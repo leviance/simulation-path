@@ -1,0 +1,148 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ độ dốc thế năng đến lực hút–đẩy
+
+## Vấn đề cần giải quyết
+
+Đường thế năng cho biết cấu hình nào có năng lượng cao hoặc thấp, nhưng muốn hai nguyên tử chuyển động, ta cần lực dưới dạng vector. Phần khó nhất ở đây không phải phép đạo hàm mà là dấu: đạo hàm đang lấy theo khoảng cách `r`, còn lực lại tác dụng lên vị trí của từng nguyên tử.
+
+Thay vì học thuộc một biểu thức cuối cùng, ta sẽ chốt quy ước và kiểm tra bằng ba tình huống có thể nhìn thấy: gần hơn đáy thế thì đẩy, đúng đáy thế thì lực gần 0, xa hơn đáy thế thì hút.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đạo hàm của thế theo khoảng cách là:
+
+$$
+\frac{dU}{dr}=\frac{24\epsilon}{r}\left[\left(\frac{\sigma}{r}\right)^6-2\left(\frac{\sigma}{r}\right)^{12}\right]
+$$
+
+Ta đã chọn $\mathbf{delta}=\mathbf{x}_B-\mathbf{x}_A$ và $\hat{\mathbf{d}}=\mathbf{delta}/r$. Vì $r$ giảm khi A đi theo hướng $+\hat{\mathbf{d}}$, lực trên A là:
+
+$$
+\mathbf{F}_A=\frac{dU}{dr}\hat{\mathbf{d}}
+$$
+
+Điều này không mâu thuẫn với $\mathbf{F}=-\nabla U$: gradient theo **position của A** chứa thêm dấu âm từ $\partial r/\partial\mathbf{x}_A=-\hat{\mathbf{d}}$.
+
+<InteractiveLab demo="lennard-jones-pair" mode="lj-force" />
+
+Chọn lần lượt “Vùng đẩy”, “Đáy thế” và “Vùng hút”. Mũi tên xanh phải hướng ra ngoài, gần như biến mất, rồi hướng vào trong. Đồ thị màu lam bên phải biểu diễn `potentialSlope = dU/dr`: giá trị âm đẩy A ra xa B, còn giá trị dương hút A về phía B.
+
+## Viết code từng bước
+
+### Bước 1 — Trả cả đại lượng vô hướng lẫn vector trong một kết quả
+
+```cpp title="include/lennard_jones.hpp — PairInteraction"
+struct PairInteraction {
+    bool valid{};
+    double distance{};
+    double potential{};
+    double potentialSlope{};
+    Vec2 forceOnA{};
+    Vec2 forceOnB{};
+};
+```
+
+`potentialSlope` nói đúng bản chất của con số này: đó là `dU/dr`, chưa phải một vector lực. `forceOnA` và `forceOnB` mới là hai đại lượng được đưa vào bước tích phân.
+
+### Bước 2 — Tính độ dốc `dU/dr`
+
+```cpp title="include/lennard_jones.hpp — potentialSlope"
+inline double potentialSlope(
+    const PotentialSample& sample,
+    const LennardJonesParameters& parameters
+) {
+    if (!sample.valid || !validParameters(parameters)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    return (24.0 * parameters.epsilon / sample.distance) *
+        (sample.ratio6 - 2.0 * sample.ratio12);
+}
+```
+
+Khi `r` nhỏ, `ratio12` rất lớn nên độ dốc mang dấu âm. Khi `r` lớn hơn `r0`, độ dốc mang dấu dương. Hàm nhận `PotentialSample` của bài trước để dùng lại `ratio6`, `ratio12` và khoảng cách đã được kiểm tra.
+
+### Bước 3 — Đổi độ dốc thành hai vector lực
+
+```cpp title="include/lennard_jones.hpp — evaluatePair"
+inline PairInteraction evaluatePair(
+    const PairState& state,
+    const LennardJonesParameters& parameters
+) {
+    PairInteraction interaction{};
+    if (!validState(state)) {
+        return interaction;
+    }
+
+    const Vec2 delta = pairDelta(state);
+    const double distance = length(delta);
+    const PotentialSample potential = samplePotential(distance, parameters);
+    if (!potential.valid) {
+        return interaction;
+    }
+
+    const double slope = potentialSlope(potential, parameters);
+    const Vec2 direction = scale(delta, 1.0 / distance);
+    const Vec2 forceOnA = scale(direction, slope);
+    if (!std::isfinite(slope) || !finite(forceOnA)) {
+        return interaction;
+    }
+
+    interaction.valid = true;
+    interaction.distance = distance;
+    interaction.potential = potential.potential;
+    interaction.potentialSlope = slope;
+    interaction.forceOnA = forceOnA;
+    interaction.forceOnB = scale(forceOnA, -1.0);
+    return interaction;
+}
+```
+
+`direction` hướng từ A tới B. Vì vậy `slope < 0` làm lực trên A quay ngược hướng này, tức là đẩy A ra xa B; `slope > 0` kéo A về phía B. Lực trên B được lấy bằng cách đổi dấu đúng cùng kết quả, không tính lại cặp theo thứ tự B–A.
+
+### Bước 4 — Kiểm đạo hàm bằng sai phân trung tâm
+
+```cpp title="tests/tests.cpp — force khớp slope của potential"
+const double numericalDerivative =
+    (potentialAfter - potentialBefore) / (2.0 * differenceStep);
+check(interaction.valid, "force sample is valid");
+check(
+    std::abs(interaction.potentialSlope - numericalDerivative) < 1.0e-7,
+    "force on A projected toward B matches dU/dr"
+);
+```
+
+Test này độc lập với biểu thức analytic của force: nó chỉ gọi hàm potential ở hai phía của một distance. Nếu ta đổi nhầm dấu hoặc thiếu một hệ số, sai phân trung tâm sẽ bắt được.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 3"
+cmake --build build --config Debug --target project_41_checkpoint_3 project_41_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Chạy checkpoint rồi thử ba mốc `0.95 sigma`, `r0` và `1.5 sigma`. Đừng chỉ nhìn chiều mũi tên: hãy đối chiếu dấu của `potentialSlope` với điểm trắng trên cả đồ thị thế năng lẫn đồ thị lực.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `ratio6 - 2*ratio12` thành `2*ratio12 - ratio6`. Cả hai mũi tên đảo chiều và phép kiểm tra đạo hàm số thất bại; hãy hoàn tác dấu.
+2. Dùng `delta = A-B` nhưng giữ nguyên công thức. Scalar vẫn đúng, vector lực đảo hướng. Đây là lý do quy ước delta phải được viết cạnh công thức.
+3. Chuẩn hóa `delta` mà không kiểm tra khoảng cách. Kéo hai nguyên tử trùng nhau sẽ gây chia cho 0; khôi phục việc gọi `samplePotential` và chỉ tạo vector đơn vị khi kết quả hợp lệ.
+
+## Tự kiểm tra kết quả
+
+- [ ] `potentialSlope < 0` ở `0.95 sigma` và mũi tên hướng ra xa nhau.
+- [ ] `potentialSlope` gần 0 tại `r0`.
+- [ ] `potentialSlope > 0` ở `1.5 sigma` và mũi tên hướng vào nhau.
+- [ ] Vector lực song song với đường nối hai tâm, kể cả khi kéo theo đường chéo.
+- [ ] Sai phân trung tâm của `U(r)` khớp `potentialSlope` trong sai số cho phép.
+- [ ] Mẫu không hữu hạn không được đưa vào phần vẽ hoặc bước tích phân.
+
+## Bài tập mở rộng
+
+1. Thử thay giới hạn trục dọc của đồ thị lực và giải thích vì sao vùng đẩy cần được cắt để phần còn lại vẫn dễ đọc.
+2. Tính lực bằng hai giá trị `differenceStep` khác nhau; giải thích vì sao bước sai phân quá lớn hoặc quá nhỏ đều có thể làm kết quả kém đi.
+3. Chứng minh bằng tích vô hướng rằng lực không có thành phần tiếp tuyến so với đường nối hai nguyên tử.
+
+Bài tiếp theo dùng một `PairInteraction` để cộng lực lên cả hai nguyên tử và kiểm tra định luật III Newton, động lượng cùng tâm khối lượng.

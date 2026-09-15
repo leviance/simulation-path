@@ -1,0 +1,180 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt tám đỉnh vào một quy ước index
+
+## Vấn đề cần giải quyết
+
+Project 12 lưu tam giác bằng ba trường `a`, `b`, `c`. Cách đó dễ đọc khi chỉ có ba vertex, nhưng không thể tiếp tục đặt tên `d`, `e`, `f` rồi viết một hàm riêng cho từng point mỗi khi model lớn hơn. Cube là bước chuyển đầu tiên sang geometry có số phần tử đủ lớn để ta cần index và vòng lặp.
+
+Checkpoint đầu chưa nối cạnh và chưa xoay. Ta chỉ tạo tám góc của cube, đặt chúng trước camera, project đúng tám lần rồi vẽ tám marker. Nếu tám point chưa đúng, thêm edge chỉ khiến lỗi khó nhìn hơn.
+
+## Bắt đầu từ starter
+
+Build target starter trước khi sửa:
+
+```bash title="Terminal — kiểm tra starter"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_13_starter
+```
+
+Bạn phải thấy cửa sổ 960×640 với framebuffer dạng lưới. `include/lab.hpp` đã có `Vec3`, camera và perspective projection từ Project 11. `src/main.cpp` đã có SDL window, texture, `putPixel`, `drawLine`, `fillCircle`, `SDL_UpdateTexture` và resize. Bài này chỉ thêm dữ liệu cube cùng đoạn nối vào render loop.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cube có tâm tại local origin và half extent là $h$. Mỗi coordinate của một góc chỉ có hai khả năng:
+
+$$
+x,y,z\in\{-h,+h\}
+$$
+
+Ba trục, mỗi trục có hai dấu, nên số tổ hợp là:
+
+$$
+2\times2\times2=8
+$$
+
+Ta chốt index theo hai lớp local Z:
+
+```text title="Quy ước index của Project 13"
+local Z = -h:  0=(-,-,-)  1=(+,-,-)  2=(+,+,-)  3=(-,+,-)
+local Z = +h:  4=(-,-,+)  5=(+,-,+)  6=(+,+,+)  7=(-,+,+)
+```
+
+Không có một thứ tự “đúng duy nhất” cho mọi engine. Điều bắt buộc là chọn một quy ước, ghi nó ra và dùng nhất quán khi tạo edge. Nếu đổi vị trí index 2 nhưng quên sửa edge list ở bài sau, cube sẽ có một đường chéo sai.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-vertices" />
+
+Chọn từng **Vertex index** và đổi **Half extent**. Readout cho biết local coordinate cùng projection status. Hai màu marker phân biệt lớp Z âm và Z dương; màu không mang ý nghĩa visibility.
+
+## Viết code từng bước
+
+### Bước 1 — Dùng std::array vì số vertex đã biết trước
+
+Mở `include/lab.hpp`, thêm alias sau phần projection:
+
+```cpp title="include/lab.hpp — cube luôn có tám vertex"
+constexpr std::size_t kCubeVertexCount = 8;
+using CubeVertices = std::array<Vec3, kCubeVertexCount>;
+```
+
+`std::array` phù hợp hơn `std::vector` ở đây vì kích thước là một phần của kiểu dữ liệu. Ta vẫn duyệt bằng vòng lặp, nhưng không có thao tác thêm/xóa vertex trong runtime.
+
+### Bước 2 — Sinh đủ tám tổ hợp dấu
+
+Hàm nhận `center` để checkpoint đầu đặt cube thẳng vào world space. `std::abs` biến half extent âm thành cùng hình hợp lệ:
+
+```cpp title="include/lab.hpp — tạo tám góc theo quy ước index"
+inline CubeVertices makeCubeVertices(double halfExtent, Vec3 center = {}) {
+    const double h = std::abs(halfExtent);
+    return {{
+        add(center, {-h, -h, -h}),
+        add(center, {h, -h, -h}),
+        add(center, {h, h, -h}),
+        add(center, {-h, h, -h}),
+        add(center, {-h, -h, h}),
+        add(center, {h, -h, h}),
+        add(center, {h, h, h}),
+        add(center, {-h, h, h}),
+    }};
+}
+```
+
+Với `h=1.2` và `center=(0,0,6)`, vertex 0 là `(-1.2,-1.2,4.8)`, còn vertex 6 là `(1.2,1.2,7.2)`. Mọi Z đều dương và xa near plane 0.5.
+
+### Bước 3 — Cache một ProjectionResult cho mỗi index
+
+Đừng chỉ lưu `Vec2 screen`; bài sau cần status và camera-space Z:
+
+```cpp title="include/lab.hpp — cache projection theo vertex index"
+struct ProjectedCube {
+    std::array<ProjectionResult, kCubeVertexCount> vertices{};
+    std::size_t projectionCount{};
+};
+```
+
+Project bằng một vòng lặp. Counter có vẻ thừa, nhưng nó tạo bằng chứng trực tiếp rằng pipeline chạy tám lần:
+
+```cpp title="include/lab.hpp — project đúng tám vertex"
+ProjectedCube result{};
+for (std::size_t index = 0; index < worldVertices.size(); ++index) {
+    result.vertices[index] = projectPerspective(
+        worldVertices[index],
+        camera,
+        lens,
+        nearPlane,
+        width,
+        height
+    );
+    ++result.projectionCount;
+}
+return result;
+```
+
+### Bước 4 — Vẽ marker nhưng chỉ đọc screen hợp lệ
+
+Trong `src/main.cpp`, loop qua cache và guard status trước khi làm tròn pixel:
+
+```cpp title="src/main.cpp — vẽ các vertex đang visible"
+for (std::size_t index = 0; index < cube.vertices.size(); ++index) {
+    const lab::ProjectionResult& vertex = cube.vertices[index];
+    if (vertex.status != lab::ProjectionStatus::Visible) {
+        continue;
+    }
+    const int x = int(std::lround(vertex.screen.x));
+    const int y = int(std::lround(vertex.screen.y));
+    std::uint32_t color = rgba(92, 236, 185);
+    if (index < 4) {
+        color = rgba(255, 190, 92);
+    }
+    fillCircle(pixels, width, height, x, y, 5, color);
+}
+```
+
+### Bước 5 — Gắn geometry vào render loop
+
+Mỗi frame, tạo world vertices rồi project bằng kích thước framebuffer hiện tại:
+
+```cpp title="src/main.cpp — dữ liệu cube đi vào projection cache"
+const lab::CubeVertices worldVertices = lab::makeCubeVertices(halfExtent, modelPosition);
+const lab::ProjectedCube projected = lab::projectCube(
+    worldVertices,
+    camera,
+    lens,
+    nearPlane,
+    width,
+    height
+);
+drawVertexMarkers(pixels, width, height, projected);
+```
+
+Ta chưa tối ưu việc tạo array vì tám phần tử rất nhỏ. Điều cần khóa ở đây là mỗi vertex có một index ổn định và một entry projection tương ứng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy kết quả cuối bài 1"
+cmake --build build --config Debug --target project_13_checkpoint_1
+```
+
+Bạn phải thấy tám marker tạo thành hai hình vuông perspective lồng nhau. Title bar báo `8 projection calls`. Resize cửa sổ: marker thay đổi vị trí theo aspect ratio nhưng array world-space không đổi.
+
+Checkpoint này cố ý chưa có edge. Nếu chỉ thấy bốn marker, hãy kiểm tra xem hai lớp có đang trùng nhau vì tất cả Z bị viết cùng dấu hay không. Nếu title báo dưới tám lần project, vòng lặp hoặc array của bạn chưa đủ phần tử.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi vertex 6 thành `{h,-h,h}`. Nó trùng vertex 5; Canvas vẫn có tám entry nhưng chỉ thấy bảy vị trí khác nhau.
+2. Đặt center Z bằng 0. Bốn vertex có Z âm, bốn vertex ở trước/giáp camera; guard sẽ loại chúng thay vì tạo pixel vô hạn.
+3. Lưu screen coordinate trực tiếp trong `CubeVertices`. Sau resize, dữ liệu “geometry” trở nên cũ và không thể dùng cho rotation 3D.
+
+## Tự kiểm tra kết quả
+
+- Array có đúng tám phần tử, index 0–7 khớp bảng dấu.
+- Với `h=1.2`, mọi coordinate local có trị tuyệt đối bằng 1.2.
+- Cube mặc định tạo tám `ProjectionResult` và tám vertex đều visible.
+- Code chỉ đọc `screen` sau khi status là `Visible`.
+- Resize không sửa local/world vertex.
+
+## Bài tập mở rộng
+
+Thêm hàm đếm số tổ hợp dấu khác nhau và xác nhận kết quả bằng 8. Sau đó cố ý cho hai index trùng coordinate để xem test này bắt lỗi mà `array.size()` không thể phát hiện.
+
+Bài tiếp theo sẽ dùng index làm “địa chỉ” cho mười hai edge. Geometry giữ vị trí; topology chỉ trả lời index nào được nối với index nào.

@@ -1,0 +1,126 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xoay từng đỉnh bằng sin và cos
+
+## Vấn đề cần giải quyết
+
+Scale chỉ kéo các tọa độ dọc theo hai trục hiện tại. Muốn xoay hình, ta cần tìm vị trí mới của mỗi đỉnh sau khi cả trục local X và Y cùng quay một góc `angle`.
+
+Ta sẽ viết công thức trực tiếp trước khi dùng ma trận. Làm như vậy giúp mỗi phần tử trong rotation matrix ở bài 5 có nguồn gốc rõ ràng, thay vì trông như chín con số phải học thuộc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sau khi quay góc θ, vector cơ sở X `(1,0)` trở thành:
+
+$$
+X'=(\cos\theta,\sin\theta)
+$$
+
+Vector cơ sở Y `(0,1)` quay cùng góc và trở thành:
+
+$$
+Y'=(-\sin\theta,\cos\theta)
+$$
+
+Điểm `(x,y)` có nghĩa là đi `x` lần theo trục X và `y` lần theo trục Y. Sau rotation:
+
+$$
+x'=x\cos\theta-y\sin\theta
+$$
+
+$$
+y'=x\sin\theta+y\cos\theta
+$$
+
+<InteractiveLab demo="transform" mode="transform-rotation" />
+
+Đặt preset Identity rồi kéo góc đến 90°. Vector cơ sở đỏ phải hướng lên, vector xanh dương phải hướng sang trái. Hai vector vẫn vuông góc và dài bằng trước khi xoay.
+
+## Viết code từng bước
+
+### Bước 1 — Tính sin/cos một lần cho mỗi point
+
+Thêm hàm sau vào `include/lab.hpp`:
+
+```cpp title="include/lab.hpp — rotatePoint"
+inline Vec2 rotatePoint(Vec2 point, double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {
+        cosine * point.x - sine * point.y,
+        sine * point.x + cosine * point.y,
+    };
+}
+```
+
+Tên `cosine` và `sine` dài hơn `c` và `s`, nhưng trong mã học tập chúng giúp hai phương trình đọc gần giống công thức ngay phía trên.
+
+### Bước 2 — Lưu góc bằng radian
+
+Giá trị ban đầu là 30°. Trạng thái vẫn lưu bằng radian vì đó là đơn vị các hàm lượng giác của C++ nhận vào.
+
+```cpp title="src/main.cpp — angle và bước quay 5 độ"
+double angle = lab::kPi / 6.0;
+
+if (event.key.key == SDLK_LEFT) {
+    angle += 5.0 * lab::kPi / 180.0;
+}
+if (event.key.key == SDLK_RIGHT) {
+    angle -= 5.0 * lab::kPi / 180.0;
+}
+```
+
+Chỉ lúc hiển thị title bar ta mới nhân `180/π` để đổi sang degree cho dễ đọc.
+
+### Bước 3 — Xoay sau khi scale
+
+Checkpoint này định nghĩa thứ tự rõ ràng: local point đi qua scale trước, sau đó mới rotation.
+
+```cpp title="src/main.cpp — scale rồi rotate từng local point"
+for (std::size_t index = 0; index < transformedSquare.size(); ++index) {
+    const lab::Vec2 scaled = lab::scalePoint(localSquare[index], scaleX, scaleY);
+    transformedSquare[index] = lab::rotatePoint(scaled, angle);
+}
+```
+
+Biến trung gian `scaled` không thừa. Nó cho người đọc nhìn thấy đúng điểm mà rotation nhận vào và là chỗ tiện đặt breakpoint.
+
+### Bước 4 — Đặt lại cả scale lẫn angle
+
+Reset phải đưa toàn bộ trạng thái đã học về giá trị ban đầu, không chỉ phần mới nhất.
+
+```cpp title="src/main.cpp — reset checkpoint 3"
+if (!event.key.repeat && event.key.key == SDLK_R) {
+    scaleX = 1.25;
+    scaleY = 0.8;
+    angle = lab::kPi / 6.0;
+}
+```
+
+Việc kiểm tra `event.key.repeat` giúp một lần nhấn R chỉ thực hiện một reset, trong khi các phím điều chỉnh vẫn được phép lặp khi giữ.
+
+## Ghép các phần lại
+
+Build `project_9_checkpoint_3`. Đầu tiên nhấn R, sau đó đặt scale gần `(1,1)` và quay từng bước. Hình xanh phải xoay quanh tâm lưới, không quay quanh góc trên trái màn hình. Scale vẫn chạy trước rotation nên hình chữ nhật dài theo local X sẽ đổi hướng cùng vật thể.
+
+Thử tính P1 `(72,-72)` với scale `(1,1)` và góc 90°. Công thức cho `(72,72)`. Nếu điểm đi sang vị trí `(-72,-72)`, dấu của một số hạng sin đã bị đảo.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng degree trực tiếp trong `std::sin(angle)`. Với `angle=90`, hàm hiểu 90 radian và kết quả không phải một phần tư vòng.
+2. Đổi `x'` thành `cosine*x + sine*y`. Hình quay không còn giữ đúng chiều; kiểm tra điểm `(0,1)` ở góc 90° sẽ lộ lỗi.
+3. Cộng tâm màn hình vào point trước rotation. Hình sẽ quay quanh world origin nằm ở góc màn hình cũ, tạo một quỹ đạo lớn thay vì xoay tại chỗ.
+
+## Tự kiểm tra kết quả
+
+- `rotatePoint({1,0}, π/2)` gần bằng `(0,1)`.
+- `rotatePoint({0,1}, π/2)` gần bằng `(-1,0)`.
+- Quay 0 hoặc một vòng đầy đủ giữ point trong sai số số thực.
+- Khi scale là `(1,1)`, cạnh và diện tích hình vuông không đổi theo angle.
+- R khôi phục đúng cả scale lẫn góc 30°.
+
+## Bài tập mở rộng
+
+Thêm phím quay đúng 90° và phím quay về 0°. Sau đó viết `rotateAround(point, pivot, angle)` bằng ba bước: trừ pivot, gọi `rotatePoint`, rồi cộng pivot trở lại. Không sửa `rotatePoint`; hàm đó vẫn chỉ xoay quanh gốc.
+
+Bài tiếp theo thêm shear vào giữa scale và rotation để quan sát một hệ trục không còn vuông góc.

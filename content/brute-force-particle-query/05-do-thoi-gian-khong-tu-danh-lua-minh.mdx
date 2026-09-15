@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo thời gian mà không tự đánh lừa mình
+
+## Vấn đề cần giải quyết
+
+Một FPS counter không cho biết brute-force query mất bao lâu, vì frame còn clear framebuffer, vẽ hàng chục nghìn điểm, upload texture và chờ renderer. Đo một query duy nhất cũng dễ bị nhiễu bởi cache, runtime và timer resolution.
+
+Benchmark của bài này dùng một tập query có seed, warm-up đúng code path rồi đo nhiều lượt hữu hạn. Ngoài timing, nó báo exact scan count và checksum; nếu hai con số đó sai, con số microsecond dù đẹp cũng không đáng tin.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với $Q$ query và $R$ repetitions trên $N$ particles:
+
+$$
+\text{totalScanned}=NQR
+$$
+
+Timing được chuẩn hóa thành:
+
+$$
+t_{query}=\frac{t_{elapsed}}{QR}
+$$
+
+Exact work là phép kiểm logic; timing là phép đo chịu noise của máy. Ta cần cả hai.
+
+<InteractiveLab demo="brute-force-particle-query" mode="brute-benchmark" />
+
+Chạy benchmark vài lần mà không đổi seed/N/radius. Checksum và total scans phải giữ nguyên; time/query có thể dao động nhẹ.
+
+## Viết code từng bước
+
+### Bước 1 — Trả mọi dữ kiện cần diễn giải
+
+```cpp title="include/lab.hpp — số đo không bị trộn với FPS"
+struct BatchMetrics {
+    std::size_t queryCount{};
+    std::size_t totalScanned{};
+    std::size_t totalHits{};
+    std::uint32_t checksum{2166136261U};
+    double elapsedMicroseconds{};
+};
+```
+
+`totalHits` giúp biết workload ghi output, còn checksum kết hợp hit count và nearest index của từng query theo đúng thứ tự.
+
+### Bước 2 — Tạo query set trước khi bấm timer
+
+```cpp title="include/lab.hpp — query centers cũng deterministic"
+const std::vector<Particle> centers = makeParticleCloud(count, bounds, seed);
+queries.reserve(centers.size());
+for (const Particle& center : centers) {
+    queries.push_back({center.position, radius});
+}
+```
+
+Mọi phiên bản thuật toán sẽ nhận cùng danh sách center/radius. Ta không benchmark random-number generation.
+
+### Bước 3 — Warm-up ngoài vùng đo
+
+```cpp title="include/lab.hpp — đi qua query path trước khi bắt đầu timer"
+reserveQueryWorkspace(workspace, particles.size());
+for (const CircleQuery& query : queries) {
+    queryBruteForceSquared(particles, query, workspace);
+}
+
+const auto started = std::chrono::steady_clock::now();
+```
+
+Warm-up không tăng `metrics.queryCount`. Nó chuẩn bị cùng code path, không giả vờ là dữ liệu đo.
+
+### Bước 4 — Dùng output và dừng ở số vòng hữu hạn
+
+```cpp title="include/lab.hpp — bounded benchmark loop có checksum"
+for (int repetition = 0; repetition < repetitions; ++repetition) {
+    for (const CircleQuery& query : queries) {
+        queryBruteForceSquared(particles, query, workspace);
+        ++metrics.queryCount;
+        metrics.totalScanned += workspace.scanned;
+        metrics.totalHits += workspace.hitIndices.size();
+        metrics.checksum = updateChecksum(metrics.checksum, workspace);
+    }
+}
+```
+
+Không có vòng `while` chờ timing “ổn định”. Caller chọn repetitions rõ ràng nên benchmark luôn trả quyền điều khiển.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint benchmark"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_27_checkpoint_5
+```
+
+Nhấn `B` ba lần. So checksum/exact scans trước, sau đó mới nhìn microseconds/query. Khi ghi kết quả, luôn ghi cả cấu hình Debug hay Release.
+
+## Thử làm sai để hiểu đúng
+
+1. Bắt đầu timer trước `makeParticleCloud` và `makeProbeQueries`. Con số đo cả setup, không còn đại diện query; chuyển timer xuống sau warm-up.
+2. In từng hit trong timed loop. Console I/O áp đảo distance check; xóa logging khỏi vùng đo.
+3. Xóa checksum và không đọc result. Compiler có thêm cơ hội loại công việc không quan sát được; giữ checksum trong metrics.
+
+## Tự kiểm tra kết quả
+
+- `queryCount == queries.size() * repetitions`.
+- `totalScanned == N * queryCount`.
+- Cùng workload cho cùng checksum.
+- Warm-up không được cộng vào queryCount.
+- Elapsed time finite và không âm.
+- Query set, reserve và rendering nằm ngoài vùng timer.
+
+## Bài tập mở rộng
+
+Thu 11 timing samples, sắp xếp và báo median thay vì chỉ một lần đo. Vẫn giữ query set, repetition và checksum giống nhau giữa các sample.
+
+Bài tiếp theo thay đổi N có kiểm soát để đọc đường tăng chi phí của brute force.

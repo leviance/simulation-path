@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng cell grid để dựng danh sách
+
+## Vấn đề cần giải quyết
+
+Naive builder luôn đo mọi cặp khi cần dựng lại. Với hệ lớn, một lần dựng như vậy vẫn đắt dù không xảy ra ở mọi bước. Ta đã học tìm hạt gần bằng cell grid ở Project 28; lần này áp dụng lại, nhưng phải thêm hai chi tiết: miền tuần hoàn và chỉ lưu mỗi cặp một lần.
+
+Đừng xóa rebuildNaive. Đầu ra của nó rất dễ hiểu và sẽ là đối chứng để biết builder mới có bỏ sót hoặc nhân đôi cặp hay không. Hai builder chỉ khác cách tìm ứng viên; cùng nhận system, skin, generation và trả về cùng NeighborList.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn số cột bằng floor của cạnh hộp chia listRadius. Sau đó tính lại bề rộng ô từ đúng số cột:
+
+$$n_x=\left\lfloor L_x/r_{list}\right\rfloor,\qquad h_x=L_x/n_x\ge r_{list}.$$
+
+Làm tương tự cho y. Khi mỗi ô rộng ít nhất listRadius, một hạt chỉ có hàng xóm cần xét trong ô của nó hoặc tám ô kề. Chú ý dùng listRadius, **không dùng cutoff**; lớp đệm cũng phải được tìm đầy đủ.
+
+Ở biên, chỉ số ô được wrap. Nếu một trục chỉ có hai ô, ô bên trái và bên phải của cùng một ô lại là **cùng một ô**. Điều kiện `j>i` không giải quyết được chuyện này: cùng cặp i,j vẫn bị duyệt lần nữa nếu ta đi vào cùng cellId lần nữa.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-grid" />
+
+Bật/tắt grid và đổi skin. Số ô có thể đổi vì ô được chọn theo listRadius, nhưng cutoff vẫn là 2.5. Các đường grid chỉ giúp quan sát; tắt chúng không đổi pairs hay lực.
+
+## Viết code từng bước
+
+### Bước 1 — Chọn ô từ bán kính tìm kiếm
+
+Thêm rebuildGrid dưới wrapCell trong `neighbor_list.hpp`. Sau khi kiểm tham số và state, tạo kích thước lưới:
+
+```cpp title="include/neighbor_list.hpp — bề rộng thực của ô không nhỏ hơn listRadius"
+const double listRadius = system.parameters.cutoff + skin;
+// Giới hạn số ô chỉ làm ô rộng hơn, nên stencil 3x3 vẫn bao phủ listRadius.
+const int columns = int(std::min(128.0, std::floor(system.box.width / listRadius)));
+const int rows = int(std::min(128.0, std::floor(system.box.height / listRadius)));
+const double cellWidth = system.box.width / columns;
+const double cellHeight = system.box.height / rows;
+std::vector<std::vector<std::size_t>> cells(std::size_t(columns* rows));
+```
+
+Giới hạn 128 tránh cấp phát quá nhiều ô trong lab. Khi giới hạn được áp dụng, ô chỉ rộng hơn nên không gây bỏ sót; đổi lại có thể xét nhiều ứng viên hơn. Điều kiện listRadius nhỏ hơn nửa cạnh bảo đảm ít nhất hai ô mỗi trục. Bản học dùng vector của vector để dễ đọc, chưa chuyển sang layout phẳng như pipeline GPU ở Project 40.
+
+Duyệt từng position đã wrap, lấy `int(position.x/cellWidth)` và tương tự cho y, rồi thêm index hạt vào cell. Dùng min với chỉ số ô cuối để chống làm tròn sát mép; validState đã từ chối tọa độ ngoài miền trước đó.
+
+### Bước 2 — Không đi vào cùng một ô hai lần
+
+Với mỗi hạt i, tính centerX/centerY, tạo mảng `visited` có chỗ cho chín ID và đặt visitedCount=0. Trong hai vòng offset từ −1 tới 1:
+
+```cpp title="include/neighbor_list.hpp — loại ô lặp sau khi wrap"
+const int cellX = wrapCell(centerX + offsetX, columns);
+const int cellY = wrapCell(centerY + offsetY, rows);
+const int cellId = cellY * columns + cellX;
+if (std::find(visited.begin(), visited.begin() + visitedCount, cellId) != visited.begin() + visitedCount) {
+    continue;
+}
+visited[std::size_t(visitedCount++)] = cellId;
+```
+
+wrapCell dùng phép dư rồi cộng count nếu kết quả âm. Chỉ những vị trí trước visitedCount trong mảng mới đã được ghi; tìm cả chín phần tử sẽ nhầm các số 0 mặc định thành một ô đã thăm.
+
+Sau khi nhận một cellId mới, duyệt các hạt j trong cell đó. Bỏ `j<=i`, tăng buildChecks, đo minimum-image distance rồi lọc listRadius như builder cũ. Hai cách loại trùng giải quyết hai lỗi khác nhau: visited loại ô lặp, `i<j` loại hướng cặp lặp và tự cặp.
+
+### Bước 3 — Chuẩn hóa đầu ra để dễ kiểm chứng
+
+Trước khi saveReference, sắp xếp pairs theo i rồi j:
+
+```cpp title="include/neighbor_list.hpp — cùng thứ tự với naive builder"
+std::sort(list.pairs.begin(), list.pairs.end(), [](PairIndex a, PairIndex b) {
+    if (a.i != b.i) {
+        return a.i < b.i;
+    }
+    return a.j < b.j;
+});
+saveReference(system, skin, generation, list);
+return true;
+```
+
+Danh sách đúng về mặt toán học không bắt buộc có thứ tự này. Ta chọn sort để `grid.pairs == naive.pairs` có ý nghĩa trực tiếp và để thứ tự cộng lực giống đối chứng, tránh cho sai số cộng số thực che lỗi tìm cặp. Sort cũng có chi phí; không bỏ qua nó khi bàn về thời gian chạy.
+
+Cuối ensureList, thay lời gọi rebuildNaive bằng rebuildGrid. Giữ hai hàm builder cạnh nhau trong cùng header, nhưng chỉ gọi một builder cho mỗi lần dựng.
+
+## Ghép các phần lại
+
+Build `project_44_checkpoint_5`, dùng G để bật/tắt đường ô. Dmax, điều kiện nửa skin và bộ tính lực từ bài trước không cần sửa. Nếu phải đổi công thức lực để dùng grid, đó là dấu hiệu hai phần đang bị trộn trách nhiệm.
+
+Ca kiểm quan trọng là hộp 6×6, cutoff=2.5, skin=0.4. Grid chỉ có 2×2 ô; stencil 3×3 sau wrap sẽ gặp ID lặp. Test phải so **tập cặp**, không chỉ so tổng số, vì thiếu một cặp và thừa một cặp có thể cho cùng count.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ visited. Với hộp hai ô mỗi trục, nhiều cặp xuất hiện lặp. Ngay cả khi sort xong, cặp trùng vẫn còn và lực bị cộng nhiều lần. Khôi phục visited; sort không phải thao tác loại trùng.
+2. Chọn ô theo cutoff nhưng vẫn tìm bằng stencil 3×3 và lọc cutoff+skin. Hạt trong lớp đệm có thể ở cách hai ô nên bị bỏ sót. Trả kích thước ô về listRadius, hoặc phải mở rộng stencil tương ứng nếu muốn dùng ô nhỏ.
+
+## Tự kiểm tra kết quả
+
+- Với hộp vuông, chữ nhật và cặp qua góc, grid và naive cho cùng pairs theo thứ tự i,j.
+- Không có cặp trùng khi một trục chỉ có hai ô.
+- BuildChecks đếm các cặp được đo, không chỉ pairs được giữ lại.
+- Đổi lớp vẽ grid không đổi state hay force; đổi skin làm dựng lại cả grid lẫn list.
+
+## Bài tập mở rộng
+
+Thử lưu các ô bằng hai mảng phẳng offset/indices như đã học ở Project 40, giữ lại test so pairs để đối chiếu. Chưa cần làm bài tập này để sang [Ghép neighbor list vào Velocity Verlet](/projects/neighbor-list-skin/06-verlet-voi-danh-sach-tai-su-dung).

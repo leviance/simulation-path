@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho hệ chuyển động bằng Velocity Verlet
+
+## Vấn đề cần giải quyết
+
+Ta đã có position, velocity và force đúng tại thời điểm ban đầu. Bây giờ mới cho hệ chuyển động. Cạm bẫy nằm ở thứ tự: force cuối bước phải dùng position sau Drift, và grid cũng phải phù hợp với position đó.
+
+Trong bài này ta dựng lại grid ở **mọi bước**. Tối ưu cache để bài 7; trước hết cần một phiên bản dễ kiểm chứng về thứ tự dữ liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với khối lượng bằng 1, Velocity Verlet có thể tách thành:
+
+$$v_{1/2}=v_n+\tfrac12\Delta t F_n,\qquad p_{n+1}=p_n+\Delta t v_{1/2},$$
+
+$$F_{n+1}=F(p_{n+1}),\qquad v_{n+1}=v_{1/2}+\tfrac12\Delta t F_{n+1}.$$
+
+Ta gộp phép kick đầu và cập nhật position vào Drift. Bank current giữ state đã nhận; bank target nhận ứng viên. Chỉ khi Force và Kick đều hợp lệ mới đổi current. Trong lúc đó hình đã present vẫn ở bước cũ, không nhảy qua trạng thái tính dở.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-6" />
+
+Bấm từng pha và nhìn bank. Đến Drift đã có marker ứng viên tím nhưng bank chưa đổi. Hủy ở giữa bước: hệ đã nhận không được nhảy theo ứng viên.
+
+## Viết code từng bước
+
+### Bước 1 — Bắt đầu một bước ở bank còn lại
+
+Trong `Engine::step`:
+
+```cpp title="include/gpu_engine.hpp — đoạn đang thêm"
+void step(lab::GlApi& gl) {
+    if (busy() || !ready || failed || !features_.integrate) {
+        return;
+    }
+    target_ = 1 - current;
+    initializing_ = false;
+    cancelled_ = false;
+    beginJob(gl, Pass::Drift);
+}
+```
+
+Điều kiện đầu ngăn việc bắt đầu một bước mới khi bước cũ chưa xong hoặc chưa có force ban đầu. `target_=1-current` chỉ chọn nơi ghi, chưa nhận kết quả.
+
+### Bước 2 — Ghi position mới, giữ vận tốc nửa bước
+
+Kernel Drift:
+
+```glsl title="shaders/drift.comp — tính ứng viên từ bank hiện tại"
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer SourcePositions { vec4 sourcePositions[]; };
+layout(std430, binding = 1) readonly buffer SourceVelocities { vec4 sourceVelocities[]; };
+layout(std430, binding = 2) readonly buffer SourceForces { vec4 sourceForces[]; };
+layout(std430, binding = 3) writeonly buffer Positions { vec4 positions[]; };
+layout(std430, binding = 4) writeonly buffer Velocities { vec4 velocities[]; };
+layout(std430, binding = 5) buffer Control { uint flags; uint maxDisplacementBits; uint maxOccupancy; uint reserved; };
+uniform uint uCount;
+uniform uint uBase;
+uniform vec2 uBox;
+uniform float uDt;
+
+void main() {
+    uint i = uBase + gl_GlobalInvocationID.x;
+    if (i >= uCount) {
+        return;
+    }
+    vec2 halfVelocity = sourceVelocities[i].xy + 0.5 * uDt * sourceForces[i].xy;
+    vec2 displacement = uDt * halfVelocity;
+    // Velocity.zw giữ phần dịch chuyển bị làm tròn, không để bước nhỏ mất mãi.
+    vec2 corrected = displacement + sourceVelocities[i].zw;
+    vec2 moved = sourcePositions[i].xy + corrected;
+    vec2 turns = floor(moved / uBox);
+    vec2 position = moved - uBox * turns;
+    if (position.x >= uBox.x) {
+        position.x = 0;
+        turns.x += 1;
+    }
+    if (position.y >= uBox.y) {
+        position.y = 0;
+        turns.y += 1;
+    }
+    vec2 applied = (position - sourcePositions[i].xy) + turns * uBox;
+    vec2 residual = corrected - applied;
+    vec2 unwrappedDelta = sourcePositions[i].zw + applied;
+    float distance2 = dot(unwrappedDelta, unwrappedDelta);
+    if (any(isnan(position)) || any(isinf(position)) || isnan(distance2) || isinf(distance2) || dot(displacement, displacement) > 0.01) {
+        atomicOr(flags, 2u);
+        return;
+    }
+    positions[i] = vec4(position, unwrappedDelta);
+    velocities[i] = vec4(halfVelocity, residual);
+    // Float không âm có thứ tự bit tương ứng; không áp dụng mẹo này cho số âm/NaN.
+    atomicMax(maxDisplacementBits, floatBitsToUint(distance2));
+}
+```
+
+`position` được wrap để vẽ và tìm cell. `unwrappedDelta` giữ độ dời chưa wrap cho bài sau. Khi một bước đi quá 0.1 đơn vị hoặc tạo NaN/Inf, shader đặt flag và CPU từ chối bước; nó không clamp displacement rồi âm thầm thay vật lý.
+
+Còn một chi tiết không nên bỏ qua khi hộp rộng: tại tọa độ khoảng 3.500, float có thể không biểu diễn được việc cộng thêm 0.0001. `velocities.zw` giữ phần dịch chuyển còn dư. Lần sau ta cộng phần dư đó vào bước mới, để những bước nhỏ tích lại thành một thay đổi biểu diễn được. `applied` đo phần thay đổi thực sự đã lưu, tính cả số lần qua biên; `residual=corrected-applied` giữ phần chưa áp dụng. Khi wrap làm tròn ra đúng cạnh hộp, ta đưa nó về zero và điều chỉnh `turns` để vẫn giữ đúng độ dời. Kick chỉ sửa velocity.xy, không được xóa residual.zw.
+
+Sau Drift, engine chạy Clear → Build → Force trên **target**, không trên current. Vì lực cũ `F_n` đã được giữ từ bước trước, mỗi bước mới chỉ cần tính lại force cuối bước.
+
+### Bước 3 — Hoàn tất velocity rồi nhận bank
+
+Kick chỉ cần hai mảng ở target:
+
+```glsl title="shaders/kick.comp — kick thứ hai của Velocity Verlet"
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer Velocities { vec4 velocities[]; };
+layout(std430, binding = 1) readonly buffer Forces { vec4 forces[]; };
+layout(std430, binding = 2) buffer Control { uint flags; uint maxDisplacementBits; uint maxOccupancy; uint reserved; };
+uniform uint uCount;
+uniform uint uBase;
+uniform float uDt;
+
+void main() {
+    uint i = uBase + gl_GlobalInvocationID.x;
+    if (i >= uCount) {
+        return;
+    }
+    vec2 velocity = velocities[i].xy + 0.5 * uDt * forces[i].xy;
+    if (any(isnan(velocity)) || any(isinf(velocity))) {
+        atomicOr(flags, 2u);
+        return;
+    }
+    // Không xóa residual vị trí do Drift vừa lưu trong zw.
+    velocities[i].xy = velocity;
+}
+```
+
+Phần đầu `commit` mới cho renderer nhìn bank này:
+
+```cpp title="include/gpu_engine.hpp — đoạn đang thêm"
+void commit() {
+    current = target_;
+    ready = true;
+    if (!initializing_) {
+        ++steps;
+    }
+```
+
+Nếu Build bị overflow, target bị bỏ. Cache đã dựng từ target cũng mất hiệu lực; bank vật lý cũ vẫn còn. Khác Project 44, bản GPU không giữ thêm một bản sao đầy đủ của grid để rollback cache: nó vô hiệu hóa dữ liệu phụ và dựng lại khi cần.
+
+## Ghép các phần lại
+
+Checkpoint 06 bật `features.integrate`. Nhấn N để yêu cầu đúng một bước; Space bật/tắt việc yêu cầu bước kế tiếp. Space không ngắt kernel đang chạy. Phím C yêu cầu hủy tại ranh giới batch; Esc thoát.
+
+```bash title="Terminal Windows — build và chạy bài 6"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_6 --parallel 2
+.\build\Debug\project_45_checkpoint_6.exe
+```
+
+`dt=0.001` là thời gian mô phỏng của một bước, không phải thời gian giữa hai lần present. Nếu một bước GPU mất lâu, mô phỏng đi chậm hơn thời gian thực. Không tăng dt để 'bù FPS' vì điều đó làm đổi bài toán số.
+
+## Thử làm sai để hiểu đúng
+
+1. Thử đổi Force sang đọc bank current sau Drift trong bản kiểm nhỏ. Hạt dùng lực ở vị trí cũ cho kick cuối; đối chứng một bước Verlet phải phát hiện sai khác. Khôi phục target bindings.
+2. Bấm C sau khi đã Drift nhưng trước khi hết bước. Số bước đã nhận và bank không tăng. Bấm N để làm lại: dữ liệu phụ phải được dựng lại nếu cache đã bị thay đổi.
+
+## Tự kiểm tra kết quả
+
+Một lần N làm steps tăng đúng 1 sau khi hoàn tất, không tăng ở Drift. Current/target không trùng nhau. Lỗi không làm state cũ thay đổi. Quỹ đạo phải được kiểm bằng số, không chỉ nhìn chuyển động mượt.
+
+## Bài tập mở rộng
+
+Vẽ sơ đồ các buffer được đọc/ghi cho Drift, Force, Kick. Đánh dấu lý do vì sao cần barrier giữa các dispatch nhưng không dùng barrier trong shader để chờ một workgroup khác.
+
+Tiếp theo: [tái sử dụng grid với skin](/projects/molecular-lab-gpu/07-tai-su-dung-grid-voi-skin).

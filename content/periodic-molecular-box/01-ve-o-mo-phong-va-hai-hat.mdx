@@ -1,0 +1,151 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ ô mô phỏng và hai hạt ở hai mép
+
+## Vấn đề cần giải quyết
+
+Ở Project 42, thành hộp là một bức tường: hạt chạm vào thì bật lại. Lần này, ta muốn bỏ bức tường ấy. Hãy tưởng tượng các ô giống hệt nhau được ghép kín mặt phẳng. Hạt ra khỏi một ô sẽ đi vào ô kế bên, còn chương trình chỉ cần lưu trạng thái trong một ô đại diện.
+
+Khoan viết công thức wrap. Trước hết cần một hình đủ rõ để nhìn thấy vấn đề: ô rộng 12 đơn vị, hạt A ở `x=0.6`, hạt B ở `x=11.4`, cùng `y=6`. Nếu nối thẳng hai marker, chúng cách nhau 10.8 đơn vị. Nhưng nếu hai mép hộp nối với nhau, khoảng cách còn bao nhiêu?
+
+Tải ZIP ở trang tổng quan, giải nén rồi mở terminal tại thư mục `project-43-periodic-molecular-box`. Chạy starter để kiểm tra SDL trước:
+
+```bash title="Terminal — chạy bộ khung trước bài 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_43_starter
+.\build\Debug\project_43_starter.exe
+```
+
+Starter chỉ có cửa sổ và đường viền ô gốc. `src/main.cpp` giữ vòng đời SDL; `include/view.hpp` chứa phép đổi tọa độ và hàm vẽ; hai header còn lại dành cho state và công thức. Mã đầy đủ của bộ khung có trong ZIP, không phải các dấu `...` cần tự đoán. Với Ninja, Linux hoặc macOS, executable nằm trực tiếp trong `build/`, không có thư mục `Debug/`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tọa độ thế giới trả lời “hạt ở đâu trong mô hình?”. Tọa độ màn hình trả lời “vẽ marker vào pixel nào?”. Ta giữ hai câu hỏi này tách biệt:
+
+$$
+x_s = x_0 + \frac{x}{L_x}s,\qquad
+y_s = y_0 + \frac{y}{L_y}s.
+$$
+
+`(x0,y0)` là góc ô vẽ, `s` là cạnh ô trên màn hình. Trong project này, cả trục y thế giới lẫn y màn hình đều tăng xuống dưới. Đó chỉ là quy ước tọa độ; không có trọng lực nên không cần đảo y. Dùng hộp chữ nhật vẫn đúng: `Lx` và `Ly` có thể khác nhau, dù ô hiển thị đang là hình vuông.
+
+Marker là một hình vuông nhỏ để dễ nhìn, không phải “nguyên tử hình vuông”. Kích thước 8 pixel của nó không tham gia tính lực hay điều kiện biên.
+
+<InteractiveLab demo="periodic-molecular-box" mode="pbc-box" />
+
+Đọc vị trí A rồi thay đổi chiều rộng trình duyệt. Marker đổi chỗ trên màn hình nhưng tọa độ thế giới không đổi. Bài này cố ý để các hạt đứng yên; chưa có phần vật lý chạy ngầm phía sau hình vẽ.
+
+## Viết code từng bước
+
+### Bước 1 — Lưu dữ liệu của một hạt
+
+Mở `include/periodic.hpp` trong starter để đọc ba kiểu dữ liệu có sẵn dưới đây. Chúng là bộ khung để lưu hạt, chưa tạo ra hạt nào. `mass` mặc định bằng 1 theo reduced units đã dùng ở Project 41–42.
+
+```cpp title="include/periodic.hpp — dữ liệu chưa phụ thuộc SDL"
+struct Vec2 {
+    double x{};
+    double y{};
+};
+
+struct Box {
+    double width{12.0};
+    double height{12.0};
+};
+
+struct Particle {
+    Vec2 position;
+    Vec2 velocity;
+    double mass{1.0};
+};
+```
+
+Không đặt `SDL_FPoint` vào `Particle`: model cần `double`, còn SDL chỉ cần tọa độ sau phép đổi để vẽ. Nhờ vậy, tests sau này có thể include phần vật lý mà không khởi tạo SDL.
+
+### Bước 2 — Tạo cặp hạt trước vòng lặp
+
+Trong `include/dynamics.hpp`, `System` gom hộp, tham số lực, danh sách hạt và thời gian. Hàm sau tạo trạng thái mà ta vừa tính bằng tay:
+
+```cpp title="include/dynamics.hpp — tạo hai marker ở hai mép"
+inline System makePair() {
+    System system;
+    Particle a;
+    a.position = {0.6, 6.0};
+    a.velocity = {-0.3, 0.12};
+    Particle b;
+    b.position = {11.4, 6.0};
+    b.velocity = {0.3, -0.12};
+    system.particles = {a, b};
+    return system;
+}
+```
+
+Velocity đã có giá trị để dùng ở bài sau, nhưng lưu một giá trị không tự làm hạt chuyển động. Phải có hàm cập nhật `position` thì hình mới thay đổi. Trong `main.cpp`, sau khi tạo renderer thành công và trước `while (running)`, tạo `system` rồi gán kết quả `pbc::makePair()` đúng một lần.
+
+### Bước 3 — Vẽ một marker từ world space
+
+Ta dùng trực tiếp SDL renderer cho lớp hiển thị nhỏ này, thay cho streaming framebuffer của Project 42. Phần model vẫn hoàn toàn ở CPU; thay cách vẽ không thay lực hoặc cách tích phân.
+
+```cpp title="include/view.hpp — từ tọa độ thế giới đến hình vuông trên cửa sổ"
+inline SDL_FPoint toScreen(pbc::Vec2 point, pbc::Box box, Viewport viewport) {
+    return {viewport.left + float(point.x / box.width) * viewport.side, viewport.top + float(point.y / box.height) * viewport.side};
+}
+
+inline bool marker(SDL_Renderer* renderer, pbc::Vec2 position, pbc::Box box, Viewport viewport, float radius) {
+    const SDL_FPoint center = toScreen(position, box, viewport);
+    // Marker vuông chỉ là ký hiệu vị trí; không đưa kích thước pixel vào điều kiện biên.
+    const SDL_FRect rect{center.x - radius, center.y - radius, 2.0f * radius, 2.0f * radius};
+    return SDL_RenderFillRect(renderer, &rect);
+}
+```
+
+`SDL_FRect` lưu góc trên trái và kích thước, không lưu tâm. Vì vậy phải trừ `radius` ở hai tọa độ đầu, rồi dùng cạnh dài `2*radius`. `SDL_RenderFillRect` dùng màu vẽ hiện tại và trả `false` nếu thất bại; ta truyền kết quả ấy lên `drawScene`, rồi lên `main` để xử lý lỗi. [Tài liệu SDL_RenderFillRect](https://wiki.libsdl.org/SDL3/SDL_RenderFillRect).
+
+### Bước 4 — Vẽ toàn bộ frame rồi mới present
+
+`drawScene` xóa nền, vẽ viền hộp, đổi màu theo index rồi gọi `marker` cho từng hạt. A ở index 0 được tô vàng; các hạt còn lại màu xanh. Trong loop, chỉ gọi `SDL_RenderPresent` sau khi các phần này đều thành công. Đừng tạo lại `system` trong loop, vì hành động đó sẽ xóa mọi thay đổi của bài sau ở mỗi frame.
+
+```cpp title="src/main.cpp — lấy kích thước hiện tại rồi vẽ frame"
+if (!SDL_GetWindowSize(window, &width, &height)) {
+    failed = true;
+    break;
+}
+const view::Viewport viewport = view::makeViewport(width, height);
+if (!view::drawScene(renderer, system, viewport, showImages)) {
+    failed = true;
+    break;
+}
+```
+
+`makeViewport` tính lại vùng vẽ từ kích thước window, nên resize không cần sửa position của hạt. Ở bài đầu, showImages luôn false; đây là đối số dành cho lớp hiển thị sẽ thêm ở bài 6. Cuối frame mới đưa kết quả lên cửa sổ:
+
+```cpp title="src/main.cpp — present và nhường thời gian cho hệ điều hành"
+if (!SDL_RenderPresent(renderer)) {
+    failed = true;
+    break;
+}
+SDL_Delay(16);
+```
+
+`SDL_Delay(16)` chỉ tránh quay vòng vẽ quá nhanh khi chưa có gì cần cập nhật; nó không phải dt vật lý. Bộ khung dùng `int main(int argc, char* argv[])` vì đã include `SDL_main.h`; giữ chữ ký này để SDL3 kết nối đúng entry point trên Windows.
+
+## Ghép các phần lại
+
+Build `project_43_checkpoint_1`. Kết quả phải khác starter đúng ở việc xuất hiện hai marker. Cửa sổ vẫn resize và thoát được; hai hạt chưa chạy, dù `velocity` đã được gán.
+
+Nếu không nhìn thấy hạt, kiểm tra theo thứ tự: `system.particles` có hai phần tử không, `toScreen` có chia đúng cạnh hộp không, màu đã được đặt trước `marker` chưa, và `present` có nằm sau phần vẽ không? Mỗi câu hỏi loại trừ một lớp lỗi cụ thể.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong `toScreen`, bỏ phép chia cho `box.width`. A và B sẽ bị đẩy xa hơn nhiều trên màn hình; có hạt mất khỏi cửa sổ. Dữ liệu vật lý vẫn là 0.6 và 11.4, lỗi nằm ở phép đổi tọa độ. Khôi phục phép chia trước khi tiếp tục.
+2. Tạm gán `system = pbc::makePair()` ở đầu mỗi frame. Hiện tại hình vẫn đúng; hãy ghi lại vì sao lỗi này chưa lộ khi chưa có chuyển động. Xóa dòng vừa thêm, rồi thử lại ý tưởng ấy sau bài 2.
+
+## Tự kiểm tra kết quả
+
+- Starter chỉ có đường viền; checkpoint 1 có đúng hai hạt.
+- A và B ở giữa chiều cao hộp, cách mép gần nhất 0.6 đơn vị.
+- Resize chỉ đổi phép vẽ; state vẫn giữ nguyên tọa độ và velocity.
+- Đóng cửa sổ giải phóng renderer, window và SDL, không cần dừng bằng Task Manager.
+
+## Bài tập mở rộng
+
+Đổi hộp thành 12×8 và đặt cả hai hạt tại `y=4`. Sửa đúng dữ liệu model, không sửa từng tọa độ pixel bằng tay. Sau đó trả về preset gốc và sang [bài 2 — đi qua biên mà không bật lại](/projects/periodic-molecular-box/02-di-qua-bien-ma-khong-bat-lai).

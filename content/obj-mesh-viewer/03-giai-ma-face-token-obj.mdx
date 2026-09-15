@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giải mã slash token và negative index
+
+## Vấn đề cần giải quyết
+
+Một OBJ ngoài thực tế hiếm khi chỉ có `f 1 2 3`. Corner có thể là `7/4/2`, nghĩa là position 7, texture coordinate 4 và normal 2. Khi chưa có UV hoặc vertex normal trong renderer, ta vẫn phải đọc đúng position thay vì từ chối cả model hoặc cố parse chuỗi có slash như một integer.
+
+OBJ còn cho phép index âm. `-1` là phần tử mới nhất tại dòng face, `-2` là phần tử ngay trước đó. Đây không phải số âm sau khi resolve; nó là cách tham chiếu tương đối trong file.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bốn dạng corner thường gặp:
+
+| Token | Position | UV | Normal |
+| --- | ---: | ---: | ---: |
+| `7` | 7 | — | — |
+| `7/4` | 7 | 4 | — |
+| `7//2` | 7 | — | 2 |
+| `7/4/2` | 7 | 4 | 2 |
+
+Project 21 chỉ dùng cột position, nên ta cắt tại slash đầu tiên. Với `positionCount=N`:
+
+$$
+resolved(i)=
+\begin{cases}
+i-1 & i>0\\
+N+i & i<0
+\end{cases}
+$$
+
+Ví dụ N=5: `1→0`, `5→4`, `-1→4`, `-5→0`. Giá trị `-6` và `0` đều sai.
+
+<InteractiveLab demo="obj-viewer" mode="obj-indices" />
+
+Chuyển giữa preset slash và negative. Geometry phải giữ nguyên khi chỉ thay cách viết token; readout luôn hiển thị index OBJ đã được đổi sang index vector nào.
+
+## Viết code từng bước
+
+### Bước 1 — Tách position field trước khi parse số
+
+```cpp title="include/lab.hpp — slash không đi vào std::from_chars"
+const std::size_t slash = token.find('/');
+if (slash != std::string_view::npos) {
+    token = token.substr(0, slash);
+}
+if (token.empty()) {
+    return std::nullopt;
+}
+```
+
+`/4/2` có position field rỗng và phải fail. Còn `7//2` tạo substring `7`, đúng phần ta cần.
+
+### Bước 2 — Resolve nhánh dương và âm riêng biệt
+
+```cpp title="include/lab.hpp — negative index dựa trên positionCount hiện tại"
+long long resolved = 0;
+if (rawIndex > 0) {
+    resolved = static_cast<long long>(rawIndex) - 1;
+} else {
+    resolved = static_cast<long long>(positionCount) + rawIndex;
+}
+if (resolved < 0 || resolved >= static_cast<long long>(positionCount)) {
+    return std::nullopt;
+}
+return static_cast<std::size_t>(resolved);
+```
+
+Ta không lấy trị tuyệt đối của index âm. Với N=5, `abs(-2)-1` cho 1, nhưng đáp án đúng là 3.
+
+### Bước 3 — Kiểm nhiều cú pháp trên cùng geometry
+
+Test dùng đủ `v/vt/vn`, `v//vn` và negative index trong một face:
+
+```cpp title="tests/tests.cpp — slash và negative cùng trỏ đúng position"
+const lab::ObjLoadResult slashAndNegative = parse(
+    "v 0 0 0\n"
+    "v 1 0 0\n"
+    "v 0 1 0\n"
+    "vt 0 0\n"
+    "vn 0 0 1\n"
+    "f 1/1/1 2//1 -1/1/1\n"
+);
+check(!slashAndNegative.hasErrors(), "slash tokens and negative indices parse");
+check(slashAndNegative.mesh.triangles[0].indices[2] == 2, "negative one resolves to the newest position");
+```
+
+`vt` và `vn` được đếm là record đã nhận diện nhưng chưa dùng. Parser không nên báo lỗi chỉ vì renderer của project hiện tại chưa tiêu thụ thuộc tính đó.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build face-token checkpoint"
+cmake --build build --config Debug --target project_21_checkpoint_3
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Asset rocket hiện dùng index dương đơn giản, vì vậy hãy dùng Canvas hoặc test fixture để kiểm slash/negative; một asset duy nhất không thể thay cho unit test có chủ đích.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay `-1` bằng `-4` khi mới có ba position. Resolver phải trả lỗi chứ không wrap thành `size_t` rất lớn.
+2. Bỏ thao tác cắt slash và thử parse `1/1/1`. `from_chars` dừng ở `/`; phép kiểm `parsed.ptr != end` phải bắt phần đuôi chưa dùng.
+3. Thử token `//1`. Position field rỗng nên cả face bị bỏ, dù normal index trông hợp lệ.
+
+## Tự kiểm tra kết quả
+
+- Bốn dạng token đều tách đúng position field.
+- Positive và negative index hợp lệ cho cùng kết quả 0-based tương ứng.
+- Index 0, field rỗng, số ngoài mảng hoặc token có chữ đều bị từ chối.
+- Không index âm nào được cast sang `size_t` trước khi kiểm phạm vi.
+- `vt` và `vn` không làm parser mất đồng bộ dòng.
+
+## Bài tập mở rộng
+
+Viết một `FaceToken` giữ cả ba `std::optional<int>` cho position/UV/normal, nhưng chưa đưa nó vào renderer. Test riêng `7//2` để chắc UV thực sự rỗng chứ không bị hiểu thành 0.
+
+Bài tiếp theo sẽ bỏ giả định mỗi face có đúng ba corner và biến polygon thành triangle fan.

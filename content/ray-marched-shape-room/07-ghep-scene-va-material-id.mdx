@@ -1,0 +1,155 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép căn phòng và giữ đúng material
+
+## Bức hình này còn thiếu gì?
+
+Ba primitive hiện vẫn đang lơ lửng giữa nền trống. Ta sẽ dựng thêm sàn, trần, tường sau và hai tường bên để tạo thành một căn phòng. Khi nhiều bề mặt cùng xuất hiện, `sampleScene` còn phải trả đúng `materialId` của bề mặt gần nhất; nếu khoảng cách thuộc vật này nhưng màu lại thuộc vật khác, vùng giao nhau sẽ lộ lỗi ngay.
+
+Bài này không thêm một hệ thống scene graph lớn. Ta chỉ giữ một quy tắc nhỏ nhưng nhất quán: **mỗi lần hỏi scene tại một điểm, phải trả về distance và material ID của cùng một vật thể gần nhất**.
+
+## Hình dung đường đi của một pixel
+
+Với floor tại $y=-1$, khoảng cách có dấu ở phía trong phòng là:
+
+$$d_{floor}=y+1$$
+
+Ceiling tại $y=2.35$ dùng $2.35-y$. Back wall tại $z=-3.1$ dùng $z+3.1$. Hai side walls tương tự theo X. Dấu được chọn sao cho vùng giữa các tường có distance dương và phía xuyên qua tường có distance âm.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-materials" />
+
+Chọn chế độ material trong Canvas và orbit quanh scene. Màu ID phải có ranh giới rõ ràng: sphere 1, box 2, torus 3, room 4. Nếu màu nhấp nháy ở một bề mặt tĩnh, distance winner hoặc hit epsilon đang không ổn định.
+
+## Cùng sửa checkpoint
+
+### Bước 1 — Thêm năm plane vào cùng `sampleScene`
+
+```cpp title="include/raymarch_math.hpp — room mở phía camera"
+inline SceneSample sampleScene(const Vec3& point) {
+    SceneSample sample{
+        sdSphere(point, {-1.0, -0.18, 0.15}, 0.82),
+        1};
+
+    sample = nearer(sample, {sdBox(point, {1.0, -0.32, 0.1}, {0.62, 0.68, 0.62}), 2});
+    sample = nearer(sample, {sdTorus(point, {0.05, 0.32, -1.25}, 0.72, 0.22), 3});
+
+    // floor, ceiling, back, left, right
+    sample = nearer(sample, {point.y + 1.0, 4});
+    sample = nearer(sample, {2.35 - point.y, 4});
+    sample = nearer(sample, {point.z + 3.1, 4});
+    sample = nearer(sample, {point.x + 3.5, 4});
+    sample = nearer(sample, {3.5 - point.x, 4});
+
+    return sample;
+}
+```
+
+Ta không dựng bức tường phía trước. Camera đứng ở phía Z dương và nhìn vào phòng theo hướng Z âm; khoảng hở này vừa cho tia đi vào scene, vừa tạo một hướng không chạm vật thể để kiểm tra điều kiện dừng.
+
+### Bước 2 — Để `nearer` trả nguyên `SceneSample`
+
+Cách sau trông ngắn nhưng sai thiết kế:
+
+```cpp title="Ví dụ cố ý chưa đúng — đừng giữ lại trong bản cuối"
+distance = std::min(distance, sphereDistance);
+distance = std::min(distance, boxDistance);
+
+if (sphereDistance < boxDistance) {
+    materialId = 1;
+} else {
+    materialId = 2;
+}
+```
+
+Khi thêm torus và room, chuỗi chọn material có thể không còn giống chuỗi chọn distance. `nearer` giải quyết bằng cách mang cả record của candidate thắng:
+
+```cpp title="include/raymarch_math.hpp — một phép so sánh, một winner"
+inline SceneSample nearer(
+    SceneSample current,
+    SceneSample candidate
+) {
+    if (candidate.distance < current.distance) {
+        return candidate;
+    }
+    return current;
+}
+```
+
+Tie giữ `current`. Thứ tự này ổn định, có thể kiểm được và tránh material đổi qua lại khi hai distance bằng nhau đúng theo số học hiện tại.
+
+### Bước 3 — Chọn màu sau khi đã có hit
+
+```glsl title="shaders/raymarch.frag — materialColor"
+vec3 materialColor(int materialId, vec3 point) {
+    if (materialId == 1) {
+        return vec3(0.20, 0.56, 0.96);
+    }
+    if (materialId == 2) {
+        return vec3(0.96, 0.43, 0.22);
+    }
+    if (materialId == 3) {
+        return vec3(0.73, 0.40, 0.95);
+    }
+
+    float checker = mod(
+        floor(point.x) + floor(point.z),
+        2.0
+    );
+    return mix(
+        vec3(0.17, 0.20, 0.27),
+        vec3(0.25, 0.29, 0.37),
+        checker
+    );
+}
+```
+
+Checker dùng hit position để tường/floor có thước đo world-space. Màu không tham gia `sampleScene` và tuyệt đối không được dùng để suy ngược material.
+
+## Chạy thử và quan sát
+
+Kiểm material bằng các điểm nằm sâu trong primitive:
+
+```cpp title="tests/tests.cpp — material identity"
+check(
+    lab::sampleScene({-1.0, -0.18, 0.15}).materialId == 1,
+    "sphere material id is stable"
+);
+check(
+    lab::sampleScene({1.0, -0.32, 0.1}).materialId == 2,
+    "box material id is stable"
+);
+check(
+    lab::sampleScene({0.77, 0.32, -1.25}).materialId == 3,
+    "torus material id is stable"
+);
+check(
+    lab::sampleScene({0.0, -1.0, 1.0}).materialId == 4,
+    "room material id is stable"
+);
+```
+
+Các điểm này được chọn để primitive tương ứng có distance nhỏ hơn rõ rệt, không phải probe mơ hồ gần vùng giao.
+
+## Cố tình làm sai
+
+1. Viết back wall là `-3.1 - point.z`. Toàn bộ vùng camera nhìn vào nằm phía âm của plane, marcher báo hit gần như ngay lập tức.
+2. Thêm front wall tại Z dương mà không dời camera vào phòng. Camera bắt đầu ngoài solid region và scene không còn như mong đợi.
+3. Cập nhật distance nhưng quên material ID trong `nearer`. Hình đúng nhưng tất cả object dùng màu của candidate trước.
+4. Dùng `<=` thay `<` và đảo thứ tự primitive. Tie material thay đổi; hãy quyết định tie policy thay vì để nó tình cờ.
+5. Dùng UV màn hình cho checker. Pattern trượt theo camera vì không bám world surface.
+
+## Dấu hiệu cho thấy bài đã hoàn thành
+
+- [ ] Room có floor, ceiling, back, left, right và mở phía camera.
+- [ ] Tia ở giữa màn hình đi vào phòng; tia quay ra ngoài dừng đúng giới hạn.
+- [ ] Material ID 1–4 ổn định tại các named probes.
+- [ ] Checker bám vào room khi camera orbit.
+- [ ] Thêm room không đòi hỏi draw call, VAO hoặc mesh mới.
+
+## Thử đi thêm một bước
+
+1. Cho left và right wall hai material ID khác nhau để kiểm orientation.
+2. Viết `SceneSample` thêm trường `objectId` tách khỏi `materialId`.
+3. Thêm smooth union giữa hai sphere, rồi mô tả vì sao việc pha material cần policy riêng.
+
+Bài tiếp theo sẽ thêm tia tính bóng và điều khiển orbit camera. Lúc đó, giới hạn dừng, normal bias và vòng đời input phải phối hợp trong một frame hoàn chỉnh.

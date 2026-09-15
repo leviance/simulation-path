@@ -1,0 +1,72 @@
+#version 430 core
+
+// 256 lanes nạp hai uint mỗi lane rồi chạy Blelloch exclusive scan trên 512 values.
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InputValues {
+    uint inputValues[];
+};
+
+layout(std430, binding = 1) writeonly buffer OutputValues {
+    uint outputValues[];
+};
+
+layout(std430, binding = 2) writeonly buffer BlockSums {
+    uint blockSums[];
+};
+
+uniform int uElementCount;
+shared uint temporary[512];
+
+void main() {
+#if LAB_CHECKPOINT >= 3
+    uint lane = gl_LocalInvocationID.x;
+    uint blockBase = gl_WorkGroupID.x * 512u;
+    uint first = blockBase + lane;
+    uint second = first + 256u;
+    temporary[lane] = first < uint(uElementCount) ? inputValues[first] : 0u;
+    temporary[lane + 256u] = second < uint(uElementCount) ? inputValues[second] : 0u;
+    barrier();
+
+    // Upsweep đặt tổng của block ở root.
+    for (uint offset = 1u; offset < 512u; offset *= 2u) {
+        uint right = (lane + 1u) * offset * 2u - 1u;
+        if (right < 512u) {
+            temporary[right] += temporary[right - offset];
+        }
+        barrier();
+    }
+
+    if (lane == 0u) {
+        blockSums[gl_WorkGroupID.x] = temporary[511];
+        temporary[511] = 0u;
+    }
+    barrier();
+
+    // Downsweep đổi partial sums thành prefix đứng trước mỗi value.
+    for (uint offset = 256u; offset >= 1u; offset /= 2u) {
+        uint right = (lane + 1u) * offset * 2u - 1u;
+        if (right < 512u) {
+            uint savedLeft = temporary[right - offset];
+            temporary[right - offset] = temporary[right];
+            temporary[right] += savedLeft;
+        }
+        barrier();
+        if (offset == 1u) {
+            break;
+        }
+    }
+
+    if (first < uint(uElementCount)) {
+        outputValues[first] = temporary[lane];
+    }
+    if (second < uint(uElementCount)) {
+        outputValues[second] = temporary[lane + 256u];
+    }
+#else
+    if (uElementCount < 0) {
+        outputValues[0] = inputValues[0];
+        blockSums[0] = temporary[0];
+    }
+#endif
+}

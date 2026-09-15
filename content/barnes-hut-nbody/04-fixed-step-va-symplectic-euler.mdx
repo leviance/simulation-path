@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Fixed step và symplectic Euler
+
+## Vấn đề cần giải quyết
+
+Ta đã tính được acceleration từ một snapshot, nhưng chưa cho body chuyển động. Nếu đưa thẳng frame time vào integrator, cùng một seed có thể cho quỹ đạo khác nhau giữa máy 60 Hz, 144 Hz hoặc một frame vừa bị debugger dừng lại.
+
+Checkpoint 4 dùng accumulator để đổi thời gian render thành các bước physics cố định 1/240 giây, đồng thời đặt guard để một frame chậm không tạo vòng lặp bù vô hạn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi frame cộng `frameSeconds` vào accumulator. Khi accumulator còn lớn hơn `fixedDeltaSeconds`, physics tiến một bước rồi trừ đúng `dt`. Render được phép nhanh/chậm khác nhau; physics chỉ thấy cùng một dãy fixed dt.
+
+Symplectic Euler cập nhật theo thứ tự:
+
+$$
+\mathbf{v}_{n+1}=\mathbf{v}_n+\mathbf{a}_n\Delta t
+$$
+
+$$
+\mathbf{p}_{n+1}=\mathbf{p}_n+\mathbf{v}_{n+1}\Delta t
+$$
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-fixed-step" />
+
+Dùng “Tiến một fixed step” để nhìn đúng một lần cập nhật. Khi bật chạy, Canvas tối đa thực hiện bốn bước cho mỗi frame; `prefers-reduced-motion` giữ mô phỏng pause.
+
+## Viết code từng bước
+
+### Bước 1 — Clamp frame time và đếm bước có guard
+
+```cpp title="include/lab.hpp — planFixedSteps"
+double available = accumulatorSeconds + std::clamp(frameSeconds, 0.0, 0.05);
+int steps = 0;
+while (available >= fixedDeltaSeconds && steps < maximumSteps) {
+    available -= fixedDeltaSeconds;
+    ++steps;
+}
+```
+
+Clamp 50 ms chặn cú nhảy lớn sau khi kéo cửa sổ hoặc dừng debugger. `maximumSteps` chặn spiral of death khi physics đã chậm hơn thời gian thực.
+
+### Bước 2 — Báo khi phải bỏ backlog
+
+```cpp title="include/lab.hpp — fixed-step guard"
+const bool droppedBacklog = available >= fixedDeltaSeconds;
+if (droppedBacklog) {
+    available = std::fmod(available, fixedDeltaSeconds);
+}
+return {steps, available, droppedBacklog};
+```
+
+Khi máy không kịp xử lý, ta bỏ các **full physics step** còn tồn để tránh vòng lặp bù kéo dài sang frame sau, nhưng vẫn giữ phần thời gian lẻ nhỏ hơn `fixedDeltaSeconds`. Cờ `droppedBacklog` có thể đưa vào telemetry; trong project học tập, nó cho biết preset đã vượt ngân sách frame.
+
+### Bước 3 — Cập nhật velocity trước position
+
+```cpp title="include/lab.hpp — integrateSymplecticEuler"
+for (std::size_t index = 0; index < bodies.size(); ++index) {
+    bodies[index].velocity += accelerations[index] * deltaSeconds;
+    bodies[index].position += bodies[index].velocity * deltaSeconds;
+}
+```
+
+Hàm nhận cả vector acceleration đã tính xong. Không body nào nhìn thấy state nửa cũ nửa mới.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 4"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_31_checkpoint_4
+```
+
+Nhấn `Space` để chạy/dừng. Preset vẫn giữ 512 bodies vì direct full pass đang làm khoảng 261 nghìn interactions cho mỗi physics step.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `frameSeconds` làm `dt`. Giới hạn FPS hoặc kéo cửa sổ sẽ đổi quỹ đạo.
+2. Cập nhật position bằng velocity cũ. Đây là explicit Euler; so energy drift lâu dài để thấy khác biệt.
+3. Bỏ maximum-step guard. Tăng N tới khi một frame chậm, accumulator lớn dần và app không thể bắt kịp.
+
+## Tự kiểm tra kết quả
+
+- Frame 1/60 s tạo bốn steps 1/240 s.
+- Bốn frame 1/240 s tạo cùng số physics steps.
+- Frame time được clamp ở 0,05 s.
+- Không frame nào chạy quá maximum steps.
+- `droppedBacklog` bật khi remainder vẫn đủ tạo thêm step, nhưng phần lẻ nhỏ hơn một step vẫn được giữ lại.
+- Velocity được cập nhật trước position.
+- Một stress run có softening dương không tạo NaN.
+
+## Bài tập mở rộng
+
+Ghi state sau một giây khi frame sequence là 60 lần 1/60 s và khi là 120 lần 1/120 s. So từng position với tolerance nhỏ. Sau đó cố ý dùng variable dt để thấy hai kết quả tách nhau.
+
+Bài tiếp theo chưa tối ưu lực ngay. Ta dựng Mass Octree và chứng minh aggregate của nó đúng trước.

@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Độ lớn (magnitude) và đầu mũi tên
+
+## Vấn đề cần giải quyết
+
+Hai đoạn thẳng ở bài trước đã cho biết điểm cuối của A và B, nhưng chưa thể hiện rõ vector đang hướng về phía nào. Trong bài này, ta sẽ biến mỗi đoạn thẳng thành một mũi tên hoàn chỉnh. Đầu mũi tên phải quay đúng hướng nhưng vẫn giữ kích thước dễ nhìn, cho dù vector dài 1 hay 10 đơn vị trong world space.
+
+Để dựng đầu mũi tên, ta cần tách hướng ra khỏi độ dài. Việc này gồm hai bước: tính **độ lớn** (`magnitude`), sau đó **chuẩn hóa vector** (`normalize`) để thu được một vector cùng hướng có độ dài bằng 1. Riêng zero vector không có hướng xác định, vì vậy không thể chuẩn hóa bằng phép chia thông thường.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với vector $v=(x,y)$, định lý Pythagoras cho:
+
+$$
+|v| = \sqrt{x^2+y^2}
+$$
+
+Vector đơn vị cùng hướng được tính bằng:
+
+$$
+\hat{v}=\frac{v}{|v|}
+$$
+
+Ví dụ, với `v = (3,4)`, độ lớn của v bằng 5 và `normalize(v)` bằng `(0.6,0.8)`. Vector mới có độ dài bằng 1 nhưng vẫn giữ nguyên hướng của v. Với `v=(0,0)`, phép chia không hợp lệ; trong project này, `normalize` sẽ trả về `(0,0)` để các bước xử lý tiếp theo vẫn an toàn.
+
+Đầu mũi tên được dựng trong **screen space** để luôn dài 14 pixel. Gọi `d` là vector đơn vị hướng từ điểm đầu tới điểm cuối; khi đó `(-d.y,d.x)` là một vector vuông góc với `d`. Từ điểm cuối, ta lùi 14 pixel theo hướng ngược lại để tìm đáy, rồi dịch sang hai phía 6 pixel để xác định hai đầu cánh.
+
+<InteractiveLab demo="vector" mode="vector-magnitude" />
+
+## Viết code từng bước
+
+### Bước 1 — Tách bình phương độ dài khỏi phép căn
+
+```cpp title="include/lab.hpp — magnitude và bình phương magnitude"
+inline double lengthSquared(Vec2 vector) {
+    return vector.x * vector.x + vector.y * vector.y;
+}
+
+inline double length(Vec2 vector) {
+    return std::sqrt(lengthSquared(vector));
+}
+```
+
+`lengthSquared` hữu ích trong những phép so sánh chỉ cần bình phương độ dài, vì nó tránh một lần gọi căn bậc hai. `length` sử dụng lại kết quả này để công thức x²+y² không bị viết lặp.
+
+### Bước 2 — Chuẩn hóa nhưng chặn vector không có hướng
+
+```cpp title="include/lab.hpp — normalize an toàn"
+inline Vec2 normalize(Vec2 vector) {
+    const double magnitude = length(vector);
+    if (!std::isfinite(magnitude) || magnitude <= 1e-12) {
+        return {};
+    }
+    return vector * (1.0 / magnitude);
+}
+```
+
+Ngưỡng `1e-12` xử lý cả zero vector lẫn những vector quá nhỏ để có thể chia một cách ổn định. `std::isfinite` ngăn `NaN` hoặc infinity tiếp tục lan sang các phép tính tọa độ và làm hỏng bước vẽ.
+
+### Bước 3 — Viết trọn hàm vẽ mũi tên
+
+Không nên đặt toàn bộ phép dựng đầu mũi tên trực tiếp trong render loop. Hãy tạo hàm `drawArrow` ngay sau `drawScreenLine` để phần render chỉ cần truyền điểm đầu, điểm cuối và màu:
+
+```cpp title="src/main.cpp — hàm drawArrow hoàn chỉnh"
+void drawArrow(
+    std::vector<std::uint32_t>& pixels,
+    int width,
+    int height,
+    lab::Vec2 start,
+    lab::Vec2 end,
+    std::uint32_t color
+) {
+    drawScreenLine(pixels, width, height, start, end, color);
+
+    const lab::Vec2 direction = lab::normalize(end - start);
+    if (lab::lengthSquared(direction) == 0.0) {
+        fillCircle(pixels, width, height, int(std::lround(end.x)), int(std::lround(end.y)), 4, color);
+        return;
+    }
+
+    const lab::Vec2 perpendicular{-direction.y, direction.x};
+    const lab::Vec2 arrowBase = end - direction * 14.0;
+    const lab::Vec2 leftWing = arrowBase + perpendicular * 6.0;
+    const lab::Vec2 rightWing = arrowBase - perpendicular * 6.0;
+    drawScreenLine(pixels, width, height, end, leftWing, color);
+    drawScreenLine(pixels, width, height, end, rightWing, color);
+}
+```
+
+Lời gọi `drawScreenLine` đầu tiên vẽ thân mũi tên. Hiệu `end - start` cho biết hướng đi từ điểm đầu tới điểm cuối trong screen space. Sau khi chuẩn hóa, `direction * 14` luôn có độ dài 14 pixel. Vector `perpendicular` vuông góc với thân mũi tên nên có thể dùng để mở hai cánh sang hai phía.
+
+### Bước 4 — Thay thân vector bằng lời gọi `drawArrow`
+
+```cpp title="src/main.cpp — vẽ hai mũi tên hoàn chỉnh"
+drawArrow(pixels, width, height, origin, endpointA, rgba(83, 240, 174));
+drawArrow(pixels, width, height, origin, endpointB, rgba(132, 169, 255));
+```
+
+Từ đây, phần render không cần quan tâm đầu mũi tên được dựng bằng công thức nào. Mỗi lời gọi chỉ cần nêu điểm đầu, điểm cuối và màu cần vẽ.
+
+## Ghép các phần lại
+
+Chạy checkpoint 2 rồi so sánh với checkpoint 1. Thân của A và B không thay đổi, nhưng đầu mũi tên làm hướng của mỗi vector trở nên rõ ràng. Trong Vector Lab, chọn trường hợp “A bằng zero”: `normalize(A)` phải trả về zero vector, các số đo vẫn hợp lệ và không có tọa độ `NaN` nào xuất hiện.
+
+A và B vẫn được lưu trong world space, nhưng phần đầu mũi tên được tính sau khi hai điểm đã chuyển sang screen space. Nhờ đó, đầu mũi tên luôn có cùng kích thước trên màn hình và không bị phóng to theo độ lớn của vector.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ nhánh kiểm tra zero trong `normalize`, sau đó đặt A về gốc. Các thành phần của vector hướng trở thành `NaN`, khiến tọa độ dùng để vẽ đầu mũi tên không còn hợp lệ.
+2. Dùng `direction = end - start` mà không gọi `normalize`. Vector càng dài thì đầu mũi tên càng lớn.
+3. Đổi vector vuông góc thành `(direction.y,direction.x)`. Hai cánh không còn đối xứng quanh thân mũi tên.
+
+Sau mỗi thí nghiệm, hoàn tác thay đổi và kiểm tra lại trường hợp “A bằng zero”.
+
+## Tự kiểm tra kết quả
+
+- A và B đều có thân cùng hai cánh tạo thành đầu mũi tên.
+- Kích thước đầu mũi tên không phụ thuộc vào magnitude của vector.
+- `length({3,4})` bằng 5.
+- `length(normalize({3,4}))` xấp xỉ 1.
+- `normalize({0,0})` trả về `{0,0}` và chương trình vẫn vẽ được.
+- Đầu mũi tên quay đúng hướng khi vector nằm ở bất kỳ góc phần tư nào.
+
+## Bài tập mở rộng
+
+Thêm hai tham số `headLength` và `headWidth` cho `drawArrow`, sau đó thử các cặp 10/4 và 20/9. Viết hàm `perpendicular(Vec2)` rồi dùng nó thay cho biểu thức tạo vector vuông góc trực tiếp. Cuối cùng, giải thích vì sao đầu mũi tên nên được tính trong screen space, còn magnitude của A/B phải được tính trong world space.
+
+Bài tiếp theo sẽ dùng `distance` để xác định điểm cuối mà người dùng đang nhấn và cho phép kéo A hoặc B bằng chuột.

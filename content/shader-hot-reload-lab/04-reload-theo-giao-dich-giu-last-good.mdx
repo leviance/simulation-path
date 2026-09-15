@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Reload theo giao dịch, giữ last-good
+
+## Vấn đề cần giải quyết
+
+Cách reload nguy hiểm nhất là xóa program hiện tại rồi mới compile source mới. Chỉ cần thiếu một dấu `;`, renderer không còn program để vẽ và cửa sổ biến thành màu clear. Người học phải sửa lỗi trong khi mất luôn kết quả trước đó.
+
+Ta sẽ xử lý reload như một giao dịch nhỏ: xây candidate bên cạnh active program, kiểm xong toàn bộ rồi mới commit. Nếu bất kỳ bước nào thất bại, failure path chỉ xóa resource tạm; last-good program vẫn vẽ frame kế tiếp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai đường đi phải tách rõ:
+
+```text
+candidate fail → delete candidate resources → active program không đổi
+candidate pass → swap active handle/locations → tăng generation → delete previous
+```
+
+`generation` đếm số program đã từng trở thành active, không đếm số lần bấm F5. `attempts` mới tăng ở cả pass lẫn fail.
+
+<InteractiveLab demo="shader-hot-reload" mode="transactional-reload" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ active và candidate fingerprint riêng
+
+```cpp title="include/pipeline.hpp — ReloadState"
+struct ReloadState {
+    std::uint64_t generation{1};
+    std::uint64_t attempts{1};
+    std::uint64_t activeFingerprint{};
+    std::uint64_t candidateFingerprint{};
+    bool lastReloadSucceeded{true};
+};
+```
+
+Khi source lỗi, `candidateFingerprint` chứng minh file đã khác, còn `activeFingerprint` cho biết hình hiện tại vẫn đến từ bản cũ.
+
+### Bước 2 — Failure không được chạm active state
+
+```cpp title="include/shader_renderer.hpp — build candidate trước"
+ProgramCandidate candidate{};
+const std::uint64_t fingerprint = fingerprintShaderSources(sources);
+if (!buildProgramCandidate(api, sources, candidate, diagnostics)) {
+    recordReloadAttempt(reloadState, fingerprint, false);
+    return false;
+}
+```
+
+`activeProgram` chưa bị đọc hoặc ghi. Candidate helper tự dọn mọi shader/program object tạm trên các nhánh lỗi.
+
+### Bước 3 — Commit rồi mới xóa previous program
+
+```cpp title="include/shader_renderer.hpp — transactional commit"
+const GLuint previousProgram = activeProgram.program;
+activeProgram = candidate;
+recordReloadAttempt(reloadState, fingerprint, true);
+if (previousProgram != 0U) {
+    api.DeleteProgram(previousProgram);
+}
+diagnostics = "Reload succeeded; candidate became the active program.";
+return true;
+```
+
+Sau phép gán, toàn bộ handle và uniform locations chuyển cùng nhau. Chỉ lúc đó previous program mới hết nhiệm vụ.
+
+## Ghép các phần lại
+
+Checkpoint 4 thêm F5. Chạy app, sửa màu hợp lệ rồi F5: generation tăng. Sau đó chèn token sai và F5 lần nữa: attempts tăng, generation đứng yên, cube vẫn mang màu trước đó.
+
+```bash title="Terminal — build checkpoint transactional reload"
+cmake --build build --config Debug --target project_35_checkpoint_4
+```
+
+Terminal in driver log và dòng `Last-good program remains active.`. Sửa lỗi, F5; candidate mới được commit mà không restart app.
+
+## Thử làm sai để hiểu đúng
+
+1. Chuyển `api.DeleteProgram(activeProgram.program)` lên đầu `reload`. Một compile error lập tức làm mất hình.
+2. Chỉ thay program handle nhưng giữ locations cũ. Cube có thể đứng yên hoặc nhận uniform sai sau reload.
+3. Tăng generation trước khi build candidate. Counter nói dối mỗi lần source lỗi.
+
+Hoàn tác rồi chạy chuỗi pass → fail → fail → pass và ghi lại generation/attempts.
+
+## Tự kiểm tra kết quả
+
+- [ ] F5 source đúng làm generation tăng đúng một.
+- [ ] F5 source sai chỉ làm attempts tăng.
+- [ ] Cube tiếp tục vẽ bằng last-good program sau lỗi.
+- [ ] Handle và locations được commit cùng một lần.
+- [ ] Previous program chỉ bị xóa sau commit thành công.
+
+Hãy dự đoán điều xảy ra nếu candidate link pass nhưng thiếu `uMvp`: transactional rule vẫn phải coi đó là failure.
+
+## Bài tập mở rộng
+
+1. Hiển thị active/candidate fingerprint dạng hexadecimal trên terminal.
+2. Giữ ba diagnostics gần nhất trong ring buffer CPU.
+3. Thêm phím quay lại generation trước và liệt kê resource nào cần giữ thêm.
+
+Bài tiếp theo tự phát hiện Save nhưng vẫn dùng đúng giao dịch vừa xây.

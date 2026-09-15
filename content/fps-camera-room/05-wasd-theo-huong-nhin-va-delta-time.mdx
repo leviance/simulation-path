@@ -1,0 +1,135 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Di chuyển WASD theo hướng camera
+
+## Vấn đề cần giải quyết
+
+Arrow keys đang di chuyển theo world X/Z từng nấc của key event. Cách đó vừa giật, vừa không biết camera đang nhìn hướng nào. Camera FPS cần đọc trạng thái phím mỗi frame, tạo một vector input, đổi nó sang world velocity rồi nhân với thời gian thật.
+
+Project 02 đã dạy delta time và lỗi đi chéo nhanh hơn. Bài này áp dụng lại hai kiến thức ấy trong một basis 3D, đồng thời giữ người xem trên mặt sàn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai input axis được tạo từ bốn phím:
+
+$$
+strafe=D-A,\qquad advance=W-S
+$$
+
+Sau khi normalize khi cần, world velocity là:
+
+$$
+velocity=right\cdot strafe+groundForward\cdot advance
+$$
+
+Vị trí frame kế tiếp:
+
+$$
+position'=position+velocity\cdot speed\cdot dt
+$$
+
+Pitch không xuất hiện trong `groundForward`, vì đây là đi bộ chứ không phải free-fly camera.
+
+<InteractiveLab demo="fps-camera" mode="camera-movement" />
+
+## Viết code từng bước
+
+### Bước 1 — Đổi bốn bool thành hai axis rõ ràng
+
+Viết từng nhánh để người học nhìn thấy phím nào đóng góp dấu nào:
+
+```cpp title="include/lab.hpp — gộp trạng thái WASD thành MoveInput"
+inline MoveInput makeMoveInput(bool left, bool right, bool backward, bool forward) {
+    MoveInput input{};
+    if (left) {
+        input.strafe -= 1.0;
+    }
+    if (right) {
+        input.strafe += 1.0;
+    }
+    if (backward) {
+        input.advance -= 1.0;
+    }
+    if (forward) {
+        input.advance += 1.0;
+    }
+    return input;
+}
+```
+
+W+S hoặc A+D tự triệt tiêu về 0 mà không cần thêm trường hợp đặc biệt.
+
+### Bước 2 — Chỉ normalize khi input dài hơn 1
+
+```cpp title="include/lab.hpp — ngăn movement chéo nhanh hơn"
+inline MoveInput normalizeMoveInput(MoveInput input) {
+    const double length = std::hypot(input.strafe, input.advance);
+    if (length > 1.0) {
+        input.strafe /= length;
+        input.advance /= length;
+    }
+    return input;
+}
+```
+
+Điều kiện `>1` giữ được cường độ của analog input nhỏ nếu sau này bạn thay keyboard bằng gamepad.
+
+### Bước 3 — Ghép basis thành velocity
+
+`right` đã nằm trên XZ; forward dành cho đi bộ cũng bỏ pitch:
+
+```cpp title="include/lab.hpp — cập nhật camera bằng speed và delta time"
+const MoveInput input = normalizeMoveInput(rawInput);
+const Vec3 forward = groundForward(camera);
+const CameraBasis basis = cameraBasis(camera);
+const Vec3 strafeVelocity = multiply(basis.right, input.strafe* speed);
+const Vec3 forwardVelocity = multiply(forward, input.advance* speed);
+const Vec3 velocity = add(strafeVelocity, forwardVelocity);
+const double safeDeltaTime = std::clamp(deltaTime, 0.0, 0.1);
+camera.position = add(camera.position, multiply(velocity, safeDeltaTime));
+```
+
+Chặn `dt` ở 0.1 giây ngăn một lần dừng ở debugger biến thành cú nhảy xuyên cả phòng.
+
+### Bước 4 — Đọc keyboard state sau khi bơm event
+
+```cpp title="src/main.cpp — đọc WASD liên tục mỗi frame"
+const bool* keyboard = SDL_GetKeyboardState(nullptr);
+const lab::MoveInput movement = lab::makeMoveInput(
+    keyboard[SDL_SCANCODE_A],
+    keyboard[SDL_SCANCODE_D],
+    keyboard[SDL_SCANCODE_S],
+    keyboard[SDL_SCANCODE_W]
+);
+camera = lab::advanceCamera(camera, movement, 3.5, deltaTime);
+```
+
+`SDL_PollEvent` phải chạy trước lời gọi này để SDL cập nhật state. Không chuyển đoạn đọc phím lên đầu frame.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build camera movement"
+cmake --build build --config Debug --target project_14_checkpoint_5
+```
+
+Giữ W để đi theo yaw hiện tại, A/D để strafe. Dùng IJKL đổi hướng rồi thử W lần nữa. Nhìn lên cao vẫn không làm camera Y rời 1.6.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `normalizeMoveInput`, đi W một giây rồi W+D một giây. Đo hai quãng đường và xác nhận tỉ lệ gần $\sqrt{2}$ trước khi hoàn tác.
+2. Bỏ `deltaTime` khỏi phép nhân. So sánh Canvas ở 30 và 144 FPS, sau đó trả `dt` vào công thức.
+3. Thay `groundForward` bằng `basis.forward`, đặt pitch 60° rồi giữ W. Quan sát Y thay đổi và hoàn tác.
+
+## Tự kiểm tra kết quả
+
+- Đi thẳng một giây với speed 3.5 cho quãng đường gần 3.5 world unit.
+- W+D có cùng quãng đường với W trong cùng thời gian.
+- 30, 60 và 144 FPS cho vị trí cuối gần nhau.
+- W đi theo yaw; A/D luôn vuông góc với hướng đi tới.
+- `deltaTime` được clamp và camera Y vẫn bằng eye height.
+
+## Bài tập mở rộng
+
+Thêm sprint bằng Left Shift với speed 6.0 nhưng không sửa `MoveInput`. Speed là đặc tính chuyển động; nó không nên bị trộn vào việc đọc hướng input.
+
+Bài tiếp theo thay IJKL bằng mouse delta liên tục và dùng relative mouse mode đúng API SDL3.

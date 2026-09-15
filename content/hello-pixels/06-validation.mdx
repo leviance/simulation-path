@@ -1,0 +1,185 @@
+# Kiểm tra và hoàn thiện Dự án 01
+
+## Vấn đề cần giải quyết
+
+Đến đây, cửa sổ đã hiển thị được ba mẫu hình và vẫn hoạt động khi đổi kích thước. Tuy nhiên, “nhìn có vẻ đúng” chưa đủ để kết luận chương trình an toàn. Công thức row-major có thể sai ở một góc khó thấy; một lần ghi ngoài biên có thể âm thầm làm hỏng vùng nhớ khác; noise cũng có thể thay đổi giữa hai lần chạy mà mắt thường không nhận ra.
+
+Bài cuối không thêm hiệu ứng mới. Thay vào đó, ta viết kiểm thử tự động cho phần không phụ thuộc SDL, rồi tự chạy ứng dụng để kiểm tra những hành vi cần cửa sổ thật. Như vậy project có hai cách kiểm chứng bổ sung cho nhau:
+
+- CTest kiểm tra các điều kiện về bộ nhớ và màu sắc;
+- danh sách kiểm tra khi chạy thật xác nhận việc nhận sự kiện, hiển thị và resize.
+
+Đây cũng là lúc nhìn lại project như một chương trình hoàn chỉnh, thay vì sáu bài học rời rạc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một phép kiểm thử tốt nên tập trung vào những điều **luôn phải đúng**, thay vì một chi tiết ngẫu nhiên của cách cài đặt. Với `Framebuffer`, đó là:
+
+- số phần tử luôn khớp kích thước;
+- hai góc tương ứng với phần tử đầu và cuối;
+- tọa độ ngoài biên không làm thay đổi dữ liệu;
+- pixel hợp lệ nhận đúng màu đã đóng gói;
+- tham số checker không hợp lệ được chặn an toàn.
+
+Không cần mở cửa sổ để kiểm tra những điều trên. `lab.hpp` chỉ dùng thư viện chuẩn C++, nên chương trình test có thể nạp header này và chạy trong vài mili-giây. Ngược lại, việc cửa sổ còn phản hồi khi resize phụ thuộc vào SDL và hệ điều hành. Phần đó hợp lý hơn khi kiểm tra trực tiếp trên ứng dụng thật, thay vì dựng một hệ thống giả lập phức tạp.
+
+Cách chia này giữ cho test vừa nhanh vừa đúng mục đích: phần tính toán thuần được kiểm tra tự động, còn phần giao tiếp với SDL được quan sát trực tiếp.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo chương trình chạy các phép kiểm thử
+
+Tạo `tests/tests.cpp`:
+
+```cpp title="tests/tests.cpp — kiểm tra layout cơ bản"
+#include "lab.hpp"
+#include <cstdlib>
+#include <iostream>
+#include <string_view>
+
+namespace {
+int failures = 0;
+
+void check(bool condition, std::string_view label) {
+    if (condition) {
+        return;
+    }
+    std::cerr << "FAILED: " << label << '\n';
+    ++failures;
+}
+} // namespace
+
+int main() {
+    lab::Framebuffer framebuffer{4, 3};
+    check(framebuffer.pixels.size() == 12, "4 by 3 framebuffer owns 12 pixels");
+    check(framebuffer.index(0, 0) == 0, "top-left index is zero");
+    check(framebuffer.index(3, 2) == 11, "bottom-right index is the final element");
+}
+```
+
+Ta chọn kích thước 4×3 vì có thể viết toàn bộ vị trí ra giấy và tự kiểm tra. Hai góc chưa bao phủ mọi pixel, nhưng đủ để phát hiện nhiều lỗi như dùng sai `width` hoặc vô tình chuyển sang cách lưu column-major.
+
+Không nên dùng `assert` làm công cụ chạy test ở đây. Trong cấu hình Release, `NDEBUG` thường khiến toàn bộ biểu thức `assert` bị loại bỏ. Hàm `check` của chúng ta luôn chạy: nếu điều kiện sai, nó in tên phép kiểm tra và tăng `failures`. Cuối `main`, chương trình trả `EXIT_FAILURE` khi có ít nhất một lỗi.
+
+### Bước 2 — Kiểm tra `putPixel` ở cả trong và ngoài biên
+
+Nối đoạn sau trước dấu `}` cuối của `main`:
+
+```cpp title="tests/tests.cpp — kiểm tra putPixel"
+const auto before = framebuffer.pixels;
+const auto red = lab::rgba(255, 0, 0);
+framebuffer.putPixel(-1, 0, red);
+framebuffer.putPixel(0, -1, red);
+framebuffer.putPixel(framebuffer.width, 0, red);
+framebuffer.putPixel(0, framebuffer.height, red);
+check(framebuffer.pixels == before, "out-of-bounds writes leave the framebuffer unchanged");
+const auto sampleColor = lab::rgba(1, 2, 3, 4);
+framebuffer.putPixel(3, 2, sampleColor);
+check(framebuffer.pixels[11] == sampleColor, "valid putPixel writes the requested color");
+```
+
+So sánh với bản sao `before` cho ta nhiều thông tin hơn việc chỉ thấy chương trình “không crash”: nó xác nhận không pixel hợp lệ nào bị thay đổi ngoài ý muốn. Sau đó ta thử một lần ghi hợp lệ ở góc cuối, vị trí rất dễ mắc lỗi lệch một đơn vị.
+
+Bốn lời gọi chạm vào bốn phía khác nhau của framebuffer. Nếu thiếu bất kỳ điều kiện bảo vệ nào, vector có thể khác `before` hoặc công cụ kiểm tra bộ nhớ sẽ báo lỗi. Màu `sampleColor` dùng alpha bằng 4 để phép kiểm tra không chỉ vô tình xác nhận ba kênh RGB.
+
+### Bước 3 — Kiểm tra resize, checkerboard và gradient
+
+Thêm hai phép kiểm tra:
+
+```cpp title="tests/tests.cpp — kiểm tra đầu vào bất thường"
+framebuffer.resize(8, 5);
+check(framebuffer.width == 8, "resize updates width");
+check(framebuffer.height == 5, "resize updates height");
+check(framebuffer.pixels.size() == 40, "resize updates storage size");
+lab::Framebuffer checker{4, 4};
+checker.checker(0);
+check(checker.pixels.size() == 16, "checker keeps framebuffer size");
+check(checker.pixels[checker.index(0, 0)] != checker.pixels[checker.index(1, 0)], "zero cell size is clamped to one");
+```
+
+Ba phép `check` sau `resize` xác nhận `width`, `height` và số phần tử luôn thay đổi cùng nhau. Lời gọi `checker(0)` kiểm tra một trường hợp đầu vào không hợp lệ: hàm phải tránh chia cho 0, giữ nguyên kích thước framebuffer và coi kích thước ô tối thiểu là 1.
+
+Ở đầu `main`, thêm hai kiểm tra ngay khi biên dịch để xác nhận thứ tự các kênh màu. Sau đó dùng framebuffer 3×3 để kiểm tra hai đầu gradient:
+
+```cpp title="tests/tests.cpp — màu và hai đầu gradient"
+static_assert(lab::rgba(255, 0, 0) == 0xFF0000FFu);
+static_assert(lab::rgba(1, 2, 3, 4) == 0x01020304u);
+lab::Framebuffer gradient{3, 3};
+gradient.gradient();
+check(gradient.pixels[gradient.index(0, 0)] == lab::rgba(0, 0, 180), "gradient starts at zero on both axes");
+check(gradient.pixels[gradient.index(2, 2)] == lab::rgba(255, 255, 180), "gradient reaches both endpoints");
+```
+
+Hai phép kiểm tra này xác nhận công thức thật sự đi từ 0 đến 255, chứ không chỉ tạo một vector đúng kích thước. Bản mã nguồn hoàn chỉnh còn kiểm tra hai góc còn lại để phát hiện lỗi đảo trục X/Y, trường hợp framebuffer 1×1 và khả năng lặp lại của noise.
+
+### Bước 4 — Thêm chương trình test vào CMake
+
+Ở cuối `CMakeLists.txt`, tạo một executable riêng cho test:
+
+```cmake title="CMakeLists.txt — test target"
+include(CTest)
+
+if(BUILD_TESTING)
+    add_executable(project_1_tests tests/tests.cpp)
+    target_include_directories(project_1_tests PRIVATE final/include)
+    add_test(NAME project_1_validation COMMAND project_1_tests)
+endif()
+```
+
+Target này không cần `target_link_libraries(... SDL3::SDL3)` vì test không gọi hàm SDL nào. Việc tách phần tính toán vào `lab.hpp` giúp test chạy nhanh, không mở cửa sổ và vẫn dùng được trong môi trường CI không có màn hình.
+
+Build rồi chạy:
+
+```bash title="Terminal — từ thư mục project-01-hello-pixels"
+cmake -S . -B build
+cmake --build build --config Debug --target project_1_tests
+ctest --test-dir build -C Debug --output-on-failure
+cmake --build build --config Release --target project_1_tests
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Hãy chạy cả Debug lẫn Release để chắc chắn hàm `check` không bị loại bỏ ở cấu hình tối ưu. Tùy chọn `--output-on-failure` giữ kết quả ngắn gọn khi mọi test đều đạt và chỉ in chi tiết khi có lỗi. Nếu CTest báo không tìm thấy test, hãy kiểm tra `BUILD_TESTING`; `include(CTest)` mặc định sẽ bật tùy chọn này.
+
+## Ghép các phần lại
+
+Project hoàn chỉnh được chia thành ba phần, mỗi phần có một trách nhiệm rõ ràng:
+
+1. `include/lab.hpp` chứa cách đóng gói màu, tính vị trí pixel, kiểm tra biên và tạo các mẫu hình.
+2. `src/main.cpp` quản lý vòng đời SDL, nhận phím, cập nhật texture và xử lý resize.
+3. `tests/tests.cpp` kiểm tra những điều luôn phải đúng, không phụ thuộc renderer hay hệ điều hành.
+
+Khi chạy ứng dụng, dữ liệu đi theo thứ tự:
+
+`khởi tạo SDL → tạo framebuffer và texture → đọc sự kiện → tạo mẫu hình → cập nhật texture → vẽ → hiển thị → lặp lại → dọn dẹp`
+
+Khi chạy kiểm thử, trình tự là:
+
+`cấu hình CMake → build project_1_tests → CTest chạy chương trình test → check từng điều kiện → main trả mã thoát`
+
+Hãy mở mã nguồn hoàn chỉnh và lần theo một pixel cụ thể. Phím `1` chọn gradient; `gradient` tạo màu bằng `rgba`; `putPixel` gọi `index`; vector được chuyển sang texture bằng đúng `pitch`; cuối cùng texture được hiển thị. Nếu tự giải thích được đường đi này, bạn đã hiểu project như một chương trình thống nhất chứ không còn là các đoạn code rời rạc.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi kỳ vọng góc cuối từ 11 thành 12. CTest phải thất bại. Sửa **kỳ vọng sai**, không sửa code đúng để chiều theo test.
+2. Tạm bỏ phần kiểm tra biên trong `putPixel`. Phép so sánh với bản sao có thể thất bại hoặc công cụ kiểm tra bộ nhớ có thể báo lỗi; cả hai đều cho thấy điều kiện bảo vệ là cần thiết.
+3. Đổi `resize(8, 5)` nhưng vẫn kỳ vọng 12 phần tử. Đọc thông báo và xác định điều kiện nào đang bị mô tả sai trong test.
+4. Tạm bỏ `SDL_RenderPresent` trong ứng dụng. CTest vẫn đạt vì nó không kiểm tra phần đi qua SDL; do đó danh sách kiểm tra khi chạy thật vẫn cần thiết.
+
+## Tự kiểm tra kết quả
+
+- [ ] `project_1_tests` build mà không link SDL.
+- [ ] CTest báo `project_1_validation` đạt.
+- [ ] Target `project_1_final` build sạch và mở được cửa sổ.
+- [ ] Phím `1`, `2`, `3`, Escape và nút Close đều hoạt động.
+- [ ] Resize liên tục không dùng `texture == nullptr` và mẫu hình vẫn phủ kín vùng pixel mới.
+- [ ] Cùng seed noise cho cùng kết quả.
+- [ ] Bạn giải thích được `index`, `putPixel`, `pitch` và thứ tự cleanup bằng lời của mình.
+
+## Bài tập mở rộng
+
+1. Viết test tách lại bốn kênh từ `rgba` và kiểm tra vài màu có alpha khác 255.
+2. Tính checksum của `noise(17)` trên framebuffer 8×8, lưu giá trị mong đợi trong test rồi thay seed để xem test có phát hiện dữ liệu đã đổi hay không.
+3. Xuất framebuffer thành file PPM bằng `std::ofstream`. Đây là cách kiểm tra pixel không phụ thuộc SDL texture.
+4. Chạy bản Debug với AddressSanitizer nếu compiler hỗ trợ, rồi thực hiện lại thí nghiệm bỏ bounds check để thấy công cụ phát hiện lỗi bộ nhớ.
+
+Source ở cuối trang là bản hoàn chỉnh có thể build, test và chạy. Hãy dùng nó để đối chiếu với bài làm của mình, thay vì chép đè toàn bộ. Mỗi khi thấy một điểm khác nhau, hãy thử giải thích vì sao trước khi quyết định sửa code.

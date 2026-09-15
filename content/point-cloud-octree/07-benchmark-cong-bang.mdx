@@ -1,0 +1,115 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Benchmark công bằng
+
+## Vấn đề cần giải quyết
+
+Octree đã khớp oracle, nhưng một lần đọc FPS không trả lời được nó nhanh ở đâu. Render, resize, OS scheduler và camera interaction đều chen vào frame time. Ta cần benchmark chỉ đo query, đồng thời giữ hai phía trên đúng cùng dữ liệu và xác nhận chúng thật sự tạo cùng output.
+
+Checkpoint 7 đưa workload thành dữ liệu rõ ràng: `points`, `volumes`, `repetitions`. Rebuild được đo riêng khi tạo tree; timer query không chứa distribution generation hay topology construction.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một benchmark hợp lệ ở đây cần bốn lớp bảo vệ:
+
+1. Octree và brute force nhận cùng spans.
+2. Có warm-up bằng cùng workload nhưng không cộng vào kết quả báo cáo.
+3. `queryCount` và exact-work counters được ghi cùng elapsed time.
+4. Checksum phụ thuộc hit set, khiến output vẫn được sử dụng và hai phía có thể đối chiếu.
+
+Brute scans phải thỏa công thức kiểm tra được:
+
+$$
+scans=N\times Q\times R
+$$
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-benchmark" />
+
+Nhấn “So benchmark”. Đọc checksum và candidates trước khi đọc millisecond. Nếu checksum khác, timing không còn ý nghĩa.
+
+## Viết code từng bước
+
+### Bước 1 — Gộp hit set thành query hash
+
+```cpp title="include/lab.hpp — checksum không phụ thuộc hit order"
+std::uint32_t queryHash = std::uint32_t(hitIndices.size());
+for (const std::size_t pointIndex : hitIndices) {
+    queryHash += std::uint32_t(pointIndex + 1U) * 0x9e3779b1U;
+}
+checksum ^= queryHash;
+checksum *= 0x01000193U;
+```
+
+Phép cộng bên trong query không phụ thuộc traversal order. Sau đó FNV-like mix giữ thứ tự của các queries trong workload.
+
+### Bước 2 — Chạy đúng số repetitions
+
+```cpp title="include/lab.hpp — vòng benchmark Octree"
+for (int repetition = 0; repetition < std::max(0, repetitions); ++repetition) {
+    for (const Bounds3D& volume : volumes) {
+        queryOctree(tree, points, volume, workspace);
+        ++metrics.queryCount;
+        metrics.totalVisitedNodes += workspace.visitedNodes;
+        metrics.totalCandidates += workspace.candidatesChecked;
+        updateChecksum(metrics.checksum, workspace.hitIndices);
+    }
+}
+```
+
+Workspace được tái sử dụng, nên timer đo traversal và exact tests thay vì allocation mới ở mỗi query.
+
+### Bước 3 — Warm-up ngoài kết quả chính
+
+```cpp title="src/main.cpp — warm-up rồi mới giữ metrics"
+lab::benchmarkOctree(tree, points, probes, 1, octreeWorkspace);
+lab::benchmarkBruteVolumes(points, probes, 1, bruteWorkspace);
+octreeBenchmark =
+    lab::benchmarkOctree(tree, points, probes, 3, octreeWorkspace);
+bruteBenchmark =
+    lab::benchmarkBruteVolumes(points, probes, 3, bruteWorkspace);
+```
+
+Warm-up có cùng code paths, nhưng return value bị bỏ. Lượt đo chính bắt đầu với metrics mới.
+
+### Bước 4 — Báo exact work cạnh timing
+
+```cpp title="include/lab.hpp — BatchMetrics"
+struct BatchMetrics {
+    std::size_t queryCount{};
+    std::size_t totalVisitedNodes{};
+    std::size_t totalCandidates{};
+    std::size_t totalScanned{};
+```
+
+`totalCandidates` và `totalScanned` ổn định hơn timing giữa các máy. Chúng giải thích algorithm đã tránh được bao nhiêu exact tests.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 7"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_30_checkpoint_7
+```
+
+Nhấn `B` vài lần. Microseconds có thể dao động, nhưng query count, checksum, brute scans và total candidates phải lặp lại chính xác với cùng preset.
+
+## Thử làm sai để hiểu đúng
+
+1. Sinh volume mới trong mỗi phía benchmark. Hai algorithm không còn chạy cùng workload. Tạo `probes` một lần rồi truyền cùng span.
+2. Đặt `buildOctree` bên trong timer query. Kết quả trở thành “rebuild + query” và không mô tả scene tĩnh. Báo rebuild riêng.
+3. Bỏ checksum và không dùng hits. Compiler Release có thể tối ưu nhiều hơn bạn nghĩ; quan trọng hơn, bạn mất kiểm tra output agreement. Giữ checksum và so hai phía.
+
+## Tự kiểm tra kết quả
+
+- Hai benchmark dùng cùng points, volumes và repetitions.
+- Warm-up không cộng vào metrics chính.
+- `queryCount == volumes.size() * repetitions`.
+- Brute scans bằng `N * Q * R`.
+- Octree và brute checksum giống nhau.
+- Query timer không chứa point generation hoặc rebuild.
+- Exact work được báo cạnh elapsed time.
+
+## Bài tập mở rộng
+
+Chạy 7 lượt benchmark Release, lưu `microseconds/query`, rồi báo median thay vì minimum. Giữ checksum và exact-work counters ở từng lượt để loại bỏ bất kỳ sample nào chạy workload khác.
+
+Benchmark mặc định mới trả lời cho một capacity. Bài sau rebuild bốn cấu hình trên cùng dữ liệu để xem memory/topology và candidate work đổi chỗ cho nhau ra sao.

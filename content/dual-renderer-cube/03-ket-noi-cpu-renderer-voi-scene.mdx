@@ -1,0 +1,213 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kết nối CPU renderer với scene
+
+## Vấn đề cần giải quyết
+
+Project 17 đã có một CPU cube, nhưng ta không chép nguyên chương trình đó vào Project 34. Renderer mới phải nhận chính `kCubeVertices`, `kCubeIndices` và `CubeScene` mà GPU sẽ dùng. Nếu CPU tự giữ mesh hoặc góc xoay riêng, F1/F2 chỉ là hai demo đặt cạnh nhau chứ chưa phải hai backend.
+
+Checkpoint 3 tạo cube nhìn thấy đầu tiên bằng CPU: C++ biến local vertex thành clip/NDC/screen, rasterize 12 triangles, ghi color/depth rồi upload framebuffer thành texture full-window.
+
+## Hiểu ý tưởng trước khi viết code
+
+Pipeline CPU được đọc thẳng:
+
+```text
+shared vertices + indices
+    → column-major MVP
+    → clip / perspective divide
+    → top-left screen coordinates
+    → coverage + depth
+    → RGBA8 framebuffer
+    → texture presenter
+```
+
+Presenter vẫn dùng OpenGL để đưa pixels lên cửa sổ. “CPU renderer” ở đây nghĩa là geometry, rasterization và depth test chạy trên CPU; không có nghĩa ta viết driver màn hình riêng.
+
+<InteractiveLab demo="dual-renderer-cube" mode="cpu-path" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo cùng MVP cho cả cube
+
+```cpp title="include/pipeline.hpp — makeMvp"
+inline Mat4 makeMvp(const CubeScene& scene, float aspect) {
+    const Mat4 model = multiply(rotationYMatrix(scene.angleY), rotationXMatrix(scene.angleX));
+    const Mat4 view = translationMatrix(0.0F, 0.0F, -4.2F);
+    const Mat4 projection = perspectiveMatrix(std::numbers::pi_v<float> / 3.0F, aspect, 0.5F, 20.0F);
+    return multiply(projection, multiply(view, model));
+}
+```
+
+CPU không gọi một helper projection “gần giống GLSL”. Nó dùng đúng matrix mà bài 5 sẽ upload làm `uMvp`.
+
+Mỗi vertex đi qua matrix này, perspective divide và phép đổi sang framebuffer có gốc top-left. Giữ `clip.w` trong kết quả giúp ta còn dữ liệu để kiểm tra và mở rộng perspective-correct interpolation sau này:
+
+```cpp title="include/pipeline.hpp — projectVertex"
+inline ScreenVertex projectVertex(const GpuCubeVertex& vertex, const Mat4& mvp, int width, int height) {
+    const Vec4 clip = transform(mvp, {vertex.positionX, vertex.positionY, vertex.positionZ, 1.0F});
+    const float ndcX = clip.x / clip.w;
+    const float ndcY = clip.y / clip.w;
+    const float ndcZ = clip.z / clip.w;
+    return {
+        (ndcX * 0.5F + 0.5F) * float(width),
+        (1.0F - (ndcY * 0.5F + 0.5F)) * float(height),
+        ndcZ * 0.5F + 0.5F,
+        clip.w,
+    };
+}
+```
+
+### Bước 2 — Color buffer và depth buffer phải đổi kích thước cùng nhau
+
+Một pixel có bốn byte màu nhưng chỉ một số thực depth. Khi cửa sổ đổi kích thước, hai mảng phải cùng mô tả đúng `width × height` pixel:
+
+```cpp title="include/pipeline.hpp — framebuffer có color và depth"
+struct Framebuffer {
+    int width{1};
+    int height{1};
+    std::vector<std::uint8_t> rgba{0U, 0U, 0U, 0U};
+    std::vector<float> depth{1.0F};
+
+    void resize(int nextWidth, int nextHeight) {
+        width = std::max(1, nextWidth);
+        height = std::max(1, nextHeight);
+        rgba.resize(std::size_t(width) * std::size_t(height) * 4U);
+        depth.resize(std::size_t(width) * std::size_t(height));
+        clear();
+    }
+
+    void clear() {
+        for (std::size_t pixel = 0; pixel < depth.size(); ++pixel) {
+            const std::size_t offset = pixel * 4U;
+            rgba[offset] = 13U;
+            rgba[offset + 1U] = 21U;
+            rgba[offset + 2U] = 38U;
+            rgba[offset + 3U] = 255U;
+        }
+        std::fill(depth.begin(), depth.end(), 1.0F);
+    }
+};
+```
+
+`resize` gọi `clear` ngay để không có frame nào nhìn thấy color hoặc depth vừa cấp phát nhưng chưa khởi tạo.
+
+### Bước 3 — Project vertices một lần, rồi chọn triangle qua shared indices
+
+Ta không transform lại cùng một vertex mỗi khi nó xuất hiện trong index buffer. Mảng `projected` chứa 24 kết quả của frame hiện tại; vòng triangle chỉ lấy ba phần tử từ đó:
+
+```cpp title="include/pipeline.hpp — project toàn bộ mesh"
+framebuffer.clear();
+CpuRenderStats stats{};
+const Mat4 mvp = makeMvp(scene, float(framebuffer.width) / float(framebuffer.height));
+std::array<ScreenVertex, kCubeVertices.size()> projected{};
+for (std::size_t index = 0; index < kCubeVertices.size(); ++index) {
+    projected[index] = projectVertex(kCubeVertices[index], mvp, framebuffer.width, framebuffer.height);
+}
+
+const std::size_t triangleCount = kCubeIndices.size() / 3U;
+for (std::size_t position = 0; position < triangleCount; ++position) {
+    std::size_t triangleIndex = position;
+    if (reverseOrder) {
+        triangleIndex = triangleCount - 1U - position;
+    }
+```
+
+```cpp title="include/pipeline.hpp — lấy ba projected vertices"
+const std::size_t offset = triangleIndex * 3U;
+ScreenVertex a = projected[kCubeIndices[offset]];
+ScreenVertex b = projected[kCubeIndices[offset + 1U]];
+ScreenVertex c = projected[kCubeIndices[offset + 2U]];
+++stats.submittedTriangles;
+```
+
+Renderer không biết face bắt đầu ở vertex nào. Nó chỉ đọc ba indices liên tiếp, giống đúng cách `glDrawElements` sẽ đọc EBO.
+
+### Bước 4 — Coverage, depth compare rồi mới ghi color
+
+Sau khi chuẩn hóa winding và tính bounding box, mỗi pixel center cho ba barycentric weights. Pixel chỉ thuộc triangle khi cả ba weights không âm trong sai số nhỏ:
+
+```cpp title="include/pipeline.hpp — coverage và nội suy depth"
+for (int y = minimumY; y <= maximumY; ++y) {
+    for (int x = minimumX; x <= maximumX; ++x) {
+        const float sampleX = float(x) + 0.5F;
+        const float sampleY = float(y) + 0.5F;
+        const float weightA = edge(b, c, sampleX, sampleY) / area;
+        const float weightB = edge(c, a, sampleX, sampleY) / area;
+        const float weightC = edge(a, b, sampleX, sampleY) / area;
+        if (weightA < -1.0e-6F || weightB < -1.0e-6F || weightC < -1.0e-6F) {
+            continue;
+        }
+        const float fragmentDepth = weightA * a.depth + weightB * b.depth + weightC * c.depth;
+        const std::size_t pixel = std::size_t(y) * std::size_t(framebuffer.width) + std::size_t(x);
+```
+
+Ba weights cộng xấp xỉ 1, vì vậy cùng phép nội suy dùng được cho depth. Đến đây mới thực hiện depth test:
+
+```cpp title="include/pipeline.hpp — depth test CPU"
+if (scene.depthEnabled && fragmentDepth >= framebuffer.depth[pixel]) {
+    ++stats.rejectedFragments;
+    continue;
+}
+framebuffer.depth[pixel] = fragmentDepth;
+```
+
+Clear depth là `1.0`; fragment mới chỉ thắng khi nhỏ hơn giá trị đã lưu. Chỉ sau phép gán depth này code mới ghi bốn byte màu và tăng `passedFragments`. Ta dùng thứ tự tường minh để bài GPU có một quy tắc cụ thể cần phản chiếu.
+
+### Bước 5 — Presenter chỉ chép kết quả lên texture
+
+`CpuTexturePresenter` được giữ lại từ Project 33: `resize` gọi `TexImage2D` khi kích thước đổi, `upload` gọi `TexSubImage2D` mỗi frame và `draw` vẽ một quad. Khác biệt quan trọng là trước khi vẽ quad, presenter tắt depth/culling vì texture đã là kết quả hoàn chỉnh:
+
+```cpp title="include/gpu_renderer.hpp — draw CPU framebuffer texture"
+void draw(GlApi& api) const {
+    api.Disable(GL_DEPTH_TEST);
+    api.Disable(GL_CULL_FACE);
+    api.UseProgram(program);
+    api.ActiveTexture(GL_TEXTURE0);
+    api.BindTexture(GL_TEXTURE_2D, texture);
+    api.Uniform1i(textureLocation, 0);
+    api.BindVertexArray(vertexArray);
+    api.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    api.BindVertexArray(0U);
+}
+```
+
+Depth test của cube đã diễn ra trong `rasterizeCpuCube`; bật lại `GL_DEPTH_TEST` khi trình bày texture chỉ trộn hai pipeline và làm kết quả phụ thuộc state OpenGL cũ.
+
+## Ghép các phần lại
+
+Trong render loop, CPU framebuffer và texture chỉ resize khi pixel dimensions đổi. Mỗi frame clear rồi rasterize từ scene hiện tại:
+
+```cpp title="src/main.cpp — CPU path của frame"
+cpuStats = lab::rasterizeCpuCube(cpuFramebuffer, scene);
+cpuPresenter.upload(gl, cpuFramebuffer);
+cpuPresenter.draw(gl);
+```
+
+Chạy checkpoint 3, kéo cube và quan sát `pass/reject` trên title bar. Ở đây renderer CPU là backend duy nhất; F1/F2 sẽ được ghép sau khi GPU path hoàn chỉnh.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `framebuffer.clear()` ở đầu frame. Color/depth của góc cũ vẫn còn, tạo vệt kéo dù transform đúng.
+2. Dùng logical window width thay cho framebuffer pixel width. Aspect và texture size sẽ lệch trên high-DPI.
+3. Ghi color trước depth compare. Hidden fragments vẫn phá màu dù Z-buffer cuối cùng chứa depth đúng.
+
+Sau khi quan sát, hoàn tác lỗi và xác nhận checksum trở lại ổn định.
+
+## Tự kiểm tra kết quả
+
+- [ ] Cube CPU hiện đủ các mặt nhìn thấy và xoay theo drag.
+- [ ] Mesh/index arrays không bị copy sang một kiểu CPU riêng.
+- [ ] Aspect lấy từ framebuffer pixels.
+- [ ] Depth clear là 1.0, phép so là nhỏ hơn.
+- [ ] Texture presenter không chứa transform/raster logic.
+
+Hãy dự đoán điều sẽ xảy ra nếu đảo triangle order khi depth bật. CTest cuối project yêu cầu color và depth output không đổi.
+
+## Bài tập mở rộng
+
+1. In checksum của ba preset angle và xác nhận lặp lại được.
+2. Thêm depth grayscale view chỉ ở Canvas, không sửa color buffer chuẩn.
+3. Đếm riêng submitted, culled, passed và rejected để biết mỗi stage loại bao nhiêu work.
+
+Bài tiếp theo đưa cùng hai array vào VBO/EBO và vẽ cube bằng GPU.

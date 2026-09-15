@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nối các compute pass bằng barrier
+
+## Bài toán cần giải quyết
+
+Các compute pass đã có đủ, nhưng gửi đúng thứ tự vẫn chưa đảm bảo pass sau nhìn thấy dữ liệu pass trước vừa ghi. Giữa count, scan, scatter và tìm hàng xóm, bước đọc tiếp theo đều là compute shader; trước readback, CPU lại là bên đọc. Ta sẽ ghi rõ từng cặp ghi–đọc và chọn barrier bit phù hợp. Trong tài liệu OpenGL, bên đọc tiếp theo thường được gọi là **consumer**.
+
+Ta sẽ ngừng nói “thêm barrier cho chắc”. Thay vào đó, với mỗi pass, hãy ghi rõ buffer nào vừa được sửa và bước tiếp theo sẽ đọc nó bằng compute shader hay CPU readback.
+
+## Theo dõi một particle đi qua grid
+
+Pass graph final:
+
+```text
+clear counts
+  → count cells
+  → scan counts / recursive sums / uniform add
+  → prepare cursors
+  → scatter indices
+  → find neighbors
+  → readback validation/heatmap
+```
+
+Các cạnh compute→compute dùng `GL_SHADER_STORAGE_BARRIER_BIT`. Chỉ cạnh cuối compute→`glGetBufferSubData` dùng `GL_BUFFER_UPDATE_BARRIER_BIT`. `barrier()` trong scan shader chỉ đồng bộ lanes **trong một workgroup**; nó không nối hai dispatch.
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="grid-pass-graph" />
+
+Chọn bước đọc tiếp theo rồi thử ba barrier bit. Canvas báo PASS/FAIL theo quy tắc OpenGL, không dựa vào việc một frame cụ thể có tình cờ đọc trúng dữ liệu mới hay không.
+
+## Xây từng phần
+
+### Bước 1 — Nhật ký phải ghi cả buffer vừa được sửa
+
+```cpp title="include/gpu_grid_engine.hpp — PassRecord"
+struct PassRecord {
+    std::string label{};
+    std::string writes{};
+    std::size_t itemCount{};
+    GLenum barrierBit{};
+};
+```
+
+Tên pass một mình chưa đủ. `writes` cho biết cạnh đang bảo vệ `cellCounts`, `cellOffsets`, `cellCursors`, `sortedIndices` hay `NeighborSummary`.
+
+### Bước 2 — Đặt barrier ngay sau pass ghi dữ liệu
+
+```cpp title="include/gpu_grid_engine.hpp — memoryBarrier"
+void memoryBarrier(
+    GlApi& gl,
+    const char* label,
+    const char* writes,
+    std::size_t itemCount,
+    GLenum barrierBit
+) {
+    gl.MemoryBarrier(barrierBit);
+```
+
+Ở checkpoint 7, hàm còn push `PassRecord`. Một helper duy nhất giữ việc dispatch và việc mô tả synchronization cạnh nhau trong source.
+
+### Bước 3 — Ghi rõ bước nào sẽ đọc dữ liệu tiếp theo
+
+```cpp title="include/gpu_grid_engine.hpp — barrierName"
+inline const char* barrierName(GLenum barrierBit) {
+    if (barrierBit == GL_SHADER_STORAGE_BARRIER_BIT) {
+        return "SHADER_STORAGE -> compute consumer";
+    }
+    if (barrierBit == GL_BUFFER_UPDATE_BARRIER_BIT) {
+        return "BUFFER_UPDATE -> readback consumer";
+    }
+    return "unexpected barrier";
+}
+```
+
+Nhật ký không in một số hex khó đọc. Mỗi dòng nói thẳng bước nào sắp đọc dữ liệu.
+
+### Bước 4 — Nối bước ghi index với bước tìm hàng xóm
+
+```cpp title="include/gpu_grid_engine.hpp — scatter to neighbors edge"
+dispatchScatter(gl);
+memoryBarrier(gl, "scatter", "sortedIndices", positions_.size(), GL_SHADER_STORAGE_BARRIER_BIT);
+dispatchNeighbors(gl);
+memoryBarrier(gl, "neighbors", "NeighborSummary", positions_.size(), GL_BUFFER_UPDATE_BARRIER_BIT);
+```
+
+Neighbor shader đọc `sortedIndices`, nên shader-storage là bit của cạnh đầu. CPU validation/readout đọc summary sau cạnh thứ hai, nên buffer-update mới xuất hiện ở cuối.
+
+## Chạy cả chuỗi xử lý
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_40_checkpoint_7 project_40_tests
+```
+
+Console in từng record với label, buffer, item count và barrier name. Scan có nhiều dispatch nội bộ; trace ghi cả scan levels và uniform-add levels thay vì gộp thành một hộp bí ẩn.
+
+## Cố tình làm hỏng grid
+
+1. Bỏ barrier count→scan. Offset có thể được tính từ occupancy cũ hoặc chưa hoàn tất.
+2. Dùng `GL_BUFFER_UPDATE_BARRIER_BIT` giữa scatter và neighbor. Bit này không dành cho compute shader đọc SSBO ở bước tiếp theo.
+3. Chỉ gọi GLSL `barrier()` trong count shader rồi bỏ `glMemoryBarrier`. Workgroups/dispatches không được nối với nhau.
+4. Dùng `GL_ALL_BARRIER_BITS` ở mọi chỗ. Chương trình có thể chạy, nhưng code không còn cho thấy dữ liệu sắp được đọc bằng cách nào và có thể đồng bộ thừa.
+
+## Tự nghiệm thu
+
+- [ ] Trace bắt đầu clear/count và kết thúc neighbors/readback.
+- [ ] Mỗi record có buffer name và item domain.
+- [ ] Compute shader đọc dữ liệu mới luôn được đặt sau shader-storage barrier.
+- [ ] CPU readback chỉ xảy ra sau buffer-update barrier.
+- [ ] Workgroup `barrier()` chỉ nằm trong scan shared-memory algorithm.
+- [ ] Không có intermediate `glGetBufferSubData` giữa count, scan, scatter và query.
+
+## Hướng mở rộng
+
+1. Vẽ graph bằng DOT từ `PassRecord` và gắn buffer name lên edge.
+2. Thêm một pass reduction neighbor counts; xác định barrier của summary→reduction.
+3. Viết debug mode cố ý bỏ một barrier và báo rõ đây là undefined/stale-data experiment, không phải benchmark.
+
+Bài 8 sẽ dùng nhật ký này để sắp xếp việc kiểm tra: kiểm cấu trúc grid trước, kết quả hàng xóm sau, rồi đo toàn bộ các pass bằng query ring có số mẫu giới hạn.

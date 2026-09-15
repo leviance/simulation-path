@@ -1,0 +1,135 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nội suy NDC depth cho từng fragment
+
+## Vấn đề cần giải quyết
+
+Depth buffer đã có một ô cho mỗi pixel, nhưng ta chưa biết ghi số nào. Lấy depth của vertex A cho cả triangle sẽ tạo một mặt phẳng giả. Lấy trung bình ba vertex cũng chỉ tạo một số duy nhất; một triangle nghiêng phải gần ở một phía và xa ở phía còn lại.
+
+Rasterizer Project 16 đã tính barycentric weights tại từng sample. Ta dùng chính ba weight đó để nội suy NDC depth của ba `ScreenVertex`.
+
+Chọn một pixel nằm trên cube và bật “Xem depth”. Kéo cube chậm: grayscale phải thay đổi mượt trong từng mặt, không nhảy thành một màu phẳng cho cả triangle.
+
+## Hiểu ý tưởng trước khi viết code
+
+## Vì sao giữ NDC depth?
+
+`projectVertex` tính clip Z và clip W theo projection rồi thực hiện perspective divide. Công thức rút gọn trong source là:
+
+```cpp title="include/lab.hpp — depth sau perspective divide"
+const double depthRange = farPlane - nearPlane;
+const double ndcDepth =
+    farPlane / depthRange -
+    nearPlane * farPlane / (depthRange * point.z);
+```
+
+Giá trị này có hai thuộc tính ta cần:
+
+- nằm trong `[0,1]` với point từ near tới far;
+- biến đổi tuyến tính trên triangle **sau projection**, nên có thể nội suy bằng screen-space barycentric weights.
+
+Camera-space Z thì không tuyến tính theo screen barycentric weights sau perspective divide. Nếu muốn nội suy một thuộc tính camera-space khác, ta cần kỹ thuật perspective-correct ở Project 20. Riêng NDC depth đã là đại lượng đúng cho Z-buffer hiện tại.
+
+<InteractiveLab demo="z-buffer" mode="depth-interpolate" />
+
+## Viết code từng bước
+
+### Bước 1 — Gắn depth với đúng vertex
+
+`ScreenVertex` giữ X, Y và depth cạnh nhau:
+
+```cpp title="include/lab.hpp — screen position và depth không bị tách rời"
+struct ScreenVertex {
+    double x{};
+    double y{};
+    double ndcDepth{};
+};
+```
+
+Khi rasterizer chuẩn hóa winding, nó đổi cả `ScreenVertex b` với `ScreenVertex c`. Nhờ vậy position và depth luôn đi cùng nhau. Chỉ đổi X/Y mà quên đổi depth sẽ làm gradient bám vào sai corner dù coverage vẫn đúng.
+
+### Bước 2 — Nội suy bằng weights đối diện cạnh
+
+Với sample P:
+
+$$
+z_P=w_Az_A+w_Bz_B+w_Cz_C,qquad w_A+w_B+w_C=1
+$$
+
+Code tương ứng chỉ là một hàm thuần:
+
+```cpp title="include/lab.hpp — tính depth tại fragment"
+inline double interpolateNdcDepth(
+    const ScreenTriangle& triangle,
+    Barycentric weights
+) {
+    return weights.a * triangle.a.ndcDepth +
+        weights.b * triangle.b.ndcDepth +
+        weights.c * triangle.c.ndcDepth;
+}
+```
+
+Ví dụ ba depth là `0.20`, `0.50`, `0.80` và weights tại sample là `(0.25, 0.50, 0.25)`:
+
+$$
+z_P=0.25(0.20)+0.50(0.50)+0.25(0.80)=0.50
+$$
+
+Kết quả nằm giữa min/max của ba vertex. Nếu sample nằm đúng A, weights là `(1,0,0)` và depth trả lại đúng `zA`.
+
+### Bước 3 — Đưa phép tính vào đúng callback
+
+Rasterizer đã truyền `weights` và triangle sau khi normalize winding:
+
+```cpp title="src/main.cpp — mỗi covered pixel có một depth riêng"
+lab::rasterizeTriangle(
+    triangle,
+    width,
+    height,
+    [&](int x, int y, lab::Barycentric weights,
+        const lab::ScreenTriangle& normalized) {
+        const double fragmentDepth = lab::interpolateNdcDepth(
+            normalized,
+            weights
+        );
+        // Checkpoint 4 chỉ hiển thị depth; bài 5 mới compare và write.
+    }
+);
+```
+
+Dùng `normalized`, không dùng lại `triangle` bên ngoài callback. Nếu winding ban đầu âm, rasterizer đã đổi B/C để weights khớp với thứ tự mới.
+
+Checkpoint 4 biến depth thành grayscale: depth gần cho màu sáng, far/clear cho màu tối. Đây là dụng cụ debug, chưa phải shading của final.
+
+## Ghép các phần lại
+
+### Build và đọc gradient
+
+```bash title="Terminal — build checkpoint nội suy depth"
+cmake --build build --config Debug --target project_17_checkpoint_4
+```
+
+Một mặt nhìn thẳng camera có thể gần như đồng màu vì ba vertex có depth gần nhau. Hãy kéo cube sang góc nghiêng; gradient mới lộ rõ. Đường chéo giữa hai triangle cùng mặt không được tạo một vệt depth đứt.
+
+## Thử làm sai để hiểu đúng
+
+1. Trả `(zA+zB+zC)/3` cho mọi sample. Mỗi triangle thành một mảng xám phẳng và lộ đường chéo; phục hồi barycentric interpolation.
+2. Gán `weights.a*zC + weights.b*zB + weights.c*zA`. Gradient bị đảo giữa A/C; dùng đúng weight với đúng vertex.
+3. Nội suy camera-space Z rồi clamp về `[0,1]`. Con số có vẻ hợp lệ nhưng không cùng convention với projection; giữ `ndcDepth`.
+4. Round depth thành byte trước khi lưu. Bạn chỉ còn 256 lớp depth và dễ tạo z-fighting giả; giữ `double`, chỉ round bản grayscale hiển thị.
+
+## Tự kiểm tra kết quả
+
+- Near plane ánh xạ gần `0`, far plane ánh xạ gần `1`.
+- `ScreenVertex` giữ `ndcDepth` cùng position qua mọi phép swap winding.
+- Mỗi fragment gọi `interpolateNdcDepth` bằng weights của chính sample đó.
+- Nội suy tại vertex trả lại depth vertex; weights `(0.25,0.5,0.25)` của ví dụ trả `0.5`.
+- Depth hữu hạn và nằm trong `[0,1]` cho toàn bộ cube hiện tại.
+- Grayscale thay đổi mượt, không có đường đứt trên đường chéo cùng mặt.
+- Chưa có fragment nào bị loại theo depth ở checkpoint này.
+
+## Bài tập mở rộng
+
+Trong title bar, in min/max depth đã nội suy của frame. Chỉ cập nhật chúng trong callback coverage và xác nhận `0 ≤ min ≤ max ≤ 1`.
+
+Bài tiếp theo sẽ dùng depth này để quyết định fragment nào được phép thay đổi framebuffer.

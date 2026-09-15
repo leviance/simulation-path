@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ bước vật lý cố định bằng accumulator
+
+## Vấn đề cần giải quyết
+
+Checkpoint 4 gọi Euler một lần cho mỗi frame và dùng chính frame delta làm `dt`. Khi cửa sổ chạy 144 FPS, bước rất nhỏ; khi máy khựng ở 20 FPS, bước lớn hơn nhiều. Cùng một góc bắn có thể hạ cánh ở hai nơi chỉ vì nhịp render khác nhau.
+
+Ta cần tách hai chiếc đồng hồ:
+
+- render nhận frame time biến đổi để biết bao lâu đã trôi qua ngoài đời;
+- physics chỉ chấp nhận những bước cố định, chẳng hạn 1/60 giây.
+
+Accumulator là phần đệm nối hai nhịp đó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi frame, ta cộng thời gian mới vào accumulator:
+
+$$
+accumulator \leftarrow accumulator + frameTime
+$$
+
+Trong khi accumulator còn đủ một `fixedDt`, chạy một physics step rồi trừ:
+
+$$
+accumulator \leftarrow accumulator-fixedDt
+$$
+
+Frame 8 ms có thể chưa tạo step nào; phần 8 ms được giữ lại. Frame sau thêm 9 ms, tổng 17 ms đủ một step 16,67 ms và còn một remainder nhỏ. Không có thời gian nào bị mất trong điều kiện bình thường.
+
+<InteractiveLab demo="projectile" mode="projectile-timestep" />
+
+Chọn `1/60 s`, bấm **Mô phỏng frame 120 ms**. Readout cho biết nhiều substep được chạy trong một frame. Thử fixed dt 1/15 s: số step ít hơn và đường xanh lệch khỏi analytic rõ hơn.
+
+## Viết code từng bước
+
+### Bước 1 — Trả kế hoạch thay vì giấu vòng lặp trong timer
+
+```cpp title="include/lab.hpp — dữ liệu của một lần tiêu thụ accumulator"
+struct FixedStepPlan {
+    int steps{};
+    double remainder{};
+    double acceptedFrameTime{};
+    double droppedTime{};
+};
+```
+
+`planFixedSteps` là hàm thuần. CTest có thể đưa vào nhiều chuỗi frame time và so tổng `steps` mà không khởi tạo SDL hay chờ đồng hồ thật.
+
+### Bước 2 — Tính số bước có thể chạy
+
+```cpp title="include/lab.hpp — tách available step khỏi giới hạn bảo vệ"
+const double acceptedFrameTime = std::min(frameSeconds, maximumFrameSeconds);
+double available = accumulator + acceptedFrameTime;
+const int availableSteps = static_cast<int>(std::floor((available + kPhysicsEpsilon) / fixedDeltaSeconds));
+const int steps = std::min(availableSteps, maximumSteps);
+available -= static_cast<double>(steps) * fixedDeltaSeconds;
+```
+
+Epsilon rất nhỏ tránh trường hợp tổng toán học đúng 1/60 nhưng biểu diễn nhị phân lại thấp hơn một chút. Nó không được lớn tới mức tạo thêm một physics step thật.
+
+### Bước 3 — Báo phần thời gian phải bỏ
+
+```cpp title="include/lab.hpp — spiral-of-death guard phải nhìn thấy được"
+double droppedTime = std::max(0.0, frameSeconds - acceptedFrameTime);
+if (availableSteps > maximumSteps) {
+    const int discardedSteps = availableSteps - maximumSteps;
+    droppedTime += static_cast<double>(discardedSteps) * fixedDeltaSeconds;
+    available -= static_cast<double>(discardedSteps) * fixedDeltaSeconds;
+}
+```
+
+Nếu app bị dừng ở debugger 5 giây, cố mô phỏng bù 300 bước có thể khiến frame tiếp theo cũng trễ, rồi backlog tiếp tục tăng: spiral of death. Final giới hạn frame time ở 0,1 s và tối đa 16 substep. Phần bỏ đi được cộng vào `droppedTime`; ta không giấu việc simulation đã chậm hơn real time.
+
+### Bước 4 — Main chỉ thi hành plan
+
+```cpp title="src/main.cpp — render frame có thể sinh nhiều physics step"
+const lab::FixedStepPlan plan = lab::planFixedSteps(accumulator, frameSeconds, fixedDeltaSeconds, 16, 0.1);
+accumulator = plan.remainder;
+substepsLastFrame = plan.steps;
+droppedTime += plan.droppedTime;
+```
+
+Vòng `for` ngay sau đó gọi Euler đúng `plan.steps` lần, luôn với cùng `fixedDeltaSeconds`.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build fixed timestep"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_22_checkpoint_5
+./build/Debug/project_22_checkpoint_5.exe
+```
+
+Chạy cùng một phát bắn ở cửa sổ bình thường và trong lúc kéo-resize liên tục. Nếu không chạm guard, state tại cùng số physics step phải giống nhau dù số render frame khác nhau.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán `accumulator=0` sau mỗi frame. Những frame ngắn hơn fixed dt bị mất thời gian và mô phỏng chạy chậm.
+2. Dùng `if` thay `while`/số `steps`. Frame 40 ms với fixed dt 1/60 chỉ chạy một bước rồi backlog tăng mãi.
+3. Không giới hạn frame time hoặc substep. Dừng debugger vài giây và quan sát app mất bao lâu mới phản hồi input.
+4. Giữ accumulator khi bắn lại. Phát bắn mới có thể nhận ngay một bước “thừa” từ phát cũ và bắt đầu ở elapsed khác 0.
+
+## Tự kiểm tra kết quả
+
+- 120 frame × 1/120 s tạo đúng 60 step khi fixed dt là 1/60 s.
+- 30 frame × 1/30 s cũng tạo đúng 60 step.
+- Remainder luôn nằm trong `[0,fixedDt)` khi không chạm guard.
+- Pause giữ accumulator nhưng không cộng frame time đang pause.
+- Fire/reset đưa accumulator và dropped-time stats về 0.
+- Frame quá lớn tạo tối đa 16 step và báo `droppedTime > 0`.
+
+## Bài tập mở rộng
+
+Vẽ một thanh accumulator: chiều dài bằng `remainder/fixedDt`. Quan sát thanh chạy từ 0 tới gần 1 ở 144 FPS, nhưng physics state vẫn chỉ thay đổi tại các fixed step.
+
+Bài tiếp theo xử lý một lỗi rời rạc khác: bước Euler cuối thường đưa viên đạn từ trên mặt đất xuống hẳn bên dưới trong một lần update.

@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng chuỗi khối lượng và lò xo
+
+## Vấn đề cần giải quyết
+
+Starter đã mở window SDL3, tạo renderer, streaming texture và vẽ một chuỗi gồm các chấm cùng đoạn thẳng. Như vậy ta có một điểm xuất phát nhìn thấy được trước khi học vật lý. Tuy nhiên, các chấm này chỉ là hình vẽ: chưa có `Particle`, chưa có `Spring`, và chương trình không biết chấm nào nối với chấm nào.
+
+Checkpoint 1 thay hình placeholder bằng dữ liệu thật. Một `Particle` giữ position, velocity, force và inverse mass. Một `Spring` không sao chép position; nó chỉ giữ index của hai endpoint cùng rest length, stiffness và damping. Với 18 particles nối thành một đường duy nhất, topology phải có đúng 17 springs.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta có thể xem chuỗi như một graph rất đơn giản:
+
+```text title="Topology — mỗi spring là một cạnh giữa hai particle"
+particle:  0 —— 1 —— 2 —— 3 —— ... —— 17
+spring:       0    1    2          16
+```
+
+Spring số `i` nối particle `i` với `i+1`. Particle 0 là anchor. Thay vì rải các nhánh `if (index==0)` khắp solver, ta đặt `inverseMass=0` cho nó; dynamic particles có `inverseMass=1/mass`.
+
+<InteractiveLab demo="spring-chain" mode="spring-scene" />
+
+Đổi giữa 8, 18 và 24 particles. Số springs luôn ít hơn số particles đúng một đơn vị. Chọn từng mass để đọc index, position và inverse mass; anchor phải là phần tử duy nhất có inverse mass bằng zero.
+
+## Viết code từng bước
+
+### Bước 1 — Tách state của particle khỏi tham số của spring
+
+```cpp title="include/lab.hpp — hai kiểu dữ liệu có trách nhiệm khác nhau"
+struct Particle {
+    Vec2 position{};
+    Vec2 velocity{};
+    Vec2 force{};
+    double inverseMass{1.0};
+    double radius{0.1};
+};
+
+struct Spring {
+    std::size_t first{};
+    std::size_t second{};
+    double restLength{0.4};
+    double stiffness{100.0};
+    double damping{1.0};
+};
+```
+
+`radius` chỉ phục vụ hit-test và rendering. Spring force về sau không đọc pixel radius; nó chỉ đọc position của hai endpoint qua index.
+
+### Bước 2 — Đặt các particle cách nhau đúng rest length
+
+```cpp title="include/lab.hpp — initial state thẳng đứng và kiểm chứng được"
+for (std::size_t index = 0; index < particleCount; ++index) {
+    Particle particle{};
+    particle.position = {anchorPosition.x, anchorPosition.y - double(index) * restLength};
+    if (index == 0) {
+        particle.inverseMass = 0.0;
+    } else {
+        particle.inverseMass = 1.0 / mass;
+    }
+```
+
+World Y hướng lên, vì vậy trừ `index*restLength` làm chuỗi đi xuống. Khoảng cách giữa hai phần tử kề nhau ban đầu đúng bằng rest length; mọi spring bắt đầu với stretch bằng zero.
+
+### Bước 3 — Tạo đúng N−1 spring bằng index liên tiếp
+
+```cpp title="include/lab.hpp — spring không giữ bản sao position"
+chain.particles.push_back(particle);
+if (index > 0) {
+    chain.springs.push_back({index - 1, index, restLength, stiffness, damping});
+}
+```
+
+Spring đầu chỉ được tạo sau particle thứ hai. Cách này tránh endpoint trỏ tới phần tử chưa tồn tại và tự cho `N−1` cạnh.
+
+### Bước 4 — Renderer đọc topology thật
+
+```cpp title="src/main.cpp — vẽ spring trước particle"
+for (const lab::Spring& spring : chain.springs) {
+    const lab::Vec2 first = worldToScreen(chain.particles[spring.first].position, view);
+    const lab::Vec2 second = worldToScreen(chain.particles[spring.second].position, view);
+    drawLine(pixels, width, height, int(std::lround(first.x)), int(std::lround(first.y)), int(std::lround(second.x)), int(std::lround(second.y)), springColor(chain, spring));
+}
+```
+
+Sau khi vẽ, `SDL_UpdateTexture` đưa CPU framebuffer lên streaming texture như các project trước. Physics state vẫn nằm trong world space; resize chỉ tạo lại texture và `WorldView`.
+
+## Ghép các phần lại
+
+```bash title="Terminal — so starter với checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_starter
+cmake --build build --config Debug --target project_25_checkpoint_1
+./build/Debug/project_25_checkpoint_1.exe
+```
+
+Hai chương trình trông gần giống nhau. Điểm khác quan trọng nằm trong dữ liệu: starter vẽ một hình cố định, còn checkpoint 1 gọi `makeVerticalChain` và renderer đi theo các index trong `SpringChain`.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạo spring kể cả khi `index==0`. Endpoint `index-1` bị tràn thành một `size_t` rất lớn; hoàn tác điều kiện `index>0`.
+2. Lưu position vào cả `Particle` lẫn `Spring`. Di chuyển particle nhưng quên cập nhật spring sẽ làm hình vẽ tách khỏi physics; hoàn tác bản sao.
+3. Đặt anchor bằng một boolean riêng nhưng vẫn để inverse mass bằng 4. Solver sau này vẫn tích phân nó; hoàn tác về một nguồn sự thật là `inverseMass=0`.
+
+## Tự kiểm tra kết quả
+
+- Starter mở window và vẽ được chuỗi placeholder trước khi có physics type.
+- Checkpoint 1 tạo đúng 18 particles và 17 springs.
+- Spring `i` nối particle `i` với `i+1`.
+- Mọi initial distance bằng 0.42 m.
+- Particle 0 ở `(0,3.6)` và có inverse mass bằng zero.
+- Các particle còn lại có mass 0.25 kg, tức inverse mass bằng 4.
+- Resize không sửa world position.
+- `SDL_UpdateTexture` vẫn nhận framebuffer có pitch đúng.
+
+## Bài tập mở rộng
+
+Thêm một hàm tạo chuỗi nằm ngang nhưng giữ nguyên `SpringChain`. Renderer và các bài force phía sau không được cần biết scene được dựng theo hướng nào.
+
+Bài tiếp theo chỉ lấy một spring ra khỏi chuỗi để trả lời câu hỏi quan trọng nhất: kéo dài thêm một đoạn thì nó tác dụng lực bao nhiêu và theo hướng nào?

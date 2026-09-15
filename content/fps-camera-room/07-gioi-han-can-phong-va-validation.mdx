@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ camera trong phòng và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Checkpoint 6 đã cho phép đi và nhìn tự do, nhưng người dùng vẫn có thể xuyên qua tường. Hình ảnh wireframe không đủ để phát hiện mọi lỗi: một dấu sai trong inverse rotation đôi khi chỉ làm scene “hơi lạ”, còn movement chéo nhanh hơn thường khó nhận bằng mắt.
+
+Bài cuối thêm bounds collision đơn giản, phép biến đổi ngược và các bài test độc lập với SDL window. Đây cũng là lúc ghép pause, reset và readout thành bản final có thể dùng lâu dài.
+
+## Hiểu ý tưởng trước khi viết code
+
+Collision của project chỉ là clamp camera center vào một hộp thu nhỏ bởi margin:
+
+$$
+x'=clamp(x,minX+margin,maxX-margin)
+$$
+
+$$
+z'=clamp(z,minZ+margin,maxZ-margin),\qquad y'=eyeHeight
+$$
+
+Để kiểm tra view transform, ta viết chiều ngược:
+
+$$
+p_{world}=R_y(yaw)\,R_x(-pitch)\,p_{camera}+camera.position
+$$
+
+Sau đó đo `cameraToWorld(worldToCamera(p)) - p`. Sai số phải gần zero ở nhiều camera pose và nhiều point.
+
+<InteractiveLab demo="fps-camera" mode="camera-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Clamp candidate position sau movement
+
+```cpp title="include/lab.hpp — giữ camera center cách tường một margin"
+const double safeMargin = std::max(0.0, margin);
+camera.position.x = std::clamp(camera.position.x, bounds.minX + safeMargin, bounds.maxX - safeMargin);
+camera.position.y = std::clamp(eyeHeight, bounds.floorY, bounds.ceilingY);
+camera.position.z = std::clamp(camera.position.z, bounds.minZ + safeMargin, bounds.maxZ - safeMargin);
+return camera;
+```
+
+Clamp diễn ra sau khi tính movement. Input, velocity và orientation không cần biết phòng rộng bao nhiêu.
+
+### Bước 2 — Tạo một hàm ghép movement với bounds
+
+```cpp title="include/lab.hpp — advance rồi clamp trong một lời gọi"
+const FpsCamera moved = advanceCamera(camera, input, speed, deltaTime);
+return clampCameraToRoom(moved, bounds, eyeHeight, margin);
+```
+
+Render loop final gọi `advanceCameraInRoom`; checkpoint 5–6 vẫn giữ bản `advanceCamera` không collision để người học thấy rõ phần mới.
+
+### Bước 3 — Viết chiều camera-to-world theo thứ tự ngược
+
+```cpp title="include/lab.hpp — đảo view transform để làm round trip"
+inline Vec3 cameraToWorld(Vec3 cameraPoint, const FpsCamera& camera) {
+    const Vec3 pitchRestored = rotateX(cameraPoint, -camera.pitch);
+    const Vec3 yawRestored = rotateY(pitchRestored, camera.yaw);
+    return add(yawRestored, camera.position);
+}
+```
+
+Nếu `worldToCamera` làm translation → inverse yaw → inverse pitch, chiều về phải làm pitch → yaw → translation.
+
+### Bước 4 — Đo basis bằng magnitude và dot
+
+```cpp title="include/lab.hpp — gom sai số camera basis"
+error = std::max(error, std::abs(magnitude(basis.forward) - 1.0));
+error = std::max(error, std::abs(magnitude(basis.right) - 1.0));
+error = std::max(error, std::abs(magnitude(basis.up) - 1.0));
+error = std::max(error, std::abs(dot(basis.forward, basis.right)));
+error = std::max(error, std::abs(dot(basis.forward, basis.up)));
+error = std::max(error, std::abs(dot(basis.right, basis.up)));
+return error;
+```
+
+Một scalar lớn nhất đủ để đưa lên title bar, còn test labels bên dưới vẫn chỉ ra invariant nào hỏng.
+
+### Bước 5 — Kiểm tra movement bằng nhiều FPS
+
+```cpp title="tests/tests.cpp — so sánh distance ở hai frame rate"
+const lab::FpsCamera thirtyFps = simulateMovement(30, {0.0, 1.0});
+const lab::FpsCamera oneFortyFourFps = simulateMovement(144, {0.0, 1.0});
+check(
+    near(thirtyFps.position.z, oneFortyFourFps.position.z),
+    "movement distance is stable across 30 and 144 FPS"
+);
+```
+
+Test còn kiểm room endpoint, view translation, forward ở yaw 90°, diagonal speed, pitch clamp, yaw wrap, bounds và ba round trip point.
+
+## Ghép các phần lại
+
+Build final và chạy test ở cả hai cấu hình:
+
+```bash title="Terminal — build và kiểm chứng Project 14"
+cmake --build build --config Debug --target project_14_final project_14_tests
+ctest --test-dir build -C Debug --output-on-failure
+cmake --build build --config Release --target project_14_final project_14_tests
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Chạy `project_14_final`, click để nhìn bằng chuột, dùng WASD đi tới cả bốn phía và xác nhận camera dừng trước tường. Space tạm dừng movement, `R` đặt lại camera, Escape nhả chuột rồi thoát.
+
+## Thử làm sai để hiểu đúng
+
+1. Clamp bằng `bounds.maxX + margin` thay vì trừ margin. Đi sát tường phải và quan sát camera xuyên ra ngoài; hoàn tác ngay.
+2. Đổi thứ tự trong `cameraToWorld` thành yaw rồi pitch. Chạy CTest và xem round-trip thất bại ở pose tổng quát, sau đó phục hồi thứ tự.
+3. Xóa normalize diagonal input. Chạy lại test “diagonal movement is not faster”, xác nhận nó bắt đúng lỗi rồi hoàn tác.
+
+## Tự kiểm tra kết quả
+
+- Room geometry có trên 100 segment và mọi endpoint nằm trong bounds.
+- View translation trả đúng `worldPoint - camera.position`.
+- Point trên forward đi vào trục camera +Z; basis error dưới $10^{-12}$.
+- Diagonal speed bằng straight speed; movement 30/60/144 FPS gần như trùng nhau.
+- Pitch không vượt 89°, yaw được wrap và camera center không vượt bounds trừ margin.
+- View round trip dưới $10^{-9}$ ở nhiều point.
+- Mouse mode được nhả ở Escape, focus-lost và cleanup.
+- Starter, bảy checkpoint, final cùng CTest build ở Debug và Release.
+
+## Bài tập mở rộng
+
+Thay clamp cứng bằng collision có “slide”: tính candidate X và Z riêng, chấp nhận trục không va chạm để người dùng vẫn trượt dọc tường. Giữ API collision trong code thuần và thêm test cho góc phòng.
+
+Project 14 đã hoàn chỉnh. Project 15 sẽ chọn một vertex trong chính căn phòng này và cho bạn quan sát từng giá trị trung gian qua Model → View → Projection.

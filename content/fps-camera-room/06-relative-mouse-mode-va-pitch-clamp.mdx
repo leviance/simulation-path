@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mouse look không mắc ở mép cửa sổ
+
+## Vấn đề cần giải quyết
+
+Nếu mouse look dựa vào vị trí cursor tuyệt đối, camera ngừng xoay khi cursor chạm mép window. Warp cursor về giữa mỗi frame lại tạo thêm event giả và phụ thuộc hệ điều hành. SDL3 đã có relative mouse mode theo từng window: cursor được ẩn/giữ trong window và motion event tiếp tục báo `xrel/yrel`.
+
+Điểm khó không chỉ là bật mode. Chương trình còn phải nhả nó khi người dùng nhấn Escape, chuyển sang cửa sổ khác hoặc thoát ứng dụng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mouse delta đổi thành angle bằng sensitivity:
+
+$$
+yaw'=wrap(yaw+\Delta x\cdot sensitivity)
+$$
+
+$$
+pitch'=clamp(pitch-\Delta y\cdot sensitivity,-89^\circ,89^\circ)
+$$
+
+Trừ delta Y để kéo chuột lên làm pitch tăng theo quy ước của project. Pitch không chạm ±90° vì tại đó hướng nhìn song song world up, khiến điều khiển trở nên khó đọc và dễ lật.
+
+<InteractiveLab demo="fps-camera" mode="camera-mouse-look" />
+
+## Viết code từng bước
+
+### Bước 1 — Gói API và state hệ điều hành cùng một chỗ
+
+Chỉ cập nhật `mouseLookActive` khi SDL báo thành công:
+
+```cpp title="src/main.cpp — bật hoặc nhả relative mouse mode"
+bool setMouseLook(SDL_Window* window, bool enabled, bool& mouseLookActive) {
+    if (!SDL_SetWindowRelativeMouseMode(window, enabled)) {
+        std::cerr << "Relative mouse mode failed: " << SDL_GetError() << '\n';
+        return false;
+    }
+    mouseLookActive = enabled;
+    return true;
+}
+```
+
+Trong SDL3, API nhận `SDL_Window*`; không dùng tên SDL2 cũ `SDL_SetRelativeMouseMode`.
+
+### Bước 2 — Clamp pitch và wrap yaw trong code thuần
+
+```cpp title="include/lab.hpp — đổi mouse delta thành yaw và pitch"
+constexpr double pitchLimit = 89.0 * kPi / 180.0;
+camera.yaw = wrapAngle(camera.yaw + deltaX * sensitivity);
+camera.pitch -= deltaY * sensitivity;
+camera.pitch = std::clamp(camera.pitch, -pitchLimit, pitchLimit);
+return camera;
+```
+
+Hàm này không include SDL, vì vậy CTest có thể ném delta cực lớn vào mà không mở window.
+
+### Bước 3 — Click để bắt đầu nhìn
+
+```cpp title="src/main.cpp — click để vào relative mouse mode"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+    setMouseLook(window, true, mouseLookActive);
+}
+if (event.type == SDL_EVENT_MOUSE_MOTION && mouseLookActive) {
+    camera = lab::applyMouseLook(camera, event.motion.xrel, event.motion.yrel, 0.0025);
+}
+```
+
+Không đọc `event.motion.x/y` cho mouse look. Hai trường đó vẫn là vị trí; ta cần độ dời `xrel/yrel`.
+
+### Bước 4 — Nhả mode khi mất focus
+
+```cpp title="src/main.cpp — dọn mouse mode khi focus thay đổi"
+if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST && mouseLookActive) {
+    setMouseLook(window, false, mouseLookActive);
+}
+```
+
+Escape cũng gọi cùng hàm. Ở cleanup, kiểm tra state một lần cuối trước khi destroy window.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build relative mouse look"
+cmake --build build --config Debug --target project_14_checkpoint_6
+```
+
+Click vào cửa sổ rồi rê chuột qua lại nhiều vòng. Camera phải tiếp tục xoay dù quãng rê lớn hơn chiều rộng window. Nhấn Escape để lấy lại cursor; khi mode đã nhả, Escape lần nữa mới thoát.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay `xrel/yrel` bằng `x/y`. Dự đoán angle sẽ phụ thuộc vị trí cursor ra sao, thử rồi hoàn tác.
+2. Bỏ pitch clamp và kéo lên liên tục. Quan sát scene lật qua đầu, sau đó phục hồi giới hạn 89°.
+3. Xóa nhánh `SDL_EVENT_WINDOW_FOCUS_LOST`, bật mouse look rồi Alt+Tab. Sau khi xác nhận cursor/state gây khó chịu, hoàn tác ngay và kiểm tra lại đường nhả.
+
+## Tự kiểm tra kết quả
+
+- Click thành công mới đặt `mouseLookActive=true`.
+- Motion chỉ sửa camera khi relative mode đang active.
+- Pitch luôn nằm trong `[−89°,89°]`; yaw nằm trong một vòng hữu hạn.
+- Escape, focus-lost và cleanup đều có đường gọi disable.
+- WASD vẫn hoạt động đồng thời với mouse look.
+
+## Bài tập mở rộng
+
+Thêm hai sensitivity preset `0.0015` và `0.0040` bằng phím số. Không nhân sensitivity với `deltaTime`: mouse delta đã là lượng input tích lũy giữa các event, không phải vận tốc theo giây.
+
+Bài cuối sẽ thêm collision đơn giản với RoomBounds và khóa toàn bộ camera math bằng CTest.

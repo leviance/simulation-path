@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo thả một khối và truyền dao động
+
+## Vấn đề cần giải quyết
+
+Đến đây chuỗi chỉ phản ứng với initial state và gravity. Sản phẩm của project yêu cầu người học kéo một khối rồi nhìn dao động truyền qua cả dây. Input này không đơn giản là ghi position một lần: trong lúc giữ chuột, integrator và pointer cùng muốn điều khiển particle; khi thả, ta còn phải quyết định velocity nào được giữ lại.
+
+Giải pháp là một `DragConstraint` ngắn hạn. Particle được chọn trở thành kinematic: spring vẫn đọc position của nó và truyền force cho hàng xóm, nhưng integration bỏ qua nó. Khi thả, velocity được ước lượng từ các pointer sample gần nhất và clamp để event timing không bơm năng lượng vô hạn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hit-test chọn dynamic particle gần pointer nhất trong bán kính $r_{pick}$:
+
+$$
+i^*=\arg\min_i \lVert p_i-p_{mouse}\rVert^2
+$$
+
+Release velocity:
+
+$$
+v_{release}=\operatorname{clampLength}\left(\frac{p_{mouse,new}-p_{mouse,old}}{\Delta t_{sample}},v_{max}\right)
+$$
+
+<InteractiveLab demo="spring-chain" mode="spring-drag" />
+
+Kéo mass giữa sang trái, giữ một nhịp rồi thả. Biểu đồ ngang theo particle index cho thấy displacement xuất hiện gần điểm kéo trước, sau đó lan dọc các spring. Thử kéo anchor: nó không được chọn.
+
+## Viết code từng bước
+
+### Bước 1 — Hit-test nhưng bỏ qua anchor
+
+```cpp title="include/lab.hpp — chỉ dynamic particle có thể được kéo"
+for (std::size_t index = 0; index < chain.particles.size(); ++index) {
+    const Particle& particle = chain.particles[index];
+    if (particle.inverseMass <= kSpringEpsilon) {
+        continue;
+    }
+    const double distanceSquared = lengthSquared(subtract(particle.position, point));
+```
+
+So squared distance tránh `sqrt` cho từng candidate. Bán kính chọn dùng world unit nên không đổi khi resize.
+
+### Bước 2 — Ghi target và sample release velocity
+
+```cpp title="include/lab.hpp — pointer sample được đổi sang world velocity"
+const Vec2 displacement = subtract(target, drag.target);
+Vec2 sampledVelocity = scale(displacement, 1.0 / sampleSeconds);
+const double sampledSpeed = length(sampledVelocity);
+if (sampledSpeed > maximumReleaseSpeed && sampledSpeed > kSpringEpsilon) {
+    sampledVelocity = scale(sampledVelocity, maximumReleaseSpeed / sampledSpeed);
+}
+```
+
+Clamp chỉ áp lên input velocity, không clamp physics velocity trong các step bình thường.
+
+### Bước 3 — Bỏ selected particle khỏi integration
+
+```cpp title="include/lab.hpp — spring vẫn đọc target nhưng integrator không giành quyền"
+if (drag.active && index == drag.particleIndex) {
+    chain.particles[index].position = drag.target;
+    chain.particles[index].velocity = {};
+    continue;
+}
+integrateParticle(chain.particles[index], deltaSeconds);
+```
+
+Velocity trong lúc drag là zero để damping không đọc một giá trị cũ không liên quan. Pointer motion tiếp theo vẫn lưu release velocity riêng trong constraint.
+
+### Bước 4 — Trả particle về dynamics khi thả
+
+```cpp title="include/lab.hpp — release velocity được áp đúng một lần"
+chain.particles[drag.particleIndex].velocity = drag.releaseVelocity;
+drag = {};
+return true;
+```
+
+SDL gọi `SDL_CaptureMouse(true)` khi bắt đầu để tiếp tục nhận motion/up event ngoài cửa sổ, và luôn gọi `SDL_CaptureMouse(false)` khi thả hoặc mất focus.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy drag constraint"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_checkpoint_6
+./build/Debug/project_25_checkpoint_6.exe
+```
+
+Chương trình bắt đầu paused. Kéo một mass để tạo biến dạng, nhả chuột rồi nhấn Space; hoặc resume trước và kéo khi chuỗi đang chạy. Hai cách phải dùng chung physics path.
+
+## Thử làm sai để hiểu đúng
+
+1. Cho integrator cập nhật selected particle trong lúc drag. Mass rung quanh pointer và force truyền đi phụ thuộc FPS; hoàn tác nhánh kinematic.
+2. Cho phép chọn particle 0. Anchor bị tách khỏi vị trí neo; hoàn tác kiểm inverse mass.
+3. Không clamp release velocity. Di chuyển chuột rất nhanh hoặc tạo sample time cực nhỏ, rồi quan sát energy tăng đột biến; hoàn tác giới hạn 6 m/s.
+
+## Tự kiểm tra kết quả
+
+- Hit-test chọn dynamic particle gần nhất trong bán kính 0.3 m.
+- Anchor không thể được chọn.
+- Pointer capture được bật/tắt cân bằng ở mouse up và focus lost.
+- Trong lúc kéo, selected position đúng target và velocity physics bằng zero.
+- Các particle khác vẫn tích phân và phản ứng với spring nối tới selected mass.
+- Release velocity không vượt 6 m/s.
+- Sau release, constraint inactive và particle trở lại integration bình thường.
+- Resize giữa lúc paused không đổi world target.
+
+## Bài tập mở rộng
+
+Thêm chế độ “pluck”: trong lúc kéo luôn đặt release velocity về zero. So wave tạo bởi displacement-only với wave có thêm vận tốc lúc thả.
+
+Bài tiếp theo dùng chính thao tác kéo để stress integrator: tăng stiffness, mass hoặc dt và đo một chỉ số không thứ nguyên thay vì kết luận bằng cảm giác “có vẻ rung mạnh”.

@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Self-force và topology inspector
+
+## Vấn đề cần giải quyết
+
+Opening criterion chỉ xét hình học. Nếu internal node chứa target cũng được approximate, `totalMass` của node bao gồm cả mass target. Ta đã biến target thành một phần của source, và hệ bắt đầu tự tác dụng lực lên chính nó.
+
+Đây là lỗi nguy hiểm vì scene vẫn có thể trông ổn ở vài frame đầu. Checkpoint 7 khóa rule chống self-force và bổ sung inspector độc lập cho storage lẫn aggregate.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng một quy tắc dễ chứng minh: **node chứa target luôn mở tiếp**. Khi đi tới leaf, vòng source kiểm `sourceIndex == targetIndex` và bỏ đúng self body. Rule này có thể mở nhiều node hơn một số biến thể Barnes–Hut nâng cao, nhưng phù hợp với project học tập vì correctness path nhìn thấy được.
+
+Inspector không tin renderer hoặc builder. Nó tự đếm body indices, tính lại child bounds, cộng lại child masses và weighted centers.
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-self-force" />
+
+Chọn central body và tăng theta. Dù nhiều node xa được aggregate, nhánh chứa body 0 vẫn mở đến leaf. Readout luôn ghi `node chứa target luôn mở tiếp`.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt self-force guard trước opening test
+
+```cpp title="include/tree.hpp — contains-target guard"
+const bool containsTarget = pointInsideBounds(bodies[targetIndex].position, node.bounds);
+if (
+    !containsTarget && distanceToCenter > 0.0 &&
+    nodeSize / distanceToCenter < theta
+) {
+```
+
+Inclusive bounds cố ý coi target trên split plane là “contained” ở cả parent và child bounds gặp nhau. Insertion vẫn chọn đúng một child bằng octant bit; traversal thà mở thêm một nhánh còn hơn approximate self mass.
+
+### Bước 2 — Đếm body storage theo index
+
+```cpp title="include/tree.hpp — insertion counts"
+for (const std::size_t bodyIndex : node.bodyIndices) {
+    if (bodyIndex >= bodies.size()) {
+        report.childIndicesValid = false;
+    } else {
+        ++insertionCounts[bodyIndex];
+    }
+}
+```
+
+Sau traversal, mỗi count phải đúng 1. Giá trị 0 là body bị mất; lớn hơn 1 là redistribute đã nhân đôi storage.
+
+### Bước 3 — Tính lại aggregate từ children
+
+```cpp title="include/tree.hpp — inspector aggregate"
+childMass += child.totalMass;
+weightedCenter += child.centerOfMass * child.totalMass;
+```
+
+Sau tám child, inspector so `childMass` với `node.totalMass` và `weightedCenter/childMass` với `node.centerOfMass`.
+
+### Bước 4 — Giữ report theo từng contract
+
+```cpp title="include/tree.hpp — topology report"
+struct BarnesHutTopologyReport {
+    bool everyBodyStoredOnce{true};
+    bool internalNodesEmpty{true};
+    bool childIndicesValid{true};
+    bool childBoundsValid{true};
+    bool aggregateMassValid{true};
+    bool centerOfMassValid{true};
+    bool statisticsMatch{true};
+};
+```
+
+Một boolean chung chỉ nói “có lỗi”. Report này cho biết phải nhìn insertion, topology hay aggregation.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 7"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_31_checkpoint_7 project_31_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+CTest có one-body case, split policy, body storage và aggregate checks. Những test này không mở SDL window.
+
+## Thử làm sai để hiểu đúng
+
+1. Xóa `!containsTarget`. One-body tree có thể tạo acceleration sai khi leaf handling cũng bị aggregate hóa.
+2. So center of mass bằng `==`. Thứ tự cộng floating point khác nhau tạo false failure; dùng tolerance nhỏ.
+3. Cho inspector gọi lại `accumulateNodeMass` rồi so chính dữ liệu nó vừa ghi. Builder và validator dùng chung lỗi, nên test mất ý nghĩa.
+
+## Tự kiểm tra kết quả
+
+- One-body direct và Barnes–Hut đều trả zero acceleration.
+- One-body traversal không có approximated node.
+- Mỗi body index xuất hiện đúng một leaf.
+- Internal nodes không giữ body indices.
+- Child index/bounds khớp octant policy.
+- Parent mass và center of mass khớp tổng children trong tolerance.
+- Leaf + internal count bằng node count.
+- Topology report không phụ thuộc camera hoặc màu wireframe.
+
+## Bài tập mở rộng
+
+Tạo tám body đúng trên ba split planes quanh origin và in leaf index của từng body. Sau đó chọn từng target, chạy theta 1,2 và xác nhận nhánh chứa target vẫn mở.
+
+Khi topology và self-force đã có test, bài tiếp theo mới định lượng sai số do theta.

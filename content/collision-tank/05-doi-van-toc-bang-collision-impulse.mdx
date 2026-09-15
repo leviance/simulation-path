@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi vận tốc bằng collision impulse
+
+## Vấn đề cần giải quyết
+
+Detection cho biết hai circle overlap, nhưng không nói chúng phải có velocity mới nào. Phản xạ từng ball như va vào một bức tường là sai: ball B cũng chuyển động và có mass; thay đổi của A phải đi kèm thay đổi đối nhau của B.
+
+Ta dùng một normal impulse. Nó chỉ tác động dọc contact normal, không sửa tangent velocity và không dịch position. Checkpoint 5 vì thế đã làm bóng “nảy” nhưng vẫn còn penetration; đó là vấn đề riêng của bài 6.
+
+## Hiểu ý tưởng trước khi viết code
+
+Relative velocity của B so với A:
+
+$$
+v_{rel}=v_B-v_A
+$$
+
+Closing speed dọc normal là $v_n=v_{rel}\cdot n$. Với normal A→B, $v_n<0$ nghĩa là hai ball tiến vào nhau. Impulse scalar:
+
+$$
+j=\frac{-(1+e)v_n}{m_A^{-1}+m_B^{-1}}
+$$
+
+Sau đó:
+
+$$
+v_A'=v_A-jnm_A^{-1},\qquad v_B'=v_B+jnm_B^{-1}
+$$
+
+<InteractiveLab demo="collision-tank" mode="collision-impulse" />
+
+Mode này bắt đầu bằng đúng hai bóng equal-mass đang overlap và lao vào nhau. Đặt restitution bằng 1, ghi `relative normal speed` cùng `impulse kế tiếp`, rồi tiến một bước: hai velocity phải đổi hướng. Tiến thêm bước nữa để thấy cặp đang tách nhau không nhận impulse lần hai. Positional correction chưa tham gia bài này.
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm tổng inverse mass
+
+```cpp title="include/lab.hpp — hai static body không thể response bằng velocity"
+const double inverseMassSum = first.inverseMass + second.inverseMass;
+if (inverseMassSum <= kCollisionEpsilon) {
+    return 0.0;
+}
+```
+
+`inverseMass=0` nghĩa là body tĩnh. Nếu cả hai cùng tĩnh, không velocity nào được thay đổi và phép chia không hợp lệ.
+
+### Bước 2 — Đo relative normal speed
+
+```cpp title="include/lab.hpp — separating pair không nhận impulse"
+const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
+const double velocityAlongNormal = dot(relativeVelocity, contact.normal);
+if (velocityAlongNormal >= 0.0) {
+    return 0.0;
+}
+```
+
+Nhánh này ngăn một contact còn overlap nhẹ bị “nảy” liên tục sau khi velocity đã hướng ra ngoài.
+
+### Bước 3 — Tính impulse scalar có restitution
+
+```cpp title="include/lab.hpp — impulse magnitude luôn dương cho closing contact"
+const double bounce = std::clamp(restitution, 0.0, 1.0);
+const double impulseMagnitude = -(1.0 + bounce) * velocityAlongNormal / inverseMassSum;
+const Vec2 impulse = scale(contact.normal, impulseMagnitude);
+```
+
+Vì `velocityAlongNormal<0`, $j$ dương. `e=1` cho elastic response dọc normal; `e=0` loại closing speed nhưng không xóa tangent speed.
+
+### Bước 4 — Áp hai thay đổi đối nhau
+
+```cpp title="include/lab.hpp — mỗi body nhận impulse theo inverse mass"
+first.velocity = subtract(first.velocity, scale(impulse, first.inverseMass));
+second.velocity = add(second.velocity, scale(impulse, second.inverseMass));
+return impulseMagnitude;
+```
+
+Ball nhẹ có inverse mass lớn nên velocity đổi nhiều hơn. Momentum thay đổi của cặp vẫn đối nhau vì nhân mass sẽ triệt inverse mass.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy normal impulse"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_checkpoint_5
+./build/Debug/project_24_checkpoint_5.exe
+```
+
+Ở checkpoint này hãy theo dõi cả `contacts`, `impulses` và `max penetration`. Bóng đã trao đổi velocity nhưng vẫn có thể đè lên nhau vài frame vì chưa có position solve.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ nhánh `velocityAlongNormal>=0`. Một cặp đang rời nhau nhận impulse mới và có thể quay lại; quan sát rồi hoàn tác.
+2. Dùng `velocityA-velocityB` nhưng giữ điều kiện dấu. Closing/separating bị đảo; hoàn tác về cùng quy ước normal.
+3. Cộng cùng impulse vào cả A và B. Tổng momentum tự tăng; hoàn tác hai dấu đối nhau.
+
+## Tự kiểm tra kết quả
+
+- Equal-mass head-on, velocity `(+1,0)` và `(-1,0)`, `e=1` đổi velocity cho nhau.
+- Impulse magnitude của case trên bằng 2 khi inverse mass đều bằng 1.
+- Tổng linear momentum của cặp được bảo toàn.
+- Kinetic energy được bảo toàn trong elastic head-on test.
+- Separating contact trả impulse zero và không sửa velocity.
+- Body inverse mass nhỏ nhận thay đổi velocity nhỏ hơn.
+- Tangent component không đổi vì chưa có friction.
+
+## Bài tập mở rộng
+
+Tạo case mass 1 va vào mass 3 đứng yên. Tính kết quả bằng tay, sau đó thêm vào CTest. Giữ radius bằng nhau để chỉ thay một biến.
+
+Bài tiếp theo giải phần còn thiếu: impulse thay velocity nhưng không tự xóa overlap đã hình thành trong một fixed step hữu hạn.

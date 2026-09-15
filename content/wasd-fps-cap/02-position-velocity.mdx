@@ -1,0 +1,141 @@
+# Từ hướng đến vị trí và vận tốc
+
+## Vấn đề cần giải quyết
+
+Ở checkpoint 1, chúng ta đã vẽ được một ô vuông và dùng WASD để đổi màu nó. Tuy vậy, ô vuông vẫn đứng yên vì `position` chưa hề thay đổi. Bài này sẽ bổ sung phần còn thiếu: biến thao tác trên bàn phím thành chuyển động trên màn hình.
+
+Có thể bạn sẽ nghĩ tới cách viết `position.x += 3` mỗi khi phím D được giữ. Cách này chạy được, nhưng con số `3` rất mơ hồ: ba pixel mỗi giây, hay ba pixel sau mỗi lần vòng lặp chạy? Nếu cập nhật tọa độ trực tiếp trong cả bốn nhánh WASD, phần đọc phím và phần di chuyển cũng bị trộn lẫn. Sau này muốn đổi tốc độ hay kiểm tra công thức sẽ rất bất tiện.
+
+Thay vào đó, dữ liệu sẽ đi qua ba bước rõ ràng:
+
+```text
+keyboard state → direction (không đơn vị)
+               → velocity (pixel / giây)
+               → position (pixel)
+```
+
+Ở checkpoint 2, chúng ta tạm coi mỗi lần cập nhật kéo dài `1/60` giây. Đây chưa phải cách làm đúng. Ta giữ giả định này trong đúng một bài để sang bài kế tiếp có thể tự nhìn thấy nó sai ở đâu.
+
+## Hiểu ý tưởng trước khi viết code
+
+`position` cho biết ô vuông đang ở đâu. `velocity` cho biết nó đang đi theo hướng nào và nhanh bao nhiêu. Nếu tốc độ được chọn là `180 pixel/giây`, ta có:
+
+```text
+velocity = direction × 180
+position mới = position cũ + velocity × thời gian
+```
+
+Với giả định mỗi lần cập nhật kéo dài `1/60` giây, ô vuông sẽ đi được `180 × 1/60 = 3 pixel`. Khi giữ W+D, `direction` đã được chuẩn hóa ở bài trước: mỗi thành phần xấp xỉ `±0.707`, nhưng độ dài của cả vector vẫn bằng 1. Vì vậy đi chéo không nhanh hơn đi ngang hay đi dọc.
+
+Ta lưu vị trí bằng số thực thay vì số nguyên. `SDL_FRect` cũng nhận tọa độ số thực, nên phần lẻ vẫn được giữ lại khi đổi từ `double` sang `float`. Điều này rất quan trọng: một bước nhỏ như `0,3 pixel` phải được cộng dồn qua nhiều lần cập nhật, chứ không thể bị làm tròn về 0 ngay lập tức.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho tốc độ của ô vuông
+
+```cpp title="src/main.cpp — các hằng số của gameplay"
+#include <algorithm>
+constexpr float kPlayerSize = 34.0F;
+constexpr double kPlayerSpeed = 180.0;
+```
+
+Giữ nguyên `kPlayerSize` từ checkpoint 1 và thêm `kPlayerSpeed` ngay bên dưới. Tên hằng giúp người đọc biết `180.0` là tốc độ của ô vuông, đồng thời cho phép thay đổi tốc độ ở một chỗ duy nhất. Trong toàn bộ project, đơn vị của hằng này là pixel/giây.
+
+Ta cũng thêm `<algorithm>` để dùng `std::clamp` ở bước 6.
+
+### Bước 2 — Bổ sung hai phép toán cho `Vec2`
+
+Ở bài trước, `Vec2` mới chỉ dùng để chứa hai thành phần `x` và `y`. Để cập nhật chuyển động, ta cần thêm phép cộng dồn hai vector và phép nhân vector với một số:
+
+```cpp title="include/lab.hpp — mở rộng Vec2 ở checkpoint 2"
+Vec2& operator+=(Vec2 other) {
+    x += other.x;
+    y += other.y;
+    return *this;
+}
+
+inline Vec2 operator*(Vec2 vector, double scalar) {
+    return {vector.x * scalar, vector.y * scalar};
+}
+```
+
+`operator*` sẽ được dùng để tính `velocity` từ `direction`. `operator+=` dùng để cộng quãng dịch chuyển vào `position`. Hai phép toán này là đủ cho bài hiện tại; chưa cần biến `Vec2` thành một thư viện toán học lớn.
+
+### Bước 3 — Giữ vị trí qua nhiều lần cập nhật
+
+```cpp title="src/main.cpp — trước vòng lặp chính"
+lab::Vec2 position{120.0, 220.0};
+bool running = true;
+```
+
+`position` phải được khai báo trước vòng lặp chính. Nếu đặt nó bên trong `while (running)`, mỗi lần vòng lặp bắt đầu, vị trí lại trở về `(120, 220)`. Ô vuông có được cập nhật nhưng kết quả lập tức bị xóa ở lần lặp kế tiếp.
+
+### Bước 4 — Chuyển hướng thành vận tốc
+
+```cpp title="src/main.cpp — sau readDirection"
+const lab::Vec2 velocity = direction * kPlayerSpeed;
+```
+
+Khi không bấm phím, `direction` bằng `{0, 0}` nên `velocity` cũng bằng `{0, 0}`. Khi giữ A, `velocity.x` bằng `-180`: dấu âm cho biết hướng sang trái, còn độ lớn `180` là tốc độ. Nhờ vậy ta không cần viết bốn nhánh cập nhật riêng cho bốn phím.
+
+### Bước 5 — Tạm cập nhật theo bước thời gian 1/60 giây
+
+```cpp title="src/main.cpp — update của checkpoint 2"
+position += velocity * (1.0 / 60.0);
+```
+
+`1.0 / 60.0` là khoảng thời gian giả định của một lần cập nhật, không phải tốc độ. Có thể kiểm tra công thức bằng đơn vị: lấy pixel/giây nhân với giây, ta nhận được quãng đường tính bằng pixel.
+
+### Bước 6 — Giữ toàn bộ ô vuông trong cửa sổ
+
+```cpp title="src/main.cpp — sau khi cập nhật position"
+position.x = std::clamp(position.x, 0.0, double(kWindowWidth) - kPlayerSize);
+position.y = std::clamp(position.y, 0.0, double(kWindowHeight) - kPlayerSize);
+```
+
+Giá trị lớn nhất của `position.x` không thể là `kWindowWidth`, bởi `position` chỉ tọa độ góc trên bên trái. Nếu góc này chạm X = 960, toàn bộ ô vuông rộng 34 pixel đã nằm ngoài cửa sổ. Bởi vậy, giới hạn đúng phải là `960 - 34`.
+
+### Bước 7 — Tạo `SDL_FRect` từ vị trí mới
+
+```cpp title="src/main.cpp — ranh giới giữa update và render"
+const SDL_FRect player{
+    float(position.x),
+    float(position.y),
+    kPlayerSize,
+    kPlayerSize,
+};
+const bool isMoving = lab::length(direction) > 0.0;
+if (!renderFrame(renderer, player, isMoving)) {
+    std::cerr << "Render failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+```
+
+`position` là dữ liệu mà phần mô phỏng cần lưu giữ. `player` chỉ là hình chữ nhật được tạo lại để SDL vẽ ở lần hiện tại. Hàm `renderFrame` từ bài trước vẫn làm đúng bốn việc: xóa nền, chọn màu, gọi `SDL_RenderFillRect` và đưa khung hình lên màn hình. Giá trị trả về của hàm vẫn phải được kiểm tra để lỗi vẽ không bị bỏ qua.
+
+## Ghép các phần lại
+
+Sau khi ghép các đoạn mã trên, mỗi vòng lặp diễn ra theo thứ tự sau: SDL cập nhật trạng thái bàn phím, `readDirection` tạo ra hướng, hướng được nhân với `kPlayerSpeed` để thành vận tốc, rồi vận tốc làm thay đổi vị trí. Cuối cùng, ta dùng vị trí mới để tạo `SDL_FRect` và vẽ ô vuông. Mỗi biến giờ chỉ có một nhiệm vụ và một đơn vị rõ ràng.
+
+Checkpoint 2 vẫn còn một điểm sai có chủ ý: `1/60` là con số đoán trước chứ không phải thời gian thực tế. Nếu vòng lặp chạy đúng 60 lần mỗi giây, chuyển động sẽ có vẻ bình thường. Nhưng nếu nó chạy 300 lần, ô vuông cũng được cộng thêm 3 pixel tới 300 lần. Bài tiếp theo sẽ biến hiện tượng này thành một thí nghiệm có số đo cụ thể.
+
+## Thử làm sai để hiểu đúng
+
+1. Đưa `position` vào bên trong `while (running)`. Hãy đoán xem ô vuông ở đâu sau hai lần lặp, rồi chạy chương trình để xác nhận nó luôn quay về điểm xuất phát.
+2. Đổi giới hạn X thành `kWindowWidth` và đi sát mép phải. `position.x` vẫn nằm trong miền bạn vừa cho phép, nhưng toàn bộ ô vuông có thể biến mất vì giới hạn đã quên chiều rộng của nó.
+3. Đổi các thành phần của `Vec2` sang `int`, đặt tốc độ là 20 pixel/giây và vẫn dùng bước `1/60`. Phần dịch chuyển nhỏ hơn một pixel sẽ bị cắt về 0 sau mỗi lần cập nhật, vì vậy ô vuông không thể di chuyển.
+
+## Tự kiểm tra kết quả
+
+- WASD di chuyển liên tục và thả phím dừng ngay.
+- Đi chéo không nhanh hơn đi ngang.
+- Vị trí không vượt bốn cạnh và cả ô vuông luôn còn trên màn hình.
+- `position` giữ được giá trị giữa các lần chạy của vòng lặp; nó không bị khởi tạo lại.
+- Với tốc độ 180 và giả định 60 FPS, mỗi lần cập nhật đi đúng 3 pixel theo đường thẳng.
+
+## Bài tập mở rộng
+
+Hãy tách phần giới hạn vị trí thành hàm `clampPlayerToWindow(position)` và truyền kích thước cửa sổ cùng kích thước ô vuông vào hàm. Sau đó thêm chế độ chạy nhanh khi giữ Shift: chọn một giá trị tốc độ lớn hơn trước khi tính `velocity`, không cập nhật `position` thêm lần thứ hai trong nhánh Shift.
+
+Bài tiếp theo sẽ đo FPS và chủ động làm vòng lặp chạy ở nhiều tốc độ khác nhau. Qua đó, bạn sẽ thấy vì sao con số cố định `1/60` khiến tốc độ chuyển động thay đổi theo máy. Sau khi sửa công thức bằng `dt` thật, chúng ta mới xây cơ chế giới hạn FPS hoàn chỉnh.

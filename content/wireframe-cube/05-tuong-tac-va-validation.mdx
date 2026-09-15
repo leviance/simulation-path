@@ -1,0 +1,197 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện tương tác và kiểm chứng cube
+
+## Vấn đề cần giải quyết
+
+Một cube xoay trông hợp lý chưa đủ chứng minh code đúng. Edge list có thể trùng một cạnh; một vertex có thể nối sai nhưng chỉ lộ ở góc nhìn nhất định; projection có thể bị gọi lại 24 lần mà hình vẫn giống hệt. Project cuối phải kiểm tra cấu trúc, geometry và pipeline bằng các con số độc lập.
+
+Ta cũng hoàn thiện trải nghiệm: mouse drag có capture, auto rotation dùng delta time, Space pause, `.` single-step, C bật depth cue, V bật marker và R reset toàn bộ state.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta sẽ kiểm tra theo hai tầng.
+
+Tầng thuần C++ không mở window:
+
+- 8 vertex, 12 edge duy nhất, mọi index hợp lệ;
+- degree của mỗi vertex bằng 3;
+- 12 cạnh dài $2h$ trước/sau rotation;
+- rotate→inverse trả tám vertex gốc;
+- projection count bằng 8;
+- depth list giảm dần.
+
+Tầng chạy trực tiếp kiểm tra phần phụ thuộc SDL: keyboard, mouse capture, resize, title bar, pause/step và texture present.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-validation" />
+
+Kéo cube rồi thả pointer ngoài Canvas. Readout `pointer capture` phải trở về “đã nhả”. Chạy/pause/single-step và theo dõi `max edge error` cùng `round-trip error` ở gần sai số máy.
+
+## Viết code từng bước
+
+### Bước 1 — Mouse chỉ sửa EulerAngles
+
+Hàm thuần giữ cùng quy ước Project 12:
+
+```cpp title="include/lab.hpp — mouse delta thành orientation"
+inline EulerAngles applyMouseDrag(
+    EulerAngles angles,
+    double deltaX,
+    double deltaY,
+    double sensitivity
+) {
+    constexpr double pitchLimit = 89.0 * kPi / 180.0;
+    angles.yaw += deltaX * sensitivity;
+    angles.pitch -= deltaY * sensitivity;
+    angles.pitch = std::clamp(angles.pitch, -pitchLimit, pitchLimit);
+    return angles;
+}
+```
+
+Event loop chỉ gọi hàm khi capture đã thành công:
+
+```cpp title="src/main.cpp — bắt đầu drag có kiểm tra lỗi"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+    if (!SDL_CaptureMouse(true)) {
+        std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+    } else {
+        dragging = true;
+    }
+    paused = true;
+}
+```
+
+Mouse-up và focus-lost đều đặt `dragging=false` rồi gọi `SDL_CaptureMouse(false)`.
+
+### Bước 2 — Animation cập nhật state, không sửa vertex
+
+```cpp title="include/lab.hpp — angular velocity nhân delta time"
+inline EulerAngles advanceEulerAngles(
+    EulerAngles angles,
+    EulerAngles angularVelocity,
+    double deltaTime
+) {
+    const double safeDeltaTime = std::clamp(deltaTime, 0.0, 0.1);
+    angles.pitch += angularVelocity.pitch * safeDeltaTime;
+    angles.yaw += angularVelocity.yaw * safeDeltaTime;
+    angles.roll += angularVelocity.roll * safeDeltaTime;
+    return angles;
+}
+```
+
+Mỗi frame vẫn gọi `rotateCube(localVertices,angles,order)`. Ta không dùng angular velocity để rotate dồn từng vertex.
+
+### Bước 3 — Kiểm tra topology độc lập với hình vẽ
+
+Degree được tính bằng cách duyệt edge list:
+
+```cpp title="include/lab.hpp — mỗi endpoint tăng degree một lần"
+inline std::array<int, kCubeVertexCount> cubeVertexDegrees() {
+    std::array<int, kCubeVertexCount> degrees{};
+    for (const Edge edge : kCubeEdges) {
+        if (!isValidEdge(edge)) {
+            continue;
+        }
+        ++degrees[edge.from];
+        ++degrees[edge.to];
+    }
+    return degrees;
+}
+```
+
+`hasValidCubeTopology` còn so từng cặp để loại edge trùng dù bị đảo chiều. Chỉ kiểm tra `size()==12` không bắt được trường hợp một edge bị lặp và một edge khác bị thiếu.
+
+### Bước 4 — Đo đủ mười hai cạnh
+
+```cpp title="include/lab.hpp — edge length đọc topology chuẩn"
+inline std::array<double, kCubeEdges.size()> cubeEdgeLengths(const CubeVertices& vertices) {
+    std::array<double, kCubeEdges.size()> lengths{};
+    for (std::size_t index = 0; index < kCubeEdges.size(); ++index) {
+        const Edge edge = kCubeEdges[index];
+        lengths[index] = magnitude(subtract(vertices[edge.to], vertices[edge.from]));
+    }
+    return lengths;
+}
+```
+
+`maximumCubeEdgeLengthError` so array trước/sau và lấy sai lệch lớn nhất. Một con số trên title đủ cảnh báo nhưng CTest vẫn biết chính xác invariant nào thất bại.
+
+### Bước 5 — Round trip trên cả tám vertex
+
+```cpp title="include/lab.hpp — lỗi inverse lớn nhất của cube"
+double error = 0.0;
+for (const Vec3 vertex : vertices) {
+    const Vec3 rotated = rotateEuler(vertex, angles, order);
+    const Vec3 restored = inverseRotateEuler(rotated, angles, order);
+    error = std::max(error, magnitude(subtract(restored, vertex)));
+}
+return error;
+```
+
+Kiểm tra tám vertex thay vì một sample giúp bắt lỗi theo dấu coordinate ở nhiều góc phần tư.
+
+### Bước 6 — Khóa pipeline bằng CTest
+
+```cpp title="tests/tests.cpp — topology và edge length"
+check(lab::kCubeEdges.size() == 12, "cube has twelve edges");
+check(lab::hasValidCubeTopology(), "cube topology is valid and unique");
+check(
+    lab::maximumCubeEdgeLengthError(localVertices, rotatedXyz) < 1e-9,
+    "XYZ keeps all edge lengths"
+);
+```
+
+Projection cache và depth order cũng có test riêng:
+
+```cpp title="tests/tests.cpp — cache và far-to-near order"
+check(projected.projectionCount == 8, "exactly eight projection calls are cached");
+check(visibleEdges.count == 12, "depth list contains all visible edges");
+for (std::size_t index = 1; index < visibleEdges.count; ++index) {
+    check(
+        visibleEdges.items[index - 1].averageDepth >= visibleEdges.items[index].averageDepth,
+        "visible edges are sorted from far to near"
+    );
+}
+```
+
+## Ghép các phần lại
+
+```bash title="Terminal — Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Sau khi Debug qua, lặp lại Release:
+
+```bash title="Terminal — Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Mở `project_13_final`. Thử arrows/PageUp/PageDown, W/S, A/D, Q/E, O, C, V, Space, `.`, R, mouse drag và resize. Khi một vertex ra ngoài frustum, đúng ba edge incident phải biến mất; chương trình không được nối qua một `screen` invalid.
+
+Project 13 đã hoàn chỉnh. Phần **Mã hoàn chỉnh của project** bên dưới lấy trực tiếp CMake, header, main và tests từ source dùng để sinh ZIP; bạn không cần tự ghép các code block trong bài.
+
+## Thử làm sai để hiểu đúng
+
+1. Lặp edge `{0,1}` và xóa `{0,4}`. Edge count vẫn là 12 nhưng uniqueness/degree test phải thất bại.
+2. Rotate `worldVertices` của frame trước. Edge error có thể nhỏ trong vài frame nhưng round-trip không còn mô tả đúng state gốc.
+3. Tăng `projectionCount` trong loop edge. Test pipeline báo khác 8 dù hình vẫn đúng.
+4. Chỉ đổi dấu angles khi viết inverse nhưng không đảo order. Test một trục có thể qua; test ba angle phải thất bại.
+
+## Tự kiểm tra kết quả
+
+- Topology có 8 vertex, 12 edge duy nhất và degree 3 ở mọi vertex.
+- 12 edge giữ độ dài $2h$ sau XYZ và ZYX rotation.
+- Rotate→inverse trả tám local vertex trong sai số $10^{-9}$.
+- Project count luôn là 8; default cube có 12 visible edge.
+- Depth list giảm dần theo average camera Z và factor nằm trong `[0,1]`.
+- Mouse capture được nhả ở mouse-up/focus-lost; animation không phụ thuộc FPS.
+- Starter, năm checkpoint, final và tests build ở Debug lẫn Release.
+
+## Bài tập mở rộng
+
+Thay cube bằng một rectangular box có ba half extent riêng `(hx,hy,hz)`. Topology vẫn giữ nguyên; hãy sửa validation để bốn cạnh song song mỗi trục có đúng độ dài `2hx`, `2hy` hoặc `2hz`.
+
+Project 14 sẽ giữ vertex/edge pipeline này nhưng chuyển phần điều khiển sang camera kiểu FPS để người dùng đi trong một căn phòng wireframe.

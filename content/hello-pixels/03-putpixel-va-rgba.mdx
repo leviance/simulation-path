@@ -1,0 +1,205 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tự viết `rgba` và `putPixel`
+
+## Vấn đề cần giải quyết
+
+Framebuffer ở bài 2 đã có đúng số phần tử và đã biết đổi `(x, y)` thành vị trí trong vector. Tuy nhiên, mỗi phần tử hiện vẫn chỉ là một số 32 bit chưa có ý nghĩa. Ta chưa quy định nhóm bit nào chứa màu đỏ, nhóm nào chứa alpha; cũng chưa có một hàm an toàn để ghi màu vào pixel.
+
+Nếu thuật toán nào cũng tự viết `pixels[y * width + x] = ...`, cùng một loại lỗi sẽ xuất hiện ở nhiều nơi: chỗ thì quên chặn tọa độ âm, chỗ lại xếp các kênh màu theo thứ tự khác. Để tránh điều đó, ta viết hai hàm dùng chung:
+
+- `rgba` nhận bốn kênh màu và đóng gói chúng vào một `std::uint32_t`.
+- `putPixel` chỉ ghi vào vector sau khi chắc chắn tọa độ nằm trong ảnh.
+
+Khi hai hàm này hoạt động đúng, code vẽ gradient, đường thẳng hay đường tròn không cần lặp lại chi tiết đóng gói màu và kiểm tra bộ nhớ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi kênh R, G, B, A chiếm 8 bit, tương ứng với các giá trị từ 0 đến 255. Bốn kênh vừa khít trong một số 32 bit:
+
+```text title="Bố cục số màu 32 bit"
+bit 31........24 23........16 15.........8 7..........0
+     RRRRRRRR     GGGGGGGG     BBBBBBBB    AAAAAAAA
+```
+
+Để đặt `r` vào 8 bit cao nhất, ta dịch nó sang trái 24 bit. Tương tự, `g` dịch 16 bit, `b` dịch 8 bit; `a` nằm sẵn ở 8 bit thấp nhất. Cuối cùng, toán tử OR `|` ghép bốn phần lại thành một giá trị duy nhất.
+
+Ví dụ, `rgba(255, 0, 0, 255)` tạo ra **giá trị số** `0xFF0000FF`: kênh R nằm ở 8 bit cao nhất, còn A nằm ở 8 bit thấp nhất. Đây là quy ước màu của project và cũng là cách `SDL_PIXELFORMAT_RGBA8888` diễn giải mỗi phần tử `std::uint32_t`.
+
+Có một điểm dễ gây nhầm lẫn: **vị trí bit trong giá trị số** không giống **thứ tự byte nhìn thấy trong RAM**. Trên CPU little-endian, memory viewer có thể hiện `0xRRGGBBAA` thành các byte `AA BB GG RR`, vì byte thấp được lưu trước. Điều đó không có nghĩa màu bị đảo. Ta đang đưa cho SDL một mảng số 32 bit và đã khai báo đúng `SDL_PIXELFORMAT_RGBA8888`. Pixel Memory Lab hiển thị cả giá trị số lẫn thứ tự byte để bạn phân biệt hai cách nhìn này.
+
+Với `putPixel`, thứ tự thực hiện quan trọng hơn bản thân công thức `index`:
+
+`kiểm tra x/y khi còn là số có dấu → tính index → ghi vector`
+
+Không được đảo thứ tự. `std::size_t(-1)` không còn là `-1`; nó trở thành một số dương cực lớn.
+
+<InteractiveLab demo="pixel" mode="pixel-rgba" />
+
+## Viết code từng bước
+
+### Bước 1 — Đóng gói bốn kênh màu vào 32 bit
+
+Trong `include/lab.hpp`, thêm hàm sau vào `namespace lab`, phía trên `Framebuffer`:
+
+```cpp title="include/lab.hpp — phía trên struct Framebuffer"
+constexpr std::uint32_t rgba(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255) {
+    return (std::uint32_t(r) << 24) | (std::uint32_t(g) << 16) | (std::uint32_t(b) << 8) | std::uint32_t(a);
+}
+```
+
+Kiểu `std::uint8_t` cho biết mỗi kênh chỉ chiếm 8 bit. Tham số alpha mặc định là 255, vì vậy `rgba(255, 0, 0)` đã tạo ra màu đỏ hoàn toàn đục mà không cần đối số thứ tư.
+
+Mỗi kênh được chuyển sang `std::uint32_t` **trước** khi dịch bit. C++ có thể tự nâng kiểu số nguyên, nhưng viết rõ phép chuyển kiểu giúp người đọc biết chính xác phép dịch đang diễn ra trên 32 bit và tránh các cảnh báo không cần thiết.
+
+Vì `rgba` là hàm `constexpr`, compiler có thể kiểm tra kết quả ngay khi biên dịch:
+
+```cpp title="include/lab.hpp — phép kiểm tra có thể đặt tạm dưới rgba"
+static_assert(rgba(255, 0, 0) == 0xFF0000FFu);
+static_assert(rgba(0, 255, 0, 128) == 0x00FF0080u);
+```
+
+Nếu một trong hai dòng không biên dịch được, lỗi chắc chắn nằm ở phép dịch bit hoặc thứ tự kênh màu; SDL chưa tham gia vào bước này.
+
+### Bước 2 — Chặn tọa độ ngoài ảnh trong `putPixel`
+
+Thêm method sau vào `Framebuffer`, ngay dưới `index`:
+
+```cpp title="include/lab.hpp — bên trong struct Framebuffer"
+void putPixel(int x, int y, std::uint32_t color) {
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+        return;
+    }
+    pixels[index(x, y)] = color;
+}
+```
+
+Điều kiện gồm bốn vế, tương ứng với bốn phía của ảnh. Hai vế đầu chặn tọa độ âm trước khi `index` chuyển chúng sang `std::size_t`. Hai vế sau phải dùng `>=`: ảnh rộng 4 chỉ có các cột 0, 1, 2, 3; cột 4 đã nằm ngoài ảnh.
+
+Khi tọa độ nằm ngoài ảnh, hàm chỉ **bỏ qua** pixel đó thay vì ném exception. Cách xử lý này phù hợp với việc vẽ: một đường tròn sát mép cửa sổ có thể tạo ra nhiều điểm bên ngoài, và mỗi điểm chỉ cần dừng lại bằng `return`. Ở bài kiểm thử, ta sẽ xác nhận rõ hành vi này để code gọi `putPixel` không phải đoán.
+
+### Bước 3 — Thêm hàm xóa toàn bộ framebuffer
+
+Một khung hình thường cần bắt đầu từ một màu nền. Thêm method:
+
+```cpp title="include/lab.hpp — bên trong struct Framebuffer"
+void clear(std::uint32_t color) {
+    std::fill(pixels.begin(), pixels.end(), color);
+}
+```
+
+`clear` là trường hợp đặc biệt vì nó luôn ghi lên toàn bộ vector. Không cần gọi `putPixel` hàng trăm nghìn lần; `std::fill` làm đúng việc đó trực tiếp. Những thuật toán vẽ theo tọa độ vẫn sẽ đi qua `putPixel`.
+
+### Bước 4 — Đưa dữ liệu framebuffer sang một texture SDL
+
+Nếu chỉ nhìn vector trong trình gỡ lỗi, ta biết dữ liệu đã thay đổi nhưng vẫn chưa nhìn thấy pixel trên cửa sổ. Vì vậy, ở mốc mã nguồn này chúng ta thêm một streaming texture. Đặt hàm sau trong namespace không tên, phía trên `main`:
+
+```cpp title="src/main.cpp — helper tạo texture"
+SDL_Texture* createFramebufferTexture(SDL_Renderer* renderer, int width, int height) {
+    return SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+}
+```
+
+Trước khi tạo framebuffer, ta hỏi SDL kích thước thật của vùng hiển thị theo pixel. Con số 960×540 chỉ là kích thước cửa sổ đã yêu cầu; trên màn hình high-DPI, số pixel thực tế có thể lớn hơn. Kích thước vừa đọc phải được dùng cho cả framebuffer lẫn texture:
+
+```cpp title="src/main.cpp — tạo framebuffer và texture cùng kích thước"
+int framebufferWidth = kInitialWidth;
+int framebufferHeight = kInitialHeight;
+if (!SDL_GetWindowSizeInPixels(window, &framebufferWidth, &framebufferHeight)) {
+    std::cerr << "SDL_GetWindowSizeInPixels failed: " << SDL_GetError() << '\n';
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+lab::Framebuffer framebuffer{framebufferWidth, framebufferHeight};
+SDL_Texture* texture = createFramebufferTexture(renderer, framebuffer.width, framebuffer.height);
+if (!texture) {
+    std::cerr << "SDL_CreateTexture failed: " << SDL_GetError() << '\n';
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+`SDL_PIXELFORMAT_RGBA8888` phải khớp với cách hàm `rgba` sắp xếp các bit. Texture sẽ nhận dữ liệu từ vector để SDL có thể vẽ nó. Bài 5 sẽ giải thích kỹ hơn về `pitch`, resize và vòng đời texture. Hiện tại chỉ cần bảo đảm hai điều: texture có cùng kích thước với framebuffer, và kích thước đó lấy từ số pixel thật của cửa sổ.
+
+### Bước 5 — Vẽ một dấu cộng để kiểm tra `putPixel`
+
+Trong `src/main.cpp`, sau khi tạo framebuffer và trước khi cập nhật texture, hãy xóa nền rồi ghi một dấu cộng quanh tâm:
+
+```cpp title="src/main.cpp — trong render loop, trước SDL_UpdateTexture"
+framebuffer.clear(lab::rgba(11, 16, 32));
+const int centerX = framebuffer.width / 2;
+const int centerY = framebuffer.height / 2;
+for (int offset = -20; offset <= 20; ++offset) {
+    framebuffer.putPixel(centerX + offset, centerY, lab::rgba(83, 240, 174));
+    framebuffer.putPixel(centerX, centerY + offset, lab::rgba(83, 240, 174));
+}
+```
+
+Đoạn code luôn gọi `putPixel` thay vì ghi trực tiếp vào `pixels`. Nếu dấu cộng nằm sát mép cửa sổ, những điểm vượt ra ngoài vẫn được bỏ qua an toàn. Người viết thuật toán không còn phải lặp lại câu hỏi “tọa độ này có hợp lệ không?” ở mọi chỗ.
+
+Cuối mỗi khung hình, gửi vector sang texture rồi hiển thị texture:
+
+```cpp title="src/main.cpp — sau khi vẽ dấu cộng"
+const int pitch = framebuffer.width * int(sizeof(std::uint32_t));
+if (!SDL_UpdateTexture(texture, nullptr, framebuffer.pixels.data(), pitch)) {
+    std::cerr << "SDL_UpdateTexture failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderClear(renderer)) {
+    std::cerr << "SDL_RenderClear failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderTexture(renderer, texture, nullptr, nullptr)) {
+    std::cerr << "SDL_RenderTexture failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderPresent(renderer)) {
+    std::cerr << "SDL_RenderPresent failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+```
+
+Biến `failed` được khai báo là `false` cạnh `running`. Nếu một lời gọi cập nhật hoặc vẽ texture thất bại, ta đặt nó thành `true` rồi rời vòng lặp. Sau đó chương trình hủy `texture` trước renderer và trả về `EXIT_FAILURE`. Như vậy, toàn bộ code tối thiểu để nhìn thấy dấu cộng đều đã được giải thích ngay trong bài này.
+
+## Ghép các phần lại
+
+Dữ liệu của một pixel giờ đi qua đầy đủ các bước sau:
+
+`rgba(r,g,b,a) → uint32_t color → putPixel(x,y,color) → index(x,y) → pixels[index] → streaming texture → cửa sổ`
+
+Hãy lần theo đường đi này trong trình gỡ lỗi. Đặt breakpoint ở `putPixel`, gọi hàm với `(3, 2)` trên framebuffer 4×3 và xác nhận `index` trả về 11. Sau đó thử `putPixel(-1, 0, ...)`: chương trình phải dừng ở nhánh `return` trước khi gọi `index`.
+
+Cách đọc này cho thấy mỗi hàm chịu trách nhiệm cho một việc: `rgba` biểu diễn màu, `putPixel` bảo vệ biên, còn `index` đổi tọa độ thành vị trí trong bộ nhớ. Khi có lỗi, bạn cũng biết nên bắt đầu kiểm tra từ đâu.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm đổi `x >= width` thành `x > width`, rồi gọi `putPixel(width, 0, ...)`. Bạn đã cho phép cột đầu tiên của hàng kế tiếp lọt qua điều kiện.
+2. Chuyển dòng `pixels[index(x, y)] = color` lên trước khối `if`. Chạy bản Debug với `x = -1`; khôi phục ngay sau khi quan sát lỗi.
+3. Đổi hai dịch bit của R và B cho nhau. Dấu cộng màu xanh có thể thành một màu khác, cho thấy bug không nằm ở renderer mà ở quy ước đóng gói.
+
+Trong Pixel Memory Lab, hãy chọn vài màu có sẵn rồi đối chiếu ba cách biểu diễn: bốn kênh R, G, B, A; giá trị `0xRRGGBBAA`; và thứ tự byte trên CPU little-endian. Bạn chỉ cần hiểu mối quan hệ giữa chúng, không cần học thuộc các dãy hex.
+
+## Tự kiểm tra kết quả
+
+- [ ] `rgba(255, 0, 0)` bằng `0xFF0000FFu` theo quy ước của project.
+- [ ] `putPixel(0, 0, color)` sửa phần tử đầu tiên.
+- [ ] `putPixel(width - 1, height - 1, color)` sửa phần tử cuối cùng.
+- [ ] Tọa độ ngoài cả bốn cạnh đều bị bỏ qua và không làm vector thay đổi.
+- [ ] Không đoạn code vẽ nào trong `main` tự tính `y * width + x`.
+- [ ] Target `project_1_checkpoint_3` build và hiển thị dấu kiểm tra bằng màu đúng.
+
+## Bài tập mở rộng
+
+1. Viết bốn hàm `red`, `green`, `blue`, `alpha` để tách từng kênh khỏi giá trị do `rgba` tạo ra. Kiểm tra `alpha(rgba(1,2,3,4)) == 4`.
+2. Thêm `putPixelUnchecked` chỉ dùng nội bộ cho những vòng lặp đã chứng minh toàn bộ tọa độ hợp lệ. Ghi rõ điều kiện đầu vào của hàm; đừng thay `putPixel` công khai bằng phiên bản này.
+3. Dùng hai vòng lặp và `putPixel` để tô một hình chữ nhật 80×40. Đây là bước đệm cho các pattern phủ kín framebuffer ở bài 4.
+
+Ở bài tiếp theo, chúng ta sẽ dùng ba hàm vừa hoàn thành — `rgba`, `clear`, `putPixel` — để tạo ra những hình ảnh có thể kiểm tra trực tiếp bằng mắt.

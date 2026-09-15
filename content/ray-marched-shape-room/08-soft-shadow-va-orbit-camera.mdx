@@ -1,0 +1,166 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo bóng mềm và điều khiển camera
+
+## Bức hình này còn thiếu gì?
+
+Căn phòng đã có hình khối và ánh sáng Lambert, nhưng nguồn sáng vẫn xuyên qua mọi vật cản. Ta sẽ bắn thêm một shadow ray từ bề mặt về phía đèn để biết điểm đó có bị che hay không. Sau đó, ta thêm orbit và zoom để có thể kiểm tra căn phòng từ nhiều góc mà không phải sửa tọa độ từng vật.
+
+Hai phần này tưởng như tách biệt nhưng đều cần giới hạn rõ ràng: vòng lặp tính bóng phải dừng theo số bước hoặc khoảng cách; input cần pointer capture, clamp và reset để camera không rơi vào trạng thái suy biến.
+
+## Hình dung đường đi của một pixel
+
+Từ hit position, hướng về đèn:
+
+$$
+\mathbf{l}=\frac{\mathbf{lightPosition}-\mathbf{hitPosition}}
+{\lVert\mathbf{lightPosition}-\mathbf{hitPosition}\rVert}
+$$
+
+Hard shadow chỉ cần trả 0 khi gặp vật cản, 1 khi tới đèn. Soft-shadow approximation giữ thêm một tỷ lệ $k d/t$: khi ray đi sát bề mặt, distance $d$ nhỏ so với quãng đã đi $t$, visibility giảm dần.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-shadow-camera" />
+
+Nhấn Space để dừng/chạy đèn, N để tiến từng bước thời gian, rồi orbit camera. Bóng phải bám world geometry; camera chỉ đổi ray nhìn, không kéo bóng hoặc primitive đi theo.
+
+## Cùng sửa checkpoint
+
+### Bước 1 — Viết vòng lặp tính bóng có bias và giới hạn dừng
+
+```cpp title="include/raymarch_math.hpp — softShadow"
+inline double softShadow(
+    const Vec3& origin,
+    const Vec3& direction,
+    double maximumDistance,
+    int maximumSteps = 48
+) {
+    double visibility = 1.0;
+    double traveled = 0.02;
+
+    for (
+        int step = 0;
+        step < maximumSteps && traveled < maximumDistance;
+        ++step
+    ) {
+        const double distance =
+            sampleScene(origin + direction * traveled).distance;
+
+        if (distance < 0.001) {
+            return 0.0;
+        }
+
+        visibility = std::min(
+            visibility,
+            14.0 * distance / traveled
+        );
+        traveled += std::clamp(distance, 0.01, 0.35);
+    }
+
+    return std::clamp(visibility, 0.0, 1.0);
+}
+```
+
+`traveled` bắt đầu ở 0,02 để tránh chia zero và không sample đúng bề mặt. Ngoài ra call site còn đẩy origin theo normal:
+
+```glsl title="shaders/raymarch.frag — gọi shadow ray"
+float visibility = softShadow(
+    result.position + normal * (uHitEpsilon * 3.0),
+    lightDirection,
+    lightDistance
+);
+
+vec3 color = baseColor * (
+    0.16 + diffuse * visibility * 0.84
+);
+```
+
+Normal bias và initial traveled cùng chống self-intersection ở hai lớp. Bias quá nhỏ tạo acne; bias quá lớn làm bóng tách khỏi chân vật thể.
+
+### Bước 2 — Cho đèn chuyển động nhưng vẫn có thể kiểm soát
+
+```glsl title="shaders/raymarch.frag — light theo thời gian"
+vec3 lightPosition = vec3(
+    2.4 + sin(uTime * 0.35) * 0.6,
+    2.0,
+    3.0
+);
+```
+
+`uTime` đến từ C++ và có thể pause. Reduced-motion khởi động ở trạng thái pause; phím N tăng đúng 0,1 giây để người học so sánh hai frame có chủ đích.
+
+### Bước 3 — Orbit camera bằng ba biến có giới hạn
+
+Camera position được suy ra từ `yaw`, `pitch`, `distance` và `target`:
+
+```cpp title="include/raymarch_math.hpp — cameraPosition"
+inline Vec3 cameraPosition(const OrbitCamera& camera) {
+    const double horizontal =
+        std::cos(camera.pitch) * camera.distance;
+
+    const Vec3 offset{
+        std::sin(camera.yaw) * horizontal,
+        std::sin(camera.pitch) * camera.distance,
+        std::cos(camera.yaw) * horizontal,
+    };
+    return camera.target + offset;
+}
+```
+
+Trong event loop, cập nhật từng biến bằng code thẳng, dễ đọc:
+
+```cpp title="src/main.cpp — drag và wheel"
+if (event.type == SDL_EVENT_MOUSE_MOTION && dragging) {
+    frame.camera.yaw +=
+        double(event.motion.x - previousMouseX) * 0.006;
+    frame.camera.pitch +=
+        double(event.motion.y - previousMouseY) * 0.006;
+    frame.camera.yaw = std::clamp(frame.camera.yaw, -0.72, 0.72);
+    frame.camera.pitch = std::clamp(frame.camera.pitch, -0.2, 0.45);
+    previousMouseX = event.motion.x;
+    previousMouseY = event.motion.y;
+}
+
+if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+    frame.camera.distance = std::clamp(
+        frame.camera.distance - double(event.wheel.y) * 0.2,
+        3.4,
+        5.4
+    );
+}
+```
+
+Pitch không tiến tới $\pm\pi/2$, nên `forward` không song song hoàn toàn với `worldUp`. Distance không về zero, nên camera không trùng target.
+
+## Chạy thử và quan sát
+
+Pointer capture phải có vòng đời cân bằng.
+
+Khi nhấn chuột trái, gọi `SDL_CaptureMouse(true)` và đặt `dragging = true`. Khi thả, mất focus hoặc reset, phải gọi `SDL_CaptureMouse(false)`. Nếu chỉ xử lý mouse-up, thao tác Alt+Tab giữa lúc drag có thể để pointer bị giữ.
+
+Canvas dùng cùng nguyên tắc với `setPointerCapture`/`releasePointerCapture`, đồng thời readout nói rõ pointer đang bị giữ hay đã nhả.
+
+## Cố tình làm sai
+
+1. Bỏ normal bias. Các mặt tự che chính mình và xuất hiện acne lốm đốm.
+2. Không giới hạn shadow steps. Một lỗi scene distance có thể làm mỗi pixel chạy loop quá lâu.
+3. Cho shadow ray đi xa hơn light distance. Vật thể phía sau đèn cũng che ánh sáng.
+4. Không clamp pitch. Camera basis mất ổn định gần cực trên/dưới.
+5. Cập nhật thẳng vị trí từng primitive khi drag. Đó là xoay scene, không phải orbit camera, và sẽ làm test material khó lặp lại.
+6. Quên nhả pointer khi window mất focus. Input trông như bị “kẹt” sau khi quay lại ứng dụng.
+
+## Dấu hiệu cho thấy bài đã hoàn thành
+
+- [ ] Visibility luôn hữu hạn trong $[0,1]$.
+- [ ] Shadow ray không vượt 48 bước hoặc `lightDistance`.
+- [ ] Bias loại self-shadow mà không làm bóng tách rõ khỏi vật.
+- [ ] Orbit, zoom, reset không tạo camera direction NaN.
+- [ ] Pointer capture được nhả khi mouse-up, focus lost và reset.
+- [ ] Pause/N cho phép tái hiện đúng vị trí đèn.
+
+## Thử đi thêm một bước
+
+1. Hiển thị số shadow steps của center ray.
+2. So sánh hard shadow với soft approximation bằng một toggle.
+3. Thêm inverse-square attenuation nhưng giữ diffuse và visibility thành hai đại lượng riêng.
+
+Bài cuối sẽ ghép các chế độ debug, báo cáo kiểm tra, cơ chế chỉ nhận shader hợp lệ và phần dọn tài nguyên thành một chương trình hoàn chỉnh.

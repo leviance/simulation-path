@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Viết vòng lặp tô kín tam giác
+
+## Vấn đề cần giải quyết
+
+Ta đã có danh sách candidate dưới dạng bounding box và một hàm kiểm một sample. Phần còn lại nghe đơn giản: duyệt từng pixel, gọi `sampleTriangle`, rồi tô pixel được nhận. Nhưng đây là nơi code rất dễ trộn ba trách nhiệm:
+
+1. chọn pixel nào cần xét;
+2. quyết định coverage;
+3. quyết định màu và cách ghi framebuffer.
+
+Ta sẽ tách phần thứ ba bằng callback `shadePixel`. Nhờ đó cùng raster loop có thể tô màu đơn hôm nay, barycentric RGB ở bài 7 và depth-buffer ở Project 17.
+
+Hàm trung tâm mang tên `rasterizeTriangle`: nó nhận geometry, framebuffer size, fill rule, candidate limit và callback; SDL không xuất hiện trong interface này.
+
+## Hiểu ý tưởng trước khi viết code
+
+Framebuffer đặt pixel `(x,y)` tại `y×width+x`. Vòng ngoài theo Y, vòng trong theo X làm các lần ghi đi liên tiếp trong memory:
+
+$$
+(minX,minY),(minX+1,minY),\ldots,(maxX,minY),(minX,minY+1),\ldots
+$$
+
+Canvas lab dùng đúng thứ tự này khi bạn bấm “Chạy lại” hoặc “Tiến một pixel”.
+
+<InteractiveLab demo="triangle-raster" mode="triangle-fill" />
+
+## Viết code từng bước
+
+### Bước 1 — Trả stats có ý nghĩa rõ ràng
+
+```cpp title="include/lab.hpp — dữ liệu quan sát của một lần raster"
+struct RasterStats {
+    IntRect bounds{};
+    std::size_t candidateCount{};
+    std::size_t testedCount{};
+    std::size_t coveredCount{};
+    bool degenerate{};
+};
+```
+
+`candidateCount` là tổng ô trong bounds. `testedCount` là số ô đã thật sự chạy coverage; nó có thể nhỏ hơn candidate khi stepper dừng sớm. `coveredCount` bằng số lần callback được gọi.
+
+### Bước 2 — Chuẩn bị bounds và giới hạn an toàn
+
+```cpp title="include/lab.hpp — chuẩn bị vòng raster"
+RasterStats stats{};
+stats.bounds = triangleBounds(triangle, width, height);
+stats.candidateCount = candidatePixelCount(stats.bounds);
+stats.degenerate = classifyWinding(triangle) == Winding::Degenerate;
+if (stats.degenerate || stats.candidateCount == 0) {
+    return stats;
+}
+
+const std::size_t safeLimit = std::min(candidateLimit, stats.candidateCount);
+```
+
+Candidate limit lớn tùy ý cũng không làm vòng lặp đi quá bounds. Degenerate dừng trước sample đầu tiên.
+
+### Bước 3 — Duyệt, kiểm, rồi mới shade
+
+```cpp title="include/lab.hpp — vòng lặp row-major của rasterizer"
+for (int y = stats.bounds.minY; y <= stats.bounds.maxY; ++y) {
+    for (int x = stats.bounds.minX; x <= stats.bounds.maxX; ++x) {
+        if (stats.testedCount >= safeLimit) {
+            return stats;
+        }
+
+        const CoverageSample sample = sampleTriangle(triangle, pixelCenter(x, y), rule);
+        ++stats.testedCount;
+        if (!sample.inside) {
+            continue;
+        }
+
+        ++stats.coveredCount;
+        shadePixel(x, y, sample.barycentric);
+    }
+}
+```
+
+Callback chỉ chạy sau coverage. Nó nhận cả barycentric weights dù checkpoint 5 mới tô màu đơn; interface đã sẵn sàng cho thuộc tính nội suy.
+
+### Bước 4 — Main chỉ lo cách viết pixel
+
+```cpp title="src/main.cpp — callback màu đơn ở checkpoint 5"
+std::uint32_t color = rgba(93, 132, 214);
+static_cast<void>(weights);
+putPixel(pixels, width, height, x, y, color);
+```
+
+`static_cast<void>` nói rõ checkpoint hiện chưa dùng weights, tránh warning nhưng không xóa tham số khỏi contract.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build triangle fill đầu tiên"
+cmake --build build --config Debug --target project_16_checkpoint_5
+```
+
+Kéo cả ba vertex. Màu xanh phải bám theo wireframe, bounding box vàng thay đổi cùng hình và title bar báo `covered < candidate` với triangle thông thường.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi vòng lặp thành quét `0..width-1`, `0..height-1`. Hình vẫn đúng nhưng candidate/tested không còn khớp bounds; phục hồi vùng quét nhỏ.
+2. Tăng `coveredCount` trước `if (!sample.inside)`. Count trở thành tested count dù hình vẫn đúng; test callback sẽ phát hiện.
+3. Gọi `shadePixel` rồi mới kiểm `inside`. Cả bounds bị ghi màu trước khi pixel ngoài bị bỏ qua; đặt callback về sau coverage.
+
+## Tự kiểm tra kết quả
+
+- Vòng ngoài theo Y, vòng trong theo X và cả hai đầu bounds đều inclusive.
+- Mỗi candidate tạo sample tại đúng pixel center.
+- `testedCount` tăng đúng một lần cho mỗi coverage test.
+- `coveredCount` bằng số lần `shadePixel` được gọi.
+- Candidate limit bằng 0 không test hoặc tô pixel nào.
+- Triangle suy biến trả stats nhưng không gọi callback.
+
+## Bài tập mở rộng
+
+Đo thời gian của hai phiên bản: quét toàn framebuffer và quét bounding box. Chạy cùng một triangle 1.000 lần trong test command-line, không đo bằng một frame có SDL present.
+
+Bài tiếp theo sẽ xử lý trường hợp còn mơ hồ: sample nằm đúng trên cạnh chung của hai triangle thì bên nào được phép tô?

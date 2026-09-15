@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Stress test, bảo toàn và nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Một bể nhiều màu trông vui mắt có thể vẫn sai: một contact bơm energy rất chậm, pair count thiếu vài cặp, static body trôi hoặc NaN chỉ xuất hiện khi hai tâm gần trùng. Final cần test nhỏ có đáp án và stress test lớn có invariant.
+
+Ta dùng hai tầng. Case hai bóng cô lập kiểm momentum/energy chính xác. Run 144 bóng kiểm tính hữu hạn, bounds, pair count và maximum penetration qua nhiều step. Hai tầng bắt các loại lỗi khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tổng linear momentum và kinetic energy:
+
+$$
+P=\sum_i m_iv_i,\qquad K=\sum_i\frac12m_i\lVert v_i\rVert^2
+$$
+
+Với restitution 1 và không có wall impact trong case hai bóng, cả P lẫn K phải bảo toàn trong tolerance. Trong cả bể, wall đổi momentum của hệ và restitution 0.96 cố ý làm giảm energy; vì vậy readout không dùng “momentum luôn zero” như một luật sai.
+
+<InteractiveLab demo="collision-tank" mode="collision-validation" />
+
+Đặt restitution 1, 144 ball, ba iterations và chạy nhanh 2 giây vài lần. Graph tím cho energy drift, vàng cho penetration. Sau đó hạ restitution: energy giảm là kết quả vật liệu, không tự động là integration bug.
+
+## Viết code từng bước
+
+### Bước 1 — Đo state sau solver một cách độc lập
+
+```cpp title="include/lab.hpp — metrics không đọc CollisionStepStats"
+const double mass = 1.0 / ball.inverseMass;
+metrics.totalMomentum = add(metrics.totalMomentum, scale(ball.velocity, mass));
+metrics.kineticEnergy += 0.5 * mass * lengthSquared(ball.velocity);
+```
+
+`measureWorld` quét state thật sau step. Nó không tin counter nội bộ, nhờ vậy một lỗi quên ghi stats không che lỗi physics và ngược lại.
+
+### Bước 2 — Quét overlap bằng detection đã kiểm thử
+
+```cpp title="include/lab.hpp — overlap count và max penetration sau step"
+const CircleContact contact = findCircleContact(balls[firstIndex], balls[secondIndex]);
+if (!contact.colliding) {
+    continue;
+}
+++metrics.overlapCount;
+metrics.maximumPenetration = std::max(metrics.maximumPenetration, contact.penetration);
+```
+
+Overlap count không nhất thiết bằng zero vì solver cho phép slop và correction hữu hạn. Tiêu chí hữu ích là penetration bị chặn và không tăng mất kiểm soát.
+
+### Bước 3 — Kiểm elastic head-on bằng số cụ thể
+
+```cpp title="tests/tests.cpp — hai equal mass đổi normal velocity"
+check(closeEnough(impulseMagnitude, 2.0), "elastic equal-mass head-on collision has the expected impulse");
+check(closeEnough(impulseFirst.velocity.x, -1.0) && closeEnough(impulseSecond.velocity.x, 1.0), "elastic equal masses exchange normal velocity");
+check(closeEnough(momentumBefore.x, momentumAfter.x) && closeEnough(momentumBefore.y, momentumAfter.y), "pair impulse conserves linear momentum");
+check(closeEnough(energyBefore, energyAfter), "restitution one conserves pair kinetic energy");
+```
+
+Đây là test cô lập, không có wall hoặc thứ tự nhiều contact làm nhiễu kết luận.
+
+### Bước 4 — Stress nhưng vẫn có giới hạn thời gian
+
+CTest chạy 240 step cho 144 ball, mỗi step kiểm đúng 30.888 pair. Nó xác nhận finite state, bounds, penetration dưới ngưỡng và elastic energy gần bảo toàn. Số step hữu hạn giữ test nhanh; không dùng một vòng `while` chờ scene “ổn”.
+
+## Ghép các phần lại
+
+```bash title="Terminal — nghiệm thu toàn bộ Project 24"
+cmake -S . -B build-all -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build-all --config Debug
+ctest --test-dir build-all -C Debug --output-on-failure
+cmake --build build-all --config Release
+ctest --test-dir build-all -C Release --output-on-failure
+./build-all/Debug/project_24_final.exe
+```
+
+Build toàn bộ starter, tám checkpoint, final và tests. Final thêm drag kick, điều khiển `dt`/restitution/iterations cùng title bar metrics; các checkpoint trước vẫn phải compile độc lập.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng restitution 0.8 nhưng vẫn đòi kinetic energy bảo toàn. Test đang sai kỳ vọng; đổi case conservation về e=1 rồi hoàn tác nhầm lẫn.
+2. Chỉ test `finite=true`. Một solver đứng yên cũng pass; thêm head-on result, pair count và penetration bound.
+3. Spawn bằng clock trong stress test. Khi fail không thể chạy lại đúng scene; hoàn tác về fixed seed.
+4. Dùng vòng stress không giới hạn thời gian. Thay bằng số step cố định và giữ process supervisor cho build/test.
+
+## Tự kiểm tra kết quả
+
+- Cùng seed tái tạo đủ 144 body state.
+- Wall tests bao gồm corner và ball đang đi ra khỏi wall overlap.
+- Detection tests bao gồm separated, overlap và coincident centers.
+- Elastic two-ball test bảo toàn momentum và kinetic energy.
+- Separating contact không nhận impulse; correction không đổi velocity.
+- Pair-count invariant đúng cho nhiều N/iteration.
+- Stress run không NaN, không ra ngoài bounds và penetration bị chặn.
+- Canvas hỗ trợ DPR, pointer capture, keyboard, reduced motion và textual state.
+- Debug/Release CTest đều chạy thật; starter, tám checkpoint và final build sạch.
+
+## Bài tập mở rộng
+
+Xuất CSV mỗi 0.1 giây gồm energy drift, overlap count, maximum penetration, pair checks và contacts. So ba giá trị solver iterations, nhưng giữ seed, dt và restitution cố định.
+
+Project 24 đã tạo một baseline collision đúng và đo được. Project 25 sẽ dùng nhiều mass–spring nối thành chuỗi, nơi lực truyền qua hàng xóm thay cho impulse tức thời giữa các circle.

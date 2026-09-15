@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Theta accuracy sweep
+
+## Vấn đề cần giải quyết
+
+Nói “theta 0,5 thường khá chính xác” không đủ cho một project học tập. Accuracy phụ thuộc distribution, mass ratio, softening và target. Ta cần một thí nghiệm tái lập, trong đó chỉ theta thay đổi còn direct oracle và target set được giữ nguyên.
+
+Checkpoint 8 chạy một theta sweep rồi báo mean/max relative force error cùng lượng công việc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với target $i$, relative error là:
+
+$$
+e_i=\frac{\lVert\mathbf{a}^{BH}_i-\mathbf{a}^{direct}_i\rVert}
+{\max(\lVert\mathbf{a}^{direct}_i\rVert,10^{-12})}
+$$
+
+Mean error mô tả target điển hình; max error bắt target tệ nhất trong sample. Hai số trả lời hai câu hỏi khác nhau, nên không thay thế nhau.
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-accuracy" />
+
+Các cột vàng là mean error; chấm xanh biểu diễn aggregate+exact work. Đọc chúng theo cặp: giảm work mà error vượt ngưỡng của bài toán không phải là tối ưu thành công.
+
+## Viết code từng bước
+
+### Bước 1 — Chọn target indices tái lập
+
+```cpp title="include/analysis.hpp — deterministic targets"
+const std::size_t targetIndex = std::min(
+    bodies.size() - 1U,
+    index* bodies.size() / count
+);
+targets.push_back(targetIndex);
+```
+
+Targets trải đều theo index, bao gồm central body khi index đầu bằng 0. Không gọi random bên trong từng theta row.
+
+### Bước 2 — Cache direct oracle trước vòng theta
+
+```cpp title="include/analysis.hpp — exact acceleration cache"
+exactAccelerations.push_back(
+    directAcceleration(bodies, targetIndex, gravitationalConstant, softening).acceleration
+);
+```
+
+Direct result không phụ thuộc theta. Tính một lần vừa giảm thời gian sweep, vừa bảo đảm mọi row dùng đúng cùng oracle values.
+
+### Bước 3 — Tính relative error có denominator floor
+
+```cpp title="include/analysis.hpp — relative force error"
+const double relativeError =
+    length(approximate.acceleration - exactAccelerations[index]) /
+    std::max(length(exactAccelerations[index]), 1.0e-12);
+row.meanRelativeError += relativeError;
+row.maximumRelativeError = std::max(row.maximumRelativeError, relativeError);
+```
+
+Floor chỉ bảo vệ phép chia khi exact acceleration gần 0; nó không sửa hay clamp vector lực.
+
+### Bước 4 — Gộp work của đúng các target đã đo
+
+```cpp title="include/analysis.hpp — accuracy work counters"
+row.metrics.visitedNodes += approximate.metrics.visitedNodes;
+row.metrics.approximatedNodes += approximate.metrics.approximatedNodes;
+row.metrics.exactInteractions += approximate.metrics.exactInteractions;
+```
+
+Nhờ vậy mỗi row chứa cả “sai bao nhiêu” và “đã làm bao nhiêu việc”.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 8"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_31_checkpoint_8
+```
+
+Nhấn `T`. Terminal in bốn rows theta 0,25; 0,5; 0,8; 1,1 với cùng 24 targets. Timing chưa nằm trong bảng này; accuracy test cần ổn định trước.
+
+## Thử làm sai để hiểu đúng
+
+1. Sinh target ngẫu nhiên mới cho mỗi theta. Error rows không còn so cùng workload.
+2. Chỉ so độ lớn acceleration. Hai vector khác hướng nhưng cùng độ lớn sẽ bị coi là đúng.
+3. Chỉ báo mean. Một target gần cụm nặng có error lớn bị che bởi nhiều target dễ.
+
+## Tự kiểm tra kết quả
+
+- Mỗi theta dùng cùng bodies, target indices, G và softening.
+- Direct acceleration được tính một lần cho mỗi target.
+- Relative error so vector difference, không chỉ scalar magnitude.
+- Theta nhỏ gần 0 khớp direct trong tolerance.
+- Trên preset, theta 0,25 có mean error không lớn hơn theta 1,1.
+- Theta lớn thường có ít exact interactions và nhiều aggregate nodes hơn.
+- Max error luôn lớn hơn hoặc bằng mean error.
+- Accuracy test không dựa vào microseconds.
+
+## Bài tập mở rộng
+
+Thêm percentile 95 của relative error. So distribution có central mass 120 với distribution mọi mass bằng 1, nhưng giữ positions/velocities giống nhau. Giải thích vì sao cùng theta không nhất thiết cho cùng error profile.
+
+Bài tiếp theo giữ accuracy contract và bắt đầu đo scaling theo N.

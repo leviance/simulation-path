@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt dữ liệu lên GPU và khởi tạo hạt
+
+## Vấn đề cần giải quyết
+
+Bài trước đã có hình. Bây giờ ta muốn chính GPU tạo position và velocity, để khi tăng N không phải dựng một `std::vector` hàng triệu hạt rồi chép sang GPU. Sau bài này, kernel khởi tạo đã chạy xong nhưng màn hình vẫn dùng preview CPU; bài 3 mới nối renderer vào SSBO.
+
+Mục tiêu không phải làm hạt chuyển động ngay. Trước tiên hai phía C++ và GLSL phải thống nhất **mỗi phần tử chiếm bao nhiêu byte**.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng ba mảng riêng: `positions`, `velocities`, `forces`. Mỗi phần tử là một `vec4` 16 byte. `positions.xy` chứa vị trí đã wrap; `positions.zw` để dành cho độ dời từ mốc dựng grid. `forces.xy` sẽ chứa lực và `forces.z` chứa phần thế năng của hạt.
+
+Có hai bank p/v/f: bank hiện tại và bank ứng viên. Thêm một mảng reference, mỗi hạt cần 7 × 16 = 112 byte trước khi tính grid/scratch. Tách các mảng không làm tổng byte tự giảm; nó giúp từng SSBO không quá lớn và mỗi kernel chỉ bind dữ liệu cần dùng.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-2" />
+
+Canvas dùng cùng lattice/seed để giải thích, nhưng tính bằng JavaScript number. Không dùng hình Canvas để kết luận dữ liệu float trên GPU đã đúng từng bit.
+
+## Viết code từng bước
+
+### Bước 1 — Khóa layout của phần tử
+
+Thêm kiểu dữ liệu vào `molecular_math.hpp`:
+
+```cpp title="include/molecular_math.hpp — đoạn đang thêm"
+struct alignas(16) Float4 {
+    float x = 0;
+    float y = 0;
+    float z = 0;
+    float w = 0;
+};
+
+static_assert(sizeof(Float4) == 16);
+static_assert(alignof(Float4) == 16);
+```
+
+Không dùng một `struct` có `vec3` rồi đoán stride. `static_assert` ở đây kiểm hợp đồng CPU; trong shader ta dùng đúng `vec4[]` với `layout(std430)`.
+
+### Bước 2 — Cấp phát sau khi đã tính dung lượng
+
+Hàm nhỏ này chịu trách nhiệm cho một buffer:
+
+```cpp title="include/gpu_storage.hpp — đoạn đang thêm"
+inline GLuint allocateBuffer(lab::GlApi& gl, std::uint64_t bytes) {
+    GLuint buffer = 0;
+    gl.GenBuffers(1, &buffer);
+    gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    gl.BufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(bytes), nullptr, GL_DYNAMIC_COPY);
+    if (buffer == 0 || gl.GetError() != GL_NO_ERROR) {
+        gl.DeleteBuffers(1, &buffer);
+        throw std::runtime_error("GPU allocation failed; reduce the particle count.");
+    }
+    return buffer;
+}
+```
+
+`nullptr` nghĩa là chưa upload dữ liệu khởi tạo. GL có thể từ chối allocation dù block size nằm trong giới hạn; vì vậy vẫn phải kiểm lỗi. `Storage::allocate` tạo candidate và giải phóng những buffer đã tạo nếu một bước thất bại. `Engine::reset` chỉ thay storage cũ sau khi toàn bộ allocation thành công. Bài 9 sẽ đọc kỹ phần budget, nhưng hàng rào đó phải hoạt động ngay từ lần cấp phát đầu tiên.
+
+### Bước 3 — Viết kernel tạo position và velocity
+
+Tạo `shaders/initialize.comp`:
+
+```glsl title="shaders/initialize.comp — khởi tạo mỗi phần tử đúng một lần"
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) writeonly buffer Positions { vec4 positions[]; };
+layout(std430, binding = 1) writeonly buffer Velocities { vec4 velocities[]; };
+layout(std430, binding = 2) writeonly buffer Forces { vec4 forces[]; };
+uniform uint uCount;
+uniform uint uBase;
+uniform uint uColumns;
+
+uint mixBits(uint value) {
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16);
+}
+
+void main() {
+    uint i = uBase + gl_GlobalInvocationID.x;
+    if (i >= uCount) {
+        return;
+    }
+    positions[i] = vec4((float(i % uColumns) + 0.5) * 1.6, (float(i / uColumns) + 0.5) * 1.6, 0, 0);
+    uint bits = mixBits(i / 2u + 45u);
+    vec2 velocity = (vec2(bits & 65535u, bits >> 16) / 65535.0 - 0.5) * 0.2;
+    if (i % 2u != 0u) {
+        velocity = -velocity;
+    }
+    if (uCount % 2u != 0u && i + 1u == uCount) {
+        velocity = vec2(0);
+    }
+    velocities[i] = vec4(velocity, 0, 0);
+    forces[i] = vec4(0);
+}
+```
+
+`uBase` là chỉ số đầu của lô, còn `gl_GlobalInvocationID.x` là chỉ số trong lô. Nhánh `i >= uCount` bảo vệ workgroup cuối. Seed lấy từ `i/2`: hai hạt liền nhau nhận vận tốc đối nhau. Khi N lẻ, hạt cuối nhận vận tốc zero, nên tổng động lượng ban đầu không bị một phần tử lẻ làm lệch.
+
+Vị trí tạo trên lattice, không random chồng lên nhau. Hàm trộn số nguyên chỉ dùng cho vận tốc, và C++ có `mixBits` tương ứng để tái lập input.
+
+## Ghép các phần lại
+
+Trong main, checkpoint 02 thêm `engine.initialize` để load shader và `engine.reset` để yêu cầu khởi tạo. `engine.tick` trong event loop gửi từng lô và quay về xử lý input. Chưa dùng `glGetBufferSubData` để kéo toàn bộ state về chỉ nhằm nhìn thấy hình.
+
+```bash title="Terminal Windows — build và chạy bài 2"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_2 --parallel 2
+.\build\Debug\project_45_checkpoint_2.exe
+```
+
+Khi phase chuyển từ initialize sang idle, buffer đã được tạo xong. Hình preview không chứng minh kernel đúng; ở bài cuối có kiểm chứng input/force bằng readback nhỏ. Trình biên dịch shader báo lỗi kèm tên file qua `loadProgram`.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản thử riêng, đổi `Float4` thành ba float nhưng giữ shader `vec4`. `static_assert(sizeof(Float4)==16)` phải chặn build. Không bỏ assert để ép chương trình chạy.
+2. Tạm bỏ nhánh hạt lẻ nhận velocity zero rồi kiểm `initialVelocity` với N=257. Tổng động lượng không còn zero. Khôi phục nhánh và giữ ca N lẻ trong tests.
+
+## Tự kiểm tra kết quả
+
+Mỗi buffer p/v/f có `16*N` byte; mỗi hạt được kernel ghi đúng một lần. Preview vẫn hiện 64 hạt và ứng dụng không tự chạy vật lý. Compile/link shader sai phải báo tên file, không im lặng tiếp tục với program 0.
+
+## Bài tập mở rộng
+
+Viết bảng byte cho 64, 100.000 và 5 triệu hạt trước khi chạy. Đừng cộng cả program/shader vào con số buffer rồi gọi đó là tổng VRAM chính xác.
+
+Tiếp theo: [vẽ trực tiếp từ SSBO](/projects/molecular-lab-gpu/03-ve-truc-tiep-tu-ssbo).
+

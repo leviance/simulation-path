@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thiên hà và trạng thái của một body
+
+## Vấn đề cần giải quyết
+
+Project này sẽ thay một phép tính lực bậc hai bằng Barnes–Hut, nhưng trước hết ta cần một scene mà mình hiểu được. Nếu dữ liệu đầu vào thay đổi ngẫu nhiên sau mỗi lần chạy, hoặc camera vô tình sửa luôn tọa độ vật lý, mọi phép so sánh về sau đều mất ý nghĩa.
+
+Checkpoint 1 bắt đầu từ starter đã mở window, tạo framebuffer và vẽ một thiên hà đứng yên. Việc của ta là chốt state của mỗi body, sinh lại đúng cùng scene từ một seed và đo ba đại lượng toàn hệ: total mass, center of mass và momentum.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi body có ba phần độc lập:
+
+- `position`: body đang ở đâu trong world space.
+- `velocity`: position sẽ thay đổi theo hướng nào và nhanh bao nhiêu.
+- `mass`: body đóng góp bao nhiêu vào lực hấp dẫn và center of mass.
+
+Renderer chỉ đọc `position`, chiếu qua orbit camera rồi tạo screen x/y. Đóng cửa sổ là những screen coordinates ấy biến mất; state vật lý vẫn nằm trong vector `bodies`.
+
+Center of mass không phải trung bình cộng position vì các body nặng nhẹ khác nhau:
+
+$$
+\mathbf{c}=\frac{\sum_i m_i\mathbf{p}_i}{\sum_i m_i}
+$$
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-scene" />
+
+Kéo Canvas để đổi góc nhìn. `root COM`, total mass và momentum không được thay đổi. Đây là phép thử nhanh để phát hiện bạn đã trộn camera space vào physics state.
+
+## Viết code từng bước
+
+### Bước 1 — Khai báo state nhỏ nhất có thể chạy lâu dài
+
+```cpp title="include/lab.hpp — Body"
+struct Body {
+    Vec3 position{};
+    Vec3 velocity{};
+    double mass{1.0};
+};
+```
+
+Không lưu screen position, force hay acceleration lâu dài trong `Body`. Screen position thuộc renderer; acceleration sẽ được tính lại từ state hiện tại ở mỗi physics step.
+
+### Bước 2 — Sinh central body trước
+
+```cpp title="include/lab.hpp — central mass"
+std::vector<Body> bodies{};
+bodies.reserve(safeCount);
+bodies.push_back({{}, {}, 120.0});
+```
+
+Body 0 nặng hơn các body quỹ đạo. Chọn index cố định giúp bài sau có một source dễ quan sát và giúp preset hoàn toàn tái lập.
+
+### Bước 3 — Cân lại momentum ban đầu
+
+```cpp title="include/lab.hpp — momentum balance"
+Vec3 momentum{};
+for (const Body& body : bodies) {
+    momentum += body.velocity * body.mass;
+}
+bodies[0].velocity = momentum * (-1.0 / bodies[0].mass);
+```
+
+Ta không xóa velocity của cả hệ. Central body nhận phần momentum đối nghịch để tổng $\sum m_i\mathbf{v}_i$ gần 0, nhờ đó thiên hà không tự trôi khỏi origin vì lỗi khởi tạo.
+
+### Bước 4 — Tính center of mass bằng trọng số
+
+```cpp title="include/lab.hpp — centerOfMass"
+for (const Body& body : bodies) {
+    mass += body.mass;
+    weightedPosition += body.position * body.mass;
+}
+if (mass <= 0.0) {
+    return {};
+}
+return weightedPosition / mass;
+```
+
+Đây cũng là đúng công thức mà mỗi Mass Octree node sẽ dùng ở lesson 5. Ta viết bản trực tiếp trước để sau này còn có giá trị đối chiếu.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_31_checkpoint_1
+```
+
+Chạy target, xoay camera và reset vài lần. Cùng seed phải tạo cùng vị trí, velocity, mass và cùng các số đo ở title bar.
+
+## Thử làm sai để hiểu đúng
+
+1. Lưu screen x/y trở lại `body.position`. Xoay camera rồi quan sát center of mass thay đổi dù physics đang pause.
+2. Dùng trung bình position không trọng số. Central body mass 120 gần như mất ảnh hưởng lên center.
+3. Bỏ bước cân momentum. Chạy mô phỏng lâu ở lesson 4 và thấy cả hệ trôi đều theo một hướng.
+
+## Tự kiểm tra kết quả
+
+- Cùng `count` và `seed` tạo từng body giống hệt nhau.
+- Mọi mass dương; position và velocity hữu hạn.
+- Body 0 có mass 120 và nằm tại origin.
+- Total momentum ban đầu có độ lớn dưới `1e-10`.
+- Xoay/zoom camera không thay total mass, center of mass hoặc momentum.
+- Starter và checkpoint 1 đều build độc lập.
+
+## Bài tập mở rộng
+
+Thêm preset hai thiên hà nhỏ bay ngược chiều nhau. Trước khi tính lực, in total momentum và dịch toàn bộ system center of mass về origin. Giữ preset này deterministic để dùng lại khi kiểm Barnes–Hut.
+
+Bài tiếp theo mới làm hai body hút nhau. Ta sẽ xử lý cự ly gần trước khi cho N body cùng tác dụng lực.

@@ -1,0 +1,143 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo chi phí của vòng lặp mọi cặp
+
+## Vấn đề cần giải quyết
+
+Từ checkpoint 6, chương trình vừa cập nhật vật lý vừa đo số liệu. Muốn biết vì sao nó chậm, ta phải đếm đúng công việc thực hiện. Con số 499.500 chỉ là số cặp duy nhất của 1.000 hạt, không phải toàn bộ lượt xét trong một bước.
+
+Bài này thêm preset 64, 144, 256 và 1.000 hạt, biểu đồ số cặp và phép đo thời gian bước. Đây là đường cơ sở để so với neighbor list ở Project 44.
+
+## Hiểu ý tưởng trước khi viết code
+
+| Số hạt | Cặp / một lần tính lực | Lượt xét / bước Verlet hiện tại |
+| --- | ---: | ---: |
+| 64 | 2.016 | 4.032 |
+| 144 | 10.296 | 20.592 |
+| 256 | 32.640 | 65.280 |
+| 1.000 | 499.500 | 999.000 |
+
+Một bước có hai lần tính lực: đầu bước và cuối bước. Phần đo số liệu dùng lại kết quả cuối, nên không quét thêm mọi cặp. activePairs chỉ đếm cặp nằm trong cutoff; dù cặp không hoạt động, vòng vét cạn vẫn phải xét khoảng cách của nó.
+
+Từ 256 lên 1.000 hạt, N tăng khoảng 3,9 lần còn công việc xét cặp tăng khoảng 15,3 lần. Thời gian đo còn chịu ảnh hưởng của CPU, compiler và cấu hình Debug/Release, nên không dùng một số FPS để thay cho việc đếm công việc.
+
+<InteractiveLab demo="molecular-dynamics-cpu" mode="md-scaling" />
+
+Chọn preset, tạm dừng rồi bấm tiến một bước. Đọc riêng số cặp, lượt xét và thời gian “một bước + đo số liệu”. Biểu đồ dùng chung thang 499.500 cặp; nó không phải đồ thị benchmark theo máy.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ số cặp là một đại lượng nguyên
+
+```cpp title="include/molecular_dynamics.hpp — estimateAllPairsWork"
+inline WorkEstimate estimateAllPairsWork(std::size_t particleCount) {
+    const std::size_t pairs = unorderedPairCount(particleCount);
+    const double thousandPairs = double(unorderedPairCount(1000U));
+    return {particleCount, pairs, double(pairs) / thousandPairs};
+}
+```
+
+`relativeToThousand` chỉ giúp vẽ độ dài thanh. Số cặp thật là số nguyên. Khi ghi workload của tích phân hiện tại, nhân số cặp với hai lần tính lực. Nếu sau này lưu lực cuối bước để dùng lại ở đầu bước kế tiếp, phải cập nhật cách đếm cùng với thuật toán.
+
+
+### Bước 2 — Đo đúng cùng một phạm vi công việc
+
+```cpp title="src/main.cpp — đổi bộ đếm hiệu năng thành millisecond"
+const std::uint64_t stepEnd = SDL_GetPerformanceCounter();
+if (completedSubsteps > 0) {
+    lastStepMilliseconds =
+        1000.0 * double(stepEnd - stepStart) /
+        double(SDL_GetPerformanceFrequency()) / double(completedSubsteps);
+}
+```
+
+Đặt stepStart trước vòng bước vật lý; sau mỗi bước đo metrics bằng forceEvaluation đã trả về, rồi lấy stepEnd. Chia cho completedSubsteps để được thời gian trung bình một bước trong frame. Khi nhấn N, dùng cùng phạm vi: bước tích phân và metrics, không tính vẽ framebuffer, in bảng hay thêm history. Đây chưa phải median của nhiều lần chạy; nhãn phải nói đúng điều đang đo.
+
+
+### Bước 3 — Tách tốc độ phát khỏi giới hạn công việc
+
+```cpp title="src/main.cpp — giới hạn số bước theo preset"
+int maximumSteps = 4;
+if (system.particles.size() >= 1000U) {
+    maximumSteps = 1;
+}
+const md::FixedStepPlan plan = md::planFixedSteps(
+    accumulator,
+    frameTime * 0.05,
+    fixedDt,
+    maximumSteps,
+    0.05
+);
+accumulator = plan.remainder;
+droppedTime += plan.droppedTime;
+```
+
+Hệ số 0,05 là tốc độ phát đã chọn: một giây thực tương ứng 0,05 đơn vị mô phỏng. maximumSteps giữ quyền xử lý input khi máy không theo kịp. dropped time được tính theo thời gian mô phỏng, không gọi nó là giây thực. Chọn tốc độ phát chậm không làm đổi dt hoặc công thức lực.
+
+
+### Bước 4 — Giới hạn mọi phép chạy hàng loạt
+
+```cpp title="include/molecular_dynamics.hpp — runBoundedSimulation"
+inline bool runBoundedSimulation(
+    MolecularSystem& system,
+    double duration,
+    double dt,
+    std::size_t maximumSteps
+) {
+    if (!std::isfinite(duration) || !std::isfinite(dt) || duration < 0.0 ||
+        dt <= 0.0) {
+        return false;
+    }
+    const double requested = std::ceil(duration / dt);
+    if (!std::isfinite(requested) || requested > double(maximumSteps)) {
+        return false;
+    }
+    const std::size_t requestedSteps = std::size_t(requested);
+    for (std::size_t step = 0; step < requestedSteps; ++step) {
+        if (!velocityVerletStep(system, dt)) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+Tính số bước dưới dạng double và so với ngân sách trước khi đổi sang size_t; nếu duration/dt bị tràn hoặc quá lớn thì từ chối ngay. Vòng lặp luôn có điểm kết thúc. Với bài đo thời gian, dùng số mẫu ít đã biết trước rồi trả điều khiển về giao diện.
+
+
+## Ghép các phần lại
+
+Làm việc từ thư mục gốc của ZIP. Mỗi target dùng một thư mục riêng: thay đổi trong `checkpoints/07/` chỉ có hiệu lực khi chạy đúng target của bài này.
+
+```bash title="Terminal — build và chạy checkpoint 7 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_42_checkpoint_7
+.\build\Debug\project_42_checkpoint_7.exe
+```
+
+Với Ninja hoặc Makefiles, executable thường nằm ngay trong `build/`. CTest của ZIP kiểm tra `final/include`; nó không tự kiểm tra phần bạn vừa sửa trong một checkpoint. Hãy dùng số đo và tình huống kiểm tra của bài trước khi đối chiếu bản hoàn chỉnh.
+
+Phím 1–4 chọn N, B bật bảng so số cặp. Dùng cùng seed, nhiệt độ, mật độ, dt và cấu hình Release khi so thời gian giữa các preset. Bảng số liệu vẫn xuất hiện khi chuyển sang final.
+
+## Thử làm sai để hiểu đúng
+
+1. Giả sử một frame dài 2 giây: ở tốc độ phát 0,05, nó yêu cầu 0,1 đơn vị mô phỏng, tức khoảng 100 bước khi dt=0,001. Chỉ tính và in kế hoạch bằng `planFixedSteps`, gồm `steps` và `droppedTime`; giữ nguyên guard và không chạy tích phân. So số bước được nhận với yêu cầu để thấy lượng công việc đã bị chặn.
+2. Trên cùng chín mẫu thời gian đã đo, thử chia cho `activePairs` rồi chia cho tổng lượt xét `2*N*(N-1)/2`. Hai cách cho ý nghĩa khác nhau. Cutoff không bỏ các cặp xa khỏi vòng lặp, nên dùng `activePairs` làm mẫu số sẽ gây hiểu nhầm khi so các mật độ.
+
+## Tự kiểm tra kết quả
+
+- [ ] N=1.000 cho 499.500 cặp mỗi lần tính lực, 999.000 lượt xét mỗi bước.
+- [ ] metrics không tạo thêm lần quét cặp.
+- [ ] Nhấn N và chạy liên tục đo cùng phạm vi công việc.
+- [ ] Tốc độ phát, dt, dropped time và thời gian xử lý được ghi với đúng ý nghĩa.
+- [ ] Mọi phép chạy hàng loạt từ chối yêu cầu vượt maximumSteps.
+- [ ] Không tháo guard của event loop để làm thí nghiệm.
+
+## Bài tập mở rộng
+
+1. Đo chín bước sau ba bước khởi động, rồi lấy median; giữ số mẫu hữu hạn.
+2. Chia thời gian cho tổng lượt xét, không chia nhầm cho số cặp hoạt động.
+3. Tính số cặp của 10.000 hạt trên giấy, không chạy vòng lặp đó.
+4. Ghi lại phạm vi cần đo trước khi thử tối ưu việc dùng lại lực đầu bước.
+
+Project 43 thêm periodic boundary để xử lý biên của hệ. Project 44 mới giảm số cặp cần xét bằng neighbor list.

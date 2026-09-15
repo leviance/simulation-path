@@ -1,0 +1,152 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo nhiệt độ, động lượng và năng lượng
+
+## Vấn đề cần giải quyết
+
+Checkpoint 5 đã chuyển động, nhưng một animation trông hợp lý chưa chứng minh bộ tích phân đúng. Ta cần biết năng lượng được đo lúc nào, sai số lớn nhất là bao nhiêu và tường có làm thay đổi tổng động lượng hay không.
+
+Bài này thêm SystemMetrics, lịch sử đồ thị và một bảng số đo trong cửa sổ. Hãy giữ nguyên thuật toán bước của bài trước; phần đo chỉ đọc dữ liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cơ năng của hệ là E=K+U, với K là động năng đầy đủ trong hệ quy chiếu của hộp. Còn nhiệt độ đã chọn ở bài 2 dùng vận tốc tương đối với khối tâm:
+
+$$
+K=\sum_i\frac12m_i\|\mathbf v_i\|^2,\qquad
+K_{thermal}=\sum_i\frac12m_i\|\mathbf v_i-\mathbf v_{cm}\|^2,
+\qquad T=\frac{2K_{thermal}}{2N-2}.
+$$
+
+K và Kthermal không luôn bằng nhau. Tường truyền xung lượng cho các hạt, nên tổng động lượng có thể thay đổi sau va chạm dù lúc đầu bằng 0. Nếu hai hạt có cùng vận tốc (1,0), K vẫn dương nhưng chuyển động tương đối giữa chúng bằng 0. Phép đo T của lab phải phản ánh điều đó.
+
+Không trừ vận tốc khối tâm khỏi trạng thái sau mỗi frame: việc ấy tự ý lấy năng lượng ra khỏi mô phỏng. Chỉ tính vận tốc tương đối trong hàm đo nhiệt độ. Cách tách này cũng được dùng trong [compute temp/com của LAMMPS](https://docs.lammps.org/compute_temp_com.html).
+
+<InteractiveLab demo="molecular-dynamics-cpu" mode="md-energy" />
+
+Tím là U, vàng là K, xanh là E. Đọc thêm T và |P| bên dưới. Đổi dt sẽ khởi tạo lại cùng N, mật độ, nhiệt độ và seed để hai lần chạy có cùng điểm xuất phát.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho các số đo
+
+```cpp title="include/molecular_dynamics.hpp — SystemMetrics"
+struct SystemMetrics {
+    bool valid{};
+    double kinetic{};
+    double potential{};
+    double totalEnergy{};
+    double temperature{};
+    Vec2 momentum{};
+    double minimumDistance{};
+    std::size_t evaluatedPairs{};
+    std::size_t activePairs{};
+};
+```
+
+Thế năng và số cặp đã có trong kết quả tính lực. `kinetic` dùng vận tốc mới sau nửa kick cuối, còn `temperature` gọi lại hàm loại vận tốc khối tâm. Tất cả phải mô tả cùng trạng thái.
+
+
+### Bước 2 — Dùng lại kết quả lực cuối bước
+
+```cpp title="include/molecular_dynamics.hpp — measureSystem nhận evaluation"
+inline SystemMetrics measureSystem(
+    const MolecularSystem& system,
+    const ForceEvaluation& evaluation
+) {
+    const double kinetic = kineticEnergy(system.particles);
+    const Vec2 momentum = linearMomentum(system.particles);
+    const double total = kinetic + evaluation.potentialEnergy;
+    return {
+        evaluation.valid && std::isfinite(kinetic) && std::isfinite(total) && finite(momentum),
+        kinetic,
+        evaluation.potentialEnergy,
+        total,
+        kineticTemperature(system.particles),
+        momentum,
+        evaluation.minimumDistance,
+        evaluation.evaluatedPairs,
+        evaluation.activePairs,
+    };
+}
+```
+
+Truyền `forceEvaluation` vừa nhận từ velocityVerletStep vào hàm này. Lực chỉ phụ thuộc vị trí, nên thế năng trong evaluation vẫn đúng sau khi hoàn tất vận tốc. Như vậy đo K/U/E không tạo thêm một vòng O(N²); công việc mới chỉ là các vòng O(N) đo động năng, động lượng và nhiệt độ. Bản overload một đối số vẫn hữu ích để đo một trạng thái mới chưa có evaluation.
+
+
+### Bước 3 — Giữ dấu sai số và theo dõi giá trị lớn nhất
+
+```cpp title="include/molecular_dynamics.hpp — relativeEnergyDrift"
+inline double relativeEnergyDrift(double currentEnergy, double initialEnergy) {
+    return (currentEnergy - initialEnergy) / std::max(std::abs(initialEnergy), 1.0e-12);
+}
+```
+
+```cpp title="src/main.cpp — cập nhật metrics và sai số lớn nhất"
+metrics = md::measureSystem(system, forceEvaluation);
+maximumEnergyDrift = std::max(maximumEnergyDrift, std::abs(md::relativeEnergyDrift(metrics.totalEnergy, system.initialEnergy)));
+```
+
+Sau mỗi bước thành công, đo metrics rồi cập nhật maximumEnergyDrift. Sai số cuối một lần chạy có thể nhỏ do dao động quay về gần điểm đầu, nên cần cả cực đại dọc quỹ đạo. Nếu E0 gần 0, tỷ lệ tương đối rất nhạy; hãy đọc thêm chênh lệch tuyệt đối E−E0, không coi một phần trăm rất lớn là bằng chứng duy nhất.
+
+
+### Bước 4 — Lưu lịch sử và hiển thị bảng số liệu
+
+```cpp title="include/molecular_dynamics_ui.hpp — appendHistory"
+inline void appendHistory(
+    std::vector<HistorySample>& history,
+    const md::MolecularSystem& system,
+    const md::SystemMetrics& metrics,
+    std::size_t limit = 180U
+) {
+    history.push_back({
+        system.elapsed,
+        metrics.kinetic,
+        metrics.potential,
+        metrics.totalEnergy,
+        metrics.temperature,
+    });
+    if (history.size() > limit) {
+        history.erase(history.begin(), history.begin() + std::ptrdiff_t(history.size() - limit));
+    }
+}
+```
+
+Thêm vector history trước event loop, ghi mẫu đầu tại t=0 và giữ tối đa 180 mẫu. Trong lúc chạy, lấy mẫu đồ thị khoảng mỗi 0,02 đơn vị mô phỏng; tính max drift vẫn diễn ra ở từng bước. Bảng chẩn đoán được tách vào `molecular_dynamics_diagnostics.hpp`, vẽ sau SDL_RenderTexture và trước SDL_RenderPresent. Nó hiện N, cấu hình, thời gian, K/U/E, T, |P| và dữ liệu hạt đang chọn. SDL_RenderDebugText chỉ có font ASCII nên bảng native dùng nhãn ngắn; bài giảng và Canvas giải thích bằng tiếng Việt.
+
+
+## Ghép các phần lại
+
+Làm việc từ thư mục gốc của ZIP. Mỗi target dùng một thư mục riêng: thay đổi trong `checkpoints/06/` chỉ có hiệu lực khi chạy đúng target của bài này.
+
+```bash title="Terminal — build và chạy checkpoint 6 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_42_checkpoint_6
+.\build\Debug\project_42_checkpoint_6.exe
+```
+
+Với Ninja hoặc Makefiles, executable thường nằm ngay trong `build/`. CTest của ZIP kiểm tra `final/include`; nó không tự kiểm tra phần bạn vừa sửa trong một checkpoint. Hãy dùng số đo và tình huống kiểm tra của bài trước khi đối chiếu bản hoàn chỉnh.
+
+Phím D đổi mật độ; T đổi nhiệt độ ban đầu; S đổi seed. Mỗi lần đổi, tạo lại system, đo E0, xóa history và đặt maximumEnergyDrift về 0. Đừng để số đo của lần chạy cũ còn xuất hiện trong thí nghiệm mới.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong C++, nhân riêng thế năng dùng cho số đo với 2, giữ quỹ đạo như cũ. Tổng E sẽ sai dù hạt chuyển động giống hệt. Khôi phục phép cộng thế năng mỗi cặp đúng một lần.
+2. Bỏ bước loại vận tốc khối tâm trong phép đo T; dùng hai hạt cùng vận tốc để thấy kết quả sai khác 0. Khôi phục phép đo tương đối. Không sửa vận tốc thật của hạt trong thí nghiệm này.
+
+## Tự kiểm tra kết quả
+
+- [ ] K, U, E và T lấy từ cùng một trạng thái.
+- [ ] T không đổi khi cộng cùng vận tốc vào mọi hạt; K và động lượng có thể đổi.
+- [ ] Tường có thể đổi tổng động lượng của riêng các hạt.
+- [ ] History không quá 180 mẫu; reset xóa cả lịch sử lẫn max drift.
+- [ ] Phép chạy chuẩn 36 hạt trong 0,4 đơn vị thời gian ở dt=1/1000 có max |drift| dưới 1%.
+- [ ] Có ca hạt thực sự va tường; không suy kết quả phần tường từ một quỹ đạo chưa chạm biên.
+
+## Bài tập mở rộng
+
+1. Vẽ T trên một trục riêng vì nó không cùng đơn vị với năng lượng.
+2. So cực đại sai số ở cùng seed và cùng thời lượng khi chia đôi dt.
+3. Đo cả K và Kthermal cho hệ có vận tốc khối tâm ban đầu khác 0.
+
+Bài sau đo chi phí mỗi bước và giải thích vì sao cần phân biệt số cặp với số lượt xét cặp.

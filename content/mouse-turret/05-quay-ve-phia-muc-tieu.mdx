@@ -1,0 +1,173 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Quay về phía mục tiêu với tốc độ hữu hạn
+
+## Vấn đề cần giải quyết
+
+`angleBetween` cho độ lệch từ 0° tới 180°, nhưng hai mục tiêu đối xứng qua hướng nòng có cùng góc. Tháp pháo vẫn chưa biết nên quay theo chiều kim đồng hồ hay ngược chiều kim đồng hồ.
+
+Ngay cả khi đã biết chiều, gán thẳng `turretAngle` bằng góc của chuột sẽ làm nòng súng “dịch chuyển tức thời” thay vì quay. Ta muốn chuyển động có tốc độ rõ ràng, không phụ thuộc FPS và không rung qua lại khi gần chạm hướng đích.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong 2D, ta dùng thành phần Z của cross product:
+
+$$
+\operatorname{crossZ}(a,b)=a_xb_y-a_yb_x
+$$
+
+Với hệ tọa độ X sang phải, Y hướng lên:
+
+- `crossZ > 0`: `b` nằm ngược chiều kim đồng hồ so với `a`;
+- `crossZ < 0`: `b` nằm theo chiều kim đồng hồ;
+- `crossZ = 0`: hai hướng thẳng hàng.
+
+Kết hợp cross và dot trong `atan2` cho góc ngắn nhất có dấu:
+
+$$
+\Delta\theta=\operatorname{atan2}(\operatorname{crossZ}(a,b),a\cdot b)
+$$
+
+<InteractiveLab demo="turret" mode="turret-rotation" />
+
+Tạm dừng lab, đặt mục tiêu ở nhiều phía rồi đọc `crossZ` và `signed angle`. Nhấn **Tiến 0,1 s** để thấy mỗi bước quay bị giới hạn. Sau đó tăng tốc độ quay và quan sát một bước lớn hơn nhưng vẫn không vượt qua mục tiêu.
+
+## Viết code từng bước
+
+### Bước 1 — Lấy dấu bằng cross product 2D
+
+```cpp title="include/lab.hpp — crossZ"
+inline double crossZ(Vec2 left, Vec2 right) {
+    return left.x * right.y - left.y * right.x;
+}
+```
+
+Hàm trả scalar vì hai vector đều nằm trên mặt phẳng XY; ta chỉ cần thành phần vuông góc với mặt phẳng đó để đọc dấu.
+
+### Bước 2 — Tính góc ngắn nhất có dấu
+
+```cpp title="include/lab.hpp — signedAngleBetween"
+inline double signedAngleBetween(Vec2 from, Vec2 to) {
+    if (!hasDirection(from) || !hasDirection(to)) {
+        return 0.0;
+    }
+    const Vec2 fromUnit = normalize(from);
+    const Vec2 toUnit = normalize(to);
+    return std::atan2(
+        crossZ(fromUnit, toUnit),
+        dot(fromUnit, toUnit)
+    );
+}
+```
+
+`atan2(y,x)` ở đây nhận cross như thành phần sine và dot như thành phần cosine. Kết quả nằm trong `[-π,π]`, đúng với chiều quay ngắn nhất.
+
+### Bước 3 — Viết rotateTowards không vượt đích
+
+```cpp title="include/lab.hpp — giới hạn một bước quay"
+inline double rotateTowards(
+    double currentAngle,
+    Vec2 targetDirection,
+    double maximumStep
+) {
+    if (!std::isfinite(maximumStep) ||
+        maximumStep <= 0.0 ||
+        !hasDirection(targetDirection)) {
+        return normalizeAngle(currentAngle);
+    }
+
+    const Vec2 currentDirection = directionFromAngle(currentAngle);
+    const double remainingAngle = signedAngleBetween(
+        currentDirection,
+        targetDirection
+    );
+
+    double step = remainingAngle;
+    if (step < -maximumStep) {
+        step = -maximumStep;
+    }
+    if (step > maximumStep) {
+        step = maximumStep;
+    }
+
+    return normalizeAngle(currentAngle + step);
+}
+```
+
+Nếu còn lệch 2° nhưng bước tối đa là 5°, `step` giữ nguyên 2° thay vì quay 5°. Nhờ vậy nòng dừng đúng đích, không vượt qua rồi sửa ngược ở frame kế tiếp.
+
+### Bước 4 — Đổi tốc độ thành bước của frame hiện tại
+
+Trước loop, lưu thời điểm cũ và tốc độ theo radian/giây. Mỗi frame đo `deltaTime` rồi gọi hàm vừa viết:
+
+```cpp title="src/main.cpp — quay theo thời gian thực"
+const double initialTurnSpeed = lab::kPi / 2.0;
+double turnSpeed = initialTurnSpeed;
+bool paused = false;
+std::uint64_t previousTicks = SDL_GetTicks();
+
+// Nằm trong game loop, sau khi xử lý event.
+const std::uint64_t currentTicks = SDL_GetTicks();
+double deltaTime = double(currentTicks - previousTicks) / 1000.0;
+previousTicks = currentTicks;
+deltaTime = std::min(deltaTime, 0.1);
+
+if (!paused) {
+    turretAngle = lab::rotateTowards(
+        turretAngle,
+        targetOffset,
+        turnSpeed * deltaTime
+    );
+}
+```
+
+`turnSpeed` có đơn vị radian/giây, `deltaTime` có đơn vị giây, nên tích của chúng là radian — đúng đơn vị của `maximumStep`.
+
+### Bước 5 — Thêm điều khiển để kiểm tra hành vi
+
+```cpp title="src/main.cpp — pause, tốc độ và reset"
+if (!event.key.repeat && event.key.key == SDLK_SPACE) {
+    paused = !paused;
+}
+if (event.key.key == SDLK_UP) {
+    turnSpeed = std::min(lab::kTau, turnSpeed + 0.25);
+}
+if (event.key.key == SDLK_DOWN) {
+    turnSpeed = std::max(0.0, turnSpeed - 0.25);
+}
+if (!event.key.repeat && event.key.key == SDLK_R) {
+    targetOffset = initialTargetOffset;
+    turretAngle = initialTurretAngle;
+    turnSpeed = initialTurnSpeed;
+    paused = false;
+}
+```
+
+Pause chỉ ngừng cập nhật góc; chuột và các control vẫn hoạt động. Điều này cho phép bạn đặt một tình huống rồi quan sát từng giá trị trước khi tiếp tục.
+
+## Ghép các phần lại
+
+Build `project_8_checkpoint_5`. Giữ mục tiêu cố định và thay đổi tốc độ quay. Ở `π/2 rad/s`, nòng cần khoảng một giây để quay 90°. Nếu FPS thay đổi, thời gian thực vẫn phải gần như vậy.
+
+Đặt mục tiêu rất gần hướng nòng để kiểm tra bước cuối. Nòng không được rung qua lại. Đặt mục tiêu đúng tâm: vì vector này không có hướng, nòng phải đứng yên thay vì tự quay về 0.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `angleBetween` làm `remainingAngle`. Giá trị luôn không âm nên tháp pháo chỉ biết quay một chiều, đôi lúc phải đi gần trọn vòng.
+2. Mỗi frame cộng cố định `0.02` radian. Chạy ở FPS khác để thấy tốc độ thật thay đổi.
+3. Luôn cộng `sign × maximumStep`, kể cả khi góc còn lại nhỏ hơn bước. Nòng sẽ vượt đích và dao động quanh mục tiêu.
+4. Không chặn `deltaTime`. Dừng tại breakpoint vài giây rồi tiếp tục để tạo một bước quay rất lớn.
+
+## Tự kiểm tra kết quả
+
+- Cross của hướng phải với hướng lên là dương; với hướng xuống là âm.
+- Góc có dấu từ phải lên trên gần `+π/2`; từ phải xuống dưới gần `-π/2`.
+- Mỗi bước không lớn hơn `turnSpeed × deltaTime`.
+- Khi góc còn lại nhỏ hơn bước tối đa, kết quả dừng đúng tại hướng đích.
+- Zero target direction giữ nguyên góc hiện tại.
+
+## Bài tập mở rộng
+
+Thêm hai tốc độ: tốc độ tối đa và gia tốc góc. Khi đó tháp pháo cần tăng tốc rồi hãm trước mục tiêu thay vì luôn quay cùng tốc độ. Hãy giữ `rotateTowards` hiện tại làm bản đối chứng trước khi thử điều khiển phức tạp hơn.
+
+Bài cuối dùng dot product thêm một lần nữa để tạo vùng khóa mục tiêu và viết test cho toàn bộ các bất biến vừa xây dựng.

@@ -1,0 +1,131 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ trước cây pass và xử lý phần đuôi
+
+## Điều khó nằm ở đâu?
+
+Mỗi workgroup có 256 invocation và mỗi lane sẽ nạp hai số, nên một block xử lý được 512 phần tử. Với 1.000.003 số, block cuối không đầy và pass đầu tạo ra 1.954 partial sum. Trước khi dispatch, ta sẽ vẽ trước toàn bộ cây xử lý để biết cần bao nhiêu tầng, bao nhiêu vùng đệm zero và bao nhiêu buffer trung gian.
+
+Nếu chỉ viết một `glDispatchCompute` rồi hy vọng shader tự “đi hết cây”, các workgroup không có một barrier toàn cục để hẹn nhau giữa chừng. Ranh giới đồng bộ toàn GPU phải là một dispatch mới. Bởi vậy pass graph cần được tính trước ở CPU từ **count**, không chờ đọc partial sums.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Số block của một tầng là:
+
+$$
+B=\left\lceil\frac{N}{512}\right\rceil
+$$
+
+Với `N=1.000.003`:
+
+```text
+tầng 0: 1.000.003 input  → 1.954 block sums
+tầng 1:     1.954 sums   →     4 block sums
+tầng 2:         4 sums   →     1 scalar
+```
+
+Tầng đầu phát chỗ cho `1.954 × 512 = 1.000.448` giá trị, nhiều hơn input thật 445. Các vị trí zero padding ấy nạp giá trị zero. Ta không cho tail lane `return` vì mọi lane trong workgroup còn phải đi qua `barrier()`.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="hierarchy-plan" />
+
+Đổi count 8, 257, 65.537 và 1.000.003. Reduction có ba pass ở preset lớn nhất. Scan dùng ba block-scan pass rồi hai uniform-add pass, tổng cộng năm dispatch.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Viết phép chia làm tròn lên bằng số nguyên
+
+```cpp title="include/reduction_math.hpp — ceilDiv"
+inline std::size_t ceilDiv(std::size_t value, std::size_t divisor) {
+    if (value == 0U || divisor == 0U) {
+        return 0U;
+    }
+    return 1U + (value - 1U) / divisor;
+}
+```
+
+`std::ceil(double(value) / divisor)` vừa thừa vừa mở cửa cho rounding khi count lớn. Công thức integer trên trả đúng một block cho mọi `1..512`.
+
+### Bước 2 — Ghi đủ dữ liệu của một tầng
+
+```cpp title="include/reduction_math.hpp — HierarchyLevel"
+struct HierarchyLevel {
+    std::size_t level{};
+    std::size_t inputCount{};
+    std::size_t blockCount{};
+    std::size_t launchedValues{};
+    std::size_t zeroPadding{};
+};
+```
+
+`blockCount` chưa đủ để debug tail. `launchedValues` và `zeroPadding` giúp title/test nói chính xác lane nào đang xử lý dữ liệu thật, lane nào nạp identity.
+
+### Bước 3 — Lặp cho tới một block
+
+```cpp title="include/reduction_math.hpp — makeHierarchy loop"
+while (currentCount > 0U) {
+    const std::size_t blockCount = ceilDiv(currentCount, blockSpan);
+    const std::size_t launchedValues = blockCount * blockSpan;
+    levels.push_back({
+        levelIndex,
+        currentCount,
+        blockCount,
+        launchedValues,
+        launchedValues - currentCount,
+    });
+    if (blockCount == 1U) {
+        break;
+    }
+    currentCount = blockCount;
+    ++levelIndex;
+}
+```
+
+Điều kiện dừng dựa trên count, không dựa trên dữ liệu. Đây là lý do CPU có thể cấp phát toàn bộ scratch buffers trước dispatch đầu tiên.
+
+### Bước 4 — Tính trước số pass của scan
+
+Với `L` tầng, scan có `L` lần scan-block và `L-1` lần uniform-add. Không add ở tầng trên cùng vì nó chỉ có một block, offset của block 0 đã là zero.
+
+## Chạy checkpoint và đọc kết quả
+
+Checkpoint 2 in plan trước khi OpenGL allocation xuất hiện:
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_39_checkpoint_2
+build\Debug\project_39_checkpoint_2.exe
+```
+
+Bạn cần thấy `Hierarchy -> 1954 -> 4 -> 1`, `first padding=445` và `scan dispatches=5`. Ba con số này sẽ trở thành invariant xuyên suốt các bài sau.
+
+## Cố tình phá thuật toán
+
+1. Dùng `N / 512`. Với 1.000.003, 67 phần tử cuối biến mất.
+2. Cho invocation ngoài count `return` trước barrier. Một số lane trong group tiếp tục, số khác dừng; hành vi barrier không còn hợp lệ.
+3. Padding bằng giá trị cuối thay vì zero. Tổng tăng giả và block sum cuối sai.
+4. Chỉ cấp scratch cho bốn phần tử vì biết tầng hai có bốn block. Tầng đầu cần giữ 1.954 partial sums.
+5. So tổng GPU và CPU bằng `==`. Cây và vòng lặp cộng float theo thứ tự khác nhau.
+
+Phép cộng toán học có tính kết hợp, nhưng float thì chỉ xấp xỉ:
+
+$$
+d=\operatorname{fl}((a+b)+c)-\operatorname{fl}(a+(b+c)),\qquad d\;\text{may be nonzero}
+$$
+
+Khác vài bit cuối không cho phép bỏ validation; nó cho biết validation cần tolerance có cơ sở.
+
+## Checklist hoàn thành
+
+- [ ] Block span là `256 × 2 = 512` giá trị.
+- [ ] `ceilDiv(1.000.003, 512) = 1.954`.
+- [ ] Tầng đầu phát 1.000.448 vị trí và nạp 445 zero.
+- [ ] Hierarchy dừng ở chuỗi `1.954 → 4 → 1`.
+- [ ] Reduction có ba dispatch; scan toàn cục có năm dispatch.
+- [ ] Plan được tính từ count, không cần intermediate readback.
+
+## Bài tập để hiểu sâu hơn
+
+1. Tính hierarchy cho 512, 513 và 262.145 phần tử bằng tay rồi đối chiếu CTest.
+2. Cho Canvas thử block span 256/1024 và so số pass; chưa kết luận nhanh hơn nếu chưa đo GPU thật.
+3. Thêm byte budget cho từng `scanBuffer` và `sumsBuffer`, sau đó tính peak GPU memory.
+
+Bài 3 sẽ hiện thực tầng đầu: 256 lane hợp tác trong shared memory để 512 giá trị co thành một partial sum.

@@ -1,0 +1,32 @@
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer Positions { vec4 positions[]; };
+layout(std430, binding = 1) writeonly buffer Reference { vec4 referencePositions[]; };
+layout(std430, binding = 2) buffer Counts { uint counts[]; };
+layout(std430, binding = 3) writeonly buffer Indices { uint indices[]; };
+layout(std430, binding = 4) buffer Control { uint flags; uint maxDisplacementBits; uint maxOccupancy; uint reserved; };
+uniform uint uCount;
+uniform uint uBase;
+uniform uint uCellsX;
+uniform uint uCellsY;
+uniform vec2 uBox;
+const uint cellCapacity = 16u;
+
+void main() {
+    uint i = uBase + gl_GlobalInvocationID.x;
+    if (i >= uCount) {
+        return;
+    }
+    vec2 position = positions[i].xy;
+    uvec2 cell = min(uvec2(position / uBox * vec2(uCellsX, uCellsY)), uvec2(uCellsX - 1u, uCellsY - 1u));
+    uint cellId = cell.y * uCellsX + cell.x;
+    uint slot = atomicAdd(counts[cellId], 1u);
+    atomicMax(maxOccupancy, slot + 1u);
+    if (slot >= cellCapacity) {
+        atomicOr(flags, 1u);
+        return;
+    }
+    indices[cellId * cellCapacity + slot] = i;
+    referencePositions[i] = vec4(position, 0, 0);
+    positions[i].zw = vec2(0);
+}

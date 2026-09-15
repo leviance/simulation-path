@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng dot product để đo mức độ cùng hướng
+
+## Vấn đề cần giải quyết
+
+Ở checkpoint 1, nòng súng và vector tới mục tiêu đã được vẽ từ cùng một gốc. Ta có thể nhìn và nói mục tiêu đang ở trước, ngang hay sau nòng súng, nhưng chương trình chưa có con số nào để đưa ra kết luận đó.
+
+Kiểm tra riêng `targetOffset.x > 0` chỉ đúng khi nòng hướng sang phải. Ngay khi nòng quay lên trên, “phía trước” không còn liên quan trực tiếp tới trục X. Ta cần một phép đo so hai hướng với nhau — đó là `dot product`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với `a=(ax,ay)` và `b=(bx,by)`:
+
+$$
+a\cdot b=a_xb_x+a_yb_y
+$$
+
+Về hình học, cùng giá trị đó cũng bằng:
+
+$$
+a\cdot b=|a||b|\cos(\theta)
+$$
+
+Nếu cả `a` và `b` đều có độ dài 1, hai thừa số độ dài biến mất. Kết quả chỉ còn `cos(θ)` và nằm trong `[-1,1]`:
+
+- gần `1`: hai hướng gần trùng nhau;
+- gần `0`: hai hướng gần vuông góc;
+- gần `-1`: hai hướng gần đối nhau.
+
+<InteractiveLab demo="turret" mode="turret-dot" />
+
+Chọn preset **Cùng hướng**, sau đó kéo mục tiêu gần và xa tâm. `raw dot` thay đổi theo khoảng cách, còn `normalized dot` giữ gần 1. Đây là lý do ta không dùng dot thô để quyết định “mức độ cùng hướng”.
+
+## Viết code từng bước
+
+### Bước 1 — Cài đặt đúng định nghĩa
+
+Thêm hàm sau vào `include/lab.hpp`:
+
+```cpp title="include/lab.hpp — dot product trong 2D"
+inline double dot(Vec2 left, Vec2 right) {
+    return left.x * right.x + left.y * right.y;
+}
+```
+
+Hàm trả về `double`. Dot product thu hai vector thành một scalar; nó không tạo ra hướng mới.
+
+### Bước 2 — Chuẩn hóa hướng tới mục tiêu
+
+`forward` đã là vector đơn vị vì được tạo từ cosine và sine. `targetOffset` thì dài theo khoảng cách từ tâm tới chuột, nên phải chuẩn hóa:
+
+```cpp title="src/main.cpp — tách hướng khỏi khoảng cách"
+const lab::Vec2 targetDirection = lab::normalize(targetOffset);
+const double alignment = lab::dot(forward, targetDirection);
+```
+
+`normalize` của project trả zero vector nếu đầu vào không có hướng. Vì vậy đặt chuột đúng tâm không gây phép chia cho zero; `alignment` lúc đó bằng 0 theo quy ước an toàn.
+
+### Bước 3 — In cả hai giá trị để tạo đối chứng
+
+Trong giai đoạn học, đừng chỉ hiển thị kết quả “đúng”. Giữ dot thô bên cạnh normalized dot để thấy chính xác việc chuẩn hóa đã bỏ yếu tố nào:
+
+```cpp title="src/main.cpp — raw dot và normalized dot"
+char title[300]{};
+const double rawDot = lab::dot(forward, targetOffset);
+std::snprintf(
+    title,
+    sizeof(title),
+    "raw dot %.1f | normalized dot %.3f | move mouse",
+    rawDot,
+    alignment
+);
+SDL_SetWindowTitle(window, title);
+```
+
+`rawDot` có đơn vị pixel vì `forward` dài 1 còn `targetOffset` đo bằng pixel. `alignment` không có đơn vị và chỉ mô tả quan hệ hướng.
+
+### Bước 4 — Khóa ba mốc bằng phép kiểm tra
+
+Ba trường hợp dễ tính nhất nên được viết thành test trước khi thử các hướng bất kỳ:
+
+```cpp title="tests/tests.cpp — ba mốc của dot product"
+check(nearlyEqual(lab::dot({1.0, 0.0}, {1.0, 0.0}), 1.0), "aligned unit vectors have dot one");
+check(nearlyEqual(lab::dot({1.0, 0.0}, {0.0, 1.0}), 0.0), "perpendicular vectors have dot zero");
+check(nearlyEqual(lab::dot({1.0, 0.0}, {-1.0, 0.0}), -1.0), "opposite unit vectors have dot negative one");
+```
+
+Với một ví dụ ít tròn hơn, nòng `forward=(1,0)` và mục tiêu `(220,120)` cho `rawDot=220`, còn normalized dot xấp xỉ `0.878`. Đổi mục tiêu thành `(440,240)` làm raw dot tăng gấp đôi nhưng normalized dot không đổi.
+
+## Ghép các phần lại
+
+Build `project_8_checkpoint_2`. Đặt mục tiêu lần lượt sang phải, phía trên và sang trái tâm. Thanh tiêu đề phải tiến gần ba mốc `1`, `0`, `-1`.
+
+Sau đó dùng thanh **Góc nòng** trong Canvas để xoay nòng mà không đổi vị trí mục tiêu. Phép đo vẫn hoạt động vì nó so hai vector, không phụ thuộc vào một trục cố định.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `rawDot` làm alignment. Kéo mục tiêu xa gấp đôi và xem “mức độ cùng hướng” tăng dù góc không đổi.
+2. Viết `left.x * right.y + left.y * right.x`. Hai vector `(1,0)` và `(0,1)` sẽ cho 1 thay vì 0.
+3. Chuẩn hóa `targetOffset` bằng cách chia trực tiếp mà không kiểm tra độ dài. Đưa chuột vào đúng tâm để tạo `NaN`.
+
+## Tự kiểm tra kết quả
+
+- `dot((1,0),(1,0)) = 1`.
+- `dot((1,0),(0,1)) = 0`.
+- `dot((1,0),(-1,0)) = -1`.
+- `dot((2,0),(3,0)) = 6`, chứng minh dot thô chứa độ dài.
+- Giữ nguyên hướng nhưng đổi khoảng cách không làm normalized dot thay đổi đáng kể.
+
+## Bài tập mở rộng
+
+Đổi màu đường nối thành xanh khi `alignment > 0`, xám khi gần 0 và đỏ khi nhỏ hơn 0. Sau đó thử dùng một ngưỡng như `0.8` để đoán vùng nhìn tương ứng bao nhiêu độ — bài tiếp theo sẽ tính con số đó chính xác.

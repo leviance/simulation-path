@@ -1,0 +1,161 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ đồ thị sin/cos theo thời gian
+
+## Vấn đề cần giải quyết
+
+Hình chiếu chỉ cho ta biết sine và cosine ở khung hình hiện tại. Muốn nhìn thấy chúng lặp lại, chương trình phải giữ một đoạn lịch sử rồi vẽ mẫu cũ ở bên trái, mẫu mới ở bên phải.
+
+Trục ngang của đồ thị phải thực sự biểu diễn thời gian. Nếu đặt điểm theo chỉ số trong `vector`, 360 mẫu ở màn hình 60 FPS sẽ dài khoảng 6 giây nhưng ở 144 FPS chỉ dài 2,5 giây. Vì vậy mỗi mẫu cần mang timestamp và vị trí X phải được tính từ timestamp đó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi mẫu lưu ba giá trị có ý nghĩa độc lập với màn hình:
+
+```text
+time, sin(angle), cos(angle)
+```
+
+Ta chọn một cửa sổ 6 giây:
+
+- mép phải là thời điểm của mẫu mới nhất;
+- mép trái là `newestTime - 6`;
+- timestamp của từng mẫu được đưa về khoảng từ 0 đến 1 rồi ánh xạ vào vùng vẽ;
+- sine/cosine trong `[-1,1]` được nhân với `amplitude` để tìm Y.
+
+<InteractiveLab demo="angle" mode="angle-graphs" />
+
+Để mô phỏng chạy vài giây rồi bấm **Tạm dừng**. Mẫu mới nhất nằm tại vạch vàng bên phải; các mẫu cũ dịch dần sang trái theo timestamp. Khi đổi vận tốc góc, khoảng cách thời gian không đổi nhưng số chu kỳ xuất hiện trong 6 giây sẽ thay đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Lưu dữ liệu toán học, không lưu pixel
+
+```cpp title="include/lab.hpp — một mẫu của đồ thị"
+struct WaveSample {
+    double time{};
+    double sine{};
+    double cosine{};
+};
+
+inline WaveSample sampleWave(double time, double angle) {
+    const Vec2 direction = unitDirection(angle);
+    return {time, direction.y, direction.x};
+}
+```
+
+`direction.y` là sine và `direction.x` là cosine theo quy ước đã dùng từ bài 2. Hàm không biết vùng vẽ rộng bao nhiêu; vì thế resize không thể làm thay đổi dữ liệu đã thu thập.
+
+### Bước 2 — Chặn kích thước của lịch sử
+
+```cpp title="include/lab.hpp — appendWaveSample"
+inline void appendWaveSample(std::vector<WaveSample>& samples, WaveSample sample, std::size_t maximumSamples) {
+    if (maximumSamples == 0) {
+        samples.clear();
+        return;
+    }
+    samples.push_back(sample);
+    if (samples.size() > maximumSamples) {
+        samples.erase(samples.begin());
+    }
+}
+```
+
+Sau khi thêm một phần tử, `vector` chỉ có thể vượt giới hạn đúng một mẫu nên chỉ cần xóa phần tử đầu tiên. Với tối đa 360 mẫu, cách viết này dễ đọc và đủ nhanh; một project về cấu trúc dữ liệu có thể thay nó bằng ring buffer sau này.
+
+### Bước 3 — Tách thời gian mô phỏng và thời gian lấy mẫu
+
+```cpp title="src/main.cpp — trạng thái của cửa sổ lịch sử 6 giây"
+double elapsedTime = 0.0;
+double sampleAccumulator = 0.0;
+std::vector<lab::WaveSample> samples;
+constexpr std::size_t kMaximumSamples = 360;
+constexpr double kSampleInterval = 1.0 / 60.0;
+constexpr double kVisibleHistorySeconds = 6.0;
+```
+
+`elapsedTime` tăng theo thời gian mô phỏng. `sampleAccumulator` cho biết đã tích lũy đủ thời gian để lấy mẫu tiếp theo hay chưa. Hai biến không có cùng nhiệm vụ, vì vậy không nên gộp chúng.
+
+### Bước 4 — Lấy tối đa khoảng 60 mẫu mỗi giây
+
+```cpp title="src/main.cpp — cập nhật góc, thời gian và lịch sử"
+angle = lab::advanceAngle(angle, angularSpeed, deltaTime);
+elapsedTime += deltaTime;
+sampleAccumulator += deltaTime;
+if (samples.empty() || sampleAccumulator >= kSampleInterval) {
+    lab::appendWaveSample(samples, lab::sampleWave(elapsedTime, angle), kMaximumSamples);
+    sampleAccumulator = std::fmod(sampleAccumulator, kSampleInterval);
+}
+```
+
+Đoạn này chỉ chạy khi `paused == false`. Chương trình vẽ nhanh hơn 60 FPS không còn tự động tạo nhiều mẫu hơn. Nếu máy chậm, timestamp vẫn phản ánh đúng thời điểm nên khoảng cách trên đồ thị không bị sai lệch.
+
+### Bước 5 — Đổi timestamp thành tọa độ X
+
+```cpp title="include/lab.hpp — mapSampleTimeToX"
+inline double mapSampleTimeToX(double sampleTime, double newestTime, double visibleDuration, double left, double right) {
+    if (!std::isfinite(sampleTime) || !std::isfinite(newestTime) ||
+        !std::isfinite(visibleDuration) || visibleDuration <= 0.0) {
+        return left;
+    }
+    const double oldestTime = newestTime - visibleDuration;
+    if (sampleTime <= oldestTime) {
+        return left;
+    }
+    if (sampleTime >= newestTime) {
+        return right;
+    }
+    const double progress = (sampleTime - oldestTime) / visibleDuration;
+    return left + (right - left) * progress;
+}
+```
+
+Mẫu mới nhất luôn ở `right`; mẫu cũ hơn đúng 6 giây nằm ở `left`. Hai nhánh biên giữ kết quả trong vùng vẽ và cũng giúp những mẫu vừa đi khỏi cửa sổ không tạo tọa độ ngoài màn hình.
+
+### Bước 6 — Vẽ đầy đủ cả sine lẫn cosine
+
+```cpp title="src/main.cpp — một lượt nối các mẫu thành hai đường"
+for (std::size_t index = 1; index < samples.size(); ++index) {
+    if (samples[index].time < oldestVisibleTime) {
+        continue;
+    }
+    const int previousX = int(std::lround(lab::mapSampleTimeToX(samples[index - 1].time, newestTime, visibleDuration, double(left), double(right))));
+    const int currentX = int(std::lround(lab::mapSampleTimeToX(samples[index].time, newestTime, visibleDuration, double(left), double(right))));
+    const int previousSinY = centerY - int(std::lround(samples[index - 1].sine * amplitude));
+    const int currentSinY = centerY - int(std::lround(samples[index].sine * amplitude));
+    const int previousCosY = centerY - int(std::lround(samples[index - 1].cosine * amplitude));
+    const int currentCosY = centerY - int(std::lround(samples[index].cosine * amplitude));
+    drawLine(pixels, width, height, previousX, previousSinY, currentX, currentSinY, rgba(83, 240, 174));
+    drawLine(pixels, width, height, previousX, previousCosY, currentX, currentCosY, rgba(132, 169, 255));
+}
+```
+
+Vòng lặp bắt đầu ở 1 vì mỗi đoạn cần hai mẫu. X đến từ timestamp; Y đến từ giá trị sine hoặc cosine. Hai đường dùng chung X nên có thể so sánh pha tại đúng cùng một thời điểm.
+
+## Ghép các phần lại
+
+Checkpoint 5 chia cửa sổ thành unit circle bên trái và đồ thị bên phải. Khi mô phỏng chạy, chương trình cập nhật góc ở mọi khung hình nhưng chỉ thêm mẫu khi `sampleAccumulator` đạt khoảng `1/60` giây. `drawWaveGraph` luôn đặt mẫu mới nhất tại mép phải và hiển thị tối đa 6 giây gần nhất.
+
+Resize chỉ thay `left`, `right`, `centerY` và `amplitude`. Timestamp cùng các giá trị trong `WaveSample` giữ nguyên, nên hình được tính lại đúng với kích thước mới.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính X bằng `index × stepX`. Đổi FPS làm cùng 360 mẫu đại diện cho những khoảng thời gian khác nhau.
+2. Lưu `screenY` thay cho sine/cosine. Resize làm phần lịch sử cũ dùng biên độ trước đó và đường bị gãy.
+3. Thêm mẫu khi đang tạm dừng. Đồ thị xuất hiện một đoạn dài nằm ngang dù thời gian mô phỏng không trôi.
+
+## Tự kiểm tra kết quả
+
+- `mapSampleTimeToX(0,6,6,100,700)` trả 100.
+- `mapSampleTimeToX(3,6,6,100,700)` trả 400.
+- `mapSampleTimeToX(6,6,6,100,700)` trả 700.
+- Lịch sử không vượt 360 mẫu và luôn bỏ mẫu cũ nhất trước.
+- Cosine đạt cực đại khi góc bằng 0; sine đạt cực đại tại `π/2`.
+- Thay đổi FPS không làm thang thời gian 6 giây của đồ thị thay đổi.
+- Resize không xóa timestamp hoặc làm đổi giá trị sine/cosine.
+
+## Bài tập mở rộng
+
+Hiển thị các vạch thời gian cách nhau một giây. Sau đó thêm độ lệch pha `φ` và vẽ `sin(angle + φ)`. Với hai vận tốc góc khác nhau cho X và Y, hãy dùng cùng hệ thống lấy mẫu để tạo đường cong Lissajous.
+
+Bài cuối cho phép kéo đầu kim, tức giải bài toán ngược: biết hướng từ tâm tới chuột và tìm lại góc.

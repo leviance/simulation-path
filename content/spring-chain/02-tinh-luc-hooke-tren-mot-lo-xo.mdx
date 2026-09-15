@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính lực Hooke trên một lò xo
+
+## Vấn đề cần giải quyết
+
+Ta đã biết hai endpoint của mỗi spring nhưng chưa có lực. Một lỗi thường gặp là viết ngay `force=-k*position`: công thức đó kéo particle về gốc tọa độ, không kéo hai endpoint về đúng khoảng cách nghỉ. Spring phải quan tâm đến **khoảng cách tương đối**, không quan tâm nó đang nằm ở đâu trong world.
+
+Trước khi duyệt cả chuỗi, checkpoint 2 tạo một `SpringSample` cho đúng một spring. Sample ghi lại distance, unit direction, stretch và force trên endpoint thứ nhất để ta nhìn được từng đại lượng trung gian.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với $p_A,p_B$ là position và $L_0$ là rest length:
+
+$$
+d=p_B-p_A,\qquad L=\lVert d\rVert,\qquad n=\frac{d}{L}
+$$
+
+$$
+x=L-L_0,\qquad F_A=kx\,n,\qquad F_B=-F_A
+$$
+
+Nếu $x>0$, spring bị kéo giãn và $F_A$ hướng từ A sang B. Nếu $x<0$, vector đổi dấu nên A bị đẩy xa B. Dấu đã nằm trong stretch; không cần thêm một nhánh “nén”.
+
+<InteractiveLab demo="spring-chain" mode="spring-hooke" />
+
+Kéo slider `distance` qua rest length. Quan sát force đổi dấu đúng tại $L=L_0$. Sau đó xoay endpoint: force phải xoay theo direction nhưng magnitude không đổi khi distance giữ nguyên.
+
+## Viết code từng bước
+
+### Bước 1 — Đo vector và chiều dài hiện tại
+
+```cpp title="include/lab.hpp — delta luôn đi từ A sang B"
+const Particle& first = chain.particles[spring.first];
+const Particle& second = chain.particles[spring.second];
+const Vec2 delta = subtract(second.position, first.position);
+const double distance = length(delta);
+if (!std::isfinite(distance) || distance <= kSpringEpsilon) {
+    return {};
+}
+```
+
+Guard hai tâm trùng nhau ngăn phép chia cho zero. Trả sample không hợp lệ rõ ràng tốt hơn giấu một normal tùy ý vào force liên tục.
+
+### Bước 2 — Chuẩn hóa direction đúng một lần
+
+```cpp title="include/lab.hpp — direction không mang độ dài"
+const Vec2 direction = scale(delta, 1.0 / distance);
+const double stretch = distance - spring.restLength;
+```
+
+Không lấy `abs(stretch)`: dấu âm chính là thông tin spring đang nén và cần đẩy hai đầu ra.
+
+### Bước 3 — Đổi stretch thành force vector
+
+```cpp title="include/lab.hpp — Hooke scalar rồi mới nhân direction"
+const double forceMagnitude = spring.stiffness * stretch;
+return {true, direction, distance, stretch, relativeSpeed, scale(direction, forceMagnitude)};
+```
+
+Trong quy ước này `forceOnFirst` là lực tác dụng lên A. Bài sau sẽ cộng vector này vào A và trừ khỏi B.
+
+### Bước 4 — Tô màu dựa trên stretch có dấu
+
+```cpp title="src/main.cpp — vàng là kéo giãn, xanh là nén"
+if (sample.valid && sample.stretch > 0.015) {
+    return kStretched;
+}
+if (sample.valid && sample.stretch < -0.015) {
+    return kCompressed;
+}
+```
+
+Ngưỡng 0.015 chỉ giảm nhấp nháy màu do sai số hiển thị; nó không thay force calculation.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint lực Hooke"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_checkpoint_2
+./build/Debug/project_25_checkpoint_2.exe
+```
+
+Checkpoint cố ý kéo particle giữa sang bên nhưng chưa tích phân. Title bar báo distance, rest length, stretch và force của spring được chọn; mũi tên đỏ biểu diễn `forceOnFirst`.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `stretch=restLength-distance`. Lực kéo giãn sẽ đẩy hai đầu xa hơn; hoàn tác thứ tự phép trừ.
+2. Dùng `delta` trực tiếp thay direction. Force bị nhân thêm distance và không còn đúng đơn vị; hoàn tác phép chuẩn hóa.
+3. Dùng `abs(stretch)`. Spring nén tiếp tục kéo hai đầu vào nhau; hoàn tác để giữ dấu.
+
+## Tự kiểm tra kết quả
+
+- Distance bằng rest length cho force zero.
+- Kéo giãn 0.2 m với `k=100 N/m` cho magnitude 20 N.
+- Nén 0.2 m cho magnitude 20 N nhưng direction force đảo lại.
+- Xoay spring không đổi magnitude ở cùng stretch.
+- Dịch cả hai endpoint cùng một vector không đổi sample.
+- Hai endpoint trùng nhau trả sample không hợp lệ, không có NaN.
+- `forceOnFirst` nằm dọc spring direction.
+
+## Bài tập mở rộng
+
+Vẽ riêng hai vector $F_A$ và $F_B$ ở hai đầu spring, rồi kiểm bằng số rằng tổng của chúng bằng zero.
+
+Bài tiếp theo làm đúng việc đó cho cả 17 springs, đồng thời cộng gravity vào từng mass trước khi state bắt đầu chuyển động.

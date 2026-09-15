@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính hai angular acceleration coupled
+
+## Vấn đề cần giải quyết
+
+Phần hình học cho biết hai quả nặng đang ở đâu, nhưng chưa cho biết trạng thái sẽ thay đổi thế nào. Con lắc kép không phải hai con lắc đơn chạy độc lập: gia tốc góc của thanh thứ nhất phụ thuộc vào góc và vận tốc góc của thanh thứ hai, và ngược lại.
+
+Mục tiêu của checkpoint 2 không phải nhớ thuộc một biểu thức dài. Ta đóng gói nó thành hàm derivative thuần, đặt tên những phần dùng chung và kiểm vài state có đáp án rõ ràng trước khi cho hệ chuyển động.
+
+## Hiểu ý tưởng trước khi viết code
+
+Derivative của state là:
+
+$$
+\dot y=(\omega_1,\alpha_1,\omega_2,\alpha_2)
+$$
+
+Với $\Delta=\theta_1-\theta_2$, hai công thức gia tốc có chung một phần mẫu số:
+
+$$
+D=2m_1+m_2-m_2\cos(2\theta_1-2\theta_2)
+$$
+
+Tử số gồm các thành phần do trọng lực, vận tốc góc và sự liên kết giữa hai thanh qua $\sin\Delta$, $\cos\Delta$. Điều quan trọng là cả $\alpha_1$ lẫn $\alpha_2$ phải được tính từ cùng một trạng thái đầu vào.
+
+<InteractiveLab demo="double-pendulum-chaos" mode="chaos-derivative" />
+
+Đặt cả hai angle về zero và omega về zero: hai alpha phải bằng zero. Sau đó đặt cả hai angle gần $\pi/2$; với unit mass/length, alpha1 tiến gần `-9.81` còn alpha2 gần zero.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo derivative có trạng thái hợp lệ rõ ràng
+
+```cpp title="include/lab.hpp — output của phương trình chuyển động"
+struct DoublePendulumDerivative {
+    double theta1Rate{};
+    double omega1Rate{};
+    double theta2Rate{};
+    double omega2Rate{};
+    bool valid{};
+};
+```
+
+`thetaRate` chính là omega; `omegaRate` là alpha. Cờ `valid` giúp RK4 ở bài sau từ chối một stage lỗi thay vì tiếp tục lan NaN.
+
+### Bước 2 — Tính và guard denominator
+
+```cpp title="include/lab.hpp — coupling denominator dùng chung"
+const double angleDifference = state.theta1 - state.theta2;
+const double sharedDenominator = 2.0 * parameters.mass1 + parameters.mass2 - parameters.mass2 * std::cos(2.0 * state.theta1 - 2.0 * state.theta2);
+const double denominator1 = parameters.length1 * sharedDenominator;
+const double denominator2 = parameters.length2 * sharedDenominator;
+if (std::abs(denominator1) <= kChaosEpsilon || std::abs(denominator2) <= kChaosEpsilon) {
+    return {};
+}
+```
+
+Với mass và length dương, denominator của model mặc định không về zero. Guard vẫn cần thiết vì API pure có thể nhận parameters sai trong test hoặc bài tập mở rộng.
+
+### Bước 3 — Tách công thức thành các phần có thể kiểm tra
+
+```cpp title="include/lab.hpp — các đại lượng dùng lại trong hai công thức"
+const double sineDifference = std::sin(angleDifference);
+const double cosineDifference = std::cos(angleDifference);
+const double omega1Squared = state.omega1 * state.omega1;
+const double omega2Squared = state.omega2 * state.omega2;
+```
+
+Ta đặt tên cho từng phần trước khi cộng chúng lại. Cách viết này dài hơn vài dòng nhưng dễ đối chiếu với công thức, dễ đặt breakpoint và quan trọng nhất là dễ phát hiện sai dấu.
+
+```cpp title="include/lab.hpp — numerator của alpha1"
+const double gravityOnFirstRod = -parameters.gravity * (2.0 * parameters.mass1 + parameters.mass2) * std::sin(state.theta1);
+const double gravityFromSecondRod = -parameters.mass2 * parameters.gravity * std::sin(state.theta1 - 2.0 * state.theta2);
+const double velocityCouplingOnFirstRod = -2.0 * sineDifference * parameters.mass2 * (omega2Squared * parameters.length2 + omega1Squared * parameters.length1 * cosineDifference);
+const double acceleration1Numerator = gravityOnFirstRod + gravityFromSecondRod + velocityCouplingOnFirstRod;
+```
+
+Với `alpha2`, ta cũng giữ ba thành phần riêng rồi mới ghép thành numerator cuối cùng. Khi một test thất bại, các biến trung gian cho biết sai số xuất hiện ở phần trọng lực hay phần liên kết vận tốc.
+
+```cpp title="include/lab.hpp — numerator của alpha2"
+const double firstRodContribution = omega1Squared * parameters.length1 * (parameters.mass1 + parameters.mass2);
+const double gravityContribution = parameters.gravity * (parameters.mass1 + parameters.mass2) * std::cos(state.theta1);
+const double secondRodContribution = omega2Squared * parameters.length2 * parameters.mass2 * cosineDifference;
+const double acceleration2Numerator = 2.0 * sineDifference * (firstRodContribution + gravityContribution + secondRodContribution);
+```
+
+### Bước 4 — Trả bốn rate theo đúng thứ tự state
+
+```cpp title="include/lab.hpp — ghép derivative hoàn chỉnh"
+DoublePendulumDerivative derivative{};
+derivative.theta1Rate = state.omega1;
+derivative.omega1Rate = acceleration1Numerator / denominator1;
+derivative.theta2Rate = state.omega2;
+derivative.omega2Rate = acceleration2Numerator / denominator2;
+derivative.valid = true;
+return derivative;
+```
+
+Gán từng field bằng tên giúp người đọc không phải nhớ thứ tự của năm giá trị trong một initializer list. Nếu struct thay đổi, compiler cũng chỉ ra đúng field còn thiếu thay vì âm thầm tráo hai đại lượng cùng kiểu `double`.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint derivative"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_26_checkpoint_2
+```
+
+Checkpoint vẫn đứng yên có chủ đích. Window title chỉ hiển thị alpha của state đang chọn; bài sau mới tích phân derivative theo thời gian.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `angleDifference` thành `theta2-theta1` nhưng giữ nguyên các dấu còn lại. Alpha thay đổi không đối xứng; hoàn tác toàn bộ theo một quy ước duy nhất.
+2. Tính alpha1 rồi cập nhật omega1 trước khi tính alpha2. Kết quả phụ thuộc thứ tự dòng code; hoàn tác để derivative không sửa input.
+3. Bỏ bình phương `omega`. Đổi dấu omega làm centrifugal contribution đổi dấu sai; hoàn tác `omega*omega`.
+
+## Tự kiểm tra kết quả
+
+- Parameters có mass hoặc length zero bị từ chối.
+- State thẳng xuống đứng yên có alpha1 và alpha2 bằng zero.
+- Hai rod ngang song song, unit parameters cho alpha1 gần `-g`, alpha2 gần zero.
+- Derivative không sửa state đầu vào.
+- Mọi output của preset mặc định đều finite.
+
+## Bài tập mở rộng
+
+Viết một hàm in riêng gravity contribution và velocity-coupling contribution của từng alpha. Tổng hai phần phải khớp derivative hiện tại trong test, nhưng không đưa struct debug này vào solver final.
+
+Bài tiếp theo gọi derivative bốn lần trong RK4 và dùng energy để đánh giá bước thời gian.

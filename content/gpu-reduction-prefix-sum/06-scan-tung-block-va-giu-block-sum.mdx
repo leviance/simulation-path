@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Scan từng block và lưu lại block sum
+
+## Điều khó nằm ở đâu?
+
+`scan_blocks.comp` chạy độc lập trên 1.954 block. Mỗi block tạo đúng exclusive prefix cho 512 phần tử của riêng nó và ghi thêm một block sum. Vấn đề là prefix của block nào cũng bắt đầu từ zero. Muốn có kết quả toàn cục, ta còn phải cộng tổng của các block đứng trước vào từng đoạn.
+
+Đây không phải bug Blelloch. Nó là ranh giới giữa **local scan** và **global scan**. Ta cần giữ cả hai output riêng:
+
+- `scanOutput`: N local prefixes;
+- `blockSums`: B total, một giá trị mỗi block.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Giả sử block span thu nhỏ còn 4 và input là:
+
+```text
+block 0: [3,1,4,2] → local [0,3,4,8], sum 10
+block 1: [5,0,2,1] → local [0,5,5,7], sum  8
+block 2: [6,1,3,2] → local [0,6,7,10], sum 12
+```
+
+Local output đúng trong phạm vi block. Muốn global output, block 1 cần cộng 10; block 2 cần cộng 18. Hai số `[0,10,18]` chính là exclusive scan của `[10,8,12]`.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="block-scan" />
+
+Canvas cố ý chưa cộng offset. Hãy nhìn phần tử đầu của mỗi block: cả ba đều bằng 0, cho thấy scan trong từng block đã đúng nhưng kết quả của toàn bộ dãy vẫn thiếu bước cộng offset.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Mỗi tầng dùng một buffer kết quả và một buffer tổng
+
+```cpp title="include/reduction_gpu_engine.hpp — ScanLevelBuffers"
+struct ScanLevelBuffers {
+    std::size_t inputCount{};
+    std::size_t blockCount{};
+    GLuint scanBuffer{};
+    GLuint sumsBuffer{};
+};
+```
+
+`scanBuffer` có `inputCount` float; `sumsBuffer` chỉ có `blockCount` float. Tách chúng làm dataflow rõ và tránh ghi đè prefix khi cần totals ở pass sau.
+
+### Bước 2 — Bind ba vai trò bằng ba binding
+
+```cpp title="include/reduction_gpu_engine.hpp — dispatchScanPass bindings"
+scanProgram_.use(gl);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, inputBuffer);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1U, outputBuffer);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 2U, sumsBuffer);
+gl.Uniform1i(scanProgram_.uniform("uElementCount"), static_cast<GLint>(count));
+gl.DispatchCompute(static_cast<GLuint>(ceilDiv(count, kBlockSpan)), 1U, 1U);
+```
+
+Binding 0/1/2 phải khớp GLSL `InputBuffer`, `ScanOutputBuffer`, `BlockSumsBuffer`. GLuint buffer name do driver cấp không phải binding point.
+
+### Bước 3 — Đọc hai đầu ra để kiểm tra bài hiện tại
+
+```cpp title="include/reduction_gpu_engine.hpp — local-prefix checkpoint"
+dispatchScanPass(
+    gl,
+    inputBuffer_,
+    scanLevels_[0].scanBuffer,
+    scanLevels_[0].sumsBuffer,
+    input_.size()
+);
+gl.MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+readVector(gl, scanLevels_[0].scanBuffer, input_.size(), localPrefixes);
+readVector(gl, scanLevels_[0].sumsBuffer, hierarchy_[0].blockCount, blockSums);
+```
+
+Checkpoint 6 readback cả hai mảng **chỉ để học và kiểm tra**. Final sẽ không đọc block sums giữa chừng; bài 7 đưa chúng thẳng vào compute pass tiếp theo.
+
+### Bước 4 — Kiểm tra index cả khi đọc lẫn khi ghi
+
+Tail lane nạp zero, tham gia đủ barrier, nhưng chỉ store khi `index < uElementCount`. Nếu store cả 512 vị trí ở block cuối, shader ghi vượt `scanOutput` đã cấp đúng N float.
+
+## Chạy checkpoint và đọc kết quả
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_39_checkpoint_6
+build\Debug\project_39_checkpoint_6.exe
+```
+
+Với 1.000.003 input, output có đúng 1.000.003 local prefix và sums buffer có 1.954 giá trị. Phần tử đầu ở block index 1, tức output index 512, phải gần zero trước uniform add.
+
+## Cố tình phá thuật toán
+
+1. Cấp `sumsBuffer` tới N float. Kết quả vẫn có thể đúng, nhưng kích thước thật cần thiết bị che khuất và bộ nhớ bị lãng phí ở mọi tầng.
+2. Dùng cùng buffer cho local prefix và block sums. Lane 0 ghi total vào vùng output mà các lane khác đang store.
+3. Đọc binding point 2 bằng `glGetBufferSubData` mà không bind GLuint sums buffer vào target. Binding point không tự chọn target readback.
+4. Mong block 1 tự biết tổng block 0 trong cùng dispatch. Không có global workgroup barrier ở đây.
+5. Gọi local output “global prefix” vì nó tăng trong từng đoạn. Kiểm index 511/512 sẽ lộ chỗ reset.
+
+## Checklist hoàn thành
+
+- [ ] Mỗi level có scan buffer dài input count và sums buffer dài block count.
+- [ ] Binding 0/1/2 khớp input/output/sums ở C++ và GLSL.
+- [ ] Tầng đầu dispatch 1.954 workgroup cho N=1.000.003.
+- [ ] Local output index 512 bắt đầu lại gần zero trước offset.
+- [ ] Sums buffer có đúng 1.954 total.
+- [ ] Tail chỉ store index hợp lệ nhưng mọi lane vẫn đi qua barrier.
+
+## Bài tập để hiểu sâu hơn
+
+1. Vẽ cặp giá trị quanh biên 511/512 và giải thích vì sao delta ở đó sai trước uniform add.
+2. Tính byte size của scan/sums buffers ở cả ba hierarchy level.
+3. Thêm một validator riêng cho local scan: chỉ so prefix trong từng block, chưa đòi global offset.
+
+Bài 7 sẽ scan chính mảng 1.954 block sums, rồi cộng offsets theo thứ tự ngược để local prefix trở thành global prefix.

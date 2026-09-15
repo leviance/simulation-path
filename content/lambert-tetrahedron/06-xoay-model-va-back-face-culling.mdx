@@ -1,0 +1,133 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xoay model và loại mặt quay lưng
+
+## Vấn đề cần giải quyết
+
+Nếu chỉ xoay vertex để vẽ nhưng vẫn dùng normal local-space, hình học và ánh sáng sẽ kể hai câu chuyện khác nhau: tetrahedron quay, còn vùng sáng đứng yên trên từng face. Ta cần normal trong cùng camera space với geometry đã transform.
+
+Tetrahedron là vật thể kín và lồi. Những face có mặt ngoài quay khỏi camera không thể nhìn thấy, vì vậy ta loại chúng trước clipping và rasterization. Lighting và culling dùng cùng normal nhưng hai hướng khác nhau: lighting so với đèn, culling so với camera.
+
+## Hiểu ý tưởng trước khi viết code
+
+Project này không có non-uniform scale. Cách rõ ràng nhất là:
+
+1. xoay bốn vertex local-space;
+2. translate chúng tới camera space;
+3. lấy lại ba vertex của từng face;
+4. tính cross product mới từ geometry đã transform.
+
+Camera nằm tại origin. Với face centroid `C`, vector từ face tới camera là:
+
+$$
+V=normalize(-C)
+$$
+
+Giữ face khi `dot(N,V)>0`.
+
+<InteractiveLab demo="lambert" mode="lambert-culling" />
+
+## Viết code từng bước
+
+### Bước 1 — Xoay một point quanh X và Y
+
+```cpp title="include/lab.hpp — rotation quanh X"
+inline Vec3 rotateX(Vec3 point, double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {
+        point.x,
+        point.y * cosine - point.z * sine,
+        point.y * sine + point.z * cosine,
+    };
+}
+```
+
+```cpp title="include/lab.hpp — rotation quanh Y"
+inline Vec3 rotateY(Vec3 point, double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {
+        point.x * cosine + point.z * sine,
+        point.y,
+        -point.x * sine + point.z * cosine,
+    };
+}
+```
+
+Thứ tự cố định là X rồi Y. Đổi thứ tự sẽ cho orientation khác; điều đó không sai về toán, nhưng Canvas và C++ phải cùng một quy ước.
+
+### Bước 2 — Transform array vertex, giữ nguyên face indices
+
+```cpp title="include/lab.hpp — local mesh sang camera space"
+inline TetrahedronMesh transformMesh(
+    const TetrahedronMesh& localMesh,
+    double pitch,
+    double yaw,
+    Vec3 translation
+) {
+    TetrahedronMesh transformed = localMesh;
+    for (std::size_t index = 0; index < localMesh.vertices.size(); ++index) {
+        Vec3 point = rotateX(localMesh.vertices[index], pitch);
+        point = rotateY(point, yaw);
+        transformed.vertices[index] = add(point, translation);
+    }
+    return transformed;
+}
+```
+
+Topology được sao chép nguyên vẹn. Không có vòng lặp transform riêng trong từng face, nên vertex dùng chung không thể nhận hai kết quả hơi khác nhau.
+
+### Bước 3 — Tính hướng từ face tới camera
+
+```cpp title="include/lab.hpp — front-facing test trong camera space"
+inline bool isFrontFacing(const std::array<Vec3, 3>& cameraVertices) {
+    const Vec3 unitNormal = faceUnitNormal(cameraVertices);
+    const Vec3 toCamera = normalize(scale(faceCentroid(cameraVertices), -1.0));
+    return dot(unitNormal, toCamera) > 0.0;
+}
+```
+
+Đây là culling, không phải lighting. Một face có thể hướng về đèn nhưng quay lưng camera; ta không cần tốn clipping và rasterization cho nó.
+
+### Bước 4 — Nối drag và keyboard vào cùng pitch/yaw
+
+```cpp title="src/main.cpp — mouse delta xoay model và tạm dừng auto-rotate"
+if (event.type == SDL_EVENT_MOUSE_MOTION && dragging) {
+    yaw += double(event.motion.xrel) * 0.008;
+    pitch += double(event.motion.yrel) * 0.008;
+    pitch = std::clamp(pitch, -1.4, 1.4);
+}
+```
+
+`WASD` và arrow cũng sửa đúng hai biến này. Pointer capture giữ drag liên tục khi cursor đi qua mép window; mouse-up nhả capture.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint rotation và culling"
+cmake --build build --config Debug --target project_19_checkpoint_6
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Kéo chậm qua nhiều orientation. Mũi tên normal phải bám theo face. Mỗi frame, `visible + culled = 4`; tại hướng tổng quát thường có một hoặc hai face nhìn thấy.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính normal từ `localMesh` sau khi đã vẽ `cameraMesh`. Vùng sáng dính vào face theo local orientation; luôn tính N và L trong cùng space.
+2. Cull bằng `dot(normal, surfaceToLight)`. Đổi preset đèn làm geometry biến mất dù camera không đổi; culling phải dùng `toCamera`.
+3. Transform ba vertex trong từng face. Vertex chung bị tính lặp, code phình to và dễ lệch rotation order; transform indexed vertex array một lần.
+4. Dùng `centroid` thay vì `-centroid` cho `toCamera`. Mọi quyết định culling bị đảo; tên vector phải đúng cả hướng.
+
+## Tự kiểm tra kết quả
+
+- Rotation và translation bảo toàn độ dài mọi cạnh.
+- Normal được recompute từ camera-space face vertices và luôn có length gần 1.
+- `visibleFaces + culledFaces == 4` ở mọi orientation hữu hạn.
+- Đổi light preset không làm culling count đổi.
+- Drag, WASD/arrow, pause, single-step và reset cùng sửa một model state.
+
+## Bài tập mở rộng
+
+Thêm chế độ debug vẽ face quay lưng bằng wireframe mờ thay vì bỏ hẳn. Culling decision vẫn phải được tính như cũ; chỉ phần hiển thị debug được phép nhìn thấy culled face.
+
+Bài cuối sẽ thay wireframe bằng bề mặt được rasterize và ghép lại near-plane clipping từ Project 18 để pipeline vẫn an toàn khi model tiến sát camera.

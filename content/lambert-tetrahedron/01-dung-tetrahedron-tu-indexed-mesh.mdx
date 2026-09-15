@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng tetrahedron từ indexed mesh
+
+## Vấn đề cần giải quyết
+
+Project này sẽ kết thúc bằng một vật thể 3D có mặt sáng, mặt tối. Nhưng trước khi nói tới đèn, ta phải có một **bề mặt** đúng nghĩa. Bốn triangle rời rạc tuy cũng vẽ thành tetrahedron, nhưng chúng che mất một ý quan trọng: các mặt đang dùng chung vertex và phải cùng tuân theo một quy ước winding.
+
+Checkpoint đầu dựng lại đầy đủ window, renderer, streaming texture và CPU framebuffer, sau đó biểu diễn tetrahedron bằng **bốn vertex cùng bốn face chứa index**. Ta chỉ vẽ wireframe để nhìn topology cho rõ. Đây là bộ khung chạy được, không phải một đoạn struct đứng riêng khỏi chương trình.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một tetrahedron có bốn đỉnh. Mỗi mặt lấy ba trong bốn đỉnh đó, nên nếu sao chép dữ liệu theo từng triangle ta sẽ lưu mười hai position. Indexed mesh giữ position một lần:
+
+$$
+Face_i = (index_A,index_B,index_C,baseColor)
+$$
+
+Khi model xoay ở bài sau, ta transform bốn vertex đúng một lần. Các face chỉ việc đọc lại kết quả qua index. Topology — đỉnh nào nối với đỉnh nào — không đổi theo thời gian.
+
+<InteractiveLab demo="lambert" mode="lambert-mesh" />
+
+## Viết code từng bước
+
+### Bước 1 — Khai báo vertex, màu và face
+
+```cpp title="include/lab.hpp — dữ liệu của indexed mesh"
+struct Face {
+    std::array<std::size_t, 3> indices{};
+    Color baseColor{};
+};
+
+struct TetrahedronMesh {
+    std::array<Vec3, 4> vertices{};
+    std::array<Face, 4> faces{};
+};
+```
+
+`baseColor` nằm ở face vì Project 19 dùng flat shading: cả mặt nhận một normal và một màu vật liệu. Ở những project texture sau này, color có thể chuyển về vertex hoặc texture sample; hiện tại đặt nó ở face làm mô hình dữ liệu nói đúng điều ta đang dạy.
+
+### Bước 2 — Dựng bốn vertex quanh local origin
+
+```cpp title="include/lab.hpp — bốn vertex và bốn mặt có index"
+inline TetrahedronMesh makeTetrahedron() {
+    return {
+        {{{1.0, 1.0, 1.0}, {-1.0, -1.0, 1.0}, {-1.0, 1.0, -1.0}, {1.0, -1.0, -1.0}}},
+        {{
+            {{{1, 2, 3}}, {244.0, 114.0, 126.0}},
+            {{{0, 3, 2}}, {91.0, 197.0, 255.0}},
+            {{{0, 1, 3}}, {255.0, 190.0, 92.0}},
+            {{{0, 2, 1}}, {126.0, 231.0, 164.0}},
+        }},
+    };
+}
+```
+
+Bốn position đối xứng quanh `(0,0,0)`. Tâm local trùng origin sẽ giúp ta kiểm normal ở bài 2. Thứ tự `1,2,3` hay `0,3,2` không tùy ý; đổi hai index sẽ đảo hướng mặt.
+
+### Bước 3 — Lấy ba vertex thật từ một face
+
+```cpp title="include/lab.hpp — giải tham chiếu index"
+inline std::array<Vec3, 3> faceVertices(const TetrahedronMesh& mesh, const Face& face) {
+    return {
+        mesh.vertices[face.indices[0]],
+        mesh.vertices[face.indices[1]],
+        mesh.vertices[face.indices[2]],
+    };
+}
+```
+
+Hàm nhỏ này là ranh giới giữa topology và geometry. Các bước tính normal, culling và clipping chỉ cần một bộ ba position; chúng không cần biết vertex ban đầu nằm ở index nào.
+
+### Bước 4 — Đặt mesh trước camera rồi project các cạnh
+
+```cpp title="src/main.cpp — cùng một translation cho bốn vertex dùng chung"
+lab::TetrahedronMesh placeStaticMesh(const lab::TetrahedronMesh& localMesh) {
+    lab::TetrahedronMesh cameraMesh = localMesh;
+    for (lab::Vec3& vertex : cameraMesh.vertices) {
+        vertex = lab::add(vertex, {0.0, 0.0, 5.0});
+    }
+    return cameraMesh;
+}
+```
+
+Camera nhìn theo `+Z`, nên translation `z=5` đặt cả tetrahedron an toàn trước near plane. Frame loop duyệt từng face, lấy ba vertex, project hai đầu mỗi cạnh rồi gọi `drawLine`. Cạnh chung có thể được vẽ hai lần ở checkpoint này; tới final, top-left rasterizer sẽ quyết định pixel thuộc face nào.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint indexed mesh"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_19_checkpoint_1
+```
+
+Chạy target, nhấn `Tab` để đổi face đang theo dõi và resize cửa sổ. Bạn phải thấy một tetrahedron wireframe ở giữa, không phải bốn triangle tách rời hoặc một hình bị kéo dãn theo aspect ratio.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi face đầu từ `{1,2,3}` thành `{1,3,2}`. Wireframe gần như không đổi, nhưng normal của face sẽ quay vào trong ở bài sau — bằng chứng hình dây chưa đủ để xác nhận topology.
+2. Lưu ba `Vec3` trực tiếp trong mỗi `Face`. Chương trình vẫn vẽ được, nhưng khi sửa một corner bạn phải đồng bộ ba bản sao; hoàn tác và giữ index.
+3. Project local vertex trước rồi cộng translation vào tọa độ screen. Perspective không còn đúng vì Z chưa tham gia phép chia; translation phải xảy ra trong 3D.
+
+## Tự kiểm tra kết quả
+
+- Mesh có đúng bốn vertex và bốn face; mỗi face có ba index trong khoảng `0..3`.
+- Các face thực sự dùng chung vertex, không sao chép position.
+- Window, renderer, streaming texture và framebuffer đều được kiểm lỗi khi tạo.
+- Tetrahedron ở trước camera tại khoảng `z=4..6` và resize giữ đúng tỉ lệ.
+- Checkpoint 1 chưa tính normal hoặc lighting; màu chỉ là `baseColor` để nhận diện mặt.
+
+## Bài tập mở rộng
+
+Viết hàm đếm số lần từng vertex index xuất hiện trong bốn face. Với tetrahedron kín này, mỗi vertex phải thuộc đúng ba face. Đừng đưa hàm vào render loop; gọi nó từ test hoặc lúc khởi tạo.
+
+Bài tiếp theo sẽ kiểm điều mà wireframe không thể cho biết: thứ tự index có làm cả bốn normal hướng ra ngoài hay không.

@@ -1,0 +1,136 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng hai nguyên tử và đo khoảng cách
+
+## Vấn đề cần giải quyết
+
+Bản khởi đầu đã mở được cửa sổ SDL3, tạo framebuffer và vẽ hai hình tròn. Tuy nhiên, đó mới chỉ là hai dấu chấm trên màn hình: chương trình chưa có `position`, `velocity` hay khái niệm khoảng cách giữa hai nguyên tử.
+
+Việc đầu tiên của Project 41 không phải là chép công thức Lennard–Jones. Ta cần dựng một `PairState` rõ ràng để các công thức phía sau luôn nhận đúng dữ liệu. Nếu dùng pixel làm vị trí vật lý, chỉ cần đổi kích thước cửa sổ là “khoảng cách phân tử” cũng đổi theo dù hai nguyên tử không hề chuyển động.
+
+Project này dùng **hệ đơn vị rút gọn (reduced units)**. Ở cấu hình mặc định, `sigma = 1`, `epsilon = 1` và `mass = 1`. Vì thế, `r = 1.5` có nghĩa khoảng cách bằng `1.5 sigma`, chưa đại diện cho mét hay nanomet của một chất cụ thể.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi vị trí của hai nguyên tử là $\mathbf{x}_A$ và $\mathbf{x}_B$. Ta thống nhất `delta` luôn đi từ A tới B:
+
+$$
+\mathbf{delta} = \mathbf{x}_B - \mathbf{x}_A
+$$
+
+Khoảng cách chỉ là độ dài của vector đó:
+
+$$
+r = \lVert\mathbf{delta}\rVert = \sqrt{delta_x^2 + delta_y^2}
+$$
+
+Với hai khối lượng $m_A$, $m_B$, tâm khối lượng là:
+
+$$
+\mathbf{x}_{cm} = \frac{m_A\mathbf{x}_A + m_B\mathbf{x}_B}{m_A+m_B}
+$$
+
+Trong cấu hình đầu tiên, hai khối lượng bằng nhau và hai vị trí đối xứng qua gốc. Tâm khối lượng phải nằm tại `(0,0)`. Đây là một mốc kiểm tra quan trọng: đổi kích thước Canvas hay thay camera không được làm nó thay đổi.
+
+<InteractiveLab demo="lennard-jones-pair" mode="pair-distance" />
+
+Kéo nguyên tử đỏ theo nhiều hướng. Hãy đọc `Delta A→B` trước rồi mới đọc `r/sigma`: `delta` thay đổi cả hướng lẫn độ dài, còn `distance` chỉ giữ lại độ dài. Dấu cộng màu xanh ở giữa là center of mass, được tính từ trạng thái vật lý chứ không phải từ kích thước Canvas.
+
+## Viết code từng bước
+
+### Bước 1 — Tách atom vật lý khỏi cách vẽ hình tròn
+
+```cpp title="include/lennard_jones.hpp — Atom và PairState"
+struct Atom {
+    Vec2 position{};
+    Vec2 velocity{};
+    double mass{1.0};
+};
+
+struct PairState {
+    Atom atomA{};
+    Atom atomB{};
+    double elapsed{};
+};
+```
+
+`Atom` không chứa màu, pixel radius hay `SDL_FRect`. Renderer sẽ đổi `position` từ world space sang screen space khi vẽ. Nhờ vậy test có thể dùng `PairState` mà không cần mở window.
+
+### Bước 2 — Giữ hướng trong `delta`, chỉ lấy scalar khi thật sự cần
+
+```cpp title="include/lennard_jones.hpp — pairDelta và pairDistance"
+inline Vec2 pairDelta(const PairState& state) {
+    return subtract(state.atomB.position, state.atomA.position);
+}
+
+inline double pairDistance(const PairState& state) {
+    return length(pairDelta(state));
+}
+```
+
+Không nên viết riêng `abs(atomB.position.x - atomA.position.x)`. Cách đó chỉ đúng khi hai atom luôn nằm trên trục X; vừa kéo chéo một atom là khoảng cách sai ngay.
+
+### Bước 3 — Tạo initial state đối xứng có chủ đích
+
+```cpp title="include/lennard_jones.hpp — makeSymmetricPair"
+inline PairState makeSymmetricPair(double separation, double mass = 1.0) {
+    PairState state{};
+    if (!std::isfinite(separation) || separation < 0.0 || !std::isfinite(mass) ||
+        mass <= kDistanceEpsilon) {
+        state.atomA.mass = 0.0;
+        state.atomB.mass = 0.0;
+        return state;
+    }
+
+    state.atomA.position = {-0.5 * separation, 0.0};
+    state.atomB.position = {0.5 * separation, 0.0};
+    state.atomA.mass = mass;
+    state.atomB.mass = mass;
+    return state;
+}
+```
+
+Hàm nhận **toàn bộ separation**, rồi đặt mỗi nguyên tử cách gốc tọa độ một nửa. Nếu truyền `1.5`, khoảng cách cuối cùng vẫn là `1.5`, không phải `3.0`. Separation âm hoặc mass không hợp lệ tạo ra một state có `mass = 0`; `validState` sẽ từ chối rõ ràng thay vì âm thầm đổi dữ liệu đầu vào thành giá trị khác.
+
+### Bước 4 — Đưa state vào chương trình SDL3
+
+```cpp title="src/main.cpp — initial PairState"
+lj::PairState state = lj::makeSymmetricPair(1.50);
+```
+
+Checkpoint 1 dùng trạng thái này để vẽ hai nguyên tử. Cửa sổ vẫn đổi kích thước được, nhưng `pairDistance(state)` không phụ thuộc `width` hay `height`.
+
+## Ghép các phần lại
+
+Build riêng checkpoint đầu và CTest:
+
+```bash title="Terminal — build checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_41_checkpoint_1 project_41_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Khi chạy `project_41_checkpoint_1`, thanh tiêu đề phải báo `delta`, `r` và `COM`. Hãy đổi kích thước cửa sổ vài lần: hình vẽ đổi tỷ lệ, còn ba giá trị vật lý vẫn giữ nguyên.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản C++ đang làm, đổi `pairDistance` thành `abs(delta.x)` rồi thử cặp có `delta=(3,4)` bằng một phép kiểm thuần CPU: kết quả sai là 3 thay vì 5. Hoàn tác và build lại. Sửa C++ không làm Canvas trên trang thay đổi; Canvas chỉ là bản minh họa để đối chiếu.
+2. Đặt A tại `-separation` và B tại `+separation`. Chương trình báo `r` gấp đôi tham số đầu vào; sửa lại hệ số `0.5`.
+3. Tính center of mass bằng trung điểm `(A+B)/2`, rồi cho hai nguyên tử có khối lượng khác nhau trong phép kiểm tra. Lúc này trung điểm hình học không còn là tâm khối lượng; hãy hoàn tác và dùng trung bình có trọng số.
+
+## Tự kiểm tra kết quả
+
+- [ ] `delta` của cặp nằm ngang mặc định bằng `(1.5,0)`.
+- [ ] `pairDistance` bằng `1.5` và không đổi khi cửa sổ đổi kích thước.
+- [ ] Hai khối lượng bằng nhau và vị trí đối xứng tạo center of mass gần `(0,0)`.
+- [ ] Nguyên tử có `mass` không hữu hạn hoặc không dương bị xem là trạng thái không hợp lệ.
+- [ ] Bản khởi đầu chưa chứa `PairState`; struct này chỉ xuất hiện từ checkpoint 1.
+- [ ] CTest kết thúc trong giới hạn 20 giây và không mở cửa sổ.
+
+## Bài tập mở rộng
+
+1. Viết hàm trả về vận tốc tâm khối lượng từ `velocity` và `mass` của hai nguyên tử.
+2. Tạo một cặp có khối lượng `1` và `2`, đồng thời giữ center of mass tại gốc; tự tìm hai vị trí phù hợp.
+3. Thêm một mũi tên biểu diễn `delta`, nhưng chỉ giữ dữ liệu vẽ trong renderer, không thêm thuộc tính đồ họa vào `Atom`.
+
+Bài tiếp theo dùng khoảng cách vừa tính để tìm thế năng Lennard–Jones. Ta sẽ đánh dấu rõ `sigma` và khoảng cách cân bằng thay vì nhầm hai mốc này là một.

@@ -1,0 +1,133 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng hộp tuần hoàn và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Hạt qua mép mượt chưa đủ chứng minh điều kiện biên đúng. Một chương trình có thể wrap vị trí đúng nhưng vẫn tính lực bằng khoảng cách thường, đếm ảnh xám thành hạt thật hoặc làm mất hành trình khi qua góc. Những lỗi ấy khó thấy khi cả nghìn hạt cùng chuyển động.
+
+Bài cuối bổ sung các phép kiểm có đáp án cụ thể vào chương trình đã xây. Ta kiểm tra hình học trước, lực sau, rồi mới đến một chuỗi bước Verlet. Bản final gồm toàn bộ code và test, không yêu cầu chép những đoạn rời rạc từ tám bài để tự đoán phần còn thiếu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chia việc kiểm chứng thành ba nhóm:
+
+| Nhóm | Câu hỏi cần trả lời | Ca kiểm tra |
+| --- | --- | --- |
+| Hình học | Tọa độ âm, mép trên và nhiều vòng có đúng không? | Wrap -0.25, 12, 36.25 trong hộp dài 12; so minimum image với chín ảnh |
+| Tương tác | Hệ có phụ thuộc cách đặt ô gốc không? | Dịch toàn hệ rồi wrap; lực và U phải giữ nguyên; hai lực cặp phải đối nhau |
+| Chuyển động | Qua biên có tạo thêm xung lượng hoặc làm mất hành trình không? | Một hạt tự do nhiều vòng; cặp tương tác thật sự qua mép; kiểm tra E, P và unwrapped |
+
+Theo dõi tổng năng lượng E=K+U và động lượng P. Ta chuẩn hóa độ lệch năng lượng bằng `max(1, abs(E0))` để không chia cho một E0 gần zero:
+
+$$
+e_E=\max_n\frac{|E_n-E_0|}{\max(1,|E_0|)},\qquad
+e_P=\max_n\|\mathbf P_n-\mathbf P_0\|.
+$$
+
+Đây là độ lệch chuẩn hóa trong reduced units, không luôn là sai số tương đối theo nghĩa chia cho |E0|. Tiêu chí của ca chuẩn là eE nhỏ hơn 0.01 và eP nhỏ hơn 10⁻⁹. Ngưỡng này dành cho cấu hình đã chọn, không phải lời hứa mọi mật độ hoặc dt đều ổn định.
+
+<InteractiveLab demo="periodic-molecular-box" mode="pbc-final" />
+
+Nút kiểm chứng chạy một hệ riêng có 36 hạt, dt=0.001 và đúng 400 bước; không làm thay đổi hệ bạn đang quan sát. Các ca hình học và cặp qua mép nằm trong test tự động riêng. Chọn 1.000 hạt để quan sát giới hạn công việc, không dùng preset này cho một vòng kiểm chứng kéo dài không xác định.
+
+## Viết code từng bước
+
+### Bước 1 — Viết các ca có thể tính bằng tay
+
+Trong `tests/tests.cpp`, hàm `check` ghi lỗi và tăng bộ đếm. Không dùng `assert`, vì Release có thể tắt assert và làm một bộ test trông như đạt dù không chạy phép kiểm nào.
+
+```cpp title="tests/tests.cpp — các ca wrap cơ bản"
+check(near(pbc::wrapCoordinate(-0.25, 12.0), 11.75), "negative coordinate");
+check(near(pbc::wrapCoordinate(12.0, 12.0), 0.0), "upper endpoint maps to zero");
+check(near(pbc::wrapCoordinate(36.25, 12.0), 0.25), "multiple positive crossings");
+check(near(pbc::wrapCoordinate(-36.25, 12.0), 11.75), "multiple negative crossings");
+```
+
+Test minimum image không gọi lại chính minimum image để tính đáp án. Nó duyệt chín ảnh của một delta trong hộp chữ nhật 12×8, đo từng khoảng cách rồi lấy nhỏ nhất. Như vậy một lỗi dùng width cho cả hai trục không thể tự xác nhận mình đúng.
+
+### Bước 2 — Kiểm tra lực độc lập với hình vẽ
+
+```cpp title="tests/tests.cpp — lực đối nhau và đạo hàm số theo vị trí"
+check(near(pbc::length(pbc::add(reference.forces[0], reference.forces[1])), 0.0), "equal and opposite forces");
+const double h = 1.0e-5;
+pbc::System plus = system;
+pbc::System minus = system;
+plus.particles[0].position.x += h;
+minus.particles[0].position.x -= h;
+const double numericalForce = -(pbc::evaluate(plus).potential - pbc::evaluate(minus).potential) / (2.0 * h);
+check(near(numericalForce, reference.forces[0].x, 1.0e-6), "force is minus position gradient");
+```
+
+`reference` được tính từ cặp A=(0.6,6), B=(11.4,6). Dấu trừ trước đạo hàm số là quan trọng: lực theo position của A bằng −∂U/∂xA. So sánh này bắt được trường hợp độ lớn đúng nhưng hướng lực ngược.
+
+Các ca tiếp theo dịch cả hai hạt rồi wrap, kiểm tra cutoff bằng nửa hộp bị từ chối và hai hạt cách nhau đúng một cạnh hộp bị nhận ra là trùng nhau. Với một hạt tự do, test dùng velocity rất lớn để vượt nhiều ô trong một bước nhưng không có lực; mục đích là kiểm tra hình học, không khuyến khích timestep lớn cho hệ tương tác.
+
+### Bước 3 — Chạy một phép đo hữu hạn trong bản SDL
+
+```cpp title="include/dynamics.hpp — đo độ lệch trong vòng kiểm chứng"
+for (int step = 0; step < 400; ++step) {
+    if (!verletStep(system, 0.001)) {
+        report.passed = false;
+        return report;
+    }
+    const double energy = kineticEnergy(system) + evaluate(system).potential;
+    report.maximumEnergyError = std::max(report.maximumEnergyError, std::abs(energy - initialEnergy) / std::max(1.0, std::abs(initialEnergy)));
+    report.momentumError = std::max(report.momentumError, length(subtract(momentum(system), initialMomentum)));
+}
+report.passed = report.maximumEnergyError < 0.01 && report.momentumError < 1.0e-9;
+```
+
+`validateRun` tạo 36 hạt với seed cố định trước vòng lặp và lưu E0, P0. Phím V tạm dừng hệ đang xem rồi chạy hàm này trên hệ riêng. Bộ CTest còn dùng một cặp tương tác đặt gần mép trên và vận tốc hướng lên; test yêu cầu unwrapped y âm trong khi wrapped y quay về gần mép dưới. Nhờ đó “bảo toàn khi qua biên” không chỉ được thử với các hạt chưa từng chạm biên.
+
+## Ghép các phần lại
+
+### Mã nguồn hoàn chỉnh
+
+[Tải ZIP Project 43](/downloads/project-43-periodic-molecular-box.zip), giải nén rồi mở terminal trong thư mục chứa `CMakeLists.txt`. ZIP có README, starter, tám checkpoint, final và tests. Mã nguồn đầy đủ của bản final được liệt kê ở cuối bài; mỗi file có thể xem và sao chép riêng.
+
+| File | Trách nhiệm |
+| --- | --- |
+| `final/include/periodic.hpp` | Vec2, Particle, wrap, minimum image và vị trí ảnh |
+| `final/include/dynamics.hpp` | Tạo hệ, force-shifted LJ, all-pairs, Verlet, năng lượng và kiểm chứng |
+| `final/include/view.hpp` | Đổi tọa độ, vẽ hộp, marker, ảnh và trace |
+| `final/src/main.cpp` | SDL lifecycle, input, accumulator hữu hạn và điều khiển preset |
+| `tests/tests.cpp` | Test không mở window, dùng cùng code final |
+| `CMakeLists.txt` | C++20, SDL 3.4.8, target final mặc định và checkpoint tùy chọn |
+
+```bash title="Terminal Windows — build final và chạy test Debug"
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+.\build\Debug\project_43_final.exe
+```
+
+```bash title="Terminal Windows — kiểm tra Release và bật checkpoint"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_43_checkpoint_8 --parallel 2
+```
+
+Linux/macOS dùng generator mặc định, đặt `-DCMAKE_BUILD_TYPE=Release` lúc configure rồi chạy `./build/project_43_final`. SDL cần các thư viện hệ thống của nền tảng; xem [Getting Started](/getting-started) nếu configure báo thiếu dependency. Lần build đầu cần mạng để tải SDL đã khóa phiên bản; các lần sau tái sử dụng bản tải trong build.
+
+Trong ứng dụng: Space chạy/dừng, N một bước, R reset, 1 cặp hạt, 2/3/4 chọn 64/144/1.000 hạt, B một hạt tự do, D đổi dt, G bật ảnh, V kiểm chứng và Esc thoát. Kéo marker A khi muốn đặt một ca hình học cụ thể. Kết quả phím V được in trong terminal, các số t, E, |P| và số cặp nằm trên tiêu đề cửa sổ.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `minimumImage(rawDelta, system.box)` thành `rawDelta` trong evaluate. Cặp ở hai mép mất tương tác; test lực qua biên và bất biến khi dịch hệ sẽ phát hiện. Khôi phục phép minimum image rồi chạy lại CTest.
+2. Tạm cập nhật unwrapped trên system thật trước khi hoàn thành candidate. Ca hai hạt mới chồng lên nhau sau drift phải từ chối bước, nhưng test rollback unwrapped sẽ hỏng. Đưa mọi cập nhật về candidate và chỉ commit ở cuối bước.
+
+## Tự kiểm tra kết quả
+
+- Debug và Release đều chạy các phép kiểm, không chỉ build thành công.
+- Wrap trả tọa độ trong khoảng nửa kín và xử lý cả vượt biên nhiều vòng.
+- Minimum image khớp oracle chín ảnh trên hộp chữ nhật; tie tại nửa hộp được chọn nhất quán.
+- Lực bằng âm đạo hàm theo vị trí, hai lực cặp đối nhau và không đổi khi dịch toàn hệ rồi wrap.
+- 1.000 hạt có 499.500 cặp trong một lần evaluate; ảnh hiển thị không tăng N.
+- Cặp tương tác thực sự qua mép vẫn đạt ngưỡng E/P; một bước lỗi giữ nguyên toàn bộ state cũ.
+- Quỹ đạo unwrapped không mất số vòng, trace không vượt 240 mẫu và loop có giới hạn bước/frame.
+
+## Bài tập mở rộng
+
+Thêm test hệ có khối lượng khác nhau, rồi đo lại P=Σmv mà không trừ vận tốc trung bình mỗi frame. Tiếp theo thử hộp chữ nhật và chỉnh viewport để giữ đúng tỉ lệ hình học. Project 44 trong [roadmap](/roadmap) sẽ giảm số cặp cần xét bằng neighbor list với skin; hãy giữ solver all-pairs này làm kết quả đối chiếu trước khi tối ưu.

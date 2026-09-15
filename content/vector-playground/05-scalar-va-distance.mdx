@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nhân vector với scalar và đo khoảng cách
+
+## Vấn đề cần giải quyết
+
+Phép cộng kết hợp hai vector để tạo ra một vector mới. **Phép nhân với một số** (`scalar multiplication`) chỉ tác động lên một vector: scalar quyết định vector đó được co ngắn, kéo dài hay đảo hướng. Trong bài này, phím ↑/↓ sẽ thay đổi scalar và chương trình sẽ vẽ kết quả `scalar × A` bằng màu tím.
+
+Bài học cũng làm rõ hai phép đo dễ bị nhầm lẫn. `length(A)` đo độ dài của vector A, tức đoạn từ gốc tới điểm cuối A. `distance(A,B)` đo khoảng cách giữa hai điểm cuối A và B. Đây là hai đoạn khác nhau nên kết quả thường không bằng nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với scalar $s$ và vector $A=(x,y)$:
+
+$$
+sA=(sx,sy)
+$$
+
+- `s > 1`: cùng hướng, dài hơn;
+- `0 < s < 1`: cùng hướng, ngắn hơn;
+- `s = 0`: trở thành zero vector;
+- `s < 0`: đảo hướng, độ dài nhân với $|s|$.
+
+Magnitude tuân theo:
+
+$$
+|sA|=|s|\,|A|
+$$
+
+Khoảng cách giữa hai điểm cuối A và B lại là:
+
+$$
+distance(A,B)=|B-A|
+$$
+
+Hàm `length` trả lời câu hỏi “vector này dài bao nhiêu?”, còn `distance` trả lời câu hỏi “hai điểm này cách nhau bao xa?”. Công thức của chúng có liên quan, nhưng tên hàm thể hiện hai ý nghĩa hình học khác nhau.
+
+<InteractiveLab demo="vector" mode="vector-scalar-distance" />
+
+Trước khi kéo, hãy thử dự đoán `|A|`, `|B|` và `distance(A,B)`. Sau đó chọn trường hợp “Đối hướng”. Khi hai vector hướng về hai phía khác nhau, bạn sẽ thấy rõ khoảng cách giữa hai điểm cuối không thể được tính bằng cách lấy hai độ dài trừ nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Thêm scalar vào trạng thái của mô phỏng
+
+```cpp title="src/main.cpp — hệ số dùng để nhân vector A"
+double scalar = 0.5;
+```
+
+Scalar là một phần trạng thái của mô phỏng nên được khai báo bên ngoài event loop, giống như A và B. Giá trị ban đầu 0.5 tạo ra một vector cùng hướng với A nhưng chỉ dài bằng một nửa, rất dễ kiểm tra bằng mắt.
+
+### Bước 2 — Điều khiển scalar bằng bàn phím
+
+```cpp title="src/main.cpp — phím lên xuống thay scalar"
+if (event.key.key == SDLK_UP) {
+    scalar = std::min(2.0, scalar + 0.1);
+}
+if (event.key.key == SDLK_DOWN) {
+    scalar = std::max(-2.0, scalar - 0.1);
+}
+```
+
+Khoảng `[-2,2]` không phải giới hạn toán học của scalar. Ta chỉ dùng giới hạn này để mũi tên tím không đi quá xa khỏi vùng hiển thị. Vì code vẫn chấp nhận key repeat, người dùng có thể giữ phím để thay đổi giá trị liên tục.
+
+### Bước 3 — Tính vector đã nhân scalar và khoảng cách A–B
+
+```cpp title="src/main.cpp — hai kết quả cần cho khung hình hiện tại"
+const lab::Vec2 scaledA = vectorA * scalar;
+const lab::Vec2 scaledScreen = worldToScreen(scaledA, width, height);
+const double distanceAB = lab::distance(vectorA, vectorB);
+```
+
+Không cần lưu `scaledA` hoặc `distanceAB` như trạng thái lâu dài. Trong mỗi frame, chương trình tính lại hai giá trị này từ A, B và scalar hiện tại. `scaledA` phải được chuyển qua `worldToScreen` vì nó sẽ trở thành một điểm cuối trên màn hình; `distanceAB` chỉ là một số đo theo world unit nên không cần đổi hệ tọa độ.
+
+### Bước 4 — Vẽ đoạn biểu diễn distance(A,B)
+
+```cpp title="src/main.cpp — đoạn AB và vector scalar"
+drawScreenLine(pixels, width, height, endpointA, endpointB, rgba(126, 139, 166));
+drawArrow(pixels, width, height, origin, scaledScreen, rgba(198, 120, 255));
+```
+
+Đoạn màu xám nối hai điểm cuối chính là đoạn mà `distance(A,B)` đang đo. Mũi tên tím vẫn bắt đầu tại gốc tọa độ vì `scaledA` là một vector, không phải một đoạn nối giữa hai điểm.
+
+### Bước 5 — Hiển thị ba số đo để đối chiếu
+
+```cpp title="src/main.cpp — số đo của A, B và scalar"
+std::snprintf(
+    title,
+    sizeof(title),
+    "A(%.2f, %.2f) | B(%.2f, %.2f) | |A| %.3f | |B| %.3f | distance(A,B) %.3f | scalar %.1f",
+    vectorA.x,
+    vectorA.y,
+    vectorB.x,
+    vectorB.y,
+    lab::length(vectorA),
+    lab::length(vectorB),
+    distanceAB,
+    scalar
+);
+```
+
+Thanh tiêu đề đặt ba số đo cạnh nhau để bạn dễ đối chiếu: `|A|` đo đoạn từ gốc tới A, `|B|` đo đoạn từ gốc tới B, còn `distance(A,B)` đo đoạn màu xám nối hai điểm cuối.
+
+## Ghép các phần lại
+
+Chạy checkpoint 5. Mũi tên tím biểu diễn `scalar × A`, còn đoạn xám nối hai điểm cuối A và B. Nhấn ↑ cho tới khi scalar bằng 1: mũi tên tím phải trùng với A. Khi scalar bằng 0, nó thu về gốc. Khi scalar âm, nó quay sang hướng đối diện với A.
+
+Sau khi đổi scalar, hãy kéo điểm cuối A. Mũi tên tím phải lập tức bám theo A mới vì `scaledA` được tính lại trong mỗi frame thay vì được lưu thành một trạng thái riêng.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ nhân thành phần x với scalar. Hướng của vector sẽ thay đổi, trong khi phép nhân đúng phải giữ nguyên hướng nếu scalar dương.
+2. Dùng `length(A)-length(B)` thay cho `distance(A,B)`. Chọn A/B nằm ở hai phía đối diện của gốc để thấy kết quả khác hẳn khoảng cách thật.
+3. Tính `scaledA` một lần bên ngoài render loop rồi không cập nhật khi kéo A. Mũi tên tím sẽ giữ kết quả cũ và không còn phản ánh giá trị hiện tại của A.
+
+Hoàn tác thay đổi rồi kiểm tra các giá trị scalar `1`, `0`, `-1`.
+
+## Tự kiểm tra kết quả
+
+- Khi scalar bằng 1, vector tím trùng A.
+- Khi scalar bằng 0, điểm cuối của mũi tên tím trở về gốc.
+- Khi scalar bằng −1, vector tím giữ nguyên độ lớn nhưng đảo hướng A.
+- Khi scalar bằng 2, độ lớn của vector tím bằng hai lần độ lớn của A.
+- Khi kéo A, kết quả `scalar × A` được cập nhật ngay.
+- Độ dài của đoạn xám A–B bằng `distance(A,B)` trên thanh tiêu đề.
+- `distance(A,B)` bằng `length(B-A)`, không phải hiệu giữa hai magnitude.
+
+## Bài tập mở rộng
+
+Thêm ba phím đặt nhanh scalar về 0, 1 và −1. Sau đó hiển thị thêm tỉ số `distance(A,B) / |A|`; nhớ xử lý riêng trường hợp A là zero vector để tránh chia cho 0.
+
+Bài cuối sẽ vẽ `normalize(A)`, thêm `lerp` từ A đến B và dùng CTest để kiểm tra toàn bộ tính chất đã học.

@@ -1,0 +1,148 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Lennard–Jones Pair Lab
+
+## Vấn đề cần giải quyết
+
+Mỗi công thức đã có phép kiểm tra riêng, nhưng sản phẩm cuối còn phải xử lý đúng lúc người dùng thay đổi điều kiện ban đầu. Nếu kéo nguyên tử trong khi mô phỏng đang chạy mà vẫn giữ vận tốc cũ, ta sẽ tạo ra một thí nghiệm rất khó giải thích. Nếu đổi `sigma` nhưng không đo lại năng lượng ban đầu, độ lệch năng lượng sẽ nhảy dù bộ tích phân không hề sai. Phép kiểm chứng cũng phải có số bước tối đa để không làm vòng lặp sự kiện bị treo.
+
+Bản hoàn chỉnh sẽ đưa mọi thao tác thay đổi trạng thái qua cùng một luồng khởi tạo lại, tự tạm dừng khi kéo chuột, giữ tâm khối lượng ở gốc tọa độ và chạy phép kiểm chứng với số bước hữu hạn. Mã trên web, thư mục `final/` và gói ZIP đều được sinh từ checkpoint 7 nên không bị lệch thành ba phiên bản khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Luồng của một thí nghiệm mới:
+
+```text
+thao tác mới
+  → tạm dừng
+  → tạo PairState đối xứng
+  → xóa velocity và elapsed
+  → đo lại năng lượng ban đầu
+  → xóa history và accumulator cũ
+  → vẽ trạng thái mới
+```
+
+Validation không chỉ trả về một giá trị đúng hoặc sai chung chung. Báo cáo giữ riêng kết quả cho các mốc thế năng, hướng lực, định luật III Newton, trạng thái hữu hạn, động lượng, tâm khối lượng và độ lệch năng lượng. Khi có lỗi, giao diện và CTest phải chỉ ra phép kiểm nào thất bại.
+
+<InteractiveLab demo="lennard-jones-pair" mode="lj-final" />
+
+Thử ba cấu hình theo thứ tự đẩy → đáy thế → hút. Nhấn “Kiểm chứng mô hình chuẩn” rồi đọc hai kết quả riêng: bộ kiểm tra chuẩn và độ lệch năng lượng lớn nhất trong 1.000 bước của điều kiện đầu đang chọn. Kéo nguyên tử đỏ hoặc đổi `dt` rồi kiểm tra lại. Bộ chuẩn PASS không có nghĩa mọi cấu hình bạn chọn đều có sai số nhỏ.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt lại mọi dữ liệu phụ thuộc điều kiện ban đầu
+
+```cpp title="src/main.cpp — tạo mới và chạy lại cùng một thí nghiệm"
+const auto resetExperiment = [&](double separation) {
+    state = lj::makeSymmetricPair(separation, state.atomA.mass);
+    experimentStart = state;
+    prepareExperiment();
+};
+
+const auto restartExperiment = [&]() {
+    state = experimentStart;
+    prepareExperiment();
+};
+```
+
+`resetExperiment` tạo một điều kiện ban đầu mới, còn `restartExperiment` chạy lại đúng điều kiện đã lưu. `prepareExperiment` chịu trách nhiệm xóa lịch sử, accumulator, lượng thời gian bị bỏ, kết quả kiểm chứng cũ và đo lại năng lượng ban đầu. Vì vậy, khi đổi `dt`, ta có thể so sánh công bằng mà không trộn dữ liệu của hai lần chạy.
+
+### Bước 2 — Khi kéo chuột, giữ tâm khối lượng và xóa vận tốc cũ
+
+```cpp title="src/main.cpp — kéo cặp đối xứng"
+state.atomA.position = lj::scale(direction, -0.5 * separation);
+state.atomB.position = lj::scale(direction, 0.5 * separation);
+state.atomA.velocity = {};
+state.atomB.velocity = {};
+state.elapsed = 0.0;
+accumulator = 0.0;
+```
+
+Khi nhấn xuống nguyên tử B, chương trình gọi `SDL_CaptureMouse(true)`. Nhờ đó, dù con trỏ đi ra ngoài cửa sổ, thao tác kéo vẫn kết thúc đúng lúc người dùng thả nút. Khoảng cách bị giới hạn trong `[0.82 sigma, 2.8 sigma]`; đây là giới hạn nhập liệu của phòng thí nghiệm, không phải phép ép giá trị bên trong công thức lực. Ngay tại gốc tọa độ, vector con trỏ không có hướng: giữ hướng hợp lệ gần nhất, không chuẩn hóa vector không rồi ghi một trạng thái lỗi vào mô phỏng.
+
+### Bước 3 — Validation gọi tên từng điều kiện
+
+```cpp title="include/lennard_jones.hpp — ValidationReport"
+struct ValidationReport {
+    bool landmarks{};
+    bool forceDirections{};
+    bool newtonThirdLaw{};
+    bool finiteRun{};
+    bool momentumConserved{};
+    bool centerOfMassStable{};
+    bool energyStable{};
+
+    bool passed() const {
+        return landmarks && forceDirections && newtonThirdLaw && finiteRun && momentumConserved &&
+            centerOfMassStable && energyStable;
+    }
+};
+```
+
+`validateModel` dùng khoảng cách đầu `1.45 sigma` và đúng 20.000 bước. Bước thời gian được đổi theo thang thời gian đặc trưng `sigma*sqrt(mass/epsilon)`. Đây là phép kiểm mô hình trên cấu hình chuẩn theo các tham số đã chọn, **không phải** phép đánh giá `dt` và khoảng cách hiện tại. Chẳng hạn, ở vùng đẩy mạnh, chương trình vẫn có thể chạy nhưng sai số năng lượng đã lớn. Vì thế phím V còn gọi `assessExperiment` trên một bản sao của điều kiện đầu, dùng đúng `dt` hiện tại và theo dõi sai số lớn nhất qua 1.000 bước. Hai phép kiểm đều hữu hạn và không thay đổi cặp đang hiển thị.
+
+### Bước 4 — Dọn tài nguyên theo đúng thứ tự phụ thuộc
+
+```cpp title="src/main.cpp — cleanup SDL3"
+SDL_DestroyTexture(texture);
+SDL_DestroyRenderer(renderer);
+SDL_DestroyWindow(window);
+SDL_Quit();
+if (failed) {
+    return EXIT_FAILURE;
+}
+return EXIT_SUCCESS;
+```
+
+Texture phụ thuộc renderer, còn renderer phụ thuộc window. Nếu dựng hình hoặc đổi kích thước thất bại, chương trình đặt `failed=true` để không trả về mã thành công giả.
+
+## Ghép các phần lại
+
+Phần **Toàn bộ mã nguồn của dự án** bên dưới lấy trực tiếp từ bản hoàn chỉnh. Mỗi file có một trách nhiệm rõ ràng:
+
+- `framebuffer.hpp`: các phép vẽ pixel, đường thẳng, hình tròn, hình chữ nhật và mũi tên; không chứa vật lý;
+- `lennard_jones.hpp`: trạng thái, thế năng, lực theo cặp, các đại lượng bất biến, Velocity Verlet, số đo và phép kiểm chứng;
+- `lennard_jones_ui.hpp`: đồ thị `dU/dr` và cách trình bày báo cáo kiểm chứng;
+- `main.cpp`: vòng đời SDL, nhập liệu, accumulator, các đồ thị và luồng đặt lại thí nghiệm;
+- `tests.cpp`: CTest thuần CPU cho các mốc thế năng, đạo hàm số, Newton III, giới hạn bước thời gian và phép chạy dài có giới hạn.
+
+```bash title="Terminal — build Debug final"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_41_final project_41_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — kiểm tra Release"
+cmake --build build --config Release --target project_41_final project_41_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Chạy `project_41_final.exe` thủ công vì chương trình có cửa sổ và vòng lặp sự kiện. CTest chỉ dùng `final/include/lennard_jones.hpp`, vì vậy không phụ thuộc vào SDL runtime.
+
+## Thử làm sai để hiểu đúng
+
+1. Khi kéo nguyên tử, giữ nguyên vận tốc cũ. Thả nó ở vùng đẩy sẽ tạo một điều kiện không còn “bắt đầu đứng yên”; hãy hoàn tác việc giữ vận tốc.
+2. Đổi `epsilon` nhưng không đo lại năng lượng ban đầu. Độ lệch nhảy ngay khi mô hình đổi; khôi phục luồng đặt lại thống nhất.
+3. Chọn `r=0.82 sigma`, `epsilon=2`, `sigma=0.8`, khối lượng `0.5`, `dt=1/250` trên Canvas. Bộ chuẩn có thể PASS trong khi báo cáo 1.000 bước cảnh báo sai số lớn. Giảm `dt` và kiểm tra lại; không chờ vô hạn tới khi năng lượng “có vẻ ổn định”.
+4. Hủy renderer trước texture hoặc trả `EXIT_SUCCESS` sau lỗi `SDL_UpdateTexture`. Khôi phục đúng thứ tự dọn tài nguyên và cờ `failed`.
+
+## Tự kiểm tra kết quả
+
+- [ ] Cấu hình 1 đẩy, cấu hình 2 ở đáy thế và cấu hình 3 hút đúng hướng.
+- [ ] Khi kéo chuột, mô phỏng tự dừng, giữ tâm khối lượng và xóa `velocity`, `elapsed`, accumulator cùng lịch sử cũ.
+- [ ] Space, N, R, 1–3, `[ ]`, E, S, M và V hoạt động như README.
+- [ ] Đồ thị thế năng đánh dấu riêng `sigma` và `r0`; đồ thị `dU/dr` đổi dấu tại `r0`; đồ thị năng lượng có U/K/E.
+- [ ] Thanh trạng thái hiển thị độ trôi tâm khối lượng so với lúc bắt đầu, không chỉ tọa độ hiện tại.
+- [ ] Validation báo PASS cho landmarks, force directions, Newton III, finite run, momentum, COM và energy.
+- [ ] Debug và Release CTest kết thúc trong timeout 20 giây.
+- [ ] Starter không chứa công thức Lennard–Jones; mỗi checkpoint chỉ thêm kiến thức của bài tương ứng.
+- [ ] Mã nguồn cuối bài, thư mục `final/` và gói ZIP khớp nhau.
+
+## Bài tập mở rộng
+
+1. Thêm vận tốc tâm khối lượng ban đầu khác 0 và kiểm tra tâm chuyển động thẳng đều trong khi khoảng cách giữa hai nguyên tử vẫn dao động.
+2. Vẽ đồ thị pha của `r` theo vận tốc tương đối hướng tâm để thấy quỹ đạo kín của một cặp liên kết.
+3. Thêm khoảng cắt trong một thí nghiệm riêng; so sánh chỗ gián đoạn của thế năng và lực trước khi chọn shifted-potential hoặc shifted-force.
+4. Chuyển từ một cặp sang vòng lặp `i<j`, nhưng chỉ thử với số nguyên tử nhỏ và giữ toàn bộ đại lượng bất biến đã có.
+
+Project 41 đã biến “hai chấm hút đẩy nhau” thành một mô hình có công thức, bộ tích phân và bằng chứng kiểm tra. Project 42 sẽ mở rộng chính phần lõi này thành hộp khí 1.000 hạt trên CPU: ta sẽ thêm vòng lặp qua các cặp, bộ cộng dồn lực và thống kê nhiệt động, nhưng không phải viết lại công thức lực từ đầu.

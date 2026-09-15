@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Compile shader và đọc info log
+
+## Vấn đề cần giải quyết
+
+Checkpoint 1 biết file có tồn tại, nhưng thông báo `compile failed` vẫn chưa đủ để sửa GLSL. Một shader có thể sai vì thiếu dấu `;`, dùng sai type, gọi hàm không tồn tại hoặc viết cú pháp của GLSL version khác. Nếu không lấy driver info log, người học chỉ còn cách đoán.
+
+Vertex và fragment shader cũng phải được gọi đúng tên. Lỗi ở `lab.frag` không nên hiện thành “OpenGL error” chung chung rồi buộc ta đọc lại cả context, mesh và matrix.
+
+## Hiểu ý tưởng trước khi viết code
+
+Compile một stage là một quy trình hoàn chỉnh:
+
+```text
+glCreateShader → glShaderSource → glCompileShader
+              → GL_COMPILE_STATUS
+              → glGetShaderInfoLog nếu fail
+              → delete shader lỗi
+```
+
+Status là kết luận; info log là lời giải thích. Có driver trả warning log dù compile thành công, cũng có driver trả log rất ngắn khi thất bại. Vì vậy ta không dùng “log rỗng” để suy ra pass/fail.
+
+<InteractiveLab demo="shader-hot-reload" mode="compile-diagnostics" />
+
+## Viết code từng bước
+
+### Bước 1 — Hỏi driver cần bao nhiêu ký tự
+
+```cpp title="include/shader_renderer.hpp — shaderInfoLog"
+inline std::string shaderInfoLog(GlApi& api, GLuint shader) {
+    GLint length = 0;
+    api.GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+    if (length <= 1) {
+        return "Driver returned no shader info log.";
+    }
+    std::vector<GLchar> characters(static_cast<std::size_t>(length), '\0');
+    api.GetShaderInfoLog(shader, length, nullptr, characters.data());
+    return std::string(characters.data());
+}
+```
+
+Buffer có đúng kích thước driver yêu cầu và được khởi tạo bằng null character. Ta không đoán log chỉ dài 512 byte.
+
+### Bước 2 — Kiểm compile status trước khi trả handle
+
+```cpp title="include/shader_renderer.hpp — compileShader"
+api.CompileShader(shader);
+GLint compiled = GL_FALSE;
+api.GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+if (compiled == GL_TRUE) {
+    return shader;
+}
+diagnostics = std::string(label) + " compile failed:\n" + shaderInfoLog(api, shader);
+api.DeleteShader(shader);
+return 0;
+```
+
+Shader lỗi bị xóa ngay trong failure path. Caller nhận `0` nên không thể vô tình attach object không hợp lệ vào program.
+
+### Bước 3 — Gọi helper với tên file thật
+
+```cpp title="include/shader_renderer.hpp — hai stage có label riêng"
+const GLuint vertexShader = compileShader(api, GL_VERTEX_SHADER, sources.vertex, "lab.vert", diagnostics);
+if (vertexShader == 0U) {
+    return false;
+}
+const GLuint fragmentShader = compileShader(api, GL_FRAGMENT_SHADER, sources.fragment, "lab.frag", diagnostics);
+```
+
+Nếu fragment compile thất bại, caller còn phải xóa vertex shader vừa compile thành công. Đây là resource lifetime, không phải việc của log helper.
+
+## Ghép các phần lại
+
+Build checkpoint 2, sau đó chèn `BROKEN_TOKEN` ngay trước dòng ghi `fragColor`:
+
+```bash title="Terminal — build checkpoint diagnostics"
+cmake --build build --config Debug --target project_35_checkpoint_2
+```
+
+Chương trình dừng ở startup và terminal phải có `lab.frag compile failed` cùng line number do driver cung cấp. Xóa token rồi chạy lại; cube xuất hiện bình thường.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `glGetShaderiv(..., GL_COMPILE_STATUS, ...)` và chỉ kiểm log length. So sánh hành vi giữa shader đúng có warning với shader sai.
+2. Dùng label `shader` cho cả hai stage. Log vẫn có dòng, nhưng người đọc không biết mở file nào.
+3. Quên `glDeleteShader(shader)` ở failure path. Lặp lỗi nhiều lần trong hot reload tương lai sẽ rò object.
+
+Hoàn tác từng lỗi, nhất là bước xóa object.
+
+## Tự kiểm tra kết quả
+
+- [ ] Vertex và fragment shader được compile riêng.
+- [ ] `GL_COMPILE_STATUS` là nguồn quyết định thành công.
+- [ ] Buffer info log lấy kích thước từ driver.
+- [ ] Diagnostics chứa `lab.vert` hoặc `lab.frag`.
+- [ ] Mọi shader object lỗi đều bị xóa.
+
+Hãy chỉ ra vì sao compile thành công ở cả hai stage vẫn chưa chứng minh program có thể link.
+
+## Bài tập mở rộng
+
+1. In warning log cả khi compile thành công nhưng giữ nó tách khỏi error.
+2. Thêm số dòng source trước mỗi dòng log trong một công cụ debug riêng.
+3. Viết một fragment shader sai type (`vec3 color = 1.0`) và đọc cách driver mô tả lỗi.
+
+Bài tiếp theo ghép hai shader đã compile vào một candidate program và kiểm interface giữa chúng.

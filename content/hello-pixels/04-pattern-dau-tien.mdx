@@ -1,0 +1,170 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Gradient, checkerboard và noise
+
+## Vấn đề cần giải quyết
+
+Sau bài 3, chúng ta đã tạo được màu và ghi pixel mà không vượt ra ngoài framebuffer. Dấu cộng ở giữa màn hình cho thấy mọi thứ đã nối đúng, nhưng mới chỉ chạm vào một vùng rất nhỏ của ảnh. Lỗi tính vị trí thường chỉ lộ ra ở cuối hàng; lỗi công thức màu lại dễ xuất hiện ở mép phải hoặc mép dưới.
+
+Bài này sẽ thêm ba mẫu hình vào `Framebuffer`. Mỗi mẫu vừa tạo ra kết quả dễ quan sát, vừa giúp phát hiện một nhóm lỗi khác nhau:
+
+- gradient kiểm tra cách đổi tọa độ sang dải màu 0…255;
+- checkerboard giúp phát hiện lỗi đảo `x/y`, chia sai ô hoặc chọn sai màu chẵn/lẻ;
+- noise có thể lặp lại đi qua toàn bộ vector và luôn cho cùng kết quả khi dùng cùng seed.
+
+Ta sẽ viết và chạy thử từng mẫu riêng, sau đó mới thêm phím để chuyển qua lại. Làm từng bước như vậy giúp khoanh vùng lỗi: nếu noise sai, gradient và checkerboard vẫn là hai kết quả đúng để đối chiếu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tọa độ pixel là số nguyên, còn gradient cần biết một pixel đã đi được bao nhiêu phần từ đầu đến cuối ảnh. Trên trục ngang, pixel đầu có `x = 0`, pixel cuối có `x = width - 1`, nên tỉ lệ được tính bằng:
+
+$$t_x = \frac{x}{width - 1}$$
+
+Nhân `t_x` với 255 sẽ cho giá trị kênh đỏ. Trục dọc làm tương tự với `y / (height - 1)` để tạo kênh xanh lá. Mẫu số phải là `width - 1`, không phải `width`; nếu dùng `width`, pixel cuối cùng sẽ không bao giờ đạt đúng 255.
+
+Checkerboard không cần một mảng riêng để lưu các ô. Phép chia nguyên `x / cell` cho biết pixel đang thuộc cột ô nào, còn `y / cell` cho biết hàng ô. Tổng hai giá trị là chẵn thì chọn màu A, là lẻ thì chọn màu B.
+
+Với noise, ta cần một dãy số trông ngẫu nhiên nhưng có thể tạo lại chính xác. Ta dùng một linear congruential generator (LCG) rất nhỏ:
+
+$$state_{n+1} = state_n \times 1664525 + 1013904223$$
+
+LCG này không dùng cho bảo mật, nhưng rất phù hợp với bài học: cùng một seed luôn tạo ra cùng một dãy màu. Nếu ảnh thay đổi dù seed vẫn giữ nguyên, ta biết thuật toán hoặc thứ tự duyệt pixel đã bị sửa.
+
+<InteractiveLab demo="pixel" mode="pixel-patterns" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo gradient theo hai trục
+
+Thêm method `gradient` vào `Framebuffer`, dưới `clear`:
+
+```cpp title="include/lab.hpp — Framebuffer::gradient"
+void gradient() {
+    const int denominatorX = std::max(1, width - 1);
+    const int denominatorY = std::max(1, height - 1);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const auto r = std::uint8_t(255.0 * x / denominatorX);
+            const auto g = std::uint8_t(255.0 * y / denominatorY);
+            putPixel(x, y, rgba(r, g, 180));
+        }
+    }
+}
+```
+
+Vòng ngoài đi lần lượt qua các hàng, vòng trong đi qua từng cột — đúng với cách dữ liệu row-major nằm trong bộ nhớ. Số `255.0` buộc phép tính dùng số thực trước khi kết quả được chuyển về 8 bit. Nếu viết `x / denominatorX * 255`, phép chia nguyên sẽ cho 0 ở gần như cả hàng, khiến gradient chỉ còn vài mức màu.
+
+`std::max(1, width - 1)` xử lý trường hợp ảnh chỉ rộng một pixel. Khi đó `x` luôn bằng 0 nên kênh đỏ cũng bằng 0, đồng thời phép chia vẫn có mẫu số hợp lệ.
+
+Hãy biên dịch mốc mã nguồn này và tạm gọi `framebuffer.gradient()` trong vòng lặp vẽ. Góc trên trái phải có R=0, G=0; mép phải đạt R=255; mép dưới đạt G=255.
+
+### Bước 2 — Chia ảnh thành các ô checkerboard
+
+Thêm method thứ hai:
+
+```cpp title="include/lab.hpp — Framebuffer::checker"
+void checker(int cell = 32) {
+    cell = std::max(1, cell);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const int cellX = x / cell;
+            const int cellY = y / cell;
+            const bool odd = (cellX + cellY) % 2 != 0;
+            std::uint32_t color = rgba(83, 240, 174);
+            if (odd) {
+                color = rgba(31, 43, 68);
+            }
+            putPixel(x, y, color);
+        }
+    }
+}
+```
+
+Ta chặn `cell` tối thiểu bằng 1 ngay trước hai vòng lặp, thay vì kiểm tra lại ở từng pixel. Với `cell = 32`, các cột 0…31 nằm trong ô 0, các cột 32…63 nằm trong ô 1. Đi ngang hoặc dọc sang ô kế tiếp làm tổng chẵn/lẻ đổi và màu đảo; đi chéo một ô theo cả hai trục làm tổng đổi hai lần nên trở về màu ban đầu.
+
+Hãy thử lần lượt `checker(1)`, `checker(8)` và `checker(64)`. Code không thay đổi; chỉ kích thước mỗi ô khác đi.
+
+### Bước 3 — Tạo noise bằng cách duyệt thẳng qua vector
+
+Noise không phụ thuộc vào `(x, y)`. Vì vậy, đây là lúc ta tận dụng việc toàn bộ pixel nằm liền nhau trong vector:
+
+```cpp title="include/lab.hpp — Framebuffer::noise"
+void noise(std::uint32_t seed = 17) {
+    std::uint32_t state = seed;
+    for (auto& pixel : pixels) {
+        state = state * 1664525u + 1013904223u;
+        const auto value = std::uint8_t(state >> 24);
+        pixel = rgba(value, std::uint8_t(value / 2), std::uint8_t(255 - value));
+    }
+}
+```
+
+Ở đây ta có thể ghi trực tiếp vào `pixel` vì vòng range-for chỉ đi qua những phần tử chắc chắn tồn tại. Không có tọa độ nào cần kiểm tra biên. Ta lấy 8 bit cao của `state` vì với LCG đơn giản này, chúng cho kết quả nhìn tự nhiên hơn các bit thấp.
+
+Hai lần gọi `noise(17)` phải tạo ra hai framebuffer giống hệt nhau; đổi sang `noise(18)` thì ảnh phải khác. Ở bài sau, ta có thể dùng một bản dữ liệu mẫu hoặc checksum để kiểm tra đặc tính này tự động.
+
+### Bước 4 — Dùng phím số để chọn mẫu hình
+
+Trong `src/main.cpp`, đặt biến trạng thái cạnh `running`:
+
+```cpp title="src/main.cpp — trước render loop"
+int pattern = 0;
+bool running = true;
+```
+
+Trong nhánh `SDL_EVENT_KEY_DOWN`, cập nhật trạng thái:
+
+```cpp title="src/main.cpp — trong xử lý keyboard event"
+if (event.key.key >= SDLK_1 && event.key.key <= SDLK_3) {
+    pattern = int(event.key.key - SDLK_1);
+}
+```
+
+Sau khi xử lý hết event và trước `SDL_UpdateTexture`, chọn đúng hàm:
+
+```cpp title="src/main.cpp — phần update framebuffer của mỗi frame"
+if (pattern == 0) {
+    framebuffer.gradient();
+} else if (pattern == 1) {
+    framebuffer.checker();
+} else {
+    framebuffer.noise();
+}
+```
+
+Đoạn xử lý phím chỉ thay đổi biến `pattern`. Ở khung hình kế tiếp, phần vẽ đọc biến này rồi gọi hàm tương ứng. Nhờ vậy, việc nhận phím và việc tạo ảnh không bị trộn vào cùng một nhánh code.
+
+## Ghép các phần lại
+
+Ở mốc mã nguồn này, một khung hình được tạo theo thứ tự:
+
+`sự kiện bàn phím → pattern → gradient/checker/noise → ghi pixel → cập nhật texture → vẽ texture → hiển thị`
+
+Khi người dùng không nhấn phím mới, `pattern` giữ nguyên nên chương trình tiếp tục vẽ cùng một mẫu. Nhấn `2` không vẽ checkerboard ngay bên trong phần xử lý sự kiện; nó chỉ đổi `pattern` thành 1. Việc tạo ảnh diễn ra sau đó, ở phần vẽ của khung hình.
+
+Khi đọc mã nguồn cuối trang, hãy lần theo một trường hợp cụ thể. Ví dụ: tìm nơi phím `2` gán `pattern`, tìm nơi `pattern` được đọc, rồi đi vào `Framebuffer::checker`. Cách đó dễ hiểu hơn việc cố đọc cả ba hàm cùng lúc.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi mẫu số gradient từ `width - 1` thành `width`. Dùng Pixel Memory Lab hoặc debugger kiểm tra kênh đỏ ở mép phải; nó không còn đạt 255.
+2. Đổi công thức thành `x / denominatorX * 255`. Vì `x < denominatorX` ở mọi pixel trừ pixel cuối, phép chia nguyên trả 0 và cả dải chỉ còn hai mức màu. Sau đó thử `255 * x / denominatorX` để thấy thứ tự phép toán làm thay đổi kết quả như thế nào.
+3. Bỏ `std::max(1, cell)` rồi gọi `checker(0)`. Dự đoán loại lỗi trước khi chạy, sau đó khôi phục điều kiện bảo vệ.
+4. Di chuyển lệnh `state = ...` ra ngoài vòng range-for. Mọi pixel sẽ nhận cùng một màu vì biến `state` chỉ tiến một lần.
+
+## Tự kiểm tra kết quả
+
+- [ ] Gradient bắt đầu ở 0 và kết thúc ở 255 trên cả hai trục.
+- [ ] Framebuffer 1×1 không chia cho 0.
+- [ ] Checkerboard đổi màu sau đúng `cell` pixel theo cả ngang và dọc.
+- [ ] `checker(0)` vẫn an toàn vì cell được chặn thành 1.
+- [ ] Cùng một seed noise tạo đúng cùng một vector pixel.
+- [ ] Phím `1`, `2`, `3` chỉ đổi biến `pattern`; mẫu hình mới được vẽ ở khung hình kế tiếp.
+- [ ] Target `project_1_checkpoint_4` build và chạy đủ ba chế độ.
+
+## Bài tập mở rộng
+
+1. Thêm pattern thứ tư là các vòng đồng tâm. So sánh bình phương khoảng cách với bình phương bán kính để tránh `sqrt` nếu chỉ cần phân dải.
+2. Cho phím `[` và `]` thay đổi `cell` của checker trong khoảng 1…128. Trạng thái mới nên nằm cạnh `pattern`, không nằm trong `Framebuffer`.
+3. Tính một checksum đơn giản cho noise seed 17 và dùng nó trong test để phát hiện thuật toán vô tình thay đổi.
+
+Bài 5 sẽ giải thích đầy đủ cách vector pixel được chuyển qua streaming texture để xuất hiện trên cửa sổ, đồng thời xử lý việc framebuffer thay đổi theo kích thước cửa sổ.

@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Scaling study: O(N²) và Barnes–Hut
+
+## Vấn đề cần giải quyết
+
+Một target Barnes–Hut nhanh hơn một full direct pass là phép so sai. Để quan sát scaling, cả hai algorithm phải trả acceleration cho toàn bộ N bodies, dùng cùng seed, theta, softening và compiler configuration.
+
+Checkpoint 9 đo full-system acceleration pass tại nhiều N. Tree rebuild được báo riêng vì scene động phải trả chi phí đó mỗi physics step, nhưng nó không được giấu bên trong force traversal timer.
+
+## Hiểu ý tưởng trước khi viết code
+
+Direct work là đúng $N(N-1)$. Barnes–Hut trung bình thường gần $O(N\log N)$ cho distribution phù hợp, nhưng không có bảo đảm mọi scene đều như vậy: cluster cực lệch, theta rất nhỏ hoặc depth guards có thể làm traversal gần direct hơn.
+
+Vì thế bảng cần cả hai lớp số liệu:
+
+- timing: điều gì xảy ra trên build/máy hiện tại;
+- work count: algorithm đã dùng bao nhiêu exact pairs và aggregate sources.
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-scaling" />
+
+Nhấn “Chạy scaling study”. Bảng Canvas giới hạn ở 1.024 bodies để không khóa tab; bản C++ đo tới 2.048. So tỷ lệ tăng giữa các row, đừng chỉ so row nhỏ nhất.
+
+## Viết code từng bước
+
+### Bước 1 — Đo direct full pass
+
+```cpp title="include/analysis.hpp — direct scaling pass"
+const auto directStarted = std::chrono::steady_clock::now();
+std::size_t directInteractions = 0;
+const std::vector<Vec3> direct = directAccelerations(
+    bodies,
+    gravitationalConstant,
+    softening,
+    &directInteractions
+);
+const auto directFinished = std::chrono::steady_clock::now();
+```
+
+Interaction count phải bằng N×(N−1) bất kể timer dao động.
+
+### Bước 2 — Build trước timer traversal
+
+```cpp title="include/analysis.hpp — Barnes-Hut scaling pass"
+const BarnesHutTree tree = buildMassOctree(bodies);
+const auto barnesHutStarted = std::chrono::steady_clock::now();
+ForceMetrics barnesHutMetrics{};
+const std::vector<Vec3> approximate = barnesHutAccelerations(
+    tree,
+    bodies,
+    theta,
+    gravitationalConstant,
+    softening,
+    &barnesHutMetrics
+);
+const auto barnesHutFinished = std::chrono::steady_clock::now();
+```
+
+App vẫn báo `rebuildMicroseconds` cạnh node count. Tách timer không có nghĩa bỏ qua rebuild; nó giúp biết chi phí đến từ cấu trúc hay force traversal.
+
+### Bước 3 — Giữ output observable trong Release
+
+```cpp title="include/analysis.hpp — benchmark sink"
+volatile double checksum = 0.0;
+for (std::size_t index = 0; index < bodies.size(); ++index) {
+    checksum = checksum + direct[index].x + approximate[index].x;
+}
+(void)checksum;
+```
+
+Sink không dùng để kiểm correctness vì Barnes–Hut được phép khác direct. Accuracy sweep đã làm nhiệm vụ đó với error rõ ràng.
+
+### Bước 4 — Chạy cùng preset counts
+
+```cpp title="src/main.cpp — scaling counts"
+const std::array<std::size_t, 4> counts{256U, 512U, 1'024U, 2'048U};
+scalingRows = lab::makeScalingStudy(
+    counts,
+    seed,
+    theta,
+    gravitationalConstant,
+    softening
+);
+```
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 9 Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_31_checkpoint_9
+```
+
+Nhấn `B` vài lần. Microseconds dao động; direct pairs và Barnes–Hut work phải lặp lại chính xác với cùng seed/theta.
+
+## Thử làm sai để hiểu đúng
+
+1. Đo direct cho một target và Barnes–Hut cho toàn hệ. Hai timer trả lời hai câu hỏi khác nhau.
+2. Tính tree bên trong traversal timer nhưng gọi cột là “force”. Người đọc không biết đang tối ưu build hay walk.
+3. Xóa kết quả acceleration ngay sau call. Optimized build có thể loại hoặc thay đổi phần công việc không quan sát được.
+
+## Tự kiểm tra kết quả
+
+- Hai phía trả N acceleration vectors.
+- Direct interactions bằng N×(N−1) ở mọi row.
+- Mỗi row dùng cùng seed, theta, G và softening.
+- Barnes–Hut work bằng aggregate sources + exact pairs, không dùng visited nodes thay thế.
+- Rebuild time được báo riêng.
+- Accuracy threshold vẫn được kiểm ở theta đang benchmark.
+- Release và Debug đều cho work counts giống nhau.
+- Mỗi benchmark có timeout; không có vòng đo vô hạn.
+
+## Bài tập mở rộng
+
+Thêm row 4.096 bodies chỉ ở Release và chạy tối đa một repetition. Sau đó đổi theta từ 0,5 sang 0,8: báo speedup cùng mean/max error để tránh trình bày một con số nhanh nhưng không còn cùng chất lượng.
+
+Bài cuối ghép benchmark với simulation lifecycle và diagnostics.

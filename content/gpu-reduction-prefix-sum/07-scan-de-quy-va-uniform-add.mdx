@@ -1,0 +1,133 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Scan nhiều tầng rồi cộng offset trở lại
+
+## Điều khó nằm ở đâu?
+
+Ta đã có local prefix cùng 1.954 block sum. Đọc chúng về CPU, scan rồi upload lại chắc chắn cho kết quả đúng, nhưng sẽ làm gián đoạn chuỗi xử lý trên GPU. Thay vào đó, ta tiếp tục scan chính dãy block sum trên GPU, sau đó dùng uniform-add pass để cộng offset trở lại từng block lớn hơn.
+
+Giải pháp đẹp hơn là nhận ra block sums vẫn chỉ là một mảng float. Ta chạy **chính `scan_blocks.comp`** trên nó: 1.954 tạo 4 sums, 4 tạo 1. Sau đó đi ngược hierarchy bằng `uniform_add.comp`.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Global scan có hai chiều dataflow:
+
+```text
+đi lên:
+input ─scan→ scan L0 + sums L0
+sums L0 ─scan→ scan L1 + sums L1
+sums L1 ─scan→ scan L2 + sums L2
+
+đi xuống:
+scan L2 ─offset→ add vào scan L1
+scan L1 ─offset→ add vào scan L0 (global output)
+```
+
+`scan L1` sau khi hoàn chỉnh chứa offset cho từng block L0. `scan L2` chứa offset cho từng block L1. Vì vậy uniform-add phải đi từ level nhỏ về level lớn; đảo thứ tự sẽ dùng offsets chưa hoàn chỉnh.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="recursive-uniform-add" />
+
+So Canvas này với bài 6. Block 1 đã cộng 10, block 2 đã cộng 18; mọi prefix nối thành một dãy duy nhất.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Đi lên bằng cùng một block-scan kernel
+
+```cpp title="include/reduction_gpu_engine.hpp — forward scan hierarchy"
+GLuint source = inputBuffer_;
+for (std::size_t levelIndex = 0; levelIndex < scanLevels_.size(); ++levelIndex) {
+    ScanLevelBuffers& level = scanLevels_[levelIndex];
+    dispatchScanPass(gl, source, level.scanBuffer, level.sumsBuffer, level.inputCount);
+    GLenum barrierBit = GL_SHADER_STORAGE_BARRIER_BIT;
+    if (scanLevels_.size() == 1U) {
+        barrierBit = GL_BUFFER_UPDATE_BARRIER_BIT;
+    }
+    gl.MemoryBarrier(barrierBit);
+    passTrace_.push_back({
+        "scan blocks",
+        level.inputCount,
+        level.blockCount,
+        barrierBit,
+    });
+    source = level.sumsBuffer;
+}
+```
+
+Với nhiều tầng, buffer tổng vừa được ghi sẽ trở thành đầu vào cho compute pass tiếp theo, nên ta dùng shader-storage barrier. Nếu chỉ có một tầng, không còn compute pass nào sau đó; CPU sẽ đọc kết quả và code chuyển sang `BUFFER_UPDATE` ngay tại đây.
+
+### Bước 2 — Dùng block index để lấy offset cần cộng
+
+```glsl title="shaders/uniform_add.comp — global offset"
+uint index = gl_GlobalInvocationID.x;
+if (index >= uint(uElementCount)) {
+    return;
+}
+
+uint blockIndex = index / 512u;
+scanOutput[index] += blockOffsets[blockIndex];
+```
+
+Kernel này không dùng shared memory hay barrier trong workgroup. Khi offsets đã hoàn chỉnh, mỗi output có thể được xử lý độc lập; chỉ cần kiểm tra index trước khi truy cập buffer.
+
+### Bước 3 — Đi xuống theo thứ tự ngược
+
+```cpp title="include/reduction_gpu_engine.hpp — backward uniform add"
+for (std::size_t levelIndex = scanLevels_.size() - 1U; levelIndex > 0U; --levelIndex) {
+    ScanLevelBuffers& target = scanLevels_[levelIndex - 1U];
+    const ScanLevelBuffers& offsets = scanLevels_[levelIndex];
+    dispatchUniformAdd(
+        gl,
+        target.scanBuffer,
+        offsets.scanBuffer,
+        target.inputCount
+    );
+```
+
+Ở vòng đầu, `scan L2` hoàn thiện `scan L1`. Vòng sau mới dùng `scan L1` làm offsets cho output L0.
+
+### Bước 4 — Đồng bộ lần cuối trước khi CPU đọc kết quả
+
+```cpp title="include/reduction_gpu_engine.hpp — uniform-add barrier choice"
+GLenum barrierBit = GL_SHADER_STORAGE_BARRIER_BIT;
+if (levelIndex == 1U) {
+    barrierBit = GL_BUFFER_UPDATE_BARRIER_BIT;
+}
+gl.MemoryBarrier(barrierBit);
+```
+
+Uniform add ở level 1 còn được shader level 0 đọc, nên dùng `SHADER_STORAGE`. Uniform add cuối tạo output cho CPU readback, nên dùng `BUFFER_UPDATE`.
+
+## Chạy checkpoint và đọc kết quả
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_39_checkpoint_7
+build\Debug\project_39_checkpoint_7.exe
+```
+
+Pass trace preset lớn nhất phải có năm dispatch và năm record: ba `scan blocks`, hai `uniform add`. Không có `glGetBufferSubData` giữa chúng. Chỉ sau uniform add L0, engine đọc N output để visualization/validation.
+
+## Cố tình phá thuật toán
+
+1. Uniform-add L0 trước khi hoàn thiện scan L1. Block offsets ở cấp dưới còn local.
+2. Dùng `blockOffsets[index / 256]`. Block span là 512 giá trị, không phải local invocation count.
+3. Đọc 1.954 block sum về CPU để scan. Kết quả có thể đúng, nhưng scan không còn là một khối GPU có thể tái sử dụng trong Project 40.
+4. Cộng total của **chính block** thay vì exclusive block offset. Mọi block bị lệch thêm một đoạn.
+5. Chạy uniform add cho hierarchy chỉ có một level. Block 0 offset đã zero; pass đó không cần thiết.
+
+## Checklist hoàn thành
+
+- [ ] Forward pass dùng source lần lượt input, sums L0, sums L1.
+- [ ] `scan L1` có 1.954 offsets; `scan L2` có 4 offsets.
+- [ ] Uniform add chạy L1 trước L0.
+- [ ] `blockIndex = index / 512` và index được kiểm tra trước khi truy cập buffer.
+- [ ] Global scan dùng ba block-scan + hai uniform-add dispatch.
+- [ ] Intermediate sums/offsets không readback hoặc upload lại.
+- [ ] Output cuối khớp CPU exclusive scan trong tolerance.
+
+## Bài tập để hiểu sâu hơn
+
+1. Thêm sơ đồ buffer names thật vào pass trace để phân biệt `scanBuffer` và `sumsBuffer` từng level.
+2. Chứng minh block 0 không thay đổi sau uniform add vì `blockOffsets[0] = 0`.
+3. Dùng cùng scan primitive để tính stream compaction addresses cho một mask 0/1 nhỏ.
+
+Bài 8 sẽ rà lại toàn bộ cách đồng bộ. `barrier()` trong GLSL và `glMemoryBarrier()` ở C++ giải quyết hai phạm vi hoàn toàn khác nhau.

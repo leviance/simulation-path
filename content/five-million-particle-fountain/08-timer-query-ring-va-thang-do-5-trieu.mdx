@@ -1,0 +1,140 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo GPU bằng timer-query ring
+
+## Ta cần giải quyết điều gì?
+
+`GL_TIME_ELAPSED` cho biết GPU đã dành bao lâu cho một đoạn lệnh, nhưng đọc kết quả ngay trong cùng frame sẽ khiến CPU phải ngồi chờ GPU. Để tránh biến công cụ đo thành nguyên nhân gây chậm, ta dùng một query ring: frame hiện tại ghi vào một slot, còn CPU chỉ đọc những slot cũ đã báo sẵn sàng.
+
+Checkpoint 8 dùng bốn query slots cho compute và bốn slot khác cho draw. Frame mới chỉ dùng slot rảnh; kết quả chỉ được lấy khi `GL_QUERY_RESULT_AVAILABLE` báo sẵn sàng. Nếu GPU chậm tới mức mọi slot còn pending, ta bỏ qua timing của frame ấy thay vì block.
+
+## Theo chân một particle
+
+Một query ring có trạng thái:
+
+```text
+slot 0: pending frame 120
+slot 1: available frame 117
+slot 2: free
+slot 3: pending frame 119
+```
+
+`begin()` chỉ được phép dùng slot free. `end()` đánh dấu pending và tăng cursor. `poll()` quét các pending slot, hỏi availability rồi mới đọc nanoseconds.
+
+Hai ring trả lời hai câu hỏi:
+
+- compute ring bao quanh `glDispatchCompute`;
+- draw ring bao quanh `glDrawArrays`.
+
+Barrier, CPU input, `SDL_GL_SwapWindow` và title update không bị gọi chung là compute time hoặc draw time.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-timing" />
+
+Tăng độ trễ query lên 5–6 frame. Cả bốn slot có thể cùng đang chờ; lúc đó chương trình phải bỏ qua việc đo frame mới thay vì chặn event loop. Thời gian trên Canvas chỉ minh họa cách vòng query hoạt động, không phải benchmark GPU của trình duyệt.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Không dùng lại slot đang chờ kết quả
+
+```cpp title="include/particle_gpu_engine.hpp — TimerQueryRing::begin"
+bool begin(GlApi& gl) {
+    if (pending_[cursor_]) {
+        return false;
+    }
+    gl.BeginQuery(GL_TIME_ELAPSED, queries_[cursor_]);
+    activeSlot_ = cursor_;
+    active_ = true;
+    return true;
+}
+```
+
+Return `false` không phải lỗi render. Engine vẫn dispatch/draw, chỉ không thu timing sample mới. Correctness không phụ thuộc profiler.
+
+### Bước 2 — Kết thúc đúng query đã mở
+
+```cpp title="include/particle_gpu_engine.hpp — TimerQueryRing::end"
+gl.EndQuery(GL_TIME_ELAPSED);
+pending_[activeSlot_] = true;
+cursor_ = (activeSlot_ + 1U) % kSlotCount;
+active_ = false;
+```
+
+Compute và draw dùng hai object ring riêng vì hai `GL_TIME_ELAPSED` query không được lồng lên nhau trên cùng target.
+
+### Bước 3 — Chỉ đọc những kết quả đã sẵn sàng
+
+```cpp title="include/particle_gpu_engine.hpp — non-blocking poll"
+GLint available = GL_FALSE;
+gl.GetQueryObjectiv(queries_[slot], GL_QUERY_RESULT_AVAILABLE, &available);
+if (available != GL_TRUE) {
+    continue;
+}
+GLuint64 nanoseconds = 0U;
+gl.GetQueryObjectui64v(queries_[slot], GL_QUERY_RESULT, &nanoseconds);
+samples_.push_back(static_cast<double>(nanoseconds) / 1'000'000.0);
+```
+
+Chỉ khi available mới gọi `GL_QUERY_RESULT`. Sample được đổi nanosecond sang millisecond và giữ tối đa 60 giá trị; median không cần một vector tăng vô hạn.
+
+### Bước 4 — Chỉ cho chọn preset mà GPU hỗ trợ
+
+Phím 1–4 chọn các preset 100k, 500k, 1m và 5m. Trước khi cấp phát, `rebuildParticles` luôn gọi lại `validateCapabilities`. Nếu yêu cầu thất bại, buffer hiện tại vẫn được giữ để chương trình tiếp tục vẽ, còn nguyên nhân được in rõ ràng.
+
+Với mỗi preset, title đặt cạnh nhau:
+
+- count thực tế và MiB;
+- compute median;
+- draw median;
+- số query pending;
+- pause/running state.
+
+Nhờ vậy, nhận xét “5 triệu chậm hơn” luôn đi kèm số particle cụ thể chứ không phải một con số thiếu ngữ cảnh.
+
+## Nối lại thành một bước mô phỏng
+
+Checkpoint 8 thêm timing mà không thay resident data path:
+
+```text
+poll kết quả query cũ đã available
+       ↓
+begin compute slot nếu free → dispatch → end
+       ↓
+barrier
+       ↓
+begin draw slot nếu free → draw → end
+       ↓
+present; không đọc query frame vừa gửi
+```
+
+```bash title="Terminal — checkpoint 8"
+cmake --build build --config Release --target project_38_checkpoint_8
+```
+
+Dùng Release khi ghi số hiệu năng. Debug vẫn cần build để bắt warning/assertion, nhưng không nên so timing Debug với Release rồi kết luận về GPU scaling.
+
+## Thử tạo lỗi
+
+1. Gọi `GL_QUERY_RESULT` ngay sau `EndQuery`. Bạn đã tạo một GPU→CPU synchronization point mỗi frame.
+2. Dùng một query cho cả compute và draw rồi gắn nhãn “compute”. Tên số đo không còn đúng vùng lệnh.
+3. Lồng draw query khi compute query còn active. `GL_TIME_ELAPSED` target không cho phép cách dùng đó.
+4. Khi slot pending, ghi đè query ID. Kết quả frame cũ bị mất hoặc state không hợp lệ.
+5. So timing giữa 100k và 5m nhưng point size/viewport khác nhau mà không ghi lại điều kiện.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] Có bốn query slots riêng cho compute và draw.
+- [ ] Slot pending không được begin lại.
+- [ ] `GL_QUERY_RESULT_AVAILABLE` được hỏi trước result.
+- [ ] Không có `glFinish` hoặc blocking result trong frame path.
+- [ ] Sample limit hữu hạn và median tính từ samples đã hoàn tất.
+- [ ] Preset đổi qua capability gate và failure giữ buffer cũ.
+- [ ] Title báo count, bytes, hai timing labels và pending count.
+- [ ] Canvas ghi rõ timing model không phải browser GPU benchmark.
+
+## Nếu muốn thử thêm
+
+1. Thêm percentile 90 bên cạnh median nhưng giữ tối đa 60 samples.
+2. Đếm số frame bỏ timing vì ring đầy; số này cho biết profiler đang theo không kịp GPU.
+3. Đo barrier-to-draw end-to-end bằng một query thứ ba và đặt nhãn chính xác.
+
+Timing không chứng minh shader đúng. Bài 9 sẽ chạy chính compute program trên một probe buffer nhỏ để kiểm từng particle mà không kéo 160 MB về CPU.

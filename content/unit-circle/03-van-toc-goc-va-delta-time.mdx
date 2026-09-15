@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vận tốc góc, delta time và chu kỳ
+
+## Vấn đề cần giải quyết
+
+Đầu kim đã được tính đúng từ một góc tĩnh. Để nó quay, cách dễ nghĩ nhất là cộng một lượng nhỏ vào `angle` mỗi frame. Cách đó lặp lại lỗi của Project 02: máy render nhiều frame hơn sẽ làm kim quay nhanh hơn.
+
+Ta cần mô tả tốc độ bằng radian mỗi giây rồi nhân với thời gian thật đã trôi qua.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba đại lượng có đơn vị khác nhau:
+
+- `angle`: radian;
+- `angularSpeed`: radian/giây;
+- `deltaTime`: giây.
+
+Do đó:
+
+$$
+angle_{new}=angle_{old}+angularSpeed\times deltaTime
+$$
+
+Đơn vị ở vế cộng thêm là `(rad/s) × s = rad`, khớp với `angle`. Nếu `angularSpeed = π/2 rad/s`, kim đi một phần tư vòng mỗi giây và cần 4 giây cho một vòng:
+
+$$
+period=\frac{2\pi}{|angularSpeed|}
+$$
+
+<InteractiveLab demo="angle" mode="angle-motion" />
+
+Kéo `angularSpeed` qua giá trị âm để xem chiều quay đảo lại. Khi độ lớn của vận tốc tiến gần 0, chu kỳ (`period`) tăng rất lớn; tại đúng 0, kim đứng yên nên thời gian hoàn thành một vòng là vô hạn.
+
+## Viết code từng bước
+
+### Bước 1 — Gói quy tắc cập nhật vào hàm thuần
+
+```cpp title="include/lab.hpp — advanceAngle"
+inline double advanceAngle(double angle, double angularSpeed, double deltaTime) {
+    if (!std::isfinite(angularSpeed) || !std::isfinite(deltaTime)) {
+        return normalizeAngle(angle);
+    }
+    return normalizeAngle(angle + angularSpeed * deltaTime);
+}
+```
+
+Hàm chuẩn hóa sau khi cộng, nên góc không tăng mãi qua hàng triệu vòng. Dữ liệu thời gian không hợp lệ bị bỏ qua thay vì truyền NaN vào sin/cos.
+
+### Bước 2 — Tính chu kỳ và xử lý tốc độ bằng 0
+
+```cpp title="include/lab.hpp — periodFromAngularSpeed"
+inline double periodFromAngularSpeed(double angularSpeed) {
+    if (!std::isfinite(angularSpeed) || std::abs(angularSpeed) <= 1e-12) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return kTau / std::abs(angularSpeed);
+}
+```
+
+`abs` làm chu kỳ luôn dương dù kim quay thuận hay ngược. Giá trị vô cực diễn đạt đúng tình huống này hơn một con số tùy ý như 999999 giây.
+
+### Bước 3 — Đo delta time từ đồng hồ SDL
+
+```cpp title="src/main.cpp — thời gian của một frame"
+const std::uint64_t currentTicks = SDL_GetTicks();
+double deltaTime = double(currentTicks - previousTicks) / 1000.0;
+previousTicks = currentTicks;
+deltaTime = std::min(deltaTime, 0.1);
+if (!paused) {
+    angle = lab::advanceAngle(angle, angularSpeed, deltaTime);
+}
+```
+
+`SDL_GetTicks` trả millisecond nên phải chia 1000. Giới hạn 0,1 giây ngăn một lần dừng ở breakpoint làm kim nhảy qua một đoạn quá lớn khi tiếp tục chạy chương trình.
+
+### Bước 4 — Điều khiển chuyển động mà không thay công thức
+
+```cpp title="src/main.cpp — pause và thay đổi vận tốc góc"
+if (!event.key.repeat && event.key.key == SDLK_SPACE) {
+    paused = !paused;
+}
+if (event.key.key == SDLK_UP) {
+    angularSpeed = std::min(2.0 * lab::kPi, angularSpeed + 0.25);
+}
+if (event.key.key == SDLK_DOWN) {
+    angularSpeed = std::max(-2.0 * lab::kPi, angularSpeed - 0.25);
+}
+```
+
+Phím chỉ sửa `paused` hoặc `angularSpeed`. Công thức cập nhật vẫn nằm ở một nơi và không có nhánh riêng cho quay thuận/quay ngược.
+
+## Ghép các phần lại
+
+Chạy checkpoint 3, bấm Space vài lần rồi thay đổi vận tốc bằng phím lên/xuống. Thanh tiêu đề hiển thị `angle`, `angularSpeed` và `period`. Khi tốc độ đổi dấu, hướng quay đổi nhưng độ lớn của một vòng vẫn là `2π`.
+
+Trong Canvas, sau khi bấm **Tạm dừng**, thanh góc và các mốc vẫn hoạt động. Nhờ vậy bạn có thể đặt kim đúng 0°, 90° hoặc 180° để kiểm tra mà không phải đuổi theo một điểm đang chuyển động.
+
+Điều cần giữ từ Project 02 là: cùng tổng thời gian phải cho cùng kết quả. 60 bước `1/60 s` và 30 bước `1/30 s` đều mô phỏng đúng một giây.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay cập nhật bằng `angle += 0.02`. Tốc độ lập tức phụ thuộc FPS.
+2. Quên chia millisecond cho 1000. Kim quay nhanh hơn dự kiến một nghìn lần.
+3. Tính period bằng `2π/angularSpeed` mà không lấy trị tuyệt đối. Quay ngược tạo một “thời gian” âm.
+
+## Tự kiểm tra kết quả
+
+- `angularSpeed = π` cho period 2 giây.
+- Tốc độ `-π` quay ngược nhưng vẫn có period 2 giây.
+- Tốc độ 0 làm kim đứng yên và period là infinity.
+- 30 bước và 60 bước với cùng tổng thời gian cho cùng góc cuối.
+- Space không làm mất góc hiện tại.
+
+## Bài tập mở rộng
+
+Thêm phím đổi trực tiếp giữa các preset `π/4`, `π/2`, `π` rad/s. Sau đó viết chế độ ping-pong: góc chỉ chạy trong một cung giới hạn rồi đảo `angularSpeed` khi chạm hai đầu.
+
+Bài sau không thêm trạng thái mới; nó dùng endpoint hiện tại để giải thích hình chiếu và ý nghĩa trực quan của sin/cos.

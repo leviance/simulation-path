@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Zoom quanh con trỏ mà không làm điểm bị trôi
+
+## Vấn đề cần giải quyết
+
+Nếu chỉ nhân `pixelsPerUnit`, camera sẽ luôn zoom quanh tâm viewport. Khi người dùng đặt con trỏ lên một chi tiết rồi cuộn, chi tiết đó trượt khỏi vị trí đang trỏ tới. Hành vi mong muốn là điểm world dưới con trỏ phải giữ nguyên trước và sau khi đổi tỉ lệ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Không cần suy ra một công thức dài mới. Ta có thể dùng chính hai phép chuyển đổi đã viết:
+
+1. dùng tỉ lệ cũ để tính `before = screenToWorld(cursor)`;
+2. thay đổi tỉ lệ;
+3. dùng camera mới để tính `after = screenToWorld(cursor)`;
+4. cộng `before - after` vào `centerWorld`.
+
+Sau bước 4, cùng một pixel dưới con trỏ lại ánh xạ tới `before`. Nói cách khác: đo điểm cũ, thay đổi tỉ lệ, đo độ lệch rồi bù đúng độ lệch đó.
+
+Tỉ lệ được giữ trong khoảng 20–160 pixel/đơn vị để lưới không quá thưa hoặc quá dày và phép chia trong `screenToWorld` luôn ổn định.
+
+Ví dụ, camera mặc định có tâm `(0,0)`, viewport 960×540 và tỉ lệ 55. Con trỏ ở `(700,160)` đang trỏ tới world `(4,2)`. Nếu tăng tỉ lệ lên 110 mà chưa bù, cùng pixel đó chỉ còn tương ứng với `(2,1)`. Hiệu `before - after = (2,1)` được cộng vào `centerWorld`; khi tính lại, kết quả trở về `(4,2)`. Chi tiết đang trỏ tới vì thế đứng yên.
+
+<InteractiveLab demo="coordinate" mode="coordinate-zoom" />
+
+## Viết code từng bước
+
+### Bước 1 — Thêm phép cộng cho vector bù
+
+Hai bài trước mới cần phép trừ. Zoom sẽ cập nhật `centerWorld` bằng một vector độ lệch, nên bây giờ ta mới thêm phép cộng:
+
+```cpp title="include/lab.hpp — cộng hai Vec2"
+inline Vec2 operator+(Vec2 left, Vec2 right) {
+    return {left.x + right.x, left.y + right.y};
+}
+```
+
+### Bước 2 — Ghi lại điểm world dưới con trỏ
+
+```cpp title="include/lab.hpp — đầu Camera2D::zoomAt"
+void zoomAt(Vec2 screen, double factor) {
+    const Vec2 worldBeforeZoom = screenToWorld(screen);
+```
+
+Lời gọi này phải xảy ra trước khi sửa `pixelsPerUnit`, vì đây là điểm ta muốn giữ nguyên.
+
+### Bước 3 — Kiểm tra hệ số và giới hạn tỉ lệ
+
+```cpp title="include/lab.hpp — cập nhật zoom scale"
+double safeFactor = 1.0;
+if (std::isfinite(factor) && factor > 0.0) {
+    safeFactor = factor;
+}
+pixelsPerUnit = std::clamp(scale() * safeFactor, 20.0, 160.0);
+```
+
+`factor` dương lớn hơn 1 dùng để phóng to; giá trị từ 0 đến 1 dùng để thu nhỏ. Số âm, 0 hoặc `NaN` được thay bằng `1.0`, tức không thay đổi, để trạng thái camera không bị hỏng. Sau phép nhân, kết quả được giới hạn trong khoảng an toàn.
+
+### Bước 4 — Đo độ lệch rồi bù vào tâm camera
+
+```cpp title="include/lab.hpp — giữ điểm dưới con trỏ"
+const Vec2 worldAfterZoom = screenToWorld(screen);
+centerWorld = centerWorld + (worldBeforeZoom - worldAfterZoom);
+}
+```
+
+Nếu `after` lệch 0,3 đơn vị world so với `before`, tâm camera dịch đúng 0,3 đơn vị theo chiều ngược lại. Phép bù dùng số thực và không làm tròn theo pixel.
+
+### Bước 5 — Lấy vị trí con trỏ khi cuộn chuột
+
+```cpp title="src/main.cpp — SDL_EVENT_MOUSE_WHEEL"
+if (event.type == SDL_EVENT_MOUSE_WHEEL && event.wheel.y != 0.0f) {
+    float mouseX = 0.0f;
+    float mouseY = 0.0f;
+    SDL_GetMouseState(&mouseX, &mouseY);
+    cursorScreen = {mouseX, mouseY};
+    double factor = 1.12;
+    if (event.wheel.y < 0.0f) {
+        factor = 1.0 / 1.12;
+    }
+    camera.zoomAt({mouseX, mouseY}, factor);
+}
+```
+
+Sự kiện wheel cho biết lượng cuộn, còn `SDL_GetMouseState` cung cấp pixel đang nằm dưới con trỏ. Ta đồng thời cập nhật `cursorScreen` để thanh tiêu đề hiển thị đúng vị trí. Cuộn ngang hoặc `wheel.y == 0` không được hiểu nhầm thành thu nhỏ. Dùng chính nghịch đảo `1 / 1.12` giúp một bước phóng to rồi một bước thu nhỏ trở về tỉ lệ cũ, miễn là chưa chạm giới hạn.
+
+## Ghép các phần lại
+
+Checkpoint 5 phối hợp cả hai chiều chuyển đổi: pixel con trỏ tìm ra điểm world cũ, tỉ lệ thay đổi, phép nghịch đo điểm world mới, tâm camera bù phần chênh lệch, rồi phần vẽ dùng camera mới cho lưới và điểm đánh dấu. Không vật thể nào phải đổi tọa độ world.
+
+Đặt con trỏ lên một giao điểm lưới nằm xa tâm rồi cuộn nhiều lần. Giao điểm đó phải đứng yên dưới con trỏ cho tới khi tỉ lệ chạm giới hạn. Thanh tiêu đề tiếp tục hiển thị tọa độ world dưới con trỏ và sai số round trip; Coordinate Lab cho phép quan sát riêng bốn bước `before → đổi tỉ lệ → after → bù tâm`.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ đổi tỉ lệ mà không bù `centerWorld`. Điểm dưới con trỏ trượt đi vì camera đang zoom quanh tâm viewport.
+2. Tính `worldBeforeZoom` sau khi đã đổi tỉ lệ. Cả hai phép đo dùng cùng camera mới, nên hiệu bằng 0 và tâm camera không được bù.
+3. Đổi hiệu bù thành `worldAfterZoom - worldBeforeZoom`. Camera dịch theo hướng ngược, khiến độ trôi của điểm neo tăng thay vì bị triệt tiêu.
+
+## Tự kiểm tra kết quả
+
+- Zoom tại tâm viewport không làm `centerWorld` thay đổi đáng kể.
+- Zoom ngoài tâm giữ giao điểm lưới dưới con trỏ.
+- Tỉ lệ luôn nằm trong khoảng 20–160 và là số dương.
+- `markerWorld` không đổi khi zoom.
+- Pan, kéo điểm và zoom vẫn phối hợp đúng sau nhiều thao tác.
+
+## Bài tập mở rộng
+
+Hãy hỗ trợ độ cuộn liên tục của trackpad bằng `factor = exp(wheelY × sensitivity)`. Sau đó thử tạo chuyển động zoom mượt nhưng vẫn giữ điểm dưới con trỏ ở mỗi khung hình. Hiển thị tỉ lệ và tọa độ world của con trỏ để xác nhận chúng ổn định trong suốt một lần cuộn.
+
+Bài cuối sẽ biến round trip và điều kiện giữ điểm dưới con trỏ thành test tự động.

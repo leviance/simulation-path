@@ -1,0 +1,36 @@
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Velocities { vec4 velocities[]; };
+layout(std430, binding = 1) readonly buffer Forces { vec4 forces[]; };
+layout(std430, binding = 2) readonly buffer InputValues { vec4 inputValues[]; };
+layout(std430, binding = 3) writeonly buffer OutputValues { vec4 outputValues[]; };
+uniform uint uCount;
+uniform uint uBase;
+uniform int uReduce;
+shared vec4 sums[256];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint group = uBase + gl_WorkGroupID.x;
+    uint i = group * 256u + lane;
+    vec4 value = vec4(0);
+    if (i < uCount) {
+        if (uReduce == 0) {
+            vec2 velocity = velocities[i].xy;
+            value = vec4(0.5 * dot(velocity, velocity), forces[i].z, velocity);
+        } else {
+            value = inputValues[i];
+        }
+    }
+    sums[lane] = value;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride /= 2u) {
+        if (lane < stride) {
+            sums[lane] += sums[lane + stride];
+        }
+        barrier();
+    }
+    if (lane == 0u) {
+        outputValues[group] = sums[0];
+    }
+}

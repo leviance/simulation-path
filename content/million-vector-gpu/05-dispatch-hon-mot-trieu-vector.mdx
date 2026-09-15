@@ -1,0 +1,131 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy phép tính trên hơn một triệu vector
+
+## Bài toán của chúng ta
+
+Ví dụ 256 phần tử ở bài trước vừa khít một workgroup nên chưa lộ ra trường hợp khó nhất: số phần tử thực tế thường không chia hết cho local size. Ta cố ý chọn 1.000.003 vector. Chia nguyên sẽ bỏ sót 67 phần tử cuối; làm tròn lên nhưng quên kiểm tra biên sẽ khiến 189 invocation thừa truy cập ra ngoài buffer.
+
+Bài 5 thêm hai phần luôn phải đi cùng nhau: phép chia làm tròn lên ở C++ và **bounds guard**, tức điều kiện chặn invocation có index nằm ngoài mảng, trong shader.
+
+## Theo dõi dữ liệu từ CPU sang GPU
+
+Số workgroup cần phát là:
+
+$$G = \left\lceil\frac{N}{L}\right\rceil$$
+
+với $N=1{,}000{,}003$ và $L=256$:
+
+$$G=3{,}907$$
+
+Số invocation thật được phát là:
+
+$$3{,}907 \times 256 = 1{,}000{,}192$$
+
+Vậy có $1{,}000{,}192 - 1{,}000{,}003 = 189$ lane không có phần tử tương ứng.
+
+<InteractiveLab demo="million-vector-gpu" mode="dispatch-tail" />
+
+Canvas mở workgroup cuối. Lane xanh có global ID nhỏ hơn N; lane đỏ phải `return` trước lần đọc `inputA[index]` đầu tiên.
+
+## Bắt tay vào code
+
+### Bước 1 — Viết ceil division không dùng float
+
+```cpp title="include/vector_compute_math.hpp — ceilDiv"
+inline std::uint32_t ceilDiv(std::size_t value, std::uint32_t divisor) {
+    if (value == 0 || divisor == 0) {
+        return 0;
+    }
+
+    return static_cast<std::uint32_t>(1U + (value - 1U) / divisor);
+}
+```
+
+Công thức `1 + (N - 1) / L` tránh phép cộng `N + L - 1` có thể overflow ở giá trị rất lớn. Nhánh `N == 0` cũng tránh `N - 1` underflow.
+
+### Bước 2 — Biểu diễn kế hoạch dispatch bằng một struct có thể kiểm thử
+
+```cpp title="include/vector_compute_math.hpp — makeDispatchPlan"
+inline DispatchPlan makeDispatchPlan(
+    std::size_t elementCount,
+    std::uint32_t localSize
+) {
+    const std::uint32_t workgroups = ceilDiv(elementCount, localSize);
+    const std::size_t launched = std::size_t(workgroups) * localSize;
+
+    return {
+        elementCount,
+        localSize,
+        workgroups,
+        launched,
+        launched - elementCount,
+    };
+}
+```
+
+`DispatchPlan` nằm trong header thuần CPU, vì vậy CTest kiểm được 3.907/189 mà không cần tạo OpenGL context.
+
+### Bước 3 — Gửi N thật, không gửi số invocation
+
+```cpp title="include/vector_compute_engine.hpp — dispatch toàn mảng"
+api.UseProgram(program_);
+for (GLuint binding = 0; binding < 3; ++binding) {
+    api.BindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, buffers_[binding]);
+}
+
+const DispatchPlan plan = makeDispatchPlan(requestedCount, 256U);
+api.Uniform1i(elementCountLocation_, static_cast<GLint>(requestedCount));
+const GLuint workgroupCount = plan.workgroupCount;
+api.DispatchCompute(workgroupCount, 1, 1);
+```
+
+`uElementCount` là miền index hợp lệ. `plan.workgroupCount` là số group cần phát. Hai giá trị khác vai trò và không được dùng thay nhau.
+
+### Bước 4 — Kiểm tra index trước khi truy cập buffer
+
+```glsl title="shaders/vector_ops.comp — bounds guard"
+uniform int uElementCount;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+
+    if (index >= uint(uElementCount)) {
+        return;
+    }
+
+    outputData[index] = inputA[index] + inputB[index];
+}
+```
+
+Chỉ kiểm tra trước dòng ghi là chưa đủ, vì hai lần đọc input có thể đã vượt khỏi mảng. Điều kiện phải nằm ngay sau khi tạo index và trước lần truy cập buffer đầu tiên.
+
+## Chạy checkpoint
+
+Khi khởi động checkpoint 5, title phải báo `N 1000003 | groups 3907 | tail lanes 189`. Các con số này lấy từ cùng `DispatchPlan` dùng để gọi API, không tính lại bằng công thức khác chỉ để hiển thị.
+
+Capability report cũng được chạy lại với plan mới. Nếu `workgroupCount` hoặc một SSBO vượt limit, app dừng trước dispatch.
+
+## Thử phá chương trình
+
+1. Dùng `N / 256`. Workgroup count thành 3.906 và 67 phần tử cuối giữ sentinel.
+2. Dùng `ceilDiv` nhưng không kiểm tra index. 189 invocation cuối sẽ truy cập ngoài ba mảng.
+3. Đặt điều kiện sau `vec4 a = inputA[index]`. Lúc đó lần đọc sai đã xảy ra trước khi hàm kịp `return`.
+4. Truyền `launchedInvocations` vào `uElementCount`. Điều kiện sẽ vô tình cho phép chính phần đuôi cần loại bỏ.
+
+## Tự nghiệm thu
+
+- [ ] `ceilDiv(0,256)=0`, `ceilDiv(1,256)=1`, `ceilDiv(256,256)=1`.
+- [ ] Plan của 1.000.003/256 là 3.907 groups và 189 unused invocations.
+- [ ] `uElementCount` nhận N thật, không nhận số lane phát.
+- [ ] Điều kiện kiểm tra index đứng trước mọi lần đọc hoặc ghi SSBO.
+- [ ] Group count được so với compute limit trước dispatch.
+- [ ] Title và dispatch dùng cùng một plan.
+
+## Bài tập tiếp theo
+
+1. Lập bảng unused lanes cho local size 32/64/128/256.
+2. Tạo CTest cho `N = 255, 256, 257`.
+3. Thêm một counter CPU chỉ để liệt kê global ID hợp lệ của group cuối, rồi đối chiếu Canvas.
+
+GPU đã ghi đủ miền index, nhưng CPU chưa được phép đọc như thể mọi write đã visible. Bài tiếp theo sẽ nối hai phía bằng barrier và readback.

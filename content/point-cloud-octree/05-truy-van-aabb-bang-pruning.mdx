@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Truy vấn AABB bằng pruning
+
+## Vấn đề cần giải quyết
+
+Octree đã giữ đúng point indices, nhưng nếu query vẫn duyệt mọi leaf thì ta chỉ đổi một vòng lặp tuyến tính thành một vòng lặp phức tạp hơn. Lợi ích xuất hiện khi bounds của node cho phép kết luận: “toàn bộ subtree này không thể chứa hit”.
+
+Checkpoint 5 xây traversal và đo chính công việc của nó. Timing có thể nhiễu; `visitedNodes`, `prunedNodes` và `candidatesChecked` nói thẳng algorithm đã làm gì.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một node bị prune khi AABB của nó không overlap query volume. Nếu parent overlap và là internal, ta thử cả tám children; từng child không liên quan sẽ bị loại ngay ở đầu lần gọi tiếp theo. Nếu node là leaf và overlap, toàn bộ point indices trong leaf mới chỉ là **candidates**. Ta vẫn gọi `pointInsideVolume` để loại false positives.
+
+Luồng xử lý luôn theo thứ tự:
+
+$$
+visit \rightarrow overlap? \rightarrow internal/leaf \rightarrow exact\ test
+$$
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-query" />
+
+Di chuyển hộp xanh vào vùng thưa rồi vùng đông. Hộp có cùng kích thước nhưng số visited nodes và candidates khác nhau; đó chính là tree thích nghi theo mật độ.
+
+## Viết code từng bước
+
+### Bước 1 — Reset workspace để tái sử dụng allocation
+
+```cpp title="include/lab.hpp — bắt đầu một query mới"
+result.hitIndices.clear();
+result.visitedNodes = 0;
+result.prunedNodes = 0;
+result.visitedLeaves = 0;
+result.candidatesChecked = 0;
+```
+
+`clear()` giữ capacity của vector hits cho các frame sau. Query API nhận workspace từ caller để allocation policy không bị giấu trong hot path.
+
+### Bước 2 — Prune trước khi đọc children hoặc points
+
+```cpp title="include/lab.hpp — node-level pruning"
+++result.visitedNodes;
+if (!volumesOverlap(node.bounds, volume)) {
+    ++result.prunedNodes;
+    return;
+}
+```
+
+Đặt overlap test trước `isLeaf()` khiến cùng một rule áp dụng cho cả internal node lẫn leaf.
+
+### Bước 3 — Duyệt đủ tám child của internal node
+
+```cpp title="include/lab.hpp — recurse internal node"
+if (!node.isLeaf()) {
+    for (const std::size_t childIndex : node.children) {
+        queryOctreeNode(tree, points, volume, childIndex, result);
+    }
+    return;
+}
+```
+
+Không cần tự chọn một octant cho query: một AABB có thể cắt qua nhiều mặt phẳng giữa và giao nhiều children.
+
+### Bước 4 — Exact-test candidates trong leaf
+
+```cpp title="include/lab.hpp — exact point test"
+for (const std::size_t pointIndex : node.pointIndices) {
+    ++result.candidatesChecked;
+    if (pointInsideVolume(points[pointIndex].position, volume)) {
+        result.hitIndices.push_back(pointIndex);
+    }
+}
+```
+
+`candidatesChecked` đếm point thật sự đi qua exact test. Nó là cầu nối trực tiếp để so Octree với brute force scans.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 5"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_30_checkpoint_5
+```
+
+Di chuyển query với `W/S`, `A/D`, `Q/E`; dùng `[` và `]` đổi kích thước. Với preset mặc định, candidates phải nhỏ hơn 100.000 trong phần lớn vị trí.
+
+## Thử làm sai để hiểu đúng
+
+1. Chọn đúng một octant theo query center. Query cắt split plane sẽ bỏ hit ở octant bên cạnh. Internal node phải thử mọi child có thể overlap.
+2. Khi leaf overlap, thêm toàn bộ indices vào hits. Candidates ngoài query volume trở thành false positives. Khôi phục exact test.
+3. Dùng AABB của hình chiếu 2D để prune. Xoay camera làm output thay đổi. Chỉ dùng `Bounds3D` world-space.
+
+## Tự kiểm tra kết quả
+
+- Mỗi query reset toàn bộ counters và hit output.
+- Node không overlap tăng `prunedNodes` rồi dừng cả subtree.
+- Internal node overlap thử đủ tám children.
+- Leaf overlap tăng `visitedLeaves`.
+- Mỗi point trong leaf overlap tăng `candidatesChecked` đúng một lần.
+- Hit chỉ được thêm sau exact test X/Y/Z inclusive.
+- Query nhỏ giảm candidates so với N ở preset mặc định.
+
+## Bài tập mở rộng
+
+Thêm `maximumVisitedDepth` vào result và hiển thị nó cạnh `visitedNodes`. So cùng query giữa clustered và uniform cloud, rồi giải thích vì sao maximum depth một mình chưa nói được candidate work.
+
+Traversal có vẻ đúng vẫn có thể sai ở một face hoặc split plane hiếm gặp. Bài sau dùng brute force làm oracle cho cùng một bộ query deterministic.

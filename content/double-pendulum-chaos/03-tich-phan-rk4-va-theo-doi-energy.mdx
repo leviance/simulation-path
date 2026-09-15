@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tích phân RK4 và theo dõi energy
+
+## Vấn đề cần giải quyết
+
+Ta đã có `pendulumDerivative(state)`, nhưng đạo hàm chỉ mô tả trạng thái đang thay đổi theo hướng nào tại một thời điểm. Muốn con lắc chuyển động, chương trình phải tích lũy thay đổi qua nhiều bước thời gian. Project 26 dùng lại RK4 đã học ở Project 23 để ta tập trung vào hệ con lắc kép thay vì học thêm một bộ tích phân mới.
+
+Một quỹ đạo trông phức tạp chưa chứng minh phép tính đúng. Khi không có ma sát, tổng cơ năng phải gần như được bảo toàn; độ trôi năng lượng vì vậy là dấu hiệu sớm cho thấy `dt` đang quá lớn.
+
+## Hiểu ý tưởng trước khi viết code
+
+RK4 ghép bốn derivative sample:
+
+$$
+y_{n+1}=y_n+\frac{\Delta t}{6}(k_1+2k_2+2k_3+k_4)
+$$
+
+Potential energy lấy trạng thái thẳng xuống làm zero. Kinetic energy của bob thứ hai phải gồm chuyển động truyền xuống từ cả hai rod.
+
+<InteractiveLab demo="double-pendulum-chaos" mode="chaos-rk4" />
+
+Chọn `dt = 1/120 s`, tiến vài bước rồi đổi sang `1/480 s` và reset. So hai đồ thị năng lượng trên cùng một khoảng thời gian mô phỏng; không so hai trạng thái ở hai thời điểm khác nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo state tạm từ một derivative
+
+```cpp title="include/lab.hpp — state tạm cho các stage RK4"
+inline DoublePendulumState addDerivative(const DoublePendulumState& state, const DoublePendulumDerivative& derivative, double factor) {
+    return {state.theta1 + derivative.theta1Rate * factor, state.omega1 + derivative.omega1Rate * factor, state.theta2 + derivative.theta2Rate * factor, state.omega2 + derivative.omega2Rate * factor, state.elapsed + factor};
+}
+```
+
+`factor` là `dt/2` hoặc `dt`. State tạm chỉ phục vụ việc lấy derivative; output cuối vẫn tăng elapsed đúng một full step.
+
+### Bước 2 — Lấy k1 đến k4 từ bốn state hoàn chỉnh
+
+```cpp title="include/lab.hpp — bốn derivative sample"
+const DoublePendulumDerivative k1 = pendulumDerivative(state, parameters);
+const DoublePendulumDerivative k2 = pendulumDerivative(addDerivative(state, k1, 0.5 * deltaSeconds), parameters);
+const DoublePendulumDerivative k3 = pendulumDerivative(addDerivative(state, k2, 0.5 * deltaSeconds), parameters);
+const DoublePendulumDerivative k4 = pendulumDerivative(addDerivative(state, k3, deltaSeconds), parameters);
+if (!k1.valid || !k2.valid || !k3.valid || !k4.valid) {
+    return state;
+}
+```
+
+Không được lấy alpha một lần rồi dùng lại cho bốn stage; như vậy chỉ đổi tên Euler thành RK4.
+
+### Bước 3 — Ghép rate theo weights 1–2–2–1
+
+```cpp title="include/lab.hpp — cập nhật state và elapsed một lần"
+next.theta1 += deltaSeconds * weighted(k1.theta1Rate, k2.theta1Rate, k3.theta1Rate, k4.theta1Rate);
+next.omega1 += deltaSeconds * weighted(k1.omega1Rate, k2.omega1Rate, k3.omega1Rate, k4.omega1Rate);
+next.theta2 += deltaSeconds * weighted(k1.theta2Rate, k2.theta2Rate, k3.theta2Rate, k4.theta2Rate);
+next.omega2 += deltaSeconds * weighted(k1.omega2Rate, k2.omega2Rate, k3.omega2Rate, k4.omega2Rate);
+next.elapsed += deltaSeconds;
+```
+
+Các angle không bị wrap sau step. Sin/cos vẫn nhận được angle ngoài một vòng; giữ state liên tục tránh tạo discontinuity không cần thiết trong integrator.
+
+### Bước 4 — Đo energy từ cùng state
+
+```cpp title="include/lab.hpp — kinetic và potential energy"
+const double kinetic = 0.5 * parameters.mass1 * velocity1Squared + 0.5 * parameters.mass2 * (velocity2X * velocity2X + velocity2Y * velocity2Y);
+const double potential = parameters.mass1 * parameters.gravity * parameters.length1 * (1.0 - std::cos(state.theta1)) + parameters.mass2 * parameters.gravity * (parameters.length1 * (1.0 - std::cos(state.theta1)) + parameters.length2 * (1.0 - std::cos(state.theta2)));
+return kinetic + potential;
+```
+
+Energy là metric độc lập với pixel. CTest có thể chạy nó hàng nghìn step mà không mở SDL window.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy một pendulum bằng RK4"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_26_checkpoint_3
+```
+
+Space chạy/dừng, `N` tiến một bước và `R` reset. Accumulator giới hạn 24 substep mỗi frame; phần thời gian bị bỏ được báo thay vì khiến UI đuổi theo vô hạn.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `k1` cho cả bốn stage. Energy drift tăng như một phương pháp bậc thấp; hoàn tác bốn state tạm.
+2. Tăng elapsed trong mỗi `addDerivative` rồi cộng tiếp bốn lần vào output. Title báo thời gian nhanh hơn physics; hoàn tác để output chỉ tăng một dt.
+3. Bỏ contribution của rod thứ nhất khỏi velocity bob thứ hai. Energy không còn khớp chuyển động coupled; hoàn tác hai component đầy đủ.
+
+## Tự kiểm tra kết quả
+
+- Single-step tăng elapsed đúng fixed dt.
+- 120 frame nhanh và 30 frame chậm tạo cùng 240 physics step trong một giây với dt=1/240.
+- RK4 5 giây ở dt=1/480 giữ relative energy drift dưới `1e-7` cho preset mặc định.
+- Frame dài bị guard và báo dropped time.
+- Pause/resume không nhận một bước thời gian khổng lồ.
+
+## Bài tập mở rộng
+
+Thêm explicit Euler chỉ trong test và chạy cùng duration. So energy drift với RK4, nhưng không dùng sự khác nhau đó làm bằng chứng chaos; đây mới chỉ là sai số integrator.
+
+Bài tiếp theo tạo hai initial state gần nhau và cho chúng đi qua đúng cùng code path.

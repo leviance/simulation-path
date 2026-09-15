@@ -1,0 +1,141 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép pitch, yaw, roll theo thứ tự
+
+## Vấn đề cần giải quyết
+
+Rotation X chỉ cho model gật quanh một trục. Muốn điều khiển orientation tự do hơn, ta cần rotation Y và Z. Nhưng “có đủ ba hàm” vẫn chưa đủ: rotate X rồi Y nói chung không cho cùng kết quả với Y rồi X.
+
+Bài này chưa dùng ma trận. Ta gọi từng hàm trên một biến tạm, nhờ vậy thứ tự thực thi hiện rõ trong code và có thể đổi bằng phím O.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba tên quen dùng trong project:
+
+- pitch: rotation quanh X;
+- yaw: rotation quanh Y;
+- roll: rotation quanh Z.
+
+Rotation Y giữ Y và xoay X/Z. Rotation Z giữ Z và xoay X/Y. Với order XYZ, point đi qua X trước, rồi Y, cuối cùng Z. Mỗi bước nhận point đã thay đổi từ bước trước, nên đổi order sẽ đổi các trục mà bước sau đang nhìn thấy.
+
+Tên pitch/yaw/roll có nhiều quy ước trong engine và tài liệu đồ họa. Project này chốt một quy ước duy nhất: point được quay quanh các trục tọa độ X, Y, Z cố định, angle lưu bằng radian, và tên order mô tả đúng thứ tự lời gọi hàm. Khi đối chiếu với thư viện khác, hãy kiểm tra quy ước của thư viện thay vì chỉ nhìn ba chữ XYZ.
+
+<InteractiveLab demo="rotation3d" mode="rotation-euler" />
+
+Đặt cả ba angle khác 0 rồi đổi Rotation order. Tam giác đổi orientation ngay, nhưng pivot và chiều dài cạnh không đổi. Nếu chỉ một angle khác 0, hai order phải cho cùng kết quả.
+
+## Viết code từng bước
+
+### Bước 1 — Viết rotation Y từ mặt phẳng X–Z
+
+Theo quy tắc bàn tay phải:
+
+```cpp title="include/lab.hpp — rotation quanh Y"
+inline Vec3 rotateY(Vec3 point, double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {
+        cosine * point.x + sine * point.z,
+        point.y,
+        -sine * point.x + cosine * point.z,
+    };
+}
+```
+
+### Bước 2 — Viết rotation Z như rotation 2D quen thuộc
+
+Z giữ nguyên, X/Y dùng đúng công thức trên mặt phẳng màn hình toán học:
+
+```cpp title="include/lab.hpp — rotation quanh Z"
+inline Vec3 rotateZ(Vec3 point, double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {
+        cosine * point.x - sine * point.y,
+        sine * point.x + cosine * point.y,
+        point.z,
+    };
+}
+```
+
+### Bước 3 — Đặt tên angle và order
+
+Struct tránh ba tham số `double` không biết thuộc trục nào:
+
+```cpp title="include/lab.hpp — trạng thái Euler bằng radian"
+struct EulerAngles {
+    double pitch{};
+    double yaw{};
+    double roll{};
+};
+
+enum class RotationOrder {
+    Xyz,
+    Zyx,
+};
+```
+
+### Bước 4 — Viết thứ tự bằng control flow tường minh
+
+Không nén ba lời gọi vào một biểu thức khó đọc:
+
+```cpp title="include/lab.hpp — áp dụng XYZ hoặc ZYX"
+inline Vec3 rotateEuler(Vec3 point, EulerAngles angles, RotationOrder order) {
+    if (order == RotationOrder::Zyx) {
+        Vec3 rotated = rotateZ(point, angles.roll);
+        rotated = rotateY(rotated, angles.yaw);
+        return rotateX(rotated, angles.pitch);
+    }
+    Vec3 rotated = rotateX(point, angles.pitch);
+    rotated = rotateY(rotated, angles.yaw);
+    return rotateZ(rotated, angles.roll);
+}
+```
+
+Với order XYZ, code chạy X→Y→Z đúng như tên. Sau này khi chuyển sang matrix, thứ tự nhân sẽ được đối chiếu với chuỗi này.
+
+Đừng viết `rotateZ(rotateY(rotateX(point,...),...),...)` ngay trong bài học. Biểu thức đó chạy đúng nhưng rất khó đặt breakpoint và dễ đọc thứ tự từ ngoài vào trong. Ba câu lệnh với biến `rotated` cho phép bạn xem giá trị sau từng trục trong debugger.
+
+### Bước 5 — Cho người học đổi order ngay khi chạy
+
+Phím O không thay angle, chỉ đổi cách áp dụng:
+
+```cpp title="src/main.cpp — đổi rotation order"
+if (!event.key.repeat && event.key.key == SDLK_O) {
+    if (order == lab::RotationOrder::Xyz) {
+        order = lab::RotationOrder::Zyx;
+    } else {
+        order = lab::RotationOrder::Xyz;
+    }
+}
+```
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy kết quả cuối bài 4"
+cmake --build build --config Debug --target project_12_checkpoint_4
+```
+
+W/S đổi pitch, A/D đổi yaw, Q/E đổi roll. Đặt khoảng 20°/35°/15°, ghi lại orientation rồi nhấn O. Hình phải đổi; nhấn O lần nữa phải trở lại orientation cũ vì angle chưa thay. Trong Canvas, dòng `A: chênh lệch giữa hai order` phải lớn hơn 0 khi có ít nhất hai angle khác 0.
+
+Hai order đều bắt đầu lại từ local triangle và đều translate sau rotation. Chúng khác orientation, không khác pivot hay kích thước.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi nhãn order nhưng vẫn gọi cùng chuỗi hàm. UI nói ZYX nhưng hình không thay đổi.
+2. Dùng degree trực tiếp với `std::sin`. 90 được hiểu là 90 radian, không phải một phần tư vòng.
+3. Cho ZYX chạy rotateX trước. Tên enum và hành vi không còn khớp, khiến inverse ở bài cuối rất dễ viết sai.
+
+## Tự kiểm tra kết quả
+
+- rotateY 90° đổi `(1,2,3)` thành `(3,2,-1)`.
+- rotateZ 90° đổi `(1,2,3)` thành `(-2,1,3)`.
+- Chỉ một angle khác 0 cho cùng kết quả ở XYZ và ZYX.
+- Ba angle tổng quát làm hai order khác nhau.
+- Cả hai order giữ khoảng cách của vertex tới local origin.
+
+## Bài tập mở rộng
+
+Thêm order YXZ bằng một nhánh mới và ghi ba point kết quả cho cùng input. Không sao chép công thức sin/cos; chỉ ghép lại ba hàm đã có.
+
+Bài tiếp theo sẽ biến mouse delta thành yaw/pitch. Phần toán vẫn gọi `rotateEuler`; input mới chỉ thay cách tạo angles.

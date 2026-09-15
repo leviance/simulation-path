@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Truyền time, resolution và mouse
+
+## Vấn đề cần giải quyết
+
+Hot reload thay **chương trình** khi source đổi. Animation lại cần thay **dữ liệu** mỗi frame. Nếu nối `elapsedSeconds` vào string GLSL rồi compile lại liên tục, ta vừa dùng sai công cụ vừa biến driver compiler thành một phần của frame loop.
+
+Uniforms là đường truyền phù hợp: program giữ nguyên, còn `uTime`, `uResolution` và `uMouse` nhận snapshot mới trước draw. Khó nhất nằm ở hai contract thường bị bỏ qua: location thuộc program generation, và mouse/resolution phải dùng cùng hệ pixel khi high-DPI.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi frame tách thành hai luồng:
+
+```text
+source file đổi → compile/link/commit → program generation mới → query locations mới
+time/mouse/resize → glUniform... trên active generation → draw, không compile
+```
+
+`SDL_GetWindowSize` trả kích thước logical dùng cho mouse event. `SDL_GetWindowSizeInPixels` trả framebuffer dùng cho viewport và shader resolution. Ta scale X/Y rồi đảo Y vì `gl_FragCoord` có gốc dưới-trái.
+
+<InteractiveLab demo="shader-hot-reload" mode="live-uniforms" />
+
+## Viết code từng bước
+
+### Bước 1 — Khóa ba uniform mới sau link
+
+```cpp title="include/shader_renderer.hpp — location thuộc candidate"
+candidate.timeLocation = api.GetUniformLocation(candidate.program, "uTime");
+candidate.resolutionLocation = api.GetUniformLocation(candidate.program, "uResolution");
+candidate.mouseLocation = api.GetUniformLocation(candidate.program, "uMouse");
+if (candidate.timeLocation < 0 || candidate.resolutionLocation < 0 || candidate.mouseLocation < 0) {
+    diagnostics = "Linked program does not expose uTime, uResolution and uMouse.";
+    destroyProgramCandidate(api, candidate);
+    return false;
+}
+```
+
+Nếu shader khai báo nhưng không dùng một uniform, compiler có quyền optimize nó đi và location thành `-1`. Final shader dùng cả ba để contract quan sát được.
+
+### Bước 2 — Đưa mouse về framebuffer pixels, gốc dưới-trái
+
+```cpp title="src/main.cpp — logical mouse sang OpenGL pixel"
+scene.mouseX = mouseWindowX * float(framebufferWidth) / float(windowWidth);
+scene.mouseY = float(framebufferHeight) - mouseWindowY * float(framebufferHeight) / float(windowHeight);
+```
+
+Không dùng một scale duy nhất cho cả hai trục. Window và framebuffer được đọc ở cùng frame để resize không làm lệch snapshot.
+
+### Bước 3 — Upload uniforms ngay trước draw
+
+```cpp title="include/shader_renderer.hpp — live uniform update"
+api.UseProgram(activeProgram.program);
+api.UniformMatrix4fv(activeProgram.mvpLocation, 1, GL_FALSE, mvp.values.data());
+api.Uniform1f(activeProgram.timeLocation, scene.elapsedSeconds);
+api.Uniform2f(activeProgram.resolutionLocation, float(framebufferWidth), float(framebufferHeight));
+api.Uniform2f(activeProgram.mouseLocation, scene.mouseX, scene.mouseY);
+```
+
+Các location đi từ `activeProgram`, không phải candidate gần nhất bị lỗi.
+
+## Ghép các phần lại
+
+Checkpoint 6 dùng fragment shader pulse nhẹ và một vùng sáng gần chuột. Build, chạy, rồi resize cửa sổ:
+
+```bash title="Terminal — build checkpoint live uniforms"
+cmake --build build --config Debug --target project_35_checkpoint_6
+```
+
+Space dừng/chạy time, N tiến 0,1 giây, mouse đổi glow. Quan sát generation và attempts: cả ba thao tác không được làm hai counter tăng.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ uniform locations của program trước sau một reload thành công. Một số driver có thể tình cờ cho cùng số; contract vẫn sai.
+2. Gửi logical window size vào `uResolution` nhưng dùng `gl_FragCoord`. Trên high-DPI, UV và mouse lệch theo scale.
+3. Không đảo mouse Y. Glow phản chiếu theo chiều dọc so với con trỏ.
+
+Khôi phục conversion rồi thử kéo cửa sổ qua màn hình có scale khác nếu máy hỗ trợ.
+
+## Tự kiểm tra kết quả
+
+- [ ] Candidate generation nào có locations của generation đó.
+- [ ] `uResolution` nhận framebuffer width/height.
+- [ ] Mouse được scale từ logical units sang pixels.
+- [ ] Mouse Y được đổi sang gốc dưới-trái.
+- [ ] Uniform update không tăng reload counter.
+- [ ] Resize cập nhật viewport, aspect và resolution trong cùng frame.
+
+Hãy giải thích tại sao reset scene bằng R không cần reload shader program.
+
+## Bài tập mở rộng
+
+1. Thêm `uDeltaTime` nhưng clamp giá trị trước upload.
+2. Hiển thị normalized mouse UV trong title bar.
+3. Thêm phím đóng băng `uTime` trong khi cube vẫn xoay để chứng minh hai state độc lập.
+
+Bài tiếp theo dùng các uniform này để viết một hiệu ứng fragment procedural hoàn chỉnh.

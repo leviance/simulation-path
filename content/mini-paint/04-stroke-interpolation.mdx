@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chèn thêm điểm để tạo nét liền
+
+## Vấn đề cần giải quyết
+
+Bài trước đã đo được khoảng cách từ `previous` đến `current`. Bây giờ ta cần chèn đủ điểm vào đoạn này để khoảng cách giữa hai dấu liên tiếp không vượt quá `spacing`.
+
+Danh sách kết quả phải luôn chứa cả `start` lẫn `end`. Nếu thiếu `start`, chỗ nối giữa hai đoạn có thể mỏng hoặc hở. Nếu thiếu `end`, dấu cuối nằm sau vị trí thật của con trỏ và nét vẽ có cảm giác chậm theo tay.
+
+Phần tính toán sẽ nằm trong `lab.hpp` để có thể kiểm thử mà không cần SDL. Phần xử lý chuột chỉ việc nhận danh sách điểm rồi đặt đầu bút tại từng điểm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Linear interpolation tạo một điểm nằm giữa A và B theo công thức:
+
+```text
+P(t) = A + (B - A)t,  với 0 ≤ t ≤ 1
+```
+
+Nếu đoạn dài `d` và khoảng cách tối đa cho phép là `s`, số đoạn nhỏ cần có là:
+
+```text
+steps = ceil(d / s)
+```
+
+Phải làm tròn lên bằng `ceil`. Chẳng hạn, đoạn dài 17 pixel với giới hạn 8 pixel cần 3 khoảng. Nếu làm tròn xuống còn 2, mỗi khoảng dài 8,5 pixel và vượt quá giới hạn. Với `steps` khoảng, ta tạo `steps + 1` điểm có chỉ số từ 0 đến `steps`; nhờ vậy cả `t = 0` và `t = 1` đều xuất hiện.
+
+<InteractiveLab demo="stroke" mode="stroke-interpolation" />
+
+## Viết code từng bước
+
+### Bước 1 — Tính một điểm nằm giữa hai đầu đoạn
+
+```cpp title="include/lab.hpp — hàm lerp"
+inline Point lerp(Point start, Point end, double t) {
+    return {
+        start.x + (end.x - start.x) * t,
+        start.y + (end.y - start.y) * t,
+    };
+}
+```
+
+`lerp(start, end, 0)` trả về `start`; với `t = 1`, hàm trả về `end`; còn `t = 0.5` cho trung điểm. Cùng một `t` được dùng cho cả X và Y, nên điểm tạo ra luôn nằm trên đoạn thẳng nối hai đầu.
+
+### Bước 2 — Xử lý hai điểm trùng nhau và `spacing` không hợp lệ
+
+```cpp title="include/lab.hpp — đầu sampleStroke"
+const double segmentLength = distance(start, end);
+if (segmentLength == 0.0) {
+    return {start};
+}
+constexpr double kMinimumSpacing = 0.5;
+double safeSpacing = kMinimumSpacing;
+if (std::isfinite(spacing)) {
+    safeSpacing = std::max(spacing, kMinimumSpacing);
+}
+```
+
+Nếu hai đầu trùng nhau, kết quả chỉ cần chứa đúng một điểm. Trả về sớm còn giúp tránh phép chia cho 0 ở bước sau.
+
+`spacing` bằng 0, số âm, vô cực hoặc `NaN` cũng không thể đi vào phép chia `distance / spacing`. Ta thay chúng bằng mức tối thiểu 0,5 pixel. Giới hạn này đủ nhỏ đối với bảng vẽ hiện tại, đồng thời ngăn dữ liệu sai tạo ra hàng triệu điểm và một lần cấp phát bộ nhớ quá lớn. Trong ứng dụng bình thường, `spacing = 0.8 × radius`; với `radius` tối thiểu bằng 2, giá trị thực tế luôn từ 1,6 pixel trở lên.
+
+### Bước 3 — Tính số bước và giữ cả hai đầu đoạn
+
+```cpp title="include/lab.hpp — sampleStroke hoàn chỉnh"
+const int steps = std::max(1, int(std::ceil(segmentLength / safeSpacing)));
+std::vector<Point> points;
+points.reserve(std::size_t(steps) + 1);
+for (int index = 0; index <= steps; ++index) {
+    const double t = double(index) / double(steps);
+    points.push_back(lerp(start, end, t));
+}
+return points;
+```
+
+`reserve` không làm thay đổi kết quả; nó chỉ tránh việc vector phải cấp phát lại khi ta đã biết trước số điểm. Việc đổi `index` và `steps` sang `double` cũng rất quan trọng. Nếu dùng phép chia số nguyên, mọi giá trị `t` trước điểm cuối đều trở thành 0 và các điểm sẽ chồng lên `start`.
+
+### Bước 4 — Đặt đầu bút tại mọi điểm vừa tạo
+
+```cpp title="src/main.cpp — motion của checkpoint 4"
+const lab::Point current{event.motion.x, event.motion.y};
+const double spacing = double(radius) * 0.8;
+for (lab::Point point : lab::sampleStroke(previous, current, spacing)) {
+    stampCircle(pixels, point, radius, color);
+}
+previous = current;
+```
+
+Khoảng cách được tính theo bán kính: đầu bút lớn có thể đặt thưa hơn mà vẫn che kín đoạn, còn đầu bút nhỏ cần nhiều điểm hơn. Hai đoạn liền nhau đều đóng dấu tại điểm chung. Công việc này hơi lặp lại, nhưng giúp code dễ hiểu và tránh khe nhỏ ở chỗ nối.
+
+## Ghép các phần lại
+
+Cách xử lý chuột không thay đổi: nhấn nút mở một nét, chuyển động cung cấp `current`, thả nút kết thúc nét. Trong nhánh chuyển động, `sampleStroke` chia khoảng nhảy thành nhiều điểm; `stampCircle` biến mỗi điểm thành một hình tròn; `putPixel` bảo vệ biên. Mỗi hàm đảm nhận một việc riêng.
+
+Hãy chạy checkpoint 3 và 4 với cùng bán kính, rồi cố kéo chuột nhanh như nhau. Checkpoint 3 để lộ những hình tròn rời, còn checkpoint 4 phải tạo nét liền. Trong Stroke Lab, bật hiển thị điểm gốc và điểm nội suy. Khi giảm tần suất lấy mẫu, các điểm gốc thưa ra nhưng khoảng cách giữa các điểm được chèn thêm vẫn không vượt quá giới hạn.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `floor` thay `ceil` cho đoạn dài 17 pixel với `spacing = 8`. Số khoảng bị làm tròn xuống và khoảng cách thực tế vượt quá 8 pixel.
+2. Đổi vòng lặp thành `index < steps`. Điểm `end` không còn xuất hiện trong kết quả.
+3. Bỏ phép đổi sang `double` khi tính `t`. Phép chia số nguyên làm gần như mọi giá trị bằng 0 và các điểm chồng lên đầu đoạn.
+4. Đặt `spacing` lớn hơn `2 × radius`. Thuật toán vẫn làm đúng giá trị đầu vào, nhưng các hình tròn không còn chạm nhau và nét lại bị đứt.
+
+## Tự kiểm tra kết quả
+
+- Nét nhanh và chậm đều liền mạch.
+- `sampleStroke` luôn trả về `start` và `end`.
+- Khoảng cách giữa hai điểm liên tiếp không vượt quá `spacing`.
+- Hai đầu trùng nhau trả đúng một điểm.
+- `spacing` bằng 0 hoặc số âm được thay bằng 0,5 pixel, không gây chia cho 0 hoặc tạo vector quá lớn.
+
+## Bài tập mở rộng
+
+Hãy thử bỏ qua điểm đầu của đoạn thứ hai khi đóng dấu, nhưng vẫn giữ nguyên test hai đầu cho hàm `sampleStroke`. So sánh `spacing = radius`, `0.8 × radius` và `0.25 × radius`: nét thay đổi ra sao, số lần gọi `stampCircle` tăng bao nhiêu? Sau đó có thể giả lập lực nhấn và nội suy cả bán kính theo `t`.
+
+Bài sau sẽ thêm bảng màu, thay đổi kích thước đầu bút và xóa bảng vẽ mà không biến phần xử lý sự kiện thành một khối code khó đọc.

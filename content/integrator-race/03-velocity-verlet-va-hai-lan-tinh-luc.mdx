@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Velocity Verlet và hai lần tính lực
+
+## Vấn đề cần giải quyết
+
+Euler dùng duy nhất acceleration ở đầu step. Với một lò xo, acceleration thay đổi ngay khi position thay đổi, nên giả định đó nhanh chóng lạc hậu. Velocity Verlet bổ sung một lần hỏi lực tại position mới và dùng cả hai đầu step để cập nhật velocity.
+
+Tên gọi cần chính xác: project này lưu cả `position` lẫn `velocity`, vì vậy ta đang cài **Velocity Verlet**, không phải một biến thể position-only rồi suy velocity bằng cách khác.
+
+## Hiểu ý tưởng trước khi viết code
+
+Quy trình phải diễn ra đúng thứ tự:
+
+$$
+a_0=a(x_0)
+$$
+
+$$
+x_1=x_0+v_0\Delta t+\frac12a_0\Delta t^2
+$$
+
+$$
+a_1=a(x_1)
+$$
+
+$$
+v_1=v_0+\frac12(a_0+a_1)\Delta t
+$$
+
+<InteractiveLab demo="integrator-race" mode="integrator-verlet" />
+
+Giữ `dt` ở 1/15 s và chạy nhanh. Lane xanh có thể lệch pha dần, nhưng amplitude không nổ như Euler. Chuyển graph sang Energy drift: đường Verlet thường dao động quanh mức ban đầu thay vì tăng một chiều.
+
+## Viết code từng bước
+
+### Bước 1 — Tính acceleration đầu bước
+
+```cpp title="include/lab.hpp — lần tính lực thứ nhất"
+const double accelerationStart = oscillatorAcceleration(current.position, parameters);
+```
+
+Đây là $a_0$. Giữ tên `Start` giúp ta không vô tình dùng nó ở nơi cần acceleration cuối bước.
+
+### Bước 2 — Tìm position mới trước
+
+```cpp title="include/lab.hpp — dự đoán position bằng Taylor bậc hai"
+const double position = current.position + current.velocity * deltaSeconds + 0.5 * accelerationStart * deltaSeconds * deltaSeconds;
+```
+
+Hạng $\frac12a_0\Delta t^2$ là điểm khác dễ thấy so với Euler. Ta chưa sửa `current`; `position` chỉ là ứng viên ở cuối step.
+
+### Bước 3 — Hỏi lực tại position mới
+
+```cpp title="include/lab.hpp — lần tính lực thứ hai"
+const double accelerationEnd = oscillatorAcceleration(position, parameters);
+const double velocity = current.velocity + 0.5 * (accelerationStart + accelerationEnd) * deltaSeconds;
+return {{position, velocity, current.elapsed + deltaSeconds}, 2};
+```
+
+Hai acceleration được lấy trung bình trước khi nhân `dt`. Vì `accelerationEnd` phụ thuộc `position`, không thể chuyển dòng này lên trước Bước 2.
+
+### Bước 4 — Giữ lane xanh độc lập
+
+Checkpoint 3 thêm `verletState`, nhưng không sửa `eulerState`. Cả hai bắt đầu từ cùng `initial`, còn mỗi lần update chỉ đọc state của lane mình. Đây là chuẩn bị cho lockstep chặt chẽ ở bài 5.
+
+## Ghép các phần lại
+
+```bash title="Terminal — so Euler và Velocity Verlet"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_checkpoint_3
+./build/Debug/project_23_checkpoint_3.exe
+```
+
+Ở `x=1`, `v=0`, `k/m=4`, `dt=0.1`, hãy tự tính trước: $a_0=-4$, $x_1=0.98$, $a_1=-3.92$, $v_1=-0.396$. CTest dùng đúng các con số này để bắt lỗi thứ tự.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính `accelerationEnd` từ `current.position` thay vì `position`. Hai lần gọi cho cùng một kết quả; dự đoán hành vi, chạy rồi hoàn tác.
+2. Bỏ hệ số `0.5` trong position. Một step nhỏ có thể vẫn trông hợp lý, nhưng test số cụ thể sẽ fail. Hoàn tác thay đổi.
+3. Chỉ trả cost bằng 1 vì “cùng một hàm acceleration”. Cost đếm số lần evaluation, không đếm số hàm khác nhau; hoàn tác về 2.
+
+## Tự kiểm tra kết quả
+
+- Chuỗi phụ thuộc là `a0 → x1 → a1 → v1`, không đảo thứ tự.
+- Một step mẫu cho `x1=0.98`, `v1=-0.396`.
+- Force counter tăng 2 mỗi step.
+- Elapsed chỉ tăng một `dt`, không tăng lần nữa khi tính `a1`.
+- Ở cùng `dt` dài hạn, energy drift của Verlet bị chặn tốt hơn Euler.
+- Exact ghost vẫn chỉ làm đối chứng.
+
+## Bài tập mở rộng
+
+Lưu `accelerationEnd` của step hiện tại để dùng lại làm `accelerationStart` ở step sau. Đo lại cost thực tế và nêu điều kiện khiến cache hợp lệ; đừng áp dụng nếu parameters thay đổi giữa hai step.
+
+Bài tiếp theo đi theo một hướng khác: RK4 đánh giá derivative tại bốn state tạm rồi lấy trung bình có trọng số.

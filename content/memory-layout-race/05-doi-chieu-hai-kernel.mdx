@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đối chiếu hai kernel trước cuộc đua
+
+## Vấn đề cần giải quyết
+
+Ta đã có hai state chứa cùng giá trị, nhưng chỉ AoS biết chuyển động. Bây giờ cần viết kernel SoA. Đây là lúc dễ tạo một benchmark “đẹp” nhưng sai: bỏ quên một trục, dùng factor khác hoặc đổi thứ tự wrap có thể làm SoA nhanh hơn đơn giản vì nó làm ít việc hơn.
+
+Vì thế thứ tự làm việc của bài này là: viết cùng công thức, chạy từ cùng source, so checksum, rồi so cả sáu field. Chưa có bước nào yêu cầu SoA phải nhanh hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Khác biệt duy nhất được phép là cú pháp truy cập:
+
+```text title="Hai cách đọc positionX của particle i"
+AoS: particles[i].positionX
+SoA: particles.positionX[i]
+```
+
+Mọi thứ khác phải giữ nguyên: `float`, `dt`, factor damping, số vòng lặp, thứ tự phép nhân/cộng và wrap rule. Với các điều kiện đó, maximum difference kỳ vọng bằng 0.
+
+Checksum chỉ là dấu hiệu tổng hợp. Hai state sai ở hai vị trí có thể vô tình cho cùng tổng. Vì vậy validation chính là:
+
+$$\max_{i,field}\left|AoS_{i,field}-SoA_{field,i}\right|$$
+
+<InteractiveLab demo="memory-layout-race" mode="layout-agreement" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết integrate SoA bằng cùng thứ tự
+
+```cpp title="include/particles.hpp — integrateSoA"
+inline void integrateSoA(ParticlesSoA& particles, float deltaSeconds) {
+    if (!validSoA(particles)) {
+        return;
+    }
+    for (std::size_t index = 0; index < particles.size(); ++index) {
+        particles.positionX[index] = wrapCoordinate(
+            particles.positionX[index] + particles.velocityX[index] * deltaSeconds
+        );
+        particles.positionY[index] = wrapCoordinate(
+            particles.positionY[index] + particles.velocityY[index] * deltaSeconds
+        );
+        particles.positionZ[index] = wrapCoordinate(
+            particles.positionZ[index] + particles.velocityZ[index] * deltaSeconds
+        );
+    }
+}
+```
+
+SoA loop đi theo particle index. Trong mỗi iteration nó đọc từ sáu allocation khác nhau, nhưng mỗi allocation lại được quét tuần tự.
+
+### Bước 2 — Tạo dispatcher tương ứng
+
+```cpp title="include/benchmark.hpp — runSoAWorkload"
+inline double runSoAWorkload(
+    ParticlesSoA& particles,
+    MemoryWorkload workload,
+    float deltaSeconds = 1.0F / 120.0F
+) {
+    if (workload == MemoryWorkload::positionX) {
+        return sumPositionXSoA(particles);
+    }
+    if (workload == MemoryWorkload::velocityOnly) {
+        dampVelocitiesSoA(particles, 0.9995F);
+        return sumPositionXSoA(particles);
+    }
+    integrateSoA(particles, deltaSeconds);
+    return sumPositionXSoA(particles);
+}
+```
+
+Đặt hai dispatcher cạnh nhau và đọc từng nhánh. Nếu một phía dùng `0.999F`, phía kia dùng `0.9995F`, benchmark phải bị coi là invalid dù chênh lệch rất nhỏ.
+
+### Bước 3 — So từng field
+
+```cpp title="include/particles.hpp — maximumLayoutDifference"
+float maximum = 0.0F;
+for (std::size_t index = 0; index < aos.size(); ++index) {
+    maximum = std::max(maximum, std::abs(aos[index].positionX - soa.positionX[index]));
+    maximum = std::max(maximum, std::abs(aos[index].positionY - soa.positionY[index]));
+    maximum = std::max(maximum, std::abs(aos[index].positionZ - soa.positionZ[index]));
+    maximum = std::max(maximum, std::abs(aos[index].velocityX - soa.velocityX[index]));
+    maximum = std::max(maximum, std::abs(aos[index].velocityY - soa.velocityY[index]));
+    maximum = std::max(maximum, std::abs(aos[index].velocityZ - soa.velocityZ[index]));
+}
+return maximum;
+```
+
+Nếu size khác nhau hoặc SoA invalid, hàm trả infinity. Không được trả 0 cho hai state không thể so.
+
+## Ghép các phần lại
+
+Từ checkpoint 5, mỗi animation step gọi cả `integrateAoS` lẫn `integrateSoA`. Title bar báo maximum difference; `L` chỉ đổi layout đang vẽ chứ không đổi state nào được update.
+
+Khi benchmark từng workload ở bài sau, mỗi phía sẽ dùng working copy riêng. Phép so hiện tại khóa correctness của kernel trước khi timing khiến ta bị phân tâm.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ dòng cập nhật `positionZ` ở SoA. Particle sample 2D có thể trông không đổi, nhưng maximum difference phải phát hiện trục Z.
+2. Dùng `double deltaSeconds` ở một phía và thực hiện phép tính double trước khi gán về float. Output có thể lệch vì rounding khác.
+3. Chạy AoS hai bước, SoA một bước. Lỗi lifecycle này không liên quan layout nhưng vẫn làm race vô nghĩa.
+4. Chỉ so checksum position.x. Sau đó cố ý sửa velocityZ và quan sát checksum không đổi.
+
+## Tự kiểm tra kết quả
+
+- [ ] Conversion ban đầu cho maximum difference bằng 0.
+- [ ] Sau hàng trăm integrate step, difference vẫn bằng 0.
+- [ ] Velocity-only tạo cùng checksum và cùng sáu field.
+- [ ] Position-x chỉ đọc state và không làm difference thay đổi.
+- [ ] Size mismatch hoặc vector SoA thiếu field không được báo là khớp.
+- [ ] Target `project_32_checkpoint_5` build và chạy được.
+
+## Bài tập mở rộng
+
+1. Trả thêm particle index và field tạo ra maximum difference để debug nhanh hơn.
+2. Viết test cố ý đổi `velocityZ[17]` và kiểm difference lớn hơn 0.
+3. Thử so với tolerance thay vì equality, rồi giải thích khi nào tolerance cần thiết.
+
+Bài 6 sẽ không đo thời gian ngay. Ta sẽ nhìn vào byte address để xây một mô hình cache-line có thể giải thích vì sao workload chỉ đọc một field khác workload dùng đủ sáu field.

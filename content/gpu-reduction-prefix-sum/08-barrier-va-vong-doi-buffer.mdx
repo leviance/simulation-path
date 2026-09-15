@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt barrier đúng chỗ và quản lý vòng đời buffer
+
+## Điều khó nằm ở đâu?
+
+Đến đây ta đã gặp hai loại barrier có tên gần giống nhau nhưng làm hai việc hoàn toàn khác. Nếu nhầm chúng, code vẫn có thể compile nhưng dữ liệu đọc ở pass sau sẽ không đáng tin cậy:
+
+- `barrier()` trong GLSL hẹn invocation của **một workgroup** tại một điểm trong shader;
+- `glMemoryBarrier(...)` trong C++ giúp lệnh đọc tiếp theo nhìn thấy dữ liệu mà lệnh trước vừa ghi.
+
+Dùng đúng loại nhưng sai vị trí vẫn hỏng. `barrier()` không thể hẹn workgroup 0 với workgroup 1; `glMemoryBarrier` không giúp lane 0 chờ lane 17 giữa hai stride của cùng shader.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Hãy đọc chuỗi xử lý theo từng cặp lệnh ghi → lệnh đọc:
+
+```text
+shared writes → lane trong cùng workgroup đọc shared
+    memoryBarrierShared + barrier
+
+SSBO partial sums → compute shader pass kế đọc SSBO
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT)
+
+SSBO final output → glGetBufferSubData
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT)
+```
+
+Barrier bit được chọn từ **cách dữ liệu sẽ được đọc**, không phải chỉ từ việc compute shader vừa ghi nó. Cùng một lần ghi nhưng hai cách đọc khác nhau có thể cần hai bit khác nhau.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="pass-barriers" />
+
+Hãy đổi bước đọc tiếp theo giữa compute pass và CPU readback, rồi thử ba barrier bit. Canvas chỉ báo PASS khi bit phù hợp với cách đọc đó. Trong tài liệu OpenGL, bước đọc tiếp theo thường được gọi là **consumer**.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Đồng bộ workgroup ngay sau khi sửa shared memory
+
+```glsl title="shaders/scan_blocks.comp — workgroup synchronization"
+memoryBarrierShared();
+barrier();
+```
+
+Hai lệnh làm ý định rõ: shared writes phải visible và mọi lane phải tới cùng giai đoạn. Chúng được đặt trực tiếp trong `main` sau load, mỗi upsweep offset, root-zero và mỗi downsweep offset để hợp lệ với GLSL 4.30.
+
+### Bước 2 — Ghi barrier vào nhật ký từng pass
+
+```cpp title="include/reduction_gpu_engine.hpp — PassRecord"
+struct PassRecord {
+    std::string label{};
+    std::size_t inputCount{};
+    std::size_t outputCount{};
+    GLenum barrierBit{};
+};
+```
+
+Nhật ký biến việc đồng bộ thành dữ liệu có thể quan sát. Nếu pass cuối của reduction vẫn ghi `SHADER_STORAGE`, ta sẽ thấy code chưa chuyển barrier sang loại dành cho CPU readback.
+
+### Bước 3 — Chọn bit ở đúng cạnh reduction
+
+```cpp title="include/reduction_gpu_engine.hpp — barrier giữa các tầng reduction"
+GLenum barrierBit = GL_BUFFER_UPDATE_BARRIER_BIT;
+if (outputCount > 1U) {
+    barrierBit = GL_SHADER_STORAGE_BARRIER_BIT;
+}
+gl.MemoryBarrier(barrierBit);
+```
+
+`outputCount > 1` đồng nghĩa còn dispatch reduction kế tiếp. Khi bằng 1, câu lệnh tiếp theo là `glGetBufferSubData`.
+
+### Bước 4 — Giữ buffer sống cho đến khi pass cuối đọc xong
+
+```cpp title="include/reduction_gpu_engine.hpp — cleanup data buffers"
+if (reductionScratch_[0] != 0U || reductionScratch_[1] != 0U) {
+    gl.DeleteBuffers(2, reductionScratch_.data());
+}
+reductionScratch_.fill(0U);
+if (inputBuffer_ != 0U) {
+    gl.DeleteBuffers(1, &inputBuffer_);
+    inputBuffer_ = 0U;
+}
+```
+
+Buffer không bị tạo hoặc xóa giữa các pass. Chúng chỉ được tạo lại khi count hoặc seed thay đổi, và phải được xóa khi OpenGL context vẫn còn hiệu lực.
+
+## Chạy checkpoint và đọc kết quả
+
+```bash title="Terminal — checkpoint 8"
+cmake --build build --config Debug --target project_39_checkpoint_8
+build\Debug\project_39_checkpoint_8.exe
+```
+
+Hãy đọc nhật ký theo thứ tự. Với preset reduction lớn: `SHADER_STORAGE, SHADER_STORAGE, BUFFER_UPDATE`. Với scan lớn: bốn barrier đầu dành cho compute pass tiếp theo, barrier cuối dành cho CPU readback.
+
+## Cố tình phá thuật toán
+
+1. Thay mọi bit bằng `GL_ALL_BARRIER_BITS`. Output có thể đúng, nhưng code không còn cho biết buffer sắp được đọc bằng cách nào và trở nên khó kiểm tra.
+2. Gọi `glMemoryBarrier` trước dispatch producer. Nó không làm visible write chưa xảy ra.
+3. Dùng `barrier()` sau khi một số tail lane return. Workgroup không còn control flow đồng đều.
+4. Nghĩ dispatch kế tiếp tự là global barrier cho SSBO visibility. Command order không thay thế memory visibility bit đúng.
+5. Xóa scratch buffer ngay sau lần dispatch cuối nhưng trước readback. Buffer đã biến mất trước khi lệnh đọc dùng đến nó.
+
+## Checklist hoàn thành
+
+- [ ] Shared-memory stride dùng `memoryBarrierShared()` và `barrier()` trong shader.
+- [ ] Compute→compute dùng `GL_SHADER_STORAGE_BARRIER_BIT`.
+- [ ] Final compute→readback dùng `GL_BUFFER_UPDATE_BARRIER_BIT`.
+- [ ] Barrier đứng sau lệnh ghi và trước lệnh đọc.
+- [ ] Không dùng `GL_ALL_BARRIER_BITS` để che quyết định.
+- [ ] Buffer tồn tại suốt mọi pass dùng nó và chỉ xóa khi context còn current.
+- [ ] Pass trace ghi barrier bit của từng cạnh.
+
+## Bài tập để hiểu sâu hơn
+
+1. Vẽ pass graph trên giấy và ghi resource được đọc/ghi cạnh mỗi node trước khi nhìn source.
+2. Cho graphics shader đọc output của scan, rồi chọn barrier bit dựa trên cách shader truy cập buffer.
+3. Viết named report đếm số cạnh thiếu barrier trong một pass trace giả lập.
+
+Đến đây, đường đi của dữ liệu và các điểm đồng bộ đã rõ. Bài 9 sẽ kiểm tra kết quả bằng nhiều điều kiện hơn việc chỉ nhìn một dãy tăng, đồng thời đo toàn bộ các pass mà không bắt CPU chờ query hiện tại.

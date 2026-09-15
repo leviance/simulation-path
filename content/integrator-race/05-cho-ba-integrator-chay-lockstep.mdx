@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho ba integrator chạy lockstep
+
+## Vấn đề cần giải quyết
+
+Ba lane đã xuất hiện, nhưng checkpoint trước vẫn đưa `frameSeconds` trực tiếp vào solver. Nếu một lane được gọi sớm hơn, nhận `dt` khác hoặc chạy nhiều bước hơn, ta không còn so integrator mà đang so ba lịch chạy.
+
+Một cuộc đua công bằng phải khóa bốn thứ: cùng initial state, cùng parameters, cùng fixed `dt` và cùng step count. Render frame chỉ quyết định lúc nào cần chạy bao nhiêu fixed step; nó không trở thành step size của physics.
+
+## Hiểu ý tưởng trước khi viết code
+
+`IntegratorRace` là một thí nghiệm, không chỉ là ba biến đặt cạnh nhau:
+
+```text
+frame time → accumulator → N fixed steps
+                             ├─ Euler(dt)
+                             ├─ Verlet(dt)
+                             └─ RK4(dt)
+```
+
+Sau mỗi race step, ba `elapsed` phải cùng bằng `stepCount * dt`. Counter được phép khác vì đó chính là cost cần đo.
+
+<InteractiveLab demo="integrator-race" mode="integrator-lockstep" />
+
+Tiến một bước và đọc Force evaluations: `1 / 2 / 4`. Tiến thêm một bước: `2 / 4 / 8`. Nếu elapsed hoặc step count khác nhau giữa các lane, hãy dừng; mọi biểu đồ sai số phía sau đều vô nghĩa.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo ba lane từ cùng snapshot
+
+```cpp title="include/lab.hpp — race giữ initial state và ba lane"
+struct IntegratorRace {
+    OscillatorState initial{};
+    IntegratorLane euler{};
+    IntegratorLane verlet{};
+    IntegratorLane rk4{};
+    std::size_t stepCount{};
+};
+
+inline IntegratorRace makeIntegratorRace(const OscillatorState& initial) {
+    return {initial, {initial, 0}, {initial, 0}, {initial, 0}, 0};
+}
+```
+
+Mỗi lane có một bản state riêng. Không cho Verlet nhận output của Euler; đó sẽ là một chuỗi solver, không phải chạy song song.
+
+### Bước 2 — Tính cả ba kết quả trước khi tăng step count
+
+```cpp title="include/lab.hpp — một lockstep gọi đủ ba solver"
+const IntegratorStepResult euler = explicitEulerStep(race.euler.state, parameters, deltaSeconds);
+const IntegratorStepResult verlet = velocityVerletStep(race.verlet.state, parameters, deltaSeconds);
+const IntegratorStepResult rk4 = rungeKutta4Step(race.rk4.state, parameters, deltaSeconds);
+if (euler.forceEvaluations == 0 || verlet.forceEvaluations == 0 || rk4.forceEvaluations == 0) {
+    return;
+}
+```
+
+Nếu một solver từ chối input, race không commit một phần. Đây là transaction nhỏ giữ invariant “cùng số step”.
+
+### Bước 3 — Commit state và counters cùng nhau
+
+```cpp title="include/lab.hpp — chỉ một nơi tăng stepCount"
+race.euler.state = euler.state;
+race.verlet.state = verlet.state;
+race.rk4.state = rk4.state;
+race.euler.forceEvaluations += std::size_t(euler.forceEvaluations);
+race.verlet.forceEvaluations += std::size_t(verlet.forceEvaluations);
+race.rk4.forceEvaluations += std::size_t(rk4.forceEvaluations);
+++race.stepCount;
+```
+
+`stepCount` không thuộc lane nào vì nó là đồng hồ chung của thí nghiệm.
+
+### Bước 4 — Dùng accumulator có giới hạn
+
+```cpp title="include/lab.hpp — frame time chỉ lập kế hoạch fixed step"
+const double acceptedFrame = std::min(frameSeconds, maximumFrameSeconds);
+double available = accumulator + acceptedFrame;
+const int availableSteps = int(std::floor((available + kIntegratorEpsilon) / fixedDeltaSeconds));
+const int steps = std::min(availableSteps, maximumSteps);
+```
+
+Frame dài sau khi kéo cửa sổ hoặc dừng debugger bị clamp; số substep cũng có trần. Phần thời gian bị bỏ được ghi lại trong `droppedTime` thay vì tạo vòng lặp đuổi theo vô hạn.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy race bằng fixed timestep"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_checkpoint_5
+./build/Debug/project_23_checkpoint_5.exe
+```
+
+Nhấn N đúng 10 lần. Title bar phải báo `stepCount=10`, elapsed `10*dt`, evaluations `10/20/40`. Sau đó chạy realtime; thay đổi FPS của cửa sổ không làm ba lane mất lockstep.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi Euler bằng `frameSeconds`, hai solver còn lại bằng `fixedDeltaSeconds`. Dự đoán điều gì xảy ra khi kéo cửa sổ, quan sát rồi hoàn tác.
+2. Tăng `stepCount` sau mỗi integrator. Một race step bị báo thành ba; hoàn tác và chỉ tăng sau khi commit đủ ba.
+3. Bỏ `maximumSteps`, đặt breakpoint vài giây rồi tiếp tục. Có thể xuất hiện spiral of death; dừng thử nghiệm và hoàn tác guard.
+
+## Tự kiểm tra kết quả
+
+- Ba lane bắt đầu từ các bản sao của cùng initial state.
+- Một race step dùng cùng parameters và `dt` cho cả ba solver.
+- Sau N step, ba elapsed cùng bằng `N*dt`.
+- Evaluation counters đúng `N`, `2N`, `4N`.
+- Hai cách chia frame có cùng tổng thời gian tạo cùng số fixed step khi chưa chạm guard.
+- Input hỏng không commit race một phần.
+- Frame quá dài bị ghi `droppedTime`, không treo vòng lặp.
+
+## Bài tập mở rộng
+
+Thêm một “slow renderer preset” tạo chuỗi frame 8 ms, 8 ms, 50 ms lặp lại. So state cuối với chuỗi frame đều có cùng tổng thời gian và giải thích khi nào guard khiến hai kết quả cố ý khác nhau.
+
+Bài tiếp theo sẽ biến khoảng cách nhìn thấy thành ba số đo: position error, phase-space error và relative energy drift.

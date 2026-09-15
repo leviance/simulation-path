@@ -1,0 +1,99 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thí nghiệm stiffness, mass và delta time
+
+## Vấn đề cần giải quyết
+
+Cùng một đoạn code có thể chạy ổn với spring mềm nhưng nổ khi tăng stiffness. Đây không phải vì máy “không đủ FPS”: spring cứng dao động nhanh hơn, trong khi integration dt có thể quá dài để lấy mẫu chuyển động đó. Damping lớn đôi khi che triệu chứng nhưng không sửa một bước thời gian quá thô.
+
+Ta cần một con số kết nối ba tham số quan trọng: stiffness $k$, mass $m$ và $\Delta t$. Với một oscillator đơn, angular frequency là $\omega=\sqrt{k/m}$; nhân với dt cho chỉ số không thứ nguyên $q$.
+
+## Hiểu ý tưởng trước khi viết code
+
+$$
+q=\Delta t\sqrt{\frac{k}{m}}
+$$
+
+$q$ càng lớn nghĩa là một numerical step chiếm phần càng lớn của time scale dao động. Chuỗi nhiều mass có nhiều vibration mode nên không có một ngưỡng duy nhất từ công thức này; ta dùng nó để so cấu hình, sau đó vẫn phải kiểm energy, stretch và finite state.
+
+<InteractiveLab demo="spring-chain" mode="spring-stability" />
+
+Chạy preset Stable, Borderline và Deliberately unstable. Quan sát $q$, energy trace và maximum stretch. Sau khi case xấu tăng không kiểm soát, nhấn reset; demo phải lấy lại điều khiển ngay.
+
+## Viết code từng bước
+
+### Bước 1 — Tính chỉ số không thứ nguyên
+
+```cpp title="include/lab.hpp — time step so với spring time scale"
+return deltaSeconds * std::sqrt(stiffness / mass);
+```
+
+Hàm trả infinity cho input không hợp lệ thay vì một giá trị “ổn” giả. `q` không phụ thuộc render FPS.
+
+### Bước 2 — Đo stretch lớn nhất trong cả chuỗi
+
+```cpp title="include/lab.hpp — metric lấy từ geometry thật"
+for (const Spring& spring : chain.springs) {
+    const SpringSample sample = sampleElasticSpring(chain, spring);
+    if (!sample.valid) {
+        metrics.finite = false;
+        continue;
+    }
+    metrics.maximumStretch = std::max(metrics.maximumStretch, std::abs(sample.stretch));
+```
+
+Màu spring giúp nhìn vị trí lỗi; `maximumStretch` cho ngưỡng regression test không phụ thuộc ảnh chụp.
+
+### Bước 3 — Không clamp state để giấu instability
+
+```cpp title="include/lab.hpp — finite state là kết quả cần đo"
+metrics.finite = metrics.finite && std::isfinite(metrics.kineticEnergy) && std::isfinite(metrics.springEnergy) && std::isfinite(metrics.gravitationalEnergy) && std::isfinite(metrics.maximumStretch) && std::isfinite(metrics.maximumSpeed) && std::isfinite(metrics.anchorError);
+return metrics;
+```
+
+Canvas fast-run dừng khi metric không finite. Physics code không clamp position, velocity hoặc force để tạo cảm giác ổn định giả.
+
+### Bước 4 — Controls reset về initial state rõ ràng
+
+```cpp title="src/main.cpp — thay stiffness không giữ state cũ"
+if (!event.key.repeat && event.key.key == SDLK_EQUALS) {
+    stiffness = std::min(600.0, stiffness + 20.0);
+    chain = makeDefaultChain(stiffness, damping);
+    paused = true;
+}
+```
+
+Reset giúp hai preset bắt đầu từ cùng geometry/velocity. Nếu thay k giữa một trạng thái đang stretch, spring potential energy nhảy ngay do người dùng đã đổi chính mô hình.
+
+## Ghép các phần lại
+
+```bash title="Terminal — thí nghiệm stability trong native app"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_checkpoint_7
+./build/Debug/project_25_checkpoint_7.exe
+```
+
+Dùng `[`/`]` đổi dt, `-`/`=` đổi stiffness và `D` đổi damping. Title bar báo $q$, max stretch, max speed và finite state; mỗi thay đổi tham số reset và pause để thí nghiệm có cùng điểm bắt đầu.
+
+## Thử làm sai để hiểu đúng
+
+1. Tăng k từ 120 lên 600 nhưng giữ dt lớn. Kéo mass rồi fast-run; ghi q và dấu hiệu energy growth trước khi reset.
+2. “Sửa” case trên bằng clamp velocity. Hình có thể bớt nổ nhưng energy bị xóa không theo mô hình; hoàn tác clamp và giảm dt.
+3. Tính q từ frameSeconds. Thay render FPS làm cảnh báo đổi dù physics dt giữ nguyên; hoàn tác về fixed delta.
+
+## Tự kiểm tra kết quả
+
+- `k=100`, `m=4`, `dt=0.02` cho q=0.1.
+- Chia dt đôi làm q giảm một nửa.
+- Tăng stiffness bốn lần làm q tăng gấp đôi.
+- Tăng mass bốn lần làm q giảm một nửa.
+- Metric đánh dấu false khi bất kỳ thành phần nào không finite.
+- Anchor error được đo độc lập với stretch.
+- Thay tham số luôn reset accumulator và pause.
+- Stable preset chịu được thao tác kéo mà không tăng energy vô hạn.
+
+## Bài tập mở rộng
+
+Với ba preset dt, đo maximum stretch sau đúng 5 giây mô phỏng từ cùng một displacement. Vẽ error tương đối so với dt nhỏ nhất; đừng dùng wall-clock time.
+
+Bài cuối gom các số đo thành Definition of Done, viết CTest cho công thức cục bộ lẫn stress run 20 giây và bàn giao source hoàn chỉnh.

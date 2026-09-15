@@ -1,0 +1,125 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính lực qua biên và chọn cutoff hợp lệ
+
+## Vấn đề cần giải quyết
+
+Đường vàng đã chỉ đúng ảnh gần nhất. Bây giờ ta đưa chính vector đó vào công thức Lennard–Jones. Với cặp ở hai mép, lực trên A phải hướng về ảnh gần của B, không kéo A chạy xuyên cả hộp để tìm marker xanh.
+
+Giữ checkpoint 3 và thêm phần tính lực vào `include/dynamics.hpp`. Bài này hiển thị lực và số cặp, nhưng chuyển động vẫn là ballistic như bài 2. Bài sau mới dùng lực để đổi velocity. Cách tách này cho phép kiểm đúng dấu lực trước khi tích phân làm vị trí thay đổi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi `delta` là minimum image của `position[j]-position[i]` và `r=length(delta)`. Vì delta hướng từ i tới j, lực trên i là:
+
+$$
+\mathbf F_i=U'_{fs}(r)\frac{\boldsymbol\delta}{r},\qquad
+\mathbf F_j=-\mathbf F_i.
+$$
+
+Dấu cộng trước `U'` không mâu thuẫn với lực bằng âm gradient theo vị trí. Khi i dịch về phía j, r giảm, nên đạo hàm r theo vị trí i có dấu âm. Ở khoảng cách 1.2 của preset đầu, độ dốc thế năng dương; delta hướng qua mép trái nên lực trên A cũng hướng sang trái.
+
+Ta giữ **force-shifted cutoff** từ Project 42:
+
+$$
+U_{fs}(r)=U(r)-U(r_c)-(r-r_c)U'(r_c),\qquad
+U'_{fs}(r)=U'(r)-U'(r_c).
+$$
+
+Ngoài cutoff, cả hai bằng zero. Trong hộp tuần hoàn, còn một điều kiện hình học: dùng `rc < min(Lx,Ly)/2` để chỉ có một ảnh gần tham gia tương tác ngắn hạn. Với hộp 12×12, cutoff 2.5 hợp lệ còn 6 không được chấp nhận trong project này. Hướng dẫn GROMACS cũng nêu giới hạn nửa cạnh ngắn nhất cho minimum image; ta dùng dấu nhỏ hơn nghiêm ngặt để bỏ trường hợp tie. [Tham khảo về điều kiện biên tuần hoàn](https://manual.gromacs.org/current/reference-manual/algorithms/periodic-boundary-conditions.html).
+
+<InteractiveLab demo="periodic-molecular-box" mode="pbc-forces" />
+
+Đặt lại cặp hai hạt, đọc một cặp được xét và một cặp có lực. Đường đỏ minh họa hướng lực; độ dài hiển thị được giới hạn để không tràn hình, còn force trong solver không bị clamp. Hãy tạm dừng khi so dấu của lực với đường vàng.
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm tra tham số trước khi duyệt cặp
+
+`validParameters` trước hết từ chối giá trị không hữu hạn hoặc cạnh hộp không dương. Sau đó kiểm điều kiện của mô hình:
+
+```cpp title="include/dynamics.hpp — hợp đồng cutoff cho hộp tuần hoàn"
+return parameters.epsilon > 0.0 && parameters.sigma > 0.0 && parameters.cutoff > parameters.sigma && parameters.cutoff < 0.5 * std::min(box.width, box.height);
+```
+
+Đoạn trên là dòng trả về ở cuối `validParameters`, không phải cả hàm. Đọc phần kiểm hữu hạn ngay trước nó trong source cuối bài. Điều kiện `cutoff > sigma` là lựa chọn cho lab Lennard–Jones này, còn giới hạn nửa hộp là điều kiện để dùng cách chọn ảnh đang học.
+
+### Bước 2 — Giữ giá trị và độ dốc cùng một mô hình
+
+`rawPair` tính thế Lennard–Jones gốc. `shiftedPair` biến đổi cả U và độ dốc, không chỉ dịch đường thế năng cho đẹp:
+
+```cpp title="include/dynamics.hpp — thế năng force-shifted"
+inline PairSample shiftedPair(double distance, Parameters parameters) {
+    if (distance >= parameters.cutoff) {
+        return {};
+    }
+    const PairSample current = rawPair(distance, parameters);
+    const PairSample edge = rawPair(parameters.cutoff, parameters);
+    PairSample sample;
+    sample.potential = current.potential - edge.potential - (distance - parameters.cutoff) * edge.slope;
+    sample.slope = current.slope - edge.slope;
+    return sample;
+}
+```
+
+`PairSample` có hai trường `potential` và `slope`. Hàm này chỉ nhận r dương, không gần zero; việc kiểm r nằm trong vòng lặp lực ngay dưới đây. Không gọi `rawPair(0)` để “thử rồi xem”: phép chia đã vô nghĩa trước khi có kết quả lực.
+
+### Bước 3 — Thay khoảng cách thường bằng minimum image
+
+Trong `evaluate`, vòng ngoài duyệt i, vòng trong bắt đầu từ `j=i+1`. Với mỗi cặp:
+
+```cpp title="include/dynamics.hpp — lấy khoảng cách tuần hoàn của một cặp"
+++result.evaluatedPairs;
+const Vec2 rawDelta = subtract(system.particles[j].position, system.particles[i].position);
+const Vec2 delta = minimumImage(rawDelta, system.box);
+const double distance = length(delta);
+if (!std::isfinite(distance) || distance < 1.0e-6) {
+    return result;
+}
+if (distance >= system.parameters.cutoff) {
+    continue;
+}
+++result.activePairs;
+```
+
+`result.valid` ban đầu là false. Nếu hai hạt trùng qua biên, hàm trả trạng thái chưa hợp lệ; nơi gọi không được sử dụng mảng force đang cộng dở. Một cặp ở ngoài cutoff vẫn tăng `evaluatedPairs`, vì ta đã phải đo khoảng cách của nó. Chưa có neighbor list ở đây.
+
+### Bước 4 — Cộng hai lực đối nhau và một lần thế năng
+
+```cpp title="include/dynamics.hpp — đóng góp của một cặp i nhỏ hơn j"
+const PairSample sample = shiftedPair(distance, system.parameters);
+// delta hướng i -> j: lực trên i là +U'(r) * delta/r.
+const Vec2 force = scale(delta, sample.slope / distance);
+if (!finite(force) || !std::isfinite(sample.potential)) {
+    return result;
+}
+result.forces[i] = add(result.forces[i], force);
+result.forces[j] = subtract(result.forces[j], force);
+result.potential += sample.potential;
+```
+
+Không gọi minimum image lần thứ hai theo chiều j→i. Dùng cùng một force rồi đổi dấu đảm bảo lực cặp đối nhau, kể cả khi sai số làm tròn nằm gần ranh giới chọn ảnh. Sau toàn bộ vòng lặp, chỉ đặt `valid=true` khi tổng U và mọi force đều hữu hạn.
+
+## Ghép các phần lại
+
+Build `project_43_checkpoint_4`. Tiêu đề cửa sổ có `pairs`, `active` và `valid`; cặp hai hạt có thêm đường đỏ. Tạm dừng để kéo A qua biên và kiểm tra hướng lực. Vì chưa dùng lực trong cập nhật velocity, đừng dùng quỹ đạo ở checkpoint này để đánh giá năng lượng.
+
+Muốn kiểm lực độc lập, dịch x của A một lượng h và -h rồi lấy `-(U(x+h)-U(x-h))/(2h)`. Nó phải gần force.x trên A. Phép kiểm này bắt được cả lỗi dấu lẫn việc dùng r thường cho U nhưng r tuần hoàn cho lực.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm thay `delta` bằng `rawDelta` trong vòng lặp. Cặp ở hai mép bỗng nằm ngoài cutoff và mất tương tác. Đưa minimum image trở lại trước khi kiểm các phần khác.
+2. Tăng cutoff lên đúng 6 trong hộp 12×12. `valid` phải thành false; nếu chương trình vẫn tích phân, nơi gọi đang bỏ qua điều kiện đầu vào. Trả cutoff về 2.5.
+3. Đổi phép trừ lực trên j thành phép cộng. Tổng lực nội bộ không còn gần zero; hệ có thể tự tăng động lượng. Khôi phục hai dấu đối nhau, không “chữa” bằng cách trừ vận tốc trung bình sau mỗi bước.
+
+## Tự kiểm tra kết quả
+
+- Cặp mặc định có một lượt xét, một cặp trong cutoff và hai lực đối nhau.
+- Lực trên A hướng qua mép trái; không hướng theo đoạn xám dài xuyên hộp.
+- U và force không đổi nếu tịnh tiến cả hệ rồi wrap lại.
+- Cutoff sai và hạt trùng qua biên không trả một kết quả hợp lệ.
+- Force khớp âm đạo hàm số của U theo vị trí, trong sai số hữu hạn.
+
+## Bài tập mở rộng
+
+Thử cùng một cặp ở giữa hộp và ở hai bên mép. Đặt cùng minimum-image delta rồi so U và force. Khi hai cách đặt cho cùng kết quả, sang [bài 5 — Velocity Verlet trong hộp tuần hoàn](/projects/periodic-molecular-box/05-verlet-trong-hop-tuan-hoan).

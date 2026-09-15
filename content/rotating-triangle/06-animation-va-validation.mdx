@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tự quay và kiểm chứng rotation
+
+## Vấn đề cần giải quyết
+
+Tam giác nhìn có vẻ đúng chưa chứng minh công thức đúng. Một lỗi dấu nhỏ có thể chỉ lộ ở vài góc; việc sửa dồn vertex có thể làm hình méo rất chậm. Ta cần các invariant đo được và một chiều inverse độc lập.
+
+Checkpoint cuối thêm auto rotation bằng delta time, pause/single-step và hai phép đo: sai lệch độ dài cạnh, cùng sai số rotate rồi inverse. Các tests chạy không cần mở SDL.
+
+Ta sẽ kiểm tra theo hai tầng. CTest khóa các trường hợp biết trước và chạy rất nhanh, không mở window. Sau khi tests xanh, ta mới chạy `project_12_final` để kiểm tra event, resize, pointer capture và cảm giác điều khiển — những phần test toán thuần không nhìn thấy được.
+
+## Hiểu ý tưởng trước khi viết code
+
+Rotation cứng phải giữ khoảng cách:
+
+$$
+|AB|_{before}=|AB|_{after}
+$$
+
+Tương tự cho BC và CA. Với order XYZ, inverse phải chạy các phép ngược dấu theo thứ tự đảo:
+
+$$
+R^{-1}=R_x(-pitch)R_y(-yaw)R_z(-roll)
+$$
+
+Đọc theo trình tự hàm: Z ngược chạy trước, sau đó Y ngược, cuối cùng X ngược.
+
+<InteractiveLab demo="rotation3d" mode="rotation-validation" />
+
+Bấm **Chạy**, pause hoặc tiến một bước. Edge-length error và round-trip error phải ở gần sai số máy dù orientation thay đổi liên tục. Đổi order và kiểm tra cả hai phép đo vẫn ổn định.
+
+## Viết code từng bước
+
+### Bước 1 — Cập nhật angles bằng angular velocity và dt
+
+Hàm clamp frame dài giống các project chuyển động trước:
+
+```cpp title="include/lab.hpp — auto rotation không phụ thuộc FPS"
+inline EulerAngles advanceEulerAngles(
+    EulerAngles angles,
+    EulerAngles angularVelocity,
+    double deltaTime
+) {
+    const double safeDeltaTime = std::clamp(deltaTime, 0.0, 0.1);
+    angles.pitch += angularVelocity.pitch * safeDeltaTime;
+    angles.yaw += angularVelocity.yaw * safeDeltaTime;
+    angles.roll += angularVelocity.roll * safeDeltaTime;
+    return angles;
+}
+```
+
+Event loop đo giây từ nanosecond rồi chỉ cập nhật khi không pause:
+
+```cpp title="src/main.cpp — cập nhật orientation trong frame"
+const Uint64 currentTicks = SDL_GetTicksNS();
+const double deltaTime = double(currentTicks - previousTicks) / 1'000'000'000.0;
+previousTicks = currentTicks;
+if (!paused) {
+    angles = lab::advanceEulerAngles(angles, angularVelocity, deltaTime);
+}
+```
+
+Khi pause, phím `.` gọi cùng hàm với `dt=1/60`. Single-step đặc biệt hữu ích khi debug: mỗi lần bấm tạo đúng một trạng thái mới, nên bạn có thể đặt breakpoint mà model không tiếp tục quay ở background.
+
+### Bước 2 — Viết inverse theo order
+
+XYZ và ZYX cần hai chuỗi đảo khác nhau:
+
+```cpp title="include/lab.hpp — đảo rotation bằng dấu và thứ tự ngược"
+inline Vec3 inverseRotateEuler(Vec3 point, EulerAngles angles, RotationOrder order) {
+    if (order == RotationOrder::Zyx) {
+        Vec3 restored = rotateX(point, -angles.pitch);
+        restored = rotateY(restored, -angles.yaw);
+        return rotateZ(restored, -angles.roll);
+    }
+    Vec3 restored = rotateZ(point, -angles.roll);
+    restored = rotateY(restored, -angles.yaw);
+    return rotateX(restored, -angles.pitch);
+}
+```
+
+### Bước 3 — Đo ba cạnh trước và sau
+
+Lấy maximum giúp title bar chỉ cần một con số cảnh báo:
+
+```cpp title="include/lab.hpp — sai lệch lớn nhất của edge lengths"
+inline double maximumEdgeLengthError(const Triangle3& original, const Triangle3& rotated) {
+    const std::array<double, 3> before = triangleEdgeLengths(original);
+    const std::array<double, 3> after = triangleEdgeLengths(rotated);
+    double error = 0.0;
+    for (std::size_t index = 0; index < before.size(); ++index) {
+        error = std::max(error, std::abs(before[index] - after[index]));
+    }
+    return error;
+}
+```
+
+Round trip đo khoảng cách từ point phục hồi tới input:
+
+```cpp title="include/lab.hpp — rotate rồi inverse"
+inline double rotationRoundTripError(Vec3 point, EulerAngles angles, RotationOrder order) {
+    const Vec3 rotated = rotateEuler(point, angles, order);
+    const Vec3 restored = inverseRotateEuler(rotated, angles, order);
+    return magnitude(subtract(restored, point));
+}
+```
+
+### Bước 4 — Khóa các góc 90° bằng CTest
+
+Ba expected value bắt được lỗi dấu trong từng trục:
+
+```cpp title="tests/tests.cpp — ba quarter turn có kết quả biết trước"
+const double quarterTurn = lab::kPi * 0.5;
+check(nearlyEqual(lab::rotateX({1.0, 2.0, 3.0}, quarterTurn), {1.0, -3.0, 2.0}), "rotate X quarter turn");
+check(nearlyEqual(lab::rotateY({1.0, 2.0, 3.0}, quarterTurn), {3.0, 2.0, -1.0}), "rotate Y quarter turn");
+check(nearlyEqual(lab::rotateZ({1.0, 2.0, 3.0}, quarterTurn), {-2.0, 1.0, 3.0}), "rotate Z quarter turn");
+```
+
+Với angle tổng quát, tests kiểm tra cả invariant lẫn inverse:
+
+```cpp title="tests/tests.cpp — edge và round-trip của hai order"
+check(lab::maximumEdgeLengthError(localTriangle, rotatedXyz) < 1e-9, "XYZ edge lengths invariant");
+check(lab::maximumEdgeLengthError(localTriangle, rotatedZyx) < 1e-9, "ZYX edge lengths invariant");
+check(lab::rotationRoundTripError(sample, angles, lab::RotationOrder::Xyz) < 1e-9, "XYZ round trip");
+check(lab::rotationRoundTripError(sample, angles, lab::RotationOrder::Zyx) < 1e-9, "ZYX round trip");
+```
+
+## Ghép các phần lại
+
+Configure, build và chạy Debug:
+
+```bash title="Terminal — build và kiểm tra Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Sau đó kiểm tra Release:
+
+```bash title="Terminal — build và kiểm tra Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Mở `project_12_final`. Thử translation, W/S, A/D, Q/E, mouse drag, O, Space, `.`, reset và resize. Edge error cùng round-trip error phải luôn nhỏ; một vertex ra khỏi frustum phải ẩn triangle an toàn.
+
+Đừng chỉ nhìn dòng “tests passed”. Hãy cố ý đổi một dấu trong `rotateY`, chạy CTest để xem quarter-turn hoặc invariant bắt lỗi, rồi hoàn tác thay đổi. Sau đó cố ý đảo thứ tự inverse: các test một trục vẫn có thể qua, nhưng round-trip với ba angle phải thất bại. Hai thí nghiệm này cho biết mỗi nhóm test đang bảo vệ điều gì.
+
+Project 12 đã hoàn chỉnh. Phần **Mã hoàn chỉnh của project** bên dưới chứa CMake, header, main và tests từ đúng source dùng để sinh ZIP; bạn có thể build ngay mà không tự ghép các code block.
+
+## Thử làm sai để hiểu đúng
+
+1. Inverse XYZ chạy X ngược trước. Với chỉ một angle test vẫn qua, nhưng angle tổng quát không trở về input.
+2. Cộng angular velocity trực tiếp mà bỏ dt. Auto rotation phụ thuộc FPS.
+3. So edge sau với edge của frame trước thay vì local triangle gốc. Sai số tích lũy chậm có thể bị che bởi việc cả hai bên cùng trôi.
+
+## Tự kiểm tra kết quả
+
+- Ba quarter turn quanh X/Y/Z khớp expected value.
+- XYZ và ZYX khác orientation với angle tổng quát.
+- Cả ba edge lengths giữ nguyên trong sai số 10⁻⁹.
+- Rotate→inverse trả point ban đầu cho cả hai order.
+- dt âm được clamp về 0, dt lớn được clamp về 0.1.
+- Starter, sáu checkpoint, final và tests build ở Debug lẫn Release.
+
+## Bài tập mở rộng
+
+Thêm một trục quay tùy ý đã normalize và cài Rodrigues' rotation formula, rồi so edge error với ba rotation trục. Đừng thay code hiện tại; thêm đường tính thứ hai để có thể đối chiếu.
+
+Project 13 sẽ dùng cùng local/world/projection pipeline cho tám vertex của một cube wireframe, nơi cấu trúc edge list trở nên quan trọng hơn việc viết từng cạnh bằng tay.

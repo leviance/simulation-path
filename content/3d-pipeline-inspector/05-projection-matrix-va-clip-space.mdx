@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Projection matrix tạo clip space và w
+
+## Vấn đề cần giải quyết
+
+Project 11 tính perspective trực tiếp bằng `x/z` và `y/z`. Cách đó rất tốt để hiểu tam giác đồng dạng, nhưng chưa ghép được với Model và View thành một matrix duy nhất. Projection matrix phải chuẩn bị phép chia phối cảnh mà bản thân matrix vẫn chỉ làm phép nhân tuyến tính trong homogeneous space.
+
+Vì vậy kết quả của Projection chưa phải NDC. Nó là `clipPoint = (clip.x, clip.y, clip.z, clip.w)`, trong đó numerator và denominator còn tách riêng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Khóa học dùng camera nhìn theo +Z, vertical FOV và NDC depth từ 0 tới 1. Projection matrix là:
+
+$$
+P=
+\begin{bmatrix}
+f/aspect&0&0&0\\
+0&f&0&0\\
+0&0&far/(far-near)&-near\cdot far/(far-near)\\
+0&0&1&0
+\end{bmatrix}
+$$
+
+với:
+
+$$
+f=\frac{1}{\tan(FOV_y/2)}
+$$
+
+Hàng cuối tạo:
+
+$$
+clip.w=camera.z
+$$
+
+Chưa có phép chia ở đây. Ta giữ `w` để bài sau kiểm tra depth trước rồi mới chia.
+
+<InteractiveLab demo="pipeline3d" mode="pipeline-projection" />
+
+## Viết code từng bước
+
+### Bước 1 — Gom bốn tham số lens
+
+```cpp title="include/lab.hpp — lens dùng vertical FOV, near và far"
+struct PerspectiveLens {
+    double verticalFovRadians{60.0 * kPi / 180.0};
+    double nearPlane{0.5};
+    double farPlane{30.0};
+};
+```
+
+Near/far thuộc về lens, không thuộc model hay camera pose. `nearPlane` phải dương và `farPlane > nearPlane`; preset mặc định thỏa điều kiện này.
+
+### Bước 2 — Đặt focal scale vào X/Y
+
+```cpp title="include/lab.hpp — hai hàng điều khiển FOV và aspect"
+const double focalScale = 1.0 / std::tan(lens.verticalFovRadians * 0.5);
+const double depthRange = lens.farPlane - lens.nearPlane;
+matrix.at(0, 0) = focalScale / aspectRatio;
+matrix.at(1, 1) = focalScale;
+```
+
+Chỉ X chia thêm aspect ratio vì FOV đang được định nghĩa theo chiều dọc. Resize cửa sổ vì vậy không làm hình bị kéo sai tỉ lệ.
+
+### Bước 3 — Ánh xạ camera depth vào clip Z
+
+```cpp title="include/lab.hpp — hàng depth của projection matrix"
+matrix.at(2, 2) = lens.farPlane / depthRange;
+matrix.at(2, 3) = -lens.nearPlane * lens.farPlane / depthRange;
+matrix.at(3, 2) = 1.0;
+return matrix;
+```
+
+Sau khi chia cho `w=z`, near map về NDC Z bằng 0 và far map về 1. Hai mốc này sẽ trở thành nền cho Z-buffer ở Project 17.
+
+### Bước 4 — Chạy Projection sau View
+
+```cpp title="src/main.cpp — tạo clip point nhưng chưa perspective divide"
+const lab::Vec4 clipPoint = lab::transform(
+    lab::projectionMatrix(lens, double(viewport.width) / double(viewport.height)),
+    cameraPoint
+);
+```
+
+Checkpoint 5 chỉ in Camera và Clip. Nó không gọi `perspectiveDivide` và chưa mở NDC/Screen trên rail.
+
+### Bước 5 — Đọc tác động của từng tham số
+
+- FOV thay đổi `clip.x` và `clip.y`, không thay Camera point.
+- Aspect chỉ thay hệ số ngang.
+- Near/far thay `clip.z`, không thay `clip.w`.
+- Di chuyển camera làm Camera point đổi, sau đó toàn Clip vector đổi theo.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build Projection và Clip stage"
+cmake --build build --config Debug --target project_15_checkpoint_5 project_15_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Dùng `[` và `]` đổi FOV. Theo dõi title bar: Camera XYZ giữ nguyên trong khi Clip X/Y đổi; `clip.w` luôn bằng Camera Z.
+
+## Thử làm sai để hiểu đúng
+
+1. Đặt `matrix.at(3,2)=0`. `clip.w` trở thành 0 và bài sau không thể perspective divide; hoàn tác.
+2. Bỏ aspect ratio khỏi hàng X. Resize cửa sổ sang rất rộng và ghi lại vì sao vị trí ngang không còn nhất quán.
+3. Dùng công thức depth của hệ camera nhìn −Z lấy từ một nguồn khác. Near/far test sẽ sai vì quy ước trục không khớp project này.
+
+## Tự kiểm tra kết quả
+
+- Projection nhận Camera point và trả Clip point bốn thành phần.
+- `clip.w = camera.z` ở nhiều depth dương.
+- Camera point không bị phép Projection ghi đè.
+- FOV lớn hơn làm trị tuyệt đối Clip X/Y nhỏ hơn với cùng Camera point.
+- Near đổi thành NDC Z gần 0; far đổi thành NDC Z gần 1 khi test thực hiện phép chia.
+- Checkpoint 5 tuyệt đối chưa dùng screen coordinate để vẽ marker perspective.
+
+## Bài tập mở rộng
+
+Tự giải hai hệ số hàng Z bằng hệ phương trình: yêu cầu `z=near → ndc.z=0` và `z=far → ndc.z=1`. So kết quả đại số với code thay vì chép matrix từ tài liệu khác.
+
+Bài tiếp theo sẽ kiểm tra `w` và camera depth, thực hiện perspective divide rồi mới đổi NDC sang pixel.

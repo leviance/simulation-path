@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# RK4: đánh giá đạo hàm tại bốn trạng thái
+
+## Vấn đề cần giải quyết
+
+RK4 thường bị trình bày như một công thức dài để chép. Cách đó đặc biệt khó hiểu khi phương trình gốc có đạo hàm bậc hai. Ta sẽ làm chậm lại: trước hết đổi oscillator thành một hệ bậc nhất trên phase state `(position, velocity)`, sau đó chỉ ra bốn state tạm nơi derivative được đánh giá.
+
+Mục tiêu không phải thuộc weights `1-2-2-1`; mục tiêu là biết mỗi `k` được tính từ state tạm nào và vì sao state thật chỉ được commit một lần ở cuối.
+
+## Hiểu ý tưởng trước khi viết code
+
+Viết $y=(x,v)$. Derivative của cả state là:
+
+$$
+f(y)=\frac{dy}{dt}=(v,a(x))
+$$
+
+Classical RK4 lấy:
+
+$$
+k_1=f(y_n),\quad
+k_2=f(y_n+\tfrac12\Delta t k_1),\quad
+k_3=f(y_n+\tfrac12\Delta t k_2),\quad
+k_4=f(y_n+\Delta t k_3)
+$$
+
+Sau đó $y_{n+1}=y_n+\frac{\Delta t}{6}(k_1+2k_2+2k_3+k_4)$.
+
+<InteractiveLab demo="integrator-race" mode="integrator-rk4" />
+
+Chọn `dt=1/15 s` và tiến từng bước. Phase plot đánh dấu `yₙ`, ba state tạm và `yₙ₊₁`; bảng bên dưới ghi hai thành phần của `k₁–k₄`. Counter RK4 tăng 4 sau mỗi step.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho hai thành phần derivative
+
+```cpp title="include/lab.hpp — derivative của phase state"
+struct PhaseDerivative {
+    double positionRate{};
+    double velocityRate{};
+};
+
+inline PhaseDerivative oscillatorDerivative(const OscillatorState& state, const OscillatorParameters& parameters) {
+    return {state.velocity, oscillatorAcceleration(state.position, parameters)};
+}
+```
+
+`positionRate` chính là velocity; `velocityRate` chính là acceleration. Cả hai phải được tích phân cùng một scheme, không dùng RK4 cho position rồi Euler cho velocity.
+
+### Bước 2 — Tạo state tạm mà không commit
+
+```cpp title="include/lab.hpp — tạo state tạm từ một derivative"
+inline OscillatorState offsetState(const OscillatorState& state, const PhaseDerivative& derivative, double amount) {
+    return {
+        state.position + derivative.positionRate * amount,
+        state.velocity + derivative.velocityRate * amount,
+        state.elapsed + amount,
+    };
+}
+```
+
+`amount` là `dt/2` hoặc `dt`. Hàm trả một bản mới; `current` của RK4 không thay đổi trong khi tính bốn stage.
+
+### Bước 3 — Thăm bốn vị trí theo đúng chuỗi
+
+```cpp title="include/lab.hpp — k1 đến k4 không dùng chung state tạm"
+const PhaseDerivative k1 = oscillatorDerivative(current, parameters);
+const PhaseDerivative k2 = oscillatorDerivative(offsetState(current, k1, 0.5 * deltaSeconds), parameters);
+const PhaseDerivative k3 = oscillatorDerivative(offsetState(current, k2, 0.5 * deltaSeconds), parameters);
+const PhaseDerivative k4 = oscillatorDerivative(offsetState(current, k3, deltaSeconds), parameters);
+```
+
+`k3` đi từ `current` theo `k2`, không tiếp tục đi từ state đã dùng cho `k2`. Mỗi stage là một câu hỏi độc lập quanh cùng step.
+
+### Bước 4 — Ghép các derivative rồi mới tạo state mới
+
+```cpp title="include/lab.hpp — weights 1-2-2-1"
+const double positionRate = (k1.positionRate + 2.0 * k2.positionRate + 2.0 * k3.positionRate + k4.positionRate) / 6.0;
+const double velocityRate = (k1.velocityRate + 2.0 * k2.velocityRate + 2.0 * k3.velocityRate + k4.velocityRate) / 6.0;
+```
+
+Weighted average vẫn là một derivative; chỉ khi commit ta mới nhân `deltaSeconds`. Kết quả trả `forceEvaluations=4` vì mỗi `oscillatorDerivative` gọi acceleration một lần.
+
+## Ghép các phần lại
+
+```bash title="Terminal — thêm lane RK4"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_checkpoint_4
+./build/Debug/project_23_checkpoint_4.exe
+```
+
+Đặt breakpoint ở bốn dòng `k1`–`k4`. Với mỗi stage, ghi `position`, `velocity`, `positionRate`, `velocityRate`. Bảng nhỏ này hữu ích hơn việc nhìn một biểu thức RK4 đã gộp kín.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính `k3` từ `k1` thay vì `k2`. Dự đoán convergence order có còn là 4 không, chạy test sau bài 7 rồi hoàn tác.
+2. Dùng weights `1-1-1-1` nhưng vẫn chia 6. Solver sẽ đi chậm vì tổng trọng số không còn 6; quan sát rồi hoàn tác.
+3. Nhân `dt` trong từng `k`, sau đó nhân `dt` lần nữa khi commit. Sai số có thể nhỏ ở một cấu hình nhưng đơn vị đã sai; hoàn tác và giữ `k` là rate.
+
+## Tự kiểm tra kết quả
+
+- `oscillatorDerivative` trả `(v,a)` theo đúng thứ tự.
+- `current` không bị sửa trong lúc tính `k1`–`k4`.
+- `k2`, `k3` ở nửa step; `k4` ở cuối step.
+- Position và velocity dùng cùng weights.
+- Elapsed tăng đúng một `dt`; counter tăng 4.
+- Ở cùng `dt` hợp lý, RK4 gần exact state hơn Euler và Verlet.
+
+## Bài tập mở rộng
+
+Hiển thị bốn điểm thăm của RK4 trên phase plot trong đúng một step. Giữ chúng là dữ liệu chẩn đoán, không thêm chúng vào history như bốn physics step.
+
+Bài tiếp theo sẽ loại ảnh hưởng của render FPS: ba integrator được đóng vào một race và chỉ tiến bằng cùng fixed timestep.

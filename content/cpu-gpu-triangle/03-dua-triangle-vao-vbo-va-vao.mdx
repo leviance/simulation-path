@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa triangle vào VBO và VAO
+
+## Vấn đề cần giải quyết
+
+Shader đã link nhưng chưa có dữ liệu để chạy. OpenGL cần biết bytes nằm ở đâu và phải chia chúng thành attributes thế nào. Hai câu hỏi này thuộc hai object khác nhau:
+
+- VBO giữ bytes của ba `GpuVertex`;
+- VAO ghi nhớ location, component count, type, stride, offset và VBO liên quan.
+
+Checkpoint 3 kết thúc bằng tam giác GPU đầu tiên ở nửa phải cửa sổ. Nửa trái vẫn chỉ là background để dấu mốc thị giác không mơ hồ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy xem VBO là vùng bytes còn VAO là “bản hướng dẫn đọc bytes”. VBO không tự biết hai float đầu là position và ba float sau là color; chính các lời gọi `glVertexAttribPointer` mới chốt cách diễn giải đó.
+
+<InteractiveLab demo="cpu-gpu-triangle" mode="vertex-contract" />
+
+## Viết code từng bước
+
+### Bước 1 — Khóa vertex contract trong C++
+
+```cpp title="include/pipeline.hpp — GpuVertex layout"
+struct GpuVertex {
+    float positionX{};
+    float positionY{};
+    float red{};
+    float green{};
+    float blue{};
+};
+
+static_assert(std::is_standard_layout_v<GpuVertex>);
+static_assert(sizeof(GpuVertex) == sizeof(float) * 5U);
+static_assert(offsetof(GpuVertex, positionX) == 0U);
+static_assert(offsetof(GpuVertex, red) == sizeof(float) * 2U);
+```
+
+Ba vertex dùng NDC trực tiếp ở checkpoint này. Mỗi vertex có hai float position và ba float color; không có padding bí mật giữa hai attributes.
+
+### Bước 2 — Upload đúng một lần vào VBO
+
+```cpp title="include/gpu_renderer.hpp — tạo VBO và VAO"
+api.GenVertexArrays(1, &vertexArray);
+api.GenBuffers(1, &vertexBuffer);
+if (vertexArray == 0U || vertexBuffer == 0U) {
+    return false;
+}
+api.BindVertexArray(vertexArray);
+api.BindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
+api.BufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(kSourceTriangle)), kSourceTriangle.data(), GL_STATIC_DRAW);
+```
+
+`GL_STATIC_DRAW` mô tả pattern dùng: data upload một lần rồi được đọc nhiều lần. Rotation sau này đi qua uniform, không upload lại VBO mỗi frame.
+
+### Bước 3 — Nói cho VAO cách đọc hai attributes
+
+```cpp title="include/gpu_renderer.hpp — position attribute"
+api.EnableVertexAttribArray(0U);
+api.VertexAttribPointer(
+    0U,
+    2,
+    GL_FLOAT,
+    GL_FALSE,
+    GLsizei(sizeof(GpuVertex)),
+    reinterpret_cast<const void*>(offsetof(GpuVertex, positionX))
+);
+```
+
+Color dùng location 1, ba components và `offsetof(GpuVertex, red)`. `stride` luôn là `sizeof(GpuVertex)`, không phải số components của riêng attribute.
+
+### Bước 4 — Draw trong viewport phải
+
+```cpp title="include/gpu_renderer.hpp — draw triangle"
+api.BindVertexArray(vertexArray);
+api.DrawArrays(GL_TRIANGLES, 0, 3);
+api.BindVertexArray(0U);
+```
+
+Draw call không mang vertex pointer. Nó dùng program, uniforms, VAO và viewport đang active tại thời điểm gọi.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 3"
+cmake --build build --config Debug --target project_33_checkpoint_3
+```
+
+Chạy app: panel phải có một triangle màu xanh cố định; panel trái vẫn trống. Title phải nhắc `VBO + VAO + glDrawArrays`.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi stride từ `sizeof(GpuVertex)` thành `sizeof(float) * 2`. Vertex thứ hai sẽ bắt đầu giữa color của vertex trước.
+2. Dùng color offset bằng 0. Fragment nhận position bytes như màu.
+3. Quên bind VAO trước draw. Core Profile không có vertex attribute state hợp lệ.
+4. Đổi draw count từ 3 xuống 2. OpenGL không có đủ ba vertex để ghép thành một triangle nên không vẽ gì, nhưng vẫn không đọc vượt VBO. Đây là cách an toàn để kiểm tra vai trò của `count`.
+
+## Tự kiểm tra kết quả
+
+- [ ] `GpuVertex` có đúng năm float và standard layout.
+- [ ] VBO upload đúng ba vertex một lần.
+- [ ] Location 0 là vec2 position, location 1 là vec3 color.
+- [ ] Cả hai attributes dùng cùng stride và offset bằng `offsetof`.
+- [ ] GPU triangle xuất hiện ở viewport phải.
+- [ ] `glGetError` bằng `GL_NO_ERROR` sau setup mesh.
+
+## Bài tập mở rộng
+
+1. Đổi thứ tự ba vertices và quan sát winding mà chưa bật culling.
+2. Thêm một vertex thứ tư nhưng giữ `GL_TRIANGLES`; giải thích vì sao nó chưa tạo hình thứ hai.
+3. In `sizeof(GpuVertex)` và hai offsets cạnh shader locations trong terminal.
+
+Bài tiếp theo sẽ làm panel trái sống lại bằng chính CPU rasterizer, rồi upload framebuffer đó như một texture.

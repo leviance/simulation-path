@@ -1,0 +1,148 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cập nhật trọng lực và respawn trong compute shader
+
+## Ta cần giải quyết điều gì?
+
+Bài trước đã đưa dữ liệu particle lên GPU nhưng buffer vẫn đứng yên. Bây giờ ta chuyển chính quy tắc trong `stepParticleCpu` sang GLSL: cùng cấu trúc dữ liệu, cùng thứ tự tích phân, cùng cách respawn và cùng điều kiện kiểm tra index. Shader không chỉ cần “trông giống” code CPU; hai bên phải tạo ra kết quả có thể đối chiếu.
+
+Mỗi compute invocation chỉ cập nhật particle có index bằng `gl_GlobalInvocationID.x`. Không invocation nào đọc hàng xóm và cũng không có atomic counter. Bài toán vẫn độc lập theo từng phần tử như Project 37, nhưng kết quả được ghi ngược vào chính record để trạng thái tồn tại qua nhiều frame.
+
+## Theo chân một particle
+
+Với local size 256, GPU chia global index theo:
+
+$$
+i = \text{workgroupID}_x \times 256 + \text{localInvocationID}_x
+$$
+
+`gl_GlobalInvocationID.x` đã cung cấp trực tiếp $i$. C++ chỉ cần phát `ceilDiv(N,256)` groups.
+
+Tại 5 triệu particle, group cuối phát index `4.999.936..5.000.191`. Chỉ `4.999.936..4.999.999` hợp lệ; 192 index còn lại phải return **trước** `particles[index]`.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-compute" />
+
+Kéo ngang để chọn lane trong workgroup cuối. Lane xanh cập nhật record; lane đỏ là invocation đã được phát nhưng thoát ngay vì index vượt giới hạn. Vì thế, “draw count là 5 triệu” không có nghĩa lệnh dispatch tạo đúng tròn 5 triệu lane.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Khai báo cùng struct và binding
+
+```glsl title="shaders/particle_update.comp — layout SSBO"
+layout(local_size_x = 256) in;
+
+struct Particle {
+    vec4 positionAge;
+    vec4 velocityLife;
+};
+
+layout(std430, binding = 0) buffer ParticleBuffer {
+    Particle particles[];
+};
+```
+
+Block không có `readonly` vì compute shader vừa đọc vừa ghi. `std430` cùng hai `vec4` nối trực tiếp với `Particle` 32 byte phía C++. Vertex shader ở bài sau sẽ khai báo cùng block nhưng chỉ đọc.
+
+### Bước 2 — Kiểm tra index trước lần truy cập đầu tiên
+
+```glsl title="shaders/particle_update.comp — kiểm tra global index"
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= uint(uParticleCount)) {
+        return;
+    }
+
+    Particle particle = particles[index];
+```
+
+Đặt điều kiện sau dòng `Particle particle = particles[index]` là quá muộn: lane dư đã đọc ngoài buffer. Việc kiểm tra phải xảy ra trước toàn bộ đường đọc/ghi, kể cả nhánh respawn.
+
+### Bước 3 — Chuyển từng dòng tích phân sang shader
+
+```glsl title="shaders/particle_update.comp — semi-implicit Euler"
+particle.velocityLife.y += uGravity * uDt;
+particle.positionAge.xyz += particle.velocityLife.xyz * uDt;
+particle.positionAge.w += uDt;
+
+bool lifetimeEnded = particle.positionAge.w >= particle.velocityLife.w;
+bool fellBelowFloor = particle.positionAge.y < kFloorY;
+if (lifetimeEnded || fellBelowFloor) {
+    particle = makeSpawnParticle(index, uSpawnEpoch);
+}
+
+particles[index] = particle;
+```
+
+Velocity Y đổi trước position. Cuối invocation chỉ có một write-back. Việc dùng local variable làm luồng đọc dễ kiểm và tránh ghi một nửa record rồi mới quyết định respawn.
+
+`makeSpawnParticle` trong shader dùng đúng constants và `mixBits` của CPU. `uSpawnEpoch` tăng khi có simulation step; pause không tăng epoch.
+
+### Bước 4 — Gửi uniform rồi dispatch
+
+Program giữ locations sau khi link thay vì tìm lại trong từng frame:
+
+```cpp title="include/particle_gpu_engine.hpp — các uniform của compute shader"
+computeParticleCountLocation_ = gl.GetUniformLocation(computeProgram_, "uParticleCount");
+computeDtLocation_ = gl.GetUniformLocation(computeProgram_, "uDt");
+computeGravityLocation_ = gl.GetUniformLocation(computeProgram_, "uGravity");
+computeSpawnEpochLocation_ = gl.GetUniformLocation(computeProgram_, "uSpawnEpoch");
+```
+
+```cpp title="include/particle_gpu_engine.hpp — dispatchUpdate"
+const DispatchPlan plan = makeDispatchPlan(count);
+gl.UseProgram(computeProgram_);
+gl.Uniform1i(computeParticleCountLocation_, static_cast<GLint>(count));
+gl.Uniform1f(computeDtLocation_, dt);
+gl.Uniform1f(computeGravityLocation_, gravity);
+gl.Uniform1ui(computeSpawnEpochLocation_, spawnEpoch);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, particleBuffer_);
+gl.DispatchCompute(static_cast<GLuint>(plan.workgroupCount), 1U, 1U);
+```
+
+Local size không được truyền từ C++; nó đã compile vào shader. `plan.localSize` phải giữ 256 để khớp `layout(local_size_x=256)`. Đổi một phía mà không compile lại phía kia làm dispatch coverage sai.
+
+## Nối lại thành một bước mô phỏng
+
+Checkpoint 4 compile `particle_update.comp`, lấy bốn uniform locations và gửi đúng một fixed step sau initialization:
+
+```text
+main SSBO binding 0
+        ↓
+compute program + count/dt/gravity/epoch
+        ↓
+19.532 groups × 256 lanes
+        ↓
+mỗi lane hợp lệ cập nhật đúng particles[index]
+```
+
+Bài này vẫn dùng phần xem thử trên CPU để vẽ vì graphics shader chưa được giới thiệu. Compute dispatch là thật, nhưng chưa có bước nào dùng output để render. Ta cố ý không đọc lại 160 MB chỉ để lấy một bức hình; bài 9 sẽ kiểm tra bằng một buffer nhỏ.
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_38_checkpoint_4
+```
+
+## Thử tạo lỗi
+
+1. Dispatch `particleCount / 256`. 64 particle cuối của 5 triệu không bao giờ được update.
+2. Bỏ kiểm tra index vì “draw chỉ dùng N”. Invocation dư vẫn có thể ghi ngoài SSBO trước khi draw bắt đầu.
+3. Dùng `gl_LocalInvocationID.x` làm index. Mọi workgroup cùng ghi 256 record đầu, tạo race rất lớn.
+4. Tăng age trước rồi dùng age mới làm điều kiện nhưng CPU làm theo thứ tự khác. Probe tại lifetime boundary sẽ fail.
+5. Tạo số ngẫu nhiên bằng atomic increment. Thứ tự invocation chạy khiến reset không còn tái lập được, đồng thời tạo tranh chấp không cần thiết.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] Shader khai báo `local_size_x = 256` và binding 0.
+- [ ] `gl_GlobalInvocationID.x` được kiểm tra trước mọi lần đọc hoặc ghi.
+- [ ] Dispatch dùng ceil division, không dùng floor division.
+- [ ] GPU cập nhật velocity, position và age theo cùng thứ tự CPU.
+- [ ] Respawn hash nhận cả index và epoch.
+- [ ] Group cuối của 5 triệu có đúng 192 lane return.
+- [ ] Checkpoint không giả vờ validation bằng cách dựng lại output để vẽ trên CPU.
+
+## Nếu muốn thử thêm
+
+1. Thêm uniform `uWindX`, rồi cập nhật cả bản đối chiếu CPU và shader trong cùng một bước.
+2. Đếm số invocation hợp lệ bằng toán CPU; chưa thêm atomic counter vào shader.
+3. Đổi local size thành 128 ở cả shader và C++, rồi tính lại group/tail trước khi chạy.
+
+Trạng thái đã thay đổi trên GPU nhưng ta chưa nhìn thấy nó. Bài 5 sẽ tạo phần render đọc trực tiếp chính SSBO này bằng `gl_VertexID`.

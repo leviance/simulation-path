@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Bresenham: chọn pixel bằng biến sai số
+
+## Vấn đề cần giải quyết
+
+DDA dễ hiểu, nhưng mỗi bước đều dùng số thực rồi phải làm tròn. Bresenham chọn pixel theo một cách khác: giữ một sai số nguyên và dùng nó để quyết định khi nào cần tiến theo X, theo Y hoặc theo cả hai. Chuỗi pixel vẫn liền mạch, nhưng vòng lặp chỉ còn phép cộng, trừ và so sánh số nguyên.
+
+Bài này sẽ viết phiên bản tổng quát ngay từ đầu. Bài kế tiếp dùng tám trường hợp cụ thể để giải thích vì sao dấu của bước đi và hai điều kiện độc lập có thể xử lý mọi hướng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trước khi nhìn phiên bản tổng quát trong source, ta xét một đoạn đi sang phải và có độ dốc từ 0 đến 1. Sau mỗi bước X, hai lựa chọn là pixel bên phải `E` và pixel chéo phải–xuống `SE`. Đường thẳng lý tưởng đi qua phía nào của trung điểm giữa E và SE thì ta chọn pixel phía đó.
+
+Gọi `Δx = x1 - x0` và `Δy = y1 - y0`. Hàm sau bằng 0 trên đường thẳng lý tưởng:
+
+$$
+L(x,y)=\Delta y(x-x_0)-\Delta x(y-y_0)
+$$
+
+Thay tọa độ trung điểm vào `L` sẽ cho biết cần giữ Y hay tăng Y. Nhân kết quả với 2 giúp loại phân số `1/2`, vì thế toàn bộ phép tính còn lại chỉ dùng số nguyên. Với trường hợp dốc thấp, ta thường gặp dạng khởi tạo `p = 2Δy - Δx`:
+
+```text
+nếu chọn E:   p += 2*Δy
+nếu chọn SE:  p += 2*(Δy - Δx)
+```
+
+Đó là nguồn gốc của “biến sai số”: nó không phải con số được đoán ra, mà là kết quả phép thử trung điểm được mang sang bước kế tiếp.
+
+Source của project dùng phiên bản đối xứng để không phải viết riêng trường hợp dốc cao, dốc thấp và tám hướng. `dx` là độ thay đổi theo X; `dy` được lưu thành số âm, nên `error = dx + dy` cũng chính là `dx - |dy|`. `doubledError` đóng vai trò phép thử trung điểm đã nhân đôi: một điều kiện quyết định có đi theo X hay không, điều kiện còn lại quyết định có đi theo Y hay không.
+
+Trong mỗi lần lặp:
+
+1. thêm pixel hiện tại vào kết quả;
+2. nếu đã tới `end` thì dừng;
+3. lưu `doubledError = 2 × error` trước khi thay đổi sai số;
+4. nếu điều kiện X đúng, tiến theo X và cập nhật `error`;
+5. nếu điều kiện Y đúng, tiến theo Y và cập nhật `error`.
+
+Hai câu `if` phải độc lập vì một lần lặp có thể vượt qua cả ranh giới theo X lẫn ranh giới theo Y, đặc biệt với các đường gần 45 độ.
+
+Vẫn với đoạn `(0,0) → (7,3)`, ta có `dx=7`, `dy=-3`, `error=4`. Bảng dưới dùng đúng giá trị **trước khi cập nhật** ở mỗi vòng:
+
+| pixel ghi ra | `error` | `e2 = 2×error` | bước tiếp theo |
+|---:|---:|---:|---:|
+| (0,0) | 4 | 8 | X |
+| (1,0) | 1 | 2 | X và Y |
+| (2,1) | 5 | 10 | X |
+| (3,1) | 2 | 4 | X và Y |
+| (4,2) | 6 | 12 | X |
+| (5,2) | 3 | 6 | X và Y |
+| (6,3) | 7 | 14 | X |
+| (7,3) | 4 | — | dừng |
+
+Trong ví dụ này, Bresenham chọn đúng cùng dãy pixel với DDA. Điểm khác nằm ở cách quyết định: thuật toán không tạo tọa độ số thực để làm tròn mà mang sai số còn lại sang bước kế tiếp.
+
+<InteractiveLab demo="raster" mode="raster-bresenham" />
+
+## Viết code từng bước
+
+### Bước 1 — Chuẩn bị khoảng cách và hướng bước
+
+```cpp title="include/lab.hpp — đầu hàm bresenham"
+int x = start.x;
+int y = start.y;
+const int dx = std::abs(end.x - start.x);
+int stepX = -1;
+if (x < end.x) {
+    stepX = 1;
+}
+const int dy = -std::abs(end.y - start.y);
+int stepY = -1;
+if (y < end.y) {
+    stepY = 1;
+}
+int error = dx + dy;
+```
+
+`dx` và độ lớn của `dy` chỉ biểu diễn khoảng cách, còn hướng đi được tách riêng vào `stepX` và `stepY`. Việc lưu `dy` dưới dạng số âm cho phép cùng công thức `error = dx + dy` hoạt động với cả đường dốc thấp lẫn dốc cao.
+
+### Bước 2 — Thêm pixel trước khi kiểm tra điểm cuối
+
+```cpp title="include/lab.hpp — khung vòng lặp Bresenham"
+std::vector<Point> points;
+for (;;) {
+    points.push_back({x, y});
+    if (x == end.x && y == end.y) {
+        break;
+    }
+    // Quyết định bước ở đây.
+}
+```
+
+Nếu hai đầu trùng nhau, vòng lặp thêm đúng một pixel rồi kết thúc. Điểm cuối cũng luôn có trong kết quả vì điều kiện `break` nằm sau `push_back`.
+
+### Bước 3 — Dùng cùng một giá trị sai số cho hai quyết định
+
+```cpp title="include/lab.hpp — hai quyết định trục"
+const int doubledError = 2 * error;
+if (doubledError >= dy) {
+    error += dy;
+    x += stepX;
+}
+if (doubledError <= dx) {
+    error += dx;
+    y += stepY;
+}
+```
+
+Phải lưu `doubledError` trước khi chạy cả hai nhánh: hai phép thử cần nhìn cùng một vị trí của đường lý tưởng. Nếu tính lại sau khi nhánh X đã sửa `error`, quyết định Y sẽ dựa trên trạng thái của bước kế tiếp và có thể chọn sai pixel. Cũng không được đổi nhánh thứ hai thành `else if`, vì đường gần 45 độ cần tiến cả hai trục trong cùng một lần lặp.
+
+### Bước 4 — Lưu dữ liệu từng bước cho phần quan sát
+
+Bản chạy được có thêm một kiểu dữ liệu dành cho Debug:
+
+```cpp title="include/lab.hpp — dữ liệu của một bước Bresenham"
+struct BresenhamStep {
+    Point point{};
+    int error{};
+    int doubledError{};
+    bool movesX{};
+    bool movesY{};
+};
+```
+
+`traceBresenham(start, end)` chạy cùng quy tắc và lưu trạng thái trước mỗi bước. Ứng dụng đọc phần tử tại `inspectedStep` để hiển thị `error`, `e2` và quyết định X/Y trên thanh tiêu đề. Ở bài cuối, test so toàn bộ pixel của trace với kết quả từ `bresenham`, bảo đảm công cụ quan sát không vô tình chạy một thuật toán khác.
+
+### Bước 5 — Dùng phím D/B để đổi thuật toán
+
+```cpp title="src/main.cpp — chọn DDA hoặc Bresenham"
+if (!event.key.repeat && event.key.key == SDLK_D) {
+    useDda = true;
+}
+if (!event.key.repeat && event.key.key == SDLK_B) {
+    useDda = false;
+}
+std::vector<lab::Point> linePoints;
+if (useDda) {
+    linePoints = lab::dda(endpointA, endpointB);
+} else {
+    linePoints = lab::bresenham(endpointA, endpointB);
+}
+```
+
+Phím chỉ quyết định hàm nào tạo `linePoints`; phần vẽ sau đó dùng chung danh sách này. Vì vậy, khác biệt trên màn hình đến từ thuật toán rasterize chứ không phải từ hai cách hiển thị khác nhau.
+
+## Ghép các phần lại
+
+Checkpoint 2 mặc định dùng Bresenham. Hãy bấm D và B để chuyển qua lại, rồi kéo một đầu đoạn chậm quanh tâm. Ở các độ dốc gần 0,5 hoặc 2,0, hai thuật toán có thể chọn một vài pixel khác nhau do quy tắc làm tròn. Cả hai kết quả vẫn hợp lệ nếu giữ hai đầu và không tạo lỗ hổng.
+
+Trong Raster Stepper, hãy đi từng bước và theo dõi `error`, `doubledError`, quyết định X/Y cùng pixel vừa được thêm. Không cần học thuộc từng điều kiện rời rạc; hãy nhìn `error` như giá trị giúp đường pixel bám quanh đường thẳng lý tưởng.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `if` thứ hai thành `else if`. Một bước không còn có thể đổi cả X và Y, nên đường gần 45° bị méo.
+2. Tính lại `doubledError` sau khi nhánh X đã sửa `error`. Quyết định Y không còn dựa trên cùng trạng thái ban đầu và một số độ dốc sẽ chọn sai pixel.
+3. Đưa điều kiện `break` lên trước `push_back`. Vòng lặp dừng khi vừa chạm đích nhưng không thêm điểm cuối vào kết quả.
+
+## Tự kiểm tra kết quả
+
+- Đoạn một điểm trả một pixel và kết thúc.
+- Đường ngang, dọc và chéo chứa cả hai đầu đoạn.
+- Vòng lặp chính không dùng số thực hoặc phép chia.
+- D/B đổi thuật toán nhưng vẫn dùng cùng `start`, `end`, màu và `putPixel`.
+- Không có độ dốc nào làm vòng lặp chạy vô hạn trong vùng thử.
+
+## Bài tập mở rộng
+
+Hãy tự ghi bảng `x`, `y`, `error` và `doubledError` cho đoạn `(0,0) → (7,3)`, rồi so tập pixel với DDA. Sau đó thử thêm callback `onStep` trong bản Debug để giao diện quan sát nhận trạng thái trực tiếp mà không phải tự chạy lại thuật toán.
+
+Bài sau sẽ kiểm tra Bresenham ở đủ tám hướng, nơi những phiên bản chỉ xử lý `0 ≤ slope ≤ 1` thường thất bại.

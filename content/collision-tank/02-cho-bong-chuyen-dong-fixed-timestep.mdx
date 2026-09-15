@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho cả đàn bóng chuyển động bằng fixed timestep
+
+## Vấn đề cần giải quyết
+
+Ta có 144 velocity nhưng chưa cập nhật position. Điều dễ làm là nhân mỗi velocity với `frameSeconds`. Cách đó khiến collision ở máy 30 FPS và 144 FPS đi qua những khoảng khác nhau, nên cặp được phát hiện cũng khác nhau.
+
+Project 23 đã xây accumulator; ở đây ta dùng lại ngay từ lúc bắt đầu chuyển động. Mọi ball trong một substep nhận cùng `fixedDeltaSeconds`. Render frame chỉ quyết định cần chạy 0, 1 hay vài substep.
+
+Ở checkpoint 2 chưa có wall collision. Bóng đi ra ngoài bể sau một lúc là kết quả dự kiến, không phải lý do để lén clamp trong hàm integration.
+
+## Hiểu ý tưởng trước khi viết code
+
+Không có acceleration trong project này, nên một bước chuyển động tự do là:
+
+$$
+p_{next}=p+v\Delta t
+$$
+
+Accumulator thực hiện:
+
+```text
+accumulator += acceptedFrameTime
+while accumulator >= fixedDt và chưa vượt maxSteps:
+    advance every ball by fixedDt
+    accumulator -= fixedDt
+```
+
+<InteractiveLab demo="collision-tank" mode="collision-motion" />
+
+Chọn 16 bóng để dễ nhìn, bấm Tiến một bước và đọc elapsed. Đổi `dt` rồi reset. Dù Canvas redraw ở nhịp nào, một single-step luôn tiến đúng giá trị trong select.
+
+## Viết code từng bước
+
+### Bước 1 — Tích phân đúng một Ball
+
+```cpp title="include/lab.hpp — movement không biết wall hay pair"
+inline void integrateBall(Ball& ball, double deltaSeconds) {
+    if (!finiteBall(ball) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
+        return;
+    }
+    ball.position = add(ball.position, scale(ball.velocity, deltaSeconds));
+}
+```
+
+Hàm không clamp bounds và không đổi velocity. Nhờ trách nhiệm hẹp, test có thể cho một ball ở `(1,2)`, velocity `(3,-4)`, `dt=0.5` và chờ đúng `(2.5,0)`.
+
+### Bước 2 — Lập kế hoạch substep trước khi sửa state
+
+```cpp title="include/lab.hpp — frame time được gom, fixed dt được giữ nguyên"
+const double acceptedFrame = std::min(frameSeconds, maximumFrameSeconds);
+double available = accumulator + acceptedFrame;
+const int availableSteps = int(std::floor((available + kCollisionEpsilon) / fixedDeltaSeconds));
+const int steps = std::min(availableSteps, maximumSteps);
+```
+
+Ta clamp frame time, không thay `fixedDeltaSeconds`. Nếu debugger dừng 4 giây, chương trình không cố mô phỏng toàn bộ 4 giây trong một frame.
+
+### Bước 3 — Duyệt toàn bộ body trong từng step
+
+```cpp title="src/main.cpp — một dt chung cho cả đàn"
+for (lab::Ball& ball : balls) {
+    lab::integrateBall(ball, fixedDeltaSeconds);
+}
+```
+
+Vòng body nằm bên trong vòng substep. Nếu đặt ngược, ball đầu có thể chạy nhiều step trước khi ball cuối chạy step đầu, gây sai lệch khi collision được thêm vào.
+
+### Bước 4 — Single-step không đi qua frame clock
+
+Khi người dùng nhấn N, main đặt `stepsToRun=1` và pause. Nó gọi cùng đoạn physics update với realtime; project không có hai implementation chuyển động khác nhau.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy fixed-step motion"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_checkpoint_2
+./build/Debug/project_24_checkpoint_2.exe
+```
+
+Chạy vài giây và xác nhận bóng rời bể. Đừng sửa hiện tượng đó trong checkpoint 2: bài 3 sẽ thêm wall response ở đúng một nơi.
+
+## Thử làm sai để hiểu đúng
+
+1. Truyền `frameSeconds` vào `integrateBall`. Thay đổi tải cửa sổ và nhìn quãng đường mỗi update; hoàn tác về fixed dt.
+2. Đặt vòng `for (Ball&)` bên ngoài vòng substep. Khi có nhiều substep, state giữa các body không còn cùng thời điểm; hoàn tác thứ tự.
+3. Bỏ `maximumSteps`, pause debugger vài giây rồi tiếp tục. Quan sát catch-up loop và hoàn tác guard trước khi nó gây treo.
+
+## Tự kiểm tra kết quả
+
+- Integration chỉ thực hiện `position += velocity*dt`.
+- Velocity không đổi trong checkpoint 2.
+- `dt<=0` và state không finite không được commit.
+- 120 frame 1/120 s và 30 frame 1/30 s đều sinh 60 step 1/60 s.
+- Single-step chạy đúng một substep rồi pause.
+- `droppedTime` tăng khi frame/substep guard phải bỏ thời gian.
+- Bóng đi qua wall ở checkpoint này vì boundary response chưa được viết.
+
+## Bài tập mở rộng
+
+Hiển thị interpolation alpha=`accumulator/fixedDt` và vẽ một ghost render position giữa state cũ–mới. Không dùng ghost đó cho collision detection.
+
+Bài tiếp theo xử lý bốn bức tường, trong đó radius và hướng velocity đều quan trọng.

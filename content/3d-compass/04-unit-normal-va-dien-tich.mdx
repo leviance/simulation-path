@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chuẩn hóa normal và đo diện tích
+
+## Vấn đề cần giải quyết
+
+Raw normal đã vuông góc với tam giác, nhưng độ dài của nó tăng khi tam giác lớn lên. Nếu dùng raw normal làm hướng chiếu sáng hoặc hướng mặt, hai tam giác song song có kích thước khác nhau sẽ cho kết quả khác nhau. Ta cần tách **hướng** thành unit normal có độ dài 1 và giữ **độ lớn** để tính diện tích.
+
+Trường hợp raw normal bằng zero cũng bắt đầu xuất hiện. Chia zero vector cho độ dài 0 sẽ tạo NaN, rồi các giá trị đó lan sang phép chiếu và tọa độ pixel. Vì vậy `normalize` phải có đường thoát an toàn ngay từ khi được viết.
+
+## Hiểu ý tưởng trước khi viết code
+
+Độ dài vector 3D vẫn đến từ dot product với chính nó:
+
+$$
+\lVert v\rVert=\sqrt{v\cdot v}=\sqrt{x^2+y^2+z^2}
+$$
+
+Với vector đủ dài:
+
+$$
+\hat v=\frac{v}{\lVert v\rVert}
+$$
+
+Cross product còn cho biết diện tích. Hai cạnh AB và AC dựng thành một hình bình hành có diện tích $\lVert AB\times AC\rVert$. Tam giác chiếm một nửa:
+
+$$
+Area=\frac{1}{2}\lVert AB\times AC\rVert
+$$
+
+<InteractiveLab demo="normal" mode="normal-unit-area" />
+
+Chọn preset tam giác vuông 3×2: raw normal có độ dài 6, unit normal dài 1 và diện tích bằng 3. Tăng B.x lên gần gấp đôi; area đổi nhưng mũi tên unit normal vẫn giữ chiều dài hiển thị.
+
+## Viết code từng bước
+
+### Bước 1 — Xây magnitude từ dot product
+
+Viết `dot` trước giúp công thức độ dài ngắn và dùng lại được trong bài winding.
+
+```cpp title="include/lab.hpp — dot và magnitude của Vec3"
+inline double dot(Vec3 left, Vec3 right) {
+    return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+inline double magnitude(Vec3 vector) {
+    return std::sqrt(dot(vector, vector));
+}
+```
+
+`dot(vector,vector)` không âm về mặt toán học. Ta dùng `double` để các kiểm tra gần zero ở bài cuối có đủ độ chính xác.
+
+### Bước 2 — Normalize có xử lý zero vector
+
+Không viết `return scale(vector,1.0/magnitude(vector))` trên một dòng. Tách `length` ra giúp kiểm tra điều kiện trước phép chia.
+
+```cpp title="include/lab.hpp — normalize không sinh NaN"
+inline Vec3 normalize(Vec3 vector, double epsilon = 1e-9) {
+    const double length = magnitude(vector);
+    if (length <= epsilon) {
+        return {};
+    }
+    return scale(vector, 1.0 / length);
+}
+```
+
+Zero vector trả về ở đây là một giá trị số an toàn, không phải một normal hợp lệ. UI sẽ chịu trách nhiệm báo “degenerate” thay vì vẽ nó như một hướng thật.
+
+### Bước 3 — Đặt tên rõ cho unit normal và diện tích
+
+Hai hàm đều lấy raw normal từ ba point hiện tại:
+
+```cpp title="include/lab.hpp — hướng normal và diện tích"
+inline Vec3 triangleUnitNormal(const Triangle& triangle) {
+    return normalize(triangleRawNormal(triangle));
+}
+
+inline double triangleArea(const Triangle& triangle) {
+    return magnitude(triangleRawNormal(triangle)) * 0.5;
+}
+```
+
+Không cần công thức Heron hay đo cạnh trong screen space. Diện tích này nằm trong world space 3D và không phụ thuộc vào góc nhìn của sơ đồ.
+
+### Bước 4 — Chỉ scale unit normal ở lúc vẽ
+
+Checkpoint 4 thay raw normal bằng unit normal rồi nhân chiều dài mũi tên cố định:
+
+```cpp title="src/main.cpp — mũi tên dùng hướng đã chuẩn hóa"
+const lab::Vec3 displayNormal = lab::scale(lab::triangleUnitNormal(triangle), 1.35);
+const lab::Vec3 endpoint = lab::add(centroid, displayNormal);
+drawWorldLine(pixels, width, height, centroid, endpoint, rgba(196, 132, 255));
+```
+
+Giá trị `1.35` là kích thước minh họa. Unit normal trong `lab.hpp` vẫn dài 1 và có thể dùng cho các phép toán khác.
+
+## Ghép các phần lại
+
+Build `project_10_checkpoint_4`. Title bar hiển thị unit normal và area. Kéo C xa khỏi cạnh AB: diện tích tăng nhưng mũi tên tím không dài ra. Đưa C gần đường AB: diện tích giảm dần; ở trạng thái thẳng hàng, mũi tên co về zero vì chưa có nhánh ẩn riêng cho degenerate.
+
+Sự tách biệt này sẽ được dùng liên tục trong đồ họa 3D: raw normal hữu ích cho area-weighted calculation, còn unit normal hữu ích khi chỉ cần hướng.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `*0.5` trong `triangleArea`. Bạn sẽ nhận diện tích hình bình hành, luôn gấp đôi diện tích tam giác.
+2. Dùng `triangleRawNormal` để vẽ với hệ số cố định 1.35. Khi kéo một đỉnh ra xa, mũi tên nhanh chóng rời khỏi cửa sổ.
+3. Bỏ nhánh `length<=epsilon` rồi chọn preset thẳng hàng trên Canvas. Kết quả phép chia 0/0 trở thành NaN; mũi tên và facing ở bài sau không còn đáng tin.
+
+## Tự kiểm tra kết quả
+
+- `magnitude((3,4,0))` bằng 5.
+- Unit normal của một tam giác hợp lệ có độ dài gần 1.
+- Tam giác vuông cạnh 3 và 4 có raw normal dài 12, area bằng 6.
+- Scale toàn bộ tam giác gấp đôi làm area tăng bốn lần nhưng unit normal không đổi.
+- Khi raw normal gần zero, `normalize` trả vector hữu hạn thay vì NaN.
+
+## Bài tập mở rộng
+
+Tính area bằng `0.5*base*height` cho một tam giác nằm trên mặt phẳng XY rồi so với `triangleArea`. Sau đó thử nhân mọi tọa độ với 3 và dự đoán area mới trước khi chạy.
+
+Bài tiếp theo giữ nguyên ba điểm nhưng đổi thứ tự B và C để tìm hiểu vì sao một mặt có thể quay normal về hai phía.

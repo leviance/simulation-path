@@ -1,0 +1,156 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm box và torus mà không tạo mesh
+
+## Bức hình này còn thiếu gì?
+
+Đây là lúc lợi thế của ray marching trở nên rõ ràng. Ta sẽ thêm một axis-aligned box và một torus mà không sửa VAO, không tải thêm vertex và cũng không gọi thêm `glDraw*`. Mỗi hình mới chỉ cần một hàm khoảng cách và vài dòng ghép vào `sampleScene`.
+
+Phần khó không nằm ở việc chép công thức. Ta cần hiểu mỗi bước biến đổi để biết tâm, kích thước và trục của primitive đang mang ý nghĩa gì.
+
+## Hình dung đường đi của một pixel
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-primitives" />
+
+Chọn từng primitive và kéo sample quanh lát cắt. Quan sát distance gần zero ở mặt box và hai vòng biên của torus, không chỉ ở tâm hình.
+
+## Cùng sửa checkpoint
+
+### Bước 1 — Tách khoảng cách ngoài và trong box
+
+Đưa điểm về local space của box, phản chiếu tám octant về octant dương, rồi trừ `halfSize`:
+
+$$
+\mathbf{q}=|\mathbf{p}-\mathbf{c}|-\mathbf{b}
+$$
+
+- Nếu có thành phần $q$ dương, điểm nằm ngoài theo trục đó. `length(max(q, 0))` đo khoảng cách Euclidean đến mặt/cạnh/góc gần nhất.
+- Nếu cả ba thành phần âm, điểm nằm trong. `min(max(q.x,q.y,q.z),0)` chọn khoảng cách âm đến mặt gần nhất.
+
+```cpp title="include/raymarch_math.hpp — sdBox"
+inline double sdBox(
+    const Vec3& point,
+    const Vec3& center,
+    const Vec3& halfSize
+) {
+    const Vec3 q = absolute(point - center) - halfSize;
+    const Vec3 outside{
+        std::max(q.x, 0.0),
+        std::max(q.y, 0.0),
+        std::max(q.z, 0.0),
+    };
+    const double inside =
+        std::min(std::max({q.x, q.y, q.z}), 0.0);
+
+    return length(outside) + inside;
+}
+```
+
+Nếu chỉ dùng `length(max(q, 0))`, mọi điểm bên trong box sẽ trả về 0 thay vì khoảng cách âm. Viền ngoài có thể vẫn trông đúng, nhưng normal và phép ghép SDF ở bên trong sẽ sai.
+
+### Bước 2 — Giảm torus 3D thành một vòng tròn 2D
+
+Torus nằm quanh trục Y. Trước tiên đo khoảng cách từ điểm đến trục Y trong mặt phẳng XZ, rồi trừ `majorRadius` để đưa tâm ống về zero. Cặp `(ringDistance, local.y)` lúc này là một điểm 2D; trừ tiếp `minorRadius` để có distance đến tiết diện tròn:
+
+```cpp title="include/raymarch_math.hpp — sdTorus"
+inline double sdTorus(
+    const Vec3& point,
+    const Vec3& center,
+    double majorRadius,
+    double minorRadius
+) {
+    const Vec3 local = point - center;
+    const double ringDistance =
+        std::hypot(local.x, local.z) - majorRadius;
+
+    return std::hypot(ringDistance, local.y) - minorRadius;
+}
+```
+
+`majorRadius` đi từ tâm torus đến tâm ống; `minorRadius` là bán kính của ống. Đổi hai giá trị cho nhau không chỉ làm hình “khác một chút” mà đổi topology hoặc làm công thức không còn khớp ý định.
+
+### Bước 3 — Chọn primitive gần nhất mà không đổi marcher
+
+```cpp title="include/raymarch_math.hpp — scene checkpoint 6"
+inline SceneSample nearer(
+    SceneSample current,
+    SceneSample candidate
+) {
+    if (candidate.distance < current.distance) {
+        return candidate;
+    }
+    return current;
+}
+
+inline SceneSample sampleScene(const Vec3& point) {
+    SceneSample sample{
+        sdSphere(point, {-1.0, -0.18, 0.15}, 0.82),
+        1};
+
+    sample = nearer(sample, {sdBox(point, {1.0, -0.32, 0.1}, {0.62, 0.68, 0.62}), 2});
+    sample = nearer(sample, {sdTorus(point, {0.05, 0.32, -1.25}, 0.72, 0.22), 3});
+
+    return sample;
+}
+```
+
+Scene union là phép lấy minimum distance. `nearer` mang luôn `materialId` của cùng winner, nên hình học và shading không lệch nhau.
+
+Điều đáng chú ý: `marchRay` và `estimateNormal` không đổi dòng nào. Chúng gọi `sampleScene`, vì vậy tự nhìn thấy primitive mới.
+
+## Chạy thử và quan sát
+
+Probe đúng mặt thay vì chọn điểm bằng mắt:
+
+```cpp title="tests/tests.cpp — primitive surfaces"
+check(
+    near(
+        lab::sdBox(
+            {1.62, -0.32, 0.1},
+            {1.0, -0.32, 0.1},
+            {0.62, 0.68, 0.62}
+        ),
+        0.0
+    ),
+    "box face has zero signed distance"
+);
+
+check(
+    near(
+        lab::sdTorus(
+            {0.99, 0.32, -1.25},
+            {0.05, 0.32, -1.25},
+            0.72,
+            0.22
+        ),
+        0.0
+    ),
+    "torus outer ring has zero signed distance"
+);
+```
+
+Torus outer surface nằm cách center $0.72 + 0.22 = 0.94$ theo trục X, vì vậy $0.05 + 0.94 = 0.99$ là probe có đáp án chính xác.
+
+## Cố tình làm sai
+
+1. Truyền full size vào tham số `halfSize`. Box lớn gấp đôi theo mỗi trục; tên tham số rõ ràng giúp bắt lỗi này.
+2. Bỏ phần `inside` của `sdBox`. Sample tại center trả 0 thay vì số âm.
+3. Dùng `length(local) - majorRadius - minorRadius` cho torus. Kết quả là sphere shell, không có lỗ giữa.
+4. Lấy `max` thay vì `min` khi ghép. Bạn đang tính intersection chứ không phải union; phần lớn vật thể biến mất.
+5. Thêm một draw call cho mỗi shape. Điều đó quay lại mesh renderer và né mục tiêu của project.
+
+## Dấu hiệu cho thấy bài đã hoàn thành
+
+- [ ] Box face và torus outer ring trả distance gần zero.
+- [ ] Center box và một điểm trong ống torus trả distance âm.
+- [ ] Sphere, box và torus xuất hiện bằng cùng một fullscreen draw call.
+- [ ] `marchRay` và `estimateNormal` không cần biết primitive type.
+- [ ] Material ID 1, 2, 3 đi cùng primitive có distance nhỏ nhất.
+
+## Thử đi thêm một bước
+
+1. Dịch torus theo trục Y và chứng minh local-space translation đúng bằng probe.
+2. Thêm rounded box bằng cách trừ một corner radius khỏi box SDF.
+3. Viết `sdCapsule` rồi ghép như material 5 mà không sửa marcher.
+
+Bài sau sẽ dùng năm plane để tạo một căn phòng hở phía camera, đồng thời hoàn thiện cách gắn material vào kết quả truy vấn scene.

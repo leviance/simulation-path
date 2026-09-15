@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chuyển renderer bằng F1 và F2
+
+## Vấn đề cần giải quyết
+
+Đến checkpoint 7, CPU và GPU đều chạy nhưng các checkpoint chọn backend cố định để tập trung debug. Bây giờ mới ghép F1/F2. Nếu ta xử lý input bên trong từng renderer hoặc init/destroy resource mỗi lần bấm phím, cube sẽ giật, mất state hoặc tạo lỗi lifetime.
+
+Checkpoint 8 đặt event → update → render theo đúng một chiều. F1/F2 sửa đúng một enum; cả hai backend và resource của chúng được tạo từ startup, dùng lại đến cleanup.
+
+## Hiểu ý tưởng trước khi viết code
+
+Frame loop cần một snapshot duy nhất:
+
+```text
+Poll events
+  ├─ F1/F2 → RendererKind
+  ├─ drag/N/Space/R → CubeScene + paused
+  └─ resize → framebuffer pixel size
+Update angle một lần
+Render CPU hoặc GPU từ cùng scene + aspect
+Swap window
+```
+
+Không render CPU rồi update rồi mới render GPU. Dù chỉ một backend hiện trên màn hình, switching phải giữ continuity như đổi camera trong cùng chương trình.
+
+<InteractiveLab demo="dual-renderer-cube" mode="renderer-switch" />
+
+## Viết code từng bước
+
+### Bước 1 — F1/F2 chỉ đổi enum
+
+```cpp title="src/main.cpp — chọn renderer"
+}
+else if (event.key.key == SDLK_F1) {
+    renderer = lab::RendererKind::cpu;
+}
+else if (event.key.key == SDLK_F2) {
+    renderer = lab::RendererKind::gpu;
+```
+
+Không có `initialize`, `destroy`, reset angle hay upload mesh trong hai nhánh này.
+
+### Bước 2 — Update trước khi chọn backend
+
+```cpp title="src/main.cpp — animation và fixed step"
+if (!paused) {
+    scene.angleY += deltaSeconds * 0.55F;
+}
+if (singleStep) {
+    scene.angleY += kFixedAngleStep;
+}
+```
+
+`N` tiến đúng 10° rồi pause. Vì scene chỉ được cập nhật một lần, F1/F2 ở frame kế tiếp nhìn cùng angle.
+
+### Bước 3 — Nhánh render chỉ đọc snapshot
+
+```cpp title="src/main.cpp — GPU branch"
+if (renderer == lab::RendererKind::gpu) {
+    const lab::Mat4 mvp = lab::makeMvp(scene, float(framebufferWidth) / float(framebufferHeight));
+    gpuRenderer.draw(gl, mvp, scene.depthEnabled, scene.cullingEnabled);
+} else {
+```
+
+CPU branch ngay sau `else` nhận cùng `scene` và pixel dimensions. Không backend nào sửa chúng.
+
+## Ghép các phần lại
+
+Chạy checkpoint 8, pause rồi tiến N vài lần. Bấm F1/F2 liên tục: orientation phải không đổi. Tiếp tục animation, drag, toggle D/C và resize; mọi state phải đi theo scene.
+
+```bash title="Terminal — build checkpoint chuyển backend"
+cmake --build build --config Debug --target project_34_checkpoint_8
+```
+
+Đừng so CPU timer quanh `glDrawElements` với thời gian CPU raster rồi kết luận tốc độ. GPU command có thể chỉ mới được submit; Project này kiểm correctness và architecture, không phải benchmark CPU/GPU.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong F2, gán lại `scene = {}`. Cube nhảy về preset mỗi lần chuyển GPU.
+2. Tạo/destroy `GpuCubeRenderer` trong nhánh F2. Nhấn phím nhanh làm allocation/resource churn và mở đường cho use-after-destroy.
+3. Để tái hiện lỗi resize một cách có chủ đích, tạm chuyển khối chuẩn bị `cpuFramebuffer` và `cpuPresenter` vào riêng nhánh CPU. Sau đó resize khi đang ở GPU rồi bấm F1: texture cũ không khớp framebuffer mới. Đưa khối này trở lại trước nhánh chọn renderer ngay sau khi quan sát xong.
+
+Hoàn tác lỗi, thực hiện lại chuỗi F1 → resize → F2 → drag → F1.
+
+## Tự kiểm tra kết quả
+
+- [ ] F1/F2 không sửa `CubeScene`.
+- [ ] Pause, N và drag chạy trước nhánh renderer.
+- [ ] Resources được tạo một lần, không theo keypress.
+- [ ] Resize ở backend nào cũng chuẩn bị đúng dimensions cho backend kia.
+- [ ] F1/F2 không làm cube nhảy orientation.
+
+Hãy dự đoán điều sẽ xảy ra nếu mỗi backend giữ `previousTicks` riêng: khi quay lại backend lâu không active, delta có thể nhảy lớn.
+
+## Bài tập mở rộng
+
+1. Thêm phím Tab đổi backend qua enum helper mà không nhân đôi logic F1/F2.
+2. Ghi một scene fingerprint từ angle/depth/culling trước và sau switch.
+3. Thiết kế API `render(const FrameInput&)` nếu sau này thêm renderer thứ ba.
+
+Bài cuối đóng validation, cleanup và toàn bộ source chạy được.

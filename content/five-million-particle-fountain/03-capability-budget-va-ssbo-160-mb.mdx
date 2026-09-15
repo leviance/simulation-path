@@ -1,0 +1,161 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính ngân sách cho SSBO 160 MB
+
+## Ta cần giải quyết điều gì?
+
+Năm triệu là số particle mà ta muốn vẽ, còn GPU phải cấp phát bộ nhớ theo byte. Vì mỗi `Particle` chiếm 32 byte, chỉ riêng SSBO chính đã cần:
+
+$$
+5.000.000 \times 32 = 160.000.000\ \text{byte} \approx 152,6\ \text{MiB}
+$$
+
+OpenGL 4.3 không đảm bảo mọi máy cho phép một shader storage block lớn tới mức đó. Nếu cứ tạo vector CPU, gọi `glBufferData` rồi mới xem lỗi, ứng dụng có thể tốn hàng trăm MB và để lại diagnostics mơ hồ. Checkpoint 3 biến byte budget và driver limits thành gate trước allocation.
+
+## Theo chân một particle
+
+Cấu hình chỉ hợp lệ khi đồng thời đạt bốn điều kiện:
+
+1. context thật là OpenGL 4.3 trở lên;
+2. local size 256 không vượt maximum workgroup size X hoặc maximum invocations;
+3. `ceilDiv(N,256)` không vượt maximum workgroup count X;
+4. `N × sizeof(Particle)` không vượt `GL_MAX_SHADER_STORAGE_BLOCK_SIZE`.
+
+Điều kiện thứ tư là lý do final có fallback. Đây không phải hạ tiêu chuẩn bí mật: title và terminal luôn báo count thực tế. Máy đủ capability vẫn chạy đúng 5 triệu; máy thiếu chỗ chọn preset lớn nhất trong 100k, 500k và 1m.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-budget" />
+
+Chọn capability 64 MiB rồi thử 5 triệu. Canvas hiển thị rõ requested bytes vượt block limit và fallback là 1 triệu. Việc này phải xảy ra trước allocation, không phải sau một frame trắng.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Khóa layout phía C++
+
+```cpp title="include/particle_math.hpp — layout assertions"
+static_assert(sizeof(Vec4) == 16);
+static_assert(alignof(Vec4) == 16);
+static_assert(sizeof(Particle) == 32);
+static_assert(alignof(Particle) == 16);
+static_assert(offsetof(Particle, velocityLife) == 16);
+```
+
+`sizeof` trả lời stride giữa hai particle. `offsetof` trả lời nơi `velocityLife` bắt đầu trong record. Chỉ kiểm tổng 32 byte là chưa đủ: compiler vẫn có thể đặt field thứ hai sai offset nếu kiểu dữ liệu thay đổi về sau.
+
+### Bước 2 — Tính số workgroup và dung lượng bằng số nguyên
+
+```cpp title="include/particle_math.hpp — makeDispatchPlan"
+plan.workgroupCount = 1U + (particleCount - 1U) / std::size_t(localSize);
+plan.launchedInvocations = plan.workgroupCount * std::size_t(localSize);
+plan.unusedInvocations = plan.launchedInvocations - particleCount;
+```
+
+Với `N=5.000.000`, kết quả là `19.532 × 256 = 5.000.192`; tức 192 lane cuối không có particle tương ứng. Bài 4 sẽ kiểm tra index trước lần đọc buffer đầu tiên.
+
+Phép tính số byte cũng phải phát hiện tràn số:
+
+```cpp title="include/particle_math.hpp — particleStorageBytes"
+if (particleCount > std::numeric_limits<std::size_t>::max() / sizeof(Particle)) {
+    return std::numeric_limits<std::size_t>::max();
+}
+return particleCount * sizeof(Particle);
+```
+
+### Bước 3 — Đọc đúng giới hạn OpenGL
+
+```cpp title="include/particle_gpu_engine.hpp — queryComputeLimits"
+gl.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0U, &limits.maximumWorkgroupCountX);
+gl.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0U, &limits.maximumWorkgroupSizeX);
+gl.GetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &limits.maximumInvocations);
+gl.GetInteger64v(
+    GL_MAX_SHADER_STORAGE_BLOCK_SIZE,
+    &limits.maximumShaderStorageBlockBytes
+);
+```
+
+Workgroup count và size là limit indexed theo X/Y/Z, nên dùng `glGetIntegeri_v(..., 0, ...)`. Block size có thể lớn hơn miền `GLint`, vì vậy dùng `glGetInteger64v`.
+
+### Bước 4 — Chọn preset rồi mới tạo dữ liệu
+
+```cpp title="include/particle_math.hpp — chooseLargestSupportedCount"
+for (auto iterator = ascendingPresets.rbegin(); iterator != ascendingPresets.rend(); ++iterator) {
+    const DispatchPlan plan = makeDispatchPlan(*iterator);
+    if (validateCapabilities(limits, plan).allPassed()) {
+        return *iterator;
+    }
+}
+return 0U;
+```
+
+Vòng lặp đi từ preset lớn xuống nhỏ. Chỉ sau khi có count hợp lệ, `main.cpp` mới gọi `makeInitialParticles` và `engine.initialize`.
+
+### Bước 5 — Upload một SSBO duy nhất
+
+```cpp title="include/particle_gpu_engine.hpp — replaceParticles"
+const std::size_t requestedCount = particles.size();
+const std::size_t bytes = particleStorageBytes(requestedCount);
+gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, particleBuffer_);
+static_cast<void>(gl.GetError());
+gl.BufferData(
+    GL_SHADER_STORAGE_BUFFER,
+    static_cast<GLsizeiptr>(bytes),
+    particles.data(),
+    GL_DYNAMIC_DRAW
+);
+const GLenum allocationError = gl.GetError();
+if (allocationError != GL_NO_ERROR) {
+    diagnostics = "glBufferData failed for the requested particle preset.";
+    return false;
+}
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, particleBuffer_);
+particleCount_ = requestedCount;
+```
+
+Chỉ cần một buffer vì compute và render cùng dùng một kiểu record. Binding 0 là quy ước chung giữa các shader, không phải buffer name do `glGenBuffers` trả về.
+
+## Nối lại thành một bước mô phỏng
+
+Checkpoint 3 vẫn vẽ CPU preview, nhưng GPU đã giữ bản particle state chính:
+
+```text
+đọc OpenGL limits
+        ↓
+validate 5m → nếu fail thử preset nhỏ hơn
+        ↓
+tạo đúng N Particle trên CPU
+        ↓
+glBufferData một lần → binding 0
+        ↓
+giải phóng vector CPU tạm sau initialize
+```
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_38_checkpoint_3
+```
+
+Terminal phải báo version, maximum local size/invocations, group count và SSBO bytes. Nếu count khác 5 triệu, phải có dòng fallback cùng số byte cần thiết.
+
+## Thử tạo lỗi
+
+1. Tính `5.000.000 × 32` bằng `int` ở một đường code có count lớn hơn. Dùng `size_t` và kiểm overflow trước phép nhân.
+2. Chỉ nhìn tổng VRAM được quảng cáo. Điều shader thực sự cần biết là giới hạn OpenGL dành cho **một storage block**.
+3. Dùng `GL_MAX_UNIFORM_BLOCK_SIZE`. UBO và SSBO là hai resource khác nhau.
+4. Gọi `makeInitialParticles(5m)` trước capability report. Fallback không còn bảo vệ memory allocation đầu tiên.
+5. Khi fallback, vẫn ghi title “5 triệu”. Người học không thể tin timing hoặc output count.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] `Particle` có size 32, alignment 16, field thứ hai ở byte 16.
+- [ ] Năm triệu được tính là 160.000.000 byte.
+- [ ] Dispatch plan có 19.532 groups và 192 lane dư.
+- [ ] Cả local-size, invocation, group-count và block-size limits đều được kiểm.
+- [ ] Preset được chọn trước khi tạo vector/buffer lớn.
+- [ ] Máy không đủ 160 MB có fallback rõ và count thật xuất hiện trong log.
+- [ ] SSBO được bind ở binding 0 sau upload.
+
+## Nếu muốn thử thêm
+
+1. Thêm preset 2 triệu và kiểm thứ tự fallback với block limit 80 MiB.
+2. Tính cả peak host memory khi vector CPU và GPU buffer cùng tồn tại trong lúc upload.
+3. In byte count theo cả MB thập phân và MiB nhị phân để thấy hai đơn vị khác nhau.
+
+Ta đã có buffer đúng kích thước nhưng nó còn đứng yên. Bài 4 sẽ chuyển đúng CPU step sang compute shader và dispatch đủ 19.532 workgroups.

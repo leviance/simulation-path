@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Capacity study
+
+## Vấn đề cần giải quyết
+
+`leafCapacity = 16` chỉ là giá trị khởi đầu, không phải lựa chọn đúng cho mọi Octree. Capacity nhỏ tạo nhiều node, cây sâu hơn và thường giảm số điểm phải kiểm chính xác. Capacity lớn làm cây gọn và dựng nhanh hơn, nhưng mỗi leaf giao hộp truy vấn có thể chứa nhiều điểm hơn.
+
+Nếu chỉ chọn cây sâu nhất hoặc cấu hình kiểm ít điểm nhất, ta đang bỏ qua chi phí dựng và duyệt cây. Bài này đo bốn capacity `8, 16, 32, 64` trên đúng cùng dữ liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi dòng phải được tạo từ cùng `points` và `volumes`; chỉ `leafCapacity` thay đổi. Ta ghi:
+
+- `nodeCount`, `leafCount`, `maximumObservedDepth`, `maximumLeafOccupancy`;
+- `rebuildMicroseconds`;
+- `totalVisitedNodes`, `totalCandidates`, checksum và time/query.
+
+Không một cột nào tự quyết định cấu hình “tốt nhất”. Cảnh đứng yên nhưng truy vấn nhiều lần có thể chấp nhận dựng cây lâu hơn để giảm số điểm phải kiểm. Cảnh thay đổi liên tục có thể cần một cây gọn và dựng lại nhanh hơn.
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-capacity" />
+
+Nhấn “Chạy capacity study”, sau đó đổi clustered/uniform và chạy lại. Cột vàng biểu diễn candidates; chấm xanh biểu diễn node count. Hai distribution có thể dẫn tới lựa chọn khác nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt đầy đủ dữ liệu cần đọc trong một row
+
+```cpp title="include/lab.hpp — CapacityStudyRow"
+struct CapacityStudyRow {
+    std::size_t leafCapacity{};
+    std::size_t nodeCount{};
+    std::size_t leafCount{};
+    int maximumObservedDepth{};
+    std::size_t maximumLeafOccupancy{};
+    double rebuildMicroseconds{};
+    BatchMetrics metrics{};
+};
+```
+
+Mỗi dòng giữ cả thông tin cấu trúc lẫn kết quả truy vấn, nên giao diện luôn biết số liệu thuộc về cây nào.
+
+### Bước 2 — Chỉ thay capacity trong vòng study
+
+```cpp title="include/lab.hpp — rebuild từng preset"
+for (const std::size_t leafCapacity : capacities) {
+    const Octree tree = buildOctree(
+        points,
+        {bounds, leafCapacity, 10, 1.0 / 1024.0}
+    );
+```
+
+`maximumDepth`, `minimumNodeSize`, points và volumes giữ nguyên. Đây là kiểm soát biến số cơ bản của một thí nghiệm.
+
+### Bước 3 — Gắn metrics với chính tree vừa build
+
+```cpp title="include/lab.hpp — đo rồi lưu row"
+const BatchMetrics metrics =
+    benchmarkOctree(tree, points, volumes, repetitions, workspace);
+rows.push_back({
+leafCapacity,
+    tree.nodes.size(),
+    tree.leafCount,
+```
+
+`rebuildMicroseconds` đã được tree ghi khi build; query metrics được đo sau đó, không trộn hai timer.
+
+### Bước 4 — Xóa study cũ khi input thay đổi
+
+```cpp title="src/main.cpp — invalidation khi distribution đổi"
+points = lab::makePointCloud(100'000, worldBounds, seed, clustered);
+tree = lab::buildOctree(points, treeConfig);
+topology = lab::inspectOctreeTopology(tree, points.size());
+octreeBenchmark = {};
+bruteBenchmark = {};
+studyRows.clear();
+```
+
+Nếu vẫn hiển thị bảng của dữ liệu cũ cạnh point cloud mới, các con số tuy đúng nhưng lại mô tả một thí nghiệm khác. Vì vậy phải xóa bảng cũ khi đầu vào thay đổi.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 8"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_30_checkpoint_8
+```
+
+Nhấn `T` để chạy phép thử. Ứng dụng in một bảng đầy đủ ra terminal; Canvas hiển thị lại từng dòng dưới biểu đồ. Với dữ liệu clustered, capacity 8 phải tạo nhiều node hơn capacity 64; checksum của mọi dòng phải giống nhau vì kết quả truy vấn không đổi.
+
+## Thử làm sai để hiểu đúng
+
+1. Sinh lại point cloud cho từng capacity. Node/candidate differences vừa do capacity vừa do dữ liệu. Dùng cùng point vector.
+2. Giữ chart sau khi đổi distribution. Người dùng đọc nhầm metrics cũ. Clear study khi topology input đổi.
+3. Chọn capacity chỉ theo node count thấp nhất. Capacity rất lớn biến tree gần root-only và tăng candidates. Đọc cả topology, exact work và lifecycle của scene.
+
+## Tự kiểm tra kết quả
+
+- Study có đúng bốn rows theo thứ tự 8, 16, 32, 64.
+- Tất cả rows dùng cùng points, volumes và repetitions.
+- Checksum giống nhau ở mọi capacity.
+- Capacity nhỏ tạo nhiều nodes hơn trong preset kiểm thử.
+- Capacity nhỏ không tăng exact candidates trên workload cố định.
+- Rebuild time và query time được báo riêng.
+- Đổi distribution/capacity xóa metrics cũ.
+
+## Bài tập mở rộng
+
+Tạo một score có trọng số do người dùng nhập: `score = rebuildWeight * rebuild + queryWeight * query`. Thử workload “rebuild mỗi frame, query một lần” và “rebuild một lần, query 10.000 lần”. Không gọi score này là chân lý chung; nó chỉ biểu diễn một lifecycle cụ thể.
+
+Bài cuối ghép mọi phần vào một ứng dụng có reset deterministic, pointer capture cân bằng, controls đầy đủ và bộ test Debug/Release.

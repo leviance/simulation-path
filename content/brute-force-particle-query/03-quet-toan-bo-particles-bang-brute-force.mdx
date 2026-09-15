@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Quét toàn bộ particles bằng brute force
+
+## Vấn đề cần giải quyết
+
+Biết kiểm một particle chưa tạo thành spatial query. Ta cần duyệt 100.000 candidates, giữ mọi index nằm trong circle và đồng thời tìm particle gần tâm nhất. Vì chưa có spatial index, thuật toán không có lý do hợp lệ để bỏ qua bất kỳ phần tử nào.
+
+Đây là baseline quan trọng. Code phải đơn giản đến mức người học có thể tự kiểm bằng một vector bốn điểm trước khi đo hiệu năng trên cloud lớn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Brute force thực hiện đúng $N$ lần kiểm cho một query:
+
+$$
+W(N)=N
+$$
+
+Hit count có thể là 0, 20 hay 20.000; scan count vẫn là $N$. Tìm mọi hit cũng có nghĩa ta không được `break` sau phần tử đầu tiên nằm trong circle.
+
+<InteractiveLab demo="brute-force-particle-query" mode="brute-scan" />
+
+Kéo `Scan progress` về 10%, sau đó nhấn “Tiến một bước”. Các hit xuất hiện dần theo prefix của vector. Chỉ khi progress đạt 100% ta mới có câu trả lời đầy đủ.
+
+## Viết code từng bước
+
+### Bước 1 — Trả cả kết quả lẫn số công việc
+
+```cpp title="include/lab.hpp — output của baseline query"
+struct BruteForceResult {
+    std::vector<std::size_t> hitIndices{};
+    std::size_t nearestIndex{kNoParticle};
+    double nearestDistanceSquared{std::numeric_limits<double>::infinity()};
+    std::size_t scanned{};
+};
+```
+
+`hitIndices` giữ identity ổn định mà không sao chép toàn bộ particle. `scanned` là exact work counter, độc lập với thời gian máy.
+
+### Bước 2 — Đi qua từng index đúng một lần
+
+```cpp title="include/lab.hpp — vòng quét không bỏ candidate"
+for (std::size_t index = 0; index < particles.size(); ++index) {
+    const double candidateDistanceSquared = distanceSquared(particles[index].position, query.center);
+    ++result.scanned;
+    if (candidateDistanceSquared < result.nearestDistanceSquared) {
+        result.nearestDistanceSquared = candidateDistanceSquared;
+        result.nearestIndex = index;
+    }
+```
+
+Nearest dùng `<`, không dùng `<=`. Nếu hai particle cách tâm bằng nhau, index gặp trước được giữ lại; kết quả vì vậy deterministic.
+
+### Bước 3 — Thu mọi hit rồi mới kết thúc vòng lặp
+
+```cpp title="include/lab.hpp — hit indices giữ đúng thứ tự vector"
+if (insideCircleWithDistance(particles[index].position, query)) {
+    result.hitIndices.push_back(index);
+}
+```
+
+Không có `else` giữa nearest và hit: particle gần nhất có thể ở ngoài radius khi query không chứa điểm nào, và hit không nhất thiết là nearest.
+
+### Bước 4 — Renderer chỉ đọc query result
+
+```cpp title="src/main.cpp — query rồi highlight output"
+const lab::BruteForceResult result = lab::queryBruteForce(active, query);
+drawHits(pixels, width, height, active, result.hitIndices, result.nearestIndex, view);
+```
+
+`drawHits` không tính lại distance. Nếu màu highlight sai, ta có thể kiểm riêng result trước khi nghi ngờ framebuffer.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint brute-force baseline"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_27_checkpoint_3
+```
+
+Giảm radius gần zero, di chuyển query vào vùng thưa rồi vùng dày. `hits` đổi mạnh nhưng `scanned` vẫn bằng 100.000.
+
+## Thử làm sai để hiểu đúng
+
+1. Thêm `break` ngay sau `push_back`. Query chỉ trả hit đầu tiên theo index, không phải mọi hit; xóa `break`.
+2. Chỉ tăng `scanned` khi particle là hit. Readout biến thành một bản sao của hit count và không còn đo workload; chuyển increment ra đầu loop.
+3. Dùng `<=` khi cập nhật nearest. Với hai điểm đối xứng, nearest nhảy sang index cuối; quay lại `<` để tie ổn định.
+
+## Tự kiểm tra kết quả
+
+- Vector bốn điểm mẫu trả đúng hit indices `[0,1,2]`.
+- Hit indices tăng dần theo particle order.
+- Full query luôn báo `scanned == N`.
+- Radius zero vẫn nhận particle trùng chính xác center.
+- Query không có hit vẫn có nearest nếu vector không rỗng.
+- Empty vector trả `kNoParticle`, zero hits và zero scans.
+
+## Bài tập mở rộng
+
+Thêm tùy chọn chỉ tìm nearest và cho phép early exit khi distance bằng zero. Giải thích vì sao tối ưu đó hợp lệ cho nearest-only nhưng không hợp lệ cho yêu cầu “tìm mọi hit”.
+
+Bài tiếp theo giữ nguyên output nhưng loại `sqrt` khỏi hot loop và tái sử dụng vùng nhớ của result.

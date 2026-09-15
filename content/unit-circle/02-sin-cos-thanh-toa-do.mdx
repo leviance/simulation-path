@@ -1,0 +1,115 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biến góc thành tọa độ bằng sin và cos
+
+## Vấn đề cần giải quyết
+
+Ta đã có đường tròn và một góc đo bằng radian, nhưng đầu kim vẫn bị ghi cứng ở phía bên phải. Cần một công thức nhận `angle` và trả về hướng 2D tương ứng, dùng được ở mọi góc phần tư.
+
+Đây là lúc sin/cos trở thành công cụ lập trình cụ thể: cosine cho thành phần theo X, sine cho thành phần theo Y.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trên unit circle, điểm ứng với góc `θ` là:
+
+$$
+(x,y)=(\cos\theta,\sin\theta)
+$$
+
+Hai thành phần này tạo thành hai cạnh vuông góc của một tam giác có cạnh huyền dài 1. Áp dụng định lý Pythagoras:
+
+$$
+\cos^2\theta+\sin^2\theta=1
+$$
+
+Vì tổng bình phương hai cạnh bằng bình phương cạnh huyền, độ dài của vector `(cosθ,sinθ)` luôn bằng 1. Muốn đầu kim cách tâm một đoạn `r`, ta nhân cả hai thành phần với `r`; muốn đổi tâm từ gốc sang `center`, ta cộng tọa độ tâm:
+
+$$
+P=center+r(\cos\theta,\sin\theta)
+$$
+
+<InteractiveLab demo="angle" mode="angle-sincos" />
+
+Hãy chọn lần lượt bốn mốc 0°, 90°, 180° và 270°. Đường xanh dương là thành phần X, đường xanh lá là thành phần Y; chúng ghép thành tam giác vuông có đầu kim là đỉnh còn lại. Đọc `endpoint` dưới Canvas rồi tự giải thích dấu của từng thành phần.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo kiểu dữ liệu cho một cặp tọa độ
+
+```cpp title="include/lab.hpp — Vec2 tối thiểu"
+struct Vec2 {
+    double x{};
+    double y{};
+};
+```
+
+Project này chưa cần toàn bộ phép toán của Project 06. `Vec2` chỉ gom hai giá trị có cùng ý nghĩa để hàm không phải trả về `std::pair<double,double>` khó đọc.
+
+### Bước 2 — Biến angle thành hướng đơn vị
+
+```cpp title="include/lab.hpp — unitDirection"
+inline Vec2 unitDirection(double angle) {
+    return {std::cos(angle), std::sin(angle)};
+}
+```
+
+Tên `unitDirection` nhắc rằng kết quả là một hướng dài 1. Hàm không biết tâm, bán kính, kích thước cửa sổ hay framebuffer.
+
+### Bước 3 — Ánh xạ hướng lên một đường tròn bất kỳ
+
+```cpp title="include/lab.hpp — pointOnCircle"
+inline Vec2 pointOnCircle(Vec2 center, double radius, double angle) {
+    const Vec2 direction = unitDirection(angle);
+    return {
+        center.x + direction.x * radius,
+        center.y + direction.y * radius,
+    };
+}
+```
+
+Ba thao tác hiện rõ theo đúng thứ tự: tính hướng, nhân theo bán kính, cộng tâm. Hàm này vẫn làm việc trong hệ tọa độ toán học nơi Y hướng lên.
+
+### Bước 4 — Đổi sang pixel khi chuẩn bị vẽ
+
+```cpp title="src/main.cpp — đầu kim trên framebuffer"
+const lab::Vec2 direction = lab::unitDirection(angle);
+const lab::Vec2 point = lab::pointOnCircle({}, double(radius), angle);
+const int pointX = centerX + int(std::lround(point.x));
+const int pointY = centerY - int(std::lround(point.y));
+drawLine(pixels, width, height, centerX, centerY, pointX, pointY, rgba(255, 226, 108));
+fillCircle(pixels, width, height, pointX, pointY, 7, rgba(255, 226, 108));
+```
+
+Dấu trừ tại `pointY` là phép đổi từ world Y hướng lên sang screen Y hướng xuống. Nếu đưa dấu trừ vào `unitDirection`, phần toán thuần sẽ bị phụ thuộc vào quy ước màn hình và `atan2` ở bài cuối sẽ khó hiểu hơn.
+
+## Ghép các phần lại
+
+Checkpoint 2 đặt góc ban đầu là 35°. Thanh tiêu đề hiển thị radian, degree và endpoint `(cos,sin)`. Đầu kim vàng phải nằm đúng trên đường tròn; resize chỉ đổi bán kính hiển thị, không đổi `direction`.
+
+Luồng dữ liệu của một frame bây giờ là:
+
+```text
+angle → unitDirection → pointOnCircle → đổi Y sang screen space → vẽ
+```
+
+Không lưu `pointX` hay `pointY` sang frame sau. Chúng là kết quả được suy ra từ `angle` hiện tại.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi `std::cos(35.0)` với ý định dùng 35°. C++ sẽ hiểu đó là 35 radian, tức hơn năm vòng rưỡi.
+2. Đổi vị trí sin và cos. Góc 0° sẽ hướng lên thay vì sang phải.
+3. Cộng `center` trước rồi mới nhân radius. Tọa độ tâm cũng bị scale và vòng tròn dịch sai vị trí.
+
+## Tự kiểm tra kết quả
+
+- 0 rad cho direction gần `(1,0)`.
+- `π/2` cho direction gần `(0,1)`.
+- π cho direction gần `(-1,0)`.
+- `direction.x² + direction.y²` gần 1 tại mọi góc thử.
+- Đầu kim nằm trên đường tròn sau khi resize.
+
+## Bài tập mở rộng
+
+Vẽ thêm một điểm ở góc `angle + π`; nó phải luôn nằm đối diện đầu kim qua tâm. Sau đó vẽ một điểm chạy với `2 × angle` để quan sát nó hoàn thành hai vòng trong khi kim chính hoàn thành một vòng.
+
+Bài sau cho `angle` thay đổi theo thời gian thay vì giữ cố định ở 35°.

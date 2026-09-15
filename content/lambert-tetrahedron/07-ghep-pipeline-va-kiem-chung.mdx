@@ -1,0 +1,200 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép pipeline chiếu sáng và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Các checkpoint trước đã cho ta từng mảnh: mesh, normal, light, diffuse, material, rotation và culling. Một renderer hoàn chỉnh cần đặt chúng đúng thứ tự rồi đưa face qua near clipping, projection và top-left rasterizer. Sai thứ tự có thể tạo hình đúng ở vị trí mặc định nhưng nổ khi model tiến sát camera.
+
+Final sẽ tô mỗi face bằng **một màu duy nhất**. Đây là flat shading: lighting được tính một lần từ face normal, không nội suy normal theo pixel. Màu phải được chốt trước clipping để hai triangle sinh ra từ cùng một face không có đường đổi sáng ở giữa.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một frame đi qua chuỗi duy nhất:
+
+$$
+local\ mesh \to camera\ mesh \to face\ normal \to lighting \to cull
+\to near\ clip \to project \to rasterize
+$$
+
+Tetrahedron lồi cho phép ta chưa cần Z-buffer: sau back-face culling, các face nhìn thấy chỉ gặp nhau ở biên silhouette và cạnh chung. Top-left rule giao pixel biên cho đúng một triangle. Với mesh lõm hoặc nhiều vật thể chồng nhau, giả định này không còn đủ — đó là phạm vi project sau.
+
+<InteractiveLab demo="lambert" mode="lambert-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Cắt face trong camera space
+
+```cpp title="include/lab.hpp — Sutherland–Hodgman cho near plane"
+inline ClippedPolygon clipTriangleToNearPlane(
+    const Triangle3& triangle,
+    double nearPlane,
+    double epsilon = 1e-9
+) {
+    ClippedPolygon output{};
+    Vec3 previous = triangle.vertices.back();
+    bool previousInside = isInsideNearPlane(previous, nearPlane, epsilon);
+
+    for (const Vec3 current : triangle.vertices) {
+        const bool currentInside = isInsideNearPlane(current, nearPlane, epsilon);
+        if (currentInside && !previousInside) {
+            appendVertex(output, intersectNearPlane(previous, current, nearPlane));
+        }
+        if (currentInside) {
+            appendVertex(output, current);
+        }
+        if (!currentInside && previousInside) {
+            appendVertex(output, intersectNearPlane(previous, current, nearPlane));
+        }
+
+        previous = current;
+        previousInside = currentInside;
+    }
+    return output;
+}
+```
+
+Đây là cùng nguyên lý Project 18, nhưng vertex clipping chỉ cần position. `displayColor` đã được tính cho face gốc và được callback raster dùng chung, nên vertex mới không cần nội suy color.
+
+### Bước 2 — Chia polygon rồi project từng triangle an toàn
+
+```cpp title="include/lab.hpp — triangle fan giữ topology sau clip"
+inline TriangleBatch triangulateFan(const ClippedPolygon& polygon) {
+    TriangleBatch batch{};
+    if (polygon.count < 3) {
+        return batch;
+    }
+
+    for (std::size_t index = 1; index + 1 < polygon.count; ++index) {
+        batch.triangles[batch.count] = {
+            {polygon.vertices[0], polygon.vertices[index], polygon.vertices[index + 1]},
+        };
+        ++batch.count;
+    }
+    return batch;
+}
+```
+
+Projection vẫn có guard `z < near → nullopt`. Guard không thay clipper; nó là hàng rào cuối ngăn phép chia lỗi nếu một invariant bị phá.
+
+### Bước 3 — Tính lighting đúng một lần cho mỗi face
+
+```cpp title="src/main.cpp — cull, shade rồi mới clip"
+const auto vertices = lab::faceVertices(mesh, face);
+if (!lab::isFrontFacing(vertices)) {
+    ++frameStats.culledFaces;
+    continue;
+}
+++frameStats.visibleFaces;
+
+const lab::Vec3 normal = lab::faceUnitNormal(vertices);
+const lab::Color displayColor = faceDisplayColor(
+    face,
+    normal,
+    light,
+    lightingEnabled
+);
+```
+
+`normal`, `light` và `vertices` đều ở cùng quy ước camera-space direction. `displayColor` không được tính lại sau khi polygon bốn đỉnh bị chia thành hai triangle.
+
+### Bước 4 — Ghi một màu phẳng qua raster callback
+
+```cpp title="src/main.cpp — top-left coverage chỉ quyết định pixel nào được ghi"
+const lab::RasterStats rasterStats = lab::rasterizeTriangle(
+    *screenTriangle,
+    width,
+    height,
+    [&](int x, int y) {
+        putPixel(pixels, width, height, x, y, packedColor(displayColor));
+    }
+);
+frameStats.coveredPixels += rasterStats.coveredCount;
+```
+
+Không có interpolation trong callback vì đây là flat shading. Tách coverage khỏi color giúp ta tái sử dụng chính top-left rasterizer cho material khác về sau.
+
+### Bước 5 — Kiểm dữ liệu trung gian, không chỉ ảnh cuối
+
+```cpp title="tests/tests.cpp — normal, ambient và coverage đều có hợp đồng"
+check(nearlyEqual(lab::length(normal), 1.0), "face normal has unit length");
+check(nearlyEqual(unlit.intensity, 0.2), "back-facing surface keeps ambient light");
+check(stats.coveredCount == callbackCount, "covered count equals shade callback count");
+```
+
+Final title bar cũng đọc dot, diffuse, intensity, visible/culled, triangle và pixel count từ chính dữ liệu production. Một frame trông lạ có đủ manh mối để lần ngược stage đầu tiên sai.
+
+### Bước 6 — Chứng minh lighting không làm thay đổi geometry
+
+Các test đơn lẻ cho dot product chưa bắt được lỗi ghép pipeline, chẳng hạn một nhánh
+lighting vô tình bỏ qua culling hoặc rasterize tập face khác. Vì vậy test chạy toàn bộ
+pipeline hai lần với cùng camera mesh nhưng hai hướng đèn khác nhau:
+
+```cpp title="tests/tests.cpp — đổi đèn chỉ được đổi màu"
+const PipelineSummary frontPass = runPipeline(
+    lab::makeDirectionalLight({0.0, 0.0, -1.0})
+);
+const PipelineSummary sidePass = runPipeline(
+    lab::makeDirectionalLight({1.0, 0.0, 0.0})
+);
+
+check(
+    frontPass.visibleFaceMask == sidePass.visibleFaceMask,
+    "changing light direction does not change back-face culling"
+);
+check(
+    frontPass.coveredCount == sidePass.coveredCount,
+    "changing light direction does not change raster coverage"
+);
+check(
+    !nearlyEqual(frontPass.colorChecksum, sidePass.colorChecksum),
+    "changing light direction changes the shaded face colors"
+);
+```
+
+`runPipeline` vẫn đi qua culling, clipping, projection và rasterization thật. Test này
+khóa đúng ranh giới trách nhiệm: ánh sáng thay màu của face, không thay hình học hay
+quyền sở hữu pixel.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build toàn Project 19 ở hai cấu hình"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Sau khi tests pass, chạy `project_19_final` và kiểm theo thứ tự:
+
+1. Bấm `1–4`; front/back phải làm các nhóm face khác nhau sáng.
+2. Nhấn `L`; geometry giữ nguyên, chỉ chuyển giữa baseColor và shadedColor.
+3. Nhấn `N` và `Tab`; normal trắng phải bám đúng face đang đọc trên title.
+4. Kéo hoặc dùng `WASD`/arrow; dot đổi liên tục, còn normal length vẫn gần 1.
+5. Nhấn `Space`, `.` và `R`; auto-rotate, single-step và reset không tạo state thứ hai.
+6. Resize cửa sổ; aspect ratio, framebuffer và texture cùng cập nhật.
+
+## Thử làm sai để hiểu đúng
+
+1. Project trước rồi mới near clip. Cạnh gần camera phóng nổ vì phép chia Z đã xảy ra; clip camera-space geometry trước.
+2. Shade từng output triangle sau triangle fan. Nếu normal được tính lại quanh cạnh clip, cùng face có thể xuất hiện đường sáng; giữ normal và color của face gốc.
+3. Rasterize cả bốn face rồi hy vọng draw order đúng. Không có Z-buffer, mặt sau có thể ghi đè mặt trước; cull outward back face trước.
+4. Chỉ nhìn ảnh mặc định. Lỗi dấu có thể ẩn ở một orientation; luôn thử front/back, lighting off và nhiều rotation.
+
+## Tự kiểm tra kết quả
+
+- Cả bốn face có outward unit normal, vuông góc với hai cạnh.
+- Diffuse cho aligned/perpendicular/opposite lần lượt `1/0/0`.
+- Intensity và color luôn nằm trong miền hợp lệ; mặt không nhận diffuse vẫn giữ ambient.
+- Rotation giữ độ dài cạnh; `visible + culled = 4`.
+- Near clipping không sinh vertex trước plane hoặc dữ liệu không hữu hạn.
+- Projected triangle phủ pixel và `coveredCount` bằng số callback.
+- Đổi hướng đèn làm màu thay đổi nhưng giữ nguyên tập face nhìn thấy và raster coverage.
+- Starter, bảy checkpoint, final và tests build sạch warning ở Debug lẫn Release.
+
+## Bài tập mở rộng
+
+Thêm một màu riêng cho directional light và nhân nó theo từng channel với material. Giữ nguyên `surfaceToLight`, diffuse và ambient tests; bổ sung test để ánh sáng đỏ không tăng channel xanh.
+
+Project 19 đã hoàn chỉnh. Bạn không chỉ có một vật thể “trông như được chiếu đèn”, mà có một pipeline có thể giải thích từng con số từ winding của face cho tới màu RGBA ghi vào pixel.

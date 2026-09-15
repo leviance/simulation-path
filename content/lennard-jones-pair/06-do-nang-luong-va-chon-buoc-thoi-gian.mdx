@@ -1,0 +1,186 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo năng lượng và chọn bước thời gian
+
+## Vấn đề cần giải quyết
+
+Nhìn hai nguyên tử dao động qua lại chưa đủ để kết luận bộ tích phân đang chạy đúng. Một lỗi dấu nhỏ vẫn có thể tạo ra chuyển động tuần hoàn; bước thời gian quá lớn đôi khi chạy được vài giây rồi mới làm hệ mất ổn định. Vì mô hình mặc định không có lực cản và không nhận ngoại lực, tổng cơ năng phải luôn ở gần giá trị ban đầu.
+
+Ta sẽ tính thế năng, động năng và tổng cơ năng từ **cùng một trạng thái**, lưu số mẫu có giới hạn, rồi chạy một phép kiểm tra dài với số bước xác định trước. Velocity Verlet không giữ năng lượng chính xác tuyệt đối ở từng thời điểm; điều cần quan sát là sai số dao động nhỏ quanh một mức thay vì liên tục trôi về một phía.
+
+## Hiểu ý tưởng trước khi viết code
+
+Động năng (kinetic energy) của hai nguyên tử là:
+
+$$
+K=\frac{1}{2}m_A\lVert\mathbf{v}_A\rVert^2+\frac{1}{2}m_B\lVert\mathbf{v}_B\rVert^2
+$$
+
+Tổng năng lượng tại trạng thái hiện tại:
+
+$$
+E=K+U(r)
+$$
+
+Độ lệch năng lượng tương đối so với năng lượng ban đầu $E_0$:
+
+$$
+drift=\frac{E-E_0}{\max(|E_0|,\varepsilon_{num})}
+$$
+
+Giữ nguyên dấu của `drift`: số dương cho biết bộ tích phân đang tự thêm năng lượng, số âm cho biết nó đang làm mất năng lượng. Với cấu hình bắt đầu đứng yên ở `r=1.45 sigma`, thế năng âm dần chuyển thành động năng khi hai nguyên tử hút nhau, nhưng tổng của hai phần phải gần như giữ nguyên.
+
+<InteractiveLab demo="lennard-jones-pair" mode="lj-energy" />
+
+Chọn `dt=1/1000`, bấm “Tiếp tục” và quan sát ba đường: tím là thế năng, vàng là động năng, xanh là tổng cơ năng. Sau đó đổi sang `1/250`; Canvas sẽ tự đưa hệ về đúng trạng thái ban đầu và xóa dữ liệu cũ. Nếu đường tổng cơ năng dao động rộng hơn, nguyên nhân đến từ bước thời gian chứ không phải do hai lần chạy bắt đầu khác nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Tính động năng của cả hai nguyên tử
+
+```cpp title="include/lennard_jones.hpp — kineticEnergy"
+inline double kineticEnergy(const PairState& state) {
+    return 0.5 * state.atomA.mass * dot(state.atomA.velocity, state.atomA.velocity) +
+        0.5 * state.atomB.mass * dot(state.atomB.velocity, state.atomB.velocity);
+}
+```
+
+`dot(v,v)` tránh gọi `sqrt` rồi lại bình phương. Cả hai nguyên tử đều đóng góp; bỏ sót một nguyên tử sẽ làm tổng năng lượng sai dù hình vẽ vẫn đối xứng.
+
+### Bước 2 — Đo mọi đại lượng từ cùng một trạng thái
+
+```cpp title="include/lennard_jones.hpp — measureSystem hoàn chỉnh"
+inline SystemMetrics measureSystem(
+    const PairState& state,
+    const LennardJonesParameters& parameters
+) {
+    const PairInteraction interaction = evaluatePair(state, parameters);
+    if (!interaction.valid) {
+        return {};
+    }
+
+    const double kinetic = kineticEnergy(state);
+    const double totalEnergy = kinetic + interaction.potential;
+    if (!std::isfinite(kinetic) || !std::isfinite(totalEnergy)) {
+        return {};
+    }
+
+    return {
+        true,
+        interaction.distance,
+        interaction.potential,
+        kinetic,
+        totalEnergy,
+        linearMomentum(state),
+        centerOfMass(state),
+    };
+}
+```
+
+Không ghép thế năng đã lưu từ đầu bước với vận tốc ở cuối bước. Mỗi mẫu lịch sử phải là ảnh chụp nhất quán của cùng một `PairState`.
+
+### Bước 3 — Chuẩn hóa độ lệch nhưng vẫn giữ dấu
+
+```cpp title="include/lennard_jones.hpp — relativeEnergyDrift"
+inline double relativeEnergyDrift(double currentEnergy, double initialEnergy) {
+    const double denominator = std::max(std::abs(initialEnergy), kDistanceEpsilon);
+    return (currentEnergy - initialEnergy) / denominator;
+}
+```
+
+`abs(initialEnergy)` chỉ nằm ở mẫu số. Không lấy `abs(current-initial)`, vì dấu của độ lệch cho biết bộ giải đang thêm hay làm mất năng lượng. Hàm chứa công thức này có tên `relativeEnergyDrift`.
+
+### Bước 4 — Phép chạy dài phải có giới hạn số bước
+
+```cpp title="include/lennard_jones.hpp — runSimulation"
+const double requested = std::floor((duration + kDistanceEpsilon) / deltaSeconds);
+if (!std::isfinite(requested) || requested > double(maximumSteps)) {
+    return false;
+}
+const std::size_t steps = std::size_t(requested);
+for (std::size_t step = 0; step < steps; ++step) {
+    if (!velocityVerletStep(state, parameters, deltaSeconds)) {
+        return false;
+    }
+}
+return true;
+```
+
+Phép kiểm tra dùng thời lượng `20`, `dt=1/1000` và ngân sách `25.000` bước. Nếu ai đó đổi nhầm `dt` thành một số cực nhỏ, hàm sẽ từ chối thay vì chạy hàng giờ. Nói cách khác, phép chạy chuẩn gồm đúng 20.000 step.
+
+### Bước 5 — Đánh giá đúng điều kiện đầu và bước thời gian đang chọn
+
+Sai số ở cuối lần chạy có thể tình cờ nhỏ dù đã tăng mạnh ở giữa. Hàm sau kiểm tra sau **từng bước**, giữ giá trị lớn nhất và nhận `state` theo giá trị để không thay đổi thí nghiệm trên màn hình.
+
+```cpp title="include/lennard_jones.hpp — báo cáo sai số trên toàn lần chạy"
+struct ExperimentReport {
+    bool valid{};
+    double maximumEnergyDrift{};
+    std::size_t completedSteps{};
+};
+
+inline ExperimentReport assessExperiment(
+    PairState state,
+    const LennardJonesParameters& parameters,
+    double dt,
+    std::size_t steps = 1000U
+) {
+    ExperimentReport report{};
+    const SystemMetrics initial = measureSystem(state, parameters);
+    if (!initial.valid || steps == 0U || steps > 2000U) {
+        return report;
+    }
+    for (std::size_t step = 0; step < steps; ++step) {
+        if (!velocityVerletStep(state, parameters, dt)) {
+            return report;
+        }
+        const SystemMetrics metrics = measureSystem(state, parameters);
+        if (!metrics.valid) {
+            return report;
+        }
+        report.maximumEnergyDrift = std::max(
+            report.maximumEnergyDrift,
+            std::abs(relativeEnergyDrift(metrics.totalEnergy, initial.totalEnergy))
+        );
+        ++report.completedSteps;
+    }
+    report.valid = true;
+    return report;
+}
+```
+
+Ở bản hoàn chỉnh, phím V gọi `assessExperiment(experimentStart, parameters, fixedDeltaSeconds)` với mặc định 1.000 bước. Ngưỡng 0,2% là tiêu chí của bài học, không phải bảo đảm cho mọi trạng thái. Hãy so các `dt` trên cùng khoảng thời gian nếu muốn đánh giá độ hội tụ: ví dụ 500 bước ở `dt`, 1.000 bước ở `dt/2` và 2.000 bước ở `dt/4`.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 6"
+cmake --build build --config Debug --target project_41_checkpoint_6 project_41_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Chương trình SDL giữ tối đa 600 mẫu và ghi thêm một điểm sau mỗi `0.02` đơn vị thời gian. Phần vật lý vẫn chạy ở mọi bước `dt`; việc vẽ thưa bớt điểm trên đồ thị không làm thay đổi kết quả mô phỏng.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ cộng động năng của nguyên tử A. Tổng năng lượng thay đổi theo pha dù bộ giải không đổi; hãy hoàn tác và cộng đủ hai nguyên tử.
+2. Dùng `potential` từ trước bước nhưng `velocity` ở sau bước. Đồ thị xuất hiện răng cưa vì hai đại lượng không cùng thời điểm; khôi phục `measureSystem(state)`.
+3. Đưa 650 mẫu giả vào hàm lưu lịch sử của C++, không chạy mô phỏng. Kiểm tra chỉ còn 600 mẫu mới nhất. Từ đó tính số mẫu sẽ tích lũy sau một giờ nếu không có giới hạn.
+4. Gọi `runSimulation` với thời lượng 20, `dt=1e-12` và ngân sách 25.000 bước. Hàm phải trả `false` ngay và không đổi trạng thái. Không tăng ngân sách để cố chạy thí nghiệm này.
+
+## Tự kiểm tra kết quả
+
+- [ ] `totalEnergy = potential + kinetic` được tính từ cùng một trạng thái.
+- [ ] Trạng thái ban đầu đứng yên có động năng bằng 0.
+- [ ] Động lượng và tâm khối lượng vẫn gần 0 trong phép chạy dài.
+- [ ] Chạy 20 đơn vị thời gian ở `dt=1/1000` kết thúc trong 20.000 step.
+- [ ] Độ lệch năng lượng tương đối tuyệt đối dưới `0.2%` ở cấu hình hút mặc định.
+- [ ] Lịch sử không vượt 600 mẫu trong chương trình SDL và 480 mẫu trong Canvas.
+- [ ] `dt` lớn tạo độ lệch rõ hơn nhưng phép kiểm chứng luôn có giới hạn thời gian.
+
+## Bài tập mở rộng
+
+1. Chạy cùng trạng thái ban đầu ở `dt`, `dt/2`, `dt/4` và lập bảng sai số năng lượng lớn nhất.
+2. Chỉ thêm semi-implicit Euler trong phép kiểm tra để so sánh xu hướng năng lượng dài hạn.
+3. Ghi CSV gồm thời gian, khoảng cách, U, K, E và độ lệch; không ghi theo từng khung hình mà dùng khoảng lấy mẫu cố định.
+
+Bài cuối ghép các cấu hình sẵn có, thao tác kéo chuột, báo cáo kiểm chứng, đặt lại và dọn tài nguyên. Sau đó gói ZIP sẽ chứa bản khởi đầu, bảy checkpoint, bản hoàn chỉnh cùng CTest khớp đúng mã hiển thị trên web.

@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# So sánh chi phí và chọn skin có căn cứ
+
+## Vấn đề cần giải quyết
+
+Skin nhỏ làm danh sách gọn nhưng chạm ngưỡng dựng lại sớm. Skin lớn giữ danh sách lâu hơn nhưng mỗi lần tính lực phải duyệt thêm các cặp dự phòng. Vì vậy, nhìn riêng số lần rebuild hoặc riêng số pairs đều chưa đủ để chọn skin.
+
+Bài này xây một phép so sánh có thể lặp lại: cùng 64 hạt, cùng seed, cùng dt và cùng 200 bước, chỉ đổi skin. Ta đếm cả công việc dựng lẫn công việc duyệt lực. Chưa đo mili giây và chưa tuyên bố bản nào nhanh gấp bao nhiêu lần.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi số lượt kiểm tra cặp khi dựng là B, số lượt kiểm tra cặp khi tính lực là F. Tổng hai loại công việc là:
+
+$$W=B+F.$$
+
+Bản mọi cặp có hai lần evaluate trong mỗi bước của solver hiện tại, nên với S bước:
+
+$$W_{all}=2S\frac{N(N-1)}{2}=SN(N-1).$$
+
+Ở đây S=200, N=64 cho 806.400 lượt. Con số này không bao gồm vẽ, khởi tạo, audit, sort hoặc copy candidate. Hai lượt kiểm tra cặp cũng chưa chắc tốn cùng số CPU cycle. Vì thế W nhỏ hơn là bằng chứng giảm số phép kiểm tra cặp, **không phải bằng chứng trực tiếp về speedup thời gian**.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-work" />
+
+Bấm “So sánh 4 giá trị skin”. Các ca đo dùng một hệ riêng nên việc kéo A trong hình không ảnh hưởng bảng. So tổng Build+Force trước, sau đó mới giải thích vì sao tổng đổi qua các giá trị skin. Trong ca ngắn và chuyển động chậm này, nhiều giá trị có thể cùng số lần dựng; không được bịa thêm một đánh đổi chưa xuất hiện trong dữ liệu.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt giới hạn và tạo lại cùng state
+
+Thêm WorkReport rồi measureWork vào `neighbor_dynamics.hpp`:
+
+```cpp title="include/neighbor_dynamics.hpp — ca đo hữu hạn, không dùng hệ đang kéo trên màn hình"
+WorkReport report;
+if (count < 4 || count > 144 || steps < 1 || steps > 400) {
+    return report;
+}
+System system = pbc::makeGas(count, 44);
+NeighborList list;
+```
+
+Giao diện gọi với count=64, steps mặc định 200. Hàm vẫn kiểm giới hạn để một lần sửa input không biến thí nghiệm thành vòng chạy hàng triệu bước. List bắt đầu rỗng, nên công việc dựng đầu tiên được tính vào tổng, không bị giấu trong một bước “chuẩn bị” trước phép đo.
+
+### Bước 2 — Chạy đúng số bước và dừng khi lỗi
+
+```cpp title="include/neighbor_dynamics.hpp — cùng dt cho mọi giá trị skin"
+for (int step = 0; step < steps; ++step) {
+    if (!cachedVerletStep(system, list, skin, 0, 0.002)) {
+        return report;
+    }
+}
+```
+
+Mỗi builder tăng buildChecks trước khi đo một cặp ứng viên. Cached solver tăng forceChecks theo evaluatedPairs ở cả before và after. Cặp nằm ngoài cutoff vẫn làm forceChecks tăng vì chương trình đã phải kiểm nó; chỉ dùng activePairs sẽ đánh giá thấp chi phí của skin lớn.
+
+Không dùng số frame hoặc thời gian playback làm điểm dừng, vì mỗi máy có thể chạy được số bước khác nhau trong cùng một giây. So các hệ chưa đi cùng một quãng thời gian mô phỏng là so hai bài toán khác nhau.
+
+### Bước 3 — Trả số đo và một kiểm tra cuối lượt
+
+```cpp title="include/neighbor_dynamics.hpp — giữ riêng chi phí dựng và chi phí lực"
+report.passed = auditForces(system, list).passed;
+report.rebuilds = list.rebuilds;
+report.buildChecks = list.buildChecks;
+report.forceChecks = list.forceChecks;
+report.allPairsChecks = std::size_t(steps) * std::size_t(count) * std::size_t(count - 1);
+return report;
+```
+
+Audit cuối lượt không tăng hai bộ đếm và chỉ xác nhận lực ở state cuối; test quỹ đạo ở bài 9 kiểm kỹ hơn qua từng bước. Nếu passed=false thì không dùng các số đo ấy để quảng bá hiệu năng.
+
+Trong main, phím T tạm dừng rồi gọi measureWork lần lượt với skin 0.2, 0.4, 0.8 và 1.2. In mỗi giá trị cùng rebuilds, buildChecks, forceChecks và allPairsChecks. Canvas có thêm cột tổng để dễ đọc và nhường một lượt xử lý giao diện giữa các ca hữu hạn.
+
+## Ghép các phần lại
+
+Build `project_44_checkpoint_8`, nhấn T và đọc bốn dòng trong terminal. Nhấn lại: các bộ đếm phải giống lần trước vì mọi lần đều tạo lại state bằng seed=44. Không có số tích lũy từ buổi chơi tương tác trước đó lọt vào ca đo.
+
+Trước khi kết luận, tự hỏi ba câu: các lượt có cùng số bước không, có tính cả lần dựng ban đầu không, và số cặp bị loại bởi cutoff có được tính là công việc không? Nếu thiếu một trong ba, bảng dễ trông đẹp hơn thực tế.
+
+Nếu muốn đo thời gian thật, hãy bổ sung phép đo Release sau khi kiểm đúng kết quả; lặp hữu hạn vài lượt, tách warm-up, báo môi trường máy và phân biệt đo solver với đo cả rendering. Không đưa audit mọi cặp vào riêng một bên của phép so.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay forceChecks bằng activePairs. Skin lớn gần như không bị “tính tiền” dù danh sách dài hơn, vì cặp dự phòng bị loại khỏi bộ đếm. Khôi phục evaluatedPairs và so bảng lại.
+2. Dựng danh sách trước lượt đo rồi đặt buildChecks về zero. Tổng chi phí trông giảm vì lần dựng đầu đã bị bỏ qua. Trả list về rỗng trước vòng bước để tính đúng công việc từ đầu đến cuối.
+
+## Tự kiểm tra kết quả
+
+- Bốn lượt cùng N=64, seed=44, dt=0.002 và 200 bước.
+- All-pairs báo 806.400 lượt; tổng tối ưu là buildChecks+forceChecks.
+- Lặp phép đo cho cùng số đếm và mỗi lượt có kiểm force cuối.
+- Phân biệt được giảm số phép kiểm với giảm mili giây; không bỏ qua chi phí copy/sort khi bàn về thời gian thật.
+
+## Bài tập mở rộng
+
+Đổi số bước sang 400 trong giới hạn cho phép và giải thích khi nào skin nhỏ bắt đầu phải dựng lại nhiều hơn. Giữ cùng cấu hình cho mọi lượt. Bài cuối sẽ [kiểm chứng và chạy dự án hoàn chỉnh](/projects/neighbor-list-skin/09-kiem-chung-va-ma-hoan-chinh).

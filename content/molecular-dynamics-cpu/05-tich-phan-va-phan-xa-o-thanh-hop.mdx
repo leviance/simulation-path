@@ -1,0 +1,242 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tích phân nhiều hạt và phản xạ ở thành hộp
+
+## Vấn đề cần giải quyết
+
+Checkpoint 4 đã tính được lực tổng lên mỗi hạt. Bây giờ ta dùng lực đó để cập nhật vận tốc và vị trí. Hộp có tường, nên còn phải xử lý trường hợp một hạt vượt biên giữa hai thời điểm lấy mẫu.
+
+Ta giữ vòng đời SDL và dữ liệu hạt. Phần mới của bài là hàm phản xạ, một bước tích phân hoàn chỉnh và bộ chia thời gian giữa các frame. Khi chạy xong, Space bật/tắt chuyển động; N chỉ tiến một bước khi đang tạm dừng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Velocity Verlet có thể viết thành nửa bước vận tốc, một bước vị trí rồi nửa bước vận tốc còn lại:
+
+$$
+\mathbf v_{1/2}=\mathbf v_0+\frac{\Delta t}{2}\frac{\mathbf F_0}{m},
+\quad
+\mathbf x_1=\mathbf x_0+\Delta t\mathbf v_{1/2},
+\quad
+\mathbf v_1=\mathbf v_{1/2}+\frac{\Delta t}{2}\frac{\mathbf F_1}{m}.
+$$
+
+Sau khi đổi vị trí, nếu x=-0,25 ở tường trái x=0, đưa x về +0,25 và đổi dấu vx. Phần đi quá biên này gọi là overshoot. Tường phải dùng x=2W−x. Thành phần vận tốc song song với tường không đổi. Cách ghép này gọi là kick–drift–reflect–kick.
+
+Phản xạ lý tưởng giữ động năng ở thời điểm va chạm, nhưng cách lấy mẫu rời rạc này không tìm chính xác thời điểm chạm tường khi lực đang thay đổi. Bởi vậy không được mặc định sai số vẫn có bậc hai như Verlet trên chuyển động trơn. Ta sẽ kiểm ca va tường riêng ở bài 6 và 8. [Tài liệu LAMMPS về phản xạ tường](https://docs.lammps.org/fix_wall_reflect.html) mô tả giới hạn tương tự.
+
+<InteractiveLab demo="molecular-dynamics-cpu" mode="md-verlet" />
+
+Tạm dừng, đọc vị trí rồi tiến một bước. Khi chạy liên tục, tốc độ phát là 0,05 đơn vị thời gian mô phỏng mỗi giây thực để dễ quan sát. dt vẫn là bước vật lý, không phải thời gian giữa hai lần vẽ.
+
+## Viết code từng bước
+
+### Bước 1 — Trả vị trí và vận tốc sau phản xạ
+
+```cpp title="include/molecular_dynamics.hpp — ReflectionResult và reflectCoordinate"
+struct ReflectionResult {
+    bool valid{};
+    double position{};
+    double velocity{};
+};
+
+inline ReflectionResult reflectCoordinate(double position, double velocity, double limit) {
+    if (!std::isfinite(position) || !std::isfinite(velocity) ||
+        !std::isfinite(limit) || limit <= 0.0) {
+        return {false, position, velocity};
+    }
+
+    double reflectedPosition = position;
+    double reflectedVelocity = velocity;
+    for (int bounce = 0; bounce < 8; ++bounce) {
+        if (reflectedPosition < 0.0) {
+            reflectedPosition = -reflectedPosition;
+            reflectedVelocity = -reflectedVelocity;
+            continue;
+        }
+        if (reflectedPosition > limit) {
+            reflectedPosition = 2.0 * limit - reflectedPosition;
+            reflectedVelocity = -reflectedVelocity;
+            continue;
+        }
+        return {true, reflectedPosition, reflectedVelocity};
+    }
+    return {false, reflectedPosition, reflectedVelocity};
+}
+```
+
+Hàm có giới hạn tám lượt xử lý. Nếu vẫn chưa đưa được vị trí vào hộp, nó báo không hợp lệ để người gọi giữ trạng thái trước bước. Giới hạn này không thay lực bằng số khác. Với vận tốc bình thường và dt nhỏ, hạt chỉ cần một lần phản xạ trên mỗi trục.
+
+
+### Bước 2 — Viết trọn bước tích phân
+
+```cpp title="include/molecular_dynamics.hpp — velocityVerletStep hoàn chỉnh"
+inline bool velocityVerletStep(
+    MolecularSystem& system,
+    double dt,
+    ForceEvaluation* completedEvaluation = nullptr
+) {
+    const bool validBox = std::isfinite(system.box.width) &&
+        std::isfinite(system.box.height) && system.box.width > 0.0 &&
+        system.box.height > 0.0;
+    if (!std::isfinite(dt) || dt <= 0.0 || !validBox || system.particles.empty()) {
+        return false;
+    }
+    const ForceEvaluation firstEvaluation = accumulatePairForces(
+        system.particles,
+        system.parameters
+    );
+    if (!firstEvaluation.valid) {
+        return false;
+    }
+
+    std::vector<Particle> candidate = system.particles;
+    std::size_t wallCollisions = 0U;
+    for (std::size_t index = 0; index < candidate.size(); ++index) {
+        Particle& particle = candidate[index];
+        particle.velocity = add(
+            particle.velocity,
+            scale(firstEvaluation.forces[index], 0.5 * dt / particle.mass)
+        );
+        particle.position = add(particle.position, scale(particle.velocity, dt));
+        if (particle.position.x < 0.0 || particle.position.x > system.box.width) {
+            ++wallCollisions;
+        }
+        if (particle.position.y < 0.0 || particle.position.y > system.box.height) {
+            ++wallCollisions;
+        }
+        const ReflectionResult reflectedX = reflectCoordinate(
+            particle.position.x,
+            particle.velocity.x,
+            system.box.width
+        );
+        const ReflectionResult reflectedY = reflectCoordinate(
+            particle.position.y,
+            particle.velocity.y,
+            system.box.height
+        );
+        if (!reflectedX.valid || !reflectedY.valid) {
+            return false;
+        }
+        particle.position = {reflectedX.position, reflectedY.position};
+        particle.velocity = {reflectedX.velocity, reflectedY.velocity};
+    }
+
+    ForceEvaluation secondEvaluation = accumulatePairForces(candidate, system.parameters);
+    if (!secondEvaluation.valid) {
+        return false;
+    }
+    for (std::size_t index = 0; index < candidate.size(); ++index) {
+        Particle& particle = candidate[index];
+        particle.velocity = add(
+            particle.velocity,
+            scale(secondEvaluation.forces[index], 0.5 * dt / particle.mass)
+        );
+        if (!finite(particle.velocity)) {
+            return false;
+        }
+    }
+
+    system.particles = std::move(candidate);
+    system.elapsed += dt;
+    ++system.stepCount;
+    system.wallCollisions += wallCollisions;
+    if (completedEvaluation != nullptr) {
+        *completedEvaluation = std::move(secondEvaluation);
+    }
+    return true;
+}
+```
+
+Đầu tiên tính lực trên vị trí cũ. Tạo `candidate` là bản sao của mảng hạt rồi lần lượt cập nhật nửa vận tốc, vị trí và phản xạ trên cả hai trục. Khi mọi vị trí đã thuộc cùng thời điểm mới, tính lực lần hai và hoàn tất vận tốc. Chỉ sau tất cả kiểm tra, ta thay mảng hạt cũ bằng candidate state — trạng thái dự kiến vừa tính. Con trỏ tùy chọn `completedEvaluation` nhận kết quả lực cuối bước, để phần hiển thị không phải quét thêm mọi cặp.
+
+
+### Bước 3 — Chia thời gian thành số bước hữu hạn
+
+```cpp title="include/molecular_dynamics.hpp — planFixedSteps"
+inline FixedStepPlan planFixedSteps(
+    double accumulator,
+    double frameTime,
+    double fixedDt,
+    int maximumSteps,
+    double maximumFrameTime
+) {
+    if (!std::isfinite(accumulator) || !std::isfinite(frameTime) ||
+        !std::isfinite(fixedDt) || !std::isfinite(maximumFrameTime) ||
+        accumulator < 0.0 || fixedDt <= 0.0 || maximumSteps < 0 ||
+        maximumFrameTime < 0.0) {
+        return {};
+    }
+    const double acceptedFrameTime = std::clamp(frameTime, 0.0, maximumFrameTime);
+    const double availableTime = accumulator + acceptedFrameTime;
+    const double tolerance = fixedDt * 1.0e-9;
+    const int availableSteps = int(std::floor((availableTime + tolerance) / fixedDt));
+    const int steps = std::min(availableSteps, maximumSteps);
+    double remainder = availableTime - double(steps) * fixedDt;
+    if (remainder < 0.0 && remainder > -tolerance) {
+        remainder = 0.0;
+    }
+
+    double droppedTime = std::max(0.0, frameTime - acceptedFrameTime);
+    if (availableSteps > maximumSteps) {
+        const int skippedSteps = int(std::floor((remainder + tolerance) / fixedDt));
+        droppedTime += double(skippedSteps) * fixedDt;
+        remainder -= double(skippedSteps) * fixedDt;
+        if (remainder < 0.0 && remainder > -tolerance) {
+            remainder = 0.0;
+        }
+    }
+    return {steps, remainder, droppedTime};
+}
+```
+
+`availableSteps` là số bước cần để theo kịp thời gian đã nhận. `maximumSteps` chặn số bước thực sự chạy, phần vượt được tính vào droppedTime. Sai số rất nhỏ `fixedDt*1e-9` giúp tổng thời gian đúng một bội dt không bị mất một bước vì làm tròn số thực.
+
+
+### Bước 4 — Nối hàm tích phân vào vòng lặp SDL
+
+```cpp title="src/main.cpp — các biến điều khiển"
+bool paused = true;
+double fixedDt = 0.001;
+double accumulator = 0.0;
+double droppedTime = 0.0;
+int completedSubsteps = 0;
+```
+
+Khai báo các biến trước event loop. Trong phần xử lý phím, Space đảo `paused`, N gọi `md::velocityVerletStep(system, fixedDt, &forceEvaluation)` chỉ khi paused. Khi đang chạy, đo frameTime bằng SDL_GetPerformanceCounter, gọi planFixedSteps với `frameTime * 0.05`, rồi gọi tích phân đúng `plan.steps` lần. Lưu plan.remainder vào accumulator và cộng plan.droppedTime. Nếu hàm trả false, tạm dừng và báo lý do; không tiếp tục cập nhật các hạt khác.
+
+
+## Ghép các phần lại
+
+Làm việc từ thư mục gốc của ZIP. Mỗi target dùng một thư mục riêng: thay đổi trong `checkpoints/05/` chỉ có hiệu lực khi chạy đúng target của bài này.
+
+```bash title="Terminal — build và chạy checkpoint 5 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_42_checkpoint_5
+.\build\Debug\project_42_checkpoint_5.exe
+```
+
+Với Ninja hoặc Makefiles, executable thường nằm ngay trong `build/`. CTest của ZIP kiểm tra `final/include`; nó không tự kiểm tra phần bạn vừa sửa trong một checkpoint. Hãy dùng số đo và tình huống kiểm tra của bài trước khi đối chiếu bản hoàn chỉnh.
+
+Thử N nhiều lần rồi Space. Kiểm số bước và thời gian trên Canvas; title native ở checkpoint này chủ yếu hiện N, số cặp và t. Bài 6 sẽ thêm bảng số liệu chi tiết vào cửa sổ.
+
+## Thử làm sai để hiểu đúng
+
+1. Trên một bản sao C++, đổi phản xạ x=-x thành x=0 rồi thử một hạt tự do đi vượt tường 0,25 đơn vị. Vị trí sai làm mất phần đường đã đi. Khôi phục phép phản xạ.
+2. Bỏ lần tính lực thứ hai, giữ lực cũ và so 100 bước chuyển động với bản đúng từ cùng trạng thái đầu. Đọc sai số năng lượng ở bài tiếp theo, rồi hoàn tác. Giữ nguyên mọi giới hạn số bước; không cần tạo vòng chạy vô hạn để thấy sai khác.
+
+## Tự kiểm tra kết quả
+
+- [ ] Hai lần tính lực đều lấy vị trí của toàn bộ hệ tại cùng một thời điểm.
+- [ ] Lực được chia cho khối lượng trước khi cập nhật vận tốc.
+- [ ] Phản xạ x không đổi vy, phản xạ y không đổi vx.
+- [ ] Bước lỗi không sửa một phần mảng hạt.
+- [ ] N không chèn thêm bước khi mô phỏng đang chạy.
+- [ ] Thời gian phát, dt và thời gian bị bỏ được phân biệt rõ.
+
+## Bài tập mở rộng
+
+1. Với hạt tự do, kiểm tốc độ trước và sau nhiều lần bật tường.
+2. Đặt hạt sát tường và cho chịu lực từ hạt thứ hai; so dt, dt/2 và dt/4 ở cùng thời lượng.
+3. Đếm bước có hạt chạm biên để biết thí nghiệm đã thực sự đi qua trường hợp cần kiểm tra.
+
+Bài tiếp theo đo năng lượng và nhiệt độ từ chính trạng thái mới này.

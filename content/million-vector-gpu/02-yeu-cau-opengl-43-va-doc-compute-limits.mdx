@@ -1,0 +1,134 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm tra OpenGL 4.3 và giới hạn compute
+
+## Bài toán của chúng ta
+
+Compute shader trở thành tính năng core từ OpenGL 4.3. Tuy nhiên, `SDL_GL_SetAttribute(..., 4, 3)` mới chỉ gửi yêu cầu khi tạo context; nó chưa chứng minh máy đã cung cấp đúng phiên bản và đủ tài nguyên. Sau khi context sẵn sàng, chương trình phải đọc lại version cùng các giới hạn thực tế trước khi tạo SSBO hoặc dispatch.
+
+Checkpoint 2 tạo một capability report trước allocation. Nếu report fail, app dừng với tên invariant cụ thể thay vì tiếp tục tới `glBufferData` hay `glDispatchCompute` rồi để lại lỗi khó giải thích.
+
+## Theo dõi dữ liệu từ CPU sang GPU
+
+Ta cần phân biệt bốn con số:
+
+- `GL_MAX_COMPUTE_WORK_GROUP_SIZE[0]`: local size tối đa theo trục X.
+- `GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS`: tổng invocation tối đa trong một workgroup.
+- `GL_MAX_COMPUTE_WORK_GROUP_COUNT[0]`: số workgroup tối đa một dispatch theo X.
+- `GL_MAX_SHADER_STORAGE_BLOCK_SIZE`: số byte tối đa của **một** shader storage block.
+
+Với `local_size_x = 256`, cả giới hạn size X và tổng invocations đều phải ít nhất 256. Với 1.000.003 `Vec4`, mỗi SSBO cần:
+
+$$1{,}000{,}003 \times 16 = 16{,}000{,}048\ \text{byte}$$
+
+<InteractiveLab demo="million-vector-gpu" mode="compute-limits" />
+
+Đổi sang preset thiếu compute. Chú ý validator fail **trước** bước tạo ba buffer; capability không đủ là một kết quả có thể báo rõ, không phải undefined behavior để “thử xem driver có chịu không”.
+
+## Bắt tay vào code
+
+### Bước 1 — Yêu cầu context trước khi tạo window
+
+```cpp title="src/main.cpp — requestOpenGl43Core"
+bool requestOpenGl43Core() {
+    return SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4) &&
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3) &&
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE) &&
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1) &&
+        SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1);
+}
+```
+
+Các attribute phải được đặt trước `SDL_CreateWindow`. Sau đó window cần `SDL_WINDOW_OPENGL`, rồi `SDL_GL_CreateContext` và `SDL_GL_MakeCurrent` mới tạo được nơi để gọi OpenGL.
+
+### Bước 2 — Nạp entry point qua SDL
+
+Trên Windows, nhiều hàm OpenGL mới không có sẵn dưới dạng symbol link trực tiếp. `GlApi::loadOne` lấy địa chỉ sau khi context current:
+
+```cpp title="include/gl_api.hpp — loadOne"
+template <typename Function>
+bool loadOne(Function& destination, const char* name) {
+    destination = reinterpret_cast<Function>(SDL_GL_GetProcAddress(name));
+
+    if (destination) {
+        return true;
+    }
+
+    missingFunction = name;
+    return false;
+}
+```
+
+Nếu `glDispatchCompute` hoặc `glMemoryBarrier` không nạp được, diagnostics in đúng tên hàm. Không để một function pointer null được gọi ở bài sau.
+
+### Bước 3 — Đọc giới hạn indexed đúng cách
+
+```cpp title="include/vector_compute_engine.hpp — queryComputeLimits"
+for (GLuint axis = 0; axis < 3; ++axis) {
+    api.GetIntegeri_v(
+        GL_MAX_COMPUTE_WORK_GROUP_COUNT,
+        axis,
+        &limits.maximumWorkgroupCount[axis]
+    );
+
+    api.GetIntegeri_v(
+        GL_MAX_COMPUTE_WORK_GROUP_SIZE,
+        axis,
+        &limits.maximumWorkgroupSize[axis]
+    );
+}
+```
+
+Hai limit này là vector X/Y/Z, vì vậy dùng `glGetIntegeri_v`. `maximumInvocations` là một scalar nên dùng `glGetIntegerv`; SSBO byte limit dùng `glGetInteger64v` để không ép một giới hạn lớn vào `int`.
+
+### Bước 4 — Báo rõ giới hạn nào chưa đạt
+
+```cpp title="include/vector_compute_math.hpp — CapabilityReport"
+struct CapabilityReport {
+    bool version43OrNewer{};
+    bool localSizeSupported{};
+    bool groupCountSupported{};
+    bool storageBlockLargeEnough{};
+
+    bool allPassed() const {
+        return version43OrNewer &&
+            localSizeSupported &&
+            groupCountSupported &&
+            storageBlockLargeEnough;
+    }
+};
+```
+
+`allPassed()` tiện cho nhánh dừng, nhưng log và CTest vẫn kiểm từng field. Nếu chỉ có một biến `supported`, người học không biết cần giảm local size, giảm N hay nâng driver/GPU.
+
+## Chạy checkpoint
+
+Thứ tự bắt buộc là:
+
+`đặt context attributes → tạo window → tạo và kích hoạt context → nạp hàm GL → đọc giới hạn → kiểm tra cấu hình dữ liệu`
+
+Bài này vẫn hiển thị kết quả CPU từ bài 1. GPU chưa nhận buffer và chưa chạy shader; thanh tiêu đề chỉ cho biết các giới hạn cần thiết đã được kiểm tra.
+
+## Thử phá chương trình
+
+1. Gọi `SDL_GL_GetProcAddress` trước khi context current. Một số địa chỉ có thể null hoặc không thuộc context cần dùng.
+2. Chỉ kiểm `maximumWorkgroupSize[0]` mà bỏ `maximumInvocations`. Local dimensions riêng lẻ chưa thay thế giới hạn tổng.
+3. Tính SSBO bytes bằng `count * 4`. Một phần tử là bốn float, tức 16 byte.
+4. Chỉ đọc chuỗi `GL_VERSION` rồi bỏ qua các giới hạn khác. Hỗ trợ đúng phiên bản API không có nghĩa GPU chứa được mọi kích thước dữ liệu.
+
+## Tự nghiệm thu
+
+- [ ] Context request là OpenGL 4.3 Core và được đặt trước window creation.
+- [ ] Mọi function pointer được kiểm null, diagnostics ghi tên hàm thiếu.
+- [ ] Version thật được đọc sau khi context current.
+- [ ] Workgroup count/size dùng query indexed theo ba trục.
+- [ ] SSBO limit dùng kiểu 64-bit và so với `count * sizeof(Vec4)`.
+- [ ] Capability fail dừng trước allocation.
+
+## Bài tập tiếp theo
+
+1. In cả giới hạn X/Y/Z thành một bảng thay vì chỉ X.
+2. Tạo preset CPU test có OpenGL 4.3 nhưng SSBO chỉ 8 MiB; xác nhận chỉ field storage fail.
+3. Tính N lớn nhất cho một SSBO `Vec4` từ limit thật của máy.
+
+Khi capability đã rõ, bài tiếp theo mới tạo vùng nhớ chung mà C++ và GLSL phải diễn giải giống hệt nhau.

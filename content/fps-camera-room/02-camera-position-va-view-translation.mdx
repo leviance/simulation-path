@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa camera position vào view transform
+
+## Vấn đề cần giải quyết
+
+Căn phòng đã xuất hiện, nhưng mọi point đang được hiểu như thể camera nằm tại world origin. Nếu cộng camera position vào room endpoint để tạo cảm giác di chuyển, ta sẽ làm bẩn geometry gốc và sớm không còn biết tường thật sự nằm ở đâu.
+
+Camera movement phải được giải quyết ở view transform: room đứng yên; ta đổi cách quan sát nó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với camera chưa xoay, camera-space point chỉ là độ dời từ camera tới world point:
+
+$$
+p_{camera}=p_{world}-camera.position
+$$
+
+Nếu camera đi thêm `(+1,0,0)`, mọi camera-space X giảm 1. Vì vậy căn phòng trôi sang trái trên màn hình dù world coordinate không đổi. Đây không phải mẹo vẽ; nó là kết quả trực tiếp của việc đổi gốc tọa độ.
+
+<InteractiveLab demo="fps-camera" mode="camera-translation" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo state cho camera
+
+Eye height 1.6 đặt camera cao hơn floor nhưng thấp hơn ceiling. Yaw/pitch đã có chỗ trong struct, dù checkpoint này chưa sử dụng chúng:
+
+```cpp title="include/lab.hpp — camera pose tối thiểu"
+struct FpsCamera {
+    Vec3 position{0.0, 1.6, 2.0};
+    double yaw{};
+    double pitch{};
+};
+```
+
+### Bước 2 — Viết translation thành một hàm có tên
+
+Không nhét phép trừ vào công thức projection. Tách hàm giúp bài sau chèn inverse rotation đúng vị trí:
+
+```cpp title="include/lab.hpp — đưa world point về gốc camera"
+inline Vec3 worldToCameraTranslation(Vec3 worldPoint, const FpsCamera& camera) {
+    return subtract(worldPoint, camera.position);
+}
+```
+
+Tên `worldToCameraTranslation` nhấn mạnh đây mới chỉ là phần translation của view transform, chưa phải lời giải hoàn chỉnh cho camera có orientation.
+
+### Bước 3 — Project camera-space point như cũ
+
+`projectCameraPoint` không cần biết camera nằm đâu. Wrapper mới nối đúng hai giai đoạn:
+
+```cpp title="src/main.cpp — nối view translation với projection"
+const lab::Vec3 cameraPoint = lab::worldToCameraTranslation(worldPoint, camera);
+return lab::projectCameraPoint(cameraPoint, lens, nearPlane, width, height);
+```
+
+Room loop chỉ thay lời gọi project; `segment.from` và `segment.to` vẫn được đọc qua `const` reference.
+
+### Bước 4 — Di chuyển thử theo world axes
+
+Arrow keys ở checkpoint 2 cố ý chưa phụ thuộc hướng nhìn:
+
+```cpp title="src/main.cpp — đổi camera position bằng phím mũi tên"
+if (event.key.key == SDLK_LEFT) {
+    camera = lab::moveCameraWorld(camera, -0.2, 0.0);
+}
+if (event.key.key == SDLK_RIGHT) {
+    camera = lab::moveCameraWorld(camera, 0.2, 0.0);
+}
+if (event.key.key == SDLK_UP) {
+    camera = lab::moveCameraWorld(camera, 0.0, 0.2);
+}
+if (event.key.key == SDLK_DOWN) {
+    camera = lab::moveCameraWorld(camera, 0.0, -0.2);
+}
+```
+
+Đây là dụng cụ kiểm tra view translation, chưa phải điều khiển FPS cuối cùng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build camera translation"
+cmake --build build --config Debug --target project_14_checkpoint_2
+```
+
+Nhấn Right: camera X tăng và room trôi sang trái. Nhấn Up: camera tiến về +Z, các khoảng grid gần trông rộng dần. Nhấn `R` để trở về `(0,1.6,2)`.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi phép trừ thành `add(worldPoint, camera.position)`. Dự đoán chiều trôi khi nhấn Right, quan sát rồi hoàn tác.
+2. Cộng `camera.position` trực tiếp vào mọi `segment.from/to`. Đi qua lại vài lần và quan sát geometry tích lũy sai số; hoàn tác để room trở lại bất biến.
+3. Đặt camera Y bằng 0. Crosshair nằm sát floor và phần lớn grid đổi hình; đưa Y về eye height 1.6.
+
+## Tự kiểm tra kết quả
+
+- `worldToCameraTranslation({3,2,8})` với camera `(1,1.6,2)` trả gần `(2,0.4,6)`.
+- Nhấn Right làm cảnh đi trái; nhấn Left làm cảnh đi phải.
+- `room[0]` giữ nguyên endpoint sau mọi lần di chuyển.
+- Camera position được tạo ngoài loop và không reset mỗi frame.
+- Checkpoint 2 chưa cần sin/cos hoặc keyboard state liên tục.
+
+## Bài tập mở rộng
+
+Hiển thị camera position trên title bar với hai chữ số sau dấu phẩy. Sau đó đổi bước Arrow từ `0.2` thành `1.0` để cảm nhận vì sao movement theo từng key event chưa đủ mượt.
+
+Bài tiếp theo thêm yaw/pitch và giải thích vì sao rotation của view phải dùng dấu ngược.

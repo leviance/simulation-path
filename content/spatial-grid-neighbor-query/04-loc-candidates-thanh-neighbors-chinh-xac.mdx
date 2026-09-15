@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lọc candidates thành hàng xóm chính xác
+
+## Vấn đề cần giải quyết
+
+Candidate cells đã thu hẹp vùng tìm kiếm, nhưng một cell xanh không nằm trọn trong circle. Particle ở góc AABB là ví dụ rõ nhất: nó thuộc một cell cần mở, song khoảng cách tới tâm có thể lớn hơn radius.
+
+Spatial Grid vì vậy không thay exact test. Nó chỉ thay cách tạo danh sách **có khả năng** là đáp án. Query hoàn chỉnh gồm broad phase chọn cell và narrow phase kiểm từng candidate.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai counters mô tả hai loại công việc:
+
+- `visitedCells`: số bucket được mở.
+- `candidatesChecked`: tổng số particle indices đọc từ các bucket đó.
+
+Với mỗi candidate, narrow test vẫn là:
+
+$$
+(x-c_x)^2+(y-c_y)^2\le r^2
+$$
+
+Nearest trong Project 28 là **nearest hit**. Nếu circle không chứa particle nào, `nearestIndex` giữ `kNoParticle`. Vì bucket traversal không theo index toàn cục, hai candidate có cùng distance phải chủ động ưu tiên index nhỏ hơn.
+
+<InteractiveLab demo="spatial-grid-neighbor-query" mode="grid-filter" />
+
+Ô xanh có nhiều điểm xám hơn số điểm vàng. Đổi radius và cellSize để thấy candidate count, hit count và visitedCells thay đổi theo ba cách khác nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Workspace tách cells, candidates và hits
+
+```cpp title="include/lab.hpp — output và exact work của grid query"
+struct GridQueryWorkspace {
+    std::vector<std::size_t> hitIndices{};
+    std::size_t nearestIndex{kNoParticle};
+    double nearestDistanceSquared{std::numeric_limits<double>::infinity()};
+    std::size_t visitedCells{};
+    std::size_t candidatesChecked{};
+};
+```
+
+Workspace được clear rồi dùng lại. Không tạo một vector mới trong mỗi frame hoặc mỗi lượt benchmark.
+
+### Bước 2 — Mở từng bucket đúng một lần
+
+```cpp title="include/lab.hpp — rectangle traversal qua buckets"
+for (int row = range.minimumRow; row <= range.maximumRow; ++row) {
+    for (int column = range.minimumColumn; column <= range.maximumColumn; ++column) {
+        const std::size_t cellIndex = std::size_t(row * grid.columns + column);
+        const std::vector<std::size_t>& bucket = grid.buckets[cellIndex];
+        ++workspace.visitedCells;
+```
+
+`visitedCells` tăng dù bucket rỗng. Việc mở một bucket rỗng vẫn là traversal work, còn candidate work của bucket đó bằng zero.
+
+### Bước 3 — Exact filter từng candidate
+
+```cpp title="include/lab.hpp — candidate không tự động trở thành hit"
+const double candidateDistanceSquared = distanceSquared(particles[particleIndex].position, query.center);
+++workspace.candidatesChecked;
+if (candidateDistanceSquared <= radiusSquared) {
+    recordGridHit(workspace, particleIndex, candidateDistanceSquared);
+}
+```
+
+Điều kiện `<=` giữ boundary inclusive giống oracle Project 27.
+
+### Bước 4 — Tie-break không phụ thuộc bucket order
+
+```cpp title="include/lab.hpp — nearest hit ổn định"
+const bool isCloser = candidateDistanceSquared < workspace.nearestDistanceSquared;
+const bool winsTie = candidateDistanceSquared == workspace.nearestDistanceSquared && particleIndex < workspace.nearestIndex;
+if (isCloser || winsTie) {
+    workspace.nearestIndex = particleIndex;
+    workspace.nearestDistanceSquared = candidateDistanceSquared;
+}
+```
+
+Nếu chỉ dùng `<`, particle gặp trước trong traversal thắng. Thứ tự đó thay đổi theo cellSize và không phải identity ổn định.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint exact neighbors"
+cmake --build build --config Debug --target project_28_checkpoint_4
+```
+
+Title báo `visited cells`, `candidates` và `hits`. Preset mặc định phải có `candidates < 100000`; hit count luôn nhỏ hơn hoặc bằng candidates.
+
+## Thử làm sai để hiểu đúng
+
+1. Push mọi index trong bucket vào hits. Các góc AABB sáng vàng sai; khôi phục exact distance test.
+2. Tăng `candidatesChecked` chỉ khi hit. Counter biến thành bản sao hit count; đưa nó lên trước nhánh `if`.
+3. Bỏ nhánh equal-distance/index. Tạo hai point đối xứng rồi đổi cellSize; nearest có thể đổi; khôi phục tie-break.
+
+## Tự kiểm tra kết quả
+
+- `visitedCells` bằng số cell trong range.
+- `candidatesChecked` bằng tổng kích thước các bucket đã mở.
+- `hits <= candidatesChecked <= N` cho query trong world.
+- Candidate ngoài circle bị loại.
+- Particle đúng trên radius được nhận.
+- Empty circle trả hit list rỗng và `kNoParticle`.
+- Equal distance chọn particle index nhỏ hơn.
+
+## Bài tập mở rộng
+
+Tô candidates bằng màu cam nhạt trước exact test, sau đó ghi đè hits bằng vàng. Quan sát false-positive region ở bốn góc candidate rectangle.
+
+Bài tiếp theo không tin hình vẽ: ta so toàn bộ hit set và nearest hit với brute-force oracle.

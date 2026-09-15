@@ -1,0 +1,109 @@
+# Thêm màu, kích thước và lệnh xóa bảng vẽ
+
+## Vấn đề cần giải quyết
+
+Thuật toán đã tạo được nét liền, nhưng Mini Paint vẫn thiếu những thao tác cơ bản: đổi màu, đổi kích thước đầu bút và xóa bảng vẽ. Nếu đưa tất cả vào nhánh `MOUSE_MOTION`, phần xử lý kéo chuột sẽ ngày càng dài và khó theo dõi.
+
+Thay vào đó, màu và bán kính được giữ thành hai biến trạng thái riêng. Sự kiện bàn phím chỉ thay đổi các biến này; đến lúc vẽ, `stampCircle` đọc giá trị hiện tại.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trước khi viết code, hãy phân biệt ba loại thao tác:
+
+- `1`, `2`, `[` và `]` thay đổi cấu hình đầu bút một lần khi phím được nhấn;
+- `C` thay đổi toàn bộ framebuffer bằng cách tô lại màu nền;
+- `MOUSE_MOTION` cung cấp các vị trí liên tiếp của nét đang vẽ.
+
+Các phím chỉ cần xử lý trong `SDL_EVENT_KEY_DOWN`, không cần hỏi trạng thái liên tục như WASD ở Project 02. `radius` phải luôn nằm trong khoảng `2 ≤ radius ≤ 64`. Ta giữ điều kiện này ngay tại nơi thay đổi bán kính để phần code vẽ luôn nhận được dữ liệu hợp lệ.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho giới hạn bán kính
+
+```cpp title="src/main.cpp — giới hạn và trạng thái đầu bút"
+constexpr int kMinimumRadius = 2;
+constexpr int kMaximumRadius = 64;
+std::uint32_t color = rgba(83, 240, 174);
+int radius = 12;
+```
+
+Không cần lưu thêm `diameter`, vì hai biến có thể bị lệch nhau sau một lần chỉnh sửa. Khi cần đường kính hoặc `spacing`, ta tính trực tiếp từ `radius`; như vậy chỉ có một giá trị gốc cần giữ đúng.
+
+### Bước 2 — Đổi màu bằng phím số
+
+```cpp title="src/main.cpp — trong SDL_EVENT_KEY_DOWN"
+if (!event.key.repeat && event.key.key == SDLK_1) {
+    color = rgba(83, 240, 174);
+}
+if (!event.key.repeat && event.key.key == SDLK_2) {
+    color = rgba(49, 87, 228);
+}
+```
+
+Màu được đóng gói theo đúng format của texture. Những nét đã vẽ là dữ liệu nằm sẵn trong `pixels`, nên thay đổi `color` chỉ ảnh hưởng tới các dấu được tạo sau đó. Bức vẽ cũ không bị đổi màu theo.
+
+### Bước 3 — Giữ bán kính trong khoảng an toàn
+
+```cpp title="src/main.cpp — phím ngoặc vuông đổi radius"
+if (!event.key.repeat && event.key.key == SDLK_LEFTBRACKET) {
+    radius = std::max(kMinimumRadius, radius - 2);
+}
+if (!event.key.repeat && event.key.key == SDLK_RIGHTBRACKET) {
+    radius = std::min(kMaximumRadius, radius + 2);
+}
+```
+
+Khi `radius` đã bằng 2, nhấn thêm `[` vẫn giữ nguyên giá trị. Tương tự, `]` không thể đưa bán kính vượt quá 64. Nhờ đó, vòng lặp trong `stampCircle` và phép tính `spacing = radius × 0.8` luôn nhận được một bán kính hợp lệ.
+
+### Bước 4 — Xóa dữ liệu thật trong `pixels`
+
+```cpp title="src/main.cpp — command C"
+if (!event.key.repeat && event.key.key == SDLK_C) {
+    std::fill(pixels.begin(), pixels.end(), background);
+}
+```
+
+`SDL_RenderClear(renderer)` chỉ xóa tạm render target trước khi texture được vẽ lên. Ở lần tiếp theo, texture vẫn lấy dữ liệu từ `pixels` và bức tranh cũ sẽ xuất hiện trở lại. Muốn xóa thật, phải tô toàn bộ vector `pixels` bằng màu nền.
+
+Điều kiện `!event.key.repeat` khiến mỗi lần nhấn ngoặc chỉ thay đổi bán kính đúng 2 pixel, thay vì tăng hoặc giảm liên tục theo tốc độ lặp phím của hệ điều hành.
+
+### Bước 5 — Dùng màu và bán kính hiện tại khi vẽ
+
+```cpp title="src/main.cpp — dùng spacing, radius và color hiện tại"
+if (event.type == SDL_EVENT_MOUSE_MOTION && drawing) {
+    const lab::Point current{event.motion.x, event.motion.y};
+    const double spacing = double(radius) * 0.8;
+    for (lab::Point point : lab::sampleStroke(previous, current, spacing)) {
+        stampCircle(pixels, point, radius, color);
+    }
+    previous = current;
+}
+```
+
+`radius` và `color` được truyền vào `stampCircle` ngay tại thời điểm vẽ. Khi bán kính thay đổi, kích thước dấu và khoảng cách nội suy cùng thay đổi theo một tỷ lệ. `previous` vẫn chỉ được cập nhật sau khi toàn bộ đoạn đã xử lý xong; không cần viết hai nhánh riêng cho đầu bút nhỏ và lớn.
+
+## Ghép các phần lại
+
+Checkpoint 5 giữ nguyên thuật toán của bài 4. Sự kiện bàn phím cập nhật `radius`, `color` hoặc nội dung `pixels`; sự kiện chuột tạo danh sách điểm rồi gọi `stampCircle` với cấu hình hiện tại. Các nét cũ đã trở thành pixel trong framebuffer nên không thay đổi khi đầu bút được chỉnh lại.
+
+Trong bản hiện tại: kéo chuột trái để vẽ, `1`/`2` chọn màu, `[`/`]` đổi bán kính, C xóa bảng vẽ và Escape thoát. Thử đổi kích thước ngay giữa một nét: phần còn lại sẽ dùng bán kính mới. Đây là hành vi được chọn cho ứng dụng, không phải lỗi dữ liệu.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `std::max` rồi giữ phím `[`. Bán kính âm khiến vòng lặp trong `stampCircle` không chạy; `spacing` vẫn được đưa về mức tối thiểu nên chương trình không treo, nhưng đầu bút biến mất.
+2. Xử lý phím C chỉ bằng `SDL_RenderClear`. Tranh có vẻ biến mất trong một lần vẽ rồi xuất hiện trở lại, vì framebuffer trong RAM chưa hề thay đổi.
+3. Đổi màu bằng cách fill toàn bộ `pixels`. Toàn bộ tranh cũ bị nhuộm lại thay vì chỉ các nét mới dùng màu mới.
+
+## Tự kiểm tra kết quả
+
+- `1/2` chỉ ảnh hưởng nét vẽ mới.
+- Radius không nhỏ hơn 2 hoặc lớn hơn 64 dù nhấn phím nhiều lần.
+- Đầu bút lớn và nhỏ đều tạo nét liên tục.
+- C đưa toàn bộ bảng vẽ về đúng màu nền.
+- Các phím điều khiển không làm thay đổi trình tự nhấn–di chuyển–thả chuột.
+
+## Bài tập mở rộng
+
+Hãy tạo một mảng màu và dùng các phím 1–5 để chọn, thay vì lặp lại nhiều nhánh gần giống nhau. Thêm hình xem trước kích thước đầu bút tại con trỏ trên một lớp hiển thị riêng, không ghi nó vào `pixels`. Cuối cùng, thử thêm undo một bước bằng cách sao chép `pixels` khi bắt đầu nét; trước khi làm, hãy tính chi phí bộ nhớ của bảng vẽ `960 × 540 × 4` byte.
+
+Bài cuối sẽ viết test cho hai đầu đoạn và khoảng cách giữa các điểm — những điều quan trọng nhất để nét không bị đứt.

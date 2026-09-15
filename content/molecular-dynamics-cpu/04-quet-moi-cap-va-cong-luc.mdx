@@ -1,0 +1,139 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Quét mọi cặp i &lt; j và cộng lực cho toàn hệ
+
+## Vấn đề cần giải quyết
+
+Hàm bài trước mới trả kết quả của một khoảng cách. Bây giờ mỗi hạt có thể chịu lực từ nhiều hạt khác. Ta cần một vector lực tổng cho từng hạt và phải chắc rằng mỗi cặp chỉ được xét một lần.
+
+Bắt đầu từ checkpoint 3. Cuối bài, hộp vẫn đứng yên nhưng title đã hiện số cặp được xét và số cặp thực sự nằm trong cutoff. Với 1.000 hạt, một lần tính lực phải xét đúng 499.500 cặp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với ba hạt, danh sách cần xét chỉ là (0,1), (0,2), (1,2). Cặp (1,0) không phải tương tác mới; (0,0) là tự tương tác và cần bỏ. Vì vậy vòng trong bắt đầu từ i+1:
+
+$$
+N_{pairs}=\frac{N(N-1)}{2}.
+$$
+
+Với delta=xj−xi và r=|delta|, lực trên i là delta·U′fs(r)/r. Ta cộng vector đó vào i và trừ đúng vector ấy khỏi j. Hai phía không gọi lại công thức riêng. Tổng nội lực triệt tiêu, còn thế năng của cặp chỉ cộng một lần.
+
+<InteractiveLab demo="molecular-dynamics-cpu" mode="md-pairs" />
+
+Click hạt ở đầu rồi ở cuối danh sách. Các đường nối chỉ biểu diễn những cặp mà hạt đang chọn đóng vai trò index nhỏ hơn, không phải toàn bộ các hạt tác dụng lực lên nó. activePairs là một phần của evaluatedPairs.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo nơi giữ kết quả của toàn bộ lần quét
+
+```cpp title="include/molecular_dynamics.hpp — ForceEvaluation"
+struct ForceEvaluation {
+    bool valid{};
+    std::vector<Vec2> forces;
+    double potentialEnergy{};
+    std::size_t evaluatedPairs{};
+    std::size_t activePairs{};
+    double minimumDistance{std::numeric_limits<double>::infinity()};
+};
+```
+
+`forces[i]` là tổng lực lên hạt i. `evaluatedPairs` đếm cả cặp ở xa; `activePairs` chỉ đếm cặp trong cutoff. `minimumDistance` là khoảng cách nhỏ nhất trong mọi cặp đã xét, hữu ích để phát hiện điều kiện đầu quá sát nhau.
+
+
+### Bước 2 — Viết trọn vòng lặp, kể cả nhánh lỗi và cutoff
+
+```cpp title="include/molecular_dynamics.hpp — accumulatePairForces hoàn chỉnh"
+inline ForceEvaluation accumulatePairForces(
+    const std::vector<Particle>& particles,
+    const MolecularParameters& parameters = {}
+) {
+    ForceEvaluation evaluation{};
+    evaluation.forces.assign(particles.size(), {});
+    const bool validInput = validParameters(parameters) && std::all_of(particles.begin(), particles.end(), [](const Particle& particle) {
+                                return finite(particle.position) && finite(particle.velocity) &&
+                                    std::isfinite(particle.mass) && particle.mass > 0.0;
+                            });
+    if (!validInput) {
+        return evaluation;
+    }
+
+    for (std::size_t first = 0; first < particles.size(); ++first) {
+        for (std::size_t second = first + 1U; second < particles.size(); ++second) {
+            ++evaluation.evaluatedPairs;
+            const Vec2 delta = subtract(
+                particles[second].position,
+                particles[first].position
+            );
+            const double distance = length(delta);
+            evaluation.minimumDistance = std::min(evaluation.minimumDistance, distance);
+            const PairSample sample = sampleForceShiftedPair(distance, parameters);
+            if (!sample.valid) {
+                return evaluation;
+            }
+            if (!sample.active) {
+                continue;
+            }
+
+            ++evaluation.activePairs;
+            evaluation.potentialEnergy += sample.potential;
+            const Vec2 forceOnFirst = scale(delta, sample.potentialSlope / distance);
+            evaluation.forces[first] = add(evaluation.forces[first], forceOnFirst);
+            evaluation.forces[second] = subtract(evaluation.forces[second], forceOnFirst);
+        }
+    }
+
+    evaluation.valid = std::isfinite(evaluation.potentialEnergy) &&
+        std::all_of(evaluation.forces.begin(), evaluation.forces.end(), finite);
+    return evaluation;
+}
+```
+
+Đầu hàm cấp N vector 0 và kiểm trạng thái hạt. Dòng `second = first + 1U` bỏ cặp trùng và tự tương tác. Sau khi tính khoảng cách, phải gọi `sampleForceShiftedPair`: mẫu lỗi làm cả lần quét thất bại, còn mẫu không hoạt động chỉ bỏ qua cặp hiện tại bằng `continue`. Chỉ sau hai kiểm tra này mới cộng U và hai lực. Cuối hàm kiểm cả mảng kết quả, tránh trả một phần tổng lực khi có giá trị không hữu hạn.
+
+
+### Bước 3 — Gọi một lần từ trạng thái đã tạo
+
+```cpp title="src/main.cpp — khởi tạo forceEvaluation"
+md::ForceEvaluation forceEvaluation = md::accumulatePairForces(
+    system.particles,
+    system.parameters
+);
+```
+
+Đặt đoạn này sau khi tạo system, trước event loop. Khi T, D hoặc S tạo lại hệ, cập nhật forceEvaluation từ hệ mới. Checkpoint 4 chưa có timestep, nên không cần gọi lại lực liên tục cho một trạng thái đang đứng yên. Title đọc `forceEvaluation.evaluatedPairs` và `forceEvaluation.activePairs`.
+
+
+## Ghép các phần lại
+
+Làm việc từ thư mục gốc của ZIP. Mỗi target dùng một thư mục riêng: thay đổi trong `checkpoints/04/` chỉ có hiệu lực khi chạy đúng target của bài này.
+
+```bash title="Terminal — build và chạy checkpoint 4 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_42_checkpoint_4
+.\build\Debug\project_42_checkpoint_4.exe
+```
+
+Với Ninja hoặc Makefiles, executable thường nằm ngay trong `build/`. CTest của ZIP kiểm tra `final/include`; nó không tự kiểm tra phần bạn vừa sửa trong một checkpoint. Hãy dùng số đo và tình huống kiểm tra của bài trước khi đối chiếu bản hoàn chỉnh.
+
+Kiểm N=1.000 cho 499.500 cặp. Để kiểm tổng lực bằng tay, dùng ba hạt trong một bản sao bài làm rồi cộng các phần tử forceEvaluation.forces (force vectors); đây là phép kiểm khác với việc đếm cặp.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong C++, cho vòng trong bắt đầu từ `second=0` và dùng `continue` để bỏ cặp `second==first`. Mỗi cặp sẽ xuất hiện hai lần: số lượt xét và thế năng gấp đôi, dù tổng lực vẫn có thể gần 0. Chạy trên ba hạt, không cần 1.000 hạt, rồi hoàn tác.
+2. Đổi phép trừ lực lên hạt thứ hai thành cộng. Bây giờ tổng nội lực khác 0. Phép kiểm này bắt lỗi dấu, còn phép đếm cặp ở trên bắt lỗi cộng đôi; cần cả hai. Khôi phục phép trừ.
+
+## Tự kiểm tra kết quả
+
+- [ ] 3 hạt cho 3 cặp; 1.000 hạt cho 499.500 cặp trong một lần tính lực.
+- [ ] activePairs không lớn hơn evaluatedPairs.
+- [ ] Mỗi cặp chỉ đóng góp một lần vào thế năng.
+- [ ] Tổng các vector lực gần 0 nhưng không dùng riêng điều kiện này để kiểm trùng cặp.
+- [ ] Một cặp không hợp lệ làm toàn bộ evaluation có valid=false.
+
+## Bài tập mở rộng
+
+1. Dùng vòng tham chiếu cho riêng một hạt, so lực với forces[i].
+2. Đặt ba hạt thẳng hàng đối xứng và dự đoán lực lên hạt giữa.
+3. Đếm riêng cặp hút và cặp đẩy từ dấu potentialSlope.
+
+Bài tiếp theo dùng mảng lực ở đầu và cuối một bước Velocity Verlet. Vì vậy một bước sẽ có hai lần quét, không chỉ 499.500 lượt xét.

@@ -1,0 +1,126 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính face normal và kiểm tra winding
+
+## Vấn đề cần giải quyết
+
+Muốn biết một mặt quay về đèn bao nhiêu, trước hết ta phải mô tả “mặt đang quay về đâu”. Đại lượng đó là **face normal**. Sai normal không làm chương trình crash; nó chỉ làm mặt đáng lẽ sáng trở nên tối, vì vậy đây là loại lỗi rất dễ bị chữa tạm bằng dấu trừ ở chỗ khác.
+
+Ta sẽ tính normal từ chính ba vertex theo thứ tự của face, chuẩn hóa nó và kiểm chứng hướng ra ngoài bằng local centroid. Khi checkpoint này xong, winding không còn là thứ ta đoán bằng mắt.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với face `A → B → C`, tạo hai cạnh cùng gốc:
+
+$$
+\vec{e}_{AB}=B-A,\qquad \vec{e}_{AC}=C-A
+$$
+
+Cross product cho raw normal:
+
+$$
+\vec{n}_{raw}=\vec{e}_{AB}\times\vec{e}_{AC},\qquad
+\hat{n}=\frac{\vec{n}_{raw}}{\lVert\vec{n}_{raw}\rVert}
+$$
+
+Đổi B và C sẽ đảo dấu cross product. Với tetrahedron có tâm tại local origin, vector từ tâm tới face là `faceCentroid`. Normal hướng ra ngoài khi `dot(rawNormal, faceCentroid) > 0`.
+
+<InteractiveLab demo="lambert" mode="lambert-normal" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết dot, cross và length thành hàm có tên
+
+```cpp title="include/lab.hpp — ba phép toán sẽ được test riêng"
+inline double dot(Vec3 left, Vec3 right) {
+    return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+inline Vec3 cross(Vec3 left, Vec3 right) {
+    return {
+        left.y * right.z - left.z * right.y,
+        left.z * right.x - left.x * right.z,
+        left.x * right.y - left.y * right.x,
+    };
+}
+
+inline double length(Vec3 value) {
+    return std::sqrt(dot(value, value));
+}
+```
+
+Không nhét toàn bộ công thức vào render loop. Những hàm nhỏ này làm code gọi đọc giống lời giải toán, đồng thời giúp CTest chỉ ra đúng phép toán bị sai.
+
+### Bước 2 — Chuẩn hóa an toàn
+
+```cpp title="include/lab.hpp — tránh chia cho vector gần zero"
+inline Vec3 normalize(Vec3 value) {
+    const double magnitude = length(value);
+    if (magnitude <= 1e-12) {
+        return {};
+    }
+    return scale(value, 1.0 / magnitude);
+}
+```
+
+Triangle suy biến có raw normal gần zero. Trả về zero vector giúp giá trị vẫn hữu hạn; test hoặc telemetry sau đó có thể báo geometry lỗi. Chia thẳng sẽ tạo NaN và làm lỗi lan tới màu pixel.
+
+### Bước 3 — Tính normal từ đúng thứ tự A–B–C
+
+```cpp title="include/lab.hpp — raw normal và unit normal của face"
+inline Vec3 faceRawNormal(const std::array<Vec3, 3>& vertices) {
+    const Vec3 edgeAB = subtract(vertices[1], vertices[0]);
+    const Vec3 edgeAC = subtract(vertices[2], vertices[0]);
+    return cross(edgeAB, edgeAC);
+}
+
+inline Vec3 faceUnitNormal(const std::array<Vec3, 3>& vertices) {
+    return normalize(faceRawNormal(vertices));
+}
+```
+
+Hàm nhận geometry đã giải index, nên sau này cùng code chạy được cho local-space lẫn camera-space vertex. Điều bắt buộc là ba vertex phải ở **cùng một không gian tọa độ**.
+
+### Bước 4 — Biến outward winding thành một phép kiểm
+
+```cpp title="include/lab.hpp — normal phải chỉ từ tâm mesh ra face"
+inline bool hasOutwardWinding(
+    const std::array<Vec3, 3>& vertices,
+    Vec3 meshCentroid = {}
+) {
+    const Vec3 fromMeshToFace = subtract(faceCentroid(vertices), meshCentroid);
+    return dot(faceRawNormal(vertices), fromMeshToFace) > 0.0;
+}
+```
+
+Mặc định `meshCentroid` là origin vì tetrahedron đang cân quanh `(0,0,0)`. Đây là phép kiểm dành cho mesh lồi trong tình huống này, không phải thuật toán tổng quát để sửa winding của mọi mesh lõm.
+
+## Ghép các phần lại
+
+Checkpoint 2 vẽ normal của face được chọn bằng một đoạn trắng từ centroid. Nhấn `Tab` để đi qua đủ bốn face.
+
+```bash title="Terminal — build và chạy test normal"
+cmake --build build --config Debug --target project_19_checkpoint_2
+cmake --build build --config Debug --target project_19_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `cross(edgeAB,edgeAC)` thành `cross(edgeAC,edgeAB)`. Mũi tên quay vào trong và outward test fail; không chữa bằng cách phủ dấu trừ ở lighting.
+2. Bỏ `normalize` rồi dùng raw normal cho dot. Face lớn nhận “nhiều ánh sáng” hơn chỉ vì diện tích; dot lúc này không còn là cosine.
+3. Lấy `edgeAB=B` và `edgeAC=C` mà quên trừ A. Kết quả chỉ tình cờ đúng khi A nằm ở origin; giữ hai vector cạnh cùng gốc.
+
+## Tự kiểm tra kết quả
+
+- Cả bốn face thỏa `hasOutwardWinding` trong local space.
+- Mỗi unit normal có length gần 1 và dot với hai cạnh gần 0.
+- Đổi thứ tự hai index làm đúng face đó thất bại trong test.
+- Normal được vẽ từ face centroid, không từ world origin.
+- Zero-length input không sinh infinity hoặc NaN.
+
+## Bài tập mở rộng
+
+Thêm một test tạo cùng triangle nhưng nhân mọi position với 3. Raw normal sẽ dài gấp 9 lần, còn unit normal phải giữ nguyên. Giải thích vì sao cross product mang hệ số diện tích bình phương theo scale cạnh.
+
+Bài tiếp theo chưa lấy dot ngay. Ta sẽ chốt hướng của vector ánh sáng trước để không phải đoán dấu ở toàn bộ pipeline.

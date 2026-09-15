@@ -1,0 +1,126 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa mảng vec4 vào SSBO với std430
+
+## Bài toán của chúng ta
+
+GPU không hiểu `std::vector<Vec4>` theo cách C++ hiểu nó. `glBufferData` chỉ sao chép một dãy byte; shader storage block mới quyết định các byte ấy được đọc thành dữ liệu gì. Vì vậy C++ và GLSL phải thống nhất hoàn toàn về kích thước, căn chỉnh và binding. Chương trình vẫn có thể compile khi hai bên hiểu khác nhau, nhưng kết quả đọc ra sẽ sai.
+
+Bài 3 vẫn chưa dispatch. Ta sẽ tạo ba Shader Storage Buffer Object (SSBO), tải A/B lên GPU, điền output bằng NaN làm dấu và gắn chúng vào binding 0/1/2. Việc dừng ở đây giúp ta kiểm tra cách bố trí bộ nhớ trước khi thêm compute shader.
+
+## Theo dõi dữ liệu từ CPU sang GPU
+
+Mảng `vec4` trong `std430` có stride 16 byte:
+
+```text
+index 0: [x y z w] byte 0..15
+index 1: [x y z w] byte 16..31
+index 2: [x y z w] byte 32..47
+```
+
+Địa chỉ phần tử $i$ là:
+
+$$\operatorname{offset}(i) = i \times 16$$
+
+`binding = 0` là vị trí interface mà shader tìm input A. Nó không phải `GLuint` do `glGenBuffers` trả về. Buffer name có thể là 7, 12, 93; miễn C++ bind đúng name đó vào binding point 0.
+
+<InteractiveLab demo="million-vector-gpu" mode="ssbo-layout" />
+
+Kéo chọn index và nhìn ba hàng. Cùng index có cùng byte offset trong cả ba buffer, nhưng mỗi buffer là một vùng nhớ riêng và có quyền đọc/ghi khác nhau.
+
+## Bắt tay vào code
+
+### Bước 1 — Khai báo ba shader storage blocks
+
+```glsl title="shaders/vector_ops.comp — interface ở checkpoint 3"
+#version 430 core
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InputA {
+    vec4 inputA[];
+};
+
+layout(std430, binding = 1) readonly buffer InputB {
+    vec4 inputB[];
+};
+
+layout(std430, binding = 2) writeonly buffer Output {
+    vec4 outputData[];
+};
+```
+
+`readonly`/`writeonly` mô tả hướng dữ liệu ngay tại interface. Shader checkpoint này chưa chạy nên `main` chưa ghi gì; declarations chỉ khóa layout và binding cho bài 4.
+
+### Bước 2 — Tạo ba OpenGL buffer
+
+```cpp title="include/vector_compute_engine.hpp — tạo SSBO"
+if (buffers_[0] == 0) {
+    api.GenBuffers(3, buffers_);
+}
+
+if (buffers_[0] == 0 || buffers_[1] == 0 || buffers_[2] == 0) {
+    diagnostics = "glGenBuffers did not create all three SSBOs.";
+    return false;
+}
+```
+
+Mảng `buffers_` giữ OpenGL object names trong suốt lifetime của engine. Khi count đổi, ta tái cấp storage trong cùng object thay vì rò thêm ba buffer mới.
+
+### Bước 3 — Tải A/B lên GPU và gắn đúng binding
+
+```cpp title="include/vector_compute_engine.hpp — input A"
+const GLsizeiptr bytes = static_cast<GLsizeiptr>(elementCount_ * sizeof(Vec4));
+
+api.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffers_[0]);
+api.BufferData(GL_SHADER_STORAGE_BUFFER, bytes, inputs.a.data(), GL_STATIC_DRAW);
+api.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffers_[0]);
+```
+
+Input B làm tương tự ở binding 1. `GL_STATIC_DRAW` chỉ là usage hint vì input không đổi giữa nhiều dispatch của cùng dataset; nó không khóa buffer thành read-only. Quyền `readonly` thật nằm trong shader block.
+
+### Bước 4 — Dùng NaN làm dấu “chưa được ghi”
+
+```cpp title="include/vector_compute_engine.hpp — output sentinel"
+const float sentinel = std::numeric_limits<float>::quiet_NaN();
+const std::vector<Vec4> unwritten(
+    elementCount_,
+    Vec4{sentinel, sentinel, sentinel, sentinel}
+);
+
+api.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffers_[2]);
+api.BufferData(GL_SHADER_STORAGE_BUFFER, bytes, unwritten.data(), GL_DYNAMIC_COPY);
+api.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, buffers_[2]);
+```
+
+Số 0 không phải dấu nhận biết tốt, vì Add hoặc Difference hoàn toàn có thể cho kết quả 0 hợp lệ. Nếu shader bỏ sót một phần tử, bài 7 sẽ phát hiện NaN trước khi so sai số.
+
+## Chạy checkpoint
+
+Cuối checkpoint, terminal phải báo input A/B đã upload và output đã được khởi tạo. Cửa sổ vẫn vẽ CPU output vì chưa có readback; đây là chủ đích, không phải GPU “đã chạy ngầm”.
+
+Khi count là 1.000.003, ba buffer dùng xấp xỉ 48 MB tổng cộng. Capability report kiểm giới hạn cho từng SSBO 16.000.048 byte, không cộng ba buffer rồi so với `GL_MAX_SHADER_STORAGE_BLOCK_SIZE` — limit đó áp dụng cho một block.
+
+## Thử phá chương trình
+
+1. Đổi C++ `Vec4` thành ba float nhưng giữ GLSL `vec4[]`. `static_assert` phải fail trước khi chạy.
+2. Bind cả A và B vào binding 0. Shader về sau không có resource hợp lệ tại binding 1.
+3. Dùng `glBindBuffer` rồi bỏ `glBindBufferBase`. Target binding dùng cho API copy chưa tự thiết lập shader binding point.
+4. Khởi tạo output bằng zero và cố dùng zero để nhận biết phần tử chưa ghi. Một kết quả hợp lệ sẽ bị báo nhầm.
+
+## Tự nghiệm thu
+
+- [ ] C++ `Vec4` có stride 16 byte; GLSL dùng `vec4[]` trong `std430`.
+- [ ] A/B/output có object name riêng.
+- [ ] Binding 0/1/2 khớp ở C++ và GLSL.
+- [ ] `bytes` bằng `elementCount * sizeof(Vec4)` và vừa `GLsizeiptr`.
+- [ ] Output được cấp cùng byte count và chứa NaN sentinel trước dispatch.
+- [ ] Re-upload count mới không làm rò buffer cũ.
+
+## Bài tập tiếp theo
+
+1. In ba buffer names cạnh ba binding points để tự thấy hai khái niệm không giống nhau.
+2. Dùng `offsetof(Vec4, z)` trong CTest và xác nhận bằng 8.
+3. Tính tổng VRAM gần đúng cho ba preset count của final.
+
+Bài tiếp theo sẽ compile shader và cho đúng 256 invocation đầu tiên ghi qua interface vừa khóa.

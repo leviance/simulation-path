@@ -1,0 +1,154 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Midpoint circle: tính một phần tám rồi phản chiếu
+
+## Vấn đề cần giải quyết
+
+Nếu kiểm tra mọi pixel trong hình vuông bao bằng điều kiện gần `x² + y² = r²`, số vị trí phải xét tăng theo diện tích và rất khó chọn độ dày đường viền nhất quán. Midpoint circle chỉ đi dọc một phần tám đường tròn, dùng một biến quyết định nguyên để chọn bước tiếp theo rồi phản chiếu sang bảy phía còn lại.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bắt đầu tại `(r,0)` rồi tăng `y` từng bước. Ở hàng kế tiếp, ta chỉ phải chọn giữa hai pixel: giữ nguyên X tại `(x, y+1)`, hoặc giảm X tại `(x-1, y+1)`. Câu hỏi còn lại là pixel nào nằm gần đường tròn lý tưởng hơn.
+
+Ta mô tả đường tròn tâm gốc bằng hàm:
+
+$$
+F(x,y)=x^2+y^2-r^2
+$$
+
+Nếu `F` âm, điểm đang nằm trong đường tròn; nếu `F` dương, điểm nằm ngoài. Thay vì tính khoảng cách tới cả hai pixel, midpoint circle kiểm tra trung điểm nằm giữa chúng:
+
+$$
+M=\left(x-\frac{1}{2},\ y+1\right)
+$$
+
+- `F(M) ≤ 0`: trung điểm còn ở trong đường tròn, nên giữ X và chọn `(x, y+1)`.
+- `F(M) > 0`: trung điểm đã ra ngoài, nên giảm X và chọn `(x-1, y+1)`.
+
+`decision` là dạng số nguyên đã rút gọn của phép kiểm tra này. Tại `(r,0)`, giá trị ban đầu được chọn là `1-r`. Sau mỗi bước, ta không tính lại bình phương từ đầu mà cộng phần thay đổi:
+
+```text
+nếu giữ X:    decision += 2*y + 1
+nếu giảm X:  decision += 2*(y - x) + 1
+```
+
+Trong hai công thức trên, `y` đã được tăng và `x` đã được giảm nếu nhánh thứ hai được chọn. Đây chính là thứ tự câu lệnh sẽ xuất hiện trong code.
+
+Một điểm offset `(x,y)` tạo tám hoán vị/dấu:
+
+```text
+(±x, ±y), (±y, ±x)
+```
+
+Khi `x == y`, `x == 0` hoặc `y == 0`, một số phép phản chiếu cho cùng tọa độ. Các điểm trùng sẽ được loại ở cuối hàm.
+
+Với `radius = 5`, `decision` bắt đầu ở `1 - 5 = -4`. Chỉ bốn lần lặp là đủ để tạo dữ liệu cho toàn bộ đường tròn:
+
+| offset được phản chiếu | `decision` trước bước | cập nhật |
+|---:|---:|---|
+| `(5,0)` | −4 | tăng Y, giữ X → `d=-1` |
+| `(5,1)` | −1 | tăng Y, giữ X → `d=4` |
+| `(5,2)` | 4 | tăng Y, giảm X → `(4,3)`, `d=3` |
+| `(4,3)` | 3 | tăng Y, giảm X → `(3,4)`, dừng |
+
+Mỗi hàng trong bảng tạo tối đa tám pixel sau khi phản chiếu. Khi `x < y`, thuật toán đã đi qua đường chéo 45 độ; những phần còn lại chính là ảnh đối xứng của các điểm đã có.
+
+<InteractiveLab demo="raster" mode="raster-circle" />
+
+Kéo thanh **Bước** từ trái sang phải. Các pixel màu trắng là những điểm vừa được tạo từ offset `(x,y)` hiện tại; pixel xanh là kết quả của các bước trước. Đường tròn đỏ chỉ đóng vai trò tham chiếu cho đường cong lý tưởng, không tham gia vào thuật toán.
+
+## Viết code từng bước
+
+### Bước 1 — Viết hàm thêm tám điểm đối xứng
+
+```cpp title="include/lab.hpp — tám điểm đối xứng"
+inline void appendSymmetricCirclePoints(std::vector<Point>& points, Point center, int x, int y) {
+    points.push_back({center.x + x, center.y + y});
+    points.push_back({center.x + y, center.y + x});
+    points.push_back({center.x - y, center.y + x});
+    points.push_back({center.x - x, center.y + y});
+    points.push_back({center.x - x, center.y - y});
+    points.push_back({center.x - y, center.y - x});
+    points.push_back({center.x + y, center.y - x});
+    points.push_back({center.x + x, center.y - y});
+}
+```
+
+Mọi tọa độ đều được cộng với `center`, vì vậy phần tính toán bên trong chỉ cần làm việc với độ lệch quanh gốc `(0,0)`.
+
+### Bước 2 — Khởi tạo điểm ngoài cùng bên phải
+
+```cpp title="include/lab.hpp — trạng thái ban đầu của circle"
+int x = std::max(0, radius);
+int y = 0;
+int decision = 1 - x;
+```
+
+Bán kính âm được đổi thành 0; sau khi loại các điểm trùng, kết quả chỉ còn tâm. Với bán kính dương, thuật toán bắt đầu ở điểm ngoài cùng bên phải của đường tròn.
+
+### Bước 3 — Tiến cho tới đường chéo 45 độ
+
+```cpp title="include/lab.hpp — vòng lặp midpoint circle"
+while (x >= y) {
+    appendSymmetricCirclePoints(points, center, x, y);
+    ++y;
+    if (decision <= 0) {
+        decision += 2 * y + 1;
+    } else {
+        --x;
+        decision += 2 * (y - x) + 1;
+    }
+}
+```
+
+Vòng lặp chỉ chạy khi `x >= y`. Sau đường chéo, những điểm mới sẽ trùng với các hoán vị đã thêm. Nếu `decision <= 0`, thuật toán giữ X và chỉ tăng Y; nếu `decision > 0`, nó giảm X đồng thời tăng Y.
+
+### Bước 4 — Loại các điểm trùng do đối xứng
+
+```cpp title="include/lab.hpp — kết thúc circle"
+std::sort(points.begin(), points.end());
+points.erase(std::unique(points.begin(), points.end()), points.end());
+return points;
+```
+
+Việc sắp xếp rồi loại trùng còn làm thứ tự kết quả ổn định giữa các lần chạy, thuận tiện cho kiểm thử và quan sát bằng debugger.
+
+### Bước 5 — Vẽ đường tròn lên framebuffer
+
+```cpp title="src/main.cpp — vẽ đường tròn ở tâm cửa sổ"
+const lab::Point canvasCenter{
+    kCanvasWidth / 2,
+    kCanvasHeight / 2,
+};
+for (lab::Point point : lab::circle(canvasCenter, 110)) {
+    putPixel(pixels, point, rgba(49, 87, 228));
+}
+```
+
+Đường tròn dùng cùng `putPixel`, vì vậy những điểm nằm ngoài cửa sổ được bỏ qua theo đúng quy tắc đã áp dụng cho mọi primitive khác.
+
+## Ghép các phần lại
+
+Vòng lặp midpoint chỉ tính khoảng một phần tám chu vi. Mỗi trạng thái tạo tối đa tám điểm đối xứng, rồi `sort`/`unique` loại các tọa độ bị lặp. Phần hiển thị không cần biết `decision`; nó chỉ nhận danh sách `Point` giống như với DDA, Bresenham và hình chữ nhật.
+
+Hãy đặt breakpoint ở đầu vòng `while`, dùng bán kính 5 rồi so `x`, `y`, `decision` với bảng trên. Y tăng sau mỗi bước; X chỉ giảm khi `decision` dương. Vòng lặp dừng gần đường chéo vì bảy phần còn lại đã được tạo bằng đối xứng.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ thêm bốn tổ hợp `(±x, ±y)`. Đường tròn sẽ thiếu các phần cần hoán đổi X với Y.
+2. Dừng vòng lặp khi `x > y` thay vì `x >= y`. Điểm trên đường chéo có thể bị bỏ và để lại khe giữa hai phần đối xứng.
+3. Bỏ bước loại trùng. Hình vẫn có vẻ đúng vì tô một pixel hai lần không đổi màu, nhưng số phần tử và mọi code giả định một tập điểm duy nhất đều sai.
+
+## Tự kiểm tra kết quả
+
+- Đường tròn có đủ đối xứng qua hai trục và hai đường chéo.
+- Bán kính 0 trả về đúng tâm.
+- Kết quả không chứa pixel trùng lặp.
+- Mọi pixel phản chiếu qua X/Y cũng tồn tại.
+- Thuật toán không duyệt toàn bộ hình vuông bao.
+
+## Bài tập mở rộng
+
+Hãy viết `filledCircle` bằng cách biến mỗi cặp `(x,y)` thành các đoạn ngang. Tô màu khác nhau cho tám phần để kiểm chứng phép đối xứng. Khi bán kính tăng, so sánh số lần lặp của midpoint với số pixel trong hình vuông bao.
+
+Bài cuối sẽ kiểm tra hình học trước, sau đó mới đo hiệu năng bằng một benchmark có `checksum` để phép tính không bị trình biên dịch loại bỏ.

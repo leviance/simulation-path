@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Dual Renderer Cube
+
+## Vấn đề cần giải quyết
+
+Một cube chuyển được F1/F2 chưa đủ để gọi là project hoàn chỉnh. Ta còn phải biết mesh có valid không, matrix trace hữu hạn không, depth có thật sự loại phụ thuộc order không, culling có giữ mặt trước không và cleanup có chạy khi context còn sống không.
+
+Bài cuối không thêm hiệu ứng. Nó biến những giả định đó thành named validation, chạy CTest không cần GPU và cung cấp trọn source để bạn có thể tải về, build rồi sửa tiếp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Validation được chia hai tầng:
+
+- CTest CPU thuần khóa mesh, Mat4, raster/depth/culling và scene ownership.
+- Runtime dùng OpenGL thật để compile shader, tạo buffers, draw, resize và cleanup.
+
+Hai tầng bổ sung nhau. CTest không thể chứng minh driver chấp nhận shader; nhìn cửa sổ không thể chứng minh triangle order independence ở mọi lần chạy.
+
+<InteractiveLab demo="dual-renderer-cube" mode="cube-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Report giữ từng invariant có tên
+
+```cpp title="include/pipeline.hpp — DualRendererValidationReport"
+struct DualRendererValidationReport {
+    bool vertexLayout{};
+    bool indexBounds{};
+    bool finiteClipCoordinates{};
+    bool depthOrderIndependent{};
+    bool cullingRemovesTriangles{};
+    bool deterministicCpuFrame{};
+    bool rendererSwitchPreservesScene{};
+};
+```
+
+Nếu title báo INVALID, debugger có thể mở report và thấy đúng field thất bại; không cần đoán một bool tổng hợp che mất nguyên nhân.
+
+### Bước 2 — Test switching mà không cần renderer thật
+
+```cpp title="include/pipeline.hpp — renderer switch giữ scene"
+const CubeScene beforeSwitch = scene;
+RendererKind renderer = RendererKind::cpu;
+renderer = RendererKind::gpu;
+static_cast<void>(renderer);
+report.rendererSwitchPreservesScene = beforeSwitch.angleX == scene.angleX && beforeSwitch.angleY == scene.angleY && beforeSwitch.depthEnabled == scene.depthEnabled && beforeSwitch.cullingEnabled == scene.cullingEnabled;
+```
+
+Test này khóa ownership: đổi backend selection không được có side effect lên scene.
+
+### Bước 3 — Destroy resource theo thứ tự ngược lúc tạo
+
+```cpp title="src/main.cpp — cleanup final"
+gpuRenderer.destroy(gl);
+cpuPresenter.destroy(gl);
+destroyWindowAndContext(window, context);
+```
+
+EBO, VBO, VAO, shader program và texture cần context current. Sau khi context chết, không được gọi function pointer OpenGL thêm lần nào.
+
+## Ghép các phần lại
+
+Build và test cả hai cấu hình:
+
+```bash title="Terminal — nghiệm thu Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — nghiệm thu Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Chạy `project_34_final`, thử F1/F2 khi pause và khi animation đang chạy, drag, N, D, C, resize, reset rồi Esc.
+
+## Source hoàn chỉnh gồm những gì?
+
+- `include/pipeline.hpp`: scene, indexed mesh, column-major Mat4, CPU raster/depth/culling và validation.
+- `include/gl_api.hpp`: function pointers cần cho shader, buffers, textures, depth và culling.
+- `include/gpu_renderer.hpp`: shader compiler, VBO/EBO/VAO cube renderer và CPU texture presenter.
+- `src/main.cpp`: SDL/OpenGL lifecycle, shared input/update, F1/F2 render branch và cleanup.
+- `tests/tests.cpp`: CTest hữu hạn, không mở window.
+
+Phần “Mã hoàn chỉnh” bên dưới lấy trực tiếp từ final checkpoint và giống source trong ZIP.
+
+## Thử làm sai để hiểu đúng
+
+1. Destroy context trước `gpuRenderer.destroy`. Resource cleanup mất context hợp lệ.
+2. Bỏ test reversed triangle order. Một regression depth có thể lọt qua vì default order vô tình đẹp.
+3. Chỉ build Debug. Shader runtime path và warning/optimization của Release chưa được kiểm.
+4. Gộp mọi field validation thành `bool valid` ngay khi tính. Khi lỗi xuất hiện, bạn mất tên invariant.
+
+Hoàn tác thay đổi và chạy lại cả CTest lẫn final app.
+
+## Tự kiểm tra kết quả
+
+- [ ] Starter, chín checkpoints và final đều build độc lập.
+- [ ] Mesh/index/matrix/depth/culling tests đều có tên và đạt.
+- [ ] F1/F2 giữ scene state qua animation, drag và resize.
+- [ ] CPU/GPU cùng depth và culling options.
+- [ ] Shader errors luôn có diagnostics.
+- [ ] GPU resources được destroy trước context.
+- [ ] Source final có comment và khoảng trắng giữa các khối logic.
+- [ ] ZIP chứa README, starter, checkpoints, final và tests.
+
+Trước khi kết thúc, hãy dự đoán điều sẽ xảy ra nếu Project 35 reload shader nhưng vô tình tạo một scene mới; bài F1/F2 hiện tại cho bạn contract để ngăn lỗi đó.
+
+## Bài tập mở rộng
+
+1. Thêm screenshot-diff thủ công ở ba preset, nhưng loại edge pixels khỏi pass/fail.
+2. Thêm renderer interface mỏng mà không dùng inheritance nếu hai backend chỉ cần một hàm render.
+3. Ghi OpenGL vendor/version và framebuffer density vào report tái lập.
+
+Project 35 sẽ giữ nguyên cube/scene contract và mở một shader lab: sửa GLSL, compile lại rồi quan sát kết quả mà không phá resource đang chạy.

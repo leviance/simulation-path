@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khi nào danh sách bắt đầu không còn đáng tin?
+
+## Vấn đề cần giải quyết
+
+Nếu dựng lại sau mọi bước, neighbor list chưa tận dụng được vùng đệm. Nhưng nếu cứ giữ mãi, một cặp chưa có trong danh sách sẽ tiến vào cutoff mà ta không hay biết. Ta cần một điều kiện đủ rõ ràng để trả lời: trước lần tính lực này, danh sách cũ còn dùng được không?
+
+Không chọn đại “10 frame dựng lại một lần”. Frame phụ thuộc tốc độ máy, còn hạt có thể đi nhanh hoặc chậm. Ta sẽ đo độ dời của từng hạt so với **lần dựng gần nhất**, rồi quyết định bằng chính khoảng trống mà skin đã dành sẵn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Xét một cặp bị loại khi dựng: khoảng cách ban đầu ít nhất bằng `cutoff+skin`. Muốn tiến vào cutoff, hai hạt phải làm khoảng cách giảm ít nhất skin. Nếu A tiến lại 0.15 và B tiến lại 0.15, khoảng cách có thể giảm 0.30, không phải 0.15. Đó là lý do không được dùng ngưỡng nguyên skin cho từng hạt.
+
+Với độ dời từ mốc là `d_i` và `d_j`, bất đẳng thức tam giác cho ta:
+
+$$r_{ij}(t)\ge r_{ij}(t_0)-\lVert d_i\rVert-\lVert d_j\rVert.$$
+
+Nếu mọi hạt đều dời **nhỏ hơn skin/2**, tổng độ dời của bất kỳ hai đầu nào nhỏ hơn skin. Cặp từng bị loại chưa thể vào cutoff. Trong hộp tuần hoàn cố định, lập luận vẫn đúng cho khoảng cách tới ảnh gần nhất; ta dùng độ dời unwrapped để không đánh mất các lần qua biên. [LAMMPS mô tả cách dùng vùng đệm và mốc nửa skin](https://docs.lammps.org/Developer_par_neigh.html).
+
+Đây là điều kiện đủ, không phải điều kiện cần. Có khi danh sách vẫn đủ cặp dù một hạt đã đi quá ngưỡng; ta vẫn dựng lại để khỏi phải chứng minh riêng cho từng tình huống. Ngay tại dấu bằng, mã cũng dựng lại.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-rebuild" />
+
+Chọn hai hạt, skin=0.4. Dùng mũi tên dịch A từng 0.05 và đọc Dmax cùng rebuilds. Khi chạm xấp xỉ 0.2, rebuilds tăng và Dmax về 0 vì vừa có mốc mới. Một lần không tăng rebuilds chính là một lần dùng lại danh sách, không phải lỗi chưa cập nhật hình.
+
+## Viết code từng bước
+
+### Bước 1 — Tính độ dời từ mốc unwrapped
+
+Trong `neighbor_list.hpp`, thêm maximumDisplacement. Đầu hàm kiểm reference và particles có cùng kích thước; nếu không, trả infinity để bắt buộc dựng lại. Với mỗi hạt:
+
+```cpp title="include/neighbor_list.hpp — đo độ dời chưa bị wrap làm mất thông tin"
+const double displacement = pbc::length(pbc::subtract(system.particles[i].unwrapped, list.reference[i]));
+if (!std::isfinite(displacement)) {
+    return std::numeric_limits<double>::infinity();
+}
+maximum = std::max(maximum, displacement);
+```
+
+Đây là độ dài vector từ mốc tới vị trí hiện tại, không phải tổng chiều dài đường đi từng bước. Một hạt đi rồi quay lại có thể có độ dời nhỏ; điều đó không gây thiếu cặp ở thời điểm hiện tại nếu ta đã kiểm trước **mọi** lần tính lực dọc đường.
+
+Đừng thay unwrapped bằng position: hạt đi đúng một vòng hộp sẽ trở lại cùng position nhưng đã dời cả một cạnh. Cũng đừng dùng minimum image cho hiệu unwrapped: thao tác ấy lại xóa thông tin nhiều vòng mà ta vừa cố giữ.
+
+### Bước 2 — Xét cả những thay đổi không phải chuyển động
+
+Thêm needsRebuild. Nhánh đầu xử lý list chưa được dựng, số hạt thay đổi hoặc generation khác. Nhánh tiếp theo giữ lại cấu hình của lần dựng:
+
+```cpp title="include/neighbor_list.hpp — các lý do phải bỏ cache cũ"
+if (!list.ready || list.reference.size() != system.particles.size() || list.generation != generation) {
+    return true;
+}
+if (list.box.width != system.box.width || list.box.height != system.box.height || list.cutoff != system.parameters.cutoff || list.skin != skin) {
+    return true;
+}
+// Kiểm trước MỖI lần tính lực; đúng nửa skin cũng dựng lại để tránh ca sát ngưỡng.
+return maximumDisplacement(system, list) >= 0.5 * skin;
+```
+
+`generation` là số phiên bản của cách đánh chỉ số hạt. Khi thay hệ hoặc đổi thứ tự các phần tử, phía gọi phải tăng generation. Chỉ nhìn size không nhận ra việc đảo hai hạt. Thay mass không đổi hàng xóm, nhưng việc thay position phải cập nhật unwrapped tương ứng; không được sửa một biểu diễn rồi để biểu diễn kia đứng yên.
+
+So sánh cấu hình ở đây dùng giá trị đã được gán trực tiếp lúc dựng, nên không cần một tolerance để cố giữ cache khi người dùng vừa đổi tham số. Đổi hộp nằm ngoài mô phỏng động của lab; nếu bổ sung tính năng đó, cần tạo state hợp lệ rồi dựng lại, không chỉ đổi số trên hình vẽ.
+
+### Bước 3 — Đặt kiểm tra ở một cửa vào duy nhất
+
+Thêm ensureList sau needsRebuild. Trong checkpoint 4, builder vẫn là naive:
+
+```cpp title="include/neighbor_list.hpp — dùng lại nếu còn hiệu lực, dựng lại nếu cần"
+if (!validListParameters(system, skin) || !validState(system)) {
+    return false;
+}
+if (!needsRebuild(system, skin, generation, list)) {
+    return true;
+}
+return rebuildNaive(system, skin, generation, list);
+```
+
+Tại main, bỏ điều kiện “cứ edited là rebuild” của bài 2 và gọi ensureList sau input. Đừng tự cập nhật reference sau mỗi lần kiểm, vì làm vậy mốc luôn đuổi theo hạt và Dmax không bao giờ lớn lên. Chỉ saveReference của builder mới được đổi mốc.
+
+## Ghép các phần lại
+
+Build `project_44_checkpoint_4`. Lúc mới chạy, list chưa ready nên được dựng một lần. Mỗi lần kéo, program kiểm hiệu lực; nhiều lần dịch nhỏ có thể cùng dùng một list. Phím B vẫn cho phép dựng lại thủ công, còn đổi skin luôn làm cache cũ mất hiệu lực.
+
+Chuột cập nhật unwrapped bằng độ dịch chuột sau phép đổi về world space. Việc kéo là can thiệp ngoài mô phỏng và đặt vận tốc A về zero, nhưng không xóa mốc list trước khi so độ dời. Vì thế thí nghiệm tay vẫn kiểm được quy tắc đang học.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi ngưỡng thành `skin`. Hãy tính tay trường hợp A và B cùng tiến lại 0.3 với skin=0.4: từng hạt chưa chạm 0.4 nhưng khoảng cách cặp đã giảm 0.6. Khôi phục ngưỡng nửa skin.
+2. Gán reference bằng unwrapped sau mỗi lần gọi maximumDisplacement. Dịch nhiều bước nhỏ: rebuilds không tăng như dự kiến vì mốc bị kéo theo. Xóa việc cập nhật mốc ở đây và giữ nó trong saveReference.
+
+## Tự kiểm tra kết quả
+
+- Dưới skin/2, list được dùng lại; tại ngưỡng hoặc quá ngưỡng thì được dựng lại.
+- Dmax về zero sau lần dựng, không phải sau mọi frame.
+- Unwrapped đi nhiều vòng vẫn được phát hiện dù position gần như không đổi.
+- Thay số hạt, thứ tự/generation, hộp, cutoff hoặc skin đều làm cache mất hiệu lực.
+
+## Bài tập mở rộng
+
+Viết một ca hạt đi 0.1 rồi quay lại vị trí cũ, kiểm trước mỗi lần tính lực và giải thích vì sao không cần tích lũy tổng quãng đường. Sau đó [dùng cell grid để dựng danh sách](/projects/neighbor-list-skin/05-dung-danh-sach-bang-cell-grid): ta đã giảm số lần dựng, giờ giảm công việc trong mỗi lần dựng.

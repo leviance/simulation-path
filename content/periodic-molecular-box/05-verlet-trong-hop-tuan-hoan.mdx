@@ -1,0 +1,140 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy Velocity Verlet trong hộp tuần hoàn
+
+## Vấn đề cần giải quyết
+
+Checkpoint 4 tính được force nhưng vẫn để hạt đi thẳng. Ta sẽ thay bước ballistic bằng Velocity Verlet và mở rộng từ một cặp sang nhiều hạt. So với Project 42, thay đổi quan trọng nằm giữa hai nửa bước vận tốc: sau drift, **wrap position thay vì phản xạ ở tường**.
+
+Nếu chỉ thay phần vẽ để hạt xuất hiện ở mép đối diện mà vẫn đảo velocity trong solver, bạn đang nhìn một hộp có tường được trang trí như hộp tuần hoàn. Bài này phải kiểm cả state, không chỉ hình.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với lực ở trạng thái đầu và cuối bước, kick–drift–kick viết như sau:
+
+$$
+\mathbf v_{1/2}=\mathbf v_n+\frac{\mathbf F_n}{m}\frac{dt}{2},\qquad
+\mathbf x_{n+1}=\operatorname{wrap}(\mathbf x_n+\mathbf v_{1/2}dt),
+$$
+$$
+\mathbf v_{n+1}=\mathbf v_{1/2}+\frac{\mathbf F_{n+1}}{m}\frac{dt}{2}.
+$$
+
+`Fn+1` phải được tính từ các position **sau drift** bằng minimum image. Wrap không tạo xung lực, vì vậy không có nhánh đảo dấu velocity khi qua mép. Lực cặp có thể đổi velocity như bình thường; cần phân biệt điều đó với việc phản xạ do tường.
+
+Để đặt nhiều hạt an toàn, ta dùng lattice có spacing ít nhất 1.6σ. Hạt nằm ở tâm ô con, nên hàng đầu và hàng cuối cũng cách nhau một spacing qua biên. Nếu chỉ kiểm khoảng cách thường giữa các hạt bên trong, bạn có thể bỏ sót một cặp quá gần nằm ở hai mép.
+
+<InteractiveLab demo="periodic-molecular-box" mode="pbc-verlet" />
+
+Chạy preset 64 trước. Đọc E và tổng động lượng; sau đó thử một hạt tự do để nhìn việc vượt biên rõ hơn. Canvas và C++ đều giới hạn số bước mỗi frame; preset 1.000 hạt dùng để kiểm số cặp, không để hứa rằng mọi máy đều đạt realtime.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo hệ nhiều hạt có thể lặp lại
+
+Trong `makeGas`, số cột là căn bậc hai làm tròn lên. Chiều dài hộp đủ lớn để spacing không nhỏ hơn 1.6:
+
+```cpp title="include/dynamics.hpp — chọn kích thước hộp cho lattice"
+const int columns = int(std::ceil(std::sqrt(double(count))));
+const double side = std::max(12.0, 1.6 * columns);
+system.box = {side, side};
+```
+
+Vị trí được lấy ở tâm ô con. PRNG số nguyên tạo hai thành phần velocity từ seed 43; sau khi tạo hết hạt, ta trừ mean velocity **một lần**. Vì mọi mass bằng 1 trong các preset, trung bình cộng này cũng là vận tốc tâm khối lượng. Nếu mở rộng sang mass khác nhau, phải dùng tổng momentum chia tổng mass như Project 42.
+
+Không rescale vận tốc sau mỗi bước: làm vậy sẽ che lỗi lực và thay hệ đang mô phỏng. Bài này cũng không thêm thermostat.
+
+### Bước 2 — Làm nửa kick và drift trên bản candidate
+
+`verletStep` kiểm dt và gọi `evaluate(system)` để có force ban đầu. Khi kết quả hợp lệ, nó sao chép hệ rồi cập nhật candidate:
+
+```cpp title="include/dynamics.hpp — nửa kick và drift trong hộp tuần hoàn"
+System candidate = system;
+for (std::size_t i = 0; i < candidate.particles.size(); ++i) {
+    Particle& particle = candidate.particles[i];
+    particle.velocity = add(particle.velocity, scale(before.forces[i], 0.5 * dt / particle.mass));
+    const Vec2 displacement = scale(particle.velocity, dt);
+    particle.position = wrapPosition(add(particle.position, displacement), candidate.box);
+}
+```
+
+Velocity trong displacement đã nhận nửa kick. Nếu vô tình dùng velocity cũ, bạn không còn thực hiện Velocity Verlet đúng công thức. Và nếu sửa trực tiếp system rồi phát hiện cặp trùng sau drift, bạn sẽ mất trạng thái hợp lệ trước bước; candidate giúp tránh điều đó.
+
+### Bước 3 — Tính lực mới, hoàn tất kick rồi mới nhận bước
+
+```cpp title="include/dynamics.hpp — hoàn tất candidate trước khi commit"
+const Evaluation after = evaluate(candidate);
+if (!after.valid) {
+    return false;
+}
+for (std::size_t i = 0; i < candidate.particles.size(); ++i) {
+    Particle& particle = candidate.particles[i];
+    particle.velocity = add(particle.velocity, scale(after.forces[i], 0.5 * dt / particle.mass));
+    if (!finite(particle.velocity)) {
+        return false;
+    }
+}
+candidate.elapsed += dt;
+if (!std::isfinite(candidate.elapsed)) {
+    return false;
+}
+system = std::move(candidate);
+return true;
+```
+
+`std::move` ở đây chuyển dữ liệu candidate vào system sau khi đã kiểm xong, không phải một thủ thuật thay công thức vật lý. Bản dễ đọc này tính lực hai lần mỗi bước. Chưa cache lực cũ; ở N=1.000, mỗi lần có 499.500 cặp, nên riêng hai lần tính lực đã xét 999.000 cặp.
+
+### Bước 4 — Giữ cửa sổ phản hồi khi workload lớn
+
+Trong `main.cpp`, thời gian thực chỉ nạp accumulator với tốc độ playback 0.1 đơn vị mô phỏng mỗi giây. dt mặc định vẫn là 0.001. Mỗi frame tối đa 8 bước, hoặc 1 bước khi có 1.000 hạt. Nếu còn quá nhiều thời gian tồn, giữ phần dư nhỏ hơn dt và ghi phần bỏ qua vào `droppedTime`.
+
+```cpp title="src/main.cpp — đặt giới hạn công việc trước vòng cập nhật"
+int maximumSteps = 8;
+if (system.particles.size() >= 1000) {
+    maximumSteps = 1;
+}
+if (!paused) {
+    accumulator += std::min(elapsed, 0.1) * 0.1;
+    droppedTime += std::max(0.0, elapsed - 0.1) * 0.1;
+} else {
+    accumulator = 0.0;
+}
+```
+
+Vòng cập nhật ngay sau đoạn này chỉ chạy khi có đủ thời gian hoặc người dùng yêu cầu một bước, đồng thời `steps < maximumSteps`. Sau mỗi bước thành công tăng steps; cuối frame xử lý phần dư như sau:
+
+```cpp title="src/main.cpp — ghi nhận thời gian không mô phỏng được"
+if (accumulator >= fixedDt) {
+    const double remainder = std::fmod(accumulator, fixedDt);
+    droppedTime += accumulator - remainder;
+    accumulator = remainder;
+}
+```
+
+Không cộng thời gian tạm dừng vào accumulator. Nếu làm vậy, sau khi đọc số liệu rồi bấm chạy, chương trình sẽ cố mô phỏng cả khoảng thời gian bạn đang dừng để suy nghĩ.
+
+Đây là chấp nhận mô phỏng chạy chậm hơn thời gian thực, không phải tăng dt để đuổi kịp. Cách làm này cũng giải thích vì sao số liệu “dropped” phải hiện ra: người dùng cần biết khi giới hạn workload đã can thiệp vào tốc độ playback.
+
+## Ghép các phần lại
+
+Build `project_43_checkpoint_5`. Phím 1 chọn cặp qua biên; 2/3/4 chọn 64/144/1.000 hạt; B chọn một hạt tự do; D đổi dt. Chọn preset sẽ pause và xóa accumulator, nên hãy nhấn Space để chạy hoặc N để đi từng bước.
+
+Tiêu đề cửa sổ hiển thị E, độ lớn tổng momentum, dt và dropped time. E được tính bằng K+U tại cùng state. Phần hiển thị có tính lại lực để đo U; bởi vậy thời gian cả frame không chỉ là chi phí hai lần force evaluation trong Verlet.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ lại phép đảo vx của hộp tường ở Project 42. Với preset một hạt, theo dõi velocity khi qua mép: đổi dấu là bằng chứng solver vẫn phản xạ. Xóa phép đảo đó và kiểm lại.
+2. Bỏ lần `evaluate(candidate)` rồi dùng force cũ cho nửa kick cuối. Hình vẫn chạy nhưng sai số năng lượng thường lớn hơn. So cùng trạng thái đầu, cùng dt, cùng số bước rồi khôi phục lực mới.
+3. Sửa system trực tiếp trước khi kiểm lực mới. Tạo hai hạt ngoài cutoff đang lao về nhau đủ nhanh để trùng sau drift. Hàm báo lỗi nhưng position đã thay đổi; khôi phục candidate rồi xác nhận toàn bộ state được giữ nguyên khi bước bị từ chối.
+
+## Tự kiểm tra kết quả
+
+- Hệ một hạt tự do giữ nguyên velocity khi vượt biên.
+- Hệ nhiều hạt có tổng lực và biến thiên tổng momentum gần zero.
+- Bước lỗi không thay position, velocity hoặc thời gian.
+- Preset 1.000 đếm đúng 499.500 cặp mỗi lần đánh giá lực.
+- Máy chậm không gây vòng catch-up vô hạn; dropped time được báo rõ.
+
+## Bài tập mở rộng
+
+Chạy hai cặp giống nhau nhưng tịnh tiến một cặp sang bên kia mép. So quỹ đạo tương đối và E sau cùng số bước. Đừng so trực tiếp position đã wrap ở hai hệ khác gốc. Tiếp theo, [bài 6](/projects/periodic-molecular-box/06-ve-cac-ban-sao-tuan-hoan) sẽ làm các ô kề hiện ra để giải thích hình học này.

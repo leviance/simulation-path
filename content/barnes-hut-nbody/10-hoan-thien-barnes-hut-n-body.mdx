@@ -1,0 +1,165 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Barnes–Hut N-body
+
+## Vấn đề cần giải quyết
+
+Từng hàm đã có test, nhưng app hoàn chỉnh còn một nhóm lỗi lifecycle: đổi theta mà giữ bảng accuracy cũ, reset khi pointer vẫn bị capture, dùng tree của state trước để tính lực state sau, hoặc tính exact energy cho mọi body ở mọi frame rồi tự làm app chậm.
+
+Checkpoint 10 tổ chức lại vòng đời: input thay tham số, fixed step rebuild tree rồi tính lực, renderer chỉ đọc state, còn các thí nghiệm đắt tiền chạy theo lệnh rõ ràng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một physics step Barnes–Hut có thứ tự:
+
+1. Dựng Mass Octree từ positions hiện tại.
+2. Tính toàn bộ accelerations từ cùng tree và cùng body snapshot.
+3. Cập nhật velocity rồi position bằng fixed dt.
+4. Bỏ tree cũ; step sau dựng lại từ positions mới.
+
+Camera có lifecycle riêng và không được kích hoạt rebuild. Accuracy/scaling tables là snapshot của tham số tại lúc chạy; khi input đổi, UI phải xóa hoặc ghi rõ chúng đã cũ.
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-validation" />
+
+Chạy mô phỏng, pause, thay theta, chạy theta sweep/scaling study rồi reset. Readout phải giữ topology hợp lệ, pointer đã nhả và zero self-force contract.
+
+## Viết code từng bước
+
+### Bước 1 — Rebuild trước mỗi Barnes–Hut force pass
+
+```cpp title="src/main.cpp — fixed Barnes-Hut step"
+tree = lab::buildMassOctree(bodies);
+const std::vector<lab::Vec3> accelerations = lab::barnesHutAccelerations(
+    tree,
+    bodies,
+    theta,
+    gravitationalConstant,
+    softening
+);
+lab::integrateSymplecticEuler(bodies, accelerations, fixedDeltaSeconds);
+```
+
+Không body nào được update trước khi toàn bộ acceleration vector hoàn tất.
+
+### Bước 2 — Cache exact diagnostics và chỉ cập nhật khi cần
+
+Khởi tạo một snapshot có giới hạn và hai cờ lifecycle:
+
+```cpp title="src/main.cpp — diagnostics state"
+const std::size_t diagnosticCount = std::min<std::size_t>(512U, bodies.size());
+lab::SystemDiagnostics diagnostics = lab::systemDiagnostics(
+    std::span<const lab::Body>(bodies).first(diagnosticCount),
+    gravitationalConstant,
+    softening
+);
+bool diagnosticsStale = false;
+std::uint64_t lastDiagnosticsTicks = SDL_GetTicks();
+```
+
+Sau một physics step, đánh dấu snapshot cũ. Trong lúc chạy, phép tính được throttle tối đa bốn lần mỗi giây; khi pause, nó cập nhật ngay:
+
+```cpp title="src/main.cpp — bounded diagnostics lifecycle"
+if (bodiesChanged) {
+    diagnosticsStale = true;
+}
+
+const bool diagnosticsDue = currentTicks - lastDiagnosticsTicks >= 250U;
+if (diagnosticsStale && (paused || diagnosticsDue)) {
+    diagnostics = lab::systemDiagnostics(
+        std::span<const lab::Body>(bodies).first(diagnosticCount),
+        gravitationalConstant,
+        softening
+    );
+    diagnosticsStale = false;
+    lastDiagnosticsTicks = currentTicks;
+}
+```
+
+Title nói rõ diagnostics dùng tối đa 512 bodies. Quan trọng hơn, renderer đọc snapshot đã cache thay vì tự gọi exact potential energy O(N²) ở mọi frame. Nếu không tách lifecycle này, ta có thể làm app chậm rồi nhầm thủ phạm là Barnes–Hut.
+
+### Bước 3 — Tách validation thành các failure modes
+
+```cpp title="include/analysis.hpp — BarnesHutValidationReport"
+struct BarnesHutValidationReport {
+    bool topologyValid{};
+    bool finiteState{};
+    bool zeroSelfForce{};
+    bool thetaAccuracyAcceptable{};
+    bool workReduced{};
+};
+```
+
+Timing không nằm trong report correctness. Một máy chậm vẫn có thể tính đúng; một phép tính rất nhanh vẫn có thể sai.
+
+Validation còn đắt hơn diagnostics vì nó dựng thêm oracle và accuracy sample, nên final chỉ chạy lại khi mô phỏng đang pause:
+
+```cpp title="src/main.cpp — validation chỉ refresh khi pause"
+if (bodiesChanged) {
+    validationCurrent = false;
+}
+if (paused && !validationCurrent) {
+    validation = lab::validateBarnesHutExperiment(
+        bodies,
+        theta,
+        gravitationalConstant,
+        softening
+    );
+    validationCurrent = true;
+}
+```
+
+### Bước 4 — Nhả pointer capture ở mọi đường kết thúc
+
+```cpp title="src/main.cpp — cleanup capture"
+SDL_CaptureMouse(false);
+SDL_DestroyTexture(texture);
+SDL_DestroyRenderer(renderer);
+SDL_DestroyWindow(window);
+SDL_Quit();
+```
+
+Reset cũng gọi `SDL_CaptureMouse(false)` trước khi đưa camera và state về preset.
+
+## Ghép các phần lại
+
+```bash title="Terminal — configure toàn bộ targets"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+```
+
+```bash title="Terminal — build và test Debug"
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — build và test Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Target `project_31_final` là source hoàn chỉnh. Starter và checkpoint 1–10 vẫn là các chương trình độc lập, không phải đoạn code rời cần ghép tay.
+
+## Thử làm sai để hiểu đúng
+
+1. Reuse tree sau khi positions đổi. Aggregate và bounds mô tả frame cũ; force error tăng dù traversal code không đổi.
+2. Tính exact energy cho 2.048 bodies ở mọi physics substep. Profiling cho thấy diagnostics lấn át algorithm đang học.
+3. Gộp mọi check thành `valid`. Khi fail, bạn không biết phải nhìn self-force, topology, error hay finite state.
+
+## Tự kiểm tra kết quả
+
+- Reset tái tạo đúng body state từ seed và xóa kết quả study cũ.
+- Pointer capture được nhả khi mouse up, cancel, reset và thoát.
+- Tree rebuild sau mỗi physics state change, không rebuild chỉ vì camera đổi.
+- Full force pass hoàn tất trước integration.
+- Topology, finite state, zero self-force, theta accuracy và work reduction đều có check riêng.
+- Energy/momentum readout ghi rõ workload bị giới hạn.
+- Diagnostics không chạy lại theo camera frame; validation chỉ refresh khi pause.
+- Theta/scaling tables ghi cùng seed, softening và counts.
+- Starter, checkpoint 1–10 và final build độc lập.
+- CTest pass ở Debug/Release với timeout 20 giây.
+- Canvas có pause/reset, keyboard, DPR, reduced motion và mô tả thay thế.
+
+## Bài tập mở rộng
+
+Thêm preset hai galaxy va chạm và một tùy chọn dùng adaptive root padding. Giữ direct oracle trên target sample cố định, rồi xem distribution lệch mạnh làm error/work theo theta thay đổi ra sao.
+
+Project 32 sẽ giữ cùng N-body workload nhưng chuyển câu hỏi sang memory layout: Array of Structures và Structure of Arrays ảnh hưởng cache, iteration và khả năng xử lý một triệu particle như thế nào.

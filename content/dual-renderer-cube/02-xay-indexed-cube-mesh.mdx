@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xây indexed cube mesh
+
+## Vấn đề cần giải quyết
+
+Cube chỉ có tám góc hình học, nhưng ta muốn mỗi mặt mang một màu phẳng. Nếu một vertex ở góc được dùng chung cho ba mặt thì nó chỉ có thể giữ một `color`; GPU sẽ nội suy màu qua các mặt hoặc buộc shader phải biết thêm face ID. Với mục tiêu hiện tại, 24 vertices—bốn cho mỗi mặt—là lựa chọn dễ đọc hơn.
+
+Ta vẫn dùng indices: hai triangles trên cùng một mặt dùng lại bốn vertices thay vì ghi sáu vertices trùng lặp. Kết quả là 24 vertices, 36 indices và 12 triangles.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một vertex không chỉ là vị trí. Nó là một gói attributes tại một “đường nối” của bề mặt. Khi color hoặc normal thay đổi đột ngột ở face seam, cùng vị trí hình học có thể cần nhiều vertices.
+
+Mỗi mặt dùng pattern:
+
+```text
+v0 ───── v1
+│      ╱ │
+│    ╱   │      indices: 0,1,2  và  0,2,3
+│  ╱     │
+v3 ───── v2
+```
+
+<InteractiveLab demo="dual-renderer-cube" mode="indexed-mesh" />
+
+## Viết code từng bước
+
+### Bước 1 — Khóa vertex memory contract
+
+```cpp title="include/pipeline.hpp — GpuCubeVertex"
+struct GpuCubeVertex {
+    float positionX{};
+    float positionY{};
+    float positionZ{};
+    float red{};
+    float green{};
+    float blue{};
+};
+
+static_assert(sizeof(GpuCubeVertex) == sizeof(float) * 6U);
+static_assert(offsetof(GpuCubeVertex, positionX) == 0U);
+static_assert(offsetof(GpuCubeVertex, red) == sizeof(float) * 3U);
+```
+
+`offsetof(red)` mới là nguồn chuẩn của VAO về sau. Ta không rải magic number `12` vào code OpenGL.
+
+### Bước 2 — Viết mặt front theo CCW khi nhìn từ ngoài
+
+```cpp title="include/pipeline.hpp — bốn vertices của mặt front"
+GpuCubeVertex{-1, -1, 1, colorChannel(239), colorChannel(90), colorChannel(102)},
+    GpuCubeVertex{1, -1, 1, colorChannel(239), colorChannel(90), colorChannel(102)},
+    GpuCubeVertex{1, 1, 1, colorChannel(239), colorChannel(90), colorChannel(102)},
+    GpuCubeVertex{-1, 1, 1, colorChannel(239), colorChannel(90), colorChannel(102)},
+```
+
+Nhìn mặt `+Z` từ bên ngoài, thứ tự dưới-trái → dưới-phải → trên-phải → trên-trái là counter-clockwise. Năm mặt còn lại cũng được viết theo cùng quy ước nhìn từ phía ngoài cube.
+
+### Bước 3 — Kiểm mọi index trước khi có EBO
+
+```cpp title="include/pipeline.hpp — cubeIndicesAreValid"
+inline bool cubeIndicesAreValid() {
+    for (const std::uint32_t index : kCubeIndices) {
+        if (index >= kCubeVertices.size()) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+OpenGL không phải nơi đầu tiên ta phát hiện index 24 trỏ ra ngoài array 24 phần tử. Đây là invariant CPU có thể khóa bằng CTest.
+
+## Ghép các phần lại
+
+Checkpoint 2 chưa tạo VBO. Nó chỉ thêm hai `constexpr std::array` và báo số lượng trên title bar. Việc trì hoãn upload giúp ta phân biệt rõ “mesh data có đúng không?” với “GPU buffer có được bind đúng không?”.
+
+```bash title="Terminal — build checkpoint 2"
+cmake --build build --config Debug --target project_34_checkpoint_2
+```
+
+Trong debugger, mở `kCubeIndices` theo từng nhóm sáu. Mỗi nhóm chỉ được tham chiếu bốn vertices của đúng một face.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi index cuối của mặt front từ `3` thành `24`. CTest index bounds phải thất bại trước khi chạy GUI.
+2. Đảo `1` và `2` trong triangle đầu nhưng không đổi triangle sau. Hai nửa cùng mặt có winding trái dấu; culling về sau chỉ giữ một nửa.
+3. Ép cube về tám vertices nhưng vẫn muốn sáu màu mặt. Ghi ra giấy xem một góc phải mang ba màu khác nhau như thế nào.
+
+Hoàn tác từng lỗi trước thí nghiệm tiếp theo.
+
+## Tự kiểm tra kết quả
+
+- [ ] `GpuCubeVertex` có đúng sáu float và color offset bằng ba float.
+- [ ] Mesh có 24 vertices, 36 indices, 12 triangles.
+- [ ] Tất cả indices nhỏ hơn 24.
+- [ ] Mỗi nhóm sáu indices tạo hai triangles từ bốn vertices cùng màu.
+- [ ] Winding được định nghĩa khi nhìn từng mặt từ bên ngoài.
+
+Hãy dự đoán điều sẽ xảy ra khi culling bật nếu riêng mặt right bị đảo winding, rồi mới đọc bài culling sau này.
+
+## Bài tập mở rộng
+
+1. Tính dung lượng VBO/EBO theo byte.
+2. Thiết kế phiên bản tám vertices dùng face normal từ primitive ID và so trade-off.
+3. Thêm `normal xyz` vào vertex trên giấy, tính stride/color/normal offsets mới.
+
+Bài tiếp theo cho CPU renderer đọc trực tiếp hai array chuẩn này.

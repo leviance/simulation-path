@@ -1,0 +1,130 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm những cell có thể chứa hàng xóm
+
+## Bài toán cần giải quyết
+
+Grid đã sẵn sàng, nhưng mỗi query vẫn phải biết cần mở những cell nào. Vòng lặp 3×3 chỉ đúng trong một số cấu hình nhỏ và sẽ bỏ sót hàng xóm khi `radius` lớn hơn `cellSize`. Thay vì hard-code, ta tính hình chữ nhật bao quanh circle query rồi clamp nó vào biên của world.
+
+Ta lấy AABB của circle `position ± radius`, đổi hai góc thành **candidate cell range** rồi duyệt hình chữ nhật đã clamp. Mỗi cell cung cấp một đoạn CSR; particle indices trong đoạn chỉ mới là candidates.
+
+## Theo dõi một particle đi qua grid
+
+Với center $(x,y)$ và radius $r$:
+
+$$
+minCell = cell(x-r,y-r),\qquad maxCell = cell(x+r,y+r)
+$$
+
+Số cell được thăm là:
+
+$$
+(maxColumn-minColumn+1)(maxRow-minRow+1)
+$$
+
+Nếu radius 10 và cell size 8, một vị trí phù hợp có thể cần 4×4 cell. “Neighbor grid” không đồng nghĩa cố định 3×3.
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="candidate-cells" />
+
+Kéo particle qua ranh giới cell và đổi radius. Vùng vàng là candidate rectangle; circle bên trong mới là exact query. Ở mép world, rectangle được clamp mà không lặp cell.
+
+## Xây từng phần
+
+### Bước 1 — Tính vùng cell bằng cùng quy tắc ánh xạ tọa độ
+
+```cpp title="include/grid_math.hpp — candidateCellRange"
+inline CellRange candidateCellRange(
+    const GridSpec& spec,
+    Vec2 center,
+    float radius
+) {
+    const Vec2 minimum{center.x - radius, center.y - radius};
+    const Vec2 maximum{center.x + radius, center.y + radius};
+    const CellCoordinate minimumCell = cellCoordinate(spec, minimum);
+    const CellCoordinate maximumCell = cellCoordinate(spec, maximum);
+    return {
+        minimumCell.column,
+        maximumCell.column,
+        minimumCell.row,
+        maximumCell.row,
+    };
+}
+```
+
+Ta không viết một công thức clamp thứ hai. Cùng `cellCoordinate` xử lý interior, corner và maximum bound.
+
+### Bước 2 — Gắn đủ năm buffer cho shader tìm hàng xóm
+
+```cpp title="include/gpu_grid_engine.hpp — dispatchNeighbors bindings"
+neighborProgram_.use(gl);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, buffers_.positions);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1U, buffers_.cellCounts);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 2U, buffers_.cellOffsets);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 3U, buffers_.sortedIndices);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 4U, buffers_.neighborSummaries);
+```
+
+Query cần quay từ slot về position gốc, nên `sortedIndices` chứa index chứ không copy position. Summary ở binding 4 có một record riêng cho mỗi invocation.
+
+### Bước 3 — Duyệt đoạn CSR nhưng chưa vội kết luận là hàng xóm
+
+```glsl title="shaders/find_neighbors.comp — candidate traversal"
+for (int row = minimumCell.y; row <= maximumCell.y; ++row) {
+    for (int column = minimumCell.x; column <= maximumCell.x; ++column) {
+        uint cell = uint(row * uColumns + column);
+        uint begin = cellOffsets[cell];
+        uint end = begin + cellCounts[cell];
+        for (uint slot = begin; slot < end; ++slot) {
+            uint candidate = sortedIndices[slot];
+            if (candidate == particle) {
+                continue;
+            }
+            ++summary.visitedCandidates;
+        }
+    }
+}
+```
+
+Checkpoint 5 dừng ở `visitedCandidates`. Dừng có chủ ý giúp ta nhìn thấy broad-phase work trước khi exact circle test làm kết quả trông đúng.
+
+### Bước 4 — Cho mỗi particle tự thực hiện một truy vấn
+
+```cpp title="include/gpu_grid_engine.hpp — dispatchNeighbors launch"
+setGridUniforms(gl, neighborProgram_);
+gl.Uniform1f(neighborProgram_.uniform("uRadius"), radius_);
+gl.DispatchCompute(static_cast<GLuint>(ceilDiv(positions_.size(), kWorkgroupSize)), 1U, 1U);
+```
+
+Ta không dispatch theo cell. Mỗi particle sở hữu đúng một output summary, vì vậy neighbor pass không cần atomic ở output.
+
+## Chạy cả chuỗi xử lý
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_40_checkpoint_5 project_40_tests
+```
+
+Checkpoint này cần báo candidate work, chưa cần neighbor count đúng. Cell size quá nhỏ làm số cell visited tăng; cell size quá lớn làm candidates trong mỗi cell tăng. Đây là trade-off sẽ được đo ở bài 8.
+
+## Cố tình làm hỏng grid
+
+1. Viết cứng `row-1..row+1` rồi tăng bán kính lớn hơn kích thước cell. Bản CPU sẽ tìm thấy hàng xóm nằm trong cell mà GPU không bao giờ duyệt tới.
+2. Không clamp minimum ở corner. Signed row âm bị cast sang uint rất lớn rồi đọc ngoài SSBO.
+3. Dùng `end = offsets[cell+1]` cho cell cuối nhưng chỉ cấp C offsets. Lần đọc sentinel vượt buffer.
+4. Đếm self như candidate có thể chấp nhận cho work metric, nhưng quên loại self trước exact query sẽ làm nearest sai ở bài sau.
+
+## Tự nghiệm thu
+
+- [ ] Radius/cell size bất kỳ tạo range tổng quát, không hard-code 3×3.
+- [ ] Corner range không có row/column âm hoặc vượt grid.
+- [ ] Mỗi cell trong rectangle được thăm đúng một lần.
+- [ ] Mỗi CSR slot nằm trong `[offset,offset+count)`.
+- [ ] Candidate count không được trình bày như neighbor count.
+- [ ] Mỗi particle ghi một summary riêng, không cần output atomic.
+
+## Hướng mở rộng
+
+1. Ghi thêm `visitedCells` vào summary và so corner/interior particle.
+2. Cho world có cell cuối nhỏ hơn cell size rồi kiểm range sát maximum.
+3. Ước lượng candidate work từ occupancy trung bình và số cell visited, sau đó so với số thực.
+
+Bài 6 sẽ thêm phép kiểm tra khoảng cách chính xác và quy tắc chọn hàng xóm gần nhất có thể tái lập vào ngay vòng lặp ứng viên này.

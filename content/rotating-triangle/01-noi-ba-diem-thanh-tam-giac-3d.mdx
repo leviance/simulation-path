@@ -1,0 +1,194 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nối ba điểm thành tam giác 3D
+
+## Vấn đề cần giải quyết
+
+Starter của Project 12 đã có cửa sổ, framebuffer, `putPixel`, `drawLine`, streaming texture và toàn bộ phép chiếu một point từ Project 11. Khi chạy, bạn chỉ thấy lưới. Ta chưa xoay gì cả; việc đầu tiên là chứng minh ba vertex 3D có thể đi qua projection rồi tạo thành một tam giác nhìn thấy được.
+
+Điểm dễ sai nằm ở status. Mỗi vertex có thể visible, behind, before-near hoặc outside. Nếu A hợp lệ nhưng B ở sau camera, `B.screen` không phải pixel để đem nối cạnh. Vì vậy checkpoint đầu phải giữ kết quả projection của từng vertex và chỉ vẽ khi cả ba cùng hợp lệ.
+
+## Bắt đầu từ chương trình nào?
+
+Giải nén source của Project 12 rồi build target `project_12_starter` trước khi sửa code:
+
+```bash title="Terminal — kiểm tra starter"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_12_starter
+```
+
+Starter phải mở được cửa sổ 960×640 với nền lưới, nhưng chưa có tam giác. Nếu cửa sổ chưa xuất hiện, hãy dừng ở đây và sửa lỗi build/SDL trước; rotation không thể giải thích một lỗi khởi tạo renderer.
+
+Trong project này, `include/lab.hpp` giữ các kiểu dữ liệu và hàm toán không phụ thuộc SDL. `src/main.cpp` giữ window, event loop, framebuffer và phần vẽ. Ta sẽ thêm dữ liệu tam giác vào header trước, sau đó mới nối nó với render loop. Cách chia này cho phép CTest kiểm tra toán mà không cần mở cửa sổ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tam giác gồm ba point:
+
+$$
+T=(A,B,C)
+$$
+
+Sau projection, ta cần ba đoạn khép kín:
+
+$$
+AB,\quad BC,\quad CA
+$$
+
+Không phải `AB, AC, BC` theo thứ tự bất kỳ. Chuỗi A→B→C→A giúp phần render và winding ở những project sau cùng dùng một quy ước nhất quán.
+
+Ở cửa sổ 960×640, ba vertex mặc định phải rơi xấp xỉ tại A=(344,408), B=(593,381), C=(489,170). Đây không phải các hằng số để chép vào code; chúng là mốc kiểm tra. Nếu kết quả lệch rất xa, lỗi nằm trong projection hoặc kích thước framebuffer chứ chưa nằm ở `drawLine`.
+
+<InteractiveLab demo="rotation3d" mode="rotation-triangle" />
+
+Đổi **Trạng thái projection** qua bốn preset. Khi một vertex ra khỏi vùng nhìn, toàn bộ triangle biến mất và phần đọc số báo lý do. Đây là giới hạn có chủ ý; clipping từng cạnh sẽ được học ở Project 18.
+
+## Viết code từng bước
+
+### Bước 1 — Nhóm ba Vec3 nhưng chưa đổi chúng thành pixel
+
+Mở `include/lab.hpp`. `Triangle3` chỉ lưu dữ liệu hình học:
+
+```cpp title="include/lab.hpp — ba vertex trong world space"
+struct Triangle3 {
+    Vec3 a{};
+    Vec3 b{};
+    Vec3 c{};
+};
+```
+
+Triangle mặc định nằm quanh Z=6, đủ xa near plane và lệch depth một chút để khi xoay ta nhìn thấy chiều sâu:
+
+```cpp title="include/lab.hpp — tam giác khởi đầu trước camera"
+inline Triangle3 defaultWorldTriangle() {
+    return {
+        {-1.4, -0.9, 5.7},
+        {1.3, -0.7, 6.4},
+        {0.1, 1.6, 5.9},
+    };
+}
+```
+
+### Bước 2 — Giữ đủ ba ProjectionResult
+
+Không trả về ba `Vec2` rời, vì như vậy caller không còn biết vertex nào không hợp lệ:
+
+```cpp title="include/lab.hpp — kết quả chiếu của cả tam giác"
+struct TriangleProjection {
+    bool visible{};
+    ProjectionResult a{};
+    ProjectionResult b{};
+    ProjectionResult c{};
+};
+```
+
+Hàm gọi projection của Project 11 ba lần rồi tổng hợp status:
+
+```cpp title="include/lab.hpp — chỉ visible khi cả ba vertex visible"
+TriangleProjection result{};
+result.a = projectPerspective(triangle.a, camera, lens, nearPlane, width, height);
+result.b = projectPerspective(triangle.b, camera, lens, nearPlane, width, height);
+result.c = projectPerspective(triangle.c, camera, lens, nearPlane, width, height);
+result.visible = result.a.status == ProjectionStatus::Visible &&
+    result.b.status == ProjectionStatus::Visible &&
+    result.c.status == ProjectionStatus::Visible;
+return result;
+```
+
+### Bước 3 — Từ chối screen value không hợp lệ trước khi vẽ
+
+`drawProjectedTriangle` trả về ngay nếu thiếu một vertex:
+
+```cpp title="src/main.cpp — guard trước khi đọc screen"
+if (!projection.visible) {
+    return;
+}
+```
+
+Sau guard, ba screen point mới được làm tròn thành pixel:
+
+```cpp title="src/main.cpp — ba cạnh AB BC CA"
+drawLine(pixels, width, height, ax, ay, bx, by, rgba(255, 180, 84));
+drawLine(pixels, width, height, bx, by, cx, cy, rgba(83, 240, 174));
+drawLine(pixels, width, height, cx, cy, ax, ay, rgba(132, 169, 255));
+fillCircle(pixels, width, height, ax, ay, 7, rgba(255, 226, 108));
+fillCircle(pixels, width, height, bx, by, 7, rgba(247, 249, 255));
+fillCircle(pixels, width, height, cx, cy, 7, rgba(196, 132, 255));
+```
+
+### Bước 4 — Ghép projection vào render loop
+
+Mỗi frame dùng width/height hiện tại, nên resize tự cập nhật aspect ratio:
+
+```cpp title="src/main.cpp — project triangle trong frame hiện tại"
+const lab::TriangleProjection projection = lab::projectTriangle(
+    worldTriangle,
+    camera,
+    lens,
+    nearPlane,
+    width,
+    height
+);
+drawProjectedTriangle(pixels, width, height, projection);
+```
+
+### Bước 5 — Đưa framebuffer mới lên cửa sổ
+
+`drawProjectedTriangle` chỉ thay đổi mảng `pixels` trong RAM. Nếu dừng ở đó, cửa sổ vẫn giữ frame cũ. Cuối mỗi vòng lặp, hãy upload mảng này vào streaming texture, copy texture sang renderer rồi present:
+
+```cpp title="src/main.cpp — upload framebuffer và present"
+if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), width* int(sizeof(std::uint32_t)))) {
+    std::cerr << "SDL_UpdateTexture failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderClear(renderer)) {
+    std::cerr << "SDL_RenderClear failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderTexture(renderer, texture, nullptr, nullptr)) {
+    std::cerr << "SDL_RenderTexture failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderPresent(renderer)) {
+    std::cerr << "SDL_RenderPresent failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+```
+
+Pitch truyền cho `SDL_UpdateTexture` là số byte của một hàng: `width * sizeof(std::uint32_t)`. Nhầm `width` thành tổng số pixel hoặc bỏ `sizeof` thường tạo ra hình sọc, lệch hàng hoặc đọc quá vùng nhớ. Ba lời gọi render phía sau không tính lại geometry; chúng chỉ đưa frame vừa hoàn thành ra màn hình.
+
+## Ghép các phần lại
+
+Build đúng target của bài này:
+
+```bash title="Terminal — chạy kết quả cuối bài 1"
+cmake --build build --config Debug --target project_12_checkpoint_1
+```
+
+Bạn phải thấy ba marker A/B/C và ba cạnh màu khép kín trên nền lưới. Resize sang cửa sổ rộng hoặc gần vuông; hình vẫn dùng đúng perspective và không kéo méo theo aspect ratio.
+
+Checkpoint này chưa có local space hay rotation. Đó là điểm quan trọng: nếu tam giác sai ngay bây giờ, ta chỉ cần kiểm tra dữ liệu vertex, status và cách nối cạnh.
+
+## Thử làm sai để hiểu đúng
+
+1. Nối AB, BC nhưng quên CA. Hình trông như một góc mở, không còn là wireframe triangle khép kín.
+2. Bỏ guard `projection.visible`. Chọn preset behind; code bắt đầu đọc `screen` của kết quả chưa được tính hợp lệ.
+3. Gộp ba vertex thành pixel ngay trong `Triangle3`. Bài rotation sau sẽ xoay pixel 2D thay vì dữ liệu 3D.
+
+## Tự kiểm tra kết quả
+
+- Tam giác mặc định cho status visible ở cả A, B và C.
+- Ba cạnh đi theo thứ tự AB, BC, CA và dùng ba màu phân biệt.
+- Mỗi vertex có marker riêng để nhìn ra việc nối sai.
+- Một vertex không visible làm toàn bộ triangle không được vẽ.
+- Resize không làm thay đổi dữ liệu world-space trong `Triangle3`.
+
+## Bài tập mở rộng
+
+Thêm chữ A/B/C vào title bar cùng camera-space Z của từng vertex. Sau đó thử đổi riêng Z của B và dự đoán marker nào tiến gần tâm nhất trước khi chạy.
+
+Bài tiếp theo sẽ tách hình dạng khỏi vị trí bằng pivot và local space. Đây là bước bắt buộc trước khi nói “xoay quanh tâm tam giác”.

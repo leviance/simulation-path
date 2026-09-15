@@ -1,0 +1,115 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Link candidate program và khóa interface
+
+## Vấn đề cần giải quyết
+
+Hai shader có thể compile riêng nhưng vẫn không tạo được pipeline. Ví dụ vertex shader xuất `vec3 vColor`, fragment shader lại nhận `vec2 vColor`; cú pháp của từng file đều đúng, nhưng interface giữa hai stage không khớp. Đây là lỗi link, không phải lỗi compile.
+
+Ngay cả khi link pass, program thiếu `uMvp` cũng không vẽ đúng cube. Project 35 vì thế không coi một `GLuint` khác 0 là đủ; candidate phải đi kèm các location đã được kiểm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Candidate là một gói tạm thời:
+
+```text
+compiled vertex + compiled fragment
+                 ↓
+          link candidate program
+                 ↓
+       link status + program info log
+                 ↓
+        required uniform locations
+```
+
+Program đang active chưa xuất hiện trong sơ đồ. Ta đang xây một ứng viên độc lập; bài sau mới quyết định lúc nào nó được thay program cũ.
+
+<InteractiveLab demo="shader-hot-reload" mode="program-interface" />
+
+## Viết code từng bước
+
+### Bước 1 — Candidate giữ handle và location cùng generation
+
+```cpp title="include/shader_renderer.hpp — ProgramCandidate"
+struct ProgramCandidate {
+    GLuint program{};
+    GLint mvpLocation{-1};
+    GLint timeLocation{-1};
+    GLint resolutionLocation{-1};
+    GLint mouseLocation{-1};
+};
+```
+
+Uniform location không phải property cố định của tên `uMvp`. Nó thuộc một program link cụ thể, nên luôn nằm cạnh program handle.
+
+### Bước 2 — Link rồi hỏi status của program
+
+```cpp title="include/shader_renderer.hpp — link candidate"
+api.AttachShader(candidate.program, vertexShader);
+api.AttachShader(candidate.program, fragmentShader);
+api.LinkProgram(candidate.program);
+api.DeleteShader(fragmentShader);
+api.DeleteShader(vertexShader);
+
+GLint linked = GL_FALSE;
+api.GetProgramiv(candidate.program, GL_LINK_STATUS, &linked);
+if (linked != GL_TRUE) {
+    diagnostics = "Program link failed:\n" + programInfoLog(api, candidate.program);
+    destroyProgramCandidate(api, candidate);
+    return false;
+}
+```
+
+Sau link, shader objects đã có thể xóa; program giữ executable đã link. Nếu link fail, candidate program cũng phải xóa.
+
+### Bước 3 — Chặn program thiếu contract bắt buộc
+
+```cpp title="include/shader_renderer.hpp — kiểm uMvp"
+candidate.mvpLocation = api.GetUniformLocation(candidate.program, "uMvp");
+candidate.timeLocation = api.GetUniformLocation(candidate.program, "uTime");
+candidate.resolutionLocation = api.GetUniformLocation(candidate.program, "uResolution");
+candidate.mouseLocation = api.GetUniformLocation(candidate.program, "uMouse");
+if (candidate.mvpLocation < 0) {
+    diagnostics = "Linked program does not expose required uniform uMvp.";
+    destroyProgramCandidate(api, candidate);
+    return false;
+}
+```
+
+Ở checkpoint 3 chỉ `uMvp` là bắt buộc. Ba live uniforms được truy vấn sẵn nhưng có thể là `-1` cho tới bài 6.
+
+## Ghép các phần lại
+
+Build checkpoint 3 rồi đổi fragment input `vColor` thành `vColour` nhưng không sửa vertex output:
+
+```bash title="Terminal — build candidate checkpoint"
+cmake --build build --config Debug --target project_35_checkpoint_3
+```
+
+Hai file compile được, nhưng program link thất bại. Khôi phục tên varying, sau đó xóa việc dùng `uMvp` trong vertex shader: compiler có thể optimize uniform khỏi program và contract check phải chặn candidate.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ kiểm `candidate.program != 0`. `glCreateProgram` thành công không nói gì về link status.
+2. Mang `mvpLocation` của program trước sang candidate. Integer tình cờ giống nhau không biến nó thành contract hợp lệ.
+3. Không xóa candidate khi thiếu `uMvp`. Mỗi lần thử source thiếu uniform lại rò một program.
+
+Khôi phục source và xác nhận cube xuất hiện trước bài 4.
+
+## Tự kiểm tra kết quả
+
+- [ ] Compile error và link error có diagnostics khác nhau.
+- [ ] Candidate chỉ sống tiếp khi `GL_LINK_STATUS` pass.
+- [ ] Shader objects được xóa sau link attempt.
+- [ ] `uMvp` được truy vấn từ đúng candidate program.
+- [ ] Candidate thiếu contract bị xóa hoàn toàn.
+
+Hãy giải thích vì sao một uniform được khai báo nhưng không dùng có thể trả location `-1` sau link.
+
+## Bài tập mở rộng
+
+1. Đổi type của `vLocalPosition` ở một stage để tạo link error khác.
+2. Thêm attribute contract check cho location 0/1.
+3. Lưu cả warning log của program link mà không biến warning thành failure.
+
+Bài tiếp theo mới cho F5 đổi program trong lúc cube đang chạy.

@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Viết fragment shader procedural
+
+## Vấn đề cần giải quyết
+
+Hạ tầng hot reload đã xong, nhưng nếu chỉ đổi một `vec3` màu thì ta chưa tận dụng được khả năng quan sát của shader lab. Bài này tạo màu từ dữ liệu có sẵn thay vì texture: local position tạo hình, time làm hình chuyển động, resolution/mouse thêm tương tác theo screen space.
+
+Ta không viết tất cả trong một biểu thức dài. Hiệu ứng được ghép từ các biến trung gian có thể sửa, Save và dự đoán riêng: `p`, `rings`, `mouseGlow`, `cold`, `hot`, `color`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với $p=(x,y)$ lấy từ local position của cube:
+
+$$
+r = \lVert p \rVert, \qquad
+bands = \frac{1 + \cos(18r - 4t)}{2}
+$$
+
+`bands` luôn nằm trong [0,1], nên dùng trực tiếp làm hệ số `mix(cold, hot, bands)`. Thành phần `-4t` dịch pha theo thời gian; nó không di chuyển geometry.
+
+<InteractiveLab demo="shader-hot-reload" mode="procedural-shader" />
+
+## Viết code từng bước
+
+### Bước 1 — Biến khoảng cách thành dải đồng tâm
+
+```glsl title="shaders/lab.frag — rings theo local position và time"
+vec2 p = vLocalPosition.xy;
+float rings = 0.5 + 0.5 * cos(length(p) * 18.0 - uTime * 4.0);
+```
+
+Hãy đổi 18 thành 6 rồi Save: vòng thưa ra. Đổi hệ số time từ 4 thành -4: hướng chuyển pha đảo lại. Hot reload giúp mỗi giả thuyết chỉ mất một lần Save.
+
+### Bước 2 — Đưa fragment và mouse về cùng UV
+
+```glsl title="shaders/lab.frag — mouse glow"
+vec2 safeResolution = max(uResolution, vec2(1.0));
+vec2 mouseUv = uMouse / safeResolution;
+vec2 fragmentUv = gl_FragCoord.xy / safeResolution;
+float mouseGlow = max(0.0, 1.0 - distance(fragmentUv, mouseUv) * 5.0);
+```
+
+`safeResolution` tránh chia 0 trong frame resize bất thường. Hai điểm cùng chia cho một resolution nên `distance` có đơn vị UV.
+
+### Bước 3 — Đổi scalar thành palette có chiều sâu mặt
+
+```glsl title="shaders/lab.frag — palette và output"
+vec3 cold = vec3(0.08, 0.18, 0.42);
+vec3 hot = vec3(1.0, 0.42, 0.18);
+vec3 color = mix(cold, hot, rings) * (0.55 + 0.45 * vColor);
+color += vec3(0.10, 0.16, 0.20) * mouseGlow;
+fragColor = vec4(color, 1.0);
+```
+
+Vertex color chỉ modulation từ 0,55 đến 1,0. Nhờ đó rings vẫn là hiệu ứng chính nhưng sáu mặt cube không mất hoàn toàn dấu hiệu orientation.
+
+### Bước 4 — C++ chỉ gửi dữ liệu, GLSL quyết định màu
+
+Phần procedural không cần thêm nhánh `if` hay công thức tạo màu ở CPU. Trước hết, vị trí chuột từ SDL phải được đổi từ window space sang framebuffer space. Trục `y` cũng được lật vì SDL đo từ mép trên còn `gl_FragCoord` đo từ mép dưới:
+
+```cpp title="src/main.cpp — đổi mouse sang framebuffer space"
+scene.mouseX = mouseWindowX * float(framebufferWidth) / float(windowWidth);
+scene.mouseY = float(framebufferHeight) - mouseWindowY * float(framebufferHeight) / float(windowHeight);
+```
+
+Sau đó C++ gửi bốn giá trị đầu vào qua các uniform; shader đang active dùng chúng để tô mọi fragment:
+
+```cpp title="include/shader_renderer.hpp — cập nhật uniform trước draw call"
+api.Uniform1f(activeProgram.timeLocation, scene.elapsedSeconds);
+api.Uniform2f(activeProgram.resolutionLocation, float(framebufferWidth), float(framebufferHeight));
+api.Uniform2f(activeProgram.mouseLocation, scene.mouseX, scene.mouseY);
+```
+
+Ba lệnh này phải chạy sau `UseProgram(activeProgram.program)` và trước `DrawElements`. `location` thuộc về đúng program đã link; vì vậy khi hot reload thành công, candidate mới phải mang theo bộ location mới thay vì tái sử dụng location của program cũ.
+
+## Ghép các phần lại
+
+Build checkpoint 7 và giữ app chạy trong lúc sửa `lab.frag`:
+
+```bash title="Terminal — build procedural checkpoint"
+cmake --build build --config Debug --target project_35_checkpoint_7
+```
+
+Thử lần lượt solid color, `vec3(uv, 0.35)`, time pulse rồi quay lại rings. Mỗi lần chỉ đổi một đoạn và dự đoán hình trước khi Save; đừng chỉnh nhiều hằng số cùng lúc rồi chỉ kết luận “trông đẹp hơn”.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `0.5 + 0.5 *` quanh cosine. `rings` sang [-1,1], làm màu có channel âm trước khi framebuffer clamp.
+2. Dùng `vLocalPosition` cho mouse distance nhưng `uMouse` vẫn ở screen pixels. Hai đại lượng khác hệ nên glow vô nghĩa.
+3. Chia chỉ `gl_FragCoord` cho resolution. Mouse và fragment không còn cùng đơn vị.
+
+Hoàn tác sau từng thí nghiệm, dùng Canvas preset để đối chiếu trực giác.
+
+## Tự kiểm tra kết quả
+
+- [ ] Rings đi từ `length(p)` chứ không phụ thuộc triangle index.
+- [ ] Time chỉ dịch pha, không compile lại program.
+- [ ] Palette nhận hệ số trong [0,1].
+- [ ] Mouse và fragment cùng normalized coordinate space.
+- [ ] Vertex color vẫn giúp đọc orientation sáu mặt.
+- [ ] Source lỗi bất kỳ vẫn giữ procedural image last-good.
+
+Hãy giải thích vì sao rings trên mỗi mặt không nhất thiết nối liền qua cạnh cube: `vLocalPosition.xy` chiếu các mặt khác nhau lên cùng hai thành phần local.
+
+## Bài tập mở rộng
+
+1. Chọn hai component khác nhau của local position theo normal mặt.
+2. Dùng `smoothstep` làm biên vòng sắc hơn rồi giải thích hai ngưỡng.
+3. Thêm palette thứ hai chọn bằng uniform nhưng không tạo shader variant mới.
+
+Bài cuối đóng validation, failure checklist và toàn bộ source chạy được.

@@ -1,0 +1,188 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biên dịch shader đầu tiên
+
+## Vấn đề cần giải quyết
+
+Compiler C++ không đọc GLSL nằm trong string. Một chương trình có thể build hoàn toàn sạch nhưng thất bại lúc chạy vì thiếu dấu chấm phẩy trong vertex shader, interface giữa hai stage không khớp hoặc driver không chấp nhận version đã yêu cầu.
+
+Vì vậy checkpoint 2 chỉ làm một việc: biến hai source strings thành shader program có diagnostics đáng tin cậy. Title bar nói “program linked”; chưa có draw call và đó là chủ ý.
+
+## Hiểu ý tưởng trước khi viết code
+
+- **Compile** áp dụng cho từng shader object. Nó kiểm source của vertex hoặc fragment stage.
+- **Link** áp dụng cho program. Nó kiểm các stage có ghép được với nhau hay không.
+
+Nếu vertex shader ghi `out vec3 vColor` còn fragment shader đòi `in vec2 vColor`, cả hai có thể compile riêng nhưng program link thất bại.
+
+<InteractiveLab demo="cpu-gpu-triangle" mode="shader-program" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết trọn cặp shader trước khi đụng tới API compile
+
+```glsl title="Vertex shader — input, transform và varying"
+#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec3 aColor;
+
+uniform float uAngle;
+uniform float uScale;
+uniform vec2 uTranslation;
+out vec3 vColor;
+
+void main() {
+    float cosine = cos(uAngle);
+    float sine = sin(uAngle);
+    vec2 rotated = vec2(
+        aPosition.x * cosine - aPosition.y * sine,
+        aPosition.x * sine + aPosition.y * cosine
+    );
+    vec2 ndc = rotated * uScale + uTranslation;
+    gl_Position = vec4(ndc, 0.0, 1.0);
+    vColor = aColor;
+}
+```
+
+`layout(location=...)` khóa interface với VAO sẽ viết ở bài sau. Uniforms là state của một draw call; `vColor` là dữ liệu chuyển sang rasterizer rồi fragment shader. Ở checkpoint này chưa có vertex nào được gửi vào, nhưng shader vẫn phải hoàn chỉnh để compiler kiểm được toàn bộ cú pháp.
+
+Fragment shader nhận đúng `vec3` mà vertex shader xuất ra. `uSmoothColor` cho phép những bài sau dùng lại cùng program để chuyển giữa màu cố định và màu nội suy:
+
+```glsl title="Fragment shader — chọn solid hoặc interpolated color"
+#version 330 core
+in vec3 vColor;
+uniform int uSmoothColor;
+out vec4 fragmentColor;
+
+void main() {
+    vec3 solidColor = vec3(0.38, 0.68, 0.94);
+    vec3 selectedColor = solidColor;
+    if (uSmoothColor != 0) {
+        selectedColor = vColor;
+    }
+    fragmentColor = vec4(selectedColor, 1.0);
+}
+```
+
+Đừng rút gọn phép chọn này thành một biểu thức khó đọc. Mục tiêu của bài là để người học nhìn thấy rõ dữ liệu nào đi vào fragment shader và giá trị nào được ghi ra framebuffer.
+
+### Bước 2 — Đọc info log đầy đủ
+
+Driver cho biết độ dài log trước. Ta cấp đúng số ký tự, gọi `GetShaderInfoLog`, rồi biến buffer kết thúc bằng null thành `std::string`:
+
+```cpp title="include/gpu_renderer.hpp — shaderInfoLog"
+inline std::string shaderInfoLog(GlApi& api, GLuint shader) {
+    GLint length = 0;
+    api.GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+    if (length <= 1) {
+        return {};
+    }
+    std::vector<GLchar> characters(std::size_t(length), '\0');
+    api.GetShaderInfoLog(shader, length, nullptr, characters.data());
+    return std::string(characters.data());
+}
+```
+
+Không dùng một buffer 512 byte cố định rồi hy vọng log vừa đủ. Một lỗi shader dài có thể bị cắt đúng chỗ chứa nguyên nhân.
+
+### Bước 3 — Compile một stage và thu dọn ngay khi lỗi
+
+```cpp title="include/gpu_renderer.hpp — compileShader"
+inline GLuint compileShader(
+    GlApi& api,
+    GLenum shaderType,
+    const char* source,
+    const char* stageName,
+    std::string& diagnostics
+) {
+    const GLuint shader = api.CreateShader(shaderType);
+    if (shader == 0U) {
+        diagnostics = std::string(stageName) + ": glCreateShader returned 0";
+        return 0U;
+    }
+    api.ShaderSource(shader, 1, &source, nullptr);
+    api.CompileShader(shader);
+    GLint compiled = GL_FALSE;
+    api.GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (compiled == GL_TRUE) {
+        return shader;
+    }
+    diagnostics = std::string(stageName) + " compile failed:\n" + shaderInfoLog(api, shader);
+    api.DeleteShader(shader);
+    return 0U;
+}
+```
+
+`0` là tín hiệu thất bại duy nhất mà caller cần xử lý. Hàm đã tự xóa shader lỗi, vì vậy phía gọi không phải đoán object nào còn sống.
+
+### Bước 4 — Link program và xử lý đủ mọi đường thoát
+
+```cpp title="include/gpu_renderer.hpp — link program"
+const GLuint program = api.CreateProgram();
+if (program == 0U) {
+    diagnostics = "glCreateProgram returned 0";
+    api.DeleteShader(vertexShader);
+    api.DeleteShader(fragmentShader);
+    return 0U;
+}
+api.AttachShader(program, vertexShader);
+api.AttachShader(program, fragmentShader);
+api.LinkProgram(program);
+api.DeleteShader(vertexShader);
+api.DeleteShader(fragmentShader);
+
+GLint linked = GL_FALSE;
+api.GetProgramiv(program, GL_LINK_STATUS, &linked);
+if (linked == GL_TRUE) {
+    diagnostics.clear();
+    return program;
+}
+diagnostics = "program link failed:\n" + programInfoLog(api, program);
+api.DeleteProgram(program);
+return 0U;
+```
+
+Sau khi `LinkProgram` kết thúc, hai shader object không còn cần thiết nên được xóa ở cả trường hợp link thành công lẫn thất bại. Program lỗi cũng phải bị xóa; nếu không, mỗi lần thử sửa shader lại rò thêm một object.
+
+### Bước 5 — Kiểm uniform locations một lần
+
+```cpp title="include/gpu_renderer.hpp — uniform locations"
+angleLocation = api.GetUniformLocation(program, "uAngle");
+scaleLocation = api.GetUniformLocation(program, "uScale");
+translationLocation = api.GetUniformLocation(program, "uTranslation");
+smoothColorLocation = api.GetUniformLocation(program, "uSmoothColor");
+```
+
+Location `-1` nghĩa là uniform không tồn tại hoặc bị optimizer loại vì không dùng. Checkpoint coi thiếu bất kỳ location bắt buộc nào là lỗi contract.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 2"
+cmake --build build --config Debug --target project_33_checkpoint_2
+```
+
+Chạy executable. Cửa sổ vẫn chỉ có hai vùng clear, nhưng terminal phải in `Triangle shader program linked successfully.`. Ta đã xác nhận shader source trước khi VBO/VAO xuất hiện.
+
+## Thử làm sai để hiểu đúng
+
+1. Xóa dấu `;` sau `out vec3 vColor`. Log phải ghi rõ vertex shader compile failed.
+2. Đổi fragment input thành `vec2`. Hai stage compile nhưng link log phải báo interface mismatch.
+3. Bỏ kiểm `GL_LINK_STATUS` rồi gọi `glUseProgram` với program lỗi. Màn hình trống nhưng nguyên nhân bị giấu.
+4. Chỉ in log ở Debug. GLSL compile ở runtime nên Release cũng cần diagnostics.
+
+## Tự kiểm tra kết quả
+
+- [ ] Mỗi shader được compile và kiểm status độc lập.
+- [ ] Compile failure có stage name cùng info log.
+- [ ] Program chỉ tồn tại sau link thành công.
+- [ ] Shader objects được xóa sau link.
+- [ ] Bốn uniform locations đều hợp lệ.
+- [ ] Checkpoint 2 chưa gọi `glDrawArrays`.
+
+## Bài tập mở rộng
+
+1. Thêm một dòng source number vào diagnostics để biết stage nào đang được compile.
+2. Tạo cố ý một varying không được fragment shader dùng và xem optimizer xử lý ra sao.
+3. In `GL_SHADING_LANGUAGE_VERSION` cạnh `GL_VERSION` sau khi thêm function pointer tương ứng.
+
+Bài sau sẽ đưa ba vertex vào VBO, mô tả chúng bằng VAO và thực hiện draw call GPU đầu tiên.

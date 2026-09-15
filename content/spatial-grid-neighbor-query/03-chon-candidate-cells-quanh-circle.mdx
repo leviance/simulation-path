@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn candidate cells quanh circle
+
+## Vấn đề cần giải quyết
+
+Ta đã biết particle nằm ở bucket nào, nhưng chưa biết query phải mở bucket nào. Kiểm từng cell xem nó có giao với circle hay không sẽ lại tạo một vòng quét toàn grid. Cách đơn giản hơn là lấy hình chữ nhật nhỏ nhất bao circle rồi đổi hai góc của hình chữ nhật thành một dải cell.
+
+AABB phải tạo một dải **conservative** gồm các candidate cells: dải được phép chứa cell không có hit, nhưng tuyệt đối không được bỏ cell có thể chứa hit. Exact circle test sẽ xử lý false positive ở bài sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Circle tâm `(cx,cy)`, bán kính `r` có AABB:
+
+$$
+[cx-r,cx+r]\times[cy-r,cy+r]
+$$
+
+Ta floor bốn biên thành `minimumColumn`, `maximumColumn`, `minimumRow`, `maximumRow`, sau đó clamp vào grid. Hai vòng lặp inclusive thăm đúng:
+
+$$
+(maxColumn-minColumn+1)(maxRow-minRow+1)
+$$
+
+cells, không trùng cell nào.
+
+<InteractiveLab demo="spatial-grid-neighbor-query" mode="grid-candidates" />
+
+Các ô xanh là candidate cells. Kéo circle qua giữa world rồi tới góc dưới trái: range bị cắt ở row/column zero nhưng vẫn bao hết phần circle nằm trong world.
+
+## Viết code từng bước
+
+### Bước 1 — GridCellRange dùng biên inclusive
+
+```cpp title="include/lab.hpp — dải cell mà hai vòng lặp sẽ thăm"
+struct GridCellRange {
+    int minimumColumn{};
+    int maximumColumn{};
+    int minimumRow{};
+    int maximumRow{};
+};
+```
+
+Tên `minimum/maximum` nói rõ loop có cả hai đầu; tránh nhầm với half-open range thường dùng cho vector.
+
+### Bước 2 — Lấy AABB của circle
+
+```cpp title="include/lab.hpp — bốn biên world-space của query"
+const double queryMinimumX = query.center.x - query.radius;
+const double queryMaximumX = query.center.x + query.radius;
+const double queryMinimumY = query.center.y - query.radius;
+const double queryMaximumY = query.center.y + query.radius;
+```
+
+Đây chỉ là candidate broad phase. AABB không thay thế circle.
+
+### Bước 3 — Loại query hoàn toàn ngoài world trước khi clamp
+
+```cpp title="include/lab.hpp — overlap test trước khi tạo range"
+if (queryMaximumX < bounds.minimum.x || queryMinimumX > bounds.maximum.x || queryMaximumY < bounds.minimum.y || queryMinimumY > bounds.maximum.y) {
+    return false;
+}
+```
+
+Nếu clamp ngay từ đầu, một circle nằm hoàn toàn ngoài world có thể bị ép về cell biên và tạo candidates giả.
+
+### Bước 4 — Floor và clamp từng biên
+
+```cpp title="include/lab.hpp — cell range hợp lệ ở cả bốn mép"
+range.minimumColumn = std::clamp(rawMinimumColumn, 0, grid.columns - 1);
+range.maximumColumn = std::clamp(rawMaximumColumn, 0, grid.columns - 1);
+range.minimumRow = std::clamp(rawMinimumRow, 0, grid.rows - 1);
+range.maximumRow = std::clamp(rawMaximumRow, 0, grid.rows - 1);
+```
+
+Không cần tập `visited` để chống duplicate: mỗi cặp `(row,column)` chỉ xuất hiện một lần trong rectangle traversal.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint candidate cells"
+cmake --build build --config Debug --target project_28_checkpoint_3
+```
+
+Di chuyển query ra bốn góc. Ô xanh không được vượt world, title vẫn báo grid hợp lệ và ứng dụng không truy cập bucket ngoài mảng.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng AABB như kết quả cuối. Các particle ở góc hình chữ nhật bị nhận dù nằm ngoài circle; bài sau phải exact filter.
+2. Clamp trước overlap test. Đặt circle hoàn toàn ngoài bounds trong unit test và thấy cell biên vẫn bị thăm; khôi phục thứ tự.
+3. Viết loop `< maximumColumn`. Cột cuối có thể chứa hit nhưng bị bỏ; dùng `<=` vì range inclusive.
+
+## Tự kiểm tra kết quả
+
+- Query giữa world tạo rectangle cell bao trọn circle.
+- Query ở góc không sinh row/column âm.
+- Query ở maximum boundary không sinh index bằng columns hoặc rows.
+- Query hoàn toàn ngoài world trả range rỗng.
+- `visitedCells` theo công thức width×height của range.
+- Không cell nào được thăm hai lần.
+
+## Bài tập mở rộng
+
+Hiển thị `minimumColumn..maximumColumn` và `minimumRow..maximumRow` trong title. Tăng radius qua nhiều cellSize để dự đoán visitedCells trước khi nhìn kết quả.
+
+Bài tiếp theo mở các bucket trong range, đếm candidate và dùng circle test để tìm hàng xóm thật.

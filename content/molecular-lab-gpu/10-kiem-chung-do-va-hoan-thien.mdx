@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng, đo chi phí và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Ta đã có đường tính toán đầy đủ, nhưng 'không crash' chưa phải là xong. Bài cuối phân biệt ba lớp kiểm chứng: tests thuần không cần GPU; đối chiếu shader trên ca nhỏ; và đo chi phí trên đúng máy đang chạy.
+
+Bạn không cần tự ghép các đoạn code rời. [ZIP đầy đủ Project 45](/downloads/project-45-molecular-lab-gpu.zip) có starter, 10 checkpoint, final, mọi shader, tests và README. Phần **mã chạy được sau bài** ở cuối trang cho xem source hoàn chỉnh, không chỉ đoạn minh họa.
+
+## Hiểu ý tưởng trước khi viết code
+
+Không yêu cầu CPU và GPU giống nhau từng bit. GPU dùng float, thứ tự cộng có thể khác do atomic append vào bucket. Điều kiện so sánh hiện dùng:
+
+$$|a-b|\le 0.002+0.002|b|.$$
+
+Tolerance này dành cho các ca kiểm nhỏ của lab, không phải độ chính xác vật lý được bảo đảm ở mọi N. Kiểm force và U trên chính input position float; kiểm thêm một bước Verlet và reduction để tránh việc hai lỗi triệt tiêu nhau trong một số đo tổng.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-10" />
+
+Bấm từng pha, hủy trước commit, rồi đối chiếu lực. Chọn preset trong bảng memory không mở GPU job. Kiểm thử desktop của website và chạy native là hai công việc riêng.
+
+## Viết code từng bước
+
+### Bước 1 — Chạy tests thuần ở cả Debug và Release
+
+`tests/tests.cpp` dùng hàm check có hiệu lực cả khi NDEBUG bật, không dùng assert. Các tests chỉ tạo tối đa 257 hạt; phép tính budget cho 5 triệu chỉ là số học.
+
+```bash title="Terminal Windows — build final và kiểm CPU có timeout"
+cmake -S . -B build -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Trên Linux với Ninja/Make, tạo riêng thư mục Debug/Release bằng `-DCMAKE_BUILD_TYPE=...`; executable không có thư mục con `Debug` hay đuôi `.exe`. CMake tối thiểu 3.24, C++20, SDL khóa 3.4.8. Nếu cần toàn bộ checkpoint, thêm `-DBUILD_CHECKPOINTS=ON`; mặc định chỉ build final và tests.
+
+### Bước 2 — Kiểm shader bằng input nhỏ
+
+Đường readback bị giới hạn rõ ràng:
+
+```cpp title="include/gpu_engine.hpp — đoạn đang thêm"
+std::vector<Float4> readParticles(lab::GlApi& gl, GLuint buffer) const {
+    if (busy() || !ready || storage.plan.count > 1024) {
+        throw std::runtime_error("Readback is only allowed for an idle, small validation case.");
+    }
+    std::vector<Float4> result(storage.plan.count);
+    gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(result.size() * sizeof(Float4)), result.data());
+    return result;
+}
+```
+
+Sau Initialize và mỗi trong ba bước, `validateForces` so Fx/Fy/U_i với oracle double. `validateDiagnostics` cộng lại K/U/P bằng CPU. `validateStep` dự đoán một bước từ position/velocity trước bước, rồi so bank GPU đã commit; không chỉ kiểm force trên một state sai.
+
+```cpp title="include/molecular_math.hpp — đoạn đang thêm"
+inline bool closeEnough(double actual, double expected) {
+    return std::isfinite(actual) && std::abs(actual - expected) <= 0.002 + 0.002 * std::abs(expected);
+}
+```
+
+```bash title="Terminal Windows — GPU verification hữu hạn, không chạy preset lớn"
+.\build\Release\project_45_final.exe --verify-gpu
+.\build\Release\project_45_final.exe --verify-gpu --tail-case
+.\build\Release\project_45_final.exe --verify-gpu --rebuild-case
+```
+
+Ba lệnh chỉ dùng N=64 và N=257, deadline nội bộ 15 giây mỗi ca, context ẩn và exit code rõ ràng. Ca 257 kiểm workgroup đuôi và reduction nhiều cấp. Ca `--rebuild-case` cho một hạt đi khoảng 0.08 mỗi bước, buộc D vượt skin/2 ở bước thứ ba; verifier yêu cầu grid thực sự được dựng lại và force vẫn khớp oracle. Nếu driver không tạo được OpenGL 4.3, đó là **chưa chạy được kiểm GPU**, không phải test pass. Khi tự động hóa, luôn đặt thêm timeout process bên ngoài khoảng 25 giây để phủ cả tạo/hủy context.
+
+### Bước 3 — Đo hữu hạn và ghi đúng tên số đo
+
+Mở final bình thường, chọn ca đã kiểm rồi nhấn B. Một warm-up bị loại, tiếp theo tối đa năm bước được lấy mẫu. Quá 20 giây hoặc bị hủy thì không công bố trung bình chưa đủ mẫu.
+
+`gpuMilliseconds` là tổng elapsed time của các compute dispatch, không gồm draw; `wallMilliseconds` tính từ yêu cầu bước tới commit, có cả CPU/poll/chờ giữa các batch. Hai số đo không được dùng thay nhau. Cách chia rất nhỏ để dễ dừng có thể làm wall time lớn hơn nhiều thời gian kernel thực sự chạy; đây là bản học có ưu tiên kiểm soát, chưa phải engine MD hiệu năng cao.
+
+## Ghép các phần lại
+
+Chạy bản hoàn chỉnh:
+
+```bash title="Terminal Windows — mở toàn bộ Molecular Lab GPU"
+.\build\Release\project_45_final.exe
+```
+
+Space chạy/dừng yêu cầu bước mới; N một bước; C hủy tại ranh giới batch; R tạo lại cùng preset; Home reset camera; kéo trái pan; wheel zoom quanh con trỏ; 1–5 chọn số hạt; B đo hữu hạn; Esc thoát. Tiêu đề báo N, drawn, step, phase, E, P, rebuilds, D, occupancy và MiB; thông tin dài có thể bị thanh tiêu đề cắt, còn kết quả benchmark/lỗi chi tiết được in ở terminal.
+
+Các file chia theo trách nhiệm: `molecular_math.hpp` là mô hình thuần/budget, `gpu_storage.hpp` là buffer, `gpu_queue.hpp` là fence/timer, `gpu_kernels.hpp` là bindings, `gpu_engine.hpp` là thứ tự pha, `particle_view.hpp` là camera/draw, `gpu_validation.hpp` là đối chứng nhỏ. Không nhét mọi thứ vào main. Shader được copy cạnh executable; build cũng ghi đường dẫn shader source để dễ thử rồi khởi động lại chương trình.
+
+## Thử làm sai để hiểu đúng
+
+1. Cố ý bỏ hệ số U/2 trong shader. Chạy verifier nhỏ: nó phải báo mismatch và exit thất bại dù hình vẫn có vẻ đúng. Khôi phục shader trước khi đo.
+2. Bắt đầu một bước rồi hủy trước commit. So steps/current bank với trước bước. Sau khi dựng lại cache, bước tiếp theo phải khớp oracle; đừng chỉ kiểm rằng nút C có đổi chữ.
+3. Đọc một kết quả benchmark rồi ghi rõ GPU, driver, N, dt, số mẫu, warm-up, số marker và chế độ grid. Không lấy Canvas hay riêng thời gian submit CPU để khẳng định speedup GPU.
+
+## Tự kiểm tra kết quả
+
+Hoàn thành khi CPU tests Debug/Release đều pass; GPU verification nhỏ pass nếu phần cứng hỗ trợ; shader force/reduction/quỹ đạo có oracle; overflow và lỗi bước không bị bỏ qua; cancel không commit ứng viên; ZIP chứa toàn bộ source cần chạy.
+
+Mốc 5 triệu là **mục tiêu cần kiểm trên máy cụ thể**. Không có kết quả chạy preset lớn trong verifier mặc định. Nếu chưa đo, ghi 'chưa đo'; nếu bị từ chối, giữ nguyên lý do thay vì giảm chuẩn kiểm tra.
+
+## Bài tập mở rộng
+
+Thử thay bucket cố định bằng CSR như Project 40 và giữ nguyên oracle/giới hạn batch. Sau đó đo cả chi phí dựng grid và force trên cùng input. Một hướng khác là double precision cho diagnostics, nhưng cần kiểm khả năng driver và chi phí trước khi chọn.
+
+Bạn đã khép lại phần Molecular Dynamics từ hai hạt tới GPU. [Project 46 trong roadmap](/roadmap) sẽ chuyển sang hộp cát số và cellular automata; phần đó chưa có tutorial hoàn chỉnh.

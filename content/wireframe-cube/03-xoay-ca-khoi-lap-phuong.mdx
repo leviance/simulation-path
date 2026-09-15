@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xoay toàn bộ cube từ local space
+
+## Vấn đề cần giải quyết
+
+Checkpoint 2 tạo cube trực tiếp quanh `(0,0,6)`. Cách đó đủ để kiểm tra topology, nhưng muốn xoay quanh tâm, ta phải trở lại pipeline đã chứng minh ở Project 12: geometry nằm quanh local origin, rotation xảy ra ở local space, sau đó translation mới đưa model ra trước camera.
+
+Điểm mới không phải công thức sin/cos. Điểm mới là áp dụng cùng một transform cho một array vertex bằng vòng lặp trong khi edge list vẫn giữ nguyên.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi local vertex đi qua cùng chuỗi:
+
+$$
+P_{local}\xrightarrow{rotation}P_{rotated}\xrightarrow{+modelPosition}P_{world}
+$$
+
+Sau đó `projectCube` tạo cache screen-space. Với tám vertex, pipeline của một frame là:
+
+```text title="Dòng dữ liệu của checkpoint 3"
+localVertices[8]
+    → rotateCube
+rotatedLocal[8]
+    → translateCube
+worldVertices[8]
+    → projectCube
+ProjectedCube[8]
+    → kCubeEdges[12]
+framebuffer
+```
+
+`kCubeEdges` không xuất hiện ở ba bước transform vì topology không có tọa độ để xoay.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-transform" />
+
+Đường xám là cube chưa xoay. Thay pitch/yaw/roll hoặc order; marker và edge màu di chuyển cùng nhau. `max edge error` phải giữ gần zero.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo cube local quanh origin
+
+Trong `main`, tách shape khỏi position:
+
+```cpp title="src/main.cpp — geometry và vị trí là hai state khác nhau"
+constexpr double halfExtent = 1.2;
+lab::Vec3 modelPosition{0.0, 0.0, 6.0};
+const lab::CubeVertices localVertices = lab::makeCubeVertices(halfExtent);
+```
+
+`localVertices` là `const` và không bị sửa trong loop. Tám coordinate của nó luôn là ±1.2.
+
+### Bước 2 — Giữ ba angle và rotation order
+
+Ta dùng lại quy ước đã học ở Project 12:
+
+```cpp title="include/lab.hpp — orientation có tên và đơn vị rõ"
+struct EulerAngles {
+    double pitch{};
+    double yaw{};
+    double roll{};
+};
+
+enum class RotationOrder {
+    Xyz,
+    Zyx,
+};
+```
+
+Các hàm `rotateX`, `rotateY`, `rotateZ` vẫn nhận radian và trả `Vec3` mới. Project này không đổi dấu hay định nghĩa order; nếu bạn dùng source Project 12, hãy chuyển nguyên nhóm hàm đã được CTest xác nhận.
+
+### Bước 3 — Transform array bằng index
+
+`rotateCube` không biết cube có edge nào:
+
+```cpp title="include/lab.hpp — rotate mỗi vertex đúng một lần"
+inline CubeVertices rotateCube(
+    const CubeVertices& localVertices,
+    EulerAngles angles,
+    RotationOrder order
+) {
+    CubeVertices rotated{};
+    for (std::size_t index = 0; index < localVertices.size(); ++index) {
+        rotated[index] = rotateEuler(localVertices[index], angles, order);
+    }
+    return rotated;
+}
+```
+
+Translation có cùng hình dạng vòng lặp:
+
+```cpp title="include/lab.hpp — cộng cùng model position cho tám vertex"
+inline CubeVertices translateCube(const CubeVertices& vertices, Vec3 translation) {
+    CubeVertices translated{};
+    for (std::size_t index = 0; index < vertices.size(); ++index) {
+        translated[index] = add(vertices[index], translation);
+    }
+    return translated;
+}
+```
+
+Hai hàm trả array mới để dữ liệu từng space có tên riêng trong debugger.
+
+### Bước 4 — Dựng lại từ local ở mỗi frame
+
+Thay dòng `makeCubeVertices(halfExtent,modelPosition)` của checkpoint 2 bằng:
+
+```cpp title="src/main.cpp — local tới world trước khi projection"
+const lab::CubeVertices rotatedLocal = lab::rotateCube(localVertices, angles, order);
+const lab::CubeVertices worldVertices = lab::translateCube(rotatedLocal, modelPosition);
+const lab::ProjectedCube projected = lab::projectCube(
+    worldVertices,
+    camera,
+    lens,
+    nearPlane,
+    width,
+    height
+);
+```
+
+Không viết `localVertices = rotateCube(localVertices,delta)`. Geometry gốc phải giữ bất biến để tránh tích lũy sai số và để reset chỉ cần đặt lại angles.
+
+### Bước 5 — Input chỉ sửa state điều khiển
+
+Keyboard không chạm vào vertex:
+
+```cpp title="src/main.cpp — ví dụ cập nhật yaw và order"
+if (event.key.key == SDLK_A) {
+    angles.yaw -= 5.0 * lab::kPi / 180.0;
+}
+if (event.key.key == SDLK_D) {
+    angles.yaw += 5.0 * lab::kPi / 180.0;
+}
+if (!event.key.repeat && event.key.key == SDLK_O) {
+    if (order == lab::RotationOrder::Xyz) {
+        order = lab::RotationOrder::Zyx;
+    } else {
+        order = lab::RotationOrder::Xyz;
+    }
+}
+```
+
+Arrows sửa X/Y của `modelPosition`, PageUp/PageDown sửa Z. W/S điều khiển pitch, A/D yaw, Q/E roll.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy kết quả cuối bài 3"
+cmake --build build --config Debug --target project_13_checkpoint_3
+```
+
+Nhấn W/S, A/D, Q/E rồi O. Cube phải quay quanh tâm của chính nó; đường nối không tách khỏi marker. Dịch model sau khi xoay: orientation giữ nguyên và toàn bộ cube đi cùng nhau.
+
+## Thử làm sai để hiểu đúng
+
+1. Translate trước rồi rotate. Vector `(0,0,6)` cũng bị xoay, khiến cube chạy vòng quanh camera.
+2. Chỉ rotate vertex 0–3. Bốn edge nối hai lớp bị kéo dài và cube trông như một khối bị vặn.
+3. Dựng lại `kCubeEdges` sau rotation. Kết quả không khác nhưng bạn đã biến dữ liệu bất biến thành công việc mỗi frame.
+
+## Tự kiểm tra kết quả
+
+- `localVertices` không đổi sau input và qua nhiều frame.
+- Cả tám vertex đi qua cùng `rotateEuler` và cùng `modelPosition`.
+- W/S, A/D, Q/E thay đúng pitch/yaw/roll; O đổi XYZ/ZYX.
+- Cùng angles nhưng order khác cho vị trí vertex khác nhau.
+- Mọi edge vẫn nối đúng hai index ban đầu và giữ độ dài $2h$.
+
+## Bài tập mở rộng
+
+Thêm một `modelScale` đồng nhất trước rotation. Kiểm tra mọi edge đổi từ $2h$ thành $2h\cdot scale$, còn degree và edge index không đổi.
+
+Bài tiếp theo sẽ dùng camera-space Z đã có trong projection cache để quyết định edge nào vẽ trước và edge nào nên sáng hơn.

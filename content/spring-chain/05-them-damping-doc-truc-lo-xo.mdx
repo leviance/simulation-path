@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm damping dọc trục lò xo
+
+## Vấn đề cần giải quyết
+
+Một cách “làm cho êm” rất phổ biến là viết `velocity *= 0.99` cho mọi particle. Nó dễ dùng nhưng không mô tả spring damper: một chuỗi đang bay ngang như vật rắn cũng bị chậm lại dù khoảng cách giữa các mass không thay đổi. Damping của spring chỉ nên phản ứng với tốc độ spring đang dài ra hoặc ngắn lại.
+
+Ta đã có direction từ A sang B. Chỉ cần chiếu relative velocity lên direction đó, ta nhận được axial relative speed có dấu.
+
+## Hiểu ý tưởng trước khi viết code
+
+$$
+v_{rel}=v_B-v_A
+$$
+
+$$
+v_{axis}=v_{rel}\cdot n
+$$
+
+$$
+F_A=(kx+c\,v_{axis})n
+$$
+
+Khi B đang rời A dọc direction, $v_{axis}>0$ và force trên A hướng về B; force đối trên B kéo nó chậm lại. Nếu hai endpoint cùng bay với một velocity, relative velocity bằng zero. Nếu B chỉ trượt vuông góc spring, dot product cũng bằng zero.
+
+<InteractiveLab demo="spring-chain" mode="spring-damping" />
+
+So ba preset damping. Sau đó chọn preset “tangent”: endpoint chuyển động vuông góc spring, force damping phải bằng zero dù speed khác zero.
+
+## Viết code từng bước
+
+### Bước 1 — Tính relative velocity của đúng hai endpoint
+
+```cpp title="include/lab.hpp — chuyển động chung bị triệt tiêu"
+const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
+const double relativeSpeed = dot(relativeVelocity, direction);
+```
+
+Trừ theo thứ tự B−A để dấu thống nhất với direction A→B và Hooke force đã dùng.
+
+### Bước 2 — Cộng damping vào scalar force
+
+```cpp title="include/lab.hpp — elastic và damping dùng chung direction"
+const double forceMagnitude = spring.stiffness * sample.stretch + spring.damping * sample.relativeSpeed;
+sample.forceOnFirst = scale(sample.direction, forceMagnitude);
+```
+
+Đơn vị của `c` là N·s/m. Nhân với m/s cho newton, cùng đơn vị với `k*stretch`.
+
+### Bước 3 — Phân phối force pair như trước
+
+```cpp title="include/lab.hpp — damping vẫn là nội lực đối nhau"
+Particle& first = chain.particles[spring.first];
+Particle& second = chain.particles[spring.second];
+first.force = add(first.force, sample.forceOnFirst);
+second.force = subtract(second.force, sample.forceOnFirst);
+```
+
+Damping làm mechanical energy giảm nhưng không được tạo net internal force cho cặp.
+
+### Bước 4 — Thay force sampler, giữ nguyên integrator
+
+```cpp title="include/lab.hpp — pipeline không đổi thứ tự"
+accumulateDampedForces(chain, gravity, gravityEnabled);
+for (Particle& particle : chain.particles) {
+    integrateParticle(particle, deltaSeconds);
+}
+enforceAnchor(chain);
+```
+
+Tách trách nhiệm giúp ta thay force model mà không chạm vào semi-implicit Euler hoặc fixed-step loop.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy chuỗi có axial damping"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_checkpoint_5
+./build/Debug/project_25_checkpoint_5.exe
+```
+
+Chạy checkpoint 4 và 5 cạnh nhau. Cả hai dùng cùng dt và initial state; checkpoint 5 phải tiến dần về trạng thái treo, còn checkpoint 4 tiếp tục trao đổi kinetic/spring/gravity energy.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `length(relativeVelocity)` thay dot product. Tangent motion bị cản và damping mất dấu; hoàn tác về projection.
+2. Trừ damping scalar khỏi Hooke scalar mà không xét quy ước relative velocity. Một số chuyển động bị khuếch đại; hoàn tác công thức đã kiểm dấu.
+3. Nhân toàn bộ particle velocity với 0.99 sau step. Tịnh tiến chung bị mất energy không thuộc spring; hoàn tác global damping.
+
+## Tự kiểm tra kết quả
+
+- Hai endpoint cùng velocity cho damping force zero.
+- Relative speed 2 m/s dọc spring với `c=4` cho damping contribution 8 N.
+- Relative velocity 3 m/s vuông góc spring cho damping contribution zero.
+- Damping force trên hai endpoint vẫn bằng nhau và ngược dấu.
+- `c=0` cho đúng kết quả checkpoint elastic.
+- Damping dương làm biên độ giảm dần trong stable preset.
+- Integrator và fixed dt không thay đổi khi thêm damping.
+
+## Bài tập mở rộng
+
+Tính damping ratio của một oscillator đơn $\zeta=c/(2\sqrt{km})$ và tạo ba preset underdamped, gần critical và overdamped. Với cả chain, đây chỉ là tham chiếu vì mỗi mode có frequency khác nhau.
+
+Bài tiếp theo thêm input quan trọng nhất của project: kéo trực tiếp một mass, giữ nó kinematic trong lúc drag và thả ra để tạo một wave thật sự.

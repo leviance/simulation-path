@@ -1,0 +1,124 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Clip near plane mà không làm rơi UV
+
+## Vấn đề cần giải quyết
+
+Preset `near` đẩy một phần quad qua near plane. Nếu project trước rồi mới cắt, Z gần zero làm tọa độ màn hình phóng nổ. Nếu chỉ clip position mà quên UV, vertex giao có geometry đúng nhưng checker bị giật hoặc kéo thành một vệt.
+
+Quy tắc cần giữ rất cụ thể: near clipping diễn ra trong camera space trên `TexturedVertex`; mỗi giao điểm dùng đúng một tham số `t` cho cả XYZ và UV. Chỉ sau khi polygon đã hợp lệ ta mới project và tạo `1/z`, `u/z`, `v/z`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với cạnh từ `start` tới `end`, giao với mặt phẳng `z = near` có:
+
+$$
+t=\frac{near-z_{start}}{z_{end}-z_{start}}
+$$
+
+Mọi thuộc tính tuyến tính trên cạnh phải dùng cùng `t`:
+
+$$
+position=lerp(position_{start},position_{end},t)
+$$
+
+$$
+uv=lerp(uv_{start},uv_{end},t)
+$$
+
+Không nội suy `1/z` bằng `t` camera-space. Reciprocal attributes thuộc projected representation và sẽ được tính lại từ Z cùng UV của vertex giao.
+
+<InteractiveLab demo="perspective-texture" mode="texture-clip" />
+
+## Viết code từng bước
+
+### Bước 1 — Giải một t cho cả vertex
+
+```cpp title="include/lab.hpp — intersectNearPlane giữ position và UV đồng bộ"
+const double t = std::clamp((nearPlane - start.position.z) / depthChange, 0.0, 1.0);
+TexturedVertex result{};
+result.position = mix(start.position, end.position, t);
+result.position.z = nearPlane;
+result.uv = mix(start.uv, end.uv, t);
+return result;
+```
+
+Gán `result.position.z = nearPlane` loại sai số tích lũy nhỏ tại biên. X và Y cùng UV vẫn đến từ phép `mix`, nên vertex nằm đúng trên cạnh ban đầu.
+
+### Bước 2 — Clip polygon theo thứ tự cạnh
+
+```cpp title="include/lab.hpp — bốn trường hợp của Sutherland–Hodgman"
+if (currentInside && !previousInside) {
+    appendVertex(output, intersectNearPlane(previous, current, nearPlane));
+}
+if (currentInside) {
+    appendVertex(output, current);
+}
+if (!currentInside && previousInside) {
+    appendVertex(output, intersectNearPlane(previous, current, nearPlane));
+}
+```
+
+Thứ tự phát vertex đi theo winding input. Một triangle cắt near plane có thể thành triangle hoặc quad; mảng bốn phần tử là đủ cho đúng một half-space clip.
+
+### Bước 3 — Chia polygon thành triangle fan
+
+```cpp title="include/lab.hpp — giữ vertex đầu làm gốc fan"
+for (std::size_t index = 1; index + 1 < polygon.count; ++index) {
+    batch.triangles[batch.count] = {{
+        polygon.vertices[0],
+        polygon.vertices[index],
+        polygon.vertices[index + 1],
+    }};
+    ++batch.count;
+}
+```
+
+Không sort lại vertex theo screen X/Y. Polygon đã có order đúng từ clipper; sort lại có thể đảo winding hoặc nối sai diagonal.
+
+### Bước 4 — Project sau clipping
+
+```cpp title="src/main.cpp — clip rồi mới project triangle sinh ra"
+const lab::ClippedPolygon polygon = lab::clipTriangleToNearPlane(input, kNearPlane);
+const lab::TriangleBatch batch = lab::triangulateFan(polygon);
+
+for (std::size_t output = 0; output < batch.count; ++output) {
+    const auto screen = lab::projectTriangle(
+        batch.triangles[output],
+        kVerticalFov,
+        viewport,
+        kNearPlane
+    );
+```
+
+`projectTriangle` nhận UV đã clip và tự tạo reciprocal attributes từ vertex mới. Đây là ranh giới giúp camera-space interpolation không lẫn với screen-space interpolation.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint near clipping có UV"
+cmake --build build --config Debug --target project_20_checkpoint_7
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Chọn preset `near`, rồi tăng giảm độ sâu cạnh gần. Phần nằm trước near plane phải biến mất gọn; checker tại đường cắt tiếp tục từ UV trên cạnh, không quay về `(0,0)` và không kéo thành một màu duy nhất.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ `mix` position và để UV mặc định `{0,0}`. Đường cắt sẽ hút checker về góc texture dù silhouette vẫn đúng.
+2. Tính một `t` cho XYZ và làm tròn `t` trước khi mix UV. Hai thuộc tính không còn chỉ cùng một điểm trên cạnh; test giao điểm phải so cả hai.
+3. Nội suy `uOverZ` bằng camera-space `t`. Đại lượng này không tuyến tính theo tham số đó; hãy clip raw UV rồi gọi `projectVertex`.
+4. Project vertex sau near plane và hy vọng rasterizer tự loại. Phép chia đã xảy ra trước coverage, nên giá trị cực lớn hoặc NaN có thể làm bounding box hỏng.
+
+## Tự kiểm tra kết quả
+
+- Mọi output vertex có `z >= near - epsilon`.
+- Vertex giao có `z == near` và UV dùng đúng cùng `t` với position.
+- Triangle hoàn toàn ngoài near plane tạo batch rỗng; triangle hoàn toàn trong giữ ba vertex.
+- Triangle cắt qua near plane tạo polygon tối đa bốn vertex và fan tối đa hai triangle.
+- Preset near không xuất hiện NaN, spike toàn màn hình hoặc seam UV tại đường cắt.
+
+## Bài tập mở rộng
+
+Vẽ các vertex do clipper sinh bằng màu riêng và in `t`, UV trước/sau cạnh. Sau đó kéo cạnh qua near plane để kiểm tra UV giao thay đổi liên tục.
+
+Bài cuối sẽ ghép toàn bộ pipeline, thêm compare view, controls, telemetry và bộ test đủ mạnh để bắt những lỗi khó thấy bằng mắt.

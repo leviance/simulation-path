@@ -1,0 +1,133 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm tra kết quả và đo toàn bộ chuỗi GPU
+
+## Điều khó nằm ở đâu?
+
+Một prefix sum sai offset vẫn có thể nhìn rất đều, còn reduction bỏ sót vài phần tử cuối vẫn cho tổng gần đúng. Tương tự, một con số GPU time nhỏ có thể mới chỉ đo một dispatch trong khi toàn bộ phép scan cần nhiều pass. Vì vậy ta tách rõ hai việc: kiểm tra kết quả và đo thời gian của cả chuỗi GPU.
+
+1. **độ đúng**: kích thước, NaN/Inf, quy tắc prefix, tổng cuối và sai số;
+2. **timing**: thời gian GPU của cả graph, đọc bất đồng bộ.
+
+Không báo PASS chỉ vì “nhìn hợp lý”, và không gọi CPU wall-clock hay FPS là GPU kernel time.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Scan có nhiều invariant rẻ và dễ giải thích:
+
+$$
+y_0\approx0
+$$
+
+$$
+y_{i+1}-y_i\approx x_i
+$$
+
+$$
+y_{N-1}+x_{N-1}\approx \operatorname{reduce}(x)
+$$
+
+Sau đó mới so từng `y[i]` với kết quả `double` trên CPU bằng ngưỡng:
+
+$$
+|a-e| \le \epsilon_{abs}+\epsilon_{rel}\max(|a|,|e|)
+$$
+
+NaN/Inf được kiểm riêng vì chúng không phải sai khác làm tròn hợp lệ.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="scan-validation" />
+
+Chèn lần lượt wrong offset, NaN và tail error. Đọc `first mismatch`, `maximum error`, adjacent delta và total consistency để xem mỗi lỗi lộ ở invariant nào.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Kết hợp sai số tuyệt đối và tương đối (mixed tolerance)
+
+```cpp title="include/reduction_math.hpp — withinTolerance"
+inline bool withinTolerance(
+    double actual,
+    double expected,
+    double absoluteTolerance,
+    double relativeTolerance
+) {
+    const double scale = std::max(std::abs(actual), std::abs(expected));
+    return std::abs(actual - expected) <= absoluteTolerance + relativeTolerance * scale;
+}
+```
+
+Absolute term bảo vệ vùng gần zero; relative term nới ngưỡng theo độ lớn prefix. Tolerance phải được ghi cạnh report và giữ cố định khi so các bản shader.
+
+### Bước 2 — Ghi vị trí sai đầu tiên và sai số lớn nhất
+
+```cpp title="include/reduction_math.hpp — mismatch bookkeeping"
+if (!finite || !withinTolerance(actualValue, expected[index], absoluteTolerance, relativeTolerance)) {
+    if (report.firstMismatch == std::numeric_limits<std::size_t>::max()) {
+        report.firstMismatch = index;
+    }
+    ++report.mismatchCount;
+}
+```
+
+`firstMismatch` chỉ được gán lần đầu để dẫn thẳng tới biên block hoặc tail. `mismatchCount` cho biết lỗi cục bộ hay lan qua toàn bộ offsets.
+
+### Bước 3 — Không chặn frame khi query chưa sẵn sàng
+
+```cpp title="include/reduction_gpu_engine.hpp — query availability gate"
+GLint available = GL_FALSE;
+gl.GetQueryObjectiv(queries_[index], GL_QUERY_RESULT_AVAILABLE, &available);
+if (available != GL_TRUE) {
+    continue;
+}
+GLuint64 nanoseconds = 0U;
+gl.GetQueryObjectui64v(queries_[index], GL_QUERY_RESULT, &nanoseconds);
+```
+
+Nếu slot chưa sẵn sàng, `poll` bỏ qua. Nó không gọi blocking `GL_QUERY_RESULT` cho frame vừa submit. Bốn slot cho CPU/GPU có vài frame để lệch pha.
+
+### Bước 4 — Lấy số mẫu có giới hạn rồi tính median
+
+```cpp title="include/reduction_gpu_engine.hpp — bounded query samples"
+samples_.push_back(static_cast<double>(nanoseconds) / 1'000'000.0);
+if (samples_.size() > 31U) {
+    samples_.erase(samples_.begin());
+}
+pending_[index] = false;
+```
+
+Nút B bắt đầu một benchmark chia thành nhiều trạng thái: mỗi vòng event loop chỉ gửi nhiều nhất một lần chạy; benchmark kết thúc khi đủ chín query result, có thể hủy và tự dừng sau 10 giây. Ring giữ tối đa 31 kết quả gần nhất; median được hiển thị cạnh phép toán, số phần tử, số pass và kết quả kiểm tra.
+
+## Chạy checkpoint và đọc kết quả
+
+```bash title="Terminal — checkpoint 9 và CTest"
+cmake --build build --config Debug --target project_39_checkpoint_9 project_39_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Timer bắt đầu trước lần dispatch đầu và kết thúc sau dispatch/barrier cuối, nhưng trước readback. Vì vậy nhãn đúng là **thời gian các pass trên GPU**, không phải thời gian từ đầu đến cuối. Khi người dùng yêu cầu kiểm tra, output vẫn được đọc sau pass cuối; timer query được lấy kết quả độc lập.
+
+## Cố tình phá thuật toán
+
+1. Dùng `actual == expected`. Thứ tự cây và double loop không khớp bit cuối.
+2. Chỉ kiểm total cuối. Hai prefix sai ngược chiều có thể bù nhau.
+3. Không kiểm `std::isfinite`. NaN phá phép so và maximum-error report.
+4. Gọi `glGetQueryObjectui64v(..., GL_QUERY_RESULT, ...)` ngay sau `EndQuery` mà không availability gate. CPU có thể chờ GPU.
+5. Đặt upload/readback vào query rồi ghi nhãn “kernel time”. Nhãn không còn mô tả đúng vùng đo.
+6. Benchmark bằng `while(true)`. Đây chính là kiểu vòng chạy khiến test/build khó dừng; Project 39 chỉ dùng số mẫu hữu hạn và CTest không mở app.
+
+## Checklist hoàn thành
+
+- [ ] Báo cáo kiểm kích thước, NaN/Inf, `output[0]`, chênh lệch hai prefix kề nhau và tổng cuối.
+- [ ] First mismatch giữ index lỗi đầu; maximum error không bị NaN che.
+- [ ] Tolerance có absolute và relative term.
+- [ ] Timer bao quanh toàn bộ ba/năm dispatch nhưng không gồm readback.
+- [ ] Query ring kiểm `GL_QUERY_RESULT_AVAILABLE` trước khi đọc result.
+- [ ] Slot pending không bị tái dùng và sample history có giới hạn.
+- [ ] CTest thuần CPU kết thúc trong timeout 20 giây.
+
+## Bài tập để hiểu sâu hơn
+
+1. Báo thêm error tại các biên 511/512 để bắt uniform-add nhanh hơn.
+2. Tách median cho Reduction và Scan thay vì trộn hai operation vào cùng sample history.
+3. Đo end-to-end bằng CPU clock trong một nhãn riêng rồi giải thích khoảng cách với GPU graph time.
+
+Bài cuối sẽ ghép controls, presets, pass graph, validation, timing và cleanup thành workbench chạy độc lập cùng toàn bộ source tải về.

@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo baseline AoS
+
+## Vấn đề cần giải quyết
+
+Nếu chỉ đo kernel integrate, ta mới biết kết quả cho workload dùng đủ sáu field. Lợi ích thường được nhắc tới của SoA lại xuất hiện khi hot loop chỉ cần một vài field. Vì vậy trước khi có SoA, ta sẽ đặt tên cho ba workload và đo baseline AoS của từng workload.
+
+Mục tiêu của bài này không phải tìm một con số “nhanh”. Mục tiêu là tạo một phép đo có thể trả lời bốn câu hỏi: đã xử lý bao nhiêu particle, chạy kernel nào, lặp bao nhiêu lần và output có thực sự được dùng không?
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba workload dùng cùng state nhưng chạm field khác nhau:
+
+| Workload | Field cần đọc/ghi | Câu hỏi |
+|---|---|---|
+| `positionX` | `positionX` | Khi chỉ đọc một field, stride ảnh hưởng thế nào? |
+| `velocityOnly` | velocity xyz | Khi dùng nửa struct thì sao? |
+| `integrate` | position xyz + velocity xyz | Khi dùng đủ sáu field thì sao? |
+
+Timing phải bao quanh đúng hot loop:
+
+`tạo/copy state → warm-up → [start timer → kernel × R → stop timer] → dùng checksum`
+
+Generation, allocation, rendering và console output đều ở ngoài cặp ngoặc vuông.
+
+<InteractiveLab demo="memory-layout-race" mode="aos-baseline" />
+
+## Viết code từng bước
+
+### Bước 1 — Biến workload thành dữ liệu có tên
+
+```cpp title="include/benchmark.hpp — MemoryWorkload"
+enum class MemoryWorkload {
+    positionX,
+    velocityOnly,
+    integrate,
+};
+```
+
+`enum class` tránh các giá trị trôi nổi như `mode = 2` mà người đọc phải nhớ. Hàm `workloadName` dùng cùng enum khi in title và bảng scaling.
+
+### Bước 2 — Một dispatcher, ba kernel rõ ràng
+
+```cpp title="include/benchmark.hpp — runAoSWorkload"
+inline double runAoSWorkload(
+    std::vector<ParticleAoS>& particles,
+    MemoryWorkload workload,
+    float deltaSeconds = 1.0F / 120.0F
+) {
+    if (workload == MemoryWorkload::positionX) {
+        return sumPositionXAoS(particles);
+    }
+    if (workload == MemoryWorkload::velocityOnly) {
+        dampVelocitiesAoS(particles, 0.9995F);
+        return sumPositionXAoS(particles);
+    }
+    integrateAoS(particles, deltaSeconds);
+    return sumPositionXAoS(particles);
+}
+```
+
+Mỗi nhánh trả về một checksum có thể quan sát. Với workload ghi velocity, checksum position.x không mô tả toàn bộ output, nhưng ở bài 5 ta còn so cả sáu field. Hiện tại nó đủ để giữ đường tính toán sống và kiểm cùng input tạo cùng tổng.
+
+### Bước 3 — Warm-up và đo hữu hạn
+
+```cpp title="include/benchmark.hpp — benchmarkAoSBaseline"
+std::vector<ParticleAoS> warm(source.begin(), source.end());
+(void)runAoSWorkload(warm, workload);
+
+std::vector<ParticleAoS> measured(source.begin(), source.end());
+const auto started = std::chrono::steady_clock::now();
+for (int repetition = 0; repetition < repetitions; ++repetition) {
+    result.checksum += runAoSWorkload(measured, workload);
+}
+const auto finished = std::chrono::steady_clock::now();
+```
+
+Hai phép copy xảy ra trước timer. `repetitions` được kiểm `> 0`, do đó nút benchmark không thể vô tình tạo vòng lặp vô hạn. `steady_clock` phù hợp để đo khoảng thời gian vì nó không nhảy theo đồng hồ hệ thống.
+
+## Ghép các phần lại
+
+Phím `W` đổi workload, phím `B` tạm dừng animation rồi gọi `benchmarkAoSBaseline`. Title bar hiện workload, elapsed time và checksum. Renderer vẫn chạy sau benchmark nhưng không góp vào elapsed time.
+
+Checkpoint 3 vẫn chỉ có AoS. Điều này tạo một mốc dễ debug: nếu checksum không lặp lại được, lỗi nằm ở source, workload hoặc benchmark harness chứ chưa thể đổ cho conversion SoA.
+
+## Thử làm sai để hiểu đúng
+
+1. Đưa `std::vector<ParticleAoS> measured(...)` vào sau `started`. Bạn đang đo cả allocation/copy và kernel.
+2. In checksum trong mỗi repetition. Console I/O sẽ lấn át công việc bộ nhớ cần đo.
+3. Bỏ warm-up rồi chỉ chạy một repetition. Kết quả dễ bị trạng thái khởi động chi phối.
+4. Dùng FPS ở title bar thay elapsed time của kernel. FPS còn chứa event loop, draw sample, texture upload và present.
+
+## Tự kiểm tra kết quả
+
+- [ ] `W` đi qua đủ ba workload và quay về workload đầu.
+- [ ] `B` luôn kết thúc sau số repetitions hữu hạn.
+- [ ] Cùng source/workload/repetitions tạo checksum giống nhau.
+- [ ] Timer không bao quanh generation, copy, draw hoặc console output.
+- [ ] Timing hữu hạn và không âm; test không yêu cầu nó nhỏ hơn một ngưỡng máy cụ thể.
+- [ ] Target `project_32_checkpoint_3` build và chạy được.
+
+## Bài tập mở rộng
+
+1. Thêm `repetitions` vào title để người đọc không so hai số đo có lượng việc khác nhau.
+2. Chạy Debug và Release, ghi kết quả nhưng chưa giải thích bằng layout.
+3. Viết một workload chỉ tính tổng speed squared; liệt kê field mà nó cần.
+
+Bài 4 sẽ tạo SoA nhưng chưa chạy cuộc đua. Trước tiên ta phải chứng minh sáu mảng mới vẫn mô tả đúng cùng một triệu particle.

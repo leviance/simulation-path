@@ -1,0 +1,138 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính cross product và raw normal
+
+## Vấn đề cần giải quyết
+
+Ta đã có hai vector cạnh nằm trên cùng mặt tam giác. Bây giờ cần tìm một hướng vuông góc với cả hai. Trong 2D, Project 08 chỉ dùng thành phần Z của cross product để biết trái/phải. Trong 3D, kết quả là một `Vec3` đầy đủ và chính là raw normal của mặt.
+
+Cross product có nhiều dấu trừ nên rất dễ chép sai mà chương trình vẫn chạy. Vì vậy bài này không dừng ở việc thấy một mũi tên tím; ta còn kiểm tra kết quả bằng hai dot product độc lập.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với $u=(u_x,u_y,u_z)$ và $v=(v_x,v_y,v_z)$:
+
+$$
+u\times v=
+\left(
+u_yv_z-u_zv_y,
+u_zv_x-u_xv_z,
+u_xv_y-u_yv_x
+\right)
+$$
+
+Kết quả có hai tính chất quan trọng:
+
+$$
+(u\times v)\cdot u=0
+$$
+
+$$
+(u\times v)\cdot v=0
+$$
+
+Trong project này:
+
+$$
+N_{raw}=\overrightarrow{AB}\times\overrightarrow{AC}
+$$
+
+<InteractiveLab demo="normal" mode="normal-cross" />
+
+Kéo C và theo dõi `N·AB`, `N·AC`. Sai số làm tròn có thể tạo số rất nhỏ như `2e-16`, nhưng không được tăng thành một giá trị đáng kể. Đưa C sang phía đối diện AB để thấy normal quay qua mặt kia.
+
+## Viết code từng bước
+
+### Bước 1 — Chép công thức thành ba dòng có cấu trúc giống nhau
+
+Đừng rút gọn thành một biểu thức khó rà soát. Mỗi dòng của `cross` tính đúng một thành phần.
+
+```cpp title="include/lab.hpp — cross product đầy đủ trong 3D"
+inline Vec3 cross(Vec3 left, Vec3 right) {
+    return {
+        left.y * right.z - left.z * right.y,
+        left.z * right.x - left.x * right.z,
+        left.x * right.y - left.y * right.x,
+    };
+}
+```
+
+Hãy đọc dòng X: bỏ hai thành phần X, rồi lấy định thức từ Y và Z. Hai dòng còn lại làm tương tự theo vòng X → Y → Z.
+
+### Bước 2 — Đóng gói quy ước normal của tam giác
+
+Một hàm riêng giúp toàn project dùng cùng thứ tự AB×AC.
+
+```cpp title="include/lab.hpp — raw normal luôn lấy AB nhân chéo AC"
+inline Vec3 triangleRawNormal(const Triangle& triangle) {
+    const auto [edgeAB, edgeAC] = triangleEdges(triangle);
+    return cross(edgeAB, edgeAC);
+}
+```
+
+Tên `RawNormal` nhắc rằng vector này chưa có độ dài 1. Độ dài của nó còn chứa thông tin về diện tích, sẽ được dùng ở bài sau.
+
+### Bước 3 — Đặt mũi tên normal tại tâm tam giác
+
+Normal là một vector nên bản thân nó không có vị trí. Để vẽ dễ đọc, ta đặt điểm đầu tại centroid:
+
+```cpp title="include/lab.hpp — tính centroid từ ba đỉnh"
+inline Vec3 triangleCentroid(const Triangle& triangle) {
+    return scale(add(add(triangle.a, triangle.b), triangle.c), 1.0 / 3.0);
+}
+```
+
+Checkpoint 3 thu nhỏ raw normal để mũi tên không bay khỏi cửa sổ:
+
+```cpp title="src/main.cpp — tạo hai đầu mũi tên raw normal"
+const lab::Vec3 centroid = lab::triangleCentroid(triangle);
+const lab::Vec3 rawNormal = lab::triangleRawNormal(triangle);
+const lab::Vec3 displayNormal = lab::scale(rawNormal, 0.22);
+const lab::Vec3 endpoint = lab::add(centroid, displayNormal);
+```
+
+Hệ số `0.22` chỉ phục vụ hiển thị. Không được dùng `displayNormal` cho phép kiểm tra toán học.
+
+### Bước 4 — Hiển thị raw normal để đối chiếu
+
+Title bar lấy thẳng ba thành phần từ kết quả:
+
+```cpp title="src/main.cpp — đọc raw normal trong frame hiện tại"
+const lab::Vec3 normal = lab::triangleRawNormal(triangle);
+std::snprintf(
+    title,
+    sizeof(title),
+    "P10 | raw N(%.2f, %.2f, %.2f) | 1-3/arrows/QE/R",
+    normal.x,
+    normal.y,
+    normal.z
+);
+```
+
+Canvas bổ sung hai dot product để bạn quan sát tính vuông góc ngay khi kéo đỉnh. C++ tests ở bài cuối sẽ khóa cùng tính chất bằng số cụ thể.
+
+## Ghép các phần lại
+
+Build `project_10_checkpoint_3`. Bạn phải thấy mũi tên tím xuất phát gần tâm tam giác. Chọn C và thay đổi Z: cả hướng lẫn độ dài mũi tên sẽ đổi. Chọn preset tam giác vuông trên Canvas để thấy AB×AC nằm đúng theo trục Z.
+
+Đến đây chương trình đã tìm được normal nhưng chưa phù hợp để dùng làm hướng. Một tam giác lớn tạo mũi tên dài hơn dù mặt có cùng hướng; đó là việc checkpoint 4 sẽ tách ra.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dòng Y thành `left.x*right.z-left.z*right.x`. Đây là dấu ngược của công thức đúng; một hoặc cả hai dot product sẽ không còn gần 0 với dữ liệu tổng quát.
+2. Gọi `cross(edgeAC,edgeAB)`. Mũi tên vẫn vuông góc và có cùng độ dài, nhưng quay ngược. Đây không phải lỗi số học; bạn đã đổi winding convention.
+3. Vẽ normal từ world origin thay vì centroid. Hướng vẫn đúng nhưng người đọc khó nhận ra nó thuộc về mặt nào khi sau này có nhiều tam giác.
+
+## Tự kiểm tra kết quả
+
+- `cross((1,0,0),(0,1,0))` trả `(0,0,1)`.
+- `cross(Y,X)` trả `(0,0,-1)`, cho thấy phép toán không giao hoán.
+- Raw normal thay đổi ngay khi A, B hoặc C di chuyển.
+- Dot của raw normal với AB và AC đều gần 0.
+- Mũi tên bắt đầu tại centroid, không phải tại world origin.
+
+## Bài tập mở rộng
+
+Vẽ thêm `-rawNormal` bằng một đường mảnh để thấy một mặt hình học luôn có hai hướng vuông góc; winding là quy ước chọn một trong hai. Sau đó in riêng `N·AB` và `N·AC` lên title bar để tự kiểm tra bản C++ khi kéo đỉnh.
+
+Bài tiếp theo sẽ chuẩn hóa raw normal và dùng chính độ dài bị bỏ đi để tính diện tích tam giác.

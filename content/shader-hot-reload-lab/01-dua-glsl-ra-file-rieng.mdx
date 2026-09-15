@@ -1,0 +1,144 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa GLSL ra file riêng
+
+## Vấn đề cần giải quyết
+
+Cube của Project 34 đã chạy bằng GPU, nhưng vertex shader và fragment shader vẫn là hai chuỗi nằm trong C++. Muốn đổi một màu, ta phải sửa header, build lại executable rồi khởi động lại chương trình. Cách đó ổn khi học draw call đầu tiên, nhưng quá chậm cho một phòng thí nghiệm cần thử hàng chục biến thể.
+
+Bài này chưa làm hot reload. Ta chỉ đổi **nơi shader source sống**: từ string literal sang `shaders/lab.vert` và `shaders/lab.frag`. Starter embedded shader vẫn là mốc đối chiếu; checkpoint 1 phải vẽ đúng cube cũ bằng source đọc từ file.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đường đi mới có thêm một bước trước compile:
+
+```text
+shader directory → read lab.vert + lab.frag → ShaderSources → compile/link → cube
+```
+
+Vấn đề quan trọng không phải `ifstream` khó dùng, mà là executable phải biết **file nào** đang được đọc. Mỗi target checkpoint có thư mục shader riêng. CMake truyền đường dẫn snapshot đó qua `COURSE_SHADER_DIRECTORY`; khi mang executable đi nơi khác, bản shader được chép cạnh executable là fallback.
+
+<InteractiveLab demo="shader-hot-reload" mode="shader-files" />
+
+## Viết code từng bước
+
+### Bước 1 — Gom hai source thành một dữ liệu có tên
+
+```cpp title="include/pipeline.hpp — ShaderSources"
+struct ShaderSources {
+    std::string vertex{};
+    std::string fragment{};
+};
+```
+
+Hai stage luôn đi thành một candidate. Ta không giữ một biến global vertex source và một biến fragment source ở nơi khác, vì như vậy rất dễ compile nửa mới nửa cũ.
+
+### Bước 2 — Đọc trọn một file và giữ path trong lỗi
+
+```cpp title="include/pipeline.hpp — readTextFile"
+inline bool readTextFile(const std::filesystem::path& path, std::string& contents, std::string& diagnostics) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        diagnostics = "Cannot open shader file: " + path.string();
+        return false;
+    }
+    std::ostringstream buffer{};
+    buffer << input.rdbuf();
+    if (!input.good() && !input.eof()) {
+        diagnostics = "Cannot read complete shader file: " + path.string();
+        return false;
+    }
+    contents = buffer.str();
+    return true;
+}
+```
+
+Binary mode ở đây không có nghĩa shader là dữ liệu nhị phân. Nó ngăn thư viện tự đổi line ending, nhờ đó byte source, line number trong log và fingerprint về sau ổn định hơn.
+
+### Bước 3 — Chọn source directory trước, fallback sau
+
+Trong lúc học, thư mục của checkpoint phải được ưu tiên vì đó là nơi bạn đang Save file. Chỉ khi cặp file này không còn tồn tại—chẳng hạn executable đã được chép sang máy khác—chương trình mới tìm thư mục `shaders` cạnh executable:
+
+```cpp title="src/main.cpp — chọn shader directory có kiểm tra"
+bool containsShaderPair(const std::filesystem::path& directory) {
+    for (const char* filename : {"lab.vert", "lab.frag"}) {
+        std::error_code error{};
+        if (!std::filesystem::is_regular_file(directory / filename, error) || error) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::filesystem::path executableShaderDirectory() {
+    const char* basePath = SDL_GetBasePath();
+    if (basePath) {
+        return std::filesystem::path(basePath) / "shaders";
+    }
+    return std::filesystem::path("shaders");
+}
+
+std::filesystem::path shaderDirectory() {
+#ifdef COURSE_SHADER_DIRECTORY
+    const std::filesystem::path sourceDirectory(COURSE_SHADER_DIRECTORY);
+    if (containsShaderPair(sourceDirectory)) {
+        return sourceDirectory;
+    }
+#endif
+    return executableShaderDirectory();
+}
+```
+
+Việc chỉ viết `#ifdef ... return source; #else return fallback;` là chưa đủ: CMake luôn định nghĩa `COURSE_SHADER_DIRECTORY`, nên nhánh fallback sẽ không bao giờ chạy. Kiểm tra cặp file ở runtime mới biến nó thành fallback thật.
+
+### Bước 4 — Đọc đúng hai tên file trước khi tạo renderer
+
+```cpp title="src/main.cpp — startup bằng external GLSL"
+lab::ShaderSources initialSources{};
+if (!lab::readShaderFiles(shaderPath, initialSources, diagnostics)) {
+    std::cerr << diagnostics << '\n';
+    renderer.destroy(gl);
+    destroyWindowAndContext(window, context);
+    return EXIT_FAILURE;
+}
+if (!renderer.initialize(gl, initialSources, diagnostics)) {
+```
+
+Startup chưa có last-good program để quay về. Vì thế thiếu file hoặc shader đầu tiên sai phải dừng có thông báo, thay vì mở một cửa sổ không vẽ gì.
+
+## Ghép các phần lại
+
+CMake tạo target rồi truyền thư mục `checkpoints/01/shaders` vào chính target đó. Build và chạy checkpoint 1:
+
+```bash title="Terminal — build checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_35_checkpoint_1
+```
+
+Terminal in dòng `Watching shader directory: ...`. Hãy mở đúng đường dẫn này, đổi một màu rồi chạy lại executable. Bài này chưa tự đọc lại khi Save; mục tiêu là xác nhận source ngoài chương trình đã thay thế embedded source.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi tên `lab.frag` thành `color.frag` nhưng không sửa code. Chương trình phải nêu đầy đủ file không mở được.
+2. Chạy executable từ một current working directory khác. Đường source do CMake truyền vẫn phải hoạt động; đây là lý do ta không dùng `./shaders` một cách mơ hồ.
+3. Xóa nửa cuối `lab.vert`. File vẫn đọc được, nhưng bước compile thất bại. Đọc file thành công không có nghĩa GLSL hợp lệ.
+
+Khôi phục hai file rồi chạy lại trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+- [ ] Starter vẫn vẽ cube bằng embedded shader.
+- [ ] Checkpoint 1 vẽ cùng cube từ hai file ngoài executable.
+- [ ] Terminal cho biết chính xác shader directory đang dùng.
+- [ ] Thiếu một file làm startup dừng với path rõ ràng.
+- [ ] Bạn phân biệt được lỗi đọc file và lỗi compile source.
+
+Hãy tự giải thích vì sao `SDL_GetBasePath` chỉ là fallback, còn target source directory mới phù hợp với workflow sửa shader trong project.
+
+## Bài tập mở rộng
+
+1. In số byte của từng stage sau khi đọc.
+2. Từ chối một shader file rỗng bằng diagnostics riêng.
+3. Thêm `README` cạnh shader giải thích input/output contract mà không sửa C++.
+
+Bài tiếp theo giữ lại toàn bộ log mà OpenGL compiler trả về khi source sai.

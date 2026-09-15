@@ -1,0 +1,144 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa một điểm 3D vào framebuffer
+
+## Vấn đề cần giải quyết
+
+Starter của Project 11 đã làm phần việc quen thuộc: mở cửa sổ SDL3, tạo renderer, giữ một mảng pixel trên CPU, chép mảng đó sang streaming texture và xử lý resize. Khi chạy, bạn chỉ thấy lưới và hai đường đi qua tâm cửa sổ.
+
+Ta chưa nên viết ngay `x/z`. Nếu marker không xuất hiện, nguyên nhân có thể nằm ở framebuffer, phép đổi tọa độ, input hoặc công thức projection. Checkpoint đầu tách ba việc đầu tiên ra: tạo một `Vec3`, vẽ marker dễ nhìn và cho bàn phím sửa từng thành phần. Khi nền móng này chạy đúng, bài sau mới đưa camera vào.
+
+## Hiểu ý tưởng trước khi viết code
+
+Điểm ban đầu là:
+
+$$
+P_{world}=(1.4,\ 0.8,\ 5.0)
+$$
+
+Framebuffer chỉ nhận pixel 2D. Vì vậy checkpoint này tạm lấy X/Y, nhân với `pixelsPerUnit`, đặt gốc vào tâm màn hình và giữ Z nguyên trong `worldPoint`. Cách vẽ này chỉ là **bản xem trước để kiểm tra dữ liệu**, không phải perspective projection. Thay Z sẽ làm số trên title bar đổi nhưng marker chưa di chuyển; đó là hành vi có chủ ý.
+
+<InteractiveLab demo="projection" mode="projection-point" />
+
+Kéo marker hoặc dùng arrows. Sau đó đổi `P.Z`: hãy để ý dữ liệu thay đổi trong bảng đọc số nhưng vị trí 2D vẫn giữ nguyên. Nếu hiểu rõ giới hạn này, bạn sẽ không nhầm một sơ đồ X/Y với camera 3D.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo Vec3 và một kết quả xem trước riêng
+
+Mở `include/lab.hpp`. `worldPoint` sẽ sống dưới dạng `Vec3`; hàm xem trước trả một `Vec2` mới thay vì xóa Z khỏi dữ liệu gốc.
+
+```cpp title="include/lab.hpp — dữ liệu 3D và bản xem trước 2D"
+struct Vec2 {
+    double x{};
+    double y{};
+};
+
+struct Vec3 {
+    double x{};
+    double y{};
+    double z{};
+};
+
+inline Vec2 previewPoint(Vec3 point, double pixelsPerUnit) {
+    return {point.x * pixelsPerUnit, point.y * pixelsPerUnit};
+}
+```
+
+Tên `previewPoint` nhắc rằng đây là dụng cụ tạm. Ta không đặt tên nó là `projectPerspective`, bởi hàm này chưa dùng depth, FOV hoặc camera.
+
+### Bước 2 — Đặt gốc xem trước vào tâm framebuffer
+
+Trong `src/main.cpp`, X tăng sang phải giống framebuffer; Y của world space tăng lên nên phải trừ khỏi tâm màn hình.
+
+```cpp title="src/main.cpp — đổi kết quả xem trước sang pixel"
+lab::Vec2 previewToScreen(lab::Vec3 point, int width, int height) {
+    const lab::Vec2 preview = lab::previewPoint(point, 70.0);
+    return {width * 0.5 + preview.x, height * 0.5 - preview.y};
+}
+```
+
+`70.0` chỉ là số pixel trên một world unit để marker dễ nhìn. Nó chưa phải focal length và sẽ được bỏ ở bài FOV.
+
+### Bước 3 — Vẽ marker thay vì một pixel khó thấy
+
+Marker gồm hai hình tròn và hai nét chữ thập. Khi một phép đổi tọa độ sai vài pixel, hình này giúp bạn nhìn ra vấn đề nhanh hơn một chấm đơn.
+
+```cpp title="src/main.cpp — marker của world point"
+void drawPointMarker(
+    std::vector<std::uint32_t>& pixels,
+    int width,
+    int height,
+    lab::Vec2 screen,
+    int radius
+) {
+    const int x = int(std::lround(screen.x));
+    const int y = int(std::lround(screen.y));
+    fillCircle(pixels, width, height, x, y, radius + 4, rgba(255, 180, 84));
+    fillCircle(pixels, width, height, x, y, radius, rgba(255, 241, 166));
+    drawLine(pixels, width, height, x - radius - 7, y, x + radius + 7, y, rgba(255, 226, 108));
+    drawLine(pixels, width, height, x, y - radius - 7, x, y + radius + 7, rgba(255, 226, 108));
+}
+```
+
+`fillCircle` và `drawLine` đều gọi `putPixel`, nơi đã kiểm tra bounds. Marker có thể chạm mép mà không ghi ra ngoài mảng.
+
+### Bước 4 — Nối bàn phím vào X, Y và Z
+
+Khởi tạo point một lần trước vòng lặp. Trong event loop, mỗi phím chỉ sửa đúng một thành phần:
+
+```cpp title="src/main.cpp — dữ liệu khởi đầu và input theo ba trục"
+lab::Vec3 worldPoint{1.4, 0.8, 5.0};
+```
+
+```cpp title="src/main.cpp — arrows điều khiển X và Y"
+if (event.key.key == SDLK_LEFT) {
+    worldPoint.x -= 0.1;
+}
+if (event.key.key == SDLK_RIGHT) {
+    worldPoint.x += 0.1;
+}
+if (event.key.key == SDLK_DOWN) {
+    worldPoint.y -= 0.1;
+}
+if (event.key.key == SDLK_UP) {
+    worldPoint.y += 0.1;
+}
+```
+
+Q/E sửa Z. Dù chưa ảnh hưởng tới marker, giá trị này đã sẵn sàng cho perspective divide ở bài 3.
+
+```cpp title="src/main.cpp — Q và E điều khiển depth"
+if (event.key.key == SDLK_Q) {
+    worldPoint.z -= 0.1;
+}
+if (event.key.key == SDLK_E) {
+    worldPoint.z += 0.1;
+}
+```
+
+## Ghép các phần lại
+
+Mỗi frame, chương trình xóa framebuffer, tính `screen = previewToScreen(worldPoint, width, height)`, gọi `drawPointMarker`, rồi `SDL_UpdateTexture` và present như Project 01. Build `project_11_checkpoint_1`: marker phải nằm phía trên-phải tâm lưới vì X và Y đều dương.
+
+Thử resize. Tâm mới được tính từ `width/height` ở mỗi frame, nên marker giữ cùng độ lệch theo world unit thay vì bám vào một pixel cũ.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `height*0.5 - preview.y` thành phép cộng. Phím Up sẽ làm marker đi xuống, ngược quy ước world space.
+2. Chỉ vẽ một pixel tại `(x,y)`. Ở màn hình độ phân giải cao, bạn sẽ khó biết chương trình không vẽ hay chỉ vẽ quá nhỏ.
+3. Gán lại `worldPoint = {screen.x, screen.y, 0}` sau khi vẽ. Dữ liệu world space sẽ bị thay bằng pixel và bài camera không còn đầu vào đúng.
+
+## Tự kiểm tra kết quả
+
+- Chạy starter chỉ có lưới; checkpoint 1 có marker vàng rõ ràng.
+- Left/Right thay X, Down/Up thay Y và Q/E thay Z đúng 0.1.
+- Đổi Z chưa làm marker di chuyển; title bar vẫn cho biết Z mới.
+- Resize giữ gốc ở tâm và không làm marker méo.
+- `worldPoint` luôn là `Vec3`; kết quả pixel nằm trong biến khác.
+
+## Bài tập mở rộng
+
+Vẽ thêm một đoạn mờ từ tâm framebuffer tới marker và ghi X/Y bằng title bar. Sau đó thử đổi `pixelsPerUnit` để thấy đây chỉ là scale của sơ đồ, chưa tạo được cảm giác gần–xa.
+
+Bài tiếp theo sẽ thêm camera. Trước khi chia cho Z, ta cần biết Z đó được đo từ gốc thế giới hay từ vị trí camera.

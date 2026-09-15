@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc đường cong thế Lennard–Jones
+
+## Vấn đề cần giải quyết
+
+Ta đã có khoảng cách `r`, nhưng vẫn chưa có tương tác vật lý. Lennard–Jones mô tả một cặp hạt bằng thế năng chỉ phụ thuộc vào khoảng cách. Hai số mũ lớn trong công thức rất dễ khiến người học chỉ ghi nhớ máy móc rằng “nhánh 12 là đẩy, nhánh 6 là hút”. Cách hiểu hữu ích hơn là đọc hình dạng đường cong và xác định chính xác ba mốc của nó.
+
+Một nhầm lẫn thường gặp là gọi `sigma` là khoảng cách cân bằng. Thực ra `sigma` là nơi thế năng đi qua 0; đáy thế nằm xa hơn một chút, tại `r0 = 2^(1/6) sigma`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thế Lennard–Jones là:
+
+$$
+U(r) = 4\epsilon\left[\left(\frac{\sigma}{r}\right)^{12} - \left(\frac{\sigma}{r}\right)^6\right]
+$$
+
+`epsilon` quyết định độ sâu của giếng thế, còn `sigma` đặt mốc khoảng cách. Với hệ đơn vị rút gọn mặc định:
+
+- tại $r=\sigma$, hai lũy thừa đều bằng 1 nên $U=0$ (`U(sigma)=0`);
+- tại $r_0=2^{1/6}\sigma\approx1.122462\sigma$, $U=-\epsilon$;
+- khi $r$ rất nhỏ, nhánh $r^{-12}$ tăng cực nhanh;
+- khi $r$ lớn, cả hai nhánh tiến về 0, nhưng nhánh hút $-r^{-6}$ chi phối phần đuôi.
+
+<InteractiveLab demo="lennard-jones-pair" mode="lj-potential" />
+
+Kéo nguyên tử đỏ ở bên trái hoặc đổi thanh khoảng cách `r/σ`. Điểm trắng trên đường tím tự đi theo khoảng cách mới; đồ thị không nhận thao tác kéo. Vạch vàng đánh dấu `sigma`, còn vạch xanh đánh dấu `r0`. Tại vạch vàng, `U` gần 0 nhưng chưa chạm đáy; tại vạch xanh, `U` gần `-epsilon`.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt hai tham số vào một struct
+
+```cpp title="include/lennard_jones.hpp — LennardJonesParameters"
+struct LennardJonesParameters {
+    double epsilon{1.0};
+    double sigma{1.0};
+};
+
+inline bool validParameters(const LennardJonesParameters& parameters) {
+    return std::isfinite(parameters.epsilon) && std::isfinite(parameters.sigma) &&
+        parameters.epsilon > 0.0 && parameters.sigma > kDistanceEpsilon;
+}
+```
+
+Gom hai tham số vào một `struct` giúp nơi gọi hàm dễ đọc hơn hai đối số `double` đứng cạnh nhau. `validParameters` yêu cầu cả hai giá trị đều hữu hạn và dương. `kDistanceEpsilon` là ngưỡng khoảng cách nhỏ nhất dùng để tránh chia cho zero; nó hoàn toàn khác với tham số năng lượng `epsilon` của thế Lennard–Jones.
+
+### Bước 2 — Tính ratio6 và ratio12 mà không gọi `pow` hai lần
+
+```cpp title="include/lennard_jones.hpp — samplePotential hoàn chỉnh"
+inline PotentialSample samplePotential(
+    double distance,
+    const LennardJonesParameters& parameters
+) {
+    PotentialSample sample{};
+    sample.distance = distance;
+    if (!validParameters(parameters) || !std::isfinite(distance) ||
+        distance <= kDistanceEpsilon) {
+        return sample;
+    }
+
+    const double ratio = parameters.sigma / distance;
+    const double ratio2 = ratio * ratio;
+    sample.ratio6 = ratio2 * ratio2 * ratio2;
+    sample.ratio12 = sample.ratio6 * sample.ratio6;
+    sample.potential = 4.0 * parameters.epsilon * (sample.ratio12 - sample.ratio6);
+    sample.valid = std::isfinite(sample.potential);
+    return sample;
+}
+```
+
+Đây là toàn bộ hàm, từ kiểm tra dữ liệu đầu vào đến giá trị trả về. Canvas dùng đúng thứ tự phép tính này. Ta giữ `ratio6` và `ratio12` trong kết quả vì bài sau sẽ dùng lại chúng khi tính đạo hàm.
+
+### Bước 3 — Tính mốc cân bằng từ `sigma`
+
+```cpp title="include/lennard_jones.hpp — equilibriumDistance"
+inline double equilibriumDistance(const LennardJonesParameters& parameters) {
+    if (!validParameters(parameters)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return std::pow(2.0, 1.0 / 6.0) * parameters.sigma;
+}
+```
+
+Không hard-code `1.122462`. Khi người dùng đổi `sigma`, mốc cân bằng phải đổi theo cùng tỷ lệ.
+
+### Bước 4 — Từ chối khoảng cách bằng zero
+
+```cpp title="include/lennard_jones.hpp — guard trước phép chia"
+if (!validParameters(parameters) || !std::isfinite(distance) || distance <= kDistanceEpsilon) {
+    return sample;
+}
+```
+
+Renderer được phép cắt đường cong ở mép trên để dễ nhìn. Hàm vật lý thì không được thay `U` vô hạn bằng một số đẹp rồi trả `valid=true`; làm vậy sẽ đưa dữ liệu giả vào integrator.
+Điểm `r = 0` là một **singularity** của mô hình, vì vậy đây là dữ liệu đầu vào không hợp lệ chứ không phải một trường hợp cần âm thầm sửa bằng phép giới hạn giá trị.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 2"
+cmake --build build --config Debug --target project_41_checkpoint_2 project_41_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Checkpoint 2 vẽ đường thế bên phải và đặt một điểm trắng tại khoảng cách hiện tại. Thanh tiêu đề phải phân biệt `sigma` với `r0`; ở cấu hình mặc định, hai số lần lượt là `1.0` và khoảng `1.12246`.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi công thức thành `ratio6 + ratio12`. Toàn bộ đường cong nằm phía dương, không còn giếng thế; hoàn tác dấu trừ.
+2. Gán `equilibriumDistance = sigma`. Phép kiểm tra `U(r0)=-epsilon` thất bại và điểm đánh dấu đáy không trùng vạch xanh.
+3. Bỏ điều kiện chặn khoảng cách rồi gọi `samplePotential(0, parameters)` trong phép kiểm tra. Kết quả trở thành `NaN` hoặc `Infinity`; khôi phục nhánh `valid=false`. Đây chính là điểm kỳ dị (singularity) cần được xử lý tường minh.
+
+## Tự kiểm tra kết quả
+
+- [ ] `U(sigma)` gần 0 với mọi `epsilon` dương.
+- [ ] `r0/sigma` gần `1.122462` và không phụ thuộc `epsilon`.
+- [ ] `U(r0)` gần `-epsilon`.
+- [ ] `U(0.95 sigma)` dương và tăng nhanh khi tiếp tục giảm khoảng cách.
+- [ ] `U(1.5 sigma)` âm nhưng cao hơn đáy thế.
+- [ ] Khoảng cách bằng 0 trả về mẫu không hợp lệ, không trả một giá trị đã bị ép lại.
+
+## Bài tập mở rộng
+
+1. Vẽ riêng hai đường `4 epsilon ratio12` và `-4 epsilon ratio6`, sau đó dùng màu thứ ba cho tổng của chúng.
+2. Cho `epsilon` nhận ba giá trị có sẵn và giải thích vì sao vị trí đáy không đổi nhưng độ sâu thay đổi.
+3. Viết phép kiểm tra theo tỷ lệ: tăng `sigma` gấp đôi phải làm mọi mốc khoảng cách tăng gấp đôi.
+
+Bài sau nối độ dốc của đường thế với lực. Điểm khó không nằm ở phép đạo hàm, mà ở cách đổi dấu của đại lượng theo `r` thành vector lực đúng hướng trên nguyên tử A.

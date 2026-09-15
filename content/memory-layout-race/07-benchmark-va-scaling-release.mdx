@@ -1,0 +1,142 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Benchmark và scaling trong Release
+
+## Vấn đề cần giải quyết
+
+Baseline AoS mới đo một khoảng tổng. Để so layout công bằng hơn, mỗi phía cần warm-up riêng, nhận cùng source, chạy cùng workload và được đo thành nhiều sample. Ta sẽ lấy median rồi tăng N từ 10.000 lên 1.000.000.
+
+Timing không phải validation. Test chỉ yêu cầu giá trị hữu hạn, checksum bằng nhau và maximum difference bằng 0. Layout nào nhanh hơn phụ thuộc compiler, CPU, build mode và workload; code không được `assert(soaTime < aosTime)`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một sample có lifecycle:
+
+1. Copy AoS source trước timer.
+2. Start timer, chạy đúng một AoS workload, stop timer.
+3. Convert/copy SoA source trước timer.
+4. Start timer, chạy đúng một SoA workload, stop timer.
+5. So output ngoài timer.
+
+Lặp lifecycle này `R` lần tạo hai dãy timing. Median là phần tử giữa sau khi sort; nếu số sample chẵn, lấy trung bình hai phần tử giữa.
+
+<InteractiveLab demo="memory-layout-race" mode="layout-benchmark" />
+
+Canvas chạy benchmark trong một `Web Worker`, không chạy vòng lặp một triệu phần tử trên UI thread. Vì vậy bạn vẫn cuộn trang và bấm “Dừng phép đo” được. Worker tự sinh source từ cùng `seed`, chỉ trả các số median/checksum/difference về component; typed arrays dung lượng lớn không bị gửi qua lại sau mỗi sample.
+
+## Viết code từng bước
+
+### Bước 1 — Viết median dễ kiểm tra
+
+```cpp title="include/benchmark.hpp — medianMilliseconds"
+inline double medianMilliseconds(std::vector<double> samples) {
+    if (samples.empty()) {
+        return 0.0;
+    }
+    std::sort(samples.begin(), samples.end());
+    const std::size_t middle = samples.size() / 2U;
+    if (samples.size() % 2U == 1U) {
+        return samples[middle];
+    }
+    return 0.5 * (samples[middle - 1U] + samples[middle]);
+}
+```
+
+Hàm nhận vector theo value vì nó cần sort. Timing samples nhỏ; clarity quan trọng hơn tránh copy vài số `double`.
+
+### Bước 2 — Đo kernel, không đo conversion
+
+```cpp title="include/benchmark.hpp — một sample AoS và SoA"
+std::vector<ParticleAoS> aos(source.begin(), source.end());
+ParticlesSoA soa = makeParticlesSoA(source);
+
+const auto measureAoS = [&]() {
+    const auto started = std::chrono::steady_clock::now();
+    result.aosChecksum += runAoSWorkload(aos, workload);
+    const auto finished = std::chrono::steady_clock::now();
+    aosSamples.push_back(
+        std::chrono::duration<double, std::milli>(finished - started).count()
+    );
+};
+const auto measureSoA = [&]() {
+    const auto started = std::chrono::steady_clock::now();
+    result.soaChecksum += runSoAWorkload(soa, workload);
+    const auto finished = std::chrono::steady_clock::now();
+    soaSamples.push_back(
+        std::chrono::duration<double, std::milli>(finished - started).count()
+    );
+};
+```
+
+`makeParticlesSoA` nằm trước `soaStarted`. Nếu sản phẩm thực tế của bạn phải convert mỗi frame, đó là một workload khác cần benchmark riêng; không trộn vào câu hỏi hiện tại.
+
+### Bước 3 — Luân phiên bên chạy trước
+
+Nếu sample nào cũng chạy AoS trước rồi SoA sau, bên chạy sau luôn nhận cùng một vị trí trong chu kỳ cache và scheduler. Ta đổi thứ tự theo parity của repetition:
+
+```cpp title="include/benchmark.hpp — đổi thứ tự đo"
+if (repetition % 2 == 0) {
+    measureAoS();
+    measureSoA();
+} else {
+    measureSoA();
+    measureAoS();
+}
+```
+
+Hai lambda `measureAoS` và `measureSoA` chỉ bao timer quanh kernel tương ứng; việc clone/convert vẫn xảy ra trước đó. Luân phiên không xóa hết nhiễu, nhưng tránh để một layout luôn nhận cùng lợi thế do thứ tự.
+
+### Bước 4 — Tạo từng scaling row từ cùng contract
+
+```cpp title="include/benchmark.hpp — makeLayoutScalingStudy"
+for (const std::size_t count : counts) {
+    const std::vector<ParticleAoS> source = makeParticlesAoS(count, seed);
+    rows.push_back({
+        count,
+        benchmarkLayoutRace(source, workload, repetitions),
+        estimateMemoryTraffic(MemoryLayout::aos, workload, count),
+        estimateMemoryTraffic(MemoryLayout::soa, workload, count),
+    });
+}
+```
+
+Mỗi row chứa timing và traffic của cùng `count`. Terminal còn in checksum/difference để kết quả không bị tách khỏi correctness.
+
+## Ghép các phần lại
+
+`B` chạy race ở N hiện tại; `S` chạy ba row 10k/100k/1M. Cả hai đều tạm dừng animation. Scaling chỉ chạy khi người dùng yêu cầu, không chạy trong startup hoặc CTest. Trên web, nút dừng sẽ `terminate()` worker hiện tại; ở app C++, mỗi lệnh vẫn hữu hạn nhờ danh sách count và repetitions cố định.
+
+Hãy build Release trước khi dùng timing để thảo luận:
+
+```bash title="Build và test Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Debug vẫn hữu ích để bắt lỗi, nhưng optimizer có thể thay đổi đáng kể cách compiler xử lý loop và bounds.
+
+## Thử làm sai để hiểu đúng
+
+1. Đo AoS ở Release và SoA ở Debug. Cùng source chưa đủ nếu build mode khác nhau.
+2. Chạy AoS năm lần nhưng SoA một lần rồi so tổng elapsed.
+3. Tạo SoA từ working AoS đã chạy một bước. Hai phía không còn cùng input.
+4. Xóa maximum difference vì “CTest đã chạy”. Benchmark harness vẫn có thể mắc lỗi lifecycle mà unit test kernel nhỏ chưa bao phủ.
+5. Tự động chạy scaling mỗi frame. Một triệu phần tử nhân nhiều repetitions sẽ khiến UI đóng băng liên tục.
+
+## Tự kiểm tra kết quả
+
+- [ ] AoS và SoA có warm-up riêng ngoài samples.
+- [ ] Mỗi sample loại copy/conversion khỏi timer.
+- [ ] Hai phía dùng cùng workload và repetitions.
+- [ ] Median được tính từ nhiều sample hữu hạn.
+- [ ] Mọi row báo checksum bằng nhau và maximum difference bằng 0.
+- [ ] Có đủ ba mốc 10k, 100k và 1M.
+- [ ] Target `project_32_checkpoint_7` build ở Debug và Release.
+
+## Bài tập mở rộng
+
+1. In toàn bộ samples cạnh median để phát hiện outlier.
+2. In thứ tự chạy cạnh từng sample để kiểm tra harness thật sự luân phiên AoS-first và SoA-first.
+3. Thêm một benchmark conversion riêng và đặt tên rõ `conversionMilliseconds`.
+
+Bài cuối sẽ ghép experiment thành ứng dụng hoàn chỉnh và chạy validation không phụ thuộc layout nào thắng.

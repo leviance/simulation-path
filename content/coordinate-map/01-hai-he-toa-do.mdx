@@ -1,0 +1,161 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hai hệ tọa độ, hai câu hỏi khác nhau
+
+## Vấn đề cần giải quyết
+
+SDL báo vị trí chuột bằng pixel trong cửa sổ: `(0,0)` nằm ở góc trên bên trái, X tăng sang phải và Y tăng xuống dưới. Một bản đồ hoặc mô phỏng lại cần lưu vật thể ở tọa độ thế giới ổn định, chẳng hạn `(2,1)`, bất kể cửa sổ rộng bao nhiêu hay camera đang phóng to tới mức nào.
+
+Nếu lưu vật thể bằng tọa độ màn hình, mỗi lần pan sẽ phải sửa toàn bộ vật thể; resize làm vị trí phụ thuộc kích thước cửa sổ cũ; còn zoom quanh con trỏ trở nên rất khó suy luận. Vì vậy, bài đầu tiên sẽ phân biệt hai hệ tọa độ và xác định camera lưu những gì trước khi viết công thức chuyển đổi.
+
+## Bộ khung có sẵn đưa pixel lên cửa sổ
+
+Mã khởi đầu đã nối framebuffer trong RAM với streaming texture và có sẵn phần xử lý resize. Hãy chạy nó trước: kết quả phải là một cửa sổ xanh đen trống. Một pixel đi qua các bước sau:
+
+```text
+putPixel(x, y) sửa vector pixels
+    → SDL_UpdateTexture upload vector
+    → SDL_RenderTexture vẽ texture
+    → SDL_RenderPresent đưa frame ra cửa sổ
+```
+
+Camera chưa tham gia chuỗi trên. Nhiệm vụ của nó là tính xem một điểm trong thế giới phải trở thành tọa độ màn hình `(x,y)` nào **trước khi** `putPixel` được gọi. Trong `main`, hàm ghi pixel dùng trực tiếp kích thước hiện tại của framebuffer sau resize:
+
+```cpp title="src/main.cpp — ghi một pixel màn hình an toàn"
+const auto putPixel = [&](int x, int y, std::uint32_t color) {
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+        return;
+    }
+    const std::size_t index = std::size_t(y) * std::size_t(width) + std::size_t(x);
+    pixels[index] = color;
+};
+```
+
+Cách tách này giữ trách nhiệm rõ ràng: `Camera2D` không biết framebuffer, còn `putPixel` không biết world space. Kết quả chuyển đổi chỉ được đưa vào `putPixel` tại phần vẽ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Project dùng hai hệ tọa độ:
+
+| World space | Screen space |
+| --- | --- |
+| đơn vị mô phỏng | pixel framebuffer |
+| gốc do thế giới định nghĩa | gốc ở góc trên trái window |
+| Y hướng lên | Y hướng xuống |
+| object được lưu ở đây | renderer/input giao tiếp ở đây |
+
+`Camera2D` mô tả quan hệ giữa hai hệ bằng ba giá trị:
+
+- `centerWorld`: điểm trong thế giới đang nằm ở tâm vùng nhìn;
+- `pixelsPerUnit`: một đơn vị thế giới tương ứng bao nhiêu pixel;
+- `viewportPixels`: kích thước vùng hiển thị hiện tại.
+
+Với camera mặc định, điểm world `(0,0)` nằm tại screen `(480,270)`. Điểm world `(2,1)` cách đó 110 pixel sang phải và 55 pixel **lên trên**, nên xuất hiện tại `(590,215)`.
+
+<InteractiveLab demo="coordinate" mode="coordinate-spaces" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo kiểu `Vec2` không phụ thuộc SDL
+
+```cpp title="include/lab.hpp — dữ liệu dùng cho cả hai hệ"
+struct Vec2 {
+    double x{};
+    double y{};
+    friend bool operator==(Vec2, Vec2) = default;
+};
+```
+
+Cùng một kiểu số học có thể chứa điểm world hoặc điểm screen. Vì vậy, tên biến phải nói rõ hệ đang dùng, chẳng hạn `markerWorld` và `previousScreen`. Trong project lớn có thể tạo hai kiểu riêng; ở bài này, quy ước đặt tên và các hàm của `Camera2D` đã đủ để tránh nhầm lẫn.
+
+### Bước 2 — Lưu trạng thái camera và bảo vệ tỉ lệ
+
+```cpp title="include/lab.hpp — đầu struct Camera2D"
+struct Camera2D {
+    Vec2 centerWorld{};
+    double pixelsPerUnit{55.0};
+    Vec2 viewportPixels{960.0, 540.0};
+
+    [[nodiscard]] double scale() const {
+        if (!std::isfinite(pixelsPerUnit) || pixelsPerUnit <= 0.0) {
+            return 20.0;
+        }
+        return pixelsPerUnit;
+    }
+};
+```
+
+Tỉ lệ bằng 0 khiến phép biến đổi ngược phải chia cho 0; `NaN` sẽ lan sang mọi tọa độ sau đó. Vì vậy, các phép chuyển đổi luôn đọc tỉ lệ qua `scale()`. Nếu `pixelsPerUnit` không hợp lệ, hàm trả về giá trị an toàn 20. `[[nodiscard]]` nhắc người gọi không được bỏ qua kết quả.
+
+### Bước 3 — Kiểm tra quy ước bằng phép tính trực tiếp
+
+```cpp title="src/main.cpp — tính vị trí điểm đánh dấu ở checkpoint 1"
+lab::Vec2 markerWorld{2.0, 1.0};
+// Trong render loop:
+lab::Vec2 markerScreen{};
+markerScreen = {
+    width * 0.5 + markerWorld.x * camera.pixelsPerUnit,
+    height * 0.5 - markerWorld.y* camera.pixelsPerUnit,
+};
+```
+
+Dấu cộng ở X và dấu trừ ở Y là điểm quan trọng. `markerWorld` là vị trí cần được giữ qua nhiều lần vẽ; `markerScreen` chỉ là kết quả tạm thời dùng cho khung hình hiện tại. Checkpoint 1 cố ý đặt công thức ngay tại nơi dùng để bạn nhìn rõ quy ước. Bài 2 mới đưa nó vào `worldToScreen` để mọi vật thể dùng chung.
+
+### Bước 4 — Vẽ hai trục đi qua gốc thế giới
+
+Với camera mặc định, `centerWorld = (0,0)`, nên gốc thế giới nằm tại tâm vùng nhìn. Trước tiên xóa framebuffer cũ, rồi vẽ trục ngang và trục dọc:
+
+```cpp title="src/main.cpp — vẽ trục qua tâm viewport"
+std::fill(pixels.begin(), pixels.end(), rgba(11, 16, 32));
+const lab::Vec2 origin{width * 0.5, height * 0.5};
+for (int x = 0; x < width; ++x) {
+    putPixel(x, int(std::lround(origin.y)), rgba(99, 112, 141));
+}
+for (int y = 0; y < height; ++y) {
+    putPixel(int(std::lround(origin.x)), y, rgba(99, 112, 141));
+}
+```
+
+Hai vòng lặp chỉ tạo mốc trên màn hình để kiểm tra dấu trong công thức. Đây chưa phải lưới tọa độ và cũng không phải trách nhiệm của `Camera2D`.
+
+### Bước 5 — Vẽ điểm đánh dấu tại tọa độ màn hình
+
+Điểm đánh dấu là một hình tròn đặc bán kính 5 pixel. Ta duyệt hình vuông bao rồi chỉ tô những độ lệch nằm trong đường tròn:
+
+```cpp title="src/main.cpp — vẽ điểm xanh tại markerScreen"
+for (int offsetY = -5; offsetY <= 5; ++offsetY) {
+    for (int offsetX = -5; offsetX <= 5; ++offsetX) {
+        if (offsetX * offsetX + offsetY * offsetY <= 25) {
+            putPixel(int(std::lround(markerScreen.x)) + offsetX, int(std::lround(markerScreen.y)) + offsetY, rgba(83, 240, 174));
+        }
+    }
+}
+```
+
+Đến đây, đường đi đã hoàn chỉnh: `markerWorld` được đổi thành `markerScreen`; tọa độ màn hình đi qua `putPixel`; vector `pixels` được chép sang texture rồi hiện lên cửa sổ. Không có hàm vẽ nào tự hiểu tọa độ thế giới.
+
+## Ghép các phần lại
+
+Ở trạng thái ban đầu, điểm đánh dấu được lưu tại world `(2,1)`, còn vị trí screen được tính trực tiếp để kiểm chứng quy ước. Hai trục đi qua tâm vùng nhìn: trục X nằm ngang, trục Y nằm dọc và chiều dương hướng lên.
+
+Trong Coordinate Lab, hãy kéo điểm và đọc đồng thời hai cặp tọa độ. Với camera mặc định, một đơn vị thế giới đúng bằng 55 pixel. Khi điểm đi lên màn hình, screen Y giảm nhưng world Y lại tăng.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng dấu cộng trong công thức Y. Điểm `(2,1)` xuất hiện dưới trục X, trái với quy ước world Y hướng lên.
+2. Lưu `markerScreen` làm vị trí gốc rồi resize cửa sổ. Điểm không còn giữ vị trí tương đối với tâm camera vì dữ liệu đã bị gắn vào vùng nhìn cũ.
+3. Đặt `pixelsPerUnit = 0` và bỏ nhánh bảo vệ. Phép biến đổi nghịch ở bài sau phải chia cho 0 và sinh giá trị không hữu hạn.
+
+## Tự kiểm tra kết quả
+
+- Gốc thế giới nằm tại tâm vùng nhìn mặc định.
+- World `(2,1)` xuất hiện cách gốc 110 pixel sang phải và 55 pixel lên trên.
+- Screen Y tăng xuống dưới, world Y tăng lên trên.
+- Tọa độ của object được đặt tên rõ là thuộc world space hay screen space.
+- Scale hợp lệ luôn hữu hạn và dương.
+
+## Bài tập mở rộng
+
+Hãy tính bằng tay tọa độ màn hình của world `(-3,-2)` với viewport 960×540 và tỉ lệ 55. Đổi viewport thành 1280×720 rồi tính lại. Cuối cùng, thêm comment ghi đơn vị cho từng field của camera.
+
+Bài sau sẽ đưa công thức thuận vào `worldToScreen` và dùng hàm này thay cho phép tính trực tiếp.

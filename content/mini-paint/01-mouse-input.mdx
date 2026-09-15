@@ -1,0 +1,199 @@
+# Một nét vẽ bắt đầu và kết thúc thế nào?
+
+## Vấn đề cần giải quyết
+
+Không phải lần di chuyển chuột nào cũng là một nét vẽ. Người dùng có thể đưa con trỏ qua bảng vẽ để chọn vị trí hoặc chỉ quan sát. Chỉ khi nút trái được giữ, chuyển động ấy mới mang nghĩa “đang vẽ”. Vừa thả nút, nét hiện tại phải kết thúc ngay.
+
+Bài đầu tiên sẽ theo dõi ba thời điểm: bắt đầu nét, tiếp tục nét và kết thúc nét. Đầu bút tạm thời chỉ rộng một pixel để chúng ta tập trung vào cách xử lý chuột; hình tròn và phép nội suy sẽ được bổ sung ở các bài sau.
+
+## Bộ khung có sẵn đưa pixel lên màn hình
+
+Mã khởi đầu chưa xử lý chuột, nhưng đã tạo sẵn một vùng nhớ để lưu bức vẽ. Trước khi thêm thao tác mới, hãy nhìn lại đường đi của một pixel từ RAM lên cửa sổ:
+
+```text
+vector pixels trong RAM
+    → SDL_UpdateTexture
+    → SDL_RenderTexture
+    → SDL_RenderPresent
+```
+
+Khác với ô vuông ở Project 02, Mini Paint không vẽ lại một vật thể rồi xóa nó ở lần tiếp theo. Những dấu bút cũ phải được giữ nguyên để dần tạo thành bức tranh, vì vậy vector `pixels` tồn tại trong suốt thời gian chương trình chạy:
+
+```cpp title="src/main.cpp — tạo bảng vẽ trước vòng lặp chính"
+const std::uint32_t background = rgba(17, 24, 43);
+std::vector<std::uint32_t> pixels(std::size_t(kCanvasWidth) * std::size_t(kCanvasHeight), background);
+```
+
+Sau khi xử lý sự kiện, toàn bộ nội dung hiện tại được chép sang texture và hiển thị:
+
+```cpp title="src/main.cpp — chép pixels lên cửa sổ"
+if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), kCanvasWidth* int(sizeof(std::uint32_t)))) {
+    std::cerr << "SDL_UpdateTexture failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderClear(renderer)) {
+    std::cerr << "SDL_RenderClear failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderTexture(renderer, texture, nullptr, nullptr)) {
+    std::cerr << "SDL_RenderTexture failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+if (!SDL_RenderPresent(renderer)) {
+    std::cerr << "SDL_RenderPresent failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+```
+
+Tham số cuối của `SDL_UpdateTexture` là số **byte** từ đầu một hàng đến đầu hàng kế tiếp, còn gọi là pitch. Với dữ liệu hiện tại, pitch bằng `width × sizeof(pixel)`. Khi chạy starter, bạn phải thấy một bảng vẽ xanh đen trống. Từ đây về sau, ta chỉ cần thay đổi `pixels`; đoạn code trên sẽ đưa kết quả lên màn hình.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một nét vẽ được điều khiển bởi các sự kiện sau:
+
+```text
+MOUSE_BUTTON_DOWN  → drawing = true, đặt điểm đầu, capture mouse
+MOUSE_MOTION       → nếu drawing, đặt dấu tại vị trí mới
+MOUSE_BUTTON_UP    → drawing = false, release capture
+WINDOW_FOCUS_LOST  → drawing = false, release capture
+```
+
+Biến `drawing` phải giữ giá trị qua nhiều sự kiện và nhiều lần lặp. Sự kiện `MOUSE_MOTION` đã chứa tọa độ tại thời điểm SDL ghi nhận chuyển động, vì vậy ta dùng trực tiếp `event.motion.x` và `event.motion.y` thay vì hỏi lại vị trí hiện tại của con trỏ.
+
+Ta còn lưu `previous`, tức vị trí chuột đã xử lý gần nhất. Bài này mới chỉ cập nhật biến đó; đến bài nội suy, nó sẽ trở thành đầu thứ nhất của đoạn cần nối. Chuẩn bị biến ngay từ đầu giúp các bài sau không phải viết lại toàn bộ phần xử lý chuột.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo bảng vẽ được giữ lại qua nhiều lần lặp
+
+```cpp title="src/main.cpp — sau khi tạo texture"
+const std::uint32_t background = rgba(17, 24, 43);
+std::vector<std::uint32_t> pixels(std::size_t(kCanvasWidth) * std::size_t(kCanvasHeight), background);
+```
+
+Không tô lại màu nền ở đầu vòng lặp. Project 02 tạo lại toàn bộ cảnh sau mỗi lần cập nhật, còn ứng dụng vẽ phải tích lũy kết quả: những pixel đã đổi màu phải còn nguyên ở lần tiếp theo.
+
+### Bước 2 — Viết `putPixel` có kiểm tra biên
+
+```cpp title="src/main.cpp — helper putPixel"
+void putPixel(std::vector<std::uint32_t>& pixels, int x, int y, std::uint32_t color) {
+    if (x < 0 || y < 0 || x >= kCanvasWidth || y >= kCanvasHeight) {
+        return;
+    }
+    pixels[std::size_t(y) * kCanvasWidth + std::size_t(x)] = color;
+}
+```
+
+Con trỏ có thể nằm sát cạnh bảng vẽ; đầu bút lớn ở bài sau còn tạo ra tọa độ âm dù tâm vẫn ở bên trong. Vì vậy, `putPixel` kiểm tra biên khi `x` và `y` vẫn là `int`, rồi mới đổi sang `size_t`. Nếu đổi quá sớm, một số âm có thể biến thành chỉ số dương rất lớn và truy cập ra ngoài vector.
+
+### Bước 3 — Lưu một vị trí chuột bằng `Point`
+
+Tạo `include/lab.hpp` với kiểu dữ liệu đơn giản để lưu một vị trí chuột:
+
+```cpp title="include/lab.hpp — tọa độ một điểm"
+struct Point {
+    double x{};
+    double y{};
+    friend bool operator==(Point, Point) = default;
+};
+```
+
+Ta dùng `double` để giữ nguyên tọa độ số thực do SDL cung cấp. Toán tử `==` chưa cần cho phần xử lý chuột, nhưng sẽ giúp bài kiểm thử so sánh điểm đầu và điểm cuối của phép nội suy mà không phải viết thêm một hàm riêng.
+
+Trong `main`, khai báo trạng thái ngay trước vòng lặp chính:
+
+```cpp title="src/main.cpp — trạng thái của nét vẽ"
+bool drawing = false;
+lab::Point previous{};
+std::uint32_t color = rgba(83, 240, 174);
+```
+
+Khi `drawing == false`, giá trị của `previous` chưa được sử dụng. Mỗi lần bắt đầu một nét mới, sự kiện nhấn chuột sẽ gán cho nó một tọa độ hợp lệ trước khi bất kỳ đoạn nào được vẽ. `color` được đặt bên cạnh vì hàm đóng dấu cần dùng màu hiện tại.
+
+### Bước 4 — Tạo đầu bút một pixel
+
+Phần xử lý sự kiện cần một cách biến tọa độ chuột thành dấu trên bảng vẽ. Phiên bản đầu tiên chỉ làm tròn vị trí về pixel gần nhất rồi gọi `putPixel`:
+
+```cpp title="src/main.cpp — đầu bút cơ sở chỉ ghi một pixel"
+void stampPoint(std::vector<std::uint32_t>& pixels, lab::Point point, std::uint32_t color) {
+    putPixel(pixels, int(std::lround(point.x)), int(std::lround(point.y)), color);
+}
+```
+
+Trong vòng lặp sự kiện, ta sẽ gọi trực tiếp `stampPoint(pixels, point, color)`. Cả vùng nhớ, vị trí và màu đều xuất hiện ngay tại nơi gọi, nên người đọc dễ biết hàm đang dùng dữ liệu nào.
+
+### Bước 5 — Bắt đầu nét và chấm điểm đầu tiên
+
+```cpp title="src/main.cpp — trong event loop"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+    drawing = true;
+    previous = {event.button.x, event.button.y};
+    stampPoint(pixels, previous, color);
+    if (!SDL_CaptureMouse(true)) {
+        std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+    }
+}
+```
+
+Việc gọi `stampPoint` ngay khi nút chuột được nhấn là rất quan trọng: một cú click không kéo vẫn phải để lại dấu. Nếu chờ tới `MOUSE_MOTION`, cú click đơn sẽ không vẽ được gì.
+
+`SDL_CaptureMouse(true)` giúp cửa sổ tiếp tục nhận chuyển động và sự kiện thả nút khi người dùng kéo con trỏ ra ngoài mép. Nhiều hệ thống đã tự làm việc này, nhưng gọi tường minh giúp hành vi của ứng dụng rõ ràng hơn. Nếu nền tảng không hỗ trợ capture, ta in lỗi và vẫn cho phép vẽ bên trong cửa sổ.
+
+### Bước 6 — Chỉ vẽ khi một nét đang được mở
+
+```cpp title="src/main.cpp — tiếp tục và kết thúc nét vẽ"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
+    drawing = false;
+    SDL_CaptureMouse(false);
+}
+if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+    drawing = false;
+    SDL_CaptureMouse(false);
+}
+if (event.type == SDL_EVENT_MOUSE_MOTION && drawing) {
+    const lab::Point current{event.motion.x, event.motion.y};
+    stampPoint(pixels, current, color);
+    previous = current;
+}
+```
+
+Hãy chú ý thứ tự: vẽ tại `current` trước, sau đó mới gán `previous = current`. Ở bài nội suy, ta cần cả vị trí cũ lẫn vị trí mới; nếu cập nhật `previous` quá sớm, hai đầu đoạn sẽ cùng là `current`.
+
+Khi cửa sổ mất focus, ta kết thúc nét ngay vì không thể chắc chắn sự kiện thả chuột sẽ quay lại đúng cửa sổ. Nhờ vậy, lần vẽ tiếp theo không bị nối nhầm với một điểm cũ.
+
+Ở checkpoint 1, mỗi vị trí chuột SDL cung cấp chỉ ghi đúng một pixel.
+
+## Ghép các phần lại
+
+Một nét vẽ không đến từ một sự kiện duy nhất. Nó được tạo bởi nhiều sự kiện rời rạc, còn biến `drawing` giúp chương trình hiểu chúng thuộc cùng một thao tác:
+
+```text
+down mở nét → nhiều motion nối tiếp nét → up đóng nét
+```
+
+Sau khi xử lý sự kiện, đoạn code ở đầu bài chép framebuffer lên texture. Vì vector `pixels` không bị tô lại bằng màu nền, mọi dấu đã đặt đều được giữ nguyên. Hãy chạy checkpoint 1, click để tạo một chấm rồi kéo chuột để thấy chuỗi điểm rời rạc. Những khoảng hở lúc này chưa cần sửa; chúng đang cho bạn nhìn thấy đúng dữ liệu SDL gửi tới chương trình.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ điều kiện `&& drawing`. Chỉ cần di chuyển con trỏ là bảng vẽ bị thay đổi dù chưa giữ chuột.
+2. Bỏ lời gọi `stampPoint` trong `MOUSE_BUTTON_DOWN`. Một cú click không kèm chuyển động sẽ không tạo `MOUSE_MOTION`, vì vậy chấm đơn biến mất.
+3. Khai báo `drawing` bên trong `while (running)`. Giá trị bị đặt lại sau mỗi lần lặp, khiến kết quả phụ thuộc vào việc các sự kiện đến cùng lúc hay khác lúc.
+
+## Tự kiểm tra kết quả
+
+- Click trái tạo đúng một chấm dù không rê.
+- Rê chuột không giữ nút không làm đổi canvas.
+- Giữ nút trái và rê chuột tạo các chấm; thả nút thì dừng, kể cả khi con trỏ đã đi ra ngoài cửa sổ.
+- Chuyển sang cửa sổ khác kết thúc nét đang vẽ; khi quay lại, chuyển động chuột không nối tiếp nét cũ.
+- Nút chuột khác không bắt đầu nét vẽ.
+- Vẽ sát bốn cạnh không truy cập ngoài vector.
+
+## Bài tập mở rộng
+
+Hãy cho nút chuột phải hoạt động như cục tẩy bằng cách dùng màu nền, nhưng vẫn đi qua cùng ba giai đoạn bắt đầu–tiếp tục–kết thúc. Trong bản Debug, thử hiển thị `drawing` và tọa độ `previous` trên thanh tiêu đề. Sau đó tạm bỏ mouse capture, kéo con trỏ ra ngoài rồi thả nút để xem hệ điều hành của bạn gửi những sự kiện nào.
+
+Bài sau sẽ thay chấm một pixel bằng đầu bút tròn đặc mà không thay đổi cách một nét vẽ bắt đầu và kết thúc.

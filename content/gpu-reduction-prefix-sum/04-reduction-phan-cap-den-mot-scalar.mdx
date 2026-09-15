@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Gộp nhiều tầng đến khi còn một tổng
+
+## Điều khó nằm ở đâu?
+
+Mỗi workgroup chỉ biết tổng của block mà nó phụ trách. Sau pass đầu, GPU vẫn còn 1.954 partial sum cần được cộng tiếp. `barrier()` trong shader không thể đồng bộ các workgroup khác nhau, vì vậy ta phải kết thúc dispatch hiện tại, đặt memory barrier rồi dispatch thêm một tầng reduction mới.
+
+Ranh giới đúng là một dispatch mới. Ta chạy lại cùng `reduce.comp` trên output vừa tạo: 1.954 thành 4, rồi 4 thành 1. CPU chỉ điều phối buffer/count; nó không đọc hay cộng partial sums.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Ta cần hai scratch buffer vì một pass không được đọc và ghi chồng lên cùng mảng. Chuỗi ownership:
+
+```text
+input SSBO (1.000.003)
+    ↓ reduce
+scratch A (1.954)
+    ↓ SHADER_STORAGE barrier → reduce
+scratch B (4)
+    ↓ SHADER_STORAGE barrier → reduce
+scratch A (1)
+    ↓ BUFFER_UPDATE barrier → CPU đọc một float
+```
+
+Scratch A/B đều cấp theo 1.954 float, kích thước lớn nhất. Các tầng sau dùng phần đầu của buffer, không cần allocation trong loop.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="hierarchical-reduction" />
+
+Đi từng pass và để ý CPU chỉ xuất hiện sau box cuối. Nếu Canvas cho CPU đứng giữa hai tầng, đó là thí nghiệm sai với mục tiêu GPU-resident.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Khởi đầu bằng input thật
+
+```cpp title="include/reduction_gpu_engine.hpp — reduction state"
+GLuint source = inputBuffer_;
+std::size_t count = input_.size();
+std::size_t scratchIndex = 0U;
+```
+
+Ba biến trả lời ba câu hỏi ở đầu mỗi pass: đọc buffer nào, có bao nhiêu phần tử hợp lệ, ghi vào scratch nào.
+
+### Bước 2 — Dispatch rồi đồng bộ trước pass đọc tiếp theo
+
+```cpp title="include/reduction_gpu_engine.hpp — hierarchical reduction loop"
+while (count > 1U) {
+    const std::size_t outputCount = ceilDiv(count, kBlockSpan);
+    const GLuint destination = reductionScratch_[scratchIndex];
+    dispatchReductionPass(gl, source, destination, count);
+    GLenum barrierBit = GL_BUFFER_UPDATE_BARRIER_BIT;
+    if (outputCount > 1U) {
+        barrierBit = GL_SHADER_STORAGE_BARRIER_BIT;
+    }
+    gl.MemoryBarrier(barrierBit);
+    passTrace_.push_back({"reduce", count, outputCount, barrierBit});
+    source = destination;
+    count = outputCount;
+    scratchIndex = 1U - scratchIndex;
+}
+```
+
+Khi vẫn còn nhiều hơn một output, compute shader ở tầng sau sẽ đọc SSBO nên dùng `SHADER_STORAGE`. Khi chỉ còn một giá trị, CPU sẽ đọc buffer nên dùng `BUFFER_UPDATE`.
+
+### Bước 3 — Đọc scalar từ buffer cuối, không đoán A/B
+
+```cpp title="include/reduction_gpu_engine.hpp — final scalar"
+readScalar(gl, source, result);
+diagnostics = "Hierarchical reduction reached one GPU scalar without intermediate readback.";
+```
+
+`source` trỏ đúng buffer vừa được ghi ở pass cuối. Không hard-code scratch A vì số tầng thay đổi theo count. Bài 9 mới bổ sung validation và GPU timer; ở checkpoint này ta chỉ tập trung kiểm tra luồng buffer và scalar nhận được.
+
+### Bước 4 — Ghi lại từng pass bằng tên dễ đọc
+
+`PassRecord` giữ label, input/output count và barrier bit. Final dùng trace để vẽ graph và title dùng `passTrace().size()` thay vì một số 3 cố định.
+
+## Chạy checkpoint và đọc kết quả
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_39_checkpoint_4
+build\Debug\project_39_checkpoint_4.exe
+```
+
+Với `N=1.000.003`, diagnostics phải nói reduction đã tới một scalar mà không intermediate readback. So scalar với `cpuReduction(input)` bằng validation report, không bằng equality.
+
+## Cố tình phá thuật toán
+
+1. Dùng một scratch buffer cho cả source và destination. Invocation có thể ghi đè dữ liệu invocation khác chưa đọc.
+2. Bỏ `SHADER_STORAGE` giữa pass 0 và 1. Dispatch sau có thể thấy partial sums stale.
+3. Gọi `glGetBufferSubData` sau mỗi tầng “để xem”. Kết quả vẫn đúng, nhưng CPU phải chờ GPU ở từng tầng và thuật toán không còn chạy liền mạch trên GPU.
+4. Luôn đọc scratch A. Count có số tầng chẵn sẽ để kết quả ở scratch B.
+5. Cấp lại buffer mỗi pass. Allocation noise làm hỏng cả code clarity lẫn phép đo.
+
+## Checklist hoàn thành
+
+- [ ] Scratch capacity ít nhất bằng 1.954 float.
+- [ ] Source/destination không trùng trong cùng pass.
+- [ ] `count` đổi `1.000.003 → 1.954 → 4 → 1`.
+- [ ] Hai cạnh compute→compute dùng `GL_SHADER_STORAGE_BARRIER_BIT`.
+- [ ] Cạnh cuối trước readback dùng `GL_BUFFER_UPDATE_BARRIER_BIT`.
+- [ ] CPU đọc đúng một scalar sau ba dispatch.
+- [ ] Pass trace có ba record với input/output count thật.
+
+## Bài tập để hiểu sâu hơn
+
+1. In buffer name A/B cạnh mỗi pass để tự kiểm ping-pong với hierarchy dài hơn.
+2. Thêm preset 513 và dự đoán nó cần hai pass trước khi chạy.
+3. Tách đo `kernel graph` và `end-to-end` thành hai nhãn, giữ readback ngoài nhãn GPU kernel.
+
+Reduction đã hoàn chỉnh. Bài 5 sẽ dùng cùng shared tree theo hai chiều để tạo **mọi prefix**, không chỉ một tổng.

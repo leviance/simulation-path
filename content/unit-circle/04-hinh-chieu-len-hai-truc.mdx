@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tách đầu kim thành hai thành phần trên trục X và Y
+
+## Vấn đề cần giải quyết
+
+Ta đã biết đầu kim có tọa độ `(cos(angle), sin(angle))`, nhưng chỉ nhìn một cặp số vẫn khó thấy mỗi thành phần đóng góp bao nhiêu vào hướng cuối cùng. Bài này sẽ tách vector đầu kim thành một đoạn nằm trên trục X và một đoạn nằm trên trục Y.
+
+Cần phân biệt hai thứ rất dễ bị lẫn: **vector thành phần** đi từ tâm dọc theo một trục, còn **đường dóng** đi từ đầu kim vuông góc về trục. Đường dóng chỉ giúp mắt nối các vị trí; độ dài của vector trên trục mới biểu diễn cosine hoặc sine.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với endpoint `P=(x,y)` trên unit circle:
+
+- hình chiếu của `P` lên trục X là `Px=(x,0)`;
+- hình chiếu của `P` lên trục Y là `Py=(0,y)`;
+- vector từ gốc tới `Px` có độ dài có dấu `x = cos(angle)`;
+- vector từ gốc tới `Py` có độ dài có dấu `y = sin(angle)`.
+
+Từ `Px` đi thẳng đứng tới `P` phải thay đổi một đoạn `y`; từ `Py` đi ngang tới `P` phải thay đổi một đoạn `x`. Vì vậy không nên lấy độ dài của hai đường dóng rồi gọi chúng là cosine và sine.
+
+<InteractiveLab demo="angle" mode="angle-projections" />
+
+Chọn mốc 30°. Đoạn xanh dương từ tâm đi sang phải phải dài hơn đoạn xanh lá đi lên vì `cos(30°) > sin(30°)`. Chuyển sang 60° và quan sát quan hệ này đảo lại. Hai đường màu xám chỉ nối endpoint với các điểm chiếu.
+
+## Viết code từng bước
+
+### Bước 1 — Tính direction và endpoint đúng một lần
+
+```cpp title="src/main.cpp — dữ liệu chung của kim và hai thành phần"
+const lab::Vec2 direction = lab::unitDirection(angle);
+const lab::Vec2 point = lab::pointOnCircle({}, double(radius), angle);
+const int pointX = centerX + int(std::lround(point.x));
+const int pointY = centerY - int(std::lround(point.y));
+```
+
+`direction` nằm trên unit circle nên chứa trực tiếp cosine và sine. `point` đã nhân hai giá trị đó với bán kính hiển thị. `pointX/pointY` là bước cuối cùng đổi sang pixel, trong đó Y bị đảo chiều để phù hợp với màn hình.
+
+### Bước 2 — Viết hai phép chiếu dưới dạng hàm thuần
+
+```cpp title="include/lab.hpp — giữ một thành phần, đưa thành phần kia về 0"
+inline Vec2 projectOntoXAxis(Vec2 point) {
+    return {point.x, 0.0};
+}
+
+inline Vec2 projectOntoYAxis(Vec2 point) {
+    return {0.0, point.y};
+}
+```
+
+Hai hàm chưa biết gì về tâm màn hình hay pixel. Chiếu lên X nghĩa là giữ X và bỏ Y; chiếu lên Y làm điều ngược lại. Tách phần toán khỏi phần vẽ giúp ta kiểm thử trực tiếp bằng những điểm đơn giản như `(3,4)`.
+
+### Bước 3 — Đổi hai điểm chiếu sang screen space
+
+```cpp title="src/main.cpp — tọa độ pixel của hai điểm chiếu"
+const lab::Vec2 cosineProjection = lab::projectOntoXAxis(point);
+const lab::Vec2 sineProjection = lab::projectOntoYAxis(point);
+const int cosineX = centerX + int(std::lround(cosineProjection.x));
+const int sineY = centerY - int(std::lround(sineProjection.y));
+```
+
+Điểm cosine luôn nằm tại `(cosineX, centerY)`. Điểm sine luôn nằm tại `(centerX, sineY)`. Tên biến ghi rõ đại lượng mà điểm đó biểu diễn, tránh kiểu tên `projectedX/projectedY` dễ khiến ta quên đang chiếu lên trục nào.
+
+### Bước 4 — Vẽ đường dóng trước, vector thành phần sau
+
+```cpp title="src/main.cpp — đường dóng xám và hai thành phần có màu"
+drawLine(pixels, width, height, pointX, pointY, cosineX, centerY, rgba(70, 83, 110));
+drawLine(pixels, width, height, pointX, pointY, centerX, sineY, rgba(70, 83, 110));
+drawLine(pixels, width, height, centerX, centerY, cosineX, centerY, rgba(132, 169, 255));
+drawLine(pixels, width, height, centerX, centerY, centerX, sineY, rgba(83, 240, 174));
+fillCircle(pixels, width, height, cosineX, centerY, 4, rgba(132, 169, 255));
+fillCircle(pixels, width, height, centerX, sineY, 4, rgba(83, 240, 174));
+```
+
+Hai đường xám được vẽ trước để không che vector màu. Xanh dương đi từ tâm tới hình chiếu trên X và biểu diễn cosine. Xanh lá đi từ tâm tới hình chiếu trên Y và biểu diễn sine. Dấu của mỗi giá trị được thể hiện bằng phía mà đoạn màu mọc ra khỏi tâm.
+
+## Ghép các phần lại
+
+Checkpoint 4 giữ nguyên chuyển động của bài trước. Mỗi khung hình, chương trình tính `angle → direction → point`, sau đó suy ra hai điểm chiếu. Không cần lưu thêm trạng thái: khi `angle` hoặc kích thước cửa sổ đổi, toàn bộ hình vẽ được tính lại từ dữ liệu hiện tại.
+
+Tạm dừng tại 150°. Cosine phải âm nên đoạn xanh dương đi sang trái; sine vẫn dương nên đoạn xanh lá đi lên. Endpoint vàng nằm tại góc đối diện của hình chữ nhật tạo bởi hai vector thành phần.
+
+## Thử làm sai để hiểu đúng
+
+1. Tô đường từ endpoint xuống trục X bằng màu cosine. Đường này có chiều dài `|sin(angle)|`, nên màu và đại lượng không còn khớp.
+2. Tạo hình chiếu lên X bằng `(0,y)`. Điểm nhận được thực ra nằm trên trục Y.
+3. Lưu `cosineX` và `sineY` qua nhiều frame. Sau resize, chúng vẫn dùng tâm và bán kính cũ nên tách khỏi endpoint.
+
+## Tự kiểm tra kết quả
+
+- 0°: vector cosine dài một bán kính sang phải; vector sine có độ dài 0.
+- 90°: vector cosine co về 0; vector sine dài một bán kính hướng lên.
+- 180°: vector cosine hướng sang trái; vector sine gần 0.
+- 270°: vector cosine gần 0; vector sine hướng xuống.
+- `projectOntoXAxis({3,4})` trả `(3,0)` và `projectOntoYAxis({3,4})` trả `(0,4)`.
+- Sau resize, endpoint, hai điểm chiếu và các đường dóng vẫn gặp nhau.
+
+## Bài tập mở rộng
+
+Vẽ thêm hình chữ nhật có tâm và endpoint là hai góc đối diện. Sau đó thay endpoint bằng một vector không có độ dài 1 để xác nhận hai hàm chiếu vẫn hoạt động; chỉ có giá trị thành phần thay đổi, quy tắc giữ một tọa độ và đưa tọa độ kia về 0 vẫn giữ nguyên.
+
+Bài sau lấy các giá trị sine/cosine theo thời gian và trải chúng thành hai đường chạy từ trái sang phải.

@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đối chiếu brute-force oracle
+
+## Vấn đề cần giải quyết
+
+Trong 3D, một góc camera che khuất rất nhiều dữ liệu. Hai point có thể chiếu lên gần cùng pixel; một query box có thể trông như chạm point nhưng thật ra lệch theo Z. Vì vậy “nhìn đúng” là tiêu chuẩn quá yếu cho Octree query.
+
+Ta giữ brute force vì nó đơn giản: quét mọi point và gọi exact test. Checkpoint 6 chạy cùng volume qua hai algorithm rồi so tập index, không so thứ tự traversal.
+
+## Hiểu ý tưởng trước khi viết code
+
+Brute force trả hits theo thứ tự point index. Octree trả theo thứ tự DFS của topology. Cả hai có thể đúng nhưng vector khác thứ tự. Correctness contract là **set equality**. Ta tạo bản sao, sort ngoài hot path rồi so.
+
+Danh sách **canonical** được so với **brute force** trên cả các hộp **split-plane**, không chỉ ở giữa cube. Ta còn dùng query ở hai góc đối diện, query chạm world face và một tập query sinh từ seed cố định. Test chỉ có dữ liệu ngẫu nhiên thường bỏ sót đúng boundary dễ sai nhất.
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-oracle" />
+
+Di chuyển query qua các cụm và sát rìa cube. Readout phải giữ `hit set khớp` dù camera đang ở góc nào và traversal đi qua số node khác nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ oracle không phụ thuộc Octree
+
+```cpp title="include/lab.hpp — brute-force oracle"
+for (std::size_t pointIndex = 0; pointIndex < points.size(); ++pointIndex) {
+    ++result.scanned;
+    if (pointInsideVolume(points[pointIndex].position, volume)) {
+        result.hitIndices.push_back(pointIndex);
+    }
+}
+```
+
+Oracle chia sẻ exact geometry contract nhưng không chia sẻ node bounds, octant policy hoặc recursion, nên nó có khả năng bắt lỗi ở những phần Octree thêm vào.
+
+### Bước 2 — Canonicalize bản sao
+
+```cpp title="include/lab.hpp — canonicalVolumeHits"
+std::vector<std::size_t> canonical(hitIndices.begin(), hitIndices.end());
+std::sort(canonical.begin(), canonical.end());
+return canonical;
+```
+
+Không sort `result.hitIndices` tại chỗ trong query. Validation không được âm thầm làm hot path đắt hơn hoặc thay output mà renderer đang dùng.
+
+### Bước 3 — So hai canonical hit sets
+
+```cpp title="include/lab.hpp — octreeMatchesBruteForce"
+return canonicalVolumeHits(octreeResult.hitIndices) ==
+    canonicalVolumeHits(bruteResult.hitIndices);
+```
+
+Vector equality sau sort kiểm cả size lẫn từng index. Một hit trùng và một hit mất không thể bù trừ cho nhau.
+
+### Bước 4 — Sinh query set tái lập được
+
+```cpp title="src/main.cpp — deterministic probes"
+const std::vector<lab::Bounds3D> validationProbes = lab::makeVolumeQueries(
+    24,
+    worldBounds,
+    {0.14, 0.12, 0.10},
+    seed ^ 0x300030U
+);
+```
+
+XOR seed tạo stream riêng cho queries mà vẫn tái lập. Cùng points và volumes sẽ được dùng lại ở benchmark.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 6"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_30_checkpoint_6
+```
+
+Chạy rồi di chuyển query sát sáu mặt root. Title phải giữ `oracle match`; nếu mismatch, dừng việc tối ưu và thu nhỏ probe thành case tối giản trước.
+
+## Thử làm sai để hiểu đúng
+
+1. So hai vectors trực tiếp mà không canonicalize. Traversal order khác làm test fail dù set đúng. Sort bản sao ở validation boundary.
+2. Cho oracle dùng candidates mà Octree trả. Cả hai cùng bỏ sót subtree và vẫn “khớp”. Oracle phải quét toàn bộ point vector.
+3. Chỉ test query giữa cube. Đổi equality policy ở Z có thể không lộ. Bổ sung corner, face và split-plane probes.
+
+## Tự kiểm tra kết quả
+
+- Oracle scans đúng N cho mỗi volume.
+- Oracle không đọc Octree nodes hoặc candidate indices.
+- Canonicalization tạo bản sao ngoài hot path.
+- Output order không thuộc correctness contract.
+- Deterministic probes dùng cùng seed, bounds và size mỗi lần chạy.
+- Corner/face/split-plane queries đều khớp.
+- Xoay camera không ảnh hưởng oracle agreement.
+
+## Bài tập mở rộng
+
+Khi mismatch, dùng `std::set_difference` để in 10 indices đầu tiên chỉ có ở một phía. Sau đó in position của chúng và sáu mặt query volume. Đây là diagnostic code; đừng đưa nó vào vòng query production.
+
+Khi output đã được chứng minh đúng, bài tiếp theo mới đo tốc độ. Benchmark sẽ khóa cùng workload và checksum để không đánh đổi correctness lấy một con số đẹp.

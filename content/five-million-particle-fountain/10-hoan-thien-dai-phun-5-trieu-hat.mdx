@@ -1,0 +1,166 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện đài phun 5 triệu hạt
+
+## Ta cần giải quyết điều gì?
+
+Các phần riêng lẻ đã chạy đúng; bài cuối sẽ nối chúng thành ứng dụng hoàn chỉnh. Ta phải bảo đảm đổi số lượng particle, pause, single-step, reset, resize và chạy validation không làm trạng thái lệch nhau. Đây cũng là lúc xử lý các lỗi tích hợp thường gặp: cấp phát vượt khả năng GPU, dùng lại query slot quá sớm, probe làm thay đổi binding chính hoặc xóa resource sau khi OpenGL context đã bị hủy.
+
+Bài này không thêm thuật toán vật lý mới. Ta tổ chức lifetime, controls và diagnostics để người học có thể chạy, quan sát và tự kiểm từng giả định. Mã hoàn chỉnh ở cuối bài được sinh từ cùng snapshot với ZIP tải xuống.
+
+## Theo chân một particle
+
+Final có ba đường công việc tách biệt:
+
+```text
+Mỗi frame đang chạy:
+clock → compute update → SHADER_STORAGE barrier → draw → present
+
+Khi count/reset đổi:
+capability check → tạo dữ liệu CPU tạm → upload main SSBO → bỏ bản CPU
+
+Khi nhấn V:
+64-particle probe → compute → BUFFER_UPDATE barrier → readback → validate
+```
+
+Chỉ đường chạy thứ nhất quyết định tốc độ mô phỏng hằng ngày. Việc tạo lại buffer và chạy kiểm tra chỉ xảy ra khi người dùng yêu cầu; hai việc này được ghi nhãn riêng và không nằm trong timer compute/draw.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-fountain-final" />
+
+Hạ giới hạn mô phỏng xuống 64 MiB rồi chọn 5 triệu particle để xem chương trình tự chọn preset thấp hơn. Canvas chỉ vẽ một mẫu nhỏ để giải thích; chương trình C++/OpenGL mới thực sự cấp phát và render trên GPU.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Chỉ thay buffer cũ sau khi buffer mới sẵn sàng
+
+```cpp title="src/main.cpp — rebuildParticles"
+const lab::CapabilityReport capability = lab::validateCapabilities(
+    limits,
+    lab::makeDispatchPlan(requestedCount)
+);
+if (!capability.allPassed()) {
+    diagnostics = "Requested preset does not pass capability validation.";
+    return false;
+}
+try {
+    std::vector<lab::Particle> particles = lab::makeInitialParticles(requestedCount);
+    if (!engine.replaceParticles(gl, particles, diagnostics)) {
+        return false;
+    }
+
+} catch (const std::exception& error) {
+    diagnostics = std::string("Particle allocation failed: ") + error.what();
+    return false;
+}
+
+particleCount = requestedCount;
+spawnEpoch = 0U;
+```
+
+Chỉ cập nhật count và epoch sau khi tải buffer mới thành công. Nếu GPU không đủ khả năng, cấp phát lỗi hoặc upload thất bại, buffer cũ vẫn tiếp tục được vẽ và người dùng nhận thông báo thay vì một màn hình trống.
+
+Vector CPU nằm trong scope `try` và được giải phóng sau upload. Final không giữ thêm 160 MB host state trong suốt vòng đời app.
+
+### Bước 2 — Giữ công việc mỗi frame thật gọn
+
+Một frame bình thường chỉ làm năm việc: đọc input, tính dt, cập nhật nếu cần, render, lấy các query result cũ đã sẵn sàng rồi present. Nó không sinh lại particle, không đọc toàn bộ buffer, không chạy bản CPU và không chờ timer query vừa gửi.
+
+Điều khiển final:
+
+- `1/2/3/4`: 100k, 500k, 1m, 5m nếu capability cho phép;
+- `Space`: pause/resume;
+- `N`: một step 1/120 giây;
+- `R`: reset preset hiện tại bằng seed ban đầu;
+- `V`: chạy probe 64 particle;
+- `Escape`: thoát.
+
+### Bước 3 — Thanh tiêu đề phải phản ánh trạng thái đang chạy
+
+```cpp title="src/main.cpp — final title data"
+std::snprintf(
+    title,
+    sizeof(title),
+    "P38 | N=%zu | %.1f MiB | compute %.3f ms | draw %.3f ms | queries %zu | probe %s | %s",
+    particleCount,
+    static_cast<double>(lab::particleStorageBytes(particleCount)) / (1024.0 * 1024.0),
+    engine.computeMedianMilliseconds(),
+    engine.drawMedianMilliseconds(),
+    engine.pendingTimingQueries(),
+    validationText,
+    runState
+);
+```
+
+Thanh tiêu đề chỉ cập nhật bốn lần mỗi giây. Count là số particle thực sự được cấp phát; timing là median của những query đã sẵn sàng; kết quả kiểm tra lấy từ lần chạy buffer thử gần nhất. Không dùng FPS thay cho thời gian compute/draw trên GPU.
+
+### Bước 4 — Hủy tài nguyên theo thứ tự ngược lúc tạo
+
+```cpp title="src/main.cpp — shutdown"
+// Cleanup GPU resources khi OpenGL context vẫn còn current.
+engine.destroy(gl);
+destroyWindowAndContext(window, context);
+```
+
+`engine.destroy` xóa query rings, VAO, SSBO rồi shader programs. Sau đó mới destroy OpenGL context, window và SDL. Mọi nhánh lỗi sau khi engine được tạo cũng phải đi qua cleanup tương ứng.
+
+## Nối lại thành một bước mô phỏng
+
+Bản hoàn chỉnh khởi tạo theo một đường duy nhất: SDL/OpenGL context → nạp hàm GL → đọc giới hạn → chọn preset → tạo và tải particle có thể tái lập → compile compute/render program → chạy buffer thử lần đầu → event loop.
+
+Trong loop, `dt > 0` mới tăng epoch và dispatch. Barrier luôn đứng giữa update và draw. Query results được poll sau commands nhưng chỉ đọc slot available. Resize dùng framebuffer pixel size thật để tính viewport và `uHalfExtent`.
+
+## Mã hoàn chỉnh và cách build
+
+Phần **Mã chạy được ở cuối bài 10** phía dưới được sinh trực tiếp từ final snapshot, gồm:
+
+- `particle_math.hpp`: record, khởi tạo có thể tái lập, bước cập nhật CPU, giới hạn phần cứng, dt và phép kiểm tra;
+- `gl_api.hpp`: OpenGL 4.3 entry points qua SDL;
+- `particle_gpu_engine.hpp`: programs, SSBO, update/draw, query rings và probe;
+- `particle_update.comp`: gravity, integration, lifetime và respawn;
+- `particle.vert` / `particle.frag`: SSBO render và point sprite;
+- `main.cpp`: lifecycle, controls, fallback và diagnostics;
+- `tests.cpp`: CTest thuần CPU.
+
+```bash title="Terminal — Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_38_final project_38_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — Release"
+cmake --build build --config Release --target project_38_final project_38_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Chạy app thủ công vì nó có window/event loop. CTest không mở cửa sổ và luôn có timeout hữu hạn.
+
+## Thử tạo lỗi
+
+1. Đổi `particleCount` trước khi upload thành công. Draw count mới có thể vượt quá dung lượng buffer cũ.
+2. Giữ vector CPU gồm năm triệu phần tử sau upload “để tiện”. Bộ nhớ tạm thời lúc khởi tạo sẽ trở thành bộ nhớ bị chiếm suốt chương trình dù không còn bước nào dùng nó.
+3. Cho validation V chạy trong mỗi frame. Probe nhỏ nhưng readback vẫn tạo synchronization liên tục.
+4. Đọc query theo cách chặn để thanh tiêu đề luôn có số mới. Chính phần hiển thị chẩn đoán lại làm chậm đoạn code đang được đo.
+5. Xóa context trước `engine.destroy`. `glDelete*` không còn context hợp lệ.
+6. Khi fallback, vẫn lấy 5 triệu làm nhãn/dispatch count. Buffer, shader và diagnostics nói ba sự thật khác nhau.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] 5 triệu tạo 19.532 groups, 192 tail lanes và 160.000.000 byte.
+- [ ] Máy thiếu SSBO capacity chọn preset nhỏ hơn trước allocation và báo count thật.
+- [ ] Main loop không full readback hoặc upload particle mỗi frame.
+- [ ] Update → `GL_SHADER_STORAGE_BARRIER_BIT` → draw giữ đúng thứ tự.
+- [ ] Pause, N, R và 1–4 giữ đúng dt, count, seed và epoch.
+- [ ] Compute/draw query rings không block và có sample limit.
+- [ ] V probe dùng buffer riêng, fixed inputs và khôi phục main binding.
+- [ ] Title báo count, MiB, timing, pending queries, validation và run state.
+- [ ] Query, VAO, SSBO và programs bị xóa trước context.
+- [ ] Debug/Release CTest kết thúc trong timeout và source trang khớp ZIP.
+
+## Nếu muốn thử thêm
+
+1. Thêm vị trí emitter điều khiển bằng chuột; chỉ gửi uniform, không tạo lại buffer.
+2. Dùng một compute pass tạo indirect draw count cho particle sống, chuẩn bị tư duy compaction.
+3. Thêm obstacle đơn giản và validation probe chứa case va chạm biên.
+4. Ghi CSV benchmark 100k→5m gồm compute median, draw median, resolution và GPU name.
+
+Project 39 chuyển sang bài toán cần nhiều invocation hợp tác: reduction và prefix sum trên một triệu số. Khi đó shared memory trong workgroup và thứ tự các pass quyết định kết quả có đúng hay không, chứ không chỉ ảnh hưởng hiệu năng.

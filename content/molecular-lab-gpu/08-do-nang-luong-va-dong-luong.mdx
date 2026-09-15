@@ -1,0 +1,127 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo năng lượng và động lượng trên GPU
+
+## Vấn đề cần giải quyết
+
+Hình chuyển động có thể trông hợp lý ngay cả khi bạn cộng U hai lần hoặc làm lệch động lượng. Ta cần số đo K, U và P, nhưng không muốn chép hàng triệu velocity về CPU sau mỗi bước.
+
+Bài này biến N bản ghi thành đúng một `vec4`. Reduction hoàn tất và hữu hạn mới cho phép commit; ứng dụng đọc bốn số thay vì N phần tử.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi hạt đóng góp động năng, phần thế năng đã chia đôi và hai thành phần động lượng. Khối lượng hiện bằng 1:
+
+$$K_i=\tfrac12(v_{ix}^2+v_{iy}^2),\quad E=\sum_i K_i+\sum_i U_i,\quad \mathbf P=\sum_i\mathbf v_i.$$
+
+Mỗi workgroup 256 invocation cộng một nhóm. Ví dụ N=257 tạo hai kết quả nhóm; pass tiếp theo cộng hai giá trị đó thành một. Không được cho invocation ngoài N `return` trước barrier trong reduction: nó phải đóng góp zero và vẫn tham gia đồng bộ.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-8" />
+
+Dừng sau Kick rồi đi thêm một pha. Bank chỉ đổi ở Reduction/commit. Canvas thể hiện thứ tự toán học, không thực thi workgroup GLSL.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo bản ghi và cộng trong shared memory
+
+Kernel dùng chung cho pass đầu và các pass cộng tiếp:
+
+```glsl title="shaders/diagnostics.comp — reduction có xử lý phần đuôi"
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Velocities { vec4 velocities[]; };
+layout(std430, binding = 1) readonly buffer Forces { vec4 forces[]; };
+layout(std430, binding = 2) readonly buffer InputValues { vec4 inputValues[]; };
+layout(std430, binding = 3) writeonly buffer OutputValues { vec4 outputValues[]; };
+uniform uint uCount;
+uniform uint uBase;
+uniform int uReduce;
+shared vec4 sums[256];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint group = uBase + gl_WorkGroupID.x;
+    uint i = group * 256u + lane;
+    vec4 value = vec4(0);
+    if (i < uCount) {
+        if (uReduce == 0) {
+            vec2 velocity = velocities[i].xy;
+            value = vec4(0.5 * dot(velocity, velocity), forces[i].z, velocity);
+        } else {
+            value = inputValues[i];
+        }
+    }
+    sums[lane] = value;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride /= 2u) {
+        if (lane < stride) {
+            sums[lane] += sums[lane + stride];
+        }
+        barrier();
+    }
+    if (lane == 0u) {
+        outputValues[group] = sums[0];
+    }
+}
+```
+
+Ở pass đầu, `value=(K_i,U_i,Px_i,Py_i)`. Ở pass sau nó đọc một partial sum. Vòng stride 128,64,...,1 chỉ để nửa số lane đang hoạt động cộng mỗi lượt, nhưng mọi lane vẫn đi qua barrier. `uBase` ở kernel này là **base group**, khác base element ở Drift/Force; engine chuyển đơn vị một cách tường minh.
+
+### Bước 2 — Luân phiên scratch, không đọc và ghi cùng vùng
+
+Khi một cấp còn nhiều hơn một kết quả nhóm:
+
+```cpp title="include/gpu_engine.hpp — đoạn đang thêm"
+if (passCount_ > 1) {
+    reductionCount_ = passCount_;
+    reductionInput_ = reductionOutput_;
+    reductionOutput_ = 1 - reductionInput_;
+    reducing_ = true;
+    enter(Pass::Diagnostics);
+}
+```
+
+Scratch đầu có `ceil(N/256)` phần tử. Các cấp sau không lớn hơn nó, nên hai buffer cỡ đó đủ dùng. `reductionInput_` và `reductionOutput_` luôn khác nhau, tránh ghi đè dữ liệu mà invocation khác chưa đọc.
+
+### Bước 3 — Đọc bốn số sau khi GPU hoàn tất
+
+Sau cấp cuối:
+
+```cpp title="include/gpu_engine.hpp — đoạn đang thêm"
+totals = readSmall<Float4>(gl, storage.scratch.at(reductionOutput_));
+if (!std::isfinite(totals.x) || !std::isfinite(totals.y) || !std::isfinite(totals.z) || !std::isfinite(totals.w)) {
+    throw std::runtime_error("Diagnostic reduction is not finite.");
+}
+commit();
+}
+```
+
+`GpuQueue` đặt `GL_BUFFER_UPDATE_BARRIER_BIT` trước fence để API đọc buffer thấy shader writes. Fence signaled cho biết lệnh trước đó đã hoàn tất; barrier và fence giải quyết hai việc khác nhau. Không coi `MemoryBarrier` là một lệnh chờ CPU. Xem [mô tả của Khronos về glMemoryBarrier](https://wikis.khronos.org/opengl/GLAPI/glMemoryBarrier).
+
+## Ghép các phần lại
+
+Checkpoint 08 bật `features.diagnostics`, cả ở trạng thái khởi tạo lẫn sau Kick. Tiêu đề hiển thị E và P; K/U/P được lấy từ GPU reduction. Trong verifier nhỏ ở bài cuối, CPU cộng lại từ velocity/force để đối chiếu reduction độc lập.
+
+```bash title="Terminal Windows — build và chạy bài 8"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_8 --parallel 2
+.\build\Debug\project_45_checkpoint_8.exe
+```
+
+Số đo finite là điều kiện cần, không đủ chứng minh vật lý đúng. Energy có thể dao động vì tích phân và sai số float; đừng thêm thao tác 'chuẩn hóa E' sau mỗi bước để che một lỗi lực. Bản này chưa có thermostat và không mô phỏng một vật liệu cụ thể.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng ca N=257 rồi tạm bỏ việc gán zero cho lane ngoài N. Reduction sẽ đọc giá trị không xác định hoặc sai kết quả. Khôi phục zero và chạy lại oracle nhỏ.
+2. Trong test, nhân đôi U nhưng giữ K và P. Chuyển động có thể không đổi; kiểm reduction phải vẫn bắt sai U. Đây là lý do không chỉ kiểm rằng E là một số hữu hạn.
+
+## Tự kiểm tra kết quả
+
+Ca 64 hạt dùng một group; 257 dùng hai cấp. Scratch không alias input/output. K/U/P khớp CPU sum trong tolerance đã công bố. Không có readback N phần tử trong đường chạy bình thường.
+
+## Bài tập mở rộng
+
+Thêm số đo max speed bằng một reduction riêng, ghi rõ phép kết hợp là max chứ không phải sum. Dự đoán trước số cấp cần cho N=5 triệu.
+
+Tiếp theo: [tăng số hạt có giới hạn](/projects/molecular-lab-gpu/09-tang-so-hat-co-gioi-han).
+

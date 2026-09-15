@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Benchmark grid và baseline công bằng
+
+## Vấn đề cần giải quyết
+
+Ta biết output đúng, giờ mới được hỏi grid nhanh hơn bao nhiêu. Một phép so thiếu công bằng rất dễ làm Spatial Grid thắng: đo brute force trên 100.000 particles nhưng đo grid trên query khác, cộng particle generation vào một phía, hoặc giấu thời gian rebuild trong FPS chung.
+
+Scene của project đứng yên, nên grid được build khi seed, N hoặc cellSize đổi. Query benchmark chỉ đo phần chạy lặp lại khi kính lúp di chuyển. Rebuild time vẫn đáng quan tâm, nhưng phải được báo thành một con số riêng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai path dùng chung:
+
+- cùng particle span;
+- cùng vector `CircleQuery` deterministic;
+- cùng repetitions;
+- cùng warm-up policy;
+- cùng checksum formula từ hit count và nearest index.
+
+Brute exact work là $NQR$. Grid exact work là tổng `candidatesChecked`, không phải `visitedCells` và cũng không phải hit count.
+
+<InteractiveLab demo="spatial-grid-neighbor-query" mode="grid-benchmark" />
+
+Bấm `So benchmark`. Hai checksum phải giống nhau. Đổi N từ 1.000 lên 100.000 để thấy brute scans tăng thẳng theo N, còn grid candidates phụ thuộc vùng cell query mở.
+
+## Viết code từng bước
+
+### Bước 1 — Một metrics schema cho cả hai path
+
+```cpp title="include/lab.hpp — timing đi cùng exact work"
+struct BatchMetrics {
+    std::size_t queryCount{};
+    std::size_t totalScanned{};
+    std::size_t totalVisitedCells{};
+    std::size_t totalCandidates{};
+    std::size_t totalHits{};
+    std::uint32_t checksum{2166136261U};
+    double elapsedMicroseconds{};
+};
+```
+
+Brute đặt `totalScanned = N×Q×R`. Grid đặt `totalScanned = totalCandidates`; `totalVisitedCells` cho biết overhead mở bucket.
+
+### Bước 2 — Warm-up cùng code path trước timer
+
+```cpp title="include/lab.hpp — warm-up không đi vào metrics"
+workspace.hitIndices.reserve(particles.size());
+for (const CircleQuery& query : queries) {
+    querySpatialGrid(grid, particles, query, workspace);
+}
+
+const auto started = std::chrono::steady_clock::now();
+```
+
+Grid đã được build trước đoạn này. Nếu particles chuyển động, hãy đo rebuild bằng một timer khác thay vì nhét nó vào query time.
+
+### Bước 3 — Ghi candidates và checksum mỗi query
+
+```cpp title="include/lab.hpp — phần công việc được đo của Spatial Grid"
+querySpatialGrid(grid, particles, query, workspace);
+++metrics.queryCount;
+metrics.totalVisitedCells += workspace.visitedCells;
+metrics.totalCandidates += workspace.candidatesChecked;
+metrics.totalScanned += workspace.candidatesChecked;
+metrics.totalHits += workspace.hitIndices.size();
+metrics.checksum = updateNeighborChecksum(metrics.checksum, workspace.hitIndices.size(), workspace.nearestIndex);
+```
+
+Checksum không thay oracle validation, nhưng nó xác nhận hai benchmark tiêu thụ output tương đương.
+
+### Bước 4 — Chạy hai benchmark liên tiếp trên cùng probes
+
+```cpp title="src/main.cpp — phím B không đổi workload giữa hai path"
+const std::vector<lab::CircleQuery> probes = lab::makeProbeQueries(24, bounds, query.radius, seed ^ 0x9e3779b9U);
+gridBenchmark = lab::benchmarkSpatialGrid(grid, active, probes, 2, gridResult);
+bruteForceBenchmark = lab::benchmarkBruteForceNeighbors(active, probes, 2, bruteForceResult);
+```
+
+Repetitions hữu hạn để một lần bấm không khóa event loop quá lâu.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint benchmark"
+cmake --build build --config Release --target project_28_checkpoint_6
+```
+
+Đọc Release timing. Debug vẫn cần build sạch và pass test, nhưng không nên dùng để kết luận hiệu năng hot loop.
+
+## Thử làm sai để hiểu đúng
+
+1. Bắt đầu timer trước `buildSpatialGrid`. Grid phải trả thêm chi phí one-time mà brute không có; tách rebuild time.
+2. Tạo probes mới với seed khác cho brute. Checksum không còn so cùng workload; dùng chung vector.
+3. Chỉ in ms/query, bỏ candidates. Bạn biết nhanh hơn nhưng không biết vì sao; giữ exact work trong metrics.
+
+## Tự kiểm tra kết quả
+
+- Cả hai path có cùng `queryCount`.
+- Brute `totalScanned == N×queryCount`.
+- Grid `totalCandidates < brute totalScanned` ở preset mặc định.
+- Hai checksum bằng nhau.
+- Warm-up không được cộng vào metrics.
+- Timing finite và không âm.
+- Rebuild không nằm trong query timer.
+- Benchmark loop hữu hạn và UI trở lại sau khi chạy.
+
+## Bài tập mở rộng
+
+Đo riêng `buildSpatialGrid` bằng microseconds rồi ước lượng cần bao nhiêu query để phần tiết kiệm bù được một lần rebuild. Đây là câu hỏi cần thiết khi particles chuyển động mỗi frame.
+
+Bài tiếp theo không giữ cellSize `0.05` bằng niềm tin: ta chạy study để đọc trade-off bằng dữ liệu.

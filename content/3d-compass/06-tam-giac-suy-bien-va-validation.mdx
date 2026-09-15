@@ -1,0 +1,150 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tam giác suy biến và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Bản hiện tại trả zero vector khi normalize raw normal quá nhỏ, nhưng vẫn vẽ và gọi nó là một normal. Điều đó che mất vấn đề thật: khi ba đỉnh thẳng hàng hoặc trùng nhau, tam giác không có diện tích và không tồn tại một hướng pháp tuyến duy nhất.
+
+Checkpoint cuối sẽ nhận diện trạng thái này, không vẽ mũi tên giả, thêm preset để tái hiện lỗi và khóa các tính chất quan trọng bằng CTest. Đây cũng là lúc kiểm tra toàn bộ đường đi từ input tới hình và title bar, thay vì chỉ kiểm tra một hàm riêng lẻ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tam giác suy biến khi:
+
+$$
+\lVert (B-A)\times(C-A)\rVert\le\varepsilon
+$$
+
+Ta dùng ngưỡng thay vì so bằng 0 tuyệt đối vì dữ liệu `double` sau nhiều phép tính có thể còn một sai số rất nhỏ.
+
+Với tam giác hợp lệ, một kiểm tra độc lập là:
+
+$$
+error=\max\left(|N\cdot AB|,|N\cdot AC|\right)
+$$
+
+`error` phải gần 0. Kiểm tra này không chứng minh toàn bộ hàm đúng, nhưng bắt được phần lớn lỗi dấu hoặc dùng nhầm cạnh trong cross product.
+
+<InteractiveLab demo="normal" mode="normal-degenerate" />
+
+Chọn preset **Thẳng hàng**: area về 0, unit normal được ghi là “không xác định” và mũi tên tím biến mất. Chọn **Gần thẳng hàng**, rồi bấm **Tự làm phẳng** hoặc tiến từng bước để quan sát lúc trạng thái đổi từ valid sang degenerate.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho điều kiện suy biến
+
+Hàm dùng raw normal, không dùng unit normal đã mất thông tin độ lớn:
+
+```cpp title="include/lab.hpp — nhận diện tam giác không có diện tích"
+inline bool isDegenerate(const Triangle& triangle, double epsilon = 1e-9) {
+    return magnitude(triangleRawNormal(triangle)) <= epsilon;
+}
+```
+
+Epsilon mặc định phù hợp với tests dùng dữ liệu cỡ đơn vị. Trong hệ thống có tọa độ rất lớn hoặc rất nhỏ, ngưỡng nên được chọn tương đối theo kích thước cạnh.
+
+### Bước 2 — Đo sai số vuông góc bằng hai cạnh
+
+Hàm validation trả một số thay vì chỉ `true/false`, nhờ vậy title bar cho biết kết quả đang cách 0 bao xa.
+
+```cpp title="include/lab.hpp — phép đo vuông góc độc lập"
+inline double orthogonalityError(const Triangle& triangle) {
+    const auto [edgeAB, edgeAC] = triangleEdges(triangle);
+    const Vec3 normal = triangleRawNormal(triangle);
+    return std::max(std::abs(dot(normal, edgeAB)), std::abs(dot(normal, edgeAC)));
+}
+```
+
+Đây là nơi `std::max` và `std::abs` giúp ý định rõ hơn một biểu thức điều kiện dài.
+
+### Bước 3 — Không vẽ hướng không tồn tại
+
+Render chỉ gọi `drawNormal` với tam giác hợp lệ:
+
+```cpp title="src/main.cpp — tách trạng thái degenerate khỏi normal hợp lệ"
+if (!lab::isDegenerate(triangle)) {
+    drawNormal(pixels, width, height, triangle);
+}
+```
+
+Title bar vẫn hiển thị area, raw normal và chữ `degenerate`, nên người học biết vì sao mũi tên biến mất thay vì tưởng render bị lỗi.
+
+### Bước 4 — Tạo dữ liệu tái hiện lỗi bằng preset
+
+Preset thẳng hàng đặt ba point trên cùng một đường; preset kế tiếp chỉ lệch Y một lượng rất nhỏ:
+
+```cpp title="src/main.cpp — hai trường hợp biên có thể gọi lại"
+if (preset == 2) {
+    return {{-1.5, -0.5, 0.0}, {0.0, 0.0, 0.0}, {1.5, 0.5, 0.0}};
+}
+if (preset == 3) {
+    return {{-1.5, -0.5, 0.0}, {0.0, 0.0, 0.0}, {1.5, 0.5001, 0.0}};
+}
+```
+
+Phím P chuyển tuần tự qua bốn preset. Khác với việc kéo bằng tay, dữ liệu cố định giúp mọi máy tái hiện cùng kết quả.
+
+### Bước 5 — Khóa cross, area và winding bằng CTest
+
+Tests không mở SDL. Tam giác vuông 3×4 cho các giá trị dễ tính bằng tay:
+
+```cpp title="tests/tests.cpp — kiểm tra normal và diện tích bằng số đã biết"
+const lab::Triangle rightTriangle{{0.0, 0.0, 0.0}, {3.0, 0.0, 0.0}, {0.0, 4.0, 0.0}};
+const auto [edgeAB, edgeAC] = lab::triangleEdges(rightTriangle);
+const lab::Vec3 rawNormal = lab::triangleRawNormal(rightTriangle);
+check(nearlyEqual(edgeAB, {3.0, 0.0, 0.0}), "edge AB");
+check(nearlyEqual(edgeAC, {0.0, 4.0, 0.0}), "edge AC");
+check(nearlyEqual(rawNormal, {0.0, 0.0, 12.0}), "raw normal magnitude and direction");
+```
+
+Trường hợp thẳng hàng kiểm tra cả trạng thái và khả năng giữ số hữu hạn:
+
+```cpp title="tests/tests.cpp — tam giác suy biến không sinh NaN"
+const lab::Triangle collinear{{-1.0, -1.0, -1.0}, {0.0, 0.0, 0.0}, {2.0, 2.0, 2.0}};
+check(lab::isDegenerate(collinear), "collinear triangle is degenerate");
+check(nearlyEqual(lab::triangleUnitNormal(collinear), {}), "degenerate normal stays finite zero");
+check(std::isfinite(lab::facingAmount(collinear, {1.0, -1.0, 1.0})), "degenerate facing is finite");
+```
+
+## Ghép các phần lại
+
+Configure và build cả checkpoint lẫn final:
+
+```bash title="Terminal — configure và build Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Sau đó lặp lại ở Release:
+
+```bash title="Terminal — build và kiểm tra Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Mở `project_10_final`. Thử đủ các đường tương tác: chọn từng đỉnh, arrows, Q/E, kéo chuột, F, bốn preset P, reset và resize. Preset thẳng hàng phải ẩn normal nhưng ứng dụng vẫn tiếp tục chạy và nhận input.
+
+Project 10 đã hoàn chỉnh. Phần **Mã hoàn chỉnh của project** bên dưới chứa `CMakeLists.txt`, `lab.hpp`, `main.cpp` và `tests.cpp` đúng với gói ZIP; bạn có thể tải về, build và chạy mà không phải tự ghép các đoạn rời trong bài.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi điều kiện thành `magnitude(...)==0.0`. Preset thẳng hàng tuyệt đối vẫn qua, nhưng dữ liệu gần thẳng hàng có thể tạo unit normal rất nhạy và thay đổi mạnh chỉ vì sai số nhỏ.
+2. Vẫn gọi `drawNormal` khi degenerate rồi chỉ ghi chữ cảnh báo. Người dùng sẽ thấy một chấm hoặc mũi tên giả và có thể hiểu nhầm zero vector là một hướng hợp lệ.
+3. Xóa test đảo winding. Sau đó cố ý đổi `cross(edgeAB,edgeAC)` thành `cross(edgeAC,edgeAB)`; mọi test độ dài và vuông góc vẫn có thể qua dù quy ước hướng đã bị đảo.
+
+## Tự kiểm tra kết quả
+
+- Basis X×Y bằng Z và Y×X bằng −Z.
+- Raw normal vuông góc với AB và AC trong sai số cho phép.
+- Tam giác vuông 3×4 có raw normal dài 12, unit normal dài 1 và area bằng 6.
+- Đảo winding đổi dấu normal nhưng giữ area.
+- Tam giác thẳng hàng được báo degenerate và không tạo NaN.
+- Starter, sáu checkpoint, final và tests đều build ở Debug lẫn Release.
+
+## Bài tập mở rộng
+
+Thêm một ngưỡng tương đối dựa trên `magnitude(AB)*magnitude(AC)` và viết test cho tam giác có tọa độ cỡ `1e6`. Sau đó tạo danh sách nhiều tam giác, vẽ normal của từng mặt và tô màu những mặt có facing âm.
+
+Project 11 sẽ dùng nền tảng Vec3 này để chiếu một điểm 3D bằng perspective. Lúc đó khoảng cách theo chiều sâu sẽ thật sự làm thay đổi kích thước và vị trí trên màn hình, thay vì chỉ dùng sơ đồ axonometric cố định.

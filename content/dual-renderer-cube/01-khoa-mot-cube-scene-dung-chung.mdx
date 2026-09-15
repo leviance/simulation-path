@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khóa một CubeScene dùng chung
+
+## Vấn đề cần giải quyết
+
+Ta đã có CPU cube ở Project 17 và một OpenGL triangle ở Project 33. Cách ghép nhanh nhất là chép cả hai chương trình vào một file, giữ `cpuAngle` bên này và `gpuAngle` bên kia. Cách đó có thể cho ra hai hình giống nhau ở frame đầu, nhưng chỉ cần pause, drag hoặc resize là state bắt đầu trôi.
+
+Project 34 chọn cấu trúc ngược lại: **scene tồn tại trước renderer**. CPU và GPU chỉ là hai backend cùng đọc một snapshot. Vì vậy bài đầu chưa vội upload cube; ta khóa ownership để những bài sau không phải chữa một thiết kế sai từ gốc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một frame được đọc theo thứ tự:
+
+```text
+input → update CubeScene → chọn RendererKind → render cùng snapshot → present
+```
+
+`CubeScene` giữ dữ liệu mô tả thế giới: góc xoay và hai visibility options. OpenGL handles, CPU framebuffer, shader program hay texture presenter thuộc backend, không thuộc scene. F1/F2 chỉ được phép đổi lựa chọn backend.
+
+<InteractiveLab demo="dual-renderer-cube" mode="shared-scene" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên rõ hai backend
+
+```cpp title="include/pipeline.hpp — RendererKind"
+enum class RendererKind {
+    cpu,
+    gpu,
+};
+```
+
+Enum giúp call site đọc thành `RendererKind::cpu`, thay vì một bool tên `useGpu` mà `true/false` rất dễ bị hiểu ngược khi code lớn dần.
+
+### Bước 2 — Scene không biết renderer là ai
+
+```cpp title="include/pipeline.hpp — CubeScene"
+struct CubeScene {
+    float angleX{-0.42F};
+    float angleY{0.68F};
+    bool depthEnabled{true};
+    bool cullingEnabled{true};
+};
+```
+
+Không có `GLuint`, `SDL_Texture*` hay `Framebuffer*` trong struct. Hai backend sẽ nhận `const CubeScene&`; renderer không được tự tăng angle trong lúc vẽ.
+
+### Bước 3 — Label cũng đi từ enum
+
+```cpp title="include/pipeline.hpp — rendererLabel"
+inline const char* rendererLabel(RendererKind renderer) {
+    if (renderer == RendererKind::cpu) {
+        return "F1 CPU rasterizer";
+    }
+    return "F2 OpenGL GPU";
+}
+```
+
+Đây là code cố ý viết tường minh. Dự án học tập không cần rút thành một ternary khó lướt chỉ để tiết kiệm hai dòng.
+
+## Ghép các phần lại
+
+Starter đã chứa SDL/OpenGL context, loader và swap loop từ Project 33. Checkpoint 1 thêm `CubeScene`, nhận drag để đổi hai góc và hiển thị state trên title bar; chưa có mesh nên cửa sổ chỉ clear background.
+
+```bash title="Terminal — chạy checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_34_checkpoint_1
+```
+
+Một checkpoint “trống hình” vẫn có mục đích rõ: ta kiểm được input chỉ sửa scene, reset trả scene về đúng preset và lifecycle OpenGL cũ vẫn chạy trước khi thêm geometry.
+
+## Thử làm sai để hiểu đúng
+
+1. Thêm `float cpuAngle` và `float gpuAngle`, rồi chỉ cập nhật biến của renderer đang active. Đổi F1/F2 vài lần: cube tương lai sẽ nhảy về state cũ.
+2. Đặt `GLuint program` vào `CubeScene`. CTest thuần CPU lập tức phải include OpenGL dù chỉ muốn kiểm angle.
+3. Trong hàm render, tự tăng `scene.angleY`. Khi CPU/GPU được gọi để đối chiếu trong cùng frame, backend chạy sau nhận state khác.
+
+Sau mỗi thử nghiệm, hoàn tác thay đổi rồi build lại checkpoint.
+
+## Tự kiểm tra kết quả
+
+- [ ] Starter và checkpoint 1 đều tạo/destroy context sạch.
+- [ ] Drag thay đổi `angleX/angleY`; R trả đúng preset.
+- [ ] `CubeScene` không chứa handle hoặc pointer của backend.
+- [ ] `RendererKind` là state riêng, chưa khiến scene bị nhân đôi.
+- [ ] Bạn giải thích được vì sao update phải diễn ra trước nhánh render.
+
+Trước khi đánh dấu hoàn thành, hãy dự đoán điều sẽ xảy ra nếu renderer được đổi giữa hai lần update trong cùng frame, rồi đối chiếu với pipeline text phía trên.
+
+## Bài tập mở rộng
+
+1. Thêm `wireframeEnabled` vào scene trên giấy và chỉ ra backend nào sẽ diễn giải option đó.
+2. Viết hàm so sánh hai `CubeScene` không phụ thuộc renderer.
+3. Giải thích vì sao framebuffer size là input của frame nhưng không nhất thiết là dữ liệu bền vững trong scene.
+
+Bài tiếp theo tạo một indexed cube duy nhất để cả CPU và GPU cùng đọc.

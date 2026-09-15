@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc lại GPU và đo sai khác
+
+## Vấn đề cần giải quyết
+
+Nhìn hai panel giống nhau chỉ là kiểm tra bằng mắt. Để bắt lỗi attribute offset, transform hoặc color interpolation, ta cần đọc một fragment GPU và so với CPU expected color. Tuy nhiên một phép so ngây thơ ở triangle edge thường không ổn định: CPU/GPU có thể dùng coverage convention khác nhau đúng một pixel quanh biên.
+
+Checkpoint 8 chọn triangle centroid—một probe nằm sâu trong interior—rồi thực hiện:
+
+```text
+centroid NDC → GPU window pixel → glReadPixels → RGB8
+centroid NDC → CPU barycentric color → quantize RGB8
+maximum channel difference
+```
+
+## Hiểu ý tưởng trước khi viết code
+
+Readback là phép đo có chủ đích chứ không phải cách render chính. Ta chỉ đọc một pixel sâu bên trong triangle khi người học bấm `P`, rồi so theo đơn vị màu 8-bit để tách sai số lượng tử khỏi lỗi tọa độ hoặc attribute.
+
+<InteractiveLab demo="cpu-gpu-triangle" mode="gpu-readback" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo probe từ geometry, không từ pixel đoán mò
+
+```cpp title="include/pipeline.hpp — triangleCentroid"
+return {
+    (transformed[0].positionX + transformed[1].positionX + transformed[2].positionX) / 3.0F,
+    (transformed[0].positionY + transformed[1].positionY + transformed[2].positionY) / 3.0F,
+};
+```
+
+Probe xoay/dịch cùng triangle vì được tính sau transform. Nó không bị bỏ lại ở vị trí cũ khi animation chạy.
+
+### Bước 2 — Đổi NDC sang GPU pixel bằng viewport phải
+
+```cpp title="include/gpu_renderer.hpp — clamp probe pixel"
+const Vec2 windowPoint = ndcToGpuWindow(pointNdc, viewport);
+result.pixelX = std::clamp(int(std::floor(windowPoint.x)), viewport.x, viewport.x + viewport.width - 1);
+result.pixelY = std::clamp(int(std::floor(windowPoint.y)), viewport.y, viewport.y + viewport.height - 1);
+```
+
+Không đảo Y ở đây. `glReadPixels` dùng OpenGL window coordinates, cùng bottom-left convention với viewport.
+
+### Bước 3 — Đọc đúng một pixel
+
+```cpp title="include/gpu_renderer.hpp — glReadPixels probe"
+std::array<std::uint8_t, 4> pixel{};
+api.ReadPixels(result.pixelX, result.pixelY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+result.actual = {
+    float(pixel[0]) / 255.0F,
+    float(pixel[1]) / 255.0F,
+    float(pixel[2]) / 255.0F,
+};
+```
+
+Readback có thể buộc CPU chờ GPU. Vì vậy final chỉ chạy đoạn này khi người dùng bấm `P`, không gọi trong mọi frame.
+
+### Bước 4 — So output cùng representation
+
+CPU expected color được `quantizeRgba8` trước khi so. Report in expected, actual và maximum difference; timing không liên quan đến pass/fail ở đây.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 8"
+cmake --build build --config Debug --target project_33_checkpoint_8
+```
+
+Chạy app, bật smooth bằng `C`, đổi transform rồi bấm `P`. Terminal phải in pixel coordinate, expected RGB, actual RGB và `maxDiff` nhỏ.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng CPU top-left Y cho readback. Probe đọc pixel đối xứng qua trục ngang.
+2. Đọc đúng trên một vertex/edge. Một pixel coverage khác có thể làm report nhảy giữa background và triangle.
+3. So CPU float trực tiếp với byte GPU nhưng tolerance bằng 0. Quantization hợp lệ bị báo lỗi.
+4. Gọi `glReadPixels` mỗi frame. App có thể chậm vì pipeline bị đồng bộ liên tục.
+5. Đọc trước draw call. Kết quả là clear color hoặc frame cũ.
+
+## Tự kiểm tra kết quả
+
+- [ ] Probe được tính từ transformed centroid.
+- [ ] GPU pixel mapping dùng viewport phải và bottom-left Y.
+- [ ] Readback xảy ra sau draw, trước swap.
+- [ ] Expected color được quantize RGBA8 trước comparison.
+- [ ] Report có expected, actual và maximum difference.
+- [ ] Edge không được dùng làm validation pass/fail.
+- [ ] `P` chạy một report hữu hạn; render loop bình thường không readback.
+
+## Bài tập mở rộng
+
+1. Thêm ba interior probes có barycentric weights đặt trước như `(0.6,0.2,0.2)`.
+2. Thêm outside probe và kiểm nó bằng đúng background color.
+3. Đếm thời gian một readback đơn lẻ, nhưng ghi rõ đây là synchronization cost chứ không phải triangle render time.
+
+Bài cuối sẽ ghép controls, validation, diagnostics và cleanup thành source hoàn chỉnh để tải về và chạy độc lập.

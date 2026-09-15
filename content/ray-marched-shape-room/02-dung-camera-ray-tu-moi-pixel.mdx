@@ -1,0 +1,145 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ pixel dựng một tia nhìn
+
+## Bức hình này còn thiếu gì?
+
+Hiện tại mỗi fragment chỉ biết nó nằm ở đâu trên màn hình. Để tìm vật thể trong không gian 3D, ta cần biến pixel đó thành một tia nhìn. Tia này có điểm bắt đầu `origin` và hướng đi `direction`, đều được biểu diễn trong world space.
+
+Đây là chỗ rất dễ viết một công thức ngắn nhưng không hiểu được. Ta sẽ tách bài toán thành bốn bước có thể kiểm riêng: tìm camera basis, đưa pixel về mặt phẳng ảnh, bù aspect ratio, rồi normalize hướng tia.
+
+## Hình dung đường đi của một pixel
+
+Với camera nhìn từ `position` về `target`:
+
+$$
+\begin{aligned}
+\mathbf{forward} &= \operatorname{normalize}(\mathbf{target}-\mathbf{position}) \\
+\mathbf{right} &= \operatorname{normalize}(\mathbf{forward}\times\mathbf{worldUp}) \\
+\mathbf{up} &= \operatorname{normalize}(\mathbf{right}\times\mathbf{forward})
+\end{aligned}
+$$
+
+Một pixel tạo ra hướng:
+
+$$
+\mathbf{direction}=\operatorname{normalize}(\mathbf{forward}+x\,\mathbf{right}+y\,\mathbf{up})
+$$
+
+Trong đó $x$ phải được nhân aspect ratio; nếu bỏ bước này, một sphere sẽ thành ellipse khi cửa sổ không vuông.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-camera" />
+
+Hãy kéo camera trong Canvas. Các tia cùng xuất phát ở camera nhưng tỏa qua những điểm khác nhau trên mặt phẳng ảnh. Tia chính giữa phải hướng gần như chính xác về `target`.
+
+## Cùng sửa checkpoint
+
+### Bước 1 — Viết bản CPU trước để có mốc đối chiếu
+
+Shader khó `printf`. Vì vậy source giữ một hàm C++ nhỏ dùng cùng tên biến và cùng công thức:
+
+```cpp title="include/raymarch_math.hpp — makeCameraRay"
+inline Ray makeCameraRay(
+    const OrbitCamera& camera,
+    double pixelX,
+    double pixelY,
+    int framebufferWidth,
+    int framebufferHeight
+) {
+    const double width = double(std::max(1, framebufferWidth));
+    const double height = double(std::max(1, framebufferHeight));
+    const Vec3 origin = cameraPosition(camera);
+    const Vec3 forward = normalize(camera.target - origin);
+    const Vec3 right = normalize(cross(forward, {0.0, 1.0, 0.0}));
+    const Vec3 up = normalize(cross(right, forward));
+
+    const double ndcX = 2.0 * ((pixelX + 0.5) / width) - 1.0;
+    const double ndcY = 1.0 - 2.0 * ((pixelY + 0.5) / height);
+    const double aspect = width / height;
+    const double tangent = std::tan(camera.verticalFieldOfViewRadians * 0.5);
+
+    const Vec3 direction = normalize(
+        forward + right * (ndcX * aspect * tangent) + up * (ndcY * tangent)
+    );
+    return {origin, direction};
+}
+```
+
+`+ 0.5` lấy tâm pixel thay vì góc pixel. Phép đổi `ndcY` có dấu ngược vì hàm CPU nhận tọa độ theo kiểu màn hình—Y đi xuống—trong khi basis `up` đi lên.
+
+### Bước 2 — Chuyển đúng công thức sang GLSL
+
+Trong fragment shader, `gl_FragCoord` đã có gốc trái dưới. Ta có thể gom phép đổi tọa độ và aspect vào một biểu thức dùng `resolution.y`:
+
+```glsl title="shaders/raymarch.frag — makeCameraRay"
+vec3 makeCameraRay(vec2 fragmentCoordinate) {
+    vec2 safeResolution = max(uResolution, vec2(1.0));
+    vec2 centered =
+        (2.0 * fragmentCoordinate - safeResolution) / safeResolution.y;
+
+    vec3 forward = normalize(uCameraTarget - uCameraPosition);
+    vec3 right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
+    vec3 up = normalize(cross(right, forward));
+    float focalLength = 1.0 / tan(radians(60.0) * 0.5);
+
+    return normalize(
+        right * centered.x +
+        up * centered.y +
+        forward * focalLength
+    );
+}
+```
+
+Vì chia cả hai trục cho `resolution.y`, `centered.x` tự mang aspect ratio còn `centered.y` nằm trong khoảng gần $[-1,1]$. `focalLength` điều khiển field of view: focal length càng nhỏ thì góc nhìn càng rộng.
+
+### Bước 3 — Hiển thị hướng tia như một phép đo
+
+Checkpoint 2 chưa ray-march. Ta encode vector chuẩn hóa $[-1,1]$ thành màu $[0,1]$:
+
+```glsl title="shaders/raymarch.frag — checkpoint 2"
+vec3 rayDirection = makeCameraRay(gl_FragCoord.xy);
+fragColor = vec4(rayDirection * 0.5 + 0.5, 1.0);
+```
+
+Đây không phải “màu đẹp”; nó là debug view. Nếu xoay camera mà hình không đổi, uniform camera chưa đi vào shader. Nếu resize làm dải màu co giãn sai, aspect đang sai.
+
+## Chạy thử và quan sát
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_36_checkpoint_2
+```
+
+Ở phía CPU, kiểm ít nhất hai bất biến:
+
+```cpp title="tests/tests.cpp — camera contract"
+const lab::OrbitCamera camera{};
+const lab::Ray center = lab::makeCameraRay(camera, 479.5, 319.5, 960, 640);
+const lab::Vec3 expected = lab::normalize(camera.target - lab::cameraPosition(camera));
+check(lab::finite(center.origin), "camera origin is finite");
+check(lab::finite(center.direction), "camera direction is finite");
+check(near(lab::length(center.direction), 1.0), "camera ray is normalized");
+check(lab::dot(center.direction, expected) > 0.999999, "center ray points at target");
+```
+
+## Cố tình làm sai
+
+1. Bỏ `aspect` ở bản CPU hoặc chia GLSL cho `safeResolution` theo từng thành phần. Resize thành cửa sổ rất rộng và quan sát góc tia ngang bị sai.
+2. Đổi `cross(forward, worldUp)` thành `cross(worldUp, forward)`. Vector `right` đảo chiều và hình bị soi gương.
+3. Bỏ `normalize` cuối. Độ dài direction thay đổi theo pixel; sau này `traveled` sẽ không còn mang đơn vị world.
+4. Đặt camera thẳng hàng hoàn toàn với `worldUp`. Cross product tiến gần vector zero; đây là lý do orbit camera phải clamp pitch.
+
+## Dấu hiệu cho thấy bài đã hoàn thành
+
+- [ ] Center ray hướng về camera target.
+- [ ] Mọi corner ray hữu hạn và có độ dài gần 1.
+- [ ] Right, up và forward gần vuông góc từng đôi một.
+- [ ] Resize không làm thay đổi field of view dọc hoặc kéo méo hình.
+- [ ] CPU và GLSL dùng cùng camera convention.
+
+## Thử đi thêm một bước
+
+1. Thêm debug màu cho `right`, `up` và `forward` riêng biệt.
+2. Cho phép đổi vertical FOV từ 35° đến 90° và theo dõi corner ray.
+3. Viết test bốn góc đối xứng qua center ray khi camera không xoay.
+
+Bài sau chưa tìm giao điểm. Trước hết, ta cần một hàm nói được một điểm đang cách bề mặt sphere bao xa.

@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho hai nguyên tử chuyển động bằng Velocity Verlet
+
+## Vấn đề cần giải quyết
+
+Ta đã có lực, nhưng câu lệnh `position += force` không tạo ra một mô phỏng vật lý. Trước hết phải đổi lực thành gia tốc bằng `a = F/m`, sau đó mới cập nhật vị trí và vận tốc theo một bước thời gian xác định.
+
+Project 23 đã dùng Velocity Verlet cho dao động điều hòa, nơi lực thay đổi tuyến tính theo vị trí. Với Lennard–Jones, lực tăng rất nhanh khi hai nguyên tử tiến vào vùng đẩy. Vì vậy code phải thể hiện rõ thứ tự `a0 → x1 → a1 → v1`; thời gian của một khung hình chỉ dùng để quyết định số bước vật lý cần chạy, không được truyền thẳng vào bộ tích phân.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với mỗi nguyên tử, Velocity Verlet thực hiện:
+
+$$
+\mathbf{x}_1=\mathbf{x}_0+\mathbf{v}_0\Delta t+\frac{1}{2}\mathbf{a}_0\Delta t^2
+$$
+
+Sau khi **vị trí của cả hai nguyên tử** đã chuyển sang thời điểm mới, ta tính lại lực của cặp để có $\mathbf{a}_1$, rồi cập nhật:
+
+$$
+\mathbf{v}_1=\mathbf{v}_0+\frac{1}{2}(\mathbf{a}_0+\mathbf{a}_1)\Delta t
+$$
+
+Mỗi bước cần hai lần tính lực. Vòng lặp dựng hình chỉ cộng thời gian vào accumulator và hỏi “đã đủ chạy bao nhiêu bước cố định?”, chứ không truyền `frameSeconds` thẳng vào bộ tích phân.
+
+<InteractiveLab demo="lennard-jones-pair" mode="lj-verlet" />
+
+Giữ mô phỏng ở trạng thái tạm dừng rồi bấm “Tiến một bước”. Bảng số liệu cho thấy độ lớn `a0` và `a1` khác nhau vì vị trí đã đổi. Chọn `dt=1/250` để nhìn rõ thay đổi trong một bước, sau đó quay về `1/1000` để quan sát chuyển động mượt và ổn định hơn.
+
+## Viết code từng bước
+
+### Bước 1 — Tính gia tốc đầu bước từ cùng một cặp lực
+
+```cpp title="include/lennard_jones.hpp — acceleration đầu bước"
+const PairForces before = accumulatePairForces(state, parameters);
+if (!before.valid) {
+    return false;
+}
+const Vec2 accelerationA0 = scale(before.forceOnA, 1.0 / state.atomA.mass);
+const Vec2 accelerationB0 = scale(before.forceOnB, 1.0 / state.atomB.mass);
+```
+
+Hai lực đối nhau, nhưng gia tốc còn phụ thuộc vào khối lượng của từng nguyên tử. Nếu dữ liệu không hợp lệ, hàm dừng trước khi sửa trạng thái đang chạy.
+
+### Bước 2 — Tính vị trí dự kiến nhưng chưa sửa trạng thái cũ
+
+```cpp title="include/lennard_jones.hpp — position mới"
+PairState candidate = state;
+const double halfDeltaSquared = 0.5 * deltaSeconds * deltaSeconds;
+candidate.atomA.position = add(
+    state.atomA.position,
+    add(scale(state.atomA.velocity, deltaSeconds), scale(accelerationA0, halfDeltaSquared))
+);
+candidate.atomB.position = add(
+    state.atomB.position,
+    add(scale(state.atomB.velocity, deltaSeconds), scale(accelerationB0, halfDeltaSquared))
+);
+```
+
+`candidate` là bản cập nhật tạm thời. Nếu khoảng cách mới làm phép tính sinh ra `NaN` hoặc một kết quả không hợp lệ, hàm trả `false` và trạng thái cũ vẫn được giữ nguyên.
+
+### Bước 3 — Tính lại lực ở vị trí mới rồi cập nhật vận tốc
+
+```cpp title="include/lennard_jones.hpp — acceleration cuối bước và velocity"
+const PairForces after = accumulatePairForces(candidate, parameters);
+if (!after.valid) {
+    return false;
+}
+const Vec2 accelerationA1 = scale(after.forceOnA, 1.0 / candidate.atomA.mass);
+const Vec2 accelerationB1 = scale(after.forceOnB, 1.0 / candidate.atomB.mass);
+candidate.atomA.velocity = add(
+    state.atomA.velocity,
+    scale(add(accelerationA0, accelerationA1), 0.5 * deltaSeconds)
+);
+candidate.atomB.velocity = add(
+    state.atomB.velocity,
+    scale(add(accelerationB0, accelerationB1), 0.5 * deltaSeconds)
+);
+```
+
+Không được tính `after` trước khi cập nhật đủ vị trí của cả A và B. Hàm tính lực phải nhìn thấy hai nguyên tử tại cùng một thời điểm.
+
+### Bước 4 — Giới hạn số bước vật lý trong một khung hình
+
+```cpp title="src/main.cpp — accumulator có guard"
+const lj::FixedStepPlan plan = lj::planFixedSteps(
+    accumulator,
+    frameSeconds,
+    fixedDeltaSeconds,
+    32,
+    0.05
+);
+accumulator = plan.remainder;
+droppedTime += plan.droppedTime;
+```
+
+Khung hình dài hơn `0.05 s` chỉ được nhận tối đa `0.05 s`; nếu phần thời gian tồn đọng cần hơn 32 bước, chương trình bỏ phần vượt giới hạn và ghi lại lượng thời gian đó. Nhờ vậy vòng lặp sự kiện luôn lấy lại quyền điều khiển thay vì mắc kẹt vì cố chạy bù.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 5"
+cmake --build build --config Debug --target project_41_checkpoint_5 project_41_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Chạy checkpoint 5, nhấn Space để bắt đầu và N để tiến từng bước khi đang tạm dừng. Hãy đổi kích thước cửa sổ trong lúc chạy: số bước con có thể đổi theo từng khung hình, nhưng mỗi bước vẫn dùng đúng `fixedDeltaSeconds`.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng lại `accelerationA0` làm `accelerationA1`. Cặp vẫn chuyển động nhưng đây không còn là Velocity Verlet hoàn chỉnh; độ lệch năng lượng ở bài sau sẽ tăng rõ.
+2. Cập nhật vận tốc trước vị trí như semi-implicit Euler rồi vẫn gọi hàm là Verlet. So code với chuỗi `a0 → x1 → a1 → v1` và hoàn tác.
+3. Truyền `frameSeconds` vào `velocityVerletStep`. Việc kéo cửa sổ sẽ làm quỹ đạo thay đổi, thậm chí khiến trạng thái mất ổn định khi một khung hình kéo dài; hãy khôi phục accumulator.
+4. Gọi riêng hàm lập kế hoạch bước với một khung hình dài 2 giây và giới hạn 32 bước con (32 substep); chỉ in kế hoạch, không chạy tích phân. So số bước được nhận với `floor(2/dt)` để thấy lượng công việc đã bị chặn. Luôn giữ giới hạn trong vòng lặp sự kiện.
+
+## Tự kiểm tra kết quả
+
+- [ ] Vị trí mới dùng vận tốc cũ và gia tốc đầu bước.
+- [ ] Lực cuối bước được tính sau khi vị trí của cả hai nguyên tử đã đổi.
+- [ ] Vận tốc dùng trung bình `a0` và `a1`.
+- [ ] Một bước thành công tăng `elapsed` đúng `dt`; bước lỗi không sửa trạng thái cũ.
+- [ ] Space chạy/tạm dừng và N tiến đúng một bước.
+- [ ] Hai cách chia thời gian dựng hình có cùng tổng thời gian tạo cùng số bước khi chưa chạm giới hạn.
+- [ ] Giới hạn thời gian khung hình và giới hạn bước con đều báo lượng thời gian bị bỏ.
+
+## Bài tập mở rộng
+
+1. Thêm bộ đếm số lần tính lực và xác nhận mỗi bước dùng đúng hai lần.
+2. Chạy cùng trạng thái ban đầu bằng semi-implicit Euler để chuẩn bị so sánh độ lệch năng lượng.
+3. Viết phép kiểm tra gọi một bước với `dt <= 0` và xác nhận trạng thái không đổi.
+
+Bài tiếp theo đo thế năng, động năng và tổng năng lượng tại cùng một trạng thái. Khi đó ta mới có bằng chứng để chọn bước thời gian cố định, thay vì chỉ nhìn chuyển động có vẻ mượt.

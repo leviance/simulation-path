@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Phát hiện hai hình tròn chạm nhau
+
+## Vấn đề cần giải quyết
+
+Hai ball có overlap không chỉ là một giá trị bool. Response cần biết hướng tách chúng và chúng đang xuyên sâu bao nhiêu. Nếu detection tự sửa velocity hoặc position, ta không thể kiểm từng phép toán hoặc minh họa “detection only”.
+
+Checkpoint 4 vì thế chỉ tạo `CircleContact`. Bóng vẫn có thể xuyên nhau; mũi tên vàng cho thấy contact sâu nhất mà solver **đã nhìn thấy nhưng chưa giải**.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với $d=p_B-p_A$ và $R=r_A+r_B$:
+
+$$
+d\cdot d<R^2
+$$
+
+nghĩa là hai circle overlap. Chỉ khi điều kiện đúng ta mới cần:
+
+$$
+distance=\sqrt{d\cdot d},\qquad n=\frac{d}{distance},\qquad penetration=R-distance
+$$
+
+Normal được quy ước từ A sang B. Quy ước này quyết định dấu của relative speed ở bài impulse.
+
+<InteractiveLab demo="collision-tank" mode="collision-detection" />
+
+Mode này cô lập đúng hai bóng đã overlap và cố ý chưa chạy impulse hay positional correction. Mũi tên vàng chỉ normal từ A sang B; readout cho biết center distance, penetration và relative normal speed để bạn đối chiếu từng thành phần của `CircleContact`.
+
+## Viết code từng bước
+
+### Bước 1 — Trả một record thay vì ba output rời
+
+```cpp title="include/lab.hpp — dữ liệu chung cho response"
+struct CircleContact {
+    bool colliding{};
+    Vec2 normal{1.0, 0.0};
+    double penetration{};
+    double centerDistance{};
+};
+```
+
+Contact không chứa con trỏ tới ball và không sửa state. Nó chỉ mô tả geometry tại thời điểm được hỏi.
+
+### Bước 2 — Reject bằng squared distance
+
+```cpp title="include/lab.hpp — đa số cặp dừng trước sqrt"
+const Vec2 centerDelta = subtract(second.position, first.position);
+const double radiusSum = first.radius + second.radius;
+const double distanceSquared = lengthSquared(centerDelta);
+if (distanceSquared >= radiusSum * radiusSum) {
+    return {};
+}
+```
+
+Với 144 ball có 10.296 cặp mỗi pass; phần lớn không gần nhau. Tránh `sqrt` cho các cặp này là một tối ưu nhỏ nhưng hoàn toàn không đổi thuật toán O(N²).
+
+### Bước 3 — Xử lý hai tâm trùng nhau
+
+```cpp title="include/lab.hpp — fallback normal luôn hữu hạn"
+if (distanceSquared <= kCollisionEpsilon * kCollisionEpsilon) {
+    const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
+    const Vec2 fallbackNormal = normalizedOr(relativeVelocity, {1.0, 0.0});
+    return {true, fallbackNormal, radiusSum, 0.0};
+}
+```
+
+Không có hướng hình học duy nhất khi hai tâm trùng. Relative velocity là lựa chọn có ích; nếu nó cũng zero, `(1,0)` giữ kết quả deterministic và tránh NaN.
+
+### Bước 4 — Tạo normal và penetration cho case thường
+
+```cpp title="include/lab.hpp — normal A sang B"
+const double centerDistance = std::sqrt(distanceSquared);
+const Vec2 normal = scale(centerDelta, 1.0 / centerDistance);
+return {true, normal, radiusSum - centerDistance, centerDistance};
+```
+
+Penetration dương vì branch separated đã return. Ta không clamp âm để che sai số logic.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy detection-only checkpoint"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_checkpoint_4
+./build/Debug/project_24_checkpoint_4.exe
+```
+
+Title bar báo contact count và maximum penetration. Chúng tăng vì chưa có response; đây là đối chứng quan trọng cho hai bài tiếp theo.
+
+## Thử làm sai để hiểu đúng
+
+1. So distance với `radiusA*radiusB`. Hai circle bán kính khác nhau sẽ sai; hoàn tác về tổng radius.
+2. Normalize `centerDelta` trước khi kiểm zero. Tạo coincident centers trong test và quan sát NaN; hoàn tác fallback.
+3. Đảo delta thành `A-B` nhưng giữ impulse formula bài sau. Dấu closing speed bị đảo; hoàn tác quy ước normal A→B.
+
+## Tự kiểm tra kết quả
+
+- Separated pair trả `colliding=false` mà không gọi sqrt.
+- Touching đúng bằng radius sum không tạo penetration trong project này.
+- Overlap ngang A=(2,3), B=(2.8,3), radius 0.5 cho normal `(1,0)` và penetration 0.2.
+- Normal có length gần 1.
+- Coincident centers trả normal hữu hạn, deterministic.
+- Detection không sửa position hoặc velocity.
+- Contact visualization dùng đúng record mà tests kiểm.
+
+## Bài tập mở rộng
+
+Vẽ center delta, radius sum và khoảng trống/penetration của một cặp được chọn. Không gọi response khi người dùng chỉ đang inspect.
+
+Bài tiếp theo dùng contact normal để đổi velocity bằng một impulse cân bằng cho cả hai ball.

@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Perspective divide từ tam giác đồng dạng
+
+## Vấn đề cần giải quyết
+
+Camera space đã cho biết point cách camera bao xa, nhưng checkpoint 2 vẫn vẽ X/Y với cùng scale ở mọi Z. Một point ở cách 2 đơn vị và một point ở cách 20 đơn vị có cùng X sẽ lệch tâm như nhau. Hình đó giống bản vẽ kỹ thuật, không giống cách ta nhìn không gian.
+
+Ta cần tìm giao điểm giữa tia đi từ camera qua point và một mặt phẳng ảnh đặt trước camera. Công thức `x/z` không xuất hiện như một mẹo; nó là kết quả trực tiếp của hai tam giác đồng dạng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Xét mặt phẳng X–Z. Camera ở gốc, point là `(x,z)` và mặt phẳng ảnh tạm đặt tại `z=1`. Tam giác lớn có cạnh ngang x, cạnh sâu z; tam giác nhỏ có cạnh ngang x′, cạnh sâu 1. Hai tam giác cùng góc nên:
+
+$$
+\frac{x'}{1}=\frac{x}{z}\quad\Rightarrow\quad x'=\frac{x}{z}
+$$
+
+Lập luận tương tự theo Y:
+
+$$
+y'=\frac{y}{z}
+$$
+
+Nếu giữ X/Y và nhân Z lên 2, cả hai độ lệch bị chia đôi. Đây là phần cốt lõi của perspective.
+
+<InteractiveLab demo="projection" mode="projection-divide" />
+
+Giữ P.X/P.Y rồi kéo P.Z. Quan sát tia ở sơ đồ X–Z và dòng `perspective divide`. Đưa point xa hơn: marker tiến dần về tâm nhưng không đổi sang phía đối diện.
+
+## Viết code từng bước
+
+### Bước 1 — Viết đúng một hàm cho phép chia
+
+Hàm nhận camera point và trả hai tỉ lệ chưa mang đơn vị pixel:
+
+```cpp title="include/lab.hpp — perspective divide"
+inline Vec2 perspectiveDivide(Vec3 cameraPoint) {
+    return {cameraPoint.x / cameraPoint.z, cameraPoint.y / cameraPoint.z};
+}
+```
+
+Ta chưa xử lý Z bằng 0 trong hàm nhỏ này. Checkpoint 3 tạm giữ point trước camera; bài 5 sẽ đặt lớp bảo vệ ở đầu pipeline, nơi có đủ thông tin để trả status rõ ràng.
+
+### Bước 2 — Giữ một khoảng depth tối thiểu trong checkpoint trung gian
+
+Khi chưa có near plane, input Q/E hoặc camera Z có thể đẩy point qua camera. Đoạn bảo vệ tạm thời giữ world Z nhỉnh hơn camera Z:
+
+```cpp title="src/main.cpp — giới hạn tạm trước khi có near plane"
+const double minimumDepth = camera.position.z + 0.1;
+if (worldPoint.z < minimumDepth) {
+    worldPoint.z = minimumDepth;
+}
+```
+
+Đây không phải thiết kế cuối. Nó chỉ giúp checkpoint 3 và 4 không chia cho zero trong lúc ta tập trung vào công thức.
+
+### Bước 3 — Tách kết quả chia khỏi camera point
+
+Trong render loop, giữ ba biến có ba ý nghĩa khác nhau:
+
+```cpp title="src/main.cpp — tạo camera point rồi mới chia"
+const lab::Vec3 cameraPoint = lab::worldToCamera(worldPoint, camera);
+screen = previewToScreen(cameraPoint, width, height);
+```
+
+```cpp title="src/main.cpp — xem kết quả chia trên framebuffer"
+const lab::Vec2 divided = lab::perspectiveDivide(cameraPoint);
+const double previewFocalLength = std::min(width, height) * 0.38;
+screen = {
+    width * 0.5 + divided.x * previewFocalLength,
+    height * 0.5 - divided.y* previewFocalLength,
+};
+```
+
+`previewFocalLength` chỉ phóng tỉ lệ không thứ nguyên thành số pixel để quan sát. Nó phụ thuộc kích thước cửa sổ và chưa diễn tả một lens có FOV cụ thể.
+
+### Bước 4 — Dùng depth để gợi ý kích thước marker
+
+Một point toán học không có kích thước, nhưng marker UI nhỏ dần giúp mắt đọc depth nhanh hơn:
+
+```cpp title="src/main.cpp — marker nhỏ dần khi Z tăng"
+if (cameraPoint.z > 0.0) {
+    markerRadius = std::clamp(int(std::lround(34.0 / cameraPoint.z)), 3, 14);
+}
+```
+
+Điều kiện Z dương giữ phép chia phụ trợ này an toàn. Kích thước marker không tham gia vào tọa độ projection.
+
+## Ghép các phần lại
+
+Build `project_11_checkpoint_3`. Đặt camera về gốc, point lần lượt tại `(2,1,4)` và `(2,1,8)`. Dòng `divide` phải đổi từ gần `(0.5,0.25)` thành `(0.25,0.125)`; độ lệch pixel so với tâm cũng giảm một nửa.
+
+Sau đó di chuyển camera theo Z. Công thức luôn dùng `cameraPoint`, vì vậy camera tiến gần point có cùng tác dụng làm depth nhỏ đi.
+
+## Thử làm sai để hiểu đúng
+
+1. Chia X cho `worldPoint.z` nhưng Y cho `cameraPoint.z`. Camera di chuyển sẽ làm hai trục co giãn khác nhau.
+2. Dùng `x*z`. Point ở xa chạy ra khỏi tâm thay vì tiến về tâm.
+3. Trả thẳng pixel từ `perspectiveDivide`. Hàm toán sẽ phụ thuộc width/height và khó test quy luật gấp đôi depth.
+
+## Tự kiểm tra kết quả
+
+- `(2,1,4)` cho divided `(0.5,0.25)`.
+- Giữ X/Y và tăng camera-space Z gấp đôi làm độ lệch khỏi tâm giảm đúng một nửa.
+- Point nằm trên trục nhìn `(0,0,z)` luôn ở tâm với mọi Z dương.
+- Camera tiến gần point làm marker rời tâm xa hơn.
+- Không có phép chia nào dùng world-space Z trực tiếp.
+
+## Bài tập mở rộng
+
+Vẽ hai point có cùng X/Y nhưng depth lần lượt 3 và 6, dùng hai màu khác nhau. Đo khoảng cách từ mỗi marker tới tâm và in tỉ số; kết quả phải gần 2.
+
+Checkpoint này còn một magic number là `previewFocalLength`. Bài tiếp theo sẽ thay nó bằng lens có vertical FOV, aspect ratio và NDC.

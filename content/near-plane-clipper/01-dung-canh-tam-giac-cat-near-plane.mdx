@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng cảnh tam giác cắt qua near plane
+
+## Vấn đề cần giải quyết
+
+Project 15 đã tránh phép chia khi một **point** nằm trước near plane. Với triangle, bỏ point lỗi chưa đủ: ba vertex nối thành một primitive. Chỉ cần A đi vào vùng `z < near` mà ta bỏ luôn cả triangle, phần còn nhìn thấy cũng biến mất. Nếu vẫn project A, phép chia cho một Z rất nhỏ làm hình phóng ra hàng nghìn pixel hoặc đổi hướng khi Z qua zero.
+
+Checkpoint đầu chưa sửa lỗi. Ta dựng một chương trình có thể **nhìn thấy nguyên nhân**: nửa trái là mặt cắt camera space với trục ngang Z, nửa phải là viewport. Triangle chuyển động dọc Z nhưng toàn bộ position vẫn ở camera space.
+
+## Hiểu ý tưởng trước khi viết code
+
+Near plane không phải một hiệu ứng trang trí trên màn hình. Nó là mặt phẳng `z = near` trong camera space. Vì vậy thứ tự đúng phải là:
+
+$$
+\text{camera-space triangle}\;\longrightarrow\;\text{clip}\;\longrightarrow\;\text{project}\;\longrightarrow\;\text{rasterize}
+$$
+
+Ta dùng chế độ `discard-whole` làm đối chứng: nếu một vertex không hợp lệ, bỏ cả triangle **trước khi chia**. Cách này an toàn nhưng sai về hình học; nó cho ta thấy chính xác phần clipper phải cải thiện.
+
+<InteractiveLab demo="near-plane" mode="near-scene" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ position và color trong cùng một vertex
+
+```cpp title="include/lab.hpp — dữ liệu đầu vào còn ở camera space"
+struct Vec3 {
+    double x{};
+    double y{};
+    double z{};
+};
+
+struct Color {
+    double red{};
+    double green{};
+    double blue{};
+};
+
+struct ClipVertex {
+    Vec3 position{};
+    Color color{};
+};
+```
+
+`Color` dùng `double`, chưa đổi về byte. Khi clipping sinh vertex mới giữa một cạnh, màu của vertex đó cũng nằm giữa hai màu đầu cạnh; làm tròn ở đây sẽ tạo vệt màu không liên tục.
+
+### Bước 2 — Tạo triangle có một vertex trước near plane
+
+```cpp title="include/lab.hpp — tình huống one-outside mặc định"
+inline Triangle3 makeDefaultTriangle() {
+    return {
+        {{-1.15, -0.85, 0.45}, {255.0, 92.0, 106.0}},
+        {{1.15, -0.70, 3.20}, {78.0, 232.0, 163.0}},
+        {{0.00, 1.05, 2.25}, {93.0, 145.0, 255.0}},
+    };
+}
+```
+
+Với `near = 1.0`, A có Z bằng `0.45` nên nằm trong khoảng camera–near plane. B và C vẫn ở phía nhìn thấy. Đây là tình huống quan trọng nhất: output đúng không còn là triangle gốc, nhưng cũng chưa phải rỗng.
+
+### Bước 3 — Dịch cả primitive bằng một biến có tên
+
+```cpp title="include/lab.hpp — cùng một depthOffset cho ba vertex"
+inline Triangle3 moveAlongDepth(Triangle3 triangle, double depthOffset) {
+    triangle.a.position.z += depthOffset;
+    triangle.b.position.z += depthOffset;
+    triangle.c.position.z += depthOffset;
+    return triangle;
+}
+```
+
+`baseTriangle` không bị ghi đè mỗi frame. Phím `A/D`, drag và sweep chỉ thay `depthOffset`; `R` đưa offset về zero. Nhờ vậy một lần reset luôn trở lại đúng preset, không tích lũy sai số qua hàng nghìn frame.
+
+### Bước 4 — Vẽ mặt cắt bằng Z và X
+
+Trong `sideViewPoint`, Z đi theo chiều ngang, X đi theo chiều dọc. Near plane trở thành đường đứng màu vàng. Đây chỉ là dụng cụ debug; nó không tham gia projection ở viewport.
+
+```cpp title="src/main.cpp — ánh xạ camera space sang mặt cắt chẩn đoán"
+const double normalizedDepth = (vertex.position.z + 0.5) / 6.0;
+const double normalizedHorizontal = (vertex.position.x + 1.8) / 3.6;
+return {
+    left + normalizedDepth * (right - left),
+    bottom - normalizedHorizontal*(bottom - top),
+};
+```
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint dựng cảnh"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_checkpoint_1
+```
+
+Chạy target rồi dùng `1–5`, `A/D`, kéo chuột trong nửa trái và nhấn `R`. Ở checkpoint này nửa phải chưa tô triangle; ta chỉ kiểm tra scene, input và phép resize trước khi thêm thuật toán.
+
+## Thử làm sai để hiểu đúng
+
+1. Project A dù `z=0.45`, sau đó kéo triangle về camera. Tọa độ screen tăng rất nhanh; hoàn tác và giữ mọi vertex ở camera space.
+2. Nếu A outside thì bỏ A nhưng vẫn nối B với C như một triangle ba đỉnh. Primitive không còn đủ topology để rasterize; đừng biến “thiếu vertex” thành dữ liệu giả.
+3. Cộng mouse delta trực tiếp vào ba Z hiện tại mỗi frame. Reset không còn chính xác và chuyển động tích lũy; quay lại `baseTriangle + depthOffset`.
+
+## Tự kiểm tra kết quả
+
+- Window, renderer, streaming texture và CPU framebuffer đều kiểm lỗi ngay sau khi tạo.
+- Triangle có ba `ClipVertex`; mỗi vertex giữ camera-space position và color.
+- Mặt cắt hiển thị Z theo chiều ngang, X theo chiều dọc và near plane tại `z=1`.
+- `1–5`, `A/D`, drag, `Space`, `N` và `R` không tạo một bản sao trạng thái thứ hai.
+- Resize tạo lại texture và framebuffer đúng kích thước pixel mới.
+- Chưa có perspective divide hoặc clipping trong checkpoint 1.
+
+## Bài tập mở rộng
+
+Thêm một đường tại `z=0` để đánh dấu camera origin và một mũi tên chỉ chiều +Z. Không đổi dữ liệu triangle; chỉ mở rộng mặt cắt chẩn đoán.
+
+Bài tiếp theo sẽ biến câu “vertex ở phía nào” thành một con số có dấu. Con số đó vừa phân loại vertex, vừa dẫn tới công thức tìm giao điểm.
+

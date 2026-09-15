@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Theo dõi file và debounce
+
+## Vấn đề cần giải quyết
+
+F5 đã an toàn, nhưng “sửa GLSL và thấy ngay” vẫn còn một thao tác thừa. Ta muốn Save trong editor tự tạo reload request. Cách ngây thơ là đọc và compile hai file mỗi frame; ở 60 FPS, compiler bị gọi 60 lần mỗi giây dù source không hề đổi.
+
+Chỉ so timestamp cũng chưa đủ. Một editor có thể truncate file, ghi nhiều chunk rồi rename file tạm. Nếu compile ngay ở thay đổi đầu tiên, chương trình dễ đọc đúng lúc file mới có một nửa nội dung.
+
+## Hiểu ý tưởng trước khi viết code
+
+Watcher nhỏ của project có ba trạng thái:
+
+```text
+chưa khởi tạo → lưu stamp đầu, không reload
+stamp thay đổi → pending, ghi changedAt
+stamp đứng yên đủ 140 ms → phát một reload, tắt pending
+```
+
+Nếu stamp lại đổi trong lúc pending, `changedAt` được đặt lại. Đây là debounce: ta chờ một khoảng yên tĩnh sau thay đổi cuối, không chặn thread bằng `sleep`.
+
+<InteractiveLab demo="shader-hot-reload" mode="file-watcher" />
+
+## Viết code từng bước
+
+### Bước 1 — Chỉ đọc metadata ở mỗi frame
+
+```cpp title="include/pipeline.hpp — fileStamp"
+inline std::uint64_t fileStamp(const std::filesystem::path& path) {
+    std::error_code error{};
+    const auto writeTime = std::filesystem::last_write_time(path, error);
+    if (error) {
+        return 0;
+    }
+    return static_cast<std::uint64_t>(writeTime.time_since_epoch().count());
+}
+```
+
+`error_code` giúp render loop không bị exception làm thoát khi editor đang thay file. Stamp 0 được xem như một thay đổi; reload sau đó sẽ báo path đọc thất bại và vẫn giữ last-good.
+
+### Bước 2 — Thay đổi mới luôn restart debounce
+
+```cpp title="include/pipeline.hpp — nhánh stamp thay đổi"
+const bool changed = stamps.vertex != state.observed.vertex || stamps.fragment != state.observed.fragment;
+if (changed) {
+    state.observed = stamps;
+    state.pending = true;
+    state.changedAtMilliseconds = nowMilliseconds;
+    return false;
+}
+```
+
+Ta theo dõi cả hai stage. Save vertex rồi fragment liên tiếp vẫn tạo một khoảng pending chung và cuối cùng reload cả cặp.
+
+### Bước 3 — Consume pending đúng một lần
+
+```cpp title="include/pipeline.hpp — hết debounce"
+if (!state.pending || nowMilliseconds - state.changedAtMilliseconds < debounceMilliseconds) {
+    return false;
+}
+state.pending = false;
+return true;
+```
+
+Sau `true`, main loop gọi lại đúng hàm `reloadFromDisk` của bài 4. Watcher không cần biết OpenGL program là gì.
+
+## Ghép các phần lại
+
+Build checkpoint 5 rồi để app chạy cạnh editor:
+
+```bash title="Terminal — build checkpoint file watcher"
+cmake --build build --config Debug --target project_35_checkpoint_5
+```
+
+Đổi một hằng số màu và Save. Sau khoảng 140 ms, generation tăng một. Giữ file đứng yên trong vài giây: attempts không được tiếp tục tăng. Chèn lỗi rồi Save: chỉ có một attempt fail; sửa và Save mới tạo attempt kế tiếp.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi `reloadFromDisk` mỗi frame. Theo dõi CPU/terminal và số attempts dù không chạm file.
+2. Reload ngay khi stamp đổi, bỏ pending. Một editor ghi file theo nhiều bước có thể tạo compile error thoáng qua.
+3. Quên tắt `pending` sau khi trả `true`. Program được compile lại ở mọi frame sau debounce.
+
+Khôi phục state machine rồi thử Save nhanh ba lần liên tiếp.
+
+## Tự kiểm tra kết quả
+
+- [ ] Frame loop chỉ đọc timestamp khi file chưa đổi.
+- [ ] Lần scan đầu không tự reload.
+- [ ] Thay đổi mới restart khoảng debounce.
+- [ ] Một chuỗi Save tạo đúng một reload sau khi ổn định.
+- [ ] Source lỗi đứng yên không tạo retry storm.
+- [ ] F5 vẫn bỏ qua debounce và reload thủ công.
+
+Hãy giải thích vì sao watcher phát “reload request” thay vì tự gọi OpenGL từ trong hàm timestamp.
+
+## Bài tập mở rộng
+
+1. Hiển thị `pending` trên title bar.
+2. So sánh debounce 40, 140 và 500 ms khi Save liên tục.
+3. Thiết kế watcher cho ba stage nhưng vẫn trả một request duy nhất.
+
+Bài tiếp theo truyền dữ liệu thay đổi mỗi frame qua uniforms mà không kích hoạt shader compiler.

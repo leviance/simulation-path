@@ -1,0 +1,137 @@
+# Kiểm chứng hai chiều biến đổi bằng round trip
+
+## Vấn đề cần giải quyết
+
+Camera có nhiều dấu cộng, dấu trừ, tâm và tỉ lệ. Một thay đổi nhỏ có thể chỉ làm điểm đánh dấu lệch sau khi resize hoặc sau một chuỗi pan/zoom, nên rất khó phát hiện bằng mắt. Ta cần test cả tọa độ lớn, tỉ lệ không hợp lệ và điểm world nằm dưới con trỏ khi zoom.
+
+Thay vì ghi cứng hàng loạt pixel mong đợi, test sẽ kiểm tra các tính chất toán học: biến đổi thuận rồi nghịch phải trả lại điểm ban đầu; `zoomAt` phải giữ điểm world dưới con trỏ; `pan` phải đổi tâm đúng đơn vị; và tâm camera phải nằm giữa màn hình sau resize.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có hai vòng round trip cần kiểm tra:
+
+```text
+screenToWorld(worldToScreen(world)) ≈ world
+worldToScreen(screenToWorld(screen)) ≈ screen
+```
+
+Project kiểm tra cả hai chiều trên nhiều điểm world và screen. Phép kiểm tra zoom còn thay đổi tỉ lệ giữa hai lần đo. Hai vector được coi là bằng nhau khi khoảng cách Euclid nhỏ hơn `1e-9`.
+
+Test không rasterize nên chưa có bước làm tròn pixel. Các phép chuyển đổi phải giữ độ chính xác số thực; chỉ phần vẽ mới được phép làm tròn.
+
+## Viết code từng bước
+
+### Bước 1 — So sánh hai vector trong cả Debug và Release
+
+```cpp title="tests/tests.cpp — nearlyEqual cho Vec2"
+int failures = 0;
+
+bool nearlyEqual(lab::Vec2 left, lab::Vec2 right, double epsilon = 1e-9) {
+    return lab::distance(left, right) < epsilon;
+}
+
+void check(bool condition, std::string_view label) {
+    if (condition) {
+        return;
+    }
+    std::cerr << "FAILED: " << label << '\n';
+    ++failures;
+}
+```
+
+So sánh bằng khoảng cách giúp điều kiện gọn và không vô tình bỏ quên một trục. `check` là hàm bình thường nên không bị loại khỏi cấu hình Release như `assert`; mã hoàn chỉnh khai báo `failures` ngay phía trên hai hàm hỗ trợ.
+
+### Bước 2 — Round trip với nhiều vùng tọa độ world
+
+```cpp title="tests/tests.cpp — forward rồi inverse"
+const std::vector<lab::Vec2> worldPoints{
+    {0.0, 0.0},
+    {2.0, 1.0},
+    {-8.0, 4.0},
+    {100.0, -80.0},
+};
+for (lab::Vec2 world : worldPoints) {
+    const lab::Vec2 restored = camera.screenToWorld(camera.worldToScreen(world));
+    check(nearlyEqual(world, restored), "world-to-screen round trip restores the world point");
+}
+```
+
+Danh sách gồm gốc, tọa độ âm/dương và một điểm ở xa, giúp phát hiện lỗi chỉ xuất hiện khi tâm hoặc tỉ lệ kết hợp với số âm. File test hoàn chỉnh còn kiểm tra chiều ngược trên bốn điểm screen, trong đó có cả tọa độ nằm ngoài viewport.
+
+### Bước 3 — Kiểm tra điểm world dưới con trỏ khi zoom
+
+```cpp title="tests/tests.cpp — zoomAt giữ điểm dưới con trỏ"
+const lab::Vec2 cursor{800.0, 120.0};
+const lab::Vec2 worldBeforeZoom = camera.screenToWorld(cursor);
+camera.zoomAt(cursor, 1.4);
+const lab::Vec2 worldAfterZoom = camera.screenToWorld(cursor);
+check(nearlyEqual(worldBeforeZoom, worldAfterZoom), "zoom keeps the world point under the cursor");
+```
+
+Con trỏ được đặt lệch tâm có chủ ý. Nếu dùng đúng tâm viewport, một cách cài đặt sai chỉ zoom quanh tâm vẫn có thể vượt qua test.
+
+### Bước 4 — Kiểm tra đơn vị và chiều của pan
+
+```cpp title="tests/tests.cpp — kéo 55 pixel theo X"
+const lab::Vec2 centerBeforePan = camera.centerWorld;
+const double expectedShift = 55.0 / camera.pixelsPerUnit;
+camera.pan({55.0, 0.0});
+check(std::abs(camera.centerWorld.x - (centerBeforePan.x - expectedShift)) < 1e-9, "horizontal pan updates world X");
+check(std::abs(camera.centerWorld.y - centerBeforePan.y) < 1e-9, "horizontal pan keeps world Y");
+```
+
+Tỉ lệ đã thay đổi sau bước zoom, nên `expectedShift` phải dùng giá trị hiện tại thay vì giả định 55 pixel/đơn vị.
+
+### Bước 5 — Kiểm tra tỉ lệ lỗi và viewport sau resize
+
+```cpp title="tests/tests.cpp — tỉ lệ lỗi và tâm màn hình"
+camera.pixelsPerUnit = 0.0;
+const lab::Vec2 restored = camera.screenToWorld(camera.worldToScreen({3.0, -2.0}));
+check(nearlyEqual(restored, {3.0, -2.0}), "invalid scale still produces an invertible transform");
+const lab::Vec2 centerBeforeInvalidZoom = camera.centerWorld;
+camera.zoomAt(cursor, std::numeric_limits<double>::quiet_NaN());
+check(nearlyEqual(camera.centerWorld, centerBeforeInvalidZoom), "NaN zoom factor keeps camera center");
+camera.viewportPixels = {1280.0, 720.0};
+const lab::Vec2 screenCenter = camera.worldToScreen(camera.centerWorld);
+check(nearlyEqual(screenCenter, {640.0, 360.0}), "camera center maps to the resized viewport center");
+```
+
+Hai chiều chuyển đổi cùng dùng giá trị tỉ lệ thay thế an toàn nên round trip vẫn đúng. `factor` bằng `NaN` không được phép làm hỏng tâm hoặc tỉ lệ. Sau khi đổi kích thước, tâm camera phải ánh xạ tới chính giữa viewport mới.
+
+### Bước 6 — Build và chạy toàn bộ
+
+```bash title="Terminal — kiểm tra Project 05"
+cmake -S examples/project-05-coordinate-map -B examples/project-05-coordinate-map/build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
+cmake --build examples/project-05-coordinate-map/build --config Debug
+ctest --test-dir examples/project-05-coordinate-map/build -C Debug --output-on-failure
+cmake --build examples/project-05-coordinate-map/build --config Release
+ctest --test-dir examples/project-05-coordinate-map/build -C Release --output-on-failure
+```
+
+## Ghép các phần lại
+
+Project hoàn chỉnh có một nguồn dữ liệu rõ ràng: vật thể lưu tọa độ world; thao tác chuột đổi screen sang world; phần vẽ đổi world sang screen; camera giữ toàn bộ trạng thái của ánh xạ. Pan và zoom chỉ sửa camera, không sửa vật thể.
+
+Khi resize, ứng dụng tạo `newPixels` và `newTexture` trước. Chỉ sau khi cả hai thành công, tài nguyên cũ mới được thay thế và viewport mới được ghi nhận. Nhờ vậy, không có lần vẽ nào dùng framebuffer mới cùng texture cũ.
+
+Chạy `project_5_final`: nút trái kéo điểm, nút phải pan, con lăn zoom, R đặt lại và Escape thoát. Sau đó chạy CTest. Phần **Mã nguồn hoàn chỉnh** cuối trang chứa đúng các file đã được build; bạn không phải tự ghép những đoạn code phía trên.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dấu Y trong phép biến đổi nghịch rồi chạy CTest. Phép kiểm tra round trip phải thất bại.
+2. Bỏ bước bù tâm trong `zoomAt`. Phép kiểm tra điểm neo dưới con trỏ phải thất bại.
+3. Đặt con trỏ đúng giữa viewport trong phép kiểm tra zoom. Cách cài đặt sai vẫn có thể vượt qua vì zoom quanh tâm không làm điểm đó trôi. Dữ liệu test phải thực sự kích hoạt hành vi cần chứng minh.
+
+## Tự kiểm tra kết quả
+
+- CTest vượt qua hai chiều round trip, zoom quanh con trỏ, pan X/Y, tỉ lệ/hệ số lỗi, giới hạn zoom và viewport.
+- Điểm đánh dấu bám con trỏ sau nhiều thao tác pan/zoom kết hợp.
+- Grid phủ viewport sau resize.
+- Zoom không làm điểm dưới con trỏ bị trượt.
+- Reset giữ đúng kích thước viewport hiện tại.
+
+## Bài tập mở rộng
+
+Hãy thêm test round trip screen cho bốn góc viewport. Sinh ngẫu nhiên tâm camera, tỉ lệ và điểm trong một miền hữu hạn để chạy 10.000 trường hợp. Sau đó tách vùng nhìn thành một hình chữ nhật riêng để chuẩn bị cho camera split-screen.
+
+Bạn đã hoàn thành nền tảng của năm project đầu: framebuffer, thời gian, lấy mẫu, rasterization và chuyển đổi tọa độ. Đây là những khối cơ bản để bước sang các mô phỏng phức tạp hơn mà không phải dựa vào “mã phép thuật”.

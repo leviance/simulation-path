@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ các bản sao mà không tạo thêm hạt
+
+## Vấn đề cần giải quyết
+
+Hạt vừa biến mất ở một mép rồi xuất hiện ở mép kia. Solver đã đúng, nhưng người mới nhìn có thể nghĩ chương trình xóa hạt và tạo một hạt khác. Ta sẽ vẽ thêm ảnh ở các ô kề để thấy rằng mô phỏng đang lặp lại, không kết thúc ở đường viền.
+
+Giữ nguyên toàn bộ phần lực và Verlet của checkpoint 5. Bài này chỉ thêm một hàm tạo **vị trí vẽ** cùng một cờ hiển thị. Nếu bật ảnh mà E hoặc số cặp thay đổi, ta đã vô tình đưa lớp trình bày vào model.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ảnh của một vị trí p trong các ô lân cận có dạng:
+
+$$
+\mathbf p_{image}=\mathbf p+(i_xL_x,\ i_yL_y),\qquad
+i_x,i_y\in\{-1,0,1\}.
+$$
+
+Hai vòng lặp cho chín vị trí, trong đó `(ix,iy)=(0,0)` là chính p. Một hạt gần mép trái sẽ có ảnh ở bên phải; một hạt gần góc có ảnh qua cả hai trục. Ta chỉ vẽ vùng gần ô gốc, nên không phải lúc nào cả chín ảnh cũng nằm trong cửa sổ.
+
+Điều đáng chú ý nằm ở kiểu dữ liệu: kết quả là `vector<Vec2>`, không phải `vector<Particle>`. Ảnh không có mass hay velocity độc lập và không được tích phân thêm lần nữa.
+
+<InteractiveLab demo="periodic-molecular-box" mode="pbc-images" />
+
+Đặt preset hai hạt, bật các bản sao rồi kéo A sát góc. So vị trí ảnh với các đường viền ô. Sau đó chạy, bật/tắt lớp xám và theo dõi N, số cặp cùng năng lượng: không số nào được nhảy chỉ vì đổi cách vẽ.
+
+## Viết code từng bước
+
+### Bước 1 — Sinh chín vị trí từ một position
+
+```cpp title="include/periodic.hpp — vị trí hiển thị ở các ô kề"
+inline std::vector<Vec2> imagePositions(Vec2 position, Box box) {
+    std::vector<Vec2> images;
+    for (int imageY = -1; imageY <= 1; ++imageY) {
+        for (int imageX = -1; imageX <= 1; ++imageX) {
+            images.push_back({position.x + imageX * box.width, position.y + imageY * box.height});
+        }
+    }
+    return images;
+}
+```
+
+Không wrap các kết quả này. Chúng cần nằm bên ngoài ô gốc để được nhìn thấy ở ô kề. Đây là khác biệt có chủ đích với `Particle.position`, vốn luôn cần biểu diễn trong ô gốc sau bước vật lý.
+
+### Bước 2 — Chỉ duyệt ảnh trong hàm vẽ
+
+Trong `drawScene`, vẽ ảnh xám trước các marker thật:
+
+```cpp title="include/view.hpp — lớp ảnh tuần hoàn không thay đổi system"
+if (showImages) {
+    if (!SDL_SetRenderDrawColor(renderer, 65, 80, 105, 255)) {
+        return false;
+    }
+    for (const pbc::Particle& particle : system.particles) {
+        for (const pbc::Vec2 image : pbc::imagePositions(particle.position, system.box)) {
+            if (!marker(renderer, image, system.box, viewport, 3.0f)) {
+                return false;
+            }
+        }
+    }
+}
+```
+
+`system` được truyền bằng tham chiếu const. Không có chỗ nào trong đoạn này gọi `particles.push_back`. Sau lớp xám, vòng vẽ hạt thật dùng màu vàng/xanh và marker lớn hơn nên tâm ô gốc vẫn dễ đọc.
+
+### Bước 3 — Thêm phím bật/tắt một lớp hiển thị
+
+```cpp title="src/main.cpp — phím G chỉ thay cờ vẽ"
+if (key == SDLK_G) {
+    showImages = !showImages;
+}
+```
+
+Biến `showImages` chỉ đi vào `drawScene`. Cả `evaluate` và `verletStep` đều không nhận biến ấy. Thiết kế hàm như vậy giúp ta kiểm tra sự tách biệt bằng cách lần theo đối số, không cần tin rằng mọi người sẽ luôn nhớ “đừng sửa lực ở đây”.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 6"
+cmake --build build --config Debug --target project_43_checkpoint_6
+.\build\Debug\project_43_checkpoint_6.exe
+```
+
+Nhấn 1 để dùng cặp dễ quan sát, G để bật ảnh. Vùng ngoài hộp chỉ hiện một phần các ô kề vì viewport cố tình ưu tiên ô gốc. Chọn preset một hạt bằng B, chạy qua biên rồi xem ảnh nào trở thành marker trong ô gốc.
+
+Đừng cộng lực với cả chín ảnh rồi chia cho chín. Đó là một mô hình tương tác khác, không phải cách sửa lỗi đếm trùng. Solver của project này đã chọn đúng một minimum image cho mỗi cặp.
+
+## Thử làm sai để hiểu đúng
+
+1. Wrap từng `image` trước khi truyền cho marker. Cả chín vị trí bị dồn về ô gốc và lớp xám biến mất ở các ô kề. Bỏ wrap khỏi đường vẽ; chỉ state vật lý cần wrap.
+2. Tạm nối các ảnh vào một bản sao danh sách hạt rồi đếm số cặp, **không đưa bản sao ấy vào loop chính**. Số cặp tăng mạnh và có các hạt trùng qua biên. Xóa thí nghiệm; giữ `imagePositions` trả `Vec2` để tránh lỗi này ngay từ kiểu dữ liệu.
+
+## Tự kiểm tra kết quả
+
+- Một hạt tạo chín vị trí vẽ, nhưng `system.particles.size()` không đổi.
+- Phần tử giữa danh sách ảnh chính là position trong ô gốc.
+- Bật/tắt G không tạo thêm bước tích phân, không reset E và không thay số cặp.
+- Ảnh qua góc dịch đúng cả Lx lẫn Ly.
+
+## Bài tập mở rộng
+
+Chỉ vẽ những ảnh có marker giao với vùng nhìn thấy để giảm số lệnh vẽ. Giữ tối ưu này ở renderer; phép tính lực không được thay đổi. Sau đó sang [bài 7 — tọa độ unwrapped](/projects/periodic-molecular-box/07-giu-quy-dao-khong-bi-dut) để giữ lại hành trình phía sau hình lặp.

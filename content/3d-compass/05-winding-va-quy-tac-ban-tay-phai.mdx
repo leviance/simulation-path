@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Winding và quy tắc bàn tay phải
+
+## Vấn đề cần giải quyết
+
+Ba point A, B, C xác định cùng một tam giác dù ta đọc chúng theo A→B→C hay A→C→B. Thế nhưng hai thứ tự này tạo normal ngược nhau. Trong renderer 3D, thứ tự đỉnh được dùng để quyết định mặt trước/mặt sau và loại bỏ những mặt quay khỏi camera. Nếu xem winding là chi tiết không quan trọng, mô hình sau này sẽ có những mặt biến mất hoặc sáng tối ngược nhau.
+
+Bài này không di chuyển point khi đảo winding. Ta chỉ đổi nhãn B và C trong dữ liệu, tính lại AB×AC rồi quan sát hướng normal.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cross product là phép toán phản giao hoán:
+
+$$
+u\times v=-(v\times u)
+$$
+
+Do đó:
+
+$$
+(B-A)\times(C-A)=-\big((C-A)\times(B-A)\big)
+$$
+
+Quy tắc bàn tay phải cho ta cách dự đoán dấu: cuộn các ngón tay từ AB về AC theo góc nhỏ hơn, ngón cái chỉ hướng của normal.
+
+Để so normal với hướng nhìn cố định $V$, ta dùng:
+
+$$
+facing=\hat N\cdot\hat V
+$$
+
+Dấu của `facing` đổi khi normal đổi hướng. Quy ước project gọi giá trị không âm là `front`, giá trị âm là `back`.
+
+<InteractiveLab demo="normal" mode="normal-winding" />
+
+Ghi lại raw normal và area, sau đó bấm **Đảo B ↔ C**. Ba vị trí trên Canvas giữ nguyên, normal đổi dấu, nhãn front/back đổi và area không đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Đảo winding bằng cách tạo Triangle mới
+
+Giữ A, đặt C cũ vào vị trí B và B cũ vào vị trí C:
+
+```cpp title="include/lab.hpp — đảo thứ tự B và C"
+inline Triangle reverseWinding(const Triangle& triangle) {
+    return {triangle.a, triangle.c, triangle.b};
+}
+```
+
+Hàm trả một giá trị mới nên dễ test: input không bị sửa ngầm và ta có thể so trước/sau trong cùng một scope.
+
+### Bước 2 — Chuẩn hóa cả hai vector trước khi dot
+
+`facingAmount` chỉ so hướng; độ lớn của tam giác hoặc `viewDirection` không được ảnh hưởng kết quả.
+
+```cpp title="include/lab.hpp — đo normal hướng về phía nào"
+inline double facingAmount(const Triangle& triangle, Vec3 viewDirection) {
+    return dot(triangleUnitNormal(triangle), normalize(viewDirection));
+}
+```
+
+Với tam giác hợp lệ, kết quả nằm trong khoảng `[-1,1]`: gần 1 khi cùng hướng, gần -1 khi ngược hướng và gần 0 khi normal gần vuông góc hướng nhìn.
+
+### Bước 3 — Nối phím F vào event loop
+
+Chỉ đổi winding một lần cho mỗi lần nhấn, nên ta bỏ qua key repeat:
+
+```cpp title="src/main.cpp — thao tác đảo winding"
+if (!event.key.repeat && event.key.key == SDLK_F) {
+    triangle = lab::reverseWinding(triangle);
+}
+```
+
+Các cạnh được tính lại trong frame kế tiếp. Không cần sửa riêng `edgeAB`, `edgeAC`, raw normal hoặc area vì chúng chưa bao giờ được lưu thành state.
+
+### Bước 4 — Hiển thị cả area và facing
+
+Title bar giúp kiểm tra hai tính chất cùng lúc:
+
+```cpp title="src/main.cpp — theo dõi winding trong checkpoint 5"
+std::snprintf(
+    title,
+    sizeof(title),
+    "P10 | area %.3f | facing %.3f | F flips winding | 1-3/arrows/QE/R",
+    lab::triangleArea(triangle),
+    lab::facingAmount(triangle, {1.0, -1.0, 1.0})
+);
+```
+
+Hướng nhìn `(1,-1,1)` khớp với hướng quan sát cố định của sơ đồ axonometric. Đây là một quy ước của project, không phải hướng camera tổng quát.
+
+## Ghép các phần lại
+
+Build `project_10_checkpoint_5`. Nhấn F nhiều lần: mũi tên tím phải luân phiên giữa hai hướng và area giữ nguyên tới sai số hiển thị. Kéo C sang phía bên kia AB cũng làm normal đổi phía, nhưng lần này hình học của tam giác thật sự thay đổi liên tục thay vì chỉ đổi thứ tự nhãn.
+
+Winding không thể suy từ vị trí screen sau phép chiếu trong mọi trường hợp 3D. Ta luôn tính normal từ ba point world-space rồi mới quyết định facing.
+
+## Thử làm sai để hiểu đúng
+
+1. Đảo `triangle.a` với `triangle.b` nhưng vẫn mô tả thao tác là B↔C. Normal cũng đổi dấu, song quy ước và UI không còn khớp; test nên khóa đúng phép đổi đã chọn.
+2. Dùng raw normal trong dot mà không normalize. Dấu vẫn thường đúng nhưng độ lớn `facing` tăng theo area và không còn nằm trong `[-1,1]`.
+3. Lấy trị tuyệt đối của facing. Front và back trở nên không phân biệt được dù mũi tên normal vẫn quay ngược.
+
+## Tự kiểm tra kết quả
+
+- `reverseWinding` giữ nguyên tập hợp ba vị trí.
+- Raw normal sau khi đảo bằng raw normal cũ nhân `-1`.
+- Unit normal sau khi đảo cũng đổi dấu và vẫn dài 1.
+- Area trước/sau bằng nhau.
+- Dấu facing và nhãn front/back đổi sau mỗi lần nhấn F.
+
+## Bài tập mở rộng
+
+Thêm hai màu fill khác nhau cho front và back nhưng vẫn giữ cạnh tam giác dễ đọc. Sau đó thử đổi `viewDirection` sang `(0,0,1)` và giải thích vì sao một số tam giác gần song song hướng nhìn cho facing gần 0.
+
+Bài cuối sẽ xử lý trường hợp winding không còn ý nghĩa: ba đỉnh nằm trên một đường và tam giác không có mặt để định nghĩa normal.

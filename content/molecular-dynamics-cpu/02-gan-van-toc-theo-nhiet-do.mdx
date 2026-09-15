@@ -1,0 +1,174 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Gán vận tốc theo nhiệt độ và bỏ chuyển động khối
+
+## Vấn đề cần giải quyết
+
+Các hạt đang đứng yên. Nếu gán vận tốc ngẫu nhiên rồi dùng ngay, cả đám hạt thường có một vận tốc trung bình khác 0. Ta cần phân biệt chuyển động chung của cả khối với chuyển động tương đối giữa các hạt.
+
+Bài này thêm vận tốc ban đầu nhưng chưa chạy mô phỏng. Hãy bắt đầu từ checkpoint 1. Kết quả cần thấy là các mũi tên vận tốc, tổng động lượng gần 0 và nhiệt độ đo được bằng giá trị đã chọn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Động lượng tổng là $\mathbf P=\sum_i m_i\mathbf v_i$. Với tổng khối lượng M, vận tốc khối tâm là $\mathbf v_{cm}=\mathbf P/M$. Phép trừ $\mathbf v_i\leftarrow\mathbf v_i-\mathbf v_{cm}$ loại chuyển động chung, kể cả khi khối lượng các hạt khác nhau.
+
+Lab đo nhiệt độ theo vận tốc tương đối với khối tâm. Trong hệ đơn vị rút gọn kB=1:
+
+$$
+K_{thermal}=\sum_i\frac12m_i\|\mathbf v_i-\mathbf v_{cm}\|^2,
+\qquad T=\frac{2K_{thermal}}{2N-2}.
+$$
+
+Hai bậc tự do bị trừ tương ứng với hai thành phần chuyển động chung trong 2D. Ngay sau khi đã bỏ vận tốc khối tâm, Kthermal bằng toàn bộ động năng K. Để đạt nhiệt độ mục tiêu, ta nhân mọi vận tốc với √(Ktarget/K), trong đó Ktarget=(2N-2)Ttarget/2.
+
+<InteractiveLab demo="molecular-dynamics-cpu" mode="md-temperature" />
+
+Đổi nhiệt độ ban đầu và seed, đọc T cùng |P|. Vector vận tốc chỉ được vẽ cho một số hạt để hình không quá rối; phép đo vẫn dùng toàn bộ N hạt.
+
+## Viết code từng bước
+
+### Bước 1 — Viết hai phép đo độc lập phần vẽ
+
+```cpp title="include/molecular_dynamics.hpp — kineticEnergy và linearMomentum"
+inline double kineticEnergy(const std::vector<Particle>& particles) {
+    double energy = 0.0;
+    for (const Particle& particle : particles) {
+        energy += 0.5 * particle.mass * lengthSquared(particle.velocity);
+    }
+    return energy;
+}
+
+inline Vec2 linearMomentum(const std::vector<Particle>& particles) {
+    Vec2 momentum{};
+    for (const Particle& particle : particles) {
+        momentum = add(momentum, scale(particle.velocity, particle.mass));
+    }
+    return momentum;
+}
+```
+
+`lengthSquared` trả vx²+vy², không cần lấy căn rồi bình phương lại. Động lượng luôn nhân với khối lượng; tổng vận tốc chỉ thay thế được khi mọi khối lượng bằng nhau.
+
+
+### Bước 2 — Tạo vận tốc thô, trừ chuyển động chung rồi đổi thang
+
+```cpp title="include/molecular_dynamics.hpp — assignThermalVelocities hoàn chỉnh"
+inline bool assignThermalVelocities(
+    std::vector<Particle>& particles,
+    double targetTemperature,
+    std::uint32_t seed = 7U
+) {
+    if (particles.size() < 2U || !std::isfinite(targetTemperature) ||
+        targetTemperature <= 0.0) {
+        return false;
+    }
+
+    DeterministicRandom random(seed);
+    Vec2 weightedVelocity{};
+    double totalMass = 0.0;
+    for (Particle& particle : particles) {
+        if (!std::isfinite(particle.mass) || particle.mass <= 0.0) {
+            return false;
+        }
+        particle.velocity = {2.0 * random.next01() - 1.0, 2.0 * random.next01() - 1.0};
+        weightedVelocity = add(weightedVelocity, scale(particle.velocity, particle.mass));
+        totalMass += particle.mass;
+    }
+    if (!std::isfinite(totalMass) || totalMass <= 0.0) {
+        return false;
+    }
+
+    const Vec2 centerVelocity = scale(weightedVelocity, 1.0 / totalMass);
+    for (Particle& particle : particles) {
+        particle.velocity = subtract(particle.velocity, centerVelocity);
+    }
+
+    const double currentEnergy = kineticEnergy(particles);
+    const std::size_t degreesOfFreedom = 2U * particles.size() - 2U;
+    const double targetEnergy = 0.5 * double(degreesOfFreedom) * targetTemperature;
+    if (!std::isfinite(currentEnergy) || currentEnergy <= 0.0) {
+        return false;
+    }
+    const double velocityScale = std::sqrt(targetEnergy / currentEnergy);
+    for (Particle& particle : particles) {
+        particle.velocity = scale(particle.velocity, velocityScale);
+    }
+    return std::all_of(particles.begin(), particles.end(), [](const Particle& particle) {
+        return finite(particle.velocity);
+    });
+}
+```
+
+Đọc hàm theo ba vòng: vòng đầu lấy mỗi thành phần trong [-1,1) và cộng `weightedVelocity`; vòng thứ hai trừ `centerVelocity`; vòng cuối nhân với `velocityScale`. Hàm cần ít nhất hai hạt và nhiệt độ dương. Bình phương vận tốc mới tạo động năng, nên hệ số phải có căn bậc hai. Phân bố đều này chỉ là điều kiện đầu đơn giản, chưa phải phân bố Maxwell–Boltzmann ở cân bằng nhiệt.
+
+
+### Bước 3 — Đo đúng đại lượng đã định nghĩa
+
+```cpp title="include/molecular_dynamics.hpp — kineticTemperature"
+inline double kineticTemperature(const std::vector<Particle>& particles) {
+    if (particles.size() < 2U) {
+        return 0.0;
+    }
+    double totalMass = 0.0;
+    for (const Particle& particle : particles) {
+        totalMass += particle.mass;
+    }
+    const Vec2 centerVelocity = scale(linearMomentum(particles), 1.0 / totalMass);
+    double thermalEnergy = 0.0;
+    for (const Particle& particle : particles) {
+        const Vec2 relativeVelocity = subtract(particle.velocity, centerVelocity);
+        thermalEnergy += 0.5 * particle.mass * lengthSquared(relativeVelocity);
+    }
+    // Chỉ loại chuyển động khối tâm khi đo; không sửa vận tốc của hạt.
+    return 2.0 * thermalEnergy / double(2U * particles.size() - 2U);
+}
+```
+
+Hàm tính lại vận tốc khối tâm mỗi khi đo. Về sau tường có thể làm tổng động lượng thay đổi; việc từng trừ vận tốc khối tâm lúc khởi tạo không đảm bảo nó bằng 0 mãi. Chỉ trừ trong phép đo này, không tự sửa vận tốc của hệ sau mỗi frame.
+
+
+### Bước 4 — Gọi bộ khởi tạo và bật mũi tên vận tốc
+
+```cpp title="include/molecular_dynamics.hpp — gán vận tốc trong makeMolecularSystem"
+system.box = makeBoxForDensity(particleCount, density);
+system.particles = createLatticeParticles(particleCount, system.box, seed);
+assignThermalVelocities(system.particles, targetTemperature, seed + 1U);
+```
+
+Thay lời gọi tạo hệ ở `main.cpp` bằng `md::makeMolecularSystem(particleCount, targetTemperature, seed, density)`. Vị trí dùng seed, vận tốc dùng seed+1 để hai dãy không bắt đầu từ cùng giá trị. Đổi đối số cuối của `drawSystem` thành `true`. Checkpoint 2 thêm phím T đổi nhiệt độ, S đổi seed và D đổi mật độ; cả ba tạo lại hệ rồi đo từ trạng thái mới.
+
+
+## Ghép các phần lại
+
+Làm việc từ thư mục gốc của ZIP. Mỗi target dùng một thư mục riêng: thay đổi trong `checkpoints/02/` chỉ có hiệu lực khi chạy đúng target của bài này.
+
+```bash title="Terminal — build và chạy checkpoint 2 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_42_checkpoint_2
+.\build\Debug\project_42_checkpoint_2.exe
+```
+
+Với Ninja hoặc Makefiles, executable thường nằm ngay trong `build/`. CTest của ZIP kiểm tra `final/include`; nó không tự kiểm tra phần bạn vừa sửa trong một checkpoint. Hãy dùng số đo và tình huống kiểm tra của bài trước khi đối chiếu bản hoàn chỉnh.
+
+Title phải hiện T bằng giá trị khởi tạo và |P| gần sai số làm tròn. Cửa sổ vẫn tĩnh: mũi tên thể hiện vận tốc sẽ dùng, chưa phải vệt chuyển động.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong C++, bỏ vòng trừ `centerVelocity` rồi đo |P| và T. Vì động năng chung vẫn nằm trong phép rescale, T đo theo chuyển động tương đối có thể không khớp target. Hoàn tác trước phép thử tiếp theo.
+2. Bỏ căn bậc hai trong `velocityScale`, tạo lại hệ cùng seed và so T với target. Vận tốc được nhân theo một tỷ lệ, nhưng động năng đổi theo bình phương tỷ lệ đó. Khôi phục căn bậc hai.
+
+## Tự kiểm tra kết quả
+
+- [ ] Tổng động lượng sau khởi tạo gần 0.
+- [ ] T đo được khớp target với cả khối lượng đồng nhất và xen kẽ 1/2.
+- [ ] Cộng cùng một vận tốc vào mọi hạt không đổi nhiệt độ đã loại chuyển động khối tâm.
+- [ ] Cùng seed cho lại toàn bộ vận tốc.
+- [ ] Đổi nhiệt độ giữ nguyên vị trí khi N, mật độ và seed không đổi.
+
+## Bài tập mở rộng
+
+1. Vẽ histogram tốc độ cho hai nhiệt độ khác nhau.
+2. Gán khối lượng xen kẽ 1 và 2, kiểm |P|; số bậc tự do vẫn là 2N-2.
+3. So phân bố vận tốc đều hiện tại với phân bố Gaussian dùng trong khởi tạo Maxwell–Boltzmann.
+
+Bài tiếp theo thêm thế năng và lực có cutoff.

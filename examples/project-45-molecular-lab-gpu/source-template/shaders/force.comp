@@ -1,0 +1,95 @@
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Positions { vec4 positions[]; };
+layout(std430, binding = 1) writeonly buffer Forces { vec4 forces[]; };
+layout(std430, binding = 2) readonly buffer Reference { vec4 referencePositions[]; };
+layout(std430, binding = 3) readonly buffer Counts { uint counts[]; };
+layout(std430, binding = 4) readonly buffer Indices { uint indices[]; };
+layout(std430, binding = 5) buffer Control { uint flags; uint maxDisplacementBits; uint maxOccupancy; uint reserved; };
+uniform uint uCount;
+uniform uint uBase;
+uniform uint uCellsX;
+uniform uint uCellsY;
+uniform vec2 uBox;
+uniform int uGrid;
+const float cutoff = 2.5;
+const uint cellCapacity = 16u;
+
+vec2 rawPair(float radius) {
+    float inverse2 = 1.0 / (radius * radius);
+    float inverse6 = inverse2 * inverse2 * inverse2;
+    return vec2(4.0 * (inverse6 * inverse6 - inverse6), 24.0 * (inverse6 - 2.0 * inverse6 * inverse6) / radius);
+}
+
+void accumulatePair(uint i, uint j, inout vec3 total) {
+    if (i == j) {
+        return;
+    }
+    vec2 delta = positions[j].xy - positions[i].xy;
+    delta -= uBox * floor(delta / uBox + 0.5);
+    float radius2 = dot(delta, delta);
+    if (isnan(radius2) || isinf(radius2) || radius2 < 0.25) {
+        atomicOr(flags, 2u);
+        return;
+    }
+    if (radius2 >= cutoff * cutoff) {
+        return;
+    }
+    float radius = sqrt(radius2);
+    vec2 value = rawPair(radius);
+    vec2 edge = rawPair(cutoff);
+    total.xy += (value.y - edge.y) * delta / radius;
+    // Mỗi cặp được hai invocation duyệt: mỗi bên chỉ giữ U/2.
+    total.z += 0.5 * (value.x - edge.x - (radius - cutoff) * edge.y);
+}
+
+void main() {
+    uint i = uBase + gl_GlobalInvocationID.x;
+    if (i >= uCount) {
+        return;
+    }
+    vec3 total = vec3(0);
+    if (uGrid == 0) {
+        // CPU không bao giờ cho nhánh N² chạy với hơn 1024 hạt.
+        if (uCount > 1024u) {
+            atomicOr(flags, 2u);
+            return;
+        }
+        for (uint j = 0u; j < uCount; ++j) {
+            accumulatePair(i, j, total);
+        }
+    } else {
+        ivec2 extent = ivec2(uCellsX, uCellsY);
+        ivec2 origin = min(ivec2(referencePositions[i].xy / uBox * vec2(extent)), extent - 1);
+        uint visited[9];
+        int visitedCount = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec2 cell = (origin + ivec2(dx, dy) + extent) % extent;
+                uint cellId = uint(cell.y) * uCellsX + uint(cell.x);
+                bool duplicate = false;
+                for (int k = 0; k < visitedCount; ++k) {
+                    if (visited[k] == cellId) {
+                        duplicate = true;
+                    }
+                }
+                if (duplicate) {
+                    continue;
+                }
+                visited[visitedCount++] = cellId;
+                uint count = counts[cellId];
+                if (count > cellCapacity) {
+                    atomicOr(flags, 1u);
+                    continue;
+                }
+                for (uint slot = 0u; slot < count; ++slot) {
+                    accumulatePair(i, indices[cellId * cellCapacity + slot], total);
+                }
+            }
+        }
+    }
+    if (any(isnan(total)) || any(isinf(total))) {
+        atomicOr(flags, 2u);
+    }
+    forces[i] = vec4(total, 0);
+}

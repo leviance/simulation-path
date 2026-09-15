@@ -1,0 +1,200 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chuẩn hóa, lerp và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Đến đây, mô phỏng đã có hầu hết các phép toán cần thiết. Trước khi hoàn thành project, ta còn phải trả lời rõ hai câu hỏi:
+
+- `normalize` có thật sự loại bỏ độ lớn nhưng vẫn giữ nguyên hướng của vector không? Chương trình xử lý zero vector như thế nào?
+- Điểm do `lerp` tạo ra có bắt đầu tại A, kết thúc tại B và luôn nằm trên đoạn nối hai điểm cuối hay không?
+
+Trong bài cuối, chương trình sẽ vẽ `normalize(A)` bằng một mũi tên màu trắng và vẽ `lerp(A,B,t)` bằng một điểm màu vàng. Sau đó, ta dùng CTest để kiểm tra toàn bộ phần toán trong `lab.hpp` mà không cần mở cửa sổ SDL.
+
+## Hiểu ý tưởng trước khi viết code
+
+Phép chuẩn hóa tạo vector đơn vị:
+
+$$
+\hat A=\frac{A}{|A|},\qquad |\hat A|\approx1
+$$
+
+Công thức trên chỉ áp dụng khi A khác zero vector. Với zero vector, không có hướng nào để giữ lại; vì vậy code của project quy ước `normalize(0)=0`.
+
+Phép nội suy tuyến tính (`linear interpolation`, viết tắt là `lerp`) được định nghĩa như sau:
+
+$$
+lerp(A,B,t)=A+(B-A)t
+$$
+
+- Khi `t=0`, kết quả trùng với A.
+- Khi `t=1`, kết quả trùng với B.
+- Khi `t=0.5`, kết quả nằm tại trung điểm của A và B.
+- Với `0<t<1`, kết quả nằm trên đoạn A–B.
+
+<InteractiveLab demo="vector" mode="vector-normalize" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết `lerp` bằng những phép toán đã kiểm tra
+
+```cpp title="include/lab.hpp — nội suy tuyến tính giữa hai vector"
+inline Vec2 lerp(Vec2 start, Vec2 end, double t) {
+    return start + (end - start) * t;
+}
+```
+
+Hàm `lerp` không tự giới hạn `t`. Nhờ đó, cùng một công thức còn có thể dùng để ngoại suy khi `t<0` hoặc `t>1`. Chỉ phần điều khiển của mô phỏng mới giữ `t` trong khoảng `[0,1]`.
+
+### Bước 2 — Chia kết quả thành bốn chế độ hiển thị
+
+Nếu mọi kết quả cùng xuất hiện, các mũi tên sẽ chồng lên nhau và rất khó đọc. Vì vậy, bản hoàn chỉnh chia hình vẽ thành bốn chế độ; người dùng chuyển chế độ bằng các phím `1`–`4`. Phím `0` hiển thị tất cả các lớp khi cần đối chiếu:
+
+```cpp title="src/main.cpp — các chế độ hiển thị của bản hoàn chỉnh"
+enum class ViewMode {
+    basic,
+    addSubtract,
+    scalarAndDistance,
+    normalizeAndLerp,
+    all,
+};
+```
+
+Chương trình khởi động ở chế độ `normalizeAndLerp` để hiển thị đúng phần đang học. A và B luôn xuất hiện làm dữ liệu gốc; những kết quả còn lại chỉ được vẽ trong chế độ tương ứng.
+
+### Bước 3 — Điều khiển t và chế độ hiển thị bằng bàn phím
+
+```cpp title="src/main.cpp — thay tham số nội suy"
+if (event.key.key == SDLK_RIGHT) {
+    interpolation = std::min(1.0, interpolation + 0.05);
+}
+if (event.key.key == SDLK_LEFT) {
+    interpolation = std::max(0.0, interpolation - 0.05);
+}
+if (!event.key.repeat && event.key.key == SDLK_1) {
+    viewMode = ViewMode::basic;
+}
+if (!event.key.repeat && event.key.key == SDLK_2) {
+    viewMode = ViewMode::addSubtract;
+}
+if (!event.key.repeat && event.key.key == SDLK_3) {
+    viewMode = ViewMode::scalarAndDistance;
+}
+if (!event.key.repeat && event.key.key == SDLK_4) {
+    viewMode = ViewMode::normalizeAndLerp;
+}
+if (!event.key.repeat && event.key.key == SDLK_0) {
+    viewMode = ViewMode::all;
+}
+```
+
+Mỗi lần nhấn phím mũi tên làm `t` thay đổi 0.05, vì vậy đoạn A–B có 21 vị trí có thể chọn nếu tính cả hai đầu. Giới hạn `[0,1]` thuộc về phần điều khiển của mô phỏng chứ không nằm trong hàm `lerp`. Điều kiện `!event.key.repeat` chỉ áp dụng cho phím đổi chế độ; người dùng vẫn có thể giữ phím mũi tên để thay đổi `t` liên tục.
+
+### Bước 4 — Vẽ đường dẫn, vector đơn vị và điểm lerp
+
+```cpp title="src/main.cpp — normalize A và nội suy từ A tới B"
+const lab::Vec2 unitA = lab::normalize(vectorA);
+const lab::Vec2 unitScreen = worldToScreen(unitA, width, height);
+const lab::Vec2 interpolated = lab::lerp(vectorA, vectorB, interpolation);
+const lab::Vec2 interpolatedScreen = worldToScreen(interpolated, width, height);
+if (viewMode == ViewMode::normalizeAndLerp || viewMode == ViewMode::all) {
+    drawScreenLine(pixels, width, height, endpointA, endpointB, rgba(75, 116, 128));
+    drawArrow(pixels, width, height, origin, unitScreen, rgba(255, 255, 255));
+    fillCircle(
+        pixels,
+        width,
+        height,
+        int(std::lround(interpolatedScreen.x)),
+        int(std::lround(interpolatedScreen.y)),
+        5,
+        rgba(255, 226, 108)
+    );
+}
+```
+
+Nếu A khác zero vector, mũi tên trắng luôn dài đúng một ô lưới vì `normalize(A)` có độ dài bằng 1 world unit. Đường xanh xám đánh dấu đoạn nội suy A–B; điểm vàng phải nằm trên đoạn này khi `t` thuộc `[0,1]`. Việc dùng màu sắc và hình dạng khác nhau giúp phân biệt rõ vector đơn vị với điểm nội suy.
+
+### Bước 5 — Kiểm tra độ lớn, normalize và zero vector
+
+```cpp title="tests/tests.cpp — các điều kiện quan trọng của normalize"
+const lab::Vec2 unitA = lab::normalize(a);
+check(nearlyEqual(lab::length(unitA), 1.0), "normalizing a non-zero vector produces unit length");
+check(nearlyEqual(unitA, {0.6, 0.8}), "normalization preserves direction");
+check(lab::normalize({}) == lab::Vec2{}, "normalizing the zero vector returns zero");
+check(nearlyEqual(lab::distance(a, b), std::sqrt(26.0)), "distance measures the difference vector");
+```
+
+Ta chọn A `(3,4)` vì độ lớn 5 và kết quả chuẩn hóa `(0.6,0.8)` đều dễ tính bằng tay. Zero vector cần một phép kiểm tra riêng để bảo đảm lỗi chia cho 0 không xuất hiện trở lại khi code được thay đổi sau này.
+
+### Bước 6 — Kiểm tra hai đầu và trung điểm của lerp
+
+```cpp title="tests/tests.cpp — ba mốc của lerp"
+check(lab::lerp(a, b, 0.0) == a, "lerp at zero returns the start");
+check(lab::lerp(a, b, 1.0) == b, "lerp at one returns the end");
+check(nearlyEqual(lab::lerp(a, b, 0.5), {0.5, 4.5}), "lerp at one half returns the midpoint");
+```
+
+Ba giá trị 0, 1 và 0.5 giúp phát hiện nhanh các lỗi như đảo A với B, quên cộng `start` hoặc nhân sai hệ số. Vì `lerp` không tự giới hạn `t`, file `tests/tests.cpp` còn kiểm tra hai trường hợp ngoại suy `t=-1` và `t=2`.
+
+### Bước 7 — Kiểm tra tính chất hình bình hành
+
+```cpp title="tests/tests.cpp — phép cộng phải khớp hình học"
+const lab::Vec2 sum = a + b;
+check(nearlyEqual(a + b, b + a), "vector addition is commutative");
+check(nearlyEqual(sum - a, b), "parallelogram corner minus A restores B");
+check(nearlyEqual(sum - b, a), "parallelogram corner minus B restores A");
+```
+
+Ba phép kiểm tra trên là phiên bản đại số của hình bình hành đã vẽ ở bài 4: từ A+B, nếu trừ đi một cạnh thì phải thu lại đúng cạnh còn lại.
+
+### Bước 8 — Bổ sung những trường hợp dễ bị bỏ quên
+
+```cpp title="tests/tests.cpp — zero, số không hữu hạn và tính đối xứng của distance"
+check(lab::normalize({1e-15, -1e-15}) == lab::Vec2{}, "normalizing a near-zero vector returns zero");
+check(lab::normalize({std::numeric_limits<double>::infinity(), 1.0}) == lab::Vec2{}, "normalizing infinity returns zero");
+check(lab::normalize({std::numeric_limits<double>::quiet_NaN(), 1.0}) == lab::Vec2{}, "normalizing NaN returns zero");
+check(nearlyEqual(lab::distance(a, a), 0.0), "a point has zero distance from itself");
+check(nearlyEqual(lab::distance(a, b), lab::distance(b, a)), "distance is symmetric");
+```
+
+`normalize` đã có các nhánh xử lý vector quá nhỏ, infinity và `NaN`, vì vậy tests cũng phải đi qua những nhánh này. Nếu chỉ kiểm tra vector `(3,4)`, phần bảo vệ có thể bị sửa hỏng mà CTest vẫn báo thành công.
+
+### Bước 9 — Build, chạy tests và mở bản hoàn chỉnh
+
+```bash title="Terminal — kiểm tra Project 06"
+cmake -S examples/project-06-vector-playground -B examples/project-06-vector-playground/build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
+cmake --build examples/project-06-vector-playground/build --config Debug
+ctest --test-dir examples/project-06-vector-playground/build -C Debug --output-on-failure
+cmake --build examples/project-06-vector-playground/build --config Release
+ctest --test-dir examples/project-06-vector-playground/build -C Release --output-on-failure
+```
+
+## Ghép các phần lại
+
+Chạy `project_6_final`. Dùng phím `1`–`4` để xem từng nhóm kết quả hoặc phím `0` để hiện tất cả. Kéo A/B, dùng ↑/↓ để thay đổi scalar và ←/→ để thay đổi `t`. Mũi tên trắng phải luôn dài một ô lưới khi A khác zero; điểm vàng phải di chuyển trên đoạn nối A–B. Khi A là zero vector, tất cả số đo vẫn phải hợp lệ.
+
+Luồng dữ liệu của chương trình đi theo một chiều rõ ràng. Phần xử lý input thay đổi A, B, scalar hoặc `t`; phần toán tính ra tổng, hiệu, vector đã nhân scalar, vector đơn vị và điểm nội suy; phần render chuyển các kết quả sang screen space rồi ghi pixel vào framebuffer. Các kết quả được suy ra đều được tính lại trong mỗi frame, không được lưu thành trạng thái độc lập.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `start +` trong `lerp` và chỉ trả `(end-start)*t`. Phép kiểm tra với `t=0` lập tức trả zero thay vì A.
+2. Thay normalize bằng `vector * length(vector)`. Vector kết quả càng dài khi A càng dài; kiểm tra độ lớn sẽ thất bại.
+3. Bỏ phép kiểm tra zero vector rồi xóa nhánh bảo vệ trong `normalize`. Các trường hợp thông thường vẫn vượt qua, cho thấy bộ kiểm thử chỉ có thể bảo vệ những hành vi đã được mô tả bằng test.
+
+Hoàn tác thay đổi và chạy lại CTest sau mỗi thí nghiệm.
+
+## Tự kiểm tra kết quả
+
+- Bộ kiểm thử vượt qua phép cộng, trừ, nhân scalar ở hai phía, `length` và `lengthSquared`.
+- `normalize` của vector khác zero có độ dài xấp xỉ 1 và giữ hướng.
+- `normalize` với zero vector, vector rất nhỏ, infinity và `NaN` đều trả về zero an toàn.
+- `distance` bằng độ lớn của vector hiệu, bằng zero với cùng một điểm và có tính đối xứng.
+- `lerp` khớp A, B và trung điểm tại ba mốc 0, 1, 0.5; các kiểm tra ngoại suy cũng vượt qua.
+- Hình bình hành giữ đúng khi kéo A/B ở mọi góc phần tư.
+- Đổi kích thước cửa sổ không làm thay đổi A/B trong world space và chương trình vẫn chọn đúng điểm cuối.
+
+## Bài tập mở rộng
+
+Cho `t` tự động tăng rồi giảm theo `dt` để điểm vàng chuyển động qua lại. Lưu 60 vị trí `lerp` gần nhất và nối chúng thành một vệt chuyển động. Cuối cùng, viết hàm `moveTowards(current,target,maxDistance)` bằng cách kết hợp `distance`, `normalize` và phép nhân scalar.
+
+Trong Project 07, bạn sẽ dùng `cos` và `sin` để biến một góc thành vector đơn vị. Các kiến thức vừa học về độ lớn, `normalize`, điểm cuối và chuyển đổi hệ tọa độ sẽ được sử dụng để tạo một chiếc kim quay trên đường tròn.

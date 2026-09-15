@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# NDC, viewport và hai hệ trục Y
+
+## Vấn đề cần giải quyết
+
+CPU và GPU có thể thống nhất hoàn toàn ở NDC nhưng vẫn cho hình lật hoặc probe đọc sai hàng pixel vì chúng dùng hai quy ước màn hình:
+
+- CPU framebuffer của khóa học: `(0,0)` ở trên-trái, Y tăng xuống;
+- OpenGL window coordinates: viewport origin ở dưới-trái, Y tăng lên.
+
+Checkpoint 6 viết hai cặp forward/inverse transform riêng. Không có một hàm `toScreen` mơ hồ dùng cho cả hai.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trục Y không “sai” ở một bên; hai pipeline chỉ chọn hai gốc tọa độ khác nhau. Ta giữ hai tên hàm rõ ràng và kiểm round-trip cho từng cặp để phép đổi hệ không bị sửa bằng những dấu trừ rải rác trong render loop.
+
+<InteractiveLab demo="cpu-gpu-triangle" mode="viewport-conventions" />
+
+## Viết code từng bước
+
+### Bước 1 — NDC sang CPU top-left screen
+
+```cpp title="include/pipeline.hpp — ndcToCpuScreen"
+inline Vec2 ndcToCpuScreen(Vec2 position, int width, int height) {
+    return {
+        (position.x * 0.5F + 0.5F) * float(width),
+        (1.0F - (position.y * 0.5F + 0.5F)) * float(height),
+    };
+}
+```
+
+Số `1 -` đảo Y. NDC `(+0,+1)` đi lên hàng đầu, còn NDC `(+0,-1)` đi xuống đáy framebuffer.
+
+### Bước 2 — NDC sang GPU bottom-left window
+
+```cpp title="include/pipeline.hpp — ndcToGpuWindow"
+inline Vec2 ndcToGpuWindow(Vec2 position, const Viewport& viewport) {
+    return {
+        float(viewport.x) + (position.x * 0.5F + 0.5F) * float(viewport.width),
+        float(viewport.y) + (position.y * 0.5F + 0.5F) * float(viewport.height),
+    };
+}
+```
+
+Ở đây không đảo Y. `viewport.x = leftWidth` dịch panel GPU sang nửa phải của framebuffer thật.
+
+### Bước 3 — Giữ inverse để test round-trip
+
+```cpp title="include/pipeline.hpp — gpuWindowToNdc"
+inline Vec2 gpuWindowToNdc(Vec2 position, const Viewport& viewport) {
+    return {
+        (position.x - float(viewport.x)) / float(viewport.width) * 2.0F - 1.0F,
+        (position.y - float(viewport.y)) / float(viewport.height) * 2.0F - 1.0F,
+    };
+}
+```
+
+CTest không cần GPU để khóa công thức này. Nó đưa nhiều NDC probes qua forward rồi inverse và kiểm sai số nhỏ.
+
+### Bước 4 — Resize mọi storage từ pixel size thật
+
+Khi `leftWidth` hoặc height đổi, CPU framebuffer resize và texture gọi lại `glTexImage2D`. Mỗi frame, hai `glViewport` nhận left/right width mới. Không dùng CSS size hay logical window size cho các bước này.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 6"
+cmake --build build --config Debug --target project_33_checkpoint_6
+```
+
+Resize cửa sổ theo cả hai chiều. Title bar phải báo framebuffer pixels mới; hai triangle vẫn giữ cùng NDC shape và hai panel phủ kín width.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng công thức CPU cho `glReadPixels`. Probe NDC Y dương sẽ đọc nửa dưới.
+2. Chia width đều bằng integer nhưng dùng `rightWidth = leftWidth`. Với width lẻ, mất một cột pixel.
+3. Resize CPU vector nhưng quên cấp lại texture storage. Upload size mới vượt storage cũ.
+4. Dùng `SDL_GetWindowSize` trên high-DPI display. Viewport chỉ phủ một phần framebuffer.
+
+## Tự kiểm tra kết quả
+
+- [ ] CPU mapping có đảo Y; GPU mapping không đảo Y.
+- [ ] Cả hai mapping đều có inverse và round-trip test.
+- [ ] `leftWidth + rightWidth == framebufferWidth`.
+- [ ] CPU framebuffer, texture storage và viewports cùng resize.
+- [ ] Hai panel không overlap hoặc để cột trống.
+- [ ] Title bar dùng pixel size từ `SDL_GetWindowSizeInPixels`.
+
+## Bài tập mở rộng
+
+1. Kéo Canvas probe tới bốn góc NDC và ghi lại hai hệ tọa độ pixel.
+2. Thêm divider một pixel; cập nhật công thức panel widths để tổng vẫn đúng.
+3. Viết test round-trip cho viewport có origin khác 0 ở cả X lẫn Y.
+
+Bài sau sẽ bật vertex colors để so barycentric interpolation CPU với varying interpolation của GPU.

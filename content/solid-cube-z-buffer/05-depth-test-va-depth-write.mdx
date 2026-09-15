@@ -1,0 +1,146 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# So sánh rồi ghi depth đúng thứ tự
+
+## Vấn đề cần giải quyết
+
+Ta đã có `storedDepth` trong buffer và `newDepth` của fragment. Phép thử nghe đơn giản — giữ số nhỏ hơn — nhưng thứ tự thao tác rất quan trọng:
+
+1. đọc depth cũ;
+2. so fragment mới với depth cũ;
+3. nếu pass, ghi depth mới **và** màu mới;
+4. nếu fail, không thay đổi buffer nào.
+
+Ghi depth trước khi lưu lại giá trị cũ làm inspector mất bằng chứng. Ghi color trước khi compare sẽ để mặt xa lóe lên hoặc tồn tại trong color buffer dù depth đã từ chối nó.
+
+Click một pixel trên vùng nhiều mặt chồng nhau. Readout cho biết fragment cuối tại pixel, depth mới và `pass/fail`. Tắt depth test để thấy mọi fragment pass theo draw order.
+
+## Hiểu ý tưởng trước khi viết code
+
+## Chọn dấu so sánh từ convention
+
+Project 17 dùng NDC depth:
+
+$$
+near\mapsto0,\qquad far\mapsto1
+$$
+
+Vì vậy điều kiện đúng là:
+
+```cpp
+newDepth < storedDepth
+```
+
+Không có dấu so sánh “chuẩn cho mọi renderer”. Một pipeline reversed-Z có convention khác và dùng phép so khác. Điều quan trọng là projection, clear value và compare phải thống nhất.
+
+Ta dùng `<` nghiêm thay vì `<=`. Hai triangle đồng phẳng cùng tạo đúng một sample trên cạnh chung nhờ top-left rule; fragment có depth bằng hệt không cần giành lại pixel đã có.
+
+<InteractiveLab demo="z-buffer" mode="depth-test" />
+
+## Viết code từng bước
+
+### Bước 1 — Trả về dữ liệu chẩn đoán
+
+```cpp title="include/lab.hpp — kết quả giữ cả trước và sau phép so"
+struct DepthTestResult {
+    double storedDepth{};
+    double newDepth{};
+    bool passed{};
+};
+```
+
+### Bước 2 — Compare rồi mới write
+
+Hàm test đọc reference tới đúng ô depth:
+
+```cpp title="include/lab.hpp — compare rồi mới depth write"
+inline DepthTestResult depthTestAndWrite(
+    DepthBuffer& depthBuffer,
+    int x,
+    int y,
+    double newDepth,
+    bool depthEnabled = true
+) {
+    double& storedDepth = depthBuffer.at(x, y);
+    const DepthTestResult result{
+        storedDepth,
+        newDepth,
+        !depthEnabled || newDepth < storedDepth,
+    };
+
+    if (result.passed) {
+        storedDepth = newDepth;
+    }
+    return result;
+}
+```
+
+Khi depth test tắt, fragment vẫn pass và ghi depth mới. Điều này biến chế độ tắt thành Painter's algorithm thật: fragment sau thắng cả color lẫn depth. Chế độ này chỉ là đối chứng; final mặc định luôn bật depth test.
+
+### Bước 3 — Chỉ ghi color trong nhánh pass
+
+```cpp title="src/main.cpp — fragment fail dừng trước color write"
+const lab::DepthTestResult test = lab::depthTestAndWrite(
+    depthBuffer,
+    x,
+    y,
+    fragmentDepth,
+    depthEnabled
+);
+
+if (!test.passed) {
+    return;
+}
+
+pixels[index] = lab::packColor(normalized.color);
+```
+
+`index` của color buffer và reference trong `DepthBuffer` đều trỏ cùng `(x,y)`. Một fragment pass tạo một cặp nhất quán: màu của face đó đi cùng depth của chính nó.
+
+Ví dụ ô depth đang là `0.72`:
+
+| Fragment mới | So sánh | Kết quả | Depth cuối |
+|---:|---|---|---:|
+| 0.81 | `0.81 < 0.72` | fail | 0.72 |
+| 0.43 | `0.43 < 0.72` | pass | 0.43 |
+| 0.43 | `0.43 < 0.43` | fail | 0.43 |
+
+Thứ tự hai fragment đầu không quan trọng: cuối cùng ô vẫn giữ `0.43`.
+
+## Ghép các phần lại
+
+### Build và so hai chế độ
+
+```bash title="Terminal — build checkpoint depth test"
+cmake --build build --config Debug --target project_17_checkpoint_5
+```
+
+Chạy chương trình:
+
+1. Bật depth bằng `D`, rồi nhấn `O`: ảnh phải giữ nguyên.
+2. Tắt depth bằng `D`, nhấn `O`: màu phải đổi ở vùng bị che.
+3. Bật lại depth và xoay cube qua nhiều góc: mặt gần luôn thắng.
+4. Resize rồi lặp lại; depth buffer mới phải được clear trước frame đầu tiên.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `<` thành `>`. Clear đang là 1.0 nên gần như không fragment nào pass; muốn dùng `>` phải đổi toàn bộ convention, không chỉ một ký tự.
+2. Viết color trước `if (!test.passed)`. Mặt xa vẫn ghi màu rồi mới return; chuyển color write xuống sau nhánh fail.
+3. Khi pass chỉ ghi color, quên ghi depth. Fragment xa đến sau cũng pass vì storedDepth vẫn là 1.0.
+4. Khi fail vẫn ghi depth nhưng không ghi color. Hai buffer mô tả hai surface khác nhau và fragment gần hợp lệ sau đó có thể bị loại nhầm.
+
+## Tự kiểm tra kết quả
+
+- Buffer clear bằng `1.0`; phép test dùng `newDepth < storedDepth`.
+- Fragment `0.25` pass trên depth `1.0`; fragment `0.75` sau đó fail.
+- Depth bằng nhau fail với phép `<` nghiêm.
+- Nhánh pass cập nhật cả depth và color của cùng pixel.
+- Nhánh fail không đổi buffer nào.
+- Bật depth làm hình không đổi khi nhấn `O`; tắt depth khôi phục lỗi có chủ ý.
+- Không sort triangle trước khi depth test.
+
+## Bài tập mở rộng
+
+Thêm hai counter `passedCount` và `rejectedCount` cho một frame. Kiểm tra `passedCount + rejectedCount` bằng tổng số fragment coverage mà rasterizer tạo.
+
+Bài tiếp theo sẽ gom các phần rời thành một `renderCube` duy nhất và chạy đủ mười hai triangle với animation, controls và telemetry.

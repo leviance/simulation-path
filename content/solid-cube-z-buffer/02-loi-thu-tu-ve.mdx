@@ -1,0 +1,133 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tái hiện lỗi che khuất do thứ tự vẽ
+
+## Vấn đề cần giải quyết
+
+Framebuffer chỉ giữ một màu ở mỗi pixel. Ở checkpoint 1, fragment đến sau luôn ghi đè fragment đến trước. Điều đó vô tình biến draw order thành “luật che khuất”, dù draw order không hề nói bề mặt nào gần camera hơn.
+
+Ta sẽ làm một thí nghiệm có kiểm soát: giữ nguyên mesh, góc quay, projection, rasterizer và màu; chỉ đảo thứ tự mười hai triangle. Nếu ảnh đổi, renderer chưa giải quyết visibility.
+
+Trong lab, hãy tắt `Depth test`, chọn “Nhiều mặt chồng nhau”, rồi bật/tắt “Đảo draw order”. Khi geometry không đổi mà màu đổi, lỗi không nằm ở phép quay hay projection.
+
+## Hiểu ý tưởng trước khi viết code
+
+## Painter's algorithm giúp được đến đâu?
+
+Ý tưởng của Painter's algorithm là vẽ vật xa trước rồi phủ vật gần lên sau, giống họa sĩ vẽ nền trước. Với vài mặt không giao nhau, ta có thể sort theo Z trung bình:
+
+$$
+z_{avg}=\frac{z_A+z_B+z_C}{3}
+$$
+
+Nhưng một scalar không mô tả hết một triangle nghiêng. Cùng một triangle có thể gần ở đầu này và xa ở đầu kia. Hai triangle còn có thể xuyên nhau hoặc tạo vòng che khuất `A che B`, `B che C`, `C che A`; khi đó không tồn tại một thứ tự toàn cục đúng.
+
+Project này không dùng sort làm lời giải. Ta chỉ cần hai order dễ lặp lại để kiểm chứng Z-buffer sau này.
+
+<InteractiveLab demo="z-buffer" mode="depth-order" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo phép đảo draw list
+
+Hàm sau nhận vị trí trong vòng lặp và trả index thật cần vẽ:
+
+```cpp title="include/lab.hpp — chọn triangle theo order xuôi hoặc ngược"
+inline std::size_t triangleIndexAt(
+    std::size_t position,
+    std::size_t count,
+    bool reverseOrder
+) {
+    if (position >= count) {
+        return count;
+    }
+    if (reverseOrder) {
+        return count - 1 - position;
+    }
+    return position;
+}
+```
+
+Guard `position >= count` làm hàm an toàn để test độc lập.
+
+### Bước 2 — Dùng index đã chọn trong vòng render
+
+Vòng render vẫn chạy `position=0..11`; nó chỉ lấy `triangleIndex` qua hàm trên:
+
+```cpp title="src/main.cpp — geometry không đổi, chỉ đổi thứ tự gửi"
+for (std::size_t position = 0; position < mesh.triangles.size(); ++position) {
+    std::size_t triangleIndex = position;
+    triangleIndex = lab::triangleIndexAt(
+        position,
+        mesh.triangles.size(),
+        reverseOrder
+    );
+    const lab::ScreenTriangle triangle = lab::screenTriangle(
+        mesh.triangles[triangleIndex],
+        screenVertices
+    );
+    // rasterizeTriangle giữ nguyên như checkpoint 1.
+}
+```
+
+### Bước 3 — Cho phép đổi order bằng bàn phím
+
+Phím `O` chỉ đổi boolean:
+
+```cpp title="src/main.cpp — toggle draw order"
+if (!event.key.repeat && event.key.key == SDLK_O) {
+    reverseOrder = !reverseOrder;
+}
+```
+
+Không tạo một mảng mesh thứ hai. Nếu hai order dùng hai bản geometry khác nhau, thí nghiệm không còn tách được nguyên nhân.
+
+### Đọc kết quả đúng cách
+
+Giả sử pixel P được cả mặt front và right phủ:
+
+| Thứ tự fragment | Màu cuối khi chưa có depth test |
+|---|---|
+| front rồi right | màu right |
+| right rồi front | màu front |
+
+Không hàng nào hỏi depth. Màu cuối chỉ là fragment cuối cùng đã chạy callback. Khi cube xoay, số pixel cùng được nhiều face phủ thay đổi, nên artifact cũng thay đổi theo thời gian.
+
+Đây là lý do “đổi thứ tự tới khi nhìn ổn” không phải một Definition of Done. Ta cần một invariant mạnh hơn: với cùng scene, color buffer cuối phải giống nhau dù triangle được gửi theo order nào.
+
+## Ghép các phần lại
+
+### Build và quan sát lỗi
+
+```bash title="Terminal — build checkpoint draw-order experiment"
+cmake --build build --config Debug --target project_17_checkpoint_2
+```
+
+Chạy chương trình và làm theo thứ tự:
+
+1. Xoay cube tới lúc nhìn thấy ba mặt.
+2. Nhấn `O` nhiều lần; chỉ order đổi nhưng màu ở vùng giao nhau đổi theo.
+3. Xoay thêm một góc nhỏ rồi thử lại.
+4. Nhấn `R`; lỗi phải quay về đúng trạng thái ban đầu, không phụ thuộc lịch sử thao tác.
+
+## Thử làm sai để hiểu đúng
+
+1. Đảo `mesh.triangles` trực tiếp mỗi khi nhấn `O`. Sau nhiều lần, state geometry bị biến đổi và test khó theo dõi; giữ mesh bất biến, chỉ ánh xạ index.
+2. Đảo ba index bên trong từng triangle. Đây là đổi winding, không phải draw order; phục hồi index vertex và chỉ đảo thứ tự triangle.
+3. Sort theo `faceName`. Tên mặt không chứa thông tin camera; hình có thể ổn ở một góc nhưng sai ngay khi cube quay.
+4. Chỉ thử góc nhìn thẳng mặt front. Hai order có thể tình cờ trông giống nhau; dùng preset overlap làm đối chứng âm.
+
+## Tự kiểm tra kết quả
+
+- `triangleIndexAt(0,12,false)` trả 0 và `triangleIndexAt(0,12,true)` trả 11.
+- Toggle `O` không đổi vertex, angle, projection hoặc rasterizer.
+- Khi chưa có depth test, preset overlap tạo color buffer khác nhau ở hai order.
+- Title bar nói rõ `normal` hay `reversed` để ảnh chụp có thể tái hiện.
+- `R` đưa order và angle về trạng thái ban đầu.
+- Chưa có depth buffer hoặc phép so Z.
+
+## Bài tập mở rộng
+
+Đếm số pixel được callback ghi từ hai lần trở lên trong một frame. Đừng dùng màu cuối để suy ra count; tạo một mảng counter tạm có cùng kích thước framebuffer.
+
+Bài tiếp theo sẽ cấp cho mỗi pixel thêm một ô nhớ để lưu bề mặt gần nhất đã gặp. Trước khi compare, ta phải làm đúng vòng đời của mảng này.

@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xác định grid và kết quả tìm hàng xóm trên CPU
+
+## Bài toán cần giải quyết
+
+Project 28 đã dùng các bucket trên CPU để giảm số particle cần kiểm tra cho một circle query. Lần này, grid sẽ được dựng hoàn toàn trên GPU và mỗi particle đều phải tìm hàng xóm của chính nó. Trước khi dùng `atomicAdd`, ta cần chốt rõ cách tính cell ID và chính xác một `NeighborSummary` phải chứa những gì; nếu không, chương trình có thể chạy nhanh nhưng ta vẫn không biết kết quả có đúng hay không.
+
+Trước hết, ta cần chốt ba điều: position nằm trong world nào, một position được đổi thành cell ID ra sao và `NeighborSummary` phải chứa những gì. Bản vét cạn trên CPU (**CPU brute-force oracle**) cố ý chậm nhưng dễ đọc; kết quả của nó sẽ làm mốc để kiểm GPU ở các bài sau.
+
+## Theo dõi một particle đi qua grid
+
+Với cell `(column,row)` trong grid có `columns` cột:
+
+$$
+cellId = row \cdot columns + column
+$$
+
+Neighbor của particle $i$ là particle $j ≠ i$ thỏa:
+
+$$
+(x_j-x_i)^2 + (y_j-y_i)^2 \le r^2
+$$
+
+Ta không dùng `sqrt` trong vòng lặp. `NeighborSummary` giữ số hàng xóm, index gần nhất, bình phương khoảng cách gần nhất và số ứng viên đã kiểm. Nếu hai khoảng cách bằng nhau, index nhỏ hơn sẽ thắng; quy tắc này rất quan trọng vì atomic scatter về sau không giữ thứ tự.
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="grid-contract" />
+
+Kéo qua các cell ở giữa rồi ra sát mép. Hãy đọc `(column,row)` trước, sau đó mới đọc row-major ID. Điểm đúng maximum bound được clamp vào cell cuối thay vì tạo một cột hoặc hàng không tồn tại.
+
+## Xây từng phần
+
+### Bước 1 — Tách cách chia grid khỏi cách lưu buffer
+
+```cpp title="include/grid_math.hpp — GridSpec"
+struct GridSpec {
+    float worldWidth{kWorldWidth};
+    float worldHeight{kWorldHeight};
+    float cellSize{8.0F};
+    std::uint32_t columns{128U};
+    std::uint32_t rows{72U};
+
+    std::size_t cellCount() const {
+        return std::size_t(columns) * std::size_t(rows);
+    }
+};
+```
+
+`GridSpec` không biết gì về OpenGL. Nhờ vậy CTest có thể kiểm địa chỉ cell mà không mở window hay tạo context.
+
+### Bước 2 — Chặn tọa độ trong world rồi mới lấy floor
+
+```cpp title="include/grid_math.hpp — cellCoordinate"
+inline CellCoordinate cellCoordinate(const GridSpec& spec, Vec2 position) {
+    const float x = clampInside(position.x, spec.worldWidth);
+    const float y = clampInside(position.y, spec.worldHeight);
+    CellCoordinate coordinate{};
+    coordinate.column = static_cast<std::uint32_t>(std::floor(x / spec.cellSize));
+    coordinate.row = static_cast<std::uint32_t>(std::floor(y / spec.cellSize));
+    coordinate.column = std::min(coordinate.column, spec.columns - 1U);
+    coordinate.row = std::min(coordinate.row, spec.rows - 1U);
+    return coordinate;
+}
+```
+
+`clampInside` dùng `nextafter(maximum, 0)` để điểm ở `x == worldWidth` không tạo `column == columns`. Shader sẽ dùng cùng thứ tự: clamp, floor, clamp integer.
+
+### Bước 3 — Viết bản vét cạn trên CPU, loại chính nó và xử lý trường hợp hòa
+
+```cpp title="include/grid_math.hpp — betterNeighbor"
+inline bool betterNeighbor(
+    float candidateDistanceSquared,
+    std::uint32_t candidateIndex,
+    float currentDistanceSquared,
+    std::uint32_t currentIndex
+) {
+    constexpr float tieEpsilon = 1.0e-6F;
+    if (candidateDistanceSquared + tieEpsilon < currentDistanceSquared) {
+        return true;
+    }
+    const bool distancesTie = std::abs(candidateDistanceSquared - currentDistanceSquared) <= tieEpsilon;
+    return distancesTie && candidateIndex < currentIndex;
+}
+```
+
+`bruteForceNeighbor` bỏ qua `queryIndex`, tăng `visitedCandidates`, kiểm `radiusSquared` rồi mới gọi hàm này. Hàm vét cạn không tái sử dụng code duyệt grid, nhờ đó hai cách tính không cùng sao chép một lỗi.
+
+### Bước 4 — Chốt layout trước khi đọc buffer về CPU
+
+`Vec2` phải là 8 byte và `NeighborSummary` phải là 16 byte. Hai `static_assert` trong checkpoint làm lỗi layout xuất hiện khi compile, thay vì biến thành nearest index ngẫu nhiên lúc chạy.
+
+## Chạy cả chuỗi xử lý
+
+Bài 1 đã có cửa sổ SDL3/OpenGL tối thiểu từ starter, nhưng toàn bộ phép tính vẫn chạy trên CPU. Chương trình sinh `262.147` position từ `(index, seed)`, in cell của particle 0 và một kết quả tìm hàng xóm mẫu bằng cách vét cạn.
+
+```bash title="Terminal — build checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_40_checkpoint_1 project_40_tests
+```
+
+```bash title="Terminal — chạy bản kiểm tra CPU"
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+## Cố tình làm hỏng grid
+
+1. Bỏ clamp integer cuối rồi truyền `position.x == worldWidth`. Quan sát `column == columns`, khiến row-major ID vượt buffer.
+2. Không loại `queryIndex`. Mọi particle luôn có nearest distance bằng zero và nearest index là chính nó.
+3. Chọn nearest chỉ bằng `<`. Hai particle đối xứng có thể đổi nearest theo thứ tự traversal.
+4. Dùng hai trạng thái RNG khác nhau để tạo đầu vào CPU và GPU. Khi kết quả lệch nhau, ta sẽ không biết lỗi nằm ở phép tìm hàng xóm hay ngay từ dữ liệu đầu vào.
+
+## Tự nghiệm thu
+
+- [ ] World 1.024×576 với cell size 8 tạo grid 128×72.
+- [ ] `(0,0)` vào cell 0; `(1024,576)` vào cell 9.215.
+- [ ] Cùng count/seed sinh đúng cùng position; seed khác làm vị trí thay đổi.
+- [ ] `Vec2` 8 byte và `NeighborSummary` 16 byte.
+- [ ] Bản vét cạn loại chính particle đang xét và nhận điểm nằm đúng trên bán kính.
+- [ ] Distance hòa chọn index nhỏ hơn.
+- [ ] CTest kết thúc trong timeout 20 giây.
+
+## Hướng mở rộng
+
+1. Thêm world origin khác zero và sửa công thức cell coordinate thành `(position-minimum)/cellSize`.
+2. Cho bản vét cạn trả cả danh sách index hàng xóm; chỉ sắp xếp danh sách khi cần đối chiếu.
+3. Tạo bốn particle đối xứng quanh một query để kiểm tie-break độc lập traversal order.
+
+Bài 2 sẽ đưa positions lên SSBO và tạo occupancy histogram bằng hai compute pass đầu tiên: clear và atomic count.

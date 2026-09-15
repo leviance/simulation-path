@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Split node và redistribute
+
+## Vấn đề cần giải quyết
+
+Root-only tree chưa loại được candidate nào. Khi leaf đã đủ `leafCapacity`, ta muốn chia bounds thành bốn child và đưa từng index xuống child phù hợp. Phần dễ sai nhất không phải vẽ bốn hình vuông; đó là **redistribute**: indices đang nằm trong parent phải được chuyển xuống cùng với particle mới vừa làm leaf quá tải.
+
+Nếu quên indices cũ, dữ liệu biến mất. Nếu giữ chúng ở parent đồng thời chèn xuống child, query có thể trả trùng. Nếu nhiều points trùng vị trí mà tree không có guard, recursion không bao giờ dừng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với parent có chiều rộng `w`, chiều cao `h`, một split tạo bốn child kích thước `w/2 × h/2`. Leaf được phép split khi:
+
+$$
+depth < maximumDepth
+$$
+
+và
+
+$$
+\frac{w}{2}\ge minimumNodeSize,\qquad \frac{h}{2}\ge minimumNodeSize
+$$
+
+Ta tạo children trước, di chuyển `particleIndices` cũ ra một biến tạm, làm rỗng parent rồi gọi lại chính `insertAtNode` cho cả indices cũ lẫn index mới. Nhờ vậy split-line policy chỉ có một bản.
+
+<InteractiveLab demo="visible-quadtree" mode="quadtree-split" />
+
+Đổi distribution giữa clustered và uniform. Clustered cloud phải tạo các leaf nhỏ tập trung quanh ba cụm; vùng thưa dừng sớm hơn.
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm guard trước khi split
+
+```cpp title="include/lab.hpp — nodeCanSplit"
+inline bool nodeCanSplit(const QuadtreeNode& node, const QuadtreeConfig& config) {
+    const double width = node.bounds.maximum.x - node.bounds.minimum.x;
+    const double height = node.bounds.maximum.y - node.bounds.minimum.y;
+    return node.depth < config.maximumDepth && width * 0.5 >= config.minimumNodeSize && height * 0.5 >= config.minimumNodeSize;
+}
+```
+
+Leaf đầy nhưng guard đã chạm thì được phép giữ nhiều hơn capacity. Capacity là threshold, không phải một lời hứa bất khả thi khi dữ liệu trùng nhau.
+
+### Bước 2 — Tạo đủ bốn child theo thứ tự cố định
+
+```cpp title="include/lab.hpp — tạo bốn child liên tiếp"
+const Bounds2D parentBounds = node.bounds;
+const int childDepth = node.depth + 1;
+const std::size_t firstChildIndex = tree.nodes.size();
+for (int quadrant = 0; quadrant < 4; ++quadrant) {
+    tree.nodes.push_back({quadtreeChildBounds(parentBounds, quadrant), childDepth});
+}
+```
+
+Không giữ reference tới `node` qua vòng `push_back`: `std::vector` có thể reallocate. Code nhớ `nodeIndex`, rồi lấy lại `tree.nodes[nodeIndex]` sau khi children đã được tạo.
+
+### Bước 3 — Biến parent thành internal node
+
+```cpp title="include/lab.hpp — chuyển storage khỏi parent"
+std::vector<std::size_t> existingIndices = std::move(tree.nodes[nodeIndex].particleIndices);
+tree.nodes[nodeIndex].particleIndices.clear();
+tree.nodes[nodeIndex].children = {firstChildIndex, firstChildIndex + 1U, firstChildIndex + 2U, firstChildIndex + 3U};
+```
+
+Sau ba dòng này, parent không còn là leaf và không giữ particle. Đây là invariant quan trọng hơn số đường kẻ trên màn hình.
+
+### Bước 4 — Redistribute qua cùng insertion path
+
+```cpp title="include/lab.hpp — đưa indices cũ xuống child"
+for (const std::size_t existingIndex : existingIndices) {
+    const int quadrant = quadtreeQuadrant(particles[existingIndex].position, parentBounds);
+    insertAtNode(tree, particles, existingIndex, tree.nodes[nodeIndex].children[std::size_t(quadrant)]);
+}
+const int quadrant = quadtreeQuadrant(particles[particleIndex].position, parentBounds);
+insertAtNode(tree, particles, particleIndex, tree.nodes[nodeIndex].children[std::size_t(quadrant)]);
+```
+
+Index mới không được `push_back` riêng vào parent. Cũ và mới đều tuân theo cùng quadrant function và có thể tiếp tục split child nếu cần.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint split"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_3
+```
+
+Title báo node count, leaf count, maximum depth và maximum leaf occupancy. Capacity 8 không đồng nghĩa mọi leaf buộc phải đúng tám phần tử.
+
+## Thử làm sai để hiểu đúng
+
+1. Xóa vòng redistribute. Tree vẫn vẽ được nhưng phần lớn particles biến mất khỏi leaves; khôi phục việc chèn lại indices cũ.
+2. Giữ `QuadtreeNode& node` rồi dùng nó sau bốn `push_back`. Khi vector reallocate, reference không còn hợp lệ; dùng `nodeIndex` để lấy lại node.
+3. Đặt `maximumDepth` rất lớn và `minimumNodeSize = 0`, sau đó thêm nhiều points trùng nhau. Recursion phình sâu; trả guards về giá trị hữu hạn.
+
+## Tự kiểm tra kết quả
+
+- Leaf chỉ thử split sau khi đã đủ capacity.
+- Cả maximumDepth và minimumNodeSize đều chặn recursion.
+- Một split luôn tạo đúng bốn child liên tiếp SW, SE, NW, NE.
+- Parent chuyển thành internal node và có `particleIndices` rỗng.
+- Indices cũ cùng index mới đều đi qua `insertAtNode`.
+- Không giữ reference vào vector element qua `push_back`.
+- Clustered và uniform distributions tạo topology khác nhau từ cùng config.
+
+## Bài tập mở rộng
+
+Tạo 100 points có cùng position `(0.5,0.5)`. Quan sát chúng luôn đi NE và cuối cùng dừng ở maximumDepth; leaf cuối được phép vượt capacity nhưng chương trình vẫn kết thúc.
+
+Bài tiếp theo viết một inspector độc lập để chứng minh split không làm mất hoặc nhân đôi particle.

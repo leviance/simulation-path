@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện thí nghiệm và nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Một vệt chuyển động rối mắt có thể gây ấn tượng nhưng chưa tạo thành một thí nghiệm đáng tin. Bài cuối bổ sung ba trạng thái khởi đầu, một mức nhiễu rõ ràng, bước thời gian cố định và chế độ chạy nhanh luôn có số bước giới hạn.
+
+Phần nghiệm thu không cố chứng minh toàn bộ lý thuyết hỗn loạn từ một quỹ đạo. Nó chỉ kiểm những điều chương trình cam kết: hình học đúng, phương trình đúng ở các ca đã biết, năng lượng không trôi quá mức, hai con lắc chạy đồng bộ và mọi giá trị vẫn hữu hạn trong khoảng thời gian đã chọn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba preset phục vụ ba câu hỏi:
+
+- **Calm:** chuyển động năng lượng thấp có giữ hai trajectory gần nhau lâu hơn?
+- **Chaotic:** perturbation nhỏ được khuếch đại thế nào trong 10–30 giây?
+- **Near upright:** state gần cân bằng không ổn định nhạy ra sao với epsilon và dt?
+
+<InteractiveLab demo="double-pendulum-chaos" mode="chaos-validation" />
+
+Chạy từng preset 30 giây ở cùng epsilon và dt. Ghi physical separation, numerical separation, energy drift và finite-time exponent; không chỉ chụp trail cuối.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt preset thành initial state thuần
+
+```cpp title="include/lab.hpp — ba initial condition có tên"
+if (preset == ChaosPreset::calm) {
+    return {0.6, 0.0, 0.8, 0.0, 0.0};
+}
+if (preset == ChaosPreset::nearUpright) {
+    return {kPi - 0.08, 0.0, kPi - 0.16, 0.0, 0.0};
+}
+return {2.0, 0.0, 1.1, 0.0, 0.0};
+```
+
+Preset chỉ tạo data. Nó không có loop riêng hoặc solver riêng, nên mọi case đi qua cùng `stepChaosExperiment`.
+
+### Bước 2 — Fast run dùng duration chia dt
+
+```cpp title="include/lab.hpp — stress run có số step hữu hạn"
+const int plannedSteps = int(std::floor(duration / deltaSeconds + kChaosEpsilon));
+for (int step = 0; step < plannedSteps; ++step) {
+    stepChaosExperiment(result.experiment, parameters, deltaSeconds);
+    ++result.steps;
+    if (!measureChaos(result.experiment, parameters).finite) {
+        break;
+    }
+}
+```
+
+Loop không chờ separation vượt một ngưỡng vì Calm có thể mất rất lâu, còn state lỗi có thể không bao giờ thỏa điều kiện.
+
+### Bước 3 — Pointer sửa theta2 ban đầu rồi reset
+
+```cpp title="src/main.cpp — atan2 theo downward vertical và pointer capture"
+const lab::Vec2 delta = lab::subtract(pointer, geometry.bob1);
+if (lab::length(delta) > 0.1) {
+    initialState.theta2 = std::atan2(delta.x, -delta.y);
+    resetExperiment();
+}
+```
+
+`SDL_CaptureMouse(true)` giữ drag khi con trỏ ra ngoài window. Interaction không teleport current state giữa một RK4 stage; nó sửa initial data rồi dựng lại experiment.
+
+### Bước 4 — Test case nhỏ trước stress
+
+```cpp title="tests/tests.cpp — angle seam và lockstep có đáp án rõ"
+check(closeEnough(lab::phaseSpaceSeparation(seamFirst, seamSecond, parameters), 2.0 * degreesToRadians, 1e-12), "phase-space separation wraps the plus-minus pi seam");
+check(twins.stepCount == 2400, "both pendulums advance through one shared step count");
+check(closeEnough(twins.primary.elapsed, twins.perturbed.elapsed, 1e-12), "twin elapsed times stay lockstep");
+```
+
+Test geometry và derivative bắt lỗi cục bộ; stress run chỉ nên đến sau khi các nền tảng này đã pass.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build và test Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+```bash title="Terminal — lặp lại ở Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Target `project_26_final` là ứng dụng hoàn chỉnh. ZIP chứa README, starter, bảy checkpoint, final và tests; không cần ghép code block từ trang web bằng tay.
+
+## Thử làm sai để hiểu đúng
+
+1. Viết fast run bằng `while (phaseSeparation < 1.0)`. Calm preset có thể chạy rất lâu và UI mất quyền điều khiển; hoàn tác số step hữu hạn.
+2. Cho drag sửa current theta2 nhưng giữ omega cũ. Bạn tạo một impulse không được mô hình hóa; hoàn tác sửa initial state rồi reset.
+3. Chỉ kiểm energy drift mà bỏ numerical shadow. Một trajectory giữ energy vẫn có thể có phase error lớn; hoàn tác cả hai metric.
+
+## Tự kiểm tra kết quả
+
+- Ba preset tạo đúng initial state và reset deterministic.
+- Geometry giữ nguyên hai rod length.
+- Equilibrium và parallel-horizontal derivative tests pass.
+- RK4 5 giây ở dt=1/480 giữ energy drift trong ngưỡng.
+- Angle seam ±179° cho separation 2°.
+- Primary, perturbed và shadow luôn cùng elapsed.
+- Validation 10 giây giữ state finite và numerical separation nhỏ hơn intentional separation.
+- Canvas hỗ trợ DPR, keyboard, pointer capture, reduced motion, pause, reset và mô tả văn bản.
+- Debug và Release CTest đều pass.
+
+## Bài tập mở rộng
+
+Thêm Poincaré section: chỉ ghi điểm khi `theta2` đi qua zero theo một chiều xác định. Giữ feature trong một module riêng và giải thích rõ interpolation qua crossing trước khi dùng hình điểm để phân loại chuyển động.
+
+Project 26 khép lại phần vật lý và numerical methods đầu tiên. Project 27 sẽ giữ thói quen đo cost/invariant nhưng chuyển sang 100.000 particles, nơi brute force trở thành một vấn đề hiệu năng có thể nhìn và benchmark.

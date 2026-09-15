@@ -1,0 +1,134 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo thời gian GPU đúng cách
+
+## Bài toán của chúng ta
+
+Nếu đặt `steady_clock` quanh `glDispatchCompute`, phần lớn thời gian ta chỉ đo được lúc CPU gửi lệnh chứ chưa phải lúc GPU hoàn thành. Gọi `glFinish` thì cho kết quả dễ hiểu hơn, nhưng lại buộc CPU chờ toàn bộ hàng lệnh. Bài này dùng `GL_TIME_ELAPSED` để đo đúng phần compute kernel, đồng thời vẫn giữ vòng lặp ứng dụng có giới hạn.
+
+Checkpoint 8 dùng `GL_TIME_ELAPSED` query đặt sát dispatch. Lượt chạy khi khởi tạo đóng vai trò warm-up; benchmark lấy chín mẫu qua nhiều frame và báo median cạnh validation mà không khóa event loop.
+
+## Theo dõi dữ liệu từ CPU sang GPU
+
+Ta tách toàn bộ công việc thành bốn vùng:
+
+```text
+Upload A/B | Dispatch compute | Barrier | Readback output
+```
+
+Timer query của project chỉ bao vùng thứ hai. Vì vậy nhãn đúng là **compute time**. Nếu muốn đo từ lúc chuẩn bị input đến lúc có output trên CPU, đó là **end-to-end time** và phải có con số/nhãn riêng.
+
+<InteractiveLab demo="million-vector-gpu" mode="gpu-timing" />
+
+Canvas dùng một dãy thời gian cố định để minh họa cách lấy chín mẫu; nó không gọi OpenGL/WebGPU và không đo phần cứng thật. Chỉ chương trình C++ mới lấy nanosecond từ driver bằng timer query.
+
+## Bắt tay vào code
+
+### Bước 1 — Tạo query object và quản lý vòng đời của nó
+
+```cpp title="include/vector_compute_engine.hpp — tạo query lazily"
+if (timerQuery_ == 0) {
+    api.GenQueries(1, &timerQuery_);
+}
+```
+
+Engine tái sử dụng object cho các dispatch tuần tự. Final không cho hai `GL_TIME_ELAPSED` query chồng nhau trên cùng target.
+
+### Bước 2 — Đặt query sát lệnh cần đo
+
+```cpp title="include/vector_compute_engine.hpp — vùng compute time"
+api.BeginQuery(GL_TIME_ELAPSED, timerQuery_);
+api.DispatchCompute(workgroupCount, 1, 1);
+api.EndQuery(GL_TIME_ELAPSED);
+```
+
+Upload đã xảy ra trong `rebuildDataset`; barrier/readback nằm sau `EndQuery`. Code structure tự chứng minh nhãn compute time, không cần dựa vào lời mô tả ngoài source.
+
+### Bước 3 — Chỉ đọc kết quả khi query đã sẵn sàng
+
+```cpp title="include/vector_compute_engine.hpp — query result"
+GLint available = GL_FALSE;
+api.GetQueryObjectiv(timerQuery_, GL_QUERY_RESULT_AVAILABLE, &available);
+if (available == GL_TRUE) {
+    GLuint64 elapsedNanoseconds = 0;
+    api.GetQueryObjectui64v(timerQuery_, GL_QUERY_RESULT, &elapsedNanoseconds);
+    gpuMilliseconds = double(elapsedNanoseconds) / 1'000'000.0;
+}
+```
+
+`GL_QUERY_RESULT` chỉ được đọc sau availability gate. Readback output vẫn là một synchronization point của Project 37, nhưng timer query không tạo thêm một lần chờ mù ngay sau `EndQuery`.
+
+### Bước 4 — Chạy warm-up, lấy chín mẫu rồi tính median
+
+```cpp title="src/main.cpp — phím B và các trạng thái benchmark"
+if (event.key.key == SDLK_B) {
+    if (benchmarkActive) {
+        benchmarkActive = false;
+        diagnostics = "Benchmark cancelled by the user.";
+    } else {
+        benchmarkActive = true;
+        benchmarkStartedTicks = SDL_GetTicksNS();
+        benchmarkSamples.clear();
+        diagnostics = "Benchmark queued; one sample will run per frame.";
+    }
+    std::cout << diagnostics << '\n';
+}
+```
+
+Sau khi xử lý hết event, đoạn điều khiển dưới đây chỉ chạy nhiều nhất một `runCalculation` trong mỗi frame:
+
+```cpp title="src/main.cpp — một sample mỗi frame"
+if (running && benchmarkActive) {
+    const std::uint64_t now = SDL_GetTicksNS();
+    if (now - benchmarkStartedTicks > kBenchmarkTimeoutNanoseconds) {
+        benchmarkActive = false;
+        diagnostics = "Benchmark stopped after the 10-second safety deadline.";
+        std::cerr << diagnostics << '\n';
+    } else if (!runCalculation()) {
+        benchmarkActive = false;
+        std::cerr << diagnostics << '\n';
+    } else if (timingAvailable) {
+        benchmarkSamples.push_back(gpuMilliseconds);
+        if (benchmarkSamples.size() == kBenchmarkSampleCount) {
+            benchmarkMedian = lab::medianMilliseconds(benchmarkSamples);
+            benchmarkActive = false;
+            diagnostics = "Benchmark completed with exactly nine available GPU samples.";
+            std::cout << diagnostics << '\n';
+        }
+    }
+}
+```
+
+Mỗi frame chỉ chạy nhiều nhất một sample. Khi đủ chín result available, app tính median và dừng; phím B hủy được benchmark đang chạy, còn deadline 10 giây bảo đảm nó không chờ vô hạn. Mỗi `runCalculation` vẫn readback và validate sau query; hai việc đó không nằm trong GPU time nhưng giúp đảm bảo benchmark không đo một kernel sai.
+
+## Chạy checkpoint
+
+Phím `B` thu đúng chín mẫu sau warm-up khởi tạo. Dataset không được sinh hoặc upload lại giữa các mẫu. Title final giữ tiến độ benchmark, sample mới nhất và median, đồng thời tiếp tục báo maximum error/PASS.
+
+Không so cứng “GPU phải nhanh hơn CPU” trong CTest. Thời gian phụ thuộc GPU, driver, power state và build; correctness mới là invariant có thể tái lập trên mọi máy.
+
+## Thử phá chương trình
+
+1. Bắt đầu query trước upload. Con số không còn là compute time.
+2. Kết thúc query sau readback. Bạn trộn transfer/stall vào nhãn kernel.
+3. Dùng một sample đầu tiên làm kết luận. Shader/driver warm-up dễ tạo outlier.
+4. Chạy vòng lặp vô hạn đến khi median “đẹp”. Đây chính là kiểu test có thể giữ terminal hàng giờ.
+5. Bỏ validation khi benchmark. Một kernel không ghi output có thể rất nhanh.
+
+## Tự nghiệm thu
+
+- [ ] `GL_TIME_ELAPSED` Begin/End chỉ bao quanh dispatch.
+- [ ] Upload, barrier, readback và UI nằm ngoài query.
+- [ ] Có một warm-up không đưa vào samples.
+- [ ] Có đúng chín samples, nhiều nhất một sample mỗi frame và deadline 10 giây.
+- [ ] Median được tính từ bản copy/sort, không phá dữ liệu cần in.
+- [ ] Timing chỉ được diễn giải khi output validation vẫn pass.
+- [ ] CTest không chứa assertion phụ thuộc tốc độ phần cứng.
+
+## Bài tập tiếp theo
+
+1. Thêm end-to-end timer CPU với nhãn riêng rồi so phần compute/transfer.
+2. Nâng single query thành query ring để tách sâu hơn CPU và GPU khi bỏ full-output readback ở project sau.
+3. Lập scaling table cho 256, 65.537 và 1.000.003 phần tử; không ép đường đo phải tuyến tính tuyệt đối.
+
+Bài cuối sẽ ghép ba operation, controls, visualization và cleanup thành một calculator không dispatch vô ích mỗi frame.

@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xây buckets cho 100.000 particles
+
+## Vấn đề cần giải quyết
+
+Các đường grid mới chỉ là hình vẽ. Để query dùng được chúng, mỗi cell phải biết particle nào đang nằm bên trong. Ta cần một index phụ: bucket số `i` chứa danh sách index trỏ về vector `particles` gốc.
+
+Điểm quan trọng là grid không sở hữu bản sao của `Particle`. Nếu copy position vào cả scene lẫn bucket, lần sau particle chuyển động ta phải đồng bộ hai nơi. Giữ index giúp data model vẫn có một nguồn chuẩn và làm validation “mỗi particle xuất hiện đúng một lần” rất dễ viết.
+
+## Hiểu ý tưởng trước khi viết code
+
+Grid `20×20` có 400 buckets. Rebuild đi qua particle theo index tăng dần:
+
+1. Tính cell address của position.
+2. `push_back(particleIndex)` vào bucket tương ứng.
+3. Lặp đến hết N particles.
+
+Nếu mọi point hợp lệ và mỗi point chỉ thuộc một cell, invariant quan trọng là:
+
+$$
+\sum_{cell=0}^{cellCount-1}|bucket_{cell}|=N
+$$
+
+<InteractiveLab demo="spatial-grid-neighbor-query" mode="grid-insert" />
+
+Đổi seed và cellSize rồi đọc `Grid / occupancy`. Tổng index vẫn là N, nhưng `maximum bucket` thay đổi theo mật độ và độ thô của grid. Đây là dữ liệu cấu trúc, không phải hiệu ứng trang trí.
+
+## Viết code từng bước
+
+### Bước 1 — SpatialGrid giữ config, buckets và thống kê build
+
+```cpp title="include/lab.hpp — dữ liệu của một Spatial Grid đã build"
+struct SpatialGrid {
+    SpatialGridConfig config{};
+    int columns{};
+    int rows{};
+    std::vector<std::vector<std::size_t>> buckets{};
+    std::size_t particleCount{};
+    std::size_t insertedCount{};
+    std::size_t nonEmptyCells{};
+    std::size_t maximumBucketSize{};
+};
+```
+
+`particleCount` là số input; `insertedCount` là số thực sự vào grid. Hai số khác nhau báo ngay dữ liệu NaN hoặc ra ngoài bounds.
+
+### Bước 2 — Tạo đủ buckets trước khi chèn
+
+```cpp title="include/lab.hpp — một bucket cho mỗi row-major cell"
+const std::size_t cellCount = std::size_t(grid.columns) * std::size_t(grid.rows);
+grid.buckets.resize(cellCount);
+```
+
+Sau hai dòng này, `grid.buckets[address.index]` luôn hợp lệ nếu address được tạo từ cùng dimensions. Việc đổi từng kích thước sang `std::size_t` trước phép nhân cũng tránh tràn `int` trong phép tính số bucket.
+
+### Bước 3 — Chỉ lưu particle index
+
+```cpp title="include/lab.hpp — rebuild bằng một vòng qua particles"
+for (std::size_t particleIndex = 0; particleIndex < particles.size(); ++particleIndex) {
+    GridAddress address{};
+    if (!spatialGridAddress(particles[particleIndex].position, config, dimensions, address)) {
+        continue;
+    }
+    grid.buckets[address.index].push_back(particleIndex);
+    ++grid.insertedCount;
+}
+```
+
+Index giữ identity giống brute-force oracle. Query về sau dùng nó để đọc `particles[particleIndex]` và để hai thuật toán nói về đúng cùng object.
+
+### Bước 4 — Đọc occupancy sau build, không trong query
+
+```cpp title="include/lab.hpp — thống kê bucket"
+for (const std::vector<std::size_t>& bucket : grid.buckets) {
+    if (!bucket.empty()) {
+        ++grid.nonEmptyCells;
+    }
+    grid.maximumBucketSize = std::max(grid.maximumBucketSize, bucket.size());
+}
+```
+
+Đây là bước chẩn đoán khi rebuild. Không cần tính lại `maximumBucketSize` trong mỗi circle query.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint buckets"
+cmake --build build --config Debug --target project_28_checkpoint_2
+```
+
+Title của cửa sổ hiển thị dimensions, inserted, non-empty và max bucket. Với cloud mặc định, `inserted` phải là 100.000.
+
+## Thử làm sai để hiểu đúng
+
+1. Push cả `Particle` vào bucket. Source vẫn chạy nhưng tạo hai bản dữ liệu; đổi lại thành `particleIndex`.
+2. Resize buckets sau vòng insertion. Lần truy cập đầu tiên vượt mảng; đưa `resize` lên trước loop.
+3. Gọi `buildSpatialGrid` mỗi frame dù particles đứng yên. CPU bị dùng cho công việc không cần thiết; build lại chỉ khi seed, N hoặc cellSize đổi.
+
+## Tự kiểm tra kết quả
+
+- Bucket count bằng `columns×rows`.
+- `insertedCount == particleCount` cho cloud trong bounds.
+- Tổng bucket entries bằng N.
+- Mỗi particle index xuất hiện đúng một lần.
+- `nonEmptyCells` không vượt tổng cell count.
+- `maximumBucketSize` lớn hơn zero khi cloud không rỗng.
+- Seed hoặc cellSize đổi thì grid được rebuild; kéo query thì không.
+
+## Bài tập mở rộng
+
+Tô màu cell theo occupancy: bucket rỗng dùng nền tối, bucket đông dùng màu sáng hơn. Giữ phép tô ở renderer; đừng lưu màu vào `SpatialGrid`.
+
+Bài tiếp theo dùng AABB của circle để chọn một dải candidate cells nhỏ hơn toàn bộ grid.

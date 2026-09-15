@@ -1,0 +1,98 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đối chiếu Z-buffer và GPU depth test
+
+## Vấn đề cần giải quyết
+
+MVP đúng chỉ đảm bảo triangles đến đúng vị trí. Nếu CPU clear depth bằng 1 nhưng GPU không clear depth buffer, hoặc một bên dùng `LESS` còn bên kia dùng `LEQUAL`, visibility có thể khác theo frame và triangle order.
+
+Checkpoint 6 đưa depth về một contract có thể đọc: OpenGL NDC z được map sang window depth `[0,1]`, buffer clear về `1.0`, fragment mới thắng khi depth nhỏ hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+CPU lưu đúng giá trị tương ứng `gl_FragCoord.z`:
+
+$$
+z_{window} = 0.5\,z_{ndc} + 0.5
+$$
+
+Vì near objects có depth nhỏ hơn, `LESS` cùng clear value 1 cho phép fragment gần nhất tồn tại. Khi depth tắt, triangle vẽ sau thắng—đó là painter order, không phải visibility đúng.
+
+<InteractiveLab demo="dual-renderer-cube" mode="depth-contract" />
+
+## Viết code từng bước
+
+### Bước 1 — CPU đổi NDC z sang window depth
+
+```cpp title="include/pipeline.hpp — depth trong projectVertex"
+return {
+    (ndcX * 0.5F + 0.5F) * float(width),
+    (1.0F - (ndcY * 0.5F + 0.5F)) * float(height),
+    ndcZ * 0.5F + 0.5F,
+    clip.w,
+};
+```
+
+Depth không đảo theo trục Y. Nó chỉ đổi range từ `[-1,1]` sang `[0,1]`.
+
+### Bước 2 — CPU dùng phép so LESS tường minh
+
+```cpp title="include/pipeline.hpp — compare và write"
+if (scene.depthEnabled && fragmentDepth >= framebuffer.depth[pixel]) {
+    ++stats.rejectedFragments;
+    continue;
+}
+framebuffer.depth[pixel] = fragmentDepth;
+```
+
+Điều kiện reject `>=` tương đương accept `<`. Bật/tắt depth chỉ đổi quyết định visibility; coverage và color source giữ nguyên.
+
+### Bước 3 — GPU phản chiếu cùng state
+
+```cpp title="include/gpu_renderer.hpp — GL_DEPTH_TEST"
+if (depthEnabled) {
+    api.Enable(GL_DEPTH_TEST);
+    api.DepthFunc(GL_LESS);
+} else {
+    api.Disable(GL_DEPTH_TEST);
+}
+```
+
+Mỗi frame main clear cả color lẫn depth sau khi viewport được cập nhật. Phím D sửa `scene.depthEnabled`, nên backend nào active cũng nhận cùng lựa chọn.
+
+## Ghép các phần lại
+
+Chạy checkpoint 6, bấm D rồi xoay cube. Khi depth off, các mặt xa có thể đè lên mặt gần theo index order. Bật lại depth, hình phải ổn định.
+
+```cpp title="src/main.cpp — clear color và depth"
+gl.ClearColor(13.0F / 255.0F, 21.0F / 255.0F, 38.0F / 255.0F, 1.0F);
+gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+```
+
+CTest còn rasterize triangle order xuôi/ngược bằng CPU. Với depth bật, hai color/depth arrays phải bằng nhau; với depth tắt và culling tắt, color output phải khác.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `GL_DEPTH_BUFFER_BIT` khỏi clear. Xoay cube nhiều frame: depth cũ khóa fragments mới một cách khó đoán.
+2. GPU dùng `GL_LEQUAL`, CPU vẫn dùng `<`. Coplanar diagonal có thể khác ownership.
+3. CPU lưu thẳng `ndcZ` nhưng clear 1. Một số depth âm “thắng” theo range khác GPU.
+
+Hoàn tác từng lỗi và chạy lại order-independence test.
+
+## Tự kiểm tra kết quả
+
+- [ ] NDC depth được map về `[0,1]`.
+- [ ] Hai buffer clear mỗi frame.
+- [ ] CPU và GPU cùng dùng LESS.
+- [ ] D sửa một field trong shared scene.
+- [ ] Triangle order không đổi output khi depth bật.
+
+Hãy dự đoán điều sẽ xảy ra nếu clear depth là 0 với `LESS`: hầu như không fragment nào có thể thắng.
+
+## Bài tập mở rộng
+
+1. Thêm depth grayscale vào Canvas và đọc near/far bằng mắt.
+2. Thử `GREATER` đúng cách bằng cách đổi cả clear value và projection convention trên giấy.
+3. Đếm rejected fragments CPU ở ba góc xoay và giải thích sự thay đổi.
+
+Bài tiếp theo loại các mặt quay lưng bằng cùng winding contract.

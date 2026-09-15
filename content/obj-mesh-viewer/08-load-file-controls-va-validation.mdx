@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện file loading, controls và validation
+
+## Vấn đề cần giải quyết
+
+Một renderer đúng công thức vẫn chưa thành ứng dụng dùng được nếu chỉ chạy khi terminal đứng đúng một thư mục, input lỗi làm crash, resize làm depth buffer lệch color buffer hoặc phím điều khiển tạo một nhánh render riêng.
+
+Bài cuối đóng phần “seam” giữa parser, asset và SDL. Final thử một danh sách path rõ ràng, dừng với diagnostic nếu không có model, normalize đúng một lần, rồi mọi tương tác chỉ thay `RenderOptions` trước khi gọi lại cùng `renderObjMesh`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Project có ba loại lỗi khác nhau và cần báo khác nhau:
+
+1. **I/O error:** không mở được path nào.
+2. **Syntax/data error:** file mở được nhưng một record có vertex/index sai.
+3. **Geometry error:** parser tạo mesh nhưng index hoặc triangle suy biến không đạt validation.
+
+Không nên che ba lỗi này bằng một fallback cube. Fallback làm cửa sổ vẫn đẹp nhưng người dùng tưởng model của mình đã load. Final chọn fail rõ ràng; Canvas dùng preset lỗi để minh họa ứng dụng vẫn sống và hiển thị diagnostic.
+
+<InteractiveLab demo="obj-viewer" mode="obj-validation" />
+
+Preset đầu là input lỗi. Sửa source, nạp lại, bật Solid, xoay model, đổi culling và draw order. Cùng một lab cho thấy parser phục hồi mà không reload trang.
+
+## Viết code từng bước
+
+### Bước 1 — Thử asset path có thứ tự và giữ path thành công
+
+```cpp title="src/main.cpp — loader không thay model ngầm"
+for (const std::string& path : candidates) {
+    lab::ObjLoadResult result = lab::loadObjFile(path);
+    if (result.opened) {
+        return {std::move(result), path};
+    }
+    lastAttempt = {std::move(result), path};
+}
+return lastAttempt;
+```
+
+CMake copy `assets` cạnh từng executable. Danh sách phụ cho phép chạy từ project root hoặc build directory; title bar ghi path thật đã dùng.
+
+### Bước 2 — Resize color, depth và texture cùng một sự kiện
+
+```cpp title="src/main.cpp — resize ba tài nguyên như một giao dịch"
+SDL_DestroyTexture(texture);
+texture = newTexture;
+width = newWidth;
+height = newHeight;
+pixels.assign(std::size_t(width) * std::size_t(height), kClearColor);
+depthBuffer.resize(width, height);
+```
+
+Texture mới phải tạo thành công trước khi phá texture cũ. Sau đó color buffer và depth buffer nhận cùng kích thước pixel; không frame nào được render với hai stride khác nhau.
+
+### Bước 3 — Validation từ parser tới pixel
+
+`validateMesh` không dereference index sai; nó kiểm phạm vi trước rồi mới gọi `faceNormal`:
+
+```cpp title="include/lab.hpp — validation không tự crash trên input cần kiểm"
+for (const std::size_t index : triangle.indices) {
+    if (index >= mesh.positions.size()) {
+        ++result.invalidIndexCount;
+        indicesValid = false;
+    }
+}
+if (!indicesValid) {
+    continue;
+}
+```
+
+CTest sau đó bao phủ OBJ cơ bản, slash/negative index, triangle fan, diagnostic line, normalization, degenerate normal, near clipping, raster stats và order independence.
+
+## Ghép các phần lại
+
+Build cả Debug lẫn Release. Hai cấu hình đều phải chạy CTest vì bộ test không dựa vào `assert`:
+
+```bash title="Terminal — nghiệm thu Project 21"
+cmake -S . -B build-all -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build-all --config Debug
+ctest --test-dir build-all -C Debug --output-on-failure
+cmake --build build-all --config Release
+ctest --test-dir build-all -C Release --output-on-failure
+```
+
+Chạy `project_21_final`. Controls cuối:
+
+- kéo chuột: xoay model;
+- `Space`: chạy/dừng animation;
+- `N`: tiến một bước;
+- `W`: wireframe/solid;
+- `C`: bật/tắt back-face culling;
+- `O`: đảo draw order;
+- `1–3`: đổi camera distance, gồm tình huống sát near plane;
+- `R`: đặt lại toàn bộ state.
+
+## Thử làm sai để hiểu đúng
+
+1. Chạy executable từ một thư mục không có `assets` và không copy asset cạnh nó. Thông báo phải cho biết path cuối đã thử, không mở cửa sổ với geometry khác.
+2. Khi resize, tạm bỏ `depthBuffer.resize`. AddressSanitizer hoặc bounds check phải phát hiện color/depth không còn cùng số pixel.
+3. Sửa asset thành `f 1 2 999`. Parser báo đúng line và final dừng; không clamp index để “cố vẽ”.
+4. Xóa đối chứng order independence khỏi test rồi cố tình bỏ depth write. Một ảnh ở góc mặc định có thể vẫn trông đúng, cho thấy vì sao test toàn buffer cần thiết.
+
+## Tự kiểm tra kết quả
+
+- Asset có license, được đóng gói trong ZIP và được copy cạnh mọi target.
+- I/O, parser và geometry diagnostics phân biệt được nhau.
+- Starter, tám checkpoint và final đều chạy độc lập.
+- Wireframe/solid, culling, order, pause/step/reset và resize dùng chung một scene state.
+- Debug và Release CTest đều pass.
+- Final source không phụ thuộc OpenGL, Assimp hoặc tinyobjloader.
+
+## Bài tập mở rộng
+
+Thêm drag-and-drop path bằng SDL drop-file event. Giữ nguyên quy tắc: parse vào một mesh tạm, validate và normalize thành công rồi mới thay mesh đang hiển thị; file lỗi không được phá model hiện tại.
+
+Project 21 đã khép lại phần renderer 3D CPU của roadmap. Project 22 chuyển sang vật lý: chọn góc và vận tốc ban đầu, tích phân quỹ đạo viên đạn rồi so trực tiếp với công thức giải tích.

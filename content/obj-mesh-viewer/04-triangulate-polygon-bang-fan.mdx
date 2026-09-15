@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chia polygon thành triangle fan
+
+## Vấn đề cần giải quyết
+
+OBJ cho phép record `f` có ba, bốn hoặc nhiều corner. CPU rasterizer của ta chỉ nhận triangle. Nếu parser lấy ba token đầu rồi bỏ phần còn lại, quad mất nửa mặt; nếu tạo triangle ngay khi đọc từng token, một token lỗi ở cuối dòng có thể để lại geometry nửa đúng nửa sai.
+
+Checkpoint 4 thu toàn bộ corner hợp lệ trước, sau đó triangulate polygon lồi bằng fan. Đây là giới hạn được ghi rõ: triangle fan không xử lý đúng polygon lõm hoặc tự cắt. Một parser production sẽ cần thuật toán triangulation mạnh hơn hoặc yêu cầu asset được triangulate trước.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ corner đầu $v_0$ làm anchor. Với polygon N corner theo cùng winding:
+
+$$
+T_i=(v_0,v_i,v_{i+1}),\qquad i=1\ldots N-2
+$$
+
+Pentagon `(0,1,2,3,4)` trở thành:
+
+- `(0,1,2)`
+- `(0,2,3)`
+- `(0,3,4)`
+
+Số triangle luôn là $N-2$. Thứ tự corner không bị sort, nên winding của polygon được truyền sang mỗi triangle.
+
+<InteractiveLab demo="obj-viewer" mode="obj-triangulation" />
+
+Preset negative là một pentagon. Dùng phím mũi tên trái/phải khi Canvas có focus để chuyển triangle được tô viền vàng; index đầu tiên phải giữ nguyên.
+
+## Viết code từng bước
+
+### Bước 1 — Chỉ triangulate sau khi face đã hợp lệ
+
+Vòng parse resolve mọi corner vào một vector tạm. Face ít hơn ba corner dừng trước khi đụng mesh:
+
+```cpp title="include/lab.hpp — kiểm đủ corner trước triangle fan"
+if (!faceValid) {
+    continue;
+}
+if (corners.size() < 3) {
+    addDiagnostic(result, lineNumber, "record f cần ít nhất ba corner");
+    continue;
+}
+appendTriangleFan(result.mesh, corners, result.sourceFaceCount, lineNumber);
+```
+
+Đây là một thao tác all-or-nothing. Một index sai ở corner thứ năm không được để bốn corner đầu sinh triangle.
+
+### Bước 2 — Giữ anchor và chạy tới N−2
+
+```cpp title="include/lab.hpp — công thức triangle fan trong code"
+for (std::size_t index = 1; index + 1 < corners.size(); ++index) {
+    mesh.triangles.push_back({
+        {corners[0], corners[index], corners[index + 1]},
+        sourceFace,
+        sourceLine,
+    });
+}
+```
+
+Điều kiện `index + 1 < corners.size()` diễn đạt trực tiếp việc luôn cần hai corner sau anchor; không cần tính `size()-2` trên kiểu unsigned.
+
+### Bước 3 — Khóa topology và metadata bằng test
+
+```cpp title="tests/tests.cpp — quad tạo đúng hai triangle chung anchor"
+check(quad.mesh.triangles.size() == 2, "four-corner face creates N minus two triangles");
+check(quad.mesh.triangles[0].indices == std::array<std::size_t, 3>{0, 1, 2}, "triangle fan starts at corner zero");
+check(quad.mesh.triangles[1].indices == std::array<std::size_t, 3>{0, 2, 3}, "triangle fan keeps winding on the second triangle");
+check(quad.mesh.triangles[0].sourceLine == 5, "triangulated face keeps its source line");
+```
+
+`sourceFace` giống nhau trên mọi triangle của polygon; `sourceLine` giúp diagnostic và pixel inspector quay lại đúng record gốc.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build polygon checkpoint"
+cmake --build build --config Debug --target project_21_checkpoint_4
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Rocket asset đã là triangle mesh, nên số source face và triangle bằng nhau. Trên Canvas, quad phải báo `1 face → 2 triangle`, pentagon báo `1 → 3`.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi vòng lặp thành `(corners[index-1], corners[index], corners[index+1])`. Vẽ pentagon và tìm vùng bị overlap hoặc winding không còn nhất quán.
+2. Push triangle ngay trong lúc đọc token rồi đặt một index sai ở cuối face. Kiểm tra xem geometry nửa vời đã lọt vào mesh như thế nào.
+3. Tạo polygon lõm hình mũi tên. Triangle fan vẫn tạo N−2 triangle nhưng có thể tô ra ngoài polygon; ghi rõ đây là giới hạn, không gọi đó là parser hoàn chỉnh.
+
+## Tự kiểm tra kết quả
+
+- Face N corner hợp lệ tạo đúng N−2 triangle.
+- Mọi triangle giữ `corners[0]` làm anchor và giữ winding ban đầu.
+- Face lỗi không sinh bất kỳ triangle nào.
+- `sourceFace` và `sourceLine` được sao chép sang mọi triangle con.
+- Triangle, quad và pentagon đều có test riêng.
+
+## Bài tập mở rộng
+
+Tính diện tích có dấu của polygon sau khi chiếu lên mặt phẳng trội nhất và cảnh báo nếu polygon lõm. Không cần viết ear clipping ngay; mục tiêu là phát hiện lúc triangle fan không còn là giả định an toàn.
+
+Bài tiếp theo sẽ giải quyết một vấn đề khác của file ngoài: model có thể rất lớn, rất nhỏ hoặc nằm xa origin.

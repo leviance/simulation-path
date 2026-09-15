@@ -1,0 +1,144 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng tam giác và hai vector cạnh
+
+## Vấn đề cần giải quyết
+
+La bàn đã giúp ta nhìn thấy ba chiều, nhưng chưa có bề mặt để tính normal. Ở checkpoint này, ta sẽ đưa tam giác ABC lên màn hình và cho phép chỉnh từng đỉnh. Quan trọng hơn, ta phải biến ba point thành đúng hai vector mà cross product cần dùng.
+
+Một lỗi dễ mắc là lấy ba cạnh `AB`, `BC`, `CA` rồi chọn tùy ý hai cạnh. Công thức normal thuận tiện nhất dùng hai vector **cùng xuất phát từ A**: `AB` và `AC`. Hai vector này được tính từ point, không phải dữ liệu lưu song song.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với ba point:
+
+$$
+A=(a_x,a_y,a_z),\quad B=(b_x,b_y,b_z),\quad C=(c_x,c_y,c_z)
+$$
+
+hai vector cạnh là:
+
+$$
+\overrightarrow{AB}=B-A
+$$
+
+$$
+\overrightarrow{AC}=C-A
+$$
+
+Ví dụ, nếu `A=(1,1,0)` và `B=(3,2,4)` thì `AB=(2,1,4)`. Vector đó có nghĩa “đi từ A tới B”, không phải vị trí của B.
+
+<InteractiveLab demo="normal" mode="normal-edges" />
+
+Chọn A rồi kéo nó. Cả `AB` lẫn `AC` cùng thay đổi vì chúng dùng chung điểm đầu. Chọn B thì chỉ `AB` đổi; chọn C thì chỉ `AC` đổi. Đây là cách nhanh nhất để kiểm tra ta đã dựng đúng dữ liệu.
+
+## Viết code từng bước
+
+### Bước 1 — Lưu ba đỉnh và thêm phép trừ Vec3
+
+`Triangle` chỉ giữ dữ liệu gốc. Chưa có `edgeAB`, `normal` hay diện tích bên trong struct.
+
+```cpp title="include/lab.hpp — dữ liệu tam giác và phép trừ"
+struct Triangle {
+    Vec3 a{};
+    Vec3 b{};
+    Vec3 c{};
+};
+
+inline Vec3 subtract(Vec3 left, Vec3 right) {
+    return {left.x - right.x, left.y - right.y, left.z - right.z};
+}
+```
+
+Không lưu kết quả dẫn xuất giúp ta tránh một câu hỏi khó chịu: sau khi kéo C, ai chịu trách nhiệm cập nhật `edgeAC` cũ?
+
+### Bước 2 — Tính hai cạnh cùng gốc
+
+`std::pair` trả hai vector theo đúng thứ tự AB rồi AC. Structured binding ở chỗ gọi giúp tên vẫn rõ ràng.
+
+```cpp title="include/lab.hpp — dựng AB và AC từ ba point"
+inline std::pair<Vec3, Vec3> triangleEdges(const Triangle& triangle) {
+    return {
+        subtract(triangle.b, triangle.a),
+        subtract(triangle.c, triangle.a),
+    };
+}
+```
+
+Hàm nhận `const Triangle&` vì nó chỉ đọc dữ liệu. Hai vector được tạo lại mỗi lần gọi và luôn khớp với frame hiện tại.
+
+### Bước 3 — Tạo một tam giác nhìn rõ cả ba chiều
+
+Đặt dữ liệu khởi đầu trong một hàm riêng để phím Reset và lúc setup dùng cùng giá trị.
+
+```cpp title="src/main.cpp — trạng thái ban đầu của tam giác"
+lab::Triangle defaultTriangle() {
+    return {
+        {-1.25, -0.75, 0.25},
+        {1.20, -0.45, -0.35},
+        {0.10, 1.15, 0.75},
+    };
+}
+```
+
+Ba giá trị Z không bằng nhau, vì vậy việc đổi Z sẽ có hiệu quả nhìn thấy được trên sơ đồ.
+
+### Bước 4 — Chọn đỉnh và chỉnh từng thành phần
+
+Ta dùng `1`, `2`, `3` để chọn A, B, C. Các phím mũi tên đổi X/Y; Q và E đổi Z.
+
+```cpp title="src/main.cpp — điều khiển đỉnh đang chọn"
+if (event.key.key >= SDLK_1 && event.key.key <= SDLK_3) {
+    selected = int(event.key.key - SDLK_1);
+}
+lab::Vec3& vertex = selectedVertex(triangle, selected);
+if (event.key.key == SDLK_LEFT) {
+    vertex.x -= 0.1;
+}
+if (event.key.key == SDLK_RIGHT) {
+    vertex.x += 0.1;
+}
+```
+
+Q/E được xử lý cùng kiểu:
+
+```cpp title="src/main.cpp — chỉnh thành phần Z và reset"
+if (event.key.key == SDLK_Q) {
+    vertex.z -= 0.1;
+}
+if (event.key.key == SDLK_E) {
+    vertex.z += 0.1;
+}
+if (!event.key.repeat && event.key.key == SDLK_R) {
+    triangle = defaultTriangle();
+    selected = 0;
+}
+```
+
+Kéo chuột chỉ thay X/Y và giữ nguyên Z. Nhờ vậy cùng một `Triangle` có thể được điều khiển bằng chuột lẫn bàn phím mà không có hai trạng thái tách rời.
+
+## Ghép các phần lại
+
+Build `project_10_checkpoint_2`. Tam giác có AB màu cam, AC màu xanh và cạnh BC màu sáng. Đỉnh đang chọn có chấm vàng lớn hơn. Title bar cho biết `selected`, AB và AC để bạn đối chiếu với hình.
+
+Nhấn `1`, rồi tăng X của A: cả hai vector cạnh phải giảm thành phần X cùng một lượng. Reset, chọn `2` và tăng Z của B: chỉ AB đổi Z. Nếu kết quả khác, hãy sửa phép trừ trước khi sang cross product.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `subtract(triangle.b, triangle.a)` thành `subtract(triangle.a, triangle.b)`. AB sẽ quay ngược và raw normal ở bài sau cũng đổi hướng.
+2. Tính cạnh thứ hai bằng `C-B`. Hai vector không còn cùng gốc về mặt hình học; cross của chúng có thể vẫn vuông góc với mặt nhưng winding trở nên khó đọc và giáo trình mất quy ước thống nhất.
+3. Lưu AB vào một biến ngoài vòng lặp rồi kéo B. Đường vẽ có thể đổi theo point nhưng số trên title vẫn cũ, cho thấy dữ liệu dẫn xuất đã lệch khỏi nguồn.
+
+## Tự kiểm tra kết quả
+
+- `triangleEdges` trả đúng `B−A` và `C−A` ở cả ba thành phần.
+- Phím 1–3 chọn đúng chấm A, B, C.
+- Arrow chỉ đổi X/Y; Q/E chỉ đổi Z của đỉnh đang chọn.
+- Kéo A làm cả AB và AC đổi, kéo B chỉ làm AB đổi.
+- Reset khôi phục cả ba point và chọn lại A.
+
+## Bài tập mở rộng
+
+Vẽ hai mũi tên AB và AC với arrowhead thay vì chỉ dùng cạnh tam giác. Sau đó thêm phím `Tab` để chuyển tuần tự A → B → C → A.
+
+Bài tiếp theo sẽ dùng đúng `cross(AB,AC)` để dựng vector vuông góc với mặt tam giác.

@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vùng chọn và quy ước AABB
+
+## Vấn đề cần giải quyết
+
+Starter không phải một màn hình trống. Nó đã tạo 100.000 `Particle`, present framebuffer bằng `SDL_UpdateTexture` và gọi `querySelectionBruteForce` mỗi khi bạn kéo chuột. Vì vậy ta có một chương trình đúng nhưng chậm để đối chiếu trong suốt project.
+
+Trước khi viết Quadtree, ta phải làm rõ “vùng chọn” nghĩa là gì. Người dùng có thể kéo từ trái sang phải, phải sang trái hoặc chéo theo bất kỳ hướng nào. Nếu mỗi nhánh tự diễn giải hai góc, cùng một thao tác có thể cho kết quả khác nhau. Điểm nằm đúng cạnh selection hay đúng đường chia giữa hai child cũng cần một quy ước duy nhất.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một axis-aligned bounding box (AABB) được lưu bằng hai góc đã chuẩn hóa:
+
+$$
+minimum=(\min(a_x,b_x),\min(a_y,b_y)),\qquad
+maximum=(\max(a_x,b_x),\max(a_y,b_y))
+$$
+
+Hai AABB **không overlap** nếu một hộp nằm hoàn toàn bên trái, phải, dưới hoặc trên hộp kia. Ta viết điều kiện “không overlap” rồi phủ định; cách này dễ kiểm hơn việc liệt kê mọi kiểu giao nhau.
+
+Child order của project là `SW=0`, `SE=1`, `NW=2`, `NE=3`. Khi `x == middleX`, point đi east; khi `y == middleY`, point đi north. Bounds của hai child có thể chạm nhau trên hình vẽ, nhưng storage policy vẫn đưa point vào đúng một child.
+
+<InteractiveLab demo="visible-quadtree" mode="quadtree-selection" />
+
+Kéo selection theo bốn hướng và dừng đúng giữa world. Readout phải luôn báo `minimum ≤ maximum`; những point nằm trên đường biên vẫn được brute force chọn.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ baseline chạy được
+
+```cpp title="src/main.cpp — particle cloud và brute result từ starter"
+std::vector<lab::Particle> particles = lab::makeParticleCloud(100'000, bounds, seed, clustered);
+lab::SelectionBox selection = lab::normalizeSelectionBox({0.42, 0.42}, {0.58, 0.56});
+lab::Vec2 dragStart = selection.minimum;
+bool dragging = false;
+lab::BruteSelectionResult bruteResult{};
+```
+
+Ta sẽ thay candidate search, không thay particle data hoặc cách present. Một baseline nhìn thấy được giúp từng checkpoint vẫn chạy và cho phép nhận ra lúc code mới trả sai.
+
+### Bước 2 — Chuẩn hóa hai góc ngay khi nhận input
+
+```cpp title="include/lab.hpp — normalize SelectionBox"
+inline SelectionBox normalizeSelectionBox(const Vec2& a, const Vec2& b) {
+    return {{std::min(a.x, b.x), std::min(a.y, b.y)}, {std::max(a.x, b.x), std::max(a.y, b.y)}};
+}
+```
+
+Mọi code phía sau chỉ nhận `SelectionBox` đã chuẩn hóa. Không cần hỏi người dùng đã kéo từ góc nào.
+
+### Bước 3 — Viết overlap theo bốn trường hợp tách rời
+
+```cpp title="include/lab.hpp — AABB overlap inclusive"
+inline bool boxesOverlap(const Bounds2D& a, const Bounds2D& b) {
+    return !(a.maximum.x < b.minimum.x || a.minimum.x > b.maximum.x || a.maximum.y < b.minimum.y || a.minimum.y > b.maximum.y);
+}
+```
+
+Dấu `<` và `>` là có chủ đích. Hai hộp chỉ chạm cạnh vẫn overlap; nhờ đó point đúng boundary không bị prune quá sớm.
+
+### Bước 4 — Chốt split-line policy
+
+```cpp title="include/lab.hpp — chọn quadrant không mơ hồ"
+const bool east = point.x >= middleX;
+const bool north = point.y >= middleY;
+if (north) {
+    if (east) {
+        return 3;
+    }
+    return 2;
+}
+if (east) {
+    return 1;
+}
+return 0;
+```
+
+Hai phép so sánh `>=` là API contract của tree. Tất cả insertion, redistribution và tests phải dùng đúng hàm này.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint quy ước AABB"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_1
+```
+
+Chạy checkpoint rồi kéo selection qua center. Title nhắc policy `split-line goes east/north`; brute-force hits vẫn đổi theo vùng chọn.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `normalizeSelectionBox` và kéo từ phải sang trái. `minimum.x > maximum.x`, query không chọn được point; khôi phục min/max ngay tại input boundary.
+2. Đổi overlap từ `<` thành `<=`. Một selection chạm đúng node edge có thể làm node bị loại; trả lại inclusive overlap.
+3. Dùng `>` thay cho `>=` trong insertion nhưng tests vẫn giả định equality đi east/north. Point trên split line đổi child; đưa toàn bộ code về cùng policy.
+
+## Tự kiểm tra kết quả
+
+- Starter vẫn tạo 100.000 deterministic particles và present bằng SDL3.
+- Forward drag và reverse drag tạo cùng `SelectionBox`.
+- Point đúng `minimum` hoặc `maximum` của selection được nhận.
+- Hai AABB chạm cạnh vẫn được xem là overlap.
+- Quadrant order là SW, SE, NW, NE.
+- Point trên vertical split đi east; point trên horizontal split đi north.
+- Brute-force result vẫn là oracle chạy được trước khi Quadtree xuất hiện.
+
+## Bài tập mở rộng
+
+Hiển thị quadrant của con trỏ trong window title. Đặt con trỏ lần lượt ở `(0.49,0.49)`, `(0.5,0.49)`, `(0.49,0.5)` và `(0.5,0.5)` để tự đoán kết quả trước khi đọc.
+
+Bài tiếp theo đóng gói world vào một root node. Cây lúc đó đúng về cấu trúc nhưng chưa nhanh hơn brute force.

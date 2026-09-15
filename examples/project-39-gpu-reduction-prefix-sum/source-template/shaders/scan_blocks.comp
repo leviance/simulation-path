@@ -1,0 +1,83 @@
+#version 430 core
+
+layout(local_size_x = 256) in;
+
+#if LAB_CHECKPOINT >= 5
+layout(std430, binding = 0) readonly buffer InputBuffer {
+    float inputData[];
+};
+
+layout(std430, binding = 1) writeonly buffer ScanOutputBuffer {
+    float scanOutput[];
+};
+
+layout(std430, binding = 2) writeonly buffer BlockSumsBuffer {
+    float blockSums[];
+};
+
+uniform int uElementCount;
+
+// Blelloch scan dùng một cây đủ 512 lá cho 256 invocation.
+shared float temporary[512];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint blockBase = gl_WorkGroupID.x * 512u;
+    uint firstIndex = blockBase + lane;
+    uint secondIndex = firstIndex + 256u;
+
+    temporary[lane] = 0.0;
+    temporary[lane + 256u] = 0.0;
+    if (firstIndex < uint(uElementCount)) {
+        temporary[lane] = inputData[firstIndex];
+    }
+    if (secondIndex < uint(uElementCount)) {
+        temporary[lane + 256u] = inputData[secondIndex];
+    }
+    memoryBarrierShared();
+    barrier();
+
+    // Upsweep: mỗi mức cây gom tổng của hai đoạn kề nhau.
+    for (uint offset = 1u; offset < 512u; offset <<= 1u) {
+        uint right = (lane + 1u) * offset * 2u - 1u;
+        if (right < 512u) {
+            uint left = right - offset;
+            temporary[right] += temporary[left];
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+
+    // Lưu total trước khi root thành identity zero của exclusive scan.
+    if (lane == 0u) {
+        blockSums[gl_WorkGroupID.x] = temporary[511];
+        temporary[511] = 0.0;
+    }
+    memoryBarrierShared();
+    barrier();
+
+    // Downsweep: đổi subtotal tree thành prefix đi vào từng nhánh.
+    for (uint offset = 256u; offset > 0u; offset >>= 1u) {
+        uint right = (lane + 1u) * offset * 2u - 1u;
+        if (right < 512u) {
+            uint left = right - offset;
+            float savedLeft = temporary[left];
+            temporary[left] = temporary[right];
+            temporary[right] += savedLeft;
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+
+    if (firstIndex < uint(uElementCount)) {
+        scanOutput[firstIndex] = temporary[lane];
+    }
+    if (secondIndex < uint(uElementCount)) {
+        scanOutput[secondIndex] = temporary[lane + 256u];
+    }
+}
+#else
+// Bài 5 sẽ cài đặt hai pha upsweep và downsweep của Blelloch scan.
+void main() {
+}
+#endif

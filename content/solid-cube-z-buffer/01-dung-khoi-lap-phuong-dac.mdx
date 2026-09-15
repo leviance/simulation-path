@@ -1,0 +1,152 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng khối lập phương đặc từ 12 triangle
+
+## Vấn đề cần giải quyết
+
+Project 13 mới nối các đỉnh cube bằng đường thẳng. Lần này ta cần bề mặt thật: mỗi mặt là một hình vuông, mỗi hình vuông được chia thành hai triangle để đi qua rasterizer của Project 16. Kết quả là tám vertex và mười hai triangle.
+
+Checkpoint đầu **chưa có Z-buffer**. Một vài mặt sẽ che nhau sai khi cube xoay; ta cố ý giữ lỗi đó để bài sau có một vấn đề thật cần giải quyết. Mục tiêu trước mắt là tạo được một đường đi hoàn chỉnh từ mesh tới pixel:
+
+$$
+\text{8 local vertices}\rightarrow\text{rotate}\rightarrow\text{project}\rightarrow
+\text{12 screen triangles}\rightarrow\text{color buffer}
+$$
+
+Nếu bạn đang tự làm thử thách, hãy bắt đầu từ `starter/`. Nó đã có window, renderer, streaming texture, CPU framebuffer, event loop và xử lý resize. Bạn chỉ cần xây phần geometry và rasterization; đừng viết lại hạ tầng SDL đã ổn định.
+
+## Hiểu ý tưởng trước khi viết code
+
+<InteractiveLab demo="z-buffer" mode="depth-cube" />
+
+## Viết code từng bước
+
+### Bước 1 — Tổ chức mesh trước khi viết vòng render
+
+Một cách dễ viết nhưng khó mở rộng là khai báo 36 position — ba position cho mỗi triangle. Cube thực ra chỉ có tám corner, vì vậy ta lưu tám `Vec3` rồi cho triangle tham chiếu bằng index:
+
+```cpp title="include/lab.hpp — một triangle tham chiếu ba vertex"
+struct IndexedTriangle {
+    std::array<std::size_t, 3> indices{};
+    Color color{};
+    const char* faceName{};
+};
+
+struct CubeMesh {
+    std::array<Vec3, 8> vertices{};
+    std::array<IndexedTriangle, 12> triangles{};
+};
+```
+
+`faceName` chưa ảnh hưởng tới hình. Nó là nhãn chẩn đoán để pixel inspector ở bài cuối có thể báo fragment đến từ mặt nào. Giữ thông tin này ngay trong mesh giúp ta không phải đoán ngược từ màu.
+
+Hai triangle của mặt trước dùng chung đường chéo `0→2`:
+
+```cpp title="include/lab.hpp — hai triangle đầu của mặt front"
+IndexedTriangle{{0, 1, 2}, {239, 90, 102, 255}, "front"},
+    IndexedTriangle{{0, 2, 3}, {239, 90, 102, 255}, "front"},
+```
+
+Năm mặt còn lại được khai báo tương tự. Mỗi mặt có màu riêng để khi che khuất sai, ta nhìn ra ngay mặt nào vừa ghi đè mặt nào.
+
+### Bước 2 — Project tám vertex đúng một lần
+
+Mười hai triangle có tổng cộng 36 lần tham chiếu vertex, nhưng chỉ có tám position khác nhau. Vì vậy mỗi frame ta quay và project tám vertex trước:
+
+```cpp title="include/lab.hpp — cache ScreenVertex của cả cube"
+inline std::array<ScreenVertex, 8> projectCube(
+    const CubeMesh& mesh,
+    int width,
+    int height,
+    double angleX,
+    double angleY
+) {
+    std::array<ScreenVertex, 8> result{};
+    for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
+        Vec3 cameraPoint = rotateCubeVertex(mesh.vertices[index], angleX, angleY);
+        cameraPoint.z += 4.2;
+        result[index] = projectVertex(cameraPoint, width, height);
+    }
+    return result;
+}
+```
+
+Cube được dựng quanh local origin, quay tại đó rồi mới dịch tới `z=4.2`. Nếu dịch trước rồi quay, cả tâm cube sẽ chạy vòng quanh camera thay vì cube xoay tại chỗ.
+
+`projectVertex` trả ba giá trị trong cùng một cấu trúc:
+
+```cpp title="include/lab.hpp — đầu ra cần cho rasterizer và bài depth sau"
+struct ScreenVertex {
+    double x{};
+    double y{};
+    double ndcDepth{};
+};
+```
+
+Bài này chỉ dùng `x` và `y`; `ndcDepth` được giữ lại vì nó là depth đúng sau perspective divide. Ta chưa so sánh nó.
+
+### Bước 3 — Từ index thành ScreenTriangle
+
+Vòng render duyệt mười hai triangle. Mỗi lần, nó lấy ba `ScreenVertex` đã cache rồi gọi đúng rasterizer top-left của Project 16:
+
+```cpp title="src/main.cpp — draw list chưa có depth test"
+const auto screenVertices = lab::projectCube(mesh, width, height, angleX, angleY);
+
+for (std::size_t position = 0; position < mesh.triangles.size(); ++position) {
+    std::size_t triangleIndex = position;
+    const lab::ScreenTriangle triangle = lab::screenTriangle(
+        mesh.triangles[triangleIndex],
+        screenVertices
+    );
+
+    lab::rasterizeTriangle(
+        triangle,
+        width,
+        height,
+        [&](int x, int y, lab::Barycentric weights, const lab::ScreenTriangle& normalized) {
+            const std::size_t index =
+                std::size_t(y) * std::size_t(width) + std::size_t(x);
+            static_cast<void>(weights);
+            pixels[index] = lab::packColor(normalized.color);
+        }
+    );
+}
+```
+
+Callback không tự kiểm tra coverage. Nó chỉ được gọi khi tâm pixel đã nằm trong triangle theo top-left rule. Tách hai việc này giữ code dễ đọc: rasterizer quyết định **pixel nào**, còn callback quyết định **ghi gì**.
+
+Cuối frame vẫn là chuỗi quen thuộc `SDL_UpdateTexture` → `SDL_RenderTexture` → `SDL_RenderPresent`. Z-buffer sau này chỉ thay quyết định trước lúc ghi `pixels[index]`; nó không thay cách SDL đưa framebuffer lên màn hình.
+
+## Ghép các phần lại
+
+### Build checkpoint đầu
+
+```bash title="Terminal — build cube đặc chưa có Z-buffer"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_17_checkpoint_1
+```
+
+Chạy target, kéo chuột để xoay cube và nhấn `R` để đặt lại góc nhìn. Bạn cần thấy một khối sáu màu, dù màu của mặt gần/xa đôi lúc chưa đúng.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi vị trí `cameraPoint.z += 4.2` lên trước `rotateCubeVertex`. Cube quay thành một quỹ đạo lớn; đưa translation về sau rotation.
+2. Sửa triangle thứ hai của mặt front thành `{0, 3, 2}`. Hai triangle có winding không nhất quán; outline có thể vẫn giống nhưng top-left ownership và các project culling sau sẽ khó kiểm chứng.
+3. Project ba vertex bên trong từng triangle. Hình không đổi, nhưng bạn thực hiện 36 phép transform thay vì 8; phục hồi cache `screenVertices`.
+4. Gọi API fill geometry của SDL thay cho `rasterizeTriangle`. Chương trình có hình nhưng bạn mất barycentric weights và không còn chỗ để tự viết depth test.
+
+## Tự kiểm tra kết quả
+
+- `makeCubeMesh` có đúng 8 vertex, 12 triangle và 6 `faceName` khác nhau.
+- Mọi index nằm trong đoạn `0..7`; hai triangle của mỗi mặt dùng cùng màu.
+- Cube được quay quanh local origin rồi dịch về phía +Z.
+- Tám vertex chỉ được project một lần mỗi frame.
+- Cả mười hai triangle đi qua cùng `rasterizeTriangle` và cùng callback ghi color.
+- Kéo chuột, `R` và resize không truy cập ngoài framebuffer.
+- Chưa có sort, depth compare hoặc Z-buffer ở checkpoint này.
+
+## Bài tập mở rộng
+
+Thêm một bộ đếm số lần `projectVertex` được gọi và in nó lên title bar. Giá trị phải luôn là 8, không phải 12 hay 36.
+
+Bài tiếp theo sẽ không thêm công thức mới. Ta chỉ đảo draw list để chứng minh hình hiện tại đang phụ thuộc vào lệnh nào chạy sau.

@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đồng bộ compute shader với vertex shader
+
+## Ta cần giải quyết điều gì?
+
+Gọi compute trước rồi draw sau chưa đủ để đảm bảo vertex shader nhìn thấy dữ liệu mới. Hai lệnh được gửi theo đúng thứ tự, nhưng GPU vẫn có nhiều stage và cache riêng. Ta cần đặt memory barrier giữa chúng để bước đọc tiếp theo — vertex shader — thấy những giá trị compute shader vừa ghi vào SSBO.
+
+Project 37 dùng `GL_BUFFER_UPDATE_BARRIER_BIT` trước `glGetBufferSubData` vì bước tiếp theo là CPU đọc buffer. Ở Project 38, vertex shader mới là bên đọc dữ liệu vừa được compute shader ghi. Vì vậy bit đúng là `GL_SHADER_STORAGE_BARRIER_BIT`.
+
+Checkpoint 6 ghép resident frame path lần đầu: update tại chỗ, barrier, draw từ chính buffer. Không có full readback.
+
+## Theo chân một particle
+
+Barrier không “làm shader nhanh hơn” và cũng không mô tả producer bằng tên. Ta đặt câu hỏi:
+
+> Lệnh sắp chạy tiếp theo sẽ dùng dữ liệu qua loại truy cập nào?
+
+Ở main path:
+
+```text
+compute shader ghi SSBO
+        ↓
+GL_SHADER_STORAGE_BARRIER_BIT
+        ↓
+vertex shader đọc SSBO
+```
+
+Ở validation path bài 9:
+
+```text
+compute shader ghi probe SSBO
+        ↓
+GL_BUFFER_UPDATE_BARRIER_BIT
+        ↓
+glGetBufferSubData đọc về CPU
+```
+
+Cùng một lệnh ghi nhưng hai cách đọc khác nhau sẽ cần hai barrier bit khác nhau.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="compute-draw-barrier" />
+
+Hãy chọn `BUFFER_UPDATE` rồi đọc sơ đồ. Bit này không phải lúc nào cũng sai; nó chỉ không phù hợp khi vertex shader là bước đọc tiếp theo. Nếu chọn “Bỏ barrier”, output sẽ được đánh dấu là cũ/không xác định thay vì giả lập một mẫu lỗi cụ thể, bởi thiếu đồng bộ không hỏng giống nhau trên mọi driver.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Chỉ dispatch khi mô phỏng thực sự tiến thêm một bước
+
+```cpp title="src/main.cpp — update condition"
+if (simulationDt > 0.0F) {
+    ++spawnEpoch;
+    if (!engine.update(gl, simulationDt, lab::kGravity, spawnEpoch, diagnostics)) {
+        std::cerr << diagnostics << '\n';
+        running = false;
+    }
+}
+```
+
+Pause tạo `dt=0`, nên không cần dispatch và epoch không tăng. Đây là một tối ưu xuất phát từ đúng semantics, không phải bỏ frame tùy ý.
+
+### Bước 2 — Đặt barrier ngay sau compute shader
+
+```cpp title="include/particle_gpu_engine.hpp — compute-to-draw barrier"
+dispatchUpdate(gl, particleCount_, dt, gravity, spawnEpoch);
+
+// Bước tiếp theo là vertex shader đọc lại cùng shader storage block.
+gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+```
+
+Barrier trước dispatch không giúp gì cho write chưa xảy ra. Barrier sau draw lại quá muộn cho chính draw đó. Vị trí của dòng code phải phản ánh cạnh dependency trong frame graph.
+
+### Bước 3 — Draw dùng lại binding 0
+
+`render()` không nhận vector particle và không gọi `glBufferData`. Nó chỉ bind main buffer tại binding 0, set uniforms rồi draw. Sau initialize, CPU không giữ một bản năm triệu record để update song song.
+
+Main frame giờ có bốn nhóm lệnh:
+
+```text
+set compute uniforms
+dispatch compute
+memory barrier trước khi vertex shader đọc SSBO
+set render uniforms + draw points
+```
+
+`SDL_GL_SwapWindow` trình bày framebuffer sau draw; nó không thay thế barrier giữa hai shader stages.
+
+## Nối lại thành một bước mô phỏng
+
+Checkpoint 6 là lần đầu fountain thật sự chuyển động hoàn toàn trên GPU:
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_38_checkpoint_6
+```
+
+Hãy tìm `glGetBufferSubData` trong mã cuối bài 6: lệnh này không được xuất hiện trong vòng lặp frame. Particle có thể sống hàng nghìn frame trong khi trạng thái chỉ đi từ compute shader sang vertex shader trên GPU. Đây là nguyên tắc **không full readback** trong đường chạy chính.
+
+Đây cũng là lúc phần xem thử trên CPU biến mất. Nếu hình lỗi, hãy tách vấn đề theo từng bài: bài 5 chứng minh phần vẽ tĩnh hoạt động; bài 4 chứng minh dispatch đúng; bài 6 chỉ thêm đồng bộ và lặp cập nhật.
+
+## Thử tạo lỗi
+
+1. Xóa barrier rồi kết luận “máy tôi vẫn chạy”. Một driver tình cờ cho kết quả đúng không tạo ra bảo đảm cho driver khác.
+2. Dùng `GL_ALL_BARRIER_BITS` để hình hoạt động. Code không còn cho biết dữ liệu sắp được đọc bằng cách nào và có thể đồng bộ thừa.
+3. Dùng `GL_BUFFER_UPDATE_BARRIER_BIT` chỉ vì nhớ từ Project 37. Hãy xác định lệnh đọc tiếp theo thay vì ghi nhớ một bit chung cho mọi compute shader.
+4. Gọi `glFinish` giữa update và draw. Hình đúng nhưng CPU và GPU bị ép chờ nhau hoàn toàn, làm mất lợi ích của cách chạy bất đồng bộ.
+5. Readback toàn bộ rồi upload vào VBO. Correctness có thể tăng nhưng bandwidth/residency architecture đã sai.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] Compute dispatch đứng trước barrier và draw đứng sau barrier.
+- [ ] Barrier bit là `GL_SHADER_STORAGE_BARRIER_BIT` cho main path.
+- [ ] Main render đọc cùng main SSBO ở binding 0.
+- [ ] Không có `glFinish` hoặc `GL_ALL_BARRIER_BITS`.
+- [ ] Không có full-buffer `glGetBufferSubData` trong frame loop.
+- [ ] Pause frame không dispatch và không tăng spawn epoch.
+- [ ] Static checkpoint 5 và moving checkpoint 6 giúp tách lỗi render khỏi lỗi synchronization.
+
+## Nếu muốn thử thêm
+
+1. Lập bảng gồm bước ghi, bước đọc và barrier bit cho ba trường hợp: SSBO→SSBO shader, SSBO→vertex attribute và SSBO→CPU readback.
+2. Thêm một compute pass thứ hai chỉ đổi màu/size và xác định barrier giữa hai compute programs.
+3. Đo end-to-end frame với và không có `glFinish` để thấy vì sao hình đúng chưa đủ để chọn synchronization.
+
+Fountain đã chạy, nhưng một frame spike hoặc pause/resume vẫn có thể làm hạt nhảy. Bài 7 sẽ khóa thời gian mô phỏng thành một interface rõ ràng.

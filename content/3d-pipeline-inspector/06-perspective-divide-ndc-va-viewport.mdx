@@ -1,0 +1,140 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ clip space tới pixel an toàn
+
+## Vấn đề cần giải quyết
+
+Clip point đã chứa mọi giá trị cần cho perspective divide, nhưng chia ngay lập tức là nguy hiểm. Point ở sau camera cho `w≤0`; point quá sát near plane tạo số rất lớn; point vượt far plane không thuộc khoảng depth đã chọn. Nếu vẫn đổi những giá trị đó sang pixel rồi clamp vào viewport, chương trình che giấu lỗi thay vì phân loại nó.
+
+Bài này hoàn thiện chuỗi Clip → NDC → Screen và chỉ cấp screen coordinate cho vertex có trạng thái `Visible`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sau khi depth hợp lệ:
+
+$$
+p_{ndc}=\left(\frac{clip.x}{clip.w},\frac{clip.y}{clip.w},\frac{clip.z}{clip.w}\right)
+$$
+
+Với quy ước viewport của khóa học:
+
+$$
+screen.x=(ndc.x+1)\frac{width}{2}
+$$
+
+$$
+screen.y=(1-ndc.y)\frac{height}{2}
+$$
+
+Số `1` ở công thức Y đảo trục vì NDC tăng lên trên, còn row index của framebuffer tăng xuống dưới.
+
+<InteractiveLab demo="pipeline3d" mode="pipeline-viewport" />
+
+## Viết code từng bước
+
+### Bước 1 — PipelineTrace giữ riêng mọi stage
+
+```cpp title="include/lab.hpp — bản ghi của một vertex qua pipeline"
+struct PipelineTrace {
+    Vec4 local{};
+    Vec4 world{};
+    Vec4 camera{};
+    Vec4 clip{};
+    Vec3 ndc{};
+    Vec2 screen{};
+    PipelineStatus status{PipelineStatus::BehindCamera};
+};
+```
+
+Nếu pipeline dừng ở Clip vì lỗi depth, `ndc` và `screen` vẫn là zero-initialized placeholder nhưng `status` nói rõ chúng **không hợp lệ để dùng**.
+
+### Bước 2 — Guard trước phép chia
+
+```cpp title="include/lab.hpp — phân loại depth trước perspective divide"
+if (trace.camera.z <= 0.0 || trace.clip.w <= 0.0) {
+    trace.status = PipelineStatus::BehindCamera;
+    return trace;
+}
+if (trace.camera.z < lens.nearPlane) {
+    trace.status = PipelineStatus::BeforeNearPlane;
+    return trace;
+}
+if (trace.camera.z > lens.farPlane) {
+    trace.status = PipelineStatus::BeyondFarPlane;
+    return trace;
+}
+```
+
+Mỗi nhánh dừng ngay, nên không có phép chia cho `w` không hợp lệ ở phía dưới.
+
+### Bước 3 — Chia Clip thành NDC
+
+```cpp title="include/lab.hpp — perspective divide cả X, Y và Z"
+inline Vec3 perspectiveDivide(Vec4 clipPoint) {
+    return {
+        clipPoint.x / clipPoint.w,
+        clipPoint.y / clipPoint.w,
+        clipPoint.z / clipPoint.w,
+    };
+}
+```
+
+NDC Z cũng được chia. Bỏ qua thành phần này sẽ làm Project 17 không có depth đúng để Z-buffer so sánh.
+
+### Bước 4 — Kiểm frustum rồi mới tạo pixel
+
+```cpp title="include/lab.hpp — chỉ viewport-transform point nằm trong NDC"
+trace.ndc = perspectiveDivide(trace.clip);
+if (!insideNdc(trace.ndc)) {
+    trace.status = PipelineStatus::OutsideFrustum;
+    return trace;
+}
+trace.screen = ndcToScreen(trace.ndc, viewportWidth, viewportHeight);
+trace.status = PipelineStatus::Visible;
+return trace;
+```
+
+Không có `std::clamp(screen.x, 0, width)`. Outside là một kết quả có ý nghĩa, không phải một pixel ở mép màn hình.
+
+### Bước 5 — Chỉ render status Visible
+
+```cpp title="src/main.cpp — marker cuối chỉ nhận screen point hợp lệ"
+if (trace.status == lab::PipelineStatus::Visible) {
+    const int markerX = viewport.left + int(std::lround(trace.screen.x));
+    const int markerY = viewport.top + int(std::lround(trace.screen.y));
+    fillSquare(pixels, width, height, markerX, markerY, 7, rgba(255, 196, 88));
+}
+```
+
+Các status khác vẫn hiện trên title bar. Bài 18 mới cắt primitive giao near plane; Project 15 chỉ theo dõi một point nên loại point là đủ.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build pipeline tới viewport"
+cmake --build build --config Debug --target project_15_checkpoint_6 project_15_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Dùng phím `1–5` để lần lượt thử visible, before-near, behind, beyond-far và outside. Chỉ preset 1 được vẽ marker trong viewport.
+
+## Thử làm sai để hiểu đúng
+
+1. Chuyển `perspectiveDivide` lên trước ba guard. Preset behind/near sẽ tạo NDC không có ý nghĩa; hoàn tác ngay.
+2. Chỉ kiểm X/Y mà bỏ NDC Z. Test near/far sẽ không còn khóa khoảng depth cần cho Z-buffer.
+3. Clamp NDC outside về `[-1,1]`. Marker sẽ dính ở mép viewport và inspector mất khả năng báo outside.
+
+## Tự kiểm tra kết quả
+
+- Visible point ở trục camera +Z tới đúng tâm viewport.
+- `camera.z≤0` trả Behind trước phép chia.
+- `0<camera.z<near` trả BeforeNear; `camera.z>far` trả BeyondFar.
+- NDC ngoài biên trả Outside và không được vẽ.
+- NDC Y dương đi lên nhưng screen Y giảm.
+- Resize dùng width/height mới cho aspect và viewport transform.
+- NDC Z của point visible nằm trong `[0,1]`.
+
+## Bài tập mở rộng
+
+Thêm một status riêng cho lens không hợp lệ (`near≤0` hoặc `far≤near`) và test rằng pipeline dừng trước khi dựng Projection matrix. Giữ preset chính của project với lens hợp lệ.
+
+Bài cuối sẽ ghép Model, View, Projection thành một MVP matrix và kiểm tra nó khớp từng stage chạy rời.

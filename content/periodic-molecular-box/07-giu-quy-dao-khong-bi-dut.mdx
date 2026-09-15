@@ -1,0 +1,115 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ lại hành trình khi hạt đi qua biên
+
+## Vấn đề cần giải quyết
+
+Một hạt đi sang trái từ x=0.1 rồi xuất hiện ở x=11.9. Nếu lấy vị trí mới trừ vị trí cũ, ta được +11.8: có vẻ hạt vừa chạy rất nhanh sang phải! Chuyển động không sai; chỉ có phép đo đang dùng một tọa độ đã bị đưa về ô gốc.
+
+Ở bài này, giữ nguyên solver của checkpoint 6 và bổ sung `unwrapped`: tọa độ không bị wrap, dùng để lưu hành trình. Sau đó vẽ hai đường lịch sử của cùng hạt A. Khi một đường nhảy qua mép hộp mà đường kia vẫn liền mạch, ta sẽ hiểu chính xác thông tin nào bị mất sau phép wrap.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy tưởng tượng các ô vuông giống nhau lát kín mặt phẳng. `position` trả lời “hạt ở đâu trong ô gốc?”, còn `unwrapped` trả lời “hạt đã đi tới đâu trên mặt phẳng ấy?”. Hai tọa độ cùng mô tả một hạt, không phải hai state vật lý độc lập.
+
+Gọi q là unwrapped, p là wrapped và d là displacement trong bước drift:
+
+$$
+\mathbf q_{new}=\mathbf q_{old}+\mathbf d,\qquad
+\mathbf p_{new}=wrap(\mathbf p_{old}+\mathbf d).
+$$
+
+Trong Velocity Verlet, d được tính từ vận tốc **sau kick nửa bước**, không phải vận tốc đầu bước. Sau mỗi bước hợp lệ, `wrapPosition(unwrapped, box)` phải gần bằng `position` ở cả hai trục.
+
+Minimum image cũng không thay thế được unwrapped. Nó chỉ chọn displacement ngắn nhất giữa hai vị trí. Nếu hạt đi hơn nửa hộp hoặc nhiều vòng trong một lần lấy mẫu, lựa chọn ấy có thể không phải hành trình thực tế. Ta đã biết d trong solver; hãy lưu nó ngay trước khi wrap làm mất thông tin số vòng.
+
+<InteractiveLab demo="periodic-molecular-box" mode="pbc-unwrapped" />
+
+Preset một hạt có vx=-8. Chạy vài giây: đường xanh biểu diễn wrapped x sẽ nhảy từ gần 0 về gần 12, còn đường vàng unwrapped x tiếp tục giảm. Bản đồ phía trên vẫn chỉ vẽ position trong ô gốc và các ảnh hiển thị.
+
+## Viết code từng bước
+
+### Bước 1 — Thêm tọa độ theo dõi vào Particle
+
+```cpp title="include/periodic.hpp — lưu vị trí trong ô và vị trí trên hành trình"
+struct Particle {
+    Vec2 position;
+    Vec2 velocity;
+    double mass{1.0};
+    Vec2 unwrapped;
+};
+```
+
+Khi tạo hệ, khởi tạo `unwrapped` bằng `position`. Trong `makePair`, thêm hai phép gán sau khi đặt vị trí A và B:
+
+```cpp title="include/dynamics.hpp — mốc hành trình lúc tạo cặp"
+a.unwrapped = a.position;
+b.unwrapped = b.position;
+```
+
+Trong `makeGas`, làm tương tự cho từng hạt trước khi đưa vào vector. Nếu quên bước này, tất cả đường hành trình sẽ bắt đầu ở (0,0) dù các hạt được xếp ở nhiều vị trí khác nhau.
+
+### Bước 2 — Lưu đúng displacement của drift
+
+Thay phần cập nhật vị trí bên trong vòng lặp đầu tiên của `verletStep` bằng đoạn sau. Phần kick nửa bước ngay trước nó được giữ nguyên:
+
+```cpp title="include/dynamics.hpp — cập nhật cả hai cách biểu diễn vị trí"
+const Vec2 displacement = scale(particle.velocity, dt);
+particle.position = wrapPosition(add(particle.position, displacement), candidate.box);
+particle.unwrapped = add(particle.unwrapped, displacement);
+if (!finite(particle.unwrapped)) {
+    return false;
+}
+```
+
+Cả hai phép cập nhật đều diễn ra trên `candidate`. Nếu tính lực mới thất bại, cả position lẫn unwrapped của state thật vẫn được giữ nguyên. Đừng cập nhật unwrapped trên `system` trong khi position nằm trên candidate: một bước bị từ chối sẽ khiến hai tọa độ lệch nhau.
+
+Hàm `ballisticStep` cũng cộng displacement vào unwrapped. Nó phục vụ các bài trước và test chuyển động tự do; bản final vẫn dùng Verlet kể cả khi chỉ có một hạt, vì tổng lực của hạt ấy bằng zero.
+
+### Bước 3 — Lưu lịch sử đủ xem, không tăng bộ nhớ mãi
+
+```cpp title="include/view.hpp — lịch sử hai tọa độ của cùng một hạt"
+struct TraceSample {
+    double wrappedX{};
+    double unwrappedX{};
+};
+
+inline void appendTrace(std::vector<TraceSample>& trace, const pbc::Particle& particle) {
+    trace.push_back({particle.position.x, particle.unwrapped.x});
+    if (trace.size() > 240) {
+        trace.erase(trace.begin());
+    }
+}
+```
+
+Main lấy mẫu sau một bước tích phân thành công, khoảng mỗi 0.01 đơn vị thời gian mô phỏng. Giới hạn 240 mẫu là lựa chọn hiển thị, không ảnh hưởng solver. Với lượng dữ liệu nhỏ này, xóa phần tử đầu vector dễ đọc và đủ dùng; ring buffer là bài tập mở rộng hợp lý.
+
+`drawTrace` dùng cùng trục ngang cho hai dãy mẫu, tự mở rộng trục dọc để chứa unwrapped. Đường xanh cho thấy lần tọa độ bị wrap; đường vàng cho thấy chuyển động liên tục. Khi đổi preset hoặc kéo A bằng chuột, xóa lịch sử và đặt lại mốc unwrapped, vì đó là thao tác can thiệp từ bên ngoài.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 7"
+cmake --build build --config Debug --target project_43_checkpoint_7
+.\build\Debug\project_43_checkpoint_7.exe
+```
+
+Nhấn B để chọn một hạt, Space để chạy và G nếu muốn xem ảnh ở các ô kề. Đồ thị nằm dưới hộp: xanh là wrapped x, vàng là unwrapped x. Chọn 1 để trở về cặp tương tác; đường vàng lúc này có thể cong do lực làm đổi vận tốc, nhưng không được nhảy chỉ vì hạt đi qua biên.
+
+Mã hoàn chỉnh trong phần cuối bài có đủ thay đổi ở `Particle`, hàm tạo hệ, drift, thao tác chuột và renderer. Đọc cả năm chỗ này trước khi ghép vào bản đang tự viết; thêm mỗi biến unwrapped sẽ chưa tạo ra một phép đo đúng.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm gán `particle.unwrapped = particle.position` sau mỗi bước. Hai đường trùng nhau và cùng nhảy ở biên. Khôi phục phép cộng displacement; unwrapped không phải một bản sao liên tục của position.
+2. Thử suy ra displacement từ minimum image của hai position rồi cho một hạt tự do đi hơn một cạnh hộp trong một bước. Phép đo mất số vòng dù position cuối vẫn đúng. Chạy ca nhiều vòng trong CTest, sau đó trở lại cách cộng displacement ngay trong drift.
+
+## Tự kiểm tra kết quả
+
+- Một hạt tự do giữ nguyên velocity khi qua mọi mép và góc.
+- Wrapped x luôn thuộc [0,Lx); unwrapped x được phép âm hoặc lớn hơn Lx.
+- `wrapPosition(unwrapped, box)` gần bằng position, với sai số số thực nhỏ.
+- Reset và đổi preset xóa trace; kéo A đặt lại mốc hành trình và vận tốc A về zero.
+- Một bước bị từ chối không thay đổi position, velocity, unwrapped hay elapsed.
+
+## Bài tập mở rộng
+
+Thêm đồ thị unwrapped y và tính bình phương độ dời so với vị trí đầu. Với một hạt tự do, kết quả phải tăng như t². Chưa gọi đó là hệ số khuếch tán: một quỹ đạo ngắn hoặc chuyển động thẳng chưa đủ để kết luận về khuếch tán. Sang [bài 8 — kiểm chứng và mã nguồn hoàn chỉnh](/projects/periodic-molecular-box/08-kiem-chung-hop-tuan-hoan) để thử những trường hợp hình vẽ dễ che khuất.

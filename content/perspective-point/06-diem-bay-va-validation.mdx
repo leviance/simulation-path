@@ -1,0 +1,187 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho điểm bay và kiểm chứng projection
+
+## Vấn đề cần giải quyết
+
+Một vài preset tĩnh chưa đủ chứng minh pipeline ổn định. Point chuyển động liên tục có thể đi sát near plane, qua nhiều depth và chịu các frame dài khi cửa sổ bị kéo hoặc debugger dừng. Ta cũng muốn kéo marker trên màn hình, nhưng một pixel 2D không tự cho biết một vị trí 3D duy nhất.
+
+Checkpoint cuối giải quyết cả hai: quỹ đạo được tính từ elapsed time, còn thao tác kéo giữ nguyên camera-space depth hiện tại để phép đổi ngược có một nghiệm xác định. Sau đó CTest kiểm tra phần toán mà không mở SDL.
+
+## Hiểu ý tưởng trước khi viết code
+
+Quỹ đạo là một hàm của thời gian:
+
+$$
+P(t)=\left(2.2\sin(0.9t),\ 1.3\cos(1.3t),\ 4.5+3\sin(0.55t)\right)
+$$
+
+Frame chỉ cập nhật `elapsed += clamp(dt,0,0.1)` rồi tính lại P. Vì không cộng một bước cố định mỗi frame, chuyển động không phụ thuộc FPS.
+
+Để đổi một pixel về camera space tại depth d đã biết, trước hết đổi pixel về NDC rồi đảo công thức projection:
+
+$$
+x=ndc_x\,d\,\tan(FOV_y/2)\,aspect
+$$
+
+$$
+y=ndc_y\,d\,\tan(FOV_y/2)
+$$
+
+<InteractiveLab demo="projection" mode="projection-motion" />
+
+Bấm **Chạy**, pause rồi tiến từng bước. Kéo marker trong viewport: X/Y thay đổi nhưng camera-space Z được giữ. Dòng round-trip error phải ở gần sai số máy.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo quỹ đạo và chặn delta time
+
+Hai hàm nằm trong `lab.hpp`, hoàn toàn độc lập với SDL:
+
+```cpp title="include/lab.hpp — quỹ đạo xác định bằng elapsed time"
+inline Vec3 flightPoint(double timeSeconds) {
+    return {
+        std::sin(timeSeconds * 0.9) * 2.2,
+        std::cos(timeSeconds * 1.3) * 1.3,
+        4.5 + std::sin(timeSeconds * 0.55) * 3.0,
+    };
+}
+
+inline double advanceFlightTime(double current, double deltaTime) {
+    const double safeDeltaTime = std::clamp(deltaTime, 0.0, 0.1);
+    return current + safeDeltaTime;
+}
+```
+
+`flightPoint` không giữ state. Cùng một `timeSeconds` luôn cho cùng một point, nên pause/step và tests đều dễ dự đoán.
+
+### Bước 2 — Đo dt trong vòng lặp SDL
+
+SDL trả tick theo nanosecond; chia cho một tỉ đổi nó thành giây:
+
+```cpp title="src/main.cpp — cập nhật elapsed khi không pause"
+const Uint64 currentTicks = SDL_GetTicksNS();
+const double deltaTime = double(currentTicks - previousTicks) / 1'000'000'000.0;
+previousTicks = currentTicks;
+if (!paused) {
+    elapsed = lab::advanceFlightTime(elapsed, deltaTime);
+    worldPoint = lab::flightPoint(elapsed);
+}
+```
+
+Phím `.` dùng bước 1/60 giây khi pause, nhờ vậy có thể quan sát một frame mà không phụ thuộc tốc độ máy.
+
+### Bước 3 — Viết phép đổi ngược tại depth cố định
+
+Không có depth, mọi point trên cùng một tia đều chiếu vào một pixel. Hàm vì vậy bắt buộc nhận `cameraDepth`:
+
+```cpp title="include/lab.hpp — pixel trở lại camera space tại depth đã biết"
+inline Vec3 screenToCameraAtDepth(
+    Vec2 screen,
+    double cameraDepth,
+    const PerspectiveLens& lens,
+    int width,
+    int height
+) {
+    const Vec2 ndc = screenToNdc(screen, width, height);
+    const double tanHalfFov = std::tan(lens.verticalFovRadians * 0.5);
+    const double aspectRatio = double(width) / double(height);
+    return {
+        ndc.x * cameraDepth * tanHalfFov * aspectRatio,
+        ndc.y * cameraDepth * tanHalfFov,
+        cameraDepth,
+    };
+}
+```
+
+### Bước 4 — Dùng inverse cho thao tác kéo
+
+Khi mouse di chuyển, lấy depth hiện tại, đổi pixel mới về camera space rồi cộng lại camera position:
+
+```cpp title="src/main.cpp — kéo marker mà vẫn giữ depth"
+if (event.type == SDL_EVENT_MOUSE_MOTION && dragging) {
+    const lab::Vec3 currentCameraPoint = lab::worldToCamera(worldPoint, camera);
+    const lab::Vec3 draggedCameraPoint = lab::screenToCameraAtDepth(
+        {event.motion.x, event.motion.y},
+        currentCameraPoint.z,
+        lens,
+        width,
+        height
+    );
+    worldPoint = lab::cameraToWorld(draggedCameraPoint, camera);
+}
+```
+
+Mouse down chỉ bắt đầu drag khi point đang visible; mouse up luôn nhả capture. Nhờ vậy kéo ra ngoài cửa sổ không làm state bị kẹt.
+
+### Bước 5 — Khóa các tính chất bằng tests
+
+Test tâm viewport sử dụng một kết quả có thể tính bằng mắt:
+
+```cpp title="tests/tests.cpp — trục nhìn đi đúng tâm"
+const lab::ProjectionResult center = lab::projectPerspective(
+    lab::cameraToWorld({0.0, 0.0, 4.0}, camera),
+    camera,
+    lens,
+    0.5,
+    width,
+    height
+);
+check(center.status == lab::ProjectionStatus::Visible, "center point is visible");
+check(nearlyEqual(center.screen, {width * 0.5, height * 0.5}), "view axis reaches screen center");
+```
+
+Test visibility gọi thẳng bốn dữ liệu biên, không cần phím P hoặc cửa sổ:
+
+```cpp title="tests/tests.cpp — bốn vùng của projection pipeline"
+const auto behind = lab::projectPerspective({0.0, 0.0, -1.0}, {}, lens, 0.5, width, height);
+const auto beforeNear = lab::projectPerspective({0.0, 0.0, 0.25}, {}, lens, 0.5, width, height);
+const auto onNear = lab::projectPerspective({0.0, 0.0, 0.5}, {}, lens, 0.5, width, height);
+const auto outside = lab::projectPerspective({20.0, 0.0, 5.0}, {}, lens, 0.5, width, height);
+check(behind.status == lab::ProjectionStatus::BehindCamera, "behind-camera status");
+check(beforeNear.status == lab::ProjectionStatus::BeforeNearPlane, "before-near status");
+check(onNear.status == lab::ProjectionStatus::Visible, "near plane boundary is visible");
+check(outside.status == lab::ProjectionStatus::OutsideFrustum, "outside-frustum status");
+```
+
+## Ghép các phần lại
+
+Configure, build và chạy tests ở Debug:
+
+```bash title="Terminal — build toàn bộ Project 11 ở Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Sau đó lặp lại bằng optimizer của Release:
+
+```bash title="Terminal — build và kiểm tra Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Mở `project_11_final`. Thử arrows/Q/E, WASD/Z/X, FOV bằng `[ ]`, near plane bằng N/M, bốn preset P, pause/step, kéo marker, reset và resize. Title bar phải luôn cho biết world point, camera point, NDC, pixel, status và round-trip error.
+
+Project 11 đã hoàn chỉnh. Phần **Mã hoàn chỉnh của project** bên dưới lấy trực tiếp `CMakeLists.txt`, `lab.hpp`, `main.cpp` và `tests.cpp` từ cùng source dùng để tạo ZIP, nên bạn không phải tự ghép các code block rời rạc.
+
+## Thử làm sai để hiểu đúng
+
+1. Cập nhật `worldPoint.x += speed` mỗi frame mà không dùng dt. Chuyển động sẽ nhanh hơn trên màn hình FPS cao.
+2. Bỏ `cameraDepth` khỏi inverse và tự chọn Z=1. Marker sẽ nhảy sang mặt phẳng ảnh ngay khi bắt đầu kéo.
+3. Chỉ test một point visible. Đảo thứ tự near/behind hoặc bỏ aspect ratio vẫn có thể lọt qua dù demo mặc định trông đúng.
+
+## Tự kiểm tra kết quả
+
+- Gấp đôi depth làm độ lệch NDC giảm một nửa.
+- FOV rộng hơn đưa point gần tâm hơn.
+- NDC ↔ screen và world ↔ camera round trip trong sai số 10⁻⁹.
+- Bốn status khớp đúng dữ liệu biên; không phép chia nguy hiểm nào chạy trước guard.
+- `advanceFlightTime` chặn dt âm về 0 và dt lớn về 0.1.
+- Starter, sáu checkpoint, final và tests đều build ở Debug lẫn Release.
+
+## Bài tập mở rộng
+
+Thêm danh sách 100 point bay với phase khác nhau và chỉ project những point visible. Đếm số point ở từng status, nhưng giữ `projectPerspective` là hàm xử lý một point để tests hiện tại vẫn dùng được.
+
+Project 12 sẽ mở rộng từ một point sang nhiều đỉnh, nối chúng thành wireframe và bắt đầu nhìn thấy cấu trúc 3D thay vì một marker đơn.

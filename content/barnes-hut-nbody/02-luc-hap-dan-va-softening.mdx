@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lực hấp dẫn và softening
+
+## Vấn đề cần giải quyết
+
+Nếu dùng thẳng $1/r^2$, hai body đi rất gần nhau sẽ tạo acceleration cực lớn. Chỉ một physics step có thể bắn chúng ra khỏi scene hoặc sinh `inf/NaN`. Giảm `dt` giúp tích phân chính xác hơn nhưng không giải quyết singularity tại $r=0$.
+
+Checkpoint 2 viết lực giữa một target và một source, rồi thêm gravitational softening theo cách trơn và có thể kiểm chứng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gia tốc của target $i$ do source $j$ tạo ra là:
+
+$$
+\mathbf{a}_{ij}=Gm_j\frac{\mathbf{p}_j-\mathbf{p}_i}
+{\left(\lVert\mathbf{p}_j-\mathbf{p}_i\rVert^2+\varepsilon^2\right)^{3/2}}
+$$
+
+Vector displacement đã chứa cả hướng lẫn khoảng cách. `sourceMass` xuất hiện vì ta đang tính acceleration; target mass đã được rút gọn khỏi $F=ma$. Softening $\varepsilon$ có đơn vị độ dài, làm lực chuyển tiếp trơn ở vùng rất gần.
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-pair-force" />
+
+Chọn một body gần center rồi tăng `softening`. Vector lực ngắn dần. Sau đó chọn body xa: thay đổi nhỏ hơn nhiều, vì $r^2$ đã lớn hơn $\varepsilon^2$.
+
+## Viết code từng bước
+
+### Bước 1 — Lấy displacement theo đúng chiều
+
+```cpp title="include/lab.hpp — source minus target"
+const Vec3 displacement = sourcePosition - targetPosition;
+const double softenedDistanceSquared =
+    lengthSquared(displacement) + softening * softening;
+```
+
+Đảo phép trừ sẽ làm gravity đẩy thay vì hút. Tên biến `sourcePosition` và `targetPosition` dài hơn một chút nhưng loại bỏ một lỗi rất khó thấy khi có hàng nghìn body.
+
+### Bước 2 — Tính inverse distance cubed
+
+```cpp title="include/lab.hpp — softened denominator"
+if (softenedDistanceSquared <= 0.0 || sourceMass <= 0.0) {
+    return {};
+}
+const double inverseDistanceCubed =
+    1.0 / std::pow(softenedDistanceSquared, 1.5);
+```
+
+Ta nhân displacement có độ dài $r$ với mẫu số bậc $3$, nên độ lớn cuối cùng vẫn gần $1/r^2$ khi $r$ lớn hơn epsilon.
+
+### Bước 3 — Nhân các đại lượng còn lại một lần
+
+```cpp title="include/lab.hpp — softenedAcceleration result"
+return displacement * (gravitationalConstant * sourceMass * inverseDistanceCubed);
+```
+
+Hàm trả acceleration và không sửa state. Nhờ vậy unit test có thể gọi nó cho các case trùng position, đổi mass hoặc đảo target/source mà không cần chạy event loop.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 2"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_31_checkpoint_2
+```
+
+Checkpoint vẽ vector acceleration của body đang chọn do central body gây ra. Dùng `,` và `.` để chuyển target, `-` và `=` để đổi softening.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `targetPosition - sourcePosition`. Vector lực quay ra ngoài và thiên hà sẽ nở thay vì hút.
+2. Viết `r² + epsilon` thay vì `r² + epsilon²`. Hai số hạng khác đơn vị, nên ý nghĩa tham số đổi theo scale của world.
+3. Clamp độ lớn acceleration sau khi tính. Lực bị gãy đột ngột ở ngưỡng; theta accuracy về sau sẽ trộn lỗi clamp với lỗi Barnes–Hut.
+
+## Tự kiểm tra kết quả
+
+- Hai position trùng nhau trả vector 0 hữu hạn.
+- Tăng source mass ba lần làm acceleration tăng ba lần.
+- Target mass không xuất hiện trong hàm acceleration.
+- Vector luôn hướng từ target tới source.
+- Với distance lớn hơn nhiều epsilon, kết quả gần công thức không softening.
+- Checkpoint 2 vẫn chỉ dùng một source, chưa giả vờ là N-body.
+
+## Bài tập mở rộng
+
+Vẽ đồ thị độ lớn acceleration theo distance cho ba epsilon. Đánh dấu vị trí $r=\varepsilon$ và giải thích bằng số vì sao epsilon quá lớn làm sai cả vùng quỹ đạo cần giữ.
+
+Bài tiếp theo sẽ gọi hàm này N−1 lần cho mỗi target để tạo direct oracle.

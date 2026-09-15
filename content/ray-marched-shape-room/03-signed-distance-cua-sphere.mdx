@@ -1,0 +1,136 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo khoảng cách đến mặt cầu bằng SDF
+
+## Bức hình này còn thiếu gì?
+
+Khi vẽ triangle mesh, ta thường tìm vị trí mà tia cắt từng triangle. Ray marching tiếp cận theo cách khác: **từ điểm đang đứng, bề mặt gần nhất còn cách bao xa?** Signed Distance Function, hay SDF, sẽ trả lời câu hỏi đó.
+
+Ở bài này ta chỉ viết SDF cho một sphere và học cách đọc dấu của kết quả. Chưa có vòng lặp, cũng chưa có ánh sáng. Quy ước này phải thật rõ ngay từ đầu; nếu không, khi scene có nhiều vật thể, ta sẽ rất khó biết lỗi xuất phát từ đâu.
+
+## Hình dung đường đi của một pixel
+
+Với tâm $\mathbf{c}$, bán kính $r$ và điểm cần hỏi $\mathbf{p}$:
+
+$$
+d(\mathbf{p})=\lVert\mathbf{p}-\mathbf{c}\rVert-r
+$$
+
+- $d < 0$: điểm nằm bên trong sphere;
+- $d = 0$: điểm nằm trên bề mặt;
+- $d > 0$: điểm nằm bên ngoài;
+- $|d|$: khoảng cách ngắn nhất đến bề mặt sphere.
+
+Đó là khác biệt quan trọng giữa SDF và một hàm `isInside`. Boolean chỉ cho biết phía nào; SDF còn cho biết ta được phép tiến bao xa mà chưa xuyên qua bề mặt.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-sphere-sdf" />
+
+Kéo điểm sample từ ngoài vào trong. Đường biên sáng là vùng distance gần zero; màu hai phía biểu diễn dấu, còn con số trong readout cho biết độ lớn thật.
+
+## Cùng sửa checkpoint
+
+### Bước 1 — Viết `sdSphere` bằng tên gọi rõ ràng
+
+```cpp title="include/raymarch_math.hpp — bản CPU"
+inline double sdSphere(
+    const Vec3& point,
+    const Vec3& center,
+    double radius
+) {
+    return length(point - center) - radius;
+}
+```
+
+```glsl title="shaders/raymarch.frag — bản GLSL"
+float sdSphere(vec3 point, vec3 center, float radius) {
+    return length(point - center) - radius;
+}
+```
+
+Hai bản cố ý giữ cùng cách đặt tham số. `p`, `c`, `r` tiện khi công thức đã quen, nhưng tên đầy đủ sẽ dễ theo dõi hơn trong lần đầu đi qua phép tính.
+
+### Bước 2 — Cho scene query trả cả khoảng cách lẫn danh tính
+
+Ngay cả khi scene mới chỉ có một sphere, ta vẫn định nghĩa kiểu kết quả sẽ dùng đến cuối project:
+
+```cpp title="include/raymarch_math.hpp — SceneSample"
+struct SceneSample {
+    double distance{std::numeric_limits<double>::infinity()};
+    int materialId{};
+};
+
+inline SceneSample sampleScene(const Vec3& point) {
+    SceneSample sample{
+        sdSphere(point, {-1.0, -0.18, 0.15}, 0.82),
+        1};
+    return sample;
+}
+```
+
+`distance` quyết định bề mặt nào gần nhất; `materialId` đi cùng primitive đó để bài 7 chọn màu. Ta chưa dùng material trong bài này, nhưng chuẩn bị sẵn từ bây giờ sẽ tránh việc phải đoán vật thể qua màu hoặc chạy lại một chuỗi `if` khác.
+
+### Bước 3 — Nhìn một lát cắt trước khi march
+
+Để thấy trường khoảng cách, checkpoint 3 lấy một điểm cách camera bốn đơn vị dọc mỗi ray rồi tô theo dấu:
+
+```glsl title="shaders/raymarch.frag — checkpoint 3"
+vec3 rayDirection = makeCameraRay(gl_FragCoord.xy);
+vec3 samplePoint = uCameraPosition + rayDirection * 4.0;
+float distance = sdSphere(
+    samplePoint,
+    vec3(-1.0, -0.18, 0.15),
+    0.82
+);
+
+float edge = exp(-abs(distance) * 18.0);
+vec3 signColor = distance < 0.0
+    ? vec3(0.95, 0.32, 0.24)
+    : vec3(0.16, 0.50, 0.92);
+fragColor = vec4(mix(signColor * 0.24, vec3(1.0), edge), 1.0);
+```
+
+Hình tròn ở đây là giao của sphere với một mặt phẳng sample, chưa phải ảnh ray-marched. `exp` chỉ dùng để làm nổi vùng $|d|$ nhỏ; nó không tham gia vào SDF.
+
+## Chạy thử và quan sát
+
+Viết probe trước khi tin vào hình:
+
+```cpp title="tests/tests.cpp — ba điểm có ý nghĩa hình học"
+const lab::Vec3 sphereCenter{-1.0, -0.18, 0.15};
+check(
+    lab::sdSphere(sphereCenter, sphereCenter, 0.82) < 0.0,
+    "sphere center is inside"
+);
+check(
+    near(
+        lab::sdSphere({-0.18, -0.18, 0.15}, sphereCenter, 0.82),
+        0.0
+    ),
+    "sphere surface has zero signed distance"
+);
+```
+
+Những probe có đáp án hình học rõ ràng đáng tin hơn việc nhìn một vùng màu rồi kết luận “có vẻ đúng”.
+
+## Cố tình làm sai
+
+1. Viết `radius - length(point - center)`. Sphere nhìn vẫn có đường biên, nhưng dấu trong/ngoài đảo ngược; marcher sẽ coi không gian ngoài là đã hit.
+2. Quên trừ `center`. Sphere bị khóa tại origin dù material và camera nói nó ở chỗ khác.
+3. Trả `abs(length(...) - radius)`. Khi mất dấu, phép ghép SDF và normal ở bên trong vật thể sẽ không còn đúng.
+4. Nhân distance với một hệ số tùy ý. Đường zero không đổi nên ảnh lát cắt trông đúng, nhưng khoảng tiến an toàn không còn là khoảng cách thật.
+
+## Dấu hiệu cho thấy bài đã hoàn thành
+
+- [ ] Center âm, một điểm trên bề mặt gần zero và điểm ngoài dương.
+- [ ] Dịch `center` làm toàn bộ trường khoảng cách dịch theo.
+- [ ] Bản CPU và GLSL dùng cùng công thức, đơn vị và vị trí sphere.
+- [ ] `sampleScene` trả `materialId == 1` cho sphere.
+- [ ] Bạn phân biệt được ảnh lát cắt SDF với ảnh ray-marched.
+
+## Thử đi thêm một bước
+
+1. Thêm một probe cách bề mặt đúng 0,25 world unit và kiểm giá trị trả về.
+2. Cho radius thay đổi trong Canvas rồi dự đoán distance trước khi nhìn readout.
+3. Vẽ các đường đồng mức tại $d=0.25$, $0.5$ và $1.0$.
+
+Bài tiếp theo sẽ dùng chính giá trị distance này làm độ dài của từng bước dọc camera ray.

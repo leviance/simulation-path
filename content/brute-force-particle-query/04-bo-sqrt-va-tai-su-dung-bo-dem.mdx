@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Bỏ sqrt và tái sử dụng bộ đệm
+
+## Vấn đề cần giải quyết
+
+Baseline đã đúng, nhưng mỗi candidate gọi `std::hypot`, và mỗi query tạo một vector result mới. Với 100.000 particles và hàng chục query benchmark, hai chi phí này nằm ngay trong đường chạy nóng nhất.
+
+Ta sẽ tối ưu mà không đổi contract: cùng cloud, cùng query phải cho cùng hit indices và nearest index. Phiên bản dễ đọc của bài trước được giữ lại làm reference, không bị xóa sau khi có code nhanh hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Vì $d\ge0$ và $r\ge0$:
+
+$$
+d\le r \iff d^2\le r^2
+$$
+
+Ta có thể so $\Delta x^2+\Delta y^2$ với $r^2$ mà không tính căn bậc hai cho từng particle. Còn `vector.clear()` đặt size về zero nhưng giữ capacity, nên vùng nhớ đã reserve có thể dùng lại.
+
+<InteractiveLab demo="brute-force-particle-query" mode="brute-squared" />
+
+Đổi seed, N và radius. Dòng `Reference / squared-distance` phải luôn báo khớp hit count và nearest index.
+
+## Viết code từng bước
+
+### Bước 1 — Tách storage dùng lại khỏi giá trị trả về
+
+```cpp title="include/lab.hpp — QueryWorkspace sống qua nhiều lần gọi"
+struct QueryWorkspace {
+    std::vector<std::size_t> hitIndices{};
+    std::size_t nearestIndex{kNoParticle};
+    double nearestDistanceSquared{std::numeric_limits<double>::infinity()};
+    std::size_t scanned{};
+};
+
+inline void reserveQueryWorkspace(QueryWorkspace& workspace, std::size_t maximumExpectedHits) {
+    workspace.hitIndices.reserve(maximumExpectedHits);
+}
+```
+
+Reserve `N` là lựa chọn đơn giản và an toàn cho bài học. Một ứng dụng thật có thể reserve theo hit count quan sát được, nhưng không nên để capacity tăng trong vùng benchmark.
+
+### Bước 2 — Reset logical state, không hủy storage
+
+```cpp title="include/lab.hpp — bắt đầu query mới trên buffer cũ"
+workspace.hitIndices.clear();
+workspace.nearestIndex = kNoParticle;
+workspace.nearestDistanceSquared = std::numeric_limits<double>::infinity();
+workspace.scanned = 0;
+```
+
+Không gán `workspace = {}` vì thao tác đó có thể làm mất vector đã reserve. Ta reset từng trường có ý nghĩa cho một query mới.
+
+### Bước 3 — Tính radius² một lần ngoài loop
+
+```cpp title="include/lab.hpp — hot loop không còn sqrt"
+const double radiusSquared = query.radius * query.radius;
+for (std::size_t index = 0; index < particles.size(); ++index) {
+    const double candidateDistanceSquared = distanceSquared(particles[index].position, query.center);
+    ++workspace.scanned;
+    if (candidateDistanceSquared <= radiusSquared) {
+        workspace.hitIndices.push_back(index);
+    }
+}
+```
+
+`radiusSquared` không đổi theo particle, vì vậy đặt nó trong loop chỉ lặp lại một phép nhân không cần thiết.
+
+### Bước 4 — App giữ một workspace bên cạnh particle storage
+
+```cpp title="src/main.cpp — reserve một lần trước event loop"
+lab::QueryWorkspace workspace{};
+lab::reserveQueryWorkspace(workspace, particles.size());
+```
+
+Mỗi frame gọi `queryBruteForceSquared(active, query, workspace)`. Output cũ bị clear, capacity được giữ, renderer đọc kết quả mới ngay sau đó.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint squared-distance"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_27_checkpoint_4
+```
+
+Chạy cùng seed/radius ở checkpoint 3 và 4. Hit count cùng nearest index phải giống nhau trước khi so timing.
+
+## Thử làm sai để hiểu đúng
+
+1. So `distanceSquared <= radius`. Vùng query trở nên quá nhỏ khi radius dưới 1; so với `radius * radius`.
+2. Dùng `workspace.hitIndices = {}` ở đầu mỗi query. Capacity có thể về zero và allocation quay lại; dùng `clear()`.
+3. Xóa reference query vì “đã có bản nhanh”. Sau đó cố ý đổi `<=` thành `<` và nhận ra không còn oracle bắt lỗi boundary; giữ cả hai trong tests.
+
+## Tự kiểm tra kết quả
+
+- Reference và optimized trả cùng hit indices.
+- Hai phiên bản chọn cùng nearest index.
+- Boundary inclusive vẫn đúng.
+- Workspace được reserve trước lần đo đầu tiên.
+- Capacity không đổi qua nhiều query với radius khác nhau.
+- Optimized full query vẫn báo `scanned == N`.
+
+## Bài tập mở rộng
+
+Thử reserve 1%, 10% và 100% của N. Đếm số lần capacity thay đổi trên một dãy radius, nhưng không dùng timing trước khi correctness test vẫn đạt.
+
+Bài tiếp theo xây một benchmark tách query khỏi generation và rendering.

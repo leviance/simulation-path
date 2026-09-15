@@ -1,0 +1,52 @@
+#version 430 core
+
+layout(local_size_x = 256) in;
+
+#if LAB_CHECKPOINT >= 3
+layout(std430, binding = 0) readonly buffer InputBuffer {
+    float inputData[];
+};
+
+layout(std430, binding = 1) writeonly buffer PartialSumsBuffer {
+    float partialSums[];
+};
+
+uniform int uElementCount;
+
+// Mỗi workgroup gom tối đa 512 giá trị; tail lane nạp zero nhưng vẫn đi qua barrier.
+shared float sharedValues[512];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint blockBase = gl_WorkGroupID.x * 512u;
+    uint firstIndex = blockBase + lane;
+    uint secondIndex = firstIndex + 256u;
+
+    sharedValues[lane] = 0.0;
+    sharedValues[lane + 256u] = 0.0;
+    if (firstIndex < uint(uElementCount)) {
+        sharedValues[lane] = inputData[firstIndex];
+    }
+    if (secondIndex < uint(uElementCount)) {
+        sharedValues[lane + 256u] = inputData[secondIndex];
+    }
+    memoryBarrierShared();
+    barrier();
+
+    for (uint stride = 256u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+            sharedValues[lane] += sharedValues[lane + stride];
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+
+    if (lane == 0u) {
+        partialSums[gl_WorkGroupID.x] = sharedValues[0];
+    }
+}
+#else
+// Bài 3 sẽ thay thân shader tối thiểu này bằng cây reduction trong shared memory.
+void main() {
+}
+#endif

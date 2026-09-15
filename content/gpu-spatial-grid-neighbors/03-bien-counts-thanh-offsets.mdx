@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng exclusive scan để tìm đầu mỗi cell
+
+## Bài toán cần giải quyết
+
+`cellCounts` cho biết độ dài từng cell, nhưng chưa cho biết mỗi đoạn bắt đầu ở vị trí nào trong `sortedIndices`. Với counts `[2,0,3,1]`, các đoạn phải bắt đầu tại `[0,2,2,5]`. Đó chính là kết quả của exclusive scan, và ta sẽ tái sử dụng thuật toán ở Project 39 để tính hoàn toàn trên GPU.
+
+CPU có thể scan 9.216 count rất nhanh, nhưng đọc counts về rồi tải offsets lên lại sẽ buộc dữ liệu rời GPU giữa chừng. Ta sẽ dùng lại cây scan số nguyên của Project 39 và giữ block sums trên GPU.
+
+## Theo dõi một particle đi qua grid
+
+Với $c_i$ là count của cell $i$:
+
+$$
+offset_i = \sum_{j=0}^{i-1} c_j
+$$
+
+Đoạn CSR của cell `i` là `[offsets[i], offsets[i] + counts[i])`. Ta không cần mảng offsets dài `C+1`; sentinel tổng được kiểm bằng:
+
+$$
+offset_{C-1}+count_{C-1}=N
+$$
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="count-scan" />
+
+Đọc từng cặp ô theo câu: “cell này bắt đầu sau tổng occupancy của mọi cell đứng trước”. Hai cell liên tiếp có cùng offset khi cell trước rỗng; đó không phải lỗi.
+
+## Xây từng phần
+
+### Bước 1 — Tính các tầng scan từ số cell
+
+```cpp title="include/grid_math.hpp — makeScanHierarchy"
+inline std::vector<ScanLevel> makeScanHierarchy(std::size_t inputCount) {
+    std::vector<ScanLevel> levels{};
+    std::size_t currentCount = inputCount;
+    while (currentCount > 0U) {
+        const std::size_t blockCount = ceilDiv(currentCount, kScanBlockSpan);
+        levels.push_back({currentCount, blockCount});
+        if (blockCount == 1U) {
+            break;
+        }
+        currentCount = blockCount;
+    }
+    return levels;
+}
+```
+
+Grid mặc định có 9.216 cells: tầng đầu sinh 18 block sums, tầng hai sinh 1. Đây là scan hierarchy của **cells**, không phải của một triệu particles.
+
+### Bước 2 — Dùng cellOffsets làm đầu ra của tầng đầu
+
+```cpp title="include/gpu_scan.hpp — level zero output"
+if (index == 0U) {
+    level.scanBuffer = levelZeroOutput;
+    level.ownsScanBuffer = false;
+} else {
+    const GLsizeiptr scanBytes = static_cast<GLsizeiptr>(level.inputCount * sizeof(std::uint32_t));
+```
+
+`cellOffsets` do grid sở hữu. Các scan output đệ quy do `GpuScanHierarchy` sở hữu, vì vậy `ownsScanBuffer` ngăn cleanup xóa cùng buffer hai lần.
+
+### Bước 3 — Scan đi lên rồi cộng offset khi đi xuống
+
+```cpp title="include/gpu_scan.hpp — scan levels"
+GLuint source = inputBuffer;
+for (ScanLevelBuffers& level : hierarchy.levels) {
+    dispatchScanBlocks(
+        gl,
+        scanProgram,
+        source,
+        level.scanBuffer,
+        level.sumsBuffer,
+        level.inputCount
+    );
+    gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    source = level.sumsBuffer;
+}
+```
+
+Sau vòng đi lên, scan của 18 block sums đã hoàn chỉnh. Vòng reverse cộng block offsets vào output tầng dưới; không level nào đi qua CPU.
+
+### Bước 4 — Lưu tổng ở nút gốc trước khi đặt nó về 0
+
+`scan_uint.comp` dùng 256 lanes cho 512 uint. Upsweep ghi total ở `temporary[511]`; lane 0 ghi total vào block sums rồi đặt root zero; downsweep mới tạo exclusive output. Mọi lane, kể cả tail nạp zero, đều đi qua cùng `barrier()`.
+
+## Chạy cả chuỗi xử lý
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_40_checkpoint_3 project_40_tests
+```
+
+Checkpoint 3 chạy `clear → count → scan L0 → scan L1 → uniform add L0`, sau đó mới readback counts/offsets phục vụ bài học. Final sẽ nối thẳng offsets vào prepare-cursors.
+
+```bash title="Terminal — kiểm phép scan trên CPU"
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+## Cố tình làm hỏng grid
+
+1. Dùng inclusive scan. Cell 0 bắt đầu tại `counts[0]`, để trống đầu array và đẩy cell cuối vượt N.
+2. Quên đặt root về zero. Mỗi block output mang total của block thay vì prefix đứng trước.
+3. Đọc 18 block sum về để scan trên CPU. Kết quả có thể đúng, nhưng chuỗi xử lý không còn nằm trọn trên GPU.
+4. Xóa `barrier()` sau một mức upsweep. Mức sau có thể đọc partial sum chưa visible.
+
+## Tự nghiệm thu
+
+- [ ] `[2,0,3,1]` scan thành `[0,2,2,5]`.
+- [ ] Offset đầu bằng zero và offsets không giảm.
+- [ ] Offset cuối cộng count cuối bằng N.
+- [ ] Grid 9.216 cells có hierarchy 9.216 → 18 → 1 block.
+- [ ] Block sums không readback giữa scan passes.
+- [ ] Tail lane nạp zero nhưng vẫn đi qua mọi workgroup barrier.
+
+## Hướng mở rộng
+
+1. Tạo counts có nhiều cell rỗng liên tiếp và giải thích vì sao offsets lặp lại hợp lệ.
+2. Thêm CTest cho `cellCount=513` để buộc hai block và một phần đuôi gần rỗng.
+3. Đo riêng scan theo số cells, không theo số particles, rồi giải thích đồ thị.
+
+Bài 4 sẽ dùng offsets làm địa chỉ thật: mỗi particle lấy một slot độc quyền và scatter index vào đoạn CSR của cell mình.

@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tự dựng forward, right và up
+
+## Vấn đề cần giải quyết
+
+View transform đã biết cách nhìn từ camera, nhưng code chưa có câu trả lời trực tiếp cho ba câu hỏi: camera đang nhìn hướng nào, bên phải nằm ở đâu, và phía trên của khung hình là hướng nào? Không có các vector này, phím W/A/S/D chỉ có thể bám world axes như Arrow keys ở checkpoint 2.
+
+Trước khi dùng basis cho movement, ta sẽ dựng và kiểm chứng nó như một đối tượng toán học độc lập.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với yaw quanh Y và pitch dương nhìn lên:
+
+$$
+forward=(\sin yaw\cos pitch,\ \sin pitch,\ \cos yaw\cos pitch)
+$$
+
+FPS camera không roll nên right luôn nằm trên mặt phẳng XZ:
+
+$$
+right=(\cos yaw,\ 0,\ -\sin yaw)
+$$
+
+Up phải theo cùng orientation:
+
+$$
+up=(-\sin yaw\sin pitch,\ \cos pitch,\ -\cos yaw\sin pitch)
+$$
+
+Ba vector đúng phải có magnitude 1 và dot product từng đôi bằng 0 trong sai số số thực.
+
+<InteractiveLab demo="fps-camera" mode="camera-basis" />
+
+## Viết code từng bước
+
+### Bước 1 — Gom ba trục vào một kiểu dữ liệu
+
+```cpp title="include/lab.hpp — kiểu dữ liệu camera basis"
+struct CameraBasis {
+    Vec3 forward{};
+    Vec3 right{};
+    Vec3 up{};
+};
+```
+
+Trả cả ba cùng lúc đảm bảo mọi nơi dùng chung một quy ước yaw/pitch.
+
+### Bước 2 — Tính sin/cos đúng một lần
+
+```cpp title="include/lab.hpp — dựng basis từ yaw và pitch"
+inline CameraBasis cameraBasis(const FpsCamera& camera) {
+    const double sinYaw = std::sin(camera.yaw);
+    const double cosYaw = std::cos(camera.yaw);
+    const double sinPitch = std::sin(camera.pitch);
+    const double cosPitch = std::cos(camera.pitch);
+
+    return {
+        {sinYaw * cosPitch, sinPitch, cosYaw * cosPitch},
+        {cosYaw, 0.0, -sinYaw},
+        {-sinYaw * sinPitch, cosPitch, -cosYaw * sinPitch},
+    };
+}
+```
+
+Không gọi `normalize` ở đây. Công thức lượng giác phải tự sinh unit vectors; nếu cần normalize để che sai số lớn, rất có thể dấu hoặc thành phần đã viết sai.
+
+### Bước 3 — Tách hướng đi trên mặt sàn
+
+Người chơi nhìn lên nhưng phím W không nên làm camera bay. Ta giữ một forward chỉ phụ thuộc yaw:
+
+```cpp title="include/lab.hpp — forward dùng cho đi bộ"
+inline Vec3 groundForward(const FpsCamera& camera) {
+    return {std::sin(camera.yaw), 0.0, std::cos(camera.yaw)};
+}
+```
+
+`cameraBasis.forward` dùng cho hướng nhìn; `groundForward` dùng cho movement. Hai tên khác nhau ngăn việc vô tình trộn hai ý nghĩa.
+
+### Bước 4 — Đưa forward lên title để kiểm tra nhanh
+
+```cpp title="src/main.cpp — đọc camera forward trong runtime"
+const lab::CameraBasis basis = lab::cameraBasis(camera);
+std::snprintf(
+    title,
+    sizeof(title),
+    "P14 | forward (%.2f %.2f %.2f) | %zu segments | IJKL/arrows/R",
+    basis.forward.x,
+    basis.forward.y,
+    basis.forward.z,
+    visibleSegments
+);
+```
+
+## Ghép các phần lại
+
+```bash title="Terminal — build camera basis"
+cmake --build build --config Debug --target project_14_checkpoint_4
+```
+
+Đặt yaw 0°: forward là `(0,0,1)`. Quay yaw 90°: forward gần `(1,0,0)`. Tăng pitch: forward Y tăng, nhưng right Y vẫn bằng 0.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `right.z` từ `-sinYaw` thành `sinYaw`. Ở yaw 45°, xem dot(forward,right) rời khỏi 0 rồi hoàn tác.
+2. Giữ `up=(0,1,0)` khi pitch khác 0. Canvas sẽ cho thấy dot(forward,up) khác 0; khôi phục công thức up.
+3. Dùng full forward cho movement thử nghiệm trong Canvas khi pitch 60°. Dự đoán camera Y thay đổi thế nào, rồi trở về `groundForward`.
+
+## Tự kiểm tra kết quả
+
+- Ở pose mặc định: forward `(0,0,1)`, right `(1,0,0)`, up `(0,1,0)`.
+- Mỗi vector có magnitude gần 1 với sai số dưới $10^{-12}$.
+- Ba dot product từng đôi gần 0.
+- Yaw 90° đưa forward sang +X và right sang −Z.
+- Pitch không làm `groundForward.y` khác 0.
+
+## Bài tập mở rộng
+
+Viết một hàm trả handedness bằng `dot(cross(right, up), forward)`. Với quy ước hiện tại, ghi lại dấu của kết quả và giải thích nó liên quan thế nào tới thứ tự các trục.
+
+Bài tiếp theo biến input WASD thành velocity bằng `groundForward`, `right`, normalize và delta time.

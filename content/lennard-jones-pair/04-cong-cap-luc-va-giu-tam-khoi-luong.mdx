@@ -1,0 +1,124 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cộng cặp lực và theo dõi tâm khối lượng
+
+## Vấn đề cần giải quyết
+
+Bài trước đã tính được lực trên nguyên tử A và vẽ một mũi tên ngược chiều trên B. Tuy nhiên, hình vẽ đối xứng chưa đủ để chứng minh phần cập nhật trạng thái giữ đúng quan hệ vật lý. Nếu code vô tình tính cặp A–B rồi lại tính B–A, lực sẽ bị cộng hai lần. Nếu mỗi nguyên tử tự gọi công thức riêng, sai số làm tròn hoặc quy ước `delta` không thống nhất có thể khiến tổng nội lực không còn bằng 0.
+
+Ta sẽ dùng một lần tính tương tác để tạo hai lực, rồi theo dõi ba đại lượng độc lập: tổng lực, động lượng và tâm khối lượng. Ba phép đo này phát hiện được những lỗi rất khó nhận ra nếu chỉ nhìn chuyển động trên màn hình.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với một lực nội bộ trong hệ bảo toàn:
+
+$$
+\mathbf{F}_A + \mathbf{F}_B = \mathbf{0}
+$$
+
+Đó là định luật III Newton. Tổng linear momentum của cặp là:
+
+$$
+\mathbf{p}=m_A\mathbf{v}_A+m_B\mathbf{v}_B
+$$
+
+Vì tổng ngoại lực bằng 0 nên $\mathbf{p}$ phải không đổi. Vận tốc tâm khối lượng thỏa:
+
+$$
+\mathbf{v}_{cm}=\frac{\mathbf{p}}{m_A+m_B}
+$$
+
+Hai lực bằng nhau không có nghĩa hai gia tốc luôn bằng nhau. Theo $\mathbf{a}=\mathbf{F}/m$, nguyên tử nhẹ nhận gia tốc lớn hơn. Project mặc định dùng hai khối lượng bằng nhau để tâm khối lượng đứng tại gốc, nhưng code không được dựa vào giả định đó khi tính linear momentum.
+
+<InteractiveLab demo="lennard-jones-pair" mode="pair-invariants" />
+
+Đổi `Khối lượng mỗi nguyên tử`, kéo cặp theo hướng chéo và đọc `Tổng lực FA+FB`. Giá trị phải gần 0 ở mọi hướng. Dấu cộng xanh là center of mass; khi trạng thái đối xứng và vận tốc bằng 0, nó đứng yên dù lực trên từng nguyên tử không bằng 0.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo hai lực từ một lần tính tương tác
+
+```cpp title="include/lennard_jones.hpp — accumulatePairForces"
+inline PairForces accumulatePairForces(
+    const PairState& state,
+    const LennardJonesParameters& parameters
+) {
+    const PairInteraction interaction = evaluatePair(state, parameters);
+    if (!interaction.valid) {
+        return {};
+    }
+    return {true, interaction.forceOnA, interaction.forceOnB};
+}
+```
+
+Với hệ nhiều hạt ở Project 42, vòng lặp sẽ duyệt `i < j`, gọi hàm cặp một lần rồi cộng hai kết quả vào hai bộ cộng dồn lực. Project 41 giữ đúng cấu trúc đó dù mới chỉ có một cặp (unordered pair).
+
+### Bước 2 — Tính động lượng từ vận tốc và khối lượng thật
+
+```cpp title="include/lennard_jones.hpp — linearMomentum"
+inline Vec2 linearMomentum(const PairState& state) {
+    return add(
+        scale(state.atomA.velocity, state.atomA.mass),
+        scale(state.atomB.velocity, state.atomB.mass)
+    );
+}
+```
+
+Không dùng `velocityA + velocityB` trừ khi hai khối lượng chắc chắn bằng nhau. Động lượng mới là đại lượng bảo toàn, không phải tổng vận tốc.
+
+### Bước 3 — Nối động lượng với chuyển động của tâm khối lượng
+
+```cpp title="include/lennard_jones.hpp — centerOfMassVelocity"
+inline Vec2 centerOfMassVelocity(const PairState& state) {
+    const double mass = totalMass(state);
+    if (!std::isfinite(mass) || mass <= kDistanceEpsilon) {
+        return {};
+    }
+    return scale(linearMomentum(state), 1.0 / mass);
+}
+```
+
+Hai lực nội bộ đối nhau làm tổng động lượng được bảo toàn. Vì thế tâm khối lượng sẽ chuyển động thẳng đều. Trong preset hiện tại, động lượng ban đầu bằng zero nên vận tốc của tâm khối lượng cũng bằng zero và nó đứng yên. Nếu cả hai nguyên tử cùng có thêm một vận tốc ban đầu, tâm khối lượng vẫn chuyển động nhưng phải đi thẳng với vận tốc không đổi.
+
+### Bước 4 — Kiểm tổng lực bằng độ dài vector, không chỉ một thành phần
+
+```cpp title="tests/tests.cpp — Newton III"
+check(
+    lj::length(lj::add(interaction.forceOnA, interaction.forceOnB)) < 1.0e-12,
+    "pair forces are exactly equal and opposite"
+);
+```
+
+Test dùng độ dài vector tổng. Chỉ kiểm `x` sẽ bỏ sót lỗi khi người dùng kéo cặp theo đường chéo.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 4"
+cmake --build build --config Debug --target project_41_checkpoint_4 project_41_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Checkpoint 4 chưa cho trạng thái chạy theo thời gian. Mục tiêu của bài này là kiểm tra một lần tính tương tác: hai lực phải đối nhau, động lượng ban đầu phải đúng và tâm khối lượng phải được tính từ khối lượng thật thay vì tọa độ pixel.
+
+## Thử làm sai để hiểu đúng
+
+1. Trả `{forceOnA, forceOnA}` thay vì đổi dấu lực trên B. Tổng lực có độ lớn gấp đôi một lực; hoàn tác sau khi đọc title.
+2. Gọi `evaluatePair` hai lần và cộng cả hai kết quả lên mỗi atom. Hướng vẫn đúng nhưng độ lớn tăng gấp đôi; CTest về potential không bắt lỗi này, còn acceleration ở bài sau sẽ sai.
+3. Tính động lượng bằng tổng vận tốc. Với hai khối lượng khác nhau và vận tốc đối nhau, code báo 0 dù động lượng thật khác 0; hãy khôi phục hệ số khối lượng.
+
+## Tự kiểm tra kết quả
+
+- [ ] `forceOnA + forceOnB` có độ dài dưới ngưỡng sai số.
+- [ ] Hai lực nằm trên cùng một đường thẳng và ngược chiều.
+- [ ] Hai vận tốc đối nhau chỉ tạo động lượng bằng 0 khi tổng có trọng số theo khối lượng bằng 0.
+- [ ] `centerOfMassVelocity = momentum / totalMass`.
+- [ ] Đổi kích thước cửa sổ hoặc đổi hướng cặp không làm đại lượng bất biến phụ thuộc pixel.
+- [ ] Một unordered pair chỉ được tính đúng một lần trong bước cộng lực.
+
+## Bài tập mở rộng
+
+1. Tạo hai khối lượng khác nhau nhưng chọn vận tốc để tổng động lượng bằng 0.
+2. Viết phép kiểm tra cho center of mass chuyển động thẳng đều khi động lượng ban đầu khác 0; dùng trực tiếp `centerOfMassVelocity` để tính vị trí kỳ vọng.
+3. Mở rộng `PairForces` để giữ `potential`, tránh gọi lại `evaluatePair` khi đo năng lượng.
+
+Bài tiếp theo cho cặp hạt chuyển động. Ta sẽ dùng lực ở cả đầu lẫn cuối mỗi bước Velocity Verlet, thay vì giữ nguyên lực đầu bước trong suốt một khung hình có độ dài bất kỳ.

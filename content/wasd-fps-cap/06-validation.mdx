@@ -1,0 +1,182 @@
+# Kiểm chứng: cùng thời gian phải đi cùng quãng đường
+
+## Vấn đề cần giải quyết
+
+Quan sát ô vuông rồi kết luận “có vẻ đi đều” vẫn chưa đủ thuyết phục. Ta có thể nhả phím sớm hoặc muộn vài phần mười giây, hình ảnh trên màn hình phải quy về pixel và ô vuông còn có thể chạm mép cửa sổ. Để kiểm tra chính xác, ta cần loại bỏ mắt người, bàn phím và cửa sổ SDL khỏi phép đo.
+
+Còn một điểm dễ bỏ sót: `assert(...)` thường bị vô hiệu hóa khi cấu hình Release định nghĩa `NDEBUG`. Một chương trình chỉ dùng `assert` có thể báo thành công dù không kiểm tra bất kỳ điều kiện nào. Vì vậy, project dùng hàm `check` tự viết. Hàm này luôn chạy ở cả Debug lẫn Release và trả mã lỗi để CTest biết bài kiểm tra có thất bại hay không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba dãy thời gian sau đều mô phỏng đúng năm giây:
+
+```text
+150 × 1/30 s = 5 s
+300 × 1/60 s = 5 s
+600 × 1/120 s = 5 s
+```
+
+Với tốc độ 180 pixel/giây, cả ba phải cho kết quả 900 pixel. Phép mô phỏng không có biên cửa sổ, vì vậy `std::clamp` ở phần hiển thị không can thiệp vào quãng đường. Do các số như `1/30` không thể biểu diễn hoàn toàn chính xác bằng số thực nhị phân, ta so sánh với một sai số `epsilon` nhỏ thay vì dùng `==`.
+
+Điều quan trọng nhất là test phải đi qua đúng hàm mà ứng dụng đang dùng:
+
+```text
+timeline dt ─→ simulate ─→ update ─→ sanitizeDeltaTime ─→ position
+                              ↑
+                       game loop cũng gọi
+```
+
+Nếu `simulate` tự chép lại công thức `position += velocity * dt`, test có thể vẫn báo thành công dù hàm `update` thật đã bị sửa hỏng. Trong code chuẩn, `simulate` gọi trực tiếp `update` để chỉ tồn tại một cách cài đặt công thức.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo chương trình test hoạt động cả ở Release
+
+Tạo `tests/tests.cpp`, thêm các header cần dùng rồi viết hai hàm hỗ trợ nhỏ:
+
+```cpp title="tests/tests.cpp — chương trình test không phụ thuộc assert"
+#include "lab.hpp"
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <string_view>
+
+namespace {
+int failures = 0;
+
+bool nearlyEqual(double left, double right, double epsilon = 1e-9) {
+    return std::abs(left - right) < epsilon;
+}
+
+void check(bool condition, std::string_view label) {
+    if (condition) {
+        return;
+    }
+    std::cerr << "FAILED: " << label << '\n';
+    ++failures;
+}
+} // namespace
+```
+
+`check` không dừng chương trình ngay ở lỗi đầu tiên. Nó in tên của từng điều kiện bị sai rồi tăng `failures`, nhờ vậy một lần chạy có thể cho ta biết nhiều vấn đề. Cuối `main`, chương trình trả `EXIT_FAILURE` nếu bộ đếm khác 0. CTest dựa vào mã trả về này để đánh dấu kết quả thất bại.
+
+```cpp title="tests/tests.cpp — trả kết quả cho CTest"
+if (failures != 0) {
+    std::cerr << failures << " validation check(s) failed\n";
+    return EXIT_FAILURE;
+}
+std::cout << "All Project 02 validation checks passed\n";
+return EXIT_SUCCESS;
+```
+
+### Bước 2 — Tạo ba dãy `dt` có cùng tổng thời gian
+
+```cpp title="tests/tests.cpp — dữ liệu 30/60/120 FPS"
+std::array<double, 150> thirtyFps{};
+thirtyFps.fill(1.0 / 30.0);
+std::array<double, 300> sixtyFps{};
+sixtyFps.fill(1.0 / 60.0);
+std::array<double, 600> oneHundredTwentyFps{};
+oneHundredTwentyFps.fill(1.0 / 120.0);
+constexpr double expectedDistance = 180.0 * 5.0;
+check(nearlyEqual(lab::simulate(thirtyFps), expectedDistance), "30 FPS travels 900 px in five seconds");
+check(nearlyEqual(lab::simulate(thirtyFps), lab::simulate(sixtyFps)), "30 and 60 FPS travel the same distance");
+check(nearlyEqual(lab::simulate(sixtyFps), lab::simulate(oneHundredTwentyFps)), "60 and 120 FPS travel the same distance");
+```
+
+Không nên chỉ kiểm tra trường hợp 60 FPS với con số mong đợi. Công thức sai `speed / 60` vẫn có thể vượt qua trường hợp này. Hai phép so sánh 30–60 và 60–120 mới phát hiện được kết quả đang vô tình phụ thuộc vào số phần tử trong dãy.
+
+### Bước 3 — Kiểm tra một dãy `dt` không đều
+
+Thời gian giữa các khung hình trong thực tế hiếm khi đều nhau tuyệt đối. Dãy sau có các bước lớn nhỏ khác nhau nhưng tổng vẫn đúng `0.1` giây, nên quãng đường phải là `180 × 0.1 = 18` pixel:
+
+```cpp title="tests/tests.cpp — timeline không đều"
+const std::array unevenTimeline{
+    0.010,
+    0.020,
+    0.005,
+    0.025,
+    0.040,
+};
+check(nearlyEqual(lab::simulate(unevenTimeline), 18.0), "uneven 0.1-second timeline travels 18 px");
+```
+
+Mọi phần tử đều nhỏ hơn `0.05`, vì vậy test này chỉ kiểm tra việc cộng dồn chuyển động theo thời gian, không vô tình kích hoạt giới hạn `dt`.
+
+### Bước 4 — Kiểm tra cả hai giới hạn của `dt`
+
+```cpp title="tests/tests.cpp — dt lớn và dt âm"
+lab::Vec2 position{};
+lab::update(position, {100.0, 0.0}, 0.2);
+check(nearlyEqual(position.x, 5.0), "large dt is clamped to 0.05 seconds");
+lab::update(position, {100.0, 0.0}, -1.0);
+check(nearlyEqual(position.x, 5.0), "negative dt is clamped to zero");
+```
+
+Lần gọi đầu chỉ được phép di chuyển `100 × 0.05 = 5` pixel. Lần gọi thứ hai phải giữ nguyên vị trí vì thời gian âm được đổi thành 0. Việc gọi trực tiếp `lab::update` cũng xác nhận quy tắc an toàn nằm trong chính hàm cập nhật, không bị giấu ở đâu đó trong vòng lặp SDL.
+
+### Bước 5 — Kiểm tra chuyển động chéo từ đầu đến cuối
+
+```cpp title="tests/tests.cpp — normalize và quãng đường chéo"
+const lab::Vec2 diagonal = lab::normalize({1.0, 1.0});
+check(nearlyEqual(lab::length(diagonal), 1.0), "diagonal direction is normalized");
+check(nearlyEqual(lab::length(lab::normalize({0.0, 0.0})), 0.0), "zero direction stays finite");
+lab::Vec2 diagonalPosition{};
+const lab::Vec2 diagonalVelocity = diagonal * 180.0;
+for (double dt : sixtyFps) {
+    lab::update(diagonalPosition, diagonalVelocity, dt);
+}
+check(nearlyEqual(lab::length(diagonalPosition), expectedDistance), "diagonal movement keeps the configured speed");
+```
+
+Điều kiện `length(diagonal) == 1` chỉ kiểm tra riêng hàm `normalize`. Vòng lặp cuối đi xa hơn: nó đưa hướng đã chuẩn hóa qua bước tính `velocity`, gọi `update` trong năm giây và xác nhận quãng đường cuối cùng vẫn đúng với tốc độ đã chọn.
+
+### Bước 6 — Build và chạy test ở cả Debug lẫn Release
+
+```bash title="Terminal — configure Project 02"
+cmake -S examples/project-02-wasd-fps-cap -B examples/project-02-wasd-fps-cap/build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
+```
+
+```bash title="Terminal — test Debug"
+cmake --build examples/project-02-wasd-fps-cap/build --config Debug
+ctest --test-dir examples/project-02-wasd-fps-cap/build -C Debug --output-on-failure
+```
+
+```bash title="Terminal — test Release"
+cmake --build examples/project-02-wasd-fps-cap/build --config Release
+ctest --test-dir examples/project-02-wasd-fps-cap/build -C Release --output-on-failure
+```
+
+Chương trình test chỉ dùng `lab.hpp`, không liên kết SDL và không mở cửa sổ, nên chạy rất nhanh cả trên máy cá nhân lẫn CI. Việc chạy thêm cấu hình Release là bắt buộc: nếu sau này ai đó đổi `check` thành `assert`, lần chạy này sẽ giúp phát hiện bộ test không còn thực sự kiểm tra gì.
+
+## Ghép các phần lại
+
+Trong ứng dụng hoàn chỉnh, mỗi phần có một trách nhiệm rõ ràng. SDL đọc bàn phím và đo thời gian; `Vec2` giúp chuyển hướng thành vận tốc; `update` thay đổi vị trí theo `dt`; renderer đọc vị trí để vẽ; còn bộ giới hạn FPS chỉ nghỉ trong phần thời gian còn dư. Chương trình test cũng gọi `update`, nhưng thay đồng hồ SDL bằng những dãy `dt` đã biết trước.
+
+Sau khi test vượt qua ở cả hai cấu hình, hãy chạy target `project_2_final`. Kiểm tra lần lượt `WASD`, `1`/`2`/`3`, `0`, `F`, `R` và `Escape`. Phần **Mã nguồn hoàn chỉnh** ở cuối trang chứa nguyên văn `CMakeLists.txt`, `include/lab.hpp`, `src/main.cpp` và `tests/tests.cpp` đã được dùng để build. Bạn có thể lấy cả project để chạy, không phải tự đoán cách ghép những đoạn code rời rạc.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `update` thành `position += velocity * (1.0 / 60.0)` rồi chạy CTest. Các dãy thời gian phải thất bại vì `simulate` gọi đúng hàm bạn vừa sửa sai.
+2. Bỏ normalize trong `readDirection`. Phép kiểm tra quãng đường chéo phải báo rằng đi chéo nhanh hơn đi thẳng.
+3. Bỏ `std::clamp` trong `sanitizeDeltaTime`. Thông báo `large dt...` phải chỉ ra đúng điều kiện vừa bị phá vỡ.
+
+Sau từng thí nghiệm, hoàn tác thay đổi và chạy lại cả Debug lẫn Release để xác nhận bộ test trở về màu xanh.
+
+## Tự kiểm tra kết quả
+
+- CTest báo `project_2_validation` passed ở cả Debug và Release.
+- Ba dãy 30/60/120 FPS đều cho 900 pixel sau năm giây.
+- Dãy không đều dài 0,1 giây cho 18 pixel.
+- `dt = 0.2` chỉ tạo bước tương ứng 0.05 giây; `dt` âm không làm vị trí chạy lùi.
+- Đi chéo năm giây có cùng quãng đường 900 pixel như đi ngang.
+- Bản hoàn chỉnh chọn được 30/60/120 FPS hoặc không giới hạn mà tốc độ theo pixel/giây không đổi.
+
+## Bài tập mở rộng
+
+Hãy thêm test tại đúng điểm biên `dt == kMaximumDeltaTime`. Sau đó tạo một dãy dài một giây gồm nhiều bước không đều, trong đó không bước nào vượt `0.05`; kiểm tra tổng quãng đường ở tốc độ 180 pixel/giây rồi lặp lại với 75 pixel/giây.
+
+Nếu muốn đi xa hơn, hãy tách phép tính thời gian nghỉ của bộ giới hạn FPS thành một hàm độc lập. Viết test cho ba trường hợp: khung hình còn dư thời gian, vừa khít mục tiêu và đã chậm hơn mục tiêu.
+
+Project tiếp theo dùng cùng nguyên tắc tách phần toán khỏi SDL để giải quyết nét vẽ chuột bị đứt.

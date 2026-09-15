@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lấy mẫu tại tâm pixel và quyết định coverage
+
+## Vấn đề cần giải quyết
+
+Một pixel không phải điểm toán học; nó là một ô vuông nhỏ. Rasterizer một mẫu cần chọn một vị trí đại diện nhất quán. Nếu dùng `(x,y)`, ta đang kiểm góc trên trái của ô. Project này dùng tâm pixel `(x+0.5,y+0.5)`.
+
+Sai khác nửa pixel gần như không thấy ở giữa triangle, nhưng nó quyết định hàng pixel sát cạnh được nhận hay loại. Đây là nguyên nhân quen thuộc của hình bị lệch hoặc hai cạnh đối xứng lại cho coverage khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sau `normalizePositiveWinding`, sample $P$ nằm trong hoặc trên biên triangle khi:
+
+$$
+E_{AB}(P)\ge0\quad\land\quad E_{BC}(P)\ge0\quad\land\quad E_{CA}(P)\ge0
+$$
+
+Checkpoint này dùng biên inclusive. Bài 6 sẽ tinh chỉnh trường hợp edge value bằng zero để hai triangle chung cạnh không cùng nhận sample.
+
+<InteractiveLab demo="triangle-raster" mode="triangle-center" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo tâm pixel ở đúng nửa đơn vị
+
+```cpp title="include/lab.hpp — quy ước sample một lần cho toàn rasterizer"
+inline Vec2 pixelCenter(int x, int y) {
+    return {double(x) + 0.5, double(y) + 0.5};
+}
+```
+
+Không cộng `0.5` rải rác trong `main.cpp`. Một hàm dùng chung giúp C++ test và Canvas lab giữ đúng cùng quy ước.
+
+### Bước 2 — Tính area trước ba phép chia
+
+```cpp title="include/lab.hpp — dừng sớm khi area gần zero"
+triangle = normalizePositiveWinding(triangle);
+CoverageSample sample{};
+sample.position = samplePosition;
+const double area = signedDoubleArea(triangle);
+if (std::abs(area) <= 1e-9) {
+    return sample;
+}
+```
+
+`sample` mặc định có `inside=false` và weight bằng 0. Triangle suy biến vì vậy rời hàm an toàn mà không tạo `NaN`.
+
+### Bước 3 — Giữ cả ba edge value
+
+```cpp title="include/lab.hpp — ba phép thử half-plane"
+sample.edgeAB = orient2D(triangle.a, triangle.b, samplePosition);
+sample.edgeBC = orient2D(triangle.b, triangle.c, samplePosition);
+sample.edgeCA = orient2D(triangle.c, triangle.a, samplePosition);
+```
+
+Ta chưa thu gọn thành một biểu thức bool. Edge values còn được dùng để giải thích sample, tính barycentric weights và kiểm lỗi.
+
+### Bước 4 — Ghép quyết định inclusive
+
+```cpp title="include/lab.hpp — coverage ở checkpoint 4"
+static_cast<void>(rule);
+sample.inside = sample.edgeAB >= -1e-9 && sample.edgeBC >= -1e-9 && sample.edgeCA >= -1e-9;
+```
+
+`-epsilon` tránh một sample toán học nằm trên biên bị loại chỉ vì sai số dấu cực nhỏ. `rule` đã có trong interface để checkpoint sau mở rộng mà không phải đổi toàn bộ lời gọi.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build pixel-center checkpoint"
+cmake --build build --config Debug --target project_16_checkpoint_4
+```
+
+Click một pixel sát cạnh rồi chuyển Canvas lab giữa `corner` và `center`. Marker xanh nghĩa là được phủ, đỏ nghĩa là bị loại; title bar cho ba con số giúp giải thích quyết định.
+
+## Thử làm sai để hiểu đúng
+
+1. Trả `{double(x),double(y)}` trong `pixelCenter`. Di chuyển một cạnh qua hàng pixel và ghi lại lúc coverage đổi; sau đó trả offset 0.5.
+2. Dùng `||` giữa ba edge test. Mọi sample chỉ cần nằm đúng phía một cạnh sẽ được nhận, gần như cả bounding box bị tô.
+3. Chia edge value cho area trước khi kiểm degenerate. Preset ba điểm thẳng hàng tạo `NaN` hoặc infinity; phục hồi early return.
+
+## Tự kiểm tra kết quả
+
+- Pixel `(1,1)` có sample position `(1.5,1.5)`.
+- Coverage luôn chạy trên triangle đã chuẩn hóa winding.
+- Ba edge values được lưu riêng trong `CoverageSample`.
+- Sample chỉ được nhận khi cả ba half-plane chấp nhận nó.
+- Triangle suy biến trả `inside=false` và weight hữu hạn bằng 0.
+- Đảo B/C không thay kết quả coverage của cùng sample.
+
+## Bài tập mở rộng
+
+Thêm chế độ 4-sample đơn giản tại bốn điểm quanh tâm pixel và tô độ sáng theo số sample được nhận. Đây là một bước đầu để hiểu anti-aliasing, nhưng không thay thuật toán một mẫu của source chính.
+
+Bài tiếp theo sẽ đặt coverage test vào hai vòng `for` qua bounding box và lần đầu tô kín tam giác.

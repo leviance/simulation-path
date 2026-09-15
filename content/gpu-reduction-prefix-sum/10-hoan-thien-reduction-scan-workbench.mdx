@@ -1,0 +1,206 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Reduction & Scan Workbench
+
+## Điều khó nằm ở đâu?
+
+Các kernel đã chạy đúng riêng lẻ; bài cuối sẽ ghép chúng thành một workbench hoàn chỉnh. Khi người dùng đổi phép toán, số phần tử hoặc seed, giao diện và buffer trên GPU phải chuyển trạng thái cùng nhau. Ta cũng sẽ xử lý các lỗi dễ xuất hiện ở bước tích hợp: áp dụng count mới trước khi cấp phát xong, giữ output cũ khi đổi operation, dùng lại query slot quá sớm hoặc xóa buffer sau khi context đã bị hủy.
+
+Workbench không có simulation time. Nó chỉ cần recompute khi state đổi hoặc người dùng yêu cầu. Chạy năm dispatch scan mỗi frame dù input đứng yên vừa lãng phí vừa làm timing khó đọc.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Final có ba đường hữu hạn:
+
+```text
+operation/count/seed đổi:
+validate capability → tạo input → allocate hierarchy → dispatch graph → final readback → validate
+
+nhấn V:
+dispatch lại graph hiện tại → readback → named validation
+
+nhấn B:
+submit tối đa 1 graph/frame → đủ 9 available queries → dừng hoặc hết deadline
+```
+
+Không đường nào có vòng benchmark vô hạn. Event loop có window chỉ chạy thủ công; CTest chỉ include `reduction_math.hpp` và kết thúc ngay.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="reduction-scan-final" />
+
+Đổi Reduction/Exclusive Scan và bốn preset. Canvas mô hình hóa pass graph; source C++ mới dispatch GPU thật. Dòng timing trong Canvas được ghi rõ là mô hình, không phải benchmark trình duyệt.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Chỉ áp dụng cấu hình mới sau khi mọi bước thành công
+
+```cpp title="src/main.cpp — thay dữ liệu đang chạy một cách an toàn"
+if (!engine.uploadInput(gl, candidateInput, diagnostics)) {
+    return false;
+}
+if (!runCurrentOperation()) {
+    const std::string candidateFailure = diagnostics;
+    std::string rollbackDiagnostics{};
+    bool rollbackPassed = engine.uploadInput(gl, input, rollbackDiagnostics);
+    if (rollbackPassed) {
+        rollbackPassed = runCurrentOperation();
+        rollbackDiagnostics = diagnostics;
+    }
+    diagnostics = candidateFailure;
+    if (rollbackPassed) {
+        diagnostics += " The previous workload was restored.";
+    } else {
+        diagnostics += " Rollback also failed: " + rollbackDiagnostics;
+    }
+    return false;
+}
+
+input = std::move(candidateInput);
+inputCount = requestedCount;
+seed = requestedSeed;
+return true;
+```
+
+Ngay trước đoạn này, chương trình đã kiểm tra giới hạn GPU và tạo `candidateInput` trong `try/catch`. Engine chỉ thay buffer đang dùng sau khi mọi lần cấp phát thành công. Nếu dữ liệu mới vẫn lỗi lúc dispatch hoặc readback, lambda sẽ nạp lại input cũ và chạy lại cấu hình cũ trước khi trả lỗi. Count và seed trên giao diện chỉ đổi sau khi cấu hình mới đã chạy và được kiểm tra thành công.
+
+### Bước 2 — Dùng một hàm chọn thuật toán, không lặp code điều khiển
+
+```cpp title="src/main.cpp — runCurrentOperation"
+if (operation == lab::Operation::exclusiveScan) {
+    return engine.runExclusiveScan(gl, scanOutput, diagnostics);
+}
+scanOutput.clear();
+return engine.runReduction(gl, reductionResult, diagnostics);
+```
+
+Tab, V, count preset và benchmark đều gọi cùng đường này. Không có một shader path “để hiển thị” khác shader path “để validate”.
+
+### Bước 3 — Mọi thao tác đều có giới hạn dừng rõ ràng
+
+Final hỗ trợ:
+
+- `Tab`: Reduction / Exclusive Scan;
+- `1–4`: 8, 257, 65.537, 1.000.003 phần tử;
+- `S`: tăng seed; `R`: về seed 39;
+- `V`: chạy và in validation;
+- `B`: bật/hủy benchmark chín sample chạy qua nhiều frame;
+- `Esc`: thoát.
+
+```cpp title="src/main.cpp — các trạng thái của benchmark"
+if (key == SDLK_B) {
+    if (benchmarkActive) {
+        benchmarkActive = false;
+        diagnostics = "Benchmark cancelled by the user.";
+    } else {
+        benchmarkActive = true;
+        benchmarkPrepared = false;
+        benchmarkSubmitted = 0U;
+        benchmarkStartedTicks = SDL_GetTicksNS();
+        diagnostics = "Benchmark queued; the event loop remains responsive.";
+    }
+    std::cout << diagnostics << '\n';
+    continue;
+}
+```
+
+Mỗi frame, app poll query cũ rồi mới quyết định có submit lượt mới hay không:
+
+```cpp title="src/main.cpp — submit và hoàn tất benchmark"
+engine.pollTiming(gl);
+if (running && benchmarkActive) {
+    const std::uint64_t benchmarkNow = SDL_GetTicksNS();
+    if (benchmarkNow - benchmarkStartedTicks > kBenchmarkTimeoutNanoseconds) {
+        benchmarkActive = false;
+        diagnostics = "Benchmark stopped after the 10-second safety deadline.";
+        std::cerr << diagnostics << '\n';
+    } else if (!benchmarkPrepared) {
+        benchmarkPrepared = engine.clearTimingSamplesWhenIdle();
+    } else if (benchmarkSubmitted < kBenchmarkSampleCount) {
+        if (!runCurrentOperation()) {
+            benchmarkActive = false;
+            std::cerr << diagnostics << '\n';
+        } else if (engine.lastTimingSubmitted()) {
+            ++benchmarkSubmitted;
+        }
+    } else if (
+        engine.pendingQueries() == 0U &&
+        engine.timingSampleCount() == kBenchmarkSampleCount
+    ) {
+        benchmarkActive = false;
+        diagnostics = "Benchmark completed with exactly nine available GPU samples.";
+        std::cout << diagnostics << '\n';
+    }
+}
+```
+
+Không còn vòng `for` chạy chín lần ngay trong keyboard callback. Nếu cả bốn query slot đều đang chờ, chương trình bỏ qua lượt đo mới và thử lại ở frame sau. Nhờ vậy input và present vẫn hoạt động, còn benchmark tự dừng sau 10 giây.
+
+### Bước 4 — Thanh tiêu đề đọc trạng thái thật từ engine
+
+Title báo operation, `N`, `passTrace().size()`, median GPU time, maximum error, validation và pending query count. Nó không hard-code “5 pass” vì Reduction chỉ có 3 và preset nhỏ có ít level hơn.
+
+### Bước 5 — Dọn tài nguyên GPU trước khi hủy context
+
+```cpp title="src/main.cpp — shutdown"
+// Cleanup query, hierarchy buffers và programs khi OpenGL context vẫn còn current.
+engine.destroy(gl);
+destroyWindowAndContext(window, context);
+return EXIT_SUCCESS;
+```
+
+`engine.destroy` xóa query ring, scan/sums/scratch/input buffers rồi ba programs. Sau đó mới hủy context, window và SDL.
+
+## Chạy checkpoint và đọc kết quả
+
+Phần **Toàn bộ mã nguồn của dự án** phía dưới được sinh từ final snapshot giống hệt gói ZIP. Các file chính:
+
+- `reduction_math.hpp`: input, bản tính CPU, các tầng xử lý, giới hạn phần cứng và phép kiểm tra;
+- `gl_api.hpp`: entry points OpenGL 4.3 qua SDL;
+- `compute_program.hpp`: đọc/compile/link shader với diagnostics;
+- `reduction_gpu_engine.hpp`: buffers, reduction/scan graph, barriers và query ring;
+- `reduce.comp`, `scan_blocks.comp`, `uniform_add.comp`: ba compute kernels;
+- `main.cpp`: lifecycle, controls, visualization và title;
+- `tests.cpp`: CTest thuần CPU.
+
+```bash title="Terminal — Debug final"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_39_final project_39_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — Release final"
+cmake --build build --config Release --target project_39_final project_39_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Chạy `project_39_final.exe` thủ công vì nó có window/event loop. CTest không mở window, không tạo OpenGL context và không benchmark GPU.
+
+## Cố tình phá thuật toán
+
+1. Tính lại ở mọi frame dù dữ liệu không đổi. Một công cụ tĩnh bỗng tiêu tốn GPU liên tục mà không có lý do.
+2. Chuyển sang reduction nhưng giữ `scanOutput` cũ. Visualization và title nói hai state khác nhau.
+3. Đổi count trước khi kiểm tra giới hạn và cấp phát. Nếu tạo buffer mới thất bại, phần vẽ hoặc readback có thể dùng count mới với buffer cũ.
+4. Cho B chạy đến khi “đủ ổn định” mà không có sample limit. App khó dừng và test có thể treo.
+5. Dùng query result blocking để title luôn mới. UI làm chậm chính graph cần đo.
+6. Xóa context trước `engine.destroy`. Các `glDelete*` không còn context hợp lệ.
+
+## Checklist hoàn thành
+
+- [ ] Tab đổi đúng graph và xóa output không còn phù hợp.
+- [ ] Preset 1.000.003 reduction có ba pass, scan có năm pass.
+- [ ] 257 phần tử zero-pad 255 giá trị nhưng không barrier divergence.
+- [ ] R tái lập seed 39; S tạo input mới có thể tái hiện.
+- [ ] Phím V báo NaN/Inf, vị trí sai đầu tiên, sai số lớn nhất và tổng cuối có nhất quán hay không.
+- [ ] B thu đúng chín timing results qua nhiều frame; có thể hủy và có deadline 10 giây.
+- [ ] Intermediate sums/offsets không readback trong graph chính.
+- [ ] Query, buffers và programs bị xóa trước OpenGL context.
+- [ ] Debug và Release CTest đều kết thúc với timeout 20 giây.
+- [ ] Source hiển thị cuối bài khớp starter/checkpoints/final trong ZIP.
+
+## Bài tập để hiểu sâu hơn
+
+1. Dùng exclusive scan của mask 0/1 để tạo địa chỉ compaction cho các phần tử được chọn.
+2. Thêm segmented scan với cờ đánh dấu đầu đoạn; trước tiên hãy viết bản CPU và phép kiểm tra ranh giới giữa các đoạn.
+3. Ghi CSV gồm operation, count, pass count, GPU median, end-to-end CPU time và validation.
+4. Thay float bằng cặp `(sum, count)` để tính mean bằng reduction có kiểu record riêng.
+
+Project 40 sẽ dùng chính tư duy của reduction/scan để xây grid và tìm hàng xóm song song trong “thành phố hạt”. Khi đó prefix sum không còn là kết quả cuối cùng; nó trở thành bước tạo offsets cho một chuỗi xử lý GPU lớn hơn.

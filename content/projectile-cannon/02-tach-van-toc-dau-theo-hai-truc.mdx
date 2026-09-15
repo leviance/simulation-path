@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tách vận tốc đầu theo hai trục
+
+## Vấn đề cần giải quyết
+
+Checkpoint 1 đã tạo được một mũi tên ngắm, nhưng “28 m/s ở góc 50°” chưa phải dạng thuận tiện để cập nhật position. Chuyển động theo X và Y có quy luật khác nhau: X không có acceleration, còn Y bị gravity kéo xuống. Vì vậy ta cần đổi initial velocity thành hai component độc lập.
+
+Mục tiêu của bài không phải học thuộc `cos` đi với X và `sin` đi với Y. Ta sẽ vẽ phép cộng vector ngay trên bãi bắn, rồi kiểm tra chiều ngược lại bằng `hypot` và `atan2`. Khi cả hai đường đi khớp nhau, các công thức mới trở thành một mô hình có thể tin cậy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Angle của project được đo từ trục +X và tính bằng radian trong code. Với speed $s$ và góc $\theta$:
+
+$$
+v_x=s\cos(\theta),\qquad v_y=s\sin(\theta)
+$$
+
+Chiều ngược lại:
+
+$$
+s=\sqrt{v_x^2+v_y^2},\qquad \theta=\operatorname{atan2}(v_y,v_x)
+$$
+
+`atan2` nhận cả Y và X nên biết vector đang ở quadrant nào. `atan(vy/vx)` vừa mất thông tin dấu, vừa chia cho zero khi vector thẳng đứng.
+
+<InteractiveLab demo="projectile" mode="projectile-components" />
+
+Mũi tên cam là `vx`; mũi tên tím bắt đầu tại đầu mũi tên cam và đi theo `vy`. Endpoint cuối của chúng phải trùng đầu mũi tên xanh. Đó chính là phép cộng `(vx,0) + (0,vy) = (vx,vy)`.
+
+## Viết code từng bước
+
+### Bước 1 — Đổi polar sang Cartesian
+
+```cpp title="include/lab.hpp — speed-angle thành velocity"
+inline Vec2 velocityFromPolar(double speed, double angleRadians) {
+    if (!std::isfinite(speed) || !std::isfinite(angleRadians)) {
+        return {};
+    }
+    return {speed * std::cos(angleRadians), speed * std::sin(angleRadians)};
+}
+```
+
+Tên tham số có hậu tố `Radians` để lời gọi khó bị hiểu nhầm. Nếu UI lưu degree, main phải nhân `pi/180` ngay tại biên trước khi gọi hàm.
+
+### Bước 2 — Khôi phục speed và angle
+
+```cpp title="include/lab.hpp — Cartesian trở lại polar"
+inline double speedFromVelocity(Vec2 velocity) {
+    return length(velocity);
+}
+
+inline double angleFromVelocity(Vec2 velocity) {
+    if (length(velocity) <= kPhysicsEpsilon) {
+        return 0.0;
+    }
+    return std::atan2(velocity.y, velocity.x);
+}
+```
+
+Angle của zero vector không có ý nghĩa. Hàm trả 0 như một giá trị an toàn, còn caller vẫn dùng `AimSelection::valid` để biết có nên nhận hướng đó hay không.
+
+### Bước 3 — Vẽ component theo phép cộng đầu-đuôi
+
+```cpp title="src/main.cpp — vx đi trước, vy nối tiếp"
+const lab::Vec2 horizontalEnd = lab::add(muzzleScreen, {aimVelocity.x * kAimPixelsPerSpeed, 0.0});
+drawArrow(pixels, width, height, muzzleScreen, horizontalEnd, kHorizontal);
+drawArrow(pixels, width, height, horizontalEnd, lab::add(muzzleScreen, aimScreenDelta), kVertical);
+```
+
+Component Y được đổi dấu khi chuyển thành `aimScreenDelta`, vì vậy arrow tím đi lên màn hình khi `vy > 0`. Dữ liệu velocity vẫn giữ Y dương trong world space.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build mốc phân rã vận tốc"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_22_checkpoint_2
+./build/Debug/project_22_checkpoint_2.exe
+```
+
+Đặt speed gần 28 m/s và góc gần 45°. `vx` cùng `vy` phải xấp xỉ $28/\sqrt{2}\approx19.8$ m/s. Đổi angle nhưng giữ speed: hai component thay đổi, còn độ dài vector xanh không đổi.
+
+## Thử làm sai để hiểu đúng
+
+1. Đưa degree thẳng vào `std::sin`. Với 50, hàm hiểu 50 radian; readout và nòng pháo không còn thống nhất.
+2. Hoán đổi sine và cosine. Ở 45° hình vẫn có vẻ đúng, vì hai giá trị bằng nhau; thử 20° để lỗi lộ rõ.
+3. Vẽ arrow `vy` từ muzzle thay vì từ `horizontalEnd`. Hai component vẫn đúng riêng lẻ nhưng không còn minh họa phép cộng vector.
+4. Dùng `std::atan(vy/vx)` rồi thử góc 85°. Sai số tăng mạnh khi `vx` nhỏ, và quadrant trái không thể phân biệt.
+
+## Tự kiểm tra kết quả
+
+- `speedFromVelocity(velocityFromPolar(s,θ)) ≈ s` với mọi aim hợp lệ.
+- `angleFromVelocity(velocityFromPolar(s,θ)) ≈ θ` trong miền 5°–85°.
+- Arrow `vx` nằm ngang, arrow `vy` thẳng đứng.
+- Endpoint của cặp component trùng endpoint velocity.
+- Thay angle không làm đổi speed; thay speed không làm đổi angle.
+
+## Bài tập mở rộng
+
+Vẽ một hình chữ nhật nét đứt có hai cạnh là `|vx|` và `|vy|`, đồng thời in tỷ lệ `vy/vx`. Thử giải thích vì sao tỷ lệ này bằng `tan(angle)` nhưng vẫn không nên dùng `atan(vy/vx)` thay `atan2`.
+
+Bài tiếp theo dùng chính `vx`, `vy` và gravity để tính vị trí ở bất kỳ thời điểm nào mà chưa cần chạy vòng lặp mô phỏng.

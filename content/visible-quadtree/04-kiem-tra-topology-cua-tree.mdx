@@ -1,0 +1,115 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm tra topology của tree
+
+## Vấn đề cần giải quyết
+
+Một hình Quadtree trông hợp lý vẫn có thể sai: parent giữ lại indices sau split, một child index vượt vector, hoặc statistics báo 2.000 leaves trong khi nodes chỉ chứa 1.900 phần tử. Ta cần một phép kiểm độc lập với code build, không dựa vào màu sắc hay cảm giác “cây chia đúng chỗ”.
+
+Inspector sẽ duyệt mọi node và mọi particle index. Đây không phải hot path; ta chấp nhận dùng một mảng count kích thước N để đổi lấy bằng chứng rõ ràng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với `insertionCounts[i]` là số leaf chứa particle `i`, storage hợp lệ khi:
+
+$$
+\forall i\in[0,N): insertionCounts[i]=1
+$$
+
+Node partition cũng phải thỏa:
+
+$$
+leafCount+internalNodeCount=nodeCount
+$$
+
+Leaf vượt capacity không tự động là lỗi. Ta chỉ đánh dấu lỗi nếu leaf vẫn còn khả năng split theo cả depth lẫn size guards.
+
+<InteractiveLab demo="visible-quadtree" mode="quadtree-topology" />
+
+Đổi capacity và distribution. `topology hợp lệ` phải giữ nguyên dù node count, depth và maximum occupancy thay đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Báo từng invariant riêng
+
+```cpp title="include/lab.hpp — QuadtreeTopologyReport"
+struct QuadtreeTopologyReport {
+    bool everyParticleStoredOnce{};
+    bool internalNodesEmpty{};
+    bool childIndicesValid{};
+    bool capacityHonored{};
+    bool statisticsMatch{};
+};
+```
+
+Một boolean `valid` duy nhất không nói sai ở đâu. Năm cờ này vừa dễ test vừa giúp window title/readout giải thích lỗi.
+
+### Bước 2 — Đếm indices ở leaves
+
+```cpp title="include/lab.hpp — kiểm particle index trong leaf"
+for (const std::size_t particleIndex : node.particleIndices) {
+    if (particleIndex >= insertionCounts.size()) {
+        childIndicesValid = false;
+    } else {
+        ++insertionCounts[particleIndex];
+    }
+}
+```
+
+Tên `childIndicesValid` ở đây bao trùm mọi index reference trong tree, kể cả particle index lạc ra ngoài source vector. Test “count bằng 1” sau đó bắt duplicate và missing.
+
+### Bước 3 — Internal node phải rỗng và trỏ đúng
+
+```cpp title="include/lab.hpp — kiểm internal node"
+internalNodesEmpty = internalNodesEmpty && node.particleIndices.empty();
+for (const std::size_t childIndex : node.children) {
+    childIndicesValid = childIndicesValid && childIndex < tree.nodes.size();
+}
+```
+
+Ta không query children ở bước này; chỉ kiểm mọi reference nằm trong vector. Một child index hợp lệ chưa chứng minh bounds đúng, nhưng đã loại được lỗi memory nguy hiểm nhất.
+
+### Bước 4 — So statistics với traversal độc lập
+
+```cpp title="include/lab.hpp — chốt topology report"
+bool everyParticleStoredOnce = tree.insertedCount == particleCount;
+for (const int count : insertionCounts) {
+    everyParticleStoredOnce = everyParticleStoredOnce && count == 1;
+}
+const bool statisticsMatch = leaves == tree.leafCount && internalNodes == tree.internalNodeCount && leaves + internalNodes == tree.nodes.size();
+return {everyParticleStoredOnce, internalNodesEmpty, childIndicesValid, capacityHonored, statisticsMatch};
+```
+
+`insertedCount == particleCount` một mình chưa đủ: một particle có thể bị nhân đôi trong khi particle khác bị mất. Mảng count mới phân biệt được hai lỗi bù trừ này.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint topology"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_4
+```
+
+Window title phải báo `topology valid`. Thử capacity 4 trong Canvas để quan sát node count tăng mà invariant không đổi.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `clear()` ở parent sau redistribution. `internalNodesEmpty` và particle counts cùng fail; khôi phục invariant internal node rỗng.
+2. Cộng `firstChildIndex + 4` cho child NE. `childIndicesValid` fail trước khi query chạm memory ngoài mảng; sửa về `+3`.
+3. Ép mọi leaf vượt capacity thành lỗi, kể cả depth đã bằng maximum. Scene có duplicate points fail vô lý; chỉ báo overflow khi `nodeCanSplit` vẫn true.
+
+## Tự kiểm tra kết quả
+
+- Report tách năm invariant thay vì một cờ mơ hồ.
+- Mỗi particle index có storage count đúng bằng 1.
+- Index ngoài particle vector bị phát hiện.
+- Internal nodes có particle list rỗng.
+- Mọi child index nhỏ hơn node count.
+- Leaf overflow chỉ hợp lệ sau split guard.
+- Leaf count cộng internal node count bằng tổng nodes.
+- Clustered và uniform trees đều pass cùng inspector.
+
+## Bài tập mở rộng
+
+Thêm kiểm tra child depth bằng parent depth cộng 1 và child bounds nằm hoàn toàn trong parent bounds. Giữ báo cáo thành các cờ riêng để biết invariant nào fail.
+
+Bài tiếp theo dùng topology đã được chứng minh để prune cả subtree trong selection query.

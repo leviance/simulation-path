@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nội suy màu trong fragment shader
+
+## Vấn đề cần giải quyết
+
+Đến checkpoint 6, coverage đã giống nhau nhưng mọi fragment dùng một màu xanh cố định. Bây giờ mỗi vertex có một màu riêng. CPU phải trộn màu bằng barycentric weights; GPU rasterizer tự nội suy `vColor` giữa vertex shader và fragment shader.
+
+Điểm quan trọng là tách hai câu hỏi:
+
+1. Pixel có được coverage không?
+2. Nếu có, color tại pixel là gì?
+
+## Hiểu ý tưởng trước khi viết code
+
+Barycentric weights vừa mô tả vị trí của điểm trong triangle, vừa là hệ số trộn ba màu vertex. CPU tính ba weights bằng signed area; GPU tạo cùng ý nghĩa qua varying được nội suy trước khi fragment shader chạy.
+
+<InteractiveLab demo="cpu-gpu-triangle" mode="fragment-interpolation" />
+
+## Viết code từng bước
+
+### Bước 1 — Tính weights từ signed area
+
+```cpp title="include/pipeline.hpp — barycentric weights"
+const float weight0 = edge(triangle[1].position, triangle[2].position, point) / signedArea;
+const float weight1 = edge(triangle[2].position, triangle[0].position, point) / signedArea;
+const float weight2 = edge(triangle[0].position, triangle[1].position, point) / signedArea;
+const float epsilon = 1.0e-6F;
+const bool inside = weight0 >= -epsilon && weight1 >= -epsilon && weight2 >= -epsilon;
+```
+
+Tại centroid, ba weights gần `1/3`; tại một vertex, weight tương ứng gần `1` và hai weight còn lại gần `0`.
+
+### Bước 2 — CPU nội suy ba channels bằng cùng weights
+
+```cpp title="include/pipeline.hpp — smooth color"
+color = {
+    triangle[0].color.red * weight0 + triangle[1].color.red * weight1 + triangle[2].color.red * weight2,
+    triangle[0].color.green* weight0 + triangle[1].color.green* weight1 + triangle[2].color.green* weight2,
+    triangle[0].color.blue* weight0 + triangle[1].color.blue* weight1 + triangle[2].color.blue* weight2,
+};
+```
+
+Coverage không đổi khi bật smooth mode. Chỉ nhánh chọn color thay đổi.
+
+### Bước 3 — GPU nhận varying đã nội suy
+
+```glsl title="Fragment shader — solid hoặc smooth"
+in vec3 vColor;
+uniform int uSmoothColor;
+out vec4 fragmentColor;
+
+void main() {
+    vec3 solidColor = vec3(0.38, 0.68, 0.94);
+    fragmentColor = vec4(uSmoothColor != 0 ? vColor : solidColor, 1.0);
+}
+```
+
+Fragment shader không tự tính barycentric weights trong project này. Rasterizer phần cứng nội suy `vColor` theo vị trí fragment.
+
+### Bước 4 — So sau RGBA8 quantization
+
+CPU float color được `putPixel` làm tròn thành byte. GPU framebuffer cũng dùng channels hữu hạn. Sai khác hợp lý không phải bằng 0 tuyệt đối ở float; bound cơ bản của một lần làm tròn là nửa bước `1/255` mỗi channel.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 7"
+cmake --build build --config Debug --target project_33_checkpoint_7
+```
+
+Nhấn `C` để đổi solid/smooth. Ở smooth mode, ba góc có ba màu riêng và vùng giữa được trộn; hai panel phải thay đổi đồng thời.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ bật smooth ở GPU. Hình dạng giống nhưng màu panel trái/phải khác rõ.
+2. Đổi thứ tự color vertices ở CPU mà giữ position. Centroid có thể gần giống nhưng vùng gần góc sai.
+3. Nội suy color trước khi xác nhận inside. Code vẫn tính số cho outside points nhưng không được ghi fragment.
+4. Đòi float color bit-identical sau khi đã ghi RGBA8. Validation đang so sai representation.
+
+## Tự kiểm tra kết quả
+
+- [ ] Weights tại centroid gần `1/3,1/3,1/3`.
+- [ ] Tổng ba weights gần 1 cho interior probes.
+- [ ] Solid/smooth không đổi coverage.
+- [ ] CPU dùng đúng color gắn với cùng vertex positions.
+- [ ] GPU varying nối `out vec3` với `in vec3`.
+- [ ] Quantization tolerance không lớn hơn nửa bước cộng epsilon nhỏ.
+
+## Bài tập mở rộng
+
+1. Thêm chế độ hiển thị riêng từng weight thành grayscale.
+2. Đặt ba vertex colors bằng nhau; solid và smooth phải trở nên giống nhau.
+3. Thử `flat` qualifier trong GLSL và giải thích provoking vertex quyết định màu nào.
+
+Bài sau sẽ đọc fragment thật từ GPU bằng `glReadPixels` và thiết kế probe tránh triangle edges.

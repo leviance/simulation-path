@@ -1,0 +1,94 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đồng bộ Model–View–Projection
+
+## Vấn đề cần giải quyết
+
+Hai cube cùng hình ở một góc chưa chứng minh matrix contract đúng. Một transpose sai đôi khi vẫn cho hình “có vẻ 3D”, đặc biệt nếu matrix gần identity. Khi kéo góc khác hoặc resize aspect, CPU/GPU mới tách nhau.
+
+Ta cần khóa ba điều: storage là column-major, multiplication là `P × V × M`, và GLSL nhận nguyên 16 floats với `transpose = GL_FALSE`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với column vector, vertex đi qua các phép biến đổi theo thứ tự phải sang trái:
+
+$$
+\text{clip} = P\,V\,M\,\text{local}
+$$
+
+Sau đó `ndc = clip.xyz / clip.w`. CPU mới đổi NDC sang top-left screen; GPU tự làm perspective divide và viewport transform. Điểm đối chiếu tốt nhất là clip/NDC, trước khi khác biệt trục Y xuất hiện.
+
+<InteractiveLab demo="dual-renderer-cube" mode="mvp-contract" />
+
+## Viết code từng bước
+
+### Bước 1 — Nhân hai Mat4 column-major
+
+```cpp title="include/pipeline.hpp — phần lõi của multiply"
+for (int inner = 0; inner < 4; ++inner) {
+    value += left.values[std::size_t(inner * 4 + row)] * right.values[std::size_t(column * 4 + inner)];
+}
+result.values[std::size_t(column * 4 + row)] = value;
+```
+
+Index `column * 4 + row` được dùng nhất quán cho storage. Ta không dựa vào comment “column-major” trong khi code lại index theo row-major.
+
+### Bước 2 — Tạo P × V × M bằng scene và aspect
+
+```cpp title="include/pipeline.hpp — makeMvp"
+inline Mat4 makeMvp(const CubeScene& scene, float aspect) {
+    const Mat4 model = multiply(rotationYMatrix(scene.angleY), rotationXMatrix(scene.angleX));
+    const Mat4 view = translationMatrix(0.0F, 0.0F, -4.2F);
+    const Mat4 projection = perspectiveMatrix(std::numbers::pi_v<float> / 3.0F, aspect, 0.5F, 20.0F);
+    return multiply(projection, multiply(view, model));
+}
+```
+
+Aspect là `framebufferWidth / framebufferHeight`, không phải kích thước ban đầu hay logical window size.
+
+### Bước 3 — Upload không transpose
+
+```cpp title="include/gpu_renderer.hpp — uMvp"
+api.UseProgram(program);
+api.UniformMatrix4fv(mvpLocation, 1, GL_FALSE, mvp.values.data());
+api.BindVertexArray(vertexArray);
+```
+
+GLSL dùng `gl_Position = uMvp * vec4(aPosition, 1.0)`. Không có phép transpose thứ hai trong shader.
+
+## Ghép các phần lại
+
+Checkpoint 5 trace vertex 0 lên title bar: local → clip → depth. Khi debug, hãy so cùng 16 floats và cùng input vertex trước khi nhìn pixels.
+
+```cpp title="src/main.cpp — tạo trace đúng framebuffer aspect"
+const lab::Mat4 mvp = lab::makeMvp(scene, float(framebufferWidth) / float(framebufferHeight));
+const lab::VertexTrace trace = lab::traceVertex(lab::kCubeVertices[0], mvp, framebufferWidth, framebufferHeight);
+```
+
+Trace có `clip.w > 0`, NDC hữu hạn và window depth trong `[0,1]` cho cube hiện tại. Đó là invariant mạnh hơn “cube vẫn thấy được”.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `GL_FALSE` thành `GL_TRUE`. Desktop OpenGL không phải nơi để dùng transpose như một nút sửa orientation; contract hoặc lỗi API sẽ lộ ra.
+2. Trả `M × V × P`. Cube rời clip volume hoặc biến dạng dù từng matrix riêng có vẻ đúng.
+3. Dùng aspect nghịch đảo `height / width`, sau đó resize cửa sổ ngang. Cube bị kéo giãn khác CPU.
+
+Hoàn tác lỗi và kiểm lại vertex trace trước khi tiếp tục.
+
+## Tự kiểm tra kết quả
+
+- [ ] `Mat4::values` được index `column * 4 + row`.
+- [ ] MVP là projection × view × model.
+- [ ] CPU/GLSL cùng nhân matrix với column vector.
+- [ ] Uniform upload dùng `GL_FALSE` và đúng location.
+- [ ] Clip w, NDC và depth của nhiều preset đều hữu hạn.
+
+Hãy dự đoán điều sẽ xảy ra nếu chỉ transpose matrix rotation nhưng không transpose translation, rồi dùng trace để chỉ ra stage sai.
+
+## Bài tập mở rộng
+
+1. Trace cả 24 vertices và tìm min/max NDC.
+2. Tách `model`, `view`, `projection` thành ba uniforms rồi so trade-off.
+3. Viết test matrix identity và translation không cần mở window.
+
+Bài tiếp theo nối depth array CPU với fixed-function depth stage của GPU.

@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Visible Quadtree và nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Final chỉ đáng tin khi interaction, benchmark và tests dùng cùng `buildQuadtree`/`queryQuadtree`. Kéo selection chỉ được query; đổi distribution hoặc capacity mới rebuild. Benchmark cũ phải bị xóa sau khi topology input đổi, nếu không readout đang mô tả một tree không còn tồn tại.
+
+Ta cũng cần chốt giới hạn project: đây là point Quadtree 2D với axis-aligned rectangle selection. Loose Quadtree, moving objects và Octree 3D là những bài toán tiếp theo, không được giấu vào final bằng abstraction khó hiểu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Final có ba nhóm state:
+
+- **Data/index:** particles, distribution, `QuadtreeConfig` và tree;
+- **Selection:** two corners, pointer capture, pause và auto phase;
+- **Experiment:** topology report, live oracle, benchmark và capacity study.
+
+Reset phải đưa cả ba nhóm về deterministic defaults. Canvas chỉ vẽ tối đa 30.000 points và 12.000 leaf outlines nền để giữ UI nhẹ, nhưng luôn tô những leaf overlap selection; tree và query vẫn xử lý đủ 100.000 indices cùng toàn bộ nodes. Readout báo riêng draw sample và stored topology để hình minh họa không bị nhầm với workload thật.
+
+<InteractiveLab demo="visible-quadtree" mode="quadtree-validation" />
+
+Thử chuỗi thao tác: reverse drag, đổi uniform, capacity 32, benchmark, study, chạy auto selection rồi reset. Readout phải trở về clustered, capacity 8, paused và chưa có benchmark.
+
+## Viết code từng bước
+
+### Bước 1 — Distribution đổi thì rebuild một lần
+
+```cpp title="src/main.cpp — rebuild sau khi đổi distribution"
+particles = lab::makeParticleCloud(100'000, bounds, seed, clustered);
+tree = lab::buildQuadtree(particles, treeConfig);
+topology = lab::inspectQuadtreeTopology(tree, particles.size());
+treeBenchmark = {};
+bruteBenchmark = {};
+studyRows.clear();
+```
+
+Pointer motion không có khối này. Selection không thay topology nên chỉ gọi query ở frame kế tiếp.
+
+### Bước 2 — Pointer capture luôn có cặp bật/tắt
+
+```cpp title="src/main.cpp — bắt đầu selection drag"
+dragging = true;
+SDL_CaptureMouse(true);
+```
+
+```cpp title="src/main.cpp — kết thúc selection drag"
+dragging = false;
+SDL_CaptureMouse(false);
+```
+
+Cleanup cũng nhả capture nếu cửa sổ đóng giữa drag. Canvas dùng `setPointerCapture`/`releasePointerCapture` theo cùng nguyên tắc.
+
+### Bước 3 — Final validation gọi production paths
+
+```cpp title="include/lab.hpp — validation dùng cùng query functions"
+for (const SelectionBox& selection : selections) {
+    queryQuadtree(tree, particles, selection, treeWorkspace);
+    querySelectionBruteForce(particles, selection, bruteWorkspace);
+    resultMatchesOracle = resultMatchesOracle && quadtreeMatchesBruteForce(treeWorkspace, bruteWorkspace);
+}
+```
+
+Không viết “query dành cho test”. Nếu tests và final đi hai code path khác nhau, CTest pass không bảo vệ interaction thật.
+
+### Bước 4 — CTest khóa topology lẫn output
+
+```cpp title="tests/tests.cpp — nghiệm thu cuối"
+check(report.topologyValid, "final validation accepts the Quadtree topology");
+check(report.resultMatchesOracle, "final validation result matches the oracle");
+check(report.candidateWorkReduced, "final validation observes reduced candidate work");
+check(report.checksumMatches, "final validation checksum matches brute force");
+check(report.finiteTiming, "final validation timings remain finite");
+```
+
+Tests không khóa số microseconds cụ thể. Chúng chỉ yêu cầu timing hữu hạn và dùng counters/checksum để chứng minh workload đúng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build và test Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+```bash title="Terminal — build và test Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Target `project_29_final` là chương trình hoàn chỉnh. ZIP chứa starter, tám checkpoints, final, tests và README; bạn không phải tự ghép code blocks từ các bài.
+
+## Thử làm sai để hiểu đúng
+
+1. Rebuild tree trong mọi frame. Selection vẫn đúng nhưng rebuild cost che mất query benefit; chỉ rebuild khi particles hoặc config đổi.
+2. Đổi capacity nhưng giữ benchmark cũ trên readout. Số đo không còn mô tả topology hiện tại; xóa benchmark/study khi input đổi.
+3. Dùng draw sample 30.000 làm particle count cho tree. UI nhanh hơn nhưng workload bị đổi lén; giữ indexed count 100.000 và báo draw sample riêng.
+
+## Tự kiểm tra kết quả
+
+- Reset trở về clustered distribution, capacity 8 và deterministic selection.
+- Reverse drag và pointer release hoạt động cả khi con trỏ ra ngoài Canvas.
+- Distribution/capacity đổi mới rebuild; selection motion không rebuild.
+- Topology report pass ở uniform lẫn clustered cloud.
+- Mỗi particle nằm đúng một leaf; internal nodes rỗng.
+- Edge selections khớp brute-force hit set.
+- Benchmark checksum khớp và Quadtree giảm candidate work ở preset mặc định.
+- Capacity study báo topology, rebuild và query work riêng.
+- Debug và Release CTest đều đạt.
+- Draw sample và indexed workload được ghi thành hai con số khác nhau.
+- Leaf-outline sample và tổng số leaves thật cũng được ghi riêng.
+
+## Bài tập mở rộng
+
+Cho một nhóm particles chuyển động. Đánh dấu những particles rời leaf bounds và thử hai chiến lược: rebuild toàn tree sau fixed step, hoặc remove/reinsert chỉ các indices bị “dirty”. Đo riêng update cost và query cost.
+
+Project 30 sẽ đưa cùng tư duy sang point cloud 3D bằng Octree: bốn quadrant trở thành tám octant, còn storage/oracle/benchmark contracts vẫn được giữ nguyên.

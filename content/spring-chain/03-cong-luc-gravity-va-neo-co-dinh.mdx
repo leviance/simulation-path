@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cộng lực, gravity và neo cố định
+
+## Vấn đề cần giải quyết
+
+Một particle trong chuỗi có thể nhận lực từ spring phía trên, spring phía dưới và gravity trong cùng substep. Nếu xử lý từng spring rồi lập tức đổi position, spring sau sẽ đọc một state khác spring trước; kết quả phụ thuộc thứ tự vòng lặp. Ta cần đóng băng state, cộng hết lực, rồi mới tích phân ở bài sau.
+
+Force accumulator của mỗi particle chỉ có ý nghĩa trong một physics step: xóa force cũ, cộng external force, cộng mọi internal spring pair. Anchor vẫn có thể nhận reaction force để quan sát, nhưng `inverseMass=0` sẽ ngăn nó gia tốc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gravity force trên dynamic particle:
+
+$$
+F_g=m g=\frac{g}{m^{-1}}
+$$
+
+Mỗi spring tạo một cặp nội lực:
+
+$$
+F_A\mathrel{+}=F_s,\qquad F_B\mathrel{-}=F_s
+$$
+
+Do đó $F_A+F_B=0$ cho riêng spring. Tổng lực toàn hệ vẫn không bằng zero vì gravity và reaction tại anchor là ngoại lực.
+
+<InteractiveLab demo="spring-chain" mode="spring-forces" />
+
+Bật/tắt gravity và kéo một particle sang bên khi paused. Các mũi tên đỏ ở particle giữa là tổng của nhiều lực; chọn một spring để xem hai contribution đối nhau trước khi cộng.
+
+## Viết code từng bước
+
+### Bước 1 — Xóa force từ substep trước
+
+```cpp title="include/lab.hpp — accumulator không được nhớ lực cũ"
+inline void clearForces(SpringChain& chain) {
+    for (Particle& particle : chain.particles) {
+        particle.force = {};
+    }
+}
+```
+
+Nếu bỏ bước này, gravity giống như lớn thêm sau mỗi frame vì cùng một vector liên tục bị cộng vào accumulator.
+
+### Bước 2 — Đổi inverse mass về mass để tính gravity
+
+```cpp title="include/lab.hpp — fixed particle không nhận gravity"
+for (Particle& particle : chain.particles) {
+    if (particle.inverseMass <= kSpringEpsilon) {
+        continue;
+    }
+    const double mass = 1.0 / particle.inverseMass;
+    particle.force = add(particle.force, scale(gravity, mass));
+}
+```
+
+Gravity truyền vào là acceleration `(0,-9.81) m/s²`; nhân mass mới cho force đơn vị newton.
+
+### Bước 3 — Phân phối cặp lực bằng nhau, ngược dấu
+
+```cpp title="include/lab.hpp — một sample cập nhật đúng hai endpoint"
+Particle& first = chain.particles[spring.first];
+Particle& second = chain.particles[spring.second];
+first.force = add(first.force, sample.forceOnFirst);
+second.force = subtract(second.force, sample.forceOnFirst);
+```
+
+Không gọi lại `sampleElasticSpring` sau khi sửa force: force accumulator không tham gia geometry nên sample vẫn chỉ cần tính một lần.
+
+### Bước 4 — Khóa thứ tự của cả bước cộng lực
+
+```cpp title="include/lab.hpp — external trước internal, chưa đổi position"
+clearForces(chain);
+if (gravityEnabled) {
+    addGravity(chain, gravity);
+}
+addElasticSpringForces(chain);
+```
+
+Thứ tự gravity/spring không đổi tổng vì đều là phép cộng. Điều bắt buộc là không tích phân xen giữa chúng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — quan sát net force khi state còn đứng yên"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_checkpoint_3
+./build/Debug/project_25_checkpoint_3.exe
+```
+
+Checkpoint 3 vẫn chưa cho time chạy. Particle giữa được kéo lệch để spring force hiện rõ; mũi tên của các mass còn lại chủ yếu hướng xuống do gravity.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `clearForces`. Gọi accumulator ba lần và đọc force gravity tăng gấp ba; hoàn tác bước clear.
+2. Cộng `gravity` trực tiếp vào force. Mass khác nhau nhận cùng force thay vì cùng acceleration; hoàn tác về `mass*gravity`.
+3. Cộng cùng `+F` cho cả A và B. Tổng nội lực khác zero và tâm hệ tự gia tốc; hoàn tác endpoint B về phép trừ.
+
+## Tự kiểm tra kết quả
+
+- Force bắt đầu từ zero ở mỗi lần accumulate.
+- Mass 0.25 kg nhận gravity force `(0,-2.4525) N`.
+- Fixed anchor không nhận gravity.
+- Hai endpoint dynamic của một spring có tổng spring force bằng zero.
+- Một particle giữa nhận contribution từ tối đa hai springs.
+- Thứ tự duyệt springs không đổi tổng force trong sai số floating-point.
+- Chưa có position hoặc velocity nào thay đổi ở checkpoint 3.
+
+## Bài tập mở rộng
+
+Tính và hiển thị reaction force tại anchor. Đừng cộng nó vào gravity của anchor; reaction ở đây chính là spring force đã tích lũy trên particle cố định.
+
+Bài tiếp theo đổi net force thành acceleration rồi cập nhật velocity và position. Đây là lúc chuỗi thật sự bắt đầu rơi, căng và dao động.

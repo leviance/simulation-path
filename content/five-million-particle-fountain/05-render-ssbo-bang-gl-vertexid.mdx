@@ -1,0 +1,161 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ trực tiếp từ SSBO bằng gl_VertexID
+
+## Ta cần giải quyết điều gì?
+
+Cách quen thuộc để vẽ point là chép position vào VBO rồi cấu hình vertex attribute. Nhưng ở đây position mới nhất đã nằm trong SSBO sau compute pass. Nếu lại chép hàng triệu vị trí sang một VBO khác ở mỗi frame, ta vừa tốn thêm thời gian vừa giữ hai bản dữ liệu không cần thiết. Vertex shader sẽ đọc thẳng SSBO bằng `gl_VertexID`.
+
+OpenGL vertex shader đã có `gl_VertexID`. Khi gọi `glDrawArrays(GL_POINTS, 0, N)`, shader nhận ID từ 0 đến N−1. Ta dùng ID ấy làm index vào `particles[]` ở binding 0. Một buffer, một record layout, không có bản sao position thứ hai.
+
+Bài 5 chỉ vẽ trạng thái tĩnh đã tải lên GPU. Tách phần render khỏi phần cập nhật giúp ta biết lỗi hình ảnh nằm ở shader vẽ, chưa liên quan đến memory barrier.
+
+## Theo chân một particle
+
+Mỗi draw vertex đi theo đường:
+
+```text
+gl_VertexID
+    ↓
+particles[ID].positionAge
+    ↓ world / halfExtent
+clip-space position + point size
+    ↓ rasterization
+gl_PointCoord trong fragment shader
+```
+
+Core profile vẫn yêu cầu một VAO đang được bind, kể cả khi shader không đọc attribute array. Vì thế ta tạo một VAO rỗng, nhưng không cần VBO hay `glVertexAttribPointer`.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-render" />
+
+Kéo để đổi ID. Mỗi vertex tự tìm đúng particle record, chuyển position sang clip space rồi tạo một point primitive. Fragment shader chỉ trang trí primitive ấy, không biết toàn bộ SSBO.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Đọc SSBO trong vertex shader
+
+```glsl title="shaders/particle.vert — ParticleBuffer"
+struct Particle {
+    vec4 positionAge;
+    vec4 velocityLife;
+};
+
+layout(std430, binding = 0) readonly buffer ParticleBuffer {
+    Particle particles[];
+};
+```
+
+`readonly` nói rõ vertex shader chỉ đọc buffer. Compute program và render program là hai executable khác nhau, nhưng binding, layout và thứ tự field phải giống tuyệt đối.
+
+### Bước 2 — Dùng `gl_VertexID` làm địa chỉ
+
+```glsl title="shaders/particle.vert — main mapping"
+uint index = uint(gl_VertexID);
+if (index >= uint(uParticleCount)) {
+    gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+    gl_PointSize = 0.0;
+    vAge01 = 1.0;
+    vSpeed01 = 0.0;
+    return;
+}
+
+Particle particle = particles[index];
+vec2 safeHalfExtent = max(uHalfExtent, vec2(0.001));
+vec2 clipPosition = particle.positionAge.xy / safeHalfExtent;
+gl_Position = vec4(clipPosition, 0.0, 1.0);
+```
+
+Trong bản hoàn chỉnh, draw count bằng đúng particle count nên nhánh kiểm tra thường không chạy. Ta vẫn giữ nó vì uniform và draw count nối C++ với GLSL; nếu hai phía lệch nhau, shader cũng không được đọc ngoài buffer.
+
+`uHalfExtent=(halfWidth,halfHeight)` thay đổi khi framebuffer resize. Chia riêng X/Y giữ đúng aspect thay vì kéo dãn fountain theo cửa sổ.
+
+### Bước 3 — Tạo point sprite tròn
+
+```glsl title="shaders/particle.frag — circular point"
+vec2 centered = gl_PointCoord - vec2(0.5);
+float radiusSquared = dot(centered, centered);
+if (radiusSquared > 0.25) {
+    discard;
+}
+
+vec3 cool = vec3(0.16, 0.58, 1.0);
+vec3 hot = vec3(1.0, 0.72, 0.25);
+vec3 color = mix(cool, hot, vSpeed01);
+float softEdge = 1.0 - smoothstep(0.12, 0.25, radiusSquared);
+float lifetimeFade = 1.0 - smoothstep(0.72, 1.0, vAge01);
+outputColor = vec4(color, softEdge * lifetimeFade * 0.34);
+```
+
+`gl_PointCoord` chạy từ `(0,0)` tới `(1,1)` trong hình vuông của point. Ta bỏ bốn góc và làm mềm mép. Màu/alpha chỉ phụ thuộc velocity và age đã có; không thêm texture upload.
+
+### Bước 4 — Draw bằng một VAO rỗng
+
+Sau khi link program, engine khóa ba uniforms và tạo VAO đúng một lần:
+
+```cpp title="include/particle_gpu_engine.hpp — render interface"
+renderParticleCountLocation_ = gl.GetUniformLocation(renderProgram_, "uParticleCount");
+renderHalfExtentLocation_ = gl.GetUniformLocation(renderProgram_, "uHalfExtent");
+renderPointScaleLocation_ = gl.GetUniformLocation(renderProgram_, "uPointScale");
+gl.GenVertexArrays(1, &vertexArray_);
+```
+
+```cpp title="include/particle_gpu_engine.hpp — render draw"
+gl.UseProgram(renderProgram_);
+gl.Uniform1i(renderParticleCountLocation_, static_cast<GLint>(particleCount_));
+gl.Uniform2f(renderHalfExtentLocation_, halfWidth, halfHeight);
+gl.Uniform1f(renderPointScaleLocation_, pointScale);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, particleBuffer_);
+gl.BindVertexArray(vertexArray_);
+gl.Enable(GL_PROGRAM_POINT_SIZE);
+gl.Enable(GL_BLEND);
+gl.BlendFunc(GL_SRC_ALPHA, GL_ONE);
+gl.DrawArrays(GL_POINTS, 0, static_cast<GLsizei>(particleCount_));
+```
+
+Additive blend làm nhiều hạt chồng nhau sáng hơn. Đây là lựa chọn hình ảnh, không đổi simulation state. Với 5 triệu hạt, point size nhỏ là chủ ý để giảm overdraw.
+
+## Nối lại thành một bước mô phỏng
+
+Checkpoint 5 có hai program đã compile nhưng chỉ graphics program chạy trong loop:
+
+```text
+SSBO tĩnh binding 0
+      ↓
+glDrawArrays(GL_POINTS, 0, N)
+      ↓
+vertex ID đọc Particle → clip position/size/color inputs
+      ↓
+fragment point sprite → additive framebuffer
+```
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_38_checkpoint_5
+```
+
+Nếu chỉ thấy nền tối, kiểm lần lượt: draw count, VAO binding, SSBO binding 0, `uHalfExtent`, program link log và GL point size. Đừng vội thêm compute update; static state phải render đúng trước.
+
+## Thử tạo lỗi
+
+1. Không bind VAO trong Core profile. Shader không cần attributes nhưng draw state vẫn không hợp lệ.
+2. Tạo một VBO position rồi upload mỗi frame. Hình có thể đúng nhưng kiến trúc đã quay lại CPU/GPU transfer path.
+3. Dùng window size thay framebuffer pixel size trên high-DPI. Viewport và aspect không khớp vùng render thật.
+4. Bỏ `GL_PROGRAM_POINT_SIZE`. Driver có thể bỏ qua `gl_PointSize` do shader ghi.
+5. Dùng alpha blend thường rồi tăng alpha để chữa hình tối. Hãy hiểu blend equation và overdraw trước khi chỉnh màu.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] Vertex shader và compute shader dùng cùng Particle/binding 0.
+- [ ] `gl_VertexID` nối thẳng với `particles[index]`.
+- [ ] C++ draw count và `uParticleCount` cùng bằng count thật.
+- [ ] Một VAO rỗng được tạo/bind trong Core profile.
+- [ ] Resize cập nhật viewport và half extent theo framebuffer pixels.
+- [ ] Không có VBO copy và không có particle readback trong render path.
+- [ ] Fragment shader tạo sprite tròn và lifetime fade hữu hạn.
+
+## Nếu muốn thử thêm
+
+1. Thêm hai palette khác nhau bằng uniform, không đổi particle record.
+2. Vẽ point size cố định 1 pixel rồi so overdraw/tính dễ nhìn với size theo age.
+3. Thử alpha blend `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`, ghi lại khác biệt hình ảnh và draw time.
+
+Phần render tĩnh đã hoạt động. Bài 6 sẽ đặt compute update trước draw và thêm memory barrier để vertex shader nhìn thấy dữ liệu mới.

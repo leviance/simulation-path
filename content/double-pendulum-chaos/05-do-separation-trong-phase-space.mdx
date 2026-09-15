@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo separation trong phase space
+
+## Vấn đề cần giải quyết
+
+Khoảng cách giữa hai quả nặng dễ quan sát nhưng không mô tả đầy đủ trạng thái. Hai quả có thể đi qua cùng vị trí với vận tốc góc khác nhau. Phép trừ góc thông thường cũng gây nhầm: $+179^\circ$ và $-179^\circ$ nằm gần nhau trên đường tròn nhưng lại cho hiệu $358^\circ$.
+
+Ta dùng kỹ thuật **wrap angle** để xây một **phase-space** metric đáp ứng ba điều: lấy hiệu góc theo cung ngắn nhất, đổi chênh lệch vận tốc góc về cùng thang đo với góc và chỉ so các trạng thái ở cùng thời điểm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đặt characteristic time:
+
+$$
+\tau=\sqrt{\frac{(L_1+L_2)/2}{g}}
+$$
+
+Sau đó:
+
+$$
+d=\sqrt{\Delta\theta_1^2+\Delta\theta_2^2+(\tau\Delta\omega_1)^2+(\tau\Delta\omega_2)^2}
+$$
+
+<InteractiveLab demo="double-pendulum-chaos" mode="chaos-separation" />
+
+Đồ thị dùng trục log vì độ tách có thể tăng từ `1e-6` lên gần một đơn vị. Đường cong không nhất thiết tăng đều; hệ phi tuyến có thể tạm thời tiến gần nhau trước khi tách xa.
+
+## Viết code từng bước
+
+### Bước 1 — Wrap một angle difference về khoảng ngắn nhất
+
+```cpp title="include/lab.hpp — xử lý biên cộng trừ pi"
+double wrapped = std::fmod(angle + kPi, 2.0 * kPi);
+if (wrapped < 0.0) {
+    wrapped += 2.0 * kPi;
+}
+wrapped -= kPi;
+```
+
+Ta wrap difference, không wrap state sau từng integration step. Sin/cos vốn tuần hoàn và integrator được phép giữ angle liên tục qua nhiều vòng.
+
+### Bước 2 — Scale angular velocity bằng time scale
+
+```cpp title="include/lab.hpp — bốn component của phase-space distance"
+const double timeScale = std::sqrt((0.5 * (parameters.length1 + parameters.length2)) / parameters.gravity);
+const double angle1Difference = wrapAngle(second.theta1 - first.theta1);
+const double angle2Difference = wrapAngle(second.theta2 - first.theta2);
+const double omega1Difference = (second.omega1 - first.omega1) * timeScale;
+const double omega2Difference = (second.omega2 - first.omega2) * timeScale;
+```
+
+`omega*timeScale` có đơn vị radian, nên norm không còn cộng trực tiếp radian với radian/giây.
+
+### Bước 3 — Ghép norm và đo bob riêng
+
+```cpp title="include/lab.hpp — phase metric và screen-friendly metric tách biệt"
+return std::hypot(std::hypot(angle1Difference, angle2Difference), std::hypot(omega1Difference, omega2Difference));
+```
+
+Second-bob distance vẫn được hiển thị bằng mét vì dễ hình dung, nhưng nó không thay thế phase-space separation.
+
+### Bước 4 — Tính finite-time exponent có điều kiện
+
+```cpp title="include/lab.hpp — tốc độ tăng trung bình trên cửa sổ hữu hạn"
+if (twins.primary.elapsed > 0.0 && initialSeparation > kChaosEpsilon && metrics.phaseSeparation > kChaosEpsilon) {
+    metrics.finiteTimeExponent = std::log(metrics.phaseSeparation / initialSeparation) / twins.primary.elapsed;
+}
+```
+
+Đây là finite-time estimate. Một giá trị dương trong đoạn ngắn không tự động là Lyapunov exponent hội tụ của toàn attractor.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build phase-space measurement"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_26_checkpoint_5
+```
+
+Chạy đến khi curve rời đáy graph. So phase separation với bob distance; hai số có đơn vị và câu hỏi khác nhau.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay `wrapAngle` bằng raw subtraction. Đặt hai góc quanh ±π và quan sát separation nhảy giả; hoàn tác wrapped difference.
+2. Bỏ `timeScale` rồi cộng trực tiếp delta omega. Đổi length/gravity làm metric thay đổi đơn vị ngầm; hoàn tác scaling.
+3. Vẽ separation trên linear axis từ 0 đến 1. Giai đoạn tăng sớm biến mất; hoàn tác log scale có floor rõ ràng.
+
+## Tự kiểm tra kết quả
+
+- `wrapAngle(181°)` cho `-179°`.
+- `+179°` và `-179°` được đo cách nhau `2°`.
+- Phase separation ban đầu bằng perturbation khi chỉ theta2 khác.
+- Bob distance có đơn vị mét; phase metric không thứ nguyên.
+- Exponent không được báo khi elapsed hoặc initial separation bằng zero.
+
+## Bài tập mở rộng
+
+Vẽ riêng bốn contribution bình phương của metric. Tìm giai đoạn separation chủ yếu đến từ angular velocity trước khi bob position nhìn thấy khác biệt.
+
+Bài sau đặt một đường numerical error cạnh đường perturbation để tránh gán mọi divergence cho chaos.

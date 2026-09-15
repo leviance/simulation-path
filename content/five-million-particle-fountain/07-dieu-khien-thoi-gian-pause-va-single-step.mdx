@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Pause, single-step và kiểm soát delta time
+
+## Ta cần giải quyết điều gì?
+
+Compute shader chỉ nhận `uDt`; nó không biết frame vừa kéo dài 16 ms hay bị khựng 600 ms vì cửa sổ đang được di chuyển. Nếu truyền thẳng thời gian thô, một frame quá dài có thể làm particle xuyên qua sàn hoặc khiến hàng triệu hạt cùng respawn. Ta sẽ giới hạn `dt`, đồng thời làm rõ cách pause và single-step hoạt động.
+
+Ta cũng cần pause phục vụ học và debug. Pause đúng nghĩa phải giữ simulation state, vẫn render frame hiện tại, vẫn xử lý resize, và khi resume không cộng cả khoảng thời gian đã dừng vào `dt` kế tiếp. Phím N chạy đúng một bước cố định để người học quan sát từng lần dispatch.
+
+## Theo chân một particle
+
+Project dùng variable timestep có clamp:
+
+$$
+\Delta t_{sim}=\min(\Delta t_{raw}, 1/30)
+$$
+
+Đây không phải fixed timestep hoàn chỉnh. Particle fountain ưu tiên throughput và hình ảnh; một compute dispatch cho 5 triệu phần tử đã đủ nặng, nên không chạy nhiều catch-up steps sau spike. Clamp chấp nhận simulation chậm lại trong frame xấu để tránh bước tích phân mất kiểm soát.
+
+Single-step bỏ qua raw dt và luôn dùng $1/120$ giây. Cùng reset và cùng số lần nhấn N tạo cùng chuỗi state.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-time-control" />
+
+Kéo raw dt lên 200 ms: simulation dt dừng ở khoảng 33,333 ms. Pause làm dt bằng 0; nút “Bước một frame” vẫn tiến đúng một fixed step.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Gom cách chọn dt vào một hàm thuần
+
+```cpp title="include/particle_math.hpp — selectSimulationDt"
+inline float selectSimulationDt(float rawDt, bool paused, bool singleStepRequested) {
+    if (singleStepRequested) {
+        return kSingleStepDt;
+    }
+    if (paused || !std::isfinite(rawDt) || rawDt <= 0.0F) {
+        return 0.0F;
+    }
+    return std::min(rawDt, kMaximumFrameDt);
+}
+```
+
+Thứ tự nhánh là chủ ý: single-step hoạt động khi đang pause; pause bình thường trả 0; raw dt bất hợp lệ không đi vào uniform; frame hợp lệ bị clamp.
+
+### Bước 2 — Chỉ đọc đồng hồ một lần mỗi frame
+
+```cpp title="src/main.cpp — raw frame time"
+const std::uint64_t nowTicks = SDL_GetTicksNS();
+const double elapsedNanoseconds = static_cast<double>(nowTicks - previousTicks);
+const float rawDt = static_cast<float>(elapsedNanoseconds / 1'000'000'000.0);
+previousTicks = nowTicks;
+```
+
+`previousTicks` vẫn cập nhật khi pause. Vì vậy sau 10 giây dừng, frame resume chỉ thấy thời gian kể từ frame pause cuối, không thấy toàn bộ 10 giây.
+
+### Bước 3 — Event chỉ ghi nhận yêu cầu của người dùng
+
+```cpp title="src/main.cpp — pause và single-step input"
+if (key == SDLK_SPACE) {
+    paused = !paused;
+}
+if (key == SDLK_N) {
+    singleStepRequested = true;
+}
+```
+
+Sau khi tính `simulationDt`, main đặt `singleStepRequested = false`. Một keydown tạo đúng một step; giữ phím không lặp vì code bỏ event `event.key.repeat`.
+
+### Bước 4 — Reset bằng cách tạo lại dữ liệu từ cùng seed
+
+Reset không sửa trực tiếp một vài particle. Nó sinh lại toàn bộ count bằng `makeInitialParticles`, upload lại main SSBO và đưa `spawnEpoch` về 0. Đây là transfer có chủ đích do người dùng yêu cầu, khác với upload vô điều kiện mỗi frame.
+
+## Nối lại thành một bước mô phỏng
+
+Checkpoint 7 có loop:
+
+```text
+poll input → đổi paused/singleStep/reset
+         ↓
+đọc clock và luôn cập nhật previousTicks
+         ↓
+selectSimulationDt
+         ↓
+dt > 0 ? dispatch + barrier : bỏ update
+         ↓
+render state hiện tại → present
+```
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_38_checkpoint_7
+```
+
+Pause rồi resize cửa sổ. Fountain phải đứng yên nhưng viewport/aspect vẫn thay đổi đúng. Nhấn N ba lần: hạt tiến ba bước nhỏ mà app vẫn ở trạng thái pause.
+
+## Thử tạo lỗi
+
+1. Không cập nhật `previousTicks` khi pause. Resume tạo raw dt bằng toàn bộ thời gian dừng.
+2. Clamp sau khi gửi uniform. Giá trị lớn đã đi vào dispatch; biến C++ được sửa không cứu frame đó.
+3. Khi pause, bỏ cả render loop. Window không repaint và resize không được phản ánh.
+4. Cho N dùng raw dt hiện tại. Kết quả phụ thuộc tốc độ người dùng nhấn phím.
+5. Reset chỉ đặt age về 0 nhưng giữ position/velocity cũ. State không trở lại preset ban đầu.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] Raw dt lấy từ một clock monotonic và đổi nanosecond sang second một lần.
+- [ ] Simulation dt không vượt `1/30` giây.
+- [ ] Pause trả dt 0 nhưng render/event loop vẫn chạy.
+- [ ] Resume không tạo một bước bằng toàn bộ thời gian đã pause.
+- [ ] N tạo đúng `1/120` giây và không key-repeat.
+- [ ] Reset tái tạo cùng seed, count và spawn epoch 0.
+- [ ] Resize khi pause vẫn cập nhật viewport/half extent.
+
+## Nếu muốn thử thêm
+
+1. Thêm phím tăng/giảm time scale trong `[0,2]`, áp dụng sau clamp và ghi rõ trong title.
+2. Ghi lại quỹ đạo 120 single steps rồi so hai lần reset.
+3. Thử fixed timestep accumulator với preset 100k, nhưng đặt maximum catch-up steps hữu hạn.
+
+Đã có simulation ổn định, nhưng chưa biết GPU dành bao nhiêu thời gian cho compute và draw. Bài 8 sẽ đo hai vùng này mà không chờ query của frame vừa gửi.

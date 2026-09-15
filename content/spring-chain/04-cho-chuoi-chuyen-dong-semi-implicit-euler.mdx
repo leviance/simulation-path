@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho chuỗi chuyển động bằng semi-implicit Euler
+
+## Vấn đề cần giải quyết
+
+Checkpoint 3 đã cho ta force tại một thời điểm nhưng chưa trả lời state sau đó. Project 23 cho thấy integrator không chỉ là chi tiết cú pháp: thứ tự cập nhật position và velocity làm energy behavior khác nhau. Với chuỗi spring, ta dùng semi-implicit Euler vì nó đơn giản như Euler nhưng thường giữ oscillator bounded tốt hơn explicit Euler ở cùng bước nhỏ.
+
+Physics step phải độc lập với render FPS. Mỗi lần accumulator đủ `fixedDeltaSeconds`, chương trình cộng lực cho toàn chuỗi rồi tích phân mọi dynamic particle đúng một lần.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với $w=1/m$ là inverse mass:
+
+$$
+a=F\,w
+$$
+
+Semi-implicit Euler:
+
+$$
+v_{n+1}=v_n+a_n\Delta t
+$$
+
+$$
+p_{n+1}=p_n+v_{n+1}\Delta t
+$$
+
+Khác biệt nằm ở công thức position dùng velocity **mới**. Phương pháp vẫn có sai số và vẫn có thể nổ nếu dt quá lớn; bài 7 sẽ cố ý đẩy nó đến giới hạn.
+
+<InteractiveLab demo="spring-chain" mode="spring-integration" />
+
+Pause rồi nhấn “Bước 1 dt”. Bảng selected particle phải cho thấy force được đổi thành acceleration, velocity thay đổi trước, sau đó position dùng velocity vừa tính.
+
+## Viết code từng bước
+
+### Bước 1 — Bỏ qua particle cố định và input hỏng
+
+```cpp title="include/lab.hpp — anchor không đi qua phép chia mass"
+if (!finiteParticle(particle) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0 || particle.inverseMass <= kSpringEpsilon) {
+    return;
+}
+```
+
+Guard này giúp `integrateParticle` dùng được độc lập trong CTest; caller không phải nhớ lọc anchor trước.
+
+### Bước 2 — Cập nhật theo đúng thứ tự semi-implicit
+
+```cpp title="include/lab.hpp — velocity mới được dùng cho position"
+const Vec2 acceleration = scale(particle.force, particle.inverseMass);
+particle.velocity = add(particle.velocity, scale(acceleration, deltaSeconds));
+particle.position = add(particle.position, scale(particle.velocity, deltaSeconds));
+```
+
+Đừng gộp hai dòng thành một biểu thức ngắn: thứ tự là nội dung đang học và cần nhìn thấy khi debug.
+
+### Bước 3 — Một chain step có ba pha rõ ràng
+
+```cpp title="include/lab.hpp — force, integrate, constraint"
+accumulateElasticForces(chain, gravity, gravityEnabled);
+for (Particle& particle : chain.particles) {
+    integrateParticle(particle, deltaSeconds);
+}
+enforceAnchor(chain);
+```
+
+`enforceAnchor` là safety invariant: position/velocity của particle đầu được phục hồi chính xác sau step, dù input state ban đầu bị sửa nhầm.
+
+### Bước 4 — Render frame chỉ lập kế hoạch fixed steps
+
+```cpp title="src/main.cpp — accumulator có giới hạn catch-up"
+if (!paused) {
+    plan = lab::planFixedSteps(accumulator, frameSeconds, fixedDeltaSeconds, 24, 0.1);
+    accumulator = plan.remainder;
+    droppedTime += plan.droppedTime;
+}
+```
+
+Frame dài bị clamp và số substep có trần 24. Nếu máy tạm dừng ở debugger, ứng dụng bỏ phần thời gian dư có báo cáo thay vì treo để “đuổi kịp”.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy chuỗi elastic chưa damping"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_checkpoint_4
+./build/Debug/project_25_checkpoint_4.exe
+```
+
+Nhấn Space để chạy, N để single-step và R để reset. Chuỗi sẽ dao động lâu vì hiện chưa có damping; đó là trạng thái có chủ đích, không phải phần bị quên.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi thứ tự hai dòng cập nhật để position dùng velocity cũ. So energy trace với bản đúng rồi hoàn tác.
+2. Truyền `frameSeconds` trực tiếp vào `stepElasticChain`. Giảm/tăng FPS và quan sát quỹ đạo đổi; hoàn tác về fixed dt.
+3. Xóa nhánh inverse mass zero. Anchor có thể nhận acceleration vô hạn hoặc di chuyển; hoàn tác guard và `enforceAnchor`.
+
+## Tự kiểm tra kết quả
+
+- Force 4 N trên mass 2 kg trong 0.5 s đổi velocity thêm 1 m/s.
+- Từ trạng thái đứng yên trên, position đi thêm 0.5 m vì dùng velocity mới.
+- Anchor position và velocity giữ chính xác sau mọi step.
+- 120 frame × 1/120 s và 30 frame × 1/30 s tạo cùng 120 physics step khi dt=1/120 s.
+- Pause không tích lũy một frame time khổng lồ khi resume.
+- Single-step chạy đúng một fixed dt.
+- State hỏng hoặc dt không dương bị từ chối.
+
+## Bài tập mở rộng
+
+Thêm explicit Euler vào một test nhỏ chỉ có một mass và một spring. Không đưa nó vào final; dùng nó để so energy growth với semi-implicit Euler trong cùng dt.
+
+Bài tiếp theo xử lý vấn đề quan sát được ngay: chuỗi lý tưởng dao động mãi. Ta sẽ thêm damping đúng phương của spring thay vì nhân bừa toàn bộ velocity.

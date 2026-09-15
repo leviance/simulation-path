@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ hạt trực tiếp từ SSBO
+
+## Vấn đề cần giải quyết
+
+Kernel đã tạo dữ liệu nhưng preview vẫn vẽ từ công thức CPU. Ta cần bỏ đường vòng đó: vertex shader sẽ đọc `positions` và `velocities` của bank đã hoàn tất. Sau bài này, hình bạn nhìn thấy thực sự lấy từ state GPU.
+
+Hạt vẫn đứng yên vì chưa có solver. Đây là một mốc kiểm tra quan trọng: nếu hạt sai trước khi tính lực, hãy tìm ở layout, binding, chỉ số hoặc camera.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi vertex ứng với một marker. Không cần upload vertex buffer riêng, vì `gl_VertexID` có thể dùng làm chỉ số SSBO. Core profile vẫn cần một VAO được bind, dù VAO không chứa attribute.
+
+$$p_{clip}=\frac{p_{world}-c}{h}.$$
+
+`c` là tâm camera; `h` là nửa vùng nhìn theo từng trục. Renderer chỉ đọc bank đã commit. Trong lúc một job compute đang chạy, ứng dụng giữ nguyên hình đã present và tiếp tục xử lý event, tránh xếp thêm các lệnh draw vào hàng đợi đang bận.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-3" />
+
+Pan/zoom trong Canvas chỉ đổi hình. Trong bản native, wheel zoom giữ world point dưới con trỏ; kéo chuột pan và Home đưa camera về hộp.
+
+## Viết code từng bước
+
+### Bước 1 — Đọc SSBO ngay trong vertex shader
+
+Dùng shader sau thay cho dữ liệu vertex phía CPU:
+
+```glsl title="shaders/particle.vert — đọc bank hiện tại"
+#version 430 core
+layout(std430, binding = 0) readonly buffer Positions { vec4 positions[]; };
+layout(std430, binding = 1) readonly buffer Velocities { vec4 velocities[]; };
+uniform uint uStride;
+uniform vec2 uCenter;
+uniform vec2 uHalfExtent;
+out vec3 color;
+
+void main() {
+    uint i = uint(gl_VertexID) * uStride;
+    vec2 point = (positions[i].xy - uCenter) / uHalfExtent;
+    gl_Position = vec4(point, 0, 1);
+    gl_PointSize = 3.0;
+    color = mix(vec3(0.2, 0.8, 0.9), vec3(1.0, 0.65, 0.3), clamp(length(velocities[i].xy), 0.0, 1.0));
+}
+```
+
+`gl_VertexID * uStride` chọn phần tử thực sự. `gl_PointSize` là kích thước marker, không phải bán kính tương tác. Fragment shader trong ZIP cắt góc của point thành hình tròn; nó không tham gia tính lực.
+
+### Bước 2 — Bind đúng bank và gọi draw
+
+Trong `ParticleView::draw`:
+
+```cpp title="include/particle_view.hpp — đoạn đang thêm"
+const auto& bank = storage.banks.at(current);
+const std::uint32_t stride = std::max(1U, ceilDivide(storage.plan.count, 100000));
+drawn = ceilDivide(storage.plan.count, stride);
+gl.UseProgram(program_);
+bind(gl, 0, bank.positions);
+bind(gl, 1, bank.velocities);
+gl.Uniform1ui(stride_, stride);
+gl.Uniform2f(center_, camera.x, camera.y);
+const float aspect = static_cast<float>(width) / static_cast<float>(std::max(1, height));
+gl.Uniform2f(halfExtent_, camera.halfHeight* aspect, camera.halfHeight);
+gl.Enable(GL_PROGRAM_POINT_SIZE);
+gl.BindVertexArray(vao_);
+gl.DrawArrays(GL_POINTS, 0, static_cast<GLsizei>(drawn));
+gl.BindVertexArray(0);
+```
+
+`drawn=ceil(N/stride)` và chỉ số cuối là `(drawn-1)*stride`, luôn nhỏ hơn N. Khi N lớn hơn 100.000, renderer bỏ qua một số marker nhưng solver vẫn tính mọi hạt. Đó là lấy mẫu để hiển thị, không phải giảm số hạt mô phỏng. Không lấy FPS của 100.000 marker rồi giới thiệu là đang vẽ 5 triệu marker.
+
+### Bước 3 — Zoom quanh con trỏ
+
+Phần camera vẫn là code CPU nhỏ:
+
+```cpp title="include/particle_view.hpp — đoạn đang thêm"
+void zoom(float mouseX, float mouseY, int width, int height, float wheel) {
+    const float screenHeight = static_cast<float>(std::max(1, height));
+    const float normalizedX = (2.0F * mouseX - static_cast<float>(width)) / screenHeight;
+    const float normalizedY = 1.0F - 2.0F * mouseY / screenHeight;
+    const float before = halfHeight;
+    halfHeight = std::clamp(before * std::exp(-wheel * 0.12F), 0.5F, 10000.0F);
+    x += normalizedX * (before - halfHeight);
+    y += normalizedY * (before - halfHeight);
+}
+```
+
+Ta tính vị trí con trỏ theo hệ tọa độ camera trước khi đổi độ phóng đại. Sau đó dịch tâm một lượng bù để world point không chạy khỏi con trỏ. Dữ liệu mouse dùng logical pixels nên `width/height` ở hàm này lấy từ `SDL_GetWindowSize`; còn viewport draw dùng kích thước framebuffer. Trộn hai loại kích thước sẽ làm zoom lệch trên màn hình HiDPI.
+
+## Ghép các phần lại
+
+Checkpoint 03 load `particle.vert`/`particle.frag` và chỉ gọi `view.draw` khi engine đã ready. Preview CPU không còn được dùng ở nhánh vẽ này.
+
+```bash title="Terminal Windows — build và chạy bài 3"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_3 --parallel 2
+.\build\Debug\project_45_checkpoint_3.exe
+```
+
+Sau initialize, 64 hạt phải xuất hiện ở cùng lattice như bài trước. Màu dựa trên tốc độ ban đầu, nhưng vị trí không đổi vì chưa có Drift. Mọi GL resource được giải phóng trước `SDL_GL_DestroyContext`.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `uStride` thành 2 ở ca 64 hạt nhưng giữ `drawn=64`. Vertex cuối sẽ đọc vượt mảng. Chỉ phân tích lỗi hoặc dùng debugger; không chạy thử đọc ngoài buffer trên GPU. Sửa công thức draw count cùng stride.
+2. Tạm đảo dấu `normalizedY` trong zoom. Đặt con trỏ gần mép trên và zoom: điểm bám trôi theo chiều dọc. Khôi phục phép đổi từ mouse y-down sang world y-up.
+
+## Tự kiểm tra kết quả
+
+Không có readback position trong vòng vẽ. N=64 cho drawn=64. Pan/zoom/Home hoạt động, zoom quanh con trỏ không đổi state hạt. Resize chỉ thay camera aspect/viewport, không reset seed.
+
+## Bài tập mở rộng
+
+Thêm lựa chọn hiển thị theo ID hoặc tốc độ và giải thích vì sao đây chỉ là thay đổi renderer. Giữ nguyên buffer vật lý.
+
+Tiếp theo: [tính lực và đối chiếu CPU](/projects/molecular-lab-gpu/04-tinh-luc-va-doi-chieu-cpu).
+

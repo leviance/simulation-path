@@ -1,0 +1,164 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép MVP và kiểm chứng toàn pipeline
+
+## Vấn đề cần giải quyết
+
+Checkpoint 6 đã chạy đúng từng stage, nhưng một renderer thật không muốn dựng lại chuỗi phép nhân cho mọi vertex. Các vertex của cùng model, cùng camera và cùng frame dùng chung Model, View, Projection; ta có thể ghép chúng thành một matrix rồi nhân mỗi local vertex đúng một lần để lấy Clip point.
+
+Tuy nhiên máy soi vẫn cần giá trị World và Camera để giải thích. Bản final vì vậy giữ hai đường tính:
+
+- **đường rời** tạo `PipelineTrace` để quan sát;
+- **đường ghép** dùng MVP để tạo Clip point như renderer tối ưu hơn.
+
+Hai đường phải trùng nhau trong sai số số thực.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với column vector:
+
+$$
+MVP=P\,V\,M
+$$
+
+và:
+
+$$
+p_{clip}=MVP\,p_{local}=P\big(V(Mp_{local})\big)
+$$
+
+Model nằm gần local vertex nhất nên chạy trước. Viết `M × V × P` không có nghĩa “đọc từ trái sang phải”; nó áp dụng Projection trước và tạo kết quả sai.
+
+Sai số kiểm chứng được lấy bằng trị tuyệt đối lớn nhất trên bốn thành phần Clip:
+
+$$
+error=\max_i\left|clip_{separate,i}-clip_{MVP,i}\right|
+$$
+
+<InteractiveLab demo="pipeline3d" mode="pipeline-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Ghép View với Model trước
+
+```cpp title="include/lab.hpp — MVP theo quy ước column vector"
+inline Mat4 mvpMatrix(
+    const ModelTransform& model,
+    const Camera3D& camera,
+    const PerspectiveLens& lens,
+    double aspectRatio
+) {
+    const Mat4 viewModel = multiply(viewMatrix(camera), modelMatrix(model));
+    return multiply(projectionMatrix(lens, aspectRatio), viewModel);
+}
+```
+
+Tên `viewModel` giúp đọc đúng: matrix này đã đưa Local qua Model rồi View. Projection được nhân ở ngoài cùng.
+
+### Bước 2 — So Clip point từ hai đường tính
+
+```cpp title="include/lab.hpp — đo sai số giữa pipeline rời và MVP"
+const PipelineTrace separate = tracePipeline(
+    localVertex,
+    model,
+    camera,
+    lens,
+    viewportWidth,
+    viewportHeight
+);
+const double aspectRatio = double(viewportWidth) / double(viewportHeight);
+const Vec4 composed = transform(mvpMatrix(model, camera, lens, aspectRatio), toPoint(localVertex));
+return maxAbsDifference(separate.clip, composed);
+```
+
+Ta so ở Clip stage, trước perspective divide. Nếu so pixel sau khi round, một lỗi nhỏ hoặc thậm chí lỗi bị clamp có thể bị che mất.
+
+### Bước 3 — Cho người dùng bước qua stage
+
+`Left/Right` chỉ thay `selectedStage`; nó không chạy lại pipeline theo cách khác. Title bar đọc trường tương ứng từ cùng một `PipelineTrace`:
+
+```cpp title="src/main.cpp — chọn stage nhưng không sửa dữ liệu"
+if (event.key.key == SDLK_LEFT) {
+    selectedStage = std::max(0, selectedStage - 1);
+}
+if (event.key.key == SDLK_RIGHT) {
+    selectedStage = std::min(5, selectedStage + 1);
+}
+```
+
+Nhờ đó việc “đi qua pipeline” là thay góc quan sát, không phải cập nhật dồn local point thành world rồi camera point.
+
+### Bước 4 — Animation vẫn dùng delta time có chặn
+
+```cpp title="include/lab.hpp — tiến model yaw theo thời gian hữu hạn"
+inline double advanceModelYaw(double yaw, double angularSpeed, double deltaTime) {
+    const double safeDeltaTime = std::clamp(deltaTime, 0.0, 0.1);
+    return std::remainder(yaw + angularSpeed * safeDeltaTime, 2.0 * kPi);
+}
+```
+
+`Space` pause/continue; `N` tiến đúng một bước 1/30 giây. Nếu cửa sổ bị kéo hoặc debugger dừng lâu, `deltaTime` lớn không làm model nhảy nhiều vòng.
+
+### Bước 5 — Kiểm tra các invariant độc lập với SDL
+
+```cpp title="tests/tests.cpp — pipeline rời phải khớp MVP ghép"
+check(
+    lab::pipelineAgreementError(localVertex, model, camera, lens, 1280, 720) <= 1e-9,
+    "separate Model View Projection matches composed MVP"
+);
+```
+
+Bộ test final còn kiểm:
+
+- identity giữ Vec4;
+- translation phân biệt point và direction;
+- Model matrix khớp scale → rotate → translate direct;
+- View matrix khớp inverse pose direct;
+- `clip.w = camera.z`;
+- near/far map vào NDC Z 0/1;
+- năm visibility status và viewport center;
+- matrix order thật sự không giao hoán.
+
+## Ghép các phần lại
+
+Build và chạy validation ở cả hai cấu hình. Các lệnh đều có test executable, không chỉ app:
+
+```bash title="Terminal — build và kiểm chứng Project 15"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Chạy `project_15_final` rồi thực hiện một vòng kiểm tra:
+
+1. `Left/Right` đi qua đủ sáu stage.
+2. `Q/E` đổi Model; Local giữ nguyên, World trở đi đổi.
+3. `W/S` hoặc `I/J/K/L` đổi camera; Local/World giữ nguyên, Camera trở đi đổi.
+4. `[`/`]` đổi FOV; Local/World/Camera giữ nguyên, Clip trở đi đổi.
+5. `1–5` chọn năm preset và xác nhận chỉ visible có marker.
+6. `Space`, `N`, `R` lần lượt pause, single-step và reset toàn state.
+
+## Thử làm sai để hiểu đúng
+
+1. Ghép `Model × View × Projection`. Test MVP agreement sẽ thất bại với pose tổng quát; phục hồi `Projection × View × Model`.
+2. So hai đường sau khi làm tròn screen pixel thay vì ở Clip. Một sai số có thể biến mất; trả phép đo về Vec4 Clip.
+3. Cho `selectedStage` ghi đè `localVertex` khi nhấn Right. Sau một vòng rail, dữ liệu sẽ không thể quay lại Local; hoàn tác thiết kế này.
+4. Bỏ guard `clip.w` rồi dùng preset behind. Xác nhận status hoặc NDC sai, sau đó phục hồi guard trước divide.
+
+## Tự kiểm tra kết quả
+
+- Pipeline rail chọn được đủ Local, World, Camera, Clip, NDC và Screen.
+- Tham số của một stage không sửa ngược dữ liệu ở stage trước.
+- MVP ghép và ba matrix rời tạo cùng Clip point với sai số không quá $10^{-9}$.
+- Point/direction, Model direct, View direct, clip W, near/far và năm status đều có test riêng.
+- Pause, single-step, reset, resize, keyboard và pointer drag hoạt động mà không tạo giá trị NaN.
+- Source không dùng OpenGL, GLM hoặc matrix helper từ thư viện ngoài.
+- Starter, bảy checkpoint, final và tests build sạch warning ở Debug lẫn Release.
+
+## Bài tập mở rộng
+
+Cho inspector nhận một array ba local vertex của tam giác và chọn vertex bằng phím `1–3`. Mỗi vertex có `PipelineTrace` riêng nhưng vẫn dùng chung Model/View/Projection. Chỉ vẽ ba marker; chưa tô bề mặt và chưa clip cạnh để giữ đúng phạm vi Project 15.
+
+Project 15 đã hoàn chỉnh. Project 16 sẽ dùng ba Screen vertex làm đầu vào cho rasterizer và lần đầu tô kín phần bên trong tam giác bằng pixel.

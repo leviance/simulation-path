@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng grid trên GPU để giảm số cặp
+
+## Vấn đề cần giải quyết
+
+Ở 100.000 hạt, mỗi invocation duyệt 99.999 hạt là quá nhiều. GPU không cứu được một lượng công việc tăng theo bình phương mãi mãi. Ta sẽ dùng grid để chỉ tìm hạt gần, nhưng giữ nguyên `accumulatePair` đã kiểm ở bài trước.
+
+Project 40 đã có CSR với count/scan/scatter. Bản đầu của Molecular Lab chọn **bucket 16 slot mỗi ô** để có giới hạn rõ ràng cho mỗi vòng lặp. Đổi lại, nó dùng bộ nhớ cho các slot trống và phải từ chối hệ quá đông trong một ô. Đây là quyết định thiết kế của lab, không phải thuật toán luôn tốt hơn CSR.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn số ô bằng `floor(L/(cutoff+skin))`. Khi đó cạnh ô thực tế `L/cells` không nhỏ hơn 2.9. Hạt trong khoảng cutoff của A phải nằm trong ô của A hoặc các ô kề, kể cả qua mép tuần hoàn.
+
+Một ô có `counts[cell]` phần tử. ID thứ k ở địa chỉ `indices[cell*16+k]`. Hai hạt vào cùng ô phải nhận hai k khác nhau, nên dùng kết quả trả về của `atomicAdd` làm slot. Nếu k từ 16 trở lên, ta đặt cờ lỗi chứ không ghi vượt buffer.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-5" />
+
+Chọn một hạt gần biên. Các ô xanh phải nối qua cạnh hộp. So số lượt kiểm của grid với mọi cặp; đây là phép đếm thuật toán, chưa là speedup thời gian.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo counts và indices với kích thước rõ ràng
+
+Phần allocation trong `Storage`:
+
+```cpp title="include/gpu_storage.hpp — đoạn đang thêm"
+referencePositions = allocateBuffer(gl, plan.particleBytes);
+counts = allocateBuffer(gl, 4ULL * plan.cells);
+indices = allocateBuffer(gl, plan.indexBytes);
+control = allocateBuffer(gl, sizeof(Control));
+```
+
+Counts cần 4 byte/ô; indices cần 16 × 4 byte/ô. Mỗi lần dựng lại phải chạy `clear.comp` trên mọi ô trước khi append. Không cần xóa toàn mảng indices: ta chỉ đọc các slot nhỏ hơn count của lần dựng hiện tại.
+
+### Bước 2 — Append nhưng không chấp nhận overflow
+
+Shader dựng grid hoàn chỉnh:
+
+```glsl title="shaders/build.comp — đặt ID vào bucket và lưu mốc"
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer Positions { vec4 positions[]; };
+layout(std430, binding = 1) writeonly buffer Reference { vec4 referencePositions[]; };
+layout(std430, binding = 2) buffer Counts { uint counts[]; };
+layout(std430, binding = 3) writeonly buffer Indices { uint indices[]; };
+layout(std430, binding = 4) buffer Control { uint flags; uint maxDisplacementBits; uint maxOccupancy; uint reserved; };
+uniform uint uCount;
+uniform uint uBase;
+uniform uint uCellsX;
+uniform uint uCellsY;
+uniform vec2 uBox;
+const uint cellCapacity = 16u;
+
+void main() {
+    uint i = uBase + gl_GlobalInvocationID.x;
+    if (i >= uCount) {
+        return;
+    }
+    vec2 position = positions[i].xy;
+    uvec2 cell = min(uvec2(position / uBox * vec2(uCellsX, uCellsY)), uvec2(uCellsX - 1u, uCellsY - 1u));
+    uint cellId = cell.y * uCellsX + cell.x;
+    uint slot = atomicAdd(counts[cellId], 1u);
+    atomicMax(maxOccupancy, slot + 1u);
+    if (slot >= cellCapacity) {
+        atomicOr(flags, 1u);
+        return;
+    }
+    indices[cellId * cellCapacity + slot] = i;
+    referencePositions[i] = vec4(position, 0, 0);
+    positions[i].zw = vec2(0);
+}
+```
+
+`slot` là giá trị trước khi cộng, nên slot đầu là 0. Khi vượt capacity, counts vẫn phản ánh số hạt thực tế và flag được bật. CPU chờ fence của toàn pha Build, đọc control rồi kiểm flag **trước khi gửi Force**. Không được viết `min(count,16)` rồi coi kết quả là đầy đủ.
+
+### Bước 3 — Duyệt các ô kề, không duyệt ô lặp
+
+Hàm CPU nhỏ này mô tả đúng stencil mà shader dùng:
+
+```cpp title="include/reference_grid.hpp — đoạn đang thêm"
+inline std::vector<std::uint32_t> neighborCells(const Plan& plan, std::uint32_t origin) {
+    std::vector<std::uint32_t> result{};
+    const int columns = static_cast<int>(plan.cellsX);
+    const int rows = static_cast<int>(plan.cellsY);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const int x = (static_cast<int>(origin % plan.cellsX) + dx + columns) % columns;
+            const int y = (static_cast<int>(origin / plan.cellsX) + dy + rows) % rows;
+            const auto cell = static_cast<std::uint32_t>(y * columns + x);
+            if (std::find(result.begin(), result.end(), cell) == result.end()) {
+                result.push_back(cell);
+            }
+        }
+    }
+    return result;
+}
+```
+
+Nếu một trục chỉ có hai ô, offset −1 và +1 có thể quay về cùng ô. Bỏ kiểm trùng sẽ cộng lực nhiều lần. Shader dùng mảng `visited[9]` thay cho vector, nhưng ý nghĩa giống nhau. Trong mỗi ô, `accumulatePair` vẫn đo khoảng cách hiện tại và lọc cutoff: grid chỉ tạo tập ứng viên, không khẳng định mọi hạt trong stencil có lực.
+
+## Ghép các phần lại
+
+Checkpoint 05 bật `features.grid`. Chuỗi khởi tạo trở thành Initialize → Clear → Build → Force. `uGrid=1` chọn nhánh tìm hạt qua bucket, không đổi công thức LJ.
+
+```bash title="Terminal Windows — build và chạy bài 5"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_5 --parallel 2
+.\build\Debug\project_45_checkpoint_5.exe
+```
+
+Chưa tích phân, nên grid chỉ được dựng một lần. Header `reference_grid.hpp` chỉ dùng trong tests nhỏ; bản native không dựng grid bằng CPU rồi upload để gọi đó là GPU grid.
+
+## Thử làm sai để hiểu đúng
+
+1. Đặt 17 hạt vào cùng một ô trong ca test CPU. `grid.valid` phải false; hàm lấy candidates phải từ chối dùng nó. Không cần gây một ca quá tải GPU để thử invariant này.
+2. Tạm bỏ dedup trong `neighborCells`, dùng hộp hai ô mỗi trục và đếm ID trả về. Bạn sẽ thấy cùng cell xuất hiện nhiều lần; khôi phục dedup và so force với mọi cặp.
+
+## Tự kiểm tra kết quả
+
+Mỗi ID xuất hiện đúng một lần trong các slot hợp lệ. Grid lattice 64/257 hạt không overflow. Lực và U khớp oracle ở mép và góc hộp. Cờ overflow phải chặn Force, không chỉ hiện cảnh báo rồi tiếp tục.
+
+## Bài tập mở rộng
+
+Ước tính bộ nhớ trống của bucket so với CSR cho cùng N. Nếu chuyển sang CSR, bạn phải thay những bước nào và còn cần giới hạn nào để một ô cực đông không làm kernel Force chạy quá lâu?
+
+Tiếp theo: [ghép Velocity Verlet](/projects/molecular-lab-gpu/06-ghep-velocity-verlet).
+

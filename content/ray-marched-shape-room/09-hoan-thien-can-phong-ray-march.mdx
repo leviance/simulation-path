@@ -1,0 +1,189 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện căn phòng ray-marched
+
+## Bức hình này còn thiếu gì?
+
+Một căn phòng trông ổn ở đúng một góc camera vẫn chưa đủ để gọi là hoàn thành. Bản cuối cần giúp ta kiểm tra được vì sao vòng ray marching dừng, normal có đúng hướng không, material có đi cùng bề mặt gần nhất không, shadow loop có giới hạn hay không và shader đang chạy có được giữ lại khi lần reload mới bị lỗi.
+
+Ta sẽ thêm ba debug views, một named validation report, quy trình build/test hữu hạn và cleanup theo đúng lifetime của OpenGL context. Sau đó source hoàn chỉnh trong trang và ZIP phải là cùng một snapshot.
+
+## Hình dung đường đi của một pixel
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-validation" />
+
+Nhấn D để chuyển Beauty → Steps → Hit → Normal. Đừng chỉ nhìn Beauty: ba view còn lại trả lời “tại sao pixel có màu này?” bằng dữ liệu ngay trong `MarchResult`.
+
+## Cùng sửa checkpoint
+
+### Bước 1 — Cho các chế độ debug dùng chung kết quả ray marching
+
+```glsl title="shaders/raymarch.frag — debug views"
+if (uDebugView == 1) {
+    float stepRatio = float(result.steps) /
+        float(max(uMaximumSteps, 1));
+    fragColor = vec4(
+        stepRatio,
+        0.25,
+        1.0 - stepRatio,
+        1.0
+    );
+    return;
+}
+
+if (uDebugView == 2) {
+    fragColor = vec4(
+        vec3(result.hit ? 1.0 : 0.0),
+        1.0
+    );
+    return;
+}
+
+if (uDebugView == 3 && result.hit) {
+    vec3 normal = estimateNormal(result.position);
+    fragColor = vec4(normal * 0.5 + 0.5, 1.0);
+    return;
+}
+```
+
+Không gọi một marcher riêng cho debug. Nếu Beauty và Steps dùng hai đường thuật toán khác nhau, debug view có thể che mất chính bug cần tìm.
+
+### Bước 2 — Báo rõ phép kiểm tra nào đang thất bại
+
+```cpp title="include/raymarch_math.hpp — report có tên"
+struct RayMarchValidationReport {
+    bool centerRayFinite{};
+    bool sphereSignCorrect{};
+    bool sphereHitDetected{};
+    bool missStopsAtGuard{};
+    bool normalPointsOutward{};
+    bool primitiveSurfacesCorrect{};
+    bool materialIdsStable{};
+    bool shadowBounded{};
+
+    bool allPassed() const {
+        return centerRayFinite &&
+            sphereSignCorrect &&
+            sphereHitDetected &&
+            missStopsAtGuard &&
+            normalPointsOutward &&
+            primitiveSurfacesCorrect &&
+            materialIdsStable &&
+            shadowBounded;
+    }
+};
+```
+
+Một biến `valid` duy nhất chỉ nói đỏ hay xanh. Các field có tên chỉ thẳng sang bài học và invariant cần sửa. Title bar final hiển thị `validation=PASS/FAIL`; CTest kiểm từng field để log lỗi không mơ hồ.
+
+### Bước 3 — Chỉ thay shader đang chạy khi shader mới hợp lệ
+
+Project 35 đã xây transaction này; Project 36 tái sử dụng thay vì compile rồi xóa active program ngay:
+
+```cpp title="include/raymarch_renderer.hpp — reload an toàn"
+bool reload(
+    GlApi& api,
+    const ShaderSources& sources,
+    std::string& diagnostics
+) {
+    ProgramCandidate candidate{};
+    if (!buildProgramCandidate(api, sources, candidate, diagnostics)) {
+        return false;
+    }
+
+    const GLuint previousProgram = activeProgram.program;
+    activeProgram = candidate;
+    ++generation;
+
+    if (previousProgram != 0) {
+        api.DeleteProgram(previousProgram);
+    }
+    diagnostics = "Ray-march shader reload succeeded.";
+    return true;
+}
+```
+
+Shader mới phải compile, link và có đủ uniform trước khi thay `activeProgram_`. Nếu fragment shader đang sửa dở, `activeProgram_` và `generation_` không đổi; căn phòng từ phiên bản đang chạy tốt vẫn hiển thị, còn lỗi được in trong terminal.
+
+## Chạy thử và quan sát
+
+### Các phím điều khiển trong bản hoàn chỉnh
+
+- Kéo chuột trái: orbit camera; wheel: zoom.
+- Space: pause/resume light; N: tiến thời gian 0,1 giây.
+- `[` / `]`: giảm/tăng maximum steps trong giới hạn an toàn.
+- `-` / `=`: giảm/tăng hit epsilon.
+- D: Beauty/Steps/Hit/Normal.
+- F5: thử compile shader từ đĩa và chỉ áp dụng nếu shader hợp lệ.
+- R: reset camera, time, marcher settings và debug view.
+- Escape: thoát.
+
+Title bar báo `steps`, `epsilon`, `debug`, `generation` và `validation`; những con số này biến app thành công cụ chẩn đoán chứ không chỉ là ảnh demo.
+
+## Mã hoàn chỉnh và cách build
+
+Phần **Mã hoàn chỉnh** bên dưới được sinh trực tiếp từ final checkpoint, gồm:
+
+- `include/raymarch_math.hpp`: vector, camera ray, SDF, marcher, normal, shadow và validation;
+- `include/gl_api.hpp`: function pointers OpenGL 3.3 cần dùng;
+- `include/raymarch_renderer.hpp`: đọc file shader, compile/link, kiểm tra uniform, thay shader an toàn và vẽ fullscreen;
+- `shaders/raymarch.vert`, `shaders/raymarch.frag`: toàn bộ chuỗi xử lý trên GPU;
+- `src/main.cpp`: SDL lifecycle, input, title, frame data và cleanup;
+- `tests/tests.cpp`: CTest CPU không mở window.
+
+Build final và tests bằng lệnh hữu hạn:
+
+```bash title="Terminal — Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_36_final project_36_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — Release"
+cmake --build build --config Release --target project_36_final project_36_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+`--timeout 20` là hàng rào bắt buộc cho test automation. Runtime app có window được kiểm thủ công rồi tự đóng; không đưa app tương tác vào CTest.
+
+## Nghiệm thu theo thứ tự bắt lỗi nhanh
+
+1. Chạy CTest trên CPU: camera ray, dấu của sphere, điều kiện hit/miss, normal, bề mặt primitive, material ID và giới hạn của tia tính bóng.
+2. Chạy final ở Beauty, resize rộng/hẹp và xác nhận aspect không méo.
+3. Chuyển Steps; giảm budget để thấy vùng silhouette thất bại trước.
+4. Chuyển Hit và Normal; kiểm ranh giới cùng hướng bề mặt.
+5. Orbit/zoom/reset, Alt+Tab trong lúc drag và xác nhận pointer không kẹt.
+6. Chèn lỗi cú pháp vào `raymarch.frag`, nhấn F5 và xác nhận shader cũ vẫn chạy, còn `generation` không tăng.
+7. Sửa shader, F5 lại và xác nhận generation tăng đúng một.
+8. Thoát app; program và VAO phải bị xóa khi context vẫn còn current.
+
+## Cố tình làm sai
+
+1. Cho Steps view gọi `marchRay` lần hai với settings khác. Hai view bất đồng và debug mất giá trị.
+2. Đặt debug Normal trước kiểm tra `result.hit`. Miss position bị dùng như bề mặt và sinh màu vô nghĩa.
+3. Thay shader đang chạy trước khi kiểm tra uniform. Một shader link thành công nhưng thiếu `uResolution` có thể khiến renderer nhận một program không dùng được.
+4. Destroy OpenGL context trước `renderer.destroy`. Các lệnh xóa GPU object chạy khi không còn context current.
+5. Bỏ timeout CTest. Một regression loop có thể giữ terminal vô hạn thay vì fail có kiểm soát.
+
+## Dấu hiệu cho thấy bài đã hoàn thành
+
+- [ ] Fullscreen triangle phủ viewport bằng một draw call, không object mesh.
+- [ ] Camera ray hữu hạn, normalize và đúng aspect ở mọi resize.
+- [ ] Sphere/box/torus/room có SDF cùng material ID ổn định.
+- [ ] Tia chính và tia tính bóng đều có giới hạn số bước và khoảng cách.
+- [ ] Normal lấy từ scene SDF; Lambert và visibility nằm trong miền hợp lệ.
+- [ ] Orbit camera có clamp, pointer capture cân bằng và reset tái lập được.
+- [ ] Beauty/Steps/Hit/Normal đọc cùng `MarchResult`.
+- [ ] F5 với shader lỗi vẫn giữ hình cũ; F5 với shader đúng tăng `generation` đúng một.
+- [ ] Starter, chín checkpoint và final build độc lập.
+- [ ] Debug/Release CTest hoàn tất trong timeout hữu hạn.
+- [ ] Canvas có DPR, keyboard, pause/reset, reduced-motion và mô tả thay thế.
+- [ ] Source trên trang trùng source trong ZIP tải về.
+
+## Thử đi thêm một bước
+
+1. Thêm ambient occlusion bằng vài SDF samples dọc normal và một debug view riêng.
+2. Thêm smooth union có tham số giữa sphere và torus, đồng thời thiết kế cách chọn material có thể giải thích được.
+3. Đo số primary/shadow samples theo frame bằng atomic counter hoặc query phù hợp, không dùng FPS làm correctness check.
+
+Project 37 vẫn dùng kết quả trên CPU làm mốc và báo rõ từng phép kiểm tra, nhưng chuyển từ fragment shader sang bài toán tính vector bằng compute shader.

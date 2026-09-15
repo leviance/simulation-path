@@ -1,0 +1,136 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng tháp pháo và mục tiêu theo chuột
+
+## Vấn đề cần giải quyết
+
+Project này không bắt đầu bằng một công thức. Ta bắt đầu bằng thứ có thể chạy và nhìn thấy: một tháp pháo ở giữa cửa sổ, một mục tiêu đi theo chuột và một nòng súng đang hướng sang phải.
+
+Starter ngay phía trên đã làm sẵn phần việc cũ: khởi tạo SDL3, tạo window/renderer, quản lý framebuffer, xử lý resize và vẽ lưới. Bài này tiếp tục từ bộ khung đó. Khi hoàn thành checkpoint 1, bạn phải có một cảnh hoàn chỉnh để các bài sau trả lời lần lượt những câu hỏi “mục tiêu có ở phía trước không?”, “lệch bao nhiêu độ?” và “nên quay theo chiều nào?”.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta đặt tâm tháp pháo tại gốc của world space. Vì vậy vị trí mục tiêu cũng chính là độ dời từ tháp pháo tới mục tiêu:
+
+$$
+\text{targetOffset}=\text{targetPosition}-\text{turretPosition}
+$$
+
+Trong project này `turretPosition = (0,0)`, nên hai vế có cùng giá trị. Dù vậy, tên `targetOffset` nhắc đúng ý nghĩa: đây là một vector chỉ từ tháp pháo tới mục tiêu, không phải tọa độ pixel tuyệt đối.
+
+World space dùng X sang phải và Y hướng lên. SDL báo tọa độ chuột trong screen space, với Y hướng xuống. Nếu tâm cửa sổ là `(centerX, centerY)`, phép đổi là:
+
+$$
+x_{world}=x_{mouse}-centerX,\qquad y_{world}=centerY-y_{mouse}
+$$
+
+<InteractiveLab demo="turret" mode="turret-scene" />
+
+Kéo mục tiêu qua phía trên rồi phía dưới tháp pháo. Quan sát dấu của `targetOffset.y`: phía trên cho số dương, phía dưới cho số âm. Đây là quy ước mà `sin`, `cos`, `atan2` và mọi phép toán ở các bài sau sẽ dùng.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo kiểu vector nhỏ, dễ đọc
+
+Mở `include/lab.hpp`. Ta chỉ cần các phép toán đã gặp ở Project 6, nhưng viết lại thành những hàm có tên rõ ràng để Project 8 có thể build độc lập.
+
+```cpp title="include/lab.hpp — Vec2 và các phép toán nền"
+struct Vec2 {
+    double x{};
+    double y{};
+};
+
+inline Vec2 add(Vec2 left, Vec2 right) {
+    return {left.x + right.x, left.y + right.y};
+}
+
+inline Vec2 subtract(Vec2 left, Vec2 right) {
+    return {left.x - right.x, left.y - right.y};
+}
+
+inline Vec2 scale(Vec2 vector, double scalar) {
+    return {vector.x * scalar, vector.y * scalar};
+}
+```
+
+`Vec2` không biết gì về SDL hay pixel. Đây là dữ liệu toán học thuần, nên phần test sau này có thể dùng nó mà không mở cửa sổ.
+
+### Bước 2 — Biến góc của nòng súng thành một hướng
+
+Ta lưu trạng thái nòng súng bằng `turretAngle`. Hướng tương ứng có độ dài 1:
+
+```cpp title="include/lab.hpp — hướng được suy ra từ góc"
+inline Vec2 directionFromAngle(double angle) {
+    return {std::cos(angle), std::sin(angle)};
+}
+```
+
+Với `turretAngle = 0`, kết quả là `(1,0)`: nòng súng hướng sang phải. Muốn vẽ nòng dài 115 pixel, ta dùng `scale(forward, 115.0)`; không cần lưu riêng endpoint của nòng.
+
+### Bước 3 — Đổi mouse motion sang world space
+
+Đặt trạng thái ban đầu trước event loop, rồi cập nhật nó khi SDL gửi mouse motion:
+
+```cpp title="src/main.cpp — vị trí mục tiêu và mouse input"
+const lab::Vec2 initialTargetOffset{220.0, 120.0};
+lab::Vec2 targetOffset = initialTargetOffset;
+const double initialTurretAngle = 0.0;
+double turretAngle = initialTurretAngle;
+
+// Nằm bên trong vòng SDL_PollEvent.
+if (event.type == SDL_EVENT_MOUSE_MOTION) {
+    const lab::Vec2 center = screenCenter(width, height);
+    targetOffset = {
+        event.motion.x - center.x,
+        center.y - event.motion.y,
+    };
+}
+```
+
+Phép trừ ở thành phần Y là chủ ý. Nếu viết `event.motion.y - center.y`, mọi góc sẽ bị phản chiếu qua trục X.
+
+### Bước 4 — Suy toàn bộ hình vẽ từ trạng thái
+
+Sau khi xóa framebuffer, tính các điểm cần vẽ trong frame hiện tại:
+
+```cpp title="src/main.cpp — dựng tháp pháo, nòng súng và mục tiêu"
+const lab::Vec2 center = screenCenter(width, height);
+const lab::Vec2 targetScreen = worldToScreen(targetOffset, center);
+const lab::Vec2 forward = lab::directionFromAngle(turretAngle);
+const lab::Vec2 barrelEnd = worldToScreen(lab::scale(forward, 115.0), center);
+
+drawLine(pixels, width, height, int(std::lround(center.x)), int(std::lround(center.y)), int(std::lround(targetScreen.x)), int(std::lround(targetScreen.y)), rgba(66, 79, 105));
+
+fillCircle(pixels, width, height, int(std::lround(center.x)), int(std::lround(center.y)), 27, rgba(44, 55, 82));
+
+drawArrow(pixels, width, height, center, barrelEnd, rgba(255, 226, 108));
+drawTarget(pixels, width, height, targetScreen, rgba(255, 107, 107));
+```
+
+Đường xám nối tâm với mục tiêu biểu diễn `targetOffset`. Mũi tên vàng biểu diễn `forward`. Hai vector này có cùng gốc; đó là hình học mà ta sẽ so sánh trong bài 2.
+
+## Ghép các phần lại
+
+Build `project_8_checkpoint_1` rồi di chuyển chuột quanh cửa sổ. Nòng súng vẫn đứng yên là đúng: bài này chỉ dựng dữ liệu đầu vào và hình vẽ, chưa viết hành vi tự quay.
+
+Hãy tự lần theo một trường hợp cụ thể. Nếu cửa sổ rộng 960, cao 640 và chuột ở `(700,200)`, tâm là `(480,320)`, do đó `targetOffset = (220,120)`. Khi đổi ngược ra màn hình, `worldToScreen` phải trả đúng `(700,200)`.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi công thức Y thành `event.motion.y - center.y`. Đưa chuột lên trên nhưng mục tiêu toán học lại nằm phía dưới; về sau tháp pháo sẽ chọn sai chiều quay.
+2. Lưu thẳng `event.motion.x/y` vào `targetOffset`. Mục tiêu không còn được đo từ tâm; resize cửa sổ làm ý nghĩa vector thay đổi.
+3. Lưu cả `barrelEnd` như một trạng thái riêng. Sau đó sửa `turretAngle` mà quên sửa endpoint để thấy hai dữ liệu có thể lệch nhau như thế nào.
+
+## Tự kiểm tra kết quả
+
+- Tháp pháo luôn nằm ở tâm sau khi resize.
+- Mục tiêu bám đúng con trỏ ở cả bốn góc phần tư.
+- `targetOffset.y` dương khi chuột ở phía trên tâm.
+- Nòng súng dài ổn định và hướng sang phải khi `turretAngle = 0`.
+- Đóng cửa sổ hoặc nhấn Escape đều thoát sạch.
+
+## Bài tập mở rộng
+
+Vẽ thêm nhãn trục `+X` và `+Y`, hoặc đổi màu đường nối khi mục tiêu nằm bên trái tháp pháo. Chưa dùng `dot product`: hãy thử quyết định chỉ bằng dấu của `targetOffset.x`, rồi ghi lại vì sao cách đó sẽ không đủ khi nòng súng bắt đầu quay.
+
+Bài tiếp theo thay câu hỏi “X của mục tiêu dương hay âm?” bằng một phép đo dùng được với mọi hướng nòng súng.

@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa particle indices vào các đoạn CSR
+
+## Bài toán cần giải quyết
+
+Mỗi cell đã có một đoạn `[offset, offset + count)`, nhưng các particle trong cùng cell vẫn phải chọn những slot khác nhau. Ghi tất cả vào `offsets[cell]` sẽ làm chúng đè lên nhau; tăng trực tiếp `offsets` lại làm mất địa chỉ đầu đoạn. Ta sẽ tạo `cellCursors` riêng và dùng giá trị cũ trả về từ `atomicAdd` làm slot.
+
+Ta giữ offsets bất biến, copy chúng sang `cellCursors`, rồi dùng **atomic scatter**: giá trị cũ trả về từ `atomicAdd(cursor,1)` trở thành slot độc quyền. Kết quả là một mảng `sortedIndices` dài đúng N; tên “sorted” chỉ có nghĩa được nhóm theo cell, không có nghĩa index tăng dần trong cell.
+
+## Theo dõi một particle đi qua grid
+
+Giả sử cell 2 có `offset=5`, `count=3`. Cursor bắt đầu ở 5. Ba particle đến theo bất kỳ thứ tự nào sẽ nhận slot 5, 6, 7. Sau scatter:
+
+```text
+cursor[2] == offset[2] + count[2] == 8
+```
+
+Atomic quyết định ai nhận slot nào, nhưng không ai nhận trùng slot. Membership là invariant; order không phải invariant.
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="csr-scatter" />
+
+Thay đổi bước arrival. Các index trong cùng đoạn có thể đảo, còn offsets/counts và tập membership không đổi. Đây là hành vi hợp lệ cần được validation chấp nhận.
+
+## Xây từng phần
+
+### Bước 1 — Sao chép offsets để tạo cursor ghi
+
+```cpp title="include/gpu_grid_engine.hpp — dispatchPrepareCursors"
+void dispatchPrepareCursors(GlApi& gl) {
+    prepareProgram_.use(gl);
+    gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, buffers_.cellOffsets);
+    gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1U, buffers_.cellCursors);
+    gl.Uniform1i(prepareProgram_.uniform("uCellCount"), static_cast<GLint>(spec_.cellCount()));
+    gl.DispatchCompute(static_cast<GLuint>(ceilDiv(spec_.cellCount(), kWorkgroupSize)), 1U, 1U);
+}
+```
+
+Pass này chạy theo cell domain. Sau nó, offsets vẫn nguyên để query đọc; cursors được phép thay đổi trong scatter.
+
+### Bước 2 — Cho mỗi particle tự ghi index của mình
+
+```cpp title="include/gpu_grid_engine.hpp — dispatchScatter"
+void dispatchScatter(GlApi& gl) {
+    scatterProgram_.use(gl);
+    gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, buffers_.positions);
+    gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1U, buffers_.cellCursors);
+    gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 2U, buffers_.sortedIndices);
+    setGridUniforms(gl, scatterProgram_);
+    gl.DispatchCompute(static_cast<GLuint>(ceilDiv(positions_.size(), kWorkgroupSize)), 1U, 1U);
+}
+```
+
+Bindings nói rõ ownership: positions chỉ đọc, cursors atomic read/write, sorted indices chỉ ghi.
+
+### Bước 3 — Lấy slot từ giá trị cũ của atomicAdd
+
+```glsl title="shaders/scatter_indices.comp — atomic cursor"
+uint particle = gl_GlobalInvocationID.x;
+if (particle >= uint(uParticleCount)) {
+    return;
+}
+
+uint cell = cellFor(positions[particle]);
+uint slot = atomicAdd(cellCursors[cell], 1u);
+sortedIndices[slot] = particle;
+```
+
+Nếu count/scan đúng, `slot` tự động nằm trong đoạn của cell. Không cần modulo và không cần một allocator toàn cục.
+
+### Bước 4 — Bản CPU chỉ kiểm particle thuộc đúng cell, không ép thứ tự
+
+```cpp title="include/grid_math.hpp — CPU scatter mirror"
+for (std::size_t index = 0; index < positions.size(); ++index) {
+    const std::uint32_t cell = cellId(spec, positions[index]);
+    const std::uint32_t slot = cursors[cell]++;
+    grid.sortedIndices[slot] = static_cast<std::uint32_t>(index);
+}
+```
+
+CPU mirror có thứ tự ổn định chỉ để test hình dạng CSR. GPU được phép tạo một permutation khác trong mỗi cell.
+
+## Chạy cả chuỗi xử lý
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_40_checkpoint_4 project_40_tests
+```
+
+Bài 4 nối ba pass `scan → prepare → scatter`, đặt shader-storage barrier giữa mỗi lần ghi và lần đọc tiếp theo, rồi mới readback để kiểm tra. Tổng số slot đã dùng phải bằng N; cursor cuối của mỗi cell phải bằng `offset + count`.
+
+## Cố tình làm hỏng grid
+
+1. AtomicAdd trực tiếp `cellOffsets`. Scatter có thể hoàn tất, nhưng query mất begin address của mọi cell.
+2. Copy offsets trước khi scan hoàn tất hoặc thiếu barrier. Cursors nhận offsets cũ và các đoạn chồng nhau.
+3. Dùng `slot = offsets[cell] + particle`. Hầu hết slot vượt đoạn vì particle index không phải local rank trong cell.
+4. Validation đòi indices trong cell tăng dần. Một GPU execution hợp lệ bị báo sai chỉ vì atomic order khác.
+
+## Tự nghiệm thu
+
+- [ ] Offsets không đổi sau prepare/scatter.
+- [ ] Cursors bắt đầu bằng offsets và kết thúc bằng `offset+count`.
+- [ ] Mỗi particle index xuất hiện đúng một lần trong `sortedIndices`.
+- [ ] Mỗi index nằm trong đoạn CSR của đúng cell.
+- [ ] Đảo arrival order vẫn giữ membership nhưng được phép đổi thứ tự trong đoạn.
+- [ ] Không slot nào nhỏ hơn 0 hoặc lớn hơn/equal N.
+
+## Hướng mở rộng
+
+1. Viết validation chỉ kiểm từng index đúng cell mà không cần sort toàn mảng.
+2. Thêm buffer `particleCellIds` để tránh tính lại cell ID ở count/scatter, rồi đo xem bandwidth thêm có đáng không.
+3. Tạo dữ liệu trong đó mọi particle cùng nằm ở một cell để thử cursor atomic trong trường hợp tranh chấp cao và kiểm tra không mất index.
+
+Bài 5 sẽ dùng ba mảng `counts`, `offsets`, `sortedIndices` như một index thật và tính candidate cell range cho từng particle.

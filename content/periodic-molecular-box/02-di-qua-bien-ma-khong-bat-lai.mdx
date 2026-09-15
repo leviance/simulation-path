@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho hạt đi qua biên mà không bật lại
+
+## Vấn đề cần giải quyết
+
+Giữ cửa sổ và hai marker của bài 1. Bây giờ ta cho chúng chuyển động thẳng: A đi về mép trái, B đi về mép phải. Nếu tiếp tục cộng `velocity*dt`, position sẽ ra ngoài khoảng `[0,12)`. Với hộp có tường, ta phản xạ vị trí và đổi dấu velocity. Với hộp tuần hoàn, không có va chạm nào xảy ra để làm điều đó.
+
+Điều cần thay là cách ghi tọa độ. Một hạt ở `x=-0.25` được biểu diễn tại `x=11.75` trong ô gốc. Nó vẫn đang đi sang trái, chứ không quay đầu. Đây là [periodic boundary](/glossary#periodic-boundary).
+
+## Hiểu ý tưởng trước khi viết code
+
+Với cạnh hộp `L`, hãy chia `x` thành “số ô đã đi” và “vị trí trong ô”. Phần thứ hai là tọa độ ta cần:
+
+$$
+q=\left\lfloor \frac{x}{L}\right\rfloor,\qquad
+x_w=x-Lq.
+$$
+
+Ví dụ `x=-0.25`, `L=12`: `floor(-0.25/12)=-1`, nên `xw=-0.25-12*(-1)=11.75`. Nếu ép kiểu về `int`, giá trị âm gần zero bị cắt thành 0 thay vì -1 và hạt vẫn nằm ngoài hộp. Vì vậy `floor` không phải chi tiết có thể đổi tùy ý.
+
+| x trước wrap | Số ô q | x trong ô gốc |
+| --- | --- | --- |
+| -0.25 | -1 | 11.75 |
+| 12 | 1 | 0 |
+| 36.25 | 3 | 0.25 |
+| -36.25 | -4 | 11.75 |
+
+Ta chọn miền **nửa mở** `[0,L)`: có 0 nhưng không có L. Hai giá trị ấy chỉ cùng một vị trí tuần hoàn; lưu cả hai sẽ khiến một số phép kiểm biên trở nên mơ hồ.
+
+<InteractiveLab demo="periodic-molecular-box" mode="pbc-wrap" />
+
+Chạy preset một hạt. A bắt đầu gần mép trái và xuất hiện lại ở phía phải khá nhanh; thành phần y vẫn tiếp tục tăng. Dừng ngay trước mép và tiến từng bước để xem position thay đổi mà hướng chuyển động không đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Viết hàm wrap một thành phần
+
+Thêm hàm sau vào `include/periodic.hpp`. Lỗi đầu vào trả một giá trị không hữu hạn, để bước tính phía trên có thể từ chối thay vì âm thầm nhận một tọa độ giả.
+
+```cpp title="include/periodic.hpp — wrap một tọa độ"
+inline double wrapCoordinate(double value, double boxLength) {
+    if (!std::isfinite(value) || !std::isfinite(boxLength) || boxLength <= 0.0) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    double wrapped = value - boxLength * std::floor(value / boxLength);
+    // Sai số làm tròn có thể cho đúng L khi value rất gần 0 từ phía âm.
+    if (wrapped >= boxLength) {
+        wrapped = 0.0;
+    }
+    if (wrapped == 0.0) {
+        return 0.0;
+    }
+    return wrapped;
+}
+```
+
+Nhánh cuối chuẩn hóa cả `-0.0` thành `0.0`. Đây không phải việc dịch hạt: hai số biểu diễn cùng vị trí, nhưng giữ một dạng giúp số liệu dễ đối chiếu. Với tọa độ lớn tới mức `double` không còn giữ được phần lẻ của x, không công thức nào khôi phục chính xác phần lẻ đã mất; project chỉ chạy các thí nghiệm hữu hạn.
+
+### Bước 2 — Áp dụng cho cả hai trục
+
+```cpp title="include/periodic.hpp — wrap vị trí 2D"
+inline Vec2 wrapPosition(Vec2 position, Box box) {
+    return {wrapCoordinate(position.x, box.width), wrapCoordinate(position.y, box.height)};
+}
+```
+
+Không dùng `width` cho cả x lẫn y. Hộp vuông sẽ che lỗi này, nên CTest sẽ dùng thêm hộp chữ nhật. Cũng không trừ bán kính marker khỏi L: hạt vật lý là một điểm, còn marker là ký hiệu vẽ.
+
+### Bước 3 — Cập nhật vị trí rồi wrap
+
+```cpp title="include/periodic.hpp — bước chuyển động chưa có lực"
+inline void ballisticStep(Particle& particle, Box box, double dt) {
+    const Vec2 displacement = scale(particle.velocity, dt);
+    particle.position = wrapPosition(add(particle.position, displacement), box);
+}
+```
+
+Nhìn lại hàm: không có dòng nào gán `particle.velocity`. Đây là điều ta muốn chứng minh trong bài. `dt` được truyền vào là fixed timestep, chưa phải thời gian render vừa đo được.
+
+### Bước 4 — Gọi từ vòng lặp theo thời gian cố định
+
+Trong `main.cpp`, phần bước vật lý duyệt từng hạt, gọi `ballisticStep`, rồi tăng `system.elapsed` đúng `fixedDt`. Phím Space chạy/dừng, N tiến một bước, R dựng lại state đầu. Accumulator và giới hạn bước đã được bố trí trong source để cửa sổ vẫn nhận event khi máy chậm; ta sẽ đọc kỹ phần này khi chuyển sang nhiều hạt ở bài 5.
+
+Ở checkpoint 2, chỉ có chuyển động thẳng. Chưa gọi Lennard–Jones, nên hai hạt đi xuyên qua nhau cũng không phải lỗi của bài này.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 2"
+cmake --build build --config Debug --target project_43_checkpoint_2
+.\build\Debug\project_43_checkpoint_2.exe
+```
+
+Mặc định C++ dùng cặp hạt từ bài 1, còn Canvas mở preset một hạt nhanh hơn để thấy vượt biên sớm. Công thức là một; nếu muốn thấy ngay trên C++, tạm tăng độ lớn velocity trong `makePair`, build lại rồi trả về giá trị cũ sau thí nghiệm.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay `floor(value/boxLength)` bằng ép kiểu `int`. Thử `value=-0.25`: hạt không được đưa về 11.75. Trả lại `floor`, rồi kiểm thêm `-36.25` để chắc rằng sửa không chỉ đúng khi vượt một biên.
+2. Thêm dòng đổi dấu vx khi x vừa qua biên. Hạt xuất hiện ở mép đối diện nhưng chạy ngược lại: bạn đã trộn periodic boundary với phản xạ tường. Xóa dòng đảo dấu và so lại velocity trước/sau.
+3. Thay wrap bằng `std::clamp`. Hạt dính ở mép khi vẫn có vận tốc hướng ra ngoài. Đây là mất quãng đường, không phải điều kiện biên tuần hoàn; khôi phục công thức trước khi sang bài sau.
+
+## Tự kiểm tra kết quả
+
+- Bốn ca trong bảng đều cho đáp án đúng.
+- Wrap lần hai không làm vị trí đổi thêm.
+- Position luôn trong miền nửa mở ở cả hai trục; velocity không đổi.
+- Một bước có thể đi qua nhiều ô mà không cần vòng `while` trừ L từng lần.
+
+## Bài tập mở rộng
+
+Viết phép kiểm cho hạt đi chéo qua một góc hộp, chẳng hạn từ `(-0.25,8.5)` trong hộp 12×8. Kết quả phải là `(11.75,0.5)`. Khi phần vị trí đã rõ, sang [bài 3 — đo khoảng cách qua biên](/projects/periodic-molecular-box/03-do-khoang-cach-qua-bien).

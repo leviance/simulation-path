@@ -1,0 +1,199 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vùng khóa mục tiêu và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Tháp pháo đã quay về mục tiêu, nhưng chương trình chưa có khái niệm “đã ngắm đủ gần”. Ta sẽ tạo một vùng nhìn đối xứng quanh nòng súng. Nếu góc sai lệch không vượt quá `halfViewAngle`, mục tiêu chuyển sang màu xanh và trạng thái đổi thành `LOCKED`.
+
+Đây cũng là lúc dừng thêm tính năng, kiểm tra các trường hợp biên và chạy bản hoàn chỉnh. Một hình vẽ đẹp chưa chứng minh projection vuông góc hay bước quay không vượt giới hạn; những điều đó cần test bằng số.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cách trực tiếp là tính `angleBetween` rồi so:
+
+$$
+\theta\leq \text{halfAngle}
+$$
+
+Nhưng trên khoảng `[0,π]`, cosine giảm khi góc tăng. Vì vậy điều kiện tương đương là:
+
+$$
+\cos(\theta)\geq\cos(\text{halfAngle})
+$$
+
+Vế trái chính là normalized dot đã có. Kiểm tra này không cần gọi `acos` mỗi frame. `halfAngle` là nửa góc vì vùng nhìn mở sang cả hai phía của hướng nòng; nếu `halfAngle = 35°`, góc mở đầy đủ là 70°.
+
+<InteractiveLab demo="turret" mode="turret-view-cone" />
+
+Tạm dừng, đặt mục tiêu bằng preset **Chéo 35°** rồi đổi nửa góc khóa quanh 35°. Quan sát cả hai vế của bất đẳng thức. Trên đường biên, project dùng phép so sánh `>=`, nên mục tiêu được tính là ở trong vùng.
+
+## Viết code từng bước
+
+### Bước 1 — Viết phép kiểm tra độc lập với phần vẽ
+
+```cpp title="include/lab.hpp — isWithinViewCone"
+inline bool isWithinViewCone(
+    Vec2 forward,
+    Vec2 toTarget,
+    double halfAngle
+) {
+    if (!hasDirection(forward) ||
+        !hasDirection(toTarget) ||
+        !std::isfinite(halfAngle)) {
+        return false;
+    }
+
+    double safeHalfAngle = halfAngle;
+    if (safeHalfAngle < 0.0) {
+        safeHalfAngle = 0.0;
+    }
+    if (safeHalfAngle > kPi) {
+        safeHalfAngle = kPi;
+    }
+
+    return cosineBetween(forward, toTarget) >=
+        std::cos(safeHalfAngle);
+}
+```
+
+Zero target direction trả `false`: khi mục tiêu nằm đúng tâm, chương trình không có hướng để xác nhận khóa. `halfAngle` được chặn trong `[0,π]` để hàm luôn có ý nghĩa hình học rõ ràng.
+
+### Bước 2 — Lưu và điều chỉnh nửa góc vùng nhìn
+
+```cpp title="src/main.cpp — trạng thái và phím điều khiển cone"
+const double initialHalfViewAngle = 35.0 * lab::kPi / 180.0;
+double halfViewAngle = initialHalfViewAngle;
+
+if (event.key.key == SDLK_LEFTBRACKET) {
+    halfViewAngle = std::max(
+        5.0 * lab::kPi / 180.0,
+        halfViewAngle - 5.0 * lab::kPi / 180.0
+    );
+}
+if (event.key.key == SDLK_RIGHTBRACKET) {
+    halfViewAngle = std::min(
+        90.0 * lab::kPi / 180.0,
+        halfViewAngle + 5.0 * lab::kPi / 180.0
+    );
+}
+```
+
+Phím `[` thu hẹp và `]` mở rộng. Trạng thái vẫn lưu bằng radian; số 5° và 90° được đổi ngay tại nơi nhập.
+
+### Bước 3 — Vẽ hai cạnh và đổi màu mục tiêu
+
+```cpp title="src/main.cpp — biểu diễn vùng khóa"
+const bool targetLocked = lab::isWithinViewCone(
+    forward,
+    targetOffset,
+    halfViewAngle
+);
+
+const lab::Vec2 lowerBoundary = lab::directionFromAngle(
+    turretAngle - halfViewAngle
+);
+const lab::Vec2 upperBoundary = lab::directionFromAngle(
+    turretAngle + halfViewAngle
+);
+
+// Hai boundary được scale 190 pixel rồi vẽ từ center.
+std::uint32_t targetColor = rgba(255, 107, 107);
+if (targetLocked) {
+    targetColor = rgba(83, 240, 174);
+}
+drawTarget(pixels, width, height, targetScreen, targetColor);
+```
+
+Hai cạnh được suy ra từ `turretAngle ± halfViewAngle`, nên tự đi theo nòng súng. Không lưu endpoint của chúng thành trạng thái riêng.
+
+### Bước 4 — Kiểm tra projection bằng đẳng thức
+
+Một test tốt mô tả điều luôn phải đúng với nhiều dữ liệu, thay vì chỉ chụp lại một frame:
+
+```cpp title="tests/tests.cpp — projection và rejection"
+const lab::Vec2 projected = lab::vectorProjection(
+    {3.0, 4.0},
+    {1.0, 0.0}
+);
+const lab::Vec2 rejected = lab::rejection(
+    {3.0, 4.0},
+    {1.0, 0.0}
+);
+
+check(nearlyEqual(lab::add(projected, rejected), {3.0, 4.0}), "projection plus rejection reconstructs vector");
+check(nearlyEqual(lab::dot(projected, rejected), 0.0), "projection and rejection are perpendicular");
+```
+
+Nếu sau này đổi cách cài đặt projection, hai điều kiện cấu trúc này vẫn phải giữ nguyên.
+
+### Bước 5 — Kiểm tra bước quay và đường biên cone
+
+```cpp title="tests/tests.cpp — rotation và view cone"
+const double firstTurn = lab::rotateTowards(
+    0.0,
+    {0.0, 1.0},
+    0.25
+);
+check(nearlyEqual(firstTurn, 0.25), "rotateTowards respects maximum step");
+
+const lab::Vec2 forward{1.0, 0.0};
+check(lab::isWithinViewCone(forward, lab::directionFromAngle(20.0 * lab::kPi / 180.0), 30.0 * lab::kPi / 180.0), "target inside cone is accepted");
+check(!lab::isWithinViewCone(forward, lab::directionFromAngle(40.0 * lab::kPi / 180.0), 30.0 * lab::kPi / 180.0), "target outside cone is rejected");
+```
+
+Bộ test hoàn chỉnh trong source còn bao phủ ba mốc dot product, clamp của cosine, dấu cross, bước quay cuối không vượt đích, zero vector và `NaN`.
+
+### Bước 6 — Build, chạy test và mở bản final
+
+```bash title="terminal — Debug"
+cmake -S . -B build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Sau khi Debug vượt qua, chạy lại với `--config Release`, rồi mở `project_8_final`. Target final được build mặc định; `BUILD_CHECKPOINTS` chỉ cần khi bạn muốn dựng lại starter và sáu mốc học.
+
+```bash title="terminal — Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+## Ghép các phần lại
+
+Bản hoàn chỉnh có các điều khiển sau:
+
+| thao tác | kết quả |
+|---|---|
+| di chuyển chuột | đặt mục tiêu |
+| `Space` | pause/tiếp tục việc quay |
+| `↑` / `↓` | tăng/giảm tốc độ quay |
+| `[` / `]` | thu hẹp/mở rộng vùng khóa |
+| `R` | đưa mọi trạng thái về ban đầu |
+| `Escape` | thoát |
+
+Khi chạy, hãy đọc hình theo thứ tự: đường xám là vector tới mục tiêu; nòng vàng là `forward`; mũi tên xanh là projection; đoạn đỏ là rejection; hai tia xám là biên vùng khóa. Mục tiêu xanh nghĩa là normalized dot đã vượt ngưỡng.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `>=` thành `<=` trong `isWithinViewCone`. Mục tiêu phía sau lại dễ được khóa hơn mục tiêu trước nòng.
+2. So `cosineBetween >= halfAngle` mà quên `cos`. Hai vế không cùng ý nghĩa và ngưỡng thay đổi sai theo degree/radian.
+3. Dùng toàn bộ góc mở 70° làm `halfAngle`. Cone thật sẽ rộng 140°.
+4. Cho zero target direction trả `true`. Đưa chuột vào tâm để thấy một mục tiêu không có hướng vẫn bị báo khóa.
+
+## Tự kiểm tra kết quả
+
+- Mục tiêu ở ±20° nằm trong cone 30°; mục tiêu ở ±40° nằm ngoài.
+- Mục tiêu đúng trên biên được chấp nhận.
+- Hai cạnh cone luôn đối xứng quanh nòng khi nó quay.
+- Pause không khóa chuột, tốc độ hoặc half-angle; reset khôi phục toàn bộ trạng thái.
+- Resize không làm mất texture, lệch tâm hay đảo hệ tọa độ.
+- CTest vượt qua ở Debug và Release.
+
+## Bài tập mở rộng
+
+Thêm hai ngưỡng khác nhau: khóa khi góc nhỏ hơn 8°, nhưng chỉ mất khóa khi góc lớn hơn 12°. Khoảng chênh này gọi là hysteresis và giúp trạng thái không nhấp nháy khi mục tiêu dao động ngay sát biên.
+
+Bạn cũng có thể thêm một bán kính phát hiện rồi yêu cầu đồng thời `distance <= range` và mục tiêu nằm trong view cone. Hãy viết test riêng cho điều kiện góc, điều kiện khoảng cách và phép kết hợp của chúng.
+
+Đến đây Project 8 đã hoàn chỉnh. Phần **Mã hoàn chỉnh của project** bên dưới chứa toàn bộ `CMakeLists.txt`, `lab.hpp`, `main.cpp` và `tests.cpp` đúng với gói ZIP; bạn có thể sao chép hoặc tải về rồi build ngay.

@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Duyệt mọi cặp và giải toàn bộ bể
+
+## Vấn đề cần giải quyết
+
+Ta đã giải được một pair, nhưng 144 ball tạo ra 10.296 unordered pair trong mỗi pass. Duyệt cả `(A,B)` lẫn `(B,A)` sẽ áp response hai lần; duyệt `(A,A)` tạo coincident contact giả; tích phân position lại trong từng solver iteration làm thời gian chạy nhanh hơn cấu hình.
+
+World step cần một thứ tự rõ: integrate một lần, sau đó lặp hữu hạn các pass wall/pair. Mỗi pass dùng `i<j` và ghi lại đúng khối lượng công việc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Số unordered pair của N body:
+
+$$
+P=\binom{N}{2}=\frac{N(N-1)}{2}
+$$
+
+Với 144 ball, mỗi pass duyệt 10.296 cặp; ba solver iterations vì thế phải báo 30.888 pair checks cho mỗi fixed step, bất kể có bao nhiêu contact thật.
+
+```text
+integrate every body once
+repeat I times:
+    resolve every wall
+    for i = 0..N-1:
+        for j = i+1..N-1:
+            detect and resolve pair(i,j)
+```
+
+<InteractiveLab demo="collision-tank" mode="collision-bruteforce" />
+
+Đổi 16/64/144 bóng và xem pair count tăng 120/2.016/10.296 mỗi iteration. Đây là baseline O(N²) có chủ đích. Project 28 mới thay candidate search bằng Spatial Grid và phải cho kết quả gần baseline này.
+
+## Viết code từng bước
+
+### Bước 1 — Integrate ngoài solver iterations
+
+```cpp title="include/lab.hpp — thời gian chỉ tiến một lần"
+for (Ball& ball : balls) {
+    integrateBall(ball, settings.deltaSeconds);
+}
+
+const int iterations = std::clamp(settings.solverIterations, 1, 8);
+```
+
+Iterations chỉ cải thiện việc truyền response qua contact chain. Nó không đại diện cho nhiều physics step.
+
+### Bước 2 — Sửa wall trong từng pass
+
+```cpp title="include/lab.hpp — pair correction có thể đẩy body vào wall"
+for (Ball& ball : balls) {
+    const WallCollisionResult wall = resolveWallCollision(ball, bounds, settings.restitution);
+    stats.wallHits += std::size_t(wall.hitCount);
+    stats.maximumPenetration = std::max(stats.maximumPenetration, wall.deepestPenetration);
+}
+```
+
+Correction của pair gần biên có thể làm circle xuyên wall một chút; pass kế tiếp đưa nó trở lại.
+
+### Bước 3 — Duyệt mỗi pair đúng một lần
+
+```cpp title="include/lab.hpp — j bắt đầu sau i"
+for (std::size_t firstIndex = 0; firstIndex < balls.size(); ++firstIndex) {
+    for (std::size_t secondIndex = firstIndex + 1; secondIndex < balls.size(); ++secondIndex) {
+        ++stats.pairChecks;
+        const PairResolutionResult pair = resolveBallPair(balls[firstIndex], balls[secondIndex], settings.restitution, settings.correctionPercent, settings.penetrationSlop);
+```
+
+Pair check tăng trước detection để count bao gồm cả cặp separated. Đó là work mà brute-force loop thật sự đã làm.
+
+### Bước 4 — Phân biệt contact và impulse
+
+```cpp title="include/lab.hpp — một contact có thể chỉ cần correction"
+if (!pair.contact.colliding) {
+    continue;
+}
+++stats.contacts;
+if (pair.impulseMagnitude > 0.0) {
+    ++stats.impulses;
+}
+```
+
+Contacts thường nhiều hơn impulses vì sau iteration đầu, một số pair đã có separating velocity nhưng còn penetration nhỏ.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy full brute-force solver"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_checkpoint_7
+./build/Debug/project_24_checkpoint_7.exe
+```
+
+Nhấn I để đổi 1–5 iterations. Pair checks phải đổi tuyến tính; elapsed mỗi N step vẫn không phụ thuộc iteration count.
+
+## Thử làm sai để hiểu đúng
+
+1. Cho `secondIndex=0`. Self-pair và duplicate pair xuất hiện; count không còn $N(N-1)/2$. Hoàn tác về `i+1`.
+2. Đặt integration trong vòng iteration. Năm iterations làm tốc độ vật lý gấp năm; hoàn tác movement ra ngoài.
+3. Chỉ tăng pairChecks khi contact tồn tại. Bạn đang đếm kết quả, không đếm work; hoàn tác counter trước detection.
+
+## Tự kiểm tra kết quả
+
+- Mỗi fixed step tích phân mỗi ball đúng một lần.
+- Solver iterations được clamp từ 1 đến 8.
+- Không có self-pair hoặc duplicate reversed pair.
+- Pair checks đúng `I*N*(N-1)/2`.
+- 4 ball, 3 iterations tạo đúng 18 checks.
+- Contact, impulse và wall-hit counters có ý nghĩa riêng.
+- Tăng iterations không thay elapsed hoặc fixed dt.
+- 144 bóng có thể chạy realtime trên cấu hình mục tiêu với baseline này.
+
+## Bài tập mở rộng
+
+Ghi thời gian CPU của riêng pair loop cho 16, 64 và 144 ball. Không tối ưu ngay; vẽ time theo pair count và giữ số liệu làm baseline cho Spatial Grid sau này.
+
+Bài cuối xây validation độc lập: conservation cho case hai bóng và stress test hữu hạn cho cả bể.

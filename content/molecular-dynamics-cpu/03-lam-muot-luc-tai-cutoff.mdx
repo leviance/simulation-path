@@ -1,0 +1,138 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa thế năng và lực về 0 tại cutoff
+
+## Vấn đề cần giải quyết
+
+Bắt đầu từ hệ có vị trí và vận tốc ở checkpoint 2. Ta chưa cho nó chạy. Trước hết cần quyết định tương tác giữa hai hạt sẽ được tính đến khoảng cách nào.
+
+Lennard–Jones gốc tiến gần 0 khi khoảng cách tăng nhưng không bằng hẳn 0 ở khoảng cách hữu hạn. Nếu bỏ đột ngột mọi tương tác ngoài rc, cả thế năng lẫn lực có bước nhảy tại rc. Khi nhiều cặp đi qua mốc đó, đồ thị năng lượng khó dùng để đánh giá bộ tích phân.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng **force-shifted cutoff**, tức dịch cả thế năng và độ dốc để nối với giá trị 0 tại rc:
+
+$$
+U_{fs}(r)=U(r)-U(r_c)-(r-r_c)U'(r_c),
+\qquad
+U'_{fs}(r)=U'(r)-U'(r_c),\quad r<r_c.
+$$
+
+Ngoài cutoff, Ufs và độ dốc đều bằng 0. Hai số trừ tại rc đóng hai vai trò khác nhau: U(rc) đổi mốc năng lượng; hạng tuyến tính còn lại thay đổi lực trong toàn bộ miền bên trong.
+
+Vì lực đã thay đổi, đáy thế mới không còn chính xác tại r₀=2^(1/6)σ. Với ε=σ=1 và rc=2,5σ, độ dốc mới tại r₀ xấp xỉ −0,039: đó là lực đẩy nhỏ. Khoảng cân bằng mới thỏa U′(r)=U′(rc). Ta giữ quy ước dấu của Project 41, nhưng phải tìm lại mốc đổi dấu.
+
+<InteractiveLab demo="molecular-dynamics-cpu" mode="md-cutoff" />
+
+Nét đứt là Lennard–Jones gốc, nét liền là đường đã dịch. Tím biểu diễn U, lam biểu diễn dU/dr; hai đại lượng có thang dọc riêng trong hình tổng quan. Bấm “Phóng to quanh cutoff” để xem vùng rc±0,1. Đọc thêm hai khoảng cách cân bằng bên dưới, thay vì suy ra từ một nét vẽ quá nhỏ.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho từng phần của kết quả
+
+```cpp title="include/molecular_dynamics.hpp — PairSample"
+struct PairSample {
+    bool valid{};
+    bool active{};
+    double potential{};
+    double potentialSlope{};
+};
+```
+
+`valid` cho biết phép tính có hợp lệ không; `active` cho biết cặp có đóng góp lực không. `valid=true, active=false` là kết quả bình thường của cặp ngoài cutoff. Cặp có khoảng cách gần 0 thì không hợp lệ và không được đưa vào tích phân.
+
+
+### Bước 2 — Giữ công thức gốc trong một hàm
+
+```cpp title="include/molecular_dynamics.hpp — rawLennardJones hoàn chỉnh"
+inline PairSample rawLennardJones(double distance, const MolecularParameters& parameters) {
+    const double ratio = parameters.sigma / distance;
+    const double ratio2 = ratio * ratio;
+    const double ratio6 = ratio2 * ratio2 * ratio2;
+    const double ratio12 = ratio6 * ratio6;
+    return {
+        true,
+        true,
+        4.0 * parameters.epsilon * (ratio12 - ratio6),
+        24.0 * parameters.epsilon * (ratio6 - 2.0 * ratio12) / distance,
+    };
+}
+```
+
+Hàm nội bộ này dùng khoảng cách đã được kiểm tra ở hàm bao ngoài. `ratio6` và `ratio12` giống Project 41; `potentialSlope` vẫn là dU/dr. Thứ tự bốn trường trả về tương ứng với PairSample ngay phía trên.
+
+
+### Bước 3 — Kiểm đầu vào và tạo mẫu đã dịch
+
+```cpp title="include/molecular_dynamics.hpp — sampleForceShiftedPair hoàn chỉnh"
+inline PairSample sampleForceShiftedPair(
+    double distance,
+    const MolecularParameters& parameters = {}
+) {
+    if (!validParameters(parameters) || !std::isfinite(distance) ||
+        distance <= kMinimumDistance) {
+        return {};
+    }
+    if (distance >= parameters.cutoff) {
+        return {true, false, 0.0, 0.0};
+    }
+
+    const PairSample sample = rawLennardJones(distance, parameters);
+    const PairSample atCutoff = rawLennardJones(parameters.cutoff, parameters);
+    return {
+        true,
+        true,
+        sample.potential - atCutoff.potential -
+            (distance - parameters.cutoff) * atCutoff.potentialSlope,
+        sample.potentialSlope - atCutoff.potentialSlope,
+    };
+}
+```
+
+Đọc theo thứ tự: từ chối tham số/khoảng cách không hợp lệ; trả `active=false` ngoài rc; lấy mẫu tại r và tại rc; trừ giá trị thế cùng tiếp tuyến. Cặp ở rất gần vẫn có lực lớn. Không dùng clamp để giấu lỗi vật lý.
+
+
+### Bước 4 — Gọi hàm lấy mẫu từ phần đồ thị
+
+```cpp title="include/molecular_dynamics_ui.hpp — hai khoảng cách dùng để vẽ"
+const double minimumDistance = 0.9 * parameters.sigma;
+const double maximumDistance = 1.08 * parameters.cutoff;
+```
+
+Thêm `md_ui::drawCutoffGraph(pixels, width, height, system.parameters)` sau `drawSystem`. Trong hàm vẽ, mỗi cột pixel tương ứng một r trong khoảng trên rồi gọi `sampleForceShiftedPair`. Chỉ tọa độ đồ thị được giới hạn ở mép khung; kết quả vật lý vẫn giữ nguyên. Checkpoint 3 đã dành vùng bên phải cho đồ thị.
+
+
+## Ghép các phần lại
+
+Làm việc từ thư mục gốc của ZIP. Mỗi target dùng một thư mục riêng: thay đổi trong `checkpoints/03/` chỉ có hiệu lực khi chạy đúng target của bài này.
+
+```bash title="Terminal — build và chạy checkpoint 3 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_42_checkpoint_3
+.\build\Debug\project_42_checkpoint_3.exe
+```
+
+Với Ninja hoặc Makefiles, executable thường nằm ngay trong `build/`. CTest của ZIP kiểm tra `final/include`; nó không tự kiểm tra phần bạn vừa sửa trong một checkpoint. Hãy dùng số đo và tình huống kiểm tra của bài trước khi đối chiếu bản hoàn chỉnh.
+
+Hộp vẫn chưa chuyển động. Đọc đồ thị và các giá trị số trước khi sang bước cộng lực toàn hệ. Để tự kiểm r₀, in potentialSlope của mẫu tại r₀ trong chương trình rồi xóa phép in tạm sau khi đối chiếu.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong C++, bỏ hạng U(rc), build lại và in mẫu tại rc−10⁻⁵, rc, rc+10⁻⁵. Thế năng có bước nhảy. Chỉ kiểm đúng rc không bắt được lỗi vì nhánh ngoài cutoff luôn trả 0; hoàn tác.
+2. Bỏ các hạng chứa U′(rc), giữ phép trừ U(rc). Thế năng nối được với 0 nhưng độ dốc vẫn nhảy. In cùng ba mẫu rồi khôi phục công thức. Canvas vẫn là bản đúng để đối chiếu, không tự nhận thay đổi C++.
+
+## Tự kiểm tra kết quả
+
+- [ ] Tại rc: mẫu hợp lệ, không hoạt động, U=0 và slope=0.
+- [ ] Mẫu ngay bên trong tiến liên tục về 0.
+- [ ] Tại đáy thế cũ, lực đã dịch không bị ép thành 0.
+- [ ] Khoảng cách gần 0 bị từ chối.
+- [ ] Dấu lực được đọc theo dUfs/dr và quy ước delta từ hạt thứ nhất tới hạt thứ hai.
+
+## Bài tập mở rộng
+
+1. Tìm đáy thế mới bằng chia đôi trong khoảng [σ,1,5σ].
+2. So rc=2σ, 2,5σ và 3σ; ghi độ dịch của đáy thế.
+3. Viết phép kiểm sai phân trung tâm cho Ufs, đối chiếu với potentialSlope.
+
+Bài tiếp theo gọi đúng hàm này cho mỗi cặp hạt.

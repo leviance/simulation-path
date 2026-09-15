@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lưu những cặp có thể sắp tương tác
+
+## Vấn đề cần giải quyết
+
+Nếu chỉ lưu các cặp đang trong cutoff rồi dùng lại danh sách đó, ta sẽ sớm bỏ sót một cặp: ở bước trước chúng chưa đủ gần, nhưng ở bước sau chúng đã tiến vào vùng có lực. Vì vậy, danh sách cần nhìn xa hơn vùng lực một chút.
+
+Bắt đầu từ checkpoint 1. Ta sẽ thêm `neighbor_list.hpp`, tạo một danh sách chỉ số và vẽ vòng vàng rộng hơn vòng xanh. Bài này mới xây danh sách bằng vòng lặp mọi cặp. Đây chưa phải tối ưu tốc độ dựng; điều quan trọng trước tiên là lưu đúng cặp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi phần bán kính thêm vào là `skin`:
+
+$$r_{list}=r_c+skin.$$
+
+Ví dụ `cutoff=2.5`, `skin=0.4` cho `listRadius=2.9`. Cặp cách nhau 2.8 được lưu dù hiện tại chưa có lực. Nếu các hạt chỉ đi một đoạn nhỏ, cặp ấy đã có sẵn trong danh sách khi chúng tiến vào cutoff. Skin không mở rộng mô hình lực; nó chỉ mua thêm thời gian trước lần tìm cặp tiếp theo.
+
+Ta dùng **half list**: mỗi cặp chỉ lưu một lần với `i<j`. Đây là chỉ số trong `system.particles`, không phải ID bất biến. Nếu thay thứ tự hạt thì danh sách phải được dựng lại, kể cả số hạt giữ nguyên.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-build" />
+
+Chọn preset hai hạt. Khoảng cách đầu là 3.2, ngoài vòng vàng 2.9 nên chưa có cặp nào. Dịch A sang phải 0.4: khoảng cách còn 2.8, cặp xuất hiện trong danh sách nhưng vẫn ngoài vòng xanh. Ở bài này mỗi thao tác sửa vị trí đều dựng lại danh sách; điều kiện dùng lại sẽ đến ở bài 4.
+
+## Viết code từng bước
+
+### Bước 1 — Lưu hai chỉ số, không lưu hai bản sao hạt
+
+Trong namespace `neighbors`, thêm kiểu cặp trước `NeighborList`:
+
+```cpp title="include/neighbor_list.hpp — một cặp chỉ tham chiếu tới system.particles"
+struct PairIndex {
+    std::size_t i{};
+    std::size_t j{};
+    bool operator==(const PairIndex&) const = default;
+};
+```
+
+Toán tử so sánh mặc định của C++20 giúp test so trực tiếp hai danh sách. Đừng đặt `Particle a,b` ở đây: sao chép hạt vào list sẽ khiến vị trí trong list lệch khỏi system sau khi mô phỏng chạy.
+
+`NeighborList` có `pairs`, `reference`, `box`, `cutoff`, `skin`, `generation`, ba bộ đếm và cờ `ready`. `reference` lưu các mốc unwrapped; bài 4 mới dùng chúng để quyết định hiệu lực. Dùng các field này ngay từ đầu để không phải đổi định dạng cache giữa chừng. Chúng không chứa lực cũ.
+
+### Bước 2 — Quét mọi cặp một lần để tạo danh sách
+
+Thêm `rebuildNaive` sau các hàm kiểm tra đầu vào. Sau khi `validListParameters` và `validState` đạt, xóa pairs cũ, tính listRadius rồi chạy:
+
+```cpp title="include/neighbor_list.hpp — chỉ lưu cặp nằm trong bán kính tìm kiếm"
+for (std::size_t i = 0; i < system.particles.size(); ++i) {
+    for (std::size_t j = i + 1; j < system.particles.size(); ++j) {
+        ++list.buildChecks;
+        const Vec2 delta = pbc::minimumImage(pbc::subtract(system.particles[j].position, system.particles[i].position), system.box);
+        if (pbc::length(delta) < listRadius) {
+            list.pairs.push_back({i, j});
+        }
+    }
+}
+```
+
+`j=i+1` đồng thời bỏ tự tương tác và bỏ cặp đảo chiều. Phải dùng minimum image như Project 43; hai hạt sát hai mép có thể là hàng xóm. `buildChecks` tăng trước phép lọc, vì cả cặp bị loại cũng đã tốn một lần đo khoảng cách.
+
+Lab yêu cầu `skin>0` và `cutoff+skin < min(Lx,Ly)/2`. Đây là giới hạn đơn giản hóa của bản học; điều kiện vật lý cho force cutoff vẫn là điều kiện riêng đã học, không được coi giới hạn của listRadius là luật chung cho mọi thư viện MD.
+
+### Bước 3 — Chụp mốc của lần dựng thành công
+
+Cuối rebuildNaive gọi `saveReference`. Hàm này lưu tọa độ tại thời điểm dựng, không lưu tham chiếu tới vùng nhớ sẽ tiếp tục thay đổi:
+
+```cpp title="include/neighbor_list.hpp — mốc độ dời và cấu hình của cache"
+list.reference.clear();
+for (const pbc::Particle& particle : system.particles) {
+    list.reference.push_back(particle.unwrapped);
+}
+list.box = system.box;
+list.cutoff = system.parameters.cutoff;
+list.skin = skin;
+list.generation = generation;
+list.ready = true;
+++list.rebuilds;
+```
+
+`ready=true` chỉ nói đã dựng một danh sách. Nó chưa bảo đảm danh sách còn đúng sau các thay đổi tương lai. Hai bộ đếm buildChecks/rebuilds là số tích lũy từ lần reset; dựng lại không đưa chúng về zero.
+
+## Ghép các phần lại
+
+Trong main, tạo `NeighborList list` trước loop. Khi list chưa ready hoặc có thao tác kéo ở checkpoint 2, gọi rebuildNaive. Phím `S` đổi skin, `B` yêu cầu dựng lại. Truyền list vào `view::draw`; vòng vàng dùng `cutoff+skin`, các đoạn xám nối A tới những hạt có cặp với index 0 trong list.
+
+Build `project_44_checkpoint_2`. Đây vẫn là hệ đứng yên. Danh sách dùng cho cả hệ, còn hình chỉ vẽ các cặp của A để tránh biến màn hình thành một mảng đường chồng lên nhau. Không so số đoạn nối đang thấy với tổng pairs rồi kết luận thiếu dữ liệu.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `j=i+1` thành `j=0`. List có thể xuất hiện tự cặp và hai chiều của cùng cặp. Ghi lại vì sao chỉ lọc khoảng cách không loại được những lỗi này, rồi khôi phục `i<j`.
+2. Thay minimumImage bằng phép trừ thường. Đưa A và B sát hai mép đối diện: chúng biến mất khỏi danh sách dù khoảng cách tuần hoàn nhỏ. Khôi phục minimum image trước khi viết phần lực.
+
+## Tự kiểm tra kết quả
+
+- Với hai hạt cách 2.8, cutoff 2.5 và skin 0.4, list có đúng một cặp.
+- Cặp cách 3.2 không có trong list; tăng skin lên 0.8 sẽ đưa cặp đó vào.
+- Mọi cặp đều có `i<j` và mỗi lần dựng đều chụp lại reference.
+- Số buildChecks của một lần naive build bằng N(N−1)/2, không chỉ bằng số cặp được giữ.
+
+## Bài tập mở rộng
+
+Thêm dòng in từng cặp của preset hai hạt và giải thích vì sao danh sách không nên lưu pointer tới phần tử vector. Tiếp theo, [tính lực từ danh sách](/projects/neighbor-list-skin/03-tinh-luc-tu-danh-sach) mà vẫn giữ nguyên mô hình của Project 43.

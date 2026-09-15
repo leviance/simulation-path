@@ -1,0 +1,156 @@
+# Kiểm chứng và đo hiệu năng có thể lặp lại
+
+## Vấn đề cần giải quyết
+
+Rasterizer có thể vẽ đúng vài hình quen thuộc nhưng vẫn sai với tọa độ âm, một octant ít thử hoặc hai góc hình chữ nhật bị đảo. Tương tự, dù Bresenham thường được giới thiệu là nhanh hơn DDA, một phép đo thiếu kiểm soát có thể bị trình biên dịch loại bỏ hoặc bị chi phí cấp phát che lấp.
+
+Ta cần trả lời riêng hai câu hỏi. Test xác nhận các hàm giữ đúng điều kiện hình học. Benchmark đo hai cách cài đặt trên cùng một bộ dữ liệu và phải sử dụng kết quả để trình biên dịch không được phép bỏ công việc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Phần kiểm chứng cần những điều kiện cụ thể, không dựa vào ảnh chụp “trông có vẻ đúng”:
+
+- đường thẳng giữ hai đầu, có đúng số điểm và liên thông ở cả hai hướng;
+- đường tròn đối xứng;
+- hình chữ nhật không phụ thuộc thứ tự hai góc và có số pixel đúng;
+- DDA xử lý được hai đầu trùng nhau.
+
+Benchmark phải chạy cùng số đoạn thẳng trên một bộ đầu vào có thể tạo lại chính xác. Biến `checksum` cộng dồn số pixel trả về để kết quả có ảnh hưởng quan sát được; nếu không, trình biên dịch có thể loại bỏ phần tính toán. Thời gian hiện tại vẫn bao gồm việc cấp phát `std::vector`. Đây là đặc điểm của API đang đo và phải được ghi rõ khi kết luận.
+
+## Viết code từng bước
+
+### Bước 1 — Chọn một pixel để quan sát thật kỹ
+
+Ở checkpoint cuối, phím trái/phải dịch `inspectedStep` qua danh sách pixel mà thuật toán vừa tạo. Phím Home quay lại pixel đầu tiên:
+
+```cpp title="src/main.cpp — điều khiển bước đang quan sát"
+std::size_t inspectedStep = 0;
+```
+
+```cpp title="src/main.cpp — phím điều khiển inspector"
+if (!event.key.repeat && event.key.key == SDLK_LEFT && inspectedStep > 0) {
+    --inspectedStep;
+}
+if (!event.key.repeat && event.key.key == SDLK_RIGHT) {
+    ++inspectedStep;
+}
+if (!event.key.repeat && event.key.key == SDLK_HOME) {
+    inspectedStep = 0;
+}
+```
+
+Người dùng có thể bấm phải nhiều lần hơn số pixel hiện có, hoặc kéo endpoint khiến đoạn thẳng ngắn đi. Vì vậy, sau khi tạo `linePoints`, ta luôn chặn chỉ số vào phần tử cuối:
+
+```cpp title="src/main.cpp — giữ chỉ số trong phạm vi hợp lệ"
+inspectedStep = std::min(inspectedStep, linePoints.size() - 1);
+```
+
+`drawInspector` lấy pixel đang chọn làm tâm của một lưới 9×9. Với mỗi ô, hàm đổi tọa độ tương đối về một `Point`, kiểm tra điểm đó có nằm trong `linePoints` hay không rồi tô một ô 16×16. Màu xanh đánh dấu đường thẳng; màu cam đánh dấu đúng bước đang quan sát. Trong vòng render, nơi gọi chỉ còn một dòng:
+
+```cpp title="src/main.cpp — vẽ inspector từ kết quả đã có"
+drawInspector(pixels, linePoints, inspectedStep);
+```
+
+Mã đầy đủ của helper nằm trong `main.cpp` ở cuối bài. Hàm này cố ý đứng ngoài DDA và Bresenham: thuật toán chỉ trả về `Point`, còn công cụ quan sát đọc kết quả đã có. Nhờ tách hai trách nhiệm, việc thêm inspector không thể âm thầm làm thay đổi pixel mà thuật toán chọn.
+
+### Bước 2 — Kiểm tra tám hướng theo cả hai chiều
+
+```cpp title="tests/tests.cpp — hai đầu đoạn và tính liên thông"
+for (lab::Point end : octantEndpoints) {
+    const auto ddaForward = lab::dda({0, 0}, end);
+    const auto ddaReverse = lab::dda(end, {0, 0});
+    const auto forward = lab::bresenham({0, 0}, end);
+    const auto reverse = lab::bresenham(end, {0, 0});
+    checkConnectedLine(ddaForward, {0, 0}, end);
+    checkConnectedLine(ddaReverse, end, {0, 0});
+    checkConnectedLine(forward, {0, 0}, end);
+    checkConnectedLine(reverse, end, {0, 0});
+}
+```
+
+`checkConnectedLine` được dùng cho cả DDA lẫn Bresenham và gọi hàm `check` luôn hoạt động trong Debug lẫn Release. Hàm kiểm tra phần tử đầu, phần tử cuối, số pixel và khoảng cách giữa hai pixel liền nhau. Nó không bắt hai chiều phải chọn cùng pixel khi đường lý tưởng nằm đúng giữa hai lựa chọn; bài 3 đã giải thích vì sao đó không phải hành vi mặc định của Bresenham.
+
+### Bước 3 — Kiểm tra hình dạng, không chỉ tính đối xứng của đường tròn
+
+```cpp title="tests/tests.cpp — tính đối xứng của đường tròn"
+const auto circlePoints = lab::circle({0, 0}, 8);
+check(std::adjacent_find(circlePoints.begin(), circlePoints.end()) == circlePoints.end(), "circle contains no duplicate pixels");
+check(contains(circlePoints, {8, 0}), "circle keeps its right cardinal point");
+check(contains(circlePoints, {0, -8}), "circle keeps its top cardinal point");
+for (lab::Point point : circlePoints) {
+    check(contains(circlePoints, {-point.x, point.y}), "circle is symmetric across Y");
+    check(contains(circlePoints, {point.y, point.x}), "circle is symmetric across the diagonal");
+    const double distanceFromCenter = std::hypot(double(point.x), double(point.y));
+    check(std::abs(distanceFromCenter - 8.0) <= 0.55, "circle pixels stay close to the requested radius");
+}
+```
+
+Đối xứng thôi chưa đủ: một tập điểm méo nhưng được phản chiếu đều vẫn có thể vượt qua test. Vì thế ta còn kiểm tra danh sách không trùng, có các điểm ngoài cùng `(±r,0)`, `(0,±r)` và mỗi pixel cách tâm gần bằng bán kính. Ngưỡng `0.55` cho phép sai số lượng tử hóa nhỏ hơn một pixel nhưng vẫn bắt được đường tròn có bán kính sai rõ rệt.
+
+### Bước 4 — Kiểm tra hình chữ nhật bằng kết quả tính tay
+
+```cpp title="tests/tests.cpp — rectangle reversed corners"
+const auto outline = lab::rectangle({4, 3}, {1, 1});
+check(outline.size() == 10, "rectangle outline has a unique inclusive perimeter");
+const auto filled = lab::filledRectangle({4, 3}, {1, 1});
+check(filled.size() == 12, "filled rectangle contains width times height pixels");
+check(lab::rectangle({2, 2}, {2, 2}) == std::vector<lab::Point>{{2, 2}}, "one-point outline is not duplicated");
+check(lab::rectangle({1, 1}, {4, 1}).size() == 4, "horizontal rectangle edge keeps every pixel");
+check(lab::rectangle({1, 1}, {4, 3}) == lab::rectangle({4, 3}, {1, 1}), "rectangle is independent of corner order");
+```
+
+Hình chữ nhật lấy cả hai biên nên rộng 4, cao 3 và phần đặc có 12 pixel. Đường viền không lặp góc có `2×4 + 2×3 - 4 = 10` pixel. Ba phép kiểm tra cuối bao phủ thêm hình một điểm, hình một hàng và trường hợp đảo hai góc — những trường hợp vòng lặp thông thường rất dễ bỏ sót.
+
+### Bước 5 — Tạo dữ liệu trước khi bắt đầu đo
+
+```cpp title="src/main.cpp — tạo các đoạn thẳng trước khi đo"
+using Segment = std::pair<lab::Point, lab::Point>;
+std::vector<Segment> segments;
+segments.reserve(kLineCount);
+for (int index = 0; index < kLineCount; ++index) {
+    segments.push_back({
+        {(index * 37) % kCanvasWidth, (index * 53) % kCanvasHeight},
+        {(index * 97 + 211) % kCanvasWidth, (index * 29 + 71) % kCanvasHeight},
+    });
+}
+```
+
+Sau một lượt chạy làm nóng, mỗi thuật toán được đo bảy lần trên đúng vector `segments`. Chỉ vòng gọi DDA hoặc Bresenham nằm giữa hai mốc `steady_clock`; thời gian tạo dữ liệu không được tính vào kết quả. Bảy số đo được sắp xếp và lấy giá trị giữa làm median. Dòng kết quả phải ghi cấu hình Release/Debug, `20.000 lines × 7 rounds`, đơn vị millisecond và `checksum` riêng của từng thuật toán.
+
+### Bước 6 — Build, chạy test rồi mới benchmark
+
+```bash title="Terminal — kiểm tra Project 04"
+cmake -S examples/project-04-tiny-2d-rasterizer -B examples/project-04-tiny-2d-rasterizer/build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
+cmake --build examples/project-04-tiny-2d-rasterizer/build --config Debug
+ctest --test-dir examples/project-04-tiny-2d-rasterizer/build -C Debug --output-on-failure
+cmake --build examples/project-04-tiny-2d-rasterizer/build --config Release
+ctest --test-dir examples/project-04-tiny-2d-rasterizer/build -C Release --output-on-failure
+```
+
+Debug thuận tiện để tìm lỗi bằng warning và debugger. Release xác nhận test vẫn thực sự hoạt động khi tối ưu hóa được bật, đồng thời là cấu hình nên dùng để so hiệu năng. Chạy `project_4_final` bản Release rồi bấm T. Một lần bấm đã gồm lượt làm nóng và bảy lượt đo; chương trình tự báo median thay vì để người chạy tùy ý chọn kết quả đẹp nhất.
+
+## Ghép các phần lại
+
+Ứng dụng hoàn chỉnh dùng D/B để chuyển giữa hai cách vẽ đường, đồng thời hiển thị hình chữ nhật và đường tròn để kiểm tra việc ghép các hàm. Phím T chạy benchmark; chương trình test gọi trực tiếp các hàm thuần. Thứ tự làm việc nên là: **kiểm tra tính đúng → cố định dữ liệu → đo → giải thích kết quả**.
+
+Benchmark hiện tính cả chi phí tạo và trả về `std::vector`. Nếu sau này đổi API sang callback ghi trực tiếp vào framebuffer, phải đo lại từ đầu; kết luận của cách cài đặt cũ không tự động đúng với kiến trúc mới.
+
+## Thử làm sai để hiểu đúng
+
+1. Xóa `checksum` rồi build Release. Trình biên dịch có thể loại bỏ phép tính không tạo ra kết quả quan sát được và làm số đo mất ý nghĩa.
+2. Dùng seed theo thời gian riêng cho mỗi thuật toán. DDA và Bresenham không còn chạy trên cùng dữ liệu nên kết quả không thể so sánh công bằng.
+3. Chỉ đo một đoạn thẳng rất ngắn. Chi phí đọc đồng hồ và cấp phát sẽ lấn át phần thuật toán; hãy tăng số đoạn rồi quan sát khi median bắt đầu ổn định.
+
+## Tự kiểm tra kết quả
+
+- CTest vượt qua các kiểm tra tám octant, đối xứng, hình chữ nhật và DDA với hai đầu trùng nhau.
+- DDA và Bresenham đều giữ hai đầu khi kéo quanh tâm.
+- Phím T in median của bảy lượt, cấu hình build, đơn vị và `checksum` ổn định giữa các lần chạy cùng bản build.
+- Kết quả Release được phân biệt với Debug.
+- Bạn giải thích được benchmark hiện bao gồm cả chi phí cấp phát vector.
+
+## Bài tập mở rộng
+
+Hãy chia dữ liệu thành các nhóm đường ngắn/dài và dốc thấp/cao rồi báo median riêng cho từng nhóm. Sau đó đổi API để nhận callback `plot(Point)`, loại bỏ việc cấp phát vector, đo lại trên cùng các đầu đoạn và ghi rõ API đã thay đổi.
+
+Project 05 tiếp tục dùng framebuffer, `putPixel` và cách kiểm tra hình học trên lưới pixel, nhưng không cần gọi DDA hay Bresenham. Lưới tọa độ chỉ gồm các đường ngang và dọc nên có thể vẽ bằng vòng lặp đơn giản; phần mới cần tập trung là chuyển đổi ổn định giữa world space và screen space khi camera pan/zoom.

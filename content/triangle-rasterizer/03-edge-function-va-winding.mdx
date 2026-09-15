@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Edge function và chiều đi quanh tam giác
+
+## Vấn đề cần giải quyết
+
+Bounding box chỉ nói “pixel này đáng để kiểm tra”. Để biết sample nằm trong triangle, ta cần ba phép thử: sample nằm về phía trong của cạnh `AB`, `BC` và `CA` hay không.
+
+Edge function trả lời câu hỏi đó bằng một cross product 2D. Nhưng dấu của nó phụ thuộc vào hướng cạnh và winding của triangle, nên ta phải chốt quy ước trước khi dùng dấu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với cạnh $A\rightarrow B$ và sample $P$:
+
+$$
+E_{AB}(P)=(B_x-A_x)(P_y-A_y)-(B_y-A_y)(P_x-A_x)
+$$
+
+- `E > 0`: P nằm ở một half-plane của cạnh.
+- `E < 0`: P nằm ở half-plane còn lại.
+- `E = 0`: P nằm đúng trên đường AB.
+
+Khi thay `P=C`, kết quả chính là hai lần diện tích có dấu của tam giác ABC.
+
+<InteractiveLab demo="triangle-raster" mode="triangle-edge" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết edge function không giấu phép trừ
+
+```cpp title="include/lab.hpp — orient2D của cạnh và sample"
+inline double orient2D(Vec2 a, Vec2 b, Vec2 point) {
+    const Vec2 edge{b.x - a.x, b.y - a.y};
+    const Vec2 offset{point.x - a.x, point.y - a.y};
+    return edge.x * offset.y - edge.y * offset.x;
+}
+```
+
+Hai vector tạm làm công thức dài hơn một chút nhưng cho thấy rõ đang tính `AB × AP`, rất phù hợp với code học tập.
+
+### Bước 2 — Dùng cùng hàm để đo area
+
+```cpp title="include/lab.hpp — area có dấu giữ nguyên hệ số 2"
+inline double signedDoubleArea(const Triangle2& triangle) {
+    return orient2D(triangle.a, triangle.b, triangle.c);
+}
+```
+
+Không chia 2 vì coverage chỉ cần dấu và tỉ lệ. Giữ “double area” còn tránh thêm một phép nhân/chia trong mọi sample.
+
+### Bước 3 — Gọi winding theo dấu số, không theo cảm giác nhìn
+
+```cpp title="include/lab.hpp — phân loại positive negative degenerate"
+inline Winding classifyWinding(const Triangle2& triangle, double epsilon = 1e-9) {
+    const double area = signedDoubleArea(triangle);
+    if (area > epsilon) {
+        return Winding::Positive;
+    }
+    if (area < -epsilon) {
+        return Winding::Negative;
+    }
+    return Winding::Degenerate;
+}
+```
+
+Trong screen space, Y tăng xuống dưới. Triangle có area số dương thường nhìn giống clockwise trên màn hình. Tên `Positive` vì vậy chính xác hơn việc gọi cứng là `CounterClockwise`.
+
+### Bước 4 — Chuẩn hóa bằng một phép swap
+
+```cpp title="include/lab.hpp — đưa mọi triangle không suy biến về area dương"
+inline Triangle2 normalizePositiveWinding(Triangle2 triangle) {
+    if (classifyWinding(triangle) == Winding::Negative) {
+        std::swap(triangle.b, triangle.c);
+    }
+    return triangle;
+}
+```
+
+Đổi B với C không thay tập ba điểm. Nó chỉ đảo hướng đi quanh biên, nhờ đó coverage test có thể dùng cùng một điều kiện dấu cho mọi input.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build edge-function checkpoint"
+cmake --build build --config Debug --target project_16_checkpoint_3
+```
+
+Click vài điểm trong và ngoài wireframe để title bar đọc ba edge value. Kéo C qua đường AB: area tiến về 0, triangle suy biến rồi đổi dấu.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi công thức thành `AP × AB`. Mọi dấu đảo nhưng area và coverage có thể vẫn “trông hợp lý” nếu bạn vô tình đảo điều kiện theo; test giá trị area cụ thể sẽ phát hiện quy ước đổi.
+2. Bỏ epsilon và chỉ so `area == 0`. Ba điểm gần thẳng hàng vẫn tạo weight rất lớn ở bài sau; phục hồi vùng degenerate nhỏ.
+3. Swap A với B nhưng tài liệu và test nói B/C. Dấu vẫn đổi, song quy ước input bị lệch; dùng đúng một phép swap đã công bố.
+
+## Tự kiểm tra kết quả
+
+- `orient2D(A,B,P)` bằng `AB × AP` theo đúng thứ tự.
+- Triangle `(0,0),(4,0),(0,4)` có signed double area bằng 16.
+- Đổi B/C làm area đổi từ +16 thành -16.
+- `normalizePositiveWinding` đưa cả hai input về area +16.
+- Ba điểm thẳng hàng được phân loại `Degenerate`.
+- Chưa có phép chia cho area trong đường xử lý degenerate.
+
+## Bài tập mở rộng
+
+Vẽ ba đường cạnh kéo dài hết Canvas và tô mờ half-plane dương của từng cạnh. Phần giao của ba vùng chính là tam giác sau khi winding đã chuẩn hóa.
+
+Bài tiếp theo sẽ đặt sample tại tâm pixel và ghép ba edge test thành một quyết định coverage hoàn chỉnh.

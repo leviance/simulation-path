@@ -1,0 +1,175 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thứ tự phép biến đổi và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Ta đã có ma trận ghép, nhưng mới dùng một thứ tự cố định. Trong số học thông thường, `2×3` và `3×2` bằng nhau; matrix multiplication nói chung không có tính chất đó. Scale một hình theo local axes rồi xoay không giống xoay hình trước rồi scale theo world axes.
+
+Bài cuối đóng gói hai thứ tự có chủ ý, thêm phím chuyển đổi, rồi kiểm tra kết quả bằng hai con đường độc lập: chuỗi hàm so với matrix và tỉ lệ diện tích so với determinant.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với column vector, hai lựa chọn của project là:
+
+$$
+M_1=T\,R\,H\,S
+$$
+
+$$
+M_2=T\,S\,H\,R
+$$
+
+`M1` thực hiện Scale → Shear → Rotate → Translate. `M2` thực hiện Rotate → Shear → Scale → Translate. Translation vẫn cuối cùng trong cả hai để việc kéo vật thể dễ dự đoán.
+
+Phần tuyến tính nằm trong khối 2×2 phía trên bên trái:
+
+$$
+\det(M)=m_{00}m_{11}-m_{01}m_{10}
+$$
+
+`|det|` là hệ số thay đổi diện tích. Dấu âm cho biết hai vector cơ sở đã đổi chiều tương đối, tức hình bị phản chiếu. Determinant bằng 0 nghĩa là cả polygon bị ép xuống một đoạn hoặc một điểm.
+
+<InteractiveLab demo="transform" mode="transform-order" />
+
+Chọn preset ghép nhiều phép rồi đổi **Thứ tự**. Hai hình có thể khác rõ rệt nhưng determinant và area ratio vẫn bằng nhau, vì đổi thứ tự không thay tích determinant của các ma trận thành phần.
+
+## Viết code từng bước
+
+### Bước 1 — Gọi đúng tích theo enum
+
+Đặt tham số trong một struct giúp `composeTransform` nhận một gói dữ liệu rõ ràng thay vì sáu đối số rời.
+
+```cpp title="include/lab.hpp — composeTransform"
+inline Mat3 composeTransform(TransformParameters parameters, TransformOrder order) {
+    const Mat3 translation = translationMatrix(parameters.translation);
+    const Mat3 scale = scaleMatrix(parameters.scaleX, parameters.scaleY);
+    const Mat3 shear = shearMatrix(parameters.shearX, parameters.shearY);
+    const Mat3 rotation = rotationMatrix(parameters.angle);
+
+    if (order == TransformOrder::RotateShearScale) {
+        return multiply(translation, multiply(scale, multiply(shear, rotation)));
+    }
+    return multiply(translation, multiply(rotation, multiply(shear, scale)));
+}
+```
+
+Tên enum mô tả thứ tự point trải qua, còn code matrix được đọc từ phải sang trái. Hai cách đọc đó phải dẫn đến cùng một chuỗi.
+
+### Bước 2 — Đổi thứ tự mà không sửa tham số
+
+Phím O chỉ đổi enum. Hình được tính lại từ `localSquare` trong frame kế tiếp.
+
+```cpp title="src/main.cpp — chuyển transform order"
+if (!event.key.repeat && event.key.key == SDLK_O) {
+    if (order == lab::TransformOrder::ScaleShearRotate) {
+        order = lab::TransformOrder::RotateShearScale;
+    } else {
+        order = lab::TransformOrder::ScaleShearRotate;
+    }
+}
+```
+
+Không hoán đổi giá trị scale hoặc shear để “bù” cho hình. Mục đích thí nghiệm là giữ cùng input và chỉ thay thứ tự.
+
+### Bước 3 — Đọc determinant và diện tích
+
+```cpp title="include/lab.hpp — determinant và polygonArea"
+inline double determinantLinearPart(Mat3 matrix) {
+    return matrix.at(0, 0) * matrix.at(1, 1) - matrix.at(0, 1) * matrix.at(1, 0);
+}
+
+inline double polygonArea(const Square& polygon) {
+    double doubledArea = 0.0;
+    for (std::size_t index = 0; index < polygon.size(); ++index) {
+        const Vec2 current = polygon[index];
+        const Vec2 next = polygon[(index + 1) % polygon.size()];
+        doubledArea += current.x * next.y - current.y * next.x;
+    }
+    return std::abs(doubledArea) * 0.5;
+}
+```
+
+`polygonArea` dùng shoelace formula. Đây là phép đo hình học độc lập với cách ta tạo matrix, nên nó thích hợp để kiểm tra determinant.
+
+### Bước 4 — So matrix với chuỗi hàm trong test
+
+```cpp title="tests/tests.cpp — hai cách tính phải trùng nhau"
+const lab::Vec2 scaled = lab::scalePoint(point, parameters.scaleX, parameters.scaleY);
+const lab::Vec2 sheared = lab::shearPoint(scaled, parameters.shearX, parameters.shearY);
+const lab::Vec2 rotated = lab::rotatePoint(sheared, parameters.angle);
+const lab::Vec2 directScaleFirst = lab::add(rotated, parameters.translation);
+
+const lab::Mat3 scaleFirstMatrix = lab::composeTransform(parameters, lab::TransformOrder::ScaleShearRotate);
+check(nearlyEqual(lab::transformPoint(scaleFirstMatrix, point), directScaleFirst), "composed matrix matches scale-shear-rotate sequence");
+```
+
+Nếu ai đó vô tình đảo tích trong `composeTransform`, test này thất bại dù hình trên màn hình vẫn có vẻ hợp lý.
+
+### Bước 5 — Kiểm tra tỉ lệ diện tích
+
+```cpp title="tests/tests.cpp — determinant phải khớp area ratio"
+const lab::Square square = lab::makeSquare(2.0);
+const lab::Square transformed = lab::transformSquare(square, scaleFirstMatrix);
+const double areaRatio = lab::polygonArea(transformed) / lab::polygonArea(square);
+const double determinant = lab::determinantLinearPart(scaleFirstMatrix);
+
+check(nearlyEqual(areaRatio, std::abs(determinant)), "absolute determinant matches area ratio");
+```
+
+Test final còn xác nhận rotation 90°, hai shear mẫu, translation, reflection và việc hai order thật sự cho kết quả khác với bộ tham số đã chọn.
+
+### Bước 6 — Build Debug, Release và chạy final
+
+```bash title="terminal — configure, build và test Debug"
+cmake -S . -B build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Sau khi Debug qua, chạy lại Release rồi mở `project_9_final`:
+
+```bash title="terminal — kiểm tra Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+## Ghép các phần lại
+
+Bản hoàn chỉnh dùng các thao tác sau:
+
+| thao tác | kết quả |
+|---|---|
+| `A` / `D` | giảm/tăng scale X |
+| `S` / `W` | giảm/tăng scale Y |
+| `←` / `→` | xoay mỗi lần 5° |
+| `J` / `L` | giảm/tăng shear X |
+| `K` / `I` | giảm/tăng shear Y |
+| kéo chuột trái | đặt translation |
+| `O` | đổi thứ tự ghép |
+| `R` | đặt lại mọi tham số |
+| `Escape` | thoát |
+
+Đường xám là local square chỉ nhận translation. Đường xanh là kết quả đầy đủ. Trục đỏ và xanh dương là ảnh của local X/Y; chấm vàng là local origin trong world space. Title bar cho phép đối chiếu tham số, determinant, area ratio và order mà không phải đoán trạng thái hiện tại.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi nhánh ScaleShearRotate thành `S×H×R×T`. Kéo chuột để thấy translation cũng bị scale và xoay, trái với yêu cầu của project.
+2. Bỏ `std::abs` khi so determinant với diện tích. Reflection tạo determinant âm trong khi diện tích hình học luôn không âm.
+3. Viết test order bằng scale đồng đều và shear bằng 0. Rotation với uniform scale giao hoán trong trường hợp đó, nên test không phát hiện được lỗi dù code đảo thứ tự.
+4. Cập nhật `localSquare = transformSquare(localSquare,matrix)` mỗi frame. Ngay cả khi input đứng yên, hình tiếp tục biến đổi và sai số tích lũy.
+
+## Tự kiểm tra kết quả
+
+- CTest qua toàn bộ phép kiểm tra ở Debug và Release.
+- Direct sequence và composed matrix sai lệch không quá `1e-9`.
+- Hai order cho điểm khác nhau với preset ghép nhiều phép.
+- `areaRatio ≈ |determinant|` khi scale, rotation, shear và reflection thay đổi.
+- Determinant bằng 0 khi một scale bằng 0; hình bị ép xuống đoạn thẳng.
+- Drag, O, R và resize không làm mất texture hoặc thay đổi localSquare.
+
+## Bài tập mở rộng
+
+Thêm một điểm pivot khác local origin. Hãy ghép `Translate(pivot) × M × Translate(-pivot)` rồi kiểm tra pivot không di chuyển. Sau đó thử viết inverse affine matrix và dùng round-trip `local → world → local` tương tự Project 05.
+
+Project 09 đã hoàn chỉnh. Phần **Mã hoàn chỉnh của project** bên dưới chứa `CMakeLists.txt`, `lab.hpp`, `main.cpp` và `tests.cpp` đúng với gói ZIP; bạn có thể tải về, build và chạy mà không phải ghép thêm đoạn mã nào.

@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đối chiếu với brute-force oracle
+
+## Vấn đề cần giải quyết
+
+Grid hiển thị ít candidates và một đám hits có vẻ hợp lý, nhưng “trông đúng” chưa chứng minh không bỏ sót particle ở boundary. Project 27 đã cho ta một oracle chậm nhưng đơn giản: quét toàn bộ N particles và exact-test từng point.
+
+Ta sẽ chạy hai thuật toán trên cùng dữ liệu. Có một khác biệt cần xử lý cẩn thận: brute force gặp hits theo particle index tăng dần, còn grid gặp chúng theo row, column rồi vị trí trong bucket. Hai thứ tự khác nhau không có nghĩa hai tập đáp án khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Validation so hai invariant:
+
+1. **Hit set** bằng nhau, bất kể traversal order.
+2. **Nearest hit index** bằng nhau, kể cả khi có tie.
+
+Để so set bằng vector, ta copy rồi sort output ở ngoài hot loop. Không sort trực tiếp `workspace.hitIndices`, vì query không hứa thứ tự tăng dần và benchmark không nên trả thêm chi phí chỉ để test dễ viết.
+
+<InteractiveLab demo="spatial-grid-neighbor-query" mode="grid-compare" />
+
+Kéo circle qua giữa, cạnh và góc. Readout `Grid / brute-force oracle` phải luôn báo khớp. Mode này cố ý chạy cả oracle khi kéo để phục vụ học tập; final bình thường không quét 100.000 points mỗi frame.
+
+## Viết code từng bước
+
+### Bước 1 — Canonicalize một bản copy
+
+```cpp title="include/lab.hpp — thứ tự chuẩn chỉ dùng khi validation"
+inline std::vector<std::size_t> canonicalHitIndices(std::span<const std::size_t> hitIndices) {
+    std::vector<std::size_t> canonical{hitIndices.begin(), hitIndices.end()};
+    std::sort(canonical.begin(), canonical.end());
+    return canonical;
+}
+```
+
+Hàm không sửa output gốc. Grid query vẫn tự do chọn traversal order phù hợp cấu trúc.
+
+### Bước 2 — So nearest trước rồi mới so hit set
+
+```cpp title="include/lab.hpp — contract grid và oracle"
+if (gridResult.nearestIndex != bruteForceResult.nearestIndex) {
+    return false;
+}
+return canonicalHitIndices(gridResult.hitIndices) == canonicalHitIndices(bruteForceResult.hitIndices);
+```
+
+So `hit count` là chưa đủ: một thuật toán có thể bỏ một hit và thêm nhầm một candidate khác nhưng tổng vẫn bằng nhau.
+
+### Bước 3 — Chạy hai path trên cùng query object
+
+```cpp title="src/main.cpp — live comparison dùng chung input"
+lab::querySpatialGrid(grid, active, query, gridResult);
+lab::queryNeighborsBruteForce(active, query, bruteForceResult);
+resultMatchesOracle = lab::spatialGridMatchesBruteForce(gridResult, bruteForceResult);
+```
+
+Không tạo radius riêng cho oracle hoặc regenerate particle cloud giữa hai lệnh.
+
+### Bước 4 — Đưa edge query vào CTest
+
+```cpp title="tests/tests.cpp — góc world là một ca kiểm bắt buộc"
+const lab::CircleQuery edgeQuery{{0.0, 0.0}, 0.1};
+lab::querySpatialGrid(grid, particles, edgeQuery, gridWorkspace);
+lab::queryNeighborsBruteForce(particles, edgeQuery, bruteWorkspace);
+check(lab::spatialGridMatchesBruteForce(gridWorkspace, bruteWorkspace), "edge query still matches brute-force oracle");
+```
+
+Ca ở góc đồng thời kiểm clamp range, boundary và duplicate cell traversal.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint oracle comparison"
+cmake --build build --config Debug --target project_28_checkpoint_5
+```
+
+Kéo query liên tục. Nếu title hiện `MISMATCH`, dừng tối ưu và tìm sai khác đầu tiên trong hai canonical vectors.
+
+## Thử làm sai để hiểu đúng
+
+1. So trực tiếp hai hit vectors. Kết quả fail dù set giống nhau vì traversal order khác; dùng canonical copies.
+2. Chỉ so `hitIndices.size()`. Đổi một hit thành candidate sai vẫn pass; so toàn bộ index set.
+3. Sort ngay trong `querySpatialGrid`. Correctness vẫn đúng nhưng hot path bị thêm `O(H log H)`; chuyển sort về validation.
+
+## Tự kiểm tra kết quả
+
+- 32 query deterministic đều khớp hit set.
+- Query giữa world, ở cạnh và ở góc đều khớp.
+- Boundary hit được cả hai path nhận.
+- Empty query cho hai hit set rỗng và cùng nearest sentinel.
+- Equal-distance tie cho cùng lowest index.
+- Grid output gốc không bị sort để phục vụ test.
+
+## Bài tập mở rộng
+
+Khi mismatch, in index đầu tiên chỉ xuất hiện ở một phía cùng position, cell address và distance². Diagnostic này hữu ích hơn chỉ in hai hit counts.
+
+Bài tiếp theo dùng checksum và exact work để benchmark grid với oracle mà không trộn grid rebuild vào query timing.

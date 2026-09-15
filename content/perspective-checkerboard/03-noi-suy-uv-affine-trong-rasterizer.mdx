@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nội suy UV affine trong rasterizer
+
+## Vấn đề cần giải quyết
+
+Mỗi vertex đã có UV, nhưng phần lớn pixel nằm giữa ba vertex. Project 16 cho ta barycentric weights tại pixel center; cách trực tiếp nhất là dùng chúng để trộn UV rồi sample checker texture.
+
+Cách đó được gọi là affine interpolation trong screen space. Nó là một baseline quan trọng: coverage, top-left rule và texture sampler đều hoạt động, nhưng khi depth ba vertex khác nhau, checker không bám đúng lên bề mặt 3D.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với weights `λA+λB+λC=1`, affine UV là:
+
+$$
+uv_{affine}=\lambda_Auv_A+\lambda_Buv_B+\lambda_Cuv_C
+$$
+
+Nếu triangle song song màn hình và ba Z bằng nhau, cách này đúng. Khi triangle nghiêng, perspective divide làm khoảng cách screen không còn tỷ lệ tuyến tính với khoảng cách trên surface; raw UV vẫn bị trộn như thể phép chia Z chưa xảy ra.
+
+<InteractiveLab demo="perspective-texture" mode="texture-affine" />
+
+## Viết code từng bước
+
+### Bước 1 — Không vứt camera depth sau projection
+
+```cpp title="include/lab.hpp — ScreenVertex của checkpoint affine"
+struct ScreenVertex {
+    Vec2 position{};
+    Vec2 uv{};
+    double cameraDepth{};
+};
+```
+
+Checkpoint 3 chưa dùng depth để sửa UV, nhưng lưu nó ngay ở ranh giới projection. Bài 4 cần depth làm reference; bài 5 biến nó thành reciprocal attributes.
+
+### Bước 2 — Project position, chuyển nguyên UV qua stage
+
+```cpp title="include/lab.hpp — projection chỉ đổi geometry"
+result.position = {
+    double(viewport.left) + (ndcX * 0.5 + 0.5) * double(viewport.width),
+    double(viewport.top) + (0.5 - ndcY * 0.5) * double(viewport.height),
+};
+result.uv = vertex.uv;
+result.cameraDepth = vertex.position.z;
+```
+
+Raw UV không bị perspective divide. Chính điểm này tạo ra nhu cầu perspective correction, không phải vì UV bản thân sai.
+
+### Bước 3 — Nội suy hai thành phần bằng cùng λ
+
+```cpp title="include/lab.hpp — affine UV tại raster sample"
+inline Vec2 interpolateAffineUv(const ScreenTriangle& triangle, Barycentric weights) {
+    return {
+        weights.a * triangle.vertices[0].uv.x +
+            weights.b * triangle.vertices[1].uv.x +
+            weights.c * triangle.vertices[2].uv.x,
+        weights.a * triangle.vertices[0].uv.y +
+            weights.b * triangle.vertices[1].uv.y +
+            weights.c * triangle.vertices[2].uv.y,
+    };
+}
+```
+
+Không round UV. Sampler mới là nơi đổi tọa độ liên tục sang texel index.
+
+### Bước 4 — Sample texture trong callback coverage
+
+```cpp title="src/main.cpp — coverage quyết định pixel, UV quyết định màu"
+const lab::Vec2 affineUv = lab::interpolateAffineUv(screen, sample.barycentric);
+lab::Vec2 selectedUv = affineUv;
+const lab::Color color = lab::sampleNearest(
+    texture,
+    selectedUv,
+    lab::AddressMode::clamp
+);
+putPixel(pixels, width, height, sample.x, sample.y, packedColor(color));
+```
+
+Top-left rasterizer không biết texture. Nó chỉ trả sample position và barycentric weights; callback chọn cách nội suy cùng cách shade.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build affine texture mapper"
+cmake --build build --config Debug --target project_20_checkpoint_3
+```
+
+So preset front với steep. Front phải giống một bàn cờ chữ nhật. Steep vẫn nằm đúng trong silhouette nhưng các ô gần/xa phân bố thiếu tự nhiên và hai triangle có thể lộ khác biệt theo diagonal.
+
+## Thử làm sai để hiểu đúng
+
+1. Nội suy integer texel index ở vertex. Làm tròn trước khiến UV nhảy theo mảng block lớn; nội suy UV double rồi sample ở pixel.
+2. Lấy barycentric ở góc `(x,y)` thay vì pixel center. Coverage và UV không còn nói về cùng sample; giữ `(x+0.5,y+0.5)`.
+3. Đổi winding bằng swap screen position nhưng không swap UV/depth. Weights trỏ sang attribute sai; swap cả `ScreenVertex`.
+4. Kết luận sampler làm méo texture. Preview đã chứng minh sampler ổn; biến dạng chỉ xuất hiện sau affine interpolation trên depth khác nhau.
+
+## Tự kiểm tra kết quả
+
+- Rasterizer dùng top-left coverage và barycentric sum gần 1.
+- UV được nội suy ở dạng double, sau đó nearest sampler mới chọn texel.
+- Front quad cho checker đều và hai triangle nối khít.
+- Steep quad vẫn đúng silhouette nhưng checker affine méo có thể nhìn thấy.
+- Checkpoint 3 chưa có `1/z`, `u/z` hoặc `v/z`.
+
+## Bài tập mở rộng
+
+Tạm thay checker bằng gradient `color=(u*255,v*255,0)`. Gradient giúp nhìn UV liên tục, còn checker giúp nhìn texel boundary. Giữ cả hai bằng một enum debug rồi quay về checker trước bài 4.
+
+Bài tiếp theo sẽ biến nhận xét “trông méo” thành một sai số UV cụ thể tại pixel được chọn.

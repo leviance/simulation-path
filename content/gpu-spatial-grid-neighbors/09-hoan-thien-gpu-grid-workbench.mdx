@@ -1,0 +1,145 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện GPU Grid Workbench
+
+## Bài toán cần giải quyết
+
+Các pass đã đúng riêng lẻ; bài cuối sẽ ghép chúng thành GPU Grid Workbench hoàn chỉnh. Khi người dùng đổi số particle, cell size, radius hoặc seed, kích thước nhiều buffer có thể thay đổi cùng lúc. Cấu hình mới chỉ được áp dụng sau khi mọi lần cấp phát và chạy thử đều thành công; nếu có lỗi, ứng dụng vẫn giữ cấu hình cũ đang hoạt động.
+
+Bản hoàn chỉnh cần tách ba nhịp: event loop luôn nhận input; các compute pass chỉ chạy khi trạng thái đổi, khi nhấn V hoặc lúc benchmark; test CPU luôn có giới hạn và không mở window.
+
+## Theo dõi một particle đi qua grid
+
+Mỗi lần đổi cấu hình là một giao dịch cập nhật (**transaction**):
+
+```text
+requested settings
+  → capability check
+  → tạo candidate positions
+  → cấp đủ sáu buffers + scan hierarchy
+  → thay trạng thái GPU khi cấp phát đã thành công
+  → chạy các compute pass
+  → nếu chạy lỗi: khôi phục và chạy lại cấu hình cũ
+  → cập nhật trạng thái giao diện
+```
+
+Nếu giới hạn GPU không đáp ứng hoặc cấp phát thất bại, buffer mới được dọn còn buffer cũ vẫn nguyên vẹn. Nếu lỗi chỉ xuất hiện khi chạy cấu hình mới, `main` dùng lại `positions/spec/radius` cũ trước khi báo lỗi. Heatmap chỉ đọc mảng `cellCounts` nhỏ sau pass cuối; toàn bộ position không đi một vòng về CPU trong đường chạy chính.
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="gpu-grid-final" />
+
+Đổi count, cell size và radius. Timing Canvas chỉ là mô hình; điều cần đọc là quan hệ: cell nhỏ tăng cells visited, cell lớn tăng occupancy/candidates. Native app mới đo GPU query thật.
+
+## Xây từng phần
+
+### Bước 1 — Cấp phát buffer mới trước khi thay buffer đang dùng
+
+```cpp title="include/gpu_grid_engine.hpp — thay buffer sau khi cấp phát thành công"
+GridBuffers candidate{};
+if (!allocateGridBuffers(gl, positions, spec, candidate, diagnostics)) {
+    destroyGridBuffers(gl, candidate);
+    return false;
+}
+
+// Chỉ thay buffer đang dùng sau khi mọi buffer và tầng scan đã cấp phát thành công.
+destroyGridBuffers(gl, buffers_);
+buffers_ = std::move(candidate);
+```
+
+`allocateGridBuffers` kiểm `glGetError` sau từng `glBufferData`. Các buffer của từng tầng scan cũng phải được cấp phát cùng đợt, không phải đợi thay buffer chính xong mới tạo tiếp.
+
+### Bước 2 — Chỉ cập nhật giao diện sau khi engine chạy thành công
+
+```cpp title="src/main.cpp — cập nhật cấu hình sau khi engine chạy thành công"
+positions = std::move(candidatePositions);
+particleCount = requestedCount;
+cellSizePreset = requestedCellPreset;
+radius = requestedRadius;
+seed = requestedSeed;
+spec = candidateSpec;
+return true;
+```
+
+Trước đoạn này, lambda đã kiểm giới hạn phần cứng rồi gọi `engine.rebuild` và `engine.run`. Nếu `run` thất bại, nhánh khôi phục đã đưa cấu hình cũ trở lại. Thanh tiêu đề sẽ không bao giờ báo count mới trong khi engine còn dùng buffer cũ.
+
+### Bước 3 — Mọi thao tác đều phải có giới hạn dừng
+
+Final hỗ trợ:
+
+- `1–4`: 1.024, 65.537, 262.147, 1.000.003 particles;
+- `[`/`]`: cell size 4, 8, 16, 32;
+- `-`/`=`: radius 1–48;
+- `S`: tăng seed; `R`: reset seed 40, cell size 8, radius 6;
+- `V`: chạy lại và validate; `B`: bật/hủy benchmark chín mẫu, tối đa một submit mỗi frame; `Esc`: thoát.
+
+```cpp title="src/main.cpp — reset qua cùng đường tạo lại buffer"
+if (key == SDLK_R && !rebuildWorkload(particleCount, 1U, 6.0F, 40U)) {
+    std::cerr << diagnostics << '\n';
+}
+```
+
+Reset không có đường bí mật sửa trực tiếp vài buffer. Nó dùng chính transaction được mọi preset dùng.
+
+### Bước 4 — Dọn tài nguyên khi OpenGL context vẫn còn hiệu lực
+
+```cpp title="src/main.cpp — cleanup order"
+// Cleanup query, scan hierarchy, grid buffers và programs khi OpenGL context vẫn current.
+engine.destroy(gl);
+destroyWindowAndContext(window, context);
+return EXIT_SUCCESS;
+```
+
+Engine xóa query ring, scan levels, sáu grid buffers và bảy programs. OpenGL context bị hủy sau cùng.
+
+## Chạy cả chuỗi xử lý
+
+Phần **Toàn bộ mã nguồn của dự án** phía dưới lấy trực tiếp từ final snapshot giống hệt ZIP. Các file có trách nhiệm rõ ràng:
+
+- `grid_math.hpp`: cấu trúc dữ liệu, bản vét cạn CPU, hàm dựng CSR và các phép kiểm tra;
+- `gl_api.hpp`, `compute_program.hpp`: OpenGL entry points cùng compile/link diagnostics;
+- `gpu_scan.hpp`: uint hierarchical exclusive scan dùng lại được;
+- `gpu_grid_engine.hpp`: buffers, pass graph, barriers, readback có chủ đích và query ring;
+- bảy `.comp`: clear, count, scan, uniform add, prepare, scatter và neighbor;
+- `main.cpp`: vòng đời chương trình, heatmap, điều khiển, thanh tiêu đề và cách thay buffer an toàn;
+- `tests.cpp`: CTest thuần CPU.
+
+```bash title="Terminal — Debug final"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_40_final project_40_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — Release final"
+cmake --build build --config Release --target project_40_final project_40_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Chạy `project_40_final.exe` thủ công vì nó có window/event loop. CTest không khởi tạo SDL, không tạo OpenGL context và không benchmark.
+
+## Cố tình làm hỏng grid
+
+1. Xóa buffer hiện tại trước khi cấp phát buffer mới. Chỉ một lần cấp phát lỗi cũng khiến ứng dụng không còn dữ liệu để tiếp tục chạy.
+2. Chạy count/scan/query lại mỗi frame dù particles đứng yên. Timing khó đọc và GPU làm việc không có thay đổi đầu vào.
+3. Đổi `particleCount` trước khi `engine.run`. Nếu shader hoặc program lỗi, giao diện sẽ báo một count khác với dung lượng buffer thật.
+4. Cho B chạy đến khi median “ổn định”. Không có giới hạn rõ, người dùng khó dừng và test có nguy cơ kéo dài.
+5. Xóa OpenGL context trước `engine.destroy`. Mọi `glDelete*` sau đó mất context hợp lệ.
+
+## Tự nghiệm thu
+
+- [ ] Preset lớn nhất dispatch 1.000.003 particles với bounds-safe tail.
+- [ ] Tổng counts, cursor ends và sorted-index permutation đều đạt.
+- [ ] Kết quả hàng xóm của 32 mẫu khớp bản vét cạn trên CPU.
+- [ ] Đổi N/cell size/seed không phá cấu hình đang chạy nếu cấp phát thất bại.
+- [ ] Phím V chạy cùng các compute pass như lần tạo grid bình thường; B thu đúng chín mẫu, có thể hủy và dừng sau 10 giây.
+- [ ] Title báo N, grid, cell size, radius, pass count, total counts, max occupancy, GPU median và validation.
+- [ ] Query/buffers/programs bị xóa trước context.
+- [ ] Debug và Release CTest kết thúc trong timeout 20 giây.
+- [ ] Source cuối bài khớp checkpoint 9, final và gói ZIP.
+
+## Hướng mở rộng
+
+1. Vẽ particle trực tiếp từ positions SSBO. Vì vertex shader đọc qua SSBO binding, giữa compute và vertex shader vẫn dùng `GL_SHADER_STORAGE_BARRIER_BIT`; chỉ dùng `GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT` khi dữ liệu thật sự được đọc qua vertex attribute array.
+2. Lưu tối đa K neighbor indices mỗi particle và báo overflow riêng thay vì cắt im lặng.
+3. Dùng grid này làm broad phase cho Lennard–Jones force, nhưng giữ force accumulation ở một invocation sở hữu particle output.
+4. Thử sắp xếp index trong từng cell và chỉ giữ bước này nếu benchmark chứng minh phép tìm hàng xóm thực sự nhanh hơn.
+
+Project 40 khép lại phần GPU compute nền tảng. Project 41 sẽ dùng neighbor list và exact distance để chuyển từ “ai ở gần?” sang lực hút–đẩy Lennard–Jones giữa hai nguyên tử đầu tiên.

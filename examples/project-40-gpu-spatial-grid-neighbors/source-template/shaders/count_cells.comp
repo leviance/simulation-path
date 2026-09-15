@@ -1,0 +1,44 @@
+#version 430 core
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Positions {
+    vec2 positions[];
+};
+
+layout(std430, binding = 1) buffer CellCounts {
+    uint cellCounts[];
+};
+
+uniform int uParticleCount;
+uniform int uColumns;
+uniform int uRows;
+uniform float uCellSize;
+uniform float uWorldWidth;
+uniform float uWorldHeight;
+
+uint cellFor(vec2 position) {
+    vec2 maximumInside = vec2(uWorldWidth, uWorldHeight) - vec2(0.0001);
+    vec2 inside = clamp(position, vec2(0.0), maximumInside);
+    uvec2 coordinate = uvec2(floor(inside / uCellSize));
+    coordinate.x = min(coordinate.x, uint(uColumns - 1));
+    coordinate.y = min(coordinate.y, uint(uRows - 1));
+    return coordinate.y * uint(uColumns) + coordinate.x;
+}
+
+void main() {
+#if LAB_CHECKPOINT >= 2
+    uint particle = gl_GlobalInvocationID.x;
+    if (particle >= uint(uParticleCount)) {
+        return;
+    }
+
+    // Nhiều particle có thể tới cùng cell trong cùng một wave.
+    uint cell = cellFor(positions[particle]);
+    atomicAdd(cellCounts[cell], 1u);
+#else
+    if (uParticleCount + uColumns + uRows < 0 || uCellSize + uWorldWidth + uWorldHeight < 0.0) {
+        cellCounts[0] = uint(positions[0].x);
+    }
+#endif
+}

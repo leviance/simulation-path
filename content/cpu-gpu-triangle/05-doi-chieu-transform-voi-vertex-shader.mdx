@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đối chiếu transform với vertex shader
+
+## Vấn đề cần giải quyết
+
+Hai tam giác tĩnh giống nhau chưa chứng minh pipeline đồng nhất. Một lỗi dấu sin hoặc đổi thứ tự transform có thể chỉ lộ ra khi triangle xoay và rời khỏi gốc. Checkpoint 5 dùng cùng ba input: `angleRadians`, `scale`, `translation` cho cả C++ và GLSL.
+
+Contract được viết thành lời trước:
+
+```text
+input position → rotate → scale → translate → NDC
+```
+
+## Hiểu ý tưởng trước khi viết code
+
+Điểm so sánh tốt nhất là NDC ngay trước viewport transform. Nếu C++ và vertex shader tạo cùng NDC cho từng vertex thì phần còn lại chỉ còn là quy ước viewport và rasterization, không còn nhập nhằng với thứ tự transform.
+
+<InteractiveLab demo="cpu-gpu-triangle" mode="vertex-transform" />
+
+## Viết code từng bước
+
+### Bước 1 — C++ giữ intermediate có tên
+
+```cpp title="include/pipeline.hpp — transformPosition"
+inline Vec2 transformPosition(Vec2 position, const Transform2D& transform) {
+    const float cosine = std::cos(transform.angleRadians);
+    const float sine = std::sin(transform.angleRadians);
+    const float rotatedX = position.x * cosine - position.y * sine;
+    const float rotatedY = position.x * sine + position.y * cosine;
+    return {
+        rotatedX * transform.scale + transform.translation.x,
+        rotatedY * transform.scale + transform.translation.y,
+    };
+}
+```
+
+Code dài hơn một biểu thức matrix nén, nhưng người học nhìn được chính xác lỗi nằm ở rotation hay bước cộng translation.
+
+### Bước 2 — GLSL phản chiếu cùng thứ tự
+
+```glsl title="Vertex shader — rotate rồi scale và translate"
+float cosine = cos(uAngle);
+float sine = sin(uAngle);
+vec2 rotated = vec2(
+    aPosition.x * cosine - aPosition.y * sine,
+    aPosition.x * sine + aPosition.y * cosine
+);
+vec2 ndc = rotated * uScale + uTranslation;
+gl_Position = vec4(ndc, 0.0, 1.0);
+```
+
+GLSL không gọi helper C++, nhưng triển khai cùng contract và cùng precision `float`. Layout là nơi chạy khác nhau; công thức không được đổi.
+
+### Bước 3 — Uniform thay đổi, VBO giữ nguyên
+
+```cpp title="include/gpu_renderer.hpp — uniforms trước draw"
+api.Uniform1f(angleLocation, transform.angleRadians);
+api.Uniform1f(scaleLocation, transform.scale);
+api.Uniform2f(translationLocation, transform.translation.x, transform.translation.y);
+int smoothColorFlag = 0;
+if (smoothColor) {
+    smoothColorFlag = 1;
+}
+api.Uniform1i(smoothColorLocation, smoothColorFlag);
+```
+
+Không có `BufferData` trong render loop. Ba source vertices bất biến; transform là state của draw call.
+
+### Bước 4 — Fixed step để soi từng trạng thái
+
+`Space` chạy/dừng, `N` tăng đúng 10°. Arrow keys dịch triangle, `Q/E` đổi scale. CPU và GPU nhận cùng một `Transform2D` trong cùng frame.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 5"
+cmake --build build --config Debug --target project_33_checkpoint_5
+```
+
+Pause app, nhấn `N` vài lần rồi dịch bằng arrows. Hai triangle phải cùng giữ orientation, kích thước và vị trí tương đối trong panel của mình.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong GLSL, translate trước rồi rotate. Triangle GPU quay quanh gốc cùng translation thay vì quanh local origin.
+2. Đổi dấu `sine` ở một phương trình. GPU quay ngược CPU.
+3. Gửi degrees thẳng vào `sin/cos`. C++/GLSL đều dùng radians.
+4. Upload vertices đã transform vào VBO mỗi frame nhưng vẫn áp uniform transform. GPU bị transform hai lần.
+
+## Tự kiểm tra kết quả
+
+- [ ] C++ và GLSL cùng rotate → scale → translate.
+- [ ] Cùng angle được biểu diễn bằng radians.
+- [ ] VBO không upload lại khi transform đổi.
+- [ ] Space pause, N step và R reset có kết quả lặp lại được.
+- [ ] Arrow/Q/E làm hai panel thay đổi đồng thời.
+- [ ] CTest khóa case 90° + scale 0.5 + translation.
+
+## Bài tập mở rộng
+
+1. Trace cả ba NDC vertices ra terminal khi nhấn một phím riêng.
+2. Thử scale âm và viết trước dự đoán winding sẽ thay đổi thế nào.
+3. Thêm non-uniform scale vào contract, rồi cập nhật cả C++ lẫn GLSL trước khi chạy.
+
+Bài tiếp theo sẽ giải quyết phần dễ gây nhầm nhất khi so hai renderer: CPU có gốc trên-trái còn OpenGL window coordinates có gốc dưới-trái.

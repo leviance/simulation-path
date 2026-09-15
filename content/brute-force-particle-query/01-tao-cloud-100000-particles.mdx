@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo cloud 100.000 particles có thể lặp lại
+
+## Vấn đề cần giải quyết
+
+Starter đã có cửa sổ SDL3, framebuffer và một đám điểm placeholder. Nó cho ta thấy hình dạng sản phẩm, nhưng các điểm được tạo bằng một mẹo theo index; không có `Particle`, world bounds hay seed để dựng lại cùng dữ liệu. Một benchmark trên scene thay đổi sau mỗi lần chạy gần như không thể đối chiếu.
+
+Checkpoint đầu tiên thay placeholder bằng dữ liệu thật: một vector chứa đúng 100.000 `Particle`. Mỗi particle chỉ cần position. Màu highlight, trạng thái hit hay pixel trên màn hình đều là kết quả của query/render, không nên nhét vào data model lúc này.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng world hình vuông $[0,1]\times[0,1]$. Hai số ngẫu nhiên $u_x,u_y\in[0,1]$ được ánh xạ vào bounds:
+
+$$
+x=x_{min}+u_x(x_{max}-x_{min})
+$$
+
+$$
+y=y_{min}+u_y(y_{max}-y_{min})
+$$
+
+PRNG có seed không làm dữ liệu “bớt ngẫu nhiên” về mặt hình ảnh; nó chỉ giúp cùng seed sinh lại đúng cùng chuỗi. Đó là điều ta cần cho test và benchmark.
+
+<InteractiveLab demo="brute-force-particle-query" mode="brute-scene" />
+
+Đổi giữa ba seed rồi quay lại `C0FFEE`. Các particle phải trở về đúng vị trí cũ. Canvas chỉ lấy mẫu tối đa 30.000 điểm khi vẽ để UI không bị nghẽn; data model vẫn chứa 100.000 phần tử.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ data model nhỏ nhất có thể
+
+```cpp title="include/lab.hpp — Particle và world bounds"
+struct Particle {
+    Vec2 position{};
+};
+
+struct Bounds2D {
+    Vec2 minimum{};
+    Vec2 maximum{};
+};
+```
+
+Index trong `std::vector<Particle>` là identity ổn định. Project này chưa cần velocity, mass hoặc một cờ `selected`; thêm chúng chỉ làm bài toán query khó đọc hơn.
+
+### Bước 2 — Viết PRNG có state rõ ràng
+
+```cpp title="include/lab.hpp — một bước XorShift32"
+std::uint32_t nextU32() {
+    state_ ^= state_ << 13U;
+    state_ ^= state_ >> 17U;
+    state_ ^= state_ << 5U;
+    return state_;
+}
+
+double nextUnit() {
+    return double(nextU32()) / double(std::numeric_limits<std::uint32_t>::max());
+}
+```
+
+`nextUnit()` trả số trong `[0,1]`. Seed zero được thay bằng một state khác zero trong constructor vì XorShift32 sẽ mắc kẹt ở zero nếu bắt đầu từ zero.
+
+### Bước 3 — Reserve trước rồi sinh đúng N phần tử
+
+```cpp title="include/lab.hpp — tạo particle cloud trong bounds"
+particles.reserve(count);
+XorShift32 random{seed};
+const double width = bounds.maximum.x - bounds.minimum.x;
+const double height = bounds.maximum.y - bounds.minimum.y;
+for (std::size_t index = 0; index < count; ++index) {
+    const double x = bounds.minimum.x + random.nextUnit() * width;
+    const double y = bounds.minimum.y + random.nextUnit() * height;
+    particles.push_back({{x, y}});
+}
+```
+
+`reserve` không tạo particle; nó chỉ chuẩn bị sức chứa để vector không phải dời dữ liệu nhiều lần. `push_back` mới làm `size()` tăng từ 0 tới `count`.
+
+### Bước 4 — Tạo cloud ngoài vòng lặp render
+
+```cpp title="src/main.cpp — scene deterministic dùng cho mọi frame"
+const lab::Bounds2D bounds{{0.0, 0.0}, {1.0, 1.0}};
+constexpr std::uint32_t seed = 0x00c0ffeeU;
+const std::vector<lab::Particle> particles = lab::makeParticleCloud(100'000, bounds, seed);
+std::size_t activeParticleCount = particles.size();
+```
+
+Generation chạy một lần. Mỗi frame chỉ đổi world position sang pixel rồi vẽ; benchmark về sau sẽ không vô tình tính cả thời gian tạo scene.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint particle cloud"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_27_checkpoint_1
+```
+
+Chạy target, resize cửa sổ rồi theo dõi title: `N` vẫn là 100.000. Khung nhìn có thể đổi kích thước, vector particle thì không.
+
+## Thử làm sai để hiểu đúng
+
+1. Chuyển `makeParticleCloud` vào vòng `while (running)`. CPU usage tăng mạnh và mọi frame là scene mới; đưa generation trở lại trước event loop.
+2. Bỏ `reserve`, rồi log mỗi lần `capacity()` đổi. Kết quả vẫn đúng nhưng vector phải cấp phát và dời phần tử nhiều lần; khôi phục `reserve(count)`.
+3. Dùng một seed lấy từ thời gian hệ thống. Reset không còn tái lập cloud và test không thể so index; quay lại seed cố định.
+
+## Tự kiểm tra kết quả
+
+- Vector có đúng 100.000 particles.
+- Mọi `x` và `y` đều nằm trong `[0,1]`.
+- Cùng seed tạo cùng position ở từng index.
+- Seed khác làm ít nhất một position thay đổi.
+- Resize chỉ thay `WorldView`, không tạo lại cloud.
+- Framebuffer vẫn được đưa lên bằng `SDL_UpdateTexture` và `SDL_RenderTexture`.
+
+## Bài tập mở rộng
+
+Thêm preset 250.000 particles, nhưng vẫn giữ 100.000 làm mặc định của project. Ghi riêng thời gian generation; đừng trộn con số đó vào query benchmark.
+
+Bài tiếp theo biến vị trí con trỏ thành một `CircleQuery` trong cùng world space `[0,1]²`.

@@ -1,0 +1,26 @@
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+IndentWidth: 4
+ContinuationIndentWidth: 4
+AccessModifierOffset: 0
+# BlockIndent lets clang-format collapse short calls back to one logical line.
+# If a call must stay multiline, continuation levels remain multiples of four.
+AlignAfterOpenBracket: BlockIndent
+AlignOperands: DontAlign
+TabWidth: 4
+UseTab: Never
+# Course snippets stay on their logical source line. The website provides
+# horizontal scrolling instead of wrapping code to an arbitrary print width.
+ColumnLimit: 0
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+SortIncludes: CaseSensitive
+IndentPPDirectives: None
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortLambdasOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+MaxEmptyLinesToKeep: 1
+SeparateDefinitionBlocks: Always

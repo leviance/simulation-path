@@ -1,0 +1,122 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Project và rasterize phần còn nhìn thấy
+
+## Vấn đề cần giải quyết
+
+Đến đây ta có zero, một hoặc hai `Triangle3` với mọi vertex ở `z ≥ near`. Chúng vẫn ở camera space; framebuffer cần screen coordinate. Đây là lúc nối clipper với projection Project 15 và rasterizer Project 16.
+
+Điểm quan trọng không phải viết thêm một renderer mới. Ta đặt một guard trước phép chia, đổi từng output triangle sang screen space rồi tái dùng đúng coverage/top-left rule đã kiểm chứng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với camera nhìn theo +Z và vertical FOV:
+
+$$
+x_{ndc}=\frac{x\,f}{aspect\,z},\qquad
+y_{ndc}=\frac{y\,f}{z},\qquad
+f=\frac{1}{\tan(FOV_y/2)}
+$$
+
+Sau clipping, `z` tối thiểu bằng `near`, nên mẫu số không tiến về zero. Giao điểm mới được project như bất kỳ vertex nào khác. Ta không tìm giao điểm trong screen space: perspective divide là phép phi tuyến theo Z, nên nội suy sau phép chia không còn tương đương với cạnh 3D ban đầu.
+
+<InteractiveLab demo="near-plane" mode="near-raster" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ guard ngay trong API projection
+
+```cpp title="include/lab.hpp — từ chối dữ liệu chưa clip trước phép chia"
+if (vertex.position.z < nearPlane || viewport.width <= 0 || viewport.height <= 0) {
+    return std::nullopt;
+}
+```
+
+Guard không thay clipper; nó phát hiện vi phạm hợp đồng. Nếu một regression đưa vertex outside vào đây, hàm trả rỗng thay vì tạo infinity rồi để rasterizer duyệt một bounding box khổng lồ.
+
+### Bước 2 — Đổi camera position sang NDC rồi pixel
+
+```cpp title="include/lab.hpp — projection và viewport transform"
+const double aspectRatio = double(viewport.width) / double(viewport.height);
+const double focalScale = 1.0 / std::tan(verticalFovRadians * 0.5);
+const double ndcX = vertex.position.x * focalScale / (aspectRatio * vertex.position.z);
+const double ndcY = vertex.position.y * focalScale / vertex.position.z;
+
+return ScreenVertex{
+    {
+        double(viewport.left) + (ndcX + 1.0) * 0.5 * double(viewport.width),
+        double(viewport.top) + (1.0 - ndcY) * 0.5 * double(viewport.height),
+    },
+    vertex.color,
+};
+```
+
+Color được chuyển nguyên vẹn sang `ScreenVertex`. Nó đã được nội suy đúng tại giao điểm ở camera space; rasterizer tiếp tục nội suy bên trong triangle bằng barycentric weights.
+
+### Bước 3 — Chỉ tạo ScreenTriangle khi cả ba vertex hợp lệ
+
+```cpp title="include/lab.hpp — optional khóa hợp đồng cho cả primitive"
+const auto a = projectVertex(triangle.a, verticalFovRadians, viewport, nearPlane);
+const auto b = projectVertex(triangle.b, verticalFovRadians, viewport, nearPlane);
+const auto c = projectVertex(triangle.c, verticalFovRadians, viewport, nearPlane);
+if (!a || !b || !c) {
+    return std::nullopt;
+}
+return ScreenTriangle{*a, *b, *c};
+```
+
+Không có nhánh “project hai vertex rồi đoán vertex thứ ba”. Một output triangle hợp lệ phải project được cả ba.
+
+### Bước 4 — Tái dùng top-left raster loop
+
+`rasterizeScreenTriangle` chuẩn hóa winding, clamp bounding box, lấy mẫu `(x+0.5,y+0.5)` và kiểm ba edge. Callback nhận màu barycentric rồi mới đổi channel `double` về byte framebuffer.
+
+```cpp title="src/main.cpp — batch đi qua cùng một rasterizer"
+const lab::RasterStats stats = lab::rasterizeScreenTriangle(
+    *projected,
+    width,
+    height,
+    [&](int x, int y, lab::Color color) {
+        putPixel(
+            pixels,
+            width,
+            height,
+            x,
+            y,
+            rgba(toByte(color.red), toByte(color.green), toByte(color.blue))
+        );
+    }
+);
+```
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint render hoàn chỉnh"
+cmake --build build --config Debug --target project_18_checkpoint_6
+```
+
+Chọn one-outside rồi kéo qua đường vàng. Phần trên viewport phải co dần liên tục. Chuyển sang “Bỏ cả triangle” hoặc nhấn `V`: cùng scene biến mất ngay khi một vertex outside, giúp đối chiếu mà không đưa phép chia nguy hiểm trở lại.
+
+## Thử làm sai để hiểu đúng
+
+1. Project triangle gốc rồi clip NDC. Đường biên chuyển động sai vì t được tính sau phép chia; quay lại clip trong camera space.
+2. Clamp `z` outside lên `near`. Silhouette nối tới một point sai X/Y và giật khi crossing; dùng intersection trên cạnh.
+3. Bỏ guard `z<near`. Một regression trong clipper có thể tạo bounding box cực lớn hoặc NaN; giữ optional như hợp đồng runtime.
+4. Dùng inclusive rule cho hai triangle fan. Pixel trên đường chéo có hai owner; phục hồi top-left rule từ Project 16.
+
+## Tự kiểm tra kết quả
+
+- `projectVertex` trả rỗng cho mọi vertex có `z < near`.
+- Vertex trên near plane project ra tọa độ hữu hạn.
+- One-outside tạo hai screen triangle; two-outside tạo một.
+- All-outside không gọi rasterizer.
+- Bounding box được clamp vào framebuffer trước vòng pixel.
+- `coveredCount` bằng đúng số lần callback chạy.
+- Gradient không có đường gãy màu tại giao điểm hoặc đường chéo fan.
+
+## Bài tập mở rộng
+
+Thêm một chế độ chỉ hiển thị wireframe của output batch trên viewport. Dùng cùng `projectTriangle`; không viết một công thức projection thứ hai cho wireframe.
+
+Bài cuối sẽ biến các quan sát trên thành invariant tự động, rồi hoàn thiện sweep, preset và mã nguồn chạy độc lập.
+

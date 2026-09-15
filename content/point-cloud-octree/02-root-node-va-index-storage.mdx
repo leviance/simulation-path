@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Root node và index storage
+
+## Vấn đề cần giải quyết
+
+Ta đã có point cloud, AABB và quy tắc chọn octant. Bước kế tiếp chưa phải recursion. Trước hết cần một `OctreeNode` đủ rõ để người học có thể mở debugger và trả lời: node phủ vùng nào, đang ở depth bao nhiêu, giữ những point nào và có child hay chưa.
+
+Checkpoint này chỉ tạo root leaf. Nó cố tình vẫn kiểm N candidates cho mỗi query. Baseline ấy giúp ta phân biệt “đã đóng gói dữ liệu thành tree” với “tree đã tạo pruning”.
+
+## Hiểu ý tưởng trước khi viết code
+
+`points` là nguồn dữ liệu duy nhất. Node không copy `Vec3`; nó giữ `pointIndices`. Nhờ vậy renderer, brute-force oracle và Octree cùng đọc một position. Nếu distribution đổi, ta tạo lại point vector và rebuild tree thay vì cố đồng bộ nhiều bản sao.
+
+Nodes nằm trong một `std::vector<OctreeNode>`. Child cũng được tham chiếu bằng index, không phải raw pointer. Giá trị `noNodeIndex` đóng vai trò sentinel; khi child đầu tiên là sentinel, node là leaf.
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-root" />
+
+Đặt 1.000, 10.000 rồi 100.000 points. `nodes` vẫn bằng 1, nhưng `candidates` tăng đúng theo N. Đây là kết quả đúng của root-only checkpoint.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt cấu hình cạnh cấu trúc được cấu hình
+
+```cpp title="include/lab.hpp — OctreeConfig"
+struct OctreeConfig {
+    Bounds3D bounds{};
+    std::size_t leafCapacity{16};
+    int maximumDepth{10};
+    double minimumNodeSize{1.0 / 1024.0};
+};
+```
+
+`leafCapacity` chưa có hiệu lực ở root-only checkpoint, nhưng nó đã nằm trong contract. Hai guard còn lại sẽ ngăn recursion vô hạn khi nhiều points trùng vị trí.
+
+### Bước 2 — Làm cho trạng thái leaf nhìn thấy được
+
+```cpp title="include/lab.hpp — OctreeNode"
+struct OctreeNode {
+    Bounds3D bounds{};
+    int depth{};
+    std::vector<std::size_t> pointIndices{};
+```
+
+```cpp title="include/lab.hpp — nhận diện leaf"
+bool isLeaf() const {
+    return children[0] == noNodeIndex;
+}
+```
+
+Tám child luôn được gán cùng lúc khi split, nên kiểm phần tử đầu tiên là đủ. Cách này giữ ownership ở vector của tree và giúp snapshot debugger dễ đọc.
+
+### Bước 3 — Chèn index hợp lệ vào root
+
+```cpp title="include/lab.hpp — createRootOctree"
+for (std::size_t pointIndex = 0; pointIndex < points.size(); ++pointIndex) {
+    if (pointInsideVolume(points[pointIndex].position, config.bounds)) {
+        tree.nodes[0].pointIndices.push_back(pointIndex);
+        ++tree.insertedCount;
+    }
+}
+tree.leafCount = 1;
+tree.maximumLeafOccupancy = tree.insertedCount;
+```
+
+`insertedCount` không mặc định bằng `points.size()`: nếu caller đưa point ngoài root bounds, tree phải nói đúng số index thực sự nhận.
+
+### Bước 4 — Giữ query baseline quan sát được
+
+```cpp title="src/main.cpp — root-only tree"
+lab::Octree tree = lab::createRootOctree(points, treeConfig);
+```
+
+Query bắt đầu ở root, thấy root overlap rồi exact-test toàn bộ `pointIndices`. Leaf capacity lúc này chỉ là lời hứa cho checkpoint kế tiếp.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 2"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_30_checkpoint_2
+```
+
+Window title phải báo `root leaf`, số stored points và capacity. Thay point count trong source hoặc Canvas để xác nhận candidates đi cùng N.
+
+## Thử làm sai để hiểu đúng
+
+1. Lưu `PointSample` trực tiếp trong node. Khi muốn đổi distribution, bạn phải cập nhật cả point cloud lẫn từng leaf. Trả node về index storage.
+2. Dùng `0` làm sentinel. Root cũng có index 0, khiến “không có child” và “trỏ tới root” lẫn nhau. Dùng `numeric_limits<size_t>::max()`.
+3. Gán `insertedCount = points.size()` trước vòng lọc bounds. Topology report sau này sẽ nói sai. Chỉ tăng count khi thật sự chèn.
+
+## Tự kiểm tra kết quả
+
+- Root bounds bằng world bounds và depth bằng 0.
+- Root là leaf, có tám sentinel child indices.
+- Node chỉ lưu point indices, không copy point positions.
+- `insertedCount` bằng số point nằm trong root bounds.
+- Root-only query kiểm đúng N candidates với dataset hợp lệ.
+- `leafCount == 1`, `internalNodeCount == 0`.
+- Checkpoint 2 vẫn render cùng point cloud và query hits như starter.
+
+## Bài tập mở rộng
+
+Thêm một point ngoài `[0,1]³` trong test và xác nhận `pointCount` tăng nhưng `insertedCount` không tăng. Giải thích vì sao final của project chọn tạo dữ liệu nằm trọn root thay vì tự động nới root bounds mỗi frame.
+
+Bài tiếp theo biến leaf capacity từ metadata thành hành vi: khi leaf thứ 17 xuất hiện, root sẽ split thành tám children và redistribute 16 indices cũ.

@@ -1,0 +1,143 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm normal và tô sáng bằng Lambert
+
+## Bức hình này còn thiếu gì?
+
+Mã ở bài trước đã tìm đúng đường viền của sphere, nhưng hình vẫn phẳng như một miếng bìa. Muốn phần hướng về phía đèn sáng hơn và phần quay lưng tối hơn, ta cần tìm normal tại điểm mà tia vừa chạm bề mặt.
+
+Ta có thể viết riêng công thức normal của sphere, nhưng cách đó sẽ không mở rộng được. Khi thêm box, torus và căn phòng, ray marcher vẫn phải hỏi cùng một hàm `sampleScene`. Vì vậy ta sẽ lấy normal từ gradient số của chính hàm này.
+
+## Hình dung đường đi của một pixel
+
+Gần bề mặt SDF, gradient hướng ra ngoài. Central differences đo chênh lệch hai phía trên từng trục:
+
+$$
+\operatorname{grad} d(\mathbf{p}) \approx
+\begin{bmatrix}
+d(\mathbf{p}+\varepsilon\mathbf{x})-d(\mathbf{p}-\varepsilon\mathbf{x})\\
+d(\mathbf{p}+\varepsilon\mathbf{y})-d(\mathbf{p}-\varepsilon\mathbf{y})\\
+d(\mathbf{p}+\varepsilon\mathbf{z})-d(\mathbf{p}-\varepsilon\mathbf{z})
+\end{bmatrix}
+$$
+
+Hệ số $2\varepsilon$ có thể bỏ vì kết quả cuối được normalize. Sáu scene samples đắt hơn công thức analytic của sphere, nhưng đổi lại cùng hàm hoạt động cho cả scene đã ghép.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-normal" />
+
+Orbit camera và quan sát vector normal ở center hit. Normal không “hướng về camera”; nó hướng ra khỏi bề mặt, còn độ sáng phụ thuộc góc với light direction.
+
+## Cùng sửa checkpoint
+
+### Bước 1 — Viết `estimateNormal` từ đúng scene query
+
+```cpp title="include/raymarch_math.hpp — bản CPU"
+inline Vec3 estimateNormal(const Vec3& point, double epsilon = 0.001) {
+    const Vec3 dx{epsilon, 0.0, 0.0};
+    const Vec3 dy{0.0, epsilon, 0.0};
+    const Vec3 dz{0.0, 0.0, epsilon};
+
+    return normalize({
+        sampleScene(point + dx).distance -
+            sampleScene(point - dx).distance,
+        sampleScene(point + dy).distance -
+            sampleScene(point - dy).distance,
+        sampleScene(point + dz).distance -
+            sampleScene(point - dz).distance,
+    });
+}
+```
+
+Đừng gọi `sdSphere` trực tiếp ở đây. Khi hit nằm trên box mà normal vẫn lấy từ sphere, silhouette đúng nhưng ánh sáng sai theo một cách rất khó đoán.
+
+### Bước 2 — Chuyển sáu sample sang GLSL
+
+GLSL dùng swizzle để tạo sáu offset mà không làm công thức ngắn đến mức khó đọc:
+
+```glsl title="shaders/raymarch.frag — bản GPU"
+vec3 estimateNormal(vec3 point) {
+    float epsilon = 0.001;
+    vec2 offset = vec2(epsilon, 0.0);
+
+    return normalize(vec3(
+        sampleScene(point + offset.xyy).distance -
+            sampleScene(point - offset.xyy).distance,
+        sampleScene(point + offset.yxy).distance -
+            sampleScene(point - offset.yxy).distance,
+        sampleScene(point + offset.yyx).distance -
+            sampleScene(point - offset.yyx).distance
+    ));
+}
+```
+
+### Bước 3 — Từ normal đến Lambert diffuse
+
+Vector từ hit point đến đèn phải được normalize trước dot product:
+
+$$
+L_d=\max(\mathbf{n}\cdot\mathbf{l},0)
+$$
+
+```glsl title="shaders/raymarch.frag — ánh sáng checkpoint 5"
+vec3 normal = estimateNormal(result.position);
+vec3 lightPosition = vec3(2.4, 2.0, 3.0);
+vec3 toLight = lightPosition - result.position;
+float lightDistance = length(toLight);
+vec3 lightDirection =
+    toLight / max(lightDistance, 0.0001);
+
+float diffuse = max(dot(normal, lightDirection), 0.0);
+vec3 baseColor = materialColor(result.materialId, result.position);
+vec3 color = baseColor * (0.16 + diffuse * 0.84);
+
+fragColor = vec4(
+    pow(max(color, 0.0), vec3(1.0 / 2.2)),
+    1.0
+);
+```
+
+`0.16` là ambient tối thiểu để phía khuất không đen tuyệt đối. `pow(..., 1/2.2)` chỉ là gamma encode xấp xỉ cho output; phép dot vẫn được tính trong không gian tuyến tính.
+
+## Chạy thử và quan sát
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_36_checkpoint_5
+```
+
+Kiểm normal bằng một điểm có đáp án rõ ràng:
+
+Điểm ngoài cùng bên phải của sphere phải có normal gần $(1,0,0)$:
+
+```cpp title="tests/tests.cpp — normal probe"
+const lab::Vec3 sphereSurface{-0.18, -0.18, 0.15};
+const lab::Vec3 normal = lab::estimateNormal(sphereSurface);
+
+check(near(lab::length(normal), 1.0, 1.0e-5), "estimated normal is normalized");
+check(normal.x > 0.999, "sphere normal points outward");
+```
+
+Đây là kiểm chứng mạnh hơn “sphere trông nổi”: nó bắt được dấu gradient đảo, normal chưa normalize và việc sample nhầm scene.
+
+## Cố tình làm sai
+
+1. Đảo hai vế `d(p-e) - d(p+e)`. Ánh sáng xuất hiện ở phía đối diện vì normal quay vào trong.
+2. Bỏ `normalize`. Độ sáng phụ thuộc cả độ lớn gradient, không chỉ góc.
+3. Tăng normal epsilon lên `0.1`. Cạnh và vật thể gần nhau bị làm mềm, normal có thể lấy ảnh hưởng từ primitive khác.
+4. Giảm epsilon quá sát độ chính xác float, chẳng hạn `1e-8`. Hiệu hai mẫu gần bằng nhau và normal trở nên nhiễu.
+5. Dùng `dot(normal, toLight)` chưa normalize. Độ sáng tăng theo khoảng cách đến đèn—ngược trực giác vật lý.
+
+## Dấu hiệu cho thấy bài đã hoàn thành
+
+- [ ] Numerical normal dài gần 1 và hướng ra ngoài tại sphere probe.
+- [ ] Lambert nằm trong $[0,1]$ sau clamp.
+- [ ] Phía quay về đèn sáng hơn phía quay đi.
+- [ ] Di chuyển camera không làm ánh sáng đổi khi camera target và đèn giữ nguyên.
+- [ ] Normal gọi `sampleScene`, không gọi riêng `sdSphere`.
+
+## Thử đi thêm một bước
+
+1. Thêm debug view encode `normal * 0.5 + 0.5`.
+2. So sánh central differences sáu mẫu với tetrahedral gradient bốn mẫu.
+3. Cho normal epsilon phụ thuộc nhẹ vào `traveled` và ghi lại ưu/nhược điểm.
+
+Bài tiếp theo sẽ thêm box và torus. Vòng lặp ray marching, cách tính normal và ánh sáng được giữ nguyên; chỉ hàm mô tả scene cần mở rộng.

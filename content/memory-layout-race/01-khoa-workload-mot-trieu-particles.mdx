@@ -1,0 +1,126 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khóa workload một triệu particle
+
+## Vấn đề cần giải quyết
+
+“AoS hay SoA nhanh hơn?” nghe như một câu hỏi có thể trả lời bằng một lần bấm benchmark. Thực ra câu hỏi đó còn thiếu phần quan trọng nhất: **nhanh hơn khi làm việc gì?** Nếu chưa chốt dữ liệu, số phần tử và phép tính, ta rất dễ vô tình cho hai phía chạy hai công việc khác nhau rồi gán chênh lệch cho memory layout.
+
+Project này dùng một state cố định: mỗi particle có position `(x, y, z)` và velocity `(x, y, z)`, tất cả đều là `float`. Ta sẽ bắt đầu bằng Array of Structures (AoS), giữ đúng một triệu phần tử và một seed. Đến khi đổi sang SoA, giá trị ở particle index `i` vẫn phải giống hệt; chỉ địa chỉ trong bộ nhớ thay đổi.
+
+Starter đã mở cửa sổ SDL3, có một dải ô màu tượng trưng cho memory và một vùng để vẽ particle sample. Checkpoint đầu tiên thay dữ liệu tượng trưng bằng vector thật. Chưa có animation, chưa có benchmark và cũng chưa có SoA.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một particle gồm sáu số:
+
+$$P_i = (p_x,p_y,p_z,v_x,v_y,v_z)$$
+
+Mỗi `float` chiếm 4 byte. Nếu struct không có padding, một particle cần:
+
+$$6 \times 4 = 24\ \text{byte}$$
+
+Một triệu particle vì thế cần khoảng 24.000.000 byte, tức 24 MB khi dùng cách ghi thập phân. Đây chỉ là state thuần; `std::vector` còn giữ một ít metadata nhưng không tạo thêm object riêng cho từng particle.
+
+Trong AoS, bộ nhớ có dạng:
+
+```text title="AoS: mỗi cặp ngoặc là một particle"
+[px0 py0 pz0 vx0 vy0 vz0] [px1 py1 pz1 vx1 vy1 vz1] ...
+```
+
+Điều đáng chú ý chưa phải nó tốt hay xấu. Ta chỉ cần ghi nhận: hai `positionX` liên tiếp cách nhau 24 byte, vì giữa chúng còn năm field khác.
+
+<InteractiveLab demo="memory-layout-race" mode="layout-scene" />
+
+Mô phỏng web khởi động ở 16.384 particles để trang mở nhanh trên máy có ít RAM. Bạn có thể chọn 1.000.000 trong control để quan sát đúng quy mô cuối; benchmark nặng chỉ chạy khi bấm nút ở các bài sau. Source C++ của checkpoint vẫn dùng `kParticleCount = 1'000'000` ngay từ bài này, nên việc giảm mặc định của Canvas không làm thay đổi workload cần build.
+
+## Viết code từng bước
+
+### Bước 1 — Định nghĩa AoS thật rõ ràng
+
+Tạo `include/particles.hpp` và đặt sáu field theo đúng thứ tự đã chốt:
+
+```cpp title="include/particles.hpp — ParticleAoS"
+struct ParticleAoS {
+    float positionX{};
+    float positionY{};
+    float positionZ{};
+    float velocityX{};
+    float velocityY{};
+    float velocityZ{};
+};
+
+static_assert(sizeof(ParticleAoS) == sizeof(float) * kParticleFieldCount);
+```
+
+`static_assert` không làm chương trình nhanh hơn. Nó khóa giả định 24 byte ngay lúc compile. Nếu sau này ai đó thêm field, đổi kiểu hoặc compiler tạo layout khác, chương trình dừng ở lỗi có tên thay vì tiếp tục benchmark bằng một stride mà bài học không còn mô tả đúng.
+
+### Bước 2 — Sinh dữ liệu có thể tạo lại
+
+Ta dùng `XorShift32` có seed. Mỗi particle lấy đúng sáu số theo cùng thứ tự:
+
+```cpp title="include/particles.hpp — makeParticlesAoS"
+inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, std::uint32_t seed) {
+    std::vector<ParticleAoS> particles{};
+    particles.reserve(count);
+    XorShift32 random{seed};
+    for (std::size_t index = 0; index < count; ++index) {
+        ParticleAoS particle{};
+        particle.positionX = random.nextSigned();
+        particle.positionY = random.nextSigned();
+        particle.positionZ = random.nextSigned();
+        particle.velocityX = random.nextSigned() * 0.35F;
+        particle.velocityY = random.nextSigned() * 0.35F;
+        particle.velocityZ = random.nextSigned() * 0.35F;
+        particles.push_back(particle);
+    }
+    return particles;
+}
+```
+
+`reserve(count)` đảm bảo vùng lưu trữ được chuẩn bị trước. Việc sinh dữ liệu xảy ra một lần trước event loop và sau này luôn đứng ngoài vùng đo thời gian.
+
+### Bước 3 — Giữ update workload khác draw workload
+
+Trong `main.cpp`, source có đủ một triệu phần tử:
+
+```cpp title="src/main.cpp — source state"
+const std::vector<lab::ParticleAoS> source = lab::makeParticlesAoS(kParticleCount, kSeed);
+std::vector<lab::ParticleAoS> particlesAoS = source;
+```
+
+Renderer không cần chấm đủ một triệu pixel lên một framebuffer rộng khoảng một nghìn pixel. Nó tính `stride` để lấy mẫu tối đa 40.000 điểm rồi vẫn gọi `SDL_UpdateTexture` đúng một lần cho framebuffer hoàn chỉnh. Đây chỉ là quyết định hiển thị; `source.size()` và các kernel về sau vẫn là một triệu.
+
+## Ghép các phần lại
+
+Luồng checkpoint 1 rất ngắn:
+
+`khởi tạo SDL → sinh AoS source → tạo working copy → vẽ memory diagram và particle sample → present`
+
+Source không đổi trong suốt chương trình. Working copy là state được phép cập nhật. Cách tách này sẽ giúp mọi lượt benchmark bắt đầu từ cùng dữ liệu mà không phải gọi PRNG trong vùng đo.
+
+## Thử làm sai để hiểu đúng
+
+Thử từng thay đổi, quan sát rồi hoàn tác:
+
+1. Bỏ `reserve(count)` và đo riêng thời gian generation. Bạn sẽ thấy allocation ảnh hưởng generation, nhưng điều đó chưa nói gì về update kernel.
+2. Đổi một field velocity sang `double`. `static_assert` phải chặn compile vì struct không còn 24 byte.
+3. Chỉ sinh 40.000 particle vì renderer chỉ vẽ từng đó. Title bar sẽ báo sai workload; bạn đã biến draw sample thành dữ liệu thật.
+4. Gọi `makeParticlesAoS` trong event loop. Cửa sổ có thể chậm, nhưng nguyên nhân là generation/allocation mỗi frame chứ chưa phải AoS.
+
+## Tự kiểm tra kết quả
+
+- [ ] `source.size()` bằng đúng 1.000.000.
+- [ ] `sizeof(ParticleAoS)` bằng 24 byte.
+- [ ] Cùng seed tạo lại đúng sáu field ở mọi index được test.
+- [ ] Mọi position nằm trong `[-1,1]`; velocity nằm gần `[-0.35,0.35]`.
+- [ ] Readout phân biệt số particle được vẽ với số particle trong state.
+- [ ] Target `project_32_checkpoint_1` build và mở được cửa sổ.
+
+## Bài tập mở rộng
+
+1. In địa chỉ `&source[0]` và `&source[1]`, rồi tính hiệu theo byte. Kết quả có khớp `sizeof(ParticleAoS)` không?
+2. Tính dung lượng cho 5 triệu particle nếu vẫn dùng sáu float.
+3. Thêm test xác nhận seed khác làm ít nhất một field thay đổi, nhưng mọi giá trị vẫn hữu hạn.
+
+Bài tiếp theo sẽ cho vector AoS chuyển động. Khi đó ta mới có một hot loop cụ thể để bàn về dữ liệu CPU phải đọc.

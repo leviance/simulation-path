@@ -1,0 +1,99 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Để cạnh chung chỉ có một chủ
+
+## Vấn đề cần giải quyết
+
+Ghép hai triangle thành một quad. Nếu coverage dùng `edge >= 0` cho mọi cạnh, sample nằm đúng đường chéo được cả hai triangle nhận. Với màu đục cuối cùng bạn có thể không thấy lỗi, nhưng blending sẽ làm cạnh đậm hơn và depth/stencil update sẽ chạy hai lần.
+
+Đổi tất cả thành `edge > 0` lại tạo vấn đề ngược: không triangle nào nhận sample biên, để lại khe hở. Ta cần một quy tắc bất đối xứng nhưng nhất quán: **top-left rule**.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sau khi winding được chuẩn hóa dương trong screen space Y-down, một cạnh được gọi là top-left khi:
+
+- cạnh đi lên: `deltaY < 0`; hoặc
+- cạnh nằm ngang và đi sang phải: `deltaY = 0 && deltaX > 0`.
+
+Edge value dương luôn được nhận. Edge value âm luôn bị loại. Edge value bằng zero chỉ được nhận nếu cạnh là top-left.
+
+<InteractiveLab demo="triangle-raster" mode="triangle-top-left" />
+
+## Viết code từng bước
+
+### Bước 1 — Nhận diện hướng cạnh
+
+```cpp title="include/lab.hpp — top-left edge trong screen space Y-down"
+inline bool isTopLeftEdge(Vec2 a, Vec2 b, double epsilon = 1e-9) {
+    const double deltaX = b.x - a.x;
+    const double deltaY = b.y - a.y;
+    const bool goesUp = deltaY < -epsilon;
+    const bool horizontalTop = std::abs(deltaY) <= epsilon && deltaX > epsilon;
+    return goesUp || horizontalTop;
+}
+```
+
+Quy tắc này gắn với cả hướng Y và winding. Nếu engine của bạn dùng Y-up hoặc winding âm, đừng sao chép biểu thức mà không chuyển quy ước.
+
+### Bước 2 — Tách phép chấp nhận một cạnh
+
+```cpp title="include/lab.hpp — inclusive và top-left dùng chung epsilon"
+inline bool acceptsEdge(double edgeValue, bool topLeft, FillRule rule, double epsilon = 1e-9) {
+    if (edgeValue > epsilon) {
+        return true;
+    }
+    if (edgeValue < -epsilon) {
+        return false;
+    }
+    if (rule == FillRule::Inclusive) {
+        return true;
+    }
+    return topLeft;
+}
+```
+
+Nhánh edge zero nằm cuối và dễ kiểm. Không nhét epsilon, rule và hướng cạnh vào một biểu thức boolean dài.
+
+### Bước 3 — Áp dụng cùng rule cho ba cạnh
+
+```cpp title="include/lab.hpp — ba cạnh cùng tham gia quyết định coverage"
+const bool insideAB = acceptsEdge(sample.edgeAB, isTopLeftEdge(triangle.a, triangle.b), rule);
+const bool insideBC = acceptsEdge(sample.edgeBC, isTopLeftEdge(triangle.b, triangle.c), rule);
+const bool insideCA = acceptsEdge(sample.edgeCA, isTopLeftEdge(triangle.c, triangle.a), rule);
+sample.inside = insideAB && insideBC && insideCA;
+```
+
+Hai triangle chung cạnh đi qua cạnh đó theo hướng ngược nhau. Vì vậy chỉ một hướng được gắn nhãn top-left và sample biên có đúng một owner.
+
+### Bước 4 — Đếm overdraw thay vì chỉ nhìn màu
+
+Main tạo một coverage buffer byte. Mỗi callback tăng counter của pixel; giá trị lớn hơn 1 được vẽ đỏ và đưa vào `overlapCount`. Preset 5 khiến đường chéo đi qua nhiều pixel center, nên bạn nhìn thấy khác biệt ngay giữa hai rule.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build shared-edge checkpoint"
+cmake --build build --config Debug --target project_16_checkpoint_6
+```
+
+Nhấn `5`, rồi `T` để đổi rule. Inclusive phải báo overlap dương và có đường đỏ; top-left giữ quad kín nhưng overlap về 0.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi cả edge zero là outside. Đường chéo mất owner ở cả hai triangle; đổi sang preset quad để nhìn khe.
+2. Dùng `deltaY > 0` cho `goesUp` dù screen Y tăng xuống. Quyền sở hữu đổi sai; test sample chung có thể thành 0 hoặc 2.
+3. Bỏ normalize winding trước `isTopLeftEdge`. Preset đảo B/C không còn cho cùng coverage; phục hồi quy ước dương trước rule.
+
+## Tự kiểm tra kết quả
+
+- Inclusive rule nhận sample đúng cạnh ở cả hai triangle.
+- Top-left rule giao sample cạnh chung cho đúng một triangle.
+- Quad không có khe hở khi dùng top-left rule.
+- Overlap buffer báo 0 với preset 5 và top-left.
+- Đảo winding ban đầu không thay owner sau normalize.
+- Epsilon được dùng nhất quán cho dấu edge và horizontal edge.
+
+## Bài tập mở rộng
+
+Chia một rectangle theo đường chéo còn lại rồi lặp test. Sau đó dịch cả bốn vertex thêm `(0.25,0.25)` và giải thích vì sao ít sample nằm đúng cạnh hơn nhưng quy tắc vẫn phải đúng.
+
+Bài cuối sẽ tận dụng chính ba edge value để tính barycentric weights, nội suy màu và hoàn thiện bộ validation.

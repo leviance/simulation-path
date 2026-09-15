@@ -1,0 +1,143 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn và kéo điểm cuối
+
+## Vấn đề cần giải quyết
+
+A và B hiện vẫn được gán giá trị cố định trong code. Để biến chương trình thành một mô phỏng tương tác, ta sẽ cho phép người dùng kéo **điểm cuối** (`endpoint`) của từng vector bằng chuột. Mỗi lần con trỏ di chuyển, chương trình phải xác định vector đang được kéo, đổi tọa độ chuột từ screen space về world space rồi cập nhật A hoặc B.
+
+Người dùng không thể nhấn chính xác vào một pixel duy nhất. Vì vậy, quanh mỗi điểm cuối sẽ có một vùng chọn hình tròn, thường được gọi là `handle`. Phép kiểm tra va chạm với vùng này (`hit-test`) sẽ đo khoảng cách từ con trỏ tới A và B, sau đó chọn điểm cuối gần hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Khoảng cách giữa hai điểm là độ lớn (`magnitude`) của vector nối chúng:
+
+$$
+distance(p,q)=|q-p|
+$$
+
+Khi người dùng nhấn chuột, SDL cung cấp tọa độ trong screen space. Hai điểm cuối A/B cũng phải được chuyển sang screen space trước khi đo, vì bán kính vùng chọn được tính bằng pixel. Nếu khoảng cách không vượt quá 14 pixel, chương trình xem điểm cuối đó là được nhấn.
+
+Sau khi một điểm cuối được chọn, mỗi sự kiện `SDL_EVENT_MOUSE_MOTION` đi qua chuỗi xử lý sau:
+
+```text
+mouse screen
+    → screenToWorld
+    → vectorA hoặc vectorB
+    → worldToScreen trong frame kế tiếp
+    → endpoint mới trên framebuffer
+```
+
+`DragTarget` biểu diễn đúng ba trạng thái có thể xảy ra: không kéo vector nào, đang kéo A hoặc đang kéo B. Dùng một `enum class` rõ ràng hơn hai biến `bool`, vì nó không cho phép A và B cùng ở trạng thái “đang kéo”.
+
+<InteractiveLab demo="vector" mode="vector-drag" />
+
+Trước khi kéo, hãy di chuyển con trỏ qua hai vòng nét đứt quanh A và B. Vector Lab hiển thị đồng thời tọa độ chuột trong screen space, tọa độ tương ứng trong world space và điểm cuối đang được giữ. Đây cũng là ba thông tin mà phần xử lý input bên dưới cần quản lý.
+
+## Viết code từng bước
+
+### Bước 1 — Viết `distance` từ các phép toán đã có
+
+```cpp title="include/lab.hpp — khoảng cách giữa hai điểm"
+inline double distance(Vec2 start, Vec2 end) {
+    return length(end - start);
+}
+```
+
+Hiệu `end - start` tạo ra vector đi từ điểm đầu tới điểm cuối; `length` lấy độ lớn của vector đó và cho ta khoảng cách. Hàm này dùng được trong cả world space lẫn screen space, miễn là hai đối số thuộc cùng một hệ tọa độ.
+
+### Bước 2 — Ghi nhớ điểm cuối đang được kéo
+
+```cpp title="src/main.cpp — trạng thái của thao tác kéo"
+enum class DragTarget { none,
+                        vectorA,
+                        vectorB };
+DragTarget dragTarget = DragTarget::none;
+```
+
+Kiểu `enum class` bảo đảm tại mỗi thời điểm chỉ có một trạng thái được chọn. Nhờ đó, phần xử lý chuột có thể đọc rất trực tiếp: nếu `dragTarget` là A thì cập nhật A; nếu là B thì cập nhật B.
+
+### Bước 3 — Chọn điểm cuối gần con trỏ nhất
+
+```cpp title="src/main.cpp — chọn endpoint gần con trỏ hơn"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+    const lab::Vec2 mouseScreen{event.button.x, event.button.y};
+    const lab::Vec2 endpointA = worldToScreen(vectorA, width, height);
+    const lab::Vec2 endpointB = worldToScreen(vectorB, width, height);
+    const double distanceToA = lab::distance(mouseScreen, endpointA);
+    const double distanceToB = lab::distance(mouseScreen, endpointB);
+    constexpr double handleRadius = 14.0;
+
+    if (distanceToA <= handleRadius || distanceToB <= handleRadius) {
+        dragTarget = DragTarget::vectorB;
+        if (distanceToA <= distanceToB) {
+            dragTarget = DragTarget::vectorA;
+        }
+        if (!SDL_CaptureMouse(true)) {
+            std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+        }
+    }
+}
+```
+
+Nếu hai vùng chọn chồng lên nhau, chương trình chọn điểm cuối gần con trỏ hơn; khi hai khoảng cách bằng nhau, A được ưu tiên. `SDL_CaptureMouse(true)` chỉ được gọi sau khi người dùng thực sự nhấn trúng một điểm cuối.
+
+### Bước 4 — Đổi tọa độ chuột về world space
+
+```cpp title="src/main.cpp — cập nhật vector đang được kéo"
+if (event.type == SDL_EVENT_MOUSE_MOTION && dragTarget != DragTarget::none) {
+    const lab::Vec2 mouseScreen{event.motion.x, event.motion.y};
+    const lab::Vec2 mouseWorld = screenToWorld(mouseScreen, width, height);
+    if (dragTarget == DragTarget::vectorA) {
+        vectorA = mouseWorld;
+    } else {
+        vectorB = mouseWorld;
+    }
+}
+```
+
+A và B vẫn phải được lưu trong world space. Không gán trực tiếp `mouseScreen` cho một vector, vì tọa độ vài trăm pixel sẽ bị hiểu nhầm thành độ dời vài trăm world unit.
+
+### Bước 5 — Kết thúc thao tác khi thả chuột hoặc mất focus
+
+```cpp title="src/main.cpp — trả thao tác kéo về trạng thái nghỉ"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
+    dragTarget = DragTarget::none;
+    SDL_CaptureMouse(false);
+}
+if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+    dragTarget = DragTarget::none;
+    SDL_CaptureMouse(false);
+}
+```
+
+Ứng dụng có thể mất focus trước khi nhận được sự kiện thả chuột. Vì vậy, cả `SDL_EVENT_MOUSE_BUTTON_UP` lẫn `SDL_EVENT_WINDOW_FOCUS_LOST` đều phải kết thúc thao tác kéo và nhả mouse capture.
+
+## Ghép các phần lại
+
+Chạy checkpoint 3, nhấn vào điểm cuối màu xanh lá rồi kéo nó qua các góc phần tư. Thanh tiêu đề phải cập nhật A trong khi B giữ nguyên. Tiếp theo, kéo điểm cuối ra ngoài cửa sổ và thả chuột: khi đưa con trỏ trở lại, chương trình không được tiếp tục kéo A.
+
+Vùng chọn được kiểm tra bằng pixel nên luôn có kích thước thuận tiện trên màn hình. Sau khi kéo, tọa độ mới được đổi về world unit trước khi lưu, nhờ vậy các phép cộng và trừ ở bài sau vẫn hoạt động đúng.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán trực tiếp `mouseScreen` cho `vectorA`. Điểm cuối lập tức nhảy ra rất xa vì tọa độ pixel bị hiểu thành world unit.
+2. Chỉ kiểm tra A trước rồi dùng `else if` cho B. Đặt hai điểm cuối gần nhau và quan sát A luôn được chọn, ngay cả khi B gần con trỏ hơn.
+3. Bỏ `SDL_CaptureMouse(true)`, kéo nhanh ra ngoài cửa sổ rồi thả. Tùy hệ điều hành, ứng dụng có thể không nhận được `SDL_EVENT_MOUSE_BUTTON_UP` và giữ trạng thái kéo.
+
+Hoàn tác từng thay đổi trước khi sang thí nghiệm tiếp theo.
+
+## Tự kiểm tra kết quả
+
+- Nhấn chuột vào vùng trống không làm A hoặc B di chuyển.
+- Kéo điểm cuối màu xanh lá chỉ làm thay đổi A; kéo điểm cuối màu xanh lam chỉ làm thay đổi B.
+- Khi hai vùng chọn nằm gần nhau, điểm cuối gần con trỏ hơn được chọn.
+- Thả chuột ngoài cửa sổ vẫn kết thúc thao tác kéo.
+- Khi ứng dụng mất focus, `dragTarget` trở về `none`.
+- Sau khi resize, chương trình vẫn chọn đúng điểm cuối tại vị trí mới.
+
+## Bài tập mở rộng
+
+Đổi bán kính hit-test thành 20 pixel nhưng vẫn giữ chấm điểm cuối có bán kính 6 pixel. Đổi màu điểm cuối đang được kéo để người dùng biết vector nào đã được chọn. Cuối cùng, viết hàm C++ thuần `pickClosestEndpoint` nhận vị trí chuột, A, B và bán kính, để có thể kiểm tra logic lựa chọn mà không cần mở cửa sổ SDL.
+
+Bài sau sẽ dùng chính hai vector kéo được này để dựng A+B, A−B và hình bình hành.

@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    name: Read published-project catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.matrix.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: matrix
+        shell: bash
+        run: node scripts/ci-project-shards.mjs >> "$GITHUB_OUTPUT"
+
+  website:
+    name: Website and content contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Reject generated outputs committed to Git
+        run: npm run check:git -- --required
+      - name: Generate course and downloads from authored sources
+        run: npm run predev
+      - name: Verify generated course files
+        run: npm run check:course
+      - name: Verify project download archives
+        run: npm run check:packages
+      - name: Verify system Chrome for browser smoke tests
+        run: google-chrome --version
+      - run: npm run lint
+      - run: npm test
+      - name: Generation and tests must leave the source checkout clean
+        shell: bash
+        run: |
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+
+  sdl:
+    name: Build cached SDL 3.4.8
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/cache@v4
+        id: sdl-cache
+        with:
+          path: build/sdl-install
+          key: sdl-3.4.8-${{ runner.os }}-${{ runner.arch }}-vs2022-v1
+      - name: Download and verify SDL source
+        if: steps.sdl-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path build/sdl-source -Force | Out-Null
+          $archive = Join-Path $env:GITHUB_WORKSPACE "build/SDL3-3.4.8.tar.gz"
+          Invoke-WebRequest "https://github.com/libsdl-org/SDL/releases/download/release-3.4.8/SDL3-3.4.8.tar.gz" -OutFile $archive
+          $expected = "e9fff7467fb60f037e6708da18b25560649e4c63edc2a69bb871b960d9cbfbba"
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "SDL archive checksum mismatch: $actual" }
+          Push-Location build/sdl-source
+          cmake -E tar xzf $archive
+          Pop-Location
+      - name: Build and install SDL once
+        if: steps.sdl-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          cmake -S build/sdl-source/SDL3-3.4.8 -B build/sdl-build -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL=ON -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/build/sdl-install"
+          cmake --build build/sdl-build --config Debug --target install
+          cmake --build build/sdl-build --config Release --target install
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdl-3.4.8-windows-vs2022
+          path: build/sdl-install
+          if-no-files-found: error
+          retention-days: 1
+
+  cpp:
+    name: C++ projects ${{ matrix.shard.id }}
+    runs-on: windows-2022
+    timeout-minutes: 45
+    needs: [catalog, sdl]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.catalog.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Generate CMake and all lesson checkpoints before configuring
+        timeout-minutes: 2
+        run: node scripts/generate-checkpoints.mjs
+      - name: Verify generated CMake and checkpoint contents
+        run: node scripts/generate-checkpoints.mjs --check
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdl-3.4.8-windows-vs2022
+          path: build/sdl-install
+      - name: Configure every checkpoint
+        shell: pwsh
+        env:
+          PROJECTS_JSON: ${{ toJSON(matrix.shard.projects) }}
+        run: |
+          $projects = @($env:PROJECTS_JSON | ConvertFrom-Json)
+          foreach ($project in $projects) {
+            cmake -S "examples/$project" -B "build/$project" -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON -DCOURSE_USE_INSTALLED_SDL3=ON -DCMAKE_PREFIX_PATH="$env:GITHUB_WORKSPACE/build/sdl-install"
+            if ($LASTEXITCODE -ne 0) { throw "Configure failed: $project" }
+          }
+      - name: Build and test Debug
+        shell: pwsh
+        env:
+          PROJECTS_JSON: ${{ toJSON(matrix.shard.projects) }}
+        run: |
+          $projects = @($env:PROJECTS_JSON | ConvertFrom-Json)
+          foreach ($project in $projects) {
+            cmake --build "build/$project" --config Debug
+            if ($LASTEXITCODE -ne 0) { throw "Debug build failed: $project" }
+            ctest --test-dir "build/$project" -C Debug --output-on-failure
+            if ($LASTEXITCODE -ne 0) { throw "Debug tests failed: $project" }
+          }
+      - name: Build and test Release
+        shell: pwsh
+        env:
+          PROJECTS_JSON: ${{ toJSON(matrix.shard.projects) }}
+        run: |
+          $projects = @($env:PROJECTS_JSON | ConvertFrom-Json)
+          foreach ($project in $projects) {
+            cmake --build "build/$project" --config Release
+            if ($LASTEXITCODE -ne 0) { throw "Release build failed: $project" }
+            ctest --test-dir "build/$project" -C Release --output-on-failure
+            if ($LASTEXITCODE -ne 0) { throw "Release tests failed: $project" }
+          }

@@ -1,0 +1,195 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép texture mapper và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Ta đã có từng mảnh: indexed quad, checker sampler, top-left rasterizer, kết quả affine để đối chiếu, reciprocal attributes, perspective-correct UV và near clipping. Project chỉ hoàn thành khi các mảnh chạy trong một pipeline thống nhất và có test chứng minh các điều kiện đúng vẫn được giữ khi scene thay đổi.
+
+Checkpoint 8 tạo ứng dụng cuối: hai khung hình dùng chung một scene để so sánh, bốn tình huống mẫu, kéo chuột để đổi độ sâu, clamp/repeat, tạm dừng, tiến từng bước, đặt lại và xem số liệu của pixel. CTest chạy phần toán mà không cần mở cửa sổ SDL.
+
+## Hiểu ý tưởng trước khi viết code
+
+Luồng dữ liệu cuối cùng là:
+
+$$
+TexturedVertex \rightarrow near\ clip \rightarrow projection\ (1/z,u/z,v/z)
+$$
+
+$$
+\rightarrow top\text{-}left\ coverage+\lambda \rightarrow corrected\ UV \rightarrow sampler \rightarrow framebuffer
+$$
+
+Compare view chỉ thay `InterpolationMode`. Nếu hai nửa dùng camera, clipping hoặc sampler khác nhau, hình khác nhau không còn là bằng chứng về perspective correction.
+
+<InteractiveLab demo="perspective-texture" mode="texture-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo một hàm render có ranh giới rõ
+
+```cpp title="include/lab.hpp — API final nhận scene state, trả telemetry"
+TextureRenderStats renderTexturedTriangle(
+    const TexturedTriangle& triangle,
+    const Texture2D& texture,
+    const Viewport& viewport,
+    double verticalFovRadians,
+    double nearPlane,
+    InterpolationMode mode,
+    AddressMode addressMode,
+    int framebufferWidth,
+    int framebufferHeight,
+    PutPixel putPixel
+) {
+```
+
+SDL không xuất hiện trong hàm này. Callback nhận một `TexturedPixel` chứa tọa độ, màu và toàn bộ dữ liệu nội suy đã dùng cho chính pixel đó. Nhờ vậy ứng dụng, bảng số liệu và CTest đều đọc chung một pipeline, thay vì mỗi nơi tự tính lại UV theo một cách khác.
+
+### Bước 2 — Shade từ cùng một raster sample
+
+```cpp title="include/lab.hpp — đo error rồi sample mode đang chọn"
+const Vec2 affineUv = interpolateAffineUv(*screen, sample.barycentric);
+const auto correctedUv = interpolatePerspectiveUv(*screen, sample.barycentric);
+if (!correctedUv) {
+    return;
+}
+total.maximumUvError = std::max(
+    total.maximumUvError,
+    uvDistance(affineUv, *correctedUv)
+);
+const auto selectedUv = interpolateUv(*screen, sample.barycentric, mode);
+if (!selectedUv) {
+    return;
+}
+
+TexturedPixel pixel{};
+pixel.x = sample.x;
+pixel.y = sample.y;
+pixel.barycentric = sample.barycentric;
+pixel.affineUv = affineUv;
+pixel.correctedUv = *correctedUv;
+pixel.selectedUv = *selectedUv;
+pixel.denominator = reciprocalDepthDenominator(*screen, sample.barycentric);
+pixel.texel = nearestTexelIndex(texture, *selectedUv, addressMode);
+pixel.color = sampleNearest(texture, *selectedUv, addressMode);
+putPixel(pixel);
+```
+
+Bảng số liệu không chạy một lượt raster khác. `maximumUvError`, UV, texel và màu cuối cùng đều xuất phát từ sample đã vượt top-left coverage.
+
+### Bước 3 — Giữ hai face dùng chung topology
+
+```cpp title="src/main.cpp — ứng dụng gọi đúng renderer mà CTest kiểm tra"
+for (std::size_t face = 0; face < quad.faces.size(); ++face) {
+    const lab::TexturedTriangle input = lab::quadTriangle(quad, face);
+    const lab::TextureRenderStats stats = lab::renderTexturedTriangle(
+        input,
+        texture,
+        viewport,
+        kVerticalFov,
+        kNearPlane,
+        interpolationMode,
+        addressMode,
+        width,
+        height,
+        [&](const lab::TexturedPixel& sample) {
+            putPixel(pixels, width, height, sample.x, sample.y, packedColor(sample.color));
+        }
+    );
+}
+```
+
+`renderTexturedTriangle` chịu trách nhiệm clipping, projection, rasterization, nội suy và lấy mẫu texture. `quadTriangle` lấy cả position và UV từ bốn vertex dùng chung. Top-left rule giao pixel trên đường chéo cho đúng một triangle, vì vậy chế độ so sánh không cần vẽ một đường đè lên để che lỗi.
+
+### Bước 4 — Test cả trường hợp đúng lẫn trường hợp làm lỗi lộ ra
+
+```cpp title="tests/tests.cpp — constant depth phải triệt tiêu correction"
+const auto corrected = lab::interpolatePerspectiveUv(*flatScreen, weights);
+check(corrected.has_value(), "constant depth has a valid denominator");
+if (corrected) {
+    check(
+        lab::uvDistance(lab::interpolateAffineUv(*flatScreen, weights), *corrected) <= 1e-12,
+        "affine and perspective uv agree at constant depth"
+    );
+}
+```
+
+```cpp title="tests/tests.cpp — tilted depth phải khác nhưng vẫn hữu hạn"
+const auto corrected = lab::interpolatePerspectiveUv(*tiltedScreen, weights);
+check(corrected.has_value(), "positive reciprocal depth produces corrected uv");
+if (corrected) {
+    check(
+        lab::uvDistance(affine, *corrected) > 0.05,
+        "tilted triangle exposes measurable affine error"
+    );
+}
+```
+
+Hai test bổ sung nhau: chỉ test “khác affine” có thể chấp nhận một công thức sai; chỉ test front plane lại không thể phân biệt nhiều implementation.
+
+### Bước 5 — Kiểm tra cả đường chéo, không chọn một pixel may mắn
+
+Một sample trên cạnh chung chỉ chứng minh đúng tại đúng vị trí đó. Test cuối rasterize cả hai
+face vào một coverage buffer; mỗi ô đếm số lần callback ghi vào pixel:
+
+```cpp title="tests/tests.cpp — đếm owner của toàn bộ quad"
+std::vector<int> owners(std::size_t(viewport.width* viewport.height), 0);
+for (const lab::TexturedTriangle& face : faces) {
+    lab::renderTexturedTriangle(
+        face,
+        texture,
+        viewport,
+        verticalFov,
+        nearPlane,
+        lab::InterpolationMode::perspectiveCorrect,
+        lab::AddressMode::clamp,
+        viewport.width,
+        viewport.height,
+        [&](const lab::TexturedPixel& sample) {
+            const std::size_t index = std::size_t(sample.y * viewport.width + sample.x);
+            ++owners[index];
+        }
+    );
+}
+```
+
+Không phần tử nào được lớn hơn 1. Sau đó test đổi đường chéo từ `0–2` sang `1–3`;
+hai coverage mask phải giống hệt nhau. Phép so này bắt được cả pixel chồng lẫn khe hở.
+Cuối cùng, lấy ba điểm ở 25%, 50% và 75% đường chéo `0–2`, khôi phục UV từ
+cả hai face rồi kiểm tra sai số dưới $10^{-12}$ và texel index trùng nhau. Như vậy
+“không có seam” trở thành một điều kiện đo được, không còn phụ thuộc mắt nhìn.
+
+## Ghép các phần lại
+
+```bash title="Terminal — configure, build final và chạy CTest"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_20_final project_20_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Chạy `project_20_final`, thử lần lượt phím `1`–`4`, `M`, `C`, `T`, `Space`, `.`, `R`, kéo chuột và resize window. Với compare view, hai viewport phải dùng cùng preset và texture; front giống nhau, steep khác nhau rõ, near clip ổn định.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạo checker texture mới trong mỗi frame. Hình vẫn đúng nhưng runtime có allocation thừa; texture source chỉ cần tạo một lần khi setup.
+2. Cho affine view dùng clamp còn correct view dùng repeat. Sai khác ở biên bị gán nhầm cho interpolation; compare phải chia sẻ address mode.
+3. Vẽ diagonal bằng line sau rasterization để che seam. Cách này giấu lỗi ownership; hãy test coverage của hai triangle bằng top-left rule.
+4. Chỉ chạy preset mặc định. Bộ test phải có UV âm, UV bằng 1, constant depth, tilted depth, near crossing và callback coverage.
+5. Giữ server hoặc app test chạy vô hạn. Validation của repository dùng timeout cứng; nếu hết hạn phải dừng cả process tree và báo stage bị treo.
+
+## Tự kiểm tra kết quả
+
+- Starter, tám checkpoint và final đều build độc lập bằng C++20.
+- Clamp/repeat nearest sampling đúng ở UV âm, UV ngoài miền và UV bằng 1.
+- Front plane làm affine/correct trùng nhau; steep plane tạo error dương và corrected UV khớp reference.
+- Near clip giữ position/UV cùng `t`, mọi output Z hợp lệ và không làm mất cả quad.
+- Hai triangle dùng shared vertices cùng top-left rule, không nứt hoặc overdraw diagonal.
+- Inspector báo barycentric sum gần 1, denominator dương, UV hữu hạn và texel index hợp lệ.
+- Pause, single-step, reset, presets, drag, resize cùng keyboard controls hoạt động sau nhiều lần đổi mode.
+- CTest pass ở Debug và Release; ứng dụng thoát sạch, không để process chạy nền.
+
+## Bài tập mở rộng
+
+Thêm một texture UV debug: U điều khiển kênh đỏ, V điều khiển kênh xanh, các đường nguyên tạo màu trắng. Texture này giúp phân biệt seam UV với aliasing của checker mà chưa cần bilinear filtering.
+
+Project 20 dừng ở nearest sampling và một quad chưa có Z-buffer. Project tiếp theo có thể tái dùng chính reciprocal depth tại pixel để giải quyết visibility giữa nhiều triangle thay vì chỉ texture mapping trên một bề mặt.

@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng cửa sổ và nhìn thấy hệ hạt trước
+
+## Vấn đề cần giải quyết
+
+Project 44 đã tránh tìm lại mọi cặp sau mỗi bước. Tuy vậy, CPU vẫn phải tính lực cho rất nhiều hạt. Project này chuyển phần đó sang GPU, nhưng ta chưa bắt đầu bằng hàng triệu hạt hay một kernel dài. Sản phẩm đầu tiên chỉ là **64 hạt đứng yên trong cửa sổ có thể resize**.
+
+[Tải source Project 45](/downloads/project-45-molecular-lab-gpu.zip), giải nén và mở terminal tại thư mục chứa `CMakeLists.txt`. Starter có SDL, OpenGL context và event loop, nhưng chưa gọi hàm vẽ hạt. Không cần tải thêm source từ project khác: các file nền được đưa vào cùng ZIP.
+
+Đọc lại Project 38 nếu bạn chưa từng tạo OpenGL context. Máy cần OpenGL 4.3 core; macOS chỉ hỗ trợ OpenGL tới 4.1 nên không chạy phần compute này. Nếu context không tạo được, hãy xử lý driver/phần cứng trước, đừng đổi số phiên bản để bỏ qua lỗi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hạt vẫn sống trong hộp 2D theo reduced units. Ta xếp các hạt cách nhau 1.6 đơn vị, đủ để không chồng lên nhau. Với `columns=ceil(sqrt(N))`, chỉ số `i` cho cột `i % columns` và hàng `i / columns`. Đây là cùng cách đánh số row-major đã gặp ở framebuffer, nhưng bây giờ mỗi phần tử là một hạt.
+
+$$x_i=(i\bmod C+0.5)\,1.6,\qquad y_i=(\lfloor i/C\rfloor+0.5)\,1.6.$$
+
+Marker rộng 6 pixel chỉ giúp nhìn rõ hạt. Nó không phải đường kính phân tử và không quyết định lúc nào có lực. Trong bài này CPU tính vị trí ban đầu và gửi các lệnh vẽ nhỏ; **chưa có phép tính vật lý trên GPU**.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-1" />
+
+Chọn hạt bằng click hoặc phím mũi tên. Kéo để pan, thay zoom để thấy rằng chỉ góc nhìn thay đổi; khoảng cách trong world space vẫn là 1.6.
+
+## Viết code từng bước
+
+### Bước 1 — Chọn cửa sổ dành cho OpenGL
+
+Trong `src/main.cpp`, giữ phần xử lý lỗi của starter. Các thuộc tính phải được đặt trước khi tạo context:
+
+```cpp title="src/main.cpp — đoạn đang thêm"
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+```
+
+Không tạo thêm `SDL_Renderer` trên cửa sổ này. SDL quản lý cửa sổ/input; OpenGL đảm nhận vẽ và compute. `gl_api.hpp` kế thừa phần nạp entry point của Project 38. Nếu thiếu một hàm, chương trình in đúng tên hàm rồi thoát.
+
+### Bước 2 — Đặt hạt lên lattice
+
+Thêm hàm lấy vị trí cho một chỉ số trong `molecular_math.hpp`:
+
+```cpp title="include/molecular_math.hpp — đoạn đang thêm"
+inline Float4 initialPosition(const Plan& plan, std::uint32_t index) {
+    return {(static_cast<float>(index % plan.columns) + 0.5F) * 1.6F, (static_cast<float>(index / plan.columns) + 0.5F) * 1.6F, 0, 0};
+}
+```
+
+Cộng `0.5` đặt hạt ở tâm khoảng lattice thay vì ngay mép. `plan.width` và `plan.height` được chọn đủ lớn; hộp nhỏ nhất rộng 12 đơn vị. Tạo `Plan` một lần trước event loop, không tạo lại hệ sau mỗi frame.
+
+### Bước 3 — Đổi tọa độ rồi vẽ marker
+
+Hàm preview dùng cùng camera sẽ được giữ cho các bài sau:
+
+```cpp title="include/particle_view.hpp — đoạn đang thêm"
+inline void drawCpuPreview(lab::GlApi& gl, const Plan& plan, const Camera& camera, int width, int height) {
+    const float scale = static_cast<float>(height) / (2.0F * camera.halfHeight);
+    gl.Enable(GL_SCISSOR_TEST);
+    gl.ClearColor(0.2F, 0.8F, 0.9F, 1.0F);
+    for (std::uint32_t i = 0; i < std::min(plan.count, 64U); ++i) {
+        const auto position = initialPosition(plan, i);
+        const int x = static_cast<int>((position.x - camera.x) * scale + static_cast<float>(width) * 0.5F);
+        const int y = static_cast<int>((position.y - camera.y) * scale + static_cast<float>(height) * 0.5F);
+        gl.Scissor(x - 3, y - 3, 6, 6);
+        gl.Clear(GL_COLOR_BUFFER_BIT);
+    }
+    gl.Disable(GL_SCISSOR_TEST);
+}
+```
+
+`scale` có đơn vị pixel/world-unit. Vì OpenGL scissor dùng gốc dưới trái, `y` ở đây tăng lên trên, khác tọa độ mouse SDL. Mỗi lần `Clear` chỉ tô trong hình chữ nhật scissor đang chọn. Cuối hàm phải tắt scissor để lần xóa toàn màn hình tiếp theo không bị giới hạn vào marker cuối.
+
+## Ghép các phần lại
+
+Trong nhánh vẽ của main, sau khi xóa nền và trước `SDL_GL_SwapWindow`, gọi `drawCpuPreview(gl, preview, view.camera, width, height)`. `width/height` lấy từ `SDL_GetWindowSizeInPixels`, không phải logical window size, để không lệch trên màn hình HiDPI.
+
+```bash title="Terminal Windows — build và chạy bài 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_1 --parallel 2
+.\build\Debug\project_45_checkpoint_1.exe
+```
+
+Checkpoint 01 thêm lời gọi vẽ vào starter. Các hàm hỗ trợ compute đã được đặt trong ZIP để mỗi checkpoint độc lập, nhưng chưa được gọi ở bài này. Việc có source một hàm không có nghĩa là chương trình đang thực thi hàm đó.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm bỏ `gl.Disable(GL_SCISSOR_TEST)` cuối hàm. Resize cửa sổ: nền có thể chỉ được xóa ở vùng marker cuối. Khôi phục dòng này và chạy lại.
+2. Tạm đặt lời gọi vẽ trước lệnh xóa nền trong main. Hạt biến mất vì bị nền phủ lên, không phải vì công thức lattice sai. Đặt lại thứ tự clear → draw → swap.
+
+## Tự kiểm tra kết quả
+
+Bạn phải thấy 64 marker đứng yên, không có hạt trùng nhau. Pan/zoom không thay đổi vị trí vật lý. Resize và HiDPI không làm hạt biến mất. Nhấn Esc hoặc đóng cửa sổ phải thoát và giải phóng GL resources trước context.
+
+Tiêu đề ở bài đầu chưa có số đo GPU hữu ích; `drawn=0` là bộ đếm của renderer SSBO chưa được bật, không phải số marker preview.
+
+## Bài tập mở rộng
+
+Đổi khoảng lattice từ 1.6 thành 1.8 và giải thích vì sao hộp cũng phải đủ lớn. Chưa bật tích phân ở đây.
+
+Tiếp theo: [đặt dữ liệu và khởi tạo trên GPU](/projects/molecular-lab-gpu/02-du-lieu-va-khoi-tao-tren-gpu).
+

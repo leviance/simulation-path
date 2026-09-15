@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn cellSize bằng dữ liệu
+
+## Vấn đề cần giải quyết
+
+Spatial Grid có một tham số ảnh hưởng mạnh đến hiệu năng: `cellSize`. Ô quá lớn khiến mỗi bucket chứa nhiều hạt và hình chữ nhật bao kéo theo nhiều điểm không thuộc vòng tròn. Ô quá nhỏ làm số hạt cần kiểm giảm, nhưng lại tạo nhiều bucket và tăng số ô phải thăm.
+
+Không có một `cellSize` tốt nhất cho mọi cảnh. Bán kính truy vấn, mật độ hạt, cách phân bố và số lần dựng lại lưới đều có ảnh hưởng. Vì vậy ta sẽ đo bốn cấu hình trên cùng dữ liệu thay vì chọn `0.05` chỉ vì hình vẽ trông đẹp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ nguyên particle cloud và query set, chỉ đổi cellSize qua bốn mốc:
+
+$$
+0.025,\quad 0.05,\quad 0.1,\quad 0.2
+$$
+
+Mỗi dòng kết quả cần ghi ít nhất:
+
+- tổng số buckets và non-empty cells;
+- maximum bucket size;
+- cells visited/query;
+- candidates/query;
+- time/query.
+
+Lưới mịn thường giảm số hạt phải kiểm nhưng làm tăng số ô phải thăm. Lưới thô thường cho kết quả ngược lại.
+
+<InteractiveLab demo="spatial-grid-neighbor-query" mode="grid-cell-size" />
+
+Bấm `Chạy cell-size study`. Biểu đồ cột dùng candidates/query — đại lượng ổn định giữa các máy. Đổi radius rồi chạy lại để thấy cellSize hợp lý phụ thuộc kích thước query.
+
+## Viết code từng bước
+
+### Bước 1 — Một row giữ cả topology và query metrics
+
+```cpp title="include/lab.hpp — kết quả của một cellSize"
+struct CellSizeStudyRow {
+    double cellSize{};
+    int columns{};
+    int rows{};
+    std::size_t nonEmptyCells{};
+    std::size_t maximumBucketSize{};
+    double rebuildMicroseconds{};
+    BatchMetrics metrics{};
+};
+```
+
+Không gộp `maximumBucketSize` với `totalCandidates`: số đầu mô tả cách dữ liệu được chia vào bucket, số sau mô tả công việc của bộ truy vấn hiện tại.
+
+### Bước 2 — Rebuild đúng grid cho từng row
+
+```cpp title="include/lab.hpp — cellSize thay đổi topology"
+for (const double cellSize : cellSizes) {
+    const SpatialGrid grid = buildSpatialGrid(particles, {bounds, cellSize});
+    const BatchMetrics metrics = benchmarkSpatialGrid(grid, particles, queries, repetitions, workspace);
+    rows.push_back({
+        cellSize,
+        grid.columns,
+        grid.rows,
+        grid.nonEmptyCells,
+        grid.maximumBucketSize,
+        grid.rebuildMicroseconds,
+        metrics,
+    });
+}
+```
+
+Không thể dùng buckets của `0.05` để giả lập `0.1`; cell address và occupancy đã khác.
+
+### Bước 3 — Dùng cùng query set cho mọi row
+
+```cpp title="src/main.cpp — bốn preset, một workload"
+const std::vector<lab::CircleQuery> probes = lab::makeProbeQueries(8, bounds, query.radius, seed ^ 0x280028U);
+const std::array<double, 4> cellSizes{0.025, 0.05, 0.1, 0.2};
+cellSizeRows = lab::makeCellSizeStudy(active, bounds, probes, cellSizes, 1);
+```
+
+Tám truy vấn là đủ để nút bấm trả kết quả nhanh. Nếu cần số liệu ổn định hơn, hãy tăng số truy vấn trong một chương trình benchmark riêng thay vì khóa cửa sổ học tập.
+
+### Bước 4 — Vẽ candidates/query thay vì FPS
+
+```cpp title="src/main.cpp — chuẩn hóa candidate work theo query"
+maximumCandidates = std::max(maximumCandidates, row.metrics.totalCandidates);
+```
+
+Bản hoàn chỉnh dùng `totalCandidates / queryCount` để đặt chiều cao cột. Con số này không bị ảnh hưởng bởi tốc độ máy hay compiler như thời gian chạy.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint cell-size study"
+cmake --build build --config Release --target project_28_checkpoint_7
+```
+
+Nhấn `S`. Ứng dụng in bốn dòng đầy đủ ra terminal; Canvas hiển thị lại số bucket, số ô đã thăm và số hạt đã kiểm dưới biểu đồ. Sau đó đổi bán kính và chạy lại. Đừng chỉ giữ cấu hình nhanh nhất, vì các cột còn lại mới giúp giải thích vì sao nó nhanh.
+
+## Thử làm sai để hiểu đúng
+
+1. Regenerate particle cloud cho mỗi cellSize. Bạn đang so bốn scene khác nhau; giữ cùng particles.
+2. Chạy query set khác nhau cho từng row. Candidate count không còn so được; dùng chung probes.
+3. Kết luận cell nhỏ nhất luôn tốt nhất chỉ vì ít candidates. Đọc thêm visited cells, bucket count và rebuild time.
+
+## Tự kiểm tra kết quả
+
+- Study có đúng bốn rows theo thứ tự yêu cầu.
+- Mỗi row dùng cùng particle count, queries và repetitions.
+- Fine grid có nhiều buckets hơn coarse grid.
+- Fine grid thường thăm nhiều cells hơn cho cùng circle.
+- Coarse grid có maximum bucket và candidate count lớn hơn trên cloud đều.
+- Checksum của mọi row mô tả cùng hit outputs.
+- Study loop hữu hạn và không chạy tự động mỗi frame.
+
+## Bài tập mở rộng
+
+Thêm hai phân bố particle: clustered và diagonal band. Chạy lại study để thấy cùng radius nhưng distribution khác cũng làm occupancy và cellSize cân bằng thay đổi.
+
+Bài cuối ghép preset, pointer capture, compare, benchmark, study và CTest thành một project tải về chạy độc lập.

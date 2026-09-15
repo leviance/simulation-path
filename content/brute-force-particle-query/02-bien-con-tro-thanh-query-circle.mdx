@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biến con trỏ thành một query circle
+
+## Vấn đề cần giải quyết
+
+Ta đã có 100.000 world positions, còn SDL mouse event lại trả pixel trong cửa sổ. So trực tiếp hai loại tọa độ này sẽ chỉ đúng tình cờ ở một kích thước window. Trước khi nghĩ tới hiệu năng, query cần được mô tả đúng về hình học.
+
+Bài này tạo `CircleQuery` gồm center trong world space và radius theo world unit. Membership test đầu tiên cố ý dùng `std::hypot`: chậm hơn phiên bản cuối nhưng rất dễ đọc, thích hợp làm reference cho bước tối ưu sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với particle $p$ và tâm query $c$, ta đặt:
+
+$$
+\Delta x=p_x-c_x,\qquad \Delta y=p_y-c_y
+$$
+
+$$
+d=\sqrt{\Delta x^2+\Delta y^2}
+$$
+
+Particle là hit khi $d\le r$. Dấu bằng là một quyết định quan trọng: điểm nằm đúng trên đường tròn được tính là ở trong query.
+
+<InteractiveLab demo="brute-force-particle-query" mode="brute-circle" />
+
+Kéo kính lúp tới sát biên, đổi radius về zero rồi tăng dần. Readout luôn báo center trong `[0,1]`, dù Canvas rộng hay hẹp.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho center và radius
+
+```cpp title="include/lab.hpp — dữ liệu của một circle query"
+struct CircleQuery {
+    Vec2 center{};
+    double radius{};
+};
+
+inline bool validQuery(const CircleQuery& query) {
+    return std::isfinite(query.center.x) && std::isfinite(query.center.y) && std::isfinite(query.radius) && query.radius >= 0.0;
+}
+```
+
+Radius âm hoặc NaN không có nghĩa hình học hữu ích, vì vậy query path trả kết quả rỗng thay vì tiếp tục với dữ liệu hỏng.
+
+### Bước 2 — Đổi mouse pixel về world point
+
+```cpp title="src/main.cpp — screenToWorld theo đúng WorldView đang vẽ"
+const double x = (screenX - view.left) / view.size;
+const double y = 1.0 - (screenY - view.top) / view.size;
+return {std::clamp(x, 0.0, 1.0), std::clamp(y, 0.0, 1.0)};
+```
+
+Trục Y bị đảo vì Canvas/framebuffer tăng xuống dưới, còn world Y tăng lên trên. Clamp giữ kính lúp trong bounds khi pointer đi ra phần panel hoặc margin.
+
+### Bước 3 — Viết phép kiểm dễ đọc nhất
+
+```cpp title="include/lab.hpp — reference membership test dùng distance"
+const double deltaX = point.x - query.center.x;
+const double deltaY = point.y - query.center.y;
+return std::hypot(deltaX, deltaY) <= query.radius;
+```
+
+Chưa cần tối ưu `sqrt`. Một reference ngắn, rõ và có test boundary sẽ giúp ta biết phiên bản tối ưu ở bài 4 có còn đúng không.
+
+### Bước 4 — Mouse event chỉ cập nhật query data
+
+```cpp title="src/main.cpp — pointer trở thành world-space query center"
+const WorldView view = makeWorldView(width, height);
+query.center = screenToWorld(event.motion.x, event.motion.y, view);
+```
+
+Event handler không tự đi tìm particle và không tô pixel. Nó chỉ cập nhật input của query; vòng xử lý bên dưới sẽ dùng cùng function cho interaction lẫn benchmark.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint query circle"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_27_checkpoint_2
+```
+
+Di chuyển chuột vào bốn góc. Title phải báo center gần `(0,0)`, `(1,0)`, `(0,1)` và `(1,1)` theo đúng world convention.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ phép đảo Y trong `screenToWorld`. Kính lúp đi lên khi chuột đi xuống; khôi phục `1.0 - (...)`.
+2. So distance bằng `< radius`. Test particle đúng trên boundary bị loại; dùng lại `<=`.
+3. Lưu radius bằng pixel nhưng center bằng world unit. Resize làm query thay đổi kích thước trong world; giữ cả hai cùng world space.
+
+## Tự kiểm tra kết quả
+
+- Mouse giữa vùng vẽ cho center gần `(0.5,0.5)`.
+- Center được clamp vào `[0,1]²`.
+- Radius luôn finite và không âm.
+- Particle cách tâm đúng radius là hit.
+- Particle xa hơn radius một lượng rõ ràng không phải hit.
+- Resize rồi đặt lại cùng world center cho cùng kết quả membership.
+
+## Bài tập mở rộng
+
+Cho phép nhập radius bằng pixel rồi đổi nó sang world unit qua `view.size`. Sau resize, kiểm rằng cùng radius pixel sẽ bao phủ một vùng world khác — đó là lựa chọn UI, không phải lỗi transform.
+
+Bài tiếp theo dùng circle query này để quét toàn bộ vector và thu mọi hit.

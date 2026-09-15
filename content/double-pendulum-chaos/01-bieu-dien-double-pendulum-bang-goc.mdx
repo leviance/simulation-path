@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biểu diễn double pendulum bằng hai góc
+
+## Vấn đề cần giải quyết
+
+Starter đã mở cửa sổ SDL3, tạo framebuffer và vẽ hai con lắc kép đứng yên. Hình ban đầu có vẻ đúng, nhưng vị trí bốn quả nặng đang được viết trực tiếp trong renderer. Nếu ta vừa lưu góc vừa lưu vị trí, hai bản dữ liệu có thể lệch nhau ngay khi mô phỏng bắt đầu chạy.
+
+Trong bài đầu, trạng thái thật của mỗi con lắc chỉ gồm hai góc, hai vận tốc góc và thời gian đã mô phỏng. Đây chính là cách biểu diễn bằng **generalized coordinates**. Mỗi `bob position` luôn được tính lại từ các đại lượng đó, không được lưu thành một bản trạng thái thứ hai.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta đo cả hai góc từ phương thẳng đứng hướng xuống. World Y hướng lên, vì vậy:
+
+$$
+p_1=(L_1\sin\theta_1,-L_1\cos\theta_1)
+$$
+
+$$
+p_2=p_1+(L_2\sin\theta_2,-L_2\cos\theta_2)
+$$
+
+Khi $\theta_1=\theta_2=0$, cả hai bob nằm thẳng dưới pivot. Đây là cấu hình dễ kiểm bằng mắt và bằng test.
+
+<InteractiveLab demo="double-pendulum-chaos" mode="chaos-geometry" />
+
+Kéo hai thanh trượt hoặc kéo quả nặng thứ hai. Dù góc quay thay đổi thế nào, khoảng cách từ điểm treo đến quả thứ nhất và giữa hai quả vẫn phải bằng đúng 1 m.
+
+## Viết code từng bước
+
+### Bước 1 — Tách parameters khỏi state
+
+```cpp title="include/lab.hpp — tham số vật lý và generalized state"
+struct DoublePendulumParameters {
+    double mass1{1.0};
+    double mass2{1.0};
+    double length1{1.0};
+    double length2{1.0};
+    double gravity{9.81};
+};
+
+struct DoublePendulumState {
+    double theta1{};
+    double omega1{};
+    double theta2{};
+    double omega2{};
+    double elapsed{};
+};
+```
+
+Mass, length và gravity mô tả hệ. Angle, angular velocity và elapsed mô tả trạng thái tức thời. Việc tách này cho phép hai trajectory dùng chung đúng một bộ parameters ở bài 4.
+
+### Bước 2 — Suy ra bob thứ nhất
+
+```cpp title="include/lab.hpp — theta1 thành bob1 trong world space"
+DoublePendulumGeometry geometry{};
+geometry.bob1 = {parameters.length1 * std::sin(state.theta1), -parameters.length1* std::cos(state.theta1)};
+```
+
+Dấu âm trước `cos` đến từ world Y hướng lên trong khi angle zero chỉ xuống. Nếu đổi quy ước, phải đổi đồng thời geometry, phương trình động lực học và interaction; không sửa riêng renderer.
+
+### Bước 3 — Đặt bob thứ hai tương đối với bob thứ nhất
+
+```cpp title="include/lab.hpp — rod thứ hai nối tiếp rod thứ nhất"
+geometry.bob2 = add(geometry.bob1, {parameters.length2 * std::sin(state.theta2), -parameters.length2* std::cos(state.theta2)});
+return geometry;
+```
+
+`theta2` là góc tuyệt đối so với phương thẳng đứng, không phải góc tương đối giữa hai rod. Vì vậy vector rod thứ hai được cộng thẳng vào `bob1`.
+
+### Bước 4 — Renderer chỉ đọc geometry
+
+```cpp title="src/main.cpp — đưa geometry lên framebuffer SDL3"
+const lab::DoublePendulumGeometry geometry = lab::pendulumGeometry(state, parameters);
+const lab::Vec2 pivot = worldToScreen(geometry.pivot, view);
+const lab::Vec2 bob1 = worldToScreen(geometry.bob1, view);
+const lab::Vec2 bob2 = worldToScreen(geometry.bob2, view);
+```
+
+Sau khi rods và bob được rasterize vào `pixels`, `SDL_UpdateTexture` đưa đúng framebuffer đó lên cửa sổ. Solver về sau không cần biết pixel hoặc kích thước window.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint geometry"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_26_checkpoint_1
+```
+
+Chạy target rồi resize cửa sổ. Rod length trên world không đổi; chỉ số pixel-per-meter thay đổi để hình vẫn vừa vùng mô phỏng.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ dấu âm trước `cos`. Angle zero làm pendulum chỉ lên thay vì xuống; hoàn tác và ghi lại hệ trục đã chọn.
+2. Tính `bob2` từ pivot thay vì từ `bob1`. Hai rod tách rời; hoàn tác phép cộng nối tiếp.
+3. Lưu thêm `bob1` và `bob2` vào `DoublePendulumState`, rồi chỉ sửa theta bằng slider. Quan sát dữ liệu cũ không tự đổi; xóa state trùng lặp.
+
+## Tự kiểm tra kết quả
+
+- Theta zero đặt bob1 tại `(0,-1)` và bob2 tại `(0,-2)` với length mặc định.
+- Distance pivot–bob1 bằng `length1` ở mọi góc.
+- Distance bob1–bob2 bằng `length2` ở mọi góc.
+- Resize không đổi world geometry.
+- Framebuffer vẫn được present qua `SDL_UpdateTexture` và `SDL_RenderTexture`.
+
+## Bài tập mở rộng
+
+Vẽ cung góc thật thay cho label chữ, nhưng tính cung từ cùng quy ước downward vertical. Thêm một test cho angle $\pi/2$ trước khi dùng cung làm tài liệu giải thích.
+
+Bài tiếp theo biến state này thành derivative: từ hai angle và hai angular velocity, ta tính hai angular acceleration coupled.

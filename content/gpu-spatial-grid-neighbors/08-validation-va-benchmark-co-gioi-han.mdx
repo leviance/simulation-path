@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm tra kết quả và giới hạn benchmark
+
+## Bài toán cần giải quyết
+
+Khi kết quả hàng xóm sai, lỗi có thể nằm ở count, scan, scatter hoặc bước lọc khoảng cách. Thay vì kiểm nearest index ngay từ đầu, ta sẽ kiểm từ ngoài vào trong: tổng counts, tính liên tục của offsets, permutation của `sortedIndices`, rồi cuối cùng mới so kết quả query với CPU. Cách này giúp khoanh vùng lỗi nhanh hơn.
+
+Với preset nhỏ, ta có thể đọc và so toàn bộ kết quả. Nhưng với một triệu particle, vét cạn mọi truy vấn trên CPU có độ phức tạp $O(N^2)$ nên không thể chạy mặc định. Thay vào đó, ta kiểm toàn bộ cấu trúc CSR rồi chỉ chọn 32 index có thể tái lập để so bằng cách vét cạn.
+
+## Theo dõi một particle đi qua grid
+
+Thứ tự kiểm:
+
+1. `sum(counts) == N`;
+2. offsets bắt đầu zero, không giảm, ranges không vượt N;
+3. cursors kết thúc ở `offset+count`;
+4. `sortedIndices` là permutation của `[0,N)`;
+5. kết quả hàng xóm của các mẫu đã chọn khớp bản vét cạn.
+
+Benchmark nằm sau correctness. Query ring có bốn slots; nếu slot cần ghi còn pending, sample mới bị bỏ thay vì CPU chờ GPU.
+
+Trước cả validation và benchmark, final còn kiểm **candidate-work budget**. Bộ nhớ có thể chứa một triệu particles nhưng `radius=48`, `cellSize=4` khiến mỗi query ghé rất nhiều cell; ước lượng bảo thủ có thể vượt hàng tỷ candidate visits. Tổ hợp ấy bị từ chối trước dispatch để một phím bấm không biến thành frame kéo dài khó kiểm soát.
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="grid-validation" />
+
+Chèn lần lượt lost count, wrong offset và duplicate index. Mỗi lỗi làm hỏng một nhóm invariant khác nhau trước khi neighbor comparison cần chạy.
+
+## Xây từng phần
+
+### Bước 1 — Kiểm tra các đoạn CSR trước khi kiểm từng index
+
+```cpp title="include/grid_math.hpp — CSR range validation"
+for (std::size_t cell = 0; cell < counts.size(); ++cell) {
+    report.maximumOccupancy = std::max(report.maximumOccupancy, counts[cell]);
+    if (cell > 0U && offsets[cell] < offsets[cell - 1U]) {
+        report.offsetsMonotonic = false;
+    }
+    const std::uint64_t end = std::uint64_t{offsets[cell]} + counts[cell];
+    if (end > particleCount) {
+        report.rangesInsideStorage = false;
+```
+
+Range dùng `uint64_t` để phép cộng kiểm tra không tự overflow theo kiểu uint của buffer.
+
+### Bước 2 — Mẫu kiểm tra lớn phải tái lập được
+
+```cpp title="include/grid_math.hpp — validationSampleIndices"
+for (std::size_t sample = 0; sample < sampleCount; ++sample) {
+    const std::uint32_t mixed = mixBits(static_cast<std::uint32_t>(sample) ^ 0x40c0ffeeU);
+    indices.push_back(std::size_t(mixed) % particleCount);
+}
+```
+
+Danh sách sample không phụ thuộc frame time hay traversal order. Một mismatch luôn quay lại cùng query index sau reset.
+
+### Bước 3 — Chỉ đọc timer query khi kết quả đã sẵn sàng
+
+```cpp title="include/gpu_grid_engine.hpp — non-blocking query poll"
+GLint available = GL_FALSE;
+gl.GetQueryObjectiv(queries_[index], GL_QUERY_RESULT_AVAILABLE, &available);
+if (available != GL_TRUE) {
+    continue;
+}
+GLuint64 nanoseconds = 0U;
+gl.GetQueryObjectui64v(queries_[index], GL_QUERY_RESULT, &nanoseconds);
+```
+
+Không có `glFinish`, không spin-wait và không `GL_QUERY_RESULT` trên slot chưa available.
+
+### Bước 4 — Chia benchmark thành các trạng thái không chặn event loop
+
+```cpp title="src/main.cpp — tối đa một sample mỗi frame"
+if (key == SDLK_B) {
+    if (benchmarkActive) {
+        benchmarkActive = false;
+        diagnostics = "Benchmark cancelled by the user.";
+    } else {
+        benchmarkActive = true;
+        benchmarkPrepared = false;
+        benchmarkSubmitted = 0U;
+        benchmarkStartedTicks = SDL_GetTicksNS();
+        diagnostics = "Benchmark queued; the event loop remains responsive.";
+    }
+    std::cout << diagnostics << '\n';
+    continue;
+}
+```
+
+Sau event phase, app poll query cũ rồi mới submit lượt kế tiếp:
+
+```cpp title="src/main.cpp — các trạng thái của benchmark"
+engine.pollTiming(gl);
+if (running && benchmarkActive) {
+    const std::uint64_t benchmarkNow = SDL_GetTicksNS();
+    if (benchmarkNow - benchmarkStartedTicks > kBenchmarkTimeoutNanoseconds) {
+        benchmarkActive = false;
+        diagnostics = "Benchmark stopped after the 10-second safety deadline.";
+        std::cerr << diagnostics << '\n';
+    } else if (!benchmarkPrepared) {
+        benchmarkPrepared = engine.clearTimingSamplesWhenIdle();
+    } else if (benchmarkSubmitted < kBenchmarkSampleCount) {
+        bool timingSubmitted = false;
+        if (!engine.run(gl, diagnostics, false, true, &timingSubmitted)) {
+            benchmarkActive = false;
+            std::cerr << diagnostics << '\n';
+        } else if (timingSubmitted) {
+            ++benchmarkSubmitted;
+        }
+    } else if (
+        engine.pendingQueries() == 0U &&
+        engine.timingSampleCount() == kBenchmarkSampleCount
+    ) {
+        benchmarkActive = false;
+        diagnostics = "Benchmark completed with exactly nine available GPU samples.";
+        std::cout << diagnostics << '\n';
+    }
+}
+```
+
+Mỗi vòng event loop chỉ submit nhiều nhất một sample rồi trả quyền cho input và present. `collectResults=false` loại readback khỏi số đo. Benchmark chỉ hoàn tất khi cả chín query đều đã `available`; người dùng có thể nhấn B để hủy, và deadline 10 giây là lối thoát cuối cùng.
+
+### Bước 5 — Ước tính số cặp ứng viên trước khi dispatch
+
+Với phân bố gần đều, occupancy trung bình là `N / cellCount`. Số cell tối đa một query có thể ghé được ước lượng bảo thủ từ `2 × radius / cellSize`, cộng phần cell ở hai đầu. Ta nhân ba đại lượng:
+
+```text
+estimated visits = N × maximum candidate cells/query × average occupancy
+```
+
+Con số này không dự đoán chính xác thời gian chạy; nó chỉ đóng vai trò cầu chì. Bản hoàn chỉnh dùng ngưỡng 1,5 tỷ lượt: preset một triệu hạt với cấu hình chính vẫn chạy, còn tổ hợp bán kính và kích thước cell tạo hàng chục tỷ lượt kiểm tra sẽ bị từ chối. Canvas hiển thị PASS/REJECT khi bạn đổi count, cell size và radius.
+
+## Chạy cả chuỗi xử lý
+
+```bash title="Terminal — checkpoint 8 và Debug CTest"
+cmake --build build --config Debug --target project_40_checkpoint_8 project_40_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — Release CTest"
+cmake --build build --config Release --target project_40_checkpoint_8 project_40_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+CTest không include OpenGL engine, không tạo window và không chạy benchmark GPU. Nó kiểm cách đánh địa chỉ, position có thể tái lập, count/scan, tính hoán vị của CSR, vùng cell, truy vấn chính xác, giới hạn phần cứng và lịch lấy mẫu.
+
+## Cố tình làm hỏng grid
+
+1. So neighbor trước grid invariants. Một duplicate index biểu hiện thành count sai ở nhiều query nhưng không chỉ ra scatter.
+2. Brute force mọi particle với mọi particle ở preset một triệu. Validation trở thành công việc bậc hai và có thể khiến máy tưởng bị treo.
+3. Đọc query result ngay sau `EndQuery`. CPU block và con số timing làm event loop giật.
+4. Tính GPU time bằng CPU wall clock quanh upload, dispatch, readback. Nhãn “GPU ms” trở nên sai nghĩa.
+
+## Tự nghiệm thu
+
+- [ ] Lost count bị bắt bởi total trước neighbor compare.
+- [ ] Wrong offset bị bắt bởi monotonic/range checks.
+- [ ] Duplicate hoặc missing particle index bị permutation check bắt.
+- [ ] Với preset lớn, chỉ vét cạn 32 query index có thể tái lập.
+- [ ] Timer query bao quanh các compute pass, không tính upload, readback hoặc bản CPU.
+- [ ] B submit nhiều nhất một sample mỗi frame, có thể hủy và dừng sau deadline 10 giây.
+- [ ] Tổ hợp một triệu particles, cell size 4 và radius lớn bị candidate-work budget từ chối trước dispatch.
+- [ ] Debug và Release CTest đều kết thúc dưới timeout 20 giây.
+
+## Hướng mở rộng
+
+1. Ghi `firstInvalidCell` và `firstNeighborMismatch` vào một report JSON nhỏ.
+2. So cell size 4/8/16/32 bằng maximum occupancy, candidates/query và GPU median.
+3. Dùng reduction trên neighbor counts để lấy average/max mà không full summary readback.
+
+Bài 9 sẽ ghép phần điều khiển, cách thay buffer an toàn, heatmap, thông báo lỗi và dọn tài nguyên thành ứng dụng hoàn chỉnh.

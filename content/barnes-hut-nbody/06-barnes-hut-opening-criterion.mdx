@@ -1,0 +1,127 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Barnes–Hut opening criterion
+
+## Vấn đề cần giải quyết
+
+Mass Octree đã tóm tắt mỗi subtree bằng `totalMass` và `centerOfMass`, nhưng không phải subtree nào cũng nên được coi như một body. Một cụm rất xa trông gần như một nguồn điểm; cùng cụm ấy ở sát target lại có cấu trúc bên trong ảnh hưởng mạnh tới hướng và độ lớn lực.
+
+Checkpoint 6 đưa ra quyết định tại từng internal node: dùng aggregate ngay, hay mở node và hỏi tiếp tám children.
+
+## Hiểu ý tưởng trước khi viết code
+
+Barnes–Hut dùng tỉ số:
+
+$$
+\frac{s}{d}<\theta
+$$
+
+Trong đó `s` là cạnh node cube, `d` là khoảng cách từ target tới center of mass, và `theta` là opening angle. Theta nhỏ đòi node trông nhỏ hơn khi nhìn từ target, nên traversal mở sâu hơn và gần direct summation hơn.
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-opening" />
+
+Kéo theta từ 0,25 lên 1,1. Theo dõi ba số: `approximatedNodes` tăng, `exactInteractions` giảm và force error tăng. Không có theta “đúng tuyệt đối”; có một trade-off cần đo trên workload cụ thể.
+
+## Viết code từng bước
+
+### Bước 1 — Leaf vẫn dùng source bodies thật
+
+```cpp title="include/tree.hpp — leaf traversal"
+for (const std::size_t sourceIndex : node.bodyIndices) {
+    if (sourceIndex == targetIndex) {
+        continue;
+    }
+    result.acceleration += softenedAcceleration(
+        bodies[targetIndex].position,
+        bodies[sourceIndex].position,
+        bodies[sourceIndex].mass,
+        gravitationalConstant,
+        softening
+    );
+    ++result.metrics.exactInteractions;
+}
+```
+
+Leaf capacity có thể lớn hơn một hoặc split guard có thể giữ nhiều body trùng vị trí. Leaf không phải aggregate shortcut; nó là nơi ta quay lại exact work.
+
+### Bước 2 — Tính node size và distance trong world space
+
+```cpp title="include/tree.hpp — opening inputs"
+const Vec3 displacement = node.centerOfMass - bodies[targetIndex].position;
+const double distanceToCenter = length(displacement);
+const double nodeSize = node.bounds.maximum.x - node.bounds.minimum.x;
+const bool containsTarget = pointInsideBounds(bodies[targetIndex].position, node.bounds);
+```
+
+Camera yaw, pitch và perspective divide hoàn toàn không xuất hiện. Thay góc nhìn không được thay traversal.
+
+### Bước 3 — Dùng aggregate source khi node đủ xa
+
+```cpp title="include/tree.hpp — accept aggregate"
+if (
+    !containsTarget && distanceToCenter > 0.0 &&
+    nodeSize / distanceToCenter < theta
+) {
+    result.acceleration += softenedAcceleration(
+        bodies[targetIndex].position,
+        node.centerOfMass,
+        node.totalMass,
+        gravitationalConstant,
+        softening
+    );
+    ++result.metrics.approximatedNodes;
+    return;
+}
+```
+
+Điều kiện `!containsTarget` sẽ được mổ xẻ ở lesson 7. Lúc này hãy coi nó là correctness guard bắt buộc.
+
+### Bước 4 — Nếu chưa đủ xa, mở đủ tám children
+
+```cpp title="include/tree.hpp — recurse children"
+for (const std::size_t childIndex : node.children) {
+    accumulateBarnesHutNode(
+        tree,
+        bodies,
+        targetIndex,
+        childIndex,
+        theta,
+        gravitationalConstant,
+        softening,
+        result
+    );
+}
+```
+
+Empty child dừng ngay vì `totalMass <= 0`. Ta giữ traversal đơn giản trước khi nghĩ đến compact child storage.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 6"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_31_checkpoint_6
+```
+
+Checkpoint 6 tăng preset lên 2.048 bodies và dùng Barnes–Hut cho full physics pass. Direct oracle vẫn được gọi cho body đang chọn để title báo relative error live.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `distance/nodeSize < theta`. Ý nghĩa theta đảo ngược và slider cho kết quả trái trực giác.
+2. Dùng khoảng cách tới node geometric center thay vì center of mass. Cụm lệch density bị đại diện sai vị trí.
+3. Approximate cả leaf bằng aggregate. Khi leaf chứa target, self mass đi thẳng vào source tổng hợp.
+
+## Tự kiểm tra kết quả
+
+- Theta gần 0 làm lực tại các target mẫu khớp direct trong tolerance.
+- Theta tăng làm aggregate source count tăng trên cùng scene.
+- `visitedNodes` không được gọi là force interactions.
+- Work dùng cho lực bằng approximated nodes + exact interactions.
+- Camera không thay ba counters của cùng target/state.
+- Empty node không tạo source lực.
+- Full-system pass trả đúng N accelerations trước khi integration bắt đầu.
+
+## Bài tập mở rộng
+
+Tô màu leaf theo việc traversal của body đang chọn đã thăm, bỏ qua hay thay bằng aggregate. Giữ màu trong một buffer debug riêng; đừng đưa trạng thái visualization vào node.
+
+Bài tiếp theo giải thích vì sao node chứa target phải mở tiếp dù $s/d$ đã nhỏ.

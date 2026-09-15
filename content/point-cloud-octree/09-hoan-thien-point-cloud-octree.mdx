@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Point Cloud Octree
+
+## Vấn đề cần giải quyết
+
+Từng thuật toán đã chạy riêng, nhưng một project hoàn chỉnh còn phải quản lý lifecycle. Xoay camera không được rebuild tree. Di chuyển query không được xóa point data. Đổi distribution hoặc capacity phải rebuild và vô hiệu hóa benchmark cũ. Pointer capture phải được release khi mouse up, cancel, reset hoặc thoát.
+
+Checkpoint 9 nối các phần vào một source path duy nhất. Đây cũng là lúc kiểm tra starter, toàn bộ checkpoints, final và tests ở cả Debug lẫn Release. Cuối bài, phần source hoàn chỉnh bên dưới cho phép bạn đối chiếu từng file trước khi tải ZIP.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy chia state theo nguyên nhân làm nó thay đổi:
+
+- **Visualization state:** yaw, pitch, distance; không rebuild, không đổi query output.
+- **Query state:** center, half extent, pause/phase; chạy query mới nhưng không rebuild.
+- **Topology state:** point distribution, point count, leaf capacity; rebuild rồi kiểm topology lại.
+- **Measurement state:** benchmark/study; phải xóa khi workload hoặc topology input đổi.
+
+`validateOctreeExperiment` chạy dataset nhỏ hơn để nghiệm thu nhanh mà vẫn kiểm topology, oracle, candidate reduction, checksum, finite timing và projection. CTest gọi hàm này không cần mở SDL window.
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-validation" />
+
+Thử lần lượt: xoay camera, di chuyển query, chạy benchmark, đổi distribution, chạy capacity study rồi reset. Readout phải cho thấy đúng phần state thay đổi và metrics cũ không còn được trình bày như kết quả hiện tại.
+
+## Viết code từng bước
+
+### Bước 1 — Rebuild chỉ khi topology input đổi
+
+```cpp title="src/main.cpp — đổi capacity và rebuild"
+tree = lab::buildOctree(points, treeConfig);
+topology = lab::inspectOctreeTopology(tree, points.size());
+octreeBenchmark = {};
+bruteBenchmark = {};
+studyRows.clear();
+```
+
+Camera và query controls không đi qua khối này. Sự tách biệt giúp interaction mượt và giữ `rebuildMicroseconds` có nghĩa rõ ràng.
+
+### Bước 2 — Cân bằng pointer capture
+
+```cpp title="src/main.cpp — bắt đầu orbit drag"
+rotatingCamera = true;
+SDL_CaptureMouse(true);
+```
+
+```cpp title="src/main.cpp — kết thúc orbit drag"
+rotatingCamera = false;
+SDL_CaptureMouse(false);
+```
+
+Final còn release capture khi reset và trước cleanup. Không để OS tiếp tục gửi relative motion cho một interaction đã kết thúc.
+
+### Bước 3 — Gộp các cờ validation độc lập
+
+```cpp title="include/lab.hpp — final ValidationReport"
+return {
+    topologyValid,
+    resultMatchesOracle,
+    candidateWorkReduced,
+    checksumMatches,
+    finiteTiming,
+    projectionFinite,
+};
+```
+
+Report không nén thành một boolean duy nhất. Khi CTest fail, bạn cần biết storage, output, work, timing hay projection đã hỏng.
+
+### Bước 4 — Giữ draw sample khác workload thật
+
+```cpp title="include/render.hpp — giới hạn phần được vẽ"
+const std::size_t drawCount = std::min<std::size_t>(points.size(), 40'000U);
+for (std::size_t index = 0; index < drawCount; ++index) {
+```
+
+Tree, query, oracle và tests vẫn nhận đủ `points`. UI phải nói rõ số point được vẽ và số index được xử lý để sampling không bị hiểu nhầm là benchmark 40.000 points.
+
+## Ghép các phần lại
+
+```bash title="Terminal — configure toàn bộ targets"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+```
+
+```bash title="Terminal — build và test Debug"
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — build và test Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Chạy target `project_30_final`. Kéo chuột để orbit, cuộn để zoom; dùng `W/S`, `A/D`, `Q/E` di chuyển volume, `[`/`]` đổi kích thước, `Space` chạy/dừng, `G` đổi distribution, `C` đổi capacity, `B` benchmark, `T` study, `R` reset và `Esc` thoát.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi `buildOctree` sau mỗi lần mouse motion. Camera drag trở nên nặng dù world data không đổi. Chỉ cập nhật yaw/pitch.
+2. Đổi distribution nhưng giữ benchmark title cũ. Metrics đúng của dataset trước bị gắn vào scene mới. Xóa measurement state cùng lúc rebuild.
+3. Vẽ đủ mọi leaf box và 100.000 points ở mọi cấu hình. Renderer lấn át query benchmark và interaction chậm. Giới hạn draw sample, nhưng giữ indexed workload đầy đủ.
+
+## Tự kiểm tra kết quả
+
+- Orbit camera dùng pointer capture, wheel zoom và near-plane guard.
+- Camera/query changes không rebuild; distribution/capacity changes có rebuild.
+- Reset khôi phục deterministic seed, clustered distribution, capacity 16, camera và query mặc định.
+- Topology report pass với child bounds 3D.
+- Live query và deterministic probes khớp brute-force oracle.
+- Benchmark có warm-up, cùng workload, cùng checksum và exact-work counters.
+- Capacity study có bốn rows và bị xóa khi input đổi.
+- UI phân biệt draw sample với 100.000-point indexed workload.
+- Starter, checkpoint 1–9 và final build độc lập.
+- CTest pass ở Debug và Release với timeout 20 giây.
+
+## Bài tập mở rộng
+
+Thêm màu theo depth nhưng chỉ dùng nó để quan sát, không đưa color vào tree/query contract. Sau đó thêm một preset query hình hộp rất mỏng theo Z và đo vì sao 3D pruning khác selection rectangle 2D.
+
+Project 31 sẽ dùng Octree cho Barnes–Hut. Node không chỉ biết bounds và point indices nữa mà còn tổng mass cùng center of mass; một subtree đủ xa có thể được xấp xỉ bằng một nguồn lực duy nhất. Sang project mới, ta vẫn giữ nguyên cách làm ở đây: kiểm topology riêng, dùng oracle để đối chiếu và chỉ tin benchmark sau khi kết quả đã đúng.

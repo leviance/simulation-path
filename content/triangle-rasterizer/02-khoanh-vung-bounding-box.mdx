@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khoanh vùng pixel bằng bounding box
+
+## Vấn đề cần giải quyết
+
+Với framebuffer `1920×1080`, quét cả màn hình nghĩa là hơn hai triệu coverage test cho một triangle, dù triangle chỉ chiếm một góc nhỏ. Trước khi hỏi pixel có nằm **trong** triangle hay không, ta nên loại ngay mọi pixel chắc chắn nằm ngoài hình chữ nhật bao quanh nó.
+
+Bounding box không quyết định coverage. Nó chỉ tạo một danh sách candidate đủ nhỏ mà không bỏ sót pixel có khả năng thuộc triangle.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giả sử X lớn nhất của vertex là `20.2`. Pixel có tâm X bằng `20.5` vẫn là candidate, nên chỉ số cuối là `20`:
+
+$$
+maxX=\lceil 20.2\rceil-1=20
+$$
+
+Với X lớn nhất đúng bằng `20.0`, pixel chỉ số `19` có tâm `19.5` là ô cuối nằm trước biên:
+
+$$
+maxX=\lceil 20.0\rceil-1=19
+$$
+
+Đầu nhỏ nhất dùng `floor`. Sau đó cả bốn giá trị phải được clamp vào framebuffer.
+
+<InteractiveLab demo="triangle-raster" mode="triangle-bounds" />
+
+## Viết code từng bước
+
+### Bước 1 — Dùng rectangle có hai đầu inclusive
+
+```cpp title="include/lab.hpp — bounds theo chỉ số pixel"
+struct IntRect {
+    int minX{};
+    int minY{};
+    int maxX{-1};
+    int maxY{-1};
+};
+
+inline bool isEmpty(IntRect bounds) {
+    return bounds.maxX < bounds.minX || bounds.maxY < bounds.minY;
+}
+```
+
+Giá trị `max=-1` làm rectangle mặc định rỗng. Vòng raster sau này có thể viết `x <= maxX` mà không phải nhớ một quy ước half-open khác.
+
+### Bước 2 — Lấy min/max từ đúng ba vertex
+
+Hàm `triangleBounds` nhận triangle cùng kích thước framebuffer và trả một `IntRect` đã clamp:
+
+```cpp title="include/lab.hpp — đổi min max liên tục thành IntRect"
+const double minimumX = std::min({triangle.a.x, triangle.b.x, triangle.c.x});
+const double minimumY = std::min({triangle.a.y, triangle.b.y, triangle.c.y});
+const double maximumX = std::max({triangle.a.x, triangle.b.x, triangle.c.x});
+const double maximumY = std::max({triangle.a.y, triangle.b.y, triangle.c.y});
+
+IntRect bounds{};
+bounds.minX = std::clamp(int(std::floor(minimumX)), 0, width - 1);
+bounds.minY = std::clamp(int(std::floor(minimumY)), 0, height - 1);
+bounds.maxX = std::clamp(int(std::ceil(maximumX)) - 1, 0, width - 1);
+bounds.maxY = std::clamp(int(std::ceil(maximumY)) - 1, 0, height - 1);
+return bounds;
+```
+
+Clamp xảy ra trước vòng lặp. Nhờ vậy `putPixel` vẫn có bounds check phòng thủ, nhưng rasterizer không chủ động sinh hàng nghìn tọa độ sai.
+
+### Bước 3 — Đếm candidate bằng kiểu đủ rộng
+
+```cpp title="include/lab.hpp — số pixel cần đưa qua coverage test"
+inline std::size_t candidatePixelCount(IntRect bounds) {
+    if (isEmpty(bounds)) {
+        return 0;
+    }
+    const std::size_t columns = std::size_t(bounds.maxX - bounds.minX + 1);
+    const std::size_t rows = std::size_t(bounds.maxY - bounds.minY + 1);
+    return columns * rows;
+}
+```
+
+Hai đầu inclusive nên phải cộng 1. Rectangle `[2,3]..[5,7]` có `4×5=20` candidate, không phải `3×4`.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build bounding-box checkpoint"
+cmake --build build --config Debug --target project_16_checkpoint_2
+```
+
+Kéo một vertex sát từng mép cửa sổ. Viền vàng có thể bị cắt theo viewport nhưng title không được báo index âm hoặc lớn hơn `width-1`, `height-1`.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `-1` khỏi `ceil(maximumX)-1`. Candidate box rộng thêm một cột khi vertex nằm đúng biên nguyên; test count sẽ bắt lỗi off-by-one.
+2. Dùng `int(minimumX)` thay cho `floor`. Với vertex âm, ép kiểu tiến về zero và có thể bỏ sai một cột trước khi clamp.
+3. Nhân rows×columns bằng `int` rồi mới đổi sang `size_t`. Kích thước cực lớn có thể overflow trước khi chuyển kiểu; phục hồi phép chuyển từng thừa số.
+
+## Tự kiểm tra kết quả
+
+- Bounds dùng `floor(min)` và `ceil(max)-1` cho cả hai trục.
+- Hai đầu của `IntRect` được hiểu thống nhất là inclusive.
+- Bounds luôn nằm trong framebuffer sau clamp.
+- Candidate count của `[2,3]..[5,7]` bằng 20.
+- Triangle cắt mép viewport không gây tọa độ pixel âm trong vòng raster tương lai.
+- Chưa pixel nào được nhận chỉ vì nằm trong bounding box.
+
+## Bài tập mở rộng
+
+Hiển thị phần trăm `candidate / (width×height)` trong title bar. Thử một triangle nhỏ, một triangle phủ gần hết màn hình và ghi lại khi bounding box giúp nhiều nhất.
+
+Bài tiếp theo sẽ viết edge function để phân đôi mặt phẳng bởi từng cạnh và giải thích vì sao thứ tự A-B-C làm dấu đổi chiều.

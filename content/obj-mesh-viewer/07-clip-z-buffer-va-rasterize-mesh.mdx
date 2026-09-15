@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa toàn bộ mesh qua clip và Z-buffer
+
+## Vấn đề cần giải quyết
+
+Checkpoint 6 đã tô được mặt nhưng còn hai điểm yếu cố ý: triangle cắt near plane bị bỏ cả mặt, và fragment đến sau ghi đè fragment trước. Với vài chục face, “đổi draw order tới khi trông ổn” không còn là chiến lược khả thi.
+
+Ta ghép lại pipeline đã tự xây ở Project 16–19. Mỗi source triangle phải đi qua đúng một đường: tra index → model/camera transform → face normal/culling → near clipping → projection → top-left rasterization → interpolate NDC depth → depth test/write → color write.
+
+## Hiểu ý tưởng trước khi viết code
+
+Near clipping hoạt động trên polygon camera space. Với một vertex ngoài và hai vertex trong, triangle biến thành quad rồi được chia thành hai triangle. Mọi output thỏa:
+
+$$
+z\ge near
+$$
+
+Sau projection, mỗi covered pixel có barycentric weights. NDC depth được nội suy:
+
+$$
+z_p=\lambda_Az_A+\lambda_Bz_B+\lambda_Cz_C
+$$
+
+Vì near ánh xạ về 0, far ánh xạ về 1, fragment pass khi `newDepth < storedDepth`. Đây là điều làm output độc lập với thứ tự face trong OBJ.
+
+<InteractiveLab demo="obj-viewer" mode="obj-render" />
+
+Bật Solid và đảo draw order. Readout chênh lệch phải giữ `0 color · 0 depth`. Tắt back-face culling để tăng số fragment overlap; Z-buffer vẫn phải giữ invariant.
+
+## Viết code từng bước
+
+### Bước 1 — Clip trong camera space trước projection
+
+```cpp title="include/lab.hpp — cạnh cắt near plane dùng cùng tham số t"
+const double t = std::clamp((nearPlane - start.z) / denominator, 0.0, 1.0);
+Vec3 result = start + (end - start) * t;
+result.z = nearPlane;
+return result;
+```
+
+`clipTriangleToNearPlane` chạy Sutherland–Hodgman trên ba cạnh, có thể trả 0, 3 hoặc 4 corner. Chỉ sau đó vòng triangle fan mới gọi `projectVertex`.
+
+### Bước 2 — Ghi color chỉ trong nhánh depth pass
+
+```cpp title="include/lab.hpp — fragment path của mọi OBJ triangle"
+const std::size_t index = depths.index(x, y);
+const double newDepth = interpolateDepth(triangle, weights);
+if (newDepth >= depths.values[index]) {
+    ++stats.rejectedFragments;
+    return;
+}
+depths.values[index] = newDepth;
+colors[index] = packColor(triangle.color);
+++stats.passedFragments;
+```
+
+Depth và color dùng cùng row-major index. Nhánh reject không thay buffer nào; nhánh pass cập nhật cả cặp dữ liệu của pixel.
+
+### Bước 3 — So toàn output giữa hai draw order
+
+```cpp title="tests/tests.cpp — invariant mạnh hơn một ảnh đẹp"
+const RenderedFrame forward = render(pyramid.mesh, false);
+const RenderedFrame reversed = render(pyramid.mesh, true);
+check(forward.colors == reversed.colors, "Z-buffer color output is independent of OBJ face order");
+check(
+    lab::depthBuffersNearlyEqual(forward.depths.values, reversed.depths.values),
+    "Z-buffer depth output is independent of OBJ face order"
+);
+```
+
+Test dùng toàn bộ buffer chứ không chọn một pixel thuận tiện. Nó cũng tắt culling để tạo nhiều overlap và buộc depth reject thực sự xảy ra.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build full CPU-pipeline checkpoint"
+cmake --build build --config Debug --target project_21_checkpoint_7
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Nhấn `O` để đảo face order, `C` để đổi culling, kéo chuột để đổi góc. Hình solid phải ổn định trong mọi tổ hợp; chỉ số culled/pass/reject có thể thay đổi theo góc.
+
+## Thử làm sai để hiểu đúng
+
+1. Project trước rồi mới clip. Giảm camera distance để một vertex tiến sát camera và quan sát tọa độ màn hình tăng mất kiểm soát.
+2. Clear depth sau mỗi triangle. Mọi fragment lại gặp 1.0 và face cuối cùng thắng như Painter path.
+3. Đổi compare thành `newDepth > storedDepth` nhưng vẫn clear 1.0. Không fragment hợp lệ nào có thể pass.
+4. Ghi color trước câu `if`. Mặt xa tồn tại trong color buffer dù depth báo reject.
+
+## Tự kiểm tra kết quả
+
+- Mọi corner sau clipping có Z không nhỏ hơn near trừ tolerance.
+- Projection không nhận vertex phía sau near plane.
+- `covered = passed + rejected` trong fragment path có depth test.
+- Depth cuối hữu hạn và nằm trong `[0,1]`.
+- Đảo draw order không đổi color hoặc depth output.
+- Triangle clip thành quad tạo đúng hai raster triangle.
+
+## Bài tập mở rộng
+
+Thêm far-plane clipping với cùng cấu trúc half-space. So số triangle bị clip khi đưa model ra xa thay vì để NDC depth lớn hơn 1 tự fail ở depth buffer.
+
+Bài cuối sẽ hoàn thiện asset lookup, diagnostic, controls, resize và bộ kiểm chứng để project có thể tải về chạy độc lập.

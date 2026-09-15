@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo sai số thay vì chỉ nhìn texture méo
+
+## Vấn đề cần giải quyết
+
+Một hình checker có thể trông lạ vì nhiều nguyên nhân: UV corner sai, winding đảo, sampler đọc nhầm row hoặc affine interpolation. Chỉ nhìn ảnh không cho biết stage nào sai.
+
+Checkpoint 4 thêm pixel inspector. Ta chọn đúng một sample đã qua coverage, lưu barycentric weights, affine UV và một reference UV được reweight bằng camera depth. Khoảng cách giữa hai UV cho một con số có thể test.
+
+## Hiểu ý tưởng trước khi viết code
+
+Reference tạm thời reweight barycentric weights theo reciprocal depth:
+
+$$
+w_i=\frac{\lambda_i/z_i}{\lambda_A/z_A+\lambda_B/z_B+\lambda_C/z_C}
+$$
+
+$$
+uv_{reference}=w_Auv_A+w_Buv_B+w_Cuv_C
+$$
+
+Bài 5 sẽ suy ra công thức này. Hiện tại ta dùng nó như một oracle: khi `zA=zB=zC`, mọi `1/z` giống nhau và weights trở lại đúng λ; khi depth khác nhau, hai UV tách ra.
+
+<InteractiveLab demo="perspective-texture" mode="texture-error" />
+
+## Viết code từng bước
+
+### Bước 1 — Reweight bằng camera depth
+
+```cpp title="include/lab.hpp — reference UV độc lập với raw affine UV"
+const double weightedA = weights.a / triangle.vertices[0].cameraDepth;
+const double weightedB = weights.b / triangle.vertices[1].cameraDepth;
+const double weightedC = weights.c / triangle.vertices[2].cameraDepth;
+const double denominator = weightedA + weightedB + weightedC;
+```
+
+Denominator gần zero được chặn. Với triangle hợp lệ hoàn toàn trước camera, ba depth dương và weights bên trong không âm nên denominator cũng dương.
+
+### Bước 2 — Trộn UV bằng weights đã sửa
+
+```cpp title="include/lab.hpp — chia một lần sau khi cộng tử số"
+const double numeratorU = weightedA * triangle.vertices[0].uv.x + weightedB * triangle.vertices[1].uv.x + weightedC * triangle.vertices[2].uv.x;
+const double numeratorV = weightedA * triangle.vertices[0].uv.y + weightedB * triangle.vertices[1].uv.y + weightedC * triangle.vertices[2].uv.y;
+return {numeratorU / denominator, numeratorV / denominator};
+```
+
+Đây chưa phải API final; nó đọc depth trực tiếp để làm chuẩn so sánh. Bài 5 sẽ chuẩn bị reciprocal attributes ngay tại projected vertex.
+
+### Bước 3 — Đo khoảng cách trong UV space
+
+```cpp title="include/lab.hpp — error không phụ thuộc resolution texture"
+inline double uvDistance(Vec2 left, Vec2 right) {
+    const double deltaU = right.x - left.x;
+    const double deltaV = right.y - left.y;
+    return std::sqrt(deltaU * deltaU + deltaV * deltaV);
+}
+```
+
+Error ở UV space dễ so giữa texture 64×64 và 1024×1024. Muốn đổi sang sai lệch texel, nhân U error với width và V error với height.
+
+### Bước 4 — Chỉ cập nhật inspector khi sample được phủ
+
+```cpp title="src/main.cpp — marker đọc đúng callback đang shade"
+if (sample.x == selectedX && sample.y == selectedY) {
+    inspection.covered = true;
+    inspection.barycentric = sample.barycentric;
+    inspection.affineUv = affineUv;
+    inspection.correctedUv = referenceUv;
+}
+```
+
+Click ngoài quad làm `covered=false`, thay vì báo một bộ UV được ngoại suy không hề dùng để vẽ.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint đo affine error"
+cmake --build build --config Debug --target project_20_checkpoint_4
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Chọn một pixel gần giữa quad rồi đổi front/medium/steep. Front phải cho error gần zero. Ở steep, di chuyển marker dọc chiều sâu để thấy error thay đổi chứ không phải một hằng số toàn face.
+
+## Thử làm sai để hiểu đúng
+
+1. So texel color thay vì UV. Hai UV khác nhau vẫn có thể rơi vào cùng checker cell và che lỗi; đo tọa độ liên tục trước sampler.
+2. Tính reference bằng một barycentric mới ở tọa độ integer khác sample. Hai phép đo không còn cùng pixel; dùng đúng `RasterSample`.
+3. Cho click ngoài triangle vẫn cập nhật inspector bằng negative weights. Đó là extrapolation, không phải pixel được render; giữ cờ `covered`.
+4. Chỉ kiểm preset steep. Một thuật toán sai có thể vẫn tạo error dương; constant-depth front phải là test agreement bằng zero.
+
+## Tự kiểm tra kết quả
+
+- Inspector chỉ hợp lệ ở pixel top-left coverage đã nhận.
+- `λA+λB+λC` sai không quá tolerance.
+- Front quad cho affine/reference UV gần bằng nhau.
+- Steep quad có sample trong lòng face với UV error đo được lớn hơn zero.
+- UV distance hữu hạn, không âm và độc lập texture resolution.
+
+## Bài tập mở rộng
+
+Tạo heatmap chỉ dùng `uvDistance` làm độ sáng, không sample checker. Vùng vertex phải tối vì cả hai phương pháp trùng đúng UV vertex; vùng giữa tilted face sẽ sáng hơn.
+
+Bài tiếp theo sẽ giải thích vì sao phép reweight theo `1/z` không phải một mẹo sửa ảnh, mà là hệ quả trực tiếp của perspective divide.

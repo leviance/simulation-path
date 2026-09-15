@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đếm particle trong từng cell bằng atomic
+
+## Bài toán cần giải quyết
+
+Trước khi xếp particle indices vào các đoạn liên tiếp, ta phải biết mỗi cell chứa bao nhiêu particle. Mỗi invocation tự tìm được cell của mình, nhưng nhiều invocation có thể cùng tăng một counter. Nếu dùng phép đọc rồi ghi thông thường, hai lane có thể đọc cùng giá trị cũ và một lần tăng sẽ bị mất. `atomicAdd` giúp mỗi lần tăng được ghi nhận đúng một lần.
+
+Chuỗi xử lý bắt đầu bằng hai pass riêng: xóa `C` counter của các cell, rồi đếm `N` particle. Hai pass làm việc trên số phần tử khác nhau, nên số workgroup cũng khác và cả hai đều phải kiểm tra index.
+
+## Theo dõi một particle đi qua grid
+
+Nếu ba invocation cùng đi vào cell 12, kết quả cần là:
+
+```text
+atomicAdd(counts[12], 1): 0 → 1 → 2 → 3
+```
+
+Thứ tự ba phép cộng không quan trọng vì mỗi phép đều thêm một. Nếu dùng `value = counts[12]; counts[12] = value + 1`, cả ba có thể đọc 0 và cuối cùng chỉ ghi 1.
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="atomic-count" />
+
+Chuyển `atomicAdd` sang `read + write`. Canvas cố ý mô hình hóa lost update: heatmap vẫn trông hợp lý, nhưng tổng occupancy không còn bằng particle count. Đây là lý do invariant tổng quan trọng hơn nhìn hình.
+
+## Xây từng phần
+
+### Bước 1 — Xóa count của từng cell
+
+```cpp title="include/gpu_grid_engine.hpp — dispatchClear"
+void dispatchClear(GlApi& gl) {
+    clearProgram_.use(gl);
+    gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, buffers_.cellCounts);
+    gl.Uniform1i(clearProgram_.uniform("uCellCount"), static_cast<GLint>(spec_.cellCount()));
+    gl.DispatchCompute(static_cast<GLuint>(ceilDiv(spec_.cellCount(), kWorkgroupSize)), 1U, 1U);
+}
+```
+
+Grid 128×72 có 9.216 counters, nên pass này phát 36 workgroups. Nó không dùng particle count.
+
+### Bước 2 — Cho mỗi particle tăng count của cell tương ứng
+
+```cpp title="include/gpu_grid_engine.hpp — dispatchCount"
+void dispatchCount(GlApi& gl) {
+    countProgram_.use(gl);
+    gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, buffers_.positions);
+    gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1U, buffers_.cellCounts);
+    setGridUniforms(gl, countProgram_);
+    gl.DispatchCompute(static_cast<GLuint>(ceilDiv(positions_.size(), kWorkgroupSize)), 1U, 1U);
+}
+```
+
+Với `1.000.003` particles, ceil division phát 3.907 groups, tức 1.000.192 invocation. Shader loại 189 invocation ở đuôi trước khi đọc `positions`.
+
+### Bước 3 — Dùng atomic trên counter của từng cell
+
+```glsl title="shaders/count_cells.comp — một particle, một increment"
+uint particle = gl_GlobalInvocationID.x;
+if (particle >= uint(uParticleCount)) {
+    return;
+}
+
+uint cell = cellFor(positions[particle]);
+atomicAdd(cellCounts[cell], 1u);
+```
+
+Ta không dùng một counter toàn cục. Contention được chia theo cell; `cellSize` càng lớn thì occupancy và contention trung bình càng cao.
+
+### Bước 4 — Đồng bộ trước khi scan đọc counts
+
+```cpp title="include/gpu_grid_engine.hpp — count producer"
+dispatchCount(gl);
+memoryBarrier(gl, "count", "cellCounts", positions_.size(), GL_BUFFER_UPDATE_BARRIER_BIT);
+```
+
+Bài 2 chỉ đọc counts về CPU để quan sát nên dùng buffer-update barrier. Sang bài 3, scan shader sẽ đọc counts trực tiếp trên GPU và barrier đổi thành `GL_SHADER_STORAGE_BARRIER_BIT`.
+
+## Chạy cả chuỗi xử lý
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_40_checkpoint_2 project_40_tests
+```
+
+Sau `engine.run`, console hoặc thanh tiêu đề phải cho thấy tổng counts bằng N. Heatmap chỉ đọc mảng cell counts nhỏ gọn sau khi các pass hoàn thành; position và dữ liệu trung gian vẫn nằm trên GPU.
+
+## Cố tình làm hỏng grid
+
+1. Thay `atomicAdd` bằng `cellCounts[cell] += 1u`. Với cloud dày, tổng counts nhỏ hơn N và thay đổi giữa các lần chạy.
+2. Clear bằng `particleCount` thay vì `cellCount`. Khi N nhỏ hơn C, một phần counter cũ sẽ còn sót lại từ lần chạy trước.
+3. Không kiểm tra index trong count shader. 189 invocation dư của preset lớn sẽ đọc ngoài positions SSBO.
+4. Dùng `floor` khác thứ tự clamp bên CPU. Particle sát maximum có CPU/GPU cell ID khác nhau.
+
+## Tự nghiệm thu
+
+- [ ] Clear dispatch theo `cellCount`, count dispatch theo `particleCount`.
+- [ ] Mỗi shader kiểm global ID trước buffer access.
+- [ ] Mỗi particle tăng đúng một cell bằng `atomicAdd`.
+- [ ] Tổng counts bằng N ở mọi preset và seed.
+- [ ] N=1.000.003 phát 3.907 workgroups, 189 tail invocations không ghi dữ liệu.
+- [ ] Cell lớn làm maximum occupancy tăng nhưng không làm mất count.
+
+## Hướng mở rộng
+
+1. Đếm thêm số cell không rỗng bằng một pass riêng sau count; không dùng atomic chung trong count pass chính.
+2. Tạo preset cluster để quan sát atomic contention tập trung vào vài cell.
+3. So `cellSize` 4, 8, 16, 32 bằng occupancy trung bình và maximum trước khi đo time.
+
+Bài 3 sẽ biến histogram counts thành địa chỉ bắt đầu cho từng cell. Đây là nơi exclusive scan của Project 39 trở thành hạ tầng thay vì sản phẩm cuối.

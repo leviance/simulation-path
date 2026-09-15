@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cố ý dùng danh sách cũ để tìm lỗi
+
+## Vấn đề cần giải quyết
+
+Hạt chạy mượt không chứng minh danh sách đúng. Thậm chí một hệ hoàn toàn không có lực do bỏ sót mọi cặp vẫn có thể chạy rất mượt: các hạt cứ đi thẳng theo vận tốc đang có. Kiểm số hữu hạn hoặc nhìn FPS sẽ không bắt được lỗi đó.
+
+Ta cần một thí nghiệm nhỏ có đáp án chắc chắn. Bài này giữ nguyên system nhưng cố ý ngừng cập nhật list, kéo hai hạt lại gần rồi hỏi bản mọi cặp: có cặp nào đang tác dụng lực mà bản tối ưu không thấy không?
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn hộp 12×12, cutoff=2.5, skin=0.4, A=(3,6), B=(6.2,6). Khoảng cách 3.2 lớn hơn listRadius=2.9, nên list ban đầu rỗng. Giữ list đó rồi đưa A sang phải 0.8. Khoảng cách còn 2.4, nằm trong cutoff, nhưng list rỗng vẫn trả hai vector lực zero.
+
+Đây không phải lỗi làm tròn. Ta đã thiếu hẳn một cặp. Audit sẽ đo ba thứ: số cặp trong cutoff không có trong list, sai số lực lớn nhất trên một hạt và sai số thế năng tổng:
+
+$$e_F=\max_i\lVert F_i^{list}-F_i^{all}\rVert,\qquad e_U=|U^{list}-U^{all}|.$$
+
+Giữ phép đếm cặp thiếu bên cạnh sai số lực. Trong một cấu hình đối xứng, các sai lệch lực có thể triệt tiêu trên vài hạt; chỉ nhìn một vector lực không đủ. [Tài liệu LAMMPS về cập nhật neighbor list](https://docs.lammps.org/neigh_modify.html) cũng lưu ý nguy cơ bỏ sót cặp khi dựng lại quá thưa.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-audit" />
+
+Preset đầu của bài là hai hạt. Bật “Cố ý giữ danh sách cũ”, chọn Canvas rồi nhấn mũi tên phải 16 lần. Bấm “Đối chiếu mọi cặp”: phải thiếu một cặp. Bấm “Dựng lại danh sách” rồi đối chiếu lần nữa. Hai phép đo dùng cùng vị trí hạt; thứ được sửa chỉ là danh sách.
+
+## Viết code từng bước
+
+### Bước 1 — Tính hai kết quả từ cùng một state
+
+Thêm struct Audit và hàm auditForces vào `neighbor_dynamics.hpp`. Ở đầu hàm:
+
+```cpp title="include/neighbor_dynamics.hpp — đối chứng không tự sửa list trước khi kiểm"
+Audit report;
+const pbc::Evaluation reference = pbc::evaluate(system);
+const pbc::Evaluation listed = evaluateListed(system, list);
+if (!reference.valid || !listed.valid) {
+    report.forceError = std::numeric_limits<double>::infinity();
+    report.potentialError = std::numeric_limits<double>::infinity();
+    return report;
+}
+```
+
+Không gọi ensureList ở đây. Nếu audit tự dựng lại trước khi so, bạn sẽ không bao giờ nhìn thấy lỗi đang muốn kiểm. Hàm nhận list bằng const reference và không thay system, mốc hay bộ đếm.
+
+`pbc::evaluate` là bản mọi cặp đã giữ lại từ Project 43. Nó dùng cùng luật lực và hình học nhưng không dùng pairs của bản tối ưu. Vì vậy một lỗi tìm cặp không thể tự xác nhận mình đúng. Đây không phải phép kiểm độc lập cho chính công thức Lennard–Jones; phần đó đã có test ở Project 41–43.
+
+### Bước 2 — Tìm chính xác cặp đang bị bỏ sót
+
+Với mỗi i, đo sai số force. Trong vòng j từ i+1, đo minimum-image distance và kiểm sự có mặt của cặp:
+
+```cpp title="include/neighbor_dynamics.hpp — cặp có lực phải có trong danh sách"
+const Vec2 delta = pbc::minimumImage(pbc::subtract(system.particles[j].position, system.particles[i].position), system.box);
+if (pbc::length(delta) < system.parameters.cutoff && std::find(list.pairs.begin(), list.pairs.end(), PairIndex{i, j}) == list.pairs.end()) {
+    ++report.missingPairs;
+}
+```
+
+`std::find` dễ đọc nhưng không phải cách tìm tối ưu. Audit là công cụ chẩn đoán chạy theo yêu cầu, không chạy trong từng frame. Canvas dùng Set của khóa cặp để tra nhanh hơn; tiêu chí cặp thiếu vẫn giống C++.
+
+Nếu list có thêm cặp ở ngoài cutoff thì không báo thiếu hay thừa lực, vì evaluateListed đã loại các cặp đó. Audit kiểm tính đầy đủ ở **thời điểm hiện tại**, không kết luận list có thể dùng mãi về sau.
+
+### Bước 3 — Đặt tiêu chí đạt và khóa đường chạy sai
+
+Sau vòng lặp:
+
+```cpp title="include/neighbor_dynamics.hpp — vừa đủ cặp vừa khớp kết quả số"
+report.potentialError = std::abs(reference.potential - listed.potential);
+report.passed = report.missingPairs == 0 && report.forceError < 1.0e-8 && report.potentialError < 1.0e-8;
+return report;
+```
+
+Trong main, phím F bật frozen và pause. Chỉ đường xử lý thao tác tay được phép giữ list cũ; Space và N bị khóa khi frozen. Phím A gọi auditForces rồi in passed, missingPairs, forceError và potentialError ra terminal. B hoặc tắt frozen dựng lại list và rời chế độ cố ý làm sai.
+
+Không đổi cachedVerletStep để cho chạy với list cũ. Thí nghiệm nhằm giải thích lỗi, không biến một solver sai thành một lựa chọn dùng bình thường.
+
+## Ghép các phần lại
+
+Build `project_44_checkpoint_7`. Với bản SDL, nhấn R để có skin mặc định 0.4, P chọn cặp, F giữ list rồi dịch A sang phải 16 lần bằng phím mũi tên. Nhấn A để đọc báo cáo trong terminal. Dùng B rồi A để thấy kết quả sau khi sửa.
+
+Nếu đặt hai hạt trùng nhau, báo cáo không đạt vì phép lực không hợp lệ; forceError/U error là infinity. Đừng đọc missingPairs=0 trong nhánh lỗi ấy thành “không có vấn đề”. Passed mới là kết luận tổng hợp.
+
+## Thử làm sai để hiểu đúng
+
+1. Thêm ensureList ngay đầu auditForces. Lặp ca hai hạt: báo cáo bỗng đạt vì hàm đã sửa lỗi trước khi đo. Xóa lời gọi đó, để thao tác “Dựng lại” là hành động riêng người học chủ động thực hiện.
+2. Chỉ kiểm `listed.valid` rồi báo đạt. List rỗng cũ cho số hữu hạn nên lọt qua. Khôi phục đối chiếu mọi cặp và phép đếm thiếu; ghi lại khác biệt giữa lỗi số học và lỗi tập cặp.
+
+## Tự kiểm tra kết quả
+
+- Ca 3.2→2.4 với skin=0.4 thiếu đúng một cặp khi list bị giữ cũ.
+- Dựng lại trên cùng state làm missingPairs=0 và hai sai số gần zero.
+- Audit không thay state, list hay các bộ đếm của solver.
+- Frozen khóa chạy và single-step; hạt chỉ đổi vị trí khi người dùng kéo hoặc dùng mũi tên.
+
+## Bài tập mở rộng
+
+Thêm bảng liệt kê các cặp thiếu với khoảng cách hiện tại, thay vì chỉ in count. Giới hạn số dòng để test lỗi trên hệ lớn không làm tràn giao diện. Sang bài [So sánh chi phí và chọn skin có căn cứ](/projects/neighbor-list-skin/08-so-sanh-chi-phi-va-chon-skin) khi bạn đã tự tái hiện được cả kết quả sai lẫn cách sửa.

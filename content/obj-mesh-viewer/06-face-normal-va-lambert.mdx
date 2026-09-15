@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính face normal và Lambert cho mesh
+
+## Vấn đề cần giải quyết
+
+Wireframe cho thấy topology nhưng chưa tạo cảm giác bề mặt. Ta đã có đủ các mảnh từ Project 19: hai cạnh tạo normal, normal cùng vector nhìn quyết định front/back-facing, và dot product với hướng sáng tạo Lambert intensity.
+
+Điểm mới ở Project 21 là dữ liệu đến từ file. Winding có thể sai và triangle có thể suy biến. Renderer không được giả định mọi face normal đều tồn tại; nó phải phát hiện, đếm và bỏ triangle không có diện tích trước khi normalize vector 0.
+
+Checkpoint 6 tô solid bằng Painter path để tập trung vào normal/lighting. Z-buffer và near clipping hoàn chỉnh sẽ được thêm ở bài 7, nên một vài mặt có thể che nhau sai khi tắt culling.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với ba camera-space position A, B, C:
+
+$$
+N=\operatorname{normalize}((B-A)\times(C-A))
+$$
+
+Đổi B và C làm cross product đổi dấu. Ta không “sửa” winding bằng cách sort index vì thứ tự corner chính là dữ liệu định hướng mặt.
+
+Camera ở origin nhìn theo +Z. Dùng centroid $G=(A+B+C)/3$, mặt trước thỏa:
+
+$$
+N\cdot G < 0
+$$
+
+Với hướng từ mặt tới đèn L và ambient $a=0.18$:
+
+$$
+I=a+(1-a)\max(0,N\cdot L)
+$$
+
+<InteractiveLab demo="obj-viewer" mode="obj-shading" />
+
+Tắt/bật back-face culling rồi kéo model. Viền vàng cho biết triangle đang đọc; normal và intensity phải đổi theo góc model, còn số position/triangle của parser giữ nguyên.
+
+## Viết code từng bước
+
+### Bước 1 — Cho triangle suy biến trả về “không có normal”
+
+```cpp title="include/lab.hpp — face normal giữ khả năng thất bại"
+inline std::optional<Vec3> faceNormal(Vec3 a, Vec3 b, Vec3 c) {
+    return normalized(cross(b - a, c - a));
+}
+```
+
+`std::optional` buộc caller xử lý case ba điểm thẳng hàng hoặc trùng nhau. Trả `{0,0,0}` sẽ khiến code phía sau khó phân biệt “normal hợp lệ” với lỗi hình học.
+
+### Bước 2 — Cull trước projection
+
+```cpp title="include/lab.hpp — front-facing được quyết định trong camera space"
+inline bool isFrontFacing(Vec3 normal, Vec3 a, Vec3 b, Vec3 c) {
+    const Vec3 centroid = (a + b + c) * (1.0 / 3.0);
+    return dot(normal, centroid) < 0.0;
+}
+```
+
+Normal phải được tính sau model rotation. Nếu dùng normal ở local space trong khi vertex đã quay, ánh sáng sẽ đứng yên trên từng face như một sticker.
+
+### Bước 3 — Tách intensity khỏi đổi màu byte
+
+```cpp title="include/lab.hpp — Lambert có ambient và clamp rõ ràng"
+const std::optional<Vec3> light = normalized(directionToLight);
+if (!light) {
+    return std::clamp(ambient, 0.0, 1.0);
+}
+const double diffuse = std::max(0.0, dot(normal, *light));
+return std::clamp(ambient + (1.0 - ambient) * diffuse, 0.0, 1.0);
+```
+
+Hàm `lambertIntensity` trả scalar này; sau đó `shadeColor` mới nhân từng kênh base color. Parser, lighting math và cách đóng gói RGBA vẫn là ba trách nhiệm riêng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build shading checkpoint"
+cmake --build build --config Debug --target project_21_checkpoint_6
+./build/Debug/project_21_checkpoint_6.exe
+```
+
+Nhấn `C` để tắt culling. Nếu mặt quay lưng xuất hiện nhưng che sai mặt trước, đó là giới hạn được giữ lại của checkpoint Painter path, không phải lỗi normal.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi cross thành `(C-A)×(B-A)`. Culling đảo phía và các mặt nhận ánh sáng ngược lại.
+2. Tính normal một lần trước vòng render rồi chỉ quay position. Kéo model và quan sát highlight không còn bám đúng hướng mặt.
+3. Bỏ ambient, đặt nguồn sáng phía sau. Các mặt không nhận diffuse trở thành đen tuyệt đối và khó phân biệt với background.
+
+## Tự kiểm tra kết quả
+
+- Normal của triangle hợp lệ hữu hạn và dài gần 1.
+- Đổi winding làm normal đảo dấu.
+- Triangle suy biến tăng counter và không tới rasterizer.
+- Culling dùng camera-space centroid, không dùng thứ tự draw.
+- Intensity luôn trong `[ambient,1]` với normal/light hợp lệ.
+
+## Bài tập mở rộng
+
+Thêm chế độ false-color biến normal từ `[-1,1]` sang RGB `[0,255]`. Chế độ này hữu ích để tìm face có winding lạc giữa một mesh lớn.
+
+Bài tiếp theo thay Painter path bằng pipeline hoàn chỉnh: near-plane clip, project, top-left rasterization và Z-buffer.

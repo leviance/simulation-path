@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thống nhất hướng đèn trước khi lấy dot
+
+## Vấn đề cần giải quyết
+
+Cụm từ “hướng ánh sáng” có hai cách hiểu trái ngược: hướng tia sáng truyền **từ đèn xuống bề mặt**, hoặc hướng vector **từ bề mặt tới đèn**. Cả hai đều hợp lý trong lời nói. Nếu biến chỉ mang tên `lightDirection`, người đọc phải tự đoán rồi thử thêm dấu trừ cho tới khi hình có vẻ đúng.
+
+Project 19 chọn một quy ước duy nhất: `surfaceToLight` luôn chỉ từ bề mặt về phía nguồn sáng. Directional light ở rất xa, nên vector này giống nhau tại mọi face.
+
+## Hiểu ý tưởng trước khi viết code
+
+Directional light không cần position và không suy giảm theo khoảng cách. Nó chỉ giữ một unit vector:
+
+$$
+\hat{L}=normalize(surfaceToLight)
+$$
+
+Nếu đèn ở phía camera và camera nhìn theo `+Z`, bề mặt hướng về camera có normal gần `-Z`; preset front vì thế dùng `surfaceToLight=(0,0,-1)`. Hướng tia photon sẽ là `-surfaceToLight`, nhưng ta không cần lưu vector thứ hai.
+
+<InteractiveLab demo="lambert" mode="lambert-light" />
+
+## Viết code từng bước
+
+### Bước 1 — Để tên field giữ luôn quy ước
+
+```cpp title="include/lab.hpp — directional light tối thiểu"
+struct DirectionalLight {
+    // surfaceToLight luôn chỉ từ bề mặt về phía nguồn sáng.
+    Vec3 surfaceToLight{};
+};
+```
+
+Comment hữu ích, nhưng tên field mới là thứ xuất hiện ở mọi call site. Khi đọc `dot(normal, light.surfaceToLight)`, ta không phải lục lại tài liệu để quyết định dấu.
+
+### Bước 2 — Chuẩn hóa khi tạo light
+
+```cpp title="include/lab.hpp — lưu unit vector ngay từ đầu"
+inline DirectionalLight makeDirectionalLight(Vec3 surfaceToLight) {
+    DirectionalLight light{};
+    light.surfaceToLight = normalize(surfaceToLight);
+    return light;
+}
+```
+
+Ta không normalize lại trong từng face, từng frame. Hàm khởi tạo biến một input như `(0,4,-1)` thành hướng đơn vị; sau đó mọi dot product có cùng ý nghĩa.
+
+### Bước 3 — Dùng bốn preset có chủ đích
+
+```cpp title="src/main.cpp — front, top, side và back"
+lab::DirectionalLight lightPreset(int preset) {
+    if (preset == 1) {
+        return lab::makeDirectionalLight({0.0, 0.0, -1.0});
+    }
+    if (preset == 2) {
+        return lab::makeDirectionalLight({0.0, 1.0, -0.25});
+    }
+    if (preset == 3) {
+        return lab::makeDirectionalLight({1.0, 0.15, -0.25});
+    }
+    return lab::makeDirectionalLight({0.0, 0.0, 1.0});
+}
+```
+
+Front/back là cặp đối chứng bắt lỗi đảo dấu. Top/side buộc nhiều face nhận các giá trị khác nhau, thay vì chỉ kiểm một trường hợp thẳng trục quá dễ.
+
+### Bước 4 — Cho mọi input sửa cùng một light
+
+```cpp title="src/main.cpp — phím 1–4 thay đúng một nguồn dữ liệu"
+if (key >= SDLK_1 && key <= SDLK_4) {
+    lightPresetIndex = int(key - SDLK_0);
+    light = lightPreset(lightPresetIndex);
+}
+```
+
+Canvas lab dùng dropdown, source SDL dùng phím số, nhưng cả hai đều thay một `surfaceToLight`. Không có preset name ở một nơi và một dấu trừ bí mật ở nơi khác.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint hướng đèn"
+cmake --build build --config Debug --target project_19_checkpoint_3
+```
+
+Chạy target và bấm `1–4`. Ở checkpoint này wireframe vẫn dùng baseColor; hãy nhìn mũi tên vàng và title bar để xác nhận hướng trước khi nó được phép ảnh hưởng độ sáng.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi tên field thành `lightDirection` rồi truyền lúc là hướng photon, lúc là hướng tới đèn. Hai preset có thể đúng nhưng preset khác sai; phục hồi tên có nghĩa.
+2. Bỏ normalize khỏi `makeDirectionalLight`. Preset `(0,1,-0.25)` có length khác 1, nên dot ở bài sau mang cả độ dài input.
+3. Dùng `abs(dot)` để front và back cùng sáng. Cách này che lỗi quy ước và biến vật liệu một mặt thành hai mặt; diffuse phải clamp chứ không lấy trị tuyệt đối.
+
+## Tự kiểm tra kết quả
+
+- `surfaceToLight` của mọi preset có length gần 1.
+- Front là `(0,0,-1)` và back là `(0,0,1)` trong quy ước camera hiện tại.
+- Mũi tên vàng, readout XYZ và field C++ cùng chỉ từ surface về light.
+- Phím `1–4` không đổi orientation của model hoặc selected face.
+- Chưa có intensity hay material trong checkpoint 3.
+
+## Bài tập mở rộng
+
+Thêm preset “diagonal” từ vector `(1,1,-1)`. Trước khi chạy, hãy tự tính mỗi thành phần sau normalize; sau đó so với title/readout trong debugger.
+
+Bài tiếp theo sẽ dùng đúng hai unit vector đã chuẩn bị — face normal và `surfaceToLight` — để nhận một hệ số diffuse có thể giải thích bằng góc.

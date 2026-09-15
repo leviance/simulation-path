@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xử lý va chạm với bốn bức tường
+
+## Vấn đề cần giải quyết
+
+Clamp `position.x` vào `[minX,maxX]` chỉ giữ **tâm** trong bể; nửa circle vẫn xuyên tường. Hơn nữa, nếu cứ thấy overlap là đảo velocity, một ball đã được đẩy vào trong nhưng còn sai số nhỏ sẽ bị đảo ngược lại và rung ở mép.
+
+Wall solve cần làm hai việc tách bạch: đưa tâm về limit có xét radius, rồi chỉ phản xạ velocity component khi component đó đang hướng vào wall.
+
+Ta sẽ kiểm tra theo đúng thứ tự: dùng **radius** để tìm giới hạn hợp lệ của tâm; xét **hướng velocity** để biết bóng có đang lao vào tường hay không; cuối cùng mới dùng **restitution** để quyết định thành phần vận tốc pháp tuyến còn lại bao nhiêu sau cú nảy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giới hạn hợp lệ của tâm là:
+
+$$
+x\in[x_{min}+r,x_{max}-r],\qquad
+y\in[y_{min}+r,y_{max}-r]
+$$
+
+Với wall thẳng đứng, normal component là $v_x$; với wall ngang là $v_y$. Restitution $e\in[0,1]$ cho response:
+
+$$
+v_n'=-e\,v_n
+$$
+
+Tangent component giữ nguyên vì bể chưa có friction.
+
+<InteractiveLab demo="collision-tank" mode="collision-walls" />
+
+Đặt restitution về 1 rồi 0.3. Kéo một bóng mạnh về wall: ở `e=1` speed normal giữ độ lớn, ở `e=0.3` nó còn 30%. Chuyển động song song tường không bị giảm.
+
+## Viết code từng bước
+
+### Bước 1 — Tính limit của tâm từ radius
+
+```cpp title="include/lab.hpp — mặt trái của circle không được qua tường"
+const double leftLimit = bounds.minimumX + ball.radius;
+if (ball.position.x < leftLimit) {
+    result.deepestPenetration = std::max(result.deepestPenetration, leftLimit - ball.position.x);
+    ball.position.x = leftLimit;
+```
+
+`deepestPenetration` giữ độ xuyên trước khi sửa để title bar/tests biết step đã khó đến mức nào.
+
+### Bước 2 — Chỉ đảo incoming velocity
+
+```cpp title="include/lab.hpp — correction không được tạo bounce lần hai"
+if (ball.velocity.x < 0.0) {
+    ball.velocity.x = -ball.velocity.x * bounce;
+}
+++result.hitCount;
+```
+
+Ở left wall, `vx<0` mới là đi ra ngoài. Nếu `vx>0`, ball đã quay vào trong; ta chỉ cần correction position.
+
+### Bước 3 — Làm tương tự cho right wall với dấu ngược
+
+```cpp title="include/lab.hpp — right wall kiểm vx dương"
+const double rightLimit = bounds.maximumX - ball.radius;
+if (ball.position.x > rightLimit) {
+    result.deepestPenetration = std::max(result.deepestPenetration, ball.position.x - rightLimit);
+    ball.position.x = rightLimit;
+    if (ball.velocity.x > 0.0) {
+        ball.velocity.x = -ball.velocity.x * bounce;
+    }
+```
+
+Bottom/top lặp cùng logic trên Y. Tách bốn block làm code dài hơn một helper “thông minh”, nhưng dấu và limit có thể đọc trực tiếp khi debug.
+
+### Bước 4 — Resolve wall sau movement
+
+Mỗi substep gọi `integrateBall` trước, sau đó `resolveWallCollision`. Ta cần candidate position đã đi qua wall để biết contact xảy ra; gọi ngược sẽ chỉ sửa state cũ.
+
+## Ghép các phần lại
+
+```bash title="Terminal — thêm boundary response"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_checkpoint_3
+./build/Debug/project_24_checkpoint_3.exe
+```
+
+Kéo dài cửa sổ và quan sát bể được letterbox. Bounds vật lý vẫn là 16×10; resize chỉ đổi scale pixel.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `minimumX` thay `minimumX+radius`. Nửa bóng sẽ biến mất qua tường; quan sát rồi hoàn tác.
+2. Bỏ nhánh `if (velocity.x<0)` ở left wall. Tạo ball overlap nhưng đang đi vào trong; nó bị bật ra ngoài lại. Hoàn tác kiểm hướng.
+3. Nhân cả `velocity` vector với restitution ở wall dọc. Tangent speed bị mất không có lý do; hoàn tác và chỉ sửa component normal.
+
+## Tự kiểm tra kết quả
+
+- Tâm luôn nằm trong bounds đã co vào một radius.
+- Corner penetration có thể báo hai wall hit trong cùng call.
+- Left/bottom chỉ đảo component âm; right/top chỉ đảo component dương.
+- Restitution được clamp vào `[0,1]`.
+- `e=1` giữ độ lớn normal component; `e=0` đưa nó về zero.
+- Ball overlap nhưng đã đi vào trong không bị đảo lần hai.
+- Resize không thay world bounds hoặc collision result.
+
+## Bài tập mở rộng
+
+Thêm friction cho wall bằng cách nhân tangent component với một hệ số riêng. Đặt tên nó `tangentRetention`, không dùng lại restitution vì hai hệ số trả lời hai câu hỏi khác nhau.
+
+Bài tiếp theo rời boundary cố định và phát hiện contact giữa hai circle chuyển động.

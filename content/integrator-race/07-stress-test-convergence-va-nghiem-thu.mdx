@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Stress test, convergence và nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Một ảnh chụp ở một `dt` không thể chứng minh implementation đúng. RK4 có thể trông đẹp chỉ vì ta chưa chạy đủ lâu; Verlet có thể thắng về energy nhưng thua phase; Euler có thể chấp nhận được nếu bài toán ngắn và budget rất thấp.
+
+Final cần một protocol lặp lại được: giữ bài toán cùng duration, chỉ thay `dt`, đo error và force evaluations. Sau đó chạy riêng một stress test dài hạn để quan sát stability và energy behavior.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nếu global error của một method có dạng $C\Delta t^p$, khi halve `dt` ta kỳ vọng:
+
+$$
+\frac{error(\Delta t)}{error(\Delta t/2)}\approx 2^p
+$$
+
+Euler có $p=1$, Velocity Verlet có $p=2$, classical RK4 có $p=4$. Tỷ lệ mong đợi lần lượt gần 2, 4 và 16 khi `dt` đã vào miền hội tụ. Đây là kiểm tra order, không phải lời hứa rằng RK4 luôn là lựa chọn tốt nhất.
+
+<InteractiveLab demo="integrator-race" mode="integrator-validation" />
+
+Chạy nhanh 20 giây ở từng preset `dt`. Ghi phase-space error, energy drift và evaluations. Một kết luận có ích phải nói rõ thời lượng, step size, tiêu chí và cost — chẳng hạn “Verlet giữ energy bị chặn với một nửa số force evaluations của RK4 trong oscillator dài hạn”.
+
+## Viết code từng bước
+
+### Bước 1 — Tách một run khỏi render loop
+
+```cpp title="include/lab.hpp — kết quả của một run có cost"
+struct IntegratorRunResult {
+    OscillatorState state{};
+    std::size_t steps{};
+    std::size_t forceEvaluations{};
+};
+```
+
+CTest không mở SDL window. Nó gọi thẳng hàm thuần để kết quả không phụ thuộc FPS, GPU hay thao tác người dùng.
+
+### Bước 2 — Chọn số step trước khi chạy
+
+```cpp title="include/lab.hpp — duration chia thành fixed step"
+const std::size_t stepCount = std::size_t(std::floor((duration + kIntegratorEpsilon) / deltaSeconds));
+for (std::size_t index = 0; index < stepCount; ++index) {
+    const IntegratorStepResult step = stepIntegrator(kind, run.state, parameters, deltaSeconds);
+    if (step.forceEvaluations == 0) {
+        break;
+    }
+```
+
+Các duration trong convergence test chia hết cho `dt`, nên mọi run kết thúc cùng elapsed. Không “chạy đến khi frame time vượt 2 giây”.
+
+### Bước 3 — Tích lũy state và evaluation thật
+
+```cpp title="include/lab.hpp — commit đúng một solver step"
+run.state = step.state;
+run.forceEvaluations += std::size_t(step.forceEvaluations);
+++run.steps;
+```
+
+`run.steps` đếm step đã commit, không mặc định bằng kế hoạch nếu solver từ chối input.
+
+### Bước 4 — Viết test theo tính chất, không theo ảnh
+
+CTest kiểm ba nhóm:
+
+- một step có số cụ thể và cost `1/2/4`;
+- halve `dt` làm error giảm với tỷ lệ phù hợp bậc hội tụ;
+- trong run 20 giây, Euler energy tăng mạnh còn Verlet drift vẫn bị chặn.
+
+Không dùng `assert`, vì Release có thể định nghĩa `NDEBUG` và xóa phép kiểm. Helper `check` luôn chạy ở cả hai cấu hình.
+
+## Ghép các phần lại
+
+```bash title="Terminal — nghiệm thu toàn bộ Project 23"
+cmake -S . -B build-all -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build-all --config Debug
+ctest --test-dir build-all -C Debug --output-on-failure
+cmake --build build-all --config Release
+ctest --test-dir build-all -C Release --output-on-failure
+./build-all/Debug/project_23_final.exe
+```
+
+Lệnh build phải đi qua starter, cả bảy checkpoint và final. Một checkpoint cũ không compile vẫn là lỗi của khóa học, dù final chạy.
+
+## Thử làm sai để hiểu đúng
+
+1. So coarse run ở 2 giây với fine run ở 2,01 giây. Phase-space error chứa khác biệt thời gian; sửa duration chia hết cho cả hai `dt`, rồi hoàn tác case sai.
+2. Chỉ kiểm `rk4Error < 0.01`. Một implementation dùng exact solution có thể pass; thêm evaluation count và convergence ratio, rồi hoàn tác mọi shortcut dùng đáp án.
+3. Xếp hạng chỉ bằng error mà bỏ cost. RK4 sẽ luôn có vẻ miễn phí; đưa force evaluations trở lại bảng.
+4. Dùng `assert` trong tests, build Release và xem test có còn thực sự kiểm điều kiện không. Hoàn tác bằng helper `check` chạy thật.
+
+## Tự kiểm tra kết quả
+
+- Starter, bảy checkpoint và final đều build độc lập với warning nghiêm ngặt.
+- Exact quarter-period và energy conservation pass trong tolerance.
+- One-step Euler/Verlet có kết quả tay đúng; RK4 dùng bốn evaluations.
+- Sau N lockstep, elapsed bằng nhau và counters là `N/2N/4N`.
+- Halve `dt` giảm error; ratio tiến gần `2/4/16` cho Euler/Verlet/RK4.
+- Long-run Euler energy growth và bounded Verlet energy đều được test.
+- Canvas có pause, single-step, reset, stress run, DPR, pointer capture, keyboard và reduced-motion.
+- Debug lẫn Release CTest đều chạy thật và pass.
+
+## Bài tập mở rộng
+
+Thêm CSV benchmark gồm `method, dt, duration, phaseSpaceError, energyDrift, evaluations, errorPerEvaluation`. Chạy nhiều amplitude và stiffness, sau đó giải thích vì sao “người thắng” thay đổi theo tiêu chí.
+
+Project 23 kết thúc với một cách đánh giá numerical method có bằng chứng: accuracy, order, stability và cost. Project 24 sẽ dùng các nền tảng này trong một bể va chạm bóng, nơi contact handling tạo thêm những sai số và ràng buộc mới.

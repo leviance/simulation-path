@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng khung tam giác trong screen space
+
+## Vấn đề cần giải quyết
+
+Project 15 kết thúc ở một `screen` point. Muốn vẽ bề mặt, ta cần ba point như vậy và một thuật toán trả lời câu hỏi khó hơn vẽ ba cạnh: **pixel nào thực sự nằm bên trong tam giác?**
+
+Đừng vội viết công thức. Nếu window, framebuffer, thứ tự ba đỉnh hoặc thao tác kéo đang sai, một rasterizer đúng vẫn tạo hình khó hiểu. Checkpoint đầu chỉ dựng bộ khung nhìn thấy được: ba screen vertex `A`, `B`, `C`, wireframe và ba handle có thể kéo.
+
+## Hiểu ý tưởng trước khi viết code
+
+Từ đây, mỗi vertex đã ở screen space:
+
+- gốc `(0,0)` nằm ở góc trên trái;
+- X tăng sang phải;
+- Y tăng xuống dưới;
+- đơn vị là pixel, nhưng tọa độ vertex vẫn là số thực.
+
+Ta giữ rasterization tách khỏi pipeline 3D. Một triangle đến từ model hay do người dùng kéo chuột đều đi vào cùng một `Triangle2`.
+
+<InteractiveLab demo="triangle-raster" mode="triangle-frame" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo kiểu dữ liệu đúng với bài toán
+
+```cpp title="include/lab.hpp — ba vertex trong screen space"
+struct Vec2 {
+    double x{};
+    double y{};
+};
+
+struct Triangle2 {
+    Vec2 a{};
+    Vec2 b{};
+    Vec2 c{};
+};
+```
+
+`double` cho phép vertex nằm giữa hai pixel. Ta chưa đổi chúng thành `int`; làm tròn sớm sẽ phá hỏng phép lấy mẫu ở các bài sau.
+
+### Bước 2 — Tạo triangle theo kích thước cửa sổ
+
+```cpp title="include/lab.hpp — triangle mặc định co theo viewport"
+inline Triangle2 makeDefaultTriangle(int width, int height) {
+    const double centerX = double(width) * 0.5;
+    const double centerY = double(height) * 0.52;
+    const double radius = double(std::min(width, height)) * 0.31;
+    return {
+        {centerX, centerY - radius},
+        {centerX + radius * 0.92, centerY + radius * 0.72},
+        {centerX - radius * 0.92, centerY + radius * 0.72},
+    };
+}
+```
+
+Triangle được dựng quanh giữa cửa sổ thay vì đóng đinh ở `960×640`. Khi resize, `R` luôn tạo lại một hình hợp lý cho kích thước hiện tại.
+
+### Bước 3 — Nối đúng ba cạnh
+
+Wireframe gồm `AB`, `BC`, `CA`. Mỗi tọa độ chỉ được làm tròn tại lúc gọi primitive vẽ line:
+
+```cpp title="src/main.cpp — đường cạnh AB dùng primitive framebuffer"
+drawLine(
+    pixels,
+    width,
+    height,
+    int(std::lround(triangle.a.x)),
+    int(std::lround(triangle.a.y)),
+    int(std::lround(triangle.b.x)),
+    int(std::lround(triangle.b.y)),
+    color
+);
+```
+
+Hai cạnh còn lại dùng cùng cách gọi. Màu handle A/B/C lần lượt là đỏ, xanh lá và xanh dương; quy ước này sẽ được dùng lại khi nội suy màu ở bài cuối.
+
+Cuối frame, chương trình vẫn dùng `SDL_UpdateTexture` để chép CPU framebuffer sang streaming texture, rồi `SDL_RenderTexture` và `SDL_RenderPresent`. Triangle rasterizer ở các bài sau chỉ thay nội dung mảng pixel; nó không thay chuỗi present đã kiểm chứng này.
+
+### Bước 4 — Kéo vertex nhưng không sửa vertex khác
+
+`nearestVertex` tìm handle gần mouse nhất trong bán kính 18 pixel. Khi đã chọn, `editableVertex` trả reference tới đúng `a`, `b` hoặc `c`; mouse motion chỉ ghi vào reference đó. `SDL_CaptureMouse(true)` giữ thao tác kéo ngay cả khi con trỏ tạm rời window.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build bộ khung Project 16"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_checkpoint_1
+```
+
+Kéo lần lượt cả ba handle rồi nhấn `R`. Chưa có pixel fill ở checkpoint này; khoảng trống bên trong là chủ ý.
+
+## Thử làm sai để hiểu đúng
+
+1. Làm tròn ba vertex ngay khi tạo `Triangle2`. Sau đó resize vài lần và để ý chuyển động bị giật theo pixel; hoàn tác để giữ tọa độ số thực.
+2. Nối `AB`, `BC` rồi lại `AB`. Đường `CA` biến mất; đây là cách nhanh để thấy thứ tự topology cũng cần kiểm tra.
+3. Cập nhật cả ba vertex bằng mouse delta. Tam giác bị kéo nguyên khối thay vì sửa hình; phục hồi reference tới đúng handle.
+
+## Tự kiểm tra kết quả
+
+- Window, renderer, streaming texture và CPU framebuffer khởi tạo có kiểm lỗi.
+- Có đúng ba screen vertex số thực và ba cạnh `AB`, `BC`, `CA`.
+- Kéo A không làm B hoặc C thay đổi.
+- Pointer vẫn thuộc thao tác kéo khi đi qua mép window.
+- `R` và resize tạo lại triangle phù hợp với kích thước mới.
+- Chưa có `SDL_RenderGeometry` hoặc hàm fill tam giác có sẵn.
+
+## Bài tập mở rộng
+
+Thêm phím `Tab` để chọn A, B, C theo vòng và dùng arrow key dịch vertex đang chọn mỗi lần một pixel. Giữ đường mouse hiện tại; hai cách nhập phải cùng sửa `Triangle2`.
+
+Bài tiếp theo sẽ khoanh vùng nhỏ nhất có thể chứa pixel của triangle. Đây là bước giúp rasterizer không phải kiểm tra toàn màn hình.

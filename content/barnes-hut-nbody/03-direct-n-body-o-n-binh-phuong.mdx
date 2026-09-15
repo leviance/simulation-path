@@ -1,0 +1,98 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Direct N-body O(N²)
+
+## Vấn đề cần giải quyết
+
+Barnes–Hut là phép xấp xỉ. Nếu không có một implementation đơn giản làm chuẩn, ta chỉ biết hình ảnh “có vẻ giống thiên hà” mà không biết lực tại từng body sai bao nhiêu.
+
+Checkpoint 3 viết direct summation: với mỗi target, quét toàn bộ sources, bỏ chính target rồi cộng từng acceleration thật. Nó chậm khi N lớn, nhưng dễ đọc và rất khó cùng sai theo cách của Octree traversal.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một target dùng $N-1$ cặp. Làm điều đó cho N target tạo:
+
+$$
+W_{direct}(N)=N(N-1)
+$$
+
+Đây là quadratic complexity. Nhân N gấp đôi làm work gần gấp bốn, dù renderer vẫn chỉ vẽ gấp đôi số chấm.
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-direct" />
+
+Đổi 128, 512 và 1.024 bodies. Readout của body đang chọn tăng theo N−1; scaling study cho full pass tăng theo N×(N−1).
+
+## Viết code từng bước
+
+### Bước 1 — Bỏ self bằng index, không bằng distance
+
+```cpp title="include/lab.hpp — direct source loop"
+for (std::size_t sourceIndex = 0; sourceIndex < bodies.size(); ++sourceIndex) {
+    if (sourceIndex == targetIndex) {
+        continue;
+    }
+```
+
+Hai body khác nhau được phép trùng position; softening giữ cặp ấy hữu hạn. Chỉ cùng index mới là self interaction.
+
+### Bước 2 — Cộng đúng một acceleration cho mỗi source
+
+```cpp title="include/lab.hpp — direct accumulation"
+result.acceleration += softenedAcceleration(
+    bodies[targetIndex].position,
+    bodies[sourceIndex].position,
+    bodies[sourceIndex].mass,
+    gravitationalConstant,
+    softening
+);
+++result.metrics.exactInteractions;
+```
+
+Counter nằm ngay cạnh công việc nó mô tả. Ta không suy đoán work từ thời gian chạy.
+
+### Bước 3 — Tạo full-system pass
+
+```cpp title="include/lab.hpp — directAccelerations"
+for (std::size_t targetIndex = 0; targetIndex < bodies.size(); ++targetIndex) {
+    const AccelerationResult result = directAcceleration(
+        bodies,
+        targetIndex,
+        gravitationalConstant,
+        softening
+    );
+    accelerations[targetIndex] = result.acceleration;
+    interactions += result.metrics.exactInteractions;
+}
+```
+
+Acceleration vector được tính từ cùng một snapshot `bodies`. Không cập nhật position giữa vòng target, nếu không target sau sẽ nhìn một thời điểm vật lý khác target trước.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 3"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_31_checkpoint_3
+```
+
+Chọn nhiều body và xác nhận mỗi body dùng đúng 511 sources trong preset 512. Checkpoint này mới hiển thị vector lực; simulation bắt đầu ở bài sau.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ self bằng `distance == 0`. Hai body khác index nhưng trùng position bị bỏ nhầm.
+2. Cập nhật velocity ngay trong vòng target. Kết quả phụ thuộc thứ tự index dù cùng timestep.
+3. Chỉ tính lực cho body đang được vẽ nổi bật rồi gọi đó là benchmark full system. Hai workload không còn so được.
+
+## Tự kiểm tra kết quả
+
+- One-body system trả acceleration 0 và 0 interactions.
+- Một target trong N-body system trả đúng N−1 interactions.
+- Full pass trả vector acceleration có đúng N phần tử.
+- Full work bằng N×(N−1), kể cả khi bodies trùng position.
+- Oracle không include hoặc đọc bất kỳ Octree node nào.
+- Mọi acceleration hữu hạn với softening dương.
+
+## Bài tập mở rộng
+
+Với hai body, nhân acceleration của mỗi body với mass tương ứng để lấy force. Kiểm $\mathbf{F}_{01}+\mathbf{F}_{10}\approx0$ và giải thích vì sao hai acceleration không nhất thiết có cùng độ lớn.
+
+Bài tiếp theo dùng full direct pass làm đầu vào cho fixed-step integrator.

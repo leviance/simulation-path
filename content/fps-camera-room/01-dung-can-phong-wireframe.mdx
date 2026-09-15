@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng căn phòng wireframe đứng yên
+
+## Vấn đề cần giải quyết
+
+Project 13 chỉ có một cube nằm trước camera. Với góc nhìn thứ nhất, ta cần một thế giới đủ lớn để nhận ra mình đang đi tới, lùi lại hay xoay đầu. Bài đầu tiên chưa đụng tới WASD: mục tiêu chỉ là dựng một căn phòng dễ đọc và giữ toàn bộ tọa độ của nó trong world space.
+
+Starter đã có cửa sổ SDL3, framebuffer, Bresenham, resize và crosshair. Sau khi vẽ xong, đường `SDL_UpdateTexture` → `SDL_RenderTexture` → `SDL_RenderPresent` vẫn đưa mảng pixel lên cửa sổ như các project trước. Bạn sẽ bổ sung dữ liệu 3D cùng phép chiếu đã quen từ Project 11. Làm theo thứ tự này giúp ta biết căn phòng đã đúng trước khi camera bắt đầu thay đổi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Căn phòng dùng trục Y làm chiều cao, camera nhìn về +Z. Bounds mặc định là:
+
+$$
+x\in[-6,6],\quad y\in[0,4],\quad z\in[0,22]
+$$
+
+Floor grid không được tạo bằng vài đường dài từ đầu tới cuối phòng. Project này chưa có near-plane clipping; nếu một line dài có đầu nằm sau camera, bỏ cả line sẽ làm mất phần còn ở phía trước. Ta chia grid thành các segment dài hai world unit để từng đoạn biến mất riêng lẻ.
+
+<InteractiveLab demo="fps-camera" mode="camera-room" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho bounds và segment
+
+`RoomBounds` là nguồn sự thật duy nhất cho cả geometry lẫn collision ở bài cuối. `SegmentKind` chỉ phục vụ màu vẽ, không thay đổi phép toán:
+
+```cpp title="include/lab.hpp — dữ liệu căn phòng trong world space"
+struct RoomBounds {
+    double minX{-6.0};
+    double maxX{6.0};
+    double floorY{0.0};
+    double ceilingY{4.0};
+    double minZ{0.0};
+    double maxZ{22.0};
+};
+
+enum class SegmentKind {
+    Floor,
+    Wall,
+    Ceiling,
+};
+
+struct Segment3 {
+    Vec3 from{};
+    Vec3 to{};
+    SegmentKind kind{SegmentKind::Wall};
+};
+```
+
+### Bước 2 — Sinh floor grid theo từng cell
+
+Vòng ngoài chọn một đường song song trục Z; vòng trong chẻ đường ấy thành nhiều đoạn ngắn. `std::min` xử lý cell cuối nếu kích thước phòng không chia hết cho spacing:
+
+```cpp title="include/lab.hpp — chia floor grid thành segment ngắn"
+for (double x = bounds.minX; x <= bounds.maxX + 1e-9; x += gridSpacing) {
+    for (double z = bounds.minZ; z < bounds.maxZ - 1e-9; z += gridSpacing) {
+        const double nextZ = std::min(z + gridSpacing, bounds.maxZ);
+        appendSegment(room, {x, bounds.floorY, z}, {x, bounds.floorY, nextZ}, SegmentKind::Floor);
+    }
+}
+```
+
+Sau đó làm một lượt tương tự theo trục X, rồi thêm ceiling frame, bốn cột góc, rail hai bên và các post ở tường cuối. Tất cả endpoint đều lấy từ `bounds`, không rải số kích thước phòng trong render loop.
+
+### Bước 3 — Tạo geometry đúng một lần
+
+Room không thay đổi theo frame, vì vậy đặt nó ngoài vòng lặp chính:
+
+```cpp title="src/main.cpp — tạo room trước render loop"
+const lab::RoomBounds roomBounds{};
+const lab::RoomGeometry room = lab::makeRoomGeometry(roomBounds, 2.0);
+```
+
+Nếu bạn đặt lời gọi này trong `while (running)`, chương trình sẽ cấp phát lại cả vector dù căn phòng không hề đổi.
+
+### Bước 4 — Project hai đầu rồi mới vẽ
+
+Checkpoint 1 chưa có camera pose. Hàm `drawRoom` xem tọa độ room như camera-space coordinate của một camera cố định và chỉ vẽ khi cả hai endpoint visible:
+
+```cpp title="src/main.cpp — project rồi raster từng room segment"
+const lab::ProjectionResult from = lab::projectCameraPoint(segment.from, lens, nearPlane, width, height);
+const lab::ProjectionResult to = lab::projectCameraPoint(segment.to, lens, nearPlane, width, height);
+if (from.status != lab::ProjectionStatus::Visible || to.status != lab::ProjectionStatus::Visible) {
+    continue;
+}
+drawLine(
+    pixels,
+    width,
+    height,
+    int(std::lround(from.screen.x)),
+    int(std::lround(from.screen.y)),
+    int(std::lround(to.screen.x)),
+    int(std::lround(to.screen.y)),
+    segmentColor(segment.kind)
+);
+```
+
+## Ghép các phần lại
+
+Build checkpoint đầu:
+
+```bash title="Terminal — build căn phòng tĩnh"
+cmake --build build --config Debug --target project_14_checkpoint_1
+```
+
+Bạn phải thấy floor grid hội tụ về phía tường cuối, khung ceiling và crosshair ở chính giữa. Title bar cho biết số segment total và số segment có hai endpoint visible.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `gridSpacing` thành `0`. Dự đoán số segment trước khi chạy; guard phải trả room rỗng thay vì lặp vô hạn. Hoàn tác về `2.0` sau khi quan sát.
+2. Thay các cell dọc Z bằng một segment duy nhất từ `minZ` tới `maxZ`. Khi camera được thêm ở bài sau, dự đoán line sẽ biến mất sớm ra sao khi endpoint gần đi qua sau camera; hoàn tác để giữ geometry đã chia nhỏ.
+3. Chuyển `makeRoomGeometry` vào trong render loop. Dùng debugger đặt breakpoint để thấy nó chạy mỗi frame, rồi đưa lời gọi trở lại trước loop.
+
+## Tự kiểm tra kết quả
+
+- `room.size()` lớn hơn 100 và không tăng theo thời gian.
+- Mọi endpoint nằm trong `RoomBounds`.
+- Crosshair không phụ thuộc geometry và luôn ở giữa framebuffer sau resize.
+- Không gọi `drawLine` trước khi kiểm tra status của cả hai endpoint.
+- Checkpoint 1 build và chạy mà chưa cần `FpsCamera`.
+
+## Bài tập mở rộng
+
+Thêm một rail ngang ở cao độ `y=3`. Hãy sinh nó từ `bounds` và `gridSpacing`, không viết nhiều lời gọi `appendSegment` có tọa độ Z lặp lại.
+
+Bài tiếp theo sẽ giữ nguyên vector `room` này và chỉ thêm camera position vào view transform.

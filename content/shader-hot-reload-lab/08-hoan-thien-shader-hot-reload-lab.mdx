@@ -1,0 +1,130 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Shader Hot Reload Lab
+
+## Vấn đề cần giải quyết
+
+Một lần Save thành công chưa chứng minh shader lab bền. Final phải chịu được file tạm biến mất, compile error, link mismatch, uniform thiếu, nhiều lần Save liên tiếp, resize high-DPI và chuỗi fail–pass lặp lại. Đồng thời mọi candidate lỗi phải được dọn mà active program vẫn sống.
+
+Ta tách phần có thể tự động hóa khỏi phần cần driver thật. CTest khóa fingerprint, generation, transactional state và debounce bằng CPU thuần; checklist trong app khóa compile/link log, hình ảnh cùng resource lifetime.
+
+## Hiểu ý tưởng trước khi viết code
+
+Validation cuối đi theo dependency:
+
+```text
+mesh/layout → shader interface → failed commit invariant
+            → successful commit invariant → watcher debounce
+            → runtime driver experiments → cleanup
+```
+
+Nếu state machine CPU sai, chưa cần mở window. Nếu CPU checks pass nhưng shader thật không reload, ta tập trung vào file path, driver log và GL object lifecycle.
+
+<InteractiveLab demo="shader-hot-reload" mode="shader-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Báo từng invariant bằng tên
+
+```cpp title="include/pipeline.hpp — ShaderLabValidationReport"
+struct ShaderLabValidationReport {
+    bool meshLayout{};
+    bool shaderInterface{};
+    bool failedReloadKeepsGeneration{};
+    bool successfulReloadAdvancesGeneration{};
+    bool watcherDebounces{};
+
+    bool allPassed() const {
+        return meshLayout && shaderInterface && failedReloadKeepsGeneration && successfulReloadAdvancesGeneration && watcherDebounces;
+    }
+};
+```
+
+`allPassed` tiện cho title bar, còn từng field vẫn có mặt trong CTest để biết contract nào hỏng.
+
+### Bước 2 — Test fail và pass trên cùng state
+
+```cpp title="tests/tests.cpp — transactional sequence"
+lab::ReloadState state{};
+state.activeFingerprint = 100;
+lab::recordReloadAttempt(state, 200, false);
+check(state.generation == 1, "failed reload keeps program generation");
+check(state.activeFingerprint == 100, "failed reload preserves last-good fingerprint");
+
+lab::recordReloadAttempt(state, 300, true);
+check(state.generation == 2, "successful reload advances generation");
+check(state.activeFingerprint == 300, "successful reload commits candidate fingerprint");
+```
+
+Hai bước dùng chung state để bắt lỗi failure vô tình làm hỏng lần commit sau.
+
+### Bước 3 — Cleanup theo dependency của OpenGL
+
+```cpp title="src/main.cpp — cleanup final"
+// Cleanup: xóa program và mesh khi OpenGL context vẫn còn current.
+renderer.destroy(gl);
+destroyWindowAndContext(window, context);
+return EXIT_SUCCESS;
+```
+
+Trong `destroy`, active program bị xóa trước EBO/VBO/VAO. Sau đó context mới được destroy; không GL function nào chạy trên context đã chết.
+
+## Ghép các phần lại
+
+Build và chạy nghiệm thu ở cả hai cấu hình. Mọi lệnh đều có timeout hữu hạn cho CTest:
+
+```bash title="Terminal — nghiệm thu Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — nghiệm thu Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Sau CTest, chạy final và thực hiện chuỗi: Save đúng → chèn compile error → Save → sửa → Save → tạo varying mismatch → Save → sửa → resize → kéo mouse. Cube chỉ được đổi generation ở hai lần candidate hoàn toàn hợp lệ.
+
+## Source hoàn chỉnh gồm những gì?
+
+- `pipeline.hpp`: cube/Mat4, file reader, fingerprint, interface, reload/watch state và validation.
+- `gl_api.hpp`: function pointers cần cho OpenGL 3.3 Core.
+- `shader_renderer.hpp`: compile/link candidate, transactional commit, uniform upload và mesh draw.
+- `lab.vert`, `lab.frag`: source GLSL đang được watcher đọc trực tiếp.
+- `main.cpp`: SDL lifecycle, F5, auto watcher, time/mouse/resize và cleanup.
+- `tests.cpp`: CTest thuần CPU cho state contract.
+
+Phần **Mã hoàn chỉnh** bên dưới được lấy trực tiếp từ final checkpoint, bao gồm cả hai file shader, và trùng với source trong ZIP.
+
+## Thử làm sai để hiểu đúng
+
+1. Xóa active program trước candidate compile. Compile error phải làm cube biến mất; đây là lỗi transactional nghiêm trọng.
+2. Không tắt watcher `pending` sau reload. Attempts tăng liên tục dù file đứng yên.
+3. Giữ location cũ sau program swap. Reload có thể pass nhưng uniforms không còn cập nhật đúng.
+4. Destroy context trước `renderer.destroy`. OpenGL cleanup chạy khi không còn context current.
+
+Hoàn tác từng lỗi và chạy lại cả CTest lẫn runtime sequence.
+
+## Tự kiểm tra kết quả
+
+- [ ] Starter, tám checkpoint và final đều build độc lập.
+- [ ] Shader directory in ra trùng snapshot đang chạy.
+- [ ] Compile/link/interface errors có diagnostics phân biệt được.
+- [ ] Fail không đổi generation hoặc active fingerprint.
+- [ ] Pass tăng generation đúng một và dọn previous program.
+- [ ] Watcher debounce một chuỗi Save thành một attempt.
+- [ ] Uniform changes không kích hoạt compiler.
+- [ ] High-DPI resolution/mouse dùng framebuffer pixels.
+- [ ] Debug và Release CTest đều đạt.
+- [ ] GPU resources bị xóa trước context/window.
+
+Trước khi kết thúc, hãy giải thích bằng lời của bạn vì sao “shader reload thành công” phải bao gồm cả uniform/interface validation, không chỉ `GL_LINK_STATUS`.
+
+## Bài tập mở rộng
+
+1. Thêm include preprocessor nhỏ cho GLSL và thiết kế dependency stamps.
+2. Lưu diagnostics gần nhất ra file trong thư mục user data, không ghi vào shader source.
+3. Thêm full-screen triangle mode nhưng giữ transactional program contract.
+
+Project 36 sẽ dùng chính workflow shader này để ray-march sphere, box và torus mà không cần mesh cho từng vật thể.

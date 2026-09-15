@@ -1,0 +1,151 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng renderer độc lập với draw order
+
+## Vấn đề cần giải quyết
+
+Một góc cube đẹp chưa chứng minh Z-buffer đúng. Lỗi clear, dấu compare hoặc depth gắn sai vertex có thể chỉ xuất hiện ở góc khác. Definition of Done của Project 17 là một invariant trên **toàn bộ output**:
+
+> Cùng mesh, camera và góc quay; đảo thứ tự mười hai triangle không được làm đổi bất kỳ pixel color hoặc depth nào khi depth test bật.
+
+Bài cuối thêm hai dụng cụ: depth view để nhìn buffer và CTest để so hai lần render. Ta cũng giữ một đối chứng âm: tắt depth phải làm hai order khác nhau ở scene overlap, nếu không test có thể đang dùng một tình huống quá dễ.
+
+Với `Depth test` bật, readout “Chênh lệch khi đảo order” phải là `0 color · 0 depth`. Tắt depth và dùng preset overlap; color difference phải lớn hơn zero.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta cần cả kiểm tra trực quan và invariant tự động. Depth view giúp hiểu dữ liệu, còn CTest so toàn buffer để không bỏ sót một pixel sai.
+
+<InteractiveLab demo="z-buffer" mode="depth-validate" />
+
+## Viết code từng bước
+
+### Bước 1 — Hiển thị depth mà không sửa thuật toán
+
+Depth view chỉ chạy sau `renderCube`. Nó đọc từng depth và thay color buffer bằng grayscale để debug:
+
+```cpp title="include/lab.hpp — gần sáng, far/clear tối"
+inline std::uint8_t depthShade(double depth) {
+    if (!std::isfinite(depth) || depth >= 1.0) {
+        return 12;
+    }
+    const double brightness =
+        (1.0 - std::clamp(depth, 0.0, 1.0)) * 235.0 + 20.0;
+    return std::uint8_t(std::lround(brightness));
+}
+```
+
+`V` không đổi projection, compare hay depth buffer; nó chỉ chọn cách trình bày kết quả. Nếu depth view nằm trong callback raster, việc bật V có thể vô tình thay color/depth path cần kiểm tra.
+
+### Bước 2 — So depth buffer với tolerance
+
+```cpp title="include/lab.hpp — kiểm mọi ô depth"
+inline bool buffersNearlyEqual(
+    const std::vector<double>& first,
+    const std::vector<double>& second,
+    double epsilon = 1e-9
+) {
+    if (first.size() != second.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < first.size(); ++index) {
+        if (std::abs(first[index] - second[index]) > epsilon) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+Color là integer RGBA nên test bằng equality tuyệt đối. Depth là `double`; cùng scene hiện tại đáng ra cho cùng phép tính, nhưng tolerance nhỏ làm contract bền hơn trước khác biệt compiler mà vẫn bắt được sai surface.
+
+### Bước 3 — Render hai frame chỉ khác order
+
+Test helper tạo buffer `160×120`, clear giống chương trình thật rồi gọi `renderCube`:
+
+```cpp title="tests/tests.cpp — hai lần render có cùng scene"
+const RenderedFrame normal = render(false, true);
+const RenderedFrame reversed = render(true, true);
+
+check(
+    normal.colors == reversed.colors,
+    "color buffer is independent of draw order"
+);
+check(
+    lab::buffersNearlyEqual(
+        normal.depths.values(),
+        reversed.depths.values()
+    ),
+    "depth buffer is independent of draw order"
+);
+```
+
+Test không chụp screenshot và không cần SDL. Nó so mọi phần tử buffer, vì một pixel sai ở góc cũng là renderer sai.
+
+### Bước 4 — Giữ đối chứng âm
+
+```cpp title="tests/tests.cpp — scene thật sự làm lộ lỗi khi tắt depth"
+const RenderedFrame painterNormal = render(false, false);
+const RenderedFrame painterReversed = render(true, false);
+
+check(
+    painterNormal.colors != painterReversed.colors,
+    "without a depth test the cube depends on triangle order"
+);
+```
+
+Nếu assertion này thất bại, chưa chắc Z-buffer sai; có thể góc test tình cờ không làm hai order khác nhau. Khi đó hãy chọn scene có nhiều face overlap hơn thay vì xóa đối chứng.
+
+### Bộ test còn khóa những gì?
+
+- mesh có 8 vertex, 12 triangle, 6 face và mọi index hợp lệ;
+- near maps về depth 0, far maps về 1, depth tăng theo camera Z;
+- `DepthBuffer` có đúng số phần tử, row-major index và resize/clear đúng;
+- barycentric example nội suy `0.20/0.50/0.80` thành `0.50`;
+- fragment gần pass, fragment xa và equal-depth fail;
+- renderer tạo cả pass lẫn reject;
+- mọi depth cuối hữu hạn và nằm trong `[0,1]`.
+
+## Ghép các phần lại
+
+### Build, test và chạy bản hoàn chỉnh
+
+```bash title="Terminal — kiểm chứng Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Sau khi CTest pass, chạy `project_17_final`:
+
+1. Dùng `1–3` để thử ba góc nhìn.
+2. Bật `D`, nhấn `O`: hình không đổi.
+3. Tắt `D`, nhấn `O`: preset 3 phải đổi màu ở vùng overlap.
+4. Bật lại `D`, nhấn `V`: gần sáng, xa tối, background gần đen.
+5. Dùng `Space`, `N`, drag và `R`; tất cả phải đi qua cùng renderer.
+6. Resize liên tục; cube vẫn đúng và buffer không lệch kích thước.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ so checksum tổng màu. Hai pixel đổi chỗ có thể giữ cùng tổng; so từng phần tử buffer.
+2. Bỏ đối chứng depth-off vì “final không dùng”. Khi đó test có thể pass với scene không hề tạo xung đột visibility.
+3. Dùng tolerance depth quá lớn như `0.1`. Hai mặt khác nhau cũng có thể bị xem là bằng; giữ tolerance quanh sai số số học, không quanh sai số thị giác.
+4. Cho depth view ghi ngược trở lại depth buffer. Sau lần nhấn V, renderer bị đổi dữ liệu; depth view chỉ được đọc.
+
+## Tự kiểm tra kết quả
+
+- Depth view chỉ đọc depth buffer sau render.
+- Hai order với depth bật có color buffer giống tuyệt đối và depth buffer sai khác không quá `1e-9`.
+- Hai order với depth tắt tạo color buffer khác nhau ở scene test.
+- Test chạy trong Release vì runner không dựa vào `assert` bị tắt bởi `NDEBUG`.
+- Starter, bảy checkpoint và final đều build độc lập.
+- ZIP chứa README, CMakeLists, starter, checkpoints, final và tests.
+- Toàn bộ controls vẫn hoạt động sau resize.
+
+## Bài tập mở rộng
+
+Thêm pixel inspector vào C++: click để lưu `(x,y)`, rồi trong callback ghi lại chuỗi `faceName`, `storedDepth`, `newDepth`, `passed` của riêng pixel đó. Giới hạn log tối đa 12 dòng mỗi frame để terminal vẫn đọc được.
+
+Project 17 đã hoàn chỉnh. Bạn đã có một renderer CPU biết chọn bề mặt gần nhất theo từng pixel. Project 18 sẽ xử lý vấn đề xảy ra **trước** rasterization: triangle cắt qua near plane phải được clip thay vì project dữ liệu không hợp lệ.

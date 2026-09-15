@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện kính lúp và nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Ta đã có thuật toán và phép đo, nhưng một project hoàn chỉnh còn cần reset deterministic, preset workload, pointer capture cân bằng và validation không phụ thuộc cửa sổ. Quan trọng hơn, baseline phải đủ rõ để Project 28 có thể thay candidate search bằng Spatial Grid mà vẫn dùng lại cùng cloud, query set và checksum.
+
+Final không cố làm brute force “thắng” bằng mọi giá. Nó ghi trung thực số scans, hit count, time/query và draw sample để người học thấy phần nào là query workload, phần nào chỉ là lựa chọn hiển thị của Canvas.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba preset 1k, 10k, 100k thay đúng một biến: $N$. Với cùng $Q$ query:
+
+$$
+\text{expectedScans}=NQ
+$$
+
+Một validation tốt kiểm cả output lẫn điều kiện thí nghiệm: seed lặp lại, reference agreement, workspace reuse, exact work và bounded loop. Timing chỉ cần finite; test không áp một ngưỡng microsecond phụ thuộc máy.
+
+<InteractiveLab demo="brute-force-particle-query" mode="brute-validation" />
+
+Kéo kính lúp, đổi preset/radius, chạy benchmark và scaling rồi reset. Sau reset, cloud, center, radius và trạng thái paused phải trở về mặc định.
+
+## Viết code từng bước
+
+### Bước 1 — Preset chỉ chọn particle count
+
+```cpp title="include/lab.hpp — workload preset không đổi thuật toán"
+inline std::size_t particleCountForPreset(ParticlePreset preset) {
+    if (preset == ParticlePreset::thousand) {
+        return 1'000;
+    }
+    if (preset == ParticlePreset::tenThousand) {
+        return 10'000;
+    }
+    return 100'000;
+}
+```
+
+Cloud 100k vẫn được giữ trong memory; `activeParticleCount` tạo span prefix. Chuyển preset vì vậy không sinh lại dữ liệu hoặc đổi seed.
+
+### Bước 2 — Pointer capture có đường bật và tắt rõ ràng
+
+```cpp title="src/main.cpp — kéo kính lúp không bị đứt ở mép cửa sổ"
+dragging = true;
+SDL_CaptureMouse(true);
+```
+
+```cpp title="src/main.cpp — mouse up trả capture cho hệ điều hành"
+dragging = false;
+SDL_CaptureMouse(false);
+```
+
+Cleanup cũng tắt capture nếu cửa sổ đóng giữa lúc kéo. Mouse motion chỉ sửa query center; nó không tạo particle hoặc chạy benchmark.
+
+### Bước 3 — Gom invariant vào validation thuần
+
+```cpp title="include/lab.hpp — correctness đứng trước timing"
+const BruteForceResult reference = queryBruteForce(first, query);
+QueryWorkspace workspace{};
+queryBruteForceSquared(first, query, workspace);
+const bool matches = reference.hitIndices == workspace.hitIndices && reference.nearestIndex == workspace.nearestIndex;
+```
+
+Hàm validation dùng 2.000 particles để chạy nhanh nhưng vẫn đi qua cùng query functions của final.
+
+### Bước 4 — CTest kiểm exact work, không đoán bằng mắt
+
+```cpp title="tests/tests.cpp — scaling contract của baseline"
+check(rows[0].metrics.totalScanned == 1'000U * probes.size(), "one-thousand row reports exact scan work");
+check(rows[1].metrics.totalScanned == 10'000U * probes.size(), "ten-thousand row reports exact scan work");
+check(rows[2].metrics.totalScanned == 100'000U * probes.size(), "one-hundred-thousand row reports exact scan work");
+```
+
+Không có assertion kiểu “phải nhanh hơn 1 ms”, vì máy khác nhau cho timing khác nhau. Exact work và checksum mới là contract có thể tái lập.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build và test Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+```bash title="Terminal — build và test Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Target `project_27_final` là ứng dụng hoàn chỉnh. ZIP chứa starter, bảy checkpoint, final, tests và README; bạn không cần ghép code block từ website bằng tay.
+
+## Thử làm sai để hiểu đúng
+
+1. Khi Canvas chỉ vẽ 30.000 điểm, đổi readout `scanned` thành 30.000. Con số không còn mô tả query 100k; trả nó về output của query function.
+2. Không gọi `SDL_CaptureMouse(false)` khi mouse up. Pointer ownership bị giữ sai; khôi phục nhánh release và cleanup guard.
+3. Viết test bắt timing dưới một ngưỡng tuyệt đối. Test pass trên máy nhanh nhưng fail trên CI; chỉ kiểm timing finite và dùng exact scans/checksum cho correctness.
+
+## Tự kiểm tra kết quả
+
+- Reset cùng seed tái tạo đúng cloud và query mặc định.
+- Preset 1/2/3 chọn đúng 1k/10k/100k mà không đổi particle order.
+- Pointer capture bật khi drag và tắt khi release/cleanup.
+- Reference và optimized query khớp trên query set deterministic.
+- Capacity workspace không tăng sau reserve.
+- Benchmark có warm-up, checksum lặp lại và loop count hữu hạn.
+- Scaling exact scans tăng 1:10:100.
+- Debug và Release CTest đều đạt.
+
+## Bài tập mở rộng
+
+Lưu kết quả baseline thành CSV gồm N, radius, queryCount, totalHits, totalScanned, checksum và time/query. Project 28 có thể xuất cùng schema để so Spatial Grid mà không đổi tiêu chí.
+
+Project 28 sẽ chia cùng “thành phố hạt” thành các ô. Khi đó query chỉ kiểm candidate trong những cell chạm circle, còn baseline Project 27 vẫn là oracle kiểm correctness và mốc đo hiệu năng.

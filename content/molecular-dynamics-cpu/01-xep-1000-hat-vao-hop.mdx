@@ -1,0 +1,273 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xếp 1.000 hạt vào hộp mà không chồng lấn
+
+## Vấn đề cần giải quyết
+
+Ở Project 41, ta đặt hai nguyên tử bằng tay. Bây giờ cần đặt 1.000 hạt mà không tạo một cặp gần như trùng nhau. Lực Lennard–Jones tăng rất nhanh khi khoảng cách nhỏ, nên điều kiện đầu cần được chuẩn bị trước khi cho hạt chuyển động.
+
+Hãy chạy starter trước. Nó đã có cửa sổ SDL3, renderer, streaming texture và một hộp gồm các chấm tĩnh. Ta giữ phần vòng đời SDL, thay cách tạo các chấm bằng dữ liệu vật lý rồi vẽ lại từ dữ liệu đó. Sau bài này, cửa sổ phải hiện đúng 1.000 hạt; chưa có vận tốc hay lực.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mật độ số hạt (number density) trong 2D là `ρ = N/(W·H)`. Nếu chọn tỷ lệ khung hộp `a = W/H`, ta có:
+
+$$
+A=N/\rho,\qquad W=\sqrt{Aa},\qquad H=A/W.
+$$
+
+Ví dụ N=1.000, ρ=0,55, a=16/9 cho diện tích khoảng 1.818,18 và hộp rộng 56,85, cao 31,98 đơn vị. Đây là tọa độ thế giới; pixel chỉ được dùng lúc vẽ.
+
+Ta chia hộp thành các ô nhỏ và đặt một hạt gần tâm mỗi ô. Lưới vị trí này gọi là lattice. Một độ lệch ngẫu nhiên nhỏ, hay jitter, giúp các hàng không đối xứng hoàn hảo. Các hạt của mô hình là các điểm; bán kính chấm vẽ không phải bán kính va chạm.
+
+<InteractiveLab demo="molecular-dynamics-cpu" mode="md-box" />
+
+Chọn 1.000 hạt, thay mật độ và seed. Đọc kích thước hộp và khoảng cách nhỏ nhất. Cùng seed và cấu hình phải cho lại cùng vị trí. Canvas dùng lõi hoàn chỉnh; những số đo về lực hoặc nhiệt độ sẽ được giải thích trong các bài sau.
+
+## Viết code từng bước
+
+### Bước 1 — Khai báo dữ liệu và những phép toán sẽ dùng
+
+```cpp title="include/molecular_dynamics.hpp — các kiểu dữ liệu"
+struct Vec2 {
+    double x{};
+    double y{};
+};
+
+struct Particle {
+    Vec2 position{};
+    Vec2 velocity{};
+    double mass{1.0};
+};
+
+struct SimulationBox {
+    double width{};
+    double height{};
+};
+
+struct MolecularParameters {
+    double epsilon{1.0};
+    double sigma{1.0};
+    double cutoff{2.5};
+};
+
+struct MolecularSystem {
+    std::vector<Particle> particles;
+    SimulationBox box{};
+    MolecularParameters parameters{};
+    double elapsed{};
+    std::size_t stepCount{};
+    double initialEnergy{};
+    std::size_t wallCollisions{};
+};
+```
+
+Tạo `include/molecular_dynamics.hpp`, đặt các kiểu trong namespace `md`. Phần đầu file cần `<vector>`, `<cmath>`, `<cstdint>`, `<cstddef>`, `<algorithm>` và `<limits>`. Các hàm `add`, `subtract`, `scale`, `lengthSquared` và `length` dùng lại phép toán vector của Project 41. `MolecularParameters` giữ tham số cho bài 3; `elapsed`, `stepCount`, `initialEnergy` và `wallCollisions` đều bằng 0 ở bài này.
+
+
+### Bước 2 — Tính kích thước hộp
+
+```cpp title="include/molecular_dynamics.hpp — makeBoxForDensity hoàn chỉnh"
+inline SimulationBox makeBoxForDensity(
+    std::size_t particleCount,
+    double density = kDefaultDensity,
+    double aspectRatio = 16.0 / 9.0
+) {
+    if (particleCount == 0U || !std::isfinite(density) || !std::isfinite(aspectRatio) ||
+        density <= 0.0 || aspectRatio <= 0.0) {
+        const double invalid = std::numeric_limits<double>::quiet_NaN();
+        return {invalid, invalid};
+    }
+
+    const double area = double(particleCount) / density;
+    const double width = std::sqrt(area * aspectRatio);
+    return {width, area / width};
+}
+```
+
+`area` có đơn vị diện tích. Biểu thức `sqrt(area * aspectRatio)` xuất phát từ W=aH; không phải một hệ số chỉnh hình cho đẹp. Hàm từ chối mật độ không dương để tránh phép chia không hợp lệ.
+
+
+### Bước 3 — Tạo dãy số ngẫu nhiên có thể lặp lại
+
+```cpp title="include/molecular_dynamics.hpp — DeterministicRandom"
+class DeterministicRandom {
+    public:
+    explicit DeterministicRandom(std::uint32_t seed)
+        : state_(seed) {}
+
+    double next01() {
+        state_ = state_ * 1664525U + 1013904223U;
+        return double(state_) / 4294967296.0;
+    }
+
+    private:
+    std::uint32_t state_{};
+};
+```
+
+`state_` là số nguyên 32 bit không dấu. Mỗi lần gọi `next01()` cập nhật state theo cùng công thức rồi trả số trong [0,1). Nhờ cùng seed và cùng thứ tự gọi, C++ và Canvas tạo cùng dãy số. Đây là bộ sinh đơn giản cho điều kiện đầu có thể kiểm tra, không dùng cho bảo mật.
+
+
+### Bước 4 — Tính số hàng, số cột rồi đặt đủ N hạt
+
+```cpp title="include/molecular_dynamics.hpp — createLatticeParticles hoàn chỉnh"
+inline std::vector<Particle> createLatticeParticles(
+    std::size_t particleCount,
+    SimulationBox box,
+    std::uint32_t seed = 42U
+) {
+    std::vector<Particle> particles;
+    if (particleCount == 0U || !std::isfinite(box.width) || !std::isfinite(box.height) ||
+        box.width <= 0.0 || box.height <= 0.0) {
+        return particles;
+    }
+
+    const double suggestedColumns = std::sqrt(double(particleCount) * box.width / box.height);
+    const std::size_t columns = std::size_t(std::ceil(suggestedColumns));
+    const std::size_t rows = (particleCount + columns - 1U) / columns;
+    const double cellWidth = box.width / double(columns);
+    const double cellHeight = box.height / double(rows);
+    const double jitterLimit = 0.08 * std::min(cellWidth, cellHeight);
+    DeterministicRandom random(seed);
+    particles.reserve(particleCount);
+
+    for (std::size_t index = 0; index < particleCount; ++index) {
+        const std::size_t column = index % columns;
+        const std::size_t row = index / columns;
+        const double jitterX = (2.0 * random.next01() - 1.0) * jitterLimit;
+        const double jitterY = (2.0 * random.next01() - 1.0) * jitterLimit;
+        particles.push_back({
+            {(double(column) + 0.5) * cellWidth + jitterX,
+                (double(row) + 0.5) * cellHeight + jitterY},
+            {0.0, 0.0},
+            1.0,
+        });
+    }
+    return particles;
+}
+```
+
+Số cột xấp xỉ √(N·W/H), làm tròn lên. Số hàng là phép chia nguyên làm tròn lên `(N + columns - 1) / columns`; hàng cuối có thể chưa đầy. `index % columns` tìm cột, `index / columns` tìm hàng. Mỗi tọa độ lệch tối đa 8% cạnh ô nhỏ hơn. Lưu ý: giới hạn này phù hợp khoảng mật độ của lab; không có nghĩa mọi mật độ tùy ý đều an toàn.
+
+
+### Bước 5 — Đưa dữ liệu vào phần vẽ
+
+```cpp title="src/main.cpp — makeCheckpointOneSystem"
+md::MolecularSystem makeCheckpointOneSystem(std::size_t particleCount, double density, std::uint32_t seed) {
+    md::MolecularSystem system{};
+    system.box = md::makeBoxForDensity(particleCount, density);
+    system.particles = md::createLatticeParticles(particleCount, system.box, seed);
+    return system;
+}
+```
+
+```cpp title="include/molecular_dynamics_ui.hpp — worldToScreen"
+inline md::Vec2 worldToScreen(
+    md::Vec2 point,
+    const md::SimulationBox& box,
+    const WorldView& view
+) {
+    const double viewWidth = double(view.right - view.left);
+    const double viewHeight = double(view.bottom - view.top);
+    return {
+        double(view.left) + point.x / box.width * viewWidth,
+        double(view.top) + point.y / box.height * viewHeight,
+    };
+}
+```
+
+```cpp title="include/molecular_dynamics_ui.hpp — drawSystem ở checkpoint 1"
+inline void drawSystem(
+    std::vector<std::uint32_t>& pixels,
+    int width,
+    int height,
+    const md::MolecularSystem& system,
+    const WorldView& view,
+    std::size_t selectedIndex,
+    bool drawVelocities
+) {
+    framebuffer::drawRectangle(pixels, width, height, view.left, view.top, view.right, view.bottom, kGrid);
+    int radius = 3;
+    if (system.particles.size() >= 512U) {
+        radius = 2;
+    }
+    for (std::size_t index = 0; index < system.particles.size(); ++index) {
+        const md::Particle& particle = system.particles[index];
+        const md::Vec2 screen = worldToScreen(particle.position, system.box, view);
+        std::uint32_t color = speedColor(md::length(particle.velocity));
+        if (index == selectedIndex) {
+            color = kSelected;
+        }
+        framebuffer::fillCircle(pixels, width, height, int(std::lround(screen.x)), int(std::lround(screen.y)), radius, color);
+    }
+}
+```
+
+Trong `main.cpp`, khai báo trạng thái trước event loop. Các giá trị dưới đây là cấu hình ban đầu, không phải biến có sẵn của SDL:
+
+```cpp title="src/main.cpp — cấu hình và trạng thái ban đầu"
+std::size_t particleCount = 1000U;
+double density = 0.55;
+std::uint32_t seed = 42U;
+md::MolecularSystem system = makeCheckpointOneSystem(particleCount, density, seed);
+std::size_t selectedIndex = 0U;
+```
+
+Phần vẽ cần một vùng pixel riêng cho hộp. Đặt kiểu và hàm sau trong namespace `md_ui` của `include/molecular_dynamics_ui.hpp`:
+
+```cpp title="include/molecular_dynamics_ui.hpp — vùng vẽ trong cửa sổ"
+struct WorldView {
+    int left{};
+    int top{};
+    int right{};
+    int bottom{};
+};
+
+inline WorldView makeWorldView(int width, int height, bool reservePanel) {
+    int right = width - 26;
+    if (reservePanel) {
+        right = std::max(420, int(std::lround(double(width) * 0.62)));
+    }
+    int bottom = height - 30;
+    return {28, 34, right, bottom};
+}
+```
+
+Trong mỗi frame, lấy `view` bằng `md_ui::makeWorldView(width, height, false)`, rồi gọi `md_ui::drawSystem(pixels, width, height, system, view, selectedIndex, false)` thay `drawStarterScene`. Thêm hai header `molecular_dynamics.hpp` và `molecular_dynamics_ui.hpp` vào phần include của `main.cpp`. Các hàm pixel và màu đã có trong file hỗ trợ. `worldToScreen` đổi tọa độ theo kích thước hộp và vùng vẽ; resize chỉ thay vùng vẽ, không sửa `position`. Phần mã đầy đủ cuối bài có cả hàm chọn hạt và xử lý resize để bạn đối chiếu sau khi tự ghép.
+
+
+## Ghép các phần lại
+
+Làm việc từ thư mục gốc của ZIP. Mỗi target dùng một thư mục riêng: thay đổi trong `checkpoints/01/` chỉ có hiệu lực khi chạy đúng target của bài này.
+
+```bash title="Terminal — build và chạy checkpoint 1 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_42_checkpoint_1
+.\build\Debug\project_42_checkpoint_1.exe
+```
+
+Với Ninja hoặc Makefiles, executable thường nằm ngay trong `build/`. CTest của ZIP kiểm tra `final/include`; nó không tự kiểm tra phần bạn vừa sửa trong một checkpoint. Hãy dùng số đo và tình huống kiểm tra của bài trước khi đối chiếu bản hoàn chỉnh.
+
+Khi chạy, title phải báo N=1000. Click một hạt để đánh dấu, rồi resize: vị trí pixel thay đổi nhưng dữ liệu tọa độ thế giới vẫn như cũ.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản C++ của checkpoint 1, đổi jitter từ 0,08 lên 0,8 rồi build lại. Chỉ quan sát vị trí tĩnh; chưa chạy lực. Một số hạt có thể rời ô hoặc ra ngoài hộp. Hoàn tác trước khi sang bài 2. Thay đổi C++ không làm Canvas trên web thay đổi.
+2. Tạm tính `rows` bằng phép chia nguyên thay vì làm tròn lên, dùng N=10 với số cột không chia hết N. Kiểm hàng cuối và bounds để thấy vì sao phải dành đủ ô cho phần dư; sau đó khôi phục `ceil`.
+
+## Tự kiểm tra kết quả
+
+- [ ] Vector chứa đúng N phần tử, kể cả khi hàng cuối chưa đầy.
+- [ ] Mọi hạt nằm trong hộp và có vận tốc bằng 0.
+- [ ] Cùng N, mật độ và seed cho cùng vị trí.
+- [ ] Kiểm khoảng cách giữa mọi cặp trên một mẫu nhỏ, gồm cả các hàng khác nhau.
+- [ ] Resize không thay đổi dữ liệu vị trí.
+
+## Bài tập mở rộng
+
+1. Chọn N=10 và tự liệt kê hàng/cột của cả 10 hạt.
+2. Thử hộp vuông, giữ nguyên N và mật độ, rồi so diện tích.
+3. Tô màu hàng của hạt đang chọn trong hàm vẽ, không thêm màu vào Particle.
+
+Bài tiếp theo giữ nguyên vị trí và gán vận tốc cho từng hạt.

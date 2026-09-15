@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tái sử dụng grid mà không bỏ sót lực
+
+## Vấn đề cần giải quyết
+
+Grid đã chạy đúng nhưng ta đang Clear và Build sau mọi Drift. Nếu mỗi hạt chỉ đi rất ít, các bucket cũ vẫn đủ để tìm mọi cặp trong cutoff. Ta sẽ giữ grid nhiều bước, nhưng cần một điều kiện có thể kiểm chứng, không đơn giản 'dựng lại sau 10 frame'.
+
+Đây là **cached cell grid**, không phải mảng các cặp `i<j` của Project 44. Mốc dùng để tìm stencil cũng phải được giữ cùng grid.
+
+## Hiểu ý tưởng trước khi viết code
+
+Khi dựng, cạnh cell không nhỏ hơn `cutoff+skin`. Nếu mỗi hạt dời ít hơn skin/2, hai hạt trước đó cách xa hơn cutoff+skin chưa thể tiến vào cutoff. Vì vậy stencil quanh **vị trí lúc dựng** vẫn bao phủ mọi cặp đang có lực.
+
+$$D_{max}=\max_i\|d_i\|,\qquad D_{max}\ge s/2\Rightarrow\text{rebuild}.$$
+
+Chú ý hai việc khác nhau: chọn candidates bằng reference positions, nhưng đo khoảng cách và tính force bằng current positions. Nếu đổi tâm stencil sang ô hiện tại mà bucket vẫn chứa hạt theo ô cũ, chứng minh phía trên không còn áp dụng.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-7" />
+
+Chạy từng pha, theo dõi D và số lần dựng. Tắt tái sử dụng grid để thấy số rebuild tăng theo bước. Chuyển động vẫn phải theo cùng công thức.
+
+## Viết code từng bước
+
+### Bước 1 — Đo độ dời mà không mất dấu qua biên
+
+Trong Drift ta đã để dành `positions.zw`:
+
+```glsl title="shaders/drift.comp — tích lũy vector độ dời từ mốc"
+vec2 displacement = uDt * halfVelocity;
+    // Velocity.zw giữ phần dịch chuyển bị làm tròn, không để bước nhỏ mất mãi.
+    vec2 corrected = displacement + sourceVelocities[i].zw;
+    vec2 moved = sourcePositions[i].xy + corrected;
+    vec2 turns = floor(moved / uBox);
+    vec2 position = moved - uBox * turns;
+    if (position.x >= uBox.x) {
+        position.x = 0;
+        turns.x += 1;
+    }
+    if (position.y >= uBox.y) {
+        position.y = 0;
+        turns.y += 1;
+    }
+    vec2 applied = (position - sourcePositions[i].xy) + turns * uBox;
+    vec2 residual = corrected - applied;
+    vec2 unwrappedDelta = sourcePositions[i].zw + applied;
+    float distance2 = dot(unwrappedDelta, unwrappedDelta);
+```
+
+Không lấy `position-currentReference` sau wrap: một hạt vừa qua mép phải sẽ trông như đã đi ngược gần cả chiều rộng hộp. Cũng không cộng độ dài từng bước, vì hạt quay lại gần mốc thì độ dời vector có thể nhỏ dù quãng đường lớn. Ta cộng `applied`, tức độ dời thực sự đã ghi sau làm tròn, thay vì phần còn nằm trong residual. Nhờ vậy phép kiểm skin theo sát các tọa độ mà kernel Force thật sự đọc.
+
+### Bước 2 — Thu giá trị lớn nhất vào control buffer
+
+Với distance² hữu hạn và không âm, biểu diễn bit float tăng cùng giá trị. Ta dùng atomicMax uint thay vì đòi extension atomic float:
+
+```glsl title="shaders/drift.comp — giảm maximum distance squared"
+atomicMax(maxDisplacementBits, floatBitsToUint(distance2));
+```
+
+Phía C++ định nghĩa đúng bốn uint:
+
+```cpp title="include/gpu_storage.hpp — đoạn đang thêm"
+struct Control {
+    std::uint32_t flags = 0;
+    std::uint32_t maxDisplacementBits = 0;
+    std::uint32_t maxOccupancy = 0;
+    std::uint32_t reserved = 0;
+};
+
+static_assert(sizeof(Control) == 16);
+```
+
+`resetControl` phải đặt maximum về zero trước mỗi job. Mẹo bit này không dùng được cho float âm hoặc NaN; Drift đã kiểm finite trước atomicMax. Mỗi lần Build, shader chụp reference và đặt `positions.zw=0` trên bank đang dựng.
+
+### Bước 3 — Quyết định dựng lại trước khi tính force
+
+Khi fence của pha Drift hoàn tất, C++ đọc 16 byte control:
+
+```cpp title="include/gpu_engine.hpp — đoạn đang thêm"
+const float distance2 = std::bit_cast<float>(control.maxDisplacementBits);
+maximumDisplacement = std::sqrt(distance2);
+if (!cacheValid_ || !features_.cache || distance2 >= skin * skin * 0.25F) {
+    enter(Pass::Clear);
+} else {
+    enter(Pass::Force);
+}
+```
+
+Dùng `>=` để xử lý cả lúc chạm ngưỡng. Nếu hủy bước sau khi reference đã bị thay, `cacheValid_` phải false. Tại `force.comp`, kiểm lại rằng origin lấy từ `referencePositions[i]`; đừng tiện tay thay bằng positions hiện tại.
+
+## Ghép các phần lại
+
+Checkpoint 07 bật `features.cache`. Thứ tự giờ là Drift → kiểm D → có thể Clear/Build → Force → Kick. Grid đang còn hiệu lực không có nghĩa force cũ còn dùng được; Force vẫn chạy ở mỗi bước.
+
+```bash title="Terminal Windows — build và chạy bài 7"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_7 --parallel 2
+.\build\Debug\project_45_checkpoint_7.exe
+```
+
+Skin chỉ là bộ đệm để chọn candidates. Cặp trong lớp 2.5–2.9 không tạo force; `accumulatePair` vẫn lọc cutoff=2.5. Reset đổi count/box nên luôn tạo cache mới, không dùng mốc của hệ trước.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong test nhỏ, dịch hai hạt về phía nhau, mỗi hạt 0.19 với skin=0.4. Grid cũ phải vẫn bao phủ mọi cặp có lực. Sau đó chạm 0.2: điều kiện phải yêu cầu rebuild trước Force.
+2. Cho một hạt qua mép hộp. So độ dời từ `positions.zw` với hiệu hai tọa độ đã wrap. Giải thích tại sao hiệu wrapped rất lớn dù bước thực tế nhỏ; giữ phép đo chưa wrap.
+
+## Tự kiểm tra kết quả
+
+Reuse và rebuild-every-step phải cho cùng lực trong sai số float. Force luôn lọc cutoff hiện tại. Rebuild dùng cùng target bank mà Force sắp đọc. Lỗi/hủy không cho phép dùng reference của candidate cho bước tiếp theo mà không kiểm hiệu lực.
+
+## Bài tập mở rộng
+
+Chứng minh bằng bất đẳng thức tam giác rằng hai độ dời dưới skin/2 chưa thể làm một cặp bị loại ở bán kính cutoff+skin tiến vào cutoff. [Tài liệu neighbor list của LAMMPS](https://docs.lammps.org/Developer_par_neigh.html) cũng giải thích vai trò của vùng đệm; cách lưu bucket trong lab là lựa chọn riêng của ta.
+
+Tiếp theo: [đo năng lượng và động lượng](/projects/molecular-lab-gpu/08-do-nang-luong-va-dong-luong).

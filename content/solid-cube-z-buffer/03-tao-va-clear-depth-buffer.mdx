@@ -1,0 +1,154 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo depth buffer song song với color buffer
+
+## Vấn đề cần giải quyết
+
+Muốn biết fragment mới gần hơn hay xa hơn, mỗi pixel phải nhớ depth tốt nhất đã gặp trong frame hiện tại. Một biến `nearestDepth` dùng chung cho cả màn hình là sai: pixel ở góc trái và pixel ở giữa có lịch sử fragment khác nhau.
+
+Ta cần một mảng `width × height`, dùng đúng row-major index của color buffer. Checkpoint này chỉ xây vòng đời của mảng — cấp phát, clear và resize — chưa dùng nó để loại fragment. Hình che sai là bình thường.
+
+Click một pixel trong lab. `Pixel / index` phải tuân theo:
+
+$$
+index = y\times width+x
+$$
+
+Color buffer và depth buffer phải báo cùng số phần tử.
+
+## Hiểu ý tưởng trước khi viết code
+
+## Chốt depth convention trước khi chọn clear value
+
+Projection của khóa học ánh xạ camera-space Z sang NDC depth:
+
+$$
+z_{ndc}=\frac{far}{far-near}-
+\frac{near\times far}{(far-near)z_{camera}}
+$$
+
+Với `near=1` và `far=10`:
+
+| Camera Z | NDC depth | Ý nghĩa |
+|---:|---:|---|
+| 1 | 0.0000 | ngay near plane |
+| 4 | 0.8333 | trong frustum |
+| 10 | 1.0000 | ngay far plane |
+
+Depth nhỏ hơn nghĩa là gần camera hơn. Vì vậy đầu frame ta clear mỗi ô về `1.0`, giá trị xa nhất trong miền hợp lệ. Đây không phải con số chọn tùy ý; nó phải khớp với projection và phép compare ở bài 5.
+
+<InteractiveLab demo="z-buffer" mode="depth-storage" />
+
+## Viết code từng bước
+
+### Bước 1 — Đóng gói kích thước và storage
+
+`DepthBuffer` giữ `width`, `height` và một `std::vector<double>`:
+
+```cpp title="include/lab.hpp — storage một scalar cho mỗi pixel"
+struct DepthBuffer {
+    DepthBuffer(int width, int height, double clearDepth = 1.0) {
+        resize(width, height, clearDepth);
+    }
+
+    void resize(int width, int height, double clearDepth = 1.0) {
+        width_ = std::max(1, width);
+        height_ = std::max(1, height);
+        values_.assign(
+            std::size_t(width_) * std::size_t(height_),
+            clearDepth
+        );
+    }
+
+    int width_{1};
+    int height_{1};
+    std::vector<double> values_{1, 1.0};
+};
+```
+
+`assign` vừa đặt đúng số phần tử, vừa khởi tạo toàn bộ bằng clear value. Clamp width/height về ít nhất 1 giữ class ở trạng thái hợp lệ ngay cả lúc hệ điều hành báo kích thước tạm thời bằng zero.
+
+### Bước 2 — Dùng cùng row-major index
+
+```cpp title="include/lab.hpp — mapping pixel sang depth slot"
+[[nodiscard]] std::size_t index(int x, int y) const {
+    return std::size_t(y) * std::size_t(width_) + std::size_t(x);
+}
+
+[[nodiscard]] double at(int x, int y) const {
+    return values_[index(x, y)];
+}
+
+double& at(int x, int y) {
+    return values_[index(x, y)];
+}
+```
+
+Overload `const` chỉ đọc; overload còn lại trả reference để depth test có thể cập nhật đúng ô. Bounds đã được rasterizer clamp vào viewport, nên vòng fragment không cần lặp lại một nhánh kiểm tra khác. Test riêng vẫn xác nhận `index(2,1)` của buffer rộng 4 bằng 6.
+
+### Bước 3 — Clear đúng lúc
+
+Depth chỉ có ý nghĩa trong một frame. Clear chạy đúng một lần sau khi clear color và trước triangle đầu tiên:
+
+```cpp title="src/main.cpp — bắt đầu một frame mới"
+std::fill(pixels.begin(), pixels.end(), kClearColor);
+depthBuffer.clear(1.0);
+
+// Từ đây mới rasterize mười hai triangle.
+```
+
+Nếu clear sau triangle thứ nhất, triangle thứ nhất mất quyền che. Nếu clear trong vòng lặp triangle, mỗi triangle lại bắt đầu với màn hình trống và triangle cuối luôn thắng — đúng lỗi checkpoint 2 nhưng tốn thêm bộ nhớ.
+
+### Bước 4 — Resize color, depth và texture cùng nhau
+
+Chỉ commit kích thước mới sau khi tạo texture thành công:
+
+```cpp title="src/main.cpp — resize cả hai CPU buffer"
+SDL_Texture* newTexture = createStreamingTexture(renderer, newWidth, newHeight);
+if (!newTexture) {
+    failed = true;
+    running = false;
+    break;
+}
+
+SDL_DestroyTexture(texture);
+texture = newTexture;
+width = newWidth;
+height = newHeight;
+pixels.assign(std::size_t(width) * std::size_t(height), kClearColor);
+depthBuffer.resize(width, height);
+```
+
+Không resize depth buffer trước khi biết texture mới tạo được. Nếu allocation sau đó thất bại, renderer sẽ có ba kích thước không còn đồng bộ.
+
+## Ghép các phần lại
+
+### Build checkpoint storage
+
+```bash title="Terminal — build DepthBuffer chưa compare"
+cmake --build build --config Debug --target project_17_checkpoint_3
+```
+
+Resize cửa sổ qua nhiều tỉ lệ. Title bar phải luôn báo đúng kích thước depth buffer; hình vẫn phụ thuộc `O` vì chưa có fragment nào đọc mảng.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `x*height+y` làm index. Một số pixel ghi sang hàng sai; phục hồi `y*width+x`.
+2. Clear về `0.0` nhưng vẫn dự định dùng phép so “nhỏ hơn”. Không fragment hợp lệ nào có thể gần hơn 0; trả về `1.0`.
+3. Chỉ gọi `depthBuffer.resize` lúc cửa sổ lớn lên. Khi thu nhỏ, index hợp lệ của color buffer có thể trỏ sai vùng logic trong depth buffer.
+4. Clear trong vòng lặp mười hai triangle. Toggle order lại đổi hình y như cũ; đưa clear ra trước vòng lặp.
+
+## Tự kiểm tra kết quả
+
+- `values().size()` luôn bằng `width × height`.
+- Pixel `(x,y)` dùng cùng index trong color buffer và depth buffer.
+- `clear()` đặt mọi ô về `1.0` trước triangle đầu tiên mỗi frame.
+- `resize()` cấp phát lại và clear storage theo kích thước pixel mới.
+- Texture chỉ được thay sau khi `SDL_CreateTexture` thành công.
+- Đổi `O` vẫn làm hình khác; checkpoint này chưa giả vờ rằng Z-buffer đã hoạt động.
+
+## Bài tập mở rộng
+
+Thêm hàm `inBounds(x,y)` cho `DepthBuffer` và test riêng bốn góc. Không gọi nó trong hot loop ở project này; mục tiêu chỉ là luyện kiểm tra contract của class.
+
+Bài tiếp theo sẽ tính giá trị cần ghi vào từng ô. Depth tại giữa một triangle nghiêng phải được nội suy, không thể lấy từ một vertex hoặc một giá trị trung bình cho cả mặt.

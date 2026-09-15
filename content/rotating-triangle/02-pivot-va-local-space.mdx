@@ -1,0 +1,144 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt pivot bằng local space
+
+## Vấn đề cần giải quyết
+
+Ba vertex hiện đang nằm trực tiếp trong world space quanh Z=6. Nếu áp dụng công thức rotation vào các số này, tam giác sẽ quay quanh world origin tại camera, tạo một vòng cung lớn thay vì xoay tại chỗ. Công thức không sai; ta đã chọn sai pivot.
+
+Giải pháp là tách hai loại dữ liệu: local triangle mô tả hình dạng quanh gốc riêng, còn `modelPosition` nói gốc đó nằm đâu trong world space. Mọi rotation sẽ xảy ra ở giữa hai bước này.
+
+Trước khi sửa, hãy chạy lại `project_12_checkpoint_1`. Nếu ba cạnh chưa khép kín hoặc resize còn sai, đừng mang lỗi đó sang bài này. Checkpoint 2 chỉ thay cách ta lưu vị trí; hình ban đầu phải trông giống hệt cuối bài 1.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn centroid làm pivot:
+
+$$
+C=\frac{A+B+C}{3}
+$$
+
+Đưa từng vertex về local space:
+
+$$
+P_{local}=P_{world}-C
+$$
+
+Và dựng lại world point:
+
+$$
+P_{world}=P_{local}+modelPosition
+$$
+
+Với triangle mặc định, centroid đúng bằng `(0,0,6)`. Sau khi trừ, local centroid phải là zero vector.
+
+Ta có thể tính ba local vertex bằng tay:
+
+```text title="Kết quả mong đợi sau khi trừ pivot"
+A_local = (-1.4, -0.9, -0.3)
+B_local = ( 1.3, -0.7,  0.4)
+C_local = ( 0.1,  1.6, -0.1)
+```
+
+Cộng riêng từng cột đều ra 0. Nếu readout của Canvas không cho local centroid gần `(0,0,0)`, hãy kiểm tra phép trừ trước khi nhìn sang phần projection.
+
+<InteractiveLab demo="rotation3d" mode="rotation-pivot" />
+
+Thay Model.X/Y/Z. Dấu chữ thập đỏ là pivot; cả ba vertex đi cùng pivot nhưng dòng `local centroid` vẫn bằng `(0,0,0)`. Đây là bằng chứng translation không làm thay đổi hình dạng local.
+
+## Viết code từng bước
+
+### Bước 1 — Tính trung bình theo từng thành phần
+
+Centroid không cần SDL hoặc projection:
+
+```cpp title="include/lab.hpp — centroid của ba vertex"
+inline Vec3 triangleCentroid(const Triangle3& triangle) {
+    return {
+        (triangle.a.x + triangle.b.x + triangle.c.x) / 3.0,
+        (triangle.a.y + triangle.b.y + triangle.c.y) / 3.0,
+        (triangle.a.z + triangle.b.z + triangle.c.z) / 3.0,
+    };
+}
+```
+
+### Bước 2 — Trừ cùng một pivot khỏi cả ba vertex
+
+Hàm trả một triangle mới, không sửa dữ liệu world ban đầu:
+
+```cpp title="include/lab.hpp — world triangle sang local triangle"
+inline Triangle3 toLocalTriangle(const Triangle3& triangle) {
+    const Vec3 pivot = triangleCentroid(triangle);
+    return {
+        subtract(triangle.a, pivot),
+        subtract(triangle.b, pivot),
+        subtract(triangle.c, pivot),
+    };
+}
+```
+
+Khi cộng ba local vertex rồi chia ba, mọi thành phần phải gần zero.
+
+### Bước 3 — Translation chỉ xảy ra khi dựng world triangle
+
+`modelPosition` được cộng cho cả ba vertex:
+
+```cpp title="include/lab.hpp — local triangle trở lại world space"
+inline Triangle3 translateTriangle(const Triangle3& triangle, Vec3 translation) {
+    return {
+        add(triangle.a, translation),
+        add(triangle.b, translation),
+        add(triangle.c, translation),
+    };
+}
+```
+
+Khởi tạo source giữ hai giá trị riêng:
+
+```cpp title="src/main.cpp — hình dạng local và vị trí model"
+const lab::Triangle3 localTriangle = lab::toLocalTriangle(lab::defaultWorldTriangle());
+lab::Vec3 modelPosition = lab::triangleCentroid(lab::defaultWorldTriangle());
+```
+
+### Bước 4 — Dựng lại từ local ở mỗi frame
+
+Không lưu một world triangle rồi cộng translation lặp lại:
+
+```cpp title="src/main.cpp — dựng world triangle từ dữ liệu gốc"
+lab::Triangle3 rotatedLocal = localTriangle;
+const lab::Triangle3 worldTriangle = lab::translateTriangle(rotatedLocal, modelPosition);
+```
+
+Tên `rotatedLocal` hiện hơi sớm, nhưng nó đánh dấu chính xác vị trí rotation sẽ được chèn vào ở bài sau.
+
+## Ghép các phần lại
+
+Build và chạy `project_12_checkpoint_2`:
+
+```bash title="Terminal — chạy kết quả cuối bài 2"
+cmake --build build --config Debug --target project_12_checkpoint_2
+```
+
+Arrows dịch model theo X/Y; PageUp/PageDown dịch theo Z. Pivot đỏ phải đi cùng triangle. Đưa model gần camera tới khi một vertex mất visibility: guard của checkpoint 1 vẫn bảo vệ phần vẽ.
+
+Luồng dữ liệu giờ là `localTriangle → rotatedLocal → worldTriangle → projectTriangle → pixels`. Checkpoint này để `rotatedLocal = localTriangle`; bài sau chỉ thay đúng một dòng ở giữa.
+
+## Thử làm sai để hiểu đúng
+
+1. Xoay world vertex quanh `(0,0,0)`. Tam giác sẽ quay vòng quanh camera thay vì đứng tại Z≈6.
+2. Trừ pivot khỏi A nhưng quên B/C. Local centroid không còn zero và hình bị đổi vị trí tương đối.
+3. Mỗi frame viết `worldTriangle = translateTriangle(worldTriangle,modelPosition)`. Position bị cộng dồn và triangle bay khỏi màn hình.
+
+## Tự kiểm tra kết quả
+
+- Centroid của world triangle mặc định bằng `(0,0,6)`.
+- Centroid của local triangle gần zero ở cả ba thành phần.
+- Translate local triangle bằng pivot khôi phục đúng A/B/C ban đầu.
+- Dịch model không thay đổi khoảng cách giữa các vertex.
+- Pivot và triangle đi cùng nhau sau mọi thao tác translation.
+
+## Bài tập mở rộng
+
+Thử dùng A làm pivot thay vì centroid: trừ `triangle.a` khỏi cả ba vertex rồi đặt modelPosition bằng A. Hãy dự đoán vertex nào sẽ đứng yên khi rotation xuất hiện.
+
+Bài tiếp theo sẽ xoay local triangle quanh X. Nhờ pivot đã ở gốc, công thức chỉ cần xử lý hình dạng, không phải biết model đang nằm ở Z=6.

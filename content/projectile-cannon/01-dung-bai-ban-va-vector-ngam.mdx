@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng bãi bắn và kéo vector ngắm
+
+## Vấn đề cần giải quyết
+
+Project 22 mở sang phần vật lý, nhưng ta không bắt đầu bằng một phương trình. Việc đầu tiên là dựng được một bãi thử có thể điều khiển: mặt đất, thân pháo, nòng pháo và một mũi tên cho biết viên đạn **sắp** nhận vận tốc nào.
+
+Starter đã có window SDL3, renderer, streaming texture, CPU framebuffer, event loop và xử lý resize. Nó còn vẽ sẵn một khẩu pháo cố định để bạn có một đầu ra nhìn thấy ngay khi build. Checkpoint 1 chỉ thêm phần thật sự mới: hệ tọa độ của bãi bắn và thao tác kéo chuột để chọn initial velocity.
+
+Ta cần giữ một ranh giới rõ từ đầu:
+
+- physics position dùng mét;
+- velocity dùng mét trên giây;
+- screen position dùng pixel;
+- chỉ `WorldView` được phép đổi giữa hai phía.
+
+Nếu trộn chúng vào cùng một biến, một lần resize cửa sổ có thể vô tình thay đổi tầm bắn của pháo.
+
+## Hiểu ý tưởng trước khi viết code
+
+World space chọn trục X hướng sang phải và Y hướng lên. Canvas/SDL framebuffer lại tăng Y xuống dưới. Với `screenOrigin` là pixel ứng với world origin và `pixelsPerMeter` là scale:
+
+$$
+x_s = origin_x + x_w\,scale
+$$
+
+$$
+y_s = origin_y - y_w\,scale
+$$
+
+Dấu trừ ở công thức Y là nơi duy nhất ta “lật” trục. Vector kéo cũng theo cùng quy ước: kéo chuột lên làm `pointer.y` nhỏ đi, nhưng `velocity.y` phải dương.
+
+<InteractiveLab demo="projectile" mode="projectile-aim" />
+
+Kéo đầu mũi tên theo nhiều hướng, kể cả ngang sang trái hoặc gần thẳng xuống. Mô phỏng giới hạn pháo trong khoảng 5°–85° và speed trong 4–32 m/s. Việc clamp không chỉ bảo vệ UI: nó định nghĩa rõ miền input mà project này hỗ trợ.
+
+## Viết code từng bước
+
+### Bước 1 — Viết hai phép đổi đối xứng nhau
+
+```cpp title="include/lab.hpp — world point thành screen point"
+inline Vec2 worldToScreen(Vec2 worldPoint, const WorldView& view) {
+    return {
+        view.screenOrigin.x + worldPoint.x * view.pixelsPerMeter,
+        view.screenOrigin.y - worldPoint.y * view.pixelsPerMeter,
+    };
+}
+```
+
+`screenToWorld` dùng đúng các phép toán ngược lại. Hai hàm này là một cặp; CTest về sau sẽ kiểm `screenToWorld(worldToScreen(p)) ≈ p` để resize hoặc đổi camera không làm sai physics.
+
+### Bước 2 — Đổi drag sang velocity có đơn vị
+
+```cpp title="include/lab.hpp — đảo screen Y đúng một lần"
+const Vec2 screenDelta = subtract(screenPointer, screenOrigin);
+const Vec2 rawVelocity{screenDelta.x / pixelsPerSpeed, -screenDelta.y / pixelsPerSpeed};
+const double rawSpeed = length(rawVelocity);
+if (!std::isfinite(rawSpeed) || rawSpeed <= kPhysicsEpsilon) {
+    return {};
+}
+```
+
+`pixelsPerSpeed` chỉ là độ nhạy của thao tác kéo. Với giá trị 5, một mũi tên dài 100 pixel tương ứng 20 m/s. Nó khác `pixelsPerMeter`, thứ quyết định một mét của bãi bắn chiếm bao nhiêu pixel.
+
+### Bước 3 — Clamp rồi dựng lại vector
+
+Ta không clamp riêng X và Y, vì cách đó đổi hướng tùy ý. Ta clamp speed và angle, sau đó dựng lại cả vector:
+
+```cpp title="include/lab.hpp — một AimSelection tự nhất quán"
+const double speed = clampValue(rawSpeed, safeMinimumSpeed, safeMaximumSpeed);
+const double angle = clampValue(std::atan2(rawVelocity.y, rawVelocity.x), safeMinimumAngle, safeMaximumAngle);
+return {{speed * std::cos(angle), speed* std::sin(angle)}, speed, angle, true};
+```
+
+Hàm `aimFromScreenDrag` trả `valid=false` cho drag có độ dài gần zero hoặc scale hỏng. Main chỉ thay aim hiện tại khi selection hợp lệ, nên một cú click không làm nòng pháo nhảy về hướng ngẫu nhiên.
+
+### Bước 4 — Giữ chuột tới khi người dùng nhả
+
+Khi nhận mouse down, final gọi `SDL_CaptureMouse(true)`. Nhờ vậy việc kéo vẫn tiếp tục nếu con trỏ vượt ra ngoài cửa sổ. Mouse up và focus lost đều phải nhả capture; đây là một cặp acquire/release giống quản lý tài nguyên.
+
+## Ghép các phần lại
+
+Build checkpoint 1:
+
+```bash title="Terminal — build mốc kéo vector ngắm"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_22_checkpoint_1
+./build/Debug/project_22_checkpoint_1.exe
+```
+
+Kéo chuột quanh nòng pháo. Title bar phải đổi speed và angle liên tục. Resize cửa sổ chỉ thay khoảng cách pixel giữa các vạch lưới; các con số m/s và độ không đổi.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ dấu trừ trước `screenDelta.y`. Kéo lên sẽ tạo vận tốc Y âm và nòng pháo bị ép về góc thấp nhất.
+2. Dùng `pixelsPerMeter` thay cho `pixelsPerSpeed`. Resize cửa sổ làm cùng một độ dài drag tạo speed khác.
+3. Bỏ kiểm tra drag gần zero rồi click đúng muzzle. Theo dõi `atan2(0,0)` và giải thích vì sao một hướng không tồn tại không nên được chấp nhận như input mới.
+4. Không nhả mouse capture khi mất focus. Thử Alt+Tab giữa lúc kéo để thấy state input bị kẹt ra sao.
+
+## Tự kiểm tra kết quả
+
+- Starter mở được và vẽ sẵn pháo dù chưa có toán projectile.
+- World Y hướng lên; screen Y hướng xuống; chỉ hàm chuyển đổi biết sự khác biệt này.
+- Kéo lên-phải tạo `vx > 0` và `vy > 0`.
+- Speed luôn nằm trong 4–32 m/s, angle luôn nằm trong 5°–85°.
+- Click không kéo không tạo NaN và không phá aim cũ.
+- Pointer capture trở về trạng thái nhả sau mouse up, cancel hoặc focus lost.
+
+## Bài tập mở rộng
+
+Thêm một vùng cấm 10° quanh phương thẳng đứng để nòng pháo không che readout. Hãy clamp angle, rồi dựng lại velocity từ speed-angle như checkpoint hiện tại; đừng clamp `velocity.x` riêng lẻ.
+
+Bài tiếp theo sẽ tách mũi tên velocity thành hai component `vx` và `vy`. Đây là bước nối input trực quan với những biến xuất hiện trong phương trình chuyển động.

@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đẩy hai bóng ra khỏi penetration
+
+## Vấn đề cần giải quyết
+
+Impulse có thể khiến hai ball bắt đầu rời nhau, nhưng position của chúng vẫn overlap ngay sau response. Nếu nhiều contact tạo thành một cụm, phần overlap còn lại khiến detection lặp lại, wall correction chen vào và scene rung.
+
+Ta thêm positional correction, nhưng không biến nó thành một cú teleport toàn phần thiếu kiểm soát. `penetrationSlop` bỏ qua sai số rất nhỏ; `correctionPercent` chỉ sửa một phần; inverse mass quyết định body nào phải dịch nhiều hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Độ correction dùng trong một pass:
+
+$$
+c=\frac{\max(penetration-slop,0)\,percent}{m_A^{-1}+m_B^{-1}}
+$$
+
+Vector correction là $cn$. Position mới:
+
+$$
+p_A'=p_A-cn\,m_A^{-1},\qquad p_B'=p_B+cn\,m_B^{-1}
+$$
+
+Velocity không xuất hiện trong công thức này.
+
+<InteractiveLab demo="collision-tank" mode="collision-correction" />
+
+Mode bài này khởi đầu với positional correction tắt. Chạy nhanh 2 giây, ghi overlap/max penetration, rồi bật checkbox và lặp lại sau reset. Impulse count có thể tương tự nhưng geometry ổn định hơn rõ rệt.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ correction trong miền an toàn
+
+```cpp title="include/lab.hpp — clamp percent và slop"
+const double safePercent = std::clamp(correctionPercent, 0.0, 1.0);
+const double safeSlop = std::max(0.0, penetrationSlop);
+const double correctionMagnitude = std::max(contact.penetration - safeSlop, 0.0) * safePercent / inverseMassSum;
+```
+
+Slop không “xóa” contact; nó chỉ cho phép một overlap cực nhỏ không bị solver kéo qua kéo lại vì floating-point noise.
+
+### Bước 2 — Phân phối correction theo inverse mass
+
+```cpp title="include/lab.hpp — body nhẹ dịch xa hơn"
+const Vec2 correction = scale(contact.normal, correctionMagnitude);
+first.position = subtract(first.position, scale(correction, first.inverseMass));
+second.position = add(second.position, scale(correction, second.inverseMass));
+return correctionMagnitude;
+```
+
+Nếu B là static body (`inverseMass=0`), chỉ A dịch. Nếu mass bằng nhau, hai ball chia đều khoảng sửa.
+
+### Bước 3 — Ghép impulse và correction nhưng không trộn công thức
+
+```cpp title="include/lab.hpp — một PairResolutionResult vẫn giữ hai kết quả"
+result.contact = findCircleContact(first, second);
+if (!result.contact.colliding) {
+    return result;
+}
+result.impulseMagnitude = applyCollisionImpulse(first, second, result.contact, restitution);
+result.correctionMagnitude = correctBallPenetration(first, second, result.contact, correctionPercent, penetrationSlop);
+```
+
+Contact được tính một lần cho hai bước. `impulseMagnitude` và `correctionMagnitude` không cộng với nhau vì chúng có đơn vị khác nhau.
+
+### Bước 4 — Cho UI bật/tắt correction độc lập
+
+Canvas truyền `correctionPercent=0` khi checkbox tắt. Cùng detection/impulse vẫn chạy, nên sự khác biệt quan sát được chỉ đến từ position solve.
+
+## Ghép các phần lại
+
+```bash title="Terminal — thêm positional correction"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_checkpoint_6
+./build/Debug/project_24_checkpoint_6.exe
+```
+
+Checkpoint C++ dùng percent 0.8 và slop 0.001 world unit. Đây là tham số solver, không phải hằng số vật lý của vật liệu.
+
+## Thử làm sai để hiểu đúng
+
+1. Dịch mỗi ball đúng `penetration/2` dù một ball static. Static body sẽ trôi; hoàn tác inverse-mass weighting.
+2. Sửa 120% penetration. Hai ball bị đẩy qua trạng thái separated quá xa và cụm contact rung; hoàn tác clamp percent.
+3. Cộng correction vào velocity thay vì position. Đơn vị sai và energy tăng; hoàn tác để correction không đụng velocity.
+
+## Tự kiểm tra kết quả
+
+- Correction zero khi penetration nhỏ hơn hoặc bằng slop.
+- Percent nằm trong `[0,1]` và không over-correct một contact đơn.
+- Equal mass chia position correction đều cho hai phía.
+- Static body có inverse mass zero không dịch.
+- Velocity trước/sau positional correction giống nhau.
+- Full correction với slop zero loại overlap của một pair đơn.
+- Bật correction làm maximum penetration của scene giảm rõ so với tắt.
+
+## Bài tập mở rộng
+
+Cho correction percent thay đổi theo penetration: nhỏ ở contact nông, lớn ở contact sâu. Vẽ hàm bạn chọn và giữ output trong `[0,1]` trước khi đưa vào solver.
+
+Bài tiếp theo ghép mọi pair của 144 ball. Đây là lúc correctness của một cặp trở thành một hệ nhiều contact có thứ tự giải hữu hạn.

@@ -1,0 +1,154 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo exclusive prefix sum bằng Blelloch scan
+
+## Điều khó nằm ở đâu?
+
+Reduction chỉ cần giữ một tổng cuối cùng, còn scan phải trả về một giá trị cho mọi phần tử. Nếu lane `i` tự cộng tất cả số đứng trước nó, lượng việc sẽ tăng thành $O(N^2)$. Blelloch scan giải quyết bài toán bằng hai lượt trên cùng một cây: upsweep gom tổng lên root, downsweep phân phối prefix trở lại các lá.
+
+Blelloch scan tái dùng cây theo hai pha cân đối:
+
+1. **upsweep** gom subtotal từ lá lên root;
+2. lưu total, đặt root về zero;
+3. **downsweep** phân phối prefix từ root trở xuống.
+
+Kết quả là exclusive scan với tổng công việc $O(N)$ và độ sâu $O(\log N)$ trong một block.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Với `[3,1,4,2]`, upsweep tạo root 10. Ta lưu 10 vào `blockSums[group]`, rồi đổi root thành 0. Trong downsweep, ở mỗi node:
+
+```text
+t = left
+left = parentPrefix
+right = parentPrefix + t
+```
+
+Sau mức cuối, các lá trở thành `[0,3,4,8]`. Nếu quên đặt root zero, cây tạo một biến thể khác và output[0] không còn là identity.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="blelloch-scan" />
+
+Dừng ở `root-zero`: total đã được cất riêng nhưng root của cây prefix bằng zero. Đây là bước nối hai pha và là nơi dễ bỏ sót nhất.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Nạp 512 lá như reduction
+
+```glsl title="shaders/scan_blocks.comp — load two values per lane"
+temporary[lane] = 0.0;
+temporary[lane + 256u] = 0.0;
+if (firstIndex < uint(uElementCount)) {
+    temporary[lane] = inputData[firstIndex];
+}
+if (secondIndex < uint(uElementCount)) {
+    temporary[lane + 256u] = inputData[secondIndex];
+}
+memoryBarrierShared();
+barrier();
+```
+
+Tail vẫn nạp zero và vẫn đi qua cả memory barrier lẫn execution barrier. Hai lệnh được viết trực tiếp trong `main` để hợp lệ với GLSL 4.30.
+
+### Bước 2 — Upsweep theo offset tăng gấp đôi
+
+```glsl title="shaders/scan_blocks.comp — upsweep"
+for (uint offset = 1u; offset < 512u; offset <<= 1u) {
+    uint right = (lane + 1u) * offset * 2u - 1u;
+    if (right < 512u) {
+        uint left = right - offset;
+        temporary[right] += temporary[left];
+    }
+    memoryBarrierShared();
+    barrier();
+}
+```
+
+`right` luôn là cuối đoạn dài `2×offset`; `left` là cuối nửa trái. Khi offset 256 hoàn tất, `temporary[511]` giữ total của block.
+
+### Bước 3 — Lưu tổng rồi đặt nút gốc về 0
+
+```glsl title="shaders/scan_blocks.comp — save total and zero root"
+if (lane == 0u) {
+    blockSums[gl_WorkGroupID.x] = temporary[511];
+    temporary[511] = 0.0;
+}
+memoryBarrierShared();
+barrier();
+```
+
+Thứ tự hai dòng quan trọng: zero trước khi ghi sẽ làm mất block sum cần cho hierarchy toàn cục.
+
+### Bước 4 — Downsweep về các lá
+
+```glsl title="shaders/scan_blocks.comp — downsweep"
+for (uint offset = 256u; offset > 0u; offset >>= 1u) {
+    uint right = (lane + 1u) * offset * 2u - 1u;
+    if (right < 512u) {
+        uint left = right - offset;
+        float savedLeft = temporary[left];
+        temporary[left] = temporary[right];
+        temporary[right] += savedLeft;
+    }
+    memoryBarrierShared();
+    barrier();
+}
+```
+
+Offset đi ngược `256 → … → 1`. Sau vòng lặp, `temporary` không còn giữ input hay subtotal tree; nó giữ exclusive prefix.
+
+### Bước 5 — Chạy thử với một block nhỏ
+
+```cpp title="include/reduction_gpu_engine.hpp — single-block extent"
+const std::size_t count = std::min<std::size_t>(input_.size(), kBlockSpan);
+```
+
+Ta cố ý giới hạn bài này ở một block để có thể đối chiếu trực tiếp mọi giá trị với kết quả CPU trước khi mở rộng sang nhiều tầng.
+
+```cpp title="include/reduction_gpu_engine.hpp — single-block scan readback"
+dispatchScanPass(
+    gl,
+    inputBuffer_,
+    scanLevels_[0].scanBuffer,
+    scanLevels_[0].sumsBuffer,
+    count
+);
+gl.MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+readVector(gl, scanLevels_[0].scanBuffer, count, output);
+readScalar(gl, scanLevels_[0].sumsBuffer, blockSum);
+```
+
+Checkpoint 5 chỉ scan tối đa 512 giá trị rồi đọc cả local prefix lẫn một block sum. Việc thu nhỏ này tách lỗi Blelloch khỏi lỗi hierarchy.
+
+## Chạy checkpoint và đọc kết quả
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_39_checkpoint_5
+build\Debug\project_39_checkpoint_5.exe
+```
+
+Ở preset 8, output phải bắt đầu bằng zero và `output[7] + input[7]` bằng block sum. Ở preset 257, nửa thứ hai của shared array có một giá trị thật và 255 zero; mọi lane vẫn đồng bộ bình thường.
+
+## Cố tình phá thuật toán
+
+1. Bỏ `temporary[511] = 0`. Output không còn exclusive.
+2. Zero root trước khi ghi `blockSums`. Global scan ở bài sau mất total của block.
+3. Downsweep offset tăng như upsweep. Cây bị duyệt sai chiều.
+4. Dùng một temporary cho swap nhưng ghi `left` trước khi lưu nó. Giá trị subtotal nhánh trái bị mất.
+5. Return ở tail lane trước cặp memory/execution barrier. Preset 257 có barrier divergence.
+
+## Checklist hoàn thành
+
+- [ ] Upsweep có offset `1 → 256`; downsweep có offset `256 → 1`.
+- [ ] `temporary[511]` được ghi vào block sum trước khi root thành zero.
+- [ ] Barrier xuất hiện sau từng mức của cả hai pha.
+- [ ] `[3,1,4,2]` tạo scan `[0,3,4,8]` và block sum 10.
+- [ ] Preset ngắn zero-pad nhưng không return trước barrier.
+- [ ] Checkpoint 5 chỉ xử lý một block để lỗi còn dễ quan sát.
+
+## Bài tập để hiểu sâu hơn
+
+1. Vẽ tay toàn bộ upsweep/downsweep cho tám số trong Canvas rồi đối chiếu từng stage.
+2. Chuyển block scan nhỏ sang integer để kiểm exact output, sau đó quay lại float và giải thích tolerance.
+3. Tạo inclusive output từ exclusive output trong một pass riêng và so traffic với việc sửa kernel.
+
+Bài 6 sẽ dispatch Blelloch cho 1.954 block. Local prefix của mỗi block đúng, nhưng đầu mọi block vẫn bắt đầu từ zero.

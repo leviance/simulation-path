@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Split tám child và redistribute
+
+## Vấn đề cần giải quyết
+
+Root-only tree tổ chức dữ liệu nhưng không giúp query. Ta cần split một leaf khi nó đã giữ đủ `leafCapacity`. Trong 3D, mỗi split tạo tám node mới; chỉ một lỗi nhỏ khi giữ reference, chọn octant hoặc chuyển indices cũ cũng có thể làm mất hàng nghìn points.
+
+Mục tiêu của checkpoint 3 không chỉ là nhìn thấy nhiều hộp. Sau build, internal node phải rỗng, mỗi point phải đi xuống đúng một leaf và recursion phải luôn có điểm dừng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Insertion có ba trường hợp:
+
+1. Node đã là internal: chọn octant rồi đi xuống child.
+2. Node là leaf còn chỗ hoặc không thể split: giữ index tại đây.
+3. Node là leaf đầy và còn được split: tạo tám child, lấy indices cũ ra, rồi chèn lại cả cũ lẫn mới.
+
+Một bẫy C++ quan trọng: `tree.nodes.push_back` có thể làm `std::vector` reallocate. Mọi reference hoặc pointer vào parent trước vòng push có thể mất hiệu lực. Vì vậy ta giữ `nodeIndex`, lưu những giá trị cần thiết, tạo children, rồi truy cập lại `tree.nodes[nodeIndex]`.
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-split" />
+
+Đổi `clustered` và `uniform`. Clustered cloud phải tạo hộp nhỏ tập trung quanh các cụm; uniform cloud trải depth đều hơn. Đây là tính thích nghi mà uniform grid không có.
+
+## Viết code từng bước
+
+### Bước 1 — Chặn split bằng depth và cả ba kích thước
+
+```cpp title="include/lab.hpp — nodeCanSplit"
+const double sizeX = node.bounds.maximum.x - node.bounds.minimum.x;
+const double sizeY = node.bounds.maximum.y - node.bounds.minimum.y;
+const double sizeZ = node.bounds.maximum.z - node.bounds.minimum.z;
+return node.depth < config.maximumDepth &&
+    sizeX * 0.5 >= config.minimumNodeSize &&
+    sizeY * 0.5 >= config.minimumNodeSize &&
+    sizeZ * 0.5 >= config.minimumNodeSize;
+```
+
+Nếu hàng nghìn points trùng cùng position, capacity không thể tách chúng sang nhiều octant. Guards cho phép leaf cuối cùng vượt capacity nhưng buộc recursion kết thúc.
+
+### Bước 2 — Đi qua internal node trước
+
+```cpp title="include/lab.hpp — đi xuống child đã có"
+const std::array<std::size_t, 8> children = tree.nodes[nodeIndex].children;
+if (!tree.nodes[nodeIndex].isLeaf()) {
+    const int octant = octreeOctant(points[pointIndex].position, tree.nodes[nodeIndex].bounds);
+    insertAtNode(tree, points, pointIndex, children[std::size_t(octant)]);
+    return;
+}
+```
+
+Ta copy mảng child indices trước lời gọi đệ quy. Đường này không thay topology của parent.
+
+### Bước 3 — Tạo đủ tám child mà không giữ reference cũ
+
+```cpp title="include/lab.hpp — tạo children liền nhau"
+const Bounds3D parentBounds = tree.nodes[nodeIndex].bounds;
+const int childDepth = tree.nodes[nodeIndex].depth + 1;
+const std::size_t firstChildIndex = tree.nodes.size();
+for (int octant = 0; octant < 8; ++octant) {
+    tree.nodes.push_back({octreeChildBounds(parentBounds, octant), childDepth});
+}
+```
+
+`firstChildIndex + octant` là địa chỉ ổn định ở cấp logic, dù vùng nhớ vật lý của vector có đổi.
+
+### Bước 4 — Dọn parent rồi chèn lại dữ liệu cũ
+
+```cpp title="include/lab.hpp — redistribute qua cùng insertion path"
+for (const std::size_t existingIndex : existingIndices) {
+    const int octant = octreeOctant(points[existingIndex].position, parentBounds);
+    const std::size_t childIndex = tree.nodes[nodeIndex].children[std::size_t(octant)];
+    insertAtNode(tree, points, existingIndex, childIndex);
+}
+```
+
+Không viết một vòng “redistribute nhanh” dùng policy khác. Indices cũ và point mới đều đi qua `octreeOctant` và `insertAtNode`, nên equality và split guards chỉ có một nguồn sự thật.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 3"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_30_checkpoint_3
+```
+
+Chạy với capacity 16. Window title báo node count, leaf count, maximum depth và maximum leaf occupancy. Hãy quan sát topology đổi theo distribution, còn hit count vẫn khớp brute baseline bằng mắt ở các query đơn giản.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ `OctreeNode& parent` rồi `push_back` tám lần, sau đó ghi `parent.children`. Address sanitizer hoặc Debug build có thể lộ use-after-reallocation. Truy cập lại qua `nodeIndex`.
+2. Chỉ đưa point mới xuống child, bỏ quên indices cũ. Renderer vẫn thấy points vì nó đọc point vector, nhưng tree mất dữ liệu. Luôn move và redistribute toàn bộ old indices.
+3. Split không có `maximumDepth`. Tạo nhiều points trùng nhau có thể sinh recursion và node count không giới hạn. Khôi phục cả depth và size guards.
+
+## Tự kiểm tra kết quả
+
+- Leaf chỉ split khi đã đủ capacity và còn qua cả ba guards.
+- Mỗi split tạo đúng tám children với depth tăng một.
+- Không giữ reference/pointer tới node qua lúc vector tăng kích thước.
+- Parent trở thành internal và có `pointIndices` rỗng.
+- Indices cũ và point mới dùng cùng insertion path.
+- Clustered distribution chia sâu ở vùng đông; uniform tạo topology khác.
+- Build luôn dừng với dữ liệu trùng vị trí.
+
+## Bài tập mở rộng
+
+Tạo 1.000 points cùng ở `(0.5,0.5,0.5)` và in leaf chứa chúng. Dự đoán depth cuối cùng theo `maximumDepth` và giải thích vì sao leaf overflow ở đây là hợp lệ chứ không phải lỗi capacity.
+
+Nhìn thấy boxes chưa đủ chứng minh tree đúng. Bài sau viết một inspector độc lập để đếm lại storage, kiểm child bounds và đối chiếu statistics.

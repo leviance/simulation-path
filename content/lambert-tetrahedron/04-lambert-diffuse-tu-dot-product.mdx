@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính Lambert diffuse từ dot product
+
+## Vấn đề cần giải quyết
+
+Ta đã có unit normal `N` và unit `surfaceToLight` `L`. Bây giờ cần biến quan hệ giữa hai hướng thành một con số: mặt quay thẳng về đèn sáng nhất, càng nghiêng càng tối, và khi quay lưng thì không nhận ánh sáng trực tiếp.
+
+Lambert diffuse giải đúng bài toán đó chỉ bằng dot product. Điều đáng học không nằm ở độ dài hàm — nó rất ngắn — mà ở ý nghĩa của input, vì sao phải normalize và vì sao phần âm bị clamp về zero.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với hai unit vector, dot product bằng cosine của góc xen giữa:
+
+$$
+N\cdot L=\cos\theta
+$$
+
+- `θ=0°`: mặt hướng thẳng tới đèn, dot bằng 1.
+- `θ=90°`: ánh sáng lướt ngang mặt, dot bằng 0.
+- `θ>90°`: đèn nằm phía sau mặt, dot âm.
+
+Diffuse không được âm, nên:
+
+$$
+diffuse=\max(0,N\cdot L)
+$$
+
+<InteractiveLab demo="lambert" mode="lambert-dot" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ phép tính thành một hàm thuần
+
+```cpp title="include/lab.hpp — Lambert diffuse tối thiểu"
+inline double lambertDiffuse(Vec3 unitNormal, Vec3 unitSurfaceToLight) {
+    const double cosine = dot(normalize(unitNormal), normalize(unitSurfaceToLight));
+    return std::max(0.0, cosine);
+}
+```
+
+Tên tham số ghi rõ kỳ vọng, còn `normalize` bên trong là dây an toàn cho caller. Trong render loop final, normal và light vốn đã là unit vector; chi phí nhỏ này ưu tiên code học tập khó dùng sai.
+
+### Bước 2 — Dùng diffuse làm grayscale trước khi thêm material
+
+```cpp title="src/main.cpp — nhìn riêng kết quả của N dot L"
+const double diffuse = lab::lambertDiffuse(unitNormal, light.surfaceToLight);
+return {220.0 * diffuse, 220.0 * diffuse, 220.0 * diffuse};
+```
+
+Checkpoint 4 cố ý bỏ baseColor. Khi cả ba channel giống nhau, sự khác biệt trên hình chỉ có thể đến từ geometry và light, không bị màu đỏ/xanh đánh lạc hướng.
+
+### Bước 3 — Khóa ba góc đại diện bằng test
+
+```cpp title="tests/tests.cpp — aligned, perpendicular và opposite"
+check(
+    nearlyEqual(lab::lambertDiffuse({0.0, 0.0, -1.0}, frontLight.surfaceToLight), 1.0),
+    "aligned normal receives full diffuse light"
+);
+check(
+    nearlyEqual(lab::lambertDiffuse({1.0, 0.0, 0.0}, frontLight.surfaceToLight), 0.0),
+    "perpendicular normal receives no diffuse light"
+);
+check(
+    nearlyEqual(lab::lambertDiffuse({0.0, 0.0, 1.0}, frontLight.surfaceToLight), 0.0),
+    "back-facing normal clamps negative diffuse to zero"
+);
+```
+
+Ba test này kiểm cả công thức lẫn quy ước hướng. Trường hợp opposite đặc biệt quan trọng: nó phân biệt `max(0,dot)` với `abs(dot)`.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint Lambert diffuse"
+cmake --build build --config Debug --target project_19_checkpoint_4
+cmake --build build --config Debug --target project_19_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Bấm front rồi back và chuyển face bằng `Tab`. Dot thô có thể âm, nhưng màu diffuse không được dùng giá trị âm. Camera chưa xoay ở checkpoint này, nên mỗi lần đổi preset là một phép thử lặp lại được.
+
+## Thử làm sai để hiểu đúng
+
+1. Trả về `cosine` mà không clamp. Channel màu âm sẽ bị clamp muộn về 0, trông có vẻ đúng nhưng intensity có thể làm phép tính khác sai; clamp ngay tại định nghĩa diffuse.
+2. Trả về `std::abs(cosine)`. Face quay lưng sáng như face quay tới đèn; test opposite phải fail.
+3. Dùng dot giữa raw normal và light. Scale model làm độ sáng đổi dù orientation giữ nguyên; chỉ dot hai hướng đơn vị.
+4. Thêm `toCamera` vào công thức. Đó không còn là Lambert diffuse; camera chỉ tham gia culling ở bài 6.
+
+## Tự kiểm tra kết quả
+
+- Diffuse luôn thuộc `[0,1]` với input hữu hạn.
+- Aligned cho 1; perpendicular và opposite đều cho 0.
+- Thay đổi độ dài input nhưng giữ hướng không làm diffuse đổi.
+- Front/back preset không thể cùng làm một face nhận full diffuse.
+- Checkpoint 4 hiển thị grayscale, chưa cộng ambient và chưa nhân baseColor.
+
+## Bài tập mở rộng
+
+Viết test cho góc 60° bằng `N=(0,0,-1)` và một `L` có cosine mong đợi là `0.5`. Dùng vector đã normalize hoặc để hàm normalize, rồi kiểm tolerance `1e-9`.
+
+Bài tiếp theo sẽ trả màu material vào hình và giải quyết một nhược điểm dễ thấy: mặt không nhận diffuse hiện tối đen hoàn toàn.

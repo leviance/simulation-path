@@ -1,0 +1,124 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm đúng thời điểm viên đạn chạm đất
+
+## Vấn đề cần giải quyết
+
+Physics chỉ được lấy mẫu tại những thời điểm rời rạc. Ở bước trước, viên đạn có thể còn cao 0,12 m; ở bước sau nó đã xuống −0,08 m. Nếu chỉ gán `y=0`, X và elapsed vẫn thuộc cuối bước, nên marker hạ cánh bị đẩy xa hơn giao điểm thật.
+
+Bài này xử lý hai câu hỏi riêng:
+
+1. Nghiệm giải tích chạm ground lúc nào?
+2. Đường Euler cắt ground ở đâu giữa hai numerical sample cuối?
+
+Hai đáp án không buộc phải giống nhau. Nội suy sửa việc xuyên bề mặt của bước số; nó không biến Euler thành nghiệm giải tích.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ground impact giải tích thỏa:
+
+$$
+y_0+v_{0y}t+\frac{1}{2}a_yt^2-y_{ground}=0
+$$
+
+Đây là quadratic $at^2+bt+c=0$. Ta chọn root hữu hạn lớn hơn epsilon; nếu projectile bắt đầu đúng ground và bay lên, root $t=0$ không phải lúc hạ cánh tương lai.
+
+Với bước Euler, gọi position trước là $p_a$, position xuyên đất là $p_b$. Tỷ lệ trên đoạn nơi Y bằng ground:
+
+$$
+\alpha=\frac{p_{a,y}-groundY}{p_{a,y}-p_{b,y}}
+$$
+
+Sau đó `impact=lerp(pa,pb,alpha)` và elapsed chỉ cộng `alpha*dt`.
+
+<InteractiveLab demo="projectile" mode="projectile-impact" />
+
+Dấu X hồng dưới ground là sample Euler thô. Chấm xanh nằm trên ground là state sau interpolation. Readout “Impact interpolation” cho biết bước cuối đã dùng bao nhiêu phần.
+
+## Viết code từng bước
+
+### Bước 1 — Giải quadratic và lọc root
+
+```cpp title="include/lab.hpp — discriminant âm nghĩa là không có giao điểm thật"
+const double discriminant = b * b - 4.0 * a * c;
+if (!std::isfinite(discriminant) || discriminant < 0.0) {
+    return std::nullopt;
+}
+const double root = std::sqrt(std::max(0.0, discriminant));
+const double first = (-b - root) / (2.0 * a);
+const double second = (-b + root) / (2.0 * a);
+```
+
+Hàm còn có nhánh tuyến tính khi `a≈0`. Project hiện có gravity, nhưng xử lý nhánh này làm contract của hàm đầy đủ và tránh chia cho zero nếu người học thử tắt gravity.
+
+### Bước 2 — Chỉ chọn root trong tương lai
+
+```cpp title="include/lab.hpp — bỏ t bằng zero và root quá khứ"
+double best = std::numeric_limits<double>::infinity();
+if (first > kPhysicsEpsilon) {
+    best = first;
+}
+if (second > kPhysicsEpsilon) {
+    best = std::min(best, second);
+}
+```
+
+Nếu không root nào hợp lệ, trả `nullopt`. Caller phải hiển thị “không có nghiệm” thay vì dùng 0 như một thời gian impact giả.
+
+### Bước 3 — Giữ cả state trước và sample thô
+
+```cpp title="include/lab.hpp — candidate được tính trước khi quyết định có impact"
+const ProjectileState before = state;
+explicitEulerStep(state, acceleration, deltaSeconds);
+const Vec2 uncorrectedPosition = state.position;
+if (before.position.y < groundY || state.position.y > groundY) {
+    return {false, 1.0, uncorrectedPosition};
+}
+```
+
+`uncorrectedPosition` được giữ trong result để Canvas vẽ dấu X. Đây là một công cụ debug hữu ích: ta thấy rõ interpolation đã sửa dữ liệu nào.
+
+### Bước 4 — Nội suy toàn bộ state liên quan
+
+```cpp title="include/lab.hpp — chỉ tiêu thụ phần thật của bước cuối"
+const double fraction = clampValue((before.position.y - groundY) / verticalTravel, 0.0, 1.0);
+state.position = lerp(before.position, state.position, fraction);
+state.position.y = groundY;
+state.velocity = lerp(before.velocity, state.velocity, fraction);
+state.elapsed = before.elapsed + deltaSeconds * fraction;
+state.active = false;
+```
+
+Gán Y đúng ground sau lerp loại sai số làm tròn nhỏ. X, velocity và elapsed vẫn lấy cùng `fraction`, nên final state mô tả một thời điểm duy nhất.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build ground impact"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_22_checkpoint_6
+./build/Debug/project_22_checkpoint_6.exe
+```
+
+Thử fixed dt lớn 1/15 s để dấu X nằm rõ dưới ground. Chấm xanh phải dừng trên đường đất và không nhận thêm step. Đường vàng nay kết thúc bằng exact root thay cho time horizon ở bài 3.
+
+## Thử làm sai để hiểu đúng
+
+1. Chọn root nhỏ nhất mà không lọc epsilon. Nếu muzzle nằm đúng ground, time of flight trở thành 0.
+2. Chỉ clamp Y nhưng giữ X cùng elapsed cuối bước. So range với interpolation; sai lệch tăng khi dt lớn.
+3. Nội suy position nhưng không nội suy velocity. State impact chứa position ở giữa bước và velocity ở cuối bước — hai thời điểm khác nhau.
+4. Quên `active=false`. Viên đạn tiếp tục nhận gravity và rơi xuống dưới ground ở frame sau.
+
+## Tự kiểm tra kết quả
+
+- Exact impact time là root dương và `analyticPosition(...,time).y≈groundY`.
+- Trường hợp gravity bằng zero không chia cho zero.
+- Bước không cắt ground giữ `stepFraction=1` và không tắt projectile.
+- Bước cắt ground tạo fraction trong `[0,1]`.
+- Numerical impact có Y đúng ground và elapsed chỉ tăng `fraction*dt`.
+- State impact không nhận thêm physics step sau khi `active=false`.
+
+## Bài tập mở rộng
+
+Đặt ground ở `y=5` và cho muzzle ở `y=12`. Kiểm cả exact root lẫn interpolation mà không hard-code số 0 trong solver. Sau đó thử initial velocity hướng xuống để chắc root tương lai vẫn được chọn đúng.
+
+Bài cuối sẽ dùng analytic reference và numerical state tại cùng elapsed để đo sai số, thay vì đánh giá bằng mắt xem hai đường “có vẻ gần nhau”.

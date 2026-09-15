@@ -1,0 +1,124 @@
+# `worldToScreen`: một điểm trong thế giới xuất hiện ở đâu?
+
+## Vấn đề cần giải quyết
+
+Checkpoint 1 tính vị trí điểm đánh dấu ngay trong phần vẽ. Nếu mỗi vật thể tự chép lại công thức, chỉ cần đổi camera hoặc quy ước trục Y là các nơi rất dễ lệch nhau. Ta cần một hàm duy nhất nhận điểm world và trả về tọa độ screen.
+
+## Hiểu ý tưởng trước khi viết code
+
+Phép biến đổi thuận gồm ba bước theo đúng thứ tự:
+
+1. tính vị trí tương đối so với camera: `relative = world - centerWorld`;
+2. đổi đơn vị thế giới sang pixel: `relative × pixelsPerUnit`;
+3. đưa gốc tới tâm viewport và đảo chiều trục Y.
+
+Công thức:
+
+```text
+screen.x = viewport.width/2  + (world.x - center.x) × scale
+screen.y = viewport.height/2 - (world.y - center.y) × scale
+```
+
+Có thể kiểm tra ngay một trường hợp: nếu `world == centerWorld`, phần tương đối bằng `{0,0}` và kết quả phải luôn là tâm viewport, bất kể tỉ lệ zoom.
+
+Ví dụ cụ thể: camera có `centerWorld=(10,-4)`, scale 100 px/unit, viewport 800×600. Với world point `(12,-1)`:
+
+```text
+relative = (12,-1) - (10,-4) = (2,3)
+screen.x = 400 + 2×100 = 600
+screen.y = 300 - 3×100 = 0
+```
+
+Kết quả `(600,0)` hợp lý: điểm nằm bên phải tâm camera 2 đơn vị và phía trên 3 đơn vị, nên xuất hiện ở mép trên màn hình.
+
+## Viết code từng bước
+
+### Bước 1 — Thêm phép trừ cho hai vector
+
+`worldToScreen` cần tính `world - centerWorld`. Bổ sung phép trừ sau bên cạnh `Vec2`:
+
+```cpp title="include/lab.hpp — trừ hai Vec2"
+inline Vec2 operator-(Vec2 left, Vec2 right) {
+    return {left.x - right.x, left.y - right.y};
+}
+```
+
+Kết quả vẫn là `Vec2`; tên `relative` ở nơi dùng cho biết đây là độ lệch so với camera, không phải tọa độ tuyệt đối.
+
+### Bước 2 — Tính vị trí tương đối so với camera
+
+```cpp title="include/lab.hpp — đầu worldToScreen"
+[[nodiscard]] Vec2 worldToScreen(Vec2 world) const {
+    const Vec2 relative = world - centerWorld;
+    const double pixelsPerWorldUnit = scale();
+```
+
+Tên `relative` nhắc rằng ta không nhân trực tiếp tọa độ tuyệt đối với tỉ lệ. Nếu camera ở `(1000,1000)` và vật thể ở `(1001,1000)`, khoảng cách giữa chúng vẫn chỉ là một đơn vị.
+
+### Bước 3 — Đổi sang pixel, đưa về tâm viewport và đảo Y
+
+```cpp title="include/lab.hpp — kết quả worldToScreen"
+return {
+    viewportPixels.x * 0.5 + relative.x * pixelsPerWorldUnit,
+    viewportPixels.y * 0.5 - relative.y* pixelsPerWorldUnit,
+};
+}
+```
+
+Dấu trừ chỉ xuất hiện ở công thức Y. Đây là nơi duy nhất phần chuyển đổi cần biết hai hệ có chiều Y ngược nhau.
+
+### Bước 4 — Vẽ điểm đánh dấu từ tọa độ world
+
+```cpp title="src/main.cpp — checkpoint 2"
+lab::Vec2 markerScreen{};
+markerScreen = camera.worldToScreen(markerWorld);
+for (int offsetY = -5; offsetY <= 5; ++offsetY) {
+    for (int offsetX = -5; offsetX <= 5; ++offsetX) {
+        if (offsetX * offsetX + offsetY * offsetY <= 25) {
+            putPixel(int(std::lround(markerScreen.x)) + offsetX, int(std::lround(markerScreen.y)) + offsetY, rgba(83, 240, 174));
+        }
+    }
+}
+```
+
+`markerWorld` không bao giờ bị thay bằng tọa độ screen. Phép chuyển đổi được thực hiện mỗi lần vẽ, ngay trước khi rasterize hình tròn. Chỉ đến lúc gọi `putPixel`, tọa độ mới được làm tròn về số nguyên.
+
+### Bước 5 — Dùng cùng hàm cho gốc thế giới
+
+```cpp title="src/main.cpp — hai trục qua world origin"
+const lab::Vec2 origin = camera.worldToScreen({0.0, 0.0});
+for (int x = 0; x < width; ++x) {
+    putPixel(x, int(std::lround(origin.y)), rgba(99, 112, 141));
+}
+for (int y = 0; y < height; ++y) {
+    putPixel(int(std::lround(origin.x)), y, rgba(99, 112, 141));
+}
+```
+
+Điểm đánh dấu và hai trục đều đi qua `worldToScreen`, nên khi camera pan ở bài 4, tất cả sẽ dịch chuyển nhất quán.
+
+## Ghép các phần lại
+
+Checkpoint 2 thay phép tính trực tiếp của bài 1 bằng `camera.worldToScreen(markerWorld)`. Hình ảnh ban đầu phải giống hệt. Khác biệt nằm trong cấu trúc code: tọa độ world không phụ thuộc viewport và mọi vật thể cần vẽ đều dùng cùng một hàm chuyển đổi.
+
+Hãy tạm đổi `centerWorld` thành `(1,0)` trong debugger. Điểm world `(2,1)` lúc này chỉ còn cách tâm `(1,1)`. Sau đó đổi `pixelsPerUnit`: hình trên màn hình ra xa hoặc gần tâm hơn nhưng `markerWorld` vẫn giữ nguyên.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ phép trừ `centerWorld`. Dịch camera không còn thay đổi vị trí trên màn hình theo cách mong đợi, đặc biệt với tọa độ world ở xa gốc.
+2. Nhân cả `viewportPixels / 2` với tỉ lệ zoom. Tâm viewport bị đẩy đi khi zoom, dù tâm màn hình phải là một mốc cố định.
+3. Dùng dấu cộng cho trục Y. Điểm có world Y dương xuất hiện phía dưới thay vì phía trên tâm màn hình.
+
+## Tự kiểm tra kết quả
+
+- `worldToScreen(centerWorld)` đúng bằng tâm viewport.
+- World `(2,1)` với camera mặc định ra `(590,215)`.
+- Đổi tỉ lệ không sửa `markerWorld`.
+- Điểm đánh dấu và gốc thế giới dùng cùng `worldToScreen`.
+- Phép chuyển đổi giữ kiểu `double` đến sát bước rasterization.
+
+## Bài tập mở rộng
+
+Hãy tính bằng tay với camera center `(10,-4)`, tỉ lệ 100 và viewport 800×600, rồi thử bốn điểm quanh tâm. Sau đó viết `worldVectorToScreen` không cộng vị trí tâm viewport để chuyển một vector độ dời thay vì một điểm.
+
+Bài sau sẽ hoàn tác từng bước để đổi pixel chuột trở lại tọa độ world.

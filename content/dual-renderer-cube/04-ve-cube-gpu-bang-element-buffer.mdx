@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ cube GPU bằng Element Buffer
+
+## Vấn đề cần giải quyết
+
+Project 33 dùng `glDrawArrays` vì một triangle chỉ có ba vertices. Cube đã có 36 indices; nếu vẫn gọi draw arrays, GPU sẽ đọc 36 vertex records liên tiếp trong khi VBO chỉ chứa 24. Ta cần một Element Buffer Object để mỗi triangle tham chiếu đúng vertex.
+
+Checkpoint 4 tạo VBO, EBO và VAO một lần, rồi vẽ toàn cube bằng một `glDrawElements`. CPU và GPU không có hai mesh: hai buffers chỉ là bản sao trên GPU của hai array chuẩn trong `pipeline.hpp`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba object trả lời ba câu hỏi khác nhau:
+
+```text
+VBO: vertex bytes nằm ở đâu?
+VAO: chia vertex bytes thành position/color thế nào, EBO nào đang gắn?
+EBO: mỗi primitive lấy vertex indices nào?
+```
+
+Trong Core Profile, EBO binding là state của VAO. Nếu bind EBO khi VAO active rồi unbind EBO trước khi rời VAO, ta vừa tháo index buffer khỏi chính VAO đó.
+
+<InteractiveLab demo="dual-renderer-cube" mode="gpu-indexed-draw" />
+
+## Viết code từng bước
+
+### Bước 1 — Shader nhận đúng dữ liệu của shared mesh
+
+Vertex shader không tự xoay cube bằng một bộ góc riêng. Nó nhận `uMvp`, nhân với `aPosition`, rồi chuyển màu mặt sang fragment shader:
+
+```glsl title="Cube vertex shader — position, color và uMvp"
+#version 330 core
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aColor;
+uniform mat4 uMvp;
+out vec3 vColor;
+
+void main() {
+    gl_Position = uMvp * vec4(aPosition, 1.0);
+    vColor = aColor;
+}
+```
+
+```glsl title="Cube fragment shader — xuất màu mặt"
+#version 330 core
+in vec3 vColor;
+out vec4 fragmentColor;
+
+void main() {
+    fragmentColor = vec4(vColor, 1.0);
+}
+```
+
+Checkpoint này mới cần một uniform location. Nếu `uMvp` trả về `-1`, dừng initialize và in diagnostics thay vì tiếp tục vẽ một cube biến mất.
+
+### Bước 2 — Tạo ba resource riêng
+
+```cpp title="include/gpu_renderer.hpp — tạo VAO, VBO và EBO"
+api.GenVertexArrays(1, &vertexArray);
+api.GenBuffers(1, &vertexBuffer);
+api.GenBuffers(1, &elementBuffer);
+if (vertexArray == 0U || vertexBuffer == 0U || elementBuffer == 0U) {
+    diagnostics = "VBO, EBO or VAO creation returned 0";
+    return false;
+}
+```
+
+Không tiếp tục setup nếu một handle bằng 0. `destroy` vẫn kiểm từng handle nên error path có thể gọi cleanup an toàn.
+
+### Bước 3 — Upload vertices và indices vào đúng target
+
+```cpp title="include/gpu_renderer.hpp — BufferData cho hai buffer"
+api.BindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
+api.BufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(kCubeVertices)), kCubeVertices.data(), GL_STATIC_DRAW);
+api.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, elementBuffer);
+api.BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(sizeof(kCubeIndices)), kCubeIndices.data(), GL_STATIC_DRAW);
+```
+
+`GL_STATIC_DRAW` mô tả mesh không đổi sau upload. Angle nằm trong uniform, nên xoay cube không cần gửi lại VBO/EBO.
+
+### Bước 4 — Ghi vertex layout và EBO vào VAO
+
+VAO phải đang bind trong lúc cấu hình cả attributes lẫn `GL_ELEMENT_ARRAY_BUFFER`. Position và color đều có ba float nhưng bắt đầu ở hai offset khác nhau:
+
+```cpp title="include/gpu_renderer.hpp — cấu hình VAO cho cube"
+api.BindVertexArray(vertexArray);
+api.BindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
+api.BufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(kCubeVertices)), kCubeVertices.data(), GL_STATIC_DRAW);
+api.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, elementBuffer);
+api.BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(sizeof(kCubeIndices)), kCubeIndices.data(), GL_STATIC_DRAW);
+api.EnableVertexAttribArray(0U);
+api.VertexAttribPointer(0U, 3, GL_FLOAT, GL_FALSE, GLsizei(sizeof(GpuCubeVertex)), reinterpret_cast<const void*>(offsetof(GpuCubeVertex, positionX)));
+api.EnableVertexAttribArray(1U);
+api.VertexAttribPointer(1U, 3, GL_FLOAT, GL_FALSE, GLsizei(sizeof(GpuCubeVertex)), reinterpret_cast<const void*>(offsetof(GpuCubeVertex, red)));
+api.BindVertexArray(0U);
+api.BindBuffer(GL_ARRAY_BUFFER, 0U);
+return api.GetError() == GL_NO_ERROR;
+```
+
+Ta không unbind `GL_ELEMENT_ARRAY_BUFFER` trong khi VAO còn active. Khi `BindVertexArray(0)` chạy, EBO đã được ghi nhớ trong cube VAO.
+
+### Bước 5 — Đọc đủ tham số của glDrawElements
+
+```cpp title="include/gpu_renderer.hpp — indexed draw call"
+api.BindVertexArray(vertexArray);
+api.DrawElements(GL_TRIANGLES, GLsizei(kCubeIndices.size()), GL_UNSIGNED_INT, nullptr);
+api.BindVertexArray(0U);
+```
+
+`nullptr` là byte offset 0 trong EBO đang gắn với VAO, không phải lời yêu cầu đọc indices từ địa chỉ null trên CPU.
+
+Ở checkpoint 4, `draw` còn upload `uMvp` và bật/tắt depth/culling từ `CubeScene`. Hai bài sau sẽ mổ xẻ riêng các state đó; hiện tại chỉ cần biết draw không sửa scene và không upload lại mesh.
+
+### Bước 6 — Thu dọn theo thứ tự ngược với lúc tạo
+
+EBO và VBO đều là buffer object nhưng vẫn giữ hai handle riêng để không xóa thiếu. Mỗi handle được đưa về 0 ngay sau khi xóa, nhờ đó `destroy` gọi lại vẫn an toàn:
+
+```cpp title="include/gpu_renderer.hpp — destroy cube resources"
+if (elementBuffer != 0U) {
+    api.DeleteBuffers(1, &elementBuffer);
+    elementBuffer = 0U;
+}
+if (vertexBuffer != 0U) {
+    api.DeleteBuffers(1, &vertexBuffer);
+    vertexBuffer = 0U;
+}
+if (vertexArray != 0U) {
+    api.DeleteVertexArrays(1, &vertexArray);
+    vertexArray = 0U;
+}
+if (program != 0U) {
+    api.DeleteProgram(program);
+    program = 0U;
+}
+```
+
+## Ghép các phần lại
+
+Vertex shader nhận `aPosition`, `aColor` và `uMvp`; fragment shader chỉ xuất màu mặt. Checkpoint 4 tạm chọn GPU backend cố định để ta xác nhận indexed draw trước khi thêm F1/F2.
+
+```bash title="Terminal — build GPU checkpoint"
+cmake --build build --config Debug --target project_34_checkpoint_4
+```
+
+Nếu cửa sổ chỉ có background, đọc diagnostics và `glGetError` trước khi đổi shader. Kiểm lần lượt program, VAO, EBO binding, count/type rồi mới đến MVP.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `GL_UNSIGNED_INT` thành `GL_UNSIGNED_SHORT` nhưng giữ buffer `uint32_t`. GPU đọc nửa-word thành indices khác hoàn toàn.
+2. Gọi `BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0)` trong lúc cube VAO còn active. Draw call mất index source.
+3. Giảm count xuống `kCubeIndices.size() - 3`. Cube thiếu đúng một triangle nhưng GPU vẫn chỉ đọc trong EBO. Từ đó giải thích vì sao count là số phần tử, không phải số byte.
+
+Hoàn tác thay đổi sau mỗi lần và xác nhận cube trở lại đủ 12 triangles.
+
+## Tự kiểm tra kết quả
+
+- [ ] VBO chứa đúng `sizeof(kCubeVertices)` bytes.
+- [ ] EBO chứa đúng `sizeof(kCubeIndices)` bytes.
+- [ ] VAO attributes dùng stride/offset từ `GpuCubeVertex`.
+- [ ] `glDrawElements` dùng 36, `GL_UNSIGNED_INT`, offset zero.
+- [ ] Xoay cube không gọi lại `BufferData`.
+
+Hãy dự đoán triangle nào biến mất khi count là 33, rồi đối chiếu với ba indices cuối. Không thử count lớn hơn 36: yêu cầu GPU đọc ra ngoài EBO là hành vi không xác định, không phải một thí nghiệm học tập an toàn.
+
+## Bài tập mở rộng
+
+1. Vẽ từng face bằng sáu draw calls và offset EBO, rồi so số draw call với bản chuẩn.
+2. Thêm wireframe mode bằng `glPolygonMode` nhưng giữ EBO.
+3. Ghi ra state nào được VAO nhớ và state nào vẫn phải bind per draw.
+
+Bài tiếp theo chứng minh `uMvp` GPU thực sự giống Mat4 CPU.

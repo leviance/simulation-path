@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Spatial Grid và nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Thuật toán đã đủ các mảnh, nhưng final chỉ đáng tin khi toàn bộ interaction dùng đúng cùng code path mà tests kiểm tra. Reset phải dựng lại đúng grid mặc định; đổi preset phải rebuild một lần; kéo query chỉ chạy query; benchmark và study không được âm thầm thay seed hoặc radius.
+
+Project 28 cũng cần chốt ranh giới kiến thức. Đây là **uniform Spatial Grid**: cellSize cố định trên toàn world. Nó rất hợp với scene có mật độ tương đối đều và query cục bộ. Project 29 mới giải quyết việc chia không gian không đều bằng Quadtree.
+
+## Hiểu ý tưởng trước khi viết code
+
+Final có ba nhóm state:
+
+- **Data/index state:** particles, seed, cellSize và grid buckets.
+- **Query state:** center, radius, pause/auto phase và pointer capture.
+- **Experiment state:** oracle match, benchmark metrics và cell-size rows.
+
+Reset đưa cả ba nhóm về mặc định. Validation thuần kiểm address, insertion, exact result, reduced candidate work và finite timing; không cần mở SDL window.
+
+<InteractiveLab demo="spatial-grid-neighbor-query" mode="grid-validation" />
+
+Thử theo thứ tự: kéo query ra ngoài mép, đổi cellSize, chạy benchmark, chạy study, bật auto probe rồi reset. Readout phải trở lại `20×20`, radius `0.08`, 100.000 particles, paused và chưa có benchmark.
+
+## Viết code từng bước
+
+### Bước 1 — Preset chỉ trả cellSize
+
+```cpp title="include/lab.hpp — preset không chứa một grid thứ hai"
+inline double cellSizeForPreset(GridPreset preset) {
+    if (preset == GridPreset::coarse) {
+        return 0.2;
+    }
+    if (preset == GridPreset::fine) {
+        return 0.025;
+    }
+    return 0.05;
+}
+```
+
+Khi preset đổi, final cập nhật config rồi gọi lại `buildSpatialGrid`. Không giữ ba bản buckets cùng lúc.
+
+### Bước 2 — Pointer capture có cặp bật/tắt
+
+```cpp title="src/main.cpp — bắt đầu drag"
+dragging = true;
+SDL_CaptureMouse(true);
+```
+
+```cpp title="src/main.cpp — kết thúc drag"
+dragging = false;
+SDL_CaptureMouse(false);
+```
+
+Cleanup cũng nhả capture nếu cửa sổ đóng khi đang kéo. Pointer motion chỉ đổi query center; nó không rebuild grid.
+
+### Bước 3 — Validation gọi đúng production functions
+
+```cpp title="include/lab.hpp — oracle agreement trong validation"
+querySpatialGrid(grid, particles, query, gridWorkspace);
+queryNeighborsBruteForce(particles, query, bruteWorkspace);
+const bool matches = spatialGridMatchesBruteForce(gridWorkspace, bruteWorkspace);
+```
+
+Không viết một “grid query cho test” riêng. Nếu final và test không gọi cùng hàm, test pass không bảo vệ ứng dụng.
+
+### Bước 4 — CTest kiểm output và exact work
+
+```cpp title="tests/tests.cpp — checksum và candidate reduction"
+check(bruteMetrics.totalScanned == particles.size() * bruteMetrics.queryCount, "brute benchmark reports exact scan work");
+check(gridMetrics.totalCandidates < bruteMetrics.totalScanned, "grid benchmark reduces candidate work");
+check(gridMetrics.checksum == bruteMetrics.checksum, "grid and brute benchmark checksums match");
+```
+
+Không đặt ngưỡng “grid phải dưới 1 ms”. Máy và build khác nhau, còn checksum cùng operation counts là invariant lặp lại được.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build và test Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+```bash title="Terminal — build và test Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Target `project_28_final` là mã hoàn chỉnh. ZIP đã chứa starter, tám checkpoint, final, tests và README; bạn không cần tự ghép các code block trong bài.
+
+## Thử làm sai để hiểu đúng
+
+1. Rebuild grid trong mọi frame. Query vẫn đúng nhưng lợi ích giảm mạnh; chỉ rebuild khi particles hoặc cellSize đổi.
+2. Quên nhả capture ở mouse up. Con trỏ vẫn bị ứng dụng giữ; khôi phục release branch và cleanup guard.
+3. Dùng số điểm Canvas vẽ làm `particleCount`. Draw sample và indexed workload bị trộn; readout phải báo riêng cả hai.
+
+## Tự kiểm tra kết quả
+
+- Reset trở về 100.000 particles, cellSize `0.05`, radius `0.08` và seed mặc định.
+- Preset 1/2/3 rebuild đúng coarse/balanced/fine grid.
+- Pointer capture bật khi drag và tắt khi release/cleanup.
+- Mỗi particle index nằm trong đúng một bucket.
+- Candidate range không vượt grid ở bốn góc.
+- Grid và oracle khớp hit set, nearest hit và benchmark checksum.
+- Grid candidate work nhỏ hơn brute scans ở preset mặc định.
+- Build time, query time, cell visits và candidates được tách riêng.
+- Debug và Release CTest đều đạt.
+
+## Bài tập mở rộng
+
+Cho particles chuyển động bằng velocity nhỏ. Chỉ rebuild sau mỗi fixed simulation step và đo riêng `rebuild ms` cùng `queries per rebuild`. Khi mật độ dồn vào một vùng, quan sát maximum bucket tăng ra sao.
+
+Project 29 sẽ giữ cùng query/oracle contract nhưng thay fixed grid bằng Quadtree nhìn thấy được. Khi đó vùng đông có thể tự chia sâu hơn vùng trống.

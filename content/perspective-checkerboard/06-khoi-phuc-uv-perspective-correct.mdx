@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khôi phục UV perspective-correct tại pixel
+
+## Vấn đề cần giải quyết
+
+Ta đã có `1/z`, `u/z`, `v/z` tại ba vertex và denominator tại pixel. Phần còn lại không phải “nắn” texture bằng một hệ số cảm tính: nội suy hai tử số bằng đúng barycentric weights, sau đó chia cả hai cho denominator chung.
+
+Checkpoint 6 giữ hai đường render affine và perspective-correct chạy cạnh nhau. Geometry, coverage, checker texture và address mode hoàn toàn giống nhau; chỉ hàm trả về UV khác. Đây là cách so sánh đủ sạch để biết phép sửa thực sự nằm ở interpolation.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tại pixel, ta nội suy:
+
+$$
+U'=\lambda_A\frac{u_A}{z_A}+\lambda_B\frac{u_B}{z_B}+\lambda_C\frac{u_C}{z_C}
+$$
+
+$$
+V'=\lambda_A\frac{v_A}{z_A}+\lambda_B\frac{v_B}{z_B}+\lambda_C\frac{v_C}{z_C}
+$$
+
+Sau đó khôi phục:
+
+$$
+u=\frac{U'}{D},\qquad v=\frac{V'}{D}
+$$
+
+Nếu ba vertex có cùng Z, mọi reciprocal depth giống nhau và hệ số đó triệt tiêu; affine và correct phải cho cùng UV. Đây là invariant quan trọng hơn việc “hình trông đẹp”.
+
+<InteractiveLab demo="perspective-texture" mode="texture-correct" />
+
+## Viết code từng bước
+
+### Bước 1 — Nội suy hai tử số
+
+```cpp title="include/lab.hpp — trộn u/z và v/z"
+const double uOverZ = weights.a * triangle.vertices[0].uOverZ +
+    weights.b * triangle.vertices[1].uOverZ +
+    weights.c * triangle.vertices[2].uOverZ;
+const double vOverZ = weights.a * triangle.vertices[0].vOverZ +
+    weights.b * triangle.vertices[1].vOverZ +
+    weights.c * triangle.vertices[2].vOverZ;
+```
+
+Đừng lấy raw `uv` từ `ScreenVertex` trong nhánh này. Chỉ một vertex dùng nhầm raw U cũng đủ tạo đường cong sai và seam khó thấy ở preset nhẹ.
+
+### Bước 2 — Chia cho denominator chung
+
+```cpp title="include/lab.hpp — khôi phục UV hoặc từ chối sample suy biến"
+const double denominator = reciprocalDepthDenominator(triangle, weights);
+if (std::abs(denominator) <= 1e-12) {
+    return std::nullopt;
+}
+return Vec2{uOverZ / denominator, vOverZ / denominator};
+```
+
+Không clamp denominator để “cứu” pixel. Một denominator gần zero là geometry hoặc input không hợp lệ; trả `nullopt` giữ lỗi số học không chảy vào texture index.
+
+### Bước 3 — Đặt hai cách nội suy sau một interface
+
+```cpp title="include/lab.hpp — chỉ mode được phép khác giữa hai viewport"
+enum class InterpolationMode {
+    affine,
+    perspectiveCorrect,
+};
+
+if (mode == InterpolationMode::affine) {
+    return interpolateAffineUv(triangle, weights);
+}
+return interpolatePerspectiveUv(triangle, weights);
+```
+
+`interpolateUv` giúp render loop không rẽ sang hai pipeline riêng. Nếu compare view có hai code path lớn, một thay đổi ở clipping hoặc sampling có thể làm phép so mất công bằng.
+
+### Bước 4 — Sample texture bằng corrected UV
+
+```cpp title="src/main.cpp — UV được chọn đi qua cùng nearest sampler"
+const auto correctedUv = lab::interpolatePerspectiveUv(screen, sample.barycentric);
+if (interpolationMode == lab::InterpolationMode::perspectiveCorrect && correctedUv) {
+    selectedUv = *correctedUv;
+}
+const lab::Color color = lab::sampleNearest(
+    texture,
+    selectedUv,
+    lab::AddressMode::clamp
+);
+```
+
+Perspective correction kết thúc trước sampler. `sampleNearest` không biết UV đến từ affine hay correct, nhờ đó bài toán projection và bài toán lọc texture không bị trộn lẫn.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint có hai interpolation mode"
+cmake --build build --config Debug --target project_20_checkpoint_6
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Đặt quad ở `front`: hai hình phải trùng nhau tới từng texel. Chuyển sang `steep`: silhouette vẫn giống hệt, nhưng correct view làm các hàng checker co dần hợp lý về phía xa. Nhấn `M` để đổi mode mà không reset camera hoặc texture.
+
+## Thử làm sai để hiểu đúng
+
+1. Chia từng `u/z` cho `1/z` ngay tại vertex rồi nội suy. Bạn vừa quay lại raw UV và thu được affine path cũ.
+2. Dùng một denominator cho U và một denominator khác cho V. Cả hai thuộc tính nằm trên cùng điểm 3D nên phải dùng chung reciprocal depth.
+3. Clamp corrected UV về 0..1 trước khi đo error. Clamp có thể giấu NaN hoặc sai số ngoài mặt; address mode chỉ chạy trong sampler.
+4. Render correct view bằng triangle dày hơn affine view. Tessellation có thể giảm affine distortion, nhưng không kiểm chứng đúng công thức đang học.
+
+## Tự kiểm tra kết quả
+
+- `interpolatePerspectiveUv` khớp reference reweight ở checkpoint 4 trong sai số `1e-9`.
+- Constant-depth triangle cho affine UV và corrected UV bằng nhau.
+- Tilted triangle tạo sai khác đo được ở pixel bên trong nhưng hai mode có coverage giống nhau.
+- Denominator gần zero trả `nullopt`, không tạo infinity hoặc texel index ngoài array.
+- Đổi interpolation mode không tạo lại checker texture và không sửa vertex UV.
+
+## Bài tập mở rộng
+
+Tô ảnh sai số `uvDistance(affine, correct)` bằng một thang màu liên tục. Giữ marker tại pixel có error lớn nhất và kiểm tra error về zero khi chuyển về preset front.
+
+Bài tiếp theo đưa một cạnh quad xuyên near plane. Ta sẽ giữ UV đúng trên vertex giao trước khi bất kỳ phép `1/z` nào được tính.

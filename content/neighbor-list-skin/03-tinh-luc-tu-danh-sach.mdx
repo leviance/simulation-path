@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính lực từ danh sách mà không đổi mô hình
+
+## Vấn đề cần giải quyết
+
+Ta đã có cặp chỉ số, nhưng dùng chúng thế nào? Một lỗi rất dễ mắc là “đã có trong neighbor list thì tính lực”. Cách đó làm lớp đệm biến thành vùng tương tác thật. Đổi skin sẽ đổi cả chuyển động, trong khi mục đích chỉ là đổi cách tổ chức công việc.
+
+Bài này thay vòng tìm cặp trong `pbc::evaluate` bằng vòng duyệt `list.pairs`. Công thức Lennard–Jones, cutoff, cách cộng lực và cách cộng thế năng đều giữ nguyên. Bản mọi cặp vẫn nằm trong `dynamics.hpp` để làm đối chứng ở các bài sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Danh sách trả lời: “Những cặp nào **có thể** cần tính?”. Bộ tính lực phải tự trả lời câu tiếp theo: “Ngay lúc này chúng có ở trong cutoff không?”. Hai câu hỏi dùng hai bán kính khác nhau:
+
+Khi dựng ở thời điểm t0, giữ cặp nếu:
+
+$$r(t_0)<r_c+skin.$$
+
+Khi tính lực ở thời điểm t, chỉ cho cặp tương tác nếu:
+
+$$r(t)<r_c.$$
+
+Trong danh sách hợp lệ có thể có cặp xa hơn listRadius hiện tại, bởi hạt đã đi ra xa từ lúc dựng. Không cần xóa riêng cặp ấy. Phép lọc force cutoff sẽ bỏ nó; danh sách chỉ cần **không thiếu** cặp đang có lực, không bắt buộc luôn nhỏ nhất.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-forces" />
+
+Chọn hai hạt, đưa khoảng cách từ 3.2 xuống 2.8 rồi xuống 2.4. Ở 2.8, số cặp trong list bằng 1 nhưng số cặp có lực bằng 0. Ở 2.4, cả hai bằng 1. Canvas đổi màu đoạn nối theo khoảng cách hiện tại; bản SDL in activePairs trên cửa sổ.
+
+## Viết code từng bước
+
+### Bước 1 — Bắt đầu bằng kết quả rỗng
+
+Thêm `evaluateListed` trong `neighbor_list.hpp`, trả về cùng kiểu Evaluation của Project 43:
+
+```cpp title="include/neighbor_list.hpp — tạo tổng lực mới ở mỗi lần gọi"
+pbc::Evaluation result;
+result.forces.resize(system.particles.size());
+if (!pbc::validParameters(system.parameters, system.box) || !validState(system) || !list.ready) {
+    return result;
+}
+```
+
+Các Vec2 mới có x=y=0. potential và các bộ đếm trong result cũng bắt đầu từ zero. Không giữ force của lần trước: vị trí có thể đã đổi dù pairs vẫn y nguyên. Trạng thái valid mặc định là false, chỉ đổi thành true khi phép tính hoàn tất.
+
+### Bước 2 — Đo lại r và lọc cutoff
+
+Trong vòng `for (const PairIndex pair : list.pairs)`, kiểm tra `pair.i < pair.j` và `pair.j < particles.size()` trước khi truy cập. Tăng evaluatedPairs rồi tính delta từ hai position **hiện tại**. Phần kiểm khoảng cách là:
+
+```cpp title="include/neighbor_list.hpp — không dùng listRadius để quyết định lực"
+const double distance = pbc::length(delta);
+if (!std::isfinite(distance) || distance < 1.0e-6) {
+    return result;
+}
+if (distance >= system.parameters.cutoff) {
+    continue;
+}
+```
+
+Hạt gần như trùng nhau không được lờ đi hoặc clamp lực. Hàm trả kết quả không hợp lệ để solver dừng rõ ràng. Còn cặp ở ngoài cutoff là trường hợp bình thường, nên dùng continue chứ không báo lỗi.
+
+### Bước 3 — Giữ dấu lực và số lần cộng U
+
+Phần còn lại lấy độ dốc của force-shifted potential đã có sẵn:
+
+```cpp title="include/neighbor_list.hpp — một phép tính cho hai lực đối nhau"
+const pbc::PairSample sample = pbc::shiftedPair(distance, system.parameters);
+const Vec2 force = pbc::scale(delta, sample.slope / distance);
+if (!pbc::finite(force) || !std::isfinite(sample.potential)) {
+    return result;
+}
+++result.activePairs;
+result.forces[pair.i] = pbc::add(result.forces[pair.i], force);
+result.forces[pair.j] = pbc::subtract(result.forces[pair.j], force);
+result.potential += sample.potential;
+```
+
+`delta` hướng từ i tới ảnh gần nhất của j. Với quy ước này, lực trên i bằng `U'(r) * delta/r`, còn lực trên j có dấu ngược lại. Không thêm một dấu trừ theo trí nhớ về `F=-gradient(U)` mà quên biến đang lấy đạo hàm; Project 41–43 đã kiểm dấu này bằng đạo hàm theo position.
+
+Sau vòng lặp, kiểm potential và mọi force đều hữu hạn rồi gán result.valid. Chú ý giới hạn: **valid chỉ là tính hợp lệ số học**, chưa xác nhận pairs còn đầy đủ. Một danh sách rỗng đã cũ vẫn có thể cho force=0 hữu hạn nhưng sai. Bài 4 bảo đảm tuổi thọ; bài 7 chủ động bắt lỗi ấy.
+
+## Ghép các phần lại
+
+Build `project_44_checkpoint_3`. Main gọi evaluateListed để hiển thị activePairs và valid; chưa tích phân. Bộ dựng naive vẫn chạy sau mỗi thao tác sửa tay, nên phép đọc lực ở bài này dùng danh sách vừa cập nhật.
+
+Thử thay skin khi giữ nguyên vị trí. Số pairs có thể đổi, nhưng activePairs và kết quả lực không được đổi. Đây là phép kiểm đơn giản nhất để xem bạn có nhầm vùng tìm cặp với vùng tương tác hay không.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ nhánh `distance >= cutoff`. Đặt cặp ở 2.8: phần mở rộng của công thức force-shifted có thể bị dùng ngoài miền đã định. Khôi phục phép lọc rồi xác nhận lực và U đều zero.
+2. Cộng force vào cả i lẫn j. Tổng lực của cặp không còn zero; hệ tự tăng động lượng dù không có ngoại lực. Trả phép cập nhật j về subtract trước khi tiếp tục.
+
+## Tự kiểm tra kết quả
+
+- Cặp trong skin được xét nhưng không tăng activePairs hay U.
+- Hai lực của một cặp đối nhau; potential cộng đúng một lần.
+- Đổi skin không đổi lực nếu list đã dựng lại trên cùng state.
+- Phân biệt được “số hữu hạn” với “không bỏ sót cặp”; không dùng valid thay cho kiểm hiệu lực cache.
+
+## Bài tập mở rộng
+
+In thêm hai thành phần lực trên A khi thử khoảng cách 2.4, 2.5 và 2.8. Sau đó sang [Khi nào danh sách bắt đầu không còn đáng tin?](/projects/neighbor-list-skin/04-khi-nao-can-dung-lai) để không phải rebuild sau mỗi lần hạt nhúc nhích.

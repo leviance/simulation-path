@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cache line, stride và useful bytes
+
+## Vấn đề cần giải quyết
+
+Khi code đọc một `float`, CPU không nhất thiết chỉ chuyển đúng 4 byte từ memory. Dữ liệu thường đi qua cache theo những khối liên tiếp gọi là cache line. Project dùng mô hình line 64 byte: không nhằm mô phỏng chính xác mọi CPU, mà để đếm xem một workload có tận dụng những byte được nạp hay không.
+
+Nếu chỉ đọc `positionX`, AoS mang theo năm field còn lại của mỗi particle dù kernel không dùng chúng. Trong SoA, một line chứa nhiều `positionX` liên tiếp. Nhưng khi integrate cần đủ sáu field, những byte “đi kèm” trong AoS không còn lãng phí. Đây là lý do không có layout thắng mọi workload.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng ba đại lượng:
+
+$$usefulBytes = N \times fieldCount \times 4$$
+
+$$loadedBytes = cacheLines \times 64$$
+
+$$efficiency = \frac{usefulBytes}{loadedBytes}$$
+
+Với một triệu particle và workload `positionX`, useful bytes luôn là 4 MB ở cả hai layout. Điểm khác nhau là địa chỉ của hai giá trị liên tiếp:
+
+- AoS stride: 24 byte.
+- SoA stride: 4 byte.
+
+Một line 64 byte chứa 16 float liên tiếp. SoA có thể dùng gần hết line cho `positionX`; AoS chỉ gặp vài `positionX` trước khi sang line mới.
+
+<InteractiveLab demo="memory-layout-race" mode="cache-lines" />
+
+## Viết code từng bước
+
+### Bước 1 — Ánh xạ workload sang field offsets
+
+```cpp title="include/benchmark.hpp — fieldsForWorkload"
+inline FieldSelection fieldsForWorkload(MemoryWorkload workload) {
+    FieldSelection selection{};
+    if (workload == MemoryWorkload::positionX) {
+        selection.offsets[0] = 0U;
+        selection.count = 1U;
+        return selection;
+    }
+    if (workload == MemoryWorkload::velocityOnly) {
+        selection.offsets[0] = 3U;
+        selection.offsets[1] = 4U;
+        selection.offsets[2] = 5U;
+        selection.count = 3U;
+        return selection;
+    }
+    for (std::size_t field = 0; field < kParticleFieldCount; ++field) {
+        selection.offsets[field] = field;
+    }
+    selection.count = kParticleFieldCount;
+    return selection;
+}
+```
+
+Offset được tính theo số float trong struct: `positionX` ở 0, velocity xyz ở 3–5. Danh sách luôn tăng dần để địa chỉ ta duyệt cũng tăng dần.
+
+### Bước 2 — Đếm line cho SoA
+
+Mỗi selected field là một allocation riêng, được giả định bắt đầu ở ranh giới line:
+
+```cpp title="include/benchmark.hpp — SoA cache-line count"
+if (layout == MemoryLayout::soa) {
+    const std::size_t bytesPerArray = particleCount * sizeof(float);
+    const std::size_t linesPerArray = (bytesPerArray + lineSize - 1U) / lineSize;
+    cacheLines = linesPerArray * fields.count;
+}
+```
+
+Phép chia làm tròn lên giữ cả line cuối chưa đầy. Nếu chọn ba velocity arrays, số line bằng ba lần số line của một array.
+
+### Bước 3 — Đếm line cho AoS từ byte address
+
+```cpp title="include/benchmark.hpp — AoS cache-line count"
+for (std::size_t index = 0; index < particleCount; ++index) {
+    for (std::size_t field = 0; field < fields.count; ++field) {
+        const std::size_t byteAddress =
+            (index * kParticleFieldCount + fields.offsets[field]) * sizeof(float);
+        const std::size_t line = byteAddress / lineSize;
+        if (line != previousLine) {
+            ++cacheLines;
+            previousLine = line;
+        }
+    }
+}
+```
+
+Vì index và field offset tăng dần, line number không đi lùi. Chỉ cần nhớ line vừa thấy, không cần tạo một `std::set` hàng trăm nghìn phần tử.
+
+## Ghép các phần lại
+
+Phím `W` giờ không chỉ đổi kernel. Nó còn đổi màu field trên memory diagram và tính lại hai `MemoryTrafficEstimate`. Title bar báo cache lines cùng efficiency của AoS/SoA cho đúng N hiện tại.
+
+Traffic model đứng ngoài benchmark timer. Nó là phép đếm dựa trên địa chỉ lý tưởng, không phải thao tác memory thật cần được cộng vào kernel.
+
+## Thử làm sai để hiểu đúng
+
+1. Đặt `usefulBytes = sizeof(ParticleAoS) * N` cho mọi workload. Position-x sẽ bị báo dùng 24 MB hữu ích dù thuật toán chỉ cần 4 MB.
+2. Dùng `particleCount * 4 / 64` mà không làm tròn lên. Array nhỏ hoặc line cuối lẻ sẽ bị bỏ sót.
+3. Kết luận SoA nhanh gấp đúng tỉ lệ loaded bytes. Cache hierarchy, prefetcher, compiler và store traffic còn ảnh hưởng timing thật.
+4. Cho mỗi SoA array nối ngay sau array trước mà không nói rõ alignment assumption. Mô hình hiện tại cố ý coi mỗi allocation bắt đầu ở line riêng.
+
+## Tự kiểm tra kết quả
+
+- [ ] Một triệu `positionX` có đúng 4.000.000 useful bytes.
+- [ ] SoA position-x dùng ít cache line hơn AoS.
+- [ ] SoA position-x có efficiency cao hơn AoS.
+- [ ] Với N phù hợp và integrate đủ sáu field, hai layout có cache-line count tương đương.
+- [ ] Traffic model không chạy bên trong timer.
+- [ ] Target `project_32_checkpoint_6` build và chạy được.
+
+## Bài tập mở rộng
+
+1. Đổi line size thành 32 và 128 byte, rồi ghi lại xu hướng thay vì timing dự đoán.
+2. Thêm workload chỉ đọc `positionX` và `positionY`; tính useful bytes trước khi chạy code.
+3. Vẽ các line boundary lên sơ đồ Canvas cho sáu particle đầu tiên.
+
+Bài 7 sẽ đặt mô hình cạnh phép đo Release thật. Nếu timing không đi đúng traffic ratio, ta sẽ ghi nhận thay vì sửa kết luận cho khớp kỳ vọng.

@@ -1,0 +1,317 @@
+[
+  {
+    "id": "01",
+    "slug": "hello-pixels",
+    "sourceDirectory": "project-01-hello-pixels",
+    "checkpointCount": 6,
+    "demoId": "pixel"
+  },
+  {
+    "id": "02",
+    "slug": "wasd-fps-cap",
+    "sourceDirectory": "project-02-wasd-fps-cap",
+    "checkpointCount": 6,
+    "demoId": "motion"
+  },
+  {
+    "id": "03",
+    "slug": "mini-paint",
+    "sourceDirectory": "project-03-mini-paint",
+    "checkpointCount": 6,
+    "demoId": "stroke"
+  },
+  {
+    "id": "04",
+    "slug": "tiny-2d-rasterizer",
+    "sourceDirectory": "project-04-tiny-2d-rasterizer",
+    "checkpointCount": 6,
+    "demoId": "raster"
+  },
+  {
+    "id": "05",
+    "slug": "coordinate-map",
+    "sourceDirectory": "project-05-coordinate-map",
+    "checkpointCount": 6,
+    "demoId": "coordinate"
+  },
+  {
+    "id": "06",
+    "slug": "vector-playground",
+    "sourceDirectory": "project-06-vector-playground",
+    "checkpointCount": 6,
+    "demoId": "vector"
+  },
+  {
+    "id": "07",
+    "slug": "unit-circle",
+    "sourceDirectory": "project-07-unit-circle",
+    "checkpointCount": 6,
+    "demoId": "angle"
+  },
+  {
+    "id": "08",
+    "slug": "mouse-turret",
+    "sourceDirectory": "project-08-mouse-turret",
+    "checkpointCount": 6,
+    "demoId": "turret"
+  },
+  {
+    "id": "09",
+    "slug": "square-transformer",
+    "sourceDirectory": "project-09-square-transformer",
+    "checkpointCount": 6,
+    "demoId": "transform"
+  },
+  {
+    "id": "10",
+    "slug": "3d-compass",
+    "sourceDirectory": "project-10-3d-compass",
+    "checkpointCount": 6,
+    "demoId": "normal"
+  },
+  {
+    "id": "11",
+    "slug": "perspective-point",
+    "sourceDirectory": "project-11-perspective-point",
+    "checkpointCount": 6,
+    "demoId": "projection"
+  },
+  {
+    "id": "12",
+    "slug": "rotating-triangle",
+    "sourceDirectory": "project-12-rotating-triangle",
+    "checkpointCount": 6,
+    "demoId": "rotation3d"
+  },
+  {
+    "id": "13",
+    "slug": "wireframe-cube",
+    "sourceDirectory": "project-13-wireframe-cube",
+    "checkpointCount": 5,
+    "demoId": "wireframe-cube"
+  },
+  {
+    "id": "14",
+    "slug": "fps-camera-room",
+    "sourceDirectory": "project-14-fps-camera-room",
+    "checkpointCount": 7,
+    "demoId": "fps-camera"
+  },
+  {
+    "id": "15",
+    "slug": "3d-pipeline-inspector",
+    "sourceDirectory": "project-15-3d-pipeline-inspector",
+    "checkpointCount": 7,
+    "demoId": "pipeline3d"
+  },
+  {
+    "id": "16",
+    "slug": "triangle-rasterizer",
+    "sourceDirectory": "project-16-triangle-rasterizer",
+    "checkpointCount": 7,
+    "demoId": "triangle-raster"
+  },
+  {
+    "id": "17",
+    "slug": "solid-cube-z-buffer",
+    "sourceDirectory": "project-17-solid-cube-z-buffer",
+    "checkpointCount": 7,
+    "demoId": "z-buffer"
+  },
+  {
+    "id": "18",
+    "slug": "near-plane-clipper",
+    "sourceDirectory": "project-18-near-plane-clipper",
+    "checkpointCount": 7,
+    "demoId": "near-plane"
+  },
+  {
+    "id": "19",
+    "slug": "lambert-tetrahedron",
+    "sourceDirectory": "project-19-lambert-tetrahedron",
+    "checkpointCount": 7,
+    "demoId": "lambert"
+  },
+  {
+    "id": "20",
+    "slug": "perspective-checkerboard",
+    "sourceDirectory": "project-20-perspective-checkerboard",
+    "checkpointCount": 8,
+    "demoId": "perspective-texture"
+  },
+  {
+    "id": "21",
+    "slug": "obj-mesh-viewer",
+    "sourceDirectory": "project-21-obj-mesh-viewer",
+    "checkpointCount": 8,
+    "demoId": "obj-viewer"
+  },
+  {
+    "id": "22",
+    "slug": "projectile-cannon",
+    "sourceDirectory": "project-22-projectile-cannon",
+    "checkpointCount": 7,
+    "demoId": "projectile"
+  },
+  {
+    "id": "23",
+    "slug": "integrator-race",
+    "sourceDirectory": "project-23-integrator-race",
+    "checkpointCount": 7,
+    "demoId": "integrator-race"
+  },
+  {
+    "id": "24",
+    "slug": "collision-tank",
+    "sourceDirectory": "project-24-collision-tank",
+    "checkpointCount": 8,
+    "demoId": "collision-tank"
+  },
+  {
+    "id": "25",
+    "slug": "spring-chain",
+    "sourceDirectory": "project-25-spring-chain",
+    "checkpointCount": 8,
+    "demoId": "spring-chain"
+  },
+  {
+    "id": "26",
+    "slug": "double-pendulum-chaos",
+    "sourceDirectory": "project-26-double-pendulum-chaos",
+    "checkpointCount": 7,
+    "demoId": "double-pendulum-chaos"
+  },
+  {
+    "id": "27",
+    "slug": "brute-force-particle-query",
+    "sourceDirectory": "project-27-brute-force-particle-query",
+    "checkpointCount": 7,
+    "demoId": "brute-force-particle-query"
+  },
+  {
+    "id": "28",
+    "slug": "spatial-grid-neighbor-query",
+    "sourceDirectory": "project-28-spatial-grid-neighbor-query",
+    "checkpointCount": 8,
+    "demoId": "spatial-grid-neighbor-query"
+  },
+  {
+    "id": "29",
+    "slug": "visible-quadtree",
+    "sourceDirectory": "project-29-visible-quadtree",
+    "checkpointCount": 8,
+    "demoId": "visible-quadtree"
+  },
+  {
+    "id": "30",
+    "slug": "point-cloud-octree",
+    "sourceDirectory": "project-30-point-cloud-octree",
+    "checkpointCount": 9,
+    "demoId": "point-cloud-octree"
+  },
+  {
+    "id": "31",
+    "slug": "barnes-hut-nbody",
+    "sourceDirectory": "project-31-barnes-hut-nbody",
+    "checkpointCount": 10,
+    "demoId": "barnes-hut-nbody"
+  },
+  {
+    "id": "32",
+    "slug": "memory-layout-race",
+    "sourceDirectory": "project-32-memory-layout-race",
+    "checkpointCount": 8,
+    "demoId": "memory-layout-race"
+  },
+  {
+    "id": "33",
+    "slug": "cpu-gpu-triangle",
+    "sourceDirectory": "project-33-cpu-gpu-triangle",
+    "checkpointCount": 9,
+    "demoId": "cpu-gpu-triangle"
+  },
+  {
+    "id": "34",
+    "slug": "dual-renderer-cube",
+    "sourceDirectory": "project-34-dual-renderer-cube",
+    "checkpointCount": 9,
+    "demoId": "dual-renderer-cube"
+  },
+  {
+    "id": "35",
+    "slug": "shader-hot-reload-lab",
+    "sourceDirectory": "project-35-shader-hot-reload-lab",
+    "checkpointCount": 8,
+    "demoId": "shader-hot-reload"
+  },
+  {
+    "id": "36",
+    "slug": "ray-marched-shape-room",
+    "sourceDirectory": "project-36-ray-marched-shape-room",
+    "checkpointCount": 9,
+    "demoId": "ray-marched-shape-room"
+  },
+  {
+    "id": "37",
+    "slug": "million-vector-gpu",
+    "sourceDirectory": "project-37-million-vector-gpu",
+    "checkpointCount": 9,
+    "demoId": "million-vector-gpu"
+  },
+  {
+    "id": "38",
+    "slug": "five-million-particle-fountain",
+    "sourceDirectory": "project-38-five-million-particle-fountain",
+    "checkpointCount": 10,
+    "demoId": "five-million-particle-fountain"
+  },
+  {
+    "id": "39",
+    "slug": "gpu-reduction-prefix-sum",
+    "sourceDirectory": "project-39-gpu-reduction-prefix-sum",
+    "checkpointCount": 10,
+    "demoId": "gpu-reduction-prefix-sum"
+  },
+  {
+    "id": "40",
+    "slug": "gpu-spatial-grid-neighbors",
+    "sourceDirectory": "project-40-gpu-spatial-grid-neighbors",
+    "checkpointCount": 9,
+    "demoId": "gpu-spatial-grid-neighbors"
+  },
+  {
+    "id": "41",
+    "slug": "lennard-jones-pair",
+    "sourceDirectory": "project-41-lennard-jones-pair",
+    "checkpointCount": 7,
+    "demoId": "lennard-jones-pair"
+  },
+  {
+    "id": "42",
+    "slug": "molecular-dynamics-cpu",
+    "sourceDirectory": "project-42-molecular-dynamics-cpu",
+    "checkpointCount": 8,
+    "demoId": "molecular-dynamics-cpu"
+  },
+  {
+    "id": "43",
+    "slug": "periodic-molecular-box",
+    "sourceDirectory": "project-43-periodic-molecular-box",
+    "checkpointCount": 8,
+    "demoId": "periodic-molecular-box"
+  },
+  {
+    "id": "44",
+    "slug": "neighbor-list-skin",
+    "sourceDirectory": "project-44-neighbor-list-skin",
+    "checkpointCount": 9,
+    "demoId": "neighbor-list-skin"
+  },
+  {
+    "id": "45",
+    "slug": "molecular-lab-gpu",
+    "sourceDirectory": "project-45-molecular-lab-gpu",
+    "checkpointCount": 10,
+    "demoId": "molecular-lab-gpu"
+  }
+]

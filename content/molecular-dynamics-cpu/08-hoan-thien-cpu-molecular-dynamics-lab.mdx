@@ -1,0 +1,227 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện CPU Molecular Dynamics Lab
+
+## Vấn đề cần giải quyết
+
+Ta đã có hộp hạt chạy được, nhưng người học còn cần đổi điều kiện đầu, đọc trạng thái một hạt và biết một lần kiểm chứng thực sự bao phủ những gì. Bài cuối ghép các phần này thành chương trình có thể tải về và chạy độc lập.
+
+Bắt đầu từ checkpoint 7. Giữ bảng số liệu và phép đo thời gian; không làm mất các công cụ chẩn đoán khi chuyển thành bản final.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi lần đổi N, mật độ, nhiệt độ hoặc seed là một thí nghiệm mới. Ta tạo lại vị trí/vận tốc, đo E0, xóa history và sai số cực đại, đưa thời gian về 0 rồi tạm dừng. Đổi dt cũng chạy lại cùng điều kiện đầu để việc so sánh có ý nghĩa.
+
+Phân biệt hai kết quả: **kiểm chứng mô hình chuẩn** chạy những ca cố định, còn **sai số của thí nghiệm đang chọn** lấy từ trạng thái bạn đang cho chạy. PASS của ca chuẩn không xác nhận mọi seed, mật độ và dt đều ổn định.
+
+<InteractiveLab demo="molecular-dynamics-cpu" mode="md-final" />
+
+Bấm kiểm chứng, đọc số lần va tường của ca thử cùng sai số lớn nhất. Sau đó chọn 1.000 hạt và chạy thử: đọc riêng sai số của quỹ đạo này. Cả Canvas và C++ đều dùng tốc độ phát 0,05 và giữ giới hạn số bước để giao diện còn phản hồi.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt lại toàn bộ dữ liệu của thí nghiệm
+
+```cpp title="src/main.cpp — phần khởi tạo lại hệ"
+system = md::makeMolecularSystem(
+    particleCount,
+    targetTemperature,
+    seed,
+    density
+);
+selectedIndex = 0U;
+forceEvaluation = md::accumulatePairForces(system.particles, system.parameters);
+paused = true;
+accumulator = 0.0;
+droppedTime = 0.0;
+completedSubsteps = 0;
+stepError = "none";
+metrics = md::measureSystem(system);
+system.initialEnergy = metrics.totalEnergy;
+history.clear();
+md_ui::appendHistory(history, system, metrics);
+nextHistoryTime = 0.02;
+maximumEnergyDrift = 0.0;
+```
+
+Đoạn này nằm trong lambda rebuildSystem. Các nhánh T, D, S, 1–4, [ ], R đều gọi lại lambda sau khi đổi cấu hình. forceEvaluation và metrics chỉ được dùng với system vừa tạo, không giữ kết quả của seed cũ.
+
+
+### Bước 2 — Kiểm cả quỹ đạo bằng số bước nhỏ đã định trước
+
+```cpp title="include/molecular_dynamics.hpp — RunReport và measureRun"
+struct RunReport {
+    bool valid{};
+    double maximumEnergyDrift{};
+};
+
+inline RunReport measureRun(MolecularSystem& system, double dt, std::size_t steps) {
+    RunReport report{};
+    if (steps == 0U || steps > 2000U || system.particles.size() > 144U) {
+        return report;
+    }
+    const SystemMetrics initial = measureSystem(system);
+    if (!initial.valid) {
+        return report;
+    }
+    ForceEvaluation evaluation{};
+    for (std::size_t step = 0; step < steps; ++step) {
+        if (!velocityVerletStep(system, dt, &evaluation)) {
+            return report;
+        }
+        const SystemMetrics metrics = measureSystem(system, evaluation);
+        if (!metrics.valid) {
+            return report;
+        }
+        report.maximumEnergyDrift = std::max(
+            report.maximumEnergyDrift,
+            std::abs(relativeEnergyDrift(metrics.totalEnergy, initial.totalEnergy))
+        );
+    }
+    report.valid = true;
+    return report;
+}
+```
+
+measureRun chỉ nhận tối đa 144 hạt và 2.000 bước. Nó đo sai số sau từng bước, không chỉ ở điểm cuối. Bản kiểm chứng gọi 400 bước cho 36 hạt và một ca hai hạt va tường trong 200 bước. Như vậy vẫn kiểm được nhánh khó mà không biến nút V thành phép đo nặng với 1.000 hạt.
+
+
+### Bước 3 — Tạo riêng ca phải chạm tường
+
+```cpp title="include/molecular_dynamics.hpp — validateMolecularDynamics hoàn chỉnh"
+inline ValidationReport validateMolecularDynamics() {
+    MolecularSystem first = makeMolecularSystem(36U, 0.2, 123U, 0.55);
+    const MolecularSystem second = makeMolecularSystem(36U, 0.2, 123U, 0.55);
+    ValidationReport report{};
+    report.deterministicInitialization = sameParticles(first.particles, second.particles);
+    report.particlesInsideBox = std::all_of(
+        first.particles.begin(),
+        first.particles.end(),
+        [&first](const Particle& particle) {
+            return particleInsideBox(particle, first.box);
+        }
+    );
+    report.momentumRemoved = length(linearMomentum(first.particles)) < 1.0e-10;
+
+    const ForceEvaluation evaluation = accumulatePairForces(first.particles, first.parameters);
+    report.exactPairCount = evaluation.evaluatedPairs == unorderedPairCount(first.particles.size());
+    const Vec2 forceSum = std::accumulate(
+        evaluation.forces.begin(),
+        evaluation.forces.end(),
+        Vec2{},
+        [](Vec2 sum, Vec2 force) {
+            return add(sum, force);
+        }
+    );
+    report.forceSumZero = length(forceSum) < 1.0e-9;
+
+    const PairSample atCutoff = sampleForceShiftedPair(
+        first.parameters.cutoff,
+        first.parameters
+    );
+    const PairSample inside = sampleForceShiftedPair(first.parameters.cutoff - 1.0e-5);
+    report.cutoffContinuous = atCutoff.valid && !atCutoff.active &&
+        atCutoff.potential == 0.0 && atCutoff.potentialSlope == 0.0 &&
+        inside.valid && std::abs(inside.potential) < 1.0e-8 &&
+        std::abs(inside.potentialSlope) < 1.0e-5;
+    const ReflectionResult reflected = reflectCoordinate(-0.25, -2.0, 10.0);
+    report.wallReflection = reflected.valid && reflected.position == 0.25 &&
+        reflected.velocity == 2.0;
+    MolecularSystem wall = makeMolecularSystem(2U, 0.2, 42U, 0.02);
+    wall.particles[0].position = {0.02, 1.0};
+    wall.particles[1].position = {1.52, 1.0};
+    wall.particles[0].velocity = {-1.0, 0.0};
+    wall.particles[1].velocity = {0.0, 0.0};
+    const RunReport wallRun = measureRun(wall, 0.0005, 200U);
+    report.wallEvents = wall.wallCollisions;
+    report.wallEnergyDrift = wallRun.maximumEnergyDrift;
+    report.wallReflection = report.wallReflection && wallRun.valid && report.wallEvents > 0U &&
+        report.wallEnergyDrift < 0.01;
+
+    const RunReport run = measureRun(first, 0.001, 400U);
+    report.finiteRun = run.valid;
+    report.maximumEnergyDrift = run.maximumEnergyDrift;
+    report.energyStable = report.finiteRun && report.maximumEnergyDrift < 0.01;
+    return report;
+}
+```
+
+Hai hạt của ca tường đặt cách nhau 1,5 đơn vị; hạt đầu chỉ cách thành trái 0,02 và đang đi về phía tường. Báo cáo yêu cầu wallEvents lớn hơn 0 và kiểm cực đại sai số năng lượng. Kiểm cutoff gồm cả mẫu ngay bên trong, vì chỉ đọc tại rc không phát hiện được lỗi nối đường cong.
+
+
+### Bước 4 — Hiện rõ kết quả và lý do dừng
+
+```cpp title="src/main.cpp — xử lý phím V"
+if (event.key.key == SDLK_V) {
+    const md::ValidationReport report = md::validateMolecularDynamics();
+    if (report.passed()) {
+        validationState = md_ui::ValidationState::passed;
+    } else {
+        validationState = md_ui::ValidationState::failed;
+    }
+    md_ui::printValidationReport(report);
+}
+```
+
+Terminal liệt kê từng phép kiểm. Bảng trong cửa sổ giữ số liệu của thí nghiệm đang chọn: N, density, seed, dt, K/U/E, T, |P|, max drift, thời gian bước và position/velocity của hạt được click. Nếu một bước bị từ chối, tạm dừng và hiện thông báo, giữ trạng thái hợp lệ trước đó.
+
+## Ghép các phần lại
+
+### Mã nguồn hoàn chỉnh và cách chạy
+
+Phần **Toàn bộ mã nguồn của dự án** cuối bài hiển thị các file hoàn chỉnh. Chúng khớp checkpoint 08 và thư mục final trong ZIP:
+
+- molecular_dynamics.hpp: dữ liệu, công thức, tích phân và phép kiểm chứng thuần CPU.
+- framebuffer.hpp: thao tác pixel; molecular_dynamics_ui.hpp: hộp hạt và các đồ thị.
+- molecular_dynamics_diagnostics.hpp: bảng số liệu bằng SDL debug text.
+- main.cpp: tài nguyên SDL, nhập liệu, vòng lặp và reset.
+- tests/tests.cpp cùng CMakeLists.txt: build và các phép kiểm độc lập cửa sổ.
+
+
+```cpp title="src/main.cpp — cleanup"
+SDL_DestroyTexture(texture);
+SDL_DestroyRenderer(renderer);
+SDL_DestroyWindow(window);
+SDL_Quit();
+```
+
+Hủy tài nguyên theo thứ tự ngược lúc tạo. Nhánh lỗi render phải trả EXIT_FAILURE để người chạy không nhận mã thành công giả.
+
+```bash title="Terminal — final và CTest trên Windows"
+cmake -S . -B build -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_42_final project_42_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+.\build\Debug\project_42_final.exe
+```
+
+```bash title="Terminal — kiểm tra Release"
+cmake --build build --config Release --target project_42_final project_42_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+CTest kiểm final/include. Khi tự làm theo bài, sửa trong bản làm việc của bạn và chạy đúng target; CTest của final không tự phát hiện sửa đổi ở checkpoint khác.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản C++ của bạn, tạm bỏ `history.clear()` hoặc không đo lại `initialEnergy` rồi đổi seed: dữ liệu của hai thí nghiệm bị ghép lẫn. Hoàn tác và xác nhận đồ thị bắt đầu lại tại t=0.
+2. Giữ mô phỏng đúng, tăng dt rồi đọc sai số lớn nhất qua 100 bước từ cùng điều kiện đầu. Trạng thái hữu hạn chưa có nghĩa sai số đủ nhỏ. Giảm dt để đối chiếu; luôn giữ timeout và giới hạn số bước của mọi phép kiểm.
+
+## Tự kiểm tra kết quả
+
+- [ ] Starter, checkpoint 01–08 và final đều build.
+- [ ] N=1.000, 499.500 cặp/lần tính lực, 999.000 lượt xét/bước.
+- [ ] T, D, S, 1–4 và [ ] tạo lại một thí nghiệm nhất quán.
+- [ ] Click hạt đọc được vị trí và vận tốc; bảng vẫn giữ timing và dropped time.
+- [ ] Chín điều kiện chuẩn đều có kết quả, ca va tường thực sự có wallEvents lớn hơn 0.
+- [ ] Sai số cực đại của ca chuẩn được tách khỏi thí nghiệm đang chạy.
+- [ ] CTest có timeout 20 giây; không mở cửa sổ.
+- [ ] ZIP chứa cả hướng dẫn, starter, tám checkpoint, final và tests.
+
+## Bài tập mở rộng
+
+1. Ghi CSV ở nhịp lấy mẫu cố định, với giới hạn số dòng.
+2. Đo tổng xung lượng truyền cho tường trong một khoảng thời gian để chuẩn bị tính áp suất.
+3. Thêm hai loại khối lượng: số bậc tự do không đổi, nhưng trung bình vận tốc phải có trọng số.
+4. Viết test rằng hai cách chia render frame cho cùng kết quả khi chưa chạm guard.
+
+Project 43 thay tường phản xạ bằng periodic boundary. Khi đó hai hạt gần hai mép đối diện có thể là láng giềng qua minimum-image convention.

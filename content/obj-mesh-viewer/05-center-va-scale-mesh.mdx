@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa model về tâm và scale vừa khung
+
+## Vấn đề cần giải quyết
+
+OBJ không quy định một đơn vị chung. Một file có thể dùng mét, file khác dùng centimet; model có thể được xuất quanh origin hoặc nằm ở tọa độ `(1200, -50, 800)`. Nếu camera distance bị hard-code theo rocket hiện tại, model tiếp theo có thể nhỏ như một pixel hoặc nằm hoàn toàn ngoài frustum.
+
+Ta cần một bước nhập liệu ổn định: tính bounds, đưa tâm bounds về origin và scale **đồng đều** để cạnh lớn nhất dài 2 model units. Renderer từ đây luôn nhận model có kích thước dự đoán được.
+
+## Hiểu ý tưởng trước khi viết code
+
+Axis-aligned bounding box (AABB) giữ min/max của từng trục:
+
+$$
+b_{min}=(\min x_i,\min y_i,\min z_i),\quad
+b_{max}=(\max x_i,\max y_i,\max z_i)
+$$
+
+Tâm bounds và độ dài trục lớn nhất:
+
+$$
+c=\frac{b_{min}+b_{max}}{2},\qquad
+e_{max}=\max(b_{max}-b_{min})
+$$
+
+Với target extent bằng 2:
+
+$$
+p'=(p-c)\frac{2}{e_{max}}
+$$
+
+Chỉ có **một** scale factor. Nếu ép riêng X, Y, Z về `[-1,1]`, rocket thấp và dài có thể biến thành khối gần vuông — vừa khung nhưng sai hình.
+
+<InteractiveLab demo="obj-viewer" mode="obj-normalize" />
+
+Bật “Xem bounds” rồi thử phóng các số trong source lên 100 lần. Center trước và uniform scale thay đổi, nhưng bounds sau cùng vẫn quanh origin với max extent bằng 2.
+
+## Viết code từng bước
+
+### Bước 1 — Khởi tạo bounds từ vertex đầu tiên
+
+```cpp title="include/lab.hpp — không dùng origin giả làm bounds ban đầu"
+if (mesh.positions.empty()) {
+    return std::nullopt;
+}
+Bounds3 bounds{mesh.positions.front(), mesh.positions.front()};
+for (const Vec3 position : mesh.positions) {
+    bounds.minimum.x = std::min(bounds.minimum.x, position.x);
+    bounds.minimum.y = std::min(bounds.minimum.y, position.y);
+    bounds.minimum.z = std::min(bounds.minimum.z, position.z);
+    bounds.maximum.x = std::max(bounds.maximum.x, position.x);
+    bounds.maximum.y = std::max(bounds.maximum.y, position.y);
+    bounds.maximum.z = std::max(bounds.maximum.z, position.z);
+}
+```
+
+Khởi tạo min/max bằng 0 là sai nếu toàn bộ model nằm ở X dương: `minimum.x` sẽ giữ 0 dù không có vertex nào ở đó.
+
+### Bước 2 — Tách center và max extent thành hàm nhỏ
+
+```cpp title="include/lab.hpp — hai đại lượng điều khiển normalize"
+inline Vec3 boundsCenter(const Bounds3& bounds) {
+    return (bounds.minimum + bounds.maximum) * 0.5;
+}
+
+inline double boundsMaxExtent(const Bounds3& bounds) {
+    const Vec3 extent = bounds.maximum - bounds.minimum;
+    return std::max({extent.x, extent.y, extent.z});
+}
+```
+
+Hai hàm thuần này dễ test và cũng cung cấp số liệu cho Canvas/readout. Không cần giấu mọi phép tính trong một vòng lặp dài.
+
+### Bước 3 — Từ chối mẫu số xấu rồi scale đồng đều
+
+```cpp title="include/lab.hpp — normalize toàn bộ position bằng một scale"
+const double maxExtent = boundsMaxExtent(*bounds);
+if (!std::isfinite(maxExtent) || maxExtent <= 1e-9 || targetExtent <= 0.0) {
+    return false;
+}
+const Vec3 center = boundsCenter(*bounds);
+const double scale = targetExtent / maxExtent;
+for (Vec3& position : mesh.positions) {
+    position = (position - center) * scale;
+}
+return true;
+```
+
+Mesh có nhiều vertex trùng một điểm tạo `maxExtent=0`; trả `false` rõ ràng tốt hơn chia cho 0 rồi sinh infinity.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build normalization checkpoint"
+cmake --build build --config Debug --target project_21_checkpoint_5
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Checkpoint gọi `normalizeMesh` đúng một lần sau khi parse, không lặp mỗi frame. Model-space data chuẩn được giữ ổn định; animation chỉ quay bản dữ liệu đó.
+
+## Thử làm sai để hiểu đúng
+
+1. Khởi tạo bounds bằng `{0,0,0}` rồi dùng model có mọi X từ 100 tới 110. So center sai với center thật.
+2. Dùng ba scale `2/extent.x`, `2/extent.y`, `2/extent.z`. Quan sát rocket bị thay tỷ lệ và normal của mặt nghiêng đổi theo.
+3. Cho mọi vertex cùng tọa độ. Nếu bỏ guard epsilon, readout sẽ lan `NaN` hoặc infinity tới projection.
+
+## Tự kiểm tra kết quả
+
+- Mesh rỗng không có bounds và normalize trả `false`.
+- Bounds chứa mọi position trước biến đổi.
+- Sau normalize, center gần `(0,0,0)` và max extent gần 2.
+- Cùng một scale được áp dụng cho X, Y, Z.
+- Topology, source face và source line không thay đổi.
+
+## Bài tập mở rộng
+
+Tính thêm bounding sphere bán kính lớn nhất sau khi đã trừ center. So khoảng cách camera cần thiết nếu fit theo AABB với fit theo sphere ở nhiều aspect ratio.
+
+Bài tiếp theo dùng triangle đã chuẩn hóa để tính face normal, culling và Lambert lighting.

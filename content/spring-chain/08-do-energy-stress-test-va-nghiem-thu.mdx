@@ -1,0 +1,131 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo energy, stress test và nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Một chuỗi chuyển động mượt trong vài giây vẫn có thể sai dấu damping, rò anchor hoặc tăng energy rất chậm. Bài cuối không thêm một hiệu ứng mới; nó biến những điều ta mong đợi thành phép đo và test có ngưỡng. Ta kiểm công thức nhỏ trước, rồi mới chạy stress cả hệ.
+
+Mechanical energy của project gồm kinetic, spring elastic và gravitational potential. Khi damping bằng zero, numerical energy có thể dao động do integrator nhưng không nên tăng vô hạn trong stable preset. Khi damping dương, energy giảm là hành vi vật lý có chủ đích.
+
+## Hiểu ý tưởng trước khi viết code
+
+$$
+K=\sum_i \frac12m_i\lVert v_i\rVert^2
+$$
+
+$$
+U_s=\sum_j \frac12k_jx_j^2
+$$
+
+Vì gravity vector hướng xuống và world Y hướng lên:
+
+$$
+U_g=-\sum_i m_i(g\cdot p_i)
+$$
+
+$$
+E=K+U_s+U_g
+$$
+
+<InteractiveLab demo="spring-chain" mode="spring-validation" />
+
+Nhấn “Chạy nhanh 20 s”. Demo phải dừng ở đúng simulated time, giữ UI responsive và báo riêng finite, anchor error, maximum stretch, maximum speed. Đây là stress test của model, không phải benchmark wall-clock.
+
+## Viết code từng bước
+
+### Bước 1 — Đo kinetic và gravitational energy theo mass thật
+
+```cpp title="include/lab.hpp — fixed particle không góp energy động"
+if (particle.inverseMass <= kSpringEpsilon) {
+    continue;
+}
+const double mass = 1.0 / particle.inverseMass;
+metrics.kineticEnergy += 0.5 * mass * lengthSquared(particle.velocity);
+if (gravityEnabled) {
+    metrics.gravitationalEnergy += -mass * dot(gravity, particle.position);
+}
+```
+
+Mốc zero của gravitational potential tùy chọn; energy difference mới là phần có ý nghĩa trong thí nghiệm.
+
+### Bước 2 — Đo spring energy từ cùng stretch dùng cho force
+
+```cpp title="include/lab.hpp — metric và solver không dùng hai định nghĩa stretch"
+metrics.maximumStretch = std::max(metrics.maximumStretch, std::abs(sample.stretch));
+metrics.springEnergy += 0.5 * spring.stiffness * sample.stretch * sample.stretch;
+```
+
+Squaring làm spring energy luôn không âm cho cả kéo giãn và nén.
+
+### Bước 3 — Định nghĩa safety envelope có ngưỡng cụ thể
+
+```cpp title="include/lab.hpp — nghiệm thu finite, anchor, stretch và speed"
+return metrics.anchorError <= 1e-9 && metrics.maximumStretch <= maximumStretchRatio * smallestRestLength && metrics.maximumSpeed <= maximumSpeed;
+```
+
+Safety envelope không tuyên bố mọi chuyển động ngoài ngưỡng là “sai vật lý”; nó ghi rõ miền mà preset mặc định cam kết hoạt động ổn định.
+
+### Bước 4 — Test công thức trước stress run
+
+```cpp title="tests/tests.cpp — Hooke case có đáp án tính tay"
+chain.particles[1].position = {1.2, 0.0};
+lab::SpringSample sample = lab::sampleElasticSpring(chain, chain.springs[0]);
+check(sample.valid, "stretched spring sample is valid");
+check(nearlyEqual(sample.stretch, 0.2), "stretch is distance minus rest length");
+check(nearlyEqual(sample.forceOnFirst.x, 20.0), "Hooke force uses stiffness times stretch");
+```
+
+Nếu test nhỏ sai, stress test không thể chỉ ra lỗi nằm ở Hooke, accumulator, damping hay integrator.
+
+### Bước 5 — Chạy đủ 20 giây simulated time
+
+```cpp title="tests/tests.cpp — stress run không mở SDL window"
+for (int step = 0; step < 4800; ++step) {
+    lab::stepDampedChain(chain, 1.0 / 240.0, {0.0, -9.81}, true);
+}
+const lab::ChainMetrics metrics = lab::measureChain(chain, {0.0, -9.81}, true);
+check(metrics.finite, "long spring-chain stress state stays finite");
+```
+
+4800×1/240 s bằng đúng 20 giây mô phỏng. Release build nhanh hơn nhưng phải cho cùng invariant như Debug.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build và test Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+```bash title="Terminal — lặp lại ở Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Target `project_25_final` chứa toàn bộ ứng dụng. ZIP tải xuống gồm README, starter, tám checkpoint, final và tests; không cần ghép code từ trang web bằng tay.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dấu gravitational energy. Một particle rơi xuống lại làm potential tăng; hoàn tác dấu `-mass*dot(g,p)`.
+2. Chỉ chạy stress 20 render frames. Kết quả phụ thuộc FPS và quá ngắn; hoàn tác về 4800 fixed steps.
+3. Cho safety envelope bỏ qua anchor error. Sửa nhầm anchor vẫn có thể “pass”; hoàn tác invariant riêng cho constraint.
+
+## Tự kiểm tra kết quả
+
+- 18 particles tạo 17 springs và initial stretch zero.
+- Hooke kéo giãn/nén đúng magnitude, direction và dấu.
+- Internal spring pair có tổng force zero.
+- Axial damping bỏ qua tangent relative motion.
+- Semi-implicit one-step case khớp đáp án tính tay.
+- Các cách chia frame time tạo cùng fixed-step count.
+- Drag không chọn anchor và clamp release velocity.
+- Stress 20 giây không có NaN, anchor error gần zero, max stretch dưới 0.40 m và max speed dưới 4 m/s. Ngưỡng stretch này lớn hơn độ giãn cân bằng xấp xỉ $17mg/k=0.347$ m của spring trên cùng, nơi phải đỡ toàn bộ 17 mass động.
+- Debug và Release CTest đều pass.
+- Canvas cùng C++ dùng chung tên biến, công thức và default parameters.
+
+## Bài tập mở rộng
+
+Thêm bending spring nối particle `i` với `i+2`, nhưng giữ nó trong một danh sách riêng và rest length riêng. Trước khi bật trong final, viết test cho topology và force pair của bending spring.
+
+Project 25 kết thúc phần mass–spring tuyến tính. Project 26 sẽ chuyển sang hai con lắc gần giống nhau để quan sát sensitivity to initial conditions và chaos; cách reset deterministic cùng metric-based validation ở đây tiếp tục được dùng lại.

@@ -1,0 +1,126 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Shear và hệ trục bị xiên
+
+## Vấn đề cần giải quyết
+
+Rotation làm cả hai trục quay cùng nhau nên góc vuông giữa chúng được giữ nguyên. Shear làm một việc khác: càng đi xa theo một trục, điểm càng bị đẩy dọc theo trục kia. Hình vuông biến thành hình bình hành, nhưng hai cặp cạnh đối diện vẫn song song.
+
+Ta sẽ thêm hai tham số `shearX` và `shearY`, đặt phép shear sau scale nhưng trước rotation. Đây là phép biến đổi cuối cùng được viết bằng công thức thành phần; bài sau sẽ gom cả ba vào ma trận.
+
+## Hiểu ý tưởng trước khi viết code
+
+Shear theo cả hai trục dùng hai phương trình:
+
+$$
+x'=x+k_xy
+$$
+
+$$
+y'=k_yx+y
+$$
+
+Với `shearX = 0.5`, điểm `(2,4)` trở thành `(4,4)`: Y càng lớn thì điểm càng bị đẩy sang phải. Với `shearY = -0.25`, cùng điểm đầu vào trở thành `(2,3.5)`.
+
+Hai phương trình phải đọc cùng một `(x,y)` ban đầu. Nếu tính x mới trước rồi dùng x mới để tính y, bạn đã ghép hai shear liên tiếp chứ không còn dùng đúng công thức trên.
+
+<InteractiveLab demo="transform" mode="transform-shear" />
+
+Đặt scale và angle về giá trị trung tính, sau đó chỉ thay `shearX`. Quan sát cạnh trên và dưới trượt ngược hướng nhưng vẫn song song. Tiếp theo đặt cả `shearX` và `shearY` khác 0; area ratio cho thấy diện tích lúc này có thể thay đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Trả về một point mới
+
+Thêm hàm thuần sau vào `include/lab.hpp`:
+
+```cpp title="include/lab.hpp — shearPoint"
+inline Vec2 shearPoint(Vec2 point, double shearX, double shearY) {
+    return {
+        point.x + shearX * point.y,
+        shearY * point.x + point.y,
+    };
+}
+```
+
+Danh sách khởi tạo chỉ được đánh giá từ `point.x` và `point.y` cũ. Không có phép gán trung gian làm dữ liệu của phương trình thứ hai thay đổi.
+
+### Bước 2 — Tạo hai tham số độc lập
+
+Giá trị ban đầu chỉ shear theo X để hình dễ đọc:
+
+```cpp title="src/main.cpp — trạng thái shear"
+double shearX = 0.35;
+double shearY = 0.0;
+```
+
+Các phím J/L điều khiển X; K/I điều khiển Y. Giới hạn `[-1.5,1.5]` đủ rộng để quan sát mà hình không lập tức chạy khỏi cửa sổ.
+
+```cpp title="src/main.cpp — phím điều chỉnh shear"
+if (event.key.key == SDLK_J) {
+    shearX = std::max(-1.5, shearX - 0.1);
+}
+if (event.key.key == SDLK_L) {
+    shearX = std::min(1.5, shearX + 0.1);
+}
+if (event.key.key == SDLK_K) {
+    shearY = std::max(-1.5, shearY - 0.1);
+}
+if (event.key.key == SDLK_I) {
+    shearY = std::min(1.5, shearY + 0.1);
+}
+```
+
+### Bước 3 — Gọi từng phép theo đúng thứ tự đã chọn
+
+Mỗi local point đi qua ba biến có tên. Đọc từ trên xuống chính là thứ tự chạy:
+
+```cpp title="src/main.cpp — Scale → Shear → Rotate"
+for (std::size_t index = 0; index < transformedSquare.size(); ++index) {
+    const lab::Vec2 scaled = lab::scalePoint(localSquare[index], scaleX, scaleY);
+    const lab::Vec2 sheared = lab::shearPoint(scaled, shearX, shearY);
+    transformedSquare[index] = lab::rotatePoint(sheared, angle);
+}
+```
+
+Ta chưa đổi thứ tự trong bài này. Mục tiêu trước mắt là có một kết quả chuẩn, dễ đặt breakpoint và dùng để đối chiếu khi chuyển sang ma trận.
+
+### Bước 4 — Reset không được bỏ sót tham số mới
+
+```cpp title="src/main.cpp — bổ sung shear vào reset"
+if (!event.key.repeat && event.key.key == SDLK_R) {
+    scaleX = 1.25;
+    scaleY = 0.8;
+    angle = lab::kPi / 6.0;
+    shearX = 0.35;
+    shearY = 0.0;
+}
+```
+
+Mỗi khi thêm trạng thái điều khiển, hãy cập nhật reset ngay trong cùng checkpoint. Nếu không, người học phải đóng chương trình mới quay lại ví dụ chuẩn.
+
+## Ghép các phần lại
+
+Build `project_9_checkpoint_4`. Nhấn R, dùng phím phải vài lần để đưa angle gần 0 rồi thử J/L. Sau đó giữ shear cố định và xoay: toàn bộ hệ trục đã xiên phải quay như một khối.
+
+Đường xám vẫn là hình local chưa biến đổi. Nếu đường xanh có các cạnh đối diện không còn song song, lỗi nằm ở cách tính point hoặc thứ tự đỉnh, không phải ở việc “shear vốn làm méo tùy ý”.
+
+## Thử làm sai để hiểu đúng
+
+1. Viết `point.x += shearX * point.y`, rồi dùng `point.x` mới trong công thức Y. Đặt cả hai shear khác 0 và so với Transform Lab; kết quả sẽ lệch.
+2. Dùng `x'=x+shearX*x`. Đây chỉ là scale X được viết bằng cách khác; hình không nghiêng theo Y.
+3. Đặt shear sau rotation trong vòng lặp. Chương trình vẫn chạy nhưng shear diễn ra theo world axes thay vì local axes đã chọn, vì vậy hình khác checkpoint chuẩn.
+
+## Tự kiểm tra kết quả
+
+- `shearPoint({2,4}, 0.5, 0)` trả `(4,4)`.
+- `shearPoint({2,4}, 0, -0.25)` trả `(2,3.5)`.
+- Shear `(0,0)` giữ nguyên mọi point.
+- Với chỉ một hệ số shear khác 0, diện tích hình được giữ nguyên.
+- Hai cặp cạnh đối diện của kết quả luôn song song.
+
+## Bài tập mở rộng
+
+Vẽ riêng ảnh của hai vector `(80,0)` và `(0,80)` sau shear. Dùng chúng làm hai cạnh xuất phát từ gốc để tự dựng lại hình bình hành mà không biến đổi bốn đỉnh. Đây là hình ảnh trực quan chuẩn bị cho hai cột đầu của ma trận.
+
+Bài tiếp theo thay ba lời gọi `scalePoint`, `shearPoint`, `rotatePoint` bằng một `Mat3` duy nhất nhưng vẫn phải cho đúng cùng kết quả.

@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Model matrix đưa local vertex ra world space
+
+## Vấn đề cần giải quyết
+
+Local vertex mô tả hình dạng của model quanh gốc riêng. Để đặt model vào scene, ta cần scale nó, xoay quanh local origin rồi tịnh tiến tới world position. Nếu cập nhật dồn vertex sau mỗi frame, sai số sẽ tích lũy và inspector mất dữ liệu gốc để so sánh.
+
+Giải pháp là giữ `localVertex` bất biến và mỗi frame tính:
+
+$$
+p_{world}=M\,p_{local}
+$$
+
+`M` phải chứa đúng thứ tự scale → rotate → translate.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với column vector, phép chạy trước nằm gần vector hơn:
+
+$$
+M=T(position)\,R_y(yaw)\,S(scale)
+$$
+
+Khi khai triển:
+
+$$
+p_{world}=T\big(R_y(S(p_{local}))\big)
+$$
+
+Nếu viết `S × R × T`, translation cũng bị scale và model không còn quay quanh local origin như mong muốn.
+
+<InteractiveLab demo="pipeline3d" mode="pipeline-model" />
+
+## Viết code từng bước
+
+### Bước 1 — Gom tham số model nhưng không nhét vertex vào đó
+
+```cpp title="include/lab.hpp — trạng thái model"
+struct ModelTransform {
+    Vec3 position{0.3, -0.2, 6.0};
+    Vec3 scale{1.2, 0.9, 1.0};
+    double yaw{20.0 * kPi / 180.0};
+};
+```
+
+`ModelTransform` là pose của cả model. Vertex vẫn nằm trong geometry local và có thể được nhiều instance dùng chung trong project sau.
+
+### Bước 2 — Viết scale và rotation Y thành Mat4
+
+Scale đặt ba hệ số lên đường chéo. Rotation Y giữ Y, xoay cặp X/Z bằng sin/cos:
+
+```cpp title="include/lab.hpp — rotation Y matrix"
+matrix.at(0, 0) = cosine;
+matrix.at(0, 2) = sine;
+matrix.at(2, 0) = -sine;
+matrix.at(2, 2) = cosine;
+return matrix;
+```
+
+Dấu ở hàng Z phải khớp với `rotateY` đã dùng trong Project 12–14. Đổi quy ước giữa chừng sẽ làm Model và View không còn đảo nhau như dự kiến.
+
+### Bước 3 — Ghép Model theo thứ tự đã chọn
+
+```cpp title="include/lab.hpp — Model = Translation × Rotation × Scale"
+inline Mat4 modelMatrix(const ModelTransform& model) {
+    const Mat4 scale = scaleMatrix(model.scale);
+    const Mat4 rotation = rotationYMatrix(model.yaw);
+    const Mat4 translation = translationMatrix(model.position);
+    return multiply(translation, multiply(rotation, scale));
+}
+```
+
+`multiply(rotation, scale)` chạy Scale trước. Kết quả tiếp tục nằm bên phải Translation, nên translation chạy cuối.
+
+### Bước 4 — Luôn transform từ local source
+
+```cpp title="src/main.cpp — tạo world point trong frame hiện tại"
+const lab::Vec4 worldPoint = lab::transform(lab::modelMatrix(model), lab::toPoint(localVertex));
+```
+
+Không có dòng `localVertex = xyz(worldPoint)`. Hai stage được giữ tách biệt và title bar có thể in cả hai cùng lúc.
+
+### Bước 5 — Giữ một đường tính không dùng matrix để đối chiếu
+
+`modelPointDirect` thực hiện scale thành phần, gọi `rotateY`, rồi cộng position. CTest so đường này với Model matrix. Đây là cách kiểm chứng hữu ích hơn việc tự so matrix với chính một hàm matrix khác.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build Model stage"
+cmake --build build --config Debug --target project_15_checkpoint_3 project_15_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Nhấn `Q/E` để đổi model yaw. Local value trên title bar phải giữ nguyên; World value và marker preview phải thay đổi ngay.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dòng return thành `multiply(scale, multiply(rotation, translation))`. Translation sẽ bị scale; chạy test “model matrix matches…” rồi hoàn tác.
+2. Cộng model position vào local vertex trước rotation. Model sẽ quay quanh world origin thay vì local origin.
+3. Ghi ngược world XYZ vào `localVertex`. Nhấn E nhiều lần và quan sát sai số tích lũy; sau đó trở lại cách tính từ source bất biến.
+
+## Tự kiểm tra kết quả
+
+- Local vertex không đổi khi chỉnh model.
+- Scale X chỉ tác động thành phần local trước rotation.
+- Yaw 90° đổi trục +X local sang hướng −Z theo quy ước hiện tại.
+- Translation chạy sau cùng và không tác động direction `w=0`.
+- Model matrix trùng đường scale → rotate → translate tường minh trong sai số $10^{-9}$.
+- Rail mở World nhưng Camera tới Screen vẫn còn pending.
+
+## Bài tập mở rộng
+
+Thêm rotation X vào `ModelTransform`, chọn rõ thứ tự `T × Ry × Rx × S` và viết một test dữ liệu mà đổi `Ry/Rx` chắc chắn cho kết quả khác. Đừng thêm rotation order selector vào UI của project chính.
+
+Bài tiếp theo sẽ giữ World vertex đứng yên và đưa camera pose vào View matrix.

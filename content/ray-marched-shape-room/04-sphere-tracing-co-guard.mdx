@@ -1,0 +1,188 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho tia tiến từng bước và dừng an toàn
+
+## Bức hình này còn thiếu gì?
+
+Ta đã dựng được camera ray và biết cách đo khoảng cách tới sphere. Bây giờ hãy cho tia thật sự di chuyển: bắt đầu tại `origin`, hỏi khoảng cách tới bề mặt gần nhất, tiến thêm đúng quãng đó theo `direction`, rồi tiếp tục lặp. Đây là ý tưởng cốt lõi của sphere tracing.
+
+Ý tưởng chỉ vài dòng, nhưng một loop chạy trong fragment shader phải có lối thoát rõ ràng. Ray có thể hit, đi ra khỏi scene, dùng hết step budget, hoặc gặp dữ liệu không hữu hạn. Một ảnh đẹp với preset hiện tại chưa chứng minh loop an toàn.
+
+## Hình dung đường đi của một pixel
+
+Tại điểm $\mathbf{p}$, SDF cho bán kính của một vùng không chứa bề mặt. Nếu giá trị là $d$, mọi điểm cách $\mathbf{p}$ ít hơn $d$ đều chưa chạm vật. Vì vậy ta có thể cập nhật:
+
+$$
+t_{n+1}=t_n+d(\mathbf{o}+t_n\mathbf{d})
+$$
+
+với $\mathbf{o}$ là ray origin, $\mathbf{d}$ là ray direction đã normalize và $t$ là quãng đường đã đi.
+
+Tên “sphere tracing” đến từ cách tưởng tượng mỗi bước là một sphere an toàn có bán kính bằng distance. Nó không có nghĩa algorithm chỉ vẽ được sphere.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-stepper" />
+
+Trong Raster Stepper, mỗi vòng tròn cho thấy một khoảng tiến an toàn. Chọn ray gần silhouette để thấy các bước nhỏ dần; đó là vùng tốn nhiều iteration nhất.
+
+## Cùng sửa checkpoint
+
+### Bước 1 — Xác định kết quả cần trả trước khi viết vòng lặp
+
+Một `bool hit` không đủ để debug. Ta giữ cả quãng đường, số bước, material và vị trí cuối:
+
+```cpp title="include/raymarch_math.hpp — dữ liệu đo được"
+struct RayMarchSettings {
+    int maximumSteps{96};
+    double hitEpsilon{0.0015};
+    double maximumDistance{20.0};
+};
+
+struct RayMarchResult {
+    bool hit{};
+    double traveled{};
+    int steps{};
+    int materialId{};
+    Vec3 position{};
+};
+```
+
+`hitEpsilon` thừa nhận rằng phép tính số thực hiếm khi chạm đúng 0. Nó quyết định độ chính xác; còn `maximumSteps` và `maximumDistance` giới hạn lượng công việc của mỗi tia.
+
+### Bước 2 — Viết vòng lặp dễ đọc với từng điều kiện dừng rõ ràng
+
+```cpp title="include/raymarch_math.hpp — marchRay"
+inline RayMarchResult marchRay(
+    const Ray& ray,
+    const RayMarchSettings& settings = {}
+) {
+    RayMarchResult result{};
+    const int maximumSteps = std::max(0, settings.maximumSteps);
+
+    for (int step = 0; step < maximumSteps; ++step) {
+        const Vec3 point =
+            ray.origin + ray.direction * result.traveled;
+        const SceneSample sample = sampleScene(point);
+
+        result.position = point;
+        result.steps = step + 1;
+
+        if (!std::isfinite(sample.distance) || !finite(point)) {
+            return result;
+        }
+
+        if (sample.distance <= settings.hitEpsilon) {
+            result.hit = true;
+            result.materialId = sample.materialId;
+            return result;
+        }
+
+        result.traveled += sample.distance;
+        if (result.traveled >= settings.maximumDistance) {
+            result.traveled = settings.maximumDistance;
+            return result;
+        }
+    }
+
+    return result;
+}
+```
+
+Mỗi nhánh `return` đều trả đủ thông tin. Tia hết số bước vẫn có `steps`; tia đi quá xa vẫn có `traveled`; còn khi chạm bề mặt, kết quả có cả `materialId` và `position`.
+
+### Bước 3 — Giữ cả giới hạn compile-time và runtime trong GLSL
+
+Một số driver muốn thấy loop bound hữu hạn khi compile. Ta dùng hard cap 160, rồi dừng sớm theo uniform:
+
+```glsl title="shaders/raymarch.frag — loop trên GPU"
+bool invalidNumber(float value) {
+    return isnan(value) || isinf(value);
+}
+
+bool invalidPosition(vec3 value) {
+    return any(isnan(value)) || any(isinf(value));
+}
+
+for (int step = 0; step < 160; ++step) {
+    if (step >= uMaximumSteps) {
+        break;
+    }
+
+    result.position = origin + direction * result.traveled;
+    SceneSample sample = sampleScene(result.position);
+    result.steps = step + 1;
+
+    if (invalidPosition(result.position) || invalidNumber(sample.distance)) {
+        result.traveled = 20.0;
+        return result;
+    }
+
+    if (sample.distance <= uHitEpsilon) {
+        result.hit = true;
+        result.materialId = sample.materialId;
+        return result;
+    }
+
+    result.traveled += sample.distance;
+    if (invalidNumber(result.traveled) || result.traveled >= 20.0) {
+        result.traveled = 20.0;
+        return result;
+    }
+}
+```
+
+Giới hạn 160 không phải target chất lượng. Nó là hàng rào tuyệt đối; `uMaximumSteps` mới là budget người dùng điều chỉnh bằng `[` và `]`.
+
+Hai kiểm tra `isnan`/`isinf` không thể sửa một SDF sai. Chúng chỉ ngăn dữ liệu hỏng lan qua hàng trăm bước. Khi gặp NaN hoặc Inf, ta coi tia là miss để frame vẫn kết thúc và còn có thể đọc thông báo lỗi.
+
+### Bước 4 — Tô hit và miss để kiểm đường đi
+
+```glsl title="shaders/raymarch.frag — checkpoint 4"
+vec3 rayDirection = makeCameraRay(gl_FragCoord.xy);
+MarchResult result = marchRay(uCameraPosition, rayDirection);
+
+if (!result.hit) {
+    vec3 sky = mix(
+        vec3(0.025, 0.04, 0.08),
+        vec3(0.10, 0.16, 0.26),
+        rayDirection.y * 0.5 + 0.5
+    );
+    fragColor = vec4(sky, 1.0);
+    return;
+}
+
+fragColor = vec4(0.18, 0.62, 0.96, 1.0);
+```
+
+Sphere lúc này là một đĩa màu phẳng. Đó là kết quả đúng: ta mới biết hit position, chưa tính normal hay ánh sáng.
+
+## Chạy thử và quan sát
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_36_checkpoint_4
+```
+
+Chạy app rồi giảm `maximumSteps` bằng phím `[`. Vùng gần silhouette phải biến mất trước vùng chính diện; tăng lại bằng `]` sẽ khôi phục hình mà không cần compile shader.
+
+## Cố tình làm sai
+
+1. Dùng `result.traveled += 0.01`. Ảnh có thể đúng nhưng số bước tăng khủng khiếp; đây là fixed-step ray marching, không phải sphere tracing.
+2. Bỏ `maximumDistance`. Một ray hướng qua phía mở có thể tiêu hết budget ở vị trí vô nghĩa và làm khó phân biệt miss.
+3. Đặt `hitEpsilon = 0.1`. Silhouette phồng ra vì ray được coi là hit khi còn cách bề mặt quá xa.
+4. Đặt `maximumSteps = 2`. Phần giữa sphere vẫn có thể hiện, nhưng vùng gần biên mất trước vì cần nhiều bước hơn.
+5. Không normalize ray direction. `traveled` không còn là world distance, làm epsilon và maximum distance mất ý nghĩa chung.
+
+## Dấu hiệu cho thấy bài đã hoàn thành
+
+- [ ] Ray chính diện hit sphere với material 1.
+- [ ] Tia quay ra phía trước căn phòng báo miss và dừng trong giới hạn.
+- [ ] `steps` không vượt `maximumSteps`; `traveled` không vượt `maximumDistance`.
+- [ ] Mọi giá trị trong result hữu hạn.
+- [ ] Giảm step budget làm silhouette hỏng theo cách quan sát được, không treo GPU.
+
+## Thử đi thêm một bước
+
+1. Tô màu theo `steps / maximumSteps` để tìm vùng đắt nhất.
+2. Đếm bao nhiêu center/corner rays hit trong một lưới CPU 32×18.
+3. Thêm enum `Hit`, `MaximumSteps`, `MaximumDistance`, `NonFinite` vào bản đối chiếu CPU để biết tia dừng vì lý do nào.
+
+Bài sau dùng hit position để ước lượng hướng bề mặt và biến đĩa phẳng thành một sphere có khối.

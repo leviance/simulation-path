@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng bể và đàn bóng deterministic
+
+## Vấn đề cần giải quyết
+
+Trước khi nói đến collision, ta cần một scene đủ lớn để lỗi thật sự lộ ra nhưng vẫn chạy lại được. Nếu mỗi lần mở chương trình lại spawn bóng ở vị trí và vận tốc khác nhau, một cặp xuyên nhau hôm nay có thể biến mất ở lần debug tiếp theo.
+
+Starter đã mở window SDL3, tạo renderer, streaming texture, CPU framebuffer và vẽ một bể cùng các circle placeholder đứng yên. Checkpoint 1 thay placeholder bằng 144 `Ball` thật: position, radius, velocity và inverse mass đều nằm trong world space; màu chỉ phục vụ rendering. `SDL_UpdateTexture` vẫn là bước đưa framebuffer lên cửa sổ như các project trước.
+
+Scene mặc định dùng lattice 16×9. Lattice đảm bảo không overlap bằng hình học; seeded PRNG chỉ chọn velocity. Ta không cần một vòng lặp “random vị trí cho đến khi may mắn không đè lên bóng cũ”.
+
+Toàn bộ việc dựng scene được gom trong `makeBallLattice`. Hàm nhận số cột, số hàng, bounds, radius, speed và seed; vì vậy bài kiểm thử có thể gọi lại đúng cùng một đầu vào rồi so từng `Ball`, thay vì phải khởi động cửa sổ SDL3 để kiểm tra dữ liệu ban đầu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi cell có kích thước:
+
+$$
+w_c=\frac{x_{max}-x_{min}}{columns},\qquad
+h_c=\frac{y_{max}-y_{min}}{rows}
+$$
+
+Tâm bóng ở giữa cell. Nếu $2r\le\min(w_c,h_c)$, hai bóng ở hai cell kề nhau không thể chồng lấn lúc spawn. Vận tốc lấy từ angle cùng speed:
+
+$$
+v=(s\cos\theta,s\sin\theta)
+$$
+
+<InteractiveLab demo="collision-tank" mode="collision-scene" />
+
+Đổi giữa 16, 64 và 144 bóng rồi nhấn Đặt lại nhiều lần. Vị trí, màu và hướng chuyển động ban đầu phải lặp lại y hệt. Đây là điều kiện để một lỗi va chạm có thể trở thành regression test.
+
+## Viết code từng bước
+
+### Bước 1 — Định nghĩa body bằng world unit
+
+```cpp title="include/lab.hpp — geometry và dynamics của một Ball"
+struct Ball {
+    Vec2 position{};
+    Vec2 velocity{};
+    double radius{0.2};
+    double inverseMass{1.0};
+    std::uint32_t color{0xffffffffU};
+};
+```
+
+`position` và `radius` dùng mét giả lập; `velocity` dùng mét/giây. `inverseMass=1/mass` xuất hiện ngay từ đầu vì impulse solver về sau dùng nó trực tiếp. Giá trị zero dành cho body tĩnh, dù scene mặc định chưa cần body tĩnh.
+
+### Bước 2 — Tạo PRNG có state hiển nhiên
+
+```cpp title="include/lab.hpp — xorshift32 không đọc clock"
+std::uint32_t nextU32() {
+    std::uint32_t value = state;
+    value ^= value << 13U;
+    value ^= value >> 17U;
+    value ^= value << 5U;
+    state = value;
+    return value;
+}
+```
+
+Đây không phải PRNG cho bảo mật. Ta chọn nó vì state chỉ có một số nguyên, dễ đối chiếu giữa C++ và TypeScript, và cùng seed luôn sinh cùng chuỗi.
+
+### Bước 3 — Kiểm cell chứa được circle trước khi spawn
+
+```cpp title="include/lab.hpp — lattice từ chối cấu hình overlap sẵn"
+const double cellWidth = (bounds.maximumX - bounds.minimumX) / double(columns);
+const double cellHeight = (bounds.maximumY - bounds.minimumY) / double(rows);
+if (2.0 * radius > std::min(cellWidth, cellHeight)) {
+    return balls;
+}
+```
+
+Nếu radius quá lớn, trả scene rỗng rõ ràng tốt hơn tạo một initial state đã vi phạm điều kiện của collision solver.
+
+### Bước 4 — Đặt tâm giữa cell và chỉ random velocity
+
+```cpp title="include/lab.hpp — position có chứng minh, velocity có seed"
+const double positionX = bounds.minimumX + (double(column) + 0.5) * cellWidth;
+const double positionY = bounds.minimumY + (double(row) + 0.5) * cellHeight;
+const double angle = 2.0 * kPi * random.nextUnit();
+const double speedScale = 0.75 + 0.5 * random.nextUnit();
+const Vec2 velocity{speed * speedScale * std::cos(angle), speed* speedScale* std::sin(angle)};
+```
+
+Speed dao động quanh giá trị yêu cầu để scene bớt đều, nhưng vẫn bị chặn trong một khoảng biết trước.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build bể deterministic"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_starter
+cmake --build build --config Debug --target project_24_checkpoint_1
+./build/Debug/project_24_checkpoint_1.exe
+```
+
+Starter phải vẽ được placeholder trước. Checkpoint 1 phải báo 144 bóng và seed `0x00c0ffee` trên title bar; các bóng vẫn đứng yên vì integration là bài tiếp theo.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay seed cố định bằng tick hiện tại. Chụp velocity của bóng đầu, reset hai lần và quan sát case thay đổi; sau đó hoàn tác để bug có thể lặp lại.
+2. Đặt tâm ở mép cell thay vì `column+0.5`. Bóng biên có thể xuyên wall ngay khi spawn; hoàn tác và kiểm khoảng cách tâm–tường.
+3. Tăng radius vượt nửa cell nhưng bỏ validation. Dự đoán overlap count trước khi chạy, quan sát rồi hoàn tác.
+
+## Tự kiểm tra kết quả
+
+- Starter mở được và vẽ bể trước khi có `Ball` physics state.
+- Checkpoint 1 tạo đúng 144 bóng từ lattice 16×9.
+- Mọi circle nằm hoàn toàn trong `TankBounds`.
+- Initial overlap count bằng zero.
+- Cùng seed tạo position, velocity, radius và màu giống hệt.
+- World state không chứa pixel coordinate; resize chỉ đổi `WorldView`.
+- Source final vẫn trình bày setup, `SDL_UpdateTexture` và cleanup thành các khối rõ ràng.
+
+## Bài tập mở rộng
+
+Thêm một preset có ba mass khác nhau nhưng giữ cùng radius. Hãy biểu diễn bằng `inverseMass` và màu; chưa thay collision response trong bài này.
+
+Bài tiếp theo cho đàn bóng chuyển động bằng fixed timestep. Việc chúng bay xuyên tường ở checkpoint 2 là lỗi có chủ đích để ta giải từng boundary một.

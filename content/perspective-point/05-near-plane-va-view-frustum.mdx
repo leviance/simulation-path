@@ -1,0 +1,138 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Near plane và bốn trạng thái nhìn thấy
+
+## Vấn đề cần giải quyết
+
+Checkpoint 4 cho kết quả đúng khi Z dương và đủ xa camera, nhưng một chương trình thật không được giả định input luôn đẹp. Point có thể ở sau camera, đúng gần Z=0 hoặc nằm ngoài biên nhìn. Nếu cứ chia trước rồi kiểm tra pixel, ta có thể nhận `NaN`, số rất lớn hoặc một ảnh bị lật.
+
+Ta sẽ bỏ giới hạn Z tạm thời và để pipeline trả một `ProjectionResult` có status. Render chỉ vẽ khi status là `Visible`; các trường hợp còn lại vẫn được giải thích trên title bar.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thứ tự kiểm tra là một phần của thuật toán:
+
+1. `cameraPoint.z <= 0`: point ở sau hoặc ngay trên camera, không được chia.
+2. `cameraPoint.z < nearPlane`: point ở phía trước nhưng quá sát, vẫn không được chia.
+3. Tính NDC; nếu `|x|>1` hoặc `|y|>1`, point nằm ngoài frustum.
+4. Chỉ phần còn lại mới là visible.
+
+Near plane không chỉ là biên hình học. Nó giữ mẫu số cách xa zero, nơi một thay đổi Z rất nhỏ có thể làm X/Z nhảy cực lớn.
+
+<InteractiveLab demo="projection" mode="projection-visibility" />
+
+Chuyển lần lượt bốn tình huống. Ở sơ đồ X–Z, near plane là vạch cam; ở viewport, marker chỉ xuất hiện với `visible`. Thử kéo near plane qua depth của point và quan sát status đổi mà không sinh số vô hạn.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho bốn kết quả
+
+Enum tránh việc truyền các chuỗi tùy ý giữa phần toán và UI:
+
+```cpp title="include/lab.hpp — status của một phép chiếu"
+enum class ProjectionStatus {
+    Visible,
+    BehindCamera,
+    BeforeNearPlane,
+    OutsideFrustum,
+};
+
+struct ProjectionResult {
+    ProjectionStatus status{ProjectionStatus::BehindCamera};
+    Vec3 cameraPoint{};
+    Vec2 ndc{};
+    Vec2 screen{};
+};
+```
+
+Kết quả giữ cả giá trị trung gian để title bar và tests không phải tính pipeline lần thứ hai.
+
+### Bước 2 — Kiểm tra Z trước mọi phép chia
+
+Đầu hàm chỉ đổi world sang camera space, rồi trả sớm ở hai vùng nguy hiểm:
+
+```cpp title="include/lab.hpp — chặn behind và before-near"
+ProjectionResult result{};
+result.cameraPoint = worldToCamera(worldPoint, camera);
+if (result.cameraPoint.z <= 0.0) {
+    result.status = ProjectionStatus::BehindCamera;
+    return result;
+}
+if (result.cameraPoint.z < nearPlane) {
+    result.status = ProjectionStatus::BeforeNearPlane;
+    return result;
+}
+```
+
+Điểm đúng trên near plane (`z == nearPlane`) được phép đi tiếp. Quy ước biên này phải nhất quán với test.
+
+### Bước 3 — Kiểm tra frustum trong NDC
+
+Chỉ sau hai guard trên, ta mới gọi hàm có phép chia:
+
+```cpp title="include/lab.hpp — projection và kiểm tra biên NDC"
+const double aspectRatio = double(width) / double(height);
+result.ndc = cameraToNdc(result.cameraPoint, lens, aspectRatio);
+result.screen = ndcToScreen(result.ndc, width, height);
+if (!isInsideNdc(result.ndc)) {
+    result.status = ProjectionStatus::OutsideFrustum;
+    return result;
+}
+result.status = ProjectionStatus::Visible;
+return result;
+```
+
+Hàm biên nhỏ giữ điều kiện dễ đọc:
+
+```cpp title="include/lab.hpp — point có nằm trong khung chuẩn hóa không"
+inline bool isInsideNdc(Vec2 ndc) {
+    return std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
+}
+```
+
+### Bước 4 — Để render tôn trọng status
+
+Render không clamp point vào mép màn hình và không vẽ dữ liệu ngoài frustum:
+
+```cpp title="src/main.cpp — chỉ ghi marker visible"
+const lab::ProjectionResult projection = lab::projectPerspective(
+    worldPoint,
+    camera,
+    lens,
+    nearPlane,
+    width,
+    height
+);
+if (projection.status == lab::ProjectionStatus::Visible) {
+    screen = projection.screen;
+    drawPointMarker(pixels, width, height, screen, markerRadius);
+}
+```
+
+Phím P gọi các preset có chủ ý để tái hiện lỗi, thay vì bắt người học chỉnh số bằng tay.
+
+## Ghép các phần lại
+
+Build `project_11_checkpoint_5`. Nhấn P theo vòng: mặc định visible, trước near plane, sau camera, ngoài frustum. Title bar phải đổi lần lượt và marker biến mất ở ba trường hợp không hợp lệ. N/M thay near plane mà ứng dụng vẫn nhận input bình thường.
+
+Đặc biệt, thử đưa world Z qua camera Z bằng Q. Chương trình không còn ép point trở lại phía trước. Nó giữ dữ liệu bạn nhập, trả `behind` và tránh phép chia.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi `cameraToNdc` trước khi kiểm tra Z. Point đúng Z=0 tạo phép chia không hữu hạn trước khi status có cơ hội bảo vệ.
+2. Chỉ kiểm tra pixel sau `ndcToScreen`. Bạn đã thực hiện phép chia nguy hiểm và trộn visibility với kích thước viewport.
+3. Clamp NDC vào `[-1,1]`. Mọi point ngoài frustum sẽ dính vào viền, làm người dùng tưởng camera vẫn nhìn thấy chúng.
+
+## Tự kiểm tra kết quả
+
+- Z≤0 trả `BehindCamera` và không vẽ marker.
+- `0 < Z < near` trả `BeforeNearPlane`.
+- Z==near, X=Y=0 là visible tại tâm.
+- `|ndc.x|>1` hoặc `|ndc.y|>1` trả `OutsideFrustum`.
+- Mọi status đều giữ số hữu hạn và ứng dụng vẫn reset/resize được.
+
+## Bài tập mở rộng
+
+Thêm `farPlane` và status `BeyondFarPlane`, nhưng giữ guard này sau near plane và trước NDC. Viết trước ba ví dụ bằng số để chốt quy ước hai biên có lấy dấu bằng hay không.
+
+Bài cuối sẽ cho point bay qua nhiều depth, kéo nó bằng phép đổi ngược và dùng CTest để khóa toàn bộ các tính chất vừa xây.

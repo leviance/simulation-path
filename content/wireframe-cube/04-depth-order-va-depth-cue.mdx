@@ -1,0 +1,166 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ cạnh xa trước, cạnh gần sau
+
+## Vấn đề cần giải quyết
+
+Wireframe checkpoint 3 đúng về geometry nhưng khó đọc khi nhiều edge giao nhau trên màn hình. Tất cả line cùng màu và cùng độ sáng, nên mắt không biết đoạn nào gần camera hơn. Ta chưa có face, triangle fill hay Z-buffer để giải quyết che khuất thật sự.
+
+Bài này dùng một cải tiến có giới hạn rõ: lấy camera-space depth trung bình của hai endpoint, sort edge xa→gần và làm edge gần sáng hơn. Nó giúp đọc chiều sâu nhưng không biến wireframe thành solid renderer.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với edge nối A và B, chọn depth đại diện:
+
+$$
+z_{edge}=\frac{z_A+z_B}{2}
+$$
+
+Trong quy ước camera của khóa học, Z dương lớn hơn nghĩa là xa hơn. Vì vậy ta sort giảm dần:
+
+$$
+z_0\ge z_1\ge\dots\ge z_{n-1}
+$$
+
+Edge xa được raster trước; edge gần raster sau và có thể ghi đè pixel tại giao điểm. Để tạo hệ số sáng, ánh xạ farthest về 0 và nearest về 1:
+
+$$
+t=\frac{z_{far}-z_{edge}}{z_{far}-z_{near}}
+$$
+
+Nếu mọi depth bằng nhau, mẫu số bằng 0; ta chọn `t=1` thay vì chia.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-depth" />
+
+Bật/tắt **Depth cue** rồi đọc hàng `far → near`. Chọn một edge để highlight; average depth của nó vẫn không đổi khi cue tắt vì cue chỉ đổi màu.
+
+## Viết code từng bước
+
+### Bước 1 — Chỉ đưa edge visible vào danh sách vẽ
+
+Khai báo record nhỏ, tham chiếu lại topology qua `edgeIndex`:
+
+```cpp title="include/lab.hpp — dữ liệu tạm dùng cho một frame"
+struct VisibleEdge {
+    std::size_t edgeIndex{};
+    double averageDepth{};
+    double depthFactor{};
+};
+
+struct VisibleEdgeList {
+    std::array<VisibleEdge, kCubeEdges.size()> items{};
+    std::size_t count{};
+};
+```
+
+Array vẫn có capacity 12, còn `count` cho biết prefix nào đang chứa dữ liệu hợp lệ.
+
+### Bước 2 — Đọc camera Z từ projection cache
+
+Không gọi `worldToCamera` lần nữa:
+
+```cpp title="include/lab.hpp — average depth dùng dữ liệu đã cache"
+const Edge edge = kCubeEdges[edgeIndex];
+if (!isProjectedEdgeVisible(cube, edge)) {
+    continue;
+}
+const double fromDepth = cube.vertices[edge.from].cameraPoint.z;
+const double toDepth = cube.vertices[edge.to].cameraPoint.z;
+const double depth = (fromDepth + toDepth) * 0.5;
+result.items[result.count] = {edgeIndex, depth, 1.0};
+++result.count;
+```
+
+Đồng thời cập nhật `nearestDepth` và `farthestDepth` từ chính các edge visible. Edge bị loại không được làm lệch khoảng màu.
+
+### Bước 3 — Chuẩn hóa depth an toàn
+
+Sau khi thu thập xong:
+
+```cpp title="include/lab.hpp — far bằng 0, near bằng 1"
+const double depthRange = farthestDepth - nearestDepth;
+for (std::size_t index = 0; index < result.count; ++index) {
+    if (depthRange <= 1e-12) {
+        result.items[index].depthFactor = 1.0;
+    } else {
+        result.items[index].depthFactor =
+            (farthestDepth - result.items[index].averageDepth) / depthRange;
+    }
+}
+```
+
+Hệ số này chỉ là dữ liệu trình bày. Vertex position và edge length không được thay đổi.
+
+### Bước 4 — Sort phần prefix đang dùng
+
+```cpp title="include/lab.hpp — camera Z lớn được vẽ trước"
+std::sort(
+    result.items.begin(),
+    result.items.begin() + static_cast<std::ptrdiff_t>(result.count),
+    [](const VisibleEdge& left, const VisibleEdge& right) {
+        return left.averageDepth > right.averageDepth;
+    }
+);
+```
+
+Comparator dùng `>` vì camera nhìn về +Z. Nếu engine khác nhìn về -Z, quy ước sort cũng phải đổi.
+
+### Bước 5 — Duyệt danh sách đã sort để raster
+
+Trong `main`, map `depthFactor` sang màu rồi vẽ:
+
+```cpp title="src/main.cpp — edge gần được vẽ sau và sáng hơn"
+for (std::size_t itemIndex = 0; itemIndex < visibleEdges.count; ++itemIndex) {
+    const lab::VisibleEdge item = visibleEdges.items[itemIndex];
+    const lab::Edge edge = lab::kCubeEdges[item.edgeIndex];
+    const lab::Vec2 from = cube.vertices[edge.from].screen;
+    const lab::Vec2 to = cube.vertices[edge.to].screen;
+    drawLine(
+        pixels,
+        width,
+        height,
+        int(std::lround(from.x)),
+        int(std::lround(from.y)),
+        int(std::lround(to.x)),
+        int(std::lround(to.y)),
+        depthColor(item.depthFactor, depthCue)
+    );
+}
+```
+
+Phím C chỉ đổi boolean `depthCue`. Ngay cả khi cue tắt, ta vẫn giữ far-to-near ordering để hai chế độ chỉ khác màu.
+
+## Đây chưa phải Z-buffer
+
+Average depth không biết một đoạn line đi xuyên qua face nào. Sort theo một số đại diện cũng không xử lý đúng mọi trường hợp hai primitive cắt nhau theo depth. Ta chỉ có painter-style ordering cho 12 line của một cube.
+
+Project 17 sẽ tô sáu mặt và dùng depth buffer theo pixel. Project 18 sẽ clip primitive tại near plane. Không nên lén giải hai vấn đề đó bằng cách clamp endpoint hay xóa thủ công các “cạnh sau”.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy kết quả cuối bài 4"
+cmake --build build --config Debug --target project_13_checkpoint_4
+```
+
+Nhấn C để so sánh. Khi cube xoay, cạnh gần phải sáng hơn và được vẽ sau. Visible edge count vẫn là 12 khi cube nằm trọn trong frustum.
+
+## Thử làm sai để hiểu đúng
+
+1. Sort tăng dần. Edge gần được vẽ trước và line xa có thể ghi đè nó tại giao điểm.
+2. Dùng world Z thay camera Z. Kết quả chỉ tình cờ đúng khi camera ở origin và chưa có orientation.
+3. Chuẩn hóa trên cả 12 edge kể cả edge invalid. Giá trị mặc định hoặc camera Z không hợp lệ làm màu của edge visible bị nén.
+4. Gọi depth cue là “hidden-line removal”. Hãy xoay cube tới khi một cạnh phía sau vẫn hiện; đó là bằng chứng hai khái niệm khác nhau.
+
+## Tự kiểm tra kết quả
+
+- Danh sách chỉ chứa edge có hai endpoint `Visible`.
+- `averageDepth` lấy từ hai `cameraPoint.z` đã cache.
+- Các item được sort theo Z giảm dần.
+- `depthFactor` luôn nằm trong `[0,1]`, kể cả khi depth range gần 0.
+- Tắt cue không đổi geometry, visibility hoặc edge order.
+
+## Bài tập mở rộng
+
+Thêm hai preset màu near/far nhưng giữ nguyên `depthFactor`. Sau đó thử ánh xạ phi tuyến `t*t` và mô tả nó thay đổi khả năng đọc chiều sâu ra sao; không sửa projection.
+
+Bài cuối sẽ thêm mouse drag, animation và tests để chứng minh topology lẫn geometry vẫn đúng khi cube chuyển động.

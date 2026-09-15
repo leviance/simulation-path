@@ -1,0 +1,142 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tách projection và độ lệch vuông góc
+
+## Vấn đề cần giải quyết
+
+Góc cho biết nòng súng lệch mục tiêu bao nhiêu, nhưng đôi khi ta cần một câu trả lời theo khoảng cách. Nếu kéo dài đường ngắm thành một đường thẳng, mục tiêu nằm cách tháp pháo bao xa dọc theo đường đó? Nó lệch sang bên bao nhiêu pixel?
+
+Ta sẽ tách `targetOffset` thành hai vector: `projection` nằm dọc hướng nòng súng và `rejection` vuông góc với hướng đó. Hình vẽ của checkpoint 4 phải cho thấy hai phần ghép lại đúng thành vector ban đầu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi vector cần tách là `v` và hướng nòng đã chuẩn hóa là `u`. Khoảng cách có dấu dọc theo `u` là:
+
+$$
+s=v\cdot u
+$$
+
+Nhân lại với hướng đơn vị để có vector projection:
+
+$$
+p=u(v\cdot u)
+$$
+
+Phần còn lại là:
+
+$$
+r=v-p
+$$
+
+Do cách dựng này, `p+r=v` và `p·r=0`. Hai đẳng thức đó quan trọng hơn một bức ảnh trông có vẻ đúng: ta có thể đưa chúng vào test để phát hiện lỗi sau khi sửa code.
+
+<InteractiveLab demo="turret" mode="turret-projection" />
+
+Kéo mục tiêu quanh tháp pháo. Mũi tên xanh luôn nằm trên đường của nòng súng. Đoạn đỏ luôn đi từ đầu projection tới mục tiêu. Khi mục tiêu nằm phía sau, `scalar projection` âm và mũi tên xanh đảo sang phía đối diện.
+
+## Viết code từng bước
+
+### Bước 1 — Lấy projection dạng scalar
+
+```cpp title="include/lab.hpp — khoảng cách có dấu dọc theo một hướng"
+inline double scalarProjection(Vec2 vector, Vec2 onto) {
+    if (!hasDirection(onto)) {
+        return 0.0;
+    }
+    return dot(vector, normalize(onto));
+}
+```
+
+Tên `onto` có nghĩa là “chiếu lên vector này”. Hàm tự chuẩn hóa `onto`; nếu quên bước đó, kết quả sẽ bị nhân thêm độ dài của trục.
+
+### Bước 2 — Tạo vector projection
+
+```cpp title="include/lab.hpp — vector nằm dọc theo onto"
+inline Vec2 vectorProjection(Vec2 vector, Vec2 onto) {
+    if (!hasDirection(onto)) {
+        return {};
+    }
+    const Vec2 unitOnto = normalize(onto);
+    return scale(unitOnto, dot(vector, unitOnto));
+}
+```
+
+`dot(vector, unitOnto)` cho biết đi bao xa; `scale(unitOnto, ...)` cho biết đi theo hướng nào. Tách thành biến `unitOnto` giúp người đọc thấy rõ hai vai trò đó.
+
+### Bước 3 — Lấy phần lệch vuông góc
+
+```cpp title="include/lab.hpp — rejection"
+inline Vec2 rejection(Vec2 vector, Vec2 onto) {
+    return subtract(vector, vectorProjection(vector, onto));
+}
+```
+
+Không cần tìm một vector vuông góc rồi chiếu thêm lần nữa. Sau khi bỏ phần song song khỏi `vector`, phần còn lại bắt buộc vuông góc với trục chiếu.
+
+### Bước 4 — Vẽ hai phần trên cùng hình
+
+Trong vòng render, dùng `targetOffset` làm vector cần tách và `forward` làm trục:
+
+```cpp title="src/main.cpp — vẽ projection và rejection"
+const lab::Vec2 parallel = lab::vectorProjection(targetOffset, forward);
+const lab::Vec2 projectionScreen = worldToScreen(parallel, center);
+
+drawArrow(
+    pixels, width, height,
+    center, projectionScreen,
+    rgba(132, 169, 255)
+);
+
+drawLine(
+    pixels, width, height,
+    int(std::lround(projectionScreen.x)), int(std::lround(projectionScreen.y)),
+    int(std::lround(targetScreen.x)), int(std::lround(targetScreen.y)),
+    rgba(255, 107, 107)
+);
+```
+
+Đoạn đỏ trên màn hình chính là `rejection`, dù ta vẽ nó bằng hai điểm `projectionScreen → targetScreen`. Hiệu của hai điểm đó bằng `targetOffset - parallel`.
+
+### Bước 5 — Hiển thị đúng hai khoảng cách
+
+```cpp title="src/main.cpp — số đo dọc và ngang đường ngắm"
+const double alongBarrel = lab::scalarProjection(targetOffset, forward);
+const double missDistance = lab::length(lab::rejection(targetOffset, forward));
+
+std::snprintf(
+    title,
+    sizeof(title),
+    "dot %.3f | projection %.1f px | perpendicular miss %.1f px",
+    alignment,
+    alongBarrel,
+    missDistance
+);
+```
+
+`alongBarrel` có dấu; `missDistance` là độ dài nên không âm. Muốn biết lệch bên nào, ta cần một đại lượng có dấu khác — đó là nội dung bài 5.
+
+## Ghép các phần lại
+
+Build `project_8_checkpoint_4`. Với nòng hướng sang phải và mục tiêu `(3,4)` nếu thu nhỏ theo cùng tỉ lệ, projection phải là `(3,0)`, rejection là `(0,4)`. Kéo mục tiêu thẳng trên đường nòng để rejection tiến về zero.
+
+Projection ở đây là lên **đường thẳng vô hạn**, không phải đoạn nòng súng dài 115 pixel. Vì vậy đầu mũi tên xanh có thể đi xa hơn đầu nòng hoặc xuất hiện phía sau tháp pháo; đó là kết quả toán học đúng.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `scale(onto, dot(vector, onto))` mà không chuẩn hóa `onto`. Tăng độ dài của `onto` và xem projection bị phóng đại hai lần.
+2. Viết `rejection = projection - vector`. Độ dài vẫn giống nhau nhưng vector đỏ đảo chiều, và `projection + rejection` không còn khôi phục `vector`.
+3. Ép scalar projection thành số không âm. Mục tiêu phía sau bị chiếu nhầm sang phía trước, làm mất thông tin quan trọng.
+
+## Tự kiểm tra kết quả
+
+- `vectorProjection((3,4),(1,0))` trả `(3,0)`.
+- `rejection((3,4),(1,0))` trả `(0,4)`.
+- `projection + rejection` gần bằng vector ban đầu.
+- `dot(projection,rejection)` gần bằng 0.
+- Chiếu lên zero vector trả kết quả ổn định, không sinh `NaN`.
+
+## Bài tập mở rộng
+
+Vẽ thêm một đường đứt nét kéo dài theo hướng nòng để làm rõ projection đang nằm trên một đường vô hạn. Sau đó tính “sai số ngắm có dấu” bằng cách quan sát rejection; thử nghĩ xem chỉ riêng vector này có đủ để chọn chiều quay trong mọi trường hợp hay không.
+
+Bài tiếp theo dùng cross product 2D để trả lời chắc chắn mục tiêu nằm phía nào và cho nòng súng quay dần về đó.

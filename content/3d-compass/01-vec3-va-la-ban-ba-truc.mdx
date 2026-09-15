@@ -1,0 +1,146 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ Vec2 đến Vec3 và la bàn ba trục
+
+## Vấn đề cần giải quyết
+
+Bộ khung của Project 10 đã có cửa sổ SDL3, framebuffer, `putPixel`, `drawLine` và phần xử lý resize. Nếu chạy starter, bạn chỉ thấy nền lưới. Việc đầu tiên của ta là dựng một la bàn gồm ba trục X, Y và Z để những điểm 3D sắp xuất hiện không còn là ba con số khó hình dung.
+
+Màn hình vẫn chỉ có hai chiều. Vì vậy ta cần phân biệt hai việc: **lưu và tính toán trong 3D**, sau đó **chiếu kết quả xuống 2D để vẽ sơ đồ**. Nếu gộp hai bước này, thành phần Z sẽ bị mất ngay từ đầu và cross product ở bài sau không còn dữ liệu để làm việc.
+
+## Hiểu ý tưởng trước khi viết code
+
+`Vec3` chỉ mở rộng `Vec2` bằng một thành phần:
+
+$$
+P=(x,y,z)
+$$
+
+Để nhìn thấy điểm đó, Project 10 dùng một phép chiếu axonometric cố định:
+
+$$
+x_d=(x-z)\cos 30^\circ
+$$
+
+$$
+y_d=y+\frac{x+z}{2}
+$$
+
+Kết quả $(x_d,y_d)$ là tọa độ trên sơ đồ, chưa phải pixel. `toScreen` sẽ nhân nó với scale, đặt gốc vào giữa cửa sổ và đảo Y theo quy ước framebuffer.
+
+Đây chưa phải camera hay perspective projection. Các đường song song vẫn song song và vật ở xa không nhỏ lại. Project 11 mới xây phép chiếu có chiều sâu.
+
+<InteractiveLab demo="normal" mode="normal-axes" />
+
+Thử đổi riêng `P.x`, `P.y`, rồi `P.z`. Ba đoạn màu cho thấy mỗi thành phần góp vào điểm cuối ra sao, còn la bàn luôn giữ X đỏ, Y xanh lá và Z xanh dương.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo Vec3 nhưng vẫn giữ Vec2 cho kết quả chiếu
+
+Mở `include/lab.hpp`. `Vec3` phục vụ phần toán; `Vec2` chỉ là kết quả tạm khi chuẩn bị vẽ.
+
+```cpp title="include/lab.hpp — hai kiểu dữ liệu có hai nhiệm vụ khác nhau"
+struct Vec2 {
+    double x{};
+    double y{};
+};
+
+struct Vec3 {
+    double x{};
+    double y{};
+    double z{};
+};
+```
+
+Các phép cơ bản vẫn làm theo từng thành phần. Viết chúng thành hàm thuần giúp những bài sau không phải lặp lại phép cộng hoặc nhân scalar trong `main.cpp`.
+
+```cpp title="include/lab.hpp — cộng và nhân scalar trong 3D"
+inline Vec3 add(Vec3 left, Vec3 right) {
+    return {left.x + right.x, left.y + right.y, left.z + right.z};
+}
+
+inline Vec3 scale(Vec3 vector, double scalar) {
+    return {vector.x * scalar, vector.y * scalar, vector.z * scalar};
+}
+```
+
+### Bước 2 — Viết phép chiếu dành riêng cho sơ đồ
+
+Tên `projectIsometric` nói rõ mục đích của hàm. Nó nhận `Vec3`, trả `Vec2` mới và không sửa point đầu vào.
+
+```cpp title="include/lab.hpp — chiếu Vec3 thành tọa độ sơ đồ"
+inline Vec2 projectIsometric(Vec3 point) {
+    constexpr double cos30 = 0.86602540378443864676;
+    return {
+        (point.x - point.z) * cos30,
+        point.y + (point.x + point.z) * 0.5,
+    };
+}
+```
+
+Hãy để ý `z` xuất hiện với dấu trừ trong `diagram.x` nhưng dấu cộng trong `diagram.y`. Nhờ vậy trục Z nghiêng về phía còn lại của X thay vì chồng lên nhau.
+
+### Bước 3 — Đổi tọa độ sơ đồ thành pixel
+
+Trong `src/main.cpp`, phép đổi sang pixel chỉ xảy ra ở ranh giới render:
+
+```cpp title="src/main.cpp — từ điểm 3D tới pixel"
+lab::Vec2 toScreen(lab::Vec3 point, int width, int height) {
+    const lab::Vec2 diagram = lab::projectIsometric(point);
+    return {
+        width * 0.5 + diagram.x * kDiagramScale,
+        height * 0.5 - diagram.y * kDiagramScale,
+    };
+}
+```
+
+Khi resize, `width` và `height` mới được truyền vào mỗi frame nên gốc `(0,0,0)` luôn trở lại tâm framebuffer.
+
+### Bước 4 — Vẽ ba vector cơ sở từ cùng một gốc
+
+Ba endpoint lần lượt chỉ bật X, Y hoặc Z. `drawWorldLine` gọi `toScreen` cho hai đầu rồi dùng Bresenham từ Project 04.
+
+```cpp title="src/main.cpp — dựng la bàn X Y Z"
+void drawAxes(std::vector<std::uint32_t>& pixels, int width, int height) {
+    const lab::Vec3 origin{};
+    drawWorldLine(pixels, width, height, origin, {2.2, 0.0, 0.0}, rgba(255, 107, 107));
+    drawWorldLine(pixels, width, height, origin, {0.0, 2.2, 0.0}, rgba(83, 240, 174));
+    drawWorldLine(pixels, width, height, origin, {0.0, 0.0, 2.2}, rgba(132, 169, 255));
+```
+
+Sau khi vẽ, framebuffer vẫn đi qua streaming texture như các project trước:
+
+```cpp title="src/main.cpp — trình bày framebuffer của checkpoint 1"
+if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), width* int(sizeof(std::uint32_t)))) {
+    std::cerr << "SDL_UpdateTexture failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+```
+
+## Ghép các phần lại
+
+Build `project_10_checkpoint_1`. Trên nền lưới phải có một gốc vàng và ba trục tách biệt. X nghiêng xuống-phải, Y đi lên, Z nghiêng xuống-trái. Resize cửa sổ vài lần để chắc rằng la bàn luôn nằm giữa.
+
+Luồng dữ liệu của checkpoint này là `Vec3 → projectIsometric → Vec2 sơ đồ → toScreen → pixel`. Từ bài sau, tam giác và normal đều đi qua đúng con đường đó; phần toán 3D không phải biết SDL đang vẽ ở độ phân giải nào.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `(point.x - point.z)` thành phép cộng. X và Z sẽ chồng lên cùng một hướng, khiến sơ đồ không còn giúp phân biệt hai trục.
+2. Trả `Vec2{point.x, point.y}` và bỏ Z. Thay đổi `P.z` trong Canvas hoặc source sẽ không tạo ra bất kỳ khác biệt nào trên màn hình.
+3. Bỏ phép đảo dấu ở `height*0.5 - diagram.y*kDiagramScale`. Trục Y xanh sẽ hướng xuống, trái với world space ta dùng trong phần toán.
+
+## Tự kiểm tra kết quả
+
+- `(0,0,0)` chiếu thành `(0,0)` trong tọa độ sơ đồ.
+- Ba vector cơ sở tạo ba hướng nhìn thấy được và dùng đúng ba màu đã thống nhất.
+- Source vẫn lưu endpoint bằng `Vec3`; không có tọa độ pixel cố định trong `lab.hpp`.
+- La bàn ở giữa sau khi resize từ cửa sổ ngang sang cửa sổ gần vuông.
+- Escape và nút đóng cửa sổ đều thoát sạch, không báo lỗi SDL.
+
+## Bài tập mở rộng
+
+Vẽ thêm phần âm của ba trục bằng màu tối hơn. Sau đó tạo điểm `P=(1,1,1)` và nối ba đoạn thành phần giống Canvas. Đừng lưu bản chiếu của P; hãy tính lại nó khi render.
+
+Bài tiếp theo sẽ đặt ba point A, B, C vào không gian này và dựng hai vector cạnh cùng xuất phát từ A.

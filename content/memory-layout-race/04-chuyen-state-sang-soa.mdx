@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chuyển cùng state sang SoA
+
+## Vấn đề cần giải quyết
+
+Trong AoS, muốn đọc `positionX` của particle kế tiếp, CPU phải đi qua toàn bộ phần còn lại của struct. SoA đổi cách sắp xếp: mọi `positionX` nằm trong một vector, mọi `positionY` nằm trong vector khác, và tương tự cho sáu field.
+
+Điểm dễ sai là nghĩ SoA tạo ra sáu nhóm particle độc lập. Không phải vậy. Particle index `i` vẫn tồn tại; state của nó được ghép từ `positionX[i]`, `positionY[i]`… `velocityZ[i]`. Nếu một vector thiếu phần tử hoặc conversion lệch index, kernel có thể đọc field của hai particle khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+SoA có dạng:
+
+```text title="SoA: mỗi hàng là một field"
+positionX: [px0 px1 px2 px3 ...]
+positionY: [py0 py1 py2 py3 ...]
+positionZ: [pz0 pz1 pz2 pz3 ...]
+velocityX: [vx0 vx1 vx2 vx3 ...]
+velocityY: [vy0 vy1 vy2 vy3 ...]
+velocityZ: [vz0 vz1 vz2 vz3 ...]
+```
+
+Hai `positionX` kế tiếp giờ cách nhau 4 byte thay vì 24 byte. Đó là thay đổi layout. Số particle, giá trị, precision và thứ tự index không được đổi.
+
+<InteractiveLab demo="memory-layout-race" mode="soa-layout" />
+
+## Viết code từng bước
+
+### Bước 1 — Khai báo sáu vector có tên đầy đủ
+
+```cpp title="include/particles.hpp — ParticlesSoA"
+struct ParticlesSoA {
+    std::vector<float> positionX{};
+    std::vector<float> positionY{};
+    std::vector<float> positionZ{};
+    std::vector<float> velocityX{};
+    std::vector<float> velocityY{};
+    std::vector<float> velocityZ{};
+
+    [[nodiscard]] std::size_t size() const {
+        return positionX.size();
+    }
+};
+```
+
+Ta chưa gói ba trục thành `std::vector<Vec3>` vì như vậy chỉ chuyển từ một struct sáu float sang hai struct ba float; đó chưa phải SoA đầy đủ cho thí nghiệm field-specific.
+
+### Bước 2 — Convert từ đúng AoS source
+
+```cpp title="include/particles.hpp — makeParticlesSoA"
+inline ParticlesSoA makeParticlesSoA(std::span<const ParticleAoS> particles) {
+    ParticlesSoA result{};
+    result.positionX.reserve(particles.size());
+    result.positionY.reserve(particles.size());
+    result.positionZ.reserve(particles.size());
+    result.velocityX.reserve(particles.size());
+    result.velocityY.reserve(particles.size());
+    result.velocityZ.reserve(particles.size());
+    for (const ParticleAoS& particle : particles) {
+        result.positionX.push_back(particle.positionX);
+        result.positionY.push_back(particle.positionY);
+        result.positionZ.push_back(particle.positionZ);
+        result.velocityX.push_back(particle.velocityX);
+        result.velocityY.push_back(particle.velocityY);
+        result.velocityZ.push_back(particle.velocityZ);
+    }
+    return result;
+}
+```
+
+Conversion cố ý dễ đọc. Nó chạy ngoài vùng benchmark, nên ta không cần biến nó thành một mẹo tối ưu khó kiểm tra.
+
+### Bước 3 — Biến “cùng size” thành invariant
+
+```cpp title="include/particles.hpp — validSoA"
+inline bool validSoA(const ParticlesSoA& particles) {
+    const std::size_t count = particles.positionX.size();
+    return particles.positionY.size() == count &&
+        particles.positionZ.size() == count &&
+        particles.velocityX.size() == count &&
+        particles.velocityY.size() == count &&
+        particles.velocityZ.size() == count;
+}
+```
+
+`size()` lấy theo `positionX`, vì vậy mọi kernel SoA phải gọi `validSoA` hoặc chỉ nhận state đã được kiểm. Không thể chỉ nhìn một vector rồi giả định năm vector còn lại đúng.
+
+## Ghép các phần lại
+
+Checkpoint 4 tạo `particlesSoA` từ chính `source`, thêm phím `L` để đổi hình giữa hai layout và vẽ particle qua các vector SoA. SoA chưa có integrate kernel; hình SoA đứng ở state ban đầu trong khi AoS có thể được reset/pause để đối chiếu.
+
+Conversion và sáu allocation xảy ra lúc setup hoặc reset, không xảy ra trong benchmark. Sau này ta đo kernel throughput, không đo chi phí chuyển một kiến trúc chương trình đang chạy từ AoS sang SoA.
+
+## Thử làm sai để hiểu đúng
+
+1. Quên `velocityZ.push_back`. `validSoA` phải trả false dù năm vector còn lại đúng.
+2. Đẩy `positionY` trước `positionX` của particle kế tiếp. Mọi vector vẫn cùng size nhưng index mapping đã sai; bài 5 cần phép so field-by-field để bắt lỗi này.
+3. Dùng `double` cho một vector SoA. Hai phía không còn cùng precision và traffic model 4 byte/field bị phá vỡ.
+4. Convert AoS→SoA bên trong vùng timer. Kết quả lúc đó trả lời “convert rồi chạy mất bao lâu?”, không còn là kernel race.
+
+## Tự kiểm tra kết quả
+
+- [ ] Sáu vector SoA đều có đúng 1.000.000 phần tử.
+- [ ] `validSoA` trả true cho state vừa convert.
+- [ ] Particle `i` giữ đúng sáu giá trị từ AoS source index `i`.
+- [ ] Phím `L` đổi được sơ đồ memory và particle sample.
+- [ ] Conversion không nằm trong timer và không chạy mỗi frame.
+- [ ] Target `project_32_checkpoint_4` build và chạy được.
+
+## Bài tập mở rộng
+
+1. Viết test cố ý xóa một phần tử khỏi `velocityZ` rồi kiểm `validSoA == false`.
+2. Tính tổng capacity byte của sáu vector và so với `source.size() * sizeof(ParticleAoS)`.
+3. Viết hàm đọc particle index `i` từ SoA thành một `ParticleAoS` tạm để debug.
+
+Bài tiếp theo sẽ viết kernel SoA và so toàn bộ state. Chỉ sau khi hai output khớp, timing giữa chúng mới đáng xem.

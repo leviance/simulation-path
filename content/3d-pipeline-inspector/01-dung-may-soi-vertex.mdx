@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng máy soi cho một vertex
+
+## Vấn đề cần giải quyết
+
+Ở các project trước, ta thường chỉ quan tâm hai đầu của quá trình: một vertex 3D được khai báo trong code và một marker xuất hiện trên màn hình. Khi marker nằm sai chỗ, nguyên nhân có thể đến từ model rotation, camera, projection hoặc phép đổi NDC sang pixel. Nếu mọi giá trị đều dùng chung một biến `point`, ta không còn biết stage nào làm dữ liệu sai lần đầu tiên.
+
+Project 15 sẽ xây một **máy soi pipeline**. Thay vì chỉ trả pixel cuối, chương trình giữ lại sáu trạng thái của cùng một vertex:
+
+$$
+Local \rightarrow World \rightarrow Camera \rightarrow Clip \rightarrow NDC \rightarrow Screen
+$$
+
+Checkpoint đầu chưa viết matrix. Mục tiêu trước mắt là dựng framebuffer, pipeline rail và một local vertex nhìn thấy được. Các stage chưa tồn tại phải được hiển thị là “đang chờ”, không dùng tọa độ giả để lấp chỗ trống.
+
+## Hiểu ý tưởng trước khi viết code
+
+`Local` mô tả vertex tương đối với gốc riêng của model. Nếu một khối lập phương có tâm tại local origin thì đỉnh `(1, 1, 1)` vẫn giữ nguyên dù cả khối được đặt ở đâu trong world.
+
+Ta chọn vertex:
+
+$$
+p_{local}=(1.0,\ 0.75,\ 0.5)
+$$
+
+Để checkpoint đầu có hình, ta dùng một phép xem trước song song rất đơn giản:
+
+$$
+preview=(local.x,local.y)\times pixelsPerUnit
+$$
+
+Đây **không phải perspective projection**. Nó chỉ giúp xác nhận framebuffer, trục X/Y và marker hoạt động trước khi pipeline thật xuất hiện.
+
+<InteractiveLab demo="pipeline3d" mode="pipeline-local" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo kiểu dữ liệu đúng với bài toán
+
+`Vec3` giữ local coordinate; `Vec2` chỉ dùng cho preview trên framebuffer:
+
+```cpp title="include/lab.hpp — local vertex và preview 2D"
+struct Vec3 {
+    double x{};
+    double y{};
+    double z{};
+};
+
+inline Vec2 previewLocalVertex(Vec3 point, double pixelsPerUnit) {
+    return {point.x * pixelsPerUnit, point.y * pixelsPerUnit};
+}
+```
+
+Không thêm trường `screenX` vào `Vec3`. Một kiểu dữ liệu không nên vừa là local point vừa giả làm screen point.
+
+### Bước 2 — Tạo framebuffer trước pipeline
+
+Starter đã có đủ chuỗi SDL3: tạo window, renderer, streaming texture và một `std::vector<std::uint32_t>` theo row-major layout. Mỗi frame xóa buffer rồi present texture:
+
+```cpp title="src/main.cpp — framebuffer CPU chạy độc lập với pipeline"
+clearCanvas(pixels);
+const ViewportRect viewport = makeViewport(width, height);
+drawViewport(pixels, width, height, viewport);
+```
+
+Pipeline sau này chỉ quyết định **pixel nào cần đánh dấu**. Việc lưu pixel và present không cần biết Model/View/Projection hoạt động ra sao.
+Sau khi vẽ xong, `SDL_UpdateTexture` chép framebuffer lên streaming texture như các project CPU trước.
+
+### Bước 3 — Dựng sáu vị trí trên pipeline rail
+
+Rail được vẽ từ trái sang phải. `availableStage` cho biết checkpoint hiện đã tính được tới đâu; `selectedStage` cho biết ô đang được đọc:
+
+```cpp title="src/main.cpp — vẽ pipeline rail"
+drawPipelineRail(pixels, width, height, activeStage, availableStage);
+```
+
+Checkpoint 1 đặt `availableStage = 0`, vì mới chỉ có Local. World tới Screen vẫn hiện bằng màu mờ để người học biết đích đến nhưng không nhầm rằng dữ liệu đã tồn tại.
+
+### Bước 4 — Vẽ marker local bằng preview có nhãn rõ ràng
+
+```cpp title="src/main.cpp — marker xem trước của local vertex"
+const lab::Vec2 preview = lab::previewLocalVertex(localVertex, 54.0);
+drawPreviewMarker(pixels, width, height, viewport, preview.x, preview.y, rgba(255, 196, 88));
+```
+
+Title bar ghi `LOCAL vertex` và ba tọa độ. Khi thay X/Y, marker di chuyển; thay Z không đổi preview. Đó là hành vi cố ý vì phép xem trước chưa có chiều sâu.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build máy soi checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_15_checkpoint_1
+```
+
+Mở executable và resize cửa sổ. Rail phải giữ đủ sáu node, viewport không có pixel vượt biên và marker local vẫn nằm quanh tâm.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán `localVertex.x += 0.01` trong render loop. Marker sẽ tự trôi dù chưa có input; hoàn tác để local data trở lại bất biến.
+2. Dùng `point.z` thay cho `point.y` trong `previewLocalVertex`. Thay Z rồi quan sát marker đi theo chiều dọc; sau đó phục hồi trục Y.
+3. Đặt `availableStage = 5`. Rail sẽ nói rằng Screen đã sẵn sàng dù chưa hề có projection. Đây là lỗi giao diện nhưng cũng là lỗi mô hình tư duy.
+
+## Tự kiểm tra kết quả
+
+- Window, renderer, texture và framebuffer được tạo với đường báo lỗi rõ ràng.
+- Local vertex được lưu một lần và không bị screen coordinate ghi đè.
+- Rail có đúng sáu stage theo thứ tự Local → World → Camera → Clip → NDC → Screen.
+- Chỉ Local được đánh dấu là đã có dữ liệu.
+- Preview X/Y đổi marker; Z chưa ảnh hưởng và được giải thích đúng.
+- Resize tạo lại texture và buffer theo kích thước pixel mới.
+
+## Bài tập mở rộng
+
+Thêm một local vertex thứ hai nhưng vẫn chỉ cho phép chọn một vertex để đưa qua inspector. Đừng tạo hai pipeline song song; mục tiêu là học cách thay **đầu vào** mà không làm giao diện bị nhân đôi.
+
+Bài tiếp theo sẽ mở rộng `Vec3` thành `Vec4`, tự viết `Mat4` và giải thích vì sao một point cần `w=1` trong khi một direction cần `w=0`.

@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Root node và leaf capacity
+
+## Vấn đề cần giải quyết
+
+Quadtree cần một node gốc phủ toàn bộ world. Ta chưa split ngay; mục tiêu của checkpoint này là hiểu một node chứa gì và phân biệt “đã có tree object” với “đã có acceleration”. Nếu root leaf vẫn giữ 100.000 indices, một selection overlap root sẽ kiểm cả 100.000 points—không khác brute force về lượng công việc.
+
+Node chỉ giữ `particleIndex`, không copy `Particle`. Particle vector tiếp tục là nguồn dữ liệu chuẩn mà renderer, brute force và Quadtree cùng đọc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi `QuadtreeNode` có bốn nhóm dữ liệu:
+
+- `bounds`: vùng 2D node quản lý;
+- `depth`: root bằng 0, child bằng depth của parent cộng 1;
+- `particleIndices`: chỉ có ý nghĩa với leaf;
+- `children`: bốn indices SW, SE, NW, NE hoặc sentinel nếu là leaf.
+
+`leafCapacity = 8` không có nghĩa leaf luôn chứa tối đa tám phần tử ở checkpoint này. Nó là ngưỡng để **thử split**, nhưng split chỉ được thêm ở bài kế tiếp.
+
+<InteractiveLab demo="visible-quadtree" mode="quadtree-root" />
+
+Đổi số particles từ 1.000 tới 100.000. Hình vẫn chỉ có một root; candidates bằng N. Đây là baseline quan trọng: metadata không tự giảm work.
+
+## Viết code từng bước
+
+### Bước 1 — Dùng sentinel để nhận biết leaf
+
+```cpp title="include/lab.hpp — child sentinel"
+inline constexpr std::size_t noNodeIndex = std::numeric_limits<std::size_t>::max();
+```
+
+Ta không cần `new`, `delete` hoặc ownership graph. Mọi node nằm trong một `std::vector`; child chỉ là index ổn định theo logic của project.
+
+### Bước 2 — Định nghĩa node dễ đọc
+
+```cpp title="include/lab.hpp — QuadtreeNode"
+struct QuadtreeNode {
+    Bounds2D bounds{};
+    int depth{};
+    std::vector<std::size_t> particleIndices{};
+    std::array<std::size_t, 4> children{noNodeIndex, noNodeIndex, noNodeIndex, noNodeIndex};
+
+    bool isLeaf() const {
+        return children[0] == noNodeIndex;
+    }
+};
+```
+
+Bốn children luôn được tạo cùng lúc, nên chỉ cần kiểm phần tử đầu để nhận biết leaf. Invariant này sẽ được topology test bảo vệ ở bài 4.
+
+### Bước 3 — Gom giới hạn split vào config
+
+```cpp title="include/lab.hpp — QuadtreeConfig"
+struct QuadtreeConfig {
+    Bounds2D bounds{};
+    std::size_t leafCapacity{8};
+    int maximumDepth{12};
+    double minimumNodeSize{1.0 / 4096.0};
+};
+```
+
+Capacity quyết định khi nào muốn split; depth và node size quyết định còn được phép split hay không. Giữ ba giá trị trong cùng config giúp benchmark preset không lệch nhau.
+
+### Bước 4 — Chèn index hợp lệ vào root
+
+```cpp title="include/lab.hpp — root leaf ban đầu"
+tree.nodes.push_back({config.bounds, 0});
+for (std::size_t particleIndex = 0; particleIndex < particles.size(); ++particleIndex) {
+    if (pointInsideBox(particles[particleIndex].position, config.bounds)) {
+        tree.nodes[0].particleIndices.push_back(particleIndex);
+        ++tree.insertedCount;
+    }
+}
+```
+
+Điểm ngoài world bị từ chối thay vì bị clamp vào root. Với cloud chuẩn, `insertedCount` phải đúng bằng particle count.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build root-only checkpoint"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_2
+```
+
+Window title phải báo `root leaf`, `stored 100000 particles` và capacity 8. Selection vẫn dùng brute force để tô hit.
+
+## Thử làm sai để hiểu đúng
+
+1. Lưu cả `Particle` vào node thay vì index. Sửa một position trong source vector sẽ không cập nhật bản copy; quay lại single source of truth.
+2. Tạo children mặc định là `{0,0,0,0}`. Root bị hiểu nhầm là internal node trỏ về chính nó; khôi phục `noNodeIndex`.
+3. Clamp point ngoài world rồi chèn vào root. `insertedCount` có vẻ đủ nhưng index spatial sai; chỉ chèn khi `pointInsideBox` trả true.
+
+## Tự kiểm tra kết quả
+
+- Root bounds trùng world bounds và depth bằng 0.
+- Root được nhận biết là leaf bằng sentinel.
+- Node chỉ lưu particle indices, không copy particle data.
+- Mỗi point hợp lệ được chèn đúng một lần vào root.
+- `insertedCount` bằng 100.000 với deterministic cloud.
+- Leaf capacity, maximum depth và minimum node size nằm trong cùng config.
+- Root-only candidates vẫn bằng N; chưa có tuyên bố tăng tốc.
+
+## Bài tập mở rộng
+
+Thêm một particle ngoài bounds vào scene nhỏ và xác nhận `particleCount` tăng nhưng `insertedCount` không tăng. Đừng dùng scene 100.000 points cho thí nghiệm này vì một lỗi nhỏ sẽ khó nhìn.
+
+Bài tiếp theo mới dùng `leafCapacity` để tạo bốn child và redistribute toàn bộ indices.

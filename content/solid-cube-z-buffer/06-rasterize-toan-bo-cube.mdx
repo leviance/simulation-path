@@ -1,0 +1,182 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa toàn bộ cube qua Z-buffer
+
+## Vấn đề cần giải quyết
+
+Checkpoint 5 đã có depth test, nhưng vòng render còn nằm rải trong `main.cpp`. Khi thêm animation và nhiều cách điều khiển, rất dễ tạo hai đường render: một đường cho cube tự quay, một đường cho drag. Hai đường đó rồi sẽ lệch logic.
+
+Ta gom pipeline thuần vào `renderCube`. Hàm nhận scene state và hai buffer, project tám vertex, rasterize mười hai triangle, chạy depth test cho mọi fragment và trả thống kê. SDL chỉ còn quản lý input, thời gian và present.
+
+Cho cube quay rồi quan sát `Fragment pass / reject`. `covered` là tổng fragment đạt coverage; nó phải bằng `pass + reject` khi depth test bật.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một frame vẫn chỉ có một pipeline. Animation, drag và single-step thay đổi cùng hai góc quay; không cách nhập nào có bản renderer riêng.
+
+<InteractiveLab demo="z-buffer" mode="depth-mesh" />
+
+## Viết code từng bước
+
+### Bước 1 — Gom pipeline vào một fragment path
+
+Chữ ký hàm cho thấy toàn bộ dependency:
+
+```cpp title="include/lab.hpp — renderer CPU không phụ thuộc SDL"
+inline RenderStats renderCube(
+    const CubeMesh& mesh,
+    int width,
+    int height,
+    double angleX,
+    double angleY,
+    bool reverseOrder,
+    bool depthEnabled,
+    std::vector<std::uint32_t>& colorBuffer,
+    DepthBuffer& depthBuffer
+);
+```
+
+Không có `SDL_Renderer*`, `SDL_Window*` hay event trong hàm. Vì vậy CTest có thể gọi renderer với buffer nhỏ mà không mở cửa sổ.
+
+Đầu hàm, tám vertex được project đúng một lần:
+
+```cpp title="include/lab.hpp — vertex stage dùng chung cho 12 triangle"
+const auto vertices = projectCube(mesh, width, height, angleX, angleY);
+RenderStats stats{};
+```
+
+Vòng triangle chỉ chọn index theo draw order và ghép `ScreenTriangle`:
+
+```cpp title="include/lab.hpp — toàn bộ draw list đi cùng pipeline"
+for (std::size_t position = 0; position < mesh.triangles.size(); ++position) {
+    const std::size_t triangleIndex = triangleIndexAt(
+        position,
+        mesh.triangles.size(),
+        reverseOrder
+    );
+    const ScreenTriangle triangle = screenTriangle(
+        mesh.triangles[triangleIndex],
+        vertices
+    );
+    // rasterizeTriangle và depth callback nằm ngay sau đây.
+}
+```
+
+### Bước 2 — Đếm coverage, pass và reject ở đúng tầng
+
+```cpp title="include/lab.hpp — telemetry từ chính fragment path"
+stats.coveredCount += rasterizeTriangle(
+    triangle,
+    width,
+    height,
+    [&](int x, int y, Barycentric weights,
+        const ScreenTriangle& normalized) {
+        const double depth = interpolateNdcDepth(normalized, weights);
+        const DepthTestResult test = depthTestAndWrite(
+            depthBuffer,
+            x,
+            y,
+            depth,
+            depthEnabled
+        );
+        if (!test.passed) {
+            ++stats.rejectedCount;
+            return;
+        }
+
+        colorBuffer[depthBuffer.index(x, y)] = packColor(normalized.color);
+        ++stats.passedCount;
+    }
+);
+```
+
+`coveredCount` được rasterizer trả sau khi callback đã chạy cho mọi covered sample. `passedCount` và `rejectedCount` được tăng đúng trong hai nhánh depth. Không quét lại buffer để suy đoán thống kê.
+
+Khi depth test bật:
+
+$$
+coveredCount=passedCount+rejectedCount
+$$
+
+Khi depth test tắt, mọi fragment pass nên `rejectedCount=0`.
+
+### Bước 3 — Để animation chỉ thay angle
+
+`main.cpp` đo delta time bằng millisecond tick, clamp tối đa 0.05 giây rồi chỉ cập nhật `angleY`:
+
+```cpp title="src/main.cpp — chuyển động không tạo renderer thứ hai"
+const std::uint64_t currentTicks = SDL_GetTicks();
+const double deltaSeconds = std::min(
+    0.05,
+    double(currentTicks - previousTicks) / 1000.0
+);
+previousTicks = currentTicks;
+
+if (!paused) {
+    angleY += deltaSeconds * 0.55;
+}
+```
+
+Sau đó frame nào cũng gọi cùng `renderCube`, dù angle đến từ animation, drag hay phím `N`. Clamp tránh cube nhảy một góc rất lớn khi cửa sổ vừa bị kéo hoặc debugger vừa tạm dừng chương trình.
+
+### Bước 4 — Hoàn thiện trật tự của một frame
+
+```cpp title="src/main.cpp — clear rồi gọi renderer CPU"
+std::fill(pixels.begin(), pixels.end(), kClearColor);
+depthBuffer.clear(1.0);
+
+const lab::RenderStats stats = lab::renderCube(
+    mesh,
+    width,
+    height,
+    angleX,
+    angleY,
+    reverseOrder,
+    depthEnabled,
+    pixels,
+    depthBuffer
+);
+```
+
+Sau lời gọi này, `main.cpp` mới chạy `SDL_UpdateTexture`, `SDL_RenderTexture` và
+`SDL_RenderPresent` bằng đúng chuỗi kiểm lỗi của starter.
+
+Nếu `renderCube` tự clear, ta không thể tái dùng nó để vẽ nhiều mesh vào cùng frame. Do đó ownership của clear nằm ở frame loop, còn ownership của draw nằm trong hàm render.
+
+## Ghép các phần lại
+
+### Build và kiểm tra controls
+
+```bash title="Terminal — build cube hoàn chỉnh về pipeline"
+cmake --build build --config Debug --target project_17_checkpoint_6
+```
+
+- `Space`: chạy/tạm dừng.
+- `N`: tăng `angleY` 0.08 radian và pause.
+- Kéo chuột: sửa `angleX/angleY` rồi pause để dễ quan sát.
+- `D`: bật/tắt depth test.
+- `O`: đảo draw order.
+- `R`: về góc và trạng thái mặc định.
+
+## Thử làm sai để hiểu đúng
+
+1. Clear depth bên trong `renderCube`. Vẽ cube thứ hai sau này sẽ xóa depth của cube đầu; giữ clear ở đầu frame.
+2. Tạo một vòng raster riêng cho `depthEnabled=false`. Hai nhánh sớm muộn sẽ khác top-left hoặc color logic; truyền boolean vào cùng fragment path.
+3. Tính `covered=passed+rejected` thay vì lấy từ rasterizer. Công thức trông đúng nhưng không còn bắt được trường hợp callback thiếu; giữ ba counter ở đúng tầng.
+4. Cộng một góc cố định mỗi frame. Máy 144 FPS quay nhanh hơn máy 60 FPS; nhân tốc độ góc với delta time.
+
+## Tự kiểm tra kết quả
+
+- `renderCube` không include hoặc nhận kiểu SDL.
+- Tám vertex được project một lần, đủ 12 triangle đi qua cùng rasterizer.
+- Mỗi covered fragment nội suy depth rồi đi qua cùng `depthTestAndWrite`.
+- Với depth bật, `covered = passed + rejected` và cả pass/reject đều lớn hơn zero ở góc mặc định.
+- Với depth tắt, reject bằng zero và `O` đổi ảnh.
+- Animation dùng delta time; pause, step và drag chỉ đổi angle.
+- Resize cấp phát lại texture/color/depth trước khi gọi renderer với kích thước mới.
+
+## Bài tập mở rộng
+
+Thêm `triangleCount` vào `RenderStats` và tăng sau mỗi call rasterizer. Nó phải luôn bằng 12, kể cả khi triangle quay lưng hoặc coverage bằng zero — Project 17 chưa có back-face culling.
+
+Bài cuối sẽ biến những điều “trông có vẻ đúng” thành phép kiểm lặp lại được trên toàn bộ color/depth buffer.

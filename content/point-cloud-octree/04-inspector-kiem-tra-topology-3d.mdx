@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Inspector kiểm tra topology 3D
+
+## Vấn đề cần giải quyết
+
+Checkpoint 3 vẽ ra một rừng hộp có vẻ hợp lý. Nhưng renderer đọc trực tiếp `points`, nên nó vẫn vẽ đủ point ngay cả khi Octree làm mất index. Một child có bounds sai cũng có thể khuất sau hàng nghìn wireframe khác. Hình ảnh giúp ta hiểu cấu trúc; nó không phải bằng chứng về correctness.
+
+Ta cần một inspector đi qua dữ liệu sau build và tự tính lại các invariants. Inspector không được dùng các con số tree tự báo để chứng minh chính chúng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với `N` points hợp lệ, một Octree đúng phải thỏa:
+
+- mỗi index từ `0` đến `N-1` xuất hiện đúng một lần trong leaves;
+- internal nodes không giữ point indices;
+- mọi child index trỏ vào `nodes` và bounds của child đúng với parent/octant;
+- leaf vượt capacity chỉ khi split guard đã chặn;
+- `leafCount + internalNodeCount == nodes.size()`.
+
+Ta dùng `insertionCounts[N]` để phát hiện đồng thời hai lỗi: count 0 là mất point, count lớn hơn 1 là insert trùng.
+
+Báo cáo trả lời ba câu hỏi theo đúng thứ tự: **every point** có xuất hiện đúng một lần không, **child bounds** có khớp octant của parent không, và **capacity** có chỉ bị vượt khi giới hạn chia đã chặn hay không.
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-topology" />
+
+Đổi distribution và capacity. Topology numbers thay đổi, nhưng nhãn `topology hợp lệ` phải giữ nguyên. Nếu chỉ nhìn node count mà không đọc invariants, bạn đang đo hình dạng chứ chưa kiểm dữ liệu.
+
+## Viết code từng bước
+
+### Bước 1 — Đếm lại storage từ leaves
+
+```cpp title="include/lab.hpp — đếm point indices"
+for (const std::size_t pointIndex : node.pointIndices) {
+    if (pointIndex >= insertionCounts.size()) {
+        childIndicesValid = false;
+    } else {
+        ++insertionCounts[pointIndex];
+    }
+}
+```
+
+Index ngoài phạm vi là lỗi cấu trúc nghiêm trọng. Với index hợp lệ, count sau cùng phải bằng 1, không chỉ “khác 0”.
+
+### Bước 2 — Kiểm internal node thật sự rỗng
+
+```cpp title="include/lab.hpp — internal storage invariant"
+++internalNodes;
+internalNodesEmpty = internalNodesEmpty && node.pointIndices.empty();
+```
+
+Nếu parent vẫn giữ old indices sau split, query sẽ có nguy cơ đọc trùng khi vừa kiểm parent vừa đi xuống children, hoặc memory tăng ngoài dự kiến.
+
+### Bước 3 — Tính lại từng child bounds
+
+```cpp title="include/lab.hpp — child index và child bounds"
+if (childIndex >= tree.nodes.size()) {
+    childIndicesValid = false;
+    continue;
+}
+childBoundsValid = childBoundsValid && sameBounds(tree.nodes[childIndex].bounds, octreeChildBounds(node.bounds, octant));
+```
+
+Ta không chỉ hỏi child có tồn tại, mà còn hỏi child thứ `octant` có đúng vùng ba bit của nó hay không.
+
+### Bước 4 — Chỉ chấp nhận overflow khi guard đã dừng split
+
+```cpp title="include/lab.hpp — capacity invariant"
+if (node.pointIndices.size() > tree.config.leafCapacity &&
+    nodeCanSplit(node, tree.config)) {
+    capacityHonored = false;
+}
+```
+
+Overflow ở maximum depth là thiết kế có chủ đích. Overflow trong một leaf vẫn có thể split mới là bug của insertion.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 4"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_30_checkpoint_4
+```
+
+Window title phải báo `topology valid`. Đừng dừng ở đó: mở debugger, đổi một child index hoặc giữ lại một index trong parent để thấy inspector đổi đúng cờ liên quan.
+
+## Thử làm sai để hiểu đúng
+
+1. Sau split, cố tình không clear `pointIndices` của parent. `internalNodesEmpty` phải fail dù hình vẽ không đổi.
+2. Hoán đổi child 3 và child 7. Cả hai index đều hợp lệ nhưng `childBoundsValid` phải fail; đó là lý do chỉ range-check là chưa đủ.
+3. Chỉ kiểm tổng số entries bằng N. Một index có thể xuất hiện hai lần trong khi index khác mất đi. Khôi phục count riêng cho từng point.
+
+## Tự kiểm tra kết quả
+
+- Mỗi point index có insertion count đúng 1.
+- Internal nodes có `pointIndices.empty()`.
+- Tám child indices của mỗi internal node đều hợp lệ.
+- Child bounds khớp parent và octant bit tương ứng.
+- Leaf overflow chỉ hợp lệ khi `nodeCanSplit` trả false.
+- Leaf/internal statistics được tính lại và khớp tree.
+- Inspector pass với cả clustered và uniform distribution.
+
+## Bài tập mở rộng
+
+Mở rộng report để trả `firstInvalidNodeIndex` thay vì chỉ boolean. Khi một invariant fail, in node index đó vào test output. Giữ boolean hiện tại để UI đọc nhanh, còn diagnostic index phục vụ debug.
+
+Topology đúng mới cho phép ta tin storage. Bài tiếp theo dùng bounds của nodes để prune cả subtree trước khi exact-test point data.

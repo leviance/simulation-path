@@ -1,0 +1,191 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mass Octree và center of mass
+
+## Vấn đề cần giải quyết
+
+Octree ở Project 30 chỉ trả lời “body nào nằm trong vùng này?”. Barnes–Hut cần câu hỏi khác: “cả subtree này có thể được thay bằng một nguồn lực ở đâu, với khối lượng bao nhiêu?”. Vì vậy mỗi node phải có `totalMass` và `centerOfMass` chính xác trước khi traversal được phép xấp xỉ.
+
+Checkpoint 5 tự dựng lại toàn bộ đường đi của một body: chọn octant, đi xuống child, split leaf khi đầy, phân phối lại indices cũ, rồi mới aggregate từ leaf lên root. Ta không giả định người học còn nhớ nguyên phần cài đặt Octree của Project 30.
+
+## Hiểu ý tưởng trước khi viết code
+
+Leaf aggregate trực tiếp từ bodies mà nó giữ. Internal node aggregate từ tám children:
+
+$$
+M=\sum_k M_k,\qquad
+\mathbf{c}=\frac{\sum_k M_k\mathbf{c}_k}{M}
+$$
+
+Root bounds được dựng lại thành cube chứa tất cả body positions. Cube quan trọng vì lesson sau dùng một cạnh duy nhất `s` trong $s/d$.
+
+<InteractiveLab demo="barnes-hut-nbody" mode="nbody-mass-tree" />
+
+Các hộp xanh là một phần leaf boxes. Xem root mass/COM trong readout, rồi chạy vài bước: topology đổi theo positions nhưng root mass phải giữ nguyên.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo cubic bounds có padding
+
+```cpp title="include/tree.hpp — cubic root"
+const Vec3 center = (minimum + maximum) * 0.5;
+const double halfExtent =
+    std::max({maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z}) *
+        0.505 +
+    1.0e-6;
+```
+
+Padding nhỏ giữ body nằm trong root dù maximum/minimum chịu sai số floating point. Cộng epsilon cũng giúp case mọi body trùng position vẫn có cube khác 0.
+
+### Bước 2 — Giữ aggregate ngay trên node
+
+```cpp title="include/tree.hpp — BarnesHutNode aggregate"
+double totalMass{};
+Vec3 centerOfMass{};
+
+bool isLeaf() const {
+    return children[0] == noNodeIndex;
+}
+```
+
+Internal node không giữ body indices sau redistribute. Aggregate là bản tóm tắt physics; indices vẫn chỉ nằm ở leaves.
+
+### Bước 3 — Đi xuống child nếu node đã split
+
+```cpp title="include/tree.hpp — insertBodyAtNode"
+if (!tree.nodes[nodeIndex].isLeaf()) {
+    const int octant = barnesHutOctant(
+        bodies[bodyIndex].position,
+        tree.nodes[nodeIndex].bounds
+    );
+    const std::size_t childIndex = tree.nodes[nodeIndex].children[octant];
+    insertBodyAtNode(tree, bodies, bodyIndex, childIndex);
+    return;
+}
+```
+
+`bodyIndex` là index trong vector `bodies`; tree không copy cả `Body`. Ở mỗi tầng, ba phép so với midpoint tạo ba bit X/Y/Z và chọn đúng một trong tám children. `return` rất quan trọng: một body đã được chuyển xuống child thì parent không được giữ thêm index đó.
+
+### Bước 4 — Split leaf mà không giữ reference bị treo
+
+Leaf nhận thêm index nếu còn chỗ hoặc không thể chia sâu hơn:
+
+```cpp title="include/tree.hpp — dừng split có giới hạn"
+if (
+    tree.nodes[nodeIndex].bodyIndices.size() < tree.config.leafCapacity ||
+    !nodeCanSplit(tree.nodes[nodeIndex], tree.config) ||
+    tree.nodes.size() + 8U > 1'000'000U
+) {
+    tree.nodes[nodeIndex].bodyIndices.push_back(bodyIndex);
+    return;
+}
+```
+
+Khi leaf đầy, ta **move indices ra biến cục bộ trước**, lưu `parentBounds`, rồi mới `push_back` tám children:
+
+```cpp title="include/tree.hpp — tạo tám children an toàn"
+std::vector<std::size_t> indices =
+    std::move(tree.nodes[nodeIndex].bodyIndices);
+indices.push_back(bodyIndex);
+
+const Bounds3D parentBounds = tree.nodes[nodeIndex].bounds;
+const int childDepth = tree.nodes[nodeIndex].depth + 1;
+const std::size_t firstChildIndex = tree.nodes.size();
+
+for (int octant = 0; octant < 8; ++octant) {
+    BarnesHutNode child{};
+    child.bounds = barnesHutChildBounds(parentBounds, octant);
+    child.depth = childDepth;
+    tree.nodes.push_back(std::move(child));
+}
+```
+
+Không viết `BarnesHutNode& parent = tree.nodes[nodeIndex]` rồi dùng `parent` sau vòng `push_back`. `std::vector` có thể chuyển vùng nhớ, khiến reference đó không còn trỏ tới node hợp lệ.
+
+Sau khi đã có đủ tám children, ghi indices của chúng vào parent và chèn lại toàn bộ body vừa lấy ra:
+
+```cpp title="include/tree.hpp — nối parent rồi phân phối lại"
+for (int octant = 0; octant < 8; ++octant) {
+    tree.nodes[nodeIndex].children[octant] =
+        firstChildIndex + std::size_t(octant);
+}
+
+for (const std::size_t oldIndex : indices) {
+    const int octant = barnesHutOctant(bodies[oldIndex].position, parentBounds);
+    const std::size_t childIndex = tree.nodes[nodeIndex].children[octant];
+    insertBodyAtNode(tree, bodies, oldIndex, childIndex);
+}
+```
+
+Đây là thời điểm parent trở thành internal node. `bodyIndices` của nó đã rỗng vì được move; mỗi index chỉ còn xuất hiện trong một leaf ở phía dưới.
+
+### Bước 5 — Aggregate leaf từ bodies thật
+
+```cpp title="include/tree.hpp — leaf aggregation"
+for (const std::size_t bodyIndex : tree.nodes[nodeIndex].bodyIndices) {
+    mass += bodies[bodyIndex].mass;
+    weightedPosition += bodies[bodyIndex].position * bodies[bodyIndex].mass;
+}
+```
+
+### Bước 6 — Aggregate internal node từ children
+
+```cpp title="include/tree.hpp — internal aggregation"
+for (const std::size_t childIndex : tree.nodes[nodeIndex].children) {
+    accumulateNodeMass(tree, bodies, childIndex);
+    mass += tree.nodes[childIndex].totalMass;
+    weightedPosition +=
+        tree.nodes[childIndex].centerOfMass * tree.nodes[childIndex].totalMass;
+}
+```
+
+Đệ quy hoàn tất child trước khi parent đọc aggregate. Sau vòng lặp, `centerOfMass = weightedPosition / mass` nếu mass dương.
+
+### Bước 7 — Build theo đúng ba pha
+
+```cpp title="include/tree.hpp — buildMassOctree"
+BarnesHutTree tree{};
+tree.config = config;
+tree.bodyCount = bodies.size();
+tree.nodes.push_back({cubicBoundsForBodies(bodies), 0});
+
+for (std::size_t bodyIndex = 0; bodyIndex < bodies.size(); ++bodyIndex) {
+    insertBodyAtNode(tree, bodies, bodyIndex, 0);
+}
+
+accumulateNodeMass(tree, bodies, 0);
+```
+
+Thứ tự này cố ý tách ba trách nhiệm: tạo root, xây topology bằng insertion, rồi tính aggregate trên topology đã ổn định. Nếu vừa insert vừa cộng mass, một lần split và redistribute sẽ buộc ta hoàn tác số liệu cũ — rất dễ đếm trùng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 5"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_31_checkpoint_5
+```
+
+Checkpoint vẫn dùng direct force để chuyển động, nhưng đã vẽ Mass Octree và báo root mass. Hãy đặt breakpoint trong `insertBodyAtNode`, theo một body qua vài tầng rồi kiểm tra parent không còn giữ index sau split. Ta chưa dùng aggregate làm nguồn lực cho tới khi lesson sau chốt opening criterion.
+
+## Thử làm sai để hiểu đúng
+
+1. Lấy trung bình tám child centers không trọng số. Empty child có ảnh hưởng ngang cụm nặng và root COM sai rõ rệt.
+2. Giữ reference tới parent rồi `push_back` tám children. Vector reallocation làm reference treo; lỗi có thể chỉ xuất hiện ở N lớn.
+3. Tính aggregate trong lúc insert nhưng quên trừ dữ liệu khi redistribute. Mass bị đếm lặp sau split.
+
+## Tự kiểm tra kết quả
+
+- Root cube chứa mọi body position.
+- Mỗi body index xuất hiện đúng một leaf.
+- Internal nodes không giữ body indices.
+- Root `totalMass` khớp hàm `totalMass(bodies)`.
+- Root `centerOfMass` khớp hàm trực tiếp.
+- Mỗi internal mass bằng tổng tám child masses.
+- Empty child có mass 0 và center hữu hạn.
+- Tree rebuild sau khi body positions đổi.
+
+## Bài tập mở rộng
+
+Vẽ một marker tại center of mass của từng internal node ở depth 1 và dùng radius tỉ lệ với căn bậc ba của mass. Đừng dùng marker này làm input cho physics; nó chỉ là inspector.
+
+Bài tiếp theo dùng đúng hai aggregate fields này để thay cả subtree bằng một source lực.

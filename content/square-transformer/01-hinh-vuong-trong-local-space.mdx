@@ -1,0 +1,139 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng hình vuông trong local space
+
+## Vấn đề cần giải quyết
+
+Starter của Project 09 đã mở được cửa sổ SDL3, quản lý framebuffer, vẽ lưới và xử lý resize. Việc đầu tiên của ta chưa phải là nhân ma trận. Ta cần đưa một hình vuông thật sự lên màn hình, đồng thời chọn cách lưu dữ liệu đủ tốt để những bài sau có thể co, xoay và làm xiên hình đó.
+
+Cách dễ nghĩ nhất là lưu bốn tọa độ pixel, chẳng hạn `(408,248)` đến `(552,392)`. Cách này vẽ được một frame nhưng trộn hình dạng của vật thể với kích thước cửa sổ. Ta sẽ lưu bốn đỉnh quanh gốc riêng của hình vuông. Chỉ khi chuẩn bị vẽ, chương trình mới đổi chúng sang pixel.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một điểm sẽ đi qua ba hệ tọa độ:
+
+$$
+P_{local}\longrightarrow P_{world}\longrightarrow P_{screen}
+$$
+
+Trong bài đầu, chưa có phép biến đổi nên `Pworld = Plocal`. Dù hai con số đang giống nhau, ý nghĩa vẫn khác: local point mô tả hình dạng quanh tâm vật thể, còn world point mô tả nơi điểm đó nằm trong cảnh.
+
+Ta dùng hình vuông có nửa cạnh `h`. Bốn đỉnh đi quanh biên theo một chiều:
+
+$$
+(-h,-h),\quad(h,-h),\quad(h,h),\quad(-h,h)
+$$
+
+Thứ tự này quan trọng vì hàm vẽ sẽ nối mỗi đỉnh với đỉnh kế tiếp rồi nối đỉnh cuối về đỉnh đầu.
+
+<InteractiveLab demo="transform" mode="transform-local" />
+
+Kéo chấm vàng sang vị trí khác. Đường xám và xanh cùng di chuyển, nhưng giá trị `local P2` không đổi. Đó chính là lợi ích của local space: di chuyển vật thể không phá hỏng dữ liệu mô tả hình dạng của nó.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo kiểu điểm và bốn đỉnh local
+
+Mở `include/lab.hpp`. Ta dùng `std::array` vì hình vuông luôn có đúng bốn đỉnh.
+
+```cpp title="include/lab.hpp — Vec2 và makeSquare"
+struct Vec2 {
+    double x{};
+    double y{};
+};
+
+using Square = std::array<Vec2, 4>;
+
+inline Square makeSquare(double halfExtent) {
+    return {
+        Vec2{-halfExtent, -halfExtent},
+        Vec2{halfExtent, -halfExtent},
+        Vec2{halfExtent, halfExtent},
+        Vec2{-halfExtent, halfExtent},
+    };
+}
+```
+
+`makeSquare(72.0)` tạo hình rộng 144 world unit và có tâm đúng tại `(0,0)`. Hàm không biết gì về SDL, framebuffer hay kích thước cửa sổ.
+
+### Bước 2 — Đổi world point thành screen point
+
+Trong `src/main.cpp`, tâm cửa sổ đóng vai trò gốc world. Trục Y của world hướng lên, còn Y của màn hình hướng xuống, nên công thức phải đổi dấu.
+
+```cpp title="src/main.cpp — phép đổi world sang screen"
+lab::Vec2 screenCenter(int width, int height) {
+    return {width * 0.5, height * 0.5};
+}
+
+lab::Vec2 worldToScreen(lab::Vec2 point, int width, int height) {
+    const lab::Vec2 center = screenCenter(width, height);
+    return {center.x + point.x, center.y - point.y};
+}
+```
+
+Giả sử cửa sổ là `960×640`. Điểm world `(72,72)` trở thành pixel `(552,248)`. Số Y giảm vì điểm world nằm phía trên tâm.
+
+### Bước 3 — Nối bốn cạnh thành polygon khép kín
+
+`drawSquare` không tự tính đỉnh. Nó nhận một `Square`, đổi từng cặp điểm sang screen space rồi gọi `drawLine` đã có từ Project 04.
+
+```cpp title="src/main.cpp — nối các cạnh của hình vuông"
+for (std::size_t index = 0; index < square.size(); ++index) {
+    const lab::Vec2 current = square[index];
+    const lab::Vec2 next = square[(index + 1) % square.size()];
+    drawWorldLine(pixels, width, height, current, next, color);
+}
+```
+
+Khi `index` bằng 3, biểu thức `(3+1)%4` trả 0. Nhờ vậy cạnh cuối tự nối về đỉnh đầu.
+
+### Bước 4 — Vẽ từ dữ liệu local trong mỗi frame
+
+Tạo dữ liệu một lần trước vòng lặp; sau khi xóa framebuffer, sao chép nó thành kết quả của frame hiện tại và vẽ.
+
+```cpp title="src/main.cpp — dữ liệu và phần render của checkpoint 1"
+const lab::Square localSquare = lab::makeSquare(72.0);
+
+clearCanvas(pixels, width, height);
+lab::Square transformedSquare = localSquare;
+drawSquare(pixels, width, height, transformedSquare, rgba(83, 240, 174), true);
+```
+
+Sau phần vẽ, chương trình vẫn dùng đường đi quen thuộc từ Project 01:
+
+```cpp title="src/main.cpp — đưa framebuffer lên cửa sổ"
+if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), width* int(sizeof(std::uint32_t)))) {
+    std::cerr << "SDL_UpdateTexture failed: " << SDL_GetError() << '\n';
+    failed = true;
+    break;
+}
+SDL_RenderClear(renderer);
+SDL_RenderTexture(renderer, texture, nullptr, nullptr);
+SDL_RenderPresent(renderer);
+```
+
+## Ghép các phần lại
+
+Build target `project_9_checkpoint_1`. Bạn phải thấy lưới, hai trục đi qua tâm và một hình vuông xanh có bốn chấm ở đỉnh. Resize cửa sổ: hình vuông vẫn ở tâm vì `worldToScreen` đọc kích thước mới ở mỗi lần vẽ.
+
+Luồng dữ liệu hiện tại rất ngắn: `makeSquare` tạo local points, `transformedSquare` nhận cùng bốn điểm, `drawSquare` đổi chúng sang pixel, rồi SDL trình bày framebuffer. Bài sau chỉ thay bước ở giữa; phần SDL không cần viết lại.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi đỉnh thứ ba thành `{-halfExtent, halfExtent}` để trùng với đỉnh cuối. Một cạnh biến mất và đường chéo xuất hiện; thứ tự đỉnh không còn chạy quanh biên.
+2. Bỏ `% square.size()` trong chỉ số của `next`. Khi vòng lặp đến đỉnh cuối, chương trình đọc ra ngoài `std::array`.
+3. Đổi `center.y - point.y` thành phép cộng. Hình vuông đối xứng nên chưa lộ lỗi; hãy tạm tăng riêng Y của đỉnh P2 thêm 30 để thấy nó xuất hiện sai phía.
+
+## Tự kiểm tra kết quả
+
+- `makeSquare(72)` trả đúng bốn điểm và tâm trung bình là `(0,0)`.
+- Bốn cạnh khép kín, không có đường chéo và mỗi đỉnh được đánh dấu một lần.
+- Hình vuông nằm giữa cửa sổ sau ít nhất năm lần resize.
+- `worldToScreen({0,0})` luôn trùng tâm framebuffer.
+- Escape và nút đóng cửa sổ đều kết thúc chương trình sạch sẽ.
+
+## Bài tập mở rộng
+
+Thêm `makeRectangle(halfWidth, halfHeight)` và dùng cùng `drawSquare` sau khi đổi tên hàm thành `drawQuad`. Sau đó thử sắp bốn đỉnh theo thứ tự ngẫu nhiên để tự giải thích vì sao một danh sách điểm chưa đủ; thứ tự của polygon cũng là dữ liệu.
+
+Bài tiếp theo giữ nguyên localSquare và thay `transformedSquare = localSquare` bằng phép scale riêng theo X và Y.

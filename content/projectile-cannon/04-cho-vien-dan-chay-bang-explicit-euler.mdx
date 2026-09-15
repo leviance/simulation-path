@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho viên đạn chạy bằng Explicit Euler
+
+## Vấn đề cần giải quyết
+
+Nghiệm giải tích cho phép hỏi thẳng position tại thời điểm bất kỳ. Nhưng nhiều hệ vật lý sau này không có công thức đóng đơn giản: lực có thể phụ thuộc velocity, các vật va chạm, lò xo nối nhiều khối với nhau. Khi đó chương trình phải mang một state từ bước trước sang bước sau.
+
+Checkpoint 4 giới thiệu integrator đơn giản nhất: Explicit Euler. Ta dùng nó dù đã có công thức chính xác, vì chính đường analytic sẽ cho thấy Euler đánh đổi điều gì để lấy sự đơn giản. Project 23 mới mở rộng phép so sánh sang Verlet và RK4.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ở đầu một bước có độ dài $dt$, state là $(p_n,v_n)$. Explicit Euler tính:
+
+$$
+p_{n+1}=p_n+v_n\,dt
+$$
+
+$$
+v_{n+1}=v_n+a_n\,dt
+$$
+
+Thứ tự có ý nghĩa. Position dùng **velocity cũ** $v_n$. Nếu update velocity trước rồi mới position, ta đã viết semi-implicit Euler — không phải lỗi cú pháp, mà là một integrator khác với đặc tính sai số khác.
+
+<InteractiveLab demo="projectile" mode="projectile-euler" />
+
+Nhấn **Đặt lại**, rồi **Tiến một bước** nhiều lần. Chấm xanh là numerical state; chấm hồng là `analyticPosition` tại đúng `elapsed` của state đó. Đoạn hồng nối chúng là position error đang tích lũy.
+
+## Viết code từng bước
+
+### Bước 1 — State chỉ giữ những gì thay đổi
+
+```cpp title="include/lab.hpp — trạng thái được mang qua từng bước"
+struct ProjectileState {
+    Vec2 position{};
+    Vec2 velocity{};
+    double elapsed{};
+    bool active{};
+};
+```
+
+Acceleration nằm trong `BallisticLaunch` vì nó là tham số của bài toán, chưa phải state biến đổi. `active` giúp event loop dừng cập nhật sau impact mà không phải xóa position cuối.
+
+### Bước 2 — Fire tạo state từ một snapshot của aim
+
+```cpp title="include/lab.hpp — phát bắn không tham chiếu slider đang đổi"
+inline ProjectileState launchProjectile(const BallisticLaunch& launch) {
+    return {launch.position, launch.velocity, 0.0, true};
+}
+```
+
+Main đồng thời lưu `firedLaunch`. Exact ghost về sau phải dùng điều kiện đầu của chính phát bắn đang bay, không dùng aim preview mà người dùng vừa kéo sang hướng khác.
+
+### Bước 3 — Giữ rõ velocity đầu bước
+
+```cpp title="include/lab.hpp — một bước Explicit Euler"
+const Vec2 startVelocity = state.velocity;
+state.position = add(state.position, scale(startVelocity, deltaSeconds));
+state.velocity = add(state.velocity, scale(acceleration, deltaSeconds));
+state.elapsed += deltaSeconds;
+```
+
+Biến `startVelocity` làm thứ tự thuật toán hiện ra ngay trong code. Đây là project học tập; viết một biểu thức ngắn hơn nhưng che mất ý nghĩa “đầu bước” sẽ làm phần so sánh integrator sau này khó hiểu.
+
+### Bước 4 — Trail lấy state sau mỗi step
+
+Mỗi lần update thành công, main thêm `projectile.position` vào `numericalTrail`. Trail là dữ liệu hiển thị; xóa trail không được làm thay đổi state vật lý.
+
+Ở riêng checkpoint 4, `deltaSeconds` của render frame được đưa thẳng vào Euler để bạn có thể nhìn thấy vấn đề. Bài tiếp theo sẽ thay đường này bằng accumulator cùng fixed dt.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build viên đạn Euler đầu tiên"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_22_checkpoint_4
+./build/Debug/project_22_checkpoint_4.exe
+```
+
+Nhấn `Enter` để fire, `Space` để pause và `N` để đi đúng một bước. Checkpoint này vẫn dùng frame delta khi chạy tự động, nên resize hoặc kéo cửa sổ có thể tạo bước lớn. Đó là lỗi thiết kế có chủ đích của thí nghiệm, không phải kiến trúc final.
+
+## Thử làm sai để hiểu đúng
+
+1. Update velocity trước position. Đường xanh chuyển từ phía trên đường analytic xuống phía dưới; bạn đã đổi sang semi-implicit Euler.
+2. Quên tăng `elapsed`. Viên đạn xanh bay nhưng exact ghost đứng ở muzzle, khiến phép so không còn cùng thời điểm.
+3. Đọc `aimVelocity` mỗi frame thay vì giữ `firedLaunch`. Kéo nòng giữa lúc viên đạn bay sẽ bẻ quỹ đạo như có động cơ vô hình.
+4. Dùng pixel position làm state rồi cộng m/s. Kết quả phụ thuộc scale của cửa sổ và không còn đơn vị nhất quán.
+
+## Tự kiểm tra kết quả
+
+- Fire đặt position về muzzle, velocity về initial velocity và elapsed về 0.
+- Một bước 0,1 s với velocity (10,20) dịch position đúng (1,2) mét trước khi gravity đổi velocity.
+- `elapsed` tăng đúng tổng các `dt` đã dùng.
+- Exact ghost được tính từ `firedLaunch` tại `projectile.elapsed`.
+- Thay aim khi projectile đang bay không sửa state hiện tại.
+- Trail chỉ chứa các position numerical, không gọi analytic formula để “nắn” đường.
+
+## Bài tập mở rộng
+
+Thêm một checkbox chuyển thứ tự hai dòng update để so Explicit Euler với semi-implicit Euler, nhưng giữ tên thuật toán rõ trong readout. Chưa cần tuyên bố cách nào “đúng hơn”; chỉ ghi lại mỗi đường nằm phía nào so với analytic path.
+
+Bài tiếp theo sửa nhược điểm quan trọng hơn: physics step hiện đang thay đổi theo render frame.

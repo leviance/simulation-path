@@ -1,0 +1,137 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo chuột để điều khiển yaw và pitch
+
+## Vấn đề cần giải quyết
+
+Các phím rất tốt để kiểm tra từng bước 5°, nhưng không tạo cảm giác cầm model và xoay. Chuột gửi vị trí tuyệt đối cùng độ dời từ event trước. Rotation cần độ dời: kéo thêm 20 pixel phải đổi thêm một lượng angle, bất kể cursor bắt đầu ở đâu.
+
+Ta cũng phải xử lý vòng đời drag. Nếu người dùng nhấn trong cửa sổ, kéo ra ngoài rồi thả, chương trình vẫn phải nhận mouse-up và nhả trạng thái. Đó là nhiệm vụ của mouse capture.
+
+Checkpoint này không viết lại phép quay. Nó chỉ tạo ra `EulerAngles` mới rồi đưa chúng vào đúng `rotateTriangle` của bài 4. Giữ ranh giới đó rõ ràng giúp ta biết lỗi “kéo sai chiều” thuộc input, còn lỗi “tam giác bị méo” thuộc toán rotation.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với sensitivity tính bằng radian trên pixel:
+
+$$
+yaw'=yaw+\Delta x\,sensitivity
+$$
+
+$$
+pitch'=pitch-\Delta y\,sensitivity
+$$
+
+Ta trừ deltaY vì Y màn hình tăng xuống. Pitch được clamp trong ±89° để tránh đi xuyên qua hai cực khi dùng kiểu điều khiển yaw/pitch này.
+
+<InteractiveLab demo="rotation3d" mode="rotation-mouse" />
+
+Kéo ngang và nhìn `mouse delta` cùng yaw. Kéo dọc để đổi pitch, rồi tăng sensitivity. Thử kéo liên tục qua mép canvas; pointer capture giữ chuỗi drag cho tới lúc thả.
+
+## Viết code từng bước
+
+### Bước 1 — Tách phép đổi input khỏi SDL
+
+`applyMouseDrag` nhận số thuần nên test được:
+
+```cpp title="include/lab.hpp — mouse delta thành Euler angles"
+inline EulerAngles applyMouseDrag(
+    EulerAngles angles,
+    double deltaX,
+    double deltaY,
+    double sensitivity
+) {
+    constexpr double pitchLimit = 89.0 * kPi / 180.0;
+    angles.yaw += deltaX * sensitivity;
+    angles.pitch -= deltaY * sensitivity;
+    angles.pitch = std::clamp(angles.pitch, -pitchLimit, pitchLimit);
+    return angles;
+}
+```
+
+Hàm không biết cursor, window hay button nào đang được dùng. Event loop chịu trách nhiệm cung cấp delta đúng lúc.
+
+### Bước 2 — Bắt đầu drag và capture mouse
+
+Mouse down chỉ bật `dragging` sau khi capture thành công:
+
+```cpp title="src/main.cpp — bắt đầu thao tác kéo"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+    if (!SDL_CaptureMouse(true)) {
+        std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+    } else {
+        dragging = true;
+    }
+}
+```
+
+Trong final, thao tác này còn pause auto rotation để model không tự chạy dưới tay người dùng.
+
+### Bước 3 — Dùng xrel/yrel khi đang kéo
+
+Không dùng `event.motion.x` làm angle:
+
+```cpp title="src/main.cpp — cập nhật orientation bằng mouse delta"
+if (event.type == SDL_EVENT_MOUSE_MOTION && dragging) {
+    angles = lab::applyMouseDrag(
+        angles,
+        event.motion.xrel,
+        event.motion.yrel,
+        0.008
+    );
+}
+```
+
+`0.008 rad/px` tương đương khoảng 0.46° mỗi pixel, đủ nhạy nhưng vẫn điều khiển được.
+
+### Bước 4 — Kết thúc drag ở mọi đường thoát
+
+Đây là nửa còn lại không được quên:
+
+```cpp title="src/main.cpp — kết thúc drag sạch sẽ"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
+    dragging = false;
+    SDL_CaptureMouse(false);
+}
+```
+
+Nếu cửa sổ mất focus giữa lúc kéo, ta cũng hủy state để lần quay lại không còn một drag “ma”:
+
+```cpp title="src/main.cpp — mất focus cũng kết thúc drag"
+if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST && dragging) {
+    dragging = false;
+    SDL_CaptureMouse(false);
+}
+```
+
+Keyboard W/S, A/D, Q/E vẫn còn nguyên. Nó là đường input dự phòng và giúp chỉnh chính xác khi mouse quá nhạy.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy kết quả cuối bài 5"
+cmake --build build --config Debug --target project_12_checkpoint_5
+```
+
+Kéo ngang sang phải: yaw tăng. Kéo lên: deltaY âm nên pitch tăng. Thả nút ngoài cửa sổ rồi đưa chuột trở lại; model không được tiếp tục xoay khi chưa nhấn lần nữa. Readout `pointer capture` trong Canvas phải trở về “đã nhả” cả khi pointer rời vùng vẽ.
+
+Nhấn O sau khi kéo. Cùng pitch/yaw vừa tạo ra orientation khác vì order thay đổi; mouse input không can thiệp vào công thức rotation.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán `yaw = event.motion.x*sensitivity`. Nhảy cursor sang vị trí khác sẽ đặt orientation tuyệt đối, không còn cảm giác kéo.
+2. Không gọi `SDL_CaptureMouse(false)`. Ứng dụng có thể giữ capture sau khi thao tác đã kết thúc.
+3. Không clamp pitch. Kéo dọc dài làm model vượt cực và yaw có cảm giác đảo chiều đột ngột.
+
+## Tự kiểm tra kết quả
+
+- Delta X dương làm yaw tăng đúng `deltaX*sensitivity`.
+- Delta Y âm làm pitch tăng.
+- Pitch không vượt ±89° trong đường điều khiển mouse.
+- Mouse up tắt `dragging` và nhả capture.
+- Keyboard và mouse cùng sửa một `EulerAngles`, không có hai orientation tách rời.
+
+## Bài tập mở rộng
+
+Thêm checkbox hoặc phím I để đảo chiều kéo dọc. Hãy thực hiện bằng cách đổi dấu deltaY trước khi gọi `applyMouseDrag`, không tạo một công thức rotation mới.
+
+Bài cuối sẽ cho angles tự chạy bằng delta time và kiểm chứng rằng mọi thao tác rotation vẫn giữ nguyên hình dạng tam giác.

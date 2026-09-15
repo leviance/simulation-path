@@ -1,0 +1,122 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ world position đến địa chỉ cell
+
+## Vấn đề cần giải quyết
+
+Starter chính là chiếc kính lúp brute force của Project 27: có 100.000 particles, một `CircleQuery` đi theo con trỏ, `queryNeighborsBruteForce` và framebuffer được present bằng `SDL_UpdateTexture`. Ta sẽ không vứt bộ khung này đi. Project 28 chỉ thay câu hỏi “phải kiểm particle nào?” bằng một cấu trúc có thể trả lời tốt hơn.
+
+Muốn chia world thành ô, trước hết mỗi position phải có một địa chỉ cell duy nhất. Đây là nền móng nhỏ nhưng dễ sai ở mép phải và mép trên: point `(1,1)` vẫn nằm trong world `[0,1]²`, trong khi phép chia thông thường lại cho column/row bằng đúng số lượng cell — tức đã vượt mảng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với `cellSize = s`, world rộng `W` và cao `H` cần số cell:
+
+$$
+columns=\left\lceil\frac{W}{s}\right\rceil,\qquad rows=\left\lceil\frac{H}{s}\right\rceil
+$$
+
+Một position `(x,y)` được đổi về cell coordinate bằng `floor`, không phải round:
+
+$$
+column=\left\lfloor\frac{x-x_{min}}{s}\right\rfloor,\qquad row=\left\lfloor\frac{y-y_{min}}{s}\right\rfloor
+$$
+
+Sau khi xác nhận point nằm trong bounds, ta clamp kết quả vào `[0,columns-1]` và `[0,rows-1]`. Cell index dùng row-major giống framebuffer:
+
+$$
+index=row\times columns+column
+$$
+
+<InteractiveLab demo="spatial-grid-neighbor-query" mode="grid-layout" />
+
+Đổi `Cell size` giữa `0.025` và `0.2`. Grid từ `40×40` co xuống `5×5`; particle data vẫn giữ nguyên. Hãy kéo query tới đúng bốn góc và để ý grid không sinh thêm hàng hoặc cột ngoài world.
+
+## Viết code từng bước
+
+### Bước 1 — Gom bounds và cellSize vào cùng một config
+
+```cpp title="include/lab.hpp — cấu hình và kích thước grid"
+struct SpatialGridConfig {
+    Bounds2D bounds{};
+    double cellSize{};
+};
+
+struct GridDimensions {
+    int columns{};
+    int rows{};
+};
+```
+
+`SpatialGridConfig` là đầu vào; `GridDimensions` là kết quả suy ra. Không lưu hai bản `cellSize` ở nhiều nơi vì chúng có thể lệch nhau sau khi đổi preset.
+
+### Bước 2 — Dùng ceil để không bỏ phần world còn dư
+
+```cpp title="include/lab.hpp — tính columns và rows"
+const double width = config.bounds.maximum.x - config.bounds.minimum.x;
+const double height = config.bounds.maximum.y - config.bounds.minimum.y;
+const double requestedColumns = std::ceil(width / config.cellSize);
+const double requestedRows = std::ceil(height / config.cellSize);
+if (!std::isfinite(requestedColumns) || !std::isfinite(requestedRows) ||
+    requestedColumns < 1.0 || requestedRows < 1.0 ||
+    requestedColumns > double(kMaximumGridDimension) ||
+    requestedRows > double(kMaximumGridDimension) ||
+    requestedColumns * requestedRows > double(kMaximumGridCellCount)) {
+    return dimensions;
+}
+dimensions.columns = int(requestedColumns);
+dimensions.rows = int(requestedRows);
+```
+
+Nếu width là `1.0` và cellSize là `0.3`, kết quả phải là bốn cột. Cột cuối chỉ rộng `0.1`, nhưng vẫn cần tồn tại để phủ tới `xMax`. Hai giới hạn `kMaximumGridDimension` và `kMaximumGridCellCount` còn ngăn một `cellSize` quá nhỏ yêu cầu cấp phát hàng tỉ bucket.
+
+### Bước 3 — Floor trước, clamp sau
+
+```cpp title="include/lab.hpp — đổi world position thành cell coordinate"
+const int rawColumn = int(std::floor((point.x - config.bounds.minimum.x) / config.cellSize));
+const int rawRow = int(std::floor((point.y - config.bounds.minimum.y) / config.cellSize));
+address.column = std::clamp(rawColumn, 0, dimensions.columns - 1);
+address.row = std::clamp(rawRow, 0, dimensions.rows - 1);
+address.index = std::size_t(address.row * dimensions.columns + address.column);
+```
+
+Không clamp một point ngoài world để “ép” nó vào grid. Hàm kiểm `pointInsideBounds` trước; clamp ở đây chỉ xử lý boundary hợp lệ như `(1,1)`.
+
+### Bước 4 — Vẽ đúng grid mà thuật toán đang dùng
+
+```cpp title="src/main.cpp — config duy nhất cho code và hình vẽ"
+lab::SpatialGridConfig gridConfig{bounds, 0.05};
+lab::GridDimensions gridDimensions = lab::spatialGridDimensions(gridConfig);
+```
+
+Các đường kẻ lấy trực tiếp `gridConfig` và `gridDimensions`. Hình minh họa vì vậy không thể vô tình hiển thị `20×20` trong khi query dùng một kích thước khác.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint địa chỉ cell"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_28_checkpoint_1
+```
+
+Chạy target rồi đổi `cellSize` trong source. Title phải báo đúng dimensions; point ở maximum bound được test thuần trong `tests.cpp`, không cần đoán bằng mắt.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay `ceil` bằng ép kiểu integer. Với cellSize `0.3`, phần world từ `0.9` tới `1.0` mất cell; khôi phục `ceil`.
+2. Dùng `round` khi tính column. Point gần giữa cell có thể nhảy sang ô kế bên; quay lại `floor`.
+3. Bỏ clamp ở maximum boundary. `(1,1)` sinh index `420` cho grid `20×20`; khôi phục clamp sau bounds test.
+
+## Tự kiểm tra kết quả
+
+- cellSize `0.05` tạo đúng `20×20` cells.
+- Cell cuối vẫn phủ maximum bound khi width không chia hết cho cellSize.
+- `(0,0)` ánh xạ tới index 0.
+- `(1,1)` ánh xạ tới index 399 trong grid `20×20`.
+- Point ngoài bounds bị từ chối thay vì bị ép vào cell biên.
+- Công thức row-major giống cách index framebuffer đã học ở Project 01.
+
+## Bài tập mở rộng
+
+Hiển thị `(column,row,index)` của query center trong title. Thử cellSize `0.3` để quan sát cell cuối nhỏ hơn ba cell trước.
+
+Bài tiếp theo tạo `columns×rows` buckets và đưa 100.000 particle indices vào đúng các cell vừa tính.

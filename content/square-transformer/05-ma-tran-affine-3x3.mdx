@@ -1,0 +1,159 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa các phép biến đổi vào ma trận 3×3
+
+## Vấn đề cần giải quyết
+
+Đến checkpoint 4, cách tính từng đỉnh đã đúng nhưng chuỗi biến tạm sẽ dài dần khi ta thêm translation hoặc muốn truyền phép biến đổi sang hàm khác. Ta cần một giá trị có thể mang toàn bộ chuỗi `Scale → Shear → Rotate → Translate`.
+
+Ma trận 3×3 giải quyết việc đó. Bài này không bỏ các hàm cũ; chúng trở thành đáp án độc lập để kiểm tra cách cài đặt ma trận.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta viết point 2D thành column vector có thêm thành phần 1:
+
+$$
+p=\begin{bmatrix}x\\y\\1\end{bmatrix}
+$$
+
+Nhờ hàng và cột thứ ba, translation cũng nằm trong một phép nhân:
+
+$$
+T=\begin{bmatrix}1&0&t_x\\0&1&t_y\\0&0&1\end{bmatrix}
+$$
+
+Rotation dùng đúng bốn hệ số đã suy ở bài 3:
+
+$$
+R=\begin{bmatrix}\cos\theta&-\sin\theta&0\\\sin\theta&\cos\theta&0\\0&0&1\end{bmatrix}
+$$
+
+Với column vector, tích sau được đọc từ phải sang trái:
+
+$$
+p_{world}=T\,R\,H\,S\,p_{local}
+$$
+
+Point đi qua scale trước, rồi shear, rotation và cuối cùng mới translation.
+
+<InteractiveLab demo="transform" mode="transform-matrix" />
+
+Đường màu cam đánh dấu một đỉnh qua các bước 0–4. Giá trị `direct vs matrix` phải luôn gần 0: chuỗi hàm và composed matrix đang giải cùng một bài toán.
+
+## Viết code từng bước
+
+### Bước 1 — Chốt layout của Mat3
+
+`values` lưu theo row-major để `at(row,column)` dễ đọc. Điều này chỉ nói cách chín số nằm trong bộ nhớ; point vẫn là column vector trong phép toán.
+
+```cpp title="include/lab.hpp — Mat3 row-major"
+struct Mat3 {
+    std::array<double, 9> values{};
+
+    [[nodiscard]] double at(int row, int column) const {
+        return values[std::size_t(row * 3 + column)];
+    }
+};
+```
+
+Đừng dùng cụm “row-major” để tự đoán phải nhân vector bên trái hay bên phải ma trận. Hai lựa chọn đó độc lập với storage layout.
+
+### Bước 2 — Tạo các ma trận có tên rõ ràng
+
+Mỗi hàm factory phản ánh đúng công thức của một bài trước. Ví dụ:
+
+```cpp title="include/lab.hpp — scaleMatrix và rotationMatrix"
+inline Mat3 scaleMatrix(double scaleX, double scaleY) {
+    return {{{scaleX, 0.0, 0.0, 0.0, scaleY, 0.0, 0.0, 0.0, 1.0}}};
+}
+
+inline Mat3 rotationMatrix(double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {{{cosine, -sine, 0.0, sine, cosine, 0.0, 0.0, 0.0, 1.0}}};
+}
+```
+
+`translationMatrix` đặt `offset.x/y` ở cột cuối. `shearMatrix` đặt `shearX` tại hàng X, cột Y và `shearY` tại hàng Y, cột X.
+
+### Bước 3 — Nhân ma trận bằng ba vòng lặp
+
+Mỗi ô của kết quả là dot product giữa một hàng bên trái và một cột bên phải:
+
+```cpp title="include/lab.hpp — matrix multiplication"
+inline Mat3 multiply(Mat3 left, Mat3 right) {
+    Mat3 result{};
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            double value = 0.0;
+            for (int index = 0; index < 3; ++index) {
+                value += left.at(row, index) * right.at(index, column);
+            }
+            result.values[std::size_t(row * 3 + column)] = value;
+        }
+    }
+    return result;
+}
+```
+
+Ba vòng lặp dài hơn chín biểu thức viết tay, nhưng cho ta đúng một quy tắc để kiểm tra và dùng lại.
+
+### Bước 4 — Biến đổi một point
+
+```cpp title="include/lab.hpp — transformPoint"
+inline Vec2 transformPoint(Mat3 matrix, Vec2 point) {
+    const double x = matrix.at(0, 0) * point.x + matrix.at(0, 1) * point.y + matrix.at(0, 2);
+    const double y = matrix.at(1, 0) * point.x + matrix.at(1, 1) * point.y + matrix.at(1, 2);
+    const double w = matrix.at(2, 0) * point.x + matrix.at(2, 1) * point.y + matrix.at(2, 2);
+    if (!std::isfinite(w) || std::abs(w) <= 1e-12) {
+        return {};
+    }
+    return {x / w, y / w};
+}
+```
+
+Với affine matrix của project này, `w` luôn bằng 1. Ta vẫn giữ phép chia và kiểm tra biên để hàm nói đúng ý nghĩa của homogeneous coordinate và không phát tán `NaN` nếu matrix hỏng.
+
+### Bước 5 — Ghép rồi áp dụng cùng ma trận cho mọi đỉnh
+
+Checkpoint 5 cố định một thứ tự. Việc xuống dòng phản ánh cây phép nhân; `S` nằm gần point nhất nên chạy trước.
+
+```cpp title="src/main.cpp — tạo matrix của checkpoint 5"
+lab::Mat3 matrix = lab::multiply(
+    lab::translationMatrix(translation),
+    lab::multiply(
+        lab::rotationMatrix(angle),
+        lab::multiply(lab::shearMatrix(shearX, shearY), lab::scaleMatrix(scaleX, scaleY))
+    )
+);
+
+transformedSquare = lab::transformSquare(localSquare, matrix);
+```
+
+Hai vector cơ sở được tạo bằng cách biến đổi origin, `(92,0)` và `(0,92)` với cùng matrix. Vì thế chúng không phải hình trang trí; chúng cho thấy trực tiếp hai trục local đã trở thành gì.
+
+## Ghép các phần lại
+
+Build `project_9_checkpoint_5`. Hình phải giữ nguyên so với checkpoint 4 khi dùng cùng tham số. Kéo chuột trái để đổi translation; hình xám đi theo vị trí nhưng không scale/rotate/shear, giúp bạn thấy translation được tách khỏi phần mô tả hình dạng.
+
+Nếu hình nhảy ngay khi đổi sang matrix, đừng sửa bằng dấu trừ ngẫu nhiên. Chọn P2, tính qua từng hàm của checkpoint 4 rồi so với `transformPoint(matrix,P2)`. Sai khác bắt đầu ở phép nào sẽ chỉ ra matrix factory hoặc thứ tự nhân bị lỗi.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi tích thành `S×H×R×T` nhưng vẫn giữ column vector. Translation sẽ bị các ma trận bên trái scale, shear và xoay theo.
+2. Đặt `offset.x/y` ở hàng cuối thay vì cột cuối. Đó là layout dành cho quy ước row vector; transformPoint hiện tại sẽ không đọc translation ở đó.
+3. Viết `result[row,column] += left[index,column] * right[row,index]`. Identity có thể chưa lộ hết lỗi; hãy dùng matrix có cả rotation và shear để kiểm tra.
+
+## Tự kiểm tra kết quả
+
+- Identity matrix giữ nguyên mọi point.
+- Mỗi matrix factory cho cùng kết quả với hàm point tương ứng.
+- `transformPoint(T, {2,-1})` với translation `(3,5)` trả `(5,4)`.
+- Matrix ghép cho P2 giống chuỗi ba hàm cũ rồi cộng translation.
+- Hai vector cơ sở bắt đầu tại transformed origin và đi theo đúng trục của hình.
+
+## Bài tập mở rộng
+
+Viết `transpose(Mat3)` rồi in cả matrix và transpose để thấy row biến thành column. Sau đó viết một hàm chỉ biến đổi direction bằng cách dùng homogeneous component `w=0`; translation không được làm direction thay đổi.
+
+Bài cuối sẽ tạo hai tích ma trận từ cùng tham số, đổi qua lại bằng phím O và dùng determinant cùng diện tích để kiểm chứng kết quả.

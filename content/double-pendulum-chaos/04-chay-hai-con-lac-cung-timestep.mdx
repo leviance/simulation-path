@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho hai con lắc chạy lockstep
+
+## Vấn đề cần giải quyết
+
+Một quỹ đạo duy nhất không thể cho ta thấy hệ nhạy với điều kiện ban đầu đến mức nào. Ta cần hai con lắc dùng cùng khối lượng, chiều dài, trọng lực, RK4 và bước thời gian; khác biệt duy nhất là một nhiễu rất nhỏ ở `theta2` lúc bắt đầu.
+
+Nếu hai con lắc chạy khác số bước hoặc khác thời điểm mô phỏng, khoảng cách giữa chúng không còn ý nghĩa. Vì vậy chương trình phải tiến cả hai đồng thời trong cùng một hàm, thay vì trông chờ vòng lặp render luôn gọi đúng thứ tự.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với primary state $y_0$, perturbed state là:
+
+$$
+\tilde y_0=y_0+(0,0,\varepsilon,0)
+$$
+
+Cả hai cùng nhận ánh xạ RK4 $F_{\Delta t}$:
+
+$$
+y_{n+1}=F_{\Delta t}(y_n),\qquad \tilde y_{n+1}=F_{\Delta t}(\tilde y_n)
+$$
+
+<InteractiveLab demo="double-pendulum-chaos" mode="chaos-twins" />
+
+Chọn nhiễu `1e-6`, tiến vài bước rồi cho mô phỏng chạy. Sau đó đổi sang `1e-2` và reset. Hai vệt tách nhau sớm hơn, trong khi `elapsed` và số bước của hai con lắc vẫn luôn bằng nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Lưu cả initial pair cho deterministic reset
+
+```cpp title="include/lab.hpp — state của thí nghiệm twin"
+struct TwinPendulums {
+    DoublePendulumState initialPrimary{};
+    DoublePendulumState initialPerturbed{};
+    DoublePendulumState primary{};
+    DoublePendulumState perturbed{};
+    std::size_t stepCount{};
+};
+```
+
+Initial state nằm cạnh current state để metric và reset không phải suy ngược từ trail hay UI control.
+
+### Bước 2 — Chỉ perturb đúng một field
+
+```cpp title="include/lab.hpp — tạo initial pair gần nhau"
+DoublePendulumState perturbed = initial;
+perturbed.theta2 += perturbationRadians;
+return {initial, perturbed, initial, perturbed, 0};
+```
+
+Không perturb màu, dt hoặc parameters. Màu chỉ giúp nhìn hai lane và không được đi vào solver.
+
+### Bước 3 — Tiến cả hai trước khi tăng shared count
+
+```cpp title="include/lab.hpp — một lời gọi lockstep"
+const DoublePendulumState primary = stepRk4(twins.primary, parameters, deltaSeconds);
+const DoublePendulumState perturbed = stepRk4(twins.perturbed, parameters, deltaSeconds);
+if (primary.elapsed <= twins.primary.elapsed || perturbed.elapsed <= twins.perturbed.elapsed) {
+    return;
+}
+twins.primary = primary;
+twins.perturbed = perturbed;
+++twins.stepCount;
+```
+
+Nếu một lane từ chối step, shared count không tăng. Final validation còn kiểm finite state để dừng run có kiểm soát.
+
+### Bước 4 — Trail chỉ là output quan sát
+
+```cpp title="src/main.cpp — lấy bob2 từ state sau step"
+const lab::DoublePendulumGeometry primaryGeometry = lab::pendulumGeometry(primary, parameters);
+const lab::DoublePendulumGeometry perturbedGeometry = lab::pendulumGeometry(perturbed, parameters);
+primaryTrail.push_back(primaryGeometry.bob2);
+perturbedTrail.push_back(perturbedGeometry.bob2);
+```
+
+Trail được giới hạn 500 điểm để không tăng bộ nhớ theo thời gian. Metric ở bài sau vẫn đọc current state, không đo khoảng cách giữa hai pixel cuối.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build twin lockstep"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_26_checkpoint_4
+```
+
+Window title báo epsilon, elapsed và shared step count. `Up`/`Down` đổi epsilon theo bội 10 rồi reset toàn bộ experiment.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `frameSeconds` cho primary và fixed dt cho perturbed. Hai lane tách nhau vì thí nghiệm không công bằng; hoàn tác shared dt.
+2. Tăng `stepCount` sau mỗi lane. Count chạy gấp đôi elapsed; hoàn tác chỉ tăng một lần sau khi cả hai thành công.
+3. Perturb current state mỗi frame thay vì chỉ initial state. Bạn đang liên tục ép hệ; hoàn tác perturbation một lần trong factory.
+
+## Tự kiểm tra kết quả
+
+- Perturbed state ban đầu chỉ khác primary ở `theta2` đúng epsilon.
+- Primary và perturbed dùng cùng parameters và dt.
+- Elapsed của hai lane giống nhau sau mọi step.
+- Shared step count bằng elapsed/dt trong sai số số học.
+- Reset cùng preset và epsilon tạo lại đúng cùng pair và trail rỗng.
+
+## Bài tập mở rộng
+
+Cho phép chọn perturbation ở `theta1` hoặc `omega2`, nhưng chỉ bật một nguồn mỗi lần. Ghi rõ đơn vị và cập nhật initial phase-space separation tương ứng.
+
+Bài tiếp theo định nghĩa “tách nhau” bằng một metric, thay vì dựa vào lúc hai đường màu nhìn có vẻ khác.

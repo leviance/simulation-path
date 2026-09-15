@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cộng 512 số trong một workgroup
+
+## Điều khó nằm ở đâu?
+
+Một block có tối đa 512 số, nhưng chỉ có 256 invocation cùng xử lý chúng. Ta không muốn tất cả cùng `atomicAdd` vào một biến duy nhất. Thay vào đó, mỗi lane nạp hai số vào `shared memory`, rồi cả workgroup thu gọn dãy theo từng stride cho đến khi `sharedValues[0]` giữ tổng cuối cùng.
+
+Điểm khó không nằm ở dấu `+`. Nó nằm ở thứ tự nhìn thấy dữ liệu. Lane 0 không được đọc giá trị lane 256 trước khi lane 256 nạp xong; stride 128 không được bắt đầu khi stride 256 còn ghi dở.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Mỗi lane `i` nạp hai địa chỉ:
+
+$$
+p_0=blockBase+i,\qquad p_1=blockBase+i+256
+$$
+
+Sau load, cây chạy stride `256, 128, 64, …, 1`. Ở stride `s`, lane nhỏ hơn `s` làm:
+
+$$
+shared[i] \leftarrow shared[i] + shared[i+s]
+$$
+
+Giữa hai stride, tất cả lane đi qua memory barrier và execution barrier. Khi stride 1 xong, `shared[0]` là tổng block.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="workgroup-reduction" />
+
+Bấm “Bước một pass” để co tám số minh họa. Source thật dùng 512 ô; Canvas thu nhỏ để ta đọc được từng giá trị.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Kiểm tra giới hạn GPU trước khi dùng shared memory
+
+```cpp title="src/main.cpp — named capability gate"
+const lab::ComputeLimits limits = lab::queryComputeLimits(gl);
+const lab::CapabilityReport capability = lab::validateCapabilities(limits, inputCount);
+```
+
+`shared float[512]` cần 2.048 byte. Gate đồng thời kiểm OpenGL 4.3, local size 256, maximum invocations, group-count X, SSBO bytes và shared-memory bytes. Không compile/allocate rồi mới đoán máy hỗ trợ.
+
+### Bước 2 — Mỗi invocation nạp hai số, phần đuôi nạp 0
+
+```glsl title="shaders/reduce.comp — load shared memory"
+sharedValues[lane] = 0.0;
+sharedValues[lane + 256u] = 0.0;
+if (firstIndex < uint(uElementCount)) {
+    sharedValues[lane] = inputData[firstIndex];
+}
+if (secondIndex < uint(uElementCount)) {
+    sharedValues[lane + 256u] = inputData[secondIndex];
+}
+memoryBarrierShared();
+barrier();
+```
+
+Không có `return`. Lane ngoài count vẫn ghi zero rồi hẹn ở barrier cùng cả nhóm.
+
+### Bước 3 — Thu cây theo stride
+
+```glsl title="shaders/reduce.comp — reduction tree"
+for (uint stride = 256u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+        sharedValues[lane] += sharedValues[lane + stride];
+    }
+    memoryBarrierShared();
+    barrier();
+}
+
+if (lane == 0u) {
+    partialSums[gl_WorkGroupID.x] = sharedValues[0];
+}
+```
+
+Barrier nằm ngoài `if`: cả 256 lane đều phải tới cùng điểm đồng bộ, kể cả lane đã hết việc cộng ở stride nhỏ.
+
+### Bước 4 — Chỉ dispatch một workgroup để dễ kiểm tra
+
+```cpp title="include/reduction_gpu_engine.hpp — first block dispatch"
+const std::size_t count = std::min<std::size_t>(input_.size(), kBlockSpan);
+dispatchReductionPass(gl, inputBuffer_, reductionScratch_[0], count);
+gl.MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+readScalar(gl, reductionScratch_[0], result);
+```
+
+Bài 3 chỉ kiểm block đầu. `BUFFER_UPDATE` được dùng vì bước tiếp theo là `glGetBufferSubData`, chưa phải một compute pass khác.
+
+## Chạy checkpoint và đọc kết quả
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_39_checkpoint_3
+build\Debug\project_39_checkpoint_3.exe
+```
+
+Chương trình compile `reduce.comp`, gắn input ở binding 0, partial sums ở binding 1, gửi `uElementCount=min(N,512)`, dispatch một workgroup rồi đọc về một float. Hãy tạm chọn preset 8 trong chương trình hoàn chỉnh hoặc Canvas để dễ đối chiếu bằng tay với kết quả CPU.
+
+## Cố tình phá thuật toán
+
+1. Bỏ barrier sau load. Lane 0 có thể cộng shared value chưa được lane khác ghi.
+2. Đặt barrier bên trong `if (lane < stride)`. Workgroup không còn đi qua barrier đồng đều.
+3. Cho tail lane return. Preset 8 sẽ làm phần lớn group rời shader trước barrier.
+4. Ghi mọi lane vào `partialSums[group]`. Có 256 writer tranh cùng một địa chỉ.
+5. Dùng `GL_BUFFER_UPDATE_BARRIER_BIT` rồi cho compute shader khác đọc buffer. Barrier bit phải khớp cách dữ liệu sắp được đọc.
+
+## Checklist hoàn thành
+
+- [ ] Shader khai báo `local_size_x = 256` và shared array 512 float.
+- [ ] Mỗi lane nạp hai vị trí, dùng zero cho index ngoài count.
+- [ ] Mọi lane đi qua barrier sau load và sau từng stride.
+- [ ] Chỉ lane 0 ghi một partial sum cho workgroup.
+- [ ] Với preset 8, 257 và 512, tổng của block khớp kết quả CPU trong sai số cho phép.
+- [ ] Shared-memory budget 2.048 byte được capability-check.
+
+## Bài tập để hiểu sâu hơn
+
+1. Thêm debug shader ghi lại shared memory sau stride 256 với preset 8; chỉ bật ở dữ liệu nhỏ.
+2. So cách “mỗi lane nạp một giá trị” với hai giá trị/lane về block span và số pass, chưa cần kết luận hiệu năng.
+3. Thay phép cộng bằng max và xác định padding identity đúng.
+
+Bài 4 sẽ dùng chính kernel này ba lần, ping-pong partial sums cho tới khi cả mảng chỉ còn một scalar.

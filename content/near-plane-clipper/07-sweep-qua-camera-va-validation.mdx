@@ -1,0 +1,155 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho triangle quét qua camera và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Một ảnh đúng ở preset one-outside chưa chứng minh clipper ổn định. Lỗi thường xuất hiện đúng lúc count đổi `3→4`, `4→3` hoặc khi vertex nằm sát plane: điểm bị nhân đôi, Z lệch một lượng nhỏ, triangle suy biến hoặc NaN chỉ tồn tại một frame.
+
+Ta sẽ cho triangle quét liên tục qua near plane, hiển thị telemetry từ chính thuật toán và viết test cho mọi topology. Đây là bước biến demo “trông có vẻ đúng” thành một module có hợp đồng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi frame có một chuỗi dữ liệu duy nhất:
+
+$$
+Triangle3 \rightarrow ClippedPolygon \rightarrow TriangleBatch \rightarrow ScreenTriangle \rightarrow pixels
+$$
+
+Các invariant cần đo ngay trên chuỗi đó:
+
+- `polygon.count` chỉ thuộc `0..4`;
+- `batch.count` chỉ thuộc `0..2`;
+- mọi output Z thỏa `z ≥ near - epsilon`;
+- position và color đều hữu hạn;
+- projection không nhận vertex trước near plane;
+- raster `coveredCount` bằng số lần shade callback chạy.
+
+<InteractiveLab demo="near-plane" mode="near-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Gom ba kết quả liên quan vào ClipResult
+
+```cpp title="include/lab.hpp — dữ liệu chẩn đoán của một lần clip"
+struct ClipResult {
+    NearPlaneCounts inputCounts{};
+    ClippedPolygon polygon{};
+    TriangleBatch batch{};
+};
+
+inline ClipResult clipForRender(const Triangle3& triangle, double nearPlane) {
+    ClipResult result{};
+    result.inputCounts = classifyTriangle(triangle, nearPlane);
+    result.polygon = clipTriangleToNearPlane(triangle, nearPlane);
+    result.batch = triangulateFan(result.polygon);
+    return result;
+}
+```
+
+Title bar và test đọc cùng dữ liệu. Không có một hàm thứ hai đoán count từ preset number; nhờ đó telemetry cũng phát hiện regression của thuật toán.
+
+### Bước 2 — Đo dữ liệu không hữu hạn và near violation
+
+```cpp title="include/lab.hpp — invariant số học của output vertex"
+inline bool isFinite(const ClipVertex& vertex) {
+    return std::isfinite(vertex.position.x) && std::isfinite(vertex.position.y) &&
+        std::isfinite(vertex.position.z) && std::isfinite(vertex.color.red) &&
+        std::isfinite(vertex.color.green) && std::isfinite(vertex.color.blue);
+}
+```
+
+```cpp title="include/lab.hpp — độ vi phạm lớn nhất về phía camera"
+inline double maximumNearPlaneViolation(const ClippedPolygon& polygon, double nearPlane) {
+    double violation = 0.0;
+    for (std::size_t index = 0; index < polygon.count; ++index) {
+        violation = std::max(violation, nearPlane - polygon.vertices[index].position.z);
+    }
+    return violation;
+}
+```
+
+Giá trị đúng là zero hoặc một lượng không quá tolerance. Nếu nó tăng lên `0.01`, không nên che bằng clamp ở projection; cần tìm lỗi trong classification/intersection.
+
+### Bước 3 — Khóa bảng topology bằng CTest
+
+```cpp title="tests/tests.cpp — one-outside phải tạo quad rồi hai triangle"
+const lab::ClippedPolygon quad = lab::clipTriangleToNearPlane(oneOutside, nearPlane);
+check(quad.count == 4, "one outside vertex produces a four-vertex polygon");
+checkPolygonIsSafe(quad, nearPlane);
+const lab::TriangleBatch twoTriangles = lab::triangulateFan(quad);
+check(twoTriangles.count == 2, "four-vertex polygon becomes two triangles");
+```
+
+Bộ test lặp lại cho all-inside, two-outside, all-outside và on-plane. Nó còn kiểm `t`, màu tại giao điểm, thứ tự vertex, hàng rào trước projection và số lần raster callback được gọi.
+
+Đừng để sweep chỉ tồn tại trong ứng dụng tương tác. Test cho một vertex lần lượt đi qua
+các depth `0.6, 0.8, 1.0, 1.2, 1.4`; ở mỗi bước, nó kiểm số vertex, tính hữu hạn,
+near constraint và dấu diện tích của polygon:
+
+```cpp title="tests/tests.cpp — quét vertex qua near plane trong test"
+for (const double movingDepth : {0.6, 0.8, 1.0, 1.2, 1.4}) {
+    const lab::Triangle3 moving{
+        vertex(-1.0, -1.0, movingDepth),
+        vertex(1.0, -1.0, 2.5),
+        vertex(0.0, 1.0, 2.0),
+    };
+    const lab::ClippedPolygon swept = lab::clipTriangleToNearPlane(moving, nearPlane);
+    const std::size_t expectedCount = movingDepth < nearPlane ? 4 : 3;
+
+    check(swept.count == expectedCount, "near-plane sweep keeps the expected topology");
+    checkPolygonIsSafe(swept, nearPlane);
+    check(signedPolygonDoubleArea(swept) > 0.0, "near-plane sweep preserves winding");
+}
+```
+
+Hai test riêng tại `near - 0.5×10⁻⁹` và `near - 2×10⁻⁹` khóa luôn ý nghĩa của
+epsilon: điểm đầu vẫn được xem là trên mặt phẳng trong sai số, điểm sau phải bị loại.
+
+### Bước 4 — Dùng một state cho drag, phím và sweep
+
+`A/D`, mouse drag, `N` và animation đều thay `depthOffset`. `Space` chỉ đổi `paused`; `V` chỉ đổi policy clip/discard; `R` phục hồi preset và offset. Delta time được clamp 0.05 giây để kéo window không làm triangle nhảy xuyên toàn vùng quan sát trong một frame.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build và kiểm chứng toàn Project 18"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Sau khi CTest pass, chạy `project_18_final` và kiểm theo thứ tự:
+
+1. Thử `1–5`; count phải lần lượt khớp các topology đã định nghĩa.
+2. Nhấn `Space`, quan sát polygon chuyển `3↔4↔3↔0` mà viewport không phóng nổ.
+3. Tạm dừng rồi nhấn `N`; mỗi lần chỉ dịch một bước nhỏ.
+4. Nhấn `V` ở one-outside; discard-whole biến mất còn clip giữ phần nhìn thấy.
+5. Kéo trong mặt cắt ra ngoài window rồi thả; pointer capture kết thúc sạch.
+6. Resize ở nhiều tỉ lệ; near constraint và màu không đổi, viewport cập nhật aspect ratio.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ color khỏi `isFinite`. Geometry có thể hữu hạn nhưng một channel NaN làm toàn pixel đổi sai; kiểm cả vertex attribute.
+2. Chỉ test preset mặc định. Lỗi out→in vẫn có thể ẩn ở two-outside hoặc on-plane; giữ đủ bảng 3/4/3/0.
+3. Để sweep dùng frame count thay delta time. Tốc độ phụ thuộc FPS và test bằng mắt trên máy khác cho kết quả khác; dùng seconds đã clamp.
+4. Khi violation dương, clamp output Z ở projection. Test topology vẫn pass giả trong khi giao điểm sai; sửa nguồn tạo vertex.
+
+## Tự kiểm tra kết quả
+
+- Signed distance, intersection position và intersection color vượt qua test tolerance.
+- Polygon count là `3/4/3/0` cho `0/1/2/3` vertex outside.
+- Triangle count tương ứng là `1/2/1/0`.
+- Vertex on-plane được giữ đúng một lần theo traversal, không sinh bản sao crossing.
+- Quét qua near plane giữ đúng topology và winding; epsilon nhận/loại vertex đúng ngưỡng.
+- Mọi output vertex hữu hạn và `maximumNearPlaneViolation ≤ 10⁻⁹`.
+- Projection từ chối vertex chưa clip.
+- Raster callback count bằng `coveredCount` và output có pixel ở trường hợp visible.
+- Starter, bảy checkpoint, final và tests build sạch warning ở Debug lẫn Release.
+
+## Bài tập mở rộng
+
+Tổng quát `clipTriangleToNearPlane` thành `clipPolygonAgainstPlane`, nhận plane dưới dạng normal và offset. Trước tiên chỉ thay API và giữ test near plane xanh; chưa thêm left/right/top/bottom/far plane cho tới khi cùng bảng transition vượt qua test.
+
+Project 18 đã hoàn chỉnh. Bạn đã xây được hàng rào giữa camera-space geometry và perspective divide: primitive bị cắt đúng hình học, vertex mới giữ thuộc tính, rồi output quay lại pipeline triangle quen thuộc.

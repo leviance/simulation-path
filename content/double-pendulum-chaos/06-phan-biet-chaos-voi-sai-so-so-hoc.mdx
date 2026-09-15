@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Phân biệt chaos với sai số số học
+
+## Vấn đề cần giải quyết
+
+Hai quỹ đạo tính bằng số có thể tách nhau vì hai nguyên nhân: điều kiện ban đầu khác nhau hoặc sai số do chia thời gian thành các bước rời rạc. Trong một hệ nhạy, ngay cả sai số rất nhỏ của RK4 cũng có thể bị khuếch đại. Nếu không đo phần sai số này, ta rất dễ nhầm hậu quả của một `dt` quá lớn với tính hỗn loạn của hệ.
+
+Ta không có nghiệm giải tích để đối chiếu trực tiếp. Thay vào đó, con lắc chính chạy một bước `dt`, còn quỹ đạo tham chiếu bắt đầu từ cùng trạng thái và chạy hai bước `dt/2`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sau một full interval:
+
+$$
+y_{n+1}=F_{\Delta t}(y_n)
+$$
+
+$$
+y^*_{n+1}=F_{\Delta t/2}(F_{\Delta t/2}(y^*_n))
+$$
+
+Chỉ so hai trạng thái sau khi thời gian mô phỏng của chúng bằng nhau. Khoảng cách này chưa phải sai số chính xác, nhưng phải giảm khi thu nhỏ `dt` trong miền RK4 còn hội tụ tốt.
+
+<InteractiveLab demo="double-pendulum-chaos" mode="chaos-shadow" />
+
+Chạy nhanh 30 giây ở `dt=1/120`, rồi lặp với `1/480` sau reset. Đường vàng là full-step so với half-step; đường tím là primary so với intentional perturbation.
+
+## Viết code từng bước
+
+### Bước 1 — Gắn shadow vào cùng experiment
+
+```cpp title="include/lab.hpp — shadow bắt đầu từ primary initial state"
+struct ChaosExperiment {
+    TwinPendulums twins{};
+    DoublePendulumState halfStepReference{};
+};
+
+inline ChaosExperiment makeChaosExperiment(const DoublePendulumState& initial, double perturbationRadians) {
+    return {makeTwinPendulums(initial, perturbationRadians), initial};
+}
+```
+
+Shadow không nhận epsilon. Nếu perturb nó, numerical curve sẽ trộn hai nguyên nhân giống đường twin.
+
+### Bước 2 — Chạy chính xác hai half-step
+
+```cpp title="include/lab.hpp — full step và hai half-step cùng elapsed"
+const DoublePendulumState firstHalf = stepRk4(experiment.halfStepReference, parameters, 0.5 * deltaSeconds);
+const DoublePendulumState secondHalf = stepRk4(firstHalf, parameters, 0.5 * deltaSeconds);
+const std::size_t previousStepCount = experiment.twins.stepCount;
+stepTwinPendulums(experiment.twins, parameters, deltaSeconds);
+```
+
+Ta tính candidate shadow trước, rồi chỉ commit nếu twin full step thực sự tăng count.
+
+### Bước 3 — Commit shadow cùng full step
+
+```cpp title="include/lab.hpp — không cho shadow chạy trước một lane lỗi"
+if (experiment.twins.stepCount > previousStepCount && secondHalf.elapsed > experiment.halfStepReference.elapsed) {
+    experiment.halfStepReference = secondHalf;
+}
+```
+
+Invariant elapsed được giữ trong data flow, không sửa bằng cách gán thời gian sau khi hai trajectory đã lệch.
+
+### Bước 4 — Đo numerical separation bằng cùng metric
+
+```cpp title="include/lab.hpp — hai curve dùng chung phase-space metric"
+metrics.twins = measureTwins(experiment.twins, parameters);
+metrics.numericalSeparation = phaseSpaceSeparation(experiment.twins.primary, experiment.halfStepReference, parameters);
+metrics.finite = metrics.twins.finite && finiteState(experiment.halfStepReference) && std::isfinite(metrics.numericalSeparation);
+```
+
+Dùng cùng metric giúp hai curve so sánh được. Tuy nhiên, ở thời gian rất dài cả hai có thể bão hòa vì chaos khuếch đại cả truncation error; validation phải nêu rõ horizon.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build shadow experiment"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_26_checkpoint_6
+```
+
+Phím `[`/`]` chia đôi hoặc nhân đôi dt và reset. Không đổi dt giữa một run vì như vậy graph ghép nhiều thí nghiệm khác nhau.
+
+## Thử làm sai để hiểu đúng
+
+1. Chạy shadow một half-step rồi so với primary full-step. Numerical separation chứa chênh lệch thời gian; hoàn tác đủ hai half-step.
+2. Tạo shadow từ perturbed initial state. Đường vàng bắt đầu ở epsilon thay vì zero; hoàn tác cùng primary initial.
+3. Kết luận solver đúng chỉ vì numerical curve nhỏ ở giây đầu. Tăng duration và chạy convergence nhiều dt; giữ kết luận trong validation horizon đã công bố.
+
+## Tự kiểm tra kết quả
+
+- Primary và shadow bắt đầu từ đúng cùng state.
+- Mỗi full step tương ứng đúng hai half-step.
+- Elapsed của primary, perturbed và shadow giống nhau.
+- Numerical separation ban đầu bằng zero.
+- Trong horizon 10 giây mặc định, numerical separation nhỏ hơn intentional separation.
+- Thu nhỏ dt làm shadow estimate giảm trong miền chưa bão hòa.
+
+## Bài tập mở rộng
+
+Thêm shadow `dt/4` chỉ vào test. So `dt`–`dt/2` với `dt/2`–`dt/4` để kiểm RK4 đang ở miền hội tụ trước khi chạy chaos experiment dài.
+
+Bài cuối đóng gói presets, pointer interaction, bounded fast run và toàn bộ CTest.

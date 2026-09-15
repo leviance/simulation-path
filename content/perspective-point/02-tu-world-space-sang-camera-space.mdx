@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi world point sang camera space
+
+## Vấn đề cần giải quyết
+
+Ở checkpoint 1, gốc nhìn luôn trùng với `(0,0,0)`. Nếu camera đi sang phải nhưng ta vẫn chiếu `worldPoint` trực tiếp, marker sẽ đứng yên như thể camera không tồn tại. Perspective cần một depth đo **từ camera**, không phải Z tuyệt đối của thế giới.
+
+Bài này thêm một camera chỉ có position, chưa có rotation. Mục tiêu là nhìn rõ cùng một point có hai bộ số: vị trí trong world space và vị trí tương đối trong camera space.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với camera chưa xoay:
+
+$$
+P_{camera}=P_{world}-C_{world}
+$$
+
+Nếu point ở X=3 và camera đi từ X=0 tới X=1, camera thấy point cách mình 2 đơn vị về bên phải. Dấu trừ cũng giải thích chuyển động ngược chiều quen thuộc: camera đi phải thì cả scene trượt trái.
+
+Phép đổi ngược là:
+
+$$
+P_{world}=P_{camera}+C_{world}
+$$
+
+<InteractiveLab demo="projection" mode="projection-camera" />
+
+Giữ `world point` không đổi rồi kéo `Camera.X`. So sánh hai dòng số: mỗi khi camera tăng 1, `camera point.x` giảm 1. Sơ đồ cạnh X–Z cho biết depth cũng là một khoảng cách tương đối.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt camera trong một kiểu có tên
+
+Ta có thể dùng một `Vec3` rời, nhưng `Camera3D` làm rõ position này thuộc về camera và để chỗ cho orientation ở project sau.
+
+```cpp title="include/lab.hpp — camera chưa xoay"
+struct Camera3D {
+    Vec3 position{};
+};
+```
+
+Trong `main`, camera bắt đầu tại gốc thế giới:
+
+```cpp title="src/main.cpp — camera ban đầu"
+lab::Camera3D camera{{0.0, 0.0, 0.0}};
+```
+
+### Bước 2 — Viết phép cộng và trừ Vec3 dễ kiểm tra
+
+Hai hàm thuần làm theo từng thành phần. Không có SDL, pixel hoặc kích thước cửa sổ trong đây.
+
+```cpp title="include/lab.hpp — cộng và trừ từng thành phần"
+inline Vec3 add(Vec3 left, Vec3 right) {
+    return {left.x + right.x, left.y + right.y, left.z + right.z};
+}
+
+inline Vec3 subtract(Vec3 left, Vec3 right) {
+    return {left.x - right.x, left.y - right.y, left.z - right.z};
+}
+```
+
+### Bước 3 — Tạo cặp đổi xuôi và đổi ngược
+
+Giữ hai hàm cạnh nhau để dấu cộng/trừ có thể đối chiếu bằng mắt.
+
+```cpp title="include/lab.hpp — world space và camera space"
+inline Vec3 worldToCamera(Vec3 worldPoint, const Camera3D& camera) {
+    return subtract(worldPoint, camera.position);
+}
+
+inline Vec3 cameraToWorld(Vec3 cameraPoint, const Camera3D& camera) {
+    return add(cameraPoint, camera.position);
+}
+```
+
+`cameraToWorld(worldToCamera(P,C),C)` phải trả lại P. Bài cuối sẽ biến điều này thành test tự động.
+
+### Bước 4 — Cho camera di chuyển độc lập với point
+
+WASD sửa X/Y của camera, Z/X sửa chiều sâu. Đoạn sau là một phần của event loop checkpoint 2:
+
+```cpp title="src/main.cpp — di chuyển camera theo X"
+if (event.key.key == SDLK_A) {
+    camera.position.x -= 0.1;
+}
+if (event.key.key == SDLK_D) {
+    camera.position.x += 0.1;
+}
+```
+
+```cpp title="src/main.cpp — di chuyển camera theo Z"
+if (event.key.key == SDLK_Z) {
+    camera.position.z -= 0.1;
+}
+if (event.key.key == SDLK_X) {
+    camera.position.z += 0.1;
+}
+```
+
+Khi render, tạo biến mới thay vì ghi đè `worldPoint`:
+
+```cpp title="src/main.cpp — dùng camera point cho bản xem trước"
+const lab::Vec3 cameraPoint = lab::worldToCamera(worldPoint, camera);
+screen = previewToScreen(cameraPoint, width, height);
+```
+
+## Ghép các phần lại
+
+Build `project_11_checkpoint_2`. Arrows/Q/E vẫn di chuyển point. A/D và W/S di chuyển camera trong hai trục màn hình; Z/X đưa camera lùi hoặc tiến theo depth. Title bar đặt `world(...)` cạnh `camera(...)`, nên bạn có thể kiểm tra phép trừ bằng số cụ thể.
+
+Checkpoint này vẫn dùng `previewToScreen(cameraPoint,...)`. Nó đã nhìn từ gốc camera nhưng chưa phải perspective: đổi cameraPoint.z chưa làm X/Y co về tâm. Ta cố tình chỉ thay một khái niệm mỗi bài.
+
+## Thử làm sai để hiểu đúng
+
+1. Viết `camera.position - worldPoint`. Mọi hướng bị đảo: point bên phải camera xuất hiện bên trái.
+2. Mỗi frame gán `worldPoint = worldToCamera(worldPoint,camera)`. Camera position bị trừ lặp lại, khiến point trôi dù input đã dừng.
+3. Dùng `worldPoint.z` ở bài projection sau. Khi camera tiến theo Z, độ sâu nhìn thấy sẽ không đổi đúng.
+
+## Tự kiểm tra kết quả
+
+- Camera tại gốc làm `cameraPoint == worldPoint`.
+- Camera `(1,0,0)` và world point `(1.4,0.8,5)` cho camera point `(0.4,0.8,5)`.
+- Camera tăng X làm marker trượt trái; tăng Y làm marker trượt xuống trong viewport.
+- Camera tăng Z làm `cameraPoint.z` giảm nhưng checkpoint 2 chưa co giãn X/Y.
+- Reset đưa cả point lẫn camera về giá trị ban đầu.
+
+## Bài tập mở rộng
+
+Vẽ một marker màu khác cho world origin sau khi đổi nó sang camera space. Khi camera di chuyển, origin phải trượt đúng như point. Sau đó tự viết một kiểm tra in ra sai số của `cameraToWorld(worldToCamera(P,C),C)`.
+
+Bài sau sẽ dùng `cameraPoint.z` làm depth và suy công thức chia từ tam giác đồng dạng.

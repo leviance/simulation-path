@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tăng số hạt có kiểm soát
+
+## Vấn đề cần giải quyết
+
+Đã đến lúc thêm preset lớn, nhưng nút '5 triệu' không phải giấy bảo đảm GPU đủ bộ nhớ hoặc hệ sẽ chạy realtime. Trước khi cấp phát, ta cần trả lời ba câu: một SSBO lớn nhất bao nhiêu, tổng buffer bao nhiêu, và một dispatch có thể làm nhiều việc tới mức nào?
+
+Các giới hạn đã có từ những bài đầu để kernel luôn được chạy qua đường có bảo vệ. Checkpoint 09 chỉ mở lựa chọn số hạt lớn cho người dùng; không bỏ các giới hạn để cố làm cho preset chạy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với C ô và R=ceil(N/256), tổng buffer đã định nghĩa là:
+
+$$B=112N+64C+4C+32R+16.$$
+
+112N là hai bank p/v/f cộng reference; 64C là 16 ID uint mỗi ô; 4C là counts; 32R là hai scratch; 16 byte cuối là control. Con số chưa gồm driver, shader program hoặc framebuffer. Khi thay preset còn phải tính cả storage cũ trong lúc tạo candidate.
+
+Quy mô còn ảnh hưởng độ chính xác. Khi tọa độ lớn, khoảng cách giữa hai giá trị float liền nhau cũng lớn hơn. Bản Drift giữ residual trong velocity.zw để không đánh mất những bước nhỏ; skin đo độ dời thực tế đã lưu. Cách này không biến float thành double: vị trí và lực vẫn có sai số lượng tử hóa. Đừng dùng kết quả của lab để khẳng định độ chính xác cho một mô hình phân tử nghiên cứu.
+
+Mỗi Force batch tối đa 2.048 invocation, mỗi invocation xem tối đa 9×16 candidates. Các kernel tuyến tính dùng batch 65.536 phần tử. Giới hạn này giảm lượng công việc mỗi dispatch; nó không phải cam kết driver không bao giờ treo.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-9" />
+
+Chọn 5 triệu trong bảng **ước tính**. Canvas chỉ tính vài số, không tạo mảng 5 triệu phần tử. So block lớn nhất với tổng memory để thấy vì sao kiểm một trong hai là chưa đủ.
+
+## Viết code từng bước
+
+### Bước 1 — Từ chối trước khi allocation
+
+`queryLimits` đọc các giới hạn từ context thật. Hàm thuần sau quyết định có thử cấp phát hay không:
+
+```cpp title="include/molecular_math.hpp — đoạn đang thêm"
+inline std::string rejectPlan(const Plan& plan, const Limits& limits, std::uint64_t oldResidentBytes = 0) {
+    if (limits.storageBindings < 8 || limits.computeBlocks < 8 || limits.vertexBlocks < 2) {
+        return "Need 8 SSBO bindings / compute blocks and 2 vertex blocks.";
+    }
+    if (limits.invocations < 256 || limits.groupSizeX < 256 || limits.groupCountX < 256 || limits.sharedBytes < 4096) {
+        return "Compute workgroup or shared-memory limits are insufficient.";
+    }
+    if (plan.largestBlock > limits.maximumBlockBytes) {
+        return "One SSBO exceeds GL_MAX_SHADER_STORAGE_BLOCK_SIZE.";
+    }
+    if (plan.residentBytes > residentBudget || plan.residentBytes + oldResidentBytes > peakBudget) {
+        return "Resident or replacement peak exceeds the application's memory budget.";
+    }
+    return {};
+}
+```
+
+Resident budget là 1 GiB và peak replacement 1.5 GiB của riêng lab. Chúng không nói máy còn bao nhiêu VRAM. Nếu GPU chia sẻ RAM, allocation vẫn có thể gây áp lực bộ nhớ hệ thống; luôn bắt đầu từ preset nhỏ và đóng các tác vụ GPU nặng khác.
+
+### Bước 2 — Chỉ gửi một dispatch đang bay
+
+Queue đã được đưa vào đường chạy từ bài 2:
+
+```cpp title="include/gpu_queue.hpp — đoạn đang thêm"
+void dispatch(lab::GlApi& gl, GLuint groups) {
+    if (pending() || groups == 0 || groups > 256) {
+        throw std::runtime_error("Invalid or overlapping compute dispatch.");
+    }
+    gl.BeginQuery(GL_TIME_ELAPSED, query_);
+    gl.DispatchCompute(groups, 1, 1);
+    gl.EndQuery(GL_TIME_ELAPSED);
+    gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+    fence_ = gl.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.Flush();
+    started_ = Clock::now();
+    if (!fence_ || gl.GetError() != GL_NO_ERROR) {
+        throw std::runtime_error("Compute dispatch or fence failed.");
+    }
+}
+```
+
+Mỗi dispatch được bọc bởi timer query, memory barrier và fence. `Flush` gửi lệnh đi nhưng không chờ xong. Không gọi một vòng dispatch tới hết 5 triệu rồi mới quay về event loop; `Engine::tick` chỉ gửi batch tiếp theo sau khi batch trước hoàn tất.
+
+### Bước 3 — Poll một lần rồi trả quyền cho event loop
+
+Phần quan trọng trong `poll`:
+
+```cpp title="include/gpu_queue.hpp — đoạn đang thêm"
+const GLenum result = gl.ClientWaitSync(fence_, 0, 0);
+if (result == GL_WAIT_FAILED) {
+    throw std::runtime_error("GPU fence wait failed.");
+}
+if (Clock::now() - started_ > std::chrono::seconds(5)) {
+    throw std::runtime_error("GPU batch exceeded 5 seconds. No further work will be submitted.");
+}
+if (result == GL_TIMEOUT_EXPIRED) {
+    return false;
+}
+```
+
+Tham số timeout zero làm lời gọi kiểm trạng thái mà không chờ. Nếu chưa xong, main vẫn nhận Esc/C và cập nhật tiêu đề phase; nó không xếp thêm draw vào hàng đợi đang bận. Đây là hành vi được mô tả trong [glClientWaitSync của Khronos](https://wikis.khronos.org/opengl/GLAPI/glClientWaitSync).
+
+Sau 5 giây cho một batch, engine dừng gửi thêm công việc và báo lỗi. **Timeout CPU không thể ngắt kernel đã chạy**. Tắt process cũng không phải cơ chế preemption đáng tin cậy cho mọi driver; vì vậy giới hạn lượng công việc trước dispatch mới là hàng rào quan trọng.
+
+## Ghép các phần lại
+
+Checkpoint 09 thêm phím 1–5: 64, 100.000, 500.000, 1 triệu và 5 triệu hạt. Đổi preset chỉ được nhận lúc idle; nếu đang chạy, Space dừng yêu cầu bước mới và C hủy bước hiện tại rồi chờ batch đang bay kết thúc.
+
+```bash title="Terminal Windows — build và chạy bài 9"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_9 --parallel 2
+.\build\Debug\project_45_checkpoint_9.exe
+```
+
+Không tự bắt đầu bằng phím 5. Kiểm 64 trước, sau đó cân nhắc 100.000. Đọc MiB, phase, occupancy và lỗi allocation. Nếu chỉ một ô vượt 16 hạt, bước phải bị từ chối dù tổng memory vẫn còn nhiều. Không tăng capacity tùy tiện mà quên tính lại bound của Force.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong test thuần, cho `maximumBlockBytes=1`. `rejectPlan` phải trả lý do mà không cần tạo OpenGL window. Đây là cách thử lỗi phần cứng thiếu khả năng an toàn.
+2. Đặt old resident bằng peak budget rồi yêu cầu thêm preset. Phải bị từ chối vì peak gồm cả hai bộ. Không bỏ phần old state chỉ để con số vừa budget.
+
+## Tự kiểm tra kết quả
+
+Không có preset lớn tự chạy khi mở chương trình. Force N² bị chặn trên 1024 hạt. Chỉ một compute batch đang bay, không có glFinish/busy-wait. Allocation candidate lỗi giữ storage cũ; lỗi sau khi khởi tạo hệ mới đã bắt đầu có thể cần Reset lại, không hứa rollback cả một lần thay preset.
+
+## Bài tập mở rộng
+
+Viết báo cáo một preset phù hợp với máy bạn: GPU/driver, N, resident estimate, largest block, dt, occupancy và số marker vẽ. Nếu preset bị từ chối hoặc chậm, ghi đúng điều đó; không suy ra năng lực của máy khác.
+
+Tiếp theo: [kiểm chứng và chạy bản hoàn chỉnh](/projects/molecular-lab-gpu/10-kiem-chung-do-va-hoan-thien).

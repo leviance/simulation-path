@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chia polygon đã clip thành triangle
+
+## Vấn đề cần giải quyết
+
+Rasterizer Project 16 nhận đúng ba vertex. Clipper lại có thể trả polygon bốn vertex khi chỉ một vertex gốc nằm outside. Không thể bỏ vertex thứ tư, cũng không thể truyền một “triangle bốn đỉnh”. Ta cần đổi polygon lồi về zero, một hoặc hai triangle mà không làm thay đổi vùng được phủ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sutherland–Hodgman giữ thứ tự vertex quanh biên và near plane không làm polygon lõm. Vì vậy ta có thể neo tại `v0` rồi tạo:
+
+$$
+(v_0,v_1,v_2),\;(v_0,v_2,v_3),\ldots
+$$
+
+Đó là triangle fan. Với Project 18, polygon chỉ có tối đa bốn vertex nên batch chỉ cần tối đa hai triangle. Đường chéo `v0–v2` là cạnh chung; top-left rule sẽ xử lý quyền sở hữu pixel ở bài sau.
+
+<InteractiveLab demo="near-plane" mode="near-triangulate" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt giới hạn batch vào kiểu dữ liệu
+
+```cpp title="include/lab.hpp — clip một triangle tạo tối đa hai triangle"
+struct TriangleBatch {
+    std::array<Triangle3, 2> triangles{};
+    std::size_t count{};
+};
+```
+
+Không cần `std::vector` cho một giới hạn hình học đã biết. `count` vẫn cần thiết vì array có capacity hai nhưng output hợp lệ có thể là zero hoặc một.
+
+### Bước 2 — Loại polygon không đủ diện tích trước vòng lặp
+
+```cpp title="include/lab.hpp — dưới ba vertex không thể tạo triangle"
+TriangleBatch batch{};
+if (polygon.count < 3) {
+    return batch;
+}
+```
+
+Ta không lặp lại một vertex để “đủ ba”. Polygon rỗng là kết quả hợp lệ khi primitive nằm hoàn toàn ngoài; draw list của frame đó đơn giản có zero triangle.
+
+### Bước 3 — Sinh fan bằng chỉ số dễ kiểm tra
+
+```cpp title="include/lab.hpp — fan (0, i, i+1)"
+inline TriangleBatch triangulateFan(const ClippedPolygon& polygon) {
+    TriangleBatch batch{};
+    if (polygon.count < 3) {
+        return batch;
+    }
+
+    for (std::size_t index = 1; index + 1 < polygon.count; ++index) {
+        batch.triangles[batch.count] = {
+            polygon.vertices[0],
+            polygon.vertices[index],
+            polygon.vertices[index + 1],
+        };
+        ++batch.count;
+    }
+    return batch;
+}
+```
+
+Với count 3, loop chạy một lần tại `index=1`. Với count 4, nó chạy tại `1` và `2`. Điều kiện `index + 1 < count` diễn tả trực tiếp việc triangle cần vertex kế tiếp.
+
+### Bước 4 — Vẽ đường chéo chỉ để debug
+
+Checkpoint vẽ outline từng output triangle màu tím trong mặt cắt. Khi polygon có bốn vertex, đường `v0–v2` xuất hiện; nó không phải cạnh silhouette mới và không được thay màu ở viewport.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint triangle fan"
+cmake --build build --config Debug --target project_18_checkpoint_5
+```
+
+Preset one-outside phải báo `polygon 4 → triangles 2`. Two-outside là `3 → 1`; all-outside là `0 → 0`. Dịch triangle bằng A/D để nhìn count đổi đúng lúc vertex đi qua plane.
+
+## Thử làm sai để hiểu đúng
+
+1. Luôn tạo đúng một triangle từ ba phần tử đầu. One-outside mất một góc của polygon; khôi phục vòng fan.
+2. Tạo triangle thứ hai là `(v1,v2,v3)`. Hai triangle có vùng chồng và không phủ đúng quad theo mọi hình dạng; neo cả hai tại `v0`.
+3. Sort polygon trước khi fan. Winding có thể đổi và đường chéo cắt ngoài polygon; dùng thứ tự clipper đã bảo toàn.
+4. Với count zero vẫn đọc `vertices[0]`. Dữ liệu default che lỗi trong Debug nhưng topology là vô nghĩa; early return trước mọi truy cập.
+
+## Tự kiểm tra kết quả
+
+- Polygon count 0, 1 hoặc 2 tạo zero triangle.
+- Count 3 tạo đúng `(v0,v1,v2)`.
+- Count 4 tạo `(v0,v1,v2)` và `(v0,v2,v3)`.
+- Hai triangle của quad dùng chung đúng cạnh `v0–v2`.
+- Winding của fan theo cùng thứ tự quanh biên với polygon.
+- Không có sort theo screen X/Y hoặc phép project trong checkpoint này.
+
+## Bài tập mở rộng
+
+Viết hàm tính tổng signed area của triangle fan trong mặt phẳng XZ và so với signed area của polygon bằng công thức shoelace. Hai giá trị phải bằng nhau trong tolerance.
+
+Bài tiếp theo mới đưa batch qua phép chia phối cảnh. Tại đó, guard projection sẽ trở thành hàng rào cuối ngăn dữ liệu chưa clip lọt vào rasterizer.

@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Benchmark và chọn leaf capacity
+
+## Vấn đề cần giải quyết
+
+Capacity 4 tạo các leaf nhỏ nên mỗi truy vấn thường kiểm ít hạt, nhưng cây có nhiều node hơn, tốn thêm bộ nhớ, thời gian dựng và số lần gọi đệ quy. Capacity 32 làm cây gọn hơn, đổi lại mỗi leaf giao vùng chọn chứa nhiều hạt hơn. Không có một capacity phù hợp với mọi cảnh; ta cần đo trên cùng dữ liệu và cùng các vùng chọn.
+
+Quadtree và brute force phải giải đúng cùng một bài toán. Chỉ đọc thời gian sau khi checksum đã khớp và các bộ đếm cho biết mỗi thuật toán thực sự đã kiểm bao nhiêu dữ liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với `Q` selections, `R` repetitions và `N` particles, brute force có exact work:
+
+$$
+scans=N\times Q\times R
+$$
+
+Quadtree báo `totalVisitedNodes` và `totalCandidates`. Thời gian dựng cây được đo riêng vì một cảnh đứng yên không dựng lại cây sau mỗi truy vấn. Checksum của từng truy vấn không phụ thuộc thứ tự hit; sau đó các checksum con mới được trộn theo thứ tự của bộ truy vấn.
+
+<InteractiveLab demo="visible-quadtree" mode="quadtree-capacity" />
+
+Nhấn “So benchmark”, rồi “Chạy capacity study”. Cột vàng là candidate work; điểm xanh biểu diễn node count. Đổi clustered/uniform để thấy preset hợp lý phụ thuộc distribution.
+
+## Viết code từng bước
+
+### Bước 1 — Checksum không phụ thuộc hit order
+
+```cpp title="include/lab.hpp — checksum theo hit set"
+inline void updateChecksum(std::uint32_t& checksum, std::span<const std::size_t> hitIndices) {
+    std::uint32_t queryHash = std::uint32_t(hitIndices.size());
+    for (const std::size_t particleIndex : hitIndices) {
+        queryHash += std::uint32_t(particleIndex + 1U) * 0x9e3779b1U;
+    }
+    checksum ^= queryHash;
+    checksum *= 0x01000193U;
+}
+```
+
+Phép cộng trong một query không đổi khi hit order đổi. Trật tự các selection trong workload vẫn được giữ khi trộn từng `queryHash`.
+
+### Bước 2 — Đếm exact work trong timed path
+
+```cpp title="include/lab.hpp — gộp Quadtree benchmark metrics"
+queryQuadtree(tree, particles, selection, workspace);
+++metrics.queryCount;
+metrics.totalVisitedNodes += workspace.visitedNodes;
+metrics.totalCandidates += workspace.candidatesChecked;
+updateChecksum(metrics.checksum, workspace.hitIndices);
+```
+
+Warm-up gọi cùng function trước khi timer thật bắt đầu nhưng không gộp metrics warm-up vào kết quả được báo.
+
+### Bước 3 — Rebuild riêng cho mỗi capacity row
+
+```cpp title="include/lab.hpp — capacity thay topology"
+for (const std::size_t leafCapacity : capacities) {
+    const Quadtree tree = buildQuadtree(particles, {bounds, leafCapacity, 12, 1.0 / 4096.0});
+    const BatchMetrics metrics = benchmarkQuadtree(tree, particles, selections, repetitions, workspace);
+    rows.push_back({leafCapacity, tree.nodes.size(), tree.leafCount, tree.maximumObservedDepth, tree.maximumLeafOccupancy, tree.rebuildMicroseconds, metrics});
+}
+```
+
+Không thể giả lập capacity 32 bằng cách query tree đã build với capacity 8; topology đã khác nên mỗi row phải rebuild.
+
+### Bước 4 — Test operation counts trước timing
+
+```cpp title="tests/tests.cpp — benchmark contract"
+check(treeMetrics.queryCount == probes.size() * 2U, "Quadtree benchmark reports exact query count");
+check(bruteMetrics.totalScanned == particles.size() * bruteMetrics.queryCount, "brute benchmark reports N times Q scans");
+check(treeMetrics.totalCandidates < bruteMetrics.totalScanned / 4U, "Quadtree benchmark reduces candidate work substantially");
+check(treeMetrics.checksum == bruteMetrics.checksum, "Quadtree and brute benchmark checksums match");
+```
+
+Không test “Quadtree phải dưới 1 ms”. Thời gian phụ thuộc máy; checksum và operation counts mới là invariant lặp lại được.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint benchmark"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_29_checkpoint_7
+```
+
+Nhấn `B` để đo hai thuật toán và `S` để thử các capacity. Ứng dụng in bảng đầy đủ ra terminal; tiêu đề cửa sổ giữ số hạt Quadtree đã kiểm tách khỏi số lần quét của brute force. Biểu đồ chỉ xuất hiện sau khi phép thử hoàn tất.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng checksum FNV theo đúng traversal order của hits. Tree và brute trả cùng set nhưng checksum khác; gộp `queryHash` không phụ thuộc order.
+2. Đổi selection seed giữa hai benchmark. Timing không còn so cùng workload; tạo probe vector một lần rồi reuse.
+3. Cộng rebuild vào mỗi Quadtree query nhưng không cộng bước tương đương cho brute force. Báo hai phép đo riêng thay vì trộn chi phí.
+
+## Tự kiểm tra kết quả
+
+- Quadtree và brute nhận cùng particles, selections và repetitions.
+- Warm-up không nằm trong metrics được báo.
+- Checksum giống nhau dù hit traversal order khác.
+- Brute scans đúng N×Q×R.
+- Quadtree báo visited nodes và candidates riêng.
+- Rebuild timing không bị cộng vào query timing.
+- Capacity 4 tạo nhiều nodes hơn capacity 32 trên scene chuẩn.
+- Capacity study giữ cùng checksum ở mọi rows.
+
+## Bài tập mở rộng
+
+Chạy cùng study với selection rộng `0.4×0.4`. So preset tốt nhất với workload `0.12×0.09`; selection lớn có thể làm lợi ích của leaf rất nhỏ giảm đi.
+
+Bài cuối ghép mọi interaction và chạy cùng invariants ở cả Debug lẫn Release.

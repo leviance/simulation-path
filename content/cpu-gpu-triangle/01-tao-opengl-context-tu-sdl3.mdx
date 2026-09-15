@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo OpenGL context từ SDL3
+
+## Vấn đề cần giải quyết
+
+Project 16 đã tự tạo từng pixel của tam giác trên CPU. Bây giờ ta muốn GPU làm công việc rasterization, nhưng không thể gọi `glClear` hay tạo shader ngay sau `SDL_CreateWindow`. Mọi lệnh OpenGL đều cần một **context** đang gắn với đúng window và đang current trên thread gọi lệnh.
+
+Checkpoint đầu chưa vẽ tam giác. Nó chỉ tạo một cửa sổ có hai vùng clear khác màu. Kết quả này nghe đơn giản, nhưng xác nhận được bốn thứ quan trọng: window có OpenGL flag, context 3.3 Core được tạo, function pointers được load sau context và framebuffer pixel size được đọc đúng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Lifecycle tối thiểu là:
+
+```text
+SDL_Init
+  → SDL_GL_SetAttribute
+  → SDL_CreateWindow(SDL_WINDOW_OPENGL)
+  → SDL_GL_CreateContext
+  → SDL_GL_MakeCurrent
+  → SDL_GL_GetProcAddress
+  → render / SDL_GL_SwapWindow
+```
+
+Đổi thứ tự hai bước cuối là lỗi nguy hiểm. Đặc biệt trên Windows, function pointer được xem là thuộc context hiện tại; đừng load chúng trước rồi hy vọng context tạo sau sẽ dùng được.
+
+<InteractiveLab demo="cpu-gpu-triangle" mode="gl-context" />
+
+## Viết code từng bước
+
+### Bước 1 — Yêu cầu OpenGL 3.3 Core trước khi tạo window
+
+```cpp title="src/main.cpp — requestOpenGl33Core"
+bool requestOpenGl33Core() {
+    return SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3) &&
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3) &&
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE) &&
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+}
+```
+
+Ta chọn Core Profile để không vô tình dựa vào `glBegin/glEnd`, matrix stack hay API fixed-function cũ. Project này sẽ dùng shader, VBO và VAO ngay từ đầu.
+
+### Bước 2 — Tạo window rồi mới tạo context
+
+```cpp title="src/main.cpp — window flags và context"
+SDL_WindowFlags windowFlags = SDL_WINDOW_RESIZABLE;
+windowFlags |= SDL_WINDOW_OPENGL;
+windowFlags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+```
+
+Sau khi `SDL_CreateWindow` thành công, ta gọi `SDL_GL_CreateContext(window)` rồi `SDL_GL_MakeCurrent(window, context)`. Mỗi lời gọi đều được kiểm tra riêng; nếu context bằng null, không có lệnh OpenGL nào được phép chạy.
+
+### Bước 3 — Load function qua context hiện tại
+
+```cpp title="include/gl_api.hpp — loadOne"
+template <typename Function>
+bool loadOne(Function& destination, const char* name) {
+    destination = reinterpret_cast<Function>(SDL_GL_GetProcAddress(name));
+    if (destination) {
+        return true;
+    }
+    missingFunction = name;
+    return false;
+}
+```
+
+Loader giữ tên function đầu tiên bị thiếu. Vì vậy lỗi startup sẽ nói rõ `glCreateShader` hay `glGenVertexArrays` không load được, thay vì crash ở một con trỏ null không có ngữ cảnh.
+
+### Bước 4 — Chia framebuffer theo pixel thật
+
+```cpp title="src/main.cpp — framebuffer pixels và hai panel"
+const int leftWidth = framebufferWidth / 2;
+const int rightWidth = framebufferWidth - leftWidth;
+```
+
+`framebufferWidth` và `framebufferHeight` đến từ `SDL_GetWindowSizeInPixels`, không phải `SDL_GetWindowSize`. Nếu width lẻ, panel phải nhận phần dư nên hai vùng vẫn phủ đủ framebuffer.
+
+## Ghép các phần lại
+
+Checkpoint 1 dùng scissor test để clear hai nửa bằng hai màu tối, sau đó gọi `SDL_GL_SwapWindow`. Chưa có shader, VBO hay triangle. Đây là dấu mốc tốt: nếu màn hình không chia đôi, ta sửa context/viewport trước khi kéo thêm ba tầng lỗi mới vào.
+
+```bash title="Terminal — build checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_33_checkpoint_1
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ `SDL_WINDOW_OPENGL` nhưng vẫn tạo context. SDL phải trả lỗi rõ ràng.
+2. Gọi `gl.load()` trước `SDL_GL_CreateContext`. Function pointers không có lifecycle hợp lệ.
+3. Dùng logical width cho scissor rồi chuyển window sang màn hình high-DPI. Hai vùng không còn phủ đúng framebuffer pixels.
+4. Yêu cầu Compatibility Profile để code “dễ chạy hơn”. Điều đó làm project mất mục tiêu học pipeline hiện đại.
+
+## Tự kiểm tra kết quả
+
+- [ ] Window resize được và có `SDL_WINDOW_OPENGL`.
+- [ ] Context yêu cầu major 3, minor 3 và Core Profile.
+- [ ] Loader chỉ chạy sau `SDL_GL_MakeCurrent`.
+- [ ] Terminal in OpenGL version và renderer string.
+- [ ] Hai vùng clear phủ đủ framebuffer kể cả khi width lẻ.
+- [ ] Target `project_33_checkpoint_1` build ở Debug.
+
+## Bài tập mở rộng
+
+1. In cả logical window size và framebuffer pixel size, rồi so trên display scale khác 100%.
+2. Tạm yêu cầu OpenGL 9.9 để quan sát đường lỗi context creation, sau đó phục hồi 3.3.
+3. Đổi màu hai scissor regions nhưng giữ alpha bằng 1 để xác nhận clear state độc lập với shader.
+
+Bài tiếp theo sẽ compile vertex shader và fragment shader đầu tiên, nhưng vẫn chưa draw triangle. Ta sẽ giữ shader diagnostics sạch trước khi thêm vertex data.

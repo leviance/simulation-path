@@ -1,0 +1,143 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm tra shader bằng một buffer probe nhỏ
+
+## Ta cần giải quyết điều gì?
+
+Nếu trạng thái particle luôn nằm trên GPU, làm sao biết compute shader đang tính đúng? Chỉ nhìn hình đài phun là chưa đủ: gravity sai một chút, age không tăng hoặc respawn dùng nhầm seed vẫn có thể tạo ra hình ảnh khá đẹp. Thay vì đọc toàn bộ 160 MB, ta chạy cùng shader trên một buffer probe chỉ có 64 particle rồi so kết quả đó với CPU.
+
+Bài 9 tách phần mô phỏng chính khỏi phần kiểm tra. Khi khởi động hoặc nhấn V, engine tạo một buffer riêng gồm 64 particle, gắn nó vào binding 0, chạy chính compute program với đầu vào cố định rồi chỉ đọc về 2.048 byte. Bản đối chiếu CPU cập nhật cùng 64 record và báo rõ phép kiểm tra nào đạt hoặc không đạt.
+
+## Theo chân một particle
+
+Probe đáng tin khi giữ những phần cần kiểm:
+
+- cùng `Particle` layout;
+- cùng compute executable;
+- cùng binding 0;
+- cùng local size và điều kiện kiểm tra index;
+- cùng dt, gravity, seed và spawn epoch;
+- barrier phù hợp trước khi CPU đọc buffer.
+
+Buffer thử không đo tốc độ của năm triệu particle và cũng không chứng minh hiệu năng. Nó chỉ kiểm tra phép tính cùng layout bằng một tập dữ liệu nhỏ có thể tái lập. Đường chạy chính vẫn được kiểm qua số phần tử, giới hạn phần cứng, barrier và timer query.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-probe" />
+
+Hãy chèn lỗi vào gravity hoặc một giá trị NaN. Báo cáo phải thất bại, nêu vị trí sai, sai số lớn nhất và giá trị không hợp lệ. Nếu tăng tolerance đến mức che luôn gravity sai, phép kiểm tra không còn ý nghĩa; tolerance chỉ dùng để chấp nhận sai khác làm tròn nhỏ.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Tạo đầu vào và kết quả mong đợi độc lập
+
+```cpp title="include/particle_gpu_engine.hpp — bản đối chiếu CPU cho buffer thử"
+std::vector<Particle> input = makeInitialParticles(probeCount, kParticleSeed);
+std::vector<Particle> expected = input;
+for (std::size_t index = 0; index < probeCount; ++index) {
+    expected[index] = stepParticleCpu(
+        expected[index],
+        index,
+        probeDt,
+        kGravity,
+        probeEpoch,
+        kParticleSeed
+    );
+}
+```
+
+`probeDt=1/120` và `probeEpoch=17` là các hằng số. Bản CPU dùng code thuần, không tái sử dụng một biểu thức được sinh chung với shader; nếu hai bên cùng sao chép một lỗi, phép đối chiếu sẽ mất tác dụng.
+
+### Bước 2 — Tạm gắn buffer thử rồi dispatch
+
+```cpp title="include/particle_gpu_engine.hpp — dispatch probe"
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, probeBuffer);
+
+const GLuint mainBuffer = particleBuffer_;
+particleBuffer_ = probeBuffer;
+dispatchUpdate(gl, probeCount, probeDt, kGravity, probeEpoch, false);
+particleBuffer_ = mainBuffer;
+```
+
+`dispatchUpdate` là đúng hàm final dùng cho main SSBO. Việc tạm thay member được giới hạn trong vài dòng; sau dispatch nó được khôi phục trước mọi render.
+
+Nếu muốn mở rộng, cách sạch hơn là cho `dispatchUpdate` nhận buffer qua tham số. Trong bài này, ta giữ hàm nhỏ để tập trung vào việc đổi binding và đồng bộ trước readback.
+
+### Bước 3 — Đồng bộ trước khi CPU đọc buffer
+
+```cpp title="include/particle_gpu_engine.hpp — probe readback"
+// Probe được CPU đọc bằng glGetBufferSubData, nên bit khác đường render chính.
+gl.MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+std::vector<Particle> actual(probeCount);
+gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, probeBuffer);
+gl.GetBufferSubData(
+    GL_SHADER_STORAGE_BUFFER,
+    0,
+    static_cast<GLsizeiptr>(particleStorageBytes(probeCount)),
+    actual.data()
+);
+```
+
+Đường render chính vẫn dùng `GL_SHADER_STORAGE_BARRIER_BIT`. Buffer thử dùng bit khác vì bước tiếp theo là `glGetBufferSubData`. Đây là ví dụ cụ thể cho nguyên tắc ở bài 6.
+
+### Bước 4 — So sánh đủ tám giá trị trong mỗi particle
+
+`validateParticles` kiểm theo thứ tự:
+
+1. hai vector có cùng size;
+2. mọi thành phần mong đợi và thực tế đều không phải NaN/Inf;
+3. sai số không vượt `absTol + relTol × scale` — cách kết hợp này thường được gọi là **mixed tolerance**;
+4. giữ maximum absolute error;
+5. đếm số particle sai và ghi lại vị trí sai đầu tiên (`first mismatch`).
+
+Sau readback, engine xóa probe buffer và bind lại main SSBO. Nhấn V không được làm frame tiếp theo vẽ từ buffer đã xóa.
+
+## Nối lại thành một bước mô phỏng
+
+Validation action có vòng đời hữu hạn:
+
+```text
+64 đầu vào có thể tái lập → một bước cập nhật trên CPU
+          ↓
+tạo/upload probe SSBO → bind 0
+          ↓
+cùng compute program, fixed dt/epoch
+          ↓
+BUFFER_UPDATE barrier → readback 2.048 byte
+          ↓
+báo cáo NaN/Inf và sai số tuyệt đối/tương đối
+          ↓
+xóa probe, bind lại main SSBO
+```
+
+```bash title="Terminal — checkpoint 9"
+cmake --build build --config Debug --target project_38_checkpoint_9 project_38_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+CTest không mở window; nó kiểm các hàm toán trên CPU. Chương trình tương tác mới chạy compute shader thật và hiển thị kết quả PASS/FAIL của buffer thử trên thanh tiêu đề.
+
+## Thử tạo lỗi
+
+1. Dùng main buffer làm probe rồi reset 64 phần tử đầu. Validation action đã sửa simulation đang xem.
+2. Viết bản CPU bằng cách sao chép nguyên GLSL. Nếu hai phía cùng chứa một lỗi, kết quả vẫn có thể PASS; code đối chiếu cần độc lập.
+3. Giữ `SHADER_STORAGE` bit trước `glGetBufferSubData`. Bước đọc tiếp theo của buffer thử không còn là shader.
+4. Xóa probe buffer nhưng quên bind lại main buffer tại binding 0. Draw frame sau đọc resource sai.
+5. Chỉ so position X/Y. Bug age/lifetime có thể tích tụ nhiều frame trước khi hình lộ ra.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] Probe có đúng 64 Particle, tức 2.048 byte.
+- [ ] Input/dt/gravity/epoch của buffer thử có thể tái lập.
+- [ ] Buffer thử chạy cùng compute program và binding 0 như đường chính.
+- [ ] Readback dùng `GL_BUFFER_UPDATE_BARRIER_BIT`.
+- [ ] Phần kiểm tra đọc đủ 8 float, phát hiện NaN/Inf, dùng sai số tuyệt đối/tương đối và ghi vị trí sai đầu tiên.
+- [ ] Probe buffer bị xóa và main binding được khôi phục.
+- [ ] V action hữu hạn; không chạy readback vô điều kiện mỗi frame.
+- [ ] Thời gian của mô phỏng chính không bị trộn với lần chạy kiểm tra.
+
+## Nếu muốn thử thêm
+
+1. Thêm probe case buộc respawn bằng cách đặt age sát lifetime trước dispatch.
+2. Chọn 64 index rải đều trong miền 5 triệu bằng một gather compute pass, nhưng vẫn readback buffer nhỏ.
+3. Ghi validation report ra JSON cùng driver/version để chia sẻ bug tái lập.
+
+Bài cuối sẽ ghép mọi đường code thành ứng dụng hoàn chỉnh, kiểm controls, title, resource lifetime và gói source chạy độc lập.

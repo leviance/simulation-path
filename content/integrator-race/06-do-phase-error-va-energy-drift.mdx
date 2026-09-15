@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo sai số trong phase space và energy drift
+
+## Vấn đề cần giải quyết
+
+Một khối có thể đứng gần exact position nhưng chạy sai hướng. Ngược lại, một solver có position lệch vì chậm pha dù amplitude và energy vẫn hợp lý. Chỉ nhìn khoảng cách ngang tại một frame không đủ để phân biệt các trường hợp đó.
+
+Ta cần ba phép đo có câu hỏi riêng: position error hỏi “lệch vị trí bao nhiêu?”, phase-space error hỏi “toàn bộ state lệch bao nhiêu?”, energy drift hỏi “solver đã tự thêm hoặc làm mất bao nhiêu phần năng lượng?”. Đại lượng thứ hai không phải một góc phase; nó là khoảng cách giữa hai điểm trong phase space đã chuẩn hóa.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ở thời gian của numerical state, lấy exact state $(x_e,v_e)$. Position error là $|x_n-x_e|$. Với phase-space error, không thể cộng trực tiếp mét và mét/giây. Khi $\omega>0$, ta chia velocity difference cho angular frequency:
+
+$$
+e_{phase\ space}=\sqrt{(x_n-x_e)^2+\left(\frac{v_n-v_e}{\omega}\right)^2}
+$$
+
+Cả hai thành phần lúc này đều mang mét. Relative energy drift là:
+
+$$
+d_E=\frac{E_n-E_0}{E_0}
+$$
+
+Dấu dương nghĩa là solver bơm energy; dấu âm nghĩa là solver làm mất energy.
+
+<InteractiveLab demo="integrator-race" mode="integrator-energy" />
+
+Chuyển Graph sang Energy drift. Chạy nhanh nhiều lần ở `dt=1/15 s`. Đừng chỉ hỏi đường nào gần zero nhất: xem đường tăng một chiều hay dao động bị chặn, rồi đối chiếu với phase-space error.
+
+## Viết code từng bước
+
+### Bước 1 — Lấy exact state ở cùng elapsed
+
+```cpp title="include/lab.hpp — không so lệch đồng hồ"
+const OscillatorState exact = analyticOscillatorState(initial, parameters, numerical.elapsed);
+const double positionDifference = numerical.position - exact.position;
+const double velocityDifference = numerical.velocity - exact.velocity;
+```
+
+Nếu exact dùng render time còn numerical dùng fixed-step time, phép đo đã chứa cả phần accumulator chưa chạy. Dùng `numerical.elapsed` loại sai lệch đó.
+
+### Bước 2 — Đưa velocity difference về đơn vị mét
+
+```cpp title="include/lab.hpp — phase-space error có đơn vị nhất quán"
+const double omega = angularFrequency(parameters);
+double phaseSpaceError = std::numeric_limits<double>::quiet_NaN();
+if (omega > kIntegratorEpsilon) {
+    const double scaledVelocityDifference = velocityDifference / omega;
+    phaseSpaceError = std::hypot(positionDifference, scaledVelocityDifference);
+}
+```
+
+Khi stiffness bằng zero, $\omega=0$ và phép chuẩn hóa không tồn tại. Hàm trả `NaN` cho riêng metric này để UI hiện “không áp dụng”; nó không trộn mét với mét/giây thành một con số có vẻ hợp lệ.
+
+### Bước 3 — Giữ dấu của energy drift
+
+```cpp title="include/lab.hpp — drift tương đối với initial energy"
+const double initialEnergy = oscillatorEnergy(initial, parameters);
+double relativeEnergyDrift = 0.0;
+if (initialEnergy > kIntegratorEpsilon) {
+    relativeEnergyDrift = (oscillatorEnergy(numerical, parameters) - initialEnergy) / initialEnergy;
+}
+```
+
+Không lấy `abs` ở đây. `+5%` và `-5%` có cùng độ lớn nhưng mô tả hai hành vi khác nhau.
+
+### Bước 4 — Trả ba câu trả lời tách biệt
+
+```cpp title="include/lab.hpp — metrics không gộp thành một điểm số"
+return {std::abs(positionDifference), phaseSpaceError, relativeEnergyDrift};
+```
+
+Không tạo một “score” chung bằng cách cộng error và cost. Người dùng cần thấy trade-off, không cần một con số che mất tiêu chí.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint có metrics và graph"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_checkpoint_6
+./build/Debug/project_23_checkpoint_6.exe
+```
+
+Nhấn G để đổi position/energy graph. History chỉ lấy mẫu định kỳ, không phải mỗi pixel hoặc mỗi render call; state vật lý vẫn được cập nhật ở mọi fixed step.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính `hypot(dx, dv)` mà không chia omega. Đổi stiffness và quan sát phase-space error thay đổi đơn vị ngầm; hoàn tác cách cộng mét với m/s.
+2. Dùng `abs(E-E0)` rồi kết luận solver nào bơm năng lượng. Dấu đã bị xóa; hoàn tác để readout giữ tăng/giảm.
+3. Lấy exact ở `performance.now()` thay vì numerical elapsed. Pause rồi single-step sẽ làm error nhảy không liên quan solver; hoàn tác.
+
+## Tự kiểm tra kết quả
+
+- Tất cả metrics bằng zero tại initial state.
+- Exact state luôn được tính ở `numerical.elapsed`.
+- Phase-space error chuẩn hóa `dv` bằng omega trước `hypot` và báo không áp dụng khi `omega=0`.
+- Energy drift giữ dấu và được chia initial energy.
+- Euler dài hạn có drift dương tăng mạnh ở dt thô.
+- Verlet energy dao động quanh ban đầu và bị chặn trong preset ổn định.
+- Position graph và energy graph dùng cùng history timestamps.
+
+## Bài tập mở rộng
+
+Thêm phase plot với trục X là `position`, trục Y là `velocity/omega`. Dùng cùng màu ba lane và vẽ exact circle mờ; không thay thế các metrics hiện tại.
+
+Bài cuối sẽ tự động hóa điều mắt thường vừa quan sát bằng convergence test và long-run stability test.

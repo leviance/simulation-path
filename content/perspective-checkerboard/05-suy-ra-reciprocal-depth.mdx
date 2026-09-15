@@ -1,0 +1,151 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Suy ra công thức reciprocal depth
+
+## Vấn đề cần giải quyết
+
+Checkpoint trước đã chứng minh affine UV sai, nhưng `referenceUvFromCameraDepths` vẫn giống một công thức được đưa từ trên trời xuống. Nếu chỉ chép lại phép reweight mà không hiểu nguồn gốc, ta rất dễ mắc lỗi “nội suy Z rồi mới lấy nghịch đảo” — kết quả trông đỡ méo nhưng vẫn sai.
+
+Bài này đi ngược từ perspective divide để tìm ba đại lượng mỗi projected vertex cần mang theo: `1/z`, `u/z` và `v/z`. Sampler và rasterizer vẫn giữ nguyên.
+
+## Hiểu ý tưởng trước khi viết code
+
+Xét một điểm chạy trên cạnh 3D từ A tới B với tham số $t$. Trước projection, cả position và UV đều tuyến tính theo $t$:
+
+$$
+P(t)=(1-t)P_A+tP_B, \qquad u(t)=(1-t)u_A+tu_B
+$$
+
+Để phần suy ra gọn hơn, ta chỉ nhìn trục X và bỏ hệ số focal vì nó xuất hiện ở cả hai đầu rồi triệt tiêu. Sau perspective divide:
+
+$$
+x_s(t)=\frac{(1-t)x_A+tx_B}{(1-t)z_A+tz_B}
+$$
+
+Rasterizer lại không biết $t$. Nó tạo một tham số $s$ tăng đều **trên màn hình**:
+
+$$
+x_s(s)=(1-s)\frac{x_A}{z_A}+s\frac{x_B}{z_B}
+$$
+
+Đặt hai biểu thức $x_s$ bằng nhau rồi giải theo $t$, ta được:
+
+$$
+t=\frac{s/z_B}{(1-s)/z_A+s/z_B}
+$$
+
+Thay $t$ trở lại công thức của $u(t)$:
+
+$$
+u(s)=
+\frac{(1-s)u_A/z_A+s u_B/z_B}
+     {(1-s)/z_A+s/z_B}
+$$
+
+Mẫu số chính là reciprocal depth tại sample trên màn hình. Với triangle, hai trọng số
+$(1-s,s)$ được thay bằng ba barycentric weights $\lambda_A,\lambda_B,\lambda_C$:
+
+$$
+D=\frac{1}{z_{pixel}}=\lambda_A\frac{1}{z_A}+\lambda_B\frac{1}{z_B}+\lambda_C\frac{1}{z_C}
+$$
+
+Ta cũng chuẩn bị $u_i/z_i$ và $v_i/z_i$. Bài sau sẽ nội suy hai tử số rồi chia cho chính $D$ để quay lại UV.
+
+Một ví dụ số cho thấy phép sửa này thay đổi kết quả ra sao. Chọn cạnh có
+$z_A=2$, $z_B=6$, $u_A=0$ và $u_B=1$:
+
+| Vị trí trên màn hình $s$ | Affine $u=s$ | $D=(1-s)/2+s/6$ | $u$ đúng | Độ sâu $1/D$ |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.25 | 0.25 | 0.4167 | 0.10 | 2.40 |
+| 0.50 | 0.50 | 0.3333 | 0.25 | 3.00 |
+| 0.75 | 0.75 | 0.2500 | 0.50 | 4.00 |
+
+Giữa đoạn thẳng trên màn hình chỉ tương ứng với 25% cạnh 3D, không phải 50%.
+Vì thế UV affine làm các ô bàn cờ phía xa sai tỷ lệ.
+
+<InteractiveLab demo="perspective-texture" mode="texture-reciprocal" />
+
+## Viết code từng bước
+
+### Bước 1 — Mở rộng projected vertex
+
+```cpp title="include/lab.hpp — dữ liệu rời khỏi projection"
+struct ScreenVertex {
+    Vec2 position{};
+    Vec2 uv{};
+    double cameraDepth{};
+    double oneOverZ{};
+    double uOverZ{};
+    double vOverZ{};
+};
+```
+
+Ta vẫn giữ `uv` để render baseline affine và giữ `cameraDepth` cho inspector. Ba field mới là dữ liệu final sẽ dùng trong perspective-correct path.
+
+### Bước 2 — Tính reciprocal attributes một lần tại vertex
+
+```cpp title="include/lab.hpp — projectVertex chuẩn bị 1/z, u/z và v/z"
+result.uv = vertex.uv;
+result.cameraDepth = vertex.position.z;
+result.oneOverZ = 1.0 / vertex.position.z;
+result.uOverZ = vertex.uv.x * result.oneOverZ;
+result.vOverZ = vertex.uv.y * result.oneOverZ;
+```
+
+`projectVertex` đã loại vertex sau near plane, nên `z` dương và không gần zero. Mỗi vertex chỉ cần một phép chia.
+
+### Bước 3 — Nội suy denominator bằng đúng λ của rasterizer
+
+```cpp title="include/lab.hpp — reciprocal depth tại pixel"
+inline double reciprocalDepthDenominator(
+    const ScreenTriangle& triangle,
+    Barycentric weights
+) {
+    return weights.a * triangle.vertices[0].oneOverZ +
+        weights.b * triangle.vertices[1].oneOverZ +
+        weights.c * triangle.vertices[2].oneOverZ;
+}
+```
+
+Coverage, affine path và perspective-correct path cùng đọc `RasterSample::barycentric`; chúng chỉ khác cách nội suy thuộc tính.
+
+### Bước 4 — Khóa invariant bằng test số học
+
+```cpp title="tests/tests.cpp — denominator phải dương ở triangle hợp lệ"
+check(
+    lab::reciprocalDepthDenominator(*tiltedScreen, weights) > 0.0,
+    "valid projected triangle keeps a positive reciprocal denominator"
+);
+```
+
+`tiltedScreen` có ba depth khác nhau. Với triangle trước camera và sample bên trong, λ không âm nên denominator phải dương.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint reciprocal depth"
+cmake --build build --config Debug --target project_20_checkpoint_5
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Chọn preset `front`: ba depth bằng nhau nên denominator gần như không đổi. Với `steep`, rê inspector từ cạnh gần sang cạnh xa; `1/z` phải giảm đều.
+
+## Thử làm sai để hiểu đúng
+
+1. Nội suy `cameraDepth` bằng λ rồi tính `1 / interpolatedZ`. Hai phép toán không hoán đổi cho nhau; so kết quả với tổng `λi / zi` ở preset steep.
+2. Tính `uOverZ = u / ndcZ`. NDC depth không phải camera-space Z dùng trong phép chiếu X/Z; texture sẽ phụ thuộc projection convention.
+3. Tính reciprocal attributes trước near clipping. Vertex giao mới chưa có bộ thuộc tính nhất quán; bài 7 sẽ clip `position` và `uv` trước rồi mới project.
+4. Dùng weights của một triangle khác trên diagonal. Denominator có thể vẫn hữu hạn nhưng UV đổi đột ngột; inspector phải gắn với callback của đúng face.
+
+## Tự kiểm tra kết quả
+
+- Mỗi projected vertex thỏa `uOverZ == uv.x * oneOverZ` và tương tự với V.
+- Denominator đúng bằng `Σ λi/zi`, hữu hạn và dương ở sample hợp lệ.
+- Front quad cho denominator không đổi khi rê marker trong cùng mặt phẳng depth.
+- Steep quad cho reciprocal depth lớn hơn ở cạnh gần và nhỏ hơn ở cạnh xa.
+- Chưa có code sampler hoặc texture nào bị nhân thêm với Z.
+
+## Bài tập mở rộng
+
+Hiển thị `1 / denominator` như camera-space depth ước lượng tại pixel. So nó với phép nội suy affine `Σλizi` và ghi lại nơi hai giá trị lệch nhiều nhất.
+
+Bài tiếp theo sẽ dùng cùng denominator để khôi phục U và V, rồi thay checker méo bằng kết quả perspective-correct.

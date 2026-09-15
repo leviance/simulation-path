@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc đường tăng chi phí theo số hạt
+
+## Vấn đề cần giải quyết
+
+Biết thời gian chạy với 100.000 hạt vẫn chưa đủ để thấy chi phí tăng theo N ra sao. Ta sẽ giữ nguyên các vòng tròn truy vấn và bán kính, chỉ thay số hạt được quét. Nếu mỗi mốc dùng một cảnh hay một bộ truy vấn khác nhau, kết quả không còn so sánh được.
+
+Phép thử dùng ba đoạn đầu của cùng vector 100.000 hạt: 1.000, 10.000 và 100.000. `std::span::first` tạo một góc nhìn ngắn hơn lên vector cũ, không sao chép dữ liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với cùng số query $Q$, brute force có:
+
+$$
+W(10N)=10NQ=10W(N)
+$$
+
+`radius` ảnh hưởng đến số hit và lượng dữ liệu phải ghi vào kết quả, nhưng brute force vẫn không thể bỏ qua hạt nào:
+
+$$
+\text{scanned}(N,r_1)=\text{scanned}(N,r_2)=N
+$$
+
+<InteractiveLab demo="brute-force-particle-query" mode="brute-scaling" />
+
+Nhấn “Chạy scaling”, sau đó đổi bán kính và chạy lại. Số hit thay đổi, còn số lần kiểm ở mỗi mốc vẫn chỉ do N và Q quyết định.
+
+## Viết code từng bước
+
+### Bước 1 — Mỗi row giữ N bên cạnh metrics
+
+```cpp title="include/lab.hpp — một điểm trên scaling study"
+struct ScalingRow {
+    std::size_t particleCount{};
+    BatchMetrics metrics{};
+};
+```
+
+Đừng chỉ lưu thời gian. `particleCount`, `queryCount` và `totalScanned` cho ta biết ba cột có thực sự được đo trên cùng một bài toán hay không.
+
+### Bước 2 — Dùng prefix thay vì tạo cloud mới
+
+```cpp title="include/lab.hpp — cùng storage, chỉ đổi số candidate được nhìn thấy"
+const std::size_t particleCount = std::min(requestedCount, particles.size());
+const std::span<const Particle> prefix = particles.first(particleCount);
+rows.push_back({particleCount, benchmarkBruteForce(prefix, queries, repetitions, workspace)});
+```
+
+Ba dòng giữ nguyên thứ tự hạt và tâm các vòng tròn. Điểm khác duy nhất là giới hạn của vòng lặp.
+
+### Bước 3 — Gọi study bằng danh sách N có chủ đích
+
+```cpp title="src/main.cpp — ba mốc cách nhau mười lần"
+const std::array<std::size_t, 3> counts{1'000, 10'000, 100'000};
+const std::vector<lab::CircleQuery> probes = lab::makeProbeQueries(32, bounds, query.radius, seed ^ 0x9e3779b9U);
+scalingRows = lab::makeScalingStudy(particles, probes, counts, 1);
+```
+
+Ba mốc là đủ để nhìn baseline; đây chưa phải công cụ benchmark tổng quát. Repetition vẫn hữu hạn để phím `S` không khóa event loop quá lâu.
+
+### Bước 4 — Chuẩn hóa timing theo query
+
+```cpp title="src/main.cpp — graph đọc microseconds trên mỗi query"
+double perQuery = 0.0;
+if (row.metrics.queryCount != 0) {
+    perQuery = row.metrics.elapsedMicroseconds / double(row.metrics.queryCount);
+}
+maximumMicroseconds = std::max(maximumMicroseconds, perQuery);
+```
+
+Biểu đồ cột giúp nhìn nhanh xu hướng; `totalScanned` mới là con số không phụ thuộc máy, cho biết vòng lặp đã chạy bao nhiêu lần.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint scaling study"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_27_checkpoint_6
+```
+
+Nhấn `S` ở bản Release. Ứng dụng in ra terminal một bảng đầy đủ gồm N, số lần quét và thời gian cho mỗi truy vấn; Canvas cũng hiển thị lại các dòng này dưới biểu đồ. Chạy ba lần để quan sát độ dao động thay vì chỉ chọn kết quả đẹp nhất.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạo ba cloud với ba seed khác nhau. Hit density trở thành biến phụ; dùng prefix của cùng cloud.
+2. Tăng radius cùng lúc tăng N. Hai yếu tố đổi chung khiến đồ thị khó diễn giải; giữ radius cố định.
+3. Dùng tổng elapsed nhưng mỗi row có queryCount khác nhau. Chuẩn hóa về time/query hoặc giữ Q giống hệt nhau.
+
+## Tự kiểm tra kết quả
+
+- Study trả đúng ba row theo thứ tự yêu cầu.
+- Row 1k báo `1.000 × Q` scans.
+- Row 10k báo `10.000 × Q` scans.
+- Row 100k báo `100.000 × Q` scans.
+- Cùng query set và particle storage được dùng cho cả ba row.
+- Timing từng row finite và không âm.
+
+## Bài tập mở rộng
+
+Thêm các mốc 2k, 5k, 20k và 50k rồi vẽ `time/query` theo N. Đừng fit một đường trước khi exact scan count của mọi row đều đúng.
+
+Bài cuối hoàn thiện controls, pointer capture và bộ validation dùng lại baseline này cho Project 28.

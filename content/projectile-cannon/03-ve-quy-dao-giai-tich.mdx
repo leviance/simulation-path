@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ quỹ đạo giải tích
+
+## Vấn đề cần giải quyết
+
+Ta đã biết viên đạn rời nòng với position và velocity nào. Câu hỏi tiếp theo là: sau 1,2 giây nó ở đâu? Vì Project 22 chỉ có gravity không đổi, ta có thể trả lời trực tiếp bằng công thức thay vì bước qua 72 frame trước đó.
+
+Nghiệm này có hai vai trò. Trước hết, nó cho người dùng đường dự đoán trước khi bắn. Quan trọng hơn, nó là “thước thẳng” để đo integrator số trong các bài sau. Nếu analytic path và numerical path dùng chung một hàm update, hai đường có thể cùng sai mà ta không phát hiện.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với acceleration không đổi:
+
+$$
+v(t)=v_0+at
+$$
+
+$$
+p(t)=p_0+v_0t+\frac{1}{2}at^2
+$$
+
+Trong project này $a=(0,-9.81)$ m/s². Vì $a_x=0$, X tăng tuyến tính. Y có hạng $t^2$, tạo thành parabol. Ở apex, vertical velocity bằng zero:
+
+$$
+t_{apex}=-\frac{v_{0y}}{a_y}
+$$
+
+<InteractiveLab demo="projectile" mode="projectile-analytic" />
+
+Đổi speed và angle. Marker tròn trên đường vàng là apex; hình vuông dưới đất là impact sẽ được giải chính xác ở bài 6. Canvas final đã có nghiệm đó để bạn thấy đích đến, còn checkpoint 3 hiện chỉ dùng một time horizon đủ dài — một khác biệt được ghi rõ thay vì giấu bằng một con số “gần đúng”.
+
+## Viết code từng bước
+
+### Bước 1 — Gom điều kiện đầu thành một giá trị
+
+```cpp title="include/lab.hpp — dữ liệu xác định một bài toán đạn đạo"
+struct BallisticLaunch {
+    Vec2 position{};
+    Vec2 velocity{};
+    Vec2 acceleration{0.0, kGravity};
+};
+```
+
+Một `BallisticLaunch` không thay đổi sau khi fire. Slider có thể chỉnh aim cho phát bắn tiếp theo, nhưng không được sửa velocity của viên đạn đã ở trên không.
+
+### Bước 2 — Viết nghiệm position thành các hạng có tên
+
+```cpp title="include/lab.hpp — position tại thời điểm t"
+inline Vec2 analyticPosition(const BallisticLaunch& launch, double elapsedSeconds) {
+    const double time = std::max(0.0, elapsedSeconds);
+    const Vec2 velocityTerm = scale(launch.velocity, time);
+    const Vec2 accelerationTerm = scale(launch.acceleration, 0.5 * time * time);
+    return add(launch.position, add(velocityTerm, accelerationTerm));
+}
+```
+
+Tách `velocityTerm` và `accelerationTerm` dài hơn một biểu thức gộp, nhưng người học có thể đối chiếu từng phần với công thức. `time` âm được đưa về 0 vì mô phỏng không hỏi trạng thái trước lúc khai hỏa.
+
+### Bước 3 — Tìm apex bằng velocity, không quét sample
+
+```cpp title="include/lab.hpp — thời điểm vận tốc dọc bằng zero"
+const double time = -launch.velocity.y / launch.acceleration.y;
+if (!std::isfinite(time) || time < 0.0) {
+    return std::nullopt;
+}
+return time;
+```
+
+Ta không chọn sample có Y lớn nhất, vì kết quả khi đó phụ thuộc số segment. Công thức cho apex chính xác trong mô hình acceleration không đổi.
+
+### Bước 4 — Lấy mẫu đường chỉ để vẽ
+
+```cpp title="include/lab.hpp — segmentCount đoạn cần segmentCount cộng một điểm"
+samples.reserve(segmentCount + 1);
+for (std::size_t index = 0; index <= segmentCount; ++index) {
+    const double amount = static_cast<double>(index) / static_cast<double>(segmentCount);
+    samples.push_back(analyticPosition(launch, duration * amount));
+}
+```
+
+`<=` giữ cả t=0 và t=duration. Việc lấy mẫu là yêu cầu của polyline, không phải cách giải physics; tăng segment chỉ làm đường vẽ mượt hơn, không đổi `analyticPosition`.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build đường dự đoán giải tích"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_22_checkpoint_3
+./build/Debug/project_22_checkpoint_3.exe
+```
+
+Checkpoint dùng horizon xấp xỉ thời gian quay về cùng độ cao cộng thêm 0,2 giây. Vì muzzle cao 1,2 m, endpoint chưa chắc nằm đúng ground. Ta chấp nhận giới hạn này và sẽ thay nó bằng nghiệm quadratic ở bài 6.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ hệ số `0.5` khỏi acceleration term. Apex và tầm xa thay đổi dù `analyticVelocity` vẫn có vẻ đúng.
+2. Dùng `gravity=+9.81` trong hệ Y hướng lên. Parabol cong lên và không có ground impact tương lai.
+3. Dùng vòng lặp `index < segmentCount`. Đường thiếu endpoint; lỗi nhỏ này sẽ khiến marker impact không khớp polyline.
+4. Tìm apex bằng sample cao nhất với 8 segment, rồi tăng lên 120. Nếu marker di chuyển, nó chỉ là xấp xỉ raster của đường chứ chưa phải kết quả physics.
+
+## Tự kiểm tra kết quả
+
+- `analyticPosition(launch,0)` đúng bằng muzzle.
+- Đạo hàm của X theo thời gian là `vx`; X không chịu gravity.
+- `analyticVelocity(launch,tApex).y ≈ 0`.
+- `segmentCount=10` tạo 11 sample gồm cả hai đầu.
+- Đổi số segment không làm thay đổi apex tính bằng công thức.
+- Đường dự đoán chỉ đọc `BallisticLaunch`, không sửa state nào.
+
+## Bài tập mở rộng
+
+Vẽ thêm marker tại `tApex/2` và `2*tApex`. In velocity ở ba thời điểm để giải thích vì sao các sample cách đều theo thời gian nhưng không cách đều theo chiều Y.
+
+Bài tiếp theo sẽ tạo một `ProjectileState` và đi qua quỹ đạo bằng những bước Explicit Euler hữu hạn. Khi ấy đường vàng trở thành đối chứng, không còn chỉ là hình trang trí.

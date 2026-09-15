@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo khoảng cách ngắn nhất qua biên
+
+## Vấn đề cần giải quyết
+
+Ta đã đưa position về đúng ô gốc, nhưng chỉ wrap position là chưa đủ. Với A ở 0.6 và B ở 11.4, phép trừ `B-A` vẫn cho 10.8. Nếu dùng khoảng cách này để tính lực, chương trình sẽ kết luận rằng hai hạt sát hai phía của một mép nối rất xa nhau.
+
+Hãy giữ lại tất cả mã của checkpoint 2. Bài này thêm một phép đo và hai đường vẽ để thấy phép đo ấy. Chưa thay đổi vận tốc bằng lực. Tách việc đo ra trước giúp lỗi hình học không lẫn với lỗi Lennard–Jones.
+
+## Hiểu ý tưởng trước khi viết code
+
+B nằm ở 11.4 trong ô gốc. Ảnh của B trong ô bên trái nằm ở `11.4-12=-0.6`. Từ A đến ảnh ấy chỉ cần đi `-1.2`, ngắn hơn nhiều so với đi `+10.8`. Ta chọn vector ngắn nhất, gọi là **minimum image**.
+
+Cho mỗi thành phần của delta, cần đưa nó vào khoảng `[-L/2,L/2)`. Có thể tận dụng hàm wrap vừa viết:
+
+$$
+d_{\min}=\operatorname{wrap}(d+L/2,L)-L/2.
+$$
+
+Với hộp chữ nhật, chọn thành phần ngắn nhất trên từng trục cũng cho vector Euclidean ngắn nhất. Kết luận này không được bê nguyên sang hộp nghiêng: khi các trục của ô không vuông góc, hình học phải được xử lý khác.
+
+Nếu delta đúng `+L/2` hoặc `-L/2`, có hai ảnh gần ngang nhau. Công thức của ta chọn `-L/2`. Vì thế ở đúng tie, `minimumImage(-d)` không nhất thiết bằng `-minimumImage(d)`. Ta sẽ chọn cutoff **nhỏ hơn** nửa cạnh ngắn nhất để cặp tie không tạo lực khác zero, và chỉ tính một vector cho mỗi cặp `i<j`.
+
+<InteractiveLab demo="periodic-molecular-box" mode="pbc-distance" />
+
+Chọn preset hai hạt. Số đo đầu phải là 10.8 / 1.2. Kéo A màu vàng, hoặc chọn Canvas rồi nhấn phím mũi tên. Quan sát khi vector vàng đi ra ngoài ô gốc: đầu mút của nó là ảnh của B, không phải một hạt mới.
+
+## Viết code từng bước
+
+### Bước 1 — Tìm thành phần ngắn nhất
+
+```cpp title="include/periodic.hpp — minimum image theo một trục"
+inline double minimumComponent(double delta, double boxLength) {
+    return wrapCoordinate(delta + 0.5 * boxLength, boxLength) - 0.5 * boxLength;
+}
+```
+
+Dịch thêm nửa hộp để khoảng cần tìm trở thành `[0,L)`, gọi wrap, rồi dịch ngược. Cách viết này tránh sự khác nhau của `round` tại số âm giữa một số ngôn ngữ, vì C++ và Canvas đều gọi `floor` trong wrap.
+
+### Bước 2 — Dùng cùng phép đo cho x và y
+
+```cpp title="include/periodic.hpp — vector qua ảnh gần nhất"
+inline Vec2 minimumImage(Vec2 delta, Box box) {
+    return {minimumComponent(delta.x, box.width), minimumComponent(delta.y, box.height)};
+}
+```
+
+Hàm nhận **delta**, không nhận một vị trí. Nhầm hai kiểu ý nghĩa này vẫn có thể biên dịch được vì đều là `Vec2`. Bởi vậy nơi gọi phải viết rõ `subtract(b,a)` trước khi truyền vào.
+
+### Bước 3 — Vẽ một đường thường và một đường tuần hoàn
+
+Trong nhánh hai hạt của `drawScene`, đường xám dùng trực tiếp A và B. Đường vàng dùng đầu mút `a+delta`:
+
+```cpp title="include/view.hpp — dựng đầu mút của đường minimum image"
+const pbc::Vec2 delta = pbc::minimumImage(pbc::subtract(b, a), system.box);
+if (!SDL_SetRenderDrawColor(renderer, 251, 191, 36, 255)) {
+    return false;
+}
+if (!line(renderer, a, pbc::add(a, delta), system.box, viewport)) {
+    return false;
+}
+```
+
+Đừng wrap đầu mút trước khi vẽ. Nếu lại đưa ảnh của B về ô gốc, đường ngắn vừa tính sẽ biến thành đường dài ban đầu. Ta chừa khoảng trống xung quanh ô để nhìn phần đường ở ô kề.
+
+### Bước 4 — Cho người dùng tự tạo các trường hợp biên
+
+Trong `main.cpp`, khi nhấn trái gần A, đặt `dragging=true`, pause và gọi `SDL_CaptureMouse(true)`. Với mỗi mouse motion, đổi con trỏ về world space rồi wrap trước khi gán `position`. Khi thả chuột hoặc mất focus, bỏ capture. Tọa độ được sửa bằng tay nên velocity của A được đặt về zero; đây là dựng một điều kiện đầu mới, không phải tương tác vật lý với con trỏ.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 3"
+cmake --build build --config Debug --target project_43_checkpoint_3
+.\build\Debug\project_43_checkpoint_3.exe
+```
+
+Tạm dừng, kéo A sang các góc và so hướng hai đoạn. Với delta `(10.8,-7.5)` trong hộp 12×8, kết quả minimum image là `(-1.2,0.5)`. Đây là ca tốt để phát hiện lỗi dùng nhầm width cho trục y.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi `minimumImage(b, box)` thay vì `minimumImage(b-a, box)`. Đường chỉ tình cờ đúng ở vài vị trí của A. Kéo A và nhận ra phép đo đang quên điểm bắt đầu; khôi phục phép trừ trước lời gọi.
+2. Wrap lại `a+delta` trước khi vẽ. Con số khoảng cách vẫn đúng nhưng đường hiển thị chạy ngang cả hộp. Khôi phục đầu mút chưa wrap để hình vẽ giải thích đúng phép tính.
+3. Thử delta đúng nửa hộp rồi cho rằng hàm sai vì không đổi dấu khi đổi thứ tự hạt. Viết ra hai ảnh bằng khoảng cách để thấy đây là tie. Giữ quy ước đã chọn; ở bài sau, tránh để tie trở thành một cặp có lực.
+
+## Tự kiểm tra kết quả
+
+- Preset đầu cho độ dài minimum image 1.2, vector từ A hướng sang trái.
+- Hộp 12×8 chọn đúng ảnh trên cả hai trục.
+- Thử lần lượt chín ảnh của B quanh ô gốc và lấy khoảng cách nhỏ nhất cho cùng độ dài với hàm của bạn.
+- Đường vẽ có thể ra ngoài ô gốc nhưng position lưu trong hạt thì không.
+
+## Bài tập mở rộng
+
+Viết oracle chín ảnh bằng hai vòng lặp từ -1 tới 1. Chỉ so **độ dài** ở tie, vì có nhiều vector cùng ngắn nhất. Giữ oracle cho CTest cuối project, rồi sang [bài 4 — lực và cutoff](/projects/periodic-molecular-box/04-tinh-luc-va-chon-cutoff).

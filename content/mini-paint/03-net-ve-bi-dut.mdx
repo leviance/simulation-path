@@ -1,0 +1,93 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vì sao kéo nhanh làm nét vẽ bị đứt?
+
+## Vấn đề cần giải quyết
+
+Đầu bút tròn hoạt động đúng ở từng vị trí mà SDL cung cấp, nhưng khi kéo nhanh, kết quả vẫn giống một dãy đồng xu nằm cách nhau. Lỗi không nằm ở công thức hình tròn. SDL chỉ gửi các vị trí rời rạc theo thời gian, trong khi con trỏ có thể đi hàng chục pixel giữa hai sự kiện `MOUSE_MOTION`.
+
+Trước khi sửa, ta sẽ tìm điều kiện khiến khoảng trống xuất hiện và giữ checkpoint 3 ở trạng thái chưa nội suy để làm mốc so sánh.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi khoảng cách giữa hai vị trí chuột liên tiếp là `d`, bán kính đầu bút là `r`. Hai hình tròn tách rời hoàn toàn khi `d > 2r`. Tuy nhiên, nếu chúng chỉ vừa chạm nhau, hai bên mép nét vẫn bị lõm rõ rệt. Vì vậy, khoảng cách đặt dấu thường nên nhỏ hơn bán kính; project này chọn `0.8r` để các dấu chồng lên nhau đủ nhiều.
+
+Tần suất sự kiện chuột không giống FPS và cũng không hoàn toàn do chương trình quyết định. Vì vậy, “vẽ nhanh hơn” không đảm bảo nhận được nhiều vị trí chuột hơn. Cách chắc chắn là tự lấp đoạn thẳng giữa vị trí trước và vị trí mới.
+
+Muốn làm vậy, ta cần giữ cả hai đầu của đoạn:
+
+```text
+previous ───────── current
+```
+
+<InteractiveLab demo="stroke" mode="stroke-sampling" />
+
+## Viết code từng bước
+
+### Bước 1 — Lưu điểm đầu ngay khi nhấn chuột
+
+```cpp title="src/main.cpp — bắt đầu một nét vẽ"
+drawing = true;
+previous = {event.button.x, event.button.y};
+stampCircle(pixels, previous, radius, color);
+```
+
+Điểm này vừa được vẽ, vừa trở thành đầu thứ nhất của đoạn đầu tiên. Nếu chỉ lưu mà không gọi `stampCircle`, chương trình phải chờ tới khi có chuyển động mới vẽ và cú click đơn lại không để lại dấu.
+
+### Bước 2 — Đo khoảng cách giữa hai vị trí chuột
+
+```cpp title="include/lab.hpp — khoảng cách Euclid"
+inline double distance(Point start, Point end) {
+    return std::hypot(end.x - start.x, end.y - start.y);
+}
+```
+
+Tên `start` và `end` cho biết rõ vai trò của hai điểm trong một đoạn. `std::hypot` tính `sqrt(dx² + dy²)`, vì vậy kết quả có cùng đơn vị pixel với tọa độ đầu vào.
+
+### Bước 3 — Cố ý chỉ vẽ ở vị trí mới
+
+```cpp title="src/main.cpp — motion cố ý chưa nội suy"
+if (event.type == SDL_EVENT_MOUSE_MOTION && drawing) {
+    const lab::Point current{event.motion.x, event.motion.y};
+    stampCircle(pixels, current, radius, color);
+    previous = current;
+}
+```
+
+Đoạn code trông hoàn toàn hợp lý, nhưng nó chỉ đặt một dấu tại `current`. Không có dòng nào xử lý khoảng trống từ `previous` đến `current`. Comment trong source ghi rõ đây là hành vi cố ý của checkpoint 3, giúp người đọc không nhầm nó với cách cài đặt cuối cùng.
+
+### Bước 4 — Đo khoảng hở trong thực tế
+
+Chạy checkpoint 3 và kéo cùng một đường ngang ba lần: chậm, vừa rồi thật nhanh. Để có con số cụ thể thay vì chỉ nhìn bằng mắt, tạm thời in khoảng cách giữa hai vị trí:
+
+```cpp title="src/main.cpp — phép đo tạm trong MOUSE_MOTION"
+std::cout << "sample gap = " << lab::distance(previous, current) << " px\n";
+```
+
+So sánh giá trị lớn nhất với `2 × radius`. Khi khoảng cách tăng, số lỗ hổng nhìn thấy cũng tăng theo. Sau thí nghiệm, hãy xóa dòng in này; ghi quá nhiều ra terminal có thể tự làm chậm chương trình và ảnh hưởng tới dữ liệu đang đo.
+
+## Ghép các phần lại
+
+Checkpoint 3 giúp cô lập đúng nguyên nhân: cách bắt đầu và kết thúc nét đã đúng, đầu bút tròn đã đúng, kiểm tra biên cũng đúng; chỉ có giả định “sự kiện chuột sẽ đến đủ dày” là sai. Nếu chỉ tăng bán kính, nét sẽ dày hơn yêu cầu. Nếu chỉ tăng FPS, SDL vẫn có thể gửi những vị trí cách xa nhau.
+
+Biến `previous` đang được cập nhật sau mỗi lần đặt dấu. Bài sau sẽ thay một lời gọi `stampCircle` bằng nhiều lời gọi tại các điểm nằm giữa `previous` và `current`, sau đó vẫn kết thúc bằng `previous = current`.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ tăng `radius` lên 50. Khoảng hở giảm nhưng kích thước đầu bút không còn đúng yêu cầu; lỗi chỉ bị che đi chứ chưa được sửa.
+2. Bỏ dòng cập nhật `previous`. Mọi đoạn sau đó đều bắt đầu từ điểm nhấn chuột đầu tiên và bức vẽ tạo thành nhiều tia.
+3. Gán `previous = current` trước khi tính khoảng cách. Hai đầu đoạn trở thành cùng một điểm, nên không thể sinh thêm vị trí ở giữa.
+
+## Tự kiểm tra kết quả
+
+- Kéo chậm cho nét gần liên tục; kéo nhanh lộ khoảng trống rõ hơn.
+- Khoảng cách in ra thay đổi theo tốc độ rê chuột, không phụ thuộc bán kính.
+- `previous` luôn là vị trí đã xử lý gần nhất.
+- Thả chuột kết thúc nét; nét mới không nối với nét cũ.
+- Bạn phân biệt được lỗi lấy mẫu chuột với lỗi vẽ đầu bút tròn.
+
+## Bài tập mở rộng
+
+Hãy lưu khoảng cách lớn nhất của mỗi nét và hiển thị nó khi thả chuột. Thử các bán kính 4, 12 và 24, rồi dự đoán từ giá trị nào khoảng trống bắt đầu xuất hiện. Bạn cũng có thể thêm chế độ Debug, vẽ tâm của từng vị trí gốc bằng màu đỏ lên trên đầu bút để quan sát dữ liệu SDL cung cấp.
+
+Bài tiếp theo sẽ dùng linear interpolation để chèn thêm điểm vào mọi đoạn và giữ khoảng cách giữa các dấu trong một giới hạn đã chọn.

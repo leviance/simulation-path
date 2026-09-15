@@ -1,0 +1,11 @@
+.next
+.vinext
+.validation
+dist
+node_modules
+public/downloads
+course/generated
+lib/generated-checkpoint-sources
+lib/generated-checkpoint-sources.ts
+examples
+content

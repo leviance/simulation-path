@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Point cloud và tám octant
+
+## Vấn đề cần giải quyết
+
+Starter đã mở cửa sổ SDL3, tạo 100.000 điểm trong cube `[0,1]³` và vẽ chúng bằng phép chiếu perspective. Bạn có thể kéo chuột để xoay camera, cuộn để zoom, dùng `W/S`, `A/D`, `Q/E` để di chuyển hộp query. Mỗi frame hiện vẫn tìm hit bằng brute force, nghĩa là kiểm đủ 100.000 điểm.
+
+Đây là điểm xuất phát có chủ ý. Nếu dựng Octree trước khi có một chương trình đúng và nhìn thấy được, ta sẽ không biết lỗi nằm ở camera, dữ liệu 3D hay cấu trúc cây. Bài này giữ baseline ấy, rồi chốt hai hợp đồng mà mọi checkpoint sau đều dựa vào: AABB trong world space và cách một point chọn duy nhất một trong tám octant.
+
+## Hiểu ý tưởng trước khi viết code
+
+Camera chỉ trả lời câu hỏi “point này được vẽ ở pixel nào?”. Octree trả lời câu hỏi hoàn toàn khác: “point này nằm ở vùng nào của world?”. Vì vậy `projectPointWithOrbit` không bao giờ được gọi trong insertion hay query.
+
+Một AABB 3D có `minimum` và `maximum`. Point nằm trong hộp khi cả ba tọa độ đều nằm trong ba đoạn đóng:
+
+$$
+x_{min}\le x\le x_{max},\quad y_{min}\le y\le y_{max},\quad z_{min}\le z\le z_{max}
+$$
+
+Ba mặt phẳng giữa chia một node thành tám octant. Ta dùng ba bit để đặt tên: bit 0 là nửa positive X, bit 1 là positive Y, bit 2 là positive Z. Chẳng hạn octant `5 = 001₂ + 100₂` nằm ở positive X, negative Y, positive Z. Khi point đúng mặt phẳng giữa, phép `>=` đưa nó về positive half. Bounds có thể chạm nhau, nhưng storage policy chỉ có một đáp án.
+
+<InteractiveLab demo="point-cloud-octree" mode="octree-octants" />
+
+Kéo Canvas để nhìn tám hộp con từ nhiều góc. Sau đó giữ nguyên query volume và chỉ xoay camera: hit count phải đứng yên, vì query dùng world coordinates chứ không dùng hình chiếu.
+
+## Viết code từng bước
+
+### Bước 1 — Chặn point nằm sau near plane trước perspective divide
+
+```cpp title="include/lab.hpp — projectPointWithOrbit"
+const double cameraZ = rotatedZ + camera.distance;
+if (cameraZ <= camera.nearPlane) {
+    return {0.0, 0.0, cameraZ, false};
+}
+const double focalScale = 1.0 / std::tan(camera.fieldOfViewRadians * 0.5);
+const double safeAspect = std::max(0.0001, camera.aspect);
+```
+
+`cameraZ` càng nhỏ thì phép chia perspective càng phóng to. Nếu chia khi `cameraZ <= 0`, point phía sau camera có thể lật qua màn hình hoặc tạo số vô hạn. Near-plane guard giữ phần visualization ổn định; nó không thay đổi point data.
+
+### Bước 2 — Viết exact test trong world space
+
+```cpp title="include/lab.hpp — point nằm trong AABB 3D"
+inline bool pointInsideVolume(const Vec3& point, const Bounds3D& bounds) {
+    return point.x >= bounds.minimum.x && point.x <= bounds.maximum.x &&
+        point.y >= bounds.minimum.y && point.y <= bounds.maximum.y &&
+        point.z >= bounds.minimum.z && point.z <= bounds.maximum.z;
+}
+```
+
+Dấu bằng là một phần của contract: point trên sáu mặt vẫn là hit. Sau này Octree có thể giảm số point cần kiểm, nhưng đáp án cuối vẫn phải đi qua chính điều kiện này.
+
+### Bước 3 — Mã hóa octant bằng ba quyết định độc lập
+
+```cpp title="include/lab.hpp — octreeOctant"
+int octant = 0;
+if (point.x >= middleX) {
+    octant |= 1;
+}
+if (point.y >= middleY) {
+    octant |= 2;
+}
+if (point.z >= middleZ) {
+    octant |= 4;
+}
+return octant;
+```
+
+Cách viết này dễ kiểm hơn tám nhánh `if` dài. Mỗi trục chịu trách nhiệm đúng một bit; point `(0.5,0.5,0.5)` bật cả ba bit và nhận octant 7.
+
+### Bước 4 — Dựng child bounds từ cùng bit policy
+
+```cpp title="include/lab.hpp — positive X của child"
+if ((octant & 1) != 0) {
+    child.minimum.x = middle.x;
+    child.maximum.x = bounds.maximum.x;
+}
+```
+
+Y và Z làm tương tự với bit 2 và 4. Quan trọng nhất không phải sự ngắn gọn, mà là `octreeChildBounds` và `octreeOctant` kể cùng một câu chuyện về ba bit.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_30_checkpoint_1
+```
+
+Chạy checkpoint, kéo camera quanh root và thử di chuyển query theo cả ba trục. Window title ghi lại quy ước `+X=1 +Y=2 +Z=4`; brute force vẫn là đường query duy nhất ở bước này.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng point sau projection để gọi `pointInsideVolume`. Xoay camera làm hit count đổi dù dữ liệu đứng yên. Trả query về `PointSample::position`.
+2. Đổi `>=` thành `>` trên riêng trục Z. Point ở `z == middleZ` đổi child so với policy đã công bố. Khôi phục equality về positive half.
+3. Dùng `<=` thay vì `<` trong phép “không overlap”. Hai hộp chỉ chạm mặt sẽ bị coi là tách rời, có thể prune mất boundary hit. Giữ overlap inclusive.
+
+## Tự kiểm tra kết quả
+
+- Starter render point cloud và query volume trước khi Octree xuất hiện.
+- Orbit camera có near-plane guard; kéo camera không thay đổi hit count.
+- Point đúng minimum/maximum của volume được nhận.
+- Hai AABB chạm mặt vẫn overlap.
+- Octant dùng bit 0/1/2 cho positive X/Y/Z.
+- Point tại ba split planes chọn octant 7 và chỉ một octant.
+- Checkpoint 1 build, mở cửa sổ và thoát sạch bằng `Esc`.
+
+## Bài tập mở rộng
+
+In octant của một probe point vào window title. Thử đủ tám tổ hợp tọa độ `0.49/0.51`, rồi thử đúng `0.5` trên từng trục và dự đoán bit trước khi chạy.
+
+Bài tiếp theo đặt toàn bộ point indices vào một root node. Cấu trúc lúc ấy đúng về hình dạng dữ liệu, nhưng chưa hề nhanh hơn brute force.

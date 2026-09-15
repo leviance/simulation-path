@@ -1,0 +1,115 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo sai số và nghiệm thu mô phỏng
+
+## Vấn đề cần giải quyết
+
+Hai đường trên màn hình trông gần nhau chưa đủ để kết luận integrator đúng. Scale có thể che sai số; góc bắn này có thể vô tình dễ; hoặc ta đang so numerical state ở 1,03 s với analytic state ở 1,00 s.
+
+Final cần biến đối chứng thành số đo có đơn vị, rồi dùng số đo đó để kiểm một tính chất mạnh hơn: khi fixed dt nhỏ đi, sai số Explicit Euler tại cùng thời điểm phải giảm. Đồng thời ta hoàn thiện controls để người học có thể lặp lại thí nghiệm mà không sửa code.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ở elapsed time $t_n$ của numerical state, lấy:
+
+$$
+p_{exact}=analyticPosition(launch,t_n)
+$$
+
+Sai số vị trí là Euclidean distance:
+
+$$
+error=\lVert p_{numeric}-p_{exact}\rVert
+$$
+
+Explicit Euler là integrator bậc một. Trong thí nghiệm acceleration không đổi, giảm `dt` bốn lần làm global position error tại cùng thời điểm giảm xấp xỉ bốn lần. Đây là kiểm tra convergence; nó mạnh hơn một ngưỡng kiểu “error < 1 m” vì một implementation sai vẫn có thể tình cờ qua ngưỡng ở một case.
+
+<InteractiveLab demo="projectile" mode="projectile-validation" />
+
+Chọn 1/15 s, bắn và pause quanh 1 giây; ghi error. Lặp lại với 1/60 s. Đường xanh phải tiến gần đường vàng rõ ràng. Khi đổi dt, lab đưa phát bắn về trạng thái chờ để hai thí nghiệm không trộn nhiều step size trong cùng một trail.
+
+## Viết code từng bước
+
+### Bước 1 — So hai position tại cùng elapsed
+
+```cpp title="include/lab.hpp — comparison mang cả hai nghiệm"
+inline TrajectoryComparison compareProjectile(const BallisticLaunch& launch, const ProjectileState& numerical) {
+    const Vec2 analytic = analyticPosition(launch, numerical.elapsed);
+    return {analytic, numerical.position, numerical.elapsed, positionError(numerical.position, analytic)};
+}
+```
+
+`TrajectoryComparison` giúp phần vẽ, title bar và tests dùng cùng định nghĩa. Nó không sửa numerical state và không dùng analytic result để kéo viên đạn xanh về đường vàng.
+
+### Bước 2 — Dùng distance thay vì sai số từng trục
+
+```cpp title="include/lab.hpp — position error mang đơn vị mét"
+inline double positionError(Vec2 numerical, Vec2 analytic) {
+    return length(subtract(numerical, analytic));
+}
+```
+
+Error luôn không âm và bất biến khi xoay hệ trục. Readout ghi `m`; nếu sau này hiển thị pixel error, đó phải là một đại lượng khác có tên khác.
+
+### Bước 3 — Mọi control đi qua một state rõ ràng
+
+Final dùng:
+
+- kéo chuột hoặc phím mũi tên để sửa aim cho **phát tiếp theo**;
+- `Enter` tạo lại `firedLaunch`, projectile, trail và accumulator;
+- `Space` pause/resume nhưng không xóa remainder;
+- `N` chạy đúng một fixed step rồi pause;
+- `[`/`]` đổi fixed dt;
+- `R` trả angle, speed, dt và toàn bộ simulation state về mặc định.
+
+Title bar hiện speed, angle, dt, elapsed, error, substep và dropped time. Một màn hình bất thường vì thế có dữ liệu để chẩn đoán, không chỉ có một chấm biến mất.
+
+### Bước 4 — Test convergence bằng cùng duration
+
+CTest chạy Explicit Euler tới đúng 1 giây với ba step size. Mỗi duration chia hết cho dt nên comparison không bị lệch thời gian. Điều kiện cần kiểm là:
+
+```cpp title="include/lab.hpp — đại lượng dùng trong convergence test"
+const Vec2 analytic = analyticPosition(launch, numerical.elapsed);
+return {analytic, numerical.position, numerical.elapsed, positionError(numerical.position, analytic)};
+```
+
+Phần test còn kiểm tỷ lệ error giữa 1/15 và 1/60 gần 4 trong hệ acceleration đều này. Nếu đổi integrator ở Project 23, tỷ lệ sẽ kể cho ta biết order hội tụ đã thay đổi.
+
+## Ghép các phần lại
+
+Build và chạy toàn bộ source:
+
+```bash title="Terminal — nghiệm thu Project 22"
+cmake -S . -B build-all -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build-all --config Debug
+ctest --test-dir build-all -C Debug --output-on-failure
+cmake --build build-all --config Release
+ctest --test-dir build-all -C Release --output-on-failure
+./build-all/Debug/project_22_final.exe
+```
+
+Đừng chỉ build final. Starter và từng checkpoint là sản phẩm người học sẽ chạy trong quá trình đọc; một macro branch hỏng ở checkpoint 3 vẫn là lỗi phát hành dù final hoạt động.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính exact position bằng `aim` hiện tại thay vì `firedLaunch`. Kéo nòng khi viên đạn đang bay làm error nhảy dù numerical state không đổi.
+2. So numerical impact với exact impact nhưng bỏ qua khác biệt elapsed. Bạn đang gộp cả sai số thời gian lẫn vị trí mà không nói rõ.
+3. Trộn 1/15 và 1/120 trong cùng một phát bắn rồi dùng kết quả để kết luận convergence. Thí nghiệm không còn một biến độc lập duy nhất.
+4. Dùng `assert` trong CTest. Release có thể định nghĩa `NDEBUG` và xóa toàn bộ phép kiểm, tạo một bài test luôn pass.
+
+## Tự kiểm tra kết quả
+
+- Error bằng zero tại t=0 và chỉ so hai position ở cùng elapsed.
+- Với cùng launch và duration, error ở 1/60 nhỏ hơn 1/15; error ở 1/240 nhỏ hơn 1/60.
+- Đổi aim giữa lúc bay không thay `firedLaunch` hoặc numerical trail.
+- Đổi fixed dt đưa mô phỏng về trạng thái chờ trước khi bắn lại.
+- Pause, step, fire và reset không tạo hai nhánh update physics khác nhau.
+- Ground impact nằm đúng Y=0; exact marker và numerical marker được phân biệt rõ.
+- Debug và Release CTest đều chạy thật và pass.
+- Starter, bảy checkpoint và final đều có source hoàn chỉnh, comment cùng khoảng cách khối dễ đọc.
+
+## Bài tập mở rộng
+
+Tạo một bảng tự động chạy cùng launch ở các dt 1/15, 1/30, 1/60, 1/120 và ghi `dt`, error tại 1 giây, `error_previous/error_current`. Đừng chạy bốn projectile bằng render frame; hãy gọi trực tiếp hàm step thuần để bảng có thể được kiểm thử lặp lại.
+
+Project 22 đã tạo được ngôn ngữ chung cho numerical methods: state, fixed dt, reference và error. Project 23 sẽ giữ cùng bài toán nhưng cho Explicit Euler, Verlet và RK4 chạy cạnh nhau để so stability, accuracy cùng chi phí trên mỗi bước.

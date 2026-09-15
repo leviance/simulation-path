@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính lực trên GPU, bắt đầu từ ca nhỏ
+
+## Vấn đề cần giải quyết
+
+Ta đã vẽ được đúng dữ liệu GPU. Bây giờ mới thêm lực. Không dùng grid ngay: bản đầu cho mỗi hạt duyệt mọi hạt còn lại, với N=64. Cách này chậm khi N lớn nhưng dễ đối chiếu và có vai trò như một chiếc thước đo.
+
+Checkpoint 04 tính force một lần sau initialize rồi dừng. Việc hệ chưa chuyển động là chủ ý; nếu vừa đổi force vừa đổi integrator, khi kết quả sai bạn sẽ khó xác định lỗi nằm ở đâu.
+
+## Hiểu ý tưởng trước khi viết code
+
+CPU ở Project 43 duyệt `i<j` và cộng hai lực đối nhau. Nếu nhiều invocation cùng cập nhật `F[j]`, GPU sẽ có tranh chấp ghi. Bản này đổi cách chia việc: invocation i tự duyệt j và chỉ ghi `F[i]`. Không cần atomicAdd float.
+
+$$\mathbf F_i=\sum_{j\ne i} U'_{FS}(r_{ij})\frac{\mathbf r_{ij}}{r_{ij}},\qquad U_i=\frac12\sum_{j\ne i}U_{FS}(r_{ij}).$$
+
+Vector `delta` hướng từ i tới j. Với khoảng cách ngắn, đạo hàm LJ âm nên lực trên i ngược hướng delta: hai hạt đẩy nhau. Mỗi cặp được tính ở cả invocation i và j, vì thế chia thế năng cho 2. Đây là đổi cách phân công, không phải đổi mô hình vật lý.
+
+<InteractiveLab demo="molecular-lab-gpu" mode="gpu-md-4" />
+
+Bấm đối chiếu lực. Canvas so full directed loop với oracle `i<j`; sai số gần zero cho thấy hai cách chia việc có thể tương đương về toán học, không chứng minh shader đã chạy đúng.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ minimum image và force-shifted LJ
+
+Đọc hàm CPU đối chứng trước khi chuyển sang GLSL:
+
+```cpp title="include/molecular_math.hpp — đoạn đang thêm"
+inline PairValue shiftedPair(double radius) {
+    if (radius >= cutoff) {
+        return {};
+    }
+    const auto value = rawPair(radius);
+    const auto edge = rawPair(cutoff);
+    return {value.potential - edge.potential - (radius - cutoff) * edge.slope, value.slope - edge.slope};
+}
+```
+
+`rawPair` trả U và đạo hàm theo bán kính. Trừ cả U tại cutoff và đường tiếp tuyến làm U lẫn lực về zero liên tục tại `cutoff=2.5`. Không thay bằng công thức chỉ dịch thế năng; đó là một mô hình khác.
+
+### Bước 2 — Cộng phần đóng góp cho riêng hạt i
+
+Trong `force.comp`, hàm được dùng chung cho vòng mọi cặp và grid ở bài kế tiếp:
+
+```glsl title="shaders/force.comp — tính một tương tác có kiểm tra"
+void accumulatePair(uint i, uint j, inout vec3 total) {
+    if (i == j) {
+        return;
+    }
+    vec2 delta = positions[j].xy - positions[i].xy;
+    delta -= uBox * floor(delta / uBox + 0.5);
+    float radius2 = dot(delta, delta);
+    if (isnan(radius2) || isinf(radius2) || radius2 < 0.25) {
+        atomicOr(flags, 2u);
+        return;
+    }
+    if (radius2 >= cutoff * cutoff) {
+        return;
+    }
+    float radius = sqrt(radius2);
+    vec2 value = rawPair(radius);
+    vec2 edge = rawPair(cutoff);
+    total.xy += (value.y - edge.y) * delta / radius;
+    // Mỗi cặp được hai invocation duyệt: mỗi bên chỉ giữ U/2.
+    total.z += 0.5 * (value.x - edge.x - (radius - cutoff) * edge.y);
+}
+```
+
+`radius2 < 0.25` là hàng rào của lab: dừng khi hạt gần hơn 0.5 sigma để không tiếp tục với lực quá lớn. Đây không phải cách sửa overlap bằng một lực giả. Flag khiến toàn bước bị từ chối. Nếu khoảng cách ngoài cutoff, hàm trả về mà không thêm force/U.
+
+### Bước 3 — Giữ oracle đủ nhỏ để có thể chạy thường xuyên
+
+Header thuần có hàm đối chiếu. Phần bảo vệ đầu vào là:
+
+```cpp title="include/molecular_math.hpp — đoạn đang thêm"
+if (positions.size() != plan.count || plan.count > 1024) {
+    throw std::invalid_argument("The CPU oracle is limited to 1024 particles.");
+}
+```
+
+`referenceForces` cộng bằng double rồi trả kết quả float để so với SSBO. Nó dùng chính position float được đọc từ GPU, không dùng một hệ random khác. Nhánh shader mọi cặp cũng từ chối N lớn hơn 1024; có hai lớp bảo vệ vì lỗi ở UI không được phép biến thành một kernel N² khổng lồ.
+
+## Ghép các phần lại
+
+Checkpoint 04 bật `features.force`. Sau Initialize, engine chuyển sang Force với `uGrid=0`; mỗi invocation ghi một `vec4(totalForce, halfPotential, 0)`. Đọc đầy đủ vòng lặp `for (j...)` trong `force.comp` ở source cuối bài.
+
+```bash title="Terminal Windows — build và chạy bài 4"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_checkpoint_4 --parallel 2
+.\build\Debug\project_45_checkpoint_4.exe
+```
+
+Phần kiểm GPU tự động được ghép ở bài 10. Ở mốc này hãy đặt breakpoint ở phase Force, xem bindings 0/1 là position/force đúng bank và đối chiếu vài hạt bằng công cụ debug nếu có. Đừng tăng N để kiểm 'GPU đã nhanh chưa'.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản thử, bỏ hệ số `0.5` khi cộng U. Force không đổi nhưng tổng U gấp đôi. Test phải so cả force và potential để bắt lỗi mà hình chuyển động không thể chỉ ra.
+2. Đảo `positions[j]-positions[i]` thành chiều ngược lại nhưng không đổi dấu công thức. Với hai hạt gần nhau lực hút/đẩy bị đảo. Khôi phục delta và kiểm dấu bằng một cặp trước khi xem cả hệ.
+
+## Tự kiểm tra kết quả
+
+Force và U của ca 64 hạt phải hữu hạn. Hạt ngoài cutoff không đóng góp. Tổng lực nội gần zero trong sai số float, không bắt buộc bằng zero từng bit vì thứ tự cộng khác nhau. Hệ vẫn đứng yên sau khi tính force.
+
+## Bài tập mở rộng
+
+Thử giải thích vì sao dùng full directed list có thể phù hợp GPU dù tính cặp hai lần. So sánh với khó khăn khi hai invocation cùng ghi vào một địa chỉ.
+
+Tiếp theo: [dựng grid để giảm số cặp](/projects/molecular-lab-gpu/05-dung-grid-va-giam-so-cap).
+

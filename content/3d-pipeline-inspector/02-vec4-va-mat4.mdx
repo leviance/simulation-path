@@ -1,0 +1,167 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ Vec3 sang Vec4 và Mat4
+
+## Vấn đề cần giải quyết
+
+Project 09 đã dùng ma trận 3×3 để ghép scale, shear, rotation và translation trong 2D. Sang 3D, một ma trận tuyến tính 3×3 vẫn xoay và co giãn được, nhưng không chứa được translation trong cùng phép nhân. Ta cần thêm một hàng, một cột và một thành phần `w` cho vector.
+
+Điểm dễ gây nhầm không nằm ở số lượng 16 phần tử, mà ở **quy ước**. Project này dùng:
+
+- matrix lưu row-major;
+- vector là column vector đứng bên phải;
+- `A × B × v` áp dụng `B` trước rồi mới `A`.
+
+Ba lựa chọn đó phải giữ nguyên tới cuối project.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta đưa point 3D vào homogeneous space bằng:
+
+$$
+p=(x,y,z,1)
+$$
+
+Direction không đại diện cho một vị trí nên dùng:
+
+$$
+d=(x,y,z,0)
+$$
+
+Với translation $(t_x,t_y,t_z)$:
+
+$$
+T=
+\begin{bmatrix}
+1&0&0&t_x\\
+0&1&0&t_y\\
+0&0&1&t_z\\
+0&0&0&1
+\end{bmatrix}
+$$
+
+Nhân hàng đầu với vector cho $x'=x+t_xw$. Vì vậy point nhận translation còn direction giữ nguyên. Đây không phải mẹo đặc biệt trong code; nó rơi ra trực tiếp từ phép nhân matrix–vector.
+
+Hãy tính thử một trường hợp bằng tay trước khi viết `Mat4`. Với point
+$p=(1,0.75,0.5,1)$ và translation $(2,1,3)$:
+
+$$
+\begin{aligned}
+x' &= 1\cdot1 + 0\cdot0.75 + 0\cdot0.5 + 2\cdot1 = 3 \\
+y' &= 0\cdot1 + 1\cdot0.75 + 0\cdot0.5 + 1\cdot1 = 1.75 \\
+z' &= 0\cdot1 + 0\cdot0.75 + 1\cdot0.5 + 3\cdot1 = 3.5 \\
+w' &= 1
+\end{aligned}
+$$
+
+Kết quả là $(3,1.75,3.5,1)$. Nếu giữ nguyên XYZ nhưng đổi thành direction
+$d=(1,0.75,0.5,0)$, ba số ở cột translation đều bị nhân với 0. Direction vì thế
+vẫn là $(1,0.75,0.5,0)$. Hai phép tính ngắn này sẽ là mốc để kiểm tra code ở cuối
+bài; đừng chỉ dùng identity vì identity không làm lộ lỗi ở cột translation.
+
+<InteractiveLab demo="pipeline3d" mode="pipeline-homogeneous" />
+
+## Viết code từng bước
+
+### Bước 1 — Lưu Mat4 sao cho dễ kiểm tra
+
+```cpp title="include/lab.hpp — Vec4 và Mat4 row-major"
+struct Vec4 {
+    double x{};
+    double y{};
+    double z{};
+    double w{};
+};
+
+struct Mat4 {
+    std::array<double, 16> values{};
+
+    double& at(int row, int column) {
+        return values[std::size_t(row * 4 + column)];
+    }
+};
+```
+
+`at(row,column)` che phép tính index khỏi mọi hàm khác. Row-major chỉ nói dữ liệu nằm trong memory thế nào; nó không biến vector thành row vector.
+
+### Bước 2 — Viết identity trước
+
+Identity là test đơn giản nhất cho phép nhân. Bốn phần tử đường chéo bằng 1, phần còn lại giữ 0:
+
+```cpp title="include/lab.hpp — identity matrix"
+inline Mat4 identityMatrix() {
+    Mat4 matrix{};
+    for (int index = 0; index < 4; ++index) {
+        matrix.at(index, index) = 1.0;
+    }
+    return matrix;
+}
+```
+
+Nếu `identity × v` không trả đúng cả `w`, chưa được viết Model matrix.
+
+### Bước 3 — Nhân hai matrix bằng ba vòng lặp tường minh
+
+Mỗi phần tử kết quả là dot product giữa một row của matrix trái và một column của matrix phải:
+
+```cpp title="include/lab.hpp — matrix multiplication"
+for (int row = 0; row < 4; ++row) {
+    for (int column = 0; column < 4; ++column) {
+        double sum = 0.0;
+        for (int index = 0; index < 4; ++index) {
+            sum += left.at(row, index) * right.at(index, column);
+        }
+        result.at(row, column) = sum;
+    }
+}
+```
+
+Đây là code học tập nên ta chưa unroll, SIMD hoặc đổi layout để “tối ưu”. Khả năng đọc và kiểm chứng quan trọng hơn vài phép nhân nhỏ.
+
+### Bước 4 — Phân biệt point và direction ở đúng nơi tạo dữ liệu
+
+```cpp title="include/lab.hpp — hai cách đưa Vec3 vào homogeneous space"
+inline Vec4 toPoint(Vec3 point) {
+    return {point.x, point.y, point.z, 1.0};
+}
+
+inline Vec4 toDirection(Vec3 direction) {
+    return {direction.x, direction.y, direction.z, 0.0};
+}
+```
+
+Không để caller tự nhớ gõ `1.0` hay `0.0` ở hàng chục chỗ. Tên hàm khiến ý nghĩa của dữ liệu hiện ngay trong code.
+
+### Bước 5 — Đọc thí nghiệm trên title bar
+
+Checkpoint dùng cùng local XYZ cho point và direction, rồi nhân cả hai với translation `(2,1,3)`. Point đổi thành `(3,1.75,3.5)`, direction vẫn là `(1,0.75,0.5)`.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build Vec4 và Mat4"
+cmake --build build --config Debug --target project_15_checkpoint_2 project_15_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Checkpoint 2 chưa có Model stage. Nó chỉ xác nhận nền móng matrix và homogeneous coordinate trước khi thêm nhiều phép biến đổi cùng lúc.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `toDirection` thành `w=1`. Direction sẽ bị translation như point; chạy test rồi hoàn tác.
+2. Đổi index thành `column * 4 + row` nhưng giữ nguyên mọi công thức. Một số matrix đối xứng vẫn có vẻ đúng, translation sẽ lộ lỗi ngay.
+3. Trong matrix multiplication, đổi `left.at(row,index)` thành `left.at(index,row)`. Identity có thể chưa bắt hết; translation kết hợp scale sẽ cho kết quả sai.
+
+## Tự kiểm tra kết quả
+
+- `identityMatrix()` giữ nguyên cả bốn thành phần của Vec4.
+- `toPoint` tạo `w=1`; `toDirection` tạo `w=0`.
+- Translation thay XYZ của point nhưng không thay direction.
+- `multiply(left,right)` không sửa hai matrix đầu vào.
+- Row-major storage và column-vector multiplication được ghi chú rõ trong source.
+- Checkpoint 2 không giả vờ đã có World/Camera/Screen stage.
+
+## Bài tập mở rộng
+
+Viết `transpose(Mat4)` và kiểm tra `transpose(transpose(M)) = M`. Không dùng transpose để “sửa” một matrix đang sai quy ước; hàm này chỉ là bài tập đọc hàng/cột.
+
+Bài tiếp theo sẽ dùng chính Mat4 này để ghép scale, rotation Y và translation thành Model matrix.

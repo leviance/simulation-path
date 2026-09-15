@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Explicit Euler — thí sinh đầu tiên
+
+## Vấn đề cần giải quyết
+
+Ta đã biết acceleration tại mọi position, nhưng chương trình vẫn chưa biết đi từ state hiện tại sang state kế tiếp. Máy tính không chạy liên tục; nó lấy một bước thời gian hữu hạn `dt`. Explicit Euler đánh giá derivative tại **đầu bước** rồi tạm coi giá trị đó không đổi trong cả bước.
+
+Điều cần học không phải hai dòng công thức ngắn, mà là chúng đang đọc state nào. Nếu cập nhật velocity trước rồi mới dùng nó cho position, bạn đã viết semi-implicit Euler — một phương pháp khác có energy behavior khác.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với state đầu bước $(x_n,v_n)$:
+
+$$
+x_{n+1}=x_n+v_n\Delta t
+$$
+
+$$
+v_{n+1}=v_n+a(x_n)\Delta t
+$$
+
+Trên phase space $(x,v/\omega)$, nghiệm exact đi theo một đường tròn. Euler bước theo tiếp tuyến của đường tròn; điểm mới nằm hơi ra ngoài. Lặp lại nhiều lần làm bán kính tăng, tương đương hệ số học ngày càng nhiều energy dù bài toán không có nguồn năng lượng.
+
+<InteractiveLab demo="integrator-race" mode="integrator-euler" />
+
+Chọn `dt = 1/15 s`, bấm “Tiến một bước” vài lần rồi chạy nhanh 20 giây. Khối đỏ và exact ghost tách nhau; energy drift dương tăng rõ. Sau đó giảm `dt` để thấy lỗi chậm lại chứ không biến mất hoàn toàn.
+
+## Viết code từng bước
+
+### Bước 1 — Trả cả kết quả lẫn chi phí
+
+```cpp title="include/lab.hpp — một step có state và số lần tính lực"
+struct IntegratorStepResult {
+    OscillatorState state{};
+    int forceEvaluations{};
+};
+```
+
+Nếu chỉ trả `OscillatorState`, UI phải tự biết Euler tốn bao nhiêu lần tính lực. Đưa cost vào kết quả khiến phép đếm nằm ngay cạnh code thực sự gọi acceleration.
+
+### Bước 2 — Lấy acceleration trước khi sửa state
+
+```cpp title="include/lab.hpp — derivative tại đầu bước"
+const double acceleration = oscillatorAcceleration(current.position, parameters);
+OscillatorState next{};
+next.position = current.position + current.velocity * deltaSeconds;
+next.velocity = current.velocity + acceleration * deltaSeconds;
+next.elapsed = current.elapsed + deltaSeconds;
+return {next, 1};
+```
+
+`current` là `const`, nên không có nguy cơ dòng thứ nhất làm thay dữ liệu mà dòng thứ hai đọc. Các biến `acceleration` và `next` hơi dài hơn cách viết gộp, nhưng đặt breakpoint vào từng phép tính rất dễ.
+
+### Bước 3 — Từ chối một step không hợp lệ
+
+```cpp title="include/lab.hpp — không cho thời gian đi lùi"
+if (!validParameters(parameters) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
+    return {current, 0};
+}
+```
+
+`forceEvaluations == 0` báo rằng state không được cập nhật. Đây là tín hiệu rõ hơn việc lặng lẽ tăng `elapsed` dù `dt` hỏng.
+
+### Bước 4 — Đặt lane đỏ cạnh exact ghost
+
+Main giữ `eulerState` riêng và vẽ nó bằng màu đỏ. Exact ghost được lấy ở đúng `eulerState.elapsed`, không phải ở thời gian render ước lượng. Nhờ vậy đoạn lệch ta nhìn thấy thực sự là integration error.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy Explicit Euler"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_checkpoint_2
+./build/Debug/project_23_checkpoint_2.exe
+```
+
+Nhấn Space để chạy. Ở checkpoint này `frameSeconds` được dùng trực tiếp để người học thấy solver đã hoạt động; fixed timestep chung chỉ xuất hiện khi cả ba lane được đưa vào một cuộc đua công bằng ở bài 5.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi thứ tự: cập nhật `next.velocity` rồi tính `next.position` từ velocity mới. Dự đoán energy sẽ tăng hay bị chặn, chạy thử, sau đó hoàn tác. Kết quả khác không chứng minh Euler “ngẫu nhiên”; bạn đã đổi integrator.
+2. Trả `forceEvaluations=2` dù chỉ gọi acceleration một lần. Graph không đổi nhưng bảng cost sai; hoàn tác và giữ phép đếm cạnh lời gọi thật.
+3. Dùng `exact.position` làm `next.position` sau mỗi step. Sai số sẽ bằng zero vì solver đang chép đáp án. Hoàn tác để exact chỉ đo.
+
+## Tự kiểm tra kết quả
+
+- Một step từ `(x=1,v=0)`, `k/m=4`, `dt=0.1` cho `x=1`, `v=-0.4`.
+- Elapsed tăng đúng một `dt` và force counter tăng đúng 1.
+- `dt <= 0` giữ nguyên state và không tăng counter.
+- Lane đỏ dùng position/velocity của chính nó; không đọc state từ ghost.
+- Với oscillator dài hạn và `dt` hữu hạn, Euler energy tăng; giảm `dt` làm tốc độ trôi giảm.
+
+## Bài tập mở rộng
+
+Vẽ phase point `(x, v/omega)` của Euler sau mỗi step. Nối các điểm và giải thích vì sao đường xoắn ra ngoài tương ứng energy growth.
+
+Bài tiếp theo thêm Velocity Verlet. Nó hỏi acceleration hai lần, nhưng đổi lại dùng thông tin ở cả đầu lẫn cuối step.

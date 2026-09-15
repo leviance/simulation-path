@@ -1,0 +1,158 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo đầu kim, dùng atan2 và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Từ `angle`, sin/cos cho ta một hướng. Khi người dùng kéo đầu kim, ta có hướng từ tâm tới chuột và cần khôi phục `angle`. Dùng `atan(y/x)` không đủ: phép chia mất thông tin về góc phần tư và không xác định khi X bằng 0.
+
+`atan2(y,x)` nhận riêng hai thành phần, phân biệt được cả bốn góc phần tư và xử lý trục dọc. Bài cuối nối thao tác kéo với hàm này, rồi kiểm tra phép đổi đi-về giữa góc và hướng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với direction `(x,y)`:
+
+$$
+angle=\operatorname{atan2}(y,x)
+$$
+
+Kết quả thường nằm trong `[-π,π]`. Project dùng khoảng `[0,2π)`, vì vậy kết quả phải đi qua `normalizeAngle`.
+
+Trước khi gọi `atan2`, tọa độ chuột cần được đổi sang độ dời trong world space:
+
+```text
+x = mouseX - centerX
+y = centerY - mouseY
+```
+
+Dòng Y dùng phép trừ ngược vì screen Y hướng xuống.
+
+<InteractiveLab demo="angle" mode="angle-atan2" />
+
+Nhấn đúng vào vùng 18 px quanh điểm vàng rồi kéo chậm qua phía dưới đường tròn. Nhấn ở chỗ khác không được làm kim nhảy tới con trỏ. Giá trị thô của `atan2` ở nửa dưới có thể âm, nhưng `angle` sau khi chuẩn hóa phải nằm giữa π và `2π`. Dùng phím trái/phải nếu muốn thay đổi từng 5°.
+
+## Viết code từng bước
+
+### Bước 1 — Viết phép biến đổi ngược
+
+```cpp title="include/lab.hpp — angleFromDirection"
+inline double angleFromDirection(Vec2 direction) {
+    if (!std::isfinite(direction.x) || !std::isfinite(direction.y)) {
+        return 0.0;
+    }
+    if (std::abs(direction.x) <= 1e-12 && std::abs(direction.y) <= 1e-12) {
+        return 0.0;
+    }
+    return normalizeAngle(std::atan2(direction.y, direction.x));
+}
+```
+
+Vector `(0,0)` không chỉ về hướng nào, nên không tồn tại một đáp án góc duy nhất. Hàm chọn 0 để kết quả luôn hữu hạn và dễ dự đoán. `NaN` hoặc vô cực cũng không được truyền tiếp vào trạng thái.
+
+### Bước 2 — Chỉ bắt đầu kéo khi nhấn gần endpoint
+
+```cpp title="src/main.cpp — hit test đầu kim"
+const lab::Vec2 center = screenCenter(width, height);
+const int radius = circleRadius(width, height);
+const lab::Vec2 pointWorld = lab::pointOnCircle({}, double(radius), angle);
+const lab::Vec2 pointScreen{center.x + pointWorld.x, center.y - pointWorld.y};
+const double offsetX = event.button.x - pointScreen.x;
+const double offsetY = event.button.y - pointScreen.y;
+if (offsetX * offsetX + offsetY * offsetY <= 18.0 * 18.0) {
+    draggingPoint = true;
+    paused = true;
+    if (!SDL_CaptureMouse(true)) {
+        std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+    }
+}
+```
+
+Khoảng cách bình phương tránh `sqrt`. Chỉ khi con trỏ nằm trong vùng chọn, chương trình mới bật `draggingPoint`, tạm dừng chuyển động và yêu cầu SDL tiếp tục gửi sự kiện chuột kể cả khi con trỏ đi ra ngoài cửa sổ.
+
+### Bước 3 — Đổi mouse motion thành angle
+
+```cpp title="src/main.cpp — suy góc từ con trỏ"
+const lab::Vec2 center = screenCenter(width, height);
+const lab::Vec2 direction{
+    event.motion.x - center.x,
+    center.y - event.motion.y,
+};
+angle = lab::angleFromDirection(direction);
+samples.clear();
+elapsedTime = 0.0;
+```
+
+Lịch sử đồ thị được xóa vì thao tác kéo có thể đưa góc tới một vị trí không liên tục với đường cũ. Bấm Space sau khi thả chuột để tiếp tục quay từ góc mới.
+
+### Bước 4 — Kiểm tra phép đổi đi-về trên toàn bộ vòng
+
+```cpp title="tests/tests.cpp — unitDirection và atan2 là hai chiều của cùng phép đổi"
+for (int step = 0; step < 24; ++step) {
+    const double original = lab::kTau * double(step) / 24.0;
+    const double restored = lab::angleFromDirection(lab::unitDirection(original));
+    check(nearlyEqual(restored, original), "unitDirection and angleFromDirection round-trip");
+}
+```
+
+24 góc bao phủ bốn trục và các góc phần tư. Test này mạnh hơn việc chỉ thử `(1,0)` và `(0,1)` vì lỗi đổi dấu Y thường chỉ lộ ở nửa dưới.
+
+### Bước 5 — Kiểm tra chuyển động không phụ thuộc FPS
+
+```cpp title="tests/tests.cpp — hai chuỗi delta time"
+double angleA = 0.0;
+for (int step = 0; step < 60; ++step) {
+    angleA = lab::advanceAngle(angleA, lab::kPi, 1.0 / 60.0);
+}
+double angleB = 0.0;
+for (int step = 0; step < 30; ++step) {
+    angleB = lab::advanceAngle(angleB, lab::kPi, 1.0 / 30.0);
+}
+check(nearlyEqual(angleA, angleB), "different delta-time sequences produce the same angle");
+```
+
+Cả hai mô phỏng đúng một giây với tốc độ π rad/s, nên góc cuối phải là π.
+
+### Bước 6 — Build và chạy kiểm chứng
+
+```bash title="Terminal — Project 07"
+cmake -S examples/project-07-unit-circle -B examples/project-07-unit-circle/build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
+cmake --build examples/project-07-unit-circle/build --config Debug
+ctest --test-dir examples/project-07-unit-circle/build -C Debug --output-on-failure
+cmake --build examples/project-07-unit-circle/build --config Release
+ctest --test-dir examples/project-07-unit-circle/build -C Release --output-on-failure
+```
+
+Tests chạy phần toán thuần và không mở cửa sổ. Sau đó hãy chạy `project_7_final` để kiểm tra việc giữ sự kiện chuột, resize, tạm dừng, vùng hit-test và màu của hai đường đồ thị.
+
+## Ghép các phần lại
+
+Bản hoàn chỉnh có hai cách sửa `angle`: chuyển động tự động gọi `advanceAngle`, còn thao tác kéo gọi `angleFromDirection`. Hai cách không chạy cùng lúc vì khi bắt đầu kéo, chương trình tự tạm dừng. Mọi kết quả còn lại — đầu kim, hình chiếu, tiêu đề và đồ thị — đều được suy ra từ góc hiện tại.
+
+Đây là mạch dữ liệu cần giữ trong đầu:
+
+```text
+angularSpeed × dt ─┐
+                   ├→ angle → (cos, sin) → endpoint / projection / graph
+mouse direction ─atan2┘
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `std::atan(y/x)`. Điểm ở góc phần tư II và IV có thể bị đưa sang góc đối diện; X bằng 0 còn gây chia cho zero.
+2. Dùng `event.motion.y - center.y`. Góc tăng theo chiều kim đồng hồ và round-trip với `unitDirection` thất bại.
+3. Không pause khi kéo. Mỗi frame tự động cộng góc ngay sau sự kiện chuột, khiến đầu kim rung hoặc trôi khỏi con trỏ.
+
+## Tự kiểm tra kết quả
+
+- Kéo được đầu kim qua đủ bốn góc phần tư.
+- `atan2` tại hướng xuống được chuẩn hóa về `3π/2`.
+- `sin²+cos²` gần 1 với toàn bộ góc test.
+- Hai chuỗi delta time cùng tổng thời gian cho cùng góc cuối.
+- Lịch sử không vượt giới hạn, loại phần tử cũ nhất và dùng timestamp để đặt điểm trên trục X.
+- CTest đạt ở Debug và Release; resize không làm sai đầu kim hoặc hai hình chiếu.
+
+## Bài tập mở rộng
+
+Thêm độ lệch pha để so `sin(angle)` với `sin(angle+φ)`. Tiếp theo, dùng hai vận tốc góc khác nhau cho X/Y và vẽ đường cong Lissajous. Cuối cùng, viết `rotateTowards` để kim chỉ quay về hướng chuột với tốc độ tối đa thay vì nhảy tới ngay lập tức.
+
+Project 08 sẽ dùng hướng hiện tại, hướng mục tiêu và dot product để xây một tháp pháo quay dần về phía chuột. Radian, `atan2`, delta time và quy tắc giữ một nguồn trạng thái duy nhất sẽ được dùng lại trực tiếp.

@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Radian và unit circle
+
+## Vấn đề cần giải quyết
+
+Ta muốn làm một chiếc kim quay quanh tâm đường tròn. Trước khi gọi `sin` hoặc `cos`, chương trình phải có một cách biểu diễn góc rõ ràng. C++ dùng **radian** trong các hàm lượng giác; nếu vô tình truyền degree, code vẫn chạy nhưng vị trí đầu kim sẽ sai hoàn toàn.
+
+Starter đã mở cửa sổ SDL3, tạo framebuffer, xử lý resize và hiển thị một nền tối. Checkpoint đầu tiên sẽ thêm unit circle, hai trục, các hằng số π/2π và ba hàm xử lý đơn vị góc. Kim chưa quay và chưa cần sin/cos.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một radian là góc chắn một cung có độ dài đúng bằng bán kính. Nếu gọi độ dài cung là `s`, bán kính là `r` và góc là `θ`, ta có `s = rθ`. Vì thế `θ = 1 rad` chính là trường hợp `s = r`.
+
+Chu vi đường tròn bằng `2πr`, nên lấy chu vi chia cho bán kính sẽ cho số radian của một vòng:
+
+$$
+\frac{2\pi r}{r}=2\pi\ \text{radian}=360^\circ
+$$
+
+Các mốc nên nhớ bằng hình ảnh, không phải học thuộc một bảng dài:
+
+| hướng | radian | degree |
+|---|---:|---:|
+| phải | `0` | `0°` |
+| trên | `π/2` | `90°` |
+| trái | `π` | `180°` |
+| dưới | `3π/2` | `270°` |
+| trở lại hướng phải | `2π` | `360°` |
+
+Trong project, `angle` luôn dùng radian. Degree chỉ xuất hiện khi đọc số cho dễ hoặc hiển thị lên thanh tiêu đề.
+
+<InteractiveLab demo="angle" mode="angle-radians" />
+
+Chọn preset **1 rad** và đọc dòng `s/r`: giá trị bằng 1 nghĩa là độ dài cung bằng bán kính. Sau đó thử lần lượt `0`, `π/2`, `π`, `3π/2` và `2π`. Ở `2π`, Canvas vẫn giữ số bạn vừa chọn nhưng đồng thời cho thấy góc sau khi chuẩn hóa là 0; hai giá trị chỉ cùng một hướng.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho π và một vòng đầy đủ
+
+```cpp title="include/lab.hpp — hai hằng số góc"
+inline constexpr double kPi = 3.14159265358979323846;
+inline constexpr double kTau = 2.0 * kPi;
+```
+
+`kTau` là `2π`, tức một vòng. Ta vẫn giữ `kPi` vì các mốc `π/2`, `π` và công thức đổi đơn vị dùng nó rất thường xuyên.
+
+### Bước 2 — Đổi degree và radian ở đúng một nơi
+
+```cpp title="include/lab.hpp — đổi đơn vị góc"
+inline double degreesToRadians(double degrees) {
+    return degrees * kPi / 180.0;
+}
+
+inline double radiansToDegrees(double radians) {
+    return radians * 180.0 / kPi;
+}
+```
+
+Hai hàm là cặp nghịch đảo. Sau khi nhận một giá trị degree từ UI, hãy đổi sang radian ngay; đừng để hai đơn vị cùng lưu trong trạng thái của mô phỏng.
+
+### Bước 3 — Đưa góc lớn hoặc âm về một vòng
+
+```cpp title="include/lab.hpp — normalizeAngle"
+inline double normalizeAngle(double angle) {
+    if (!std::isfinite(angle)) {
+        return 0.0;
+    }
+    double normalized = std::fmod(angle, kTau);
+    if (normalized < 0.0) {
+        normalized += kTau;
+    }
+    if (normalized >= kTau) {
+        return 0.0;
+    }
+    return normalized;
+}
+```
+
+`fmod` giữ lại phần dư sau khi bỏ các vòng đầy đủ. Trong C++, phần dư của góc âm vẫn âm, nên phải cộng `2π`. Nhánh cuối xử lý sai số làm tròn hiếm gặp tại đúng biên trên. `NaN` hoặc vô cực không thể mô tả một hướng hữu ích, vì vậy hàm chọn giá trị ổn định là 0.
+
+### Bước 4 — Vẽ vòng tròn và hai trục
+
+Checkpoint dùng lại midpoint circle từ Project 04. Sau khi tính tâm và bán kính theo kích thước cửa sổ, phần render chỉ còn:
+
+```cpp title="src/main.cpp — unit circle cố định"
+drawLine(pixels, width, height, centerX - radius - 20, centerY, centerX + radius + 20, centerY, rgba(99, 112, 141));
+drawLine(pixels, width, height, centerX, centerY - radius - 20, centerX, centerY + radius + 20, rgba(99, 112, 141));
+drawCircleOutline(pixels, width, height, centerX, centerY, radius, rgba(126, 139, 166));
+```
+
+Vòng tròn trên màn hình có bán kính hàng trăm pixel, còn “unit” nói về dữ liệu toán học có bán kính 1. Bài sau sẽ scale vector đơn vị theo bán kính hiển thị.
+
+## Ghép các phần lại
+
+Build checkpoint 1. Cửa sổ phải hiện đường tròn, hai trục và một đoạn từ tâm hướng sang phải. Thanh tiêu đề ghi ba cặp mốc `0`, `π`, `2π` theo cả radian và degree.
+
+Điều quan trọng ở đây chưa phải chuyển động. Bạn cần giải thích được vì sao một vòng là `2π`, vì sao `std::sin` nhận radian, và vì sao `normalizeAngle(-π/2)` phải trả `3π/2`.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ phép chia 180 trong `degreesToRadians`, rồi đổi 90°. Kết quả không còn là `π/2`.
+2. Chỉ gọi `fmod` mà không xử lý phần dư âm. Góc quay ngược sẽ nằm ngoài khoảng đã cam kết.
+3. Dùng `while (angle > 2π) angle -= 2π`. Một góc cực lớn có thể cần rất nhiều vòng lặp, trong khi `fmod` xử lý trực tiếp.
+
+## Tự kiểm tra kết quả
+
+- `degreesToRadians(180)` gần bằng π.
+- `radiansToDegrees(2π)` gần bằng 360.
+- `normalizeAngle(2π)` trả 0.
+- `normalizeAngle(-π/2)` trả `3π/2`.
+- Resize cửa sổ không làm đường tròn biến thành ellipse.
+
+## Bài tập mở rộng
+
+Thêm bốn vạch nhỏ tại 0°, 90°, 180° và 270°. Sau đó viết `shortestAngleDifference(from,to)` trả về góc quay ngắn nhất trong khoảng `[-π,π]`; hàm này sẽ hữu ích khi một vật cần quay dần về mục tiêu.
+
+Bài tiếp theo dùng chính `angle` để tính tọa độ đầu kim bằng cosine và sine.

@@ -1,0 +1,125 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc face và đổi index 1-based
+
+## Vấn đề cần giải quyết
+
+Point cloud cho biết các position đã vào bộ nhớ, nhưng chưa nói position nào nối với nhau. Record `f` mang topology của model. Lỗi phổ biến đầu tiên là dùng nguyên số đọc từ OBJ để truy cập `std::vector`: `f 1 2 3` rồi lấy `positions[1]`, `positions[2]`, `positions[3]`. Corner đầu bị lệch và corner cuối có thể vượt mảng.
+
+Checkpoint này chỉ nhận face có đúng ba corner và index dương. Giới hạn đó có chủ ý: ta khóa quy ước 1-based trước, rồi bài 3 mới thêm slash cùng negative index, bài 4 mới mở rộng polygon.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai hệ index khác nhau đúng một đơn vị:
+
+$$
+index_{vector}=index_{OBJ}-1
+$$
+
+| Token trong OBJ | Phần tử C++ |
+| ---: | ---: |
+| 1 | `positions[0]` |
+| 2 | `positions[1]` |
+| N | `positions[N-1]` |
+
+Index 0 không có nghĩa “phần tử đầu”; nó **không hợp lệ trong OBJ**. Việc đổi quy ước nên diễn ra ngay tại parser boundary. Sau đó `ObjTriangle` chỉ giữ `std::size_t` 0-based, còn renderer không phải nhớ dữ liệu đến từ định dạng nào.
+
+<InteractiveLab demo="obj-viewer" mode="obj-faces" />
+
+Các nhãn vàng trên Canvas vẫn dùng số OBJ 1-based để bạn đối chiếu source. Readout “OBJ index → vector index” hiển thị cả hai giá trị của triangle đang chọn.
+
+## Viết code từng bước
+
+### Bước 1 — Parse một integer nguyên vẹn
+
+`std::from_chars` không bỏ qua phần đuôi. Ta chỉ chấp nhận khi toàn bộ token là một integer khác 0:
+
+```cpp title="include/lab.hpp — đổi positive OBJ index sang vector index"
+int rawIndex = 0;
+const char* begin = token.data();
+const char* end = token.data() + token.size();
+const auto parsed = std::from_chars(begin, end, rawIndex);
+if (parsed.ec != std::errc{} || parsed.ptr != end || rawIndex == 0) {
+    return std::nullopt;
+}
+
+if (rawIndex < 1) {
+    return std::nullopt;
+}
+const long long resolved = static_cast<long long>(rawIndex) - 1;
+```
+
+Kiểu signed được giữ tới sau khi kiểm phạm vi. Nếu đổi `-1` sang `size_t` quá sớm, nó trở thành một số dương cực lớn và thông báo lỗi khó hiểu hơn.
+
+### Bước 2 — Resolve từng corner trước khi tạo triangle
+
+Parser thu token tới hết dòng. Nếu một corner sai, cả face bị bỏ:
+
+```cpp title="include/lab.hpp — face không được tạo nửa chừng"
+while (record >> token) {
+    const std::optional<std::size_t> resolved = resolveObjPositionIndex(
+        token,
+        result.mesh.positions.size()
+    );
+    if (!resolved) {
+        addDiagnostic(result, lineNumber, "face chứa position index không hợp lệ: " + token);
+        faceValid = false;
+        break;
+    }
+    corners.push_back(*resolved);
+}
+if (!faceValid) {
+    continue;
+}
+```
+
+`positionCount` là số vertex **đã xuất hiện tới dòng face hiện tại**. Checkpoint chưa cho face tham chiếu vertex ở tương lai; cách này cũng chuẩn bị đúng ngữ nghĩa cho negative index ở bài sau.
+
+### Bước 3 — Lưu topology rồi dựng wireframe
+
+Khi đúng ba corner, parser mới tạo `ObjTriangle`:
+
+```cpp title="include/lab.hpp — triangle chỉ giữ index nội bộ an toàn"
+result.mesh.triangles.push_back({
+    {corners[0], corners[1], corners[2]},
+    result.sourceFaceCount,
+    lineNumber,
+});
+```
+
+Renderer project toàn bộ position một lần, rồi mỗi triangle tra ba kết quả và nối ba cạnh:
+
+```cpp title="src/main.cpp — topology vừa parse trở thành wireframe"
+drawLine(pixels, width, height, *a, *b, 0x70d6ffffU);
+drawLine(pixels, width, height, *b, *c, 0x70d6ffffU);
+drawLine(pixels, width, height, *c, *a, 0x70d6ffffU);
+```
+
+## Ghép các phần lại
+
+```bash title="Terminal — build face-index checkpoint"
+cmake --build build --config Debug --target project_21_checkpoint_2
+./build/Debug/project_21_checkpoint_2.exe
+```
+
+Rocket phải chuyển từ 18 điểm rời thành wireframe gồm 32 triangle. Nếu chỉ mất một mặt, đọc diagnostic trước khi nghi ngờ projection.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay face đầu bằng `f 0 2 3`. Parser phải báo index 0 tại đúng dòng và không tạo triangle đó.
+2. Thay `f 1 9 10` bằng `f 1 9 99`. Chương trình phải bỏ cả face; tuyệt đối không clamp 99 về vertex cuối.
+3. Xóa phép trừ 1 rồi chạy với AddressSanitizer nếu compiler hỗ trợ. Ghi lại face nào truy cập ngoài mảng đầu tiên.
+
+## Tự kiểm tra kết quả
+
+- `1` luôn resolve thành `0`; `N` resolve thành `N-1` khi N nằm trong mảng.
+- `0`, số âm ở checkpoint này, chữ và số vượt position count đều trả `std::nullopt`.
+- Face lỗi không để lại triangle một phần.
+- Wireframe dùng index đã parse, không hard-code edge riêng cho rocket.
+- `sourceLine` và `sourceFace` được giữ trên triangle.
+
+## Bài tập mở rộng
+
+Thêm một counter cho số edge được gửi đi và số edge unique nếu coi `(a,b)` giống `(b,a)`. Vì sao hai số khác nhau trên mesh có các triangle chung cạnh?
+
+Bài tiếp theo sẽ mở resolver để hiểu bốn dạng face token phổ biến và negative index của OBJ.

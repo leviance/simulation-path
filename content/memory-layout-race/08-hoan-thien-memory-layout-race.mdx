@@ -1,0 +1,126 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện Memory Layout Race
+
+## Vấn đề cần giải quyết
+
+Ta đã có đủ mảnh ghép: deterministic source, AoS/SoA kernels, output comparison, cache-line model và benchmark. Bản final cần ghép chúng mà không biến ứng dụng thành một vòng benchmark vô hạn hoặc để renderer chen vào timing.
+
+Ứng dụng khởi động ở trạng thái pause. Animation chỉ giúp quan sát state; `B` và `S` mới là hai hành động đo. Reset phải tạo lại working state từ source, layout đang hiển thị không được quyết định layout nào được update, và validation phải báo từng contract riêng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Lifecycle final:
+
+`setup → sinh source → tạo AoS + SoA working state → pause → event → optional step/benchmark → draw sample → present`
+
+Ba nhóm công việc không trộn nhau:
+
+- **Correctness:** deterministic, conversion, kernel agreement.
+- **Model:** useful bytes, cache lines, efficiency.
+- **Measurement:** warm-up, samples, median, checksum.
+
+Timing có thể đổi giữa hai lần chạy mà validation vẫn pass. Ngược lại, một timing rất đẹp với difference khác 0 phải bị loại.
+
+<InteractiveLab demo="memory-layout-race" mode="layout-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Validation trả về các cờ có tên
+
+```cpp title="include/benchmark.hpp — MemoryLayoutValidationReport"
+struct MemoryLayoutValidationReport {
+    bool deterministic{};
+    bool conversionExact{};
+    bool kernelsAgree{};
+    bool singleFieldReducesTraffic{};
+    bool fullWorkloadUsesAllBytes{};
+    bool benchmarkObservable{};
+};
+```
+
+Không nén sáu câu hỏi thành một `bool passed` ngay trong thư viện. Khi failure xảy ra, test và title bar cần chỉ ra contract nào hỏng.
+
+### Bước 2 — Benchmark chỉ chạy từ event rõ ràng
+
+```cpp title="src/main.cpp — phím benchmark và scaling"
+}
+else if (event.key.key == SDLK_B) {
+    paused = true;
+    aosBaseline = lab::benchmarkAoSBaseline(source, workload, 5);
+    layoutBenchmark = lab::benchmarkLayoutRace(source, workload, 5);
+}
+else if (event.key.key == SDLK_S) {
+    paused = true;
+    const std::array<std::size_t, 3> counts{10'000U, 100'000U, 1'000'000U};
+    scalingRows = lab::makeLayoutScalingStudy(counts, kSeed, workload, 3);
+```
+
+Hai đường đều hữu hạn. `S` có workload lớn hơn nên chỉ chạy khi người dùng chủ động bấm phím; CTest không gọi scaling một triệu.
+
+### Bước 3 — Update cả hai, chỉ đổi phần đang vẽ
+
+```cpp title="src/main.cpp — final update"
+if (!paused || singleStep) {
+    lab::integrateAoS(particlesAoS, kFixedDeltaSeconds);
+    lab::integrateSoA(particlesSoA, kFixedDeltaSeconds);
+}
+```
+
+`showSoA` chỉ được đọc trong renderer. Nếu phím `L` làm đổi layout được update, hai state sẽ lệch chỉ vì người dùng đổi góc nhìn.
+
+## Ghép các phần lại
+
+Điều khiển final:
+
+- `Space`: chạy/dừng animation.
+- `N`: tiến một bước.
+- `L`: đổi AoS/SoA đang vẽ.
+- `W`: đổi workload dùng cho model và benchmark.
+- `B`: benchmark N hiện tại.
+- `S`: scaling 10k/100k/1M.
+- `R`: reset working states từ source.
+- `Esc`: thoát.
+
+Chạy cả hai cấu hình và test:
+
+```bash title="Nghiệm thu Debug"
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Nghiệm thu Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+CTest dùng vài nghìn particle và repetitions nhỏ để luôn kết thúc nhanh. Scaling một triệu là experiment tương tác, không phải điều kiện để test runner chiếm máy lâu.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi `makeLayoutScalingStudy` trước event loop. Startup bị chặn dù người dùng chưa muốn đo.
+2. Chỉ update layout đang vẽ. Nhấn `L` vài lần sẽ làm maximum difference tăng.
+3. Dùng `soaMilliseconds < aosMilliseconds` làm Definition of Done. Test sẽ phụ thuộc CPU và workload thay vì correctness.
+4. Vẽ đủ một triệu particle rồi dùng FPS để giải thích kernel. Texture upload và overdraw sẽ che mất memory-layout experiment.
+5. Bỏ timeout khỏi lệnh CTest. Một regression tạo vòng lặp không có guard có thể giữ test runner vô hạn.
+
+## Tự kiểm tra kết quả
+
+- [ ] Startup pause và không tự chạy benchmark/scaling.
+- [ ] `R` đưa hai layout về source giống nhau.
+- [ ] `L` chỉ đổi hình vẽ; maximum difference vẫn bằng 0.
+- [ ] `W` đổi đồng thời field highlight, traffic model và benchmark workload.
+- [ ] `B`/`S` kết thúc hữu hạn, timing đi cạnh checksum và difference.
+- [ ] Canvas chạy phép đo trong Web Worker, có trạng thái đang chạy và nút dừng thật sự hủy worker.
+- [ ] Canvas hỗ trợ pointer capture, keyboard, DPR và reduced motion.
+- [ ] Starter, checkpoint 01–08 và final build được.
+- [ ] CTest Debug/Release cùng Canvas math tests đều đạt.
+
+## Bài tập mở rộng
+
+1. Thêm workload tính kinetic energy từ ba velocity và dự đoán traffic trước khi đo.
+2. Thêm padding có chủ đích vào `ParticleAoS`, cập nhật `static_assert` rồi đo stride mới.
+3. Tách SoA thành các block 4 hoặc 8 particle để chuẩn bị cho SIMD, nhưng giữ bản hiện tại làm oracle.
+4. Ghi CPU, compiler và build flags cạnh bảng timing để người khác có thể tái lập phép đo.
+
+Project 32 kết thúc phần cấu trúc không gian và tư duy hiệu năng. Project 33 sẽ chuyển sang OpenGL: vẽ lại tam giác cũ bằng GPU và đối chiếu từng bước với renderer CPU, thay vì nhảy thẳng vào shader mà không biết dữ liệu đã đi qua đâu.

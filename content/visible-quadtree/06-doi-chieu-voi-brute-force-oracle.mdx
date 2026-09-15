@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đối chiếu với brute-force oracle
+
+## Vấn đề cần giải quyết
+
+Quadtree traversal trả hits theo thứ tự leaf và child, còn brute force trả theo particle index tăng dần. Hai thứ tự khác nhau không phải lỗi; hai **tập kết quả** khác nhau mới là lỗi. Nếu vô tình biến traversal order thành API contract, ta sẽ sort trong hot path và trả giá cho một thuộc tính không cần thiết.
+
+Validation tạo bản sao của hai hit lists, sort chúng ngoài query rồi so. Ta còn phải đưa các selection ở world corner, split line và boundary vào probe set vì random queries ở giữa scene thường bỏ sót lỗi khó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi `H_tree` và `H_brute` là hai hit lists. Correctness cần:
+
+$$
+sort(H_{tree})=sort(H_{brute})
+$$
+
+Ta không chỉ so hit count. Hai thuật toán có thể cùng trả 20 phần tử nhưng sai ở hai indices khác nhau. Cùng selection objects phải được đưa cho cả hai phía; không tạo lại query bằng random generator giữa hai lượt.
+
+<InteractiveLab demo="visible-quadtree" mode="quadtree-compare" />
+
+Readout đối chiếu live mỗi lần kéo. Thử selection rất mỏng dọc center line và selection chạm góc `(1,1)`; trạng thái phải luôn là `hit set khớp`.
+
+## Viết code từng bước
+
+### Bước 1 — Canonicalize một bản sao
+
+```cpp title="include/lab.hpp — canonical hit order chỉ cho validation"
+inline std::vector<std::size_t> canonicalSelectionHits(std::span<const std::size_t> hitIndices) {
+    std::vector<std::size_t> canonical(hitIndices.begin(), hitIndices.end());
+    std::sort(canonical.begin(), canonical.end());
+    return canonical;
+}
+```
+
+Kết quả query gốc không bị thay đổi. Production renderer vẫn có thể dùng traversal order tự nhiên.
+
+### Bước 2 — So toàn bộ canonical lists
+
+```cpp title="include/lab.hpp — oracle agreement"
+inline bool quadtreeMatchesBruteForce(const QuadtreeQueryResult& treeResult, const BruteSelectionResult& bruteResult) {
+    return canonicalSelectionHits(treeResult.hitIndices) == canonicalSelectionHits(bruteResult.hitIndices);
+}
+```
+
+`std::vector::operator==` kiểm cả length lẫn từng index. Không cần viết vòng lặp so sánh thứ hai.
+
+### Bước 3 — Sinh selection set một lần
+
+```cpp title="include/lab.hpp — deterministic selection probes"
+const std::vector<Particle> centers = makeParticleCloud(count, bounds, seed, false);
+std::vector<SelectionBox> selections{};
+selections.reserve(count);
+for (const Particle& center : centers) {
+    selections.push_back(normalizeSelectionBox({center.position.x - width * 0.5, center.position.y - height * 0.5}, {center.position.x + width * 0.5, center.position.y + height * 0.5}));
+}
+```
+
+Selection được phép vươn ra ngoài world. Quadtree root vẫn overlap phần bên trong, còn exact test chỉ đọc particles vốn nằm trong world.
+
+### Bước 4 — Gọi hai production paths trong cùng vòng test
+
+```cpp title="tests/tests.cpp — so cùng selection object"
+lab::queryQuadtree(tree, particles, selection, treeWorkspace);
+lab::querySelectionBruteForce(particles, selection, bruteWorkspace);
+check(lab::quadtreeMatchesBruteForce(treeWorkspace, bruteWorkspace), "Quadtree hit set matches brute-force oracle");
+check(treeWorkspace.candidatesChecked <= particles.size(), "one Quadtree query never checks more candidates than particles");
+```
+
+Không viết query rút gọn riêng cho test. CTest phải gọi đúng hàm mà final dùng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint oracle"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_29_checkpoint_6
+```
+
+Checkpoint title báo `oracle match`. Test runner hoàn chỉnh sẽ được build cùng final ở bài 8.
+
+## Thử làm sai để hiểu đúng
+
+1. So hai vectors trực tiếp không canonicalize. Cùng hit set bị báo mismatch vì traversal order khác; sort bản sao ngoài hot path.
+2. Chỉ so `hitIndices.size()`. Thay một hit bằng một index sai vẫn pass; so toàn bộ canonical lists.
+3. Sinh random selection mới trước khi gọi brute force. Hai phía làm hai bài toán khác nhau; tạo probe set một lần rồi reuse.
+
+## Tự kiểm tra kết quả
+
+- Query production không sort hits.
+- Validation canonicalize bản sao, không sửa output gốc.
+- So sánh kiểm cả length lẫn từng particle index.
+- Cùng selection object được truyền cho tree và brute force.
+- Ít nhất 32 deterministic probes được kiểm.
+- Probe set có world corners và split-line cases.
+- Selection vươn ra ngoài world vẫn trả đúng phần hits bên trong.
+- Live Canvas agreement giữ đúng khi kéo qua boundary.
+
+## Bài tập mở rộng
+
+Ghi selection đầu tiên gây mismatch ra console cùng hai canonical lists. Sau khi sửa lỗi, biến selection đó thành một regression test cố định thay vì chỉ dựa vào random seed.
+
+Bài tiếp theo dùng checksum cùng exact operation counts để benchmark mà không đánh mất correctness.

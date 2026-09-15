@@ -1,0 +1,160 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nối mười hai cạnh bằng edge list
+
+## Vấn đề cần giải quyết
+
+Ta đã có tám marker, nhưng cube chỉ xuất hiện khi các marker được nối đúng. Viết mười hai lời gọi `drawLine` với 24 biến pixel sẽ chạy, song cách đó trộn ba việc: topology, projection và raster. Chỉ cần đổi index convention hoặc thêm transform là đoạn render rất dễ lệch.
+
+Bài này tạo `Edge { from, to }`. Một edge chỉ lưu hai index; nó không chứa `Vec3`, `Vec2`, màu hoặc SDL. Nhờ vậy topology giữ nguyên từ local space cho tới screen space.
+
+## Hiểu ý tưởng trước khi viết code
+
+Theo quy ước bài 1, cube gồm ba nhóm edge:
+
+```text title="Mười hai edge của cube"
+lớp Z âm:     0-1  1-2  2-3  3-0
+lớp Z dương:  4-5  5-6  6-7  7-4
+nối hai lớp:  0-4  1-5  2-6  3-7
+```
+
+Tổng cộng $4+4+4=12$ edge. Mỗi vertex chạm đúng ba edge, hay có **degree** bằng 3. Tổng degree là 24; mỗi edge được đếm ở hai endpoint nên:
+
+$$
+|E|=\frac{8\times3}{2}=12
+$$
+
+Đây là invariant topology mạnh hơn việc nhìn hình. Một đường chéo có thể khiến cube “gần giống đúng”, nhưng degree hoặc danh sách edge duy nhất sẽ phát hiện sai.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-edges" />
+
+Chọn **Edge** để highlight. Hai endpoint và degree của chúng hiện dưới Canvas. Projection cache vẫn báo 8 dù 12 edge cần đọc tổng cộng 24 endpoint.
+
+## Viết code từng bước
+
+### Bước 1 — Edge chỉ giữ quan hệ giữa hai index
+
+Trong `include/lab.hpp`:
+
+```cpp title="include/lab.hpp — một edge không sao chép tọa độ"
+struct Edge {
+    std::size_t from{};
+    std::size_t to{};
+};
+```
+
+Sau đó khai báo topology là `constexpr` vì nó không đổi trong runtime:
+
+```cpp title="include/lab.hpp — topology 12 cạnh của cube"
+inline constexpr std::array<Edge, 12> kCubeEdges{{
+    {0, 1},
+    {1, 2},
+    {2, 3},
+    {3, 0},
+    {4, 5},
+    {5, 6},
+    {6, 7},
+    {7, 4},
+    {0, 4},
+    {1, 5},
+    {2, 6},
+    {3, 7},
+}};
+```
+
+Các dòng được nhóm theo đúng ba hàng trong sơ đồ. Định dạng này ngắn vì dữ liệu lặp có cấu trúc, không phải vì ta cố nén logic khó đọc.
+
+### Bước 2 — Kiểm tra bounds trước khi dùng index
+
+Một typo `{7,8}` sẽ đọc ra ngoài array. Tách guard thành hàm thuần:
+
+```cpp title="include/lab.hpp — hợp đồng tối thiểu của edge"
+inline bool isValidEdge(Edge edge) {
+    return edge.from < kCubeVertexCount &&
+        edge.to < kCubeVertexCount &&
+        edge.from != edge.to;
+}
+```
+
+Điều kiện cuối loại self-edge như `{3,3}`. Test cuối project còn kiểm tra edge trùng và degree.
+
+### Bước 3 — Visibility thuộc endpoint, không thuộc edge list
+
+Edge hợp lệ về index vẫn có thể không vẽ được nếu một endpoint ở ngoài frustum:
+
+```cpp title="include/lab.hpp — một edge chỉ visible khi cả hai endpoint visible"
+inline bool isProjectedEdgeVisible(const ProjectedCube& cube, Edge edge) {
+    if (!isValidEdge(edge)) {
+        return false;
+    }
+    return cube.vertices[edge.from].status == ProjectionStatus::Visible &&
+        cube.vertices[edge.to].status == ProjectionStatus::Visible;
+}
+```
+
+Ta bỏ toàn bộ edge trong trường hợp này. Cắt edge tại near plane là một thuật toán khác và sẽ được xây ở Project 18.
+
+### Bước 4 — Dùng lại cache khi duyệt edge
+
+Trong `src/main.cpp`, không gọi `projectPerspective` bên trong loop:
+
+```cpp title="src/main.cpp — edge chỉ đọc hai entry đã project"
+for (const lab::Edge edge : lab::kCubeEdges) {
+    if (!lab::isProjectedEdgeVisible(cube, edge)) {
+        continue;
+    }
+    const lab::Vec2 from = cube.vertices[edge.from].screen;
+    const lab::Vec2 to = cube.vertices[edge.to].screen;
+    drawLine(
+        pixels,
+        width,
+        height,
+        int(std::lround(from.x)),
+        int(std::lround(from.y)),
+        int(std::lround(to.x)),
+        int(std::lround(to.y)),
+        rgba(132, 169, 255)
+    );
+}
+```
+
+Mười hai edge đọc 24 endpoint, nhưng đó chỉ là 24 lần truy cập array. Perspective divide vẫn xảy ra đúng tám lần ở `projectCube`.
+
+### Bước 5 — Vẽ edge trước marker
+
+Trong render loop, gọi `drawFlatEdges` trước `drawVertexMarkers`:
+
+```cpp title="src/main.cpp — line nằm dưới marker"
+drawFlatEdges(pixels, width, height, projected);
+drawVertexMarkers(pixels, width, height, projected);
+```
+
+Marker được vẽ sau sẽ che đầu line và làm từng vertex dễ nhận biết. Thứ tự này chỉ liên quan presentation, không thay topology.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy kết quả cuối bài 2"
+cmake --build build --config Debug --target project_13_checkpoint_2
+```
+
+Title bar phải báo `8 cached projections`, `12/12 visible edges` và `topology valid`. Hình có hai vòng bốn cạnh cùng bốn đoạn nối. Nếu xuất hiện đường chéo, đối chiếu edge index với bảng đầu bài trước khi nhìn vào Bresenham.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay `{3,0}` bằng `{3,1}`. Một mặt có đường chéo; degree của vertex 0 giảm còn 2, vertex 1 tăng thành 4.
+2. Project lại `worldVertices[edge.from]` và `worldVertices[edge.to]` trong loop. Hình không đổi, nhưng số perspective divide tăng từ 8 lên 24 mỗi frame.
+3. Bỏ visibility guard rồi đẩy cube qua camera. Code đọc `screen` của endpoint không hợp lệ và line có thể nhảy qua framebuffer.
+
+## Tự kiểm tra kết quả
+
+- Edge list có đúng 12 cặp và không có self-edge.
+- Mọi index nằm trong `[0,8)`; không có cặp trùng dù đảo chiều.
+- Degree của cả tám vertex đều bằng 3.
+- Cube mặc định có 12 edge visible nhưng projection count vẫn bằng 8.
+- Một vertex invalid làm đúng ba edge incident bị bỏ.
+
+## Bài tập mở rộng
+
+Viết hàm nhận hai index và tìm edge tương ứng mà không quan tâm chiều. Kiểm tra `findEdge(0,1)` và `findEdge(1,0)` trả cùng một entry.
+
+Bài sau sẽ rotate toàn bộ `CubeVertices`. Edge list không cần sửa một dòng nào, vì rotation đổi vị trí chứ không đổi topology.

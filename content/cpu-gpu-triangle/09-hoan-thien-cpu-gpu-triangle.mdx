@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện CPU/GPU Triangle
+
+## Vấn đề cần giải quyết
+
+Mỗi stage riêng đã chạy, nhưng một project hoàn chỉnh còn phải giữ đúng lifecycle khi reset, resize, shader lỗi hoặc người dùng thoát. Bài cuối không thêm thuật toán đồ họa mới; nó biến các checkpoint thành một ứng dụng có thể kiểm chứng và một bộ source có thể build độc lập.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bản final không ghép code bằng cách dồn mọi thứ vào `main`. Nó giữ state mô phỏng, tài nguyên GPU, framebuffer CPU và validation ở đúng vai trò để từng phần vẫn có thể kiểm tra riêng.
+
+<InteractiveLab demo="cpu-gpu-triangle" mode="pipeline-validation" />
+
+## Viết code từng bước
+
+### Bước 1 — Ghép update và render mà không trộn state
+
+Input chỉ sửa `Transform2D`, `paused`, `smoothColor` hoặc đặt `probeRequested`. Update tiến angle. Render dùng cùng snapshot transform cho CPU framebuffer và GPU uniforms trong một frame.
+
+```cpp title="src/main.cpp — fixed angle step"
+if (!paused) {
+    transform.angleRadians += deltaSeconds * 0.5F;
+}
+if (singleStep) {
+    transform.angleRadians += kFixedAngleStep;
+}
+```
+
+Không có CPU angle và GPU angle riêng. Nếu tách hai biến, pause/step có thể làm chúng lệch dù công thức transform đúng.
+
+### Bước 2 — Giữ từng validation có tên
+
+```cpp title="include/pipeline.hpp — PipelineValidationReport"
+struct PipelineValidationReport {
+    bool vertexLayout{};
+    bool transformOrder{};
+    bool cpuRoundTrip{};
+    bool gpuRoundTrip{};
+    bool centroidWeights{};
+    bool deterministicRaster{};
+    bool rgba8Tolerance{};
+};
+```
+
+Các check này chạy bằng code CPU thuần nên CTest không mở window. Runtime `P` bổ sung bằng chứng từ GPU thật nhưng không thay thế unit tests.
+
+### Bước 3 — Cleanup theo dependency
+
+```cpp title="src/main.cpp — cleanup đúng thứ tự"
+cpuPresenter.destroy(gl);
+gpuTriangle.destroy(gl);
+destroyWindowAndContext(window, context);
+```
+
+Texture, VAO, VBO và program phải được xóa khi context còn sống. `destroyWindowAndContext` mới destroy context, window rồi `SDL_Quit`.
+
+## Ghép các phần lại
+
+Khi ba khối trên đứng đúng chỗ, `main` chỉ còn điều phối lifecycle: nhận input, cập nhật state, render CPU/GPU từ cùng snapshot, đo khi được yêu cầu rồi cleanup theo thứ tự ngược lúc tạo.
+
+### Build và chạy bản hoàn chỉnh
+
+```bash title="Terminal — nghiệm thu Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — nghiệm thu Release"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Chạy `project_33_final` rồi thử đủ `Space`, `N`, arrows, `Q/E`, `C`, `P`, `R`, resize và `Esc`. App pause mặc định; scale bị giới hạn để triangle không biến mất ngoài ý muốn.
+
+## Source hoàn chỉnh gồm những gì?
+
+- `include/pipeline.hpp`: contract CPU có thể test—vertex layout, transform, viewport mapping, barycentric raster và validation.
+- `include/gl_api.hpp`: tập OpenGL function pointers tối thiểu, load sau context.
+- `include/gpu_renderer.hpp`: shader diagnostics, VBO/VAO, texture presenter và readback.
+- `src/main.cpp`: lifecycle SDL/OpenGL cùng render hai panel.
+- `tests/tests.cpp`: test code thuần, không phụ thuộc GPU hoặc window.
+
+Phần “Mã hoàn chỉnh” bên dưới bài lấy trực tiếp từ final checkpoint. Đây chính là source trong ZIP, không phải bản rút gọn viết lại cho tài liệu.
+
+## Thử làm sai để hiểu đúng
+
+1. Destroy context trước `gpuTriangle.destroy`. Function pointers/resources không còn context hợp lệ.
+2. Giữ `probeRequested=true` sau readback. App vô tình đồng bộ CPU/GPU mỗi frame.
+3. Resize viewport nhưng không resize CPU texture. Panel trái méo hoặc upload lỗi.
+4. Chỉ chạy Release vì “GPU code không cần Debug”. Shader/runtime lifecycle vẫn cần cả hai cấu hình.
+5. Assert GPU pixel đúng trên edge. Test trở nên phụ thuộc coverage convention thay vì contract cần học.
+
+## Tự kiểm tra kết quả
+
+- [ ] OpenGL 3.3 Core context được tạo và loader chạy sau MakeCurrent.
+- [ ] Shader compile/link errors giữ stage name và info log.
+- [ ] `GpuVertex`, VBO, VAO và GLSL locations khớp nhau.
+- [ ] CPU texture trái và GPU triangle phải dùng cùng source/transform.
+- [ ] Solid/smooth mode đổi đồng thời ở hai pipeline.
+- [ ] Coordinate round-trip và barycentric centroid tests đạt.
+- [ ] `P` đọc interior probe sau draw với RGBA8 tolerance.
+- [ ] Resize/high-DPI cập nhật framebuffer, texture và viewports.
+- [ ] GPU resources được nhả trước context.
+- [ ] Starter, chín checkpoint và final build ở Debug/Release.
+- [ ] CTest, Canvas math tests và production website build đều đạt.
+
+## Bài tập mở rộng
+
+1. Thêm toggle wireframe bằng `glPolygonMode`, rồi vẽ CPU edges riêng mà không đổi fill oracle.
+2. Thêm second triangle dùng cùng VBO và kiểm draw range bằng `first/count`.
+3. Ghi OpenGL vendor/version, SDL video driver và framebuffer pixel density vào report tái lập.
+4. Thử một shader compile failure có chủ đích, chụp log rồi phục hồi source trước khi commit.
+
+Project 34 sẽ nâng cùng phép đối chiếu lên một cube: phím F1 chọn CPU renderer, F2 chọn GPU renderer. Nhờ Project 33, các từ context, shader, VBO, VAO, viewport và readback đã có điểm tựa cụ thể thay vì chỉ là boilerplate OpenGL.

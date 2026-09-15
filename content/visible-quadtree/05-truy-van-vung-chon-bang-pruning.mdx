@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Truy vấn vùng chọn bằng pruning
+
+## Vấn đề cần giải quyết
+
+Tree đã đúng về storage nhưng chưa đem lại lợi ích cho vùng chọn. Query cần dùng bounds của node để quyết định: subtree này có thể chứa hit hay chắc chắn không liên quan? Nếu không overlap, ta bỏ qua cả node lẫn mọi hậu duệ—đó là phần công việc Quadtree tiết kiệm.
+
+Node overlap chưa có nghĩa mọi particle bên trong đều là hit. Bounds của leaf có thể rộng hơn selection; vì vậy candidates vẫn phải qua exact `pointInsideSelection`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Traversal có ba trường hợp:
+
+1. Node không overlap selection: tăng `prunedNodes` rồi return.
+2. Internal node overlap: gọi query cho bốn children.
+3. Leaf overlap: tăng `visitedLeaves`, rồi exact-test từng particle index.
+
+`visitedNodes` mô tả traversal work. `candidatesChecked` mô tả geometry work. Hai con số không thay thế nhau: capacity nhỏ có thể giảm candidates nhưng làm tree sâu và tăng nodes phải thăm.
+
+<InteractiveLab demo="visible-quadtree" mode="quadtree-query" />
+
+Kéo một selection nhỏ qua vùng trống và qua cụm đông. Leaf xanh là những leaf overlap; point vàng mới là hit. Để ý candidates thay đổi theo density dù selection có cùng kích thước.
+
+## Viết code từng bước
+
+### Bước 1 — Workspace ghi rõ từng loại công việc
+
+```cpp title="include/lab.hpp — kết quả một Quadtree query"
+struct QuadtreeQueryResult {
+    std::vector<std::size_t> hitIndices{};
+    std::size_t visitedNodes{};
+    std::size_t prunedNodes{};
+    std::size_t visitedLeaves{};
+    std::size_t candidatesChecked{};
+};
+```
+
+Workspace được tái sử dụng giữa các query. `hitIndices.clear()` giữ capacity đã cấp phát thay vì tạo vector mới trong mỗi frame.
+
+### Bước 2 — Prune trước khi xét node type
+
+```cpp title="include/lab.hpp — bỏ subtree không overlap"
+const QuadtreeNode& node = tree.nodes[nodeIndex];
+++result.visitedNodes;
+if (!boxesOverlap(node.bounds, selectionBounds(selection))) {
+    ++result.prunedNodes;
+    return;
+}
+```
+
+Nếu đặt overlap test sau recursion, ta vẫn thăm toàn bộ descendants và mất ý nghĩa của spatial index.
+
+### Bước 3 — Internal node chuyển câu hỏi xuống children
+
+```cpp title="include/lab.hpp — recurse bốn children"
+if (!node.isLeaf()) {
+    for (const std::size_t childIndex : node.children) {
+        queryQuadtreeNode(tree, particles, selection, childIndex, result);
+    }
+    return;
+}
+```
+
+Không cần tự lọc child trước vòng lặp. Mỗi lần gọi bắt đầu bằng cùng overlap test, giữ logic pruning ở một chỗ.
+
+### Bước 4 — Exact-test candidates trong leaf
+
+```cpp title="include/lab.hpp — leaf narrow phase"
+++result.visitedLeaves;
+for (const std::size_t particleIndex : node.particleIndices) {
+    ++result.candidatesChecked;
+    if (pointInsideSelection(particles[particleIndex].position, selection)) {
+        result.hitIndices.push_back(particleIndex);
+    }
+}
+```
+
+`candidatesChecked` tăng trước exact test. Nhờ vậy readout phân biệt leaf occupancy với số hit thực.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint query"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_5
+```
+
+Title báo visited, pruned, leaves, candidates và hits. Kéo selection về một góc nhỏ; candidates phải thấp hơn 100.000.
+
+## Thử làm sai để hiểu đúng
+
+1. Xóa overlap branch. Hit set vẫn đúng nhưng visited nodes tiến tới toàn bộ tree; khôi phục early return để lấy lại pruning.
+2. Thêm toàn bộ indices của leaf overlap vào hits. Selection nhỏ chọn cả vùng ngoài rectangle; trả lại exact point test.
+3. Không reset counters giữa hai query. Số liệu tăng mãi dù selection đứng yên; xóa hit list và đặt counters về 0 ở entry function.
+
+## Tự kiểm tra kết quả
+
+- Query reset workspace trước mỗi traversal.
+- Root được tính là một visited node.
+- Node không overlap dừng ngay và tăng pruned count.
+- Internal node không giữ candidates; nó chỉ recurse children.
+- Leaf overlap tăng visitedLeaves đúng một lần.
+- candidates bằng tổng particle indices trong những leaf overlap.
+- Hit phải thỏa inclusive point-in-selection.
+- Selection nhỏ kiểm ít candidates hơn brute scans ở preset mặc định.
+
+## Bài tập mở rộng
+
+Thêm `maximumVisitedDepth` vào query result. So vùng chọn nằm trong cụm đông với vùng chọn cùng kích thước ở khoảng trống để xem traversal đi sâu khác nhau ra sao.
+
+Bài tiếp theo không tin query chỉ vì hình vẽ hợp lý; ta sẽ so mọi hit với brute-force oracle.

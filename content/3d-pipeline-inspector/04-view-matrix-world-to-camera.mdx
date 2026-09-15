@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# View matrix hoàn tác camera pose
+
+## Vấn đề cần giải quyết
+
+Checkpoint 3 đã đặt vertex vào world space, nhưng projection luôn giả định camera nằm tại origin và nhìn theo +Z. Project 14 giải quyết điều này bằng ba phép toán tường minh: trừ camera position, inverse yaw rồi inverse pitch. Bây giờ ta cần đưa đúng chuỗi đó vào Mat4 mà không thay đổi quy ước dấu hoặc rotation order.
+
+Điểm quan trọng: camera di chuyển không được sửa `worldPoint`. View matrix tạo một giá trị mới ở Camera stage.
+
+## Hiểu ý tưởng trước khi viết code
+
+View transform tường minh của Project 14 là:
+
+$$
+p_{camera}=R_x(pitch)\,R_y(-yaw)\,(p_{world}-camera.position)
+$$
+
+Phép trừ position có thể viết thành translation matrix với vector âm:
+
+$$
+V=R_x(pitch)\,R_y(-yaw)\,T(-camera.position)
+$$
+
+Do dùng column vector, `T(-position)` nằm gần world point nhất và được áp dụng trước. Đây là cùng thuật toán, chỉ thay cách biểu diễn.
+
+<InteractiveLab demo="pipeline3d" mode="pipeline-view" />
+
+## Viết code từng bước
+
+### Bước 1 — Camera chỉ giữ pose
+
+```cpp title="include/lab.hpp — camera state không chứa world geometry"
+struct Camera3D {
+    Vec3 position{};
+    double yaw{};
+    double pitch{};
+};
+```
+
+Không lưu sẵn `viewMatrix` trong struct ở project này. Matrix được dựng lại từ pose để tránh trạng thái cache cũ khi position hoặc angle thay đổi.
+
+### Bước 2 — Viết rotation X theo cùng quy ước thành phần
+
+```cpp title="include/lab.hpp — hai hàng quay Y và Z quanh trục X"
+matrix.at(1, 1) = cosine;
+matrix.at(1, 2) = -sine;
+matrix.at(2, 1) = sine;
+matrix.at(2, 2) = cosine;
+return matrix;
+```
+
+Matrix này cho $y'=cy-sz$ và $z'=sy+cz$, đúng với `rotateX` dùng làm đường tham chiếu.
+
+### Bước 3 — Ghép ba phép nghịch đảo
+
+```cpp title="include/lab.hpp — dựng View matrix từ camera pose"
+inline Mat4 viewMatrix(const Camera3D& camera) {
+    const Mat4 inverseTranslation = translationMatrix(multiply(camera.position, -1.0));
+    const Mat4 inverseYaw = rotationYMatrix(-camera.yaw);
+    const Mat4 inversePitch = rotationXMatrix(camera.pitch);
+    return multiply(inversePitch, multiply(inverseYaw, inverseTranslation));
+}
+```
+
+Tên biến ghi rõ ý nghĩa, nhờ vậy ta không phải đoán dấu âm thuộc về camera hay model.
+
+### Bước 4 — Chạy Model rồi mới View
+
+```cpp title="src/main.cpp — world point đi tiếp qua View"
+const lab::Vec4 worldPoint = lab::transform(lab::modelMatrix(model), lab::toPoint(localVertex));
+const lab::Vec4 cameraPoint = lab::transform(lab::viewMatrix(camera), worldPoint);
+```
+
+Hai dòng này chính là hai stage đầu của pipeline. `worldPoint` không bị ghi đè, nên inspector vẫn in được cả World và Camera.
+
+### Bước 5 — So với công thức tường minh
+
+```cpp title="include/lab.hpp — view transform không qua matrix để đối chiếu"
+inline Vec3 worldToCameraDirect(Vec3 worldPoint, const Camera3D& camera) {
+    const Vec3 relative = subtract(worldPoint, camera.position);
+    const Vec3 yawNeutral = rotateY(relative, -camera.yaw);
+    return rotateX(yawNeutral, camera.pitch);
+}
+```
+
+CTest dùng nhiều camera pose và yêu cầu `xyz(V × worldPoint)` trùng với hàm này. Nếu sai dấu yaw hoặc sai thứ tự, dữ liệu tổng quát sẽ bắt được ngay.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build View stage"
+cmake --build build --config Debug --target project_15_checkpoint_4 project_15_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Dùng `A/D`, `W/S` đổi camera position và `I/J/K/L` đổi pitch/yaw. World value phải giữ nguyên; Camera value đổi ngược chiều camera pose.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `translationMatrix(camera.position)` thay vì vector âm. Camera sang phải sẽ làm point cũng sang phải trong camera space; hoàn tác.
+2. Dùng `rotationYMatrix(camera.yaw)`. Test với yaw khác 0 sẽ sai ngay cả khi pose mặc định vẫn đúng.
+3. Đổi return thành `inverseYaw × inversePitch × inverseTranslation`. Với yaw và pitch cùng khác zero, View matrix không còn trùng đường direct.
+
+## Tự kiểm tra kết quả
+
+- Camera mặc định cho Camera value bằng World value.
+- Camera tăng X làm camera-space X của vertex giảm.
+- Camera tăng Z tiến gần model làm camera-space depth giảm.
+- Yaw/pitch chỉ thay Camera và các stage phía sau; Local/World giữ nguyên.
+- View matrix trùng `worldToCameraDirect` trong sai số $10^{-9}$.
+- Rail mở Camera nhưng Clip/NDC/Screen chưa được dùng để vẽ.
+
+## Bài tập mở rộng
+
+Viết `cameraToWorldMatrix` bằng các phép thuận và kiểm tra `cameraToWorldMatrix × viewMatrix` gần identity. Dùng test số, không chỉ nhìn 16 phần tử bằng mắt.
+
+Bài tiếp theo sẽ đưa Camera point qua Projection matrix và giải thích lý do Clip stage cần một `w` chưa được chia.

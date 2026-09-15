@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cập nhật particles trong AoS
+
+## Vấn đề cần giải quyết
+
+Ta đã có một triệu struct nằm liên tục trong vector, nhưng chúng vẫn đứng yên. Muốn nghiên cứu memory layout, trước hết cần một kernel đủ thật để lặp nhiều lần và đủ đơn giản để biết chính xác nó chạm field nào.
+
+Kernel đầu tiên sẽ cập nhật ba position từ ba velocity. Particle đi ra khỏi cạnh `1` sẽ quay lại phía `-1`, tương tự ở chiều ngược lại. Không có lực, collision hay random trong vòng lặp. Những phần đó chỉ làm câu hỏi về memory khó đọc hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với một bước thời gian `dt`, từng trục dùng cùng công thức:
+
+$$p_{new} = p_{old} + v \Delta t$$
+
+Sau đó ta wrap về đoạn `[-1,1]`. Vì velocity tối đa khoảng `0.35` và `dt = 1/120`, một bước chỉ đi khoảng `0.00292`, nên giá trị không thể nhảy qua cả hai cạnh trong cùng một bước.
+
+Một particle cần đọc sáu float: ba position cũ và ba velocity. Nó ghi lại ba position. Trong AoS, sáu giá trị này nằm ngay cạnh nhau. Đây là workload dùng gần như toàn bộ struct, vì vậy chưa có lý do để đoán SoA sẽ thắng.
+
+<InteractiveLab demo="memory-layout-race" mode="aos-layout" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết wrap thành hàm riêng
+
+```cpp title="include/particles.hpp — wrapCoordinate"
+inline float wrapCoordinate(float value) {
+    float wrapped = value;
+    if (wrapped > kWorldMaximum) {
+        wrapped -= kWorldMaximum - kWorldMinimum;
+    }
+    if (wrapped < kWorldMinimum) {
+        wrapped += kWorldMaximum - kWorldMinimum;
+    }
+    return wrapped;
+}
+```
+
+Hai nhánh được viết đầy đủ để người đọc thấy chính xác cạnh nào đang xử lý. Hàm không clamp vào biên: particle đi quá `1.0` một đoạn sẽ xuất hiện ở `-1.0` cộng đúng đoạn dư đó.
+
+### Bước 2 — Duyệt AoS theo thứ tự lưu trữ
+
+```cpp title="include/particles.hpp — integrateAoS"
+inline void integrateAoS(std::span<ParticleAoS> particles, float deltaSeconds) {
+    for (ParticleAoS& particle : particles) {
+        particle.positionX = wrapCoordinate(
+            particle.positionX + particle.velocityX * deltaSeconds
+        );
+        particle.positionY = wrapCoordinate(
+            particle.positionY + particle.velocityY * deltaSeconds
+        );
+        particle.positionZ = wrapCoordinate(
+            particle.positionZ + particle.velocityZ * deltaSeconds
+        );
+    }
+}
+```
+
+`std::span` cho hàm nhìn thấy một dải particle nhưng không sở hữu hoặc cấp phát lại vector. Bên trong hot loop không có `push_back`, `new`, logging hay SDL API.
+
+### Bước 3 — Chỉ update khi được yêu cầu
+
+Checkpoint khởi động ở trạng thái pause. `Space` chạy liên tục; `N` tiến đúng một bước:
+
+```cpp title="src/main.cpp — AoS update"
+if (!paused || singleStep) {
+    lab::integrateAoS(particlesAoS, kFixedDeltaSeconds);
+}
+```
+
+Pause mặc định rất quan trọng với project hiệu năng. Mở trang hoặc chạy executable không được tự động chiếm CPU vô hạn khi người học còn đang đọc readout.
+
+## Ghép các phần lại
+
+Event loop quyết định **khi nào** update. `integrateAoS` quyết định **update như thế nào**. Renderer đọc working state sau update nhưng không nằm trong kernel. Nhờ đó bài 3 có thể gọi chính hàm này trong một benchmark không mở window.
+
+Khi nhấn `R`, `particlesAoS = source` trả toàn bộ một triệu phần tử về seed ban đầu. Không gọi PRNG lần nữa, nên reset và benchmark dùng cùng byte input.
+
+## Thử làm sai để hiểu đúng
+
+1. Đưa `SDL_RenderPresent` vào trong vòng `for (ParticleAoS&)`. Chương trình gần như dừng lại vì bạn present một triệu lần; đây không còn là memory-layout benchmark.
+2. Dùng `positionX = std::clamp(positionX, -1, 1)`. Particle chạm cạnh sẽ đứng yên ở đó thay vì quay lại phía đối diện.
+3. Sinh random velocity mới trong mỗi bước. Hai layout sau này sẽ không thể nhận cùng input trừ khi bạn quản lý PRNG cực kỳ cẩn thận.
+4. Chỉ update các particle được renderer lấy mẫu. Hình vẫn chuyển động nhưng workload đã giảm từ một triệu xuống tối đa 40.000.
+
+## Tự kiểm tra kết quả
+
+- [ ] `N` làm particle sample dịch chuyển đúng một bước.
+- [ ] `Space` chạy/dừng mà không tái tạo vector.
+- [ ] `R` đưa state về đúng source ban đầu.
+- [ ] Sau hàng trăm bước, mọi position vẫn nằm trong `[-1,1]`.
+- [ ] Particle count và velocity không đổi sau integrate.
+- [ ] Target `project_32_checkpoint_2` build và chạy được.
+
+## Bài tập mở rộng
+
+1. Viết test cho particle bắt đầu ở `0.999F`, velocity dương và kiểm phần dư sau wrap.
+2. Đếm số float load/store về mặt thuật toán trong một bước đầy đủ.
+3. Thử `dt = 10` và giải thích vì sao hàm wrap hiện tại không còn đủ tổng quát.
+
+Bài sau sẽ đo AoS một cách có tên và có checksum. Ta vẫn chưa thêm SoA, vì thay layout và benchmark cùng lúc sẽ khiến lỗi khó truy ra.

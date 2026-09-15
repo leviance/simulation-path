@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép ambient, material và màu pixel
+
+## Vấn đề cần giải quyết
+
+Diffuse bằng zero làm mặt quay lưng đèn đen tuyệt đối. Trong một renderer vật lý hơn, ánh sáng phản xạ từ môi trường có thể vẫn chiếu tới mặt đó. Project 19 chưa mô phỏng nhiều lần phản xạ; ta dùng một mức **ambient** nhỏ để hình còn đọc được.
+
+Đồng thời cần tách hai câu hỏi: bề mặt vốn có màu gì, và frame này nó nhận bao nhiêu ánh sáng? `Material` giữ `baseColor`; phép lighting trả `intensity`; chỉ sau đó ta mới nhân từng channel.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng mô hình tối giản:
+
+$$
+intensity=clamp(ambient+diffuseStrength\times diffuse,0,1)
+$$
+
+$$
+shadedColor=baseColor\times intensity
+$$
+
+Với `ambient=0.16` và `diffuseStrength=0.84`, face không nhận diffuse còn 16% màu gốc; face nhận diffuse bằng 1 trở về đúng 100% baseColor.
+
+<InteractiveLab demo="lambert" mode="lambert-material" />
+
+## Viết code từng bước
+
+### Bước 1 — Để material nói rõ các hệ số thuộc bề mặt
+
+```cpp title="include/lab.hpp — material tối thiểu cho flat shading"
+struct Material {
+    Color baseColor{};
+    double ambient{0.16};
+    double diffuseStrength{0.84};
+};
+
+struct LightingSample {
+    double dotValue{};
+    double diffuse{};
+    double intensity{};
+    Color shadedColor{};
+};
+```
+
+`LightingSample` giữ cả kết quả trung gian. Final có thể đưa chúng lên title bar; tests kiểm từng bước thay vì chỉ so một màu cuối khó chẩn đoán.
+
+### Bước 2 — Nhân màu nhưng chưa làm tròn byte
+
+```cpp title="include/lab.hpp — scale ba channel bằng cùng intensity"
+inline Color multiplyColor(Color color, double intensity) {
+    return {
+        std::clamp(color.red * intensity, 0.0, 255.0),
+        std::clamp(color.green * intensity, 0.0, 255.0),
+        std::clamp(color.blue * intensity, 0.0, 255.0),
+    };
+}
+```
+
+Màu vẫn dùng `double`. Nếu làm tròn ở mỗi stage, nhiều phép blend hoặc interpolation về sau sẽ tích lũy sai số. `toByte` chỉ được gọi đúng lúc ghi framebuffer.
+
+### Bước 3 — Tính sample theo thứ tự có thể đọc lại
+
+```cpp title="include/lab.hpp — dot, diffuse, intensity rồi shadedColor"
+inline LightingSample shadeMaterial(
+    Vec3 unitNormal,
+    const DirectionalLight& light,
+    const Material& material
+) {
+    LightingSample sample{};
+    sample.dotValue = dot(normalize(unitNormal), light.surfaceToLight);
+    sample.diffuse = std::max(0.0, sample.dotValue);
+    sample.intensity = std::clamp(
+        material.ambient + material.diffuseStrength * sample.diffuse,
+        0.0,
+        1.0
+    );
+    sample.shadedColor = multiplyColor(material.baseColor, sample.intensity);
+    return sample;
+}
+```
+
+Đây là phiên bản dài hơn một biểu thức gộp, nhưng người học có thể đặt breakpoint ở từng dòng và readout có dữ liệu đúng tên.
+
+### Bước 4 — Chỉ đổi sang byte ở rìa framebuffer
+
+```cpp title="src/main.cpp — pack màu sau khi lighting hoàn tất"
+std::uint32_t packedColor(lab::Color color) {
+    return rgba(toByte(color.red), toByte(color.green), toByte(color.blue));
+}
+```
+
+`rgba` và `putPixel` không biết material hay light. Ranh giới này giữ renderer đơn giản: phần lighting tạo màu, phần framebuffer chỉ lưu màu.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint material"
+cmake --build build --config Debug --target project_19_checkpoint_5
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Trong lab, kéo Ambient về 0 để thấy mặt quay lưng đen; tăng lên 0.5 để thấy hình phẳng hơn vì chênh lệch sáng–tối giảm. `baseColor` không đổi trong cả hai trường hợp.
+
+## Thử làm sai để hiểu đúng
+
+1. Cộng ambient thẳng vào từng channel, chẳng hạn `red + 0.16`. Đây là trộn đơn vị 0–255 với hệ số 0–1; ambient phải tham gia intensity.
+2. Dùng `baseColor + lightColor` rồi clamp. Màu nhanh chóng cháy trắng và không còn tỷ lệ với góc; nhân color với intensity.
+3. Ép `intensity` sang `uint8_t` trước khi nhân. Mọi giá trị dưới 1 thành zero; giữ phép tính ở `double`.
+4. Đặt `ambient=0.3`, `diffuseStrength=1.0` nhưng bỏ clamp. Face thẳng đèn vượt baseColor; nếu muốn HDR sau này cần pipeline khác, còn Project 19 giữ `[0,1]`.
+
+## Tự kiểm tra kết quả
+
+- `LightingSample` giữ dot thô, diffuse đã clamp, intensity và shadedColor.
+- Diffuse zero cho intensity đúng bằng ambient.
+- Với `ambient + diffuseStrength = 1`, diffuse one giữ nguyên baseColor.
+- Intensity luôn trong `[0,1]`; color channel luôn trong `[0,255]`.
+- Làm tròn byte chỉ xảy ra khi pack RGBA cho framebuffer.
+
+## Bài tập mở rộng
+
+Cho bốn face dùng bốn cặp `ambient/diffuseStrength` khác nhau nhưng giữ cùng baseColor. Quan sát material có thể làm hai mặt cùng góc nhận độ sáng khác nhau; sau đó trả source về thông số chung để tiếp tục bài 6.
+
+Tới đây lighting đã đúng cho một mesh đứng yên. Bài tiếp theo xử lý trường hợp thực tế: geometry xoay, normal phải xoay theo và một số face quay lưng camera cần được loại.

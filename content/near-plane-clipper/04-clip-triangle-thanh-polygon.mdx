@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cắt triangle thành polygon 0–4 đỉnh
+
+## Vấn đề cần giải quyết
+
+Ta đã biết vertex nào inside và tìm được giao điểm của một cạnh crossing. Phần còn khó là **thứ tự thêm vertex**. Một tập điểm đúng nhưng sai thứ tự sẽ tự cắt khi nối thành polygon, đổi winding hoặc tạo triangle fan chồng lên nhau.
+
+Sutherland–Hodgman giải quyết việc này bằng cách đi quanh biên input đúng một vòng và xây output theo cùng thứ tự.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi cạnh có hướng `previous → current` rơi vào một trong bốn trường hợp:
+
+| Previous | Current | Thêm vào output |
+|---|---|---|
+| inside | inside | `current` |
+| inside | outside | `intersection` |
+| outside | inside | `intersection`, rồi `current` |
+| outside | outside | không thêm |
+
+Triangle là vòng kín `A→B→C→A`. Vì vậy vòng lặp khởi đầu với `previous=C`, sau đó lần lượt lấy `current=A`, `B`, `C`. Cạnh đóng vòng không cần một đoạn code đặc biệt.
+
+<InteractiveLab demo="near-plane" mode="near-polygon" />
+
+## Viết code từng bước
+
+### Bước 1 — Biểu diễn đúng giới hạn output
+
+```cpp title="include/lab.hpp — polygon tối đa bốn vertex"
+struct ClippedPolygon {
+    std::array<ClipVertex, 4> vertices{};
+    std::size_t count{};
+};
+
+inline void appendVertex(ClippedPolygon& polygon, const ClipVertex& vertex) {
+    if (polygon.count < polygon.vertices.size()) {
+        polygon.vertices[polygon.count] = vertex;
+        ++polygon.count;
+    }
+}
+```
+
+Cắt một triangle bằng **một** plane chỉ có thể giữ ba vertex hoặc thay một vertex ngoài bằng hai giao điểm, nên bốn là capacity đủ. `count` nói phần nào của array đang có dữ liệu hợp lệ.
+
+### Bước 2 — Khởi tạo bằng cạnh đóng vòng
+
+```cpp title="include/lab.hpp — chuẩn bị C→A trước lần lặp đầu"
+const std::array<ClipVertex, 3> input{triangle.a, triangle.b, triangle.c};
+ClippedPolygon output{};
+
+ClipVertex previous = input.back();
+bool previousInside = isInsideNearPlane(previous, nearPlane, epsilon);
+```
+
+Nếu đặt `previous=A`, lần lặp đầu xử lý cạnh A→A vô nghĩa và bỏ mất C→A. Đây là lỗi off-by-one topology rất dễ bị che ở preset all-inside.
+
+### Bước 3 — Viết bốn trường hợp bằng ba nhánh thẳng
+
+```cpp title="include/lab.hpp — một bước Sutherland–Hodgman"
+if (currentInside && !previousInside) {
+    appendVertex(output, intersectNearPlane(previous, current, nearPlane));
+}
+if (currentInside) {
+    appendVertex(output, current);
+}
+if (!currentInside && previousInside) {
+    appendVertex(output, intersectNearPlane(previous, current, nearPlane));
+}
+```
+
+Ba `if` độc lập diễn tả bảng trên rõ hơn một cây `if/else` lồng sâu. Với out→in, hai nhánh đầu cùng chạy và thêm đúng `intersection, current`. Với in→out, chỉ nhánh cuối chạy.
+
+### Bước 4 — Tiến previous sau khi đã xử lý cạnh
+
+```cpp title="include/lab.hpp — chuẩn bị cạnh kế tiếp"
+previous = current;
+previousInside = currentInside;
+```
+
+Hai biến phải tiến cùng nhau. Tính lại `previousInside` từ một vertex khác hoặc cập nhật nó trước các nhánh sẽ làm transition trong bảng không còn đúng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint polygon clipping"
+cmake --build build --config Debug --target project_18_checkpoint_4
+```
+
+Trong Canvas, chọn one-outside rồi nhấn “Tiến một cạnh” từ `0/3` tới `3/3`. Theo dõi output list lớn dần. Chạy executable và thử năm preset; đường xanh là polygon cuối, đường xám là triangle gốc.
+
+## Thử làm sai để hiểu đúng
+
+1. Khởi tạo `previous=input.front()`. Cạnh C→A biến mất và one-outside có count sai; trả về `input.back()`.
+2. Ở out→in chỉ thêm `current`. Polygon đi thẳng qua vùng bị cắt thay vì bắt đầu tại plane; thêm intersection trước current.
+3. Ở in→out thêm cả `current`. Vertex outside lọt vào output và projection guard phải từ chối; chỉ thêm intersection.
+4. Sort output theo X sau vòng lặp. Thứ tự quanh biên bị phá ở triangle xoay; giữ nguyên thứ tự traversal.
+
+## Tự kiểm tra kết quả
+
+- All-inside tạo polygon 3 vertex và giữ thứ tự input.
+- One-outside tạo 4 vertex.
+- Two-outside tạo 3 vertex.
+- All-outside tạo 0 vertex.
+- Vertex on-plane không bị nhân đôi.
+- Mọi output vertex có Z không nhỏ hơn near quá `10⁻⁹`.
+- Polygon không vượt capacity bốn và không chứa NaN.
+
+## Bài tập mở rộng
+
+Thêm vào `ClippedPolygon` một mảng nhỏ ghi nguồn của từng output: `OriginalA/B/C` hoặc `Intersection`. Hiển thị nhãn nguồn cạnh marker, nhưng không dùng nhãn đó để điều khiển thuật toán.
+
+Bài tiếp theo sẽ đổi polygon lồi này về đúng đầu vào mà triangle rasterizer Project 16 đã biết xử lý.

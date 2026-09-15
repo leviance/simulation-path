@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo checker texture và lấy mẫu texel
+
+## Vấn đề cần giải quyết
+
+UV là tọa độ liên tục, còn texture là một array màu rời rạc. Trước khi nội suy UV trên triangle, ta cần một quy tắc hoàn chỉnh để biến `(u,v)` thành texel `(x,y)`: texture có kích thước bao nhiêu, UV bằng 1 đi đâu, và UV âm được clamp hay lặp lại?
+
+Ta dùng checker procedural thay vì đọc file ảnh để phần cần học không bị lẫn với image decoder. Bàn cờ có cạnh sắc nên sai lệch UV hiện ra rất rõ ở các bài sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với texture `width × height`, nearest sampling làm hai bước:
+
+1. đưa UV về miền hợp lệ theo address mode;
+2. đổi sang integer texel rồi clamp index cuối.
+
+Clamp dùng `clamp(u,0,1)`. Repeat dùng `u-floor(u)`, nên `-0.1` trở thành `0.9` thay vì một số âm. Với UV đúng bằng 1, clamp chọn texel cuối còn repeat quay về texel 0.
+
+<InteractiveLab demo="perspective-texture" mode="texture-sampling" />
+
+## Viết code từng bước
+
+### Bước 1 — Lưu texture theo row-major
+
+```cpp title="include/lab.hpp — ảnh nguồn nằm hoàn toàn trong CPU memory"
+struct Texture2D {
+    int width{};
+    int height{};
+    std::vector<Color> texels{};
+};
+```
+
+Giống framebuffer, texel `(x,y)` nằm tại `y*width+x`. Điểm khác là framebuffer là đích vẽ, còn texture là nguồn màu được sample.
+
+### Bước 2 — Sinh bàn cờ bằng parity của cell
+
+```cpp title="include/lab.hpp — checker texture có số ô độc lập resolution"
+const int cellX = x * cells / width;
+const int cellY = y * cells / height;
+Color color{236.0, 240.0, 248.0};
+if ((cellX + cellY) % 2 != 0) {
+    color = {38.0, 48.0, 72.0};
+}
+texture.texels[std::size_t(y) * std::size_t(width) + std::size_t(x)] = color;
+```
+
+Texture mặc định 64×64 nhưng có 8×8 ô. Resolution và số checker cell là hai khái niệm khác nhau; mỗi ô hiện rộng tám texel.
+
+### Bước 3 — Address UV trước khi chọn texel
+
+```cpp title="include/lab.hpp — clamp hoặc repeat có tên rõ"
+inline double addressCoordinate(double value, AddressMode mode) {
+    if (mode == AddressMode::clamp) {
+        return std::clamp(value, 0.0, 1.0);
+    }
+    return value - std::floor(value);
+}
+```
+
+Không dùng `%` trực tiếp với số âm. Công thức phần thập phân dương làm `-1.1`, `-0.1` và `0.9` cùng trỏ tới một vị trí lặp.
+
+### Bước 4 — Khóa index trong array
+
+```cpp title="include/lab.hpp — UV bằng 1 không được tạo index width"
+int x = int(std::floor(addressedU * double(texture.width)));
+int y = int(std::floor(addressedV * double(texture.height)));
+x = std::clamp(x, 0, texture.width - 1);
+y = std::clamp(y, 0, texture.height - 1);
+```
+
+Với clamp, `u=1` tạm tạo `x=width`, rồi bước cuối đưa nó về `width-1`. Với repeat, addressed U đã là 0 nên tự chọn texel đầu.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checker texture và test sampler"
+cmake --build build --config Debug --target project_20_checkpoint_2
+cmake --build build --config Debug --target project_20_tests
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Checkpoint 2 vẽ texture preview ở góc cửa sổ nhưng chưa phủ nó lên quad. Trong lab, kéo U/V vượt miền 0..1 rồi đổi clamp/repeat để thấy chính xác texel được chọn.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính `x=int(u*width)` rồi truy cập ngay. `u=1` đọc ngoài vector; luôn clamp index cuối hoặc định nghĩa mapping khác có test.
+2. Repeat bằng `std::fmod(value,1.0)` và giữ kết quả âm. UV `-0.1` tạo index âm; dùng `value-floor(value)`.
+3. Dùng framebuffer width khi sample texture. Resize window sẽ đổi pattern dù texture không đổi; sampler chỉ dùng kích thước `Texture2D`.
+4. Tạo checker texture lại mỗi frame. Dữ liệu nguồn bất biến bị cấp phát vô ích; tạo một lần trước event loop.
+
+## Tự kiểm tra kết quả
+
+- Texture 64×64 chứa đúng 4096 texel theo row-major.
+- Hai checker cell kề nhau trả màu khác nhau.
+- Clamp `(1,1)` chọn `(63,63)`; repeat `(1,1)` chọn `(0,0)`.
+- Repeat UV âm luôn tạo index trong bounds.
+- Resize cửa sổ không thay texture source hoặc kết quả của cùng UV.
+
+## Bài tập mở rộng
+
+Thêm address mode `mirrorRepeat`: đoạn 0..1 đi xuôi, 1..2 đi ngược. Viết test cho `u=-0.25`, `0.25`, `1.25`, `2.25` trước khi nối nó vào UI.
+
+Bài tiếp theo sẽ lấy barycentric weights tại pixel và dùng sampler này để tô checker lên quad bằng cách affine — cách chạy được nhưng sai khi mặt phẳng nghiêng.

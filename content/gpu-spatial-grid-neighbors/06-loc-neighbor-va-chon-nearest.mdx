@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lọc chính xác và chọn hàng xóm gần nhất
+
+## Bài toán cần giải quyết
+
+Những cell vừa tìm chỉ cho ta danh sách candidate. Ở bốn góc của hình chữ nhật sẽ có các điểm nằm ngoài bán kính, và danh sách còn chứa chính particle đang truy vấn. Vì vậy shader phải loại `self`, so distance squared với `radius²`, rồi mới tăng số hàng xóm và cập nhật nearest.
+
+Exact pass cần ba quy tắc tách bạch: bỏ self, so distance squared với `radiusSquared`, rồi cập nhật nearest bằng distance/index tie-break.
+
+## Theo dõi một particle đi qua grid
+
+Ta giữ `nearestDistanceSquared = infinity` và `nearestIndex = UINT_MAX` lúc bắt đầu. Candidate $j$ tốt hơn khi:
+
+$$
+d_j^2 < d_{best}^2
+$$
+
+hoặc hai distance bằng nhau trong epsilon và $j < bestIndex$. Quy tắc phụ làm output độc lập với thứ tự indices bên trong cell.
+
+<InteractiveLab demo="gpu-spatial-grid-neighbors" mode="exact-neighbors" />
+
+Particle đỏ là query, vùng vàng là candidate cells, các particle vàng nhỏ mới là exact neighbors. Hãy tìm candidate nằm trong rectangle nhưng ngoài circle; đó là điểm broad phase phải giao cho exact phase loại đi.
+
+## Xây từng phần
+
+### Bước 1 — Kiểm tra khoảng cách rồi mới tăng số hàng xóm
+
+```glsl title="shaders/find_neighbors.comp — exact radius test"
+vec2 delta = positions[candidate] - query;
+float candidateDistanceSquared = dot(delta, delta);
+if (candidateDistanceSquared > radiusSquared) {
+    continue;
+}
+++summary.neighborCount;
+```
+
+`<=` được giữ bằng cách chỉ continue khi `>`. Particle đúng trên circle boundary là neighbor.
+
+### Bước 2 — Quy tắc hòa không được phụ thuộc thứ tự duyệt
+
+```cpp title="include/grid_math.hpp — quy tắc chọn hàng xóm gần nhất ổn định"
+if (candidateDistanceSquared + tieEpsilon < currentDistanceSquared) {
+    return true;
+}
+const bool distancesTie = std::abs(candidateDistanceSquared - currentDistanceSquared) <= tieEpsilon;
+return distancesTie && candidateIndex < currentIndex;
+```
+
+Shader `isBetter` dùng cùng điều kiện. Ta không sort `sortedIndices` chỉ để nearest ổn định.
+
+### Bước 3 — Viết bản CSR trên CPU theo cùng quy tắc
+
+```cpp title="include/grid_math.hpp — exact CSR filter"
+const float candidateDistance = distanceSquared(query, positions[candidateIndex]);
+if (candidateDistance > radiusSquared) {
+    continue;
+}
+++summary.neighborCount;
+if (betterNeighbor(
+        candidateDistance,
+        candidateIndex,
+        summary.nearestDistanceSquared,
+        summary.nearestIndex
+    )) {
+```
+
+Bản CSR trên CPU dùng để kiểm cách duyệt grid; bản vét cạn dùng một vòng lặp khác để tránh cả hai cùng sao chép lỗi tính vùng cell.
+
+### Bước 4 — Ghi toàn bộ kết quả một lần ở cuối shader
+
+```glsl title="shaders/find_neighbors.comp — owned output"
+neighborSummaries[particle] = summary;
+```
+
+Invocation không sửa summary của particle khác. Đây là khác biệt quan trọng với count/scatter, nơi nhiều invocation cùng sửa cell counter.
+
+## Chạy cả chuỗi xử lý
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_40_checkpoint_6 project_40_tests
+```
+
+CTest có bốn points: hai điểm cách query đúng 5 đơn vị, một điểm nằm trong candidate AABB nhưng ngoài circle. Neighbor count phải là 2 và nearest index phải là 1 vì tie-break.
+
+```bash title="Terminal — chạy exact-query tests"
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+## Cố tình làm hỏng grid
+
+1. Không bỏ `candidate == particle`. Nearest luôn là self với distance zero.
+2. So `distanceSquared <= radius`. Đơn vị không khớp và vùng nhận bị co sai.
+3. Dùng `< radiusSquared`. Particle nằm đúng trên biên sẽ cho kết quả khác nhau giữa CPU và GPU nếu bản CPU dùng `<=`.
+4. Cập nhật nearest chỉ khi distance nhỏ hơn tuyệt đối. Hai điểm đối xứng đổi nearest theo atomic scatter order.
+
+## Tự nghiệm thu
+
+- [ ] Self không tăng neighbor count và không thể thành nearest.
+- [ ] Candidate ở góc AABB nhưng ngoài circle bị loại.
+- [ ] Candidate đúng trên radius được nhận.
+- [ ] `visitedCandidates >= neighborCount` ở mọi particle.
+- [ ] Distance hòa chọn index nhỏ hơn dù đảo CSR order.
+- [ ] CPU brute force và CPU CSR query khớp trong CTest.
+
+## Hướng mở rộng
+
+1. Thêm `maximumNeighbors` và một cờ overflow; vẫn phải đếm total thật dù chỉ lưu K indices đầu.
+2. Tính average neighbor count bằng reduction của Project 39 mà không full summary readback.
+3. Mở rộng summary thành tổng vector từ query tới neighbors, chuẩn bị cho force accumulation.
+
+Bài 7 sẽ không nhìn từng kernel riêng lẻ nữa, mà kiểm toàn bộ đường đi của buffer và barrier giữa các pass.

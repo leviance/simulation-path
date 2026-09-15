@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Reduction và scan khác nhau ở đầu ra nào?
+
+## Điều khó nằm ở đâu?
+
+Trong Project 37, mỗi invocation tự tính `output[i]` từ đúng `input[i]` của nó. Reduction và prefix sum thì khác: một kết quả có thể phụ thuộc vào rất nhiều phần tử khác. Trước khi viết shader, ta cần hiểu thật rõ hai phép toán này trả về gì và viết một bản đối chiếu đơn giản trên CPU (**CPU oracle**).
+
+Trước khi nghĩ tới shader, ta phải trả lời dứt khoát hai hàm cần trả gì rồi ghi lại đáp án bằng code CPU độc lập. Với input `[3, 1, 4, 2]`:
+
+- reduction trả một scalar `10`;
+- exclusive scan trả `[0, 3, 4, 8]`.
+
+Số `4` ở input index 2 chưa được tính vào output index 2. Chính chữ *exclusive* tạo nên quy tắc này. Nếu không chốt rõ từ đầu, một shader inclusive scan vẫn có thể cho dãy tăng rất đẹp nhưng lại giải sai bài toán.
+
+## Đi qua thuật toán bằng một ví dụ nhỏ
+
+Gọi input là $x_0, x_1, \ldots, x_{N-1}$. Hai kết quả được định nghĩa bởi:
+
+$$
+\operatorname{reduce}(x)=\sum_{i=0}^{N-1}x_i
+$$
+
+$$
+\operatorname{exclusiveScan}(x)_i=\sum_{j=0}^{i-1}x_j,
+\qquad \operatorname{exclusiveScan}(x)_0=0
+$$
+
+Reduction thu cả mảng thành một giá trị; scan vẫn trả về N giá trị. Vì thế chúng có thể dùng chung phép cộng và ý tưởng cây song song, nhưng kiểu đầu ra không giống nhau.
+
+<InteractiveLab demo="gpu-reduction-prefix-sum" mode="reduction-scan-contract" />
+
+Kéo qua tám input nhỏ. Hãy đọc từng ô scan như câu “tổng trước khi tới đây”, không phải “tổng tới đây”. Cách đọc ấy tự nhiên hơn việc học thuộc inclusive/exclusive.
+
+## Chuyển ý tưởng thành code
+
+### Bước 1 — Dùng enum để phân biệt Reduction và Scan
+
+```cpp title="include/reduction_math.hpp — chọn phép toán"
+enum class Operation {
+    reduction,
+    exclusiveScan,
+};
+
+inline const char* operationName(Operation operation) {
+    if (operation == Operation::reduction) {
+        return "Reduction";
+    }
+    return "Exclusive Scan";
+}
+```
+
+`enum class` ngăn ta truyền nhầm một số nguyên không có nghĩa. Tên operation sẽ đi vào title, diagnostics và nhánh dispatch ở final.
+
+### Bước 2 — Viết bản reduction trên CPU bằng double
+
+```cpp title="include/reduction_math.hpp — cpuReduction"
+inline double cpuReduction(const std::vector<float>& input) {
+    double total = 0.0;
+    for (float value : input) {
+        total += static_cast<double>(value);
+    }
+    return total;
+}
+```
+
+Input vẫn là `float` như SSBO, nhưng biến tích lũy là `double`. Bản CPU cần làm mốc ổn định, không nên cố bắt chước thứ tự làm tròn của cây GPU.
+
+### Bước 3 — Viết exclusive scan trên CPU theo cách dễ đọc
+
+```cpp title="include/reduction_math.hpp — cpuExclusiveScan"
+inline std::vector<double> cpuExclusiveScan(const std::vector<float>& input) {
+    std::vector<double> output(input.size());
+    double runningTotal = 0.0;
+    for (std::size_t index = 0; index < input.size(); ++index) {
+        output[index] = runningTotal;
+        runningTotal += static_cast<double>(input[index]);
+    }
+    return output;
+}
+```
+
+Thứ tự hai dòng trong vòng lặp quyết định kết quả: ghi `runningTotal` **trước**, rồi mới cộng `input[index]`. Nếu đảo lại, hàm sẽ trở thành inclusive scan.
+
+### Bước 4 — Sinh dãy đầu vào có thể tái lập
+
+`makeDeterministicInput(count, seed)` băm `index` và `seed` thành float dương nhỏ. Cùng hai tham số luôn tạo cùng dãy, nên mismatch ở index 731.204 có thể được tái hiện sau khi reset.
+
+## Chạy checkpoint và đọc kết quả
+
+Bài 1 chưa cần compute shader. Chương trình tạo input, chạy hai hàm CPU rồi in một số mốc:
+
+```bash title="Terminal — checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_39_checkpoint_1 project_39_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Ví dụ nhỏ `[3,1,4,2]` nằm trong CTest; dãy một triệu phần tử giúp xác nhận việc sinh input và hai hàm CPU vẫn hoàn thành trong thời gian hợp lý.
+
+## Cố tình phá thuật toán
+
+1. Đổi thứ tự hai dòng trong `cpuExclusiveScan`. Output trở thành `[3,4,8,10]`: đó là inclusive scan, không phải một sai số nhỏ.
+2. Dùng `float runningTotal` trong bản CPU. Hàm vẫn chạy, nhưng kết quả không còn là mốc `double` độc lập để so với shader float.
+3. Sinh input bằng RNG có state toàn cục và không lưu seed. Một mismatch chỉ xuất hiện một lần rồi biến mất sau restart.
+4. Chỉ kiểm phần tử cuối của scan. Một offset sai ở giữa có thể bị phép cộng sau đó che bớt.
+
+## Checklist hoàn thành
+
+- [ ] `[3,1,4,2]` reduction thành `10`.
+- [ ] Exclusive scan của cùng input là `[0,3,4,8]`.
+- [ ] Output scan có cùng số phần tử với input và phần tử đầu bằng zero.
+- [ ] Bản CPU tích lũy bằng `double`, còn input vẫn là `float`.
+- [ ] Cùng count/seed tạo lại đúng cùng một dãy; seed khác làm dãy thay đổi.
+- [ ] Checkpoint 1 và CTest kết thúc trong timeout 20 giây.
+
+## Bài tập để hiểu sâu hơn
+
+1. Viết thêm inclusive scan CPU rồi biểu diễn nó từ exclusive scan bằng `inclusive[i] = exclusive[i] + input[i]`.
+2. Thêm phép `max reduction` và xác định identity thích hợp thay cho zero.
+3. Với mảng rỗng, quyết định rõ API nên trả gì và viết test trước khi sửa code.
+
+Bài 2 sẽ chưa viết shader. Ta sẽ vẽ chính xác GPU cần bao nhiêu tầng, bao nhiêu block và bao nhiêu ô zero padding cho `1.000.003` phần tử.

@@ -1,0 +1,131 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khởi tạo particle có thể tái lập và trải tuổi
+
+## Ta cần giải quyết điều gì?
+
+Đài phun chỉ trông tự nhiên khi các particle không bay giống hệt nhau. Mỗi hạt cần một vị trí xuất phát, hướng bay, tốc độ và lifetime riêng. Tuy nhiên, ta không dùng một random generator có state chung: thứ tự invocation trên GPU không cố định, nhiều invocation có thể cùng chạm vào state đó và lỗi cũng khó tái hiện. Thay vào đó, mỗi particle sẽ tự sinh giá trị từ `index`, `seed` và `spawnEpoch`.
+
+Checkpoint 2 dùng một hướng khác: random-like value là hàm thuần của `(index, channel, seed, spawnEpoch)`. Không có con trỏ RNG và không phụ thuộc particle nào chạy trước. Cùng input luôn tạo cùng output ở CPU lẫn GPU.
+
+## Theo chân một particle
+
+Ta cần nhiều số khác nhau cho cùng một index. `channel` đóng vai trò nhãn:
+
+- channel 0 chọn vị trí X trên emitter;
+- channel 1 chọn velocity X;
+- channel 2 chọn velocity Y;
+- channel 3 chọn lifetime;
+- channel 4 chọn age ban đầu.
+
+Một hàm trộn bit biến index, channel và seed thành `uint32`, rồi lấy 24 bit thấp để tạo số trong $[0,1]$. Đây không phải bộ sinh số dành cho mật mã. Nó chỉ cần nhanh, có thể tái lập (**deterministic**) và phân bố đủ tốt cho hình ảnh.
+
+Nếu mọi particle có age bằng 0, frame đầu chỉ có một dải hạt ở emitter. Ta “trải tuổi” từ 0 tới 92% lifetime rồi dùng phương trình chuyển động để đặt hạt vào vị trí tương ứng:
+
+$$
+p_x(a)=p_{x0}+v_xa,\qquad
+p_y(a)=p_{y0}+v_{y0}a+\frac{1}{2}ga^2
+$$
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-initialization" />
+
+Tắt “Trải age ban đầu” để thấy mọi sample cùng rời emitter. Bật lại rồi đổi seed: hình dạng thay đổi, nhưng cùng seed luôn trở về đúng cùng một fountain.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Tạo số giả ngẫu nhiên từ index và channel
+
+```cpp title="include/particle_math.hpp — random01"
+inline float random01(
+    std::size_t index,
+    std::uint32_t channel,
+    std::uint32_t seed = kParticleSeed
+) {
+    const std::uint32_t lowIndex = static_cast<std::uint32_t>(index);
+    const std::uint32_t bits = mixBits(lowIndex ^ (channel * 0x9e3779b9U) ^ seed);
+    return static_cast<float>(bits & 0x00ffffffU) / 16777215.0F;
+}
+```
+
+`channel` được nhân một hằng số lẻ lớn trước khi XOR, nên bốn thuộc tính không lấy lại cùng chuỗi bit. Mask 24 bit phù hợp độ chính xác mantissa của `float` và dễ viết giống hệt trong GLSL.
+
+### Bước 2 — Tạo trạng thái của particle khi vừa sinh ra
+
+```cpp title="include/particle_math.hpp — makeSpawnParticle"
+const float emitterX = -0.32F + random01(index, 0U, epochSeed) * 0.64F;
+const float velocityX = -1.45F + random01(index, 1U, epochSeed) * 2.90F;
+const float velocityY = 5.7F + random01(index, 2U, epochSeed) * 4.6F;
+const float lifetime = 1.8F + random01(index, 3U, epochSeed) * 2.8F;
+
+Particle particle{};
+particle.positionAge = {emitterX, 0.0F, 0.0F, 0.0F};
+particle.velocityLife = {velocityX, velocityY, 0.0F, lifetime};
+```
+
+Các khoảng số được viết thành biến có tên. Người học có thể đổi độ rộng emitter hoặc độ xòe velocity mà không phải giải mã một biểu thức dài. Lifetime luôn dương và age luôn zero ở spawn state.
+
+`spawnEpoch` được trộn vào seed. Cùng particle khi tái sinh ở hai thời điểm khác nhau sẽ có hướng mới; cùng index và epoch vẫn tái lập được trong validation.
+
+### Bước 3 — Phân bố tuổi để frame đầu đã có hình đài phun
+
+```cpp title="include/particle_math.hpp — makeInitialParticle"
+Particle particle = makeSpawnParticle(index, 0U, seed);
+const float ageFraction = random01(index, 4U, seed) * 0.92F;
+const float age = particle.velocityLife.w * ageFraction;
+
+particle.positionAge.x += particle.velocityLife.x * age;
+particle.positionAge.y +=
+    particle.velocityLife.y * age + 0.5F * kGravity * age * age;
+particle.velocityLife.y += kGravity * age;
+particle.positionAge.w = age;
+```
+
+Ta dùng công thức giải tích cho bước khởi tạo thay vì gọi integrator hàng trăm lần. Mục tiêu là dựng một trạng thái đầu hợp lý, không phải giả rằng nghiệm này thay thế update loop. Từ frame kế tiếp, mọi hạt lại đi qua `stepParticleCpu` hoặc compute shader.
+
+Hệ số `0,92` để lại một khoảng nhỏ trước khi hết vòng đời, nhờ đó ít particle phải tái sinh ngay ở frame đầu. Điều kiện sàn vẫn xử lý những quỹ đạo đã rơi thấp hơn camera.
+
+## Nối lại thành một bước mô phỏng
+
+Bài 2 thay `makeSpawnParticle` đơn giản của bài trước bằng quy trình khởi tạo có thể tái lập đầy đủ:
+
+```text
+index + seed
+    ↓ mixBits theo từng channel
+spawn position/velocity/lifetime
+    ↓ channel age riêng
+đưa particle tới age ban đầu bằng quỹ đạo giải tích
+    ↓
+CPU preview tiếp tục bằng semi-implicit Euler
+```
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_38_checkpoint_2
+```
+
+Hãy reset nhiều lần. Hình phải trở lại đúng vị trí ban đầu; nếu mỗi lần lại khác, trong chương trình vẫn còn một nguồn ngẫu nhiên chưa phụ thuộc vào seed.
+
+## Thử tạo lỗi
+
+1. Bỏ `channel` khỏi hash. Emitter X, velocity X, velocity Y và lifetime trở thành cùng một số đã scale; fountain tạo đường chéo có tương quan rất rõ.
+2. Dùng `spawnEpoch` lấy trực tiếp từ wall clock. Validation cùng input không còn tái lập được.
+3. Trải age nhưng chỉ tăng `positionAge.w`; vị trí vẫn ở emitter dù hạt được ghi là đã sống vài giây.
+4. Cập nhật position bằng gravity nhưng quên cập nhật velocity Y. Frame đầu nối không liên tục với step tiếp theo.
+5. Cho age đúng bằng lifetime. Một phần lớn hạt sẽ respawn ngay dispatch đầu, làm age spreading mất ý nghĩa.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] Cùng index/channel/seed tạo lại đúng cùng `random01`.
+- [ ] Hai channel khác nhau không lặp cùng giá trị ở các probe đã chọn.
+- [ ] Spawn state có age 0, lifetime dương và velocity Y hướng lên.
+- [ ] Initial state có age nhỏ hơn lifetime.
+- [ ] Position và velocity của initial state cùng tương ứng với age đã chọn.
+- [ ] Reset bằng cùng seed tạo cùng checksum/probe.
+- [ ] Đổi seed làm hình thay đổi nhưng không phá các invariant trên.
+
+## Nếu muốn thử thêm
+
+1. Thêm channel cho kích thước hạt nhưng chưa đổi record; tính point size trực tiếp từ index ở vertex shader sau này.
+2. Tạo hai emitter bằng cách dùng bit thấp của hash chọn vị trí trái/phải.
+3. Viết bảng 10 index đầu với emitter X, velocity và lifetime để tìm tương quan bất thường.
+
+Ta đã có dữ liệu đúng, nhưng chưa được phép cấp phát 5 triệu phần tử. Bài 3 sẽ tính chính xác số byte và hỏi driver trước khi tạo SSBO.

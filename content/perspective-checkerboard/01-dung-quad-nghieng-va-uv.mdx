@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng quad nghiêng và gắn UV
+
+## Vấn đề cần giải quyết
+
+Mục tiêu của Project 20 là dán một bàn cờ lên mặt phẳng 3D nghiêng. Nhưng “dán texture” không bắt đầu từ sampler; nó bắt đầu từ việc xác định **điểm nào trên bề mặt tương ứng với điểm nào trên ảnh**. Ta cần một quad có geometry rõ ràng, hai triangle dùng chung vertex và một cặp UV tại mỗi corner.
+
+Checkpoint đầu dựng lại đầy đủ window, renderer, CPU framebuffer và streaming texture. Sau đó nó project quad rồi vẽ wireframe cùng đường chéo chung. Chưa có ô cờ nào được tô: nếu silhouette, winding hoặc aspect ratio sai, ta muốn nhìn thấy lỗi đó trước khi texture che lên.
+
+## Hiểu ý tưởng trước khi viết code
+
+Position trả lời vertex nằm ở đâu trong camera space. UV trả lời vertex đó chạm vào đâu trên texture:
+
+$$
+TexturedVertex=(x,y,z,u,v)
+$$
+
+Project này dùng U tăng sang phải, V tăng xuống dưới. Bốn corner lần lượt nhận `(0,1)`, `(1,1)`, `(1,0)`, `(0,0)`. Quad được chia theo diagonal `0–2`; hai triangle phải tham chiếu đúng cùng vertex 0 và 2, không sao chép UV.
+
+<InteractiveLab demo="perspective-texture" mode="texture-quad" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt position và UV trong cùng một vertex
+
+```cpp title="include/lab.hpp — vertex mang geometry cùng texture coordinate"
+struct TexturedVertex {
+    Vec3 position{};
+    Vec2 uv{};
+};
+
+struct TexturedTriangle {
+    std::array<TexturedVertex, 3> vertices{};
+};
+```
+
+UV không phải dữ liệu trang trí đặt ở một array không liên quan. Clipping ở bài 7 sẽ sinh vertex mới; khi đó position và UV phải được nội suy bằng cùng tham số cạnh.
+
+### Bước 2 — Dựng quad bằng bốn vertex dùng chung
+
+```cpp title="include/lab.hpp — cạnh trái gần camera, cạnh phải ở xa"
+inline TexturedQuad makeTiltedQuad(double nearDepth = 2.2, double farDepth = 6.2) {
+    return {
+        {{
+            {{-1.6, -1.0, nearDepth}, {0.0, 1.0}},
+            {{1.6, -1.0, farDepth}, {1.0, 1.0}},
+            {{1.6, 1.0, farDepth}, {1.0, 0.0}},
+            {{-1.6, 1.0, nearDepth}, {0.0, 0.0}},
+        }},
+        {{{0, 2, 1}, {0, 3, 2}}},
+    };
+}
+```
+
+Camera nhìn theo `+Z`. Cạnh trái có Z nhỏ hơn nên hiện lớn hơn sau projection; cạnh phải ở xa nên co lại. Hai face dùng winding hướng mặt trước về camera.
+
+### Bước 3 — Giải một face thành triangle thật
+
+```cpp title="include/lab.hpp — topology index trở thành ba TexturedVertex"
+inline TexturedTriangle quadTriangle(const TexturedQuad& quad, std::size_t faceIndex) {
+    const auto& face = quad.faces[faceIndex];
+    return {{
+        quad.vertices[face[0]],
+        quad.vertices[face[1]],
+        quad.vertices[face[2]],
+    }};
+}
+```
+
+Rasterizer về sau nhận triangle, còn scene giữ indexed quad. Hàm này là ranh giới rõ giữa dữ liệu mesh và primitive gửi vào pipeline.
+
+### Bước 4 — Project cạnh trước khi tô bề mặt
+
+```cpp title="src/main.cpp — cùng một viewport cho mọi corner"
+const double ndcX = point.x * focalScale / (aspect * point.z);
+const double ndcY = point.y * focalScale / point.z;
+projected[index] = {
+    double(viewport.left) + (ndcX * 0.5 + 0.5) * double(viewport.width),
+    double(viewport.top) + (0.5 - ndcY * 0.5) * double(viewport.height),
+};
+```
+
+Checkpoint 1 nối các điểm projected theo face indices. Đường chéo bị vẽ hai lần không gây hại ở wireframe; khi tô pixel, top-left rule sẽ giao cạnh đó cho đúng một triangle.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build checkpoint quad và UV"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_20_checkpoint_1
+```
+
+Chạy target và thử phím `1–4`. Front có hai cạnh cùng depth và trông như rectangle; medium/steep tạo hình thang; near cố ý đưa cạnh trái qua near plane để dùng ở bài 7.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi UV vertex 2 từ `(1,0)` thành `(0,0)`. Wireframe không đổi, nhưng texture ở bài sau bị gập; geometry đúng không chứng minh attribute đúng.
+2. Tạo sáu vertex độc lập cho hai triangle. Chỉ cần sửa UV một bản sao ở diagonal, texture sẽ có seam; giữ bốn vertex chung.
+3. Dùng faces `{0,1,2}` và `{0,2,3}` mà không kiểm winding theo camera convention. Coverage có thể bị đảo hoặc culling sau này sai; giữ thứ tự đã xác nhận.
+
+## Tự kiểm tra kết quả
+
+- Quad có bốn `TexturedVertex`, hai face và diagonal dùng chung index 0/2.
+- Bốn UV phủ đúng miền `[0,1]×[0,1]`, V tăng xuống dưới texture.
+- Front tạo rectangle projected; steep tạo hình thang nhưng không tự giao nhau.
+- Resize cập nhật aspect ratio, framebuffer và streaming texture.
+- Checkpoint 1 chưa tạo checker texture và chưa nội suy UV tại pixel.
+
+## Bài tập mở rộng
+
+Thêm test đếm số lần mỗi index xuất hiện trong hai face. Sau đó đổi diagonal sang `1–3`, cập nhật faces nhưng giữ bốn UV corner; wireframe vẫn phải phủ cùng một quad.
+
+Bài tiếp theo sẽ tạo ảnh nguồn đầu tiên: một checker texture procedural có thể lấy mẫu độc lập với geometry.

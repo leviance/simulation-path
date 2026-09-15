@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép neighbor list vào Velocity Verlet
+
+## Vấn đề cần giải quyết
+
+Danh sách đã đúng khi ta kéo hạt bằng tay. Giờ cần đưa nó vào mô phỏng chạy tự động. Đây là lúc một lỗi thứ tự rất hay xuất hiện: kiểm list đầu bước, cho hạt drift, rồi tính lực cuối bước bằng list trước drift mà không kiểm lại.
+
+Một bước nhỏ vẫn có thể là bước vừa chạm ngưỡng nửa skin. Vì thế quy tắc không phải “mỗi bước kiểm một lần”, mà là **trước mỗi lần tính lực, danh sách phải còn hiệu lực**. Bản Velocity Verlet ở đây có hai lần tính lực nên có hai điểm kiểm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ nguyên ba phần kick–drift–kick từ Project 43:
+
+$$v_{1/2}=v_0+\frac{F(x_0)}{m}\frac{dt}{2},\quad x_1=x_0+v_{1/2}dt,\quad v_1=v_{1/2}+\frac{F(x_1)}{m}\frac{dt}{2}.$$
+
+Trước `F(x0)`, kiểm list theo x0. Sau drift, cập nhật cả unwrapped và position đã wrap, rồi kiểm list theo x1 trước `F(x1)`. Rebuild có thể xảy ra tại một trong hai điểm, hoặc không xảy ra ở cả hai. Dù list không đổi, lực vẫn phải tính lại từ vị trí hiện tại.
+
+Ta cũng mở rộng cách xử lý lỗi: candidate không chỉ chứa hệ hạt mà còn chứa list. Nếu bước cuối thất bại, không được giữ lại một reference hay bộ đếm thuộc về state đã bị bỏ.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-verlet" />
+
+Chọn 64 hạt, tiến một vài bước rồi chạy. Quan sát thời gian tăng trong khi rebuilds có thể đứng yên. Thay skin và chạy lại từ cùng preset để thấy tần suất dựng thay đổi. Nếu thiết bị bật reduced motion, chỉ dùng “Tiến 1 bước”.
+
+## Viết code từng bước
+
+### Bước 1 — Tính lực đầu bước trên candidate
+
+Thêm `cachedVerletStep` vào file mới `neighbor_dynamics.hpp`, include neighbor_list.hpp. Kiểm dt hữu hạn, dương và không lớn hơn 0.01, rồi tạo hai bản tạm:
+
+```cpp title="include/neighbor_dynamics.hpp — chưa sửa state thật khi bắt đầu bước"
+System candidate = system;
+NeighborList candidateList = list;
+if (!ensureList(candidate, skin, generation, candidateList)) {
+    return false;
+}
+const pbc::Evaluation before = evaluateListed(candidate, candidateList);
+candidateList.forceChecks += before.evaluatedPairs;
+if (!before.valid) {
+    return false;
+}
+```
+
+forceChecks đếm số cặp solver thực sự duyệt trong các bước được chấp nhận. Phép tính phục vụ bảng hiển thị không tăng bộ đếm này. Cách sao chép candidate dễ kiểm chứng nhưng tốn copy; đây là bản học về neighbor list, chưa phải solver hiệu năng tối đa.
+
+### Bước 2 — Drift rồi kiểm list một lần nữa
+
+Trong vòng hạt, cập nhật nửa vận tốc, dùng vận tốc ấy để tính displacement, cộng displacement vào unwrapped và wrap vị trí vẽ:
+
+```cpp title="include/neighbor_dynamics.hpp — cùng một displacement cho hai biểu diễn tọa độ"
+pbc::Particle& particle = candidate.particles[i];
+particle.velocity = pbc::add(particle.velocity, pbc::scale(before.forces[i], 0.5 * dt / particle.mass));
+const Vec2 displacement = pbc::scale(particle.velocity, dt);
+particle.unwrapped = pbc::add(particle.unwrapped, displacement);
+particle.position = pbc::wrapPosition(pbc::add(particle.position, displacement), candidate.box);
+```
+
+Sau khi **mọi hạt** đã drift, mới kiểm và tính lực cuối bước:
+
+```cpp title="include/neighbor_dynamics.hpp — điểm kiểm không được bỏ sau drift"
+if (!ensureList(candidate, skin, generation, candidateList)) {
+    return false;
+}
+const pbc::Evaluation after = evaluateListed(candidate, candidateList);
+candidateList.forceChecks += after.evaluatedPairs;
+if (!after.valid) {
+    return false;
+}
+```
+
+Không tính lực sau khi chỉ mới di chuyển một hạt: khi đó system chứa lẫn vị trí cũ và mới. Nửa kick cuối dùng `after.forces` cho tất cả hạt, kiểm velocity hữu hạn, rồi tăng candidate.elapsed.
+
+### Bước 3 — Nhận cả state lẫn cache sau khi thành công
+
+Chỉ đến cuối hàm mới chuyển dữ liệu tạm về hai đối số thật:
+
+```cpp title="include/neighbor_dynamics.hpp — không commit nửa bước hoặc nửa cache"
+system = std::move(candidate);
+list = std::move(candidateList);
+return true;
+```
+
+Nếu gặp cặp gần như trùng nhau ở lực cuối bước, hàm đã trả false trước đoạn này. Main dừng chạy, giữ nguyên state trước bước và báo lỗi. Không clamp lực để cố làm hệ chạy tiếp: thao tác ấy vừa thay mô hình vừa có thể che một lỗi khởi tạo.
+
+## Ghép các phần lại
+
+Build `project_44_checkpoint_6`. Space chạy/dừng; N tiến một bước; R reset. Main giữ fixedDt=0.002, playback=0.1 và accumulator. Mỗi frame chạy tối đa 8 bước, riêng 1.000 hạt tối đa 1 bước; thời gian không xử lý kịp được cộng vào droppedTime chứ không làm dt lớn lên.
+
+`elapsed` đo thời gian thực chỉ dùng cho accumulator. Nhấn N vẫn chạy đúng một fixedDt, không phụ thuộc lúc bạn bấm nhanh hay chậm. Khi pause hoặc sửa tay, phần thời gian tích lũy được bỏ để không bất ngờ chạy bù sau đó.
+
+Đừng đánh giá tốc độ bằng việc hạt chạy trên màn hình nhanh hơn: playback cố ý chỉ bằng 0.1 và số bước/frame bị chặn. Ta sẽ đo lượng công việc bằng một ca riêng ở bài 8.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ ensureList sau drift. Tạo ca hai hạt ban đầu cách 3.2, skin=0.4, cho A đi thêm 0.8 trong một drift có kiểm soát. Force cuối bước sẽ bỏ sót cặp mới vào cutoff. Đây là ca test thứ tự, không phải vận tốc gợi ý cho khí ổn định. Khôi phục lần kiểm thứ hai.
+2. Cho builder sửa list thật thay vì candidateList. Khi một bước drift tạo overlap rồi bị từ chối, system quay về cũ nhưng mốc của list lại thuộc vị trí bị bỏ. Khôi phục bản sao list và chỉ move cả hai ở cuối hàm.
+
+## Tự kiểm tra kết quả
+
+- Có ensureList trước cả before lẫn after; drift nằm giữa hai lần này.
+- Mỗi lực được tính từ toàn bộ hệ cùng thời điểm.
+- Một bước lỗi giữ nguyên position, unwrapped, velocity, thời gian, pairs, reference và các bộ đếm.
+- Chuyển động không phụ thuộc FPS; giới hạn bước/frame vẫn có hiệu lực ở preset lớn.
+
+## Bài tập mở rộng
+
+Thử tận dụng lực cuối bước làm lực đầu bước kế tiếp để giảm một lần evaluate. Ghi rõ khi nào lực cache phải bị hủy do người dùng sửa vị trí hoặc tham số. Giữ bản hai lần tính lực hiện tại làm đối chứng trước khi làm tối ưu này. Bài tiếp theo là [Cố ý dùng danh sách cũ để tìm lỗi](/projects/neighbor-list-skin/07-bat-loi-danh-sach-cu).

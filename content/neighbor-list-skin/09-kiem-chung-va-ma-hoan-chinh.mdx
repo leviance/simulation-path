@@ -1,0 +1,124 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy dự án hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Neighbor list là một tối ưu có trạng thái: kết quả hôm nay phụ thuộc danh sách và mốc được lưu từ trước. Chỉ test builder trên một ảnh chụp là chưa đủ. Cần kiểm cả lúc mốc hết hiệu lực, lúc hạt đi qua biên, lúc drift làm phát sinh cặp mới và lúc một bước bị từ chối.
+
+Bài cuối gom các phép kiểm thành tests thuần C++, chạy được mà không mở SDL. Sau đó ta build final có đầy đủ điều khiển. Mục tiêu không chỉ là “chạy được”, mà là biết chính xác bản tối ưu đã được đối chiếu với những ca nào.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách bộ kiểm thành ba lớp. Hình học kiểm grid và naive tạo cùng pairs. Lực kiểm list không thiếu cặp trong cutoff và cho F/U khớp mọi cặp. Quỹ đạo chạy hai bản cùng state đầu, so q và v sau từng bước; nếu sai ở bước nào thì không chờ tới cuối mới nhìn tổng năng lượng.
+
+Ca chuẩn dùng 36 hạt, seed=44, 200 bước dt=0.002 và skin=0.4. Ngoài sai số quỹ đạo 1e-8, ta theo dõi năng lượng chuẩn hóa và động lượng:
+
+$$e_E=\max_t\frac{|E(t)-E(0)|}{\max(1,|E(0)|)},\qquad e_P=\lVert P(T)-P(0)\rVert.$$
+
+Ngưỡng eE dưới 1% và eP dưới 1e-9 là tiêu chí cho **ca chuẩn này**, không phải cam kết mọi mật độ hay dt đều ổn định. Năng lượng của tích phân số vẫn có sai số; neighbor list đúng phải không tạo thêm sai khác so với bản mọi cặp cùng dt.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-final" />
+
+Nút kiểm chứng chạy trên hệ 36 hạt riêng, không trên hệ vừa kéo. Ca hai hạt có drift lớn trong tests chỉ kiểm thứ tự cập nhật list và rollback; không dùng nó để đánh giá độ ổn định của khí.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ tests hoạt động cả trong Release
+
+File `tests/tests.cpp` include neighbor_dynamics.hpp, không include SDL. Dùng hàm check thay vì assert:
+
+```cpp title="tests/tests.cpp — không để Release tắt mất các phép kiểm"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << label << '\n';
+    }
+}
+```
+
+Main chạy các nhóm test rồi trả EXIT_FAILURE nếu failures>0. Nhờ đó CTest nhận được trạng thái lỗi thật. TestBuilders so trực tiếp dãy pairs của grid và naive trên hộp 6×6, 6×10, 12×8; hộp 6×6 bắt lỗi ô lặp sau wrap. Ca riêng đặt hai hạt qua góc kiểm minimum image được dùng trong builder.
+
+### Bước 2 — Tạo ca lỗi tuổi thọ có đáp án rõ ràng
+
+TestStaleList dựng cặp 3.2 đơn vị rồi đưa A thêm 0.8 mà không refresh. Phần kiểm không chờ solver chạy:
+
+```cpp title="tests/tests.cpp — thiếu cặp vẫn có thể cho số hữu hạn"
+const neighbors::Audit stale = neighbors::auditForces(system, list);
+check(!stale.passed && stale.missingPairs == 1 && stale.forceError > 0.0, "stale list misses interacting pair");
+check(neighbors::evaluateListed(system, list).valid, "finite is not the same as complete");
+check(neighbors::ensureList(system, 0.4, 0, list), "refresh stale list");
+check(neighbors::auditForces(system, list).passed, "repaired list agrees with all pairs");
+```
+
+TestLifetime dùng skin=0.5 và hai lần dịch 0.125 để chạm ngưỡng 0.25 một cách biểu diễn chính xác trong số nhị phân. Nó còn dịch −24 trong hộp 12 để bảo đảm unwrapped không mất số vòng, rồi thử từng thay đổi cấu hình.
+
+TestVerletAndRollback cho A đi từ 3 tới 3.8 trong một drift để bắt lần ensureList thứ hai. Một ca khác đưa A tới đúng vị trí B; lực cuối bị từ chối. Tests kiểm system và các field cache/counters vẫn là giá trị trước bước, không chỉ kiểm elapsed.
+
+### Bước 3 — Đối chiếu hai quỹ đạo qua từng bước
+
+Trong validateNeighborList, fast và reference được sao từ cùng state. Sau mỗi bước, fast dùng cachedVerletStep, reference dùng pbc::verletStep, rồi audit force/U. Tiếp theo so từng hạt:
+
+```cpp title="include/neighbor_dynamics.hpp — không chỉ so kết quả ở frame cuối"
+for (std::size_t i = 0; i < fast.particles.size(); ++i) {
+    if (pbc::length(pbc::subtract(fast.particles[i].unwrapped, reference.particles[i].unwrapped)) > 1.0e-8 || pbc::length(pbc::subtract(fast.particles[i].velocity, reference.particles[i].velocity)) > 1.0e-8) {
+        return false;
+    }
+}
+```
+
+Ta so unwrapped thay vì trừ trực tiếp hai position gần hai phía biên. Sau đó đo năng lượng chuẩn hóa lớn nhất trong lượt và động lượng cuối. Bản all-pairs ở đây không dùng neighbor list; sort pairs trong builder làm thứ tự cộng giống nhau để phép đối chiếu nhạy với lỗi thuật toán.
+
+## Ghép các phần lại
+
+### Mã nguồn hoàn chỉnh
+
+[Tải ZIP Project 44](/downloads/project-44-neighbor-list-skin.zip). ZIP chứa README, starter, chín checkpoint độc lập, final và tests. Phần mã hoàn chỉnh cuối bài cho xem và sao chép từng file; không cần tự ghép các đoạn rời ở trên thành một chương trình mới.
+
+| File trong final | Trách nhiệm |
+| --- | --- |
+| `include/periodic.hpp` | Vec2, Particle, wrap, minimum image, ảnh tuần hoàn — giữ từ Project 43 |
+| `include/dynamics.hpp` | Tạo hệ, force-shifted LJ, mọi cặp và Velocity Verlet tham chiếu |
+| `include/neighbor_list.hpp` | PairIndex, mốc cache, hai builder, lọc force cutoff và điều kiện dựng lại |
+| `include/neighbor_dynamics.hpp` | Cached Verlet, audit, phép đếm công việc và kiểm chứng hữu hạn |
+| `include/neighbor_view.hpp` | Vẽ hộp, marker, vòng cutoff/skin và cell grid bằng SDL3 |
+| `src/main.cpp` | Vòng đời SDL, input, pause/reset, accumulator và giới hạn bước/frame |
+
+`CMakeLists.txt` và `tests/tests.cpp` nằm ở gốc gói, được dùng chung cho các snapshot. Không có asset cần tải thêm; mọi hình được vẽ bằng code. CMake khóa SDL **3.4.8**, dùng C++20 và yêu cầu CMake 3.24 trở lên. Target mặc định là final, checkpoint chỉ được build khi bật option.
+
+```bash title="Terminal Windows — build và kiểm tra Debug"
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+.\build\Debug\project_44_final.exe
+```
+
+```bash title="Terminal Windows — kiểm tra Release và build một checkpoint"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_44_checkpoint_9 --parallel 2
+```
+
+Trên Linux/macOS với generator một cấu hình, dùng `-DCMAKE_BUILD_TYPE=Release` khi configure và chạy `./build/project_44_final`. Xem [Getting Started](/getting-started) để cài compiler và dependency nền tảng của SDL. Lần configure đầu cần mạng để lấy SDL; lần sau dùng lại bản trong build. Giới hạn `--parallel 2` tránh dồn quá nhiều tác vụ biên dịch, còn `--timeout 20` chặn từng test. Chúng không phải timeout cho tải mạng/configure; nếu một công cụ đứng im bất thường, dừng để xem log thay vì chạy thêm nhiều bản song song.
+
+Trong bản SDL: `1/2/3` chọn 64/144/1.000 hạt; `P` chọn hai hạt; `S` đổi skin; `B` dựng lại và rời frozen; `G` bật grid; `Space` chạy/dừng; `N` một bước; `R` đặt lại cả hệ và skin; `F` giữ list để thử lỗi; `A` audit; `T` so công việc; `V` kiểm chứng; `Esc` thoát. Kéo A hoặc dùng mũi tên để sửa vị trí. Báo cáo A/T/V in trong terminal; trạng thái và bộ đếm ngắn nằm trên cửa sổ.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ visited trong grid builder rồi chạy CTest. Nhóm hộp hai ô phải thất bại dù nhiều preset lớn vẫn trông bình thường. Khôi phục code và xác nhận Debug lẫn Release đều chạy lại test.
+2. Bỏ lần ensureList sau drift hoặc commit candidateList trước khi kiểm lực cuối. Ca drift/rollback phải phát hiện đúng lỗi tương ứng. Khôi phục hai thay đổi trước khi dùng bảng công việc để so sánh.
+
+## Tự kiểm tra kết quả
+
+- Mọi snapshot build độc lập; tests không mở window và chạy thật trong Debug/Release.
+- Grid khớp naive trên miền tuần hoàn, không thiếu hoặc trùng cặp ở hộp hai ô mỗi trục.
+- Lớp skin không tạo lực; thay cấu hình hoặc chạm nửa skin đều vô hiệu hóa cache.
+- Stale list có ca tái hiện được; rebuild sửa được trên cùng state.
+- Drift kiểm list trước lực cuối; bước lỗi rollback cả state và cache.
+- Ca chuẩn khớp force/U/quỹ đạo với mọi cặp và đạt ngưỡng E/P đã nêu.
+- Phép đo công việc có giới hạn, tính cả build lẫn force và không được gọi là benchmark thời gian.
+
+## Bài tập mở rộng
+
+Giảm chi phí sao chép candidate bằng buffer dự phòng có thể tái sử dụng, nhưng giữ nguyên tests rollback và đối chiếu quỹ đạo. Tiếp theo thử một thế năng khác với cùng cutoff để kiểm giao diện list không phụ thuộc Lennard–Jones. Project 45 trong [roadmap](/roadmap) đưa Molecular Dynamics lên GPU; hãy giữ cả naive builder và solver CPU này làm đối chứng khi chuyển công việc sang compute shader.

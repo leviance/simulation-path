@@ -1,0 +1,5 @@
+low-poly-rocket.obj was created for Simulation Path.
+
+To the extent possible under law, the author has dedicated this asset to the
+public domain under CC0 1.0 Universal:
+https://creativecommons.org/publicdomain/zero/1.0/

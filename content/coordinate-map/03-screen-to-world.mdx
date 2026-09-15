@@ -1,0 +1,124 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# `screenToWorld`: đổi vị trí chuột về tọa độ thế giới
+
+## Vấn đề cần giải quyết
+
+Phần vẽ đã biết một điểm world xuất hiện ở đâu, nhưng sự kiện chuột chỉ cung cấp pixel trên màn hình. Muốn kéo điểm đánh dấu, đặt vật thể hoặc chọn một ô bản đồ, chương trình phải trả lời: pixel dưới con trỏ tương ứng với tọa độ nào trong thế giới?
+
+Không nên viết một công thức “gần giống chiều thuận” rồi hy vọng kết quả đúng. Phép biến đổi ngược phải hoàn tác từng bước theo thứ tự ngược lại: bỏ độ dời tới tâm viewport, chia tỉ lệ, đảo Y rồi cộng `centerWorld`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Từ forward X:
+
+```text
+screen.x = halfWidth + (world.x-center.x)×scale
+```
+
+Suy ra:
+
+```text
+world.x = center.x + (screen.x-halfWidth)/scale
+world.y = center.y - (screen.y-halfHeight)/scale
+```
+
+Dấu trừ ở Y vẫn còn vì đổi dấu hai lần sẽ trở về giá trị ban đầu. Điều quan trọng nhất cần kiểm tra là:
+
+```text
+screenToWorld(worldToScreen(p)) ≈ p
+```
+
+Dấu `≈` chỉ chừa sai số rất nhỏ của số thực, không có nghĩa công thức được phép lệch vài pixel.
+
+Đảo lại ví dụ bài trước với screen `(600,0)`, camera center `(10,-4)`, scale 100 và viewport 800×600:
+
+```text
+world.x = 10 + (600-400)/100 = 12
+world.y = -4 - (0-300)/100 = -1
+```
+
+Kết quả phục hồi đúng `(12,-1)`. Tự tính cả chiều thuận lẫn chiều nghịch với cùng một bộ số giúp phát hiện dấu Y sai nhanh hơn chỉ nhìn vào công thức.
+
+<InteractiveLab demo="coordinate" mode="coordinate-inverse" />
+
+## Viết code từng bước
+
+### Bước 1 — Dùng cùng giá trị tỉ lệ an toàn
+
+```cpp title="include/lab.hpp — đầu screenToWorld"
+[[nodiscard]] Vec2 screenToWorld(Vec2 screen) const {
+    const double pixelsPerWorldUnit = scale();
+```
+
+Cả `worldToScreen` và `screenToWorld` phải đọc tỉ lệ qua `scale()`. Nếu một hàm dùng trực tiếp `pixelsPerUnit` còn hàm kia dùng giá trị thay thế an toàn, hai phép biến đổi sẽ không còn đảo nhau khi tỉ lệ không hợp lệ.
+
+### Bước 2 — Hoàn tác tâm viewport, tỉ lệ và tâm camera
+
+```cpp title="include/lab.hpp — screenToWorld hoàn chỉnh"
+return {
+    centerWorld.x + (screen.x - viewportPixels.x * 0.5) / pixelsPerWorldUnit,
+    centerWorld.y - (screen.y - viewportPixels.y * 0.5) / pixelsPerWorldUnit,
+};
+}
+```
+
+Không làm tròn tọa độ screen đầu vào. Một nửa pixel vẫn tương ứng với một vị trí world hợp lệ và giúp thao tác kéo chuyển động mượt hơn.
+
+### Bước 3 — Đổi tọa độ sự kiện khi bắt đầu kéo
+
+```cpp title="src/main.cpp — bắt đầu kéo bằng nút chuột trái"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+    draggingPoint = true;
+    cursorScreen = {event.button.x, event.button.y};
+    markerWorld = camera.screenToWorld(cursorScreen);
+    if (!SDL_CaptureMouse(true)) {
+        std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+    }
+}
+```
+
+Một cú click đặt tâm điểm đánh dấu ngay dưới con trỏ, nhưng giá trị được lưu vẫn là tọa độ world. Mouse capture giúp cửa sổ tiếp tục nhận chuyển động và sự kiện thả nút khi con trỏ đi ra ngoài. Nếu nền tảng không hỗ trợ, chương trình báo lỗi nhưng thao tác bên trong cửa sổ vẫn hoạt động.
+
+### Bước 4 — Cập nhật tọa độ world khi chuột di chuyển
+
+```cpp title="src/main.cpp — kéo điểm đánh dấu"
+if (event.type == SDL_EVENT_MOUSE_MOTION && draggingPoint) {
+    cursorScreen = {event.motion.x, event.motion.y};
+    markerWorld = camera.screenToWorld(cursorScreen);
+}
+```
+
+Phần vẽ sau đó gọi `worldToScreen(markerWorld)`. Hai phép chuyển đổi nối tiếp phải đưa điểm đánh dấu trở lại đúng vị trí con trỏ, chỉ còn sai số ở bước làm tròn pixel. Khi thả chuột hoặc cửa sổ mất focus, `draggingPoint` được đặt về `false` và mouse capture được nhả, vì vậy thao tác cũ không thể tự nối tiếp khi cửa sổ hoạt động trở lại.
+
+## Ghép các phần lại
+
+Checkpoint 3 tạo thành một vòng chuyển đổi khép kín:
+
+```text
+mouse screen → screenToWorld → markerWorld → worldToScreen → pixel
+```
+
+Đây là cách kiểm tra rất trực quan. Nếu điểm đánh dấu lệch khỏi con trỏ, hãy kiểm tra tâm viewport, tỉ lệ và dấu Y trong hai hàm. Không nên thêm một “độ lệch sửa lỗi” vào phần xử lý sự kiện, vì cách đó chỉ che nguyên nhân.
+
+Thanh tiêu đề hiển thị đồng thời tọa độ screen, tọa độ world, tỉ lệ và sai số round trip theo pixel. Trước khi làm tròn để vẽ, sai số phải rất gần 0. Con số này được tính bằng chính `Camera2D` trong C++, không phải dữ liệu minh họa viết sẵn.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng dấu cộng trong phép biến đổi nghịch của Y. Kéo chuột lên làm điểm đánh dấu đi xuống vì hai phép biến đổi không còn đảo nhau.
+2. Bỏ phép chia cho tỉ lệ. Cùng một quãng kéo bằng pixel tạo ra quãng đường world khác nhau khi zoom.
+3. Làm tròn tọa độ world ngay trong `screenToWorld`. Điểm đánh dấu sẽ giật theo lưới dù ứng dụng chưa yêu cầu snap.
+
+## Tự kiểm tra kết quả
+
+- Click đặt điểm đánh dấu dưới con trỏ.
+- Giữ nút trái và kéo để điểm bám theo chuột.
+- `markerWorld` thay đổi; phần vẽ không lưu tọa độ screen của điểm làm trạng thái lâu dài.
+- World Y tăng khi kéo lên màn hình.
+- Round trip của nhiều điểm có sai số gần 0.
+
+## Bài tập mở rộng
+
+Hãy thêm snap-to-grid có chủ đích bằng cách làm tròn **sau** `screenToWorld`, rồi so với việc làm tròn sai ngay trong hàm chuyển đổi. Hiển thị tọa độ world của con trỏ trên thanh tiêu đề. Sau đó viết `screenVectorToWorld` cho một độ dời, không cộng tâm camera.
+
+Bài sau sẽ dùng phép biến đổi ngược để tìm phần thế giới đang nhìn thấy và triển khai pan từ độ dời chuột trên màn hình.

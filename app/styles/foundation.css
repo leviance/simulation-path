@@ -1,0 +1,246 @@
+:root {
+  --bg: #f3f2ed;
+  --surface: #fbfaf6;
+  --surface-2: #e9e8e1;
+  --ink: #101521;
+  --muted: #667085;
+  --line: #d8d7d0;
+  --navy: #11192c;
+  --green: #19b877;
+  --green-bright: #53f0ae;
+  --blue: #3157e4;
+  --orange: #ef7d42;
+  --header-bg: rgba(243, 242, 237, 0.88);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1220;
+  --surface: #131a2b;
+  --surface-2: #1a2235;
+  --ink: #f4f6fb;
+  --muted: #9aa6bd;
+  --line: #273149;
+  --navy: #090e19;
+  --green: #53f0ae;
+  --header-bg: rgba(13, 18, 32, 0.9);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 90px;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  text-rendering: optimizeLegibility;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+.shell {
+  width: min(1180px, calc(100% - 48px));
+  margin-inline: auto;
+}
+
+.site-header {
+  height: 74px;
+  border-bottom: 1px solid var(--line);
+  background: var(--header-bg);
+  backdrop-filter: blur(16px);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.header-inner {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 190px;
+}
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  color: var(--bg);
+  font:
+    800 17px ui-monospace,
+    monospace;
+  position: relative;
+}
+.brand-mark span {
+  color: var(--green-bright);
+}
+.brand b {
+  font-size: 11px;
+  line-height: 1.05;
+  letter-spacing: 0.12em;
+}
+.site-header nav {
+  display: flex;
+  gap: 28px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.site-header nav a {
+  color: var(--muted);
+  transition: color 0.2s;
+}
+.site-header nav a:hover {
+  color: var(--ink);
+}
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.search-trigger {
+  height: 36px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 3px;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.search-trigger span {
+  font-size: 19px;
+  color: var(--ink);
+}
+.search-trigger kbd,
+.search-input kbd {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  padding: 2px 5px;
+  border-radius: 3px;
+  font:
+    10px ui-monospace,
+    monospace;
+}
+.theme-toggle {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 17px;
+}
+
+.search-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  padding-top: 10vh;
+  background: rgba(5, 9, 18, 0.68);
+  backdrop-filter: blur(6px);
+}
+.search-dialog {
+  width: min(650px, calc(100% - 32px));
+  margin: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.35);
+}
+.search-input {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+.search-input span {
+  font-size: 25px;
+}
+.search-input input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 16px;
+}
+.search-results {
+  padding: 8px;
+  max-height: 55vh;
+  overflow: auto;
+}
+.search-results a {
+  display: grid;
+  grid-template-columns: 90px 1fr 20px;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 12px;
+  border-radius: 3px;
+}
+.search-results a:hover {
+  background: var(--surface-2);
+}
+.search-results a span {
+  color: var(--green);
+  font:
+    700 10px ui-monospace,
+    monospace;
+  text-transform: uppercase;
+}
+.search-results a b {
+  font-size: 13px;
+}
+.search-results a i {
+  font-style: normal;
+  color: var(--muted);
+}
+.search-results p {
+  padding: 25px;
+  text-align: center;
+  color: var(--muted);
+}
+.search-results .search-error button {
+  margin-left: 6px;
+  border: 0;
+  padding: 0;
+  color: var(--green);
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}

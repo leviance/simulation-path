@@ -1,0 +1,61 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+/playwright-report/
+/test-results/
+
+# next.js
+/.next/
+/.vinext/
+/out/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+/dist/
+/outputs/
+/work/
+/.tmp/
+/.validation/
+/.npm-cache/
+/examples/**/build/
+/examples/**/build*/
+/examples/_deps/
+*.tsbuildinfo
+
+# Reproducible course outputs. Keep source-template, lessons, tests and generators in Git.
+/course/generated/
+/content/generated/
+/content/registry.ts
+/lib/generated-checkpoint-sources/
+/lib/generated-checkpoint-sources.ts
+/examples/project-[0-9][0-9]-*/starter/
+/examples/project-[0-9][0-9]-*/checkpoints/
+/examples/project-[0-9][0-9]-*/final/
+/examples/project-[0-9][0-9]-*/CMakeLists.txt
+/public/downloads/
+/build/

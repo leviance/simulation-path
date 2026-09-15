@@ -1,0 +1,146 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xác định dữ liệu và quy tắc chuyển động của particle
+
+## Ta cần giải quyết điều gì?
+
+Mục tiêu cuối cùng là mô phỏng năm triệu particle, nhưng bài đầu chỉ chạy một preview nhỏ trên CPU. Ta làm vậy để trả lời hai câu hỏi thật rõ ràng: mỗi particle cần lưu những dữ liệu nào, và một bước mô phỏng cập nhật chúng theo thứ tự nào? Khi quy tắc này đã đúng trên CPU, việc chuyển sang compute shader sẽ dễ kiểm tra hơn rất nhiều.
+
+Starter đã tạo SDL window, yêu cầu OpenGL 4.3 Core, nạp các entry point cần thiết và xử lý framebuffer high-DPI. Từ bộ khung đó, ta sẽ thêm `Particle`, một hàm cập nhật thuần CPU và vùng xem thử. Tới cuối bài, vài nghìn hạt sẽ phun lên rồi rơi xuống; hàm CPU này cũng sẽ làm mốc đối chiếu cho bài kiểm tra ở bài 9.
+
+## Theo chân một particle
+
+Mỗi particle cần vị trí $p$, vận tốc $v$, tuổi hiện tại $a$ và tuổi thọ $L$. Với gia tốc trọng trường $g$, semi-implicit Euler cập nhật theo thứ tự:
+
+$$
+\begin{aligned}
+v_{t+\Delta t} &= v_t + g\Delta t \\
+p_{t+\Delta t} &= p_t + v_{t+\Delta t}\Delta t \\
+a_{t+\Delta t} &= a_t + \Delta t
+\end{aligned}
+$$
+
+Điểm dễ bỏ sót nằm ở dòng thứ hai: position dùng **vận tốc mới**, tức vận tốc đã chịu gravity. Thứ tự này khác explicit Euler, nơi position dùng vận tốc cũ. Cả hai đều có thể cho hình chuyển động, nhưng CPU và GPU phải thống nhất một cách.
+
+Khi `age >= lifetime` hoặc hạt rơi dưới `floorY`, state cũ không còn được tiếp tục. Particle được tái sinh tại miệng phun với vận tốc mới.
+
+<InteractiveLab demo="five-million-particle-fountain" mode="particle-contract" />
+
+Kéo `raw dt` lên vùng 100–200 ms và quan sát giá trị simulation dt. Canvas cho thấy vì sao một frame bị đứng không nên biến thành cú nhảy vật lý dài cả phần mười giây. Bài 7 sẽ đưa clamp này vào event loop hoàn chỉnh.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Dùng hai `Vec4` có ý nghĩa rõ ràng
+
+```cpp title="include/particle_math.hpp — Particle record"
+struct alignas(16) Vec4 {
+    float x{};
+    float y{};
+    float z{};
+    float w{};
+};
+
+struct alignas(16) Particle {
+    Vec4 positionAge{};
+    Vec4 velocityLife{};
+};
+```
+
+Ba thành phần đầu của `positionAge` là position; `w` là age. Tương tự, `velocityLife.xyz` là velocity và `velocityLife.w` là lifetime. Tên này dài hơn `data0/data1`, nhưng lúc đọc shader ta biết chính xác mỗi component đang mang nghĩa gì.
+
+Project là mô phỏng 2D nên `z` hiện bằng 0. Ta vẫn giữ `vec4` vì record này sẽ đi qua `std430`; hai khối 16 byte dễ kiểm hơn một struct trộn `vec2` và các scalar có padding khó nhìn.
+
+### Bước 2 — Viết một step thẳng, không nén công thức
+
+```cpp title="include/particle_math.hpp — lõi stepParticleCpu"
+particle.velocityLife.y += gravity * dt;
+particle.positionAge.x += particle.velocityLife.x * dt;
+particle.positionAge.y += particle.velocityLife.y * dt;
+particle.positionAge.z += particle.velocityLife.z * dt;
+particle.positionAge.w += dt;
+
+const bool lifetimeEnded = particle.positionAge.w >= particle.velocityLife.w;
+const bool fellBelowFloor = particle.positionAge.y < kFloorY;
+if (lifetimeEnded || fellBelowFloor) {
+    return makeSpawnParticle(index, spawnEpoch, seed);
+}
+```
+
+Mỗi dòng tương ứng một phần của công thức. Viết tách như vậy giúp ta đặt breakpoint sau gravity, kiểm position rồi mới xem age. Nó cũng tạo một bản tham chiếu dễ đối chiếu với GLSL ở bài 4.
+
+Hàm còn kiểm tra đầu vào trước khi tính:
+
+```cpp title="include/particle_math.hpp — kiểm tra dt"
+if (!(dt > 0.0F) || !std::isfinite(dt)) {
+    return particle;
+}
+```
+
+`dt = 0` có nghĩa “không mô phỏng”, rất hữu ích khi pause. `NaN` không được phép lan vào hàng triệu record.
+
+### Bước 3 — Preview bằng một tập nhỏ
+
+Checkpoint 1 tạo `2.048` particle trên CPU. Mỗi frame, code gọi cùng một hàm cho từng phần tử:
+
+```cpp title="src/main.cpp — stepCpuPreview"
+for (std::size_t index = 0; index < particles.size(); ++index) {
+    particles[index] = lab::stepParticleCpu(
+        particles[index],
+        index,
+        dt,
+        lab::kGravity,
+        epoch
+    );
+}
+```
+
+Preview dùng `glScissor` để đặt vài pixel cho từng sample. Đây chỉ là dụng cụ nhìn state CPU; nó không phải giải pháp render cuối cùng và tuyệt đối không thể mở rộng tới năm triệu lần clear mỗi frame. Bài 5 sẽ thay toàn bộ preview path bằng một draw call GPU.
+
+## Nối lại thành một bước mô phỏng
+
+Checkpoint 1 có luồng rất ngắn:
+
+```text
+SDL/OpenGL window
+        ↓
+tạo Particle preview
+        ↓
+đọc dt → stepParticleCpu cho từng hạt
+        ↓
+vẽ sample bằng scissor → swap window
+```
+
+Build riêng checkpoint để không phải đọc code của các bài sau:
+
+```bash title="Terminal — checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_38_checkpoint_1
+```
+
+Nếu cửa sổ chỉ có nền tối trong vài frame đầu, kiểm `positionAge.y` và chiều trục Y khi chuyển sang pixel. Đừng sửa gravity thành số dương chỉ để hình bay lên mãi; hạt cần vận tốc ban đầu hướng lên rồi gravity kéo xuống.
+
+## Thử tạo lỗi
+
+1. Cập nhật position trước velocity. Ghi lại hai kết quả sau 100 step; chúng đang dùng hai integrator khác nhau.
+2. Tăng position nhưng quên tăng age. Hạt rơi qua floor vẫn respawn, còn hạt không rơi sẽ không bao giờ hết lifetime.
+3. Chỉ kiểm lifetime mà bỏ điều kiện sàn. Một vài tổ hợp velocity/lifetime có thể tiếp tục rơi rất xa dưới camera.
+4. Cho pause bằng cách không render nhưng vẫn gọi `stepParticleCpu`. Hình bị giấu chứ simulation không dừng.
+5. Dùng ngay năm triệu particle ở phần xem thử bằng scissor. Khi đó bạn đang đo hàng triệu lần đổi trạng thái OpenGL, không phải cách xử lý particle mà project muốn dạy.
+
+## Kiểm tra trước khi sang bài mới
+
+- [ ] `Particle` có hai trường tên rõ nghĩa, không phải tám scalar rời.
+- [ ] Velocity Y đổi trước khi position Y dùng nó.
+- [ ] Age tăng đúng bằng `dt` ở một step không respawn.
+- [ ] `dt <= 0`, NaN hoặc Infinity không làm thay đổi particle.
+- [ ] Particle hết lifetime và particle dưới floor đều tái sinh.
+- [ ] Preview chỉ dùng tập nhỏ và không được gọi là GPU particle renderer.
+- [ ] Cùng reset và cùng chuỗi `dt` tạo lại cùng kết quả CPU.
+
+## Nếu muốn thử thêm
+
+1. Viết một test tay với `position=(1,2)`, `velocity=(3,10)`, gravity `-10` và `dt=0,1`; tính state trước khi chạy code.
+2. Thêm acceleration X nhỏ như gió, nhưng giữ gravity Y riêng để công thức còn dễ đọc.
+3. So explicit Euler và semi-implicit Euler trên cùng Canvas quỹ đạo trong 240 step.
+
+Bài tiếp theo sẽ giải quyết một vấn đề nhìn thấy ngay khi reset: nếu mọi hạt đều bắt đầu ở age bằng 0, đài phun xuất hiện thành một “cục” đồng loạt thay vì dòng hạt liên tục.

@@ -1,0 +1,157 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# DDA: biến một đoạn thẳng liên tục thành pixel
+
+## Vấn đề cần giải quyết
+
+Trong hình học, một đoạn thẳng chứa vô số điểm. Framebuffer thì chỉ có một lưới các pixel với tọa độ nguyên. Nhiệm vụ của rasterizer là chọn ra một chuỗi pixel đại diện cho đoạn từ `start` đến `end`, giữ được hai đầu và không để xuất hiện lỗ hổng.
+
+DDA (Digital Differential Analyzer) là thuật toán phù hợp để bắt đầu vì nó đi thẳng từ công thức nội suy tới tọa độ pixel. DDA chưa phải cách tối ưu nhất, nhưng từng bước rất dễ tính bằng tay và sẽ là mốc để so sánh với Bresenham ở bài sau.
+
+## Bộ khung có sẵn hiển thị pixel như thế nào?
+
+Mã khởi đầu mở cửa sổ, tạo một streaming texture và cấp phát vector `pixels` có kích thước `960 × 540`. Sau mỗi lần xử lý sự kiện, chương trình tô vector bằng màu nền, chép nó sang texture rồi hiển thị. Vì vậy, khi chạy starter, bạn phải thấy một cửa sổ xanh đen **chưa có đường thẳng**.
+
+DDA không cần biết SDL hay kích thước cửa sổ. Hàm chỉ nhận hai điểm và trả về `std::vector<Point>`. Trong `main.cpp`, mọi điểm được ghi vào framebuffer qua cùng một hàm:
+
+```cpp title="src/main.cpp — hàm ghi pixel có kiểm tra biên"
+void putPixel(std::vector<std::uint32_t>& pixels, lab::Point point, std::uint32_t color) {
+    if (point.x < 0 || point.y < 0 || point.x >= kCanvasWidth || point.y >= kCanvasHeight) {
+        return;
+    }
+    const std::size_t index = std::size_t(point.y) * std::size_t(kCanvasWidth) + std::size_t(point.x);
+    pixels[index] = color;
+}
+```
+
+Biên được kiểm tra khi `x` và `y` vẫn là `int`. Nếu đổi một tọa độ âm sang `size_t` trước, nó sẽ trở thành một số dương rất lớn và có thể truy cập ra ngoài vector. Công thức `y × width + x` vẫn là cách đánh chỉ số row-major đã học ở Project 01. Ta viết lại ở đây để phần nối giữa thuật toán thuần và framebuffer của project này luôn hiện rõ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi `dx = end.x - start.x`, `dy = end.y - start.y`. Số bước cần đi bằng độ thay đổi lớn hơn:
+
+```text
+steps = max(|dx|, |dy|)
+```
+
+Nếu X thay đổi 100 pixel còn Y thay đổi 30 pixel, ta dùng 100 bước. Nhờ vậy, trục X — trục thay đổi nhiều hơn — chỉ tiến đúng một pixel sau mỗi bước. Với `i` chạy từ 0 đến `steps`:
+
+```text
+t = i / steps
+x = round(start.x + dx × t)
+y = round(start.y + dy × t)
+```
+
+Đây chính là phép nội suy tuyến tính trên hai trục. Kết quả số thực được làm tròn về pixel gần nhất. Nếu `start == end`, `steps` bằng 0; hàm phải trả về đúng một điểm trước khi thực hiện phép chia.
+
+Hãy thử tính bằng tay đoạn `(0,0) → (7,3)`. Trong trường hợp này, `steps = 7` và bảng kết quả là:
+
+| `i` | `t = i/7` | điểm liên tục `(x,y)` | pixel sau `lround` |
+|---:|---:|---:|---:|
+| 0 | 0,000 | (0,000; 0,000) | (0,0) |
+| 1 | 0,143 | (1,000; 0,429) | (1,0) |
+| 2 | 0,286 | (2,000; 0,857) | (2,1) |
+| 3 | 0,429 | (3,000; 1,286) | (3,1) |
+| 4 | 0,571 | (4,000; 1,714) | (4,2) |
+| 5 | 0,714 | (5,000; 2,143) | (5,2) |
+| 6 | 0,857 | (6,000; 2,571) | (6,3) |
+| 7 | 1,000 | (7,000; 3,000) | (7,3) |
+
+Bảng cho thấy sau mỗi bước, không phải cả X và Y đều thay đổi. X tăng liên tục vì đây là trục dài hơn; Y chỉ đổi khi tọa độ số thực đi qua ngưỡng làm tròn tiếp theo.
+
+<InteractiveLab demo="raster" mode="raster-dda" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo kiểu `Point` cho tọa độ pixel
+
+```cpp title="include/lab.hpp — tọa độ một pixel"
+struct Point {
+    int x{};
+    int y{};
+    friend bool operator==(Point, Point) = default;
+};
+```
+
+Khác với `Point` của Mini Paint, kết quả ở project này là các ô pixel cụ thể nên `x` và `y` dùng số nguyên. Toán tử `==` giúp bài kiểm thử so sánh điểm đầu và điểm cuối một cách trực tiếp.
+
+### Bước 2 — Tính vector chênh lệch và số bước
+
+```cpp title="include/lab.hpp — đầu hàm dda"
+inline std::vector<Point> dda(Point start, Point end) {
+    const int dx = end.x - start.x;
+    const int dy = end.y - start.y;
+    const int steps = std::max(std::abs(dx), std::abs(dy));
+    if (steps == 0) {
+        return {start};
+    }
+```
+
+`std::abs` khiến số bước không phụ thuộc đoạn đi sang trái, sang phải, lên hay xuống. Nhánh `steps == 0` vừa tránh chia cho 0, vừa xác định rõ một đoạn có hai đầu trùng nhau phải tạo đúng một pixel.
+
+### Bước 3 — Nội suy rồi làm tròn từng điểm
+
+```cpp title="include/lab.hpp — phần còn lại của dda"
+std::vector<Point> points;
+points.reserve(std::size_t(steps) + 1);
+for (int index = 0; index <= steps; ++index) {
+    const double t = double(index) / double(steps);
+    points.push_back({
+        int(std::lround(start.x + double(dx) * t)),
+        int(std::lround(start.y + double(dy) * t)),
+    });
+}
+return points;
+}
+```
+
+Vòng lặp dùng `<=` để chỉ số cuối cùng tạo ra `t = 1` và giữ được `end`. `std::lround` làm tròn tới số nguyên gần nhất thay vì cắt phần thập phân về 0, điều đặc biệt quan trọng với tọa độ âm. Hai phép đổi sang `double` ngăn phép chia số nguyên làm hầu hết giá trị `t` bằng 0.
+
+### Bước 4 — Vẽ kết quả DDA vào framebuffer
+
+Đặt hai đầu đoạn trước vòng lặp chính. Sau khi xử lý sự kiện, xóa hình cũ, gọi DDA rồi ghi từng điểm:
+
+```cpp title="src/main.cpp — từ hai đầu đoạn tới đường trên màn hình"
+lab::Point endpointA{220, 270};
+lab::Point endpointB{740, 150};
+// Bên trong frame, sau khi xử lý event:
+std::fill(pixels.begin(), pixels.end(), rgba(11, 16, 32));
+const auto linePoints = lab::dda(endpointA, endpointB);
+for (lab::Point point : linePoints) {
+    putPixel(pixels, point, rgba(83, 240, 174));
+}
+```
+
+Sau đoạn này, phần code có sẵn dùng `SDL_UpdateTexture` để chép `pixels` sang texture, vẽ texture và gọi `SDL_RenderPresent`. Như vậy đường đi hoàn chỉnh là: DDA tạo danh sách điểm → `putPixel` đổi framebuffer → texture đưa kết quả lên cửa sổ.
+
+Hãy build checkpoint 1 ngay tại đây. Một đường xanh cố định từ A tới B phải xuất hiện. Nếu `linePoints` chứa đúng dữ liệu trong debugger nhưng cửa sổ vẫn trống, hãy kiểm tra `putPixel`, `SDL_UpdateTexture` và `SDL_RenderPresent` thay vì tiếp tục sửa DDA.
+
+Checkpoint đầu tiên cố ý chưa có thao tác kéo và lưới phóng to. Hai phần đó không giúp giải thích công thức DDA, nên được đưa sang các bài sau, khi bạn đã có hai thuật toán để so sánh. Muốn thử ngay nhiều độ dốc, hãy dùng Raster Stepper ở đầu bài: kéo A/B, chạy từng bước rồi đối chiếu cột tọa độ liên tục với pixel đã làm tròn.
+
+Cuối trang có toàn bộ `lab.hpp` và `main.cpp` của checkpoint 1. Phần mới cần hiểu chỉ gồm hàm `dda`, hai điểm A/B và vòng lặp ghi danh sách kết quả vào framebuffer; phần khởi tạo SDL đã có từ starter.
+
+## Ghép các phần lại
+
+Sau mỗi lần lặp, DDA nhận hai điểm cố định, tính chênh lệch, chọn số bước theo trục dài hơn và tạo `steps + 1` điểm. `putPixel` ghi những điểm nằm trong framebuffer, rồi texture đưa kết quả lên màn hình. Vì DDA không biết SDL hay kích thước cửa sổ, hàm có thể được kiểm thử riêng.
+
+Trong Raster Stepper, hãy đi từng bước và quan sát: `t` tăng đều, tọa độ số thực trượt dọc đoạn thẳng, còn tọa độ pixel chỉ thay đổi khi giá trị vượt qua ngưỡng làm tròn nửa đơn vị.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `min(abs(dx), abs(dy))` để tính số bước. Đường dốc thấp không lấy đủ mẫu theo trục X, nên bỏ cột và bị đứt.
+2. Đổi `index <= steps` thành `index < steps`. Lần lặp tại `t = 1` không chạy và điểm cuối biến mất.
+3. Bỏ phép đổi sang `double` khi tính `t`. Phép chia số nguyên làm gần như mọi giá trị bằng 0, nên nhiều điểm chồng lên điểm đầu.
+
+## Tự kiểm tra kết quả
+
+- Hai đầu đoạn đều nằm trong kết quả.
+- Đoạn cố định A→B hiển thị đúng trong checkpoint; Raster Stepper xử lý được đoạn ngang, dọc, chéo và một điểm.
+- Chạy theo cả hai chiều đều giữ đúng hai đầu, đúng số điểm và không tạo bước nhảy lớn hơn một pixel. Nếu ứng dụng yêu cầu hai chiều phải tạo cùng một tập pixel, hãy viết test riêng thay vì suy ra từ vài ví dụ đẹp.
+- Mỗi bước không nhảy quá một pixel trên trục dài.
+- DDA không đọc/ghi framebuffer trực tiếp.
+
+## Bài tập mở rộng
+
+Hãy in `t`, tọa độ số thực và tọa độ sau làm tròn cho đoạn `(0,0) → (7,3)`. Thử nhiều độ dốc và đếm xem có điểm nào bị lặp do làm tròn hay không. Sau đó viết một biến thể cộng dồn `xIncrement`/`yIncrement` thay vì tính lại từ `t`, rồi so sánh kết quả và sai số tích lũy.
+
+Bài sau sẽ loại bỏ số thực khỏi vòng lặp bằng biến sai số của Bresenham.

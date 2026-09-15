@@ -1,0 +1,126 @@
+# Kiểm chứng: nét vẽ không còn khoảng hở
+
+## Vấn đề cần giải quyết
+
+Một nét nhìn có vẻ liền trên màn hình chưa đủ để kết luận thuật toán đúng. Bán kính lớn có thể che mất khoảng hở, còn tay người không thể lặp lại chính xác cùng một đường kéo. Ta cần kiểm tra trực tiếp những điều `sampleStroke` phải bảo đảm: giữ điểm đầu và điểm cuối, giới hạn khoảng cách giữa các điểm được tạo, xử lý hai đầu trùng nhau và không hỏng khi `spacing` bằng 0.
+
+Sau phần test toán học, ta vẫn chạy ứng dụng hoàn chỉnh để kiểm tra mouse capture, mất focus, thao tác bàn phím và việc vẽ sát mép — những phần không thể xác nhận chỉ bằng hàm thuần.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hàm phải thỏa các điều kiện sau:
+
+```text
+points.front() == start
+points.back()  == end
+distance(points[i-1], points[i]) ≤ spacing + epsilon
+```
+
+Nếu ba điều kiện trên được giữ và `spacing < 2 × radius`, tâm của hai dấu liên tiếp không thể cách nhau quá đường kính đầu bút. Với lựa chọn `0.8 × radius`, các hình tròn còn chồng lên nhau khá nhiều, nhờ đó mép nét ít bị lõm.
+
+Những phép kiểm tra này không cần SDL, texture hay chuột thật. Đó chính là lý do `Point`, `distance`, `lerp` và `sampleStroke` được đặt trong một header độc lập.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo chương trình test và kiểm tra hai đầu đoạn
+
+`check` là một hàm bình thường nên vẫn chạy trong cấu hình Release; nó không bị loại bỏ bởi `NDEBUG` như `assert`. Chương trình giữ bộ đếm `failures`, in tên của điều kiện sai và trả `EXIT_FAILURE` để CTest nhận biết thất bại.
+
+```cpp title="tests/tests.cpp — hàm check luôn chạy ở Release"
+namespace {
+int failures = 0;
+
+void check(bool condition, std::string_view label) {
+    if (condition) {
+        return;
+    }
+    std::cerr << "FAILED: " << label << '\n';
+    ++failures;
+}
+} // namespace
+```
+
+Thêm `<cstdlib>`, `<iostream>` và `<string_view>` như trong mã hoàn chỉnh, rồi kiểm tra phần tử đầu và cuối:
+
+```cpp title="tests/tests.cpp — đoạn ngang chuẩn"
+const auto points = lab::sampleStroke({0.0, 0.0}, {100.0, 0.0}, 8.0);
+check(points.front() == lab::Point{0.0, 0.0}, "horizontal stroke keeps its first endpoint");
+check(points.back() == lab::Point{100.0, 0.0}, "horizontal stroke keeps its last endpoint");
+```
+
+Vì `check` là hàm chứ không phải macro, biểu thức `lab::Point{0.0, 0.0}` có dấu phẩy vẫn được truyền bình thường, không cần bọc thêm một lớp ngoặc.
+
+### Bước 2 — Kiểm tra khoảng cách giữa từng cặp điểm
+
+```cpp title="tests/tests.cpp — kiểm tra giới hạn spacing"
+for (std::size_t index = 1; index < points.size(); ++index) {
+    check(lab::distance(points[index - 1], points[index]) <= 8.001, "horizontal stroke respects spacing");
+}
+```
+
+`8.001` chừa một sai số rất nhỏ quanh ngưỡng 8 cho phép tính số thực. Chỉ kiểm tra `points.size()` là chưa đủ: danh sách có thể chứa đúng số phần tử nhưng các điểm phân bố sai hoặc dồn hết về một đầu.
+
+### Bước 3 — Thử hướng chéo và tọa độ âm
+
+```cpp title="tests/tests.cpp — đoạn không nằm trên trục"
+const auto diagonal = lab::sampleStroke({-10.0, -10.0}, {10.0, 10.0}, 3.0);
+check(diagonal.front() == lab::Point{-10.0, -10.0}, "diagonal stroke keeps its first endpoint");
+check(diagonal.back() == lab::Point{10.0, 10.0}, "diagonal stroke keeps its last endpoint");
+```
+
+Thuật toán hình học không nên phụ thuộc vào kích thước bảng vẽ hay giả định tọa độ luôn dương. Việc bỏ các pixel ngoài biên là trách nhiệm của `putPixel`, không phải `sampleStroke`.
+
+### Bước 4 — Kiểm tra các đầu vào đặc biệt
+
+```cpp title="tests/tests.cpp — hai điểm trùng nhau và spacing không hợp lệ"
+const auto samePoint = lab::sampleStroke({2.0, 3.0}, {2.0, 3.0}, 8.0);
+check(samePoint.size() == 1, "zero-length stroke emits one point");
+check(samePoint.front() == lab::Point{2.0, 3.0}, "zero-length stroke preserves its point");
+const auto zeroSpacing = lab::sampleStroke({0.0, 0.0}, {100.0, 0.0}, 0.0);
+check(zeroSpacing.size() == 201, "zero spacing uses the minimum spacing");
+check(zeroSpacing.size() < 1'000, "invalid spacing cannot allocate an excessive sample count");
+const auto negativeSpacing = lab::sampleStroke({0.0, 0.0}, {100.0, 0.0}, -10.0);
+check(negativeSpacing.size() == zeroSpacing.size(), "negative spacing uses the minimum spacing");
+const auto nonFiniteSpacing = lab::sampleStroke({0.0, 0.0}, {100.0, 0.0}, std::numeric_limits<double>::quiet_NaN());
+check(nonFiniteSpacing.size() == zeroSpacing.size(), "NaN spacing uses the minimum spacing");
+```
+
+`spacing` bằng 0, số âm và `NaN` đều được thay bằng 0,5 pixel. Vì vậy, đoạn dài 100 pixel có 200 khoảng và 201 điểm. Điều kiện nhỏ hơn 1.000 phần tử kiểm tra thêm mục tiêu an toàn: dữ liệu sai không được biến thành một lần cấp phát khổng lồ. Thêm `#include <limits>` ở đầu file để dùng `std::numeric_limits` như trong mã hoàn chỉnh cuối trang.
+
+### Bước 5 — Chạy test và bản hoàn chỉnh
+
+```bash title="Terminal — build và kiểm tra Project 03"
+cmake -S examples/project-03-mini-paint -B examples/project-03-mini-paint/build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
+cmake --build examples/project-03-mini-paint/build --config Debug
+ctest --test-dir examples/project-03-mini-paint/build -C Debug --output-on-failure
+cmake --build examples/project-03-mini-paint/build --config Release
+ctest --test-dir examples/project-03-mini-paint/build -C Release --output-on-failure
+```
+
+## Ghép các phần lại
+
+Trong project hoàn chỉnh, các bước nối với nhau theo một đường rõ ràng: sự kiện chuột mở hoặc đóng nét; mỗi `MOUSE_MOTION` tạo một đoạn; `sampleStroke` chia đoạn thành nhiều điểm; `stampCircle` đặt đầu bút tại từng điểm; `putPixel` bảo vệ biên; cuối cùng texture đưa kết quả lên cửa sổ. Test tự động kiểm tra phần hình học, còn danh sách thử trực tiếp kiểm tra chuột và hiển thị.
+
+Chạy `project_3_checkpoint_3` rồi `project_3_final`, cố gắng thực hiện cùng một động tác kéo nhanh để so bản chưa nội suy với bản hoàn chỉnh. Sau đó chạy CTest. Phần **Mã nguồn hoàn chỉnh** cuối trang là đúng bộ file đã dùng để build chương trình và tạo ZIP tải về; bạn không phải tự ghép các đoạn code trong bài.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `ceil` thành `floor`. Phép kiểm tra đoạn dài 17 pixel với `spacing = 8` phải phát hiện khoảng cách vượt ngưỡng.
+2. Đổi điều kiện vòng lặp thành `< steps`. Phép kiểm tra điểm cuối phải thất bại.
+3. Bỏ nhánh `segmentLength == 0`. Trường hợp `samePoint` đi vào phép chia cho 0 và bộ test phải báo lỗi.
+
+Mỗi thí nghiệm chỉ sửa một dòng, nhưng phá vỡ một điều kiện khác nhau và phải nhận được thông báo tương ứng. Sau từng lần thử, hãy hoàn tác thay đổi rồi chạy lại test.
+
+## Tự kiểm tra kết quả
+
+- CTest báo `project_3_validation` passed.
+- Điểm đầu và điểm cuối được giữ cho cả đoạn ngang lẫn đoạn chéo.
+- Mọi khoảng liên tiếp nằm trong ngưỡng.
+- Click đơn, kéo nhanh, kéo ra ngoài cửa sổ và mất focus đều được xử lý đúng trong ứng dụng hoàn chỉnh.
+- Đổi màu, đổi bán kính, xóa bảng vẽ và Escape đều làm đúng chức năng.
+
+## Bài tập mở rộng
+
+Hãy thêm kiểm tra ngẫu nhiên cho 1.000 cặp điểm với `spacing` dương. Tính tổng độ dài của đường gấp khúc trả về rồi so với khoảng cách thẳng từ đầu đến cuối. Sau đó tách `stampCircle` để chạy trên một bảng vẽ nhỏ trong test, kiểm tra tính đối xứng và việc cắt hình ở mép.
+
+Project tiếp theo sẽ đi sâu hơn vào rasterization: thay vì đóng dấu đầu bút, chúng ta tự xây DDA, Bresenham, hình chữ nhật và midpoint circle từng bước.

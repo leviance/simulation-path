@@ -1,0 +1,127 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hình chữ nhật: sắp xếp hai góc rồi dùng lại hàm vẽ đường
+
+## Vấn đề cần giải quyết
+
+Người dùng có thể kéo một hình chữ nhật theo bất kỳ hướng nào: từ trái trên xuống phải dưới hoặc theo chiều ngược lại. Hàm nhận hai góc phải tự xử lý thứ tự thay vì bắt nơi gọi luôn truyền “góc nhỏ trước”. Kết quả đường viền không được lặp pixel ở bốn góc, còn hình đặc phải có số pixel tính được chính xác.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai điểm bất kỳ được chuẩn hóa thành bốn cạnh:
+
+```text
+left   = min(x1, x2)    right  = max(x1, x2)
+top    = min(y1, y2)    bottom = max(y1, y2)
+```
+
+Đường viền là hợp của bốn đoạn Bresenham. Mỗi góc thuộc hai cạnh, vì vậy danh sách ban đầu sẽ chứa các điểm trùng nhau và cần được làm sạch. Hình đặc đơn giản hơn: với mỗi Y từ `top` đến `bottom`, ta thêm toàn bộ hàng pixel từ `left` đến `right`.
+
+Vì cả hai biên đều được lấy, chiều rộng là `right - left + 1` và chiều cao là `bottom - top + 1`. Khi cả hai kích thước lớn hơn 1, đường viền có `2 × width + 2 × height - 4` pixel; trừ 4 vì mỗi góc đã bị tính hai lần. Nếu width hoặc height bằng 1, hình chữ nhật suy biến thành một đoạn thẳng và số pixel chỉ bằng kích thước còn lại.
+
+<InteractiveLab demo="raster" mode="raster-rectangle" />
+
+Trong lab, hãy kéo góc A qua phía bên kia góc B. Hình không được biến mất: chỉ có `left`, `right`, `top`, `bottom` đổi vai trò. Nút **Đảo hai góc** thực hiện đúng phép thử này mà không thay đổi vị trí hình. Khi chuyển sang hình đặc, số pixel phải bằng tích chiều rộng và chiều cao đang hiển thị.
+
+## Viết code từng bước
+
+### Bước 1 — Sắp xếp giới hạn ngay đầu hàm
+
+```cpp title="include/lab.hpp — tính bốn cạnh từ hai góc"
+const int left = std::min(first.x, second.x);
+const int right = std::max(first.x, second.x);
+const int top = std::min(first.y, second.y);
+const int bottom = std::max(first.y, second.y);
+```
+
+Sau bước này, phần còn lại của hàm không cần biết người dùng đã kéo theo hướng nào. Bốn biến có ý nghĩa rõ ràng còn giúp giảm số trường hợp phải suy nghĩ và kiểm thử.
+
+### Bước 2 — Tạo bốn cạnh bằng Bresenham
+
+```cpp title="include/lab.hpp — ghép bốn cạnh của hình chữ nhật"
+inline void appendPoints(std::vector<Point>& destination, const std::vector<Point>& source) {
+    destination.insert(destination.end(), source.begin(), source.end());
+}
+
+std::vector<Point> points;
+appendPoints(points, bresenham({left, top}, {right, top}));
+appendPoints(points, bresenham({right, top}, {right, bottom}));
+appendPoints(points, bresenham({right, bottom}, {left, bottom}));
+appendPoints(points, bresenham({left, bottom}, {left, top}));
+```
+
+Không cần viết thêm vòng lặp riêng cho đường ngang và dọc vì Bresenham đã xử lý hai đầu cũng như đoạn suy biến. `appendPoints` chỉ nối danh sách nguồn vào danh sách đích; đặt tên thành hàm giúp công việc này dễ đọc hơn một lambda nằm giữa thuật toán.
+
+### Bước 3 — Loại các pixel góc bị lặp
+
+`std::sort` cần biết thứ tự của hai `Point`. Bổ sung toán tử sau vào struct: so X trước, nếu X bằng nhau thì so Y.
+
+```cpp title="include/lab.hpp — thứ tự toàn phần cho Point"
+friend bool operator<(Point left, Point right) {
+    if (left.x != right.x) {
+        return left.x < right.x;
+    }
+    return left.y < right.y;
+}
+```
+
+Sau đó sort và gọi `unique`:
+
+```cpp title="include/lab.hpp — sort rồi loại phần tử trùng"
+std::sort(points.begin(), points.end());
+points.erase(std::unique(points.begin(), points.end()), points.end());
+return points;
+```
+
+`std::unique` chỉ gom các phần tử trùng nằm cạnh nhau, vì vậy danh sách phải được sắp xếp trước. Vẽ cùng một góc hai lần không tạo khác biệt trên màn hình, nhưng một danh sách không trùng lặp sẽ dễ đếm, dễ kiểm thử và dễ dùng lại hơn.
+
+### Bước 4 — Tô hình đặc theo từng hàng pixel
+
+```cpp title="include/lab.hpp — filledRectangle"
+for (int y = top; y <= bottom; ++y) {
+    for (int x = left; x <= right; ++x) {
+        points.push_back({x, y});
+    }
+}
+```
+
+Ta biết trước chính xác số pixel nên có thể gọi `reserve((right - left + 1) × (bottom - top + 1))`. Không cần tạo đường viền rồi dùng flood fill; duyệt trực tiếp từng hàng vừa dễ hiểu, vừa có chi phí tỷ lệ với số pixel thực sự cần tạo.
+
+### Bước 5 — Vẽ phần tô trước, đường viền sau
+
+```cpp title="src/main.cpp — vẽ phần đặc và đường viền"
+for (lab::Point point : lab::filledRectangle({70, 70}, {210, 145})) {
+    putPixel(pixels, point, rgba(31, 43, 68));
+}
+for (lab::Point point : lab::rectangle({70, 70}, {210, 145})) {
+    putPixel(pixels, point, rgba(239, 125, 66));
+}
+```
+
+Đường viền được vẽ sau để màu cam không bị phần tô đặc che mất.
+
+## Ghép các phần lại
+
+Hình chữ nhật minh họa hai cách tạo pixel. Đường viền dùng lại Bresenham; phần đặc sinh trực tiếp từng hàng trong vùng. Cả hai đều bắt đầu bằng bước tính `left`, `right`, `top`, `bottom`, nên nơi gọi chỉ cần truyền hai góc theo bất kỳ thứ tự nào.
+
+Checkpoint 4 hiển thị cả phần tô và đường viền. Hãy đảo thứ tự hai góc trong code: kết quả phải giữ nguyên. Sau đó thử hình chỉ có một pixel, một hàng và một cột để thấy quy tắc lấy cả hai biên phối hợp với trường hợp Bresenham suy biến như thế nào.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ bước tính `min/max` rồi đảo hai góc đầu vào. Cận bắt đầu lớn hơn cận kết thúc và vòng lặp tô có thể không chạy lần nào.
+2. Dùng `< right` và `< bottom`. Cột phải cùng hàng dưới bị loại vì cận cuối không còn được lấy.
+3. Gọi `unique` mà không sort trước. Các điểm trùng từ bốn cạnh không đứng cạnh nhau, nên vẫn còn phần tử lặp trong kết quả.
+
+## Tự kiểm tra kết quả
+
+- Đảo hai góc cho cùng tập pixel.
+- Đường viền chứa bốn góc và không có điểm trùng.
+- Hình đặc chứa đúng `width × height` pixel khi tính cả hai biên.
+- Hình chữ nhật một điểm trả về đúng một pixel.
+- Đường viền nằm trên phần tô và không bị che.
+
+## Bài tập mở rộng
+
+Hãy thử tránh `sort` bằng cách bỏ điểm cuối của ba cạnh đầu, rồi so sánh độ phức tạp và độ rõ ràng với bản hiện tại. Viết `filledRectangleClipped` chỉ tạo những điểm nằm trong cửa sổ thay vì dựa vào `putPixel`. Sau đó thêm độ dày cho viền bằng nhiều hình chữ nhật lồng nhau.
+
+Bài sau sẽ dùng đối xứng tám phía để vẽ đường tròn trong khi chỉ cần tính một octant.

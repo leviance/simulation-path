@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Co giãn riêng theo hai trục
+
+## Vấn đề cần giải quyết
+
+Hình vuông đã được lưu quanh local origin. Bây giờ ta muốn thay đổi chiều rộng mà không bắt buộc thay đổi chiều cao, rồi làm ngược lại. Nếu sửa trực tiếp bốn phần tử trong `localSquare`, ta sẽ mất hình gốc và rất khó đặt lại chính xác. Thay vào đó, mỗi frame tạo bốn điểm mới từ dữ liệu local bất biến.
+
+Bài này cũng cố ý cho phép scale bằng 0 và scale âm. Hai trường hợp đó giúp ta nhìn rõ scale thực sự làm gì, thay vì chỉ dùng nó như nút “phóng to”.
+
+## Hiểu ý tưởng trước khi viết code
+
+Non-uniform scale dùng hai hệ số độc lập:
+
+$$
+x'=s_xx,\qquad y'=s_yy
+$$
+
+Với điểm `(4,-2)` và scale `(2,3)`, kết quả là `(8,-6)`. Nếu `sx = 0`, mọi điểm có `x' = 0`, nên cả hình bị ép xuống trục Y. Nếu `sx < 0`, dấu X đảo lại và hình phản chiếu qua trục Y.
+
+<InteractiveLab demo="transform" mode="transform-scale" />
+
+Kéo `scaleX` chậm qua 0. Hình co thành một đoạn thẳng rồi mở sang phía đối diện. Đọc `determinant`: dấu đổi khi chỉ một trục có scale âm, còn trị tuyệt đối tiến về 0 khi hình mất diện tích.
+
+## Viết code từng bước
+
+### Bước 1 — Viết một hàm chỉ làm đúng một việc
+
+Thêm `scalePoint` vào `include/lab.hpp`:
+
+```cpp title="include/lab.hpp — scalePoint"
+inline Vec2 scalePoint(Vec2 point, double scaleX, double scaleY) {
+    return {point.x * scaleX, point.y * scaleY};
+}
+```
+
+Hàm nhận point bằng giá trị và trả point mới. `localSquare` ở bên ngoài không bị sửa.
+
+### Bước 2 — Tạo trạng thái điều khiển
+
+Đặt hai biến trước event loop. Các giá trị khác nhau giúp checkpoint đầu tiên đã cho thấy non-uniform scale.
+
+```cpp title="src/main.cpp — trạng thái scale"
+double scaleX = 1.25;
+double scaleY = 0.8;
+```
+
+Ta giới hạn mỗi hệ số trong `[-2,2]`, nhưng không loại 0 hoặc số âm:
+
+```cpp title="src/main.cpp — phím thay đổi scale"
+if (event.key.key == SDLK_A) {
+    scaleX = std::max(-2.0, scaleX - 0.1);
+}
+if (event.key.key == SDLK_D) {
+    scaleX = std::min(2.0, scaleX + 0.1);
+}
+if (event.key.key == SDLK_S) {
+    scaleY = std::max(-2.0, scaleY - 0.1);
+}
+if (event.key.key == SDLK_W) {
+    scaleY = std::min(2.0, scaleY + 0.1);
+}
+```
+
+### Bước 3 — Tính mọi đỉnh từ hình gốc
+
+Sau `clearCanvas`, bắt đầu bằng một bản sao rồi thay từng phần tử bằng kết quả scale của local point tương ứng.
+
+```cpp title="src/main.cpp — tạo transformedSquare từ localSquare"
+lab::Square transformedSquare = localSquare;
+for (std::size_t index = 0; index < transformedSquare.size(); ++index) {
+    transformedSquare[index] = lab::scalePoint(localSquare[index], scaleX, scaleY);
+}
+```
+
+Vế phải luôn đọc `localSquare[index]`, không đọc điểm đã được biến đổi ở frame trước. Nhờ vậy, đặt `scaleX` trở lại 1 sẽ khôi phục đúng chiều rộng ban đầu.
+
+### Bước 4 — Vẽ hình gốc để có mốc so sánh
+
+Đường xám cho biết local square sẽ trông như thế nào nếu chưa scale; đường xanh là kết quả.
+
+```cpp title="src/main.cpp — so hình gốc với hình đã scale"
+drawSquare(pixels, width, height, localSquare, rgba(83, 97, 125), false);
+drawSquare(pixels, width, height, transformedSquare, rgba(83, 240, 174), true);
+```
+
+Nhờ hai đường cùng xuất hiện, bạn có thể phân biệt “hình nhỏ lại” với “camera zoom ra”. Lưới và hình xám không đổi nên đây chắc chắn là scale của vật thể.
+
+## Ghép các phần lại
+
+Build `project_9_checkpoint_2`, nhấn A/D để đổi `scaleX`, S/W để đổi `scaleY`, R để đặt lại. Title bar hiển thị hai giá trị hiện tại. Giữ D đến 2 làm hình rộng gấp đôi; giữ A đi qua 0 để quan sát phản chiếu.
+
+Hãy chọn một đỉnh cụ thể. P2 ban đầu là `(72,72)`. Với `scaleX=1.5`, `scaleY=0.5`, vị trí mới phải là `(108,36)`. Đối chiếu hướng và khoảng cách trên lưới trước khi chuyển bài.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi công thức Y thành `point.y * scaleX`. Điều chỉnh scaleY sẽ không còn tác dụng, còn scaleX vô tình điều khiển cả hai trục.
+2. Thay `localSquare[index]` bằng `transformedSquare[index]` rồi bỏ dòng khởi tạo lại mỗi frame. Hình sẽ nhân scale lặp vô hạn thay vì biểu diễn giá trị trên title bar.
+3. Chặn scale tối thiểu ở `0.1`. Chương trình vẫn dùng được, nhưng bạn mất hai thí nghiệm quan trọng: phép biến đổi suy biến tại 0 và reflection khi âm.
+
+## Tự kiểm tra kết quả
+
+- `(4,-2)` qua scale `(2,3)` cho `(8,-6)`.
+- Scale `(1,1)` giữ nguyên mọi đỉnh.
+- Scale `(0,1)` đưa cả bốn đỉnh lên cùng đường `x=0`.
+- Scale `(-1,1)` giữ kích thước nhưng đảo trái/phải.
+- R luôn khôi phục `(1.25,0.8)` dù đã giữ phím lâu.
+
+## Bài tập mở rộng
+
+Thêm chế độ khóa tỉ lệ: khi bật, thay đổi `scaleX` cũng đặt `scaleY` bằng cùng giá trị. Sau đó thêm một phím riêng để dùng `scaleY = -scaleX` và dự đoán dấu của phép phản chiếu trước khi nhìn kết quả.
+
+Bài tiếp theo sẽ xoay kết quả scale quanh local origin bằng chính `sin` và `cos` đã học ở Project 07.

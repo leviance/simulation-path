@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xoay quanh trục X bằng sin và cos
+
+## Vấn đề cần giải quyết
+
+Ta đã có local triangle quanh origin nhưng chưa thay đổi orientation. Rotation 3D thường được trình bày bằng một ma trận 4×4 ngay lập tức, khiến người học phải ghi nhớ nhiều ô sin/cos mà chưa hiểu mỗi ô đang làm gì.
+
+Checkpoint này chỉ xoay quanh X. Khi nhìn dọc trục X, bài toán trở lại đúng rotation 2D đã học: X đứng yên, còn Y/Z chạy quanh một vòng tròn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trên mặt phẳng Y–Z, công thức rotation 2D là:
+
+$$
+y'=\cos(\theta)y-\sin(\theta)z
+$$
+
+$$
+z'=\sin(\theta)y+\cos(\theta)z
+$$
+
+Và thành phần nằm trên trục quay không đổi:
+
+$$
+x'=x
+$$
+
+Với góc 90°, point `(1,2,3)` trở thành `(1,-3,2)`. Ví dụ này đủ đơn giản để kiểm tra dấu bằng tay.
+
+Hãy đọc công thức theo chuyển động, đừng học thuộc bốn ô sin/cos. Ở 0°, `cos=1`, `sin=0`, point không đổi. Ở 90°, `cos=0`, `sin=1`, nên `y'=-z` và `z'=y`. Riêng local vertex A `(-1.4,-0.9,-0.3)` sẽ thành `(-1.4,0.3,-0.9)`. Hai con số này là mốc debug trực tiếp cho checkpoint.
+
+<InteractiveLab demo="rotation3d" mode="rotation-x" />
+
+Kéo Pitch X. Tam giác màu là kết quả hiện tại, tam giác xám là orientation ban đầu. Quan sát trục X không đổi hướng trong khi phần Y/Z của các vertex thay đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Tính sin/cos một lần cho mỗi point
+
+Hàm nhận angle theo radian:
+
+```cpp title="include/lab.hpp — rotation quanh X"
+inline Vec3 rotateX(Vec3 point, double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {
+        point.x,
+        cosine * point.y - sine * point.z,
+        sine * point.y + cosine * point.z,
+    };
+}
+```
+
+Ta trả một `Vec3` mới. Nếu sửa `point.y` trước rồi dùng nó để tính Z, công thức thứ hai sẽ dùng dữ liệu đã bị thay đổi.
+
+### Bước 2 — Áp dụng cùng một rotation cho ba local vertex
+
+Không viết lại công thức ba lần trong `main`:
+
+```cpp title="include/lab.hpp — rotate cả local triangle quanh X"
+inline Triangle3 rotateTriangleX(const Triangle3& triangle, double angle) {
+    return {
+        rotateX(triangle.a, angle),
+        rotateX(triangle.b, angle),
+        rotateX(triangle.c, angle),
+    };
+}
+```
+
+### Bước 3 — Lưu pitch riêng, chưa cần EulerAngles
+
+Checkpoint này chỉ có một angle nên một biến có tên rõ ràng là đủ:
+
+```cpp title="src/main.cpp — trạng thái pitch của checkpoint 3"
+double pitchRadians = 0.0;
+```
+
+W/S đổi 5° sang radian tại ranh giới input:
+
+```cpp title="src/main.cpp — phím W tăng pitch"
+if (event.key.key == SDLK_W) {
+    pitchRadians += 5.0 * lab::kPi / 180.0;
+}
+```
+
+### Bước 4 — Chen rotation giữa local và world
+
+Đây là thay đổi quan trọng nhất của cả bài:
+
+```cpp title="src/main.cpp — rotate local rồi mới translate"
+lab::Triangle3 rotatedLocal = localTriangle;
+rotatedLocal = lab::rotateTriangleX(localTriangle, pitchRadians);
+const lab::Triangle3 worldTriangle = lab::translateTriangle(rotatedLocal, modelPosition);
+```
+
+Mỗi frame bắt đầu lại từ `localTriangle`; không có vertex nào bị rotate dồn trên kết quả cũ.
+
+Đây cũng là lúc phân biệt hai phép rất dễ đảo: `rotateTriangleX` thay orientation quanh local origin, còn `translateTriangle` đưa pivot tới vị trí của model. Nếu đổi thứ tự, chính vector `(0,0,6)` cũng bị xoay và tam giác sẽ chạy một vòng quanh camera.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy kết quả cuối bài 3"
+cmake --build build --config Debug --target project_12_checkpoint_3
+```
+
+Nhấn W/S hoặc chỉnh Pitch trong Canvas. Với pitch 0°, triangle trùng đường xám. Ở 90°, Y và Z đổi vai trò theo công thức; perspective khiến ba marker thay đổi không đều vì depth mới khác nhau. Readout `|A| trước / sau` phải giữ nguyên tới sai số làm tròn.
+
+Translation vẫn chạy sau rotation. Di chuyển model bằng arrows rồi tiếp tục xoay: pivot ở vị trí mới nhưng hình vẫn quay tại chỗ.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính `z' = sin*y - cos*z`. Test 90° sẽ cho Z sai dấu và độ dài không còn được giữ ở nhiều góc.
+2. Rotate `worldTriangle` sau khi cộng modelPosition. Model sẽ quay quanh camera thay vì quanh pivot.
+3. Mỗi frame gán `localTriangle = rotateTriangleX(localTriangle,delta)`. Sai số tích lũy và state hình học bị trộn với angle điều khiển.
+
+## Tự kiểm tra kết quả
+
+- rotateX giữ nguyên X của mọi point.
+- Góc 0 trả lại đúng point đầu vào.
+- `(1,2,3)` xoay 90° thành `(1,-3,2)` trong sai số double.
+- Khoảng cách từ local vertex tới origin không đổi.
+- Triangle quay quanh dấu pivot đỏ, không chạy vòng quanh camera.
+
+## Bài tập mở rộng
+
+Vẽ quỹ đạo của local vertex A khi pitch chạy từ 0 tới 360°. Nếu nhìn trong mặt phẳng Y–Z, các sample phải nằm trên một đường tròn có bán kính `sqrt(A.y²+A.z²)`.
+
+Bài sau sẽ áp dụng cùng cách suy luận cho Y và Z, rồi ghép ba rotation theo một thứ tự được ghi rõ.

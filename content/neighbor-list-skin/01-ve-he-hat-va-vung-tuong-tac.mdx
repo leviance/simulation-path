@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ hệ hạt và nhìn rõ phạm vi tương tác
+
+## Vấn đề cần giải quyết
+
+Hộp khí ở Project 43 đã tính đúng lực qua biên. Nhưng với 1.000 hạt, một lần tính lực vẫn phải xem xét 499.500 cặp. Đa số các cặp ở quá xa nhau: ta mất công đo khoảng cách chỉ để kết luận lực bằng zero. Velocity Verlet lại cần hai lần tính lực trong mỗi bước của bản hiện tại.
+
+Ta sẽ giảm phần công việc đó, nhưng trước hết hãy dựng một hình đủ rõ để biết mình đang bỏ qua những cặp nào. Bài này kết thúc với 64 hạt **đứng yên**, một hạt A màu vàng và vòng cutoff màu xanh quanh A. Chưa có neighbor list, cũng chưa chạy tích phân.
+
+[Tải source Project 44](/downloads/project-44-neighbor-list-skin.zip), giải nén rồi mở terminal trong thư mục chứa `CMakeLists.txt`:
+
+```bash title="Terminal Windows — kiểm tra bộ khung SDL trước"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_44_starter --parallel 2
+.\build\Debug\project_44_starter.exe
+```
+
+Starter đã có window, renderer, event loop và đường viền hộp. Hai file `periodic.hpp` và `dynamics.hpp` giữ phần đã học ở Project 43: kiểu hạt, minimum image, force-shifted LJ, tạo hệ và solver mọi cặp. Chúng được đưa nguyên vào ZIP để bạn không phải ghép dependency bằng tay. **Có sẵn hàm không có nghĩa là hàm đang được gọi**: starter chưa tạo hạt hoặc cập nhật vật lý. File mới `neighbor_view.hpp` dành cho hình vẽ của project này.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với `N` hạt, chọn hạt thứ nhất có `N` cách và hạt thứ hai có `N−1` cách. Nhưng A–B và B–A là cùng một cặp, nên số cặp khác nhau là:
+
+$$M=\frac{N(N-1)}{2}.$$
+
+Vòng xanh có bán kính `cutoff=2.5` theo reduced units. Một hạt nằm ngoài vòng xanh của A không tác dụng lực lên A trong mô hình force-shifted đang dùng. Vẽ vòng tròn không tự giảm số vòng lặp; nó chỉ giúp ta thấy rằng danh sách các cặp cần tính lực có thể ngắn hơn nhiều so với mọi cặp.
+
+Hộp vẫn tuần hoàn. Vòng xanh ra ngoài mép phải phải xuất hiện tiếp ở mép trái. Đó là một vùng tương tác đi qua biên, không phải hai vùng độc lập.
+
+<InteractiveLab demo="neighbor-list-skin" mode="nl-cutoff" />
+
+Chọn 64 rồi 1.000 hạt và đọc số cặp. Kéo A tới sát mép để nhìn phần còn lại của vòng xanh ở phía đối diện. Kích thước marker chỉ giúp ta thấy vị trí, không phải đường kính vật lý của hạt.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt hệ khí vào cửa sổ đang có
+
+Trong `src/main.cpp`, sau khi tạo renderer thành công, đổi phần khởi tạo system thành:
+
+```cpp title="src/main.cpp — tạo state một lần trước event loop"
+pbc::System system;
+system = pbc::makeGas(64, 44);
+```
+
+`64` là số hạt, `44` là seed. Hàm `makeGas` bố trí các hạt trên lattice đủ thưa, gán vận tốc có thể tái lập và khởi tạo `unwrapped=position`. Ở bài này vận tốc chỉ được lưu; chưa có lệnh thay đổi position theo thời gian. Không đặt lệnh tạo hệ trong vòng `while (running)`, nếu không mỗi frame sẽ xóa thay đổi do kéo chuột.
+
+### Bước 2 — Vẽ marker từ tọa độ thế giới
+
+Đọc lại `toScreen` có sẵn trong `neighbor_view.hpp`. Nó chia tọa độ cho cạnh hộp trước khi nhân với cạnh vùng vẽ:
+
+```cpp title="include/neighbor_view.hpp — phép đổi tọa độ dùng cho mọi lớp vẽ"
+inline SDL_FPoint toScreen(pbc::Vec2 p, pbc::Box box, Viewport viewport) {
+    return {viewport.left + float(p.x / box.width) * viewport.side, viewport.top + float(p.y / box.height) * viewport.side};
+}
+```
+
+Trong vòng lặp vẽ các hạt của `draw`, màu vàng được chọn khi `i==0`, màu xanh khi `i>0`. Phần đặt hình vuông tại tâm là:
+
+```cpp title="include/neighbor_view.hpp — vẽ một hạt bằng SDL_RenderFillRect"
+const SDL_FPoint center = toScreen(system.particles[i].position, system.box, viewport);
+const SDL_FRect marker{center.x - 3.0f, center.y - 3.0f, 6.0f, 6.0f};
+if (!SDL_RenderFillRect(renderer, &marker)) {
+    return false;
+}
+```
+
+`SDL_FRect` nhận góc trên trái chứ không nhận tâm, nên ta trừ 3 ở hai tọa độ rồi dùng cạnh 6 pixel. Màu phải được đặt trước lời gọi vẽ; kết quả `false` được truyền lên main để báo lỗi và giải phóng SDL. Resize chỉ đổi viewport, không sửa dữ liệu vật lý.
+
+### Bước 3 — Ghép đường tròn từ các đoạn thẳng
+
+Thêm `drawRadius` trước hàm `draw`. Ta chia một vòng thành 64 đoạn. Hai đầu mỗi đoạn được tạo bằng công thức đường tròn đã học ở Project 07:
+
+```cpp title="include/neighbor_view.hpp — hai đầu của đoạn thứ step"
+const double angle0 = 6.283185307179586 * step / 64.0;
+const double angle1 = 6.283185307179586 * (step + 1) / 64.0;
+const pbc::Vec2 a{image.x + radius * std::cos(angle0), image.y + radius* std::sin(angle0)};
+const pbc::Vec2 b{image.x + radius * std::cos(angle1), image.y + radius* std::sin(angle1)};
+if (!segment(renderer, a, b, box, viewport)) {
+    return false;
+}
+```
+
+Đoạn này nằm trong vòng `step=0..63`, bên ngoài là vòng duyệt `pbc::imagePositions(center,box)`. `segment` đổi hai điểm sang screen space rồi gọi `SDL_RenderLine`. Hàm `draw` đã đặt clip rect theo ô gốc, vì vậy chỉ các phần nằm trong hộp được giữ lại. Chín ảnh là vị trí vẽ tạm, không thêm hạt vào system.
+
+Trong `draw`, trước phần marker, đặt màu xanh và gọi `drawRadius` với tâm là `system.particles[0].position`, bán kính là `system.parameters.cutoff`. Chỉ gọi khi danh sách hạt không rỗng. Bản checkpoint đầy đủ phía dưới cho thấy chính xác vị trí ghép, bao gồm nhánh lỗi SDL.
+
+## Ghép các phần lại
+
+Build target `project_44_checkpoint_1` thay cho starter rồi chạy file `.exe` tương ứng. Nhấn `1`, `2`, `3` để chọn 64, 144, 1.000 hạt; `P` chọn hai hạt. Phím mũi tên dịch A 0.05 đơn vị, chuột kéo A và `R` đưa về mặc định. Mọi thao tác tay cập nhật cả position lẫn unwrapped; chưa có chuyển động tự chạy.
+
+Với preset 64, hộp có cạnh 12.8 và bộ đếm mọi cặp là 2.016. Nếu không thấy vòng xanh, hãy kiểm tra màu, lời gọi drawRadius và clip rect trước khi nghi ngờ minimum image. Hình vẽ chưa dùng bất kỳ phép tìm hàng xóm nào.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ phép chia `p.x / box.width` trong toScreen. Marker chạy ra khỏi vùng vẽ dù dữ liệu vẫn đúng. Khôi phục phép chia rồi resize cửa sổ; vị trí thế giới phải giữ nguyên.
+2. Chỉ vẽ vòng quanh tâm thật, không duyệt imagePositions. Kéo A sát mép: nửa vòng bên kia biến mất dù hạt ở đó vẫn tương tác. Khôi phục chín ảnh và nhớ rằng đây là sửa lớp hiển thị, chưa thay vòng lặp lực.
+
+## Tự kiểm tra kết quả
+
+- Starter mở được; checkpoint 1 có thêm hạt và vòng xanh, không có hạt tự chạy.
+- 64 hạt cho 2.016 cặp, 1.000 hạt cho 499.500 cặp mỗi lần tính lực.
+- Vòng cutoff được vẽ tiếp qua biên; marker vẫn nằm trong ô gốc.
+- Kéo A, resize và reset đều hoạt động; không tạo lại system sau mỗi frame.
+
+## Bài tập mở rộng
+
+Thử dùng hộp chữ nhật và sửa viewport để giữ đúng tỉ lệ hai trục, thay vì ép hộp thành hình vuông trên màn hình. Khi đã phân biệt được việc vẽ vòng với việc tìm cặp, sang bài [Lưu những cặp có thể sắp tương tác](/projects/neighbor-list-skin/02-luu-cac-cap-trong-vung-dem).

@@ -1,0 +1,22 @@
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer Velocities { vec4 velocities[]; };
+layout(std430, binding = 1) readonly buffer Forces { vec4 forces[]; };
+layout(std430, binding = 2) buffer Control { uint flags; uint maxDisplacementBits; uint maxOccupancy; uint reserved; };
+uniform uint uCount;
+uniform uint uBase;
+uniform float uDt;
+
+void main() {
+    uint i = uBase + gl_GlobalInvocationID.x;
+    if (i >= uCount) {
+        return;
+    }
+    vec2 velocity = velocities[i].xy + 0.5 * uDt * forces[i].xy;
+    if (any(isnan(velocity)) || any(isinf(velocity))) {
+        atomicOr(flags, 2u);
+        return;
+    }
+    // Không xóa residual vị trí do Drift vừa lưu trong zw.
+    velocities[i].xy = velocity;
+}

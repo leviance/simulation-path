@@ -1,0 +1,209 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng một Bresenham cho đủ tám octant
+
+## Vấn đề cần giải quyết
+
+Nhiều cách cài đặt Bresenham đơn giản chỉ chạy khi X tăng và độ dốc nằm trong khoảng từ 0 đến 1. Nhưng hai đầu đoạn trong ứng dụng có thể nằm ở bất kỳ vị trí nào: trái, phải, trên, dưới, dốc cao hoặc dốc thấp. Viết tám phiên bản gần giống nhau sẽ vừa dài, vừa dễ sửa thiếu một trường hợp.
+
+Bài này giải thích vì sao `dx`, `dy`, `stepX`, `stepY` cùng hai nhánh độc lập đã đủ cho cả tám octant. Sau đó ta thêm thao tác kéo hai đầu đoạn, tạo tám trường hợp có thể lặp lại và kiểm tra tính liên thông theo cả hai chiều. Phần tương tác được đặt ở đây, thay vì bài DDA, vì lúc này nó thực sự giúp so sánh nhiều hướng của cả hai thuật toán.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mặt phẳng quanh `start` được chia thành tám vùng theo hướng của X/Y và trục nào thay đổi nhiều hơn. Thuật toán tổng quát tách ba câu hỏi:
+
+- **cần đi bao xa:** `abs(end - start)`;
+- **cần đi về phía nào:** `+1` hoặc `-1`;
+- **trục nào thay đổi thường xuyên hơn:** được quyết định bởi tần suất hai nhánh X/Y chạy.
+
+Vì `dy` được lưu dưới dạng số âm, `error = dx + dy` cân bằng độ thay đổi giữa hai trục. Đường dốc thấp thường tiến X ở mỗi lần lặp và thỉnh thoảng mới tiến Y. Đường dốc cao làm ngược lại, còn đường chéo thường tiến cả hai.
+
+Một bộ điểm kiểm tra quanh gốc phải có đủ bốn hướng và cả độ dốc cao lẫn thấp:
+
+| vùng | endpoint | đặc điểm |
+|---:|---:|---|
+| 1 | `(9,2)` | phải, xuống, dốc thấp |
+| 2 | `(2,9)` | phải, xuống, dốc cao |
+| 3 | `(-2,9)` | trái, xuống, dốc cao |
+| 4 | `(-9,2)` | trái, xuống, dốc thấp |
+| 5 | `(-9,-2)` | trái, lên, dốc thấp |
+| 6 | `(-2,-9)` | trái, lên, dốc cao |
+| 7 | `(2,-9)` | phải, lên, dốc cao |
+| 8 | `(9,-2)` | phải, lên, dốc thấp |
+
+Tọa độ Y trong bảng theo quy ước màn hình, vì vậy số dương đi xuống. Có thể kiểm tra thêm hai đường chéo 45 độ, nhưng chúng không thay thế được trường hợp dốc cao hoặc dốc thấp.
+
+<InteractiveLab demo="raster" mode="raster-octants" />
+
+## Viết code từng bước
+
+### Bước 1 — Tách hướng khỏi khoảng cách
+
+```cpp title="include/lab.hpp — dấu bước không làm đổi độ lớn"
+const int dx = std::abs(end.x - start.x);
+int stepX = -1;
+if (x < end.x) {
+    stepX = 1;
+}
+const int dy = -std::abs(end.y - start.y);
+int stepY = -1;
+if (y < end.y) {
+    stepY = 1;
+}
+```
+
+Khi `end` nằm bên trái, `stepX = -1`; khi nằm phía trên, `stepY = -1`. Nếu hai đầu có cùng tọa độ trên một trục, biến bước của trục đó vẫn nhận -1 nhưng điều kiện tương ứng không làm tọa độ đi quá điểm đích.
+
+### Bước 2 — Giữ hai quyết định độc lập
+
+```cpp title="include/lab.hpp — phần quyết định tám octant"
+const int doubledError = 2 * error;
+if (doubledError >= dy) {
+    error += dy;
+    x += stepX;
+}
+if (doubledError <= dx) {
+    error += dx;
+    y += stepY;
+}
+```
+
+Cùng một cấu trúc vẫn hoạt động khi đổi hướng hoặc khi X và Y đổi vai trò trục dài hơn. Không cần nhánh riêng kiểu “nếu đang ở octant 5”; đó là lợi ích của công thức đối xứng.
+
+### Bước 3 — Lưu tám trường hợp mẫu thành dữ liệu
+
+```cpp title="src/main.cpp — bảng offset cho tám octant"
+constexpr std::array<lab::Point, 8> kOctantOffsets{{
+    {9, 2},
+    {2, 9},
+    {-2, 9},
+    {-9, 2},
+    {-9, -2},
+    {-2, -9},
+    {2, -9},
+    {9, -2},
+}};
+```
+
+Mảng này có đủ đường dốc cao, dốc thấp và bốn hướng quanh tâm. Có thể thêm đường chéo 45 độ như trường hợp biên, nhưng không dùng nó để thay thế một vùng đã có. `std::array` thể hiện rõ danh sách luôn có đúng tám phần tử và không cần cấp phát động.
+
+### Bước 4 — Xác định rõ điều kiện của một đường hợp lệ
+
+Với mỗi trường hợp, hãy dùng lưới phóng to để kiểm tra bốn điều: pixel đầu bằng `start`, pixel cuối bằng `end`, số pixel bằng `max(|dx|, |dy|) + 1`, và hai pixel liên tiếp chỉ lệch tối đa một đơn vị trên mỗi trục nhưng không trùng nhau. Sau đó đảo hai đầu và kiểm tra lại. Ở bài 6, bốn điều này sẽ trở thành hàm `checkConnectedLine` trong `tests/tests.cpp`; checkpoint 3 chỉ tập trung vào việc quan sát và giải thích.
+
+Có một chi tiết quan trọng: đảo hai đầu **không bắt buộc** tạo đúng cùng một tập pixel. Với đoạn `(0,0) → (2,1)`, đường lý tưởng đi giữa hai pixel ứng viên ở bước giữa. Quy tắc xử lý trường hợp bằng nhau có thể chọn `(1,1)` theo một chiều và `(1,0)` theo chiều ngược lại. Cả hai vẫn hợp lệ nếu giữ hai đầu, có đúng `max(|dx|, |dy|) + 1` điểm và không tạo lỗ hổng.
+
+Nếu một ứng dụng thật sự yêu cầu đảo chiều vẫn cho đúng cùng tập pixel, hãy chuẩn hóa thứ tự hai đầu trước khi gọi Bresenham. Đó là một yêu cầu bổ sung của API, không phải tính chất mặc định của thuật toán.
+
+### Bước 5 — Kéo hai đầu đoạn để thử mọi hướng
+
+Ta dùng lại mô hình tương tác đã học ở Mini Paint: nhấn chuột để bắt đầu, `MOUSE_MOTION` cập nhật dữ liệu và thả chuột hoặc mất focus để kết thúc. `draggedEndpoint` cho biết A hay B đang được kéo:
+
+```cpp title="src/main.cpp — đầu đoạn đang được kéo"
+int draggedEndpoint = -1;
+```
+
+Hàm `drawHandle` vẽ một ô vuông nhỏ quanh mỗi đầu đoạn. Đây chỉ là dấu hiệu trực quan để người dùng biết vị trí nào có thể kéo; nó không tham gia vào thuật toán Bresenham:
+
+```cpp title="src/main.cpp — vẽ tay nắm quanh một đầu đoạn"
+void drawHandle(std::vector<std::uint32_t>& pixels, lab::Point center, std::uint32_t color) {
+    constexpr int kHandleRadius = 6;
+    for (int y = center.y - kHandleRadius; y <= center.y + kHandleRadius; ++y) {
+        for (int x = center.x - kHandleRadius; x <= center.x + kHandleRadius; ++x) {
+            putPixel(pixels, {x, y}, color);
+        }
+    }
+}
+```
+
+Khi nhấn chuột, checkpoint chọn đầu gần con trỏ hơn. Ta so sánh bình phương khoảng cách vì thứ tự gần–xa không thay đổi và không cần gọi `sqrt`:
+
+```cpp title="src/main.cpp — chọn đầu đoạn gần con trỏ"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+    const lab::Point mouse{
+        int(event.button.x),
+        int(event.button.y),
+    };
+    const auto squaredDistance = [](lab::Point left, lab::Point right) {
+        const int dx = right.x - left.x;
+        const int dy = right.y - left.y;
+        return dx * dx + dy * dy;
+    };
+    const int distanceToA = squaredDistance(mouse, endpointA);
+    const int distanceToB = squaredDistance(mouse, endpointB);
+    if (distanceToA <= distanceToB) {
+        draggedEndpoint = 0;
+        endpointA = mouse;
+    } else {
+        draggedEndpoint = 1;
+        endpointB = mouse;
+    }
+    if (!SDL_CaptureMouse(true)) {
+        std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+    }
+}
+```
+
+Trong lúc kéo, chương trình chỉ sửa đầu đã chọn. Mỗi frame sau đó tự gọi lại DDA hoặc Bresenham với A/B mới, nên không cần lưu riêng danh sách pixel cũ:
+
+```cpp title="src/main.cpp — cập nhật và kết thúc thao tác kéo"
+if (event.type == SDL_EVENT_MOUSE_MOTION && draggedEndpoint >= 0) {
+    const lab::Point mouse{int(event.motion.x), int(event.motion.y)};
+    if (draggedEndpoint == 0) {
+        endpointA = mouse;
+    } else {
+        endpointB = mouse;
+    }
+}
+if ((event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) || event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+    draggedEndpoint = -1;
+    SDL_CaptureMouse(false);
+}
+```
+
+Gọi `drawHandle` sau khi vẽ đường để hai ô vuông 13×13 luôn nằm trên cùng và dễ nhìn. Thao tác kéo chỉ thay đổi dữ liệu đầu vào; nó không nằm trong `dda` hoặc `bresenham`.
+
+### Bước 6 — Dùng phím O để lần lượt thử tám trường hợp
+
+Kéo chuột bằng tay rất khó tạo lại chính xác cùng một độ dốc. Checkpoint 3 thêm phím O để lần lượt đặt đoạn thẳng vào tám trường hợp trong bảng:
+
+```cpp title="src/main.cpp — phím O chọn octant kế tiếp"
+if (!event.key.repeat && event.key.key == SDLK_O) {
+    const lab::Point offset = kOctantOffsets[octantPreset];
+    endpointA = {kCanvasWidth / 2, kCanvasHeight / 2};
+    endpointB = {
+        endpointA.x + offset.x * 22,
+        endpointA.y + offset.y * 22,
+    };
+    octantPreset = (octantPreset + 1) % kOctantOffsets.size();
+}
+```
+
+Hệ số 22 chỉ phóng lớn độ lệch để đường dễ nhìn trên cửa sổ; hướng và tỷ lệ `9:2` hoặc `2:9` vẫn giữ nguyên. Bấm O tám lần phải đi đủ một vòng rồi quay lại trường hợp đầu tiên. Nhờ dữ liệu cố định, một lỗi có thể được lặp lại thay vì phụ thuộc vào thao tác kéo bằng tay.
+
+## Ghép các phần lại
+
+Checkpoint 3 không thay đổi công thức Bresenham. Nó bổ sung hai cách tạo dữ liệu kiểm tra: kéo A/B để khám phá tự do và bấm O để lặp lại đúng tám trường hợp đã định trước. Mục tiêu là chuyển từ “một đường mẫu có vẻ đúng” sang “đã kiểm tra có hệ thống ở mọi hướng”.
+
+Bài 2 đã xây cơ chế; bài 3 kiểm tra miền áp dụng và giải thích vì sao nó tổng quát. Nhờ vậy, ba dòng cập nhật sai số không còn là một công thức phải học thuộc.
+
+## Thử làm sai để hiểu đúng
+
+1. Ép `stepX = 1`. Khi `end` nằm bên trái, X liên tục đi sai hướng và vòng lặp không thể chạm đích.
+2. Bỏ `std::abs` khỏi `dx`. Ý nghĩa của `error` thay đổi theo dấu và thuật toán không còn đối xứng giữa trái với phải.
+3. Chỉ kiểm tra vùng phải–dưới. Cả hai lỗi trên có thể bị bỏ sót, cho thấy một ví dụ đẹp không thể thay thế bộ tám trường hợp.
+
+## Tự kiểm tra kết quả
+
+- Kéo đầu đoạn quanh đủ một vòng không có hướng nào bị treo hoặc đứt.
+- `start` và `end` luôn xuất hiện.
+- Cả A→B và B→A đều giữ đúng hai đầu, đúng số điểm và liên thông ở tám octant.
+- Phím O đi qua đủ tám trường hợp rồi quay về trường hợp đầu sau tám lần bấm.
+- Đường dốc cao vẫn liền theo Y, đường dốc thấp vẫn liền theo X.
+- Bạn giải thích vai trò riêng của độ lớn và dấu bước.
+
+## Bài tập mở rộng
+
+Hãy tự sinh các điểm cuối trong hình vuông `[-20,20]²` và kiểm tra cả hai chiều. Xác nhận số điểm luôn bằng `max(|dx|, |dy|) + 1`. Sau đó viết một biến thể chuẩn hóa thứ tự hai đầu để cố ý bảo đảm cùng tập pixel khi đảo chiều, rồi so sánh ưu và nhược điểm với bản hiện tại. Có thể tô màu theo chỉ số bước để quan sát thứ tự vẽ.
+
+Bài sau sẽ gọi lại Bresenham bốn lần để tạo viền hình chữ nhật, rồi tô hình đặc theo từng hàng pixel.
