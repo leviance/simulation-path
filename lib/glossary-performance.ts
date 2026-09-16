@@ -108,8 +108,8 @@ export const performanceGlossaryTerms = [
       "Cấu trúc phân vùng 3D trong đó mỗi internal node chia AABB của nó thành tám octant. Project 30 dùng Octree để vùng point cloud đông tự chia sâu, còn query volume có thể prune cả subtree không overlap.",
   },
   {
-    id: "octant",
-    term: "Octant",
+    id: "octant-3d",
+    term: "Octant (3D)",
     definition:
       "Một trong tám phần của không gian quanh ba mặt phẳng giữa. Project 30 mã hóa positive X, Y, Z bằng ba bit 1, 2, 4; point đúng split plane đi về positive half để chỉ có một octant.",
   },

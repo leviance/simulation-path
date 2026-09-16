@@ -475,7 +475,7 @@ export default function SpringChainLab({ mode }: { mode?: InteractiveLabMode }) 
       view.simulationHeight,
       size.height - view.simulationHeight,
     );
-  }, [displayChain, drag, safeSpringIndex, showForces, size, view, viewState]);
+  }, [displayChain, drag, mode, safeSpringIndex, showForces, size, view, viewState]);
 
   const pointerWorld = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;

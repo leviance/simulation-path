@@ -246,7 +246,7 @@ function drawPassGraph(
   const left = 26;
   const right = width - 26;
   const usable = right - left;
-  labels.forEach((label, index) => {
+  labels.forEach((_label, index) => {
     const x = left + (index * usable) / Math.max(1, labels.length - 1);
     context.beginPath();
     context.arc(x, 116, index === selectedPass ? 13 : 9, 0, Math.PI * 2);

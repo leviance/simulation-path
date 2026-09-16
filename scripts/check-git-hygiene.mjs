@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { workspace } from "./project-catalog.mjs";
-import { trackedGeneratedFiles } from "./git-hygiene.mjs";
+import { trackedCompiledFiles, trackedGeneratedFiles } from "./git-hygiene.mjs";
 
 if (!existsSync(path.join(workspace, ".git"))) {
   // GitHub's source ZIP has no index. CI must require the real index check.
@@ -10,10 +10,10 @@ if (!existsSync(path.join(workspace, ".git"))) {
   }
   process.stdout.write("Source archive without .git: tracked-output check skipped.\n");
 } else {
-  const tracked = trackedGeneratedFiles(workspace);
+  const tracked = [...trackedGeneratedFiles(workspace), ...trackedCompiledFiles(workspace)];
   if (tracked.length > 0) {
     process.stderr.write(
-      `${tracked.length} generated course outputs are tracked in Git:\n` +
+      `${tracked.length} generated outputs or compiled artifacts are tracked in Git:\n` +
         tracked
           .slice(0, 20)
           .map((file) => `  ${file}\n`)
@@ -22,6 +22,6 @@ if (!existsSync(path.join(workspace, ".git"))) {
     );
     process.exitCode = 1;
   } else {
-    process.stdout.write("Git tracks authored course sources, not generated outputs.\n");
+    process.stdout.write("No generated course outputs or compiled artifacts in the Git index.\n");
   }
 }

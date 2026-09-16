@@ -6,6 +6,11 @@ import { interactiveLabUsages } from "./mdx-contracts.mjs";
 import { assertSelfContainedModule } from "./typescript-module-contract.mjs";
 import { reconcileGeneratedFiles } from "./generated-files.mjs";
 import { normalizeSearchText } from "../lib/search-normalization.mjs";
+import {
+  assertGlossaryModules,
+  glossaryRegistrySource,
+  loadGlossaryCatalog,
+} from "./glossary-catalog.mjs";
 
 const projects = loadProjectCatalog();
 const checkOnly = process.argv.includes("--check");
@@ -192,25 +197,13 @@ function validateLab(project, lab) {
 }
 
 const roadmapModule = await evaluateTypeScript(path.join("course", "roadmap.ts"));
-const glossaryModule = await evaluateTypeScript(path.join("lib", "glossary.ts"));
-const lightingGlossaryModule = await evaluateTypeScript(path.join("lib", "glossary-lighting.ts"));
-const texturingGlossaryModule = await evaluateTypeScript(path.join("lib", "glossary-texturing.ts"));
-const meshGlossaryModule = await evaluateTypeScript(path.join("lib", "glossary-mesh.ts"));
-const physicsGlossaryModule = await evaluateTypeScript(path.join("lib", "glossary-physics.ts"));
-const performanceGlossaryModule = await evaluateTypeScript(
-  path.join("lib", "glossary-performance.ts"),
+assertGlossaryModules(
+  readdirSync(path.join(workspace, "lib"))
+    .filter((file) => /^glossary(?:-[a-z-]+)?\.ts$/.test(file))
+    .map((file) => `lib/${file}`),
 );
-const gpuGlossaryModule = await evaluateTypeScript(path.join("lib", "glossary-gpu.ts"));
+const glossaryTerms = await loadGlossaryCatalog(evaluateTypeScript);
 const roadmap = roadmapModule.roadmapSeed;
-const glossaryTerms = [
-  ...glossaryModule.glossaryTerms,
-  ...lightingGlossaryModule.lightingGlossaryTerms,
-  ...texturingGlossaryModule.texturingGlossaryTerms,
-  ...meshGlossaryModule.meshGlossaryTerms,
-  ...physicsGlossaryModule.physicsGlossaryTerms,
-  ...performanceGlossaryModule.performanceGlossaryTerms,
-  ...gpuGlossaryModule.gpuGlossaryTerms,
-];
 const roadmapById = new Map(roadmap.map((item) => [String(item.id).padStart(2, "0"), item]));
 const lessonIds = new Set();
 const authoredProjects = [];
@@ -346,6 +339,7 @@ const glossarySearchItems = glossaryTerms.map((term) =>
 );
 
 const expectedFiles = new Map([
+  [path.join(generatedDirectory, "glossary.ts"), glossaryRegistrySource()],
   [path.join(generatedDirectory, "catalog.ts"), catalogSource],
   [path.join(generatedDirectory, "project-summaries.ts"), summariesSource],
   [path.join(generatedDirectory, "project-loaders.ts"), loadersSource],

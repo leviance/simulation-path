@@ -229,7 +229,7 @@ const learning = {
   references: {
     "p30-l01": [
       { label: "Perspective divide", href: "/glossary#perspective-divide", kind: "Thuật ngữ" },
-      { label: "Octant", href: "/glossary#octant", kind: "Thuật ngữ" },
+      { label: "Octant", href: "/glossary#octant-3d", kind: "Thuật ngữ" },
       { label: "AABB volume", href: "/glossary#aabb-volume", kind: "Thuật ngữ" },
     ],
     "p30-l02": [

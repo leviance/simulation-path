@@ -5,7 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { isGeneratedCoursePath, trackedGeneratedFiles } from "../scripts/git-hygiene.mjs";
+import {
+  isCompiledArtifact,
+  isGeneratedCoursePath,
+  trackedCompiledFiles,
+  trackedGeneratedFiles,
+} from "../scripts/git-hygiene.mjs";
 
 const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputs = [
@@ -34,6 +39,7 @@ const authored = [
   "lib/checkpoint-source.ts",
   "package-lock.json",
 ];
+const compiled = ["tests.obj", "scratch/tests.o", "scratch/tests.exe", "scratch/tests.pdb"];
 
 function git(directory, args, options = {}) {
   return execFileSync("git", args, {
@@ -55,24 +61,66 @@ test("Git ignores generated outputs and the guard catches force-added files", ()
     git(root, ["init", "--quiet"]);
     copyFileSync(path.join(workspace, ".gitignore"), path.join(root, ".gitignore"));
     copyFileSync(path.join(workspace, ".gitattributes"), path.join(root, ".gitattributes"));
-    for (const file of [...outputs, ...authored]) {
+    for (const file of [...outputs, ...authored, ...compiled]) {
       const target = path.join(root, file);
       mkdirSync(path.dirname(target), { recursive: true });
       writeFileSync(target, "fixture\n");
     }
     const ignored = git(root, ["check-ignore", "--no-index", "-z", "--stdin"], {
-      input: [...outputs, ...authored].join("\0") + "\0",
+      input: [...outputs, ...authored, ...compiled].join("\0") + "\0",
     })
       .split("\0")
       .filter(Boolean)
       .sort();
-    assert.deepEqual(ignored, [...outputs].sort());
+    assert.deepEqual(ignored, [...outputs, ...compiled].sort());
     git(root, ["add", "--all"]);
     assert.deepEqual(trackedGeneratedFiles(root), []);
 
     // .gitignore alone cannot protect against files that were already tracked or force-added.
     git(root, ["add", "--force", "--", outputs[0], outputs[5]]);
     assert.deepEqual(trackedGeneratedFiles(root), [outputs[0], outputs[5]]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function coffHeader(machine = 0x8664) {
+  const header = Buffer.alloc(20);
+  header.writeUInt16LE(machine, 0);
+  header.writeUInt16LE(1, 2);
+  return header;
+}
+
+test("compiled artifacts are rejected without rejecting Wavefront mesh assets", () => {
+  for (const machine of [0x014c, 0x8664, 0xaa64]) {
+    assert.equal(isCompiledArtifact("nested/tests.obj", coffHeader(machine)), true);
+  }
+  const bigObj = Buffer.alloc(28);
+  bigObj.writeUInt16LE(0xffff, 2);
+  bigObj.writeUInt16LE(2, 4);
+  bigObj.writeUInt16LE(0x8664, 6);
+  assert.equal(isCompiledArtifact("nested/tests.OBJ", bigObj), true);
+  assert.equal(isCompiledArtifact("mesh.obj", Buffer.from("v 0 0 0\nv 1 0 0\nf 1 2 3\n")), false);
+  assert.equal(isCompiledArtifact("mesh.obj", Buffer.alloc(0)), false);
+  for (const file of compiled.slice(1)) assert.equal(isCompiledArtifact(file), true, file);
+});
+
+test("compiled-file guard inspects staged bytes, even if the working file is replaced", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "simulation-path-compiled-policy-"));
+  try {
+    git(root, ["init", "--quiet"]);
+    copyFileSync(path.join(workspace, ".gitignore"), path.join(root, ".gitignore"));
+    mkdirSync(path.join(root, "assets"));
+    const mesh = "v 0 0 0\nv 1 0 0\nf 1 2 3\n";
+    writeFileSync(path.join(root, "assets/mesh.obj"), mesh);
+    writeFileSync(path.join(root, "tests.obj"), coffHeader());
+    git(root, ["add", "--all"]);
+    assert.deepEqual(trackedCompiledFiles(root), []);
+    git(root, ["add", "--force", "--", "tests.obj"]);
+    writeFileSync(path.join(root, "tests.obj"), mesh);
+    assert.deepEqual(trackedCompiledFiles(root), ["tests.obj"]);
+    git(root, ["rm", "--cached", "--force", "--", "tests.obj"]);
+    assert.deepEqual(trackedCompiledFiles(root), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -271,7 +271,6 @@ test("site search includes shared pages and glossary terms", async () => {
   const searchSource = (await Promise.all(searchFiles.map((file) => readFile(file, "utf8")))).join(
     "\n",
   );
-  const glossarySource = await readFile(path.join(workspace, "lib", "glossary.ts"), "utf8");
   assert.match(searchSource, /Generated page-search shard/);
   assert.match(searchSource, /Generated glossary-search shard/);
   for (const href of ["/getting-started", "/roadmap", "/downloads", "/glossary"]) {
@@ -286,8 +285,18 @@ test("site search includes shared pages and glossary terms", async () => {
     "row-major-order",
     "zoom-anchor",
   ]) {
-    assert.ok(glossarySource.includes(`id: "${id}"`), `Glossary search term is missing: ${id}`);
+    assert.ok(searchSource.includes(`"href": "/glossary#${id}"`), `Missing search term: ${id}`);
   }
+
+  const html = await (await render("/glossary")).text();
+  const renderedIds = [...html.matchAll(/<article id="([^"]+)"/g)].map((match) => match[1]);
+  const indexedIds = [...searchSource.matchAll(/"href": "\/glossary#([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  assert.ok(renderedIds.length > 0, "Glossary page must contain terms");
+  assert.equal(new Set(renderedIds).size, renderedIds.length, "Duplicate glossary anchor");
+  assert.equal(new Set(indexedIds).size, indexedIds.length, "Duplicate glossary search result");
+  assert.deepEqual(indexedIds.sort(), renderedIds.sort());
 });
 
 test("all published project and lesson routes render", async () => {

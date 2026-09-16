@@ -25,7 +25,7 @@
     "typecheck": "tsc --noEmit",
     "test:labs": "node --experimental-strip-types --test tests/lab-math.test.mjs tests/lab-math-depth.test.mjs tests/lab-math-texturing.test.mjs tests/lab-math-obj.test.mjs tests/lab-math-projectile.test.mjs tests/lab-math-integrator.test.mjs tests/lab-math-collision.test.mjs tests/lab-math-spring.test.mjs tests/lab-math-chaos.test.mjs tests/lab-math-brute-force.test.mjs tests/lab-math-spatial-grid.test.mjs tests/lab-math-quadtree.test.mjs tests/lab-math-octree.test.mjs tests/lab-math-barnes-hut.test.mjs tests/lab-math-memory-layout.test.mjs tests/lab-math-cpu-gpu-triangle.test.mjs tests/lab-math-dual-renderer-cube.test.mjs tests/lab-math-shader-hot-reload.test.mjs tests/lab-math-ray-marched-shape-room.test.mjs tests/lab-math-million-vector-gpu.test.mjs tests/lab-math-five-million-particle-fountain.test.mjs tests/lab-math-gpu-reduction-prefix-sum.test.mjs tests/lab-math-gpu-spatial-grid-neighbors.test.mjs tests/lab-math-lennard-jones-pair.test.mjs tests/lab-math-molecular-dynamics-cpu.test.mjs tests/lab-math-periodic-molecular-box.test.mjs tests/lab-math-neighbor-list-skin.test.mjs tests/lab-math-molecular-lab-gpu.test.mjs",
     "pretest:tooling": "npm run generate:course",
-    "test:tooling": "node --test tests/tooling.test.mjs tests/git-hygiene.test.mjs tests/process-supervisor.test.mjs tests/lesson-sections.test.mjs",
+    "test:tooling": "node --test tests/tooling.test.mjs tests/git-hygiene.test.mjs tests/glossary.test.mjs tests/process-supervisor.test.mjs tests/lesson-sections.test.mjs",
     "test:clean-checkout": "node scripts/verify-clean-checkout.mjs",
     "test:browser": "node scripts/run-test-suite.mjs browser",
     "test:browser:built": "node scripts/run-browser-tests.mjs",

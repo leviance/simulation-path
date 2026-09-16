@@ -171,6 +171,8 @@ Chỉ commit nguồn chuẩn: bài học, metadata, Canvas, `source-template`, t
 
 `npm run check:git` phát hiện cả output đã bị force-add vào Git. CI cũng chạy kiểm tra này trước khi sinh dữ liệu. `.gitignore` chỉ ngăn file mới; với file đã được theo dõi từ trước, cần bỏ theo dõi riêng mà không xóa file trên máy.
 
+File biên dịch như `.exe`, `.o`, `.pdb` cũng bị chặn. Riêng `.obj` có thể là file biên dịch hoặc mô hình Wavefront: bộ kiểm tra đọc chữ ký binary trong Git index để phân biệt, không cấm các mesh trong `assets/`. Không đưa file biên dịch vào thư mục source hay dùng `git add -f` để vượt qua quy tắc này.
+
 Để kiểm tra quy trình từ một bản source sạch:
 
 ```bash

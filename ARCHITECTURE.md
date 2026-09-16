@@ -44,6 +44,7 @@ Các thư mục `starter/`, `checkpoints` và `final/` là output được sinh,
 `npm run generate:course` đồng bộ:
 
 - catalog, project summary và các manifest/learning/lab loader;
+- registry import glossary dùng chung cho trang thuật ngữ và search;
 - các search shard tự chia theo kích thước serialized, mục tiêu tối đa 16 KiB mỗi shard;
 - progress migration shard riêng cho từng project;
 - một lesson registry nhỏ cho từng project và router gốc chỉ import registry của project đang mở;
@@ -58,6 +59,8 @@ Catalog chỉ kiểm tra nguồn đầu vào: MDX, metadata, `source-template`, 
 `npm run check:course` chỉ kiểm tra, không ghi file. Validator kiểm tra ID, slug, lesson order, lesson ID, MDX filename, code guide bị thiếu hoặc mồ côi, Canvas mode bằng MDX AST, checkpoint count và output cũ. Các file `manifest.ts`, `learning.ts`, `lab.ts` được phép dùng `import type`, nhưng phải tự chứa toàn bộ runtime value để generator có thể đánh giá ổn định.
 
 Search chỉ tải page/project shard khi mở hộp thoại. Glossary và lesson shard được tải khi người dùng bắt đầu nhập, vì vậy số request khởi tạo không tăng theo toàn bộ số lesson.
+
+Danh sách module thuật ngữ được khai báo một lần trong `scripts/glossary-catalog.mjs`. Khi thêm `lib/glossary-*.ts`, đăng ký module tại đây rồi chạy `npm run generate:course`. Trang thuật ngữ dùng `course/generated/glossary.ts`, chỉ chứa import, không chép lại định nghĩa. Search lấy dữ liệu từ cùng danh sách. Generator báo lỗi nếu thiếu module, ID trùng hoặc định nghĩa rỗng; test đối chiếu toàn bộ anchor hiển thị với kết quả tìm kiếm.
 
 ## Giới hạn chống phình file
 
