@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Divergence: so lượng đi ra với lượng đi vào
+
+## Vấn đề cần giải quyết
+
+Nhìn Source, ta thấy các mũi tên tỏa ra. Nhưng gió đều cũng đưa mọi điểm sang một phía: vì sao trường này không được gọi là tỏa? Ta cần so dòng đi vào và đi ra quanh **một vùng nhỏ**, thay vì chỉ nhìn một mũi tên.
+
+Bài này thêm divergence vào inspector và một lớp màu có dấu. Màu được tính từ Field, không từ hình mũi tên đã scale trên màn hình.
+
+## Hiểu ý tưởng trước khi viết code
+
+Xét một hình chữ nhật nhỏ rộng h, cao k, quanh điểm đang đo. Dòng qua cạnh phải trừ dòng qua cạnh trái là chênh lệch vx nhân chiều cao k. Hai cạnh trên/dưới tương tự với vy. Chia dòng ra ròng cho diện tích hk:
+
+$$\frac{v_x(x+h/2,y)-v_x(x-h/2,y)}{h}+\frac{v_y(x,y+k/2)-v_y(x,y-k/2)}{k}.$$
+
+Khi vùng nhỏ dần, ta có divergence:
+
+$$\nabla\cdot\mathbf{v}=\partial_xv_x+\partial_yv_y.$$
+
+Nó là **một số**, không phải hướng mới. Trong gió đều, dòng đi ra ở một cạnh được cân bằng bởi dòng đi vào ở cạnh đối diện, nên divergence bằng 0 dù vận tốc khác 0. Source `(x,y)` cho `1+1=2`; Sink cho `−1−1=−2`. Rotation có vx chỉ phụ thuộc y, vy chỉ phụ thuộc x nên hai đạo hàm cần dùng đều bằng 0.
+
+Trên lưới nút, ta dùng derivativeX/Y từ bài trước để ước lượng các đạo hàm. Đây là phép đo cục bộ của trường trơn đã lấy mẫu; chưa phải solver bảo toàn khối lượng trên một lưới fluid.
+
+<InteractiveLab demo="wind-map" mode="wind-4" />
+
+Chọn lớp Divergence. So Source, Sink và Uniform ở cùng nút rồi thử một nút khác. Giá trị không đổi theo vị trí trong ba trường tuyến tính này.
+
+## Viết code từng bước
+
+### Bước 1 — Lấy đúng thành phần theo đúng trục
+
+Hàm divergence rất ngắn vì hai hàm đạo hàm đã làm phần kiểm mép và chia khoảng cách:
+
+```cpp title="include/derivatives.hpp — divergence của vector"
+inline double divergence(const Field& field, int x, int y) {
+    return derivativeX(field, field.vx, x, y) + derivativeY(field, field.vy, x, y);
+}
+```
+
+Vx được lấy đạo hàm theo x, vy theo y. Không cộng derivativeY(vx) với derivativeX(vy), và không cộng hai thành phần vector trực tiếp. Một trường có vector bằng 0 ở gốc vẫn có divergence 2: phép đo cần các mẫu xung quanh.
+
+### Bước 2 — Chọn dữ liệu cho lớp màu
+
+Trong `drawField`, mỗi nút bắt đầu với scalar phi. Nếu layer là Divergence, thay **giá trị dùng để vẽ** bằng số đo divergence:
+
+```cpp title="include/view.hpp — chọn số cho lớp divergence"
+if (layer == Layer::Divergence) {
+    value = divergence(field, x, y);
+}
+```
+
+Không ghi value vào scalar hoặc vx/vy. Mảng trường giữ nguyên, nên đổi lớp màu không thể làm chuyển động hạt đổi ở bài sau.
+
+### Bước 3 — Giữ dấu khi đổi sang màu
+
+`scalarColor` dùng thang cố định −2 đến 2. Độ bão hòa phụ thuộc độ lớn, còn dấu chọn xanh hoặc cam:
+
+```cpp title="include/view.hpp — độ bão hòa màu"
+const double t = std::min(1.0, std::abs(value) / range);
+```
+
+Tính độ bão hòa bằng trị tuyệt đối không có nghĩa bỏ dấu của số đo. Nhánh `value>=0` chọn màu cam; nhánh còn lại chọn xanh. Giá trị 0 có cùng nền tối ở cả hai phía. Số không hữu hạn được tô hồng để lộ lỗi.
+
+## Ghép các phần lại
+
+Checkpoint 04 mở với Source và lớp Divergence. P đổi trường, L đổi lớp, I đọc số tại nút. Build `project_48_checkpoint_4`; kiểm Source/Sink trước khi nhìn hình phức tạp hơn. Phần code hoàn chỉnh sau bài cho thấy layer chỉ đi vào renderer.
+
+Với thang cố định, Source và Sink có độ bão hòa tương đương nhưng màu khác dấu. Nếu sửa trường thành `(2x,2y)`, divergence bằng 4 và màu bão hòa; I vẫn phải báo 4.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm dùng `derivativeX(field,field.vy,...)` thay đạo hàm của vx. Source sẽ không còn cho 2. Kiểm từng thành phần bằng tay rồi khôi phục cặp trục/thành phần.
+2. Tạm dùng `abs(divergence)` trước `scalarColor`. Source và Sink có cùng màu dù một trường tỏa, một trường hút. Khôi phục số có dấu và kiểm cả hai preset.
+
+## Tự kiểm tra kết quả
+
+Uniform: 0; Source: 2; Sink: −2; Rotation: 0; Shear: 0. Các đáp án áp dụng cả nút mép với sai phân đang dùng, trong sai số dấu phẩy động. Source tại gốc có vector 0 nhưng divergence 2. Đổi layer giữ nguyên Field. [OpenStax trình bày định nghĩa và ý nghĩa dòng ra của divergence](https://openstax.org/books/calculus-volume-3/pages/6-5-divergence-and-curl).
+
+## Bài tập mở rộng
+
+Với trường `(2x,−y)`, tính divergence rồi thử code. Trường này tỏa theo x và hút theo y: dấu cuối cùng cho biết điều gì về diện tích một vùng rất nhỏ? Tiếp theo, [đo xu hướng quay bằng curl](/projects/wind-map/05-curl-va-xoay-cuc-bo).

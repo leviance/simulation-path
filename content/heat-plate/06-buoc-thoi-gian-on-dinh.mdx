@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy liên tục mà không làm nghiệm phát nổ
+
+## Vấn đề cần giải quyết
+
+Bấm N từng bước rất tiện để học công thức. Để quan sát tấm nguội dần, ta muốn chạy tự động. Có hai câu hỏi riêng: mỗi bước solver được phép dài bao nhiêu, và mỗi frame cần chạy bao nhiêu bước?
+
+Tăng FPS không chữa được một bước solver quá lớn. Ngược lại, bước ổn định nhưng gọi đúng một lần mỗi frame sẽ làm tốc độ mô phỏng phụ thuộc máy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Viết lại stencil để thấy trọng số của từng ô:
+
+$$C_{\mathrm{new}}=(1-2r_x-2r_y)C+r_xL+r_xR+r_yU+r_yD.$$
+
+Tổng trọng số bằng 1. Nếu chúng đều không âm, giá trị mới nằm trong khoảng min/max của các giá trị cũ liên quan. Vì alpha không âm, điều còn lại là:
+
+$$r_x+r_y\le\frac12.$$
+
+Khi dx=dy, hai hệ số bằng nhau và mỗi hệ số không vượt 1/4. Mặc định r=0.2. Nếu alpha tăng từ 6 lên 12 mà dt vẫn 1/30 thì r=0.4, trọng số tâm là -0.6. Một xung 1 trong nền 0 sẽ cho tâm âm chỉ sau một bước!
+
+Điều kiện ổn định không đồng nghĩa nghiệm chính xác cao. Sát giới hạn, các dao động ô nóng/lạnh xen kẽ có thể tắt rất chậm hoặc đổi dấu. Giảm dt còn giúp giảm sai số thời gian; giảm kích thước ô cũng buộc xét lại dt vì hệ số chứa dx², dy².
+
+<InteractiveLab demo="heat-plate" mode="heat-6" />
+
+Chọn alpha=12 với dt=1/30. Nút bước/chạy bị khóa và xuất hiện lý do. Đổi dt thành 1/60: r trở về 0.2, solver chạy được. Ứng dụng không âm thầm đổi alpha hoặc clamp nhiệt độ.
+
+## Viết code từng bước
+
+### Bước 1 — Chặn trước khi làm thay đổi field
+
+Ngay đầu diffuse đã có:
+
+```cpp title="include/diffusion.hpp — từ chối bước không ổn định"
+if (!stable(settings)) {
+    return false;
+}
+```
+
+Hàm kiểm tra tham số hữu hạn và dương đúng chỗ trước khi tính hệ số. Khi từ chối, current, next và tick chưa bị sửa. Main có trách nhiệm báo lỗi và dừng; không tiếp tục diễn như thể đã mô phỏng một bước.
+
+### Bước 2 — Tích lũy thời gian thật để quyết định số bước
+
+`planSteps` nhận accumulator, elapsed và dt của solver. Phần cốt lõi:
+
+```cpp title="include/timing.hpp — kế hoạch bước cho frame"
+const double accepted = std::min(elapsed, 0.25);
+const double total = accumulator + accepted;
+const double due = std::floor((total + 1e-10) / dt);
+StepPlan plan;
+plan.steps = static_cast<int>(std::min(due, 8.0));
+plan.remainder = std::max(0.0, total - due * dt);
+plan.dropped = elapsed - accepted + (due - plan.steps) * dt;
+return plan;
+```
+
+`due` là số bước đến hạn; chỉ chạy tối đa tám. Phần dư trừ cả due, không chỉ số bước đã chạy, vì ta chủ động bỏ các bước quá budget. Sai số 1e-10 giây chỉ tránh bỏ sót bước sát ranh giới do làm tròn số.
+
+Không biến elapsed của một frame thành dt rồi đưa thẳng vào diffuse. Một frame đột ngột chậm sẽ làm r tăng mạnh và phá điều kiện ổn định.
+
+### Bước 3 — Chạy solver rồi mới render
+
+Trong main, đồng hồ SDL cung cấp elapsed. Khi không pause và không có bước thủ công:
+
+```cpp title="src/main.cpp — dùng cùng dt cho scheduler và solver"
+const auto plan = heat::planSteps(accumulator, elapsed, settings.dt);
+accumulator = plan.remainder;
+droppedSeconds += plan.dropped;
+for (int step = 0; step < plan.steps; ++step) {
+    heat::diffuse(field, settings);
+}
+```
+
+N gọi một bước riêng, đồng thời pause và xóa phần dư. Đổi alpha/dt cũng pause để người học xem lại hệ số trước khi chạy. Mất focus dừng cả mô phỏng lẫn nét vẽ.
+
+## Ghép các phần lại
+
+Trong `project_47_checkpoint_6`, Space chạy/dừng, A đổi alpha qua 3/6/12, T đổi dt giữa 1/30 và 1/60. Các tham số và cảnh báo REJECTED hiện ở tiêu đề. Nếu cấu hình không ổn định, main tự chuyển về pause.
+
+Với dt=1/30, hai giây chia thành frame 15, 30 hoặc 120 FPS đều cần 60 bước nếu không bỏ thời gian. Với dt=1/60 thì cần 120 bước; không lấy 60 bước ở hai dt khác nhau rồi gọi đó là cùng thời gian mô phỏng.
+
+Bộ giới hạn giữ ứng dụng phản hồi khi máy chậm, nhưng khi dropped tăng, mô phỏng **không theo kịp thời gian thật**. Đây là đánh đổi được báo ra, không phải cơ chế tự đảm bảo tốc độ vật lý.
+
+## Thử làm sai để hiểu đúng
+
+1. Không chạy vòng lặp mất ổn định dài. Chỉ tính bằng tay xung tâm 1 với r=0.4: tâm mới -0.6, bốn bên 0.4. Tổng vẫn bằng 1 nhưng nghiệm đã sai tính dương; bảo toàn tổng chưa đủ.
+2. Tạm gọi diffuse đúng một lần mỗi frame, đổi SDL_Delay từ 16 sang 66. Mô phỏng chậm đi theo FPS. Khôi phục accumulator rồi lặp lại phép thử.
+
+## Tự kiểm tra kết quả
+
+alpha=12, dt=1/30 bị từ chối và tick không đổi. dt=1/60 khôi phục ổn định. Space/pause không tích nợ; N chỉ tăng một tick. Frame dài 10 giây không gây vòng bù vô hạn, tối đa tám bước và phần bỏ qua được báo.
+
+## Bài tập mở rộng
+
+Nếu dx và dy cùng giảm một nửa mà alpha giữ nguyên, dt tối đa phải đổi theo tỉ lệ nào? Sau đó đọc [bài 7 — đo trường nhiệt](/projects/heat-plate/07-do-doc-truong-nhiet) để kiểm nghiệm bằng số thay vì dựa vào cảm giác tốc độ.

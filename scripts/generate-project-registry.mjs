@@ -5,6 +5,7 @@ import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
 import { interactiveLabUsages } from "./mdx-contracts.mjs";
 import { assertSelfContainedModule } from "./typescript-module-contract.mjs";
 import { reconcileGeneratedFiles } from "./generated-files.mjs";
+import { projectSummaryModules } from "./project-summary-shards.mjs";
 import { normalizeSearchText } from "../lib/search-normalization.mjs";
 import {
   assertGlossaryModules,
@@ -245,10 +246,7 @@ const summaries = authoredProjects.map(({ project, editorial, roadmapItem }) => 
   download: `/downloads/${project.sourceDirectory}.zip`,
   demoId: project.demoId,
 }));
-const summariesSource =
-  `// Generated from project manifests. Do not edit by hand.\n` +
-  `import type { PublishedProjectSummary } from "../types";\n\n` +
-  `export const publishedProjectSummaries = ${JSON.stringify(summaries, null, 2)} as const satisfies readonly PublishedProjectSummary[];\n`;
+const summaryModules = projectSummaryModules(summaries);
 
 const manifestEntries = projects.map(
   (project) => `    "${project.slug}": () => import("../projects/p${project.id}/manifest"),`,
@@ -341,7 +339,7 @@ const glossarySearchItems = glossaryTerms.map((term) =>
 const expectedFiles = new Map([
   [path.join(generatedDirectory, "glossary.ts"), glossaryRegistrySource()],
   [path.join(generatedDirectory, "catalog.ts"), catalogSource],
-  [path.join(generatedDirectory, "project-summaries.ts"), summariesSource],
+  ...Array.from(summaryModules, ([file, source]) => [path.join(generatedDirectory, file), source]),
   [path.join(generatedDirectory, "project-loaders.ts"), loadersSource],
   [path.join(generatedDirectory, "lab-loaders.ts"), labLoadersSource],
 ]);

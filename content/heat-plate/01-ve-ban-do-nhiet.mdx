@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ tấm kim loại trước khi mô phỏng nhiệt
+
+## Vấn đề cần giải quyết
+
+Trong Project 46, mỗi ô chứa một nhãn như Sand hoặc Water. Lần này, ô chứa **một con số nhiệt độ**. Ta chưa làm nhiệt lan ngay: trước hết phải nhìn thấy một vùng nóng ở giữa tấm lạnh và biết con số nào đã tạo nên màu đó.
+
+[Tải source Project 47](/downloads/project-47-heat-plate.zip), giải nén và mở terminal tại thư mục có `CMakeLists.txt`. Starter đã có window, renderer, event loop và xử lý lỗi SDL. Chạy bộ khung trước để chắc chắn môi trường build đang hoạt động:
+
+```bash title="Terminal — chạy bộ khung SDL3"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_47_starter --parallel 2
+.\build\Debug\project_47_starter.exe
+```
+
+Đây là đường dẫn Windows/Visual Studio. Với generator một cấu hình trên Linux/macOS, executable nằm trực tiếp trong `build/`. Starter mở cửa sổ nền tối; sau bài này, checkpoint 01 phải hiện tấm 64 × 48 ô. Bạn có thể viết tiếp trong `starter/` của ZIP rồi đối chiếu mã đầy đủ ở cuối bài.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng nhiệt độ dư chuẩn hóa, ký hiệu $\theta$:
+
+$$\theta=\frac{T-T_{\mathrm{ambient}}}{T_{\mathrm{hot}}-T_{\mathrm{ambient}}}.$$
+
+Nếu môi trường là 20°C và mức nóng tham chiếu là 100°C thì 60°C tương ứng $\theta=0.5$. Các con số °C này chỉ giúp hiểu phép chuẩn hóa; chương trình chưa mô tả một loại kim loại cụ thể. Trong source, 0 là lạnh như môi trường, 1 là mức nóng của bút.
+
+Field có 64 cột và 48 hàng. Địa chỉ của ô `(x,y)` là `y*width+x`; ô `(3,2)` có index 131. Đây là địa chỉ phần tử, không phải pixel màn hình. Resize chỉ phóng cách vẽ, không tăng số ô hay lượng nhiệt.
+
+<InteractiveLab demo="heat-plate" mode="heat-1" />
+
+Chọn ô bằng chuột hoặc mũi tên. Khối giữa có giá trị 1, ngoài khối là 0. Chưa có chuyển động: hình đứng yên là kết quả đúng của bài này.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ bộ khung, chọn hệ tọa độ để vẽ
+
+Sau khi tạo window thành công, main tạo renderer và kiểm tra lỗi riêng:
+
+```cpp title="src/main.cpp — tạo renderer"
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (!renderer) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+Ngay sau đó, starter gọi `SDL_SetRenderLogicalPresentation` với kích thước 64 × 48 và chế độ LETTERBOX. Nhờ vậy, một đơn vị vẽ là một ô. SDL giữ tỉ lệ khi cửa sổ thay đổi; dải thừa không thuộc tấm kim loại.
+
+### Bước 2 — Lưu số đo trong Field
+
+Mở `include/field.hpp`. Field có width, height và hai vector `current`/`next`. Bây giờ chỉ đọc current; next được chuẩn bị cho bước truyền nhiệt sau này. Constructor kiểm kích thước trước khi cấp phát:
+
+```cpp title="include/field.hpp — tạo đủ ô lạnh"
+current.assign(static_cast<std::size_t>(width * height), 0.0);
+next = current;
+```
+
+Dùng `double` vì nhiệt độ sau một bước thường là số lẻ. Không lưu vào byte màu rồi đọc màu ngược ra nhiệt độ: làm vậy vừa mất độ chính xác vừa buộc solver phụ thuộc bảng màu.
+
+`makeField` đặt 8 × 8 ô ở giữa bằng 1. Tạo field **một lần trước vòng lặp main**; nếu tạo lại mỗi frame, mọi thay đổi của người dùng và solver đều bị xóa.
+
+### Bước 3 — Đổi nhiệt độ thành màu rồi vẽ
+
+`colorFor` dùng một thang cố định: 0 xanh đậm, 1 vàng. Nó giới hạn giá trị phục vụ hiển thị, nhưng không ghi lại vào Field. Trong `drawField`, mỗi ô được vẽ bằng đoạn này:
+
+```cpp title="include/view.hpp — tô hình vuông của một ô"
+const SDL_FRect cell{static_cast<float>(x), static_cast<float>(y), 1.0F, 1.0F};
+if (!SDL_RenderFillRect(renderer, &cell)) {
+    return false;
+}
+```
+
+Màu được đặt trước lời gọi vẽ. Hai số 1 là kích thước logical của ô, không phải một pixel vật lý. Khi gọi hàm trong main, chuyển lỗi vẽ thành cờ để dọn tài nguyên:
+
+```cpp title="src/main.cpp — đưa field lên màn hình"
+if (!heat::drawField(renderer, field)) {
+    failed = true;
+}
+```
+
+## Ghép các phần lại
+
+Vòng lặp giữ thứ tự: đọc event → clear → drawField → present. Lúc này không có `diffuse`. Build `project_47_checkpoint_1` và chạy để đối chiếu với Canvas; phải thấy vùng nóng 8 × 8 giữa tấm, không tự nhạt đi.
+
+Toàn bộ source sau bài được hiển thị ở cuối trang. Bạn có thể mở từng file để xem chỗ khai báo biến, include và cách hàm mới được gọi trong main, thay vì ghép các đoạn trích mà không biết vị trí.
+
+## Thử làm sai để hiểu đúng
+
+1. Chuyển `drawField` lên trước clear. Hình biến mất vì bị xóa trong cùng frame; đưa nó về sau clear.
+2. Tạm đổi tất cả giá trị 1 trong cảnh thành 0.5. Vùng giữa phải tối đi. Nếu tự co thang màu theo min/max mỗi frame, vùng 0.5 có thể vẫn vàng rực và che việc tấm đã nguội. Giữ thang 0–1 cố định.
+
+## Tự kiểm tra kết quả
+
+Có 3072 ô, trong đó 64 ô nóng. Đổi kích thước window không làm đổi mảng current. Ô `(3,2)` có index 131; `contains(64,0)` trả false. Đóng cửa sổ không báo lỗi và renderer được giải phóng trước window.
+
+## Bài tập mở rộng
+
+Tạo một dải có nhiệt độ tăng từ 0 đến 1 theo chiều ngang. Chỉ sửa dữ liệu, không sửa vòng vẽ. Tiếp theo, [dùng chuột đặt nhiệt độ](/projects/heat-plate/02-dat-nhiet-bang-chuot) để không phải build lại mỗi lần đổi cảnh.

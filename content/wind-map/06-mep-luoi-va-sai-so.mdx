@@ -1,0 +1,91 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo sai số và kiểm tra cách lấy đạo hàm ở mép
+
+## Vấn đề cần giải quyết
+
+Các trường tuyến tính đều cho đáp án rất đẹp. Điều đó chưa chứng minh gradient của một scalar cong sẽ chính xác. Ta cần một đáp án được suy ra độc lập, đo sai số và xem nó thay đổi thế nào khi tinh lưới.
+
+Ta cũng phải kiểm mép riêng. Chỉ đo vùng giữa có thể làm cả project báo “đúng” trong khi đạo hàm ở hàng ngoài cùng sai.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hill có $\phi=e^{-(x^2+y^2)}$. Dùng quy tắc đạo hàm hàm hợp, đáp án là:
+
+$$\nabla\phi=(-2x\phi,-2y\phi).$$
+
+Oracle tính công thức này trực tiếp, không gọi derivativeX/Y. Sai số tại một nút là độ dài hiệu giữa hai vector:
+
+$$e=\sqrt{(g_x-g_x^{\mathrm{exact}})^2+(g_y-g_y^{\mathrm{exact}})^2}.$$
+
+Sai phân trung tâm có lỗi bậc hai khi hàm đủ trơn. Từ khai triển quanh x, các hạng hằng và bậc chẵn triệt tiêu khi lấy hiệu hai phía; hạng còn lại sau đạo hàm chứa $h^2$. Ở đầu thấp, công thức ba điểm $(-3f_0+4f_1-f_2)/(2h)$ cũng có lỗi bậc hai; đầu cao dùng $(3f_n-4f_{n-1}+f_{n-2})/(2h)$. Chia h làm đôi thường giảm lỗi xấp xỉ bốn lần, nhưng không phải lời hứa cho mọi hàm, mọi độ phân giải hay khi làm tròn đã chiếm ưu thế.
+
+Ta chọn 33×25 và 65×49 trên **cùng miền**. Số khoảng tăng gấp đôi, dx/dy giảm một nửa. Không nhân đôi width thành 66 vì lưới gồm cả hai đầu miền.
+
+<InteractiveLab demo="wind-map" mode="wind-6" />
+
+Giữ preset Gradient, scalar Hill và tắt xoáy. Đọc sai số trong miền/mép, đổi độ phân giải rồi so. Với Bowl, sai phân đang dùng khớp hàm bậc hai nên lỗi gần bằng 0; dùng Hill mới thấy rõ hội tụ.
+
+## Viết code từng bước
+
+### Bước 1 — Viết oracle giải tích
+
+`exactGradient` chỉ nhận vị trí và loại scalar:
+
+```cpp title="include/field.hpp — đáp án gradient của Hill"
+if (potential == Potential::Hill) {
+    const double value = std::exp(-p.x * p.x - p.y * p.y);
+    return {-2 * p.x * value, -2 * p.y * value};
+}
+```
+
+Oracle không đọc Field.vx/vy. Vì thế nó vẫn phát hiện lỗi nếu công thức sai phân chia thiếu dx hoặc đảo dấu.
+
+### Bước 2 — Tách max error ở hai vùng
+
+`gradientError` tính sai số vector, rồi ghi max vào đúng vùng:
+
+```cpp title="include/diagnostics.hpp — đo sai số từng nút"
+const Vec2 exact = exactGradient(world(field, x, y), potential);
+const double error = std::hypot(field.vx[i] - exact.x, field.vy[i] - exact.y);
+if (x == 0 || y == 0 || x == field.width - 1 || y == field.height - 1) {
+    report.boundary = std::max(report.boundary, error);
+} else {
+    report.interior = std::max(report.interior, error);
+}
+```
+
+Không lấy một giá trị trung bình chung: một hàng mép sai có thể bị hàng nghìn nút giữa che đi. Khi preset không phải Gradient hoặc có cộng xoáy, vx/vy không còn là gradient thuần của phi; inspector không dùng oracle này để đánh giá trường đó.
+
+### Bước 3 — Đổi lưới nhưng giữ miền
+
+Phím G tạo Field mới với cặp kích thước đã chọn:
+
+```cpp title="src/main.cpp — chọn độ phân giải"
+if (field.width == 33) {
+    field = wind::Field(65, 49);
+} else {
+    field = wind::Field();
+}
+```
+
+Sau đó đưa cursor về giữa và `populate` lại. Constructor tự tính dx/dy theo số khoảng. Giữ spacing cũ khi tăng số nút sẽ làm miền mở rộng, không còn là cùng thí nghiệm tinh lưới.
+
+## Ghép các phần lại
+
+Build `project_48_checkpoint_6`. Chương trình mở với Gradient/Hill. I in hai sai số, G đổi lưới, I đọc lại. Tests của bản cuối yêu cầu mỗi sai số giảm hơn ba lần trong ca này; khoảng cho phép tránh coi hệ số bốn là đẳng thức tuyệt đối.
+
+Kiểm mép bằng phím mũi tên. Không nối hai đầu miền thành tuần hoàn và không lặp mẫu đầu để giả vờ có hàng xóm. Sai phân một phía là phép **đo đạo hàm**, chưa phải điều kiện biên của một fluid solver.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm thay ba điểm đầu trái bằng `(f1-f0)/h`. Công thức này có lỗi bậc một với hàm tổng quát; sai số mép không còn giảm cùng tốc độ. Khôi phục ba điểm rồi đo lại cả hai vùng.
+2. Tạo lưới 65×49 nhưng giữ dx/dy bằng 0.125. World không còn giữ miền cũ hoặc đạo hàm bị scale sai. Khôi phục constructor tính spacing từ width−1/height−1.
+
+## Tự kiểm tra kết quả
+
+Bowl cho lỗi gần 0 ở cả hai vùng. Hill có lỗi khác 0 nhưng giảm hơn ba lần khi tinh lưới theo ca chuẩn. Hai nút đầu/cuối vẫn đúng world; vector và oracle dùng cùng vị trí. Không đánh giá trường có cộng xoáy bằng oracle gradient thuần. Lỗi không hữu hạn phải làm test thất bại, không được tính như 0.
+
+## Bài tập mở rộng
+
+Thử thêm lưới 129×97 và ghi ba hàng số lỗi. Khi nào sai số làm tròn bắt đầu có ý nghĩa? Thử scalar có góc nhọn và giải thích vì sao lập luận hàm trơn không còn áp dụng ngay tại góc. Tiếp theo, [nội suy vận tốc và thả hạt đánh dấu](/projects/wind-map/07-noi-suy-va-hat-danh-dau).

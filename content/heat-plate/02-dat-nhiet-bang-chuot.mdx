@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt vùng nóng và lạnh bằng chuột
+
+## Vấn đề cần giải quyết
+
+Tấm ở bài trước chỉ có một khối nóng cố định. Ta cần click ở đâu thì đặt vùng nóng ở đó, hoặc chọn bút lạnh để làm nguội một vùng. Hãy hoàn thành input khi solver còn chưa chạy: nét vẽ đứng yên giúp phát hiện click lệch và các khoảng hở dễ hơn.
+
+Tiếp tục từ checkpoint 01. Bài này thay đổi `field.hpp`, `view.hpp` và main; chưa đụng đến phương trình nhiệt.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mouse event dùng tọa độ window, còn renderer dùng 64 × 48 đơn vị logical. Không chia mouseX cho một kích thước ô cố định: sau resize hoặc khi có letterbox, phép chia đó sẽ sai.
+
+Sau khi đổi sang logical coordinates, ô được chọn là:
+
+$$x_{\mathrm{cell}}=\lfloor x_{\mathrm{logical}}\rfloor,\qquad y_{\mathrm{cell}}=\lfloor y_{\mathrm{logical}}\rfloor.$$
+
+Brush bán kính r tô những offset thỏa $dx^2+dy^2\le r^2$. Bán kính 0 vẫn đặt được một ô. Ta **đặt** nhiệt độ bằng 1 hoặc 0, không cộng thêm nhiệt theo số event. Đây chưa phải nguồn phát nhiệt có công suất xác định.
+
+<InteractiveLab demo="heat-plate" mode="heat-2" />
+
+Chọn “Tấm lạnh”, bán kính 0 và kéo nhanh một nét. Canvas cho phép dùng mũi tên rồi Enter để đặt bút mà không cần chuột. Cả tấm vẫn đứng yên vì ta chưa cập nhật nhiệt.
+
+## Viết code từng bước
+
+### Bước 1 — Đổi tọa độ bằng renderer đang dùng
+
+Trong `mouseCell`, gọi SDL trước khi lấy phần nguyên:
+
+```cpp title="include/view.hpp — chuyển từ window sang logical"
+float logicalX = 0;
+float logicalY = 0;
+if (!SDL_RenderCoordinatesFromWindow(renderer, mouseX, mouseY, &logicalX, &logicalY)) {
+    return false;
+}
+```
+
+Hàm kiểm tra số hữu hạn và bounds, rồi mới floor. Nếu click trong letterbox, trả false. Không clamp điểm đó vào ô gần nhất: người dùng chưa chạm tấm mà mép tấm lại bị tô là một lỗi input.
+
+### Bước 2 — Tô một dấu tròn
+
+`paintDisk` nhận Field và tọa độ ô; nó không biết SDL. Vòng lặp duyệt một hình vuông nhỏ quanh tâm rồi loại các điểm nằm ngoài hình tròn:
+
+```cpp title="include/field.hpp — chỉ ghi những ô thuộc brush"
+const int x = centerX + dx;
+const int y = centerY + dy;
+if (dx * dx + dy * dy <= radius * radius && field.contains(x, y)) {
+    field.current[field.index(x, y)] = value;
+}
+```
+
+`contains` bảo vệ mảng khi brush chạm mép. Bán kính được giới hạn 0–8; giá trị bút giới hạn 0–1. Giới hạn **input của bút** là một quyết định giao diện, khác hẳn việc clamp kết quả solver để giấu nghiệm sai.
+
+### Bước 3 — Nối các sample, nhưng không nối qua ngoài lưới
+
+Mouse không gửi một event cho mỗi ô. Nếu chỉ đóng dấu ở điểm mới nhất, nét bán kính 0 sẽ đứt khi rê nhanh. `paintStroke` chia đoạn theo thành phần dịch chuyển lớn hơn:
+
+```cpp title="include/field.hpp — số bước nội suy"
+const int dx = x1 - x0;
+const int dy = y1 - y0;
+const int steps = std::max(std::abs(dx), std::abs(dy));
+```
+
+Nếu steps bằng 0, đóng một dấu và return. Với trường hợp còn lại:
+
+```cpp title="include/field.hpp — đóng dấu trên đoạn"
+for (int i = 0; i <= steps; ++i) {
+    const double t = static_cast<double>(i) / steps;
+    const int x = static_cast<int>(std::lround(x0 + t * dx));
+    const int y = static_cast<int>(std::lround(y0 + t * dy));
+    paintDisk(field, x, y, radius, value);
+}
+```
+
+## Ghép các phần lại
+
+Main lưu `drawing`, `previousValid` và điểm trước. Nhấn chuột trái: bắt đầu nét và tô ngay. Rê chuột: nối từ điểm trước đến điểm mới. Nhả nút hoặc mất focus: kết thúc nét. Khi ra ngoài lưới, bỏ previousValid để lần vào lại không tạo đường nối qua vùng chưa được vẽ.
+
+Phím 1 chọn nóng, 2 chọn lạnh; [ và ] đổi bán kính; C đưa cả tấm về 0; R khôi phục cảnh. Build `project_47_checkpoint_2`. Trong bản SDL, thao tác đặt ô bằng mũi tên/Enter sẽ được thêm ở bài 7.
+
+Giữ chuột đứng yên sau khi click không tiếp tục giữ nhiệt độ tại 1. Khi đã có solver, vùng đó sẽ nguội dần. Muốn một nguồn giữ nóng liên tục cần một mô hình riêng, không nên âm thầm biến brush thành nguồn đó.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay paintStroke bằng paintDisk tại mỗi mouse motion. Rê thật nhanh với bán kính 0 để thấy khoảng hở, rồi khôi phục nội suy.
+2. Tạm không hủy previousValid khi mouse ra ngoài. Kéo ra khỏi mép và vào ở vị trí khác: đường nối dài ngoài ý muốn xuất hiện. Sửa lại trước khi thêm solver.
+
+## Tự kiểm tra kết quả
+
+Click sau resize vẫn trúng ô. Bán kính 0 đặt đúng một ô, nét nhanh không đứt giữa các sample hợp lệ. Brush ở góc không ghi ra ngoài vector. Tô lạnh trả giá trị về 0; nhả chuột bên ngoài hoặc mất focus không để bút mắc kẹt.
+
+## Bài tập mở rộng
+
+Thêm mức bút 0.5 và kiểm tra bằng inspector trên Canvas. Giải thích vì sao vẽ lại cùng một ô bằng bút 1 không làm nó thành 2. Sang [bài 3 — nhiệt lan trên một hàng](/projects/heat-plate/03-nhiet-lan-tren-mot-hang) khi input đã ổn.

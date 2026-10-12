@@ -1,0 +1,94 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Gradient chỉ về phía nào trên một bản đồ độ cao?
+
+## Vấn đề cần giải quyết
+
+Các trường trước được viết trực tiếp bằng công thức vector. Bây giờ ta chỉ có một giá trị scalar tại mỗi nút, giống bản đồ độ cao. Làm sao từ những con số đó biết đi theo hướng nào thì giá trị tăng nhanh nhất?
+
+Ta sẽ lưu phi, lấy hai đạo hàm riêng, rồi vẽ gradient. Trong chương trình, chỉ preset Gradient dùng kết quả này làm trường vector. Chọn Source hay Rotation vẫn cho vector theo công thức riêng, dù lớp scalar còn hiển thị.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gradient của một hàm hai biến là:
+
+$$\nabla\phi=\left(\frac{\partial\phi}{\partial x},\frac{\partial\phi}{\partial y}\right).$$
+
+Đạo hàm theo x đo mức thay đổi khi đi ngang và giữ y cố định; theo y đo khi đi dọc và giữ x cố định. Cặp số chỉ hướng phi tăng nhanh nhất. Ta không mặc định vật thể hay gió phải đi theo hướng đó: chẳng hạn dòng nhiệt trong Project 47 đi về phía nhiệt độ giảm, tức ngược gradient.
+
+Bowl có $\phi=(x^2+y^2)/2$: đáy ở gốc nên gradient hướng ra ngoài. Hill có $\phi=\exp(-x^2-y^2)$: đỉnh ở gốc nên gradient hướng vào. Cả hai có gradient bằng 0 đúng tại gốc.
+
+Tại nút trong miền, ta ước lượng:
+
+$$\partial_x\phi(x,y)\approx\frac{\phi(x+h,y)-\phi(x-h,y)}{2h},\qquad h=\Delta x.$$
+
+Hai mẫu cách nhau 2h nên mẫu số phải là 2h. Mảng y tăng hướng lên, vì vậy đạo hàm y dùng cùng thứ tự “chỉ số cao trừ chỉ số thấp”.
+
+<InteractiveLab demo="wind-map" mode="wind-3" />
+
+Chọn Gradient của phi, rồi đổi Bowl/Hill. Tại `(1,0)`, Bowl cho vector `(1,0)`, Hill hướng sang trái. Màu là scalar, mũi tên là gradient: chúng biểu diễn hai kiểu dữ liệu khác nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo scalar trước khi lấy đạo hàm
+
+`potentialAt` tính phi từ vị trí world. Cả hai trường đều trơn và có đáp án giải tích để kiểm về sau:
+
+```cpp title="include/field.hpp — tính phi tại một vị trí"
+const double r2 = p.x * p.x + p.y * p.y;
+if (potential == Potential::Hill) {
+    return std::exp(-r2);
+}
+return 0.5 * r2;
+```
+
+`populate` ghi scalar cho tất cả nút trước. Gradient chỉ đọc mảng scalar đã hoàn chỉnh; không tính đạo hàm khi một nửa mảng vẫn là dữ liệu cũ.
+
+### Bước 2 — Viết derivativeX và derivativeY
+
+`derivativeX` nhận Field để lấy dx và index, cùng mảng giá trị cần lấy đạo hàm. Nhánh bên trong miền là:
+
+```cpp title="include/derivatives.hpp — sai phân trung tâm theo x"
+return (values[i + 1] - values[i - 1]) / (2 * field.dx);
+```
+
+Ở đầu trái/phải không có đủ hai mẫu. Source dùng ba điểm phía trong miền. Ở đầu trái:
+
+```cpp title="include/derivatives.hpp — đạo hàm tại đầu trái"
+if (x == 0) {
+    return (-3 * values[i] + 4 * values[i + 1] - values[i + 2]) / (2 * field.dx);
+}
+```
+
+Hệ số −3, 4, −1 cho tổng bằng 0 khi scalar hằng, và trả đúng độ dốc của hàm tuyến tính hoặc bậc hai. Bài 6 sẽ kiểm kỹ sai số mép. `derivativeY` dùng stride width và dy, không dùng i±1.
+
+### Bước 3 — Ghép hai đạo hàm thành vector
+
+Hàm gradient duyệt lại lưới và gán hai thành phần:
+
+```cpp title="include/derivatives.hpp — ghi vector gradient tại nút"
+const auto i = field.index(x, y);
+field.vx[i] = derivativeX(field, field.scalar, x, y);
+field.vy[i] = derivativeY(field, field.scalar, x, y);
+```
+
+Không chuẩn hóa vector này trong dữ liệu: độ dài gradient cũng chứa thông tin về độ dốc. Renderer tự giới hạn độ dài mũi tên để hình dễ đọc.
+
+## Ghép các phần lại
+
+Sau vòng lặp tạo scalar/nền, `populate` gọi gradient nếu chọn preset Gradient. H đổi Bowl/Hill; L chuyển giữa chỉ mũi tên và lớp màu scalar. I in phi và vector. Build `project_48_checkpoint_3`, chọn Gradient rồi thử hai scalar.
+
+Thang màu cố định −2..2; Bowl gần góc có thể vượt 2 và bão hòa màu. Inspector vẫn đọc số thật. Không dùng màu để lưu lại phi hoặc sửa nghiệm.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm bỏ số 2 ở mẫu của sai phân trung tâm. Mũi tên có thể vẫn chỉ đúng hướng nhưng độ lớn gấp đôi. So tại `(1,0)` của Bowl rồi khôi phục mẫu số.
+2. Đảo thứ tự hai mẫu trong derivativeY. Bowl sẽ cho vy âm ở nửa trên trong khi vx vẫn đúng. Kiểm một điểm có cả x và y khác 0, khôi phục thứ tự trước khi tiếp tục.
+
+## Tự kiểm tra kết quả
+
+Bowl cho gradient `(x,y)` trong sai số dấu phẩy động, kể cả mép. Scalar hằng cho gradient 0. Hill hướng về đỉnh, gradient ở đỉnh bằng 0. Chuyển scalar trong preset Rotation không biến Rotation thành gradient. Kiểm số bằng I và Canvas; [OpenStax giải thích gradient và đạo hàm theo hướng](https://openstax.org/books/calculus-volume-3/pages/4-6-directional-derivatives-and-the-gradient).
+
+## Bài tập mở rộng
+
+Thêm scalar `phi=2x−3y`, dự đoán gradient ở mọi nút rồi kiểm. Nếu muốn vật thể trượt xuống địa hình, nên dùng gradient hay âm gradient? Tiếp theo, [đo dòng đi ra ròng bằng divergence](/projects/wind-map/04-divergence-va-dong-ra).

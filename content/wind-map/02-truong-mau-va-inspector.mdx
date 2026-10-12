@@ -1,0 +1,94 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tỏa ra, hút vào, xoay và trượt khác nhau thế nào?
+
+## Vấn đề cần giải quyết
+
+Lưới mũi tên đã vẽ được nhưng tất cả giống nhau. Ta sẽ thay vector theo vị trí, rồi dùng inspector để kiểm công thức tại một nút cụ thể. Các trường nhỏ có đáp án dễ tính này sẽ là bộ thí nghiệm cho divergence và curl ở các bài sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trường vector là hàm gán một vector cho mỗi vị trí. Năm trường đầu của project:
+
+| Trường | Vector tại (x,y) | Dấu hiệu nhìn thấy |
+| --- | --- | --- |
+| Uniform | (1,0.25) | Mọi mũi tên như nhau |
+| Source | (x,y) | Tỏa khỏi gốc, xa gốc dài hơn |
+| Sink | (−x,−y) | Hướng về gốc |
+| Rotation | (−y,x) | Tiếp tuyến quanh gốc |
+| Shear | (y,0) | Hàng trên đi phải, hàng dưới đi trái |
+
+Với Rotation, tại `(1,0)` vector là `(0,1)`, còn tại `(0,1)` là `(-1,0)`: quay ngược chiều kim đồng hồ theo world y hướng lên. Với Shear, tại `(1,0)` vector bằng 0 dù điểm ấy không ở gốc. Các ví dụ này cho thấy vị trí và vector là hai dữ liệu khác nhau.
+
+<InteractiveLab demo="wind-map" mode="wind-2" />
+
+Chọn trường, click một nút hoặc dùng phím mũi tên, rồi đọc vector. Mũi tên đã bị giới hạn độ dài để dễ nhìn; inspector giúp kiểm số thật.
+
+## Viết code từng bước
+
+### Bước 1 — Viết công thức trên world coordinates
+
+`populate` duyệt các nút, lấy vị trí world rồi tính vector. Với Source và Sink:
+
+```cpp title="include/scenes.hpp — hai trường tỏa và hút"
+if (scene.preset == Preset::Source) {
+    v = p;
+}
+if (scene.preset == Preset::Sink) {
+    v = {-p.x, -p.y};
+}
+```
+
+Rotation dùng phép xoay 90° đã học trong Project 06–09. Shear chỉ phụ thuộc y:
+
+```cpp title="include/scenes.hpp — trường xoay và trượt"
+if (scene.preset == Preset::Rotation) {
+    v = {-p.y, p.x};
+}
+if (scene.preset == Preset::Shear) {
+    v = {p.y, 0};
+}
+```
+
+Ghi v.x/v.y vào hai mảng tại cùng index. Mỗi lần dựng trường phải ghi lại toàn bộ nền, tránh để dữ liệu preset trước sót lại.
+
+### Bước 2 — Giữ lựa chọn trong Scene
+
+Scene chứa preset, còn Field là các mẫu đã tính. Khi bấm P, tăng preset và dựng lại trường. Trong checkpoint 02, chỉ có năm trường đầu; preset Gradient sẽ được mở ở bài 3.
+
+```cpp title="src/main.cpp — chọn preset kế tiếp"
+scene.preset = static_cast<wind::Preset>((static_cast<int>(scene.preset) + 1) % count);
+changed = true;
+```
+
+Main xử lý `changed` trước khi render bằng lời gọi `populate`. Trường ở bài này không phụ thuộc thời gian, nên không cần tính lại mỗi frame.
+
+### Bước 3 — Đổi input về world rồi chọn nút
+
+`mouseWorld` gọi `SDL_RenderCoordinatesFromWindow` để bỏ ảnh hưởng resize/letterbox, sau đó đảo screen y về world. Chỉ nhận điểm trong miền; sai số làm tròn rất nhỏ sát cạnh được hấp thụ, điểm ngoài bản đồ thực sự bị từ chối. Chọn nút gần nhất:
+
+```cpp title="src/main.cpp — chọn nút từ tọa độ world"
+cursorX = std::clamp(static_cast<int>(std::lround((p.x + 2) / field.dx)), 0, field.width - 1);
+cursorY = std::clamp(static_cast<int>(std::lround((p.y + 1.5) / field.dy)), 0, field.height - 1);
+```
+
+Clamp ở đây bảo vệ index sau phép làm tròn, không biến click ngoài letterbox thành click trên mép. Phím Up tăng cursorY vì y world hướng lên. Phím I in world và vector ra console, không nhét mọi số vào window title.
+
+## Ghép các phần lại
+
+Tạo Scene trước vòng lặp, `populate` một lần lúc đầu và mỗi khi P/R làm thay đổi Scene. Đọc input → cập nhật lựa chọn → dựng trường nếu cần → clear/draw/present. Build `project_48_checkpoint_2`; dùng P, các phím mũi tên và I để đối chiếu Canvas.
+
+Click chỉ chọn nút, chưa làm thay đổi gió. Cặp số đang đọc là mẫu tại nút gần nhất, chưa phải vận tốc được nội suy ở chính xác vị trí chuột.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm dùng `{x,y}` của vòng lặp cho Source thay vì p world. Mũi tên không còn tỏa từ giữa hình; inspector tại gốc world cũng khác 0. Khôi phục lời gọi `world`.
+2. Trong Rotation, đổi `{-p.y,p.x}` thành `{p.y,-p.x}`. Hình vẫn xoay nhưng theo chiều ngược lại. Kiểm ở `(1,0)` rồi khôi phục dấu; bài curl sẽ phát hiện chính lỗi này bằng một con số.
+
+## Tự kiểm tra kết quả
+
+Source tại `(1,0)` cho `(1,0)`; Sink cho `(-1,0)`; Rotation cho `(0,1)`; Shear cho `(0,0)`. Rotation tại gốc bằng 0 và không gây chia 0. Resize rồi chọn lại cùng world: vector không đổi. Chọn mép bằng bàn phím vẫn đọc được, click ngoài bản đồ không làm index vượt mảng.
+
+## Bài tập mở rộng
+
+Tự thêm trường `(2x,−y)`, mô tả hình trước khi viết. Tại vị trí nào vector bằng 0? Tiếp theo, [tạo vector từ độ dốc của một trường scalar](/projects/wind-map/03-gradient-tu-truong-scalar).

@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ lưới mũi tên để nhìn thấy một trường vector
+
+## Vấn đề cần giải quyết
+
+Một bản đồ nhiệt cho mỗi vị trí một con số. Bản đồ gió cần thêm hướng: tại cùng vị trí, gió có thể thổi sang phải, hướng lên hoặc đứng yên. Ta sẽ lưu hai thành phần của một vector rồi vẽ chúng thành mũi tên. Chưa đo gradient, divergence hay curl trong bài này.
+
+[Tải source Project 48](/downloads/project-48-wind-map.zip), giải nén và mở terminal ở thư mục có `CMakeLists.txt`. Starter đã có window, renderer, event loop và logical presentation. Hãy chạy cửa sổ nền tối trước:
+
+```bash title="Terminal — build và chạy starter trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_48_starter --parallel 2
+.\build\Debug\project_48_starter.exe
+```
+
+Với Linux/macOS và generator một cấu hình, thêm `-DCMAKE_BUILD_TYPE=Debug` khi configure; executable nằm ngay trong `build/`. Bạn có thể viết tiếp trong `starter/` của ZIP. Mã chạy được sau mỗi bài nằm ở cuối trang để đối chiếu vị trí khai báo và lời gọi hàm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng miền world $[-2,2]\times[-1.5,1.5]$. Trục x hướng sang phải, y hướng lên. 33 cột và 25 hàng là **các nút lấy mẫu**, gồm cả hai đầu miền:
+
+$$\Delta x=\frac{4}{33-1}=0.125,\qquad \Delta y=\frac{3}{25-1}=0.125.$$
+
+Nút `(0,0)` ở góc dưới trái, `(32,24)` ở góc trên phải. Cách này khác lưới cell-centered trong Project 47: ở đây vị trí đầu tiên nằm ngay trên biên. Index vẫn là `y*width+x`; nút `(3,2)` có index 69.
+
+Đầu tiên, mọi vector đều bằng `(1,0.25)`. Mũi tên nghiêng nhẹ lên phải. Độ dài vẽ tỉ lệ với độ lớn vector nhưng có giới hạn để chúng không che nhau; số lưu trong Field vẫn giữ nguyên.
+
+<InteractiveLab demo="wind-map" mode="wind-1" />
+
+Hình đứng yên là đúng. Chuyển động của hạt chỉ xuất hiện ở bài 7; mũi tên hiện tại là các mẫu của một trường.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ bộ khung SDL3 chạy được
+
+Sau khi tạo window, starter tạo renderer và kiểm lỗi riêng. Không gọi hàm vẽ nếu renderer chưa tồn tại:
+
+```cpp title="src/main.cpp — tạo renderer"
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (!renderer) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+Logical presentation là 800×600, chế độ LETTERBOX. Đây là hệ tọa độ để SDL vẽ, còn world chỉ rộng 4 đơn vị. `toScreen` lo chuyển giữa hai hệ; khi resize, SDL lo scale logical lên cửa sổ thật.
+
+### Bước 2 — Lưu hai thành phần ở mỗi nút
+
+`Vec2` là cặp số x/y. Field có ba mảng: scalar được chuẩn bị cho bài sau, vx/vy giữ trường vector hiện tại. Sau khi kiểm kích thước, constructor tạo đủ phần tử:
+
+```cpp title="include/field.hpp — cấp phát dữ liệu lưới"
+dx = 4.0 / (width - 1);
+dy = 3.0 / (height - 1);
+scalar.assign(static_cast<std::size_t>(width * height), 0.0);
+vx.assign(scalar.size(), 1.0);
+vy.assign(scalar.size(), 0.25);
+```
+
+`world(field,x,y)` biến index lưới thành vị trí trong miền. Đừng dùng `(x,y)` của vòng lặp làm world trực tiếp, nếu không miền sẽ thành 0..32 và 0..24.
+
+### Bước 3 — Vẽ thân và hai cạnh đầu mũi tên
+
+`drawArrow` tính độ lớn bằng `hypot`. Nếu gần 0, nó vẽ chấm thay vì chia cho 0. Với vector khác 0, ta lấy hướng đơn vị rồi tìm đầu mũi tên:
+
+```cpp title="include/view.hpp — tính đầu mũi tên"
+const double length = std::min(0.16, 0.09 * speed);
+const Vec2 direction{v.x / speed, v.y / speed};
+const Vec2 tip{p.x + length * direction.x, p.y + length * direction.y};
+```
+
+Hai nhánh đầu mũi tên lấy hướng lùi và hướng vuông góc. Hàm `line` đổi cả hai đầu sang screen rồi gọi SDL:
+
+```cpp title="include/view.hpp — vẽ một đoạn thẳng"
+const Vec2 start = toScreen(a);
+const Vec2 end = toScreen(b);
+return SDL_RenderLine(renderer, static_cast<float>(start.x), static_cast<float>(start.y), static_cast<float>(end.x), static_cast<float>(end.y));
+```
+
+`toScreen` dùng `1.5-p.y` cho tọa độ screen y. Chỉ đảo ở đây; vy trong Field vẫn dương khi vector hướng lên.
+
+## Ghép các phần lại
+
+Main tạo Field một lần trước vòng lặp. Sau clear, gọi `drawField(renderer,field,layer)` rồi present. `drawField` duyệt một phần các nút để mũi tên không quá dày; toàn bộ dữ liệu vẫn có đủ 825 nút. Build target `project_48_checkpoint_1` rồi chạy trong `build/Debug/` trên Windows.
+
+Lỗi SDL được chuyển thành `failed=true`, sau đó dọn renderer và window rồi trả `EXIT_FAILURE`. Đóng cửa sổ bình thường trả `EXIT_SUCCESS`.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm thay `1.5-p.y` bằng `p.y+1.5` trong `toScreen`. Mũi tên vốn chếch lên sẽ chếch xuống. Khôi phục phép đổi y ở một chỗ, không sửa dấu vy để bù.
+2. Cho vx/vy đều bằng 0. Phải thấy chấm và không xuất hiện NaN. Tạm bỏ nhánh kiểm speed sẽ cho phép chia 0/0; khôi phục nhánh trước khi tiếp tục.
+
+## Tự kiểm tra kết quả
+
+Có 825 nút, `(3,2)` có index 69. Hai góc world đúng `(-2,-1.5)` và `(2,1.5)`. Các mũi tên hướng giống nhau; resize không đổi mảng hay vector. Kiểm vector 0, mở/đóng cửa sổ và đường dọn tài nguyên.
+
+## Bài tập mở rộng
+
+Đổi vector đồng đều thành `(-0.5,1)`, dự đoán hướng trước khi chạy. Thử thêm trục world x/y vào nền. Tiếp theo, [tạo các trường tỏa, hút, xoay và trượt](/projects/wind-map/02-truong-mau-va-inspector).

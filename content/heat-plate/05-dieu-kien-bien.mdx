@@ -1,0 +1,81 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nhiệt đi đâu khi chạm mép tấm?
+
+## Vấn đề cần giải quyết
+
+Công thức năm điểm cần đọc hàng xóm. Nhưng ô ở mép không có đủ bốn hàng xóm trong mảng. Trả 0, lặp lại ô sát mép hay vòng sang phía đối diện đều có ý nghĩa vật lý khác nhau; không thể chọn chỉ để tránh crash.
+
+Bài này giữ hai lựa chọn rõ ràng: tấm được cách nhiệt ở mép, hoặc vành ngoài bị giữ ở nhiệt độ môi trường.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với biên cách nhiệt, không cho nhiệt đi qua mặt ngoài. Ở mép trái, dùng một ghost cell có giá trị bằng ô đầu tiên:
+
+$$\theta_{-1,j}=\theta_{0,j}.$$
+
+Chênh lệch giữa ghost và ô đầu tiên bằng 0. Ô biên vẫn có thể đổi nhiệt với ô phía trong. Đây là mô hình cell-centered: mặt ngoài nằm giữa tâm ô thật và tâm ghost, không nằm tại tâm ô thật.
+
+Chế độ lạnh trong project dùng cách đơn giản khác: **giữ cả vành ô ngoài bằng 0**, và chỉ cập nhật các ô bên trong. Vành này trao đổi với một môi trường đủ lớn để luôn giữ mức 0. Tổng nhiệt trong field vì thế có thể giảm. Đây không phải cùng cách đặt biên hình học với mô hình ghost phía trên; ta dùng nó để học cách áp đặt một nhiệt độ cố định, không so hai trường hợp như cùng một bài toán vật lý.
+
+<InteractiveLab demo="heat-plate" mode="heat-5" />
+
+Tô một vùng sát mép rồi thử hai chế độ. Với biên lạnh, bút nóng không thể giữ ô trên vành ở 1. Phần nằm sâu hơn vẫn nóng và tiếp tục trao đổi với vành lạnh.
+
+## Viết code từng bước
+
+### Bước 1 — Đọc ghost mà không truy cập ngoài vector
+
+`sample` kẹp **tọa độ đọc**, không kẹp nhiệt độ:
+
+```cpp title="include/diffusion.hpp — ghost của biên cách nhiệt"
+x = std::clamp(x, 0, field.width - 1);
+y = std::clamp(y, 0, field.height - 1);
+return field.current[field.index(x, y)];
+```
+
+Khi x=-1, ta đọc x=0. Ở góc, cả hai hướng ngoài miền đều dùng chính ô góc. Tổng các trao đổi qua những mặt giữa hai ô vẫn triệt tiêu từng cặp, còn mặt ngoài đóng góp 0.
+
+### Bước 2 — Áp nhiệt độ cố định lên vành
+
+Field có `edge` để nhận biết vành ngoài. `applyBoundary` duyệt và gán 0 khi Settings đang ở chế độ Cold:
+
+```cpp title="include/diffusion.hpp — giữ vành ở nhiệt độ môi trường"
+if (field.edge(x, y)) {
+    field.current[field.index(x, y)] = 0;
+}
+```
+
+Gọi hàm sau input, sau reset và sau đổi chế độ. Nếu chỉ gọi khi solver chạy, người dùng có thể tô nóng vành trong lúc pause, trái với điều kiện biên đã chọn.
+
+### Bước 3 — Giữ cả next đúng ở vành
+
+Trong diffuse, vành Cold không dùng stencil:
+
+```cpp title="include/diffusion.hpp — không cho vành lạnh tự thay đổi"
+if (settings.boundary == Boundary::Cold && field.edge(x, y)) {
+    field.next[index] = 0;
+    continue;
+}
+```
+
+Điểm này dễ bỏ sót. Current đúng nhưng next còn dữ liệu từ lần trước thì sau swap, vành lại nóng. Mọi phần tử next phải được gán trong mỗi bước, kể cả những ô không giải phương trình.
+
+## Ghép các phần lại
+
+Phím B đổi giữa Insulated và Cold trong `project_47_checkpoint_5`. Main áp biên trước khi bước mô phỏng và vẽ. Khi đổi từ cách nhiệt sang lạnh, nhiệt độ vành có thể giảm ngay cả khi chưa bấm N; đó là thao tác đổi bài toán, không phải một bước diffusion bí mật.
+
+Chuyển ngược về cách nhiệt không phục hồi lượng nhiệt đã mất. Muốn so hai trường hợp từ cùng một trạng thái, reset hoặc dựng lại cùng field rồi mới chạy.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm cho sample ngoài miền trả 0 trong chế độ cách nhiệt. Đặt một trường đồng đều 0.4: mép sẽ nguội trước. Bạn đã vô tình cho nhiệt thoát ra ngoài.
+2. Tạm bỏ nhánh ghi next bằng 0 trên vành Cold. Tô lên mép hoặc đổi chế độ rồi tiến vài bước. Khôi phục nhánh và kiểm cả current lẫn next sau swap.
+
+## Tự kiểm tra kết quả
+
+Với cách nhiệt, trường đồng đều không đổi, kể cả ô góc. Với Cold, vành luôn bằng 0 sau vẽ/tẩy/reset; các ô bên trong mới dùng stencil. Không đòi hỏi bảo toàn tổng khi có biên lạnh hoặc vừa đổi biên. Không có đọc/ghi ngoài mảng.
+
+## Bài tập mở rộng
+
+Thử giữ vành ở 0.2 thay vì 0. Khi nội thất đang lạnh hơn, tổng nhiệt có thể tăng hay không? Giải thích trước khi sửa code. Tiếp theo, [chọn bước thời gian đủ nhỏ](/projects/heat-plate/06-buoc-thoi-gian-on-dinh).

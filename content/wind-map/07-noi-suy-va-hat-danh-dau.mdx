@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thả hạt để quan sát đường đi trong trường gió
+
+## Vấn đề cần giải quyết
+
+Mũi tên cho biết vector ở các nút. Một hạt nằm giữa bốn nút thì nên lấy vận tốc nào? Lấy nút gần nhất sẽ làm hướng đổi đột ngột mỗi khi hạt qua ranh giới. Ta sẽ nội suy vận tốc, rồi tích phân phương trình chuyển động.
+
+Hạt chỉ đọc trường đã tạo. Trong project này, nó không tác động ngược lên gió, không mang khối lượng và không va chạm với hạt khác.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giả sử vị trí nằm trong một ô có bốn nút góc. Với tx/ty là phần vị trí trong ô, từ 0 đến 1, nội suy theo x ở hàng dưới/trên rồi nội suy theo y:
+
+$$\mathbf{v}(p)=(1-t_y)[(1-t_x)\mathbf{v}_{00}+t_x\mathbf{v}_{10}]+t_y[(1-t_x)\mathbf{v}_{01}+t_x\mathbf{v}_{11}].$$
+
+Tổng trọng số bằng 1. Trường hằng hoặc affine được tái tạo đúng trong sai số làm tròn. Trường cong chỉ được xấp xỉ: thêm nút giúp, nhưng không biến bilinear thành đáp án giải tích cho mọi hàm.
+
+Hạt thỏa $dp/dt=v(p)$. Midpoint RK2 lấy vận tốc hai lần:
+
+$$p_m=p_n+\frac{\Delta t}{2}v(p_n),\qquad p_{n+1}=p_n+\Delta t\,v(p_m).$$
+
+Với trường quay, Euler có thể làm quỹ đạo nở ra rõ rệt. Midpoint giảm sai số với cùng dt nhưng vẫn cần kiểm chứng. Dt ở đây là 1/60 giây mô hình; các frame render chỉ quyết định cần làm bao nhiêu bước.
+
+<InteractiveLab demo="wind-map" mode="wind-7" />
+
+N tiến đúng một bước, Space chạy/dừng. Đổi FPS hiển thị để xem tốc độ mô phỏng; đổi trường sẽ dừng và gieo lại hạt để bắt đầu một thí nghiệm mới. 128 hạt ra khỏi miền hoặc quá tám giây được gieo lại, nên mật độ chấm không đo lượng chất lỏng.
+
+## Viết code từng bước
+
+### Bước 1 — Tìm ô chứa điểm rồi nội suy
+
+`sampleVelocity` từ chối điểm ngoài miền hoặc không hữu hạn trước khi tính index. Chuyển world thành chỉ số liên tục rồi chọn góc dưới trái:
+
+```cpp title="include/particles.hpp — chọn ô nội suy"
+const double gx = (p.x + 2) / field.dx;
+const double gy = (p.y + 1.5) / field.dy;
+const int x = std::min(field.width - 2, static_cast<int>(std::floor(gx)));
+const int y = std::min(field.height - 2, static_cast<int>(std::floor(gy)));
+const double tx = gx - x;
+const double ty = gy - y;
+```
+
+Tại cạnh phải, gx có thể bằng width−1. Ta chọn ô cuối với x=width−2 và tx=1; không truy cập một ô nằm ngoài mảng. Hàm blend áp dụng cùng trọng số cho vx và vy:
+
+```cpp title="include/particles.hpp — blend một thành phần vector"
+const double bottom = (1 - tx) * values[i] + tx * values[i + 1];
+const double top = (1 - tx) * values[i + field.width] + tx * values[i + field.width + 1];
+return (1 - ty) * bottom + ty * top;
+```
+
+### Bước 2 — Lấy vận tốc tại điểm giữa
+
+`midpointStep` kiểm step dương, hữu hạn và không vượt 0.05. Sau vận tốc first tại vị trí đầu, nó tính điểm giữa:
+
+```cpp title="include/particles.hpp — bước midpoint RK2"
+const Vec2 middle{p.x + 0.5 * step * first.x, p.y + 0.5 * step * first.y};
+Vec2 second;
+if (!sampleVelocity(field, middle, second)) {
+    return false;
+}
+result = {p.x + step * second.x, p.y + step * second.y};
+return inside(result);
+```
+
+Vị trí cuối phải được cộng từ p ban đầu, không từ middle. Nếu điểm giữa hoặc cuối ra khỏi miền, bước bị từ chối và `advanceParticles` gieo lại hạt bằng seed xác định từ index. Không clamp hạt vào mép rồi để nó bám tường.
+
+### Bước 3 — Đưa fixed timestep vào vòng lặp
+
+Main giữ accumulator, tick và thời gian bỏ qua. `planSteps` nhận tối đa 0.25 giây/frame, thực hiện tối đa tám bước; số bước dư được bỏ và báo dropped. Vòng chạy chỉ gọi đúng số bước đã được duyệt:
+
+```cpp title="src/main.cpp — tiến các tick đã được lên lịch"
+const auto plan = wind::planSteps(accumulator, elapsed);
+accumulator = plan.remainder;
+dropped += plan.dropped;
+for (int step = 0; step < plan.steps; ++step) {
+    wind::advanceParticles(field, particles);
+    ++tick;
+}
+```
+
+N dừng và gọi một bước; Space chạy/dừng và xóa accumulator. Mất focus cũng dừng. Hạt không chạy bù toàn bộ khoảng thời gian ứng dụng bị treo hoặc nằm nền.
+
+## Ghép các phần lại
+
+Build `project_48_checkpoint_7`. Main xử lý input, thay trường nếu cần, tiến hạt, vẽ bản đồ rồi vẽ marker vàng. Field không thay đổi trong `advanceParticles`. Canvas dùng cùng công thức, seed và thứ tự cập nhật.
+
+Trong Uniform, một hạt chưa bị gieo lại đi đúng `(1/60,0.25/60)` sau một bước. Trong Rotation, so quỹ đạo một hạt gần gốc với `p(t)=(r*cos(t),r*sin(t))`. Chỉ dùng hạt chưa ra miền/chưa quá tuổi cho phép so này.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm lấy vector nút gần nhất thay bilinear. Chọn trường xoay, theo dõi hạt khi qua ô: hướng đổi theo từng nấc. Khôi phục nội suy bốn nút, kiểm thêm vận tốc tại điểm giữa bằng một trường affine.
+2. Tạm cộng vị trí từ middle thay vì p trong bước cuối RK2. Gió đều sẽ đi 1.5 lần quãng đường đúng. Kiểm một bước Uniform rồi khôi phục điểm xuất phát.
+
+## Tự kiểm tra kết quả
+
+Bilinear nhận hai góc miền và cho đúng vector affine tại điểm không trùng nút; điểm ngoài/NaN bị từ chối. Một bước Uniform đi đúng v*dt. Hai giây với lịch 15/30/120 FPS cho cùng 120 tick nếu không bỏ thời gian. Frame bị nghẽn chỉ làm tối đa tám bước và tăng dropped. Pause/blur không để accumulator tích vô hạn.
+
+## Bài tập mở rộng
+
+Thêm một đường trail ngắn cho mỗi hạt, xóa trail khi gieo lại để không nối từ mép sang seed. So lỗi Euler và midpoint sau một giây Rotation bằng đáp án giải tích. Tiếp theo, [đặt một xoáy cục bộ bằng chuột](/projects/wind-map/08-dat-xoay-bang-chuot).

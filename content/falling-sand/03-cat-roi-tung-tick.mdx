@@ -1,0 +1,94 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho một ô cát rơi đúng một lần mỗi tick
+
+## Vấn đề cần giải quyết
+
+Ta đã có thể vẽ cát ở bất kỳ đâu, nhưng nó vẫn lơ lửng. Bài này chỉ thêm một luật: nếu ngay dưới ô cát là ô trống, đổi chỗ hai ô. Chưa trượt chéo, chưa có nước và chưa tự chạy liên tục. Phím N sẽ cho ta nhìn rõ một lần cập nhật làm những gì.
+
+Giữ phần vẽ và input của checkpoint 02. Thêm `rules.hpp`; main gọi luật sau khi xử lý event, trước khi render.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong cellular automata, mỗi ô có trạng thái và các luật dựa trên lân cận. Với cát rơi thẳng, lân cận ta cần chỉ có ô `(x,y+1)`. Đây là cách mở đầu cho mô hình theo ô lưới, không phải tích phân quỹ đạo của một hạt.
+
+Tuy luật ngắn, thứ tự thực hiện rất quan trọng. Nếu duyệt từ trên xuống và sửa ngay mảng đang đọc, cát từ hàng 0 xuống hàng 1 sẽ gặp vòng lặp lần nữa ở hàng 1, rồi hàng 2. Một tick có thể đưa nó xuống tận đáy.
+
+Ta dùng hai lớp bảo vệ: duyệt **từ dưới lên**, và một mảng `moved` đánh dấu các ô tham gia đổi chỗ. Mảng này chỉ có hiệu lực trong một tick. Đây là cập nhật tại chỗ có thứ tự, khác CA đồng bộ dùng hai buffer để mọi ô cùng đọc trạng thái cũ.
+
+<InteractiveLab demo="falling-sand" mode="sand-3" />
+
+Chọn lưới trống, bán kính 0, đặt một ô cát gần phía trên. Bấm “Tiến một tick” và xem nó chỉ xuống một hàng. Vẽ một bệ dưới nó để thử trường hợp bị chặn.
+
+## Viết code từng bước
+
+### Bước 1 — Thêm bộ nhớ cho một tick
+
+`Grid` có thêm `moved`, cùng số phần tử với `cells`, và `tick` bắt đầu từ 0. Mỗi phần tử `moved` là 0 hoặc 1. Không cần tăng timestamp vô hạn hoặc dùng một map theo tọa độ cho lưới nhỏ này.
+
+Ở đầu `stepGrid`, xóa toàn bộ dấu của tick trước:
+
+```cpp title="include/rules.hpp — bắt đầu tick"
+std::fill(grid.moved.begin(), grid.moved.end(), std::uint8_t{0});
+```
+
+### Bước 2 — Cho phép một lần đổi chỗ
+
+Hàm `tryMove` nhận ô nguồn do `stepGrid` đã xác nhận là cát. Nó kiểm tra bounds của đích trước khi tính index, rồi kiểm tra dấu:
+
+```cpp title="include/rules.hpp — kiểm tra hai ô"
+const std::size_t source = grid.index(x, y);
+const std::size_t destination = grid.index(targetX, targetY);
+if (grid.moved[source] != 0 || grid.moved[destination] != 0) {
+    return false;
+}
+bool allowed = grid.cells[destination] == Cell::Empty;
+```
+
+Nếu đích không trống, trả `false`; nếu hợp lệ, đổi chỗ và đánh dấu:
+
+```cpp title="include/rules.hpp — thực hiện di chuyển"
+std::swap(grid.cells[source], grid.cells[destination]);
+grid.moved[source] = 1;
+grid.moved[destination] = 1;
+return true;
+```
+
+Sau swap, ô nguồn thành Empty, ô đích thành Sand. Số ô cát vẫn là một. Đánh dấu cả nguồn có nghĩa là tạm giữ cả “chỗ vừa rời đi” đến hết tick; cột cát vì vậy có thể xuất hiện khoảng trống tạm thời. Đây là một phần của luật ta chọn, không phải mô phỏng nén vật liệu liên tục.
+
+### Bước 3 — Duyệt lưới theo thứ tự của mô phỏng
+
+Vòng ngoài của `stepGrid` đi từ `grid.height-1` xuống 0. Vòng trong đi qua các cột. Bỏ qua vật liệu không di chuyển và ô đã có dấu, rồi thử ô bên dưới:
+
+```cpp title="include/rules.hpp — thử rơi thẳng"
+if (tryMove(grid, x, y, x, y + 1)) {
+    continue;
+}
+```
+
+`continue` kết thúc xử lý ô hiện tại sau lần chuyển thành công. Cuối hàm tăng `grid.tick`. Một tick là một lượt áp dụng luật lên lưới, không phải số frame đã vẽ.
+
+## Ghép các phần lại
+
+Trong main, tạo `singleStep=false` ở đầu mỗi vòng lặp. Khi nhận một `KEY_DOWN` của N mà không phải key repeat, đặt cờ thành true. Sau khi lấy hết event:
+
+```cpp title="src/main.cpp — cập nhật trước khi vẽ"
+if (singleStep) {
+    sand::stepGrid(grid);
+}
+```
+
+Đừng đặt lời gọi trong `drawGrid`: resize hoặc vẽ lại không được vô tình làm cát rơi thêm. Build `project_46_checkpoint_3`. Nhấn N vài lần để thấy cột cát hạ xuống nhưng chưa dàn sang hai bên.
+
+## Thử làm sai để hiểu đúng
+
+1. Để tái hiện lỗi rơi nhiều hàng, cần tạm đổi vòng `y` sang trên-xuống **và** bỏ hai kiểm tra `moved`. Nếu chỉ đổi chiều duyệt, moved mask vẫn ngăn hạt chạy tiếp. Đặt một hạt ở hàng 0 và quan sát, rồi khôi phục cả hai thay đổi.
+2. Tạm bỏ lệnh xóa `moved` đầu tick. Sau vài lần nhấn N, các dấu cũ ngăn chuyển động mới. Khôi phục và reset để thấy vai trò của bộ nhớ chỉ sống trong một tick.
+
+## Tự kiểm tra kết quả
+
+Một hạt trong khoảng trống xuống đúng một hàng sau một lần N. Cát không xuyên tường hoặc rơi khỏi hàng cuối. Không thêm input thì số ô cát không tăng/giảm. Gọi render nhiều lần mà không gọi `stepGrid` phải cho cùng trạng thái.
+
+## Bài tập mở rộng
+
+Thử một cột ba ô cát liên tiếp. Vẽ ra giấy trạng thái trước/sau hai tick, nhớ rằng ô nguồn cũng được đánh dấu. Giải thích khoảng trống bạn quan sát được trước khi sang [bài 4 — cát trượt và thứ tự duyệt](/projects/falling-sand/04-cat-truot-va-thu-tu-duyet).

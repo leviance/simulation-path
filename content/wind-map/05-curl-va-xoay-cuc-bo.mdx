@@ -1,0 +1,79 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Curl đo xu hướng quay ngay quanh một điểm
+
+## Vấn đề cần giải quyết
+
+Rotation và Uniform đều có divergence 0, nhưng chỉ một trường quay quanh gốc. Divergence chưa mô tả hết sự thay đổi của vector xung quanh một điểm. Ta thêm curl để đo xu hướng quay cục bộ.
+
+Có một ví dụ dễ gây nhầm: Shear `(y,0)` chỉ có các mũi tên ngang nhưng vẫn có curl. Nếu định nghĩa curl bằng “nhìn thấy hình vòng tròn”, ta sẽ bỏ sót trường này.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy tưởng tượng một bánh guồng rất nhỏ đặt vào trường. Phía phải đi lên mạnh hơn phía trái làm nó quay ngược kim đồng hồ. Phía trên đi phải mạnh hơn phía dưới lại làm nó quay theo kim đồng hồ. Hai chênh lệch đóng góp trái dấu:
+
+$$\operatorname{curl}_z\mathbf{v}=\partial_xv_y-\partial_yv_x.$$
+
+Ta đang xét trường 2D nằm trong mặt phẳng xy; curl 3D chỉ còn thành phần z. World y lên, nên curl z dương tương ứng ngược kim đồng hồ. Đừng lấy dấu trực tiếp từ screen y vốn hướng xuống.
+
+Với Rotation `v=(-y,x)`, curl bằng `1−(−1)=2`. Nếu viết quay cứng `v=(-omega*y,omega*x)`, curl bằng `2*omega`, **không phải omega**. Với Shear `v=(y,0)`, curl bằng `0−1=−1`: hàng trên kéo phải nhiều hơn hàng dưới, tạo xu hướng quay cục bộ dù từng đường dòng nằm ngang.
+
+<InteractiveLab demo="wind-map" mode="wind-5" />
+
+So Rotation và Shear với lớp Curl. Tại gốc, cả hai có vector bằng 0 nhưng curl không bằng 0. Chọn Source: divergence khác 0, curl bằng 0.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ đúng công thức và dấu
+
+Hàm curl lấy đạo hàm **chéo** và phép trừ:
+
+```cpp title="include/derivatives.hpp — curl z trong world space"
+inline double curl(const Field& field, int x, int y) {
+    // Thành phần z của curl trong mặt phẳng world x phải, y lên.
+    return derivativeX(field, field.vy, x, y) - derivativeY(field, field.vx, x, y);
+}
+```
+
+Không đổi vy sang screen trước khi tính đạo hàm. Đổi tọa độ chỉ thuộc lớp vẽ/input; các phép đo luôn đọc Field theo world.
+
+### Bước 2 — Vẽ curl bằng cùng thang có dấu
+
+Thêm lựa chọn layer, không thêm một loại dữ liệu vector mới:
+
+```cpp title="include/view.hpp — lớp màu curl"
+if (layer == Layer::Curl) {
+    value = curl(field, x, y);
+}
+```
+
+Giữ nguyên thang −2..2 dùng ở bài divergence. Nhờ vậy Rotation cho cam, Shear cho xanh với độ bão hòa thấp hơn. Đây là màu của curl tại nút, không phải màu đánh dấu vector đang đi bên trái hay bên phải.
+
+### Bước 3 — Đưa số đo vào inspector
+
+Phím I bổ sung curl vào dòng console đang có:
+
+```cpp title="src/main.cpp — đọc curl tại nút chọn"
+std::cout << " curl_z=" << wind::curl(field, cursorX, cursorY);
+```
+
+Kiểm các preset có đáp án trước khi thêm một xoáy cục bộ. Màu và mũi tên có thể trông hợp lý ngay cả khi dấu sai; số 2 và −1 sẽ phát hiện lỗi rõ hơn.
+
+## Ghép các phần lại
+
+Build `project_48_checkpoint_5`. Chương trình mở với Rotation và lớp Curl. P đổi các trường, L chuyển scalar/div/curl, I đọc vector cùng các đạo hàm. Thử một nút mép rồi về gốc: trường tuyến tính vẫn cho cùng curl ở mọi nơi.
+
+Chọn preset Gradient và scalar Bowl: curl phải gần 0. Với scalar đủ trơn, đạo hàm hỗn hợp bằng nhau nên curl của gradient bằng 0; bài 9 sẽ kiểm quan hệ này bằng số với Hill.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dấu trừ thành dấu cộng trong curl. Rotation sẽ cho 0 thay vì 2, dù hình mũi tên vẫn quay. Khôi phục phép trừ và kiểm Shear nữa.
+2. Tạm đổi dấu vy trong mảng để bù screen y. Hình có thể được “sửa” ở một preset nhưng số đo của Rotation và Source sai. Trả Field về world y lên và chỉ đảo y trong `toScreen`.
+
+## Tự kiểm tra kết quả
+
+Uniform/Source/Sink: curl 0; Rotation: 2; Shear: −1. Gradient Bowl gần 0. Gốc có vector 0 nhưng curl của Rotation vẫn bằng 2. Divergence và curl là hai phép đo độc lập: không dùng kết quả của một phép thay cho phép kia. [OpenStax giải thích curl và quan hệ với gradient](https://openstax.org/books/calculus-volume-3/pages/6-5-divergence-and-curl).
+
+## Bài tập mở rộng
+
+Thử trường `(-2y,2x)` và dự đoán curl trước khi chạy. Tự giải thích vì sao Shear có divergence 0 mà curl khác 0. Tiếp theo, [đo sai số và kiểm phép lấy đạo hàm ở mép lưới](/projects/wind-map/06-mep-luoi-va-sai-so).

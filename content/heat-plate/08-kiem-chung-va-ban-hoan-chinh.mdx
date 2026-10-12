@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng solver và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Một đốm nóng loang đẹp vẫn có thể che lỗi đọc sai hàng, mất nhiệt ở biên hoặc dùng hai mảng không đúng cách. Bài cuối không thêm hiệu ứng trang trí: ta đưa solver qua những bài toán nhỏ có đáp án, rồi mới tin các cảnh do mình vẽ.
+
+Bản hoàn chỉnh có bốn preset: vùng nóng giữa tấm, đồng đều 0.4, ô nóng/lạnh xen kẽ và tấm lạnh. Các preset giúp lặp lại thí nghiệm từ cùng trạng thái, không phụ thuộc nét chuột mỗi lần.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta cần nhiều phép kiểm độc lập:
+
+- **Đáp án một bước:** xung nhiệt cho tâm và bốn bên bằng 0.2.
+- **Trường không đổi:** đồng đều 0.4 với biên cách nhiệt giữ nguyên.
+- **Bất biến:** tổng θ giữ trong sai số, min/max không vượt miền cũ khi bước ổn định và không có input.
+- **Điều kiện biên:** vành lạnh luôn bằng 0, tổng giảm ở ca chuẩn.
+- **Lịch bước:** cùng 60 bước cho cùng mảng, bất kể chia frame ra sao.
+
+Một tham chiếu mạnh hơn là cosine mode của chính lưới cách nhiệt:
+
+$$\theta_{x,y}^{0}=0.5+0.25\cos\left(\frac{\pi(x+1/2)}{W}\right),$$
+
+$$
+g=1-4r_x\sin^2\left(\frac{\pi}{2W}\right),\qquad
+\theta_{x,y}^{n}=0.5+0.25g^n\cos\left(\frac{\pi(x+1/2)}{W}\right).
+$$
+
+Field này không đổi theo y. Công thức g là hệ số suy giảm **của stencil rời rạc**, không phải nghiệm liên tục được tuyên bố chính xác cho mọi dt. Nó kiểm được cả ghost cách nhiệt và mức suy giảm sau nhiều bước.
+
+<InteractiveLab demo="heat-plate" mode="heat-8" />
+
+“Kiểm chứng tấm chuẩn” chạy các bản field riêng với tham số chuẩn, không sửa cảnh đang vẽ và không dùng alpha/dt đang chọn. PASS chỉ nói các ca đã kiểm đạt, không nói mọi mô hình vật lý hoặc mọi input đều đúng.
+
+## Viết code từng bước
+
+### Bước 1 — Chạy kiểm đếm trong một vòng hữu hạn
+
+`validatePlate` tạo field riêng và nhớ tổng ban đầu. Trong 120 bước cách nhiệt:
+
+```cpp title="include/diagnostics.hpp — theo dõi sai số tổng"
+const bool accepted = diffuse(field, settings);
+const Stats stats = measure(field);
+result.maxSumError = std::max(result.maxSumError, std::abs(stats.sum - initialSum));
+result.conserved = result.conserved && accepted && result.maxSumError < 1e-9;
+result.bounded = result.bounded && stats.minimum >= -1e-12 && stats.maximum <= 1 + 1e-12;
+```
+
+Một vòng riêng kiểm biên lạnh và tổng không tăng. Không dùng cùng điều kiện bảo toàn cho cả hai. Validator luôn có điểm dừng; không mở một vòng “chạy đến khi hoàn toàn nguội” có thể kéo dài vô hạn.
+
+### Bước 2 — Viết test có đáp án độc lập
+
+`tests/tests.cpp` tạo một xung 5 × 5 rồi so các giá trị cụ thể:
+
+```cpp title="tests/tests.cpp — đáp án của xung nhiệt"
+field = heat::Field(5, 5);
+field.current[field.index(2, 2)] = 1;
+check(heat::diffuse(field, settings), "stable pulse accepted");
+check(near(heat::sample(field, 2, 2), 0.2), "pulse center equals 0.2");
+```
+
+Các điều kiện tiếp theo kiểm hàng xóm, đường chéo và tổng. Cả C++ và TypeScript còn khởi tạo cùng cosine mode 8 × 6, chạy 20 bước rồi so với công thức g. Đó là phép đối chiếu số, không phải so hai ảnh bằng mắt.
+
+### Bước 3 — Để test vẫn hoạt động trong Release
+
+Hàm check không dùng assert:
+
+```cpp title="tests/tests.cpp — ghi nhận lỗi thật"
+if (!condition) {
+    ++failures;
+    std::cerr << "FAIL: " << label << '\n';
+}
+```
+
+Cuối chương trình trả EXIT_FAILURE nếu failures lớn hơn 0. Điều này quan trọng vì assert thường bị tắt trong Release. Tolerance dùng cho sai số dấu phẩy động; lỗi đọc nhầm hàng hoặc sai hệ số không được “chữa” bằng cách nới tolerance.
+
+## Ghép các phần lại
+
+Phím P đổi preset, R đặt lại preset hiện tại, C xóa về tấm lạnh. V tạm dừng, kiểm các field riêng và in từng điều kiện ra terminal; main đặt lại mốc đồng hồ sau đó để thời gian kiểm tra không thành nợ mô phỏng. I vẫn in inspector, A/T đổi alpha/dt, B đổi biên.
+
+```bash title="Terminal — build đầy đủ và kiểm Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+.\build\Debug\project_47_final.exe
+```
+
+```bash title="Terminal — kiểm cả Release"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+[Tải ZIP đầy đủ](/downloads/project-47-heat-plate.zip). Gói có README, starter, tám checkpoint, final, tests và CMake khóa SDL 3.4.8. Phần **Toàn bộ mã nguồn của dự án** ở cuối trang hiển thị source final thật, không phải bản rút gọn; không cần source từ Project 46 để build.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm bỏ hệ số 2 trước center trong sai phân. Ca đồng đều và cosine mode phải FAIL trong cả Debug và Release. Khôi phục code rồi build lại.
+2. Tạm cho biên cách nhiệt đọc ghost bằng 0. Ca bảo toàn và cosine phải phát hiện sai, dù đốm nóng ban đầu ở xa mép có thể chưa lộ rõ trên hình.
+3. Chỉ thử cấu hình không ổn định qua guard. Không bỏ guard rồi chạy tự do để chờ chương trình phát nổ; đáp án một bước đã đủ chứng minh lỗi.
+
+## Tự kiểm tra kết quả
+
+Starter, checkpoint 01–08 và final build được. CTest đạt cả hai cấu hình. Reset rồi chạy cùng số bước cho cùng field; chuỗi 15/30/120 FPS đều tạo 60 bước trong hai giây ở dt=1/30 nếu không drop. Chế độ không hợp lệ không tăng tick, không âm thầm sửa field.
+
+Kiểm tra input sau resize, mất focus và kéo ra ngoài. Giữ nét vẽ, điều kiện biên và solver tách biệt: mỗi phần phải có thể giải thích bằng những phép thử riêng.
+
+## Bài tập mở rộng
+
+So cosine rời rạc với nghiệm liên tục khi lần lượt giảm dt để đo sai số thời gian. Đọc thêm [phương trình nhiệt và sai phân hữu hạn của MIT](https://math.mit.edu/classes/18.086/2006/am54.pdf), chú ý phân biệt tổng nhiệt với đại lượng bình phương dùng trong phân tích suy giảm.
+
+Project 47 kết thúc tại đây. Tiếp theo, [Project 48 — Bản đồ gió](/projects/wind-map) chuyển sang trường vector để quan sát gradient, divergence và curl.

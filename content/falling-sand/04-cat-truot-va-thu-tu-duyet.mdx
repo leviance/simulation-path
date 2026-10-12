@@ -1,0 +1,87 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Để cát trượt xuống hai bên và tạo thành đống
+
+## Vấn đề cần giải quyết
+
+Cát ở checkpoint 03 chỉ biết rơi thẳng. Khi chạm bệ, nó đứng thành cột dù hai bên còn trống. Ta sẽ cho nó thử hai ô chéo phía dưới, nhưng phải trả lời thêm một câu hỏi: khi cả hai phía đều trống, chọn phía nào trước?
+
+Chỉ cần sửa `rules.hpp`. Window, brush và phép swap đã đủ; đừng thay những phần đang chạy đúng để thêm một luật mới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một ô cát lần lượt thử ba đích:
+
+$$D_0=(x,y+1),\qquad D_1=(x+d,y+1),\qquad D_2=(x-d,y+1),\quad d\in\{-1,1\}.$$
+
+Đích đầu tiên hợp lệ sẽ được chọn. Nếu luôn thử trái trước, một cảnh nhỏ có thể lệch trái chỉ vì cách viết code. Nếu luôn duyệt cột trái trước, các hạt bên trái cũng thường được quyền chiếm chỗ trước.
+
+Ta giảm hai thiên lệch đó bằng hai lựa chọn riêng: đảo chiều duyệt ngang mỗi tick, và dùng tính chẵn/lẻ của `x+y+tick` để chọn hướng chéo ưu tiên. Không dùng số ngẫu nhiên nên có thể chạy lại chính xác cùng một cảnh.
+
+**Điều này không đảm bảo đối xứng hoàn toàn.** Vì cập nhật tại chỗ, ô được xét sau vẫn nhìn thấy thay đổi từ ô trước. Thứ tự duyệt là một phần của mô hình, không phải chi tiết có thể đổi tùy ý mà mong kết quả giữ nguyên.
+
+<InteractiveLab demo="falling-sand" mode="sand-4" />
+
+Vẽ một cột cát trên bệ và tiến từng tick. Chọn một ô sát mép đống để dự đoán nó sẽ rơi thẳng, trượt chéo hay đứng yên.
+
+## Viết code từng bước
+
+### Bước 1 — Đảo chiều ngang, vẫn giữ dưới-lên
+
+Vòng trong dùng `column` đếm số lần lặp; tọa độ thực sự cần xét là `x`:
+
+```cpp title="include/rules.hpp — chọn cột đang xét"
+int x = column;
+if (grid.tick % 2U != 0) {
+    x = grid.width - 1 - column;
+}
+```
+
+Ở tick chẵn, `column=0` ứng với cột 0. Ở tick lẻ, nó ứng với cột cuối. Cách viết này giữ cùng một điều kiện vòng lặp và không dùng số nguyên không dấu để đếm lùi qua zero.
+
+### Bước 2 — Chỉ thử chéo nếu rơi thẳng thất bại
+
+Giữ lời gọi xuống dưới ở đầu như bài trước. Sau đó chọn `direction`:
+
+```cpp title="include/rules.hpp — chọn hướng ưu tiên"
+int direction = -1;
+if ((static_cast<std::uint32_t>(x + y) + grid.tick) % 2U != 0) {
+    direction = 1;
+}
+```
+
+Giá trị -1 là trái, +1 là phải. Cùng tọa độ và tick sẽ luôn cho cùng lựa chọn. Dùng `tick` của mô phỏng, không lấy thời gian thực từ SDL; nếu không, tốc độ máy có thể đổi kết quả vật liệu.
+
+### Bước 3 — Dùng lại phép di chuyển đã được bảo vệ
+
+```cpp title="include/rules.hpp — thử hai ô chéo"
+if (tryMove(grid, x, y, x + direction, y + 1)) {
+    continue;
+}
+if (tryMove(grid, x, y, x - direction, y + 1)) {
+    continue;
+}
+```
+
+Ta không viết lại kiểm tra bounds, moved hoặc swap. Mọi hướng đi dùng cùng `tryMove`, nên không có chuyện rơi thẳng giữ số hạt nhưng trượt chéo lại vô tình nhân đôi chúng.
+
+Luật này chỉ kiểm tra **ô đích**. Nó cho phép đi chéo qua một góc mà mô hình hạt có bán kính có thể coi là bị chặn. Nếu muốn cát không lọt qua góc hẹp, phải thêm quy tắc khác và kiểm thử nó; không nên diễn giải hình ảnh hiện tại như va chạm hình học chính xác.
+
+## Ghép các phần lại
+
+Build `project_46_checkpoint_4`. Phím N vẫn tiến một tick; chưa có chế độ chạy liên tục. Reset rồi đưa khối cát xuống bệ: các ô gần chỗ bị chặn bắt đầu lan sang bên.
+
+Tại một tick, ghi `(x,y,tick)` của hạt bạn theo dõi. Tính parity, liệt kê ba đích theo thứ tự, rồi kiểm tra đích nào Empty và chưa có moved. Làm được việc này quan trọng hơn việc đoán đống cát cuối cùng trông thế nào.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm cố định `direction=-1` và không đảo chiều quét. Chạy lại cùng cảnh nhiều lần: kết quả vẫn lặp lại, nhưng dễ nghiêng về một phía. Khôi phục và so sánh; tính lặp lại không đồng nghĩa với không thiên lệch.
+2. Cho phép thử chéo trước khi thử xuống. Cát có thể đi sang bên dù bên dưới trống. Khôi phục ưu tiên xuống rồi giải thích tại sao thứ tự các nhánh làm thay đổi mô hình.
+
+## Tự kiểm tra kết quả
+
+Ô dưới trống thì cát rơi thẳng. Ô dưới bị chặn và một ô chéo trống thì cát có thể trượt. Cả ba đích bị chặn thì đứng yên. Cùng cảnh và cùng số tick cho cùng kết quả; không kết luận rằng mọi cảnh đối xứng đều phải giữ đối xứng.
+
+## Bài tập mở rộng
+
+Thêm điều kiện “ô ngang bên cạnh cũng phải trống” trước khi đi chéo. Vẽ một góc hẹp để so sánh hai bộ luật. Giữ bản chuẩn để sang [bài 5 — nước và đổi chỗ](/projects/falling-sand/05-nuoc-va-doi-cho), nơi moved mask bắt đầu thực sự cần cho chuyển động ngang.

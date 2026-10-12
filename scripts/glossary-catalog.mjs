@@ -8,6 +8,9 @@ export const glossarySources = [
   { file: "lib/glossary-physics.ts", name: "physicsGlossaryTerms" },
   { file: "lib/glossary-performance.ts", name: "performanceGlossaryTerms" },
   { file: "lib/glossary-gpu.ts", name: "gpuGlossaryTerms" },
+  { file: "lib/glossary-cellular.ts", name: "cellularGlossaryTerms" },
+  { file: "lib/glossary-heat.ts", name: "heatGlossaryTerms" },
+  { file: "lib/glossary-fields.ts", name: "fieldGlossaryTerms" },
 ];
 
 export function assertGlossaryModules(files) {

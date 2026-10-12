@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng hộp cát và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Hình ảnh giờ đã giống một hộp cát, nhưng nhìn đẹp chưa chứng minh code đúng. Một ô nước mất sau vài trăm tick rất khó nhận ra bằng mắt. Lỗi index ở mép lưới cũng có thể chỉ xuất hiện khi người dùng vẽ đúng một vị trí.
+
+Bài cuối thêm những công cụ để kiểm tra: đếm vật liệu, chọn ô bằng bàn phím, đổi cảnh mẫu, checksum và một ca chạy hữu hạn. Đồng thời ta chạy tests thuần cho các ca nhỏ có đáp án biết trước.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi ô luôn chứa một nhãn vật liệu nên tổng số ô luôn bằng `W*H`, ngay cả khi thuật toán vô tình biến nước thành cát. Vì vậy cần kiểm riêng:
+
+$$N_m=\sum_{i=0}^{WH-1}[cell_i=m],\qquad N_m(t+1)=N_m(t).$$
+
+Điều kiện này chỉ áp dụng khi không vẽ, tẩy hoặc reset. Những thao tác đó cố ý thay thế vật liệu. Thêm hai điều kiện nữa: tường giữ nguyên vị trí; hai lần chạy cùng cảnh và cùng số tick khớp từng ô.
+
+Checksum giúp ghi nhanh dấu vết trạng thái. Nó không chứng minh hai lưới bằng nhau vì hash có thể trùng; unit test vẫn so sánh toàn bộ mảng khi kiểm tính lặp lại.
+
+<InteractiveLab demo="falling-sand" mode="sand-7" />
+
+Nút “Kiểm chứng cảnh chuẩn” chạy một lưới riêng 120 tick, không xóa cảnh bạn đang vẽ. PASS của ca này không có nghĩa mọi cảnh người dùng tự tạo đã được kiểm chứng.
+
+## Viết code từng bước
+
+### Bước 1 — Đếm từng loại, không chỉ ô có màu
+
+Thêm `countMaterials` vào `grid.hpp`:
+
+```cpp title="include/grid.hpp — thống kê vật liệu"
+inline std::array<int, 4> countMaterials(const Grid& grid) {
+    std::array<int, 4> counts{};
+    for (const Cell material : grid.cells) {
+        ++counts[static_cast<std::size_t>(material)];
+    }
+    return counts;
+}
+```
+
+Mảng kết quả theo đúng thứ tự Empty, Wall, Sand, Water. Tăng số Water mà giảm số Sand vẫn làm tổng không đổi, nhưng sẽ bị phép so sánh từng phần tử phát hiện.
+
+### Bước 2 — Tạo ca kiểm chứng có điểm dừng
+
+Trong `validation.hpp`, tạo hai lưới giống nhau và giữ một bản initial để kiểm vị trí tường. Mỗi vòng làm đúng một tick ở cả hai bên:
+
+```cpp title="include/validation.hpp — kiểm đếm sau mỗi tick"
+stepGrid(first);
+stepGrid(second);
+result.conserved = result.conserved && countMaterials(first) == before;
+result.deterministic = result.deterministic && first.cells == second.cells;
+```
+
+Vòng ngoài dừng sau 120 tick. Phím V tạm dừng hộp cát, gọi hàm này và in ba kết quả `true`/`false` trong terminal: bảo toàn, lặp lại, tường cố định. Kết quả tổng hợp chỉ là PASS khi cả ba đều đúng. Đặt lại mốc đồng hồ SDL sau khi kiểm tra để thời gian chạy validator không bị đưa vào accumulator của hộp cát thật.
+
+### Bước 3 — Kiểm ca nhỏ bằng đáp án cụ thể
+
+`tests/tests.cpp` dùng hàm `check` tăng biến `failures`; cuối chương trình trả `EXIT_FAILURE` nếu có lỗi. Không dùng `assert`, vì Release có thể tắt nó.
+
+Ví dụ sau kiểm một lần rơi, không chỉ kiểm tổng số cát:
+
+```cpp title="tests/tests.cpp — một ô cát sau một tick"
+grid = sand::Grid(8, 8);
+grid.set(4, 0, Cell::Sand);
+sand::stepGrid(grid);
+check(grid.at(4, 1) == Cell::Sand && grid.at(4, 0) == Cell::Empty, "sand falls exactly one cell");
+check(sand::countMaterials(grid)[2] == 1, "fall neither duplicates nor destroys sand");
+```
+
+Các ca tiếp theo chặn ba đích rơi của nước để chỉ còn chuyển động ngang; vây nước bằng tường để buộc cát/nước swap; kiểm một brush chạm góc và một nét bán kính 0. Mỗi ca cô lập một hành vi, nên khi thất bại bạn biết nên nhìn vào đâu.
+
+Tests cũng chạy 60 tick chuẩn rồi dựng lại cùng kết quả bằng chuỗi frame 15/30/120 FPS trong hai giây. Ta so sánh mảng ô, không so thời gian chạy test trên máy. Một fixture 8 × 8 cố định được dùng ở cả C++ lẫn TypeScript để đối chiếu kết quả hai triển khai.
+
+## Ghép các phần lại
+
+Bản hoàn chỉnh thêm `P` đổi giữa cảnh chuẩn, phễu cát và lưới trống; `R` đặt lại cảnh hiện tại; mũi tên chọn ô, Enter đóng dấu brush. Tiêu đề window hiện số ô cát/nước, tick, tọa độ/index, bán kính và dropped time. Khi đọc bộ đếm, nhớ input vẽ là nguyên nhân hợp lệ làm số ô thay đổi.
+
+```bash title="Terminal — build toàn bộ mốc và kiểm thử Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+.\build\Debug\project_46_final.exe
+```
+
+```bash title="Terminal — kiểm thử cả Release"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+[ZIP đầy đủ của Project 46](/downloads/project-46-falling-sand.zip) chứa README, starter, bảy checkpoint, final và tests. Phần **Toàn bộ mã nguồn của dự án** ở cuối trang hiển thị source thật của final cùng CMake và tests, không phải một bản chép lại rút gọn. Bản này dùng SDL3 renderer, không cần OpenGL compute hoặc source từ các project khác.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm làm swap mất nước như bài 5. Chạy CTest: ca swap và kiểm đếm phải FAIL, cả Debug lẫn Release. Nếu chỉ hình thay đổi nhưng test vẫn PASS, xem lại test có đang build từ `final/include` bạn vừa sửa hay không.
+2. Tạm bỏ giới hạn bốn bước trong `planSteps`. Ca elapsed 10 giây phải phát hiện lỗi budget. Khôi phục giới hạn và chạy lại trước khi dùng input thời gian thật.
+3. Reset hai lần, mỗi lần tiến cùng 20 tick mà không vẽ. Checksum phải giống nhau. Sau đó tô thêm một ô: checksum có thể đổi, nhưng không dùng hash khác nhau để kết luận quy tắc bị sai.
+
+## Tự kiểm tra kết quả
+
+Các target starter, 01–07 và final đều build được. CTest Debug/Release đạt; validator 120 tick báo PASS. Vẽ sau resize không lệch; kéo ra ngoài rồi vào không nối nét qua vùng ngoài; pause/reset/mất focus không gây bù tick bất ngờ. Phần code hoàn chỉnh còn comment và dùng thụt dòng bốn khoảng trắng.
+
+## Bài tập mở rộng
+
+Thêm một vật liệu Oil nổi trên Water, nhưng trước khi viết luật hãy lập bảng loại nào được swap với loại nào. Bổ sung bộ đếm và test cho từng cặp mới. Nếu muốn thử double buffer, phải giải quyết cả xung đột khi hai ô cùng chọn một đích; chỉ chép mảng không tự giải quyết vấn đề đó.
+
+Bạn đã hoàn thành Project 46. Tiếp theo, [Project 47 — Tấm kim loại nóng](/projects/heat-plate) chuyển từ nhãn vật liệu sang trường nhiệt độ trên lưới, rồi dùng sai phân hữu hạn để mô phỏng nhiệt lan đi.

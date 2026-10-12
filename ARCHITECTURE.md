@@ -23,6 +23,8 @@ examples/project-XX-<slug>/     project C++ build độc lập
 
 `lib/course.ts` chỉ ghép roadmap với `project-summaries.ts`. Manifest đầy đủ chỉ được tải khi mở đúng project. Search, Canvas metadata, source checkpoint và lesson content đều dùng literal dynamic import để bundler tách chunk.
 
+`project-summaries.ts` chỉ ghép các shard trong `course/generated/summaries/`. Mỗi shard chứa tối đa 10 project, mục tiêu 8 KiB và giới hạn 16 KiB; generator giữ nguyên thứ tự catalog. Metadata của đủ 78 project vẫn được chia nhỏ thay vì nối thành một file lớn.
+
 ## Source C++ và checkpoint
 
 `source-template/` giữ nguyên cấu trúc thư mục mà snapshot cần có:

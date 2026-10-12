@@ -313,5 +313,26 @@
     "sourceDirectory": "project-45-molecular-lab-gpu",
     "checkpointCount": 10,
     "demoId": "molecular-lab-gpu"
+  },
+  {
+    "id": "46",
+    "slug": "falling-sand",
+    "sourceDirectory": "project-46-falling-sand",
+    "checkpointCount": 7,
+    "demoId": "falling-sand"
+  },
+  {
+    "id": "47",
+    "slug": "heat-plate",
+    "sourceDirectory": "project-47-heat-plate",
+    "checkpointCount": 8,
+    "demoId": "heat-plate"
+  },
+  {
+    "id": "48",
+    "slug": "wind-map",
+    "sourceDirectory": "project-48-wind-map",
+    "checkpointCount": 9,
+    "demoId": "wind-map"
   }
 ]

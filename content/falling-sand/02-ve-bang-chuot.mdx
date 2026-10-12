@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biến con trỏ chuột thành bút vẽ vật liệu
+
+## Vấn đề cần giải quyết
+
+Ở bài trước, mỗi lần muốn đổi cảnh ta phải sửa `makeScene` rồi build lại. Bây giờ hãy để người dùng tự vẽ cát, tường hoặc xóa vật liệu. Đừng thêm chuyển động vội: khi mọi ô còn đứng yên, ta dễ nhìn ra nét bị đứt hoặc click bị lệch hơn.
+
+Tiếp tục từ checkpoint 01. Bài này bổ sung `paintDisk`, `paintStroke` vào `grid.hpp`, `mouseCell` vào `view.hpp` và trạng thái nét vẽ trong `main.cpp`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mouse event cho tọa độ trong window. Renderer của ta lại dùng lưới 96 × 64 và có thể chừa letterbox. Chia trực tiếp `mouseX` cho 10 chỉ đúng khi cửa sổ tình cờ rộng 960 pixel và không có thay đổi scale.
+
+Hãy nhờ SDL đổi window coordinates sang render coordinates trước, kiểm tra điểm nằm trong lưới, rồi mới lấy phần nguyên:
+
+$$x_{cell}=\lfloor x_{logical}\rfloor,\qquad y_{cell}=\lfloor y_{logical}\rfloor.$$
+
+Bút tròn bán kính `r` tô các offset thỏa `dx*dx+dy*dy <= r*r`. `r=0` vẫn tô được một ô. Bút thay thế vật liệu ở các ô đó; nó không “thêm một hạt nữa” nếu ô đã có cát.
+
+<InteractiveLab demo="falling-sand" mode="sand-2" />
+
+Chọn lưới trống, vẽ một nét mảnh thật nhanh, rồi vẽ sát mép. Dùng mũi tên và Enter để thử cùng thao tác mà không cần chuột.
+
+## Viết code từng bước
+
+### Bước 1 — Chuyển tọa độ một lần ở ranh giới input
+
+Hàm `mouseCell` gọi API chuyển tọa độ và trả `false` nếu không lấy được điểm hợp lệ:
+
+```cpp title="include/view.hpp — đổi tọa độ mouse"
+float logicalX = 0;
+float logicalY = 0;
+if (!SDL_RenderCoordinatesFromWindow(renderer, windowX, windowY, &logicalX, &logicalY)) {
+    return false;
+}
+```
+
+Sau kiểm tra hữu hạn và bounds, mới chuyển sang số nguyên:
+
+```cpp title="include/view.hpp — từ tọa độ logical sang ô"
+if (logicalX < 0 || logicalY < 0 || logicalX >= grid.width || logicalY >= grid.height) {
+    return false;
+}
+x = static_cast<int>(std::floor(logicalX));
+y = static_cast<int>(std::floor(logicalY));
+return true;
+```
+
+Không clamp điểm ngoài lưới về biên. Làm vậy sẽ biến thao tác kéo trong dải letterbox thành một vệt vẽ dọc mép hộp.
+
+### Bước 2 — Viết brush trước khi viết event handler
+
+`paintDisk` nhận tọa độ ô, không biết gì về SDL. Nó giới hạn bán kính 0–8 rồi kiểm từng offset:
+
+```cpp title="include/grid.hpp — phần tô hình tròn"
+for (int dy = -radius; dy <= radius; ++dy) {
+    for (int dx = -radius; dx <= radius; ++dx) {
+        if (dx * dx + dy * dy <= radius * radius) {
+            grid.set(centerX + dx, centerY + dy, material);
+        }
+    }
+}
+```
+
+Không cần căn bậc hai để kiểm tra khoảng cách. `grid.set` đã bảo vệ biên, vì vậy brush có thể chạm mép mà không ghi ra ngoài vector.
+
+### Bước 3 — Nối các vị trí mouse được lấy mẫu
+
+Một lần rê chuột không đảm bảo có event ở mọi ô. `paintStroke` lấy số bước bằng thành phần dịch chuyển lớn hơn; mỗi bước đóng một dấu brush:
+
+```cpp title="include/grid.hpp — nối các tâm brush"
+for (int i = 0; i <= steps; ++i) {
+    const double t = static_cast<double>(i) / steps;
+    const int x = static_cast<int>(std::lround(x0 + t * dx));
+    const int y = static_cast<int>(std::lround(y0 + t * dy));
+    paintDisk(grid, x, y, radius, material);
+}
+```
+
+Nhánh `steps==0` ở ngay trước vòng lặp chỉ đóng một dấu rồi return, tránh chia cho zero. Vì hai đầu nằm trong lưới, các điểm nội suy cũng nằm trong hình chữ nhật lưới.
+
+## Ghép các phần lại
+
+Trong main, `drawing` cho biết nút trái đang được giữ; `previousValid` cho biết có điểm trước để nối hay không. `MOUSE_BUTTON_DOWN` bắt đầu nét và tô ngay; `MOUSE_MOTION` nối từ điểm trước; `MOUSE_BUTTON_UP` kết thúc nét. SDL mặc định auto-capture khi nhấn mouse, nên vẫn nhận được thao tác nhả bên ngoài cửa sổ.
+
+Khi tọa độ ra ngoài lưới, đặt `previousValid=false`. Lần vào lại lấy điểm hiện tại làm cả hai đầu nét. Khi mất focus, xóa cả `drawing` lẫn `previousValid`; đừng chờ một sự kiện nhả chuột có thể đã xảy ra ở ứng dụng khác.
+
+Phím `1` chọn cát, `2` chọn tường, `4` chọn tẩy. `[` và `]` đổi bán kính. Nước sẽ được thêm ở bài 5. Build và chạy `project_46_checkpoint_2`; mọi ô vẫn đứng yên.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm chỉ gọi `paintDisk` tại điểm mouse mới thay cho `paintStroke`. Dùng bán kính 0 và rê nhanh: nét có thể đứt. Khôi phục nội suy rồi thử lại.
+2. Bỏ việc xóa `previousValid` khi ra ngoài. Kéo ra khỏi một mép, vòng chuột bên ngoài rồi vào ở vị trí khác: xuất hiện đường nối không được vẽ trong lưới. Khôi phục trước khi tiếp tục.
+
+## Tự kiểm tra kết quả
+
+Vẽ được cả trước và sau resize; click trong letterbox không đổi lưới. Kéo ra ngoài rồi vào lại không tạo đường nối dài. Bút bán kính 0 tô một ô, brush ở góc không gây crash. Nhấn R khôi phục cảnh chuẩn; nhả chuột hoặc mất focus đều kết thúc nét.
+
+## Bài tập mở rộng
+
+Thêm chế độ chỉ tô vào ô Empty, rồi so sánh với bút thay thế đang dùng. Ghi rõ chế độ đó làm gì khi kéo qua tường. Tiếp theo, [cho cát rơi từng tick](/projects/falling-sand/03-cat-roi-tung-tick) mà vẫn giữ nguyên toàn bộ phần input.

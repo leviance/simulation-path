@@ -1,0 +1,89 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc nhiệt độ thật thay vì chỉ nhìn màu
+
+## Vấn đề cần giải quyết
+
+Vùng nóng nhạt màu có thể do nhiệt lan ra, do nhiệt thoát qua biên, hoặc chỉ do bảng màu đổi. Nếu chỉ nhìn ảnh, ta khó phân biệt các nguyên nhân này.
+
+Bài này thêm một inspector chọn ô và các phép đo toàn field. Không đổi thuật toán diffuse: ta đang bổ sung dụng cụ để hiểu và kiểm tra nó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Các đại lượng cần đọc là nhiệt độ nhỏ nhất, lớn nhất, trung bình và tổng:
+
+$$S=\sum_{i=0}^{WH-1}\theta_i,\qquad \bar\theta=\frac{S}{WH}.$$
+
+Trong tấm cách nhiệt, không có input, S giữ gần như nguyên vẹn. Cực đại vẫn có thể giảm vì cùng lượng nhiệt được phân bố rộng hơn. Đừng nhầm **độ tương phản giảm** với **tổng nhiệt giảm**.
+
+S chỉ tỉ lệ với nhiệt lượng dư nếu các ô có cùng thể tích và vật liệu có cùng mật độ, nhiệt dung. Muốn đổi sang Joule còn cần các hệ số đó cùng khoảng nhiệt độ tham chiếu. Project này chưa gán chúng nên giao diện ghi “Tổng θ”, không ghi một đơn vị vật lý không có cơ sở.
+
+Với biên lạnh, môi trường lấy nhiệt đi và S có thể giảm. Tô bút cũng chủ động thay S. Vì vậy không dùng một ngưỡng “sum phải giữ nguyên” cho mọi chế độ.
+
+<InteractiveLab demo="heat-plate" mode="heat-7" />
+
+Giữ biên cách nhiệt, reset rồi chạy. Quan sát max giảm trong khi tổng xấp xỉ 64. Sau đó chọn biên lạnh và so lại từ cùng cảnh; mất nhiệt rõ hơn khi đốm nóng lan đến vành hoặc khi bạn đặt đốm sát vành.
+
+## Viết code từng bước
+
+### Bước 1 — Duyệt dữ liệu thật để đo
+
+Trong `include/diagnostics.hpp`, `measure` đọc current:
+
+```cpp title="include/diagnostics.hpp — min, max và tổng"
+for (const double value : field.current) {
+    result.minimum = std::min(result.minimum, value);
+    result.maximum = std::max(result.maximum, value);
+    result.sum += value;
+}
+```
+
+Minimum và maximum được khởi tạo bằng phần tử đầu tiên, không mặc định bằng 0. Nếu một field toàn 0.4 mà min được giữ là 0, phép đo đã sai dù hình vẫn đẹp.
+
+### Bước 2 — Tính trung bình từ đúng số ô
+
+```cpp title="include/diagnostics.hpp — trung bình toàn field"
+result.mean = result.sum / static_cast<double>(field.current.size());
+return result;
+```
+
+Tổng bao gồm cả vành trong chế độ Cold. Mẫu số luôn là width*height; không đổi sang “chỉ đếm ô còn nóng”, vì đó là một đại lượng khác. Dùng cùng định nghĩa khi so C++ với Canvas.
+
+### Bước 3 — Đọc một ô ở vị trí người dùng chọn
+
+Main bổ sung mũi tên và Enter. Ví dụ giới hạn con trỏ ở mép phải:
+
+```cpp title="src/main.cpp — di chuyển ô đang chọn"
+if (event.key.key == SDLK_RIGHT) {
+    cursorX = std::min(field.width - 1, cursorX + 1);
+}
+```
+
+Phím I in kết quả ra terminal, hữu ích khi tiêu đề window không đủ chỗ hiển thị:
+
+```cpp title="src/main.cpp — đọc inspector"
+const auto stats = heat::measure(field);
+std::cout << "Cell (" << cursorX << ", " << cursorY << ") theta=" << heat::sample(field, cursorX, cursorY) << '\n';
+std::cout << "Min=" << stats.minimum << " max=" << stats.maximum << " mean=" << stats.mean << " sum=" << stats.sum << '\n';
+```
+
+Canvas hiển thị thêm bốn hàng xóm để bạn tự thay vào stencil. Các sample nằm ngoài miền trong chế độ cách nhiệt vẫn có nghĩa ghost đã học, không phải ô mới được cấp phát.
+
+## Ghép các phần lại
+
+Build `project_47_checkpoint_7`. Dùng mũi tên để chọn ô, Enter đặt bút tại ô đó, I xem số đo. Rectangle viền trắng chỉ là đánh dấu hiển thị, không thay nhiệt độ của ô.
+
+So đúng cùng tick và cùng input khi đối chiếu Canvas/C++. Không dùng thời gian bạn mất để click hai nút làm mốc so sánh chính xác. Tốt nhất reset, pause và tiến một số bước biết trước.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm khởi tạo minimum bằng 0 rồi tạo field đồng đều 0.4. Phép đo min sẽ lộ lỗi ngay; khôi phục khởi tạo từ phần tử đầu.
+2. Chỉ nhìn sum trong ví dụ r=0.4 không ổn định ở bài trước. Sum vẫn đúng trong bước đầu nhưng min âm. Giải thích vì sao một invariant không đủ chứng minh toàn bộ solver.
+
+## Tự kiểm tra kết quả
+
+Cảnh mặc định có sum 64, mean 64/3072, min 0 và max 1. Sau các bước ổn định với cách nhiệt, sum sai khác rất nhỏ do dấu phẩy động; max không tăng. Tô một ô hoặc đổi biên có thể đổi sum hợp lệ. Inspector không cho con trỏ vượt biên.
+
+## Bài tập mở rộng
+
+Thêm phương sai nhiệt độ để đo độ không đồng đều. Dự đoán nó thay đổi thế nào trong tấm cách nhiệt và phân biệt nó với nhiệt lượng dư. Bài cuối sẽ [biến các quan sát thành tests](/projects/heat-plate/08-kiem-chung-va-ban-hoan-chinh).

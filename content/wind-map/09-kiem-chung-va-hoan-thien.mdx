@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng bản đồ và chạy chương trình hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Bản đồ đã có mũi tên, màu và hạt chuyển động. Ta cần chứng minh các phép đo đúng, không chỉ kết luận hình “trông hợp lý”. Một dấu sai trong curl, index sai ở mép hay thiếu dx trong đạo hàm đều có thể tạo hình khá đẹp.
+
+Bài cuối bổ sung validator V trên field riêng và tests không cần SDL window. Source hoàn chỉnh gồm tất cả file, CMake, README và tests; có thể tải ZIP rồi build độc lập với website và các project trước.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn các ca có đáp án độc lập:
+
+| Trường | Divergence | Curl z |
+| --- | ---: | ---: |
+| (1,0.25) | 0 | 0 |
+| (x,y) | 2 | 0 |
+| (−x,−y) | −2 | 0 |
+| (−y,x) | 0 | 2 |
+| (y,0) | 0 | −1 |
+
+Với Bowl, gradient chính xác là `(x,y)`. Với Hill, so với `−2(x,y)*exp(−x²−y²)` và yêu cầu sai số giảm khi tinh lưới. Curl của gradient số cũng gần 0: hai toán tử đạo hàm theo x/y ở đây tác động trên hai trục độc lập, nên chúng giao hoán trong số học chính xác, kể cả với nhánh một phía. Dấu phẩy động để lại phần dư rất nhỏ.
+
+Trường hợp đó kiểm tính nhất quán của toán tử, **không tự chứng minh gradient chính xác**. Một gradient bị nhân sai hệ số vẫn có thể có curl 0. Vì vậy vẫn cần oracle giải tích và phép kiểm hội tụ.
+
+<InteractiveLab demo="wind-map" mode="wind-9" />
+
+Chạy kiểm chứng trường chuẩn. Validator báo lỗi lớn nhất của trường tuyến tính, curl(gradient) và lỗi gradient trước/sau tinh lưới. Nó dừng chuyển động nhưng không đổi field hay tick của thí nghiệm đang xem.
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm cả miền và mép với trường affine
+
+Validator có ba bảng khớp nhau theo index fixture:
+
+```cpp title="include/diagnostics.hpp — các oracle đạo hàm"
+const Preset presets[] = {Preset::Uniform, Preset::Source, Preset::Sink, Preset::Rotation, Preset::Shear};
+const double expectedDiv[] = {0, 2, -2, 0, 0};
+const double expectedCurl[] = {0, 0, 0, 2, -1};
+```
+
+Mỗi ca dựng một Field riêng, duyệt tất cả nút và lấy sai số lớn nhất. Không bỏ hàng mép. Không chỉ kiểm dấu hay ảnh chụp, vì kết quả 1 thay cho 2 có thể cùng màu cam nhưng vẫn sai.
+
+### Bước 2 — Kiểm gradient bằng hai phép khác nhau
+
+Sau ca Hill trên lưới thô, tạo lưới mịn trong cùng miền:
+
+```cpp title="include/diagnostics.hpp — tinh lưới để đo hội tụ"
+report.coarse = gradientError(field, scene.potential);
+Field fine(65, 49);
+populate(fine, scene);
+report.refined = gradientError(fine, scene.potential);
+```
+
+`passed` yêu cầu lỗi affine/curl(gradient) nhỏ hơn 1e−10, cùng hai lỗi gradient giảm hơn ba lần. Tolerance là tiêu chí kiểm, không phải thao tác sửa dữ liệu về đáp án.
+
+Tests thêm bilinear của trường affine và quỹ đạo quay giải tích. Sau một giây Rotation, hạt bắt đầu `(0.5,0)` phải gần `(0.5*cos(1),0.5*sin(1))`; giảm dt làm sai số midpoint giảm. Đây là oracle khác với việc chạy lại cùng thuật toán hai lần.
+
+### Bước 3 — Giữ tests hoạt động cả Release
+
+`check` tăng failures và in nhãn khi điều kiện sai. Không dùng assert có thể bị tắt bởi NDEBUG. Cuối tests:
+
+```cpp title="tests/tests.cpp — trả mã lỗi cho CTest"
+if (failures != 0) {
+    return EXIT_FAILURE;
+}
+return EXIT_SUCCESS;
+```
+
+Các tests lịch 15/30/120 FPS so cùng 120 tick và cùng vị trí tracer. Ca frame nghẽn chỉ kiểm ngân sách hữu hạn và dropped time, không yêu cầu bù đủ mười giây. Ca xoáy kiểm tính không cộng dồn, cùng đáp án stencil riêng tại tâm.
+
+## Ghép các phần lại
+
+Tại thư mục ZIP có CMake, build final rồi chạy tests:
+
+```bash title="Terminal — kiểm bản hoàn chỉnh trong Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Windows/Visual Studio chạy `build/Debug/project_48_final.exe`. Với generator một cấu hình, chọn CMAKE_BUILD_TYPE lúc configure và dùng build directory riêng cho cấu hình khác. Tests không mở window; ứng dụng final mới là chương trình tương tác.
+
+P chọn trường, H chọn scalar, L chọn lớp, G chọn lưới. I in inspector; N/Space điều khiển tracer; B/S/chuột/Enter điều khiển xoáy; R reset Scene; V kiểm ca chuẩn; Esc thoát. Source đầy đủ sau bài và README trong ZIP giải thích từng phím.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm bỏ dy trong derivativeY, chạy tests. Các ca tuyến tính và gradient phải báo lỗi có nhãn, cả trong Release. Khôi phục phép chia rồi chạy lại hai cấu hình.
+2. Tạm thay oracle giải tích bằng lời gọi gradient số đang kiểm. Lỗi có thể biến mất dù thuật toán sai; khôi phục oracle độc lập và cố ý đảo một dấu để xác nhận tests bắt được lỗi.
+
+## Tự kiểm tra kết quả
+
+Validator chuẩn báo PASS, nhưng bạn vẫn kiểm riêng tương tác: đổi preset/layer, resize, chọn mép, đặt xoáy bằng chuột và Enter, pause/reset, mất focus. Tests phải bao phủ đáp án affine, Bowl/Hill, mép, nội suy, quỹ đạo, scheduling và xoáy không cộng dồn. Build được starter, chín checkpoint, final và CTest Debug/Release.
+
+Các kết quả thuộc miền, công thức, resolution và tolerance đã nêu. Mật độ tracer và hình mũi tên không chứng minh một fluid solver bảo toàn khối lượng hoặc giải pressure đúng.
+
+## Bài tập mở rộng
+
+Thêm biểu đồ sai số theo spacing, hoặc kiểm một trường bạn tự thiết kế bằng đạo hàm tay. Viết một ca test mới trước khi thay công thức, rồi xác nhận nó thực sự thất bại khi cố ý sửa sai.
+
+Project 48 kết thúc tại đây. [Project 49 trong roadmap](/roadmap#project-49) sẽ dùng các phép toán trường để xây Stable Fluids 2D; nội dung đó hiện còn **Sắp ra mắt**.

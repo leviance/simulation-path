@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho nhiệt lan trên cả tấm bằng stencil năm điểm
+
+## Vấn đề cần giải quyết
+
+Một hàng đã truyền nhiệt đúng, nhưng đốm nóng chưa lan lên trên hay xuống dưới. Ta sẽ thêm hướng còn thiếu mà không thay bộ khung input, render hay double buffer.
+
+Khác hộp cát, không có ô nào “chuyển chỗ” sang hàng xóm. Mỗi ô vẫn ở nguyên vị trí; **giá trị nhiệt độ tại ô** thay đổi theo trao đổi với các ô quanh nó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thêm nhiệt độ phía trên U và phía dưới D. Hai hướng có thể có khoảng cách ô khác nhau:
+
+$$r_x=\frac{\alpha\Delta t}{\Delta x^2},\qquad r_y=\frac{\alpha\Delta t}{\Delta y^2}.$$
+
+$$C_{\mathrm{new}}=C+r_x(L-2C+R)+r_y(U-2C+D).$$
+
+Năm vị trí được đọc là tâm và bốn hàng xóm trực tiếp. Đây là **stencil năm điểm**, không phải trung bình tùy ý của tám ô bao quanh. Nó xấp xỉ phương trình nhiệt:
+
+$$\frac{\partial\theta}{\partial t}=\alpha\left(\frac{\partial^2\theta}{\partial x^2}+\frac{\partial^2\theta}{\partial y^2}\right).$$
+
+Mỗi đạo hàm bậc hai ở vế phải chính là ý tưởng ba ô đã học. Ký hiệu dài hơn nhưng chương trình chỉ thêm một phép sai phân theo y.
+
+<InteractiveLab demo="heat-plate" mode="heat-4" />
+
+Đặt một ô 1 ở giữa nền 0, tiến một bước. Với rx=ry=0.2, tâm còn 0.2 và bốn ô cạnh đều bằng 0.2. Ô chéo vẫn bằng 0: nhiệt chưa đi được hai liên kết lưới trong một bước.
+
+## Viết code từng bước
+
+### Bước 1 — Tính hệ số của hướng y
+
+Thêm ry vào diffuse. Trong trường hợp tổng quát, không giả định nó luôn bằng rx:
+
+```cpp title="include/diffusion.hpp — hệ số theo trục y"
+inline double ratioY(const Settings& settings) {
+    return settings.diffusivity * settings.dt / (settings.dy * settings.dy);
+}
+```
+
+Source mặc định dx=dy=1 nên hai hệ số đều 0.2. Tests vẫn có trường hợp dx khác dy để không vô tình viết sai công thức cho lưới chữ nhật.
+
+### Bước 2 — Bổ sung sai phân dọc
+
+Ngay sau khi tính phần ngang, thêm:
+
+```cpp title="include/diffusion.hpp — phần truyền nhiệt theo chiều dọc"
+const double vertical = sample(field, x, y - 1) - 2 * center + sample(field, x, y + 1);
+value += ry * vertical;
+```
+
+Sau đó mới gán value vào next[index]. Không lấy average của hai kết quả ngang/dọc: điều đó tự ý chia đôi hệ số khuếch tán. Cũng không nhân cả tổng với rx nếu dx và dy khác nhau.
+
+### Bước 3 — Cập nhật điều kiện chấp nhận bước
+
+Trong hai chiều, tổng hai hệ số mới quyết định giới hạn:
+
+```cpp title="include/diffusion.hpp — xét cả hai hướng"
+double sum = ratioX(settings);
+sum += ratioY(settings);
+return std::isfinite(sum) && sum <= 0.5;
+```
+
+Hàm còn kiểm các tham số hữu hạn, alpha không âm, dt/dx/dy dương trước đoạn này. Bản mặc định có tổng 0.4 nên được chấp nhận. Giới hạn r≤0.5 của bài 3 không thể bê nguyên sang mỗi hướng của bài này.
+
+## Ghép các phần lại
+
+Build `project_47_checkpoint_4`. Mọi thao tác chuột, N, C và R giữ nguyên. Solver vẫn chỉ đọc current, ghi next và swap sau toàn lưới; bỏ double buffer ở đây sẽ làm hình ảnh lệch theo thứ tự quét.
+
+Xung đầu tiên loang thành hình dấu cộng, không phải một đĩa tròn mịn. Đó là cấu trúc của lưới và stencil ở vài bước đầu, không tự động chứng minh solver sai. Sau nhiều bước, phân bố mượt dần nhưng vẫn là xấp xỉ trên lưới hữu hạn.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm dùng `x+1` ở chỗ cần `y+1`. Ca xung nhiệt sẽ không còn bốn nhánh đối xứng; kiểm đáp án từng ô sẽ chỉ ra hướng bị thiếu.
+2. Tạm chia value cho 2 sau khi cộng phần dọc. Một tấm đồng đều sẽ nguội dù không có nơi thoát nhiệt. Khôi phục công thức và chạy lại ca đồng đều.
+
+## Tự kiểm tra kết quả
+
+Tâm và bốn hàng xóm của xung bằng 0.2; tổng vẫn bằng 1. Đường chéo bằng 0 sau bước đầu. Đảo thứ tự duyệt không đổi nghiệm một bước vì tất cả đọc cùng current. Lưới không có ô nóng ngoài miền do index bị nối nhầm giữa hai hàng.
+
+## Bài tập mở rộng
+
+Giữ dy=1 nhưng đặt dx=2 trong Settings; tính rx rồi dự đoán hướng lan chậm hơn. Không thay cách vẽ để “làm cho giống” dự đoán: đọc giá trị trước. Tiếp theo, [xác định chuyện gì xảy ra ở biên](/projects/heat-plate/05-dieu-kien-bien).

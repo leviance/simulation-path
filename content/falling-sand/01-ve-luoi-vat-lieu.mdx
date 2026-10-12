@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ một lưới cát và tường bằng SDL3
+
+## Vấn đề cần giải quyết
+
+Ta vừa dành nhiều project để theo dõi vị trí và vận tốc của từng hạt. Hộp cát này bắt đầu khác: chia màn hình thành các ô, rồi hỏi **mỗi ô đang chứa gì**. Chưa cần lực, vận tốc hay GPU. Trước khi nghĩ đến cát rơi, ta phải vẽ được một khối cát đứng yên trên một cái bệ.
+
+[Tải source Project 46](/downloads/project-46-falling-sand.zip), giải nén và mở terminal tại thư mục có `CMakeLists.txt`. Starter đã có phần tạo window, renderer, event loop và giải phóng SDL. Chạy thử nó trước: bạn phải thấy một cửa sổ nền tối có thể resize và đóng bình thường.
+
+```bash title="Terminal — kiểm tra bộ khung"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_46_starter --parallel 2
+.\build\Debug\project_46_starter.exe
+```
+
+Lệnh chạy trên dùng đường dẫn Windows/Visual Studio. Với generator một cấu hình, executable nằm trực tiếp trong `build/`. Bạn có thể viết tiếp trong `starter/` của ZIP; `checkpoints/01/` là mốc đối chiếu sau bài này, không phải một đoạn code còn đang bỏ dở.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thế giới có 96 cột và 64 hàng, gốc ở góc trên trái. Ô `(0,0)` ở trên cùng; tăng `y` nghĩa là đi xuống. Ta lưu các ô trong một `std::vector` theo hàng:
+
+$$i=yW+x,\qquad 0\le x<W,\quad 0\le y<H.$$
+
+Với `W=96`, ô `(5,2)` có index `197`. Đây là địa chỉ trong mảng vật liệu, không phải tọa độ pixel của cửa sổ. Một ô có thể được phóng lên thành nhiều pixel tùy kích thước màn hình.
+
+`Cell::Sand` và màu vàng là hai thứ khác nhau. Luật mô phỏng sẽ đọc `Cell`; renderer chỉ dùng màu để người xem phân biệt vật liệu. Nếu dùng màu làm trạng thái, đổi giao diện rất dễ làm thay đổi cả hành vi.
+
+<InteractiveLab demo="falling-sand" mode="sand-1" />
+
+Click một ô hoặc dùng phím mũi tên để xem tọa độ và index. Các ô chưa chuyển động vì ta chưa viết bước cập nhật.
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm tra phần tạo renderer trong bộ khung
+
+Sau khi `SDL_Init` và `SDL_CreateWindow` thành công, starter tạo renderer như sau. Giữ nhánh xử lý lỗi này khi bổ sung code:
+
+```cpp title="src/main.cpp — renderer trong bộ khung"
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (!renderer) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+Ngay sau đó, `SDL_SetRenderLogicalPresentation(renderer, 96, 64, SDL_LOGICAL_PRESENTATION_LETTERBOX)` đặt hệ tọa độ vẽ bằng kích thước lưới. SDL phóng hình và giữ tỉ lệ; phần thừa của cửa sổ trở thành letterbox. Nhờ vậy ta không phải tự nhân mọi tọa độ với kích thước ô sau mỗi lần resize.
+
+### Bước 2 — Thêm dữ liệu lưới
+
+Mở `include/grid.hpp`. `Grid` giữ `width`, `height` và `cells`; constructor tạo đủ `width*height` ô `Empty`. Hai hàm nhỏ xác định cách truy cập:
+
+```cpp title="include/grid.hpp — tọa độ và địa chỉ ô"
+bool contains(int x, int y) const {
+    return x >= 0 && y >= 0 && x < width && y < height;
+}
+
+std::size_t index(int x, int y) const {
+    return static_cast<std::size_t>(y * width + x);
+}
+```
+
+`index` giả định tọa độ hợp lệ. Các hàm `at` và `set` kiểm tra `contains` trước khi truy cập mảng: đọc ngoài lưới trả về `Wall`, ghi ngoài lưới bị bỏ qua. Đặc biệt, `x==width` không hợp lệ dù công thức index vẫn có thể cho một số nằm trong vector — đó là đầu hàng tiếp theo, không phải ô ta muốn.
+
+Hàm `makeScene` đặt một bệ từ cột 8 đến 87 ở hàng 50, cùng khối cát ở phía trên. Trong `main`, tạo `sand::Grid grid = sand::makeScene();` **một lần trước vòng lặp**, không tạo lại mỗi frame.
+
+### Bước 3 — Vẽ hình vuông đại diện cho từng ô
+
+Trong `drawGrid` ở `include/view.hpp`, duyệt từng `(x,y)`, bỏ qua ô trống và lấy màu từ `colorFor`. Phần thực sự vẽ hình vuông là:
+
+```cpp title="include/view.hpp — vẽ một ô vật liệu"
+const SDL_Color color = colorFor(material);
+if (!SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a)) {
+    return false;
+}
+const SDL_FRect rectangle{static_cast<float>(x), static_cast<float>(y), 1.0F, 1.0F};
+if (!SDL_RenderFillRect(renderer, &rectangle)) {
+    return false;
+}
+```
+
+Hai số `1.0F` là chiều rộng và chiều cao **một ô logical**, không phải một pixel vật lý. `SDL_RenderFillRect` tô hình; đặt màu đơn thuần chưa vẽ gì lên màn hình. Khi một lời gọi thất bại, hàm trả `false` để main in lỗi và dọn tài nguyên.
+
+## Ghép các phần lại
+
+Trong vòng lặp main, giữ thứ tự `SDL_RenderClear` → `drawGrid` → `SDL_RenderPresent`. Renderer không được sửa nội dung `grid`; nó chỉ đọc trạng thái hiện có.
+
+```cpp title="src/main.cpp — gọi phần vẽ mới"
+if (!sand::drawGrid(renderer, grid)) {
+    failed = true;
+}
+```
+
+Build `project_46_checkpoint_1` và chạy executable tương ứng. Bạn phải thấy khối cát vàng và bệ xám. Các header dành cho bài sau trong ZIP hiện chưa bổ sung hành vi; starter và checkpoint không chạy những luật chưa học.
+
+## Thử làm sai để hiểu đúng
+
+1. Chuyển lời gọi `drawGrid` lên trước `SDL_RenderClear`, build lại và quan sát: hình bị xóa mất ngay trong cùng frame. Đưa lời gọi về sau clear.
+2. Đổi chiều rộng rectangle từ 1 thành 2. Các ô vẽ chồng lên nhau nhưng dữ liệu không nhiều lên. Khôi phục 1 rồi resize cửa sổ để phân biệt kích thước hiển thị với kích thước lưới.
+
+## Tự kiểm tra kết quả
+
+Khối cát có 135 ô, bệ có 80 ô; tất cả đứng yên. Đổi tỉ lệ cửa sổ không làm hình vuông thành hình chữ nhật. Đóng cửa sổ không báo lỗi SDL. Kiểm tra bằng tay `index(5,2)==197` và xác nhận `contains(96,0)==false`.
+
+## Bài tập mở rộng
+
+Thêm một bệ thứ hai bằng `grid.set`, không sửa renderer. Thay màu cát rồi chứng minh vị trí các ô vẫn giữ nguyên. Sau đó sang [bài 2 — vẽ bằng chuột](/projects/falling-sand/02-ve-bang-chuot): ta sẽ đưa input về đúng hệ tọa độ vừa chọn.
