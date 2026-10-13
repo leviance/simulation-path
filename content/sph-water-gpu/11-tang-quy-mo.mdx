@@ -1,0 +1,78 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tăng số hạt sau khi kiểm tra tài nguyên
+
+## Vấn đề cần giải quyết
+
+Solver nhỏ đã có grid, adaptive dt và khả năng dừng submit. Giờ mới tăng N. Mục tiêu không phải bấm một triệu rồi xem máy chịu được không, mà là dự đoán allocation, kiểm giới hạn và giữ quyền xác nhận của người dùng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Preset dùng side 8/32/48/100, tức 512/32.768/110.592/1.000.000 hạt. Miền và khối 0.4 m giữ nguyên, spacing/mass giảm theo độ phân giải. Memory plan gồm tất cả bank, CSR, scan sums và reduction scratch.
+
+N lớn không bảo đảm 60 FPS. Grid giảm search trung bình, nhưng occupancy tăng khi hạt tụ lại; mỗi invocation có budget ứng viên và failure flag. Vẽ 100.000 representative points không làm physics nhỏ đi.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-11" />
+
+Chọn Kế hoạch GPU 100³. Bảng thay memory estimate, còn số hạt CPU vẫn 64 hoặc 216. Đây là dự toán, không allocation trên GPU của browser.
+
+## Viết code từng bước
+
+### Bước 1 — Tính đủ resident bytes
+
+Trong makePlan:
+
+```cpp title="include/model.hpp — budget không chỉ là position"
+plan.residentBytes = 100ULL * plan.count + 12ULL * plan.cells + scanBytes + 32ULL * ceilDivide(plan.count, 256);
+plan.largestBlock = std::max(16ULL * plan.count, 4ULL * plan.cells);
+```
+
+100 N gồm position/velocity hai bank, density, acceleration và indices. 12 C là count/offset/cursor. ScanBytes tính các tầng, không lấy một con số constant tùy ý.
+
+### Bước 2 — Kiểm GL limit trước BufferData
+
+Storage kiểm SSBO block size và bindings:
+
+```cpp title="include/storage.hpp — đọc giới hạn phần cứng"
+gl.GetInteger64v(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &block);
+gl.GetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &bindings);
+gl.GetIntegerv(GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, &computeBlocks);
+gl.GetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &vertexBlocks);
+```
+
+Còn phải kiểm group count/size, shared memory và budget 192 MiB. Limit đúng không bảo đảm VRAM rảnh; allocation failure vẫn phải báo. Source giữ workload cũ nếu allocation mới thất bại.
+
+### Bước 3 — Chỉ allocate sau xác nhận
+
+Phím 1–4 đặt armedSide, in N/MiB; Enter mới tạo Plan và reset:
+
+```cpp title="src/main.cpp — xác nhận workload"
+const auto requested = makePlan(armedSide);
+armedSide = 0;
+try {
+    engine.reset(gl, requested);
+    plan = requested;
+    engine.grid = true;
+} catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+}
+```
+
+Điều kiện ngoài đoạn này còn yêu cầu queue idle. C hủy lựa chọn; mọi lựa chọn lớn đều đưa app về paused. Không tự nâng N vì shader nhỏ đã chạy nhanh.
+
+## Ghép các phần lại
+
+Checkpoint 11 mở ở 512 hạt. Chỉ thử 32³ sau khi oracle nhỏ qua; thử 48³/100³ nếu GPU phù hợp. Với N>512, all-pairs bị từ chối. Reset cùng resolution reuse storage; chuyển workload còn xét peak memory để không cộng hai allocation lớn vượt budget.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ mass cũ khi tăng side. Total mass tăng mạnh và bạn không còn so cùng khối vật lý; tính lại m=rho0*s³.
+2. Dùng draw count thay cho workload count hoặc cấp phát trước xác nhận. Khôi phục tách render/physics và Enter gate.
+
+## Tự kiểm tra kết quả
+
+Preset đầy đủ giữ 64 kg. Plan bytes khớp allocation. Không auto-run, không cấp phát million particles trong Canvas. Các limit/peak budget/allocation failure đều có đường báo lỗi; không cam kết FPS hay độ chính xác vật lý.
+
+## Bài tập mở rộng
+
+Ghi model time/GPU time/occupancy cho từng N bạn thực sự đã chạy. Cuối cùng [kiểm chứng và tải source hoàn chỉnh](/projects/sph-water-gpu/12-kiem-chung-va-hoan-thien).

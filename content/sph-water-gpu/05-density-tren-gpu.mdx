@@ -1,0 +1,78 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính density trên GPU với một ca nhỏ
+
+## Vấn đề cần giải quyết
+
+Khối hạt đã có kernel đúng đơn vị. Giờ mỗi hạt cần density để biết mức nén tại vị trí của nó. Ta bắt đầu bằng all-pairs 512 hạt: dễ kiểm và chưa phải nơi cần tối ưu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Density của i là tổng mW(|xi−xj|), có cả j=i. Self có W(0) dương. Một invocation tính xong tổng của đúng một hạt rồi ghi density[i], nên không cần atomic cho density.
+
+Ở mép khối hoặc sát tường, support thiếu hạt. Density thấp không tự chứng minh code sai: đây là mô hình không có wall samples 3D. Đừng clamp density lên 1000 để làm màu đẹp, vì điều đó che mất limitation.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-5" />
+
+Chọn hạt giữa và hạt mép, đọc rho thay vì chỉ nhìn màu. Màu bão hòa là thao tác view. Canvas tính cùng tổng bằng CPU double; nó không đo tốc độ shader.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ oracle nhỏ trên CPU
+
+Reference đọc position packet đã biết, cộng trực tiếp:
+
+```cpp title="include/reference.hpp — oracle summation density"
+double rho = 0;
+for (const auto other : positions) {
+    rho += plan.mass * kernel(length(subtract(xyz(p), xyz(other))), plan.h);
+}
+report.density.push_back(rho);
+```
+
+evaluate nhận positions/velocities cùng kích thước và từ chối quá 512 hạt. Nó không phải fallback cho workload lớn; mục đích là làm đáp án độc lập cho shader.
+
+### Bước 2 — Ghi một record riêng trên GPU
+
+Trong density.comp, nhánh all-pairs:
+
+```glsl title="shaders/density.comp — GLSL tổng mW"
+for (uint j = 0u; j < uCount; j++) rho += uMass * kernel(length(p - positions[j].xyz));
+```
+
+i>=uCount được kiểm trước khi đọc position. Kết quả là vec4(rho,pressure,reserved,error). Ở checkpoint 5, pressure=0; Bài 06 mới tính EOS. Nonfinite hoặc rho không dương được ghi flag, không biến thành một density hợp lệ.
+
+### Bước 3 — Bind input/output và đặt barrier
+
+Engine.submit chọn density program trước force:
+
+```cpp title="include/engine.hpp — density pass"
+use(gl, programs.density, storage.plan, settings, grid);
+bind(gl, 0, storage.positions[current]);
+bind(gl, 1, storage.density);
+bind(gl, 2, storage.counts);
+bind(gl, 3, storage.offsets);
+bind(gl, 4, storage.indices);
+dispatch(gl, storage.plan.count);
+```
+
+Ba buffer grid chưa được shader đọc ở checkpoint 5; chúng sẽ thay vòng all-pairs ở Bài 08. dispatch tính ceil(N/256) rồi gọi SSBO barrier cho pass tiếp theo. Barrier không đồng nghĩa CPU đã được phép readback; cần fence của cả batch.
+
+## Ghép các phần lại
+
+N ở checkpoint 5 chỉ tính density, không chuyển động và không tăng simulated tick. R đưa state về lattice. Vertex shader dùng density đổi màu sau khi batch xong; vị trí vẫn không đổi.
+
+Trong checkpoint 5–8, Engine còn readback các output nhỏ sau fence để phát hiện nonfinite trước khi commit. Đây là đường kiểm tạm cho N≤512, không phải kiến trúc dùng cho hệ lớn. Từ Bài 09, reduction thay nó bằng một record 16 byte.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ j=i. Hạt đơn lẻ mất toàn bộ density, và hạt mép giảm thêm một self contribution; khôi phục self.
+2. Tính density rồi cập nhật position ngay trong cùng invocation. Các invocation khác đọc state không nhất quán; giữ density pass chỉ đọc position.
+
+## Tự kiểm tra kết quả
+
+Density finite và dương. Hạt đơn lẻ cho mW(0). GPU khớp oracle theo tolerance, không đòi double và float cùng bit. Chưa có force hoặc integration; N không làm khối rơi.
+
+## Bài tập mở rộng
+
+Tính self contribution theo h=1.3*spacing; nó không phụ thuộc side khi mass đổi đúng. Sau đó [thêm pressure và viscosity](/projects/sph-water-gpu/06-pressure-va-viscosity).

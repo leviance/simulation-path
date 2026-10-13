@@ -1,0 +1,79 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho khối nước chuyển động mà không ghi đè state
+
+## Vấn đề cần giải quyết
+
+Đến đây force đã được tính xong, nhưng hạt vẫn đứng yên. Ta thêm gravity và integrate. Đây là lúc sai lầm ghi position ngay tại chỗ có thể làm kết quả phụ thuộc lịch chạy invocation.
+
+## Hiểu ý tưởng trước khi viết code
+
+Semi-implicit Euler cập nhật vNew=vOld+dt*a, rồi xNew=xOld+dt*vNew. Toàn bộ force đọc state cũ; integration ghi bank khác. Hộp có sáu mặt, mỗi mặt chỉ phản xạ velocity normal đang hướng ra ngoài.
+
+Collision là boundary đơn giản: nó giữ hạt trong hộp, không bù support kernel. Density gần thành vẫn có thể sai; không gọi collision là hydrostatic boundary SPH.
+
+$$
+\mathbf v_{\mathrm{new}}=\mathbf v_{\mathrm{old}}+\Delta t\,\mathbf a_{\mathrm{old}},\qquad
+\mathbf x_{\mathrm{new}}=\mathbf x_{\mathrm{old}}+\Delta t\,\mathbf v_{\mathrm{new}}.
+$$
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-7" />
+
+Bấm 20 tick để nhìn displacement rõ hơn, rồi đọc time/dt. Đây là thời gian mô phỏng, không phải 20 frame. Hạt ban đầu đứng yên nhận gravity; phần pressure chỉ xuất hiện khi density cao hơn rho0.
+
+## Viết code từng bước
+
+### Bước 1 — Integrate cùng thứ tự trên CPU
+
+Reference dùng ba thành phần độc lập:
+
+```cpp title="include/reference.hpp — semi-implicit Euler"
+velocity.x += dt * acceleration.x;
+velocity.y += dt * acceleration.y;
+velocity.z += dt * acceleration.z;
+position.x += dt * velocity.x;
+position.y += dt * velocity.y;
+position.z += dt * velocity.z;
+```
+
+Không dùng velocity cũ ở ba dòng position; đó là integrator khác. Dt chỉ nhân ở integration, không nhân thêm trong force.
+
+### Bước 2 — Đọc cũ, ghi mới trên GPU
+
+integrate.comp:
+
+```glsl title="shaders/integrate.comp — GLSL bank mới"
+vec3 velocity = velocities[i].xyz + dt * acceleration[i].xyz;
+vec3 position = positions[i].xyz + dt * velocity;
+```
+
+Sau collision, ghi nextPositions/nextVelocities. Engine bind current vào input và 1−current vào output. Không alias hai bank; SSBO barrier không thể chữa race nếu input/output là cùng buffer.
+
+### Bước 3 — Commit sau khi batch xong
+
+Trong Engine.poll, chỉ chạy đoạn này sau fence:
+
+```cpp title="include/engine.hpp — commit state đã hoàn tất"
+current = 1 - current;
+++steps;
+time += lastDt;
+```
+
+Nếu bước thất bại, không đổi current. GPU không quyết định bank từ frame parity; host giữ ownership và view đọc đúng bank đã commit.
+
+## Ghép các phần lại
+
+Checkpoint 7 dùng dt cố định 0.0005 s và N cho một tick. Khối bắt đầu rơi, các hạt chạm thành bị giữ trong [spacing/2,1−spacing/2]. Workload vẫn≤512; Bài 09 mới chọn dt thích nghi cho scale lớn.
+
+## Thử làm sai để hiểu đúng
+
+1. Bind current vào cả input/output. So hai lần chạy cùng state: thứ tự đọc/ghi có thể đổi force; khôi phục bank khác.
+2. Luôn nhân velocity normal với−0.1, kể cả khi nó đang đi vào hộp. Hạt sát thành có thể bị quay ngược không đúng; kiểm dấu hướng ra.
+
+## Tự kiểm tra kết quả
+
+Gravity-only có vy=−g*dt ở tick đầu. Collision không đổi tangent. Mỗi tick tăng steps đúng một và chỉ đổi current sau fence. Camera không ảnh hưởng trajectory.
+
+## Bài tập mở rộng
+
+So với Euler explicit trên ca gravity nhỏ bằng oracle, không thay solver chuẩn. Tiếp theo [CSR grid 3D](/projects/sph-water-gpu/08-csr-grid-ba-chieu).

@@ -33,6 +33,7 @@ function languageFor(relativePath) {
   if ([".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl"].includes(extension))
     return "cpp";
   if (extension === ".md" || extension === ".mdx") return "markdown";
+  if ([".comp", ".vert", ".frag", ".geom", ".glsl"].includes(extension)) return "glsl";
   return "text";
 }
 

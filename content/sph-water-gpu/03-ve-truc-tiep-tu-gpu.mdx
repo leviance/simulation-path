@@ -1,0 +1,75 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ trực tiếp từ position buffer
+
+## Vấn đề cần giải quyết
+
+Ta đã có 512 position trên GPU nhưng hình vẫn dùng preview. Bây giờ bỏ đường preview và để vertex shader đọc position SSBO. Không cần readback toàn mảng để SDL_RenderPoint; cùng buffer sẽ tiếp tục được solver cập nhật.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một vertex ứng với một hạt được vẽ. gl_VertexID chọn record; binding 0 là position, binding 1 là density. VAO rỗng vẫn cần trong core profile, dù ta không dùng vertex attribute.
+
+Projection orthographic dùng cùng yaw/pitch như preview. Depth test giúp điểm ở phía trước che điểm phía sau. Point fragment bỏ các góc để chấm có hình tròn, không biến chấm đó thành mặt nước có ánh sáng.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-3" />
+
+Kéo orbit để nhìn thứ tự sâu. Canvas sắp điểm theo depth trên CPU; source SDL dùng depth buffer thật. Hai đường hiển thị khác implementation nhưng cùng phép xoay camera.
+
+## Viết code từng bước
+
+### Bước 1 — Đọc bank hiện tại
+
+ParticleView.draw bind bank mà Engine đã commit:
+
+```cpp title="include/view.hpp — bind cho vertex shader"
+gl.UseProgram(program_);
+bind(gl, 0, storage.positions[current]);
+bind(gl, 1, storage.density);
+```
+
+current không phải số frame chẵn/lẻ. Nó là bank chứa state đã hoàn tất; Bài 07 mới đổi current sau integration.
+
+### Bước 2 — Xoay trong shader, không sửa position
+
+Trong particle.vert:
+
+```glsl title="shaders/particle.vert — GLSL camera orbit"
+uint i = uint(gl_VertexID) * uStride;
+vec3 p = positions[i].xyz - 0.5;
+float x = cos(uCamera.x) * p.x + sin(uCamera.x) * p.z;
+float depth = -sin(uCamera.x) * p.x + cos(uCamera.x) * p.z;
+float y = cos(uCamera.y) * p.y - sin(uCamera.y) * depth;
+float z = sin(uCamera.y) * p.y + cos(uCamera.y) * depth;
+gl_Position = vec4(1.5 * uCamera.z * x / uAspect, 1.5 * uCamera.z * y, -z / 1.5, 1.0);
+```
+
+uAspect sửa trục x khi window rộng. Z được đổi dấu/range cho depth của OpenGL; không lấy world z thẳng làm clip z sau khi camera đã xoay.
+
+### Bước 3 — Tách workload vẽ khỏi workload physics
+
+Source giới hạn tối đa 100.000 điểm vẽ:
+
+```cpp title="include/view.hpp — stride chỉ dành cho vẽ"
+const auto stride = std::max(1U, ceilDivide(storage.plan.count, 100000));
+drawn = ceilDivide(storage.plan.count, stride);
+```
+
+Sau đó DrawArrays(GL_POINTS,0,drawn). Với N 512, stride 1 nên vẽ đủ. Với N 1.000.000, stride 10; density/force vẫn chạy đủ N. Đây là subsampling có thể tạo pattern, không phải chứng minh chất lượng mặt nước.
+
+## Ghép các phần lại
+
+Checkpoint 3 phải vẽ 512 hạt thật sau initialization fence. Main bật PROGRAM_POINT_SIZE, DEPTH_TEST, clear cả color/depth và dùng kích thước framebuffer thật. Không tạo SDL_Renderer trong GL window.
+
+## Thử làm sai để hiểu đúng
+
+1. Bind bank chưa được initialization vào vertex shader. Hình không ổn định hoặc biến mất; khôi phục current.
+2. Dùng drawn thay cho N trong compute shader. Solver sẽ bỏ hạt nhưng renderer vẫn có vẻ chạy nhanh; giữ riêng hai đại lượng.
+
+## Tự kiểm tra kết quả
+
+Có 512 hạt đứng yên trong source SDL; title N và drawn cùng 512. Orbit/zoom/resize không đổi state. Không có readback position trong đường vẽ.
+
+## Bài tập mở rộng
+
+Thử đổi kích thước point sprite và giải thích vì sao mass không đổi. Sau đó học [kernel theo thể tích](/projects/sph-water-gpu/04-kernel-ba-chieu).

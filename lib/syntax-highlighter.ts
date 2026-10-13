@@ -1,6 +1,6 @@
 export const CODE_THEME = "one-dark-pro";
 
-export type HighlightLanguage = "bash" | "cmake" | "cpp" | "diff" | "markdown" | "text";
+export type HighlightLanguage = "bash" | "cmake" | "cpp" | "glsl" | "diff" | "markdown" | "text";
 
 const colors = {
   foreground: "#abb2bf",
@@ -91,6 +91,22 @@ const shellKeywords = new Set([
   "then",
   "while",
 ]);
+const glslKeywords = new Set([
+  "layout",
+  "uniform",
+  "buffer",
+  "readonly",
+  "writeonly",
+  "shared",
+  "in",
+  "out",
+  "inout",
+  "uint",
+  "precision",
+  "highp",
+  "mediump",
+  "lowp",
+]);
 const cmakeKeywords = new Set([
   "add_executable",
   "cmake_minimum_required",
@@ -122,7 +138,10 @@ function tokenColor(token: string, line: string, end: number, language: Highligh
   if (token.startsWith("//") || token.startsWith("#")) return colors.comment;
   if (token.startsWith('"') || token.startsWith("'")) return colors.string;
   if (/^(?:0[xX][\da-fA-F]+|\d)/.test(token)) return colors.number;
-  if (language === "cpp" && cppKeywords.has(token)) return colors.keyword;
+  if ((language === "cpp" || language === "glsl") && cppKeywords.has(token)) return colors.keyword;
+  if (language === "glsl" && glslKeywords.has(token)) return colors.keyword;
+  if (language === "glsl" && /^(?:[iubd]?vec[234]|mat[234](?:x[234])?)$/.test(token))
+    return colors.type;
   if (language === "bash" && shellKeywords.has(token)) return colors.keyword;
   if (language === "cmake" && cmakeKeywords.has(token.toLowerCase())) return colors.keyword;
   if (language === "bash" && line.trimStart().startsWith(token)) return colors.function;
@@ -139,7 +158,8 @@ function highlightLine(line: string, language: HighlightLanguage) {
     if (line.startsWith("@@")) return span(line, colors.function);
   }
   if (language === "markdown" && /^\s*#{1,6}\s/.test(line)) return span(line, colors.function);
-  if (language === "cpp" && /^\s*#/.test(line)) return span(line, colors.keyword);
+  if ((language === "cpp" || language === "glsl") && /^\s*#/.test(line))
+    return span(line, colors.keyword);
 
   let html = "";
   let cursor = 0;

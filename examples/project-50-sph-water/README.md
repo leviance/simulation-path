@@ -68,4 +68,4 @@ Timestep tests tách hai ca: velocity=0/c=20 làm acoustic bound nhỏ hơn maxD
 
 Kernel có tích phân theo diện tích gần1 và gradient khớp finite difference. Density được so tổng trực tiếp và ca self/wall. Cặp tự do kiểm force đối xứng/công suất viscosity. Grid so all-pairs ở cell âm/cutoff và quỹ đạo150 bước. Dam300 bước kiểm finite và báo compression, không chứng nhận độ chính xác vật lý. Emitter kiểm mass/overlap/capacity. Lịch30/60/120 FPS so cùng ca cặp không gravity/wall, không discarded time. CTest không dùng assert nên vẫn kiểm trong Release.
 
-Tài liệu đối chiếu: [PySPH kernels](https://pysph.readthedocs.io/en/main/reference/kernels.html), [PySPH equations](https://pysph.readthedocs.io/en/main/reference/equations.html), [SDL CMake](https://wiki.libsdl.org/SDL3/README-cmake). Project51 sẽ sang SPH3D/GPU, hiện chưa phát hành.
+Tài liệu đối chiếu: [PySPH kernels](https://pysph.readthedocs.io/en/main/reference/kernels.html), [PySPH equations](https://pysph.readthedocs.io/en/main/reference/equations.html), [SDL CMake](https://wiki.libsdl.org/SDL3/README-cmake). Tiếp theo là Project51 — SPH3D/GPU: kernel thể tích, CSR3D, reduction và CPU oracle để kiểm shader.

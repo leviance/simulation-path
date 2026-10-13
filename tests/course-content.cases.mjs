@@ -28,7 +28,7 @@ test("every lesson follows the content contract without escaped formatting artif
       (source.match(/^### Bước /gm) ?? []).length >= 3,
       `${lesson.file} needs at least three explained code steps`,
     );
-    const codeFences = source.match(/^```(?:cpp|cmake|bash) title="[^"]+"$/gm) ?? [];
+    const codeFences = source.match(/^```(?:cpp|glsl|cmake|bash) title="[^"]+"$/gm) ?? [];
     assert.ok(
       codeFences.length >= 3,
       `${lesson.file} needs at least three titled instructional code blocks`,

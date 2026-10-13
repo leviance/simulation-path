@@ -1,0 +1,72 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ ứng dụng phản hồi khi GPU đang tính
+
+## Vấn đề cần giải quyết
+
+Một dispatch lớn có thể kéo dài. Nếu CPU chờ GPU xong trong event loop, người dùng không pause hay đóng window được. Ta cần một batch pending, poll không chặn và giới hạn rõ ràng cho benchmark.
+
+## Hiểu ý tưởng trước khi viết code
+
+Memory barrier phục vụ visibility giữa GPU consumers; fence cho CPU biết các lệnh trước nó đã hoàn tất. Hai việc khác nhau. ClientWaitSync với timeout 0 là phép hỏi trạng thái, không phải đợi tới khi hoàn thành. Xem [Khronos reference](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glClientWaitSync.xhtml).
+
+Pause ngăn tick tiếp theo. Nó không thu hồi compute đã gửi. Timeout 5 s báo lỗi và dừng submit, cũng không phải cơ chế preempt driver. Vì thế safety bắt đầu từ workload nhỏ và xác nhận N, không chỉ từ một nút Stop.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-10" />
+
+Canvas chạy tối đa 4 tick/frame ở 20 FPS. Đây là chế độ theo work budget, không bù wall-clock time. Tắt reduced motion vẫn giữ paused; phải bấm Chạy để tiếp tục.
+
+## Viết code từng bước
+
+### Bước 1 — Poll mà không khóa event loop
+
+Trong Queue.poll:
+
+```cpp title="include/queue.hpp — hỏi fence với timeout0"
+const auto result = gl.ClientWaitSync(fence_, 0, 0);
+```
+
+WAIT_FAILED là lỗi, TIMEOUT_EXPIRED trả false cho main tiếp tục xử lý input. Sau 5 s chưa xong, throw và không gửi thêm work; tuyệt đối không loop ClientWaitSync tới khi thành công.
+
+### Bước 2 — Không xếp render đằng sau batch dài
+
+Main bỏ render/swap khi compute còn pending:
+
+```cpp title="src/main.cpp — trả quyền xử lý input"
+if (engine.queue.pending()) {
+    SDL_Delay(1);
+    continue;
+}
+```
+
+Nếu vẫn gửi một draw mỗi frame khi GPU đang bận, queue có thể đầy và SwapWindow lại chặn CPU. Khi batch hoàn tất, commit, vẽ một frame mới, rồi mới submit tick tiếp nếu đang playing.
+
+### Bước 3 — Đo work hữu hạn
+
+Benchmark B bắt đầu khi idle; mỗi completion cộng GPU timer. Sau đúng 8 tick:
+
+```cpp title="src/main.cpp — dừng benchmark"
+if (measuredSteps == 8) {
+    measuring = false;
+    std::cout << "8 ticks GPU mean ms=" << measuredMs / 8 << " simulated s=" << engine.time << '\n';
+}
+```
+
+GPU timer đo batch compute, không đồng nghĩa frame FPS hoặc simulated seconds/real seconds. Script verify bên ngoài còn có process timeout để thu hồi toàn process tree.
+
+## Ghép các phần lại
+
+Checkpoint 10 mới bật Space chạy. N vẫn pause rồi submit một tick; C hủy các tick/benchmark chưa gửi. Blur/minimize dừng playing, hủy drag/capture. Không có accumulator bù một quãng wall time lớn sau khi window quay lại.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng glFinish mỗi frame. Event loop phải chờ hết queue; khôi phục fence/poll.
+2. Bỏ giới hạn 8 tick của benchmark hoặc tự chạy benchmark khi mở app. Người dùng mất quyền chọn work; chỉ B mới bắt đầu và luôn có điểm dừng.
+
+## Tự kiểm tra kết quả
+
+Chỉ một batch pending; bank/readback không đổi trước fence. Pause/blur không tạo tick mới. Benchmark có đúng 8 completion; title báo GPUms và simulated time riêng. Cancel không hứa dừng GPU command đang chạy.
+
+## Bài tập mở rộng
+
+Đo GPU batch time và wall time trên ca 512 hạt, giải thích phần thời gian ngoài compute. Sau đó [tăng quy mô có kiểm tra tài nguyên](/projects/sph-water-gpu/11-tang-quy-mo).

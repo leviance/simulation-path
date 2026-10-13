@@ -348,5 +348,12 @@
     "sourceDirectory": "project-50-sph-water",
     "checkpointCount": 10,
     "demoId": "sph-water"
+  },
+  {
+    "id": "51",
+    "slug": "sph-water-gpu",
+    "sourceDirectory": "project-51-sph-water-gpu",
+    "checkpointCount": 12,
+    "demoId": "sph-water-gpu"
   }
 ]

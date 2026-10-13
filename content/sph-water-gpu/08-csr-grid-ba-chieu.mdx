@@ -1,0 +1,81 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng spatial grid 3D hoàn toàn trên GPU
+
+## Vấn đề cần giải quyết
+
+All-pairs 512 hạt có thể kiểm được, nhưng một triệu hạt cần 10¹²so sánh cho một pass. Ta chuyển sang grid mà không thay kernel, density hoặc force. Không upload bucket CPU và cũng không giới hạn cứng 32 hạt/cell.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cell sizeR=2 h. Một hạt chỉ cần các cell kề theo mỗi trục:3×3×3=27 cell. Cell là broad phase; sau đó vẫn tính khoảng cách 3D/support thật.
+
+CSR gồm counts, exclusive offsets và indices. Counts quyết định mỗi cell có bao nhiêu ID; offsets cho vị trí bắt đầu. Scatter dùng atomic cursor để mỗi ID nhận một slot riêng. Thứ tự ID trong cell có thể khác giữa các dispatch, nên float sums không được hứa khớp từng bit.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-8" />
+
+Đổi Search giữa CSR và all-pairs ở cùng state. Đọc candidates, cell/offset/count của hạt chọn. Canvas dùng sort ID để làm oracle deterministic; GPU atomic scatter không giữ thứ tự đó.
+
+## Viết code từng bước
+
+### Bước 1 — Tính cell và đếm
+
+common.glsl flatten theo row-major 3D; count.comp chỉ làm histogram:
+
+```glsl title="shaders/count.comp — GLSL histogram"
+uint i = gl_GlobalInvocationID.x;
+if (i >= uCount || bad(positions[i].xyz)) return;
+atomicAdd(counts[flatten(cellOf(positions[i].xyz))], 1u);
+```
+
+Clear counts trước count. CellOf kẹp p=1 vào cell cuối, không wrap qua phía đối diện. Biên không tuần hoàn.
+
+### Bước 2 — Exclusive scan nhiều tầng
+
+Đọc lại Project 39/40 nếu Blelloch còn lạ. Pass scan tạo offsets và block sums; source tiếp tục scan các sums:
+
+```cpp title="include/passes.hpp — hierarchy scan trên GPU"
+GLuint source = storage.counts;
+for (const auto& level : storage.scan) {
+    gl.UseProgram(programs.scan);
+    gl.Uniform1i(requireUniform(gl, programs.scan, "uElementCount"), static_cast<GLint>(level.level.input));
+    bind(gl, 0, source);
+    bind(gl, 1, level.output);
+    bind(gl, 2, level.sums);
+    gl.DispatchCompute(level.level.groups, 1, 1);
+    gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    source = level.sums;
+}
+```
+
+Sau khi lên tới một block, uniform-add đi ngược xuống. Không để CPU loop qua mọi cell để scan. Với plan 100³ hạt, số cell có thể lớn hơn N; count và scan dùng cells, không nhầm sang count.
+
+### Bước 3 — Scatter ID, không scatter position
+
+Sau cursors=offsets, scatter.comp:
+
+```glsl title="shaders/scatter.comp — GLSL slot duy nhất"
+uint i = gl_GlobalInvocationID.x;
+if (i >= uCount || bad(positions[i].xyz)) return;
+uint slot = atomicAdd(cursors[flatten(cellOf(positions[i].xyz))], 1u);
+indices[slot] = i;
+```
+
+Position vẫn ở bank cũ. Density/force lấy j=indices[slot] khi duyệt range của 27 cell; kernel loại ứng viên ngoài support. Giới hạn 4096 ứng viên là safety failure: ghi flag và không commit tick, không trả một lực bị cắt ngầm.
+
+## Ghép các phần lại
+
+Checkpoint 8 rebuild grid mỗi tick trước density. G chỉ bật/tắt search khi N≤512 để so cùng solver. Khi hạt đổi cell, tick tiếp theo count/scan/scatter dùng position đã commit mới; không reuse một grid stale.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ duyệt 9 cell trên mặt xy. Hàng xóm ở lớp z±1 bị mất; kiểm pair khác lớp trước khi nhìn dam.
+2. Scatter position tại chỗ thay vì ID. Bạn vừa làm thay đổi state mà các hạt khác đang đọc; giữ indices riêng.
+
+## Tự kiểm tra kết quả
+
+Counts cộng ra N, offsets liên tiếp và mỗi ID xuất hiện đúng một lần ở đúng cell. Density/force khớp all-pairs trong tolerance. Có test điểm sát cell boundary và support cutoff; không đòi atomic order cố định.
+
+## Bài tập mở rộng
+
+Ghi histogram occupancy sau một ca nhỏ và phân biệt candidates với neighbors. Sau đó [reduction và timestep](/projects/sph-water-gpu/09-timestep-va-reduction).

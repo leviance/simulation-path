@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi kernel từ diện tích sang thể tích
+
+## Vấn đề cần giải quyết
+
+Thêm z vào position nhưng giữ hệ số kernel 2D sẽ làm density sai đơn vị và sai độ lớn. Ta cần đổi cả khối lượng mỗi hạt lẫn normalization, rồi kiểm chúng trước khi port force.
+
+## Hiểu ý tưởng trước khi viết code
+
+Spacing=s, khối cạnh 0.4 m và N=side³. Đặt m=rho0*s³ với rho0=1000 kg/m³. Khi tăng side, m giảm; tổng mass vẫn 64 kg cho khối đầy đủ.
+
+Cubic spline giữ polynomial của Project 50, nhưng hệ số 3D là sigma=1/(πh³). Tích phân cần kiểm là 4 π∫r²W(r)dr=1, không phải tích phân theo diện tích 2 π∫rWdr. Xem [công thức normalization của PySPH](https://pysph.readthedocs.io/en/main/reference/kernels.html).
+
+Gradient hướng theo displacement; đạo hàm kernel âm ngoài tâm. Đổi i/j làm gradient đổi dấu. Khi r=0, vector gradient là 0 dù W(0) vẫn dương.
+
+$$
+m=\rho_0s^3,\qquad \rho_i=\sum_jm_jW(\|\mathbf x_i-\mathbf x_j\|,h),\qquad 4\pi\int_0^{2h}r^2W(r,h)\,dr=1.
+$$
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-4" />
+
+Vòng tím là hình chiếu support sphere; hạt vàng được chọn bằng khoảng cách 3D thật. Orbit để tìm hai điểm gần trên màn hình nhưng khác lớp z, rồi xem chúng có thật nằm trong support không.
+
+## Viết code từng bước
+
+### Bước 1 — Đổi spacing và mass cùng nhau
+
+Trong makePlan:
+
+```cpp title="include/model.hpp — các đại lượng vật lý"
+plan.spacing = 0.4 / side;
+plan.h = 1.3 * plan.spacing;
+plan.support = 2 * plan.h;
+plan.mass = restDensity * plan.spacing * plan.spacing * plan.spacing;
+```
+
+Tăng side giữ hình khối và total mass, không phải nhét thêm mass vào cùng một hình. Ca 257 hạt của verify là một phần lattice, nên không dùng nó để đòi tổng 64 kg.
+
+### Bước 2 — Viết kernel 3D trên CPU trước
+
+Oracle trong kernel.hpp:
+
+```cpp title="include/kernel.hpp — cubic spline theo thể tích"
+inline double kernel(double r, double h) {
+    const double q = r / h;
+    const double sigma = 1 / (std::numbers::pi * h * h * h);
+    if (q >= 2) {
+        return 0;
+    }
+    if (q < 1) {
+        return sigma * (1 - 1.5 * q * q + 0.75 * q * q * q);
+    }
+    return sigma * 0.25 * std::pow(2 - q, 3);
+}
+```
+
+GPU dùng cùng polynomial trong common.glsl, file được loader chèn sau #version. Không sao chép hai bản kernel riêng vào density.comp và force.comp.
+
+### Bước 3 — Đạo hàm và xử lý tâm
+
+Đoạn quan trọng của gradient:
+
+```cpp title="include/kernel.hpp — gradient không chia cho zero"
+const double r = length(displacement);
+const double q = r / h;
+if (r == 0 || q >= 2) {
+    return {};
+}
+double derivative = -0.75 * std::pow(2 - q, 2);
+if (q < 1) {
+    derivative = -3 * q + 2.25 * q * q;
+}
+const double scale = derivative / (std::numbers::pi * h * h * h * h * r);
+return {scale * displacement.x, scale * displacement.y, scale * displacement.z};
+```
+
+Có h⁴ vì derivative theo q phải nhân thêm 1/h. Chia r đổi displacement thành hướng đơn vị. CTest so gradient với finite difference độc lập, không gọi lại cùng derivative làm oracle.
+
+## Ghép các phần lại
+
+Checkpoint 4 vẫn là khối đứng yên. Bài này thay công thức chuẩn bị cho solver, chưa tính density trên GPU. Tests tích phân bằng các shell hình cầu và kiểm r=0, q=1, support cutoff.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ sigma 2D 10/(7 πh²). Tích phân thể tích không còn 1 và density đổi theo spacing không đúng; khôi phục sigma 3D.
+2. Bỏ nhánh r=0. Self interaction làm gradient NaN; kiểm zero-distance trước khi nhìn hình.
+
+## Tự kiểm tra kết quả
+
+Tổng mass khối đầy đủ là 64 kg ở mọi preset. Tích phân 3D gần 1 trong 1e−6; gradient finite, odd và khớp finite difference. Không đánh đồng support với point size.
+
+## Bài tập mở rộng
+
+So W(0) khi h giảm đôi và giải thích hệ số 8. Tiếp theo [tính density trên GPU](/projects/sph-water-gpu/05-density-tren-gpu).

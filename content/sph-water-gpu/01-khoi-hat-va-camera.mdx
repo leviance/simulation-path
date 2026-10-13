@@ -1,0 +1,79 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nhìn khối hạt từ nhiều hướng trước khi viết solver
+
+## Vấn đề cần giải quyết
+
+Ở Project 50, mỗi hạt chỉ có x và y. Bây giờ ta thêm z, nhưng trước khi nói đến GPU hay chất lỏng, bạn cần nhìn được một khối hạt trong không gian. Nếu hình đầu tiên chỉ là một màn hình trống, rất khó biết lỗi nằm ở solver hay ở camera.
+
+Starter đã mở SDL window với OpenGL 4.3 core. Bài này thêm preview 4×4×4: 64 điểm đứng yên. Chưa có gravity, density hay compute dispatch. Ta dùng preview CPU nhỏ để kiểm tọa độ và input trước; Bài 02 mới tạo state 512 hạt trên GPU.
+
+## Hiểu ý tưởng trước khi viết code
+
+Index một chiều được tách thành x=i%side, y=(i/side)%side, z=i/(side²). Mỗi hạt nằm ở tâm một ô nhỏ, nên thêm 0.5 trước khi nhân spacing. Khối cạnh 0.4 m đặt trong hộp [0,1]³, y hướng lên.
+
+Camera orbit chỉ thay cách nhìn, không xoay position của hạt. Ta dịch tâm hộp về gốc, xoay quanh y theo yaw, rồi xoay quanh x theo pitch và chiếu orthographic. Hai hạt cùng pixel vẫn có thể khác z: đó là lý do cần xoay camera.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-1" />
+
+Kéo Canvas để nhìn từ hai hướng; bật lát z qua hạt chọn để thấy một hàng hạt biến mất khỏi hình mà số hạt của mô phỏng vẫn giữ nguyên. Mũi tên trái/phải đổi hạt; vị trí được ghi bằng ba thành phần dưới Canvas.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo vị trí từ ba chỉ số
+
+Thêm vào include/model.hpp. Plan đã giữ side và spacing; hàm trả world position, không trả pixel:
+
+```cpp title="include/model.hpp — lattice 3D"
+inline Vec3 initialPosition(const Plan& plan, std::uint32_t i) {
+    return {0.08 + (i % plan.side + 0.5) * plan.spacing, 0.12 + ((i / plan.side) % plan.side + 0.5) * plan.spacing, 0.3 + (i / (plan.side * plan.side) + 0.5) * plan.spacing};
+}
+```
+
+X thay nhanh nhất. Sau side hạt ta sang hàng y kế tiếp; sau side² hạt ta sang lớp z kế tiếp. Không lấy i/side cho z: lúc đó nhiều điểm sẽ đi khỏi hộp.
+
+### Bước 2 — Đưa world về camera
+
+Camera giữ ba tham số riêng:
+
+```cpp title="include/view.hpp — camera không chứa physics"
+struct Camera {
+    float yaw = 0.6F;
+    float pitch = -0.3F;
+    float zoom = 1;
+};
+```
+
+Trong cameraPoint, tính x và depth sau yaw, rồi y và z sau pitch. Trừ (0.5,0.5,0.5) trước khi xoay để tâm hộp đứng yên. Zoom chỉ nhân scale khi vẽ; không nhân world position.
+
+### Bước 3 — Vẽ preview rồi nối input
+
+Preview dùng scissor để vẽ điểm nhỏ bằng OpenGL, chưa cần vertex buffer:
+
+```cpp title="include/view.hpp — world tới framebuffer"
+const auto p = cameraPoint(initialPosition(plan, i), camera);
+const double scale = height * 0.75 * camera.zoom;
+const int x = static_cast<int>(width / 2 + scale * p.x);
+const int y = static_cast<int>(height / 2 + scale * p.y);
+gl.Scissor(x - 2, y - 2, 4, 4);
+gl.Clear(GL_COLOR_BUFFER_BIT);
+```
+
+Scissor dùng gốc dưới-trái, nên y cộng scale. SDL_GetWindowSizeInPixels cung cấp kích thước framebuffer thật trên màn hình DPI cao. Main bắt drag/orbit bằng relative motion, wheel zoom và Home đặt lại camera; capture được hủy khi thả chuột hoặc mất focus.
+
+## Ghép các phần lại
+
+Build project_51_checkpoint_1. Kết quả phải là khối 64 điểm nhìn được từ nhiều hướng. Starter vẫn là nền trống; checkpoint 1 chưa submit compute. Preview bị giới hạn cố ý, không phải thuật toán SPH chạy chậm nên chỉ vẽ được 64 hạt.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi z thành i/side. Dự đoán những lớp nào ra khỏi hộp trước khi chạy, rồi khôi phục side².
+2. Xoay position trong state mỗi lần kéo. Sau nhiều lần orbit, camera không còn là phép xem thuần và sai số cộng dồn vào dữ liệu. Khôi phục việc xoay chỉ trong view.
+
+## Tự kiểm tra kết quả
+
+Có 64 điểm, khác nhau theo cả ba trục; Home khôi phục góc nhìn. Resize chỉ đổi projection. Không có tick hay position tự chạy. Orbit không đổi số hạt hoặc position được inspector đọc.
+
+## Bài tập mở rộng
+
+Vẽ tám góc và mười hai cạnh hộp để kiểm orientation. Sau đó học [SSBO và initialization shader](/projects/sph-water-gpu/02-ssbo-va-khoi-tao).

@@ -1,0 +1,85 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng CPU↔GPU và chạy khối nước hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Một khối xanh chuyển động chưa chứng minh shader đúng. Bài cuối kiểm geometry, kernel, search, force, integration và lifecycle bằng các ca nhỏ có đáp án. Workload lớn chỉ là bước thử tài nguyên tiếp theo, không thay thế các phép kiểm này.
+
+## Hiểu ý tưởng trước khi viết code
+
+CTest thuần không mở window. Nó kiểm normalization, gradient, pair power, timestep, mass và layout. GPU verify mở window hidden cho 512 hạt hoặc 257 hạt để bắt tail, compare buffer với oracleCPU double và kiểm hai tick.
+
+Float/GPU atomic sum có thứ tự khác doubleCPU, nên validation.hpp ghi tolerance cụ thể. NaN/Infinity luôn thất bại; không tăng tolerance tới mức che lỗi dấu, sai h hay thiếu self.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-12" />
+
+Nút Kiểm oracle CPU so CSR với all-pairs trên state đang xem và không đổi tick. Nó **không** kiểm GPU. Kiểm GPU thật chỉ thuộc chương trình SDL.
+
+## Viết code từng bước
+
+### Bước 1 — Không để NaN vượt qua phép so
+
+Hàm closeEnough trong validation tránh cả tên macro near của Windows:
+
+```cpp title="include/validation.hpp — tolerance có kiểm finite"
+return std::isfinite(actual) && std::isfinite(expected) && std::abs(actual - expected) <= absolute + relative * std::abs(expected);
+```
+
+Density dùng absolute 0.001/relative 0.0001; pressure 0.2/0.003; acceleration 0.01/0.003. Integration có tolerance riêng nhỏ hơn. Không dùng cùng tolerance tuyệt đối cho mọi đơn vị.
+
+### Bước 2 — Kiểm CSR cả ownership và permutation
+
+Sau fence, đọc counts/offsets/indices của ca nhỏ. Range phải liên tiếp, ID không được lặp:
+
+```cpp title="include/validation.hpp — không chỉ kiểm tổng counts"
+const auto id = indices[slot];
+if (id >= plan.count || seen[id] || cellId(plan, xyz(oldPosition[id])) != cell) {
+    std::cerr << "Invalid CSR ownership/permutation\n";
+    return false;
+}
+seen[id] = true;
+```
+
+CSR được dựng từ oldPosition, nên không so cell owner với position đã integrate. Oracle dùng support đã round về float cho phép phân cell, rồi vẫn dùng double cho công thức force.
+
+### Bước 3 — So cả state mới, không chỉ force
+
+Expected position/velocity được tích phân từ state cũ:
+
+```cpp title="include/validation.hpp — oracle integration"
+auto p = xyz(oldPosition[i]);
+auto v = xyz(oldVelocity[i]);
+integrate(p, v, expected.acceleration[i], engine.lastDt, engine.storage.plan.spacing / 2);
+```
+
+Nếu chỉ kiểm lực, alias bank hoặc swap sớm vẫn có thể lọt. Verify kiểm cả density/pressure/force lẫn position/velocity mới, hai tick liên tiếp và total timeout 15 s trong app.
+
+## Ghép các phần lại
+
+Tải ZIP, mở terminal ở thư mục có CMakeLists.txt:
+
+```bash title="Terminal — build và CTest"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Windows/Visual Studio chạy build/Debug/project_51_final.exe. Chạy thêm --verify-gpu rồi --verify-gpu --tail-case, không chạy million-particle benchmark trong bộ test tự động. Generator single-config dùng build directory riêng và CMAKE_BUILD_TYPE. Shader directory đi kèm từng snapshot; không trộn shader checkpoint 8 với executable checkpoint 12.
+
+N/Space/C/R/Home, drag/wheel và phím 1–4/Enter được giải thích trong README. Final là chương trình đầy đủ, không cần website hay project trước để chạy. OpenGL 4.3 là điều kiện runtime; CTest thuần không cần GPU.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ support filter hoặc guard tail, chạy verify nhỏ. Khôi phục shader rồi chạy lại, không chỉ xem image.
+2. Thay expected force bằng chính GPU buffer đang kiểm. Validator tự so với nó nên mất ý nghĩa; giữ CPU oracle độc lập và thử đảo một dấu để chắc test bắt được.
+
+## Tự kiểm tra kết quả
+
+CTest Debug/Release qua; verify 257/512 hạt so finite/tolerance/CSR/integration. Ghi GPU/driver của máy đã kiểm, không suy rộng thành mọi GPU. Chạy/dừng/reset/cancel/camera hoạt động, không auto-increase N. Báo rho error thật; PASS toán và dữ liệu không chứng nhận solver nước đã hội tụ.
+
+## Bài tập mở rộng
+
+Thêm hydrostatic wall correction hoặc surface reconstruction như một nhánh nghiên cứu, có tests và báo cáo riêng. Project 51 kết thúc phần chất lưu; tiếp theo là [Project 52 — ray intersection](/roadmap), hiện chưa phát hành.
