@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ các hạt trong bể trước khi mô phỏng nước
+
+## Vấn đề cần giải quyết
+
+Ở Project 49, khói nằm trên một lưới cố định. Bài này đổi cách biểu diễn: mỗi phần nhỏ của nước được gắn với một hạt có vị trí riêng. Khi nước chảy, chính các vị trí ấy thay đổi.
+
+Chưa cần học toàn bộ SPH ngay. Việc đầu tiên là chạy một cửa sổ SDL3, vẽ thành bể và một cột chấm tròn bên trái. Nếu chưa nhìn thấy dữ liệu, những lỗi ở solver sau này sẽ rất khó phân biệt với lỗi vẽ.
+
+Hãy đọc thử thách ở [đầu học phần](/projects/sph-water) trước. Tải ZIP, mở thư mục project và chạy starter. Starter chỉ có bể trống; bài này bổ sung 96 hạt đứng yên. Các bài đã hoàn thành đều có source chạy được ở cuối trang, không cần tự ghép đoạn mã từ nhiều bài.
+
+## Hiểu ý tưởng trước khi viết code
+
+Miền mô phỏng rộng 1 m, cao 0.8 m, trục y hướng lên. SDL lại vẽ y hướng xuống. Với khung logical 800×660, ta dành 700 pixel cho một mét và đặt đáy tại y=610:
+
+$$
+x_s=50+700x_w,\qquad y_s=610-700y_w.
+$$
+
+Phép đổi chỉ dùng lúc vẽ hoặc đọc input. Position vẫn tính bằng mét; kéo rộng window không làm nước nặng hơn, nhanh hơn hay thay đổi khoảng cách giữa hạt.
+
+`spacing=0.045` là khoảng cách ban đầu của lattice. Bán kính vẽ 7 logical pixel chỉ giúp nhìn rõ từng chấm. Nó chưa phải bán kính va chạm giữa các hạt và cũng không phải bán kính kernel SPH sẽ học ở Bài 03.
+
+<InteractiveLab demo="sph-water" mode="sph-1" />
+
+## Viết code từng bước
+
+### Bước 1 — Chạy starter và giữ bộ khung SDL3
+
+Trong thư mục ZIP đã giải nén, configure một lần và bật các checkpoint:
+
+```bash title="Terminal — build starter trước khi viết solver"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_50_starter
+```
+
+Chạy `build/Debug/project_50_starter.exe` trên Visual Studio generator; với Ninja, executable thường nằm ngay trong `build`. Starter tạo window/renderer, dùng logical presentation và giải phóng tài nguyên khi thoát. Giữ các nhánh kiểm lỗi này trong `src/main.cpp`; đừng xóa để đoạn mã ngắn hơn.
+
+### Bước 2 — Tạo dữ liệu của cột hạt
+
+Thêm kiểu dữ liệu sau trong `include/model.hpp`. Position/velocity là vector; density/pressure sẽ được tính thật từ Bài 04. Giá trị khởi tạo của hai trường này chưa phải kết quả SPH.
+
+```cpp title="include/model.hpp — dữ liệu một hạt"
+struct Particle {
+    Vec2 position;
+    Vec2 velocity;
+    double density = restDensity;
+    double pressure = 0;
+};
+```
+
+`State` giữ một `std::vector<Particle>`. Trong `makeState`, preset Dam chọn 8 cột, 12 hàng. Đặt tâm hạt đầu tiên cách đáy/thành nửa spacing để không bắt đầu bên trong tường:
+
+```cpp title="include/model.hpp — dựng lattice trong makeState"
+for (int y = 0; y < rows; ++y) {
+    for (int x = 0; x < columns; ++x) {
+        Vec2 position{spacing / 2 + x * spacing, spacing / 2 + y * spacing};
+        state.particles.push_back({position, {0, 0}});
+    }
+}
+```
+
+Trong `main`, gọi `state = water::makeState(preset)` sau khi tạo renderer. Hàm dựng cảnh không cần biết SDL; nó sẽ được dùng lại trong tests thuần.
+
+### Bước 3 — Đổi tọa độ rồi vẽ chấm tròn
+
+Trong `include/view.hpp`, đặt phép đổi tọa độ và hàm vẽ. SDL3 có `SDL_RenderLine`, nên có thể tô hình tròn bằng các hàng ngang: ở độ cao `row`, nửa chiều rộng là căn của `radius²−row²`.
+
+```cpp title="include/view.hpp — phép đổi world sang logical screen"
+inline Vec2 toScreen(Vec2 p) {
+    return {50 + 700 * p.x, 610 - 700 * p.y};
+}
+```
+
+```cpp title="include/view.hpp — vẽ một scanline của chấm tròn"
+const double halfWidth = std::sqrt(std::max(0.0, radius * radius - row * row));
+if (!SDL_RenderLine(renderer, static_cast<float>(center.x - halfWidth), static_cast<float>(center.y + row), static_cast<float>(center.x + halfWidth), static_cast<float>(center.y + row))) {
+    return false;
+}
+```
+
+Vòng ngoài của `drawDisk` chạy `row` từ âm radius đến dương radius. `drawScene` xóa nền, vẽ rectangle của bể, duyệt các hạt, gọi `drawDisk(toScreen(p.position),7)` rồi `SDL_RenderPresent`. Mỗi hàm vẽ trả `bool`; lỗi SDL phải được truyền lên `main` để thoát với mã lỗi.
+
+## Ghép các phần lại
+
+Build target `project_50_checkpoint_1` theo danh sách target trong CMake được cung cấp. Luồng dữ liệu lúc này là `makeState → state.particles → toScreen → drawDisk`. Không có tích phân thời gian hay tương tác hạt. R dựng lại cột nước, P đổi preset, I in dữ liệu hạt đang chọn ra terminal.
+
+Đừng thêm noise hay hiệu ứng làm mịn ở bước này. Một lattice đều giúp ta biết khoảng cách ban đầu là bao nhiêu khi kiểm density sau đó.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ dấu trừ trong `y_s=610−700y_w`. Cột hạt sẽ nằm dưới đáy hoặc ngoài window. Đây là lỗi hệ tọa độ, không phải gravity sai.
+2. Dùng window width làm spacing của `makeState`. Resize rồi quan sát cột đổi hình. Khôi phục spacing world cố định và để renderer lo letterbox.
+
+## Tự kiểm tra kết quả
+
+Preset Dam có đúng 96 hạt; hạt đầu ở (0.0225,0.0225). Cột đứng yên dù để window mở lâu. Resize, R và P hoạt động; đóng window không để lại process. Màu chỉ được đọc từ state, không ghi ngược vào density.
+
+## Bài tập mở rộng
+
+Thêm preset hình chữ L bằng cách tạo position, không sửa hàm vẽ. Ghi số hạt dự kiến rồi đối chiếu vector size. Tiếp theo, [cho hạt rơi và va thành](/projects/sph-water/02-trong-luc-va-thanh-be); chưa có lực SPH trong bước đó.

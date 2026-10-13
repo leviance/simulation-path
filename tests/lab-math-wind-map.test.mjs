@@ -98,6 +98,26 @@ test("wind discrete gradient has zero curl even where the one-sided operators ar
   for (let y = 0; y < field.height; y++)
     for (let x = 0; x < field.width; x++) near(wind.curl(field, x, y), 0);
 });
+test("wind diagnostics never hide nonfinite interior or boundary samples", () => {
+  for (const value of [NaN, Infinity, -Infinity]) {
+    for (const [x, y, region] of [
+      [3, 3, "interior"],
+      [0, 3, "boundary"],
+    ]) {
+      const field = wind.makeField();
+      wind.populate(field, { ...wind.initialScene(), preset: "gradient", potential: "bowl" });
+      field.vx[y * field.width + x] = value;
+      const report = wind.gradientError(field, "bowl");
+      assert.equal(report.finite, false);
+      assert.equal(report[region], Infinity);
+      assert.ok(!(report[region] < 1e-10));
+      assert.equal(wind.maximumError(0, Math.abs(wind.divergence(field, x + 1, y))), Infinity);
+      assert.equal(wind.maximumError(0, Math.abs(wind.curl(field, x, y + 1))), Infinity);
+    }
+    assert.equal(wind.maximumError(0, value), Infinity);
+    assert.equal(wind.maximumError(wind.maximumError(0, value), 0), Infinity);
+  }
+});
 test("wind bilinear sampling reproduces affine vectors and rejects outside or non-finite positions", () => {
   const field = wind.makeField(9, 7);
   for (let y = 0; y < field.height; y++)

@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ một đám khói trước khi mô phỏng chất lưu
+
+## Vấn đề cần giải quyết
+
+Trong Project 48, ta tạo trường gió bằng công thức. Project này sẽ tự cập nhật velocity và cho khói đi theo nó. Trước khi giải phương trình, hãy dựng thứ nhìn thấy được: một hộp vuông với đám khói đứng yên gần đáy.
+
+[Tải source Project 49](/downloads/project-49-stable-fluids.zip), giải nén, mở terminal tại thư mục có CMake và chạy starter:
+
+```bash title="Terminal — build starter trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_49_starter --parallel 2
+.\build\Debug\project_49_starter.exe
+```
+
+Đây là đường chạy với Visual Studio. Linux/macOS dùng generator một cấu hình: chọn `-DCMAKE_BUILD_TYPE=Debug`, executable ở ngay `build/`. Starter mở cửa sổ nền tối. Bạn có thể viết tiếp trong `starter/` của ZIP và đối chiếu source đầy đủ sau mỗi bài.
+
+## Hiểu ý tưởng trước khi viết code
+
+Miền world là `[0,1]²`, y hướng lên. Chia thành N×N ô, mặc định N=24. Khói được lấy mẫu tại **tâm ô**, không tại các nút gồm hai đầu miền như Project 48:
+
+$$
+h=1/N,\qquad p_{ij}=((i+0.5)h,(j+0.5)h).
+$$
+
+Concentration d bằng 0 là không có khói; gần 1 là đậm. Đây là scalar khói được vận chuyển trong không khí, không phải density của toàn bộ chất lưu. Các phép tính pressure sau này giả sử density chất lưu bằng 1.
+
+Cảnh Plume đặt một Gaussian quanh `(0.5,0.2)`. Tâm Gaussian có thể không trùng tâm một ô, nên max của mảng không nhất thiết bằng 1. Màu grayscale chỉ là cách vẽ scalar.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-1" />
+
+Hình đứng yên là đúng. Chưa có lực nổi, velocity solver hay advection ở checkpoint đầu.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ renderer và hệ tọa độ cố định
+
+Starter tạo renderer sau khi window thành công và kiểm lỗi riêng:
+
+```cpp title="src/main.cpp — tạo renderer"
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (!renderer) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+Logical presentation là 800×800, LETTERBOX. `toScreen` ánh xạ world vào vùng 768×768 có lề 16 và đảo y đúng một chỗ. Resize không thay N hoặc concentration.
+
+### Bước 2 — Tạo đủ scalar tại tâm ô
+
+Grid kiểm N nằm trong 8..32 trước khi cấp phát:
+
+```cpp title="include/grid.hpp — tạo hai mảng concentration"
+h = 1.0 / n;
+density.assign(static_cast<std::size_t>(n * n), 0);
+densityNext = density;
+```
+
+Hiện chỉ cần đọc density. DensityNext dành cho cập nhật sau này. Các buffer velocity/pressure trong Grid sẽ được giải thích từ bài 4; chúng chưa được dùng để làm khói chuyển động.
+
+`makeGrid` tính vị trí tâm ô, rồi tạo cảnh ban đầu:
+
+```cpp title="include/grid.hpp — scalar của Gaussian"
+const double py = (y + 0.5) * grid.h - centerY;
+grid.density[y * n + x] = std::exp(-(px * px + py * py) / 0.008);
+```
+
+Không tạo Grid mới trong từng frame: làm vậy sẽ xóa mọi nét brush và bước mô phỏng ở các bài tiếp theo.
+
+### Bước 3 — Vẽ hình vuông của từng ô
+
+Sau khi đặt màu từ scalar, renderer tìm góc trên của ô rồi tô rectangle:
+
+```cpp title="include/view.hpp — vẽ một ô khói"
+const Vec2 top = toScreen({x * grid.h, (y + 1) * grid.h});
+const SDL_FRect cell{static_cast<float>(top.x), static_cast<float>(top.y), static_cast<float>(768 * grid.h + 0.25), static_cast<float>(768 * grid.h + 0.25)};
+if (!SDL_RenderFillRect(renderer, &cell)) {
+    return false;
+}
+```
+
+Màu giới hạn trong 0..1 để vẽ, nhưng không ghi ngược vào density. Lỗi vẽ trả false để main chuyển sang đường dọn tài nguyên.
+
+## Ghép các phần lại
+
+Main tạo Grid một lần, sau đó đọc event → clear → drawGrid → present. Build `project_49_checkpoint_1`. Đám khói phải nằm thấp trong hộp, không tự dâng lên hoặc tan đi. Source sau bài cho thấy đầy đủ include, khai báo state và chỗ gọi renderer.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng vị trí `(i*h,j*h)` thay tâm ô khi tạo scalar. Bạn đã chuyển lattice sang nút nhưng renderer và các bài sau vẫn nghĩ mẫu ở tâm. Khôi phục offset 0.5 trước khi học nội suy.
+2. Tạo Grid lại mỗi frame, rồi thử chỉnh một giá trị scalar bằng debugger. Thay đổi lập tức biến mất. Đưa việc tạo Grid về trước vòng lặp.
+
+## Tự kiểm tra kết quả
+
+N=24 tạo 576 scalar; index `(3,2)` bằng 51. Tâm ô đầu là `(h/2,h/2)`, tâm ô cuối là `(1−h/2,1−h/2)`. Max có thể nhỏ hơn 1 do lấy mẫu. Resize giữ dữ liệu; mở/đóng cửa sổ và lỗi renderer có đường giải phóng đúng.
+
+## Bài tập mở rộng
+
+Đặt hai Gaussian thay vì một, hoặc tạo một hình chữ nhật khói bằng dữ liệu scalar. Giữ nguyên vòng vẽ. Tiếp theo, [đặt/xóa khói bằng chuột](/projects/stable-fluids/02-brush-va-concentration).

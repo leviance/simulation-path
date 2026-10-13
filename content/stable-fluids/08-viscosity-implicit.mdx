@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm độ nhớt bằng một bước diffusion implicit
+
+## Vấn đề cần giải quyết
+
+Velocity có thể thay đổi gắt giữa các mẫu. Ta thêm độ nhớt để khuếch tán velocity. Project 47 đã dùng diffusion explicit cho nhiệt; lần này dùng implicit Euler và giữ vế phải cố định trong một solver lặp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với Laplacian L và viscosity ν:
+
+$$
+v_{\mathrm{new}}=v_{\mathrm{old}}+\nu\Delta t\,Lv_{\mathrm{new}},\qquad (I-\nu\Delta t L)v_{\mathrm{new}}=v_{\mathrm{old}}.
+$$
+
+Laplacian đọc **velocity mới**, vì vậy phải giải hệ chứ không cộng một lần từ dữ liệu cũ. Với a=νdt/h², stencil cho một candidate:
+
+$$
+v_i=\frac{v_i^{\mathrm{source}}+a\sum_{j\in\mathcal{N}(i)}v_j}{1+a\,m_i}.
+$$
+
+Normal velocity ở tường vẫn 0. Tangential dùng free-slip: thiếu hàng xóm phía ngoài tương ứng đạo hàm pháp tuyến 0, nên bỏ phần đó khỏi count. Normal wall bằng 0 vẫn đóng góp vào stencil phía có tường.
+
+Mỗi solve có 12 vòng trong phạm vi N≤32, ν≤0.003 đã nêu. Implicit không đồng nghĩa một số vòng hữu hạn đã giải chính xác; tests kiểm phương trình và sự giảm norm năng lượng trong ca chuẩn.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-8" />
+
+Trên cùng preset, so ν=0 và 0.003 từ cùng state đầu. Reset trước, rồi chọn ν vì Reset khôi phục mặc định. Cả khi ν=0, advection vẫn có diffusion số.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ nguồn cố định
+
+Trước vòng solve, sao chép velocity đầu làm RHS:
+
+```cpp title="include/diffusion.hpp — nguồn của hệ implicit"
+const auto sourceU = grid.u;
+const auto sourceV = grid.v;
+const double a = viscosity * dt / (grid.h * grid.h);
+```
+
+Nếu lấy nguồn từ grid.u đã cập nhật mỗi vòng, bạn đang thực hiện nhiều bước diffusion nối nhau, không giải một bước dt đã chọn. ν=0 trả ngay, không thay dữ liệu.
+
+### Bước 2 — Tính candidate tại từng lattice
+
+Với u nội bộ, hai hàng xóm theo x luôn có, còn theo y chỉ thêm khi trong miền. Candidate là:
+
+```cpp title="include/diffusion.hpp — cập nhật u implicit"
+grid.uNext[i] = (sourceU[i] + a * sum) / (1 + a * count);
+```
+
+V có cách đếm tương ứng theo trục còn lại. Mẫu normal wall được ghi 0 trực tiếp; không lấy pressure stencil làm viscosity stencil vì kiểu mẫu cố định ở biên khác nhau.
+
+### Bước 3 — Swap và ghép projection
+
+Kết thúc mỗi iteration, swap cả hai:
+
+```cpp title="include/diffusion.hpp — kết thúc một iteration"
+grid.u.swap(grid.uNext);
+grid.v.swap(grid.vNext);
+```
+
+Kết thúc solve giữ walls. Step gọi project sau diffusion, tiếp tục advect velocity, project lại rồi advect scalar. Các operator có điều kiện biên và sai số riêng, không bỏ projection chỉ vì diffusion trông làm trường mượt hơn.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_8`. Q đổi ν, I đọc chỉ số năng lượng velocity. Chỉ số này là `h²/2` nhân tổng bình phương mẫu cạnh, một norm của mô hình; không ghi Joule khi chưa gán kích thước, density và bề dày vật lý.
+
+Tests riêng chỉ chạy diffuseVelocity để so nguồn với nghiệm implicit. Quan sát cả step không tách được tác động viscosity khỏi advection/projection.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay sourceU bằng grid.u đang đổi ở tử số. Tăng số vòng sẽ làm tác động vật lý mạnh lên như nhiều dt. Khôi phục bản nguồn cố định và kiểm phương trình `(I−νdtL)v=source`.
+2. Bỏ h² trong a. Đổi resolution sẽ thay tác động viscosity sai cách. Khôi phục νdt/h² và kiểm cùng miền với spacing mới.
+
+## Tự kiểm tra kết quả
+
+ν=0 không đổi bước diffusion. ν>0 giảm norm velocity trong ca chuẩn, normal wall vẫn 0, và residual implicit nhỏ theo tolerance tests. Source giữ nguyên qua 12 vòng; tham số ngoài giới hạn/NaN bị từ chối trước khi sửa velocity. Không dùng scalar khói làm RHS cho velocity diffusion.
+
+## Bài tập mở rộng
+
+Vẽ residual implicit theo iteration, thử tăng ν ngoài phạm vi trong một thí nghiệm riêng rồi tăng budget để đánh giá hội tụ. Tiếp theo, [thêm impulse chuột và lực nổi](/projects/stable-fluids/09-khuay-chuot-va-luc-noi).

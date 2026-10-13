@@ -1,0 +1,139 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng pressure để các hạt không dồn thành một đống
+
+## Vấn đề cần giải quyết
+
+Gravity đẩy hạt xuống, nhưng chưa có cơ chế chống nén. Vì vậy nhiều hạt có thể tụ lại gần đáy. Ta cần density tăng dẫn tới pressure tăng, rồi pressure tạo lực đẩy các hạt ra. Đây là bước đầu tiên khiến cột bắt đầu lan ngang.
+
+Project 49 giải Poisson để sửa divergence. Bài này không giải Poisson: pressure được tính trực tiếp từ density bằng một equation of state (EOS). Mô hình cho phép nước nén một chút, nên gọi là weakly compressible SPH — WCSPH.
+
+## Hiểu ý tưởng trước khi viết code
+
+Dùng EOS tuyến tính có clamp:
+
+$$
+p_i=\max(0,c^2(\rho_i-\rho_0)),\qquad
+\mathbf a_i^p=-\sum_{j\ne i}m_j\left(\frac{p_i}{\rho_i^2}+\frac{p_j}{\rho_j^2}\right)\nabla_iW_{ij}.
+$$
+
+`c` là tốc độ âm **số**, mặc định 12 m/s, không phải velocity của nước. Càng lớn, cùng độ nén càng tạo pressure lớn và timestep cần nhỏ hơn. Rho=1100, rho0=1000, c=12 cho p=14400; rho=900 cho p=0 vì clamp.
+
+Clamp tránh pressure âm hút hạt thành cụm ở nơi thiếu support. Nhưng nó thay đổi mô hình ở mặt thoáng; đừng diễn giải như đã giải đúng mọi vấn đề tensile instability hay density error.
+
+Hai hạt nước dùng cùng coefficient đối xứng. Gradient đối dấu khi đổi i/j, nên lực nội đối nhau. Mẫu wall dùng rho_wall=rho0, p_wall=p_i: xấp xỉ này giúp đẩy khỏi thành nhưng chưa phải boundary hydrostatic chính xác. Tường là tác động ngoài hệ, không tham gia phép kiểm bảo toàn momentum của cặp tự do.
+
+<InteractiveLab demo="sph-water" mode="sph-5" />
+
+Trước khi quan sát cả bể, chọn **Thí nghiệm → Cặp hạt độc lập**. Đây là phép tính tại một thời điểm: A/B đứng ở x=0,47/0,53, density được **cho trước**, gravity và wall đều tắt. Ta chưa tích phân vị trí và cũng không chạy summation density cho cặp này. Nhờ vậy, bạn chỉ đang kiểm công thức force, không trộn thêm ảnh hưởng của hàng trăm hạt.
+
+Giữ rhoA=1100, rhoB=1200 và c=12. EOS cho pA=14400, pB=28800. Với displacement A−B=(−0,06;0), gradient theo A có thành phần x≈1617,274473. Coefficient `pA/rhoA²+pB/rhoB²` dương; dấu trừ trước gradient làm acceleration của A hướng trái. Nhân acceleration với mass=2,025 để được force: FxA≈−211,561054 và FxB≈+211,561054. Bảng **Tổng lực nội** phải gần (0;0).
+
+Đặt cả hai density về 900: pressure và force pressure cùng về 0. Sau đó giữ density dương pressure, đổi c từ 12 lên 20. Độ lớn force tăng theo c², còn hướng lực không đổi. Mũi tên dùng chung thang độ dài trong từng lần vẽ; muốn so độ lớn giữa các lần đổi tham số, đọc số thay vì chỉ nhìn mũi tên.
+
+## Viết code từng bước
+
+### Bước 1 — Tính pressure sau khi hoàn tất density
+
+Thêm `computePressure` vào `include/solver.hpp`. Mỗi lần đổi c, tính lại pressure từ density thay vì nhân trực tiếp pressure cũ:
+
+```cpp title="include/solver.hpp — EOS tuyến tính có clamp"
+inline void computePressure(State& state, double soundSpeed) {
+    for (auto& p : state.particles) {
+        p.pressure = std::max(0.0, soundSpeed * soundSpeed * (p.density - restDensity));
+    }
+}
+```
+
+Trong `prepare`, thứ tự là neighbors, density, pressure rồi acceleration. Không tính pressure và integrate ngay khi vừa xong density của một hạt.
+
+### Bước 2 — Đọc cả hai phía của một tương tác
+
+Mở `accelerations`. Với j là wall, khởi tạo density/pressure theo quy ước trên; với j là nước, thay bằng state của hạt j:
+
+```cpp title="include/solver.hpp — phân biệt fluid và wall"
+double densityB = restDensity;
+double pressureB = p.pressure;
+Vec2 velocityB{0, 0};
+if (j < state.particles.size()) {
+    const auto& other = state.particles[j];
+    densityB = other.density;
+    pressureB = other.pressure;
+    velocityB = other.velocity;
+}
+```
+
+VelocityB được chuẩn bị cho Bài 06; chưa tham gia force pressure. Nếu source checkpoint đánh dấu `[[maybe_unused]]`, đó chỉ là chú thích cho compiler, không đổi ý nghĩa biến.
+
+### Bước 3 — Cộng force vào vector acceleration riêng
+
+Self index bị bỏ qua ở force. Với mỗi hàng xóm khác, lấy displacement=x_i−x_j, gọi gradient và cộng:
+
+```cpp title="include/solver.hpp — pressure acceleration"
+double coefficient = p.pressure / (p.density * p.density) + pressureB / (densityB * densityB);
+result[i].x -= mass * coefficient * grad.x;
+result[i].y -= mass * coefficient * grad.y;
+```
+
+Ở đây chưa nhân dt. `integrate` làm việc đó đúng một lần. `result` được tính xong cho mọi hạt rồi mới cập nhật velocity/position, vì thế duyệt hạt trước hay sau không đọc position đã đổi của hàng xóm.
+
+### Bước 4 — Tạo phép kiểm riêng cho hai hạt
+
+Trong `include/pair.hpp`, `inspectPair` dựng một state riêng để không làm thay đổi bể đang chạy:
+
+Trước hết, đặt tên cho nhóm tham số của phép đo. `PairParameters` chỉ là struct dữ liệu, không có solver bên trong:
+
+```cpp title="include/pair.hpp — tham số của cặp độc lập"
+struct PairParameters {
+    double densityA = 1100;
+    double densityB = 1200;
+    bool approaching = true;
+};
+```
+
+`approaching` chọn hướng velocity, sẽ dùng khi kiểm viscosity ở Bài 06. Lực pressure trong bài này không phụ thuộc lựa chọn đó. `PairReport` giữ state đã chuẩn bị cùng các số cần in/vẽ:
+
+```cpp title="include/pair.hpp — dữ liệu inspector trả về"
+struct PairReport {
+    State state;
+    std::vector<Vec2> pressureForce;
+    std::vector<Vec2> viscosityForce;
+    Vec2 netForce;
+    Vec2 grad;
+    double pi = 0;
+    double viscosityPower = 0;
+};
+```
+
+Ở checkpoint 5, `viscosityForce`, `pi` và `viscosityPower` đều bằng 0; bài sau mới dùng chúng. `pressureForce[i]` là force của hạt i, `netForce` là tổng force của cặp, `grad` là gradient W theo A. Giờ tạo state và gán density trong `inspectPair`:
+
+```cpp title="include/pair.hpp — density cho trước trong thí nghiệm lực"
+PairReport report;
+report.state = makeState(Preset::Pair);
+report.state.walls.clear();
+report.state.particles[0].density = parameters.densityA;
+report.state.particles[1].density = parameters.densityB;
+```
+
+Hàm đặt gravity=0, gọi `computePressure`, lập all-pairs rồi gọi **chính** `accelerations` của solver. Nó không tự viết lại công thức pressure. Dùng alpha=0 khi lấy riêng pressure acceleration. Kết quả là acceleration; muốn báo force trong inspector phải nhân thêm mass. `pair-view.hpp` chỉ vẽ/in kết quả, không cập nhật density hoặc position.
+
+## Ghép các phần lại
+
+Giữ gravity và collision đã viết. Pressure là phần cộng thêm vào acceleration, không thay gravity. Phím C chọn c=8/12/20; Canvas chỉ cho tiến từng bước ở bài này. Source đầy đủ sau bài có thể build mà chưa cần artificial viscosity, grid hay vòi nước.
+
+Trong ứng dụng SDL, **F** chuyển giữa bể và phép kiểm cặp độc lập. **1/2** đổi density của A/B theo 900→1100→1200; **C** đổi c; **I** in force, gradient và tổng lực. **R** đặt lại tham số. Chế độ cặp giữ vị trí cố định, nên N/Space không chạy nó; nhấn F để quay lại bể, bể vẫn đang pause ở bản từ Bài 09.
+
+Đừng nhầm thí nghiệm này với **Cảnh mẫu → Hai hạt** trong bể. Preset trong bể vẫn phải chạy summation density, nên density ban đầu thấp và pressure có thể bằng 0. Nó hữu ích cho kernel/search/timing, nhưng không phải ca chứng minh pressure đẩy. Hai thí nghiệm có mục đích khác nhau và được ghi rõ trong UI.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong source SDL, đổi dấu trừ trước coefficient thành cộng. Bật F với density 1100/1200: lực pressure sẽ hướng vào nhau. So gradient và hướng displacement rồi khôi phục dấu. Canvas giữ công thức chuẩn để bạn đối chiếu, không tự nhận sửa đổi C++.
+2. Dùng chỉ p_i/rho_i², bỏ phía j. Với density khác nhau, lực hai chiều không còn cân bằng. Dùng I đọc tổng lực cặp trước khi nhìn toàn bể; khôi phục cả hai phía.
+
+## Tự kiểm tra kết quả
+
+EOS cho 14400 ở ca rho=1100/c=12 và 0 khi rho thấp hơn rho0. Cặp 1100/1200 cho lực pressure ≈(−211,561054;0) và (+211,561054;0), tổng gần 0; đổi c không đổi tính đối xứng. Trong bể, density/pressure luôn hữu hạn, nhưng chưa đòi rho/rho0 sát 1 ở mọi hạt. Pressure có thể làm dao động mạnh; bài sau thêm tiêu tán số thay vì kẹp velocity.
+
+## Bài tập mở rộng
+
+Lập bảng pressure ở c=8/12/20 với rho=1100. So độ cứng theo c², không theo c. Sau đó thêm [artificial viscosity](/projects/sph-water/06-artificial-viscosity).

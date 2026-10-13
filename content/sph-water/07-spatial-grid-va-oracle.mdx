@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm hàng xóm nhanh hơn mà không đổi lực
+
+## Vấn đề cần giải quyết
+
+Mỗi substep đang thử mọi vị trí, bao gồm wall, cho từng hạt nước. Cách này dễ kiểm nhưng tốn O(N(N+B)) phép thử với B mẫu tường. Khi thêm vòi và chạy nhiều substep mỗi frame, phần tìm hàng xóm có thể chiếm phần lớn thời gian.
+
+Ta thêm spatial grid, nhưng giữ all-pairs làm oracle. Tối ưu chỉ được chấp nhận khi danh sách hàng xóm và kết quả solver vẫn khớp, không phải chỉ vì Canvas chạy nhanh hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn cell size bằng support=2h. Một vòng support quanh hạt chỉ có thể chạm cell của nó và tám cell kề. Tọa độ cell:
+
+$$
+c_x=\left\lfloor x/(2h)\right\rfloor,\qquad c_y=\left\lfloor y/(2h)\right\rfloor.
+$$
+
+Wall samples có tọa độ âm, nên phải dùng floor. Ép số âm về int bằng truncation sẽ gom một số vị trí ngoài bể vào cell sai. Bucket chứa cả fluid/wall index, không dùng hai hệ index khác nhau.
+
+Ứng viên lấy từ 3×3 cell **chưa chắc** là hàng xóm. Vẫn lọc r² nhỏ hơn support². Sort các index được nhận giúp giữ thứ tự cộng giống all-pairs: sai số do search không bị lẫn với sai số thứ tự cộng floating point.
+
+<InteractiveLab demo="sph-water" mode="sph-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Đưa positions vào bucket
+
+Trong `buildNeighbors`, sau khi ghép positions, dùng `std::map<pair<int,int>,vector<size_t>>`. Nó không phải cấu trúc nhanh nhất, nhưng rõ ràng cho quy mô vài trăm hạt:
+
+```cpp title="include/neighbors.hpp — cell có tọa độ âm"
+const auto p = result.positions[j];
+auto cell = std::make_pair(static_cast<int>(std::floor(p.x / support)), static_cast<int>(std::floor(p.y / support)));
+buckets[cell].push_back(j);
+```
+
+Rebuild mỗi substep vì particle position vừa thay đổi. Chưa tái sử dụng neighbor list với skin như các project molecular trước; SPH support/search ở đây được tính lại trực tiếp.
+
+### Bước 2 — Lấy ứng viên từ các cell kề
+
+Với hạt i, tính cx/cy bằng floor tương tự, rồi nối bucket nếu có:
+
+```cpp title="include/neighbors.hpp — duyệt đúng chín cell"
+for (int y = cy - 1; y <= cy + 1; ++y) {
+    for (int x = cx - 1; x <= cx + 1; ++x) {
+        const auto found = buckets.find({x, y});
+        if (found != buckets.end()) {
+            nearby.insert(nearby.end(), found->second.begin(), found->second.end());
+        }
+    }
+}
+```
+
+Giữ nhánh `else` all-pairs và phần lọc khoảng cách Bài 04. Cộng `nearby.size()` vào `candidates` trước cutoff; inspector báo chi phí thử ứng viên, không phải benchmark thời gian chuẩn hóa theo máy.
+
+### Bước 3 — So cả dữ liệu và quỹ đạo
+
+Sau cutoff, sort list để cùng thứ tự cộng với all-pairs:
+
+```cpp title="include/neighbors.hpp — giữ thứ tự reduction"
+std::sort(list.begin(), list.end());
+result.lists.push_back(std::move(list));
+```
+
+Phím G chuyển grid/all-pairs. Kiểm bằng control và `tests/tests.cpp` đi kèm; validator trong UI được thêm ở Bài 10. CTest so `grid.lists == brute.lists`, sau đó chạy hai bản dam 150 bước với cùng settings để so position.
+
+## Ghép các phần lại
+
+Density/force không biết list đến từ grid hay all-pairs. Chỉ `buildNeighbors` thay nhánh search; việc sort thống nhất reduction order giữ các phép cộng giống nhau. Đừng dùng candidate count nhỏ hơn làm bằng chứng grid luôn nhanh hơn: map allocation/sort cũng có chi phí.
+
+## Thử làm sai để hiểu đúng
+
+1. Duyệt chỉ cell của hạt. Hai hạt ở hai phía cùng một ranh cell có thể rất gần nhưng bị bỏ sót. Oracle danh sách phải phát hiện lỗi.
+2. Bỏ cutoff vì đã dùng 3×3 cell. Một số ứng viên xa support sẽ lọt vào inspector; force kernel có thể bằng 0 nhưng danh sách vẫn sai và tốn công.
+
+## Tự kiểm tra kết quả
+
+So danh sách ở preset Dam/Pool/Pair/Empty, cell âm, góc và khoảng cách đúng 2h. Khoảng cách đúng cutoff bị loại vì W/gradient bằng 0. Quỹ đạo grid/all-pairs khớp trong sai số 1e−10 ở ca chuẩn. Khi dùng grid, số ứng viên giảm nhưng số hạt/mass và công thức không đổi.
+
+## Bài tập mở rộng
+
+Đo thời gian buildNeighbors riêng và thời gian toàn substep, chạy lặp cùng state nhiều lần. Báo machine/configuration, không lấy một frame ngẫu nhiên. Tiếp theo [thêm vòi nước](/projects/sph-water/08-do-nuoc-bang-chuot).

@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt vận tốc trên cạnh để đo dòng ra qua từng ô
+
+## Vấn đề cần giải quyết
+
+Gió cho trước đủ để học advection, nhưng chưa đủ cho hộp khí không nén được. Ta cần đọc vận tốc qua bốn cạnh một ô, kiểm dòng đi vào/đi ra và sau này dùng pressure để sửa đúng các cạnh đó.
+
+Project 48 lấy cả hai thành phần vector tại nút. Từ bài này, ta chuyển sang MAC: scalar/pressure ở tâm ô, u trên cạnh dọc, v trên cạnh ngang. Đây là lựa chọn dữ liệu phục vụ các phép toán tiếp theo, không phải đổi tên mảng cũ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một lưới N×N có ba lattice:
+
+| Dữ liệu | Kích thước | Vị trí world của mẫu (i,j) |
+| --- | --- | --- |
+| d, p | N×N | ((i+0.5)h,(j+0.5)h) |
+| u | (N+1)×N | (ih,(j+0.5)h) |
+| v | N×(N+1) | ((i+0.5)h,jh) |
+
+Ở ô `(i,j)`, dòng qua hai cạnh dọc là `(uR−uL)*h`; qua hai cạnh ngang là `(vT−vB)*h`. Chia diện tích h²:
+
+$$
+D\mathbf{v}_{ij}=\frac{u_R-u_L+v_T-v_B}{h}.
+$$
+
+Hai ô kề nhau dùng chung một vận tốc cạnh. Khi cộng divergence toàn hộp, dòng qua cạnh nội bộ triệt tiêu. Tường kín đặt vận tốc pháp tuyến bằng 0; phần tiếp tuyến được trượt, tức free-slip. Sampler lặp mẫu tangential sát mép phù hợp cách mở rộng này; chưa có moving wall hoặc no-slip.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-4" />
+
+Chọn một ô: chấm xanh là hai u, chấm vàng là hai v. So cảnh Nén và giãn với Dòng xoáy. Vortex được tạo từ streamfunction ở các góc; các hiệu chéo triệt tiêu nên divergence số gần 0.
+
+## Viết code từng bước
+
+### Bước 1 — Cấp phát đúng hai mảng velocity
+
+Grid đã chuẩn bị buffer; giờ chúng có ý nghĩa trong solver:
+
+```cpp title="include/grid.hpp — kích thước các cạnh MAC"
+u.assign(static_cast<std::size_t>((n + 1) * n), 0);
+uNext = u;
+v.assign(static_cast<std::size_t>(n * (n + 1)), 0);
+vNext = v;
+```
+
+Stride của u là N+1, còn v là N. Đừng dùng `y*N+x` cho cả hai. Hàm velocity lấy vector tại p bằng hai sampler có offset khác nhau:
+
+```cpp title="include/transport.hpp — lấy vector từ hai lattice"
+return {sample(grid, grid.u, grid.n + 1, grid.n, {0, 0.5}, p), sample(grid, grid.v, grid.n, grid.n + 1, {0.5, 0}, p)};
+```
+
+### Bước 2 — Giữ normal velocity ở tường bằng 0
+
+Hai tường dọc giữ u bằng 0:
+
+```cpp title="include/grid.hpp — normal velocity tại trái/phải"
+grid.u[y * (grid.n + 1)] = 0;
+grid.u[y * (grid.n + 1) + grid.n] = 0;
+```
+
+Tương tự, v ở đáy và trên bằng 0. Không xóa cả hai thành phần ở mọi ô sát tường: làm vậy sẽ áp một điều kiện khác và thay stencil pressure đang chuẩn bị.
+
+### Bước 3 — Tính divergence từ cùng bốn cạnh
+
+`computeDivergence` ghi một scalar cho mỗi ô:
+
+```cpp title="include/pressure.hpp — divergence MAC"
+grid.div[y * grid.n + x] = (grid.u[y * (grid.n + 1) + x + 1] - grid.u[y * (grid.n + 1) + x] + grid.v[(y + 1) * grid.n + x] - grid.v[y * grid.n + x]) / grid.h;
+```
+
+RMS toàn trường là căn trung bình bình phương, tránh dấu âm/dương triệt tiêu trong số đo lỗi. Tổng div gần 0 trong hộp kín không đồng nghĩa từng ô có div gần 0.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_4`. L đổi Khói/Divergence, O bật vector, I đọc RMS. N chỉ advect scalar theo velocity MAC đã tạo; chưa sửa velocity bằng pressure. Cảnh nén/giãn được giữ để bài 5 có một vế phải khác 0.
+
+[Fluid Simulation Notes của Robert Bridson](https://www.cs.ubc.ca/~rbridson/fluidsimulation/fluids_notes.pdf) trình bày layout MAC và các phép toán pressure trên cạnh. Trong project, mọi operator sẽ dùng đúng cùng layout này.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng stride N cho u. Một số mẫu trông vẫn có hướng, nhưng divergence không còn đúng bốn cạnh và phép triệt tiêu bị phá. Khôi phục stride N+1, kiểm preset streamfunction.
+2. Chỉ nhìn tổng divergence để kết luận hộp không nén được. Cảnh nén/giãn có tổng gần 0 nhưng RMS lớn. Giữ cả bản đồ div và RMS, không thay RMS bằng trị tuyệt đối của tổng.
+
+## Tự kiểm tra kết quả
+
+N=24: d/p có 576 phần tử, u/v có 600. Normal wall luôn 0. Tổng div trong hộp kín gần 0, nhưng cảnh nén/giãn có RMS khác 0. Vortex có RMS gần 0 tới sai số làm tròn. Chọn ô ở cả mép/cạnh góc không truy cập ngoài mảng.
+
+## Bài tập mở rộng
+
+Viết phép kiểm tổng `h²*div` bằng dòng qua biên, rồi cố ý cho một cạnh biên u khác 0 để thấy hai số đổi cùng nhau. Tiếp theo, [suy ra phương trình pressure](/projects/stable-fluids/05-pressure-poisson).

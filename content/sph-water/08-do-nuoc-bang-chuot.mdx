@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm vòi nước có thể điều khiển bằng chuột
+
+## Vấn đề cần giải quyết
+
+Đến đây nước chỉ có từ preset. Ta muốn đặt vòi ở phía trên và thêm hạt mới. Nhưng phát hạt theo mọi mouse event sẽ phụ thuộc tần suất input, dễ tạo nhiều hạt trùng nhau và pressure rất lớn. Bài này viết emitter có điều kiện rõ ràng trước khi chạy liên tục ở Bài 09.
+
+Click hoặc Enter thử phát một hạt. Nếu vị trí quá gần hạt cũ hoặc đã đủ capacity, thao tác phải bị từ chối và có số đếm, không xóa bớt hạt cũ để tạo cảm giác “vẫn đổ được”.
+
+## Hiểu ý tưởng trước khi viết code
+
+Emitter thêm một Particle có mass m, velocity ban đầu (0,−0.4) m/s. Do đó mỗi lần thành công:
+
+$$
+M_{\text{new}}=M_{\text{old}}+m.
+$$
+
+Tổng mass nước không bao gồm wall samples. Vòi phát ở vị trí cách mọi hạt cũ ít nhất 0.8*spacing; đây là khoảng cách **phát hạt**, không phải hard-sphere radius hay kernel support. Trong solver, các hạt vẫn có thể gần nhau hơn ngưỡng ấy.
+
+Capacity=384 giữ CPU demo hữu hạn. Việc clamp nozzle vào vùng tâm hợp lệ là kiểm input; không clamp density/velocity trong solver để che bất ổn. Rê chuột chỉ di chuyển vòi, không phát thêm hạt theo mỗi motion event.
+
+<InteractiveLab demo="sph-water" mode="sph-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Đổi mouse input về world
+
+Trong event `SDL_EVENT_MOUSE_BUTTON_DOWN`, đổi event sang render coordinates rồi dùng phép inverse của Bài 01:
+
+```cpp title="src/main.cpp — đổi tọa độ event"
+SDL_ConvertEventToRenderCoordinates(renderer, &event);
+const auto world = water::fromScreen({event.button.x, event.button.y});
+```
+
+```cpp title="include/view.hpp — logical screen sang world"
+inline Vec2 fromScreen(Vec2 p) {
+    return {(p.x - 50) / 700, (610 - p.y) / 700};
+}
+```
+
+Kiểm world nằm trong bể trước khi dùng. `SDL_ConvertEventToRenderCoordinates` tính cả letterbox; window pixel trực tiếp sẽ sai sau resize. Với motion event, đọc `event.motion.x/y`, không đọc nhánh button của union.
+
+### Bước 2 — Từ chối vị trí không phù hợp
+
+Thêm `pour` trong `include/emitter.hpp`. Kiểm finite trước, clamp nozzle vào miền tâm hợp lệ, kiểm capacity rồi khoảng cách:
+
+```cpp title="include/emitter.hpp — từ chối overlap trước khi thêm hạt"
+for (const auto& p : state.particles) {
+    if (length(subtract(p.position, position)) < spacing * 0.8) {
+        ++state.rejected;
+        return false;
+    }
+}
+state.particles.push_back({position, {0, -0.4}});
+++state.emitted;
+return true;
+```
+
+Nếu nozzle không finite, trả false nhưng không thêm/xóa particle. `emitted` đếm số thành công; `rejected` đếm overlap/capacity. Inspector hiển thị cả hai để người học biết vì sao giữ vòi ở cùng chỗ không thể phát vô hạn hạt.
+
+### Bước 3 — Quản lý kéo và bàn phím
+
+Khi nhấn chuột trong bể, lưu nozzle, bật pouring, capture và thử một lần phát:
+
+```cpp title="src/main.cpp — bắt đầu thao tác vòi"
+nozzle = world;
+pouring = true;
+SDL_CaptureMouse(true);
+water::pour(state, nozzle);
+```
+
+Mouse up, blur hoặc minimize phải hủy pouring/capture; ra khỏi bể cũng hủy thao tác. Keyboard arrows dịch nozzle một spacing, Enter gọi `pour` một lần. Canvas dùng pointer capture với cùng ý nghĩa, và thanh chọn hạt vẫn hỗ trợ inspector khi arrows đã chuyển sang điều khiển vòi.
+
+## Ghép các phần lại
+
+Checkpoint 08 chưa chạy liên tục. Click/Enter thêm một hạt, N tiến một bước; motion chỉ đổi nozzle. Khi emitter thêm hạt, inspector tính lại density/pressure tại position hiện tại. Tick kế tiếp rebuild hàng xóm, nên hạt mới không bị bỏ khỏi force.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi `pour` trong mọi mouse motion. Rê cùng quãng đường với các tốc độ event khác nhau và quan sát số lần thử tăng khác nhau. Khôi phục motion chỉ đổi nozzle.
+2. Bỏ overlap guard, Enter nhiều lần tại cùng chỗ. Self/neighbor contribution tăng density mạnh; đây là input không phù hợp, không phải lý do giảm pressure tùy ý.
+
+## Tự kiểm tra kết quả
+
+Bể trống, Enter lần đầu tăng count lên 1 và mass lên 2.025 kg; Enter lần nữa tại cùng position bị từ chối. Vượt capacity không thêm hạt. Resize không lệch vòi; mouse up/blur dừng thao tác; keyboard dùng được toàn bộ input chính. Chưa đòi emission rate của bài này như một vòi nước vật lý.
+
+## Bài tập mở rộng
+
+Thêm một hàng ba vòi với khoảng cách an toàn và đo mass được thêm, vẫn giữ capacity chung. Bài tiếp theo [chạy substep với ngân sách hữu hạn](/projects/sph-water/09-substep-va-ngan-sach) sẽ tự thử phát sau mỗi tick hoàn tất.

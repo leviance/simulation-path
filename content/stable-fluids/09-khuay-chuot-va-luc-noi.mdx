@@ -1,0 +1,78 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khuấy khói bằng chuột và thêm lực nổi
+
+## Vấn đề cần giải quyết
+
+Ta đã có velocity solver, giờ cần tương tác khiến khói chuyển động. Kéo chuột thêm một thay đổi velocity cục bộ; buoyancy làm vùng có khói được đẩy lên qua mỗi tick. Hai tác động có cách phụ thuộc thời gian khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Input chuột dùng displacement delta từ điểm trước tới điểm mới. Tại mỗi cạnh, cộng `4*delta*weight`, weight là Gaussian quanh điểm hiện tại. Đây là **impulse minh họa theo quãng kéo**, không phải lực giữ nguyên qua nhiều tick; không nhân dt thêm một lần.
+
+Buoyancy là lực theo thời gian. Cạnh v nằm giữa hai scalar, lấy trung bình concentration rồi cộng:
+
+$$
+v\leftarrow v+\Delta t\,\beta\frac{d_{\mathrm{below}}+d_{\mathrm{above}}}{2}.
+$$
+
+World y lên nên β≥0 tạo tác động hướng lên. Đây là mô hình gọn tỉ lệ với khói, chưa có nhiệt hoặc combustion. Giữ chuột đứng yên không tiếp tục thêm impulse hay nguồn khói; buoyancy vẫn được áp trong từng tick nếu bật.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-9" />
+
+Đặt khói rồi kéo, hoặc dùng WASD/nút khuấy tại ô chọn. N từng bước để nhìn projection sửa phần divergence input vừa tạo. Tắt lực nổi để tách tác động chuột khỏi buoyancy.
+
+## Viết code từng bước
+
+### Bước 1 — Phân phối impulse lên đúng cạnh
+
+`addImpulse` kiểm điểm/delta hữu hạn trước khi ghi. Cạnh u nhận phần x, cạnh v nhận phần y:
+
+```cpp title="include/input.hpp — impulse tại cạnh u"
+grid.u[y * (grid.n + 1) + x] += 4 * delta.x * weight(x * grid.h, (y + 0.5) * grid.h);
+```
+
+```cpp title="include/input.hpp — impulse tại cạnh v"
+grid.v[y * grid.n + x] += 4 * delta.y * weight((x + 0.5) * grid.h, y * grid.h);
+```
+
+Không ghi velocity ở normal wall. Với cùng tâm/weight, chia một delta thành hai nửa cho cùng tổng impulse. Khi tâm cũng di chuyển, việc lấy mẫu kernel theo event vẫn là xấp xỉ; không tuyên bố mọi tần suất mouse event tạo hình giống hệt.
+
+### Bước 2 — Áp lực nổi theo dt
+
+Hai ô kề cạnh v được đọc trước advection:
+
+```cpp title="include/input.hpp — lực nổi trên cạnh ngang"
+const double concentration = 0.5 * (grid.density[y * grid.n + x] + grid.density[(y - 1) * grid.n + x]);
+grid.v[y * grid.n + x] += dt * strength * concentration;
+```
+
+Strength chọn 0/0.8/1.6. Không áp buoyancy theo số frame render; solver tick mới là nơi tích phân lực.
+
+### Bước 3 — Kết thúc stroke đúng lúc
+
+Mouse capture giữ event khi kéo; ra khỏi bản đồ hủy điểm nối trước, blur/thả giải phóng capture. Khi có đoạn kéo hợp lệ:
+
+```cpp title="src/main.cpp — gửi quãng kéo vào velocity"
+fluid::addImpulse(grid, p, {p.x - previous.x, p.y - previous.y});
+fluid::computeDivergence(grid);
+```
+
+Đo divergence ngay sau input để hiện state thật. `hasProjection=false` báo report trước không còn đại diện cho velocity vừa thay đổi. WASD tạo impulse 0.05 theo hướng chọn, nên người dùng bàn phím cũng khuấy được.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_9`. K bật/tắt khuấy bằng chuột, B đổi lực nổi; brush vẫn đặt/xóa scalar. Step thêm buoyancy trước diffusion/projection; impulse chuột được đưa vào state ngay lúc input, projection ở tick tiếp theo sửa nó.
+
+## Thử làm sai để hiểu đúng
+
+1. Nhân dt vào impulse đã được quy định theo displacement. Tác động chuột yếu đi theo timestep, sai với mô hình input đang chọn. Khôi phục increment velocity; nếu muốn lực liên tục, phải thiết kế nguồn lực theo thời gian riêng.
+2. Bỏ dt trong buoyancy. Chạy thêm nhiều tick trên cùng thời gian làm lực quá mạnh. Khôi phục dt và kiểm một cạnh giữa scalar hằng bằng 1: tăng đúng dt*β trước projection.
+
+## Tự kiểm tra kết quả
+
+Delta x chỉ tăng u, delta y chỉ tăng v; normal wall giữ 0. Cùng tâm, hai nửa delta khớp một delta đầy đủ. Buoyancy có dt và đúng dấu y. Giữ chuột không tiếp tục khuấy; thả/blur hủy stroke. Không dùng PASS của ca chuẩn để kết luận state vừa thêm impulse đã incompressible.
+
+## Bài tập mở rộng
+
+Thiết kế một nguồn khói giữ liên tục theo tick, đo lượng thêm theo giây và phân biệt với bút đặt giá trị hiện tại. Tiếp theo, [ghép toàn pipeline với fixed timestep](/projects/stable-fluids/10-solver-pipeline-va-timestep).

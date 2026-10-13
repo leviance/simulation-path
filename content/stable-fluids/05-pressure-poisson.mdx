@@ -1,0 +1,157 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ divergence đến phương trình pressure
+
+## Vấn đề cần giải quyết
+
+Velocity hiện có thể làm một ô co/giãn. Ta tìm một trường pressure tạo ra phần sửa velocity sao cho divergence nhỏ đi. Bài này chỉ giải pressure; chưa áp phần sửa, để thấy rõ pressure và projection là hai bước khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi D là divergence MAC, G là gradient từ pressure tâm ô ra cạnh. Với density chất lưu bằng 1, velocity sau sửa dự kiến là:
+
+$$
+\mathbf{v}_{\mathrm{new}}=\mathbf{v}^{*}-\Delta t\,Gp.
+$$
+
+Yêu cầu Dv_new=0 dẫn tới DGp=Dv*/dt. Chọn A=−DG, b=−Dv*/dt, được **A*p=b**. Dấu trừ trong b đi cùng định nghĩa A, không phải lựa chọn theo màu đẹp.
+
+Ở ô giữa miền, A là âm Laplacian: `(4p−pL−pR−pB−pT)/h²`. Mép chỉ đếm hàng xóm bên trong; đây là Neumann pressure tương ứng normal wall không đổi. Pressure cộng một hằng số vẫn có cùng gradient, nên ta chọn trung bình pressure bằng 0 để bỏ độ tự do đó.
+
+Ta sẽ giải phương trình này bằng Jacobi. Ý tưởng khá đơn giản: tạm giữ pressure của các ô hàng xóm, rồi tính xem pressure của ô đang xét nên bằng bao nhiêu. Mỗi vòng đọc toàn bộ pressure **cũ** và ghi vào một mảng **mới**. Làm xong cả lưới mới đổi hai mảng cho nhau.
+
+### Tính một ô bằng các con số cụ thể
+
+Trong Canvas, chọn **Ca Jacobi 8×8**. Ca này không có khói. Chỉ một cạnh u giữa ô A=(3,3) và B=(4,3) có velocity khác 0: `u=−h*dt*64`. Vì h=1/8, divergence tại A là −64dt, tại B là +64dt; do đó RHS lần lượt là +64 và −64. Các ô khác có RHS bằng 0. Hai giá trị đối nhau nên tổng RHS bằng 0, phù hợp với hộp kín.
+
+Bắt đầu với mọi pressure bằng 0. Ô A có bốn hàng xóm, nên phương trình tại A là:
+
+$$
+\frac{4p_A-p_L-p_R-p_B-p_T}{h^2}=64.
+$$
+
+Chuyển các pressure hàng xóm sang vế phải:
+
+$$
+p_{\mathrm{candidate}}=\frac{p_L+p_R+p_B+p_T+h^2b_A}{4}
+=\frac{0+(1/8)^2\cdot64}{4}=0.25.
+$$
+
+Source không nhận ngay giá trị 0,25. Ta dùng weighted Jacobi: giữ 25% pressure cũ, nhận 75% candidate. Vòng đầu cho `p_A=0.25*0+0.75*0.25=0.1875`. Tương tự, ô B nhận −0,1875. Chỉ hai ô này khác 0, nên mean pressure vẫn bằng 0.
+
+Sang vòng thứ hai, A đọc pressure cũ của B là −0,1875, không đọc giá trị B đang được tính trong vòng này. Tổng hàng xóm của A là −0,1875; candidate thành 0,203125. Sau blend, A nhận `0.25*0.1875+0.75*0.203125=0.19921875`.
+
+Trọng số 0,75 giúp giảm dao động của Jacobi thuần trong bài toán này. Nó không có nghĩa 75% độ chính xác. Muốn biết lời giải còn sai bao nhiêu, ta đo **residual** `r=Ap−b` trên toàn lưới. Ca 8×8 bắt đầu với residual RMS ≈11,313708; sau vòng đầu còn ≈3,741657.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-5" />
+
+Chọn Ca Jacobi 8×8, bấm **Tiến một vòng Jacobi** hai lần. Đối chiếu “Vòng vừa chạy”, candidate và pressure kết quả với phép tính trên. Bảng hàng xóm là state **sau** vòng vừa chạy; “Candidate ở vòng kế tiếp” dự đoán vòng sắp tới. Dùng mũi tên chọn ô B, một ô mép và một ô góc để xem stencil thay đổi.
+
+**Bắt đầu lại pressure** đưa pressure về 0 và lập lại RHS từ velocity hiện có, không đặt lại cả mô phỏng. N là một thao tác khác: chạy trọn budget pressure rồi advect khói một tick. Ở bài này cả J lẫn N đều chưa sửa velocity. Chưa kết luận khói incompressible chỉ vì đã có màu pressure.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo vế phải từ divergence
+
+Thêm `beginPressure` vào `include/pressure.hpp`. Hàm này chuẩn bị một lần trước khi chạy các vòng Jacobi:
+
+```cpp title="include/pressure.hpp — vế phải Poisson"
+inline void beginPressure(Grid& grid) {
+    enforceWalls(grid);
+    computeDivergence(grid);
+    std::fill(grid.pressure.begin(), grid.pressure.end(), 0);
+    double mean = 0;
+    for (std::size_t i = 0; i < grid.rhs.size(); ++i) {
+        grid.rhs[i] = -grid.div[i] / dt;
+        mean += grid.rhs[i];
+    }
+    mean /= grid.rhs.size();
+    for (double& value : grid.rhs) {
+        value -= mean;
+    }
+    grid.pressureReady = true;
+    grid.pressureIterations = 0;
+    grid.hasProjection = false;
+}
+```
+
+Hộp kín có tổng divergence gần 0, là điều kiện tương thích của Neumann. Source loại mean RHS rất nhỏ do làm tròn. Đây không phải cách cứu một hộp có dòng biên không cân bằng: enforceWalls phải đúng trước. `pressureReady` cho biết RHS đã được lập; `pressureIterations` đếm số vòng, không phải số tick của mô phỏng.
+
+### Bước 2 — Dùng hàng xóm trong miền
+
+`neighbours` chỉ cộng pressure ở những ô có thật. Nó trả `sum` và `count`, dùng cùng quan hệ cạnh như D/G. Phần cập nhật trong `jacobiIteration` là:
+
+```cpp title="include/pressure.hpp — một cập nhật pressure"
+double gauge = 0;
+for (int y = 0; y < grid.n; ++y) {
+    for (int x = 0; x < grid.n; ++x) {
+        const int i = y * grid.n + x;
+        const auto nearby = neighbours(grid, grid.pressure, x, y);
+        const double candidate = (nearby.sum + grid.h * grid.h * grid.rhs[i]) / nearby.count;
+        grid.pressureNext[i] = 0.25 * grid.pressure[i] + 0.75 * candidate;
+        gauge += grid.pressureNext[i];
+    }
+}
+```
+
+Count là 4 ở giữa, 3 ở mép, 2 ở góc. Với ô A trong ca 8×8, vòng đầu `nearby.sum=0`, `count=4`, `rhs[i]=64`: đây chính là phép tính 0,25 rồi 0,1875 ở trên. Không ghi ngược vào `grid.pressure` ngay trong vòng lặp; làm thế sẽ khiến kết quả phụ thuộc thứ tự duyệt.
+
+### Bước 3 — Chọn mean pressure bằng 0 rồi đổi buffer
+
+Nối đoạn sau vào cuối vòng Jacobi, sau khi đã cập nhật **mọi** ô:
+
+```cpp title="include/pressure.hpp — kết thúc một vòng Jacobi"
+gauge /= grid.pressure.size();
+for (double& value : grid.pressureNext) {
+    value -= gauge;
+}
+grid.pressure.swap(grid.pressureNext);
+++grid.pressureIterations;
+```
+
+`gauge` là mean của các pressure vừa tính. Trừ cùng một hằng số không đổi gradient, nhưng giữ pressure khỏi có một mức nền tùy ý. Ca hai ô đối xứng có gauge bằng 0; ở ca khác phải tính từ cả lưới. Không đặt pressure ở mọi mép bằng 0: điều đó đổi Neumann thành một bài khác.
+
+`jacobiIteration` còn trả `JacobiTrace` để inspector ghi lại RHS, pressure cũ, candidate, gauge và kết quả tại ô được chọn. Trace chỉ giúp đọc phép tính, không tham gia phương trình.
+
+### Bước 4 — Đo residual và ghép một lần giải đầy đủ
+
+Residual đọc pressure vừa giải và RHS vẫn giữ nguyên:
+
+```cpp title="include/pressure.hpp — sai số tại một ô"
+const double residual = (nearby.count * grid.pressure[i] - nearby.sum) / (grid.h * grid.h) - grid.rhs[i];
+sum += residual * residual;
+```
+
+Lấy RMS cả trường. Không đo hiệu giữa hai iteration rồi coi đó là residual: hai iteration ít thay đổi có thể vẫn chưa giải tốt hệ phương trình. `solvePressure` chỉ là cách chạy nhiều vòng của đúng hàm đã dùng cho nút J:
+
+```cpp title="include/pressure.hpp — chạy budget hữu hạn"
+beginPressure(grid);
+for (int iteration = 0; iteration < iterations; ++iteration) {
+    jacobiIteration(grid);
+}
+return pressureResidual(grid);
+```
+
+Tham số `iterations` được kiểm trong khoảng 1–160 trước đoạn này. Không gọi `beginPressure` bên trong mỗi vòng: như vậy pressure sẽ bị xóa liên tục và không thể tiến gần lời giải.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_5`. Trong ứng dụng SDL, **H** mở ca Jacobi 8×8 và chọn A=(3,3); **J** chạy một vòng; **Z** bắt đầu lại pressure. Console in các số trung gian sau mỗi lần J. Mũi tên chọn ô, I đọc RHS/tổng hàng xóm/candidate, L đổi Pressure/Divergence/Khói.
+
+N gọi `solvePressure` trước advection scalar nhưng chưa gọi `project`. T đổi budget 40/80/160. Để so các budget, chọn cùng preset, bắt đầu lại từ cùng state rồi N một lần. Solver luôn bắt đầu pressure từ 0; J thì giữ kết quả vòng trước để tiếp tục. J/Z tự pause ở bản hoàn chỉnh và không đổi tick.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ dt trong RHS. Pressure bị scale sai, residual đối với phương trình đúng không còn khớp và projection sau này sửa thiếu. Khôi phục `−div/dt` cùng dấu của A.
+2. Luôn chia candidate cho 4 tại mép nhưng chỉ cộng hàng xóm có thật. Pressure không còn tương ứng Neumann đã chọn. Khôi phục count hợp lệ và kiểm cả góc.
+3. Ghi trực tiếp vào pressure cũ. So ô B ở vòng đầu của ca 8×8: nó không còn chỉ đọc bốn số 0. Khôi phục hai buffer, kiểm lại cả A và B phải nhận ±0,1875.
+
+## Tự kiểm tra kết quả
+
+Ca 8×8 cho RHS A/B bằng +64/−64. Vòng đầu cho pressure +0,1875/−0,1875, residual RMS ≈3,741657; vòng hai A≈0,19921875. J không đổi u/v, scalar hoặc tick. Z đưa số vòng về 0 và giữ velocity.
+
+Trong bài 5, solve pressure không đổi u/v. Mean pressure gần 0, residual hữu hạn và giảm trong ca chuẩn khi tăng budget. Velocity zero cho RHS/pressure zero. Giữ RHS cố định suốt solve; không thay nó bằng divergence của scalar khói. Không yêu cầu residual của mọi ca giảm ở từng vòng riêng lẻ chỉ dựa vào ví dụ này.
+
+## Bài tập mở rộng
+
+Ghi residual theo iteration trên cùng grid, tìm xem phần giảm chậm xuất hiện khi nào. Tiếp theo, [áp gradient pressure vào velocity](/projects/stable-fluids/06-projection-va-residual).

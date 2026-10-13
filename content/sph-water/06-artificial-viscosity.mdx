@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giảm dao động bằng artificial viscosity
+
+## Vấn đề cần giải quyết
+
+Pressure chống nén nhưng cũng khiến hạt dao động: chúng lao vào nhau, bị đẩy ra rồi lại quay lại. Bài này thêm một lực tiêu tán cho cặp đang tiến lại gần. Điều quan trọng không chỉ là “nhìn êm hơn”, mà là biết lực ấy được bật khi nào, mang dấu gì và làm mất năng lượng ra sao.
+
+Ta dùng artificial viscosity kiểu Monaghan với beta=0. Đây là tiêu tán **số**, không phải đang đặt hệ số độ nhớt thực của nước. Vì vậy gọi tham số là alpha, không đổi tên thành ν như phần viscosity của Project 49.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đặt r_ij=x_i−x_j và v_ij=v_i−v_j. Đạo hàm của khoảng cách bình phương là 2v_ij·r_ij. Dot product âm nghĩa là khoảng cách đang giảm. Khi ấy:
+
+$$
+\mu_{ij}=\frac{h\,\mathbf v_{ij}\cdot\mathbf r_{ij}}{r_{ij}^2+0.01h^2},\qquad
+\Pi_{ij}=\frac{-\alpha c\mu_{ij}}{(\rho_i+\rho_j)/2}.
+$$
+
+Khi dot không âm, Pi bằng 0. Trong force, cộng Pi vào coefficient pressure trước khi nhân −m*gradient. [PySPH mô tả artificial viscosity](https://pysph.readthedocs.io/en/main/reference/equations.html#pysph.sph.basic_equations.MonaghanArtificialViscosity) có cả alpha/beta; bài này bỏ thành phần beta bậc hai để giữ mô hình đơn giản, không nhằm mô phỏng shock tốc độ cao.
+
+Với cặp tự do tiến lại gần, Pi dương và lực viscosity cản chuyển động tương đối. Tổng lực nội vẫn gần 0, nhưng công suất tổng của phần viscosity không dương. Momentum và energy là hai phép đo khác nhau.
+
+<InteractiveLab demo="sph-water" mode="sph-6" />
+
+Chọn **Thí nghiệm → Cặp hạt độc lập**, giữ density 1100/1200, c=12 và alpha=0,15. A có vx=+0,3, B có vx=−0,3 nên chúng đang tiến lại gần. Với displacement A−B=(−0,06;0), relativeVelocity=(+0,6;0), dot bằng −0,036. Công thức trên cho Pi≈0,000907030.
+
+Lực viscosity riêng của A có Fx≈−6,015272, của B là +6,015272. Nó cản cả A đang đi phải và B đang đi trái. Công suất của hai lực là `(+0.3)*(-6.015272)+(-0.3)*(+6.015272)≈−3.609163`. Tổng lực bằng 0 nhưng công suất âm: hệ giữ momentum trong tương tác nội, còn phần chuyển động tương đối mất năng lượng.
+
+Đổi **Chuyển động tương đối → Tách ra**: cả Pi, lực viscosity và công suất viscosity phải về 0. Lực pressure vẫn còn, vì nó phụ thuộc density chứ không phụ thuộc điều kiện tiến lại gần. Chọn alpha=0 cũng tắt riêng viscosity mà không tắt pressure.
+
+## Viết code từng bước
+
+### Bước 1 — Chỉ nhận cặp đang tiến lại gần
+
+Thêm `artificialViscosity` trong `include/kernel.hpp`. Hàm nhận displacement/relativeVelocity theo cùng thứ tự i−j:
+
+```cpp title="include/kernel.hpp — điều kiện bật viscosity"
+const double approach = dot(relativeVelocity, displacement);
+if (approach >= 0) {
+    return 0;
+}
+```
+
+Nếu đảo chỉ một trong hai vector, dấu dot bị đảo. Đổi i/j đồng thời thì dot giữ nguyên, là tính đối xứng cần có.
+
+### Bước 2 — Tính mu và Pi hữu hạn
+
+Phần tiếp theo của hàm là:
+
+```cpp title="include/kernel.hpp — Monaghan với beta bằng 0"
+const double mu = h * approach / (dot(displacement, displacement) + 0.01 * h * h);
+return -alpha * soundSpeed * mu / (0.5 * (densityA + densityB));
+```
+
+Số 0.01h² giữ mẫu số không về 0 khi hai position rất gần. Nó không thay nhánh r=0 của gradient và cũng không phải lý do cho phép phát nhiều hạt trùng vị trí.
+
+### Bước 3 — Ghép vào force và thêm control
+
+Trong `accelerations`, ngay sau khi tính coefficient pressure, cộng Pi. VelocityB của wall bằng 0; tương tác wall có thể tiêu tán năng lượng và trao momentum với bể.
+
+```cpp title="include/solver.hpp — thêm Pi trước gradient"
+coefficient += artificialViscosity(displacement, subtract(p.velocity, velocityB), p.density, densityB, settings.soundSpeed, settings.alpha);
+```
+
+Sau đó vẫn là hai dòng `result[i] -= mass*coefficient*grad` ở Bài 05, không tích phân thêm lần nữa. Trong `main`, Q chọn alpha 0/0.15/0.3. Reset cùng preset trước mỗi lần so để không trộn khác biệt state với khác biệt tham số.
+
+### Bước 4 — Đo riêng lực và công suất viscosity
+
+`inspectPair` chạy `accelerations` hai lần trên **cùng state**: một lần alpha=0, một lần alpha theo control. Hiệu hai acceleration chính là phần viscosity. Trong `include/pair.hpp`, phần ghi kết quả cho mỗi hạt là:
+
+```cpp title="include/pair.hpp — tách force khỏi acceleration"
+const Vec2 pressure{mass * pressureAcceleration[i].x, mass * pressureAcceleration[i].y};
+const Vec2 viscosity{mass * (totalAcceleration[i].x - pressureAcceleration[i].x), mass * (totalAcceleration[i].y - pressureAcceleration[i].y)};
+report.pressureForce.push_back(pressure);
+report.viscosityForce.push_back(viscosity);
+report.netForce.x += mass * totalAcceleration[i].x;
+report.netForce.y += mass * totalAcceleration[i].y;
+report.viscosityPower += dot(report.state.particles[i].velocity, viscosity);
+```
+
+`netForce` cộng lực **pressure + viscosity**, còn `viscosityPower` chỉ cộng v·F của phần viscosity. Không dùng tổng acceleration để đo công suất viscosity: khi đó bạn đã tính cả công của pressure. Hai lần đo phải giữ nguyên position, velocity và density; đừng cho chạy một tick ở giữa.
+
+## Ghép các phần lại
+
+Pipeline giữ nguyên: neighbors → density → pressure → acceleration → integrate/collision. Artificial viscosity chỉ thay acceleration. Mặc định alpha=0.15; alpha=0 dùng để cô lập pressure, không phải cấu hình được hứa hẹn sẽ ổn định lâu dài.
+
+Dùng cặp hạt **độc lập** để kiểm dấu và công suất trước, rồi mới quay lại bể để quan sát dao động. Trong SDL, F bật phép kiểm cặp, D đổi tiến lại gần/tách ra, Q đổi alpha, I in Pi/lực/công suất. Vị trí được giữ cố định nên mỗi lần đổi control vẫn đo đúng cùng một state. Preset Hai hạt trong bể không giữ density cho trước; không dùng nó thay cho phép kiểm này.
+
+## Thử làm sai để hiểu đúng
+
+1. Bật Pi cả khi hạt đang tách ra. Solver sẽ cản cả chuyển động giãn, khác mô hình đang dạy. Đặt velocity hướng ra và kiểm Pi phải bằng 0.
+2. Cộng Pi sau khi đã nhân gradient hoặc nhân Pi thêm dt trong hàm này. Kiểm đơn vị và vị trí ghép; dt chỉ thuộc `integrate`.
+
+## Tự kiểm tra kết quả
+
+Pi bằng 0 cho cặp tách ra, không âm cho cặp tiến lại gần. Ca mặc định cho Pi≈0,000907030 và công suất viscosity≈−3,609163; alpha=0 cho cả hai bằng 0. Với gravity/wall tắt, force hai phía đối nhau. Không khẳng định energy toàn bể giảm đều: gravity, pressure, collision và emitter cũng tham gia.
+
+## Bài tập mở rộng
+
+Ghi công suất của cặp với alpha=0,0.15,0.3 tại cùng state. Tiếp theo [tăng tốc tìm hàng xóm bằng grid](/projects/sph-water/07-spatial-grid-va-oracle), giữ nguyên toàn bộ công thức force.

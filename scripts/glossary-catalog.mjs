@@ -11,6 +11,8 @@ export const glossarySources = [
   { file: "lib/glossary-cellular.ts", name: "cellularGlossaryTerms" },
   { file: "lib/glossary-heat.ts", name: "heatGlossaryTerms" },
   { file: "lib/glossary-fields.ts", name: "fieldGlossaryTerms" },
+  { file: "lib/glossary-fluids.ts", name: "fluidGlossaryTerms" },
+  { file: "lib/glossary-sph.ts", name: "sphGlossaryTerms" },
 ];
 
 export function assertGlossaryModules(files) {

@@ -1,0 +1,78 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho trường vận tốc tự vận chuyển chính nó
+
+## Vấn đề cần giải quyết
+
+Velocity vừa được chiếu nhưng còn đứng yên như một bản đồ cho trước. Trong chất lưu, vận tốc cũng được vận chuyển bởi chính dòng chảy. Ta dùng backtrace cho từng thành phần, lấy mẫu tại đúng vị trí cạnh u/v và chiếu lại sau đó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ở cạnh u, ta cần cả vector flow để lần ngược, nhưng giá trị được vận chuyển chỉ là u. Ở cạnh v cũng vậy. Hai lattice có offset khác nhau:
+
+$$
+p_u=(ih,(j+0.5)h),\quad u_{\mathrm{new}}(p_u)=u_{\mathrm{old}}(p_u-\Delta t\,\mathbf{v}_{\mathrm{old}}(p_u)).
+$$
+
+Điều quan trọng là cả hai lượt đọc cùng u/v cũ. Nếu swap u ngay sau lượt u, lượt v sẽ lấy flow có u mới và v cũ: không còn cùng một thời điểm.
+
+Interpolation và backtrace không giữ divergence số bằng 0. Vì vậy bước này phải được theo sau bởi projection, rồi mới advect khói bằng velocity đã sửa. Semi-Lagrangian có diffusion số; không gọi giảm độ xoáy qua nội suy là viscosity vật lý khi ν vẫn bằng 0.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-7" />
+
+N từng bước trên cảnh Dòng xoáy. So velocity, div RMS và hình khói. Số “lần projection gần nhất” ở đây thuộc lần chiếu sau advection velocity.
+
+## Viết code từng bước
+
+### Bước 1 — Backtrace từ cạnh u
+
+Vị trí cạnh được dựng bằng offset `(0,0.5)`, còn flow được nội suy bằng cả hai thành phần:
+
+```cpp title="include/transport.hpp — vận chuyển u"
+const Vec2 p{x * grid.h, (y + 0.5) * grid.h};
+const Vec2 flow = velocity(grid, p);
+grid.uNext[y * (grid.n + 1) + x] = sample(grid, grid.u, grid.n + 1, grid.n, {0, 0.5}, {p.x - dt * flow.x, p.y - dt * flow.y});
+```
+
+Ghi vào uNext. Hàm velocity vẫn đọc grid.u và grid.v, chưa có thành phần nào được swap.
+
+### Bước 2 — Backtrace từ cạnh v
+
+Offset v là `(0.5,0)` và stride N:
+
+```cpp title="include/transport.hpp — vận chuyển v"
+const Vec2 p{(x + 0.5) * grid.h, y * grid.h};
+const Vec2 flow = velocity(grid, p);
+grid.vNext[y * grid.n + x] = sample(grid, grid.v, grid.n, grid.n + 1, {0.5, 0}, {p.x - dt * flow.x, p.y - dt * flow.y});
+```
+
+Đừng chỉ dùng u để backtrace u và v để backtrace v. Quãng di chuyển là vector 2D, dù giá trị được lấy mẫu là một thành phần scalar.
+
+### Bước 3 — Swap cùng lúc rồi chiếu lại
+
+Chỉ sau hai lượt mới đổi buffer:
+
+```cpp title="include/transport.hpp — hoàn tất velocity advection"
+grid.u.swap(grid.uNext);
+grid.v.swap(grid.vNext);
+enforceWalls(grid);
+```
+
+Step gọi project tiếp theo rồi advectDensity. EnforceWalls đảm bảo backtrace/interpolation không làm normal wall có vận tốc; project dùng đúng state sau đó.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_7`. Pipeline hiện là advect velocity → project → advect khói. Chưa có viscosity hoặc lực. Preset streamfunction khởi đầu có divergence gần 0, giúp thấy phần divergence do advection tạo ra và phần projection sửa.
+
+## Thử làm sai để hiểu đúng
+
+1. Swap u trước khi tính vNext. Đảo hướng duyệt hoặc so với một bản tham chiếu đọc state cũ: kết quả khác. Khôi phục việc swap cả hai sau hai lượt.
+2. Bỏ project sau advection. Vẫn có khói xoay khá đẹp, nhưng div có thể tích lại qua nhiều tick. Khôi phục projection và đọc residual để biết phần sai số vẫn còn.
+
+## Tự kiểm tra kết quả
+
+Kết quả advection khớp một lượt tham chiếu duyệt ngược nhưng cùng đọc state cũ. Normal wall vẫn 0. Cả u/v có đúng offset/stride và lấy đủ flow vector. Sau step, report projection thuộc state mới. Theo dõi min/max scalar và tổng, không ép tổng về giá trị ban đầu.
+
+## Bài tập mở rộng
+
+Thử một dt lớn hơn trong bản sao thí nghiệm, ghi độ nhòe và div/residual; đừng chỉ so tốc độ chạy. Tiếp theo, [thêm viscosity implicit](/projects/stable-fluids/08-viscosity-implicit).

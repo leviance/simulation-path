@@ -55,6 +55,8 @@ report.refined = gradientError(fine, scene.potential);
 
 `passed` yêu cầu lỗi affine/curl(gradient) nhỏ hơn 1e−10, cùng hai lỗi gradient giảm hơn ba lần. Tolerance là tiêu chí kiểm, không phải thao tác sửa dữ liệu về đáp án.
 
+Các phép lấy max dùng `maximumError` đã viết ở Bài 06. Một mẫu NaN/Infinity phải làm báo cáo thất bại, kể cả khi mọi mẫu khác cho lỗi bằng 0. Tests cố ý chèn giá trị không hữu hạn vào field để kiểm gradient, divergence và curl; lỗi đã ghi nhận không được một mẫu hợp lệ phía sau xóa đi.
+
 Tests thêm bilinear của trường affine và quỹ đạo quay giải tích. Sau một giây Rotation, hạt bắt đầu `(0.5,0)` phải gần `(0.5*cos(1),0.5*sin(1))`; giảm dt làm sai số midpoint giảm. Đây là oracle khác với việc chạy lại cùng thuật toán hai lần.
 
 ### Bước 3 — Giữ tests hoạt động cả Release
@@ -101,4 +103,4 @@ Các kết quả thuộc miền, công thức, resolution và tolerance đã nê
 
 Thêm biểu đồ sai số theo spacing, hoặc kiểm một trường bạn tự thiết kế bằng đạo hàm tay. Viết một ca test mới trước khi thay công thức, rồi xác nhận nó thực sự thất bại khi cố ý sửa sai.
 
-Project 48 kết thúc tại đây. [Project 49 trong roadmap](/roadmap#project-49) sẽ dùng các phép toán trường để xây Stable Fluids 2D; nội dung đó hiện còn **Sắp ra mắt**.
+Project 48 kết thúc tại đây. Tiếp theo, [Project 49 — Stable Fluids 2D](/projects/stable-fluids) dùng các phép toán trường để xây mô phỏng khói có thể khuấy bằng chuột.

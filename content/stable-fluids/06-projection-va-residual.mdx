@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng pressure để sửa vận tốc và đo sai số còn lại
+
+## Vấn đề cần giải quyết
+
+Pressure đã được giải nhưng velocity chưa đổi. Ta sẽ trừ gradient pressure khỏi các cạnh nội bộ, đo divergence trước/sau và kiểm xem residual có giải thích đúng phần lỗi còn lại hay không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cạnh u giữa hai ô đọc pressure trái/phải; cạnh v đọc dưới/trên:
+
+$$
+u\leftarrow u-\Delta t\frac{p_R-p_L}{h},\qquad v\leftarrow v-\Delta t\frac{p_T-p_B}{h}.
+$$
+
+Đây là hiệu pressure hai tâm ô cách nhau h. Không dùng lại sai phân trung tâm của Project 48 tại một nút rồi ghi vào cạnh MAC.
+
+Với A=−DG, b=−Dv*/dt và residual r=Ap−b:
+
+$$
+D\mathbf{v}_{\mathrm{new}}=D\mathbf{v}^{*}+\Delta t\,Ap=\Delta t\,r.
+$$
+
+Vì vậy RMS divergence sau gần `dt*residual RMS`, tới sai số làm tròn/mean RHS. Nếu hai số lệch đáng kể, kiểm dấu, h, dt và cách xử lý tường trước khi tăng budget. Solver nhiều vòng không thể chữa hai toán tử không nhất quán.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-6" />
+
+Reset cảnh nén/giãn, chọn budget rồi N một bước để đọc projection trước/sau. Muốn so budget thấp hơn, reset trước rồi đổi budget để giữ cùng velocity đầu. Divergence giảm, nhưng không phải 0 tuyệt đối với số vòng hữu hạn.
+
+J vẫn chỉ giải **một vòng pressure**, như ở bài trước; nó không áp gradient vào velocity. N mới thực hiện projection ở checkpoint này. Đừng so divergence sau J rồi kết luận projection không hoạt động: bạn chưa chạy bước sửa vận tốc.
+
+## Viết code từng bước
+
+### Bước 1 — Sửa các cạnh u nội bộ
+
+Vòng x chạy từ 1 tới N−1 để không sửa hai tường dọc:
+
+```cpp title="include/pressure.hpp — gradient pressure tại u"
+grid.u[y * (grid.n + 1) + x] -= dt * (grid.pressure[y * grid.n + x] - grid.pressure[y * grid.n + x - 1]) / grid.h;
+```
+
+Hai pressure đọc là ô phải và ô trái của chính cạnh u này. Mỗi cạnh chỉ cập nhật một lần.
+
+### Bước 2 — Sửa v và giữ tường
+
+Vòng y của v chạy từ 1 tới N−1:
+
+```cpp title="include/pressure.hpp — gradient pressure tại v"
+grid.v[y * grid.n + x] -= dt * (grid.pressure[y * grid.n + x] - grid.pressure[(y - 1) * grid.n + x]) / grid.h;
+```
+
+Sau đó enforceWalls, rồi computeDivergence. Không sửa velocity toàn biên bằng một pressure ngoài miền tự đặt 0; tường normal velocity đã cố định nên pressure dùng Neumann.
+
+### Bước 3 — Lưu phép đo trước/sau
+
+Report chỉ có ý nghĩa khi ghi cùng một lần projection:
+
+```cpp title="include/pressure.hpp — lưu phép đo sau chiếu"
+report.after = computeDivergence(grid);
+grid.projection = report;
+grid.hasProjection = true;
+```
+
+Before đo ngay trước solve, residual đo sau solve, after đo sau sửa velocity. Nét khuấy sau này có thể thêm divergence mới; không dùng report cũ để gọi state mới là đã divergence-free.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_6`. Step project velocity rồi advect scalar. I in số trước/sau cùng residual. Ca kiểm chứng cuối dùng N=16 và 160 vòng, yêu cầu after nhỏ hơn 8% before. Đây là threshold cho ca được nêu, không áp tự động cho mọi resolution hoặc velocity do chuột tạo.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi phép trừ gradient thành cộng. Divergence có thể tăng, quan hệ với residual bị phá. Khôi phục dấu và kiểm trường gradient có thể được loại bỏ bằng pressure.
+2. Dùng mẫu số 2h như sai phân trung tâm. Phần sửa giảm một nửa, dù pressure solve đúng. Khôi phục h và so `after` với `dt*residual`.
+
+## Tự kiểm tra kết quả
+
+Normal wall giữ 0; div giảm trong ca chuẩn và after khớp dt*residual. Preset streamfunction đã có div gần 0 nên project không làm đổi đáng kể velocity. Pressure cộng một hằng số không đổi gradient. Báo lỗi còn lại, không clamp divergence về 0 để hiện PASS.
+
+## Bài tập mở rộng
+
+So cùng budget ở N=16/24/32 và giải thích tại sao lưới mịn có thể cần nhiều vòng hơn. Tiếp theo, [cho velocity tự vận chuyển](/projects/stable-fluids/07-advect-velocity).

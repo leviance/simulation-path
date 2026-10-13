@@ -72,6 +72,22 @@ export function useCanvasSize(canvasRef: RefObject<HTMLCanvasElement | null>): C
   return size;
 }
 
+export function usePauseOnReducedMotion(stop: () => void) {
+  useEffect(() => {
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const changed = () => {
+      // Pause is persistent: leaving reduced motion never resumes the experiment.
+      if (media.matches) stop();
+    };
+    media.addEventListener("change", changed);
+    const frame = media.matches ? requestAnimationFrame(stop) : null;
+    return () => {
+      media.removeEventListener("change", changed);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [stop]);
+}
+
 export function canvasPoint(
   event: { clientX: number; clientY: number },
   canvas: HTMLCanvasElement,

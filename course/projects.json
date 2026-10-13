@@ -334,5 +334,19 @@
     "sourceDirectory": "project-48-wind-map",
     "checkpointCount": 9,
     "demoId": "wind-map"
+  },
+  {
+    "id": "49",
+    "slug": "stable-fluids",
+    "sourceDirectory": "project-49-stable-fluids",
+    "checkpointCount": 11,
+    "demoId": "stable-fluids"
+  },
+  {
+    "id": "50",
+    "slug": "sph-water",
+    "sourceDirectory": "project-50-sph-water",
+    "checkpointCount": 10,
+    "demoId": "sph-water"
   }
 ]

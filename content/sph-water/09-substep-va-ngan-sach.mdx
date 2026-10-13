@@ -1,0 +1,94 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy bể nước với substep và ngân sách hữu hạn
+
+## Vấn đề cần giải quyết
+
+N giúp kiểm từng bước nhưng không đủ để quan sát cột nước đổ. Giờ ta chạy liên tục mà không buộc một frame bằng một physics step. SPH dùng nhiều substep nhỏ, và độ cứng pressure ảnh hưởng timestep phù hợp.
+
+Một yêu cầu ngang với độ chính xác là không để solver chạy bù vô hạn sau khi window bị treo hoặc mất focus. Khi máy không theo kịp, demo phải báo thời gian bỏ qua và dừng được; không cố giấu bằng cách nuốt dt lớn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tính vmax từ độ dài velocity, amax từ acceleration đã chuẩn bị. Dùng hai bound thực hành cùng dt tối đa:
+
+$$
+\Delta t=\min\left(0.001,\frac{0.25h}{c+v_{\max}},0.25\sqrt{\frac{h}{\max(a_{\max},10^{-12})}}\right).
+$$
+
+Acoustic bound hạn chế chuyển động của tín hiệu pressure; force bound hạn chế thay đổi do gia tốc lớn. Đây là lựa chọn bảo thủ cho **mô hình giảng dạy hiện tại**, không phải chứng minh ổn định mọi EOS/viscosity/boundary. Nếu dt nhỏ hơn 1e−6 s, solver dừng để người dùng reset; không tăng dt cưỡng bức rồi tiếp tục.
+
+Accumulator chứa wall-clock time chưa mô phỏng. Mỗi frame nhận tối đa 0.05 s và chạy tối đa 64 tick. Thời gian bị clamp hoặc phần dư bị bỏ khi chạm work cap cộng vào `dropped`. Do đó FPS thấp/nghẽn có thể làm simulated time chậm hơn wall clock, phải đọc số đo cùng hình.
+
+<InteractiveLab demo="sph-water" mode="sph-9" />
+
+## Viết code từng bước
+
+### Bước 1 — Chọn dt từ state và acceleration hiện tại
+
+Thêm `chooseDt` trong `include/solver.hpp`; duyệt state/acceleration để lấy max rồi tính:
+
+```cpp title="include/solver.hpp — acoustic và force bound"
+const double acoustic = 0.25 * h / (settings.soundSpeed + speed);
+const double forceBound = 0.25 * std::sqrt(h / std::max(force, 1e-12));
+const double dt = std::min({maxDt, acoustic, forceBound});
+if (!std::isfinite(dt) || dt < 1e-6) {
+    throw std::runtime_error("SPH step too small: reset or reduce the forcing");
+}
+return dt;
+```
+
+`prepare` giờ trả cả acceleration và dt mới. Trong các bài trước dt luôn 0.001 để cô lập từng thay đổi; từ bài này c/v/force có thể làm dt nhỏ hơn.
+
+Để kiểm các bound thật sự hoạt động, dùng các ca thuần trong tests thay vì chỉ nhìn bể. Với h=0,0585, velocity=0, c=20 và acceleration=0, acoustic bound là 0,00073125 s: nhỏ hơn maxDt, nên phải được chọn. Giữ velocity=0, c=12 nhưng cho amax=1e6, force bound khoảng 0,000060467 s sẽ chi phối. Trả maxDt cho cả hai ca là sai, dù một ca có force nhỏ vẫn vượt qua phép kiểm “dt không lớn hơn maxDt”.
+
+Trước khi lấy max, `chooseDt` kiểm state hữu hạn, acceleration đủ phần tử và từng vector acceleration hữu hạn. Nếu có NaN, đừng để phép `std::max` bỏ qua nó rồi tiếp tục. Tests còn thử force quá lớn khiến dt dưới1e−6: trường hợp đó phải báo lỗi, không âm thầm kẹp dt lên.
+
+### Bước 2 — Trừ đúng thời gian đã mô phỏng
+
+Trong `include/timing.hpp`, `FramePlan` giữ remainder/steps/dropped. Khởi tạo remainder từ accumulator cũ cộng elapsed đã clamp. Vòng tick chuẩn bị lực trước khi biết dt, chỉ tích phân nếu đủ thời gian:
+
+```cpp title="include/timing.hpp — một tick trong advanceFrame"
+const auto prepared = prepare(state, settings);
+if (plan.remainder + 1e-12 < prepared.dt) {
+    break;
+}
+integrate(state, prepared.acceleration, prepared.dt);
+if (pouring) {
+    pour(state, nozzle);
+}
+plan.remainder = std::max(0.0, plan.remainder - prepared.dt);
+++plan.steps;
+```
+
+Emitter thử phát **sau** tick hoàn tất. Tick tiếp theo dựng lại neighbors/density/pressure, bao gồm hạt mới. Việc thử phát theo simulated tick tránh phụ thuộc số motion event, nhưng đây vẫn là vòi có giới hạn spacing/capacity, chưa phải bộ đặt lưu lượng kg/s.
+
+### Bước 3 — Áp work cap và pause an toàn
+
+Vòng `while` giới hạn 64 bước. Khi chạm giới hạn:
+
+```cpp title="include/timing.hpp — báo và bỏ phần thời gian chưa xử lý"
+if (plan.steps == 64) {
+    plan.dropped += plan.remainder;
+    plan.remainder = 0;
+}
+```
+
+`main` đo elapsed bằng `SDL_GetTicksNS`, luôn cập nhật mốc cũ ngay cả khi paused. Space chỉ toggle pause và xóa accumulator; blur/minimize dừng solver, tắt pouring và bỏ capture. Canvas hủy RAF/listeners khi unmount, dùng DPR chung và chỉ cho từng bước khi reduced motion.
+
+## Ghép các phần lại
+
+Một frame có thể làm 0, 1 hoặc nhiều tick. N vẫn chỉ làm một tick và đưa demo về paused. Phím E bật/tắt vòi liên tục trong C++; checkbox tương đương trên Canvas. Chọn FPS 15/30/60 để thấy khác biệt tốc độ hiển thị và dropped time; đừng đồng nhất số frame với số bước vật lý.
+
+## Thử làm sai để hiểu đúng
+
+1. Đưa dt=elapsed của frame thẳng vào `integrate`. C=20 ở FPS thấp dễ làm force đẩy hạt quá xa; khôi phục các substep/bound.
+2. Bỏ work cap rồi giả lập elapsed=2 s trong test thuần. Không cần treo browser thật để thử; phép kiểm phải chứng minh vẫn tối đa 64 bước và dropped ít nhất 1.95 s.
+
+## Tự kiểm tra kết quả
+
+Dt không vượt bất kỳ bound nào; hai ca trên phải chọn lần lượt 0,00073125 và khoảng 0,000060467 s. Dữ liệu NaN/Infinity, acceleration thiếu phần tử hoặc dt dưới1e−6 phải bị từ chối. Cặp không wall/gravity cho cùng quỹ đạo theo lịch 30/60/120 FPS khi không có dropped time. Ca đó kiểm scheduling, không chứng minh mọi input/bể ở mọi FPS giống tuyệt đối. Blur rồi quay lại không chạy bù thời gian đã nghỉ; reduced motion vẫn dùng N được. Tắt reduced motion không tự chạy tiếp: người dùng phải bấm Chạy.
+
+## Bài tập mở rộng
+
+Thêm readout acoustic/force bound riêng để biết đại lượng nào đang giới hạn dt. Sau đó [kiểm chứng và chạy bản hoàn chỉnh](/projects/sph-water/10-kiem-chung-va-hoan-thien).

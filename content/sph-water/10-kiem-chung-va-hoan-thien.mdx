@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng SPH và chạy bể nước hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Bể đã có nước đổ và lan ngang, nhưng hình ảnh thuyết phục chưa đủ chứng minh solver đúng. Bài cuối gom những phép kiểm có kết quả biết trước: normalization, gradient, density, force đối xứng, viscosity, grid, emission và scheduling.
+
+Hai loại kết luận phải tách nhau: **mã thực hiện đúng công thức đang chọn** và **mô hình đủ chính xác cho mục đích sử dụng**. PASS ở ca chuẩn không có nghĩa density luôn sát rho0 hay boundary đã mô phỏng nước thực chính xác.
+
+## Hiểu ý tưởng trước khi viết code
+
+Oracle nên đi đường khác với hàm cần kiểm. Với kernel, cộng diện tích các vành mỏng thay vì chỉ tính W(0). Với gradient, lấy finite difference của W thay vì gọi lại gradient ở một vector khác:
+
+$$
+I\approx\sum_k2\pi r_kW(r_k)\Delta r,\qquad
+\partial_xW\approx\frac{W(|\mathbf r+\varepsilon\mathbf e_x|)-W(|\mathbf r-\varepsilon\mathbf e_x|)}{2\varepsilon}.
+$$
+
+Force nội kiểm trên cặp không gravity/wall, density/pressure đặt rõ. Grid kiểm cùng state với all-pairs, rồi so quỹ đạo. Ca dam chạy hữu hạn 300 bước kiểm finite/bounds và **báo độ nén thực**; nó không áp một ngưỡng density đẹp rồi chỉnh solver cho vừa.
+
+<InteractiveLab demo="sph-water" mode="sph-10" />
+
+## Viết code từng bước
+
+### Bước 1 — Thêm validator dùng state riêng
+
+Trong `include/diagnostics.hpp`, `validateWater` tạo ca mới, không sửa bể đang hiển thị. Vòng tích phân kernel dùng 2000 bin midpoint:
+
+```cpp title="include/diagnostics.hpp — normalization theo diện tích"
+for (int k = 0; k < bins; ++k) {
+    const double r = (k + 0.5) * dr;
+    integral += 2 * std::numbers::pi * r * kernel(r) * dr;
+}
+results.push_back({"Kernel 2D: integral near one", std::abs(integral - 1) < 1e-6, integral});
+```
+
+Gradient finite difference dùng epsilon=1e−6, tolerance=1e−4. Grid so index lists với all-pairs; cặp force có tolerance=1e−10. V trên C++ in từng PASS/FAIL/value ra terminal; Canvas hiện báo cáo riêng. Không trộn báo cáo này với compression của bể hiện tại.
+
+### Bước 2 — Giữ test hoạt động trong Release
+
+`tests/tests.cpp` không dùng assert vì NDEBUG có thể loại bỏ nó. Runner đếm failures và trả EXIT_FAILURE nếu có lỗi:
+
+```cpp title="tests/tests.cpp — runner không bị tắt ở Release"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL " << label << '\n';
+    }
+}
+```
+
+Test density cộng trực tiếp mọi position, có self/wall; pressure fixture rho=1100/c=12 phải cho 14400. Viscosity kiểm công suất phần lực riêng. Emission kiểm đúng mass/overlap/capacity; schedule so 30/60/120 FPS ở ca không discard. CTest không mở window nên không cần thao tác tay để kết thúc.
+
+### Bước 3 — Build và test hai configuration
+
+Trong thư mục source ZIP, dùng Visual Studio 2022:
+
+```bash title="Terminal — build và kiểm toàn bộ snapshot"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+SDL 3.4.8 được khóa qua FetchContent; CMake mặc định build target final, bật option trên để có starter và mười checkpoint. Ninja single-config cần hai build directory với CMAKE_BUILD_TYPE tương ứng; đừng hiểu `--config` là đổi configuration cho mọi generator.
+
+## Ghép các phần lại
+
+Source đầy đủ ở cuối trang gồm CMake, các header tách theo trách nhiệm, `src/main.cpp` và tests. Lõi không phụ thuộc SDL; view/input chỉ chuyển dữ liệu. Pipeline mỗi tick là neighbors → density → pressure → acceleration (gravity/pressure/artificial viscosity) → chọn dt → integrate/collision; emitter chạy sau tick.
+
+Đọc giới hạn trước khi dùng kết quả: EOS tuyến tính/clamp cho phép sai số density; mẫu wall là xấp xỉ, trần giải tích chỉ giữ demo hữu hạn; alpha không phải độ nhớt nước; chưa có surface tension hay reconstruction mặt nước. [PySPH](https://pysph.readthedocs.io/en/main/reference/equations.html) là nguồn đối chiếu công thức kernel/density/lực, không phải lời hứa rằng mọi lựa chọn boundary trong bài giống solver của thư viện.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay hệ số kernel 2D bằng 3D rồi chạy tests. Normalization/density phải báo lỗi, kể cả hình ảnh vẫn có một đám chấm xanh.
+2. Cho grid bỏ cell âm hoặc chỉ giữ cell hiện tại. Ca wall/neighbor oracle phải fail trước khi chạy whole dam. Sửa search thay vì tăng pressure để bù density sai.
+
+## Tự kiểm tra kết quả
+
+CMake build starter/checkpoint/final độc lập, Debug và Release đều CTest PASS. Chạy final: R/P, I, C/Q/G, arrows/Enter, Space/E và V hoạt động; mouse release/blur dừng vòi, resize không lệch input. Mass chỉ tăng theo emission thành công; dropped time được hiển thị. **PASS không thay thế việc đọc compression và dt của cảnh đang chạy.**
+
+## Bài tập mở rộng
+
+Viết báo cáo ngắn: so c=8/12/20 tại cùng preset/time, ghi maximum compression, dt và chi phí substep; so alpha riêng thay vì thay nhiều tham số cùng lúc. Project 51 sẽ chuyển SPH lên GPU và sang 3D; hiện còn [Sắp ra mắt trên roadmap](/roadmap), chưa có tutorial hoàn chỉnh.

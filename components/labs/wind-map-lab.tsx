@@ -40,6 +40,7 @@ import {
   setupCanvas,
   useCanvasSize,
   useReducedMotion,
+  usePauseOnReducedMotion,
 } from "./lab-shared";
 
 const labels: Record<Preset, string> = {
@@ -90,6 +91,7 @@ function WindExperiment({ stage }: { stage: number }) {
     accumulator.current = 0;
     release();
   }, [release]);
+  usePauseOnReducedMotion(stop);
   const resetTracers = () => {
     accumulator.current = 0;
     setPaused(true);

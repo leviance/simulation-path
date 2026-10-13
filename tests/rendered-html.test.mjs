@@ -38,4 +38,6 @@ import "./projects-45.cases.mjs";
 import "./projects-46.cases.mjs";
 import "./projects-47.cases.mjs";
 import "./projects-48.cases.mjs";
+import "./projects-49.cases.mjs";
+import "./projects-50.cases.mjs";
 import "./source-contract.cases.mjs";

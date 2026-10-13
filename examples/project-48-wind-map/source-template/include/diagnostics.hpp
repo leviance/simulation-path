@@ -1,11 +1,21 @@
 #pragma once
 #include "scenes.hpp"
+#include <limits>
 
 namespace wind {
 #if LAB_CHECKPOINT >= 6
+inline double maximumError(double current, double candidate) {
+    // std::max can hide NaN because comparisons with NaN are false.
+    if (!std::isfinite(current) || !std::isfinite(candidate)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return std::max(current, candidate);
+}
+
 struct GradientError {
     double interior = 0;
     double boundary = 0;
+    bool finite = true;
 };
 
 inline GradientError gradientError(const Field& field, Potential potential) {
@@ -15,10 +25,13 @@ inline GradientError gradientError(const Field& field, Potential potential) {
             const auto i = field.index(x, y);
             const Vec2 exact = exactGradient(world(field, x, y), potential);
             const double error = std::hypot(field.vx[i] - exact.x, field.vy[i] - exact.y);
+            if (!std::isfinite(error)) {
+                report.finite = false;
+            }
             if (x == 0 || y == 0 || x == field.width - 1 || y == field.height - 1) {
-                report.boundary = std::max(report.boundary, error);
+                report.boundary = maximumError(report.boundary, error);
             } else {
-                report.interior = std::max(report.interior, error);
+                report.interior = maximumError(report.interior, error);
             }
         }
     }
@@ -48,8 +61,8 @@ inline ValidationReport validateMap() {
         populate(field, scene);
         for (int y = 0; y < field.height; ++y) {
             for (int x = 0; x < field.width; ++x) {
-                report.derivativeError = std::max(report.derivativeError, std::abs(divergence(field, x, y) - expectedDiv[fixture]));
-                report.derivativeError = std::max(report.derivativeError, std::abs(curl(field, x, y) - expectedCurl[fixture]));
+                report.derivativeError = maximumError(report.derivativeError, std::abs(divergence(field, x, y) - expectedDiv[fixture]));
+                report.derivativeError = maximumError(report.derivativeError, std::abs(curl(field, x, y) - expectedCurl[fixture]));
             }
         }
     }
@@ -59,14 +72,14 @@ inline ValidationReport validateMap() {
     populate(field, scene);
     for (int y = 0; y < field.height; ++y) {
         for (int x = 0; x < field.width; ++x) {
-            report.gradientCurl = std::max(report.gradientCurl, std::abs(curl(field, x, y)));
+            report.gradientCurl = maximumError(report.gradientCurl, std::abs(curl(field, x, y)));
         }
     }
     report.coarse = gradientError(field, scene.potential);
     Field fine(65, 49);
     populate(fine, scene);
     report.refined = gradientError(fine, scene.potential);
-    report.passed = report.derivativeError < 1e-10 && report.gradientCurl < 1e-10 && report.refined.interior < report.coarse.interior / 3 && report.refined.boundary < report.coarse.boundary / 3;
+    report.passed = report.coarse.finite && report.refined.finite && report.derivativeError < 1e-10 && report.gradientCurl < 1e-10 && report.refined.interior < report.coarse.interior / 3 && report.refined.boundary < report.coarse.boundary / 3;
     return report;
 }
 #endif

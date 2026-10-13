@@ -1,0 +1,84 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép solver và chạy với timestep cố định
+
+## Vấn đề cần giải quyết
+
+Từng operator đã có, giờ cần một thứ tự chạy rõ ràng và vòng lặp không phụ thuộc FPS. Ta muốn dừng, tiến một bước, đổi tham số để đo tiếp và trở lại ứng dụng sau khi mất focus mà không chạy bù vô hạn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một tick dùng thứ tự:
+
+`buoyancy → diffuse velocity → project → advect velocity → project → advect density`
+
+Mouse impulse đã nằm trong state trước tick. Projection đầu chuẩn bị velocity sau lực/viscosity; projection sau sửa divergence phát sinh qua advection. Scalar đọc velocity cuối cùng. Pressure lưu sau tick thuộc lần solve cuối, không phải một lượng được advect như khói.
+
+Đây là tách toán tử cho hiệu ứng Stable Fluids, chưa phải phép tích phân chính xác toàn bộ phương trình cùng lúc. Dt cố định 1/60. Elapsed của frame chỉ quyết định **số tick**, không đổi dt của operator.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-10" />
+
+Chạy ở FPS hiển thị 15/30/60. Khi không bỏ thời gian, cùng số tick cho cùng trajectory. Đổi resolution dựng lại scene vì số mẫu khác; đổi viscosity/pressure budget/buoyancy chỉ pause để bạn giữ dữ liệu đang đo.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ operator trong một hàm step
+
+Sau kiểm Settings, phần velocity chạy theo thứ tự đã chọn:
+
+```cpp title="include/simulation.hpp — cập nhật velocity"
+addBuoyancy(grid, settings.buoyancy);
+diffuseVelocity(grid, settings.viscosity);
+project(grid, settings.iterations);
+advectVelocity(grid);
+project(grid, settings.iterations);
+```
+
+Sau đó advectDensity và đo divergence. Kiểm tham số trước khi sửa state để một budget/ν/buoyancy sai không tạo bước cập nhật nửa chừng. Không ghép physics vào drawGrid.
+
+### Bước 2 — Lên lịch số tick hữu hạn
+
+Plan nhận tối đa 0.25 giây, cộng accumulator, rồi tính số tick cần làm:
+
+```cpp title="include/simulation.hpp — giới hạn công việc mỗi frame"
+const double due = std::floor((total + 1e-10) / dt);
+StepPlan plan;
+plan.steps = static_cast<int>(std::min(4.0, due));
+plan.remainder = std::max(0.0, total - due * dt);
+plan.dropped = elapsed - accepted + (due - plan.steps) * dt;
+```
+
+Tối đa bốn tick. Phần quá ngân sách bị bỏ, không để lại một hàng đợi tăng mãi. Khi quá tải, mô phỏng chậm hơn thời gian thật; dropped time giúp thấy điều đó. Không báo tốc độ đúng thời gian nếu đã bỏ work.
+
+### Bước 3 — Chạy plan và quản lý pause
+
+Main gọi step đúng số lần:
+
+```cpp title="src/main.cpp — thực hiện các tick trong plan"
+for (int i = 0; i < plan.steps; ++i) {
+    if (!fluid::step(grid, settings)) {
+        failed = true;
+    }
+}
+```
+
+Space xóa accumulator khi đổi chạy/dừng; N dừng rồi tiến một bước. Blur giải phóng capture, dừng và xóa accumulator. Bộ đếm thời gian frame vẫn cập nhật khi paused, nên resume không nhận toàn bộ thời gian nghỉ làm elapsed.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_10`. G đổi N=24/32, T/Q/B đổi tham số, I đọc số. Canvas có FPS cap để thử timing; source C++ render theo frame thực tế nhưng vẫn cùng fixed tick. Hai phía không cần render cùng FPS để có cùng bước mô phỏng.
+
+R khôi phục scene, resolution và settings mặc định. Nếu so hai cấu hình từ cùng state đầu, reset trước rồi chọn tham số. Đổi layer hoặc vector overlay chỉ thay hiển thị.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng elapsed làm dt trong operator. Chạy ở 15 và 60 FPS sẽ khác trajectory, số vòng pressure vẫn giống nhưng RHS và backtrace đã đổi. Khôi phục dt=1/60.
+2. Giữ mọi tick quá ngân sách trong accumulator. Sau một frame nghẽn, ứng dụng có thể liên tục chạy bù và khó dừng. Khôi phục dropped time, kiểm frame mười giây chỉ trả tối đa bốn tick.
+
+## Tự kiểm tra kết quả
+
+Một giây với lịch 15/30/120 FPS tạo 60 tick khi không dropped và cho cùng mảng. Frame nghẽn có work hữu hạn, remainder nằm trong một dt. Pause/blur/reset không làm clock chạy bù. Đổi Settings không xóa scalar; đổi resolution tạo scene mới có đúng kích thước MAC.
+
+## Bài tập mở rộng
+
+Ghi thời gian mỗi operator để xem pressure chiếm bao nhiêu work ở từng N/budget. Thay đổi budget là thay độ chính xác solve, không chỉ FPS. Tiếp theo, [kiểm chứng solver và chạy bản hoàn chỉnh](/projects/stable-fluids/11-kiem-chung-va-hoan-thien).

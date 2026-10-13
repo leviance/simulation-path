@@ -1,0 +1,98 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng solver và chạy bản khói hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Khói chuyển động đẹp chưa chứng minh stride, dấu pressure hay timing đúng. Bài cuối thêm validator ca chuẩn trên dữ liệu riêng và tests thuần không mở window. Source hoàn chỉnh của toàn project có ở cuối bài và trong ZIP.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta kiểm từng lớp bằng những câu hỏi có đáp án riêng:
+
+| Phần | Ca kiểm |
+| --- | --- |
+| Lattice/sampler | Trường affine tái tạo đúng với offset scalar/u/v |
+| Scalar advection | `d=x` cho backtrace đúng dấu; scalar hằng giữ nguyên |
+| Divergence | Tổng flux nội bộ triệt tiêu; streamfunction có div gần 0 |
+| Pressure | Residual được tính lại bằng tổng hiệu hàng xóm độc lập |
+| Projection | Div giảm và after≈dt*residual, normal wall giữ 0 |
+| Viscosity | Kiểm `(I−νdtL)v=source`, norm energy giảm ở fixture |
+| Timing | Các lịch render cho cùng tick/state, hitch có ngân sách hữu hạn |
+
+Validator V dùng ca nén/giãn N=16, 160 vòng pressure và yêu cầu after nhỏ hơn 8% before. Nó còn kiểm scalar hằng dưới velocity zero và viscosity trên vortex. Đây là ca chuẩn riêng: PASS không thay thế div/residual của cấu hình đang tương tác.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-11" />
+
+Thử một impulse rồi N để đo state hiện tại, sau đó chạy ca chuẩn. Tick và mảng thí nghiệm đang xem không bị validator thay; validator chỉ pause. Nếu N=32/budget=40 có residual lớn, PASS ca chuẩn không làm sai số đó biến mất.
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm projection trên grid riêng
+
+Validator tạo fixture rồi chiếu với budget được nêu rõ:
+
+```cpp title="include/diagnostics.hpp — ca projection chuẩn"
+auto projected = makeGrid(16, Preset::Compressing);
+report.projection = project(projected, 160);
+```
+
+Tests thêm field streamfunction đã divergence-free, kiểm project không làm đổi đáng kể velocity đó. Việc lặp lại cùng solver hai lần không thay một oracle độc lập; quan hệ D/G/residual và flux biên giúp bắt lỗi cấu trúc.
+
+### Bước 2 — Tách operator khi kiểm viscosity
+
+Đo trước/sau riêng bước diffusion:
+
+```cpp title="include/diagnostics.hpp — ca viscosity chuẩn"
+report.beforeEnergy = measure(viscous).energy;
+diffuseVelocity(viscous, 0.003);
+report.afterEnergy = measure(viscous).energy;
+```
+
+Tests giữ source và tính lại Laplacian để kiểm phương trình implicit trên u/v. Với scalar, dùng field hằng và một phép dịch affine có đáp án, không chỉ so hình khói sau nhiều tick.
+
+### Bước 3 — Trả mã lỗi đúng trong Release
+
+Hàm check tăng failures và in tên ca. Cuối tests trả mã cho CTest:
+
+```cpp title="tests/tests.cpp — báo kết quả tests"
+if (failures != 0) {
+    return EXIT_FAILURE;
+}
+return EXIT_SUCCESS;
+```
+
+Không dùng assert bị tắt bởi NDEBUG. Tests không mở SDL window hoặc chạy main loop vô hạn. Lịch timing dùng dữ liệu nhỏ và số frame/tick hữu hạn.
+
+## Ghép các phần lại
+
+Tại thư mục ZIP có CMake, build các target và chạy hai cấu hình:
+
+```bash title="Terminal — Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Windows chạy `build/Debug/project_49_final.exe`; với generator một cấu hình, chọn CMAKE_BUILD_TYPE lúc configure, executable ở ngay build và dùng thư mục riêng cho cấu hình khác. ZIP có README, starter, 11 checkpoint, final và tests.
+
+P/R chọn/reset scene; 1/2 và `[`/`]` chọn brush; Enter đặt tại cursor. N/Space điều khiển bước/chạy, G chọn N, T chọn pressure budget, Q viscosity, B lực nổi, K khuấy chuột, WASD impulse, L/O hiển thị, I inspector và V ca chuẩn. Chương trình mở ở trạng thái pause.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm thay dấu RHS hoặc mẫu số gradient trong projection. Tests phải báo lỗi residual/divergence hoặc fixture shared, kể cả Release. Khôi phục công thức rồi chạy lại cả hai cấu hình.
+2. Tạm sửa check chỉ in “FAIL” nhưng không tăng failures, cuối chương trình vẫn trả success. CTest sẽ xanh dù kiểm sai. Khôi phục failures/EXIT_FAILURE và cố ý làm một điều kiện sai để xác nhận đường lỗi hoạt động.
+
+## Tự kiểm tra kết quả
+
+Starter và mọi checkpoint build được; CTest Debug/Release đều kiểm thực sự. Các ca bao phủ affine, offset, scalar hằng/min-max, flux, pressure residual, projection, buffer cũ, viscosity, impulse và scheduling. Kiểm thêm tương tác chuột/bàn phím, capture/blur, resize, pause/reset và lựa chọn layer.
+
+Stable Fluids ưu tiên một cập nhật chịu được timestep tương đối lớn; nó vẫn có diffusion số, lỗi split, lỗi backtrace và lỗi solve hữu hạn. Muốn đánh giá độ chính xác phải đo các lỗi đó trên cấu hình cụ thể. [Bài gốc của Stam](https://www.research.autodesk.com/app/uploads/2023/03/realtime-fluid-dynamics-for.pdf_recpiqfORriEwf7FN.pdf) và [ghi chú MAC/pressure của Bridson](https://www.cs.ubc.ca/~rbridson/fluidsimulation/fluids_notes.pdf) là hai tài liệu để đọc tiếp.
+
+## Bài tập mở rộng
+
+Thêm biểu đồ residual theo iteration hoặc một ca pressure từ potential biết trước. Chỉ sau khi các toán tử hiện tại được kiểm chứng mới thêm obstacle, nguồn khói liên tục hoặc kỹ thuật giảm diffusion số.
+
+Project 49 kết thúc tại đây. Tiếp tục với [Project 50 — bể nước bằng hạt SPH 2D](/projects/sph-water), bắt đầu từ vẽ hạt và thành bể trước khi viết density/pressure.

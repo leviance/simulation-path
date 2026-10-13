@@ -48,14 +48,19 @@ Oracle không đọc Field.vx/vy. Vì thế nó vẫn phát hiện lỗi nếu c
 ```cpp title="include/diagnostics.hpp — đo sai số từng nút"
 const Vec2 exact = exactGradient(world(field, x, y), potential);
 const double error = std::hypot(field.vx[i] - exact.x, field.vy[i] - exact.y);
+if (!std::isfinite(error)) {
+    report.finite = false;
+}
 if (x == 0 || y == 0 || x == field.width - 1 || y == field.height - 1) {
-    report.boundary = std::max(report.boundary, error);
+    report.boundary = maximumError(report.boundary, error);
 } else {
-    report.interior = std::max(report.interior, error);
+    report.interior = maximumError(report.interior, error);
 }
 ```
 
 Không lấy một giá trị trung bình chung: một hàng mép sai có thể bị hàng nghìn nút giữa che đi. Khi preset không phải Gradient hoặc có cộng xoáy, vx/vy không còn là gradient thuần của phi; inspector không dùng oracle này để đánh giá trường đó.
+
+`maximumError` kiểm `std::isfinite` trước khi lấy max. Nếu một giá trị là NaN hoặc Infinity, hàm trả Infinity và giữ lỗi đó qua các mẫu tiếp theo; `finite` cũng chuyển thành false. Không dùng thẳng `std::max(0, NaN)`: phép so sánh với NaN có thể khiến max giữ lại 0 và che mất lỗi. Tests có mẫu không hữu hạn ở cả trong miền lẫn mép, không chỉ kiểm field hợp lệ.
 
 ### Bước 3 — Đổi lưới nhưng giữ miền
 

@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khói ở ô này đã đi từ đâu tới?
+
+## Vấn đề cần giải quyết
+
+Brush đã tạo được dữ liệu. Giờ ta cho khói đi theo một gió cố định `(0.2,0)` trước khi viết velocity solver. Thay vì đẩy từng ô cũ sang một ô mới và xử lý chỗ trống/chồng lấn, ta hỏi mỗi ô mới cần lấy giá trị từ đâu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nếu gió đi phải, khói tới vị trí p đã ở phía trái một bước trước. Semi-Lagrangian lần ngược:
+
+$$
+p_{\mathrm{from}}=p-\Delta t\,v(p),\qquad d_{\mathrm{new}}(p)=d_{\mathrm{old}}(p_{\mathrm{from}}).
+$$
+
+Dt=1/60, velocity theo world/giây. Sampler mới đổi world sang lattice, nên không nhân N hai lần trong backtrace. Điểm from thường không trùng tâm ô; dùng bilinear như Project 48 nhưng scalar lattice có offset `(0.5,0.5)`.
+
+Bilinear là trung bình có trọng số không âm, tổng bằng 1. Với dữ liệu hữu hạn, một bước không tạo cực trị scalar mới. Tuy nhiên, nội suy làm nhòe chi tiết và **không bảo toàn tổng scalar chính xác**. Không cần CFL≤1 để giữ tính chất khoảng giá trị của bước lấy mẫu này, nhưng backtrace quá dài vẫn có thể kém chính xác.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-3" />
+
+N tiến từng bước. Khói dịch sang phải. Bài này dùng gió cho trước, chưa áp dụng điều kiện hộp kín cho một velocity solver; khi from vượt vùng mẫu, sampler lặp giá trị sát mép.
+
+## Viết code từng bước
+
+### Bước 1 — Tìm điểm xuất phát từ tâm ô
+
+Với mỗi ô, tạo p tại tâm và lần ngược theo flow:
+
+```cpp title="include/transport.hpp — backtrace scalar"
+const Vec2 flow{0.2, 0};
+const Vec2 from{p.x - dt * flow.x, p.y - dt * flow.y};
+grid.densityNext[y * grid.n + x] = sample(grid, grid.density, grid.n, grid.n, {0.5, 0.5}, from);
+```
+
+Flow cho trước chỉ xuất hiện ở checkpoint 03. Từ bài 4, lời gọi lấy velocity từ các cạnh MAC thay dòng khởi tạo này.
+
+### Bước 2 — Nội suy đúng lattice
+
+Sampler đổi vị trí về chỉ số liên tục, trừ offset rồi giới hạn vùng mẫu:
+
+```cpp title="include/transport.hpp — đổi world sang lattice"
+const double gx = std::clamp(p.x * grid.n - offset.x, 0.0, static_cast<double>(width - 1));
+const double gy = std::clamp(p.y * grid.n - offset.y, 0.0, static_cast<double>(height - 1));
+```
+
+Sau floor, chọn ô nội suy cuối đúng cách ở mép trên/phải và lấy tx/ty. Blend bốn giá trị:
+
+```cpp title="include/transport.hpp — nội suy bilinear"
+const double bottom = (1 - tx) * values[i] + tx * values[i + 1];
+const double top = (1 - tx) * values[i + width] + tx * values[i + width + 1];
+return (1 - ty) * bottom + ty * top;
+```
+
+Clamp ở đây định nghĩa cách mở rộng trường ngoài miền lấy mẫu. Nó khác việc clamp dữ liệu scalar để che lỗi solver. Điều kiện tường cho velocity sẽ được xây riêng.
+
+### Bước 3 — Đọc density cũ, ghi densityNext
+
+Mỗi ô đọc cùng thời điểm cũ. Chỉ khi xong hai vòng lặp mới đổi mảng:
+
+```cpp title="include/transport.hpp — kết thúc advection scalar"
+grid.density.swap(grid.densityNext);
+```
+
+Không cần xóa densityNext vì tất cả ô đã được gán. Cập nhật tại chỗ sẽ làm ô bên phải đọc mẫu đã di chuyển của ô bên trái, phụ thuộc hướng duyệt.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_3`. N gọi step một lần rồi tăng tick; vẫn chưa chạy tự động. Main render state mới sau input. Bài [Real-Time Fluid Dynamics for Games của Jos Stam](https://www.research.autodesk.com/app/uploads/2023/03/realtime-fluid-dynamics-for.pdf_recpiqfORriEwf7FN.pdf) là tài liệu gốc cho hướng tách các bước của Stable Fluids; project này sẽ dùng layout MAC khi thêm pressure.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dấu trừ trong from thành dấu cộng. Gió đi phải nhưng hình khói đi trái. Khôi phục dấu, thử một scalar tăng tuyến tính theo x để kiểm số tại một ô giữa miền.
+2. Quên offset 0.5. Với flow=0, sampler có thể vẫn làm trường scalar dịch/nhòe vì đang đọc như mẫu tại nút. Khôi phục offset, kiểm scalar hằng và kiểm field bất kỳ dưới gió 0.
+
+## Tự kiểm tra kết quả
+
+Scalar hằng giữ nguyên. Gió `(0.2,0)` lần ngược sang trái; ở một ô trong miền có `d=x`, kết quả là `x−dt*0.2`. Min/max không vượt khoảng mẫu tới sai số làm tròn. Tổng scalar có thể đổi; báo số đo thay vì tuyên bố bảo toàn. Tick tăng đúng một mỗi N.
+
+## Bài tập mở rộng
+
+So nhiều lần advection dt nhỏ với ít lần dt lớn trên cùng thời gian. Ghi độ nhòe, min/max và tổng scalar. Tiếp theo, [đặt velocity trên cạnh với lưới MAC](/projects/stable-fluids/04-luoi-mac-va-divergence).

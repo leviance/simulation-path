@@ -66,6 +66,27 @@ int main() {
     const auto refined = wind::gradientError(fine, scene.potential);
     check(refined.interior < coarse.interior / 3 && refined.boundary < coarse.boundary / 3, "Gaussian gradient converges at both interior and boundary");
 
+    // NaN must fail diagnostics even when the other samples have zero error.
+    const double invalidValues[] = {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+    for (const double value : invalidValues) {
+        for (const int x : {0, 3}) {
+            wind::Field invalid;
+            wind::Scene bowlScene;
+            bowlScene.preset = wind::Preset::Gradient;
+            wind::populate(invalid, bowlScene);
+            invalid.vx[invalid.index(x, 3)] = value;
+            const auto error = wind::gradientError(invalid, bowlScene.potential);
+            double regionError = error.interior;
+            if (x == 0) {
+                regionError = error.boundary;
+            }
+            check(!error.finite && std::isinf(regionError) && !(regionError < 1e-10), "nonfinite gradient is never reported as zero");
+            check(std::isinf(wind::maximumError(0, std::abs(wind::divergence(invalid, x + 1, 3)))), "nonfinite divergence fails aggregation");
+            check(std::isinf(wind::maximumError(0, std::abs(wind::curl(invalid, x, 4)))), "nonfinite curl fails aggregation");
+        }
+        check(std::isinf(wind::maximumError(wind::maximumError(0, value), 0)), "invalid error cannot be overwritten by later valid samples");
+    }
+
     // Bilinear phải tái tạo một trường affine ở giữa nút và ở hai đầu miền.
     for (int y = 0; y < field.height; ++y) {
         for (int x = 0; x < field.width; ++x) {

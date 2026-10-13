@@ -32,6 +32,7 @@ import {
   setupCanvas,
   useCanvasSize,
   useReducedMotion,
+  usePauseOnReducedMotion,
 } from "./lab-shared";
 
 function PlateExperiment({ stage }: { stage: number }) {
@@ -67,6 +68,7 @@ function PlateExperiment({ stage }: { stage: number }) {
     accumulator.current = 0;
     release();
   }, [release]);
+  usePauseOnReducedMotion(stop);
   const reset = (nextPreset = preset) => {
     stop();
     field.current = makeField(nextPreset);

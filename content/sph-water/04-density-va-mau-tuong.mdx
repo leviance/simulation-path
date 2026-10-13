@@ -1,0 +1,91 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo density từ hàng xóm và xử lý phần thiếu gần tường
+
+## Vấn đề cần giải quyết
+
+Ta đã biết trọng số của một hạt tại một khoảng cách. Giờ hãy trả lời: vùng quanh hạt i đang chứa bao nhiêu khối lượng trên một đơn vị diện tích? Đây là density dùng để suy pressure, không phải màu hay số đếm chấm tròn.
+
+Một điểm dễ mắc lỗi là hạt sát đáy có ít hàng xóm vì phía dưới không có nước. Nếu bỏ qua chuyện đó, solver sẽ coi vùng sát thành thiếu density dù nước đang chạm thành. Bài này thêm mẫu tĩnh bên ngoài bể để bù một phần support.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi hạt có mass m=rho0*spacing²=2.025 kg trong mô hình 2D. Rho0=1000 **kg/m²**, không phải mật độ thể tích kg/m³ của nước thật. Density được tính bằng tổng:
+
+$$
+\rho_i=\sum_j m_jW(|\mathbf x_i-\mathbf x_j|).
+$$
+
+Tổng bao gồm **self**: j=i đóng góp mW(0), dù self gradient bằng 0. Trong lòng lattice, tổng gần rho0; tại mặt trên của cột, thiếu hàng xóm nên thấp hơn. Bài này không nhân một hệ số tùy ý để ép mọi density bằng rho0.
+
+Ta dựng ba lớp mẫu ngoài đáy/hai bên, cùng spacing/mass với hạt nước. Mẫu không chuyển động và không được tính vào tổng mass nước. Không có mẫu SPH trên cùng; collision trần an toàn ở Bài 02 chỉ giữ demo hữu hạn, không sửa thiếu support ở mép trên.
+
+<InteractiveLab demo="sph-water" mode="sph-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo danh sách vị trí và all-pairs
+
+Trong `include/neighbors.hpp`, ghép positions theo thứ tự: tất cả hạt nước trước, mẫu tường sau. Index j nhỏ hơn particle count là nước; phần còn lại là wall. Trước khi tối ưu, thử mọi j cho mỗi i và lọc khoảng cách thật:
+
+```cpp title="include/neighbors.hpp — lọc support và giữ self"
+for (const auto j : nearby) {
+    const auto displacement = subtract(p.position, result.positions[j]);
+    if (dot(displacement, displacement) < support * support) {
+        list.push_back(j);
+    }
+}
+```
+
+`nearby` lúc này chứa mọi index. Cutoff dùng bình phương khoảng cách để tránh căn cho ứng viên bị loại; khi gọi kernel vẫn phải lấy r, không dùng r².
+
+### Bước 2 — Cộng mass nhân kernel cho từng hạt
+
+Thêm `computeDensity` trong `include/solver.hpp`. Không đổi position/velocity ở đây:
+
+```cpp title="include/solver.hpp — summation density"
+auto& p = state.particles[i];
+double density = 0;
+for (const auto j : neighbors.lists[i]) {
+    density += mass * kernel(length(subtract(p.position, neighbors.positions[j])));
+}
+p.density = density;
+```
+
+Hoàn tất density của cả state trước khi tính pressure hoặc acceleration. `prepare` gọi hàm này; phần trước khi render cũng làm mới density tại position đang hiển thị để inspector không đọc dữ liệu của bước trước.
+
+### Bước 3 — Thêm mẫu tĩnh mà không nhân đôi góc
+
+Trong `makeState`, duyệt lattice mở rộng. Điều kiện OR dưới đây thêm mỗi vị trí ngoài miền đúng một lần, kể cả góc thuộc cả đáy và thành:
+
+```cpp title="include/model.hpp — mẫu ngoài đáy và hai bên"
+for (int y = -3; y <= 18; ++y) {
+    for (int x = -3; x <= 24; ++x) {
+        Vec2 position{spacing / 2 + x * spacing, spacing / 2 + y * spacing};
+        if (position.y < 0 || position.x < 0 || position.x > 1) {
+            state.walls.push_back(position);
+        }
+    }
+}
+```
+
+Ba lớp đủ che support 2h theo lattice này. Các chấm xám giúp thấy cách bù support nhưng không phải hình học collision. Nếu đổi spacing/h, phải xét lại số lớp; không mặc định ba lớp đúng với mọi tham số.
+
+## Ghép các phần lại
+
+Luồng mới là `buildNeighbors → computeDensity`, sau đó vẫn gravity và collision như cũ. Cột chưa có force SPH. Màu xanh/tím/hồng dựa vào rho/rho0, không phải pressure; dùng inspector để đọc số thật.
+
+Ở lattice ban đầu, một hạt đủ sâu trong lòng cột cho rho/rho0 xấp xỉ 0.999947. Không đòi mọi hạt có số ấy: mặt thoáng và góc là các vị trí có support khác nhau.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ j=i khỏi tổng density. Hạt đơn giữa miền sẽ có density bằng 0, gây mẫu số lực sai ở bài sau. Self phải giữ trong density nhưng bỏ trong force.
+2. Thêm góc một lần trong vòng đáy rồi thêm lại trong vòng thành. Density góc tăng giả tạo. Khôi phục một vòng lattice với điều kiện OR.
+
+## Tự kiểm tra kết quả
+
+Hạt đơn không wall có density=mW(0), không phải rho0. So hạt sát đáy với/không wall samples: có wall thì tổng lớn hơn. Viết oracle cộng trực tiếp mọi position bằng mW rồi so với danh sách cutoff. Hạt mặt thoáng có thể thiếu density; đó là giới hạn của summation gần mặt thoáng, không phải lý do clamp density.
+
+## Bài tập mở rộng
+
+Lập bảng rho/rho0 của hạt đáy, giữa và trên cùng. Giải thích khác biệt bằng vòng support. Bài tiếp theo sẽ [biến độ nén thành pressure và lực đối xứng](/projects/sph-water/05-pressure-va-luc-doi-xung).

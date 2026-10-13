@@ -30,6 +30,7 @@ import {
   setupCanvas,
   useCanvasSize,
   useReducedMotion,
+  usePauseOnReducedMotion,
 } from "./lab-shared";
 
 const colors = ["#0b1020", "#77849d", "#e5c07b", "#61afef"];
@@ -56,11 +57,21 @@ function SandExperiment({ stage }: { stage: number }) {
   const accumulator = useRef(0);
 
   const publish = useCallback(() => setSnapshot(structuredClone(gridRef.current)), []);
-  const reset = (nextPreset = preset) => {
+  const release = useCallback(() => {
     const activePointer = pointer.current;
-    if (activePointer !== null && canvasRef.current?.hasPointerCapture(activePointer)) {
+    pointer.current = null;
+    previous.current = null;
+    if (activePointer !== null && canvasRef.current?.hasPointerCapture(activePointer))
       canvasRef.current.releasePointerCapture(activePointer);
-    }
+  }, []);
+  const stop = useCallback(() => {
+    setPaused(true);
+    accumulator.current = 0;
+    release();
+  }, [release]);
+  usePauseOnReducedMotion(stop);
+  const reset = (nextPreset = preset) => {
+    stop();
     gridRef.current = makeScene(stage, nextPreset);
     accumulator.current = 0;
     pointer.current = null;
@@ -85,26 +96,17 @@ function SandExperiment({ stage }: { stage: number }) {
   };
 
   useEffect(() => {
-    const loseFocus = () => {
-      setPaused(true);
-      accumulator.current = 0;
-      const activePointer = pointer.current;
-      if (activePointer !== null && canvasRef.current?.hasPointerCapture(activePointer)) {
-        canvasRef.current.releasePointerCapture(activePointer);
-      }
-      pointer.current = null;
-      previous.current = null;
-    };
     const visibility = () => {
-      if (document.hidden) loseFocus();
+      if (document.hidden) stop();
     };
-    window.addEventListener("blur", loseFocus);
+    window.addEventListener("blur", stop);
     document.addEventListener("visibilitychange", visibility);
     return () => {
-      window.removeEventListener("blur", loseFocus);
+      window.removeEventListener("blur", stop);
       document.removeEventListener("visibilitychange", visibility);
+      release();
     };
-  }, []);
+  }, [stop, release]);
 
   useEffect(() => {
     if (paused || reducedMotion || stage < 6) return;
