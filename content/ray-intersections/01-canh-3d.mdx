@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng cảnh để nhìn thấy thứ mình sắp chọn
+
+## Vấn đề cần giải quyết
+
+Bạn nhấp vào một quả cầu trên màn hình. Làm sao chương trình biết cú nhấp ấy chạm quả cầu ở đâu trong không gian 3D? Ta sẽ trả lời câu hỏi đó bằng một tia từ camera. Nhưng trước hết phải có cảnh để ngắm: một mặt phẳng, quả cầu, hộp và tam giác.
+
+Bài này chỉ dựng hình. Chưa có tia, chưa có chọn vật thể. Bạn sẽ thấy bốn hình bằng khung dây và học phần dữ liệu nào là tọa độ world, phần nào là pixel. Làm rõ hai phần này ngay từ đầu sẽ tránh lỗi “tia tính đúng nhưng dấu chạm lại lệch hình”.
+
+Tải ZIP ở trang tổng quan, giải nén và mở terminal trong thư mục có CMakeLists.txt. Starter đã có window, renderer, event loop và cleanup. Chạy starter để xác nhận nền tối xuất hiện, cửa sổ đổi kích thước được và Esc đóng ứng dụng. Nếu starter chưa chạy, hãy quay lại Getting Started trước khi thêm toán.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cảnh dùng x sang phải, y hướng lên; camera ở (0,1.5,−7), nhìn về (0,0.3,0). Z dương là phía xa camera ban đầu. World không dùng quy ước y xuống của SDL.
+
+Camera có ba hướng: forward nhìn về target, right đi ngang, up đi lên. Với một điểm world, lấy vector từ camera đến điểm, rồi dot với ba hướng ấy. Thành phần forward là depth. Điểm xa hơn có hình nhỏ hơn vì x/y được chia cho depth.
+
+$$
+forward=\frac{target-origin}{\|target-origin\|},\quad
+right=\frac{upWorld\times forward}{\|upWorld\times forward\|},\quad
+up=forward\times right
+$$
+
+Đây là perspective projection đã gặp ở Project 11–15, nhưng ta giữ nó ngay trong project để ZIP chạy độc lập. Vertical FOV là 55°. Scale phụ thuộc chiều cao, vì vậy resize theo chiều ngang không làm hình bị kéo dãn.
+
+<InteractiveLab demo="ray-intersections" mode="ray52-1" />
+
+Hãy nhận diện từng hình: sphere màu xanh, box vàng, triangle tím, plane là lưới xám. Chưa có picking nên các điều khiển tia bị tắt. Khung dây không che khuất; một cạnh ở xa vẫn có thể nhìn xuyên qua hình phía trước. Ta chưa dùng hình ảnh để quyết định vật thể gần nhất.
+
+## Viết code từng bước
+
+### Bước 1 — Đọc bộ khung trước khi thêm hình
+
+Trong src/main.cpp, phần mở cửa sổ giữ cách viết trực tiếp như các project đầu:
+
+```cpp title="src/main.cpp — window và renderer"
+SDL_Window* window = SDL_CreateWindow("Ray intersection lab", picking::viewWidth, picking::viewHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+if (window == nullptr) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+```
+
+Nhánh renderer thất bại phải hủy window rồi SDL_Quit; source đầy đủ dưới bài có nhánh này. Renderer dùng logical presentation 900×640 kiểu letterbox. Sau resize, nội dung vẫn dùng hệ pixel 900×640; viền đen không phải một phần của cảnh. Bài 02 sẽ đổi mouse event sang chính hệ đó.
+
+### Bước 2 — Tạo dữ liệu hình học trong world
+
+Trong include/shapes.hpp, sphere chỉ cần tâm và bán kính:
+
+```cpp title="include/shapes.hpp — dữ liệu sphere"
+struct Sphere {
+    Vec3 center{-1.5, 0, 0};
+    double radius = 0.85;
+};
+```
+
+Plane giữ một điểm và normal; box giữ minimum/maximum trên ba trục; triangle giữ A/B/C. Scene gom bốn struct ấy. Không lưu pixel vào chúng. Sphere được vẽ bằng ba đường tròn lớn, nhưng Bài 04 sẽ tính giao với mặt cầu thật, không giao với các đoạn khung dây.
+
+### Bước 3 — Chiếu world rồi vẽ các cạnh
+
+Thêm project trong include/camera.hpp:
+
+```cpp title="include/camera.hpp — perspective projection"
+const Basis basis = cameraBasis(camera);
+const Vec3 relative = subtract(point, camera.origin);
+const double depth = dot(relative, basis.forward);
+if (depth <= 0.05 || width <= 0 || height <= 0) {
+    return std::nullopt;
+}
+const double scale = height / (2 * camera.tanHalfFov * depth);
+return Pixel{width / 2 + scale * dot(relative, basis.right), height / 2 - scale * dot(relative, basis.up)};
+```
+
+Dấu trừ ở y chuyển world-up thành screen-down. Điểm trước near plane không được đem chia. Hàm line trong include/view.hpp còn cắt đoạn qua near plane trước khi project hai đầu; nếu chỉ bỏ đầu nằm sau camera, một cạnh cắt qua vùng nhìn sẽ biến mất hoàn toàn.
+
+drawScene vẽ lưới plane, ba great circle của sphere, mười hai cạnh box và ba cạnh triangle bằng SDL_RenderLine. Main gọi nó sau SDL_RenderClear và trước SDL_RenderPresent. Đây là toàn bộ đường đi từ dữ liệu world đến cửa sổ, chưa có renderer 3D hoặc OpenGL mới.
+
+## Ghép các phần lại
+
+Build target project_52_checkpoint_1:
+
+```bash title="Terminal — chạy cảnh đầu tiên"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_52_checkpoint_1 --parallel 2
+```
+
+Trên Windows/Visual Studio, chạy build/Debug/project_52_checkpoint_1.exe. Với generator single-config, chọn CMAKE_BUILD_TYPE và chạy executable trực tiếp trong build directory.
+
+Kết quả là bốn hình đứng yên. Khi resize cửa sổ, nội dung letterbox thay đổi kích thước nhưng sphere vẫn tròn. Starter chỉ có nền trống; checkpoint 1 mới có cảnh.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dấu trừ y trong project thành cộng. Trước khi chạy, dự đoán plane nằm phía nào; sau đó khôi phục dấu.
+2. Bỏ phép chia cho depth. Sphere và triangle ở các độ sâu khác nhau sẽ không còn nhỏ đi đúng cách. So với bản đúng rồi hoàn tác.
+
+## Tự kiểm tra kết quả
+
+Bốn hình xuất hiện, sphere tròn, plane nằm dưới các vật thể. Resize không sửa world coordinates; Esc và nút đóng cửa sổ hoạt động. Không có hit, ID hoặc ray tự xuất hiện ở checkpoint này. Toàn bộ mã chạy được của bài nằm phía dưới, không cần ghép từ những fragment trên.
+
+## Bài tập mở rộng
+
+Thay vị trí sphere và xác nhận chỉ dữ liệu Scene đổi, còn project và draw không đổi. Khi đã nhìn được cảnh, sang [Bài 02 — tạo tia từ chuột](/projects/ray-intersections/02-tao-tia-tu-chuot).

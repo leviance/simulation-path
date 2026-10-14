@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ lát cắt đầu tiên trước khi dựng volume
+
+## Vấn đề cần giải quyết
+
+Một khối dữ liệu 3D khó học nếu việc đầu tiên là cấp phát một mảng rất lớn rồi chỉ in vài con số. Ta sẽ làm ngược lại: vẽ một ảnh mức xám trước, rồi mới giải thích ảnh ấy lấy dữ liệu từ đâu.
+
+Bài này mở SDL window và hiển thị một lát XY của phantom tự tạo. Phantom là một hàm trả scalar trong [0,1] ở mỗi vị trí world. Scalar ở đây chỉ là giá trị tổng hợp để học cách xem volume: không phải density có đơn vị vật lý, không phải Hounsfield Units và không dùng cho chẩn đoán.
+
+Tải ZIP ở trang tổng quan, mở thư mục có CMakeLists.txt và chạy starter. Starter chỉ có nền tối, event loop và cleanup. Checkpoint 1 mới thêm texture và lát cắt; chưa lưu cả khối vào mảng 3D.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hình dung một mặt phẳng đi xuyên qua khối. Giữ z cố định, mỗi pixel hỏi hàm phantom tại một cặp x/y trên mặt phẳng ấy. Scalar 0 được vẽ đen, 1 được vẽ trắng.
+
+Phantom gồm một Gaussian lớn và hai Gaussian nhỏ đặt lệch nhau. Dùng hình bất đối xứng giúp nhận ra lỗi đảo hoặc tráo trục; một quả cầu đặt giữa khối thường che mất những lỗi đó.
+
+$$
+G(p;c,r)=\exp\left(-\sum_{a=0}^{2}\left(\frac{p_a-c_a}{r_a}\right)^2\right)
+$$
+
+Ta dùng Grid để mô tả vùng world rộng 3.2, cao 3.84, sâu 4.8 world units. Trong bài này Grid chỉ cho biết vùng cần vẽ, chưa có volume allocation. C++ dựng ảnh 128×128, lấy mẫu ở tâm pixel (x+0.5,y+0.5), rồi fit ảnh theo tỉ lệ vật lý để không kéo dãn hình.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-1" />
+
+Nhìn vùng sáng lớn và các vùng nhỏ lệch tâm. Các nút đổi volume/lát vẫn bị tắt vì bài này chỉ dựng một mặt phẳng cố định. Canvas tính trực tiếp phantom giống checkpoint 1, không giả vờ đã có dữ liệu voxel.
+
+## Viết code từng bước
+
+### Bước 1 — Đọc bộ khung và tạo streaming texture
+
+Main khởi tạo window/renderer như các project đầu; nhánh lỗi hủy những tài nguyên đã tạo. Phần mới là texture:
+
+```cpp title="src/main.cpp — texture chứa ảnh RGBA"
+texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, slices::Image::side, slices::Image::side);
+if (texture == nullptr || !SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST)) {
+    failed = true;
+    running = false;
+    break;
+}
+```
+
+Textures nằm trong một array đã khởi tạo bằng nullptr; vòng lặp tạo đủ ba texture nhỏ để dùng lại về sau. Bài này chỉ vẽ view 0. RGBA32 cho phép ta ghi bốn byte R/G/B/A theo thứ tự, không phụ thuộc cách một số nguyên 32-bit nằm trong bộ nhớ.
+
+Filter của SDL là nearest. Việc nội suy scalar ở Bài 05 sẽ do ta tính trên CPU; không để bilinear của texture âm thầm làm mượt ảnh rồi tưởng đó là trilinear 3D.
+
+### Bước 2 — Tính scalar rồi đổi thành byte màu
+
+Phantom trong include/model.hpp:
+
+```cpp title="include/model.hpp — phantom bất đối xứng"
+const double body = 0.6 * gaussian(point, {0, 0, 0}, {0.85, 1.1, 1.3});
+const double insert = 0.75 * gaussian(point, {-0.55, -0.45, 0.35}, {0.22, 0.3, 0.5});
+const double marker = 0.8 * gaussian(point, {0.9, 0.85, -0.6}, {0.18, 0.25, 0.22});
+return std::clamp(0.04 + body + insert + marker, 0.0, 1.0);
+```
+
+makeImage trong include/display.hpp đổi mỗi pixel centre sang world x/y bằng slicePoint, giữ z của cursor rồi gọi phantom. Bài này brightness bằng scalar clamp [0,1]. Quantize bằng floor(brightness*255+0.5), ghi cùng gray vào R/G/B và 255 vào A.
+
+Ảnh là một array byte riêng của CPU. Không đọc ngược texture để tìm scalar; texture chỉ là đầu ra hiển thị.
+
+### Bước 3 — Ghi từng row theo pitch rồi present
+
+Hàm upload trong include/view.hpp lock texture trước, sau đó ghi toàn bộ row:
+
+```cpp title="include/view.hpp — ghi row theo pitch thật"
+for (int row = 0; row < Image::side; ++row) {
+    auto* destination = static_cast<std::uint8_t*>(pixels) + row * pitch;
+    const auto* source = image.rgba.data() + row * Image::side * 4;
+    std::memcpy(destination, source, Image::side * 4);
+}
+SDL_UnlockTexture(texture);
+return true;
+```
+
+pitch tính bằng byte, không bằng pixel. Lock là write-only, không bảo đảm chứa ảnh cũ; ta luôn ghi đủ từng row. Sau unlock, drawSlice gọi SDL_RenderTexture vào fitted rectangle, rồi main SDL_RenderPresent. Theo [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture), streaming texture cần unlock để áp dụng dữ liệu mới.
+
+## Ghép các phần lại
+
+Build và chạy checkpoint đầu:
+
+```bash title="Terminal — lát cắt đầu tiên"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_53_checkpoint_1 --parallel 2
+```
+
+Windows/Visual Studio chạy build/Debug/project_53_checkpoint_1.exe. Single-config generator dùng CMAKE_BUILD_TYPE và executable trực tiếp trong build directory.
+
+Lát mặc định có z=0.06, vị trí của centre index 20 trong cấu hình sẽ học ở Bài 02. Resize dùng logical presentation 900×660 letterbox; ảnh giữ aspect 3.2/3.84. Chưa có PageUp/Down hoặc dữ liệu volume; điều đó đúng với checkpoint này.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ +0.5 khi lấy mẫu pixel. Bạn chuyển từ tâm pixel sang góc pixel; so vị trí chi tiết nhỏ trước khi hoàn tác.
+2. Dùng row*width thay row*pitch cho destination. Đơn vị bị sai; đừng giữ phép ghi này vì có thể vượt buffer. Khôi phục pitch trước khi chạy bản cuối.
+
+## Tự kiểm tra kết quả
+
+Có một ảnh mức xám, không méo khi resize, alpha đầy đủ và không có vệt row sai. Lock failure khiến app báo lỗi và thoát thất bại. Starter vẫn là nền trống; checkpoint 1 chỉ tính một lát, chưa cấp phát volume. Source đầy đủ chạy được nằm dưới bài.
+
+## Bài tập mở rộng
+
+Dời tâm Gaussian nhỏ trong phantom rồi dự đoán vùng sáng di chuyển. Khi nhìn được ảnh, sang [Bài 02 — voxel và memory layout](/projects/volume-slicer/02-voxel-va-memory-layout).

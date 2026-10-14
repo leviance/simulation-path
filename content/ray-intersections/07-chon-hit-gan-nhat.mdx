@@ -1,0 +1,85 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép bốn phép giao thành công cụ chọn vật thể
+
+## Vấn đề cần giải quyết
+
+Một ray có thể chạm sphere, plane và triangle ở các t khác nhau. Vẽ dấu cho mọi hit giúp debug, nhưng người dùng chỉ muốn chọn bề mặt đầu tiên tia gặp. Hình nào được vẽ sau cùng không quyết định điều đó.
+
+Bài này ghép các hàm thành một query hoàn chỉnh. Ta thêm nearest hit, các preset kiểm inside và một chế độ quét có thể dừng. Thuật toán chỉ thử bốn primitive; chưa cần BVH hoặc benchmark lớn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Các ứng viên phải được tính từ cùng ray và cùng range. Khi direction unit, t nhỏ hơn là khoảng cách nhỏ hơn. Ngay cả khi direction không unit, so t vẫn đúng nếu tất cả dùng cùng ray; đừng normalize ray riêng trong một hàm rồi so t với hàm khác.
+
+Ở t bằng nhau chính xác, source chọn ID nhỏ hơn để kết quả không phụ thuộc thứ tự duyệt. Không dùng epsilon lớn để coi hai surface thật sự cách nhau là cùng vị trí. Near-equal t vẫn được so như số thật; công cụ nhỏ này chưa giải quyết mọi trường hợp z-fighting hay mesh overlap.
+
+<InteractiveLab demo="ray-intersections" mode="ray52-7" />
+
+Preset “Trong sphere” cho mặt thoát sphere; “Trong box” cho mặt thoát box. Ở preset box, giảm tMax xuống 0.5: ray chưa tới mặt z=max nên Box trả MISS. Preset nhìn ra ngoài cảnh không có hit. Bật Quét tia, rồi kéo vùng vẽ: thao tác tay dừng quét để không có hai nguồn điều khiển tranh nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ kết quả của từng primitive
+
+include/query.hpp không chỉ trả một boolean:
+
+```cpp title="include/query.hpp — bốn ứng viên trên cùng ray"
+hits[0] = intersectPlane(ray, scene.plane);
+hits[1] = intersectSphere(ray, scene.sphere);
+hits[2] = intersectBox(ray, scene.box);
+hits[3] = intersectTriangle(ray, scene.triangle);
+```
+
+Mỗi slot có thể rỗng. Inspector đọc được cả hình thắng lẫn hình thua, nên người học giải thích được vì sao dấu plane phía sau sphere không được chọn. ID gắn với primitive, không gắn với vị trí trong một danh sách render tùy ý.
+
+### Bước 2 — Chọn t nhỏ nhất và xử lý tie
+
+```cpp title="include/query.hpp — nearest hit"
+std::optional<Hit> best;
+for (const auto& hit : hits) {
+    if (!hit) {
+        continue;
+    }
+    if (!best || hit->t < best->t || (hit->t == best->t && hit->objectId < best->objectId)) {
+        best = hit;
+    }
+}
+return best;
+```
+
+Input của nearestHit là các Hit hợp lệ do candidates tạo. Nó không sửa point, normal hoặc t. Nếu không có ứng viên, best vẫn rỗng. Main vẽ hit thắng màu xanh lá; các hit khác xám. Marker trùng pixel là điều tự nhiên: mọi điểm trên một ray camera đều project về cùng pixel, normal và t giúp phân biệt độ sâu.
+
+### Bước 3 — Thêm preset và điều khiển dừng được
+
+Đặt camera vào sphere mà không đổi dữ liệu hình:
+
+```cpp title="include/query.hpp — camera trong sphere"
+if (preset == 1) {
+    camera.origin = scene.sphere.center;
+    camera.target = add(camera.origin, {0, 0, 1});
+}
+```
+
+Preset box dùng trung điểm minimum/maximum. Preset miss quay target về −z. Main nhận phím 1–4, Space quét/dừng, +/- đổi tMax, I in inspector; R reset camera/range/tâm ngắm. Mất focus hoặc minimize dừng quét. Các phép giao vẫn được tính khi paused; pause ở đây chỉ dừng chuyển động tâm ngắm, không tắt chức năng chọn.
+
+Canvas có thêm thí nghiệm tia song song/tiếp tuyến/suy biến và hỗ trợ pointer capture. Reduced motion tắt quét tự động nhưng không vô hiệu hóa bàn phím. C++ không dùng web reduced-motion preference; mở paused và chỉ quét sau thao tác Space của người dùng.
+
+## Ghép các phần lại
+
+Build project_52_checkpoint_7. Ngắm vào sphere rồi nhấn I: console đọc từng hit với t, point, normal, frontFace. Title ghi nearest ID. Hãy so ID 0/1/2/3 với plane/sphere/box/triangle, không đoán theo màu dây nào ở trên cùng.
+
+C++ dùng input trong logical 900×640; Canvas dùng aspect của vùng CSS thật. Nếu hai hình có bố cục hơi khác trên màn hình hẹp, đó là aspect khác, không phải công thức khác. Cả hai vẫn dùng đúng aspect cho vẽ và ray.
+
+## Thử làm sai để hiểu đúng
+
+1. Luôn giữ hit cuối cùng trong vòng lặp. Đổi thứ tự candidates và xác nhận vật thể chọn đổi dù hình học không đổi; khôi phục min t.
+2. Normalize direction ngay trong intersectSphere nhưng không đổi t theo scale. Test nonunit ray giữa nhiều hình có thể chọn sai. Giữ cùng ray cho mọi phép giao.
+
+## Tự kiểm tra kết quả
+
+Nearest có t nhỏ nhất, tie đúng ID và đảo thứ tự ứng viên không đổi ID. Inside sphere/box nhận exit với outward normal và frontFace=false. Range ngắn không tạo điểm bề mặt giả. Reset đưa mọi tham số về mặc định; blur dừng scan, không có workload tăng ngầm.
+
+## Bài tập mở rộng
+
+Cho click lưu lựa chọn thay vì chỉ hover/ngắm; khi miss hãy giữ hay bỏ lựa chọn theo một quy tắc rõ ràng. Cuối cùng sang [Bài 08 — kiểm chứng và source hoàn chỉnh](/projects/ray-intersections/08-kiem-chung-va-hoan-thien).

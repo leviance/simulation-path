@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm điểm chạm mặt phẳng và nhận ra tia song song
+
+## Vấn đề cần giải quyết
+
+Ray đã đi đúng qua tâm ngắm. Câu hỏi tiếp theo là nó chạm mặt phẳng y=−1 ở đâu. Đây là phép giao đơn giản nhất để kiểm toàn bộ đường đi: mouse → ray → t → world point → marker.
+
+Ta cần phân biệt ba điều: tia chạm ở phía trước, đường thẳng có giao nhưng điểm ấy nằm sau origin, và tia song song nên không có điểm chạm duy nhất. Không thể trả t=0 cho tất cả ca thất bại vì t=0 đôi khi là nghiệm thật.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mặt phẳng được xác định bởi một điểm point và normal n. Điểm p thuộc mặt phẳng khi n·(p−point)=0. Thay phương trình tia vào rồi chuyển vế:
+
+$$
+t=\frac{n\cdot(point-origin)}{n\cdot direction}
+$$
+
+Mẫu số đo mức tia hướng vào normal. Khi nó gần zero, hai hướng gần vuông góc và tia gần song song plane. Source dùng ngưỡng góc 1e−10, có nhân length(direction) để direction không unit vẫn nhận cùng chính sách.
+
+Tia nằm hẳn trên plane có vô số điểm chung, không có một surface hit duy nhất; công cụ này trả miss. Normal giữ hướng hình học. frontFace=true khi direction·normal âm, không phải khi t dương.
+
+<InteractiveLab demo="ray-intersections" mode="ray52-3" />
+
+Ngắm xuống plane, đọc t và point.y. Point.y phải là −1. Chọn thí nghiệm “Song song plane”: kết quả MISS là chủ động, không phải NaN. Hướng gần ngang có thể chạm rất xa; tMax có thể loại nghiệm dù đường thẳng vẫn cắt plane.
+
+## Viết code từng bước
+
+### Bước 1 — Trả đủ thông tin bằng Hit
+
+Thêm Hit trong include/hit.hpp:
+
+```cpp title="include/hit.hpp — kết quả phép giao"
+struct Hit {
+    double t = 0;
+    Vec3 point;
+    Vec3 normal;
+    bool frontFace = false;
+    int objectId = -1;
+    double u = 0;
+    double v = 0;
+};
+```
+
+Hàm giao trả `std::optional<Hit>`: có giá trị là hit, rỗng là miss. u/v dành cho tam giác sau này. ID plane là 0; sphere, box, triangle lần lượt 1,2,3. Không dùng con trỏ vào renderer hay một index thay đổi theo thứ tự vẽ.
+
+### Bước 2 — Chặn tia song song trước phép chia
+
+Chuẩn hóa normal để inspector luôn đọc vector unit:
+
+```cpp title="include/hit.hpp — denominator và chính sách gần song song"
+const Vec3 normal = normalize(plane.normal);
+const double denominator = dot(ray.direction, normal);
+if (std::abs(denominator) <= 1e-10 * length(ray.direction)) {
+    return std::nullopt;
+}
+```
+
+Trước đoạn này, valid kiểm ray, point, normal và normal zero. Ngưỡng này cố ý loại một vùng góc rất nhỏ; nó không chứng minh mọi phép tính floating point đều chính xác. Scene của bài dùng tọa độ nhỏ, không dữ liệu địa lý rất lớn.
+
+### Bước 3 — Chọn t hợp lệ rồi dựng point
+
+```cpp title="include/hit.hpp — nghiệm plane"
+const double t = dot(subtract(plane.point, ray.origin), normal) / denominator;
+if (!inRange(ray, t)) {
+    return std::nullopt;
+}
+return makeHit(ray, t, normal, 0);
+```
+
+makeHit lấy point=at(ray,t) và frontFace từ dot; không tự lật normal. candidates trong include/query.hpp đặt kết quả plane vào slot 0. Main vẽ marker xám và đoạn normal, ghi t lên title. Chưa chọn nearest: đến Bài 07 ta mới quyết định ứng viên nào gần nhất.
+
+## Ghép các phần lại
+
+Build project_52_checkpoint_3. Ngắm xuống lưới rồi lên cao: một phía có hit, một phía miss. Marker có thể nằm ngoài vùng lưới được vẽ vì plane là vô hạn; lưới chỉ giúp nhìn phương hướng.
+
+Khung dây không có depth test. Hiện tại dấu chạm plane có thể nhìn xuyên sphere; chưa được gọi đó là chọn nhầm. Sphere chưa có hàm giao ở checkpoint này.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ kiểm denominator, dùng tia song song. Quan sát vì sao infinity hoặc NaN không thể làm một marker có nghĩa rồi khôi phục nhánh.
+2. Chấp nhận t âm. Đường thẳng phía sau camera cũng được coi là hit; thử tia hướng lên từ trên plane, rồi trả lại inRange.
+
+## Tự kiểm tra kết quả
+
+Các hit có point.y≈−1, normal=(0,1,0), frontFace đúng dấu dot. Tia song song/coplanar, nghiệm sau origin và nghiệm vượt tMax đều miss. Plane có normal zero bị từ chối. Không có dấu hit giả tại t=0.
+
+## Bài tập mở rộng
+
+Đổi plane thành mặt nghiêng và kiểm residual n·(point−plane.point). Nếu cần chọn một miếng sàn hữu hạn, phải thêm kiểm biên riêng, không sửa công thức plane. Sang [Bài 04 — giao sphere](/projects/ray-intersections/04-giao-voi-sphere).

@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chỉnh tương phản mà không sửa dữ liệu volume
+
+## Vấn đề cần giải quyết
+
+Volume đã đọc đúng nhưng một số vùng scalar gần nhau khó phân biệt khi toàn bộ [0,1] đều được trải lên 256 mức xám. Ta cần phóng đại một khoảng giá trị quan tâm mà không thay dataset.
+
+Bài này thêm window/level. Đây là một phép ánh xạ hiển thị, không phải phép sửa density hoặc một thuật toán tái dựng CT. Inspector phải giữ nguyên scalar gốc dù ảnh sáng/tối đi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Level là tâm cửa sổ scalar, width là độ rộng dương. Đặt minimum=level−width/2, rồi đổi scalar sang brightness:
+
+$$
+brightness=clamp\left(\frac{value-(level-width/2)}{width},0,1\right)
+$$
+
+Ví dụ level=0.5,width=0.4: 0.3 thành đen, 0.5 thành xám giữa, 0.7 thành trắng. Width hẹp tăng tương phản trong khoảng nhỏ nhưng cắt mất thông tin ngoài khoảng; không làm dataset chính xác hơn.
+
+Đường đi cần giữ rõ: voxel scalar → sampling → window/level → brightness → byte RGBA. Không nội suy byte màu rồi gọi kết quả là scalar, vì clamp/quantization đã mất thông tin.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-4" />
+
+Thay Level/Window width và đọc hai dòng scalar/brightness. Scalar tại world point không đổi. Chọn ramp để tìm vị trí bị cắt đen/trắng; sau đó trở lại phantom và thử làm rõ một vùng yếu.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ tham số hiển thị riêng
+
+include/display.hpp có Window:
+
+```cpp title="include/display.hpp — tham số tương phản"
+struct Window {
+    double level = 0.5;
+    double width = 1;
+};
+```
+
+Window không nằm trong Volume và không giữ con trỏ tới values. Main có windowing riêng; W/S đổi level trong [0,1], A/D đổi width trong [0.05,1.5]. Hàm toán vẫn từ chối width≤0 hoặc NaN dù UI đã giới hạn.
+
+### Bước 2 — Ánh xạ scalar sau khi lấy mẫu
+
+```cpp title="include/display.hpp — scalar tới brightness"
+const double minimum = window.level - window.width / 2;
+return std::clamp((value - minimum) / window.width, 0.0, 1.0);
+```
+
+Đoạn này nằm trong windowValue, sau kiểm input hữu hạn. Width không phải hệ số opacity; level không phải threshold nhị phân. Width=1,level=0.5 phục hồi ánh xạ mặc định cho scalar [0,1].
+
+### Bước 3 — Quantize vào ảnh, giữ values nguyên vẹn
+
+makeImage chỉ ghi Image.rgba:
+
+```cpp title="include/display.hpp — byte màu sau window/level"
+const auto gray = static_cast<std::uint8_t>(std::floor(brightness * 255 + 0.5));
+const std::size_t pixel = static_cast<std::size_t>(4 * (x + y * Image::side));
+image.rgba[pixel] = gray;
+image.rgba[pixel + 1] = gray;
+image.rgba[pixel + 2] = gray;
+image.rgba[pixel + 3] = 255;
+```
+
+Giá trị double vẫn nằm trong volume.values. Main đánh dirty khi windowing đổi để tạo ảnh mới; không fillPhantom lại và không upload ảnh mới nếu state không đổi. I in scalar gốc tại cursor. Chưa có crosshair cho click ở bài này, nhưng inspector vẫn đọc world point chung.
+
+## Ghép các phần lại
+
+Build project_53_checkpoint_4. Thử W/S và A/D, rồi I: scalar gốc giữ nguyên. R phục hồi level/width mặc định. Khi so hai screenshot, ghi cả mặt cắt và window/level; hai ảnh khác tương phản không nhất thiết khác dữ liệu.
+
+Mapping này là cách hiển thị scalar tổng hợp của project, không triển khai định nghĩa windowing của DICOM và không hiệu chuẩn Hounsfield Units.
+
+## Thử làm sai để hiểu đúng
+
+1. Ghi brightness trở lại volume.values. Sau vài lần chỉnh window, dữ liệu không còn trở về ban đầu; hoàn tác và kiểm test display preserves source scalars.
+2. Cho width=0 trong một unit test. Không kẹp nó âm thầm thành số rất nhỏ: test phải nhận invalid_argument. Giữ giới hạn UI và validation hàm toán.
+
+## Tự kiểm tra kết quả
+
+Scalar không đổi khi chỉ sửa window/level. Black/midpoint/white đúng giá trị dự đoán; byte R/G/B giống nhau và A=255. Width zero/âm/NaN bị từ chối. Ảnh chỉ tính lại khi dirty, không cấp phát volume mỗi frame.
+
+## Bài tập mở rộng
+
+Thêm histogram scalar của một lát, ghi rõ bin từ raw scalar hay brightness. Không dùng histogram để thay dữ liệu. Tiếp theo là [nội suy giữa các lát](/projects/volume-slicer/05-noi-suy-giua-cac-lat).

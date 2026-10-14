@@ -1,0 +1,80 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép ba lát cắt qua cùng một điểm trong world
+
+## Vấn đề cần giải quyết
+
+Xem từng hướng riêng lẻ vẫn khó biết vùng sáng ở view này tương ứng đâu trong view khác. Ta cần ba mặt phẳng đi qua cùng một world point, có crosshair để đọc vị trí ấy.
+
+Đừng tạo ba cursor độc lập rồi cố đồng bộ bằng những phép đổi index rời rạc. State của bài này chỉ có một Point (x,y,z). Mỗi view dùng một thành phần làm vị trí cut, hai thành phần còn lại làm crosshair.
+
+## Hiểu ý tưởng trước khi viết code
+
+Khi click XY, ta sửa x/y và giữ z. Lát XZ đổi vì cut của nó là y; lát YZ đổi vì cut là x. Chính lát XY giữ nguyên plane, chỉ crosshair của nó dời.
+
+Input phải đi qua hai lớp: SDL window coordinates → logical renderer coordinates → fitted image rectangle → world. Click vào viền panel không được tạo một point trong volume.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-6" />
+
+Click/kéo một ảnh. Theo dõi world point và vị trí hai mặt cắt còn lại. Mũi tên dời trong active plane, PageUp/Down dời cut. Quét lát chỉ dời một thành phần của cursor; tới lát cuối nó dừng, không chạy vô hạn hoặc tự quay lại đầu.
+
+## Viết code từng bước
+
+### Bước 1 — Một cursor dùng cho ba view
+
+Main đặt threeViews=true từ checkpoint này. Khi dựng và vẽ mỗi view, truyền cùng cursor. drawSlice tính crosshair từ world:
+
+```cpp title="include/view.hpp — world point tới crosshair"
+const Axes axes = axesFor(view);
+const double u = (cursor[axes.horizontal] - lower(grid, axes.horizontal)) / (grid.count[axes.horizontal] * grid.spacing[axes.horizontal]);
+const double v = 1 - (cursor[axes.vertical] - lower(grid, axes.vertical)) / (grid.count[axes.vertical] * grid.spacing[axes.vertical]);
+```
+
+U/V này theo physical box, không theo [0,count−1] của centre. Nếu chia bằng count−1 ở đây, crosshair ở centre đầu sẽ nằm sát mép ảnh thay vì nửa voxel vào bên trong.
+
+### Bước 2 — Chỉ pick fitted rectangle
+
+pickSlice trong include/layout.hpp kiểm biên trước:
+
+```cpp title="include/layout.hpp — pixel trong ảnh tới u/v"
+if (rect.width <= 0 || rect.height <= 0 || x < rect.x || x > rect.x + rect.width || y < rect.y || y > rect.y + rect.height) return std::nullopt;
+const double u = (x - rect.x) / rect.width;
+const double v = (y - rect.y) / rect.height;
+Point point = cursor;
+```
+
+Hai trục trong plane đổi bằng cùng công thức slicePoint; cuối cùng clamp cursor về khoảng centre đầu/cuối. Trục cut giữ nguyên. Main chuyển mouse event bằng SDL_ConvertEventToRenderCoordinates, chọn rect của từng view và chỉ capture drag nếu click thật sự trong ảnh.
+
+Không đọc event.motion khi event là mouse button: chúng là các member khác nhau trong SDL_Event. Source chọn đúng member theo type, rồi mới lấy x/y.
+
+### Bước 3 — Quét có giới hạn và dừng được
+
+Main dùng dt từ SDL_GetTicksNS, clamp 0.1 và tốc độ 4 voxel/s. Khi tới centre cuối:
+
+```cpp title="src/main.cpp — dừng ở lát cuối"
+if (cursor[axis] >= last) {
+    cursor[axis] = last;
+    paused = true;
+}
+```
+
+Mở paused. Space đổi chạy/dừng; thao tác tay dừng scan để không tranh quyền điều khiển. Blur/minimize và R hủy drag/capture. Canvas có pointer capture, cleanup, DPR riêng và reduced motion; tắt reduced motion không tự chạy lại quét.
+
+## Ghép các phần lại
+
+Build project_53_checkpoint_6. Active view có border xanh; phím 1/2/3 đổi active view để keyboard biết dùng bảng trục nào. I in world point và scalar của nearest/trilinear, không phải grayscale sau window.
+
+Ở SDL, dirty chỉ bật khi dữ liệu hiển thị đổi; texture giữ ảnh khi state đứng yên. Canvas quét tối đa 10 lần cập nhật ảnh mỗi giây để thí nghiệm CPU nhỏ không chiếm event loop. Hai bản có cùng tốc độ theo world, không dùng frame count để dời cut.
+
+## Thử làm sai để hiểu đúng
+
+1. Cập nhật cả ba cursor khi click một view. Trục cut của chính view vừa click cũng đổi; giữ một Point và chỉ sửa hai trục trong plane.
+2. Bỏ fitted rectangle check, lấy u/v từ toàn panel. Click letterbox tạo point lệch; phục hồi check và kiểm round-trip pixel/world bằng CTest.
+
+## Tự kiểm tra kết quả
+
+Crosshair ba view biểu diễn cùng Point. Click XY giữ z, click XZ giữ y, click YZ giữ x. Resize/DPI/letterbox không lệch input. Mouse/keyboard đều dùng được; pause/reset/blur dừng scan và hủy drag; tới cuối không enqueue thêm công việc.
+
+## Bài tập mở rộng
+
+Thêm một marker lưu world point đã chọn để quay lại sau, ghi rõ nó khác active cursor. Cuối cùng sang [kiểm chứng và source hoàn chỉnh](/projects/volume-slicer/07-kiem-chung-va-hoan-thien).

@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng hình học và chạy project hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Một marker nằm “đúng chỗ” chưa đủ chứng minh phép giao đúng. Camera và ray có thể cùng sai một dấu; một hit có t hợp lý nhưng normal sai; build Debug qua trong khi Release bỏ hết assert.
+
+Bài cuối dùng test thuần để kiểm các quan hệ hình học độc lập, rồi thêm phím V để kiểm các hit đang ngắm ngay trong ứng dụng. CTest không mở window, không GPU compute và không benchmark chạy vô hạn; lệnh V chỉ kiểm bốn primitive, không khởi động benchmark khác.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba nhóm kiểm tra bổ sung cho nhau. Ca có nghiệm biết trước kiểm giá trị t. Residual kiểm point có nằm trên bề mặt. Round-trip kiểm ray/projection có cùng hệ tọa độ.
+
+$$
+r_{plane}=n\cdot(p-p_0),\quad
+r_{sphere}=\|p-center\|-radius,\quad
+r_{triangle}=\|p-(wA+uB+vC)\|
+$$
+
+Box phải có mọi thành phần point nằm trong bounds và ít nhất một thành phần bằng tọa độ của mặt; đừng chỉ kiểm interval không rỗng. Normal dài một. frontFace chỉ phản ánh dấu dot với normal hình học.
+
+<InteractiveLab demo="ray-intersections" mode="ray52-8" />
+
+Inspector hiện các quan hệ số để bạn quan sát, nhưng CTest mới giữ các ca hồi quy. Residual point−ray.at(t) trong Canvas chỉ kiểm quan hệ lưu record, không phải oracle độc lập vì point vốn được dựng bằng chính at. Residual plane và các test phương trình hình mới kiểm thêm một điều khác.
+
+## Viết code từng bước
+
+### Bước 1 — Dùng test runner không bị Release bỏ qua
+
+tests/tests.cpp dùng check rõ ràng thay assert:
+
+```cpp title="tests/tests.cpp — check còn hoạt động với NDEBUG"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        std::cerr << "FAIL: " << label << '\n';
+        ++failures;
+    }
+}
+```
+
+Cuối main, failures khác zero trả EXIT_FAILURE; thành công trả EXIT_SUCCESS. CTest đọc exit code, không dựa vào dòng “PASS” in ra. closeEnough kiểm hữu hạn và sai số tuyệt đối 1e−9 cho các ca nhỏ đã chọn; đây không phải tolerance dùng cho mọi scene cực lớn.
+
+### Bước 2 — Kiểm camera bằng chiều ngược lại
+
+Tests duyệt nhiều u/v và aspect 0.6/1/1.5/2.5:
+
+```cpp title="tests/tests.cpp — project điểm nằm trên ray"
+const auto ray = cameraRay(camera, u, v, aspect);
+const auto pixel = project(at(ray, 5), camera, 600 * aspect, 600);
+check(closeEnough(length(ray.direction), 1), "camera ray normalized");
+check(pixel.has_value(), "ray sample projects");
+```
+
+Sau đó so pixel.x với u*width và pixel.y với v*height. Nếu bỏ aspect hoặc đổi dấu y ở một phía, ca này thất bại. Không chỉ so ray giữa màn hình: lỗi scale thường bị che ở đó.
+
+Các ca primitive kiểm entry/exit/tangent/nonunit, plane song song/coplanar, box parallel-boundary và đoạn nằm trong thể tích mà chưa tới mặt. Triangle có cả hai phía, cạnh, đỉnh, outside và suy biến. Invalid ray/geometry không được trả một Hit chứa NaN.
+
+### Bước 3 — Tái dựng point bằng dữ liệu hình
+
+Với triangle, lấy barycentric từ hit rồi tái dựng một point độc lập:
+
+```cpp title="tests/tests.cpp — barycentric reconstruction"
+const double w = 1 - triangleHit->u - triangleHit->v;
+const auto reconstructed = add(add(multiply(triangle.a, w), multiply(triangle.b, triangleHit->u)), multiply(triangle.c, triangleHit->v));
+check(closeEnough(length(subtract(reconstructed, triangleHit->point)), 0), "barycentric reconstruction");
+```
+
+Tests còn kiểm residual plane/sphere, box nằm trên mặt, normal và frontFace. Nhóm nearest đảo thứ tự ứng viên, kiểm tie ID và empty miss. Hãy thử đảo một dấu ở công thức rồi chạy lại để chắc tests bắt được sai, không chỉ test đi qua đường code.
+
+Thêm include/validation.hpp và gọi validateHits bằng phím V từ main. Hàm giữ một report checks/failures, kiểm range, point, normal rồi dùng phương trình riêng của từng hình. Chẳng hạn sphere được kiểm bằng khoảng cách tới tâm:
+
+```cpp title="include/validation.hpp — kiểm bề mặt sphere"
+report.check(std::abs(length(subtract(hit->point, scene.sphere.center)) - scene.sphere.radius) <= tolerance);
+```
+
+V dừng scan trước khi kiểm và in report vào console; nút “Kiểm hit hiện tại” trong Canvas làm điều tương tự. Một tia miss có thể chỉ cho một check valid(ray) và không có lỗi. Vì thế PASS ở đây chỉ nói record được báo là nhất quán, không chứng minh query không bỏ sót hit. Các ca nghiệm biết trước trong CTest vẫn cần thiết.
+
+## Ghép các phần lại
+
+Tải ZIP, mở terminal ở thư mục có CMakeLists.txt:
+
+```bash title="Terminal — build toàn bộ và kiểm cả Debug/Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Windows/Visual Studio chạy build/Debug/project_52_final.exe. Generator single-config dùng thư mục Debug/Release riêng với CMAKE_BUILD_TYPE tương ứng. Final là target mặc định; BUILD_CHECKPOINTS bật starter và tám snapshot. FetchContent tải SDL 3.4.8 đã khóa checksum, luôn link SDL3::SDL3.
+
+ZIP chứa README, CMake, starter, checkpoints, final và tests; không cần website hoặc source của project trước để chạy. Toàn bộ source final nằm ngay dưới bài. Chỉ source-template và nội dung biên soạn được đưa vào Git; snapshot/ZIP là output sinh, không nhân bản vào lịch sử repository.
+
+## Thử làm sai để hiểu đúng
+
+1. Sửa box để trả max(entry,tMin). Ca đoạn ray trong box sẽ bắt hit giả; khôi phục trước khi tiếp tục.
+2. Đổi check sang assert rồi build Release. Không dùng việc “CTest vẫn xanh” làm bằng chứng vì check có thể bị NDEBUG xóa; trả lại runner và cố ý làm một nghiệm sai để thấy EXIT_FAILURE.
+
+## Tự kiểm tra kết quả
+
+Starter, tám checkpoint và final build được. CTest Debug/Release kiểm toán mà không window. Test ca biết trước và residual qua; thay một dấu chủ động phải khiến test fail. Sau đó kiểm tay resize/DPI/letterbox, mouse/keyboard, scan/pause/preset/reset trên desktop.
+
+Đây là ray intersection giải tích cho bốn primitive, không phải ray marcher của Project 36 hoặc ray tracer hoàn chỉnh. Không hứa watertight cho triangle mesh, transformed box hay floating point ở tọa độ cực lớn. Ghi rõ phạm vi khi dùng code làm nền cho project khác.
+
+## Bài tập mở rộng
+
+Bổ sung một primitive mới và test oracle trước khi thêm nó vào candidates. Tiếp theo là [Project 53 — máy cắt lát khối 3D](/projects/volume-slicer): lưu và lấy mẫu dữ liệu bên trong thể tích trước khi dùng interval của tia để tích lũy qua khối ở các project sau.

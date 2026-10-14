@@ -1,0 +1,87 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dời mặt cắt liên tục bằng trilinear
+
+## Vấn đề cần giải quyết
+
+Nearest chọn một voxel nên khi mặt cắt đi qua điểm giữa hai centre, ảnh nhảy sang lớp kế tiếp. Ta muốn lấy mẫu ở vị trí liên tục, không chỉ ở index nguyên.
+
+Trilinear không tạo dataset có độ phân giải cao hơn. Nó chỉ nối các giá trị đã có bằng một hàm tuyến tính từng ô. Bài này cho bạn so nearest và trilinear trên cùng world point, tránh nhầm “mượt hơn” với “có thêm chi tiết”.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đổi world về grid coordinate có −0.5 vì mẫu nằm ở centre. Trên mỗi trục, lấy low=floor(g), high=low+1 và fraction=g−low. Với ba trục, ta có tám tổ hợp low/high.
+
+$$
+value=\sum_{i,j,k\in\{0,1\}}w_x(i)w_y(j)w_z(k)\,V_{ijk},\quad
+w_a(0)=1-f_a,\quad w_a(1)=f_a
+$$
+
+Tổng trọng số bằng một. Ở một centre, một góc có trọng số một và trả đúng voxel. Với field affine a+b*x+c*y+d*z, trilinear tái tạo đúng ở vùng giữa các centre, nên đây là oracle tốt để kiểm.
+
+Ở nửa voxel sát physical edge không có centre bên ngoài. Ta replicate mẫu biên bằng clamp g về [0,count−1], nhưng chỉ sau khi xác nhận point ở trong physical box. Ngoài box phải miss, không extrapolate vô hạn.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-5" />
+
+Bật Trilinear và dời lát từng 0.1 voxel. Đọc nearest/trilinear tại cùng cursor. Trilinear thường thay đổi liên tục, nearest đổi theo bậc. Điều này xảy ra trước window/level; SDL texture vẫn dùng nearest để không che mất sự khác nhau.
+
+## Viết code từng bước
+
+### Bước 1 — Tìm low/high/fraction đúng hệ centre
+
+Trong include/sampling.hpp, sau inside check:
+
+```cpp title="include/sampling.hpp — hai centre quanh từng tọa độ"
+const double coordinate = std::clamp(gridCoordinate(volume.grid, axis, point[axis]), 0.0, static_cast<double>(volume.grid.count[axis] - 1));
+low[axis] = static_cast<int>(std::floor(coordinate));
+high[axis] = std::min(low[axis] + 1, volume.grid.count[axis] - 1);
+fraction[axis] = coordinate - low[axis];
+```
+
+Nếu count=1 thì low=high=0,fraction=0; không có chia cho count−1 hoặc access index 1. Điểm ở mép thấp clamp về centre 0; đó là chính sách boundary, không là bằng chứng affine oracle còn chính xác ngoài vùng centre.
+
+### Bước 2 — Cộng tám góc, không ghép công thức khó đọc
+
+Ba vòng lặp x/y/z mỗi vòng chạy 0 và 1. Trong từng góc:
+
+```cpp title="include/sampling.hpp — trọng số một góc"
+double factor = 1 - fraction[axis];
+if (corner[axis] == 1) {
+    index[axis] = high[axis];
+    factor = fraction[axis];
+}
+weight *= factor;
+```
+
+Index bắt đầu bằng low; bit 1 đổi sang high. Weight bắt đầu bằng một rồi nhân factor của cả ba trục. Sau cùng cộng weight*voxel(index) vào result. Cách viết dài hơn một biểu thức tám hạng nhưng dễ đặt breakpoint và đối chiếu từng góc.
+
+### Bước 3 — Chọn sampler trước khi ánh xạ màu
+
+makeImage đổi sampler khi linear bật:
+
+```cpp title="include/display.hpp — sampling trước display mapping"
+if (linear) {
+    value = sampleLinear(volume, point).value_or(0);
+}
+```
+
+Sau đó mới windowValue và byte RGBA. Phím L đổi nearest/trilinear; PageUp/Down từ bài này dời 0.1 voxel thay vì 1. Bản cuối có source đầy đủ cho toàn bộ hàm, không bắt bạn tự đoán các vòng lặp còn thiếu.
+
+## Ghép các phần lại
+
+Build project_53_checkpoint_5. Giữ cùng vị trí cut và window/level khi so hai sampler. Với phantom, sampled value không nhất thiết bằng phantom(point): dữ liệu đã được lấy mẫu hữu hạn từ lúc fill, trilinear không biết giá trị analytic giữa các centre.
+
+Ramp là field affine theo index, vì vậy cũng affine theo world khi spacing cố định. Trong vùng centre, trilinear giữ gradient dự đoán được; nearest vẫn có bậc.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ −0.5 hoặc dùng một fraction chung cho ba trục. Centre test và affine oracle sẽ sai, đặc biệt spacing không đều. Khôi phục từng fraction độc lập.
+2. Clamp point vào box trước khi kiểm inside. Tia/point ngoài khối vẫn nhận dữ liệu biên giả; trả optional rỗng cho outside rồi mới replicate nửa voxel bên trong.
+
+## Tự kiểm tra kết quả
+
+Nearest/trilinear tại centre bằng voxel gốc. Trilinear giữ field hằng và field affine trong vùng centre; outside miss; singleton không đọc vượt buffer. Không dùng byte màu làm dữ liệu nội suy, không gọi smoothing của SDL là trilinear.
+
+## Bài tập mở rộng
+
+Vẽ tám centre và trọng số tại một probe riêng để nhìn tổng weight=1. Sang [ba view và điểm chung](/projects/volume-slicer/06-ba-view-va-diem-chung).

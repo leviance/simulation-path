@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hai nghiệm của sphere: vào, ra và tiếp tuyến
+
+## Vấn đề cần giải quyết
+
+Tia xuyên qua sphere thường chạm hai lần: đi vào và đi ra. Nếu chỉ lấy nghiệm nhỏ nhất, camera nằm trong sphere sẽ nhận một t âm và bị báo miss dù tia chắc chắn chạm mặt thoát.
+
+Bài này thêm phép giao sphere. Ta giữ cả hai nghiệm, thử chúng theo thứ tự và chỉ chọn nghiệm nằm trong range. Đây cũng là nơi học vì sao viết một công thức ngắn nhất không luôn là cách tính đáng tin nhất.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mặt cầu có tâm center và bán kính radius. Đặt offset=origin−center, rồi thay tia vào phương trình khoảng cách tới tâm:
+
+$$
+a=direction\cdot direction,\quad b_h=offset\cdot direction,\quad
+c=offset\cdot offset-radius^2
+$$
+
+$$
+a t^2+2b_h t+c=0,\qquad \Delta=b_h^2-a c
+$$
+
+Delta âm là miss, zero là tiếp tuyến, dương là hai nghiệm. Dùng halfB làm tên biến vì hệ số tuyến tính là 2*halfB, không phải halfB. Hàm giao không giả sử a=1.
+
+Công thức trực tiếp có thể trừ hai số gần bằng nhau. Source dùng q để tính một nghiệm từ phép cộng cùng dấu, nghiệm còn lại từ tích hai nghiệm c/a. Đây là cải thiện tính toán, không phải phép giao robust ở mọi thang tọa độ.
+
+<InteractiveLab demo="ray-intersections" mode="ray52-4" />
+
+Ngắm sphere và đọc t cùng normal. Chọn “Tiếp tuyến sphere”: ray cố định chạy dọc z qua x=center.x+radius, y=0. Nó phải chạm tại t≈3. Giảm tMax xuống dưới 3 để thấy hit bị loại bởi range chứ không bởi discriminant.
+
+## Viết code từng bước
+
+### Bước 1 — Tính các hệ số từ offset
+
+Trong include/sphere.hpp:
+
+```cpp title="include/sphere.hpp — quadratic của sphere"
+const Vec3 offset = subtract(ray.origin, sphere.center);
+const double a = dot(ray.direction, ray.direction);
+const double halfB = dot(offset, ray.direction);
+const double c = dot(offset, offset) - sphere.radius * sphere.radius;
+const double discriminant = halfB * halfB - a * c;
+```
+
+Hàm đã kiểm valid ray, center hữu hạn và radius dương. Sau đoạn này, discriminant không hữu hạn/âm hoặc a không hợp lệ đều trả miss. Không kẹp một discriminant âm thành zero: làm vậy có thể biến tia trượt sphere thành một hit tiếp tuyến giả.
+
+### Bước 2 — Tính hai nghiệm và xử lý q=0
+
+```cpp title="include/sphere.hpp — nghiệm ít triệt tiêu hơn"
+const double root = std::sqrt(discriminant);
+const double q = -halfB - std::copysign(root, halfB);
+double t0 = -halfB / a;
+double t1 = t0;
+if (q != 0) {
+    t0 = q / a;
+    t1 = c / q;
+}
+if (t0 > t1) {
+    std::swap(t0, t1);
+}
+```
+
+copysign lấy độ lớn root với dấu halfB. Nếu q=0, phép c/q không được thực hiện; hai nghiệm giữ −halfB/a. Ca tiếp tuyến ngay tại origin dùng nhánh này. Nếu tMin dương, nghiệm t=0 vẫn bị loại đúng theo range.
+
+### Bước 3 — Thử cả nghiệm vào và nghiệm ra
+
+```cpp title="include/sphere.hpp — chọn nghiệm và outward normal"
+double t = t0;
+if (!inRange(ray, t)) {
+    t = t1;
+}
+if (!inRange(ray, t)) {
+    return std::nullopt;
+}
+const Vec3 normal = normalize(subtract(at(ray, t), sphere.center));
+return makeHit(ray, t, normal, 1);
+```
+
+Khi origin ở trong sphere, t0 âm và t1 dương; đoạn code tự chọn t1. Khi tMin nằm sau entry nhưng trước exit, cũng chọn exit. Normal hướng từ tâm ra ngoài, kể cả ở mặt thoát; frontFace khi đó false.
+
+## Ghép các phần lại
+
+Build project_52_checkpoint_4. candidates giờ có plane và sphere. Hai hit cùng một ray có thể được ghi lên title; chưa có “nearest”. Vẽ sphere bằng các vòng tròn không ảnh hưởng phương trình giao.
+
+Muốn kiểm ca inside ngay ở checkpoint 4, tạm đổi camera.origin sang scene.sphere.center và target sang tâm cộng (0,0,1). Bài 07 mới có preset chính thức; chưa cần thêm hệ thống camera để làm phép thử này.
+
+Tham khảo cách thiết lập quadratic và khó khăn floating point tại [PBRT — Spheres](https://www.pbr-book.org/4ed/Shapes/Spheres). PBRT có xử lý sai số sâu hơn; source của bài là bản giảng dạy cho cảnh nhỏ, không phải bản sao của renderer ấy.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ thử t0 rồi trả miss. Đặt origin trong sphere, dự đoán dấu hai nghiệm và xác nhận mặt thoát bị bỏ.
+2. Đặt a=1 trong hàm giao, chạy test direction=(0,0,2). Point tính ra không còn nằm trên sphere. Khôi phục a từ dot.
+
+## Tự kiểm tra kết quả
+
+Entry, exit, tangent và miss có ca riêng. Hit thỏa length(point−center)≈radius. Normal dài một và hướng ra ngoài. Nonunit direction làm t thay đổi nhưng point không đổi cho cùng hướng hình học; NaN, radius âm và direction zero bị loại.
+
+## Bài tập mở rộng
+
+Trả cả entry/exit để đo độ dài đoạn xuyên sphere; nhớ đoạn dài bằng (tExit−tEntry)*length(direction). Tiếp tục với [ba slab của box](/projects/ray-intersections/05-giao-voi-box).

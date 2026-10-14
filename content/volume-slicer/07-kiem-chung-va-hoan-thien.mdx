@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm volume bằng oracle rồi chạy project hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Một ảnh trông giống lát CT không chứng minh volume được đọc đúng. Dataset đối xứng có thể che tráo trục; sampler cùng sai với công thức expected có thể cho test xanh; Release có thể bỏ assert.
+
+Bài cuối thêm audit bằng phím V, kiểm field affine độc lập và bàn giao project chạy riêng. Audit là công cụ toán/dữ liệu hữu hạn, không kiểm định ảnh CT hay chẩn đoán.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta cần ba lớp bằng chứng. Index test dùng grid không cubic và giá trị có thể tính tay. Sampling test dùng centre/boundary/singleton. Interpolation oracle dùng field affine:
+
+$$
+f(x,y,z)=0.2+0.1x+0.2y+0.15z
+$$
+
+Trong vùng giữa các centre, trilinear phải tái tạo f trong sai số floating point. Ở nửa voxel sát mép, replication có thể khác f analytic; đó là chính sách đã chọn, không dùng affine oracle ngoài vùng centre rồi kết luận sai.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-7" />
+
+Nhấn “Kiểm volume và nội suy”. Report ghi scalar min/max và max residual trên oracle nhỏ. Nó không sửa cursor, window hay dataset. PASS không có nghĩa phantom trở thành CT thật hoặc volume đã chứa mọi chi tiết của hàm analytic.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ checks trong cả Debug và Release
+
+tests/tests.cpp dùng runner rõ ràng:
+
+```cpp title="tests/tests.cpp — check không bị NDEBUG bỏ qua"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        std::cerr << "FAIL: " << label << '\n';
+        ++failures;
+    }
+}
+```
+
+Cuối main, failures khác zero trả EXIT_FAILURE; thành công trả EXIT_SUCCESS. CTest đọc exit code. Dataset 4×3×5 kiểm x stride 1, y stride 4, z stride 12 và index cuối 59; không dùng một lưới cubic duy nhất.
+
+### Bước 2 — Tạo expected bằng một hàm độc lập
+
+include/diagnostics.hpp có affine, không gọi sampleLinear để tính expected:
+
+```cpp title="include/diagnostics.hpp — trường tuyến tính làm oracle"
+inline double affine(Point point) {
+    return 0.2 + 0.1 * point[0] + 0.2 * point[1] + 0.15 * point[2];
+}
+```
+
+Audit điền một Volume nhỏ ở các centre, lấy 16 point interior rồi so sampleLinear với affine(point). Test còn giữ centre, outside, replicated edge và singleton riêng; một oracle đẹp ở interior không thay những ca biên đó.
+
+### Bước 3 — Báo residual và thử làm validator thất bại
+
+Trong auditVolume:
+
+```cpp title="include/diagnostics.hpp — sai số nội suy"
+const double error = std::abs(*sampled - affine(point));
+report.residual = std::max(report.residual, error);
+report.check(error <= 1e-12);
+```
+
+Source default dùng double/Float64, nên tolerance này dành cho grid nhỏ và field đã chọn. Audit quét tối đa 122.880 scalar của app rồi oracle nhỏ, không có benchmark vô hạn. V dừng scan trước khi chạy. Test cố ý sửa một scalar âm để xác nhận report.failures tăng.
+
+Các test khác kiểm physical aspect, hướng plane, pixel/world pick, invalid dimensions/spacing, window width và RGBA. MakeImage không được đổi volume.values khi thay window/level.
+
+## Ghép các phần lại
+
+Tải ZIP, mở terminal ở thư mục có CMakeLists.txt:
+
+```bash title="Terminal — build và CTest Debug/Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Windows/Visual Studio chạy build/Debug/project_53_final.exe. Single-config generator dùng thư mục build riêng cho từng CMAKE_BUILD_TYPE. Final là target mặc định; BUILD_CHECKPOINTS bật starter và bảy checkpoint độc lập.
+
+C++20, CMake 3.24+, SDL 3.4.8 khóa checksum qua FetchContent, link SDL3::SDL3. ZIP có README, CMake, starter, checkpoints, final và tests; không cần website hoặc build project trước. Source hoàn chỉnh của final nằm dưới bài, có comment và các khối code tách rõ.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong sampler bỏ −0.5 hoặc đổi một stride. Centre/affine/index test phải fail; đừng đổi expected để khớp bug.
+2. Đổi check sang assert rồi chạy Release với NDEBUG. Không coi việc CTest xanh là đủ nếu check bị xóa; trả lại runner và sửa một scalar âm để chứng minh validator bắt lỗi.
+
+## Tự kiểm tra kết quả
+
+Starter, bảy checkpoint và final build được. CTest Debug/Release kiểm toán không cần window. Chạy tay phantom/ramp, ba hướng cắt, nearest/trilinear, window/level, crosshair, scan/pause/reset và resize/DPI/letterbox trên desktop.
+
+Audit và unit tests không kiểm mouse capture hoặc UI của máy thật. Trilinear không phục hồi chi tiết đã mất, spacing không mặc định mm, phantom không phải HU. Không có DICOM loader, oblique slice, MIP hay ray integration trong project này.
+
+## Bài tập mở rộng
+
+Thêm export một lát dưới dạng PGM ở một nhánh riêng, kèm mapping window/level trong metadata. Tiếp theo là [Project 54 — Volume Ray Marching](/roadmap), hiện Sắp ra mắt: thay vì chỉ hỏi một mặt phẳng, ta lấy mẫu dọc tia qua volume.

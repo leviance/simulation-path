@@ -14,6 +14,8 @@ export const glossarySources = [
   { file: "lib/glossary-fluids.ts", name: "fluidGlossaryTerms" },
   { file: "lib/glossary-sph.ts", name: "sphGlossaryTerms" },
   { file: "lib/glossary-sph-gpu.ts", name: "sphGpuGlossaryTerms" },
+  { file: "lib/glossary-ray-intersections.ts", name: "rayIntersectionGlossaryTerms" },
+  { file: "lib/glossary-volume.ts", name: "volumeGlossaryTerms" },
 ];
 
 export function assertGlossaryModules(files) {

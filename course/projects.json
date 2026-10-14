@@ -355,5 +355,19 @@
     "sourceDirectory": "project-51-sph-water-gpu",
     "checkpointCount": 12,
     "demoId": "sph-water-gpu"
+  },
+  {
+    "id": "52",
+    "slug": "ray-intersections",
+    "sourceDirectory": "project-52-ray-intersections",
+    "checkpointCount": 8,
+    "demoId": "ray-intersections"
+  },
+  {
+    "id": "53",
+    "slug": "volume-slicer",
+    "sourceDirectory": "project-53-volume-slicer",
+    "checkpointCount": 7,
+    "demoId": "volume-slicer"
   }
 ]
