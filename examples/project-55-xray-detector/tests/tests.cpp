@@ -34,6 +34,15 @@ int main() {
     check(close(materialLength({{0, 0, -6}, {0, 0, 1}, 5.7}, slab), 0.25), "detector clips finite segment");
     check(materialLength({{2, 0, -6}, {0, 0, 1}, 12}, slab) == 0, "parallel miss");
     Settings settings;
+    auto imageSettings = settings;
+    imageSettings.exposure *= 2;
+    check(!imageChanged(settings, imageSettings), "exposure does not invalidate normalized image");
+    check(!imageChanged(settings, settings), "unchanged settings keep cached image");
+    imageSettings.angle = 0.1;
+    check(imageChanged(settings, imageSettings), "object angle invalidates image");
+    imageSettings = settings;
+    imageSettings.numeric = true;
+    check(imageChanged(settings, imageSettings), "solver change invalidates image");
     const auto result = measure(centre, scene, settings);
     check(close(result.depth.low, 0.605) && close(result.ratio, std::exp(-0.605)) && close(result.logProjection, 0.605), "independent analytic Beer Lambert");
     settings.exposure = 20000;

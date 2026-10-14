@@ -1,4 +1,15 @@
 import { expect, test } from "@playwright/test";
+test("Spectrum inspector reproduces the worked example and resets with the lab", async ({
+  page,
+}) => {
+  await page.goto("/projects/xray-detector/07-pho-hai-nang-luong");
+  const inspector = page.getByRole("region", { name: "Phổ hai thành phần theo độ dày" });
+  await expect(inspector).toContainText("T = 0.548220; p = 0.601079");
+  await page.getByLabel("Hệ số chiều dài phổ", { exact: true }).press("ArrowRight");
+  await expect(page.getByLabel("Hệ số chiều dài phổ", { exact: true })).toHaveValue("1.05");
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(page.getByLabel("Hệ số chiều dài phổ", { exact: true })).toHaveValue("1");
+});
 test("X-ray lab gates stages, separates exposure/display and keeps reduced-motion paused", async ({
   page,
 }) => {

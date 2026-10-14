@@ -16,7 +16,7 @@ $$
 T=e^{-\sigma\rho L},\qquad C=c(1-T)
 $$
 
-Dùng nhiều step kể cả 0.17 để có partial tail. GPU so với CPU trên phantom/ramp/constant, camera outside/inside và vài pixel biết trước. So C/T trong RGBA32F trước gamma, không so screenshot đã compose.
+Dùng nhiều step kể cả 0.17 để có partial tail. GPU so với CPU trên phantom/ramp/constant, camera outside/inside và vài pixel biết trước. Mỗi view có sáu cấu hình nhỏ: hai step cơ sở, sigma=0, transfer cool và hai ca sigma=8 bật early termination. So C/T trong RGBA32F trước gamma, không so screenshot đã compose. Phép so màu kiểm tính đúng của nhánh early, không chứng minh số mẫu tiết kiệm trên GPU; pure tests kiểm số mẫu của oracle CPU riêng.
 
 GPU target **16×12**, đọc bốn pixel cho mỗi cấu hình; không đọc cả ảnh lớn và không benchmark vô hạn. Tolerance 0.0025 cho float/hardware interpolation so với CPU double. App kiểm deadline 10s giữa readback; timeout process ngoài 30s còn cần vì ReadPixels có thể chặn. Timeout không preempt GPU command đã gửi và không bảo đảm driver không treo.
 

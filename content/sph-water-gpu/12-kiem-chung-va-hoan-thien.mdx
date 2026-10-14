@@ -20,9 +20,9 @@ Nút Kiểm oracle CPU so CSR với all-pairs trên state đang xem và không �
 
 ### Bước 1 — Không để NaN vượt qua phép so
 
-Hàm closeEnough trong validation tránh cả tên macro near của Windows:
+Hàm closeEnough nằm trong oracle-stats.hpp để cả CTest và GPU validator dùng được. Tên này cũng tránh macro near của Windows:
 
-```cpp title="include/validation.hpp — tolerance có kiểm finite"
+```cpp title="include/oracle-stats.hpp — tolerance có kiểm finite"
 return std::isfinite(actual) && std::isfinite(expected) && std::abs(actual - expected) <= absolute + relative * std::abs(expected);
 ```
 
@@ -45,12 +45,20 @@ CSR được dựng từ oldPosition, nên không so cell owner với position �
 
 ### Bước 3 — So cả state mới, không chỉ force
 
-Expected position/velocity được tích phân từ state cũ:
+Trước hết tính vmax từ oldVelocity, amax và rhoMax từ kết quả CPU. So ba extrema ấy với reduction GPU, rồi tính dtCPU bằng chooseDt. Không lấy dt từ GPU làm đáp án cho chính GPU: nếu reduction bị sai, hai nhánh có thể cùng dùng một dt sai và vẫn khớp position.
+
+Expected position/velocity được tích phân từ state cũ và **dtCPU độc lập**:
+
+```cpp title="include/validation.hpp — timestep từ oracle CPU"
+const auto expected = evaluate(engine.storage.plan, oldPosition, oldVelocity, engine.settings);
+const auto extrema = oracleStats(oldVelocity, expected);
+const double dtCPU = chooseDt(plan, extrema.speed, extrema.acceleration, engine.settings.soundSpeed);
+```
 
 ```cpp title="include/validation.hpp — oracle integration"
 auto p = xyz(oldPosition[i]);
 auto v = xyz(oldVelocity[i]);
-integrate(p, v, expected.acceleration[i], engine.lastDt, engine.storage.plan.spacing / 2);
+integrate(p, v, expected.acceleration[i], dtCPU, engine.storage.plan.spacing / 2);
 ```
 
 Nếu chỉ kiểm lực, alias bank hoặc swap sớm vẫn có thể lọt. Verify kiểm cả density/pressure/force lẫn position/velocity mới, hai tick liên tiếp và total timeout 15 s trong app.
@@ -67,7 +75,9 @@ cmake --build build --config Release --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
-Windows/Visual Studio chạy build/Debug/project_51_final.exe. Chạy thêm --verify-gpu rồi --verify-gpu --tail-case, không chạy million-particle benchmark trong bộ test tự động. Generator single-config dùng build directory riêng và CMAKE_BUILD_TYPE. Shader directory đi kèm từng snapshot; không trộn shader checkpoint 8 với executable checkpoint 12.
+Windows/Visual Studio chạy build/Debug/project_51_final.exe. Kiểm GPU bằng từng lượt nhỏ: --verify-gpu, --verify-gpu --tail-case, --verify-acoustic và --verify-force. Hai lượt sau vẫn chỉ dùng 512 hạt. Vận tốc lớn kích hoạt acoustic bound trong pipeline SPH. Riêng --verify-force đưa gia tốc (0,10⁶,0) biết trước vào reduction/integration để kiểm force bound; nó cố ý bỏ qua density/force SPH, không chứng minh công thức lực chất lỏng đúng. Hai lượt lattice/tail vẫn kiểm toàn pipeline ấy. App từ chối fixture nếu bound cần kiểm không thực sự chi phối. Không chạy million-particle benchmark trong bộ test tự động.
+
+Mỗi lượt phải được chạy riêng với timeout ngoài process 30 s; không tự thử lại nếu timeout. Generator single-config dùng build directory riêng và CMAKE_BUILD_TYPE. Shader directory đi kèm từng snapshot; không trộn shader checkpoint 8 với executable checkpoint 12.
 
 N/Space/C/R/Home, drag/wheel và phím 1–4/Enter được giải thích trong README. Final là chương trình đầy đủ, không cần website hay project trước để chạy. OpenGL 4.3 là điều kiện runtime; CTest thuần không cần GPU.
 

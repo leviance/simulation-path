@@ -19,7 +19,15 @@ $$
 
 <InteractiveLab demo="sph-water-gpu" mode="sph3-6" />
 
-Đọc acceleration của hạt mép và hạt trong lòng khối. Đổi c, alpha khi đang pause. Velocity ban đầu 0 nên viscosity lúc đầu 0: muốn chứng minh tiêu tán, dùng pair fixture trong tests hoặc chạy các tick của bài sau, không kết luận từ một hình đứng yên.
+Canvas mở bằng cảnh **Khối bị nén — pressure**. Chọn một hạt ngoài mép rồi đổi c từ 12 lên 20: pressure và độ lớn acceleration tăng, trong khi position vẫn giữ nguyên. Mũi tên xanh giúp đọc hướng lực; chúng dùng chung một tỉ lệ hiển thị, không phải quãng đường hạt đã đi.
+
+Thử lần lượt ba cảnh để tách hai hiệu ứng:
+
+1. **Khối chưa nén:** density lớn nhất của cảnh 64 hạt chỉ khoảng 976.37, thấp hơn rho0. EOS cho pressure bằng 0. Đổi c không thể tạo pressure từ một độ nén chưa tồn tại.
+2. **Khối bị nén:** giữ mass và h, đưa các hạt gần nhau hơn. Tổng mW tăng, density vượt rho0; pressure đẩy các hạt ra xa nhau. Velocity vẫn bằng 0 nên alpha chưa có tác dụng.
+3. **Hai hạt tiến lại gần:** pressure của cặp này bằng 0; chỉ viscosity tạo lực cản. Đặt alpha=0 rồi alpha=0.15 để thấy khác biệt. Chuyển sang **Hai hạt tách xa**: cùng khoảng cách nhưng dấu của vij·rij đổi, viscosity trở về 0.
+
+Bài này chưa thêm gravity hay cập nhật position. Các cảnh hai hạt là phép thử lực riêng, không đại diện khối nước 64 kg. Bản C++ có các pair fixture trong tests; phần tương tác bên trên tính cùng công thức bằng double trên CPU.
 
 ## Viết code từng bước
 
@@ -31,7 +39,7 @@ Trong density.comp:
 pressure = max(0.0, uC * uC * (rho - 1000.0));
 ```
 
-C=12, rho 1100 cho 14400, rho 900 cho 0. Clamp là approximation ở mặt thoáng; không kẹp rho hoặc velocity để tránh phải kiểm lỗi.
+Thử tính trước: với c=12 và rho=1100, ta có p=12²*(1100−1000)=14400. Giữ rho rồi đổi c=20 thì p=40000. Còn rho=900 cho p=0 ở cả hai lựa chọn. Phép chặn pressure âm này là một xấp xỉ tại mặt thoáng; nó không cho phép ta sửa density về 1000 để che lỗi.
 
 ### Bước 2 — Viết viscosity trên CPU oracle
 
@@ -78,7 +86,7 @@ Checkpoint 6: N tính density→pressure→force nhưng chưa đổi position. F
 
 ## Tự kiểm tra kết quả
 
-EOS và pair tests có đáp án số; gradient theo z tham gia force thật. Velocity 0 không tạo viscosity. Position/tick không đổi ở checkpoint 6.
+Khối nén có pressure dương và lực hướng ra ở mép; tăng c làm pressure tăng theo c². Cặp tiến lại gần có lực cản khi alpha>0, còn cặp tách xa không có viscosity. Velocity 0 không tạo viscosity. Position/tick không đổi ở checkpoint 6; các test cặp kiểm tổng lực nội và công suất tiêu tán riêng.
 
 ## Bài tập mở rộng
 

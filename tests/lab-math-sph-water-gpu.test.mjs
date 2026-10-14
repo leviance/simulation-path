@@ -1,8 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as w from "../lib/labs/sph-water-gpu.ts";
+import { forceFixture } from "../lib/labs/sph-water-gpu/fixtures.ts";
 const near = (a, b, t = 1e-9) =>
   assert.ok(Number.isFinite(a) && Math.abs(a - b) < t, `${a} != ${b}`);
+
+test("Lesson6 fixtures expose pressure and viscosity without advancing particles", () => {
+  const plan = w.makePlan(4);
+  const compressed = forceFixture(plan, "compressed");
+  const before = structuredClone(compressed);
+  const report = w.evaluate(plan, compressed, w.defaultSettings, 6);
+  assert.ok(Math.max(...report.pressure) > 0);
+  assert.ok(Math.max(...report.acceleration.map(w.length)) > 0);
+  const stronger = w.evaluate(plan, compressed, { ...w.defaultSettings, soundSpeed: 20 }, 6);
+  near(stronger.pressure[0] / report.pressure[0], (20 / 12) ** 2);
+  assert.deepEqual(compressed, before);
+  const approaching = forceFixture(plan, "approaching");
+  const on = w.evaluate(plan, approaching, w.defaultSettings, 6);
+  assert.ok(on.acceleration[0].x < 0 && on.acceleration[1].x > 0);
+  assert.ok(on.pressure.every((p) => p === 0));
+  for (const [particles, settings] of [
+    [approaching, { ...w.defaultSettings, alpha: 0 }],
+    [forceFixture(plan, "separating"), w.defaultSettings],
+  ]) {
+    assert.ok(
+      w.evaluate(plan, particles, settings, 6).acceleration.every((a) => w.length(a) === 0),
+    );
+  }
+});
 test("SPH3D volume kernel, odd gradient and finite-difference oracle agree", () => {
   const plan = w.makePlan();
   let integral = 0;

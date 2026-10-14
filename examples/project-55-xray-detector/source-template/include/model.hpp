@@ -58,7 +58,15 @@ struct Settings {
     bool spectral = false;
     double lowWeight = 0.6;
     double exposure = 10000;
+
+    bool operator==(const Settings&) const = default;
 };
+
+// Pixel selection and exposure do not change the normalized detector image.
+inline bool imageChanged(Settings before, Settings after) {
+    before.exposure = after.exposure;
+    return before != after;
+}
 
 inline void validate(Settings settings) {
     if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 2) {

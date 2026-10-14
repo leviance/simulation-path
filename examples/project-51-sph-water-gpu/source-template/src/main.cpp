@@ -2,6 +2,7 @@
 #define LAB_CHECKPOINT 12
 #endif
 #include "engine.hpp"
+#include "force-verification.hpp"
 #include "validation.hpp"
 #include "view.hpp"
 #include <SDL3/SDL_main.h>
@@ -14,6 +15,9 @@
 int main(int argc, char** argv) {
     using namespace water3;
     bool verify = false, tail = false;
+#if LAB_CHECKPOINT >= 12
+    VerifyCase verifyCase = VerifyCase::lattice;
+#endif
     for (int i = 1; i < argc; ++i) {
 #if LAB_CHECKPOINT >= 12
         const std::string_view argument = argv[i];
@@ -21,8 +25,14 @@ int main(int argc, char** argv) {
             verify = true;
         } else if (argument == "--tail-case") {
             tail = true;
+        } else if (argument == "--verify-acoustic") {
+            verify = true;
+            verifyCase = VerifyCase::acoustic;
+        } else if (argument == "--verify-force") {
+            verify = true;
+            verifyCase = VerifyCase::force;
         } else {
-            std::cerr << "Use --verify-gpu [--tail-case]. Large runs require interactive confirmation.\n";
+            std::cerr << "Use --verify-gpu [--tail-case], --verify-acoustic or --verify-force. Large runs require interactive confirmation.\n";
             return EXIT_FAILURE;
         }
 #else
@@ -243,7 +253,13 @@ int main(int argc, char** argv) {
                 }
                 if (engine.ready && !engine.queue.pending()) {
                     if (engine.steps > checkedSteps) {
-                        if (!validateGpu(gl, engine, oldPosition, oldVelocity)) {
+                        bool valid = false;
+                        if (verifyCase == VerifyCase::force) {
+                            valid = validateForceFixture(gl, engine, oldPosition, oldVelocity);
+                        } else {
+                            valid = validateGpu(gl, engine, oldPosition, oldVelocity);
+                        }
+                        if (!valid) {
                             failed = true;
                         }
                         checkedSteps = engine.steps;
@@ -253,7 +269,26 @@ int main(int argc, char** argv) {
                     } else if (!failed) {
                         oldPosition = readVector<Float4>(gl, engine.storage.positions[engine.current], plan.count);
                         oldVelocity = readVector<Float4>(gl, engine.storage.velocities[engine.current], plan.count);
-                        engine.submit(gl);
+                        if (checkedSteps == 0 && verifyCase == VerifyCase::acoustic) {
+                            prepareVerifyCase(verifyCase, oldPosition, oldVelocity);
+                            const auto expected = evaluate(plan, oldPosition, oldVelocity, engine.settings);
+                            const auto extrema = oracleStats(oldVelocity, expected);
+                            const double acoustic = 0.25 * plan.h / (engine.settings.soundSpeed + extrema.speed);
+                            const double forceBound = 0.25 * std::sqrt(plan.h / std::max(extrema.acceleration, 1e-12));
+                            if (!(acoustic < std::min(maxDt, forceBound))) {
+                                throw std::runtime_error("Requested timestep bound is not active in the fixture");
+                            }
+                            gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, engine.storage.positions[engine.current]);
+                            gl.BufferSubData(GL_SHADER_STORAGE_BUFFER, 0, oldPosition.size() * sizeof(Float4), oldPosition.data());
+                            gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, engine.storage.velocities[engine.current]);
+                            gl.BufferSubData(GL_SHADER_STORAGE_BUFFER, 0, oldVelocity.size() * sizeof(Float4), oldVelocity.data());
+                            gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+                        }
+                        if (verifyCase == VerifyCase::force) {
+                            submitForceFixture(gl, engine);
+                        } else {
+                            engine.submit(gl);
+                        }
                     }
                 }
             }

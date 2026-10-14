@@ -5,6 +5,7 @@ import {
   type Camera,
   type Particle,
   type Plan,
+  type Vec3,
 } from "@/lib/labs/sph-water-gpu";
 import { setupCanvas, type CanvasSize } from "../lab-shared";
 export function drawWater(
@@ -13,6 +14,7 @@ export function drawWater(
   plan: Plan,
   particles: Particle[],
   density: number[],
+  acceleration: Vec3[],
   selected: number,
   camera: Camera,
   stage: number,
@@ -61,6 +63,39 @@ export function drawWater(
     ctx.beginPath();
     ctx.arc(center.x, center.y, plan.support * center.scale, 0, Math.PI * 2);
     ctx.stroke();
+  }
+  if (stage >= 6) {
+    const maximum = Math.max(0, ...acceleration.map(length));
+    if (maximum > 0) {
+      ctx.strokeStyle = "#64e1b4";
+      const factor = (2 * plan.spacing) / maximum;
+      for (const [i, particle] of particles.entries()) {
+        if (slice && Math.abs(particle.position.z - probe.position.z) > plan.spacing / 2) continue;
+        const a = project(particle.position, camera, size.width, size.height);
+        const force = acceleration[i];
+        const b = project(
+          {
+            x: particle.position.x + factor * force.x,
+            y: particle.position.y + factor * force.y,
+            z: particle.position.z + factor * force.z,
+          },
+          camera,
+          size.width,
+          size.height,
+        );
+        const angle = Math.atan2(b.y - a.y, b.x - a.x);
+        if (Math.hypot(b.x - a.x, b.y - a.y) < 1) continue;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.lineTo(b.x - 5 * Math.cos(angle - 0.45), b.y - 5 * Math.sin(angle - 0.45));
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(b.x - 5 * Math.cos(angle + 0.45), b.y - 5 * Math.sin(angle + 0.45));
+        ctx.stroke();
+      }
+    }
+    ctx.fillStyle = "#64e1b4";
+    ctx.fillText("max |a| = " + maximum.toFixed(4) + " m/s² · mũi tên dùng tỉ lệ chung", 16, 65);
   }
   ctx.fillStyle = "#d5dcea";
   ctx.font = "13px sans-serif";

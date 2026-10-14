@@ -39,6 +39,8 @@ import {
   useReducedMotion,
 } from "./lab-shared";
 import { drawSlices } from "./volume-slicer/draw";
+import { createScanClock } from "@/lib/labs/volume-slicer/scan-clock";
+import { TrilinearInspector } from "./volume-slicer/trilinear-inspector";
 
 function SlicerExperiment({ stage }: { stage: number }) {
   const canvas = useRef<HTMLCanvasElement>(null),
@@ -54,6 +56,7 @@ function SlicerExperiment({ stage }: { stage: number }) {
     [paused, setPaused] = useState(true),
     [validation, setValidation] = useState("Chưa kiểm");
   const pointer = useRef<number | null>(null);
+  const [inspectorVersion, setInspectorVersion] = useState(0);
   const volume = useMemo(() => {
     if (stage < 2) return null;
     const value = new Volume();
@@ -99,12 +102,11 @@ function SlicerExperiment({ stage }: { stage: number }) {
   }, [stop, release]);
   useEffect(() => {
     if (paused || reduced || stage < 6) return;
-    let frame = 0,
-      previous = performance.now();
+    let frame = 0;
+    const elapsedSinceRefresh = createScanClock(performance.now());
     const animate = (now: number) => {
-      if (now - previous >= 100) {
-        const dt = Math.min(0.1, (now - previous) / 1000);
-        previous = now;
+      const dt = elapsedSinceRefresh(now);
+      if (dt > 0) {
         const axis = axesFor(activeView).cut;
         setCursor((point) => {
           const next: Point = [...point];
@@ -134,6 +136,7 @@ function SlicerExperiment({ stage }: { stage: number }) {
     setWidth(1);
     setLinear(false);
     setValidation("Chưa kiểm");
+    setInspectorVersion((value) => value + 1);
   };
   const pick = (event: PointerEvent<HTMLCanvasElement>, down = false) => {
     const p = canvasPoint(event, event.currentTarget);
@@ -387,6 +390,9 @@ function SlicerExperiment({ stage }: { stage: number }) {
         onLostPointerCapture={end}
       />
       <LabReadout items={readout} />
+      {stage >= 5 && volume && (
+        <TrilinearInspector key={inspectorVersion} volume={volume} point={cursor} />
+      )}
       {reduced && (
         <p>
           Reduced motion đang bật: quét tự động bị tắt; các lát tĩnh và điều khiển tay vẫn dùng

@@ -1,9 +1,40 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as s from "../lib/labs/volume-slicer.ts";
+import { createScanClock } from "../lib/labs/volume-slicer/scan-clock.ts";
 const near = (a, b, t = 1e-12) =>
   assert.ok(Number.isFinite(a) && Math.abs(a - b) <= t, `${a} != ${b}`);
 const grid = { count: [4, 3, 5], spacing: [0.2, 0.3, 0.4] };
+
+test("Trilinear inspector has eight independent contributions and reproduces 0.525", () => {
+  const volume = new s.Volume({ count: [2, 2, 2], spacing: [1, 1, 1] });
+  volume.values.set([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
+  const point = [-0.25, 0, 0.25];
+  const trace = s.linearStencil(volume, point);
+  assert.equal(trace.corners.length, 8);
+  near(
+    trace.corners.reduce((sum, c) => sum + c.weight, 0),
+    1,
+  );
+  near(trace.value, 0.525);
+  near(trace.value, s.sampleLinear(volume, point));
+  near(trace.corners[0].weight, 0.09375);
+  near(trace.corners[6].contribution, 0.196875);
+  assert.equal(s.linearStencil(volume, [-2, 0, 0]), null);
+});
+
+test("Slice refresh throttling preserves elapsed time at different frame rates", () => {
+  for (const fps of [30, 59, 60, 61, 144]) {
+    const update = createScanClock(0);
+    let distance = 0;
+    for (let frame = 1; frame <= fps * 10; frame++) distance += 4 * update((frame * 1000) / fps);
+    // At most one normal refresh interval is pending at the measurement endpoint.
+    assert.ok(Math.abs(distance - 40) <= 4 * (0.1 + 1 / fps) + 1e-10, `${fps}: ${distance}`);
+  }
+  const update = createScanClock(0);
+  near(update(10000), 0.25);
+  near(createScanClock(10000)(10000), 0);
+});
 test("Volume shape, row-major address and allocation bounds are explicit", () => {
   const v = new s.Volume(grid);
   assert.equal(v.values.length, 60);

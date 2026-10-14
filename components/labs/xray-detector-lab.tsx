@@ -29,6 +29,7 @@ import {
   useReducedMotion,
 } from "./lab-shared";
 import { drawDetector, pickPixel } from "./xray-detector/draw";
+import { SpectrumInspector } from "./xray-detector/spectrum-inspector";
 function Experiment({ stage }: { stage: number }) {
   const canvas = useRef<HTMLCanvasElement>(null),
     size = useCanvasSize(canvas),
@@ -40,6 +41,7 @@ function Experiment({ stage }: { stage: number }) {
     [auditResult, setAuditResult] = useState("Chưa kiểm"),
     [error, setError] = useState("");
   const [shown, setShown] = useState(0);
+  const [inspectorVersion, setInspectorVersion] = useState(0);
   const previewReady = useRef(false);
   const [preview, setPreview] = useState({ image: new Uint8ClampedArray(40 * 30 * 4), rows: 0 });
   const scene = useMemo(() => makeScene(settings.preset, stage), [settings.preset, stage]);
@@ -151,6 +153,7 @@ function Experiment({ stage }: { stage: number }) {
     setPixel({ x: 40, y: 30 });
     setAuditResult("Chưa kiểm");
     setError("");
+    setInspectorVersion((value) => value + 1);
   };
   const pick = (e: PointerEvent<HTMLCanvasElement>) => {
     const p = canvasPoint(e, e.currentTarget),
@@ -447,6 +450,13 @@ function Experiment({ stage }: { stage: number }) {
         onLostPointerCapture={end}
       />
       <LabReadout items={readout} />
+      {stage >= 7 && result && (
+        <SpectrumInspector
+          key={inspectorVersion}
+          depth={result.depth}
+          weight={settings.lowWeight}
+        />
+      )}
       {error && <p role="alert">{error}</p>}
       <p>
         Intensity lý tưởng, không photon noise, scatter, đáp ứng detector hay hệ số vật liệu đã hiệu

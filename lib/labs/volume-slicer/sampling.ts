@@ -1,6 +1,5 @@
 import { Volume, inside, gridCoordinate, worldCoordinate, type Point } from "./model.ts";
-export function sampleLinear(volume: Volume, point: Point): number | null {
-  if (!inside(volume.grid, point)) return null;
+function linearCell(volume: Volume, point: Point) {
   const low: Point = [0, 0, 0],
     high: Point = [0, 0, 0],
     fraction: Point = [0, 0, 0];
@@ -13,6 +12,11 @@ export function sampleLinear(volume: Volume, point: Point): number | null {
     high[axis] = Math.min(low[axis] + 1, volume.grid.count[axis] - 1);
     fraction[axis] = coordinate - low[axis];
   }
+  return { low, high, fraction };
+}
+export function sampleLinear(volume: Volume, point: Point): number | null {
+  if (!inside(volume.grid, point)) return null;
+  const { low, high, fraction } = linearCell(volume, point);
   let result = 0;
   for (let z = 0; z < 2; z++)
     for (let y = 0; y < 2; y++)
@@ -31,6 +35,29 @@ export function sampleLinear(volume: Volume, point: Point): number | null {
         result += weight * volume.voxel(index[0], index[1], index[2]);
       }
   return result;
+}
+
+// Inspector-only trace; the image sampler does not allocate corner records per pixel.
+export function linearStencil(volume: Volume, point: Point) {
+  if (!inside(volume.grid, point)) return null;
+  const { low, high, fraction } = linearCell(volume, point);
+  const corners = [];
+  for (let z = 0; z < 2; z++)
+    for (let y = 0; y < 2; y++)
+      for (let x = 0; x < 2; x++) {
+        const bits: Point = [x, y, z];
+        const index = bits.map((bit, a) => (bit ? high[a] : low[a])) as Point;
+        const weight = bits.reduce((w, bit, a) => w * (bit ? fraction[a] : 1 - fraction[a]), 1);
+        const value = volume.voxel(...index);
+        corners.push({ bits, index, weight, value, contribution: weight * value });
+      }
+  return {
+    low,
+    high,
+    fraction,
+    corners,
+    value: corners.reduce((sum, c) => sum + c.contribution, 0),
+  };
 }
 export const affine = (p: Point) => 0.2 + 0.1 * p[0] + 0.2 * p[1] + 0.15 * p[2];
 export function auditVolume(volume: Volume) {

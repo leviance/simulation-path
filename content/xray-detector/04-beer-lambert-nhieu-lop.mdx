@@ -26,22 +26,34 @@ Các layer cộng tau nên đổi thứ tự danh sách không đổi T. Overlap
 
 ### Bước 1 — Tạo các box có hệ số riêng
 
-makeScene thêm preset layers và overlap:
+Ta bắt đầu với lớp phía trước. Viết từng field giúp thấy rõ hình học nằm trong minimum/maximum, còn muLow/muHigh là hệ số, không phải tọa độ:
 
 ```cpp title="include/materials.hpp"
-inline Scene makeScene([[maybe_unused]] int preset) {
-    const Material slab{{-1.2, -1.05, -0.55}, {1.2, 1.05, 0.55}, 0.55, 0.18};
-    if (preset == 1) {
-        return {{{-1.2, -1.05, -1.1}, {1.2, 1.05, -0.25}, 0.35, 0.12}, {{-1.2, -1.05, 0.25}, {1.2, 1.05, 1.1}, 0.9, 0.32}, {{0.25, -0.45, 1.35}, {0.7, 0.1, 1.85}, 1.8, 0.65}};
-    }
-    if (preset == 2) {
-        return {slab, {{-0.6, -0.5, -0.8}, {0.6, 0.5, 0.8}, 1.1, 0.4}};
-    }
-    return {slab};
-}
+Material frontLayer;
+frontLayer.minimum = {-1.2, -1.05, -1.1};
+frontLayer.maximum = {1.2, 1.05, -0.25};
+frontLayer.muLow = 0.35;
+frontLayer.muHigh = 0.12;
 ```
 
-Preset1 có hai lớp tách bởi không khí và một box nhỏ lệch tâm; nó giúp nhìn lỗi trục. Preset2 cố ý overlap additive. MuHigh được giữ cho mô hình hai năng lượng ở Bài 07; hiện chỉ dùng muLow để tạo T.
+Theo z, lớp này dài −0.25−(−1.1)=0.85. Lớp sau nằm từ z=0.25 đến 1.1; khoảng giữa là không khí. Đặt tên riêng cho các phần còn lại rồi ghép scene:
+
+```cpp title="include/materials.hpp — lớp sau và phần chèn lệch tâm"
+Material backLayer;
+backLayer.minimum = {-1.2, -1.05, 0.25};
+backLayer.maximum = {1.2, 1.05, 1.1};
+backLayer.muLow = 0.9;
+backLayer.muHigh = 0.32;
+
+Material smallInsert;
+smallInsert.minimum = {0.25, -0.45, 1.35};
+smallInsert.maximum = {0.7, 0.1, 1.85};
+smallInsert.muLow = 1.8;
+smallInsert.muHigh = 0.65;
+return {frontLayer, backLayer, smallInsert};
+```
+
+Đoạn này nằm trong nhánh preset=1 của makeScene. Vùng chèn lệch tâm giúp nhận ra lỗi đảo trục; tia giữa không đi qua nó. Với tia giữa, tauLow=0.35*0.85+0.9*0.85=1.0625. MuHigh được giữ cho Bài 07; hiện ảnh chỉ dùng muLow. Preset=2 dùng slab cùng một additionalMedium có tên riêng và cố ý cộng mu tại vùng overlap.
 
 ### Bước 2 — Cộng optical depth từ chord
 

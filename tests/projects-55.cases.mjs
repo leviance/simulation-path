@@ -62,3 +62,12 @@ test("Project55 documents finite beams, additive overlap, raw/display separation
   ])
     assert.match(last, p);
 });
+
+test("Project55 names scene materials and avoids rerendering the image when selecting a pixel", async () => {
+  const materials = await readFile(path.join(dir, "source-template/include/materials.hpp"), "utf8");
+  assert.match(materials, /return \{frontLayer, backLayer, smallInsert\}/);
+  const main = await readFile(path.join(dir, "source-template/src/main.cpp"), "utf8");
+  assert.match(main, /if \(imageDirty\)\s*\{\s*xray::upload/);
+  assert.match(main, /if \(inspectorDirty\)/);
+  assert.doesNotMatch(main, /bool dirty = true/);
+});

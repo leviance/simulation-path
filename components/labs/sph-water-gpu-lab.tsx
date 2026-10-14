@@ -15,13 +15,13 @@ import {
   evaluate,
   length,
   subtract,
-  makeParticles,
   makePlan,
   step,
   type Camera,
   type Particle,
   type Settings,
 } from "@/lib/labs/sph-water-gpu";
+import { forceFixture, type ForcePreset } from "@/lib/labs/sph-water-gpu/fixtures";
 import { LabReadout, useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
 import { drawWater } from "./sph-water-gpu/draw";
 
@@ -32,7 +32,10 @@ function WaterExperiment({ stage }: { stage: number }) {
     reducedMotion = useReducedMotion();
   const [side, setSide] = useState(4),
     plan = useMemo(() => makePlan(side), [side]);
-  const [particles, setParticles] = useState<Particle[]>(() => makeParticles(makePlan(4))),
+  const [preset, setPreset] = useState<ForcePreset>(stage === 6 ? "compressed" : "lattice");
+  const [particles, setParticles] = useState<Particle[]>(() =>
+      forceFixture(makePlan(4), stage === 6 ? "compressed" : "lattice"),
+    ),
     state = useRef(particles);
   const [settings, setSettings] = useState<Settings>({ ...defaultSettings }),
     [camera, setCamera] = useState<Camera>({ ...defaultCamera });
@@ -64,17 +67,19 @@ function WaterExperiment({ stage }: { stage: number }) {
   );
   const advance = useCallback(
     (steps: number) => {
-      if (stage < 7) return;
+      if (stage < 7 || error) return;
       try {
         let elapsed = 0,
           dt = 0;
+        let next = state.current;
         for (let i = 0; i < steps; i++) {
-          const result = step(plan, state.current, settings, stage);
-          state.current = result.particles;
+          const result = step(plan, next, settings, stage);
+          next = result.particles;
           elapsed += result.dt;
           dt = result.dt;
         }
-        setParticles(state.current);
+        state.current = next;
+        setParticles(next);
         setTick((v) => v + steps);
         setTime((v) => v + elapsed);
         setDt(dt);
@@ -83,12 +88,13 @@ function WaterExperiment({ stage }: { stage: number }) {
         setError(String(failure));
       }
     },
-    [stage, plan, settings, stop],
+    [stage, plan, settings, stop, error],
   );
-  const reset = (nextSide = side) => {
+  const reset = (nextSide = side, nextPreset = preset) => {
     stop();
     setSide(nextSide);
-    const value = makeParticles(makePlan(nextSide));
+    setPreset(nextPreset);
+    const value = forceFixture(makePlan(nextSide), nextPreset);
     state.current = value;
     setParticles(value);
     setSelected(0);
@@ -131,7 +137,19 @@ function WaterExperiment({ stage }: { stage: number }) {
   }, [paused, reducedMotion, stage, error, advance]);
   useEffect(() => {
     const ctx = canvas.current?.getContext("2d");
-    if (ctx) drawWater(ctx, size, plan, particles, report.density, selected, camera, stage, slice);
+    if (ctx)
+      drawWater(
+        ctx,
+        size,
+        plan,
+        particles,
+        report.density,
+        report.acceleration,
+        selected,
+        camera,
+        stage,
+        slice,
+      );
   }, [size, plan, particles, report, selected, camera, stage, slice]);
   const down = (event: PointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0 || pointer.current) return;
@@ -234,6 +252,21 @@ function WaterExperiment({ stage }: { stage: number }) {
             <option value={6}>6³ = 216 hạt</option>
           </select>
         </label>
+        {stage >= 6 && (
+          <label>
+            Thí nghiệm lực{" "}
+            <select
+              aria-label="Thí nghiệm lực"
+              value={preset}
+              onChange={(e) => reset(side, e.target.value as ForcePreset)}
+            >
+              <option value="lattice">Khối chưa nén</option>
+              <option value="compressed">Khối bị nén — pressure</option>
+              <option value="approaching">Hai hạt tiến lại gần — viscosity</option>
+              <option value="separating">Hai hạt tách xa — viscosity bằng 0</option>
+            </select>
+          </label>
+        )}
         <label>
           Hạt chọn{" "}
           <input
@@ -405,6 +438,14 @@ function WaterExperiment({ stage }: { stage: number }) {
         <p>
           Vòng tím là hình chiếu của support sphere 2h. Hai hạt nhìn gần nhau trên màn hình vẫn có
           thể cách xa theo z; bảng density dùng khoảng cách 3D, không dùng khoảng cách pixel.
+        </p>
+      )}
+      {stage >= 6 && (
+        <p>
+          Mũi tên xanh chỉ hướng acceleration; mọi mũi tên dùng cùng tỉ lệ, với vector lớn nhất dài
+          hai spacing. Đây không phải vị trí hạt sau một tick. Bài 06 chưa có gravity: khối nén cho
+          thấy pressure; cặp tiến lại gần cho thấy viscosity, cặp tách xa không có viscosity. Các
+          cảnh hai hạt là phép thử riêng, không phải khối nước 64 kg.
         </p>
       )}
       {stage >= 10 && (

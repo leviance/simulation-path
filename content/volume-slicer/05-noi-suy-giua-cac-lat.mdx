@@ -25,6 +25,25 @@ Tổng trọng số bằng một. Ở một centre, một góc có trọng số 
 
 Bật Trilinear và dời lát từng 0.1 voxel. Đọc nearest/trilinear tại cùng cursor. Trilinear thường thay đổi liên tục, nearest đổi theo bậc. Điều này xảy ra trước window/level; SDL texture vẫn dùng nearest để không che mất sự khác nhau.
 
+### Tính một điểm trước khi viết vòng lặp
+
+Trong phần **Tám voxel đóng góp bao nhiêu?**, chọn ô mẫu. Tám giá trị được xếp theo thứ tự x thay nhanh nhất: 0.1, 0.2, …, 0.8. Điểm vàng có fraction (0.25,0.5,0.75), nghĩa là đi 25% theo x, 50% theo y và 75% theo z từ góc thấp của ô.
+
+Theo x, hai trọng số là 0.75 và 0.25; theo y là 0.5 và 0.5; theo z là 0.25 và 0.75. Mỗi góc lấy tích của ba lựa chọn:
+
+| Góc x,y,z | Giá trị | Trọng số | Đóng góp |
+| --- | --- | --- | --- |
+| 0,0,0 | 0.1 | 0.09375 | 0.009375 |
+| 1,0,0 | 0.2 | 0.03125 | 0.006250 |
+| 0,1,0 | 0.3 | 0.09375 | 0.028125 |
+| 1,1,0 | 0.4 | 0.03125 | 0.012500 |
+| 0,0,1 | 0.5 | 0.28125 | 0.140625 |
+| 1,0,1 | 0.6 | 0.09375 | 0.056250 |
+| 0,1,1 | 0.7 | 0.28125 | 0.196875 |
+| 1,1,1 | 0.8 | 0.09375 | 0.075000 |
+
+Tổng trọng số bằng 1; tổng đóng góp bằng **0.525**. Dời fx về 0 rồi 1 để thấy các góc bên đối diện lần lượt mất trọng số. Chế độ **Theo cursor của volume** dùng đúng tám mẫu quanh điểm đang xem trên ảnh; ô được vẽ chuẩn hóa để đọc trọng số, không thể hiện tỉ lệ physical spacing.
+
 ## Viết code từng bước
 
 ### Bước 1 — Tìm low/high/fraction đúng hệ centre
@@ -42,15 +61,29 @@ Nếu count=1 thì low=high=0,fraction=0; không có chia cho count−1 hoặc a
 
 ### Bước 2 — Cộng tám góc, không ghép công thức khó đọc
 
-Ba vòng lặp x/y/z mỗi vòng chạy 0 và 1. Trong từng góc:
+Ba vòng lặp x/y/z mỗi vòng chạy 0 và 1. Đây là toàn bộ phần cộng tám góc sau khi đã tính low/high/fraction ở Bước 1:
 
 ```cpp title="include/sampling.hpp — trọng số một góc"
-double factor = 1 - fraction[axis];
-if (corner[axis] == 1) {
-    index[axis] = high[axis];
-    factor = fraction[axis];
+double result = 0;
+for (int z = 0; z < 2; ++z) {
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            const std::array<int, 3> corner{x, y, z};
+            std::array<int, 3> index = low;
+            double weight = 1;
+            for (int axis = 0; axis < 3; ++axis) {
+                double factor = 1 - fraction[axis];
+                if (corner[axis] == 1) {
+                    index[axis] = high[axis];
+                    factor = fraction[axis];
+                }
+                weight *= factor;
+            }
+            result += weight * volume.voxel(index[0], index[1], index[2]);
+        }
+    }
 }
-weight *= factor;
+return result;
 ```
 
 Index bắt đầu bằng low; bit 1 đổi sang high. Weight bắt đầu bằng một rồi nhân factor của cả ba trục. Sau cùng cộng weight*voxel(index) vào result. Cách viết dài hơn một biểu thức tám hạng nhưng dễ đặt breakpoint và đối chiếu từng góc.
@@ -84,4 +117,4 @@ Nearest/trilinear tại centre bằng voxel gốc. Trilinear giữ field hằng 
 
 ## Bài tập mở rộng
 
-Vẽ tám centre và trọng số tại một probe riêng để nhìn tổng weight=1. Sang [ba view và điểm chung](/projects/volume-slicer/06-ba-view-va-diem-chung).
+Đổi ô mẫu thành field chỉ thay theo x. Dự đoán vì sao dời fy/fz không đổi kết quả, rồi kiểm bằng test. Sang [ba view và điểm chung](/projects/volume-slicer/06-ba-view-va-diem-chung).

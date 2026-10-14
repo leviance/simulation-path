@@ -20,10 +20,34 @@ inline Scene makeScene([[maybe_unused]] int preset) {
     const Material slab{{-1.2, -1.05, -0.55}, {1.2, 1.05, 0.55}, 0.55, 0.18};
 #if LAB_CHECKPOINT >= 4
     if (preset == 1) {
-        return {{{-1.2, -1.05, -1.1}, {1.2, 1.05, -0.25}, 0.35, 0.12}, {{-1.2, -1.05, 0.25}, {1.2, 1.05, 1.1}, 0.9, 0.32}, {{0.25, -0.45, 1.35}, {0.7, 0.1, 1.85}, 1.8, 0.65}};
+        // Two slabs along z, separated by air. Name fields to expose their meaning.
+        Material frontLayer;
+        frontLayer.minimum = {-1.2, -1.05, -1.1};
+        frontLayer.maximum = {1.2, 1.05, -0.25};
+        frontLayer.muLow = 0.35;
+        frontLayer.muHigh = 0.12;
+
+        Material backLayer;
+        backLayer.minimum = {-1.2, -1.05, 0.25};
+        backLayer.maximum = {1.2, 1.05, 1.1};
+        backLayer.muLow = 0.9;
+        backLayer.muHigh = 0.32;
+
+        // An off-centre insert makes axis or orientation mistakes visible.
+        Material smallInsert;
+        smallInsert.minimum = {0.25, -0.45, 1.35};
+        smallInsert.maximum = {0.7, 0.1, 1.85};
+        smallInsert.muLow = 1.8;
+        smallInsert.muHigh = 0.65;
+        return {frontLayer, backLayer, smallInsert};
     }
     if (preset == 2) {
-        return {slab, {{-0.6, -0.5, -0.8}, {0.6, 0.5, 0.8}, 1.1, 0.4}};
+        Material additionalMedium;
+        additionalMedium.minimum = {-0.6, -0.5, -0.8};
+        additionalMedium.maximum = {0.6, 0.5, 0.8};
+        additionalMedium.muLow = 1.1;
+        additionalMedium.muHigh = 0.4;
+        return {slab, additionalMedium};
     }
 #endif
     return {slab};

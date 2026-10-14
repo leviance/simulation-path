@@ -10,7 +10,7 @@ Ta thêm đúng hai thành phần tổng hợp để thấy sự khác biệt. �
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mỗi material có muLow và muHigh. Dataset của bài chọn muLow>muHigh để thành phần high ít bị suy giảm hơn. Low weight w là phần tín hiệu không vật thể của low; tổng weights bằng1:
+Mỗi material có muLow và muHigh. Trong dữ liệu tổng hợp này, muLow lớn hơn muHigh nên thành phần high đi xuyên qua dễ hơn. w là tỉ lệ tín hiệu low khi chưa có vật thể; thành phần high nhận phần còn lại 1−w. Hai trọng số cộng lại bằng 1:
 
 $$
 T=w e^{-\tau_L}+(1-w)e^{-\tau_H},\qquad p=-\ln(T)
@@ -21,6 +21,14 @@ $$
 [NIST XCOM](https://physics.nist.gov/PhysRefData/Xcom/Text/intro.html) là nguồn dữ liệu hệ số photon theo năng lượng/vật liệu. Project không lấy số từ đó; các mu đang dùng chỉ phục vụ bài tập. Không suy ngược vật liệu thật từ hai số toy này.
 
 <InteractiveLab demo="xray-detector" mode="xray55-7" />
+
+### Tính một ví dụ để thấy vì sao không thể lấy trung bình tau
+
+Giả sử tauLow=1, tauHigh=0.2 và w=0.6. Tín hiệu low truyền qua là 0.6*exp(−1)≈0.220728; high là 0.4*exp(−0.2)≈0.327492. Detector cộng hai số ấy: T≈**0.548220**, rồi mới lấy p=−ln(T)≈**0.601079**.
+
+Nếu lấy tau trung bình trước, ta nhận 0.6*1+0.4*0.2=0.68 và exp(−0.68)≈0.506617. Đây là kết quả khác, không phải cách viết gọn của cùng phép đo.
+
+Nhân đôi chiều dài của cả hai thành phần thì tauLow=2, tauHigh=0.4. T≈0.349329 và p≈1.051741, nhỏ hơn 2*0.601079. Thành phần high ban đầu chiếm 40% tín hiệu, nhưng sau vật thể thứ nhất đã chiếm khoảng 59.74% tín hiệu truyền qua. Chính sự thay đổi tỉ lệ này làm đường p theo độ dày cong xuống, thay vì là một đường thẳng.
 
 ## Viết code từng bước
 
@@ -81,7 +89,7 @@ Weight âm hoặc tổng không1 có thể làm ratio không còn trong [0,1]. H
 
 Build/run project_55_checkpoint_7. Chọn single slab, exact, bật spectral. So T với w*exp(-tauLow)+(1−w)*exp(-tauHigh); weight 0/1 là ca kiểm dễ nhất.
 
-Tạo hai slab giống nhau nối tiếp hoặc duplicate additive trong test để nhân thickness. Với mono, p2=2*p1; với hai thành phần khác mu và weight nằm giữa0/1, p2 thường nhỏ hơn2*p1. Layer order vẫn không đổi kết quả vì ta chỉ mô hình primary attenuation, chưa scatter.
+Tạo hai slab giống nhau nối tiếp hoặc thêm bản sao slab trong test để nhân đôi độ dày. Với mono, p2=2*p1; với hai hệ số khác nhau và `0<w<1`, p không còn tăng tuyến tính. Đổi thứ tự layer vẫn không đổi kết quả vì mô hình chỉ tính suy giảm của tia truyền thẳng, chưa có scatter.
 
 ## Thử làm sai để hiểu đúng
 
@@ -90,13 +98,13 @@ Tạo hai slab giống nhau nối tiếp hoặc duplicate additive trong test đ
 
 ## Tự kiểm tra kết quả
 
-w0/1 đúng endpoint; strength0 cho T1 với mọi w. MuLow=MuHigh thì spectral trùng mono. Scene/ray/coefficients không bị sửa khi đổi mode.
+w=0 và w=1 cho đúng hai trường hợp một thành phần; strength=0 cho T=1 với mọi w. MuLow=MuHigh thì spectral trùng mono. Scene, ray và các hệ số không bị sửa khi đổi mode.
 
 Không áp dụng kết quả toy này cho chẩn đoán, chọn liều hay thiết kế hệ phát tia. Project chỉ tính forward projection tổng hợp.
 
 ## Bài tập mở rộng
 
-Chọn tauLow=1,tauHigh=.2,w=.6, tính cả hai công thức “sum exp” và “exp average”. So kết quả, rồi giải thích tại sao log không phân phối qua tổng.
+Giữ ví dụ trên nhưng đổi w=0.5. Tính tỉ lệ low/high sau vật thể và sau khi nhân đôi độ dày. Giải thích vì sao không được lấy log riêng từng thành phần rồi cộng theo trọng số ban đầu.
 
 [Bài tiếp theo](/projects/xray-detector/08-kiem-chung-va-hoan-thien) — Kiểm máy X-ray ảo rồi chạy project hoàn chỉnh.
 

@@ -90,3 +90,13 @@ test("Project54 explains midpoint approximation, physical ds, result C/T and saf
   ])
     assert.match(last, pattern);
 });
+
+test("Project54 GPU verification covers zero extinction, transfer and early shader options", async () => {
+  const source = await readFile(
+    path.join(directory, "source-template/include/validation.hpp"),
+    "utf8",
+  );
+  assert.match(source, /Settings\{0, 0\.17, false, false\}/);
+  assert.match(source, /Settings\{8, 0\.04, true, true\}/);
+  assert.match(source, /Settings\{8, 0\.17, false, true\}/);
+});

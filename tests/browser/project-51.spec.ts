@@ -1,4 +1,19 @@
 import { expect, test } from "@playwright/test";
+test("SPH pressure and viscosity experiments produce observable force in lesson6", async ({
+  page,
+}) => {
+  await page.goto("/projects/sph-water-gpu/06-pressure-va-viscosity");
+  const acceleration = page
+    .locator(".lab-readout div")
+    .filter({ has: page.getByText("Acceleration hạt chọn", { exact: true }) })
+    .locator("dd");
+  await expect(acceleration).not.toHaveText("(0.000000; 0.000000; 0.000000)");
+  await page.getByLabel("Thí nghiệm lực", { exact: true }).selectOption("separating");
+  await expect(acceleration).toHaveText("(0.000000; 0.000000; 0.000000)");
+  await page.getByLabel("Thí nghiệm lực", { exact: true }).selectOption("approaching");
+  await expect(acceleration).not.toHaveText("(0.000000; 0.000000; 0.000000)");
+  await expect(page.getByRole("button", { name: "Tiến một tick", exact: true })).toBeDisabled();
+});
 test("SPH3D lab gates physics,plans large workloads without allocation and validates CPU independently", async ({
   page,
 }) => {

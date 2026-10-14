@@ -18,10 +18,15 @@ inline void verifyGpu(GlApi& gl, Renderer& renderer) {
         for (bool inside : {false, true}) {
             Camera camera;
             camera.inside = inside;
-            for (double step : {0.04, 0.17}) {
-                Settings settings;
-                settings.stepLength = step;
-                settings.early = false;
+            // Small, explicit cases cover each shader option without growing the target.
+            const std::array cases{
+                Settings{2, 0.04, true, false},
+                Settings{2, 0.17, true, false},
+                Settings{0, 0.17, false, false},
+                Settings{2, 0.17, false, false},
+                Settings{8, 0.04, true, true},
+                Settings{8, 0.17, false, true}};
+            for (const auto settings : cases) {
                 renderer.render(gl, camera, settings);
                 gl.BindFramebuffer(GL_FRAMEBUFFER, renderer.framebuffer);
                 for (const auto& pixel : {std::array{7, 5}, std::array{0, 0}, std::array{15, 11}, std::array{12, 8}}) {

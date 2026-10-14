@@ -1,4 +1,5 @@
 #include "query.hpp"
+#include "scan.hpp"
 #include "validation.hpp"
 #include <cstdlib>
 #include <iostream>
@@ -32,6 +33,15 @@ void checkHit(const std::optional<picking::Hit>& hit, double t, std::string_view
 
 int main() {
     using namespace picking;
+    Scan scan;
+    const double first = scan.advance(0.05);
+    const double heldPhase = scan.phase;
+    // Pausing calls no advance; elapsed wall time must not enter the next dt.
+    check(closeEnough(first, 0.5 + 0.35 * std::sin(0.04)), "scan follows running time");
+    check(closeEnough(scan.advance(0.05), 0.5 + 0.35 * std::sin(heldPhase + 0.04)), "resume preserves phase");
+    scan.reset();
+    check(scan.phase == 0 && closeEnough(scan.advance(0), 0.5), "scan reset ignores uptime");
+    check(closeEnough(scan.advance(10), 0.5 + 0.35 * std::sin(0.08)), "scan clamps a real long frame");
     // Projection and unprojection must agree at different aspect ratios.
     const Camera camera;
     for (double aspect : {0.6, 1.0, 1.5, 2.5}) {

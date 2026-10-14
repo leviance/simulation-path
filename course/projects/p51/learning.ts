@@ -30,7 +30,8 @@ const data = {
       steps: [
         {
           title: "Khóa layout CPU/GLSL",
-          explanation: "Float4 có size/alignment 16 byte, Vec 3double chỉ dành cho oracle.",
+          explanation:
+            "Float4 có kích thước và alignment 16 byte để khớp GLSL; Vec3 dùng double chỉ để tính đáp án CPU.",
         },
         {
           title: "Tính bộ nhớ trước allocation",
@@ -177,7 +178,7 @@ const data = {
         {
           title: "Duyệt 27 cell và lọc support thật",
           explanation:
-            "Duyệt 27 cell, lọc kernel support; vượt 4096ứng viên là failure, không lực truncated.",
+            "Duyệt 27 cell rồi lọc theo khoảng cách support. Nếu vượt 4096 ứng viên, báo lỗi thay vì trả lực từ một danh sách bị cắt cụt.",
         },
       ],
     },

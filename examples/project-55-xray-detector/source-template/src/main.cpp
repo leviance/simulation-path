@@ -43,7 +43,8 @@ int main(int argc, char** argv) {
         }
         SDL_SetRenderVSync(renderer, 1);
         [[maybe_unused]] xray::Settings settings;
-        [[maybe_unused]] bool dirty = true;
+        [[maybe_unused]] bool imageDirty = true;
+        [[maybe_unused]] bool inspectorDirty = true;
         [[maybe_unused]] int pixelX = 40;
         [[maybe_unused]] int pixelY = 30;
 #if LAB_CHECKPOINT >= 1
@@ -97,7 +98,7 @@ int main(int argc, char** argv) {
                     if (picked) {
                         pixelX = (*picked)[0];
                         pixelY = (*picked)[1];
-                        dirty = true;
+                        inspectorDirty = true;
                         paused = true;
                         dragging = SDL_CaptureMouse(true);
                     }
@@ -110,7 +111,7 @@ int main(int argc, char** argv) {
                     if (picked) {
                         pixelX = (*picked)[0];
                         pixelY = (*picked)[1];
-                        dirty = true;
+                        inspectorDirty = true;
                     }
                 }
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
@@ -118,6 +119,9 @@ int main(int argc, char** argv) {
                     SDL_CaptureMouse(false);
                 }
                 if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+                    const auto before = settings;
+                    const int oldPixelX = pixelX;
+                    const int oldPixelY = pixelY;
                     if (event.key.key != SDLK_SPACE) {
                         paused = true;
                     }
@@ -204,7 +208,8 @@ int main(int argc, char** argv) {
                         std::cout << "Audit PASS; max boundary optical-depth error=" << xray::audit() << '\n';
                     }
 #endif
-                    dirty = true;
+                    imageDirty = imageDirty || xray::imageChanged(before, settings);
+                    inspectorDirty = inspectorDirty || before != settings || oldPixelX != pixelX || oldPixelY != pixelY;
                 }
 #endif
             }
@@ -218,7 +223,8 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 3
             if (!paused) {
                 settings.angle = xray::wrapAngle(settings.angle + 0.25 * dt);
-                dirty = true;
+                imageDirty = true;
+                inspectorDirty = true;
             }
 #else
             (void)dt;
@@ -226,9 +232,14 @@ int main(int argc, char** argv) {
 #endif
 #endif
 #if LAB_CHECKPOINT >= 1
-            if (dirty) {
+            // Rebuild the whole image only when image parameters change.
+            if (imageDirty) {
                 xray::upload(texture, xray::makeImage(settings));
+                imageDirty = false;
+            }
 #if LAB_CHECKPOINT >= 4
+            // Choosing a pixel measures one ray; it does not rerender 4,800 rays.
+            if (inspectorDirty) {
                 const auto measurement = xray::measure(xray::detectorRay((pixelX + 0.5) / xray::imageWidth, (pixelY + 0.5) / xray::imageHeight), xray::makeScene(settings.preset), settings);
                 std::ostringstream title;
                 title << std::fixed << std::setprecision(5) << "Toy X-ray | pixel " << pixelX << ',' << pixelY << " | tauLow=" << measurement.depth.low << " T=" << measurement.ratio << " I=" << measurement.intensity;
@@ -242,9 +253,9 @@ int main(int argc, char** argv) {
                 if (!SDL_SetWindowTitle(window, title.str().c_str())) {
                     throw std::runtime_error(SDL_GetError());
                 }
-#endif
-                dirty = false;
+                inspectorDirty = false;
             }
+#endif
 #endif
             if (!SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255) || !SDL_RenderClear(renderer)) {
                 throw std::runtime_error(SDL_GetError());

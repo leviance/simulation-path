@@ -67,6 +67,8 @@ Canvas có thêm thí nghiệm tia song song/tiếp tuyến/suy biến và hỗ 
 
 ## Ghép các phần lại
 
+Chế độ quét giữ phase riêng trong include/scan.hpp. Mỗi frame vẫn cập nhật mốc thời gian, nhưng chỉ khi đang chạy mới cộng 0.8*dt vào phase. Pause không làm phase trôi theo uptime; R đặt phase về 0. Vì vậy chờ mười giây khi pause không khiến tâm ngắm nhảy tới một vị trí khác lúc resume.
+
 Build project_52_checkpoint_7. Ngắm vào sphere rồi nhấn I: console đọc từng hit với t, point, normal, frontFace. Title ghi nearest ID. Hãy so ID 0/1/2/3 với plane/sphere/box/triangle, không đoán theo màu dây nào ở trên cùng.
 
 C++ dùng input trong logical 900×640; Canvas dùng aspect của vùng CSS thật. Nếu hai hình có bố cục hơi khác trên màn hình hẹp, đó là aspect khác, không phải công thức khác. Cả hai vẫn dùng đúng aspect cho vẽ và ray.

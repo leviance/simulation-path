@@ -26,6 +26,8 @@ $$
 
 Nếu entry lớn hơn exit, không có khoảng chung. Khi một thành phần direction bằng zero, tia không đổi tọa độ trên trục đó: origin ngoài slab là miss ngay; origin trong slab thì trục ấy không thu hẹp khoảng.
 
+Ví dụ box=[−1,1]³, origin=(−2,0,−3), direction=(1,0,1)/√2. Slab x cho khoảng [√2,3√2], slab z cho [2√2,4√2]; slab y không giới hạn thêm vì direction.y=0 và origin.y nằm trong box. Khoảng chung là **[2√2,3√2]**. Điểm vào là (0,0,−1), điểm ra là (1,0,0), chiều dài đoạn trong box là √2. Hãy tự thay hai t vào origin+t*direction trước khi đọc vòng lặp.
+
 Đừng kẹp entry bằng tMin rồi dùng nó như surface hit. Tia trong box có entry âm. Nếu tMax dừng trước exit, đoạn tia vẫn nằm trong thể tích nhưng chưa chạm mặt nào hợp lệ.
 
 <InteractiveLab demo="ray-intersections" mode="ray52-5" />

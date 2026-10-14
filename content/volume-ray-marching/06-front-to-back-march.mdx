@@ -20,6 +20,15 @@ $$
 
 Told là phần ánh sáng còn xuyên qua các đoạn phía trước. Cộng màu bằng **T cũ**, rồi mới cập nhật T. Không lấy T mới để làm đoạn hiện tại bị suy giảm thêm một lần.
 
+Thử tính hai đoạn đều dài 1, sigma=2, density lần lượt 0.25 và 0.5. Dùng channel blue của màu cool, có c=1:
+
+| Đoạn | T trước đoạn | alpha của đoạn | Phần cộng vào C | C sau đoạn | T sau đoạn |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 1 | 0.393469 | 0.393469 | 0.393469 | 0.606531 |
+| 2 | 0.606531 | 0.632121 | 0.383400 | 0.776870 | 0.223130 |
+
+Ở đoạn 2, 0.632121 không được cộng nguyên vào C: phần sương phía trước đã giảm trọng số còn 0.606531. Hai channel còn lại dùng cùng phép tính, nhân thêm 0.8 và 0.9. Với màu hằng, kiểm nhanh Cblue+T=1; với transfer thay đổi theo density ở bài sau, đừng áp dụng invariant này một cách máy móc cho mọi channel.
+
 Chọn Medium hằng, tiến từng mẫu bằng N hoặc nút Tiến một mẫu. Đồ thị đọc density và T sau mỗi đoạn; ảnh trái là kết quả đầy đủ, không phải phần ray đang xem. Khi đổi tham số, profile về đầu và preview CPU được dựng lại theo batch nhỏ.
 
 <InteractiveLab demo="volume-ray-marching" mode="fog54-6" />

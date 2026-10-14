@@ -4,11 +4,11 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-All-pairs 512 hạt có thể kiểm được, nhưng một triệu hạt cần 10¹²so sánh cho một pass. Ta chuyển sang grid mà không thay kernel, density hoặc force. Không upload bucket CPU và cũng không giới hạn cứng 32 hạt/cell.
+All-pairs với 512 hạt vẫn đủ nhỏ để kiểm. Nhưng với một triệu hạt, mỗi pass phải xét tới 10¹² cặp. Ta chuyển sang spatial grid để tìm ứng viên lân cận, còn kernel và công thức lực giữ nguyên. Grid được dựng trên GPU; không upload bucket CPU hay âm thầm bỏ hạt khi một cell chứa hơn 32 hạt.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Cell sizeR=2 h. Một hạt chỉ cần các cell kề theo mỗi trục:3×3×3=27 cell. Cell là broad phase; sau đó vẫn tính khoảng cách 3D/support thật.
+Đặt cạnh cell bằng bán kính support R=2h. Khi tìm hàng xóm của một hạt, ta xét cell của nó cùng các cell kề theo ba trục: 3×3×3=27 cell. Đây mới là bước tìm ứng viên; mỗi cặp vẫn phải được lọc bằng khoảng cách 3D thật.
 
 CSR gồm counts, exclusive offsets và indices. Counts quyết định mỗi cell có bao nhiêu ID; offsets cho vị trí bắt đầu. Scatter dùng atomic cursor để mỗi ID nhận một slot riêng. Thứ tự ID trong cell có thể khác giữa các dispatch, nên float sums không được hứa khớp từng bit.
 

@@ -1,4 +1,16 @@
 import { expect, test } from "@playwright/test";
+test("Trilinear lesson exposes eight weights and the worked numerical example", async ({
+  page,
+}) => {
+  await page.goto("/projects/volume-slicer/05-noi-suy-giua-cac-lat");
+  const inspector = page.getByRole("region", { name: "Tám voxel và trọng số trilinear" });
+  await expect(inspector.locator("tbody tr")).toHaveCount(8);
+  await expect(page.getByLabel("Kết quả ô trilinear")).toHaveText("0.52500");
+  await page.getByLabel("Trilinear fx", { exact: true }).press("ArrowRight");
+  await expect(page.getByLabel("Kết quả ô trilinear")).toHaveText("0.53000");
+  await page.getByRole("button", { name: "Đặt lại ô mẫu", exact: true }).click();
+  await expect(page.getByLabel("Kết quả ô trilinear")).toHaveText("0.52500");
+});
 test("Volume lab gates chapters, preserves raw scalar under contrast and coordinates three planes", async ({
   page,
 }) => {

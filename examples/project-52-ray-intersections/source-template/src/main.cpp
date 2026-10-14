@@ -1,3 +1,4 @@
+#include "scan.hpp"
 #include "validation.hpp"
 #include "view.hpp"
 #include <cstdlib>
@@ -48,6 +49,8 @@ int main(int, char**) {
 #if LAB_CHECKPOINT >= 7
     bool paused = true;
     int preset = 0;
+    picking::Scan scan;
+    std::uint64_t previous = SDL_GetTicksNS();
     std::cout << "1 room | 2 inside sphere | 3 inside box | 4 miss | Space scan/pause | +/- range | I inspector\n";
 #endif
 #if LAB_CHECKPOINT >= 8
@@ -97,6 +100,7 @@ int main(int, char**) {
 #if LAB_CHECKPOINT >= 7
                     paused = true;
                     preset = 0;
+                    scan.reset();
 #endif
                 }
             }
@@ -117,6 +121,7 @@ int main(int, char**) {
                     u = 0.5;
                     v = 0.5;
                     paused = true;
+                    scan.reset();
                 }
                 if (event.key.key == SDLK_I) {
                     const auto ray = picking::cameraRay(camera, u, v, static_cast<double>(picking::viewWidth) / picking::viewHeight, tMax);
@@ -146,9 +151,13 @@ int main(int, char**) {
             break;
 
 #if LAB_CHECKPOINT >= 7
-        // Optional scan is bounded and never enabled automatically.
-        if (!paused)
-            u = 0.5 + 0.35 * std::sin(static_cast<double>(SDL_GetTicks()) * 0.0008);
+        // Update the clock even while paused; resume never includes paused wall time.
+        const auto now = SDL_GetTicksNS();
+        const double dt = static_cast<double>(now - previous) / 1e9;
+        previous = now;
+        if (!paused) {
+            u = scan.advance(dt);
+        }
 #endif
         SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255);
         if (!SDL_RenderClear(renderer)) {

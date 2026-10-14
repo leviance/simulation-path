@@ -64,7 +64,9 @@ Mở paused. Space đổi chạy/dừng; thao tác tay dừng scan để không 
 
 Build project_53_checkpoint_6. Active view có border xanh; phím 1/2/3 đổi active view để keyboard biết dùng bảng trục nào. I in world point và scalar của nearest/trilinear, không phải grayscale sau window.
 
-Ở SDL, dirty chỉ bật khi dữ liệu hiển thị đổi; texture giữ ảnh khi state đứng yên. Canvas quét tối đa 10 lần cập nhật ảnh mỗi giây để thí nghiệm CPU nhỏ không chiếm event loop. Hai bản có cùng tốc độ theo world, không dùng frame count để dời cut.
+Ở SDL, dirty chỉ bật khi dữ liệu hiển thị đổi; texture giữ ảnh khi state đứng yên. Canvas cũng quét 4 voxel/s nhưng chỉ cập nhật ảnh khoảng 10 lần mỗi giây. Nó cộng đủ thời gian giữa hai lần cập nhật: một khoảng 0.115 s phải dời 0.46 voxel, không được kẹp thành 0.1 s rồi bỏ 0.015 s còn lại. Nhịp vẽ ảnh và tốc độ dời mặt cắt là hai việc riêng.
+
+Khi một lần cập nhật bị đình trệ quá lâu, Canvas chỉ nhận tối đa 0.25 s để tránh bước nhảy lớn; SDL chặn dt mỗi frame ở 0.1 s. Vì vậy hai bản cùng tốc độ khi chạy bình thường, không hứa bù toàn bộ thời gian treo hoặc khi tab mất focus.
 
 ## Thử làm sai để hiểu đúng
 

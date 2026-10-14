@@ -38,9 +38,11 @@ GPU smoke tests chỉ dùng hệ nhỏ, không chạy benchmark lớn tự độ
 ```bash
 build/Debug/project_51_final.exe --verify-gpu
 build/Debug/project_51_final.exe --verify-gpu --tail-case
+build/Debug/project_51_final.exe --verify-acoustic
+build/Debug/project_51_final.exe --verify-force
 ```
 
-Verify có total timeout 15 s trong app, mỗi batch 5 s; khi tự viết script, luôn đặt thêm hard timeout ngoài process và dọn descendants. Không thể dùng timeout để preempt một GPU command đã gửi hoặc bảo đảm driver không treo. Không tự động gửi triệu hạt khi mở app/test.
+Chạy từng lệnh riêng với hard timeout ngoài process 30 s; không tự chạy lại nếu timeout. Verify có total timeout 15 s trong app, mỗi batch 5 s. Hai fixture mới chỉ dùng 512 hạt. Acoustic dùng vận tốc lớn trong pipeline SPH; force dùng gia tốc (0,10⁶,0) biết trước và chỉ kiểm reduction/integration, cố ý bỏ qua force SPH. Lattice/tail vẫn kiểm toàn pipeline. Chúng không phải benchmark. CPU tự tính extrema và dt trước khi so integration, không dùng GPU dt làm đáp án. Không thể dùng timeout để preempt một GPU command đã gửi hoặc bảo đảm driver không treo. Không tự động gửi triệu hạt khi mở app/test.
 
 ## Điều khiển
 

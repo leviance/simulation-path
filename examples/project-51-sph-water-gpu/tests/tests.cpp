@@ -1,3 +1,4 @@
+#include "oracle-stats.hpp"
 #include "reference.hpp"
 #include <cstdlib>
 #include <iostream>
@@ -29,6 +30,33 @@ int main() {
         check((water3::ceilDivide(plan.count, stride) - 1) * stride < plan.count, "render stride never fetches outside SSBO");
     }
     const auto plan = water3::makePlan();
+    // A wrong finite GPU reduction must fail even if integration used its wrong dt.
+    const water3::OracleStats extrema{500, 9.81, 1000};
+    const double dtCPU = water3::chooseDt(plan, extrema.speed, extrema.acceleration, 12);
+    check(water3::matchesOracleStats(500, 9.81, 1000, 0, dtCPU, extrema, plan, 12), "independent reduction baseline");
+    check(!water3::matchesOracleStats(0, 9.81, 1000, 0, water3::maxDt, extrema, plan, 12), "forged velocity reduction rejected");
+    check(!water3::matchesOracleStats(500, 0, 1000, 0, dtCPU, extrema, plan, 12), "forged force reduction rejected");
+    check(!water3::matchesOracleStats(500, 9.81, 900, 0, dtCPU, extrema, plan, 12), "forged density reduction rejected");
+    check(!water3::matchesOracleStats(500, 9.81, 1000, 1, dtCPU, extrema, plan, 12), "GPU error flag rejected");
+    check(!water3::matchesOracleStats(500, 9.81, 1000, 0, water3::maxDt, extrema, plan, 12), "shared wrong timestep rejected");
+    for (const auto fixture : {water3::VerifyCase::acoustic}) {
+        std::vector<water3::Float4> positions;
+        for (std::uint32_t i = 0; i < plan.count; ++i) {
+            const auto p = water3::initialPosition(plan, i);
+            positions.push_back({static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z), 1});
+        }
+        std::vector<water3::Float4> velocities(plan.count);
+        water3::prepareVerifyCase(fixture, positions, velocities);
+        const auto reference = water3::evaluate(plan, positions, velocities, {});
+        const auto statistics = water3::oracleStats(velocities, reference);
+        const double acoustic = 0.25 * plan.h / (12 + statistics.speed);
+        const double forceBound = 0.25 * std::sqrt(plan.h / std::max(statistics.acceleration, 1e-12));
+        check(acoustic < std::min(water3::maxDt, forceBound), "small GPU fixture activates acoustic bound");
+    }
+    const auto prescribed = water3::forceTimestepReference(plan.count);
+    const auto forceStats = water3::oracleStats(std::vector<water3::Float4>(plan.count), prescribed);
+    const double forceDt = water3::chooseDt(plan, forceStats.speed, forceStats.acceleration, 12);
+    check(forceDt < std::min(water3::maxDt, 0.25 * plan.h / 12), "prescribed fixture activates force bound");
     check(sizeof(water3::Float4) == 16 && alignof(water3::Float4) == 16, "std430 record ABI");
     check(water3::cellId(plan, {1, 1, 1}) == plan.cells - 1, "world endpoint clamped to last cell");
     check(water3::kernel(2 * plan.h, plan.h) == 0, "support cutoff");

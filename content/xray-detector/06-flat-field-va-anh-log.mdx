@@ -100,6 +100,8 @@ Exposure phải dương để I/I0 có nghĩa. Các giới hạn logRange/exposu
 
 Build/run project_55_checkpoint_6. Giữ scene/ray, tăng exposure: I raw đổi nhưng I/I0 và p giữ nguyên. Bật ảnh log, rồi đảo palette: readout tau/T/I/p không đổi.
 
+Trong main, imageDirty chỉ yêu cầu dựng lại ảnh khi tham số ảnh đổi. Chọn pixel hoặc tăng exposure chỉ bật inspectorDirty để đo lại một ray và cập nhật title. Không tính lại 4.800 ray chỉ để dời crosshair; exposure cũng không đổi ảnh đã chuẩn hóa trong mô hình không noise này.
+
 Mô hình không inverse-square/cosine response, scatter hay detector calibration. Với một flat-field I0(u,v) thực sự không đồng nhất, phải chia theo từng pixel; không lấy một số source power toàn cục thay cho flat-field.
 
 ## Thử làm sai để hiểu đúng

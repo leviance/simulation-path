@@ -60,6 +60,8 @@ Target 240×180 cố định, tối đa512 samples/ray; resize chỉ letterbox/p
 
 CTest pure không SDL/window/GPU. Checks không dùng assert nên Debug và Release đều kiểm interval, layout/edge, medium hằng analytic, partial tail, zero sigma, miss, early bound, ramp convergence, input bounds và dataset immutability.
 
+GPU verify vẫn dùng target 16×12 và bốn pixel/cấu hình. Nó kiểm sáu settings trên mỗi view/dataset: hai step cơ sở, sigma=0, transfer cool và hai ca sigma=8 bật early. Tổng 576 phép so channel C/T, không phải benchmark. Phép so màu không chứng minh số mẫu đã tiết kiệm trên GPU; số mẫu và early bound được kiểm ở oracle CPU riêng. Giữ timeout ngoài process 30 s và không thử lại tự động sau timeout.
+
 --smoke-gpu ở checkpoint1–9 render hidden16×12 một lần, kiểm shader compile/link/uniform, một pixel hữu hạn và GL errors. --verify-gpu chỉ checkpoint9/final: target16×12, bốn pixel/config, phantom/ramp/constant, outside/inside, step0.04/0.17. So linear C/T với CPU double, tolerance0.0025; không screenshot/gamma.
 
 Ví dụ PowerShell hard timeout30s ngoài process:
