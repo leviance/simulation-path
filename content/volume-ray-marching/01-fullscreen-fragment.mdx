@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ ảnh đầu tiên bằng fragment shader
+
+## Vấn đề cần giải quyết
+
+Ở Project 53, bạn xem khối dữ liệu bằng những lát cắt. Lần này ta muốn đứng bên ngoài, xoay camera và nhìn xuyên khối như nhìn một đám sương. Nhưng trước khi viết công thức sương, cần có chương trình đưa được ảnh do fragment shader tạo ra lên cửa sổ.
+
+Tải ZIP ở trang tổng quan. Starter có SDL window, OpenGL context, event loop và nền tối. **Bài này chỉ thêm một ảnh gradient**, chưa có tia, voxel hay vòng lặp lấy mẫu. Chạy được ảnh ấy rồi hãy sang bài sau.
+
+Ta dùng OpenGL 3.3 core và GLSL 330, không cần compute shader. SDL quản lý cửa sổ/input; OpenGL vẽ ảnh, không tạo thêm SDL_Renderer.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một tam giác lớn phủ toàn bộ vùng ảnh đủ để GPU chạy fragment shader ở mỗi pixel. Vertex shader chỉ cần ba vị trí lấy bằng gl_VertexID. Các phần ngoài vùng clip sẽ được cắt; ta không vẽ cạnh hay hình khối ở đây.
+
+Chương trình có hai lượt vẽ. Lượt đầu tạo ảnh 240×180 trong texture RGBA32F gắn vào framebuffer. Lượt sau phóng ảnh ấy lên cửa sổ, giữ tỉ lệ 4:3 và chừa viền khi cần. Vì vậy resize không làm số tia sẽ tính ở các bài sau tăng theo.
+
+Fragment đầu tiên lấy gl_FragCoord chia cho kích thước target. gl_FragCoord đã ở tâm pixel: pixel đầu có tọa độ 0.5, không cộng 0.5 lần nữa. Red tăng sang phải, green tăng lên trên. Canvas dưới đây tính ảnh tương đương bằng CPU, không chạy shader.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-1" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo context trước khi load hàm OpenGL
+
+Đọc đầu src/main.cpp của starter: SDL_Init kiểm bool, window có SDL_WINDOW_OPENGL, context yêu cầu 3.3 core. Chỉ gọi gl.load() sau khi context tạo thành công.
+
+```cpp title="src/main.cpp"
+SDL_GLContext context = SDL_GL_CreateContext(window);
+if (!context) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+Theo [SDL_GL_CreateContext](https://wiki.libsdl.org/SDL3/SDL_GL_CreateContext), trên Windows cần lấy địa chỉ các hàm OpenGL mới bằng SDL_GL_GetProcAddress. gl_api.hpp báo tên hàm nếu không load được; include header không thay thế việc load entry point.
+
+### Bước 2 — Vẽ tam giác phủ ảnh
+
+Tạo fullscreen.vert rồi volume.frag của checkpoint 1:
+
+```glsl title="shaders/fullscreen.vert"
+#version 330 core
+// One oversized triangle covers the target without a vertex buffer.
+const vec2 positions[3] = vec2[3](vec2(-1, -1), vec2(3, -1), vec2(-1, 3));
+
+void main() {
+    gl_Position = vec4(positions[gl_VertexID], 0, 1);
+}
+```
+
+```glsl title="shaders/volume.frag"
+void main() {
+    vec2 uv = gl_FragCoord.xy / uSize;
+    result = vec4(uv, 0.2, 0.0);
+}
+```
+
+Ba đỉnh clip (-1,-1), (3,-1), (-1,3) phủ cả hình vuông clip. Không cần VBO nhưng core profile vẫn cần một VAO hợp lệ. Channel alpha của texture kết quả sẽ lưu transmittance T, không phải opacity. Gradient đặt T=0 để present không thêm nền.
+
+### Bước 3 — Vẽ vào target rồi present
+
+initialize tạo GL_RGBA32F, filter nearest, gắn vào GL_COLOR_ATTACHMENT0 và kiểm framebuffer complete. render bind target, đặt viewport 240×180, use program, upload uSize, rồi kết thúc bằng:
+
+```cpp title="include/renderer.hpp"
+gl.BindVertexArray(vao);
+gl.DrawArrays(GL_TRIANGLES, 0, 3);
+gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+```
+
+display chuyển sang framebuffer 0, tính rectangle letterbox, lấy texture kết quả bằng present.frag và vẽ lại tam giác. Present ghép màu/nền tuyến tính rồi áp dụng gần đúng gamma 1/2.2. Do đó độ sáng màn hình không bằng trực tiếp số RGB của gradient.
+
+## Ghép các phần lại
+
+CMake đóng gói shader bên cạnh executable; không cần chạy đúng working directory. loadProgram đọc file, compile/link và báo lỗi kèm tên file/log driver.
+
+```bash title="Terminal — build ảnh đầu tiên"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_54_checkpoint_1 --parallel 2
+.\build\Debug\project_54_checkpoint_1.exe
+```
+
+Đây là PowerShell/Visual Studio. Với single-config generator, thêm CMAKE_BUILD_TYPE=Debug lúc configure; executable nằm trực tiếp trong build. Giữ target 240×180 trong cả project để giới hạn tải GPU.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi tên volume.frag trong bản thử rồi chạy lại. Phải có Missing shader và exit failure, không phải cửa sổ đen chạy mãi. Khôi phục tên trước khi tiếp tục.
+2. Bỏ bind VAO trong bản thử. Core profile phải báo GL error khi DrawArrays; khôi phục VAO, không đổi sang compatibility context để che lỗi.
+
+## Tự kiểm tra kết quả
+
+Ảnh có red tăng sang phải, green tăng lên trên và blue cố định. Kéo rộng cửa sổ: ảnh giữ tỉ lệ, không kéo dãn. Escape/nút đóng cửa sổ thoát sạch, console không có compile/link/GL error.
+
+Giữ GL_BLEND, GL_DEPTH_TEST và GL_FRAMEBUFFER_SRGB tắt. Ta sẽ tự tích lũy C/T; blending hoặc encode sRGB thêm một lần sẽ làm kết quả sai.
+
+## Bài tập mở rộng
+
+Thay gradient bằng checker dùng uv trong một bản riêng. Giải thích vì sao phóng cửa sổ không tăng số ô nếu shader vẫn chạy vào target 240×180.
+
+[Bài tiếp theo](/projects/volume-ray-marching/02-ray-va-camera) thay gradient bằng hướng tia của camera.
+

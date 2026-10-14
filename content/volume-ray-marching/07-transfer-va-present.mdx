@@ -1,0 +1,89 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn màu để thấy cấu trúc bên trong
+
+## Vấn đề cần giải quyết
+
+Ảnh cool đã nhìn xuyên được, nhưng các vùng density chỉ khác độ đậm. Ta thêm transfer function để density thấp có màu lạnh, density cao có màu ấm. Màu chỉ giúp đọc cấu trúc, không có nghĩa volume đã được chiếu sáng thật.
+
+Giữ nguyên density, sigma, ray và tích lũy. Chỉ đổi transfer rồi đọc lại hợp đồng của present. C/T vẫn phải tuyến tính trước khi ghép nền.
+
+## Hiểu ý tưởng trước khi viết code
+
+Transfer nhận rho và trả RGB trong [0,1]. Warm dùng red tăng theo density, blue giảm; cool giữ (0.8,0.9,1). Chuyển warm/cool **không đổi T**, vì extinction chỉ phụ thuộc sigma*rho*ds.
+
+C đã bao gồm trọng số opacity trong từng cell. Không nhân C thêm 1−T lần nữa:
+
+$$
+C_{display,linear}=C+T B,\quad C_{screen}\approx\operatorname{clamp}(C_{display,linear},0,1)^{1/2.2}
+$$
+
+B=(0.025,0.035,0.055) là nền. Gamma 1/2.2 chỉ là gần đúng hiển thị, không quy trình sRGB được hiệu chuẩn. Ta tắt GL_FRAMEBUFFER_SRGB để không encode hai lần.
+
+Dùng Canvas đổi Transfer warm, theo dõi T cuối: số ấy phải giữ nguyên nếu dataset/camera/sigma/step không đổi. Màu C thay, T không thay.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Map density sang màu riêng
+
+Hàm transfer CPU trong reference.hpp:
+
+```cpp title="include/reference.hpp"
+inline Point transfer([[maybe_unused]] double density, [[maybe_unused]] bool warm) {
+    if (warm) {
+        return {0.2 + 0.8 * density, 0.45 + 0.25 * density, 1 - 0.8 * density};
+    }
+    return {0.8, 0.9, 1};
+}
+```
+
+Shader có cùng ba công thức RGB. Warm luôn bị chặn tự nhiên trong [0,1] vì rho từ volume cũng trong [0,1]. Không dùng màu gamma-encoded như dữ liệu đầu vào tích lũy.
+
+### Bước 2 — Ghép nền sau cả ray
+
+present.frag đọc target RGBA32F và làm:
+
+```glsl title="shaders/present.frag"
+    vec3 linearColor = value.rgb + value.a * vec3(0.025, 0.035, 0.055);
+    color = vec4(pow(clamp(linearColor, 0.0, 1.0), vec3(1.0 / 2.2)), 1);
+```
+
+value.rgb là C premultiplied theo các alpha cell; value.a là T. Không dùng GL blend equation truyền thống với alpha=T. Trước đoạn trên, present kiểm T âm và vẽ magenta nếu shader báo budget error.
+
+### Bước 3 — Giữ pipeline không làm phép cộng trùng
+
+initialize của renderer tắt:
+
+```cpp title="include/renderer.hpp"
+gl.Disable(GL_DEPTH_TEST);
+gl.Disable(GL_BLEND);
+gl.Disable(GL_FRAMEBUFFER_SRGB);
+```
+
+Depth test không có ích cho fullscreen triangle. Blend không cần vì shader tự tích lũy ray. Framebuffer sRGB tắt vì present tự gamma. Target 240×180 giữ float, còn default framebuffer là đầu ra hiển thị.
+
+## Ghép các phần lại
+
+Build/run project_54_checkpoint_7. C đổi warm/cool; ảnh đổi bảng màu, silhouette và extinction giữ nguyên. Trong Canvas, so T trước/sau đổi transfer. Chọn constant để thấy C analytic dễ kiểm: transfer(0.25,warm)*(1−T).
+
+Nếu muốn sửa nền, sửa ở present và oracle hiển thị tương đương; **không sửa march**. GPU verify ở bài cuối so C/T raw nên không phụ thuộc nền/gamma.
+
+## Thử làm sai để hiểu đúng
+
+1. Nhân value.rgb thêm (1−value.a) trong bản thử. Đây là áp opacity lần hai; ảnh nhạt/sai so với C analytic. Bỏ phép nhân trùng.
+2. Gamma từng sample trước cộng C. Phép cộng màu không còn tuyến tính, chia đoạn khác nhau có thể đổi ảnh. Gamma chỉ sau compose nền.
+
+## Tự kiểm tra kết quả
+
+Warm/cool cùng T với cùng input; C thay đúng transfer. Sigma=0 cho C=0,T=1 nên cả hai mode chỉ có nền. Miss cũng trả nền.
+
+Không có lighting, shadow hay multiple scattering trong project. Màu đỏ không chứng minh vật liệu nóng hoặc có tính chất y khoa nào.
+
+## Bài tập mở rộng
+
+Thiết kế transfer ba đoạn tuyến tính nhưng giữ mọi channel trong [0,1]. So T trước/sau; giải thích vì sao đổi palette không được đổi extinction.
+
+[Bài tiếp theo](/projects/volume-ray-marching/08-quality-va-gioi-han) đánh đổi số mẫu và sai số có giới hạn.
+

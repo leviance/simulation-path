@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ ảnh detector đầu tiên bằng SDL3
+
+## Vấn đề cần giải quyết
+
+Project 54 cho bạn nhìn một khối sương bằng màu phát xạ và độ xuyên sáng. Máy X-ray ảo làm việc khác: detector ghi tín hiệu còn lại sau khi tia đi qua vật thể. Ta không dùng màu sương để thay cho phép đo này.
+
+Trước tiên hãy chạy được ảnh bằng SDL3. Tải ZIP ở trang tổng quan; starter mở window/renderer, event loop và nền tối. Checkpoint 1 thêm texture 80×60 cùng một patch tối trên nền trắng. **Đây chỉ là ảnh kiểm pipeline, chưa phải ảnh X-ray tính từ vật liệu.**
+
+Project này dùng SDL_Renderer, không fragment shader/OpenGL. Kiến thức mới nằm ở đường đi của tia và tín hiệu detector.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ảnh detector là mảng byte RGBA của CPU. Texture SDL chỉ để hiển thị; dữ liệu vật lý ở các bài sau sẽ giữ bằng double riêng, không đọc ngược byte màu để suy optical depth.
+
+Target 80×60 có tỉ lệ 4:3. Renderer dùng logical presentation 1000×700 letterbox; vùng ảnh 480×360 không bị kéo dãn khi resize. Độ phân giải detector không tăng theo kích thước cửa sổ.
+
+Canvas tính preview 40×30 để giảm công việc trong trình duyệt. Hai độ phân giải khác nhau được ghi rõ; preview không dùng để đo tốc độ C++ hay chứng nhận một thiết bị X-ray.
+
+<InteractiveLab demo="xray-detector" mode="xray55-1" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo ảnh kiểm trước khi thêm vật lý
+
+Trong main, sau window/renderer, tạo SDL_PIXELFORMAT_RGBA32 với SDL_TEXTUREACCESS_STREAMING, kích thước imageWidth/imageHeight và SDL_SCALEMODE_NEAREST. Nếu tạo texture hoặc đặt filter thất bại, throw và đi tới cleanup. brightness của bài này là:
+
+```cpp title="include/detector.hpp"
+inline double brightness(int x, int y, [[maybe_unused]] const Settings& settings) {
+    if (x >= 25 && x < 55 && y >= 18 && y < 42) {
+        return 0.35;
+    }
+    return 1;
+}
+```
+
+Patch tối có vị trí cố định theo pixel. Nó giúp thấy ảnh có lên đúng vùng và có đảo trục không; chưa biểu diễn một vật thể gây hấp thụ.
+
+### Bước 2 — Ghi đủ bốn channel của từng pixel
+
+makeImage tạo buffer CPU, duyệt y/x và ghi RGBA:
+
+```cpp title="include/detector.hpp"
+inline Image makeImage(Settings settings) {
+    validate(settings);
+    Image image;
+    for (int y = 0; y < imageHeight; ++y) {
+        for (int x = 0; x < imageWidth; ++x) {
+            const double value = brightness(x, y, settings);
+            const auto gray = static_cast<std::uint8_t>(std::floor(std::clamp(value, 0.0, 1.0) * 255 + 0.5));
+            const int offset = 4 * (x + imageWidth * y);
+            image.rgba[offset] = gray;
+            image.rgba[offset + 1] = gray;
+            image.rgba[offset + 2] = gray;
+            image.rgba[offset + 3] = 255;
+        }
+    }
+    return image;
+}
+```
+
+Offset=4*(x+width*y), đơn vị byte. Red/green/blue cùng gray, alpha=255. Quantize sau khi clamp brightness; RGBA32 là thứ tự bốn byte, không cần đoán endian của uint32.
+
+### Bước 3 — Upload theo pitch thật
+
+view.hpp khóa texture rồi ghi đủ từng hàng:
+
+```cpp title="include/view.hpp"
+inline void upload(SDL_Texture* texture, const Image& image) {
+    void* pixels = nullptr;
+    int pitch = 0;
+    if (!SDL_LockTexture(texture, nullptr, &pixels, &pitch)) {
+        throw std::runtime_error(SDL_GetError());
+    }
+    if (pitch < imageWidth * 4) {
+        SDL_UnlockTexture(texture);
+        throw std::runtime_error("Texture pitch too small");
+    }
+    for (int y = 0; y < imageHeight; ++y) {
+        auto* destination = static_cast<std::uint8_t*>(pixels) + y * pitch;
+        const auto* source = image.rgba.data() + y * imageWidth * 4;
+        std::memcpy(destination, source, imageWidth * 4);
+    }
+    SDL_UnlockTexture(texture);
+}
+```
+
+Pitch là byte stride do SDL trả về, có thể khác width*4. Lock không đảm bảo có ảnh cũ để đọc; phải ghi đầy đủ. Sau unlock, main clear nền, SDL_RenderTexture vào imageRect rồi SDL_RenderPresent. Xem [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture) về hợp đồng write-only và unlock.
+
+## Ghép các phần lại
+
+Trong thư mục ZIP có CMakeLists.txt:
+
+```bash title="Terminal — chạy ảnh detector đầu tiên"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_55_checkpoint_1 --parallel 2
+.\build\Debug\project_55_checkpoint_1.exe
+```
+
+Đây là PowerShell/Visual Studio. Single-config generator dùng CMAKE_BUILD_TYPE lúc configure và executable trực tiếp trong build. Main hủy texture trước renderer/window, rồi SDL_Quit; nhánh lỗi trả EXIT_FAILURE.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng width thay vì width*4 cho số byte copy mỗi row. Chỉ một phần row được ghi; ảnh có thể lỗi hoặc giữ dữ liệu không xác định. Khôi phục byte count.
+2. Đổi texture sang RGBA8888 nhưng vẫn ghi byte theo RGBA32 mà không kiểm định dạng. Màu/channel có thể lệch theo platform. Giữ định dạng khớp buffer.
+
+## Tự kiểm tra kết quả
+
+Nền detector trắng, patch tối nằm giữa; chưa có source ray hoặc vật liệu. Resize giữ ảnh 4:3 và phần viền. Escape/nút đóng cửa sổ thoát sạch. Không nhầm nền trắng này với công suất của nguồn thật.
+
+## Bài tập mở rộng
+
+Thêm một đường chéo một pixel vào ảnh kiểm để phân biệt đảo x/y. Đừng thêm công thức suy giảm vào brightness cho tới khi có ray ở bài tiếp theo.
+
+[Bài tiếp theo](/projects/xray-detector/02-source-detector-va-ray) — Nối nguồn điểm với từng pixel detector.
+

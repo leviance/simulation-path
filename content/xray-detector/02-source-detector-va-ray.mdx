@@ -1,0 +1,98 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nối nguồn điểm với từng pixel detector
+
+## Vấn đề cần giải quyết
+
+Ảnh đã hiển thị được. Bây giờ mỗi pixel cần biết nó nhận tia từ đâu. Ta đặt một nguồn điểm ở phía trước vật thể và một mặt detector ở phía sau, rồi nối nguồn tới tâm pixel.
+
+Bài này vẫn chưa có vật liệu. Ảnh đổi sang gradient biểu diễn thành phần x của direction. Sơ đồ bên phải giúp kiểm đường đi trước khi tính độ tối.
+
+## Hiểu ý tưởng trước khi viết code
+
+Source=(0,0,-6), detector nằm ở z=6, rộng 6 và cao 4.5 world units. Pixel centre đổi thành u/v; ảnh y hướng xuống, world y hướng lên:
+
+$$
+u=\frac{x+0.5}{80},\quad v=\frac{y+0.5}{60},\quad P=((u-0.5)6,(0.5-v)4.5,6)
+$$
+
+$$
+d=\frac{P-S}{\lVert P-S\rVert},\qquad t_{max}=\lVert P-S\rVert
+$$
+
+Beam chỉ dài tới detector, không ray vô hạn. Tia ở góc dài hơn tia giữa; normalize direction giúp t về sau là khoảng cách world.
+
+Sơ đồ XZ là hình chiếu của ray 3D, không phải lát cắt y=0. Chọn pixel ở hàng khác làm y của endpoint đổi dù sơ đồ XZ có thể nhìn giống nhau.
+
+<InteractiveLab demo="xray-detector" mode="xray55-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo beam hữu hạn
+
+geometry.hpp định nghĩa Beam có origin/direction/maximum và detectorRay:
+
+```cpp title="include/geometry.hpp"
+inline Beam detectorRay(double u, double v) {
+    if (!std::isfinite(u) || !std::isfinite(v) || u < 0 || u > 1 || v < 0 || v > 1) {
+        throw std::invalid_argument("Detector coordinates must be in [0,1]");
+    }
+    const Point origin{0, 0, -6};
+    const Point detector{(u - 0.5) * 6, (0.5 - v) * 4.5, 6};
+    const Point delta = subtract(detector, origin);
+    const double distance = length(delta);
+    return {origin, multiply(delta, 1 / distance), distance};
+}
+```
+
+Source/detector dùng cùng world units. Không dùng pixel index làm world x/y, không bỏ maximum sau normalize.
+
+### Bước 2 — Vẽ direction để kiểm công thức
+
+Checkpoint 2 chỉ thay brightness:
+
+```cpp title="include/detector.hpp"
+inline double brightness(int x, int y, [[maybe_unused]] const Settings& settings) {
+    const auto beam = detectorRay((x + 0.5) / imageWidth, (y + 0.5) / imageHeight);
+    return std::clamp(0.5 + beam.direction[0], 0.0, 1.0);
+}
+```
+
+Direction x được map quanh gray=0.5. Resize chỉ phóng ảnh đã có, không đổi detector physical size. Gradient không phải transmission.
+
+### Bước 3 — Chọn pixel mà không chọn nhầm letterbox
+
+SDL_ConvertEventToRenderCoordinates đổi mouse event sang logical renderer coordinates, rồi pickPixel:
+
+```cpp title="include/view.hpp"
+inline std::optional<std::array<int, 2>> pickPixel(double x, double y) {
+    if (x < imageRect.x || x >= imageRect.x + imageRect.w || y < imageRect.y || y >= imageRect.y + imageRect.h) {
+        return std::nullopt;
+    }
+    return std::array{static_cast<int>((x - imageRect.x) / imageRect.w * imageWidth), static_cast<int>((y - imageRect.y) / imageRect.h * imageHeight)};
+}
+```
+
+Chỉ vùng imageRect nhận input; mép phải/dưới là exclusive để không sinh index80/60. Main thêm marker và drawGeometry cho pixel đang chọn. Mũi tên chọn pixel; click/kéo dùng mouse capture, blur hủy drag.
+
+## Ghép các phần lại
+
+Build/run project_55_checkpoint_2. Chọn pixel trái/phải rồi xem ray source→detector. A/D và Space chưa xoay vật thể vì chưa có vật thể.
+
+Test thuận tính dùng u=v=0.5 cho direction=(0,0,1), maximum=12. Target80×60 có số pixel chẵn nên pixel40,30 lệch nhẹ khỏi tâm hình học; không đòi readout của pixel đó bằng tia centre bitwise.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng (x/width,y/height) thay pixel centre. Mọi beam lệch nửa pixel. Khôi phục +0.5 đúng một lần.
+2. Cho maximum=20 cố định trong mọi beam. Một box sau detector có thể gây hấp thụ dù tia đã kết thúc. Giữ khoảng source→pixel thật.
+
+## Tự kiểm tra kết quả
+
+Tia centre dài12, góc trên phải kết thúc ở (3,2.25,6), mọi direction có độ dài gần1. Click trong viền không đổi pixel. Chọn hàng khác phải đổi direction y dù hình chiếu XZ tương tự.
+
+## Bài tập mở rộng
+
+Tự tính endpoint của pixel0,0. Viết test at(beam,maximum) trùng endpoint, rồi so với trường hợp dùng x/width sai.
+
+[Bài tiếp theo](/projects/xray-detector/03-chieu-dai-qua-vat-lieu) — Tính chiều dài tia đi trong một lớp vật liệu.
+

@@ -1,0 +1,125 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa density lên texture 3D và lấy đúng mẫu
+
+## Vấn đề cần giải quyết
+
+Ảnh length cho biết ray xuyên box bao xa, nhưng chưa có cấu trúc bên trong. Bây giờ ta đưa dữ liệu scalar lên GPU. Chỉ lấy **một mẫu ở giữa đoạn tia** và vẽ mức xám; chưa tích lũy sương.
+
+Project 53 giữ scalar bằng double ở CPU. Project này lưu cùng phantom bằng float/R32F để upload một channel density trực tiếp lên GPU.
+
+## Hiểu ý tưởng trước khi viết code
+
+Volume có 64×48×40 voxel, spacing (0.05,0.08,0.12). Nó vừa khít box 3.2×3.84×4.8 world units. Mảng x-fast chiếm 64×48×40×4 byte = **480 KiB**, không phải kích thước texture RGBA chứa ảnh.
+
+Một vị trí world p đổi sang uvw trong [0,1]:
+
+$$
+uvw_a=\frac{p_a-boxMin_a}{boxMax_a-boxMin_a},\quad g_a=uvw_aN_a-0.5
+$$
+
+Tâm texel i nằm ở (i+0.5)/N, không phải i/(N−1). GL_LINEAR nội suy tám texel ở mức mip đang dùng; ta chỉ có level 0. CLAMP_TO_EDGE lặp giá trị texel biên trong nửa ô sát biên. CPU oracle dùng cùng quy ước g=uvw*N−0.5.
+
+Ray ngoài box phải miss trước khi sampling. Clamp sampler không có nghĩa volume kéo dài vô tận ra ngoài box. Chọn Ramp để kiểm trục, Medium hằng để loại ảnh hưởng dataset.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo mảng density x-fast
+
+Thêm Volume vào include/volume.hpp:
+
+```cpp title="include/volume.hpp"
+struct Volume {
+    std::array<int, 3> count{64, 48, 40};
+    std::vector<float> density = std::vector<float>(64 * 48 * 40);
+
+    std::size_t index(int x, int y, int z) const {
+        return static_cast<std::size_t>(x + count[0] * (y + count[1] * z));
+    }
+};
+```
+
+fillVolume duyệt z/y/x, dùng tâm voxel trong world space. Phantom có một Gaussian lớn và hai vùng nhỏ lệch tâm giống Project 53. Ramp=(x+2y+4z)/313 giúp nhận ra tráo trục. Preset constant gán 0.25 cho tất cả voxel. Chỉ thay dataset khi nhấn P, không tạo lại volume mỗi frame.
+
+### Bước 2 — Upload R32F và cấu hình sampler
+
+Trong Renderer, upload làm một lần lúc tạo dataset và mỗi lần đổi preset:
+
+```cpp title="include/renderer.hpp"
+void upload(GlApi& gl, const Volume& volume) {
+    GLint maximum = 0;
+    gl.GetIntegerv(GL_MAX_3D_TEXTURE_SIZE, &maximum);
+    if (maximum < 64) {
+        throw std::runtime_error("3D texture size unsupported");
+    }
+    if (!densityTexture) {
+        gl.GenTextures(1, &densityTexture);
+    }
+    gl.ActiveTexture(GL_TEXTURE0);
+    gl.BindTexture(GL_TEXTURE_3D, densityTexture);
+    gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    gl.TexImage3D(GL_TEXTURE_3D, 0, GL_R32F, 64, 48, 40, 0, GL_RED, GL_FLOAT, volume.density.data());
+    gl.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    gl.PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    if (gl.GetError() != GL_NO_ERROR) {
+        throw std::runtime_error("3D texture upload failed");
+    }
+}
+```
+
+GL_R32F là định dạng lưu trên GPU, GL_RED/GL_FLOAT mô tả mảng CPU một channel float. uDensity là texture unit 0, không phải texture object ID. GL_LINEAR cho cả min/mag tránh filter mặc định đòi mipmaps chưa có. UNPACK_ALIGNMENT được đặt rõ và khôi phục. Kiểm GL_MAX_3D_TEXTURE_SIZE trước allocation.
+
+Xem [glTexImage3D](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glTexImage3D.xhtml) và [glTexParameter](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glTexParameter.xhtml) để phân biệt định dạng, dữ liệu đầu vào và sampling state.
+
+### Bước 3 — Lấy mẫu trong shader và đối chiếu CPU
+
+Shader khai báo uniform sampler3D uDensity, lấy channel red:
+
+```glsl title="shaders/volume.frag"
+float densityAt(vec3 point) {
+    vec3 uvw = (point - boxMin) / (boxMax - boxMin);
+    return texture(uDensity, uvw).r;
+}
+```
+
+```cpp title="include/volume.hpp"
+    const double uv = (point[axis] - boxMinimum[axis]) / (boxMaximum[axis] - boxMinimum[axis]);
+    const double g = std::clamp(uv * volume.count[axis] - 0.5, 0.0, static_cast<double>(volume.count[axis] - 1));
+    low[axis] = static_cast<int>(std::floor(g));
+    high[axis] = std::min(low[axis] + 1, volume.count[axis] - 1);
+    fraction[axis] = g - low[axis];
+```
+
+Đoạn C++ trên nằm trong vòng lặp ba trục của sampleDensity. Sau khi tìm low/high/fraction, hàm cộng tám corner với trọng số tích theo trục. Đây là oracle của GL_LINEAR ở level 0, không phải lấy sampleNearest rồi làm mượt màu.
+
+main của checkpoint 4 gọi densityAt tại origin+direction*(entry+exit)*0.5 và ghi gray/T=0. Bạn sẽ thấy cấu trúc khác ảnh length dù silhouette vẫn do cùng boxInterval quyết định.
+
+## Ghép các phần lại
+
+Build/run project_54_checkpoint_4. P luân phiên phantom → ramp → medium hằng. Constant phải cho cùng giá trị gray ở mọi pixel hit, nhưng silhouette vẫn thay theo camera. Miss trả T=1 nên hiện nền.
+
+Texture density thuộc GPU, mảng Volume là bản CPU giữ để kiểm chứng. Đổi camera không upload lại; đổi dataset mới upload. Bài tiếp theo dùng density như đầu vào absorption.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay uvw*N−0.5 bằng uvw*(N−1) ở CPU oracle. Các tâm voxel không còn trùng hardware texture centres; ramp lệch giá trị. Khôi phục quy ước centre, không nới tolerance để che lỗi.
+2. Để MIN_FILTER mặc định nhưng chỉ upload level 0. Texture có thể không complete và đọc sai. Đặt GL_LINEAR, hoặc thực sự tạo mipmaps nếu làm bài mở rộng; không gọi mipmap là “trilinear tám voxel” của bài này.
+
+## Tự kiểm tra kết quả
+
+Mảng đúng 480 KiB, index(63,47,39) bằng phần tử cuối. Sample tại tâm một voxel ramp bằng giá trị lưu của voxel đó. Sample ở boxMin/boxMax dùng texel biên, hữu hạn.
+
+Phantom/ramp/constant nằm trong [0,1]. Ray miss không lấy density. Density tổng hợp không phải HU, không dùng cho chẩn đoán hay diễn giải vật liệu thật.
+
+## Bài tập mở rộng
+
+Tính world point của centre (10,20,30), rồi sampleDensity và so với volume.density[index]. Thử đánh tráo width/depth trong bản upload để xem ramp lộ lỗi ra sao.
+
+[Bài tiếp theo](/projects/volume-ray-marching/05-density-va-opacity) đổi density thành opacity có độ dài đoạn.
+

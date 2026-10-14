@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tách tín hiệu thô khỏi ảnh mức xám và ảnh log
+
+## Vấn đề cần giải quyết
+
+Đổi exposure làm raw I lớn hơn, nhưng không được làm một vật thể “ít hấp thụ hơn” chỉ vì màn hình sáng hơn. Ta cần tách tín hiệu raw khỏi normalization và cách vẽ.
+
+Bài này thêm ảnh log cùng tùy chọn đảo palette. Các nút display không thay mu, ray, tau hoặc T.
+
+## Hiểu ý tưởng trước khi viết code
+
+I0 là tín hiệu khi không có vật thể, ở đúng pixel đó. Mô hình này đặt I0 đồng nhất và không noise. Vì I=I0*T:
+
+$$
+r=I/I_0=T,\qquad p=-\ln(r)=\tau\quad\text{(mono, chưa clamp)}
+$$
+
+Tăng I0 đổi I cùng tỉ lệ; ratio và p giữ nguyên. Điều đó không mô phỏng lợi ích giảm photon noise của exposure thật vì project chưa có noise.
+
+Ảnh ratio vẽ gray=clamp(T,0,1). Ảnh log vẽ gray=clamp(p/logRange,0,1), logRange mặc định4. Đảo palette là gray→1−gray. Chúng chỉ là mã hóa hiển thị, không hiệu chuẩn radiometry hay gamma.
+
+Log dùng floor1e-12 để tránh log(0), nhưng ratio raw không bị sửa. Khi clamped, p không còn là tau chính xác; chương trình giữ flag để không báo một giá trị bão hòa như phép đo đầy đủ.
+
+<InteractiveLab demo="xray-detector" mode="xray55-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Tính log từ measurement thay vì từ byte
+
+measure bổ sung logProjection và logClamped sau ratio:
+
+```cpp title="include/projection.hpp"
+inline Measurement measure(Beam beam, const Scene& scene, Settings settings) {
+    validate(settings);
+    validateScene(scene);
+    validateBeam(beam);
+    const Beam local = objectBeam(beam, settings.angle);
+    Depth depth;
+    if (settings.numeric) {
+        depth = midpointDepth(local, scene, settings.strength, settings.stepLength);
+    } else {
+        depth = exactDepth(local, scene, settings.strength);
+    }
+    const double ratio = transmission(depth, settings);
+    double logProjection = 0;
+    bool logClamped = false;
+    // Store the actual ratio. The floor applies only to the logarithm.
+    const double safeRatio = std::max(ratio, 1e-12);
+    logProjection = -std::log(safeRatio);
+    logClamped = ratio < 1e-12;
+    return {depth, ratio, settings.exposure * ratio, logProjection, logClamped};
+}
+```
+
+Đừng lấy −ln(grayByte/255): quantization/clamp/palette đã làm mất thông tin. Với mono không clamp, test so p với tau. Trong spectral ở bài sau, p không còn đơn giản bằng một tau trung bình.
+
+### Bước 2 — Đổi ảnh ở lớp display
+
+brightness giữ kết quả vật lý rồi mới xử lý display:
+
+```cpp title="include/detector.hpp"
+inline double brightness(int x, int y, const Settings& settings, const Scene& scene) {
+    const auto result = measure(detectorRay((x + 0.5) / imageWidth, (y + 0.5) / imageHeight), scene, settings);
+    double value = result.ratio;
+    if (settings.logView) {
+        value = result.logProjection / settings.logRange;
+    }
+    value = std::clamp(value, 0.0, 1.0);
+    if (settings.invert) {
+        value = 1 - value;
+    }
+    return value;
+}
+```
+
+Log/invert không đi vào exactDepth/midpointDepth. Nếu ảnh trắng vì p vượt range, đó là display saturation; raw p trong inspector vẫn còn nguyên.
+
+### Bước 3 — Giữ input hợp lệ
+
+Settings được kiểm trước measurement/render:
+
+```cpp title="include/model.hpp"
+inline void validate(Settings settings) {
+    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 2) {
+        throw std::invalid_argument("Invalid angle, strength or preset");
+    }
+    if (!std::isfinite(settings.stepLength) || settings.stepLength < 0.05 || settings.stepLength > 0.5 || !std::isfinite(settings.logRange) || settings.logRange < 0.5 || settings.logRange > 12) {
+        throw std::invalid_argument("Invalid quality or display range");
+    }
+    if (!std::isfinite(settings.lowWeight) || settings.lowWeight < 0 || settings.lowWeight > 1 || !std::isfinite(settings.exposure) || settings.exposure < 1000 || settings.exposure > 50000) {
+        throw std::invalid_argument("Invalid spectrum or exposure");
+    }
+}
+```
+
+Exposure phải dương để I/I0 có nghĩa. Các giới hạn logRange/exposure là phạm vi UI của project, không quy tắc thiết bị thật. C++ L đổi ảnh log, I đảo palette, +/− đổi I0; Canvas có cùng controls và readout.
+
+## Ghép các phần lại
+
+Build/run project_55_checkpoint_6. Giữ scene/ray, tăng exposure: I raw đổi nhưng I/I0 và p giữ nguyên. Bật ảnh log, rồi đảo palette: readout tau/T/I/p không đổi.
+
+Mô hình không inverse-square/cosine response, scatter hay detector calibration. Với một flat-field I0(u,v) thực sự không đồng nhất, phải chia theo từng pixel; không lấy một số source power toàn cục thay cho flat-field.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng exposure để nhân brightness rồi clamp mà vẫn gọi ảnh đó là ratio. Source sáng hơn làm ảnh sáng hơn, che mất invariant normalization. Giữ raw I riêng và display T.
+2. Clamp ratio raw lên epsilon trước khi lưu. Bạn không còn biết detector T nhỏ tới đâu. Chỉ clamp đầu vào log, giữ flag.
+
+## Tự kiểm tra kết quả
+
+Exposure10000→20000 làm I gấp đôi nhưng ratio/p bằng nhau. Log/palette không sửa measurement hoặc scene. Mono slab cho p=.605 với centre analytic, chưa clamp. Khi clamp, flag hiện rõ.
+
+Ảnh detector càng tối không đồng nghĩa ảnh y khoa càng “tốt”; đây là số đo tổng hợp với palette tự chọn.
+
+## Bài tập mở rộng
+
+Tạo một test I0 không đồng nhất theo pixel nhưng I=I0*T. Chuẩn hóa đúng theo từng pixel phải phục hồi cùng T. So với chia nhầm một I0 cố định.
+
+[Bài tiếp theo](/projects/xray-detector/07-pho-hai-nang-luong) — Cộng tín hiệu của hai năng lượng trước khi lấy log.
+

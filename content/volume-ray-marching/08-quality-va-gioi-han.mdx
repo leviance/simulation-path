@@ -1,0 +1,88 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi chất lượng mà không đổi mô hình độ đặc
+
+## Vấn đề cần giải quyết
+
+Step nhỏ cho nhiều mẫu nhưng cũng tốn GPU hơn. Ta cần cho người dùng đổi chất lượng mà không biến mỗi lần resize thành một workload lớn hơn, và không che việc cắt mất đoạn ray dưới tên “tối ưu”.
+
+Bài này thêm early termination có ngưỡng rõ ràng. Cap 512 vẫn là báo lỗi, không phải cùng cơ chế với dừng sớm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Volume box có đường chéo gần 6.93 world units. Step nhỏ nhất 0.02 cần khoảng 347 mẫu cho ray dài nhất, thấp hơn cap 512. Target cố định 240×180, nên trần số lần lấy mẫu mỗi frame là 240×180×512. Đây là trần cấu trúc, không cam kết FPS trên mọi GPU.
+
+Early termination dừng khi T≤0.001. Phần ray còn lại chỉ có trọng số T nhỏ. Với transfer và background mỗi channel trong [0,1], sai khác mỗi channel của màu đã compose bị chặn bởi T tại lúc dừng. Sai khác T cũng không vượt ngưỡng ấy. Nếu cho transfer HDR vượt 1, bound này không còn giữ nguyên.
+
+Medium hằng không cần step rất nhỏ để đúng: Beer–Lambert từng cell nhân lại thành nghiệm cả đoạn. Medium biến thiên vẫn có sai số midpoint; giảm step cần so hội tụ, không chỉ nhìn ảnh đẹp. Step nhỏ không phục hồi chi tiết đã mất trong voxel.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Validate phạm vi trước render
+
+model.hpp định nghĩa:
+
+```cpp title="include/model.hpp"
+constexpr int maxSteps = 512;
+constexpr double stopThreshold = 0.001;
+
+inline void validate(Settings settings) {
+    if (!std::isfinite(settings.sigma) || settings.sigma < 0 || settings.sigma > 8 || !std::isfinite(settings.stepLength) || settings.stepLength < 0.02 || settings.stepLength > 0.25) {
+        throw std::invalid_argument("sigma 0..8, stepLength 0.02..0.25 required");
+    }
+}
+```
+
+Native controls chỉ tạo sigma 0..8 và step 0.02..0.16, validator cho tới 0.25 để test partial tail. NaN/infinity và request vượt phạm vi bị từ chối. Không tự clamp một yêu cầu lỗi rồi báo PASS.
+
+### Bước 2 — Tách cap khỏi early termination
+
+Shader kiểm count trước vòng lặp:
+
+```glsl title="shaders/volume.frag"
+int count = int(ceil((exit - entry) / uStep));
+if (count > 512) {
+    result = vec4(1, 0, 1, -1);
+    return;
+}
+```
+
+Nếu sửa code cho step quá nhỏ, diagnostic có T=-1. Present vẽ magenta, CPU throw. Không lấy 512 mẫu đầu rồi trả một ray bị thiếu phía sau. Với input hỗ trợ, cap không bị chạm; nó vẫn bảo vệ khi người học sửa code.
+
+### Bước 3 — Dừng vì phần còn lại không đáng kể
+
+Sau cập nhật C/T trong march CPU:
+
+```cpp title="include/reference.hpp"
+if (settings.early && result.transmittance <= stopThreshold) {
+    break;
+}
+```
+
+GLSL làm cùng điều kiện nếu uEarly khác zero. Mặc định early=false để kiểm nghiệm đầy đủ. E bật/tắt native, Canvas dùng checkbox. Không giảm count trước khi biết T đã đủ nhỏ.
+
+## Ghép các phần lại
+
+Build/run project_54_checkpoint_8. Chọn constant rồi đổi Q: T phải gần như giữ nguyên. Chọn phantom/ramp để so step coarse/fine; một ảnh trông giống không phải bằng chứng không có sai số.
+
+Tăng sigma tới 8 rồi bật E để dễ thấy giảm samples. Với ray miss hoặc medium trong suốt, early không có gì để tiết kiệm. Canvas không phải GPU benchmark; nó là CPU oracle 48×36, dựng tối đa hai hàng mỗi frame và hủy batch cũ khi đổi tham số.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng cap làm early: chỉ cho vòng lặp chạy 20 mẫu rồi trả C/T như hợp lệ. Ray dài bị mất phần sau dù T còn lớn. Khôi phục count đầy đủ; cap lỗi phải hiện diagnostic.
+2. Tăng target theo kích thước cửa sổ trong bản thử. Resize làm workload tăng, nhất là DPI cao. Giữ 240×180 và chỉ đổi viewport present/letterbox.
+
+## Tự kiểm tra kết quả
+
+Pure tests so full/early với medium đặc và kiểm sai khác C/T không quá 0.001. Constant invariant theo step; ramp có test hội tụ. Request step=0.001 bị từ chối.
+
+Mở paused; Space quay/dừng camera. Blur/minimize/reset dừng tự quay, hủy capture. Canvas reduced-motion tắt tự chạy profile nhưng vẫn cho N/tiến mẫu thủ công. Giới hạn này giảm rủi ro workload; không bảo đảm GPU driver không treo.
+
+## Bài tập mở rộng
+
+Giữ medium hằng và thử ngưỡng 0.01 trong một bản riêng. Đo số mẫu tiết kiệm và sai khác so full. Viết ra điều kiện cần để bound màu còn đúng.
+
+[Bài tiếp theo](/projects/volume-ray-marching/09-kiem-chung-va-hoan-thien) kiểm oracle/GPU và bàn giao chương trình hoàn chỉnh.
+

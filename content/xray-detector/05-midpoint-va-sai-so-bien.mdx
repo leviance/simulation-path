@@ -1,0 +1,124 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# So lấy mẫu theo bước với kết quả giải tích
+
+## Vấn đề cần giải quyết
+
+Exact chord cho kết quả tốt khi vật thể là các box có mu hằng. Nhưng nếu mu được cho bằng trường dữ liệu phức tạp, ta thường phải lấy mẫu dọc tia. Bài này dùng các box có nghiệm sẵn làm oracle để học midpoint sampling và thấy lỗi biên.
+
+Chuyển phương pháp không được đổi scene hoặc hệ số. Cả hai phải tính cùng optical depth trên cùng đoạn source→detector.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chia beam thành ceil(maximum/stepLength) cell. Lấy mu ở midpoint, cộng mu*ds. Mẫu trong không khí có mu0; một cell cuối có ds ngắn hơn stepLength:
+
+$$
+\tau_{num}=\sum_k\mu(p(t_k+ds_k/2))ds_k
+$$
+
+Với mu gián đoạn ở mặt box, midpoint có thể bỏ hoặc nhận cả cell khi chỉ một phần cell nằm trong vật liệu. Vì vậy giảm step thường làm sai số nhỏ đi nhưng **không nhất thiết giảm đơn điệu ở từng pixel**. Một step tình cờ khớp biên có thể tốt hơn step nhỏ hơn.
+
+Với mỗi chord có hai biên, một bound bảo thủ là |tauNum−tauExact|≤2*step*strength*sum(mu). Đây là bound cho box piecewise-constant, không lời hứa cho mọi scalar field.
+
+<InteractiveLab demo="xray-detector" mode="xray55-5" />
+
+## Viết code từng bước
+
+### Bước 1 — Hỏi một điểm thuộc những medium nào
+
+contains kiểm cả ba trục:
+
+```cpp title="include/materials.hpp"
+inline bool contains(const Material& m, Point p) {
+    for (int a = 0; a < 3; ++a) {
+        if (p[a] < m.minimum[a] || p[a] > m.maximum[a]) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+Midpoint trong vùng overlap cộng mu của mọi box chứa điểm đó. Không break ở box đầu tiên. Ray nằm đúng trên mặt dùng closed bounds giống slab; ray chỉ chạm một điểm không có length dương trong nghiệm exact.
+
+### Bước 2 — Tích phân có ds và giới hạn
+
+midpointDepth trong projection.hpp:
+
+```cpp title="include/projection.hpp"
+inline Depth midpointDepth(Beam beam, const Scene& scene, double strength, double stepLength) {
+    validateBeam(beam);
+    if (!std::isfinite(stepLength) || stepLength < 0.05 || stepLength > 0.5) {
+        throw std::invalid_argument("Step length must be 0.05..0.5");
+    }
+    const int count = static_cast<int>(std::ceil(beam.maximum / stepLength));
+    if (count > maxSteps) {
+        throw std::runtime_error("Sample budget exceeded");
+    }
+    Depth depth;
+    for (int i = 0; i < count; ++i) {
+        const double t = i * stepLength;
+        const double ds = std::min(stepLength, beam.maximum - t);
+        const Point point = at(beam, t + ds / 2);
+        for (const auto& material : scene) {
+            if (contains(material, point)) {
+                depth.low += strength * material.muLow * ds;
+                depth.high += strength * material.muHigh * ds;
+            }
+        }
+        ++depth.samples;
+    }
+    return depth;
+}
+```
+
+Beam đã được đổi sang object space trước khi gọi. Step0.05..0.5, maximum≤20 và cap512 giữ công việc hữu hạn. Count vượt cap báo lỗi, không nhận ray bị cắt cụt. Không gọi exp mỗi cell; ở đây chỉ cần tích phân tau rồi exp ở detector.
+
+### Bước 3 — Cho người dùng đổi solver mà không đổi physics
+
+measure chọn exact hoặc midpoint:
+
+```cpp title="include/projection.hpp"
+inline Measurement measure(Beam beam, const Scene& scene, Settings settings) {
+    validate(settings);
+    validateScene(scene);
+    validateBeam(beam);
+    const Beam local = objectBeam(beam, settings.angle);
+    Depth depth;
+    if (settings.numeric) {
+        depth = midpointDepth(local, scene, settings.strength, settings.stepLength);
+    } else {
+        depth = exactDepth(local, scene, settings.strength);
+    }
+    const double ratio = transmission(depth, settings);
+    double logProjection = 0;
+    bool logClamped = false;
+    return {depth, ratio, settings.exposure * ratio, logProjection, logClamped};
+}
+```
+
+validate settings/scene/beam trước khi làm việc. Hai đường dùng cùng angle, strength và transmission. N đổi phương pháp trong C++; Q đổi step. Canvas bật Midpoint sampling rồi nhấn M/Xem một mẫu để đọc t, ds, muLow và tau đã cộng.
+
+## Ghép các phần lại
+
+Build/run project_55_checkpoint_5. Chọn single slab, angle0, đổi step; so tau với .605 của tia centre analytic hoặc exact của pixel đang chọn. Các marker có cả sample trong air: chúng vẫn là công việc của integrator, dù đóng góp0.
+
+Native target 80×60 cố định, maximum của detector corner khoảng12.572; step 0.05 cần khoảng252 mẫu/ray. Không tự tăng target khi resize. Mặc định dùng exact; numeric chỉ bật khi bạn muốn thử.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ ds rồi cộng mu mỗi sample. Step nhỏ làm tau tăng theo số mẫu, không theo vật liệu. Khôi phục mu*ds.
+2. Cho tail dùng nguyên step. Optical length có thể vượt detector. Dùng min(stepLength,maximum−t), kể cả mẫu cuối trong air.
+
+## Tự kiểm tra kết quả
+
+So exact/numeric theo error bound, không đòi bằng nhau bitwise. Tổng ds bằng maximum trong tolerance; số mẫu không quá512. Step0,NaN,.001 hoặc>.5 bị từ chối. Measurement không sửa scene.
+
+Không dùng trilinear của Project 54 ở đây: mu là tổng các indicator box, không texture voxel. Không che sai số biên bằng filter của texture hiển thị.
+
+## Bài tập mở rộng
+
+Chọn một slab có biên không chia hết step=.11. Tính các midpoint nằm trong slab và tauNum bằng tay. Thử vài step rồi ghi vì sao sai số có thể lên/xuống thay vì giảm đều.
+
+[Bài tiếp theo](/projects/xray-detector/06-flat-field-va-anh-log) — Tách tín hiệu thô khỏi ảnh mức xám và ảnh log.
+

@@ -62,4 +62,4 @@ source-template, tests và README là authored inputs. Starter/checkpoints/final
 
 Tham khảo [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture), [SDL_RenderTexture](https://wiki.libsdl.org/SDL3/SDL_RenderTexture), [SDL input conversion](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates).
 
-Tiếp theo: Project 54 — Volume Ray Marching, hiện Sắp ra mắt.
+Tiếp theo: Project 54 — Volume Ray Marching, dùng fragment shader để tích lũy màu và transmittance dọc tia.

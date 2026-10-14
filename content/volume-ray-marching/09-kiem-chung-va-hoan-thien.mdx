@@ -1,0 +1,133 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm C/T trên GPU và chạy project hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Ảnh có sương chưa đủ chứng minh shader đúng. Một lỗi đổi trục hoặc đảo y có thể vẫn cho ảnh đẹp; một lỗi ds làm độ đặc phụ thuộc step. Bài cuối kiểm các con số rồi chạy bản hoàn chỉnh.
+
+Ta tách ba loại kiểm: pure CTest không window, GPU numeric verify target nhỏ, và kiểm tương tác desktop. Test toán không chứng minh mouse capture/driver/cửa sổ hoạt động đúng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Medium hằng cho nghiệm độc lập với code marching:
+
+$$
+T=e^{-\sigma\rho L},\qquad C=c(1-T)
+$$
+
+Dùng nhiều step kể cả 0.17 để có partial tail. GPU so với CPU trên phantom/ramp/constant, camera outside/inside và vài pixel biết trước. So C/T trong RGBA32F trước gamma, không so screenshot đã compose.
+
+GPU target **16×12**, đọc bốn pixel cho mỗi cấu hình; không đọc cả ảnh lớn và không benchmark vô hạn. Tolerance 0.0025 cho float/hardware interpolation so với CPU double. App kiểm deadline 10s giữa readback; timeout process ngoài 30s còn cần vì ReadPixels có thể chặn. Timeout không preempt GPU command đã gửi và không bảo đảm driver không treo.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-9" />
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm trường hợp có nghiệm giải tích
+
+tests/tests.cpp có runner check hoạt động cả Release/NDEBUG. Trong vòng lặp nhiều step, nó kiểm:
+
+```cpp title="tests/tests.cpp"
+const auto result = march(front, volume, settings);
+const double expectedT = std::exp(-2 * 0.25 * 4.8);
+check(closeEnough(result.transmittance, expectedT), "constant medium step invariant");
+check(result.samples == static_cast<int>(std::ceil((interval->exit - interval->entry) / step)), "tail sample included");
+```
+
+Test đếm mẫu theo interval thực đã tính, không lấy 4.8 lý tưởng để suy số mẫu bitwise. Sai số floating-point ở ceil có thể thêm một tail gần zero; điều cần giữ là tổng optical length và C/T.
+
+Các test khác gồm parallel/inside/miss, x-fast/480 KiB, biên sampler, sigma=0, request lỗi, early bound, ramp convergence và không sửa density.
+
+### Bước 2 — Đọc raw target và tạo cùng ray CPU
+
+Trong verifyGpu, sau renderer.render và bind framebuffer:
+
+```cpp title="include/validation.hpp"
+for (const auto& pixel : {std::array{7, 5}, std::array{0, 0}, std::array{15, 11}, std::array{12, 8}}) {
+    float actual[4]{};
+    gl.ReadPixels(pixel[0], pixel[1], 1, 1, GL_RGBA, GL_FLOAT, actual);
+    const auto ray = cameraRay(camera, (pixel[0] + 0.5) / renderer.width, 1 - (pixel[1] + 0.5) / renderer.height, static_cast<double>(renderer.width) / renderer.height);
+    const auto expected = march(ray, volume, settings);
+    const std::array<double, 4> reference{expected.color[0], expected.color[1], expected.color[2], expected.transmittance};
+    for (int component = 0; component < 4; ++component) {
+        const double error = std::abs(actual[component] - reference[component]);
+        if (!std::isfinite(actual[component]) || error > 0.0025) {
+            throw std::runtime_error("GPU C/T differs from CPU oracle");
+        }
+        maximumError = std::max(maximumError, error);
+        ++comparisons;
+    }
+    if (SDL_GetTicks() - started > 10000) {
+        throw std::runtime_error("GPU verify total timeout");
+    }
+}
+```
+
+Y GL hướng lên; cameraRay CPU hướng xuống, nên v=1−(y+0.5)/height. Nếu không đổi quy ước ở đây, test so hai tia khác nhau. ReadPixels chỉ xuất hiện ở smoke/verify, không trong interactive render loop.
+
+### Bước 3 — Chạy verify riêng, không chen vào mỗi frame
+
+Main xử lý cờ và chạy verify trước event loop:
+
+```cpp title="src/main.cpp"
+if (verify) {
+    fog::verifyGpu(gl, renderer);
+}
+```
+
+--verify-gpu tạo hidden context và render target nhỏ. Starter/checkpoint sớm chưa có oracle cuối nên từ chối cờ này. --smoke-gpu ở checkpoint 1–9 kiểm compile/link/uniform và một pixel hữu hạn; nó không thay thế numeric verify.
+
+## Ghép các phần lại
+
+Trong thư mục ZIP có CMakeLists.txt, build final mặc định:
+
+```bash title="Terminal — build và pure tests"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Debug\project_54_final.exe
+```
+
+CMake tối thiểu 3.24, C++20, SDL3 khóa 3.4.8 qua FetchContent. OpenGL 3.3 core là yêu cầu runtime. Không tăng --parallel theo số core chỉ để build nhanh hơn trên máy đang học.
+
+GPU verify nên có deadline ngoài process. Ví dụ PowerShell:
+
+```bash title="PowerShell — GPU verify có giới hạn 30 giây"
+$gpuCheck = Start-Process -FilePath ".\build\Debug\project_54_final.exe" -ArgumentList "--verify-gpu" -WindowStyle Hidden -PassThru -RedirectStandardOutput "gpu-verify.log" -RedirectStandardError "gpu-verify-error.log"
+if (-not $gpuCheck.WaitForExit(30000)) {
+    $gpuCheck.Kill()
+    throw "GPU verify vượt 30 giây; dừng kiểm và xem driver/log."
+}
+Get-Content "gpu-verify.log"
+Get-Content "gpu-verify-error.log"
+if ($gpuCheck.ExitCode -ne 0) { throw "GPU verify thất bại." }
+```
+
+Không lặp lại test GPU tự động nếu đã timeout. Đọc log và kiểm driver/context trước; CTest vẫn chạy riêng không cần GL context.
+
+Bản final: drag/mũi tên orbit, wheel distance, Space quay/dừng, I inside, P dataset, +/− sigma, Q step, C transfer, E early, R reset, Escape thoát. Khi mở app paused. Shader có trong checkpoint/final và được copy cạnh executable.
+
+Mã đầy đủ của mọi file xuất hiện ở phần source cuối trang; ZIP gồm README, starter, chín checkpoint, final, shader và tests. Đừng chỉ chép main.cpp: program cần cả headers và shader.
+
+## Thử làm sai để hiểu đúng
+
+1. So screenshot gamma-encoded với C/T raw của oracle. Kết quả sẽ lệch dù march đúng. So target float trước present; kiểm ảnh màn hình là một bài kiểm riêng.
+2. Đọc GPU mỗi frame hoặc tăng verify lên cửa sổ fullscreen trong bản thử. Readback có thể đồng bộ CPU/GPU và làm app chậm. Khôi phục verify riêng 16×12 và deadline, không tắt overlay/test để bỏ qua lỗi.
+
+## Tự kiểm tra kết quả
+
+CTest Debug/Release trả exit success; shader smoke của từng checkpoint không báo compile/link/uniform/GL error. Final --verify-gpu báo PASS với maximum error≤0.0025. Nếu thiếu OpenGL context, báo giới hạn môi trường, không ghi GPU đã kiểm.
+
+Kiểm tay trên desktop: P/Q/C/E/+− hoạt động, sigma=0 trả nền, I inside vẫn có sương trước mặt; resize giữ aspect/target; drag thả ngoài window, blur/minimize và R không giữ capture/tự quay. CTest không kiểm mouse capture hay chất lượng driver.
+
+Trên web, kiểm navigation, Copy, ZIP download, focus/mũi tên/N/Space, reset/reduced-motion. Canvas chỉ CPU, không xác nhận shader thật. Dữ liệu tổng hợp không phải HU/CT thật; project không có reconstruction, scattering hay multiple scattering.
+
+## Bài tập mở rộng
+
+Thêm một dataset density theo z có tích phân biết trước, rồi viết test T độc lập với march. Sau đó mới thử tăng resolution trong một bản riêng, vẫn giữ cap và đo workload.
+
+[Project 55 — Máy X-ray ảo](/projects/xray-detector) tiếp tục với tia xuyên nhiều lớp vật liệu để tạo ảnh detector. Bạn có thể quay lại [tổng quan Project 54](/projects/volume-ray-marching) để đối chiếu thử thách ban đầu.
+

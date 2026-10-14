@@ -1,0 +1,131 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cộng từng đoạn dọc tia theo front-to-back
+
+## Vấn đề cần giải quyết
+
+Midpoint duy nhất bỏ qua cấu trúc không nằm giữa box. Giờ ray phải đi qua nhiều đoạn, mỗi đoạn lấy density ở midpoint và đóng góp một phần màu. Đây mới là volume ray marching của project.
+
+Giữ camera, box và texture. Thay nhánh midpoint trong main bằng vòng lặp; thêm march CPU cùng công thức làm oracle. Checkpoint 6 vẫn dùng màu cool cố định để chỉ kiểm tích lũy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với length L và stepLength s, lấy ceil(L/s) đoạn. Đoạn cuối thường ngắn hơn s, nên ds=min(s,exit−t). Sample ở t+ds/2. Sai ds cuối sẽ tính absorption ngoài box.
+
+C bắt đầu (0,0,0), T bắt đầu 1. Đi từ gần đến xa:
+
+$$
+C_{new}=C_{old}+T_{old}(1-e^{-\sigma\rho_i ds_i})c_i,\quad T_{new}=T_{old}e^{-\sigma\rho_i ds_i}
+$$
+
+Told là phần ánh sáng còn xuyên qua các đoạn phía trước. Cộng màu bằng **T cũ**, rồi mới cập nhật T. Không lấy T mới để làm đoạn hiện tại bị suy giảm thêm một lần.
+
+Chọn Medium hằng, tiến từng mẫu bằng N hoặc nút Tiến một mẫu. Đồ thị đọc density và T sau mỗi đoạn; ảnh trái là kết quả đầy đủ, không phải phần ray đang xem. Khi đổi tham số, profile về đầu và preview CPU được dựng lại theo batch nhỏ.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ kết quả linear C/T riêng
+
+reference.hpp khai báo:
+
+```cpp title="include/reference.hpp"
+struct Result {
+    Point color{0, 0, 0};
+    double transmittance = 1;
+    int samples = 0;
+};
+```
+
+samples giúp kiểm workload; không phải opacity. Shader dùng vec4(color,transmittance) cùng hợp đồng. Không readback mỗi frame: CPU oracle chỉ dùng cho tests và verify nhỏ.
+
+### Bước 2 — Chia ray và tích lũy trong shader
+
+Sau interval đã hit, shader thực hiện:
+
+```glsl title="shaders/volume.frag"
+    int count = int(ceil((exit - entry) / uStep));
+    if (count > 512) {
+        result = vec4(1, 0, 1, -1);
+        return;
+    }
+    vec3 color = vec3(0);
+    float transmittance = 1.0;
+    for (int i = 0; i < 512; ++i) {
+        if (i >= count) {
+            break;
+        }
+        float t = entry + float(i) * uStep;
+        float ds = min(uStep, exit - t);
+        float density = densityAt(uOrigin + direction * (t + ds * 0.5));
+        float segmentT = exp(-uSigma * density * ds);
+        float alpha = 1.0 - segmentT;
+        // Use T before attenuating it by this segment.
+        color += transmittance * alpha * transfer(density);
+        transmittance *= segmentT;
+    }
+    result = vec4(color, transmittance);
+```
+
+Cap 512 là hàng rào an toàn, không phải số bước bắt buộc. Count nhỏ hơn cap thì dừng đúng count. Nếu count lớn hơn cap, shader trả diagnostic magenta/T âm, không giả partial ray là ảnh hợp lệ.
+
+Mỗi iteration tính ds thật rồi rho tại midpoint. Màu cool trong transfer là (0.8,0.9,1). CPU double và shader float có thể chọn thêm một tail cực nhỏ vì ceil quanh số nguyên; kiểm optical length/C/T theo tolerance, không giả định mọi camera có cùng số mẫu bitwise.
+
+### Bước 3 — Viết oracle CPU theo cùng thứ tự
+
+Hàm march trong reference.hpp:
+
+```cpp title="include/reference.hpp"
+inline Result march(const Ray& ray, const Volume& volume, Settings settings) {
+    validate(settings);
+    Result result;
+    const auto interval = boxInterval(ray);
+    if (!interval) {
+        return result;
+    }
+    const int count = static_cast<int>(std::ceil((interval->exit - interval->entry) / settings.stepLength));
+    if (count > maxSteps) {
+        throw std::runtime_error("Step budget exceeded: no partial result accepted");
+    }
+
+    for (int i = 0; i < count; ++i) {
+        const double t = interval->entry + i * settings.stepLength;
+        const double ds = std::min(settings.stepLength, interval->exit - t);
+        const double density = sampleDensity(volume, at(ray, t + ds / 2));
+        const double alpha = segmentAlpha(density, settings.sigma, ds);
+        const Point color = transfer(density, settings.warm);
+        // The old transmittance weights this segment; update T only afterwards.
+        result.color = add(result.color, multiply(color, result.transmittance * alpha));
+        result.transmittance *= std::exp(-settings.sigma * density * ds);
+        ++result.samples;
+    }
+    return result;
+}
+```
+
+validate chặn sigma/step không hợp lệ trước khi tính count. Miss trả C=0,T=1,samples=0. CPU từ chối count vượt ngân sách thay vì trả một ảnh thiếu đoạn. Hàm không sửa volume.
+
+## Ghép các phần lại
+
+Build/run project_54_checkpoint_6. Q đổi step 0.02/0.04/0.08/0.16. Phantom bắt đầu hiện các vùng đặc ngoài midpoint; medium hằng giữ T gần như không đổi khi đổi step.
+
+Đừng so trực tiếp màu screenshot với oracle: present có nền/gamma. So C/T trong target tuyến tính. Màu cool của checkpoint này khác warm ở final; khi so CPU nhớ chọn cùng transfer.
+
+## Thử làm sai để hiểu đúng
+
+1. Nhân T trước rồi dùng T mới cộng màu trong bản thử. Màu của từng cell bị hấp thụ thêm lần nữa. Medium hằng không còn cho C=c*(1−T). Khôi phục thứ tự C trước, T sau.
+2. Cho mọi cell dùng ds=stepLength kể cả tail. Thử step=0.17 với L=4.8; tổng ds vượt L, ảnh đặc quá. Dùng remainder thật của interval.
+
+## Tự kiểm tra kết quả
+
+Constant cho T=exp(−sigma*rho*L), C=c*(1−T) với nhiều step, kể cả 0.17 không chia hết L. Miss không sample; sigma=0 trong suốt; density không bị sửa.
+
+Với phantom/ramp, giảm step là kiểm hội tụ xấp xỉ tích phân, không yêu cầu bitwise giống nhau. Trilinear không tạo thêm resolution của volume khi step nhỏ hơn voxel.
+
+## Bài tập mở rộng
+
+L=0.21, step=0.08: viết t/ds/midpoint của ba cell. Tổng ds phải 0.21, không 0.24. Thêm test C analytic cho một medium hằng khác.
+
+[Bài tiếp theo](/projects/volume-ray-marching/07-transfer-va-present) dùng màu để phân biệt density mà không thay extinction.
+

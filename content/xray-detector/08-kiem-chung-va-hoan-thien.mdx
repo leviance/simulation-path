@@ -1,0 +1,145 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm máy X-ray ảo rồi chạy project hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Có ảnh detector không có nghĩa mọi công thức đúng. Một mô phỏng học tập cần các ca độc lập: biết chiều dày/hệ số trước, tính nghiệm bằng tay rồi kiểm chương trình.
+
+Bài cuối thêm phím V/audit, chạy tests và bàn giao toàn bộ source. Tách rõ pure math, SDL smoke và kiểm tương tác desktop; không dùng một kết quả PASS để chứng nhận cả ba.
+
+## Hiểu ý tưởng trước khi viết code
+
+Slab centre thickness1.1, muLow.55 cho tau=.605 và T=exp(-.605). Đây là oracle độc lập với boxInterval/midpoint loop. Ca oblique còn qua hai mặt z cho L=1.1/dz.
+
+Tests thêm source inside, ray miss/parallel, detector clip, order invariant, overlap-additive, exposure invariant, spectrum endpoints và log nonlinearity. Với midpoint, dùng partial tail và boundary bound, không chọn một step đẹp để khẳng định solver luôn chính xác.
+
+Audit chỉ vài phép đo scalar, không render ảnh lớn, không chạy benchmark vô hạn. SDL smoke dùng target 80×60 một lần rồi exit; nó không kiểm chuột/DPI/driver trên mọi máy.
+
+<InteractiveLab demo="xray-detector" mode="xray55-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Thêm audit nhỏ có nghiệm biết trước
+
+audit.hpp dùng scene độc lập và so với .605:
+
+```cpp title="include/audit.hpp"
+inline double audit() {
+    const Beam beam{{0, 0, -6}, {0, 0, 1}, 12};
+    const Scene slab{{{-1, -1, -0.55}, {1, 1, 0.55}, 0.55, 0.18}};
+    Settings settings;
+    const auto exact = measure(beam, slab, settings);
+    if (std::abs(exact.depth.low - 0.605) > 1e-12 || std::abs(exact.ratio - std::exp(-0.605)) > 1e-12) {
+        throw std::runtime_error("Independent slab oracle failed");
+    }
+    double maximumError = 0;
+    for (double step : {0.05, 0.11, 0.25}) {
+        settings.numeric = true;
+        settings.stepLength = step;
+        const auto result = measure(beam, slab, settings);
+        const double error = std::abs(result.depth.low - 0.605);
+        const double bound = 2 * step * 0.55 + 1e-12;
+        if (error > bound) {
+            throw std::runtime_error("Midpoint boundary bound failed");
+        }
+        maximumError = std::max(maximumError, error);
+    }
+    return maximumError;
+}
+```
+
+V chạy audit native; Canvas nút Kiểm slab và biên dùng cùng ca nhỏ. Max error .055 ở fixture này là sai số midpoint biên hợp lệ, không sai số của exact oracle. Bound thay đổi theo step và mu.
+
+### Bước 2 — Kiểm input trước khi chia hoặc lấy ceil
+
+validateBeam giữ finite normalized beam dài≤20:
+
+```cpp title="include/geometry.hpp"
+inline void validateBeam(Beam beam) {
+    if (!std::isfinite(beam.maximum) || beam.maximum <= 0 || beam.maximum > 20 || std::abs(dot(beam.direction, beam.direction) - 1) > 1e-6) {
+        throw std::invalid_argument("Finite unit beam with length <=20 required");
+    }
+    for (int a = 0; a < 3; ++a) {
+        if (!std::isfinite(beam.origin[a]) || !std::isfinite(beam.direction[a])) {
+            throw std::invalid_argument("Nonfinite beam");
+        }
+    }
+}
+```
+
+Tests cố ý đưa nonunit/NaN/bounds lỗi. Không biến request quality sai thành một ảnh partial rồi báo thành công. Pure tests include audit.hpp, không gọi SDL_Init và không cần window.
+
+### Bước 3 — Giữ checks trong Release
+
+Settings validation cũng được kiểm bằng test:
+
+```cpp title="include/model.hpp"
+inline void validate(Settings settings) {
+    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 2) {
+        throw std::invalid_argument("Invalid angle, strength or preset");
+    }
+    if (!std::isfinite(settings.stepLength) || settings.stepLength < 0.05 || settings.stepLength > 0.5 || !std::isfinite(settings.logRange) || settings.logRange < 0.5 || settings.logRange > 12) {
+        throw std::invalid_argument("Invalid quality or display range");
+    }
+    if (!std::isfinite(settings.lowWeight) || settings.lowWeight < 0 || settings.lowWeight > 1 || !std::isfinite(settings.exposure) || settings.exposure < 1000 || settings.exposure > 50000) {
+        throw std::invalid_argument("Invalid spectrum or exposure");
+    }
+}
+```
+
+tests/tests.cpp dùng check(bool condition,std::string_view label), tăng failures và trả EXIT_FAILURE nếu có lỗi. Không dùng assert làm mất phép kiểm khi NDEBUG bật. Code đầy đủ của tests và final có ở phần source cuối bài.
+
+## Ghép các phần lại
+
+C++20, CMake 3.24+, SDL3 khóa 3.4.8 qua FetchContent và link SDL3::SDL3. Trong thư mục ZIP:
+
+```bash title="Terminal — build final và pure tests"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Debug\project_55_final.exe
+```
+
+Windows/Visual Studio chạy trong build/Debug. Single-config generator dùng build riêng/CMAKE_BUILD_TYPE. Final là target mặc định; BUILD_CHECKPOINTS bật starter và8 checkpoint. ZIP độc lập, không cần website/Project 54.
+
+SDL smoke có deadline ngoài process30s, ví dụ PowerShell:
+
+```bash title="PowerShell — smoke bounded"
+$smoke = Start-Process -FilePath ".\build\Debug\project_55_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru -RedirectStandardOutput "smoke.log" -RedirectStandardError "smoke-error.log"
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "SDL smoke vượt 30 giây; dừng và xem log."
+}
+Get-Content "smoke.log"
+Get-Content "smoke-error.log"
+if ($smoke.ExitCode -ne 0) { throw "SDL smoke thất bại." }
+```
+
+Không chạy lại liên tục khi timeout. Timeout process không bảo đảm một graphics driver không treo; pure CTest vẫn kiểm riêng không renderer.
+
+Final controls: click/kéo/mũi tên chọn pixel; A/D xoay, Space quay/dừng, P scene, W/S strength, N exact/midpoint, Q step, L log, I invert, +/− exposure, B spectral, J/K weight, V audit, R reset, Escape thoát. Blur/minimize/reset hủy capture và dừng; không tự resume.
+
+Source cuối bài có toàn bộ headers/main/tests. ZIP có README, starter, checkpoint và final; đừng chỉ chép main.cpp. Project 56 sẽ quay nguồn quanh vật thể và dựng sinogram, hiện vẫn Sắp ra mắt.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ so midpoint với một hàm gọi lại chính midpoint. Hai bản sai giống nhau vẫn PASS. Giữ slab/chord analytic cùng expected values độc lập.
+2. Dùng byte screenshot làm reference intensity. Display có clamp/range/palette/quantization, không phải measurement raw. So tau/T/I/p trước display.
+
+## Tự kiểm tra kết quả
+
+CTest Debug/Release exit success; audit fixture đúng và invalid settings bị từ chối. SDL smoke của starter/checkpoint/final render một frame rồi thoát. Smoke không chứng nhận behavior desktop.
+
+Kiểm tay: chọn pixel đúng, thả drag ngoài window, resize/DPI/letterbox, pause/reset/blur, source–detector clip, N/Q/L/I/B/+− controls. Web kiểm navigation, Copy, ZIP, keyboard/M/Space, reset và reduced motion. Không khẳng định đã kiểm desktop chỉ vì các test toán qua.
+
+Dữ liệu tổng hợp không phải HU/CT thật. Không noise, scatter, detector response hay calibration; không reconstruction và không hướng dẫn vận hành nguồn bức xạ.
+
+## Bài tập mở rộng
+
+Thêm một material có muLow=muHigh rồi kiểm spectral=mono. Viết báo cáo nhỏ phân biệt lỗi geometry, integration, spectrum và display thay vì gom mọi khác biệt thành “ảnh sai”.
+
+Quay lại [thử thách Project 55](/projects/xray-detector) và tự build từ starter, không đọc final trước.
+

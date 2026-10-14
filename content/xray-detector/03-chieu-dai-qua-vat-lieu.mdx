@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính chiều dài tia đi trong một lớp vật liệu
+
+## Vấn đề cần giải quyết
+
+Một tia có thể xuyên lớp vật liệu, đi qua không khí hoặc chỉ chạm mép. Ta cần chiều dài thật bên trong box, không chỉ điểm chạm mặt trước.
+
+Để kiểm riêng hình học, checkpoint này vẽ ảnh length/4: ray xuyên box dài hơn sáng hơn. Ảnh này **chưa là intensity**, nên chưa có quy tắc “đặc hơn thì tối hơn”.
+
+## Hiểu ý tưởng trước khi viết code
+
+Box đầu nằm giữa z=-0.55 và z=0.55, dày1.1. Giao ba slab cho interval nằm trong box, đồng thời clip vào [0,beam.maximum]. Source bên trong bắt đầu entry=0; vật liệu sau detector không đóng góp.
+
+Khi xoay vật thể quanh y, ta giữ box axis-aligned trong object space và đổi ray bằng rotation nghịch đảo. Rotation giữ độ dài nên maximum, t và chiều dài chord không cần đổi đơn vị:
+
+$$
+o_{local}=R_y(-\theta)o,\qquad d_{local}=R_y(-\theta)d
+$$
+
+Điều này khác quay cả source/detector để chụp nhiều góc ở Project 56. Trong project này chỉ vật thể quay.
+
+<InteractiveLab demo="xray-detector" mode="xray55-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Giao slab và clip vào detector
+
+boxInterval kiểm beam normalized, dữ liệu hữu hạn và xử lý direction zero trước phép chia:
+
+```cpp title="include/geometry.hpp"
+inline std::optional<Interval> boxInterval(Beam beam, Point minimum, Point maximum) {
+    validateBeam(beam);
+    for (int a = 0; a < 3; ++a) {
+        if (!std::isfinite(beam.origin[a]) || !std::isfinite(beam.direction[a]) || !std::isfinite(minimum[a]) || !std::isfinite(maximum[a]) || minimum[a] >= maximum[a]) {
+            throw std::invalid_argument("Invalid ray or bounds");
+        }
+    }
+    Interval result{0, beam.maximum};
+    for (int a = 0; a < 3; ++a) {
+        if (beam.direction[a] == 0) {
+            if (beam.origin[a] < minimum[a] || beam.origin[a] > maximum[a]) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        double near = (minimum[a] - beam.origin[a]) / beam.direction[a];
+        double far = (maximum[a] - beam.origin[a]) / beam.direction[a];
+        if (near > far) {
+            std::swap(near, far);
+        }
+        result.entry = std::max(result.entry, near);
+        result.exit = std::min(result.exit, far);
+        if (result.entry >= result.exit) {
+            return std::nullopt;
+        }
+    }
+    return result;
+}
+```
+
+Entry=max các near và0; exit=min các far vàmaximum. Entry≥exit là không có đoạn dài dương. Ray song song ngoài slab miss; source inside vẫn tính phần trước mặt tới exit.
+
+### Bước 2 — Đổi ray thay vì xoay từng mặt box
+
+objectBeam dùng góc âm:
+
+```cpp title="include/geometry.hpp"
+inline Beam objectBeam(Beam beam, double angle) {
+    return {rotateY(beam.origin, -angle), rotateY(beam.direction, -angle), beam.maximum};
+}
+```
+
+Hàm rotateY ở model.hpp là cùng rotation đã học trước đó. Không scale direction sau rotation; các khoảng t local vẫn bằng quãng đường world.
+
+### Bước 3 — Lấy chiều dài và tạo ảnh diagnostic
+
+materialLength trả zero khi miss:
+
+```cpp title="include/materials.hpp"
+inline double materialLength(Beam beam, const Material& material) {
+    const auto interval = boxInterval(beam, material.minimum, material.maximum);
+    if (!interval) {
+        return 0;
+    }
+    return interval->exit - interval->entry;
+}
+```
+
+brightness lấy detectorRay→objectBeam, gọi materialLength cho slab rồi chia4/clamp thành gray. Sơ đồ vẽ footprint XZ xoay của box; hit vẫn xét ba trục, không suy từ đường vẽ 2D.
+
+## Ghép các phần lại
+
+Build/run project_55_checkpoint_3. A/D hoặc Space xoay object; mở paused. Với tia centre liên tục u=v=0.5, angle0: entry=5.45, exit=6.55, length1.1. Với ray oblique còn qua hai mặt z, length=1.1/direction.z.
+
+Không dùng công thức oblique ấy nếu ray ra qua mặt bên trước: boxInterval tự chọn mặt exit thật.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng surface hit của Project 52 rồi dừng ở mặt trước. Bạn chỉ có entry, không có length xuyên vật liệu. Giữ cả entry/exit.
+2. Đổi ray bằng +angle thay vì −angle. Box vẽ theo một hướng nhưng ảnh là hướng khác. Kiểm với box bất đối xứng và sửa inverse transform.
+
+## Tự kiểm tra kết quả
+
+Tia centre cho thickness1.1; source inside cho phần còn lại0.55. Beam maximum5.7 từ source z−6 chỉ đi0.25 trong slab. Ray song song ngoài x-range miss. Resize/letterbox không thay các giá trị vật lý.
+
+## Bài tập mở rộng
+
+Đặt thêm box sau z=6 trong một test. Nó phải cho length0 vì đã qua detector. Thử source nằm trong box để nhận ra vì sao entry cần clamp0.
+
+[Bài tiếp theo](/projects/xray-detector/04-beer-lambert-nhieu-lop) — Từ chiều dài qua nhiều lớp đến tín hiệu detector.
+

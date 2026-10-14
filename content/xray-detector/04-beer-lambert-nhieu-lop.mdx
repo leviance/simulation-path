@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ chiều dài qua nhiều lớp đến tín hiệu detector
+
+## Vấn đề cần giải quyết
+
+Có chiều dài qua vật liệu rồi, ta mới đổi nó thành tín hiệu detector. Checkpoint này thêm nhiều lớp và ảnh transmission thật trong mô hình lý tưởng.
+
+Không tích lũy màu C như Project 54. Detector chỉ đo phần tín hiệu truyền qua; nơi suy giảm nhiều có ratio thấp, nên tối hơn với palette mặc định.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mu là hệ số suy giảm theo 1/world-unit. Với mỗi box có mu hằng, optical depth cộng theo chiều dài chord:
+
+$$
+\tau=\sum_i s\mu_iL_i,\qquad T=e^{-\tau},\qquad I=I_0T
+$$
+
+s là strength. Quy luật exponential và tính nhân của transmission dọc tia được giải thích trong [PBRT — Transmittance](https://www.pbr-book.org/4ed/Volume_Scattering/Transmittance). Các mu ở đây là số tổng hợp, không đại diện vật liệu hay năng lượng keV thật.
+
+Các layer cộng tau nên đổi thứ tự danh sách không đổi T. Overlap được định nghĩa là **cộng mu của các medium bổ sung**, không phải box sau thay box trước. Nếu muốn mô hình vật liệu thay thế, cần chính sách khác; không thể dùng draw order ngầm.
+
+<InteractiveLab demo="xray-detector" mode="xray55-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo các box có hệ số riêng
+
+makeScene thêm preset layers và overlap:
+
+```cpp title="include/materials.hpp"
+inline Scene makeScene([[maybe_unused]] int preset) {
+    const Material slab{{-1.2, -1.05, -0.55}, {1.2, 1.05, 0.55}, 0.55, 0.18};
+    if (preset == 1) {
+        return {{{-1.2, -1.05, -1.1}, {1.2, 1.05, -0.25}, 0.35, 0.12}, {{-1.2, -1.05, 0.25}, {1.2, 1.05, 1.1}, 0.9, 0.32}, {{0.25, -0.45, 1.35}, {0.7, 0.1, 1.85}, 1.8, 0.65}};
+    }
+    if (preset == 2) {
+        return {slab, {{-0.6, -0.5, -0.8}, {0.6, 0.5, 0.8}, 1.1, 0.4}};
+    }
+    return {slab};
+}
+```
+
+Preset1 có hai lớp tách bởi không khí và một box nhỏ lệch tâm; nó giúp nhìn lỗi trục. Preset2 cố ý overlap additive. MuHigh được giữ cho mô hình hai năng lượng ở Bài 07; hiện chỉ dùng muLow để tạo T.
+
+### Bước 2 — Cộng optical depth từ chord
+
+exactDepth dùng từng materialLength:
+
+```cpp title="include/projection.hpp"
+inline Depth exactDepth(Beam beam, const Scene& scene, double strength) {
+    Depth depth;
+    for (const auto& material : scene) {
+        const double distance = materialLength(beam, material);
+        depth.low += strength * material.muLow * distance;
+        depth.high += strength * material.muHigh * distance;
+    }
+    return depth;
+}
+```
+
+Một miss có distance0, không cộng gì. Strength0 làm mọi optical depth bằng0. Đây là nghiệm giải tích của mô hình piecewise-constant box, không ray marching lấy mẫu.
+
+### Bước 3 — Tính transmission rồi intensity
+
+Nhánh mono của transmission:
+
+```cpp title="include/projection.hpp"
+inline double transmission(Depth depth, [[maybe_unused]] Settings settings) {
+    return std::exp(-depth.low);
+}
+```
+
+measure lưu depth, ratio và I=settings.exposure*ratio. brightness trả ratio rồi quantize thành byte. I0 là flat-field không vật thể tại từng pixel, được mô hình này đặt đồng nhất; **không phải công suất nguồn**. Chưa có inverse-square/solid-angle/cosine response hoặc photon noise.
+
+## Ghép các phần lại
+
+Build/run project_55_checkpoint_4. P đổi scene, W/S đổi strength. Native title đọc tau, T và raw I của pixel đang chọn; Canvas cho đọc từng chord.
+
+Slab centre có L=1.1, muLow=.55 nên tau=.605, T=exp(-.605). Pixel40,30 lệch nhẹ tâm nên kết quả hơi khác ca analytic này; kiểm công thức theo chính beam của pixel ấy.
+
+## Thử làm sai để hiểu đúng
+
+1. Cộng transmission của các layer thay vì cộng tau. Hai lớp có thể cho T>1 hoặc ít suy giảm hơn một lớp. Giữ tau tổng rồi exp, tương đương nhân từng T.
+2. Dùng box order làm “vật liệu trên cùng” ở preset overlap. Chính sách không còn additive như oracle. Định nghĩa lại model nếu cần replacement, không đổi âm thầm.
+
+## Tự kiểm tra kết quả
+
+Strength0/vacuum cho T=1. T nằm [0,1], tăng mu/chord không làm T tăng. Đảo thứ tự layers giữ kết quả; duplicate slab làm tau gấp đôi. Không có C+T*background hoặc alpha blend trong detector.
+
+## Bài tập mở rộng
+
+Tính hai layer L1=.8,mu1=.3 và L2=.5,mu2=1.1 bằng tay. So exp của tổng tau với tích hai transmission.
+
+[Bài tiếp theo](/projects/xray-detector/05-midpoint-va-sai-so-bien) — So lấy mẫu theo bước với kết quả giải tích.
+

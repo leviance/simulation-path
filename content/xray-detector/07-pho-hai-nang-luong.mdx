@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cộng tín hiệu của hai năng lượng trước khi lấy log
+
+## Vấn đề cần giải quyết
+
+Với một năng lượng và mu hằng, p tăng tuyến tính theo thickness. Một phổ có nhiều thành phần không đơn giản như vậy: mỗi thành phần bị suy giảm khác nhau rồi detector cộng tín hiệu.
+
+Ta thêm đúng hai thành phần tổng hợp để thấy sự khác biệt. Đây không phải phổ tube, không gán keV và không thay cho bảng hệ số vật liệu thật.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi material có muLow và muHigh. Dataset của bài chọn muLow>muHigh để thành phần high ít bị suy giảm hơn. Low weight w là phần tín hiệu không vật thể của low; tổng weights bằng1:
+
+$$
+T=w e^{-\tau_L}+(1-w)e^{-\tau_H},\qquad p=-\ln(T)
+$$
+
+**Cộng intensity trước khi log**, không tính exp của tau trung bình. Khi thickness tăng, thành phần ít suy giảm chiếm ưu thế hơn trong tín hiệu truyền qua; p không còn tuyến tính theo thickness. Đây là minh họa toán của sự thay đổi phổ, không hệ số hiệu chuẩn.
+
+[NIST XCOM](https://physics.nist.gov/PhysRefData/Xcom/Text/intro.html) là nguồn dữ liệu hệ số photon theo năng lượng/vật liệu. Project không lấy số từ đó; các mu đang dùng chỉ phục vụ bài tập. Không suy ngược vật liệu thật từ hai số toy này.
+
+<InteractiveLab demo="xray-detector" mode="xray55-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Tổng hợp transmission của từng thành phần
+
+Nhánh spectral mới trong transmission:
+
+```cpp title="include/projection.hpp"
+inline double transmission(Depth depth, [[maybe_unused]] Settings settings) {
+    if (settings.spectral) {
+        return settings.lowWeight * std::exp(-depth.low) + (1 - settings.lowWeight) * std::exp(-depth.high);
+    }
+    return std::exp(-depth.low);
+}
+```
+
+w=1 trả mono low, w=0 trả mono high. Đổi weight không sửa muLow/muHigh. Detector ở đây cộng hai intensity với đáp ứng bằng nhau đã hấp thụ trong weights; chưa có đáp ứng phụ thuộc năng lượng thực.
+
+### Bước 2 — Giữ hai optical depth riêng
+
+exactDepth đã tích lũy hai channel:
+
+```cpp title="include/projection.hpp"
+inline Depth exactDepth(Beam beam, const Scene& scene, double strength) {
+    Depth depth;
+    for (const auto& material : scene) {
+        const double distance = materialLength(beam, material);
+        depth.low += strength * material.muLow * distance;
+        depth.high += strength * material.muHigh * distance;
+    }
+    return depth;
+}
+```
+
+Trong midpoint cũng cộng hai mu*ds riêng. Không dùng mu trung bình trước exp. Native B bật/tắt spectral, J/K đổi weight; Canvas có checkbox/slider tương ứng.
+
+### Bước 3 — Chặn weights sai
+
+validate kiểm lowWeight trong [0,1] và các tham số khác:
+
+```cpp title="include/model.hpp"
+inline void validate(Settings settings) {
+    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 2) {
+        throw std::invalid_argument("Invalid angle, strength or preset");
+    }
+    if (!std::isfinite(settings.stepLength) || settings.stepLength < 0.05 || settings.stepLength > 0.5 || !std::isfinite(settings.logRange) || settings.logRange < 0.5 || settings.logRange > 12) {
+        throw std::invalid_argument("Invalid quality or display range");
+    }
+    if (!std::isfinite(settings.lowWeight) || settings.lowWeight < 0 || settings.lowWeight > 1 || !std::isfinite(settings.exposure) || settings.exposure < 1000 || settings.exposure > 50000) {
+        throw std::invalid_argument("Invalid spectrum or exposure");
+    }
+}
+```
+
+Weight âm hoặc tổng không1 có thể làm ratio không còn trong [0,1]. Hàm transmission không tự đoán normalization của một spectrum tùy ý; ta chỉ hỗ trợ hai weights w và1−w.
+
+## Ghép các phần lại
+
+Build/run project_55_checkpoint_7. Chọn single slab, exact, bật spectral. So T với w*exp(-tauLow)+(1−w)*exp(-tauHigh); weight 0/1 là ca kiểm dễ nhất.
+
+Tạo hai slab giống nhau nối tiếp hoặc duplicate additive trong test để nhân thickness. Với mono, p2=2*p1; với hai thành phần khác mu và weight nằm giữa0/1, p2 thường nhỏ hơn2*p1. Layer order vẫn không đổi kết quả vì ta chỉ mô hình primary attenuation, chưa scatter.
+
+## Thử làm sai để hiểu đúng
+
+1. Lấy exp(-(w*tauLow+(1−w)*tauHigh)). Đây là exp của trung bình, không tổng transmission; thường cho kết quả khác. Khôi phục hai exp riêng.
+2. Lấy w*(-ln(Tlow))+(1−w)*(-ln(Thigh)) rồi gọi đó là log detector. Detector cộng intensity trước, không đo riêng hai log trong mô hình này.
+
+## Tự kiểm tra kết quả
+
+w0/1 đúng endpoint; strength0 cho T1 với mọi w. MuLow=MuHigh thì spectral trùng mono. Scene/ray/coefficients không bị sửa khi đổi mode.
+
+Không áp dụng kết quả toy này cho chẩn đoán, chọn liều hay thiết kế hệ phát tia. Project chỉ tính forward projection tổng hợp.
+
+## Bài tập mở rộng
+
+Chọn tauLow=1,tauHigh=.2,w=.6, tính cả hai công thức “sum exp” và “exp average”. So kết quả, rồi giải thích tại sao log không phân phối qua tổng.
+
+[Bài tiếp theo](/projects/xray-detector/08-kiem-chung-va-hoan-thien) — Kiểm máy X-ray ảo rồi chạy project hoàn chỉnh.
+

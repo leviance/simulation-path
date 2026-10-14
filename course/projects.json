@@ -369,5 +369,19 @@
     "sourceDirectory": "project-53-volume-slicer",
     "checkpointCount": 7,
     "demoId": "volume-slicer"
+  },
+  {
+    "id": "54",
+    "slug": "volume-ray-marching",
+    "sourceDirectory": "project-54-volume-ray-marching",
+    "checkpointCount": 9,
+    "demoId": "volume-ray-marching"
+  },
+  {
+    "id": "55",
+    "slug": "xray-detector",
+    "sourceDirectory": "project-55-xray-detector",
+    "checkpointCount": 8,
+    "demoId": "xray-detector"
   }
 ]

@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chỉ lấy mẫu trong đoạn tia xuyên volume
+
+## Vấn đề cần giải quyết
+
+Ta không lấy density từ camera tới vô tận, cũng không dừng ngay khi chạm mặt trước. Cần entry lẫn exit: đoạn ray thật sự nằm trong khối.
+
+Bài này chưa đọc texture. Shader tô xám theo chiều dài đoạn xuyên box, giúp sửa camera/slab mà không phải đoán từ ảnh sương.
+
+## Hiểu ý tưởng trước khi viết code
+
+Box có min=(-1.6,-1.92,-2.4), max=(1.6,1.92,2.4). Mỗi trục cho một khoảng t nằm giữa hai mặt song song; giao ba khoảng là phần nằm trong toàn box.
+
+$$
+p(t)=o+td,\quad t_{entry}=\max(0,t_{x0},t_{y0},t_{z0}),\quad t_{exit}=\min(20,t_{x1},t_{y1},t_{z1})
+$$
+
+Hai nghiệm trên từng trục phải sắp tăng dần. Entry≥exit nghĩa là không có đoạn dài dương. Ray chỉ chạm một điểm không tạo absorption nên coi là miss. tMax=20 đủ cho camera/box đang dùng.
+
+**Camera inside bắt đầu ở t=0**, không chọn mặt exit như surface hit của Project 52. Dùng nhầm surface hit sẽ bỏ toàn bộ medium trước mặt. Bật Camera trong volume và đọc entry/exit bên dưới.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Tách interval khỏi surface hit
+
+CPU boxInterval trả optional; nullopt là miss, không phải một cặp zero dễ bị hiểu nhầm.
+
+```cpp title="include/model.hpp"
+struct Interval {
+    double entry = 0;
+    double exit = 20;
+};
+```
+
+Entry bắt đầu 0 để bỏ phần sau camera, exit bắt đầu 20 để chặn độ xa.
+
+### Bước 2 — Xét hướng song song trước phép chia
+
+Shader giao từng slab:
+
+```glsl title="shaders/volume.frag"
+bool intervalFor(vec3 origin, vec3 direction, out float entry, out float exit) {
+    entry = 0.0;
+    exit = 20.0;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (direction[axis] == 0.0) {
+            if (origin[axis] < boxMin[axis] || origin[axis] > boxMax[axis]) {
+                return false;
+            }
+            continue;
+        }
+        float a = (boxMin[axis] - origin[axis]) / direction[axis];
+        float b = (boxMax[axis] - origin[axis]) / direction[axis];
+        entry = max(entry, min(a, b));
+        exit = min(exit, max(a, b));
+        if (entry >= exit) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+Direction zero không xuyên hai mặt của slab đó. Origin ngoài slab thì miss ngay; nằm trong thì trục này không siết interval. min/max sắp a/b cho cả hướng âm. Không chia zero rồi trông chờ mọi NaN/infinity tự được xử lý đúng.
+
+### Bước 3 — Vẽ length để kiểm hình học
+
+Renderer bắt đầu upload origin từ bài này, rồi main dùng interval:
+
+```cpp title="include/renderer.hpp"
+gl.Uniform3f(uniform(gl, program, "uOrigin"), static_cast<float>(basis.origin[0]), static_cast<float>(basis.origin[1]), static_cast<float>(basis.origin[2]));
+```
+
+```glsl title="shaders/volume.frag"
+    float entry, exit;
+    if (!intervalFor(uOrigin, direction, entry, exit)) {
+        result = vec4(0, 0, 0, 1);
+        return;
+    }
+    result = vec4(vec3((exit - entry) / 7.0), 0.0);
+```
+
+Chia 7 chỉ để đổi length thành mức xám, không phải tham số vật liệu. Ray dài hơn thường sáng hơn ở diagnostic; về sau ray dài làm transmittance giảm.
+
+## Ghép các phần lại
+
+Build/run project_54_checkpoint_3. Silhouette box và mức xám đổi khi orbit. Wheel làm box to/nhỏ. I chuyển camera inside, R về ngoài; inside dùng basis cố định nên yaw/pitch không đổi hướng.
+
+Ca dễ tính: origin=(0,0,-8), direction=(0,0,1) cho entry=5.6, exit=10.4, length=4.8. Origin=(0,0,0) cho entry=0, exit=2.4.
+
+## Thử làm sai để hiểu đúng
+
+1. Cho entry bắt đầu −infinity và quên clamp 0. Camera inside lấy cả phần khối sau mình. Khôi phục entry=0.
+2. Bỏ nhánh direction zero. Ray origin x=2, direction x=0 phải miss vì song song ngoài slab. Không clamp sample vào box để giả một hit.
+
+## Tự kiểm tra kết quả
+
+Hai ca center nói trên đúng trong tests. Ray song song ngoài slab miss; ở x=1.6 vẫn có đoạn qua box. CPU từ chối direction=(0,0,2) vì t không còn là world distance.
+
+Native checkpoint này chưa cấp phát density hoặc sample texture. Box chỉ là giới hạn toán học, không phải một mesh được vẽ.
+
+## Bài tập mở rộng
+
+Viết ra ba khoảng slab cho ray theo −z. Thêm test cho box phía sau camera: sau khi clamp entry=0 phải miss.
+
+[Bài tiếp theo](/projects/volume-ray-marching/04-texture-3d) đưa volume từ Project 53 lên texture 3D.
+

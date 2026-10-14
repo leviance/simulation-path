@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo một tia cho mỗi pixel của ảnh
+
+## Vấn đề cần giải quyết
+
+Gradient đã xác nhận đường đi shader → texture → cửa sổ. Giờ mỗi pixel cần một hướng nhìn riêng. Ảnh chưa có sương: màu chỉ biểu diễn direction, để kiểm camera trước khi texture/opacity che mất lỗi.
+
+Tiếp tục checkpoint 1, giữ framebuffer, shader loader và present. Thêm Camera/Basis trong model.hpp, upload basis trong renderer.hpp và đổi main của volume.frag.
+
+## Hiểu ý tưởng trước khi viết code
+
+Camera có origin là vị trí đứng, forward là hướng nhìn, right/up là hai hướng trên mặt ảnh. Camera orbit quanh gốc; pitch giới hạn ±1.2 radian để không nhìn đúng theo world-up và làm cross product suy biến.
+
+Pixel giữa hướng theo forward. Lệch sang phải cộng right; lên trên cộng up. Vertical FOV là 55°, aspect là 240/180:
+
+$$
+d=\operatorname{normalize}\left(f+(2u-1)a\tan(55^\circ/2)r+(2v_{GL}-1)\tan(55^\circ/2)q\right)
+$$
+
+r/q là right/up, a là aspect. Normalize để t, stepLength và ds về sau đều là khoảng cách world. CPU dùng v từ trên xuống nên hệ số up là 1−2v. GL dùng y từ dưới lên: vCPU=1−vGL cho cùng pixel.
+
+Kéo Canvas hoặc focus rồi nhấn mũi tên. Màu direction*0.5+0.5 giúp xem cả thành phần âm mà không bị clamp mất.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Dựng basis trong world space
+
+Origin orbit tính từ yaw/pitch/distance. Forward nhìn về gốc.
+
+```cpp title="include/model.hpp"
+inline Basis cameraBasis(Camera camera) {
+    Point origin{camera.distance * std::sin(camera.yaw) * std::cos(camera.pitch), camera.distance * std::sin(camera.pitch), -camera.distance * std::cos(camera.yaw) * std::cos(camera.pitch)};
+    Point forward = normalize(multiply(origin, -1));
+    if (camera.inside) {
+        origin = {0, 0, 0};
+        forward = {0, 0, 1};
+    }
+    const Point right = normalize(cross({0, 1, 0}, forward));
+    return {origin, forward, right, cross(forward, right)};
+}
+```
+
+right=cross(worldUp,forward), up=cross(forward,right). Không tự đổi thứ tự cross cho giống một engine khác. Nhánh inside sẽ dùng ở bài sau: origin=(0,0,0), forward=(0,0,1), không normalize origin zero.
+
+### Bước 2 — Giữ ray CPU làm đối chứng
+
+cameraRay dùng cùng basis/FOV với shader:
+
+```cpp title="include/model.hpp"
+inline Ray cameraRay(Camera camera, double u, double v, double aspect) {
+    const auto basis = cameraBasis(camera);
+    const double tangent = std::tan(55 * 3.141592653589793 / 360);
+    const Point offset = add(multiply(basis.right, (2 * u - 1) * aspect * tangent), multiply(basis.up, (1 - 2 * v) * tangent));
+    return {basis.origin, normalize(add(basis.forward, offset))};
+}
+```
+
+u/v là tọa độ chuẩn hóa [0,1], không phải pixel nguyên. Với ảnh CPU, gọi bằng (x+0.5)/width và (y+0.5)/height. Center ray và ray qua cạnh pixel khác nhau; sai khác nhỏ này sẽ làm kiểm GPU không khớp.
+
+### Bước 3 — Đổi direction thành màu
+
+Renderer upload forward/right/up bằng Uniform3f; shader tính:
+
+```glsl title="shaders/volume.frag"
+void main() {
+    vec2 uv = gl_FragCoord.xy / uSize;
+    float tangent = tan(radians(55.0) * 0.5);
+    vec3 direction = normalize(uForward + (2.0 * uv.x - 1.0) * (uSize.x / uSize.y) * tangent * uRight + (2.0 * uv.y - 1.0) * tangent * uUp);
+    result = vec4(direction * 0.5 + 0.5, 0.0);
+}
+```
+
+Checkpoint 2 chưa dùng origin nên không tìm location uOrigin: uniform không dùng có thể bị compiler loại bỏ. Hàm uniform báo lỗi location âm để bắt typo. Dùng aspect target, không dùng aspect cửa sổ đã letterbox.
+
+## Ghép các phần lại
+
+Build/run target project_54_checkpoint_2. Drag trái orbit; wheel đổi distance 4..12; mũi tên đổi yaw/pitch. Space bắt đầu/dừng tự quay, R reset. Mặc định paused; blur/minimize dừng và hủy mouse capture.
+
+Ảnh direction đổi theo yaw/pitch. Chỉ đổi distance không đổi màu direction khi cùng góc nhìn vào gốc: đó là đúng, không phải wheel hỏng. Bài sau silhouette box mới đổi kích thước.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ normalize cuối cameraRay/shader. Tia góc ảnh dài hơn tia giữa; cùng t sẽ đi quãng đường khác nhau. Khôi phục normalize trước khi tính absorption.
+2. Dùng cùng dấu y cho CPU/GL. Top/bottom và phép so pixel bị đảo. Sửa nơi tạo ray, không lật volume để che lỗi camera.
+
+## Tự kiểm tra kết quả
+
+Direction hữu hạn, dot(direction,direction) gần 1. Center ray outside nhìn về gốc; CPU v=0 và GL v=1 cùng chỉ phía trên. Resize không đổi phối cảnh target.
+
+Tự quay không tiếp tục khi lấy lại focus. dt bị chặn 0.1s để tránh bước nhảy sau một frame chậm.
+
+## Bài tập mở rộng
+
+Tính center ray cho yaw=0,pitch=0: forward phải theo +z. Thêm test so center ray với basis.forward.
+
+[Bài tiếp theo](/projects/volume-ray-marching/03-doan-tia-trong-box) tìm đoạn ray nằm trong volume.
+

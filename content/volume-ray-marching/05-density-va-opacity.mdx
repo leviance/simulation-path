@@ -1,0 +1,85 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi density thành opacity có độ dài đoạn
+
+## Vấn đề cần giải quyết
+
+Gray ở midpoint chỉ trả lời “điểm giữa có density bao nhiêu”. Nó không trả lời “nhìn xuyên đoạn sương này còn thấy nền bao nhiêu”. Ta cần đổi density thành mức suy giảm ánh sáng.
+
+Bài này vẫn dùng một midpoint cho cả đoạn, **chưa ray marching đầy đủ**. Cách đơn giản ấy đúng với medium hằng và cho phép kiểm công thức trước khi thêm vòng lặp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hình dung ánh sáng còn lại giảm theo tỉ lệ của chính nó khi đi qua sương. Với density rho không đổi trong đoạn ds, transmittance Tseg là phần còn đi xuyên qua:
+
+$$
+T_{seg}=e^{-\sigma\rho ds},\quad \alpha=1-T_{seg}
+$$
+
+rho là scalar [0,1], không có đơn vị vật liệu. Sigma là extinction scale theo 1/world-unit; tích sigma*rho*ds không có đơn vị. Công thức suy giảm theo Beer–Lambert được trình bày trong [PBRT — Transmittance](https://www.pbr-book.org/4ed/Volume_Scattering/Transmittance). Ta dùng nó cho visualization emission–absorption, không mô phỏng scattering/lighting đầy đủ.
+
+Nếu rho=0.25,sigma=2,L=4.8 thì T=exp(−2.4), khoảng 0.090718. Chia đoạn thành hai nửa, nhân hai Tseg vẫn ra cùng T. **Tăng số mẫu không được tự làm sương đặc hơn**; đó là lý do alpha phải có ds.
+
+Ở checkpoint 5, ds=L và rho lấy ở midpoint. Với phantom thay đổi dọc tia, đây chỉ là xấp xỉ thô. Medium hằng mới là ca có nghiệm đúng để kiểm bước này.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-5" />
+
+## Viết code từng bước
+
+### Bước 1 — Tính alpha ổn định trên CPU
+
+Thêm segmentAlpha vào reference.hpp:
+
+```cpp title="include/reference.hpp"
+inline double segmentAlpha(double density, double sigma, double ds) {
+    return -std::expm1(-sigma * density * ds);
+}
+```
+
+expm1(x) tính exp(x)−1 tốt khi x rất gần zero. Viết −expm1(−tau) tránh phép trừ hai số gần 1. GLSL 330 không có expm1; shader dùng 1−exp, vì thế so CPU/GPU theo tolerance chứ không bitwise.
+
+### Bước 2 — Áp dụng một midpoint cho cả interval
+
+Thay gray ở main bằng:
+
+```glsl title="shaders/volume.frag"
+    float density = densityAt(uOrigin + direction * (entry + exit) * 0.5);
+    float transmittance = exp(-uSigma * density * (exit - entry));
+    result = vec4(vec3(0.8, 0.9, 1.0) * (1.0 - transmittance), transmittance);
+```
+
+C=color*(1−T) là phần màu của medium, đã mang trọng số opacity. Texture kết quả lưu (C,T), **alpha channel là T**, không phải 1−T. Present đã biết ghép C+T*background. Đừng bật GL_BLEND để làm thêm một lần compositing.
+
+### Bước 3 — Đưa sigma vào shader
+
+Renderer upload uSigma sau khi validate settings:
+
+```cpp title="include/renderer.hpp"
+gl.Uniform1f(uniform(gl, program, "uSigma"), static_cast<float>(settings.sigma));
+```
+
+Main cho +/− đổi sigma 0..8. Uniform là float, settings CPU giữ double. Sigma=0 làm T=1 và C=0, toàn ảnh chỉ còn nền; không phải lỗi upload texture.
+
+## Ghép các phần lại
+
+Build/run project_54_checkpoint_5. Chọn constant bằng P rồi thử +/−. Khối nhìn đặc hơn khi sigma tăng, nhưng dataset giữ nguyên. Đổi camera inside làm length ngắn đi, không thay density.
+
+Bài này chưa có Q/step controls. Với phantom, một vùng đặc ở phía trước nhưng midpoint rơi ngoài vùng ấy có thể bị bỏ qua hoàn toàn. Đây là hạn chế đã biết, không sửa bằng cách tăng sigma.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán alpha=rho ở một bản thử. Chia cùng ray thành nhiều cell rồi compositing: medium hằng sẽ đặc dần theo số cell. Khôi phục công thức có ds.
+2. Ghi 1−T vào alpha channel của result nhưng giữ present đọc nó như T. Nền xuất hiện sai, đặc biệt sigma=0. Giữ hợp đồng result=(C,T) thống nhất.
+
+## Tự kiểm tra kết quả
+
+Constant center ray theo +z từ (0,0,-8) cho T gần 0.090718. Sigma=0 trả nền; tăng sigma làm T không tăng. Camera inside lấy L từ origin đến exit, không cả chiều sâu box.
+
+Density/ramp không bị sửa khi đổi sigma. Không diễn giải sigma=2 như hệ số hấp thụ đã hiệu chuẩn của sương hay mô người.
+
+## Bài tập mở rộng
+
+Tự tính T cho cùng medium với L=2.4 và sigma=2. Giải thích tại sao opacity cả đoạn không bằng hai lần opacity nửa đoạn.
+
+[Bài tiếp theo](/projects/volume-ray-marching/06-front-to-back-march) thay midpoint duy nhất bằng nhiều đoạn nhỏ.
+
