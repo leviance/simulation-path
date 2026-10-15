@@ -1,0 +1,99 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ số ngẫu nhiên đến quãng đường tự do
+
+## Vấn đề cần giải quyết
+
+Nếu mỗi frame đi một đoạn ngẫu nhiên tùy ý, phân bố đường đi sẽ phụ thuộc FPS và quy tắc ta vừa nghĩ ra. Ta cần lấy mẫu một **quãng đường tới tương tác kế tiếp** theo một mô hình xác suất rõ ràng, độc lập với frame render.
+
+Đồng thời phải xem lại được một photon sau khi sửa code. Vì vậy, project dùng PRNG có seed và luồng theo photon ID, không gọi random_device mỗi lần cần một số.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong môi trường đồng nhất, muT=muA+muS là hệ số tương tác theo chiều dài. Xác suất chưa gặp tương tác sau đoạn s là exp(−muT*s). Đảo hàm phân phối tích lũy cho ta:
+
+$$S=\frac{-\ln(1-U)}{\mu_T},\qquad 0<U<1.$$
+
+Đây là lấy mẫu phân bố mũ, như phần [homogeneous medium của PBRT](https://pbr-book.org/3ed-2018/Light_Transport_II_Volume_Rendering/Sampling_Volume_Scattering). Ta chỉ dùng ý tưởng khoảng cách ngẫu nhiên ở đây, không chép thuật toán weighted spectral transport của renderer đó.
+
+S không phải tốc độ, không nhân dt và không mặc định dừng ở 1/muT. 1/muT là giá trị trung bình của phân bố, còn từng mẫu có thể rất ngắn hoặc rất dài. Bài này chưa xét biên hay phân loại tương tác; thước S trong Canvas không phải đường photon thực sự đã đi.
+
+<InteractiveLab demo="photon-rain" mode="photon57-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo chuỗi uint32 tái lập
+
+```cpp title="include/random.hpp"
+    std::uint32_t next() {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return state;
+    }
+```
+
+Đây là xorshift32. Dùng uint32_t để phép dịch phải là logical shift và phép toán được hiểu theo 32 bit. State 0 sẽ kẹt mãi ở 0; constructor ánh xạ seed 0 sang 0x6d2b79f5. PRNG này phục vụ học/tái lập, không dùng cho mật mã và không chứng minh các mẫu độc lập tuyệt đối.
+
+### Bước 2 — Đưa uint32 vào khoảng mở
+
+```cpp title="include/random.hpp"
+    double uniform() {
+        return (static_cast<double>(next()) + 0.5) / 4294967296.0;
+    }
+```
+
+Mẫu nhỏ nhất vẫn dương, mẫu lớn nhất vẫn nhỏ hơn 1. Nếu chia cho UINT32_MAX, có thể nhận U=1 và log(0); nếu để U=0, một bước dài 0 cũng có thể gây vòng lặp không tiến. Trong TypeScript, các phép dịch dùng `>>>`, còn phép nhân seed dùng Math.imul để khớp modulo 2^32, không nhân bằng số thực rồi cắt muộn.
+
+### Bước 3 — Lấy mẫu quãng đường
+
+```cpp title="include/random.hpp"
+    if (muT == 0) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return -std::log1p(-u) / muT;
+```
+
+freePath kiểm muT hữu hạn trong [0,6] và U trong (0,1) trước đoạn trên. log1p(-u) tính ln(1−u) ổn định khi u nhỏ. MuT=0 là chân không, không chia cho 0; bài sau sẽ cho photon đi thẳng tới biên. Với muT=2,U=.5, S=ln2/2≈.34657359 world units.
+
+### Bước 4 — Gắn luồng RNG với photon ID
+
+```cpp title="include/random.hpp"
+    std::uint32_t value = seed + 0x9e3779b9u * (static_cast<std::uint32_t>(id) + 1u);
+    value ^= value >> 16;
+    value *= 0x85ebca6bu;
+    value ^= value >> 13;
+    value *= 0xc2b2ae35u;
+    value ^= value >> 16;
+    return value;
+```
+
+photonSeed kiểm id trong [0,8191] trước khi trộn. Bước avalanche dùng fmix32 từ [MurmurHash3 của tác giả Austin Appleby](https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp), được công bố public domain, để các ID liền nhau không bắt đầu bằng những state gần nhau đơn giản. Đây là bước trộn seed, không thay thế bộ sinh xorshift32.
+
+Mỗi lần dựng photon, Random bắt đầu từ seed đã trộn này. Mẫu U đầu dùng chọn y=.75*(2U−1), mẫu sau mới chọn S. Ghi đúng thứ tự dùng RNG: thay thứ tự sẽ thay kết quả dù seed không đổi.
+
+Không nói các ID tạo ra nguồn ngẫu nhiên độc lập về mặt chứng minh toán học. Điều ta bảo đảm là photon sau không bị dịch chuỗi chỉ vì photon trước đã tán xạ nhiều lần; đổi cách chia batch không đổi luồng của cùng ID.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_57_checkpoint_2 --parallel 2
+.\build\Debug\project_57_checkpoint_2.exe
+```
+
+B đổi seed 42→2026→1, Up/Down chọn ID, A/D đổi muA, P chọn chân không/hấp thụ thuần. Chưa có scattering nên muS bắt buộc0. Title đọc U và S; thước chỉ vẽ tới6 để dễ nhìn, nhưng S trong dữ liệu không bị cắt thành6.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng Random(seed) chung rồi chạy mọi photon nối tiếp. Thêm một RNG draw ở photon0 sẽ làm photon1 đổi đường đi. Khôi phục luồng theo ID để giữ khả năng so từng photon.
+2. Dùng S=U/muT. Mẫu bị chặn ở 1/muT, không còn đuôi mũ. So U=.5 với mốc ln2/2 rồi khôi phục inverse CDF.
+
+## Tự kiểm tra kết quả
+
+Cùng settings/ID cho cùng y,U,S. U luôn nằm trong (0,1), không NaN. freePath(2,.5) khớp mốc trên; freePath(0,.5)=∞. Thay muT từ1 lên2 với cùng U làm S giảm một nửa. Chưa gọi ứng viên tương tác là hấp thụ.
+
+## Bài tập mở rộng
+
+Lấy một tập nhỏ các S và tự vẽ histogram. Đừng kiểm rằng mọi mẫu gần giá trị trung bình: phân bố mũ có đuôi dài. Nếu kiểm mean, phải chọn tolerance thống kê và số mẫu hữu hạn.
+
+[Bài tiếp theo](/projects/photon-rain/03-so-quang-duong-voi-bien) — Photon gặp tương tác hay thoát qua biên trước?

@@ -82,4 +82,4 @@ source-template/tests/README là authored inputs. Starter/checkpoints/final/CMak
 
 Tham khảo [ASTRA 2D geometries](https://astra-toolbox.com/docs/geom2d.html), [scikit-image Radon](https://scikit-image.org/docs/stable/auto_examples/transform/plot_radon_transform.html), [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture).
 
-Tiếp theo: Project 57 — Mưa photon ngẫu nhiên, hiện Sắp ra mắt.
+Tiếp theo: Project 57 — Mưa photon ngẫu nhiên, theo dõi hấp thụ, tán xạ và thoát bằng Monte Carlo trong 2D.

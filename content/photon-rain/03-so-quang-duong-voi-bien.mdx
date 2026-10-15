@@ -1,0 +1,79 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Photon gặp tương tác hay thoát qua biên trước?
+
+## Vấn đề cần giải quyết
+
+Mẫu S có thể dài hơn cả medium. Nếu cứ đi đủ S rồi đánh dấu tương tác, chương trình sẽ hấp thụ hoặc tán xạ photon trong không khí bên ngoài. Cần so sự kiện tương tác với sự kiện chạm biên trước khi cập nhật vị trí.
+
+Checkpoint 3 nối điểm phát tới một ứng viên tương tác trong medium, hoặc tới đúng cạnh thoát. Ứng viên bên trong **chưa được phân loại**; hấp thụ và tán xạ sẽ được thêm lần lượt ở hai bài sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Vị trí p nằm trong rectangle, direction d có độ dài 1. Với trục x, nếu dx>0 thì cạnh sắp gặp là right, nếu `dx<0` thì là left. Khoảng cách tới cạnh đó là (boundary−px)/dx. Làm tương tự với y, bỏ qua trục song song có direction=0, rồi lấy khoảng cách nhỏ nhất.
+
+$$s_{\mathrm{travel}}=\min(S,d_{\mathrm{boundary}}).$$
+
+Nếu S>=boundary, photon thoát. Nếu S nhỏ hơn boundary, nó gặp tương tác trong medium. Quy ước tie đi về nhánh thoát; không tạo thêm một tương tác đúng trên mặt biên chỉ vì làm tròn.
+
+<InteractiveLab demo="photon-rain" mode="photon57-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm hợp đồng của ray
+
+validatePhoton kiểm vị trí finite, nằm trong medium với tolerance số học nhỏ và norm direction gần 1. Không dùng marker8×8 để mở rộng medium. Hai direction(1,0) và(2,0) không thể dùng chung công thức distance mà cho cùng đơn vị.
+
+### Bước 2 — Tìm cạnh theo từng trục
+
+```cpp title="include/geometry.hpp"
+    for (int axis = 0; axis < 2; ++axis) {
+        const double direction = value.direction[axis];
+        if (direction == 0) {
+            continue;
+        }
+```
+
+Trong vòng lặp này, chọn right/top cho hướng dương, left/bottom cho hướng âm. Sau khi đã chọn đúng boundary:
+
+```cpp title="include/geometry.hpp"
+        distance = std::min(distance, (boundary - value.position[axis]) / direction);
+```
+
+exitDistance bắt đầu với∞, xét hai trục rồi trả max(0,distance). Khi photon ở cạnh trái và hướng sang trái, khoảng cách thoát bằng 0 là hợp lệ. Không đẩy một epsilon vào bên trong: thao tác đó có thể làm photon tương tác thêm một đoạn vật liệu không tồn tại.
+
+### Bước 3 — Cắt quãng đường trước khi ghi điểm
+
+```cpp title="include/geometry.hpp"
+    const double distance = std::min(sampled, boundary);
+    Point endpoint = move(value.position, value.direction, distance);
+    const bool escaped = sampled >= boundary;
+```
+
+sampleFlight lấy S từ phân bố mũ khi muT>0. Khi muT=0, sampled giữ∞ và không lấy thêm RNG draw cho free path. Nếu escaped, clamp endpoint vào rectangle để sửa sai số cỡ máy tại cạnh; đây không phải clamp mọi điểm tương tác về biên.
+
+firstFlight dựng lại seed/ID, launch photon và gọi sampleFlight. Nó dùng cùng thứ tự RNG với sampleFirst của bài trước, nên S đầu tiên phải khớp readout cũ.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_57_checkpoint_3 --parallel 2
+.\build\Debug\project_57_checkpoint_3.exe
+```
+
+Chọn chân không: tất cả hướng ban đầu(1,0) đi từ cạnh trái tới cạnh phải, chiều dài3, không có tương tác. Chọn muA>0 và đổi ID để tìm cả hai trường hợp `S<3` và S>=3. Marker bên trong chỉ là Candidate, không được đọc là photon đã hấp thụ.
+
+## Thử làm sai để hiểu đúng
+
+1. Luôn dùng endpoint=p+S*d. Khi S>3, điểm vượt khỏi rectangle. Khôi phục min(S,boundary); thước S bên dưới vẫn giữ mẫu dài ban đầu.
+2. Chia cho direction ở cả hai trục trước khi kiểm direction=0. Với hướng ban đầu nằm ngang, nhánh y có thể chia cho 0. Đưa kiểm song song lên trước phép chia.
+
+## Tự kiểm tra kết quả
+
+Các fixture tự tính được: p=(−1.5,0),d=(1,0) có boundary3; p=(0,0),d=(0,1) có boundary1; p=(−1.5,0),d=(−1,0) có boundary0. Tia chéo d=(1,1)/căn2 từ tâm thoát qua cạnh trên sau căn2. Endpoint thoát nằm trên một cạnh, không nằm ngoài medium.
+
+## Bài tập mở rộng
+
+Thêm test p=(0,1),d=(1,0): photon đang trên cạnh trên nhưng hướng song song, vẫn đi tới cạnh phải. Phân biệt nó với p=(0,1),d=(0,1), vốn thoát ngay. Không dùng một quy tắc “ở trên biên thì luôn thoát” cho mọi hướng.
+
+[Bài tiếp theo](/projects/photon-rain/04-hap-thu-thuan) — Bắt đầu với môi trường chỉ hấp thụ.

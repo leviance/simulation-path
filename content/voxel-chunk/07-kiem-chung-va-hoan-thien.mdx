@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng chunk và hoàn thiện ứng dụng
+
+## Vấn đề cần giải quyết
+
+Một khối đất trông ổn chưa đủ để chuyển sang tối ưu. Hai hàm cùng dùng một công thức sai vẫn có thể “kiểm” lẫn nhau; mặt quay lưng chưa cull cũng có thể che winding sai. Ta cần các đáp án tính được độc lập, rồi kiểm native lẫn phần toán Canvas.
+
+Đích của bài là bản hoàn chỉnh có thể tải về và chạy **không cần website**. Nó không tự chạy server, không benchmark vô hạn và không tạo thêm chunk ngoài giới hạn 16³.
+
+## Hiểu ý tưởng trước khi viết code
+
+Các fixture nên có lý do rõ ràng:
+
+- 4096 bộ tọa độ phải cho 4096 index khác nhau, từ 0 đến 4095; kiểm thêm các bước nhảy 1/16/256.
+- Một cube có sáu normal hướng ngoài và 12 triangles; hai cube kề nhau vẫn 24 ở bản chưa culling.
+- Preset single/full/steps/empty có 1/4096/1408/0 block. Số 1408 tính từ bốn bậc, không lấy lại từ chính vòng tạo đất.
+- Lớp đáy khối đặc có 256 block hiển thị, 3072 triangles; chunk gốc vẫn 4096 block.
+- Đảo thứ tự triangles không đổi depth gần nhất trong sai số số thực; tắt Z-buffer là thí nghiệm lỗi, không phải chế độ chuẩn.
+
+$$T_{baseline}=12N_{solid}\le49152,\qquad P=320\times240=76800.$$
+
+Đó là giới hạn kích thước, không phải cam kết FPS. Số mẫu pixel thử còn phụ thuộc bounding box các tam giác. Không dùng ảnh 320×240 trên CPU hoặc thời gian Canvas để suy ra hiệu năng OpenGL hay một thế giới voxel lớn.
+
+<InteractiveLab demo="voxel-chunk" mode="voxel58-7" />
+
+Nút Kiểm chứng trên Canvas kiểm số triangles của full/empty/lớp đáy. CTest kiểm thêm index, normals, camera, picking và depth. Nút này không thay thế tất cả tests và cũng không chứng minh thao tác chuột của desktop đã được kiểm.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ kiểm tra khi build Release
+
+```cpp title="tests/tests.cpp"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << label << '\n';
+    }
+}
+```
+
+Không dùng `assert` để báo kết quả CTest vì Release có thể định nghĩa NDEBUG. Runner ghi failure, kết thúc bằng EXIT_FAILURE nếu có lỗi. Những kiểm tra sâu trong `audit.hpp` ném exception có thông điệp; runner bắt và chuyển thành failure, không báo PASS sau một exception.
+
+### Bước 2 — Kiểm geometry không cần SDL
+
+```cpp title="include/audit.hpp"
+const Chunk full = makeChunk(1);
+const Mesh mesh = buildMesh(full);
+check(solidCount(full) == 4096, "full chunk block count");
+check(mesh.size() == 49152, "12 triangles per solid block");
+check(buildMesh(makeChunk(3)).empty(), "empty chunk mesh");
+check(buildMesh(full, 0).size() == 256 * 12, "bottom slice count");
+check(solidCount(full) == 4096, "slice must not mutate storage");
+```
+
+`tests.cpp` còn duyệt mọi tọa độ để bắt index trùng, kiểm sáu biên −1/16 và lấy cross product của hai cạnh từng quad để so normal với ±X/±Y/±Z. Không gọi renderer hoặc mở window trong CTest; máy không có màn hình vẫn kiểm được dữ liệu thuần.
+
+### Bước 3 — Đảo draw order và kiểm depth
+
+```cpp title="include/audit.hpp"
+render(frame, single, camera);
+const auto before = frame.depth;
+std::reverse(single.begin(), single.end());
+render(frame, single, camera);
+```
+
+So từng depth hữu hạn với tolerance 1e−9 và kiểm nền vẫn là nền. Hai mặt đồng phẳng có thể cạnh tranh tại điểm cùng depth, nên không lấy màu ở đường chung làm chuẩn vật lý tuyệt đối. Test thêm một cặp tam giác gần/xa chồng nhau để bắt lỗi clear/compare; phần TypeScript có cùng fixture.
+
+### Bước 4 — Build và chạy từng nhóm kiểm có giới hạn
+
+```bash title="Terminal — Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Debug\project_58_final.exe
+```
+
+Visual Studio 2022 cần workload Desktop development with C++. Với single-config generator, chọn CMAKE_BUILD_TYPE khi configure; executable nằm trực tiếp trong build thay vì build/Debug. Final là target mặc định; BUILD_CHECKPOINTS bật starter và checkpoint 1…7. CMake khóa SDL3 3.4.8 bằng FetchContent/checksum và link `SDL3::SDL3` theo [tài liệu CMake chính thức](https://wiki.libsdl.org/SDL3/README-cmake).
+
+## Ghép các phần lại
+
+Hidden smoke chỉ tạo tài nguyên, vẽ một frame rồi tự thoát. Chạy có thời hạn để một lỗi event loop không giữ tiến trình mãi:
+
+```powershell title="PowerShell — smoke một frame"
+$smoke = Start-Process -FilePath ".\build\Debug\project_58_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Smoke vượt giới hạn 30 giây; dừng kiểm để xem lỗi."
+}
+if ($smoke.ExitCode -ne 0) {
+    throw "Smoke thất bại."
+}
+```
+
+Sau đó kiểm desktop thủ công một lượt ngắn: đổi đủ bốn preset, xoay bằng drag và arrow, zoom đến hai giới hạn, pause/reset, đổi lớp, đọc ô mép, resize/letterbox, chuyển focus rồi quay lại. Native V chạy pure audit hữu hạn. Canvas phải giữ paused với reduced-motion, nhả capture khi cancel và không có ResizeObserver loop. Những bước này khác với build/CTest; đừng gộp tất cả thành “đã test” chỉ vì compiler thành công.
+
+ZIP có README, CMake, starter, bảy checkpoint, final và tests. Source đầy đủ sau bài khớp đúng snapshot; cuối module có toàn bộ mã nguồn dự án. Không cần chép các đoạn rời trong bài rồi đoán file còn thiếu.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi index thành x+16*(y+16*z). Công thức vẫn tạo ánh xạ một-một nhưng fixture bước nhảy trục phải thất bại. Chỉ kiểm “không trùng” chưa đủ xác nhận layout đã công bố.
+2. Thêm loại mặt chung trong `buildMesh`. Ảnh ngoài có thể giống hệt, nhưng test hai cube=24 và full=49152 phải báo khác. Đó là thay đổi baseline có chủ đích chỉ nên làm cùng bài tối ưu và test mới ở Project 59.
+
+## Tự kiểm tra kết quả
+
+Debug/Release CTest trả exit code 0; starter/checkpoint/final mở được và hidden smoke tự thoát. Preset không đổi sau reload source; reset quay về đất bậc thang, slice=15, depth bật và paused. Không giữ screenshot/ZIP/build output trong Git. Tài liệu, Canvas và source dùng cùng Block ID, layout và công thức camera.
+
+Project 58 kết thúc ở một chunk chưa tối ưu. **Project 59 — Ẩn các mặt nằm trong đất** sẽ giảm geometry bằng quan hệ lân cận. Project 59–78 hiện **Sắp ra mắt**, chưa có tutorial hoàn chỉnh. Ray phá/đặt block dành cho Project 60, không phải chức năng còn thiếu của bảng lớp này.
+
+## Bài tập mở rộng
+
+Ghi một bảng baseline cho bốn preset: số block, số quad, số triangles và kích thước mesh. Thêm bộ đếm rebuild để phân biệt đổi camera với đổi dữ liệu. Giữ kết quả để so khi thực hiện hidden-face elimination ở project kế tiếp; chưa sửa test để hợp thức hóa một công thức sai.
+
+[Quay lại tổng quan Project 58](/projects/voxel-chunk) hoặc [xem roadmap](/roadmap) để chuẩn bị phần tiếp theo.

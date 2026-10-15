@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xoay khối đất và kiểm tra độ sâu
+
+## Vấn đề cần giải quyết
+
+Một ảnh cố định chưa đủ để kiểm hình 3D. Mặt đang bị che có thật sự đúng không, hay tình cờ draw order làm nó trông ổn? Bài này cho phép xoay/zoom và cố ý tắt Z-buffer để thấy sự khác biệt.
+
+Ta dùng **camera trực giao** để giữ phần mới tập trung vào voxel. Không có perspective divide, near-plane clipping hoặc FPS camera. Kiến thức camera phối cảnh ở các project trước vẫn hữu ích, nhưng không nên kéo tất cả vào bài đầu của một voxel chunk.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trừ tâm `(8,8,8)` khỏi điểm world trước khi xoay. Gọi yaw là a và pitch là b:
+
+$$c_x=\cos(a)x-\sin(a)z,\quad c_z=\sin(a)x+\cos(a)z,$$
+$$c_y=\cos(b)y-\sin(b)c_z,\quad d=\sin(b)y+\cos(b)c_z.$$
+
+Với scale s, ảnh CPU 320×240 có `screenX=160+s*cx`, `screenY=120-s*cy`. Ta chọn **d lớn hơn là gần hơn**. Đây là quy ước của renderer này, không phải quy tắc chung “z lớn luôn gần” cho mọi API.
+
+Z-buffer clear về −∞. Tại tâm pixel, barycentric nội suy d; fragment chỉ ghi màu nếu d lớn hơn depth đang lưu. Vì đây là phép chiếu affine/trực giao, nội suy depth tuyến tính ở screen space là phù hợp; ta không áp công thức này một cách máy móc sang mọi thuộc tính phối cảnh.
+
+<InteractiveLab demo="voxel-chunk" mode="voxel58-5" />
+
+Kéo để xoay, dùng phím mũi tên nếu không dùng chuột. Tắt Z-buffer, xoay một ít rồi bật lại. Số tam giác không đổi khi bật depth: chương trình vẫn xử lý geometry, chỉ kết quả visibility khác.
+
+## Viết code từng bước
+
+### Bước 1 — Đọc phép chiếu đang có trong bộ khung
+
+```cpp title="include/raster.hpp"
+const double cx = std::cos(camera.yaw) * x - std::sin(camera.yaw) * z;
+const double cz = std::sin(camera.yaw) * x + std::cos(camera.yaw) * z;
+const double cy = std::cos(camera.pitch) * y - std::sin(camera.pitch) * cz;
+const double depth = std::sin(camera.pitch) * y + std::cos(camera.pitch) * cz;
+const double scale = camera.scale * camera.zoom;
+return {imageWidth * 0.5 + cx * scale, imageHeight * 0.5 - cy * scale, depth};
+```
+
+`x/y/z` ở đây đã trừ `camera.center`. Tâm world luôn ở giữa ảnh, mọi điểm cùng kích thước không nhỏ dần theo khoảng cách. Đổi yaw/pitch không ghi vào Chunk hoặc sửa origin của các block.
+
+### Bước 2 — Thêm orbit và zoom có giới hạn
+
+```cpp title="include/raster.hpp"
+inline void orbit(Camera& camera, double dx, double dy) {
+    camera.yaw = std::remainder(camera.yaw + dx * 0.01, 2 * std::acos(-1.0));
+    camera.pitch = std::clamp(camera.pitch + dy * 0.01, -1.2, 1.2);
+}
+
+inline void zoom(Camera& camera, double amount) {
+    camera.zoom = std::clamp(camera.zoom * std::exp(amount * 0.1), 0.5, 1.5);
+}
+```
+
+`dx/dy` là lượng điều khiển, không phải số block. Yaw được đưa về một vòng để không lớn mãi; pitch bị chặn để hình không lật bất ngờ qua cực. Zoom nhân theo exp rồi clamp; một nhấn +/− đổi theo tỷ lệ, không cộng số pixel vào từng vertex.
+
+Native có drag/arrow, +/−, Space chạy/dừng xoay, D bật/tắt depth. Canvas có nút/slider tương đương. Cả hai mở paused. Khi mất focus, dừng xoay và nhả capture; không tự resume khi quay lại tab. Với reduced-motion, Canvas chỉ cho xoay thủ công.
+
+### Bước 3 — Nối chuyển động với thời gian nhưng không chạy bù vô hạn
+
+```cpp title="src/main.cpp"
+if (!paused && !smoke) {
+    voxel::orbit(camera, dt * 20, 0);
+    dirty = true;
+}
+```
+
+Main lấy dt từ `SDL_GetTicks` và chặn tối đa 0.05 giây. Sau khi cửa sổ bị treo hoặc debug lâu, ta không chạy một vòng lặp “bù” hàng nghìn frame. Đây chỉ là chuyển động trình diễn, không phải tích phân vật lý cần bắt kịp thời gian thực.
+
+### Bước 4 — Kiểm phép so depth
+
+```cpp title="include/raster.hpp"
+if (!useDepth || depth > frame.depth[pixel]) {
+    frame.depth[pixel] = depth;
+    frame.pixels[pixel] = triangle.color;
+}
+```
+
+Trong `rasterTriangle`, `wa/wb/wc` lấy từ edge functions đã chia area; bỏ pixel ngoài tam giác, rồi tính `wa*a.depth+wb*b.depth+wc*c.depth`. `render` phải clear depth trước mỗi ảnh mới. Không clear thì depth của camera cũ sẽ chặn các fragment ở camera mới.
+
+Không back-face culling ở đây. Mặt quay lưng vẫn rasterize, rồi bị depth test che nếu có mặt gần hơn. Cũng không bỏ mặt giáp block đặc: việc đó phải xảy ra lúc **dựng mesh**, không phải trong phép so pixel.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_58_checkpoint_5 --parallel 2
+.\build\Debug\project_58_checkpoint_5.exe
+```
+
+Khi xoay đất bậc thang, bộ đếm vẫn 1408/16896. Ảnh CPU 320×240 giữ nguyên khi resize; SDL letterbox phóng nó theo logical coordinates. Native chuyển mouse event về hệ logical bằng `SDL_ConvertEventToRenderCoordinates` trước khi xét vùng kéo, không lấy raw window pixel làm tọa độ bảng.
+
+## Thử làm sai để hiểu đúng
+
+1. Tắt Z-buffer bằng D/checkbox. Một số mặt vẽ sau đè lên mặt gần hơn; đó là lỗi draw order, không phải đất vừa đổi dữ liệu. Bật lại và kiểm khối kín.
+2. Clear depth về +∞ nhưng vẫn dùng `>`. Hầu hết fragment không vượt qua được. Khôi phục cặp nhất quán **clear −∞, compare greater**; đừng đổi riêng một phía.
+
+## Tự kiểm tra kết quả
+
+Orbit giữ tâm, zoom dừng ở 0.5/1.5, pitch dừng ở ±1.2. Drag/keyboard không thay số block/tam giác. Pause, blur và reset dừng được chuyển động. Depth bật cho visibility đúng từ nhiều góc; khi depth tắt không dùng ảnh làm chuẩn đúng. CTest cuối module đảo thứ tự triangles để kiểm depth độc lập draw order.
+
+## Bài tập mở rộng
+
+Tách `meshDirty` và `frameDirty`: camera đổi chỉ raster lại, preset đổi mới rebuild mesh. Ghi số lần gọi `buildMesh` khi xoay mười bước để chứng minh sự khác biệt. Không dùng thời gian một frame làm kết luận hiệu năng tổng thể.
+
+[Bài tiếp theo](/projects/voxel-chunk/06-doc-tung-lop-block) — Mở từng lớp để đọc dữ liệu bên trong.

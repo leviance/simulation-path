@@ -1,0 +1,91 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho photon tán xạ nhiều lần
+
+## Vấn đề cần giải quyết
+
+Trong môi trường có scattering, một tương tác không nhất thiết làm photon biến mất. Nó có thể đổi hướng, tiếp tục đi, rồi lại tương tác hoặc thoát ở cạnh trái/trên/dưới. Không còn một lần lấy mẫu S là xong.
+
+Ta thêm lựa chọn loại tương tác và vòng lặp theo dõi nhiều bước. Vòng lặp phải có trần; nhưng chạm trần tính toán không có nghĩa vật lý là hấp thụ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tổng hệ số muT=muA+muS quyết định khoảng cách tới tương tác. **Tại một tương tác đã xảy ra**, xác suất hấp thụ là muA/muT, còn lại là tán xạ. Dùng một U mới cho lựa chọn này, không tái dùng U đã sinh S.
+
+Nếu tán xạ, project chọn angle=2πU và direction=(cos angle,sin angle). Đây là phân bố đều theo góc trên đường tròn 2D. [PBRT mô tả phase functions và tán xạ đẳng hướng trong 3D](https://www.pbr-book.org/4ed/Volume_Scattering/Phase_Functions); ta không giả rằng chọn một góc phẳng là lấy mẫu đều trên mặt cầu, cũng không mô phỏng Compton hay Rayleigh.
+
+<InteractiveLab demo="photon-rain" mode="photon57-5" />
+
+## Viết code từng bước
+
+### Bước 1 — Dùng đúng xác suất tại collision
+
+```cpp title="include/transport.hpp"
+        const double absorptionProbability = settings.muA / (settings.muA + settings.muS);
+        if (random.uniform() < absorptionProbability) {
+            trace.vertices.push_back({value.position, Event::Absorption});
+            trace.status = Status::Absorbed;
+            return;
+        }
+```
+
+Nhánh thoát vẫn được xử lý trước đoạn này. Chỉ vào đây khi có tương tác trong medium, nên muT>0 và phép chia hợp lệ. MuS=0 cho xác suất1, muA=0 cho xác suất0. Không tung thêm một đồng xu “50/50” khi hai hệ số khác nhau.
+
+### Bước 2 — Đổi hướng rồi tiếp tục từ điểm hiện tại
+
+```cpp title="include/transport.hpp"
+inline Point scatterDirection(double u) {
+    if (!std::isfinite(u) || u <= 0 || u >= 1) {
+        throw std::invalid_argument("Invalid scattering sample");
+    }
+    const double angle = 2 * std::numbers::pi * u;
+    return {std::cos(angle), std::sin(angle)};
+}
+```
+
+Sau collision không hấp thụ, tăng scatters, ghi Event::Scatter và dùng U mới để lấy hướng. Không đưa photon về cạnh phát hoặc lấy y mới. Bước kế tiếp phải tính exitDistance theo vị trí/direction mới, rồi lấy một S mới trong cùng môi trường.
+
+Trong vòng lặp, một bước xử lý tối đa một collision hoặc một lần thoát. EventLimit trong [1,64] đặt số bước tối đa; không có vòng lặp vô hạn chờ photon thoát.
+
+### Bước 3 — Không bịa kết cục khi hết ngân sách
+
+tracePhoton gọi advancePhoton ở mỗi bước rồi kiểm Status. Nếu đã Absorbed/Escaped thì trả lịch sử ngay; chỉ khi vẫn Alive mới sang bước kế. Nhờ tách một bước khỏi vòng lặp, bản chỉ hấp thụ ở bài trước không cần một vòng lặp giả chỉ chạy một lần.
+
+```cpp title="include/transport.hpp"
+    trace.status = Status::Censored;
+    return;
+```
+
+Chỉ tới đoạn này nếu mọi bước trong ngân sách đều tán xạ và photon chưa kết thúc. [Censored](/glossary#photon-censoring) nghĩa là ta **chưa biết** photon sẽ thoát hay hấp thụ nếu theo dõi tiếp. Nó khác Event::Scatter: tán xạ là sự kiện, Censored là trạng thái dừng do thuật toán.
+
+Giới hạn thấp có ích để thấy vấn đề ngay. Chọn preset chỉ tán xạ, limit 1: photon gặp collision đầu sẽ bị dừng sau một lần tán xạ. Không được tăng bộ đếm absorbed để làm bảng số trông “đủ”.
+
+### Bước 4 — Xem lại lịch sử đã tính
+
+Mỗi Trace có Emission rồi các Scatter, cuối cùng có thể Absorption/Escape. Nếu Censored, vertex cuối vẫn là Scatter; không thêm một sự kiện hấp thụ giả. Canvas có Về điểm phát/Xem đỉnh kế và thanh kéo; native Left/Right hoặc kéo timeline.
+
+Đường đi đã được tính hữu hạn trước khi xem. Timeline chỉ lộ dần các vertex đã ghi, không tung RNG thêm ở mỗi lần bấm. Màu marker theo sự kiện tại **đỉnh đang xem**, không lấy màu kết cục cuối để tô mọi đỉnh trước đó.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_57_checkpoint_5 --parallel 2
+.\build\Debug\project_57_checkpoint_5.exe
+```
+
+J/K đổi muS, L chọn limit 1/8/64, P đổi preset. Cùng seed/ID nhưng đổi muS sẽ đổi lịch sử vì cả khoảng cách lẫn loại tương tác thay đổi. Đổi limit giữ cùng tiền tố RNG/đường đi: limit lớn có thể theo dõi tiếp photon mà limit nhỏ đã dừng.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán Absorbed sau vòng lặp khi hết limit. Với muA=0, chương trình sẽ báo hấp thụ dù mô hình không có cơ chế đó. Khôi phục Censored và giữ riêng nó trong thống kê.
+2. Lấy random x,y trong hình vuông rồi normalize để chọn hướng. Phân bố góc không đều. Khôi phục angle=2πU cho mô hình 2D này; đừng đổi sang 3D mà giữ nguyên cách lấy mẫu.
+
+## Tự kiểm tra kết quả
+
+Direction mới có norm gần 1. Không vertex nào vượt medium. Trace có nhiều nhất eventLimit+1 vertex. MuA=0 không có Absorbed; muS=0 không có Scatter/Censored. Với limit nhỏ, Censored là kết quả hợp lệ, không tự biến nó thành PASS vật lý hoặc bỏ qua.
+
+## Bài tập mở rộng
+
+Tìm một ID Censored ở limit 1, tăng limit 8 rồi 64 và so tiền tố vertices. Phân biệt sự khác nhau giữa “đã có thêm thông tin về cùng lịch sử” và “chạy thêm photon khác để tăng N”.
+
+[Bài tiếp theo](/projects/photon-rain/06-dem-nhieu-photon) — Gom nhiều đường đi thành thống kê.

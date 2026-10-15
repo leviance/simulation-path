@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lưu 4096 block trong một chunk
+
+## Vấn đề cần giải quyết
+
+Cube của bài trước mới là hình học. Nếu chỉ giữ danh sách tam giác, làm sao biết ô nào là đất, ô nào là không khí, hoặc đọc vật liệu ở `(7,7,7)`? Ta cần một lớp dữ liệu độc lập với hình vẽ.
+
+Bài này thêm `Chunk`, đặt đúng một block Stone và vẽ bảng dữ liệu của lớp y=7. Phần 3D vẫn chỉ là cube đã làm được. Ta chưa dựng mesh cho cả chunk; trước hết phải chắc rằng tọa độ và bộ nhớ khớp nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chunk có 16 ô theo mỗi trục, tổng cộng 4096 ô. Tọa độ local là số nguyên từ 0 đến 15. Block `(x,y,z)` chiếm một hộp world có góc nhỏ nhất `(x,y,z)` và góc lớn nhất `(x+1,y+1,z+1)`.
+
+Ta chọn **x chạy nhanh nhất, rồi z, sau cùng y**. Một hàng x dài 16; một lớp x/z dài 256:
+
+$$i=x+16(z+16y),\quad \Delta i_x=1,\quad \Delta i_z=16,\quad \Delta i_y=256.$$
+
+Đây là lựa chọn layout của project, không phải công thức duy nhất cho mọi voxel engine. Nếu đổi layout, mọi nơi đọc/ghi phải đổi theo. Với layout hiện tại, `(1,0,0)` ở index 1, `(0,0,1)` ở 16 và `(0,1,0)` ở 256. Tọa độ cuối `(15,15,15)` cho 4095, không phải 4096.
+
+<InteractiveLab demo="voxel-chunk" mode="voxel58-2" />
+
+Bảng dưới đọc lớp y=7: x tăng sang phải, z tăng xuống dưới. Chiều xuống của z chỉ là cách đặt bảng 2D, không thay quy ước y hướng lên trong world. Ô Stone ở `(7,7,7)` có index 1911.
+
+## Viết code từng bước
+
+### Bước 1 — Định nghĩa loại block
+
+```cpp title="include/model.hpp"
+enum class Block : std::uint8_t { Air, Grass, Dirt, Stone };
+using Chunk = std::array<Block, capacity>;
+```
+
+`Air=0`, `Grass=1`, `Dirt=2`, `Stone=3` theo thứ tự enum. `capacity` là `16*16*16`. Mảng giữ **ID vật liệu**, không giữ RGBA, renderer hoặc các vertex. Vì Air bằng 0, `Chunk chunk{}` khởi tạo toàn không khí mà không cần vòng lặp set từng ô.
+
+4096 ID một byte có payload 4096 byte. Mesh về sau lớn hơn nhiều vì một block sinh nhiều vertex. Không nên nhân bản mesh trong từng ô chỉ để tiện gọi hàm vẽ.
+
+### Bước 2 — Kiểm biên trước khi tính index
+
+```cpp title="include/model.hpp"
+inline int index(int x, int y, int z) {
+    if (!inside(x, y, z)) {
+        throw std::out_of_range("block coordinate outside chunk");
+    }
+    // x liền nhau trong bộ nhớ, hết hàng đến z, hết lớp đến y.
+    return x + side * (z + side * y);
+}
+```
+
+`inside` kiểm cả ba trục bằng miền nửa mở `[0,16)`. Phải kiểm **từng tọa độ**, không chỉ kiểm kết quả index: `(16,0,0)` cho index 16 vẫn nằm trong mảng nhưng lại đè lên `(0,0,1)`. Kiểm độ dài mảng một mình không phát hiện được lỗi này.
+
+Giữ tham số `int` để −1 vẫn là −1 khi kiểm biên. Chỉ cast sang `size_t` sau khi `index` đã xác nhận hợp lệ; ép âm thành unsigned từ đầu sẽ làm lỗi khó đọc hơn.
+
+### Bước 3 — Dùng chung đường đọc/ghi
+
+```cpp title="include/model.hpp"
+inline Block get(const Chunk& chunk, int x, int y, int z) {
+    return chunk.at(static_cast<std::size_t>(index(x, y, z)));
+}
+
+inline void set(Chunk& chunk, int x, int y, int z, Block block) {
+    chunk.at(static_cast<std::size_t>(index(x, y, z))) = block;
+}
+```
+
+`get` nhận `const Chunk&`: đọc dữ liệu không được âm thầm sửa nó. `set` nhận reference không const vì nhiệm vụ của nó là ghi. Dùng hai hàm này thay vì chép công thức index vào từng vòng lặp; về sau kiểm lỗi chỉ cần bắt đầu ở một nơi.
+
+### Bước 4 — Đặt một block rồi đọc lại
+
+```cpp title="include/model.hpp"
+Chunk chunk{};
+if (preset == 0) {
+    set(chunk, 7, 7, 7, Block::Stone);
+}
+```
+
+Đây là phần preset đầu của `makeChunk`. Main nhận chunk, đọc `get(chunk,7,7,7)` để chọn vật liệu cho cube. Vòng vẽ bảng dùng chính `get(chunk,x,slice,z)`, không tự đoán một ô nào đó phải có màu xanh.
+
+Bảng vẽ các cell 15×15 trong bước lưới 16 pixel để có đường ngăn. Air vẫn được vẽ nền tối trên bảng, dù về sau không sinh geometry trong mesh. **Ô có dữ liệu** và **ô có mặt được vẽ** là hai khái niệm khác nhau.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_58_checkpoint_2 --parallel 2
+.\build\Debug\project_58_checkpoint_2.exe
+```
+
+Kết quả phải có cube bên trái, một ô đặc ở bảng lớp y=7 bên phải và `solid=1`. Camera vẫn cố định, chưa có phím sửa block. `solidCount` đếm ID khác Air từ dữ liệu, không lấy số tam giác chia 12 để suy ngược.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi `set(chunk,16,0,0,Block::Stone)`. Chương trình phải báo ngoài miền và đi qua cleanup, không ghi vào ô z=1. Không “sửa” bằng cách kẹp 16 về 15 vì như vậy che lỗi tọa độ.
+2. Đổi lớp đọc từ y=7 thành y=8. Bảng sẽ toàn Air trong khi cube vẫn còn: bạn đang nhìn một lát khác, chưa làm mất block trong dữ liệu. Đưa lại y=7.
+
+## Tự kiểm tra kết quả
+
+Tự tính ba bước nhảy 1/16/256 và index 1911. Kiểm bảng có đúng một ô đặc. Đọc `get` nhiều lần không đổi `solidCount`. Các biên −1 và 16 đều bị từ chối ở mỗi trục. Bài này chưa phải dựng hình toàn chunk, nên chưa có khối đất 16³ trên màn hình.
+
+## Bài tập mở rộng
+
+Đặt thêm một Dirt ở `(8,7,7)` rồi chỉ kiểm bảng lớp và `solidCount=2`. Phần cube đang vẽ thủ công chưa tự tăng lên hai: ghi lại khoảng trống đó. Bài tiếp theo sẽ thay cách dựng hình để mọi block đặc đều có geometry.
+
+[Bài tiếp theo](/projects/voxel-chunk/03-tu-block-den-mesh) — Dựng mesh từ toàn bộ block đặc.

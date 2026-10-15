@@ -1,0 +1,93 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc kết quả Monte Carlo cùng mức bất định
+
+## Vấn đề cần giải quyết
+
+Chạy một lượt có 512 photon rồi thấy tỷ lệ thoát khác exp(−muT*3), ta chưa thể kết luận thuật toán sai. Có thể đang so hai đại lượng khác nhau, có thể đó là sai số lấy mẫu, cũng có thể eventLimit đã để lại nhiều kết cục chưa biết.
+
+Ta cần chọn đúng đại lượng để so lý thuyết, báo mức bất định và không dùng tăng N như cách sửa mọi lỗi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chùm ban đầu đi ngang đoạn L=3. Xác suất **không có tương tác nào** là:
+
+$$p_0=e^{-(\mu_A+\mu_S)L}.$$
+
+Đây là [beam transmittance theo extinction](https://www.pbr-book.org/4ed/Volume_Scattering/Transmittance), không tính các photon đã tán xạ vào hướng khác rồi thoát. Vì vậy, chỉ so p0 với ballistic/N. Khi muS=0, ballistic trùng escaped; khi có tán xạ, tổng thoát còn gồm nhiều photon không ballistic.
+
+Đối với chỉ báo Bernoulli lý tưởng “photon có thoát không tương tác không?”, sai số chuẩn của tỷ lệ k/N cỡ căn(p0*(1−p0)/N). Tăng N gấp 4 làm thang sai số chuẩn giảm khoảng 2 lần. Nó không bảo đảm sai số quan sát ở từng seed giảm đều hoặc đúng một nửa.
+
+<InteractiveLab demo="photon-rain" mode="photon57-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết nghiệm lý thuyết của đúng phép đo
+
+```cpp title="include/statistics.hpp"
+inline double expectedBallistic(Settings settings) {
+    validate(settings);
+    return std::exp(-(settings.muA + settings.muS) * (right - left));
+}
+```
+
+Vì tất cả photon ban đầu hướng(1,0) và y nằm trong (-.75,.75), khoảng cách tới cạnh phải luôn 3. Nếu sau này đổi nguồn, direction hoặc hình học, không giữ công thức L=3 một cách máy móc.
+
+Ngay cả khi một photon Censored ở bước tán xạ muộn, ta đã biết nó **không ballistic**. Vì vậy chỉ báo ballistic vẫn xác định cho mọi photon đã xử lý, khác với kết cục thoát/hấp thụ còn chưa biết.
+
+### Bước 2 — Dùng Wilson thay vì khoảng đối xứng đơn giản ở biên
+
+Nếu k=0, công thức sai số chuẩn cắm p=k/N sẽ bằng 0; không nên kết luận xác suất thật chắc chắn bằng 0. Ta dùng [Wilson score interval](https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm) với z≈1.96 cho mức 95%.
+
+```cpp title="include/statistics.hpp"
+    constexpr double z = 1.959963984540054;
+    const double p = static_cast<double>(successes) / count;
+    const double denominator = 1 + z * z / count;
+    const double centre = (p + z * z / (2 * count)) / denominator;
+    const double halfWidth = z * std::sqrt(p * (1 - p) / count + z * z / (4 * count * count)) / denominator;
+    return {std::max(0.0, centre - halfWidth), std::min(1.0, centre + halfWidth)};
+```
+
+wilson kiểm count>0, `count<=8192` và `0<=successes<=count` trước khi tính. Với N=0, giao diện hiện Chưa có dữ liệu, không vẽ một tỷ lệ 0 giả. Với k=0 hoặc k=N, interval vẫn có độ rộng, trừ sai số số học nhỏ ở endpoint.
+
+Mức 95% mô tả coverage khi lặp thí nghiệm theo mô hình mẫu ngẫu nhiên, không hứa mọi seed đều cho interval chứa tham số thật. PRNG ở project hữu hạn và quyết định bởi seed; ta dùng CI như công cụ học thống kê, không chứng nhận chất lượng nguồn ngẫu nhiên hoặc một thiết bị vật lý.
+
+### Bước 3 — Báo censoring bằng một khoảng khác
+
+Với E photon biết đã thoát và C photon Censored, tỷ lệ thoát của chính tập lịch sử này, nếu theo dõi tới cùng, chỉ biết nằm trong:
+
+$$\left[\frac{E}{N},\frac{E+C}{N}\right].$$
+
+Đây là khoảng **bất định kết cục do dừng sớm**, không confidence interval do lấy mẫu. Nó chưa bao gồm sai số khi suy từ tập mẫu ra xác suất của toàn mô hình. Không đổi mẫu số thành N−C, không tô cùng nhãn Wilson 95% cho khoảng này.
+
+Trong Canvas, hai readout được ghi nhãn riêng. Đặt muA=0,muS=2,limit 1 để thấy khoảng kết cục rộng: lý thuyết môi trường chỉ tán xạ không hấp thụ, nhưng các lịch sử bị dừng chưa được theo tới khi thoát.
+
+### Bước 4 — Lập thí nghiệm có thể so được
+
+Chọn hấp thụ thuần muA=.4, seed 42; thêm512 mẫu rồi ghi k/N và Wilson. Chuyển 2048 mẫu tạo lượt mới, tính lại cùng các ID đầu và thêm phần còn lại. Với RNG theo ID, tập 512 là tiền tố của tập 2048 nếu settings vật lý không đổi. Không dùng hai preview photon làm hai thí nghiệm tỷ lệ.
+
+Đọc cả error tuyệt đối, N và interval; không chỉ nhìn “gần đúng” từ hình. Sau đó đổi seed để thấy dao động, nhưng không lọc seed chỉ giữ lượt đẹp.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_57_checkpoint_7 --parallel 2
+.\build\Debug\project_57_checkpoint_7.exe
+```
+
+N/M vẫn thêm mẫu thủ công; chưa tự chạy. Title native có ballistic estimate, CI và theory khi N>0. Canvas còn hiện khoảng kết cục thoát do giới hạn. Với không khí, p0=1; với muA=.4,muS=0, p0≈.301194; với muA=.4,muS=.9, p0=exp(−3.9)≈.0202419.
+
+## Thử làm sai để hiểu đúng
+
+1. So escaped/N với exp(−muT*L) trong preset có tán xạ. Chênh lệch không nhất thiết là lỗi sampler. Khôi phục ballistic/N cho phép so không tương tác.
+2. Viết test bắt mọi seed phải nằm trong Wilson 95%. Khoảng không có bảo đảm đó. Dùng fixture seed cố định với tolerance thống kê hợp lý và thêm các invariant xác định; không sửa RNG để ép một CI đẹp.
+
+## Tự kiểm tra kết quả
+
+Wilson không vượt[0,1], k=0/N vẫn có interval phù hợp, N=0 bị từ chối trong hàm và được UI xử lý. Chân không cho ballistic=N. Censored không bị bỏ khỏi mẫu số, không bị tính thành absorbed; interval Wilson và khoảng kết cục được phân biệt. Không yêu cầu error của từng lượt giảm đơn điệu theo N.
+
+## Bài tập mở rộng
+
+Chọn vài seed trước khi chạy, dùng N=512 và 2048 rồi lập bảng error/interval. Không tự tăng đến hàng triệu mẫu; giới hạn mỗi lượt 8192 là đủ học cách đọc dao động và ngăn một thí nghiệm vô hạn.
+
+[Bài tiếp theo](/projects/photon-rain/08-hoan-thien-va-kiem-chung) — Hoàn thiện mưa photon và kiểm chứng mô hình.

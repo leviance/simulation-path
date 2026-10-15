@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng mesh từ toàn bộ block đặc
+
+## Vấn đề cần giải quyết
+
+Ở bài trước, ghi thêm block mới chỉ làm bảng đổi màu. Main vẫn gọi `appendCube` đúng một lần tại vị trí cố định. Bây giờ ta bỏ chỗ gọi thủ công đó và xây mesh từ **dữ liệu thật**.
+
+Để dễ kiểm, preset của bài là khối đặc: cả 4096 ô đều Stone. Nó phải trông như một khối lớn nhưng bên trong vẫn là 4096 cube riêng. Ta cố ý giữ cả mặt tiếp giáp — đây là bản nền để Project 59 đo và giảm công việc dư thừa.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba lớp dữ liệu có ba vai trò khác nhau:
+
+- `Chunk` trả lời “ô này chứa gì?”. Đây là dữ liệu gốc.
+- `Mesh` trả lời “cần gửi những tam giác nào để vẽ?”. Nó có thể dựng lại từ chunk.
+- `Frame` trả lời “pixel này có màu và depth nào sau khi rasterize?”. Nó phụ thuộc cả mesh lẫn camera.
+
+Không lưu màu framebuffer ngược vào Chunk. Không dùng việc nhìn thấy một mặt để kết luận block phía sau là Air.
+
+$$N_{quad}=6N_{solid},\qquad N_{triangle}=12N_{solid}.$$
+
+Với 4096 block, ta có 24576 quad và **49152 triangles**. Hai cube kề nhau vẫn tạo 24 triangles, dù hai mặt nằm cùng mặt phẳng tiếp giáp không thể thấy từ bên ngoài. Z-buffer không xóa chúng khỏi danh sách; nó chỉ từ chối fragment không đủ gần.
+
+<InteractiveLab demo="voxel-chunk" mode="voxel58-3" />
+
+Màu phẳng không vẽ đường biên từng block trên mặt phẳng nên khối đặc có thể trông như một cube lớn. Bảng lớp và bộ đếm giúp bạn biết bên trong thực sự có bao nhiêu ô, thay vì suy từ đường kẻ trang trí.
+
+## Viết code từng bước
+
+### Bước 1 — Tạo dữ liệu khối đặc
+
+```cpp title="include/model.hpp"
+if (preset == 1) {
+    chunk.fill(Block::Stone);
+}
+```
+
+Không cần tạo 4096 đối tượng SDL. `fill` chỉ ghi ID Stone vào mảng cố định. Dữ liệu tốn vài KiB; phần nặng hơn là geometry và các lần rasterize.
+
+### Bước 2 — Duyệt chunk theo layout đã chọn
+
+```cpp title="include/mesh.hpp"
+Mesh mesh;
+mesh.reserve(static_cast<std::size_t>(solidCount(chunk)) * 12);
+for (int y = 0; y < side; ++y) {
+    for (int z = 0; z < side; ++z) {
+        for (int x = 0; x < side; ++x) {
+            const Block block = get(chunk, x, y, z);
+            if (block == Block::Air) {
+                continue;
+            }
+            appendCube(mesh, {static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, static_cast<int>(block));
+        }
+    }
+}
+return mesh;
+```
+
+Đây là phần dựng geometry trong `buildMesh`. Vòng trong cùng là x nên các lần `get` đi liền bộ nhớ. Tọa độ block trở thành origin của cube, không nhân với kích thước cửa sổ. Block `(15,15,15)` có góc xa tại 16, vẫn hợp lệ dù **tọa độ ô** chỉ đến 15.
+
+`reserve` cấp chỗ trước cho tối đa 12 triangles mỗi block, không làm `size()` tăng. Chỉ `push_back` trong `appendCube` mới thêm tam giác thật. Với Air, ta `continue` và không thêm gì.
+
+Tham số `slice` đã có trong chữ ký để giữ đường gọi ổn định; ở Bài 03–05 nó chưa cắt geometry. Bài 06 mới thêm nhánh loại y lớn hơn lớp đang xem.
+
+### Bước 3 — Thay cube cố định bằng mesh dẫn xuất
+
+```cpp title="src/main.cpp"
+mesh = voxel::buildMesh(chunk, slice);
+voxel::render(frame, mesh, camera, useDepth);
+upload(texture, frame);
+dirty = false;
+```
+
+Đoạn này nằm trong `if (dirty)`. Mesh được dựng từ chunk rồi rasterize; vòng present không tự thêm cube nữa. Camera chuyển về tâm `(8,8,8)` và scale 6 để vừa cả khối đất, thay vì phóng một viên như hai bài đầu.
+
+Đây chưa phải pipeline tối ưu nhất: thay camera vẫn dựng lại mesh trong cùng nhánh dirty dù block không đổi. Nhưng ở trạng thái paused, ta không làm lại công việc mỗi frame. Tách `meshDirty` và `frameDirty` là một bài tập nhỏ có thể đo được, không phải lý do bỏ qua việc giảm mặt trong Project 59.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_58_checkpoint_3 --parallel 2
+.\build\Debug\project_58_checkpoint_3.exe
+```
+
+Bạn phải thấy `solid=4096`, `triangles=49152`, bảng lớp y=15 toàn ô đặc. Mesh không còn phụ thuộc một vị trí hard-code trong main. Nếu đặt một ô Air trong preset, số tam giác phải giảm đúng 12, dù thay đổi hình có thể bị các block xung quanh che.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ kiểm Air rồi dùng preset toàn không khí. Mảng có 4096 ô nhưng không có block đặc; vẽ cả Air sẽ tạo khối giả. Hoàn nguyên và kiểm `mesh.empty()`.
+2. Đổi vòng x từ `x < side` thành `x <= side`. `get` phải từ chối x=16. Lỗi nằm ở miền tọa độ, không được chữa bằng cách tăng dung lượng mảng lên 17³.
+
+## Tự kiểm tra kết quả
+
+Một block cho 12 triangles; hai block kề nhau cho 24; khối đặc cho 49152; toàn Air cho 0. Mọi vertex nằm trong world `[0,16]`. Dựng mesh không đổi bất kỳ Block ID nào. Số triangles là **đầu vào rasterizer**, không phải số tam giác nhìn thấy hoặc số lần depth test thành công.
+
+## Bài tập mở rộng
+
+Tính số triangles nếu 16³ block chỉ giữ lớp đáy y=0: 256×12=3072. Tạo tạm preset đó, kiểm bằng số trước khi nhìn hình. Không loại các mặt kề nhau ở bài tập này; ta cần cùng một baseline cho phần tối ưu sau.
+
+[Bài tiếp theo](/projects/voxel-chunk/04-dat-va-vat-lieu) — Tạo đất bậc thang và tô vật liệu.

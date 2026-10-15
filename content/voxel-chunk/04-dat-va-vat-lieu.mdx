@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo đất bậc thang và tô vật liệu
+
+## Vấn đề cần giải quyết
+
+Khối đặc xác nhận số lượng và kích thước, nhưng chưa giống một mảnh đất. Ta sẽ tạo bốn bậc cao dần, đặt Grass ở trên cùng, Dirt ngay bên dưới và Stone sâu hơn. Hình phải bắt nguồn từ Block ID, không phải vẽ thêm một mảng màu xanh lên màn hình cho giống cỏ.
+
+Bài này cũng thêm bốn preset. Preset toàn Air rất quan trọng: khi không còn geometry, ứng dụng vẫn phải xóa ảnh cũ và chạy bình thường.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi cột `(x,z)` có chiều cao nguyên:
+
+$$h(x,z)=4+\left\lfloor\frac{x}{4}\right\rfloor.$$
+
+Với x từ 0 đến 15, bốn nhóm cột cao 4, 5, 6, 7. Ta lấp các ô từ y=0 đến `height-1`. Ô y=height là Air. Chiều cao chưa phụ thuộc z nên các bậc kéo dài suốt chiều z.
+
+Tổng số block có thể tính tay, độc lập với vòng lặp:
+
+$$N=16\times4\times(4+5+6+7)=1408,\qquad T=12N=16896.$$
+
+Đây là địa hình bậc thang **cố định**, không phải noise, không có seed và không giải quyết seam giữa chunks. Những vấn đề đó thuộc Project 63. Đặt một hàm nhỏ dễ đoán giúp ta kiểm layout và vật liệu trước.
+
+<InteractiveLab demo="voxel-chunk" mode="voxel58-4" />
+
+Thử đổi qua “Khối đặc”, “Đất bậc thang”, “Một block”, “Toàn Air”. Camera bài này vẫn cố định để thay đổi bạn thấy chỉ đến từ dữ liệu.
+
+## Viết code từng bước
+
+### Bước 1 — Lấp các cột đúng chiều cao
+
+```cpp title="include/model.hpp"
+const int height = 4 + x / 4;
+if (y < height) {
+    Block block = Block::Stone;
+    if (y >= height - 3) {
+        block = Block::Dirt;
+    }
+    if (y == height - 1) {
+        block = Block::Grass;
+    }
+    set(chunk, x, y, z, block);
+}
+```
+
+Đặt đoạn này trong ba vòng y/z/x của preset 2. `x/4` là phép chia nguyên vì cả hai toán hạng là int. Không làm tròn số float rồi mới dùng làm số lớp.
+
+Thứ tự gán vật liệu có chủ đích: ban đầu Stone, ba lớp trên cùng tạm thành Dirt, rồi **lớp trên cùng ghi đè thành Grass**. Như vậy bên dưới Grass còn hai lớp Dirt, không phải ba. Ví dụ cột cao 4 có y=0 Stone, y=1–2 Dirt, y=3 Grass; y=4 Air.
+
+### Bước 2 — Đổi ID thành màu khi dựng mặt
+
+```cpp title="include/mesh.hpp"
+if (material == 1) {
+    color = {100, 190, 90, 255};
+}
+if (material == 2) {
+    color = {170, 115, 75, 255};
+}
+if (material == 3) {
+    color = {150, 160, 180, 255};
+}
+```
+
+Đây là phần chọn màu gốc trong `faceColor`. Sau đó nhân với hệ số của hướng mặt. Grass là cả block xanh, không chỉ một tấm cỏ trên mặt +Y; ta chưa dùng texture atlas hoặc vật liệu khác nhau cho từng mặt.
+
+Giữ màu trong mesh, không đổi `Block` thành một struct chứa sáu màu. Dữ liệu vật liệu vẫn chỉ một ID và có thể được renderer khác đọc sau này.
+
+### Bước 3 — Tạo chunk mới khi đổi preset
+
+```cpp title="src/main.cpp"
+if (key == SDLK_P) {
+    preset = (preset + 1) % 4;
+    chunk = voxel::makeChunk(preset);
+    paused = true;
+    dirty = true;
+}
+```
+
+P đi lần lượt qua single/full/steps/empty. `makeChunk` khởi tạo mảng Air mới trước khi lấp preset; không đắp chồng lên dữ liệu preset cũ. `dirty=true` khiến lượt vẽ tới clear framebuffer, dựng mesh mới rồi upload lại. Empty không có triangles nhưng vẫn clear màu/depth, vì thế không để lại “bóng ma” của khối đất trước.
+
+R đưa về đất bậc thang, camera mặc định, slice=15 và depth bật. Ở checkpoint này chưa điều khiển camera; bài sau sẽ nối các phím đó vào cùng event loop.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_58_checkpoint_4 --parallel 2
+.\build\Debug\project_58_checkpoint_4.exe
+```
+
+Mở mặc định đất bậc thang: 1408 block, 16896 triangles. Bảng y=15 toàn Air là **đúng**, vì cột cao nhất chỉ đến y=6. Đừng vì bảng trống mà tăng chiều cao lên 16; ở Bài 06 bạn sẽ kéo lớp xuống để đọc phần đất.
+
+Preset “Một block” ở góc nhìn cả chunk trông nhỏ hơn cube Bài 01. Đó là khác biệt scale của camera, không phải kích thước block bị thay đổi theo preset.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi `y < height` thành `y <= height`. Mỗi cột thừa một block, tổng tăng 256; bậc thấp nhất cao 5 thay vì 4. Kiểm bằng số đếm trước khi nhìn màu.
+2. Chuyển nhánh Grass lên trước nhánh Dirt. Lớp trên cùng bị Dirt ghi đè, đất mất màu xanh. Đây là lỗi thứ tự gán dữ liệu, không phải shading.
+
+## Tự kiểm tra kết quả
+
+Preset single/full/steps/empty lần lượt có 1/4096/1408/0 block và 12/49152/16896/0 triangles. Kiểm cột x=0 và x=15 cho đúng chiều cao 4 và 7. Đổi preset nhiều lần không tăng bộ đếm ngoài các giá trị này. Empty không giữ ảnh cũ; R khôi phục được đất.
+
+## Bài tập mở rộng
+
+Thêm một bảng chú giải ba màu bằng `SDL_RenderFillRect` và `SDL_RenderDebugText`. Bảng chỉ đọc màu vật liệu, không tác động vào chunk. Không thêm culling, texture hoặc noise để giải quyết một bài tập vốn chỉ cần nhãn rõ ràng.
+
+[Bài tiếp theo](/projects/voxel-chunk/05-camera-va-do-sau) — Xoay khối đất và kiểm tra độ sâu.

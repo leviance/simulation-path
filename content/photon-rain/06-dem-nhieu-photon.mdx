@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Gom nhiều đường đi thành thống kê
+
+## Vấn đề cần giải quyết
+
+Xem một photon giúp hiểu thuật toán, nhưng không đủ để ước lượng tỷ lệ hấp thụ/thoát. Ta cần xử lý nhiều ID, tally mỗi ID đúng một lần và giữ đủ thông tin để không nhầm các loại số đếm.
+
+Đặc biệt, một photon có thể tán xạ 10 lần rồi thoát. Nếu cộng “hấp thụ + tán xạ + thoát” thành số photon phát, tổng sẽ sai vì đang trộn số sự kiện với số kết cục.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba nhóm kết thúc của một lượt tính có ngân sách là:
+
+$$N=N_{\mathrm{absorbed}}+N_{\mathrm{escaped}}+N_{\mathrm{censored}}.$$
+
+scatteredPhotons đếm photon từng có ít nhất một Scatter; scatterEvents đếm tổng Scatter. Cả hai là thống kê bổ sung, **không** cộng vào đẳng thức trên.
+
+[Ballistic](/glossary#photon-ballistic) là photon thoát mà chưa từng tán xạ/tương tác; trong mô hình analog, photon có tương tác đầu mà còn sống phải tán xạ. Ballistic là tập con escaped, không phải một nhóm thứ tư đứng cạnh escaped.
+
+<InteractiveLab demo="photon-rain" mode="photon57-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Khai báo các bộ đếm có tên rõ ràng
+
+```cpp title="include/statistics.hpp"
+struct Counts {
+    int completed = 0;
+    int absorbed = 0;
+    int escaped = 0;
+    int censored = 0;
+    int ballistic = 0;
+    int scatteredPhotons = 0;
+    int scatterEvents = 0;
+    bool operator==(const Counts&) const = default;
+};
+```
+
+completed nghĩa là số lịch sử đã xử lý tới kết cục hoặc ngân sách, không có nghĩa tất cả đã biết kết cục vật lý. Tên Censored và readout phải luôn hiện khi khác 0.
+
+### Bước 2 — Tally một Trace, không tally preview dang dở
+
+```cpp title="include/statistics.hpp"
+    if (trace.status == Status::Alive) {
+        throw std::invalid_argument("Cannot tally an unfinished preview");
+    }
+    ++counts.completed;
+```
+
+tally tăng đúng một nhóm terminal. Ở nhánh Escaped, kiểm scatters==0 để tăng ballistic. Sau đó tăng scatteredPhotons nếu scatters>0 và cộng scatters vào scatterEvents. Không dùng số vertex làm số scatter: Emission/Absorption/Escape cũng là vertex.
+
+### Bước 3 — Gán mỗi ID đúng một lượt
+
+```cpp title="include/statistics.hpp"
+        const int id = experiment.counts.completed;
+        const auto trace = tracePhoton(experiment.settings, id);
+        tally(experiment.counts, trace);
+        experiment.recent.push_back(trace);
+        if (experiment.recent.size() > 24) {
+            experiment.recent.erase(experiment.recent.begin());
+        }
+```
+
+advance dùng completed làm ID kế tiếp, xử lý tối đa budget photon. Settings được chụp trong Experiment. Chia 2048 photon thành batch 1 hay batch 32 phải cho cùng Counts, vì RNG được khởi tạo theo ID chứ không theo frame hoặc số lần gọi advance.
+
+Chỉ giữ 24 trace gần nhất để vẽ nền mờ. Đây không phải toàn bộ dataset; không dùng số đường đang nhìn thấy làm mẫu số. Muốn xem ID cũ, preview dựng lại trace đó mà không tally lần nữa.
+
+### Bước 4 — Thêm mẫu thủ công trước khi chạy tự động
+
+Native N thêm 1 photon, M thêm 32; Canvas có hai nút tương ứng. Mở lượt mới completed=0 dù preview ID 0 đã có đường đi. Chọn ID/đỉnh không tăng completed. Nút chạy tự động chỉ xuất hiện có tác dụng từ Bài 08, để ta kiểm bộ đếm trước scheduler.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_57_checkpoint_6 --parallel 2
+.\build\Debug\project_57_checkpoint_6.exe
+```
+
+Q chọn 512/2048/8192 mẫu mục tiêu. Đổi count, seed, hệ số hoặc limit tạo lượt mới, không cộng lẫn dữ liệu cũ. Thêm 32 rồi đổi ID về 0: completed phải giữ 32. Reset rồi thêm 1 tổng cộng 32 lần: Counts phải khớp lượt batch 32 trước đó.
+
+## Thử làm sai để hiểu đúng
+
+1. Cộng scatterEvents vào tổng kết cục. Chọn scattering mạnh, tổng dễ lớn hơn N. Khôi phục ba nhóm terminal và giữ scatterEvents ở readout riêng.
+2. Bỏ Censored khỏi mẫu số khi tính tỷ lệ thoát. Cùng một mô hình nhưng limit thấp có thể trông như tăng tỷ lệ thoát. Giữ N=completed và báo phần chưa biết, không chọn lọc chỉ photon đã có kết cục.
+
+## Tự kiểm tra kết quả
+
+absorbed+escaped+censored=completed và `ballistic<=escaped`. `scatteredPhotons<=completed`, scatterEvents>=scatteredPhotons. Recent không vượt 24. Advance budget 0 không đổi dữ liệu, gọi khi đủ count trả 0, không tally lại ID cuối. Settings gốc và preview không làm thay đổi Counts đã lưu.
+
+## Bài tập mở rộng
+
+Với preset chỉ tán xạ và limit 1, kiểm absorbed=0 và escaped+censored=N. Sau đó tăng limit để xem phần chưa biết thay đổi. Đừng đặt yêu cầu “phải không Censored” trước khi đã chọn ngân sách phù hợp.
+
+[Bài tiếp theo](/projects/photon-rain/07-sai-so-monte-carlo) — Đọc kết quả Monte Carlo cùng mức bất định.

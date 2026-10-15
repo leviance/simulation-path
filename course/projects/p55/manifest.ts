@@ -56,7 +56,7 @@ const data = {
       "Exposure đổi I nhưng không đổi ratio/p; log/palette không sửa measurement.",
       "Two-energy endpoints w=0/1 đúng; sum intensity trước log, log thickness không tuyến tính như mono.",
       "Pure CTest Debug/Release không window; SDL smoke nhỏ có timeout30s tách khỏi QA desktop.",
-      "Roadmap/search/glossary/prev-next/ZIP đồng bộ; Project 57–78 giữ Sắp ra mắt, generated output không đưa vào Git.",
+      "Roadmap/search/glossary/prev-next/ZIP đồng bộ; Project 59–78 giữ Sắp ra mắt, generated output không đưa vào Git.",
     ],
   },
   lessons: [

@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ môi trường và photon đầu tiên
+
+## Vấn đề cần giải quyết
+
+Project 55–56 tính tín hiệu bằng chiều dài xuyên qua vật liệu. Lần này, thay vì tính ngay một giá trị trung bình, ta theo dõi từng photon: nó đi được bao xa, có bị hấp thụ không, có đổi hướng rồi thoát ra không?
+
+Trước khi viết công thức, hãy thử [thử thách đầu module](/projects/photon-rain). Sản phẩm cần có đường đi xem lại được và thống kê của nhiều photon, không chỉ một hiệu ứng các chấm bay ngẫu nhiên.
+
+Bắt đầu từ ZIP độc lập của Project 57. Starter mở window/renderer, xử lý event và clear nền tối. Checkpoint 1 thêm một miền vật liệu hình chữ nhật và một photon ở cạnh trái. **Chưa có ngẫu nhiên, hấp thụ hoặc tán xạ.**
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng một môi trường đồng nhất trong mặt phẳng XY: x từ −1.5 đến 1.5, y từ −1 đến 1. Y của world hướng lên, y màn hình hướng xuống. Photon giữ position và direction trong world space; chỉ hàm screen đổi sang logical pixel:
+
+$$x_s=340+180x,\qquad y_s=330-180y.$$
+
+Miền rộng 3 world units, cao 2; ở bản SDL nó chiếm 540×360 logical pixel. Photon ban đầu ở cạnh trái, hướng `(1,0)`. Chấm vuông 8×8 chỉ là marker để nhìn thấy, không phải kích thước vật lý của photon.
+
+<InteractiveLab demo="photon-rain" mode="photon57-1" />
+
+Mô hình này là công cụ học thuật toán trong 2D. Nó không mô tả đầy đủ bức xạ X-ray, không dùng dữ liệu y khoa và không vận hành thiết bị phát tia.
+
+## Viết code từng bước
+
+### Bước 1 — Chạy bộ khung
+
+```bash title="Terminal — starter"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_57_starter --parallel 2
+.\build\Debug\project_57_starter.exe
+```
+
+Các lệnh trên dành cho PowerShell và Visual Studio. Cửa sổ tối phải mở/đóng được trước khi thêm mô hình. Main kiểm lỗi SDL_Init, SDL_CreateWindow và SDL_CreateRenderer; khi lỗi, in SDL_GetError rồi trả EXIT_FAILURE.
+
+### Bước 2 — Tách dữ liệu khỏi hình vẽ
+
+```cpp title="include/model.hpp"
+struct Photon {
+    Point position{left, 0};
+    Point direction{1, 0};
+};
+```
+
+Point là array hai double. left bằng −1.5. Không lưu pixel màn hình trong position hoặc renderer trong Photon; nhờ vậy phần toán sẽ kiểm bằng CTest mà không mở window. Direction có độ dài 1 để khoảng cách dọc tia mang đúng đơn vị chiều dài.
+
+### Bước 3 — Vẽ môi trường
+
+```cpp title="include/view.hpp"
+inline void drawMedium(SDL_Renderer* renderer) {
+    require(SDL_SetRenderDrawColor(renderer, 25, 42, 66, 255));
+    require(SDL_RenderFillRect(renderer, &mediumRect));
+    require(SDL_SetRenderDrawColor(renderer, 125, 160, 200, 255));
+    require(SDL_RenderRect(renderer, &mediumRect));
+    require(SDL_RenderDebugText(renderer, 70, 120, "XY medium: [-1.5,1.5] x [-1,1]"));
+}
+```
+
+mediumRect là `{70,150,540,360}`. Màu nền chỉ đánh dấu nơi có môi trường, chưa biểu diễn mu hay xác suất hấp thụ. require đưa lỗi SDL tới cleanup. SDL_RenderDebugText có sẵn trong SDL3, chỉ hỗ trợ chữ ASCII nhỏ, nên nhãn native dùng tiếng Anh; tài liệu và Canvas vẫn bằng tiếng Việt. Không cần thêm SDL_ttf để học phần toán ở đây. Xem [giới hạn của hàm debug text](https://wiki.libsdl.org/SDL3/SDL_RenderDebugText).
+
+### Bước 4 — Vẽ photon ở vị trí world
+
+```cpp title="include/view.hpp"
+inline void drawPhoton(SDL_Renderer* renderer, Point position) {
+    const auto centre = screen(position);
+    const SDL_FRect marker{centre.x - 4, centre.y - 4, 8, 8};
+    require(SDL_RenderFillRect(renderer, &marker));
+}
+```
+
+Main clear → drawMedium → drawTrace/marker → present. Với một điểm phát duy nhất, drawTrace thêm đoạn ngắn chỉ hướng sang phải. Đây là mũi chỉ hướng, không phải photon đã bay một quãng đường trong vật liệu.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 1"
+cmake --build build --config Debug --target project_57_checkpoint_1 --parallel 2
+.\build\Debug\project_57_checkpoint_1.exe
+```
+
+Logical presentation 1080×720 letterbox giữ tỷ lệ khi resize. Các bài sau vẫn dùng cùng world rectangle, không tăng số photon hoặc đổi độ dày vật liệu theo kích thước cửa sổ. Mã hoàn chỉnh của checkpoint nằm ở phần source bên dưới.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi screen thành y_s=330+180*y. Điểm có world y dương chuyển xuống dưới. Hoàn nguyên; phép đổi màn hình không được sửa dữ liệu vật lý.
+2. Làm marker lớn gấp đôi. Chỉ hình vẽ đổi, không vị trí/direction hoặc kích thước medium. Đừng dùng kích thước marker làm bán kính va chạm.
+
+## Tự kiểm tra kết quả
+
+Starter chỉ nền tối; checkpoint có rectangle 3:2 và một điểm ở cạnh trái. Resize không bóp hình. Escape/nút đóng thoát sạch. Chưa có số photon hấp thụ hoặc tỷ lệ thoát; một marker vàng không phải kết quả mô phỏng.
+
+## Bài tập mở rộng
+
+Vẽ dấu cộng ở world origin và đặt thử Photon.position=(0,.5). Kiểm nó nằm giữa theo x, phía trên tâm theo y, rồi đưa về điểm phát trước bài tiếp theo.
+
+[Bài tiếp theo](/projects/photon-rain/02-seed-va-quang-duong-tu-do) — Từ số ngẫu nhiên đến quãng đường tự do.

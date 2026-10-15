@@ -390,5 +390,19 @@
     "sourceDirectory": "project-56-ct-sinogram",
     "checkpointCount": 9,
     "demoId": "ct-sinogram"
+  },
+  {
+    "id": "57",
+    "slug": "photon-rain",
+    "sourceDirectory": "project-57-photon-rain",
+    "checkpointCount": 8,
+    "demoId": "photon-rain"
+  },
+  {
+    "id": "58",
+    "slug": "voxel-chunk",
+    "sourceDirectory": "project-58-voxel-chunk",
+    "checkpointCount": 7,
+    "demoId": "voxel-chunk"
   }
 ]

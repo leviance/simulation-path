@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện mưa photon và kiểm chứng mô hình
+
+## Vấn đề cần giải quyết
+
+Các phần tính toán đã có: lấy mẫu khoảng cách, đi tới biên/tương tác, chọn hấp thụ/tán xạ và tally. Bây giờ mới bật chạy tự động, với ngân sách rõ ràng và khả năng dừng/đổi cấu hình mà không trộn dữ liệu.
+
+Ta cũng cần kiểm độc lập thay vì chỉ tin hình đường đi gấp khúc. Cuối bài có toàn bộ source CMake, headers, main và tests; ZIP độc lập gồm starter, tám checkpoint và final.
+
+## Hiểu ý tưởng trước khi viết code
+
+advance xử lý tối đa 32 photon mới mỗi lần, mỗi photon tối đa 64 bước. Một frame không được chạy cả lượt 8192 photon hoặc “bù” tất cả công việc sau frame chậm. Preview thêm một lịch sử hữu hạn; 24 trace mờ được lấy từ các mẫu đã tính, không mô phỏng lại toàn bộ dataset mỗi lần vẽ.
+
+Đổi muA,muS,seed,count hoặc eventLimit phải tạo Experiment mới và dừng. Xem ID/đỉnh không tally. Pause, blur/minimize, tab ẩn và reduced-motion đều dừng; quay lại cửa sổ không tự resume. Trong reduced motion vẫn thêm 1/32 mẫu bằng nút thủ công được.
+
+<InteractiveLab demo="photon-rain" mode="photon57-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Cho lệnh thủ công ưu tiên trước auto
+
+```cpp title="src/main.cpp"
+            int budget = controls.requested;
+            controls.requested = 0;
+            if (budget > 0) {
+                controls.paused = true;
+            }
+            if (!controls.paused) {
+                budget = 32;
+            }
+```
+
+Không cộng một mẫu thủ công với 32 mẫu auto rồi vượt ngân sách. Sau đó advance(experiment,budget) trả số mẫu mới; nếu có, chọn ID vừa tính và vẽ lại. Đủ count thì đặt paused=true, gọi thêm không ghi đè hoặc tái đếm photon cuối.
+
+Trong Canvas, một callback requestAnimationFrame gọi advance 32 rồi lên lịch callback kế. Cleanup cancel frame; stop hạ cờ running ngay để callback cũ không tiến vào lượt mới sau khi đổi settings.
+
+### Bước 2 — Giữ cấu hình của một lượt nhất quán
+
+makeExperiment validate settings và chụp bản sao. Nhánh input so settings trước/sau; nếu khác hoặc R thì tạo lượt mới, completed=0, recent rỗng và hủy lệnh requested còn treo. Một preview ID 0 mới không có nghĩa mẫu0 đã được tally.
+
+Pointer input native đổi qua SDL_ConvertEventToRenderCoordinates trước pickVertex. Timeline chỉ nhận trong vùng của nó, không nhận letterbox. Capture được nhả khi mouse-up/cancel/blur/reset; Canvas xử lý pointercancel và lostpointercapture tương ứng. Resize/DPR không đổi medium hoặc số photon mục tiêu.
+
+### Bước 3 — Dùng fixture riêng cho toán và xác suất
+
+```cpp title="include/audit.hpp"
+    Settings settings;
+    settings.muA = 0.4;
+    settings.muS = 0;
+    settings.count = 4096;
+    auto experiment = makeExperiment(settings);
+    for (int batch = 0; batch < 128; ++batch) {
+        advance(experiment, 32);
+    }
+```
+
+Audit seed 42,4096 photon, hấp thụ thuần. Expected là exp(−.4*3), không gọi lại tracePhoton để tự tạo “expected”. Tolerance bằng 5 sai số chuẩn lý thuyết cộng 1/N cho fixture này. Nó không biến thành lời hứa mọi seed phải khớp năm chữ số hoặc nằm trong CI 95%.
+
+tests/tests.cpp bổ sung PRNG uint32 fixture, inverse CDF, boundary, direction unit, conservation, max vertices, batch 1/32 và giới hạn recent. Kiểm only-scattering không tạo hấp thụ giả, vacuum thoát hết và limit thấp có thể Censored. Các check vẫn hoạt động trong Release/NDEBUG.
+
+### Bước 4 — Chỉ báo PASS sau khi audit thực sự trả về
+
+```cpp title="src/main.cpp"
+                    if (event.key.key == SDLK_V) {
+                        const double error = photon::audit();
+                        std::cout << "Audit PASS | absolute error=" << error << '\n';
+                    }
+```
+
+Nếu audit ném exception, main tới nhánh lỗi và không in PASS trước đó. Canvas nút Kiểm hấp thụ thuần dùng fixture nhỏ tương ứng, không sửa Experiment đang xem.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build toàn bộ và CTest"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Debug\project_57_final.exe
+```
+
+Windows dùng Visual Studio 2022 Desktop development with C++. Single-config generator chọn CMAKE_BUILD_TYPE lúc configure, executable ở trực tiếp build. Final là target mặc định; BUILD_CHECKPOINTS bật starter và project_57_checkpoint_1…8. SDL3 khóa 3.4.8 qua FetchContent/checksum và link SDL3::SDL3.
+
+Pure CTest không SDL_Init/window. Smoke SDL tạo hidden window, render một frame rồi thoát; cần watchdog ngoài process:
+
+```powershell title="PowerShell — smoke tối đa 30 giây"
+$smoke = Start-Process -FilePath ".\build\Debug\project_57_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru -RedirectStandardOutput "smoke.log" -RedirectStandardError "smoke-error.log"
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "SDL smoke vượt 30 giây; dừng kiểm tra."
+}
+Get-Content "smoke.log"
+Get-Content "smoke-error.log"
+if ($smoke.ExitCode -ne 0) { throw "SDL smoke thất bại." }
+```
+
+Không tự retry khi timeout. Automation cần outer timeout và dọn process tree; watchdog không bảo đảm preempt graphics driver đã bị treo. Không benchmark vô hạn hoặc mở GPU workload lớn để kiểm một mô hình CPU 2D nhỏ.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ reset Experiment khi đổi seed giữa lượt. Counts trộn hai tập mẫu mà UI chỉ hiện một seed. Khôi phục invalidation rồi chạy lại.
+2. Chuẩn hóa hướng scattering sai hoặc tally Censored thành Absorbed. Fixture unit direction/only-scattering/conservation phải chỉ ra sai phạm; không tăng tolerance thống kê để làm chúng qua.
+
+## Tự kiểm tra kết quả
+
+Starter, 8 checkpoint,final build Debug/Release; pure CTest pass và hidden smoke thoát trong deadline. Seed/ID chung cho C++/TypeScript giữ cùng fixture số đếm, trong khi tọa độ so theo tolerance số học, không hứa bit-identical cho sin/cos/log trên mọi compiler.
+
+Kiểm desktop riêng: slider/seed/preset, timeline mouse/keyboard, pause/reset, blur, DPI/resize, reload tiến độ và tải ZIP. CTest/smoke không thay thế các thao tác đó.
+
+Phạm vi cuối: môi trường đồng nhất, analog unit photon, tán xạ đều góc 2D, không biến đổi năng lượng, Compton/Rayleigh, detector response, phản xạ/khúc xạ biên, liều hoặc thiết bị phát tia. Censored là chưa biết kết cục, không một sự kiện vật lý. Không dùng kết quả này để dự đoán thiết bị X-ray thật.
+
+## Bài tập mở rộng
+
+Export Counts kèm settings/seed và quy ước mô hình; hoặc thêm bảng số theo nhiều eventLimit nhỏ để đọc bất định do dừng sớm. Nếu muốn thêm vật liệu không đồng nhất hay tán xạ 3D, cần học sampler tương ứng, không chỉ đổi màu/đổi tên biến rồi giữ công thức hiện tại.
+
+Project 57 kết thúc phần Ray, Volume và giả lập X-ray. Tiếp theo là [Project 58 — Khối đất 16×16×16](/projects/voxel-chunk), mở đầu phần Voxel World. Project 59–78 vẫn **Sắp ra mắt**.

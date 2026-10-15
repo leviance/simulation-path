@@ -51,7 +51,7 @@ const data = {
       "Quét hết đúng views hàng; gọi thêm không sửa dữ liệu, pause không tiến, đổi cấu hình không trộn phép đo cũ.",
       "Các góc chung của lưới 30 và 120 cho cùng projection; ảnh phóng to không được quảng cáo là thêm mẫu đo.",
       "CTest Debug/Release và audit nhỏ chạy có timeout; kiểm tương tác desktop được báo riêng, không đánh đồng với smoke.",
-      "Roadmap/search/glossary/ZIP đồng bộ; Project 57–78 vẫn Sắp ra mắt và generated output không đưa vào Git.",
+      "Roadmap/search/glossary/ZIP đồng bộ; Project 59–78 vẫn Sắp ra mắt và generated output không đưa vào Git.",
     ],
   },
   lessons: [

@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Bắt đầu với môi trường chỉ hấp thụ
+
+## Vấn đề cần giải quyết
+
+Ta đã biết tương tác đầu tiên có nằm trong medium hay không. Trước khi thêm đường đi gấp khúc, hãy hoàn tất trường hợp đơn giản hơn: muS=0, mọi tương tác bên trong đều là hấp thụ.
+
+Mỗi photon có đúng một kết cục: Absorbed hoặc Escaped. Ta ghi đường đi thành Trace để xem lại, không chỉ tô một chấm rồi mất toàn bộ thông tin.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đây là [analog transport](/glossary#photon-analog-transport): photon mang một đơn vị, hoặc còn sống hoặc đã bị hấp thụ. Ta đã lấy mẫu tương tác theo phân bố mũ, nên **không nhân thêm exp(−muA*S) vào trọng số của photon**. Làm cả hai sẽ tính suy giảm hai lần.
+
+Với muS=0, muT=muA, chiều dài chùm ban đầu trong medium là3. Xác suất thoát không tương tác là exp(−3*muA); xác suất hấp thụ là1−exp(−3*muA). Đây là quan hệ với Beer–Lambert từ Project 55, nhưng nó nói về tỷ lệ trong nhiều mẫu, không quyết định kết cục của một photon cụ thể.
+
+<InteractiveLab demo="photon-rain" mode="photon57-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Khởi tạo lịch sử theo ID
+
+```cpp title="include/transport.hpp"
+    Random random(photonSeed(settings.seed, id));
+    Photon value = launch(random);
+    Trace trace;
+    trace.vertices.push_back({value.position, Event::Emission});
+```
+
+tracePhoton validate settings trước đoạn này. Vertex đầu chỉ ghi phát photon; chưa phải collision. Trace giữ vertices, trạng thái cuối, số collision và số scatter. Màu hiển thị được chọn khi vẽ, không nằm trong dữ liệu vật lý.
+
+### Bước 2 — Xử lý thoát trước
+
+Ta tách một bước bay thành advancePhoton. Hàm nhận Photon/Trace bằng reference, cập nhật vị trí và trạng thái. Trong checkpoint này, tracePhoton gọi nó một lần rồi trả lịch sử đã hoàn thành.
+
+```cpp title="include/transport.hpp"
+        const Flight flight = sampleFlight(value, random, settings);
+        value.position = flight.endpoint;
+        if (flight.escaped) {
+            trace.vertices.push_back({value.position, Event::Escape});
+            trace.status = Status::Escaped;
+            return;
+        }
+```
+
+Trình tự này quan trọng: nếu photon tới biên trước S, nó không có collision để bị hấp thụ. Ghi endpoint ở cạnh và kết thúc. Chân không đi qua nhánh này ngay; không log/chia0 và không cần một luật hấp thụ riêng.
+
+### Bước 3 — Hấp thụ ứng viên bên trong
+
+```cpp title="include/transport.hpp"
+        trace.vertices.push_back({value.position, Event::Absorption});
+        trace.status = Status::Absorbed;
+        return;
+```
+
+Checkpoint 4 chỉ chạy một bước tới tương tác/biên đầu tiên. Trước đoạn trên, collisions tăng1. MuS khác 0 bị từ chối ở các checkpoint trước Bài 05, nên không có chuyện dùng muA+muS để lấy S rồi gán mọi tương tác thành hấp thụ.
+
+Ở bản final, vị trí này sẽ được mở rộng thành lựa chọn hấp thụ hay tán xạ. Mã hoàn chỉnh dưới bài vẫn là đúng phiên bản chỉ hấp thụ đang học, không nhảy sang vòng lặp scattering chưa giải thích.
+
+### Bước 4 — Vẽ kết cục nhưng giữ ý nghĩa dữ liệu
+
+preview gọi tracePhoton rồi drawTrace nối các vertex. Điểm Absorption màu hồng, điểm Escape màu xanh. Title đọc trạng thái cuối của preview. Chưa tally nhiều photon; đổi ID để xem đường khác không tạo một thống kê nào cả.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_57_checkpoint_4 --parallel 2
+.\build\Debug\project_57_checkpoint_4.exe
+```
+
+Giữ seed 42, muA=.4, chọn các ID để thấy cả hấp thụ và thoát. Không đòi đúng 30.1194% của mười photon phải thoát: tỷ lệ lý thuyết exp(−1.2)≈.301194 là giới hạn xác suất, không một quy tắc chia đều từng nhóm nhỏ.
+
+## Thử làm sai để hiểu đúng
+
+1. Ghi Absorbed trước khi kiểm flight.escaped. Chân không cũng có thể bị gán hấp thụ ở cạnh. Khôi phục nhánh thoát lên trước.
+2. Vừa lấy mẫu hấp thụ vừa nhân photon còn sống với Beer–Lambert. Đếm lại tổng đơn vị sẽ không còn đúng mô hình analog. Bỏ giảm trọng số; weighted transport là phương pháp khác cần thiết kế estimator riêng.
+
+## Tự kiểm tra kết quả
+
+MuA=0 cho mọi photon thoát, collisions=0, scatters=0. MuA>0 cho trace có Emission rồi Absorption/Escape. Hấp thụ có collisions 1, không tán xạ. Endpoint không vượt rectangle. Cùng seed/ID cho cùng trace và không sửa Settings đầu vào.
+
+## Bài tập mở rộng
+
+Tính tay xác suất thoát khi muA=.2,.4,.8 với L=3. Chưa kiểm bằng cách ép một photon phải đúng xác suất đó; đến Bài 06–07 ta mới có mẫu nhiều photon và cách đọc sai số.
+
+[Bài tiếp theo](/projects/photon-rain/05-tan-xa-va-gioi-han) — Cho photon tán xạ nhiều lần.
