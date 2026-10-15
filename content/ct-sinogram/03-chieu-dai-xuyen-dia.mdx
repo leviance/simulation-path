@@ -1,0 +1,87 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo chiều dài tia đi trong một đĩa
+
+## Vấn đề cần giải quyết
+
+Tia vàng có thể cắt phantom ở một đoạn dài, lướt sát mép hoặc hoàn toàn đi ngoài. Muốn tính suy giảm, ta cần chiều dài đoạn **nằm trong vật liệu**, không phải chiều dài source→detector.
+
+Vì phantom là các đĩa, ta tìm chiều dài này bằng hình học chính xác thay vì ray marching. Cách làm cũng tạo một mốc kiểm chứng tốt: nếu sinogram sai, ta có thể tách lỗi ở bước tính chord khỏi lỗi lưu hàng/góc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi S là nguồn, d là direction đã normalized, C là tâm đĩa và r là bán kính. Vector delta=C−S. Chiếu delta lên d được `along=dot(delta,d)`. Khoảng cách vuông góc từ C tới đường thẳng chứa tia có bình phương:
+
+$$h^2=\lVert C-S\rVert^2-\mathrm{along}^2.$$
+
+Nếu h² lớn hơn hoặc bằng r², tia đi ngoài hoặc tiếp tuyến: chiều dài bên trong bằng 0. Nếu cắt đĩa, nửa chord là căn(r²−h²), hai giao điểm có distance=along±halfChord.
+
+Nhưng hai giao điểm đó thuộc **đường thẳng vô hạn**. Ta còn phải clip với đoạn [0,maximum]. Nguồn ở trong đĩa cần bỏ phần giao điểm phía sau nguồn; detector nằm trong đĩa cần cắt chiều dài tại detector.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Chiếu tâm lên hướng tia
+
+```cpp title="include/geometry.hpp"
+    const Point delta = subtract(disk.centre, beam.origin);
+    const double along = dot(delta, beam.direction);
+    const double perpendicularSquared = std::max(0.0, dot(delta, delta) - along * along);
+    const double halfChordSquared = disk.radius * disk.radius - perpendicularSquared;
+    if (halfChordSquared <= 0) {
+        return 0;
+    }
+```
+
+max với 0 xử lý sai số làm tròn nhỏ của h². Không dùng nó để che direction sai norm: validateBeam kiểm finite, norm² gần 1, maximum trong (0,12]. chordLength là hàm hình học cấp thấp nhận đầu vào đã hợp lệ; từ Bài 04, measure sẽ gọi các bước validate trước khi dùng nó.
+
+### Bước 2 — Clip hai giao điểm
+
+```cpp title="include/geometry.hpp"
+    const double halfChord = std::sqrt(halfChordSquared);
+    const double entry = std::max(0.0, along - halfChord);
+    const double exit = std::min(beam.maximum, along + halfChord);
+    return std::max(0.0, exit - entry);
+```
+
+Đừng trả `2*halfChord` ngay. Con số đó chỉ đúng khi cả chord nằm trong đoạn đo. Nếu exit nhỏ hơn entry, giao của hai đoạn rỗng và kết quả phải bằng 0, không phải số âm.
+
+### Bước 3 — Đọc chiều dài trước khi đổi thành màu
+
+Main chọn beam từ row/column và in L0, chiều dài qua đĩa đầu tiên, ở title. Canvas đọc riêng chiều dài qua từng đĩa. Các chiều dài không bị đổi khi thay màu vật thể hoặc phóng cửa sổ.
+
+Tại checkpoint này, phantom mặc định vẫn là nền có hai insert. Các phím chọn preset/strength được thêm ở Bài 04. Muốn kiểm đĩa đơn bằng tay trước đó, dùng fixture dưới đây trong một chương trình test nhỏ hoặc đọc test hoàn chỉnh ở cuối module.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_56_checkpoint_3 --parallel 2
+.\build\Debug\project_56_checkpoint_3.exe
+```
+
+Bốn trường hợp tự tính được cho đĩa C=(0,0),r=1:
+
+| Đoạn tia | Chiều dài mong đợi |
+| --- | ---: |
+| S=(4,0), d=(-1,0), maximum=8 | 2 |
+| S=(0,0), d=(1,0), maximum=8 | 1 |
+| S=(4,0), d=(-1,0), maximum=3.5 | 0.5 |
+| S=(4,1), d=(-1,0), maximum=8 | 0 — tiếp tuyến |
+
+Đây là các fixture hình học, không nhất thiết đều là ray do scanner sinh. Chúng giúp kiểm hợp đồng finite segment độc lập với chuyển động máy quét.
+
+## Thử làm sai để hiểu đúng
+
+1. Trả thẳng 2*halfChord. Fixture nguồn bên trong cho 2 thay vì 1; fixture detector cắt sớm cũng sai. Khôi phục entry/exit.
+2. Nhân direction với 2 mà vẫn dùng công thức hiện tại. along và h² không còn ý nghĩa như phép chiếu trên vector đơn vị. Chạy qua validateBeam để thấy đầu vào bị từ chối, không chữa bằng một epsilon lớn.
+
+## Tự kiểm tra kết quả
+
+Miss/tangent có chiều dài 0, không NaN. Source-inside và finite clip đúng bảng. Chord của các ray do scanner tạo nằm trong [0,maximum]. Hai pixel đối xứng của đĩa ở tâm phải cho chiều dài gần bằng nhau; tia tâm liên tục không trùng pixel centre của detector chẵn.
+
+## Bài tập mở rộng
+
+Với ray song song trục x cách tâm h=0.6, tính chord đĩa r=1 bằng 2*căn(1−0.36)=1.6. Thêm test cho đoạn đủ dài và đoạn kết thúc trước giao điểm đầu tiên.
+
+[Bài tiếp theo](/projects/ct-sinogram/04-mot-hang-detector) — Từ chiều dài đến một hàng detector.

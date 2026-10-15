@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi số góc mà không nhầm với độ nét ảnh
+
+## Vấn đề cần giải quyết
+
+Một sinogram phóng to nhìn mượt hơn chưa chắc chứa nhiều thông tin đo hơn. Ta cần phân biệt ba thứ: số pixel detector, số góc thu nhận và kích thước ảnh trên màn hình.
+
+Bài này thêm lựa chọn 30/60/120 góc. Cả ba vẫn dùng 128 detector pixel; mọi phép đo tại cùng góc vật lý phải khớp nhau. Ta không thêm reconstruction để đánh giá chất lượng ảnh CT ở đây.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với detector cố định, thay views chỉ thay bước góc:
+
+| views | Bước góc | Góc cuối | Số ray cả lượt |
+| --- | ---: | ---: | ---: |
+| 30 | 12° | 348° | 3840 |
+| 60 | 6° | 354° | 7680 |
+| 120 | 3° | 357° | 15360 |
+
+Hai ảnh cùng cao 520 logical pixel vẫn có thể chỉ chứa 30 hoặc 120 hàng đo. Nearest phóng từng hàng, không thêm góc. Nội suy bilinear có thể làm màu mượt hơn nhưng cũng không tạo phép đo mới.
+
+Đĩa ở tâm là trường hợp kiểm đối xứng tốt, nhưng **không nhạy với thiếu góc**: mỗi hàng vốn giống nhau. Hãy dùng đĩa nhỏ lệch tâm khi quan sát [lấy mẫu góc](/glossary#ct-angular-sampling).
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Chỉ cho các độ phân giải nhỏ đã định
+
+validate chỉ chấp nhận views=30,60,120. Phím Q chuyển tuần tự, đưa row đang xem về 0; Canvas dùng select. Không cho input tùy ý hàng triệu góc rồi cấp mảng theo nó.
+
+```cpp title="include/controls.hpp"
+    if (key == SDLK_Q) {
+        controls.settings.views *= 2;
+        if (controls.settings.views > 120) {
+            controls.settings.views = 30;
+        }
+        controls.row = 0;
+    }
+```
+
+Đổi views thay Settings vật lý của lượt quét. Nhánh invalidation ở Bài 06 tạo Scan mới, dừng và xóa dữ liệu cũ; không resize vector rồi giữ một phần hàng có góc khác.
+
+### Bước 2 — Giữ texture và dữ liệu cùng chiều cao
+
+Main theo dõi textureViews. Khi số góc khác, hủy texture cũ và tạo texture 128×views mới; chọn nearest. SinogramRect giữ nguyên kích thước trên màn hình. Native dùng logical letterbox, Canvas dùng DPR cho bitmap màn hình; cả hai không tự thay detectorCount theo số pixel cửa sổ.
+
+Các biến này có vai trò khác nhau:
+
+- `scan.settings.views`: số góc thực sự đã chọn để đo.
+- `scan.acquired`: số hàng đã đo xong.
+- `textureViews`: số hàng mà texture hiện tại chứa được.
+- `controls.row`: hàng đang xem, có thể chưa đo.
+
+### Bước 3 — So cùng góc, không so cùng index
+
+Row j của lưới 30 góc ứng với row 4j của lưới 120. Ví dụ j=5 cho 60° ở cả hai, còn row 5 của 120 chỉ là 15°.
+
+```cpp title="include/scan.hpp"
+inline double samplingAngle(int coarseRow) {
+    return viewAngle(coarseRow * 4, 120) - viewAngle(coarseRow, 30);
+}
+```
+
+Hàm nhỏ này phục vụ kiểm quy ước lưới: kết quả phải gần 0 cho j=0..29. Tests còn so **giá trị projection** ở hai góc chung, không dừng ở việc hai angle bằng nhau. Giữ scene/strength giống nhau khi so.
+
+### Bước 4 — Quan sát phần thông tin chưa có
+
+Chọn đĩa nhỏ lệch tâm, 30 góc, quét hết và bật trace. Các hàng thưa cho thấy ta chỉ biết tín hiệu tại một số góc rời rạc. Đổi 120 góc sẽ xóa lượt cũ; quét lại có nhiều hàng hơn, không chỉ nhiều byte màu hơn.
+
+Đường trace liên tục là dự đoán hình học từ phantom đã biết. Nó không lấp dữ liệu chưa đo, cũng không chứng minh một thuật toán có thể khôi phục vật thể bất kỳ từ ít góc. Không suy một ngưỡng views tối thiểu phổ quát từ thí nghiệm nhỏ này.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 8"
+cmake --build build --config Debug --target project_56_checkpoint_8 --parallel 2
+.\build\Debug\project_56_checkpoint_8.exe
+```
+
+Ghi p của một pixel ở 60° với 30 góc (row 5). Chuyển 120, quét ít nhất tới row 20 rồi chọn cùng pixel ở row 20. Hai số gần bằng trong sai số số thực, dù hình sinogram cao/dày khác nhau. Chọn hàng chưa đo chỉ cho preview, phải đọc stored riêng.
+
+## Thử làm sai để hiểu đúng
+
+1. So row 5 của cả hai lưới và gọi chênh lệch là sai số độ phân giải. Chúng thuộc hai góc khác nhau. Khôi phục mapping j→4j.
+2. Giữ nguyên values khi views đổi. Row cũ bị gán nhãn góc mới, khiến dữ liệu sai mà ảnh vẫn có vẻ hợp lý. Tạo lượt mới và quét lại.
+
+## Tự kiểm tra kết quả
+
+30/60/120 tạo đúng 3840/7680/15360 ô. Bước góc 12°/6°/3°, không hàng 360°. samplingAngle gần 0 tại mọi hàng coarse. Projection của các góc chung khớp; display range/resize không đổi số ray. Thiếu góc không được “sửa” bằng smoothing màu.
+
+## Bài tập mở rộng
+
+Ghi lại p của một pixel ở 0°,60°,120° ở cả ba lưới. Tạo bảng so bằng số thực, không so screenshot. Chỉ sau khi phép đo khớp mới nghiên cứu nội suy góc hoặc reconstruction trong một project riêng.
+
+[Bài tiếp theo](/projects/ct-sinogram/09-kiem-chung-va-hoan-thien) — Kiểm máy CT đồ chơi và chạy bản hoàn chỉnh.

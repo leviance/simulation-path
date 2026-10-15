@@ -89,5 +89,5 @@ source-template/tests/README là authored inputs; starter/checkpoints/final/CMak
 
 Tham khảo [PBRT Transmittance](https://www.pbr-book.org/4ed/Volume_Scattering/Transmittance), [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture), [NIST XCOM](https://physics.nist.gov/PhysRefData/Xcom/Text/intro.html).
 
-Tiếp theo: Project 56 — Máy CT đồ chơi, hiện Sắp ra mắt.
+Tiếp theo: Project 56 — Máy CT đồ chơi, quay nguồn và detector để dựng sinogram theo lát cắt 2D.
 

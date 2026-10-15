@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Theo dõi vệt của một điểm lệch tâm
+
+## Vấn đề cần giải quyết
+
+Với đĩa ở tâm, các hàng sinogram giống nhau. Chuyển sang đĩa nhỏ lệch tâm, vùng có tín hiệu dịch qua lại theo góc. Vì sao nó cong, và vì sao không nên gọi ngay đó là “đường sin của điểm”?
+
+Tên sinogram thường gắn với ví dụ tia song song. Máy của ta lại có nguồn điểm hữu hạn và detector phẳng: có phép chiếu phối cảnh. Bài này tự suy ra vị trí detector của một điểm, rồi dùng Canvas đối chiếu thay vì học thuộc hình dạng đường cong.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ điểm P đứng yên trong XY. Trong cơ sở đang quay, tọa độ của P là:
+
+$$p_r=P\cdot r,\qquad p_t=P\cdot t.$$
+
+Nguồn S có tọa độ (4,0); detector nằm trên đường radial=−4. Trên đường đi từ S qua P, thành phần radial phải đi từ 4 xuống −4, tức thay đổi −8. Từ S tới P nó chỉ thay đổi p_r−4. Vì vậy, hệ số kéo dài từ đoạn SP tới detector là 8/(4−p_r). Offset trên detector:
+
+$$s(\theta)=\frac{8p_t}{4-p_r}.$$
+
+Đây là phép suy ra cho đúng hình học của project. [ASTRA định nghĩa fanflat bằng nguồn điểm, tâm detector và hướng pixel](https://astra-toolbox.com/docs/geom2d.html). Với [parallel-beam/Radon](https://scikit-image.org/docs/stable/auto_examples/transform/plot_radon_transform.html), phép chiếu có hình thức khác; không thay mô hình rồi giữ nguyên công thức.
+
+Do p_r thay đổi theo góc, mẫu số không phải hằng số. Vệt fan-beam **không phải đường sin thuần**. Phantom bị giới hạn trong bán kính 1.5 nên 4−p_r luôn dương, không có điểm nằm sau nguồn.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Đổi cơ sở của điểm, không xoay lại phantom
+
+```cpp title="include/geometry.hpp"
+    const Point radial{std::cos(angle), std::sin(angle)};
+    const Point tangent{-std::sin(angle), std::cos(angle)};
+    const double radialDistance = dot(point, radial);
+    const double tangentDistance = dot(point, tangent);
+    return (sourceRadius + detectorRadius) * tangentDistance / (sourceRadius - radialDistance);
+```
+
+Hàm pointOffset kiểm angle/point finite và point nằm trong vùng được hỗ trợ. Không gọi screen trong phép chiếu. Trong sơ đồ, P không di chuyển; chỉ tọa độ của nó trong cơ sở quay thay đổi.
+
+### Bước 2 — Đổi offset thành cột hiển thị
+
+Detector offset chạy từ −4 đến +4, nên u=s/8+0.5. Tọa độ cột liên tục là 128*u−0.5 nếu muốn so với index của pixel centre; không làm tròn s trước phép đổi này.
+
+drawTrace vẽ marker theo u trên mỗi hàng sinogram. Nút T trong SDL và checkbox Vệt điểm trong Canvas bật/tắt đường dự đoán. Nó không ghi đè scan.values hoặc làm acquired tăng.
+
+Trong controls.hpp, phím T chỉ đổi cờ hiển thị:
+
+```cpp title="include/controls.hpp"
+    if (key == SDLK_T) {
+        controls.trace = !controls.trace;
+    }
+```
+
+Ở nhánh vẽ của main, chỉ gọi drawTrace nếu trace=true. Không gọi acquireOne trong nhánh này: việc bật đường dự đoán và việc đo thêm dữ liệu là hai thao tác khác nhau.
+
+### Bước 3 — Phân biệt điểm lý tưởng với đĩa hữu hạn
+
+Chọn phantom **Đĩa nhỏ lệch tâm**, rồi quét. Tâm đĩa là `(0.65,0.3)`, đúng điểm mà đường hồng theo dõi. Một điểm toán học không có bề dày nên không tự tạo một phép đo hấp thụ hữu hạn như đĩa. Đĩa radius=.25 tạo **dải** tín hiệu; đường hồng chỉ đánh dấu ray đi qua tâm.
+
+Không bắt buộc marker phải trùng pixel sáng nhất. Với chùm tia phân kỳ, ray gần tâm nhất theo khoảng cách vuông góc không luôn đi đúng qua tâm; lấy mẫu hữu hạn còn tạo sai lệch giữa marker liên tục và pixel centre.
+
+Nếu chọn phantom nền và hai insert, đường hồng vẫn theo P cố định trên sơ đồ, dù P không phải tâm của một đĩa trong preset đó. Hãy dùng preset đĩa lệch tâm cho thí nghiệm chính.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_56_checkpoint_7 --parallel 2
+.\build\Debug\project_56_checkpoint_7.exe
+```
+
+Chọn đĩa lệch tâm bằng P, Space quét rồi T bật trace. Ba mốc tự tính cho P=(.65,.3):
+
+| Góc | p_r | p_t | Offset s |
+| --- | ---: | ---: | ---: |
+| 0° | .65 | .3 | .71641791 |
+| 90° | .3 | −.65 | −1.40540541 |
+| 180° | −.65 | −.3 | −.51612903 |
+
+Ở 0° và 180°, offset không đối nhau. Đây cũng là lý do không áp điều kiện “hàng θ+π bằng hàng θ đảo cột” của parallel-beam lên fan-beam này.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ p_r ở mẫu số, dùng s=2*p_t. Vệt trở thành đường sin nhưng lệch khỏi các mốc trong bảng và ray không còn đi qua P. Khôi phục phép chiếu phối cảnh.
+2. Dùng world x làm p_t ở mọi góc. Vệt đứng yên hoặc đổi sai pha. Kiểm lại hai phép dot với basis đang quay.
+
+## Tự kiểm tra kết quả
+
+P=(0,0) luôn cho s=0. Với P lệch tâm, đặt u=s/8+.5 vào detectorRay: khoảng cách vuông góc từ P đến đường tia gần 0 và P nằm trong đoạn source→detector. Marker chỉ đổi overlay; dữ liệu p và acquired không đổi. Không dùng đối xứng nửa vòng sai hình học làm assertion.
+
+## Bài tập mở rộng
+
+Tự chọn một P khác trong bán kính 1.5, tính ba mốc rồi thay điểm của trace và marker sơ đồ cùng lúc. Ghi rõ đây là vị trí điểm, không intensity và không kết quả reconstruction.
+
+[Bài tiếp theo](/projects/ct-sinogram/08-lay-mau-goc-va-do-phan-giai) — Đổi số góc mà không nhầm với độ nét ảnh.

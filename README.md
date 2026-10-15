@@ -2,7 +2,7 @@
 
 Simulation Path là lộ trình học C++20, SDL3, đồ họa máy tính và mô phỏng số thông qua 78 mini project có thể chạy được. Thay vì học công thức hoặc API riêng lẻ, người học dùng chúng để lần lượt tạo framebuffer, renderer 3D trên CPU, mô phỏng vật lý, hệ hạt, chất lỏng, volume renderer, thế giới voxel và bộ UI của riêng mình.
 
-Project 01–55 hiện đã có 426 bài tiếng Việt, 55 Canvas lab tương tác và 55 gói source độc lập. Project 56–78 đã có vị trí cùng dependency trong roadmap nhưng vẫn mang trạng thái **Sắp ra mắt**; chúng chưa được trình bày như tutorial hoàn chỉnh.
+Project 01–56 hiện đã có 435 bài tiếng Việt, 56 Canvas lab tương tác và 56 gói source độc lập. Project 57–78 đã có vị trí cùng dependency trong roadmap nhưng vẫn mang trạng thái **Sắp ra mắt**; chúng chưa được trình bày như tutorial hoàn chỉnh.
 
 ## Vì sao có lộ trình này?
 
@@ -161,7 +161,7 @@ cmake --build examples/project-01-hello-pixels/build --config Debug
 ctest --test-dir examples/project-01-hello-pixels/build -C Debug --output-on-failure
 ```
 
-Build mặc định tạo target final. `BUILD_CHECKPOINTS=ON` bổ sung starter và sáu target checkpoint. Mỗi project khóa SDL 3.4.8 bằng URL cùng SHA-256 và link qua `SDL3::SDL3`.
+Build mặc định tạo target final. `BUILD_CHECKPOINTS=ON` bổ sung starter và các target checkpoint, tương ứng với số bài học của từng project. Mỗi project khóa SDL 3.4.8 bằng URL cùng SHA-256 và link qua `SDL3::SDL3`.
 
 Lệnh sinh checkpoint chỉ cần chạy ở repository của website, không cần mở server. Nếu tải ZIP của một project từ trang Downloads, ZIP đã có đủ CMake, starter, checkpoint và final; bạn không cần Node.js hay npm để build gói đó.
 

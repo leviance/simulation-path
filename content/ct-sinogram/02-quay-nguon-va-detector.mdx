@@ -1,0 +1,87 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Quay nguồn và detector quanh vật thể
+
+## Vấn đề cần giải quyết
+
+Ta đã nhìn thấy phantom. Bây giờ cần một nguồn ở bên ngoài và một dãy detector ở phía đối diện. Nếu chỉ xoay vị trí nguồn mà quên xoay hướng dãy detector, máy sẽ thay đổi hình học giữa các góc đo.
+
+Checkpoint 2 thêm cụm source–detector cùng quay, tia vàng đi tới pixel được chọn và bàn phím để kiểm góc. Chưa tính hấp thụ: các đường tia ở bước này chỉ là hình học.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ở góc θ, dùng hai vector đơn vị vuông góc:
+
+$$r=(\cos\theta,\sin\theta),\qquad t=(-\sin\theta,\cos\theta).$$
+
+`radial` hướng từ gốc tới nguồn; `tangent` chỉ chiều tăng pixel detector. Nguồn S=4r, tâm detector D=−4r. Detector rộng 8 world units; vị trí liên tục u trong [0,1] có offset s=8(u−0.5), endpoint Q=D+st.
+
+Ở θ=0, nguồn nằm bên phải `(4,0)`, detector ở bên trái và pixel tăng từ dưới lên. Ở θ=π/2, nguồn lên trên `(0,4)`, detector xuống dưới và pixel tăng sang trái. Đây là quy ước riêng của project, không mặc định trùng quy ước góc của một thư viện CT.
+
+Mô hình này là [fan-beam với detector phẳng](/glossary#ct-fan-beam): các tia chung nguồn nhưng không song song. [ASTRA mô tả riêng các hình học parallel và fanflat](https://astra-toolbox.com/docs/geom2d.html); ta dùng ý tưởng source/detector/basis, không tích hợp thư viện đó vào source.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo vị trí nguồn và pixel
+
+```cpp title="include/geometry.hpp"
+    const Point radial{std::cos(angle), std::sin(angle)};
+    const Point tangent{-std::sin(angle), std::cos(angle)};
+    const Point source = multiply(radial, sourceRadius);
+    const Point detectorCentre = multiply(radial, -detectorRadius);
+    const double offset = (u - 0.5) * detectorWidth;
+    const Point endpoint = add(detectorCentre, multiply(tangent, offset));
+```
+
+Đoạn này nằm trong detectorRay. `multiply`, `add`, `subtract` là các hàm vector hai thành phần trong model.hpp; không có phép biến đổi màn hình trong đó. Kiểm u hữu hạn và trong [0,1] trước khi dựng endpoint.
+
+### Bước 2 — Giữ cả hướng lẫn chiều dài
+
+```cpp title="include/geometry.hpp"
+    const Point delta = subtract(endpoint, source);
+    const double maximum = length(delta);
+    return {source, multiply(delta, 1 / maximum), maximum};
+```
+
+Beam giữ origin, direction normalized và maximum. Điểm dọc tia là origin+distance*direction; distance có cùng đơn vị với bán kính phantom. **maximum không được đặt bằng 1 sau khi chuẩn hóa**. Tia giữa dài 8; tia biên dài căn(80), khoảng 8.94427.
+
+Hàm at dựng lại điểm theo distance. Với distance=maximum, kết quả phải quay về đúng endpoint detector. Ta dùng đoạn hữu hạn này ở bài sau, không dùng ray vô hạn.
+
+### Bước 3 — Lấy mẫu ở tâm pixel
+
+```cpp title="include/view.hpp"
+    const auto selected = detectorRay(angle, (column + 0.5) / detectorCount);
+    line(renderer, selected.origin, at(selected, selected.maximum));
+```
+
+Detector có 128 pixel. Pixel 0 dùng u=0.5/128, pixel 127 dùng u=127.5/128. u=0 và u=1 là hai mép vật lý của dãy, chỉ để vẽ khung. Vì số pixel chẵn, **không pixel nào nằm đúng u=0.5**; tia tâm liên tục vẫn hữu ích để tính tay/test.
+
+### Bước 4 — Nối thao tác bàn phím với hình vẽ
+
+controls.hpp xử lý Left/Right đổi column, Up/Down đổi row. Lúc này dùng 120 vị trí góc, angle=2π*row/120. Các phím giữ index trong khoảng hợp lệ; không dùng số pixel làm góc. Main dựng sơ đồ từ angle và column sau khi đã clear nền, rồi present.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_56_checkpoint_2 --parallel 2
+.\build\Debug\project_56_checkpoint_2.exe
+```
+
+Trong Canvas, đặt thanh góc ở row 0 rồi row 30 để xem 0° và 90°. Trong SDL, dùng mũi tên; title có row/column. Phantom phải đứng yên. Tia vàng đổi theo pixel, còn toàn bộ cụm nguồn/detector đổi theo góc.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ tangent=(0,1) khi quay. Ở 0° khó thấy sai, nhưng 90° dãy detector không còn vuông góc với radial. Khôi phục tangent quay cùng radial.
+2. Bỏ `+0.5`. Hai mép và tâm lấy mẫu không còn đối xứng; sau này hàng detector của phantom tròn có thể lệch một pixel. So column 0 và 127 rồi sửa lại.
+
+## Tự kiểm tra kết quả
+
+Tích dot(radial,tangent) gần 0; norm của mỗi vector gần 1. Tia tâm ở 0° đi từ `(4,0)` tới `(-4,0)`. Tia biên tới đúng mép detector; at(beam,maximum) khớp endpoint. Resize không làm đổi geometry. Chưa có số đo p/T và không tự tạo sinogram.
+
+## Bài tập mở rộng
+
+Tính tay endpoint ở θ=π/2,u=1: `(-4,-4)`. Kiểm lại bằng detectorRay. Dùng nghiệm này để phát hiện lỗi đảo hướng tangent mà không cần nhìn ảnh.
+
+[Bài tiếp theo](/projects/ct-sinogram/03-chieu-dai-xuyen-dia) — Đo chiều dài tia đi trong một đĩa.

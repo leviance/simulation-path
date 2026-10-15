@@ -1,0 +1,99 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Quét từng phần và giữ dữ liệu nhất quán
+
+## Vấn đề cần giải quyết
+
+Đo từng hàng giúp hiểu sinogram nhưng hơi bất tiện khi muốn quét cả vòng. Cách đơn giản nhất là vòng lặp đo hết 120 góc; tuy nhiên nếu sau này forward model nặng hơn, cách này giữ main thread quá lâu và làm nút dừng mất tác dụng.
+
+Ta thêm quét tự động với lượng công việc nhỏ mỗi frame. Đồng thời giải quyết một lỗi quan trọng hơn màu sắc: không được để nửa sinogram thuộc phantom cũ, nửa còn lại thuộc phantom mới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một [lượt quét nhất quán](/glossary#ct-acquisition) giữ cố định scene, strength và lưới góc. Thông số nào làm phép đo thay đổi thì phải tạo scan mới. Thông số chỉ phục vụ xem dữ liệu thì không.
+
+| Thao tác | Xử lý |
+| --- | --- |
+| Đổi phantom, strength, số góc | Dừng; tạo Scan mới, values toàn NaN, acquired=0 |
+| Reset | Như trên và khôi phục controls mặc định |
+| Chọn ô, đổi góc đang xem | Dừng để xem; không đổi dữ liệu đo |
+| Đổi display range hoặc invert | Đổi màu, không đo lại và không xóa lượt quét |
+| Blur/minimize/hidden | Dừng, hủy capture; không tự tiếp tục khi quay lại |
+
+Mỗi frame xử lý **tối đa hai hàng**, tổng 256 ray. Không tính “số hàng còn nợ” theo dt sau khi máy bị khựng; máy quét này minh họa dữ liệu, không cần chạy theo thời gian vật lý thật.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt giới hạn ngay trong hàm thu nhận
+
+```cpp title="include/scan.hpp"
+inline int advance(Scan& scan, int budget) {
+    if (budget < 0 || budget > 2) {
+        throw std::invalid_argument("At most two views per frame");
+    }
+    int completed = 0;
+    while (completed < budget && acquireOne(scan)) {
+        ++completed;
+    }
+    return completed;
+}
+```
+
+Budget là số hàng, không số millisecond. Giới hạn theo lượng công việc dễ kiểm chứng hơn một lời hứa “luôn dưới 8ms” phụ thuộc máy. Scene cũng bị giới hạn ba đĩa. Nếu đổi sang model tốn hơn, cần đo thời gian thực tế và giảm batch; hai hàng không phải bảo đảm tuyệt đối về độ trễ.
+
+### Bước 2 — Đưa pause vào vòng lặp ứng dụng
+
+```cpp title="src/main.cpp"
+            if (!controls.paused) {
+                const int completed = ct::advance(scan, 2);
+                if (completed > 0) {
+                    controls.row = scan.acquired - 1;
+                    dirty = true;
+                }
+                if (scan.acquired == scan.settings.views) {
+                    controls.paused = true;
+                }
+            }
+```
+
+Space đổi paused, bỏ qua key repeat. Khi hoàn tất, paused trở lại true; bấm tiếp không tự ghi đè dữ liệu. N vẫn đo đúng một hàng khi đang dừng. Main tiếp tục poll event và present giữa các batch, không có vòng lặp `while chưa đủ cả lượt` trong một frame.
+
+N phải dừng chế độ tự quét trước khi đo một hàng. Main còn ưu tiên lệnh step ngay trước bước thu nhận, kể cả khi N và Space cùng tới trong một frame; không được đo một hàng thủ công rồi cộng thêm hai hàng tự động. Các phím mũi tên cũng dừng để hàng người dùng đang xem không bị bước quét kế tiếp thay ngay lập tức.
+
+### Bước 3 — Tạo dữ liệu mới khi vật lý đổi
+
+Sau keyDown, so controls.settings trước/sau. Nếu khác hoặc người dùng nhấn R, gán scan=makeScan(settings), đặt paused=true và bỏ lệnh step còn treo. Invert/display range không nằm trong Settings vật lý nên không kích hoạt nhánh này.
+
+Scan chứa bản sao scene/settings; các hàm acquire không đọc nhầm giao diện mới. Đừng chỉ xóa texture: nếu values cũ còn nguyên, một lần đổi palette có thể làm ảnh cũ hiện trở lại.
+
+### Bước 4 — Hủy công việc khi Canvas không còn hoạt động
+
+Canvas dùng requestAnimationFrame, mỗi callback advance(scan,2) rồi mới lên lịch callback kế. Cleanup cancel frame, stop hạ cờ running ngay và hủy pointer capture. Blur, document.hidden và prefers-reduced-motion chuyển sang reduce đều gọi stop. Bỏ reduced-motion không tự resume.
+
+Reduced-motion vẫn cho N hoặc nút Đo một hàng: người học kiểm mô hình được mà không phải xem animation. Resize chỉ vẽ lại, không cấp sinogram lớn hơn.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_56_checkpoint_6 --parallel 2
+.\build\Debug\project_56_checkpoint_6.exe
+```
+
+Đo vài hàng, dừng và ghi p của một ô. Đổi palette/range: p giữ nguyên. Đổi strength: acquired về 0 và ô cũ thành chưa đo. Quét lại rồi so với phép tính ở strength mới, không so với ảnh cũ còn trên màn hình.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ makeScan khi đổi phantom giữa lượt. Sinogram có một ranh giới ngang giả, không liên quan vật thể nào. Khôi phục reset dữ liệu và quét lại từ đầu.
+2. Cho budget=views trong mỗi frame. advance phải từ chối thay vì làm theo. Giữ giới hạn tại lớp tính toán, không chỉ tin caller luôn dùng số nhỏ.
+
+## Tự kiểm tra kết quả
+
+advance với budget 0 không đo; budget 2 thêm tối đa hai hàng, kể cả khi chỉ còn một. Gọi khi đủ hàng trả 0. Pause/blur không tiến acquired; resume tiếp tục ở hàng kế, không lặp hàng đã đo. Reset và đổi vật lý không còn cell finite từ lượt trước.
+
+## Bài tập mở rộng
+
+Thêm bộ đếm tổng ray của lượt quét: acquired*128. Dùng nó để kiểm việc đổi palette không làm tăng công việc đo; không dùng FPS Canvas để kết luận hiệu năng native.
+
+[Bài tiếp theo](/projects/ct-sinogram/07-vet-cua-diem-lech-tam) — Theo dõi vệt của một điểm lệch tâm.

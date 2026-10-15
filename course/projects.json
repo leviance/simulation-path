@@ -383,5 +383,12 @@
     "sourceDirectory": "project-55-xray-detector",
     "checkpointCount": 8,
     "demoId": "xray-detector"
+  },
+  {
+    "id": "56",
+    "slug": "ct-sinogram",
+    "sourceDirectory": "project-56-ct-sinogram",
+    "checkpointCount": 9,
+    "demoId": "ct-sinogram"
   }
 ]

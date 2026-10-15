@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ chiều dài đến một hàng detector
+
+## Vấn đề cần giải quyết
+
+Biết tia đi trong vật liệu bao xa chưa đủ để tạo phép đo. Cùng một chiều dài, mu lớn hơn phải làm tín hiệu truyền qua nhỏ hơn. Ta lấy lại mô hình mono của Project 55, áp dụng cho từng ray của dãy detector.
+
+Kết thúc bài, phía dưới sơ đồ máy quét có một dải 128 pixel. Nó là **projection ở một góc**, chưa phải sinogram nhiều góc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi đĩa đóng góp optical depth bằng strength*mu*L. Tất cả đóng góp cộng lại:
+
+$$\tau=\sum_i k\mu_iL_i,\qquad T=I/I_0=e^{-\tau},\qquad p=-\ln T.$$
+
+`strength` là hệ số k chung để thử mức suy giảm, không công suất nguồn. Ta giả sử I0 lý tưởng đã chuẩn hóa, không photon noise hoặc đáp ứng detector. Trong mô hình mono này p bằng tau trong sai số số thực. Không mang công thức phổ hai năng lượng ở Project 55 vào rồi tiếp tục khẳng định p tuyến tính theo độ dày.
+
+Preset nền có hai insert dùng **cộng mu**: ở vùng chồng lên nền, insert thêm mu của nó, không thay thế mu nền. Hình phantom vẽ theo thứ tự không có quyền quyết định kết quả đo.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ số đo dưới dạng số thực
+
+```cpp title="include/projection.hpp"
+struct Measurement {
+    double tau = 0;
+    double ratio = 1;
+    double projection = 0;
+};
+using Projection = std::array<Measurement, detectorCount>;
+```
+
+`ratio` dùng để vẽ dải detector ở bài này. `projection` là p sẽ lưu trong sinogram. Không đọc lại byte màu để suy p: nhiều giá trị khác nhau đã có thể bị làm tròn về cùng một mức xám.
+
+### Bước 2 — Tính một phép đo
+
+```cpp title="include/projection.hpp"
+    Measurement result;
+    for (const auto& disk : scene) {
+        result.tau += strength * disk.mu * chordLength(beam, disk);
+    }
+    result.ratio = std::exp(-result.tau);
+    result.projection = -std::log(result.ratio);
+    return result;
+```
+
+Phần đầu của measure gọi validateBeam và validateScene, rồi kiểm strength hữu hạn trong [0,2]. Scene chỉ có 1–3 đĩa, mu trong [0,2], mỗi đĩa nằm hoàn toàn trong bán kính 1.5. Bound bảo thủ tau≤36 khiến exp(-tau) còn dương, nên đoạn này không cần floor để né log(0). Nếu mở rộng thông số, phải xét lại bound; không cho phép input tùy ý rồi hy vọng log luôn hợp lệ.
+
+Vì đang tạo dữ liệu lý tưởng, ta có thể lưu tau trực tiếp làm p để giảm sai số exp/log. Ở đây vẫn giữ cả ba để người học nhìn được quan hệ với tín hiệu detector; tests kiểm chúng gần bằng nhau.
+
+### Bước 3 — Duyệt một hàng detector
+
+```cpp title="include/projection.hpp"
+inline Projection project(double angle, const Scene& scene, double strength) {
+    Projection row;
+    for (int column = 0; column < detectorCount; ++column) {
+        const double u = (column + 0.5) / detectorCount;
+        row[column] = measure(detectorRay(angle, u), scene, strength);
+    }
+    return row;
+}
+```
+
+Đây là lấy một tia tại tâm mỗi pixel, chưa tích phân theo bề rộng pixel detector. Độ phân giải luôn 128 dù cửa sổ to hay nhỏ.
+
+drawProjection đổi ratio thành gray=round(255*T), vẽ các rectangle kề nhau. Không khí cho T=1 nên trắng; vật liệu làm T nhỏ đi nên tối hơn. Khi vẽ sinogram p ở bài sau, quy ước mặc định ngược lại: p=0 đen, p lớn sáng. Đừng dùng trực giác màu để thay định nghĩa đại lượng.
+
+### Bước 4 — Thử các phantom và strength
+
+Trong SDL, P chuyển đĩa ở tâm → đĩa lệch tâm → nền cùng insert. W/S tăng/giảm strength, có clamp [0,2]. Trong Canvas dùng select/slider tương ứng. Khi người học đổi góc, main cập nhật preview; không tính lại 128 ray mỗi frame nếu đầu vào không đổi.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_56_checkpoint_4 --parallel 2
+.\build\Debug\project_56_checkpoint_4.exe
+```
+
+Chọn đĩa ở tâm, radius=1,mu=.5,strength=1. Tia tâm liên tục có L=2, tau=1, T≈0.36787944,p=1. Pixel 63 và 64 lệch tâm một chút nên chỉ gần, không chính xác bằng mốc này. Title/Canvas đọc p và T riêng để so phép tính.
+
+## Thử làm sai để hiểu đúng
+
+1. Cộng T của từng đĩa thay vì cộng tau. Với hai đĩa, tổng có thể lớn hơn 1. Khôi phục cộng optical depth rồi exp một lần.
+2. Thay vòng cộng bằng chỉ lấy đĩa cuối ray chạm. Đảo thứ tự scene sẽ đổi kết quả dù vật thể không đổi. Khôi phục chính sách cộng mu; thay thế vật liệu là một mô hình khác, cần xử lý vùng giao riêng.
+
+## Tự kiểm tra kết quả
+
+Strength=0 cho T=1,p=0 ở mọi pixel. T nằm trong (0,1], p không âm ngoài sai số làm tròn rất nhỏ. Đĩa ở tâm tạo hàng đối xứng. Đổi thứ tự scene không đổi phép đo; nhân đôi một đĩa làm tau gấp đôi và T thành bình phương, trong giới hạn scene hợp lệ.
+
+## Bài tập mở rộng
+
+In đóng góp k*mu*L của từng đĩa cho pixel đang chọn. Tự cộng chúng và so với tau tổng. Không làm tròn từng đóng góp trước khi cộng.
+
+[Bài tiếp theo](/projects/ct-sinogram/05-ghep-thanh-sinogram) — Ghép các góc đo thành sinogram.

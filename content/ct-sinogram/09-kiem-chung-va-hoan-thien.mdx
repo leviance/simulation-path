@@ -1,0 +1,122 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm máy CT đồ chơi và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Sinogram có dải cong đẹp chưa đủ để kết luận đúng. Lỗi đảo góc, lệch nửa pixel hoặc trộn dữ liệu cũ vẫn có thể tạo một ảnh dễ tin. Ta kết thúc bằng các phép kiểm có nghiệm riêng và build toàn bộ ứng dụng, không chỉ chạy một hàm lẻ.
+
+Mã đầy đủ ở cuối trang gồm CMake, headers, main và tests; ZIP ở trang tổng quan chạy độc lập với website. Đây là sản phẩm của chín bước vừa học, không phải một main.cpp khác không liên quan các checkpoint.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn phantom một đĩa C=(0,0),r=1,mu=.5,strength=1. Gọi s là offset trên detector. Khoảng cách từ gốc tới đường thẳng nguồn→pixel:
+
+$$h=\frac{4|s|}{\sqrt{8^2+s^2}}.$$
+
+Với h nhỏ hơn 1, chord bằng 2*căn(1−h²), nên p=.5*chord=căn(1−h²); ngoài đĩa p=0. Công thức này dùng offset detector và khoảng cách đường thẳng, **không gọi lại chordLength để sinh expected**. Nó là oracle độc lập cho toàn hàng.
+
+Do đĩa ở tâm bất biến khi quay, các hàng sinogram phải giống nhau. Với đĩa lệch tâm, dùng phép kiểm ray đi qua pointOffset ở Bài 07; không dùng đối xứng θ+π đảo cột sai cho fan-beam.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-9" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo expected từ một công thức khác
+
+```cpp title="include/audit.hpp"
+            const double s = ((column + 0.5) / detectorCount - 0.5) * detectorWidth;
+            const double distance = sourceRadius * std::abs(s) / std::hypot(sourceRadius + detectorRadius, s);
+            double expected = 0;
+            if (distance < 1) {
+                expected = std::sqrt(1 - distance * distance);
+            }
+            const auto actual = measure(detectorRay(angle, (column + 0.5) / detectorCount), disk, 1);
+            maximumError = std::max(maximumError, std::abs(actual.projection - expected));
+```
+
+Audit kiểm 30 góc×128 tia, báo maximumError và fail nếu lớn hơn 1e−10. Đây là fixture nhỏ, có số phép tính cố định. Không tự chạy benchmark lặp lại đến khi “đủ ổn định”. V trong SDL hoặc nút Kiểm phantom tròn trong Canvas chạy audit mà không sửa scan hiện tại.
+
+### Bước 2 — Kiểm cả dữ liệu và hợp đồng đầu vào
+
+tests/tests.cpp dùng check trả lỗi và EXIT_FAILURE, không dùng assert dễ biến mất khi NDEBUG. Ngoài oracle, cần kiểm:
+
+- Nguồn/endpoint ở 0°/90°, direction normalized; tia tâm liên tục có L=2, p=1.
+- Miss/tangent, nguồn trong đĩa và detector cắt sớm.
+- Strength=0, thứ tự đĩa, cộng mu và tính bất biến của scene.
+- NaN trước đo, acquired tăng sau hàng hoàn chỉnh, quét đủ rồi gọi thêm không sửa dữ liệu.
+- Budget 0/1/2, budget lớn hoặc thông số không finite bị từ chối.
+- Các góc chung 30/120 và ray qua điểm của trace.
+
+Không gọi audit rồi chỉ so với chính giá trị audit trả về. Test phải có expected độc lập hoặc invariant đã giải thích được.
+
+### Bước 3 — Nối audit vào chương trình đang chạy
+
+Thêm nhánh V trong phần xử lý key-down không repeat của main:
+
+```cpp title="src/main.cpp"
+                    if (event.key.key == SDLK_V) {
+                        const double maximumError = ct::audit();
+                        std::cout << "Audit PASS | max error " << maximumError << '\n';
+                    }
+```
+
+audit tự tạo phantom hình tròn để kiểm, không dùng phantom hiện tại làm expected và không sửa scan đang xem. Nếu vượt tolerance, hàm ném exception tới nhánh lỗi của main; không tiếp tục in kết luận PASS.
+
+Pure tests dùng cùng nguyên tắc fail rõ ràng. Hàm check trong tests/tests.cpp ghi từng nhãn lỗi và tăng failures:
+
+```cpp title="tests/tests.cpp"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << label << '\n';
+    }
+}
+```
+
+Cuối main của test, failures khác 0 trả EXIT_FAILURE. Vì đây là nhánh if thông thường, build Release không loại mất kiểm tra. Toàn bộ fixtures và nhánh kết thúc nằm trong source cuối trang.
+
+## Ghép các phần lại
+
+```bash title="Terminal — build và CTest"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Debug\project_56_final.exe
+```
+
+Visual Studio là multi-config; single-config generator dùng CMAKE_BUILD_TYPE lúc configure và executable nằm trực tiếp trong build. Final được build mặc định. BUILD_CHECKPOINTS bật starter và project_56_checkpoint_1…9; không sửa snapshots mà sửa source-template trong repository website rồi chạy generator.
+
+Pure CTest không SDL_Init/window. Smoke SDL kiểm pipeline thật bằng hidden window và một frame, cần watchdog ngoài process:
+
+```powershell title="PowerShell — smoke tối đa 30 giây"
+$smoke = Start-Process -FilePath ".\build\Debug\project_56_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru -RedirectStandardOutput "smoke.log" -RedirectStandardError "smoke-error.log"
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "SDL smoke vượt 30 giây; dừng kiểm tra."
+}
+Get-Content "smoke.log"
+Get-Content "smoke-error.log"
+if ($smoke.ExitCode -ne 0) { throw "SDL smoke thất bại." }
+```
+
+Không tự lặp khi timeout. Deadline này không bảo đảm preempt công việc đã gửi xuống graphics driver. Build/test automation cần outer timeout và cleanup process tree; không chạy suite không giới hạn khi máy đã có dấu hiệu quá tải.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ nửa pixel trong detectorRay nhưng giữ oracle lấy pixel centre. Audit toàn hàng phải phát hiện khác biệt. Hoàn nguyên trước khi chạy final.
+2. Thay hàng mới bằng T thay vì p. Oracle hình tròn và phép so project-row phải fail, dù ảnh vẫn có dải cong. Giữ rõ đại lượng lưu trong values.
+
+## Tự kiểm tra kết quả
+
+Tất cả target build Debug/Release, pure CTest pass và audit error≤1e−10. Kiểm desktop riêng: chọn ô bằng mouse/keyboard, bỏ letterbox, drag ra ngoài rồi thả, resize/DPI, pause/blur/reset, thay views và tải ZIP. Smoke hoặc kiểm toán học không thay thế những thao tác này.
+
+Sản phẩm là **forward projection mono lý tưởng của lát cắt 2D**. Không reconstruction, HU/DICOM, hiệu chuẩn/liều, noise, scatter, phổ đa năng lượng hay thiết bị phát tia. Không suy chất lượng chẩn đoán hoặc cấu trúc vật thể thật từ mô hình này. Mỗi detector pixel chỉ lấy một ray tâm; không tích phân diện tích pixel.
+
+## Bài tập mở rộng
+
+Thêm export dữ liệu kèm metadata hoặc thử một phantom khác trong bounds hiện có. Nếu muốn tái dựng ảnh, cần thiết kế bước mới tương thích fan-beam (hoặc chuyển/rebin sang parallel đúng cách); không gọi thẳng inverse Radon của mô hình tia song song rồi coi là lời giải chuẩn.
+
+Tiếp theo trong roadmap là Project 57 — Mưa photon ngẫu nhiên: Monte Carlo hấp thụ, tán xạ và thoát, hiện **Sắp ra mắt**. Nó bổ sung các hiện tượng ngẫu nhiên mà máy CT đồ chơi này chủ động bỏ qua.

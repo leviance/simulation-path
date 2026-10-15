@@ -18,6 +18,7 @@ export const glossarySources = [
   { file: "lib/glossary-volume.ts", name: "volumeGlossaryTerms" },
   { file: "lib/glossary-volume-marching.ts", name: "volumeMarchingGlossaryTerms" },
   { file: "lib/glossary-xray.ts", name: "xrayGlossaryTerms" },
+  { file: "lib/glossary-ct.ts", name: "ctGlossaryTerms" },
 ];
 
 export function assertGlossaryModules(files) {

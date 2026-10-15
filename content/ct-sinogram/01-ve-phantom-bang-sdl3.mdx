@@ -1,0 +1,99 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ vật thể trước khi xây máy quét
+
+## Vấn đề cần giải quyết
+
+Ở Project 55, nguồn và detector đứng yên trong khi ta tính ảnh xuyên qua vật thể. Lần này, ta giữ vật thể đứng yên, quay cả nguồn lẫn detector rồi lưu phép đo ở nhiều góc. Sản phẩm cuối là **sinogram**, chưa phải ảnh CT đã tái dựng.
+
+Trước khi đọc lời giải, thử challenge ở [trang tổng quan](/projects/ct-sinogram). Nếu chưa biết bắt đầu từ đâu, mục tiêu đầu tiên rất nhỏ: mở cửa sổ và vẽ vật thể cần quét. Chưa cần tia, công thức suy giảm hay mảng sinogram.
+
+Tải ZIP của Project 56. Đây là project độc lập, không cần chép file từ Project 55. Starter có CMake, window/renderer, event loop và nền tối; checkpoint 1 thêm ba đĩa tròn. Ta dùng một **lát cắt XY** để nhìn rõ quá trình đo, không dựng máy CT 3D hay đọc dữ liệu y khoa.
+
+## Hiểu ý tưởng trước khi viết code
+
+Vật thể thử nghiệm gọi là *phantom*. Trong project này nó chỉ là danh sách các đĩa: tâm `centre`, bán kính `radius`, hệ số suy giảm `mu`. Đơn vị chiều dài do ta tự chọn; mu có đơn vị nghịch đảo chiều dài, không ứng với một vật liệu thật.
+
+Giữ dữ liệu này trong world space, y hướng lên. Khi vẽ mới đổi sang tọa độ SDL, y hướng xuống. Một world unit chiếm 45 logical pixel:
+
+$$x_s=260+45x,\qquad y_s=310-45y.$$
+
+Đừng đưa phép đảo y vào dữ liệu phantom. Sau này nguồn, detector và tia phải cùng dùng một hệ XY nhất quán.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-1" />
+
+Canvas ở bài này chỉ cho thấy hình dạng. Màu của đĩa giúp phân biệt chúng, **không phải kết quả đo**; nơi các đĩa chồng nhau cũng chưa được hiển thị như một tích phân mu.
+
+## Viết code từng bước
+
+### Bước 1 — Chạy bộ khung trước
+
+Trong thư mục giải nén:
+
+```bash title="Terminal — starter"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_56_starter --parallel 2
+.\build\Debug\project_56_starter.exe
+```
+
+Trên Windows/Visual Studio, cửa sổ tối phải mở được và Escape phải thoát. Nếu SDL_Init hoặc SDL_CreateRenderer thất bại, main in SDL_GetError và trả mã lỗi. Đừng thêm mô hình máy quét khi bộ khung này chưa chạy.
+
+### Bước 2 — Khai báo dữ liệu của vật thể
+
+```cpp title="include/model.hpp"
+struct Disk {
+    Point centre;
+    double radius;
+    double mu;
+    bool operator==(const Disk&) const = default;
+};
+using Scene = std::vector<Disk>;
+```
+
+`Point` là `std::array<double, 2>`. `Scene` không giữ renderer, texture hay màu SDL; nhờ vậy CTest có thể kiểm hình học mà không mở window. `makeScene(2)` tạo một đĩa nền và hai insert nhỏ. Đến Bài 04 ta mới quy định insert **cộng thêm mu** vào nền, không thay thế nền.
+
+### Bước 3 — Vẽ đĩa bằng các dải ngang
+
+SDL_Renderer không có hàm fill circle trực tiếp. Với một hàng cách tâm y pixel, nửa bề rộng của đĩa là căn của r²−y². Ta vẽ một rectangle cao một pixel ở mỗi hàng:
+
+```cpp title="include/view.hpp"
+inline void drawDisk(SDL_Renderer* renderer, const Disk& disk) {
+    const auto centre = screen(disk.centre);
+    const float radius = static_cast<float>(45 * disk.radius);
+    for (int y = -static_cast<int>(radius); y <= static_cast<int>(radius); ++y) {
+        const float halfWidth = std::sqrt(std::max(0.0f, radius * radius - y * static_cast<float>(y)));
+        const SDL_FRect span{centre.x - halfWidth, centre.y + y, 2 * halfWidth, 1};
+        require(SDL_RenderFillRect(renderer, &span));
+    }
+}
+```
+
+`screen` làm phép đổi XY ở trên. `require` ném exception nếu một lệnh SDL trả false, đưa chương trình tới cleanup. max với 0 tránh căn số âm do làm tròn ở biên; đây là rasterization để nhìn, không phải hàm tính chiều dài tia xuyên đĩa.
+
+### Bước 4 — Đặt lệnh vẽ vào đúng chỗ
+
+Trong vòng lặp của main: xử lý events → clear nền → gọi drawScene → present. drawScene chọn màu rồi gọi drawDisk cho từng phần tử. Main đặt logical presentation 1080×720 letterbox, nên resize không thay đổi tỷ lệ vật thể hoặc thông số mô hình.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 1"
+cmake --build build --config Debug --target project_56_checkpoint_1 --parallel 2
+.\build\Debug\project_56_checkpoint_1.exe
+```
+
+Phần mã chạy được sau bài ở bên dưới có toàn bộ main và headers tương ứng. Nếu tự viết từ starter, đối chiếu **cả file**, không chỉ chép riêng hàm drawDisk. Nguồn và detector chưa xuất hiện ở checkpoint này; sinogram cũng chưa có dữ liệu.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ dấu trừ trước world y trong screen. Insert phía trên chuyển xuống dưới. Hoàn nguyên rồi xác nhận tâm `(0.45,0.25)` nằm bên phải và phía trên gốc.
+2. Đổi màu của insert. Hình vẽ thay đổi, nhưng centre/radius/mu không đổi. Ghi lại sự khác nhau giữa **mô tả vật thể** và **cách hiển thị vật thể**.
+
+## Tự kiểm tra kết quả
+
+Starter nền tối; checkpoint 1 có đĩa lớn ở giữa và hai đĩa nhỏ lệch tâm. Resize giữ hình tròn, không kéo thành ellipse. Escape/nút đóng thoát sạch. Chưa có ảnh nào được gọi là ảnh CT đo được.
+
+## Bài tập mở rộng
+
+Vẽ dấu cộng ở gốc và tại tâm từng đĩa để kiểm phép đổi hệ tọa độ. Chưa đổi bán kính hoặc thêm đĩa vượt giới hạn phantom: các bài sau sẽ kiểm mọi đĩa nằm trong bán kính 1.5.
+
+[Bài tiếp theo](/projects/ct-sinogram/02-quay-nguon-va-detector) — Quay nguồn và detector quanh vật thể.
