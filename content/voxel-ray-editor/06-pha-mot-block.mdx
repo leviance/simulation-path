@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Phá đúng một block mỗi lần nhấn
+
+## Vấn đề cần giải quyết
+
+Bạn đã chọn được block. Lần click tiếp theo phải biến đúng ô ấy thành Air và để lộ bề mặt phía sau. Đây là lần đầu module ghi vào chunk, nên cần tách rõ thao tác người dùng với việc chạy preview mỗi frame.
+
+Giữ nút chuột hoặc rê con trỏ không được phá liên tục. Sau khi phá, không dùng hit vừa xóa để xử lý một action tiếp theo.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một action có ba bước: tạo ray từ camera/aim hiện tại, truy vấn chunk hiện tại, rồi ghi một Block ID nếu có hit. Hàm nhận chunk bằng reference để sửa, nhưng toàn bộ traversal trước đó vẫn chỉ đọc.
+
+Cache của preview có thể chưa cập nhật giữa hai sự kiện trong cùng frame. Vì thế action tự query lại; không lấy `state.trace.hit` làm quyền ghi. Cách này vừa dễ lý giải, vừa tránh xóa hai lần cùng một ô bằng kết quả cũ.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-6" />
+
+Ghi lại số block, phá một ô và kiểm số lượng giảm đúng 1. Giữ nút rồi rê qua đất: số lượng không giảm tiếp. Ngắm vùng nền rồi phá phải báo không có block trong tầm, dữ liệu không đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Viết một hàm chỉ phá tối đa một ô
+
+```cpp title="include/editing.hpp"
+inline EditResult breakBlock(Chunk& chunk, const Ray& ray, double reach) {
+    const auto trace = traverse(chunk, ray, reach);
+    if (!trace.hit.has_value()) {
+        return {false, "No solid block in reach"};
+    }
+    const auto cell = trace.hit->cell;
+    set(chunk, cell[0], cell[1], cell[2], Block::Air);
+    return {true, "Removed exactly one block"};
+}
+```
+
+`EditResult.changed` cho caller biết có cần dựng mesh lại hay không. MISS không phải exception: đây là tình huống dùng bình thường. Input số học sai như direction zero mới bị từ chối bằng lỗi ở tầng ray.
+
+### Bước 2 — Tạo ray cho action, không tin preview cũ
+
+```cpp title="include/editor.hpp"
+const Ray actionRay = cameraRay(state.camera, state.pixelX + 0.5, state.pixelY + 0.5);
+EditResult result;
+```
+
+Ở checkpoint 6, nhánh thực hiện là `result = breakBlock(state.chunk, actionRay, state.reach);`. Tham số `place` được giữ sẵn để bài sau thêm đặt block; nó chưa bật chức năng đặt trong checkpoint này.
+
+Sau action, caller lưu message. Chỉ khi changed=true mới gọi geometryChanged. Lần refresh tiếp theo lấy chunk mới để dựng lại các mặt giáp Air; không cố xóa riêng hai triangles của block khỏi mesh cũ vì neighbor cũng có mặt mới cần xuất hiện.
+
+### Bước 3 — Gọi từ button-down hoặc một key-down
+
+```cpp title="include/controls.hpp"
+if (down && event.button.button == SDL_BUTTON_LEFT) {
+    edit(state, false);
+}
+```
+
+`down` được tính từ SDL_EVENT_MOUSE_BUTTON_DOWN, không phải trạng thái giữ nút mỗi frame. Trước khối này, code đã đổi tọa độ SDL về viewport, cập nhật pixelX/pixelY và bỏ sự kiện ngoài ảnh. Key Delete/Backspace gọi cùng action; main bỏ key repeat. Như vậy keyboard và mouse không có hai phiên bản thuật toán sửa chunk khác nhau.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_60_checkpoint_6 --parallel 2
+.\build\Debug\project_60_checkpoint_6.exe
+```
+
+Ngắm giữa bậc đất mặc định rồi click trái. Mặt của neighbor trước đây bị ẩn phải xuất hiện. Thử phá tiếp mà không di chuyển aim: mỗi action query lại, nên có thể chọn block vừa lộ phía sau. Đó không phải auto-paint; vẫn cần một lần nhấn mới cho mỗi ô.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi breakBlock ở mọi frame khi nút trái đang giữ. Một lần nhấn dài sẽ đào xuyên nhiều lớp. Chuyển lời gọi về sự kiện down, giữ preview chỉ đọc.
+2. Chỉ đặt pixel của ảnh cũ thành màu nền. Block ID và mesh vẫn còn, xoay camera là đất hiện lại. Sửa source data trước, rồi cập nhật mesh/frame từ data.
+
+## Tự kiểm tra kết quả
+
+Action thành công chỉ đổi một phần tử chunk thành Air. Action MISS không thay đổi byte nào. Hai action liên tiếp trước refresh vẫn phá hai block khác nhau nếu có đất phía sau. Nhả chuột, giữ chuột và mouse motion không tự tạo thêm action. Keyboard cho kết quả tương đương; focus loss dừng preview và nhả capture.
+
+## Bài tập mở rộng
+
+Tạo một hàng chỉ có hai block ở x=2 và x=4. Gọi breakBlock hai lần mà không dựng mesh giữa chúng, rồi kiểm cả hai trở thành Air. Đây là test nhỏ để bắt lỗi dùng lại cached Hit.
+
+[Bài tiếp theo](/projects/voxel-ray-editor/07-dat-block-ke-mat) — Đặt block vào ô Air kề mặt vừa chọn.

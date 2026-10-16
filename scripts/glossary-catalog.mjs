@@ -22,6 +22,7 @@ export const glossarySources = [
   { file: "lib/glossary-photon.ts", name: "photonGlossaryTerms" },
   { file: "lib/glossary-voxel.ts", name: "voxelGlossaryTerms" },
   { file: "lib/glossary-voxel-faces.ts", name: "voxelFaceGlossaryTerms" },
+  { file: "lib/glossary-voxel-picking.ts", name: "voxelPickingGlossaryTerms" },
 ];
 
 export function assertGlossaryModules(files) {

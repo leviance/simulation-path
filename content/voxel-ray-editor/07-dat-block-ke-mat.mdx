@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt block vào ô Air kề mặt vừa chọn
+
+## Vấn đề cần giải quyết
+
+Click phải không nên ghi đè block đang ngắm. Người dùng muốn thêm một ô sát mặt ấy. Ta đã có normal hướng ra, nên có thể tìm ô đích mà không suy luận lại từ yaw camera hoặc từ màu trên màn hình.
+
+Bài này thêm ghost outline xanh và ba vật liệu Grass/Dirt/Stone. Chỉ một ô Air hợp lệ trong chunk mới có thể nhận vật liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nếu hit=(2,8,8), normal=(−1,0,0), ô đặt là (1,8,8):
+
+$$target=hit.cell+hit.normal.$$
+
+Ghost preview trả lời “nếu nhấn lúc này thì ô nào có thể được đặt?”, không tự ghi gì. Khi action xảy ra, truy vấn và kiểm điều kiện lại trên dữ liệu hiện tại.
+
+Các trường hợp từ chối là một phần của chức năng: MISS; normal zero do origin nằm trong block; target ngoài chunk; target không phải Air. Với tie ở cạnh/góc, normal ưu tiên X/Y/Z có thể dẫn đến một neighbor đã đặc: ta từ chối, không lén chuyển sang một mặt khác và không overwrite.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-7" />
+
+Chọn vật liệu, tìm outline xanh rồi đặt một ô. Ngắm tiếp cùng pixel: hit mới có thể là block vừa đặt, nên lần nhấn sau sẽ đặt ra một lớp nữa. Đến biên thì nút bị vô hiệu hóa; project không tạo thêm chunk lân cận.
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm normal trước khi cộng tọa độ
+
+```cpp title="include/editing.hpp"
+const auto normal = hit->normal;
+if (std::abs(normal[0]) + std::abs(normal[1]) + std::abs(normal[2]) != 1) {
+    return std::nullopt;
+}
+```
+
+Normal là Cell nguyên. Tổng trị tuyệt đối bằng 1 đảm bảo đúng một thành phần ±1 và hai thành phần zero. Hàm cũng kiểm source cell vẫn ở trong chunk và còn solid; một preview cũ không được xem như nguồn dữ liệu luôn đúng.
+
+### Bước 2 — Chỉ nhận target còn trống và ở trong mảng
+
+```cpp title="include/editing.hpp"
+const Cell target{source[0] + normal[0], source[1] + normal[1], source[2] + normal[2]};
+if (!inside(target[0], target[1], target[2]) || get(chunk, target[0], target[1], target[2]) != Block::Air) {
+    return std::nullopt;
+}
+return target;
+```
+
+Toán tử `||` short-circuit giúp không đọc mảng khi target ngoài bounds. Không clamp target=16 về 15: như vậy là ghi vào một ô khác, có thể ghi đè đất ở biên. PlacementCell trả optional, dùng được cho cả preview và action.
+
+### Bước 3 — Query lại trước khi ghi vật liệu
+
+```cpp title="include/editing.hpp"
+const auto trace = traverse(chunk, ray, reach);
+const auto target = placementCell(chunk, trace.hit);
+if (!target.has_value()) {
+    return {false, "Cannot place: no valid empty adjacent cell inside chunk"};
+}
+set(chunk, (*target)[0], (*target)[1], (*target)[2], material);
+return {true, "Placed exactly one block"};
+```
+
+Trước đoạn này, placeBlock chỉ chấp nhận material Grass/Dirt/Stone. Air không phải “vật liệu đặt”: thao tác xóa đã có hàm riêng. Action thành công đánh dấu geometry dirty giống break; action thất bại chỉ cập nhật message.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_60_checkpoint_7 --parallel 2
+.\build\Debug\project_60_checkpoint_7.exe
+```
+
+Native: click phải hoặc E để đặt, 1/2/3 chọn vật liệu. Canvas có nút thay thế và select vật liệu. Ghost là overlay debug, không phải một block trong suốt nằm trong world; nó không tham gia mesher hoặc ray query.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng target=hit.cell−normal. Bạn sẽ đi vào phía trong đất, thường bị occupancy check chặn. Giữ check ấy và sửa dấu, đừng bỏ check để “đặt được”.
+2. Ghi target trước khi kiểm bounds hoặc occupancy. Một click biên có thể truy cập ngoài mảng, hoặc thay vật liệu của block có sẵn. Chứng minh target hợp lệ trước mọi lệnh set.
+
+## Tự kiểm tra kết quả
+
+Với hit (2,8,8), normal (−1,0,0), target là (1,8,8). Đặt thành công tăng số solid đúng 1 và chỉ đổi một byte ID. Target ngoài chunk/đã đặc, MISS và inside-hit đều không ghi dữ liệu. Sau break/place, ghost và hit được query lại. Ba vật liệu khác màu nhưng đều opaque và vẫn loại mặt tiếp giáp.
+
+## Bài tập mở rộng
+
+Từ ray +X với block đầu ở x=2, đặt lần lượt ở x=1 và x=0. Lần tiếp theo phải bị từ chối vì target x=−1. Viết test so sánh toàn chunk trước/sau lần thất bại.
+
+[Bài tiếp theo](/projects/voxel-ray-editor/08-input-va-cap-nhat-mesh) — Tách input, query và cập nhật mesh.

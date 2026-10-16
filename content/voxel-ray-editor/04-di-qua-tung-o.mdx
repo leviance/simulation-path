@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đi qua từng ô bằng 3D DDA
+
+## Vấn đề cần giải quyết
+
+Bây giờ ta đã biết tia vào và ra chunk ở đâu. Giả sử nó đi từ trái sang phải qua hàng y=8, z=8: thứ tự cần đọc là (0,8,8), (1,8,8), rồi đến (15,8,8). Ta muốn làm được điều tương tự khi tia đi xiên, mà không phải thử hàng nghìn điểm cách nhau một bước nhỏ.
+
+Checkpoint 4 chỉ vẽ đường đi qua các ô, **chưa dừng ở đất**. Nhờ vậy, bạn có thể kiểm thuật toán trên chunk rỗng trước khi thêm điều kiện chọn block.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi khi rời một ô, tia phải đi qua ít nhất một mặt phẳng lưới. Với từng trục, ta lưu:
+
+- `step`: index tăng 1, giảm 1 hay không đổi.
+- `tMax`: thời điểm gặp mặt phẳng tiếp theo, tính từ ray origin.
+- `tDelta`: khoảng t giữa hai mặt phẳng liên tiếp trên cùng trục.
+
+Ví dụ O=(−1,8.5,8.5), D=(1,0,0): tia vào ô x=0 ở t=1, gặp x=1 ở t=2, gặp x=2 ở t=3. Vì thế tMaxX ban đầu bằng 2 và tDeltaX bằng 1. Hai trục còn lại không bao giờ đổi ô nên tMax/tDelta bằng infinity.
+
+$$t_{Max,a}=\frac{boundary_a-O_a}{D_a},\qquad t_{Delta,a}=\frac{1}{|D_a|}.$$
+
+Ý tưởng lấy lần vượt mặt lưới gần nhất cũng được trình bày trong [PBRT: traversal bằng DDA](https://pbr-book.org/4ed/Volume_Scattering/Media). Quy tắc tie và tolerance dưới đây là lựa chọn cụ thể của project này.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-4" />
+
+Chọn preset rỗng rồi dùng Bước tiếp theo. Ô xanh lam là visit đang xem. Hình chiếu XZ không thể tách hai ô chỉ khác y; hãy đọc cả XYZ và khoảng t ở phần văn bản.
+
+### Khi tia nằm đúng đường phân chia hai ô
+
+Điểm x=16 với D.x âm phải bắt đầu ở ô 15, không phải ô 16. Tương tự, x=8 với D.x âm đi vào ô 7. Nếu D.x=0 thì chọn phía half-open chứa x=8, tức ô 8. Không cộng một epsilon cố định vào cả ba tọa độ: nó có thể đẩy tia sang sai ô.
+
+Nếu tia đi chéo qua góc (1,1,1), cả ba trục đổi ô cùng lúc. Ta chuyển thẳng từ (0,0,0) sang (1,1,1), không ghé những ô chỉ chạm cạnh/góc. Các mốc t chênh nhau không quá `1e-9` được coi là cùng một lần vượt mặt.
+
+## Viết code từng bước
+
+### Bước 1 — Chọn ô đầu tiên theo hướng đi
+
+```cpp title="include/traversal.hpp"
+int coordinate = static_cast<int>(std::floor(p));
+if (direction[axis] < 0 && p == std::floor(p)) {
+    --coordinate;
+}
+cell[axis] = std::clamp(coordinate, 0, 15);
+```
+
+`p` là tọa độ tại clip enter, không phải origin ban đầu. Source đầy đủ chỉ clamp sau khi slab test đã chứng minh tia đi vào chunk. Bước snap về số nguyên cũng có ngưỡng đổi từ sai số t sang tọa độ: `tolerance*abs(direction[axis])`. Đây là xử lý sai số ở biên, không phải cho phép ray bên ngoài bị kéo vào chunk.
+
+### Bước 2 — Chuẩn bị lần vượt mặt tiếp theo
+
+```cpp title="include/traversal.hpp"
+tMax[axis] = std::numeric_limits<double>::infinity();
+tDelta[axis] = std::numeric_limits<double>::infinity();
+if (direction[axis] != 0) {
+    step[axis] = 1;
+    double boundary = cell[axis] + 1;
+    if (direction[axis] < 0) {
+        step[axis] = -1;
+        boundary = cell[axis];
+    }
+    tMax[axis] = (boundary - origin[axis]) / direction[axis];
+    tDelta[axis] = 1 / std::abs(direction[axis]);
+}
+```
+
+`tMax` dùng cùng hệ t với clip enter/exit. Nếu bạn tính nó tương đối từ điểm vào chunk nhưng lại so với t tuyệt đối, đoạn đầu có thể đúng mà các ô sau vẫn sai. Nhánh direction=0 không thực hiện phép chia.
+
+### Bước 3 — Ghi đoạn đang ở trong ô, rồi đi tiếp
+
+```cpp title="include/traversal.hpp"
+const double next = std::min({tMax[0], tMax[1], tMax[2]});
+const double exit = std::min(next, trace.interval->exit);
+if (exit - t > tolerance) {
+    trace.visits.push_back({cell, t, exit, normal});
+```
+
+Đây là phần mở đầu của khối ghi visit; xem khối hoàn chỉnh trong source checkpoint bên dưới. Chỉ đoạn dài hơn tolerance mới trở thành visit. Khi `next` đã chạm clip exit, trả kết quả ngay, không đi sang ô ngoài chunk.
+
+Sau đó vòng lặp xét **mọi** trục có tMax gần next trong tolerance, tăng cell và cộng tDelta cho từng trục ấy. Giới hạn 64 vòng rộng hơn số lần vượt các mặt của chunk 16³; nếu vượt giới hạn thì báo lỗi, không âm thầm trả MISS. Preview chỉ phát lại danh sách đã tính, mỗi nhịp một visit, không chạy thêm một traversal vô hạn.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_60_checkpoint_4 --parallel 2
+.\build\Debug\project_60_checkpoint_4.exe
+```
+
+Native dùng N để xem ô tiếp theo, Space phát/dừng. Mỗi frame tự động chỉ tiến tối đa một ô. Canvas tôn trọng reduced-motion: khi hệ điều hành yêu cầu giảm chuyển động, dùng nút bước thủ công.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng `else if` để chỉ step một trục khi tie. Với ray O=(−1,−1,−1), D tỷ lệ (1,1,1), bạn sẽ thấy những ô phụ không có đoạn đi bên trong. Khôi phục vòng lặp step mọi trục tie.
+2. Luôn floor x=16 thành 16 rồi đọc mảng ngay. Ray đi từ +X vào chunk sẽ vượt bounds. Hãy sửa cell đầu theo hướng âm, thay vì bọc index bằng modulo.
+
+## Tự kiểm tra kết quả
+
+Ray ngang đi đủ 16 ô theo thứ tự; ray từ x=16 đi về −X bắt đầu ở 15 và kết thúc ở 0. Ray chéo góc đi 16 ô (i,i,i), không có visit độ dài zero. Reach rút ngắn đường đi đúng chỗ, query không đổi Block ID và mọi traversal đều kết thúc trong giới hạn.
+
+## Bài tập mở rộng
+
+Tính tay tMax/tDelta cho O=(−1,0.25,8.5), D tỷ lệ (2,1,0), rồi đối chiếu năm visit đầu bằng test thuần. Nhớ normalize direction trước khi tính và giữ nguyên quy tắc tie của module.
+
+[Bài tiếp theo](/projects/voxel-ray-editor/05-hit-va-phap-tuyen) — Dừng ở block đầu tiên và đọc pháp tuyến.

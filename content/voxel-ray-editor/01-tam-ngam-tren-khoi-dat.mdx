@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt tâm ngắm lên khối đất
+
+## Vấn đề cần giải quyết
+
+Project 59 cho ta nhìn khối đất và đọc mặt tiếp giáp từ bảng tọa độ. Nhưng nếu muốn chỉ vào hình rồi phá đúng block ở phía trước thì bảng x/z không còn đủ. Ta cần nối một vị trí trên màn hình với dữ liệu 3D.
+
+Hãy đọc [thử thách đầu Project 60](/projects/voxel-ray-editor) và tự thử trước. Sản phẩm lần này là một editor nhỏ: ngắm, chọn block đầu tiên, phá một block hoặc đặt một block sát mặt vừa chọn. Chưa có người chơi FPS, cơ thể va chạm hoặc thế giới vô tận.
+
+Bài đầu chỉ thêm **tâm ngắm** vào chương trình đang có khối đất. Chưa có ray, Hit hoặc chỉnh sửa dữ liệu. Đừng bắt đầu bằng công thức DDA khi con trỏ còn chưa khớp ảnh.
+
+## Hiểu ý tưởng trước khi viết code
+
+ZIP có đầy đủ chunk, mesher đã bỏ mặt tiếp giáp, camera trực giao, CPU Z-buffer và SDL3 setup từ Project 59. Starter mở đất bậc thang, xoay bằng arrow/middle-drag và đổi preset được. Checkpoint 1 thêm crosshair.
+
+Ảnh CPU là 320×240, vẽ vào vùng logical 640×480 ở góc trái. Window logical tổng thể 960×600 có letterbox. Vì vậy, sau khi SDL đổi event về render coordinates:
+
+$$pixel_x=\lfloor logical_x/2\rfloor,\quad pixel_y=\lfloor logical_y/2\rfloor.$$
+
+Chỉ nhận khi logical x/y nằm trong vùng ảnh. Tâm mẫu của pixel nguyên `(x,y)` là `(x+.5,y+.5)`, đúng nơi rasterizer lấy mẫu. Panel bên phải và phần letterbox không được clamp vào một block mép rồi coi như click hợp lệ.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-1" />
+
+WASD hoặc hai slider thay đổi pixel đang ngắm. Arrow/middle-drag đổi camera, không đổi Block ID. Từ bài 6, click trái mới phá block; trước đó mọi thao tác chỉ quan sát.
+
+## Viết code từng bước
+
+### Bước 1 — Chạy lại một chương trình có hình thật
+
+```bash title="Terminal — starter và checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_60_starter project_60_checkpoint_1 --parallel 2
+.\build\Debug\project_60_starter.exe
+```
+
+Đóng starter rồi chạy checkpoint. Starter phải có đất bậc thang 1408 block, không chỉ cửa sổ trống. Main kiểm từng SDL resource và cleanup; source nền nằm đầy đủ trong ZIP, không yêu cầu chép header từ các project cũ.
+
+### Bước 2 — Giữ tọa độ ngắm riêng với camera
+
+```cpp title="include/editor.hpp"
+int pixelX = 160;
+int pixelY = 120;
+double reach = 64;
+Block material = Block::Stone;
+```
+
+Editor giữ tâm ngắm bằng pixel CPU, không raw mouse hoặc tọa độ world. Reach và material dành cho bài sau; chưa được dùng để phá/đặt trong checkpoint 1. Tách chúng khỏi Camera giúp ta xoay ảnh mà vẫn hỏi “pixel này đang ngắm vào đâu?”.
+
+### Bước 3 — Đổi event trước khi ghi pixel
+
+```cpp title="include/controls.hpp"
+if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    throw std::runtime_error(SDL_GetError());
+}
+```
+
+`pointerEvent` đọc x/y từ đúng loại event, kiểm vùng ảnh rồi mới ghi:
+
+```cpp title="include/controls.hpp"
+state.pixelX = static_cast<int>(x / 2);
+state.pixelY = static_cast<int>(y / 2);
+state.pickDirty = true;
+state.paused = true;
+```
+
+Vì x/y đã được kiểm không âm, cast int ở đây tương đương floor. [SDL_ConvertEventToRenderCoordinates](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates) tính cả logical presentation, viewport và scale; đừng nhân DPR thêm lần nữa. Canvas đổi CSS point qua kích thước vùng ảnh, còn DPR chỉ dùng cho bitmap nét.
+
+### Bước 4 — Vẽ crosshair trùng tâm pixel
+
+```cpp title="include/view.hpp"
+const float sx = static_cast<float>(x * 2 + 1);
+const float sy = static_cast<float>(y * 2 + 1);
+require(SDL_RenderLine(renderer, sx - 6, sy, sx + 6, sy));
+require(SDL_RenderLine(renderer, sx, sy - 6, sx, sy + 6));
+```
+
+Hàm drawCrosshair nhận pixel nguyên rồi vẽ overlay trắng. `+1` ở logical space chính là `.5` ở CPU space. Nó không đọc màu framebuffer để đoán block; hình dưới crosshair chưa phải một kết quả picking.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 1"
+.\build\Debug\project_60_checkpoint_1.exe
+```
+
+Di chuyển crosshair qua đất, nền và sát mép ảnh. Số block/triangles không đổi. Resize giữ tỷ lệ và tọa độ ngắm; ngoài ảnh không tạo thao tác. Mã chạy được sau bài có toàn bộ main/headers/CMake, không chỉ phần crosshair được trích ở đây.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng raw window mouse x/y mà bỏ chuyển logical. Sau resize/letterbox, crosshair không còn ở pixel người dùng chỉ vào. Sửa đường đổi tọa độ, không thêm một hằng offset đoán bằng mắt.
+2. Chia x/y cho DPR sau khi đã chuyển sang logical. Trên màn hình high-DPI, tâm ngắm bị lệch về góc. DPR không phải hệ số world hoặc pixel CPU của ray.
+
+## Tự kiểm tra kết quả
+
+Starter có khối đất; checkpoint có crosshair đúng pixel. WASD không đụng camera; arrow/middle-drag không sửa dữ liệu. Không có nút phá/đặt ở bài này. Escape, reset và mất focus không giữ mouse capture.
+
+## Bài tập mở rộng
+
+Đặt tâm ở pixel `(0,0)` và `(319,239)` bằng slider rồi tự tính logical center tương ứng. Xác nhận chúng nằm **trong** hai pixel góc của vùng ảnh, không ở panel ngoài cùng.
+
+[Bài tiếp theo](/projects/voxel-ray-editor/02-tu-pixel-den-ray) — Từ pixel đang ngắm đến tia trong world.

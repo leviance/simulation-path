@@ -53,7 +53,7 @@ const data = {
       "Oracle đếm ba chiều dương cho F=6N−2E; face keys không trùng, đúng hướng và không chứa mặt giáp block đặc.",
       "Nhiều góc camera cho coverage/depth gần nhất tương đương baseline; khác màu ở điểm đồng phẳng được phân biệt với lỗi bề mặt.",
       "Debug/Release build và CTest, hidden smoke có timeout; browser QA được báo riêng.",
-      "Roadmap/search/glossary/ZIP đồng bộ; Project 60–78 vẫn Sắp ra mắt, không đưa generated output vào Git.",
+      "Roadmap/search/glossary/ZIP đồng bộ; project chưa phát hành vẫn Sắp ra mắt, không đưa generated output vào Git.",
     ],
   },
   lessons: [

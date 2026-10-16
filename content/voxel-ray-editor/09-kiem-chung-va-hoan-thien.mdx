@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng picker và hoàn thiện editor
+
+## Vấn đề cần giải quyết
+
+Click thử vài ô không đủ chứng minh picker đúng: ray trục, biên âm và tie thường chỉ lỗi ở những góc rất cụ thể. Ta cần một cách tìm hit khác để đối chiếu DDA, cùng các fixture có đáp án tính tay.
+
+Final ghép đầy đủ editor đã học, không thêm FPS controller hoặc một hệ world mới. Source dưới bài và ZIP chứa mọi file cần build; không cần chép header từ Project 59.
+
+## Hiểu ý tưởng trước khi viết code
+
+Oracle ở đây quét mọi block đặc, cắt ray với AABB đơn vị của từng block và lấy enter gần nhất. Nó chậm hơn DDA nhưng chỉ có 4096 ô, phù hợp cho test hữu hạn. Nó không dùng step/tMax/tDelta, nên có thể bắt lỗi thứ tự traversal.
+
+Oracle vẫn dùng chung clipBox: nếu slab test cùng sai, cả hai có thể đồng ý. Vì thế fixture axis/parallel/tangent/reach với đáp án tính tay là lớp kiểm độc lập cần thiết. Không gọi oracle là “bằng chứng tuyệt đối” hoặc chạy nó mỗi frame.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-9" />
+
+Nút sanity của Canvas chỉ kiểm các trace hữu hạn trên bảy preset với ray đang ngắm. Nó không chạy toàn bộ oracle/test suite. Native phím V chạy audit AABB hữu hạn; Node/CTest kiểm thêm fixture, mutation và cache. Từng loại kiểm có phạm vi riêng.
+
+## Viết code từng bước
+
+### Bước 1 — Tìm hit theo AABB, không theo DDA
+
+```cpp title="include/audit.hpp"
+if (interval.has_value() && (!best.has_value() || interval->enter < best->distance)) {
+    best = Hit{{x, y, z}, interval->normal, interval->enter};
+}
+```
+
+Khối này ở trong ba vòng lặp y/z/x, bỏ Air trước khi gọi clipBox với min=(x,y,z), max=(x+1,y+1,z+1). Nó áp dụng cùng reach và quy ước đoạn dài hơn tolerance. Audit so hit presence, cell và distance; normal tie được kiểm bằng fixture riêng.
+
+### Bước 2 — Dùng check còn hiệu lực ở Release
+
+```cpp title="tests/tests.cpp"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << label << '\n';
+    }
+}
+```
+
+Không dùng assert làm hàng rào nghiệm thu duy nhất: Release thường định nghĩa NDEBUG. Test kết thúc bằng EXIT_FAILURE nếu failures khác zero, CTest mới nhận biết lỗi. Traversal vượt giới hạn cũng ném lỗi thay vì báo MISS như thể vẫn đúng.
+
+### Bước 3 — Kiểm invariant nhỏ trước khi thử cả editor
+
+```cpp title="tests/tests.cpp"
+const Ray axis = makeRay({-1, 8.5, 8.5}, {1, 0, 0});
+const auto span = clipBox(axis, {0, 0, 0}, {16, 16, 16}, 64);
+check(span.has_value() && close(span->enter, 1) && close(span->exit, 17), "axis slab fixture");
+```
+
+Suite còn kiểm ray chiếu ngược đúng pixel, signed zero, mặt max đi vào/đi ra, tie, origin-inside, hit gần nhất và placement. Mutation so toàn chunk để biết chỉ một ID đổi. Cache test phân biệt aim, camera và hai action trước refresh; queries không sửa dữ liệu.
+
+## Ghép các phần lại
+
+Trong ZIP, final là target mặc định; bật BUILD_CHECKPOINTS để build cả starter và chín checkpoint. SDL3 3.4.8 được khóa bằng URL/checksum, link qua SDL3::SDL3. Cần C++20 và CMake 3.24+, Windows dùng Visual Studio 2022 với Desktop development with C++.
+
+```bash title="Terminal — build và CTest hai cấu hình"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Với single-config generator, đặt CMAKE_BUILD_TYPE khi configure; executable nằm trực tiếp trong build thay vì thư mục Debug/Release. Chạy tương tác bằng build/Debug/project_60_final.exe. CTest thuần không mở cửa sổ.
+
+```powershell title="PowerShell — smoke một frame, không chờ vô hạn"
+$smoke = Start-Process -FilePath ".\build\Debug\project_60_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Smoke quá 30 giây."
+}
+if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+Giới hạn hai compiler, timeout từng test và smoke có điểm dừng. Nếu một bước lỗi, đọc log trước khi chạy lại; không lặp vô hạn, không mở benchmark nền. Khi tự chạy build trong hệ CI/agent, đặt thêm deadline ngoài cho cả process tree, vì timeout của CTest không giới hạn thời gian compiler.
+
+### Checklist tương tác desktop
+
+- Chọn bảy preset; empty phải MISS, full chỉ chọn mặt ngoài. Reset về bậc thang có 1408 block.
+- Hover/WASD đổi aim; arrow/middle-drag orbit; +/− zoom; reach thấp báo MISS đúng nghĩa.
+- Left/Delete phá, right/E đặt, 1/2/3 đổi vật liệu. Một lần nhấn một action, không auto-paint khi giữ/kéo.
+- Preview bước/pause/reset đúng; blur/cancel/resize không giữ capture hoặc tự tiếp tục chạy. Canvas reduced-motion vẫn xem được từng bước.
+- Ghost/normal và counters khớp bài 5–8. Mọi sửa đổi chỉ nằm trong bộ nhớ, đóng ứng dụng là mất world đã sửa.
+
+Đây là checklist chạy trực tiếp, khác với PASS của Node/CTest hoặc smoke một frame. Không đánh dấu đã kiểm mouse/high-DPI chỉ vì executable khởi động được.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi normal thành step rồi chỉ chạy oracle so cell/t. Nó có thể vẫn PASS. Thêm fixture normal sáu mặt để thấy vì sao không nên dựa vào một oracle duy nhất.
+2. Tắt re-query trong action, sau đó gọi hai break trước refresh. Cache preview chưa đổi nhưng dữ liệu đã đổi; test mutation sẽ bắt việc chỉ xóa được một ô.
+
+## Tự kiểm tra kết quả
+
+Build và CTest Debug/Release đều đạt, smoke thoát sau một frame. Camera/slab/biên/tie có fixture riêng; DDA khớp AABB trên bảy preset; query giữ chunk nguyên vẹn. Break/place đúng một ID và an toàn khi hai action liên tiếp. Báo riêng phần kiểm desktop chưa làm, thay vì gọi mọi thứ đã hoàn thành chỉ vì suite tự động xanh.
+
+## Bài tập mở rộng
+
+Thêm test property có seed cố định cho nhiều camera/pixel hơn, nhưng giới hạn số ray và timeout rõ ràng. Khi thấy bất đồng, lưu ray và chunk tối giản thành fixture thay vì chỉ tăng tolerance để test qua.
+
+Bạn đã có editor một chunk. Project 61 sẽ học greedy meshing để giảm số quad mà giữ đúng bề mặt; Project 61–78 hiện **Sắp ra mắt**. Chưa có streaming, player collision, perspective hoặc lưu world trong final này.
+
+[Về tổng quan Project 60](/projects/voxel-ray-editor) · [Xem roadmap](/roadmap).

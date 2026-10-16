@@ -1,0 +1,85 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dừng ở block đầu tiên và đọc pháp tuyến
+
+## Vấn đề cần giải quyết
+
+Đường DDA đã đi đúng thứ tự gần đến xa. Giờ ta chỉ cần dừng ở ô đầu tiên chứa đất. Nhưng nếu chỉ trả XYZ, bài đặt block sẽ không biết người dùng đang ngắm mặt nào. Kết quả chọn phải có cả ô, khoảng cách và normal hướng ra khỏi mặt vừa đi vào.
+
+Ta chưa sửa world trong bài này. Outline vàng chỉ giúp kiểm xem hit có đúng với hướng nhìn hay không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Xét ray đi theo +X, từ Air vào một block Stone ở (2,8,8). Nó đi qua mặt trái x=2. Normal hướng ra ở đó là (−1,0,0), trái dấu với stepX. Vì traversal đi gần đến xa, block đặc đầu tiên có đoạn bên trong là đáp án; không cần tìm thêm rồi sort.
+
+$$normal_a=-step_a.$$
+
+Khi đi qua cạnh/góc, hình học không cho một mặt duy nhất. Project chọn normal theo thứ tự **X rồi Y rồi Z** trong các trục tie. Cell vẫn step tất cả trục như bài trước. Đây là hai quyết định khác nhau: bước cell quyết định ô nào thật sự đi vào, normal chỉ quyết định mặt nào dùng cho thao tác đặt.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-5" />
+
+Ngắm một bậc đất rồi xoay camera bằng phím mũi tên hoặc kéo nút giữa. Đọc cell/normal/t thay vì chỉ nhìn outline. Pixel nền phải MISS; màu Grass/Stone không được dùng để đoán ID.
+
+## Viết code từng bước
+
+### Bước 1 — Gói kết quả hit rõ nghĩa
+
+```cpp title="include/traversal.hpp"
+struct Hit {
+    Cell cell;
+    Cell normal;
+    double distance;
+};
+```
+
+`distance` chính là enter của visit có block, tính từ origin plane depth=32. `Cell` là ba số nguyên, dùng được cho tọa độ ô và normal đơn trục. `std::optional<Hit>` biểu diễn MISS; không dùng cell=(0,0,0) làm giá trị báo không có kết quả vì đó là một ô hợp lệ.
+
+### Bước 2 — Kiểm Block ID sau khi biết visit có phần bên trong
+
+```cpp title="include/traversal.hpp"
+if (stopAtSolid && get(chunk, cell[0], cell[1], cell[2]) != Block::Air) {
+    trace.hit = Hit{cell, normal, t};
+    return trace;
+}
+```
+
+Khối này nằm **trong** điều kiện `exit-t>tolerance` của bài trước. Chuyển phép kiểm ra ngoài có thể chọn một block chỉ bị chạm cạnh. Cờ `stopAtSolid=false` giữ chế độ quan sát đường đi đầy đủ khi cần debug.
+
+### Bước 3 — Chọn normal sau mỗi lần vượt mặt
+
+```cpp title="include/traversal.hpp"
+if (!normalChosen) {
+    normal[axis] = -step[axis];
+    normalChosen = true;
+}
+```
+
+Vòng lặp axis chạy 0/1/2 tương ứng X/Y/Z. Lần đầu gặp một trục tie sẽ đặt normal, những trục tie sau vẫn step nhưng không ghi đè normal. Normal của visit đầu lấy từ slab entry nếu ray bắt đầu bên ngoài.
+
+### Origin đã nằm trong block thì sao?
+
+Ray thuần có thể bắt đầu trong một ô đặc, dù camera demo bình thường ở ngoài chunk. Khi đó t=0, normal=(0,0,0): không có mặt vừa đi vào theo chiều tiến của tia. Ta vẫn cho phép chọn và phá ô đó; bài đặt block sẽ từ chối vì không có mặt kề xác định. Không tự lấy normal theo direction lớn nhất để che đi trường hợp thiếu dữ liệu.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_60_checkpoint_5 --parallel 2
+.\build\Debug\project_60_checkpoint_5.exe
+```
+
+Đường preview từ đây kết thúc tại hit. Chọn preset rỗng thì không có outline vàng, nhưng DDA vẫn đi hết đoạn clip. Chọn full thì hit phải ở mặt ngoài nhìn thấy, không xuyên đến mặt sau.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán normal bằng step thay vì −step. Outline vẫn đúng ô, nhưng bài sau sẽ đặt vào phía bên trong block. Test ray +X phải trả normal (−1,0,0).
+2. Cho normal của origin-inside bằng normal cũ. Query sau có thể đặt vào mặt không tồn tại trong kết quả hiện tại. Khởi tạo normal zero cho trace mới và kiểm trường hợp này riêng.
+
+## Tự kiểm tra kết quả
+
+Với Stone tại (2,8,8), Grass tại (4,8,8), O=(−1,8.5,8.5), D=(1,0,0), hit là (2,8,8), t=3, normal=(−1,0,0). Đổi hướng ray thì mặt vào đổi dấu đúng. Ray chéo không chọn block chỉ chạm cạnh, normal tie theo X/Y/Z ổn định, ray trong block cho t=0/normal zero. Query không đổi dữ liệu.
+
+## Bài tập mở rộng
+
+Viết sáu fixture vào sáu mặt của một block đơn. Với mỗi fixture, kiểm cả cell, normal và distance. Đừng chỉ đếm rằng có sáu lần HIT: sai dấu normal vẫn có thể vượt bài test đó.
+
+[Bài tiếp theo](/projects/voxel-ray-editor/06-pha-mot-block) — Phá đúng một block mỗi lần nhấn.

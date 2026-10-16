@@ -1,0 +1,89 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm đoạn tia thật sự đi trong chunk
+
+## Vấn đề cần giải quyết
+
+Nhiều pixel chỉ ngắm vào nền. Ngay cả ray đi qua đất cũng bắt đầu ngoài chunk, nên không thể floor origin rồi đọc block ngay. Trước hết ta phải tìm khoảng t ray nằm trong hộp `[0,16)³` và trong tầm với cho phép.
+
+Bài này chưa duyệt ô. Nó chỉ trả một interval hoặc MISS, giúp phần traversal sau không chạy trong vùng không có dữ liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi trục cho một slab. Với direction component khác zero, giải hai giao với min/max rồi lấy khoảng gần/xa. Giao ba khoảng và `[0,reach)`:
+
+$$t_{enter}=\max(0,t_{near,x},t_{near,y},t_{near,z}),$$
+$$t_{exit}=\min(reach,t_{far,x},t_{far,y},t_{far,z}).$$
+
+Chỉ nhận nếu `exit-enter>1e-9`. Tolerance này theo **t của ray normalized**, nên có đơn vị world distance. Tiếp xúc chỉ tại điểm/cạnh hoặc một đoạn không dài hơn tolerance được coi là không đi vào ô; đây là quy ước số học của project, không một định lý rằng mọi tiếp xúc đều không tồn tại.
+
+Nếu d=0, ray song song với slab: tọa độ origin phải ở `[min,max)`. Đúng mặt max và đi song song được coi là ngoài. Cả +0 và −0 đều đi qua nhánh này, không sinh 0/0.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-3" />
+
+Thử hạ Tầm với xuống 1: ray origin vẫn ở mặt phẳng depth=32, nên chưa chạm đất. MISS vì ngoài tầm không có nghĩa chunk bị xóa. Đây là lý do cần nói rõ reach tính từ đâu.
+
+## Viết code từng bước
+
+### Bước 1 — Xử lý song song trước phép chia
+
+```cpp title="include/clip.hpp"
+if (direction[axis] == 0) {
+    // Miền half-open: tia song song nằm đúng mặt max không đi trong ô.
+    if (origin[axis] < lo[axis] || origin[axis] >= hi[axis]) {
+        return std::nullopt;
+    }
+    continue;
+}
+```
+
+Không thay direction zero bằng một hằng 0.001. Làm vậy đổi ray và có thể tạo hit giả. Bounds ở đây là khoảng của **một hộp**, không phải index mảng; phép đọc Block ID vẫn chưa diễn ra.
+
+### Bước 2 — Gom khoảng gần/xa của ba trục
+
+```cpp title="include/clip.hpp"
+double a = (lo[axis] - origin[axis]) / direction[axis];
+double b = (hi[axis] - origin[axis]) / direction[axis];
+if (a > b) {
+    std::swap(a, b);
+}
+```
+
+Direction âm làm hai giao đảo thứ tự. `near` bắt đầu −∞, `far` bắt đầu reach. Sau mỗi trục, near lấy max, far lấy min. Hàm giữ nearTimes của từng trục; sau khi đã có near cuối cùng, chọn trục đầu tiên cách nó không quá tolerance, theo thứ tự X/Y/Z. Không so tie theo một near tạm: ba sai số nhỏ có thể cộng dồn khiến mặt được chọn không còn gần mốc vào cuối cùng.
+
+### Bước 3 — Chỉ trả khoảng có phần bên trong đủ dài
+
+```cpp title="include/clip.hpp"
+const double enter = std::max(0.0, near);
+if (far - enter <= tolerance) {
+    return std::nullopt;
+}
+```
+
+Ray đi ra từ mặt max có exit=0 nên miss. Ray từ mặt max đi vào có enter=0 và một đoạn dương nên hợp lệ. Ray origin trong chunk có enter=0 nhưng không có mặt ngoài vừa đi vào; normal của interval giữ zero trong trường hợp đó.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_60_checkpoint_3 --parallel 2
+.\build\Debug\project_60_checkpoint_3.exe
+```
+
+Với ray O=(−1,8.5,8.5), D=(1,0,0), reach=64, interval phải là [1,17). Reach=1 chỉ chạm đúng điểm vào và bị từ chối. O=(16,8,8), D=(−1,0,0) đi vào ô ngoài cùng; cùng O nhưng D=(1,0,0) đi ra nên miss.
+
+Native dùng `[`/`]` chỉnh reach 1..64; Canvas có slider. Ngoài đoạn clip, code không truy cập mảng chunk. Khi interval vắng, DDA ở bài sau sẽ trả ngay.
+
+## Thử làm sai để hiểu đúng
+
+1. Không swap a/b khi D âm. Tia nhìn từ phía +X có thể bị báo miss dù đi xuyên khối. Kiểm bằng fixture axis trước khi nghĩ lỗi camera.
+2. Chấp nhận `exit==enter` rồi floor điểm tiếp xúc. Một ray chỉ chạm góc có thể chọn block không hề đi vào. Khôi phục điều kiện đoạn dài hơn tolerance.
+
+## Tự kiểm tra kết quả
+
+Axis interval, song song, signed zero, tangent, origin-inside và hai hướng tại mặt max đều đúng. Reach hữu hạn trong (0,64], direction normalized và bounds hợp lệ được kiểm trước traversal. MISS không đổi dữ liệu hoặc ảnh đất.
+
+## Bài tập mở rộng
+
+Tự viết bốn ray cho các phía ±Y/±Z rồi tính interval tay. Giữ direction đơn vị. Kiểm slab trước bằng hộp đầy đủ, sau đó dùng cùng hàm với một unit AABB để chuẩn bị oracle cuối module.
+
+[Bài tiếp theo](/projects/voxel-ray-editor/04-di-qua-tung-o) — Đi qua từng ô bằng 3D DDA.

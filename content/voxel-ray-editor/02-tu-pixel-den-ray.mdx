@@ -1,0 +1,81 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ pixel đang ngắm đến tia trong world
+
+## Vấn đề cần giải quyết
+
+Crosshair mới là hai nét trên ảnh. Muốn biết nó trỏ vào block nào, ta cần dựng một tia 3D mà mọi điểm trên tia đều chiếu về pixel đó. Nếu công thức ray không khớp renderer, highlight sẽ lệch dù thuật toán giao block hoàn toàn đúng.
+
+Ta giữ camera **trực giao** của Project 58–59. Không dùng công thức perspective “mọi tia cùng đi ra từ vị trí mắt” cho một renderer không có phối cảnh.
+
+## Hiểu ý tưởng trước khi viết code
+
+Camera đang xoay world theo yaw a, pitch b, trừ tâm `(8,8,8)`, rồi đổi camera x/y sang screen. Đảo phép biến đổi đó bằng ba vector cơ sở:
+
+$$R=(\cos a,0,-\sin a),$$
+$$U=(-\sin a\sin b,\cos b,-\cos a\sin b),$$
+$$N=(\sin a\cos b,\sin b,\cos a\cos b).$$
+
+R hướng sang phải trên ảnh, U hướng lên, N hướng về người xem. Với `s=6*zoom`, lấy `cx=(sx−160)/s`, `cy=(120−sy)/s`. Ta đặt origin ở camera depth=32:
+
+$$O=(8,8,8)+cxR+cyU+32N,\qquad D=-N.$$
+
+Mọi pixel có O khác nhau nhưng D giống nhau. Các vector cơ sở vuông góc/đơn vị nên D dài một; makeRay vẫn normalize và kiểm đầu vào. t trong `O+tD` là khoảng cách world tính từ mặt phẳng origin này, **không phải khoảng cách từ mắt của người chơi FPS**.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-2" />
+
+Tia đi theo chiều sâu nên trên ảnh chính nó co về một pixel. Inset XZ giúp nhìn hướng đi từ trên xuống; nó bỏ chiều y, không phải camera thứ hai dùng để chọn block.
+
+## Viết code từng bước
+
+### Bước 1 — Viết basis khớp đúng dấu của renderer
+
+```cpp title="include/ray.hpp"
+const Vec3 right{std::cos(a), 0, -std::sin(a)};
+const Vec3 up{-std::sin(a) * std::sin(b), std::cos(b), -std::cos(a) * std::sin(b)};
+const Vec3 towardViewer{std::sin(a) * std::cos(b), std::sin(b), std::cos(a) * std::cos(b)};
+```
+
+Đọc lại hàm `project` của Project 59 để đối chiếu từng dấu. `up` không đơn giản là `(0,1,0)` khi có pitch. Nếu lấy một hàm lookAt dùng quy ước khác rồi trộn vào đây, ray có thể nhìn theo một hướng khác với ảnh.
+
+### Bước 2 — Đưa tâm pixel về camera plane
+
+```cpp title="include/ray.hpp"
+const double cx = (screenX - 160) / (camera.scale * camera.zoom);
+const double cy = (120 - screenY) / (camera.scale * camera.zoom);
+```
+
+`screenX/screenY` nhận `pixelX+.5/pixelY+.5`. Y screen tăng xuống nên cy dùng `120-screenY`. Image size luôn 320×240, còn scale và center được khóa theo renderer hiện tại. CameraRay từ chối pixel ngoài vùng, zoom sai hoặc số không hữu hạn thay vì tạo một tia NaN.
+
+### Bước 3 — Dịch origin, không đổi hướng theo pixel
+
+```cpp title="include/ray.hpp"
+const Vec3 origin{8 + right.x * cx + up.x * cy + towardViewer.x * 32, 8 + right.y * cx + up.y * cy + towardViewer.y * 32, 8 + right.z * cx + up.z * cy + towardViewer.z * 32};
+return makeRay(origin, {-towardViewer.x, -towardViewer.y, -towardViewer.z});
+```
+
+Depth=32 đặt mặt phẳng phát tia ra trước chunk hữu hạn này. Đây không phải “độ xa nhìn thấy” của một world lớn. Bản học giới hạn origin local trong ±128, ray normalized và reach tối đa 64 để mọi phép tính/kiểm thử có miền rõ ràng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_60_checkpoint_2 --parallel 2
+.\build\Debug\project_60_checkpoint_2.exe
+```
+
+Refresh tạo ray và readout O/D. Cách kiểm mạnh hơn nhìn inset là lấy `pointAt(ray,t)` với t=0,16,32,50 rồi gọi project: mọi điểm phải trả về đúng `(sx,sy)` trong sai số số thực. Đổi yaw/zoom và làm lại. Hai pixel khác nhau có origin khác nhau nhưng direction bằng nhau.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ dấu trừ ở cy. Ngắm phía trên ảnh lại tạo tia đi qua điểm phía dưới. Slab/DDA sau này không thể sửa một ray đầu vào sai.
+2. Cho mọi ray cùng origin rồi thêm cx/cy vào direction như camera perspective. Nó không còn chiếu khớp renderer trực giao. Dùng kiểm chiếu ngược để bắt lỗi, không hiệu chỉnh bằng offset thủ công.
+
+## Tự kiểm tra kết quả
+
+Direction dài một và không đổi khi chỉ di chuyển crosshair; origin thay đổi theo pixel. Tia giữ đúng pixel qua nhiều t và yaw/zoom. Không có Hit hay mutation ở checkpoint 2; đường màu cam trong inset mới chỉ là ray đến reach hiện tại.
+
+## Bài tập mở rộng
+
+Viết một test cho ba pixel góc/tâm ở zoom .5,1,1.5. So project(pointAt(ray,t)) với pixel gốc bằng tolerance nhỏ. Không chỉ kiểm direction normalized: một tia dài một vẫn có thể nhìn sai hướng.
+
+[Bài tiếp theo](/projects/voxel-ray-editor/03-cat-ray-voi-chunk) — Tìm đoạn tia thật sự đi trong chunk.

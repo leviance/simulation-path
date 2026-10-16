@@ -411,5 +411,12 @@
     "sourceDirectory": "project-59-voxel-hidden-faces",
     "checkpointCount": 8,
     "demoId": "voxel-hidden-faces"
+  },
+  {
+    "id": "60",
+    "slug": "voxel-ray-editor",
+    "sourceDirectory": "project-60-voxel-ray-editor",
+    "checkpointCount": 9,
+    "demoId": "voxel-ray-editor"
   }
 ]

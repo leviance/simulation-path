@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tách input, query và cập nhật mesh
+
+## Vấn đề cần giải quyết
+
+Editor đã dùng được, nhưng ở checkpoint trước preview vẫn query lại mỗi lần refresh. Rê tâm ngắm không làm thay đổi đất; không có lý do để dựng mesh hay raster toàn ảnh chỉ vì cần biết hit mới.
+
+Bài này giữ đúng kết quả cũ, rồi giảm công việc thừa bằng ba cờ dirty. Ta dùng bộ đếm để kiểm, không suy đoán từ cảm giác giao diện có mượt hay không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba loại dữ liệu có phụ thuộc khác nhau:
+
+| Thao tác | Mesh | Ảnh CPU | Ray/Hit |
+| --- | --- | --- | --- |
+| Đổi aim hoặc reach | Giữ | Giữ | Query lại |
+| Orbit hoặc zoom camera | Giữ | Raster lại | Query lại |
+| Break/place thành công, đổi preset | Dựng lại | Raster lại | Query lại |
+| Bước preview, đổi vật liệu đặt | Giữ | Giữ | Giữ |
+| Idle | Giữ | Giữ | Giữ |
+
+Ghost tính rẻ từ hit hiện có và vật liệu; nó không làm đổi chunk. UI vẫn có thể vẽ overlay mỗi lần cần hiển thị, nhưng không vì vậy mà chạy lại thuật toán đất.
+
+<InteractiveLab demo="voxel-ray-editor" mode="pick60-8" />
+
+Ghi số rebuild/raster/query. Dịch aim đúng một lần rồi so sánh; chỉ query tăng. Orbit làm raster/query tăng. Phá một ô làm cả ba tăng ở lần refresh kế. Không dùng số FPS để thay cho những kiểm chứng này.
+
+## Viết code từng bước
+
+### Bước 1 — Đánh dấu đúng khi geometry thay đổi
+
+```cpp title="include/editor.hpp"
+inline void geometryChanged(Editor& state) {
+    state.cache.meshDirty = true;
+    state.cache.frameDirty = true;
+    state.pickDirty = true;
+    state.paused = true;
+}
+```
+
+Ngược lại, cameraChanged chỉ frameDirty/pickDirty. Aim chỉ pickDirty. Pause đường preview khi đầu vào thay đổi để người xem không bị nhảy sang ô thứ 10 của một đường mới chưa từng xem.
+
+### Bước 2 — Không query khi đầu vào chưa đổi
+
+```cpp title="include/editor.hpp"
+if (!state.pickDirty) {
+    return imageChanged;
+}
+```
+
+Refresh gọi update của SceneCache trước điều kiện này; update tự bỏ qua mesh/frame sạch. Sau đó nếu pickDirty=false thì giữ ray/trace. Khi query xong, clear pickDirty, tăng queries và đưa preview về visit đầu nếu đường vừa thay đổi.
+
+```cpp title="include/editor.hpp"
+state.pickDirty = false;
+++state.queries;
+if (changed) {
+    state.shown = 1;
+}
+```
+
+### Bước 3 — Giữ action độc lập với preview cache
+
+```cpp title="include/editor.hpp"
+state.message = result.message;
+if (result.changed) {
+    geometryChanged(state);
+}
+return result;
+```
+
+Đây là cuối hàm edit. Phần đầu vẫn tạo actionRay và query lại như bài 6–7. Bộ đếm `queries` ở UI đếm **refresh preview**, không đếm những query xác nhận action này. Tối ưu không được biến cached Hit thành kết quả đúng vĩnh viễn.
+
+Hai action có thể tới trong một vòng poll event trước khi refresh. Cả hai sửa đúng chunk hiện tại; meshDirty chỉ là bool nên lần refresh sau gộp chúng thành một rebuild. Ta gộp việc dựng mesh, không gộp hay bỏ mất action của người dùng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 8"
+cmake --build build --config Debug --target project_60_checkpoint_8 --parallel 2
+.\build\Debug\project_60_checkpoint_8.exe
+```
+
+Reset trả editor về preset bậc thang và counter của state mới. Resize Canvas chỉ đổi kích thước hiển thị/DPR; camera CPU vẫn 320×240 nên resize không yêu cầu mesh hay query mới. Native cũng dùng logical presentation để letterbox khi thay đổi cửa sổ.
+
+Kéo camera dùng pointer capture trong thời gian kéo; pointerup/cancel, blur và reset đều nhả capture. Mất focus dừng playback. Reduced-motion không tự phát DDA; các nút bước và keyboard vẫn dùng được.
+
+## Thử làm sai để hiểu đúng
+
+1. Đặt meshDirty=true trong mouse motion. Hình có thể không đổi nhưng rebuild tăng liên tục. Chuyển aim về pickDirty; chỉ geometry thật sự đổi mới chạm mesh.
+2. Dùng state.trace.hit để break sau khi vừa thay aim mà chưa refresh. Bạn có thể xóa ô ở vị trí cũ. Giữ action query riêng dù preview đã có dirty flag.
+
+## Tự kiểm tra kết quả
+
+Idle không tăng counter. Aim/reach chỉ tăng preview query, camera không rebuild mesh. Edit thành công cập nhật cả geometry/frame/pick; thất bại không dựng lại đất. Hai edit trước refresh dùng hit mới và chỉ cần một rebuild. Counter query có ý nghĩa rõ ràng, không bị quảng cáo như tổng mọi truy vấn của chương trình.
+
+## Bài tập mở rộng
+
+Viết test thuần thay aim, refresh hai lần và kiểm queries chỉ tăng 1. Tiếp đó gọi hai break trước refresh: solid giảm 2 nhưng rebuild chỉ tăng 1. Dùng fixture có đủ hai block dọc ray, không phụ thuộc vào một góc camera tình cờ.
+
+[Bài tiếp theo](/projects/voxel-ray-editor/09-kiem-chung-va-hoan-thien) — Kiểm chứng picker và hoàn thiện editor.
