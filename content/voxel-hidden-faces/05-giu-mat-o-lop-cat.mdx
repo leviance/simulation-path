@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ đúng mặt trên khi cắt lớp
+
+## Vấn đề cần giải quyết
+
+Ở Project 58, cắt hình tại y=slice chỉ cần không dựng các block phía trên. Mỗi block phía dưới vốn còn đủ sáu mặt, nên mặt trên tự có. Sau khi loại mặt tiếp giáp, cách làm chưa đầy đủ đó sẽ tạo lỗi mới: mặt trên bị bỏ vì dữ liệu vẫn còn block ở lớp cao hơn, dù block ấy không được vẽ.
+
+Ta cần thống nhất **miền đang hiển thị** cho cả block nguồn lẫn neighbor. Không cần xóa dữ liệu, không tạo một tấm nắp giả đè lên toàn chunk.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với slice=k, phần hiển thị chỉ gồm các block có y không lớn hơn k. Neighbor ở y=k+1 không nằm trong phần này; đối với mesher của ảnh cắt, nó được coi là Air hiển thị. Vì thế mặt +Y của block ở y=k phải được giữ.
+
+$$solid_{active}(x,y,z)=inside(x,y,z)\land(y\le k)\land(Block(x,y,z)\ne Air).$$
+
+Với full chunk cắt ở k=0, ta còn hộp 16×1×16:
+
+$$F=2(16\times16+16\times1+1\times16)=576,\qquad T=1152.$$
+
+Baseline của cùng phần cắt có 256 block/3072 triangles. So 1152 với 3072, **không so với baseline cả chunk 49152**, nếu muốn diễn tả đúng tỷ lệ giảm geometry ở trạng thái đang xem.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="faces59-5" />
+
+Kéo Cắt ở y xuống 0 rồi xoay nhìn từ trên. Tấm đất phải kín, không chỉ còn thành bên. Mở lại y=15 phải có đầy đủ khối cũ vì dữ liệu chưa bị sửa.
+
+## Viết code từng bước
+
+### Bước 1 — Cho slice thực sự chọn miền hiển thị
+
+```cpp title="include/model.hpp"
+inline int effectiveSlice(int slice) {
+    if (slice < 0 || slice >= side) {
+        throw std::invalid_argument("slice must be 0..15");
+    }
+    return slice;
+}
+```
+
+Ở các checkpoint trước, sau kiểm hợp lệ hàm luôn trả 15. Từ bài này, nó trả lớp người dùng chọn. Cùng hàm được dùng cho vòng dựng mesh và phép đọc neighbor để tránh hai định nghĩa miền khác nhau.
+
+### Bước 2 — Chỉ dựng block trong miền đó
+
+```cpp title="include/mesh.hpp"
+const int top = effectiveSlice(slice);
+```
+
+`buildMesh` duyệt y từ 0 đến top, bao gồm top. Block tại y=top còn được vẽ; từ top+1 trở lên không có geometry. Storage Chunk vẫn nguyên 4096 ô và hàm nhận `const Chunk&`.
+
+### Bước 3 — Dùng cùng giới hạn khi đọc neighbor
+
+```cpp title="include/mesh.hpp"
+if (!inside(x, y, z) || y > effectiveSlice(slice)) {
+    return false;
+}
+return get(chunk, x, y, z) != Block::Air;
+```
+
+Đây là `activeSolid`, đã được viết từ bài 3. Điều mới là effectiveSlice không còn trả hằng 15. Với block `(8,0,8)` và slice=0, neighbor +Y `(8,1,8)` có ID Stone thật nhưng **không active**. keepFace trả true và thêm mặt nắp của chính block nguồn.
+
+Nhờ quy tắc này, khoang Air khi bị mặt cắt mở ra cũng có hình nhất quán. Không cần special-case “cavity preset”, không dựng một quad khổng lồ bỏ qua lỗ rỗng hoặc vật liệu.
+
+### Bước 4 — Đổi slice và đánh dấu geometry cần dựng lại
+
+```cpp title="include/controls.hpp"
+if (key == SDLK_PAGEUP || key == SDLK_PAGEDOWN) {
+    stop(state);
+    if (key == SDLK_PAGEUP) {
+        state.slice = std::min(15, state.slice + 1);
+    } else {
+        state.slice = std::max(0, state.slice - 1);
+    }
+    invalidateGeometry(state);
+}
+```
+
+Slice đổi tập block và tập mặt, nên không chỉ là camera/frame change. `invalidateGeometry` đánh dấu cả meshDirty và frameDirty. Việc tách hai bước để không rebuild khi chỉ xoay sẽ được hoàn thiện ở bài 7.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_59_checkpoint_5 --parallel 2
+.\build\Debug\project_59_checkpoint_5.exe
+```
+
+Native dùng PageUp/PageDown; Canvas có slider và cùng hai phím khi canvas có focus. Full tại slice=7 giữ tám lớp: F=`2*(16*16+16*8+8*16)=1024`, T=2048. Counts “Block trong miền hiển thị” là N active, không phải storage đã bị thu nhỏ.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ vòng y đến slice nhưng đọc neighbor bằng toàn chunk. Mặt nắp của lớp trên cùng biến mất. Sửa lại miền đọc neighbor, không tắt Z-buffer để che vấn đề.
+2. Set các block trên slice thành Air trong Chunk. Kéo slice lên lại sẽ thấy dữ liệu đã mất. Hoàn nguyên và tạo lại preset; cắt hiển thị không phải công cụ phá block.
+
+## Tự kiểm tra kết quả
+
+Full slice=0: 256 block active, 576 quad, 1152 triangles. Slice=7: 2048 block, 1024 quad, 2048 triangles. Slice=15: 4096 block, 1536 quad, 3072 triangles. Mở/đóng lớp nhiều lần không đổi bất kỳ Block ID gốc nào. Nắp đúng vật liệu của block nguồn, có lỗ nếu ô nguồn là Air.
+
+## Bài tập mở rộng
+
+Kiểm full ở mọi slice từ 0 đến 15 bằng công thức `F=512+64*(slice+1)`. Lưu một bản sao Chunk trước vòng test và so lại sau cùng. Đây là bài test nhỏ hữu hạn, không cần chạy render liên tục hàng nghìn frame.
+
+[Bài tiếp theo](/projects/voxel-hidden-faces/06-doc-quyet-dinh-tung-mat) — Đọc lý do giữ hoặc bỏ từng mặt.

@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chỉ dựng mặt có ô trống ở bên kia
+
+## Vấn đề cần giải quyết
+
+Hai block opaque kề nhau có hai mặt nằm trên cùng chỗ tiếp giáp. Cả hai mặt không thể thấy từ bên ngoài khối đặc. Ta sẽ không tạo chúng ngay từ đầu, thay vì tạo xong rồi mong Z-buffer loại bớt công việc.
+
+Đây là thay đổi thuật toán đầu tiên. Giữ nút chuyển baseline/culled để so trên **cùng chunk và camera**, không reset góc nhìn khi đổi chế độ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Để xét mặt +X của block `(x,y,z)`, đọc ô `(x+1,y,z)`. Mặt −X đọc `(x−1,y,z)`, tương tự cho y và z. Quy tắc của project rất ngắn:
+
+$$keep(p,f)=\neg solid(p+offset_f).$$
+
+Quy tắc này chỉ được dùng sau khi biết block nguồn là đặc. Air không có mặt để xét. Trong project, Grass/Dirt/Stone đều opaque; không so hai ID có bằng nhau hay không.
+
+Với chunk độc lập, tọa độ ngoài 0..15 được coi là Air **theo phạm vi ứng dụng hiện tại**. Không gọi get ngoài mảng, không wrap sang cạnh đối diện. Khi có nhiều chunk thật, phải đọc dữ liệu chunk lân cận; ta chưa xây phần đó ở đây.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="faces59-3" />
+
+Bật/tắt “Bỏ mặt tiếp giáp” hoặc nhấn M khi Canvas có focus. Khối đặc giữ nguyên hình ngoài nhưng số triangles đổi từ 49152 xuống 3072. Cặp block đổi từ 24 xuống 20 vì bỏ hai quad chung, mỗi quad hai triangles.
+
+## Viết code từng bước
+
+### Bước 1 — Khóa thứ tự sáu offset
+
+```cpp title="include/mesh.hpp"
+inline constexpr std::array<std::array<int, 3>, 6> offsets{{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}};
+```
+
+Thứ tự phải khớp quad trong geometry.hpp. Không tráo +Y và +Z chỉ vì nhìn phối cảnh thấy hai hướng “đều đi lên” trên màn hình. Offset là tọa độ world nguyên, không phải vector screen sau phép chiếu.
+
+### Bước 2 — Đọc neighbor an toàn
+
+```cpp title="include/mesh.hpp"
+inline bool activeSolid(const Chunk& chunk, int x, int y, int z, int slice) {
+    // Ngoài chunk hoặc phía trên mặt cắt là Air của miền hiển thị.
+    if (!inside(x, y, z) || y > effectiveSlice(slice)) {
+        return false;
+    }
+    return get(chunk, x, y, z) != Block::Air;
+}
+```
+
+`inside` được kiểm trước get. Ở checkpoint 3, effectiveSlice luôn trả 15: chưa có cắt lớp. Chữ ký đã giữ slice để bài sau thêm miền hiển thị mà không viết lại toàn bộ đường gọi. Ngoài chunk trả false không có nghĩa set ô ngoài đó thành Air trong mảng; ô ấy không tồn tại trong storage.
+
+### Bước 3 — Tách quyết định khỏi tạo vertex
+
+```cpp title="include/mesh.hpp"
+inline bool keepFace(const Chunk& chunk, int x, int y, int z, int face, int slice) {
+    const auto offset = offsets.at(static_cast<std::size_t>(face));
+    return !activeSolid(chunk, x + offset[0], y + offset[1], z + offset[2], slice);
+}
+```
+
+Hàm này không biết camera hoặc renderer. Cùng một chunk phải cho cùng tập mặt dù camera ở bên nào. Nếu đưa view direction vào đây, bạn đã trộn thuật toán khác vào quy tắc neighbor.
+
+### Bước 4 — Bỏ mặt trước khi gọi appendFace
+
+```cpp title="include/mesh.hpp"
+if (culled) {
+    ++result.neighborChecks;
+    if (!keepFace(chunk, x, y, z, face, slice)) {
+        continue;
+    }
+}
+appendFace(result.mesh, origin, static_cast<int>(block), face);
+result.keys.push_back({x, y, z, face});
+```
+
+Một mặt bị bỏ không có vertex và không có FaceKey trong output. `neighborChecks` đếm sáu quyết định mỗi block đặc, kể cả quyết định ở biên; nó không chỉ đếm số lần get thật sự đọc mảng. Baseline không chạy nhánh này và giữ đủ sáu mặt.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_59_checkpoint_3 --parallel 2
+.\build\Debug\project_59_checkpoint_3.exe
+```
+
+Với khối đặc, mỗi mặt ngoài có 16×16 quad. Tổng là `6*16*16=1536` quad, 3072 triangles. Tỷ lệ bỏ geometry là `1−3072/49152=93.75%`; bản mới còn 1/16 số triangles. Đây **không phải** lời hứa FPS tăng 16 lần: vẫn có quét chunk, kiểm neighbor, upload/present và raster các mặt ngoài.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng offset −X khi xét mặt +X. Với cặp block ở x=7 và x=8, chương trình bỏ sai mặt ngoài và giữ mặt chung. Hình có thể hở; FaceKey sẽ chỉ rõ hướng sai.
+2. Bỏ kiểm inside rồi gọi get ở x=16 của block mép. Chương trình phải báo ngoài miền thay vì wrap về x=0. Đưa kiểm biên lại trước phép đọc, không nới mảng để che lỗi.
+
+## Tự kiểm tra kết quả
+
+Single vẫn 12 triangles, pair 20, full 3072. Bật/tắt M không đổi chunk hoặc camera, Z-buffer luôn bật. Neighbor checks bằng 6N trong culled mode và 0 ở baseline. Đổi góc nhìn không đổi tập mặt, kể cả những mặt quay lưng với camera.
+
+## Bài tập mở rộng
+
+Đặt hai block chỉ chạm cạnh hoặc chạm góc. Chúng phải giữ đủ 12 quad/24 triangles vì không kề theo một trong sáu hướng. Đây là bài test bắt lỗi dùng nhầm 26-neighborhood thay vì sáu ô kề mặt.
+
+[Bài tiếp theo](/projects/voxel-hidden-faces/04-bien-chunk-va-khoang-rong) — Phân biệt biên chunk, vật liệu và khoang Air.

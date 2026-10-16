@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc lý do giữ hoặc bỏ từng mặt
+
+## Vấn đề cần giải quyết
+
+Counts có thể đúng nhưng mặt vẫn sai vị trí: bỏ nhầm một mặt +X và giữ thừa một mặt −X thì tổng không đổi. Ta cần lần theo **một quyết định cụ thể**, từ block nguồn qua offset đến neighbor.
+
+Inspector không chỉnh sửa đất. Nó chỉ đọc dữ liệu và giải thích điều mesher sẽ làm; người học có thể đối chiếu với FaceKey thay vì đoán từ màu pixel.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn `(x,y,z)` và một hướng face. Trước hết hỏi block nguồn có active không. Nếu nguồn là Air hoặc nằm trên cut thì **không có mặt nguồn**, khác với trường hợp “có mặt nhưng bị neighbor che”. Sau đó mới phân loại neighbor:
+
+- Ngoài chunk độc lập: giữ.
+- Trong chunk nhưng trên cut: giữ nắp.
+- Trong miền, ID=Air: giữ.
+- Trong miền, opaque: bỏ.
+
+$$neighbor=selected+offset[face].$$
+
+Inspector không phụ thuộc camera. Khi baseline đang được chọn, nó vẫn có thể nói “quy tắc culling sẽ bỏ mặt này”, còn readout chế độ phải báo baseline thực tế vẫn giữ. Đừng trộn lời giải thích quy tắc với trạng thái geometry hiện tại.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="faces59-6" />
+
+Bảng x/z đọc ở **Block y**, độc lập với Cắt ở y. Nhờ vậy ta kiểm được cả nguồn nằm trên cut. Viền cam trên hình là overlay debug vẽ đè, kể cả mặt đang bị che; nó không chứng minh mặt ấy nhìn thấy từ camera. Màu nền và Z-buffer của ảnh chính không bị đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Từ bảng 2D đến tọa độ block
+
+```cpp title="include/inspection.hpp"
+const double localX = x - panelX;
+const double localZ = y - panelY;
+if (localX < 0 || localZ < 0 || localX >= 256 || localZ >= 256) {
+    return std::nullopt;
+}
+return std::array<int, 3>{static_cast<int>(localX / cellSize), selectedY, static_cast<int>(localZ / cellSize)};
+```
+
+Panel native ở `(660,60)`, mỗi ô bước 16 logical pixel. Screen y sau khi trừ panelY trở thành z trên bảng, không phải world y. Native đổi event sang render coordinates trước khi picking; [SDL cũng đổi xrel/yrel theo logical presentation](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates).
+
+Miền bảng là half-open: click đúng cạnh phải hoặc cạnh dưới không tạo ô 16. Pointer capture giữ drag cho đến up/cancel; ra khỏi bảng không clamp thành block mép. Một drag bắt đầu ở bảng không được chuyển thành orbit khi rời bảng.
+
+### Bước 2 — Từ chối nguồn không có geometry
+
+```cpp title="include/inspection.hpp"
+const auto [x, y, z] = selected;
+const auto offset = offsets.at(static_cast<std::size_t>(face));
+if (!activeSolid(chunk, x, y, z, slice)) {
+    return "No face: source is Air or outside active slice";
+}
+```
+
+Đọc nguồn trước neighbor. Chọn khoang Air `(8,8,8)` không nên hiện “giữ sáu mặt” chỉ vì quanh nó có đất; Air không tự sinh cube. Sáu mặt quanh khoang thuộc **sáu block đặc lân cận**, quay về phía ô Air.
+
+### Bước 3 — Ghi rõ lý do của neighbor
+
+```cpp title="include/inspection.hpp"
+std::string reason = "KEEP: neighbor Air";
+if (!inside(nx, ny, nz)) {
+    reason = "KEEP: outside isolated chunk";
+} else if (ny > effectiveSlice(slice)) {
+    reason = "KEEP: above display cut";
+} else if (activeSolid(chunk, nx, ny, nz, slice)) {
+    reason = "DROP: opaque neighbor";
+}
+```
+
+`nx/ny/nz` là selected+offset, in kèm trong readout để thấy được dấu và trục. Các nhãn native dùng ASCII vì SDL_RenderDebugText không phải thư viện font tiếng Việt; bài học và Canvas giải thích bằng tiếng Việt.
+
+### Bước 4 — Giữ inspector là thao tác chỉ đọc
+
+```cpp title="include/controls.hpp"
+if (key == SDLK_F) {
+    state.face = (state.face + 1) % 6;
+}
+```
+
+Native U/I đổi x, J/K đổi y, N/O đổi z; F đi sáu hướng. Canvas có ô số x/y/z, select hướng và bảng click/drag, tất cả dùng được bằng keyboard. Chọn block/hướng không gọi invalidateGeometry; chỉ overlay/text cần đổi. Cách này cũng tránh việc UI debug tự làm lệch số đo rebuild ở bài sau.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_59_checkpoint_6 --parallel 2
+.\build\Debug\project_59_checkpoint_6.exe
+```
+
+Thử bốn tình huống: full tại `(15,7,7)` hướng +X → ngoài chunk; full `(7,7,7)` hướng +X → opaque; full slice=7, nguồn `(7,7,7)` +Y → trên cut; cavity nguồn `(7,8,8)` +X → Air thật. Sau đó chọn `(8,8,8)` ở cavity để thấy thông báo không có mặt nguồn.
+
+## Thử làm sai để hiểu đúng
+
+1. Đọc màu pixel dưới con trỏ thay vì Block ID. Mặt bị che không có pixel riêng; màu đậm/nhạt cũng không mã hóa ID một-một. Quay lại get/activeSolid trên dữ liệu.
+2. Khi baseline bật, đổi nhãn thành “mesh đã bỏ” theo keepFace. Inspector lúc này nói sai về chế độ thực tế. Tách readout quy tắc khỏi readout baseline/culled như demo.
+
+## Tự kiểm tra kết quả
+
+Cả bốn lý do và trường hợp thiếu nguồn đều đọc được, tọa độ neighbor đúng dấu. Chọn ô không sửa Chunk hoặc số triangles, không đổi camera. Focus loss, reset, pointer cancel nhả capture; keyboard vẫn chọn được ô/hướng khi không dùng chuột. Đây chưa phải ray picking hoặc phá/đặt block của Project 60.
+
+## Bài tập mở rộng
+
+Tạo bảng sáu dòng cho block đang chọn, mỗi dòng là hướng, neighbor và lý do. Dữ liệu đến từ cùng hàm inspectFace; không viết lại sáu nhánh logic khác nhau trong UI. So bảng với FaceKey của block đó khi culled mode bật.
+
+[Bài tiếp theo](/projects/voxel-hidden-faces/07-khong-dung-lai-mesh-khi-xoay) — Không dựng lại mesh khi chỉ xoay camera.

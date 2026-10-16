@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng mesher và hoàn thiện ứng dụng
+
+## Vấn đề cần giải quyết
+
+Khối đất trông giống baseline là điều cần, nhưng chưa đủ: camera ngoài không thấy được mặt thiếu quanh khoang kín; đếm đúng tổng cũng chưa phát hiện một mặt bị giữ sai chỗ. Bài cuối ghép các kiểm tra độc lập để bản tối ưu không chỉ “có vẻ chạy”.
+
+Source hoàn chỉnh phải build được cả Debug/Release, tests không cần mở window, smoke tự thoát và ZIP không phụ thuộc website. Kiểm trực tiếp chuột/keyboard trên desktop được tách riêng khỏi kiểm tự động.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi N là số block active, E là số **cặp kề mặt vô hướng** trong miền hiển thị. Ban đầu có 6N mặt; mỗi cặp kề làm mất hai mặt đối nhau:
+
+$$F=6N-2E.$$
+
+Chỉ đếm cặp theo +X/+Y/+Z để mỗi cặp xuất hiện một lần. Oracle này không gọi keepFace. Nó kiểm tổng quad, còn một oracle thứ hai quét từng mặt phẳng giữa hai ô và so trạng thái hai phía để lập **tập FaceKey chính xác**. Hai cách kiểm bổ sung cho nhau:
+
+- Counts bắt thừa/thiếu tổng thể và đối chiếu công thức hộp/cavity/checker.
+- FaceKey `(x,y,z,face)` bắt sai vị trí, sai hướng hoặc trùng mặt dù tổng vẫn đúng.
+- Winding đối chiếu cross product với offset; ảnh/depth so với baseline kiểm đường render thật.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="faces59-8" />
+
+Nút kiểm trên Canvas chạy bảy preset ở ba slice, kiểm F=6N−2E, keys duy nhất và dữ liệu bất biến. Node tests và CTest có thêm plane oracle, cache, winding và depth từ nhiều góc. Nút PASS không tự chứng minh mọi thao tác desktop đã được thử.
+
+## Viết code từng bước
+
+### Bước 1 — Viết oracle bằng cặp block, không dùng lại keepFace
+
+```cpp title="include/audit.hpp"
+if (x + 1 < side && get(chunk, x + 1, y, z) != Block::Air) {
+    ++adjacentPairs;
+}
+if (y + 1 <= top && get(chunk, x, y + 1, z) != Block::Air) {
+    ++adjacentPairs;
+}
+if (z + 1 < side && get(chunk, x, y, z + 1) != Block::Air) {
+    ++adjacentPairs;
+}
+```
+
+Đoạn này chạy sau khi biết block nguồn đặc và tăng N. Lấy `6*solid-2*adjacentPairs` làm đáp án. Chặn +Y theo top chứ không luôn theo 15, vì oracle phải đếm đúng miền cắt đang kiểm.
+
+### Bước 2 — So cả tập mặt từ cách quét khác
+
+```cpp title="tests/tests.cpp"
+const bool a = occupied(negative);
+const bool b = occupied(positive);
+if (a == b) {
+    continue;
+}
+```
+
+Trong `planeOracle`, với mỗi trục ta quét các mặt phẳng k=0..16. Nếu hai phía cùng đặc hoặc cùng trống, không có mặt biên. Nếu chỉ một phía đặc, mặt thuộc block phía ấy và hướng về phía trống. Thuật toán không dùng bảng offsets của mesher, nên một bảng offset bị tráo có thể bị phát hiện thay vì sai giống nhau ở hai bên.
+
+```cpp title="tests/tests.cpp"
+check(std::set<FaceKey>(result.keys.begin(), result.keys.end()) == planeOracle(chunk, slice), "oriented faces match plane oracle");
+```
+
+Tests còn dùng năm mẫu sparse xác định bằng công thức nguyên để tránh chỉ đúng trên hình hộp. Tổng miền nhỏ, hữu hạn; không tạo thế giới lớn hoặc chạy randomized loop không có điểm dừng.
+
+### Bước 3 — Kiểm depth và cache, không đòi pixel màu tuyệt đối ở đường chung
+
+```cpp title="tests/tests.cpp"
+render(baseline, buildMesh(chunk, false, 7).mesh, camera);
+render(culled, buildMesh(chunk, true, 7).mesh, camera);
+```
+
+Với full/cavity/steps ở hai yaw, so coverage hữu hạn và depth gần nhất với tolerance 1e−8. Không chỉ nhìn checksum tổng dễ triệt tiêu sai số. Những fragment đồng phẳng tại đường chung có thể tie theo draw order; phân biệt sai màu ở đúng điểm tie với mất bề mặt hoặc depth sai. Z-buffer luôn bật ở cả hai đường.
+
+CTest cũng kiểm idle không làm việc, camera không rebuild, geometry change tạo frame mới và cut không sửa Chunk. Runner dùng check/exception tường minh; không dùng assert bị vô hiệu ở Release.
+
+### Bước 4 — Build cả hai cấu hình với giới hạn rõ ràng
+
+```bash title="Terminal — Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Debug\project_59_final.exe
+```
+
+Windows dùng Visual Studio 2022 với Desktop development with C++. Single-config generator chọn CMAKE_BUILD_TYPE khi configure, executable trực tiếp ở build. Final là target mặc định; BUILD_CHECKPOINTS bật starter và checkpoint 1…8. SDL3 khóa 3.4.8 qua FetchContent/checksum, luôn link `SDL3::SDL3` theo [hướng dẫn CMake chính thức](https://wiki.libsdl.org/SDL3/README-cmake).
+
+## Ghép các phần lại
+
+Chạy hidden smoke một frame có thời hạn để xác nhận tạo SDL/texture và đường present, không dùng nó thay CTest:
+
+```powershell title="PowerShell — smoke có giới hạn"
+$smoke = Start-Process -FilePath ".\build\Debug\project_59_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Smoke vượt 30 giây; dừng kiểm để đọc lỗi."
+}
+if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+Kiểm desktop riêng một lượt ngắn: bảy preset, M không nhảy camera, cut không mất nắp, inspector không rebuild, kéo bảng ra ngoài/cancel, keyboard x/y/z/hướng, resize/high-DPI/letterbox, pause/reset/blur. Canvas ở reduced-motion chỉ xoay thủ công, rời tab không tự resume. Không mở stress test vô hạn để “chắc hơn”.
+
+Phần source sau mỗi bài khớp đúng checkpoint; cuối module có toàn bộ mã của project. ZIP gồm README, CMake, starter, tám checkpoint, final và tests, không cần Node hoặc web server để chạy C++. Snapshot/ZIP/build output được sinh lại từ nguồn chuẩn, không đưa vào Git.
+
+## Thử làm sai để hiểu đúng
+
+1. Đếm E theo cả sáu hướng rồi vẫn dùng `6N−2E`. Mỗi cặp bị trừ hai lần; pair không còn đáp án 10 quad. Sửa oracle về ba hướng dương, không sửa fixture cho khớp số sai.
+2. Giữ nhầm một mặt và bỏ nhầm một mặt khác để tổng không đổi. Count có thể PASS nhưng so FaceKey với plane oracle phải FAIL. Một phép đo đúng không thay thế tất cả lớp kiểm chứng khác.
+
+## Tự kiểm tra kết quả
+
+Debug/Release CTest trả exit code 0. Starter, từng checkpoint và final build; smoke tự thoát. Full/cavity/checker/cut khớp counts đã tính độc lập; FaceKey/winding/coverage/depth đúng. Caching không làm ảnh cũ khi geometry đổi. Website routes, search, glossary và ZIP đồng bộ; kiểm tương tác trực tiếp được ghi rõ đã hoặc chưa làm.
+
+Project 59 kết thúc với **một chunk opaque, neighbor-face elimination, chưa gộp quad**. Project 60 — Chọn, phá và đặt block bằng tia từ camera là bước tiếp theo. Project 60–78 hiện **Sắp ra mắt**, chưa có tutorial hoàn chỉnh; greedy meshing dành cho Project 61 và streaming cho Project 62.
+
+## Bài tập mở rộng
+
+Lập báo cáo nhỏ cho full, cavity, checker và steps: N, số cặp E, F dự đoán, F thực tế, baseline triangles và culled triangles. Ghi riêng chi phí quét/kiểm neighbor với giảm output. Giữ bảng để so với greedy meshing sau này; chưa gọi việc bỏ mặt tiếp giáp là gộp mặt.
+
+[Quay lại Project 59](/projects/voxel-hidden-faces) hoặc [xem roadmap](/roadmap) để chuẩn bị bước tiếp theo.

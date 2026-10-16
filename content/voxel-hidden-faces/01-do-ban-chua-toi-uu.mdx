@@ -1,0 +1,93 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo bản chunk còn đủ sáu mặt
+
+## Vấn đề cần giải quyết
+
+Project 58 đã dựng được một khối đất 16³, nhưng một block nằm sâu bên trong vẫn sinh đủ sáu mặt. Ta không thấy các mặt ấy vì Z-buffer che chúng, chứ chương trình chưa hề ngừng tạo và xử lý chúng.
+
+Lần này ta sẽ bỏ phần geometry dư thừa mà vẫn giữ nguyên bề mặt ngoài. Trước khi đọc lời giải, hãy thử [thử thách đầu Project 59](/projects/voxel-hidden-faces): hai block kề nhau cần bao nhiêu mặt, và làm sao quyết định điều đó mà không nhìn vào camera?
+
+Bài đầu **chưa tối ưu**. Ta chạy bản nền, nhìn thấy chunk và đọc đúng số đầu vào rasterizer. Nếu chưa có một baseline đáng tin, việc báo “giảm được rất nhiều tam giác” sẽ chẳng có gì để đối chiếu.
+
+## Hiểu ý tưởng trước khi viết code
+
+ZIP mang theo bộ khung đầy đủ từ Project 58: dữ liệu Block ID, layout x/z/y, camera trực giao, rasterizer 320×240, Z-buffer và đường upload texture SDL3. Starter chạy được nhưng mesh rỗng; checkpoint 1 nối dữ liệu chunk vào hàm dựng cube để có hình thật. Không cần tự tìm và chép lại một loạt header từ project cũ.
+
+Với bản nền, mỗi block đặc tạo 6 quad, mỗi quad 2 triangles:
+
+$$F_{base}=6N,\qquad T_{base}=12N.$$
+
+Khối đặc có N=4096 nên F=24576, T=49152. **Đây là tổng geometry được gửi vào rasterizer**, không phải số mặt camera đang nhìn thấy. Tắt màu, phóng nhỏ cửa sổ hoặc xoay sang góc khác không làm danh sách đó ngắn đi.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="faces59-1" />
+
+Đổi giữa một block, hai block kề nhau và khối đặc. Dù hai block ghép lại trông như một hộp dài, baseline vẫn lưu hai mặt chung ở giữa. Camera và pause đã có sẵn từ Project 58; bài này không bắt bạn học lại input trước khi xử lý vấn đề mới.
+
+## Viết code từng bước
+
+### Bước 1 — Chạy bộ khung của project mới
+
+Giải nén ZIP, mở PowerShell tại thư mục có CMakeLists.txt:
+
+```bash title="Terminal — starter và checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_59_starter project_59_checkpoint_1 --parallel 2
+.\build\Debug\project_59_starter.exe
+.\build\Debug\project_59_checkpoint_1.exe
+```
+
+Đóng starter trước khi chạy checkpoint. Starter phải hiện nền tối; checkpoint phải hiện khối đặc. Escape thoát. Nếu window hoặc texture chưa tạo được, đọc SDL_GetError trước khi sửa mesher.
+
+### Bước 2 — Dựng đủ cube từ dữ liệu thật
+
+```cpp title="include/mesh.hpp"
+const Block block = get(chunk, x, y, z);
+if (block == Block::Air) {
+    continue;
+}
+++result.solid;
+const Vec3 origin{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)};
+appendCube(result.mesh, origin, static_cast<int>(block));
+```
+
+Đoạn này nằm trong ba vòng y/z/x của `buildMesh`. Chỉ Air bị bỏ. Với mỗi block đặc, `appendCube` thêm đủ 12 triangles, đúng như Project 58. `BuildResult` giữ mesh cùng bộ đếm; danh sách `keys` ghi nguồn của từng mặt để các bài sau kiểm vị trí/hướng, không tham gia vào phép chiếu.
+
+### Bước 3 — Nối mesh với framebuffer rồi texture
+
+```cpp title="src/main.cpp"
+if (voxel::update(state.cache, state.chunk, state.culled, state.slice, state.camera)) {
+    voxel::upload(texture, state.cache.frame);
+}
+voxel::draw(renderer, texture, state);
+```
+
+`update` hiện dựng lại baseline khi ảnh cần thay đổi, rồi gọi rasterizer. `upload` khóa streaming texture và copy từng hàng theo pitch. `draw` đưa texture lên renderer:
+
+```cpp title="include/view.hpp"
+const SDL_FRect image{0, 0, 640, 480};
+require(SDL_RenderTexture(renderer, texture, nullptr, &image));
+```
+
+Ảnh CPU giữ 320×240, vùng hiển thị logical 640×480 dùng nearest filtering. Window toàn bộ 960×600 có letterbox. Resize không đổi số block, không thêm triangle và không tăng framebuffer CPU. [SDL_LockTexture trả vùng ghi với pitch riêng](https://wiki.libsdl.org/SDL3/SDL_LockTexture); bản khung ghi đủ pixel, không dựa vào nội dung texture cũ.
+
+## Ghép các phần lại
+
+P đổi preset, R reset, kéo hoặc dùng arrow để xoay, +/− zoom, Space chạy/dừng. Mở ở trạng thái paused; mất focus thì dừng và nhả capture. Trong checkpoint này chưa có phím M hoặc checkbox culling: ta chưa viết quy tắc giữ/bỏ mặt.
+
+Chuyển preset hai block: `solid=2`, `faces=12`, `triangles=24`. Chuyển khối đặc: 4096/24576/49152. Mã chạy độc lập của toàn checkpoint nằm ngay dưới bài, bao gồm SDL setup, rasterizer và cleanup — không chỉ một đoạn hàm thiếu ngữ cảnh.
+
+## Thử làm sai để hiểu đúng
+
+1. Nhầm `result.mesh.size()` là số quad. Kết quả hai block thành “24 mặt”, gấp đôi đúng 12 quad. Ghi rõ đơn vị ở UI và nhớ mỗi quad có hai triangles.
+2. Đổi camera rồi suy rằng số mặt đã giảm vì chỉ còn thấy một hoặc hai phía. Đọc lại bộ đếm: geometry không đổi. Ta cần sửa bước dựng mesh, không đổi góc nhìn để giấu công việc dư thừa.
+
+## Tự kiểm tra kết quả
+
+Starter chỉ nền tối; checkpoint có chunk và counts đúng cho cả ba preset. Bản một block có 6 quad/12 triangles, bản hai block 12/24. Z-buffer vẫn bật, reset/pause/resize hoạt động. Chưa có giảm geometry ở bài này.
+
+## Bài tập mở rộng
+
+Vẽ hai hình cube trên giấy và tô hai mặt chạm nhau. Viết đáp án cho số quad sau khi bỏ chúng, rồi thử tự sửa trước khi đọc tiếp. Không đổi Z-buffer hoặc màu vật liệu để làm hai mặt đó “biến mất”.
+
+[Bài tiếp theo](/projects/voxel-hidden-faces/02-tach-ham-ve-mot-mat) — Tách một mặt khỏi hàm dựng cube.

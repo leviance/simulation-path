@@ -54,7 +54,7 @@ const data = {
       "Photon chạm giới hạn được báo riêng; conservation và ballistic subset đúng với mọi preset nhỏ.",
       "Wilson interval kiểm được cả k=0, k=N và N=0; không yêu cầu mọi seed luôn nằm trong khoảng 95%.",
       "Pure CTest Debug/Release, hidden SDL smoke và kiểm tra toàn site có timeout; kiểm tương tác desktop được báo riêng.",
-      "Roadmap/search/glossary/downloads đồng bộ; Project 59–78 vẫn Sắp ra mắt và generated output không đưa vào Git.",
+      "Roadmap/search/glossary/downloads đồng bộ; các project chưa phát hành hiển thị Sắp ra mắt và generated output không đưa vào Git.",
     ],
   },
   lessons: [

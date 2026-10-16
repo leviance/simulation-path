@@ -1,0 +1,92 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tách một mặt khỏi hàm dựng cube
+
+## Vấn đề cần giải quyết
+
+`appendCube` hiện thêm cả sáu mặt một lần. Nếu mặt +X bị block bên cạnh che, ta chưa có cách bỏ riêng nó. Bước nhỏ trước khi viết thuật toán là tách hàm `appendFace`: gọi hàm này một lần chỉ sinh đúng hai triangles của một quad.
+
+Bài này là **refactor không đổi hình**. Counts và ảnh phải giữ như checkpoint 1; đừng vừa tách hàm vừa thêm culling rồi không biết lỗi xuất hiện từ thay đổi nào.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta giữ nguyên thứ tự mặt của Project 58: 0=+X, 1=−X, 2=+Y, 3=−Y, 4=+Z, 5=−Z. Mảng quad, màu đậm nhạt và offset neighbor về sau phải dùng chung thứ tự này.
+
+Một quad có bốn góc, nhưng hai triangles cần sáu lượt tham chiếu:
+
+$$Q=(v_0,v_1,v_2,v_3)\longrightarrow (v_0,v_1,v_2),(v_0,v_2,v_3).$$
+
+Giữ thứ tự CCW khi nhìn từ ngoài block. Culling lần này không phải back-face culling, nhưng winding đúng vẫn cần để normal, hướng mặt và phiên bản renderer sau không mâu thuẫn nhau.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="faces59-2" />
+
+Demo có cùng hình và số lượng với bài trước. Đây là kết quả mong muốn: thay đổi cách tổ chức code không tự làm geometry ít đi.
+
+## Viết code từng bước
+
+### Bước 1 — Chọn quad theo hướng mặt
+
+```cpp title="include/geometry.hpp"
+inline void appendFace(Mesh& mesh, Vec3 origin, int material, int face) {
+    constexpr std::array<int, 6> corners{0, 1, 2, 0, 2, 3};
+    const auto& quad = faces.at(static_cast<std::size_t>(face));
+```
+
+Đây là đầu hàm; phần thân đầy đủ có ở checkpoint bên dưới. `face` chỉ chọn hướng 0..5, không phải index của triangle trong mesh. `origin` vẫn là tọa độ block, material vẫn là Block ID.
+
+`faces[0]` có x=1 ở cả bốn góc nên là mặt +X. Khi đặt tại block x=7, mặt đó nằm trên world x=8. Một lỗi hay gặp là nghĩ “mặt của block x=7 thì mọi vertex phải có x=7”; điều đó chỉ đúng cho mặt −X.
+
+### Bước 2 — Chỉ sinh hai triangles của mặt đó
+
+```cpp title="include/geometry.hpp"
+for (int triangle = 0; triangle < 2; ++triangle) {
+    Triangle output{};
+    output.color = faceColor(material, face);
+    for (int vertex = 0; vertex < 3; ++vertex) {
+        const int corner = corners.at(static_cast<std::size_t>(triangle * 3 + vertex));
+        const Vec3 local = quad.at(static_cast<std::size_t>(corner));
+        output.points.at(static_cast<std::size_t>(vertex)) = {origin.x + local.x, origin.y + local.y, origin.z + local.z};
+    }
+    mesh.push_back(output);
+}
+```
+
+Không còn vòng sáu mặt trong thân hàm này. Mỗi lần gọi luôn thêm hai phần tử vào Mesh. Màu được tính theo mặt đang chọn; không tô cả cube bằng một màu rồi mất khả năng nhìn lỗi hướng.
+
+### Bước 3 — Cho appendCube gọi lại hàm nhỏ
+
+```cpp title="include/geometry.hpp"
+inline void appendCube(Mesh& mesh, Vec3 origin, int material) {
+    for (int face = 0; face < 6; ++face) {
+        appendFace(mesh, origin, material, face);
+    }
+}
+```
+
+Hàm dựng cube giờ chỉ nói rõ ý định “thêm sáu mặt”. `buildMesh` cũng có thể gọi appendFace trực tiếp trong vòng face và ghi FaceKey `(x,y,z,face)`. Chưa có kiểm neighbor nên mọi mặt vẫn được giữ.
+
+Tại sao vẫn giữ appendCube? Nó là cách diễn đạt baseline quen thuộc và giúp bạn kiểm refactor. Không cần viết một bản tạo vertex thứ hai khác công thức; sau checkpoint 2, hai đường cùng dùng appendFace.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_59_checkpoint_2 --parallel 2
+.\build\Debug\project_59_checkpoint_2.exe
+```
+
+So với checkpoint 1 ở cùng preset/góc nhìn: counts không đổi, không thiếu nửa mặt, màu các hướng không bị tráo. Cặp block vẫn 24 triangles. Nếu thấy ít đi, refactor đã vô tình thay thuật toán hoặc bỏ một hướng.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ vòng face trong appendCube và chỉ gọi appendFace với face=0. Bạn chỉ còn một tấm ở phía +X, không phải cube. Hàm nhỏ không tự đoán năm hướng còn lại.
+2. Đổi `(0,2,3)` thành `(0,3,2)` cho tam giác thứ hai. Hình có thể vẫn giống vì chưa back-face culling, nhưng normal của nửa mặt đảo hướng. Kiểm cross product, không chỉ nhìn ảnh.
+
+## Tự kiểm tra kết quả
+
+appendFace thêm đúng hai triangles; appendCube thêm 12. Sáu normal hướng ±X/±Y/±Z đúng thứ tự. Origin chỉ dịch vị trí, không đổi winding. Baseline không giảm geometry và Z-buffer không bị sửa trong refactor này.
+
+## Bài tập mở rộng
+
+Tạo một Mesh rỗng trong pure test, gọi appendFace cho cả sáu hướng riêng lẻ và kiểm `size()` tăng thêm 2 mỗi lần. Đối chiếu min/max tọa độ của mặt +Y: mọi vertex phải có y=origin.y+1.
+
+[Bài tiếp theo](/projects/voxel-hidden-faces/03-bo-mat-tiep-giap) — Chỉ dựng mặt có ô trống ở bên kia.

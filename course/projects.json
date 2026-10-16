@@ -404,5 +404,12 @@
     "sourceDirectory": "project-58-voxel-chunk",
     "checkpointCount": 7,
     "demoId": "voxel-chunk"
+  },
+  {
+    "id": "59",
+    "slug": "voxel-hidden-faces",
+    "sourceDirectory": "project-59-voxel-hidden-faces",
+    "checkpointCount": 8,
+    "demoId": "voxel-hidden-faces"
   }
 ]

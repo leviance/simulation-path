@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Phân biệt biên chunk, vật liệu và khoang Air
+
+## Vấn đề cần giải quyết
+
+Khối đặc là trường hợp đẹp nhất cho tối ưu này: phần lớn block nằm trong đất. Nhưng nếu chỉ thử full rồi kết luận “voxel luôn giảm 93.75% geometry” thì ta đang hiểu sai thuật toán.
+
+Ta cần thử những dữ liệu buộc quy tắc bộc lộ rõ: hai vật liệu khác nhau, một khoang rỗng kín và các block xếp kiểu checker không chạm mặt nhau. Bài này thêm các preset đó, không thêm một loại culling mới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một mặt giáp block opaque thì bỏ, **không cần cùng vật liệu**. Stone chạm Grass vẫn là hai vật thể kín; không có lý do dựng một mặt Stone và một mặt Grass nằm ép vào nhau. Nếu có glass hoặc water trong suốt, quy tắc sẽ phải thiết kế lại; source này chưa hỗ trợ chúng.
+
+Ngược lại, một khoang Air hoàn toàn bị đất bao kín vẫn làm xuất hiện sáu mặt bao quanh. Camera bên ngoài không nhìn thấy chúng, nhưng sáu phép đọc neighbor vẫn gặp Air. Thuật toán không flood-fill để tìm “không khí nối ra ngoài”, không biết camera đang ở đâu và không làm occlusion culling.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="faces59-4" />
+
+Các đáp án tính được trước khi chạy code:
+
+| Preset | Block đặc | Quad sau loại mặt | Triangles |
+| --- | ---: | ---: | ---: |
+| Một block | 1 | 6 | 12 |
+| Hai block kề mặt | 2 | 10 | 20 |
+| Khối đặc 16³ | 4096 | 1536 | 3072 |
+| Một khoang Air kín | 4095 | 1542 | 3084 |
+| Checker 3D | 2048 | 12288 | 24576 |
+| Toàn Air | 0 | 0 | 0 |
+| Đất bậc thang | 1408 | 912 | 1824 |
+
+Ở khoang kín, mặt ngoài vẫn 1536, thêm 6 mặt nhìn vào ô Air nên thành 1542. Checker đặt block khi `(x+y+z)%2==0`; đi một bước theo bất kỳ trục nào đổi tính chẵn lẻ, vì thế không có cặp block kề mặt. Nó **không giảm một triangle nào** so với baseline của chính nó.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ cặp khác vật liệu để kiểm opacity
+
+```cpp title="include/model.hpp"
+if (preset == 0 || preset == 1) {
+    set(chunk, 7, 7, 7, Block::Stone);
+}
+if (preset == 1) {
+    set(chunk, 8, 7, 7, Block::Grass);
+}
+```
+
+Cặp này đã có từ baseline. Bây giờ dùng nó như một fixture quan trọng: culled phải còn 10 quad dù hai ID khác nhau. Quyết định không dùng `neighbor == currentBlock`, mà dùng `neighbor != Air`.
+
+### Bước 2 — Tạo một khoang Air thật trong dữ liệu preset
+
+```cpp title="include/model.hpp"
+if (preset == 3) {
+    chunk.fill(Block::Stone);
+    set(chunk, 8, 8, 8, Block::Air);
+}
+```
+
+Đây là thao tác tạo dữ liệu mẫu lúc chọn preset, không phải tính năng người chơi phá block bằng chuột. Có thể hình ngoài trông hệt full, nhưng số mặt tăng thêm 6. Ảnh ngoài giống nhau không có nghĩa hai mesh giống nhau.
+
+### Bước 3 — Tạo trường hợp không có lợi cho thuật toán
+
+```cpp title="include/model.hpp"
+if (preset == 4 && (x + y + z) % 2 == 0) {
+    set(chunk, x, y, z, Block::Stone);
+}
+```
+
+Đặt trong ba vòng y/z/x của preset 4. Checker có 2048 block, mỗi block giữ sáu mặt. Mesher còn phải thực hiện 12288 kiểm neighbor rồi vẫn giữ 12288 quad. Đây là lý do không thể lấy tỷ lệ của full làm kết quả hiệu năng chung cho mọi scene.
+
+Preset 5 giữ Chunk toàn Air. Không có triangles vẫn phải clear/upload ảnh mới; UI báo “Không có geometry để so” thay vì tính `0/0` rồi hiện NaN.
+
+### Bước 4 — Kiểm đất bậc thang bằng hình học
+
+```cpp title="include/model.hpp"
+const int height = 4 + x / 4;
+```
+
+Đất vẫn dùng dữ liệu của Project 58. Tính số quad ngoài bằng sáu phía: top+bottom=512; hai phía x ngoài có 64+112; ba vách bậc dọc x có 3×16=48; hai phía z có 2×88=176. Tổng `512+64+112+48+176=912`. Đây là phép tính độc lập với vòng đọc neighbor, không phải số lấy ra từ chính mesher rồi dùng kiểm lại mesher.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_59_checkpoint_4 --parallel 2
+.\build\Debug\project_59_checkpoint_4.exe
+```
+
+P lần lượt qua bảy preset. M chuyển baseline/culled mà không đổi dữ liệu. Quan sát counts trước khi xoay hình; với khoang kín, muốn nhìn vào bên trong ta sẽ dùng lớp cắt ở bài sau, không bỏ thêm mặt chỉ vì camera hiện không nhìn thấy chúng.
+
+Biên chunk ở đây luôn được xem là không khí vì chỉ có một chunk độc lập. Trong một thế giới nhiều chunk, hai chunk đặc chạm nhau phải đọc dữ liệu của nhau mới bỏ được seam faces. “Ngoài mảng” không đồng nghĩa “Air thật trong thế giới”; đó là giới hạn phạm vi cần ghi rõ.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ bỏ mặt khi hai Block ID bằng nhau. Pair Stone/Grass sẽ còn 12 quad thay vì 10. Hoàn nguyên sang quy tắc opaque/Air; cùng hoặc khác màu không quyết định mặt tiếp giáp.
+2. Bỏ mọi mặt bao quanh khoang Air vì camera ở ngoài không nhìn thấy chúng. Counts cavity trở về 1536, nhưng bạn đã dùng một quy tắc khác mà chưa định nghĩa. Giữ 1542; muốn giải quyết khả năng nhìn thấy cần thuật toán riêng.
+
+## Tự kiểm tra kết quả
+
+Đủ bảy preset khớp bảng. Checker không giảm geometry, empty không NaN và không giữ ảnh cũ. Cavity có 6 mặt thêm dù camera quay hướng nào. Mỗi mặt ngoài chunk được giữ ở cả sáu phía; không chỉ kiểm +X và +Y.
+
+## Bài tập mở rộng
+
+Tự tính một hộp đặc kích thước 2×3×4: số quad ngoài là `2*(2*3+3*4+2*4)=52`, triangles=104. Tạo fixture hộp đó trong tests và so với baseline 24 block/288 triangles. Chưa gộp các quad đồng phẳng thành một quad lớn.
+
+[Bài tiếp theo](/projects/voxel-hidden-faces/05-giu-mat-o-lop-cat) — Giữ đúng mặt trên khi cắt lớp.

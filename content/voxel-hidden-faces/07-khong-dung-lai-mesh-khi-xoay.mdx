@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Không dựng lại mesh khi chỉ xoay camera
+
+## Vấn đề cần giải quyết
+
+Ta đã giảm triangles, nhưng bản hiện tại vẫn gọi buildMesh khi camera đổi. Geometry vốn không phụ thuộc camera; dựng lại đúng cùng tập mặt chỉ để xoay hình là công việc dư thừa khác với mặt tiếp giáp.
+
+Bài này tách hai lý do cập nhật: **mesh thay đổi** và **ảnh cần vẽ lại**. Ta kiểm bằng counters có ý nghĩa rõ ràng, không chạy một benchmark dài hoặc khẳng định tốc độ từ cảm giác mượt hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Preset, mode baseline/culled hoặc slice thay đổi tập triangles, nên đánh dấu `meshDirty`. Camera chỉ đổi vị trí screen/depth của các vertex, nên chỉ `frameDirty`. Chọn ô/hướng của inspector chỉ đổi overlay/text, không làm hai việc trên.
+
+Khi rebuild xong, ảnh cũ không còn đúng nên tự đánh dấu frameDirty. Sau khi raster xong mới clear frameDirty. Một frame paused không có thay đổi phải **không làm gì ở cả hai bước**.
+
+$$geometry\ change\Rightarrow meshDirty\Rightarrow rebuild\Rightarrow frameDirty,$$
+$$camera\ change\Rightarrow frameDirty\Rightarrow rasterize.$$
+
+Tỷ lệ geometry của full là 93.75%, nhưng rebuild vẫn quét tối đa 4096 ô và thực hiện 6N quyết định neighbor. Culling chủ yếu giảm dữ liệu output và phần việc downstream. Tách cache tránh chạy lại cả phần quét ấy mỗi khi orbit.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="faces59-7" />
+
+Nhấn Xoay một bước vài lần: số rebuild phải đứng yên, số rasterize tăng. Chọn ô/hướng: cả hai đứng yên. Đổi preset/mode/cut: cả hai tăng. Reset đưa counters về một lượt khởi tạo mới.
+
+## Viết code từng bước
+
+### Bước 1 — Đặt dữ liệu cache ở một nơi
+
+```cpp title="include/cache.hpp"
+struct SceneCache {
+    BuildResult built;
+    Frame frame;
+    bool meshDirty = true;
+    bool frameDirty = true;
+    int rebuilds = 0;
+    int rasterizations = 0;
+};
+```
+
+Cache giữ kết quả dẫn xuất, không thay quyền sở hữu Chunk. Hai flag khởi tạo true để lần đầu dựng cả mesh lẫn ảnh. Không dùng số triangle=0 làm tín hiệu “chưa build”: empty là một mesh hợp lệ và không nên bị dựng lại mãi.
+
+### Bước 2 — Rebuild chỉ khi geometry đổi
+
+```cpp title="include/cache.hpp"
+if (cache.meshDirty) {
+    cache.built = buildMesh(chunk, culled, slice);
+    cache.meshDirty = false;
+    cache.frameDirty = true;
+    ++cache.rebuilds;
+}
+```
+
+Thứ tự rõ ràng: thay output, clear meshDirty, làm ảnh cũ hết hiệu lực, tăng số lượt thật sự đã rebuild. Không tăng counter ở nơi nhận event vì một loạt event có thể gộp thành một lượt xử lý.
+
+### Bước 3 — Chỉ raster/upload nếu ảnh mới cần được tạo
+
+```cpp title="include/cache.hpp"
+if (!cache.frameDirty) {
+    return false;
+}
+render(cache.frame, cache.built.mesh, camera);
+cache.frameDirty = false;
+++cache.rasterizations;
+return true;
+```
+
+Main chỉ upload texture nếu update trả true. SDL vẫn present để phục vụ window và overlay, nhưng không khóa/copy texture cùng một ảnh mỗi frame khi paused. Canvas dùng cùng hai bước trong helper thuần, tách draw overlay khỏi việc raster lại framebuffer.
+
+### Bước 4 — Phân loại invalidation đúng ở nơi nhận input
+
+```cpp title="include/controls.hpp"
+inline void invalidateGeometry(Controls& state) {
+    state.cache.meshDirty = true;
+    state.cache.frameDirty = true;
+}
+```
+
+Preset/mode/slice gọi hàm trên. Arrow, drag hoặc zoom chỉ đặt `state.cache.frameDirty=true`. Inspector không gọi nó. Auto rotation dùng dt chặn tối đa 0.05 giây và không chạy vòng “bù thời gian” sau khi tab treo; blur/reduced-motion giữ pause thay vì tự resume.
+
+Đừng để một nhánh input quên invalidation: dữ liệu mới nhưng ảnh cũ là lỗi cache, không phải keepFace. Khi debug, đối chiếu counters, state và mesh trước khi sửa công thức neighbor.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_59_checkpoint_7 --parallel 2
+.\build\Debug\project_59_checkpoint_7.exe
+```
+
+Mở mặc định full/culled, sau lượt đầu counters là 1/1. Xoay một bước thành 1/2. Đổi cut sau đó thành 2/3. Không nhập gì thì cả hai giữ nguyên. Canvas có thể nhận resize để vẽ lại bitmap theo DPR, nhưng framebuffer CPU không tăng độ phân giải và mesh không đổi.
+
+Không dùng số lần rebuild hoặc số triangles làm thay thế cho thời gian. Nếu đo tốc độ trong bài tập, phải báo riêng rebuild, raster, upload/present, chế độ build và dữ liệu; vài lượt hữu hạn đủ để kiểm chức năng, không cần chạy stress test cả buổi.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ set meshDirty khi đổi preset nhưng không làm frameDirty sau rebuild. Cache chứa geometry mới mà texture vẫn là hình cũ. Đặt quan hệ rebuild → frameDirty ngay trong update để mọi đường gọi đều đúng.
+2. Set cả hai flag ở mọi mouse event, kể cả chọn ô inspector. Hình vẫn đúng nhưng counters tăng không cần thiết. Sửa nơi phân loại event, không bỏ counter để che công việc thừa.
+
+## Tự kiểm tra kết quả
+
+Idle không rebuild/raster/upload. Camera chỉ tăng rasterizations; geometry state tăng cả hai; inspector chỉ vẽ lại overlay/text. Empty không bị coi là chưa có cache. Reset dừng chuyển động, nhả capture và khởi tạo lại cache. Không dùng kết quả này để khẳng định FPS tăng đúng bằng tỷ lệ giảm triangles.
+
+## Bài tập mở rộng
+
+Viết test gọi update hai lần liên tiếp không đổi input và yêu cầu lần hai trả false. Sau đó chỉ bật frameDirty, đổi camera, kiểm rebuilds không tăng. Cuối cùng bật meshDirty mà không tự bật frameDirty; update vẫn phải tạo ảnh mới sau rebuild.
+
+[Bài tiếp theo](/projects/voxel-hidden-faces/08-kiem-chung-va-hoan-thien) — Kiểm chứng mesher và hoàn thiện ứng dụng.

@@ -50,7 +50,7 @@ const data = {
       "Khối đặc lớp đáy có 3072 triangles, không làm mất 4096 block trong chunk gốc.",
       "Z-buffer giữ depth độc lập draw order; khi tắt depth phải quan sát được lỗi visibility.",
       "Debug/Release CTest và hidden SDL smoke có timeout; kiểm tương tác desktop được báo riêng.",
-      "Roadmap, search, glossary và ZIP đồng bộ; Project 59–78 vẫn Sắp ra mắt, generated output không đưa vào Git.",
+      "Roadmap, search, glossary và ZIP đồng bộ; các project chưa phát hành hiển thị Sắp ra mắt, generated output không đưa vào Git.",
     ],
   },
   lessons: [
