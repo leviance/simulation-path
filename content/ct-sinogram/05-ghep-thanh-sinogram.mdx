@@ -67,17 +67,92 @@ Main đo sẵn hàng 0 ở lần mở checkpoint, giúp đối chiếu với pre
 
 ### Bước 3 — Đổi số đo sang texture
 
-Tạo streaming texture RGBA32 kích thước 128×views, nearest. Trong upload, lock texture lấy pixels/pitch; mỗi hàng bắt đầu tại pixels+row*pitch. Với từng cell:
+Ta cần một streaming texture có **128 cột và views hàng**, không phải texture lớn bằng vùng hiển thị trên cửa sổ. Trong main, con trỏ texture khởi tạo bằng nullptr và textureViews bằng 0. Đặt khối sau trong `if (dirty)`, trước khi upload:
 
-- Nếu value không finite, ghi màu xanh `(28,42,65)`.
-- Nếu đã đo, brightness=clamp(value/displayRange,0,1), rồi mới đổi sang byte xám.
-- Nếu invert, lấy 1−brightness; alpha luôn 255.
+```cpp title="src/main.cpp"
+if (textureViews != controls.settings.views) {
+    SDL_DestroyTexture(texture);
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, ct::detectorCount, controls.settings.views);
+    if (texture == nullptr) {
+        throw std::runtime_error(SDL_GetError());
+    }
+    ct::require(SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST));
+    textureViews = controls.settings.views;
+}
+```
 
-Ghi đủ mọi row theo pitch, kiểm pitch≥128*4 và unlock trước RenderTexture. [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture) là write-only: không đọc lại texture cũ để lấy số đo. `scan.values` mới là dữ liệu gốc.
+Ở checkpoint 5, views luôn là 120: khối này tạo texture ở lần vẽ đầu, các lần sau giữ tài nguyên đã có. Nearest phóng từng ô đo, không nội suy để tạo dữ liệu mới. Đến Bài 08, khi cho đổi 30/60/120 hàng, ta sẽ thay khối này bằng helper tạo tài nguyên mới thành công trước khi hủy tài nguyên cũ.
+
+Tiếp theo, thêm hàm upload vào view.hpp. Hàm ghi **đủ mọi pixel**, kể cả vùng chưa đo:
+
+```cpp title="include/view.hpp"
+inline void upload(SDL_Texture* texture, const Scan& scan, double displayRange, bool invert) {
+    void* pixels = nullptr;
+    int pitch = 0;
+    require(SDL_LockTexture(texture, nullptr, &pixels, &pitch));
+    if (pitch < detectorCount * 4) {
+        SDL_UnlockTexture(texture);
+        throw std::runtime_error("Texture pitch too small");
+    }
+    for (int row = 0; row < scan.settings.views; ++row) {
+        auto* destination = static_cast<std::uint8_t*>(pixels) + row * pitch;
+        for (int column = 0; column < detectorCount; ++column) {
+            const double value = scan.values[column + detectorCount * row];
+            const int offset = 4 * column;
+            destination[offset] = 28;
+            destination[offset + 1] = 42;
+            destination[offset + 2] = 65;
+            if (std::isfinite(value)) {
+                double brightness = std::clamp(value / displayRange, 0.0, 1.0);
+                if (invert) {
+                    brightness = 1 - brightness;
+                }
+                const auto gray = static_cast<std::uint8_t>(std::lround(255 * brightness));
+                destination[offset] = gray;
+                destination[offset + 1] = gray;
+                destination[offset + 2] = gray;
+            }
+            destination[offset + 3] = 255;
+        }
+    }
+    SDL_UnlockTexture(texture);
+}
+```
+
+Vòng row chọn địa chỉ đầu hàng bằng `row*pitch`; vòng column chọn bốn byte trong hàng bằng `4*column`. Không dùng `128*4` thay pitch để tìm đầu hàng kế. Nếu pitch quá nhỏ, phải unlock trước khi báo lỗi. Khi lock thất bại, require đã ném lỗi nên không được tiếp tục ghi qua con trỏ pixels.
+
+Mỗi pixel bắt đầu bằng màu xanh `(28,42,65)` cho NaN. Chỉ số đo finite mới đi qua `clamp(value/displayRange,0,1)` rồi đổi sang byte xám. Alpha luôn 255. Ví dụ p=.5, displayRange=2 cho brightness=.25, gray=64; bật invert cho gray=191. Với p=0, màu mặc định là đen, không phải xanh chưa đo. Không làm tròn p trong scan.values.
+
+[SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture) là write-only: không đọc lại texture cũ để lấy số đo. `scan.values` mới là dữ liệu gốc. Sau khối tạo texture ở trên, main gọi:
+
+```cpp title="src/main.cpp"
+ct::upload(texture, scan, controls.displayRange, controls.invert);
+```
+
+Đường vẽ mỗi frame vẫn là clear → vẽ sơ đồ/dải detector → RenderTexture → present. Chèn lệnh sau sau drawProjection, trước SDL_RenderPresent:
+
+```cpp title="src/main.cpp"
+ct::require(SDL_RenderTexture(renderer, texture, nullptr, &ct::sinogramRect));
+```
+
+`sinogramRect` đã định nghĩa trong view.hpp là vùng logical `{550,70,480,520}`. Texture 128×120 được phóng vào vùng đó; số ô đo không đổi thành 480×520. Chỉ upload trong nhánh dirty, nhưng vẫn RenderTexture sau mỗi lần clear để ảnh không biến mất khi dữ liệu chưa đổi.
 
 ### Bước 4 — Chọn ô để xem lại geometry
 
-pickCell đổi vị trí trong sinogramRect thành column/row. Mép phải/dưới bị loại để không sinh column 128 hoặc row=views. SDL event phải qua SDL_ConvertEventToRenderCoordinates; phần letterbox ngoài ảnh không phải dữ liệu. Pointer capture giữ thao tác kéo, mouse-up/blur hủy capture.
+Thêm pickCell vào view.hpp để đổi vị trí trong sinogramRect thành column/row:
+
+```cpp title="include/view.hpp"
+inline std::optional<std::array<int, 2>> pickCell(float x, float y, int views) {
+    if (x < sinogramRect.x || y < sinogramRect.y || x >= sinogramRect.x + sinogramRect.w || y >= sinogramRect.y + sinogramRect.h) {
+        return std::nullopt;
+    }
+    const int column = static_cast<int>((x - sinogramRect.x) / sinogramRect.w * detectorCount);
+    const int row = static_cast<int>((y - sinogramRect.y) / sinogramRect.h * views);
+    return std::array<int, 2>{column, row};
+}
+```
+
+Trừ góc vùng ảnh để được vị trí local, chia chiều rộng/cao để đưa về [0,1), rồi nhân số cột/hàng. Mép phải/dưới bị loại để không sinh column 128 hoặc row=views. Trong nhánh mouse-down/motion của main, gọi SDL_ConvertEventToRenderCoordinates trước khi lấy x/y và gọi pickCell. Khi có kết quả, cập nhật controls.column/row, paused và dirty; không gọi acquireOne. Pointer capture giữ thao tác kéo, mouse-up/blur hủy capture. Phần letterbox ngoài ảnh không phải dữ liệu.
 
 Chọn hàng chưa đo vẫn có thể dựng preview từ phantom. Readout phải ghi rõ **chưa đo**; preview không được lén ghi thêm hàng vào scan.
 

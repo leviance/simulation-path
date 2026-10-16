@@ -10,7 +10,7 @@ Bài này chưa duyệt ô. Nó chỉ trả một interval hoặc MISS, giúp ph
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mỗi trục cho một slab. Với direction component khác zero, giải hai giao với min/max rồi lấy khoảng gần/xa. Giao ba khoảng và `[0,reach)`:
+Xét riêng trục X, tia phải nằm giữa hai mặt x=0 và x=16. Ta tìm khoảng t thỏa điều kiện ấy, rồi làm tương tự cho Y và Z. Vùng giữa một cặp mặt song song như vậy gọi là *slab*. Nếu thành phần direction khác zero, giải hai giao với min/max rồi sắp theo thứ tự gần/xa. Cuối cùng lấy giao ba khoảng với `[0,reach)`:
 
 $$t_{enter}=\max(0,t_{near,x},t_{near,y},t_{near,z}),$$
 $$t_{exit}=\min(reach,t_{far,x},t_{far,y},t_{far,z}).$$
@@ -60,7 +60,7 @@ if (far - enter <= tolerance) {
 }
 ```
 
-Ray đi ra từ mặt max có exit=0 nên miss. Ray từ mặt max đi vào có enter=0 và một đoạn dương nên hợp lệ. Ray origin trong chunk có enter=0 nhưng không có mặt ngoài vừa đi vào; normal của interval giữ zero trong trường hợp đó.
+Ray đi ra từ mặt max có exit=0 nên miss. Ray từ mặt max đi vào có enter=0 và một đoạn dương nên hợp lệ. Ray origin trong chunk có enter=0 nhưng không có mặt **ngoài chunk** vừa đi vào; normal của interval giữ zero. Bài sau sẽ cắt ray với ô đầu tiên để tìm mặt vào của chính ô đó. Hai việc không giống nhau: origin có thể đang ở một mặt voxel nằm sâu bên trong chunk.
 
 ## Ghép các phần lại
 

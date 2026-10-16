@@ -87,6 +87,14 @@ int main() {
     }
 
     Settings settings;
+    // Đĩa lệch tâm: so đúng cùng 60 độ, không dựa vào đối xứng tròn tại gốc.
+    const auto samplingScene = makeScene(1);
+    const auto coarse60 = project(viewAngle(5, 30), samplingScene, 1);
+    const auto fine60 = project(viewAngle(20, 120), samplingScene, 1);
+    for (int column = 0; column < detectorCount; ++column) {
+        check(close(coarse60[column].projection, fine60[column].projection), "same 60 degree measurement on nested grids");
+    }
+
     settings.views = 30;
     auto scan = makeScan(settings);
     check(scan.values.size() == 3840 && scan.acquired == 0 && std::isnan(scan.values.front()), "scan starts unmeasured");

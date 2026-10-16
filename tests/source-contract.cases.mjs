@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { isCourseTextFile } from "../scripts/course-file-types.mjs";
+import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
 import {
   workspace,
   projectCatalog,
@@ -33,6 +34,10 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
       "examples",
       projectDirectoryBySlug.get(lesson.project),
     );
+    // Từ Project 56, snippet phải là một đoạn liên tiếp của checkpoint thật.
+    const projectNumber = Number(
+      projectDirectoryBySlug.get(lesson.project).match(/^project-(\d+)-/)[1],
+    );
     const checkpointDirectory = path.join(
       projectDirectory,
       "checkpoints",
@@ -57,7 +62,9 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
         : path.join(checkpointDirectory, relative);
       const source = await readFile(sourcePath, "utf8");
       assert.ok(
-        isTokenSubsequence(snippet, source),
+        projectNumber >= 56
+          ? isContiguousCodeExcerpt(snippet, source)
+          : isTokenSubsequence(snippet, source),
         `${lesson.file} drifts from checkpoint ${lessonNumber}: ${title}`,
       );
     }

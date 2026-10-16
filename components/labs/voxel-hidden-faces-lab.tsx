@@ -34,6 +34,7 @@ import {
   usePauseOnReducedMotion,
 } from "./lab-shared";
 import { draw, layout } from "./voxel-hidden-faces/draw";
+import { VoxelFaceInspector } from "./voxel-face-inspector";
 function FacesLab({ stage }: { stage: number }) {
   const canvas = useRef<HTMLCanvasElement>(null),
     size = useCanvasSize(canvas),
@@ -158,6 +159,10 @@ function FacesLab({ stage }: { stage: number }) {
     pointer.current = { ...p, x: n.x, y: n.y };
   };
   const key = (e: KeyboardEvent<HTMLCanvasElement>) => {
+    if (e.repeat && [" ", "r", "m"].includes(e.key.toLowerCase())) {
+      e.preventDefault();
+      return;
+    }
     const actions: Record<string, () => void> = {
       ArrowLeft: () => setCamera((c) => orbit(c, -8, 0)),
       ArrowRight: () => setCamera((c) => orbit(c, 8, 0)),
@@ -197,7 +202,14 @@ function FacesLab({ stage }: { stage: number }) {
   const baseline = 12 * (view?.built.solid ?? 0),
     triangles = view?.built.mesh.length ?? 0;
   return (
-    <div className="interactive-lab" data-testid="voxel-hidden-faces-lab">
+    <div
+      className="interactive-lab"
+      data-testid="voxel-hidden-faces-lab"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) stop();
+      }}
+    >
+      {stage === 2 && <VoxelFaceInspector />}
       <div className="lab-controls">
         <button onClick={reset}>Đặt lại</button>
         <label>
@@ -344,7 +356,6 @@ function FacesLab({ stage }: { stage: number }) {
         onLostPointerCapture={() => {
           pointer.current = null;
         }}
-        onBlur={stop}
       />
       <p id={help}>
         Kéo hình hoặc dùng mũi tên để xoay, +/− zoom, Space chạy/dừng, R đặt lại.{" "}

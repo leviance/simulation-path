@@ -54,6 +54,20 @@ test("Hidden faces baseline and exact preset fixtures mirror native C++", () => 
   assert.equal(1 - 3072 / 49152, 0.9375);
   assert.match(audit(), /PASS/);
 });
+test("Hidden faces refactor keeps baseline triangles and keys unchanged through stages one to three", () => {
+  for (const preset of [0, 1, 2]) {
+    const chunk = makeChunk(preset);
+    const before = buildMesh(chunk, false, 15, 1);
+    const refactored = buildMesh(chunk, false, 15, 2);
+    const perFace = buildMesh(chunk, false, 15, 3);
+    assert.deepEqual(refactored.mesh, before.mesh);
+    assert.deepEqual(refactored.keys, before.keys);
+    assert.deepEqual(perFace.mesh, refactored.mesh);
+    assert.deepEqual(perFace.keys, refactored.keys);
+    assert.equal(refactored.neighborChecks, 0);
+  }
+});
+
 test("Hidden faces remove both shared opaque materials but not diagonal contacts", () => {
   const r = buildMesh(makeChunk(1), true),
     keys = new Set(r.keys.map((k) => k.join(",")));

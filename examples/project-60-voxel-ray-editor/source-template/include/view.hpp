@@ -122,6 +122,13 @@ inline void draw(SDL_Renderer* renderer, SDL_Texture* texture, const Editor& sta
     require(SDL_RenderDebugText(renderer, 12, 530, visits.c_str()));
     if (visible > 0) {
         const auto visit = state.trace.visits.at(visible - 1);
+        // Snapshot trước khi rời ô: không chạy traversal lần nữa để xem lại.
+        require(SDL_RenderDebugText(renderer, 660, 370, "axis step tMax    tDelta"));
+        for (int axis = 0; axis < 3; ++axis) {
+            std::ostringstream row;
+            row << "XYZ"[axis] << "    " << visit.step[axis] << "    " << std::fixed << std::setprecision(3) << visit.tMax[axis] << "    " << visit.tDelta[axis];
+            require(SDL_RenderDebugText(renderer, 660, 390.0f + axis * 20, row.str().c_str()));
+        }
         const std::string cell = "Visit (" + std::to_string(visit.cell[0]) + "," + std::to_string(visit.cell[1]) + "," + std::to_string(visit.cell[2]) + ") t=" + std::to_string(visit.enter) + ".." + std::to_string(visit.exit);
         require(SDL_RenderDebugText(renderer, 12, 590, cell.c_str()));
     }

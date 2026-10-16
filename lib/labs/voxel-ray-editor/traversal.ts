@@ -8,8 +8,17 @@ import {
   type Ray,
   type Interval,
   type Cell,
+  type Vec3,
 } from "./ray.ts";
-export type Visit = { cell: Cell; enter: number; exit: number; normal: Cell };
+export type Visit = {
+  cell: Cell;
+  enter: number;
+  exit: number;
+  normal: Cell;
+  step: Cell;
+  tMax: Vec3;
+  tDelta: Vec3;
+};
 export type Hit = { cell: Cell; normal: Cell; distance: number };
 export type Trace = { interval: Interval | null; visits: Visit[]; hit: Hit | null };
 export function traverse(
@@ -29,8 +38,8 @@ export function traverse(
   const start = pointAt(ray, trace.interval.enter),
     cell: Cell = [0, 0, 0],
     step: Cell = [0, 0, 0],
-    tMax = [Infinity, Infinity, Infinity],
-    tDelta = [Infinity, Infinity, Infinity];
+    tMax: Vec3 = [Infinity, Infinity, Infinity],
+    tDelta: Vec3 = [Infinity, Infinity, Infinity];
   for (let axis = 0; axis < 3; axis++) {
     const d = ray.direction[axis];
     let p = Math.max(0, Math.min(16, start[axis]));
@@ -46,14 +55,24 @@ export function traverse(
       tDelta[axis] = 1 / Math.abs(d);
     }
   }
-  let t = trace.interval.enter,
-    normal: Cell = [...trace.interval.normal];
+  // Mặt đi vào ô đầu không nhất thiết là mặt ngoài chunk: origin có thể ở biên nội bộ.
+  const firstCellInterval = clipBox(ray, cell, cell.map((v) => v + 1) as Cell, reach);
+  let t = Math.max(trace.interval.enter, firstCellInterval?.enter ?? trace.interval.enter),
+    normal: Cell = firstCellInterval ? [...firstCellInterval.normal] : [0, 0, 0];
   for (let iteration = 0; iteration < 64; iteration++) {
     if (!inside(...cell)) return trace;
     const next = Math.min(...tMax),
       exit = Math.min(next, trace.interval.exit);
     if (exit - t > tolerance) {
-      trace.visits.push({ cell: [...cell], enter: t, exit, normal: [...normal] });
+      trace.visits.push({
+        cell: [...cell],
+        enter: t,
+        exit,
+        normal: [...normal],
+        step: [...step],
+        tMax: [...tMax],
+        tDelta: [...tDelta],
+      });
       if (stage >= 5 && stopAtSolid && chunk[index(...cell)] !== 0) {
         trace.hit = { cell: [...cell], normal: [...normal], distance: t };
         return trace;

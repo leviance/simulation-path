@@ -111,7 +111,7 @@ const data = {
         {
           title: "Chốt quy ước biên",
           explanation:
-            "Normal tie ưu tiên X/Y/Z. Origin trong block cho t=0 và normal zero; không dùng kết quả ấy để đặt block.",
+            "Normal tie ưu tiên X/Y/Z. Origin hẳn trong block không có entry face; origin trên mặt nội bộ vẫn giữ normal để đặt vào ô Air kề mặt.",
         },
       ],
     },

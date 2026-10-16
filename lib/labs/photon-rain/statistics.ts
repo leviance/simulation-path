@@ -13,6 +13,7 @@ export interface Experiment {
   settings: Readonly<Settings>;
   counts: Counts;
   recent: { id: number; trace: Trace }[];
+  convergence: { count: number; ballistic: number; low: number; high: number }[];
 }
 export function makeExperiment(settings: Settings): Experiment {
   validate(settings);
@@ -28,6 +29,7 @@ export function makeExperiment(settings: Settings): Experiment {
       scatterEvents: 0,
     },
     recent: [],
+    convergence: [],
   };
 }
 export function tally(counts: Counts, trace: Trace) {
@@ -50,6 +52,12 @@ export function advance(experiment: Experiment, budget: number) {
     const id = experiment.counts.completed,
       trace = tracePhoton(experiment.settings, id);
     tally(experiment.counts, trace);
+    // Mốc 1,2,4,...,8192 và N cuối: tối đa 15 điểm, không lấy thêm mẫu RNG.
+    const n = experiment.counts.completed;
+    if ((n & (n - 1)) === 0 || n === experiment.settings.count) {
+      const [low, high] = wilson(experiment.counts.ballistic, n);
+      experiment.convergence.push({ count: n, ballistic: experiment.counts.ballistic, low, high });
+    }
     experiment.recent.push({ id, trace });
     if (experiment.recent.length > 24) experiment.recent.shift();
     completed++;

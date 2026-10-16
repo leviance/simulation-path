@@ -63,6 +63,27 @@ int main() {
             }
         }
         Chunk empty{};
+        // Origin trên mặt nội bộ: không được nhầm với origin nằm hẳn trong block.
+        for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
+            for (int sign : {-1, 1}) {
+                Chunk faceChunk{};
+                std::array<double, 3> origin{8.5, 8.5, 8.5};
+                std::array<double, 3> direction{};
+                Cell cell{8, 8, 8};
+                Cell expected{};
+                origin[axisIndex] = 8;
+                direction[axisIndex] = -sign;
+                expected[axisIndex] = sign;
+                if (sign > 0) {
+                    cell[axisIndex] = 7;
+                }
+                set(faceChunk, cell[0], cell[1], cell[2], Block::Stone);
+                const auto faceRay = makeRay({origin[0], origin[1], origin[2]}, {direction[0], direction[1], direction[2]});
+                const auto firstHit = traverse(faceChunk, faceRay).hit;
+                check(firstHit.has_value() && firstHit->cell == cell && firstHit->normal == expected && close(firstHit->distance, 0), "internal face entry normal");
+                check(placeBlock(faceChunk, faceRay, 64, Block::Dirt).changed, "internal face permits Air neighbor placement");
+            }
+        }
         const auto negative = traverse(empty, makeRay({16, 8, 8}, {-1, 0, 0}), 64, false);
         check(negative.visits.size() == 16 && negative.visits.front().cell == Cell{15, 8, 8} && negative.visits.back().cell == Cell{0, 8, 8}, "negative entry forward cell");
         const auto diagonal = traverse(empty, makeRay({-1, -1, -1}, {1, 1, 1}), 64, false);

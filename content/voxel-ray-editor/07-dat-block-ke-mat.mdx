@@ -16,7 +16,7 @@ $$target=hit.cell+hit.normal.$$
 
 Ghost preview trả lời “nếu nhấn lúc này thì ô nào có thể được đặt?”, không tự ghi gì. Khi action xảy ra, truy vấn và kiểm điều kiện lại trên dữ liệu hiện tại.
 
-Các trường hợp từ chối là một phần của chức năng: MISS; normal zero do origin nằm trong block; target ngoài chunk; target không phải Air. Với tie ở cạnh/góc, normal ưu tiên X/Y/Z có thể dẫn đến một neighbor đã đặc: ta từ chối, không lén chuyển sang một mặt khác và không overwrite.
+Các trường hợp từ chối là một phần của chức năng: MISS; normal zero do origin nằm hẳn bên trong block; target ngoài chunk; target không phải Air. Nếu origin nằm ngay trên mặt block và tia đi vào, normal vẫn là normal của mặt ấy, không phải zero. Với tie ở cạnh/góc, normal ưu tiên X/Y/Z có thể dẫn đến một neighbor đã đặc: ta từ chối, không lén chuyển sang một mặt khác và không overwrite.
 
 <InteractiveLab demo="voxel-ray-editor" mode="pick60-7" />
 

@@ -7,6 +7,9 @@ struct Visit {
     double enter;
     double exit;
     Cell normal{};
+    Cell step{};
+    std::array<double, 3> tMax{};
+    std::array<double, 3> tDelta{};
 };
 
 struct Hit {
@@ -23,6 +26,10 @@ struct Trace {
 
 #if LAB_CHECKPOINT >= 4
 inline Trace traverse(const Chunk& chunk, const Ray& ray, double reach = 64, bool stopAtSolid = true) {
+#if LAB_CHECKPOINT < 5
+    static_cast<void>(chunk);
+    static_cast<void>(stopAtSolid);
+#endif
     Trace trace;
     trace.interval = clipBox(ray, {0, 0, 0}, {16, 16, 16}, reach);
     if (!trace.interval.has_value()) {
@@ -59,8 +66,16 @@ inline Trace traverse(const Chunk& chunk, const Ray& ray, double reach = 64, boo
             tDelta[axis] = 1 / std::abs(direction[axis]);
         }
     }
+    // Ô đầu có thể bắt đầu ở một mặt bên trong chunk, không phải chỉ ở biên chunk.
+    const Vec3 lower{static_cast<double>(cell[0]), static_cast<double>(cell[1]), static_cast<double>(cell[2])};
+    const Vec3 upper{lower.x + 1, lower.y + 1, lower.z + 1};
+    const auto firstCellInterval = clipBox(ray, lower, upper, reach);
     double t = trace.interval->enter;
-    Cell normal = trace.interval->normal;
+    Cell normal{};
+    if (firstCellInterval.has_value()) {
+        t = std::max(t, firstCellInterval->enter);
+        normal = firstCellInterval->normal;
+    }
     for (int iteration = 0; iteration < 64; ++iteration) {
         if (!inside(cell[0], cell[1], cell[2])) {
             return trace;
@@ -68,15 +83,12 @@ inline Trace traverse(const Chunk& chunk, const Ray& ray, double reach = 64, boo
         const double next = std::min({tMax[0], tMax[1], tMax[2]});
         const double exit = std::min(next, trace.interval->exit);
         if (exit - t > tolerance) {
-            trace.visits.push_back({cell, t, exit, normal});
+            trace.visits.push_back({cell, t, exit, normal, step, tMax, tDelta});
 #if LAB_CHECKPOINT >= 5
             if (stopAtSolid && get(chunk, cell[0], cell[1], cell[2]) != Block::Air) {
                 trace.hit = Hit{cell, normal, t};
                 return trace;
             }
-#else
-            static_cast<void>(chunk);
-            static_cast<void>(stopAtSolid);
 #endif
         }
         if (next >= trace.interval->exit - tolerance) {

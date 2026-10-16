@@ -95,9 +95,9 @@ const data = {
           explanation: "Dùng NaN khi chưa đo, tăng acquired sau khi ghi đủ hàng.",
         },
         {
-          title: "Upload texture",
+          title: "Đưa số đo lên texture",
           explanation:
-            "Texture RGBA32 dùng pitch thật, hiển thị ô chưa đo khác p=0; input chuyển sang logical coordinates.",
+            "Tạo texture 128×views, ghi đủ RGBA theo pitch thật rồi RenderTexture sau clear; giữ NaN khác p=0 và đổi input sang logical coordinates.",
         },
       ],
     },
@@ -148,11 +148,22 @@ const data = {
       focus: "So cách lấy mẫu góc mà không trộn nó với kích thước ảnh hiển thị.",
       expected:
         "Q hoặc select chọn 30/60/120 hàng; detector vẫn 128 pixel và lưới góc chung khớp nhau.",
-      files: ["include/scan.hpp", "include/controls.hpp", "src/main.cpp"],
+      files: [
+        "include/scan.hpp",
+        "include/controls.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
       steps: [
         {
-          title: "Đọc angular spacing",
-          explanation: "30/60/120 góc tương ứng 12°/6°/3°; góc cuối không phải 360°.",
+          title: "Tính khoảng cách giữa các góc quét",
+          explanation: "30/60/120 góc tương ứng 12°/6°/3°; không lấy lại góc 360° vì trùng với 0°.",
+        },
+        {
+          title: "Thay texture khi đổi số hàng",
+          explanation:
+            "Tạo và cấu hình texture mới thành công rồi mới hủy texture cũ; sau đó tải lại dữ liệu sinogram.",
         },
         {
           title: "So cùng góc vật lý",
@@ -160,7 +171,7 @@ const data = {
             "row j ở 30 góc khớp row 4j ở 120 góc; cùng chỉ số hàng không có nghĩa cùng góc.",
         },
         {
-          title: "Quan sát undersampling",
+          title: "Quan sát khi lấy quá ít góc",
           explanation:
             "Dải lệch tâm thưa hơn khi ít góc; phóng texture không bổ sung phép đo hay chứng minh chất lượng reconstruction.",
         },

@@ -73,6 +73,8 @@ if (key == SDLK_P) {
     preset = (preset + 1) % 4;
     chunk = voxel::makeChunk(preset);
     paused = true;
+    dragging = false;
+    SDL_CaptureMouse(false);
     dirty = true;
 }
 ```

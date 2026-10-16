@@ -20,6 +20,8 @@ Nếu tán xạ, project chọn angle=2πU và direction=(cos angle,sin angle). 
 
 ### Bước 1 — Dùng đúng xác suất tại collision
 
+Ta tiếp tục sửa `advancePhoton` của bài trước. Hàm này trả về `void` và cập nhật Photon/Trace qua reference; `return;` chỉ kết thúc **một bước**, không trả về lịch sử cho caller.
+
 ```cpp title="include/transport.hpp"
         const double absorptionProbability = settings.muA / (settings.muA + settings.muS);
         if (random.uniform() < absorptionProbability) {
@@ -45,18 +47,42 @@ inline Point scatterDirection(double u) {
 
 Sau collision không hấp thụ, tăng scatters, ghi Event::Scatter và dùng U mới để lấy hướng. Không đưa photon về cạnh phát hoặc lấy y mới. Bước kế tiếp phải tính exitDistance theo vị trí/direction mới, rồi lấy một S mới trong cùng môi trường.
 
+Đặt ba dòng sau ngay sau nhánh hấp thụ trong `advancePhoton`:
+
+```cpp title="include/transport.hpp"
+    ++trace.scatters;
+    trace.vertices.push_back({value.position, Event::Scatter});
+    value.direction = scatterDirection(random.uniform());
+```
+
 Trong vòng lặp, một bước xử lý tối đa một collision hoặc một lần thoát. EventLimit trong [1,64] đặt số bước tối đa; không có vòng lặp vô hạn chờ photon thoát.
 
 ### Bước 3 — Không bịa kết cục khi hết ngân sách
 
-tracePhoton gọi advancePhoton ở mỗi bước rồi kiểm Status. Nếu đã Absorbed/Escaped thì trả lịch sử ngay; chỉ khi vẫn Alive mới sang bước kế. Nhờ tách một bước khỏi vòng lặp, bản chỉ hấp thụ ở bài trước không cần một vòng lặp giả chỉ chạy một lần.
+Trong Bài 04, `tracePhoton` chỉ gọi một bước bay rồi trả lịch sử. Thay hàm đó bằng bản dưới đây để xử lý nhiều bước. Khác với `advancePhoton`, hàm này **trả về một Trace**, nên mọi nhánh kết thúc đều phải dùng `return trace;`.
 
 ```cpp title="include/transport.hpp"
+inline Trace tracePhoton(Settings settings, int id) {
+    validate(settings);
+    Random random(photonSeed(settings.seed, id));
+    Photon value = launch(random);
+    Trace trace;
+    trace.vertices.push_back({value.position, Event::Emission});
+    for (int event = 0; event < settings.eventLimit; ++event) {
+        advancePhoton(value, random, settings, trace);
+        if (trace.status != Status::Alive) {
+            return trace;
+        }
+    }
+    // Chạm ngân sách không cho biết photon sẽ hấp thụ hay thoát sau đó.
     trace.status = Status::Censored;
-    return;
+    return trace;
+}
 ```
 
-Chỉ tới đoạn này nếu mọi bước trong ngân sách đều tán xạ và photon chưa kết thúc. [Censored](/glossary#photon-censoring) nghĩa là ta **chưa biết** photon sẽ thoát hay hấp thụ nếu theo dõi tiếp. Nó khác Event::Scatter: tán xạ là sự kiện, Censored là trạng thái dừng do thuật toán.
+Đọc vòng lặp theo đúng thứ tự: bay một bước → kiểm kết cục → chỉ lặp tiếp nếu còn Alive. Nếu photon đã thoát hoặc bị hấp thụ, trả ngay, không lấy thêm RNG và không ghi thêm vertex. Chỉ tới dòng gán Censored nếu mọi bước trong ngân sách đều tán xạ và photon chưa kết thúc. [Censored](/glossary#photon-censoring) nghĩa là ta **chưa biết** photon sẽ thoát hay hấp thụ nếu theo dõi tiếp. Nó khác Event::Scatter: tán xạ là sự kiện, Censored là trạng thái dừng do thuật toán.
+
+Ví dụ limit=1: nếu bước đầu thoát thì trả Escaped ngay; nếu hấp thụ thì trả Absorbed; chỉ nếu tán xạ và vẫn sống mới ghi Censored sau vòng lặp. Không đặt Censored bên trong `advancePhoton`, vì một bước tán xạ chưa có quyền quyết định toàn bộ ngân sách đã hết.
 
 Giới hạn thấp có ích để thấy vấn đề ngay. Chọn preset chỉ tán xạ, limit 1: photon gặp collision đầu sẽ bị dừng sau một lần tán xạ. Không được tăng bộ đếm absorbed để làm bảng số trông “đủ”.
 

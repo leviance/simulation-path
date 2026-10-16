@@ -1,5 +1,27 @@
 import { expect, test } from "@playwright/test";
 const route = "/projects/voxel-chunk/07-kiem-chung-va-hoan-thien";
+
+test("Voxel pause button does not resume when focus leaves the canvas", async ({ page }) => {
+  await page.goto(route);
+  await page.getByLabel("Voxel Chunk Lab", { exact: true }).press("Space");
+  await page.getByRole("button", { name: "Tạm dừng", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Chạy xoay", exact: true })).toBeVisible();
+});
+
+test("Voxel cube face experiment preserves mesh and repeated Space does not toggle", async ({
+  page,
+}) => {
+  await page.goto("/projects/voxel-chunk/01-ve-cube-dau-tien");
+  const inspector = page.getByRole("region", { name: "Phòng thực hành từng mặt cube" });
+  await inspector.getByRole("checkbox").check();
+  await expect(inspector).toContainText("Tam giác 2 đã đảo normal");
+  await expect(page.locator(".lab-readout")).toContainText("12");
+  await page.goto(route);
+  await page
+    .getByLabel("Voxel Chunk Lab", { exact: true })
+    .dispatchEvent("keydown", { key: " ", repeat: true, bubbles: true });
+  await expect(page.getByRole("button", { name: "Chạy xoay", exact: true })).toBeVisible();
+});
 test("Voxel lesson stages controls and preserves chunk data when slicing", async ({ page }) => {
   await page.goto("/projects/voxel-chunk/01-ve-cube-dau-tien");
   await expect(page.getByLabel("Khối mẫu", { exact: true })).toHaveCount(0);

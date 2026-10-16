@@ -55,6 +55,23 @@ test("Voxel editor orthographic rays project back to the aimed pixel at every de
   assert.deepEqual(a.direction, b.direction);
   assert.notDeepEqual(a.origin, b.origin);
 });
+test("Voxel camera canonical bases reconstruct the lesson pixel at zero and quarter-turn yaw", () => {
+  for (const [yaw, origin, direction] of [
+    [0, [8 + 1 / 12, 8 - 1 / 12, 40], [0, 0, -1]],
+    [Math.PI / 2, [40, 8 - 1 / 12, 8 - 1 / 12], [-1, 0, 0]],
+  ]) {
+    const camera = { ...defaultCamera, yaw, pitch: 0 };
+    const ray = cameraRay(camera, 160.5, 120.5);
+    for (let axis = 0; axis < 3; axis++) {
+      close(ray.origin[axis], origin[axis]);
+      close(ray.direction[axis], direction[axis]);
+    }
+    const pixel = project(pointAt(ray, 32), camera);
+    close(pixel.x, 160.5);
+    close(pixel.y, 120.5);
+  }
+});
+
 test("Voxel editor slab intervals handle parallel, signed zero, outside, tangent and reach", () => {
   const r = makeRay([-1, 8, 8], [1, 0, 0]),
     s = clipBox(r, [0, 0, 0], [16, 16, 16], 64);
@@ -209,6 +226,40 @@ test("Voxel editor query/mutation invalidation does not reraster for aim or idle
   assert.equal(e.rebuilds, 2);
   assert.notDeepEqual(e.trace.hit?.cell, old.cell);
 });
+test("Voxel editor internal voxel faces retain entry normals and permit adjacent placement", () => {
+  for (let axis = 0; axis < 3; axis++)
+    for (const sign of [-1, 1]) {
+      const chunk = new Uint8Array(4096),
+        origin = [8.5, 8.5, 8.5],
+        direction = [0, 0, 0];
+      const cell = [8, 8, 8],
+        normal = [0, 0, 0];
+      origin[axis] = 8;
+      direction[axis] = -sign;
+      normal[axis] = sign;
+      if (sign > 0) cell[axis] = 7;
+      chunk[index(...cell)] = 3;
+      const ray = makeRay(origin, direction),
+        hit = traverse(chunk, ray).hit;
+      assert.deepEqual(hit.cell, cell);
+      assert.deepEqual(hit.normal, normal);
+      close(hit.distance, 0);
+      const target = cell.map((v, i) => v + normal[i]);
+      assert.deepEqual(placementCell(chunk, hit), target);
+      assert.equal(placeBlock(chunk, ray, 64, 2).changed, true);
+      assert.equal(chunk[index(...target)], 2);
+    }
+});
+
+test("Voxel editor DDA snapshots explain each crossing without sharing mutable arrays", () => {
+  const trace = traverse(new Uint8Array(4096), makeRay([-1, 8.5, 8.5], [1, 0, 0]), 64, false);
+  assert.deepEqual(trace.visits[0].step, [1, 0, 0]);
+  assert.deepEqual(trace.visits[0].tMax, [2, Infinity, Infinity]);
+  assert.deepEqual(trace.visits[0].tDelta, [1, Infinity, Infinity]);
+  assert.deepEqual(trace.visits[1].tMax, [3, Infinity, Infinity]);
+  assert.notEqual(trace.visits[0].tMax, trace.visits[1].tMax);
+});
+
 test("Voxel editor rejects invalid numeric inputs instead of unbounded traversal", () => {
   for (const [o, d] of [
     [

@@ -15,7 +15,7 @@ export const voxelPickingGlossaryTerms = [
     id: "voxel-entry-normal",
     term: "Entry normal của voxel hit",
     definition:
-      "Normal đơn trục hướng ra block ở mặt ray vừa đi vào. Đặt block tại hit.cell+normal, không phải hit.cell−normal hoặc luôn dùng ô Air cuối. Ở cạnh/góc Project 60 ưu tiên X rồi Y rồi Z; origin đã trong block cho t=0 và normal zero, vì không có entry face để đặt.",
+      "Normal đơn trục hướng ra block ở mặt ray vừa đi vào. Đặt block tại hit.cell+normal, không phải hit.cell−normal hoặc luôn dùng ô Air cuối. Tie ưu tiên X/Y/Z. Origin hẳn trong block không có entry face; origin trên mặt voxel có thể cho t=0 và normal khác zero, kể cả mặt bên trong chunk.",
   },
   {
     id: "voxel-edit-transaction",

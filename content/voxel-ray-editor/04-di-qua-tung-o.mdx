@@ -24,7 +24,7 @@ $$t_{Max,a}=\frac{boundary_a-O_a}{D_a},\qquad t_{Delta,a}=\frac{1}{|D_a|}.$$
 
 <InteractiveLab demo="voxel-ray-editor" mode="pick60-4" />
 
-Chọn preset rỗng rồi dùng Bước tiếp theo. Ô xanh lam là visit đang xem. Hình chiếu XZ không thể tách hai ô chỉ khác y; hãy đọc cả XYZ và khoảng t ở phần văn bản.
+Chọn preset rỗng rồi dùng Một ô tiếp theo. Ô xanh lam là visit đang xem. Bảng ngay dưới hình giữ `step/tMax/tDelta` tại thời điểm **trước khi rời ô**; cột Sắp vượt cho biết những trục có mốc gần nhất. Nếu nhiều trục cùng được đánh dấu, đó là một lần tie. Hình chiếu XZ không thể tách hai ô chỉ khác y; hãy đọc cả XYZ và khoảng t.
 
 ### Khi tia nằm đúng đường phân chia hai ô
 
@@ -65,18 +65,80 @@ if (direction[axis] != 0) {
 
 `tMax` dùng cùng hệ t với clip enter/exit. Nếu bạn tính nó tương đối từ điểm vào chunk nhưng lại so với t tuyệt đối, đoạn đầu có thể đúng mà các ô sau vẫn sai. Nhánh direction=0 không thực hiện phép chia.
 
-### Bước 3 — Ghi đoạn đang ở trong ô, rồi đi tiếp
+### Bước 3 — Lấy mặt vào của đúng ô đầu tiên
+
+Clip với chunk cho biết đoạn cần duyệt, nhưng normal của hộp chunk chưa chắc là normal của ô đầu. Ví dụ origin=(8,8.5,8.5) đang đúng mặt x=8, hướng về −X: ô đầu là x=7 và mặt vào của nó có normal +X. Đây không phải origin nằm hẳn trong block.
+
+Ta dùng lại slab test với AABB đơn vị của ô đầu, không thêm một bộ công thức biên thứ hai:
 
 ```cpp title="include/traversal.hpp"
-const double next = std::min({tMax[0], tMax[1], tMax[2]});
-const double exit = std::min(next, trace.interval->exit);
-if (exit - t > tolerance) {
-    trace.visits.push_back({cell, t, exit, normal});
+const Vec3 lower{static_cast<double>(cell[0]), static_cast<double>(cell[1]), static_cast<double>(cell[2])};
+const Vec3 upper{lower.x + 1, lower.y + 1, lower.z + 1};
+const auto firstCellInterval = clipBox(ray, lower, upper, reach);
+double t = trace.interval->enter;
+Cell normal{};
+if (firstCellInterval.has_value()) {
+    t = std::max(t, firstCellInterval->enter);
+    normal = firstCellInterval->normal;
+}
 ```
 
-Đây là phần mở đầu của khối ghi visit; xem khối hoàn chỉnh trong source checkpoint bên dưới. Chỉ đoạn dài hơn tolerance mới trở thành visit. Khi `next` đã chạm clip exit, trả kết quả ngay, không đi sang ô ngoài chunk.
+Origin nằm hẳn trong ô không có mặt vừa đi vào nên normal zero. Origin trên mặt và đi vào ô thì có normal, kể cả khi mặt đó không phải biên ngoài chunk.
 
-Sau đó vòng lặp xét **mọi** trục có tMax gần next trong tolerance, tăng cell và cộng tDelta cho từng trục ấy. Giới hạn 64 vòng rộng hơn số lần vượt các mặt của chunk 16³; nếu vượt giới hạn thì báo lỗi, không âm thầm trả MISS. Preview chỉ phát lại danh sách đã tính, mỗi nhịp một visit, không chạy thêm một traversal vô hạn.
+### Bước 4 — Viết trọn vòng duyệt, không bỏ qua bước đổi ô
+
+Đặt khối sau ngay sau phần khởi tạo t/normal. `trace`, `cell`, `step`, `tMax`, `tDelta` đã được chuẩn bị ở các bước trên. Đây là vòng duyệt của checkpoint 4; chưa có nhánh chọn block đặc.
+
+```cpp title="include/traversal.hpp"
+for (int iteration = 0; iteration < 64; ++iteration) {
+    if (!inside(cell[0], cell[1], cell[2])) {
+        return trace;
+    }
+    const double next = std::min({tMax[0], tMax[1], tMax[2]});
+    const double exit = std::min(next, trace.interval->exit);
+    if (exit - t > tolerance) {
+        trace.visits.push_back({cell, t, exit, normal, step, tMax, tDelta});
+    }
+    if (next >= trace.interval->exit - tolerance) {
+        return trace;
+    }
+
+    normal = {};
+    bool normalChosen = false;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (tMax[axis] <= next + tolerance) {
+            cell[axis] += step[axis];
+            tMax[axis] += tDelta[axis];
+            if (!normalChosen) {
+                normal[axis] = -step[axis];
+                normalChosen = true;
+            }
+        }
+    }
+    t = std::max(t, next);
+}
+throw std::runtime_error("DDA exceeded bounded 64 iterations");
+```
+
+Đọc theo ba phần: ghi đoạn đang ở trong ô → kiểm hết đoạn clip → đổi sang ô kế tiếp. Bảy trường của Visit giữ tọa độ, enter/exit, normal và ba bộ giá trị DDA để xem lại. Các mảng được **sao chép**, không trỏ vào biến tMax đang tiếp tục thay đổi.
+
+`next` là mốc vượt mặt lưới gần nhất. `exit` còn bị chặn bởi clip exit/reach. Chỉ đoạn dài hơn tolerance mới trở thành visit; tiếp xúc zero không xuất hiện trên preview. Khi đã tới cuối clip, trả ngay, không đọc ô ngoài chunk.
+
+Vòng axis không dùng else-if: **mọi** trục tie đều tăng cell và cộng tDelta. Chỉ normal chọn trục đầu X/Y/Z. Cuối lượt, t tiến tới next. Giới hạn 64 vòng là hàng rào phát hiện lỗi; vượt giới hạn phải báo lỗi, không giả thành MISS.
+
+### Bước 5 — Tính tay một tia xiên trước khi thử góc phức tạp
+
+Với O=(−1,0.25,8.5), D=(2,1,0)/√5, tia vào chunk ở t≈1.118034 và ô (0,0,8). tDeltaX≈1.118034, tDeltaY≈2.236068; trục Z có infinity.
+
+| Ô đang ở | enter | tMaxX | tMaxY | Rời ô theo |
+| --- | ---: | ---: | ---: | --- |
+| (0,0,8) | 1.118034 | 2.236068 | 1.677051 | Y |
+| (0,1,8) | 1.677051 | 2.236068 | 3.913119 | X |
+| (1,1,8) | 2.236068 | 3.354102 | 3.913119 | X |
+| (2,1,8) | 3.354102 | 4.472136 | 3.913119 | Y |
+| (2,2,8) | 3.913119 | 4.472136 | 6.149187 | X |
+
+Đây là fixture ray thuần để kiểm bằng test, không phải cấu hình của camera đang phát từ depth=32. Trong Canvas, dùng bảng DDA với ray camera hiện tại để thực hiện cùng cách so: lấy min, đổi cell, cộng đúng tDelta của trục vừa vượt.
 
 ## Ghép các phần lại
 
@@ -89,12 +151,12 @@ Native dùng N để xem ô tiếp theo, Space phát/dừng. Mỗi frame tự đ
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `else if` để chỉ step một trục khi tie. Với ray O=(−1,−1,−1), D tỷ lệ (1,1,1), bạn sẽ thấy những ô phụ không có đoạn đi bên trong. Khôi phục vòng lặp step mọi trục tie.
+1. Trong fixture ray chéo O=(−1,−1,−1), D tỷ lệ (1,1,1), thử chỉ step một trục tie mỗi vòng. Khi vẫn giữ bộ lọc `exit-t>tolerance`, các ô contact-only **không được ghi thành visit**: cả hai bản vẫn có 16 ô (i,i,i). Lỗi quan sát được là normal: tại ô (1,1,1), bản đúng trả (−1,0,0); bản ưu tiên từng trục X rồi Y rồi Z qua ba vòng trả (0,0,−1), vì nó đã quên lần vượt X. Kiểm normal trong fixture, đừng chỉ so danh sách cell hoặc tìm “ô phụ” trên preview.
 2. Luôn floor x=16 thành 16 rồi đọc mảng ngay. Ray đi từ +X vào chunk sẽ vượt bounds. Hãy sửa cell đầu theo hướng âm, thay vì bọc index bằng modulo.
 
 ## Tự kiểm tra kết quả
 
-Ray ngang đi đủ 16 ô theo thứ tự; ray từ x=16 đi về −X bắt đầu ở 15 và kết thúc ở 0. Ray chéo góc đi 16 ô (i,i,i), không có visit độ dài zero. Reach rút ngắn đường đi đúng chỗ, query không đổi Block ID và mọi traversal đều kết thúc trong giới hạn.
+Ray ngang đi đủ 16 ô theo thứ tự; ray từ x=16 đi về −X bắt đầu ở 15 và kết thúc ở 0. Ray chéo góc đi 16 ô (i,i,i), không có visit độ dài zero và normal tie đúng X/Y/Z. Origin trên mặt nội bộ giữ normal của ô đầu; origin hẳn trong ô mới không có entry face. Các snapshot không bị biến thành cùng một mảng tMax cuối cùng. Reach rút ngắn đường đi đúng chỗ và query không đổi Block ID.
 
 ## Bài tập mở rộng
 

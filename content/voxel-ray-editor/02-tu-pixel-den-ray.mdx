@@ -10,17 +10,42 @@ Ta giữ camera **trực giao** của Project 58–59. Không dùng công thức
 
 ## Hiểu ý tưởng trước khi viết code
 
-Camera đang xoay world theo yaw a, pitch b, trừ tâm `(8,8,8)`, rồi đổi camera x/y sang screen. Đảo phép biến đổi đó bằng ba vector cơ sở:
+### Bắt đầu với camera chưa xoay
+
+Cho yaw=pitch=0 trước. Trên ảnh, tăng world x làm điểm đi sang phải, tăng y làm điểm đi lên; depth tăng dọc +Z về phía người xem. Ba hướng khi ấy là R=(1,0,0), U=(0,1,0), N=(0,0,1). Tia phải đi **vào** cảnh nên D=(0,0,−1), ngược với N. Camera trực giao không có một mắt chung để nối tới từng pixel.
+
+### Lấy basis từ chính phép chiếu đang dùng
+
+Gọi q=P−C, với C=(8,8,8). Renderer của Project 58 trừ tâm trước, xoay yaw a rồi pitch b. Sau bước yaw, `cx=cos(a)*qx−sin(a)*qz` và `cz=sin(a)*qx+cos(a)*qz`. Thay cz vào `cy=cos(b)*qy−sin(b)*cz` và `depth=sin(b)*qy+cos(b)*cz`, ta được:
+
+$$c_x=\cos(a)q_x-\sin(a)q_z,$$
+$$c_y=-\sin(a)\sin(b)q_x+\cos(b)q_y-\cos(a)\sin(b)q_z,$$
+$$depth=\sin(a)\cos(b)q_x+\sin(b)q_y+\cos(a)\cos(b)q_z.$$
+
+Mỗi dòng là một dot product của q với một vector. Đọc ba hệ số của qx/qy/qz theo thứ tự, ta có ba vector cơ sở:
 
 $$R=(\cos a,0,-\sin a),$$
 $$U=(-\sin a\sin b,\cos b,-\cos a\sin b),$$
 $$N=(\sin a\cos b,\sin b,\cos a\cos b).$$
 
-R hướng sang phải trên ảnh, U hướng lên, N hướng về người xem. Với `s=6*zoom`, lấy `cx=(sx−160)/s`, `cy=(120−sy)/s`. Ta đặt origin ở camera depth=32:
+R hướng sang phải trên ảnh, U hướng lên, N hướng về người xem. Nói cách khác, `cx=dot(q,R)`, `cy=dot(q,U)`, `depth=dot(q,N)`. Ba vector vuông góc và dài một, nên dựng lại q bằng **cxR+cyU+depthN**. Đó là lý do ta nhân tọa độ camera với basis, không phải một công thức ray cần học thuộc riêng.
+
+Với `s=6*zoom`, đảo bước đổi screen để lấy `cx=(sx−160)/s`, `cy=(120−sy)/s`. Chọn depth=32 cho mặt phẳng phát tia rồi cộng lại tâm C:
 
 $$O=(8,8,8)+cxR+cyU+32N,\qquad D=-N.$$
 
 Mọi pixel có O khác nhau nhưng D giống nhau. Các vector cơ sở vuông góc/đơn vị nên D dài một; makeRay vẫn normalize và kiểm đầu vào. t trong `O+tD` là khoảng cách world tính từ mặt phẳng origin này, **không phải khoảng cách từ mắt của người chơi FPS**.
+
+### Tự tính hai góc camera dễ kiểm
+
+Lấy pixel nguyên (160,120), tâm mẫu (160.5,120.5), zoom=1 nên cx=1/12 và cy=−1/12. Giữ pitch=0:
+
+| Yaw | R | N | Origin O | Direction D |
+| --- | --- | --- | --- | --- |
+| 0 | (1,0,0) | (0,0,1) | (8.083333,7.916667,40) | (0,0,−1) |
+| π/2 | (0,0,−1) | (1,0,0) | (40,7.916667,7.916667) | (−1,0,0) |
+
+U=(0,1,0) ở cả hai dòng. Tại t=32, tia trở lại mặt phẳng depth=0; chiếu điểm ấy phải được (160.5,120.5). Đây là fixture camera thuần để kiểm bằng test, không phải các giá trị yaw/pitch mặc định của demo. Nếu dấu sai ở một basis, hai mốc đơn giản này giúp tìm lỗi trước khi thử các góc bất kỳ.
 
 <InteractiveLab demo="voxel-ray-editor" mode="pick60-2" />
 

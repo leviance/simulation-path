@@ -101,9 +101,9 @@ const data = {
           explanation: "angle=2πU cho hướng đều trên đường tròn 2D, không phải sphere sampling 3D.",
         },
         {
-          title: "Giữ kết cục chưa biết",
+          title: "Lặp từng bước và trả đúng lịch sử",
           explanation:
-            "Sau eventLimit tương tác chưa kết thúc, Status=Censored; không đổi nó thành Absorbed để làm đủ tổng.",
+            "advancePhoton trả void sau một bước; tracePhoton trả Trace khi kết thúc, hoặc ghi Censored nếu hết ngân sách mà vẫn sống.",
         },
       ],
     },

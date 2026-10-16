@@ -63,7 +63,7 @@ Smoke mở hidden và thoát sau một frame. CTest thuần không tạo SDL win
 - Origin trên camera depth=32, direction normalized, t/reach là world distance từ origin plane, không từ mắt FPS. API reach (0,64], UI 1..64. Origin finite trong ±128; reject ray sai trước traversal.
 - Slab/visit chỉ nhận đoạn có exit−enter>1e-9 theo t; contact-only và đoạn mỏng không vượt tolerance được bỏ. Direction component 0 dùng infinity, không chia zero.
 - Biên nguyên đi chiều âm bắt đầu ở ô phía âm. Tie trong tolerance step mọi trục, normal ưu tiên X/Y/Z. Không chọn ô chỉ chạm cạnh/góc. Tối đa 64 vòng, vượt giới hạn là lỗi.
-- Origin trong block: hit t=0, normal zero; được phá nhưng không đặt. Target=hit.cell+normal chỉ hợp lệ khi normal đơn trục, còn Air và trong chunk. Không overwrite hoặc tự sinh chunk kế bên.
+- Origin hẳn trong block: hit t=0, normal zero; được phá nhưng không đặt. Origin trên mặt voxel vẫn có entry normal, kể cả mặt nội bộ chunk; không dùng t=0 để tự kết luận thiếu normal. Target=hit.cell+normal chỉ hợp lệ khi normal đơn trục, còn Air và trong chunk. Không overwrite hoặc tự sinh chunk kế bên.
 - Query không sửa storage. Action re-query dữ liệu hiện tại; preview chỉ đọc. Aim/reach chỉ pickDirty, camera thêm frameDirty, edit thành công thêm meshDirty. Counter queries đếm refresh preview, không đếm query xác nhận action.
 - Outline/ghost là debug overlay. Inset XZ có thể chồng các visit khác y; đọc XYZ/t ở text. World chỉ ở RAM, không persistence/undo.
 

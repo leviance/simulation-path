@@ -16,6 +16,12 @@ test("Photon lab stages scattering and separates preview from statistical sample
   await expect(read("Ước lượng / Wilson 95%")).toHaveText("Chưa có dữ liệu");
   await page.getByRole("button", { name: "Thêm 32 photon", exact: true }).click();
   await expect(read("Đã tính")).toHaveText("32 / 2048");
+  const convergence = page.getByRole("region", { name: "Đọc độ bất định theo số photon" });
+  await expect(convergence.getByRole("img")).toBeVisible();
+  await convergence.getByText("Xem số liệu của đồ thị", { exact: true }).click();
+  await expect(convergence.locator("tbody tr")).toHaveCount(6);
+  await expect(convergence.locator("tbody tr").last().getByRole("rowheader")).toHaveText("32");
+  await expect(read("Đã tính")).toHaveText("32 / 2048");
   const counts = await read("Hấp thụ / thoát / chưa biết").textContent();
   await page.getByLabel("ID photon", { exact: true }).press("ArrowLeft");
   await page.getByRole("button", { name: "Về điểm phát", exact: true }).click();
@@ -25,6 +31,7 @@ test("Photon lab stages scattering and separates preview from statistical sample
   await expect(read("Audit hấp thụ thuần")).toContainText("PASS");
   await page.getByLabel("Seed photon", { exact: true }).selectOption("2026");
   await expect(read("Đã tính")).toHaveText("0 / 2048");
+  await expect(convergence.locator("tbody tr")).toHaveCount(0);
 });
 test("Photon reduced motion and capped scattering keep unresolved outcomes explicit", async ({
   page,

@@ -54,11 +54,13 @@ if (!normalChosen) {
 }
 ```
 
-Vòng lặp axis chạy 0/1/2 tương ứng X/Y/Z. Lần đầu gặp một trục tie sẽ đặt normal, những trục tie sau vẫn step nhưng không ghi đè normal. Normal của visit đầu lấy từ slab entry nếu ray bắt đầu bên ngoài.
+Vòng lặp axis chạy 0/1/2 tương ứng X/Y/Z. Lần đầu gặp một trục tie sẽ đặt normal, những trục tie sau vẫn step nhưng không ghi đè normal. Riêng visit đầu, normal lấy từ slab test với AABB của chính ô đầu, như Bài 04.
 
-### Origin đã nằm trong block thì sao?
+### Phân biệt nằm trong block với nằm trên mặt block
 
-Ray thuần có thể bắt đầu trong một ô đặc, dù camera demo bình thường ở ngoài chunk. Khi đó t=0, normal=(0,0,0): không có mặt vừa đi vào theo chiều tiến của tia. Ta vẫn cho phép chọn và phá ô đó; bài đặt block sẽ từ chối vì không có mặt kề xác định. Không tự lấy normal theo direction lớn nhất để che đi trường hợp thiếu dữ liệu.
+Ray thuần có thể bắt đầu **hẳn bên trong** một ô đặc, dù camera demo bình thường ở ngoài chunk. Khi đó t=0, normal=(0,0,0): không có mặt vừa đi vào. Ta vẫn cho phép chọn và phá ô đó; bài đặt block sẽ từ chối vì không có mặt kề xác định.
+
+Đừng áp dụng kết luận này cho mọi hit t=0. Với Stone tại (7,8,8), origin=(8,8.5,8.5), direction=(−1,0,0), origin đang trên mặt +X của Stone; ô (8,8,8) phía ngoài mặt vẫn Air. Hit có t=0 **và normal=(1,0,0)**, nên có thể đặt ở ô Air ấy. Clip AABB của ô đầu ở Bài 04 giữ được sự khác biệt này; chỉ dùng normal của hộp chunk sẽ làm mất nó.
 
 ## Ghép các phần lại
 
@@ -76,7 +78,7 @@ cmake --build build --config Debug --target project_60_checkpoint_5 --parallel 2
 
 ## Tự kiểm tra kết quả
 
-Với Stone tại (2,8,8), Grass tại (4,8,8), O=(−1,8.5,8.5), D=(1,0,0), hit là (2,8,8), t=3, normal=(−1,0,0). Đổi hướng ray thì mặt vào đổi dấu đúng. Ray chéo không chọn block chỉ chạm cạnh, normal tie theo X/Y/Z ổn định, ray trong block cho t=0/normal zero. Query không đổi dữ liệu.
+Với Stone tại (2,8,8), Grass tại (4,8,8), O=(−1,8.5,8.5), D=(1,0,0), hit là (2,8,8), t=3, normal=(−1,0,0). Đổi hướng ray thì mặt vào đổi dấu đúng. Ray chéo không chọn block chỉ chạm cạnh, normal tie theo X/Y/Z ổn định. Origin nằm hẳn bên trong block cho t=0/normal zero; nằm ngay trên mặt và đi vào thì t=0 nhưng normal khác zero. Query không đổi dữ liệu.
 
 ## Bài tập mở rộng
 

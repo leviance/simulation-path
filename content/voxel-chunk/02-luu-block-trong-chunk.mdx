@@ -27,7 +27,12 @@ Bảng dưới đọc lớp y=7: x tăng sang phải, z tăng xuống dưới. C
 ### Bước 1 — Định nghĩa loại block
 
 ```cpp title="include/model.hpp"
-enum class Block : std::uint8_t { Air, Grass, Dirt, Stone };
+enum class Block : std::uint8_t {
+    Air,
+    Grass,
+    Dirt,
+    Stone,
+};
 using Chunk = std::array<Block, capacity>;
 ```
 

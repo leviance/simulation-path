@@ -24,6 +24,10 @@ Mỗi mặt có bốn đỉnh. Chia quad theo `(0,1,2)` và `(0,2,3)` để tạ
 
 Ba mặt nhìn thấy có màu đậm nhạt khác nhau. Đây là hệ số màu cố định theo hướng mặt để dễ nhận hình khối, chưa phải chiếu sáng vật lý. Tất cả 12 tam giác đều được rasterize; Z-buffer che phần ở phía sau.
 
+Ở phần Đọc một mặt dưới demo, chọn +X. Bốn nhãn v0..v3 là bốn góc của **một quad**, không phải tám góc của cả cube. Tam giác vàng dùng (v0,v1,v2), tam giác xanh dùng (v0,v2,v3); chúng chung đường chéo v0–v2. Mũi tên là normal tính bằng cross product, bảng bên dưới cho cả thứ tự đỉnh lẫn tọa độ.
+
+Thử Đảo winding tam giác 2: chỉ đổi nó thành (v0,v3,v2). Normal của nửa mặt này quay vào trong, dù tấm mặt vẫn trông kín vì chưa cull mặt quay lưng. Bỏ checkbox để khôi phục trước khi đọc code. Thí nghiệm là overlay riêng, không thay mesh/counts của khối chính.
+
 ## Viết code từng bước
 
 ### Bước 1 — Chạy bộ khung trước
@@ -50,7 +54,9 @@ using Mesh = std::vector<Triangle>;
 
 `Vec3` có ba `double`; `Color` có bốn byte RGBA. Một tam giác giữ ba vị trí world và một màu phẳng. Bản nền cố ý chưa dùng index buffer: một cube lưu 36 lượt vertex, dễ lần theo mặt nào sinh tam giác nào. Đừng nhầm 36 lượt lưu này với tám góc hình học của cube.
 
-Trong `mesh.hpp`, mảng `faces` chứa sáu quad. Mặt đầu có x=1 ở cả bốn đỉnh, nên nó là mặt +X. Đọc lần lượt từng quad trong source đầy đủ bên dưới và tự xác định mặt −X, +Y, −Y, +Z, −Z.
+Trong `mesh.hpp`, mảng `faces` chứa sáu quad. Mặt +X có bốn góc local v0=(1,0,0), v1=(1,1,0), v2=(1,1,1), v3=(1,0,1). Mọi x đều bằng 1; khi cộng origin=(7,7,7), mặt nằm trên world x=8. Bạn có thể đối chiếu từng tọa độ trong bảng của demo thay vì lần theo cả mảng sáu mặt ngay lập tức.
+
+Từ v0, cạnh v1−v0=(0,1,0) và v2−v0=(0,1,1). Cross product bằng (1,0,0), đúng hướng +X. Đến mặt −X, cả tọa độ x và thứ tự đi quanh quad phải đổi sao cho normal hướng ra −X; không chỉ thay số 1 thành 0 rồi giữ thứ tự cũ.
 
 ### Bước 3 — Ghép hai tam giác cho từng mặt
 

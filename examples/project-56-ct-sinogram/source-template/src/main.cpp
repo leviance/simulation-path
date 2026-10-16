@@ -166,6 +166,9 @@ int main(int argc, char** argv) {
             // Inspector and detector preview update only when their inputs change.
             if (dirty) {
 #if LAB_CHECKPOINT >= 5
+#if LAB_CHECKPOINT >= 8
+                ct::resizeSinogramTexture(renderer, texture, textureViews, controls.settings.views);
+#else
                 if (textureViews != controls.settings.views) {
                     SDL_DestroyTexture(texture);
                     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, ct::detectorCount, controls.settings.views);
@@ -175,6 +178,7 @@ int main(int argc, char** argv) {
                     ct::require(SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST));
                     textureViews = controls.settings.views;
                 }
+#endif
                 ct::upload(texture, scan, controls.displayRange, controls.invert);
 #endif
                 std::ostringstream title;

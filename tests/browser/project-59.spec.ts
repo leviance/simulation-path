@@ -1,5 +1,21 @@
 import { expect, test } from "@playwright/test";
 const route = "/projects/voxel-hidden-faces/08-kiem-chung-va-hoan-thien";
+
+test("Hidden-face pause button respects a keyboard-started animation", async ({ page }) => {
+  await page.goto(route);
+  await page.getByLabel("Hidden Faces Lab", { exact: true }).press("Space");
+  await page.getByRole("button", { name: "Tạm dừng", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Chạy xoay", exact: true })).toBeVisible();
+});
+
+test("Hidden faces ignore repeated toggle keys", async ({ page }) => {
+  await page.goto(route);
+  const lab = page.getByLabel("Hidden Faces Lab", { exact: true });
+  await lab.dispatchEvent("keydown", { key: " ", repeat: true, bubbles: true });
+  await expect(page.getByRole("button", { name: "Chạy xoay", exact: true })).toBeVisible();
+  await lab.dispatchEvent("keydown", { key: "m", repeat: true, bubbles: true });
+  await expect(page.getByLabel("Bỏ mặt tiếp giáp", { exact: true })).toBeChecked();
+});
 test("Hidden faces compare baseline, cap the cut and explain individual neighbors", async ({
   page,
 }) => {

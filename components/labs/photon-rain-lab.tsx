@@ -30,6 +30,7 @@ import {
   usePauseOnReducedMotion,
 } from "./lab-shared";
 import { draw, timelineVertex } from "./photon-rain/draw";
+import { ConvergencePlot } from "./photon-rain/convergence-plot";
 
 const statusText = {
   alive: "Chưa phân loại tương tác",
@@ -473,6 +474,9 @@ function ExperimentLab({ stage }: { stage: number }) {
         onLostPointerCapture={end}
       />
       <LabReadout items={readout} />
+      {stage >= 7 && (
+        <ConvergencePlot samples={current.convergence} expected={expectedBallistic(settings)} />
+      )}
       {error && <p role="alert">{error}</p>}
       <p>
         Hồng: hấp thụ; xanh: thoát; tím: chạm giới hạn, chưa biết kết cục. Đường mờ là tối đa 24

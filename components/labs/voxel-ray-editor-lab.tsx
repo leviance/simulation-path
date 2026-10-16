@@ -33,6 +33,7 @@ import {
   usePauseOnReducedMotion,
 } from "./lab-shared";
 import { draw, layout } from "./voxel-ray-editor/draw";
+import { DdaReadout } from "./voxel-ray-editor/dda-readout";
 function EditorLab({ stage }: { stage: number }) {
   const canvas = useRef<HTMLCanvasElement>(null),
     size = useCanvasSize(canvas),
@@ -138,7 +139,6 @@ function EditorLab({ stage }: { stage: number }) {
     bump();
   };
   const key = (event: KeyboardEvent<HTMLCanvasElement>) => {
-    if (event.repeat) return;
     const k = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     const actions: Record<string, () => void> = {
       r: reset,
@@ -201,14 +201,20 @@ function EditorLab({ stage }: { stage: number }) {
     }
     if (actions[k]) {
       event.preventDefault();
-      actions[k]();
+      if (!event.repeat) actions[k]();
     }
   };
   const visit = state.trace.visits[Math.min(state.shown, state.trace.visits.length) - 1],
     hit = state.trace.hit,
     target = stage >= 7 ? placementCell(state.chunk, hit) : null;
   return (
-    <div className="interactive-lab" data-testid="voxel-ray-editor-lab">
+    <div
+      className="interactive-lab"
+      data-testid="voxel-ray-editor-lab"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) stop();
+      }}
+    >
       <div className="lab-controls">
         <button onClick={reset}>Đặt lại</button>
         <label>
@@ -380,7 +386,6 @@ function EditorLab({ stage }: { stage: number }) {
         onLostPointerCapture={() => {
           pointer.current = null;
         }}
-        onBlur={stop}
         onContextMenu={(e) => e.preventDefault()}
       />
       <p id={help}>
@@ -454,6 +459,7 @@ function EditorLab({ stage }: { stage: number }) {
             : []),
         ]}
       />
+      {stage >= 4 && <DdaReadout visit={visit} />}
       {stage >= 9 && (
         <button
           onClick={() => {

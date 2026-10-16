@@ -29,6 +29,7 @@ import {
   usePauseOnReducedMotion,
 } from "./lab-shared";
 import { draw, layout, renderScene } from "./voxel-chunk/draw";
+import { VoxelFaceInspector } from "./voxel-face-inspector";
 
 function ChunkLab({ stage }: { stage: number }) {
   const canvas = useRef<HTMLCanvasElement>(null),
@@ -138,6 +139,10 @@ function ChunkLab({ stage }: { stage: number }) {
     pointer.current = { ...p, x: next.x, y: next.y };
   };
   const key = (e: KeyboardEvent<HTMLCanvasElement>) => {
+    if (e.repeat && [" ", "r"].includes(e.key.toLowerCase())) {
+      e.preventDefault();
+      return;
+    }
     if (e.key.toLowerCase() === "r") {
       e.preventDefault();
       reset();
@@ -164,7 +169,13 @@ function ChunkLab({ stage }: { stage: number }) {
   };
   const currentIndex = index(selected[0], slice, selected[2]);
   return (
-    <div className="interactive-lab" data-testid="voxel-chunk-lab">
+    <div
+      className="interactive-lab"
+      data-testid="voxel-chunk-lab"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) stop();
+      }}
+    >
       <div className="lab-controls">
         <button onClick={reset}>Đặt lại</button>
         {stage >= 4 && (
@@ -300,7 +311,6 @@ function ChunkLab({ stage }: { stage: number }) {
         onLostPointerCapture={() => {
           pointer.current = null;
         }}
-        onBlur={stop}
       />
       <p id={help}>
         Trên: hình chiếu trực giao với Z-buffer CPU 320×240. Dưới: lớp dữ liệu x/z, Air là ô tối.{" "}
@@ -329,6 +339,7 @@ function ChunkLab({ stage }: { stage: number }) {
           { label: "Kiểm chứng", value: result },
         ]}
       />
+      {stage === 1 && <VoxelFaceInspector />}
       <p>
         Mesh vẫn chứa mặt bên trong và mặt quay lưng. Z-buffer chỉ quyết định pixel được thấy, không
         làm giảm số tam giác. Màu đậm/nhạt theo hướng mặt là quy ước minh họa, không phải ánh sáng

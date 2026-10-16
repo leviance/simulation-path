@@ -50,4 +50,5 @@ import "./projects-57.cases.mjs";
 import "./projects-58.cases.mjs";
 import "./projects-59.cases.mjs";
 import "./projects-60.cases.mjs";
+import "./review-56-60.cases.mjs";
 import "./source-contract.cases.mjs";

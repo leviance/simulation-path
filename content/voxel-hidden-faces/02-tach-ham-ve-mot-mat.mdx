@@ -22,6 +22,10 @@ Giữ thứ tự CCW khi nhìn từ ngoài block. Culling lần này không ph�
 
 Demo có cùng hình và số lượng với bài trước. Đây là kết quả mong muốn: thay đổi cách tổ chức code không tự làm geometry ít đi.
 
+Phần Đọc một mặt cho thấy bốn đỉnh và hai tam giác mà `appendFace` sẽ tạo ra. Đây là thí nghiệm riêng, không phải chế độ culling mới. Chọn một hướng rồi đối chiếu hình với hai bộ chỉ số. Đổi origin chỉ dịch mọi vertex; đổi face chọn quad khác; đảo winding tam giác 2 làm normal của riêng nửa mặt ấy quay vào trong. Bảng số giúp bạn nhận ra sự khác biệt ngay cả khi hình khối chính chưa bật back-face culling.
+
+Đường gọi ở checkpoint 1 là `buildMesh → appendCube → tạo hai triangle × sáu mặt`. Ở checkpoint 2, ta giữ `buildMesh → appendCube`, nhưng bên trong cube sẽ gọi `appendFace` sáu lần. Cả hai vẫn thêm 12 triangle mỗi block. Sang Bài 03, `buildMesh` mới gọi thẳng `appendFace` để có thể bỏ riêng một mặt sau khi kiểm neighbor.
+
 ## Viết code từng bước
 
 ### Bước 1 — Chọn quad theo hướng mặt
@@ -63,9 +67,9 @@ inline void appendCube(Mesh& mesh, Vec3 origin, int material) {
 }
 ```
 
-Hàm dựng cube giờ chỉ nói rõ ý định “thêm sáu mặt”. `buildMesh` cũng có thể gọi appendFace trực tiếp trong vòng face và ghi FaceKey `(x,y,z,face)`. Chưa có kiểm neighbor nên mọi mặt vẫn được giữ.
+Hàm dựng cube giờ chỉ nói rõ ý định “thêm sáu mặt”. Trong checkpoint 2, `buildMesh` vẫn gọi hàm này một lần cho mỗi block đặc; vòng face riêng của `buildMesh` chỉ ghi FaceKey `(x,y,z,face)`, chưa thêm tam giác lần nữa. Nếu vừa gọi appendCube vừa appendFace trong vòng ấy, geometry sẽ bị nhân đôi.
 
-Tại sao vẫn giữ appendCube? Nó là cách diễn đạt baseline quen thuộc và giúp bạn kiểm refactor. Không cần viết một bản tạo vertex thứ hai khác công thức; sau checkpoint 2, hai đường cùng dùng appendFace.
+Giữ appendCube trong đường dựng hình ở bài này giúp bạn kiểm refactor ngay trên ứng dụng. Khi Bài 03 chuyển việc gọi appendFace sang buildMesh, phần tạo vertex của một mặt vẫn không đổi; ta chỉ thêm quyền quyết định có gọi nó hay không.
 
 ## Ghép các phần lại
 
@@ -78,7 +82,7 @@ So với checkpoint 1 ở cùng preset/góc nhìn: counts không đổi, không 
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ vòng face trong appendCube và chỉ gọi appendFace với face=0. Bạn chỉ còn một tấm ở phía +X, không phải cube. Hàm nhỏ không tự đoán năm hướng còn lại.
+1. Trong checkpoint 2, chọn preset Một block. Bỏ vòng face trong appendCube và chỉ gọi appendFace với face=0, rồi build lại target checkpoint 2. Mesh chỉ còn 2 triangles của mặt +X, không còn 12 triangles của cube. Hàm nhỏ không tự đoán năm hướng còn lại. Khôi phục vòng lặp trước bài sau; từ checkpoint 3, buildMesh đã gọi appendFace trực tiếp nên sửa appendCube không còn đổi hình trong ứng dụng.
 2. Đổi `(0,2,3)` thành `(0,3,2)` cho tam giác thứ hai. Hình có thể vẫn giống vì chưa back-face culling, nhưng normal của nửa mặt đảo hướng. Kiểm cross product, không chỉ nhìn ảnh.
 
 ## Tự kiểm tra kết quả

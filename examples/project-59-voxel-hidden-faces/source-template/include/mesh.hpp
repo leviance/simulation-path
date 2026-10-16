@@ -48,7 +48,7 @@ inline BuildResult buildMesh([[maybe_unused]] const Chunk& chunk, [[maybe_unused
                 }
                 ++result.solid;
                 const Vec3 origin{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)};
-#if LAB_CHECKPOINT < 2
+#if LAB_CHECKPOINT < 3
                 appendCube(result.mesh, origin, static_cast<int>(block));
 #endif
                 for (int face = 0; face < 6; ++face) {
@@ -60,7 +60,7 @@ inline BuildResult buildMesh([[maybe_unused]] const Chunk& chunk, [[maybe_unused
                         }
                     }
 #endif
-#if LAB_CHECKPOINT >= 2
+#if LAB_CHECKPOINT >= 3
                     appendFace(result.mesh, origin, static_cast<int>(block), face);
 #endif
                     result.keys.push_back({x, y, z, face});

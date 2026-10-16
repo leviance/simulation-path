@@ -153,6 +153,27 @@ test("Photon Wilson handles boundaries and separates ballistic prediction from t
   const c = run({ ...defaultSettings, count: 512 }).counts;
   assert.ok(c.escaped > c.ballistic);
 });
+test("Photon convergence checkpoints are bounded, batch-independent and use the tally prefix", () => {
+  const settings = { ...defaultSettings, count: 512 };
+  const one = run(settings, 1),
+    batched = run(settings, 32);
+  assert.deepEqual(one.convergence, batched.convergence);
+  assert.deepEqual(
+    one.convergence.map((s) => s.count),
+    [1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
+  );
+  const last = one.convergence.at(-1);
+  assert.equal(last.ballistic, one.counts.ballistic);
+  assert.deepEqual([last.low, last.high], wilson(one.counts.ballistic, 512));
+  const before = structuredClone(one.convergence);
+  advance(one, 32);
+  assert.deepEqual(one.convergence, before);
+  const max = run({ ...settings, count: 8192 });
+  assert.ok(max.convergence.length <= 15);
+  close(wilson(154, 512)[0], 0.2626619417224134);
+  close(wilson(154, 512)[1], 0.34186771266717264);
+});
+
 test("Photon validation rejects invalid uniforms, geometry, budgets, seeds and premature scattering", () => {
   for (const u of [0, 1, NaN, -0.01]) assert.throws(() => freePath(1, u), RangeError);
   for (const muT of [-1, 7, NaN, Infinity]) assert.throws(() => freePath(muT, 0.5), RangeError);

@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 #include <cstdint>
 #include <optional>
+#include <string>
 
 namespace ct {
 constexpr int viewWidth = 1080;
@@ -113,6 +114,32 @@ inline std::optional<std::array<int, 2>> pickCell(float x, float y, int views) {
     const int column = static_cast<int>((x - sinogramRect.x) / sinogramRect.w * detectorCount);
     const int row = static_cast<int>((y - sinogramRect.y) / sinogramRect.h * views);
     return std::array<int, 2>{column, row};
+}
+#endif
+
+#if LAB_CHECKPOINT >= 8
+// Chỉ thay tài nguyên cũ sau khi tạo và cấu hình texture mới thành công.
+inline void resizeSinogramTexture(SDL_Renderer* renderer, SDL_Texture*& texture, int& textureViews, int views) {
+    if (views != 30 && views != 60 && views != 120) {
+        throw std::invalid_argument("views must be 30, 60 or 120");
+    }
+    if (textureViews == views) {
+        return;
+    }
+
+    SDL_Texture* replacement = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, detectorCount, views);
+    if (replacement == nullptr) {
+        throw std::runtime_error(SDL_GetError());
+    }
+    if (!SDL_SetTextureScaleMode(replacement, SDL_SCALEMODE_NEAREST)) {
+        const std::string error = SDL_GetError();
+        SDL_DestroyTexture(replacement);
+        throw std::runtime_error(error);
+    }
+
+    SDL_DestroyTexture(texture);
+    texture = replacement;
+    textureViews = views;
 }
 #endif
 

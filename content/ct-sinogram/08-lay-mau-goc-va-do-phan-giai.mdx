@@ -40,11 +40,57 @@ validate chỉ chấp nhận views=30,60,120. Phím Q chuyển tuần tự, đư
     }
 ```
 
-Đổi views thay Settings vật lý của lượt quét. Nhánh invalidation ở Bài 06 tạo Scan mới, dừng và xóa dữ liệu cũ; không resize vector rồi giữ một phần hàng có góc khác.
+Đổi views thay lưới góc của lượt quét, không chỉ thay chiều cao ảnh. Trong main, giữ nhánh kiểm settings của Bài 06:
+
+```cpp title="src/main.cpp"
+if (controls.settings != before.settings || event.key.key == SDLK_R) {
+    scan = ct::makeScan(controls.settings);
+    controls.paused = true;
+    controls.step = false;
+}
+```
+
+`before` là bản sao controls ngay trước keyDown. Sau Q, scan mới có values toàn NaN và acquired=0. Không resize vector rồi giữ một phần hàng cũ: cùng row 5 nhưng góc của nó đã đổi. Bỏ lệnh step đang treo để thao tác đổi cấu hình không tự đo một hàng ngoài ý muốn.
 
 ### Bước 2 — Giữ texture và dữ liệu cùng chiều cao
 
-Main theo dõi textureViews. Khi số góc khác, hủy texture cũ và tạo texture 128×views mới; chọn nearest. SinogramRect giữ nguyên kích thước trên màn hình. Native dùng logical letterbox, Canvas dùng DPR cho bitmap màn hình; cả hai không tự thay detectorCount theo số pixel cửa sổ.
+Texture 128×30 không chứa được dữ liệu của scan 128×120. Ta thêm hàm sau trong view.hpp. Nhận `SDL_Texture*&` để thay con trỏ của caller, và `int&` để chỉ cập nhật textureViews sau khi thay tài nguyên thành công:
+
+```cpp title="include/view.hpp"
+inline void resizeSinogramTexture(SDL_Renderer* renderer, SDL_Texture*& texture, int& textureViews, int views) {
+    if (views != 30 && views != 60 && views != 120) {
+        throw std::invalid_argument("views must be 30, 60 or 120");
+    }
+    if (textureViews == views) {
+        return;
+    }
+
+    SDL_Texture* replacement = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, detectorCount, views);
+    if (replacement == nullptr) {
+        throw std::runtime_error(SDL_GetError());
+    }
+    if (!SDL_SetTextureScaleMode(replacement, SDL_SCALEMODE_NEAREST)) {
+        const std::string error = SDL_GetError();
+        SDL_DestroyTexture(replacement);
+        throw std::runtime_error(error);
+    }
+
+    SDL_DestroyTexture(texture);
+    texture = replacement;
+    textureViews = views;
+}
+```
+
+Có ba trường hợp: kích thước đã đúng thì không làm gì; tạo/cấu hình mới thất bại thì giữ texture cũ và báo lỗi; thành công mới hủy texture cũ và nhận replacement. Nếu cấu hình scale thất bại, phải hủy cả replacement vừa tạo. Lưu message trước khi cleanup để không mất lỗi ban đầu.
+
+Trong `if (dirty)` của main, gọi hàm này **trước** upload. Nó cũng xử lý lần đầu khi texture=nullptr và textureViews=0:
+
+```cpp title="src/main.cpp"
+ct::resizeSinogramTexture(renderer, texture, textureViews, controls.settings.views);
+ct::upload(texture, scan, controls.displayRange, controls.invert);
+```
+
+SinogramRect giữ nguyên kích thước trên màn hình. Native dùng logical letterbox, Canvas dùng DPR cho bitmap màn hình; cả hai không tự thay detectorCount theo số pixel cửa sổ.
 
 Các biến này có vai trò khác nhau:
 
@@ -63,7 +109,18 @@ inline double samplingAngle(int coarseRow) {
 }
 ```
 
-Hàm nhỏ này phục vụ kiểm quy ước lưới: kết quả phải gần 0 cho j=0..29. Tests còn so **giá trị projection** ở hai góc chung, không dừng ở việc hai angle bằng nhau. Giữ scene/strength giống nhau khi so.
+Hàm nhỏ này chỉ kiểm cách gán góc: kết quả gần 0 cho j=0..29. Nó chưa kiểm số đo. Thêm fixture sau vào tests/tests.cpp, dùng **đĩa lệch tâm** để phép so không vô tình đúng chỉ vì đĩa ở tâm đối xứng mọi góc:
+
+```cpp title="tests/tests.cpp"
+const auto samplingScene = makeScene(1);
+const auto coarse60 = project(viewAngle(5, 30), samplingScene, 1);
+const auto fine60 = project(viewAngle(20, 120), samplingScene, 1);
+for (int column = 0; column < detectorCount; ++column) {
+    check(close(coarse60[column].projection, fine60[column].projection), "same 60 degree measurement on nested grids");
+}
+```
+
+Cả hai hàng dùng θ=60°, cùng scene, strength và pixel centres. Vòng lặp so cả 128 số p, không chỉ một tổng hoặc ảnh nhìn bằng mắt. `close` là hàm so sai số nhỏ của test runner; tên fixture chỉ rõ đang kiểm điều gì.
 
 ### Bước 4 — Quan sát phần thông tin chưa có
 

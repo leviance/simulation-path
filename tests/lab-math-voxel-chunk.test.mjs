@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { inspectQuad } from "../lib/labs/voxel-face-inspector.ts";
 import {
   index,
   makeChunk,
@@ -16,6 +17,24 @@ import {
   audit,
   scene,
 } from "../lib/labs/voxel-chunk.ts";
+test("Voxel isolated face experiments expose vertex order without mutating geometry", () => {
+  const before = structuredClone(faces);
+  for (let face = 0; face < 6; face++) {
+    const good = inspectQuad(face),
+      bad = inspectQuad(face, true);
+    assert.deepEqual(good.triangles[0].normal, good.expected);
+    assert.deepEqual(good.triangles[1].normal, good.expected);
+    assert.deepEqual(bad.triangles[0].normal, good.expected);
+    assert.deepEqual(
+      bad.triangles[1].normal.map((v) => (v === 0 ? 0 : -v)),
+      good.expected,
+    );
+    assert.deepEqual(bad.triangles[1].indices, [0, 3, 2]);
+  }
+  assert.deepEqual(faces, before);
+  assert.throws(() => inspectQuad(6), RangeError);
+});
+
 test("Voxel storage maps all 4096 coordinates once and rejects each boundary", () => {
   const ids = new Set();
   for (let y = 0; y < 16; y++)

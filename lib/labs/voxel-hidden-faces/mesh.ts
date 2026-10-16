@@ -1,4 +1,4 @@
-import { validateChunk } from "../voxel-chunk/model.ts";
+import { appendCube, validateChunk } from "../voxel-chunk/model.ts";
 import {
   index,
   faces,
@@ -63,12 +63,13 @@ export function buildMesh(chunk: Uint8Array, culled: boolean, slice = 15, stage 
         const block = chunk[index(x, y, z)];
         if (block === 0) continue;
         result.solid++;
+        if (stage < 3) appendCube(result.mesh, [x, y, z], block);
         for (let face = 0; face < 6; face++) {
           if (culled && stage >= 3) {
             result.neighborChecks++;
             if (!keepFace(chunk, x, y, z, face, slice, stage)) continue;
           }
-          appendFace(result.mesh, [x, y, z], block, face);
+          if (stage >= 3) appendFace(result.mesh, [x, y, z], block, face);
           result.keys.push([x, y, z, face]);
         }
       }

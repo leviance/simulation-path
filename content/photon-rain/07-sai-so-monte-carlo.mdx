@@ -37,7 +37,17 @@ Ngay cả khi một photon Censored ở bước tán xạ muộn, ta đã biết
 
 ### Bước 2 — Dùng Wilson thay vì khoảng đối xứng đơn giản ở biên
 
-Nếu k=0, công thức sai số chuẩn cắm p=k/N sẽ bằng 0; không nên kết luận xác suất thật chắc chắn bằng 0. Ta dùng [Wilson score interval](https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm) với z≈1.96 cho mức 95%.
+Trước khi đọc công thức, thử một bộ số nhỏ. **Giả sử** ta xử lý N=512 photon và có k=154 ballistic. Đây là ví dụ tính tay, không phải kết quả được hứa cho seed 42:
+
+| Đại lượng | Giá trị | Cách đọc |
+| --- | ---: | --- |
+| Tỷ lệ quan sát k/N | 0.30078125 | Khoảng 30.08% photon của lượt này không tương tác |
+| Cận dưới Wilson | 0.26266194 | Một đầu của khoảng ước lượng theo mô hình Bernoulli |
+| Cận trên Wilson | 0.34186771 | Đầu còn lại; không phải min/max photon có thể quan sát |
+
+Với hấp thụ thuần muA=.4, lý thuyết p0≈.301194 nằm trong khoảng ví dụ ấy. Điều này không biến tỷ lệ quan sát thành xác suất thật, cũng không khẳng định “95% photon nằm trong khoảng”. Khoảng đang nói về **tham số xác suất**, không phải vị trí hoặc từng photon.
+
+Nếu k=0, công thức sai số chuẩn cắm p=k/N sẽ bằng 0; không nên kết luận xác suất thật chắc chắn bằng 0. Ta dùng [Wilson score interval](https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm) với z≈1.96 cho mức 95%. Trong code dưới đây, p là k/N, denominator điều chỉnh mẫu hữu hạn, centre là tâm đã điều chỉnh, halfWidth là nửa độ rộng:
 
 ```cpp title="include/statistics.hpp"
     constexpr double z = 1.959963984540054;
@@ -64,7 +74,13 @@ Trong Canvas, hai readout được ghi nhãn riêng. Đặt muA=0,muS=2,limit 1 
 
 ### Bước 4 — Lập thí nghiệm có thể so được
 
-Chọn hấp thụ thuần muA=.4, seed 42; thêm512 mẫu rồi ghi k/N và Wilson. Chuyển 2048 mẫu tạo lượt mới, tính lại cùng các ID đầu và thêm phần còn lại. Với RNG theo ID, tập 512 là tiền tố của tập 2048 nếu settings vật lý không đổi. Không dùng hai preview photon làm hai thí nghiệm tỷ lệ.
+Chọn hấp thụ thuần muA=.4, seed 42; thêm 512 mẫu rồi ghi k/N và Wilson. Đồ thị dưới Canvas ghi các mốc N=1,2,4,... và N cuối từ những photon đã tally. Điểm vàng là k/N, vạch xanh là Wilson, đường hồng đứt là p0. Trục N dùng log₂: hai mốc liên tiếp nhân đôi số mẫu, không phải cộng một photon.
+
+Ở Canvas, helper TypeScript advance ghi mốc sau mỗi tally, nên thêm 1 hay 32 photon/lần vẫn có cùng lịch sử ở các mốc chung. Không gọi tracePhoton lần nữa để vẽ đồ thị, không lấy thêm RNG và không dùng 24 đường mờ làm mẫu số. Tối đa 15 mốc nên phần minh họa cũng có giới hạn rõ ràng. Mở Xem số liệu của đồ thị nếu muốn đọc số hoặc không xem được hình. Đồ thị là công cụ học trên web; bản SDL vẫn đọc ước lượng/Wilson ở title bằng cùng công thức, không thêm một pipeline vẽ đồ thị vào source C++.
+
+Quan sát k/N có thể dao động qua lại quanh p0; các vạch thường hẹp dần nhưng không phải một đường hầm chắc chắn chứa mọi điểm tương lai. Đây là các khoảng Wilson **tại từng N**, dùng mẫu lồng nhau, không phải một confidence band đồng thời cho cả quá trình. Không đếm số vạch chứa p0 rồi gọi đó là thử nghiệm coverage độc lập.
+
+Chuyển 2048 mẫu tạo lượt mới, tính lại cùng các ID đầu và thêm phần còn lại. Với RNG theo ID, tập 512 là tiền tố của tập 2048 nếu settings vật lý không đổi. Không dùng hai preview photon làm hai thí nghiệm tỷ lệ.
 
 Đọc cả error tuyệt đối, N và interval; không chỉ nhìn “gần đúng” từ hình. Sau đó đổi seed để thấy dao động, nhưng không lọc seed chỉ giữ lượt đẹp.
 
