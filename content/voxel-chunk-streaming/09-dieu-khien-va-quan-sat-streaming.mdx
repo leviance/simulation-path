@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đi theo một hành trình và quan sát hàng đợi
+
+## Vấn đề cần giải quyết
+
+Một streamer đúng trên vài tọa độ vẫn có thể khó quan sát khi đi liên tục, dừng giữa queue hoặc reset lúc kéo camera. Ta thêm hành trình tự đi theo mốc và hoàn thiện điều khiển, nhưng không biến bài này thành FPS controller.
+
+## Hiểu ý tưởng trước khi viết code
+
+Auto route có chín mốc X/Z, quay vòng theo chỉ số. Mỗi tick đi tới một mốc rồi xử lý một batch; đây là đường đi rời rạc để thử queue, không tích phân vận tốc. Mặc định tắt và playback đang pause. N vẫn đi một tick với reduced-motion.
+
+Đồng hồ chỉ tích lũy dt đã clamp, mỗi callback tối đa một tick. Sau alt-tab không có while catch-up. Mất focus/ẩn tab phải pause lâu dài; trở lại không tự resume. Pointer capture giữ thao tác kéo ra ngoài canvas và được nhả khi reset/cancel/blur.
+
+Map chỉ có 7×7 quanh player. Sau teleport, chunk xa chờ gỡ có thể không nằm trong map; đọc resident/queue để biết chúng vẫn còn trong RAM.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-9" />
+
+## Viết code từng bước
+
+### Bước 1 — Thêm route mà không sửa scheduler
+
+step chỉ đổi player theo mốc nếu autoTravel bật, rồi gọi pump. Chỉ số quay vòng có giới hạn. Tắt autoTravel thì hết pending tự pause, không chạy một loop rỗng mãi.
+
+```cpp title="include/controller.hpp"
+inline void step(App& app) {
+    if (app.autoTravel) {
+        const std::array<Player, 9> route{{{8, 8}, {20, 8}, {36, 8}, {36, 24}, {20, 24}, {8, 24}, {-4, 8}, {-20, -8}, {8, 8}}};
+        const Player p = route[app.waypoint];
+        movePlayer(app.world, p.x, p.z);
+        app.waypoint = (app.waypoint + 1) % route.size();
+    }
+    pump(app.world);
+    bool finished = app.world.pending.empty();
+    finished = finished && !app.autoTravel;
+    if (finished) {
+        stop(app);
+    }
+}
+```
+
+
+### Bước 2 — Cho thời gian chạy theo nhịp hữu hạn
+
+tick kẹp dt tối đa 0.1 giây, xử lý một batch khi đủ 0.2 giây. Pause không tích lũy thời gian. Canvas hủy RAF khi pause/unmount; native focus-loss nhả capture rồi stop.
+
+```cpp title="include/controller.hpp"
+inline void tick(App& app, double dt) {
+    if (app.paused) {
+        return;
+    }
+    // Mỗi lần chỉ xử lý một batch; không while bù thời gian sau alt-tab.
+    app.elapsed += std::clamp(dt, 0.0, 0.1);
+    if (app.elapsed >= 0.2) {
+        app.elapsed = 0;
+        step(app);
+    }
+}
+```
+
+
+### Bước 3 — Teleport từ inspector có kiểm miền
+
+IJKL/click map chỉ đổi Key đang chọn. E/Đến chunk đã chọn mới đổi player về tâm chunk nếu còn trong miền demo. Thao tác tay pause route để không bị tự động kéo trở lại ngay.
+
+```cpp title="include/controls.hpp"
+if (key == SDLK_E) {
+    const double x = app.selected.x * side + 8;
+    const double z = app.selected.z * side + 8;
+    if (std::abs(x) <= playerLimit && std::abs(z) <= playerLimit) {
+        movePlayer(app.world, x, z);
+    }
+}
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 9"
+cmake --build build --config Debug --target project_62_checkpoint_9 --parallel 2
+.\build\Debug\project_62_checkpoint_9.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Pause nhưng vẫn cộng dt: resume có thể làm hàng loạt job không quan sát được. Không bù thời gian đã pause.
+2. Space khởi động khi queue rỗng và autoTravel tắt tạo RAF vô ích. Phải chặn cả đường keyboard, không chỉ disable button.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Preset âm/teleport, bước tay, pause/reset và tự đi dùng cùng scheduler. Controls dùng keyboard được. Kéo ra ngoài rồi thả không kẹt camera; blur/ẩn tab/reduced-motion dừng tự chạy. Kiểm desktop được báo riêng, không suy từ CTest.
+
+## Bài tập mở rộng
+
+Khi đang tải dở vùng xa, chọn lại vị trí âm rồi N từng lần. Ghi Key các job kế tiếp và giải thích vì sao chúng thuộc kế hoạch mới.
+
+Tiếp theo: [Kiểm chứng streaming và hoàn thiện world](/projects/voxel-chunk-streaming/10-kiem-chung-va-hoan-thien).

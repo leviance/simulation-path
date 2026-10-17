@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nối bốn giá trị thành một mặt địa hình êm
+
+## Vấn đề cần giải quyết
+
+Hash ở bài trước tạo những bậc nhảy lớn giữa các ô lattice. Ta sẽ giữ nguyên bốn giá trị ở bốn góc, nhưng nội suy phần nằm giữa để địa hình chuyển dần từ góc này sang góc kia.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đổi world sang không gian noise bằng x/scale, z/scale. Lấy x0=floor(x), z0=floor(z); phần lẻ tx,tz luôn trong [0,1), kể cả x=−0.25 thì x0=−1 và phần lẻ 0.75. Ta nội suy hai hàng theo X, rồi nội suy hai kết quả theo Z. Trước khi nội suy, thay t bằng s(t)=t²(3−2t) để độ dốc ở hai đầu về zero.
+
+$$
+n(x,z)=\operatorname{lerp}\big(\operatorname{lerp}(v_{00},v_{10},s(t_x)),\operatorname{lerp}(v_{01},v_{11},s(t_x)),s(t_z)\big)
+$$
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="terrain63-4" />
+
+### Tính thử một điểm trước khi đọc hàm
+
+Trong **Thí nghiệm nội suy bốn góc**, giữ seed=42 và bấm “Về mẫu (−0.25, 0.5)”. Tọa độ này nằm trong không gian noise. Nếu scale=32 thì nó tương ứng với world (−8,16), vì (−8/32,16/32)=(−0.25,0.5).
+
+Vì floor(−0.25)=−1, ô đang xét có góc đầu (x0=−1,z0=0). Phần lẻ là tx=0.75, tz=0.5. Ta cần bốn giá trị sau; các số trong bảng đã làm tròn để dễ đọc:
+
+| Góc | Địa chỉ lattice | Giá trị từ seed 42 |
+| --- | --- | --- |
+| v00 | (−1,0) | 0.77084001 |
+| v10 | (0,0) | −0.59563592 |
+| v01 | (−1,1) | −0.20982681 |
+| v11 | (0,1) | −0.17070268 |
+
+Sau smoothstep, trọng số theo X là s(0.75)=0.84375; theo Z là s(0.5)=0.5. Trộn hàng trên: a=v00+(v10−v00)×0.84375≈−0.38212406. Trộn hàng dưới tương tự: b≈−0.17681582. Cuối cùng n=a+(b−a)×0.5≈−0.27946994. Hãy đối chiếu từng số với readout của Canvas; dùng giá trị đầy đủ trong test, không dùng các số đã làm tròn ở bảng.
+
+Kéo điểm trắng hoặc thay tx/tz bằng bàn phím để thấy a, b rồi n thay đổi. Bấm “Góc v00”: hai trọng số bằng 0 nên n phải trở lại đúng v00. Thử tx=0.25 và bật/tắt smoothstep: trọng số X đổi từ 0.25 thành 0.15625. Hai cách vẫn trùng nhau tại góc, nhưng cách chuyển giữa các góc khác nhau. Thí nghiệm này chỉ minh họa phép nội suy, không tái tạo terrain hay tải thêm chunk. Với tx=1, nó hiển thị cạnh phải của ô đang chọn; hàm valueNoise khi sang ô kế tiếp vẫn nhận cùng giá trị ở biên.
+
+## Viết code từng bước
+
+### Bước 1 — Viết phép trộn hai giá trị
+
+blend(a,b,t) trả a khi t=0 và b khi t=1. Công thức a+(b−a)t cho biết t là phần đường đã đi từ a tới b; không phải tọa độ world. Hàm này được dùng ba lần trong một mẫu noise.
+
+```cpp title="include/noise.hpp"
+inline double blend(double a, double b, double t) {
+    return a + (b - a) * t;
+}
+```
+
+### Bước 2 — Làm êm trọng số, không làm mờ pixel
+
+s(0)=0, s(1)=1 và s′(t)=6t(1−t), nên s′ bằng zero ở hai đầu. Ghép các ô có thể giữ tín hiệu và đạo hàm bậc nhất liên tục (C1). Điều này nói về hàm trước floor, không biến bề mặt voxel thành đường trơn.
+
+```cpp title="include/noise.hpp"
+inline double smooth(double t) {
+    return t * t * (3.0 - 2.0 * t);
+}
+```
+
+### Bước 3 — Nội suy bốn góc của cùng một ô
+
+a trộn hai nút hàng z0, b trộn hai nút hàng z0+1, rồi blend(a,b,tz). Không nhầm z0+1 thành worldZ+1: đây là bước một ô lattice. Trước phép cast, code từ chối NaN, vô cực và tọa độ ngoài miền. Seed tiếp tục giữ nguyên ở cả bốn nút.
+
+```cpp title="include/noise.hpp"
+inline double valueNoise(double x, double z, std::uint32_t seed) {
+    if (!std::isfinite(x) || !std::isfinite(z) || std::abs(x) > 2048 || std::abs(z) > 2048) {
+        throw std::out_of_range("noise coordinates -2048..2048");
+    }
+    const int x0 = static_cast<int>(std::floor(x));
+    const int z0 = static_cast<int>(std::floor(z));
+    const double tx = smooth(x - x0);
+    const double tz = smooth(z - z0);
+    const double a = blend(latticeValue(x0, z0, seed), latticeValue(x0 + 1, z0, seed), tx);
+    const double b = blend(latticeValue(x0, z0 + 1, seed), latticeValue(x0 + 1, z0 + 1, seed), tx);
+    return blend(a, b, tz);
+}
+```
+
+## Ghép các phần lại
+
+Từ checkpoint_4, terrainSignal gọi valueNoise(worldX/scale,worldZ/scale,seed). Scale=32 nghĩa là khoảng cách hai nút cơ sở bằng 32 world units, không có nghĩa noise lặp lại mỗi 32 units. Đây là **value noise** vì nút chứa giá trị vô hướng, không phải gradient Perlin noise. Công thức smoothstep có thể đối chiếu trong [tài liệu Khronos](https://registry.khronos.org/OpenGL-Refpages/gl4/html/smoothstep.xhtml).
+
+```bash title="Terminal — checkpoint 04"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_63_checkpoint_4 --parallel 2
+./build/Debug/project_63_checkpoint_4.exe
+```
+
+Lệnh trên dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure và chạy executable trong `build/`. Tên target có trong CMakeLists.txt của ZIP. Mục **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint, không chỉ các đoạn vừa thay.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay floor bằng cast int ở x=−0.25. Bạn nhận x0=0 và trọng số âm, tức đã ngoại suy sai ô; kiểm số ở inspector thay vì chỉ nhìn hình.
+2. Bỏ smooth, dùng phần lẻ trực tiếp. Giá trị vẫn nối được ở biên lattice nhưng độ dốc thường gãy. Thử mặt cắt trước và sau khi bỏ, rồi khôi phục smoothstep.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Tại nút nguyên, valueNoise bằng latticeValue. Mẫu (−0.25,0.5), seed 42 cho khoảng −0.27946993972686357. Qua hai phía x=−1,0,1, giá trị và độ dốc một phía tiến về nhau trong sai số cho phép. H sau floor vẫn có bậc là bình thường.
+
+## Bài tập mở rộng
+
+Vẽ riêng đường t và s(t) từ 0 đến 1. Đánh dấu 0,0.5,1 rồi giải thích vì sao cùng đi qua ba điểm nhưng hai đường có độ dốc đầu/cuối khác nhau.
+
+Tiếp theo: [Thêm chi tiết bằng nhiều octave](/projects/voxel-procedural-terrain/05-ghep-nhieu-octave).
+

@@ -31,7 +31,12 @@ export function zoom(camera: Camera, amount: number): Camera {
 }
 const edge = (a: ScreenPoint, b: ScreenPoint, x: number, y: number) =>
   (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
-export function raster(mesh: Triangle[], camera: Camera, useDepth = true) {
+export function raster(
+  mesh: Triangle[],
+  camera: Camera,
+  useDepth = true,
+  depthRange?: { near: number; far: number },
+) {
   const pixels = new Uint8ClampedArray(imageWidth * imageHeight * 4);
   const depth = new Float64Array(imageWidth * imageHeight).fill(-Infinity);
   for (let i = 0; i < depth.length; i++) pixels.set([11, 16, 32, 255], i * 4);
@@ -51,6 +56,7 @@ export function raster(mesh: Triangle[], camera: Camera, useDepth = true) {
         if (wa < -1e-10 || wb < -1e-10 || wc < -1e-10) continue;
         const d = wa * a.depth + wb * b.depth + wc * c.depth,
           i = y * 320 + x;
+        if (depthRange && (d > depthRange.near || d <= depthRange.far)) continue;
         if (!useDepth || d > depth[i]) {
           depth[i] = d;
           pixels.set(triangle.color, i * 4);

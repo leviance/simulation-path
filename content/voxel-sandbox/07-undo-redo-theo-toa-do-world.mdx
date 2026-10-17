@@ -1,0 +1,141 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Undo và redo bằng địa chỉ world
+
+## Vấn đề cần giải quyết
+
+Một click nhầm không nên buộc người dùng đặt lại bằng tay. Nhưng lịch sử giữ con trỏ Entry sẽ hỏng sau unload, và lưu cả buffer 4096 ô cho từng lệnh sẽ rất lãng phí. Ta cần lưu đúng phần thay đổi nhỏ nhất.
+
+## Hiểu ý tưởng trước khi viết code
+
+Command gồm cell world, before và after. Undo ghi before, redo ghi after qua cùng đường writeCell, nhưng không tạo một command mới. Hai stack giữ tối đa 32 lệnh; edit mới sau undo xóa redo. Trước replay, kiểm giá trị hiện tại còn khớp expected value để không ghi đè state đã lệch khỏi lịch sử.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Hỏi giá trị kể cả khi chunk không còn resident
+
+Giá trị hiện tại vẫn được quyết định bởi delta hoặc base. Undo offline không cần tải chunk chỉ để sửa một byte trong buffer; nó cập nhật dữ liệu world và Entry mới sau này sẽ phủ lại delta.
+
+```cpp title="include/editing.hpp"
+inline Block effectiveBlock(const World& world, Cell cell) {
+    const auto found = world.edits.find(cell);
+    if (found != world.edits.end()) {
+        return found->second;
+    }
+    return baseBlock(world, cell);
+}
+```
+
+### Bước 2 — Ghi command sau khi thay đổi thành công
+
+Chỉ record khi changed, không cho no-op hoặc cap failure vào history. Command giữ giá trị theo value, không reference. Khi stack vượt 32, bỏ lệnh cũ nhất; đây là history hữu hạn có chủ đích, không phải lời hứa undo mọi hành động từ đầu phiên.
+
+```cpp title="include/editing.hpp"
+inline bool writeCell(World& world, Cell cell, Block value, bool record = true) {
+    validateCell(cell);
+    if (static_cast<unsigned>(value) > 3) {
+        throw std::out_of_range("Block ID 0..3");
+    }
+    const Key key{floorDiv(cell[0]), floorDiv(cell[2])};
+    const auto found = world.chunks.find(key);
+    Block before = effectiveBlock(world, cell);
+    if (found != world.chunks.end()) {
+        before = get(found->second.blocks, cell[0] - key.x * side, cell[1], cell[2] - key.z * side);
+    }
+    if (before == value) {
+        return false;
+    }
+    const Block base = baseBlock(world, cell);
+    if (value != base && !world.edits.contains(cell) && world.edits.size() >= 512) {
+        return false;
+    }
+    if (value == base) {
+        world.edits.erase(cell);
+    } else {
+        world.edits[cell] = value;
+    }
+    if (found != world.chunks.end()) {
+        set(found->second.blocks, cell[0] - key.x * side, cell[1], cell[2] - key.z * side, value);
+    }
+    markEdit(world, cell);
+    if (record) {
+        world.undo.push_back({cell, before, value});
+        if (world.undo.size() > 32) {
+            world.undo.erase(world.undo.begin());
+        }
+        world.redo.clear();
+    }
+    return true;
+}
+```
+
+### Bước 3 — Replay mà không tự ghi lại chính mình
+
+Dùng writeCell(...,false), kiểm expected value trước, rồi mới chuyển command giữa hai stack. Nếu bị từ chối thì không pop lệnh. Sau import/reset, history cũ bị xóa vì nó thuộc một world/config khác.
+
+```cpp title="include/editing.hpp"
+inline bool history(World& world, bool redo) {
+    auto& source = world.undo;
+    auto& target = world.redo;
+    if (redo) {
+        if (world.redo.empty()) {
+            return false;
+        }
+        const Command command = world.redo.back();
+        if (effectiveBlock(world, command.cell) != command.before) {
+            return false;
+        }
+        if (!writeCell(world, command.cell, command.after, false)) {
+            return false;
+        }
+        world.redo.pop_back();
+        world.undo.push_back(command);
+        return true;
+    }
+    if (source.empty()) {
+        return false;
+    }
+    const Command command = source.back();
+    if (effectiveBlock(world, command.cell) != command.after) {
+        return false;
+    }
+    if (!writeCell(world, command.cell, command.before, false)) {
+        return false;
+    }
+    source.pop_back();
+    target.push_back(command);
+    return true;
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_7, phá ở gần gốc, đi xa cho chunk đó bị gỡ rồi Z. Resident không tăng nhưng delta thay đổi. Y redo, quay về và kiểm buffer. Sau một undo, thực hiện edit mới: redo phải rỗng, không thể áp lại nhánh lịch sử cũ lên công trình mới.
+
+```bash title="Terminal — checkpoint 07"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_7 --parallel 2
+./build/Debug/project_64_checkpoint_7.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Lưu Entry* trong Command. Sau unload, địa chỉ đó không còn hợp lệ, dù vừa thử ở gần gốc có vẻ chạy được.
+2. Undo bằng writeCell mặc định record=true. Lệnh hoàn tác lại bị thêm vào undo, làm lịch sử tự sinh và phá quy tắc LIFO.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Undo/redo dùng địa chỉ world, làm việc cả offline mà không load; redo branch bị xóa sau edit mới. Mỗi phía không vượt 32 lệnh. Stale expected value, empty stack hoặc write failure không thay stack/delta.
+
+## Bài tập mở rộng
+
+Tạo hành trình edit→undo→redo→undo→edit với một cell và ghi trạng thái hai stack sau mỗi bước. Nếu muốn group nhiều cell thành một lệnh, thiết kế atomic validation cho cả nhóm trước khi triển khai.
+
+Tiếp theo: [Xuất và nhập một bản lưu có thể kiểm tra](/projects/voxel-sandbox/08-xuat-nhap-ban-luu).
+

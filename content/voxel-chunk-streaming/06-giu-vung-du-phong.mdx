@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ thêm một vòng để khỏi tải đi tải lại
+
+## Vấn đề cần giải quyết
+
+Nhân vật đứng gần ranh giới, nhích sang rồi quay lại: nếu cứ gỡ ngay ngoài wanted, cùng một hàng chunk sẽ bị tạo và xóa liên tục. Ta cần giữ thêm dữ liệu đã có, nhưng không biến vòng dự phòng thành vùng phải tải.
+
+## Hiểu ý tưởng trước khi viết code
+
+Wanted dùng bán kính r; keep dùng r+1. Chỉ tải các Key trong wanted còn thiếu. Chunk đã resident nằm ngoài wanted nhưng còn trong keep được giữ nguyên. r=1 có 9 chunk cần tải và tối đa 25 vị trí giữ; r=2 có 25 cần tải và tối đa 49 vị trí giữ. Cap global vẫn là 49.
+
+Sau teleport, resident xa có thể còn lại vài tick vì unload cũng có budget; map 7×7 không hiển thị chúng nhưng bộ đếm vẫn tính. Giảm radius cũng gỡ dần, không tuyên bố resident phải bằng số wanted ngay lập tức.
+
+Khi center/radius đổi, thay kế hoạch đang chờ. Đây là queue đồng bộ chưa chạy, không có thread worker để hủy giữa một job. Một job đã hoàn tất không được tính là cancelled.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-6" />
+
+### Lặp lại đường đi của bài trước
+
+Vẫn bắt đầu từ 9 resident quanh (0,0), radius=1, budget=2 rồi đi từ (8,8) sang (24,8). Lần này cột chunk −1 còn nằm trong keep của center mới nên không cần gỡ. Chỉ có ba job tải ở cột 2.
+
+| Thời điểm | Wanted | Resident | Pending | Job vừa chạy | Mesh dựng lại trong tick |
+| --- | --- | --- | --- | --- | --- |
+| Vừa đi sang phải | 9 | 9 | 3 | Chưa có | Chưa có |
+| Tick 1 | 9 | 11 | 1 | Tải (2,0), (2,−1) | 11 |
+| Tick 2 | 9 | 12 | 0 | Tải (2,1) | 12 |
+| Quay về (8,8), chưa tick | 9 | 12 | 0 | Không cần tải hay gỡ | Không có |
+
+Resident=12 không phải tải thừa wanted: ba chunk cũ được giữ lại để dùng khi quay về. Bộ đếm loads đã tăng từ 9 lên 12 ở lượt đi; lượt về không làm nó tăng nữa. Ở checkpoint này, mesh vẫn dựng lại cả vùng sau một batch thay đổi; đừng dùng cột cuối để kết luận dirty meshing đã hoạt động.
+
+Các preset vị trí **di chuyển trong World đang mở**, giữ radius, budget, resident và bộ đếm. Chỉ Reset/R mới tạo lại World. Nhờ vậy, bạn có thể đặt budget=1, chọn vị trí xa rồi quay về trước tick tiếp theo để quan sát các job bị hủy, thay vì vô tình đo hai lần khởi tạo độc lập.
+
+## Viết code từng bước
+
+### Bước 1 — Mở rộng vùng giữ, không vùng tạo
+
+Chỉ keepRadius thêm một. wanted không đổi. Nếu dùng keepRadius trong vòng load thì bạn sẽ tải cả vòng ngoài ngay, tăng công việc không cần thiết.
+
+```cpp title="include/world.hpp"
+inline int keepRadius(const World& world) {
+    return loadRadius(world) + 1;
+}
+```
+
+
+### Bước 2 — Bỏ job không còn thuộc mục tiêu
+
+retarget dựng job mới rồi đếm các job cũ không còn cần. Job giữ Key nên không bị dangling khi Entry đã đổi. pump vẫn re-plan trước mỗi tick như một lớp bảo vệ; không thực thi mù danh sách của vị trí cũ.
+
+```cpp title="include/scheduler.hpp"
+inline void retarget(World& world) {
+    const auto jobs = plan(world);
+    std::set<std::pair<bool, Key>> ids;
+    for (const Job& job : jobs) {
+        ids.insert({job.load, job.key});
+    }
+    for (const Job& old : world.pending) {
+        if (!ids.contains({old.load, old.key})) {
+            ++world.cancelled;
+        }
+    }
+    world.pending = jobs;
+}
+```
+
+
+### Bước 3 — Đổi radius và budget có kiểm tra
+
+settings từ chối tham số sai trước khi sửa state. r chỉ nhận 1/2. Giới hạn batch vừa chạy được ghi bằng lastBudget khi pump bắt đầu; không đem lastJobs của budget=2 so với setting=1 vừa chọn rồi báo lỗi giả.
+
+```cpp title="include/scheduler.hpp"
+inline void settings(World& world, int radius, int budget) {
+    if (radius < 1 || radius > 2 || budget < 1 || budget > 2) {
+        throw std::out_of_range("radius/budget 1..2");
+    }
+    world.radius = 1;
+    world.radius = radius;
+    world.budget = budget;
+    retarget(world);
+}
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_62_checkpoint_6 --parallel 2
+.\build\Debug\project_62_checkpoint_6.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Tải toàn bộ square(center,keepRadius): r=1 bỗng tải 25 thay vì 9 chunk dù nhân vật chưa đi đâu.
+2. Giữ pending cũ sau teleport: nhân vật đã quay lại gốc mà chương trình vẫn tải vùng xa. Kiểm từng Key load có còn nằm trong wanted mới không.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Từ center (0,0) sang (1,0) tải thêm ba chunk; quay về trước khi hàng cũ ra khỏi keep không tăng loads. Teleport hai lần liên tiếp bỏ các job sai đích. Sau drain không còn job, mọi resident nằm trong keep; cap luôn≤49 kể cả lúc đang chuyển.
+
+## Bài tập mở rộng
+
+Trong Canvas, chọn preset nhảy xa khi còn job chờ rồi xem mục **job bị hủy khi đổi mục tiêu**. Danh sách này là những job trong queue cũ không còn xuất hiện trong kế hoạch mới, không phải chunk đã bị unload. So Key và priority cũ với lịch sử batch để phân biệt “chưa chạy nên bỏ” và “đã chạy nên phải gỡ”. Đổi preset không xóa lịch sử; Đặt lại mới bắt đầu phiên chẩn đoán mới.
+
+Vẽ wanted và keep trên giấy cho r=1. Phân loại từng Key sau một bước sang phải: giữ trong wanted, giữ dự phòng, cần tải mới hoặc cần gỡ.
+
+Tiếp theo: [Không vẽ hai mặt ở đường giáp ranh](/projects/voxel-chunk-streaming/07-nhin-sang-chunk-hang-xom).

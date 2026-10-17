@@ -1,0 +1,127 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy cảnh mô phỏng trước khi thêm UI
+
+## Vấn đề cần giải quyết
+
+Trước khi làm nút bấm, ta cần một chương trình có thứ gì đó để điều khiển. Nếu chỉ vẽ hai ô chữ nhật ghi Pause và Reset, bạn chưa biết nút đã nối với mô phỏng đúng hay chưa. Vì vậy, bài đầu dựng một cảnh rất nhỏ: quả bóng rơi theo phương Y, chạm sàn rồi nảy lên.
+
+Tải ZIP ở trang tổng quan, giải nén và mở thư mục có `CMakeLists.txt`. Build `project_65_starter` trước: cửa sổ phải có nền tối, một đường sàn và hình vuông màu cam. Hình vuông chỉ đánh dấu nơi bóng sẽ xuất hiện; starter chưa có vật lý hoặc UI. Không cần mở lại source voxel của Project 64.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng mặt phẳng 960×540; Y tăng xuống như các project 2D đầu khóa. Tâm bóng bắt đầu ở `y=90`, sàn ở `y=460`, bán kính 14 nên tâm chạm sàn tại 446. Gravity dương kéo bóng xuống.
+
+Nhắc lại semi-implicit Euler: với bước cố định h=1/120 s, cập nhật vận tốc trước rồi vị trí:
+
+$$
+v_{n+1}=v_n+g h,\qquad y_{n+1}=y_n+v_{n+1}h.
+$$
+
+Ở đây gravity có đơn vị **logical pixel/s²**, không phải m/s². Ta cố ý dùng một mô hình đơn giản, không kéo bộ giải va chạm lớn vào bài UI. Khi chạm sàn/trần, vị trí được chặn lại và vận tốc đổi hướng, nhân 0.72. Ngưỡng tốc độ 8 ở sàn giúp bóng nghỉ thay vì rung mãi; đây không phải mô hình bảo toàn năng lượng.
+
+<InteractiveLab demo="simulator-controls" mode="controls65-1" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết một bước vật lý có đầu vào rõ ràng
+
+Mở `include/simulation.hpp`. `Model` giữ vị trí, vận tốc, gravity, accumulator và ticks; `paused=true` nên mở chương trình chưa tự chạy. `stepPhysics` chỉ tiến một bước h, không đọc đồng hồ hay sự kiện SDL. Bạn có thể gọi nó trong CTest mà không mở cửa sổ.
+
+```cpp title="include/simulation.hpp"
+inline void stepPhysics(Model& model) {
+    // Semi-implicit Euler: cập nhật vận tốc trước rồi mới cập nhật vị trí.
+    model.velocity += model.gravity * fixedDt;
+    model.y += model.velocity * fixedDt;
+    if (model.y < 48.0) {
+        model.y = 48.0;
+        model.velocity = std::abs(model.velocity) * 0.72;
+    }
+    const double bottom = floorY - ballRadius;
+    if (model.y > bottom) {
+        model.y = bottom;
+        model.velocity = -model.velocity * 0.72;
+        if (std::abs(model.velocity) < 8.0) {
+            model.velocity = 0.0;
+        }
+    }
+    ++model.ticks;
+}
+```
+
+### Bước 2 — Vẽ bóng bằng các hàng ngang
+
+Mở view.hpp. Một hàng cách tâm một đoạn row có nửa chiều rộng bằng căn bậc hai của r²−row². Vòng lặp đi từ −14 đến14, tô một Rect cao1 ở mỗi hàng; X tâm giữ320, Y tâm lấy từ model.y nên hình sẽ đi theo vật lý. Helper fill chuyển Rect sang SDL_FRect rồi gọi SDL_SetRenderDrawColor và SDL_RenderFillRect; bạn đã thấy cách tô hình chữ nhật ở starter, giờ dùng lại để ghép hình tròn. Thêm1 vào chiều rộng giúp hàng ở hai cực vẫn có pixel.
+
+```cpp title="include/view.hpp"
+    // Tô từng hàng ngang của hình tròn, không cần ảnh hoặc texture bên ngoài.
+    for (int row = -14; row <= 14; ++row) {
+        const double halfWidth = std::sqrt(ballRadius * ballRadius - double(row * row));
+        fill(renderer, {320.0 - halfWidth, model.y + double(row), halfWidth * 2.0 + 1.0, 1.0}, 255, 190, 104);
+    }
+```
+
+### Bước 3 — Đổi thời gian frame thành số bước hữu hạn
+
+`advance` nhận số giây đã trôi qua. Khi Pause, ta xóa accumulator và trả về ngay. Khi chạy, chỉ nhận tối đa 0.1 giây mỗi frame và làm tối đa 12 bước. Nếu máy bị đứng lâu, chương trình bỏ bớt thời gian thay vì cố chạy bù hàng nghìn bước. Ticks đếm bước vật lý, không phải số frame được vẽ.
+
+```cpp title="include/simulation.hpp"
+inline int advance(Model& model, double elapsed) {
+    if (model.paused) {
+        model.accumulator = 0.0;
+        return 0;
+    }
+    if (!std::isfinite(elapsed) || elapsed < 0.0) {
+        return 0;
+    }
+
+    model.accumulator += std::min(elapsed, 0.1);
+    int count = 0;
+    while (count < 12 && model.accumulator + 1e-12 >= fixedDt) {
+        stepPhysics(model);
+        model.accumulator = std::max(0.0, model.accumulator - fixedDt);
+        ++count;
+    }
+    return count;
+}
+```
+
+### Bước 4 — Gọi update rồi vẫn vẽ mỗi frame
+
+Trong `src/main.cpp`, lấy thời gian bằng SDL_GetTicksNS, đổi nanosecond thành giây, cập nhật previous rồi gọi advance. Lời gọi draw nằm ngoài phần kiểm Pause: bóng đứng lại nhưng cửa sổ vẫn được vẽ và nhận input. `view.hpp` tô hình tròn bằng các hàng ngang, dùng helper fill chuyển Rect sang SDL_FRect.
+
+```cpp title="src/main.cpp"
+        const Uint64 now = SDL_GetTicksNS();
+        double elapsed = double(now - previous) / 1e9;
+        previous = now;
+        lab::advance(model, elapsed);
+        lab::draw(renderer, model, ui);
+```
+
+## Ghép các phần lại
+
+Build checkpoint 1 bằng các lệnh dưới. Mở cửa sổ, nhấn **N** một lần: ticks tăng 1, vị trí nhích xuống. Nhấn **Space** để chạy rồi nhấn lại để Pause. Đây là phím tạm giúp thử cảnh trước khi có button; đến bài 05, Space sẽ chỉ tác động lên control đang có focus.
+
+```bash title="Terminal — từ starter đến checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_65_starter project_65_checkpoint_1 --parallel 2
+./build/Debug/project_65_checkpoint_1.exe
+```
+
+Trên Windows dùng Visual Studio 2022 có workload C++; CMake ≥3.24 và C++20. CMake FetchContent khóa SDL3 3.4.8 bằng checksum, luôn link SDL3::SDL3. Lần đầu cần mạng để tải SDL. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug`; executable ở `build/`, không trong `build/Debug/`. Đừng chép cả source-template vào project học: dùng starter hoặc snapshot tương ứng trong ZIP.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi thứ tự thành cập nhật y bằng vận tốc cũ rồi mới cộng gravity. Sau 60 bước, vị trí khác công thức của semi-implicit Euler dù vận tốc cuối có thể vẫn đúng. Khôi phục thứ tự rồi so lại.
+2. Bỏ kiểm paused trong advance. Chờ mười giây khi đang Pause rồi nhấn N; ticks hoặc vị trí đã thay đổi trước thao tác, cho thấy mô phỏng chưa thực sự dừng.
+3. Bỏ giới hạn frame và số vòng lặp. Chỉ phân tích trên giấy hoặc test elapsed hữu hạn, không treo debugger thật lâu: một frame chậm sẽ phải chạy bù quá nhiều bước và làm UI mất phản hồi.
+
+## Tự kiểm tra kết quả
+
+Bạn phải chạy được cả starter và checkpoint 1. Bản 01 bắt đầu Pause, N tăng đúng một tick, Space chạy/dừng và sàn giữ tâm bóng không vượt 446. UI chưa có là đúng mốc này. Chờ khi Pause không làm ticks tăng; sau Resume bóng không nhảy vì thời gian chờ.
+
+Đọc toàn bộ source ở cuối bài và tìm ba phần: dữ liệu trong Model, update thuần trong simulation.hpp, lệnh SDL trong view.hpp/main.cpp. Nếu chưa phân biệt được, hãy theo một lần nhấn N từ event đến stepPhysics trước khi đi tiếp.
+
+## Bài tập mở rộng
+
+Đổi gravity mặc định thành 240, reset chương trình và dự đoán vận tốc sau 60 bước. Ghi đơn vị cạnh con số. Sau đó sang [bài 02 — vẽ panel và hit-test](/projects/simulator-controls/02-ve-panel-va-hit-test).

@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ thay đổi khi chunk bị gỡ khỏi RAM
+
+## Vấn đề cần giải quyết
+
+Vừa xây vài block, đi xa rồi quay về thì công trình biến mất. Lý do không nằm ở renderer: unload đã xóa Entry, còn lần load sau chỉ chạy lại hàm terrain gốc. Buffer resident là cache, chưa phải nơi lưu thay đổi của world.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ hai lớp: B0(p) là terrain procedural; delta chứa những cell người dùng làm khác nền. Nếu delta có p thì dùng giá trị đó, kể cả 0/Air; nếu không mới hỏi B0. Phá cần một tombstone Air, không phải xóa record. Ngược lại, khi đặt lại đúng vật liệu nền, ta xóa delta vì nó không còn cần thiết.
+
+$$
+B(p)=\begin{cases}\Delta(p)&p\in\operatorname{dom}(\Delta)\\B_0(p)&\text{khi không có delta}\end{cases}
+$$
+
+Có record giá trị 0 khác hoàn toàn với không có record.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-5" />
+
+## Viết code từng bước
+
+### Bước 1 — Hỏi dữ liệu nền bằng địa chỉ world
+
+baseBlock dùng heightAt/materialAt P63 tại x/z world và y của cell. Nó không đọc resident hoặc mesh. Nhờ vậy có thể biết giá trị cần khôi phục dù chunk đã gỡ. Không gọi generateTerrain cho 4096 ô chỉ để đọc một cell.
+
+```cpp title="include/editing.hpp"
+inline Block baseBlock(const World& world, Cell cell) {
+    validateCell(cell);
+    return materialAt(cell[1], heightAt(cell[0], cell[2], world.config), world.config);
+}
+```
+
+### Bước 2 — Tạo nền rồi phủ delta khi load
+
+Mỗi Entry nhận một buffer nền mới, sau đó lọc các delta thuộc Key và ghi Block ID. Map delta thuộc World, không thuộc Entry nên erase chunk không xóa công trình. Địa chỉ âm vẫn phải floor; cell x=−1 thuộc Key−1, local 15.
+
+```cpp title="include/world.hpp"
+inline bool loadChunk(World& world, Key key) {
+    if (world.chunks.contains(key) || world.chunks.size() >= maxResident) {
+        return false;
+    }
+    Entry entry;
+    entry.blocks = generateTerrain(key, world.config);
+    // Dữ liệu nền được tạo lại, sau đó phủ delta (kể cả tombstone Air).
+    for (const auto& [cell, material] : world.edits) {
+        if (floorDiv(cell[0]) == key.x && floorDiv(cell[2]) == key.z) {
+            set(entry.blocks, cell[0] - key.x * side, cell[1], cell[2] - key.z * side, material);
+        }
+    }
+    world.chunks.emplace(key, std::move(entry));
+    ++world.loads;
+    return true;
+}
+```
+
+### Bước 3 — Cập nhật delta cùng buffer như một thay đổi duy nhất
+
+Nếu value==base thì erase record; ngược lại giữ cả value=Air. Kiểm cap 512 trước khi chèn một địa chỉ mới. Thao tác khôi phục nền vẫn được phép khi cap đầy vì nó giải phóng slot. Không ghi buffer trước rồi mới phát hiện map hết chỗ.
+
+```cpp title="include/editing.hpp"
+inline bool writeCell(World& world, Cell cell, Block value, bool record = true) {
+    validateCell(cell);
+    if (static_cast<unsigned>(value) > 3) {
+        throw std::out_of_range("Block ID 0..3");
+    }
+    const Key key{floorDiv(cell[0]), floorDiv(cell[2])};
+    const auto found = world.chunks.find(key);
+    Block before = effectiveBlock(world, cell);
+    if (found != world.chunks.end()) {
+        before = get(found->second.blocks, cell[0] - key.x * side, cell[1], cell[2] - key.z * side);
+    }
+    if (before == value) {
+        return false;
+    }
+    const Block base = baseBlock(world, cell);
+    if (value != base && !world.edits.contains(cell) && world.edits.size() >= 512) {
+        return false;
+    }
+    if (value == base) {
+        world.edits.erase(cell);
+    } else {
+        world.edits[cell] = value;
+    }
+    if (found != world.chunks.end()) {
+        set(found->second.blocks, cell[0] - key.x * side, cell[1], cell[2] - key.z * side, value);
+    }
+    markEdit(world, cell);
+    (void)record;
+    flushEdits(world);
+    return true;
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_5, phá một block ở gốc và đi tới (200,−200) bằng WASD hoặc viết hành trình test hữu hạn; sau khi unload, quay lại. Bộ đếm delta không phụ thuộc resident. Trong TypeScript, effectiveBlock dùng `??` chứ không dùng `||`: giá trị 0 là tombstone hợp lệ, không được rơi về nền.
+
+```bash title="Terminal — checkpoint 05"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_5 --parallel 2
+./build/Debug/project_64_checkpoint_5.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Khi phá, gọi edits.erase(cell) vì nghĩ xóa block là xóa record. Regeneration sẽ làm block mọc lại; cần giữ record cell→Air.
+2. Chỉ dùng local index làm khóa delta. Hai chunk có cùng local sẽ sửa lẫn nhau. Thử hai cell world(−1,0,0) và(15,0,0), chúng không phải cùng địa chỉ.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Air tombstone còn sau unload/return; khôi phục đúng base làm delta giảm. Không edit thì checksum terrain P63 còn nguyên. 512 record là giới hạn cứng; record 513 bị từ chối trước khi buffer/history/dirty flags đổi.
+
+## Bài tập mở rộng
+
+Thêm màn thống kê số delta trong từng chunk mà không tải lại các chunk xa. Phân biệt “không có record” với “record có value 0” ngay trong test, không dựa vào ảnh.
+
+Tiếp theo: [Cập nhật mesh và preview đúng lúc](/projects/voxel-sandbox/06-cap-nhat-mesh-va-preview).
+

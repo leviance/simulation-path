@@ -1,0 +1,92 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc địa hình bằng bản đồ và mặt cắt
+
+## Vấn đề cần giải quyết
+
+Ảnh 3D đẹp không đủ để biết công thức đúng. Góc camera có thể che một đường gãy, còn bậc voxel bình thường dễ bị nhầm là lỗi. Ta cần đọc cùng một địa hình ở ba dạng: mesh resident, bản đồ độ cao và mặt cắt.
+
+## Hiểu ý tưởng trước khi viết code
+
+Inspector lấy mẫu tại tọa độ voxel nguyên: floor vị trí player liên tục. Canvas cho chọn cột khác bằng kéo map hoặc nhập world X/Z. Đường xanh là 8+6n(x,z) liên tục ở các bài noise đã nội suy; đường vàng là H(floor(x),z). Height map dùng hàm procedural nên hiển thị cả nơi chưa resident, không ngụ ý chunk đó đã nằm trong RAM.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="terrain63-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Tách mẫu cột thành dữ liệu nhỏ
+
+x/z trong ColumnSample là địa chỉ cột nguyên, signal là giá trị trước lượng tử hóa, height là số block. Không lấy local làm đầu vào chỉ vì inspector đang đứng trong một chunk. Tọa độ âm gần zero là nơi dễ phát hiện sai floor nhất.
+
+```cpp title="include/controller.hpp"
+inline ColumnSample inspectColumn(const App& app) {
+    const int x = static_cast<int>(std::floor(app.world.player.x));
+    const int z = static_cast<int>(std::floor(app.world.player.z));
+    return {x, z, terrainSignal(x, z, app.world.config), heightAt(x, z, app.world.config)};
+}
+```
+
+### Bước 2 — Chỉ raster lại khi dữ liệu hoặc camera đổi
+
+Inspector/hover chỉ đọc hàm, không sửa blocks. Camera đổi làm ảnh dirty nhưng không cần generate hoặc remesh. Canvas tách cache pixel khỏi lần vẽ map/readout; đừng đặt generateTerrain trong requestAnimationFrame.
+
+```cpp title="include/controller.hpp"
+inline bool refreshFrame(App& app) {
+    if (!app.world.frameDirty && !app.cameraDirty) {
+        return false;
+    }
+    render(app.frame, sceneMesh(app.world), app.camera);
+    app.world.frameDirty = false;
+    app.cameraDirty = false;
+    ++app.rasterizations;
+    return true;
+}
+```
+
+### Bước 3 — Giữ playback hữu hạn và có thể dừng
+
+Clamp dt và chỉ chạy một batch sau 0.2 giây; không while bù hàng trăm tick sau alt-tab. Native mất focus sẽ pause và nhả capture. Canvas xử lý thêm pointercancel, reduced-motion và cleanup RAF khi đổi lesson.
+
+```cpp title="include/controller.hpp"
+inline void tick(App& app, double dt) {
+    if (app.paused) {
+        return;
+    }
+    // Mỗi lần chỉ xử lý một batch; không while bù thời gian sau alt-tab.
+    app.elapsed += std::clamp(dt, 0.0, 0.1);
+    if (app.elapsed >= 0.2) {
+        app.elapsed = 0;
+        step(app);
+    }
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_8. Chọn preset âm, đưa X/Z tới hai phía biên −16,0,16 và xem mặt cắt. Bật lỗi local cho preview 2D, nhưng giữ mesh 3D đúng để đối chiếu. Màu vàng chia ô chunk là lớp chú thích, không phải mặt hình học. Kéo vùng ảnh 3D để orbit; phím mũi tên làm cùng thao tác. Nếu không dùng chuột, nhập X/Z và dùng nút di chuyển.
+
+```bash title="Terminal — checkpoint 08"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_63_checkpoint_8 --parallel 2
+./build/Debug/project_63_checkpoint_8.exe
+```
+
+Lệnh trên dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure và chạy executable trong `build/`. Tên target có trong CMakeLists.txt của ZIP. Mục **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint, không chỉ các đoạn vừa thay.
+
+## Thử làm sai để hiểu đúng
+
+1. Đòi đường vàng trơn như đường xanh. floor và lấy mẫu voxel cố ý tạo bậc; hãy kiểm đường xanh và cùng world point trước khi kết luận seam.
+2. Kéo map rồi thả con trỏ ngoài canvas, đổi tab hoặc bật reduced-motion lúc đang chạy. Nếu pointer vẫn bị giữ hoặc demo tự chạy lại khi quay về, vòng đời input chưa được dọn đúng.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Cùng X/Z và cấu hình cho n/H giống nhau trong inspector native và Canvas. Space repeat không cuộn trang hoặc bật/tắt liên tục, reduced-motion vẫn cho Một tick. Đổi kích thước/DPR không gây ResizeObserver loop. Preview 2D được ghi rõ không phải danh sách resident.
+
+## Bài tập mở rộng
+
+Inspector đã có x0/z0 và bốn giá trị góc từ bài 04. Hãy thêm bảng đóng góp của từng octave: tần số, trọng số, giá trị noise và tích trọng số×noise tại cùng world point. Cộng các dòng rồi chia tổng trọng số để đối chiếu n của bài 05; sau đó thử bật/tắt octave cuối mà không đổi seed hoặc scale.
+
+Tiếp theo: [Kiểm chứng địa hình và chạy source hoàn chỉnh](/projects/voxel-procedural-terrain/09-kiem-chung-va-hoan-thien).
+

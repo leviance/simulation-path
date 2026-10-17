@@ -1,0 +1,150 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng bảng điều khiển và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+UI trông đúng trong một lần click chưa đủ để kết luận đúng. Các bug thường xuất hiện ở chuỗi thao tác: giữ nút, kéo qua control khác, mất focus rồi nhận một release muộn. Bài cuối viết test cho những chuỗi đó, kiểm mô phỏng bằng kết quả tính độc lập và chạy source hoàn chỉnh.
+
+Bắt đầu từ checkpoint 6. Code dùng cho input vẫn là code thuần trong controls.hpp; test không dựng một bộ button khác rồi kiểm bộ đó. Checkpoint 7 bổ sung audit chỉ đọc và phím F1 để xem kết quả ngay trong native.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có hai lớp kiểm khác nhau. **Invariant** trả lời state còn hợp lệ hay không: dữ liệu hữu hạn, gravity trong miền, accumulator nhỏ hơn một bước, Control ID hợp lệ. **Hành vi** trả lời thao tác đã làm đúng điều mong muốn hay chưa: release ngoài nút không được Pause, Reset giữ gravity, panel không lọt click xuống cảnh. Một audit xanh không chứng minh cả lớp hành vi.
+
+Vật lý cũng cần kết quả đối chiếu không lặp lại chính vòng update. Trước va chạm, bắt đầu từ nghỉ, sau n bước semi-implicit Euler:
+
+$$
+v_n=gnh,\qquad y_n=90+g h^2\frac{n(n+1)}2.
+$$
+
+Với n=60, h=1/120, g=480 ta có v=240 và y=151. Sai số vị trí so với nghiệm liên tục 150 là 1 pixel; đó là đặc điểm của phép tích phân, không phải lỗi slider. Chọn 60 bước để bóng chưa chạm sàn và công thức trên còn áp dụng.
+
+<InteractiveLab demo="simulator-controls" mode="controls65-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Thêm audit không tự sửa dữ liệu
+
+audit.hpp tách finite, bounds, clock và controls. Khi phát hiện gravity=-1, hàm trả false và giữ nguyên dữ liệu sai để test báo được nguyên nhân. Không clamp ngầm trong audit. F1 chỉ log kết quả, không thay thế CTest và không có nghĩa capture thực tế đã được kiểm.
+
+```cpp title="include/audit.hpp"
+inline bool audit(const Model& model, const Ui& ui) {
+    const bool finite = std::isfinite(model.y) && std::isfinite(model.velocity) && std::isfinite(model.gravity) && std::isfinite(model.accumulator);
+    const bool bounds = model.y >= 48.0 && model.y <= floorY - ballRadius && model.gravity >= 0.0 && model.gravity <= 1200.0;
+    const bool clock = model.accumulator >= 0.0 && model.accumulator < fixedDt + 1e-12;
+    const bool controls = validControl(ui.hot) && validControl(ui.active) && validControl(ui.focus);
+
+    return finite && bounds && clock && controls && model.scenePresses >= 0;
+}
+```
+
+### Bước 2 — Đối chiếu đồng hồ và free-flight bằng công thức độc lập
+
+testClock chạy 60 bước, tính expectedY bằng tổng cấp số cộng và so sai số 1e-8. Một Model khác nhận 15 frame, mỗi frame 4h: cùng số fixed step phải cho cùng y/v. Test còn kiểm frame rất dài chỉ làm 12 bước, NaN không tiến, Pause bỏ thời gian chờ và Reset giữ lựa chọn. Check không dùng assert để Release vẫn kiểm thật.
+
+```cpp title="tests/tests.cpp"
+void testClock() {
+    using namespace lab;
+    Model a;
+    check(advance(a, 50.0) == 0 && a.ticks == 0, "paused time never accumulates");
+    setPaused(a, false);
+    for (int i = 0; i < 60; ++i) {
+        advance(a, fixedDt);
+    }
+    const double n = 60.0;
+    const double expectedVelocity = a.gravity * fixedDt * n;
+    const double expectedY = 90.0 + a.gravity * fixedDt * fixedDt * n * (n + 1.0) / 2.0;
+    // Đối chiếu công thức tổng cấp số cộng, không gọi lại vòng lặp của simulator.
+    check(near(a.velocity, expectedVelocity) && near(a.y, expectedY), "semi-implicit free-flight oracle");
+    Model b;
+    setPaused(b, false);
+    for (int i = 0; i < 15; ++i) {
+        advance(b, 4.0 * fixedDt);
+    }
+    check(a.ticks == b.ticks && near(a.y, b.y), "dt partitions have same fixed steps");
+    check(advance(b, 1e9) == 12, "long frame limited to twelve steps");
+    check(advance(b, std::numeric_limits<double>::quiet_NaN()) == 0, "NaN frame ignored");
+    const auto ticks = b.ticks;
+    setPaused(b, true);
+    advance(b, 3600.0);
+    check(b.ticks == ticks && b.accumulator == 0.0, "pause drops wait time");
+    setGravity(b, 1000.0);
+    resetSimulation(b);
+    check(b.paused && b.gravity == 1000.0 && b.y == 90.0 && b.ticks == 0, "reset keeps pause and gravity");
+    setGravity(b, std::numeric_limits<double>::infinity());
+    check(b.gravity == 1000.0, "nonfinite parameter ignored");
+}
+```
+
+### Bước 3 — Kiểm chuỗi input trên chính các hàm production
+
+testPointer gọi down/move/up theo thứ tự, không gọi activate trực tiếp để giả vờ đã kiểm button. Nó thử release mồ côi, thả khác nút, thả ngoài, đi ra rồi quay lại, slider clamp và blur. testGeometry kiểm biên và letterbox; testKeyboard kiểm thứ tự focus/repeat. Stress 12000 frame là hữu hạn, không benchmark vô hạn.
+
+```cpp title="tests/tests.cpp"
+void testKeyboard() {
+    using namespace lab;
+    Model model;
+    Ui ui;
+    keyDown(model, ui, Key::Tab, false, false);
+    check(ui.focus == Control::Pause, "first Tab selects Pause");
+    keyDown(model, ui, Key::Space, false, false);
+    keyDown(model, ui, Key::Space, false, true);
+    check(!model.paused, "Space repeat does not toggle twice");
+    keyDown(model, ui, Key::Tab, true, false);
+    check(ui.focus == Control::Gravity, "Shift Tab wraps to slider");
+    keyDown(model, ui, Key::Home, false, false);
+    keyDown(model, ui, Key::Right, false, true);
+    check(model.gravity == 20.0, "slider arrows allow repeat");
+    keyDown(model, ui, Key::End, false, false);
+    check(model.gravity == 1200.0, "End selects maximum");
+    keyDown(model, ui, Key::Tab, true, false);
+    check(ui.focus == Control::Reset, "reverse slider to Reset");
+    keyDown(model, ui, Key::Enter, false, false);
+    check(!model.paused && model.gravity == 1200.0 && model.ticks == 0, "keyboard reset preserves choices");
+    pointerDown(model, ui, {800.0, 252.0});
+    keyDown(model, ui, Key::Escape, false, false);
+    check(ui.active == Control::None, "Escape cancels gesture");
+}
+```
+
+## Ghép các phần lại
+
+Build final và chạy CTest ở cả Debug/Release. Trên web, phần **Toàn bộ mã nguồn của dự án** cuối bài có đủ CMakeLists.txt, include, main và tests; ZIP có thêm starter cùng bảy checkpoint. Bạn không phải ghép lại một dự án từ các snippet rời rạc.
+
+```bash title="Terminal — nghiệm thu có giới hạn"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+./build/Debug/project_65_final.exe
+```
+
+```powershell title="Terminal — hidden smoke có deadline"
+$smoke = Start-Process -FilePath ".\build\Debug\project_65_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Smoke quá 30 giây."
+}
+if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+Smoke chỉ mở window ẩn, vẽ một frame rồi thoát; không ghi file hoặc clipboard. Automation phải có deadline bên ngoài cho cả build/process tree, không chỉ timeout trong CTest. Giữ tối đa hai compiler. Không cần chạy server web để kiểm C++ hoặc toán; desktop QA là một bước riêng sau kiểm tự động.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay một check bằng assert rồi build Release với NDEBUG. Test có thể xanh vì điều kiện không còn được thực thi, không phải vì code đúng. Khôi phục check và thử cố ý truyền sai một fixture để thấy exit failure.
+2. Viết expectedY bằng cách gọi stepPhysics lên Model thứ hai. Nếu cả hai dùng cùng bug, test vẫn xanh; công thức tổng độc lập mới kiểm được thứ tự cập nhật.
+3. Chỉ kiểm audit sau click. Toggle Pause hai lần vẫn tạo state hợp lệ nhưng hành vi sai. Phải kiểm paused và số action sau từng transition.
+4. Coi hidden smoke là kiểm tương tác đầy đủ. Nó không kéo chuột ra ngoài window, không thử capture backend và không chứng minh Tab dùng thuận tiện.
+
+## Tự kiểm tra kết quả
+
+Bảng nghiệm thu gồm: same-button click đúng 1 action; mọi release không hợp lệ đều không action; slider đúng đầu/giữa/cuối và không mất active ngoài panel; focus nhìn thấy, Tab hai chiều, repeat đúng loại; Reset giữ gravity/paused; panel không lọt click; letterbox/DPR đúng; blur/cancel/ẩn tab/resize/unmount không để capture treo; Pause không tích thời gian.
+
+CTest và test TypeScript phải kiểm cùng fixture 0/600/1200, free-flight y=151/v=240, các viewport rộng/cao/2× và thứ tự focus. Đọc console/log lỗi thật khi thử capture. UI native dùng nhãn ASCII, chưa screen reader đầy đủ; Canvas có HTML tương đương và Tab thoát được. Dữ liệu mô phỏng chỉ nằm trong RAM; localStorage tiến độ học không lưu gravity hoặc bóng.
+
+## Bài tập mở rộng
+
+Thêm một slider hệ số nảy với cùng quy tắc hit/active/focus và test biên. Bạn sẽ thấy phần nào bắt đầu lặp lại; đó là động lực cho Project 66 xây cây giao diện sống qua nhiều frame, không phải lý do nhét widget framework vào bài này. Các project chưa phát hành vẫn ghi **Sắp ra mắt** trong [roadmap](/roadmap).

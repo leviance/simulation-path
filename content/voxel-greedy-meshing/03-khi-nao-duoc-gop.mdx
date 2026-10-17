@@ -1,0 +1,80 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khi nào hai mặt được gộp?
+
+## Vấn đề cần giải quyết
+
+Tường sọc Grass, Dirt, Stone vẫn là một mặt phẳng. Nếu chỉ kiểm ô mask khác Air, thuật toán sẽ gộp cả tường rồi tô màu ô đầu: hình đúng nhưng vật liệu sai. Ta cần chốt thế nào là hai mặt được phép gộp.
+
+## Hiểu ý tưởng trước khi viết code
+
+**Culling** hỏi neighbor có che mặt không; **merging** hỏi các mặt ngoài đã giữ có cùng thuộc tính không. Grass sát Stone vẫn che nhau vì đều opaque, nhưng hai mặt ngoài khác material không thể trở thành một quad flat-color.
+
+Khóa đầy đủ là `(plane, direction, material)`. Plane/direction cố định trong mask nên sameFace chỉ so material. Chưa có UV, AO, ánh sáng theo đỉnh. Khi thêm chúng, cùng material chưa đủ; phải mở rộng quy tắc để không mất chi tiết.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="greedy61-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ Block ID thay vì bool
+
+Giá trị Stone/Grass/Dirt là dữ liệu màu cho quad về sau. Điều kiện dưới chỉ kiểm neighbor là Air, không kiểm neighbor khác material.
+
+```cpp title="include/mask.hpp"
+const Block material = activeBlock(chunk, source, slice);
+if (material != Block::Air && activeBlock(chunk, neighbor, slice) == Block::Air) {
+    mask[v * side + u] = material;
+}
+```
+
+
+### Bước 2 — Viết phép so có tên
+
+sameFace từ chối cả Air==Air để seed rỗng không thành rectangle. Direction không bị quên: nó cố định trên toàn bộ mask.
+
+```cpp title="include/rectangles.hpp"
+inline bool sameFace(Block candidate, Block material) {
+    return material != Block::Air && candidate == material;
+}
+```
+
+
+### Bước 3 — Dựng tường sọc để kiểm màu
+
+Preset 7 là tường dày một block tại z=8, mỗi bốn cột đổi material. Chọn +Z/plane=9: bốn dải, dải cuối trở lại Grass. Hai dải Grass không được nối qua phần giữa khác màu. Bài 04 mới thêm viền rectangle.
+
+```cpp title="include/model.hpp"
+if (preset == 7 && z == 8) {
+    set(chunk, x, y, z, static_cast<Block>(1 + (x / 4) % 3));
+}
+```
+
+
+## Ghép các phần lại
+
+Bắt đầu từ checkpoint trước, đối chiếu các file vừa sửa rồi chạy snapshot của bài này. Mỗi snapshot chứa đủ source và build độc lập, không liên kết ngược đến module khác. Phần mã hoàn chỉnh dưới bài cho phép kiểm toàn bộ file thay vì ghép các mảnh bằng trí nhớ.
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_61_checkpoint_3 --parallel 2
+.\build\Debug\project_61_checkpoint_3.exe
+```
+
+Windows/Visual Studio dùng đường dẫn trên. Với generator single-config, đặt CMAKE_BUILD_TYPE=Debug và chạy executable trực tiếp trong build. Nhãn native dùng ASCII; giải thích tiếng Việt nằm trong bài và Canvas.
+
+## Thử làm sai để hiểu đúng
+
+1. Sau bài 04, đổi sameFace thành kiểm khác Air: tường sọc sẽ mất ranh giới màu. Hãy ghi dự đoán trước khi làm.
+2. Đổi culling thành neighbor!=material: sinh mặt trong giữa hai block khác màu. Preset hai block phải có 10, không phải 12 mặt.
+
+Chỉ sửa trên bản thử riêng rồi hoàn tác thí nghiệm trước khi đi tiếp; code tải về là bản đúng.
+
+## Tự kiểm tra kết quả
+
+Mask tường giữ đúng ba Block ID và không sửa chunk. Hai block khác material kề nhau vẫn có 10 mặt đơn vị. Phân biệt được điều kiện giữ mặt với điều kiện gộp.
+
+## Bài tập mở rộng
+
+Hai mặt cùng Stone nhưng AO ở một góc khác nhau có gộp chỉ theo ID không? Nêu dữ liệu cần giữ, chưa cần triển khai.
+
+Tiếp theo: [Mở rộng hình chữ nhật rồi xóa phần đã dùng](/projects/voxel-greedy-meshing/04-tim-hinh-chu-nhat).
+

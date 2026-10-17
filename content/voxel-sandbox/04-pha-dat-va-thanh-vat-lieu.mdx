@@ -1,0 +1,126 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Phá, đặt và chọn vật liệu
+
+## Vấn đề cần giải quyết
+
+Người dùng đã chọn được block nhưng một editor cần quy tắc rõ ràng cho từng action. Phá là thay hit bằng Air; đặt là thêm một block sát mặt được chọn. Hai thao tác không được dùng lại Hit cũ sau khi dữ liệu vừa đổi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hit là kết quả của query tại một thời điểm, không phải một handle sống mãi. Mỗi action dựng lại ray từ camera/aim hiện tại rồi query lại. Đặt tại hit.cell+hit.normal, chỉ nếu ô đó là Air và resident. Normal zero khi origin nằm trong block không cho biết một mặt đặt hợp lệ. Palette 1/2/3 chỉ chọn Block ID, chưa có inventory theo số lượng.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm điều kiện của action trước khi ghi
+
+Material phải 1..3. Phá dùng chính hit; đặt kiểm normal, tọa độ trong tầng và target Air resident. Không overwrite block khác, không tạo chunk mới vì click và không cho đặt tại y=16. Re-query ngay đầu action ngăn hai click liên tiếp cùng tác động vào hit cũ.
+
+```cpp title="include/editing.hpp"
+inline bool editRay(World& world, const Ray& ray, bool place, Block material) {
+    if (material == Block::Air || static_cast<unsigned>(material) > 3) {
+        throw std::out_of_range("material 1..3");
+    }
+    // Luôn pick lại từ dữ liệu hiện tại; preview trên màn hình có thể đã cũ.
+    const Trace trace = traceWorld(world, ray);
+    if (!trace.hit) {
+        return false;
+    }
+    Cell cell = trace.hit->cell;
+    Block value = Block::Air;
+    if (place) {
+        if (trace.hit->normal == Cell{}) {
+            return false;
+        }
+        for (int i = 0; i < 3; ++i) {
+            cell[i] += trace.hit->normal[i];
+        }
+        if (cell[1] < 0 || cell[1] >= 16 || cell[0] < -1024 || cell[0] >= 1024 || cell[2] < -1024 || cell[2] >= 1024 || residentBlock(world, cell) != 0) {
+            return false;
+        }
+        value = material;
+    }
+    return writeCell(world, cell, value);
+}
+```
+
+### Bước 2 — Ghi một cell bằng cách đơn giản trước
+
+Ở checkpoint 04, writeCell chỉ sửa buffer resident và remesh eager. before==value là no-op, không ghi history hoặc đếm việc thành công. Bản này cố ý chưa giữ edit qua unload: ta cần thấy thao tác cơ bản chạy đúng rồi mới thêm dữ liệu session ở bài 05.
+
+```cpp title="include/editing.hpp"
+inline bool writeCell(World& world, Cell cell, Block value, bool record = true) {
+    validateCell(cell);
+    if (static_cast<unsigned>(value) > 3) {
+        throw std::out_of_range("Block ID 0..3");
+    }
+    const Key key{floorDiv(cell[0]), floorDiv(cell[2])};
+    const auto found = world.chunks.find(key);
+    Block before = effectiveBlock(world, cell);
+    if (found != world.chunks.end()) {
+        before = get(found->second.blocks, cell[0] - key.x * side, cell[1], cell[2] - key.z * side);
+    }
+    if (before == value) {
+        return false;
+    }
+    if (found == world.chunks.end()) {
+        return false;
+    }
+    if (found != world.chunks.end()) {
+        set(found->second.blocks, cell[0] - key.x * side, cell[1], cell[2] - key.z * side, value);
+    }
+    markEdit(world, cell);
+    (void)record;
+    flushEdits(world);
+    return true;
+}
+```
+
+### Bước 3 — Nối input với action, không với vòng render
+
+action tạm dừng queue, tạo ray mới và báo changed/no change. SDL gọi ở button-down hoặc key-down không repeat, không gọi ở mouse-motion hay draw. Canvas dùng nút Phá/Đặt hoặc F/G làm cùng thao tác; giữ/kéo chuột không auto-paint.
+
+```cpp title="include/controller.hpp"
+inline void action(App& app, bool place) {
+    stop(app);
+    const Ray ray = cameraRay(app.camera, app.world.player, app.aimX, app.aimY, cameraVolume(app.world, app.camera).near);
+    const bool changed = editRay(app.world, ray, place, app.material);
+    app.message = "No change: check hit, resident, boundary or delta cap";
+    if (changed) {
+        app.message = "Edited one cell";
+        app.pickDirty = true;
+    }
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_4. Tải vùng quanh player, chọn Grass/Dirt/Stone bằng 1/2/3 rồi phá hai lần trên cùng ray: hit thứ hai phải lùi xuống hoặc ra phía sau. Đặt một block lên mặt vừa lộ ra và quan sát target đổi theo query mới. Viền chỉ là preview; khi ấn nút vẫn phải kiểm lại toàn bộ.
+
+```bash title="Terminal — checkpoint 04"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_4 --parallel 2
+./build/Debug/project_64_checkpoint_4.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng app.trace.hit đã cache để ghi trực tiếp. Sau lần phá đầu, lần thứ hai có thể sửa lại Air thay vì chọn block tiếp theo.
+2. Cho đặt khi residentBlock trả −1, hoặc chấp nhận target khác Air. Bạn sẽ tạo dữ liệu chưa tải/ghi đè công trình. Giữ validation ở editRay trước writeCell.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Một action thành công đổi tối đa một cell, material đúng palette. Invalid target không sửa buffer. Query mới nhìn thấy dữ liệu vừa đổi ngay cả khi mesh chưa refresh. Đi xa/gỡ chunk ở bài này có thể mất edit: đó là phần còn thiếu được giải quyết ngay bài 05.
+
+## Bài tập mở rộng
+
+Đếm số byte Block ID khác trước/sau một action thay vì chỉ nhìn ảnh. Thử đặt từ origin trong block, target trên trần và target Unknown; tất cả phải bị từ chối mà không đổi dữ liệu.
+
+Tiếp theo: [Giữ thay đổi khi chunk bị gỡ khỏi RAM](/projects/voxel-sandbox/05-giu-chinh-sua-khi-chunk-bi-go).
+

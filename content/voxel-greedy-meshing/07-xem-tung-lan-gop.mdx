@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xem từng rectangle mà thuật toán đã chọn
+
+## Vấn đề cần giải quyết
+
+Nút chạy gộp sẽ không giúp học nếu mỗi lần bấm lại tính từ đầu rồi tô một hình tùy ý. Ta cần biết rectangle nào đã chọn, thứ tự của nó và vùng đã phủ. Mesher ở đây chạy một lần; stepper diễn lại danh sách đã lưu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Preview có count, paused, elapsed. count là độ dài prefix đã hiện, từ 0 đến tổng rectangle. Mask gốc giữ nguyên để đọc vật liệu. Viền trắng là rectangle vừa hiện, vàng là phần trước; 3D luôn hiển thị mesh hoàn chỉnh, không giả làm mesher đang bị dừng giữa vòng lặp.
+
+Bản này bước theo **rectangle hoàn chỉnh**, không dừng giữa từng phép so width/height. Canvas đánh dấu seed bằng viền xanh ngọc và ô làm dừng mở rộng bằng viền đỏ. Readout giải thích đó là biên mask, ô không có mặt, material khác hay ô đã dùng ở bước trước. Thông tin này được suy ra từ rectangle đã lưu và phần mask còn lại sau các bước trước, không chạy một mesher khác. Đổi camera không đổi danh sách.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="greedy61-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Lưu kết quả khi mask đổi
+
+resetPreview tạo mask và trích rectangle khi đổi preset/hướng/plane/cut, rồi đặt stepper về tạm dừng. Đổi camera chỉ đổi ảnh 3D. draw đọc preview, không extractRectangles mỗi frame.
+
+```cpp title="include/app.hpp"
+int comparisons = 0;
+app.preview = extractRectangles(app.mask, app.face, app.plane, comparisons);
+```
+
+
+### Bước 2 — Tiến một rectangle, dừng ở cuối
+
+N và nút Một rectangle tăng prefix đúng một. Không modulo để tự nhảy về đầu; restart là thao tác riêng. Đến cuối, paused=true dừng playback.
+
+```cpp title="include/stepper.hpp"
+inline void next(Stepper& stepper, int total) {
+    stepper.count = std::min(stepper.count + 1, total);
+    if (stepper.count == total) {
+        stepper.paused = true;
+    }
+}
+```
+
+
+### Bước 3 — Giới hạn thời gian, giải phóng input
+
+tick clamp dt tối đa 0.1 giây, chỉ tiến một rectangle khi đủ 0.15 giây. Không while catch-up sau khi alt-tab. Blur/minimize dừng, nhả capture; Canvas cleanup RAF khi ẩn tab/unmount và tắt tự chạy với reduced-motion.
+
+Trong Canvas, callback RAF đầu tiên sau khi bấm Chạy chỉ ghi mốc thời gian. Chưa biết khoảng thời gian giữa hai frame thì chưa cộng elapsed. Khi Pause rồi Resume, ta tạo đồng hồ mới; thời gian đã chờ không được biến thành một bước nhảy ngay lúc Resume. Ví dụ các frame ở mốc 1000, 1100, 1149 ms chưa tiến rectangle; frame 1150 ms mới đủ 150 ms để tiến một bước. Một frame bị treo lâu vẫn chỉ đóng góp tối đa 100 ms, đúng với giới hạn dt của bản C++.
+
+```cpp title="include/stepper.hpp"
+inline void tick(Stepper& stepper, double dt, int total) {
+    if (stepper.paused) {
+        return;
+    }
+    stepper.elapsed += std::clamp(dt, 0.0, 0.1);
+    if (stepper.elapsed >= 0.15) {
+        stepper.elapsed = 0;
+        next(stepper, total);
+    }
+}
+```
+
+
+## Ghép các phần lại
+
+Bắt đầu từ checkpoint trước, đối chiếu các file vừa sửa rồi chạy snapshot của bài này. Mỗi snapshot chứa đủ source và build độc lập, không liên kết ngược đến module khác. Phần mã hoàn chỉnh dưới bài cho phép kiểm toàn bộ file thay vì ghép các mảnh bằng trí nhớ.
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_61_checkpoint_7 --parallel 2
+.\build\Debug\project_61_checkpoint_7.exe
+```
+
+Windows/Visual Studio dùng đường dẫn trên. Với generator single-config, đặt CMAKE_BUILD_TYPE=Debug và chạy executable trực tiếp trong build. Nhãn native dùng ASCII; giải thích tiếng Việt nằm trong bài và Canvas.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi extractRectangles trong draw: instrument tạm sẽ thấy tính lại dù chỉ present một frame.
+2. While bù toàn bộ dt sau alt-tab vài phút tạo hàng loạt bước không quan sát được. Giữ một bước hữu hạn và pause khi mất focus.
+
+Chỉ sửa trên bản thử riêng rồi hoàn tác thí nghiệm trước khi đi tiếp; code tải về là bản đúng.
+
+## Tự kiểm tra kết quả
+
+Mở bài tạm dừng. N tăng đúng một; cuối danh sách tự dừng; đổi mask về 0. Space/N và nút cho cùng kết quả. Reduced-motion vẫn bước tay được; kéo ra ngoài Canvas vẫn nhận pointer-up qua capture.
+
+## Bài tập mở rộng
+
+Tường sọc +Z/plane=9 cho bốn rectangle theo thứ tự nào? Vì sao hai dải Grass ở đầu/cuối không nối lại?
+
+Tiếp theo: [Chỉ dựng lại mesh khi dữ liệu thay đổi](/projects/voxel-greedy-meshing/08-cache-va-do-cong-viec).
+

@@ -1,0 +1,98 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng bề mặt và hoàn thiện chương trình
+
+## Vấn đề cần giải quyết
+
+Tổng diện tích đúng vẫn có thể thiếu mặt trái và trùng mặt phải. Ảnh chưa đủ: winding sai vẫn hiện vì CPU vẽ hai mặt, mặt khoang lại nằm khuất. Cần kiểm dữ liệu bề mặt chứ không chỉ số đếm/screenshot.
+
+## Hiểu ý tưởng trước khi viết code
+
+Oracle đi từng block đặc, xét sáu neighbor, ghi key `(x,y,z,face,material)` cho mỗi mặt ngoài. Không gọi makeMask/extractRectangles. Bung rectangle thành w×h key rồi sort hai danh sách, so **multiset** để giữ cả duplicate.
+
+Thêm cross product bắt winding, bounds bắt vertex ngoài chunk, coverage/depth ở camera hữu hạn và dirty flags tests riêng. Màu pixel tại cạnh đồng phẳng có thể khác do tie xử lý theo thứ tự; không xem đó là mất mặt. Fixture tính tay vẫn cần để tránh hai bên cùng hiểu sai quy ước.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="greedy61-9" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo đáp án từ cell-neighbor
+
+expectedFaces không quét mask theo plane. Neighbor opaque che mặt bất kể material; Air/ngoài miền thì ghi key. Không dùng lại buildBaseline làm đáp án duy nhất.
+
+```cpp title="include/oracle.hpp"
+const int nx = x + d[0], ny = y + d[1], nz = z + d[2];
+if (ny <= slice && get(chunk, nx, ny, nz) != Block::Air) {
+    continue;
+}
+keys.push_back({x, y, z, face, static_cast<int>(material)});
+```
+
+
+### Bước 2 — So mặt có hướng/vật liệu
+
+expandedFaces chuyển plane về source: dương plane−1, âm plane. verify so danh sách sort, nên duplicate/mất mặt/đổi material đều thất bại dù diện tích bằng nhau.
+
+```cpp title="include/oracle.hpp"
+inline int verify(const Chunk& chunk, const std::vector<Rectangle>& quads, int slice) {
+    const auto expected = expectedFaces(chunk, slice);
+    if (expected != expandedFaces(quads)) {
+        throw std::runtime_error("oriented material coverage mismatch");
+    }
+    return static_cast<int>(expected.size());
+}
+```
+
+
+### Bước 3 — Build, test và chạy final
+
+Build cả Debug/Release; CTest code thuần không mở window. Smoke --smoke mở hidden, thoát sau một frame và có timeout ngoài. Nút oracle Canvas chỉ kiểm khối hiện tại, không thay toàn bộ QA.
+
+```bash title="Terminal — Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+
+## Ghép các phần lại
+
+Bắt đầu từ checkpoint trước, đối chiếu các file vừa sửa rồi chạy snapshot của bài này. Mỗi snapshot chứa đủ source và build độc lập, không liên kết ngược đến module khác. Phần mã hoàn chỉnh dưới bài cho phép kiểm toàn bộ file thay vì ghép các mảnh bằng trí nhớ.
+
+```bash title="Terminal — checkpoint 9"
+cmake --build build --config Debug --target project_61_checkpoint_9 --parallel 2
+.\build\Debug\project_61_checkpoint_9.exe
+```
+
+Windows/Visual Studio dùng đường dẫn trên. Với generator single-config, đặt CMAKE_BUILD_TYPE=Debug và chạy executable trực tiếp trong build. Nhãn native dùng ASCII; giải thích tiếng Việt nằm trong bài và Canvas.
+
+## Thử làm sai để hiểu đúng
+
+1. Thêm quad đầu vào cuối phải bị verify từ chối. Thử tiếp bỏ một quad hoặc đổi material để kiểm oracle bắt được cả ba dạng.
+2. Dùng assert trong tests.cpp khiến Release có thể bỏ kiểm tra. Dùng check tăng failures rồi trả EXIT_FAILURE.
+
+Chỉ sửa trên bản thử riêng rồi hoàn tác thí nghiệm trước khi đi tiếp; code tải về là bản đúng.
+
+## Tự kiểm tra kết quả
+
+Full=6, cavity=12, checker=12288, empty=0; oracle qua chín preset và cut 0/7/15, gồm fixture mask 4×4. Winding sáu hướng ra ngoài; coverage/depth khớp baseline; chunk không đổi; cache tests qua Debug/Release.
+
+## Bài tập mở rộng
+
+Nối một edit của Project 60: đổi đúng một Block ID, đặt meshDirty rồi verify sau remesh. Greedy có thể tạo T-junction; flat-color CPU demo chưa chứng minh mesh watertight với mọi renderer hoặc dùng ngay được làm collision mesh.
+
+```powershell title="Terminal — smoke có deadline"
+$smoke = Start-Process -FilePath ".\build\Debug\project_61_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Smoke quá 30 giây."
+}
+if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+Kiểm desktop riêng sau test tự động: preset/hướng/plane/cut, M, orbit/zoom, bước tay, pause/reset, blur/capture, resize/high-DPI. Smoke không phải kiểm tương tác hoàn chỉnh. Final có ở **Toàn bộ mã nguồn của dự án** cuối bài và trong ZIP.
+
+Tiếp tục [Project 62 — Chunk Streaming](/projects/voxel-chunk-streaming) để tải và gỡ chunk quanh nhân vật. Source của Project 61 vẫn tập trung vào meshing một chunk. Các project chưa phát hành được đánh dấu **Sắp ra mắt** trong [roadmap](/roadmap).
+

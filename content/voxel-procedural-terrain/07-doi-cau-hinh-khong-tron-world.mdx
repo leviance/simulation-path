@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi seed và cấu hình mà không trộn hai world
+
+## Vấn đề cần giải quyết
+
+Đổi seed trong hàm noise thôi chưa đủ: các Entry đã tạo vẫn mang dữ liệu và mesh của seed cũ. Nếu tải thêm chunk bằng seed mới, hai địa hình khác nhau sẽ đứng cạnh nhau và tạo đường gãy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Coi mỗi bộ seed/scale/octave là một thế hệ world. Bản học tập này không giữ hai world để crossfade: nó bỏ cache cũ như một giao dịch, khởi tạo một chunk ngay dưới player, rồi để scheduler tải phần còn lại theo budget. Đổi cấu hình làm vùng resident thu nhỏ tạm thời; đó là hành vi được chọn, không phải mất dữ liệu bí ẩn.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="terrain63-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm cấu hình trước mọi thay đổi
+
+Không sửa world rồi mới phát hiện scale=8 hoặc octaves=0. Native nhận struct có kiểu rõ; Canvas có draft riêng, nút Áp dụng mới commit. Giá trị chưa hợp lệ không được làm mất resident đang xem.
+
+```cpp title="include/terrain.hpp"
+inline void validateConfig(const TerrainConfig& config) {
+    if (config.seed > 65535u || (config.scale != 16 && config.scale != 32 && config.scale != 64) || config.octaves < 1 || config.octaves > 4) {
+        throw std::out_of_range("seed 0..65535, scale 16/32/64, octaves 1..4");
+    }
+}
+```
+
+### Bước 2 — Dựng state kế tiếp ngoài state đang dùng
+
+next giữ player, radius và budget, nhận config mới và generation+1. Chỉ load/rebuild chunk dưới player, retarget từ state mới, rồi move toàn next vào world. Cấu hình được copy, không giữ tham chiếu vào ô input đang sửa.
+
+```cpp title="include/scheduler.hpp"
+inline void applyConfig(World& world, TerrainConfig config) {
+    validateConfig(config);
+    // Tạo thế hệ mới ngoài state đang hiển thị, chỉ giữ một chunk khởi động.
+    World next;
+    next.player = world.player;
+    next.radius = world.radius;
+    next.budget = world.budget;
+    next.lastBudget = world.budget;
+    next.config = config;
+    next.generation = world.generation + 1;
+    const Key center = centerOf(next.player);
+    loadChunk(next, center);
+    rebuild(next, center);
+    next.peak = 1;
+    retarget(next);
+    world = std::move(next);
+}
+```
+
+### Bước 3 — Cho tải tiếp theo nhịp cũ
+
+Queue cũ biến mất cùng thế hệ cũ. Mỗi tick sau bootstrap vẫn chỉ load/unload tối đa budget và dựng tập mesh ảnh hưởng. Bootstrap một chunk là công việc riêng của nút áp dụng, không được tính là một tick budget=0 mà vẫn phát sinh mesh.
+
+```cpp title="include/scheduler.hpp"
+inline void pump(World& world) {
+    world.pending = plan(world);
+    world.lastJobs = 0;
+    world.lastMeshes = 0;
+    world.lastBudget = world.budget;
+    ++world.ticks;
+    const int count = std::min(world.budget, static_cast<int>(world.pending.size()));
+    std::vector<Key> changed;
+    for (int i = 0; i < count; ++i) {
+        const Job job = world.pending[i];
+        ++world.lastJobs;
+        bool applied = false;
+        if (job.load) {
+            applied = loadChunk(world, job.key);
+        } else {
+            applied = unloadChunk(world, job.key);
+        }
+        if (applied) {
+            changed.push_back(job.key);
+        }
+    }
+    // Hoàn tất geometry cho cả batch trước khi công bố frame.
+    refreshMeshes(world, changed);
+    world.pending = plan(world);
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_7. Native: C tăng seed, F xoay scale 16→32→64, O đổi octave 1..4; mỗi phím áp dụng ngay và pause. Canvas: sửa draft rồi bấm Áp dụng cấu hình. Resident trở về 1, pending về 8 với radius=1; generation tăng, rebuild=1 và lastJobs=0. Space/N tải phần còn lại. Đổi vị trí mẫu giữ cấu hình hiện tại; R đặt lại cả cấu hình mặc định.
+
+```bash title="Terminal — checkpoint 07"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_63_checkpoint_7 --parallel 2
+./build/Debug/project_63_checkpoint_7.exe
+```
+
+Lệnh trên dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure và chạy executable trong `build/`. Tên target có trong CMakeLists.txt của ZIP. Mục **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint, không chỉ các đoạn vừa thay.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ thay world.config rồi giữ resident cũ. Đi xa tải thêm một hàng, bạn sẽ thấy old/new seed trộn nhau; so từng Entry với generateTerrain(key,newConfig) để bắt lỗi.
+2. Giữ con trỏ hoặc reference vào Entry trước khi applyConfig. Cache cũ đã bị hủy; hãy giữ Key rồi lookup lại, giống quy tắc unload của Project 62.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Thông số sai không thay generation, resident hoặc queue. Áp dụng tại tọa độ âm bootstrap đúng center âm. Sau khi tải hết, mọi buffer khớp config snapshot mới; sửa tiếp ô draft chưa áp dụng không đổi world. Job budget không phải cam kết thời gian ms.
+
+## Bài tập mở rộng
+
+Nếu muốn giữ ảnh world cũ trong lúc tải world mới, cần thêm bộ nhớ và quy tắc swap thế nào? Viết thiết kế double-buffer có cap riêng trước khi code; đừng lén giữ resident của cả hai thế hệ trong cap của một world.
+
+Tiếp theo: [Đọc địa hình bằng bản đồ và mặt cắt](/projects/voxel-procedural-terrain/08-doc-dia-hinh-bang-inspector).
+

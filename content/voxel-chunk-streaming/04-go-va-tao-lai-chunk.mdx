@@ -1,0 +1,99 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Gỡ chunk xa và tạo lại đúng dữ liệu cũ
+
+## Vấn đề cần giải quyết
+
+Tải mới mà không gỡ cũ thì chỉ đang giấu việc nạp toàn world sau thời gian chạy. Bài này thêm vòng đời rõ ràng: Entry đi xa bị xóa, vector mesh và buffer blocks của nó được giải phóng; khi quay lại, ta tạo lại cùng dữ liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ở checkpoint 04, keepRadius bằng loadRadius: ngoài vùng wanted là gỡ ngay. Chưa có vùng dự phòng nên đảo chiều sát biên sẽ lộ ra nhiều load/unload; đó là lý do của bài 06.
+
+Dữ liệu chỉ phụ thuộc Key, không phụ thuộc thứ tự tải hoặc số lần camera xoay. Mẫu phẳng cao 4, material lớp trên lặp theo modulo dương. FNV-1a trên 4096 Block ID giúp đối chiếu C++/TypeScript, nhưng checksum không phải chứng minh không có collision; test còn so trực tiếp buffer.
+
+World này chưa có thao tác phá/đặt. Nếu gắn editor Project 60 mà không lưu delta, gỡ rồi regenerate sẽ làm mất edit. Không gọi regeneration là persistence.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Xóa Entry, không chỉ ẩn hình
+
+unloadChunk dùng erase để giải phóng ownership. Job và inspector giữ Key chứ không giữ con trỏ Entry; sau erase, đọc lại bằng find. Không giữ reference tới blocks/mesh của chunk đã bị gỡ.
+
+```cpp title="include/world.hpp"
+inline bool unloadChunk(World& world, Key key) {
+    if (world.chunks.erase(key) == 0) {
+        return false;
+    }
+    ++world.unloads;
+    return true;
+}
+```
+
+
+### Bước 2 — Thu thập Key trước khi erase
+
+Không vừa range-for qua map vừa erase phần tử đang duyệt. synchronize lấy danh sách retiring rồi xóa ở vòng riêng, sau đó mới tải wanted còn thiếu. Thứ tự gỡ trước giúp giải phóng slot cho vùng mới.
+
+```cpp title="include/scheduler.hpp"
+const Key center = targetCenter(world);
+// Thu thập Key trước; không giữ iterator/reference qua erase.
+std::vector<Key> retiring;
+for (const auto& [key, entry] : world.chunks) {
+    (void)entry;
+    if (distance(key, center) > keepRadius(world)) {
+        retiring.push_back(key);
+    }
+}
+for (const Key key : retiring) {
+    if (unloadChunk(world, key)) {
+        changed.push_back(key);
+    }
+}
+```
+
+
+### Bước 3 — Đối chiếu dữ liệu sau khi quay lại
+
+Hash chỉ đọc Block ID, không đọc vector capacity, địa chỉ hoặc màu pixel. Chunk (0,0) có hash 2424852421, chunk (−1,0) có 3845785541 trong cả hai bản. Đi xa, gỡ rồi quay lại phải có buffer giống ban đầu.
+
+```cpp title="include/world.hpp"
+inline std::uint32_t hashChunk(const Chunk& blocks) {
+    std::uint32_t hash = 2166136261u;
+    for (const Block value : blocks) {
+        hash = (hash ^ static_cast<std::uint32_t>(value)) * 16777619u;
+    }
+    return hash;
+}
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_62_checkpoint_4 --parallel 2
+.\build\Debug\project_62_checkpoint_4.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ xóa mesh nhưng giữ blocks trong một map lịch sử: resident hiển thị ít nhưng RAM vẫn tăng. Bản này không giữ cache dữ liệu không giới hạn.
+2. Dùng RNG theo thứ tự load thay vì Key: quay lại có data khác. Thử thay thứ tự di chuyển trước khi kết luận thuật toán generate tái lập.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Ở checkpoint 04, sau mỗi thao tác đi qua biên, vùng loaded được đồng bộ còn 9 chunk. Đi xa rồi quay lại trả đúng dữ liệu cũ. Không có pointer/reference sống qua erase. Đảo chiều có thể tải lại nhiều, bài sau sẽ xử lý dần.
+
+## Bài tập mở rộng
+
+Lưu một bản copy Block ID của chunk (−1,0), đi xa để nó bị gỡ rồi quay lại. So cả 4096 byte thay vì chỉ so hash.
+
+Tiếp theo: [Chia việc tải và gỡ thành các batch nhỏ](/projects/voxel-chunk-streaming/05-hang-doi-co-ngan-sach).

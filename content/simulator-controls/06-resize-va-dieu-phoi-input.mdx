@@ -1,0 +1,126 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ input đúng khi resize và mất focus
+
+## Vấn đề cần giải quyết
+
+Panel đang đúng ở cửa sổ960×540, nhưng điều gì xảy ra khi người dùng kéo rộng cửa sổ hoặc chuyển màn hình? Nếu hình được scale còn hit-test vẫn dùng tọa độ cũ, button sẽ nhận chuột sai vị trí. Một lỗi khác khó thấy hơn: UI nhận click nhưng cảnh cũng nhận cùng click đó.
+
+Bài này bật resize, giữ chung hệ tọa độ logic và thêm thao tác bấm cảnh để di chuyển bóng theo Y. Thao tác cảnh giúp ta kiểm cụ thể input có bị lọt qua panel hay không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta vẫn thiết kế trên mặt phẳng960×540. Khi viewport W×H khác tỷ lệ, scale đồng nhất theo cạnh chật hơn và chừa letterbox ở hai bên hoặc trên/dưới:
+
+$$
+s=\min(W/960,H/540),\quad o_x=(W-960s)/2,\quad o_y=(H-540s)/2.
+$$
+
+Điểm chuột window được đổi về logic bằng (x−ox)/s và (y−oy)/s. Điểm trong dải letterbox có thể cho tọa độ logic âm hoặc vượt960/540; giữ như vậy để hit-test loại, không clamp nó vào button ở mép.
+
+Native dùng SDL_SetRenderLogicalPresentation và SDL_ConvertEventToRenderCoordinates, không tự áp công thức lần nữa. Helper windowToLogical dưới đây phục vụ Canvas và kiểm toán học. Canvas lấy tọa độ CSS trước rồi đổi logic; DPR chỉ làm bitmap sắc hơn, không được nhân vào tọa độ CSS của pointer.
+
+<InteractiveLab demo="simulator-controls" mode="controls65-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Hiểu phép đổi tọa độ trước khi dùng API
+
+Hàm trả optional khi viewport không hợp lệ, ví dụ chiều cao 0 lúc minimize. Offset giải thích vì sao chỉ chia chuột cho scale chưa đủ. Với viewport960×720, content lệch xuống90; điểm window(800,180) phải về logical(800,90), nằm trên Pause.
+
+```cpp title="include/geometry.hpp"
+inline std::optional<Point> windowToLogical(Point point, double width, double height) {
+    if (!std::isfinite(width) || !std::isfinite(height) || width <= 0.0 || height <= 0.0) {
+        return std::nullopt;
+    }
+
+    const double scale = std::min(width / canvasWidth, height / canvasHeight);
+    const double offsetX = (width - canvasWidth * scale) / 2.0;
+    const double offsetY = (height - canvasHeight * scale) / 2.0;
+    const Point logical{(point.x - offsetX) / scale, (point.y - offsetY) / scale};
+    if (!std::isfinite(logical.x) || !std::isfinite(logical.y)) {
+        return std::nullopt;
+    }
+    return logical;
+}
+```
+
+### Bước 2 — Chỉ cho cảnh xử lý khi UI chưa nhận input
+
+pointerDown trả true cho panel, không chỉ button. Main gọi nó trước; chỉ khi consumed=false mới gọi scenePointerDown. Hàm cảnh còn kiểm scene riêng, nên click dải letterbox hoặc khoảng giữa panel/cảnh không làm gì. X bóng giữ320; click chỉ thay Y, đưa v/accumulator về 0 và tăng scenePresses để dễ quan sát.
+
+```cpp title="include/controls.hpp"
+inline void scenePointerDown(Model& model, Point point) {
+    if (!contains(scene, point)) {
+        return;
+    }
+
+    model.y = std::clamp(point.y, 48.0, floorY - ballRadius);
+    model.velocity = 0.0;
+    model.accumulator = 0.0;
+    ++model.scenePresses;
+    ++model.clockRevision;
+}
+```
+
+### Bước 3 — Hủy gesture và tạm dừng khi cửa sổ đổi vòng đời
+
+suspend không giả lập pointerUp, vì pointerUp có thể kích hoạt button. Nó xóa active/hot, Pause vật lý và bỏ accumulator; focus được giữ để người dùng biết control trước đó. Main gọi nó khi focus lost, minimized, hidden hoặc resized, rồi release capture. Khi quay lại, người dùng tự Resume.
+
+```cpp title="include/controls.hpp"
+inline void suspend(Model& model, Ui& ui) {
+    // Blur/resize không được để lại một thao tác kéo đang dở.
+    cancelPointer(ui);
+    setPaused(model, true);
+    model.accumulator = 0.0;
+}
+```
+
+## Ghép các phần lại
+
+Thêm SDL_WINDOW_RESIZABLE khi tạo window. Sau khi tạo renderer, gọi SDL_SetRenderLogicalPresentation(renderer,960,540,SDL_LOGICAL_PRESENTATION_LETTERBOX) và kiểm giá trị trả về.
+
+```cpp title="src/main.cpp"
+    if (!SDL_SetRenderLogicalPresentation(renderer, 960, 540, SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
+        SDL_Log("Logical presentation: %s", SDL_GetError());
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+```
+
+Trong vòng poll, xử lý vòng đời cửa sổ rồi gọi SDL_ConvertEventToRenderCoordinates trước khi đọc event.motion/button. Nếu chuyển đổi lỗi, log và bỏ sự kiện; không dùng tọa độ chưa rõ hệ.
+
+```cpp title="src/main.cpp"
+            if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+                SDL_Log("Event conversion: %s", SDL_GetError());
+                continue;
+            }
+```
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_65_checkpoint_6 --parallel 2
+./build/Debug/project_65_checkpoint_6.exe
+```
+
+Mở cửa sổ rộng ngang rồi cao dọc. Panel phải giữ tỷ lệ, hover và click vẫn đúng. Bấm khoảng trống panel: scenePresses không đổi. Bấm trong cảnh: số tăng 1, Y bóng đổi. Giữ slider rồi kéo qua cảnh: chỉ gravity đổi, không tăng scenePresses.
+
+Canvas dùng setPointerCapture với đúng pointerId; bỏ qua pointer khác khi gesture đang được giữ. Mọi đường pointerup, pointercancel, lostpointercapture, blur, hidden, resize, reset và unmount phải release hoặc hủy gesture. Mất capture bất ngờ không được tạo click. Callback ResizeObserver chỉ cập nhật bitmap ở frame sau qua helper chung, tránh tự kích vòng ResizeObserver loop.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ scale hình, giữ event.window theo tọa độ cũ. Sau resize bạn phải bấm lệch sang cạnh nút mới kích hoạt được: đây là lỗi hệ tọa độ, không phải hit-test Rect sai.
+2. Convert event bằng SDL rồi lại tự chia scale/offset. Tọa độ bị đổi hai lần; ở kích thước gốc có vẻ đúng nhưng resize là lộ lỗi.
+3. Gửi click cho scene bất kể kết quả consumed. Bấm panel có thể vừa chỉnh UI vừa sửa mô phỏng. Đừng vá bằng kiểm bóng có nằm dưới panel hay không; phải sửa thứ tự phân phối input.
+4. Gọi pointerUp khi blur hoặc pointercancel. Nếu vị trí cuối còn trong button, một thao tác bị hủy lại chạy action. Hủy phải đi qua cancelPointer/suspend.
+
+## Tự kiểm tra kết quả
+
+Thử viewport rộng, cao và kích thước2×; hit-test vẫn đúng và dải letterbox không hit. Native pause khi resize; Resume chỉ theo yêu cầu người dùng. Alt+Tab giữa lúc giữ slider rồi quay lại: active=None, mô phỏng đang Pause, thả chuột không tạo action.
+
+Trong Canvas, thử kéo khỏi canvas, nhấn Esc, chuyển tab, resize và dùng pointer thứ hai. Control giữ gesture phải không bị cướp. Một thay đổi gravity đã áp dụng trước cancel vẫn được giữ: cancel dừng gesture, không undo tham số. Reset vẫn giữ gravity/paused theo quy tắc cũ.
+
+## Bài tập mở rộng
+
+Lấy ba điểm logic quanh mép Pause, tự chiếu ra viewport1440×540 rồi đổi ngược; kiểm điểm không bị clamp từ letterbox vào panel. Chuyển sang [bài 07 — kiểm chứng và bản hoàn chỉnh](/projects/simulator-controls/07-kiem-chung-va-hoan-thien).

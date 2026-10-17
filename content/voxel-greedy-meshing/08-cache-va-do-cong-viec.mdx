@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chỉ dựng lại mesh khi dữ liệu thay đổi
+
+## Vấn đề cần giải quyết
+
+Mesh ít triangle hơn nhưng vẫn quét chunk và raster mỗi vòng SDL thì công việc thừa có thể lấn át lợi ích. Ta tách rõ khi nào geometry thay đổi, khi nào chỉ camera hoặc inspector đổi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mesh phụ thuộc chunk/cut/chế độ gộp. Ảnh CPU phụ thuộc mesh/camera. Mesh mới kéo theo frameDirty; orbit chỉ frameDirty. Đổi plane/hướng inspector chỉ tạo preview mới. SDL vẫn present; counter raster không đếm present.
+
+Mask samples và key comparisons là đơn vị khác nhau. Baseline kiểm neighbor của block đặc, greedy lấy mẫu mọi ô mask kể cả rỗng. Không suy ra ms/FPS từ hai counter. Muốn đo, tách build/raster, warm-up hữu hạn, giữ cùng preset/config rồi ghi các mẫu có giới hạn. Không benchmark vô hạn trên UI thread.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="greedy61-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Đánh dấu tại nơi dữ liệu đổi
+
+P, cut, M gọi changeMesh. Orbit/zoom chỉ frameDirty. Nếu nối editor Project 60, chỉ edit thành công mới meshDirty; hover không cần. Đổi plane chỉ resetPreview.
+
+```cpp title="include/app.hpp"
+inline void changeMesh(App& app) {
+    app.cache.meshDirty = true;
+    resetPreview(app);
+}
+```
+
+
+### Bước 2 — Làm mới theo dependency
+
+Checkpoint 08 bỏ hai dòng ép dirty mỗi frame của bản trước. refresh dựng mesh rồi raster một lần; cả hai cờ false thì không làm gì. Preview và SDL draw không nằm trong counter.
+
+```cpp title="include/cache.hpp"
+if (cache.meshDirty) {
+    cache.built = buildMesh(chunk, slice, merge);
+    cache.meshDirty = false;
+    cache.frameDirty = true;
+    ++cache.rebuilds;
+}
+if (cache.frameDirty) {
+    render(cache.frame, cache.built.mesh, camera);
+    cache.frameDirty = false;
+    ++cache.rasterizations;
+}
+```
+
+
+### Bước 3 — Chỉ upload khi ảnh mới
+
+So rasterizations trước/sau để quyết định upload texture. Reset tạo cache với counter=0; nhiều thay đổi trước refresh được gộp một rebuild. Ảnh hiện tại tiếp tục được present khi idle.
+
+```cpp title="src/main.cpp"
+const int before = app.cache.rasterizations;
+voxel::refresh(app.cache, app.chunk, app.slice, app.merge, app.camera);
+if (app.cache.rasterizations != before) {
+    voxel::upload(texture, app.cache.frame);
+}
+```
+
+
+## Ghép các phần lại
+
+Bắt đầu từ checkpoint trước, đối chiếu các file vừa sửa rồi chạy snapshot của bài này. Mỗi snapshot chứa đủ source và build độc lập, không liên kết ngược đến module khác. Phần mã hoàn chỉnh dưới bài cho phép kiểm toàn bộ file thay vì ghép các mảnh bằng trí nhớ.
+
+```bash title="Terminal — checkpoint 8"
+cmake --build build --config Debug --target project_61_checkpoint_8 --parallel 2
+.\build\Debug\project_61_checkpoint_8.exe
+```
+
+Windows/Visual Studio dùng đường dẫn trên. Với generator single-config, đặt CMAKE_BUILD_TYPE=Debug và chạy executable trực tiếp trong build. Nhãn native dùng ASCII; giải thích tiếng Việt nằm trong bài và Canvas.
+
+## Thử làm sai để hiểu đúng
+
+1. meshDirty trong mouse motion làm xoay camera tăng rebuild dù world không đổi. Quan sát counter rồi hoàn tác.
+2. Quên frameDirty sau rebuild khiến geometry mới nhưng ảnh cũ. Nhánh meshDirty phải nối dependency này.
+
+Chỉ sửa trên bản thử riêng rồi hoàn tác thí nghiệm trước khi đi tiếp; code tải về là bản đúng.
+
+## Tự kiểm tra kết quả
+
+Idle không tăng rebuild/raster. Xoay một bước chỉ tăng raster. P/M tăng mỗi counter một sau refresh. Đổi plane inspector không tăng cả hai. Counter không phải frame present hoặc FPS.
+
+## Bài tập mở rộng
+
+Test đặt meshDirty ba lần trước refresh nhưng rebuild chỉ tăng một. Nếu đo CPU time, công bố có tính allocation/validation/raster không.
+
+Tiếp theo: [Kiểm chứng bề mặt và hoàn thiện chương trình](/projects/voxel-greedy-meshing/09-kiem-chung-va-hoan-thien).
+

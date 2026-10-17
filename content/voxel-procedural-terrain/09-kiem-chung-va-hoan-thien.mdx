@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng địa hình và chạy source hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Ta đã có một world chạy được; giờ phải chứng minh rằng tải theo thứ tự khác, quay về chunk cũ và đổi seed không làm kết quả lệch. Một tấm ảnh không bắt được một mặt bị vẽ trùng hoặc một block đỉnh bị thiếu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chia kiểm chứng thành ba lớp. Golden fixture bắt thay đổi hash/công thức; oracle cột bắt địa chỉ và fill; oracle bề mặt global của Project 62 bắt mesh. Oracle cột vẫn dùng heightAt/materialAt nên không độc lập với công thức noise — vì vậy không được bỏ test nút lattice, nội suy và fixture rồi chỉ chạy oracle.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="terrain63-9" />
+
+## Viết code từng bước
+
+### Bước 1 — So từng cell bằng địa chỉ world
+
+Oracle duyệt cả 16 lớp, gồm Air phía trên, rồi hỏi world X/Z độc lập với vòng fill của generateTerrain. Test vùng monolithic duyệt world liên tục và tách địa chỉ về storage theo đường khác; lỗi reset local hoặc off-by-one ở đỉnh sẽ bị phát hiện.
+
+```cpp title="include/terrain-oracle.hpp"
+inline int verifyColumns(Key key, const Chunk& blocks, const TerrainConfig& config) {
+    int errors = 0;
+    for (int z = 0; z < side; ++z) {
+        for (int x = 0; x < side; ++x) {
+            const int height = heightAt(key.x * side + x, key.z * side + z, config);
+            for (int y = 0; y < side; ++y) {
+                if (get(blocks, x, y, z) != materialAt(y, height, config)) {
+                    ++errors;
+                }
+            }
+        }
+    }
+    return errors;
+}
+```
+
+### Bước 2 — Ghép kiểm dữ liệu với kiểm mặt ngoài
+
+verifySchedule giữ resident/job/mesh trong cap; verifyColumns kiểm mỗi buffer; verifySurface dựng đáp án từ global cell và sáu neighbor rồi so multiset mặt có hướng/vật liệu. `verifyTriangles` trong `include/mesh-oracle.hpp` kiểm tiếp buffer triangle theo thứ tự hai triangle/quad: số lượng, tọa độ vertex, winding và màu. Nó viết riêng phép dựng góc theo từng cặp hướng, không gọi `appendQuad`; màu vẫn dùng palette chung, nên đây không phải phép kiểm độc lập công thức palette. Không chỉ so ảnh đã raster, vì Z-buffer có thể giấu mặt thừa.
+
+```cpp title="include/terrain-oracle.hpp"
+inline void verifyTerrain(const World& world) {
+    verifySchedule(world);
+    for (const auto& [key, entry] : world.chunks) {
+        if (verifyColumns(key, entry.blocks, world.config) != 0) {
+            throw std::runtime_error("terrain column mismatch");
+        }
+    }
+    verifySurface(world);
+    verifyTriangles(world);
+}
+```
+
+### Bước 3 — Giữ bài kiểm luôn có hiệu lực
+
+Dùng check và EXIT_FAILURE thay assert bị NDEBUG tắt. Cả Debug lẫn Release phải chạy fixture: chunk (0,0) checksum 4263195062, (−1,0) 2291264103, (1,−1) 2892146174 với mặc định seed42/scale32/octaves3. Các số này không áp cho checkpoint trung gian.
+
+```cpp title="tests/tests.cpp"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << label << '\n';
+    }
+}
+```
+
+## Ghép các phần lại
+
+Build cả starter, 9 checkpoint và final bằng --parallel 2; CTest là code thuần không mở cửa sổ. Test có vòng lặp hữu hạn và timeout ngoài. Native V chạy audit resident hiện tại, không thay cả suite hành trình. Dữ liệu có thể tái tạo không có nghĩa edit tự được lưu: project này không có editor/persistence.
+
+```bash title="Terminal — checkpoint 09"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_63_checkpoint_9 --parallel 2
+./build/Debug/project_63_checkpoint_9.exe
+```
+
+Lệnh trên dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure và chạy executable trong `build/`. Tên target có trong CMakeLists.txt của ZIP. Mục **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint, không chỉ các đoạn vừa thay.
+
+## Thử làm sai để hiểu đúng
+
+1. Cho generator dùng local X/Z hoặc seed cộng Key trong bản thử. Oracle cột/monolithic phải fail; nếu vẫn PASS thì test đang gọi lại cùng đường sai với code được kiểm.
+2. Bỏ một quad khỏi `Entry.quads` hoặc thêm bản sao mặt biên: `verifySurface` phải phát hiện sai multiset địa chỉ/hướng/material. Thử riêng việc xóa một triangle trong `Entry.mesh` nhưng giữ nguyên quads: `verifyTriangles` phải báo lỗi, dù oracle cột và bề mặt vẫn đúng.
+3. Giữ nguyên số triangle nhưng đổi một vertex, đảo winding hoặc sửa màu. `verifyTriangles` đối chiếu từng cặp triangle với bốn góc quad và thứ tự vertex theo hướng mặt, không gọi lại `appendQuad`. Nó kiểm buffer thật mà renderer đọc; không chứng minh mọi bước render đều đúng. Cần kết hợp ba lớp kiểm: cột voxel, bề mặt quad, và buffer triangle.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Golden hash/float, scale/octave bounds, biên âm/dương, cùng world sample qua hai halo, vùng monolithic, cột không lỗ, regeneration, cache invalidation và mesh oracle đều qua. Test cũng kiểm thông số sai trước mutation và idle không rebuild. Double không bật fast-math; fixture xác nhận toolchain hỗ trợ, không hứa bit-exact trên mọi nền tảng.
+
+## Bài tập mở rộng
+
+Thêm seed khác và một hành trình hữu hạn mới, không tăng cap hay tắt test seam để suite xanh. Source đầy đủ ở cuối bài và ZIP gồm README, starter, checkpoints/01…09, final và tests. Sau khi chạy tự động, kiểm tương tác desktop riêng. Tiếp tục với [Project 64 — Sandbox dựng khối](/projects/voxel-sandbox) để thêm phá/đặt, session delta, undo/redo và bản lưu. Các project chưa phát hành được ghi **Sắp ra mắt** trong [roadmap](/roadmap).
+
+```bash title="Terminal — build và CTest hai cấu hình"
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+```powershell title="Terminal — hidden smoke có deadline"
+$smoke = Start-Process -FilePath ".\build\Debug\project_63_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Smoke quá 30 giây."
+}
+if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+Smoke chỉ kiểm khởi động một frame rồi thoát, không thay kiểm chuột/phím, pause, blur, theme hoặc download trên desktop. Automation build/test cần deadline cho cả process tree, không chỉ vòng lặp bên trong.
+

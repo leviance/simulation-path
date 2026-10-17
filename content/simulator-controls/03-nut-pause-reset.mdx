@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Làm nút Pause và Reset hoạt động đúng
+
+## Vấn đề cần giải quyết
+
+Ta đã biết chuột đang ở đâu, nhưng hover không phải click. Hãy thử nghĩ về thao tác nhấn Pause, giữ chuột rồi kéo ra ngoài và thả: bạn có muốn chương trình vẫn Pause không? Ở project này, câu trả lời là không. Một button chỉ kích hoạt khi nhấn và thả trên chính nó.
+
+Bắt đầu từ checkpoint 2. Ta giữ nguyên phần vẽ và hit-test, thêm trạng thái của gesture rồi mới nối với mô phỏng.
+
+## Hiểu ý tưởng trước khi viết code
+
+`hot` theo vị trí chuột hiện tại. `active` ghi nhớ control đã nhận lần nhấn đầu tiên và giữ nguyên cho tới khi thả hoặc hủy. `focus` ghi control nhận bàn phím; bài 05 mới dùng nó. Kéo từ Pause qua Reset thì hot=Reset nhưng active vẫn là Pause.
+
+Quy tắc click là: lúc thả, active khác None và bằng hot. Nhấn ở ngoài rồi thả trong nút không hợp lệ; nhấn một nút rồi thả trên nút khác cũng không hợp lệ. Nhấn, kéo ra ngoài, quay lại cùng nút rồi thả thì hợp lệ. Đây là lựa chọn hành vi được ghi rõ, không phải điều tự xảy ra khi vẽ Rect.
+
+Pause chỉ chặn bước vật lý; vòng event và render vẫn chạy. Reset của project này **giữ gravity và trạng thái Pause**, đưa bóng về y=90, v=0, ticks=0. Reset khi đang chạy sẽ chạy tiếp từ cảnh mới.
+
+### Theo dõi một thao tác nhấn rồi kéo ra ngoài
+
+Giả sử ban đầu cảnh đang chạy và chưa control nào có focus. Bảng dưới ghi trạng thái **sau** mỗi event; “đi qua Reset” là một motion, không phải lần nhấn mới.
+
+| Event | hot | active | focus | Cảnh và action |
+| --- | --- | --- | --- | --- |
+| Down trên Pause | Pause | Pause | Pause | Vẫn chạy, chưa toggle |
+| Move sang Reset | Reset | Pause | Pause | Vẫn chạy; hover không chuyển focus |
+| Up trên Reset | Reset | None | Pause | Không action vì nơi nhấn và thả khác nhau |
+| Down trên Pause lần nữa | Pause | Pause | Pause | Vẫn chạy |
+| Up trên Pause | Pause | None | Pause | Toggle đúng một lần, cảnh Pause |
+
+Nếu gesture bị hủy do mất focus hoặc mất capture, active trở về None mà không gọi activate. Focus bàn phím không phải quyền giữ chuột: nó có thể tiếp tục trỏ tới Pause sau khi đã thả. Đến bài 05, Tab mới chuyển focus giữa các control. Đừng gộp ba biến thành một “nút đang chọn”, vì chúng trả lời ba câu hỏi khác nhau.
+
+<InteractiveLab demo="simulator-controls" mode="controls65-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Ghi active tại thời điểm nhấn
+
+pointerDown lấy hot từ hitTest rồi ghi active/focus. Nếu đã có active, lần down mới không được cướp gesture. Hàm trả true cho toàn bộ panel, kể cả phần trống; bài 06 sẽ dùng kết quả này để chặn click lọt xuống cảnh. Ở bài này model chưa cần sửa khi down.
+
+```cpp title="include/controls.hpp"
+inline bool pointerDown(Model& model, Ui& ui, Point point) {
+    if (ui.active != Control::None) {
+        return true;
+    }
+
+    ui.hot = hitTest(point);
+    ui.active = ui.hot;
+    ui.focus = ui.hot;
+    (void)model;
+    // Cả khoảng trống trong panel cũng thuộc UI, không chuyển click cho cảnh.
+    return contains(panel, point);
+}
+```
+
+### Bước 2 — Thả chuột, xóa active rồi mới thực hiện action
+
+Sao chép control đã nhấn, xóa active và tính hot ở vị trí thả. Sau đó mới so sánh và gọi activate. Xóa trạng thái trước action giúp Reset không để lại một nút đang bị giữ. activate chuyển Pause sang setPaused, Reset sang resetSimulation; không chứa lệnh SDL.
+
+```cpp title="include/controls.hpp"
+inline void pointerUp(Model& model, Ui& ui, Point point) {
+    const Control pressed = ui.active;
+    ui.active = Control::None;
+    ui.hot = hitTest(point);
+
+    // Một button chỉ chạy khi bắt đầu nhấn và kết thúc thả trên chính nó.
+    if (pressed != Control::None && pressed == ui.hot) {
+        activate(model, pressed);
+    }
+}
+```
+
+### Bước 3 — Reset cả đồng hồ liên quan đến cảnh
+
+Reset không tạo Model mới vì làm vậy sẽ vô tình đưa gravity/paused về mặc định. Chỉ gán những trường cần khôi phục. clockRevision tăng để main biết frame này có action thay đổi mốc thời gian; main đặt elapsed=0 khi revision đổi, nên không dùng thời gian đo từ trước Reset/Resume.
+
+```cpp title="include/simulation.hpp"
+inline void resetSimulation(Model& model) {
+    // Reset cảnh, không tự đổi lựa chọn gravity hoặc trạng thái Pause của người dùng.
+    model.y = 90.0;
+    model.velocity = 0.0;
+    model.accumulator = 0.0;
+    model.ticks = 0;
+    ++model.clockRevision;
+}
+```
+
+## Ghép các phần lại
+
+Nối SDL_EVENT_MOUSE_BUTTON_DOWN/UP cho nút trái vào pointerDown/Up. MOUSE_MOTION gọi pointerMove để cập nhật hot nhưng không đổi active. Khi một control nhận down, native gọi SDL_CaptureMouse(true); up hoặc focus lost giải phóng bằng SDL_CaptureMouse(false).
+
+```cpp title="src/main.cpp"
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+                const lab::Point point{event.button.x, event.button.y};
+                const bool consumed = lab::pointerDown(model, ui, point);
+                (void)consumed;
+                if (ui.active != lab::Control::None && !SDL_CaptureMouse(true)) {
+                    SDL_Log("Capture unavailable; gesture cancelled: %s", SDL_GetError());
+                    lab::cancelPointer(ui);
+                }
+            }
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
+                lab::pointerUp(model, ui, {event.button.x, event.button.y});
+                SDL_CaptureMouse(false);
+            }
+```
+
+Capture giúp tiếp tục nhận sự kiện ngoài cửa sổ, không khóa con trỏ trong cửa sổ. Chỉ giữ nó trong một gesture. Nếu backend không hỗ trợ, source log lỗi rồi hủy gesture; không âm thầm giữ active mãi. SDL cũng có auto-capture, nhưng ở đây ta vẫn viết đường acquire/release để thấy ownership. Slider ở bài sau có thể đã đổi giá trị khi nhấn; hủy gesture không có nghĩa rollback giá trị.
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_65_checkpoint_3 --parallel 2
+./build/Debug/project_65_checkpoint_3.exe
+```
+
+Đọc thêm setPaused trong source đầy đủ: nó xóa accumulator và tăng clockRevision chỉ khi trạng thái thật sự đổi. Main tiếp tục gọi advance mỗi frame; khi Pause, advance không tiến vật lý. Không đặt cả event loop trong if chưa paused.
+
+## Thử làm sai để hiểu đúng
+
+1. Gọi activate mỗi frame khi nút trái còn giữ. Pause sẽ bật/tắt liên tục và Reset chạy hàng chục lần trong một lần nhấn. Action phải nằm ở transition up hợp lệ, không nằm trong trạng thái đang giữ.
+2. Chỉ kiểm hot khi thả, không nhớ active. Nhấn ngoài rồi thả trong Pause sẽ bị tính nhầm là click.
+3. Không hủy active khi mất focus. Alt+Tab trong lúc giữ nút rồi quay lại có thể khiến một release muộn kích hoạt action không còn mong muốn.
+4. Reset bằng Model mới. Đến bài 04, gravity người dùng vừa chọn sẽ mất; hãy giữ lại đúng những trường mà quy tắc Reset yêu cầu.
+
+## Tự kiểm tra kết quả
+
+Thử lần lượt release không có down, down/up cùng nút, down Pause/up Reset, down Pause/up ngoài, down Pause/ra ngoài/quay lại/up. Chỉ hai trường hợp hợp lệ mới toggle đúng một lần. Giữ nút không được tự lặp action.
+
+Cho cảnh chạy rồi Pause, chờ vài giây và Resume: bóng không chạy bù thời gian chờ. Reset khi Pause giữ Pause, Reset khi chạy giữ trạng thái chạy. Bấm UI vẫn phản hồi lúc vật lý dừng.
+
+## Bài tập mở rộng
+
+Thêm bộ đếm số lần activate để quan sát một gesture chỉ sinh một action. Không biến bộ đếm thành điều kiện chống lỗi. Tiếp tục [bài 04 — slider trọng lực](/projects/simulator-controls/04-slider-trong-luc).

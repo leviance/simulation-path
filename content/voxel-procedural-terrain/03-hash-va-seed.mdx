@@ -1,0 +1,87 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo giá trị giả ngẫu nhiên mà không phụ thuộc thứ tự tải
+
+## Vấn đề cần giải quyết
+
+Sin/cos tạo ra các dải lặp rất dễ nhận ra. Ta cần giá trị thay đổi theo seed, nhưng quay về một chunk đã gỡ vẫn phải nhận đúng dữ liệu cũ. Dùng một chuỗi rand rồi lấy phần tử tiếp theo sẽ khiến kết quả phụ thuộc thứ tự tải.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thay vì “xin số ngẫu nhiên tiếp theo”, ta hỏi một hàm: địa chỉ lattice (i,j) và seed này cho giá trị gì? Hàm không giữ state nên hỏi trước hay sau đều như nhau. Hash trả 32 bit; 16 bit thấp được đổi sang khoảng [−1,1]. Đây không phải hash mật mã hay phép chứng minh các nút độc lập thống kê.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="terrain63-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Trộn địa chỉ bằng uint32_t
+
+Cast tọa độ âm sang uint32_t trước phép nhân. C++ unsigned tràn theo modulo 2³²; TypeScript dùng Math.imul và >>> để giữ cùng bit pattern. Các hằng hex là hằng trộn bit đã chọn cho bài, không mang đơn vị độ dài hay độ cao. Không dùng std::hash vì ta cần fixture có thể đối chiếu.
+
+```cpp title="include/noise.hpp"
+inline std::uint32_t latticeHash(int x, int z, std::uint32_t seed) {
+    if (x < -4096 || x > 4096 || z < -4096 || z > 4096 || seed > 65535u) {
+        throw std::out_of_range("lattice/seed outside teaching domain");
+    }
+    std::uint32_t hash = static_cast<std::uint32_t>(x) * 0x8da6b343u;
+    hash ^= static_cast<std::uint32_t>(z) * 0xd8163841u;
+    hash ^= seed;
+    hash = (hash ^ (hash >> 16)) * 0x7feb352du;
+    hash = (hash ^ (hash >> 15)) * 0x846ca68bu;
+    return hash ^ (hash >> 16);
+}
+```
+
+### Bước 2 — Đổi bit thành một giá trị hữu hạn
+
+Mask 65535 giữ 16 bit; chia 65535.0 để có số thực trong [0,1], nhân 2 rồi trừ 1. Với seed 42, latticeHash(0,0)=388445122 và latticeHash(−1,0)=4012630698. Ghi các số này làm golden fixture cho C++ và TypeScript.
+
+```cpp title="include/noise.hpp"
+inline double latticeValue(int x, int z, std::uint32_t seed) {
+    return static_cast<double>(latticeHash(x, z, seed) & 65535u) / 65535.0 * 2.0 - 1.0;
+}
+```
+
+### Bước 3 — Thử địa hình chỉ có hash
+
+Bài này lấy floor(world/scale) làm địa chỉ lattice, với scale mặc định là 32. Mỗi ô 32×32 có một giá trị nên địa hình chia thành những mảng phẳng. Giữ nguyên scale ở bài 04: khi đó chỉ có cách nối các giá trị thay đổi, không phải vừa đổi kích thước mảng vừa bật nội suy. Hash giải quyết tính tái lập; nội suy ở bài sau mới tạo chuyển tiếp êm.
+
+```cpp title="include/terrain.hpp"
+inline double terrainSignal(double x, double z, const TerrainConfig& config) {
+    validateConfig(config);
+    if (!std::isfinite(x) || !std::isfinite(z) || std::abs(x) > 2048 || std::abs(z) > 2048) {
+        throw std::out_of_range("world -2048..2048");
+    }
+    return latticeValue(static_cast<int>(std::floor(x / config.scale)), static_cast<int>(std::floor(z / config.scale)), config.seed);
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_3, đi xa rồi quay lại, hoặc tải các chunk theo thứ tự khác. Seed chưa đổi thì checksum không đổi. Cùng một seed được truyền vào mọi chunk; tuyệt đối không cộng Key vào seed để tạo “ngẫu nhiên riêng” cho từng chunk. Làm vậy khiến hai cách hỏi một điểm giáp ranh thuộc hai trường noise khác nhau.
+
+```bash title="Terminal — checkpoint 03"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_63_checkpoint_3 --parallel 2
+./build/Debug/project_63_checkpoint_3.exe
+```
+
+Lệnh trên dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure và chạy executable trong `build/`. Tên target có trong CMakeLists.txt của ZIP. Mục **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint, không chỉ các đoạn vừa thay.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay seed chung bằng seed+Key.x trong bản thử. So cùng world point qua hai địa chỉ chunk/halo: kết quả khác nhau dù tọa độ world giống hệt.
+2. Dùng signed int cho phép nhân hash lớn. Signed overflow là undefined behavior trong C++, không phải phiên bản ngắn gọn của modulo unsigned. Khôi phục uint32_t trước khi so fixture.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Ba fixture hash nguyên khớp bit giữa hai bản. Thứ tự hỏi các nút và thứ tự tạo chunk không ảnh hưởng dữ liệu. Địa hình còn chia mảng theo scale=32; đi qua x=31 sang x=32 để thấy bước nhảy. Đừng làm mờ ảnh để che nó, vì dữ liệu vẫn chưa được nội suy.
+
+## Bài tập mở rộng
+
+In cùng một nút mười lần xen kẽ các nút khác nhau, rồi đổi seed từ 42 sang 43. Kiểm tính lặp lại của từng seed, không đòi mọi cặp seed luôn khác nhau ở mọi nút vì hash có thể va chạm.
+
+Tiếp theo: [Nối bốn giá trị thành một mặt địa hình êm](/projects/voxel-procedural-terrain/04-noi-suy-value-noise).
+

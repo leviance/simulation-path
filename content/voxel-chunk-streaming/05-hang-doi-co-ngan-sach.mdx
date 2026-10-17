@@ -1,0 +1,146 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chia việc tải và gỡ thành các batch nhỏ
+
+## Vấn đề cần giải quyết
+
+synchronize xử lý cả vùng trong một lần. Teleport xa có thể phải gỡ nhiều chunk rồi tạo một loạt chunk mới trước khi trả lại event loop. Ta cần chia công việc thành các batch nhỏ mà vẫn biết mình đang đợi việc gì.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một Job chỉ có Key, loại load/unload và priority. Queue lấy từ state hiện tại: gỡ resident ngoài keep, tải wanted chưa có. Unload xa trước để có slot, rồi load gần trước theo $dx^2+dz^2$; tie theo z rồi x để chạy lại cùng thứ tự.
+
+Budget là 1 hoặc 2 job mỗi tick, không phải giới hạn millisecond. Một load gồm generate và meshing; trước bài 08 còn rebuild toàn vùng. Đừng gọi đây là async I/O hoặc hard real-time. Cách chia batch giúp event loop có cơ hội xử lý input giữa các lần làm việc.
+
+Checkpoint 05 đổi nhịp khởi tạo: một chunk đã nhìn thấy và tám job load chờ quanh nó. N xử lý một tick; Space chạy các tick, hết queue tự dừng.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-5" />
+
+### Theo dõi một lần đi qua biên chunk
+
+Trước hết, để nhân vật ở (8,8), radius=1 và chạy hết queue. Lúc này 9 chunk quanh center (0,0) đã resident. Pause, chọn budget=2 rồi đi sang (24,8): center thành (1,0). Wanted chuyển từ các cột chunk −1..1 sang 0..2. Ở checkpoint 05 chưa có vòng giữ dự phòng, nên phải gỡ ba chunk cột −1 và tải ba chunk cột 2.
+
+| Thời điểm | Wanted | Resident | Pending | Job vừa chạy | Mesh dựng lại trong tick |
+| --- | --- | --- | --- | --- | --- |
+| Vừa di chuyển, chưa tick | 9 | 9 | 6 | Chưa có | Chưa có |
+| Tick 1 | 9 | 7 | 4 | Gỡ (−1,−1), (−1,1) | 7 |
+| Tick 2 | 9 | 7 | 2 | Gỡ (−1,0), tải (2,0) | 7 |
+| Tick 3 | 9 | 9 | 0 | Tải (2,−1), (2,1) | 9 |
+
+Wanted là tập cần có, không phải số chunk chắc chắn đã có ngay. Resident có thể giảm trong lúc chuyển vùng vì ta gỡ trước rồi mới tải. Cột cuối cho thấy giới hạn của bản hiện tại: budget=2 chỉ giới hạn **job**, chưa giới hạn số mesh phải dựng. Bài 08 mới thu hẹp việc dựng mesh về các chunk bị ảnh hưởng.
+
+## Viết code từng bước
+
+### Bước 1 — Định nghĩa thứ tự không mơ hồ
+
+earlierJob đặt unload trước load. Với unload, priority lớn đi trước; với load, nhỏ đi trước. Key so z/x để tie ổn định. Nếu chỉ sort theo distance mà không chốt tie, log giữa các lần chạy có thể khó đối chiếu.
+
+```cpp title="include/scheduler.hpp"
+inline bool earlierJob(const Job& a, const Job& b) {
+    // Gỡ xa trước để giải phóng slot; tải gần trước, tie z rồi x.
+    if (a.load != b.load) {
+        return !a.load;
+    }
+    if (a.priority != b.priority) {
+        if (a.load) {
+            return a.priority < b.priority;
+        }
+        return a.priority > b.priority;
+    }
+    return a.key < b.key;
+}
+```
+
+
+### Bước 2 — Lập kế hoạch từ resident và wanted
+
+plan chỉ đọc World. Nó không generate, erase hoặc rebuild. Một Key đã resident không được xếp thêm load; Key còn trong keep không được xếp unload. Tách việc quyết định khỏi việc thực thi giúp kiểm queue độc lập.
+
+```cpp title="include/scheduler.hpp"
+inline std::vector<Job> plan(const World& world) {
+    const Key center = targetCenter(world);
+    std::vector<Job> jobs;
+    for (const auto& [key, entry] : world.chunks) {
+        (void)entry;
+        if (distance(key, center) > keepRadius(world)) {
+            jobs.push_back({key, false, 0});
+        }
+    }
+    for (const Key key : wanted(world)) {
+        if (!world.chunks.contains(key)) {
+            jobs.push_back({key, true, 0});
+        }
+    }
+    for (Job& job : jobs) {
+        const int dx = job.key.x - center.x;
+        const int dz = job.key.z - center.z;
+        job.priority = dx * dx + dz * dz;
+    }
+    std::sort(jobs.begin(), jobs.end(), earlierJob);
+    return jobs;
+}
+```
+
+
+### Bước 3 — Chỉ lấy một prefix có giới hạn
+
+pump chụp các job hiện tại, xử lý tối đa budget rồi hoàn tất mesh cho batch. Cuối hàm lập lại pending từ state mới. Tham chiếu tới Job không được sống qua việc thay vector; ở đây lấy Job bằng giá trị.
+
+```cpp title="include/scheduler.hpp"
+inline void pump(World& world) {
+    world.pending = plan(world);
+    world.lastJobs = 0;
+    world.lastMeshes = 0;
+    world.lastBudget = world.budget;
+    ++world.ticks;
+    const int count = std::min(world.budget, static_cast<int>(world.pending.size()));
+    std::vector<Key> changed;
+    for (int i = 0; i < count; ++i) {
+        const Job job = world.pending[i];
+        ++world.lastJobs;
+        bool applied = false;
+        if (job.load) {
+            applied = loadChunk(world, job.key);
+        } else {
+            applied = unloadChunk(world, job.key);
+        }
+        if (applied) {
+            changed.push_back(job.key);
+        }
+    }
+    // Hoàn tất geometry cho cả batch trước khi công bố frame.
+    refreshMeshes(world, changed);
+    world.pending = plan(world);
+}
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_62_checkpoint_5 --parallel 2
+.\build\Debug\project_62_checkpoint_5.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng while(!pending.empty()) trong một tick: budget không còn tác dụng, teleport lại thành một lượt công việc dài.
+2. Load trước unload khi đã sát cap: vùng mới không có slot trong khi vẫn giữ vùng xa. Quan sát đầu queue khi chọn preset nhảy xa.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Ban đầu resident=1, pending=8. Với budget=2, một lần N xét tối đa hai job. Play có thể tạm dừng; queue hết tự dừng. Node/CTest dùng vòng drain có tối đa 100 tick, không chờ vô hạn.
+
+Mở **Lịch sử 8 batch gần nhất** dưới Canvas. Mỗi dòng ghi tick, load/unload, Key và priority tại thời điểm chạy; priority là khoảng cách bình phương tới chunk trung tâm, không phải số thứ tự tăng dần chung cho cả hai loại job. Đọc hai dòng cùng tick để kiểm budget=2. Chỉ giữ tám batch và bản sao Key, không giữ Entry hay buffer đã unload. Đây là phần chẩn đoán bổ sung của Canvas; scheduler native vẫn dùng cùng thứ tự trong `plan` và `pump`.
+
+## Bài tập mở rộng
+
+Chọn budget=1, teleport từ nơi này sang nơi khác khi queue chưa hết. Ghi lại việc nào lẽ ra phải bỏ; bài 06 sẽ đưa nó vào retarget.
+
+Tiếp theo: [Giữ thêm một vòng để khỏi tải đi tải lại](/projects/voxel-chunk-streaming/06-giu-vung-du-phong).

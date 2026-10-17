@@ -1,0 +1,153 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Điều khiển toàn bộ panel bằng bàn phím
+
+## Vấn đề cần giải quyết
+
+Nếu chỉ có chuột, panel chưa thực sự dễ dùng. Bạn có thể muốn chỉnh gravity từng mức nhỏ, hoặc không dùng chuột được. Bài này cho cả ba control hoạt động bằng bàn phím, đồng thời tránh việc giữ Space khiến Pause bật/tắt liên tục.
+
+Bắt đầu từ checkpoint 4. Đừng thêm phím tắt trực tiếp vào từng nút mà không có quy tắc focus: khi có nhiều control cùng dùng Enter, ta phải biết control nào nhận phím.
+
+## Hiểu ý tưởng trước khi viết code
+
+`focus` là control đang nhận bàn phím, khác hot đang dưới chuột và active đang giữ gesture. Di chuột qua Reset không được kéo focus khỏi slider mà bạn đang chỉnh bằng arrow. Khi pointerDown nhận một control, nó chủ động chuyển focus tới control đó.
+
+Thứ tự native là Pause → Reset → Gravity → Pause; Shift+Tab đi ngược. Enter/Space chỉ kích hoạt button, arrow trái/phải đổi gravity từng 20, Home/End về 0/1200. Repeat được phép với arrow để kéo dài một thao tác chỉnh, nhưng không được phép với activation hoặc Tab.
+
+Từ mốc này, **Space không còn là phím chạy/dừng toàn cục** của bài 01. Nếu focus=Reset, Space phải Reset; nếu focus=Gravity, Space không được âm thầm đổi Pause. N vẫn cho một bước khi Pause và không có gesture chuột đang giữ.
+
+<InteractiveLab demo="simulator-controls" mode="controls65-5" />
+
+## Viết code từng bước
+
+### Bước 1 — Dịch phím SDL sang ý nghĩa mà code thuần hiểu
+
+translateKey đặt ở main.cpp vì SDL_Keycode thuộc tầng SDL. controls.hpp chỉ nhận enum Key, bool shift và bool repeat nên CTest không cần SDL. Cách tách này giống việc chuyển event.button.x/y thành Point trước khi gọi hit-test.
+
+```cpp title="src/main.cpp"
+lab::Key translateKey(SDL_Keycode key) {
+    if (key == SDLK_TAB)
+        return lab::Key::Tab;
+    if (key == SDLK_RETURN)
+        return lab::Key::Enter;
+    if (key == SDLK_SPACE)
+        return lab::Key::Space;
+    if (key == SDLK_LEFT)
+        return lab::Key::Left;
+    if (key == SDLK_RIGHT)
+        return lab::Key::Right;
+    if (key == SDLK_HOME)
+        return lab::Key::Home;
+    if (key == SDLK_END)
+        return lab::Key::End;
+    if (key == SDLK_ESCAPE)
+        return lab::Key::Escape;
+    return lab::Key::Other;
+}
+```
+
+### Bước 2 — Đổi focus bằng Tab và hủy gesture còn dở
+
+Xử lý Escape và Tab trước action khác. Tab không lặp; khi chuyển focus, ta hủy active để việc đang giữ slider không đi kèm việc gõ nút khác. Các nhánh viết rõ thứ tự ba control, không ép người mới suy luận từ công thức modulo hoặc số enum.
+
+```cpp title="include/controls.hpp"
+inline bool keyDown(Model& model, Ui& ui, Key key, bool shift, bool repeat) {
+    if (key == Key::Escape) {
+        cancelPointer(ui);
+        return true;
+    }
+    if (key == Key::Tab) {
+        if (repeat) {
+            return true;
+        }
+        cancelPointer(ui);
+        if (shift) {
+            if (ui.focus == Control::Reset) {
+                ui.focus = Control::Pause;
+            } else if (ui.focus == Control::Gravity) {
+                ui.focus = Control::Reset;
+            } else {
+                ui.focus = Control::Gravity;
+            }
+        } else {
+            if (ui.focus == Control::Pause) {
+                ui.focus = Control::Reset;
+            } else if (ui.focus == Control::Reset) {
+                ui.focus = Control::Gravity;
+            } else {
+                ui.focus = Control::Pause;
+            }
+        }
+        return true;
+    }
+```
+
+### Bước 3 — Tách repeat của button khỏi repeat của slider
+
+Nếu còn active, phím khác không chen vào gesture. Với Enter/Space, chỉ activate khi repeat=false. Với arrow, không chặn repeat, nhưng vẫn đi qua setGravity để clamp. Home/End chọn hai đầu. Khi hàm trả true, main biết UI đã dùng sự kiện và không gửi nó tiếp cho cảnh.
+
+```cpp title="include/controls.hpp"
+    if (key == Key::Enter || key == Key::Space) {
+        if (!repeat) {
+            activate(model, ui.focus);
+        }
+        return ui.focus != Control::None;
+    }
+    if (ui.focus != Control::Gravity) {
+        return false;
+    }
+    if (key == Key::Left) {
+        setGravity(model, model.gravity - 20.0);
+        return true;
+    }
+    if (key == Key::Right) {
+        setGravity(model, model.gravity + 20.0);
+        return true;
+    }
+    if (key == Key::Home) {
+        setGravity(model, 0.0);
+        return true;
+    }
+    if (key == Key::End) {
+        setGravity(model, 1200.0);
+        return true;
+    }
+```
+
+## Ghép các phần lại
+
+Trong view.hpp, lấy Rect theo ui.focus và vẽ một đường viền vàng bên ngoài 3 pixel. Đừng chỉ đổi màu nền vì nền đang thể hiện hover/press. Người dùng phải phân biệt được focus ngay khi con trỏ ở nơi khác.
+
+```cpp title="include/view.hpp"
+    if (ui.focus != Control::None) {
+        const SDL_FRect border{float(focused.x - 3.0), float(focused.y - 3.0), float(focused.width + 6.0), float(focused.height + 6.0)};
+        SDL_SetRenderDrawColor(renderer, 255, 209, 102, 255);
+        SDL_RenderRect(renderer, &border);
+    }
+```
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_65_checkpoint_5 --parallel 2
+./build/Debug/project_65_checkpoint_5.exe
+```
+
+Nhấn Tab lần đầu tới Pause, Space để Resume, Tab tới Reset, Enter để Reset khi vẫn đang chạy. Tab tới Gravity, nhấn Home rồi arrow phải một lần: gravity=20. Giữ arrow cho tăng liên tục; giữ Space trên Pause không được toggle liên tục.
+
+Canvas không phải một cửa sổ native riêng. Ở hai đầu dãy control, Tab/Shift+Tab được trả lại cho trình duyệt để bạn đi ra ngoài, tránh keyboard trap. Các button và range HTML phía dưới điều khiển cùng Model, có tên và giá trị mà trình đọc màn hình hiểu. Việc vẽ chữ trong Canvas tự nó không tạo accessibility tree; đừng gọi bản native hoặc Canvas vẽ tay là đã hỗ trợ screen reader đầy đủ.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán focus=hot trong mọi motion. Đang dùng arrow trên slider, chỉ cần chuột vô tình trôi qua Reset là bàn phím đổi mục tiêu. Focus chỉ đổi bởi hành động có chủ ý như Tab hoặc pointerDown.
+2. Chặn tất cả sự kiện repeat. Button an toàn nhưng giữ arrow không còn dùng được; hai loại control cần quy tắc khác nhau.
+3. Vẫn giữ Space toàn cục sau khi đã gọi keyDown. Một lần Space có thể vừa Reset vừa Pause, hoặc toggle hai lần như không xảy ra gì.
+4. Bắt Tab mãi trong Canvas. Người dùng bàn phím sẽ không tới được nút bài tiếp theo; kiểm cả đường thoát, không chỉ thứ tự focus bên trong.
+
+## Tự kiểm tra kết quả
+
+Không dùng chuột, bạn phải chạy/dừng, Reset và chỉnh được gravity ở cả hai đầu. Shift+Tab trả đúng control trước, hover không đổi focus, focus ring vẫn thấy khi chuột ngoài panel. Enter/Space repeat không kích hoạt thêm; arrow repeat vẫn thay giá trị.
+
+Trong Canvas, dùng Tab đi vào rồi đi ra các control HTML. Với reduced-motion, Chạy mô phỏng bị vô hiệu hóa và action trên Canvas cũng không khởi động animation; nút Một bước vẫn tiến được đúng 1/120 s.
+
+## Bài tập mở rộng
+
+Viết một chuỗi phím với kết quả dự đoán trước: Tab, Space, Tab, Enter, Tab, End, Shift+Tab. Đối chiếu focus/paused/gravity sau từng bước. Tiếp theo là [bài 06 — resize và điều phối input](/projects/simulator-controls/06-resize-va-dieu-phoi-input).

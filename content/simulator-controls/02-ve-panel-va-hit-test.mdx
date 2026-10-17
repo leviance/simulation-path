@@ -1,0 +1,92 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ panel và tìm control dưới con trỏ
+
+## Vấn đề cần giải quyết
+
+Cảnh đã chạy được, nhưng người dùng chưa có cách nhìn thấy các thao tác đang hỗ trợ. Bài này dựng panel bên phải, vẽ hai button và xác định con trỏ nằm trên control nào. **Chưa nối click với action**: ta cần chắc rằng phần nhìn thấy và vùng nhận chuột trùng nhau trước.
+
+Bắt đầu từ checkpoint 1. Cảnh nằm bên trái, còn khoảng bên phải đang trống. Ta sẽ dùng khoảng đó làm bảng điều khiển, không phủ lên bóng hoặc sàn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một button trước hết là một hình chữ nhật và một nhãn. Nếu tọa độ vẽ là một bộ số, tọa độ nhận chuột lại là một bộ số chép tay khác, chúng sẽ sớm lệch nhau. Vì vậy, `pauseButton` và `resetButton` là Rect dùng chung cho cả drawButton lẫn hitTest.
+
+Ta chọn miền half-open: cạnh trái/trên thuộc Rect, cạnh phải/dưới không thuộc Rect. Với hai control đặt sát nhau, một điểm trên ranh giới không được cả hai cùng nhận. `hot` là control ngay dưới con trỏ; nó chỉ phục vụ phản hồi hover. Nó chưa nói người dùng đã nhấn control đó.
+
+<InteractiveLab demo="simulator-controls" mode="controls65-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Định nghĩa phép kiểm điểm nằm trong Rect
+
+Mở geometry.hpp. Điều kiện kiểm cả X và Y, đồng thời loại NaN/Infinity. Đọc từng vế với ví dụ Pause: x thuộc [688,912), y thuộc [80,124). Điểm (688,80) nằm trong, còn (912,80) nằm ngoài. Không dùng khoảng cách đến tâm cho button chữ nhật.
+
+```cpp title="include/geometry.hpp"
+inline bool contains(Rect rect, Point point) {
+    // Cạnh phải/dưới không thuộc hình: hai control kề nhau không nhận cùng một điểm.
+    return std::isfinite(point.x) && std::isfinite(point.y) && point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height;
+}
+```
+
+### Bước 2 — Đặt control rồi viết hit-test theo đúng Rect
+
+Panel bắt đầu x=664; button nằm ở x=688, rộng 224, cao 44. `hitTest` trả Control::None cho phần còn lại. Enum giúp phần điều khiển nói Pause/Reset thay vì nhớ số 0/1/2. Gravity chưa xuất hiện trong hit-test vì bài này chưa có slider.
+
+```cpp title="include/controls.hpp"
+inline Control hitTest(Point point) {
+    if (contains(pauseButton, point)) {
+        return Control::Pause;
+    }
+    if (contains(resetButton, point)) {
+        return Control::Reset;
+    }
+    return Control::None;
+}
+```
+
+### Bước 3 — Vẽ hình và nhãn, rồi dùng hot để đổi màu
+
+drawButton nhận Rect và Control ID. Tô nền trước, tô lại khi hot trùng ID rồi vẽ nhãn. Trong event MOUSE_MOTION, main đưa event.motion.x/y vào hitTest và gán ui.hot. Di chuyển chuột không sửa Model. Nhãn Pause đổi thành Resume khi cảnh đang dừng, nhưng button chưa nhấn được.
+
+```cpp title="include/view.hpp"
+inline void drawButton(SDL_Renderer* renderer, const Ui& ui, Control id, Rect rect, const char* label) {
+    fill(renderer, rect, 48, 63, 87);
+    if (ui.hot == id) {
+        fill(renderer, rect, 67, 87, 118);
+    }
+    (void)id;
+
+    SDL_SetRenderDrawColor(renderer, 230, 237, 247, 255);
+    SDL_RenderDebugText(renderer, float(rect.x + 16.0), float(rect.y + 18.0), label);
+}
+```
+
+## Ghép các phần lại
+
+Trong `draw`, vẽ nền cảnh trước, panel sau, rồi hai button. Cả drawButton và hitTest đều nhận đúng các Rect đã khai báo trong controls.hpp. Không có widget tree; ba control cố định vẫn đủ nhỏ để viết thẳng và nhìn rõ đường đi của dữ liệu.
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_65_checkpoint_2 --parallel 2
+./build/Debug/project_65_checkpoint_2.exe
+```
+
+Đưa chuột qua Pause và Reset: màu nền phải đổi ngay khi đi qua biên. Bấm vẫn chưa làm gì là chủ ý của checkpoint 2, không phải bug. Space/N từ bài trước vẫn giúp kiểm cảnh.
+
+SDL_RenderDebugText dùng font debug 8×8, chỉ vẽ ký tự ASCII. Nhãn trong chương trình native vì thế dùng Resume/Reset scene; Canvas và bài giảng dùng tiếng Việt. Không gọi nó là giải pháp typography hoàn chỉnh.
+
+## Thử làm sai để hiểu đúng
+
+1. Tăng x trong drawButton nhưng không đổi Rect của hitTest. Bạn sẽ thấy button ở một nơi nhưng hover ở nơi khác. Sửa bằng cách chỉ có một nguồn Rect, không bù tọa độ riêng ở event.
+2. Đổi cạnh phải thành phép so sánh `<=`. Với hai Rect sát nhau, điểm nằm đúng đường chia có thể thuộc cả hai; thứ tự if sẽ vô tình quyết định control thắng.
+3. Cho MOUSE_MOTION gọi resetSimulation. Chỉ cần lướt qua nút đã sửa cảnh: đó là nhầm hover với action. Phần update chưa được phép nằm trong hit-test.
+
+## Tự kiểm tra kết quả
+
+Hai button phải nhìn thấy rõ; hover khớp mọi cạnh và khoảng trống không làm sáng button. Cảnh không đổi vì di chuyển chuột. Kiểm nhanh bốn điểm (688,80), (911,123), (912,80), (688,124) trên giấy và trong test pure sau này.
+
+Ở mốc này chưa resize window nên event và hình vẽ đang cùng hệ tọa độ 960×540. Bài06 sẽ thêm logical presentation; không tự nhân tọa độ chuột với DPI ở đây.
+
+## Bài tập mở rộng
+
+Đổi vị trí Reset bằng cách sửa đúng một Rect; hình vẽ và hit-test phải cùng chuyển. Sau đó học [bài 03 — nút Pause và Reset](/projects/simulator-controls/03-nut-pause-reset).

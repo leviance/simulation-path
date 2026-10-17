@@ -1,0 +1,219 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn block đầu tiên qua nhiều chunk
+
+## Vấn đề cần giải quyết
+
+Ray đã ở đúng world; giờ cần tìm block đặc đầu tiên. Không thể chỉ chạy lại DDA của một chunk rồi bỏ qua các chunk còn lại, và cũng không được coi chunk chưa tải là một khoảng trống có thể nhìn xuyên.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta clip ray vào domain world và tầng Y=0..15, rồi DDA trực tiếp bằng cell world. Storage được tra bằng floor(world/16) và local tương ứng. Có ba kết quả khác nhau: hit, miss và bị chặn bởi Unknown. Unknown là dữ liệu chưa resident, không phải Air. Tolerance theo t là 1e-9; ô chỉ bị chạm cạnh/góc không có đoạn đi vào đủ dài sẽ không được chọn.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-3" />
+
+### Một tia đi qua ranh giới x=0
+
+Để dễ tính tay, dùng fixture có hai chunk (−1,0) và (0,0) đều đã resident. Mọi block là Air, trừ Stone tại cell world (0,2,0). Đây là dữ liệu thử riêng, không phải địa hình mặc định. Ray bắt đầu ở (−1.5,2.5,0.5), hướng (1,0,0), nên t cũng chính là quãng đường đi dọc X.
+
+Trục Y/Z không đổi: tMaxY=tMaxZ=∞. Theo X, mỗi ô rộng 1 nên tDeltaX=1. Mặt kế tiếp ban đầu là x=−1, cách origin 0.5.
+
+| Cell world đang xét | Chunk (cx,cz) | local x | t vào ô | tMaxX trước khi bước | Kết quả |
+| --- | --- | --- | --- | --- | --- |
+| (−2,2,0) | (−1,0) | 14 | 0 | 0.5 | Air, đi tiếp |
+| (−1,2,0) | (−1,0) | 15 | 0.5 | 1.5 | Air, đi tiếp |
+| (0,2,0) | (0,0) | 0 | 1.5 | 2.5 | Stone, trả hit |
+
+Tại hit, normal=(−1,0,0): tia đi vào qua mặt trái của block. Để ý bước từ world x=−1 sang x=0: local x quay từ 15 về 0 và chunk đổi từ −1 sang 0, nhưng DDA không khởi động lại. Nó vẫn giữ t=1.5 của cùng một tia.
+
+Bây giờ gỡ riêng chunk (0,0) khỏi fixture. Hai bước đầu không đổi; đến cell (0,2,0), query trả Unknown thay vì Stone. Kết quả phải là blocked, không có hit và không được tự tải chunk đó. Chính sự phân biệt này ngăn thao tác phá/đặt xuyên qua vùng chưa biết. Test hồi quy chạy cả hai biến thể.
+
+## Viết code từng bước
+
+### Bước 1 — Tra đúng chunk của mỗi cell
+
+Hàm trả ID 0 cho Air, ID 1..3 cho block và −1 cho chunk chưa resident. Mesher của P62 coi neighbor chưa tải là Air để đóng frontier; picker cố ý khác, vì cho ray đi xuyên dữ liệu chưa biết sẽ sửa nhầm block phía sau. Query không được generate chunk để lấp chỗ thiếu.
+
+```cpp title="include/query.hpp"
+inline int residentBlock(const World& world, Cell cell) {
+    if (cell[1] < 0 || cell[1] >= side) {
+        return 0;
+    }
+    const Key key{floorDiv(cell[0]), floorDiv(cell[2])};
+    const auto found = world.chunks.find(key);
+    if (found == world.chunks.end()) {
+        return -1;
+    }
+    return static_cast<int>(get(found->second.blocks, cell[0] - key.x * side, cell[1], cell[2] - key.z * side));
+}
+```
+
+### Bước 2 — Tìm đoạn đi bên trong, không chỉ một điểm chạm
+
+Mỗi trục cắt một khoảng t. Component bằng zero chỉ cần kiểm origin nằm trong khoảng half-open; không chia cho zero. Hàm trả entry normal ưu tiên X/Y/Z nếu nhiều mặt đi vào cùng lúc. Cùng helper cũng dùng cho ô đầu để giữ normal đúng khi origin ở mặt nội bộ.
+
+```cpp title="include/ray.hpp"
+inline std::optional<Span> clipBox(const Ray& ray, Vector lo, Vector hi, double reach) {
+    double enter = -INFINITY;
+    double exit = reach;
+    Vector times{-INFINITY, -INFINITY, -INFINITY};
+    for (int i = 0; i < 3; ++i) {
+        const double d = ray.direction[i];
+        const double o = ray.origin[i];
+        if (d == 0) {
+            if (o < lo[i] || o >= hi[i]) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        double a = (lo[i] - o) / d;
+        double b = (hi[i] - o) / d;
+        if (a > b) {
+            std::swap(a, b);
+        }
+        times[i] = a;
+        enter = std::max(enter, a);
+        exit = std::min(exit, b);
+    }
+    const double start = std::max(0.0, enter);
+    if (exit - start <= epsilon) {
+        return std::nullopt;
+    }
+    Cell normal{};
+    if (enter >= 0) {
+        for (int i = 0; i < 3; ++i) {
+            if (enter - times[i] <= epsilon) {
+                normal[i] = -1;
+                if (ray.direction[i] < 0) {
+                    normal[i] = 1;
+                }
+                break;
+            }
+        }
+    }
+    return Span{start, exit, normal};
+}
+```
+
+### Bước 3 — Đi front-to-back và dừng ngay khi kết quả đã rõ
+
+cell đầu dùng floor, nếu ray đi âm và bắt đầu đúng mặt nguyên thì lùi về ô phía hướng đi. tMax là thời điểm qua mặt kế tiếp, tDelta là khoảng t cho một ô theo trục. next lấy min; khi tie thì step mọi trục, không ghé các ô chỉ chạm cạnh. Mỗi visit cần exit−enter>epsilon. Gặp ID−1 thì blocked, gặp ID>0 thì hit; chỉ Air mới đi tiếp.
+
+```cpp title="include/query.hpp"
+inline Trace traceWorld(const World& world, const Ray& ray, double reach = 96) {
+    const Ray validated = makeRay(ray.origin, ray.direction);
+    for (int i = 0; i < 3; ++i) {
+        if (std::abs(ray.direction[i] - validated.direction[i]) > epsilon) {
+            throw std::out_of_range("normalized direction");
+        }
+    }
+    if (!std::isfinite(reach) || reach <= 0 || reach > 96) {
+        throw std::out_of_range("reach (0,96]");
+    }
+    Trace result;
+    const auto interval = clipBox(ray, {-1024, 0, -1024}, {1024, 16, 1024}, reach);
+    if (!interval) {
+        return result;
+    }
+    Cell cell{};
+    Cell step{};
+    Vector tMax{INFINITY, INFINITY, INFINITY};
+    Vector tDelta{INFINITY, INFINITY, INFINITY};
+    for (int i = 0; i < 3; ++i) {
+        const double d = ray.direction[i];
+        double p = ray.origin[i] + interval->enter * d;
+        const double nearest = std::round(p);
+        if (d != 0 && std::abs(p - nearest) <= epsilon * std::abs(d)) {
+            p = nearest;
+        }
+        cell[i] = static_cast<int>(std::floor(p));
+        if (d < 0 && p == std::floor(p)) {
+            --cell[i];
+        }
+        if (d != 0) {
+            step[i] = 1;
+            if (d < 0) {
+                step[i] = -1;
+            }
+            int boundary = cell[i];
+            if (d > 0) {
+                ++boundary;
+            }
+            tMax[i] = (boundary - ray.origin[i]) / d;
+            tDelta[i] = 1 / std::abs(d);
+        }
+    }
+    const auto first = clipBox(ray, {static_cast<double>(cell[0]), static_cast<double>(cell[1]), static_cast<double>(cell[2])}, {static_cast<double>(cell[0] + 1), static_cast<double>(cell[1] + 1), static_cast<double>(cell[2] + 1)}, reach);
+    Cell normal = interval->normal;
+    if (first) {
+        normal = first->normal;
+    }
+    double t = interval->enter;
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        if (cell[0] < -1024 || cell[0] >= 1024 || cell[1] < 0 || cell[1] >= 16 || cell[2] < -1024 || cell[2] >= 1024) {
+            return result;
+        }
+        const double next = std::min({tMax[0], tMax[1], tMax[2]});
+        const double exit = std::min(next, interval->exit);
+        if (exit - t > epsilon) {
+            result.path.push_back(cell);
+            const int value = residentBlock(world, cell);
+            if (value < 0) {
+                result.blocked = true;
+                return result;
+            }
+            if (value > 0) {
+                result.hit = Hit{cell, normal, t};
+                return result;
+            }
+        }
+        if (next >= interval->exit - epsilon) {
+            return result;
+        }
+        normal = {};
+        bool chosen = false;
+        for (int i = 0; i < 3; ++i) {
+            if (tMax[i] <= next + epsilon) {
+                cell[i] += step[i];
+                tMax[i] += tDelta[i];
+                if (!chosen) {
+                    normal[i] = -step[i];
+                    chosen = true;
+                }
+            }
+        }
+        t = std::max(t, next);
+    }
+    throw std::runtime_error("DDA exceeded 256 iterations");
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_3, tải 9 chunk rồi ngắm hai phía biên −16, 0, 16. Viền vàng là hit, xanh lá là ô có thể đặt, đường xanh lam nối tâm các cell đã thăm để đọc đường đi; đó là debug overlay, không phải tia chính xác trong cell. Tối đa 256 iterations vì reach≤96 với direction normalized; nếu vượt, code báo lỗi thay vì chạy vô hạn.
+
+```bash title="Terminal — checkpoint 03"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_3 --parallel 2
+./build/Debug/project_64_checkpoint_3.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi −1 của residentBlock thành 0. Từ vùng chưa tải, ray sẽ đi xuyên tới một chunk đã có ở phía sau; thao tác như vậy không còn dựa trên dữ liệu đầy đủ.
+2. Ở tie chỉ tăng một trục rồi ghi visit có độ dài zero. Ray chéo có thể chọn ô bên cạnh chỉ bị chạm góc. So với oracle quét từng AABB để thấy sai.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+DDA khớp cell/normal/t với oracle ở ray axis, chéo, camera và tọa độ âm. Signed zero không sinh NaN; origin trong block cho t=0/normal zero. Unknown chặn mà không làm tăng resident. Không sửa dữ liệu khi chỉ ngắm.
+
+## Bài tập mở rộng
+
+Thử ray từ (−1,2.5,−1) theo (1,0,1) trên fixture hai block chéo. Đọc path và giải thích vì sao normal tại tie chọn X là một quy ước, không phải normal hình học duy nhất.
+
+Tiếp theo: [Phá, đặt và chọn vật liệu](/projects/voxel-sandbox/04-pha-dat-va-thanh-vat-lieu).
+

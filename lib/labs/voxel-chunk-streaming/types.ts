@@ -1,0 +1,25 @@
+import type { Key, Player } from "./coordinates.ts";
+import type { Entry, ChunkGenerator } from "./data.ts";
+export type Job = { kind: "load" | "unload"; key: Key; priority: number };
+export type BatchTrace = { tick: number; jobs: Job[] };
+export type World = {
+  stage: number;
+  player: Player;
+  radius: number;
+  budget: number;
+  chunks: Map<string, Entry>;
+  pending: Job[];
+  batches: BatchTrace[];
+  cancelledJobs: Job[];
+  loads: number;
+  unloads: number;
+  rebuilds: number;
+  ticks: number;
+  cancelled: number;
+  lastJobs: number;
+  lastMeshes: number;
+  lastBudget: number;
+  peak: number;
+  frameDirty: boolean;
+  generate: ChunkGenerator;
+};

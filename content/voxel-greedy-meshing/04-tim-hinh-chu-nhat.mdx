@@ -1,0 +1,127 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mở rộng hình chữ nhật rồi xóa phần đã dùng
+
+## Vấn đề cần giải quyết
+
+Ở bài trước, ta đã biết những mặt nào được phép gộp. Bây giờ hãy chọn ô sáng đầu tiên trong mask và tìm một hình chữ nhật chỉ chứa các mặt cùng material. Sau khi ghi lại hình chữ nhật đó, ta xóa phần đã dùng rồi tìm ô tiếp theo. Chỗ cần cẩn thận là mở rộng xuống hàng dưới: ô đầu hàng hợp lệ chưa có nghĩa cả hàng đều hợp lệ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Duyệt v từ trên xuống, u từ trái qua phải. Từ seed `(u,v)`, tăng width hết mức trên hàng hiện tại, sau đó tăng height khi **mọi ô** của hàng mới cùng material. Diện tích là $w\times h$. Xóa đúng vùng đó để seed sau không dùng lại.
+
+Width trước height tạo kết quả tái lập, không cam kết ít quad nhất. Chữ L có hàng đầu hai ô, hàng sau một ô sẽ cho rectangle đầu 2×1, không phải 1×2. Thứ tự khác có thể chia khác mà vẫn giữ đúng bề mặt.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="greedy61-4" />
+
+### Thử làm bằng tay trên một vùng 4×4
+
+Giả sử góc trên trái của mask có dữ liệu dưới đây; các ô còn lại trong mask 16×16 đều trống. `S` là Stone (ID 3), `G` là Grass (ID 1), dấu `.` là ô không có mặt. Cột là u, hàng là v.
+
+```text title="Bốn hàng đầu của mask"
+        u=0  1  2  3
+v=0      S  S  G  .
+v=1      S  S  G  .
+v=2      S  .  G  G
+v=3      .  .  .  G
+```
+
+Ô bắt đầu, hay **seed**, là (0,0). Ta nhận ô Stone ngay bên phải nên width tăng từ 1 lên 2. Ô (2,0) là Grass: dừng ở width=2, không gộp hai material khác nhau.
+
+Tiếp theo, kiểm hai ô của hàng v=1: cả hai đều là Stone nên height tăng lên 2. Sang hàng v=2, ô (0,2) vẫn là Stone nhưng ô (1,2) trống. Vì vậy không nhận cả hàng này. Kết quả đầu tiên là rectangle `(u=0,v=0,w=2,h=2)`, diện tích 4; xóa đúng bốn ô đó rồi tiếp tục quét.
+
+| Lần | Seed (u,v) | Material | Width × height | Vì sao dừng |
+| --- | --- | --- | --- | --- |
+| 1 | (0,0) | Stone | 2×2 | Bên phải khác material; hàng dưới có lỗ ở (1,2) |
+| 2 | (2,0) | Grass | 1×3 | Bên phải trống; ô (2,3) trống |
+| 3 | (0,2) | Stone | 1×1 | Bên phải và hàng dưới đều trống |
+| 4 | (3,2) | Grass | 1×2 | Bên phải và hàng dưới đều trống |
+
+Tổng diện tích là 4+3+1+2=10, bằng số ô có mặt ban đầu. Bấm **Nạp ví dụ mask 4×4** để đưa đúng fixture này vào Canvas: hướng +Y, plane=16, lớp y=15. Những ô ngoài vùng 4×4 đều rỗng. Native có cùng dữ liệu ở preset số 8, chọn bằng P. Ô viền xanh ngọc đánh dấu seed; các ô viền đỏ chỉ nơi phép mở rộng bị từ chối. Bài này giải thích rectangle đầu tiên; đến bài 07, thông tin sẽ đi theo từng bước playback.
+
+## Viết code từng bước
+
+### Bước 1 — Mở chiều rộng từ seed
+
+extractRectangles nhận Mask bằng giá trị. Xóa bản sao không phá mask gốc của inspector. Air bỏ qua; width bắt đầu bằng 1 vì seed đã hợp lệ.
+
+```cpp title="include/rectangles.hpp"
+int width = 1;
+while (u + width < side) {
+    ++comparisons;
+    if (!sameFace(mask[v * side + u + width], material)) {
+        break;
+    }
+    ++width;
+}
+```
+
+
+### Bước 2 — Kiểm cả hàng trước khi tăng height
+
+matches chỉ đúng khi toàn bộ đoạn rộng width ở hàng mới cùng khóa. Một ô khác là dừng. Không thu hẹp width giữa chừng: đây là thuật toán width-first đã chọn.
+
+```cpp title="include/rectangles.hpp"
+int height = 1;
+while (v + height < side) {
+    bool matches = true;
+    for (int du = 0; du < width; ++du) {
+        ++comparisons;
+        if (!sameFace(mask[(v + height) * side + u + du], material)) {
+            matches = false;
+            break;
+        }
+    }
+    if (!matches) {
+        break;
+    }
+    ++height;
+}
+```
+
+
+### Bước 3 — Ghi kết quả rồi xóa vùng phủ
+
+Mỗi rectangle giữ vị trí/kích thước/hướng/plane/material. Xóa đúng w×h ô. Mỗi rectangle loại ít nhất một ô, mask chỉ có 256 ô, nên thuật toán hữu hạn. Canvas bài này hiện toàn bộ viền; chưa có playback.
+
+```cpp title="include/rectangles.hpp"
+rectangles.push_back({face, plane, u, v, width, height, material});
+// Remove exactly the covered rectangle before scanning the next seed.
+for (int dv = 0; dv < height; ++dv) {
+    for (int du = 0; du < width; ++du) {
+        mask[(v + dv) * side + u + du] = Block::Air;
+    }
+}
+```
+
+
+## Ghép các phần lại
+
+Bắt đầu từ checkpoint trước, đối chiếu các file vừa sửa rồi chạy snapshot của bài này. Mỗi snapshot chứa đủ source và build độc lập, không liên kết ngược đến module khác. Phần mã hoàn chỉnh dưới bài cho phép kiểm toàn bộ file thay vì ghép các mảnh bằng trí nhớ.
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_61_checkpoint_4 --parallel 2
+.\build\Debug\project_61_checkpoint_4.exe
+```
+
+Windows/Visual Studio dùng đường dẫn trên. Với generator single-config, đặt CMAKE_BUILD_TYPE=Debug và chạy executable trực tiếp trong build. Nhãn native dùng ASCII; giải thích tiếng Việt nằm trong bài và Canvas.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ kiểm ô đầu hàng khi tăng height: mask có lỗ giữa hàng sẽ bị rectangle phủ kín lỗ.
+2. Bỏ phần xóa vùng đã dùng: seed sau tạo rectangle chồng lên kết quả trước. Tổng diện tích lớn hơn số ô sáng.
+
+Chỉ sửa trên bản thử riêng rồi hoàn tác thí nghiệm trước khi đi tiếp; code tải về là bản đúng.
+
+## Tự kiểm tra kết quả
+
+Full mask cùng material thành một rectangle 16×16; mask rỗng không sinh rectangle. Tường sọc không có viền qua ranh giới màu. Mask gốc không đổi sau extractRectangles.
+
+## Bài tập mở rộng
+
+Đổi ô (1,2) trong ví dụ thành Stone. Rectangle đầu tiên thay đổi thế nào? Tự dự đoán toàn bộ danh sách trước khi chạy test, rồi kiểm lại tổng diện tích và việc không có hai rectangle phủ cùng một ô.
+
+Tham khảo cách quy meshing 3D về các lát 2D trong [bài viết gốc của Mikola Lysenko](https://0fps.net/2012/06/30/meshing-in-a-minecraft-game/). Bản cài đặt ở đây giữ width-first và quy ước material đã nêu.
+
+Tiếp theo: [Đưa rectangle trở lại không gian 3D](/projects/voxel-greedy-meshing/05-tu-rectangle-den-quad).
+

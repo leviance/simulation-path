@@ -1,0 +1,125 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo slider để thay đổi trọng lực
+
+## Vấn đề cần giải quyết
+
+Nút bấm phù hợp với một lệnh rời rạc. Gravity là một giá trị liên tục: nếu chỉ có nút tăng/giảm, rất khó thử nhanh nhiều mức. Bài này thêm thanh trượt và nối nó trực tiếp với Model.
+
+Bắt đầu từ checkpoint 3. Panel đã có button hoạt động; phần dưới chúng được chừa cho slider. Ta tiếp tục dùng hot/active/focus, không tạo một cơ chế giữ chuột thứ hai.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thanh rộng 224, bắt đầu x=688 và biểu diễn miền gravity 0..1200. Với vị trí chuột x, trước hết tính phần đã đi trên thanh rồi đổi sang giá trị:
+
+$$
+t=\frac{x-688}{224},\qquad g=\operatorname{clamp}(1200t,0,1200).
+$$
+
+Khi nhấn giữa thanh, gravity=600. Khi kéo quá hai đầu, giá trị dừng ở 0 hoặc 1200. Hit-test vẫn half-open: điểm x=912 không bắt đầu một gesture mới, nhưng một gesture đã giữ slider có thể kéo tới x=912 và đạt 1200. Phân biệt vùng nhận lần nhấn với miền giá trị trong lúc kéo.
+
+Đổi gravity không tự reset vị trí/vận tốc. Bóng đang bay vẫn giữ vận tốc đó, chỉ những bước sau chịu gia tốc mới. Gravity = 0 vì thế không đồng nghĩa bóng đứng yên; nếu muốn bắt đầu từ nghỉ, bấm Reset.
+
+<InteractiveLab demo="simulator-controls" mode="controls65-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt một cửa vào duy nhất cho giá trị gravity
+
+setGravity loại giá trị không hữu hạn rồi clamp về 0..1200. Chuột, bàn phím và control HTML đều đi qua quy tắc này. Không clamp ở phần vẽ rồi để Model chứa số sai, vì vật lý sẽ đọc dữ liệu sai trước khi bạn nhìn thấy nó.
+
+```cpp title="include/simulation.hpp"
+inline void setGravity(Model& model, double value) {
+    if (!std::isfinite(value)) {
+        return;
+    }
+
+    model.gravity = std::clamp(value, 0.0, 1200.0);
+}
+```
+
+### Bước 2 — Đổi X của chuột thành giá trị trên thanh
+
+dragGravity chỉ biết công thức mapping. Tọa độ Y dùng để quyết định có nhận lần down hay không; sau khi active=Gravity, kéo lên trên hoặc xuống dưới không làm mất gesture. knob được vẽ ở slider.x + gravity/1200 * slider.width, chính là phép đổi ngược.
+
+```cpp title="include/controls.hpp"
+inline void dragGravity(Model& model, double x) {
+    const double t = (x - gravitySlider.x) / gravitySlider.width;
+    setGravity(model, t * 1200.0);
+}
+```
+
+### Bước 3 — Cập nhật trong motion khi slider còn active
+
+pointerDown cập nhật giá trị ngay tại điểm nhấn, để bấm trên thanh đưa knob tới đó. Trong pointerMove, hot có thể thành None hoặc Reset, nhưng active vẫn Gravity nên dragGravity vẫn chạy. activate không có action riêng cho Gravity: ta đổi giá trị ngay trong gesture, không đợi một click hợp lệ như button.
+
+```cpp title="include/controls.hpp"
+inline void pointerMove(Model& model, Ui& ui, Point point) {
+    ui.hot = hitTest(point);
+    if (ui.active == Control::Gravity) {
+        dragGravity(model, point.x);
+    }
+}
+```
+
+### Bước 4 — Nhận cả tọa độ ở lần thả cuối
+
+Event up có thể mang tọa độ mới mà chương trình chưa nhận qua motion, chẳng hạn khi các event motion bị gộp. Vì vậy, nếu control đang giữ là Gravity, pointerUp phải đưa point.x qua dragGravity **trước khi** xóa active. Sau đó mới chạy quy tắc button vốn có.
+
+```cpp title="include/controls.hpp"
+inline void pointerUp(Model& model, Ui& ui, Point point) {
+    const Control pressed = ui.active;
+    // Event up có thể mang tọa độ mới dù motion cuối đã bị gộp hoặc bỏ qua.
+    if (pressed == Control::Gravity) {
+        dragGravity(model, point.x);
+    }
+    ui.active = Control::None;
+    ui.hot = hitTest(point);
+
+    // Một button chỉ chạy khi bắt đầu nhấn và kết thúc thả trên chính nó.
+    if (pressed != Control::None && pressed == ui.hot) {
+        activate(model, pressed);
+    }
+}
+```
+
+Ví dụ chỉ có down tại x=800 rồi up tại x=1200, không có motion ở giữa: gravity vẫn phải đạt 1200. Up tại x=−100 thì về 0. Ngược lại, cancel chỉ kết thúc gesture, không có tọa độ cuối để áp thêm và cũng không hoàn tác những giá trị đã kéo trước đó. Đây là hai đường kết thúc khác nhau, dù cả hai đều giải phóng active.
+
+## Ghép các phần lại
+
+Trong hitTest, thêm kiểm gravitySlider sau hai button. Trong draw, tô vùng nhận chuột 40 pixel cao, track mảnh ở giữa và knob 10 pixel rộng. Vùng nhận rộng hơn track giúp thao tác dễ hơn; cả hai vẫn dùng cùng hệ tọa độ.
+
+```cpp title="include/view.hpp"
+    fill(renderer, gravitySlider, 38, 50, 72);
+    const double knobX = gravitySlider.x + model.gravity / 1200.0 * gravitySlider.width;
+    fill(renderer, {gravitySlider.x, 250.0, gravitySlider.width, 4.0}, 111, 132, 164);
+    fill(renderer, {knobX - 5.0, 238.0, 10.0, 28.0}, 89, 225, 190);
+```
+
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_65_checkpoint_4 --parallel 2
+./build/Debug/project_65_checkpoint_4.exe
+```
+
+Pause cảnh, kéo slider tới giữa, Reset rồi nhấn N: bóng vẫn ở trạng thái Pause, gravity=600 và chỉ một bước vật lý vừa được thực hiện. Resume để nhìn ảnh hưởng rõ hơn. Bài này không làm tròn gravity trong Model; nhãn chỉ làm tròn khi hiển thị.
+
+Canvas bên trên có preset 0/480/1200 để lặp lại thí nghiệm; preset cố ý Pause và reset cả cảnh. Đừng nhầm nó với Reset thông thường vốn giữ Pause và gravity.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ cập nhật khi hot=Gravity. Kéo ra ngoài thanh sẽ làm giá trị ngừng thay đổi dù người dùng vẫn đang giữ chuột. Điều kiện đúng phải là active=Gravity.
+2. Quên trừ slider.x trước khi chia chiều rộng. Nhấn đầu trái không ra 0, giá trị thường bị clamp lên tối đa ngay từ đầu.
+3. Cho gravity về 0 rồi kết luận bóng phải đứng lại. Vận tốc đã có không tự biến mất khi gia tốc bằng 0; Reset trước khi thử trạng thái nghỉ.
+4. Clamp knob khi vẽ nhưng không clamp dữ liệu. Nhãn trông có vẻ đúng, song gravity ngoài miền làm bóng nhảy bất thường.
+
+## Tự kiểm tra kết quả
+
+Kiểm gravity ở x=688/800/912 trong khi đang giữ:0/600/1200. Kéo xa bên trái/phải vẫn nằm trong miền. Chuyển cửa sổ giữa gesture phải hủy active, không tiếp tục kéo khi quay lại. UI còn hoạt động khi Pause.
+
+Thêm test chỉ gửi down/up mà không gửi motion: down (800,252), up (1200,252) cho gravity=1200; lặp lại với up (−100,252) cho gravity=0. Sau cancel, một up đến muộn không được đổi gravity nữa. Đây là test xử lý input, chưa thay thế việc kiểm capture trong trình duyệt hoặc cửa sổ SDL.
+
+Đặt gravity khác mặc định, Reset và xác nhận tham số không mất. Dùng cùng điểm nhấn ở nhiều lần chạy để có thí nghiệm lặp lại được; không so hai quỹ đạo có vị trí/vận tốc ban đầu khác nhau rồi quy lỗi cho slider.
+
+## Bài tập mở rộng
+
+Thêm một nhãn hiển thị t trong 0..1 và đối chiếu t=0.25 với gravity 300. Chưa thêm slider thứ hai vì bước tiếp theo cần hoàn thiện đường bàn phím cho control hiện có. Học [bài 05 — focus và bàn phím](/projects/simulator-controls/05-dieu-khien-bang-ban-phim).

@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa rectangle trở lại không gian 3D
+
+## Vấn đề cần giải quyết
+
+Rectangle đang ở bảng 2D. Ta phải đưa nó về đúng plane trong world rồi gửi triangle cho rasterizer. appendQuad đã có trong starter để vẽ mặt đơn vị; bài này dùng nó với width/height lớn hơn 1, tích hợp trước riêng +Y.
+
+## Hiểu ý tưởng trước khi viết code
+
+Góc đầu P có axis=plane, uAxis=u, vAxis=v. Bốn đỉnh là $P$, $P+wU$, $P+wU+hV$, $P+hV$. Hướng dương dùng 0-1-2 / 0-2-3; hướng âm đảo thứ tự. Không nhân plane với width hoặc cộng width vào cả ba tọa độ.
+
+Một quad luôn gồm hai triangle dù phủ 1 hay 256 mặt đơn vị. Checkpoint 05 chỉ gộp +Y: full chunk còn 1280 quad ở năm hướng kia và một quad +Y, tổng 1281. Chưa chờ kết quả 6 ở bài này.
+
+Thử tính trước một quad cụ thể: `face=2 (+Y), plane=16, u=2, v=4, width=3, height=5`. Vì u=Z và v=X, bốn góc theo thứ tự là `(4,16,2)`, `(4,16,5)`, `(9,16,5)`, `(9,16,2)`. Chỉ Z tăng theo width, chỉ X tăng theo height, còn Y luôn bằng 16. Hai triangle là góc 0–1–2 và 0–2–3. Tích có hướng của hai cạnh đầu trỏ lên +Y, đúng hướng mặt cần vẽ.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="greedy61-5" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt bốn góc trên plane
+
+Giữ axis không đổi cho mọi góc. Vertex biên được bằng 16: đó là mép chunk, không phải chỉ số block. Array trung gian chọn axis giúp tránh sáu bộ công thức.
+
+```cpp title="include/quad.hpp"
+const int axis = r.face / 2;
+const int uAxis = (axis + 1) % 3;
+const int vAxis = (axis + 2) % 3;
+std::array<double, 3> p{};
+p[axis] = r.plane;
+p[uAxis] = r.u;
+p[vAxis] = r.v;
+std::array<std::array<double, 3>, 4> corners{{p, p, p, p}};
+corners[1][uAxis] += r.width;
+corners[2][uAxis] += r.width;
+corners[2][vAxis] += r.height;
+corners[3][vAxis] += r.height;
+```
+
+
+### Bước 2 — Chọn thứ tự triangle hướng ra
+
+Đảo thứ tự cho hướng âm. CPU rasterizer vẽ cả hai mặt nên winding sai có thể vẫn hiện bình thường; bài cuối kiểm cross product độc lập.
+
+```cpp title="include/quad.hpp"
+std::array<int, 6> order{{0, 1, 2, 0, 2, 3}};
+if (r.face % 2 != 0) {
+    order = {{0, 3, 2, 0, 2, 1}};
+}
+```
+
+
+### Bước 3 — Gắn quad lớn vào mesh
+
+buildGreedy cộng unitFaces từ mask trước khi gộp. Các rectangle được lưu rồi đưa qua appendQuad. Nhấn M so baseline/greedy tại cùng camera; +Y không còn hàng trăm quad nhỏ. Các hướng còn lại vẫn giữ mặt đơn vị đúng hình.
+
+Điểm tích hợp mới nằm ở nhánh chọn hướng này. Các hướng khác trong checkpoint 05 vẫn chuyển mỗi ô sáng thành rectangle 1×1; không bỏ chúng khỏi mesh.
+
+```cpp title="include/mesh.hpp"
+if (face == 2) {
+    rectangles = extractRectangles(mask, face, plane, built.comparisons);
+}
+```
+
+```cpp title="include/mesh.hpp"
+for (const Rectangle& r : rectangles) {
+    built.quads.push_back(r);
+    appendQuad(built.mesh, r);
+}
+```
+
+
+## Ghép các phần lại
+
+Bắt đầu từ checkpoint trước, đối chiếu các file vừa sửa rồi chạy snapshot của bài này. Mỗi snapshot chứa đủ source và build độc lập, không liên kết ngược đến module khác. Phần mã hoàn chỉnh dưới bài cho phép kiểm toàn bộ file thay vì ghép các mảnh bằng trí nhớ.
+
+```bash title="Terminal — checkpoint 5"
+cmake --build build --config Debug --target project_61_checkpoint_5 --parallel 2
+.\build\Debug\project_61_checkpoint_5.exe
+```
+
+Windows/Visual Studio dùng đường dẫn trên. Với generator single-config, đặt CMAKE_BUILD_TYPE=Debug và chạy executable trực tiếp trong build. Nhãn native dùng ASCII; giải thích tiếng Việt nằm trong bài và Canvas.
+
+## Thử làm sai để hiểu đúng
+
+1. Cộng width vào axis thay vì uAxis: quad lệch khỏi plane, trông như tấm vách bị kéo dài.
+2. Dùng winding dương cho mặt âm: CPU vẫn hiện hình nhưng test normal phải thất bại. Screenshot không đủ chứng minh winding.
+
+Chỉ sửa trên bản thử riêng rồi hoàn tác thí nghiệm trước khi đi tiếp; code tải về là bản đúng.
+
+## Tự kiểm tra kết quả
+
+Checkpoint 05 full có unitFaces=1536, quads=1281, triangles=2562. M không đổi silhouette. Mask +Y vẫn phủ 256 ô dù chỉ sinh một quad.
+
+## Bài tập mở rộng
+
+Tính bốn đỉnh +Y với plane=16, u=2, v=4, width=3, height=5. Nhớ uAxis=Z, vAxis=X; mọi đỉnh phải có y=16.
+
+Tiếp theo: [Quét đủ sáu hướng, kiểm biên và lớp cắt](/projects/voxel-greedy-meshing/06-quet-du-sau-huong).
+

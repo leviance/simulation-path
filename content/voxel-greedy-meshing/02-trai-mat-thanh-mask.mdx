@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Trải một hướng mặt thành bảng 2D
+
+## Vấn đề cần giải quyết
+
+Ta muốn gộp mặt liền nhau nhưng bề mặt nằm trong 3D. Làm sao tìm rectangle mà không viết sáu thuật toán? Tạm chỉ nhìn các mặt +Y ở y=16: đó là một bảng 16×16.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi mask chỉ chứa **một hướng, tại một plane**. X=0, Y=1, Z=2; `axis=face/2`, `uAxis=(axis+1)%3`, `vAxis=(axis+2)%3`. +Y dùng u=Z, v=X. Quy ước này giữ U×V hướng dương cho winding bài 05.
+
+Plane là tọa độ mặt, không phải chỉ số block. +X tại plane=8 có source x=7, neighbor x=8; −X cùng plane có source x=8, neighbor x=7. Có 16 lớp block nhưng **17 vị trí plane**, gồm 0 và 16. Ô mask tối nghĩa là không có mặt theo hướng đang xét, không nhất thiết world cell là Air.
+
+Giữ bảng sau bên cạnh khi đọc code. Hai hướng đối nhau dùng cùng u/v, chỉ khác phía chứa block nguồn và thứ tự vertex:
+
+| Face | Trục giữ bằng plane | u | v | Tọa độ source theo trục chính |
+| --- | --- | --- | --- | --- |
+| +X (0) | X | Y | Z | plane−1 |
+| −X (1) | X | Y | Z | plane |
+| +Y (2) | Y | Z | X | plane−1 |
+| −Y (3) | Y | Z | X | plane |
+| +Z (4) | Z | X | Y | plane−1 |
+| −Z (5) | Z | X | Y | plane |
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="greedy61-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Chọn hướng và hai trục trong mặt
+
+Sáu hướng theo thứ tự +X, −X, +Y, −Y, +Z, −Z. Mỗi cặp chung axis; dấu chọn bên source. makeMask từ chối tham số ngoài miền trước vòng lặp.
+
+```cpp title="include/mask.hpp"
+const int axis = face / 2;
+const int uAxis = (axis + 1) % 3;
+const int vAxis = (axis + 2) % 3;
+int sign = -1;
+if (face % 2 == 0) {
+    sign = 1;
+}
+```
+
+
+### Bước 2 — Tìm hai block nằm hai bên plane
+
+Điền u/v vào hai trục còn lại. Hướng dương lùi source một ô; hướng âm không lùi. Neighbor tiến một ô theo sign. Viết tay cả +X/−X tại plane=8 để thấy hai phía đối nhau.
+
+```cpp title="include/mask.hpp"
+std::array<int, 3> source{};
+source[axis] = plane;
+if (sign > 0) {
+    --source[axis];
+}
+source[uAxis] = u;
+source[vAxis] = v;
+auto neighbor = source;
+neighbor[axis] += sign;
+```
+
+
+### Bước 3 — Chỉ điền mặt ngoài
+
+Ô có mặt giữ Block ID; ô không có mặt giữ Air từ khởi tạo. activeBlock xử lý biên và cut. Không clamp source về biên vì sẽ tự tạo mặt giả. F và [/] trong native chọn bảng cần đọc.
+
+```cpp title="include/mask.hpp"
+const Block material = activeBlock(chunk, source, slice);
+if (material != Block::Air && activeBlock(chunk, neighbor, slice) == Block::Air) {
+    mask[v * side + u] = material;
+}
+```
+
+
+## Ghép các phần lại
+
+Bắt đầu từ checkpoint trước, đối chiếu các file vừa sửa rồi chạy snapshot của bài này. Mỗi snapshot chứa đủ source và build độc lập, không liên kết ngược đến module khác. Phần mã hoàn chỉnh dưới bài cho phép kiểm toàn bộ file thay vì ghép các mảnh bằng trí nhớ.
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_61_checkpoint_2 --parallel 2
+.\build\Debug\project_61_checkpoint_2.exe
+```
+
+Windows/Visual Studio dùng đường dẫn trên. Với generator single-config, đặt CMAKE_BUILD_TYPE=Debug và chạy executable trực tiếp trong build. Nhãn native dùng ASCII; giải thích tiếng Việt nằm trong bài và Canvas.
+
+## Thử làm sai để hiểu đúng
+
+1. Quét `plane<16` thay vì `plane<=16`: mất mặt biên dương cuối. Giữ đủ plane 0 và 16.
+2. Quên lùi source khi sign dương: mask +Y/plane=16 rỗng. Source phải y=15, neighbor y=16.
+
+Chỉ sửa trên bản thử riêng rồi hoàn tác thí nghiệm trước khi đi tiếp; code tải về là bản đúng.
+
+## Tự kiểm tra kết quả
+
+Full chunk +Y/16 có 256 ô sáng; +Y/8 rỗng; −Y/0 có 256 ô sáng. Toàn Air cho mask rỗng ở mọi hướng. Thay plane chỉ đổi inspector, không cắt world; hình 3D vẫn dùng baseline.
+
+## Bài tập mở rộng
+
+Với block (7,7,7), liệt kê plane sáu mặt rồi kiểm bằng Canvas. Giải thích vì sao +Z có u=X, v=Y.
+
+Tiếp theo: [Khi nào hai mặt được gộp?](/projects/voxel-greedy-meshing/03-khi-nao-duoc-gop).
+

@@ -1,0 +1,153 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xuất và nhập một bản lưu có thể kiểm tra
+
+## Vấn đề cần giải quyết
+
+Session delta giúp công trình còn khi đi xa, nhưng đóng chương trình vẫn mất toàn bộ RAM. Ta cần một bản lưu đơn giản có thể đọc bằng mắt, chuyển giữa native và Canvas, và từ chối input hỏng mà không làm mất world đang mở.
+
+## Hiểu ý tưởng trước khi viết code
+
+VXL1 chỉ lưu version, seed/scale/octaves và các delta khác nền. Không lưu mesh, resident hoặc history vì chúng là cache/trạng thái phiên. Output sắp record theo x,y,z và dùng LF; parser chấp nhận whitespace quy định nhưng không chấp nhận số thập phân, duplicate, record dư hoặc delta bằng nền. Giới hạn ASCII 32768 byte và 512 record trước khi tách record.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-8" />
+
+### Đọc một bản lưu trước khi viết parser
+
+Đây là một fixture hợp lệ với generator của project. Có hai block bị phá gần gốc và một block Stone được đặt ở trên cao:
+
+```text title="Một bản VXL1 có ba chỉnh sửa"
+VXL1 42 32 3
+3
+-1 0 -1 0
+0 0 0 0
+16 14 0 3
+```
+
+Dòng đầu lần lượt là version `VXL1`, seed 42, scale 32 và 3 octave. Dòng thứ hai là **số record**, không phải số chunk. Mỗi dòng còn lại có dạng `worldX worldY worldZ material`:
+
+| Cell world | ID | Ý nghĩa |
+| --- | --- | --- |
+| (−1,0,−1) | 0 — Air | Ghi nhớ việc phá block nền; thuộc chunk (−1,−1) |
+| (0,0,0) | 0 — Air | Phá một block nền khác; không được bỏ qua ID 0 |
+| (16,14,0) | 3 — Stone | Đặt Stone tại nơi generator ban đầu trả Air; thuộc chunk (1,0) |
+
+Với giới hạn 512 record, parser chỉ cần nhận tối đa 5+4×512=2053 token: bốn token header, một token count và bốn token mỗi record. Đây là lý do của con số trong code, không phải một hằng số chọn tùy ý.
+
+Thử đổi material của record cuối thành 9. Parser phải từ chối **toàn bộ** bản lưu; hai record Air trước đó không được áp một phần lên phiên đang mở. Để làm được điều đó, ta đọc và kiểm tra vào state tạm, rồi mới thay World sau khi mọi record đều hợp lệ.
+
+## Viết code từng bước
+
+### Bước 1 — Xuất một biểu diễn canonical
+
+`std::map<Cell,Block>` đã sắp lexicographic theo x/y/z; TypeScript sắp cùng thứ tự. Mỗi dòng record có bốn số nguyên, kể cả ID 0. Cùng dữ liệu phải ra cùng byte để fixture C++/TS bắt sai khác thật.
+
+```cpp title="include/snapshot.hpp"
+inline std::string serialize(const World& world) {
+    std::ostringstream output;
+    output << "VXL1 " << world.config.seed << ' ' << world.config.scale << ' ' << world.config.octaves << '\n';
+    output << world.edits.size() << '\n';
+    for (const auto& [cell, material] : world.edits) {
+        output << cell[0] << ' ' << cell[1] << ' ' << cell[2] << ' ' << static_cast<int>(material) << '\n';
+    }
+    return output.str();
+}
+```
+
+### Bước 2 — Đọc số nguyên chặt chẽ
+
+from_chars cần tiêu thụ hết token và không overflow. Không chấp nhận 42x, +42 hoặc 1e2. TypeScript cũng kiểm regex decimal rồi kiểm miền. Không dùng parseInt một phần vì nó có thể im lặng nhận phần đầu của token hỏng.
+
+```cpp title="include/snapshot.hpp"
+inline int decimalInteger(const std::string& token) {
+    int value = 0;
+    const auto result = std::from_chars(token.data(), token.data() + token.size(), value);
+    if (result.ec != std::errc{} || result.ptr != token.data() + token.size()) {
+        throw std::runtime_error("decimal integer/overflow");
+    }
+    return value;
+}
+```
+
+### Bước 3 — Parse toàn bộ vào state tạm rồi mới thay phiên
+
+Kiểm header/config/count và từng cell/material, duplicate và redundant. Chỉ sau đó createWorld bằng config+delta mới và player hiện tại. UI mới swap world, history/cache cũ mất theo giao dịch. Nếu parse lỗi, caller giữ nguyên state đang dùng.
+
+```cpp title="include/snapshot.hpp"
+inline World importSnapshot(const World& current, const std::string& text) {
+    if (text.size() > 32768) {
+        throw std::runtime_error("snapshot <=32768 bytes");
+    }
+    for (const unsigned char c : text) {
+        if ((c < 32 && c != 9 && c != 10 && c != 13) || c > 126) {
+            throw std::runtime_error("ASCII snapshot");
+        }
+    }
+    std::istringstream input(text);
+    std::vector<std::string> tokens;
+    std::string token;
+    while (input >> token) {
+        tokens.push_back(token);
+        if (tokens.size() > 2053) {
+            throw std::runtime_error("too many tokens");
+        }
+    }
+    if (tokens.size() < 5 || tokens[0] != "VXL1") {
+        throw std::runtime_error("VXL1 header");
+    }
+    const int seed = decimalInteger(tokens[1]);
+    if (seed < 0) {
+        throw std::runtime_error("nonnegative seed");
+    }
+    const TerrainConfig config{static_cast<std::uint32_t>(seed), decimalInteger(tokens[2]), decimalInteger(tokens[3])};
+    validateConfig(config);
+    const int count = decimalInteger(tokens[4]);
+    if (count < 0 || count > 512 || tokens.size() != static_cast<std::size_t>(5 + count * 4)) {
+        throw std::runtime_error("delta count/trailing data");
+    }
+    World parsed;
+    parsed.config = config;
+    for (int i = 0; i < count; ++i) {
+        const std::size_t offset = 5 + static_cast<std::size_t>(i) * 4;
+        const Cell cell{decimalInteger(tokens[offset]), decimalInteger(tokens[offset + 1]), decimalInteger(tokens[offset + 2])};
+        validateCell(cell);
+        const int value = decimalInteger(tokens[offset + 3]);
+        if (value < 0 || value > 3 || parsed.edits.contains(cell) || static_cast<Block>(value) == baseBlock(parsed, cell)) {
+            throw std::runtime_error("invalid/redundant/duplicate delta");
+        }
+        parsed.edits.emplace(cell, static_cast<Block>(value));
+    }
+    // Chỉ trả state mới sau khi toàn bộ text hợp lệ. Caller mới thay world cũ.
+    return createWorld(config, parsed.edits, current.player);
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_8. Native F5 copy text vào clipboard, tự dán ra file để giữ lại; Shift+F9 đọc clipboard và thay phiên. SDL_GetClipboardText cần SDL_free, và cả hai API clipboard dùng trên main thread theo [SDL SetClipboardText](https://wiki.libsdl.org/SDL3/SDL_SetClipboardText) và [SDL GetClipboardText](https://wiki.libsdl.org/SDL3/SDL_GetClipboardText). Canvas xuất vào textarea, người dùng tự copy; nhập khi có edit cần chọn cho phép thay phiên. Không có autosave ngầm.
+
+```bash title="Terminal — checkpoint 08"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_8 --parallel 2
+./build/Debug/project_64_checkpoint_8.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Vừa đọc từng record vừa áp vào world hiện tại. Nếu record cuối sai, bạn đã phá một phần phiên cũ trước khi có cơ hội báo lỗi.
+2. Bỏ tombstone Air hoặc lưu toàn mesh trong snapshot. Trường hợp đầu làm block đã phá mọc lại; trường hợp sau đưa cache phụ thuộc thuật toán render vào định dạng dữ liệu world.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Fixture VXL1 chung khớp byte, import→export không đổi; CRLF hợp lệ được canonical thành LF. Thiếu/dư/trùng/redundant/overflow/config sai/ngoài miền/oversize đều reject trước mutation. Import chỉ bootstrap một chunk dưới player, queue tải phần còn lại.
+
+## Bài tập mở rộng
+
+Xuất một bản có ba record, cố ý làm hỏng record cuối và chứng minh checksum phiên đang mở không đổi. Nếu muốn đổi thuật toán terrain về sau, hãy nâng version hoặc có migration rõ ràng; VXL1 hiện gắn với generator của bài.
+
+Tiếp theo: [Hoàn thiện điều khiển và vòng đời tương tác](/projects/voxel-sandbox/09-hoan-thien-dieu-khien).
+

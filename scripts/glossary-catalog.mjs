@@ -23,6 +23,11 @@ export const glossarySources = [
   { file: "lib/glossary-voxel.ts", name: "voxelGlossaryTerms" },
   { file: "lib/glossary-voxel-faces.ts", name: "voxelFaceGlossaryTerms" },
   { file: "lib/glossary-voxel-picking.ts", name: "voxelPickingGlossaryTerms" },
+  { file: "lib/glossary-voxel-greedy.ts", name: "voxelGreedyGlossaryTerms" },
+  { file: "lib/glossary-voxel-streaming.ts", name: "voxelStreamingGlossaryTerms" },
+  { file: "lib/glossary-voxel-terrain.ts", name: "voxelTerrainGlossaryTerms" },
+  { file: "lib/glossary-voxel-sandbox.ts", name: "voxelSandboxGlossaryTerms" },
+  { file: "lib/glossary-ui-controls.ts", name: "uiControlGlossaryTerms" },
 ];
 
 export function assertGlossaryModules(files) {

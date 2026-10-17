@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cập nhật mesh và preview đúng lúc
+
+## Vấn đề cần giải quyết
+
+Sửa một cell mà dựng lại mọi mesh thì dễ viết nhưng tốn việc. Ngược lại, chỉ dựng mesh chunk chứa cell sẽ sai khi cell nằm ở biên: mặt của neighbor cũng vừa đổi trạng thái bị che hoặc lộ ra.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với editor một tầng X/Z, cell interior chỉ ảnh hưởng self. Ở x=0/15 thêm neighbor X tương ứng; ở z=0/15 thêm neighbor Z. Một cell góc tối đa ba Key, không cần chunk chéo. Gộp chúng vào set rồi flush trước frame, sau khi toàn bộ action trong batch đã sửa buffer.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Ghi đúng tập mesh bị ảnh hưởng
+
+Không quét cả world, cũng không thêm neighbor chéo. Nếu source chunk đang offline thì sửa delta không làm frontier resident đổi, nên không cần load/remesh chunk đó. Khi nó được load sau này, đường load/streaming đã xử lý neighbor.
+
+```cpp title="include/editing.hpp"
+inline void markEdit(World& world, Cell cell) {
+    const Key key{floorDiv(cell[0]), floorDiv(cell[2])};
+    if (!world.chunks.contains(key)) {
+        return;
+    }
+    world.dirty.insert(key);
+    const int x = cell[0] - key.x * side;
+    const int z = cell[2] - key.z * side;
+    if (x == 0) {
+        world.dirty.insert({key.x - 1, key.z});
+    }
+    if (x == 15) {
+        world.dirty.insert({key.x + 1, key.z});
+    }
+    if (z == 0) {
+        world.dirty.insert({key.x, key.z - 1});
+    }
+    if (z == 15) {
+        world.dirty.insert({key.x, key.z + 1});
+    }
+}
+```
+
+### Bước 2 — Dựng lại tập đã gộp và giữ counter đúng nghĩa
+
+Từ bài 06, keys chỉ là dirty set; nhiều cell trong một chunk vẫn rebuild một lần. rebuild dùng chung tăng lastMeshes của streaming, nên flush chụp/khôi phục counter lịch sử và ghi editRebuilds riêng. Nếu không tách, verifySchedule có thể báo vượt budget dù batch streaming không hề chạy thêm job.
+
+```cpp title="include/editing.hpp"
+inline int flushEdits(World& world) {
+    if (world.dirty.empty()) {
+        return 0;
+    }
+    const int historical = world.lastMeshes;
+    std::set<Key> keys = world.dirty;
+    int count = 0;
+    for (const Key key : keys) {
+        if (world.chunks.contains(key)) {
+            rebuild(world, key);
+            ++count;
+        }
+    }
+    world.lastMeshes = historical;
+    world.editRebuilds += count;
+    world.dirty.clear();
+    world.frameDirty = true;
+    return count;
+}
+```
+
+### Bước 3 — Hoàn tất geometry trước khi đưa ảnh mới ra
+
+Flush edit trước query/render. Query đọc blocks nên hai action liên tiếp vẫn đúng ngay khi mesh đang dirty; nhưng frame chỉ được công bố khi các mặt liên quan đã dựng lại. Aim-only không raster world; camera đổi không sinh lại terrain hoặc remesh.
+
+```cpp title="include/controller.hpp"
+inline bool refreshFrame(App& app) {
+    flushEdits(app.world);
+    refreshPick(app);
+    if (!app.world.frameDirty && !app.cameraDirty) {
+        return false;
+    }
+    const ViewVolume volume = cameraVolume(app.world, app.camera);
+    render(app.frame, sceneMesh(app.world), app.camera, true, volume.near, volume.far);
+    app.world.frameDirty = false;
+    app.cameraDirty = false;
+    ++app.rasters;
+    return true;
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_6. Sửa hai cell interior cùng chunk trước một lần refresh: phải chỉ thêm một edit rebuild. Sửa cell world (0,15,0) khi các neighbor resident: đúng ba mesh. So surface oracle sau flush để bắt cả mặt thiếu lẫn mặt thừa. Dù y=0/15, demo không streaming theo Y nên không có chunk neighbor trên/dưới.
+
+```bash title="Terminal — checkpoint 06"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_6 --parallel 2
+./build/Debug/project_64_checkpoint_6.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ thêm self vào dirty set. Phá block ở biên sẽ làm neighbor vẫn giữ mesh với mặt cũ; nhìn ở một góc camera có thể không thấy, oracle vẫn bắt được.
+2. Cộng các lần edit vào lastMeshes mà không tách khỏi lịch sử streaming. Thực hiện nhiều edit không pump rồi kiểm budget để thấy báo lỗi giả.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Interior một mesh, góc X/Z tối đa ba mesh; dirty Key trùng được gộp, lần flush thứ hai trả 0. lastMeshes của batch trước không đổi do edit. Idle không query/rebuild/raster; aim chỉ query, camera chỉ query+raster.
+
+## Bài tập mở rộng
+
+Thêm readout số cell đã sửa và số mesh thực sự dựng lại trong một batch. Không gọi cả hai là “số lần cập nhật”, vì đó là hai đại lượng khác nhau.
+
+Tiếp theo: [Undo và redo bằng địa chỉ world](/projects/voxel-sandbox/07-undo-redo-theo-toa-do-world).
+

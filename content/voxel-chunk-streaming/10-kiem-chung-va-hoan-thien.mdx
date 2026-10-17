@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng streaming và hoàn thiện world
+
+## Vấn đề cần giải quyết
+
+Cap đúng nhưng seam sai; hình đẹp nhưng job cũ vẫn chạy; hash đúng nhưng Entry không được giải phóng. Không có một bộ đếm nào chứng minh tất cả. Ta kiểm địa chỉ, lịch tải/gỡ, bề mặt global và cache bằng các phép thử riêng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Oracle tạo map global cell từ Block ID resident, kiểm sáu neighbor rồi ghi face key (world x,y,z,face,material). Nó không gọi worldBlock/makeWorldMask. Bung rectangle local, cộng Key*16 rồi so multiset đã sort để bắt cả mặt trùng và thiếu ở biên.
+
+Kiểm lịch sau từng tick, không chỉ sau drain: jobs≤lastBudget, meshes≤5×lastBudget, resident≤49, pending≤74. Player đứng yên phải settle trong tối đa 100 tick. Đổi setting không thay ý nghĩa batch lịch sử.
+
+Regeneration có fixture hash chung và so buffer trực tiếp; không persistence cho edit. Demo giới hạn player±512, một tầng chunk; không chứng minh world vô hạn thật, đa luồng hoặc hard real-time.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-10" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo đáp án từ global cell
+
+Oracle đọc storage thành solid map rồi xét sáu offset. Key dùng world, không local; hai mặt local giống nhau ở hai chunk khác nhau không được đánh đồng.
+
+```cpp title="include/oracle.hpp"
+using Cell = std::array<int, 3>;
+using FaceKey = std::array<int, 5>;
+std::map<Cell, Block> solid;
+// Oracle đi từ global cell, không gọi makeWorldMask hoặc worldBlock.
+for (const auto& [key, entry] : world.chunks) {
+    for (int y = 0; y < side; ++y) {
+        for (int z = 0; z < side; ++z) {
+            for (int x = 0; x < side; ++x) {
+                const Block material = entry.blocks[x + side * (z + side * y)];
+                if (material != Block::Air) {
+                    solid.emplace(Cell{x + key.x * side, y, z + key.z * side}, material);
+                }
+            }
+        }
+    }
+}
+```
+
+
+### Bước 2 — Đối chiếu bề mặt và giới hạn công việc
+
+Surface oracle so hướng/vật liệu và duplicate. verifySchedule chỉ sanity state hiện tại; hành trình, regeneration, seam, idle/camera và round-trip cần Node/CTest riêng.
+
+```cpp title="include/oracle.hpp"
+inline void verifySchedule(const World& world) {
+    // Kiểm giới hạn state hiện tại; không thay bộ test hành trình và surface.
+    if (world.chunks.size() > maxResident || world.pending.size() > 74 || world.lastJobs > world.lastBudget || world.lastMeshes > 5 * world.lastBudget) {
+        throw std::runtime_error("streaming work bound violated");
+    }
+    std::set<std::pair<bool, Key>> ids;
+    for (const Job& job : world.pending) {
+        if (!ids.insert({job.load, job.key}).second) {
+            throw std::runtime_error("duplicate job");
+        }
+    }
+}
+```
+
+```cpp title="include/oracle.hpp"
+std::sort(expected.begin(), expected.end());
+std::sort(actual.begin(), actual.end());
+if (expected != actual) {
+    throw std::runtime_error("global oriented surface mismatch");
+}
+```
+
+
+### Bước 3 — Build Debug/Release và chạy final
+
+CTest code thuần không tạo SDL window. Tối đa hai compiler; --smoke mở hidden và thoát một frame với deadline ngoài. Không benchmark hoặc drain vô hạn để chờ thuật toán lỗi tự xong.
+
+```bash title="Terminal — kiểm Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 10"
+cmake --build build --config Debug --target project_62_checkpoint_10 --parallel 2
+.\build\Debug\project_62_checkpoint_10.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Cho worldBlock trả Air với mọi neighbor khác Key: world 3×3 phải lệch khỏi 5376. Bỏ source ownership guard để xem oracle bắt mặt trùng.
+2. So lastJobs với budget vừa giảm có thể báo lỗi giả. Giữ lastBudget và test đổi setting trước tick tiếp.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Round-trip âm/dương, hash chung, hành trình teleport/đảo chiều/đổi radius, bound từng tick và oracle global qua. Origin có 768 mặt, 3×3 có 5376; idle/camera không rebuild thừa. Debug/Release dùng check/EXIT_FAILURE, không assert bị NDEBUG tắt.
+
+## Bài tập mở rộng
+
+Thêm hành trình có seed cố định, số mốc hữu hạn và timeout. Khi fail, giữ player/Key/queue tối giản để tái hiện; đừng tăng cap hoặc bỏ seam test cho suite xanh.
+
+```powershell title="Terminal — smoke có timeout"
+$smoke = Start-Process -FilePath ".\build\Debug\project_62_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Smoke quá 30 giây."
+}
+if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+Sau tự động, kiểm desktop riêng: qua biên âm, preset/teleport khi đang chờ, đổi radius/budget, pause/reset, pointer capture/cancel/blur và high-DPI. Nút sanity không chạy oracle surface toàn hành trình. Final nằm ở **Toàn bộ mã nguồn của dự án** cuối bài và ZIP; không cần phục dựng chương trình từ snippet.
+
+Tiếp tục với [Project 63 — Đồi núi tự sinh](/projects/voxel-procedural-terrain) để thay mẫu đất phẳng bằng địa hình procedural theo tọa độ world. Các project chưa phát hành được đánh dấu **Sắp ra mắt** trong [roadmap](/roadmap).

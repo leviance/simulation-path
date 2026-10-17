@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tải một vùng chunk quanh nhân vật
+
+## Vấn đề cần giải quyết
+
+Địa chỉ đã đúng, giờ cần đất quanh nhân vật chứ không chỉ một chunk. Ta sẽ lưu nhiều Entry, tạo vùng wanted và chuyển mesh local của từng chunk sang hệ tọa độ dùng để vẽ. Chưa gỡ chunk cũ để bạn thấy trực tiếp vì sao bộ nhớ có thể tăng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Vùng cần tải là hình vuông theo khoảng cách Chebyshev: max(|dx|,|dz|)≤r. r=1 cho $(2r+1)^2=9$ chunk, gồm center và tám ô quanh nó. `std::map<Key,Entry>` giữ từng chunk theo địa chỉ; Entry sở hữu blocks và mesh, không dùng thứ tự trong vector để đoán Key.
+
+Mesh của mỗi chunk vẫn có vertex local 0..16. Khi vẽ, X/Z cộng Key*16 rồi trừ vị trí player, cộng 8 để dùng lại camera center=8. Không cộng offset vào Block ID index hoặc sửa mesh local mỗi lần nhân vật đi.
+
+Checkpoint 03 chưa gỡ dữ liệu cũ nhưng vẫn chặn ở 49 resident. Đi quá xa có thể có vùng chưa tải; đó là giới hạn an toàn của bản trung gian, không dùng nó làm final.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo danh sách wanted
+
+Hai vòng lặp bao gồm cả hai đầu center±r. Với tọa độ âm, center đã được tính bằng floor ở bài 02. Danh sách này chỉ nói muốn có chunk nào, không có nghĩa cả world phải được cấp phát.
+
+```cpp title="include/world.hpp"
+inline std::vector<Key> wanted(const World& world) {
+    const Key center = targetCenter(world);
+    const int radius = loadRadius(world);
+    std::vector<Key> keys;
+    for (int z = center.z - radius; z <= center.z + radius; ++z) {
+        for (int x = center.x - radius; x <= center.x + radius; ++x) {
+            validateKey({x, z});
+            keys.push_back({x, z});
+        }
+    }
+    return keys;
+}
+```
+
+
+### Bước 2 — Nạp Entry chưa có
+
+loadChunk kiểm trùng và cap trước khi tạo data. Mỗi Entry có buffer 4096 ID riêng; std::move chuyển ownership vào map. Tên load ở đây nghĩa là generate CPU trong RAM, chưa đọc disk hoặc network.
+
+```cpp title="include/world.hpp"
+inline bool loadChunk(World& world, Key key) {
+    if (world.chunks.contains(key) || world.chunks.size() >= maxResident) {
+        return false;
+    }
+    Entry entry;
+    entry.blocks = generateChunk(key);
+    world.chunks.emplace(key, std::move(entry));
+    ++world.loads;
+    return true;
+}
+```
+
+
+### Bước 3 — Đưa mesh local vào ảnh world
+
+sceneMesh tạo bản triangle để vẽ, không thay tọa độ trong entry.mesh. Nhờ đó cùng một mesh dùng lại được khi player/camera đi. synchronize ở checkpoint 03 gọi loadChunk cho mọi Key còn thiếu trong wanted.
+
+```cpp title="include/controller.hpp"
+inline Mesh sceneMesh(const World& world) {
+    Mesh mesh;
+    // Local mesh không đổi khi player/camera di chuyển; chỉ bản vẽ nhận offset.
+    for (const auto& [key, entry] : world.chunks) {
+        for (Triangle triangle : entry.mesh) {
+            for (Vec3& p : triangle.points) {
+                p.x += key.x * side - world.player.x + 8;
+                p.z += key.z * side - world.player.z + 8;
+            }
+            mesh.push_back(triangle);
+        }
+    }
+    return mesh;
+}
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_62_checkpoint_3 --parallel 2
+.\build\Debug\project_62_checkpoint_3.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Cộng Key*16 hai lần, một lần lúc generate vertex và một lần khi vẽ: các chunk cách nhau một khoảng lớn. Giữ mesh local nhất quán.
+2. Tạo lại mọi Entry trong wanted mỗi lần di chuyển: hash có thể giống nhưng allocation/rebuild tăng vô ích. Trước hết phải kiểm chunks.contains(key).
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Vào checkpoint 03 có 9 chunk. Đi qua biên tải thêm hàng mới; đi trong cùng chunk không generate thêm. Tổng resident có thể tăng vì chưa unload, nhưng không vượt 49. Các mặt giữa hai chunk chưa cull ở bản này.
+
+## Bài tập mở rộng
+
+Đi từ center (0,0) sang (1,0). Liệt kê ba Key mới cần tải và sáu Key cũ vẫn dùng được. So sánh với việc tạo lại cả chín chunk.
+
+Tiếp theo: [Gỡ chunk xa và tạo lại đúng dữ liệu cũ](/projects/voxel-chunk-streaming/04-go-va-tao-lai-chunk).

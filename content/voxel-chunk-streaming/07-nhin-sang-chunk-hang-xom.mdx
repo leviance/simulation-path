@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Không vẽ hai mặt ở đường giáp ranh
+
+## Vấn đề cần giải quyết
+
+Đặt hai chunk cạnh nhau rồi dùng mesher một chunk của Project 61: mỗi bên xem ngoài biên là Air, nên vẫn giữ hai mặt bên trong. Chúng thường bị che trong ảnh, nhưng geometry dư và seam sẽ sai khi thay đổi tập resident.
+
+## Hiểu ý tưởng trước khi viết code
+
+Quy tắc giữ mặt vẫn là source đặc, neighbor Air. Điều thay đổi là lookup: neighbor có thể ở chunk kế bên. World block X/Z đổi bằng floorDiv, local=world−Key*16. Nếu chunk chưa resident thì trả Air để vùng đã tải có mặt biên khép lại.
+
+Một lỗi tinh vi: khi quét plane=0/16, source ngoài chunk không được đọc từ neighbor rồi sinh geometry hộ neighbor. **Chỉ chunk hiện tại sở hữu source**. Neighbor query được vượt biên; source query thì không. Material khác nhau nhưng cùng opaque vẫn che mặt.
+
+Trước bài 08, thay topology vẫn rebuild toàn vùng nên hình đúng nhưng còn tốn việc. Ta sửa tính đúng trước, rồi thu hẹp invalidation.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Tra block theo địa chỉ world
+
+worldBlock xử lý y ngoài tầng trước, rồi tìm Key X/Z và local. Không tự generate dữ liệu neighbor khi query; lookup phải chỉ đọc state resident. Neighbor chưa có là Air trong mô hình hiển thị này.
+
+```cpp title="include/meshing.hpp"
+inline Block worldBlock(const World& world, int x, int y, int z) {
+    if (y < 0 || y >= side) {
+        return Block::Air;
+    }
+    const Key key{floorDiv(x), floorDiv(z)};
+    const auto found = world.chunks.find(key);
+    if (found == world.chunks.end()) {
+        return Block::Air;
+    }
+    return get(found->second.blocks, x - key.x * side, y, z - key.z * side);
+}
+```
+
+
+### Bước 2 — Giữ quyền sở hữu source
+
+Trong makeWorldMask, dựng source local theo face/plane như bài greedy. Kiểm inside trước khi đọc source. Nếu bỏ kiểm này và đọc source qua worldBlock, chunk hiện tại có thể phát ra mặt của neighbor ở plane biên.
+
+Ở đầu makeWorldMask, lấy blocks một lần. Reference này chỉ sống trong lần dựng mask; không giữ nó qua load/unload. Các ô bên trong đọc trực tiếp buffer, chỉ neighbor vượt biên mới cần tìm map.
+
+```cpp title="include/meshing.hpp"
+const Chunk& blocks = world.chunks.at(key).blocks;
+```
+
+```cpp title="include/meshing.hpp"
+std::array<int, 3> p{};
+p[axis] = plane;
+if (sign > 0) {
+    --p[axis];
+}
+p[uAxis] = u;
+p[vAxis] = v;
+// Chỉ chunk hiện tại sở hữu source; neighbor có thể thuộc chunk khác.
+if (!inside(p[0], p[1], p[2])) {
+    continue;
+}
+```
+
+
+### Bước 3 — Hỏi neighbor rồi đưa mask vào greedy
+
+Neighbor được đổi sang global X/Z bằng Key*16. Cả source Stone và neighbor Grass đều opaque nên mặt bị bỏ. rebuild chỉ thay makeMask bằng makeWorldMask; extractor rectangle, winding và flat color giữ nguyên.
+
+```cpp title="include/meshing.hpp"
+const Block material = get(blocks, p[0], p[1], p[2]);
+if (material == Block::Air) {
+    continue;
+}
+auto n = p;
+n[axis] += sign;
+Block neighbor = Block::Air;
+if (inside(n[0], n[1], n[2])) {
+    neighbor = get(blocks, n[0], n[1], n[2]);
+} else {
+    neighbor = worldBlock(world, key.x * side + n[0], n[1], key.z * side + n[2]);
+}
+if (neighbor == Block::Air) {
+    mask[v * side + u] = material;
+}
+```
+
+```cpp title="include/meshing.hpp"
+const Mask mask = makeWorldMask(world, key, face, plane);
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 7"
+cmake --build build --config Debug --target project_62_checkpoint_7 --parallel 2
+.\build\Debug\project_62_checkpoint_7.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Luôn trả Air khi local vượt 0..15: mặt giữa các chunk vẫn tồn tại. Tổng mặt của world 3×3 không đạt 5376.
+2. Cho source ngoài chunk đọc sang neighbor: có thể phát sinh mặt trùng ngay tại plane=0/16. Oracle cần so vị trí/hướng/material, không chỉ nhìn silhouette.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Một chunk phẳng có 768 mặt đơn vị. Sau khi đủ 3×3 chunk, culling toàn world còn 5376 mặt. Load/unload làm mặt trong biến mất hoặc frontier hiện lại trong cùng batch; không cần đợi hết toàn queue mới sửa seam.
+
+## Bài tập mở rộng
+
+Tính tay hai chunk kề theo X: tổng 2×768 trừ hai mặt 16×4 bằng 1408. Viết fixture hai Entry rồi so oracle; dùng hai material lớp trên khác nhau.
+
+Tiếp theo: [Chỉ dựng lại những mesh bị ảnh hưởng](/projects/voxel-chunk-streaming/08-chi-dung-lai-mesh-bi-anh-huong).

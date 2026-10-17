@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Quét đủ sáu hướng, kiểm biên và lớp cắt
+
+## Vấn đề cần giải quyết
+
+Hướng +Y đã đúng. Sao chép thành sáu đoạn riêng sẽ dễ bỏ plane=0 hoặc nhầm dấu. Ta dùng chung makeMask/appendQuad cho mọi hướng, rồi thử cả những mặt khuất mà hình ngoài không cho thấy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sáu hướng × 17 plane × 256 ô cho $26112$ mask samples. Đây là số công việc của bản cài đặt này, không phải neighbor checks của baseline, càng không phải thời gian chạy.
+
+Cut giữ block y≤slice. Phía trên xem như Air cho **cả source và neighbor**, nên lớp cắt tự có nắp mới. Khoang Air kín có sáu mặt trong: full chunk khoét một ô giữa có 12 quad, không chỉ sáu mặt ngoài.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="greedy61-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Quét đủ plane của mọi hướng
+
+Ở checkpoint 06, bỏ nhánh chỉ gộp face==2: mọi mask đi qua extractRectangles. Không nối rectangle giữa plane/hướng khác nhau. Giữ `plane<=side` để có cả mặt ở tọa độ 16.
+
+```cpp title="include/mesh.hpp"
+for (int face = 0; face < 6; ++face) {
+    for (int plane = 0; plane <= side; ++plane) {
+        const Mask mask = makeMask(chunk, face, plane, slice);
+        built.samples += side * side;
+        for (const Block material : mask) {
+            if (material != Block::Air) {
+                ++built.unitFaces;
+            }
+        }
+```
+
+
+### Bước 2 — Giữ quy ước winding chung
+
+Sau vòng đếm unitFaces, gọi extractor cho mọi mask, không giữ nhánh face==2 nữa:
+
+```cpp title="include/mesh.hpp"
+std::vector<Rectangle> rectangles;
+rectangles = extractRectangles(mask, face, plane, built.comparisons);
+```
+
+appendQuad vẫn đảo thứ tự theo parity của face. Chuyển X/Y/Z chỉ thay axis/uAxis/vAxis. Hướng âm dùng plane=0 ở mép ngoài, source là ô 0, không phải ô −1.
+
+```cpp title="include/quad.hpp"
+std::array<int, 6> order{{0, 1, 2, 0, 2, 3}};
+if (r.face % 2 != 0) {
+    order = {{0, 3, 2, 0, 2, 1}};
+}
+```
+
+
+### Bước 3 — Cắt miền hiển thị, không xóa world
+
+activeBlock trả Air khi p[1]>slice. PageUp/PageDown đánh dấu meshDirty và reset preview. Tăng slice về 15 phải khôi phục nguyên khối.
+
+```cpp title="include/model.hpp"
+inline Block activeBlock(const Chunk& chunk, const std::array<int, 3>& p, int slice) {
+    if (p[1] > slice) {
+        return Block::Air;
+    }
+    return get(chunk, p[0], p[1], p[2]);
+}
+```
+
+
+## Ghép các phần lại
+
+Bắt đầu từ checkpoint trước, đối chiếu các file vừa sửa rồi chạy snapshot của bài này. Mỗi snapshot chứa đủ source và build độc lập, không liên kết ngược đến module khác. Phần mã hoàn chỉnh dưới bài cho phép kiểm toàn bộ file thay vì ghép các mảnh bằng trí nhớ.
+
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_61_checkpoint_6 --parallel 2
+.\build\Debug\project_61_checkpoint_6.exe
+```
+
+Windows/Visual Studio dùng đường dẫn trên. Với generator single-config, đặt CMAKE_BUILD_TYPE=Debug và chạy executable trực tiếp trong build. Nhãn native dùng ASCII; giải thích tiếng Việt nằm trong bài và Canvas.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ bỏ source trên cut nhưng vẫn lấy neighbor từ toàn chunk: mất nắp mới vì block phía trên vẫn bị xem là đặc.
+2. Chỉ nhìn full chunk: mesher bỏ mọi mặt khoang vẫn có thể trông đúng từ ngoài. Dùng cavity để oracle kiểm mặt trong.
+
+Chỉ sửa trên bản thử riêng rồi hoàn tác thí nghiệm trước khi đi tiếp; code tải về là bản đúng.
+
+## Tự kiểm tra kết quả
+
+Full=6 quad/12 triangle; cavity=12; empty=0; checker=12288 không gộp. Full cut y=0 có 6 quad nhưng unitFaces=576. M giữ nguyên bề mặt.
+
+## Bài tập mở rộng
+
+Tính diện tích hộp 16×1×16 sau cut: 2×(16×16+16×1+16×1). Kiểm unitFaces theo đáp án, không chỉ nhìn quad.
+
+Tiếp theo: [Xem từng rectangle mà thuật toán đã chọn](/projects/voxel-greedy-meshing/07-xem-tung-lan-gop).
+

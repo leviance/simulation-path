@@ -1,0 +1,89 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện điều khiển và vòng đời tương tác
+
+## Vấn đề cần giải quyết
+
+Các thuật toán đã đúng nhưng sandbox chưa dễ dùng nếu việc đi xa làm mất edit, ngắm chỉ dùng được chuột hoặc một lần alt-tab để lại trạng thái kéo. Bài này hoàn thiện đường điều khiển mà không đưa mutation vào vòng animation.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thao tác xem, queue và edit có vòng đời khác nhau. Pause chỉ dừng tải tự động; người dùng vẫn có thể N hoặc sửa tay. Reset cố ý xóa phiên. Preset chỉ đổi player và retarget queue, không tạo World rỗng. Input repeat không được biến một nhấn phá thành hàng chục lệnh; pointer capture phải được nhả khi up/cancel/blur/reset.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-9" />
+
+## Viết code từng bước
+
+### Bước 1 — Đổi vị trí mà giữ dữ liệu session
+
+P đi qua gốc, phía âm, vùng xa và sát biên; chỉ gọi movePlayer trên world hiện tại. Preset vị trí của Project 63 cũng giữ world, không reset. Cần phân biệt bốn thao tác: di chuyển chỉ đổi vùng cần tải; đổi cấu hình terrain tạo generation mới; Reset xóa phiên hiện tại; import thay config/delta sau khi kiểm toàn bộ dữ liệu. Chỉ hai thao tác cuối trong sandbox mới được phép thay công trình theo yêu cầu rõ ràng của người dùng.
+
+```cpp title="include/controller.hpp"
+inline void choosePreset(App& app) {
+    stop(app);
+    app.preset = (app.preset + 1) % 4;
+    const std::array<Player, 4> positions{{{8, 8}, {-0.5, -0.5}, {200, -200}, {15.5, 8}}};
+    movePlayer(app.world, positions[app.preset].x, positions[app.preset].z);
+    app.pickDirty = true;
+    app.message = "Travel keeps session deltas; N/Space loads the new region";
+}
+```
+
+### Bước 2 — Giữ ngắm bằng phím độc lập camera
+
+IJKL dịch pixel ngắm 2 đơn vị, arrow orbit camera. Canvas có ô X/Y và các nút thao tác thay phím. aim cùng giá trị là no-op; tránh query/raster chỉ vì event lặp lại cùng pixel.
+
+```cpp title="include/controller.hpp"
+inline void aim(App& app, int x, int y) {
+    x = std::clamp(x, 0, 319);
+    y = std::clamp(y, 0, 239);
+    if (app.aimX == x && app.aimY == y) {
+        return;
+    }
+    app.aimX = x;
+    app.aimY = y;
+    app.pickDirty = true;
+}
+```
+
+### Bước 3 — Dọn trạng thái tương tác ở điểm mất quyền điều khiển
+
+Mất focus/minimize thì pause, hủy dragging và nhả SDL capture. Mọi key command đều bỏ repeat; middle drag chỉ orbit, mouse motion không edit. Canvas bổ sung pointercancel/lostcapture, visibilitychange, reduced-motion và cleanup RAF. R/reset và import là thao tác thay phiên rõ ràng.
+
+```cpp title="src/main.cpp"
+                if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
+                    voxel::stop(app);
+                    dragging = false;
+                    SDL_CaptureMouse(false);
+                }
+```
+
+## Ghép các phần lại
+
+Build checkpoint_9. Tải vùng, xây gần biên, P đi xa rồi P quay về; sau khi queue ổn định vẫn thấy công trình. Kéo chuột giữa ra khỏi vùng ảnh, thả ngoài, alt-tab và quay lại. Với Canvas, bật reduced-motion rồi dùng N và các nút Phá/Đặt; playback không tự bật lại khi bỏ reduced-motion.
+
+```bash title="Terminal — checkpoint 09"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_9 --parallel 2
+./build/Debug/project_64_checkpoint_9.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Preset gọi app.world=createWorld() thay vì movePlayer. Cảnh mới xuất hiện nhưng công trình đã mất; đây là lỗi ownership, không phải lỗi streaming.
+2. Gọi action ở mouse-motion hoặc giữ key-repeat. Một thao tác kéo sinh hàng loạt edit và history đầy ngay; giữ mutation ở button/key-down đơn lẻ.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Preset giữ delta/history, thao tác tay pause queue; blur/cancel/reset nhả capture. Space repeat không cuộn trang hoặc toggle liên tục trong Canvas. Native IJKL/Canvas X/Y ngắm đúng pixel; camera/aim không ghi block.
+
+## Bài tập mở rộng
+
+Viết một checklist thao tác desktop gồm chuột, bàn phím, reload/import và reduced-motion. Tách kết quả kiểm tự động khỏi kết quả bạn đã thật sự thử; hidden smoke không chứng minh UX đúng.
+
+Tiếp theo: [Kiểm chứng và nghiệm thu sandbox](/projects/voxel-sandbox/10-kiem-chung-va-nghiem-thu).
+

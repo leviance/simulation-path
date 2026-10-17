@@ -1,0 +1,93 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho mặt đất nhấp nhô bằng một hàm độ cao
+
+## Vấn đề cần giải quyết
+
+Ta muốn mặt đất cao thấp khác nhau nhưng chưa muốn gỡ lỗi một thuật toán giả ngẫu nhiên. Trước hết dùng sin/cos để có hình dễ dự đoán: một gợn đồi chạy liên tục trên cả world.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đặt n(x,z)=sin(x/16)cos(z/16), rồi H=floor(8+6n), kẹp trong [2,14]. Số 8 nâng mặt đất lên, 6 điều khiển biên độ và 16 làm gợn trải rộng hơn. Đầu vào là world X/Z. Chunk chỉ quyết định dữ liệu nằm ở đâu trong RAM; nó không phải gốc tọa độ mới của hàm độ cao.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="terrain63-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Thay hằng số bằng một hàm có thể dự đoán
+
+Ở checkpoint 01, tín hiệu luôn bằng 0 nên mặt đất phẳng. Sang checkpoint 02, ta thay hằng số đó bằng hàm sin/cos. Tại (0,0), n=0 nên H=8. Tại cột nguyên (24,0), n=sin(1.5)≈0.9975 nên H=floor(8+6n)=13. Đỉnh lý thuyết ở x=8π cho n=1 và H=14, nhưng x đó không phải địa chỉ cột nguyên. Dùng (24,0) để đối chiếu với inspector thay vì chỉ nhận xét “trông giống đồi”.
+
+```cpp title="include/terrain.hpp"
+inline double terrainSignal(double x, double z, const TerrainConfig& config) {
+    validateConfig(config);
+    if (!std::isfinite(x) || !std::isfinite(z) || std::abs(x) > 2048 || std::abs(z) > 2048) {
+        throw std::out_of_range("world -2048..2048");
+    }
+    return std::sin(x / 16) * std::cos(z / 16);
+}
+```
+
+### Bước 2 — Đổi tín hiệu thành số block
+
+floor quyết định quy tắc lượng tử hóa; clamp giữ cột trong tầng Y=0..15. H là số lượng nên mesh mặt trên nằm trên mặt phẳng y=H, còn ID trên cùng tại y=H−1. Heightfield này không thể biểu diễn hang hay mỏm đá nhô ra.
+
+```cpp title="include/terrain.hpp"
+inline int heightAt(double x, double z, const TerrainConfig& config) {
+    const double signal = terrainSignal(x, z, config);
+    return std::clamp(static_cast<int>(std::floor(8 + 6 * signal)), 2, 14);
+}
+```
+
+### Bước 3 — Dùng tọa độ world khi lấp từng chunk
+
+Key(-1,0), local x=15 tương ứng world x=−1. Key(0,0), local x=0 tương ứng world x=0. Hai vị trí khác nhau có thể cao khác nhau; thứ phải nhất quán là hai cách hỏi cùng một world point, chẳng hạn local 16 của chunk trái và local 0 của chunk phải.
+
+```cpp title="include/terrain.hpp"
+inline Chunk generateTerrain(Key key, const TerrainConfig& config) {
+    validateKey(key);
+    validateConfig(config);
+    Chunk blocks{};
+    for (int z = 0; z < side; ++z) {
+        for (int x = 0; x < side; ++x) {
+            const int worldX = key.x * side + x;
+            const int worldZ = key.z * side + z;
+            const int height = heightAt(worldX, worldZ, config);
+            for (int y = 0; y < height; ++y) {
+                set(blocks, x, y, z, materialAt(y, height, config));
+            }
+        }
+    }
+    return blocks;
+}
+```
+
+## Ghép các phần lại
+
+Giữ mesh và scheduler nguyên trạng, build checkpoint_2. Trên Canvas, xem đường xanh trước rồi mới nhìn đường vàng: xanh là tín hiệu chưa lượng tử hóa, vàng lấy mẫu tại X nguyên rồi floor. Đi qua x=0 và x=16; world không được bắt đầu lại một gợn mới ở mỗi chunk. Preview 2D truy vấn hàm nên vẫn hiện vùng chưa resident; ảnh 3D chỉ vẽ resident.
+
+```bash title="Terminal — checkpoint 02"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_63_checkpoint_2 --parallel 2
+./build/Debug/project_63_checkpoint_2.exe
+```
+
+Lệnh trên dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure và chạy executable trong `build/`. Tên target có trong CMakeLists.txt của ZIP. Mục **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint, không chỉ các đoạn vừa thay.
+
+## Thử làm sai để hiểu đúng
+
+1. Bật “Cố ý dùng local cho preview 2D”. Mỗi ô chunk lặp lại cùng một mảnh địa hình; mặt cắt có thể nhảy khi local quay từ 15 về 0. Lỗi chỉ ở preview 2D, mesh 3D vẫn dùng code đúng để đối chiếu.
+2. Bỏ floor và cast trực tiếp một giá trị âm trong một bản thử của riêng bạn. Cast C++ về zero không tương đương floor. Công thức H hiện được kẹp dương, nhưng phép đổi tọa độ âm ở các bài sau vẫn bắt buộc dùng floor.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Inspector tại (0,0) cho H=8. Qua biên chunk không reset phase. Height trong [2,14], không có block y≥H, không có lỗ trong cột. Không đặt điều kiện H(15,z)=H(16,z): đó là hai mẫu khác nhau.
+
+## Bài tập mở rộng
+
+Giảm hệ số 6 xuống 3 rồi tăng mẫu số 16 lên 32. Dự đoán riêng chiều cao và độ rộng gợn thay đổi thế nào. Sau khi hiểu hai tác động, khôi phục tham số trước bài hash.
+
+Tiếp theo: [Tạo giá trị giả ngẫu nhiên mà không phụ thuộc thứ tự tải](/projects/voxel-procedural-terrain/03-hash-va-seed).
+

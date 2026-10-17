@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy world đang có và thêm tâm ngắm
+
+## Vấn đề cần giải quyết
+
+Sau Project 63, world đã có đồi núi và tự tải chunk khi ta đi xa. Nhưng người dùng mới chỉ quan sát được, chưa xây được gì. Ta bắt đầu bằng một việc nhìn thấy ngay: đặt tâm ngắm lên đúng pixel của ảnh CPU. Chưa viết ray, chưa sửa block, để lỗi input không bị lẫn với lỗi picking.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cửa sổ native là 960×700, còn ảnh CPU vẫn 320×240, được đặt tại (0,30) và phóng hai lần. Tọa độ mouse logical (320,270) tương ứng pixel CPU (160,120). Resize/high-DPI không được làm thay đổi phép đổi này: SDL cần chuyển event sang logical render coordinates trước. Canvas dùng hình chữ nhật ảnh thực tế để đổi ngược về cùng miền pixel.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-1" />
+
+## Viết code từng bước
+
+### Bước 1 — Chạy lại thế giới đang có
+
+Build và mở starter trước. Bạn phải thấy một chunk, tám job chờ và camera dùng được; N tải tối đa hai job. Nếu chưa có ảnh, hãy sửa phần build/SDL ở đây, không viết thêm thuật toán để che lỗi. Starter mang đủ source Project 63, không đòi bạn lắp các file từ nhiều ZIP.
+
+```cpp title="src/main.cpp"
+    SDL_Window* window = SDL_CreateWindow("Minimal voxel sandbox", 960, 700, flags);
+    SDL_Renderer* renderer = nullptr;
+    if (window != nullptr) {
+        renderer = SDL_CreateRenderer(window, nullptr);
+    }
+    SDL_Texture* texture = nullptr;
+    if (renderer != nullptr) {
+        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, voxel::imageWidth, voxel::imageHeight);
+    }
+```
+
+### Bước 2 — Vẽ tâm ngắm trên ảnh, không vào dữ liệu voxel
+
+Bài 01 thêm hai nét nhỏ tại tâm pixel được chọn. Overlay này chỉ là lời nhắc vị trí ngắm, không phải block và không dùng màu pixel để quyết định hit. Vì ảnh đã phóng hai lần, tọa độ overlay cũng cần cùng phép phóng và offset 30.
+
+```cpp title="include/view.hpp"
+inline void draw(SDL_Renderer* renderer, SDL_Texture* texture, const App& app) {
+    require(SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255));
+    require(SDL_RenderClear(renderer));
+    const SDL_FRect image{0, 30, 640, 480};
+    require(SDL_RenderTexture(renderer, texture, nullptr, &image));
+    const float x = static_cast<float>((app.aimX + 0.5) * 2);
+    const float y = static_cast<float>(30 + (app.aimY + 0.5) * 2);
+    require(SDL_SetRenderDrawColor(renderer, 255, 235, 160, 255));
+    require(SDL_RenderLine(renderer, x - 5, y, x + 5, y));
+    require(SDL_RenderLine(renderer, x, y - 5, x, y + 5));
+    require(SDL_SetRenderDrawColor(renderer, 225, 230, 245, 255));
+    label(renderer, 12, 12, "Voxel sandbox: orthographic, no FPS/collision");
+    label(renderer, 665, 50, "WASD move | arrows orbit");
+    label(renderer, 665, 75, "Mouse aim | middle drag orbit");
+    label(renderer, 665, 100, "N step | Space load | R reset");
+    label(renderer, 665, 135, "resident=" + std::to_string(app.world.chunks.size()) + " jobs=" + std::to_string(app.world.pending.size()));
+    label(renderer, 665, 160, "aim=" + std::to_string(app.aimX) + "," + std::to_string(app.aimY));
+    label(renderer, 12, 540, "player=" + std::to_string(app.world.player.x) + "," + std::to_string(app.world.player.z));
+    label(renderer, 12, 565, "stream meshes=" + std::to_string(app.world.lastMeshes) + " edit rebuilds=" + std::to_string(app.world.editRebuilds));
+    label(renderer, 12, 590, "queries=" + std::to_string(app.queries) + " rasters=" + std::to_string(app.rasters));
+    label(renderer, 12, 625, app.message);
+    require(SDL_RenderPresent(renderer));
+}
+```
+
+### Bước 3 — Đọc và chặn tọa độ ngắm
+
+aim giữ X trong 0..319, Y trong 0..239; cùng pixel thì không đánh dấu query dirty lại. Native gọi nó sau SDL_ConvertEventToRenderCoordinates. Canvas có ô nhập X/Y để bạn làm cùng thao tác bằng bàn phím. Chưa cần biết voxel nào nằm dưới tâm ngắm ở bài này.
+
+```cpp title="include/controller.hpp"
+inline void aim(App& app, int x, int y) {
+    x = std::clamp(x, 0, 319);
+    y = std::clamp(y, 0, 239);
+    if (app.aimX == x && app.aimY == y) {
+        return;
+    }
+    app.aimX = x;
+    app.aimY = y;
+    app.pickDirty = true;
+}
+```
+
+## Ghép các phần lại
+
+Chạy checkpoint_1, thử các góc ảnh và tâm (160,120), rồi resize cửa sổ. Dùng N/Space tải xong vùng 3×3 để thấy cảnh đầy đủ. WASD dịch vị trí quan sát 4 đơn vị mỗi lần nhấn; camera trực giao này chưa phải nhân vật FPS. Ở checkpoint này click chưa phá hoặc đặt được block.
+
+```bash title="Terminal — checkpoint 01"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_1 --parallel 2
+./build/Debug/project_64_checkpoint_1.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Quên trừ offset 30 theo Y. Tâm ngắm sẽ luôn lệch xuống 15 pixel CPU; thử điểm ở sát mép trên để nhận ra ngay.
+2. Dùng trực tiếp tọa độ window vật lý sau khi resize. Cùng một điểm nhìn thấy sẽ ra pixel khác; khôi phục chuyển event về logical render coordinates trước phép chia hai.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Starter có ảnh, resident=1/job=8; bốn tick budget 2 tải đủ 9 chunk. Tâm ngắm theo đúng mouse/pixel nhập và không vượt ảnh. Ngắm hoặc xoay không thay checksum terrain.
+
+## Bài tập mở rộng
+
+Thêm readout tọa độ mouse logical cạnh pixel CPU và dự đoán kết quả tại bốn góc. Giữ overlay tách khỏi framebuffer để bước vẽ không bị nhầm với bước query.
+
+Tiếp theo: [Đưa tia từ camera về đúng world](/projects/voxel-sandbox/02-ray-tu-camera-sang-world).
+

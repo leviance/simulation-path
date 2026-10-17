@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biến độ cao thành cỏ, đất và đá
+
+## Vấn đề cần giải quyết
+
+Độ cao đã đúng nhưng cả world vẫn một màu đá. Ta sẽ quyết định Block ID cho từng vị trí trong cột, đồng thời kiểm liệu mesher có xử lý đúng nơi hai chunk có độ cao khác nhau hay không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ở cột thấp `H < 11`, y=H−1 là Grass, hai lớp kế dưới là Dirt nếu còn nằm trên y=0, phần còn lại Stone. Cột H≥11 toàn Stone để có đỉnh đá đơn giản. Đây chỉ là quy tắc vật liệu cho bài học, không phải biome theo khí hậu hay mô phỏng đất thật. Air nằm ngoài [0,H).
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="terrain63-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Quyết định vật liệu bằng các điều kiện dễ đọc
+
+Kiểm Air trước, rồi Grass, Dirt, cuối cùng Stone. Điều kiện y>0 giữ đáy là Stone ngay cả khi H=2. Mọi ID Grass/Dirt/Stone đều opaque; khác màu không có nghĩa mặt chung cần được vẽ.
+
+```cpp title="include/terrain.hpp"
+inline Block materialAt(int y, int height, const TerrainConfig& config) {
+    (void)config;
+    if (y < 0 || y >= height) {
+        return Block::Air;
+    }
+    if (y == height - 1 && height < 11) {
+        return Block::Grass;
+    }
+    if (height < 11 && y >= height - 3 && y > 0) {
+        return Block::Dirt;
+    }
+    return Block::Stone;
+}
+```
+
+### Bước 2 — Lấp đủ cột trong một buffer mới
+
+Chunk được zero-initialize nên mọi ô chưa lấp là Air. Vòng y chỉ chạy tới height−1. Không tái dùng buffer cũ rồi chỉ ghi phần đặc: khi H giảm, phần đỉnh cũ có thể còn sót nếu không xóa.
+
+```cpp title="include/terrain.hpp"
+inline Chunk generateTerrain(Key key, const TerrainConfig& config) {
+    validateKey(key);
+    validateConfig(config);
+    Chunk blocks{};
+    for (int z = 0; z < side; ++z) {
+        for (int x = 0; x < side; ++x) {
+            const int worldX = key.x * side + x;
+            const int worldZ = key.z * side + z;
+            const int height = heightAt(worldX, worldZ, config);
+            for (int y = 0; y < height; ++y) {
+                set(blocks, x, y, z, materialAt(y, height, config));
+            }
+        }
+    }
+    return blocks;
+}
+```
+
+### Bước 3 — Đưa dữ liệu vào Entry trước khi dựng mesh
+
+loadChunk tạo dữ liệu nhưng không tự quét toàn world. Scheduler đã gom các Key ảnh hưởng và hoàn tất mesh cho batch. Mesher Project 62 đọc neighbor resident: hai cột cao 8 và 5 vẫn có vách ba block lộ ra, không phải đường nứt cần xóa.
+
+```cpp title="include/world.hpp"
+inline bool loadChunk(World& world, Key key) {
+    if (world.chunks.contains(key) || world.chunks.size() >= maxResident) {
+        return false;
+    }
+    Entry entry;
+    entry.blocks = generateTerrain(key, world.config);
+    world.chunks.emplace(key, std::move(entry));
+    ++world.loads;
+    return true;
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_6. Quay camera để nhìn mặt trên và vách. Các mặt giữa hai voxel đặc phải biến mất dù một bên Dirt, một bên Stone. Nếu neighbor chưa resident, mesher coi là Air để đóng frontier; khi neighbor tải xong, dựng lại cả hai phía trong batch. Ta không sinh thêm chunk chỉ để hỏi neighbor.
+
+```bash title="Terminal — checkpoint 06"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_63_checkpoint_6 --parallel 2
+./build/Debug/project_63_checkpoint_6.exe
+```
+
+Lệnh trên dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure và chạy executable trong `build/`. Tên target có trong CMakeLists.txt của ZIP. Mục **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint, không chỉ các đoạn vừa thay.
+
+## Thử làm sai để hiểu đúng
+
+1. Đọc neighbor bằng get local trong cùng chunk rồi coi mọi vị trí ngoài 0..15 là Air. Khi hai chunk đã resident, mặt trong ở biên vẫn còn; oracle bề mặt sẽ phát hiện mặt thừa.
+2. Xóa mọi mặt trên đường chia chunk vì nghĩ đó đều là seam. Với hai cột khác H, phần chênh cao là bề mặt ngoài thật; xóa đi sẽ tạo lỗ nhìn xuyên địa hình.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Cột H=4 có Stone tại y0, Dirt y1/y2, Grass y3, Air từ y4. H=11/14 toàn Stone. Buffer mới không có lỗ. Hai chunk resident khớp oracle global, bao gồm hướng mặt và vật liệu; không dùng checksum ảnh thay cho kiểm Block ID.
+
+## Bài tập mở rộng
+
+Thêm một quy tắc vật liệu dựa trên độ dốc bằng cách hỏi cùng hàm heightAt ở world X±1/Z±1. Giải thích vì sao không cần tải neighbor để hỏi hàm terrain nhưng mesher vẫn chỉ cull theo resident. Giữ phần mở rộng tách khỏi bản final chuẩn.
+
+Tiếp theo: [Đổi seed và cấu hình mà không trộn hai world](/projects/voxel-procedural-terrain/07-doi-cau-hinh-khong-tron-world).
+

@@ -1,0 +1,153 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và nghiệm thu sandbox
+
+## Vấn đề cần giải quyết
+
+Sandbox tổng hợp nhiều phần nên một lỗi có thể bị phần khác che đi: Z-buffer giấu mặt thừa, cache giữ hit cũ, hoặc công trình chỉ biến mất sau unload. Ta cần bộ nghiệm thu theo invariant thay vì một video trông có vẻ ổn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Dùng ba cách nhìn độc lập tương đối: picking bằng quét AABB thay cho bước DDA; dữ liệu resident so base+delta; mặt ngoài từ global cell/sáu neighbor thay cho greedy mesher. Oracle picking còn chia sẻ helper slab, nên vẫn phải có fixture axis/tie/grazing riêng. Một nút audit current state không thay các test hành trình, malformed import và giới hạn bộ nhớ.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-10" />
+
+### PASS chỉ đúng với dữ liệu vừa được kiểm
+
+Nút “Kiểm bề mặt resident” ghi kết quả vào ô **Kiểm bề mặt**, tách khỏi thông báo của thao tác phá/đặt/nhập. Ở trạng thái ban đầu, một resident có 874 mặt đơn vị; kiểm lúc này có thể báo PASS với con số 874. Bấm “Một tick” để tải thêm hai chunk: world đã đổi, nên nhãn phải thành “Cần kiểm lại”, không được giữ PASS của dữ liệu cũ. Kiểm lại lúc này sẽ đếm 2494 mặt đơn vị với cấu hình mặc định.
+
+Tương tự, một edit, undo/redo hay import làm kết quả trước không còn hiệu lực. Di chuyển cũng có thể đánh dấu cần kiểm lại khi mục tiêu streaming đổi. Chỉ tick idle không thay dữ liệu thì giữ kết quả vẫn hợp lệ. Native dùng dòng audit riêng và cùng quy tắc vô hiệu hóa khi dữ liệu đổi. Audit xác nhận trạng thái tại thời điểm chạy, không phải chứng nhận cho mọi trạng thái tương lai của sandbox.
+
+## Viết code từng bước
+
+### Bước 1 — Đối chiếu ray bằng đường không dùng tMax
+
+Quét AABB block đặc để lấy entry gần nhất, đồng thời quét các chunk Unknown trong miền ray để không kết luận hit xuyên vùng chưa biết. Oracle chậm nhưng chỉ dùng trên fixture hữu hạn, không gọi trong mỗi frame.
+
+```cpp title="include/oracle.hpp"
+inline Trace bruteOracle(const World& world, const Ray& ray) {
+    Trace result;
+    double best = INFINITY;
+    for (const auto& [key, entry] : world.chunks) {
+        for (int y = 0; y < 16; ++y) {
+            for (int z = 0; z < 16; ++z) {
+                for (int x = 0; x < 16; ++x) {
+                    if (get(entry.blocks, x, y, z) == Block::Air) {
+                        continue;
+                    }
+                    const Cell cell{key.x * 16 + x, y, key.z * 16 + z};
+                    const auto span = clipBox(ray, {static_cast<double>(cell[0]), static_cast<double>(y), static_cast<double>(cell[2])}, {static_cast<double>(cell[0] + 1), static_cast<double>(y + 1), static_cast<double>(cell[2] + 1)}, 96);
+                    if (span && span->enter < best) {
+                        best = span->enter;
+                        result.hit = Hit{cell, span->normal, best};
+                    }
+                }
+            }
+        }
+    }
+    const int cx = static_cast<int>(std::floor(ray.origin[0] / 16));
+    const int cz = static_cast<int>(std::floor(ray.origin[2] / 16));
+    for (int z = cz - 7; z <= cz + 7; ++z) {
+        for (int x = cx - 7; x <= cx + 7; ++x) {
+            if (world.chunks.contains({x, z})) {
+                continue;
+            }
+            const auto span = clipBox(ray, {static_cast<double>(x * 16), 0, static_cast<double>(z * 16)}, {static_cast<double>(x * 16 + 16), 16, static_cast<double>(z * 16 + 16)}, 96);
+            if (span && span->enter <= best + epsilon) {
+                result.blocked = true;
+            }
+        }
+    }
+    if (result.blocked) {
+        result.hit.reset();
+    }
+    return result;
+}
+```
+
+### Bước 2 — Kiểm dữ liệu và bề mặt sau khi flush
+
+Resident phải đúng effectiveBlock; giới hạn delta/history còn nguyên và dirty set phải rỗng trước khi kiểm mesh. Oracle surface so multiset địa chỉ/hướng/material, không chỉ số mặt tổng. Điều này bắt được hai lỗi thiếu/thừa vô tình bù số lượng.
+
+```cpp title="include/oracle.hpp"
+inline void verifySandbox(const World& world) {
+    verifySchedule(world);
+    if (world.edits.size() > 512 || world.undo.size() > 32 || world.redo.size() > 32 || !world.dirty.empty()) {
+        throw std::runtime_error("sandbox bounds or unflushed mesh");
+    }
+    for (const auto& [key, entry] : world.chunks) {
+        for (int y = 0; y < 16; ++y) {
+            for (int z = 0; z < 16; ++z) {
+                for (int x = 0; x < 16; ++x) {
+                    if (get(entry.blocks, x, y, z) != effectiveBlock(world, {key.x * 16 + x, y, key.z * 16 + z})) {
+                        throw std::runtime_error("resident differs from base + delta");
+                    }
+                }
+            }
+        }
+    }
+    verifySurface(world);
+    verifyTriangles(world);
+}
+```
+
+### Bước 3 — Báo lỗi thật ở cả Debug lẫn Release
+
+Không dùng assert bị NDEBUG tắt. Các test kiểm ray round-trip, signed seam, Unknown, action mới, tombstone, offline undo, cap, snapshot byte/malformed và cache idle. CTest trả EXIT_FAILURE nếu có check fail; smoke ẩn thoát một frame, không đụng clipboard.
+
+```cpp title="tests/tests.cpp"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << label << '\n';
+    }
+}
+```
+
+## Ghép các phần lại
+
+Build starter, 10 checkpoint và final bằng --parallel 2, chạy CTest cả Debug và Release với timeout. Surface audit native V kiểm resident hiện tại; nút Canvas ghi rõ chỉ kiểm bề mặt. Khi thử hỏng input snapshot, phải giữ một phiên đang có công trình để chứng minh nó không bị thay một phần. Không tắt test biên hay tăng cap chỉ để suite xanh.
+
+```bash title="Terminal — checkpoint 10"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_10 --parallel 2
+./build/Debug/project_64_checkpoint_10.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. So mỗi số mặt tổng hoặc ảnh màu. Duplicate một mặt và xóa một mặt khác có thể giữ tổng, còn Z-buffer che mất khác biệt; giữ multiset có hướng/material.
+2. Bỏ fixture Unknown hoặc chỉ gọi lại DDA trong oracle. Test sẽ đồng ý với chính bug của code, không xác nhận được lựa chọn block đầu tiên.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Audit resident kiểm cả buffer triangle bằng `verifyTriangles`, không dừng ở quads. Test camera còn đặt một block cao phía trước origin cũ, chiếu đúng pixel rồi đối chiếu `hit.distance ≈ near − depth`. Phá block phải xóa block đang thấy, không phải block bị nó che. Test teleport giữ chunk cũ để bảo đảm near vẫn đứng trước mọi resident; giới hạn DDA 96 và 256 bước không được nới vô hạn để làm test qua.
+
+Node và CTest qua các fixture chung; snapshot VXL1 cùng byte, terrain chưa edit giữ checksum P63. Mọi loop/process có cap/timeout; không hơn hai compiler. Build/render route, links/glossary/ZIP và source snippet khớp checkpoint. Desktop interaction được kiểm riêng sau khi người dùng bật server.
+
+## Bài tập mở rộng
+
+Tạo một công trình qua biên âm, xuất VXL1, reset, nhập lại rồi kiểm bằng cell thay vì ảnh. Source đầy đủ ở cuối bài và ZIP; không cần phục dựng project từ các snippet. Phần voxel 58–64 đã khép lại. Tiếp tục với [Project 65 — Bảng điều khiển cho simulator](/projects/simulator-controls) để tự viết button và slider bằng SDL3. Các project chưa phát hành được ghi **Sắp ra mắt** trong [roadmap](/roadmap).
+
+```bash title="Terminal — nghiệm thu Debug và Release"
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+```powershell title="Terminal — hidden smoke có deadline"
+$smoke = Start-Process -FilePath ".\build\Debug\project_64_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw "Smoke quá 30 giây."
+}
+if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+Automation cần deadline cho cả build/process tree, không chỉ vòng lặp bên trong. Hidden smoke không đọc clipboard, không kiểm pointer/keyboard hoặc giữ edit sau unload thay cho CTest. Sau kiểm tự động, thử desktop riêng; giữ bản lưu trước khi R hoặc nhập phiên khác.
+

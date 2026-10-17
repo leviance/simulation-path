@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa tia từ camera về đúng world
+
+## Vấn đề cần giải quyết
+
+Đặt tâm ngắm đúng pixel chưa cho biết ta đang nhìn block nào. Ta cần dựng tia ngược từ pixel về world. Điểm dễ sai nhất là mesh của Project 63 được dịch theo player để camera luôn nhìn quanh tâm, còn storage vẫn dùng địa chỉ world.
+
+## Hiểu ý tưởng trước khi viết code
+
+Khi vẽ, x_render=x_world−player.x+8, Z cũng vậy. Khi tạo ray phải đảo đúng offset đó. Với camera trực giao, các pixel có origin khác nhau nhưng cùng direction. Ray bắt đầu trên mặt phẳng near, nằm trước toàn bộ chunk đang resident. Reach 96 được đo từ mặt phẳng này, không phải chiều dài cánh tay hay khoảng cách từ mắt FPS. Pixel (160,120) thực sự lấy mẫu tại (160.5,120.5).
+
+$$
+O_{world}=(p_x,8,p_z)+uR+vU+d_{near}N,\qquad D=-N
+$$
+
+Trong công thức, R/right và U/up nằm trên mặt phẳng ảnh; N hướng về người xem. `cameraRay` dùng chính ba vector này, không đổi sang camera perspective.
+
+<InteractiveLab demo="voxel-sandbox" mode="sandbox64-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Nhìn lại phép chiếu dùng để vẽ world
+
+Hàm này đưa một point world về hệ tọa độ mà camera hiện tại đang chiếu. Nếu chỉ đảo công thức của một chunk quanh gốc mà quên player, picking có thể đúng ở (8,8) rồi lệch ngay khi WASD hoặc preset âm.
+
+```cpp title="include/view.hpp"
+inline ScreenPoint worldProjection(const App& app, Vec3 point) {
+    point.x += 8 - app.world.player.x;
+    point.z += 8 - app.world.player.z;
+    return project(point, app.camera);
+}
+```
+
+### Bước 2 — Dựng origin bằng right, up và normal
+
+u/v là độ lệch pixel đã chia camera.scale*zoom; dấu Y bị đảo vì screen đi xuống. Tâm world là (player.x,8,player.z), không phải (8,8,8). right/up/normal dùng cùng yaw/pitch như project; direction đi ngược normal hướng về cảnh.
+
+```cpp title="include/ray.hpp"
+inline Ray cameraRay(const Camera& camera, Player player, int x, int y, double nearDepth = minimumNearDepth) {
+    if (x < 0 || x >= 320 || y < 0 || y >= 240 || camera.scale != 2 || camera.center != 8 || camera.zoom < 0.5 || camera.zoom > 1.5 || !std::isfinite(camera.zoom) || !std::isfinite(camera.yaw) || !std::isfinite(camera.pitch) || !std::isfinite(nearDepth) || nearDepth < minimumNearDepth || nearDepth > 3072) {
+        throw std::out_of_range("sandbox camera/pixel");
+    }
+    const double a = camera.yaw;
+    const double b = camera.pitch;
+    const Vector right{std::cos(a), 0, -std::sin(a)};
+    const Vector up{-std::sin(a) * std::sin(b), std::cos(b), -std::cos(a) * std::sin(b)};
+    const Vector normal{std::sin(a) * std::cos(b), std::sin(b), std::cos(a) * std::cos(b)};
+    const Vector center{player.x, 8, player.z};
+    const double u = (x + 0.5 - 160) / (camera.scale * camera.zoom);
+    const double v = (120 - y - 0.5) / (camera.scale * camera.zoom);
+    Vector origin{};
+    Vector direction{};
+    for (int i = 0; i < 3; ++i) {
+        origin[i] = center[i] + right[i] * u + up[i] * v + normal[i] * nearDepth;
+        direction[i] = -normal[i];
+    }
+    return makeRay(origin, direction);
+}
+```
+
+### Bước 3 — Chuẩn hóa và chặn đầu vào trước khi đi qua lưới
+
+Origin phải finite trong ±4096, direction finite và khác zero. Normalize làm t có đơn vị world distance. Miền này dành cho player±512, Key hợp lệ và viewport/zoom của demo, kể cả chunk cũ đang chờ gỡ sau teleport; không có nghĩa ray nhận được mọi số thực. Không cast NaN sang chỉ số cell.
+
+```cpp title="include/ray.hpp"
+inline Ray makeRay(Vector origin, Vector direction) {
+    double lengthSquared = 0;
+    for (int i = 0; i < 3; ++i) {
+        if (!std::isfinite(origin[i]) || std::abs(origin[i]) > 4096 || !std::isfinite(direction[i])) {
+            throw std::out_of_range("finite ray, origin +/-4096");
+        }
+        lengthSquared += direction[i] * direction[i];
+    }
+    const double length = std::sqrt(lengthSquared);
+    if (!std::isfinite(length) || length < 1e-12) {
+        throw std::out_of_range("zero direction");
+    }
+    for (double& value : direction) {
+        value /= length;
+    }
+    return {origin, direction};
+}
+```
+
+### Cho renderer và picker nhìn cùng một khoảng độ sâu
+
+Không được đặt origin tại một depth cố định nằm giữa cảnh. Khi xoay camera, block phía trước origin vẫn có thể được vẽ, nhưng ray lại bắt đầu sau nó và chọn nhầm block phía sau. Tăng một hằng số chỉ che lỗi ở một vài góc nhìn.
+
+`cameraVolume` trong `include/camera-volume.hpp` chiếu tám góc AABB của từng chunk resident. Vì depth trực giao là hàm tuyến tính, depth lớn nhất luôn nằm ở một trong tám góc này. Ta đặt `near = max(64, ceil(maxDepth) + 1)` và `far = near - 96`. Khoảng đệm một đơn vị giữ origin ở ngoài khối đặc, thay vì cắt ngang một block. Vòng xét có nhiều nhất 49×8 góc, không phụ thuộc số triangle.
+
+```cpp title="include/controller.hpp — cùng view volume cho render và pick"
+const ViewVolume volume = cameraVolume(app.world, app.camera);
+render(app.frame, sceneMesh(app.world), app.camera, true, volume.near, volume.far);
+```
+
+Trong `refreshPick` và `action`, truyền `volume.near` làm đối số thứ năm của `cameraRay`. Rasterizer chỉ giữ pixel có `far < depth <= near`. Với cùng tâm pixel, một hit tại khoảng cách t phải có `depth = near - t`. Kiểm quan hệ này giúp bắt lỗi mà round-trip screen không phát hiện được.
+
+Đây là một lát nhìn sâu 96 đơn vị. Sau teleport, chunk cũ còn resident có thể đẩy near ra xa và làm vùng mới nằm ngoài far trong vài tick. Tiếp tục tải/gỡ chunk để ổn định cảnh; không kéo dài DDA vô hạn. Quy tắc Unknown ở bài sau vẫn có thể từ chối chọn một frontier nhìn thấy được, vì dữ liệu trước nó chưa được tải.
+
+## Ghép các phần lại
+
+Checkpoint_2 chưa có hit. Kiểm ray bằng cách lấy P=O+tD rồi chiếu P bằng worldProjection: phải trở lại tâm pixel đã ngắm ở nhiều t. Thử player âm, hai mức zoom và yaw khác nhau. Đây là phép kiểm mạnh hơn việc vẽ một mũi tên rồi thấy nó có vẻ cùng hướng.
+
+```bash title="Terminal — checkpoint 02"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_64_checkpoint_2 --parallel 2
+./build/Debug/project_64_checkpoint_2.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trong `build/`. **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint; các snippet chỉ tập trung phần vừa giải thích.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng tâm (8,8,8) cố định khi tạo ray. Đi tới player (−20.5,33), chiếu ngược sẽ lệch dù công thức camera không đổi.
+2. Bỏ +0.5 khi lấy pixel center. Sai nửa pixel có thể nhỏ ở ảnh xa nhưng khiến hit đổi tại cạnh; giữ cùng quy ước sampling với rasterizer.
+
+Thử trên một bản riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Round-trip screen của O+20D khớp x+0.5/y+0.5 trong 1e-9 cho các preset kiểm thử. Direction có norm≈1; đổi pixel không đổi direction của cùng camera trực giao. Reach của sandbox sẽ tối đa 96 từ origin plane.
+
+## Bài tập mở rộng
+
+So hai ray qua hai pixel xa nhau: hiệu origin nằm trên mặt phẳng right/up, còn direction giống nhau. Giải thích vì sao không dùng công thức perspective hoặc chia theo z ở đây.
+
+Tiếp theo: [Chọn block đầu tiên qua nhiều chunk](/projects/voxel-sandbox/03-chon-block-qua-nhieu-chunk).
+

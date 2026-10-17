@@ -57,7 +57,7 @@ const data = {
       "Idle không query/rebuild/raster, aim chỉ query, camera không rebuild, nhiều edit trước refresh được gộp một rebuild.",
       "Build/CTest Debug và Release, hidden smoke một frame có timeout; kiểm tương tác desktop được báo riêng.",
       "Nút sanity UI chỉ kiểm query hữu hạn; oracle đầy đủ chạy ở Node/CTest. Không đánh đồng PASS của một nút với toàn bộ QA.",
-      "Roadmap/search/glossary/ZIP đồng bộ; Project 61–78 Sắp ra mắt, generated output không đưa vào Git.",
+      "Roadmap/search/glossary/ZIP đồng bộ; phần chưa phát hành hiển thị Sắp ra mắt, generated output không đưa vào Git.",
     ],
   },
   lessons: [

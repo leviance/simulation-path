@@ -418,5 +418,40 @@
     "sourceDirectory": "project-60-voxel-ray-editor",
     "checkpointCount": 9,
     "demoId": "voxel-ray-editor"
+  },
+  {
+    "id": "61",
+    "slug": "voxel-greedy-meshing",
+    "sourceDirectory": "project-61-voxel-greedy-meshing",
+    "checkpointCount": 9,
+    "demoId": "voxel-greedy-meshing"
+  },
+  {
+    "id": "62",
+    "slug": "voxel-chunk-streaming",
+    "sourceDirectory": "project-62-voxel-chunk-streaming",
+    "checkpointCount": 10,
+    "demoId": "voxel-chunk-streaming"
+  },
+  {
+    "id": "63",
+    "slug": "voxel-procedural-terrain",
+    "sourceDirectory": "project-63-voxel-procedural-terrain",
+    "checkpointCount": 9,
+    "demoId": "voxel-procedural-terrain"
+  },
+  {
+    "id": "64",
+    "slug": "voxel-sandbox",
+    "sourceDirectory": "project-64-voxel-sandbox",
+    "checkpointCount": 10,
+    "demoId": "voxel-sandbox"
+  },
+  {
+    "id": "65",
+    "slug": "simulator-controls",
+    "sourceDirectory": "project-65-simulator-controls",
+    "checkpointCount": 7,
+    "demoId": "simulator-controls"
   }
 ]

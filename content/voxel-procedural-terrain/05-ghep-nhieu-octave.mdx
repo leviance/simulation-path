@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm chi tiết bằng nhiều octave
+
+## Vấn đề cần giải quyết
+
+Một lớp value noise tạo đồi rộng nhưng ít chi tiết. Tăng tần số của cả lớp sẽ làm mất luôn dáng đồi lớn. Ta muốn giữ sườn đồi rộng và thêm gợn nhỏ lên trên nó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Dùng tổng kiểu fBm hữu hạn: n=(Σ aₖv(2ᵏx/scale,2ᵏz/scale))/Σaₖ, với aₖ=0.5ᵏ. Mỗi octave có tần số gấp đôi và biên độ còn một nửa. Tất cả dùng cùng seed; các lớp không phải các biến ngẫu nhiên độc lập. Chia tổng trọng số giúp khoảng giá trị không lớn lên chỉ vì thêm octave.
+
+$$
+n(x,z)=\frac{\sum_{k=0}^{m-1}2^{-k}v(2^kx/L,2^kz/L)}{\sum_{k=0}^{m-1}2^{-k}}
+$$
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="terrain63-5" />
+
+### Ba lớp đóng góp bao nhiêu tại cùng một cột?
+
+Lấy world (15,8), seed=42, scale=32 và 3 octave. Ta không lấy ba cột khác nhau: cả ba mẫu đều góp vào **cùng cột** (15,8), nhưng nhìn tọa độ đó ở ba tần số.
+
+| Octave k | Điểm đưa vào valueNoise | Biên độ aₖ | Giá trị mẫu v | Đóng góp aₖv |
+| --- | --- | --- | --- | --- |
+| 0 | (0.46875,0.25) | 1 | −0.39802680 | −0.39802680 |
+| 1 | (0.9375,0.5) | 0.5 | −0.51396419 | −0.25698209 |
+| 2 | (1.875,1) | 0.25 | 0.78808795 | 0.19702199 |
+
+Tổng trọng số là 1+0.5+0.25=1.75. Tổng đóng góp khoảng −0.45798691; chia cho 1.75 được n≈−0.26170681. Vì vậy H=floor(8+6n)=6. Nếu chỉ dùng octave 0, n≈−0.39802680 và H=5. Thêm chi tiết không đồng nghĩa mọi cột đều cao hơn: giá trị của lớp mới có thể âm hoặc dương.
+
+## Viết code từng bước
+
+### Bước 1 — Giữ cả tổng và tổng trọng số
+
+sum và weight bắt đầu bằng zero, amplitude bằng 1, frequency bằng 1/scale. Sau mỗi mẫu, cộng đúng amplitude vào weight rồi mới giảm amplitude. Nếu chia cho số octave thay cho weight, độ cao sẽ giảm sai vì các lớp không có trọng số bằng nhau.
+
+```cpp title="include/terrain.hpp"
+inline double terrainSignal(double x, double z, const TerrainConfig& config) {
+    validateConfig(config);
+    if (!std::isfinite(x) || !std::isfinite(z) || std::abs(x) > 2048 || std::abs(z) > 2048) {
+        throw std::out_of_range("world -2048..2048");
+    }
+    double sum = 0;
+    double weight = 0;
+    double amplitude = 1;
+    double frequency = 1.0 / config.scale;
+    for (int octave = 0; octave < config.octaves; ++octave) {
+        sum += amplitude * valueNoise(x * frequency, z * frequency, config.seed);
+        weight += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2;
+    }
+    return sum / weight;
+}
+```
+
+### Bước 2 — Đổi tín hiệu đã chuẩn hóa thành cột
+
+Giữ 8 và 6 như bài trước. Khi đổi octave, khoảng độ cao vẫn nằm trong [2,14], còn hình chi tiết thay đổi. clamp là hàng rào an toàn, không phải cách chữa một tổng sai vì quên chuẩn hóa.
+
+```cpp title="include/terrain.hpp"
+inline int heightAt(double x, double z, const TerrainConfig& config) {
+    const double signal = terrainSignal(x, z, config);
+    return std::clamp(static_cast<int>(std::floor(8 + 6 * signal)), 2, 14);
+}
+```
+
+### Bước 3 — Giới hạn cấu hình trước khi chạy
+
+Scale chỉ nhận 16/32/64 và octave 1..4. Ở trường hợp chi tiết nhất, khoảng lattice cuối bằng 16/2³=2 block; ta không thêm lớp có bước nhỏ hơn voxel rồi ngạc nhiên vì ảnh thay đổi thất thường. Đây là giới hạn thực hành, không chứng minh tín hiệu đã band-limit hoàn toàn.
+
+```cpp title="include/terrain.hpp"
+inline void validateConfig(const TerrainConfig& config) {
+    if (config.seed > 65535u || (config.scale != 16 && config.scale != 32 && config.scale != 64) || config.octaves < 1 || config.octaves > 4) {
+        throw std::out_of_range("seed 0..65535, scale 16/32/64, octaves 1..4");
+    }
+}
+```
+
+## Ghép các phần lại
+
+Build checkpoint_5. Trong Canvas bài này dùng cấu hình mặc định; phần điều chỉnh thông số sẽ được thêm cùng giao dịch đổi world ở bài 07. Đọc vòng lặp và thử sửa octave trong TerrainConfig để so 1,2,3,4 lớp. Khi chỉ có một octave, kết quả phải bằng valueNoise của bài trước. [Glossary libnoise](https://libnoise.sourceforge.net/glossary/index.html) giải thích octave, lacunarity và persistence; code ở đây tự viết value noise, không dùng thư viện đó.
+
+```bash title="Terminal — checkpoint 05"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_63_checkpoint_5 --parallel 2
+./build/Debug/project_63_checkpoint_5.exe
+```
+
+Lệnh trên dùng Visual Studio 2022 trên Windows. Với Ninja/Make single-config, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure và chạy executable trong `build/`. Tên target có trong CMakeLists.txt của ZIP. Mục **Mã chạy được sau bài** dưới đây có toàn bộ file của checkpoint, không chỉ các đoạn vừa thay.
+
+## Thử làm sai để hiểu đúng
+
+1. Xóa phép chia sum/weight. Một seed có thể đẩy nhiều cột chạm trần clamp; hình bẹt đỉnh không phải chi tiết tự nhiên mới.
+2. Nhân frequency bằng 2 nhưng quên giảm amplitude. Các gợn nhỏ có sức nặng ngang đồi lớn, tạo bề mặt quá gắt. Dự đoán trước khi thử rồi khôi phục 0.5.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Với mọi scale/octave cho phép, tín hiệu nằm trong [−1,1] và H trong [2,14]. Một octave khớp valueNoise. Tại (15,8) với mặc định, n≈−0.26170680617117803, H=6; fixture giúp nhận ra đổi nhầm thứ tự cập nhật weight.
+
+## Bài tập mở rộng
+
+Đếm số lần hash cho một chunk trước khi tối ưu: 256 cột × số octave × 4 góc. Đề xuất cache nút lattice nhưng chưa triển khai; cache phải chứa cả seed và scale/octave phù hợp, không được làm kết quả phụ thuộc thứ tự tải.
+
+Tiếp theo: [Biến độ cao thành cỏ, đất và đá](/projects/voxel-procedural-terrain/06-lap-day-cot-va-vat-lieu).
+

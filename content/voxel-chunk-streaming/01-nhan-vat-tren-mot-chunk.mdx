@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt nhân vật lên khối đất đang chạy
+
+## Vấn đề cần giải quyết
+
+Project 61 đã biết gộp mặt trong một chunk. Nhưng khi nhân vật đi ra khỏi chunk đó, thế giới kết thúc ở đâu? Trước khi tải thêm đất, ta cần thấy rõ nhân vật đang đứng ở đâu và camera có đi theo đúng không. Một thuật toán streaming không có cảnh để quan sát rất dễ biến thành vài bộ đếm tăng lên mà không biết chương trình đang làm gì.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bản học tập dùng một tầng chunk theo Y, mỗi chunk vẫn chứa 16³ Block ID nhưng đất chỉ cao 4 block. Hình phẳng giúp nhận ra lỗi tải/gỡ; địa hình thay đổi theo noise để dành cho Project 63. Lớp trên đổi vật liệu theo Key để các chunk dễ phân biệt.
+
+ZIP đã có greedy mesher, camera trực giao và Z-buffer từ Project 61. Starter phải hiển thị một khối đất. Marker hồng nằm trên mặt đất ở y=4.2, là overlay debug chứ chưa có cơ thể, trọng lực hoặc collision. Ở bài này nhân vật chỉ đi trong chunk 0; ra tọa độ âm là việc của bài sau.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-1" />
+
+## Viết code từng bước
+
+### Bước 1 — Chạy khung có đất trước
+
+Cấu hình CMake với BUILD_CHECKPOINTS=ON, chạy starter để kiểm SDL window, renderer và streaming texture. Ảnh CPU 320×240 được phóng lên vùng 640×480. Nhìn thấy đất rồi mới thêm điều khiển; không bắt đầu bằng một map rỗng.
+
+```cpp title="src/main.cpp"
+SDL_Window* window = SDL_CreateWindow("Voxel chunk streaming", 960, 600, flags);
+SDL_Renderer* renderer = nullptr;
+if (window != nullptr) {
+    renderer = SDL_CreateRenderer(window, nullptr);
+}
+SDL_Texture* texture = nullptr;
+if (renderer != nullptr) {
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, voxel::imageWidth, voxel::imageHeight);
+}
+```
+
+
+### Bước 2 — Dịch nhân vật bằng hành động rõ ràng
+
+WASD thay X/Z đúng 4 world units mỗi lần nhấn. Đây là lệnh bước tay để thử streaming, không phải mô phỏng vận tốc theo frame. movePlayer tạm chặn trong [0,16) ở checkpoint 01; giữ phím không tự đi liên tục.
+
+```cpp title="include/controls.hpp"
+double dx = 0;
+double dz = 0;
+if (key == SDLK_W) {
+    dz = -4;
+}
+if (key == SDLK_S) {
+    dz = 4;
+}
+if (key == SDLK_A) {
+    dx = -4;
+}
+if (key == SDLK_D) {
+    dx = 4;
+}
+if (dx != 0 || dz != 0) {
+    movePlayer(app.world, std::clamp(app.world.player.x + dx, -playerLimit, playerLimit), std::clamp(app.world.player.z + dz, -playerLimit, playerLimit));
+}
+```
+
+
+### Bước 3 — Vẽ marker bằng cùng camera
+
+Ảnh world được dịch theo vị trí nhân vật nên trong hệ tọa độ dùng để vẽ, nhân vật luôn ở X=Z=8. Marker đi qua project giống geometry rồi đổi về kích thước SDL. Đừng vẽ nó ở tâm cửa sổ theo phỏng đoán; tâm ảnh không nhất thiết là điểm trên mặt đất.
+
+```cpp title="include/view.hpp"
+const ScreenPoint p = project({8, 4.2, 8}, app.camera);
+const SDL_FRect marker{static_cast<float>(p.x * 2 - 3), static_cast<float>(30 + p.y * 2 - 3), 6, 6};
+require(SDL_SetRenderDrawColor(renderer, 255, 100, 120, 255));
+require(SDL_RenderFillRect(renderer, &marker));
+```
+
+
+## Ghép các phần lại
+
+Trong ZIP, build starter trước rồi checkpoint 01 để thấy phần điều khiển mới. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 1"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_62_starter --parallel 2
+cmake --build build --config Debug --target project_62_checkpoint_1 --parallel 2
+.\build\Debug\project_62_checkpoint_1.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ offset theo player trong sceneMesh nhưng vẫn vẽ marker ở (8,4.2,8): marker đứng yên trong world trong khi tọa độ player thay đổi. Hoàn tác sau khi quan sát.
+2. Nhân tọa độ SDL thêm device-pixel-ratio: marker lệch khỏi ảnh ở high-DPI. CPU pixel, SDL logical và bitmap vật lý không phải cùng hệ tọa độ.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Starter có khối đất rõ ràng; checkpoint 01 thêm marker, WASD và inspector. Mũi tên hoặc kéo hình xoay camera, +/- zoom. Chưa có queue hoặc nhiều chunk; không gọi sự thiếu đó là lỗi của bản đầu.
+
+## Bài tập mở rộng
+
+Dùng IJKL hoặc click bản đồ để chọn một ô khác. Giải thích vì sao chọn inspector không được thay đổi Block ID hoặc dựng lại mesh.
+
+Tiếp theo: [Đổi world sang chunk và local, kể cả tọa độ âm](/projects/voxel-chunk-streaming/02-world-chunk-va-toa-do-am).

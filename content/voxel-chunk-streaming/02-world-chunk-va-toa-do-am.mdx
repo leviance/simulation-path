@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi world sang chunk và local, kể cả tọa độ âm
+
+## Vấn đề cần giải quyết
+
+Đứng ở X=−0.5 thì bạn thuộc chunk nào? Nếu dùng phép chia int C++ như với số dương, kết quả có thể là chunk 0 và local âm. Một sai lệch ở đây sẽ lan sang lookup neighbor, hàng đợi và cả mặt giáp ranh.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với cạnh S=16, ta cần $c=\lfloor x/S\rfloor$, $l=x-cS$. Khi đó $0\le l<16$ và $x=16c+l$. Voxel local là floor(l), không phải phần dư của world position dạng float. Ví dụ −0.5 → c=−1, l=15.5; −16 → −1,0; −16.5 → −2,15.5.
+
+C++ chia int bằng cách bỏ phần lẻ về zero, không tự làm floor ở miền âm. Vì vậy có hai helper: splitAxis cho vị trí liên tục, floorDiv cho world block nguyên dùng khi tra neighbor. Key có X/Z nguyên; y vẫn nằm trong một tầng 0..15.
+
+Bạn có thể kiểm quy tắc chia int ở [bản thảo tiêu chuẩn C++](https://eel.is/c++draft/expr.mul). Đừng sửa lệch tọa độ bằng cách lấy abs; ta cần giữ nguyên vị trí bên âm.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Tách vị trí liên tục bằng floor
+
+splitAxis kiểm finite và miền [−512,512] trước phép cast. local vẫn là double để marker dịch được giữa hai voxel; block là chỉ số nguyên để đọc storage. Giới hạn này là phạm vi demo, không phải kích thước working set.
+
+```cpp title="include/coordinates.hpp"
+inline AxisLocation splitAxis(double position) {
+    if (!std::isfinite(position) || std::abs(position) > playerLimit) {
+        throw std::out_of_range("player position -512..512");
+    }
+    const int chunk = static_cast<int>(std::floor(position / side));
+    const double local = position - chunk * side;
+    return {chunk, local, static_cast<int>(std::floor(local))};
+}
+```
+
+
+### Bước 2 — Sửa phép chia cho world block nguyên
+
+Nếu phần dư âm thì quotient phải lùi một. Với −16 phần dư bằng zero nên không lùi; với −17 cần chunk −2. Không viết một nhánh đặc biệt chỉ cho −1 vì lỗi xuất hiện ở mọi biên âm.
+
+```cpp title="include/coordinates.hpp"
+inline int floorDiv(int value) {
+    // C++ chia số nguyên về zero; cần lùi thêm một chunk nếu dư âm.
+    int quotient = value / side;
+    if (value % side < 0) {
+        --quotient;
+    }
+    return quotient;
+}
+```
+
+
+### Bước 3 — Ghép X/Z thành Key của nhân vật
+
+Key dùng địa chỉ chunk chứ không dùng tọa độ local. Camera vẫn bám player world. Thử preset ngay bên âm gốc: map đổi center sang (−1,−1), nhưng lúc này dữ liệu vẫn chỉ có chunk 0; bài 03 mới tải thêm.
+
+```cpp title="include/coordinates.hpp"
+inline Key centerOf(const Player& player) {
+    return {splitAxis(player.x).chunk, splitAxis(player.z).chunk};
+}
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 2"
+cmake --build build --config Debug --target project_62_checkpoint_2 --parallel 2
+.\build\Debug\project_62_checkpoint_2.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay floor(position/16) bằng cast int: thử −0.5 sẽ rơi nhầm vào chunk 0. So cả chunk và local, không chỉ nhìn marker.
+2. Với int âm, dùng world%16 làm local trực tiếp: có thể ra −1 và truy cập sai mảng. Local block phải nằm trong 0..15.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Các mốc −16.5/−16/−0.5/0/15.5/16 cho đúng địa chỉ. Ghép chunk*16+local khôi phục world. Input NaN/ngoài miền bị từ chối trước khi sửa player.
+
+## Bài tập mở rộng
+
+Viết bảng mốc −32, −16, 0, 16, 32 và hai phía mỗi mốc một khoảng 0.5. Tự dự đoán trước khi dùng preset hoặc pure tests.
+
+Tiếp theo: [Tải một vùng chunk quanh nhân vật](/projects/voxel-chunk-streaming/03-tai-cac-chunk-quanh-nhan-vat).

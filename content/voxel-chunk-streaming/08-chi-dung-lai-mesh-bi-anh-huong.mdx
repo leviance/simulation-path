@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chỉ dựng lại những mesh bị ảnh hưởng
+
+## Vấn đề cần giải quyết
+
+Đổi một chunk mà dựng lại toàn bộ 49 mesh thì queue nhỏ vẫn có thể tốn nhiều việc. Tuy nhiên chỉ rebuild chunk mới cũng sai: neighbor cũ còn giữ mặt mà nó vừa bị che, hoặc thiếu mặt sau khi một chunk bị gỡ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một load/unload ảnh hưởng Key đó và bốn neighbor ngang. Chưa streaming theo Y nên không có hàng xóm trên/dưới chunk. Gộp Key bằng set để hai job kề nhau không rebuild cùng một mesh hai lần. Load tối đa 5 mesh, unload tối đa 4 mesh còn sống; với budget 2, bound bảo thủ là 10.
+
+Đây là batch đồng bộ: đổi resident, dựng xong các mesh ảnh hưởng, rồi mới cập nhật ảnh. Không có queue mesh riêng để geometry cũ hở biên trong nhiều frame. Counter lastMeshes đếm rebuild của batch, rebuilds đếm cả phiên; rasterizations không phải số lần SDL present hoặc FPS.
+
+Di chuyển player trong cùng chunk và orbit chỉ đổi ảnh. Thay topology mới làm geometry thay đổi. Buffer Block ID và mesh local vẫn giữ nguyên khi chỉ dịch camera.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="stream62-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Ghi đúng tập ảnh hưởng
+
+markAffected không quét cả world. Key vừa unload có thể không còn trong map; rebuild tự bỏ qua nó. Set vẫn giữ các neighbor cần khôi phục mặt biên.
+
+```cpp title="include/meshing.hpp"
+inline void markAffected(std::set<Key>& dirty, Key key) {
+    dirty.insert(key);
+    dirty.insert({key.x - 1, key.z});
+    dirty.insert({key.x + 1, key.z});
+    dirty.insert({key.x, key.z - 1});
+    dirty.insert({key.x, key.z + 1});
+}
+```
+
+
+### Bước 2 — Hoàn tất geometry trước frame
+
+refreshMeshes lấy hợp các Key thay đổi của cả batch, rebuild các Entry còn sống rồi đánh dấu frameDirty. Không trả lại UI giữa lúc resident đã đổi nhưng neighbor mesh chưa cập nhật.
+
+```cpp title="include/meshing.hpp"
+inline void refreshMeshes(World& world, const std::vector<Key>& changed) {
+    if (changed.empty()) {
+        return;
+    }
+    std::set<Key> dirty;
+    for (const Key key : changed) {
+        markAffected(dirty, key);
+    }
+    for (const Key key : dirty) {
+        rebuild(world, key);
+    }
+    world.peak = std::max(world.peak, world.chunks.size());
+    world.frameDirty = true;
+}
+```
+
+
+### Bước 3 — Chỉ raster khi ảnh thật sự đổi
+
+refreshFrame đọc mesh đã cache. Không gọi sceneMesh/render khi cả frameDirty và cameraDirty đều false. CameraDirty không đánh dấu mesh; SDL vẫn dùng texture cũ để present.
+
+```cpp title="include/controller.hpp"
+inline bool refreshFrame(App& app) {
+    if (!app.world.frameDirty && !app.cameraDirty) {
+        return false;
+    }
+    render(app.frame, sceneMesh(app.world), app.camera);
+    app.world.frameDirty = false;
+    app.cameraDirty = false;
+    ++app.rasterizations;
+    return true;
+}
+```
+
+
+## Ghép các phần lại
+
+Mở snapshot trước làm điểm bắt đầu. Đối chiếu các file vừa thay đổi, rồi build checkpoint của bài này. Mỗi snapshot có đủ source độc lập. Phần mã hoàn chỉnh dưới bài cho phép xem cả file và chỗ gọi hàm, không phải tự ghép các mảnh theo phỏng đoán.
+
+```bash title="Terminal — checkpoint 8"
+cmake --build build --config Debug --target project_62_checkpoint_8 --parallel 2
+.\build\Debug\project_62_checkpoint_8.exe
+```
+
+Đường dẫn trên dành cho Windows/Visual Studio. Single-config generator đặt CMAKE_BUILD_TYPE=Debug và chạy executable ở build. Native dùng nhãn ASCII; Canvas và bài giảng giải thích bằng tiếng Việt.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ dirty Key mới load: neighbor cũ vẫn chứa mặt bên trong. Chỉ dirty Key bị unload: Key đã mất, không ai sửa lỗ trên các neighbor.
+2. Đặt frameDirty/mesh rebuild trong draw: idle cũng tăng counter. Đổi inspector phải không thay đổi rebuild hoặc raster.
+
+Làm trên bản thử riêng rồi khôi phục code đúng trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Một tick không vượt 5×budget mesh rebuild. Neighbor không liên quan giữ revision cũ. Idle không generate/remesh/raster; xoay một bước chỉ tăng raster. Payload 49×4096 byte chỉ là Block ID, không phải tổng RAM vì còn mesh/map/allocator.
+
+## Bài tập mở rộng
+
+Với hai job load sát nhau, liệt kê hai tập ảnh hưởng rồi lấy hợp. Dự đoán số mesh thực sự còn resident và đối chiếu lastMeshes.
+
+Tiếp theo: [Đi theo một hành trình và quan sát hàng đợi](/projects/voxel-chunk-streaming/09-dieu-khien-va-quan-sat-streaming).
