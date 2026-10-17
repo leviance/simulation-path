@@ -453,5 +453,12 @@
     "sourceDirectory": "project-65-simulator-controls",
     "checkpointCount": 7,
     "demoId": "simulator-controls"
+  },
+  {
+    "id": "66",
+    "slug": "widget-tree",
+    "sourceDirectory": "project-66-widget-tree",
+    "checkpointCount": 8,
+    "demoId": "widget-tree"
   }
 ]

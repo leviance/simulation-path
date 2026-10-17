@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Điều khiển mô phỏng qua ID thay vì qua tên từng nút
+
+## Vấn đề cần giải quyết
+
+Ta đã tìm được node dưới chuột, nhưng chưa có Button nào làm gì. Project 65 giữ một Control enum riêng cho ba trường hợp. Trong cây này, nhiều Button có thể cùng Action::Reset; dispatcher không cần biết chúng nằm trong Group nào hoặc được thêm ở index bao nhiêu.
+
+## Hiểu ý tưởng trước khi viết code
+
+hot là ID dưới chuột; active là ID giữ gesture; focus dành cho bàn phím ở bài sau. Ui không sở hữu node. Trước khi dùng ID, `locate` tìm view hiện tại, gồm bounds world và enabled kế thừa. Con trỏ trong WidgetView chỉ dùng trong thao tác đang diễn ra, không được cất sang sự kiện khác.
+
+Slider đổi X world thành trọng lực:
+
+$$t=\frac{x-bounds.x}{bounds.width},\qquad g=1200\,\mathrm{clamp}(t,0,1)$$
+
+Khi kéo Panel sang trái 16, mép Slider cũng sang trái 16. Nếu vẫn trừ hằng 688 như một thanh cố định, con trỏ không còn khớp núm kéo. Đây là phép thử giúp thấy lý do phải lưu UI bằng cây, không chỉ đổi cách đặt tên hàm.
+
+<InteractiveLab demo="widget-tree" mode="tree66-5" />
+
+## Viết code từng bước
+
+### Bước 1 — Ghi active bằng ID lúc nhấn
+
+Trước khi nhận down, reconcile loại ID không còn tương tác được. Nếu đã có active thì down khác không được cướp gesture. Panel trả consumed=true cả ở vùng trống, nhưng không trở thành active.
+
+```cpp title="include/input.hpp — chọn owner cho gesture"
+reconcile(tree, ui);
+if (ui.active != 0)
+    return true;
+ui.hot = hitTest(tree, point);
+ui.focus = 0;
+const auto view = locate(tree, ui.hot);
+```
+
+Đoạn tiếp theo trong pointerDown chỉ nhận active cho Button/Slider đang enabled. Hàm trả về ui.hot!=0 để host quyết định có chuyển event xuống cảnh không. Trong events.hpp, scene chỉ đổi vị trí bóng khi UI chưa dùng sự kiện và point thuộc Rect của cảnh.
+
+Native gọi SDL_CaptureMouse khi có active. Nếu backend từ chối capture, host hủy gesture thay vì để lại một Button có thể thiếu sự kiện up. Canvas dùng pointerId làm owner và pointer capture; cancel/lost capture từ pointer khác không kết thúc thao tác hiện tại. [SDL_CaptureMouse](https://wiki.libsdl.org/SDL3/SDL_CaptureMouse) không được hỗ trợ bởi mọi video target, nên phải kiểm kết quả.
+
+### Bước 2 — Hoàn tất click ở lần thả, không phải ở mỗi frame
+
+Lấy active ra biến cục bộ, nhận nốt mẫu slider cuối, rồi xóa active trước action. Nếu Button bị thay đổi hoặc mất hiệu lực trước release, reconcile sẽ loại owner cũ.
+
+```cpp title="include/input.hpp — một lần release, tối đa một action"
+inline void pointerUp(const Tree& tree, Model& model, Ui& ui, Point point) {
+    reconcile(tree, ui);
+    const WidgetId active = ui.active;
+    drag(tree, model, active, point.x);
+    ui.active = 0;
+    ui.hot = hitTest(tree, point);
+    if (active != 0 && active == ui.hot)
+        activate(tree, model, active);
+}
+```
+
+activate kiểm loại node và enabled, rồi đọc Action. Reset chỉ gọi resetSimulation trên Model, không dựng Tree mới. Release mồ côi có active=0 nên không làm gì. Cancel chỉ bỏ gesture, không tự đặt lại gravity mà người dùng vừa kéo.
+
+### Bước 3 — Đọc bounds mới mỗi khi kéo
+
+drag không cần biết Slider là child ở cấp mấy. Nó lấy bounds từ locate rồi gọi cùng setGravity mà vật lý dùng. setGravity bỏ NaN/Infinity và clamp vào 0..1200.
+
+```cpp title="include/input.hpp — slider không phụ thuộc tọa độ viết cứng"
+inline void drag(const Tree& tree, Model& model, WidgetId id, double x) {
+    const auto view = locate(tree, id);
+    if (view && view->enabled && view->node->kind == Kind::Slider) {
+        setGravity(model, (x - view->bounds.x) / view->bounds.width * 1200);
+    }
+}
+```
+
+pointerMove vẫn cập nhật hot theo point mới, nhưng active giữ nguyên cho tới up/cancel. Vì vậy có thể kéo Slider lên trên hoặc ra ngoài Panel mà không làm mất owner. Host đổi tọa độ theo logical presentation đúng một lần; DPR chỉ thuộc bitmap của Canvas.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 05"
+cmake --build build --config Debug --target project_66_checkpoint_5 --parallel 2
+./build/Debug/project_66_checkpoint_5.exe
+```
+
+Thử Pause, Reset và Slider trước khi chạy vật lý. Ở vị trí mặc định, x=800 là giữa thanh và cho g=600. Dịch root sang trái 16: giữa thanh là x=784, vẫn phải cho 600. Kéo qua mép rồi thả phải clamp ở đầu tương ứng, kể cả khi up là mẫu tọa độ cuối chưa có motion trước đó.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi active trong pointerMove theo hot. Nhấn Pause rồi kéo sang Reset: Reset có thể nhận release dù không nhận down. Đây là lỗi ownership, không phải lỗi hit-test.
+2. Lưu WidgetView hoặc Widget* vào Ui để khỏi tra lại. Thử xóa nhánh ở bài 07: ID có thể được kiểm lại, còn con trỏ cũ đã hết lifetime. Khôi phục Ui chỉ chứa ID trước khi tiếp tục.
+
+Thử trên bản riêng rồi hoàn tác các thay đổi sai.
+
+## Tự kiểm tra kết quả
+
+Mỗi click hợp lệ tạo đúng một action. Release ngoài/khác Button không activate; Slider nhận mẫu up cuối. Control disable và Panel trống chặn click xuống cảnh. Reset giữ cây/ID; chạy 1000 bước vật lý không gọi builder. Focus bàn phím chưa được bật ở mốc này.
+
+## Bài tập mở rộng
+
+Thêm một Button Reset thứ hai bằng dữ liệu, không sửa activate. Đặt nó trong Panel lồng khác rồi kiểm action. Tiếp theo: [Focus bàn phím từ cây](/projects/widget-tree/06-focus-theo-cay).

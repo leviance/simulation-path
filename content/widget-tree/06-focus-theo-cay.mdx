@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho bàn phím đi qua các control trong cây
+
+## Vấn đề cần giải quyết
+
+Nếu Tab vẫn được viết Pause→Reset→Gravity bằng tay, thêm một Button vào cây chưa thực sự làm hệ thống mở rộng được. Ta cần sinh thứ tự focus từ cùng cây đang được vẽ, đồng thời không để hover giành quyền nhận bàn phím.
+
+## Hiểu ý tưởng trước khi viết code
+
+Focus order lấy các node tương tác theo preorder: Pause, Reset, Slider ở cây mặc định. Panel/Label không có mặt trong danh sách. Node bị clip hoàn toàn, ẩn hoặc disable theo parent cũng không được nhận focus.
+
+Native đi vòng ở hai đầu. Canvas cố ý trả Tab về trang ở hai đầu để người dùng còn ra được control HTML và phần nội dung tiếp theo. Hai cách này khác ở host, không thay ownership của cây. Trong Canvas, dùng Tab đầu tiên khi focus đang ở khung mô phỏng để chọn Pause; Shift+Tab ở đầu trả ra ngoài.
+
+<InteractiveLab demo="widget-tree" mode="tree66-6" />
+
+## Viết code từng bước
+
+### Bước 1 — Lọc từ danh sách node đang hiển thị
+
+Ta không đọc trực tiếp vector children của Group vì control có thể lồng sâu hơn. paintList đã tính visibility/clip và enabled kế thừa; focusOrder chỉ giữ các loại có thể tương tác.
+
+```cpp title="include/traversal.hpp — thứ tự focus không viết cứng ID"
+inline std::vector<WidgetId> focusOrder(const Tree& tree) {
+    std::vector<WidgetId> result;
+    for (const WidgetView& view : paintList(tree)) {
+        if (view.enabled && (view.node->kind == Kind::Button || view.node->kind == Kind::Slider))
+            result.push_back(view.node->id);
+    }
+    return result;
+}
+```
+
+Preset cắt Panel không đưa Slider hoàn toàn nằm ngoài Group vào focus order. Khi ẩn Group ở bài 07, danh sách có thể rỗng: Tab phải thoát hoặc được host xử lý, không lấy order[0] vô điều kiện.
+
+### Bước 2 — Dịch vị trí trong danh sách rồi lấy lại ID
+
+Trong keyDown, tìm index của ui.focus. index=-1 nghĩa focus chưa thuộc danh sách. Với Tab tiến, next bắt đầu ở 0; Shift+Tab từ None chọn phần tử cuối trong native. Phép modulo chỉ dùng sau khi kiểm danh sách không rỗng.
+
+```cpp title="include/keyboard.hpp — tính vị trí tiếp theo"
+int index = -1;
+for (int i = 0; i < static_cast<int>(order.size()); ++i)
+    if (order[i] == ui.focus)
+        index = i;
+int next = index + 1;
+if (shift) {
+    next = index - 1;
+    if (index < 0)
+        next = static_cast<int>(order.size()) - 1;
+}
+const int size = static_cast<int>(order.size());
+ui.focus = order[static_cast<std::size_t>((next + size) % size)];
+return true;
+```
+
+Ui vẫn lưu ID, không lưu index. Danh sách có thể đổi khi thêm/xóa node, nên index cũ không phải địa chỉ ổn định. Tab hủy active trước khi đổi focus; người dùng không vừa kéo Slider vừa gửi action tới Button khác.
+
+### Bước 3 — Chặn repeat cho action, không chặn cho mọi phím
+
+Giữ Enter có thể tạo nhiều keydown. Ta nhận event để không cho host xử lý lần nữa, nhưng chỉ activate ở lần đầu. Slider arrow được repeat để chỉnh liên tục; Home/End đi về hai đầu.
+
+```cpp title="include/keyboard.hpp — Button không bị nhấn lặp"
+if (ui.active != 0)
+    return true;
+if (key == Key::Enter || key == Key::Space) {
+    if (!repeat)
+        activate(tree, model, ui.focus);
+    return ui.focus != 0;
+}
+```
+
+Không ghi ui.focus trong pointerMove. Hover qua Reset trong khi Pause đang focus chỉ đổi hot; Enter vẫn tác động Pause. Native events.hpp tách Shift+arrow khỏi keyDown của Slider, nên dịch Panel không đồng thời giảm gravity. Khung focus được vẽ bên trong bounds và bị cùng clip như control.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 06"
+cmake --build build --config Debug --target project_66_checkpoint_6 --parallel 2
+./build/Debug/project_66_checkpoint_6.exe
+```
+
+Đi Tab ba lần, xác nhận ID tương ứng Pause→Reset→Slider. Từ Slider, Home đặt 0, End đặt 1200, giữ trái giảm từng 20. Thử preset cắt: chỉ các control còn hiển thị mới được đưa vào thứ tự focus. Canvas phải cho Tab thoát ra ngoài, không giữ người học trong khung.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán focus=hot mỗi lần chuột di chuyển. Dùng Tab chọn Pause rồi lướt qua Reset: Enter kích hoạt một control khác với lựa chọn bàn phím vừa thực hiện.
+2. Bỏ kiểm repeat của Enter nhưng giữ repeat của arrow. Giữ Enter trên Pause sẽ chạy/dừng liên tục. Sau đó thử chặn repeat cho mọi phím: arrow không còn tăng đều như mong muốn. Khôi phục hai chính sách riêng.
+
+Thử trên bản riêng rồi khôi phục trước khi sang bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Focus order được sinh từ cây, không phải danh sách ba ID cố định. Hover không đổi focus. Repeat không toggle Button nhiều lần; Slider arrow vẫn repeat. Shift+arrow chỉ dịch Panel. Native đi vòng, Canvas thoát ở hai đầu đúng như phần hướng dẫn.
+
+## Bài tập mở rộng
+
+Thêm một Button trước Slider, không sửa keyDown; dự đoán thứ tự Tab mới. Tiếp theo: [Ẩn/xóa nhánh và lifetime của ID](/projects/widget-tree/07-an-xoa-va-vong-doi).

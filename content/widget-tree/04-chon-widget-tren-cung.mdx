@@ -1,0 +1,88 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm đúng widget đang nằm trên cùng
+
+## Vấn đề cần giải quyết
+
+Chọn preset hai Button chồng nhau. Cả Pause lẫn Reset đều chứa điểm (700,90), nhưng người dùng chỉ thấy Button được vẽ sau. Nếu hit-test lấy node đầu tiên tìm thấy theo thứ tự vẽ, nó sẽ chọn Button nằm bên dưới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Paint đi parent→children, từ child đầu đến child cuối. Picking phải đi từ child cuối ngược về đầu, tìm sâu trong nhánh đó rồi mới xét parent. Ta dừng ngay khi gặp node nhận input đầu tiên.
+
+Hai điều kiện phải cùng đúng: điểm nằm trong bounds **và** clip. Dùng quy ước half-open `[left,right) × [top,bottom)`, nên hai control kề cạnh không nhận chung một điểm. Label chỉ hiển thị, không che input; Panel nhận vùng trống để cảnh phía sau không nhận nhầm click. Control disable vẫn chắn input, còn việc không tạo action do dispatcher kiểm.
+
+Đây là chính sách của UI ta đang xây, không phải mọi toolkit đều xử lý giống hệt. Chưa có capture/bubble như DOM; kết quả chỉ là một WidgetId, hoặc 0 nếu không có hit.
+
+<InteractiveLab demo="widget-tree" mode="tree66-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Dùng lại place thay vì viết bộ tọa độ thứ hai
+
+Mở pick trong traversal.hpp. Node bị ẩn, rỗng clip hoặc point nằm ngoài đều được loại trước khi đi tiếp. Nhờ gọi place, phép vẽ và picking dùng cùng cách cộng parent và giao clip.
+
+```cpp title="include/traversal.hpp — điều kiện đi vào nhánh"
+const auto placed = place(node, origin, clip, enabled, depth);
+if (!placed || !contains(placed->clip, point) || !contains(placed->bounds, point))
+    return 0;
+```
+
+Điểm trên phần Reset bị cắt ở bài 03 vẫn nằm trong bounds đầy đủ, nhưng nằm ngoài clip. Chỉ kiểm bounds sẽ làm vùng vô hình nhận chuột. Không đọc màu pixel để giải quyết chuyện này: nhãn và overlay debug có thể trùng màu hoặc che ảnh mà không phải node nhận input.
+
+### Bước 2 — Tìm child được vẽ sau trước
+
+`rbegin` bắt đầu từ phần tử cuối, `rend` là mốc dừng trước phần tử đầu. `**it` đi qua iterator tới unique_ptr rồi tới Widget. Ta dùng iterator trong đúng vòng tìm kiếm, không cất nó vào Ui.
+
+```cpp title="include/traversal.hpp — đi ngược thứ tự paint"
+for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
+    const WidgetId hit = pick(**it, {placed->bounds.x, placed->bounds.y}, placed->clip, placed->enabled, depth + 1, point);
+    if (hit != 0)
+        return hit;
+}
+if (node.kind == Kind::Panel)
+    return node.id;
+if (node.kind == Kind::Button || node.kind == Kind::Slider)
+    return node.id;
+return 0;
+```
+
+Chỉ sau khi không child nào nhận point, ta mới xét node hiện tại. Label đi đến return 0 nên có thể đặt nhãn lên Button mà không lấy mất input của Button. Button disable vẫn trả ID để chặn click-through; bài 05 kiểm enabled trước khi ghi active hoặc gọi action.
+
+### Bước 3 — Chặn viewport và chỉ cập nhật hot
+
+Wrapper hitTest loại điểm ở ngoài logical viewport. SDL có thể trả tọa độ âm sau khi đổi event; không clamp điểm đó về mép Panel, vì clamp có thể biến một click ngoài thành click bên trong.
+
+```cpp title="include/traversal.hpp — một cửa vào cho picking"
+inline WidgetId hitTest(const Tree& tree, Point point) {
+    if (!contains(viewport, point))
+        return 0;
+    return pick(*tree.root, {}, viewport, true, 0, point);
+}
+```
+
+Ở checkpoint 04, motion chỉ gán hot rồi renderer dùng nó để đổi màu. Click chưa sửa Model. Dòng hot trong readout là ID được chọn, không phải index trong vector; xóa hoặc thêm node sau này sẽ làm hai khái niệm này khác nhau.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 04"
+cmake --build build --config Debug --target project_66_checkpoint_4 --parallel 2
+./build/Debug/project_66_checkpoint_4.exe
+```
+
+Ở preset chồng, đọc cây để tìm Button cuối trong Group. Point (700,90) phải trả ID của nó. Sau đó dùng preset cắt: điểm y=175 còn thuộc Reset; y=176 không còn thuộc Reset dù bounds kết thúc ở y=184.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi vòng pick sang children.begin()/end(). Hover có thể chọn Pause ở dưới Button Reset đang được nhìn thấy. Đổi thứ tự child trong builder để chứng minh lỗi gắn với paint order, không phải tên action.
+2. Bỏ phép kiểm placed.clip. Đưa chuột xuống phần Reset đã bị cắt; hot vẫn đổi thành Reset. Hãy kiểm cả mép bằng nhau, không chỉ một point ở xa.
+
+Thử trên bản riêng rồi khôi phục trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Button được vẽ cuối thắng tại vùng chồng. Label không nhận hit; Panel trống trả ID của Panel; point ngoài viewport trả 0. Phần bị clip không nhận hover. Model chưa thay đổi chỉ vì di chuyển con trỏ.
+
+## Bài tập mở rộng
+
+Thêm một Label trùng Rect với hai Button rồi đảo thứ tự hai Button. Dự đoán hot trước khi chạy từng trường hợp. Tiếp theo: [Nối ID với Model](/projects/widget-tree/05-noi-input-voi-model).

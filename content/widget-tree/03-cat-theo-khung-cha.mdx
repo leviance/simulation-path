@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Không cho widget vẽ tràn khỏi Panel cha
+
+## Vấn đề cần giải quyết
+
+Một Button vẫn có thể thuộc Group dù một phần của nó nằm ngoài khung Group. Nếu ta thu nhỏ Group, Button không nên vẽ đè ra ngoài. Nhưng sửa luôn Rect của Button sẽ làm mất kích thước gốc và gây khó hiểu khi Group được mở rộng trở lại.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta giữ hai dữ liệu khác nhau: **bounds** là vị trí/kích thước đầy đủ; **clip** là vùng được phép xuất hiện. Clip của một node là giao giữa bounds của nó với clip đã được parent nhận từ các tổ tiên.
+
+$$L=\max(L_a,L_b),\quad R=\min(R_a,R_b),\quad w=\max(0,R-L)$$
+
+Trục Y làm tương tự. Không giao thì width hoặc height bằng 0. Đây không phải thuật toán layout: node không bị dời đi hoặc co lại, chỉ bị giới hạn phần nhìn thấy.
+
+Chọn preset cắt Group: Group world y=80, cao 96 nên kết thúc tại y=176. Reset vẫn bắt đầu ở y=140 và cao 44; phần được vẽ chỉ cao 36. Slider của bài sau nằm dưới mép Group nên sẽ không xuất hiện ở preset này.
+
+<InteractiveLab demo="widget-tree" mode="tree66-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết phép giao độc lập với SDL
+
+Hàm trả Rect mới, không sửa a hoặc b. Nó dùng double vì chung kiểu với geometry; ví dụ của project đặt tọa độ nguyên. Kiểm cả trường hợp không giao và chỉ chạm cạnh.
+
+```cpp title="include/geometry.hpp — giao hai Rect"
+inline Rect intersect(Rect a, Rect b) {
+    const double x = std::max(a.x, b.x);
+    const double y = std::max(a.y, b.y);
+    return {x, y, std::max(0.0, std::min(a.x + a.width, b.x + b.width) - x), std::max(0.0, std::min(a.y + a.height, b.y + b.height) - y)};
+}
+```
+
+### Bước 2 — Giao clip tại mỗi cấp, không chỉ với root
+
+Thêm phép giao trong place. visit đã truyền placed.clip xuống child từ bài 02, nên giao của mọi tổ tiên tự được tích lũy. Nếu chỉ giao với root, một grandchild vẫn có thể vẽ tràn Panel con.
+
+```cpp title="include/traversal.hpp — clip được kế thừa"
+const Rect bounds{origin.x + node.local.x, origin.y + node.local.y, node.local.width, node.local.height};
+clip = intersect(bounds, clip);
+if (clip.width <= 0 || clip.height <= 0)
+    return std::nullopt;
+return WidgetView{&node, bounds, clip, enabled, depth};
+```
+
+Không có WidgetView không đồng nghĩa node bị xóa. `find` vẫn đọc được node trong ownership tree, còn paintList bỏ node không có phần hiển thị. Đây cũng là lý do Inspector tách local, world và clip.
+
+### Bước 3 — Áp kết quả lên renderer rồi dọn state clip
+
+SDL_SetRenderClipRect dùng một Rect theo viewport của render target hiện tại. Trong project, viewport không được dịch riêng, nên ta dùng trực tiếp tọa độ logical đã tính. Source đổi mép sang số nguyên; ở các tọa độ nguyên của ví dụ, clip đúng như fixture 36 pixel cao. Không đòi Canvas và SDL raster giống từng byte ở mép phân số.
+
+```cpp title="include/view.hpp — clip cho node hiện tại"
+const SDL_Rect clip{int(std::ceil(view.clip.x)), int(std::ceil(view.clip.y)), int(std::floor(view.clip.x + view.clip.width) - std::ceil(view.clip.x)), int(std::floor(view.clip.y + view.clip.height) - std::ceil(view.clip.y))};
+require(SDL_SetRenderClipRect(renderer, &clip));
+```
+
+Mỗi node đặt toàn bộ clip hiệu lực của chính nó trước khi vẽ, không dựa vào clip mà sibling trước để lại. Sau cây UI, draw tắt clip rồi vẽ HUD. Trong Canvas, mỗi node dùng save/clip/restore. [Tài liệu SDL_SetRenderClipRect](https://wiki.libsdl.org/SDL3/SDL_SetRenderClipRect) mô tả `nullptr` là tắt clipping.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 03"
+cmake --build build --config Debug --target project_66_checkpoint_3 --parallel 2
+./build/Debug/project_66_checkpoint_3.exe
+```
+
+Chọn preset cắt Panel. Dịch cả root không được làm phần Button đã bị clip “rơi” ở vị trí cũ. Bài này chỉ chứng minh phần vẽ; đến bài 04 mới dùng cùng clip cho hit-test.
+
+## Thử làm sai để hiểu đúng
+
+1. Ghi clip trở lại node.local. Chuyển preset hoặc tăng chiều cao Group: Button không khôi phục kích thước cũ vì dữ liệu gốc đã bị sửa.
+2. Bỏ SDL_SetRenderClipRect(renderer, nullptr) trước HUD. Các dòng thông tin bên ngoài node cuối có thể biến mất dù dữ liệu hoàn toàn đúng; đây là state renderer bị rò, không phải node bị xóa.
+
+Thử trên bản riêng rồi khôi phục trước khi tiếp tục.
+
+## Tự kiểm tra kết quả
+
+Reset bounds vẫn (688,140,224,44), clip là (688,140,224,36). Node nằm hoàn toàn ngoài clip không có WidgetView, nhưng vẫn có ID trong cây. SDL clip không ảnh hưởng phần HUD sau lượt vẽ UI.
+
+## Bài tập mở rộng
+
+Lồng hai Panel có mép cắt khác nhau, tính vùng giao bằng tay rồi so Inspector. Sau đó học [chọn widget trên cùng](/projects/widget-tree/04-chon-widget-tren-cung): phần đã không nhìn thấy cũng không được nhận chuột.

@@ -1,0 +1,178 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biến các hình vẽ thành widget có dữ liệu riêng
+
+## Vấn đề cần giải quyết
+
+Ở Project 65, Pause, Reset và Gravity là ba trường hợp được viết riêng. Thêm control thứ tư nghĩa là sửa thêm chỗ vẽ, hit-test và bàn phím. Ta sẽ giữ lại cảnh bóng rơi, nhưng thay phần UI bằng một cấu trúc dữ liệu có thể duyệt được.
+
+Đừng bắt đầu bằng việc chép một lớp Widget dài. Hãy build starter trước: phải thấy bóng, sàn, Space chạy/dừng, N tiến một bước và R reset cảnh. Starter đã có window/renderer, logical presentation và vật lý của Project 65; chưa có cây UI. Nếu cửa sổ chưa chạy, sửa phần môi trường trước khi học ownership.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một widget trước hết là dữ liệu: nó thuộc loại nào, nằm ở đâu, có nhãn gì và chứa những widget nào. SDL_Renderer không cần nằm trong node. Khi vẽ, ta đọc node rồi gọi SDL; khi nhận input, ta tra lại chính dữ liệu đó.
+
+Parent **sở hữu** child, không chỉ biết địa chỉ của child. `std::unique_ptr<Widget>` biểu diễn một owner duy nhất; khi parent bị hủy, danh sách children cũng bị hủy. `std::vector` có thể dời các unique_ptr trong bộ nhớ, nhưng đây không phải lời hứa rằng con trỏ đến node sống mãi: xóa nhánh vẫn hủy node. Vì vậy trạng thái input sẽ giữ WidgetId, không giữ Widget*.
+
+Retained UI có nghĩa cây còn sống giữa các frame. Nó không có nghĩa SDL tự giữ ảnh của frame trước, hay ta không cần render lại. Trong Canvas, hãy so số frame vẽ với số lần dựng cây.
+
+<InteractiveLab demo="widget-tree" mode="tree66-1" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ nền SDL chạy được rồi thêm kiểu dữ liệu
+
+`src/main.cpp` vẫn tạo window và renderer theo từng bước quen thuộc. Window đã có cờ resizable từ starter; lỗi ở bất kỳ bước nào đều đi ra đường cleanup, không dùng renderer null.
+
+```cpp title="src/main.cpp — nền đã có trong starter"
+SDL_Window* window = SDL_CreateWindow("Project 66 - Retained widget tree", 960, 540, flags);
+```
+
+`Kind` trả lời “vẽ và xử lý như loại nào”; `Action` trả lời “Button này làm gì”; `Binding` cho Label đọc giá trị hiện tại từ Model. Hai enum sau chưa phải hệ thống script hoặc event binding. ID 0 được dành cho None; root bắt đầu ở ID 1.
+
+```cpp title="include/tree.hpp — dữ liệu của một node"
+using WidgetId = std::uint32_t;
+inline constexpr int maxWidgets = 32;
+inline constexpr int maxDepth = 6;
+inline constexpr WidgetId maxId = 1000000;
+enum class Kind {
+    Panel,
+    Button,
+    Slider,
+    Label
+};
+enum class Action {
+    None,
+    Pause,
+    Reset
+};
+enum class Binding {
+    None,
+    Gravity,
+    Time
+};
+
+struct Widget {
+    WidgetId id = 0;
+    Kind kind = Kind::Panel;
+    Rect local;
+    std::string text;
+    Action action = Action::None;
+    Binding binding = Binding::None;
+    std::vector<std::unique_ptr<Widget>> children;
+};
+```
+
+`Rect local` đo từ góc parent. Width/height là kích thước của node, không phải phần còn trống mà ta tự chia trong Panel. Project này vẫn đặt tọa độ thủ công; layout tự động là nội dung của Project 67.
+
+### Bước 2 — Chuyển ownership vào danh sách children
+
+Trước khi thêm con, cần có owner của cả cây. `Tree` tạo root bằng make_unique; constructor đặt ID và Rect của root. Các số 664/24/272/492 là vị trí và kích thước Panel mà ta đã chọn, không phải một phép layout bí mật. nextId=2 vì số 1 đã thuộc root.
+
+```cpp title="include/tree.hpp — owner của cây"
+struct Tree {
+    std::unique_ptr<Widget> root = std::make_unique<Widget>();
+    WidgetId nextId = 2;
+    int count = 1;
+    int revision = 0;
+
+    Tree() {
+        root->id = 1;
+        root->local = {664, 24, 272, 492};
+        root->text = "Panel";
+    }
+};
+```
+
+Mở `add` trong tree.hpp. `find` so ID của node hiện tại rồi tìm tiếp trong children; trả nullptr nếu không thấy. `depthOf` cũng đi theo nhánh đó nhưng trả số cấp, với root ở depth 0. Hai helper này có đầy đủ trong checkpoint; đừng coi ID là chỉ số vector.
+
+Sau khi tìm parent, add kiểm nó là Panel, kiểm Rect, depth và cap trước khi thay đổi cây. `make_unique` cấp phát một Widget; các trường được điền rõ ràng trước khi chuyển owner vào vector bằng `std::move`. Sau move, biến child không còn giữ node đó, nên ta lưu ID trước khi chuyển.
+
+```cpp title="include/tree.hpp — giao node mới cho parent"
+inline WidgetId add(Tree& tree, WidgetId parentId, Kind kind, Rect local, const std::string& text = "", Action action = Action::None, Binding binding = Binding::None) {
+    Widget* parent = find(*tree.root, parentId);
+    if (!parent || parent->kind != Kind::Panel || tree.count >= maxWidgets || tree.nextId > maxId || depthOf(*tree.root, parentId) >= maxDepth || !validRect(local) || text.size() > 40) {
+        throw std::out_of_range("widget parent, geometry or capacity");
+    }
+
+    auto child = std::make_unique<Widget>();
+    child->id = tree.nextId;
+    child->kind = kind;
+    child->local = local;
+    child->text = text;
+    child->action = action;
+    child->binding = binding;
+    const WidgetId id = child->id;
+    parent->children.push_back(std::move(child));
+    ++tree.nextId;
+    ++tree.count;
+    ++tree.revision;
+    return id;
+}
+```
+
+Không dùng `delete child.get()`: unique_ptr sẽ làm việc đó khi owner bị hủy. Cũng không copy một unique_ptr để cho hai parent cùng sở hữu một node. API add chỉ tạo node mới, không nhận một nhánh đang có sẵn; ở đây chưa có reparent nên không có thao tác nối parent trở lại dưới descendant.
+
+`buildTree` dùng add để đặt Label tiêu đề tại local (24,16), Button tại (24,56). Nó trả một `BuiltTree` gồm owner Tree và các ID cần cho demo; những ID này chỉ là số, không phải các owner mới. Button của checkpoint 01 mới được vẽ, chưa nhận click. Dữ liệu đã có Action::Pause để thấy nơi cấu hình được đặt, nhưng dispatcher chỉ được nối ở bài 05.
+
+```cpp title="include/scene.hpp — dựng đúng cây của checkpoint 01"
+inline BuiltTree buildTree(int preset = 0) {
+    if (preset < 0 || preset > 3)
+        throw std::out_of_range("preset 0..3");
+    BuiltTree built;
+    Tree& tree = built.tree;
+    if (preset == 3)
+        tree.root->local.x = 520;
+    add(tree, 1, Kind::Label, {24, 16, 224, 24}, "SIMULATOR");
+    built.pause = add(tree, 1, Kind::Button, {24, 56, 224, 44}, "Pause / Resume", Action::Pause);
+    return built;
+}
+```
+
+Bản mặc định dùng preset=0. Nhánh preset=3 chỉ dịch root để kiểm UI che một phần cảnh ở các bài sau. Không có loop tạo node trong hàm vẽ. `return built` chuyển kết quả ra App; cây có unique_ptr không được copy để tạo hai owner song song.
+
+### Bước 3 — Đặt owner ở ngoài vòng lặp frame
+
+Thêm `BuiltTree` vào App. Khi `lab::App app` được tạo, builder chạy một lần. Vòng while vốn đã có trong starter chỉ nhận event, cập nhật Model và gọi draw; không đặt buildTree vào drawScene hoặc drawWidget.
+
+```cpp title="include/app.hpp — state tồn tại giữa các frame"
+BuiltTree built = buildTree();
+int builds = 1;
+int preset = 0;
+int extraLabels = 0;
+std::string message = "Tree built once";
+```
+
+Trong `view.hpp`, helper fill đổi Rect thành SDL_FRect rồi gọi SDL_RenderFillRect. Bài này vẽ root và các child trực tiếp của root bằng một vòng for; đến bài 02 mới cần renderer đi sâu tùy số cấp. `draw` kết thúc bằng SDL_RenderPresent, còn việc giữ node sống là trách nhiệm của App.
+
+```cpp title="include/app.hpp — vẽ dữ liệu hiện có"
+const auto nodes = paintList(app.built.tree);
+for (const WidgetView& node : nodes)
+    drawWidget(renderer, node, app.model, app.ui);
+require(SDL_SetRenderClipRect(renderer, nullptr));
+```
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 01"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_66_checkpoint_1 --parallel 2
+./build/Debug/project_66_checkpoint_1.exe
+```
+
+Lệnh dùng Visual Studio 2022 trên Windows. Với Ninja/Make, configure thêm `-DCMAKE_BUILD_TYPE=Debug` và chạy executable trong build/. Mã chạy được sau bài có toàn bộ file; hãy mở main.cpp để xác nhận App được tạo trước while. Source ZIP không cần lấy lại file từ Project 65.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản thử, tạo App mới trong mỗi vòng while. Quan sát builds/ID nếu chỉ nhìn số ID: chúng có thể lặp lại giống nhau dù đối tượng đã bị hủy rồi dựng lại. Đặt breakpoint tại buildTree để thấy số lần gọi; số ID không phải bằng chứng duy nhất của retained state.
+2. Thử gọi add với parent là ID của Button, hoặc Rect rộng 0. Hàm phải từ chối trước khi count/nextId thay đổi. Không sửa guard để một control bất kỳ cũng chứa child cho “tiện”.
+
+Thực hiện trên bản thử riêng rồi hoàn tác trước bài tiếp theo.
+
+## Tự kiểm tra kết quả
+
+Checkpoint có Panel, Label và một Button. Frame tăng, builds giữ 1; Space/N/R chỉ tác động cảnh bóng. Reset cảnh giữ nguyên cây, ID và gravity. Bạn chỉ rõ được owner của từng node và lý do Ui sau này không giữ raw pointer.
+
+## Bài tập mở rộng
+
+Thêm một Label trực tiếp vào root bằng add, không thêm nhánh if riêng trong draw. Dự đoán ID mới trước khi chạy. Tiếp theo: [Vẽ Panel lồng nhau](/projects/widget-tree/02-panel-long-nhau).

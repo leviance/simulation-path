@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng cây UI và chạy toàn bộ dự án
+
+## Vấn đề cần giải quyết
+
+Một ảnh đẹp không chứng minh ownership đúng. Hai lỗi tọa độ có thể bù nhau; một Button vẫn trông bình thường dù được activate hai lần; con trỏ treo có thể chưa crash trong lần thử đầu. Ta cần kiểm dữ liệu và các transition có đáp án rõ ràng, không chỉ gọi một hàm audit rồi thấy PASS.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách ba lớp kiểm: cấu trúc cây, hình học/thứ tự, và hành vi theo chuỗi input. Audit của Canvas/F1 chỉ kiểm state hiện tại. Nó không chứng minh press/release đúng, không kiểm capture của hệ điều hành và không thay desktop QA.
+
+Fixture phải độc lập ở phần đang kiểm. Expected Pause world=(664+24+0,24+56+0)=(688,80); không lấy place(Pause) làm đáp án cho một lời gọi place khác. Cùng nguyên tắc đó, xóa Group phải còn 3 node vì ta đếm nhánh bằng tay từ builder, không dùng subtreeSize để tạo expected cho removeSubtree.
+
+<InteractiveLab demo="widget-tree" mode="tree66-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Audit cấu trúc và ID trước khi tin trạng thái UI
+
+checkNode duyệt cả ownership tree, gồm node ẩn; kiểm ID duy nhất, depth, Rect, count và chỉ Panel có children. Vòng kiểm có cap 32 node/depth 6 để không biến một cây hỏng thành công việc vô hạn. Sau đó audit đối chiếu Ui với những view còn hợp lệ.
+
+```cpp title="include/audit.hpp — kiểm state hiện tại"
+inline int audit(const Tree& tree, const Ui& ui) {
+    if (!tree.root || tree.root->kind != Kind::Panel || tree.nextId > maxId + 1)
+        throw std::runtime_error("invalid root");
+    std::set<WidgetId> ids;
+    int count = 0;
+    checkNode(*tree.root, 0, tree, ids, count);
+    if (count != tree.count)
+        throw std::runtime_error("invalid tree count");
+    Ui repaired = ui;
+    reconcile(tree, repaired);
+    if (repaired.hot != ui.hot || repaired.active != ui.active || repaired.focus != ui.focus)
+        throw std::runtime_error("stale widget id");
+    return count;
+}
+```
+
+Không sửa trực tiếp Ui thật trong audit rồi báo PASS: làm vậy sẽ che state sai mà test cần bắt. Ở đây reconcile chỉ chạy trên bản sao repaired để so với state được đưa vào.
+
+### Bước 2 — Kiểm fixture và transition, không dùng chính thuật toán làm đáp án
+
+Trong tests.cpp, check tăng số lỗi và main trả EXIT_FAILURE nếu có lỗi. Không dùng assert vì NDEBUG trong Release có thể bỏ toàn bộ điều kiện. Kiểm cả bounds và clip của Reset: 44 là kích thước gốc, 36 là phần còn được nhìn thấy.
+
+```cpp title="tests/tests.cpp — hai đáp án được tính trước"
+const auto reset = locate(clipped.tree, clipped.reset);
+check(reset && reset->bounds.height == 44 && reset->clip.height == 36, "clip changes visibility not ownership bounds");
+check(hitTest(clipped.tree, {700, 175}) == clipped.reset && hitTest(clipped.tree, {700, 176}) != clipped.reset, "half-open clipped button");
+```
+
+Thêm các chuỗi: down Pause→move Reset→up Reset không action; down/up Pause đúng một action; Slider up ở ngoài nhận mẫu cuối; cancel không áp mẫu mới. Với mutation: down Slider→hide/remove Group→reconcile→up phải không gửi input tới node đã mất. Test thêm Label overlay, Button disable chắn input, Tab bỏ node bị clip và ID mới lớn hơn ID đã xóa.
+
+### Bước 3 — Chứng minh retained state bằng nhiều lần đọc, rồi kiểm giới hạn
+
+Source lưu địa chỉ root và nextId trước 1000 lượt đọc/cập nhật. Không giữ node vào Ui; con trỏ ở test chỉ dùng để so identity trong khoảng không có mutation. Reset vật lý không được làm địa chỉ root hoặc ID thay đổi.
+
+```cpp title="tests/tests.cpp — test không dựng lại cây"
+for (int frame = 0; frame < 1000; ++frame) {
+    paintList(retained.tree);
+    hitTest(retained.tree, {700, 90});
+    advance(model, fixedDt);
+}
+resetSimulation(model);
+check(retained.tree.root.get() == rootAddress && retained.tree.nextId == lastId && audit(retained.tree, Ui{}) == 9, "retained state survives render/query/physics/reset");
+```
+
+Kiểm thêm parent không phải Panel, Rect NaN/rộng 0, node/depth cap và root protection. Input bị từ chối phải không đổi count/nextId; đừng kiểm mỗi việc có throw hay không. Audit và test thuần vẫn chưa chứng minh API capture của desktop backend hoạt động, nên cần smoke và QA riêng.
+
+## Ghép các phần lại
+
+```bash title="Terminal — Debug và Release đều phải kiểm"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+./build/Debug/project_66_final.exe
+```
+
+Single-config generator dùng hai build directory với CMAKE_BUILD_TYPE tương ứng. Mỗi build cần watchdog bên ngoài; timeout trong CTest không giới hạn thời gian compile. Chỉ chạy hai compiler, không retry vô hạn. Khi muốn smoke:
+
+```powershell title="PowerShell — một frame ẩn, tối đa 10 giây"
+$trial = Start-Process -FilePath ".\build\Debug\project_66_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $trial.WaitForExit(10000)) {
+    taskkill.exe /PID $trial.Id /T /F
+    throw "Smoke vượt 10 giây."
+}
+if ($trial.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+Final source đầy đủ nằm dưới bài và trong ZIP: geometry, simulation, tree, scene, traversal, input, keyboard, mutation, audit, view, app, events và main. Không cần tự ghép từ các snippet. README phân biệt Reset cảnh với dựng lại cây và ghi đủ phím native.
+
+## Thử làm sai để hiểu đúng
+
+1. Cho expected world Rect gọi lại place; sau đó cố ý cộng thiếu offset trong place. Test có thể vẫn xanh vì cả actual/expected dùng chung lỗi. Khôi phục expected từ hằng số (688,80).
+2. Bỏ dọn active/focus sau remove nhưng vẫn gọi audit chỉ sau một lượt rebuild mới. State sai đã bị xóa trước khi kiểm. Chạy audit ngay sau mutation và kiểm release kế tiếp không action.
+3. Đổi check sang assert, build Release, rồi cố ý đặt expected clip height thành 35. Test phải fail ở cả hai cấu hình; nếu không, phép kiểm đã bị loại khỏi chương trình.
+
+Thử trên bản riêng rồi hoàn tác mọi mutation kiểm thử.
+
+## Tự kiểm tra kết quả
+
+Tám checkpoint đều build độc lập; CTest Debug/Release qua; hidden smoke kết thúc hữu hạn. Website có challenge, glossary, search, code One Dark, source cuối từng bài và ZIP khớp nguồn. Không thêm thư viện hoặc file build vào Git. Cây giữ ID giữa frame nhưng không được lưu qua reload; localStorage chỉ lưu tiến độ học.
+
+Desktop QA cần ghi riêng: preset chồng/cắt, slider kéo ngoài window, capture thất bại, hai pointer/cancel, blur/resize/DPR, Tab/Shift+Tab, repeat và reduced-motion. Smoke không thay các thử nghiệm này. Bộ UI hiện chưa có layout tự động, parser HTML/CSS hoặc bubbling.
+
+## Bài tập mở rộng
+
+Thêm một Slider hệ số nảy bằng node mới; test dùng bounds của node thay vì tọa độ viết cứng. Sau đó thử tăng số control: bạn vẫn phải đặt y bằng tay. Đó là bài toán của Project 67 — bố cục hộp tự động, đang **Sắp ra mắt** trong [roadmap](/roadmap).

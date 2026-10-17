@@ -1,0 +1,93 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ Panel lồng nhau mà không cộng tọa độ bằng tay
+
+## Vấn đề cần giải quyết
+
+Bây giờ ta muốn nhóm Pause và Reset trong một Panel con. Nếu từng Button vẫn giữ tọa độ màn hình, dịch cả nhóm sẽ phải sửa nhiều Rect. Ta cần một quy tắc chung để vị trí của con đi theo parent mà dữ liệu local không đổi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Local đo từ góc parent; world đo trên mặt phẳng logic của cửa sổ. Với translation đơn thuần:
+
+$$p_{world}=p_{parent}+p_{local}$$
+
+Root bắt đầu ở (664,24). Group nằm tại local (24,56), nên Group world là (688,80). Pause ở local (0,0) trong Group, nên Pause cũng bắt đầu tại (688,80). Reset ở (0,60), nên world là (688,140). Không cộng thêm Rect của root lần thứ hai.
+
+Ta sẽ duyệt **parent trước, các child sau**. Mỗi lời gọi nhận góc world của parent, tính góc của node hiện tại, vẽ nó rồi truyền kết quả xuống child. Đó là phép duyệt depth-first; nó chưa tự quyết định control nên nằm ở đâu.
+
+<InteractiveLab demo="widget-tree" mode="tree66-2" />
+
+## Viết code từng bước
+
+### Bước 1 — Chỉ đổi nơi chứa dữ liệu khi dựng cây
+
+Trong scene.hpp, tạo Group dưới root rồi dùng ID của Group làm parent cho hai Button. Các tọa độ này là local: x=0 của Pause không có nghĩa mép trái cửa sổ.
+
+```cpp title="include/scene.hpp — tạo nhánh control"
+built.group = add(tree, 1, Kind::Panel, {24, 56, 224, static_cast<double>(height)}, "Controls");
+built.pause = add(tree, built.group, Kind::Button, {0, 0, 224, 44}, "Pause / Resume", Action::Pause);
+built.reset = add(tree, built.group, Kind::Button, {0, 60, 224, 44}, "Reset scene", Action::Reset);
+```
+
+height ở bản này là 300. Source giữ width của Group là 224, bằng width của các Button; việc chọn các số vẫn do chúng ta làm. Bài 67 mới thay phần đặt vị trí tay bằng thuật toán layout.
+
+### Bước 2 — Mang origin xuống từng lời gọi
+
+`place` tính bounds của một node. Nó không thay node.local; bounds chỉ là kết quả cho lần duyệt hiện tại.
+
+```cpp title="include/traversal.hpp — chuyển local sang world"
+const Rect bounds{origin.x + node.local.x, origin.y + node.local.y, node.local.width, node.local.height};
+```
+
+`std::function<void(const WidgetView&)>` là một callback: visit biết cách đi qua cây, còn callback biết phải làm gì với từng node. Nhờ vậy paintList có thể dùng visit để thu thập view mà không cần gọi SDL trong thuật toán cây.
+
+```cpp title="include/traversal.hpp — DFS dùng chung"
+inline void visit(const Widget& node, Point origin, Rect clip, bool enabled, int depth, const std::function<void(const WidgetView&)>& draw) {
+    const auto placed = place(node, origin, clip, enabled, depth);
+    if (!placed)
+        return;
+    draw(*placed);
+    for (const auto& child : node.children) {
+        visit(*child, {placed->bounds.x, placed->bounds.y}, placed->clip, placed->enabled, depth + 1, draw);
+    }
+}
+```
+
+clip và enabled được mang theo để chuẩn bị cho các bài sau; ở checkpoint 02 chưa có cắt theo parent hoặc disable. depth dùng cho kiểm giới hạn và Inspector, không được nhân vào tọa độ.
+
+### Bước 3 — Dịch root thay vì sửa từng child
+
+`movePanel` chỉ sửa local của root. Vì parent của root là gốc viewport (0,0), local của root cũng là vị trí world của nó. Giới hạn dịch giữ root trong mặt phẳng 960×540.
+
+```cpp title="include/scene.hpp — một thay đổi kéo theo cả nhánh"
+tree.root->local.x = std::clamp(tree.root->local.x + dx, 0.0, 688.0);
+tree.root->local.y = std::clamp(tree.root->local.y + dy, 0.0, 48.0);
+++tree.revision;
+```
+
+Dịch root sang trái 16: Pause world thành (672,80), Reset thành (672,140), nhưng cả hai local vẫn như cũ. Dùng Inspector của Canvas để kiểm ba giá trị này, không chỉ nhìn cả khối có vẻ đi cùng nhau.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 02"
+cmake --build build --config Debug --target project_66_checkpoint_2 --parallel 2
+./build/Debug/project_66_checkpoint_2.exe
+```
+
+Native dùng Shift+mũi tên để dịch root 4 đơn vị; Canvas có thêm nút dịch 16. Tọa độ event đã được SDL_ConvertEventToRenderCoordinates đưa về logical space từ starter. Đừng lại chia event cho tỉ lệ window lần nữa.
+
+## Thử làm sai để hiểu đúng
+
+1. Truyền origin cũ của parent thay vì placed.bounds vào lời gọi child. Group có thể đi theo root nhưng các Button sẽ mất offset của Group; kiểm bằng fixture (688,80).
+2. Khi dịch root, cộng dx vào cả Rect của từng Button. Hệ thống sẽ áp offset hai lần và các con di chuyển nhanh gấp đôi; xem local trong Inspector để phát hiện.
+
+Thử trên bản riêng rồi hoàn tác các thay đổi sai.
+
+## Tự kiểm tra kết quả
+
+Cây có root→Group→Pause/Reset. Đổi vị trí root không gọi buildTree, không đổi local hoặc ID của con. Cùng một visit vẽ được cây có thêm Panel con; không có ba bộ công thức riêng cho từng độ sâu.
+
+## Bài tập mở rộng
+
+Thêm một Panel giữa Group và Reset, cho nó offset (8,12). Tính world Rect mới bằng tay trước khi chạy. Nếu Button tràn khung cha, đừng ép local về 0: [bài 03 sẽ xử lý bằng clipping](/projects/widget-tree/03-cat-theo-khung-cha).

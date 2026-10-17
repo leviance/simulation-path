@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ẩn hoặc xóa một nhánh mà không để lại ID treo
+
+## Vấn đề cần giải quyết
+
+Thử giữ Slider rồi làm Group biến mất. Một hệ thống chỉ biết vẽ cây có thể vẫn giữ active là ID của Slider cũ. Khi release đến, nó dùng một con trỏ hết lifetime, hoặc gửi action cho node mới vừa được đặt vào chỗ cũ.
+
+Bài này không thêm thuật toán layout. Ta xử lý câu hỏi căn bản hơn: ai sở hữu node, node còn sống hay không, và Ui phải làm gì khi một nhánh không còn tương tác được?
+
+## Hiểu ý tưởng trước khi viết code
+
+Ẩn và xóa khác nhau. Ẩn chỉ đổi visible: node, ID và children vẫn thuộc cây. Xóa nhánh là hủy unique_ptr trong danh sách của parent, kéo theo việc hủy các descendant. Disable vẫn vẽ và chặn click, nhưng không cho action hoặc keyboard focus.
+
+Có hai cách tra cứu với mục đích khác nhau:
+
+| Tra cứu | Câu hỏi được trả lời |
+| --- | --- |
+| find | Cây còn sở hữu node có ID này không? |
+| locate | Node có view hiện tại sau visibility/clip không, bounds/clip/enable kế thừa là gì? |
+| focusOrder | Những node nào hiện được phép nhận keyboard focus? |
+
+ID không phải giấy bảo đảm lifetime. Nó chỉ cho phép ta kiểm lại. Trong cùng phiên cây, nextId tăng dần và không tái dùng số đã xóa; dựng lại cả cây mở phiên ID mới, nên host phải hủy capture và xóa Ui trước khi nhận input tiếp.
+
+<InteractiveLab demo="widget-tree" mode="tree66-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Ẩn nhánh mà không sửa ownership
+
+Thêm visible/enabled vào Widget; place đọc các cờ này khi đi xuống cây. Nếu parent bị ẩn, cả nhánh không có view. Nếu parent bị disable, mọi child nhận enabled=false dù cờ riêng của child vẫn là true.
+
+```cpp title="include/mutation.hpp — đổi visibility rồi dọn trạng thái input"
+inline void setVisible(Tree& tree, WidgetId id, bool visible, Ui& ui) {
+    Widget* node = find(*tree.root, id);
+    if (node) {
+        node->visible = visible;
+        ++tree.revision;
+    }
+    reconcile(tree, ui);
+}
+```
+
+node ở đây chỉ là con trỏ cục bộ trong lời gọi; không có thao tác erase trong hàm này. Hide rồi show Group phải trả lại đúng ID cũ. Nó không được âm thầm gọi buildTree. Trong Canvas, wrapper mutation cũng đối chiếu Ui sau khi sửa dữ liệu.
+
+### Bước 2 — Xóa từ danh sách children của owner
+
+Ta tìm child mang ID cần xóa, đếm kích thước nhánh trước rồi erase unique_ptr. Sau erase trả về ngay, không dùng iterator, reference hoặc con trỏ vừa bị hủy. Nếu chưa đúng child, tìm tiếp trong nhánh con.
+
+```cpp title="include/mutation.hpp — hủy cả nhánh theo ownership"
+inline bool eraseChild(Widget& parent, WidgetId id, Tree& tree) {
+    for (auto it = parent.children.begin(); it != parent.children.end(); ++it) {
+        if ((*it)->id == id) {
+            tree.count -= subtreeSize(**it);
+            parent.children.erase(it);
+            ++tree.revision;
+            return true;
+        }
+        if (eraseChild(**it, id, tree))
+            return true;
+    }
+    return false;
+}
+```
+
+removeSubtree từ chối root trước khi gọi eraseChild. Ở cây mặc định có 9 node, Group sở hữu nhánh 6 node. Xóa Group để lại 3 node: root, Label tiêu đề và Label thời gian. Đây là đáp án đếm độc lập để kiểm, không phải lấy count sau xóa làm expected.
+
+### Bước 3 — Dọn ID không còn dùng được trước release tiếp theo
+
+reconcile không chỉ hỏi find, vì node có thể còn sống nhưng nằm trong nhánh ẩn hoặc đã bị clip. Hàm giữ active/focus chỉ khi node có view, enabled và thuộc loại tương tác.
+
+```cpp title="include/input.hpp — đối chiếu trạng thái với cây mới"
+const auto valid = [&tree](WidgetId id) {
+    const auto view = locate(tree, id);
+    return view && view->enabled && (view->node->kind == Kind::Button || view->node->kind == Kind::Slider);
+};
+if (!valid(ui.active))
+    ui.active = 0;
+if (!valid(ui.focus))
+    ui.focus = 0;
+if (!locate(tree, ui.hot))
+    ui.hot = 0;
+```
+
+Ở host, active về 0 thì phải nhả capture. Ui sạch nhưng hệ điều hành vẫn đang capture cũng là một lỗi vòng đời. Canvas dùng releasePointerCapture theo đúng pointer owner; blur, resize, ẩn tab và reduced-motion đều hủy gesture. Không tự chạy tiếp vật lý khi quay lại tab.
+
+`add` giữ nextId tăng dần, kiểm cap trước mutation. Một Label mới không mượn ID của Slider vừa xóa. Nút Dựng lại cây là thao tác khác: tạm dừng, giữ y/v/gravity, xóa Ui/capture rồi tạo phiên cây mới. Reset cảnh chỉ sửa Model, không reset ID.
+
+## Ghép các phần lại
+
+```bash title="Terminal — checkpoint 07"
+cmake --build build --config Debug --target project_66_checkpoint_7 --parallel 2
+./build/Debug/project_66_checkpoint_7.exe
+```
+
+Native H ẩn/hiện Group, E enable/disable, D xóa Group, A thêm tối đa bốn Label dưới root, T dựng cây mặc định. Để kiểm nhánh bị xóa giữa gesture, giữ chuột trên Slider rồi nhấn D. Trong Canvas, dùng các nút mutation và xem Inspector; test tự động còn gọi chuỗi down→remove→reconcile→up mà không dựa vào việc browser tự blur khi bấm nút HTML.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ reconcile sau hide. Node vẫn còn trong ownership tree, nên chỉ kiểm find sẽ không phát hiện active/focus đang ở một control không nhìn thấy. Nhìn cả ID lẫn action sau release.
+2. Đặt nextId về ID vừa xóa để “tiết kiệm số”. Release hoặc một lệnh cũ có thể trỏ vào node mới. Không cần chạy đến crash mới kết luận lỗi; test phải chứng minh ID không tái dùng trong cùng phiên cây.
+3. Sau children.erase(it), đọc (*it)->id để ghi log. Iterator đã mất hiệu lực; hãy ghi dữ liệu cần dùng trước erase hoặc trả về ngay như source chuẩn.
+
+Thử trên bản riêng, không giữ các lỗi lifetime này trong final.
+
+## Tự kiểm tra kết quả
+
+Hide/show giữ ID; delete loại cả nhánh; root không xóa được. Active/focus được dọn trước sự kiện tiếp theo. Không có raw pointer hoặc iterator lưu trong Ui. Add sai không đổi count/nextId, cap 32 node/depth 6 vẫn có hiệu lực. Sau khi Group bị xóa, click cũ không tạo action trên Label mới.
+
+## Bài tập mở rộng
+
+Ẩn một Panel cấp sâu hơn thay vì cả Group; dự đoán focus order còn lại. Viết test cho việc xóa nhánh đang có focus nhưng không có active. Tiếp theo: [Kiểm chứng và source hoàn chỉnh](/projects/widget-tree/08-kiem-chung-va-hoan-thien).
