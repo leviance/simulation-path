@@ -29,6 +29,7 @@ export const glossarySources = [
   { file: "lib/glossary-voxel-sandbox.ts", name: "voxelSandboxGlossaryTerms" },
   { file: "lib/glossary-ui-controls.ts", name: "uiControlGlossaryTerms" },
   { file: "lib/glossary-widget-tree.ts", name: "widgetTreeGlossaryTerms" },
+  { file: "lib/glossary-box-layout.ts", name: "boxLayoutGlossaryTerms" },
 ];
 
 export function assertGlossaryModules(files) {

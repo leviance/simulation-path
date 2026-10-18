@@ -1,0 +1,98 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng layout và chạy toàn bộ dự án
+
+## Vấn đề cần giải quyết
+
+Một Panel trông gọn gàng không chứng minh margin, gap, cache hoặc picking đã đúng. Lỗi hụt bốn pixel có thể chưa lộ cho tới khi ẩn một control; cache stale có thể chỉ xuất hiện khi resize và click trong cùng frame. Ta cần đáp án tính độc lập và các chuỗi thao tác cụ thể.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách ba lớp kiểm: số học của layout, transition làm thay đổi cây/constraint và tích hợp input/render. Audit trên Canvas chỉ kiểm state hiện tại, không thay CTest, không chứng minh browser/desktop capture hoạt động và không thể xác nhận UI dễ dùng.
+
+Expected không được tính lại bằng chính measure/arrange đang kiểm. Với cấu hình mặc định, tự cộng root+Group+Pause để có `(656,96)`; Group height=28+192+32=252. Đó là fixture, không phải một lời gọi locate dùng làm expected cho locate khác.
+
+<InteractiveLab demo="box-layout" mode="box67-9" />
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm shape và dữ liệu phụ mà không sửa state
+
+auditLayout báo lỗi nếu layout còn dirty, ID/style/count không khớp hoặc geometry không hữu hạn. Nó không gọi arrange để “sửa hộ” rồi PASS. Hàm này là lớp bảo vệ nhỏ, không kiểm được mọi công thức hay thứ tự sự kiện.
+
+```cpp title="include/audit.hpp — audit không làm sạch state sai"
+if (state.dirty)
+    throw std::runtime_error("layout is dirty");
+std::set<WidgetId> ids;
+checkLayoutNode(*state.scene.tree.root, state, ids, 0);
+if (ids.size() != state.scene.styles.size() || int(ids.size()) != state.scene.tree.count)
+    throw std::runtime_error("ownership/style mismatch");
+return int(paintList(state.scene.tree).size());
+```
+
+### Bước 2 — Viết fixture và phép kiểm không mất ở Release
+
+tests.cpp include code thuần, không SDL/window. check tăng failures; main trả EXIT_FAILURE khi có lỗi. Không dùng assert, vì NDEBUG ở Release có thể bỏ mất điều kiện. Kiểm cả width/height và world origin, không chỉ một tổng đẹp mắt.
+
+```cpp title="tests/tests.cpp — fixture tính từ cấu hình mặc định"
+check(group && group->bounds.height == 252, "Group auto height = 28 + 192 + 32");
+check(pause && pause->bounds.x == 656 && pause->bounds.y == 96 && pause->bounds.width == 240 && pause->bounds.height == 36, "independent nested world fixture");
+check(state.sizes.at(1).naturalHeight == 360 && state.scene.tree.root->local.height == 492, "natural height is not fixed height");
+```
+
+Test thêm hidden giảm 52, một/không child không gap, margin bất đối xứng, Fixed overflow, Fill zero và input sau đổi width. Thử down Slider rồi đổi constraint: active phải về 0; release cũ không sửa gravity. Xóa Label phải dọn style, ID mới không tái sử dụng ID cũ.
+
+### Bước 3 — Kiểm cache bằng công việc không đổi layout
+
+Ghi lại root address, nextId và passes. Một nghìn lần ensure/đọc/vật lý không được dựng lại cây hoặc tăng passes. Sau một thay đổi spacing hợp lệ, ensure chạy đúng một lượt; cùng giá trị và dữ liệu NaN phải không làm dirty.
+
+```cpp title="tests/tests.cpp — mô phỏng không làm lại layout"
+for (int frame = 0; frame < 1000; ++frame) {
+    ensureLayout(state, ui);
+    paintList(state.scene.tree);
+    advance(model, fixedDt);
+}
+check(state.passes == passes && state.scene.tree.root.get() == rootAddress && state.scene.tree.nextId == nextId, "1000 frames retain layout and ownership");
+```
+
+Build toàn bộ starter, chín checkpoint và final. Dùng CMake ≥3.24, C++20, SDL3 3.4.8 khóa bằng FetchContent và link SDL3::SDL3. Lần configure đầu cần mạng; bản ZIP không cần source của Project 66.
+
+```bash title="Terminal — mọi mốc đều phải build"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+./build/Debug/project_67_final.exe
+```
+
+Ninja/Make single-config dùng hai build directory với CMAKE_BUILD_TYPE tương ứng. Mỗi build cần watchdog ngoài, tối đa hai compiler; CTest timeout không giới hạn compile. Không retry vô hạn. Với smoke một frame ẩn:
+
+```powershell title="PowerShell — smoke có deadline riêng"
+$trial = Start-Process -FilePath ".\build\Debug\project_67_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
+if (-not $trial.WaitForExit(10000)) {
+    taskkill.exe /PID $trial.Id /T /F
+    throw "Smoke vượt 10 giây."
+}
+if ($trial.ExitCode -ne 0) { throw "Smoke thất bại." }
+```
+
+## Ghép các phần lại
+
+Source cuối bài và ZIP chứa main, app/events/view, scene, style/layout/runtime/audit, các helper hình học/input/keyboard/vật lý và tests. Không cần chép các đoạn rời để ghép thành final. Chạy fixture thuần trước, smoke sau, rồi ghi kết quả desktop QA riêng; một nút audit xanh chưa đủ nghiệm thu toàn bộ.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi expected Group height thành 251 trên bản test riêng. Debug và Release đều phải fail. Nếu chỉ Debug fail, kiểm xem bạn đã dùng assert ở đâu.
+2. Cho expected gọi lại measure rồi bỏ margin.bottom trong measure. Actual và expected cùng sai nên test có thể xanh. Khôi phục hằng số 252 và các fixture margin bất đối xứng.
+3. Xóa dirty rồi giữ Rect cũ; chỉ audit state có thể vẫn chưa biết sai. Chuỗi đổi width→ensure→down tại điểm mới phải bắt được lỗi này.
+
+## Tự kiểm tra kết quả
+
+Chín checkpoint build độc lập; tests Debug/Release không phụ thuộc window và smoke kết thúc hữu hạn. Website có challenge, Canvas theo mốc, code One Dark, source cuối từng bài, glossary/search và ZIP khớp source. Chỉ nguồn chuẩn được theo dõi trong Git, không thêm thư viện hoặc output build.
+
+Desktop QA cần kiểm riêng: drag ra ngoài, final release, hai pointer/cancel/lost capture, blur/resize/DPR, Tab thoát Canvas, key repeat và reduced-motion. Smoke và audit không thay phần này. Layout hiện vẫn một cột, chưa có HTML/CSS, wrapping, scrolling hoặc flex shrink/grow.
+
+## Bài tập mở rộng
+
+Thử thiết kế input cho một file mô tả cây UI thay vì các lời gọi add. Đừng viết parser ngay trong engine layout: Project 68 — đọc panel.html — sẽ làm phần đó, hiện **Sắp ra mắt** trên [roadmap](/roadmap). Khi thêm cú pháp, các fixture layout của project này vẫn phải giữ nguyên.

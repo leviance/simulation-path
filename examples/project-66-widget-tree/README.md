@@ -81,4 +81,4 @@ Vật lý kế thừa Project 65: gravity logical px/s², fixedDt=1/120, tối �
 
 CTest dùng check/EXIT_FAILURE, vẫn có hiệu lực ở Release. Fixture tính world Rect bằng hằng số độc lập, kiểm reverse paint order, clip, ID, node/depth caps, input/cancel, ẩn/xóa trong lúc active, ID không tái dùng, root protection và 1000 lần đọc/cập nhật không dựng lại cây. Audit chỉ kiểm cấu trúc và ID hiện tại, không chứng minh UI dùng thuận tiện. Node test dùng cùng fixture và thêm callback thật của Canvas; test trình duyệt kiểm riêng.
 
-Trước nghiệm thu desktop: thử preset chồng/cắt, slider kéo ngoài window, hai pointer, cancel/blur/resize, keyboard repeat, Tab thoát Canvas, DPR và reduced-motion. Project 67–78 chưa phát hành vẫn ghi Sắp ra mắt trên roadmap.
+Trước nghiệm thu desktop: thử preset chồng/cắt, slider kéo ngoài window, hai pointer, cancel/blur/resize, keyboard repeat, Tab thoát Canvas, DPR và reduced-motion. Tiếp tục với Project 67 về bố cục hộp tự động; Project 68–78 chưa phát hành vẫn ghi Sắp ra mắt trên roadmap.

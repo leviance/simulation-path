@@ -1,0 +1,78 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xử lý control rộng hơn khung chứa
+
+## Vấn đề cần giải quyết
+
+Khi Panel hẹp đi, ta dễ “sửa cho đẹp” bằng cách clamp mọi control về width còn lại. Nhưng làm vậy phá hợp đồng Fixed: kích thước người dùng yêu cầu đã bị âm thầm thay đổi. Ta sẽ giữ đúng số đo và xử lý phần tràn bằng clip.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bounds trả lời widget thực sự nằm ở đâu và rộng bao nhiêu; clip trả lời phần nào của nó còn được nhìn thấy và nhận input. Một Slider rộng 320 vẫn ánh xạ 0..1200 theo 320, không theo mảnh đang lộ ra. Vì thế kéo trong phần nhìn thấy có thể chưa tới giá trị tối đa; đang capture thì kéo ra ngoài vẫn được clamp tới hai đầu.
+
+Root cao cố định 492. Khi thêm bốn Label, root naturalHeight=520 nhưng height không tự tăng thành 520. Phần cuối bị cắt; chưa có scrolling, auto window height hay phân phối lại gap.
+
+<InteractiveLab demo="box-layout" mode="box67-8" />
+
+## Viết code từng bước
+
+### Bước 1 — Chuyển riêng Slider sang Fixed
+
+setOverflow là tiện ích demo, không phải một loại layout mới. Nó đặt Slider rộng 320 hoặc trả lại Fill, rồi invalidate. Không sửa computed local trực tiếp. Native dùng O, Canvas có preset Panel hẹp và Slider Fixed.
+
+```cpp title="include/runtime.hpp — Fixed giữ kích thước yêu cầu"
+BoxStyle& style = state.scene.styles.at(state.scene.slider);
+style.width = Width::Fill;
+if (enabled)
+    style.width = Width::Fixed;
+style.fixedWidth = 320;
+state.overflow = enabled;
+invalidate(state, ui);
+```
+
+### Bước 2 — Cắt lúc vẽ/chọn, không cắt số đo
+
+Phần clip vẫn dùng traversal của Project 66. Mỗi node được đặt trong world rồi giao bounds với clip từ tổ tiên. Panel không dùng contentBox làm clip: **clip theo border bounds**, còn contentBox dùng để đặt children. Margin lớn hoặc Fixed có thể vẽ vào vùng padding cho tới mép border; đây là chính sách engine, không phải CSS overflow.
+
+```cpp title="include/traversal.hpp — clip có thể nhỏ hơn bounds"
+const Rect bounds{origin.x + node.local.x, origin.y + node.local.y, node.local.width, node.local.height};
+clip = intersect(bounds, clip);
+if (clip.width <= 0 || clip.height <= 0)
+    return std::nullopt;
+return WidgetView{&node, bounds, clip, enabled, depth};
+```
+
+Với root width=220, Group width=176 và Slider world x=756, width=320. Group kết thúc tại x=914 nên clip Slider rộng 158. Chọn Slider trong Inspector để so 320 với 158; đừng dùng một hình thu nhỏ 158 rồi gọi nó là Slider Fixed.
+
+### Bước 3 — Ánh xạ giá trị bằng bounds đầy đủ
+
+Hàm drag không cần biết layout có bao nhiêu lớp. locate lấy view mới nhất rồi dùng bounds của chính Slider. setGravity kiểm giá trị hữu hạn và clamp về 0..1200.
+
+```cpp title="include/input.hpp — tìm lại geometry theo ID"
+inline void drag(const Tree& tree, Model& model, WidgetId id, double x) {
+    const auto view = locate(tree, id);
+    if (view && view->enabled && view->node->kind == Kind::Slider) {
+        setGravity(model, (x - view->bounds.x) / view->bounds.width * 1200);
+    }
+}
+```
+
+Vùng ngoài clip không thể khởi đầu gesture. Khi đã kéo và có capture, tọa độ ngoài clip vẫn cập nhật giá trị theo bounds; thả nhận mẫu cuối. Cancel/blur/layout change không tạo thêm mẫu hoặc action. Đây là lý do input không được chỉ dựa vào một Rect đã cắt để vẽ.
+
+## Ghép các phần lại
+
+Chọn preset overflow, đọc bounds và clip của Slider rồi thử click hai phía mép Group. Sau đó khởi đầu drag trong clip và kéo vượt ra ngoài: capture phải cho phép cập nhật tới 1200. Bật/tắt Fixed không được thay gravity hoặc dựng lại cây; nó chỉ invalidate geometry và hủy gesture cũ.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng clip.width để chia vị trí kéo. Giá trị 1200 sẽ tới quá sớm ở mép clip; cùng một vị trí world cho giá trị khác khi parent bị cắt. Khôi phục phép chia theo bounds.width.
+2. Cho hit-test bỏ qua ancestor clip. Nhấn ở phần Slider bị khuất bên phải Group vẫn bắt đầu kéo. Kiểm một điểm nằm trong bounds nhưng ngoài clip, nó không được trả Slider ID.
+3. Đổi height root sang naturalHeight mỗi lần overflow. Bốn Label mới làm root vượt khung thay vì giữ 492; bạn đã đổi chính sách Fixed mà không nói cho người dùng.
+
+## Tự kiểm tra kết quả
+
+Preset overflow có Slider bounds width=320 và clip width=158. Điểm ngoài clip không down Slider; capture đang có vẫn nhận move/up cuối. Bốn Label làm naturalHeight=520, root height=492. Content width có thể về 0 nếu inset quá lớn, không thành số âm, không có loop layout vô hạn hoặc scrollbar giả.
+
+## Bài tập mở rộng
+
+Viết một cảnh root hẹp với padding lớn để content width=0; xác nhận leaf Fill width=0 không được vẽ hoặc hit. Bài cuối sẽ [kiểm chứng các hợp đồng này](/projects/box-layout/09-kiem-chung-va-hoan-thien).

@@ -1,0 +1,81 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo một control trước khi quyết định đặt nó ở đâu
+
+## Vấn đề cần giải quyết
+
+Parent cần biết một Button chiếm bao nhiêu chỗ trước khi đặt control phía sau. Nhưng width của Button có thể phụ thuộc phần content còn lại của parent. Ta cần một bước đo nhận constraint rõ ràng, thay vì đọc lại Rect tạm trong builder rồi coi đó là yêu cầu kích thước.
+
+Bài này thêm measure và bảng số đo. **Các control vẫn chưa tự di chuyển**. So số đo trong Inspector với local Rect để thấy hai việc đo và đặt không phải một.
+
+## Hiểu ý tưởng trước khi viết code
+
+availableWidth là phần ngang parent cấp cho child, còn bao gồm hai margin của child. Với Fill:
+
+$$
+w_b = \max(0, w_a - m_l - m_r).
+$$
+
+Với Fixed, w_b chính là fixedWidth, kể cả khi nó lớn hơn chỗ có sẵn. Kết quả height của leaf lấy fixedHeight; không cộng padding/border vì hợp đồng đã chọn border-box height. Chỉ Panel mới có Auto height. Ta chưa đo chữ, chưa wrap và không cho height của con phụ thuộc ngược vào height chưa biết của cha.
+
+<InteractiveLab demo="box-layout" mode="box67-3" />
+
+## Viết code từng bước
+
+### Bước 1 — Tạo chỗ lưu kết quả theo ID
+
+Size giữ width/height mà arrange sẽ dùng. naturalHeight ghi tổng chiều cao nội dung mà Panel cần; nó có thể khác height nếu Panel cao cố định. Measures dùng ID để nối với cây, không giữ con trỏ qua mutation.
+
+```cpp title="include/layout.hpp — số đo không có tọa độ"
+struct Size {
+    double width = 0;
+    double height = 0;
+    double naturalHeight = 0;
+};
+
+using Measures = std::map<WidgetId, Size>;
+```
+
+### Bước 2 — Giải quyết chiều ngang trước
+
+Mở hàm measure. Sau khi kiểm Style và availableWidth hữu hạn, ta tính border width. Root không margin nên width=320. Content của root còn 320−4−32=284. Button margin trái/phải 4 nhận border width=276. Đừng lấy 320 trừ margin của mọi tổ tiên trong cùng một công thức; mỗi parent chỉ truyền content width của mình.
+
+```cpp title="include/layout.hpp — Width Fill không sửa Style"
+double width = style.fixedWidth;
+if (style.width == Width::Fill)
+    width = std::max(0.0, availableWidth - style.margin.left - style.margin.right);
+```
+
+measure đi qua children của Panel để thu số đo. Cây hiện còn phẳng, nhưng cách duyệt là cách bạn đã dùng ở Project 66. Với mỗi child visible, nó tính margin.top + border height + margin.bottom, thêm gap ở giữa. Công thức đó sẽ được dùng kỹ hơn ở hai bài sau.
+
+### Bước 3 — Chốt height mà không ghi local Rect
+
+Leaf dùng fixedHeight. Panel Auto dùng tổng naturalHeight; root Fixed vẫn trả height=492, dù tổng nội dung thấp hơn hoặc cao hơn. Đưa result vào Measures rồi trả lại cho parent. Không gán node.local trong measure.
+
+```cpp title="include/layout.hpp — kết quả đo được lưu riêng"
+double height = style.fixedHeight;
+if (style.height == Height::Auto)
+    height = naturalHeight;
+const Size result{width, height, naturalHeight};
+sizes[node.id] = result;
+return result;
+```
+
+Ở mốc này native đo lại khi được gọi; chưa có cache dirty ở bài 07. Canvas cũng hiển thị các số đo để quan sát. passes không phải benchmark hoặc số lần render. Không dùng số đo của một frame cũ để “đo” frame mới.
+
+## Ghép các phần lại
+
+ensureLayout của checkpoint 03 xóa bảng số đo rồi gọi measure. draw vẫn dùng Rect cũ; Inspector cho xem cả hai. Hãy xác nhận chỉ việc chạy bước đo không làm cây trôi vị trí. Phần arrange sẽ được nối vào giữa measure và draw ở bài tiếp theo.
+
+## Thử làm sai để hiểu đúng
+
+1. Trừ padding/border khỏi width Fill rồi coi kết quả đó là border width. Button sẽ nhỏ hơn hợp đồng 10 đơn vị ở mỗi lớp leaf. Tách phép tính border width và contentBox trở lại.
+2. Cho measure ghi y của node. Khi đó việc xem số đo đã vô tình làm thay đổi bố cục. Lưu lại local Rect trước/sau measure và xác nhận nó không đổi.
+
+## Tự kiểm tra kết quả
+
+Root được đo width=320, height=492; leaf Button width=276, height=36, dù vị trí y vẫn lấy từ builder. Thay một Rect tạm không được làm đổi size đo từ Style. NaN, constraint âm và Style ngoài giới hạn bị từ chối, không có vòng lặp đo đến khi “trông vừa”.
+
+## Bài tập mở rộng
+
+Tính số đo của leaf với margin trái 3, phải 9 và availableWidth=100: Fill phải rộng 88. Nếu đổi sang Fixed 140, nó vẫn rộng 140. Tiếp theo ta dùng những số đo này để [xếp một cột](/projects/box-layout/04-xep-mot-cot).

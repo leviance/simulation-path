@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chỉ tính lại layout khi đầu vào đổi
+
+## Vấn đề cần giải quyết
+
+Tới đây layout đúng nhưng native còn đo/đặt lại mỗi lần host gọi ensureLayout. Khi bóng đang rơi, gravity và ticks thay đổi liên tục, còn hình học UI vẫn như cũ. Ta cần cache kết quả — và quan trọng hơn, biết lúc nào cache đã cũ.
+
+Chỉ gọi layout trước draw là chưa đủ. Một frame có thể nhận resize rồi mouse down liên tiếp; down phải thấy Rect mới ngay trong hàng đợi sự kiện đó, không chờ tới lúc vẽ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Dirty là lời hẹn “trước lần đọc hình học tiếp theo, hãy tính lại”. Đổi width, gap, padding hoặc visibility cần dirty. Hover, gravity, ticks và Reset vật lý không cần. Setter từ chối dữ liệu sai trước khi ghi và bỏ qua giá trị không đổi.
+
+Layout đổi cũng làm gesture đang dùng hình học cũ mất nghĩa. Project này chọn chính sách đơn giản: hủy active/hot, nhả capture, giữ gravity đã áp dụng rồi reconcile focus sau arrange. Ta không cố kéo tiếp trên một Slider vừa chuyển chỗ.
+
+<InteractiveLab demo="box-layout" mode="box67-7" />
+
+## Viết code từng bước
+
+### Bước 1 — Ghi đầu vào qua một đường kiểm soát
+
+setWidth nhận border width constraint của root từ 220 tới 420. Root không margin, Fill width của nó bằng constraint. Mép phải được giữ tại 936; đổi width vì thế cũng đổi root x. Không sửa width root rồi tự sửa tất cả child trong setter.
+
+```cpp title="include/runtime.hpp — width đổi thì layout mới dirty"
+inline bool setWidth(LayoutState& state, Ui& ui, double value) {
+    if (!std::isfinite(value) || value < 220 || value > 420)
+        return false;
+    if (value != state.width) {
+        state.width = value;
+        invalidate(state, ui);
+    }
+    return true;
+}
+```
+
+invalidate đặt dirty và cancel Ui. Setter thuần không gọi SDL; host mới là nơi nhả capture. Nhờ vậy test không cần window, còn trách nhiệm dọn tài nguyên của hệ điều hành vẫn rõ ràng.
+
+### Bước 2 — Đo và đặt một lần khi dirty
+
+ensureLayout bỏ qua ngay nếu cache còn đúng. Khi cần tính, nó xóa số đo cũ, measure cả cây rồi arrange từ root. Sau đó tăng passes, xóa dirty và reconcile focus/hot trên geometry mới. Đừng xóa dirty trước một phép đo có thể thất bại.
+
+```cpp title="include/runtime.hpp — cập nhật cache hữu hạn"
+if (!state.dirty)
+    return false;
+state.sizes.clear();
+measure(*state.scene.tree.root, state.width, state.scene.styles, state.sizes);
+arrange(*state.scene.tree.root, 936 - state.width, 24, state.scene.styles, state.sizes);
+++state.passes;
+```
+
+Mọi thay đổi runtime của bài đều đi qua setter. Nếu bạn sửa trực tiếp Style hoặc children, bạn phải invalidate; engine không tự quan sát mọi lần ghi C++ như một framework reactive. Đây là hợp đồng API, không phải phép so sánh toàn cây ở mỗi frame.
+
+### Bước 3 — Hoàn tất layout trước khi dịch và xử lý input
+
+Trong handle, ensureLayout đứng trước SDL_ConvertEventToRenderCoordinates và trước pointerDown. Native resize cấp width bằng `clamp(windowWidth/3,220,420)`; đây là chính sách host của demo, không phải công thức trong engine. Mặt phẳng logic vẫn 960×540; [window units có thể khác kích thước pixel](https://wiki.libsdl.org/SDL3/SDL_GetWindowSize) trên màn hình mật độ cao. Shift+←/→ thay constraint trực tiếp; khi có Shift, không gửi mũi tên đó vào Slider.
+
+```cpp title="include/events.hpp — input đọc Rect mới"
+ensureLayout(state, app.ui);
+require(SDL_ConvertEventToRenderCoordinates(renderer, &event));
+Tree& tree = state.scene.tree;
+```
+
+Canvas dùng range width để mô phỏng constraint. Resize khung web hoặc đổi DPR chỉ đổi tỉ lệ hiển thị, không tự đổi width constraint. Nó pause/cancel khi resize, blur hoặc tab bị ẩn. Chạy cảnh rồi theo dõi passes: sau bài 07, một nghìn frame không đổi Style vẫn chỉ dùng kết quả đã có.
+
+## Ghép các phần lại
+
+Chạy checkpoint 07, đổi width một lần rồi để bóng chạy. passes phải đứng yên trong khi ticks tăng. Pause, kéo Slider và đổi constraint: active/capture phải bị hủy, nhưng giá trị gravity đã áp dụng không bị hoàn tác. Native resize và Canvas range cùng đi qua setWidth.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ invalidate trong setWidth. Thanh width thay đổi nhưng bounds cũ không đổi, click dùng geometry cũ. Kiểm cả số đo, tọa độ và passes để tránh chỉ sửa phần vẽ.
+2. Chuyển ensureLayout xuống sau pointerDown. Gửi chuỗi width=220 rồi down tại center mới của Slider trong cùng frame; down có thể chọn nhầm node hoặc không chọn gì.
+3. Giữ active khi đổi gap trong lúc kéo. Release sau đó có thể tác động lên geometry khác. Khôi phục cancel trước layout và nhả capture ở host.
+
+## Tự kiểm tra kết quả
+
+Width 320→220 làm Fill nhỏ đi 100, root chuyển sang x=716, ID không đổi. Cùng giá trị width không tăng passes; NaN không đổi width/dirty. Đổi gravity, hover hoặc step vật lý không chạy layout lại. Một sự kiện down ngay sau đổi constraint phải dùng Rect mới, không chờ draw.
+
+## Bài tập mở rộng
+
+Thêm một setter cho padding trái riêng và viết test “giá trị không đổi không dirty”. Đừng thêm cơ chế tìm dependency toàn cây; giới hạn của bài là dirty flag tường minh. Tiếp theo: [khi control không vừa khung](/projects/box-layout/08-overflow-va-clipping).

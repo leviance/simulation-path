@@ -460,5 +460,12 @@
     "sourceDirectory": "project-66-widget-tree",
     "checkpointCount": 8,
     "demoId": "widget-tree"
+  },
+  {
+    "id": "67",
+    "slug": "box-layout",
+    "sourceDirectory": "project-67-box-layout",
+    "checkpointCount": 9,
+    "demoId": "box-layout"
   }
 ]

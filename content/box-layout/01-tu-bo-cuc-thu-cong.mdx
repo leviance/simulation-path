@@ -1,0 +1,92 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy bảng điều khiển và nhìn ra việc phải sửa tọa độ
+
+## Vấn đề cần giải quyết
+
+Ở Project 66, ta đã có một cây UI dùng chung cho vẽ, chuột và bàn phím. Nhưng cây chưa tự sắp xếp các control. Muốn đặt Reset thấp hơn Pause, ta vẫn phải điền một số y; muốn thêm Label ở giữa, ta phải sửa cả những số y nằm phía sau.
+
+Project này bắt đầu từ một chương trình **đã chạy được**. Hãy tải ZIP, build starter và thử Pause, Reset, Slider. Bạn phải thấy bóng, sàn và Panel bên phải trước khi thêm bất kỳ thuật toán nào. Starter giữ window/renderer, vật lý, ownership, picking, clip và focus của Project 66; chưa có BoxStyle, measure hay arrange.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta sẽ thay câu “Reset ở y=108” bằng một quy tắc: “Reset đứng sau Pause, có margin riêng và cách control trước một gap”. Quy tắc là đầu vào; tọa độ là kết quả. Khi thêm control, quy tắc không đổi nhưng các tọa độ cần được tính lại.
+
+Bài này cố ý giữ bố cục thủ công. Canvas cũng chưa có thanh gap hoặc width tự động. Hãy dùng nó để nhận ra sản phẩm xuất phát, không phải để chứng minh engine layout đã xong.
+
+<InteractiveLab demo="box-layout" mode="box67-1" />
+
+## Viết code từng bước
+
+### Bước 1 — Chạy lại nền SDL trước
+
+Trong `src/main.cpp`, SDL tạo window resizable 960×540 rồi tạo renderer. Mỗi resource được kiểm tra riêng; lỗi đi qua cleanup và trả mã thất bại. Logical presentation vẫn là 960×540 nên tọa độ UI không đổi theo DPR.
+
+```cpp title="src/main.cpp — tạo cửa sổ đã có trong starter"
+SDL_Window* window = SDL_CreateWindow("Project 67 - Vertical box layout", 960, 540, flags);
+```
+
+Vòng lặp nhận event, cập nhật Model rồi vẽ. Bóng chỉ là cảnh nền quen thuộc để bạn thử UI; project này không thêm thuật toán vật lý mới. Space chạy/dừng nếu không có Button đang focus, N tiến một bước khi pause, R reset cảnh. Tab và chuột vẫn hoạt động như Project 66.
+
+### Bước 2 — Theo một Rect từ dữ liệu ra màn hình
+
+Mở `include/scene.hpp`. Starter là cây phẳng: root chứa tiêu đề, hai Button, các Label, Slider và footer. Những số dưới đây đều là tọa độ local đo từ góc root. Chưa có Group lồng vào giữa.
+
+```cpp title="include/scene.hpp — hai control còn đặt tọa độ tay"
+scene.pause = add(tree, parent, Kind::Button, {22, 58, 276, 36}, "Pause", Action::Pause);
+scene.reset = add(tree, parent, Kind::Button, {22, 108, 276, 36}, "Reset", Action::Reset);
+```
+
+Root bắt đầu tại `(616,24)`, nên Pause được vẽ tại `(638,82)`. `paintList` cộng offset parent và trả bounds world. `drawWidget` đọc bounds đó, gọi helper fill dưới đây. Hãy đi theo đường `add → paintList → drawWidget → SDL_RenderFillRect`, thay vì chỉ nhìn những con số trong builder.
+
+```cpp title="include/view.hpp — helper đưa Rect tới SDL"
+inline void fill(SDL_Renderer* renderer, Rect r, Uint8 red, Uint8 green, Uint8 blue) {
+    require(SDL_SetRenderDrawColor(renderer, red, green, blue, 255));
+    const SDL_FRect rect{float(r.x), float(r.y), float(r.width), float(r.height)};
+    require(SDL_RenderFillRect(renderer, &rect));
+}
+```
+
+### Bước 3 — Thêm số đọc tọa độ và giữ Model tách riêng
+
+Thêm describePause vào app.hpp để checkpoint 01 có một phép quan sát thật, thay vì chỉ chạy lại starter. Hàm tra Pause bằng ID và đọc bounds world; không tự cộng lại offset hoặc sửa geometry. Draw gọi nó ở dòng chữ y=112. Trên Canvas, ô “Pause world” cho cùng phép quan sát.
+
+```cpp title="include/app.hpp — đọc vị trí thực sự được vẽ"
+inline std::string describePause(const LayoutState& state) {
+    const auto view = locate(state.scene.tree, state.scene.pause);
+    if (!view)
+        return "Pause is clipped or hidden";
+    return "Pause world=(" + std::to_string(int(view->bounds.x)) + "," + std::to_string(int(view->bounds.y)) + ") size=" + std::to_string(int(view->bounds.width)) + "x" + std::to_string(int(view->bounds.height));
+}
+```
+
+App giữ layout, Model và Ui riêng. LayoutState lúc này mới sở hữu Scene; chưa tính tọa độ tự động. `Reset cảnh` chỉ sửa Model. Nút khôi phục bố cục trên web hoặc phím T native dựng lại cây và xóa input cũ, nhưng giữ vị trí, vận tốc và gravity của cảnh rồi pause.
+
+```cpp title="include/app.hpp — ba phần state độc lập"
+struct App {
+    LayoutState layout;
+    Model model;
+    Ui ui;
+    bool boxes = true;
+    std::string message = "Manual coordinates";
+};
+```
+
+Đừng dùng việc reset bóng làm lý do dựng lại UI. Sau này layout đổi nhiều lần nhưng những widget còn sống vẫn phải giữ ID; đó là điểm nối quan trọng với bài trước.
+
+## Ghép các phần lại
+
+Build target project_67_checkpoint_1 rồi đi theo một click: event được đổi sang logical space, picking trả ID, dispatcher sửa Model, drawWidget đọc Model để đổi nhãn. Source đầy đủ cuối bài giữ nguyên đường đi này; ở bài sau ta chỉ thay cách xác định hình học.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản thử riêng, đổi y của Reset từ 108 thành 128 nhưng giữ nguyên Slider và Label. Bạn sẽ thấy khoảng cách phía dưới bị thay đổi ngoài ý muốn. Liệt kê những dòng phải sửa để giữ cả cột đẹp như cũ.
+2. Dựng Scene bên trong draw thay vì để nó nằm trong App. Các ID và input không còn có lifetime rõ ràng qua frame. Khôi phục owner trước vòng while; render chỉ đọc cây.
+
+## Tự kiểm tra kết quả
+
+Starter và checkpoint 01 đều chạy được, có 8 node. Pause/Reset/Slider nhận input, Tab đi qua control; bóng không biến mất khi bạn reset bố cục. Bạn chỉ ra được chỗ tạo Rect và chỗ gọi SDL_RenderFillRect. Chưa có lời hứa control sẽ tự dịch khi thêm node.
+
+## Bài tập mở rộng
+
+Thử thêm một Label giữa Reset và Gravity, tự sắp lại cột một lần bằng tay. Đừng biến bản thử đó thành source chuẩn; mục tiêu là cảm nhận công việc mà layout sẽ làm thay bạn. Bài tiếp theo: [tách các lớp hộp](/projects/box-layout/02-margin-border-padding).

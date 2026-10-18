@@ -1,0 +1,81 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng cursorY xếp control từ trên xuống
+
+## Vấn đề cần giải quyết
+
+Ta đã biết kích thước từng control. Bây giờ cần đặt chúng nối tiếp nhau: sửa height của Pause phải đẩy Reset và Slider xuống, không cần sửa ba dòng y. Root vẫn chứa trực tiếp tất cả control; chưa có Panel con để bài toán đầu tiên vừa đủ nhỏ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tưởng tượng một con trỏ đứng ở mép trên content của parent. Trước mỗi child, nó đi qua gap nếu đã có child trước đó, rồi qua margin.top. Sau khi đặt child, con trỏ đi hết border height và margin.bottom.
+
+Nếu y_i là góc border box của child thứ i:
+
+$$
+y_{i+1}=y_i+h_i+m_{b,i}+g+m_{t,i+1}.
+$$
+
+Gap chỉ có giữa hai child. Một child không có gap, Panel rỗng cũng không có gap. Gap=0 không có nghĩa hai border box sát nhau: hai margin 4 vẫn tạo khoảng cách 8.
+
+<InteractiveLab demo="box-layout" mode="box67-4" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt root rồi lấy content origin local
+
+arrange nhận x/y do parent truyền vào. Root được đặt tại `(936-width,24)` để giữ mép phải. Hàm ghi border box từ Size đã đo, sau đó tính content box với origin `(0,0)`. Dùng world x/y ở đây sẽ làm con bị cộng offset hai lần khi traversal vẽ.
+
+```cpp title="include/layout.hpp — bắt đầu một cột"
+const Size size = sizes.at(node.id);
+node.local = {x, y, size.width, size.height};
+const BoxStyle& style = styles.at(node.id);
+const Rect content = contentBox({0, 0, size.width, size.height}, style);
+double cursorY = content.y;
+int visibleCount = 0;
+```
+
+### Bước 2 — Đặt từng child bằng số đo có sẵn
+
+Trong vòng lặp, bỏ node hidden trước khi tính gap. Ở bài này children đều là leaf nên ta gán local trực tiếp; bài 05 thay đúng bước gán bằng arrange đệ quy. Không gọi measure lại ở đây.
+
+```cpp title="include/layout.hpp — đặt một leaf"
+if (visibleCount > 0)
+    cursorY += style.gap;
+const double childX = content.x + childStyle.margin.left;
+const double childY = cursorY + childStyle.margin.top;
+child->local = {childX, childY, childSize.width, childSize.height};
+cursorY = childY + childSize.height + childStyle.margin.bottom;
+++visibleCount;
+```
+
+Trên Canvas, đổi gap từ 8 lên 24. Root có bảy child nên sáu khoảng gap tăng tổng cộng 96. Control thứ hai chỉ dịch 16, control sau nữa dịch thêm 16; đây không phải dịch toàn Panel bằng một offset.
+
+### Bước 3 — Đổi Style, không chỉnh từng Rect
+
+setSpacing kiểm gap/padding trước khi ghi, cập nhật Style root và Group nếu Group tồn tại. Tới bài 05, padding Group được chọn bằng `max(0,paddingRoot−4)`. Quy tắc này chỉ là tiện ích demo; engine vẫn hỗ trợ từng Edges độc lập.
+
+```cpp title="include/runtime.hpp — đánh dấu sau khi đầu vào thật sự đổi"
+if (changed)
+    invalidate(state, ui);
+return true;
+```
+
+Native dùng `[`/`]` đổi gap, Canvas có range cho gap và padding. Kích thước leaf là border-box height cố định, nên thay padding ở leaf không tự làm Button cao thêm. Nền và input vẫn đọc cùng local Rect đã arrange.
+
+## Ghép các phần lại
+
+Checkpoint 04 gọi measure trước, arrange sau, rồi mới vẽ và hit-test. Chạy preset gap lớn và preset gọn để thấy cùng một cây nhận các Rect khác nhau. Reset cảnh không phục hồi gap; chỉ khôi phục bố cục mới đưa Style về mặc định.
+
+## Thử làm sai để hiểu đúng
+
+1. Thêm gap trước cả child đầu tiên. Tiêu đề sẽ cách content top thêm 8; tăng gap làm cả cột trôi xuống. Đối chiếu title local y=18 để tìm lỗi.
+2. Quên margin.bottom khi tiến cursor. Với hai Button margin 4, khoảng cách bị hụt 4 dù gap nhìn vẫn hợp lý. Tính chênh giữa hai border box bằng công thức trước khi sửa.
+
+## Tự kiểm tra kết quả
+
+Root padding 16, border 2 cho title local `(18,18)`. Pause sau title có local y=54; Reset y=106, khoảng cách hai góc trên là 52=36+4+8+4. Đổi gap hoặc padding không dựng lại cây và không cần sửa builder. Cột hiện vẫn phẳng.
+
+## Bài tập mở rộng
+
+Cho riêng Reset margin.top=12. Chỉ nó và các control phía sau dịch xuống 8, Pause không đổi. Tiếp theo: [Panel con tự cao vừa nội dung](/projects/box-layout/05-panel-tu-tinh-chieu-cao).

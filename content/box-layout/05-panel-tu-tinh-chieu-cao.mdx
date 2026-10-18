@@ -1,0 +1,74 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho Panel con tự cao vừa những control bên trong
+
+## Vấn đề cần giải quyết
+
+Một cột phẳng làm việc tốt cho vài control, nhưng ta thường muốn gom chúng thành nhóm: tiêu đề ở ngoài, Pause/Reset/Gravity ở trong Group, footer nằm sau Group. Nếu chiều cao Group vẫn điền tay thì thêm một Label lại phải sửa nó bằng tay. Ta mới chỉ chuyển công việc từ y của child sang height của parent.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chiều rộng đi từ trên xuống: biết width của parent mới biết child Fill rộng bao nhiêu. Chiều cao Auto được cộng khi đi ngược lên: biết height các child mới biết Panel cần cao bao nhiêu. Sau đó arrange đi từ trên xuống để đặt local Rect.
+
+Trong một lượt layout, measure đi qua mỗi node một lần, arrange cũng vậy. Ta không gọi measure lại từ từng arrange và không chạy nhiều vòng tới khi các số “ổn định”. Với quy tắc hữu hạn của project, không có chu trình kích thước.
+
+<InteractiveLab demo="box-layout" mode="box67-5" />
+
+## Viết code từng bước
+
+### Bước 1 — Thay parent của năm control
+
+Builder thêm Group ngay sau tiêu đề, rồi dùng ID của Group làm parent cho Pause, Reset, Gravity Label, Slider và value Label. Footer vẫn thuộc root. Rect khi add Group chỉ là dữ liệu tạm hợp lệ; arrange sẽ thay nó, không dùng height=252 trong builder làm đáp án.
+
+```cpp title="include/scene.hpp — tạo nhánh có bố cục riêng"
+scene.group = add(tree, 1, Kind::Panel, {22, 54, 276, 252}, "Controls");
+parent = scene.group;
+```
+
+Style Group dùng Fill, Auto height, margin=4, padding=12, border=2, gap=8. Root content width=284 cấp cho Group; sau hai margin, border width Group=276. Group content width=248, nên Button bên trong rộng 240. Các lớp không dùng chung một hằng số width.
+
+### Bước 2 — Cộng height của các child đang hiển thị
+
+Đọc vòng lặp trong measure. Child được đo theo innerWidth của Panel. visibleCount chỉ tăng sau child tham gia flow; từ child thứ hai mới có gap. Mỗi child đóng góp margin trên, border height và margin dưới.
+
+```cpp title="include/layout.hpp — tích lũy chiều cao tự nhiên"
+const Size childSize = measure(*child, innerWidth, styles, sizes);
+const BoxStyle& childStyle = styles.at(child->id);
+if (visibleCount > 0)
+    childrenHeight += style.gap;
+childrenHeight += childStyle.margin.top + childSize.height + childStyle.margin.bottom;
+++visibleCount;
+```
+
+Năm outer height là 44,44,32,40,32, tổng 192. Bốn gap góp 32, inset trên/dưới góp 28. Group cần 252. Root naturalHeight=360 nhưng height vẫn là 492 do Style root Fixed; khoảng trống cuối root không được phân phối thành gap mới.
+
+```cpp title="include/layout.hpp — cộng inset của Panel"
+naturalHeight = 2 * style.border + style.padding.top + childrenHeight + style.padding.bottom;
+```
+
+### Bước 3 — Arrange lại cả nhánh bằng số đo đã lưu
+
+Trong arrange, thay dòng gán child.local của checkpoint 04 bằng lời gọi đệ quy. Nó vừa đặt child, vừa đặt các descendant. childX/childY vẫn local so với node hiện tại; paintList mới cộng chúng thành world khi vẽ.
+
+```cpp title="include/layout.hpp — arrange đi từ cha xuống con"
+arrange(*child, childX, childY, styles, sizes);
+```
+
+Kiểm bằng phép cộng độc lập: root=(616,24), Group local=(22,54), Pause local=(18,18). Pause world=(656,96), kích thước 240×36. Nếu bạn thấy x lớn hơn rất nhiều, hãy tìm chỗ truyền world thay vì local vào arrange.
+
+## Ghép các phần lại
+
+Build checkpoint 05 và chọn Group trong Inspector. Theo chiều rộng root→Group→Pause, rồi theo chiều cao Pause/Reset/Label→Group→root. Cuối cùng chọn Pause để kiểm phép cộng local→world. Một bảng số đo được dùng cho cả cây, không dựng lại node ở mỗi frame.
+
+## Thử làm sai để hiểu đúng
+
+1. Lấy child.local.height từ builder thay vì childSize.height. Đổi height của một Button trong Style: measure báo khác nhưng Group vẫn giữ chiều cao cũ. Khôi phục nguồn số đo duy nhất là Measures.
+2. Truyền Group world origin xuống arrange con. Traversal sẽ cộng lại offset Group lần nữa. So fixture Pause=(656,96) để tránh kiểm bằng một lời gọi place khác dùng chung lỗi.
+
+## Tự kiểm tra kết quả
+
+Cây có 9 node. Group đo height=252, root naturalHeight=360; Pause world=(656,96), width=240. Thay gap/padding làm Group và footer thay đổi theo. Thứ tự đo và đặt đúng, không sửa Style trong quá trình đó và không đo lại từng subtree khi arrange.
+
+## Bài tập mở rộng
+
+Thêm một Panel con rỗng trên bản thử riêng. Auto height của nó chỉ bằng inset trên/dưới; không được có một gap “để dành”. Bài tiếp theo: [thay đổi các control tham gia flow](/projects/box-layout/06-an-them-xoa-control).

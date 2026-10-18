@@ -1,0 +1,87 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tách margin, border, padding và phần nội dung
+
+## Vấn đề cần giải quyết
+
+Nói “Button rộng 200” vẫn chưa đủ rõ. 200 là phần chứa chữ, cả nền và viền, hay còn gồm khoảng trống bên ngoài? Nếu không chốt điều này, ta dễ trừ padding hai lần hoặc lấy margin làm vùng nhận chuột.
+
+Ta chọn một hợp đồng đơn giản: width/height trong kết quả layout luôn là **border box**. Margin nằm bên ngoài. Content là phần còn lại sau khi trừ border và padding. Đây là quy tắc của engine nhỏ đang viết, không phải toàn bộ CSS.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với border dày b đều bốn phía, content width là:
+
+$$
+w_c = \max(0, w_b - 2b - p_l - p_r).
+$$
+
+Content x bằng border-box x cộng b và padding trái. Margin không xuất hiện trong phép trừ này: nó ảnh hưởng chỗ parent dành cho node, không thu nhỏ nội dung bên trong node. Hai margin cạnh nhau sẽ cộng lại; ta không dùng margin collapsing.
+
+<InteractiveLab demo="box-layout" mode="box67-2" />
+
+Chọn Pause trong Inspector. Border box 276×36, border=1 và padding=4 cho content 266×26. Cam nét đứt là margin box, không phải vùng click. Các hình overlay được vẽ để giải thích, nên có thể nằm ngoài clip thực tế của widget.
+
+## Viết code từng bước
+
+### Bước 1 — Lưu Style riêng với Widget
+
+Thêm Edges, Width, Height và BoxStyle trong `include/style.hpp`. Edges có bốn trường left/top/right/bottom; không gộp thành một con số vì ta còn cần kiểm những phía khác nhau. Styles là map từ WidgetId sang BoxStyle, còn Widget vẫn sở hữu children như cũ.
+
+```cpp title="include/style.hpp — đầu vào của layout"
+struct BoxStyle {
+    Width width = Width::Fill;
+    double fixedWidth = 180;
+    Height height = Height::Fixed;
+    double fixedHeight = 24;
+    Edges margin{4, 4, 4, 4};
+    Edges padding{4, 4, 4, 4};
+    double border = 1;
+    double gap = 8;
+};
+```
+
+Fill/Fixed và Auto/Fixed mới là tên các lựa chọn; bài sau mới dùng chúng để đo. Style không có x/y. Layout được phép sửa Widget::local nhưng không được biến fixedWidth thành “width còn lại sau frame trước”.
+
+### Bước 2 — Tính content box từ border box
+
+Hàm contentBox nhận một Rect và Style. Ta có thể truyền Rect local hoặc world; kết quả sẽ ở cùng hệ tọa độ với Rect đầu vào. Kích thước được clamp về 0 khi tổng inset quá lớn, không tạo width/height âm.
+
+```cpp title="include/style.hpp — phần nằm trong padding"
+inline Rect contentBox(Rect box, const BoxStyle& style) {
+    return {box.x + style.border + style.padding.left, box.y + style.border + style.padding.top, std::max(0.0, box.width - 2 * style.border - style.padding.left - style.padding.right), std::max(0.0, box.height - 2 * style.border - style.padding.top - style.padding.bottom)};
+}
+```
+
+Không sửa box.width trong hàm này: phần nền/viền vẫn có kích thước ban đầu. Clamp content về 0 cũng không tự co Fixed, không tự thêm scrollbar và không hoàn trả padding cho parent. Layout dùng content box để đặt children của Panel; skin Button/Slider và debug text vẫn kế thừa Project 66. Ta chưa viết text layout hoặc styling cho từng phần của control như một trình duyệt.
+
+### Bước 3 — Khởi tạo Style một lần cùng cây
+
+Mỗi node có style mặc định theo Kind. Root có height cố định 492, không margin, padding 16 và border 2. Tiêu đề/footer bỏ margin. Button cao 36, Slider cao 32, Label cao 24; các chiều cao này **đã gồm** border/padding.
+
+```cpp title="include/scene.hpp — cấu hình hộp root"
+BoxStyle& rootStyle = scene.styles.at(1);
+rootStyle.height = Height::Fixed;
+rootStyle.fixedHeight = 492;
+rootStyle.margin = {0, 0, 0, 0};
+rootStyle.padding = {16, 16, 16, 16};
+```
+
+Checkpoint này vẫn đặt Rect tay. Overlay chỉ giúp đọc Style và nhận diện từng hộp; đổi Style chưa phải là một engine tự động đặt vị trí. Trong phần vẽ thật, helper fill và hit-test vẫn dùng border bounds/clip của Project 66; màu chẩn đoán không đổi chính sách input.
+
+## Ghép các phần lại
+
+Build checkpoint 02, bật B trong native hoặc chọn “Hiện box model” trên web. So cùng một widget ở ba lớp hộp và Inspector. Các lớp màu là chẩn đoán; tắt chúng không được đổi Rect, ID hoặc kết quả click.
+
+## Thử làm sai để hiểu đúng
+
+1. Trừ margin thêm lần nữa trong contentBox. Với margin trái/phải đều 4, content width sẽ hụt 8. So với phép tính 276−2−8=266 để phát hiện lỗi.
+2. Dùng margin box làm vùng hit. Nhấn vào phần cam ngoài Button có thể kích hoạt Button dù chưa chạm nền. Khôi phục picking theo border bounds và ancestor clip.
+
+## Tự kiểm tra kết quả
+
+Inspector hiển thị Style riêng và local/world bounds riêng. Content của Pause là 266×26, margin không ăn vào content. Bạn giải thích được tại sao leaf height không cộng padding/border thêm lần nữa. Chưa có text wrapping hoặc đo glyph; Label dài sẽ bị clip theo chính sách hiện có.
+
+## Bài tập mở rộng
+
+Đặt padding trái 10, phải 2 trên bản thử riêng và tự tính content x/width trước khi xem hình. Bài tiếp theo: [đo kích thước mà chưa đặt vị trí](/projects/box-layout/03-do-kich-thuoc).
