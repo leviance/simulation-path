@@ -1,148 +1,165 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Framebuffer: biến một vector thành mặt phẳng pixel
+# Tạo framebuffer và tìm vị trí một pixel
 
 ## Vấn đề cần giải quyết
 
-Sau bài 1, chúng ta đã có một cửa sổ hoạt động ổn định. Tuy nhiên, màu xanh đen hiện vẫn do `SDL_RenderClear` tô trực tiếp; chương trình chưa có vùng nhớ pixel của riêng mình. Muốn tự viết các thuật toán vẽ, trước hết ta cần một vùng nhớ mà code C++ có thể đọc và thay đổi.
+Bài 01 đã mở được cửa sổ, nhưng nền vẫn do SDL tô trực tiếp. Muốn tự vẽ, ta cần một bức ảnh nằm trong RAM và cho phép C++ sửa từng pixel. Bức ảnh đó là framebuffer.
 
-Trong project này, vùng nhớ đó chính là framebuffer: một `std::vector<std::uint32_t>` chứa toàn bộ bức ảnh. Mỗi phần tử tương ứng với một pixel. Vấn đề là vector chỉ có một chiều, còn khi vẽ chúng ta lại suy nghĩ theo hai tọa độ `(x, y)`. Bài này sẽ nối hai cách nhìn đó với nhau. Nếu phép sắp xếp bộ nhớ sai, mọi hình vẽ về sau cũng sẽ sai.
-
-Hãy bắt đầu từ mã nguồn cuối bài 1, giữ nguyên `src/main.cpp` rồi tạo tệp `include/lab.hpp`. Khi học xong bài này, bạn cần trả lời được ba câu hỏi: framebuffer có bao nhiêu phần tử, pixel `(x, y)` nằm ở vị trí nào trong vector, và vùng nhớ thay đổi ra sao khi đổi kích thước ảnh.
+Bài này chỉ làm phần bộ nhớ: tạo một vector, biết nó rộng/cao bao nhiêu và tìm đúng phần tử cho tọa độ `(x, y)`. Chưa cần học màu hoặc texture. Vì vậy, cửa sổ cuối bài vẫn xanh đen; kết quả mới được kiểm bằng số đọc, debugger và Canvas.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hãy lấy một ảnh rất nhỏ, rộng 4 và cao 3 pixel. Nếu lưu theo **row-major**, bộ nhớ được xếp như sau:
+Đừng bắt đầu với 960×540. Hãy lấy ảnh rộng 4, cao 3:
 
-```text title="Framebuffer 4 × 3 trong bộ nhớ"
-hàng y=0:  [0] [1] [2] [3]
-hàng y=1:  [4] [5] [6] [7]
-hàng y=2:  [8] [9] [10][11]
+```text title="12 phần tử, xếp từng hàng từ trái sang phải"
+y = 0     [ 0] [ 1] [ 2] [ 3]
+y = 1     [ 4] [ 5] [ 6] [ 7]
+y = 2     [ 8] [ 9] [10] [11]
 ```
 
-Muốn tới hàng `y`, ta phải đi qua `y` hàng hoàn chỉnh. Mỗi hàng có `width` phần tử, nên quãng đầu tiên là `y × width`. Sau đó đi thêm `x` phần tử trong hàng hiện tại:
+Vector không biết “hàng”. Nó chỉ có các phần tử từ 0 đến 11. Chúng ta tự đặt quy ước: lưu hết hàng trên rồi mới sang hàng dưới, gọi là row-major.
 
-$$index(x,y) = y \times width + x$$
+Muốn đến pixel `(2, 1)`, đi qua một hàng đủ 4 phần tử, rồi đi thêm 2:
 
-Với `width = 4`, pixel `(2, 1)` nằm tại `1 × 4 + 2 = 6`. Góc phải dưới `(3, 2)` nằm tại `2 × 4 + 3 = 11`, cũng là `width × height - 1`.
+$$index = y \times width + x = 1 \times 4 + 2 = 6$$
 
-Từ đây đến cuối project, chúng ta luôn phải giữ đúng hai điều kiện:
+Góc phải dưới `(3, 2)` có index 11. Đi xuống một hàng làm index tăng đúng `width`, không phải `height`.
 
-- `pixels.size()` luôn bằng `width × height`.
-- Mọi index hợp lệ nằm trong đoạn từ `0` đến `pixels.size() - 1`.
-
-`std::vector` phù hợp vì nó tự quản lý bộ nhớ và đặt các phần tử liền nhau trong RAM. Đặc điểm “liền nhau” này rất quan trọng: ở bài sau, chúng ta sẽ đưa `pixels.data()` cho SDL để chuyển cả bức ảnh sang texture.
+Sau một lần cấp phát thành công, ta phải giữ `pixels.size() == width × height`. Nếu chỉ đổi hai số kích thước mà quên vùng nhớ, công thức đúng vẫn có thể trỏ ra ngoài vector.
 
 <InteractiveLab demo="pixel" mode="pixel-memory" />
 
+Chọn preset 4×3, dùng Home rồi mũi tên phải đi hết một hàng. Quan sát lúc index từ 3 sang 4: tọa độ chuyển từ `(3,0)` sang `(0,1)`. Các ô đang được phóng to để dễ đọc; một ô không phải một pixel vật lý của trình duyệt.
+
 ## Viết code từng bước
 
-### Bước 1 — Tạo kiểu `Framebuffer`
+### Bước 1 — Tách dữ liệu ảnh khỏi SDL
 
-Tạo tệp `include/lab.hpp`. Dòng `#pragma once` giúp một file `.cpp` không nạp cùng header nhiều lần. Các header còn lại cung cấp kiểu số nguyên, kiểu biểu diễn kích thước và `std::vector`.
+Tạo `include/lab.hpp` với `#pragma once`, các include `algorithm`, `cstddef`, `cstdint`, `new`, `vector` và `namespace lab`. Bên trong, tạo `struct Framebuffer` có ba trường:
 
-```cpp title="include/lab.hpp — phần đầu tệp"
-#pragma once
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
-namespace lab {
-struct Framebuffer {
-    int width{};
-    int height{};
-    std::vector<std::uint32_t> pixels;
-};
-} // namespace lab
+```cpp title="include/lab.hpp — dữ liệu của Framebuffer"
+int width = 0;
+int height = 0;
+std::vector<std::uint32_t> pixels;
 ```
 
-`width` và `height` dùng `int` vì tọa độ từ SDL có thể mang dấu. Kích thước và vị trí trong `std::vector` dùng `std::size_t`, đúng với kiểu mà các container chuẩn của C++ sử dụng. Sau này, ta sẽ kiểm tra tọa độ khi nó vẫn còn là số có dấu, rồi mới chuyển sang `std::size_t`.
+`uint32_t` là số nguyên không dấu 32 bit. Ở bài 03, bốn kênh màu sẽ nằm trong số ấy. Vector tự quản lý vùng nhớ liên tiếp và giải phóng khi framebuffer hết vòng đời.
 
-### Bước 2 — Luôn cập nhật kích thước cùng với vùng nhớ
+`int` cho kích thước/tọa độ giúp giữ được số âm khi kiểm đầu vào. `std::size_t` là kiểu dùng cho kích thước/chỉ số của vector; chỉ chuyển sang nó sau khi đã loại đầu vào âm.
 
-Thêm constructor và `resize` vào bên trong `Framebuffer`:
+Framebuffer mới tạo đang rỗng, với width/height bằng 0. Ta chỉ dùng nó làm ảnh sau khi `resize` thành công.
 
-```cpp title="include/lab.hpp — bên trong Framebuffer"
-Framebuffer(int w, int h) {
-    resize(w, h);
-}
+### Bước 2 — Đặt giới hạn trước khi cấp phát
 
-void resize(int w, int h) {
-    width = std::max(1, w);
-    height = std::max(1, h);
-    const std::size_t pixelCount = std::size_t(width) * std::size_t(height);
-    pixels.assign(pixelCount, 0u);
+Thêm hằng số này trong struct:
+
+```cpp title="include/lab.hpp — budget cấp phát"
+static constexpr std::size_t maximumPixelCount = 16u * 1024u * 1024u;
+```
+
+Đó là 16.777.216 pixel, tương đương 64 MiB khi mỗi pixel chiếm 4 byte. Một ảnh 1920×1080 cần khoảng 7,9 MiB; đây không phải lý do để bỏ qua giới hạn hoặc lỗi cấp phát.
+
+Ta sẽ tạo một vector mới rồi mới thay vector cũ. Trong thời gian đó, có thể tồn tại cả hai vùng nhớ, ngoài texture của SDL. Vì thế, giới hạn số pixel không phải tổng RAM cao nhất của cả chương trình.
+
+### Bước 3 — Cấp phát thành công rồi mới đổi kích thước
+
+Thêm method:
+
+```cpp title="include/lab.hpp — Framebuffer::resize"
+bool resize(int newWidth, int newHeight) {
+    if (newWidth <= 0 || newHeight <= 0) {
+        return false;
+    }
+
+    const std::size_t columns = static_cast<std::size_t>(newWidth);
+    const std::size_t rows = static_cast<std::size_t>(newHeight);
+    if (columns > maximumPixelCount / rows) {
+        return false;
+    }
+
+    try {
+        std::vector<std::uint32_t> newPixels(columns * rows, 0u);
+        pixels.swap(newPixels);
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
+
+    width = newWidth;
+    height = newHeight;
+    return true;
 }
 ```
 
-Constructor gọi lại `resize` thay vì tự viết thêm một đoạn cấp phát khác. Nhờ vậy, mọi thay đổi kích thước đều đi qua một chỗ duy nhất. `std::max(1, w)` và `std::max(1, h)` không cho framebuffer có chiều rộng hoặc chiều cao bằng 0. `assign` vừa tạo đúng số phần tử, vừa đặt tất cả về 0. Màu sắc sẽ được định nghĩa ở bài 3; hiện tại ta chỉ quan tâm đến kích thước và bộ nhớ.
+Có ba điểm đáng đọc chậm:
 
-Hai thừa số được chuyển sang `std::size_t` trước khi nhân. Nếu nhân hai giá trị `int` trước rồi mới đổi kiểu, phép nhân có thể tràn trong miền `int` khi ảnh quá lớn.
+- Kiểm width/height dương trước. Nhờ vậy `rows` không thể bằng 0 khi làm phép chia.
+- Kiểm `columns > maximumPixelCount / rows` trước khi nhân. Ta không cần tạo ra một tích quá lớn rồi mới phát hiện lỗi.
+- `newPixels` được cấp phát trước; `swap` chỉ đổi vùng nhớ khi đã thành công. Nếu `std::bad_alloc` xuất hiện vì thiếu RAM, hàm trả false và ảnh cũ còn nguyên.
 
-### Bước 3 — Đổi tọa độ `(x, y)` thành vị trí trong vector
+`try/catch` ở đây chỉ xử lý lỗi cấp phát, không phải cách che mọi lỗi của chương trình. Khi vector tạm ra khỏi scope, nó giải phóng vùng nhớ cũ nhận từ `swap`.
 
-Thêm hàm sau ngay dưới `resize`:
+Khác với việc clamp về 1, hàm này từ chối ảnh 0×0 hoặc kích thước quá lớn. Người gọi phải quyết định chờ, báo lỗi hay thoát; framebuffer không tự đổi yêu cầu thành một kích thước khác.
 
-```cpp title="include/lab.hpp — bên trong Framebuffer"
+### Bước 4 — Viết công thức index
+
+Thêm ngay dưới `resize`:
+
+```cpp title="include/lab.hpp — Framebuffer::index"
 [[nodiscard]] std::size_t index(int x, int y) const {
-    return std::size_t(y) * std::size_t(width) + std::size_t(x);
+    return static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
 }
 ```
 
-Từ khóa `const` cho biết hàm không sửa framebuffer. `[[nodiscard]]` yêu cầu compiler cảnh báo nếu code gọi `index` nhưng không dùng kết quả. Hàm này chỉ làm một việc: đổi `(x, y)` thành vị trí trong vector. Việc kiểm tra biên sẽ do `putPixel` đảm nhiệm ở bài 3, trước khi gọi `index`.
+`const` nói rằng hàm không đổi dữ liệu ảnh. `nodiscard` nhắc khi gọi nhưng bỏ kết quả. Điều kiện dùng hàm là tọa độ đã hợp lệ; `index` không tự kiểm biên. Ta sẽ đặt việc bảo vệ vào `putPixel` ở bài sau.
 
-Không được gọi `index(-1, 0)`. Khi chuyển `-1` sang `std::size_t`, ta nhận được một số dương rất lớn. Bản thân công thức không sai; vấn đề là tọa độ âm phải được chặn trước khi đi vào hàm này.
+Không gọi `index(-1, 0)` để “thử lỗi”. Chuyển −1 sang size_t tạo một số không dấu rất lớn, không còn là tọa độ âm dễ nhận ra.
 
-### Bước 4 — Tạo framebuffer trong chương trình
+### Bước 5 — Tạo framebuffer trong main
 
-Trong `src/main.cpp`, thêm header của chúng ta trước header SDL, rồi tạo framebuffer sau khi window và renderer đã được tạo thành công:
+Thêm `#include "lab.hpp"` vào `src/main.cpp`. Sau khi window/renderer đã tạo thành công, thêm:
 
-```cpp title="src/main.cpp — include và setup"
-#include "lab.hpp"
-#include <SDL3/SDL.h>
-// ... SDL_Init, window và renderer giữ nguyên từ bài 1 ...
-lab::Framebuffer framebuffer{kInitialWidth, kInitialHeight};
-SDL_SetWindowTitle(window, "Project 01 - Framebuffer owns 518,400 pixels");
+```cpp title="src/main.cpp — cấp phát ảnh ở checkpoint 2"
+lab::Framebuffer framebuffer;
+if (!framebuffer.resize(kInitialWidth, kInitialHeight)) {
+    std::cerr << "Framebuffer allocation failed\n";
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+std::cout << framebuffer.width << " x " << framebuffer.height << " = " << framebuffer.pixels.size() << " pixels\n";
 ```
 
-Lúc này chương trình đã cấp phát `960 × 540 = 518.400` pixel. Dòng chữ trên thanh tiêu đề giúp ta xác nhận bước đó, nhưng cửa sổ vẫn giống hệt bài 1 vì dữ liệu trong vector chưa được gửi sang SDL. Bài 3 sẽ đưa những pixel đầu tiên lên màn hình; bài 5 sẽ giải thích trọn vẹn quá trình cập nhật texture và xử lý resize. Ở bài này, điều cần kiểm tra là vùng nhớ chứ chưa phải hình ảnh.
+Đây vẫn là ảnh thử có kích thước 960×540, chưa phải ảnh theo output high-DPI. Bài 03 sẽ đọc kích thước đầu ra thật khi tạo texture.
 
-Để kiểm tra nhanh, hãy xem `framebuffer.pixels.size()` trong trình gỡ lỗi. Bạn cũng có thể tạm tạo framebuffer 4×3 và dùng `assert(framebuffer.index(3, 2) == 11)`, sau đó xóa phép thử khi đã chắc chắn mình hiểu công thức.
+Build `project_1_checkpoint_2`, chạy và kiểm 518.400 phần tử trong terminal. Nếu mở debugger, xem `pixels.size()`; đừng kỳ vọng thay một phần tử sẽ đổi cửa sổ ngay vì vector chưa được gửi sang SDL.
 
 ## Ghép các phần lại
 
-So với bài 1, phần khởi tạo giờ có thêm bước tạo framebuffer:
+Tới đây có hai phần độc lập: SDL giữ cửa sổ sống, Framebuffer giữ vùng nhớ ảnh. `main` tạo chúng rồi chạy vòng lặp cũ; không có lời gọi upload nào bị giấu trong Framebuffer.
 
-`khởi tạo SDL → tạo Framebuffer → chạy event loop → dọn dẹp SDL`
-
-`Framebuffer` vẫn chưa tham gia vào phần vẽ. Chúng ta chủ động giải quyết riêng bài toán bộ nhớ trước: `resize` giữ `width`, `height` và `pixels` khớp với nhau; `index` chỉ đổi tọa độ thành vị trí. Chưa có hàm nào ghi màu vào pixel.
-
-Khi đọc mã nguồn đầy đủ ở cuối trang, hãy bắt đầu từ constructor, xem nó gọi `resize`, rồi tự tính `index` với ảnh 4×3. Không cần đọc lại toàn bộ `main.cpp`; phần quan trọng của bài này nằm trong `include/lab.hpp`.
+Tự tính lại ba vị trí `(0,0)`, `(0,1)`, `(3,2)` với ảnh 4×3. Sau đó đổi width thành 5 trong Canvas. Vì mỗi hàng dài thêm một phần tử, index của các hàng phía dưới thay đổi dù tọa độ bạn chọn không đổi.
 
 ## Thử làm sai để hiểu đúng
 
-Thực hiện từng thí nghiệm riêng rồi hoàn tác:
-
-1. Đổi công thức thành `x * height + y`. Với framebuffer 4×3, tính lại vị trí của `(3, 2)` và nhận ra dữ liệu không còn được xếp theo row-major.
-2. Thay `assign` bằng chỉ hai phép gán `width = w; height = h;`. Sau `resize(8, 5)`, kích thước vector vẫn là giá trị cũ và không còn khớp với `width × height`.
-3. Bỏ `std::max(1, ...)`, gọi `resize(0, 10)` và quan sát vector rỗng. Hãy nghĩ xem đoạn code tính `width - 1` ở bài gradient sẽ gặp chuyện gì.
-
-Trong Pixel Memory Lab ở đầu trang, hãy chọn một ô rồi đối chiếu `(x, y)` với vị trí trong vector. Sau đó thay đổi `width`: bạn sẽ thấy chỉ cần chiều rộng đổi, cùng một giá trị `y` đã dẫn đến một vị trí bộ nhớ khác.
+1. Tính tay bằng `y × height + x`. Hai hàng có bị chồng vùng nhớ không? Không cần sửa code để ghi thử ra ngoài buffer.
+2. Chỉ trong debugger hoặc test nhỏ, gọi resize với 0, −1 và một kích thước rất lớn. Kết quả phải là false, không cấp phát một ảnh khác.
+3. Dự đoán dung lượng của ảnh 4×3 trước khi đọc ô “Pitch” và “Byte offset” trong Lab: pitch là 16 byte, toàn ảnh 48 byte.
 
 ## Tự kiểm tra kết quả
 
-- [ ] `Framebuffer{4, 3}` tạo đúng 12 phần tử.
-- [ ] `index(0, 0)` bằng 0; `index(3, 2)` bằng 11.
-- [ ] Đi xuống một hàng làm index tăng đúng `width`.
-- [ ] Sau `resize(8, 5)`, vector có 40 phần tử và dữ liệu cũ đã được thay thế.
-- [ ] Bạn giải thích được vì sao kiểm tra tọa độ âm phải xảy ra trước phép đổi sang `std::size_t`.
-- [ ] Target `project_1_checkpoint_2` build và chạy từ chính thư mục project.
+- [ ] Ảnh 4×3 có 12 phần tử, index cuối là 11.
+- [ ] Đi xuống một hàng tăng index đúng width.
+- [ ] Resize thành công đổi kích thước và vector cùng lúc.
+- [ ] Resize sai giữ dữ liệu cũ, không tự clamp kích thước.
+- [ ] Bạn phân biệt được số phần tử với số byte.
+- [ ] Checkpoint 2 chạy được nhưng chưa dùng vector làm ảnh hiển thị.
 
 ## Bài tập mở rộng
 
-1. Viết hàm ngược `coordinates(index)` trả lại `x = index % width` và `y = index / width`. Chỉ chấp nhận index hợp lệ.
-2. Tính dung lượng byte của framebuffer 1920×1080 khi mỗi pixel chiếm 4 byte. So kết quả với `pixels.size() * sizeof(std::uint32_t)`.
-3. Thêm `bool contains(int x, int y) const` nhưng chưa dùng nó để ghi pixel. Bài sau sẽ biến hàm này thành hàng rào an toàn cho `putPixel`.
+1. Viết phép đổi ngược: `x = index % width`, `y = index / width` cho index hợp lệ.
+2. Tính dung lượng 1920×1080 và 3840×2160, rồi so với budget.
+3. Viết bảng index cho ảnh 3×4 để nhận ra width và height không đổi vai trò cho nhau.
 
-Ở bài 3, chúng ta sẽ quy định cách một số 32 bit biểu diễn màu RGBA, rồi viết `putPixel` để ghi màu mà không chạm ra ngoài framebuffer.
+Sang [bài 03 — RGBA và những pixel đầu tiên](/projects/hello-pixels/03-putpixel-va-rgba). Chúng ta sẽ quy định màu trong mỗi số 32 bit, ghi vào đúng phần tử và đưa ảnh ấy lên cửa sổ.

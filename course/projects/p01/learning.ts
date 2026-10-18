@@ -3,199 +3,163 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p01-l01": {
-      focus:
-        "Dựng bộ khung đầu tiên của ứng dụng SDL3: khởi tạo phần video, tạo window và renderer, xử lý sự kiện trong vòng lặp rồi giải phóng tài nguyên đúng thứ tự.",
+      focus: "Viết bộ khung SDL từ đầu, biết mỗi tài nguyên được tạo ở đâu và hủy lúc nào.",
       expected:
-        "Cửa sổ 960×540 có nền xanh đen, vẫn phản hồi khi kéo hoặc thu nhỏ và đóng được bằng nút Close lẫn phím Escape.",
+        "Cửa sổ 960×540 có nền xanh đen; kéo/đóng bình thường và Escape kết thúc event loop.",
       files: ["src/main.cpp", "CMakeLists.txt"],
       steps: [
         {
-          title: "Kiểm tra ngay khi khởi tạo",
+          title: "Chạy starter trước",
           explanation:
-            "Trong SDL3, SDL_Init trả về bool. Nếu nhận false, hãy in SDL_GetError() và dừng chương trình; không tiếp tục tạo cửa sổ từ một trạng thái lỗi.",
+            "Starter chỉ in một dòng để xác nhận toolchain. Bài 01 thêm SDL_Init, window và renderer; không giấu sẵn một hệ thống vẽ chưa được giải thích.",
         },
         {
-          title: "Đặt phần vẽ ngoài SDL_PollEvent",
+          title: "Đọc event rồi mới vẽ",
           explanation:
-            "SDL_PollEvent chỉ lấy các sự kiện đang chờ. Phần cập nhật và vẽ phải nằm ngoài vòng này để chương trình vẫn tạo khung hình khi người dùng không thao tác.",
+            "PollEvent lấy hết event đang chờ. Phần vẽ nằm ngoài vòng đó; running=false được kiểm trước khi vẽ tiếp.",
         },
         {
-          title: "Dọn dẹp theo thứ tự ngược",
+          title: "Báo lỗi và dọn tài nguyên",
           explanation:
-            "Renderer được hủy trước window, sau đó mới gọi SDL_Quit. Đây là chiều ngược lại với thứ tự các tài nguyên đã được tạo.",
+            "Kiểm bool/pointer ngay sau lời gọi SDL. Hủy renderer trước window và SDL_Quit; Delay chỉ nhường CPU, không phải FPS cap.",
         },
       ],
     },
     "p01-l02": {
-      focus:
-        "Tạo kiểu Framebuffer gồm width, height và một vector pixel lưu theo row-major; dùng std::size_t khi tính số phần tử trong bộ nhớ.",
+      focus: "Tự tính vị trí trên ảnh 4×3 trước khi dùng công thức cho cửa sổ lớn.",
       expected:
-        "Framebuffer 4×3 chứa đúng 12 pixel. Pixel góc trái có index 0, còn pixel góc phải dưới có index 11.",
-      files: ["include/lab.hpp"],
+        "Có 12 phần tử, góc cuối index 11; resize không hợp lệ giữ nguyên kích thước và pixel cũ.",
+      files: ["include/lab.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Để vector quản lý bộ nhớ",
+          title: "Đặt hợp đồng dữ liệu",
           explanation:
-            "std::vector<uint32_t> tự cấp phát, tự giải phóng và đặt các pixel liền nhau trong RAM; sau này có thể truyền pixels.data() cho SDL_UpdateTexture.",
+            "Framebuffer rỗng lúc mới tạo. Sau resize thành công, vector có đúng width×height phần tử; index chỉ nhận tọa độ đã hợp lệ.",
         },
         {
-          title: "Đổi từ hai chiều sang một chiều",
+          title: "Cấp phát trước, đổi state sau",
           explanation:
-            "Công thức index = y × width + x đi qua y hàng hoàn chỉnh, rồi tiến thêm x phần tử trong hàng hiện tại.",
+            "Kiểm đầu vào và budget trước phép nhân, cấp phát vector tạm rồi swap. Đây là cách tránh đổi width khi vùng nhớ mới chưa tồn tại.",
         },
         {
-          title: "Resize cập nhật mọi thứ cùng lúc",
+          title: "Kiểm ở RAM trước",
           explanation:
-            "Hàm resize chặn width và height tối thiểu bằng 1, sau đó tạo lại chính xác width × height phần tử.",
+            "Bài này in kích thước và xem vector trong debugger. Cửa sổ chưa hiển thị framebuffer; bài 03 sẽ xây đường đưa pixel lên màn hình.",
         },
       ],
     },
     "p01-l03": {
-      focus:
-        "Đóng gói bốn kênh RGBA vào uint32_t và viết putPixel để mọi phép ghi theo tọa độ đều dùng chung một bước kiểm tra biên.",
+      focus: "Đi trọn đường của một pixel: RGBA → số 32 bit → putPixel → texture → cửa sổ.",
       expected:
-        "Pixel nằm trong biên đổi sang đúng màu. Tọa độ âm hoặc vượt quá width/height được bỏ qua mà không làm thay đổi vector.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Dấu cộng xanh được tạo bằng CPU. Texture copy RGB trực tiếp; tọa độ ngoài biên không sửa pixel nào.",
+      files: ["include/lab.hpp", "include/presentation.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Chuyển kiểu trước khi dịch bit",
+          title: "Tách giá trị số khỏi byte order",
           explanation:
-            "Chuyển uint8_t thành uint32_t trước phép dịch để người đọc biết rõ phép toán đang diễn ra trên 32 bit.",
+            "0xRRGGBBAA khớp packed RGBA8888. Little-endian đặt byte thấp trước; không nhầm với định dạng RGBA32 theo byte array.",
         },
         {
-          title: "Kiểm tra biên trước khi tính index",
+          title: "Kiểm biên rồi mới ghi",
           explanation:
-            "Không gọi index với x hoặc y âm: khi chuyển sang size_t, số âm sẽ biến thành một chỉ số dương rất lớn.",
+            "Giữ x/y là int để chặn số âm, sau đó mới gọi index. clear dùng std::fill vì nó duyệt toàn bộ phần tử đang tồn tại.",
         },
         {
-          title: "Thử cả tọa độ hợp lệ lẫn không hợp lệ",
+          title: "Giải thích presentation ngay khi dùng",
           explanation:
-            "Ghi vào góc cuối để xác nhận cách tính vị trí; so sánh vector trước và sau một lần ghi ngoài biên để chắc chắn dữ liệu không bị thay đổi.",
+            "Tạo streaming texture, chọn BLENDMODE_NONE, tính pitch theo byte, upload, copy và present. Không để lời gọi SDL xuất hiện trước phần giải thích.",
         },
       ],
     },
     "p01-l04": {
-      focus:
-        "Dùng tọa độ pixel để tạo gradient, checkerboard và noise có thể lặp lại; ba mẫu hình đồng thời kiểm tra màu sắc, cách tính vị trí và việc phủ kín framebuffer.",
+      focus: "Dùng bốn mẫu để hiểu từng kiểu duyệt và phát hiện lỗi màu, tọa độ, thứ tự pixel.",
       expected:
-        "Các phím 1, 2, 3 chuyển được giữa ba mẫu. Gradient đạt đủ hai đầu màu, checkerboard xen kẽ đúng kích thước ô và cùng một seed luôn tạo cùng một ảnh noise.",
+        "1 Solid, 2 Gradient, 3 Checker, 4 Noise; -/= đổi cell, N đổi seed và noise đứng yên khi không đổi đầu vào.",
       files: ["include/lab.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Gradient đi hết dải màu",
+          title: "Làm solid rồi gradient",
           explanation:
-            "Chia x cho width−1 và y cho height−1 để pixel đầu nhận 0, pixel cuối nhận 255; max(1, …) tránh chia cho 0 với ảnh chỉ có một pixel.",
+            "Solid kiểm toàn ảnh đã được ghi; gradient dùng width−1/height−1, chia số thực rồi cắt về uint8_t. Ảnh một hàng/cột có quy tắc rõ.",
         },
         {
-          title: "Chọn màu checkerboard bằng chẵn lẻ",
+          title: "Chia ô và sinh noise",
           explanation:
-            "x/cell và y/cell cho biết pixel thuộc ô nào. Tổng hai tọa độ ô là chẵn hay lẻ sẽ quyết định màu.",
+            "Checker dựa vào tổng tọa độ ô. Noise đi đúng một lượt vector bằng LCG uint32_t; seed=17 cho fixture biết trước.",
         },
         {
-          title: "Noise dùng seed cố định",
+          title: "Nối phím với state",
           explanation:
-            "Linear congruential generator tạo cùng một chuỗi khi dùng cùng seed, vì vậy kết quả có thể được kiểm tra lại chính xác.",
+            "Phím chỉ đổi pattern/cell/seed và đặt dirty. Vòng vẽ tạo và upload ảnh một lần sau các thay đổi, không sinh lại noise mỗi frame.",
         },
       ],
     },
     "p01-l05": {
-      focus:
-        "Cập nhật streaming texture bằng framebuffer trên CPU với pitch tính theo byte, hiển thị texture và tạo lại tài nguyên khi kích thước pixel của cửa sổ thay đổi.",
+      focus: "Giữ kích thước CPU/texture đúng pixel output trong suốt resize và phục hồi cửa sổ.",
       expected:
-        "Ảnh lấp đầy cửa sổ ở mọi kích thước. Resize liên tục không làm chương trình dừng, không làm lệch hàng pixel và không dùng lại texture đã hủy.",
-      files: ["src/main.cpp", "include/lab.hpp"],
+        "Ảnh được tính lại ở kích thước mới, không chỉ co giãn texture; minimize không tạo buffer 0×0.",
+      files: ["include/presentation.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Pitch không phải là width",
+          title: "Đọc output thật",
           explanation:
-            "SDL_UpdateTexture cần khoảng cách tính bằng byte giữa hai hàng, nên pitch bằng width × sizeof(uint32_t), không chỉ bằng width.",
+            "Sau PollEvent, GetRenderOutputSize trả kích thước vùng renderer theo pixel. Không lấy window coordinates làm số phần tử framebuffer.",
         },
         {
-          title: "Dùng sự kiện kích thước pixel",
+          title: "Thay cả cặp tài nguyên",
           explanation:
-            "SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED cung cấp số pixel thật của vùng hiển thị, đặc biệt quan trọng trên màn hình high-DPI.",
+            "Tạo Framebuffer tạm và texture mới. Chỉ commit khi cả hai thành công; thất bại không để CPU/texture lệch nhau.",
         },
         {
-          title: "Chỉ thay tài nguyên khi cặp mới đã sẵn sàng",
+          title: "Tách resize khỏi redraw",
           explanation:
-            "Tạo framebuffer và texture mới trước. Nếu tạo texture thất bại, không thay đổi cặp tài nguyên đang dùng.",
+            "Chỉ kích thước đổi mới cấp phát. Minimize/zero output tạm bỏ qua; kích thước giữ nguyên chỉ tiếp tục copy texture đang có.",
         },
       ],
     },
     "p01-l06": {
-      focus:
-        "Dùng kiểm thử C++ để xác nhận các điều kiện luôn phải đúng, sau đó build và chạy lại bản hoàn chỉnh của project bằng CMake.",
+      focus: "Chứng minh dữ liệu đúng bằng fixture độc lập rồi kiểm presentation và desktop riêng.",
       expected:
-        "CTest báo toàn bộ phép kiểm thử đều đạt. Target project_1_final hiển thị đủ ba mẫu và vẫn hoạt động sau nhiều lần resize.",
-      files: ["tests/tests.cpp", "include/lab.hpp"],
+        "CTest đạt Debug/Release; final --smoke tự thoát sau 12 lần resize. Bốn scene, input và minimize được tự kiểm trực tiếp.",
+      files: ["tests/tests.cpp", "include/smoke.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Kiểm tra phần C++ mà không cần SDL",
+          title: "Test có thể thất bại ở Release",
           explanation:
-            "Chương trình test include lab.hpp nhưng không mở cửa sổ, nhờ vậy chạy nhanh trong terminal và dùng được trên CI.",
+            "check tăng failures và main trả EXIT_FAILURE; không dùng assert bị NDEBUG loại bỏ. Các expected value nhỏ được tính độc lập.",
         },
         {
-          title: "Kiểm tra điều luôn phải đúng",
+          title: "Kiểm cả dữ liệu không hợp lệ",
           explanation:
-            "Số phần tử, vị trí hai góc và việc bảo vệ biên phải đúng dù sau này bạn đổi bảng màu hay mẫu hình.",
+            "Ảnh 1×1/1×N/N×1, tọa độ âm, cell≤0 và kích thước quá lớn đều có test. Resize thất bại phải giữ cả dữ liệu cũ.",
         },
         {
-          title: "Đối chiếu với source hoàn chỉnh",
+          title: "Không đánh đồng các loại kiểm tra",
           explanation:
-            "Cuối bài có README, CMakeLists, header, main và tests đầy đủ, giống với nội dung trong gói tải về.",
+            "CTest không mở SDL. Smoke ẩn kiểm upload/present hữu hạn; kéo resize, đổi DPI và input thật vẫn cần desktop QA.",
         },
       ],
     },
   },
   references: {
     "p01-l01": [
-      {
-        label: "SDL_Init",
-        href: "https://wiki.libsdl.org/SDL3/SDL_Init",
-        kind: "SDL API",
-      },
-      {
-        label: "SDL_CreateWindow",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CreateWindow",
-        kind: "SDL API",
-      },
-      {
-        label: "SDL_CreateRenderer",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CreateRenderer",
-        kind: "SDL API",
-      },
+      { label: "SDL_Init", href: "https://wiki.libsdl.org/SDL3/SDL_Init", kind: "SDL API" },
       {
         label: "SDL_PollEvent",
         href: "https://wiki.libsdl.org/SDL3/SDL_PollEvent",
         kind: "SDL API",
       },
-      {
-        label: "Event loop",
-        href: "/glossary#event-loop",
-        kind: "Thuật ngữ",
-      },
+      { label: "SDL CMake", href: "https://wiki.libsdl.org/SDL3/README-cmake", kind: "SDL API" },
+      { label: "Event loop", href: "/glossary#event-loop", kind: "Thuật ngữ" },
     ],
     "p01-l02": [
-      {
-        label: "Framebuffer",
-        href: "/glossary#framebuffer",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Bounds check",
-        href: "/glossary#bounds-check",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
-      },
+      { label: "Framebuffer", href: "/glossary#framebuffer", kind: "Thuật ngữ" },
+      { label: "Bounds check", href: "/glossary#bounds-check", kind: "Thuật ngữ" },
     ],
     "p01-l03": [
       {
-        label: "SDL_CreateTexture",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CreateTexture",
+        label: "SDL_PixelFormat",
+        href: "https://wiki.libsdl.org/SDL3/SDL_PixelFormat",
         kind: "SDL API",
       },
       {
@@ -204,32 +168,20 @@ const learning = {
         kind: "SDL API",
       },
       {
-        label: "Streaming texture",
-        href: "/glossary#streaming-texture",
-        kind: "Thuật ngữ",
+        label: "SDL_SetTextureBlendMode",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetTextureBlendMode",
+        kind: "SDL API",
       },
-      {
-        label: "Pitch / stride",
-        href: "/glossary#pitch-stride",
-        kind: "Thuật ngữ",
-      },
+      { label: "Pitch / stride", href: "/glossary#pitch-stride", kind: "Thuật ngữ" },
     ],
     "p01-l04": [
-      {
-        label: "Framebuffer",
-        href: "/glossary#framebuffer",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
-      },
+      { label: "Framebuffer", href: "/glossary#framebuffer", kind: "Thuật ngữ" },
+      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
     ],
     "p01-l05": [
       {
-        label: "SDL_UpdateTexture",
-        href: "https://wiki.libsdl.org/SDL3/SDL_UpdateTexture",
+        label: "SDL_GetRenderOutputSize",
+        href: "https://wiki.libsdl.org/SDL3/SDL_GetRenderOutputSize",
         kind: "SDL API",
       },
       {
@@ -237,33 +189,16 @@ const learning = {
         href: "https://wiki.libsdl.org/SDL3/SDL_RenderTexture",
         kind: "SDL API",
       },
-      {
-        label: "SDL_RenderPresent",
-        href: "https://wiki.libsdl.org/SDL3/SDL_RenderPresent",
-        kind: "SDL API",
-      },
-      {
-        label: "Pitch / stride",
-        href: "/glossary#pitch-stride",
-        kind: "Thuật ngữ",
-      },
+      { label: "Streaming texture", href: "/glossary#streaming-texture", kind: "Thuật ngữ" },
     ],
     "p01-l06": [
       {
-        label: "CTest command-line reference",
+        label: "CTest",
         href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
         kind: "CMake",
       },
-      {
-        label: "Checkpoint",
-        href: "/glossary#checkpoint",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
-      },
+      { label: "Checkpoint", href: "/glossary#checkpoint", kind: "Thuật ngữ" },
+      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
     ],
   },
 } satisfies ProjectLearningAssets;

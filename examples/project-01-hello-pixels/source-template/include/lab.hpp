@@ -1,53 +1,72 @@
 #pragma once
+
 #ifndef LAB_CHECKPOINT
 #define LAB_CHECKPOINT 6
 #endif
+
 #if LAB_CHECKPOINT >= 2
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <new>
 #include <vector>
-#endif
+
 namespace lab {
+
 #if LAB_CHECKPOINT >= 3
-constexpr std::uint32_t rgba(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255) {
-    return (std::uint32_t(r) << 24) | (std::uint32_t(g) << 16) | (std::uint32_t(b) << 8) | std::uint32_t(a);
+// Đây là giá trị số 0xRRGGBBAA, không phải thứ tự byte trong RAM.
+constexpr std::uint32_t rgba(std::uint8_t red, std::uint8_t green, std::uint8_t blue, std::uint8_t alpha = 255) {
+    const std::uint32_t redBits = static_cast<std::uint32_t>(red) << 24;
+    const std::uint32_t greenBits = static_cast<std::uint32_t>(green) << 16;
+    const std::uint32_t blueBits = static_cast<std::uint32_t>(blue) << 8;
+    return redBits | greenBits | blueBits | static_cast<std::uint32_t>(alpha);
 }
-
-static_assert(rgba(255, 0, 0) == 0xFF0000FFu);
-static_assert(rgba(0, 255, 0, 128) == 0x00FF0080u);
 #endif
-#if LAB_CHECKPOINT >= 2
 
-// Framebuffer sở hữu một mảng pixel row-major ở phía CPU.
+// Mỗi phần tử trong vector là một pixel. Các hàng nằm liền nhau.
 struct Framebuffer {
-    int width{};
-    int height{};
+    int width = 0;
+    int height = 0;
     std::vector<std::uint32_t> pixels;
 
-    Framebuffer(int w, int h) {
-        resize(w, h);
+    // 16 triệu pixel, tương đương 64 MiB; resize cần thêm một buffer tạm.
+    static constexpr std::size_t maximumPixelCount = 16u * 1024u * 1024u;
+
+    bool resize(int newWidth, int newHeight) {
+        if (newWidth <= 0 || newHeight <= 0) {
+            return false;
+        }
+
+        const std::size_t columns = static_cast<std::size_t>(newWidth);
+        const std::size_t rows = static_cast<std::size_t>(newHeight);
+        if (columns > maximumPixelCount / rows) {
+            return false;
+        }
+
+        // Chỉ thay kích thước sau khi đã cấp phát thành công.
+        try {
+            std::vector<std::uint32_t> newPixels(columns * rows, 0u);
+            pixels.swap(newPixels);
+        } catch (const std::bad_alloc&) {
+            return false;
+        }
+
+        width = newWidth;
+        height = newHeight;
+        return true;
     }
 
-    void resize(int w, int h) {
-        width = std::max(1, w);
-        height = std::max(1, h);
-        const std::size_t pixelCount = std::size_t(width) * std::size_t(height);
-#if LAB_CHECKPOINT >= 3
-        pixels.assign(pixelCount, rgba(11, 16, 32));
-#else
-        pixels.assign(pixelCount, 0u);
-#endif
-    }
-
+    // Điều kiện gọi: 0 <= x < width và 0 <= y < height.
     [[nodiscard]] std::size_t index(int x, int y) const {
-        return std::size_t(y) * std::size_t(width) + std::size_t(x);
+        return static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
     }
+
 #if LAB_CHECKPOINT >= 3
     void putPixel(int x, int y, std::uint32_t color) {
         if (x < 0 || y < 0 || x >= width || y >= height) {
             return;
         }
+
         pixels[index(x, y)] = color;
     }
 
@@ -55,23 +74,24 @@ struct Framebuffer {
         std::fill(pixels.begin(), pixels.end(), color);
     }
 #endif
-#if LAB_CHECKPOINT >= 4
 
-    // Mỗi pattern chỉ thay đổi dữ liệu pixel; renderer không cần biết cách tạo màu.
+#if LAB_CHECKPOINT >= 4
     void gradient() {
         const int denominatorX = std::max(1, width - 1);
         const int denominatorY = std::max(1, height - 1);
+
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                const auto r = std::uint8_t(255.0 * x / denominatorX);
-                const auto g = std::uint8_t(255.0 * y / denominatorY);
-                putPixel(x, y, rgba(r, g, 180));
+                const auto red = static_cast<std::uint8_t>(255.0 * x / denominatorX);
+                const auto green = static_cast<std::uint8_t>(255.0 * y / denominatorY);
+                putPixel(x, y, rgba(red, green, 180));
             }
         }
     }
 
     void checker(int cell = 32) {
         cell = std::max(1, cell);
+
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
                 const int cellX = x / cell;
@@ -88,13 +108,16 @@ struct Framebuffer {
 
     void noise(std::uint32_t seed = 17) {
         std::uint32_t state = seed;
-        for (auto& pixel : pixels) {
+
+        // uint32_t quay vòng theo modulo 2^32: đây là chủ ý của LCG.
+        for (std::uint32_t& pixel : pixels) {
             state = state * 1664525u + 1013904223u;
-            const auto value = std::uint8_t(state >> 24);
-            pixel = rgba(value, std::uint8_t(value / 2), std::uint8_t(255 - value));
+            const auto value = static_cast<std::uint8_t>(state >> 24);
+            pixel = rgba(value, static_cast<std::uint8_t>(value / 2), static_cast<std::uint8_t>(255 - value));
         }
     }
 #endif
 };
-#endif
+
 } // namespace lab
+#endif

@@ -1,141 +1,154 @@
-# Giới hạn FPS: chỉ nghỉ trong phần thời gian còn thừa
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tự viết bộ giới hạn FPS
 
 ## Vấn đề cần giải quyết
 
-Nhờ `dt`, tốc độ của ô vuông không còn phụ thuộc vào FPS. Tuy vậy, nếu không đặt giới hạn, vòng lặp có thể vẽ hàng trăm hoặc hàng nghìn khung hình gần như giống hệt nhau mỗi giây. CPU và GPU phải làm việc nhiều hơn, máy nóng hơn, trong khi khác biệt nhìn thấy được không tương xứng.
+Chuyển động đã dùng `dt`, nhưng vòng lặp vẫn có thể làm CPU/GPU xử lý nhiều frame không cần thiết. Các delay 33/16/8 ms trước đây chỉ phục vụ thí nghiệm: làm việc xong rồi nghỉ nguyên số đó khiến tổng thời gian dài hơn mức ta muốn.
 
-Mục tiêu của bài này là giữ tốc độ quanh 60 FPS mà không dùng một vòng chờ bận và cũng không giả định mỗi khung hình luôn kéo dài đúng 16,667 ms.
-
-Giới hạn FPS chỉ điều khiển **tần suất vẽ**. `dt` vẫn phải đo thời gian thực tế để điều khiển chuyển động. Hai cơ chế này giải quyết hai vấn đề khác nhau và không thay thế cho nhau.
+Bây giờ ta sẽ bỏ `experimentDelayMs`, đo thời gian làm việc và chỉ nghỉ phần còn lại. Mặc định giới hạn gần 60 FPS; phím F1 bật/tắt giới hạn, 1/2/3 chọn 30/60/120 và 0 chọn uncapped. Bàn phím WASD, hàm update và phép đo B không cần viết lại.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ở mức 60 FPS, mỗi khung hình có khoảng thời gian tối đa:
+Ở 60 FPS, mỗi frame có khoảng 16,667 ms:
 
-```text
-target = 1 giây / 60 = 16.666... ms
-sleep  = max(0, target - thời gian đã làm việc)
-```
+$$
+t_{\mathrm{sleep}} = \max\left(0,\frac{1}{FPS_{\mathrm{target}}}-t_{\mathrm{work}}\right).
+$$
 
-Ta ghi lại thời điểm bắt đầu, thực hiện toàn bộ phần đọc phím, cập nhật và vẽ, rồi mới đo thời gian đã dùng. Nếu công việc đã tốn 20 ms thì không thể lấy lại 3,3 ms đã quá hạn; chương trình phải chuyển sang lần lặp tiếp theo ngay. Nếu chỉ tốn 4 ms, luồng có thể nghỉ khoảng 12,6 ms còn lại.
+Trong công thức, `work` là thời gian làm việc, `sleep` là thời gian nghỉ và `target` là mức FPS muốn giới hạn. Nếu làm việc 4 ms thì còn khoảng 12,667 ms để nghỉ. Nếu làm việc 20 ms thì đã quá hạn; không thể ngủ thêm một khoảng âm để lấy lại thời gian.
 
-`SDL_DelayNS` không đảm bảo đánh thức luồng chính xác tới từng nanosecond. Bộ lập lịch của hệ điều hành luôn có độ phân giải và sai số nhất định, vì vậy FPS thực tế sẽ dao động quanh 60. Điều ta cần là tránh giữ CPU bận vô ích; tốc độ di chuyển vẫn đúng vì đã dùng `dt`.
+<InteractiveLab demo="motion" mode="motion-limiter" />
 
-Project đang tạo renderer bằng `SDL_CreateRenderer(window, nullptr)` và chưa bật `SDL_SetRenderVSync`, nên checkpoint này tự điều khiển nhịp bằng đồng hồ. Nếu sau này bật VSync, hãy đo lại trước khi giữ thêm bộ giới hạn; hai cơ chế cùng chờ có thể khiến kết quả khó dự đoán.
+Chọn 60 FPS và kéo thời gian làm việc từ 4 đến 20 ms. Ngân sách nghỉ giảm về 0. Đây là phép tính lý tưởng; `SDL_DelayNS` có thể nghỉ lâu hơn yêu cầu do bộ lập lịch của hệ điều hành. Đơn vị nanosecond của API không có nghĩa luồng được đánh thức chính xác tới từng nanosecond. [Tài liệu SDL](https://wiki.libsdl.org/SDL3/SDL_DelayNS).
 
 ## Viết code từng bước
 
-### Bước 1 — Tính thời lượng mục tiêu của một khung hình
+### Bước 1 — Viết phần tính thời gian nghỉ không phụ thuộc SDL
 
-```cpp title="src/main.cpp — hằng số đầu file"
-#include <cstdint>
+Thêm `<cstdint>` và hàm sau vào `include/lab.hpp`:
 
-std::uint64_t targetFrameDurationNs(int targetFps) {
-    return 1'000'000'000ull / std::uint64_t(targetFps);
+
+```cpp title="include/lab.hpp — tính ngân sách còn lại có kiểm tra unsigned"
+inline std::uint64_t remainingFrameNs(int targetFps, std::uint64_t workNs) {
+    if (targetFps <= 0) {
+        return 0;
+    }
+    const std::uint64_t targetNs = 1'000'000'000ull / static_cast<std::uint64_t>(targetFps);
+    if (workNs >= targetNs) {
+        return 0;
+    }
+    return targetNs - workNs;
 }
 ```
 
-`std::uint64_t` được khai báo trong `<cstdint>`. Vì `SDL_GetTicksNS()` trả về nanosecond, thời lượng mục tiêu cũng được tính bằng nanosecond để tránh đổi đơn vị qua lại. Hậu tố `ull` giữ phép tính ở kiểu số nguyên không dấu đủ lớn; các dấu nháy chỉ giúp con số dễ đọc hơn.
 
-Hàm nhận `targetFps` để cùng một đoạn code có thể dùng cho 30, 60 và 120 FPS. Phần xử lý phím chỉ gán ba giá trị dương đã biết, nên phép chia không gặp trường hợp chia cho 0.
+FPS không dương nghĩa là không giới hạn, trả 0 trước khi chia. Khi `workNs >= targetNs`, trả 0 trước khi trừ. Nếu trừ hai số không dấu theo thứ tự sai, kết quả có thể thành số dương cực lớn và gây khoảng chờ rất dài.
 
-### Bước 2 — Đo toàn bộ thời gian xử lý một khung hình
+Phép chia số nguyên ở 60 FPS cho 16.666.666 ns. Sai khác nhỏ hơn một nanosecond không đáng kể so với sai số của hệ điều hành. Không cần viết một bộ đo thời gian phức tạp để “sửa” phần làm tròn này.
 
-```cpp title="src/main.cpp — đầu và cuối while (running)"
-const std::uint64_t frameStart = SDL_GetTicksNS();
-// poll input, update, render, present...
-const std::uint64_t elapsed = SDL_GetTicksNS() - frameStart;
+### Bước 2 — Lấy mốc trước toàn bộ công việc
+
+Đặt ngay đầu `while (running)`:
+
+
+```cpp title="src/main.cpp — mốc đầu frame"
+const Uint64 frameStart = SDL_GetTicksNS();
 ```
 
-`frameStart` phải được lấy trước mọi công việc mà ta muốn tính vào khoảng 16,67 ms. Nếu đặt nó ngay trước `SDL_DelayNS`, `elapsed` sẽ gần bằng 0. Khi đó chương trình làm việc xong còn nghỉ thêm trọn 16,67 ms, khiến FPS thấp hơn mục tiêu.
 
-### Bước 3 — Chỉ nghỉ trong phần thời gian còn thiếu
+Mốc này phải đứng trước xử lý event, cập nhật, vẽ, present và cập nhật title. Nếu chỉ lấy mốc ngay trước lệnh delay, bạn sẽ bỏ quên toàn bộ công việc vừa làm và nghỉ thêm trọn 16,667 ms.
 
-```cpp title="src/main.cpp — sau SDL_RenderPresent"
+Sau present và cập nhật title, thêm:
+
+
+```cpp title="src/main.cpp — chỉ nghỉ sau khi vẽ xong"
 if (capped) {
-    const std::uint64_t target = targetFrameDurationNs(targetFps);
-    const std::uint64_t elapsed = SDL_GetTicksNS() - frameStart;
-    if (elapsed < target) {
-        SDL_DelayNS(target - elapsed);
-    }
-}
+            const Uint64 workNs = SDL_GetTicksNS() - frameStart;
+            const Uint64 sleepNs = lab::remainingFrameNs(targetFps, workNs);
+            SDL_DelayNS(sleepNs);
+        }
 ```
 
-Điều kiện `elapsed < target` là bắt buộc vì cả hai biến đều là số nguyên không dấu. Nếu `elapsed` đã lớn hơn `target`, phép trừ `target - elapsed` sẽ tràn xuống dưới và biến thành một số dương cực lớn. Chương trình có thể bị yêu cầu nghỉ trong một khoảng thời gian rất dài.
 
-### Bước 4 — Đổi mức FPS mà không thay đổi `dt`
+Không có vòng chờ bận. Khi đã hết ngân sách, `sleepNs` bằng 0; chương trình không yêu cầu chờ thêm.
 
-Trong checkpoint 3 và 4, các phím `1`/`2`/`3` chọn một độ trễ cố ý để tạo ra lỗi và đối chứng. Sang checkpoint 5, toàn bộ phần thí nghiệm đó được bỏ đi. Ba phím này giờ chọn mức giới hạn FPS thực sự. Không giữ lại `experimentDelayMs` bên cạnh đoạn code mới.
+### Bước 3 — Đổi mức cap bằng event, không đổi dt
 
-```cpp title="src/main.cpp — phím F chỉ đổi chính sách cap"
-if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
-    if (event.key.key == SDLK_F) {
-        capped = !capped;
-    }
-    if (event.key.key == SDLK_1) {
-        targetFps = 30;
-        capped = true;
-    }
-    if (event.key.key == SDLK_2) {
-        targetFps = 60;
-        capped = true;
-    }
-    if (event.key.key == SDLK_3) {
-        targetFps = 120;
-        capped = true;
-    }
-    if (event.key.key == SDLK_0) {
-        capped = false;
-    }
-}
+Khai báo hai biến trước vòng lặp:
+
+
+```cpp title="src/main.cpp — mức giới hạn mặc định"
+bool capped = true;
+    int targetFps = 60;
 ```
 
-Ta bỏ qua sự kiện lặp phím để việc giữ F không liên tục bật rồi tắt giới hạn. Mỗi phím được viết thành một nhánh riêng, dễ đọc và dễ đặt breakpoint. Phím `0` chọn chế độ không giới hạn; F bật hoặc tắt mức giới hạn gần nhất.
 
-Không nhánh nào thay đổi `dt`. Khoảng thời gian chương trình nghỉ cũng là một phần của thời gian thực giữa hai lần cập nhật và sẽ được đo ở vòng lặp kế tiếp. Nếu hệ điều hành làm một khung hình kéo dài 17,2 ms, chuyển động sẽ dùng đúng 17,2 ms thay vì tự cho rằng nó chỉ dài 16,67 ms.
+Trong nhánh `SDL_EVENT_KEY_DOWN && !event.key.repeat`, thêm:
 
-### Bước 5 — Đặt lại vị trí và quãng đường
 
-Muốn so nhiều mức cap, mỗi lần thử phải bắt đầu từ cùng một vị trí và quãng đường 0. Tách vị trí đầu thành hằng rồi thêm phím `R`:
-
-```cpp title="src/main.cpp — mốc bắt đầu và phím reset"
-lab::Vec2 position{120.0, 220.0};
-const lab::Vec2 initialPosition = position;
-double distanceTravelled = 0.0;
-// Trong SDL_EVENT_KEY_DOWN:
-if (event.key.key == SDLK_R) {
-    position = initialPosition;
-    distanceTravelled = 0.0;
-}
+```cpp title="src/main.cpp — các phím chọn giới hạn"
+if (event.key.key == SDLK_F1) {
+                    capped = !capped;
+                }
+                if (event.key.key == SDLK_1) {
+                    targetFps = 30;
+                    capped = true;
+                }
+                if (event.key.key == SDLK_2) {
+                    targetFps = 60;
+                    capped = true;
+                }
+                if (event.key.key == SDLK_3) {
+                    targetFps = 120;
+                    capped = true;
+                }
+                if (event.key.key == SDLK_0) {
+                    capped = false;
+                }
 ```
 
-Nếu gán `position = {}`, ô vuông sẽ về góc trên bên trái thay vì vị trí xuất phát đã chọn. Nếu chỉ đưa quãng đường về 0, mỗi lần thử lại bắt đầu ở một vị trí khác. Đặt lại cả hai biến giúp mọi lần so sánh có cùng điều kiện ban đầu mà không phải can thiệp vào đồng hồ hay mức FPS.
+
+F1 là thao tác bật/tắt nên dùng event và bỏ qua repeat. WASD vẫn dùng keyboard state. Đổi cap không được sửa `kPlayerSpeed`, `rawDt` hoặc tự truyền `1/targetFps` vào update.
+
+Phím R đặt lại player, quãng đường WASD và kết quả tham chiếu; phím B chạy lại phép đo năm giây từ 0. Chọn mức FPS **trước** khi bấm B để mỗi phép đo có điều kiện rõ ràng.
+
+### Bước 4 — Giữ cách đo dt từ bài trước
+
+Đầu frame sau, `now - previous` chứa cả thời gian xử lý lẫn phần nghỉ của frame trước. Vì vậy không trừ `sleepNs` khỏi `rawDt`. Nhân vật vẫn đang tồn tại trong lúc luồng nghỉ; một giây thật không chỉ gồm thời gian CPU bận.
+
+Bộ giới hạn và công thức chuyển động có hai nhiệm vụ độc lập: giới hạn giúp giảm số frame được yêu cầu xử lý; `dt` giúp mỗi bước đi đúng theo thời gian đã đo. Một frame chậm hơn mục tiêu không được “bù” bằng cách đổi vận tốc.
+
+### Bước 5 — Đọc FPS thực và hiểu giới hạn phần cứng
+
+Title hiển thị `cap 60` hoặc `cap 0 (0=off)`, cùng FPS đo được và kết quả B. Mức cap là **giới hạn trên gần đúng**, không phải lời hứa luôn đạt 60 FPS. Nếu máy chỉ xử lý được 40 frame/giây, limiter không thể làm nó nhanh lên.
+
+Ứng dụng không chủ động bật VSync. Tuy vậy backend, driver hoặc compositor có thể tác động nhịp present. Nếu uncapped vẫn quanh refresh rate màn hình, không được kết luận ngay rằng FPS limiter chưa tắt. Hãy kiểm tra `capped`, thời gian `SDL_RenderPresent` và cấu hình môi trường. [SDL_SetRenderVSync](https://wiki.libsdl.org/SDL3/SDL_SetRenderVSync).
 
 ## Ghép các phần lại
 
-Cuối mỗi vòng lặp, thứ tự phải là `render → present → đo elapsed → delay`. Sang đầu vòng lặp kế tiếp, chương trình mới lấy `now` để tính `dt`. Nhờ vậy, `dt` bao gồm cả thời gian xử lý lẫn thời gian nghỉ của lần trước.
+Chạy `project_2_checkpoint_5`. Chọn 1, bấm B, chờ DONE; làm lại với 2, 3 và 0. Ở các lần `dropped` bằng 0, quãng đường tham chiếu gần 900 px dù số frame khác nhau. Sau đó giữ WASD để xác nhận đây vẫn là ứng dụng tương tác, không chỉ là một phép đo tự động.
 
-Chạy checkpoint 5, giữ D trong **ba giây** và quan sát `distance` trên thanh tiêu đề. Từ vị trí ban đầu, quãng đường khoảng 540 pixel chưa làm ô vuông chạm mép phải. Nếu giữ tới năm giây, việc giới hạn ở biên cửa sổ sẽ xen vào phép đo và làm kết quả khó so sánh.
-
-Nhấn R để bắt đầu lại, rồi thử lần lượt ở 30, 60 và 120 FPS. Ba quãng đường phải gần nhau. Sai số do thời điểm bấm và nhả phím là bình thường, nhưng không còn chênh lệch 2× hay 4× như checkpoint 3. Ở bài cuối, hàm `simulate` không có mép cửa sổ sẽ giúp ta kiểm tra chính xác trong đủ năm giây.
+Nếu quãng đường thấp hơn, đọc `dropped` trước. Nếu nó tăng, một số frame vượt 0,05 s và update đã bỏ thời gian theo quy tắc bài 4. Nếu không tăng, kiểm tra phép đổi đơn vị và tổng thời gian đo.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ điều kiện `elapsed < target` rồi cố làm một khung hình chậm hơn thời lượng mục tiêu. Phép trừ số nguyên không dấu có thể biến thành khoảng chờ cực lớn.
-2. Chuyển `frameStart` xuống ngay trước đoạn giới hạn. Thời gian đọc phím, cập nhật và vẽ sẽ bị bỏ khỏi phép đo, nên tổng thời gian dài hơn mục tiêu và FPS thấp hơn dự tính.
-3. Thay `SDL_DelayNS` bằng vòng chờ rỗng cho đến hết ngân sách. FPS có thể vẫn đúng, nhưng Task Manager cho thấy một core CPU bị giữ bận gần như hoàn toàn.
+1. Thêm nguyên delay 16 ms sau bộ giới hạn mới. FPS giảm vì bạn đã chờ hai lần; bỏ delay thí nghiệm cũ.
+2. Đưa `frameStart` xuống ngay trước phép tính `workNs`. FPS thấp hơn mục tiêu vì công việc bị bỏ khỏi phép đo.
+3. **Không chạy một lệnh chờ cực dài để thử underflow.** Viết test truyền `workNs = 20.000.000` tại 60 FPS và xác nhận hàm trả 0. Bài cuối cung cấp test này.
+4. Truyền `1/targetFps` vào update thay vì thời gian đo. Làm một frame chậm bất thường và giải thích vì sao chuyển động không còn theo thời gian thật.
 
 ## Tự kiểm tra kết quả
 
-- F đổi giữa `CAP` và `UNCAPPED` đúng một lần sau mỗi lần nhấn.
-- Phím 1/2/3 chọn được mức 30/60/120 FPS; phím 0 bỏ giới hạn và R đặt lại phép đo.
-- FPS dao động hợp lý quanh mức chọn, không cần chính xác tuyệt đối.
-- Mức sử dụng CPU giảm rõ khi bật giới hạn trên máy có thể chạy FPS cao.
-- Khung hình chậm hơn mục tiêu không gây tràn số hoặc tạo khoảng nghỉ dài bất thường.
-- Tốc độ di chuyển không đổi khi chuyển chế độ.
+- Mặc định cap 60; F1 chuyển bật/tắt đúng một lần mỗi lần nhấn.
+- 1/2/3 chọn 30/60/120, 0 bỏ giới hạn; không còn `experimentDelayMs`.
+- FPS được đo theo thời gian thật, không hiển thị mức cap như FPS thực.
+- Frame quá hạn trả thời gian nghỉ 0, không unsigned underflow.
+- Chuyển cap không đổi tốc độ; B vẫn có phép đo năm giây có thể lặp lại.
+- CPU thường giảm khi cap thấp hơn khả năng xử lý; kết quả cụ thể cần đo trên máy, không khẳng định sẵn một tỉ lệ.
 
 ## Bài tập mở rộng
 
-Hãy thêm một biểu đồ nhỏ lưu `elapsed` của 120 khung hình gần nhất và đánh dấu những lần vượt quá thời lượng mục tiêu. Nếu muốn giới hạn chính xác hơn, bạn có thể cho luồng nghỉ trong phần lớn thời gian rồi chờ chủ động trong một đoạn rất ngắn cuối cùng. Hãy đo mức dùng CPU trước khi quyết định sự đánh đổi đó có đáng hay không.
+Thêm mức cap 45 FPS, rồi viết test cho frame làm việc 5 ms ở mức này. Sau đó đo thời gian làm việc và thời gian toàn frame riêng: giải thích vì sao 4 ms xử lý không có nghĩa ứng dụng đang hiển thị 250 FPS khi đã bật cap 60.
 
-Bài cuối sẽ dùng test để chứng minh các tính chất quan trọng thay vì chỉ quan sát bằng mắt.
+[Bài tiếp theo: kiểm chứng và chạy bản hoàn chỉnh](/projects/wasd-fps-cap/06-validation).

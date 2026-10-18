@@ -1,215 +1,288 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { LabReadout, drawLine, setupCanvas, useCanvasSize, useReducedMotion } from "./lab-shared";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  advanceMotion,
+  createMotionTimeline,
+  freshMotionState,
+  remainingFrameNs,
+  simulateMotion,
+  type MotionPreset,
+} from "@/lib/labs/motion";
+import { LabReadout, useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
+import { drawMotion } from "./motion-lab-view";
 import type { InteractiveLabMode } from "./types";
 
-type MotionState = {
-  frameDistance: number;
-  timeDistance: number;
-  elapsed: number;
-  last: number;
-  accumulator: number;
-  history: Array<{ t: number; frame: number; timed: number }>;
-};
-
-function freshMotionState(): MotionState {
-  return {
-    frameDistance: 0,
-    timeDistance: 0,
-    elapsed: 0,
-    last: performance.now(),
-    accumulator: 0,
-    history: [],
-  };
-}
-
 export default function MotionLab({ mode }: { mode?: InteractiveLabMode }) {
-  void mode;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const size = useCanvasSize(canvasRef);
   const reducedMotion = useReducedMotion();
   const [fps, setFps] = useState(30);
-  const [paused, setPaused] = useState(false);
+  const [preset, setPreset] = useState<MotionPreset>("even");
+  const [paused, setPaused] = useState(true);
   const [revision, setRevision] = useState(0);
-  const [readout, setReadout] = useState({ frameDistance: 0, timeDistance: 0, elapsed: 0 });
-  const simulation = useRef<MotionState>(freshMotionState());
-  const lastReadoutTick = useRef(-1);
+  const [sampleTime, setSampleTime] = useState(5);
+  const [workMs, setWorkMs] = useState(4);
+  const [readout, setReadout] = useState({
+    elapsed: 0,
+    frameDistance: 0,
+    timeDistance: 0,
+    discarded: 0,
+  });
+  const simulation = useRef(freshMotionState());
+  const playback = useRef({ last: 0, accumulator: 0, index: 0 });
+  const timeline = useRef(createMotionTimeline(30, "even"));
+  const ownerPointer = useRef<number | null>(null);
+  const showFrame = mode !== "motion-dt";
+  const showLimiter = mode === "motion-limiter";
+
+  const publish = useCallback(() => {
+    const state = simulation.current;
+    setReadout({
+      elapsed: state.elapsed,
+      frameDistance: state.frameDistance,
+      timeDistance: state.timeDistance,
+      discarded: state.discarded,
+    });
+    setRevision((value) => value + 1);
+  }, []);
+
+  const clearPointer = useCallback(() => {
+    const id = ownerPointer.current;
+    const canvas = canvasRef.current;
+    ownerPointer.current = null;
+    if (id !== null && canvas?.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+  }, []);
+
+  const stop = useCallback(() => {
+    playback.current.last = 0;
+    setPaused(true);
+  }, []);
+  usePauseOnReducedMotion(stop);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
+    const onHidden = () => {
+      if (document.hidden) stop();
+    };
+    const onWindowBlur = () => {
+      clearPointer();
+      stop();
+    };
+    document.addEventListener("visibilitychange", onHidden);
+    window.addEventListener("blur", onWindowBlur);
+    return () => {
+      document.removeEventListener("visibilitychange", onHidden);
+      window.removeEventListener("blur", onWindowBlur);
+      clearPointer();
+    };
+  }, [stop, clearPointer]);
+
+  const reset = useCallback(
+    (nextFps = fps, nextPreset = preset) => {
+      clearPointer();
+      simulation.current = freshMotionState();
+      playback.current = { last: 0, accumulator: 0, index: 0 };
+      timeline.current = createMotionTimeline(nextFps, nextPreset);
+      setPaused(true);
+      setSampleTime(5);
+      publish();
+    },
+    [fps, preset, clearPointer, publish],
+  );
+
+  const calculate = useCallback(() => {
+    clearPointer();
+    simulation.current = simulateMotion(fps, preset);
+    playback.current = { last: 0, accumulator: 0, index: timeline.current.length };
+    setPaused(true);
+    publish();
+  }, [fps, preset, clearPointer, publish]);
+
+  const togglePaused = useCallback(() => {
+    if (reducedMotion) return;
+    if (simulation.current.elapsed >= 5) reset();
+    playback.current.last = 0;
+    setPaused((value) => !value);
+  }, [reducedMotion, reset]);
+
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx) return;
     let animationFrame = 0;
-
+    let lastPublish = 0;
     const draw = (now: number) => {
+      const clock = playback.current;
       const state = simulation.current;
-      const dt = Math.min(Math.max((now - state.last) / 1000, 0), 0.05);
-      state.last = now;
       if (!paused && !reducedMotion) {
-        state.accumulator += dt;
-        const step = 1 / fps;
-        while (state.accumulator >= step) {
-          state.frameDistance += 3;
-          state.timeDistance += 180 * step;
-          state.elapsed += step;
-          state.accumulator -= step;
+        if (clock.last !== 0) clock.accumulator += Math.max(0, (now - clock.last) / 1000);
+        clock.last = now;
+        // Timeline dài tối đa 600 bước; mỗi callback chỉ xử lý tối đa 32 bước.
+        let steps = 0;
+        while (clock.index < timeline.current.length && steps < 32) {
+          const dt = timeline.current[clock.index];
+          if (clock.accumulator < dt) break;
+          advanceMotion(state, dt);
+          clock.accumulator -= dt;
+          clock.index += 1;
+          steps += 1;
         }
-        const lastSample = state.history.at(-1)?.t ?? -1;
-        if (state.elapsed - lastSample >= 0.2) {
-          state.history.push({
-            t: state.elapsed,
-            frame: state.frameDistance,
-            timed: state.timeDistance,
-          });
-          if (state.history.length > 80) state.history.shift();
+        if (now - lastPublish >= 100 || state.elapsed >= 5) {
+          const { elapsed, frameDistance, timeDistance, discarded } = state;
+          setReadout({ elapsed, frameDistance, timeDistance, discarded });
+          lastPublish = now;
         }
-        const readoutTick = Math.floor(state.elapsed);
-        if (readoutTick !== lastReadoutTick.current) {
-          lastReadoutTick.current = readoutTick;
-          setReadout({
-            frameDistance: state.frameDistance,
-            timeDistance: state.timeDistance,
-            elapsed: state.elapsed,
-          });
-        }
+        if (state.elapsed >= 5) setPaused(true);
       }
-
-      setupCanvas(ctx, size);
-      const laneWidth = Math.max(120, size.width - 90);
-      ctx.fillStyle = "#9aa6c1";
-      ctx.font = "11px ui-monospace";
-      ctx.fillText("FRAME-BASED · +3 px/frame", 28, 34);
-      ctx.fillText("TIME-BASED · 180 px/second", 28, 120);
-      for (const y of [70, 156]) drawLine(ctx, { x: 28, y }, { x: size.width - 28, y }, "#26314c");
-      ctx.fillStyle = "#ffb454";
-      ctx.fillRect(28 + (state.frameDistance % laneWidth), 49, 34, 34);
-      ctx.fillStyle = "#53f0ae";
-      ctx.fillRect(28 + (state.timeDistance % laneWidth), 135, 34, 34);
-      ctx.fillStyle = "#fff";
-      ctx.font = "700 12px ui-monospace";
-      ctx.fillText(`${fps} FPS → ${(fps * 3).toFixed(0)} px/s`, size.width - 180, 34);
-      ctx.fillText(`${state.frameDistance.toFixed(1)} px`, 28, 98);
-      ctx.fillText(`${state.timeDistance.toFixed(1)} px`, 28, 184);
-
-      const chartTop = 218;
-      const chartBottom = size.height - 24;
-      const chartLeft = 38;
-      const chartRight = size.width - 24;
-      drawLine(ctx, { x: chartLeft, y: chartTop }, { x: chartLeft, y: chartBottom }, "#46536e");
-      drawLine(ctx, { x: chartLeft, y: chartBottom }, { x: chartRight, y: chartBottom }, "#46536e");
-      ctx.fillStyle = "#9aa6c1";
-      ctx.font = "10px ui-monospace";
-      ctx.fillText("DISTANCE–TIME", chartLeft, chartTop - 10);
-      const history = state.history;
-      if (history.length > 1) {
-        const firstT = history[0].t;
-        const spanT = Math.max(1, history.at(-1)!.t - firstT);
-        const maximum = Math.max(1, ...history.flatMap((item) => [item.frame, item.timed]));
-        const plot = (key: "frame" | "timed", color: string) => {
-          ctx.beginPath();
-          history.forEach((item, index) => {
-            const x = chartLeft + ((item.t - firstT) / spanT) * (chartRight - chartLeft);
-            const y = chartBottom - (item[key] / maximum) * (chartBottom - chartTop);
-            if (index === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-          });
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-        };
-        plot("frame", "#ffb454");
-        plot("timed", "#53f0ae");
-      }
-      if (!paused && !reducedMotion) {
+      drawMotion(ctx, size, state, sampleTime, showFrame);
+      if (!paused && !reducedMotion && state.elapsed < 5) {
         animationFrame = requestAnimationFrame(draw);
       }
     };
-
-    if (paused || reducedMotion) {
-      draw(performance.now());
-    } else {
-      animationFrame = requestAnimationFrame(draw);
-    }
+    if (paused || reducedMotion) draw(performance.now());
+    else animationFrame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(animationFrame);
-  }, [fps, paused, reducedMotion, revision, size]);
+  }, [paused, reducedMotion, revision, size, sampleTime, showFrame]);
 
-  const reset = () => {
-    simulation.current = freshMotionState();
-    lastReadoutTick.current = -1;
-    setReadout({ frameDistance: 0, timeDistance: 0, elapsed: 0 });
-    setPaused(false);
-    setFps(30);
-    setRevision((value) => value + 1);
-  };
-  const simulateFiveSeconds = () => {
-    const history = Array.from({ length: 6 }, (_, second) => ({
-      t: second,
-      frame: second * fps * 3,
-      timed: second * 180,
-    }));
-    simulation.current = {
-      frameDistance: fps * 3 * 5,
-      timeDistance: 180 * 5,
-      elapsed: 5,
-      last: performance.now(),
-      accumulator: 0,
-      history,
-    };
-    lastReadoutTick.current = 5;
-    setReadout({ frameDistance: fps * 3 * 5, timeDistance: 180 * 5, elapsed: 5 });
-    setPaused(true);
-    setRevision((value) => value + 1);
-  };
-  const togglePaused = () => {
-    simulation.current.last = performance.now();
-    setPaused((value) => !value);
-  };
+  const inspect = useCallback(
+    (clientX: number) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = ((clientX - rect.left) / rect.width) * size.width;
+      setSampleTime(Math.max(0, Math.min(5, ((x - 38) / (size.width - 66)) * 5)));
+    },
+    [size.width],
+  );
 
+  const sample =
+    simulation.current.history.findLast((item) => item.elapsed <= sampleTime) ??
+    simulation.current.history[0];
   return (
     <div className="lab-body">
+      <p>
+        Mốc FPS ở đây là dữ liệu của thí nghiệm, không phải FPS thật của trình duyệt.
+        {showFrame ? " Hai làn dùng cùng thang 1.800 px." : " Làn xanh dùng thang 1.800 px."} Thử
+        tính ngay năm giây rồi kéo trên đồ thị để đọc số.
+      </p>
       <div className="lab-controls">
         <label>
-          FPS mô phỏng
-          <input
-            type="range"
-            min="30"
-            max="120"
-            step="15"
+          FPS thí nghiệm
+          <select
             value={fps}
             onChange={(event) => {
-              simulation.current.last = performance.now();
-              setFps(Number(event.target.value));
+              const value = Number(event.target.value);
+              setFps(value);
+              reset(value, preset);
             }}
-          />
-          <output>{fps}</output>
+          >
+            {[15, 30, 60, 120].map((value) => (
+              <option key={value} value={value}>
+                {value} FPS
+              </option>
+            ))}
+          </select>
         </label>
-        {reducedMotion && <span className="control-hint">Đã bật giảm chuyển động</span>}
-        <button onClick={simulateFiveSeconds}>Mô phỏng 5 giây</button>
+        <label>
+          Dãy thời gian
+          <select
+            value={preset}
+            onChange={(event) => {
+              const value = event.target.value as MotionPreset;
+              setPreset(value);
+              reset(fps, value);
+            }}
+          >
+            <option value="even">Đều</option>
+            <option value="jitter">Xen kẽ 0,75× / 1,25×</option>
+            <option value="stall">Một frame dài 0,2 s</option>
+          </select>
+        </label>
+        <button onClick={calculate}>Tính ngay 5 giây</button>
         <button disabled={reducedMotion} onClick={togglePaused}>
-          {paused ? "Tiếp tục" : "Tạm dừng"}
+          {paused ? "Chạy / tiếp tục" : "Tạm dừng"}
         </button>
-        <button onClick={reset}>Đặt lại</button>
+        <button onClick={() => reset()}>Đặt lại</button>
+        {reducedMotion && (
+          <span className="control-hint">Giảm chuyển động: dùng “Tính ngay 5 giây”.</span>
+        )}
       </div>
+      {showLimiter && (
+        <label>
+          Thời gian làm việc mỗi frame (ms)
+          <input
+            type="range"
+            min="0"
+            max="40"
+            step="1"
+            value={workMs}
+            onChange={(event) => setWorkMs(Number(event.target.value))}
+          />
+          <output>
+            {workMs} ms làm việc + {(remainingFrameNs(fps, workMs * 1e6) / 1e6).toFixed(3)} ms nghỉ.
+            Đây là ngân sách lý tưởng, không phải phép đo SDL_DelayNS.
+          </output>
+        </label>
+      )}
       <canvas
         ref={canvasRef}
         tabIndex={0}
-        aria-label="Hai chuyển động và đồ thị distance-time so sánh frame-based với delta time"
+        aria-label="So sánh quãng đường theo frame và theo dt; kéo để đọc đồ thị, mũi tên trái phải để chọn thời điểm"
+        onPointerDown={(event) => {
+          if (event.button !== 0 || ownerPointer.current !== null) return;
+          ownerPointer.current = event.pointerId;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          event.currentTarget.focus();
+          inspect(event.clientX);
+        }}
+        onPointerMove={(event) => {
+          if (event.pointerId === ownerPointer.current) inspect(event.clientX);
+        }}
+        onPointerUp={(event) => {
+          if (event.pointerId === ownerPointer.current) clearPointer();
+        }}
+        onPointerCancel={(event) => {
+          if (event.pointerId === ownerPointer.current) clearPointer();
+        }}
+        onLostPointerCapture={(event) => {
+          if (event.pointerId === ownerPointer.current) ownerPointer.current = null;
+        }}
+        onBlur={() => {
+          clearPointer();
+          stop();
+        }}
+        onKeyDown={(event) => {
+          if (event.ctrlKey || event.metaKey || event.altKey) return;
+          if (!["ArrowLeft", "ArrowRight", " ", "r", "R"].includes(event.key)) return;
+          event.preventDefault();
+          if (event.repeat) return;
+          if (event.key === " ") togglePaused();
+          if (event.key.toLowerCase() === "r") reset();
+          if (event.key === "ArrowLeft") setSampleTime((value) => Math.max(0, value - 0.25));
+          if (event.key === "ArrowRight") setSampleTime((value) => Math.min(5, value + 0.25));
+        }}
       />
       <LabReadout
         items={[
-          { label: "Thời gian mô phỏng", value: `${readout.elapsed.toFixed(2)} s` },
+          { label: "Thời gian đo", value: readout.elapsed.toFixed(2) + " s" },
           {
-            label: "Frame-based",
-            value: `${readout.frameDistance.toFixed(1)} px (${fps * 3} px/s)`,
+            label: "Thời gian đã cập nhật",
+            value: (readout.elapsed - readout.discarded).toFixed(3) + " s",
           },
-          { label: "Time-based", value: `${readout.timeDistance.toFixed(1)} px (180 px/s)` },
+          { label: "Frame-based", value: readout.frameDistance.toFixed(1) + " px" },
+          { label: "Dùng dt", value: readout.timeDistance.toFixed(1) + " px" },
+          { label: "Thời gian bị bỏ", value: readout.discarded.toFixed(3) + " s" },
           {
-            label: "Chênh lệch",
-            value: `${Math.abs(readout.frameDistance - readout.timeDistance).toFixed(1)} px`,
+            label: "Mốc đang đọc",
+            value: sample.elapsed.toFixed(2) + " s; dt " + sample.timeDistance.toFixed(1) + " px",
           },
         ]}
       />
+      <p>
+        {showFrame && "Vàng: 3 pixel mỗi frame. "}Xanh: 180 pixel/giây × min(dt, 0,05). Ở 30/60/120
+        FPS đều, đường xanh kết thúc tại 900 px; 15 FPS hoặc frame 0,2 s sẽ làm mất thời gian vì
+        clamp. Trong ứng dụng C++, WASD vẫn do bạn điều khiển; phím B đo một vật tham chiếu riêng,
+        không kéo nhân vật chạy tự động.
+      </p>
     </div>
   );
 }

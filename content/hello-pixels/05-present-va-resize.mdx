@@ -1,178 +1,150 @@
-# Đưa framebuffer lên cửa sổ và xử lý resize
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Resize mà không làm sai ảnh hoặc mất tài nguyên
 
 ## Vấn đề cần giải quyết
 
-Ba mẫu hình ở bài 4 hiện chỉ nằm trong RAM của CPU. Renderer của SDL không biết vector đó tồn tại, cũng không biết dữ liệu của hàng tiếp theo bắt đầu ở đâu. Muốn nhìn thấy framebuffer trên cửa sổ, mỗi khung hình phải đi qua các bước sau:
+Checkpoint 4 đã tạo đủ bốn scene, nhưng framebuffer và texture vẫn giữ kích thước lúc mở cửa sổ. Kéo window chỉ làm RenderTexture co giãn ảnh cũ. Gradient có thể vẫn đẹp nên lỗi này dễ bị bỏ qua; checkerboard cho thấy rõ ô đang bị kéo dãn.
 
-`Framebuffer (CPU) → streaming texture → renderer → window`
+Sản phẩm cuối yêu cầu framebuffer theo kích thước vùng hiển thị. Khi output đổi, phải thay cả vector CPU lẫn texture. Nếu chỉ thay một bên, pitch hoặc số hàng SDL đọc sẽ không còn đúng.
 
-Ở bài trước, chúng ta đã dùng chuỗi này để nhìn thấy các mẫu hình, nhưng chưa giải thích kỹ từng bước. Bài này sẽ hoàn thiện nó và xử lý một tình huống dễ gây lỗi hơn: resize. Khi kích thước cửa sổ thay đổi, framebuffer và texture cũ không còn khớp với vùng hiển thị mới. Nếu chỉ cập nhật một trong hai, ảnh có thể bị lệch hàng, bị kéo giãn hoặc được ghi vào một texture sai kích thước.
-
-Mục tiêu của bài là luôn giữ kích thước, framebuffer và texture khớp với nhau.
+Bài này giữ nguyên bốn thuật toán tạo ảnh. Chúng ta chỉ sửa thời điểm tạo tài nguyên và cách phản ứng với resize/minimize.
 
 ## Hiểu ý tưởng trước khi viết code
 
-`SDL_TEXTUREACCESS_STREAMING` cho SDL biết texture này sẽ thường xuyên nhận dữ liệu mới từ CPU. Khi gọi `SDL_UpdateTexture`, ta phải cung cấp:
+Có ba kích thước dễ nhầm:
 
-- texture đích;
-- vùng cần cập nhật (`nullptr` nghĩa là toàn texture);
-- con trỏ tới byte đầu tiên của ảnh;
-- `pitch`: số **byte** từ đầu một hàng tới đầu hàng kế tiếp.
+- Kích thước window theo đơn vị tọa độ của hệ điều hành.
+- Kích thước output renderer theo pixel thật.
+- Kích thước framebuffer/texture mà ứng dụng đang giữ.
 
-Framebuffer của ta có `width` pixel mỗi hàng, mỗi pixel là `std::uint32_t` rộng 4 byte:
+Với high-DPI, hai số đầu không nhất thiết giống nhau. Vì Project 01 không dùng logical presentation hay render target riêng, ta đọc [SDL_GetRenderOutputSize](https://wiki.libsdl.org/SDL3/SDL_GetRenderOutputSize) để biết ảnh CPU cần rộng/cao bao nhiêu pixel.
 
-$$pitch = width \times sizeof(std::uint32_t)$$
+Resize cũng là một thay đổi có thể thất bại. Cách an toàn là giữ cặp cũ trong khi chuẩn bị cặp mới:
 
-Với ảnh rộng 960, pitch là 3840 byte. Truyền 960 sẽ khiến SDL tưởng hàng kế tiếp bắt đầu quá sớm và đọc các hàng chồng lên nhau.
+`đọc kích thước → cấp phát framebuffer mới → tạo texture mới → thay cả cặp → hủy texture cũ`.
 
-Việc resize phải được thực hiện trọn vẹn. Ta chỉ thay tài nguyên đang dùng khi cả framebuffer mới lẫn texture mới đều đã tạo thành công. Trình tự là:
+Nếu một bước chuẩn bị thất bại, không tiếp tục như thể resize đã thành công. Ứng dụng này báo lỗi rồi thoát sạch; không cố render một cặp tài nguyên lệch kích thước.
 
-1. nhận kích thước pixel mới;
-2. tạo một framebuffer tạm với kích thước mới;
-3. tạo một texture tạm có cùng kích thước;
-4. nếu tạo texture thất bại, không dùng framebuffer mới và kết thúc vòng lặp;
-5. nếu thành công, thay framebuffer và texture cũ bằng cặp mới.
+<InteractiveLab demo="pixel" mode="pixel-resize" />
+
+Thay width từ 4 thành 5 khi height=3. Lab phải có 15 phần tử mới và pitch 20 byte, không chỉ làm bốn cột cũ rộng hơn. Chọn 1×1 để đối chiếu quy tắc gradient của bài trước.
 
 ## Viết code từng bước
 
-### Bước 1 — Đọc kích thước pixel thật của cửa sổ
+### Bước 1 — Chuẩn bị framebuffer mới trước
 
-Hai hằng số 960×540 là kích thước cửa sổ ta yêu cầu, nhưng trên màn hình high-DPI, số pixel thật có thể lớn hơn. Vì vậy, trước khi tạo framebuffer và texture lần đầu, hãy đọc kích thước pixel trực tiếp từ cửa sổ rồi dùng đúng một cặp giá trị cho cả hai:
+Trong presentation.hpp, thêm `#include <utility>` để dùng std::move. Thêm helper:
 
-```cpp title="src/main.cpp — phần setup framebuffer và texture"
-int framebufferWidth = kInitialWidth;
-int framebufferHeight = kInitialHeight;
-if (!SDL_GetWindowSizeInPixels(window, &framebufferWidth, &framebufferHeight)) {
-    std::cerr << "SDL_GetWindowSizeInPixels failed: " << SDL_GetError() << '\n';
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return EXIT_FAILURE;
-}
-lab::Framebuffer framebuffer{framebufferWidth, framebufferHeight};
-SDL_Texture* texture = createFramebufferTexture(renderer, framebuffer.width, framebuffer.height);
-if (!texture) {
-    std::cerr << "SDL_CreateTexture failed: " << SDL_GetError() << '\n';
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return EXIT_FAILURE;
-}
-```
+```cpp title="include/presentation.hpp — thay cặp tài nguyên"
+inline bool replaceFramebuffer(SDL_Renderer* renderer, Framebuffer& framebuffer, SDL_Texture*& texture, int width, int height) {
+    Framebuffer replacement;
+    if (!replacement.resize(width, height)) {
+        SDL_SetError("Cannot allocate framebuffer (positive dimensions, maximum 16777216 pixels)");
+        return false;
+    }
 
-Hàm `createFramebufferTexture` đã được viết ở bài 3 với `SDL_PIXELFORMAT_RGBA8888` và `SDL_TEXTUREACCESS_STREAMING`. Ta gọi lại hàm này thay vì lặp lại các đối số. Kích thước texture lấy từ chính framebuffer, không dùng lại hai con số 960 và 540 viết cứng. Nhìn vào lời gọi, ta thấy ngay texture phải khớp với framebuffer.
+    SDL_Texture* replacementTexture = createFramebufferTexture(renderer, width, height);
+    if (!replacementTexture) {
+        return false;
+    }
 
-Ta cần xử lý kích thước ở hai thời điểm. `SDL_GetWindowSizeInPixels` cung cấp giá trị đúng trước khung hình đầu tiên; còn `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` báo mỗi lần kích thước pixel thay đổi trong lúc chương trình đang chạy.
-
-Texture được kiểm tra ngay sau khi tạo. Nếu vẫn đi vào vòng lặp với `texture == nullptr`, chương trình chỉ báo lỗi muộn hơn ở `SDL_UpdateTexture` hoặc `SDL_RenderTexture`, khiến ta khó nhận ra nguyên nhân thật là bước tạo texture.
-
-### Bước 2 — Gửi framebuffer sang texture rồi hiển thị
-
-Sau khi tạo xong mẫu hình cho khung hiện tại, thêm các lời gọi đưa ảnh lên cửa sổ:
-
-```cpp title="src/main.cpp — cuối mỗi frame"
-const int pitch = framebuffer.width * int(sizeof(std::uint32_t));
-if (!SDL_UpdateTexture(texture, nullptr, framebuffer.pixels.data(), pitch)) {
-    std::cerr << "SDL_UpdateTexture failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
-if (!SDL_RenderClear(renderer)) {
-    std::cerr << "SDL_RenderClear failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
-if (!SDL_RenderTexture(renderer, texture, nullptr, nullptr)) {
-    std::cerr << "SDL_RenderTexture failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
-if (!SDL_RenderPresent(renderer)) {
-    std::cerr << "SDL_RenderPresent failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
+    SDL_Texture* previousTexture = texture;
+    framebuffer = std::move(replacement);
+    texture = replacementTexture;
+    SDL_DestroyTexture(previousTexture);
+    return true;
 }
 ```
 
-`pixels.data()` trả về con trỏ tới phần tử đầu tiên của vector. SDL nhận `pitch` bằng kiểu `int`, nên phép chuyển kiểu từ `sizeof` được viết rõ ngay tại lời gọi API.
+`Framebuffer&` cho phép thay ảnh của người gọi. `SDL_Texture*&` là tham chiếu đến biến con trỏ texture: khi gán con trỏ mới trong helper, biến ở runPixels cũng đổi. Nếu chỉ truyền một bản sao con trỏ, caller có thể tiếp tục dùng texture cũ đã hủy.
 
-Ba lời gọi cuối không làm cùng một việc. `SDL_RenderClear` xóa vùng vẽ hiện tại, `SDL_RenderTexture` vẽ texture lên vùng đó, còn `SDL_RenderPresent` mới hiển thị kết quả lên cửa sổ. Nếu bỏ `SDL_RenderPresent`, người dùng vẫn nhìn thấy khung hình cũ dù dữ liệu texture đã được cập nhật.
+Framebuffer tạm tự giải phóng nếu tạo texture thất bại. Khi cả hai đã sẵn sàng, std::move chuyển vùng nhớ vector sang framebuffer đang dùng, không copy toàn bộ ảnh một lần nữa. Lưu previousTexture rồi hủy sau giúp ta nhìn rõ thời điểm tài nguyên cũ hết vòng đời.
 
-Hai đối số `nullptr` của `SDL_RenderTexture` có nghĩa là lấy toàn bộ texture nguồn và vẽ kín vùng đích. Vì texture luôn được tạo theo kích thước pixel hiện tại của cửa sổ, ảnh không bị phóng to hoặc thu nhỏ ngoài ý muốn.
+Hàm không giữ nội dung ảnh cũ. Bốn scene đều được tính lại từ thông số; resize Noise giữ seed nhưng thay chiều dài mỗi hàng, nên bố cục ảnh có thể đổi. Không hứa rằng cùng seed ở hai kích thước khác nhau cho cùng ảnh hai chiều.
 
-### Bước 3 — Tạo lại framebuffer và texture khi cửa sổ đổi kích thước
+### Bước 2 — Đọc output sau khi đã lấy hết event
 
-Trong event loop, thêm nhánh này cạnh các phần xử lý sự kiện khác:
+Trong vòng lặp runPixels, ngay sau PollEvent và kiểm running, thay phần tạm của bài 03–04 bằng:
 
-```cpp title="src/main.cpp — trong vòng SDL_PollEvent"
-if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-    const int newWidth = std::max(1, event.window.data1);
-    const int newHeight = std::max(1, event.window.data2);
-    lab::Framebuffer newFramebuffer{newWidth, newHeight};
-    SDL_Texture* newTexture = createFramebufferTexture(renderer, newWidth, newHeight);
-    if (!newTexture) {
-        std::cerr << "Recreate texture failed: " << SDL_GetError() << '\n';
+```cpp title="src/main.cpp — kiểm output trước khi tạo ảnh"
+if ((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0) {
+    SDL_Delay(20);
+    continue;
+}
+if (!SDL_GetRenderOutputSize(renderer, &width, &height)) {
+    failed = true;
+    break;
+}
+if (width <= 0 || height <= 0) {
+    SDL_Delay(20);
+    continue;
+}
+```
+
+Khi đã có kích thước hợp lệ, so với framebuffer đang giữ rồi mới tạo lại tài nguyên:
+
+```cpp title="src/main.cpp — chỉ thay cặp khi kích thước đổi"
+if (width != framebuffer.width || height != framebuffer.height) {
+    if (!lab::replaceFramebuffer(renderer, framebuffer, texture, width, height)) {
         failed = true;
-        running = false;
         break;
     }
-    framebuffer = std::move(newFramebuffer);
-    SDL_DestroyTexture(texture);
-    texture = newTexture;
+    dirty = true;
 }
 ```
 
-Ta dùng `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` vì framebuffer cần số pixel thật, không chỉ kích thước theo tọa độ cửa sổ. Do project đã bật `SDL_WINDOW_HIGH_PIXEL_DENSITY`, một cửa sổ 960×540 trên macOS hoặc Wayland có thể có vùng vẽ chứa nhiều pixel hơn.
+Một lần kéo window có thể tạo nhiều event trước khi ta vẽ lại. Đọc output sau khi lấy hết event giúp dùng kích thước hiện tại, không cấp phát lại cho từng thông báo trung gian trong hàng đợi.
 
-`newFramebuffer` và `newTexture` chỉ là tài nguyên tạm. Nếu tạo texture thất bại, chương trình vẫn chưa đụng đến cặp tài nguyên đang dùng. Chỉ khi cả hai đều hợp lệ, ta mới chuyển framebuffer mới vào, hủy texture cũ rồi gán texture mới. Biến `failed` giúp `main` trả về `EXIT_FAILURE` khi quá trình này thất bại. Kích thước được giữ trong `Framebuffer`, tránh có thêm một cặp `width/height` khác dễ bị quên cập nhật.
+Đoạn này vẫn chạy khi không có resize event, nhưng chỉ hỏi hai số; không cấp phát nếu chúng chưa đổi. Nhờ vậy việc chuyển màn hình/DPI hoặc phục hồi cửa sổ cũng được đối chiếu với output thật.
 
-### Bước 4 — Dừng ngay nếu không tạo được texture mới
+### Bước 3 — Đừng biến minimize thành ảnh 1×1
 
-Ngay sau vòng `SDL_PollEvent`, giữ điều kiện thoát:
+Khi minimize, renderer có thể báo output rỗng hoặc giữ lại số cũ. Ta kiểm cờ MINIMIZED trước khi hỏi renderer, rồi kiểm width/height khi cửa sổ đang hoạt động. continue quay lại vòng lặp để tiếp tục nhận event, không tạo texture rỗng và không bỏ hẳn event loop.
 
-```cpp title="src/main.cpp — sau khi xử lý hết event"
-if (!running) {
-    break;
-}
-```
+Delay ngắn nhường CPU trong lúc chờ. Khi phục hồi, vòng lặp đọc lại kích thước và tạo cặp mới nếu cần. Không đặt running=false chỉ vì người dùng minimize.
 
-Lệnh `break` trong nhánh resize chỉ rời khỏi vòng `SDL_PollEvent`; nó chưa rời vòng `while (running)`. Vì vậy ta cần kiểm tra `running` thêm một lần. Nếu không, chương trình vẫn có thể tiếp tục tạo ảnh và gọi các hàm render sau khi việc resize đã thất bại.
+### Bước 4 — Bắt buộc tính lại ảnh sau khi thay cặp
+
+`dirty=true` là phần dễ quên nhất. Framebuffer mới chứa số 0, không tự mang gradient/checker cũ sang. Nếu quên dirty, texture mới có thể chưa được upload dữ liệu có nghĩa.
+
+Trình tự trong một vòng lặp bây giờ là:
+
+1. Nhận Close, Escape hoặc phím đổi scene.
+2. Thoát ngay nếu không còn running.
+3. Đọc output, chờ nếu minimize, thay tài nguyên nếu kích thước đổi.
+4. Nếu dirty, tạo lại scene và upload bằng pitch mới.
+5. Copy/present texture và nhường CPU.
+
+Phần tạo màu không cần biết window đang resize. Ngược lại, replaceFramebuffer không cần biết bạn đang xem scene nào.
 
 ## Ghép các phần lại
 
-Một khung hình hoàn chỉnh giờ diễn ra theo thứ tự:
+Build `project_1_checkpoint_5`, chọn checkerboard và kéo cửa sổ rộng ra. Cell của C++ tính theo pixel output nên kích thước ô nguồn không bị đổi như kéo giãn texture cũ. Số ô nhìn thấy tăng khi vùng hiển thị rộng hơn.
 
-1. Đọc hết các sự kiện đang chờ. Nếu có resize, tạo framebuffer và texture mới rồi thay cả hai.
-2. Nếu quá trình đó thất bại, rời vòng lặp.
-3. Dùng `pattern` để tạo lại dữ liệu pixel trong framebuffer.
-4. Tính `pitch` từ chiều rộng **hiện tại** rồi cập nhật texture.
-5. Vẽ texture và hiển thị khung hình lên cửa sổ.
-
-Điều quan trọng nhất là mọi nơi đều đọc cùng một kích thước. `pitch` dùng `framebuffer.width`, còn texture mới cũng được tạo từ `framebuffer.width` và `framebuffer.height`. Không còn nhiều con số viết cứng có thể lệch nhau.
-
-Khi đọc mã nguồn cuối bài, hãy bắt đầu từ nhánh xử lý resize, rồi tìm mọi nơi sử dụng `width`, `height` và `framebuffer.width`. Nếu thấy một biến kích thước được lưu ở nơi khác, hãy kiểm tra xem nó có được cập nhật cùng lúc hay không.
+Sau đó thử minimize/restore, chuyển scene và đóng cửa sổ. Nếu có hai màn hình DPI khác nhau, kéo window qua lại rồi quan sát. Không có thiết bị phù hợp thì ghi “chưa kiểm DPI nhiều màn hình”, không mặc định đã kiểm.
 
 ## Thử làm sai để hiểu đúng
 
-1. Truyền `framebuffer.width` làm pitch thay vì nhân `sizeof(std::uint32_t)`. Hình hỏng theo hàng là bằng chứng SDL đang bắt đầu hàng mới sai vị trí.
-2. Chuyển `framebuffer = std::move(newFramebuffer)` lên trước phép kiểm tra `newTexture`. Khi việc tạo texture thất bại, chương trình rơi vào tình trạng framebuffer mới đi cùng texture cũ.
-3. Bỏ điều kiện `if (!running) break;` sau event loop rồi cố tình đặt sai pixel format để việc tạo texture mới thất bại. Quan sát lỗi thứ hai che mất lỗi đầu tiên như thế nào.
-4. Đổi event sang kích thước logic và thử trên màn hình có scaling. So sánh với `SDL_GetWindowSizeInPixels`.
+1. Đặt breakpoint tại replaceFramebuffer. Khi chỉ nhấn phím 1–4, vì sao helper không được gọi?
+2. Tạm bỏ dirty=true sau resize, chạy với checker rồi quan sát ảnh mới không được tính lại; hoàn tác ngay.
+3. Dùng debugger kiểm width/height/pixels.size sau vài lần resize. Cả ba phải khớp trước upload.
+4. Trong test thuần, yêu cầu kích thước vượt budget. Kiểm dữ liệu cũ còn nguyên, không thử cấp phát vô hạn để làm máy hết RAM.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Texture dùng `SDL_PIXELFORMAT_RGBA8888` và `SDL_TEXTUREACCESS_STREAMING`.
-- [ ] Pitch được tính bằng byte từ chiều rộng hiện tại.
-- [ ] `SDL_UpdateTexture` xảy ra sau khi framebuffer đã được tạo cho frame.
-- [ ] Resize cập nhật framebuffer và tạo lại texture trong cùng nhánh event.
-- [ ] Texture cũ được hủy đúng một lần; chương trình không gọi hàm render với `texture == nullptr`.
-- [ ] Thay đổi kích thước liên tục ít nhất 10 lần vẫn cho pattern phủ kín cửa sổ.
-- [ ] Target `project_1_checkpoint_5` build và chạy trên kích thước cửa sổ khác 960×540.
+- [ ] Framebuffer và texture lấy cùng output size thật.
+- [ ] Không cấp phát lại khi chỉ đổi scene.
+- [ ] Cặp mới sẵn sàng trước khi hủy texture cũ.
+- [ ] Resize thất bại không tiếp tục upload bằng kích thước lệch.
+- [ ] Minimize/restore không tạo ảnh 0×0 hoặc làm mất event loop.
+- [ ] Cả bốn scene phủ kín output sau ít nhất 10 lần resize.
+- [ ] Bạn phân biệt kiểm bằng Canvas với kiểm native trên desktop.
 
 ## Bài tập mở rộng
 
-1. Tách việc tạo texture thành helper nhận `renderer`, `width`, `height`. Helper phải trả null và giữ nguyên thông báo SDL khi thất bại.
-2. Thêm chế độ giữ tỉ lệ 16:9 bằng destination `SDL_FRect`; so sánh với cách kéo texture lấp đầy toàn cửa sổ.
-3. Chỉ tạo lại texture khi kích thước thật sự khác framebuffer hiện tại. Ghi log số lần recreate trong lúc kéo cửa sổ để hiểu tần suất event.
+1. Thêm số đọc kích thước output/framebuffer vào title để dễ phát hiện lệch.
+2. Đếm số lần cấp phát khi kéo resize; thử gom thay đổi thay vì xử lý từng event để so sánh.
+3. Nếu muốn giữ nội dung một ứng dụng Paint khi resize, mô tả cách copy vùng giao giữa ảnh cũ/mới. Không áp dụng yêu cầu đó cho bốn scene đang tự sinh.
 
-Bài cuối sẽ viết kiểm thử C++ cho phần không phụ thuộc SDL, sau đó build và kiểm tra toàn bộ project từ một thư mục mới.
+Tiếp tục [bài 06 — kiểm chứng và bản hoàn chỉnh](/projects/hello-pixels/06-validation). Cửa sổ đã làm đủ chức năng; bước cuối là chứng minh phần dữ liệu đúng và ghi rõ những gì cần chạy thử trực tiếp.

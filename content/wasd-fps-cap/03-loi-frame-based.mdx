@@ -1,174 +1,250 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Lỗi phụ thuộc FPS: cùng một đoạn code, hai tốc độ khác nhau
+# Đo lỗi phụ thuộc FPS
 
 ## Vấn đề cần giải quyết
 
-Checkpoint 2 cộng `velocity × 1/60` sau mỗi lần vòng lặp chạy. Trên máy hiển thị gần 60 FPS, ô vuông có vẻ di chuyển đúng nên lỗi này rất dễ bị bỏ qua. Nhưng nếu vòng lặp chạy 120 lần trong một giây, chương trình sẽ áp dụng tới 120 khoảng thời gian “giả 1/60 giây”. Kết quả là ô vuông đi nhanh gấp đôi.
+Ô vuông đã chạy, nhưng chưa biết nó có đi đúng 180 pixel/giây không. Chỉ nhìn hình chuyển động không đủ: máy nhanh có thể chạy nhiều vòng lặp hơn, người bấm phím cũng khó giữ chính xác năm giây.
 
-Bài này chưa vội sửa công thức. Trước hết, ta sẽ thêm ba mức độ trễ vào checkpoint 3 để có thể quan sát và đo lỗi một cách lặp lại:
+Bài này giữ nguyên công thức sai `/60` và thêm hai công cụ: đo FPS thật, đo một chuyển động tham chiếu trong năm giây. WASD vẫn điều khiển player như trước. Phím B bắt đầu đo **một vật tham chiếu riêng**, không tự giành quyền điều khiển ô vuông của bạn.
 
-- phím `1`: nghỉ khoảng 33 ms sau mỗi vòng lặp;
-- phím `2`: nghỉ khoảng 16 ms;
-- phím `3`: nghỉ khoảng 8 ms;
-- phím `R`: chạy lại phép đo với mức hiện tại.
-
-Khi phép đo bắt đầu, chương trình tự cho ô vuông đi sang phải trong một giây thực tế rồi ghi lại quãng đường. FPS và quãng đường sẽ xuất hiện trên thanh tiêu đề cửa sổ. Nhờ vậy, bạn có thể đổi mức thử và so sánh kết quả mà không phải sửa code rồi biên dịch lại nhiều lần.
+Vì sao không lấy player để đo năm giây? Từ X = 120, đi 900 pixel sẽ chạm biên 926 trước khi hết thời gian. Khi đó số đo phản ánh cả việc bị chặn ở mép, không chỉ công thức chuyển động. Vật tham chiếu không có biên nên tránh được nhầm lẫn này.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với công thức hiện tại:
+Mỗi lần gọi `moveFrameBased`, hướng sang phải đi được `180/60 = 3` pixel. Sau năm giây:
 
-```text
-distance = speed × (1/60) × số frame trong một giây
-```
+| FPS lý tưởng | Số frame | Quãng đường |
+| ---: | ---: | ---: |
+| 30 | 150 | 450 px |
+| 60 | 300 | 900 px |
+| 120 | 600 | 1.800 px |
 
-Nếu `speed = 180`, mỗi frame cộng 3 pixel:
+Đổi FPS mà quãng đường đổi theo là dấu hiệu rõ ràng của lỗi. Còn FPS được đo bằng **số frame chia cho số giây thật**, không lấy mức cap hoặc độ trễ làm kết quả.
 
-| FPS thật | Quãng đường dự đoán sau 1 giây |
-| ---: | ---: |
-| 30 | 90 pixel |
-| 60 | 180 pixel |
-| 120 | 360 pixel |
+<InteractiveLab demo="motion" mode="motion-compare" />
 
-Số khung hình không phải là thước đo thời gian. GPU, VSync, bộ lập lịch của hệ điều hành và các chương trình chạy nền đều có thể làm số lần vòng lặp chạy thay đổi. Chuyển động đúng phải phụ thuộc vào thời gian thật đã trôi qua, không phụ thuộc vào số lần màn hình được vẽ lại.
-
-<InteractiveLab demo="motion" />
+Chọn 30, 60, 120 FPS, bấm “Tính ngay 5 giây” và ghi kết quả. Đường vàng đổi độ dốc; đường xanh là công thức sẽ học ở bài sau. Đây là dãy thời gian giả lập, **không phải FPS thật của Canvas hay SDL**. Bạn có thể kéo trên đồ thị hoặc dùng phím trái/phải để đọc từng mốc.
 
 ## Viết code từng bước
 
-### Bước 1 — Đo thời gian và FPS
+### Bước 1 — Đo khoảng thời gian giữa hai lần lặp
 
-Ta sẽ dùng `std::snprintf` để tạo nội dung cho thanh tiêu đề, vì vậy cần thêm `<cstdio>`. Tiếp đó, khai báo các biến đo trước vòng lặp chính:
+Thêm `#include "measurement.hpp"` và `<cstdio>` vào `main.cpp` (file measurement được viết ở bước 2). Trước vòng lặp, đặt cả nhóm trạng thái sau cạnh `position`:
 
-```cpp title="src/main.cpp — header và trạng thái đo FPS"
-#include <cstdio>
-double previousTime = double(SDL_GetTicksNS()) / 1e9;
-double fpsElapsed = 0.0;
-int fpsFrames = 0;
+```cpp title="src/main.cpp — trạng thái đồng hồ, quãng đường và thí nghiệm"
+Uint64 previous = SDL_GetTicksNS();
+    bool wasSuspended = true;
+    double fpsElapsed = 0.0;
+    int fpsFrames = 0;
+    double distanceTravelled = 0.0;
+    lab::Measurement measurement;
+    int experimentDelayMs = 16;
 ```
 
-Trong mỗi frame, sau khi xử lý event, lấy thời điểm mới:
+Trong vòng lặp, sau khi xử lý event, lấy:
 
-```cpp title="src/main.cpp — đo dt dù chưa dùng để update"
-const double now = double(SDL_GetTicksNS()) / 1e9;
-const double dt = now - previousTime;
-previousTime = now;
+
+```cpp title="src/main.cpp — lấy hiệu nanosecond rồi đổi sang giây"
+const Uint64 now = SDL_GetTicksNS();
+        double rawDt = static_cast<double>(now - previous) / 1'000'000'000.0;
+        previous = now;
 ```
 
-`SDL_GetTicksNS()` trả về nanosecond, nên phép chia cho `1e9` đổi kết quả sang giây. Ta đã có `dt` — thời gian từ lần lặp trước đến lần lặp hiện tại — nhưng vẫn chưa dùng nó để di chuyển. Ở bước này, `dt` chỉ phục vụ việc đo.
 
-FPS được tính trên một khoảng nửa giây thay vì lấy `1 / dt` của đúng một khung hình. Giá trị của từng khung hình riêng lẻ thường dao động mạnh; lấy trung bình trong một khoảng ngắn sẽ cho con số dễ đọc hơn.
+Lấy hiệu hai số nguyên trước, rồi mới đổi hiệu sang `double` và chia 1.000.000.000. Cách này tránh chuyển hai thời điểm lớn sang số thực rồi mới trừ. Sau khi tính, cập nhật `previous` ngay để lần kế tiếp chỉ đo khoảng vừa trôi qua.
 
-### Bước 2 — Giữ nguyên công thức sai để làm đối chứng
+`rawDt` lúc này **chỉ phục vụ đo**, chưa dùng để sửa chuyển động. Nó bao gồm thời gian xử lý, render/present và phần nghỉ của vòng trước.
 
-```cpp title="src/main.cpp — update cố ý sai ở checkpoint 3"
-position += velocity * (1.0 / 60.0);
+### Bước 2 — Tạo phép đo riêng có trạng thái rõ ràng
+
+Tạo `include/measurement.hpp`, include `lab.hpp` và `<algorithm>`, `<cmath>`. Trong namespace `lab`, thêm:
+
+
+```cpp title="include/measurement.hpp — trạng thái trước, trong và sau phép đo"
+struct Measurement {
+    bool running = false;
+    double elapsed = 0.0;
+    double distance = 0.0;
+    double discarded = 0.0;
+    double frames = 0.0;
+
+    void start() {
+        running = true;
+        elapsed = 0.0;
+        distance = 0.0;
+        discarded = 0.0;
+        frames = 0.0;
+    }
+};
 ```
 
-Điều quan trọng là chưa thay công thức di chuyển. Nếu vừa thêm phép đo vừa sửa lỗi, ta sẽ không còn nhìn thấy mối liên hệ giữa FPS và quãng đường. Dòng code sai này chính là đối tượng của thí nghiệm.
 
-### Bước 3 — Lưu trạng thái của phép đo một giây
+`elapsed` là số giây đã đo; `distance` là quãng đường tham chiếu; `frames` là số frame có thể gồm phần lẻ cuối cùng; `discarded` chưa tăng ở checkpoint này nhưng bài sau dùng để báo thời gian bị clamp. Gọi `start` để xóa toàn bộ kết quả cũ và bắt đầu lại.
 
-Đặt các biến này cạnh nhóm biến FPS, trước `while (running)`:
+### Bước 3 — Gọi chính hàm chuyển động đang bị nghi ngờ
 
-```cpp title="src/main.cpp — trạng thái của phép đo"
-const lab::Vec2 initialPosition = position;
-int experimentDelayMs = 16;
-bool experimentRunning = false;
-double experimentElapsed = 0.0;
-double experimentDistance = 0.0;
-```
 
-Trong nhánh `SDL_EVENT_KEY_DOWN`, mỗi phím sẽ chọn độ trễ rồi đưa phép đo về trạng thái ban đầu:
-
-```cpp title="src/main.cpp — chọn mức và khởi động lại phép đo"
-bool restartExperiment = event.key.key == SDLK_R;
-if (event.key.key == SDLK_1) {
-    experimentDelayMs = 33;
-    restartExperiment = true;
-}
-if (event.key.key == SDLK_2) {
-    experimentDelayMs = 16;
-    restartExperiment = true;
-}
-if (event.key.key == SDLK_3) {
-    experimentDelayMs = 8;
-    restartExperiment = true;
-}
-if (restartExperiment) {
-    position = initialPosition;
-    experimentElapsed = 0.0;
-    experimentDistance = 0.0;
-    experimentRunning = true;
-}
-```
-
-Khối này chỉ chạy khi phím vừa được nhấn, không chạy với sự kiện lặp phím. Nếu không kiểm tra `event.key.repeat`, việc giữ phím sẽ liên tục đưa đồng hồ và vị trí về 0 khiến phép đo không bao giờ hoàn thành.
-
-### Bước 4 — Cho ô vuông tự chạy trong lúc đo
-
-Trong lúc đo, ta tạm bỏ qua WASD và đặt `direction` hướng sang phải. Khi phép đo kết thúc, bàn phím lại hoạt động như bình thường:
-
-```cpp title="src/main.cpp — direction tự động trong phép đo"
-lab::Vec2 direction = readDirection();
-if (experimentRunning) {
-    direction = {1.0, 0.0};
-}
-```
-
-Ngay trước khi cập nhật, hãy lưu lại vị trí cũ. Sau đó tính khoảng cách giữa vị trí cũ và vị trí mới, cộng dồn thời gian thực tế, rồi dừng khi đủ một giây:
-
-```cpp title="src/main.cpp — tích lũy đúng một giây thí nghiệm"
-const lab::Vec2 positionBeforeUpdate = position;
-position += velocity * (1.0 / 60.0);
-if (experimentRunning) {
-    experimentDistance += lab::length({
-        position.x - positionBeforeUpdate.x,
-        position.y - positionBeforeUpdate.y,
-    });
-    experimentElapsed += dt;
-    if (experimentElapsed >= 1.0) {
-        experimentRunning = false;
+```cpp title="include/measurement.hpp — cập nhật đối chứng trong đúng năm giây"
+inline void advanceMeasurement(Measurement& measurement, double rawDt) {
+    if (!measurement.running || !std::isfinite(rawDt) || rawDt <= 0.0) {
+        return;
+    }
+    const double usedDt = std::min(rawDt, 5.0 - measurement.elapsed);
+    Vec2 displacement{};
+    moveFrameBased(displacement, {180.0, 0.0});
+    // Chỉ lấy phần khung hình nằm trong cửa sổ đo đúng 5 giây.
+    displacement.x *= usedDt / rawDt;
+    measurement.distance += displacement.x;
+    measurement.frames += usedDt / rawDt;
+    measurement.elapsed += usedDt;
+    if (measurement.elapsed >= 5.0 - 1e-9) {
+        measurement.elapsed = 5.0;
+        measurement.running = false;
     }
 }
 ```
 
-Vị trí ban đầu được chọn đủ xa mép phải để ô vuông không chạm biên trong thời gian đo, kể cả ở mức chạy nhanh nhất. Nếu `std::clamp` giữ ô vuông lại ở mép cửa sổ, quãng đường thu được sẽ không còn phản ánh đúng lỗi mà ta đang kiểm tra.
 
-### Bước 5 — Hiển thị kết quả và tạo độ trễ
+`usedDt` lấy tối đa phần thời gian còn thiếu đến năm giây. Nếu frame cuối kéo dài 0,03 s nhưng chỉ còn 0,01 s trong phép đo, ta tính 1/3 quãng dịch chuyển của frame đó. Đây là cách đo ở thời điểm đúng năm giây, không phải một bước vật lý mới của player. Không cắt frame cuối thì sai số có thể chỉ do mỗi lần thử dừng ở thời điểm khác nhau.
 
-Sau `SDL_RenderPresent`, hãy cập nhật thanh tiêu đề khoảng nửa giây một lần. Cuối vòng lặp, gọi `SDL_Delay` với độ trễ đã chọn:
+Điểm quan trọng: Measurement gọi **cùng `moveFrameBased` với ứng dụng**, không tự tạo đáp án bằng công thức `FPS × 3 × 5`. Bài sau sửa chuyển động thì cả hai nơi cùng đổi sang `update`.
 
-```cpp title="src/main.cpp — độ trễ cố ý của checkpoint 3"
-SDL_Delay(Uint32(experimentDelayMs));
+### Bước 4 — Nhấn B để đo, dùng 1/2/3 để thay độ trễ
+
+Trong xử lý `KEY_DOWN` không lặp phím, thêm:
+
+
+```cpp title="src/main.cpp — cả nhánh phím thao tác một lần"
+if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+                if (event.key.key == SDLK_R) {
+                    position = {120.0, 220.0};
+                    distanceTravelled = 0.0;
+                    measurement = {};
+                    wasSuspended = true;
+                }
+                if (event.key.key == SDLK_B) {
+                    measurement.start();
+                    wasSuspended = true;
+                }
+                if (event.key.key == SDLK_1) {
+                    experimentDelayMs = 33;
+                }
+                if (event.key.key == SDLK_2) {
+                    experimentDelayMs = 16;
+                }
+                if (event.key.key == SDLK_3) {
+                    experimentDelayMs = 8;
+                }
+            }
 ```
 
-Đây chỉ là cách cố ý làm chậm vòng lặp, **chưa phải cơ chế giới hạn FPS hoàn chỉnh**. `SDL_Delay(33)` không tính đến thời gian đọc phím, cập nhật và vẽ, nên kết quả thực tế sẽ thấp hơn 30 FPS một chút. Hãy đọc FPS trên thanh tiêu đề thay vì coi các mức 33, 16 và 8 ms là tuyệt đối chính xác. Ở bài 5, ta sẽ đo toàn bộ thời gian xử lý rồi chỉ nghỉ phần còn thiếu.
+
+Cờ `wasSuspended` khiến lần đầu sau khi bấm B dùng `rawDt = 0`: không lấy thời gian từ trước lúc bắt đầu đo. Phím R đặt lại cả player, quãng đường WASD và kết quả tham chiếu.
+
+Các phím 1/2/3 chọn `experimentDelayMs` bằng 33/16/8. Cuối vòng lặp:
+
+
+```cpp title="src/main.cpp — độ trễ dùng để tạo đối chứng"
+SDL_Delay(static_cast<Uint32>(experimentDelayMs));
+```
+
+
+Đây **chưa phải FPS limiter**. Nghỉ 33 ms sau khi làm việc không có nghĩa tổng frame đúng 33 ms; thời gian làm việc còn cộng vào nữa. Vì thế phải đọc FPS thực, không gắn nhãn “chính xác 30 FPS” cho mức này.
+
+### Bước 5 — Đọc FPS và hai quãng đường khác nhau
+
+Sau khi có `rawDt`, ứng dụng cộng thời gian thật và số frame:
+
+
+```cpp title="src/main.cpp — cập nhật bộ đếm và phép đo"
+if (rawDt > 0.0) {
+            fpsElapsed += rawDt;
+            ++fpsFrames;
+        }
+        lab::advanceMeasurement(measurement, rawDt);
+```
+
+
+Khoảng mỗi 0,5 s, tạo title rồi bắt đầu một khoảng đếm FPS mới:
+
+```cpp title="src/main.cpp — hiển thị FPS thực và kết quả phép đo"
+if (fpsElapsed >= 0.5) {
+            char title[256]{};
+            const char* measureLabel = "B: START";
+            if (measurement.running) {
+                measureLabel = "TEST";
+            } else if (measurement.elapsed >= 5.0) {
+                measureLabel = "DONE";
+            }
+            std::snprintf(title, sizeof(title), "%.1f FPS | delay %dms | WASD %.1f px | %s %.2fs %.1fpx | dropped %.3fs", fpsFrames / fpsElapsed, experimentDelayMs, distanceTravelled, measureLabel, measurement.elapsed, measurement.distance, measurement.discarded);
+            if (!SDL_SetWindowTitle(window, title)) {
+                std::cerr << "Title failed: " << SDL_GetError() << '\n';
+                failed = true;
+                break;
+            }
+            fpsElapsed = 0.0;
+            fpsFrames = 0;
+        }
+```
+
+`%.1f` in số thực một chữ số thập phân, `%d` in số nguyên và `%s` chèn nhãn TEST/DONE. `std::snprintf` nhận cả kích thước mảng `title` để không ghi vượt bộ đệm. Nếu cập nhật title lỗi, chương trình đánh dấu thất bại rồi đi qua cleanup như lỗi render. Không gán `target FPS` vào chỗ `fpsFrames / fpsElapsed`.
+
+Trên title, `WASD ... px` là quãng đường **thực sự đi được sau clamp biên** của player. `TEST/DONE ... s ... px` là kết quả tham chiếu không có biên. Đứng sát mép giữ D thì quãng đường WASD dừng; phép đo B vẫn tiếp tục. Đó là hai phép đo có mục đích khác nhau.
+
+### Bước 6 — Tạm ngưng đo khi cửa sổ không còn nhận input
+
+Đặt phần này sau xử lý event, trước khi lấy `now`:
+
+```cpp title="src/main.cpp — không tính thời gian ở cửa sổ khác"
+bool suspended = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) == 0;
+        if ((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0) {
+            suspended = true;
+        }
+        if (suspended) {
+            wasSuspended = true;
+            fpsElapsed = 0.0;
+            fpsFrames = 0;
+            SDL_Delay(30);
+            continue;
+        }
+```
+
+`continue` bỏ qua cập nhật, vẽ và phép đo của lần lặp đang tạm ngưng. Khi trở lại, lấy `now` như bước 1 rồi kiểm cờ:
+
+```cpp title="src/main.cpp — mốc đầu tiên sau tạm ngưng hoặc bắt đầu đo"
+if (wasSuspended) {
+            rawDt = 0.0;
+            wasSuspended = false;
+        }
+```
+
+Như vậy `previous` luôn được cập nhật bằng thời điểm mới, còn frame đầu không nhận khoảng thời gian từ trước khi bạn bấm B hoặc rời cửa sổ. Việc xóa `fpsElapsed/fpsFrames` trong lúc dừng cũng tránh pha thời gian không hoạt động vào con số FPS sau khi trở lại.
 
 ## Ghép các phần lại
 
-Chạy `project_2_checkpoint_3`, lần lượt bấm `1`, `2`, `3` và chờ chữ `MEASURING` trên thanh tiêu đề đổi lại thành `PRESS 1/2/3`. Ghi lại FPS và quãng đường sau mỗi lần. Kết quả không nhất thiết đúng tròn 90, 180 và 360 pixel, nhưng khi FPS tăng gần gấp đôi, quãng đường cũng phải tăng gần gấp đôi.
+Chạy `project_2_checkpoint_3`. Chọn 1, bấm B, giữ cửa sổ có focus và chờ DONE 5,00 s. Ghi FPS cùng quãng đường tham chiếu. Lặp với 2 rồi 3, **không đổi mức giữa một lần đo**.
 
-Motion Lab ở trên mô phỏng các mốc FPS lý tưởng. Sau năm giây, công thức dùng `1/60` đi được lần lượt 450, 900 và 1.800 pixel; công thức dùng thời gian thật luôn đi 900 pixel. Chương trình C++ cho thấy cùng một quy luật, nhưng có thêm những dao động nhỏ do hệ điều hành và phần cứng thực tế.
+Thử dự đoán từ FPS đọc được: khoảng 45 FPS thì mỗi giây đi gần 135 px, sau năm giây gần 675 px. Vì FPS trên title là trung bình ngắn 0,5 s chứ không phải trung bình toàn phép đo, dự đoán này chỉ gần đúng nếu nhịp frame dao động.
+
+Khi mất focus hoặc minimize, ứng dụng tạm ngưng đo và cập nhật. Sau khi trở lại, nó lấy mốc đồng hồ mới; thời gian chờ ở cửa sổ khác không được tính vào năm giây hoạt động.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `1.0 / 60.0` thành `1.0 / 30.0`. Giữ nguyên các mức độ trễ và dự đoán quãng đường trước khi chạy: kết quả phải tăng gần gấp đôi.
-2. Gọi cả ba mức `SDL_Delay` nối tiếp trong cùng một vòng lặp. Lúc này kết quả không còn trả lời được mức nào gây ra quãng đường vừa đo, vì bạn đã thay nhiều yếu tố cùng lúc.
-3. Bỏ điều kiện kiểm tra `event.key.repeat` rồi giữ một phím số. Hệ điều hành sẽ phát sự kiện lặp phím và phép đo liên tục quay về 0 trước khi kịp hoàn thành.
+1. Thay `/60.0` thành `/30.0` trong `moveFrameBased`. Giữ một preset rồi đo lại: quãng đường tăng gấp đôi dù FPS không nhất thiết đổi.
+2. Cộng `rawDt` kể từ trước lúc bấm B vào frame đầu. Kết quả có thêm khoảng thời gian bạn chưa bắt đầu đo.
+3. Dùng vị trí player sau clamp làm tham chiếu năm giây. Đi tới mép và giải thích vì sao kết quả thấp hơn dù công thức không thay đổi.
 
 ## Tự kiểm tra kết quả
 
-- Checkpoint chạy được mà không cần sửa code bằng tay.
-- `1`, `2`, `3` bắt đầu ba phép đo riêng; `R` lặp lại mức hiện tại.
-- Thanh tiêu đề cập nhật khoảng hai lần mỗi giây và hiển thị FPS, độ trễ, quãng đường cùng trạng thái phép đo.
-- FPS cao hơn làm công thức sai tạo ra quãng đường lớn hơn trong cùng một giây.
-- Biến `dt` có đơn vị giây nhưng chưa xuất hiện trong phép cập nhật `position`.
-- Bạn giải thích được vì sao “3 pixel/frame” không đồng nghĩa “180 pixel/giây”.
+- Có ba mức độ trễ và phép đo B có thể lặp lại, không cần sửa code.
+- WASD luôn là điều khiển của người dùng, B không tự lái player.
+- FPS cao hơn làm tham chiếu đi xa hơn trong cùng năm giây.
+- Bạn phân biệt được FPS thực với độ trễ được yêu cầu.
+- `rawDt` có đơn vị giây, nhưng chuyển động vẫn cố ý dùng `moveFrameBased`.
 
 ## Bài tập mở rộng
 
-Thêm mức độ trễ 50 ms và dự đoán quãng đường trước khi chạy. Sau đó đo năm lần với cùng một mức để xem kết quả dao động ra sao. Hãy hoàn thành bảng đo trước khi sửa dòng cập nhật vị trí.
+Ghi ba lần đo ở cùng một preset rồi so độ dao động. Tiếp đó thêm mức delay 50 ms và dự đoán kết quả trước khi chạy. Giữ bảng này để so trực tiếp với phiên bản sửa bằng `dt`.
 
-Bài tiếp theo sẽ thay hằng `1/60` bằng `dt` thực tế, đồng thời tách phép cập nhật thành một hàm có thể kiểm thử mà không cần mở cửa sổ SDL.
+[Bài tiếp theo: dùng thời gian thực để di chuyển](/projects/wasd-fps-cap/04-delta-time).

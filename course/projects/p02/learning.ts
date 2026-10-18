@@ -4,145 +4,149 @@ const learning = {
   guides: {
     "p02-l01": {
       focus:
-        "Bắt đầu từ cửa sổ và renderer đã tạo ở Project 1, tự vẽ một SDL_FRect rồi đọc trạng thái WASD liên tục để đổi màu ô vuông.",
+        "Từ starter có nền trống, tự tô một ô vuông trong framebuffer rồi dùng màu để kiểm tra WASD. Chưa di chuyển và chưa chuẩn hóa hướng.",
       expected:
-        "Một ô vuông xám được vẽ bằng SDL_RenderFillRect. Khi giữ WASD, ô vuông đổi sang màu xanh; A+D và W+S triệt tiêu nhau; `direction` luôn có độ dài 0 hoặc 1.",
-      files: ["src/main.cpp", "include/lab.hpp"],
+        "Ô vuông xám 34×34 ở (120,220); giữ WASD thì xanh, A+D hoặc W+S triệt tiêu. Resize giữ nguyên tỉ lệ ảnh 960×540.",
+      files: [
+        "include/framebuffer.hpp",
+        "include/lab.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Vẽ ô vuông trước",
+          title: "Chạy nền trống trước",
           explanation:
-            "SDL_SetRenderDrawColor chọn màu, SDL_RenderClear xóa nền, SDL_RenderFillRect tô ô vuông và SDL_RenderPresent đưa kết quả lên màn hình.",
+            "Starter mang theo phần framebuffer và upload texture từ Project 01. Xác nhận nền hiện ra rồi mới thêm hàm tô hình.",
         },
         {
-          title: "Đọc từng phím thật rõ ràng",
+          title: "Tô đúng từng hàng",
           explanation:
-            "Bốn nhánh A/D/W/S tạo `direction` theo cách dễ theo dõi; phép rút gọn D−A và S−W chỉ được giới thiệu sau khi người học đã hiểu từng nhánh.",
+            "Hai vòng lặp chọn các pixel trong hình chữ nhật, cắt ở biên ảnh trước khi ghi; cạnh phải và dưới không thuộc hình.",
         },
         {
-          title: "Chuẩn hóa an toàn",
+          title: "Đọc trạng thái sau event",
           explanation:
-            "Chỉ thực hiện phép chia khi độ dài lớn hơn 0 để vector `{0, 0}` không tạo ra NaN.",
+            "Dùng từng nhánh A/D/W/S rõ ràng; kiểm tra kết quả bằng màu trước khi thay đổi vị trí.",
         },
       ],
     },
     "p02-l02": {
       focus:
-        "Tách `position`, `direction` và `velocity` để phần đọc phím chỉ xác định hướng, còn hàm cập nhật chịu trách nhiệm thay đổi vị trí.",
+        "Thêm chuyển động sau khi hình và bàn phím đã chạy. Tách vị trí, hướng và vận tốc; chưa dùng toán tử tự định nghĩa.",
       expected:
-        "Ô vuông di chuyển 3 pixel sau mỗi lần cập nhật theo giả định tạm thời 60 Hz và luôn nằm trọn trong cửa sổ. Bài kế tiếp sẽ cho thấy giả định này sai ở đâu.",
+        "WASD di chuyển liên tục, hướng chéo được chuẩn hóa và player nằm trong ảnh. Công thức tạm /60 còn sai theo FPS để bài sau đo.",
       files: ["include/lab.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Gắn đơn vị cho từng đại lượng",
+          title: "Giữ phần lẻ của vị trí",
           explanation:
-            "`direction` không có đơn vị; tốc độ dùng pixel/giây; `velocity = direction × speed`; `position` dùng pixel.",
+            "Lưu position bằng double, chỉ floor ở bước vẽ để các dịch chuyển dưới một pixel vẫn được cộng dồn.",
         },
         {
-          title: "Chỉ thêm toán tử cần dùng",
-          explanation:
-            "`operator*` và `operator+=` giúp công thức cập nhật gần với ký hiệu toán mà vẫn giữ `Vec2` đơn giản.",
+          title: "Sửa tốc độ chéo",
+          explanation: "Giải thích độ dài √2 rồi mới chia cho độ dài, không chia vector bằng 0.",
         },
         {
-          title: "Tính cả kích thước ô vuông",
+          title: "Cập nhật rồi giữ trong biên",
           explanation:
-            "Giới hạn phải là `width - playerWidth` và `height - playerHeight`; nếu không, cạnh phải hoặc cạnh dưới vẫn có thể lọt khỏi cửa sổ.",
+            "Hai phép cộng x/y diễn đạt công thức trực tiếp; giới hạn phải trừ cả kích thước player.",
         },
       ],
     },
     "p02-l03": {
       focus:
-        "Cố ý dùng bước `1/60` sau mỗi lần lặp rồi đo quãng đường trong một giây bằng các phím 1/2/3. Đây là thí nghiệm đối chứng, chưa phải cách cài đặt cuối cùng.",
+        "Giữ công thức sai, thêm đồng hồ và đo một chuyển động tham chiếu năm giây không có biên.",
       expected:
-        "Ba mức 33/16/8 ms tự cho ô vuông đi sang phải trong một giây và tạo ra ba quãng đường khác nhau. Motion Lab minh họa cùng lỗi trên đồ thị quãng đường–thời gian.",
-      files: ["src/main.cpp"],
+        "1/2/3 đổi delay 33/16/8 ms, B bắt đầu đo. WASD vẫn do người học điều khiển; FPS cao hơn làm tham chiếu đi xa hơn.",
+      files: ["include/measurement.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tìm giả định bị che giấu",
+          title: "Lấy hiệu thời điểm trước khi đổi sang giây",
           explanation:
-            "`position += velocity × 1/60` chỉ đúng nếu vòng lặp thực sự chạy đúng 60 lần mỗi giây, điều hệ điều hành không cam kết.",
+            "Đo rawDt bằng SDL_GetTicksNS; FPS tính từ thời gian thực, bao gồm cả lúc nghỉ.",
         },
         {
-          title: "FPS càng cao, sai số càng lớn",
+          title: "Đo riêng để tránh mép cửa sổ",
           explanation:
-            "Ở 120 FPS, bước `1/60` bị áp dụng 120 lần mỗi giây, nên ô vuông đi nhanh gấp đôi tốc độ đã chọn.",
+            "Measurement gọi cùng hàm cập nhật với player nhưng không clamp vị trí; frame cuối chỉ lấy phần thuộc cửa sổ năm giây.",
         },
         {
-          title: "Lặp lại phép đo dễ dàng",
+          title: "Ghi số trước khi sửa",
           explanation:
-            "Phím 1/2/3 đặt lại vị trí, chọn độ trễ và tự đo đúng một giây; R lặp lại mức hiện tại mà không phải sửa code.",
+            "Chọn một mức, bấm B, chờ DONE rồi ghi FPS và quãng đường; không đổi mức giữa phép đo.",
         },
       ],
     },
     "p02-l04": {
       focus:
-        "Đo delta time bằng đồng hồ của SDL, dùng chung một hàm `update` và giải thích rõ cái giá của việc giới hạn variable timestep.",
+        "Thay /60 bằng update dùng dt và giải thích chính xác thời gian bị cắt khi dt quá lớn.",
       expected:
-        "Ba mức 33/16/8 ms trong cùng phép đo một giây đều cho quãng đường gần 180 pixel. Sau khi dừng lâu ở breakpoint, ô vuông không nhảy quá xa.",
-      files: ["src/main.cpp", "include/lab.hpp"],
+        "Ba mức 30/60/120 FPS đều cho gần 900 px trong năm giây nếu không có frame vượt 0,05 s. dropped cho biết thời gian đã bỏ.",
+      files: ["include/lab.hpp", "include/measurement.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đo giữa hai lần cập nhật",
+          title: "Viết update thuần C++",
           explanation:
-            "Lưu `previous`, lấy `now` ở lần lặp mới rồi cập nhật `previous` ngay sau khi tính `dt` để không cộng trùng thời gian.",
+            "Vận tốc pixel/giây nhân dt giây thành độ dời pixel; reject dt không hữu hạn rồi clamp.",
         },
         {
-          title: "Đổi nanosecond sang giây",
+          title: "Dùng chung công thức",
           explanation:
-            "Chia kết quả SDL_GetTicksNS cho 1e9 để cùng đơn vị với `velocity` tính bằng pixel/giây.",
+            "Player, Measurement và simulate đều gọi update; chỉ player bị giữ trong biên cửa sổ.",
         },
         {
-          title: "Hiểu sự đánh đổi",
+          title: "Không giấu thời gian bị bỏ",
           explanation:
-            "`update` giới hạn bước tối đa ở 0,05 giây để tránh cú nhảy; phần thời gian vượt ngưỡng bị bỏ nên mô phỏng liên tục dưới 20 FPS sẽ chậm hơn thời gian thật.",
+            "Frame dài 0,2 s chỉ mô phỏng 0,05 s, bỏ 0,15 s. Mất focus/minimize tạm ngưng và đặt lại mốc đồng hồ.",
         },
       ],
     },
     "p02-l05": {
       focus:
-        "Tự viết bộ giới hạn FPS: đo thời gian đã dùng, tính phần còn lại ở 30/60/120 FPS và chỉ gọi SDL_DelayNS khi vẫn còn dư.",
+        "Thay delay cố định bằng bộ giới hạn đo toàn bộ công việc của một frame; giữ nguyên cách đo dt.",
       expected:
-        "Phím 1/2/3 chọn 30/60/120 FPS, phím 0 bỏ giới hạn và F bật hoặc tắt mức gần nhất. Quãng đường không thay đổi theo mức FPS.",
-      files: ["src/main.cpp"],
+        "1/2/3 chọn 30/60/120 FPS, 0 uncapped, F1 bật/tắt mức gần nhất; B vẫn đo được quãng đường và R đặt lại.",
+      files: ["include/lab.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tính thời lượng mục tiêu",
+          title: "Tách phần tính khỏi SDL",
           explanation:
-            "Thời lượng tính bằng nanosecond là `1e9 / targetFps`, vì vậy một hàm có thể phục vụ cả ba mức 30/60/120.",
+            "remainingFrameNs nhận mức FPS và thời gian làm việc, trả 0 nếu uncapped hoặc đã quá hạn.",
         },
         {
-          title: "Không trừ khi đã quá hạn",
+          title: "Nghỉ sau present",
           explanation:
-            "Chỉ gọi SDL_DelayNS khi `elapsed < target`; khung hình đã chậm phải tiếp tục ngay để phép trừ số không dấu không bị tràn.",
+            "Mốc frameStart được lấy trước xử lý sự kiện; dt của vòng sau bao gồm cả phần nghỉ vòng trước.",
         },
         {
-          title: "Nghỉ sau khi vẽ xong",
+          title: "Đọc FPS thay vì tin con số cap",
           explanation:
-            "Đo cả phần đọc phím, cập nhật, vẽ và present rồi mới nghỉ phần còn dư để tổng thời gian gần với mục tiêu.",
+            "SDL_DelayNS có thể nghỉ lâu hơn yêu cầu; renderer hoặc hệ thống cũng có thể giới hạn FPS thực.",
         },
       ],
     },
     "p02-l06": {
       focus:
-        "Kiểm chứng đúng hàm `update` bằng nhiều dãy `dt` và một chương trình test vẫn hoạt động khi NDEBUG được bật trong Release.",
+        "Kiểm tra đúng các hàm ứng dụng dùng: input, hình chữ nhật, dt, limiter và phép đo tham chiếu.",
       expected:
-        "CTest ở Debug và Release xác nhận các dãy thời gian đều/không đều, giới hạn `dt` và chuyển động chéo. `project_2_final` giữ nguyên tốc độ ở 30, 60, 120 FPS hoặc khi bỏ giới hạn.",
-      files: ["tests/tests.cpp", "include/lab.hpp"],
+        "CTest chạy Debug/Release, starter và sáu checkpoint build độc lập. Native smoke 12 frame kiểm tra resize/present, không thay thế thử WASD bằng tay.",
+      files: ["tests/tests.cpp", "src/main.cpp", "include/lab.hpp", "include/measurement.hpp"],
       steps: [
         {
-          title: "Cùng tổng thời gian",
+          title: "Test có đáp án cụ thể",
           explanation:
-            "150×1/30, 300×1/60 và 600×1/120 đều bằng năm giây; `simulate` phải trả về cùng một quãng đường.",
+            "30/60/120 FPS cùng năm giây cho 900 px; dãy 0,1 s không đều cho 18 px; hình 34×34 đúng 1.156 pixel.",
         },
         {
-          title: "Test đúng code của ứng dụng",
+          title: "Test đường vào thật",
           explanation:
-            "`simulate` gọi `update` thay vì chép lại công thức, nên nếu `update` bị sửa hỏng, các test thời gian cũng thất bại.",
+            "Hướng chéo trong test đi qua directionFromKeys giống readDirection của app, không chỉ gọi normalize riêng.",
         },
         {
-          title: "Không phụ thuộc vào assert",
+          title: "Chạy và đọc kết quả",
           explanation:
-            "`check` in tên điều kiện lỗi, tăng bộ đếm và trả EXIT_FAILURE nên mọi phép kiểm tra vẫn chạy trong cấu hình Release.",
+            "Build cả Debug/Release, chạy CTest có timeout rồi kiểm tra riêng bàn phím, focus, resize và FPS trên máy.",
         },
       ],
     },
@@ -155,100 +159,45 @@ const learning = {
         kind: "SDL API",
       },
       {
-        label: "SDL_RenderFillRect",
-        href: "https://wiki.libsdl.org/SDL3/SDL_RenderFillRect",
-        kind: "SDL API",
-      },
-      {
         label: "SDL_PollEvent",
         href: "https://wiki.libsdl.org/SDL3/SDL_PollEvent",
         kind: "SDL API",
       },
       {
-        label: "Event loop",
-        href: "/glossary#event-loop",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p02-l02": [
-      {
-        label: "SDL_FRect",
-        href: "https://wiki.libsdl.org/SDL3/SDL_FRect",
+        label: "SDL_SetRenderLogicalPresentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
         kind: "SDL API",
       },
-      {
-        label: "Variable timestep",
-        href: "/glossary#variable-timestep",
-        kind: "Thuật ngữ",
-      },
     ],
+    "p02-l02": [{ label: "Normalize", href: "/glossary#normalization", kind: "Thuật ngữ" }],
     "p02-l03": [
-      {
-        label: "SDL_Delay",
-        href: "https://wiki.libsdl.org/SDL3/SDL_Delay",
-        kind: "SDL API",
-      },
-      {
-        label: "Delta time",
-        href: "/glossary#delta-time",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p02-l04": [
       {
         label: "SDL_GetTicksNS",
         href: "https://wiki.libsdl.org/SDL3/SDL_GetTicksNS",
         kind: "SDL API",
       },
-      {
-        label: "Delta time",
-        href: "/glossary#delta-time",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Variable timestep",
-        href: "/glossary#variable-timestep",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Fixed timestep",
-        href: "/glossary#fixed-timestep",
-        kind: "Thuật ngữ",
-      },
+      { label: "SDL_Delay", href: "https://wiki.libsdl.org/SDL3/SDL_Delay", kind: "SDL API" },
+    ],
+    "p02-l04": [
+      { label: "Delta time", href: "/glossary#delta-time", kind: "Thuật ngữ" },
+      { label: "Variable timestep", href: "/glossary#variable-timestep", kind: "Thuật ngữ" },
+      { label: "Fixed timestep", href: "/glossary#fixed-timestep", kind: "Thuật ngữ" },
     ],
     "p02-l05": [
+      { label: "SDL_DelayNS", href: "https://wiki.libsdl.org/SDL3/SDL_DelayNS", kind: "SDL API" },
       {
-        label: "SDL_DelayNS",
-        href: "https://wiki.libsdl.org/SDL3/SDL_DelayNS",
+        label: "SDL_SetRenderVSync",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderVSync",
         kind: "SDL API",
-      },
-      {
-        label: "Delta time",
-        href: "/glossary#delta-time",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Fixed timestep",
-        href: "/glossary#fixed-timestep",
-        kind: "Thuật ngữ",
       },
     ],
     "p02-l06": [
       {
-        label: "CTest command-line reference",
+        label: "CTest",
         href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
         kind: "CMake",
       },
-      {
-        label: "Delta time",
-        href: "/glossary#delta-time",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
-      },
+      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
     ],
   },
 } satisfies ProjectLearningAssets;

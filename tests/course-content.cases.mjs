@@ -315,7 +315,7 @@ test("every project teaches its visible starting point before new abstractions",
     [
       "wasd-fps-cap",
       "01-keyboard-state.mdx",
-      ["SDL_FRect", "SDL_RenderFillRect", "SDL_GetKeyboardState"],
+      ["fillRectangle", "putPixel", "SDL_GetKeyboardState"],
     ],
     ["mini-paint", "01-mouse-input.mdx", ["SDL_UpdateTexture", "putPixel", "stampPoint"]],
     ["tiny-2d-rasterizer", "01-dda.mdx", ["putPixel", "SDL_UpdateTexture", "lab::dda"]],
@@ -486,14 +486,23 @@ test("every project teaches its visible starting point before new abstractions",
     ),
     "utf8",
   );
-  assert.match(projectTwoCheckpoint, /SDL_RenderFillRect\(renderer, &player\)/);
-  assert.doesNotMatch(
-    projectTwoCheckpoint,
-    /SDL_CreateTexture|SDL_UpdateTexture|std::vector<std::uint32_t>/,
+  assert.match(projectTwoCheckpoint, /lab::fillRectangle\(framebuffer/);
+  assert.doesNotMatch(projectTwoCheckpoint, /SDL_RenderFillRect\(/);
+  const projectTwoInput = await readFile(
+    path.join(
+      workspace,
+      "examples",
+      "project-02-wasd-fps-cap",
+      "checkpoints",
+      "01",
+      "include",
+      "lab.hpp",
+    ),
+    "utf8",
   );
   assert.ok(
-    projectTwoCheckpoint.indexOf("if (keyboard[SDL_SCANCODE_A])") <
-      projectTwoCheckpoint.indexOf("return lab::normalize(direction)"),
-    "Project 02 must teach explicit key branches before normalization",
+    projectTwoInput.includes("if (left)") && projectTwoInput.includes("if (right)"),
+    "Project 02 must teach explicit key branches",
   );
+  assert.doesNotMatch(projectTwoInput, /normalize/, "Normalization belongs to lesson 2");
 });

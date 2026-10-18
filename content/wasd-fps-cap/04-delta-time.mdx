@@ -1,97 +1,149 @@
-# Delta time: đo thời gian, không đoán thời gian
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng thời gian thực để di chuyển
 
 ## Vấn đề cần giải quyết
 
-Thí nghiệm ở checkpoint 3 đã cho thấy: khi số lần vòng lặp chạy thay đổi, quãng đường cũng thay đổi theo. Trong code, chúng ta đã đo được `dt` — số giây thực tế giữa hai lần cập nhật — nhưng chưa dùng tới nó. Bây giờ chỉ cần thay phần thời gian đoán trước bằng thời gian vừa đo:
+Bài trước đã đo được lỗi: mỗi frame đều đi 3 pixel, nên nhiều frame hơn thì đi xa hơn. Ta đã có `rawDt` từ đồng hồ SDL. Bây giờ hãy dùng khoảng thời gian đó thay cho con số đoán `1/60`.
 
-```text
-position += velocity × (1/60)   // đoán
-position += velocity × dt       // đo
-```
-
-Ngoài việc sửa chuyển động, ta sẽ tách công thức cập nhật thành một hàm độc lập. Nhờ đó, hàm có thể được kiểm tra với nhiều dãy `dt` khác nhau mà không cần mở cửa sổ SDL.
+Đừng thay cả bộ khung. Giữ nguyên hình, bàn phím, các preset độ trễ và phép đo B; chỉ thay hàm cập nhật rồi đo lại cùng điều kiện. Như vậy bạn biết kết quả thay đổi vì công thức thời gian, không phải vì ta vừa viết một ứng dụng khác.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Vận tốc có đơn vị pixel/giây, còn `dt` có đơn vị giây. Nhân hai đại lượng này sẽ cho quãng đường tính bằng pixel. Sau một giây, dù chương trình chạy 30 bước `1/30`, 60 bước `1/60` hay 120 bước `1/120`, tổng các giá trị `dt` vẫn bằng 1. Với tốc độ 180 pixel/giây, cả ba trường hợp đều phải đi được 180 pixel.
+Với vận tốc không đổi:
 
-Trong thực tế, `dt` đôi khi tăng đột ngột. Điều này có thể xảy ra khi chương trình dừng ở breakpoint, cửa sổ bị kéo hoặc máy vừa thức dậy. Nếu dùng nguyên giá trị lớn đó, ô vuông có thể nhảy qua cả màn hình chỉ sau một lần cập nhật. Trong project này, ta giới hạn `dt` tối đa ở `0.05` giây.
+$$
+x_{n+1} = x_n + v_x\,dt,\qquad
+y_{n+1} = y_n + v_y\,dt.
+$$
 
-Giới hạn `dt` giúp tránh cú nhảy quá lớn, nhưng cũng có cái giá của nó:
+Chỉ số n là lần cập nhật hiện tại, n+1 là lần kế tiếp. Vận tốc là pixel/giây, `dt` là giây, nên phần cộng vào vị trí là pixel. Sau năm giây, tổng các bước là `180 × 5 = 900` pixel, dù chia thành 150, 300 hay 600 bước, **miễn là ta không bỏ bớt thời gian và chưa chạm biên**.
 
-| Tình huống | Điều xảy ra |
-| --- | --- |
-| `0 ≤ dt ≤ 0.05` | Chuyển động giữ đúng tốc độ theo thời gian |
-| Một lần cập nhật bị chậm đột ngột | Phần thời gian vượt 0.05 bị bỏ để tránh cú nhảy |
-| Máy liên tục dưới 20 FPS | Simulation sẽ chậm hơn thời gian thật |
+Nhưng nếu dừng ở breakpoint hai giây rồi tiếp tục, dùng nguyên `dt = 2` sẽ tạo bước nhảy 360 pixel. Project này chọn giới hạn mỗi lần cập nhật ở 0,05 s. Khi đó chỉ đi tối đa 9 pixel ở tốc độ 180. Phần thời gian vượt ngưỡng bị bỏ, không được tích lũy để chạy bù.
 
-Cách làm này thường được gọi là **variable timestep có giới hạn**: mỗi lần cập nhật dùng một `dt` khác nhau, miễn là không vượt quá 0.05 giây. Một lựa chọn khác là **fixed timestep**, trong đó thời gian dư được giữ trong một biến tích lũy rồi mô phỏng bằng nhiều bước nhỏ có kích thước cố định. Fixed timestep phù hợp hơn với physics phức tạp, nhưng kéo theo việc xử lý lượng thời gian tồn đọng và nội suy hình ảnh. Project 2 chưa cần đến phần đó; điều quan trọng là hiểu giới hạn của giải pháp đang dùng.
+<InteractiveLab demo="motion" mode="motion-dt" />
+
+Thử dãy đều ở 30/60/120 FPS: đường xanh đến 900 px. Chuyển sang 15 FPS hoặc preset có một frame dài 0,2 s. Đường xanh không còn đến 900 px, đồng thời “Thời gian bị bỏ” tăng. Đây là giới hạn thật của cách làm, không phải kết quả cần che đi.
 
 ## Viết code từng bước
 
-### Bước 1 — Đo `dt` bằng đồng hồ của SDL
+### Bước 1 — Tách thời gian đo được khỏi thời gian được phép mô phỏng
 
-```cpp title="src/main.cpp — trước và trong game loop"
-double previousTime = double(SDL_GetTicksNS()) / 1e9;
-// Trong loop, sau xử lý input:
-const double now = double(SDL_GetTicksNS()) / 1e9;
-const double dt = now - previousTime;
-previousTime = now;
-```
+Trong `include/lab.hpp`, thêm `<algorithm>`, `<span>` và hằng giới hạn 0,05:
 
-`SDL_GetTicksNS()` dùng một đồng hồ chỉ tăng, rất phù hợp để đo khoảng thời gian. Sau khi lấy hiệu, phải gán `previousTime = now`. Nếu bỏ quên dòng này, `dt` sẽ trở thành toàn bộ thời gian kể từ lúc mở chương trình và lớn dần sau mỗi lần lặp.
 
-### Bước 2 — Tách công thức cập nhật thành một hàm riêng
-
-```cpp title="include/lab.hpp — chuẩn hóa dt và cập nhật vị trí"
-#include <algorithm>
-#include <span>
+```cpp title="include/lab.hpp — kiểm tra dt trước khi cập nhật"
 constexpr double kMaximumDeltaTime = 0.05;
 
 inline double sanitizeDeltaTime(double dt) {
+    if (!std::isfinite(dt)) {
+        return 0.0;
+    }
     return std::clamp(dt, 0.0, kMaximumDeltaTime);
 }
+```
 
+
+`std::isfinite` từ `<cmath>` loại `NaN` và infinity. `std::clamp` không tự biến `NaN` thành một số hợp lệ. Thời gian âm không có ý nghĩa ở đây nên trả 0.
+
+Tách tên `rawDt` và `simulationDt` giúp tránh nhầm: FPS và đồng hồ phép đo cần thời gian thật; chuyển động mới nhận thời gian đã giới hạn.
+
+### Bước 2 — Viết công thức bằng hai phép cộng rõ ràng
+
+
+```cpp title="include/lab.hpp — cập nhật vị trí không phụ thuộc SDL"
 inline void update(Vec2& position, Vec2 velocity, double dt) {
-    position += velocity * sanitizeDeltaTime(dt);
+    const double simulationDt = sanitizeDeltaTime(dt);
+    position.x += velocity.x * simulationDt;
+    position.y += velocity.y * simulationDt;
 }
 ```
 
-Hàm `update` không cần biết đến SDL, bàn phím hay renderer. Mọi dữ liệu cần thiết đều đi qua tham số và kết quả duy nhất là `position` thay đổi. Vì vậy, chương trình test có thể gọi hàm hàng nghìn lần mà không cần tạo cửa sổ.
 
-`sanitizeDeltaTime` cũng chặn giá trị nhỏ hơn 0, bởi thời gian âm không có ý nghĩa trong bài toán này. Ở tốc độ 180 pixel/giây, giới hạn `0.05` tương ứng với bước di chuyển tối đa 9 pixel.
+Hàm không đọc bàn phím, không gọi renderer và không chờ. Nó chỉ nhận vị trí, vận tốc, thời gian rồi thay vị trí. Chính vì vậy ta có thể kiểm tra nó bằng dãy số trong terminal.
 
-### Bước 3 — Dùng thời gian thực tế để di chuyển
+Trong `main.cpp`, thay lời gọi `moveFrameBased` bằng:
 
-```cpp title="src/main.cpp — thay công thức dùng hằng 1/60"
-lab::update(position, velocity, dt);
+
+```cpp title="src/main.cpp — update rồi clamp trong vòng lặp"
+lab::update(position, velocity, rawDt);
+        lab::clampPlayer(position, lab::Framebuffer::width, lab::Framebuffer::height, kPlayerSize);
 ```
 
-Hai checkpoint cũ vẫn được giữ nguyên để bạn có thể chạy lại thí nghiệm bất cứ lúc nào. Trong checkpoint 4, dòng dùng hằng `1/60` được thay hoàn toàn bằng lời gọi `update` ở trên.
 
-### Bước 4 — Đo đúng quãng đường xuất hiện trên màn hình
+Phần tô ô vuông vẫn như cũ. Không sửa `kPlayerSpeed` theo FPS và không đổi `position` sang số nguyên.
 
-Checkpoint 4 vẫn dùng các phím `1`/`2`/`3` từ bài trước, nhưng chuyển động giờ đi qua `lab::update`. Mỗi lần lặp, ta lưu vị trí cũ, cập nhật vị trí, giới hạn nó trong cửa sổ rồi mới cộng quãng đường thực tế:
+### Bước 3 — Cho phép đo B dùng cùng hàm update
 
-```cpp title="src/main.cpp — tích lũy quãng đường thí nghiệm sau clamp"
-const lab::Vec2 positionBeforeUpdate = position;
-lab::update(position, velocity, dt);
-position.x = std::clamp(position.x, 0.0, double(kWindowWidth) - kPlayerSize);
-position.y = std::clamp(position.y, 0.0, double(kWindowHeight) - kPlayerSize);
-if (experimentRunning) {
-    experimentDistance += lab::length({position.x - positionBeforeUpdate.x, position.y - positionBeforeUpdate.y});
-    experimentElapsed += dt;
-    if (experimentElapsed >= 1.0) {
-        experimentRunning = false;
+`Measurement` cũng phải đổi sang hàm mới. Đây là phiên bản đầy đủ của hàm sau thay đổi:
+
+
+```cpp title="include/measurement.hpp — đo thời gian thật và báo phần bị bỏ"
+inline void advanceMeasurement(Measurement& measurement, double rawDt) {
+    if (!measurement.running || !std::isfinite(rawDt) || rawDt <= 0.0) {
+        return;
+    }
+    const double usedDt = std::min(rawDt, 5.0 - measurement.elapsed);
+    Vec2 displacement{};
+    update(displacement, {180.0, 0.0}, usedDt);
+    measurement.discarded += usedDt - sanitizeDeltaTime(usedDt);
+    measurement.distance += displacement.x;
+    measurement.frames += usedDt / rawDt;
+    measurement.elapsed += usedDt;
+    if (measurement.elapsed >= 5.0 - 1e-9) {
+        measurement.elapsed = 5.0;
+        measurement.running = false;
     }
 }
 ```
 
-Tại sao không cộng thẳng `length(velocity) * dt`? Khi ô vuông đã chạm mép, công thức đó vẫn tiếp tục tăng quãng đường dù hình ảnh không còn nhúc nhích. Lấy hiệu giữa vị trí trước và sau khi áp dụng mọi giới hạn sẽ khiến con số trên thanh tiêu đề khớp với chuyển động bạn thực sự nhìn thấy. Khi `MEASURING` đổi thành `PRESS 1/2/3`, hãy ghi lại giá trị `px / 1 s`.
 
-### Bước 5 — Mô phỏng quãng đường mà không cần cửa sổ
+`elapsed` tăng theo `usedDt` thật. `distance` tăng theo kết quả `update` đã giới hạn. `discarded` cộng phần chênh lệch giữa hai thời gian. Ví dụ rawDt = 0,2 s: `elapsed` tăng 0,2 s, chuyển động đi 9 px, `discarded` tăng 0,15 s.
 
-```cpp title="include/lab.hpp — helper cho validation"
+Frame cuối vẫn chỉ lấy phần thời gian còn thiếu đến đúng năm giây. Phép đo này là vật tham chiếu riêng nên không chịu clamp vị trí của player.
+
+### Bước 4 — Không để thời gian mất focus làm player nhảy
+
+Phần tạm ngưng đã thêm ở bài 3; đọc lại nó trước khi tiếp tục:
+
+
+```cpp title="src/main.cpp — tạm ngưng khi không điều khiển được cửa sổ"
+bool suspended = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) == 0;
+        if ((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0) {
+            suspended = true;
+        }
+        if (suspended) {
+            wasSuspended = true;
+            fpsElapsed = 0.0;
+            fpsFrames = 0;
+            SDL_Delay(30);
+            continue;
+        }
+```
+
+
+Ở lần đầu trở lại, code đặt thời gian bằng 0:
+
+
+```cpp title="src/main.cpp — bỏ khoảng thời gian ứng dụng đang tạm ngưng"
+const Uint64 now = SDL_GetTicksNS();
+        double rawDt = static_cast<double>(now - previous) / 1'000'000'000.0;
+        previous = now;
+        if (wasSuspended) {
+            rawDt = 0.0;
+            wasSuspended = false;
+        }
+```
+
+
+Không reset mốc đồng hồ thì lần lấy hiệu tiếp theo bao gồm cả thời gian ở cửa sổ khác. Tạm ngưng và giới hạn dt giải quyết hai tình huống khác nhau: mất focus/minimize là chủ động ngừng; một frame chậm bất thường khi đang hoạt động vẫn đi qua clamp.
+
+Khi tạm ngưng, bộ đếm FPS ngắn hạn được xóa để lần đọc sau không pha thời gian dừng vào FPS đang hoạt động. Phép đo năm giây giữ kết quả hiện có và tiếp tục khi trở lại.
+
+### Bước 5 — Chuẩn bị một cách kiểm tra không mở cửa sổ
+
+
+```cpp title="include/lab.hpp — chạy lại cùng update trên một dãy dt"
 inline double simulate(std::span<const double> timeSteps, double speed = 180.0) {
     Vec2 position{};
     const Vec2 velocity{speed, 0.0};
@@ -102,41 +154,38 @@ inline double simulate(std::span<const double> timeSteps, double speed = 180.0) 
 }
 ```
 
-`<algorithm>` cung cấp `std::clamp`, còn `<span>` cho phép hàm nhận một dãy `dt` mà không phải sao chép dữ liệu. Điểm đáng chú ý nhất là `simulate` không tự viết lại công thức chuyển động. Nó gọi đúng hàm `update` mà ứng dụng đang dùng. Nếu ai đó sửa hỏng `update`, các test 30/60/120 FPS cũng phải thất bại; ta không muốn test vô tình kiểm tra một bản sao khác của công thức.
 
-Các dãy 30/60/120 FPS đều có bước nhỏ hơn 0,05 giây nên không bị cắt bớt thời gian. Ở bài kiểm thử cuối, ta sẽ thêm trường hợp `dt = 0,2` và `dt` âm để kiểm tra cả hai giới hạn.
+`std::span<const double>` nhận một dãy thời gian mà không sao chép nó. Hàm này **gọi update**, không tự chép lại công thức. Bài cuối sẽ đưa các dãy tổng đúng năm giây vào đây và so đáp án 900 pixel.
 
 ## Ghép các phần lại
 
-Chạy checkpoint 4 rồi lần lượt bấm `1`, `2`, `3`. FPS và số lần cập nhật vẫn khác nhau, nhưng sau một giây, tổng các giá trị `dt` đều xấp xỉ 1. Vì thế ô vuông phải đi gần cùng một quãng đường ở cả ba mức. Những độ trễ nhân tạo chỉ tồn tại trong checkpoint 3 và 4 để phục vụ thí nghiệm; checkpoint 5 sẽ loại bỏ chúng và viết cơ chế giới hạn FPS đúng cách.
+Chạy `project_2_checkpoint_4`. Chọn 1 rồi bấm B, chờ DONE; lặp lại với 2 và 3. Nếu `dropped` bằng 0, ba quãng đường phải gần 900 pixel, dù FPS thực khác nhau. So với bảng của checkpoint 3 để thấy tác dụng của đúng thay đổi vừa làm.
 
-Luồng dữ liệu bây giờ là:
+Có ba khái niệm không nên gọi chung là “60 FPS”:
 
-```text
-SDL clock ─→ dt ───────────────┐
-keyboard ─→ direction ─→ velocity ─→ update(position) ─→ render
-```
+- **Render FPS**: mỗi giây vẽ/present bao nhiêu frame.
+- **Số lần update**: ở vòng lặp hiện tại, một lần update cho một frame; nhưng mỗi lần nhận `dt` khác nhau.
+- **Thời gian mô phỏng**: tổng `simulationDt`. Khi clamp cắt thời gian, tổng này nhỏ hơn thời gian thật.
 
-Thời gian và thao tác bàn phím chỉ gặp nhau trong bước `update`. Cách chia trách nhiệm này sẽ còn được dùng lại trong nhiều project mô phỏng sau.
+Đây là **variable timestep có giới hạn**. Fixed timestep sẽ cộng thời gian vào accumulator, rồi chạy nhiều bước có kích thước cố định khi cần. Nó không có nghĩa “luôn truyền 1/60 một lần mỗi frame”: cách đó chính là lỗi vừa đo. Project này chưa cài vòng lặp fixed timestep; các bài mô phỏng vật lý sau sẽ cần bàn kỹ hơn về số bước tối đa và thời gian tồn đọng.
 
 ## Thử làm sai để hiểu đúng
 
-1. Xóa `previousTime = now`. `dt` lúc này được tính từ khi chương trình bắt đầu thay vì từ lần lặp trước, nên mỗi lần cập nhật lại nhận một khoảng thời gian lớn hơn và ô vuông tăng tốc bất thường.
-2. Đảo phép trừ thành `previousTime - now`. Mọi `dt` đều âm, bị clamp về 0 và ô vuông đứng yên; đây là triệu chứng giúp lần ngược về lỗi dấu.
-3. Bỏ giới hạn trong `sanitizeDeltaTime`, dừng chương trình ở breakpoint vài giây rồi tiếp tục. Lần cập nhật kế tiếp nhận một `dt` rất lớn và ô vuông nhảy xa.
+1. Xóa `previous = now`. Khoảng đo dần thành toàn bộ thời gian từ lúc bắt đầu, không còn là thời gian giữa hai frame.
+2. Đổi `rawDt` thành hằng `1.0/60.0` khi gọi `update`. Đo B ở ba preset để thấy lỗi cũ quay lại.
+3. Bỏ clamp, đặt breakpoint trong lúc cửa sổ còn focus, đợi vài giây rồi tiếp tục. Quan sát bước nhảy; sau đó hoàn tác.
+4. Dùng `simulationDt` thay `rawDt` để tính FPS. Khi có frame dài, con số hiển thị không còn phản ánh số frame theo thời gian thật.
 
 ## Tự kiểm tra kết quả
 
-- Ba mức 33/16/8 ms cho quãng đường gần bằng nhau sau cùng một khoảng thời gian khi chạy checkpoint 4, miễn là ô vuông chưa chạm mép.
-- Đi chéo vẫn không nhanh hơn đi ngang.
-- Sau breakpoint dài, nhân vật chỉ nhảy tối đa `speed × 0.05` trước clamp màn hình.
-- `update` không phụ thuộc SDL và có thể gọi từ chương trình test chạy trong terminal.
-- Bạn nêu được đơn vị của `position`, `velocity` và `dt`.
+- Player và phép đo tham chiếu đều gọi `update`; `moveFrameBased` không còn trong checkpoint 4.
+- Dãy đều 30/60/120 FPS, không có frame vượt 0,05 s, cho 900 pixel trong năm giây.
+- Frame 0,2 s chỉ mô phỏng 0,05 s và báo bỏ 0,15 s.
+- Mất focus/minimize không tạo cú nhảy khi trở lại.
+- Bạn giải thích được vì sao dưới 20 FPS liên tục, clamp này làm mô phỏng chậm hơn thời gian thật.
 
 ## Bài tập mở rộng
 
-Hãy hiển thị giá trị `dt` lớn nhất trong mỗi khoảng nửa giây. Sau đó thử bỏ giới hạn `dt` trong bản Debug để so sánh hành vi khi dừng ở breakpoint.
+Tạo dãy `0,01; 0,02; 0,005; 0,025; 0,04` giây. Tính tổng bằng tay và dự đoán quãng đường trước khi gọi `simulate`. Sau đó thay một phần tử bằng 0,2 và tính riêng thời gian thật, thời gian mô phỏng, phần bị bỏ.
 
-Nếu muốn tìm hiểu fixed timestep, hãy viết mã giả cho biến tích lũy: cộng `frameDt`, gọi `update(fixedDt)` chừng nào lượng thời gian tích lũy còn đủ một bước, rồi giữ phần dư cho lần sau. Giải thích thêm vì sao cần giới hạn số bước mô phỏng khi máy chạy quá chậm.
-
-Bài tiếp theo sẽ giới hạn số khung hình mỗi giây mà không làm thay đổi tốc độ di chuyển.
+[Bài tiếp theo: tự viết bộ giới hạn FPS](/projects/wasd-fps-cap/05-fps-cap).

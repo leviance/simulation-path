@@ -1,233 +1,233 @@
-# Vẽ ô vuông rồi đọc WASD
+# Tự tô ô vuông rồi đọc WASD
 
 ## Vấn đề cần giải quyết
 
-Project 01 đã cho chúng ta một `SDL_Window`, một `SDL_Renderer` và vòng lặp chính có thể thoát bằng nút Close hoặc phím Escape. Mã khởi đầu của Project 02 tiếp tục đúng từ đó: mỗi khung hình chỉ xóa cửa sổ bằng màu xanh đen rồi hiển thị. Chưa có ô vuông, chưa có vector và cũng chưa đọc bàn phím.
+Trong Project 01, ta đã tạo ảnh trên CPU rồi đưa ảnh lên cửa sổ bằng texture. Bây giờ hãy dùng lại cách đó để vẽ một nhân vật đơn giản: ô vuông 34×34 pixel. Sau khi vẽ được hình, ta sẽ kiểm tra bàn phím bằng cách đổi màu khi giữ WASD. **Bài này chưa làm ô vuông di chuyển.**
 
-Trước tiên, hãy build `project_2_starter`. Nếu thấy một cửa sổ trống có nền xanh đen thì môi trường đã sẵn sàng. Trong bài này, chúng ta sẽ hoàn thành lần lượt ba việc:
+Trước khi mở code hướng dẫn, thử tự làm hai việc: tô hình tại góc trái trên (120,220), rồi cho nó đổi từ xám sang xanh khi giữ D. Nếu làm được, thêm ba phím còn lại. Chưa cần nghĩ tới vận tốc hay FPS.
 
-1. vẽ một ô vuông xám cố định;
-2. đổi màu ô vuông khi người dùng giữ WASD;
-3. gộp bốn phím thành một vector hướng có độ dài 0 hoặc 1.
+Starter đã có window, renderer, framebuffer và hàm upload/present từ Project 01. Chạy từ thư mục project sau khi giải nén ZIP:
 
-Kết thúc bài này, ô vuông vẫn chưa di chuyển. Ta cố ý học riêng cách vẽ và đọc bàn phím trước; bài 2 mới cập nhật vị trí. Nhờ vậy, nếu ô vuông không xuất hiện thì lỗi nằm ở phần vẽ, còn nếu nó không đổi màu thì ta kiểm tra phần bàn phím — chưa phải lần mò trong cả hệ thống chuyển động.
+```bash title="Terminal — build nền trống và checkpoint đầu"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_2_starter project_2_checkpoint_1 --parallel 2
+```
+
+Trên Windows, chạy `.\build\Debug\project_2_starter.exe`. Bạn phải thấy nền xanh đen. Với Ninja/Makefiles, đặt `-DCMAKE_BUILD_TYPE=Debug` khi configure; executable thường ở trực tiếp trong `build/`. **Checkpoint** là mã chạy được sau khi hoàn thành một bài, không phải phần đang viết dở. Phần mã đầy đủ cuối trang cho phép đối chiếu cả file, không chỉ các đoạn trích dưới đây.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một frame có ba pha:
+Một hình chữ nhật không cần một công cụ vẽ mới: chỉ cần tô các pixel theo từng hàng. Hình có góc (120,220), rộng 34 và cao 34 gồm các cột 120…153, các hàng 220…253. Cột 154 và hàng 254 nằm ngoài hình. Quy ước **lấy cạnh trái/trên, không lấy cạnh phải/dưới** giúp ta tô đúng 34×34 = 1.156 pixel.
 
-```text
-event: xử lý Close/Escape
-    → update: đọc trạng thái phím đang giữ
-    → render: clear, tô SDL_FRect, present
-```
+Project 01 thay số pixel theo kích thước đầu ra. Trong project này, ta chọn **ảnh logic cố định 960×540** để 180 pixel/giây luôn có cùng ý nghĩa khi resize. SDL co giãn cả ảnh theo cùng một tỉ lệ và chừa viền nếu cần. Không kéo giãn riêng chiều ngang khiến ô vuông thành hình chữ nhật. Pixel logic không nhất thiết bằng một pixel vật lý trên màn hình HiDPI.
 
-Sự kiện bàn phím cho biết một thay đổi vừa xảy ra, chẳng hạn phím vừa được nhấn xuống. `SDL_GetKeyboardState` trả lời câu hỏi khác: ngay lúc này những phím nào vẫn đang được giữ? Chuyển động liên tục cần câu trả lời thứ hai. Tuy nhiên, trước khi đọc WASD, ta sẽ vẽ ô vuông lên cửa sổ để chắc chắn phần hiển thị đã hoạt động.
+Về bàn phím, hãy phân biệt hai câu hỏi:
+
+- `SDL_EVENT_KEY_DOWN`: phím nào **vừa được nhấn**? Dùng cho Escape, hoặc bật/tắt một chế độ.
+- `SDL_GetKeyboardState`: phím nào **đang được giữ**? Dùng cho di chuyển liên tục.
+
+Ta xử lý hết event trước, rồi mới đọc keyboard state. SDL cập nhật trạng thái khi xử lý sự kiện; chỉ gọi hàm lấy mảng không làm hệ điều hành tự gửi thêm dữ liệu. Một lần nhấn và thả quá nhanh giữa hai lần lấy mẫu có thể không còn trong trạng thái đang giữ; các hành động cần bắt từng lần nhấn vẫn dùng event. [Tài liệu SDL](https://wiki.libsdl.org/SDL3/SDL_GetKeyboardState).
 
 ## Viết code từng bước
 
-### Bước 1 — Tạo một ô vuông cố định
+### Bước 1 — Nhận lại phần hiển thị đã biết
 
-Trong namespace không tên ở đầu `main.cpp`, khai báo kích thước ô vuông. Sau vòng `SDL_PollEvent`, tạo một `SDL_FRect` ở vị trí cố định:
+`include/framebuffer.hpp` giữ `pixels` theo hàng, có `clear` và `putPixel` như Project 01. `include/presentation.hpp` tạo texture `RGBA8888`, không pha alpha, upload với `pitch = width × sizeof(uint32_t)` rồi present. Hai file này có sẵn trong starter; đừng viết thêm một vòng lặp SDL thứ hai.
 
-```cpp title="src/main.cpp — mốc tạm có thể build: SDL_FRect cố định"
-constexpr float kPlayerSize = 34.0F;
-const SDL_FRect player{
-    120.0F,      // cạnh trái
-    220.0F,      // cạnh trên
-    kPlayerSize, // width
-    kPlayerSize, // height
-};
+Điểm mới trong setup là chọn cách hiển thị ảnh cố định:
+
+
+```cpp title="src/main.cpp — giữ tỉ lệ ảnh logic"
+if (!SDL_SetRenderLogicalPresentation(renderer, lab::Framebuffer::width, lab::Framebuffer::height, SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
+        std::cerr << "Logical presentation failed: " << SDL_GetError() << '\n';
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
 ```
 
-`SDL_FRect` giữ cạnh trái, cạnh trên, chiều rộng và chiều cao bằng số thực. Trong screen space của SDL, `(0,0)` nằm ở góc trên trái; X tăng sang phải và Y tăng xuống dưới.
 
-Đây mới là bước tạm để nhìn thấy kết quả càng sớm càng tốt. Hai số `120` và `220` đang là tọa độ viết trực tiếp. Cuối bài, ta sẽ đưa chúng vào biến `position` để chuẩn bị cho chuyển động.
+`LETTERBOX` giữ nguyên tỉ lệ 16:9. Việc này chỉ thay cách ảnh được hiển thị, không sửa vị trí hoặc số phần tử của framebuffer. [SDL giải thích logical presentation](https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation).
 
-### Bước 2 — Xóa nền, tô ô vuông rồi hiển thị
+### Bước 2 — Tự tô hình bằng putPixel
 
-Đặt hàm sau phía trên `main`. Renderer của SDL ghi nhớ màu vẽ hiện tại, vì vậy sau khi xóa nền ta phải đổi sang màu của ô vuông:
+Thêm hàm sau trong namespace `lab`, sau `rgba` của `include/framebuffer.hpp`:
 
-```cpp title="src/main.cpp — hàm renderFrame đầu tiên"
-bool renderFrame(SDL_Renderer* renderer, const SDL_FRect& player, bool isMoving) {
-    if (!SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255)) {
-        return false;
+
+```cpp title="include/framebuffer.hpp — tô các hàng bên trong hình"
+inline void fillRectangle(Framebuffer& framebuffer, int left, int top, int width, int height, std::uint32_t color) {
+    if (width <= 0 || height <= 0) {
+        return;
     }
-    if (!SDL_RenderClear(renderer)) {
-        return false;
-    }
-    if (isMoving) {
-        if (!SDL_SetRenderDrawColor(renderer, 83, 240, 174, 255)) {
-            return false;
+
+    // Dùng int64_t trước khi cộng để cả tọa độ cực trị cũng không tràn int.
+    const auto right = std::clamp<std::int64_t>(std::int64_t(left) + width, 0, Framebuffer::width);
+    const auto bottom = std::clamp<std::int64_t>(std::int64_t(top) + height, 0, Framebuffer::height);
+    const int firstX = std::clamp(left, 0, Framebuffer::width);
+    const int firstY = std::clamp(top, 0, Framebuffer::height);
+    for (int y = firstY; y < bottom; ++y) {
+        for (int x = firstX; x < right; ++x) {
+            framebuffer.putPixel(x, y, color);
         }
-    } else {
-        if (!SDL_SetRenderDrawColor(renderer, 126, 143, 177, 255)) {
-            return false;
-        }
     }
-    if (!SDL_RenderFillRect(renderer, &player)) {
-        return false;
-    }
-    if (!SDL_RenderPresent(renderer)) {
-        return false;
-    }
-    return true;
 }
 ```
 
-Mỗi lời gọi SDL được kiểm tra bằng một `if` riêng. Đoạn code dài hơn một chút, nhưng thứ tự rất dễ đọc: chọn màu nền → xóa cửa sổ → chọn màu ô vuông → tô hình chữ nhật → hiển thị khung hình. Nếu có lỗi, ta cũng biết chính xác lời gọi nào thất bại.
 
-Ở cuối khung hình, gọi hàm với `false` vì ta chưa đọc bàn phím:
+Hai vòng `for` là phần tạo ra ô vuông. Phần phía trước chỉ cắt hình theo biên ảnh để không duyệt hàng triệu tọa độ nằm ngoài cửa sổ. `firstX/firstY` là điểm bắt đầu sau khi cắt; `right/bottom` là điểm dừng không được lấy.
 
-```cpp title="src/main.cpp — mốc tạm có thể build: render player đứng yên"
-if (!renderFrame(renderer, player, false)) {
-    std::cerr << "Render failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
+Vì `left + width` có thể tràn kiểu `int` trước khi kịp clamp, code đổi `left` sang `int64_t` **trước phép cộng**. Đây không phải công thức vẽ mới, chỉ là cách giữ phép tính biên an toàn. Width/height không dương thì không có pixel nào cần tô.
+
+### Bước 3 — Lưu vị trí và vẽ trước khi đọc phím
+
+Thêm `#include "lab.hpp"` ngay sau include phần hiển thị trong `main.cpp`:
+
+```cpp title="src/main.cpp — include phần hiển thị và dữ liệu của bài"
+#include "presentation.hpp"
+#include "lab.hpp"
 ```
 
-Mã khởi đầu đã khai báo `bool failed = false` cạnh `running`. Nếu dừng vì một lỗi SDL, ta đặt biến này thành `true`. Chương trình vẫn đi qua phần dọn dẹp tài nguyên và cuối cùng trả về `EXIT_FAILURE`.
+Tạo `include/lab.hpp` với phần đầu sau, rồi đặt các khai báo bên dưới bên trong namespace `lab`. Đóng namespace bằng `}` ở cuối file:
 
-**Hãy dừng lại và build.** Bạn phải thấy một ô vuông xám 34×34. Nếu chưa thấy, hãy kiểm tra đúng ba việc: cửa sổ đã được xóa trước khi tô hình chưa, màu vẽ đã đổi khỏi màu nền chưa, và `SDL_RenderPresent` đã được gọi chưa. Lúc này chưa cần kiểm tra bàn phím.
-
-### Bước 3 — Kiểm tra WASD bằng cách đổi màu
-
-Sau khi xử lý hết sự kiện, lấy trạng thái bàn phím hiện tại và kiểm tra bốn phím:
-
-```cpp title="src/main.cpp — mốc tạm có thể build: đọc WASD thành bool"
-const bool* keyboard = SDL_GetKeyboardState(nullptr);
-const bool isMoving = keyboard[SDL_SCANCODE_W] || keyboard[SDL_SCANCODE_A] || keyboard[SDL_SCANCODE_S] || keyboard[SDL_SCANCODE_D];
-if (!renderFrame(renderer, player, isMoving)) {
-    std::cerr << "Render failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
-```
-
-**Build lần nữa.** Giữ một phím WASD phải làm ô vuông chuyển sang màu xanh; thả tất cả các phím thì nó trở về màu xám. Ta đã xác nhận việc đọc bàn phím hoạt động mà chưa cần đưa thêm toán vector vào.
-
-Vì sao không dựa hoàn toàn vào `SDL_EVENT_KEY_DOWN`? Sự kiện này chỉ báo thời điểm phím vừa được nhấn và còn có thể lặp lại theo thiết lập của hệ điều hành. Để di chuyển liên tục, mỗi khung hình ta cần biết phím nào **đang được giữ**. `SDL_GetKeyboardState` cung cấp đúng thông tin đó và được truy cập bằng các giá trị `SDL_SCANCODE_*`, không phải `SDLK_*`.
-
-### Bước 4 — Tạo kiểu `Vec2` vừa đủ dùng
-
-Bây giờ mới tạo `include/lab.hpp`:
-
-```cpp title="include/lab.hpp — Vec2, length và normalize"
+```cpp title="include/lab.hpp — header mới cho vị trí và bàn phím"
 #pragma once
 #include <cmath>
-
 namespace lab {
+```
+
+Ta cần hai tọa độ, nên tạo kiểu dữ liệu nhỏ:
+
+
+```cpp title="include/lab.hpp — hai tọa độ của vị trí hoặc hướng"
 struct Vec2 {
     double x{};
     double y{};
 };
+```
 
+
+`position` được khai báo **trước vòng lặp** và giữ giá trị từ frame này sang frame sau. Trong checkpoint này nó luôn là `{120.0, 220.0}`. Khi vẽ, `renderFrame` xóa ảnh cũ, chọn màu, tô hình và hiển thị:
+
+
+```cpp title="src/main.cpp — toàn bộ hàm vẽ một frame"
+bool renderFrame(SDL_Renderer* renderer, SDL_Texture* texture, lab::Framebuffer& framebuffer, lab::Vec2 position, bool isMoving) {
+    framebuffer.clear(lab::rgba(11, 16, 32));
+    std::uint32_t color = lab::rgba(126, 143, 177);
+    if (isMoving) {
+        color = lab::rgba(83, 240, 174);
+    }
+
+    // Chỉ làm tròn lúc vẽ; position vẫn giữ phần lẻ cho lần cập nhật sau.
+    const int left = static_cast<int>(std::floor(position.x));
+    const int top = static_cast<int>(std::floor(position.y));
+    lab::fillRectangle(framebuffer, left, top, kPlayerSize, kPlayerSize, color);
+    return lab::presentFramebuffer(renderer, texture, framebuffer);
+}
+```
+
+
+`std::floor` lấy cột/hàng nguyên ở bước vẽ, không làm mất phần lẻ của `position`. Điều này chưa tạo khác biệt khi đứng yên, nhưng sẽ quan trọng khi mỗi lần cập nhật chỉ đi được 0,3 pixel. Để thử phần vẽ trước khi thêm WASD, truyền `false` cho đối số `isMoving` khi gọi hàm; hình phải có màu xám. Sau khi phần phím bên dưới hoàn thành, thay bằng giá trị `length(direction) > 0` của checkpoint. Kiểm tra hình xuất hiện đúng vị trí trước khi tiếp tục.
+
+### Bước 4 — Cho từng phím đóng góp một hướng
+
+Trong `include/lab.hpp`, thêm:
+
+
+```cpp title="include/lab.hpp — bốn nhánh dễ đọc cho WASD"
+inline Vec2 directionFromKeys(bool left, bool right, bool up, bool down) {
+    Vec2 direction{};
+    if (left) {
+        direction.x -= 1.0;
+    }
+    if (right) {
+        direction.x += 1.0;
+    }
+    if (up) {
+        direction.y -= 1.0;
+    }
+    if (down) {
+        direction.y += 1.0;
+    }
+    return direction;
+}
+```
+
+
+A giảm X, D tăng X; W giảm Y vì gốc màn hình ở góc trên trái, S tăng Y. Các `if` độc lập để nhiều phím có thể cùng đóng góp. A+D cho `-1 + 1 = 0`. Nếu đổi sang `else if`, phím đầu tiên sẽ thắng thay vì triệt tiêu.
+
+Hàm này không phụ thuộc SDL nên có thể kiểm thử riêng. Phần lấy phím của SDL chỉ làm nhiệm vụ truyền bốn giá trị `bool`:
+
+
+```cpp title="src/main.cpp — đọc trạng thái sau SDL_PollEvent"
+lab::Vec2 readDirection() {
+    const bool* keyboard = SDL_GetKeyboardState(nullptr);
+    return lab::directionFromKeys(
+        keyboard[SDL_SCANCODE_A],
+        keyboard[SDL_SCANCODE_D],
+        keyboard[SDL_SCANCODE_W],
+        keyboard[SDL_SCANCODE_S]
+    );
+}
+```
+
+
+Mảng dùng chỉ số `SDL_SCANCODE_*`, không dùng `SDLK_*`. Ta không cấp phát hay giải phóng mảng này: SDL sở hữu nó.
+
+### Bước 5 — Dùng màu để xác nhận kết quả
+
+Sau vòng xử lý event, gọi `readDirection`. `length` dùng `std::hypot` để tính độ dài; ở đây ta chỉ cần biết hướng có khác 0 không:
+
+
+```cpp title="include/lab.hpp — độ dài của hướng"
 inline double length(Vec2 vector) {
     return std::hypot(vector.x, vector.y);
 }
-
-inline Vec2 normalize(Vec2 vector) {
-    const double magnitude = length(vector);
-    if (magnitude == 0.0) {
-        return {};
-    }
-    return {vector.x / magnitude, vector.y / magnitude};
-}
-} // namespace lab
 ```
 
-Và thêm include này **trước** include SDL trong `main.cpp`:
 
-```cpp title="src/main.cpp — include kiểu vector vừa tạo"
-#include "lab.hpp"
-#include <SDL3/SDL.h>
+
+```cpp title="src/main.cpp — đọc hướng mỗi vòng lặp"
+lab::Vec2 direction = readDirection();
 ```
 
-Nhánh kiểm tra độ dài bằng 0 là bắt buộc. Khi không giữ phím nào, hoặc khi hai phím đối nghịch triệt tiêu nhau, vector có độ dài 0. Nếu vẫn chia các thành phần cho 0, kết quả sẽ thành `NaN` và vị trí ở bài sau cũng bị hỏng theo.
 
-### Bước 5 — Đổi từng phím thành một hướng
 
-Đặt `readDirection` phía trên `renderFrame`:
-
-```cpp title="src/main.cpp — phiên bản rõ nghĩa của readDirection"
-lab::Vec2 readDirection() {
-    const bool* keyboard = SDL_GetKeyboardState(nullptr);
-    lab::Vec2 direction{};
-    if (keyboard[SDL_SCANCODE_A]) {
-        direction.x -= 1.0;
-    }
-    if (keyboard[SDL_SCANCODE_D]) {
-        direction.x += 1.0;
-    }
-    if (keyboard[SDL_SCANCODE_W]) {
-        direction.y -= 1.0;
-    }
-    if (keyboard[SDL_SCANCODE_S]) {
-        direction.y += 1.0;
-    }
-    return lab::normalize(direction);
-}
-```
-
-Bốn nhánh `if` độc lập giúp ta nhìn thấy đóng góp của từng phím. A+D cho `x = -1 + 1 = 0`; W+S cho `y = 0`; còn W+D tạo hướng `(1, -1)`. Sau khi hiểu cách cộng này, bạn có thể tự rút gọn thành `D - A` và `S - W` nếu muốn, nhưng bản đang học vẫn ưu tiên sự rõ ràng.
-
-Vector `(1, -1)` có độ dài `√2`. Nếu dùng nguyên vector đó làm hướng, nhân vật sẽ đi chéo nhanh hơn khoảng 41% so với đi ngang. `normalize` giữ nguyên hướng nhưng đưa độ dài về 1, nên mọi hướng di chuyển đều dùng cùng một tốc độ.
-
-### Bước 6 — Thay tọa độ viết trực tiếp bằng `position`
-
-Khai báo `position` trước vòng lặp chính để giá trị này được giữ lại giữa các khung hình. Sau khi xử lý sự kiện, đọc `direction` rồi tạo `SDL_FRect` từ `position`:
-
-```cpp title="src/main.cpp — input và render hoàn chỉnh của checkpoint 1"
-lab::Vec2 position{120.0, 220.0};
-const lab::Vec2 direction = readDirection();
-const SDL_FRect player{
-    float(position.x),
-    float(position.y),
-    kPlayerSize,
-    kPlayerSize,
-};
+```cpp title="src/main.cpp — kiểm tra kết quả vẽ"
 const bool isMoving = lab::length(direction) > 0.0;
-if (!renderFrame(renderer, player, isMoving)) {
-    std::cerr << "Render failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
+        if (!renderFrame(renderer, texture, framebuffer, position, isMoving)) {
+            std::cerr << "Render failed: " << SDL_GetError() << '\n';
+            failed = true;
+            break;
+        }
 ```
 
-`position` dùng `double` để bài sau có thể cộng dồn những bước di chuyển nhỏ hơn một pixel. Chỉ khi tạo `SDL_FRect` để vẽ, ta mới đổi giá trị sang `float`.
 
-Phần đọc trạng thái và vẽ phải nằm ngoài `while (SDL_PollEvent(...))`. Nếu đặt phần vẽ bên trong đó, cửa sổ chỉ cập nhật khi hàng đợi đang có sự kiện.
+Giữ D: hình chuyển xanh. Thả D: hình xám. Giữ A+D: hình xám vì hướng tổng bằng 0. Giữ W+D: hướng là (1,-1), hình vẫn đứng yên nhưng xanh. **Ta chưa chuẩn hóa hướng ở bài này**; bài sau mới cần sửa tốc độ chéo.
 
 ## Ghép các phần lại
 
-Luồng dữ liệu cuối bài là:
+Thứ tự trong vòng lặp là xử lý Close/Escape → đọc WASD → xóa framebuffer → tô hình → upload texture → present. Không đặt phần vẽ bên trong `while (SDL_PollEvent(...))`: khi hàng đợi trống, hình vẫn cần được vẽ.
 
-```text
-SDL_PollEvent → SDL_GetKeyboardState → direction → normalize
-                                                ↓
-SDL_RenderClear → chọn màu → SDL_RenderFillRect → SDL_RenderPresent
-```
-
-Mã nguồn cuối bài đã bỏ các đoạn tạm ở bước đầu. Hãy build rồi so với code bạn vừa viết; phần diff cuối trang cho biết chính xác mã khởi đầu đã thay đổi ở đâu.
+Chạy `project_2_checkpoint_1`. Đối chiếu mã đầy đủ cuối trang nếu bạn chưa biết đặt một hàm ở đâu. Hàm vẽ ở phía trên `main`; biến `position` ở trước vòng lặp; lời gọi đọc phím và vẽ ở trong vòng lặp, sau xử lý event.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ `SDL_RenderPresent`: lệnh vẽ vẫn chạy nhưng cửa sổ không nhận được hình ảnh mới.
-2. Không đổi màu sau `SDL_RenderClear`: ô vuông hòa vào nền.
-3. Đưa phần vẽ vào trong `SDL_PollEvent`: cửa sổ ngừng cập nhật khi hàng đợi không có sự kiện.
-4. Bỏ điều kiện kiểm tra độ dài bằng 0 trong `normalize`, rồi quan sát `direction` bằng debugger: các thành phần có thể trở thành `NaN`.
+1. Đổi `x < right` thành `x <= right`. Hình rộng thêm một cột; đếm pixel sẽ phát hiện lỗi dù nhìn bằng mắt khó thấy.
+2. Bỏ `framebuffer.clear` rồi đổi vị trí khởi đầu bằng debugger. Hình cũ còn lại vì bạn chưa xóa ảnh CPU.
+3. Đổi nhánh D thành `else if` sau A. Giữ A+D và so màu với bản đúng.
+4. Đọc phím chỉ trong `SDL_EVENT_KEY_DOWN`. Khi thả phím, bạn phải tự quản thêm trạng thái; việc di chuyển liên tục không còn đơn giản như lấy keyboard state mỗi vòng.
 
 ## Tự kiểm tra kết quả
 
-- Mã khởi đầu chỉ có nền; mã cuối bài có thêm một ô vuông xám.
-- WASD làm ô vuông chuyển xanh ngay khi giữ và trở về xám khi thả.
-- A+D hoặc W+S cho `direction` bằng `{0, 0}`.
-- Hướng chéo có `length(direction)` xấp xỉ 1, không phải 1,414.
-- Ô vuông chưa di chuyển; Close và Escape vẫn thoát sạch.
+- Starter có nền trống; checkpoint 1 có ô vuông xám 34×34 ở (120,220).
+- WASD làm hình xanh khi hướng khác 0; hai phím đối nghịch triệt tiêu.
+- Hình chưa di chuyển. Close và Escape vẫn thoát sạch.
+- Resize giữ tỉ lệ ô vuông; số pixel logic trong framebuffer không đổi.
+- Phần tạo hình không dùng `SDL_RenderFillRect`; SDL chỉ hiển thị ảnh do CPU tạo.
 
 ## Bài tập mở rộng
 
-Hãy đổi vị trí và kích thước ban đầu của ô vuông. Sau đó thêm các phím mũi tên như một cách điều khiển thứ hai, nhưng vẫn gộp tất cả vào một `direction` duy nhất trước khi gọi `normalize`. Chỉ in `direction` khi giá trị thay đổi để quan sát tám hướng mà không làm terminal đầy thông báo.
+Tô thêm một hình chữ nhật 80×20 ở vị trí khác bằng cùng hàm. Sau đó thêm phím mũi tên: gộp nó với WASD thành bốn giá trị `bool` trước khi gọi `directionFromKeys`, không viết thêm một hệ tọa độ riêng.
 
-Bài tiếp theo sẽ nhân `direction` với tốc độ tính bằng pixel/giây, rồi dùng kết quả để thay đổi `position`.
+[Bài tiếp theo: cho ô vuông di chuyển](/projects/wasd-fps-cap/02-position-velocity).

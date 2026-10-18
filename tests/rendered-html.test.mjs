@@ -2,6 +2,8 @@
 import "./site-platform.cases.mjs";
 import "./course-content.cases.mjs";
 import "./projects-01-08.cases.mjs";
+import "./projects-01-rebuild.cases.mjs";
+import "./projects-02-rebuild.cases.mjs";
 import "./projects-13.cases.mjs";
 import "./projects-14.cases.mjs";
 import "./projects-15.cases.mjs";

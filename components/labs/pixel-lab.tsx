@@ -1,177 +1,303 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent,
+  type PointerEvent,
 } from "react";
-import { clamp } from "@/lib/labs/geometry";
+import {
+  createPixelBuffer,
+  packRgba,
+  packedHex,
+  paintPixelPattern,
+  pixelIndex,
+  putPixel,
+  unpackRgba,
+  type PixelPattern,
+  type RgbaChannels,
+} from "@/lib/labs/pixel-memory";
 import { LabReadout, canvasPoint, setupCanvas, useCanvasSize } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 
-export default function PixelLab({ mode: lessonMode }: { mode?: InteractiveLabMode }) {
+export default function PixelLab({ mode }: { mode?: InteractiveLabMode }) {
+  return <PixelMemoryLab key={mode ?? "overview"} mode={mode} />;
+}
+
+function PixelMemoryLab({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pointerRef = useRef<number | null>(null);
+  const descriptionId = useId();
   const size = useCanvasSize(canvasRef);
-  const initialPattern =
-    lessonMode === "pixel-rgba" || lessonMode === "pixel-memory" ? "solid" : "checker";
-  const [mode, setMode] = useState(initialPattern);
-  const [columns, setColumns] = useState(16);
-  const [channels, setChannels] = useState({ r: 83, g: 240, b: 174, a: 255 });
-  const [hover, setHover] = useState({ x: 4, y: 3 });
+  const memoryOnly = mode === "pixel-memory";
+  const rgbaOnly = mode === "pixel-rgba";
+  const initialPattern: PixelPattern = memoryOnly || rgbaOnly ? "solid" : "gradient";
+  const [pattern, setPattern] = useState<PixelPattern>(initialPattern);
+  const [width, setWidth] = useState(16);
+  const [height, setHeight] = useState(9);
+  const [cell, setCell] = useState(2);
+  const [seed, setSeed] = useState(17);
+  const [channels, setChannels] = useState<RgbaChannels>({ r: 83, g: 240, b: 174, a: 255 });
+  const [selected, setSelected] = useState({ x: 4, y: 3 });
+  const [probe, setProbe] = useState({ x: 4, y: 3 });
+  const [written, setWritten] = useState<{ x: number; y: number; color: number } | null>(null);
+  const [message, setMessage] = useState("Chưa ghi thử pixel.");
   const [paused, setPaused] = useState(false);
-  const rows = 9;
-  const memoryOnly = lessonMode === "pixel-memory";
-  const rgbaOnly = lessonMode === "pixel-rgba";
-
+  const writeColor = packRgba(channels.r, channels.g, channels.b, channels.a);
+  const buffer = useMemo(() => {
+    const next = createPixelBuffer(width, height);
+    let color = writeColor;
+    if (memoryOnly || rgbaOnly) color = packRgba(11, 16, 32);
+    paintPixelPattern(next, pattern, { color, cell, seed });
+    if (written) putPixel(next, written.x, written.y, written.color);
+    return next;
+  }, [width, height, pattern, writeColor, cell, seed, written, memoryOnly, rgbaOnly]);
+  const index = pixelIndex(width, selected.x, selected.y);
+  const color = unpackRgba(buffer.pixels[index]);
   const metrics = useMemo(() => {
-    const panelWidth = size.width >= 560 ? 245 : 125;
-    const cell = Math.max(
-      4,
-      Math.min((size.width - panelWidth - 42) / columns, (size.height - 48) / rows),
-    );
-    return { columns, rows, cell, ox: 20, oy: 24 };
-  }, [columns, size]);
+    const pixelSize = Math.min((size.width - 32) / width, (size.height - 32) / height);
+    return {
+      pixelSize,
+      ox: (size.width - width * pixelSize) / 2,
+      oy: (size.height - height * pixelSize) / 2,
+    };
+  }, [size, width, height]);
 
-  const colorAt = useCallback(
-    (x: number, y: number) => {
-      if (mode === "solid") return [channels.r, channels.g, channels.b, channels.a];
-      if (mode === "gradient") {
-        return [
-          Math.floor((x / Math.max(1, columns - 1)) * 255),
-          Math.floor((y / Math.max(1, rows - 1)) * 255),
-          180,
-          255,
-        ];
-      }
-      if (mode === "noise") {
-        let state = 17;
-        const linearIndex = y * columns + x;
-        for (let index = 0; index <= linearIndex; index += 1) {
-          state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx) return;
+    setupCanvas(ctx, size);
+    const { pixelSize, ox, oy } = metrics;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const value = unpackRgba(buffer.pixels[pixelIndex(width, x, y)]);
+        // Giống SDL_BLENDMODE_NONE: alpha được lưu nhưng không dùng để pha nền.
+        ctx.fillStyle = "rgb(" + value.r + "," + value.g + "," + value.b + ")";
+        ctx.fillRect(
+          ox + x * pixelSize,
+          oy + y * pixelSize,
+          Math.max(1, pixelSize - 1),
+          Math.max(1, pixelSize - 1),
+        );
+        if (memoryOnly && pixelSize >= 20) {
+          ctx.fillStyle = "#bac9e7";
+          ctx.font = "12px ui-monospace";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(
+            String(pixelIndex(width, x, y)),
+            ox + (x + 0.5) * pixelSize,
+            oy + (y + 0.5) * pixelSize,
+          );
         }
-        const value = state >>> 24;
-        return [value, Math.floor(value / 2), 255 - value, 255];
       }
-      return (x + y) % 2 ? [31, 43, 68, 255] : [83, 240, 174, 255];
-    },
-    [channels, columns, mode],
-  );
-  const selectedColor = useMemo(() => colorAt(hover.x, hover.y), [colorAt, hover.x, hover.y]);
-  const [selectedR, selectedG, selectedB, selectedA] = selectedColor;
-  const selectedPacked =
-    (((selectedR << 24) >>> 0) | (selectedG << 16) | (selectedB << 8) | selectedA) >>> 0;
-  const selectedPackedHex = selectedPacked.toString(16).toUpperCase().padStart(8, "0");
+    }
+    ctx.strokeStyle = paused ? "#ffb454" : "#53f0ae";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(ox + selected.x * pixelSize, oy + selected.y * pixelSize, pixelSize, pixelSize);
+  }, [buffer, height, width, selected, memoryOnly, metrics, paused, size]);
+
+  function releasePointer() {
+    const canvas = canvasRef.current;
+    const pointer = pointerRef.current;
+    pointerRef.current = null;
+    if (canvas && pointer !== null && canvas.hasPointerCapture(pointer))
+      canvas.releasePointerCapture(pointer);
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-    const { columns, rows, cell, ox, oy } = metrics;
-    for (let y = 0; y < rows; y += 1) {
-      for (let x = 0; x < columns; x += 1) {
-        const [r, g, b, a] = colorAt(x, y);
-        ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
-        ctx.fillRect(ox + x * cell, oy + y * cell, cell - 1, cell - 1);
+    const release = () => {
+      const pointer = pointerRef.current;
+      pointerRef.current = null;
+      if (canvas && pointer !== null && canvas.hasPointerCapture(pointer)) {
+        canvas.releasePointerCapture(pointer);
       }
-    }
-    ctx.strokeStyle = paused ? "#ffb454" : "#fff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(ox + hover.x * cell, oy + hover.y * cell, cell, cell);
+    };
+    window.addEventListener("blur", release);
+    return () => {
+      release();
+      window.removeEventListener("blur", release);
+    };
+  }, []);
 
-    const [r, g, b, a] = selectedColor;
-    const tx = ox + columns * cell + 18;
-    ctx.fillStyle = "#9aa6c1";
-    ctx.font = "11px ui-monospace";
-    ctx.fillText("COORDINATE", tx, 52);
-    ctx.fillStyle = "#fff";
-    ctx.font = "700 18px ui-monospace";
-    ctx.fillText(`(${hover.x}, ${hover.y})`, tx, 76);
-    ctx.fillStyle = "#9aa6c1";
-    ctx.font = "11px ui-monospace";
-    ctx.fillText("LINEAR INDEX", tx, 112);
-    ctx.fillStyle = "#53f0ae";
-    ctx.font = "700 15px ui-monospace";
-    ctx.fillText(`${hover.y} × ${columns} + ${hover.x}`, tx, 135);
-    ctx.fillText(`= ${hover.y * columns + hover.x}`, tx, 157);
-    ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
-    ctx.fillRect(tx, 187, 28, 28);
-    ctx.fillStyle = "#fff";
-    ctx.font = "12px ui-monospace";
-    ctx.fillText(`${r}, ${g}, ${b}, ${a}`, tx, 235);
-    ctx.fillText(`0x${selectedPackedHex}`, tx, 257);
-  }, [colorAt, columns, hover, metrics, paused, selectedColor, selectedPackedHex, size]);
-
-  const updatePointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (paused) return;
+  function selectPointer(event: PointerEvent<HTMLCanvasElement>) {
+    if (paused || !event.isPrimary) return;
+    if (pointerRef.current !== null && pointerRef.current !== event.pointerId) return;
     const point = canvasPoint(event, event.currentTarget);
-    const { columns, rows, cell, ox, oy } = metrics;
-    const x = Math.floor((point.x - ox) / cell);
-    const y = Math.floor((point.y - oy) / cell);
-    if (x >= 0 && x < columns && y >= 0 && y < rows) setHover({ x, y });
-  };
+    const x = Math.floor((point.x - metrics.ox) / metrics.pixelSize);
+    const y = Math.floor((point.y - metrics.oy) / metrics.pixelSize);
+    if (x >= 0 && x < width && y >= 0 && y < height) setSelected({ x, y });
+  }
 
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (paused || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-    event.preventDefault();
-    setHover((point) => ({
-      x: clamp(
-        point.x + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0),
-        0,
-        columns - 1,
-      ),
-      y: clamp(point.y + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0), 0, 8),
+  function endPointer(event: PointerEvent<HTMLCanvasElement>, cancelled = false) {
+    if (pointerRef.current !== event.pointerId) return;
+    if (!cancelled) selectPointer(event);
+    releasePointer();
+  }
+
+  function changeSize(nextWidth: number, nextHeight: number) {
+    releasePointer();
+    setWidth(nextWidth);
+    setHeight(nextHeight);
+    setSelected((current) => ({
+      x: Math.min(current.x, nextWidth - 1),
+      y: Math.min(current.y, nextHeight - 1),
     }));
-  };
+    setWritten(null);
+    setMessage("Đã tạo lại buffer; pixel ghi thử trước đó không được giữ.");
+  }
 
-  const reset = () => {
-    setMode(initialPattern);
-    setColumns(16);
+  function keyDown(event: KeyboardEvent<HTMLCanvasElement>) {
+    if (paused || event.altKey || event.ctrlKey || event.metaKey) return;
+    let nextIndex = index;
+    if (event.key === "ArrowRight") nextIndex = Math.min(index + 1, buffer.pixels.length - 1);
+    else if (event.key === "ArrowLeft") nextIndex = Math.max(0, index - 1);
+    else if (event.key === "ArrowDown")
+      nextIndex = Math.min(index + width, buffer.pixels.length - 1);
+    else if (event.key === "ArrowUp") nextIndex = Math.max(0, index - width);
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = buffer.pixels.length - 1;
+    else return;
+    event.preventDefault();
+    setSelected({ x: nextIndex % width, y: Math.floor(nextIndex / width) });
+  }
+
+  function writeProbe() {
+    const candidate = { ...buffer, pixels: buffer.pixels.slice() };
+    if (putPixel(candidate, probe.x, probe.y, writeColor)) {
+      setWritten({ ...probe, color: writeColor });
+      setSelected(probe);
+      setMessage(
+        "Đã ghi vào pixels[" +
+          pixelIndex(width, probe.x, probe.y) +
+          "]; các phần tử khác giữ nguyên.",
+      );
+    } else {
+      setMessage("Bỏ qua tọa độ ngoài biên; không phần tử nào bị thay đổi.");
+    }
+  }
+
+  function reset() {
+    releasePointer();
+    setPattern(initialPattern);
+    setWidth(16);
+    setHeight(9);
+    setCell(2);
+    setSeed(17);
     setChannels({ r: 83, g: 240, b: 174, a: 255 });
-    setHover({ x: 4, y: 3 });
+    setSelected({ x: 4, y: 3 });
+    setProbe({ x: 4, y: 3 });
+    setWritten(null);
+    setMessage("Chưa ghi thử pixel.");
     setPaused(false);
-  };
+  }
 
   return (
     <div className="lab-body">
       <div className="lab-controls">
+        <label>
+          Kích thước mẫu
+          <select
+            defaultValue=""
+            disabled={paused}
+            onChange={(event) => {
+              const [w, h] = event.target.value.split("x").map(Number);
+              changeSize(w, h);
+              event.target.value = "";
+            }}
+          >
+            <option value="" disabled>
+              Chọn preset
+            </option>
+            <option value="4x3">4 × 3 — tính tay index</option>
+            <option value="1x1">1 × 1 — trường hợp biên</option>
+            <option value="16x9">16 × 9 — xem mẫu hình</option>
+          </select>
+        </label>
+        <label>
+          Width
+          <input
+            type="range"
+            min="1"
+            max="32"
+            value={width}
+            disabled={paused}
+            onChange={(event) => changeSize(Number(event.target.value), height)}
+          />
+          <output>{width}</output>
+        </label>
+        <label>
+          Height
+          <input
+            type="range"
+            min="1"
+            max="18"
+            value={height}
+            disabled={paused}
+            onChange={(event) => changeSize(width, Number(event.target.value))}
+          />
+          <output>{height}</output>
+        </label>
         {!memoryOnly && !rgbaOnly && (
           <label>
-            Preset
+            Scene
             <select
-              value={mode}
-              onChange={(event) => setMode(event.target.value)}
+              value={pattern}
               disabled={paused}
+              onChange={(event) => {
+                setPattern(event.target.value as PixelPattern);
+                setWritten(null);
+              }}
             >
-              <option value="checker">Checkerboard</option>
-              <option value="gradient">Gradient</option>
-              <option value="noise">Deterministic noise</option>
-              <option value="solid">RGBA tùy chỉnh</option>
+              <option value="solid">1 — Solid</option>
+              <option value="gradient">2 — Gradient</option>
+              <option value="checker">3 — Checkerboard</option>
+              <option value="noise">4 — Noise</option>
             </select>
           </label>
         )}
-        <label>
-          Cột
-          <input
-            type="range"
-            min="4"
-            max="24"
-            value={columns}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              setColumns(value);
-              setHover((point) => ({ ...point, x: clamp(point.x, 0, value - 1) }));
-            }}
-            disabled={paused}
-          />
-          <output>{columns}</output>
-        </label>
+        {pattern === "checker" && (
+          <label>
+            Cell
+            <input
+              type="range"
+              min="1"
+              max="16"
+              value={cell}
+              disabled={paused}
+              onChange={(event) => {
+                setCell(Number(event.target.value));
+                setWritten(null);
+              }}
+            />
+            <output>{cell}</output>
+          </label>
+        )}
+        {pattern === "noise" && (
+          <label>
+            Seed
+            <input
+              type="number"
+              min="0"
+              max="4294967295"
+              value={seed}
+              disabled={paused}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isInteger(value) && value >= 0 && value <= 4294967295) {
+                  setSeed(value);
+                  setWritten(null);
+                }
+              }}
+            />
+          </label>
+        )}
         {!memoryOnly &&
-          mode === "solid" &&
+          (rgbaOnly || pattern === "solid") &&
           (["r", "g", "b", "a"] as const).map((channel) => (
             <label key={channel}>
               {channel.toUpperCase()}
@@ -180,51 +306,119 @@ export default function PixelLab({ mode: lessonMode }: { mode?: InteractiveLabMo
                 min="0"
                 max="255"
                 value={channels[channel]}
+                disabled={paused}
                 onChange={(event) =>
                   setChannels((current) => ({ ...current, [channel]: Number(event.target.value) }))
                 }
-                disabled={paused}
               />
               <output>{channels[channel]}</output>
             </label>
           ))}
-        <button onClick={() => setPaused((value) => !value)}>
+        <button
+          onClick={() => {
+            releasePointer();
+            setPaused((value) => !value);
+          }}
+        >
           {paused ? "Tiếp tục" : "Tạm dừng"}
         </button>
         <button onClick={reset}>Đặt lại</button>
       </div>
+      <p id={descriptionId}>
+        Mỗi ô phóng to là một pixel nguồn. Chọn bằng chuột, phím mũi tên, Home hoặc End; các số đọc
+        bên dưới cũng dùng được khi không nhìn Canvas. Thí nghiệm không tự chuyển động.
+      </p>
       <canvas
         ref={canvasRef}
-        onPointerDown={(event) => {
-          if (paused) return;
-          event.currentTarget.setPointerCapture(event.pointerId);
-          updatePointer(event);
-        }}
-        onPointerMove={updatePointer}
-        onKeyDown={onKeyDown}
         tabIndex={0}
-        aria-label={`Lưới pixel ${columns} nhân ${rows}; rê chuột hoặc dùng phím mũi tên để xem tọa độ, linear index và RGBA`}
+        aria-label={"Lưới pixel " + width + " nhân " + height}
+        aria-describedby={descriptionId}
+        onPointerDown={(event) => {
+          if (paused || !event.isPrimary || event.button !== 0) return;
+          event.currentTarget.focus();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          pointerRef.current = event.pointerId;
+          selectPointer(event);
+        }}
+        onPointerMove={selectPointer}
+        onPointerUp={(event) => endPointer(event)}
+        onPointerCancel={(event) => endPointer(event, true)}
+        onLostPointerCapture={(event) => {
+          if (pointerRef.current === event.pointerId) pointerRef.current = null;
+        }}
+        onBlur={releasePointer}
+        onKeyDown={keyDown}
       />
       <LabReadout
         items={[
-          { label: "Pixel đang chọn", value: `(${hover.x}, ${hover.y})` },
+          { label: "Pixel đang chọn", value: "(" + selected.x + ", " + selected.y + ")" },
           {
             label: "Linear index",
-            value: `${hover.y} × ${columns} + ${hover.x} = ${hover.y * columns + hover.x}`,
+            value: selected.y + " × " + width + " + " + selected.x + " = " + index,
           },
-          ...(memoryOnly
-            ? []
-            : [
-                { label: "RGBA", value: `${selectedR}, ${selectedG}, ${selectedB}, ${selectedA}` },
-                { label: "Packed 0xRRGGBBAA", value: `0x${selectedPackedHex}` },
+          { label: "Số phần tử", value: width + " × " + height + " = " + buffer.pixels.length },
+          { label: "Pitch (byte)", value: width + " × 4 = " + width * 4 },
+          { label: "Byte offset", value: index + " × 4 = " + index * 4 },
+          ...(!memoryOnly
+            ? [
+                {
+                  label: "RGBA",
+                  value: color.r + ", " + color.g + ", " + color.b + ", " + color.a,
+                },
+                { label: "Packed 0xRRGGBBAA", value: packedHex(buffer.pixels[index]) },
                 {
                   label: "Byte trên CPU little-endian",
-                  value:
-                    `${selectedA.toString(16).padStart(2, "0")} ${selectedB.toString(16).padStart(2, "0")} ${selectedG.toString(16).padStart(2, "0")} ${selectedR.toString(16).padStart(2, "0")}`.toUpperCase(),
+                  value: [color.a, color.b, color.g, color.r]
+                    .map((v) => v.toString(16).toUpperCase().padStart(2, "0"))
+                    .join(" "),
                 },
-              ]),
+              ]
+            : []),
         ]}
       />
+      {!memoryOnly && (
+        <>
+          <div className="lab-controls">
+            <label>
+              X ghi thử
+              <input
+                type="number"
+                min="-1"
+                max={width}
+                value={probe.x}
+                disabled={paused}
+                onChange={(event) => {
+                  const x = Number(event.target.value);
+                  if (Number.isInteger(x)) setProbe((current) => ({ ...current, x }));
+                }}
+              />
+            </label>
+            <label>
+              Y ghi thử
+              <input
+                type="number"
+                min="-1"
+                max={height}
+                value={probe.y}
+                disabled={paused}
+                onChange={(event) => {
+                  const y = Number(event.target.value);
+                  if (Number.isInteger(y)) setProbe((current) => ({ ...current, y }));
+                }}
+              />
+            </label>
+            <button disabled={paused} onClick={writeProbe}>
+              Thử putPixel
+            </button>
+            <output>Màu sẽ ghi: {packedHex(writeColor)}</output>
+          </div>
+          <p role="status">{message}</p>
+          <p>
+            Alpha vẫn nằm trong số màu. Bản C++ dùng SDL_BLENDMODE_NONE nên không pha màu với nền;
+            Canvas này cũng giữ RGB trực tiếp.
+          </p>
+        </>
+      )}
     </div>
   );
 }

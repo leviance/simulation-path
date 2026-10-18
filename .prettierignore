@@ -9,3 +9,5 @@ lib/generated-checkpoint-sources
 lib/generated-checkpoint-sources.ts
 examples
 content
+# Đặc tả biên soạn thủ công; giữ nguyên bố cục của tài liệu roadmap chuẩn.
+docs/specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md

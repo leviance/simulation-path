@@ -1,45 +1,38 @@
-# Kiểm tra và hoàn thiện Dự án 01
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy dự án hoàn chỉnh
 
 ## Vấn đề cần giải quyết
 
-Đến đây, cửa sổ đã hiển thị được ba mẫu hình và vẫn hoạt động khi đổi kích thước. Tuy nhiên, “nhìn có vẻ đúng” chưa đủ để kết luận chương trình an toàn. Công thức row-major có thể sai ở một góc khó thấy; một lần ghi ngoài biên có thể âm thầm làm hỏng vùng nhớ khác; noise cũng có thể thay đổi giữa hai lần chạy mà mắt thường không nhận ra.
+Nhìn thấy gradient không đủ để kết luận chương trình đúng. Có thể phần mép cuối chưa bao giờ đạt 255, một lần ghi ngoài biên chưa tình cờ crash, hoặc lỗi chỉ xuất hiện khi build Release.
 
-Bài cuối không thêm hiệu ứng mới. Thay vào đó, ta viết kiểm thử tự động cho phần không phụ thuộc SDL, rồi tự chạy ứng dụng để kiểm tra những hành vi cần cửa sổ thật. Như vậy project có hai cách kiểm chứng bổ sung cho nhau:
-
-- CTest kiểm tra các điều kiện về bộ nhớ và màu sắc;
-- danh sách kiểm tra khi chạy thật xác nhận việc nhận sự kiện, hiển thị và resize.
-
-Đây cũng là lúc nhìn lại project như một chương trình hoàn chỉnh, thay vì sáu bài học rời rạc.
+Bài này không thêm scene thứ năm. Ta viết test cho dữ liệu thuần, kiểm đường upload/present bằng smoke hữu hạn, rồi dùng checklist desktop cho phần máy không tự chứng minh được. Cuối trang là toàn bộ mã nguồn của dự án và ZIP chứa starter, checkpoint, final cùng tests.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một phép kiểm thử tốt nên tập trung vào những điều **luôn phải đúng**, thay vì một chi tiết ngẫu nhiên của cách cài đặt. Với `Framebuffer`, đó là:
+Có ba loại bằng chứng khác nhau:
 
-- số phần tử luôn khớp kích thước;
-- hai góc tương ứng với phần tử đầu và cuối;
-- tọa độ ngoài biên không làm thay đổi dữ liệu;
-- pixel hợp lệ nhận đúng màu đã đóng gói;
-- tham số checker không hợp lệ được chặn an toàn.
+| Cách kiểm | Chứng minh điều gì? | Không thay thế được |
+| --- | --- | --- |
+| CTest không mở cửa sổ | Màu, index, bounds, công thức ảnh, dữ liệu sau resize | Driver, hình ảnh thực và input |
+| Smoke SDL ẩn, tự thoát | Tạo texture, resize, upload và present không báo lỗi | Cảm nhận trực quan, bàn phím/minimize thật |
+| Kiểm trực tiếp desktop | Bốn scene, phản hồi input, DPI và vòng đời window | Đáp án số chính xác của thuật toán |
 
-Không cần mở cửa sổ để kiểm tra những điều trên. `lab.hpp` chỉ dùng thư viện chuẩn C++, nên chương trình test có thể nạp header này và chạy trong vài mili-giây. Ngược lại, việc cửa sổ còn phản hồi khi resize phụ thuộc vào SDL và hệ điều hành. Phần đó hợp lý hơn khi kiểm tra trực tiếp trên ứng dụng thật, thay vì dựng một hệ thống giả lập phức tạp.
+Test tốt có đáp án độc lập. Ví dụ ảnh 4×3 có index cuối 11 do ta tính tay, không gọi index một lần nữa để làm expected cho chính index.
 
-Cách chia này giữ cho test vừa nhanh vừa đúng mục đích: phần tính toán thuần được kiểm tra tự động, còn phần giao tiếp với SDL được quan sát trực tiếp.
+Hàm `assert` có thể bị tắt khi định nghĩa NDEBUG ở Release. Ta dùng `check` tăng số lỗi và main trả EXIT_FAILURE, để test vẫn có hiệu lực ở cả hai cấu hình.
+
+<InteractiveLab demo="pixel" mode="pixel-validation" />
+
+Trước khi đọc fixture, tự kiểm 4×3, gradient 3×3 và một lần putPixel ngoài biên trong Lab. Đây là cách tập dự đoán, không phải thay thế chạy CTest C++.
 
 ## Viết code từng bước
 
-### Bước 1 — Tạo chương trình chạy các phép kiểm thử
+### Bước 1 — Tạo chương trình test thuần C++
 
-Tạo `tests/tests.cpp`:
+Tạo `tests/tests.cpp`, include `lab.hpp` cùng các header chuẩn được dùng. Không include SDL. Thêm biến `int failures = 0;` và helper:
 
-```cpp title="tests/tests.cpp — kiểm tra layout cơ bản"
-#include "lab.hpp"
-#include <cstdlib>
-#include <iostream>
-#include <string_view>
-
-namespace {
-int failures = 0;
-
+```cpp title="tests/tests.cpp — check không bị tắt ở Release"
 void check(bool condition, std::string_view label) {
     if (condition) {
         return;
@@ -47,139 +40,157 @@ void check(bool condition, std::string_view label) {
     std::cerr << "FAILED: " << label << '\n';
     ++failures;
 }
-} // namespace
+```
 
-int main() {
-    lab::Framebuffer framebuffer{4, 3};
-    check(framebuffer.pixels.size() == 12, "4 by 3 framebuffer owns 12 pixels");
-    check(framebuffer.index(0, 0) == 0, "top-left index is zero");
-    check(framebuffer.index(3, 2) == 11, "bottom-right index is the final element");
+Một lỗi không làm test dừng ngay, nên bạn thấy các nhóm lỗi liên quan. Cuối main, trả kết quả cho CTest:
+
+```cpp title="tests/tests.cpp — mã thoát của test"
+if (failures != 0) {
+    std::cerr << failures << " validation check(s) failed\n";
+    return EXIT_FAILURE;
+}
+std::cout << "All Project 01 validation checks passed\n";
+return EXIT_SUCCESS;
+```
+
+Source đầy đủ tách testMemoryAndBounds và testScenes thành hai hàm để main không thành một khối dài. Các helper chỉ phục vụ việc đọc test, không thay công thức cần kiểm.
+
+### Bước 2 — Kiểm index và lần ghi ngoài biên
+
+Những kiểm tra đầu tiên:
+
+```cpp title="tests/tests.cpp — fixture ảnh 4×3"
+lab::Framebuffer framebuffer;
+check(framebuffer.resize(4, 3), "create 4 by 3");
+check(framebuffer.pixels.size() == 12, "4 by 3 owns 12 pixels");
+check(framebuffer.index(0, 0) == 0, "top-left index");
+check(framebuffer.index(3, 0) == 3, "last column in first row");
+check(framebuffer.index(0, 1) == 4, "next row advances by width");
+check(framebuffer.index(3, 2) == 11, "bottom-right index");
+```
+
+Sau khi clear bằng màu nền và lưu bản sao before, thử cả bốn phía:
+
+```cpp title="tests/tests.cpp — các tọa độ phải bị bỏ qua"
+framebuffer.putPixel(-1, 0, marker);
+framebuffer.putPixel(0, -1, marker);
+framebuffer.putPixel(4, 0, marker);
+framebuffer.putPixel(0, 3, marker);
+framebuffer.putPixel(INT_MIN, INT_MAX, marker);
+check(framebuffer.pixels == before, "outside writes do not change any element");
+```
+
+Biến marker có màu `rgba(1,2,3,4)`, khác nền. Sau đó ghi hợp lệ ở (3,2), kiểm phần tử 11 và đếm đúng một phần tử mang marker. Cách này mạnh hơn việc chỉ nhìn chương trình “không crash”.
+
+### Bước 3 — Kiểm resize bị từ chối không phá ảnh cũ
+
+Sau khi lưu pixels thành saved:
+
+```cpp title="tests/tests.cpp — giữ state khi resize thất bại"
+check(!framebuffer.resize(0, 3), "reject zero width");
+check(!framebuffer.resize(4, -1), "reject negative height");
+check(!framebuffer.resize(INT_MAX, INT_MAX), "reject huge product before allocation");
+check(!framebuffer.resize(INT_MAX, 1), "reject width above memory budget");
+check(framebuffer.width == 4 && framebuffer.height == 3, "failed resize preserves dimensions");
+check(framebuffer.pixels == saved, "failed resize preserves pixels");
+```
+
+Kích thước quá lớn bị chặn trước allocation; bài test không tìm cách dùng hết RAM máy bạn. Ngoài ra, source chạy 100 kích thước nhỏ liên tiếp rồi ghi vào phần tử cuối để kiểm công thức sau mỗi resize.
+
+Test này kiểm state khi đầu vào bị từ chối. Nó không giả vờ đã ép hệ điều hành tạo ra mọi tình huống thiếu RAM hoặc lỗi GPU; các đường lỗi ấy vẫn cần xử lý trong code.
+
+### Bước 4 — Dùng đáp án biết trước cho cả bốn scene
+
+- Solid: mọi phần tử bằng đúng màu đã yêu cầu.
+- Gradient 3×3: bốn góc đạt các cặp R/G 0 hoặc 255; giữa là 127/127. Có thêm ảnh 1×1, 1×3, 3×1.
+- Checker cell=2: pixel trong cùng ô cùng màu, ô ngang bên cạnh khác màu, ô chéo cùng màu. Cell 0/âm theo quy tắc clamp về 1.
+- Noise seed=17: sáu giá trị đầu biết trước là 62, 210, 117, 76, 182, 85. Vẫn kiểm cùng seed giống nhau và đổi seed khác nhau.
+
+Màu được kiểm thêm lúc biên dịch:
+
+```cpp title="tests/tests.cpp — bit packing"
+static_assert(lab::rgba(255, 0, 0) == 0xFF0000FFu);
+static_assert(lab::rgba(1, 2, 3, 4) == 0x01020304u);
+static_assert(lab::rgba(0, 0, 0, 0) == 0u);
+static_assert(lab::rgba(255, 255, 255, 255) == 0xFFFFFFFFu);
+```
+
+Đừng chỉ tạo noiseA/noiseB bằng cùng hàm rồi so sánh: một hàm sai nhưng xác định vẫn vượt qua cách kiểm đó. Fixture độc lập mới phát hiện thay đổi không mong muốn trong công thức.
+
+### Bước 5 — Build và chạy CTest ở cả hai cấu hình
+
+CMake trong ZIP đã có target tests, include final/include và đăng ký project_1_validation; test không link SDL. Tại thư mục project:
+
+```bash title="Terminal — kiểm Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Với Ninja/Makefiles một cấu hình, dùng hai build directory và -DCMAKE_BUILD_TYPE=Debug/Release. Không chạy -C Release rồi nghĩ đã đổi một binary Debug thành Release.
+
+`--parallel 2` giới hạn công việc compile; `--timeout 20` chặn từng test treo. Trong repository website, các suite còn có process supervisor và deadline tổng. Không bỏ deadline chỉ vì một lần chạy lâu hơn dự kiến.
+
+### Bước 6 — Kiểm đường SDL bằng smoke hữu hạn
+
+Final có thêm helper runSmoke trong `include/smoke.hpp`. Đó là công cụ test riêng: cửa sổ ẩn, 12 lần đổi kích thước và luân phiên bốn công thức qua đúng các helper upload/present. Nó tự kết thúc, không chạy vòng tương tác vô hạn.
+
+Main chỉ chọn đường này khi nhận `--smoke`:
+
+```cpp title="src/main.cpp — chọn đường smoke"
+if (smoke) {
+    success = lab::runSmoke(window, renderer);
+} else {
+    success = runPixels(window, renderer);
 }
 ```
 
-Ta chọn kích thước 4×3 vì có thể viết toàn bộ vị trí ra giấy và tự kiểm tra. Hai góc chưa bao phủ mọi pixel, nhưng đủ để phát hiện nhiều lỗi như dùng sai `width` hoặc vô tình chuyển sang cách lưu column-major.
+Biến smoke được đọc từ argv; chạy bình thường không có tham số vẫn mở ứng dụng tương tác. Trên Windows:
 
-Không nên dùng `assert` làm công cụ chạy test ở đây. Trong cấu hình Release, `NDEBUG` thường khiến toàn bộ biểu thức `assert` bị loại bỏ. Hàm `check` của chúng ta luôn chạy: nếu điều kiện sai, nó in tên phép kiểm tra và tăng `failures`. Cuối `main`, chương trình trả `EXIT_FAILURE` khi có ít nhất một lỗi.
-
-### Bước 2 — Kiểm tra `putPixel` ở cả trong và ngoài biên
-
-Nối đoạn sau trước dấu `}` cuối của `main`:
-
-```cpp title="tests/tests.cpp — kiểm tra putPixel"
-const auto before = framebuffer.pixels;
-const auto red = lab::rgba(255, 0, 0);
-framebuffer.putPixel(-1, 0, red);
-framebuffer.putPixel(0, -1, red);
-framebuffer.putPixel(framebuffer.width, 0, red);
-framebuffer.putPixel(0, framebuffer.height, red);
-check(framebuffer.pixels == before, "out-of-bounds writes leave the framebuffer unchanged");
-const auto sampleColor = lab::rgba(1, 2, 3, 4);
-framebuffer.putPixel(3, 2, sampleColor);
-check(framebuffer.pixels[11] == sampleColor, "valid putPixel writes the requested color");
+```powershell title="Terminal — SDL smoke và chạy tương tác"
+.\build\Debug\project_1_final.exe --smoke
+.\build\Release\project_1_final.exe --smoke
+.\build\Debug\project_1_final.exe
 ```
 
-So sánh với bản sao `before` cho ta nhiều thông tin hơn việc chỉ thấy chương trình “không crash”: nó xác nhận không pixel hợp lệ nào bị thay đổi ngoài ý muốn. Sau đó ta thử một lần ghi hợp lệ ở góc cuối, vị trí rất dễ mắc lỗi lệch một đơn vị.
-
-Bốn lời gọi chạm vào bốn phía khác nhau của framebuffer. Nếu thiếu bất kỳ điều kiện bảo vệ nào, vector có thể khác `before` hoặc công cụ kiểm tra bộ nhớ sẽ báo lỗi. Màu `sampleColor` dùng alpha bằng 4 để phép kiểm tra không chỉ vô tình xác nhận ba kênh RGB.
-
-### Bước 3 — Kiểm tra resize, checkerboard và gradient
-
-Thêm hai phép kiểm tra:
-
-```cpp title="tests/tests.cpp — kiểm tra đầu vào bất thường"
-framebuffer.resize(8, 5);
-check(framebuffer.width == 8, "resize updates width");
-check(framebuffer.height == 5, "resize updates height");
-check(framebuffer.pixels.size() == 40, "resize updates storage size");
-lab::Framebuffer checker{4, 4};
-checker.checker(0);
-check(checker.pixels.size() == 16, "checker keeps framebuffer size");
-check(checker.pixels[checker.index(0, 0)] != checker.pixels[checker.index(1, 0)], "zero cell size is clamped to one");
-```
-
-Ba phép `check` sau `resize` xác nhận `width`, `height` và số phần tử luôn thay đổi cùng nhau. Lời gọi `checker(0)` kiểm tra một trường hợp đầu vào không hợp lệ: hàm phải tránh chia cho 0, giữ nguyên kích thước framebuffer và coi kích thước ô tối thiểu là 1.
-
-Ở đầu `main`, thêm hai kiểm tra ngay khi biên dịch để xác nhận thứ tự các kênh màu. Sau đó dùng framebuffer 3×3 để kiểm tra hai đầu gradient:
-
-```cpp title="tests/tests.cpp — màu và hai đầu gradient"
-static_assert(lab::rgba(255, 0, 0) == 0xFF0000FFu);
-static_assert(lab::rgba(1, 2, 3, 4) == 0x01020304u);
-lab::Framebuffer gradient{3, 3};
-gradient.gradient();
-check(gradient.pixels[gradient.index(0, 0)] == lab::rgba(0, 0, 180), "gradient starts at zero on both axes");
-check(gradient.pixels[gradient.index(2, 2)] == lab::rgba(255, 255, 180), "gradient reaches both endpoints");
-```
-
-Hai phép kiểm tra này xác nhận công thức thật sự đi từ 0 đến 255, chứ không chỉ tạo một vector đúng kích thước. Bản mã nguồn hoàn chỉnh còn kiểm tra hai góc còn lại để phát hiện lỗi đảo trục X/Y, trường hợp framebuffer 1×1 và khả năng lặp lại của noise.
-
-### Bước 4 — Thêm chương trình test vào CMake
-
-Ở cuối `CMakeLists.txt`, tạo một executable riêng cho test:
-
-```cmake title="CMakeLists.txt — test target"
-include(CTest)
-
-if(BUILD_TESTING)
-    add_executable(project_1_tests tests/tests.cpp)
-    target_include_directories(project_1_tests PRIVATE final/include)
-    add_test(NAME project_1_validation COMMAND project_1_tests)
-endif()
-```
-
-Target này không cần `target_link_libraries(... SDL3::SDL3)` vì test không gọi hàm SDL nào. Việc tách phần tính toán vào `lab.hpp` giúp test chạy nhanh, không mở cửa sổ và vẫn dùng được trong môi trường CI không có màn hình.
-
-Build rồi chạy:
-
-```bash title="Terminal — từ thư mục project-01-hello-pixels"
-cmake -S . -B build
-cmake --build build --config Debug --target project_1_tests
-ctest --test-dir build -C Debug --output-on-failure
-cmake --build build --config Release --target project_1_tests
-ctest --test-dir build -C Release --output-on-failure
-```
-
-Hãy chạy cả Debug lẫn Release để chắc chắn hàm `check` không bị loại bỏ ở cấu hình tối ưu. Tùy chọn `--output-on-failure` giữ kết quả ngắn gọn khi mọi test đều đạt và chỉ in chi tiết khi có lỗi. Nếu CTest báo không tìm thấy test, hãy kiểm tra `BUILD_TESTING`; `include(CTest)` mặc định sẽ bật tùy chọn này.
+Nếu chạy qua automation, đặt hard timeout bên ngoài khoảng 15 giây cho mỗi smoke. Một lời gọi driver vẫn có thể kẹt; giới hạn số vòng lặp không thay thế deadline của process.
 
 ## Ghép các phần lại
 
-Project hoàn chỉnh được chia thành ba phần, mỗi phần có một trách nhiệm rõ ràng:
+Bản hoàn chỉnh có các trách nhiệm rõ ràng:
 
-1. `include/lab.hpp` chứa cách đóng gói màu, tính vị trí pixel, kiểm tra biên và tạo các mẫu hình.
-2. `src/main.cpp` quản lý vòng đời SDL, nhận phím, cập nhật texture và xử lý resize.
-3. `tests/tests.cpp` kiểm tra những điều luôn phải đúng, không phụ thuộc renderer hay hệ điều hành.
+- lab.hpp sở hữu pixel và công thức thuần C++.
+- presentation.hpp tạo/copy texture và thay cặp tài nguyên.
+- main.cpp giữ vòng đời SDL, event, tham số scene và dirty.
+- smoke.hpp chỉ dành cho đường kiểm hữu hạn.
+- tests.cpp chứa fixture, không mở window.
 
-Khi chạy ứng dụng, dữ liệu đi theo thứ tự:
-
-`khởi tạo SDL → tạo framebuffer và texture → đọc sự kiện → tạo mẫu hình → cập nhật texture → vẽ → hiển thị → lặp lại → dọn dẹp`
-
-Khi chạy kiểm thử, trình tự là:
-
-`cấu hình CMake → build project_1_tests → CTest chạy chương trình test → check từng điều kiện → main trả mã thoát`
-
-Hãy mở mã nguồn hoàn chỉnh và lần theo một pixel cụ thể. Phím `1` chọn gradient; `gradient` tạo màu bằng `rgba`; `putPixel` gọi `index`; vector được chuyển sang texture bằng đúng `pitch`; cuối cùng texture được hiển thị. Nếu tự giải thích được đường đi này, bạn đã hiểu project như một chương trình thống nhất chứ không còn là các đoạn code rời rạc.
+Từ phím 2, bạn phải lần được tới gradient, tới rgba/putPixel/index, tới upload/pitch rồi tới cửa sổ. Từ một test thất bại, bạn phải biết kiểm phần CPU hay presentation thay vì sửa mò cả chương trình.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi kỳ vọng góc cuối từ 11 thành 12. CTest phải thất bại. Sửa **kỳ vọng sai**, không sửa code đúng để chiều theo test.
-2. Tạm bỏ phần kiểm tra biên trong `putPixel`. Phép so sánh với bản sao có thể thất bại hoặc công cụ kiểm tra bộ nhớ có thể báo lỗi; cả hai đều cho thấy điều kiện bảo vệ là cần thiết.
-3. Đổi `resize(8, 5)` nhưng vẫn kỳ vọng 12 phần tử. Đọc thông báo và xác định điều kiện nào đang bị mô tả sai trong test.
-4. Tạm bỏ `SDL_RenderPresent` trong ứng dụng. CTest vẫn đạt vì nó không kiểm tra phần đi qua SDL; do đó danh sách kiểm tra khi chạy thật vẫn cần thiết.
+1. Đổi expected index cuối từ 11 thành 12. CTest phải fail cả Debug lẫn Release; sửa lại expected, không sửa code đúng để chiều theo test sai.
+2. Đổi một hệ số LCG hoặc đảo kênh R/B. Fixture phải phát hiện.
+3. Bỏ lời gọi present trong một bản thử. CTest CPU vẫn đạt: điều đó giải thích vì sao checklist SDL/desktop còn cần thiết.
+4. Giữ bounds check, thử các tọa độ ngoài ảnh qua Lab và CTest. Không cần bỏ hàng rào bảo vệ để cố gây lỗi bộ nhớ.
 
 ## Tự kiểm tra kết quả
 
-- [ ] `project_1_tests` build mà không link SDL.
-- [ ] CTest báo `project_1_validation` đạt.
-- [ ] Target `project_1_final` build sạch và mở được cửa sổ.
-- [ ] Phím `1`, `2`, `3`, Escape và nút Close đều hoạt động.
-- [ ] Resize liên tục không dùng `texture == nullptr` và mẫu hình vẫn phủ kín vùng pixel mới.
-- [ ] Cùng seed noise cho cùng kết quả.
-- [ ] Bạn giải thích được `index`, `putPixel`, `pitch` và thứ tự cleanup bằng lời của mình.
+- [ ] CTest đạt ở Debug và Release, không dùng assert cho runtime validation.
+- [ ] Bốn scene đều có fixture kiểm dữ liệu, không chỉ kiểm số phần tử.
+- [ ] Smoke tự thoát; không nhầm smoke ẩn với kiểm trực tiếp desktop.
+- [ ] Phím 1–4, N và −/= hoạt động ở scene tương ứng.
+- [ ] Resize ít nhất 10 lần; minimize/restore; kiểm high-DPI nếu có thiết bị.
+- [ ] Close và Escape thoát sạch.
+- [ ] Bạn tự giải thích được index, color packing, pitch, dirty và thời điểm hủy texture.
 
 ## Bài tập mở rộng
 
-1. Viết test tách lại bốn kênh từ `rgba` và kiểm tra vài màu có alpha khác 255.
-2. Tính checksum của `noise(17)` trên framebuffer 8×8, lưu giá trị mong đợi trong test rồi thay seed để xem test có phát hiện dữ liệu đã đổi hay không.
-3. Xuất framebuffer thành file PPM bằng `std::ofstream`. Đây là cách kiểm tra pixel không phụ thuộc SDL texture.
-4. Chạy bản Debug với AddressSanitizer nếu compiler hỗ trợ, rồi thực hiện lại thí nghiệm bỏ bounds check để thấy công cụ phát hiện lỗi bộ nhớ.
+1. Xuất framebuffer thành file PPM để kiểm ảnh không phụ thuộc SDL.
+2. Thêm fixture seed=0 và seed lớn nhất của uint32_t.
+3. Đo số lần tạo ảnh/upload khi không có input để xác nhận dirty đang tiết kiệm công việc.
+4. Thêm một scene mới và một test có đáp án tự tính trước.
 
-Source ở cuối trang là bản hoàn chỉnh có thể build, test và chạy. Hãy dùng nó để đối chiếu với bài làm của mình, thay vì chép đè toàn bộ. Mỗi khi thấy một điểm khác nhau, hãy thử giải thích vì sao trước khi quyết định sửa code.
+Đã hoàn thành Project 01 khi ứng dụng native đạt checklist, không chỉ khi đọc xong trang. Phần mã hoàn chỉnh ngay bên dưới là bản để build, chạy và đối chiếu; ZIP cũng chứa đúng các source ấy. Tiếp theo, [Project 02](/projects/wasd-fps-cap) dùng vòng lặp này để vẽ một ô vuông rồi mới thêm bàn phím, vận tốc và delta time.

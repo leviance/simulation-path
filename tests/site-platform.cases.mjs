@@ -65,7 +65,7 @@ test("roadmap contains exactly 78 ordered projects and correct release states", 
   );
   assert.match(
     compactManifestSource,
-    /prerequisites: \["Project 01 — window, renderer và event loop"\]/,
+    /prerequisites: \["Project 01 — framebuffer, putPixel, texture và event loop"\]/,
   );
   assert.match(
     compactManifestSource,

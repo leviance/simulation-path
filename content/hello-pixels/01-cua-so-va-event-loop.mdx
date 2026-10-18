@@ -1,57 +1,39 @@
-# Cửa sổ và event loop
+# Mở cửa sổ đầu tiên và giữ chương trình phản hồi
 
 ## Vấn đề cần giải quyết
 
-Một chương trình console đơn giản thường chạy lần lượt từ đầu đến cuối rồi thoát. Với chương trình đồ họa, cách đó không đủ. Nếu `main` kết thúc ngay sau khi tạo cửa sổ, cửa sổ cũng đóng lại trước khi chúng ta kịp nhìn thấy gì. Chương trình phải tiếp tục chạy, nhận sự kiện từ hệ điều hành và vẽ lại cửa sổ cho đến khi người dùng yêu cầu thoát.
+Mục tiêu cuối project là tạo ảnh từ một mảng pixel của riêng mình. Nhưng trước khi có ảnh, ta cần một chương trình mở được cửa sổ, nhận được yêu cầu đóng và báo lỗi đúng lúc. Nếu phần này chưa chạy ổn, rất khó biết một màn hình đen là do công thức màu hay do ứng dụng chưa vẽ gì.
 
-Mục tiêu của bài đầu tiên rất rõ ràng: mở một cửa sổ 960×540 có nền xanh đen, sau đó đóng nó bằng nút **Close** hoặc phím **Escape**. Chúng ta chưa vẽ pixel nào cả, nhưng mọi phần còn lại của project đều sẽ được xây trên bộ khung này.
+Bài này bắt đầu từ starter chỉ in một dòng ra terminal. Chúng ta sẽ tự thêm SDL, cửa sổ và vòng lặp. Kết quả cuối bài là cửa sổ nền xanh đen, chưa có framebuffer. Đây là bước chuẩn bị, không phải sản phẩm hoàn chỉnh của Project 01.
 
-Chúng ta sẽ làm lần lượt bốn việc:
-
-1. Khởi tạo phần video của SDL.
-2. Tạo `SDL_Window` và `SDL_Renderer`.
-3. Giữ chương trình tiếp tục chạy bằng một event loop.
-4. Giải phóng tài nguyên trước khi thoát.
+Nếu chưa build được starter, hãy hoàn thành [Getting Started](/getting-started) trước. Không cần cài lại compiler hoặc chép SDL vào thư mục project nếu đã làm xong phần đó.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Trong lúc chương trình chạy, mỗi khung hình đều đi qua một nhịp quen thuộc:
+Ứng dụng console thường làm xong công việc rồi kết thúc. Ứng dụng có cửa sổ thì khác: nó phải tiếp tục chờ chuột, bàn phím và hệ điều hành cho đến khi người dùng muốn thoát.
 
-`nhận thao tác → cập nhật trạng thái → vẽ → đưa hình lên cửa sổ`
+Một lần đi qua vòng lặp gồm ba việc: lấy những sự kiện đang chờ, quyết định có tiếp tục không, rồi hiển thị ảnh. Phần vẽ không được nằm trong vòng lấy sự kiện; không có thao tác mới cũng không có nghĩa cửa sổ được phép ngừng phản hồi.
 
-SDL đưa các thao tác như nhấn phím, di chuột hay bấm nút đóng vào một hàng đợi. Mỗi lần gọi `SDL_PollEvent`, ta lấy ra một sự kiện đang chờ để xử lý. Vì thế, vòng `while (SDL_PollEvent(...))` chỉ làm nhiệm vụ **đọc hết các sự kiện hiện có**; nó không phải toàn bộ vòng lặp của chương trình.
-
-Nếu đặt phần vẽ bên trong vòng `SDL_PollEvent`, chương trình chỉ vẽ khi có sự kiện mới. Người dùng vừa ngừng di chuột là hình ảnh cũng ngừng cập nhật. Đây là một lỗi rất dễ mắc khi mới học SDL.
-
-Ba thành phần chính phải được tạo theo đúng thứ tự:
-
-- SDL phải được khởi tạo trước tiên.
-- `SDL_Window` chỉ được tạo sau khi SDL sẵn sàng.
-- `SDL_Renderer` cần một cửa sổ đã tồn tại.
-
-Ta tạo chúng theo thứ tự `SDL_Init → Window → Renderer`. Khi thoát, ta giải phóng theo chiều ngược lại: `Renderer → Window → SDL_Quit`.
+Ta tạo tài nguyên theo thứ tự `SDL_Init → Window → Renderer`. Renderer gắn với window, nên khi thoát phải hủy renderer trước window, rồi mới `SDL_Quit`. Ở các bài sau, texture sẽ được hủy trước renderer.
 
 ## Viết code từng bước
 
-### Bước 1 — Tạo `main.cpp`
+### Bước 1 — Build và chạy đúng mốc bài học
 
-Tạo tệp `src/main.cpp` và thêm ba header sau:
+Giải nén ZIP vào một thư mục riêng. Trong terminal tại thư mục chứa `CMakeLists.txt`, chạy:
 
-```cpp title="src/main.cpp — điểm bắt đầu"
-#include <SDL3/SDL.h>
-#include <cstdlib>
-#include <iostream>
-
-int main() {
-    // Các bước tiếp theo sẽ được đặt ở đây.
-}
+```bash title="Terminal — chuẩn bị starter và checkpoint"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_1_starter --parallel 2
 ```
 
-`SDL3/SDL.h` cung cấp các hàm tạo cửa sổ, renderer và xử lý sự kiện. `cstdlib` khai báo `EXIT_SUCCESS`, `EXIT_FAILURE`; còn `iostream` giúp in thông báo lỗi ra cửa sổ terminal.
+Trên Windows với Visual Studio, chạy `.\build\Debug\project_1_starter.exe`. Bạn phải thấy dòng xác nhận toolchain. Starter chưa mở cửa sổ; đừng lấy final rồi xóa bớt tùy ý vì rất dễ giữ lại code của các bài chưa học.
 
-### Bước 2 — Khởi tạo SDL
+CMake dùng C++20 và FetchContent để tải đúng SDL 3.4.8 có checksum. Executable link qua `SDL3::SDL3`. Cấu hình đầy đủ nằm trong gói source và phần mã chạy được cuối trang; bạn không phải tự đoán các include/library path.
 
-Đặt đoạn code này ở đầu `main`:
+### Bước 2 — Khởi tạo SDL và tạo window
+
+Mở `src/main.cpp` của bài làm. Các header dùng trong bài là `SDL3/SDL.h`, `cstdlib` và `iostream`. Trong `main`, bắt đầu bằng:
 
 ```cpp title="src/main.cpp — đầu hàm main"
 if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -60,23 +42,27 @@ if (!SDL_Init(SDL_INIT_VIDEO)) {
 }
 ```
 
-Trong SDL3, `SDL_Init` trả về `true` khi thành công và `false` khi thất bại. Dự án hiện chỉ dùng hình ảnh nên ta truyền `SDL_INIT_VIDEO`; chưa cần khởi tạo audio hay gamepad.
+SDL3 trả `bool`: thành công là `true`. Ta đọc `SDL_GetError()` ngay khi thất bại, không tiếp tục tạo tài nguyên từ một bước khởi tạo lỗi.
 
-Khi một lời gọi SDL thất bại, `SDL_GetError()` trả về thông báo gần nhất. Ta đọc nó ngay tại nhánh lỗi vì một lời gọi SDL khác có thể làm thay đổi thông báo, khiến nguyên nhân ban đầu khó tìm hơn.
+Đặt `kInitialWidth = 960`, `kInitialHeight = 540` trong namespace không tên ở đầu file. Đây là các hằng số dùng trong chính file này. Tiếp theo, tạo window:
 
-### Bước 3 — Tạo cửa sổ và renderer
-
-Đặt hai kích thước có tên ở phần đầu tệp, rồi thêm phần tạo tài nguyên ngay dưới lệnh khởi tạo SDL:
-
-```cpp title="src/main.cpp — sau SDL_Init"
-constexpr int kInitialWidth = 960;
-constexpr int kInitialHeight = 540;
-SDL_Window* window = SDL_CreateWindow("Project 01 - Hello Pixels", kInitialWidth, kInitialHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+```cpp title="src/main.cpp — tạo window sau SDL_Init"
+SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+SDL_Window* window = SDL_CreateWindow("Project 01 - Hello Pixels", kInitialWidth, kInitialHeight, flags);
 if (!window) {
     std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << '\n';
     SDL_Quit();
     return EXIT_FAILURE;
 }
+```
+
+`RESIZABLE` cho phép kéo thay đổi kích thước. `HIGH_PIXEL_DENSITY` cho phép vùng vẽ dùng mật độ pixel của màn hình. Kích thước 960×540 là kích thước window được yêu cầu, không phải lời khẳng định rằng mọi màn hình đều có đúng 518.400 pixel đầu ra.
+
+### Bước 3 — Tạo renderer
+
+Đặt ngay sau phần tạo window:
+
+```cpp title="src/main.cpp — tạo renderer"
 SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
 if (!renderer) {
     std::cerr << "SDL_CreateRenderer failed: " << SDL_GetError() << '\n';
@@ -86,15 +72,15 @@ if (!renderer) {
 }
 ```
 
-`kInitialWidth` và `kInitialHeight` chỉ là kích thước lúc cửa sổ mới mở. Người dùng vẫn có thể thay đổi kích thước sau đó. Cờ `SDL_WINDOW_RESIZABLE` cho phép kéo giãn cửa sổ; `SDL_WINDOW_HIGH_PIXEL_DENSITY` cho phép dùng mật độ pixel thật của màn hình nếu hệ điều hành hỗ trợ. Khi truyền `nullptr` cho `SDL_CreateRenderer`, ta để SDL tự chọn rendering driver phù hợp.
+`nullptr` để SDL chọn driver phù hợp. Nếu bước này lỗi thì window đã tồn tại, nhưng renderer chưa tồn tại; vì vậy nhánh lỗi chỉ hủy window rồi đóng SDL.
 
-Mỗi tài nguyên được tạo và kiểm tra ngay sau đó. Đoạn code có dài hơn một biểu thức viết tắt, nhưng đổi lại ta biết chính xác bước nào thất bại. Chẳng hạn, nếu tạo renderer không thành công, ta chỉ cần hủy cửa sổ vì đó là tài nguyên duy nhất đã được tạo.
+Ở bài này renderer tô nền tạm để xác nhận cửa sổ chạy được. Từ bài 03, ảnh sẽ do CPU tạo; renderer chỉ copy texture chứa ảnh đó ra cửa sổ, không vẽ primitive thay cho chúng ta.
 
-### Bước 4 — Tách vòng lặp chính thành một hàm riêng
+### Bước 4 — Viết vòng lặp, không bỏ sót đường thoát
 
-Bây giờ thêm hàm `runWindowCheckpoint` phía trên `main`. Nhờ tách phần chạy chính ra một hàm riêng, nhìn vào `main` ta vẫn thấy rõ ba giai đoạn: khởi tạo, chạy, rồi dọn dẹp. Ở những bài sau, chúng ta chỉ cần mở rộng phần giữa mà không làm rối toàn bộ hàm `main`.
+Thêm `runWindowCheckpoint` vào namespace không tên, phía trên `main`:
 
-```cpp title="src/main.cpp — hàm chạy checkpoint cửa sổ"
+```cpp title="src/main.cpp — vòng lặp của bài 01"
 bool runWindowCheckpoint(SDL_Renderer* renderer) {
     bool running = true;
     while (running) {
@@ -107,6 +93,10 @@ bool runWindowCheckpoint(SDL_Renderer* renderer) {
                 running = false;
             }
         }
+        if (!running) {
+            break;
+        }
+
         if (!SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255)) {
             return false;
         }
@@ -116,81 +106,66 @@ bool runWindowCheckpoint(SDL_Renderer* renderer) {
         if (!SDL_RenderPresent(renderer)) {
             return false;
         }
+
+        SDL_Delay(10);
     }
     return true;
 }
 ```
 
-Vòng `SDL_PollEvent` tiếp tục cho đến khi không còn sự kiện nào đang chờ. Trước khi đọc dữ liệu bên trong `event`, ta luôn xem `event.type` là gì. Ví dụ, chỉ được đọc `event.key` khi đang xử lý một sự kiện bàn phím.
+`PollEvent` trả từng sự kiện; ta lấy hết những sự kiện đang chờ trước khi vẽ. Chỉ đọc `event.key` khi `event.type` là sự kiện bàn phím. Close và Escape đều đổi cùng biến `running`; kiểm biến này trước phần vẽ để không tạo thêm ảnh sau yêu cầu thoát.
 
-`SDL_EVENT_QUIT` xuất hiện khi người dùng bấm nút đóng hoặc khi hệ điều hành yêu cầu ứng dụng kết thúc. Escape là phím thoát do chúng ta tự thêm. Cả hai trường hợp đều đặt `running = false`, nhờ vậy chương trình chỉ có một cách rời khỏi vòng lặp. Sau khi viết xong hàm, gọi nó trong `main`:
+`SetRenderDrawColor` chọn màu, `RenderClear` xóa nền, `RenderPresent` đưa kết quả lên cửa sổ. Mọi lời gọi đều được kiểm tra. Hàm trả `false` khi vẽ lỗi, không đánh đồng lỗi render với việc người dùng đóng bình thường.
 
-```cpp title="src/main.cpp — chạy event loop"
-const bool failed = !runWindowCheckpoint(renderer);
-if (failed) {
-    std::cerr << "Render failed: " << SDL_GetError() << '\n';
+`SDL_Delay(10)` nhường CPU trong lúc chờ. Nó không bảo đảm 60 FPS: thời gian làm việc và độ chính xác của bộ lập lịch chưa được tính. Chúng ta sẽ giải quyết timing ở Project 02.
+
+### Bước 5 — Gọi vòng lặp rồi dọn tài nguyên
+
+Sau khi có renderer, khai báo `bool success = false;` rồi gọi:
+
+```cpp title="src/main.cpp — chạy và dọn dẹp"
+success = runWindowCheckpoint(renderer);
+if (!success) {
+    std::cerr << "Application failed: " << SDL_GetError() << '\n';
 }
-```
 
-Sau khi xử lý xong các sự kiện, ba lời gọi sau đảm nhiệm ba việc riêng:
-
-- `SDL_SetRenderDrawColor` chọn màu nền theo RGBA.
-- `SDL_RenderClear` tô toàn bộ vùng vẽ bằng màu đó.
-- `SDL_RenderPresent` hiển thị khung hình vừa vẽ lên cửa sổ.
-
-Điểm quan trọng là cả ba lệnh đều nằm ngoài vòng `SDL_PollEvent`. Nhờ vậy, chương trình vẫn vẽ đều ngay cả khi người dùng không chạm vào chuột hay bàn phím.
-
-### Bước 5 — Giải phóng tài nguyên
-
-Đặt phần cuối này ngay sau lời gọi `runWindowCheckpoint(renderer)`:
-
-```cpp title="src/main.cpp — sau khi event loop kết thúc"
 SDL_DestroyRenderer(renderer);
 SDL_DestroyWindow(window);
 SDL_Quit();
-if (failed) {
+if (!success) {
     return EXIT_FAILURE;
 }
 return EXIT_SUCCESS;
 ```
 
-Renderer được tạo từ cửa sổ nên phải hủy trước cửa sổ. `SDL_Quit` đứng cuối cùng vì nó đóng phần video mà hai tài nguyên trên đang sử dụng. Gom việc dọn dẹp về cuối `main` cũng giúp ta ít bỏ sót tài nguyên khi chương trình lớn dần.
-
-Phần **Mã chạy được sau bài** ở cuối trang chứa toàn bộ mã nguồn tại thời điểm kết thúc bài 1. Bản này chỉ có cửa sổ và event loop vừa viết; framebuffer của bài sau chưa xuất hiện.
+Đoạn này là phần cuối `main`. Dọn tài nguyên ở một chỗ giúp cả đường thoát bình thường lẫn lỗi trong vòng lặp đều được xử lý. Mã đầy đủ cuối trang ghép chính xác các phần trên; không cần tự thêm lời gọi chưa được giải thích.
 
 ## Ghép các phần lại
 
-Hãy đọc lại mã nguồn theo thứ tự chương trình thực sự chạy, thay vì xem từng đoạn code rời rạc. Toàn bộ chương trình có ba giai đoạn:
+Chạy target `project_1_checkpoint_1`. Đặt breakpoint ở `SDL_Init`, đầu `runWindowCheckpoint` và `SDL_DestroyRenderer`. Mở cửa sổ rồi đóng: debugger phải đi theo thứ tự khởi tạo, chờ sự kiện, dọn dẹp.
 
-1. **Khởi tạo:** `SDL_Init` mở phần video, sau đó chương trình tạo `window` rồi mới tạo `renderer`. Bước nào thất bại thì in lỗi và dừng trước khi vào vòng lặp.
-2. **Chạy:** `main` gọi `runWindowCheckpoint`. Mỗi vòng lấy hết sự kiện đang chờ, cập nhật `running`, xóa cửa sổ bằng màu nền rồi hiển thị khung hình mới.
-3. **Dọn dẹp:** khi vòng lặp kết thúc, chương trình lần lượt hủy renderer, hủy cửa sổ và gọi `SDL_Quit`.
-
-Bạn có thể đặt breakpoint tại `SDL_Init`, đầu `while (running)` và `SDL_DestroyRenderer`, sau đó chạy chương trình và đóng cửa sổ. Trình gỡ lỗi phải đi qua ba điểm đó theo đúng thứ tự. Điều quan trọng nhất của bài này là vòng đời **khởi tạo → vòng lặp → dọn dẹp**. Những project SDL sau này vẫn giữ cấu trúc ấy; chúng chỉ thêm công việc vào vòng lặp ở giữa.
+Chương trình chưa có ảnh CPU. Nếu cửa sổ đã hiện đúng, hãy giữ nguyên nền này làm mốc kiểm tra. Bài sau chỉ thêm bộ nhớ framebuffer; đến bài 03 mới đưa dữ liệu ấy lên màn hình.
 
 ## Thử làm sai để hiểu đúng
 
-Hãy thử từng thay đổi dưới đây riêng rẽ rồi trả code về trạng thái đúng trước khi sang thí nghiệm kế tiếp:
+1. Đưa phần vẽ vào trong `while (SDL_PollEvent)`. Dự đoán điều gì xảy ra khi không có sự kiện rồi thử một lát và hoàn tác.
+2. Bỏ nhánh Escape, giữ Close. Xác nhận hai cách thoát không phải cùng một sự kiện.
+3. Đổi màu nền thành đỏ và chạy lại. Nếu không đổi, kiểm tra xem bạn có đang chạy đúng executable vừa build hay không.
 
-1. Chuyển `SDL_RenderPresent` vào trong `while (SDL_PollEvent)`. Sau đó ngừng di chuột và quan sát lúc nào cửa sổ được vẽ lại.
-2. Xóa vòng `SDL_PollEvent`. Thử kéo, thu nhỏ và đóng cửa sổ; hệ điều hành có thể đánh dấu ứng dụng là “Not responding”.
-3. Sau khi đặt `running = false`, thêm `if (!running) break;` ngay dưới phần xử lý sự kiện. Dùng trình gỡ lỗi để xem chương trình có còn vẽ khung hình cuối cùng hay không.
-
-Trước mỗi thí nghiệm, hãy viết ra một câu dự đoán. Sau khi chạy, so sánh điều vừa thấy với dự đoán ban đầu. Cách học này giúp bạn hiểu vai trò của event loop tốt hơn nhiều so với chỉ chép lại code.
+Không cần cố tình bỏ toàn bộ event loop để làm ứng dụng treo. Ta có thể hiểu vai trò của nó bằng breakpoint và các thay đổi nhỏ an toàn.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Target `project_1_checkpoint_1` biên dịch thành công.
-- [ ] Cửa sổ 960×540 có nền xanh đen và vẫn phản hồi khi kéo hoặc thay đổi kích thước.
-- [ ] Nút Close và phím Escape đều kết thúc cùng một vòng lặp chính.
-- [ ] Khi khởi tạo thất bại, chương trình in được thông báo từ `SDL_GetError()`.
-- [ ] Phần vẽ nằm ngoài vòng `SDL_PollEvent`.
-- [ ] Renderer, cửa sổ và SDL được giải phóng theo đúng thứ tự.
+- [ ] Starter build được; checkpoint 1 mở được cửa sổ.
+- [ ] Window và renderer đều được kiểm lỗi ngay sau khi tạo.
+- [ ] Vẽ nằm ngoài vòng PollEvent; Close/Escape đều thoát.
+- [ ] Cửa sổ vẫn phản hồi khi kéo hoặc thu nhỏ.
+- [ ] Bạn chỉ ra được tài nguyên nào còn tồn tại tại mỗi nhánh lỗi.
 
 ## Bài tập mở rộng
 
-1. Thêm phím `R` để đổi qua lại giữa hai màu nền. Chỉ cần lưu màu hiện tại; không cần tạo renderer mới.
-2. Gọi `SDL_GetWindowSizeInPixels` sau khi tạo cửa sổ và in kích thước nhận được. Vì cửa sổ đã bật `SDL_WINDOW_HIGH_PIXEL_DENSITY`, trên macOS hoặc Wayland con số này có thể khác kích thước window coordinate bạn yêu cầu.
-3. Tạm trả về `EXIT_FAILURE` ở cuối chương trình, xem exit code trong terminal rồi đổi lại thành `EXIT_SUCCESS`.
+1. Thêm phím R đổi nền giữa hai màu bằng một biến state, không tạo renderer mới.
+2. In tên driver đang dùng nếu muốn tìm hiểu thêm SDL; đây không phải yêu cầu để sang bài.
+3. Vẽ lại sơ đồ thứ tự tạo/hủy bằng lời của bạn.
 
-Khi đã hoàn thành tất cả các mục trên, sang bài 02 để tạo framebuffer đầu tiên thay cho nền một màu.
+Tiếp tục [bài 02 — tạo framebuffer](/projects/hello-pixels/02-framebuffer-la-gi). Cửa sổ này sẽ giữ nguyên vai trò, còn việc tạo ảnh dần chuyển sang code CPU.

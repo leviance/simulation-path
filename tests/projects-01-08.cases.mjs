@@ -496,55 +496,36 @@ test("Project 12 draws a projected triangle before deriving rotation and mouse c
   assert.match(labSource, /maximumEdgeLengthError3\(/);
 });
 
-test("Project 02 checkpoints and validation preserve the lesson experiment", async () => {
-  const project = path.join(workspace, "examples", "project-02-wasd-fps-cap");
-  const templateHeader = await readFile(
-    path.join(project, "source-template", "include", "lab.hpp"),
-    "utf8",
-  );
-  const validation = await readFile(path.join(project, "tests", "tests.cpp"), "utf8");
-  const checkpointThree = await readFile(
-    path.join(project, "checkpoints", "03", "src", "main.cpp"),
-    "utf8",
-  );
-  const checkpointFour = await readFile(
-    path.join(project, "checkpoints", "04", "src", "main.cpp"),
-    "utf8",
-  );
-  const checkpointFive = await readFile(
-    path.join(project, "checkpoints", "05", "src", "main.cpp"),
-    "utf8",
-  );
-  const firstLesson = await readFile(
-    path.join(workspace, "content", "wasd-fps-cap", "01-keyboard-state.mdx"),
-    "utf8",
-  );
-
-  assert.match(
-    templateHeader,
-    /for \(double dt : timeSteps\) \{\s*update\(position, velocity, dt\);/,
-  );
-  assert.doesNotMatch(validation, /#include\s*<cassert>|\bassert\s*\(/);
-  assert.match(validation, /return EXIT_FAILURE;/);
-  assert.match(validation, /negative dt is clamped to zero/);
-
-  for (const [name, source] of [
-    ["checkpoint 03", checkpointThree],
-    ["checkpoint 04", checkpointFour],
-  ]) {
-    assert.match(source, /experimentDelayMs/, `${name} lost its repeatable delay preset`);
-    assert.match(source, /experimentDistance/, `${name} lost its one-second distance measurement`);
-    assert.match(
-      source,
-      /SDL_Delay\(Uint32\(experimentDelayMs\)\)/,
-      `${name} no longer changes the observed frame rate`,
-    );
+test("Project 02 checkpoints preserve drawing, movement and measured FPS progression", async () => {
+  const root = path.join(workspace, "examples/project-02-wasd-fps-cap");
+  const read = (file) => readFile(path.join(root, file), "utf8");
+  const first = await read("checkpoints/01/src/main.cpp");
+  const math1 = await read("checkpoints/01/include/lab.hpp");
+  assert.match(first, /lab::fillRectangle/);
+  assert.match(first, /SDL_GetKeyboardState/);
+  assert.doesNotMatch(math1, /normalize|moveFrameBased|inline void update/);
+  const second = await read("checkpoints/02/include/lab.hpp");
+  assert.match(second, /return normalize\(direction\)/);
+  assert.match(second, /position.x \+= velocity.x \/ 60.0/);
+  for (const checkpoint of ["03", "04"]) {
+    const main = await read("checkpoints/" + checkpoint + "/src/main.cpp");
+    assert.match(main, /experimentDelayMs/);
+    assert.match(main, /SDL_Delay\(static_cast<Uint32>\(experimentDelayMs\)\)/);
+    assert.match(main, /lab::advanceMeasurement\(measurement, rawDt\)/);
+    assert.match(main, /SDLK_B/);
   }
-  assert.match(checkpointThree, /position \+= velocity \* \(1\.0 \/ 60\.0\)/);
-  assert.match(checkpointFour, /lab::update\(position, velocity, dt\)/);
-  assert.doesNotMatch(checkpointFive, /experimentDelayMs|experimentRunning/);
-  assert.match(checkpointFive, /targetFrameDurationNs|SDL_DelayNS/);
-
-  assert.match(firstLesson, /#include "lab\.hpp"/);
-  assert.match(firstLesson, /mốc tạm có thể build/);
+  const third = await read("checkpoints/03/include/measurement.hpp");
+  assert.match(third, /moveFrameBased\(displacement/);
+  const fourth = await read("checkpoints/04/include/measurement.hpp");
+  assert.match(fourth, /update\(displacement/);
+  assert.match(fourth, /measurement.discarded/);
+  const fifth = await read("checkpoints/05/src/main.cpp");
+  assert.doesNotMatch(fifth, /experimentDelayMs|moveFrameBased/);
+  assert.match(fifth, /lab::remainingFrameNs/);
+  assert.match(fifth, /SDLK_F1/);
+  const validation = await read("tests/tests.cpp");
+  assert.doesNotMatch(validation, /#include\s*<cassert>|\bassert\s*\(/);
+  assert.match(validation, /negative dt is clamped to zero/);
+  assert.match(validation, /directionFromKeys/);
+  assert.match(validation, /return EXIT_FAILURE/);
 });
