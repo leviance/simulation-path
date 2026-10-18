@@ -1,0 +1,131 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nội suy giữa hai điểm và hoàn thiện project
+
+## Vấn đề cần giải quyết
+
+Lerp trả lời một câu hỏi khác với phép cộng: nếu muốn đặt một điểm ở một phần nào đó trên đoạn từ endpoint A tới endpoint B, phải tính ở đâu?
+
+Bài cuối thêm điểm P(t), cho điều khiển t rồi kiểm chứng cả phần toán lẫn ứng dụng. Bạn sẽ nhận được toàn bộ source chạy độc lập, không phải tự đoán các đoạn nối giữa những snippet.
+
+## Hiểu ý tưởng trước khi viết code
+
+Từ A tới B cần độ dời B−A. Lấy một phần t của độ dời ấy rồi cộng vào A:
+
+$$
+P(t)=A+t(B-A)
+$$
+
+t = 0 ở A, t = 1 ở B, t = 0.5 ở trung điểm. Với A=(3,1.5), B=(−1,2.5), ta có P(0.5)=(1,2). Cách viết tương đương là (1−t)A+tB.
+
+t là một **tỉ lệ không đơn vị**, không tự là thời gian hoặc tốc độ. Muốn animation, bạn phải tự cho t thay đổi theo thời gian; bài này giữ điều khiển thủ công để quan sát hình học.
+
+<InteractiveLab demo="vector" mode="vector-full" />
+
+Chọn “Lerp” trong **Lớp bổ sung** để hiện slider t và điểm vàng. Bản hoàn chỉnh luôn giữ A/B, tổng và hiệu; những lớp thêm không che mất các kết quả cốt lõi. Dùng t = 0, 0.5, 1 rồi kéo cả hai endpoint.
+
+## Viết code từng bước
+
+### Bước 1 — Viết lerp từ ba phép toán đã học
+
+```cpp title="include/lab.hpp — độ dời có trọng số rồi đặt tại điểm đầu"
+inline Vec2 lerp(Vec2 start, Vec2 end, double t) {
+    return start + (end - start) * t;
+}
+```
+
+Hàm này không tự clamp t. Ngoài [0,1], nó cho **ngoại suy**: t = −1 đi tiếp phía trước A, t = 2 đi tiếp qua B. Chỉ UI của project giới hạn điểm trong đoạn.
+
+### Bước 2 — Điều khiển t và vẽ điểm đúng lớp
+
+Trong main, phím [ giảm 0.05, ] tăng 0.05:
+
+```cpp title="src/main.cpp — giữ t trong miền của đoạn thẳng"
+if (event.key.key == SDLK_LEFTBRACKET) {
+    scene.interpolation = std::max(0.0, scene.interpolation - 0.05);
+}
+if (event.key.key == SDLK_RIGHTBRACKET) {
+    scene.interpolation = std::min(1.0, scene.interpolation + 0.05);
+}
+```
+
+renderScene vẽ đoạn nối A–B trước, sau đó mới vẽ A/B và điểm nội suy:
+
+```cpp title="include/view.hpp — điểm nội suy vẽ sau endpoint"
+const Vec2 point = lerp(scene.vectorA, scene.vectorB, scene.interpolation);
+const Vec2 screen = worldToScreen(point);
+disc(image, static_cast<int>(std::lround(screen.x)), static_cast<int>(std::lround(screen.y)), 6, kLerp);
+```
+
+Điểm vàng được tô cuối để tại t=0 hoặc t=1, nó không bị chấm endpoint phủ mất. Một công thức đúng nhưng thứ tự vẽ sai vẫn làm người học tưởng điểm biến mất.
+
+### Bước 3 — Kiểm chứng bằng một cách tính độc lập
+
+```cpp title="tests/tests.cpp — oracle theo trọng số từng thành phần"
+const lab::Vec2 actual = lab::lerp(p, q, t);
+const lab::Vec2 reference{(1.0 - t) * p.x + t * q.x, (1.0 - t) * p.y + t * q.y};
+check(near(actual, reference), "lerp agrees with independently weighted components");
+```
+
+Test không gọi lại lerp để làm reference. Nó tính từng thành phần theo trọng số (1−t), t. Các fixtures t=0/1/0.5, ngoại suy, tổng/hiệu và normalize kiểm tra những ý nghĩa khác nhau.
+
+Runner dùng check, không dùng assert bị NDEBUG tắt:
+
+```cpp title="tests/tests.cpp — Release vẫn trả mã lỗi nếu kiểm tra thất bại"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAILED: " << label << '\n';
+    }
+}
+```
+
+Tests còn bao phủ số subnormal/gần DBL_MAX, hai cạnh hình bình hành, B+(A−B)=A, hit radius, grab offset, zero/trùng điểm, clamp endpoint và pixel thật của renderer.
+
+### Bước 4 — Build và chạy toàn bộ executable
+
+```bash title="Terminal — kiểm tra Debug/Release rồi chạy final"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Release\project_6_final.exe
+```
+
+Cần compiler C++20, CMake 3.24+ và mạng lần configure đầu để tải SDL 3.4.8 đã khóa checksum. Visual Studio dùng --config; Ninja/Unix Makefiles thường dùng hai build directory cùng CMAKE_BUILD_TYPE tương ứng.
+
+Final mở lớp cộng/trừ. Phím 2 mở scalar (Q/E chỉnh), 3 mở vector đơn vị, 4 mở lerp ([/]); 0 mở tất cả. Các lớp chỉ bổ sung hình, không ẩn A/B/tổng/hiệu. Space pause, R reset, Escape thoát.
+
+Starter và tám checkpoint là những chương trình chạy độc lập. Final không có macro ẩn tính năng; phần source cuối bài có đủ CMake, main, header và tests.
+
+## Ghép các phần lại
+
+Phần toán ở lab.hpp; phép world/screen và miền endpoint ở camera.hpp; trạng thái/hit-test/drag ở scene.hpp; primitive ở framebuffer.hpp; hình học từng lớp ở view.hpp; SDL texture/HUD ở presentation.hpp; main điều phối input và vòng đời.
+
+Ứng dụng giữ ảnh 1100×760, không tái cấp phát theo mỗi kích thước window. Letterbox giữ tròn thành tròn, input được đổi về bảng logic trước hit-test. Các giới hạn endpoint/scalar là lựa chọn sản phẩm để tổng/hiệu cũng ở trong vùng nhìn, không phải giới hạn của vector nói chung.
+
+--smoke mở window ẩn, chạy 12 frame có đổi scene/lớp/resize rồi thoát. Nó kiểm tra startup/present/cleanup, **không chứng minh mouse, focus hoặc DPI đã được thử bằng tay**.
+
+## Thử làm sai để hiểu đúng
+
+1. Viết lerp thành A+B×t. t=1 không đến B; thiếu bước lấy B−A.
+2. Clamp t ngay trong hàm toán rồi chạy test ngoại suy. Hàm đã bị đổi hợp đồng; hãy clamp tại UI.
+3. Dời phép vẽ điểm vàng lên trước chấm A/B. Tại t=0/1 nó có thể bị phủ mất dù dữ liệu đúng.
+4. Dùng một kết quả từ chính lerp làm expected. Test trở thành phép so một hàm với chính nó và không bắt được lỗi công thức.
+
+## Tự kiểm tra kết quả
+
+- A/B, A+B và A−B hiển thị đồng thời ngay trong final.
+- P(0), P(1), P(0.5) khớp A, B, trung điểm; điểm vàng còn nhìn thấy ở hai đầu.
+- CTest qua Debug và Release; vector hữu hạn cực nhỏ/cực lớn vẫn normalize đúng.
+- Kéo từng endpoint từ mép chấm, kéo/thả ngoài window, Alt+Tab, resize, pause/reset giữa lần kéo không kẹt capture.
+- Chọn riêng A/B khi cả hai zero; chỉnh bằng keyboard; Tab của Canvas không bị giữ.
+- Thử DPI 100%/200% nếu có: input phải khớp hình sau letterbox.
+- Tất cả source có trong ZIP và cuối bài; test CPU, smoke và QA desktop được ghi nhận riêng.
+
+## Bài tập mở rộng
+
+Cho t tăng đều theo thời gian trong một phiên bản riêng. So cách “từ A cố định tới B cố định” với cách mỗi frame lấy vị trí hiện tại lerp tới B bằng hệ số cố định. Hai chuyển động không có cùng vận tốc hoặc ý nghĩa.
+
+[Project 07: biến góc thành chuyển động trên vòng tròn](/projects/unit-circle).

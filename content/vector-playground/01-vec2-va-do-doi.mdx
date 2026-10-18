@@ -1,203 +1,149 @@
-# Vec2 và độ dời có hướng
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ bộ khung tới hai vector trên màn hình
 
 ## Vấn đề cần giải quyết
 
-Ở Project 05, bạn đã xây dựng được một mặt phẳng 2D và biết cách chuyển đổi tọa độ giữa world space với screen space. Project 06 sử dụng lại nền tảng đó để tạo một mô phỏng mới: hai vector A và B cùng xuất phát từ gốc tọa độ, mỗi vector có một độ lớn và một hướng riêng.
+Ở Project 05, bạn đã biết đặt điểm trên mặt phẳng và đổi world coordinate sang pixel. Bây giờ ta dùng lại nền tảng đó để xây một mô phỏng mới: hai vector A và B cùng xuất phát từ gốc tọa độ.
 
-Trước khi thực hiện phép cộng hay gọi `normalize`, ta cần giải quyết ba việc cơ bản:
-
-1. Một vector 2D được lưu bằng dữ liệu gì?
-2. Nếu vector bắt đầu tại gốc tọa độ thì điểm cuối của nó nằm ở đâu?
-3. Làm thế nào để chuyển điểm cuối đó thành tọa độ pixel và vẽ lên framebuffer?
-
-Ở checkpoint đầu tiên, A và B mới được vẽ dưới dạng hai đoạn thẳng cùng xuất phát từ gốc tọa độ. Mỗi đoạn có một chấm tròn ở điểm cuối (`endpoint`). Ta cố ý chưa vẽ đầu mũi tên để tập trung vào cách lưu dữ liệu và chuyển đổi tọa độ; phần đó sẽ được bổ sung ở bài sau.
-
-### Bộ khung đã có sẵn
-
-Starter không phải là một chương trình trống. Nó đã tạo window, renderer, framebuffer và streaming texture. Trong mỗi frame, `drawBoard` xóa hình cũ rồi vẽ lại lưới cùng hai trục tọa độ. Sau đó, framebuffer được đưa lên cửa sổ theo đúng quy trình đã học:
-
-```text
-drawBoard sửa vector pixels
-    → SDL_UpdateTexture chép pixels sang texture
-    → SDL_RenderTexture đưa texture vào renderer
-    → SDL_RenderPresent hiện frame
-```
-
-Hàm `drawLine` trong starter chính là thuật toán Bresenham của Project 04. Ta sẽ dùng lại hàm này thay vì viết lại rasterizer, nhờ đó toàn bộ bài học có thể tập trung vào cách biểu diễn và vẽ vector.
+Đừng bắt đầu bằng một danh sách công thức. Hãy mở được bảng tọa độ, thêm hai độ dời vào dữ liệu, rồi nhìn thấy chúng trên màn hình. Sau bài này, A đi lên bên phải, B đi lên bên trái; đầu mũi tên sẽ được thêm ở bài 2.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một điểm trả lời câu hỏi “đang ở đâu?”. Một vector trả lời câu hỏi “đi bao xa và theo hướng nào?”. Cả hai đều có thể lưu bằng hai số `(x,y)`, nhưng chúng không phải cùng một khái niệm.
+Một **điểm** cho biết vị trí. Một **vector** cho biết đi bao xa và theo hướng nào. Cả hai có thể lưu bằng hai số, nhưng cách dùng khác nhau.
 
-Trong mô phỏng này, A và B đều bắt đầu tại gốc `(0,0)`, vì vậy tọa độ điểm cuối bằng đúng hai thành phần của vector. Nếu điểm bắt đầu không nằm ở gốc, điểm cuối phải được tính bằng cách cộng thêm độ dời:
+Ví dụ: bắt đầu ở (2,1), đi theo độ dời (3,−2), bạn đến (5,−1). Khi bắt đầu ở gốc (0,0), tọa độ điểm cuối trùng đúng các thành phần của vector. Vì thế A = (3,1.5) nghĩa là từ gốc đi 3 đơn vị sang phải và 1.5 đơn vị lên trên.
 
-```text
-điểm đầu      = (2, 1)
-độ dời        = (3, -2)
-điểm cuối     = điểm đầu + độ dời = (5, -1)
-```
+Ta vẫn giữ world Y hướng lên, screen Y hướng xuống. Bảng logic rộng 1100, cao 760; gốc ở screen (550,420), mỗi world unit ứng với 45 pixel logic:
 
-Đó là lý do biểu thức `start + displacement` có ý nghĩa hình học rõ ràng. Ngược lại, phép cộng hai vị trí bất kỳ thường không biểu diễn một thao tác hữu ích.
+| Vector | Điểm cuối screen trước làm tròn | Vị trí so với gốc |
+|---|---|---|
+| A = (3,1.5) | (685,352.5) | Trên phải |
+| B = (−1,2.5) | (505,307.5) | Trên trái |
 
-Với A = `(3, 1.5)`, hãy đọc vector như một chỉ dẫn chuyển động: từ gốc đi 3 đơn vị sang phải và 1.5 đơn vị lên trên. Do điểm bắt đầu là `(0,0)`, điểm cuối của A nằm tại `(3,1.5)`.
+<InteractiveLab demo="vector" mode="vector-spaces" />
 
-Các phép toán cơ bản được thực hiện theo từng thành phần:
-
-$$
-A + B = (A_x + B_x,\ A_y + B_y)
-$$
-
-$$
-A - B = (A_x - B_x,\ A_y - B_y)
-$$
-
-$$
-sA = (sA_x,\ sA_y)
-$$
-
-Ta sẽ định nghĩa sẵn ba phép toán cơ bản cho `Vec2`, nhưng trong bài này chỉ dùng A và B để vẽ. Các bài tiếp theo sẽ lần lượt trực quan hóa phép cộng, phép trừ và phép nhân vector với một số.
+Chọn preset thay vì kéo chuột ở bài này. Đối chiếu tọa độ đọc bên dưới với hướng của từng đoạn; chấm tròn là endpoint, chưa phải đầu mũi tên.
 
 ## Viết code từng bước
 
-### Bước 1 — Định nghĩa `Vec2` và các phép toán cơ bản
+### Bước 1 — Chạy bộ khung đã có sẵn
 
-```cpp title="include/lab.hpp — kiểu Vec2 và ba phép toán cơ bản"
+Tải ZIP Project 06, giải nén và mở terminal tại thư mục có CMakeLists.txt:
+
+```bash title="Terminal — chạy starter trước khi thêm vector"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_6_starter --parallel 2
+.\build\Debug\project_6_starter.exe
+```
+
+Bộ khung đã có sẵn framebuffer, drawLine dùng Bresenham, drawBoard vẽ lưới/trục và phần SDL trình bày texture. Starter phải mở được window, resize giữ tỉ lệ, Space tạm dừng và Escape thoát.
+
+Khác bản đồ ở Project 05, bảng học toán này có kích thước logic cố định. SDL dùng letterbox để vừa window mà không kéo méo hình. Ta sẽ lưu endpoint trong miền X từ −4 đến 4, Y từ −3 đến 3; cách bố trí ấy còn chừa chỗ cho tổng, hiệu và scalar ở các bài sau.
+
+### Bước 2 — Dùng Vec2 để lưu độ dời
+
+Trong namespace lab của include/lab.hpp:
+
+```cpp title="include/lab.hpp — Vec2 giữ hai thành phần số thực"
 struct Vec2 {
     double x{};
     double y{};
-
     friend bool operator==(Vec2, Vec2) = default;
 };
-
-inline Vec2 operator+(Vec2 left, Vec2 right) {
-    return {left.x + right.x, left.y + right.y};
-}
-
-inline Vec2 operator-(Vec2 left, Vec2 right) {
-    return {left.x - right.x, left.y - right.y};
-}
-
-inline Vec2 operator*(Vec2 vector, double scalar) {
-    return {vector.x * scalar, vector.y * scalar};
-}
 ```
 
-Hai thành phần `x` và `y` dùng `double` vì dữ liệu vector được lưu trong world space và có thể chứa phần thập phân. Chỉ khi đưa tọa độ vào rasterizer, chương trình mới làm tròn sang `int`. Toán tử nhân nhận vector ở bên trái và scalar ở bên phải để biểu thức `vector * 2.0` gần với cách viết toán học.
+double giữ được phần thập phân. Bạn chưa làm tròn khi lưu dữ liệu; việc đó chỉ xảy ra khi rasterize.
 
-### Bước 2 — Lưu A và B như trạng thái của mô phỏng
+Scene giữ hai vector qua các frame:
 
-```cpp title="src/main.cpp — trạng thái ban đầu của hai vector"
-lab::Vec2 vectorA{3.0, 1.5};
-lab::Vec2 vectorB{-1.0, 2.5};
+```cpp title="include/scene.hpp — hai độ dời tồn tại qua nhiều frame"
+struct Scene {
+    Vec2 vectorA{3.0, 1.5};
+    Vec2 vectorB{-1.0, 2.5};
+};
 ```
 
-Hai biến phải được khai báo trước vòng `while (running)` vì giá trị của chúng cần được giữ lại qua nhiều frame. Nếu đặt chúng bên trong vòng lặp, mọi thay đổi do thao tác kéo chuột ở bài 3 sẽ bị mất ngay khi frame tiếp theo bắt đầu.
+Không đặt hai biến này bên trong renderScene rồi gán lại mỗi lần vẽ. Khi có kéo thả ở bài 3, dữ liệu sẽ phải giữ nguyên cho tới lần input tiếp theo.
 
-### Bước 3 — Chuyển tọa độ khi chuẩn bị vẽ
+### Bước 3 — Đưa điểm cuối lên bảng
 
-```cpp title="src/main.cpp — chuyển đổi tọa độ của mô phỏng"
-lab::Vec2 worldToScreen(lab::Vec2 world, int width, int height) {
-    return {
-        width * 0.5 + world.x * kPixelsPerUnit,
-        height * 0.5 - world.y * kPixelsPerUnit,
-    };
-}
+Các phép đổi nằm trong include/camera.hpp:
 
-lab::Vec2 screenToWorld(lab::Vec2 screen, int width, int height) {
-    return {
-        (screen.x - width * 0.5) / kPixelsPerUnit,
-        (height * 0.5 - screen.y) / kPixelsPerUnit,
-    };
+```cpp title="include/camera.hpp — world coordinate sang pixel logic"
+inline Vec2 worldToScreen(Vec2 world) {
+    return {kOriginX + world.x * kPixelsPerUnit, kOriginY - world.y * kPixelsPerUnit};
 }
 ```
 
-Gốc tọa độ của mô phỏng nằm tại tâm viewport. Trong world space, trục Y hướng lên; trong screen space, trục Y hướng xuống. Vì vậy công thức tính screen Y phải có dấu trừ. Checkpoint 1 chưa dùng `screenToWorld`, nhưng ta viết cả hai chiều chuyển đổi ở cùng một chỗ để quy ước tọa độ luôn nhất quán.
+Gốc lệch xuống một chút để chừa phần trên cho số đo. Dấu trừ ở Y giữ đúng quy ước world Y hướng lên. Với A, tính x = 550 + 3 × 45 = 685, y = 420 − 1.5 × 45 = 352.5.
 
-### Bước 4 — Chuyển tọa độ số thực thành pixel
+Rasterizer chỉ nhận tọa độ nguyên. Hàm nối hai phần:
 
-`drawLine` của Project 04 nhận tọa độ pixel kiểu `int`, còn điểm đầu và điểm cuối của vector đang dùng `double`. Hàm `drawScreenLine` dưới đây chịu trách nhiệm làm tròn tọa độ trước khi gọi rasterizer:
-
-```cpp title="src/main.cpp — chuyển Vec2 trong screen space thành tọa độ pixel"
-void drawScreenLine(
-    std::vector<std::uint32_t>& pixels,
-    int width,
-    int height,
-    lab::Vec2 start,
-    lab::Vec2 end,
-    std::uint32_t color
-) {
-    drawLine(
-        pixels,
-        width,
-        height,
-        int(std::lround(start.x)),
-        int(std::lround(start.y)),
-        int(std::lround(end.x)),
-        int(std::lround(end.y)),
-        color
-    );
+```cpp title="include/view.hpp — làm tròn đúng lúc gọi Bresenham"
+inline void drawScreenLine(Framebuffer& image, Vec2 start, Vec2 end, std::uint32_t color) {
+    // Không cho một đầu vào lỗi tạo vòng Bresenham dài vô hạn.
+    if (!finite(start) || !finite(end) || std::abs(start.x) > 4096.0 || std::abs(start.y) > 4096.0 || std::abs(end.x) > 4096.0 || std::abs(end.y) > 4096.0) {
+        return;
+    }
+    drawLine(image, static_cast<int>(std::lround(start.x)), static_cast<int>(std::lround(start.y)), static_cast<int>(std::lround(end.x)), static_cast<int>(std::lround(end.y)), color);
 }
 ```
 
-Tên hàm có chữ `Screen` để nhắc rằng `start` và `end` phải nằm trong screen space. Sau bước làm tròn này, `drawLine` chỉ còn làm việc với tọa độ pixel.
+Kiểm tra hữu hạn/giới hạn trước khi ép int để đầu vào lỗi không biến thành vòng lặp vẽ khổng lồ. Với dữ liệu của ứng dụng, các tọa độ luôn nằm trong bảng.
 
-### Bước 5 — Vẽ thân vector và điểm cuối
+### Bước 4 — Vẽ hai đoạn và đưa ảnh lên window
 
-```cpp title="src/main.cpp — vẽ A và B ở checkpoint 1"
-const lab::Vec2 origin = worldToScreen({}, width, height);
-const lab::Vec2 endpointA = worldToScreen(vectorA, width, height);
-const lab::Vec2 endpointB = worldToScreen(vectorB, width, height);
-drawScreenLine(pixels, width, height, origin, endpointA, rgba(83, 240, 174));
-drawScreenLine(pixels, width, height, origin, endpointB, rgba(132, 169, 255));
-fillCircle(pixels, width, height, int(std::lround(endpointA.x)), int(std::lround(endpointA.y)), 6, rgba(83, 240, 174));
-fillCircle(pixels, width, height, int(std::lround(endpointB.x)), int(std::lround(endpointB.y)), 6, rgba(132, 169, 255));
+Trong renderScene, sau drawBoard:
+
+```cpp title="include/view.hpp — hai đoạn từ cùng gốc"
+const Vec2 origin = worldToScreen({});
+const Vec2 endpointA = worldToScreen(scene.vectorA);
+const Vec2 endpointB = worldToScreen(scene.vectorB);
+drawScreenLine(image, origin, endpointA, kA);
+drawScreenLine(image, origin, endpointB, kB);
 ```
 
-`origin`, `endpointA` và `endpointB` đều đã nằm trong screen space. Vector A được vẽ bằng màu xanh lá, vector B bằng màu xanh lam; quy ước này được giữ nguyên trong toàn bộ project.
+drawHandle thêm chấm tròn tại mỗi endpoint. A xanh lá, B xanh lam; màu này được giữ xuyên suốt project.
 
-### Bước 6 — Đưa tọa độ lên thanh tiêu đề
+Main gọi renderScene khi dirty, rồi uploadFramebuffer:
 
-```cpp title="src/main.cpp — đọc tọa độ mà không cần thư viện font"
-char title[260]{};
-std::snprintf(
-    title,
-    sizeof(title),
-    "A(%.2f, %.2f) | B(%.2f, %.2f)",
-    vectorA.x,
-    vectorA.y,
-    vectorB.x,
-    vectorB.y
-);
-SDL_SetWindowTitle(window, title);
+```cpp title="include/presentation.hpp — chép ảnh CPU sang texture"
+inline bool uploadFramebuffer(SDL_Texture* texture, const Framebuffer& image) {
+    return SDL_UpdateTexture(texture, nullptr, image.pixels.data(), Framebuffer::width * static_cast<int>(sizeof(std::uint32_t)));
+}
 ```
 
-Ta chưa cần thêm SDL_ttf chỉ để hiển thị vài giá trị. Thanh tiêu đề của window đủ để đối chiếu tọa độ, còn framebuffer được dành cho phần minh họa hình học.
+SDL_UpdateTexture chép pixel; SDL_RenderTexture và SDL_RenderPresent mới đưa texture ra window. Toàn bộ main và các header nối giữa những đoạn trích nằm ở cuối trang.
+
+```bash title="Terminal — chạy checkpoint 1"
+cmake --build build --config Debug --target project_6_checkpoint_1 --parallel 2
+.\build\Debug\project_6_checkpoint_1.exe
+```
 
 ## Ghép các phần lại
 
-Chạy `project_6_checkpoint_1`. Cửa sổ phải hiển thị một lưới tọa độ có gốc nằm ở giữa. Vector A màu xanh lá hướng lên bên phải; vector B màu xanh lam hướng lên bên trái. Thanh tiêu đề phải ghi A `(3.00,1.50)` và B `(-1.00,2.50)`.
+Scene lưu độ dời A/B → worldToScreen tìm endpoint → drawScreenLine làm tròn → drawLine ghi qua putPixel → texture hiện ảnh. Các phép toán của Vec2 được khai báo cạnh struct; ta sẽ dùng chúng để dựng đầu tên, kéo điểm và vẽ các kết quả ở những bài tiếp.
 
-Luồng xử lý của một vector hiện đã hoàn chỉnh: `vectorA` được lưu trong world space, `worldToScreen` tính vị trí điểm cuối trên màn hình, `drawScreenLine` làm tròn tọa độ và cuối cùng Bresenham ghi các pixel của đoạn thẳng vào framebuffer.
+Resize chỉ đổi cách trình bày bảng. Bạn không nhân lại A/B theo kích thước window, vì độ dời trong world không phải độ dời pixel của window.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đưa `vectorA` vào bên trong render loop rồi thay đổi giá trị của nó. Quan sát rằng vector bị đặt lại ở đầu mỗi frame nên không thể lưu kết quả của thao tác kéo.
-2. Bỏ dấu trừ ở công thức screen Y. A có Y dương nhưng lại xuất hiện bên dưới trục ngang.
-3. Ép `vectorA.x` và `vectorA.y` sang `int` ngay khi lưu. Thử giá trị `(1.25,0.5)` và quan sát thông tin bị mất trước cả khi vẽ.
-
-Sau mỗi thí nghiệm, hoàn tác thay đổi và build lại checkpoint.
+1. Bỏ dấu trừ ở screen Y. A có Y dương nhưng lại đi xuống.
+2. Đổi Vec2 sang int rồi thử A = (1.25,0.5). Phần thập phân mất trước khi chương trình vẽ.
+3. Khởi tạo lại Scene trong vòng render. Sau này thao tác kéo vừa sửa dữ liệu sẽ bị ghi đè.
+4. Tắt uploadFramebuffer. Sửa A/B không làm texture nhận ảnh mới; đây không phải lỗi công thức tọa độ.
 
 ## Tự kiểm tra kết quả
 
-- Starter mở được cửa sổ với lưới và hai trục tọa độ trước khi bạn thêm `Vec2`.
-- Checkpoint 1 hiển thị A và B cùng xuất phát từ gốc tọa độ.
-- A `(3,1.5)` nằm bên phải và phía trên gốc.
-- B `(-1,2.5)` nằm bên trái và phía trên gốc.
-- Tọa độ của A/B trong world space vẫn dùng `double`; chỉ tọa độ đưa vào rasterizer mới được làm tròn.
-- Khi đổi kích thước cửa sổ, gốc tọa độ chuyển tới tâm viewport mới nhưng A/B không thay đổi.
+- Starter có lưới/trục và chạy được trước khi thêm A/B.
+- Hai đoạn cùng xuất phát ở (550,420); A nằm trên phải, B trên trái.
+- Endpoint A tính được (685,352.5); khi tô pixel, lround chọn hàng 353.
+- A/B giữ double; screen point chỉ là kết quả tạm.
+- Resize giữ tỉ lệ bảng và không đổi các thành phần của vector.
 
 ## Bài tập mở rộng
 
-Thêm toán tử `scalar * vector` bằng cách gọi lại `vector * scalar`. Sau đó đổi A thành `(-2,-1)` và dự đoán hướng của nó trước khi chạy chương trình. Cuối cùng, tự tính tọa độ screen của điểm cuối A khi cửa sổ có kích thước 960×640 và `kPixelsPerUnit = 70`.
+Đổi A thành (−2,−1) và tự dự đoán screen coordinate trước khi chạy. Tiếp đó, vẽ một bản sao cùng độ dời từ một điểm bắt đầu khác gốc: endpoint mới phải là start + displacement.
 
-Bài sau sẽ biến hai đoạn thẳng thành mũi tên thật sự và dùng định lý Pythagoras để đo độ dài của chúng.
+[Bài tiếp: độ dài và đầu mũi tên](/projects/vector-playground/02-magnitude-va-arrow-head).

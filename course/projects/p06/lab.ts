@@ -3,35 +3,46 @@ import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
   base: {
     label: "VECTOR LAB",
-    title: "Điều gì xảy ra khi A hoặc B thay đổi?",
+    title: "Hai vector cùng gốc, nhiều cách quan sát",
     description:
-      "Kéo điểm cuối của A và B để quan sát trực tiếp phép cộng, phép trừ, magnitude, normalize và lerp.",
+      "Kéo đầu mũi tên và đối chiếu công thức với hình học; mọi kết quả được tính lại từ A/B.",
   },
   modes: {
-    "vector-magnitude": {
-      title: "Độ lớn và hướng của vector thay đổi như thế nào?",
+    "vector-spaces": {
+      title: "Từ hai tọa độ tới hai đoạn thẳng",
       description:
-        "Kéo điểm cuối của A hoặc B; lab chỉ hiển thị hai vector cùng normalize(A) để tập trung vào cấu tạo của một mũi tên.",
+        "Chọn preset và đối chiếu world coordinate; chưa bật kéo thả hay phép toán bổ sung.",
+    },
+    "vector-magnitude": {
+      title: "Độ dài khác với chiều dài đầu mũi tên",
+      description:
+        "Quan sát các preset, kể cả zero; đầu tên được dựng theo screen pixel, không phải world unit.",
     },
     "vector-drag": {
-      title: "Chương trình xác định điểm cuối được kéo như thế nào?",
+      title: "Chọn đúng endpoint và giữ chỗ đang nắm",
       description:
-        "Lab hiển thị vùng hit-test, tọa độ chuột trong screen/world space và điểm cuối đang được giữ.",
+        "Kéo A/B, đọc vùng hit-test cùng screen/world coordinate; trùng điểm thì ưu tiên vector đang chọn.",
     },
     "vector-addition": {
       title: "Vì sao A+B nằm ở góc đối diện của hình bình hành?",
-      description:
-        "Kéo A hoặc B để đối chiếu phép cộng theo từng thành phần với hình bình hành trên mặt phẳng.",
+      description: "Hai cạnh phụ là các bản sao của A và B, chỉ đổi vị trí đặt.",
+    },
+    "vector-subtraction": {
+      title: "A−B là độ dời từ B tới A",
+      description: "So vector hiệu tại gốc, bản sao B→A và vector −B.",
     },
     "vector-scalar-distance": {
-      title: "Scalar thay đổi A như thế nào và distance(A,B) đang đo đoạn nào?",
-      description:
-        "So sánh |A|, |B| với distance(A,B), đồng thời thay đổi scalar để quan sát A co, giãn hoặc đảo hướng.",
+      title: "Scalar thay đổi A thế nào, distance(A,B) đo đoạn nào?",
+      description: "Thay scalar, so độ dài từ gốc với đoạn nối hai endpoint.",
     },
     "vector-normalize": {
-      title: "Normalize giữ lại điều gì và lerp đặt điểm ở đâu?",
+      title: "Normalize giữ hướng và đưa độ dài về một",
+      description: "Đối chiếu mũi tên trắng với vòng tròn bán kính một; zero không có hướng.",
+    },
+    "vector-full": {
+      title: "Mô phỏng vector hoàn chỉnh",
       description:
-        "So sánh A với vector đơn vị cùng hướng, sau đó thay đổi t để theo dõi điểm nội suy trên đoạn A–B.",
+        "A/B, tổng và hiệu luôn có mặt; chọn lớp bổ sung để thử scalar, normalize hoặc lerp.",
     },
   },
 } satisfies ProjectLabMeta;

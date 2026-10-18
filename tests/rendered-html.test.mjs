@@ -7,6 +7,7 @@ import "./projects-02-rebuild.cases.mjs";
 import "./projects-03-rebuild.cases.mjs";
 import "./projects-04-rebuild.cases.mjs";
 import "./projects-05-rebuild.cases.mjs";
+import "./projects-06-rebuild.cases.mjs";
 import "./projects-13.cases.mjs";
 import "./projects-14.cases.mjs";
 import "./projects-15.cases.mjs";

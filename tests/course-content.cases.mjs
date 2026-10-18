@@ -108,8 +108,10 @@ test("interactive labs expose only the controls needed by each lesson", async ()
     ["vector-playground/02-magnitude-va-arrow-head.mdx", "vector-magnitude"],
     ["vector-playground/03-keo-endpoint.mdx", "vector-drag"],
     ["vector-playground/04-cong-tru-vector.mdx", "vector-addition"],
-    ["vector-playground/05-scalar-va-distance.mdx", "vector-scalar-distance"],
-    ["vector-playground/06-normalize-lerp-validation.mdx", "vector-normalize"],
+    ["vector-playground/05-hieu-vector.mdx", "vector-subtraction"],
+    ["vector-playground/06-scalar-va-distance.mdx", "vector-scalar-distance"],
+    ["vector-playground/07-vector-don-vi.mdx", "vector-normalize"],
+    ["vector-playground/08-lerp-va-validation.mdx", "vector-full"],
     ["unit-circle/01-radian-va-vong-tron-don-vi.mdx", "angle-radians"],
     ["unit-circle/02-sin-cos-thanh-toa-do.mdx", "angle-sincos"],
     ["unit-circle/03-van-toc-goc-va-delta-time.mdx", "angle-motion"],
@@ -307,7 +309,7 @@ test("interactive labs expose only the controls needed by each lesson", async ()
   assert.match(await vectors.text(), /A\+B nằm ở góc đối diện của hình bình hành/i);
   const drag = await render("/projects/vector-playground/03-keo-endpoint");
   assert.match(await drag.text(), /bán kính hit-test/i);
-  const distance = await render("/projects/vector-playground/05-scalar-va-distance");
+  const distance = await render("/projects/vector-playground/06-scalar-va-distance");
   assert.match(await distance.text(), /distance\(A,B\).*đo đoạn nào/i);
 });
 

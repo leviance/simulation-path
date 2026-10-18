@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Co giãn vector và đo đoạn nối hai điểm
+
+## Vấn đề cần giải quyết
+
+Ta muốn đổi độ dài A mà vẫn giữ đường hướng của nó, hoặc đảo hẳn chiều. Đồng thời, cần phân biệt hai câu hỏi: “A dài bao nhiêu?” và “hai endpoint cách nhau bao xa?”.
+
+Bài này thêm scalar điều khiển được, mũi tên tím sA và đoạn nối A–B. Cả tổng lẫn hiệu đã học vẫn hiện trên bản C++.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nhân vector với scalar nghĩa là nhân **cả hai** thành phần cùng một số:
+
+$$
+sA=(sA_x,sA_y),\qquad |sA|=|s|\,|A|
+$$
+
+s dương giữ hướng, s âm đảo hướng, s = 0 cho zero. Nếu chỉ nhân X, hình thường sẽ quay, không còn là co giãn cùng hướng.
+
+Trong khi đó, distance(A,B) đo đoạn nối hai endpoint:
+
+$$
+distance(A,B)=|B-A|
+$$
+
+|A| đo từ gốc tới A; |B| đo từ gốc tới B. Không đại lượng nào tự nó là khoảng cách A–B.
+
+<InteractiveLab demo="vector" mode="vector-scalar-distance" />
+
+Đưa scalar lần lượt tới 2, 0 và −1. Sau đó kéo cả hai endpoint sang vị trí khác nhưng giữ nguyên độ dời giữa chúng: distance giữ nguyên dù |A|, |B| có thể đổi.
+
+## Viết code từng bước
+
+### Bước 1 — Lưu scalar, không lưu sA
+
+Thêm trong Scene:
+
+```cpp title="include/scene.hpp — scalar thuộc trạng thái người dùng"
+double scalar{0.5};
+```
+
+Giới hạn UI là [−2,2]. Với endpoint X trong [−4,4], Y trong [−3,3], miền ấy bảo đảm sA vẫn nằm trong bảng. Hàm toán operator* không tự clamp scalar; ràng buộc thuộc giao diện.
+
+### Bước 2 — Tính lại kết quả từ A mới nhất
+
+```cpp title="include/view.hpp — vẽ vector co giãn và đoạn khoảng cách"
+if (scene.viewMode == Scene::ViewMode::Scalar || scene.viewMode == Scene::ViewMode::All) {
+    const Vec2 scaledA = scene.vectorA * scene.scalar;
+    drawArrow(image, origin, worldToScreen(scaledA), kScalar);
+    drawScreenLine(image, endpointA, endpointB, kGuide);
+}
+```
+
+scaledA là biến tạm. Nếu lưu nó như state riêng, bạn sẽ phải nhớ cập nhật cả khi kéo A lẫn khi đổi scalar; bỏ sót một nhánh làm hình tím lỗi thời.
+
+Bản checkpoint 6 mặc định mở lớp Scalar. Trong final, nhấn 2 để mở lớp này; A/B, tổng và hiệu vẫn không bị ẩn.
+
+### Bước 3 — Đo đúng đoạn A–B
+
+```cpp title="include/lab.hpp — khoảng cách lấy từ độ dời giữa hai điểm"
+inline double distance(Vec2 start, Vec2 end) {
+    return length(end - start);
+}
+```
+
+Chương trình đưa distance(scene.vectorA, scene.vectorB) lên HUD. Đoạn xám được vẽ từ endpointA tới endpointB để số đo có một đối tượng hình học rõ ràng.
+
+Từ distance(A,B)=length(B−A), đổi thứ tự chỉ đảo hướng vector hiệu, không đổi độ lớn. Đây là thuộc tính cần có trong tests.
+
+### Bước 4 — Nối scalar với bàn phím
+
+Phím Q giảm 0.1, E tăng 0.1; chặn ở [−2,2]. Phần tăng trong main là:
+
+```cpp title="src/main.cpp — không vượt giới hạn scalar"
+if (event.key.key == SDLK_E) {
+    scene.scalar = std::min(2.0, scene.scalar + 0.1);
+}
+```
+
+Canvas dùng slider có nhãn và output, nên có thể thao tác bằng Tab cùng phím mũi tên. Đổi control sẽ kết thúc pointer drag cũ để không còn capture khi bạn chuyển cách nhập.
+
+```bash title="Terminal — chạy checkpoint 6"
+cmake --build build --config Debug --target project_6_checkpoint_6 --parallel 2
+.\build\Debug\project_6_checkpoint_6.exe
+```
+
+## Ghép các phần lại
+
+Scalar chỉ đổi kết quả tím sA, không sửa A gốc. Chọn một giá trị âm rồi kéo A: hướng tím phải luôn đối hướng A, không chỉ đúng ở frame đầu.
+
+Độ dài và khoảng cách đều mang world unit. Không lấy chiều dài đoạn screen bằng pixel rồi đưa lên HUD dưới nhãn distance world.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ nhân thành phần X với scalar. A đổi góc thay vì chỉ co/giãn.
+2. Dùng length(A)+length(B) cho distance(A,B). Đặt A=B khác zero: khoảng cách đúng phải bằng 0.
+3. Lưu scaledA trước vòng event. Kéo A làm mũi tên tím không còn bám theo dữ liệu mới.
+4. Clamp trong operator* thay vì UI. Một hàm toán tổng quát bị thay đổi nghĩa mà các tests ngoại suy ở bài cuối khó phát hiện nếu chỉ dùng scalar nhỏ.
+
+## Tự kiểm tra kết quả
+
+- Scalar 1 cho sA trùng A; −1 cho vector đối; 0 cho zero.
+- |sA| gần bằng |s|×|A| trong miền dữ liệu của project.
+- distance(A,A)=0; distance(A,B)=distance(B,A).
+- Đoạn xám khớp số đo distance, không nhầm với |A|/|B|.
+- Giữ phím hoặc kéo slider không làm scalar vượt [−2,2].
+
+## Bài tập mở rộng
+
+Tịnh tiến cùng lúc hai endpoint bằng một độ dời T rồi đo lại khoảng cách. Dùng biểu thức (B+T)−(A+T) để giải thích kết quả mà không dựa vào hình.
+
+[Bài tiếp: đưa hướng của A lên đường tròn đơn vị](/projects/vector-playground/07-vector-don-vi).

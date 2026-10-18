@@ -1,293 +1,169 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { length, clamp, type Point } from "@/lib/labs/geometry";
 import {
-  add as addVectors,
-  clamp,
-  length as vectorLength,
-  lerp as lerpVector,
-  normalize as normalizeVector,
-  scale as scaleVector,
-  subtract as subtractVectors,
-  type Point,
-} from "@/lib/labs/geometry";
-import { LabReadout, canvasPoint, drawLine, setupCanvas, useCanvasSize } from "./lab-shared";
+  vectorScene,
+  beginVectorDrag,
+  moveVectorEndpoint,
+  nudgeVector,
+  vectorResults,
+  vectorLayers,
+  vectorScreenToWorld,
+  type VectorScene,
+} from "@/lib/labs/vector-playground";
+import { LabReadout, useCanvasSize } from "./lab-shared";
+import { drawVectorLab, vectorPointFromEvent } from "./vector-lab-view";
 import type { InteractiveLabMode } from "./types";
-
-const vectorPresets: Record<string, { a: Point; b: Point }> = {
-  basic: { a: { x: 3, y: 1.5 }, b: { x: -1, y: 2.5 } },
-  perpendicular: { a: { x: 3, y: 0 }, b: { x: 0, y: 2 } },
-  opposite: { a: { x: 3, y: 1 }, b: { x: -3, y: -1 } },
-  zero: { a: { x: 0, y: 0 }, b: { x: 2, y: 2 } },
-};
 
 export default function VectorLab({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const size = useCanvasSize(canvasRef);
-  const [vectors, setVectors] = useState(vectorPresets.basic);
+  const [scene, setScene] = useState<VectorScene>(vectorScene);
+  const sceneRef = useRef(scene);
+  const owner = useRef<number | null>(null);
+  const previousMode = useRef(mode);
   const [preset, setPreset] = useState("basic");
-  const [scalar, setScalar] = useState(0.5);
-  const [interpolation, setInterpolation] = useState(0.5);
   const [paused, setPaused] = useState(false);
-  const [activeTarget, setActiveTarget] = useState<"a" | "b" | null>(null);
   const [cursorScreen, setCursorScreen] = useState<Point | null>(null);
-  const dragging = useRef<"a" | "b" | null>(null);
-  const showDragDetails = mode === "vector-drag";
-  const showArithmetic = mode === undefined || mode === "vector-addition";
-  const showNormalize =
-    mode === undefined || mode === "vector-magnitude" || mode === "vector-normalize";
-  const showScalar = mode === undefined || mode === "vector-scalar-distance";
-  const showDistance = mode === undefined || mode === "vector-scalar-distance";
-  const showLerp = mode === undefined || mode === "vector-normalize";
-  const scale = Math.max(34, Math.min(58, size.width / 16));
-  const center = { x: size.width * 0.5, y: size.height * 0.54 };
-  const sum = addVectors(vectors.a, vectors.b);
-  const difference = subtractVectors(vectors.a, vectors.b);
-  const unitA = normalizeVector(vectors.a);
-  const scaledA = scaleVector(vectors.a, scalar);
-  const lerped = lerpVector(vectors.a, vectors.b, interpolation);
-
-  const toScreen = useCallback(
-    (world: Point): Point => ({
-      x: center.x + world.x * scale,
-      y: center.y - world.y * scale,
-    }),
-    [center.x, center.y, scale],
-  );
-
-  const toWorld = useCallback(
-    (screen: Point): Point => ({
-      x: (screen.x - center.x) / scale,
-      y: (center.y - screen.y) / scale,
-    }),
-    [center.x, center.y, scale],
-  );
-
-  useEffect(() => {
+  const layers = vectorLayers(mode, scene.viewMode);
+  const results = vectorResults(scene);
+  const updateScene = (next: VectorScene) => {
+    sceneRef.current = next;
+    setScene(next);
+  };
+  const release = () => {
+    const id = owner.current;
+    owner.current = null;
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-
-    const firstX = center.x % scale;
-    const firstY = center.y % scale;
-    for (let x = firstX; x < size.width; x += scale) {
-      drawLine(ctx, { x, y: 0 }, { x, y: size.height }, "#1d2943");
-    }
-    for (let y = firstY; y < size.height; y += scale) {
-      drawLine(ctx, { x: 0, y }, { x: size.width, y }, "#1d2943");
-    }
-    drawLine(ctx, { x: 0, y: center.y }, { x: size.width, y: center.y }, "#63708d", 2);
-    drawLine(ctx, { x: center.x, y: 0 }, { x: center.x, y: size.height }, "#63708d", 2);
-
-    const drawArrow = (
-      startWorld: Point,
-      endWorld: Point,
-      color: string,
-      label: string,
-      dashed = false,
-    ) => {
-      const start = toScreen(startWorld);
-      const end = toScreen(endWorld);
-      const dx = end.x - start.x;
-      const dy = end.y - start.y;
-      const magnitude = Math.hypot(dx, dy);
-      ctx.save();
-      if (dashed) ctx.setLineDash([6, 5]);
-      drawLine(ctx, start, end, color, 2.5);
-      ctx.restore();
-      if (magnitude > 1e-6) {
-        const ux = dx / magnitude;
-        const uy = dy / magnitude;
-        const base = { x: end.x - ux * 14, y: end.y - uy * 14 };
-        const perpendicular = { x: -uy, y: ux };
-        drawLine(
-          ctx,
-          end,
-          { x: base.x + perpendicular.x * 6, y: base.y + perpendicular.y * 6 },
-          color,
-          2.5,
-        );
-        drawLine(
-          ctx,
-          end,
-          { x: base.x - perpendicular.x * 6, y: base.y - perpendicular.y * 6 },
-          color,
-          2.5,
-        );
-      }
-      ctx.fillStyle = color;
-      ctx.font = "700 12px ui-monospace";
-      ctx.fillText(label, end.x + 9, end.y - 9);
+    if (id !== null && canvas?.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+    if (sceneRef.current.dragged >= 0) updateScene({ ...sceneRef.current, dragged: -1 });
+  };
+  useEffect(() => {
+    const blur = () => release();
+    const hidden = () => {
+      if (document.hidden) release();
     };
-
-    const origin = { x: 0, y: 0 };
-    drawArrow(origin, vectors.a, "#53f0ae", "A");
-    drawArrow(origin, vectors.b, "#84a9ff", "B");
-
-    if (showDragDetails) {
-      (["a", "b"] as const).forEach((key) => {
-        const point = toScreen(vectors[key]);
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, 20, 0, Math.PI * 2);
-        ctx.strokeStyle = activeTarget === key ? "#ffe26c" : "#7f8daa";
-        ctx.lineWidth = activeTarget === key ? 3 : 1.5;
-        ctx.setLineDash([5, 4]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      });
+    window.addEventListener("blur", blur);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", blur);
+      document.removeEventListener("visibilitychange", hidden);
+      release();
+    };
+  }, []);
+  useEffect(() => {
+    release();
+    if (previousMode.current !== mode) {
+      previousMode.current = mode;
+      updateScene(vectorScene());
+      setPreset("basic");
+      setPaused(false);
+      setCursorScreen(null);
     }
-
-    if (showArithmetic) {
-      drawArrow(origin, sum, "#ffb454", "A+B");
-      drawArrow(origin, difference, "#ff6b6b", "A−B");
-      drawArrow(vectors.a, sum, "#4b5875", "", true);
-      drawArrow(vectors.b, sum, "#4b5875", "", true);
-      drawArrow(vectors.b, vectors.a, "#ae5b68", "A−B moved", true);
-    }
-    if (showDistance) {
-      drawLine(ctx, toScreen(vectors.a), toScreen(vectors.b), "#7e8ba6", 2);
-    }
-    if (showScalar) {
-      drawArrow(origin, scaledA, "#c678ff", "sA");
-    }
-    if (showNormalize) drawArrow(origin, unitA, "#ffffff", "Â");
-    if (showLerp) {
-      drawLine(ctx, toScreen(vectors.a), toScreen(vectors.b), "#4b7480", 2);
-      const point = toScreen(lerped);
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffe26c";
-      ctx.fill();
-      ctx.fillStyle = "#ffe26c";
-      ctx.font = "700 11px ui-monospace";
-      ctx.fillText("lerp", point.x + 9, point.y + 4);
-    }
-
-    (["a", "b"] as const).forEach((key) => {
-      const point = toScreen(vectors[key]);
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, 7, 0, Math.PI * 2);
-      ctx.fillStyle = paused ? "#6f7d9c" : key === "a" ? "#53f0ae" : "#84a9ff";
-      ctx.fill();
-      ctx.strokeStyle = "#ffffff";
-      ctx.stroke();
-    });
-  }, [
-    activeTarget,
-    center.x,
-    center.y,
-    difference,
-    lerped,
-    paused,
-    scale,
-    scaledA,
-    showArithmetic,
-    showDistance,
-    showDragDetails,
-    showLerp,
-    showNormalize,
-    showScalar,
-    size,
-    sum,
-    toScreen,
-    unitA,
-    vectors,
-  ]);
-
-  const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) =>
-    canvasPoint(event, event.currentTarget);
-
+  }, [size.width, size.height, mode]);
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawVectorLab(ctx, size, scene, vectorLayers(mode, scene.viewMode));
+  }, [size, scene, mode]);
+  const togglePause = () => {
+    release();
+    setPaused((value) => !value);
+  };
+  const reset = () => {
+    release();
+    updateScene(vectorScene());
+    setPreset("basic");
+    setPaused(false);
+    setCursorScreen(null);
+  };
+  const choosePreset = (value: string) => {
+    release();
+    setPreset(value);
+    updateScene(vectorScene(value, sceneRef.current.selected));
+  };
   const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (paused) return;
-    const point = pointFromEvent(event);
-    const endpointA = toScreen(vectors.a);
-    const endpointB = toScreen(vectors.b);
-    const distanceA = Math.hypot(point.x - endpointA.x, point.y - endpointA.y);
-    const distanceB = Math.hypot(point.x - endpointB.x, point.y - endpointB.y);
-    if (showDragDetails) {
-      setCursorScreen(point);
-    }
-    if (Math.min(distanceA, distanceB) > 20) {
-      if (showDragDetails) {
-        setActiveTarget(null);
-      }
+    if (
+      paused ||
+      !layers.canDrag ||
+      !event.isPrimary ||
+      event.button !== 0 ||
+      owner.current !== null
+    )
+      return;
+    const screen = vectorPointFromEvent(event, size);
+    if (!screen) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    setCursorScreen(screen);
+    const next = beginVectorDrag(sceneRef.current, screen);
+    updateScene(next);
+    if (next.dragged < 0) return;
+    owner.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setPreset("custom");
+  };
+  const moveEndpoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (paused || (owner.current !== null && owner.current !== event.pointerId)) return;
+    const screen = vectorPointFromEvent(event, size, owner.current !== null);
+    if (!screen) {
+      release();
       return;
     }
-    dragging.current = distanceA <= distanceB ? "a" : "b";
-    if (showDragDetails) {
-      setActiveTarget(dragging.current);
+    setCursorScreen(screen);
+    if (owner.current === null) return;
+    if ((event.buttons & 1) === 0) {
+      release();
+      return;
     }
-    setPreset("custom");
-    event.currentTarget.setPointerCapture(event.pointerId);
+    updateScene(moveVectorEndpoint(sceneRef.current, screen));
   };
-
-  const moveEndpoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (paused) return;
-    const point = pointFromEvent(event);
-    if (showDragDetails) {
-      setCursorScreen(point);
+  const endDrag = (event: ReactPointerEvent<HTMLCanvasElement>, cancelled = false) => {
+    if (owner.current !== event.pointerId || (!cancelled && event.button !== 0)) return;
+    const screen = vectorPointFromEvent(event, size, true);
+    if (!cancelled && !paused && screen) {
+      updateScene(moveVectorEndpoint(sceneRef.current, screen));
+      setCursorScreen(screen);
     }
-    if (!dragging.current) return;
-    const key = dragging.current;
-    const world = toWorld(point);
-    setVectors((current) => ({
-      ...current,
-      [key]: {
-        x: clamp(world.x, -7, 7),
-        y: clamp(world.y, -4.5, 4.5),
-      },
-    }));
+    release();
   };
-
   const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (paused || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const key = event.key;
+    if (![" ", "r", "R", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key))
+      return;
     event.preventDefault();
-    const key = event.shiftKey ? "a" : "b";
+    if (key === " ") {
+      if (!event.repeat) togglePause();
+      return;
+    }
+    if (key === "Escape") {
+      release();
+      return;
+    }
+    if (paused) return;
+    if (key.toLowerCase() === "r") {
+      if (!event.repeat) reset();
+      return;
+    }
+    if (!layers.canDrag) return;
+    release();
+    const deltaWorld = { x: 0, y: 0 };
+    if (key === "ArrowLeft") deltaWorld.x = -0.1;
+    if (key === "ArrowRight") deltaWorld.x = 0.1;
+    if (key === "ArrowUp") deltaWorld.y = 0.1;
+    if (key === "ArrowDown") deltaWorld.y = -0.1;
+    updateScene(nudgeVector(sceneRef.current, deltaWorld));
     setPreset("custom");
-    setVectors((current) => ({
-      ...current,
-      [key]: {
-        x: clamp(
-          current[key].x +
-            (event.key === "ArrowRight" ? 0.25 : event.key === "ArrowLeft" ? -0.25 : 0),
-          -7,
-          7,
-        ),
-        y: clamp(
-          current[key].y + (event.key === "ArrowUp" ? 0.25 : event.key === "ArrowDown" ? -0.25 : 0),
-          -4.5,
-          4.5,
-        ),
-      },
-    }));
   };
-
-  const reset = () => {
-    setVectors(vectorPresets.basic);
-    setPreset("basic");
-    setScalar(0.5);
-    setInterpolation(0.5);
-    setActiveTarget(null);
-    setCursorScreen(null);
-    dragging.current = null;
-    setPaused(false);
-  };
-
-  const stopDrag = () => {
-    dragging.current = null;
-    setActiveTarget(null);
-  };
-
-  const cursorWorld = cursorScreen ? toWorld(cursorScreen) : null;
-
+  const pair = (p: Point) => `(${p.x.toFixed(3)}, ${p.y.toFixed(3)})`;
+  const cursorWorld = cursorScreen ? vectorScreenToWorld(cursorScreen) : null;
   return (
     <div className="lab-body">
       <div className="lab-controls">
@@ -295,21 +171,58 @@ export default function VectorLab({ mode }: { mode?: InteractiveLabMode }) {
           Trường hợp
           <select
             value={preset}
-            onChange={(event) => {
-              const value = event.target.value;
-              setPreset(value);
-              if (vectorPresets[value]) setVectors(vectorPresets[value]);
-            }}
             disabled={paused}
+            onChange={(event) => choosePreset(event.target.value)}
           >
             <option value="basic">Hai hướng khác nhau</option>
             <option value="perpendicular">Vuông góc</option>
             <option value="opposite">Đối hướng</option>
             <option value="zero">A bằng zero</option>
+            <option value="bothZero">Cả hai bằng zero</option>
             {preset === "custom" && <option value="custom">Tự chỉnh</option>}
           </select>
         </label>
-        {showScalar && (
+        {layers.canDrag && (
+          <label>
+            Điểm đang chọn
+            <select
+              aria-label="Chọn vector"
+              value={scene.selected}
+              disabled={paused}
+              onChange={(event) => {
+                release();
+                updateScene({ ...sceneRef.current, selected: Number(event.target.value) as 0 | 1 });
+              }}
+            >
+              <option value={0}>A</option>
+              <option value={1}>B</option>
+            </select>
+          </label>
+        )}
+        {layers.full && (
+          <label>
+            Lớp bổ sung
+            <select
+              aria-label="Lớp bổ sung"
+              value={scene.viewMode}
+              disabled={paused}
+              onChange={(event) => {
+                release();
+                updateScene({
+                  ...sceneRef.current,
+                  viewMode: event.target.value as VectorScene["viewMode"],
+                });
+              }}
+            >
+              <option value="arithmetic">Chỉ cộng/trừ</option>
+              <option value="scalar">Scalar và distance</option>
+              <option value="unit">Normalize và vòng tròn đơn vị</option>
+              <option value="lerp">Lerp</option>
+              <option value="all">Tất cả</option>
+            </select>
+          </label>
+        )}
+        {layers.scalar && (
           <label>
             Scalar
             <input
@@ -317,107 +230,118 @@ export default function VectorLab({ mode }: { mode?: InteractiveLabMode }) {
               min="-2"
               max="2"
               step="0.1"
-              value={scalar}
-              onChange={(event) => setScalar(Number(event.target.value))}
+              value={scene.scalar}
               disabled={paused}
+              onChange={(event) => {
+                release();
+                updateScene({
+                  ...sceneRef.current,
+                  scalar: clamp(Number(event.target.value), -2, 2),
+                });
+              }}
             />
-            <output>{scalar.toFixed(1)}</output>
+            <output>{scene.scalar.toFixed(1)}</output>
           </label>
         )}
-        {showLerp && (
+        {layers.interpolation && (
           <label>
             t
             <input
+              aria-label="Tham số t"
               type="range"
               min="0"
               max="1"
               step="0.05"
-              value={interpolation}
-              onChange={(event) => setInterpolation(Number(event.target.value))}
+              value={scene.interpolation}
               disabled={paused}
+              onChange={(event) => {
+                release();
+                updateScene({
+                  ...sceneRef.current,
+                  interpolation: clamp(Number(event.target.value), 0, 1),
+                });
+              }}
             />
-            <output>{interpolation.toFixed(2)}</output>
+            <output>{scene.interpolation.toFixed(2)}</output>
           </label>
         )}
-        <button onClick={() => setPaused((value) => !value)}>
-          {paused ? "Tiếp tục" : "Tạm dừng"}
-        </button>
+        <button onClick={togglePause}>{paused ? "Tiếp tục" : "Tạm dừng"}</button>
         <button onClick={reset}>Đặt lại</button>
       </div>
+      <p className="control-hint">
+        {layers.canDrag
+          ? "Kéo điểm cuối A/B hoặc chọn vector trong danh sách rồi dùng mũi tên. Nhấn vùng trống không tạo vector mới. Trùng điểm thì ưu tiên vector đang chọn."
+          : "Chọn preset để quan sát hai vector; phần kéo thả được giới thiệu ở bài tiếp."}{" "}
+        Space tạm dừng, R đặt lại; Tab luôn rời Canvas bình thường. Miền endpoint: X từ −4 đến 4, Y
+        từ −3 đến 3.
+      </p>
       <canvas
         ref={canvasRef}
+        style={{ height: "clamp(340px, 52vw, 520px)" }}
         onPointerDown={startDrag}
         onPointerMove={moveEndpoint}
-        onPointerUp={stopDrag}
-        onPointerCancel={stopDrag}
-        onLostPointerCapture={stopDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={(event) => endDrag(event, true)}
+        onLostPointerCapture={(event) => {
+          if (owner.current === event.pointerId) release();
+        }}
+        onBlur={release}
         onKeyDown={onKeyDown}
         tabIndex={0}
-        aria-label="Mô phỏng vector 2D; dùng phím mũi tên để di chuyển B và giữ Shift cùng phím mũi tên để di chuyển A"
+        aria-label="Mô phỏng vector 2D; kéo đầu mũi tên hoặc chọn A/B rồi dùng bàn phím"
       />
       <LabReadout
         items={[
-          {
-            label: "A",
-            value: `(${vectors.a.x.toFixed(2)}, ${vectors.a.y.toFixed(2)}) · |A|=${vectorLength(vectors.a).toFixed(3)}`,
-          },
-          {
-            label: "B",
-            value: `(${vectors.b.x.toFixed(2)}, ${vectors.b.y.toFixed(2)}) · |B|=${vectorLength(vectors.b).toFixed(3)}`,
-          },
-          ...(showArithmetic
+          { label: "A", value: pair(scene.vectorA) + " · |A|=" + length(scene.vectorA).toFixed(3) },
+          { label: "B", value: pair(scene.vectorB) + " · |B|=" + length(scene.vectorB).toFixed(3) },
+          ...(layers.addition ? [{ label: "A+B", value: pair(results.vectorSum) }] : []),
+          ...(layers.subtraction ? [{ label: "A−B", value: pair(results.vectorDifference) }] : []),
+          ...(layers.scalar
             ? [
-                { label: "A+B", value: `(${sum.x.toFixed(2)}, ${sum.y.toFixed(2)})` },
-                { label: "A−B", value: `(${difference.x.toFixed(2)}, ${difference.y.toFixed(2)})` },
+                { label: "scalar × A", value: pair(results.scaledA) },
+                { label: "distance(A,B)", value: results.distanceAB.toFixed(6) },
               ]
             : []),
-          ...(showDragDetails
-            ? [
-                { label: "Vùng chọn", value: "20 px quanh mỗi endpoint" },
-                {
-                  label: "Con trỏ screen",
-                  value: cursorScreen
-                    ? `(${cursorScreen.x.toFixed(1)}, ${cursorScreen.y.toFixed(1)}) px`
-                    : "Di chuyển chuột trên lab",
-                },
-                {
-                  label: "Con trỏ world",
-                  value: cursorWorld
-                    ? `(${cursorWorld.x.toFixed(2)}, ${cursorWorld.y.toFixed(2)})`
-                    : "—",
-                },
-                { label: "Đang kéo", value: activeTarget ? activeTarget.toUpperCase() : "Không" },
-              ]
-            : []),
-          ...(showNormalize
+          ...(layers.unit
             ? [
                 {
                   label: "normalize(A)",
-                  value: `(${unitA.x.toFixed(3)}, ${unitA.y.toFixed(3)}) · length=${vectorLength(unitA).toFixed(3)}`,
+                  value: pair(results.unitA) + " · length=" + length(results.unitA).toFixed(6),
                 },
-              ]
-            : []),
-          ...(showScalar
-            ? [{ label: "scalar × A", value: `(${scaledA.x.toFixed(2)}, ${scaledA.y.toFixed(2)})` }]
-            : []),
-          ...(showDistance
-            ? [
                 {
-                  label: "distance(A,B)",
-                  value: vectorLength(subtractVectors(vectors.b, vectors.a)).toFixed(3),
+                  label: "Hướng của A",
+                  value:
+                    length(scene.vectorA) === 0
+                      ? "Không xác định; trả vector 0 theo quy ước"
+                      : "Cùng hướng với vector đơn vị",
                 },
               ]
             : []),
-          ...(showLerp
+          ...(layers.interpolation
             ? [
                 {
                   label: "lerp(A,B,t)",
-                  value: `(${lerped.x.toFixed(2)}, ${lerped.y.toFixed(2)}) tại t=${interpolation.toFixed(2)}`,
+                  value: pair(results.point) + " tại t=" + scene.interpolation.toFixed(2),
+                },
+              ]
+            : []),
+          ...(layers.dragDetails
+            ? [
+                { label: "Vùng chọn", value: "14 px quanh endpoint trên bảng logic" },
+                { label: "Con trỏ screen", value: cursorScreen ? pair(cursorScreen) + " px" : "—" },
+                { label: "Con trỏ world", value: cursorWorld ? pair(cursorWorld) : "—" },
+                {
+                  label: "Đang kéo",
+                  value: scene.dragged < 0 ? "Không" : scene.dragged === 0 ? "A" : "B",
                 },
               ]
             : []),
         ]}
       />
+      <p className="control-hint">
+        Mô phỏng không tự chạy animation. Chế độ giảm chuyển động không làm mất thao tác; các giá
+        trị bên trên là phần mô tả thay thế cho hình vẽ.
+      </p>
     </div>
   );
 }

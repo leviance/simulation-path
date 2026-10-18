@@ -30,7 +30,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
       "examples",
       projectDirectoryBySlug.get(lesson.project),
     );
-    // Project 01–05 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
+    // Project 01–06 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
     const projectNumber = Number(
       projectDirectoryBySlug.get(lesson.project).match(/^project-(\d+)-/)[1],
     );
@@ -58,7 +58,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
         : path.join(checkpointDirectory, relative);
       const source = await readFile(sourcePath, "utf8");
       assert.ok(
-        projectNumber <= 5 || projectNumber >= 56
+        projectNumber <= 6 || projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
         `${lesson.file} drifts from checkpoint ${lessonNumber}: ${title}`,
@@ -101,7 +101,7 @@ test("C++ validation remains active in both Debug and Release", async () => {
     ["mini-paint", "06-validation.mdx"],
     ["tiny-2d-rasterizer", "06-benchmark-validation.mdx"],
     ["coordinate-map", "07-round-trip-test.mdx"],
-    ["vector-playground", "06-normalize-lerp-validation.mdx"],
+    ["vector-playground", "08-lerp-va-validation.mdx"],
     ["unit-circle", "06-atan2-va-validation.mdx"],
     ["mouse-turret", "06-vung-khoa-va-validation.mdx"],
     ["square-transformer", "06-thu-tu-phep-bien-doi-va-validation.mdx"],

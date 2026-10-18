@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vector đơn vị và trường hợp không có hướng
+
+## Vấn đề cần giải quyết
+
+Bạn đã dùng normalize để dựng đầu tên, nhưng đến lúc này ta mới quan sát nó như một đối tượng toán học riêng. Nếu A rất dài hoặc rất ngắn, “chỉ giữ hướng của A” trông như thế nào?
+
+Ta thêm một vòng tròn bán kính một world unit và mũi tên trắng normalize(A). Vector đầu vào màu xanh vẫn giữ nguyên để bạn so sánh.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với A khác zero, vector đơn vị có cùng hướng/chiều và độ dài bằng một:
+
+$$
+\hat A=\frac{A}{|A|},\qquad |\hat A|\approx 1
+$$
+
+Lấy A = (4,3), ta có |A| = 5 và normalize(A) = (0.8,0.6). Endpoint của vector đơn vị nằm trên đường tròn tâm gốc, bán kính 1.
+
+Đừng clamp X và Y về [−1,1]: làm vậy chỉ đưa điểm vào một hình vuông, không bảo đảm độ dài một.
+
+<InteractiveLab demo="vector" mode="vector-normalize" />
+
+Kéo A qua nhiều độ dài trên cùng một hướng; mũi tên trắng phải ở nguyên điểm trên đường tròn. Chọn “A bằng zero”: không có hướng nào để giữ, và vector trả về (0,0) **không phải vector đơn vị**.
+
+## Viết code từng bước
+
+### Bước 1 — Đọc lại hợp đồng normalize
+
+```cpp title="include/lab.hpp — giữ hướng với mọi vector hữu hạn khác zero"
+inline Vec2 normalize(Vec2 vector) {
+    if (!finite(vector)) {
+        return {};
+    }
+    const double largest = std::max(std::abs(vector.x), std::abs(vector.y));
+    if (largest == 0.0) {
+        return {};
+    }
+    const Vec2 scaled{vector.x / largest, vector.y / largest};
+    const double magnitude = length(scaled);
+    return {scaled.x / magnitude, scaled.y / magnitude};
+}
+```
+
+largest bảo vệ phép tính với cả số cực nhỏ/cực lớn. Chia hai thành phần cùng tỉ lệ không đổi hướng, rồi độ dài của scaled mới được dùng để đưa kết quả về một.
+
+Nếu đầu vào NaN hoặc infinity, hàm từ chối bằng vector zero. Nếu đầu vào chính xác zero, cũng trả zero. Đây là quy ước lập trình để không lan giá trị lỗi tới rasterizer; không có nghĩa toán học đã định nghĩa được hướng của zero.
+
+### Bước 2 — Vẽ đường tròn đúng đơn vị
+
+```cpp title="include/view.hpp — vòng tròn bán kính một và vector đơn vị"
+if (scene.viewMode == Scene::ViewMode::Unit || scene.viewMode == Scene::ViewMode::All) {
+    drawCircle(image, kOriginX, kOriginY, kPixelsPerUnit, kWhite);
+    const Vec2 unitA = normalize(scene.vectorA);
+    drawArrow(image, origin, worldToScreen(unitA), kWhite);
+}
+```
+
+Một world unit bằng kPixelsPerUnit, nên bán kính đường tròn là 45 pixel logic. Nếu bạn dùng bán kính một pixel, hình không còn đại diện cho độ dài một world unit.
+
+Bản checkpoint 7 mở lớp Unit ngay từ đầu. Final dùng phím 3; Canvas của bài này giữ riêng lớp normalize để dễ quan sát.
+
+### Bước 3 — So với một số đo độc lập
+
+Độ lớn kết quả được đọc bằng length:
+
+```cpp title="include/lab.hpp — đo kết quả sau normalize"
+inline double length(Vec2 vector) {
+    return std::hypot(vector.x, vector.y);
+}
+```
+
+HUD in cả thành phần unitA và length(unitA). Đối chiếu bằng hai cách: số đo gần 1 và endpoint nằm trên vòng tròn. Một trong hai cách đơn độc có thể che lỗi đơn vị hoặc lỗi phần vẽ.
+
+### Bước 4 — Thử hướng âm và đi qua zero
+
+```bash title="Terminal — chạy checkpoint 7"
+cmake --build build --config Debug --target project_6_checkpoint_7 --parallel 2
+.\build\Debug\project_6_checkpoint_7.exe
+```
+
+Đưa A từ (1,0) về gốc rồi sang (−1,0). Bên phải có hướng +X; ở gốc không có hướng; bên trái có hướng −X. Sự đổi chiều ở hai phía zero là đúng, không phải lỗi làm mượt.
+
+Không tự thay zero bằng “hướng cũ” trong hàm normalize. Một ứng dụng có thể muốn giữ hướng cuối cùng, nhưng đó là state riêng của ứng dụng, không phải kết quả normalize(0).
+
+## Ghép các phần lại
+
+Normalize tạo một kết quả mới; nó không làm A gốc mất độ lớn. Cả mũi tên đầu vào, vòng tròn và vector đơn vị dùng cùng phép worldToScreen.
+
+Vì bảng logic cố định, resize không làm một world unit đổi thành một đại lượng vật lý mới. SDL chỉ trình bày lại cả bảng theo cùng tỉ lệ.
+
+## Thử làm sai để hiểu đúng
+
+1. Clamp từng thành phần về [−1,1]. Với (4,3), kết quả (1,1) có độ dài căn 2.
+2. Chia bằng lengthSquared thay vì length. Vector thường không còn dài một.
+3. Trả (1,0) khi A=0 mà vẫn gọi đó là “cùng hướng A”. Bạn đã tự chọn một hướng không có trong đầu vào.
+4. Đo độ dài screen rồi so với 1 world unit. Kết quả phụ thuộc pixelsPerUnit, không phải normalize sai.
+
+## Tự kiểm tra kết quả
+
+- A=(4,3) cho (0.8,0.6); endpoint đơn vị nằm trên vòng tròn.
+- Nhân A với scalar dương không đổi hướng đơn vị; scalar âm đảo hướng.
+- Vector hữu hạn rất nhỏ/vượt miền bình phương vẫn normalize được bằng bước scale.
+- Zero ghi rõ không có hướng; normalize(0)=0 chỉ là fallback.
+- A gốc không bị thay thế bởi vector đơn vị.
+
+## Bài tập mở rộng
+
+Vẽ normalize(B) bằng màu khác. Sau đó chọn A và B cùng hướng nhưng độ lớn khác nhau: hai vector đơn vị phải trùng nhau, dù hai endpoint đầu vào khác nhau.
+
+[Bài tiếp: lerp, kiểm chứng và bản hoàn chỉnh](/projects/vector-playground/08-lerp-va-validation).

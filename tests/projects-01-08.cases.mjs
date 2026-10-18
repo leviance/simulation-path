@@ -135,18 +135,19 @@ test("Project 06 teaches vector math through a concrete runnable progression", a
 
   const second = await readFile(path.join(directory, "02-magnitude-va-arrow-head.mdx"), "utf8");
   assert.match(second, /void drawArrow\(/);
-  assert.match(second, /drawScreenLine\(pixels, width, height, start, end, color\)/);
+  assert.match(second, /drawScreenLine\(image, start, end, color\)/);
 
-  const fifth = await readFile(path.join(directory, "05-scalar-va-distance.mdx"), "utf8");
+  const fifth = await readFile(path.join(directory, "06-scalar-va-distance.mdx"), "utf8");
   assert.match(fifth, /mode="vector-scalar-distance"/);
-  assert.match(fifth, /const double distanceAB = lab::distance\(vectorA, vectorB\)/);
-  assert.match(fifth, /drawScreenLine\(pixels, width, height, endpointA, endpointB/);
+  assert.match(fifth, /return length\(end - start\)/);
+  assert.match(fifth, /drawScreenLine\(image, endpointA, endpointB/);
 
-  const final = await readFile(path.join(directory, "06-normalize-lerp-validation.mdx"), "utf8");
-  assert.match(final, /normalize\(0\)=0/);
-  assert.match(final, /lerp\(A,B,t\)/);
-  assert.match(final, /enum class ViewMode/);
-  assert.match(final, /numeric_limits<double>::quiet_NaN/);
+  const unit = await readFile(path.join(directory, "07-vector-don-vi.mdx"), "utf8");
+  assert.match(unit, /normalize\(0\)=0/);
+  const final = await readFile(path.join(directory, "08-lerp-va-validation.mdx"), "utf8");
+  assert.match(final, /Hàm này không tự clamp t/);
+  assert.match(final, /có đủ CMake, main, header và tests/);
+  assert.match(final, /subnormal\/gần DBL_MAX/);
   assert.match(final, /Project 07/);
 });
 

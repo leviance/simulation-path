@@ -1,125 +1,103 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Cộng, trừ và hình bình hành
+# Cộng vector và dựng hình bình hành
 
 ## Vấn đề cần giải quyết
 
-Công thức tính `A+B` theo từng thành phần rất ngắn, nhưng chỉ nhìn vào công thức sẽ khó hình dung kết quả nằm ở đâu trên mặt phẳng. Trong bài này, ta sẽ vẽ hình bình hành tạo bởi A và B để thấy điểm cuối của A+B chính là góc đối diện với gốc tọa độ.
+Giả sử A là một bước đi, B là bước tiếp theo. Tổng A+B phải cho biết bạn ở đâu sau hai bước đó. Việc cộng từng thành phần rất ngắn, nhưng hình vẽ sẽ giúp bạn hiểu vì sao cộng như vậy.
 
-Phép trừ cũng có một cách hiểu hình học rõ ràng. `A−B` không phải là độ dài của A trừ cho độ dài của B; nó là độ dời cần thực hiện để đi từ điểm cuối B tới điểm cuối A. Vì vậy, mũi tên đi từ B tới A phải cùng hướng và cùng độ dài với vector A−B vẽ từ gốc.
+Ta đã có hai vector cùng gốc và kéo được từng endpoint. Bây giờ thêm một mũi tên tổng màu vàng cùng hai cạnh phụ.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với A = `(3,1.5)` và B = `(-1,2.5)`:
+Với A = (3,1.5), B = (−1,2.5):
 
 $$
-A+B=(3-1,\ 1.5+2.5)=(2,4)
+A+B=(3-1,\;1.5+2.5)=(2,4)
 $$
 
-Từ gốc tọa độ, ta có thể đi theo A rồi đi tiếp theo B, hoặc đi theo B rồi đi tiếp theo A. Cả hai cách đều kết thúc tại A+B. Khi vẽ thêm một bản sao của B bắt đầu tại A và một bản sao của A bắt đầu tại B, bốn đoạn thẳng tạo thành một hình bình hành.
+Đi theo A trước rồi đặt một **bản sao B** tại endpoint A, ta đến S = A+B. Đổi thứ tự: đi theo B rồi đặt bản sao A tại B, vẫn tới S. Hai cách đi là hai cạnh kề của hình bình hành.
 
-Với phép trừ:
-
-$$
-A-B=(3-(-1),\ 1.5-2.5)=(4,-1)
-$$
-
-Và:
-
-$$
-B+(A-B)=A
-$$
-
-Đẳng thức cuối cho thấy vì sao mũi tên đi từ B tới A biểu diễn đúng A−B.
+Điểm quan trọng: chuyển chỗ đặt một vector không đổi các thành phần của nó. Đoạn từ A tới S có độ dời S−A = B, không phải S.
 
 <InteractiveLab demo="vector" mode="vector-addition" />
 
+Kéo hai endpoint và thử dự đoán góc vàng trước khi nhìn số A+B. Với preset đối hướng, tổng bằng zero; hình bình hành bị ép thành một đoạn, chứ thuật toán không hỏng.
+
 ## Viết code từng bước
 
-### Bước 1 — Tính tổng và hiệu trong world space
+### Bước 1 — Cộng world coordinate theo thành phần
 
-```cpp title="src/main.cpp — hai kết quả toán học của A và B"
-const lab::Vec2 vectorSum = vectorA + vectorB;
-const lab::Vec2 vectorDifference = vectorA - vectorB;
-const lab::Vec2 sumScreen = worldToScreen(vectorSum, width, height);
-const lab::Vec2 differenceScreen = worldToScreen(vectorDifference, width, height);
+Toán tử đã được khai báo cạnh Vec2 từ bài đầu:
+
+```cpp title="include/lab.hpp — phép cộng hai độ dời"
+inline Vec2 operator+(Vec2 left, Vec2 right) {
+    return {left.x + right.x, left.y + right.y};
+}
 ```
 
-Phép cộng và phép trừ phải được thực hiện trên A/B trong world space. Nếu cộng hai điểm cuối đã đổi sang screen space, tọa độ tâm viewport sẽ bị cộng thêm một lần và kết quả không còn biểu diễn đúng vector.
+Chỉ cộng X với X và Y với Y. Kết quả là một độ dời mới, không sửa A/B đầu vào.
 
-### Bước 2 — Vẽ kết quả từ cùng một gốc
+### Bước 2 — Tính tổng rồi mới đổi ra screen
 
-```cpp title="src/main.cpp — A+B màu cam và A−B màu đỏ"
-drawArrow(pixels, width, height, origin, sumScreen, rgba(255, 180, 84));
-drawArrow(pixels, width, height, origin, differenceScreen, rgba(255, 107, 107));
+Trong renderScene:
+
+```cpp title="include/view.hpp — hai cạnh phụ và mũi tên tổng"
+const Vec2 vectorSum = scene.vectorA + scene.vectorB;
+const Vec2 sumScreen = worldToScreen(vectorSum);
+drawScreenLine(image, endpointA, sumScreen, kGuide);
+drawScreenLine(image, endpointB, sumScreen, kGuide);
+drawArrow(image, origin, sumScreen, kSum);
 ```
 
-Vector tổng được vẽ bằng màu cam, vector hiệu bằng màu đỏ. Cả hai cùng bắt đầu tại gốc tọa độ để người học có thể đọc trực tiếp các thành phần trên lưới.
+vectorSum ở world; sumScreen ở pixel logic. Hai drawScreenLine phụ nối endpoint A/B tới sumScreen, còn drawArrow vẽ tổng từ gốc.
 
-### Bước 3 — Khép hình bình hành bằng hai cạnh phụ
+Không cộng endpointA + endpointB: mỗi endpoint screen đã chứa độ dời tới gốc (550,420). Cộng chúng sẽ cộng gốc hai lần và đảo nhầm ý nghĩa của Y.
 
-```cpp title="src/main.cpp — hai bản sao tịnh tiến của A và B"
-drawScreenLine(pixels, width, height, endpointA, sumScreen, rgba(75, 88, 117));
-drawScreenLine(pixels, width, height, endpointB, sumScreen, rgba(75, 88, 117));
+### Bước 3 — Kiểm tra bằng phép trừ có ý nghĩa
+
+Nếu S đúng, S−A phải phục hồi B, S−B phải phục hồi A. Dùng operator−:
+
+```cpp title="include/lab.hpp — hiệu dùng để đo độ dời của cạnh"
+inline Vec2 operator-(Vec2 left, Vec2 right) {
+    return {left.x - right.x, left.y - right.y};
+}
 ```
 
-Đoạn từ điểm cuối A tới A+B là một bản sao của B. Tương tự, đoạn từ điểm cuối B tới A+B là một bản sao của A. Hai cạnh phụ được vẽ bằng màu xám để không lấn át các vector chính.
+Ở đây phép trừ chỉ kiểm tra từng cạnh. Bài sau sẽ dành riêng cho mũi tên A−B và lý do hướng của nó đi từ B tới A.
 
-### Bước 4 — Đặt một bản sao của A−B đúng vào vị trí hình học
+### Bước 4 — Chạy rồi thử cả số âm và trường hợp suy biến
 
-Mũi tên đỏ bắt đầu tại gốc giúp ta đọc các thành phần của `A−B`. Để thể hiện ý nghĩa hình học, ta vẽ thêm một bản sao màu đỏ sẫm đi từ điểm cuối B tới điểm cuối A:
-
-```cpp title="src/main.cpp — tịnh tiến A−B tới điểm B"
-drawArrow(pixels, width, height, endpointB, endpointA, rgba(174, 91, 104));
+```bash title="Terminal — chạy checkpoint 4"
+cmake --build build --config Debug --target project_6_checkpoint_4 --parallel 2
+.\build\Debug\project_6_checkpoint_4.exe
 ```
 
-Hai mũi tên có điểm bắt đầu khác nhau nhưng phải luôn cùng hướng và cùng độ dài. Hãy kéo A hoặc B để tự kiểm tra tính chất này.
-
-### Bước 5 — Hiển thị con số để đối chiếu hình vẽ
-
-```cpp title="src/main.cpp — tọa độ tổng và hiệu trên thanh tiêu đề"
-std::snprintf(
-    title,
-    sizeof(title),
-    "A(%.2f, %.2f) | B(%.2f, %.2f) | A+B(%.2f, %.2f) | A-B(%.2f, %.2f)",
-    vectorA.x,
-    vectorA.y,
-    vectorB.x,
-    vectorB.y,
-    vectorSum.x,
-    vectorSum.y,
-    vectorDifference.x,
-    vectorDifference.y
-);
-```
-
-Sau mỗi lần kéo một điểm cuối, hãy tự cộng các thành phần của A và B trước khi đọc A+B trên thanh tiêu đề. Mô phỏng lúc này không chỉ minh họa công thức mà còn giúp bạn kiểm tra kết quả tính tay.
+Bản này luôn vẽ A, B, tổng và hai cạnh phụ. Chọn F2 để thử hai hướng vuông góc, F3 để thử đối hướng; kéo một endpoint để hình không còn vuông góc.
 
 ## Ghép các phần lại
 
-Chạy checkpoint 4. A, B và A+B phải tạo thành một hình bình hành, bất kể bạn kéo hai điểm cuối sang góc phần tư nào. Khi A và B đối hướng với cùng độ lớn, A+B trở về gốc. Khi B là zero vector, cả A+B lẫn A−B đều trùng với A.
+A/B là state duy nhất của hai độ dời. Mỗi lần dựng ảnh, vectorSum được tính lại; không lưu một biến sum riêng rồi cố nhớ cập nhật nó ở mọi mouse handler.
 
-Mũi tên A−B màu đỏ cho biết các thành phần của vector hiệu. Bản sao màu đỏ sẫm đi từ B tới A cho biết vector hiệu xuất hiện như thế nào giữa hai điểm cuối.
+Cạnh phụ có màu nhạt để phân biệt vector đầu vào với bản sao đã chuyển chỗ. Tổng giữ màu vàng. Bạn có thể đi theo hai đường từ O tới S để đọc hình bằng mắt.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tính `vectorSum = endpointA + endpointB` trong screen space. Thay đổi kích thước cửa sổ và quan sát điểm tổng bị lệch vì tọa độ tâm viewport đã bị cộng hai lần.
-2. Vẽ cạnh phụ từ A tới B thay vì từ A tới A+B. Hình không còn khép kín và không biểu diễn phép cộng.
-3. Thay `vectorA - vectorB` bằng `{length(A)-length(B),0}`. Vector hiệu lúc này chỉ còn nằm trên trục X và mất hoàn toàn hướng đúng.
-
-Hoàn tác thay đổi và chọn trường hợp “Đối hướng” trong Vector Lab để kiểm tra lại.
+1. Cộng endpoint screen thay vì A/B world. Mũi tên tổng bị lệch thêm một lần gốc bảng.
+2. Tính vectorSum một lần trước vòng event. Kéo A/B làm các cạnh tách khỏi đầu mũi tên vàng.
+3. Vẽ cạnh từ A tới B rồi gọi đó là bản sao B. Độ dời của đoạn ấy là B−A, không phải B.
+4. Cho rằng A+B phải dài bằng |A|+|B|. Thử vuông góc hoặc đối hướng để thấy tổng độ dời khác tổng quãng đường.
 
 ## Tự kiểm tra kết quả
 
-- A+B có tọa độ bằng tổng từng thành phần.
-- Hai cạnh phụ gặp nhau đúng tại điểm cuối của A+B.
-- Đổi thứ tự A/B không làm thay đổi A+B.
-- A−B từ gốc và bản sao từ B tới A song song, cùng chiều, cùng độ dài.
-- Khi B bằng zero, A+B và A−B đều bằng A.
-- Khi B bằng −A, A+B bằng zero.
+- A mặc định cộng B cho (2,4).
+- Cạnh A→S có độ dời B, cạnh B→S có độ dời A.
+- Đổi thứ tự cộng vẫn cùng điểm đến.
+- Kéo đầu vào cập nhật tổng và hai cạnh ngay trong frame kế tiếp.
+- Collinear, đối hướng và zero vẫn cho kết quả có ý nghĩa.
 
 ## Bài tập mở rộng
 
-Thêm phép `B−A` bằng màu khác và đặt một bản sao từ A tới B. Sau đó thử chứng minh bằng thành phần rằng `(A+B)-A=B`.
+Tính |A|+|B| và |A+B| cho preset vuông góc, rồi đối hướng. Viết một câu giải thích vì sao hai đại lượng có thể khác nhau dù cùng được đo bằng world unit.
 
-Bài sau sẽ dùng scalar để thay đổi độ lớn và hướng của A, đồng thời phân biệt độ dài của một vector với khoảng cách giữa hai điểm cuối.
+[Bài tiếp: hiểu A−B bằng đường đi từ B tới A](/projects/vector-playground/05-hieu-vector).

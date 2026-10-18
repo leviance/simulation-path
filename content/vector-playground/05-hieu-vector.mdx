@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vì sao A−B đi từ B tới A?
+
+## Vấn đề cần giải quyết
+
+Đọc A−B theo từng thành phần rất dễ, nhưng người học thường nhầm chiều: “A trừ B” thì mũi tên đi từ A tới B hay ngược lại?
+
+Ta sẽ giữ A/B và hình bình hành đã có, thêm vector hiệu màu đỏ san hô. Một bản sao của hiệu được đặt ngay tại B để trả lời bằng hình.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy đặt câu hỏi: đang ở B, cần đi thêm độ dời D nào để đến A?
+
+$$
+B+D=A\quad\Longrightarrow\quad D=A-B
+$$
+
+Với A = (3,1.5), B = (−1,2.5), độ dời cần đi là (4,−1): từ B sang phải 4 đơn vị, xuống 1 đơn vị. Đó là **B→A**. A→B là B−A và có chiều ngược lại.
+
+Có thể nhìn phép trừ bằng cách cộng thêm hướng ngược:
+
+$$
+A-B=A+(-B)
+$$
+
+−B không phải điểm B bị “đổi nhãn”; nó là độ dời có cả X/Y đổi dấu.
+
+<InteractiveLab demo="vector" mode="vector-subtraction" />
+
+So mũi tên đỏ từ O với bản sao B→A. Chúng nằm ở hai chỗ khác nhau nhưng cùng chiều và cùng độ dài. Kéo B vượt qua A rồi thử mô tả hướng hiệu trước khi đọc số.
+
+## Viết code từng bước
+
+### Bước 1 — Tính hiệu trong world space
+
+```cpp title="include/lab.hpp — trừ hai thành phần cùng loại"
+inline Vec2 operator-(Vec2 left, Vec2 right) {
+    return {left.x - right.x, left.y - right.y};
+}
+```
+
+Không lấy trị tuyệt đối: dấu của X/Y chứa thông tin hướng. Với dữ liệu mặc định, A−B = (4,−1), không phải (4,1).
+
+### Bước 2 — Đặt cùng độ dời ở hai nơi
+
+```cpp title="include/view.hpp — hiệu tại gốc, bản sao B tới A và hướng ngược B"
+const Vec2 vectorDifference = scene.vectorA - scene.vectorB;
+drawArrow(image, origin, worldToScreen(vectorDifference), kDifference);
+drawArrow(image, endpointB, endpointA, kDifference);
+drawArrow(image, origin, worldToScreen(scene.vectorB * -1.0), kGuide);
+```
+
+Dòng thứ nhất tính vectorDifference. Một drawArrow bắt đầu ở origin, điểm cuối là worldToScreen(vectorDifference). Dòng tiếp theo bắt đầu ở endpointB và kết thúc ở endpointA: đó là cùng độ dời đã được chuyển chỗ.
+
+Mũi tên xám −B giúp bạn ghép đường đi “theo A rồi đi ngược B”. Nó là lớp giải thích, không phải một vector input mới có thể kéo.
+
+### Bước 3 — Dùng nhân scalar để lấy hướng ngược
+
+```cpp title="include/lab.hpp — nhân một độ dời với số âm"
+inline Vec2 operator*(Vec2 vector, double scalar) {
+    return {vector.x * scalar, vector.y * scalar};
+}
+
+inline Vec2 operator*(double scalar, Vec2 vector) {
+    return vector * scalar;
+}
+```
+
+Nhân −1 đổi dấu cả hai thành phần. Ta đã có toán tử này từ Vec2 để dùng khi dựng hình; bài sau sẽ cho điều khiển scalar trong một khoảng liên tục.
+
+Nếu chỉ đổi dấu X mà giữ Y, bạn đang phản chiếu qua trục Y, không lấy vector đối.
+
+### Bước 4 — So tổng và hiệu cùng lúc
+
+```bash title="Terminal — chạy checkpoint 5"
+cmake --build build --config Debug --target project_6_checkpoint_5 --parallel 2
+.\build\Debug\project_6_checkpoint_5.exe
+```
+
+Bản này luôn hiển thị A/B, A+B và A−B. Chọn F3: A và B đối hướng, tổng bằng zero nhưng hiệu bằng 2A. Chọn F5: cả hai zero, tổng/hiệu đều zero và không có hướng.
+
+## Ghép các phần lại
+
+Điểm đầu/tọa độ đặt không làm đổi ý nghĩa vector. Hai mũi tên chỉ biểu diễn cùng vector khi độ dời X/Y bằng nhau; việc cùng dài chưa đủ, vì chúng có thể khác hướng.
+
+Khoảng cách giữa endpoint A/B sẽ là độ dài của A−B hoặc B−A. Hai vector ngược chiều nhưng cùng độ lớn; đó là lý do khoảng cách không phụ thuộc thứ tự.
+
+## Thử làm sai để hiểu đúng
+
+1. Vẽ bản sao từ A tới B rồi ghi A−B. Đọc phương trình A + D = B để thấy nhãn đúng phải là B−A.
+2. Lấy abs từng thành phần của hiệu. Hướng đi xuống/trái bị biến thành đi lên/phải.
+3. Lấy −B bằng cách chỉ đổi dấu một thành phần. Thử B có cả X/Y khác zero để thấy vector đối bị tính sai.
+4. Cho rằng A+B và A−B luôn song song. Kéo hai vector không cùng phương để bác bỏ bằng hình.
+
+## Tự kiểm tra kết quả
+
+- Dữ liệu mặc định cho A−B = (4,−1).
+- B+(A−B) phục hồi A.
+- Bản sao B→A và hiệu tại gốc có cùng độ dời, không chỉ cùng độ dài.
+- Đổi A/B trong phép trừ đảo chiều hiệu.
+- A=B cho hiệu zero; đối hướng không đồng nghĩa hiệu zero.
+
+## Bài tập mở rộng
+
+Thêm một bản sao B−A từ A tới B với màu khác. Không cần phép toán mới; hãy dùng hình để giải thích vì sao distance(A,B) vẫn bằng distance(B,A).
+
+[Bài tiếp: scalar và khoảng cách](/projects/vector-playground/06-scalar-va-distance).

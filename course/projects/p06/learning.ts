@@ -3,146 +3,174 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p06-l01": {
-      focus:
-        "Bắt đầu từ chương trình SDL3 đã có window, framebuffer và hệ trục tọa độ; thêm Vec2 rồi dùng nó để biểu diễn hai vector A và B có cùng gốc.",
+      focus: "Chạy bảng tọa độ từ starter rồi thêm Vec2 và trạng thái A/B trước khi học phép toán.",
       expected:
-        "Vector A(3,1.5) hướng lên bên phải, vector B(-1,2.5) hướng lên bên trái. Khi thay đổi kích thước cửa sổ, gốc tọa độ vẫn nằm ở giữa và dữ liệu A/B không thay đổi.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Hai đoạn từ gốc tới A(3,1.5) và B(−1,2.5) có màu riêng; resize không đổi các tọa độ đó.",
+      files: ["include/lab.hpp", "include/camera.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Giữ dữ liệu vector ở dạng số thực",
+          title: "Bắt đầu từ hình đã chạy",
           explanation:
-            "Các thành phần của Vec2 được lưu bằng double để không làm mất phần thập phân. Chỉ khi chuẩn bị vẽ pixel, chương trình mới làm tròn tọa độ sang int.",
+            "drawBoard, framebuffer, texture và event loop đã sẵn sàng; bạn chỉ thêm dữ liệu vector.",
         },
         {
-          title: "Phân biệt tọa độ mô phỏng và tọa độ màn hình",
-          explanation:
-            "A và B là dữ liệu trong world space. origin, endpointA và endpointB chỉ là kết quả tạm thời sau khi chuyển sang screen space để vẽ.",
+          title: "Lưu độ dời, không lưu pixel",
+          explanation: "A/B ở world space; endpoint screen chỉ là biến tạm dùng để vẽ.",
         },
         {
-          title: "Tận dụng những phần đã hoàn thành",
-          explanation:
-            "Starter đã xử lý việc khởi tạo SDL, quản lý framebuffer, vẽ đoạn thẳng bằng Bresenham và resize. Bài này chỉ bổ sung phần biểu diễn vector.",
+          title: "Nối đủ đường đi của dữ liệu",
+          explanation: "worldToScreen → drawScreenLine → Bresenham → putPixel → SDL_UpdateTexture.",
         },
       ],
     },
     "p06-l02": {
-      focus:
-        "Tính độ lớn và hướng đơn vị của vector, sau đó dùng hướng đơn vị cùng một vector vuông góc để dựng đầu mũi tên.",
-      expected:
-        "A và B được vẽ thành hai mũi tên hoàn chỉnh. Đầu mũi tên dài 14 pixel, rộng 12 pixel và không thay đổi kích thước khi độ lớn của vector thay đổi; zero vector chỉ hiện thành một chấm.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Đo độ lớn bằng Pythagoras/hypot và dùng hướng chuẩn hóa để dựng đầu mũi tên.",
+      expected: "A/B có đầu tên; đầu tên ngắn lại hợp lý khi vector rất ngắn, zero không tạo NaN.",
+      files: ["include/lab.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Tính độ lớn bằng định lý Pythagoras",
-          explanation:
-            "lengthSquared trả về x²+y²; length gọi lại hàm này rồi lấy căn bậc hai, nhờ vậy công thức không bị viết lặp.",
+          title: "Phân biệt hai độ dài",
+          explanation: "length(A) là world unit; chiều dài đầu tên là screen pixel.",
         },
         {
-          title: "Không chia cho độ dài bằng zero",
+          title: "Chia cùng tỉ lệ trước",
           explanation:
-            "normalize trả về zero vector khi độ lớn quá nhỏ hoặc không phải một số hữu hạn. Nhờ đó, các bước vẽ phía sau không nhận NaN hay infinity.",
+            "normalize dùng thành phần lớn nhất để không mất hướng ở các số rất lớn/rất nhỏ.",
         },
         {
-          title: "Dựng đầu mũi tên trong screen space",
+          title: "Dựng hai cánh",
           explanation:
-            "Chương trình chuẩn hóa end−start sau khi đã đổi sang screen space, vì vậy đầu mũi tên luôn giữ cùng kích thước tính bằng pixel.",
+            "direction cho trục thân; perpendicular cho hai phía; headLength được chặn theo đoạn ngắn.",
         },
       ],
     },
     "p06-l03": {
-      focus:
-        "Xác định điểm cuối gần con trỏ nhất, ghi nhớ vector đang được kéo và đổi tọa độ chuột về world space trước khi cập nhật A hoặc B.",
+      focus: "Chọn endpoint bằng screen distance, giữ grab offset và đúng mouse/pointer owner.",
       expected:
-        "Chỉ điểm cuối được nhấn mới di chuyển. Nhấn vào vùng trống không làm thay đổi A/B; thả chuột ngoài cửa sổ hoặc chuyển sang ứng dụng khác đều kết thúc thao tác kéo.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Kéo A/B không nhảy điểm, chỉ sửa vector đang giữ; mẫu button-up cuối được áp dụng trước khi release capture.",
+      files: ["include/scene.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "So sánh các điểm trong cùng một hệ tọa độ",
+          title: "Hit-test cùng hệ",
           explanation:
-            "Tọa độ chuột và hai điểm cuối đều được biểu diễn bằng pixel trước khi so với handleRadius.",
+            "Cả chuột lẫn endpoint được đưa về pixel của bảng logic trước phép so khoảng cách.",
         },
         {
-          title: "Ưu tiên điểm cuối gần con trỏ hơn",
+          title: "Không kéo vào giữa con trỏ",
           explanation:
-            "Nếu vùng chọn của A và B chồng lên nhau, chương trình so distanceToA với distanceToB để chọn điểm gần hơn.",
+            "grabOffset lưu chênh lệch world lúc nhấn; moveEndpoint cộng lại đúng phần đó.",
         },
         {
-          title: "Lưu A và B bằng world unit",
+          title: "Hủy một cách đầy đủ",
           explanation:
-            "Mỗi sự kiện SDL_EVENT_MOUSE_MOTION phải đi qua screenToWorld. Nếu gán tọa độ pixel trực tiếp cho A/B, mọi phép toán vector phía sau sẽ sai đơn vị.",
+            "Nút thả, lost buttons, blur, hidden, resize, pause/reset và preset đều không để drag cũ tồn tại.",
         },
       ],
     },
     "p06-l04": {
-      focus:
-        "Tính A+B và A−B trong world space, sau đó dùng hình bình hành và một bản sao của A−B để giải thích ý nghĩa hình học của hai phép toán.",
+      focus: "Vẽ tổng vector bằng phép toán world và hai đường đi nối đuôi nhau.",
       expected:
-        "Khi kéo A hoặc B, điểm cuối của A+B luôn nằm ở góc đối diện của hình bình hành. Mũi tên A−B từ gốc và mũi tên từ B tới A luôn song song, cùng chiều và cùng độ dài.",
-      files: ["src/main.cpp", "include/lab.hpp"],
+        "A+B nằm tại góc đối diện; hai cạnh phụ lần lượt bằng B và A, kể cả khi A/B âm hoặc đối hướng.",
+      files: ["include/lab.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Thực hiện phép toán trước khi đổi hệ tọa độ",
-          explanation:
-            "A và B phải được cộng theo từng thành phần trong world space. Nếu cộng hai endpoint trong screen space, tâm viewport cũng bị cộng thêm một lần.",
+          title: "Cộng dữ liệu world",
+          explanation: "operator+ cộng đúng thành phần, không cộng hai screen endpoints.",
         },
         {
-          title: "Dựng hình bình hành",
-          explanation:
-            "Đoạn từ A tới A+B là một bản sao của B; đoạn từ B tới A+B là một bản sao của A.",
+          title: "Đặt bản sao của B tại A",
+          explanation: "Đi từ A tới sum có độ dời B.",
         },
         {
-          title: "Hiểu A−B là độ dời từ B tới A",
-          explanation:
-            "Vẽ A−B từ gốc rồi vẽ thêm một bản sao từ B tới A giúp người học thấy hai mũi tên biểu diễn cùng một độ dời.",
+          title: "Kiểm tra đường đi còn lại",
+          explanation: "Đi từ B tới sum có độ dời A; không suy ra correctness chỉ từ một hình đẹp.",
         },
       ],
     },
     "p06-l05": {
-      focus:
-        "Cho phép thay đổi scalar của A, đồng thời vẽ đoạn nối A–B để phân biệt độ dài của từng vector với khoảng cách giữa hai điểm cuối.",
+      focus: "Đặt phép trừ vào câu hỏi cụ thể: phải đi thế nào từ B để tới A?",
       expected:
-        "Phím lên/xuống thay đổi scalar trong khoảng [-2,2]. Mũi tên tím co, giãn hoặc đảo hướng; độ dài của đoạn xám A–B bằng đúng distance(A,B) trên thanh tiêu đề.",
-      files: ["src/main.cpp", "include/lab.hpp"],
+        "Mũi tên A−B từ gốc và bản sao B→A cùng chiều, song song, bằng độ dài; −B giúp nhìn phép cộng với hướng ngược.",
+      files: ["include/view.hpp", "include/lab.hpp"],
       steps: [
         {
-          title: "Nhân cả hai thành phần với cùng một scalar",
-          explanation:
-            "Khi scalar dương, phép nhân phải giữ nguyên hướng của A. Nếu chỉ nhân thành phần x, vector sẽ quay sang một hướng khác.",
+          title: "Tìm độ dời còn thiếu",
+          explanation: "B + (A−B) = A quyết định thứ tự phép trừ.",
         },
         {
-          title: "Tính lại kết quả trong mỗi frame",
-          explanation:
-            "scaledA phụ thuộc vào A và scalar hiện tại, nên đây là dữ liệu được suy ra chứ không phải một trạng thái cần lưu riêng.",
+          title: "So hai bản sao",
+          explanation: "Vị trí đặt khác nhau không làm đổi vector.",
         },
         {
-          title: "Phân biệt length và distance",
+          title: "Dùng cả trường hợp đối hướng",
           explanation:
-            "length(A) đo đoạn từ gốc tới điểm cuối A. distance(A,B) đo đoạn nối hai điểm cuối và được tính bằng length(B−A).",
+            "Preset đối hướng cho tổng zero nhưng hiệu khác zero; hai phép toán không giống nhau.",
         },
       ],
     },
     "p06-l06": {
-      focus:
-        "Tách các nhóm kết quả thành bốn chế độ hiển thị, vẽ normalize(A), nội suy một điểm trên đoạn A–B và kiểm tra phần toán bằng CTest.",
+      focus: "Co, giãn hoặc đảo hướng A bằng scalar và đo riêng đoạn A–B.",
       expected:
-        "Phím 1–4 chuyển giữa bốn chế độ. Khi A khác zero, vector trắng dài đúng một world unit; điểm vàng luôn nằm trên đoạn A–B với t trong [0,1]; toàn bộ phép kiểm tra của Project 06 đều vượt qua.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Scalar ∈ [−2,2], distance(A,B) không bị nhầm với |A| hoặc |B|; bản checkpoint bật lớp scalar ngay.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Xây dựng lerp từ các phép toán đã có",
-          explanation:
-            "Công thức start + (end−start)×t dùng lại phép trừ, phép nhân scalar và phép cộng thay vì tính lại từng thành phần.",
+          title: "Nhân cả X và Y",
+          explanation: "Scalar âm đảo hướng, scalar zero mất hướng, scalar dương giữ hướng.",
         },
         {
-          title: "Kiểm tra cả dữ liệu thông thường lẫn dữ liệu đặc biệt",
-          explanation:
-            "Bộ tests bao phủ zero vector, vector rất nhỏ, infinity, NaN, tính đối xứng của distance, nội suy và ngoại suy.",
+          title: "Khoảng cách là độ dài hiệu",
+          explanation: "distance(A,B)=length(B−A), luôn không âm và đối xứng.",
         },
         {
-          title: "Kiểm chứng hình học bằng đẳng thức",
+          title: "Kết quả không phải state riêng",
           explanation:
-            "Nếu (A+B)−A cho lại B và (A+B)−B cho lại A, góc đối diện của hình bình hành đã được tính đúng.",
+            "scaledA được tính từ vectorA và scalar mới nhất; không giữ bản sao lỗi thời.",
+        },
+      ],
+    },
+    "p06-l07": {
+      focus:
+        "Đưa vector đơn vị lên vòng tròn bán kính một và giải thích chính xác trường hợp zero.",
+      expected:
+        "Vector trắng cùng hướng A, dài một world unit khi A khác zero; A=0 ghi rõ không có hướng, fallback không phải vector đơn vị.",
+      files: ["include/lab.hpp", "include/view.hpp", "include/presentation.hpp"],
+      steps: [
+        {
+          title: "Giữ lại hướng",
+          explanation: "Normalize không phải clamp từng thành phần hoặc đổi vector sang screen.",
+        },
+        {
+          title: "Đối chiếu đường tròn",
+          explanation: "Bán kính kPixelsPerUnit biểu diễn một world unit trên bảng.",
+        },
+        {
+          title: "Tách toán khỏi quy ước chương trình",
+          explanation:
+            "Hướng của zero không xác định; trả (0,0) chỉ để chương trình tiếp tục an toàn.",
+        },
+      ],
+    },
+    "p06-l08": {
+      focus:
+        "Xây lerp từ phép cộng/trừ/scalar, điều khiển t và nghiệm thu ứng dụng bằng test lẫn desktop checklist.",
+      expected:
+        "Final mặc định hiển thị A/B/tổng/hiệu; phím 4 hoặc lớp Lerp mở điểm nội suy; CTest Debug/Release kiểm tra toán, input state và raster.",
+      files: ["include/lab.hpp", "tests/tests.cpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "t là tỉ lệ trên đoạn",
+          explanation: "0 ở A, 1 ở B, 0.5 ở trung điểm; không phải giây hay tốc độ.",
+        },
+        {
+          title: "Dùng oracle độc lập",
+          explanation:
+            "Fixture tọa độ/độ dài, tính các thành phần lerp riêng và kiểm tra hình bình hành qua đẳng thức.",
+        },
+        {
+          title: "Kiểm tra đúng tầng",
+          explanation:
+            "CPU test không mở window; smoke chỉ 12 frame ẩn; input/HiDPI vẫn cần kiểm tra trực tiếp.",
         },
       ],
     },
@@ -155,14 +183,9 @@ const learning = {
         kind: "Thuật ngữ",
       },
       {
-        label: "World space",
-        href: "/glossary#world-space",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Screen space",
-        href: "/glossary#screen-space",
-        kind: "Thuật ngữ",
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
       },
     ],
     "p06-l02": [
@@ -172,36 +195,21 @@ const learning = {
         kind: "Thuật ngữ",
       },
       {
-        label: "Normalization",
-        href: "/glossary#normalization",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Zero vector",
-        href: "/glossary#zero-vector",
-        kind: "Thuật ngữ",
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
       },
     ],
     "p06-l03": [
       {
-        label: "SDL_CaptureMouse",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
-        kind: "SDL API",
-      },
-      {
-        label: "SDL_MouseMotionEvent",
-        href: "https://wiki.libsdl.org/SDL3/SDL_MouseMotionEvent",
-        kind: "SDL API",
-      },
-      {
-        label: "Distance",
-        href: "/glossary#distance",
-        kind: "Thuật ngữ",
-      },
-      {
         label: "Pointer capture",
         href: "/glossary#pointer-capture",
         kind: "Thuật ngữ",
+      },
+      {
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
       },
     ],
     "p06-l04": [
@@ -211,48 +219,62 @@ const learning = {
         kind: "Thuật ngữ",
       },
       {
-        label: "Vector subtraction",
-        href: "/glossary#vector-subtraction",
-        kind: "Thuật ngữ",
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
       },
     ],
     "p06-l05": [
       {
-        label: "Scalar multiplication",
-        href: "/glossary#scalar-multiplication",
+        label: "Vector subtraction",
+        href: "/glossary#vector-subtraction",
         kind: "Thuật ngữ",
       },
       {
-        label: "Magnitude",
-        href: "/glossary#magnitude",
-        kind: "Thuật ngữ",
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
       },
+    ],
+    "p06-l06": [
       {
         label: "Distance",
         href: "/glossary#distance",
         kind: "Thuật ngữ",
       },
-    ],
-    "p06-l06": [
       {
-        label: "CTest command-line reference",
-        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
-        kind: "CMake",
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
       },
+    ],
+    "p06-l07": [
       {
         label: "Normalization",
         href: "/glossary#normalization",
         kind: "Thuật ngữ",
       },
       {
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
+      },
+    ],
+    "p06-l08": [
+      {
         label: "Linear interpolation",
         href: "/glossary#linear-interpolation",
         kind: "Thuật ngữ",
       },
       {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
+      },
+      {
+        label: "CTest command-line reference",
+        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
+        kind: "CMake",
       },
     ],
   },
