@@ -3,18 +3,28 @@ import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
   base: {
     label: "STROKE LAB",
-    title: "Vì sao nét chuột bị đứt?",
-    description: "Thay sampling rate, xem input samples và bật nội suy để lấp khoảng hở.",
+    title: "Từ các mẫu chuột đến một nét liền",
+    description:
+      "Tô pixel bằng công thức C++, thử lấy mẫu thưa và so khoảng cách trước/sau nội suy.",
   },
   modes: {
+    "stroke-brush": {
+      title: "Bán kính 2 tạo ra bao nhiêu pixel?",
+      description:
+        "Phóng to lưới của đầu bút tròn, đổi bán kính và đối chiếu điều kiện dx² + dy² ≤ r².",
+    },
     "stroke-sampling": {
-      title: "Các mouse sample để lại khoảng hở bao lớn?",
-      description: "Nội suy mở ở trạng thái tắt để quan sát đúng lỗi mà bài đang chẩn đoán.",
+      title: "Đo khoảng hở trước khi sửa",
+      description: "Giữ nội suy tắt, lấy 1 trên N mẫu và xem khoảng cách giữa các tâm.",
     },
     "stroke-interpolation": {
-      title: "Nội suy đã giới hạn khoảng cách giữa các stamp chưa?",
+      title: "Chia đoạn thành đủ số khoảng",
       description:
-        "Bắt đầu với nội suy được bật, rồi tắt đi để tạo đối chứng trên cùng một stroke.",
+        "Bật/tắt nội suy trên cùng mẫu; giảm khoảng tâm không có nghĩa khôi phục quỹ đạo đã mất.",
+    },
+    "stroke-validation": {
+      title: "Hai nét riêng có bị nối nhầm?",
+      description: "Thử preset, click/kéo hoặc Enter và phím mũi tên; so pixel và khoảng dấu bút.",
     },
   },
 } satisfies ProjectLabMeta;

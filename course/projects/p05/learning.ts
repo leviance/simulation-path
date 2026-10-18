@@ -4,143 +4,148 @@ const learning = {
   guides: {
     "p05-l01": {
       focus:
-        "Đặt quy ước rõ cho screen space và world space trong Camera2D; mọi thao tác sau đó đều đi qua hai hàm chuyển đổi.",
+        "Chạy starter, rồi tự vẽ trục và điểm (2,1) bằng putPixel trước khi gom công thức vào camera.",
       expected:
-        "Bạn xác định được gốc tọa độ, chiều dương của Y và đơn vị trong từng hệ. Điểm (2,1) xuất hiện đúng ở phía trên bên phải tâm màn hình.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Hai trục nằm giữa window; điểm xanh ở trên phải, cách gốc 110 px ngang và 55 px dọc.",
+      files: ["include/framebuffer.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Quy ước screen space",
-          explanation: "Gốc nằm ở góc trên bên trái, X sang phải, Y đi xuống và đơn vị là pixel.",
+          title: "Bắt đầu từ ảnh CPU",
+          explanation:
+            "Framebuffer và texture đã chạy; thêm hình vào renderScene, không sửa vòng đời SDL.",
         },
         {
-          title: "Quy ước world space",
-          explanation:
-            "Gốc do thế giới định nghĩa, X sang phải, Y đi lên và đơn vị độc lập với độ phân giải.",
+          title: "Quy ước hai hệ",
+          explanation: "Screen Y đi xuống; world Y đi lên. 55 px đại diện một đơn vị world.",
         },
         {
-          title: "Camera nối hai hệ",
+          title: "Từ số tới hình",
           explanation:
-            "`centerWorld`, `pixelsPerUnit` và `viewportPixels` đủ để mô tả quan hệ giữa hai hệ tọa độ.",
+            "Tính markerScreen rồi gọi disc; SDL_UpdateTexture mới đưa ảnh CPU lên texture.",
         },
       ],
     },
     "p05-l02": {
-      focus:
-        "Viết `worldToScreen` bằng ba bước: tính vị trí tương đối với camera, đổi sang pixel, rồi đưa gốc tới tâm viewport và đảo Y.",
+      focus: "Viết worldToScreen và thử thay tâm/tỉ lệ camera mà không đổi dữ liệu điểm.",
       expected:
-        "centerWorld luôn được ánh xạ tới giữa viewport. Tăng world.x làm điểm đi sang phải; tăng world.y làm điểm đi lên màn hình.",
-      files: ["include/lab.hpp"],
+        "Camera center luôn nằm giữa viewport; world (2,1) vẫn giữ nguyên trong vector points.",
+      files: ["include/lab.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Tính vị trí tương đối",
-          explanation:
-            "`relative = world - centerWorld` biến tọa độ tuyệt đối thành độ lệch so với tâm camera.",
+          title: "Trừ tâm camera",
+          explanation: "relativeX/relativeY trả lời điểm cách tâm nhìn bao xa trong world.",
         },
         {
-          title: "Đổi sang pixel",
-          explanation:
-            "Nhân với `pixelsPerUnit` để đổi đơn vị world thành pixel; tỉ lệ dương được bảo vệ bởi `scale()`.",
+          title: "Nhân tỉ lệ",
+          explanation: "scale() bảo vệ đơn vị pixel/world; không đổi dữ liệu điểm khi zoom.",
         },
         {
-          title: "Chỉ đảo Y một lần",
-          explanation:
-            "`screenY = halfHeight - relative.y × scale` vì trục Y màn hình ngược chiều world; phần vẽ không được đảo thêm lần nữa.",
+          title: "Đưa gốc tới giữa ảnh",
+          explanation: "Cộng nửa chiều rộng, trừ độ cao do screen Y đi xuống.",
         },
       ],
     },
     "p05-l03": {
-      focus:
-        "Suy ra `screenToWorld` bằng cách hoàn tác từng bước theo thứ tự ngược; đây là nền tảng để chọn vật thể và đọc tọa độ con trỏ.",
-      expected:
-        "Với nhiều điểm khác nhau, screenToWorld(worldToScreen(p)) phục hồi p với sai số dưới 1e−9.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Suy ra screenToWorld và nối mouse motion đã đổi về render coordinates.",
+      expected: "Tọa độ world dưới chuột đổi liên tục; giữa window trả về centerWorld.",
+      files: ["include/lab.hpp", "src/main.cpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Bỏ độ dời tới tâm viewport",
-          explanation:
-            "Trừ nửa kích thước viewport khỏi tọa độ screen để trở lại độ lệch pixel quanh tâm.",
+          title: "Hoàn tác phép chiếu",
+          explanation: "Bỏ nửa viewport, chia scale rồi cộng camera center.",
         },
         {
-          title: "Chia cho tỉ lệ",
+          title: "Đổi input đúng một lần",
           explanation:
-            "Chia `pixelsPerUnit` để đổi pixel trở lại đơn vị world; Y vẫn có dấu trừ đối xứng với chiều thuận.",
+            "SDL_ConvertEventToRenderCoordinates xử lý renderer/logical presentation trước khi đưa vào camera.",
         },
         {
-          title: "Cộng tâm camera",
-          explanation: "Bước cuối đưa độ lệch tương đối trở lại tọa độ world tuyệt đối.",
+          title: "Hiển thị số đo",
+          explanation:
+            "HUD đọc cursorScreen và screenToWorld; không vẽ lại điểm tại vị trí con trỏ.",
         },
       ],
     },
     "p05-l04": {
-      focus:
-        "Vẽ lưới từ khoảng world đang nhìn thấy và pan camera bằng độ dời chuột sau khi đổi qua tỉ lệ.",
-      expected:
-        "Khi kéo chuột, lưới bám theo tay. Điểm đánh dấu giữ nguyên tọa độ trong world space và khoảng cách đường lưới phản ánh đúng mức zoom.",
-      files: ["src/main.cpp", "include/lab.hpp"],
+      focus: "Vẽ lưới trong vùng world đang nhìn thấy và kéo camera bằng chuột phải.",
+      expected: "Lưới thay đổi mật độ phù hợp, có nhãn số; kéo phải làm cảnh đi theo tay.",
+      files: ["include/lab.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tính vùng world đang thấy",
-          explanation:
-            "Đổi hai góc screen về world rồi dùng `floor`/`ceil` để chỉ lặp qua các đường lưới trong viewport.",
+          title: "Chọn bước lưới",
+          explanation: "Dãy 1–2–5 × 10^n giữ khoảng cách ít nhất 40 pixel.",
         },
         {
-          title: "Camera đi ngược cảnh",
-          explanation:
-            "Kéo nội dung sang phải tương đương `centerWorld` đi sang trái `deltaX / scale`; Y đổi dấu theo quy ước hai hệ.",
+          title: "Chỉ xét vùng nhìn",
+          explanation: "Đổi hai góc ảnh về world; ceil chọn đường đầu tiên.",
         },
         {
-          title: "Dùng độ dời của từng sự kiện",
+          title: "Pan bằng delta",
           explanation:
-            "Mỗi MOUSE_MOTION dùng `current - previous` rồi cập nhật `previous`, tránh cộng lại toàn bộ quãng kéo ở mọi sự kiện.",
+            "Đổi độ dời từ pixel sang world, đổi dấu X của camera và cập nhật mẫu chuột trước đó.",
         },
       ],
     },
     "p05-l05": {
-      focus:
-        "Zoom quanh con trỏ bằng một điều kiện rõ ràng: điểm world dưới con trỏ trước khi zoom phải vẫn nằm ở đó sau khi đổi tỉ lệ.",
+      focus: "Giữ world anchor bằng hai lần screenToWorld quanh thao tác đổi scale.",
       expected:
-        "Cuộn để zoom không làm điểm dưới con trỏ bị trôi; pixelsPerUnit luôn nằm trong khoảng 20…160.",
+        "Con lăn và +/- giữ đúng vị trí world dưới dấu chữ thập; zoom được giới hạn 5–800 px/unit.",
       files: ["include/lab.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Ghi điểm trước khi zoom",
-          explanation:
-            "`before = screenToWorld(cursor)` dùng camera cũ để biết điểm world người dùng đang trỏ tới.",
+          title: "Đo điểm trước zoom",
+          explanation: "Lưu worldBeforeZoom bằng camera cũ.",
         },
         {
-          title: "Đổi tỉ lệ trong giới hạn",
-          explanation:
-            "Nhân với `factor` rồi clamp để tỉ lệ luôn hữu hạn, dương và lưới không quá dày hoặc quá thưa.",
+          title: "Đổi scale rồi đo lại",
+          explanation: "Clamp tỉ lệ, tính worldAfterZoom tại cùng screen point.",
         },
         {
-          title: "Bù tâm camera",
-          explanation:
-            "Tính `after` bằng camera mới rồi cộng `before - after` vào `centerWorld` để triệt tiêu độ trôi.",
+          title: "Bù centerWorld",
+          explanation: "Cộng chênh lệch hai điểm; không thay các điểm trong scene.",
         },
       ],
     },
     "p05-l06": {
-      focus:
-        "Kiểm tra round trip, pan theo tỉ lệ và zoom quanh con trỏ bằng code thuần; sau đó chạy ứng dụng hoàn chỉnh có lưới, pan, zoom và điểm world.",
+      focus: "Thêm danh sách điểm, hit-test và trạng thái kéo riêng với pan.",
       expected:
-        "Toàn bộ CTest đều đạt. `project_5_final` giữ đúng điểm dưới con trỏ khi zoom, pan đúng chiều và đặt lại camera bằng phím R.",
-      files: ["tests/tests.cpp", "include/lab.hpp"],
+        "Click trái đặt điểm mới hoặc chọn điểm trên cùng trong vùng click; kéo giữ grab offset, Delete xóa điểm đã chọn.",
+      files: ["include/scene.hpp", "src/main.cpp", "include/view.hpp"],
       steps: [
         {
-          title: "Round trip trên nhiều vùng",
-          explanation:
-            "Kiểm tra gốc, số âm và điểm xa để tránh công thức chỉ vô tình đúng gần tâm camera.",
+          title: "Chọn bằng screen distance",
+          explanation: "Hit-test 10 px ổn định ở mọi mức zoom; xét từ điểm vẽ sau cùng.",
         },
         {
-          title: "So sánh với epsilon",
-          explanation:
-            "Phép chuyển đổi dùng `double`, nên kiểm tra `distance < epsilon` thay vì dùng `operator==` sau chuỗi nhân và chia.",
+          title: "Giữ chỗ người dùng nắm",
+          explanation: "grabOffset tránh nhảy điểm khi click lệch tâm.",
         },
         {
-          title: "Kiểm tra đúng hành vi zoom",
+          title: "Một thao tác tại một thời điểm",
           explanation:
-            "Test không cần biết tỉ lệ cuối là bao nhiêu; nó xác nhận điểm world dưới con trỏ không thay đổi.",
+            "ownerButton/owner chọn đúng mouse và nút; cancelDrag dọn trạng thái và capture.",
+        },
+      ],
+    },
+    "p05-l07": {
+      focus: "Chạy kiểm thử CPU độc lập, kiểm tra cửa sổ thật và đọc toàn bộ source cuối bài.",
+      expected:
+        "Starter, bảy checkpoint và final build được; CTest Debug/Release kiểm tra round trip, pan/zoom, grid, hit-test, drag và resize.",
+      files: ["tests/tests.cpp", "include/presentation.hpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Test số cụ thể trước",
+          explanation: "Fixture (2,1) → (590,215) bắt lỗi dấu và gốc; round trip đơn độc chưa đủ.",
+        },
+        {
+          title: "Test invariant tương tác",
+          explanation:
+            "Zoom giữ nguyên điểm dưới con trỏ, drag giữ offset, resize không đổi points.",
+        },
+        {
+          title: "Nghiệm thu hai lớp",
+          explanation:
+            "CTest không mở window; checklist desktop kiểm tra input, nhãn, focus và HiDPI.",
         },
       ],
     },
@@ -148,38 +153,43 @@ const learning = {
   references: {
     "p05-l01": [
       {
-        label: "Screen space",
-        href: "/glossary#screen-space",
-        kind: "Thuật ngữ",
-      },
-      {
         label: "World space",
         href: "/glossary#world-space",
         kind: "Thuật ngữ",
       },
       {
-        label: "Framebuffer",
-        href: "/glossary#framebuffer",
+        label: "Screen space",
+        href: "/glossary#screen-space",
         kind: "Thuật ngữ",
+      },
+      {
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
       },
     ],
     "p05-l02": [
       {
+        label: "World space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
+      },
+      {
         label: "Screen space",
         href: "/glossary#screen-space",
         kind: "Thuật ngữ",
       },
       {
-        label: "World space",
-        href: "/glossary#world-space",
-        kind: "Thuật ngữ",
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
       },
     ],
     "p05-l03": [
       {
-        label: "SDL_MouseMotionEvent",
-        href: "https://wiki.libsdl.org/SDL3/SDL_MouseMotionEvent",
-        kind: "SDL API",
+        label: "World space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
       },
       {
         label: "Screen space",
@@ -187,21 +197,16 @@ const learning = {
         kind: "Thuật ngữ",
       },
       {
-        label: "World space",
-        href: "/glossary#world-space",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Round-trip test",
-        href: "/glossary#round-trip-test",
-        kind: "Thuật ngữ",
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
       },
     ],
     "p05-l04": [
       {
-        label: "SDL_CaptureMouse",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
-        kind: "SDL API",
+        label: "World space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
       },
       {
         label: "Screen space",
@@ -209,43 +214,60 @@ const learning = {
         kind: "Thuật ngữ",
       },
       {
-        label: "World space",
-        href: "/glossary#world-space",
-        kind: "Thuật ngữ",
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
       },
     ],
     "p05-l05": [
       {
-        label: "SDL_MouseWheelEvent",
-        href: "https://wiki.libsdl.org/SDL3/SDL_MouseWheelEvent",
-        kind: "SDL API",
-      },
-      {
-        label: "SDL_GetMouseState",
-        href: "https://wiki.libsdl.org/SDL3/SDL_GetMouseState",
-        kind: "SDL API",
-      },
-      {
-        label: "Round-trip test",
-        href: "/glossary#round-trip-test",
+        label: "World space",
+        href: "/glossary#world-space",
         kind: "Thuật ngữ",
+      },
+      {
+        label: "Screen space",
+        href: "/glossary#screen-space",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
       },
     ],
     "p05-l06": [
       {
+        label: "World space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Screen space",
+        href: "/glossary#screen-space",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
+      },
+    ],
+    "p05-l07": [
+      {
+        label: "World space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Screen space",
+        href: "/glossary#screen-space",
+        kind: "Thuật ngữ",
+      },
+      {
         label: "CTest command-line reference",
         href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
         kind: "CMake",
-      },
-      {
-        label: "Round-trip test",
-        href: "/glossary#round-trip-test",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
       },
     ],
   },

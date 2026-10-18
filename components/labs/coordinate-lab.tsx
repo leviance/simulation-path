@@ -6,188 +6,294 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
 } from "react";
+import {
+  initialCamera,
+  beginCoordinateDrag,
+  moveCoordinatePoint,
+  panCamera,
+  screenToWorld,
+  worldToScreen,
+  zoomCameraAt,
+  gridSpacing,
+  type Camera,
+  type CoordinateScene,
+} from "@/lib/labs/coordinate";
 import { clamp, type Point } from "@/lib/labs/geometry";
-import { screenToWorld, worldToScreen, zoomCameraAt, type Camera } from "@/lib/labs/coordinate";
-import { LabReadout, canvasPoint, drawLine, setupCanvas, useCanvasSize } from "./lab-shared";
+import { LabReadout, useCanvasSize } from "./lab-shared";
+import { coordinatePoint, drawCoordinateLab } from "./coordinate-lab-view";
 import type { InteractiveLabMode } from "./types";
 
 const cameraPresets: Record<string, Camera> = {
-  origin: { x: 0, y: 0, zoom: 55 },
+  origin: initialCamera,
   offset: { x: 2.5, y: -1.5, zoom: 45 },
-  close: { x: -1, y: 1, zoom: 110 },
+  close: { x: -1, y: 1, zoom: 250 },
 };
+const initialScene = (): CoordinateScene => ({
+  camera: { ...initialCamera },
+  points: [{ x: 2, y: 1 }],
+  selected: -1,
+  grabOffset: { x: 0, y: 0 },
+  draggingPoint: false,
+});
 
 export default function CoordinateLab({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const size = useCanvasSize(canvasRef);
-  const [camera, setCamera] = useState<Camera>(cameraPresets.origin);
+  const [scene, setScene] = useState<CoordinateScene>(initialScene);
+  const sceneRef = useRef(scene);
   const [preset, setPreset] = useState("origin");
   const [cursor, setCursor] = useState<Point>({ x: 200, y: 160 });
   const [paused, setPaused] = useState(false);
   const [anchorError, setAnchorError] = useState(0);
-  const dragOrigin = useRef<Point | null>(null);
-  const canPanAndZoom = mode === undefined || mode === "coordinate-zoom";
+  const owner = useRef<{ id: number; button: number; previous: Point } | null>(null);
+  const previousMode = useRef(mode);
+  const canPan =
+    mode === undefined || ["coordinate-pan", "coordinate-zoom", "coordinate-points"].includes(mode);
+  const canZoom = mode === undefined || ["coordinate-zoom", "coordinate-points"].includes(mode);
+  const canEdit = mode === undefined || mode === "coordinate-points";
+  const camera = scene.camera;
   const cursorWorld = screenToWorld(cursor, camera, size);
-  const restoredCursor = worldToScreen(cursorWorld, camera, size);
-  const roundTripError = Math.hypot(restoredCursor.x - cursor.x, restoredCursor.y - cursor.y);
+  const restored = worldToScreen(cursorWorld, camera, size);
+  const roundTripError = Math.hypot(restored.x - cursor.x, restored.y - cursor.y);
 
-  useEffect(() => {
+  const updateScene = (next: CoordinateScene) => {
+    sceneRef.current = next;
+    setScene(next);
+  };
+  const release = () => {
+    const active = owner.current;
+    owner.current = null;
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-    const left = camera.x - size.width / (2 * camera.zoom);
-    const right = camera.x + size.width / (2 * camera.zoom);
-    const bottom = camera.y - size.height / (2 * camera.zoom);
-    const top = camera.y + size.height / (2 * camera.zoom);
-    for (let x = Math.floor(left); x <= Math.ceil(right); x += 1) {
-      const screen = worldToScreen({ x, y: 0 }, camera, size);
-      drawLine(
-        ctx,
-        { x: screen.x, y: 0 },
-        { x: screen.x, y: size.height },
-        x === 0 ? "#63708d" : "#1d2943",
-        x === 0 ? 2 : 1,
-      );
-      if (x !== 0) {
-        ctx.fillStyle = "#6f7d9c";
-        ctx.font = "10px ui-monospace";
-        ctx.fillText(String(x), screen.x + 4, worldToScreen({ x: 0, y: 0 }, camera, size).y - 5);
-      }
+    if (active && canvas?.hasPointerCapture(active.id)) canvas.releasePointerCapture(active.id);
+    if (sceneRef.current.draggingPoint) updateScene({ ...sceneRef.current, draggingPoint: false });
+  };
+  useEffect(() => {
+    const blur = () => release();
+    const hidden = () => {
+      if (document.hidden) release();
+    };
+    window.addEventListener("blur", blur);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", blur);
+      document.removeEventListener("visibilitychange", hidden);
+      release();
+    };
+  }, []);
+  useEffect(() => {
+    release();
+    if (previousMode.current !== mode) {
+      previousMode.current = mode;
+      updateScene(initialScene());
+      setPreset("origin");
+      setAnchorError(0);
+      setPaused(false);
     }
-    for (let y = Math.floor(bottom); y <= Math.ceil(top); y += 1) {
-      const screen = worldToScreen({ x: 0, y }, camera, size);
-      drawLine(
-        ctx,
-        { x: 0, y: screen.y },
-        { x: size.width, y: screen.y },
-        y === 0 ? "#63708d" : "#1d2943",
-        y === 0 ? 2 : 1,
-      );
-    }
-    const world = screenToWorld(cursor, camera, size);
-    const restored = worldToScreen(world, camera, size);
-    const error = Math.hypot(restored.x - cursor.x, restored.y - cursor.y);
-    ctx.beginPath();
-    ctx.arc(restored.x, restored.y, 7, 0, Math.PI * 2);
-    ctx.fillStyle = paused ? "#6f7d9c" : "#53f0ae";
-    ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.stroke();
-    ctx.fillStyle = "#0b1020";
-    ctx.fillRect(16, 16, 320, 96);
-    ctx.fillStyle = "#9aa6c1";
-    ctx.font = "11px ui-monospace";
-    ctx.fillText(`SCREEN  (${cursor.x.toFixed(1)}, ${cursor.y.toFixed(1)})`, 28, 39);
-    ctx.fillStyle = "#53f0ae";
-    ctx.fillText(`WORLD   (${world.x.toFixed(3)}, ${world.y.toFixed(3)})`, 28, 61);
-    ctx.fillStyle = error < 1e-9 ? "#84a9ff" : "#ff6b6b";
-    ctx.fillText(`ROUND TRIP ERROR  ${error.toExponential(2)} px`, 28, 83);
-    ctx.fillStyle = anchorError < 1e-9 ? "#84a9ff" : "#ff6b6b";
-    ctx.fillText(`ZOOM ANCHOR ERROR ${anchorError.toExponential(2)} world`, 28, 103);
-  }, [anchorError, camera, cursor, paused, size]);
+  }, [size.width, size.height, mode]);
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawCoordinateLab(ctx, size, scene, cursor, canPan);
+  }, [size, scene, cursor, canPan]);
 
-  const move = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (paused) return;
-    const point = canvasPoint(event, event.currentTarget);
-    setCursor(point);
-    if (dragOrigin.current) {
-      const dx = point.x - dragOrigin.current.x;
-      const dy = point.y - dragOrigin.current.y;
-      setPreset("custom");
-      setCamera((current) => ({
-        ...current,
-        x: current.x - dx / current.zoom,
-        y: current.y + dy / current.zoom,
-      }));
-      dragOrigin.current = point;
-    }
-  };
-  const zoomAt = (point: Point, factor: number) => {
-    setPreset("custom");
-    const result = zoomCameraAt(camera, point, factor, size);
-    setAnchorError(result.anchorError);
-    setCamera(result.camera);
-  };
-  const onWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
-    if (paused || !canPanAndZoom) return;
-    event.preventDefault();
-    const point = canvasPoint(event, event.currentTarget);
-    setCursor(point);
-    if (event.deltaY !== 0) {
-      zoomAt(point, event.deltaY < 0 ? 1.12 : 1 / 1.12);
-    }
-  };
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (paused) return;
-    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-      event.preventDefault();
-      if (!canPanAndZoom) {
-        setCursor((current) => ({
-          x: clamp(
-            current.x + (event.key === "ArrowRight" ? 10 : event.key === "ArrowLeft" ? -10 : 0),
-            0,
-            size.width,
-          ),
-          y: clamp(
-            current.y + (event.key === "ArrowDown" ? 10 : event.key === "ArrowUp" ? -10 : 0),
-            0,
-            size.height,
-          ),
-        }));
-        return;
-      }
-      setPreset("custom");
-      setCamera((current) => ({
-        ...current,
-        x:
-          current.x +
-          (event.key === "ArrowRight"
-            ? 20 / current.zoom
-            : event.key === "ArrowLeft"
-              ? -20 / current.zoom
-              : 0),
-        y:
-          current.y +
-          (event.key === "ArrowUp"
-            ? 20 / current.zoom
-            : event.key === "ArrowDown"
-              ? -20 / current.zoom
-              : 0),
-      }));
-    }
-    if (canPanAndZoom && (event.key === "+" || event.key === "=")) zoomAt(cursor, 1.12);
-    if (canPanAndZoom && (event.key === "-" || event.key === "_")) zoomAt(cursor, 1 / 1.12);
+  const togglePause = () => {
+    release();
+    setPaused((value) => !value);
   };
   const reset = () => {
-    setAnchorError(0);
+    release();
+    updateScene(initialScene());
     setPreset("origin");
-    setCamera(cameraPresets.origin);
-    setCursor({ x: size.width * 0.55, y: size.height * 0.5 });
+    setAnchorError(0);
+    setCursor({ x: size.width / 2, y: size.height / 2 });
     setPaused(false);
+  };
+  const resetView = () => {
+    release();
+    updateScene({ ...sceneRef.current, camera: { ...initialCamera } });
+    setPreset("origin");
+    setAnchorError(0);
+  };
+  const zoomAt = (screen: Point, factor: number) => {
+    release();
+    const result = zoomCameraAt(sceneRef.current.camera, screen, factor, size);
+    updateScene({ ...sceneRef.current, camera: result.camera });
+    setAnchorError(result.anchorError);
+    setPreset("custom");
+  };
+  const start = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (paused || !event.isPrimary || owner.current || (event.button !== 0 && event.button !== 2))
+      return;
+    const point = coordinatePoint(event, size);
+    if (!point) return;
+    event.currentTarget.focus();
+    event.preventDefault();
+    setCursor(point);
+    if ((event.button === 0 && !canEdit) || (event.button === 2 && !canPan)) return;
+    if (event.button === 0) {
+      const next = beginCoordinateDrag(sceneRef.current, point, size);
+      updateScene(next);
+      if (!next.draggingPoint) return;
+    }
+    owner.current = { id: event.pointerId, button: event.button, previous: point };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const move = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (paused || (owner.current && owner.current.id !== event.pointerId)) return;
+    const point = coordinatePoint(event, size);
+    if (!point) {
+      release();
+      return;
+    }
+    setCursor(point);
+    const active = owner.current;
+    if (!active) return;
+    const mask = active.button === 2 ? 2 : 1;
+    if ((event.buttons & mask) === 0) {
+      release();
+      return;
+    }
+    if (active.button === 2) {
+      const deltaPixels = { x: point.x - active.previous.x, y: point.y - active.previous.y };
+      updateScene({ ...sceneRef.current, camera: panCamera(sceneRef.current.camera, deltaPixels) });
+      active.previous = point;
+      setPreset("custom");
+    } else updateScene(moveCoordinatePoint(sceneRef.current, point, size));
+  };
+  const end = (event: ReactPointerEvent<HTMLCanvasElement>, cancelled = false) => {
+    const active = owner.current;
+    if (!active || active.id !== event.pointerId || (!cancelled && event.button !== active.button))
+      return;
+    const point = coordinatePoint(event, size);
+    if (!cancelled && point && !paused) {
+      if (active.button === 2) {
+        const deltaPixels = { x: point.x - active.previous.x, y: point.y - active.previous.y };
+        updateScene({
+          ...sceneRef.current,
+          camera: panCamera(sceneRef.current.camera, deltaPixels),
+        });
+      } else updateScene(moveCoordinatePoint(sceneRef.current, point, size));
+      setCursor(point);
+    }
+    release();
+  };
+  // A native non-passive listener reliably prevents page scroll over the lab.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const wheel = (event: WheelEvent) => {
+      if (!canZoom || event.ctrlKey || event.metaKey) return;
+      event.preventDefault();
+      if (paused) return;
+      const point = coordinatePoint(
+        { ...event, clientX: event.clientX, clientY: event.clientY, currentTarget: canvas },
+        size,
+      );
+      if (!point || !Number.isFinite(event.deltaY) || event.deltaY === 0) return;
+      let delta = event.deltaY;
+      if (event.deltaMode === 1) delta *= 16;
+      if (event.deltaMode === 2) delta *= size.height;
+      setCursor(point);
+      zoomAt(point, Math.exp(-clamp(delta, -600, 600) * 0.002));
+    };
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", wheel);
+  }, [canZoom, paused, size]);
+
+  const erase = () => {
+    release();
+    const current = sceneRef.current;
+    if (current.selected < 0) return;
+    updateScene({
+      ...current,
+      points: current.points.filter((_, index) => index !== current.selected),
+      selected: -1,
+    });
+  };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const keys = [
+      " ",
+      "r",
+      "R",
+      "Enter",
+      "Delete",
+      "Escape",
+      "ArrowLeft",
+      "ArrowRight",
+      "ArrowUp",
+      "ArrowDown",
+      "+",
+      "=",
+      "-",
+      "_",
+    ];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === " ") {
+      if (!event.repeat) togglePause();
+      return;
+    }
+    if (event.key === "Escape") {
+      release();
+      return;
+    }
+    if (paused) return;
+    if (event.key.toLowerCase() === "r") {
+      resetView();
+      return;
+    }
+    if (canEdit && event.key === "Delete") {
+      erase();
+      return;
+    }
+    if (canEdit && event.key === "Enter" && !event.repeat) {
+      updateScene({ ...beginCoordinateDrag(sceneRef.current, cursor, size), draggingPoint: false });
+      return;
+    }
+    if (canZoom && ["+", "=", "-", "_"].includes(event.key)) {
+      zoomAt(cursor, ["+", "="].includes(event.key) ? 1.12 : 1 / 1.12);
+      return;
+    }
+    const dx = event.key === "ArrowRight" ? 10 : event.key === "ArrowLeft" ? -10 : 0;
+    const dy = event.key === "ArrowDown" ? 10 : event.key === "ArrowUp" ? -10 : 0;
+    if (!dx && !dy) return;
+    release();
+    const current = sceneRef.current;
+    if (canEdit && current.selected >= 0 && !event.shiftKey) {
+      const points = current.points.map((point, index) =>
+        index === current.selected
+          ? { x: point.x + dx / camera.zoom, y: point.y - dy / camera.zoom }
+          : point,
+      );
+      updateScene({ ...current, points });
+    } else if (canPan && event.shiftKey) {
+      updateScene({ ...current, camera: panCamera(current.camera, { x: dx, y: dy }) });
+      setPreset("custom");
+    } else
+      setCursor((point) => ({
+        x: clamp(point.x + dx, 0, size.width - 1),
+        y: clamp(point.y + dy, 0, size.height - 1),
+      }));
   };
 
   return (
     <div className="lab-body">
       <div className="lab-controls">
-        <span className="control-hint">
-          {canPanAndZoom
-            ? "Kéo/mũi tên để pan · Wheel/+/- để zoom"
-            : "Di chuyển chuột hoặc dùng phím mũi tên để đổi screen point"}
-        </span>
-        {canPanAndZoom && (
+        {canPan && (
           <label>
             Góc nhìn
             <select
               value={preset}
+              disabled={paused}
               onChange={(event) => {
+                release();
                 const value = event.target.value;
                 setPreset(value);
-                if (cameraPresets[value]) setCamera(cameraPresets[value]);
+                if (cameraPresets[value])
+                  updateScene({ ...sceneRef.current, camera: { ...cameraPresets[value] } });
+                setAnchorError(0);
               }}
-              disabled={paused}
             >
               <option value="origin">Gốc tọa độ</option>
               <option value="offset">Lệch tâm</option>
@@ -196,36 +302,67 @@ export default function CoordinateLab({ mode }: { mode?: InteractiveLabMode }) {
             </select>
           </label>
         )}
-        <label>
-          Tỉ lệ <output>{camera.zoom.toFixed(0)} px/unit</output>
-        </label>
-        <button onClick={() => setPaused((value) => !value)}>
-          {paused ? "Tiếp tục" : "Tạm dừng"}
-        </button>
+        {canEdit && (
+          <label>
+            Điểm
+            <select
+              aria-label="Chọn điểm"
+              disabled={paused}
+              value={scene.selected}
+              onChange={(event) => {
+                release();
+                updateScene({ ...sceneRef.current, selected: Number(event.target.value) });
+              }}
+            >
+              <option value={-1}>Chưa chọn</option>
+              {scene.points.map((_, index) => (
+                <option key={index} value={index}>
+                  P{index + 1}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {canEdit && (
+          <button disabled={paused || scene.selected < 0} onClick={erase}>
+            Xóa điểm
+          </button>
+        )}
+        {canZoom && (
+          <>
+            <button disabled={paused} aria-label="Thu nhỏ" onClick={() => zoomAt(cursor, 1 / 1.12)}>
+              −
+            </button>
+            <button disabled={paused} aria-label="Phóng to" onClick={() => zoomAt(cursor, 1.12)}>
+              +
+            </button>
+          </>
+        )}
+        <button onClick={togglePause}>{paused ? "Tiếp tục" : "Tạm dừng"}</button>
         <button onClick={reset}>Đặt lại</button>
       </div>
+      <p className="control-hint">
+        {canEdit
+          ? "Chuột trái: đặt/kéo điểm · Chuột phải: pan · Wheel: zoom. Bàn phím: Enter đặt điểm tại dấu chữ thập; chọn P trong danh sách rồi dùng mũi tên để di chuyển; Shift+mũi tên pan; Delete xóa."
+          : canPan
+            ? "Kéo chuột phải hoặc Shift+mũi tên để pan. Mũi tên di chuyển dấu chữ thập; +/- zoom quanh dấu chữ thập."
+            : "Camera được giữ cố định. Di chuyển chuột hoặc dùng mũi tên để đọc hai tọa độ của cùng một vị trí."}{" "}
+        Space tạm dừng, R đặt lại góc nhìn (giữ điểm). Không có chuyển động tự chạy.
+      </p>
       <canvas
         ref={canvasRef}
-        onPointerDown={(event) => {
-          if (paused) return;
-          const point = canvasPoint(event, event.currentTarget);
-          setCursor(point);
-          if (canPanAndZoom) {
-            dragOrigin.current = point;
-            event.currentTarget.setPointerCapture(event.pointerId);
-          }
-        }}
+        onPointerDown={start}
         onPointerMove={move}
-        onPointerUp={() => {
-          dragOrigin.current = null;
+        onPointerUp={end}
+        onPointerCancel={(event) => end(event, true)}
+        onLostPointerCapture={(event) => {
+          if (owner.current?.id === event.pointerId) release();
         }}
-        onPointerCancel={() => {
-          dragOrigin.current = null;
-        }}
-        onWheel={onWheel}
+        onBlur={release}
+        onContextMenu={(event) => event.preventDefault()}
         onKeyDown={onKeyDown}
         tabIndex={0}
-        aria-label="Mặt phẳng tọa độ có pan, zoom quanh cursor và hiển thị round-trip error"
+        aria-label="Mặt phẳng tọa độ: hai trục, lưới, pan zoom và đặt kéo điểm"
       />
       <LabReadout
         items={[
@@ -233,10 +370,12 @@ export default function CoordinateLab({ mode }: { mode?: InteractiveLabMode }) {
           { label: "World", value: `(${cursorWorld.x.toFixed(3)}, ${cursorWorld.y.toFixed(3)})` },
           {
             label: "Camera",
-            value: `(${camera.x.toFixed(3)}, ${camera.y.toFixed(3)}), zoom ${camera.zoom.toFixed(1)} px/unit`,
+            value: `(${camera.x.toFixed(2)}, ${camera.y.toFixed(2)}), ${camera.zoom.toFixed(1)} px/unit`,
           },
-          { label: "Round-trip error", value: `${roundTripError.toExponential(2)} px` },
-          { label: "Zoom-anchor error", value: `${anchorError.toExponential(2)} world unit` },
+          { label: "Bước lưới", value: gridSpacing(camera.zoom).toString() + " world unit" },
+          { label: "Số điểm", value: `${scene.points.length}/256` },
+          { label: "Round-trip error", value: roundTripError.toExponential(2) + " px" },
+          { label: "Zoom-anchor error", value: anchorError.toExponential(2) + " world unit" },
         ]}
       />
     </div>

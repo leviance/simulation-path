@@ -3,22 +3,31 @@ import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
   base: {
     label: "COORDINATE LAB",
-    title: "Một điểm đang ở screen hay world space?",
-    description: "Pan, zoom quanh cursor và theo dõi round-trip error.",
+    title: "Mặt phẳng tọa độ kéo-thả",
+    description: "Đặt và kéo điểm, pan, zoom quanh con trỏ; đối chiếu screen/world và sai số.",
   },
   modes: {
     "coordinate-spaces": {
-      title: "Một điểm đang được đọc ở screen hay world space?",
-      description: "Camera được giữ cố định; di chuyển con trỏ để chỉ tập trung vào hai hệ tọa độ.",
+      title: "Điểm (2,1) nằm ở đâu trên màn hình?",
+      description: "Camera được giữ cố định; chỉ đọc hai tọa độ và quan sát điểm đã vẽ.",
     },
     "coordinate-inverse": {
-      title: "screenToWorld phục hồi điểm dưới con trỏ thế nào?",
+      title: "Từ vị trí chuột về world coordinate",
       description:
-        "Camera được giữ cố định để bạn đối chiếu screen point với world point tương ứng.",
+        "Di chuyển dấu chữ thập, đọc screen/world rồi tự tính lại bằng công thức nghịch.",
+    },
+    "coordinate-pan": {
+      title: "Lưới đi theo tay, tọa độ điểm không đổi",
+      description: "Kéo chuột phải, đổi preset; quan sát bước lưới và tâm camera.",
     },
     "coordinate-zoom": {
-      title: "Zoom quanh cursor có giữ đúng world anchor?",
-      description: "Bật đầy đủ pan và zoom, đồng thời đo round-trip error cùng zoom-anchor error.",
+      title: "Giữ nguyên world point dưới con trỏ",
+      description: "Pan và zoom bằng wheel hoặc +/-; theo dõi zoom-anchor error.",
+    },
+    "coordinate-points": {
+      title: "Đặt và kéo nhiều điểm",
+      description:
+        "Click trái vùng trống để thêm điểm, kéo gần điểm để di chuyển; chọn điểm và thao tác bằng bàn phím.",
     },
   },
 } satisfies ProjectLabMeta;

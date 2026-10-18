@@ -77,7 +77,7 @@ test("roadmap contains exactly 78 ordered projects and correct release states", 
   );
   assert.match(
     compactManifestSource,
-    /prerequisites: \["Project 01 — framebuffer và putPixel", "Project 04 — rasterization trên lưới pixel"\]/,
+    /prerequisites: \["Project 01 — window, texture, framebuffer và putPixel", "Project 03 — mouse input và kết thúc thao tác kéo", "Project 04 — tự vẽ primitive trên ảnh CPU"\]/,
   );
   assert.match(
     compactManifestSource,

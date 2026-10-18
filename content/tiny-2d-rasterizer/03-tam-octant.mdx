@@ -1,209 +1,254 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Dùng một Bresenham cho đủ tám octant
+# Kéo hai đầu và soi từng pixel
 
 ## Vấn đề cần giải quyết
 
-Nhiều cách cài đặt Bresenham đơn giản chỉ chạy khi X tăng và độ dốc nằm trong khoảng từ 0 đến 1. Nhưng hai đầu đoạn trong ứng dụng có thể nằm ở bất kỳ vị trí nào: trái, phải, trên, dưới, dốc cao hoặc dốc thấp. Viết tám phiên bản gần giống nhau sẽ vừa dài, vừa dễ sửa thiếu một trường hợp.
+Sửa A/B rồi build lại giúp học thuật toán, nhưng không tiện để tìm lỗi. Ta cần kéo một đầu quanh đầu còn lại, đổi hướng ngay trên window và phóng to đoạn đang xem.
 
-Bài này giải thích vì sao `dx`, `dy`, `stepX`, `stepY` cùng hai nhánh độc lập đã đủ cho cả tám octant. Sau đó ta thêm thao tác kéo hai đầu đoạn, tạo tám trường hợp có thể lặp lại và kiểm tra tính liên thông theo cả hai chiều. Phần tương tác được đặt ở đây, thay vì bài DDA, vì lúc này nó thực sự giúp so sánh nhiều hướng của cả hai thuật toán.
+Checkpoint 3 thêm input và inspector cho **đường thẳng đã vẽ được**. Không đổi công thức DDA/Bresenham. Mục tiêu là quan sát được lỗi thay vì viết thêm một thuật toán chỉ để tạo hình minh họa.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mặt phẳng quanh `start` được chia thành tám vùng theo hướng của X/Y và trục nào thay đổi nhiều hơn. Thuật toán tổng quát tách ba câu hỏi:
+Tám octant là tám vùng quanh A, phân bởi các trục và đường chéo. Một đoạn có thể đi trái/phải, lên/xuống và dốc cao/thấp. Hai trị tuyệt đối dx, dy xử lý độ dốc; stepX/stepY xử lý hướng. Không cần tám hàm Bresenham riêng.
 
-- **cần đi bao xa:** `abs(end - start)`;
-- **cần đi về phía nào:** `+1` hoặc `-1`;
-- **trục nào thay đổi thường xuyên hơn:** được quyết định bởi tần suất hai nhánh X/Y chạy.
+Tọa độ chuột là một vấn đề khác. Ảnh luôn 960 × 540, nhưng window có thể lớn hơn, nhỏ hơn hoặc có dải letterbox. **Tọa độ event chưa phải chỉ số pixel của ảnh.** Ta phải đổi theo renderer rồi mới kiểm tra biên và floor.
 
-Vì `dy` được lưu dưới dạng số âm, `error = dx + dy` cân bằng độ thay đổi giữa hai trục. Đường dốc thấp thường tiến X ở mỗi lần lặp và thỉnh thoảng mới tiến Y. Đường dốc cao làm ngược lại, còn đường chéo thường tiến cả hai.
-
-Một bộ điểm kiểm tra quanh gốc phải có đủ bốn hướng và cả độ dốc cao lẫn thấp:
-
-| vùng | endpoint | đặc điểm |
-|---:|---:|---|
-| 1 | `(9,2)` | phải, xuống, dốc thấp |
-| 2 | `(2,9)` | phải, xuống, dốc cao |
-| 3 | `(-2,9)` | trái, xuống, dốc cao |
-| 4 | `(-9,2)` | trái, xuống, dốc thấp |
-| 5 | `(-9,-2)` | trái, lên, dốc thấp |
-| 6 | `(-2,-9)` | trái, lên, dốc cao |
-| 7 | `(2,-9)` | phải, lên, dốc cao |
-| 8 | `(9,-2)` | phải, lên, dốc thấp |
-
-Tọa độ Y trong bảng theo quy ước màn hình, vì vậy số dương đi xuống. Có thể kiểm tra thêm hai đường chéo 45 độ, nhưng chúng không thay thế được trường hợp dốc cao hoặc dốc thấp.
+Inspector cũng không tính lại “pixel đáng lẽ được vẽ”. Nó đọc 9 × 9 màu quanh pixel đang chọn từ framebuffer thật, sau đó vẽ mỗi màu thành một ô 16 × 16. Nhờ vậy, lỗi ghi ảnh vẫn có thể nhìn thấy dù công thức line đúng.
 
 <InteractiveLab demo="raster" mode="raster-octants" />
 
+Chọn từng octant rồi đảo A/B. Mũi tên dịch B, Shift + mũi tên dịch A; PageUp/PageDown chọn bước. Trên màn hình, Y tăng xuống dưới nên thứ tự octant ở đây đi theo chiều kim đồng hồ từ phía phải/xuống.
+
 ## Viết code từng bước
 
-### Bước 1 — Tách hướng khỏi khoảng cách
+### Bước 1 — Thêm trạng thái thao tác, không đặt nó trong thuật toán
 
-```cpp title="include/lab.hpp — dấu bước không làm đổi độ lớn"
-const int dx = std::abs(end.x - start.x);
-int stepX = -1;
-if (x < end.x) {
-    stepX = 1;
-}
-const int dy = -std::abs(end.y - start.y);
-int stepY = -1;
-if (y < end.y) {
-    stepY = 1;
+Scene trong include/scene.hpp có các dữ liệu sau:
+
+
+```cpp title="include/scene.hpp — hình học và thao tác đang thực hiện"
+struct Scene {
+    Point a{220, 270};
+    Point b{740, 150};
+    Algorithm algorithm = Algorithm::Bresenham;
+    Tool tool = Tool::Line;
+    int dragged = -1;
+    bool zoom = true;
+    std::size_t inspectedStep = 0;
+    std::size_t octant = 0;
+};
+```
+
+dragged = −1 nghĩa là chưa kéo; 0 chọn A, 1 chọn B. inspectedStep là chỉ số bản ghi, không phải tọa độ. zoom chỉ điều khiển phần hiển thị. Không trường nào trong số này thuộc công thức Bresenham.
+
+Hàm sau nhận tọa độ **đã đổi về ảnh logic**:
+
+
+```cpp title="include/scene.hpp — từ tọa độ logic đến một ô hợp lệ"
+inline std::optional<Point> imagePoint(double x, double y) {
+    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0 || y < 0.0 || x >= Framebuffer::width || y >= Framebuffer::height) {
+        return std::nullopt;
+    }
+    return Point{static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y))};
 }
 ```
 
-Khi `end` nằm bên trái, `stepX = -1`; khi nằm phía trên, `stepY = -1`. Nếu hai đầu có cùng tọa độ trên một trục, biến bước của trục đó vẫn nhận -1 nhưng điều kiện tương ứng không làm tọa độ đi quá điểm đích.
+Điểm ngoài ảnh bị từ chối, không ép vào mép. Kiểm tra hữu hạn và biên trước phép đổi sang int. Trường hợp X = 960 nằm ngoài ảnh, còn 959,9 thuộc cột 959.
 
-### Bước 2 — Giữ hai quyết định độc lập
+### Bước 2 — Chọn tay nắm gần nhất và giữ nó tới lúc thả
 
-```cpp title="include/lab.hpp — phần quyết định tám octant"
-const int doubledError = 2 * error;
-if (doubledError >= dy) {
-    error += dy;
-    x += stepX;
+
+```cpp title="include/scene.hpp — bắt đầu một lần kéo"
+inline bool beginDrag(Scene& scene, Point point) {
+    if (scene.dragged >= 0 || !imagePoint(point.x, point.y)) {
+        return false;
+    }
+    const Point second = secondHandle(scene);
+    const double distanceA = std::hypot(static_cast<double>(point.x - scene.a.x), static_cast<double>(point.y - scene.a.y));
+    const double distanceB = std::hypot(static_cast<double>(point.x - second.x), static_cast<double>(point.y - second.y));
+    scene.dragged = 1;
+    if (distanceA <= distanceB) {
+        scene.dragged = 0;
+    }
+    moveHandle(scene, point);
+    return true;
 }
-if (doubledError <= dx) {
-    error += dx;
-    y += stepY;
+```
+
+Ta dùng khoảng cách để chọn A hoặc B; nếu bằng nhau, ưu tiên A. secondHandle hiện trả B, về sau công cụ circle sẽ dùng vị trí tay nắm bán kính.
+
+Lần nhấn đầu cũng gọi moveHandle để điểm phản hồi ngay tại nơi click:
+
+
+```cpp title="include/scene.hpp — thay đổi tay nắm đã chọn"
+inline void moveHandle(Scene& scene, Point point) {
+    if (scene.dragged < 0 || !imagePoint(point.x, point.y)) {
+        cancelDrag(scene);
+        return;
+    }
+    if (scene.dragged == 0) {
+        scene.a = point;
+    } else {
+        {
+            scene.b = point;
+        }
+    }
+    scene.inspectedStep = 0;
 }
 ```
 
-Cùng một cấu trúc vẫn hoạt động khi đổi hướng hoặc khi X và Y đổi vai trò trục dài hơn. Không cần nhánh riêng kiểu “nếu đang ở octant 5”; đó là lợi ích của công thức đối xứng.
+Khi kéo xong:
 
-### Bước 3 — Lưu tám trường hợp mẫu thành dữ liệu
 
-```cpp title="src/main.cpp — bảng offset cho tám octant"
-constexpr std::array<lab::Point, 8> kOctantOffsets{{
-    {9, 2},
-    {2, 9},
-    {-2, 9},
-    {-9, 2},
-    {-9, -2},
-    {-2, -9},
-    {2, -9},
-    {9, -2},
-}};
+```cpp title="include/scene.hpp — giữ cả tọa độ chỉ xuất hiện ở sự kiện thả nút"
+inline void endDrag(Scene& scene, Point point) {
+    moveHandle(scene, point);
+    cancelDrag(scene);
+}
 ```
 
-Mảng này có đủ đường dốc cao, dốc thấp và bốn hướng quanh tâm. Có thể thêm đường chéo 45 độ như trường hợp biên, nhưng không dùng nó để thay thế một vùng đã có. `std::array` thể hiện rõ danh sách luôn có đúng tám phần tử và không cần cấp phát động.
+Giống Mini Paint, vị trí cuối không nhất thiết xuất hiện trong một motion trước đó. endDrag cập nhật vị trí rồi mới hủy trạng thái kéo. Ngược lại, mất focus hoặc pointer bị hủy chỉ cần cancelDrag, không tự tạo một vị trí cuối.
 
-### Bước 4 — Xác định rõ điều kiện của một đường hợp lệ
+### Bước 3 — Đổi tọa độ event đúng một lần
 
-Với mỗi trường hợp, hãy dùng lưới phóng to để kiểm tra bốn điều: pixel đầu bằng `start`, pixel cuối bằng `end`, số pixel bằng `max(|dx|, |dy|) + 1`, và hai pixel liên tiếp chỉ lệch tối đa một đơn vị trên mỗi trục nhưng không trùng nhau. Sau đó đảo hai đầu và kiểm tra lại. Ở bài 6, bốn điều này sẽ trở thành hàm `checkConnectedLine` trong `tests/tests.cpp`; checkpoint 3 chỉ tập trung vào việc quan sát và giải thích.
+Trong main, trước khi đọc event.button hoặc event.motion:
 
-Có một chi tiết quan trọng: đảo hai đầu **không bắt buộc** tạo đúng cùng một tập pixel. Với đoạn `(0,0) → (2,1)`, đường lý tưởng đi giữa hai pixel ứng viên ở bước giữa. Quy tắc xử lý trường hợp bằng nhau có thể chọn `(1,1)` theo một chiều và `(1,0)` theo chiều ngược lại. Cả hai vẫn hợp lệ nếu giữ hai đầu, có đúng `max(|dx|, |dy|) + 1` điểm và không tạo lỗ hổng.
 
-Nếu một ứng dụng thật sự yêu cầu đảo chiều vẫn cho đúng cùng tập pixel, hãy chuẩn hóa thứ tự hai đầu trước khi gọi Bresenham. Đó là một yêu cầu bổ sung của API, không phải tính chất mặc định của thuật toán.
-
-### Bước 5 — Kéo hai đầu đoạn để thử mọi hướng
-
-Ta dùng lại mô hình tương tác đã học ở Mini Paint: nhấn chuột để bắt đầu, `MOUSE_MOTION` cập nhật dữ liệu và thả chuột hoặc mất focus để kết thúc. `draggedEndpoint` cho biết A hay B đang được kéo:
-
-```cpp title="src/main.cpp — đầu đoạn đang được kéo"
-int draggedEndpoint = -1;
+```cpp title="src/main.cpp — đổi tọa độ mouse theo renderer"
+const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_MOUSE_MOTION;
+if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    std::cerr << "Mouse coordinates: " << SDL_GetError() << '\n';
+    failed = true;
+    running = false;
+    break;
+}
 ```
 
-Hàm `drawHandle` vẽ một ô vuông nhỏ quanh mỗi đầu đoạn. Đây chỉ là dấu hiệu trực quan để người dùng biết vị trí nào có thể kéo; nó không tham gia vào thuật toán Bresenham:
+SDL_ConvertEventToRenderCoordinates tính cả logical presentation, scale và viewport. [Tài liệu SDL](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates) lưu ý kết quả vẫn có thể nằm ngoài vùng render; vì thế imagePoint vẫn cần thiết.
 
-```cpp title="src/main.cpp — vẽ tay nắm quanh một đầu đoạn"
-void drawHandle(std::vector<std::uint32_t>& pixels, lab::Point center, std::uint32_t color) {
-    constexpr int kHandleRadius = 6;
-    for (int y = center.y - kHandleRadius; y <= center.y + kHandleRadius; ++y) {
-        for (int x = center.x - kHandleRadius; x <= center.x + kHandleRadius; ++x) {
-            putPixel(pixels, {x, y}, color);
+Không vừa gọi hàm này vừa tự nhân theo tỉ lệ window. Như vậy sẽ đổi tọa độ hai lần, khiến tay nắm lệch khi resize hoặc trên màn hình HiDPI.
+
+Phần event còn lại của checkpoint làm các việc cụ thể:
+
+- Down chỉ nhận nút trái; beginDrag thành công mới lưu MouseID và yêu cầu capture.
+- Motion chỉ nhận đúng MouseID đang kéo, đồng thời kiểm tra SDL_BUTTON_LMASK. Mẫu ngoài ảnh hoặc không còn giữ nút sẽ hủy kéo.
+- Up cùng thiết bị gọi endDrag để lấy điểm cuối rồi nhả capture.
+- Mất focus, minimize, resize hoặc rời window đều kết thúc kéo. Quay lại khi còn giữ nút không tự bắt đầu một lần kéo mới.
+
+Capture có thể không được driver hỗ trợ. Chương trình ghi cảnh báo nhưng vẫn dùng các event nhận được; nó không giả vờ rằng đã kiểm được capture vật lý. Xem thêm [SDL_CaptureMouse](https://wiki.libsdl.org/SDL3/SDL_CaptureMouse).
+
+### Bước 4 — Tạo bộ tám hướng cố định để lặp lại lỗi
+
+
+```cpp title="include/scene.hpp — phím O đổi octant"
+inline void selectOctant(Scene& scene) {
+    constexpr std::array<Point, 8> offsets{{
+        {9, 2},
+        {2, 9},
+        {-2, 9},
+        {-9, 2},
+        {-9, -2},
+        {-2, -9},
+        {2, -9},
+        {9, -2},
+    }};
+    cancelDrag(scene);
+    scene.tool = Tool::Line;
+    scene.a = {480, 270};
+    const Point offset = offsets[scene.octant];
+    scene.b = {scene.a.x + offset.x * 22, scene.a.y + offset.y * 22};
+    scene.octant = (scene.octant + 1) % offsets.size();
+    scene.inspectedStep = 0;
+}
+```
+
+Độ lệch (9,2), (2,9), … được nhân 22 để nhìn rõ trên ảnh lớn. A luôn trở về (480,270); octant chạy từ 0 tới 7 rồi lặp. Bộ dữ liệu cố định giúp bạn nói chính xác “lỗi ở hướng thứ tư” thay vì cố kéo chuột giống lần trước.
+
+D/B vẫn đổi thuật toán. 1 về Line; I/J/K/L dịch B một pixel, giữ Shift để dịch A. Ta không dùng WASD ở đây vì D đã dành cho DDA. Mũi tên trái/phải chọn bước, Home/End chọn bản ghi đầu/cuối; Z bật/tắt inspector.
+
+Mỗi lệnh hoặc thay đổi hình học đều kết thúc thao tác kéo đang có. Bạn không thể tiếp tục điều khiển A bằng một lần nhấn chuột cũ sau khi đã đổi công cụ bằng bàn phím.
+
+### Bước 5 — Phóng to dữ liệu màu thật
+
+Đây là phần đọc và vẽ inspector trong include/view.hpp:
+
+
+```cpp title="include/view.hpp — inspector 9 × 9 lấy từ framebuffer"
+inline void drawInspector(Framebuffer& framebuffer, Point selected) {
+    constexpr int kCells = 9;
+    constexpr int kCellSize = 16;
+    constexpr int kOriginX = 800;
+    constexpr int kOriginY = 380;
+    std::array<std::uint32_t, kCells * kCells> source{};
+
+    // Chụp vùng nguồn trước khi vẽ overlay để không tự đọc pixel vừa phóng to.
+    for (int row = 0; row < kCells; ++row) {
+        for (int column = 0; column < kCells; ++column) {
+            const int x = selected.x + column - kCells / 2;
+            const int y = selected.y + row - kCells / 2;
+            std::uint32_t color = kBackground;
+            if (imagePoint(x, y)) {
+                color = framebuffer.pixels[static_cast<std::size_t>(y) * Framebuffer::width + x];
+            }
+            source[static_cast<std::size_t>(row * kCells + column)] = color;
+        }
+    }
+
+    for (int row = 0; row < kCells; ++row) {
+        for (int column = 0; column < kCells; ++column) {
+            std::uint32_t border = 0x39445FFFu;
+            if (column == kCells / 2 && row == kCells / 2) {
+                border = kSelectedColor;
+            }
+            for (int dy = 0; dy < kCellSize; ++dy) {
+                for (int dx = 0; dx < kCellSize; ++dx) {
+                    std::uint32_t color = border;
+                    if (dx > 0 && dy > 0) {
+                        color = source[static_cast<std::size_t>(row * kCells + column)];
+                    }
+                    framebuffer.putPixel(kOriginX + column * kCellSize + dx, kOriginY + row * kCellSize + dy, color);
+                }
+            }
         }
     }
 }
 ```
 
-Khi nhấn chuột, checkpoint chọn đầu gần con trỏ hơn. Ta so sánh bình phương khoảng cách vì thứ tự gần–xa không thay đổi và không cần gọi `sqrt`:
+Có hai lượt duyệt tách biệt. Lượt đầu chụp 81 màu vào source. Lượt sau mới vẽ overlay tại góc dưới phải. Nếu đọc/ghi xen kẽ, khi vị trí đang soi nằm gần overlay, các ô cuối có thể đọc nhầm chính ảnh vừa phóng to.
 
-```cpp title="src/main.cpp — chọn đầu đoạn gần con trỏ"
-if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
-    const lab::Point mouse{
-        int(event.button.x),
-        int(event.button.y),
-    };
-    const auto squaredDistance = [](lab::Point left, lab::Point right) {
-        const int dx = right.x - left.x;
-        const int dy = right.y - left.y;
-        return dx * dx + dy * dy;
-    };
-    const int distanceToA = squaredDistance(mouse, endpointA);
-    const int distanceToB = squaredDistance(mouse, endpointB);
-    if (distanceToA <= distanceToB) {
-        draggedEndpoint = 0;
-        endpointA = mouse;
-    } else {
-        draggedEndpoint = 1;
-        endpointB = mouse;
-    }
-    if (!SDL_CaptureMouse(true)) {
-        std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
-    }
-}
+Màu viền cam đánh dấu ô trung tâm; phần trong ô vẫn là màu gốc. Các tọa độ ngoài ảnh dùng màu nền. Marker tay nắm được vẽ sau inspector, nên bạn đang soi hình học trước khi marker che pixel đó.
+
+Tiêu đề đọc cùng frame.line[inspectedStep] mà plotSteps đã dùng. Với DDA, nó hiện tọa độ liên tục; với Bresenham là error/e2 và hai quyết định trục. Khi tắt zoom, đường vẫn vẽ đầy đủ: thao tác chọn bước chỉ dùng để quan sát, không chạy một bản thuật toán khác.
+
+```bash title="Terminal — chạy công cụ tương tác ở checkpoint 3"
+cmake --build build --config Debug --target project_4_checkpoint_3 --parallel 2
+.\build\Debug\project_4_checkpoint_3.exe
 ```
-
-Trong lúc kéo, chương trình chỉ sửa đầu đã chọn. Mỗi frame sau đó tự gọi lại DDA hoặc Bresenham với A/B mới, nên không cần lưu riêng danh sách pixel cũ:
-
-```cpp title="src/main.cpp — cập nhật và kết thúc thao tác kéo"
-if (event.type == SDL_EVENT_MOUSE_MOTION && draggedEndpoint >= 0) {
-    const lab::Point mouse{int(event.motion.x), int(event.motion.y)};
-    if (draggedEndpoint == 0) {
-        endpointA = mouse;
-    } else {
-        endpointB = mouse;
-    }
-}
-if ((event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) || event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-    draggedEndpoint = -1;
-    SDL_CaptureMouse(false);
-}
-```
-
-Gọi `drawHandle` sau khi vẽ đường để hai ô vuông 13×13 luôn nằm trên cùng và dễ nhìn. Thao tác kéo chỉ thay đổi dữ liệu đầu vào; nó không nằm trong `dda` hoặc `bresenham`.
-
-### Bước 6 — Dùng phím O để lần lượt thử tám trường hợp
-
-Kéo chuột bằng tay rất khó tạo lại chính xác cùng một độ dốc. Checkpoint 3 thêm phím O để lần lượt đặt đoạn thẳng vào tám trường hợp trong bảng:
-
-```cpp title="src/main.cpp — phím O chọn octant kế tiếp"
-if (!event.key.repeat && event.key.key == SDLK_O) {
-    const lab::Point offset = kOctantOffsets[octantPreset];
-    endpointA = {kCanvasWidth / 2, kCanvasHeight / 2};
-    endpointB = {
-        endpointA.x + offset.x * 22,
-        endpointA.y + offset.y * 22,
-    };
-    octantPreset = (octantPreset + 1) % kOctantOffsets.size();
-}
-```
-
-Hệ số 22 chỉ phóng lớn độ lệch để đường dễ nhìn trên cửa sổ; hướng và tỷ lệ `9:2` hoặc `2:9` vẫn giữ nguyên. Bấm O tám lần phải đi đủ một vòng rồi quay lại trường hợp đầu tiên. Nhờ dữ liệu cố định, một lỗi có thể được lặp lại thay vì phụ thuộc vào thao tác kéo bằng tay.
 
 ## Ghép các phần lại
 
-Checkpoint 3 không thay đổi công thức Bresenham. Nó bổ sung hai cách tạo dữ liệu kiểm tra: kéo A/B để khám phá tự do và bấm O để lặp lại đúng tám trường hợp đã định trước. Mục tiêu là chuyển từ “một đường mẫu có vẻ đúng” sang “đã kiểm tra có hệ thống ở mọi hướng”.
+Input đổi tọa độ → Scene thay A/B → dirty tạo lại SceneFrame → ghi ảnh line → chụp vùng inspector → vẽ overlay/tay nắm → upload/present. Bresenham vẫn là vòng lặp của bài 2.
 
-Bài 2 đã xây cơ chế; bài 3 kiểm tra miền áp dụng và giải thích vì sao nó tổng quát. Nhờ vậy, ba dòng cập nhật sai số không còn là một công thức phải học thuộc.
+Kéo một đầu xuyên qua đầu kia, thử tất cả octant, rồi giảm khoảng cách tới mức hai đầu trùng nhau. Đọc số bản ghi và pixel được chọn trong tiêu đề, thay vì chỉ nhìn đường có vẻ đẹp.
 
 ## Thử làm sai để hiểu đúng
 
-1. Ép `stepX = 1`. Khi `end` nằm bên trái, X liên tục đi sai hướng và vòng lặp không thể chạm đích.
-2. Bỏ `std::abs` khỏi `dx`. Ý nghĩa của `error` thay đổi theo dấu và thuật toán không còn đối xứng giữa trái với phải.
-3. Chỉ kiểm tra vùng phải–dưới. Cả hai lỗi trên có thể bị bỏ sót, cho thấy một ví dụ đẹp không thể thay thế bộ tám trường hợp.
+1. Đọc event.button.x trực tiếp như pixel ảnh. Resize window sang tỉ lệ khác, click nơi có tay nắm và quan sát độ lệch; hoàn tác trước khi thử tiếp.
+2. Bỏ xử lý vị trí trong endDrag. Thử thả chuột ở vị trí chưa có motion tương ứng; điểm có thể dừng ở mẫu trước.
+3. Bỏ nhánh kiểm SDL_BUTTON_LMASK. Nếu một sự kiện thả nút bị mất, các motion sau có thể tiếp tục kéo dù nút đã nhả.
+4. Trong inspector, đọc trực tiếp framebuffer khi đang vẽ từng ô thay vì chụp source trước. Soi gần góc dưới phải và tìm dấu hiệu overlay tự lặp.
 
 ## Tự kiểm tra kết quả
 
-- Kéo đầu đoạn quanh đủ một vòng không có hướng nào bị treo hoặc đứt.
-- `start` và `end` luôn xuất hiện.
-- Cả A→B và B→A đều giữ đúng hai đầu, đúng số điểm và liên thông ở tám octant.
-- Phím O đi qua đủ tám trường hợp rồi quay về trường hợp đầu sau tám lần bấm.
-- Đường dốc cao vẫn liền theo Y, đường dốc thấp vẫn liền theo X.
-- Bạn giải thích vai trò riêng của độ lớn và dấu bước.
+- Kéo được cả A lẫn B; đúng MouseID mới điều khiển lần kéo đang có.
+- Rời ảnh, mất focus, resize và thả nút không để lại trạng thái kéo.
+- O đi đủ tám hướng; DDA/Bresenham giữ hai đầu và liên thông theo cả hai chiều.
+- Z và mũi tên không thay dữ liệu thuật toán; inspector đọc ảnh thật và không tự đọc overlay.
+- Resize khác tỉ lệ và HiDPI, nếu có, vẫn chọn đúng vị trí trên ảnh. Việc này phải thử trên desktop, không suy từ CTest.
 
 ## Bài tập mở rộng
 
-Hãy tự sinh các điểm cuối trong hình vuông `[-20,20]²` và kiểm tra cả hai chiều. Xác nhận số điểm luôn bằng `max(|dx|, |dy|) + 1`. Sau đó viết một biến thể chuẩn hóa thứ tự hai đầu để cố ý bảo đảm cùng tập pixel khi đảo chiều, rồi so sánh ưu và nhược điểm với bản hiện tại. Có thể tô màu theo chỉ số bước để quan sát thứ tự vẽ.
+Lưu lại hai bộ pixel của đoạn (0,0) → (2,1) và chiều ngược. Cả hai có hai đầu và khoảng cách bước hợp lệ, nhưng không nhất thiết cùng pixel giữa. Viết tiêu chí kiểm tra dựa trên khoảng cách tới đường lý tưởng thay vì buộc đảo chiều phải cho cùng một tập.
 
-Bài sau sẽ gọi lại Bresenham bốn lần để tạo viền hình chữ nhật, rồi tô hình đặc theo từng hàng pixel.
+[Bài tiếp: ghép đường viền và tô hình chữ nhật](/projects/tiny-2d-rasterizer/04-rectangle).

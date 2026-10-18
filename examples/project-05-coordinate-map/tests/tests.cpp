@@ -1,95 +1,124 @@
-#include "lab.hpp"
-#include <cmath>
+#include "view.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <string_view>
-#include <vector>
 
 namespace {
 int failures = 0;
 
-bool nearlyEqual(lab::Vec2 left, lab::Vec2 right, double epsilon = 1e-9) {
-    return lab::distance(left, right) < epsilon;
+// Không dùng assert: Release vẫn phải trả mã lỗi khi kiểm tra thất bại.
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        std::cerr << "FAILED: " << label << '\n';
+        ++failures;
+    }
 }
 
-void check(bool condition, std::string_view label) {
-    if (condition) {
-        return;
-    }
-    std::cerr << "FAILED: " << label << '\n';
-    ++failures;
+bool near(lab::Vec2 a, lab::Vec2 b) {
+    return lab::distance(a, b) < 1e-9;
 }
 } // namespace
 
 int main() {
     lab::Camera2D camera;
+    check(near(camera.worldToScreen({2.0, 1.0}), {590.0, 215.0}), "independent forward fixture fixes axis direction and origin");
+    check(near(camera.screenToWorld({590.0, 215.0}), {2.0, 1.0}), "independent inverse fixture");
 
-    // Forward rồi inverse phải phục hồi world point ban đầu.
-    const std::vector<lab::Vec2> worldPoints{
-        {0.0, 0.0},
-        {2.0, 1.0},
-        {-8.0, 4.0},
-        {100.0, -80.0},
-    };
-    for (lab::Vec2 world : worldPoints) {
-        const lab::Vec2 restored = camera.screenToWorld(camera.worldToScreen(world));
-        check(nearlyEqual(world, restored), "world-to-screen round trip restores the world point");
+    // Nhiều camera, mức zoom, viewport và điểm âm/dương.
+    for (double scale : {5.0, 20.0, 55.0, 160.0, 800.0}) {
+        for (lab::Vec2 center : {lab::Vec2{0.0, 0.0}, lab::Vec2{-120.5, 91.25}}) {
+            for (lab::Vec2 viewport : {lab::Vec2{320.0, 240.0}, lab::Vec2{1600.0, 900.0}}) {
+                camera = {center, scale, viewport};
+                for (int x = -20; x <= 20; ++x) {
+                    const lab::Vec2 world{x * 3.7, x * -2.3 + 1.0};
+                    check(near(camera.screenToWorld(camera.worldToScreen(world)), world), "world round trip");
+                    const lab::Vec2 screen{x * 7.5, x * 4.1};
+                    check(near(camera.worldToScreen(camera.screenToWorld(screen)), screen), "screen round trip");
+                    const lab::Vec2 anchor = camera.screenToWorld(screen);
+                    camera.zoomAt(screen, 1.12);
+                    check(near(camera.screenToWorld(screen), anchor), "zoom keeps cursor anchor");
+                }
+            }
+        }
+        const double spacing = lab::gridSpacing(scale);
+        check(spacing * scale >= 40.0 - 1e-9 && spacing * scale <= 100.0 + 1e-9, "adaptive grid spacing stays legible");
     }
 
-    // Inverse rồi forward cũng phải phục hồi screen point ban đầu.
-    const std::vector<lab::Vec2> screenPoints{
-        {0.0, 0.0},
-        {960.0, 540.0},
-        {800.0, 120.0},
-        {-50.0, 900.0},
-    };
-    for (lab::Vec2 screen : screenPoints) {
-        const lab::Vec2 restored = camera.worldToScreen(camera.screenToWorld(screen));
-        check(nearlyEqual(screen, restored), "screen-to-world round trip restores the screen point");
+    camera = {};
+    const lab::Vec2 before = camera.worldToScreen({2.0, 1.0});
+    camera.pan({55.0, 27.5});
+    check(near(camera.centerWorld, {-1.0, 0.5}), "camera moves opposite horizontal drag");
+    const lab::Vec2 after = camera.worldToScreen({2.0, 1.0});
+    check(near({after.x - before.x, after.y - before.y}, {55.0, 27.5}), "scene follows pan delta exactly");
+
+    // Bù anchor phải đúng cả lúc chạm giới hạn zoom và khi bỏ input lỗi.
+    const lab::Vec2 cursor{805.0, 117.0};
+    for (double factor : {1e100, 1e-100, 1.4, 0.8}) {
+        const lab::Vec2 anchor = camera.screenToWorld(cursor);
+        camera.zoomAt(cursor, factor);
+        check(near(camera.screenToWorld(cursor), anchor), "anchor preserved at zoom clamp");
+        check(camera.scale() >= 5.0 && camera.scale() <= 800.0, "scale clamp");
     }
-
-    // Zoom phải giữ nguyên world point nằm dưới cursor.
-    const lab::Vec2 cursor{800.0, 120.0};
-    const lab::Vec2 worldBeforeZoom = camera.screenToWorld(cursor);
-    camera.zoomAt(cursor, 1.4);
-    const lab::Vec2 worldAfterZoom = camera.screenToWorld(cursor);
-    check(nearlyEqual(worldBeforeZoom, worldAfterZoom), "zoom keeps the world point under the cursor");
-
-    // Pan được kiểm tra riêng theo từng trục để thấy rõ dấu của phép biến đổi.
-    const lab::Vec2 centerBeforePan = camera.centerWorld;
-    const double expectedShift = 55.0 / camera.pixelsPerUnit;
-    camera.pan({55.0, 0.0});
-    check(std::abs(camera.centerWorld.x - (centerBeforePan.x - expectedShift)) < 1e-9, "horizontal pan updates world X");
-    check(std::abs(camera.centerWorld.y - centerBeforePan.y) < 1e-9, "horizontal pan keeps world Y");
-    const lab::Vec2 centerBeforeVerticalPan = camera.centerWorld;
-    camera.pan({0.0, 55.0});
-    check(std::abs(camera.centerWorld.x - centerBeforeVerticalPan.x) < 1e-9, "vertical pan keeps world X");
-    check(std::abs(camera.centerWorld.y - (centerBeforeVerticalPan.y + expectedShift)) < 1e-9, "vertical pan updates world Y");
-
-    // Scale và zoom input không hợp lệ không được làm camera thành NaN.
+    const lab::Camera2D unchanged = camera;
+    for (double invalid : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+        camera.zoomAt(cursor, invalid);
+        check(camera.centerWorld == unchanged.centerWorld && camera.pixelsPerUnit == unchanged.pixelsPerUnit, "invalid zoom is a no-op");
+    }
     camera.pixelsPerUnit = 0.0;
-    const lab::Vec2 restored = camera.screenToWorld(camera.worldToScreen({3.0, -2.0}));
-    check(nearlyEqual(restored, {3.0, -2.0}), "invalid scale still produces an invertible transform");
-    camera.zoomAt(cursor, -1.0);
-    check(camera.pixelsPerUnit >= 20.0, "negative zoom factor cannot make scale invalid");
-    const lab::Vec2 centerBeforeInvalidZoom = camera.centerWorld;
-    const double scaleBeforeInvalidZoom = camera.pixelsPerUnit;
-    camera.zoomAt(cursor, std::numeric_limits<double>::quiet_NaN());
-    check(nearlyEqual(camera.centerWorld, centerBeforeInvalidZoom), "NaN zoom factor keeps camera center");
-    check(camera.pixelsPerUnit == scaleBeforeInvalidZoom, "NaN zoom factor keeps scale");
-    camera.zoomAt(cursor, 1e9);
-    check(camera.pixelsPerUnit == 160.0, "zoom scale is clamped at the upper bound");
-    camera.zoomAt(cursor, 1e-9);
-    check(camera.pixelsPerUnit == 20.0, "zoom scale is clamped at the lower bound");
+    check(near(camera.screenToWorld(camera.worldToScreen({3.0, -2.0})), {3.0, -2.0}), "invalid scale uses shared fallback");
 
-    // Camera center luôn ánh xạ tới chính giữa viewport mới.
-    camera.viewportPixels = {1280.0, 720.0};
-    const lab::Vec2 screenCenter = camera.worldToScreen(camera.centerWorld);
-    check(nearlyEqual(screenCenter, {640.0, 360.0}), "camera center maps to the resized viewport center");
+    // Hit-test trong screen space và grab offset tránh nhảy khi nắm lệch tâm.
+    lab::Scene scene;
+    scene.points = {{2.0, 1.0}, {-1.0, -2.0}};
+    for (double scale : {5.0, 55.0, 800.0}) {
+        scene.camera.pixelsPerUnit = scale;
+        const lab::Vec2 pointScreen = scene.camera.worldToScreen(scene.points[0]);
+        check(lab::hitPoint(scene, {pointScreen.x + 10.0, pointScreen.y}) == 0, "10 pixel hit boundary at every zoom");
+        check(lab::hitPoint(scene, {pointScreen.x + 10.01, pointScreen.y}) == -1, "outside hit radius");
+    }
+    scene.camera = {};
+    const lab::Vec2 pointScreen = scene.camera.worldToScreen(scene.points[0]);
+    const lab::Vec2 grab{pointScreen.x + 6.0, pointScreen.y - 3.0};
+    const lab::Vec2 original = scene.points[0];
+    lab::beginPointDrag(scene, grab);
+    check(near(scene.points[0], original), "selection does not snap point to cursor");
+    lab::movePoint(scene, {grab.x + 55.0, grab.y + 27.5});
+    check(near(scene.points[0], {3.0, 0.5}), "drag changes world position by pixel delta / scale");
+    lab::cancelDrag(scene);
+    const lab::Vec2 stopped = scene.points[0];
+    lab::movePoint(scene, {0.0, 0.0});
+    check(near(scene.points[0], stopped), "cancelled drag cannot move point");
+    lab::beginPointDrag(scene, {50.0, 50.0});
+    check(scene.points.size() == 3 && scene.selected == 2, "empty click adds independent point");
+    lab::eraseSelected(scene);
+    check(scene.points.size() == 2 && scene.selected == -1, "delete clears selection");
+
+    const auto points = scene.points;
+    scene.camera.pan({130.0, -90.0});
+    scene.camera.zoomAt(cursor, 1.8);
+    scene.camera.viewportPixels = {1280.0, 720.0};
+    check(scene.points == points, "pan zoom resize never mutate world points");
+    check(near(scene.camera.worldToScreen(scene.camera.centerWorld), {640.0, 360.0}), "resized viewport center");
+    scene.points.assign(256, {0.0, 0.0});
+    lab::beginPointDrag(scene, {0.0, 0.0});
+    check(scene.points.size() == 256 && !scene.draggingPoint, "point cap is bounded");
+    scene.points = {{0.0, 0.0}, {0.0, 0.0}};
+    check(lab::hitPoint(scene, scene.camera.worldToScreen({0.0, 0.0})) == 1, "topmost point wins overlap");
+
+    // Raster thực phải có trục, điểm, giữ kích thước và chống ghi vượt ảnh.
+    lab::Framebuffer image;
+    lab::Scene visible;
+    lab::renderScene(image, visible);
+    check(image.pixels[270 * image.width + 10] == lab::kAxisX, "X axis raster");
+    check(image.pixels[10 * image.width + 480] == lab::kAxisY, "Y axis raster");
+    check(image.pixels[215 * image.width + 590] == lab::kPoint, "point raster fixture");
+    const auto pixelCount = image.pixels.size();
+    image.putPixel(-1, 0, 0);
+    image.putPixel(image.width, image.height, 0);
+    check(image.pixels.size() == pixelCount, "bounds keep framebuffer size");
 
     if (failures != 0) {
-        std::cerr << failures << " validation check(s) failed\n";
         return EXIT_FAILURE;
     }
     std::cout << "All Project 05 validation checks passed\n";

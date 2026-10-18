@@ -4,145 +4,147 @@ const learning = {
   guides: {
     "p03-l01": {
       focus:
-        "Theo dõi lúc một nét bắt đầu, tiếp tục và kết thúc qua các sự kiện chuột; lưu vị trí trước để chuẩn bị nối đoạn ở bài sau.",
+        "Bắt đầu bằng nền trống đã chạy được. Thêm một đầu bút một pixel và ba thao tác nhấn, kéo, thả; chưa dạy hình tròn hoặc nội suy.",
       expected:
-        "Một cú click trái tạo ngay một chấm. Mouse capture giữ được thao tác kéo ngoài cửa sổ; thả nút hoặc mất focus đều kết thúc nét và không nối sang lần vẽ sau.",
-      files: ["src/main.cpp", "include/lab.hpp"],
+        "Click trái tạo chấm. Giữ chuột tạo các mẫu rời; thả nút xử lý endpoint rồi đóng nét. Resize và letterbox không làm lệch tọa độ bút.",
+      files: [
+        "include/framebuffer.hpp",
+        "include/presentation.hpp",
+        "include/lab.hpp",
+        "include/brush.hpp",
+        "include/paint.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Bắt đầu nét",
+          title: "Giữ dữ liệu tranh",
           explanation:
-            "Khi nhấn chuột, đặt `drawing = true`, chép tọa độ vào `previous` và vẽ ngay để cú click không kéo vẫn để lại dấu.",
+            "Clear framebuffer một lần khi khởi tạo. SDL_RenderClear chỉ xóa render target, không xóa vector chứa tranh.",
         },
         {
-          title: "Tiếp tục nét",
+          title: "Đổi tọa độ trước khi dùng",
           explanation:
-            "Chỉ xử lý chuyển động khi `drawing` đang bật; lấy tọa độ mới vào `current`, vẽ xong rồi mới cập nhật `previous`.",
+            "SDL_ConvertEventToRenderCoordinates tính cả scale/letterbox/HiDPI. Điểm ngoài ảnh bị từ chối, không ép vào cạnh.",
         },
         {
-          title: "Kết thúc nét",
+          title: "Đóng nét đúng lúc",
           explanation:
-            "Thả chuột hoặc mất focus đều tắt `drawing` và nhả capture. Lần nhấn tiếp theo gán lại `previous`, nên hai nét không bị nối xuyên qua khoảng trống.",
+            "begin/move/end thuần C++ được app gọi trực tiếp. Up giữ endpoint, cancel không vẽ; rời vùng ảnh hoặc mất focus thì cần nhấn lại.",
         },
       ],
     },
     "p03-l02": {
       focus:
-        "Biến một hình tròn đặc thành pixel bằng hình vuông bao và điều kiện `dx² + dy² ≤ radius²`, sau đó bỏ an toàn phần nằm ngoài bảng vẽ.",
+        "Thay dấu một pixel bằng vòng lặp tô hình tròn, không thay cách một nét bắt đầu và kết thúc.",
       expected:
-        "Đầu bút tạo một hình tròn đặc, đối xứng. Đặt tâm tại bốn góc không làm chương trình dừng hoặc ghi ra ngoài vector.",
-      files: ["src/main.cpp"],
+        "Bán kính 2 có 13 pixel ở giữa ảnh và 6 pixel khi tâm ở góc. Sát cạnh không ghi sai vùng nhớ.",
+      files: ["include/brush.hpp", "include/paint.hpp"],
       steps: [
         {
-          title: "Chỉ duyệt vùng cần thiết",
+          title: "Tính tay trường hợp nhỏ",
           explanation:
-            "Hai vòng lặp chạy từ `-radius` đến `radius`, không quét toàn bộ framebuffer cho mỗi vị trí chuột.",
+            "Duyệt dx/dy từ −r đến r; giữ các ô có bình phương khoảng cách không vượt r².",
         },
         {
-          title: "So sánh bình phương",
-          explanation:
-            "So `dx² + dy²` với `radius²` cho cùng kết quả hình học mà không phải gọi căn bậc hai cho từng pixel.",
+          title: "Giữ phép đổi tọa độ an toàn",
+          explanation: "Kiểm tâm hữu hạn, nằm trong ảnh và radius hợp lệ trước khi floor sang int.",
         },
         {
-          title: "Kiểm tra sau khi cộng tâm",
+          title: "Đổi đúng hàm tạo dấu",
           explanation:
-            "Tính X/Y thật bằng tâm cộng độ lệch, rồi kiểm tra biên trước khi dùng chúng làm chỉ số.",
+            "applyStamp gọi stampCircle thay stampPoint; begin/move/end và phần upload giữ nguyên.",
         },
       ],
     },
     "p03-l03": {
       focus:
-        "Cố ý chỉ đặt đầu bút ở vị trí mới để quan sát dữ liệu chuột rời rạc: con trỏ đi một quãng dài nhưng chương trình chỉ nhận được hai đầu.",
+        "Biến lỗi nét đứt thành một phép thử có thể lặp lại bằng S và D, thay vì phụ thuộc tốc độ tay.",
       expected:
-        "Khi kéo nhanh, phiên bản chưa nội suy để lộ khoảng hở. Giảm tần suất lấy mẫu trong Stroke Lab làm khoảng hở tăng rõ rệt.",
-      files: ["src/main.cpp"],
+        "S đổi mức lấy thưa, D vẽ cùng năm vị trí. Title cho biết số mẫu giữ, số dấu và input gap; chưa nội suy nên khoảng hở vẫn hiện rõ.",
+      files: ["include/lab.hpp", "include/paint.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Sự kiện không phải quỹ đạo",
+          title: "Đo khoảng cách mẫu được giữ",
           explanation:
-            "MOUSE_MOTION chỉ cung cấp các vị trí rời rạc; SDL không đảm bảo hai vị trí luôn gần hơn đường kính đầu bút.",
+            "Lưu previous đến khi một mẫu được chấp nhận; không gán nó theo những motion đã cố ý bỏ qua.",
         },
         {
-          title: "FPS cao chưa chắc có thêm điểm",
+          title: "Bảo vệ mẫu đầu và cuối",
           explanation:
-            "Nếu chỉ hỏi vị trí một lần mỗi khung hình, nhiều chuyển động có thể bị gộp thành một đoạn dài; tăng tốc độ vẽ không sửa được dữ liệu bị thiếu.",
+            "Down luôn vẽ, up gọi moveStroke với forceEndpoint nên lấy thưa không làm mất vị trí thả chuột.",
         },
         {
-          title: "Đo trước khi sửa",
+          title: "Không nhầm lấy mẫu với FPS",
           explanation:
-            "Hiển thị tâm các dấu và đo `distance(previous, current)` giúp xác định lỗi nằm ở việc lấy mẫu chuột, không phải công thức hình tròn.",
+            "1/N chỉ là thao tác bỏ bớt event để tạo đối chứng, không đo Hz của chuột hoặc FPS renderer.",
         },
       ],
     },
     "p03-l04": {
       focus:
-        "Chia đoạn thành đủ số bước để khoảng cách giữa hai lần đặt đầu bút không vượt quá `spacing`, đồng thời giữ cả điểm đầu và điểm cuối.",
+        "Thêm lerp và sampleStroke, sau đó thay việc đặt một dấu ở current bằng nhiều dấu dọc đoạn.",
       expected:
-        "Nét vẫn liền khi kéo nhanh. `sampleStroke` giữ đúng hai đầu và xử lý được trường hợp hai điểm trùng nhau.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Cùng preset D, nét liền hơn mà không đổi brush. Các tâm nội suy không vượt spacing; helper giữ hai đầu và có giới hạn số điểm rõ ràng.",
+      files: ["include/lab.hpp", "include/paint.hpp"],
       steps: [
         {
-          title: "Chọn đủ số bước",
-          explanation:
-            "`steps = ceil(distance / spacing)` bảo đảm mỗi đoạn nhỏ không dài hơn `spacing` đã chọn.",
+          title: "Từ trung điểm đến lerp",
+          explanation: "Cùng t cho X/Y giữ điểm trên đoạn. ceil(17/8) là ba khoảng, bốn điểm.",
         },
         {
-          title: "Giữ cả hai đầu",
+          title: "Giữ hợp đồng hai đầu",
           explanation:
-            "Chỉ số chạy từ 0 đến `steps`, nên `t = index / steps` có cả 0 và 1; `lerp` vì vậy trả đúng điểm đầu và điểm cuối.",
+            "Thêm start/end trực tiếp, chỉ dùng lerp cho điểm bên trong để không mất endpoint vì sai số làm tròn.",
         },
         {
-          title: "Xử lý đầu vào đặc biệt",
+          title: "Nêu giới hạn thay vì che nó",
           explanation:
-            "Hai điểm trùng nhau trả về một điểm trước phép chia; `spacing` bằng 0, số âm hoặc NaN được thay bằng 0,5 pixel để tránh chia lỗi và cấp phát quá lớn.",
+            "Spacing lỗi dùng sàn 0,5; đoạn quá 2.048 pixel bị từ chối, tối đa 4.097 điểm mỗi đoạn. Không hạ mật độ âm thầm.",
         },
       ],
     },
     "p03-l05": {
       focus:
-        "Thêm bảng màu, giới hạn `radius` và lệnh xóa bảng vẽ mà không trộn phần điều khiển vào thuật toán nội suy.",
+        "Bổ sung công cụ vẽ trong khi giữ phần rasterization và nội suy độc lập với sự kiện bàn phím.",
       expected:
-        "Phím 1/2 đổi màu, [/] thay đổi bán kính trong khoảng 2…64 và C xóa bảng vẽ. Nét đang vẽ luôn dùng trạng thái hiện tại.",
-      files: ["src/main.cpp"],
+        "1–4 chọn bốn màu, [/] đổi radius 2–64, C xóa tranh. Thay công cụ hoặc clear đóng nét hiện tại, không nối từ tọa độ cũ.",
+      files: ["include/paint.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Phím chỉ cập nhật trạng thái",
-          explanation:
-            "Phần xử lý phím chỉ đổi `color`, `radius` hoặc tô lại `pixels`; `stampCircle` đọc các giá trị hiện tại khi cần vẽ.",
+          title: "Chọn màu cho nét mới",
+          explanation: "Pixel của nét cũ không đổi; chỉ state.color được cập nhật.",
         },
         {
-          title: "Giữ bán kính trong giới hạn",
+          title: "Giữ radius hợp lệ",
           explanation:
-            "`std::max` và `std::min` giữ bán kính từ 2 đến 64, tránh đầu bút biến mất hoặc mỗi dấu trở nên quá tốn kém.",
+            "Giới hạn ở nơi thay đổi bán kính; brush vẫn tự từ chối đầu vào sai trước vòng lặp.",
         },
         {
-          title: "Xóa bằng cách tô lại vector",
+          title: "Xóa dữ liệu thật",
           explanation:
-            "Lệnh C dùng `std::fill` để đưa toàn bộ `pixels` về màu nền; không cần hủy texture hay cấp phát lại.",
+            "clearPainting fill framebuffer bằng màu nền và cancel nét; không hủy texture hoặc cấp phát lại ảnh.",
         },
       ],
     },
     "p03-l06": {
-      focus:
-        "Kiểm tra hai đầu đoạn, khoảng cách giữa các điểm và trường hợp hai đầu trùng nhau; sau đó chạy ứng dụng hoàn chỉnh với chuột, đầu bút, nội suy và phím điều khiển.",
+      focus: "Kiểm cùng hàm app dùng, từ hình học đến ảnh pixel và vòng đời thao tác.",
       expected:
-        "Toàn bộ CTest đều đạt. `project_3_final` tạo được nét liền khi rê chuột nhanh và vẫn an toàn ở mọi mép của bảng vẽ.",
-      files: ["tests/tests.cpp", "include/lab.hpp"],
+        "CTest Debug/Release xác nhận endpoint, spacing, giới hạn cấp phát, brush, nhiều nét và công cụ. SDL smoke 12 frame kiểm resize/upload/present, không thay desktop QA.",
+      files: ["tests/tests.cpp", "include/paint.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Kiểm tra khoảng cách",
-          explanation:
-            "Mỗi cặp điểm liên tiếp phải cách nhau không quá `spacing` cộng một `epsilon` nhỏ cho sai số số thực.",
+          title: "Có đáp án độc lập",
+          explanation: "Đoạn 17/8 cho bốn điểm; radius 2 cho 13 pixel; góc ảnh còn 6 pixel.",
         },
         {
-          title: "Kiểm tra hai đầu",
+          title: "Test đủ đường vào",
           explanation:
-            "`front()` bằng `start` và `back()` bằng `end` giúp phát hiện vòng lặp bỏ mất đầu hoặc cuối đoạn.",
+            "begin/move/end kiểm click, endpoint chỉ có ở up, cancel, reentry và nét rời; không chỉ gọi lerp riêng.",
         },
         {
-          title: "Giữ phần toán độc lập",
+          title: "Tách ba lớp kiểm thử",
           explanation:
-            "Hình học thuần nằm trong `lab.hpp`; sự kiện SDL và việc ghi framebuffer nằm trong `main.cpp`.",
+            "CTest kiểm dữ liệu, smoke kiểm SDL hữu hạn, còn chuột vật lý/focus/HiDPI phải thao tác trên desktop.",
         },
       ],
     },
@@ -150,37 +152,20 @@ const learning = {
   references: {
     "p03-l01": [
       {
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
+      },
+      {
         label: "SDL_CaptureMouse",
         href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
         kind: "SDL API",
       },
-      {
-        label: "SDL_PollEvent",
-        href: "https://wiki.libsdl.org/SDL3/SDL_PollEvent",
-        kind: "SDL API",
-      },
-      {
-        label: "Pointer capture",
-        href: "/glossary#pointer-capture",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Input sampling",
-        href: "/glossary#input-sampling",
-        kind: "Thuật ngữ",
-      },
+      { label: "Input sampling", href: "/glossary#input-sampling", kind: "Thuật ngữ" },
     ],
     "p03-l02": [
-      {
-        label: "Rasterization",
-        href: "/glossary#rasterization",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Bounds check",
-        href: "/glossary#bounds-check",
-        kind: "Thuật ngữ",
-      },
+      { label: "Rasterization", href: "/glossary#rasterization", kind: "Thuật ngữ" },
+      { label: "Bounds check", href: "/glossary#bounds-check", kind: "Thuật ngữ" },
     ],
     "p03-l03": [
       {
@@ -188,47 +173,26 @@ const learning = {
         href: "https://wiki.libsdl.org/SDL3/SDL_MouseMotionEvent",
         kind: "SDL API",
       },
-      {
-        label: "Input sampling",
-        href: "/glossary#input-sampling",
-        kind: "Thuật ngữ",
-      },
+      { label: "Input sampling", href: "/glossary#input-sampling", kind: "Thuật ngữ" },
     ],
     "p03-l04": [
-      {
-        label: "Input sampling",
-        href: "/glossary#input-sampling",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
-      },
+      { label: "Linear interpolation", href: "/glossary#linear-interpolation", kind: "Thuật ngữ" },
+      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
     ],
     "p03-l05": [
       {
-        label: "SDL_GetKeyboardState",
-        href: "https://wiki.libsdl.org/SDL3/SDL_GetKeyboardState",
+        label: "SDL keyboard events",
+        href: "https://wiki.libsdl.org/SDL3/SDL_KeyboardEvent",
         kind: "SDL API",
-      },
-      {
-        label: "Bounds check",
-        href: "/glossary#bounds-check",
-        kind: "Thuật ngữ",
       },
     ],
     "p03-l06": [
       {
-        label: "CTest command-line reference",
+        label: "CTest",
         href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
         kind: "CMake",
       },
-      {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
-      },
+      { label: "Pointer capture", href: "/glossary#pointer-capture", kind: "Thuật ngữ" },
     ],
   },
 } satisfies ProjectLearningAssets;

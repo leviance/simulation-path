@@ -1,104 +1,124 @@
-# Vẽ đầu bút tròn từ công thức khoảng cách
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tự tô đầu bút tròn
 
 ## Vấn đề cần giải quyết
 
-Checkpoint 1 đã ghi lại được các vị trí chuột, nhưng dấu rộng một pixel quá nhỏ để dùng làm cọ vẽ. Trong bài này, mỗi vị trí sẽ tạo ra một hình tròn đặc có bán kính `radius`, kể cả khi tâm nằm sát mép bảng vẽ.
+Bài 1 đã nhận chuột đúng và giữ được tranh. Nhưng một pixel quá nhỏ để làm đầu bút. Bài này thay dấu đó bằng một hình tròn đặc, còn cách nhấn–kéo–thả và upload texture giữ nguyên.
 
-Ta chưa dùng texture hình chiếc cọ hay thư viện vẽ hình. Mục tiêu là tự biến một công thức khoảng cách quen thuộc thành các pixel cụ thể trong framebuffer.
+Thử tính trước: nếu bán kính bằng 2, có phải tô cả hình vuông 5×5 không? Những pixel nào phải bỏ? Ta sẽ có một đáp án nhỏ để đối chiếu, không chỉ nhìn một hình tròn rồi đoán “đúng rồi”.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Xét một pixel cách tâm `dx` theo chiều ngang và `dy` theo chiều dọc. Pixel đó nằm trong hình tròn bán kính `r` khi:
+Một pixel lệch tâm `dx` theo chiều ngang, `dy` theo chiều dọc nằm trong hình tròn bán kính `r` nếu:
 
-```text
-dx² + dy² ≤ r²
-```
+$$
+dx^2 + dy^2 \le r^2.
+$$
 
-Điều kiện này đến từ định lý Pythagoras. Ta có thể lấy căn bậc hai của `dx² + dy²` rồi so với `r`, nhưng bình phương cả hai vế cho cùng kết quả và không phải gọi `sqrt` cho từng pixel. Ta sẽ duyệt hình vuông bao quanh đường tròn, từ `-r` đến `+r`, rồi chỉ tô những vị trí thỏa điều kiện.
+Đây là Pythagoras nhưng không cần lấy căn cho từng pixel. Với r = 2, các hàng có lần lượt 1, 3, 5, 3, 1 pixel: tổng **13**, không phải 25. Điểm (2,1) bị loại vì bình phương khoảng cách bằng 5 > 4; điểm (1,1) được giữ.
 
-Tâm đầu bút vẫn dùng tọa độ chuột dạng số thực. Ta làm tròn tâm một lần về pixel gần nhất; các độ lệch `dx` và `dy` dùng số nguyên vì từ đây ta đang chọn từng ô trong lưới pixel. Phần nào của hình tròn nằm ngoài bảng vẽ sẽ được `putPixel` từ bài trước bỏ qua an toàn.
+<InteractiveLab demo="stroke" mode="stroke-brush" />
 
-Với `radius = 2`, hình vuông bao có `5 × 5 = 25` vị trí có thể xét, nhưng chỉ 13 vị trí thỏa điều kiện:
-
-```text
-          (0,-2)
-(-1,-1)  (0,-1)  (1,-1)
-(-2, 0)  (-1,0)  (0,0)  (1,0)  (2,0)
-(-1, 1)  (0, 1)  (1, 1)
-          (0, 2)
-```
-
-Ví dụ, `(2,1)` bị loại vì `2² + 1² = 5 > 4`; còn `(1,1)` được giữ vì `1² + 1² = 2 ≤ 4`. Tự kiểm tra trường hợp nhỏ này trước khi chạy sẽ giúp bạn phân biệt lỗi ở giới hạn vòng lặp, ở điều kiện hình tròn hay ở bước cộng tọa độ tâm.
+Lưới này phóng to các pixel thật do công thức tô, không dùng hình tròn vector của Canvas làm đáp án thay thế. Đổi bán kính rồi xem cả hình lẫn số pixel. Ảnh lab nhỏ hơn native, nhưng công thức và quy ước chọn pixel giống nhau.
 
 ## Viết code từng bước
 
-### Bước 1 — Giữ lại đầu bút một pixel để đối chiếu
+### Bước 1 — Thêm bán kính vào trạng thái đầu bút
 
-```cpp title="src/main.cpp — đầu bút của checkpoint 1"
-void stampPoint(std::vector<std::uint32_t>& pixels, lab::Point point, std::uint32_t color) {
-    putPixel(pixels, int(std::lround(point.x)), int(std::lround(point.y)), color);
-}
+Trong `include/paint.hpp`, sau màu bút thêm:
+
+
+```cpp title="include/paint.hpp — bán kính mặc định trong PaintState"
+int radius = 12;
 ```
 
-Hàm này được giữ trong checkpoint 1 để bài trước vẫn chạy đúng như lúc hoàn thành. Nó cũng cho thấy đầu bút tròn không cần một cơ chế ghi pixel mới; ta chỉ gọi `putPixel` nhiều lần tại các tọa độ khác nhau.
 
-### Bước 2 — Duyệt hình vuông bao quanh đường tròn
+Chỉ lưu bán kính. Khi cần đường kính hay spacing ta tính từ nó, không giữ thêm một biến có thể bị lệch. Ở bài này bán kính chưa có phím thay đổi; muốn thử r = 2 trong native, sửa giá trị khởi tạo rồi build lại checkpoint 2.
 
-```cpp title="src/main.cpp — vòng lặp của stampCircle"
-void stampCircle(std::vector<std::uint32_t>& pixels, lab::Point center, int radius, std::uint32_t color) {
-    const int centerX = int(std::lround(center.x));
-    const int centerY = int(std::lround(center.y));
+### Bước 2 — Tô hình tròn bằng hai vòng lặp
+
+Trong `include/brush.hpp`, sau đầu bút một pixel, thêm:
+
+
+```cpp title="include/brush.hpp — toàn bộ hàm stampCircle"
+inline void stampCircle(Framebuffer& framebuffer, Point center, int radius, std::uint32_t color) {
+    if (!insideCanvas(center) || radius < 2 || radius > 64) {
+        return;
+    }
+    const int centerX = static_cast<int>(std::floor(center.x));
+    const int centerY = static_cast<int>(std::floor(center.y));
+
+    // Bán kính đã giới hạn, nên bình phương và hai vòng lặp đều nhỏ, hữu hạn.
     for (int dy = -radius; dy <= radius; ++dy) {
         for (int dx = -radius; dx <= radius; ++dx) {
-            // Điều kiện hình tròn được thêm ở bước kế tiếp.
+            if (dx * dx + dy * dy <= radius * radius) {
+                framebuffer.putPixel(centerX + dx, centerY + dy, color);
+            }
         }
     }
 }
 ```
 
-Dùng `<=` để xét cả những vị trí cách tâm đúng bằng bán kính. Với `radius = 12`, cả trục X và Y đều chạy từ -12 đến 12, nên hình vuông bao có `25 × 25` vị trí.
 
-### Bước 3 — Chọn pixel nằm trong hình tròn
+Đầu tiên kiểm tâm và bán kính để không đổi NaN hoặc số rất lớn sang `int`. Các tọa độ hợp lệ dùng `floor` như bài 1. Hai vòng lặp xét hình vuông từ −r đến r, bao gồm cả hai đầu. Chỉ những vị trí thỏa điều kiện mới được đưa vào `putPixel`.
 
-```cpp title="src/main.cpp — stampCircle hoàn chỉnh"
-if (dx * dx + dy * dy <= radius * radius) {
-    putPixel(pixels, centerX + dx, centerY + dy, color);
+Giới hạn r từ 2 đến 64 khiến phép bình phương không tràn kiểu int và công việc mỗi dấu hữu hạn. Đây không phải một hàm hình tròn nhận mọi số nguyên bất kỳ; hợp đồng của đầu bút được nêu ngay ở đầu hàm.
+
+### Bước 3 — Chỉ thay chỗ tạo dấu, không viết lại các nhánh chuột
+
+
+```cpp title="include/paint.hpp — applyStamp của bài 2"
+inline void applyStamp(Framebuffer& framebuffer, PaintState& state, Point point) {
+    stampCircle(framebuffer, point, state.radius, state.color);
 }
 ```
 
-Điều kiện được tính bằng độ lệch quanh tâm. Chỉ sau khi một vị trí thỏa điều kiện, ta mới cộng `centerX` và `centerY` để đổi sang tọa độ thật trên bảng vẽ. Tâm được làm tròn bên ngoài hai vòng lặp để không lặp lại cùng phép tính hàng trăm lần. Mọi pixel vẫn đi qua `putPixel`, nên phần đầu bút nằm ngoài mép không thể ghi sai vùng nhớ.
 
-### Bước 4 — Dùng đầu bút tròn trong phần xử lý chuột
+`beginStroke`, `moveStroke` và `endStroke` đã gọi `applyStamp` từ bài trước, nên cả click, kéo và vị trí thả cuối đều dùng hình tròn mới. Không cần chép công thức hình tròn vào ba nhánh SDL.
 
-```cpp title="src/main.cpp — dùng stampCircle khi xử lý chuột"
-stampCircle(pixels, previous, radius, color);
-stampCircle(pixels, current, radius, color);
+Giữ các phiên bản checkpoint cũ để so sánh: checkpoint 1 gọi `stampPoint`, checkpoint 2 gọi `stampCircle`. Đó là hai chương trình độc lập, không phải bật macro khi chạy.
+
+### Bước 4 — Giữ kiểm tra biên tại nơi ghi pixel
+
+Hàm ghi của starter vẫn là:
+
+
+```cpp title="include/framebuffer.hpp — bảo vệ mọi đường ghi ảnh"
+void putPixel(int x, int y, std::uint32_t color) {
+        if (x < 0 || y < 0 || x >= width || y >= height) {
+            return;
+        }
+        pixels[static_cast<std::size_t>(y) * width + x] = color;
+    }
 ```
 
-Cả lúc nhấn chuột lẫn lúc di chuyển đều gọi cùng một hàm với đủ vùng nhớ, tâm, bán kính và màu. So với checkpoint 1, thay đổi duy nhất ở phần xử lý chuột là `stampPoint` trở thành `stampCircle`. Phần chuột quyết định **khi nào và ở đâu** cần vẽ; `stampCircle` quyết định **dấu vẽ có hình dạng gì**.
+
+Tâm ở (0,0) vẫn hợp lệ. Các độ lệch âm của hình tròn sẽ bị bỏ bởi `putPixel`, phần còn lại vẫn được vẽ. Với bán kính 2, góc trên trái còn 6 pixel. Tâm nằm ngoài ảnh bị từ chối theo quy ước bắt đầu nét của ứng dụng; đừng nhầm hai trường hợp đó.
 
 ## Ghép các phần lại
 
-Trình tự nhấn–di chuyển–thả chuột của bài 1 được giữ nguyên. Mỗi khi sự kiện gọi `stampCircle`, checkpoint 2 duyệt các độ lệch, lọc chúng bằng công thức đường tròn rồi gọi `putPixel` cho từng vị trí hợp lệ.
+Build `project_3_checkpoint_2` rồi click một lần. Bạn phải thấy hình tròn đặc, không chỉ đường viền. Thử ở giữa và sát từng cạnh. Kéo nhanh có thể vẫn thấy các hình tròn rời: điều này chưa được sửa ở bài 2.
 
-Chạy checkpoint 2 và click một lần. Kết quả phải là một hình tròn đặc, không phải đường viền. Khi kéo nhanh, bạn vẫn có thể thấy nhiều hình tròn tách rời nhau. Tăng bán kính chỉ che được một phần khoảng hở, không giải quyết nguyên nhân. Hai bài tiếp theo sẽ đo rồi sửa đúng vấn đề này.
+Đầu bút trả lời “một dấu có hình gì”; xử lý nét trả lời “đặt dấu lúc nào, ở đâu”. Tách hai câu hỏi này giúp thay hình dạng bút mà không phá input.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `<=` thành `>=`. Phần bên ngoài đường tròn trong hình vuông bao bị tô, còn vùng quanh tâm lại rỗng.
-2. Bỏ phép cộng với `centerX` và `centerY`. Mọi dấu đều xuất hiện quanh góc `(0,0)` thay vì vị trí con trỏ.
-3. Thay điều kiện bằng `dx + dy <= radius`. Kết quả bị chặn bởi một đường chéo vì tổng có dấu không phải bình phương khoảng cách Euclid.
+1. Đổi `<=` thành `>=` trong điều kiện hình tròn: phần ngoài hình tròn trong ô vuông bị tô.
+2. Bỏ phép cộng tâm vào dx/dy: mọi dấu bị kéo về góc ảnh.
+3. Dùng `dx + dy <= radius` thay tổng bình phương: hình bị chặn bởi đường chéo, không còn đo khoảng cách Euclid.
+4. Chạy vòng lặp toàn framebuffer cho mỗi dấu: hình vẫn đúng nhưng làm nhiều việc không cần thiết.
 
 ## Tự kiểm tra kết quả
 
-- Click tạo hình tròn đặc, đối xứng quanh tâm.
-- `radius = 12` cho đường kính gần 25 pixel vì có cả hai biên.
-- Đầu bút sát cạnh được cắt gọn và chương trình không truy cập ra ngoài vùng nhớ.
-- Phần xử lý sự kiện không chứa công thức hình tròn.
-- Checkpoint 1 vẫn tạo chấm một pixel, checkpoint 2 tạo đầu bút tròn.
+- r = 2 tạo 13 pixel ở giữa, 6 pixel tại góc trên trái.
+- Pixel trên trục cách tâm đúng r được tô; pixel (r,1) ở r = 2 không được tô.
+- Hình đối xứng, đặc và cắt an toàn ở cạnh.
+- Không đổi conversion chuột hoặc cách giữ framebuffer.
+- Kéo nhanh còn có thể đứt; chưa gọi checkpoint này là bản hoàn chỉnh.
 
 ## Bài tập mở rộng
 
-Hãy viết thêm `stampSquare` và dùng phím B để đổi loại đầu bút sau khi hoàn thành project. Thử tô màu khác cho những pixel thỏa `r - 1 < distance <= r` để quan sát riêng đường biên. Với bán kính lớn, bạn có thể chỉ duyệt `dy`, tính khoảng X tối đa bằng `sqrt(r² - dy²)` rồi so sánh số vòng lặp với cách hiện tại.
+Tự đếm số pixel của r = 3 rồi so với lab. Vì r = 2 gồm cả các ô −2…2, độ rộng lớn nhất là 5 pixel, không phải 4. Giải thích điều này mà không dùng ảnh chụp làm bằng chứng duy nhất.
 
-Bài sau sẽ đo khoảng cách giữa những vị trí chuột liên tiếp để giải thích vì sao đầu bút đúng mà nét vẽ vẫn bị đứt.
+[Bài tiếp theo: đo nguyên nhân nét bị đứt](/projects/mini-paint/03-net-ve-bi-dut).

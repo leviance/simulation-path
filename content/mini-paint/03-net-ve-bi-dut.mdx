@@ -1,93 +1,198 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Vì sao kéo nhanh làm nét vẽ bị đứt?
+# Đo nguyên nhân nét bị đứt
 
 ## Vấn đề cần giải quyết
 
-Đầu bút tròn hoạt động đúng ở từng vị trí mà SDL cung cấp, nhưng khi kéo nhanh, kết quả vẫn giống một dãy đồng xu nằm cách nhau. Lỗi không nằm ở công thức hình tròn. SDL chỉ gửi các vị trí rời rạc theo thời gian, trong khi con trỏ có thể đi hàng chục pixel giữa hai sự kiện `MOUSE_MOTION`.
+Một dấu bút đúng chưa tạo thành một nét đúng. Khi chuột đi xa giữa hai mẫu mà chương trình nhận, hai hình tròn có thể không chạm nhau. Tăng bán kính chỉ che lỗ hổng bằng một nét dày hơn yêu cầu.
 
-Trước khi sửa, ta sẽ tìm điều kiện khiến khoảng trống xuất hiện và giữ checkpoint 3 ở trạng thái chưa nội suy để làm mốc so sánh.
+Bài này thêm đối chứng lặp lại được. S chọn giữ 1/1, 1/2, 1/4 hoặc 1/8 motion; D **xóa ảnh hiện tại rồi vẽ cùng một bộ điểm**. Chưa có nội suy. Nhờ vậy bạn không phải cố kéo giống hệt nhau ở mỗi lần thử. D chỉ là phép thử có chủ ý, không phải chức năng tự vẽ của sản phẩm cuối.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Gọi khoảng cách giữa hai vị trí chuột liên tiếp là `d`, bán kính đầu bút là `r`. Hai hình tròn tách rời hoàn toàn khi `d > 2r`. Tuy nhiên, nếu chúng chỉ vừa chạm nhau, hai bên mép nét vẫn bị lõm rõ rệt. Vì vậy, khoảng cách đặt dấu thường nên nhỏ hơn bán kính; project này chọn `0.8r` để các dấu chồng lên nhau đủ nhiều.
+Với hai dấu bán kính r, khoảng tâm lớn hơn 2r tạo hai hình tách rời. Khi vừa chạm nhau, mép nét vẫn có thể lõm. Ta sẽ dùng khoảng nhỏ hơn, 0,8r, ở bài sau.
 
-Tần suất sự kiện chuột không giống FPS và cũng không hoàn toàn do chương trình quyết định. Vì vậy, “vẽ nhanh hơn” không đảm bảo nhận được nhiều vị trí chuột hơn. Cách chắc chắn là tự lấp đoạn thẳng giữa vị trí trước và vị trí mới.
-
-Muốn làm vậy, ta cần giữ cả hai đầu của đoạn:
-
-```text
-previous ───────── current
-```
+“Giữ 1 trên N mẫu” là **thí nghiệm bỏ bớt event**, không phải phép đo Hz của chuột hoặc FPS. Số lần present và số motion không phải cùng một đại lượng.
 
 <InteractiveLab demo="stroke" mode="stroke-sampling" />
 
+Chọn đường thẳng rồi tăng N. Các tâm trắng thưa đi và khoảng input tăng. Trong bài này nội suy bị khóa tắt để giữ đúng đối chứng; bài sau mới bật được.
+
 ## Viết code từng bước
 
-### Bước 1 — Lưu điểm đầu ngay khi nhấn chuột
+### Bước 1 — Thêm khoảng cách và bộ đếm của một nét
 
-```cpp title="src/main.cpp — bắt đầu một nét vẽ"
-drawing = true;
-previous = {event.button.x, event.button.y};
-stampCircle(pixels, previous, radius, color);
-```
+Trong `include/lab.hpp`, thêm:
 
-Điểm này vừa được vẽ, vừa trở thành đầu thứ nhất của đoạn đầu tiên. Nếu chỉ lưu mà không gọi `stampCircle`, chương trình phải chờ tới khi có chuyển động mới vẽ và cú click đơn lại không để lại dấu.
 
-### Bước 2 — Đo khoảng cách giữa hai vị trí chuột
-
-```cpp title="include/lab.hpp — khoảng cách Euclid"
+```cpp title="include/lab.hpp — khoảng cách giữa hai mẫu"
 inline double distance(Point start, Point end) {
     return std::hypot(end.x - start.x, end.y - start.y);
 }
 ```
 
-Tên `start` và `end` cho biết rõ vai trò của hai điểm trong một đoạn. `std::hypot` tính `sqrt(dx² + dy²)`, vì vậy kết quả có cùng đơn vị pixel với tọa độ đầu vào.
 
-### Bước 3 — Cố ý chỉ vẽ ở vị trí mới
+Thêm các trường sau vào `PaintState`. Chúng được đặt lại khi một nét mới bắt đầu:
 
-```cpp title="src/main.cpp — motion cố ý chưa nội suy"
-if (event.type == SDL_EVENT_MOUSE_MOTION && drawing) {
-    const lab::Point current{event.motion.x, event.motion.y};
-    stampCircle(pixels, current, radius, color);
-    previous = current;
+
+```cpp title="include/paint.hpp — trạng thái đo và lấy thưa"
+int sampleEvery = 1;
+    int received = 0;
+    int accepted = 0;
+    int stamps = 0;
+    double maximumGap = 0.0;
+```
+
+
+`received` đếm motion trước khi lấy thưa, `accepted` đếm các vị trí được giữ gồm down/up, `stamps` đếm lần đặt dấu. `maximumGap` đo khoảng cách lớn nhất giữa **mẫu được giữ**, không phải giữa các pixel trong dấu tròn.
+
+### Bước 2 — Bỏ motion có chủ ý nhưng không bỏ down/up
+
+Hàm `moveStroke` có thêm đối số `bool forceEndpoint = false`. Sau kiểm tra drawing và vùng ảnh, thêm:
+
+
+```cpp title="include/paint.hpp — phân biệt motion với endpoint bắt buộc"
+if (!forceEndpoint) {
+        ++state.received;
+        const int interval = std::max(1, state.sampleEvery);
+        if (state.received % interval != 0) {
+            return false;
+        }
+    }
+```
+
+
+`endStroke` truyền true để thả nút luôn đi qua phần lấy thưa:
+
+
+```cpp title="include/paint.hpp — endpoint không phụ thuộc N"
+inline bool endStroke(Framebuffer& framebuffer, PaintState& state, Point endpoint) {
+    const bool changed = moveStroke(framebuffer, state, endpoint, true);
+    cancelStroke(state);
+    return changed;
 }
 ```
 
-Đoạn code trông hoàn toàn hợp lý, nhưng nó chỉ đặt một dấu tại `current`. Không có dòng nào xử lý khoảng trống từ `previous` đến `current`. Comment trong source ghi rõ đây là hành vi cố ý của checkpoint 3, giúp người đọc không nhầm nó với cách cài đặt cuối cùng.
 
-### Bước 4 — Đo khoảng hở trong thực tế
+Những mẫu bị bỏ **không cập nhật previous**. Nó phải giữ điểm đã xử lý gần nhất, nếu không khoảng cách đo và đoạn sẽ nội suy ở bài sau đều sai.
 
-Chạy checkpoint 3 và kéo cùng một đường ngang ba lần: chậm, vừa rồi thật nhanh. Để có con số cụ thể thay vì chỉ nhìn bằng mắt, tạm thời in khoảng cách giữa hai vị trí:
+### Bước 3 — Đo rồi vẫn chỉ đặt một dấu mới
 
-```cpp title="src/main.cpp — phép đo tạm trong MOUSE_MOTION"
-std::cout << "sample gap = " << lab::distance(previous, current) << " px\n";
+
+```cpp title="include/paint.hpp — đối chứng chưa nội suy"
+state.maximumGap = 0.0;
+    applyStamp(framebuffer, state, point);
+    return true;
+}
+
+inline bool moveStroke(Framebuffer& framebuffer, PaintState& state, Point current, bool forceEndpoint = false) {
+    if (!state.drawing) {
+        return false;
+    }
+    if (!insideCanvas(current)) {
+        cancelStroke(state);
+        return false;
+    }
+    if (!forceEndpoint) {
+        ++state.received;
+        const int interval = std::max(1, state.sampleEvery);
+        if (state.received % interval != 0) {
+            return false;
+        }
+    }
+    if (current == state.previous) {
+        return false;
+    }
+    state.maximumGap = std::max(state.maximumGap, distance(state.previous, current));
+    ++state.accepted;
+    // Bài 1–3 cố ý chỉ đặt dấu ở mẫu mới, chưa nối khoảng giữa hai mẫu.
+    applyStamp(framebuffer, state, current);
+    state.previous = current;
 ```
 
-So sánh giá trị lớn nhất với `2 × radius`. Khi khoảng cách tăng, số lỗ hổng nhìn thấy cũng tăng theo. Sau thí nghiệm, hãy xóa dòng in này; ghi quá nhiều ra terminal có thể tự làm chậm chương trình và ảnh hưởng tới dữ liệu đang đo.
+
+`applyStamp` tăng `state.stamps` mỗi lần tạo dấu. `beginStroke` đặt lại bộ đếm rồi vẽ dấu đầu. Một lần click không kéo chỉ có một dấu vì up trùng previous được bỏ sớm.
+
+### Bước 4 — Tạo cùng một bộ mẫu bằng phím D
+
+
+```cpp title="include/paint.hpp — mẫu thử chạy qua đúng begin move end"
+inline void drawDemo(Framebuffer& framebuffer, PaintState& state) {
+    cancelStroke(state);
+    framebuffer.clear(kBackground);
+    beginStroke(framebuffer, state, {80.0, 270.0});
+    for (int x = 280; x <= 880; x += 200) {
+        moveStroke(framebuffer, state, {static_cast<double>(x), 270.0});
+    }
+    endStroke(framebuffer, state, {880.0, 270.0});
+}
+```
+
+
+Năm vị trí là X = 80, 280, 480, 680, 880; tất cả ở Y = 270. Chạy S ở 1/1 rồi D: khoảng tâm 200 pixel. Chuyển sang 1/4 rồi D: các motion giữa bị bỏ, còn đầu/cuối cách nhau 800 pixel. Mỗi D xóa ảnh trước nên kết quả cũ không che khoảng hở của lần sau. Không dùng D trên tranh muốn giữ.
+
+### Bước 5 — Đưa S/D vào sự kiện và xem số đo
+
+Trong nhánh KEY_DOWN không repeat, phím D gọi demo và báo ảnh đã đổi:
+
+
+```cpp title="src/main.cpp — gọi phép thử từ bàn phím"
+if (event.key.key == SDLK_D) {
+                    SDL_CaptureMouse(false);
+                    lab::drawDemo(framebuffer, state);
+                    dirty = true;
+                }
+```
+
+
+
+```cpp title="src/main.cpp — đổi tỷ lệ lấy mẫu"
+if (event.key.key == SDLK_S) {
+                    lab::cancelStroke(state);
+                    SDL_CaptureMouse(false);
+                    state.sampleEvery *= 2;
+                    if (state.sampleEvery > 8) {
+                        state.sampleEvery = 1;
+                    }
+                    dirty = true;
+                }
+```
+
+
+Trước khi đổi mức, S cancel nét và nhả capture; muốn thử cùng điều kiện thì bấm D sau khi chọn S. Khi ảnh thay đổi, title hiển thị số mẫu giữ, số dấu và input gap:
+
+
+```cpp title="src/main.cpp — số đo không được gọi nhầm là FPS"
+char title[256]{};
+            std::snprintf(title, sizeof(title), "Mini Paint | r=%d | 1/%d samples | %d kept | %d stamps | input gap %.1fpx | S sampling | D demo", state.radius, state.sampleEvery, state.accepted, state.stamps, state.maximumGap);
+```
+
+
+`std::snprintf` nhận kích thước bộ đệm title, `%d` in số nguyên, `%.1f` in số thực một chữ số thập phân. App kiểm tra `SDL_SetWindowTitle` như các lời gọi SDL khác; xem đầy đủ nhánh báo lỗi trong source cuối trang.
 
 ## Ghép các phần lại
 
-Checkpoint 3 giúp cô lập đúng nguyên nhân: cách bắt đầu và kết thúc nét đã đúng, đầu bút tròn đã đúng, kiểm tra biên cũng đúng; chỉ có giả định “sự kiện chuột sẽ đến đủ dày” là sai. Nếu chỉ tăng bán kính, nét sẽ dày hơn yêu cầu. Nếu chỉ tăng FPS, SDL vẫn có thể gửi những vị trí cách xa nhau.
+Chạy `project_3_checkpoint_3`. Bấm D ở các mức S khác nhau, ghi số mẫu giữ và input gap. Với bán kính 12, khoảng 200 hoặc 800 pixel đều lớn hơn đường kính nên phải thấy dấu rời.
 
-Biến `previous` đang được cập nhật sau mỗi lần đặt dấu. Bài sau sẽ thay một lời gọi `stampCircle` bằng nhiều lời gọi tại các điểm nằm giữa `previous` và `current`, sau đó vẫn kết thúc bằng `previous = current`.
+Số dấu và số mẫu còn gần nhau ở phiên bản này. Bài sau giữ nguyên dữ liệu đầu vào nhưng tăng số dấu bằng nội suy. Đây mới là cách sửa nguyên nhân, không phải tăng FPS hoặc làm bút dày lên.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chỉ tăng `radius` lên 50. Khoảng hở giảm nhưng kích thước đầu bút không còn đúng yêu cầu; lỗi chỉ bị che đi chứ chưa được sửa.
-2. Bỏ dòng cập nhật `previous`. Mọi đoạn sau đó đều bắt đầu từ điểm nhấn chuột đầu tiên và bức vẽ tạo thành nhiều tia.
-3. Gán `previous = current` trước khi tính khoảng cách. Hai đầu đoạn trở thành cùng một điểm, nên không thể sinh thêm vị trí ở giữa.
+1. Cập nhật previous ngay cả khi motion bị bỏ. Khoảng input đo được không còn là khoảng giữa các mẫu thực sự dùng để vẽ.
+2. Áp dụng lấy thưa cả cho up. Một số lần thả mất vị trí cuối.
+3. Bỏ clear trước D rồi so preset khác. Tranh cũ chồng lên làm thí nghiệm không còn điều kiện ban đầu giống nhau.
+4. In từng motion ra terminal. Chính việc ghi log có thể ảnh hưởng nhịp event; chỉ xem bộ đếm tổng hợp.
 
 ## Tự kiểm tra kết quả
 
-- Kéo chậm cho nét gần liên tục; kéo nhanh lộ khoảng trống rõ hơn.
-- Khoảng cách in ra thay đổi theo tốc độ rê chuột, không phụ thuộc bán kính.
-- `previous` luôn là vị trí đã xử lý gần nhất.
-- Thả chuột kết thúc nét; nét mới không nối với nét cũ.
-- Bạn phân biệt được lỗi lấy mẫu chuột với lỗi vẽ đầu bút tròn.
+- S có bốn mức và D lặp lại trên ảnh trống.
+- 1/1 cho input gap 200 px, 1/4 cho 800 px với mẫu D.
+- Chưa có nội suy; không chỉnh bán kính để che khoảng hở.
+- Down/up vẫn được giữ, các motion bị bỏ không đổi previous.
+- Bạn không gọi tỷ lệ 1/N là Hz của chuột.
 
 ## Bài tập mở rộng
 
-Hãy lưu khoảng cách lớn nhất của mỗi nét và hiển thị nó khi thả chuột. Thử các bán kính 4, 12 và 24, rồi dự đoán từ giá trị nào khoảng trống bắt đầu xuất hiện. Bạn cũng có thể thêm chế độ Debug, vẽ tâm của từng vị trí gốc bằng màu đỏ lên trên đầu bút để quan sát dữ liệu SDL cung cấp.
+Thử cùng thí nghiệm với một đường gấp khúc. Nếu bỏ điểm ở góc, liệu nối thẳng hai đầu có dựng lại góc đó không? Ghi dự đoán để đối chiếu ở bài nội suy.
 
-Bài tiếp theo sẽ dùng linear interpolation để chèn thêm điểm vào mọi đoạn và giữ khoảng cách giữa các dấu trong một giới hạn đã chọn.
+[Bài tiếp theo: nối mẫu thành nét liền](/projects/mini-paint/04-stroke-interpolation).

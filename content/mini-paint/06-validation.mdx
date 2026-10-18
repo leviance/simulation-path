@@ -1,32 +1,29 @@
-# Kiểm chứng: nét vẽ không còn khoảng hở
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng Mini Paint
 
 ## Vấn đề cần giải quyết
 
-Một nét nhìn có vẻ liền trên màn hình chưa đủ để kết luận thuật toán đúng. Bán kính lớn có thể che mất khoảng hở, còn tay người không thể lặp lại chính xác cùng một đường kéo. Ta cần kiểm tra trực tiếp những điều `sampleStroke` phải bảo đảm: giữ điểm đầu và điểm cuối, giới hạn khoảng cách giữa các điểm được tạo, xử lý hai đầu trùng nhau và không hỏng khi `spacing` bằng 0.
+Một nét có vẻ liền chưa chứng minh ứng dụng đúng. Bút lớn có thể che lỗi khoảng tâm; helper toán học đúng vẫn không phát hiện việc app bỏ endpoint khi thả nút hoặc nối hai nét riêng.
 
-Sau phần test toán học, ta vẫn chạy ứng dụng hoàn chỉnh để kiểm tra mouse capture, mất focus, thao tác bàn phím và việc vẽ sát mép — những phần không thể xác nhận chỉ bằng hàm thuần.
+Ta kiểm ba lớp riêng: CTest cho dữ liệu và trạng thái, smoke hữu hạn cho SDL, thao tác desktop cho chuột thật/focus/HiDPI. Không lấy kết quả của một lớp để tuyên bố hai lớp còn lại đã qua.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hàm phải thỏa các điều kiện sau:
+Những đáp án nhỏ giúp tìm lỗi nhanh: đoạn 17 pixel, spacing 8 cần bốn điểm; bút bán kính 2 có 13 pixel ở giữa ảnh và 6 pixel ở góc; hai nét cách xa phải để vùng giữa nguyên màu nền.
 
-```text
-points.front() == start
-points.back()  == end
-distance(points[i-1], points[i]) ≤ spacing + epsilon
-```
+<InteractiveLab demo="stroke" mode="stroke-validation" />
 
-Nếu ba điều kiện trên được giữ và `spacing < 2 × radius`, tâm của hai dấu liên tiếp không thể cách nhau quá đường kính đầu bút. Với lựa chọn `0.8 × radius`, các hình tròn còn chồng lên nhau khá nhiều, nhờ đó mép nét ít bị lõm.
-
-Những phép kiểm tra này không cần SDL, texture hay chuột thật. Đó chính là lý do `Point`, `distance`, `lerp` và `sampleStroke` được đặt trong một header độc lập.
+Preset “Hai nét rời” giúp quan sát việc không nối qua hai lần nhấn. Xóa rồi dùng Enter mở nét, phím mũi tên nối đoạn, Enter lần nữa đóng nét. Sau đó mũi tên chỉ dịch con trỏ cam; tới chỗ mới nhấn Enter để bắt đầu nét khác. Đây là bộ dữ liệu thử tối đa 8 nét/128 điểm; native không giữ lịch sử điểm nên không có giới hạn này.
 
 ## Viết code từng bước
 
-### Bước 1 — Tạo chương trình test và kiểm tra hai đầu đoạn
+### Bước 1 — Dùng check vẫn hoạt động ở Release
 
-`check` là một hàm bình thường nên vẫn chạy trong cấu hình Release; nó không bị loại bỏ bởi `NDEBUG` như `assert`. Chương trình giữ bộ đếm `failures`, in tên của điều kiện sai và trả `EXIT_FAILURE` để CTest nhận biết thất bại.
+`tests/tests.cpp` include `paint.hpp`, `<algorithm>`, `<array>`, `<cstdlib>`, `<iostream>`, `<limits>` và `<string_view>`. Phần hỗ trợ:
 
-```cpp title="tests/tests.cpp — hàm check luôn chạy ở Release"
+
+```cpp title="tests/tests.cpp — đưa thất bại về CTest"
 namespace {
 int failures = 0;
 
@@ -37,90 +34,134 @@ void check(bool condition, std::string_view label) {
     std::cerr << "FAILED: " << label << '\n';
     ++failures;
 }
+
+std::uint32_t pixel(const lab::Framebuffer& framebuffer, int x, int y) {
+    return framebuffer.pixels[static_cast<std::size_t>(y) * lab::Framebuffer::width + x];
+}
 } // namespace
 ```
 
-Thêm `<cstdlib>`, `<iostream>` và `<string_view>` như trong mã hoàn chỉnh, rồi kiểm tra phần tử đầu và cuối:
 
-```cpp title="tests/tests.cpp — đoạn ngang chuẩn"
-const auto points = lab::sampleStroke({0.0, 0.0}, {100.0, 0.0}, 8.0);
-check(points.front() == lab::Point{0.0, 0.0}, "horizontal stroke keeps its first endpoint");
-check(points.back() == lab::Point{100.0, 0.0}, "horizontal stroke keeps its last endpoint");
+Hàm pixel chỉ dùng với tọa độ test đã biết hợp lệ. `check` tăng failures và in nhãn lỗi; cuối main trả EXIT_FAILURE nếu có lỗi. Không dùng assert vì NDEBUG ở Release có thể loại bỏ nó.
+
+### Bước 2 — Kiểm hai đầu, điểm giữa và spacing
+
+
+```cpp title="tests/tests.cpp — đáp án không chỉ là số phần tử"
+const auto points = lab::sampleStroke({0.0, 0.0}, {17.0, 0.0}, 8.0);
+    check(points.size() == 4, "17/8 needs three intervals and four points");
+    check(points.front() == lab::Point{0.0, 0.0}, "stroke keeps start");
+    check(points.back() == lab::Point{17.0, 0.0}, "stroke keeps end");
+    check(std::abs(points[1].x - 17.0 / 3.0) < 1e-9, "first interior point uses floating-point division");
+    for (std::size_t index = 1; index < points.size(); ++index) {
+        check(lab::distance(points[index - 1], points[index]) <= 8.0 + 1e-9, "every interval respects spacing");
+    }
 ```
 
-Vì `check` là hàm chứ không phải macro, biểu thức `lab::Point{0.0, 0.0}` có dấu phẩy vẫn được truyền bình thường, không cần bọc thêm một lớp ngoặc.
 
-### Bước 2 — Kiểm tra khoảng cách giữa từng cặp điểm
+Điểm thứ hai phải ở X = 17/3, không phải 0 hoặc 8. Chỉ kiểm vector có bốn phần tử chưa phát hiện được việc tính sai vị trí.
 
-```cpp title="tests/tests.cpp — kiểm tra giới hạn spacing"
-for (std::size_t index = 1; index < points.size(); ++index) {
-    check(lab::distance(points[index - 1], points[index]) <= 8.001, "horizontal stroke respects spacing");
-}
+Phần tiếp theo trong file kiểm đoạn bằng 0, spacing lỗi, giới hạn 4.097 điểm và đoạn bị từ chối. Từ chối đầu vào ngoài hợp đồng là khác với làm thưa âm thầm rồi vẫn báo đạt spacing.
+
+### Bước 3 — Kiểm rasterization bằng pixel thật
+
+
+```cpp title="tests/tests.cpp — đếm 13 pixel của brush bán kính hai"
+lab::Framebuffer framebuffer;
+    framebuffer.clear(lab::kBackground);
+    constexpr std::uint32_t ink = 0x53F0AEFFu;
+    lab::stampCircle(framebuffer, {20.0, 20.0}, 2, ink);
+    check(std::count(framebuffer.pixels.begin(), framebuffer.pixels.end(), ink) == 13, "radius-two brush contains thirteen pixels");
+    check(pixel(framebuffer, 22, 20) == ink && pixel(framebuffer, 20, 18) == ink, "circle includes axial boundary");
+    check(pixel(framebuffer, 22, 21) == lab::kBackground, "circle excludes squared distance five");
 ```
 
-`8.001` chừa một sai số rất nhỏ quanh ngưỡng 8 cho phép tính số thực. Chỉ kiểm tra `points.size()` là chưa đủ: danh sách có thể chứa đúng số phần tử nhưng các điểm phân bố sai hoặc dồn hết về một đầu.
 
-### Bước 3 — Thử hướng chéo và tọa độ âm
+Sau đó đặt tâm (0,0) và đếm 6 pixel còn lại; kiểm các tâm rất lớn, bán kính sai và putPixel ngoài biên không thay ảnh. Với r = 12, các cặp pixel đối xứng qua trục và đổi X/Y phải bằng nhau.
 
-```cpp title="tests/tests.cpp — đoạn không nằm trên trục"
-const auto diagonal = lab::sampleStroke({-10.0, -10.0}, {10.0, 10.0}, 3.0);
-check(diagonal.front() == lab::Point{-10.0, -10.0}, "diagonal stroke keeps its first endpoint");
-check(diagonal.back() == lab::Point{10.0, 10.0}, "diagonal stroke keeps its last endpoint");
+Những test này gọi đúng stampCircle của app. Canvas cũng dùng cùng điều kiện bình phương khoảng cách, nhưng một kết quả Canvas đẹp không thay thế test C++.
+
+### Bước 4 — Kiểm cả vị trí chỉ có ở up và hai nét độc lập
+
+
+```cpp title="tests/tests.cpp — up nối endpoint trước khi đóng nét"
+check(!lab::moveStroke(framebuffer, state, {20.0, 20.0}), "hover cannot paint");
+    check(!lab::beginStroke(framebuffer, state, {-1.0, 20.0}), "letterbox or outside down cannot start");
+    check(lab::beginStroke(framebuffer, state, {20.0, 20.0}), "down starts stroke");
+    check(!lab::beginStroke(framebuffer, state, {80.0, 20.0}), "second down cannot replace active stroke");
+    check(lab::endStroke(framebuffer, state, {80.0, 20.0}), "up includes final endpoint");
+    check(pixel(framebuffer, 80, 20) == ink && pixel(framebuffer, 50, 20) == ink, "release-only segment is connected");
+    check(!state.drawing, "up closes stroke");
 ```
 
-Thuật toán hình học không nên phụ thuộc vào kích thước bảng vẽ hay giả định tọa độ luôn dương. Việc bỏ các pixel ngoài biên là trách nhiệm của `putPixel`, không phải `sampleStroke`.
 
-### Bước 4 — Kiểm tra các đầu vào đặc biệt
+Ngay phía trên các dòng này, test đã tạo `lab::PaintState state;` và đặt radius = 2. Các phần kế tiếp thử nét mới ở X = 150 và xác nhận X = 110 vẫn là nền. Khi ra ngoài vùng ảnh hoặc cancel, move/up sau đó không được vẽ thêm.
 
-```cpp title="tests/tests.cpp — hai điểm trùng nhau và spacing không hợp lệ"
-const auto samePoint = lab::sampleStroke({2.0, 3.0}, {2.0, 3.0}, 8.0);
-check(samePoint.size() == 1, "zero-length stroke emits one point");
-check(samePoint.front() == lab::Point{2.0, 3.0}, "zero-length stroke preserves its point");
-const auto zeroSpacing = lab::sampleStroke({0.0, 0.0}, {100.0, 0.0}, 0.0);
-check(zeroSpacing.size() == 201, "zero spacing uses the minimum spacing");
-check(zeroSpacing.size() < 1'000, "invalid spacing cannot allocate an excessive sample count");
-const auto negativeSpacing = lab::sampleStroke({0.0, 0.0}, {100.0, 0.0}, -10.0);
-check(negativeSpacing.size() == zeroSpacing.size(), "negative spacing uses the minimum spacing");
-const auto nonFiniteSpacing = lab::sampleStroke({0.0, 0.0}, {100.0, 0.0}, std::numeric_limits<double>::quiet_NaN());
-check(nonFiniteSpacing.size() == zeroSpacing.size(), "NaN spacing uses the minimum spacing");
+Đây là test **begin/move/end mà SDL thật gọi**, không phải một phiên bản trạng thái viết riêng trong file test.
+
+### Bước 5 — Kiểm nét raster ở nhiều hướng và các công cụ
+
+File test chọn tám endpoint quanh (200,200), vẽ bằng begin/end rồi kiểm dày 1.001 vị trí trên đường tâm bằng một phép đo riêng. Nó phát hiện trường hợp khoảng tâm hợp lý nhưng bước floor/rasterization vẫn để hở trên fixture.
+
+Điều này không chứng minh mọi hình dạng và mọi tốc độ chuột. Nó là bằng chứng cụ thể cho các hướng, bán kính nhỏ và dữ liệu đã kiểm. Test cuối xác nhận color/radius/clear đều đóng nét, clear thay vector thật và demo dùng lại cùng hàm vẽ.
+
+### Bước 6 — Build cả Debug và Release
+
+Từ thư mục chứa CMakeLists.txt trong ZIP:
+
+```bash title="Terminal — configure và test Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
 ```
 
-`spacing` bằng 0, số âm và `NaN` đều được thay bằng 0,5 pixel. Vì vậy, đoạn dài 100 pixel có 200 khoảng và 201 điểm. Điều kiện nhỏ hơn 1.000 phần tử kiểm tra thêm mục tiêu an toàn: dữ liệu sai không được biến thành một lần cấp phát khổng lồ. Thêm `#include <limits>` ở đầu file để dùng `std::numeric_limits` như trong mã hoàn chỉnh cuối trang.
-
-### Bước 5 — Chạy test và bản hoàn chỉnh
-
-```bash title="Terminal — build và kiểm tra Project 03"
-cmake -S examples/project-03-mini-paint -B examples/project-03-mini-paint/build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
-cmake --build examples/project-03-mini-paint/build --config Debug
-ctest --test-dir examples/project-03-mini-paint/build -C Debug --output-on-failure
-cmake --build examples/project-03-mini-paint/build --config Release
-ctest --test-dir examples/project-03-mini-paint/build -C Release --output-on-failure
+```bash title="Terminal — test Release"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
+
+Ninja/Makefiles dùng thư mục riêng cho mỗi cấu hình với CMAKE_BUILD_TYPE tương ứng. Các test không link SDL hoặc mở window, nên phải kết thúc nhanh; 20 giây là timeout bảo vệ, không phải thời gian chờ bình thường.
+
+```bash title="Windows — bản tương tác và SDL smoke"
+.\build\Debug\project_3_final.exe
+.\build\Debug\project_3_final.exe --smoke
+```
+
+Smoke dùng window ẩn, chạy 12 frame có brush/nội suy/màu/resize/upload/present rồi tự thoát. Khi tự động hóa phải đặt deadline ngoài 15 giây để bảo vệ cả trường hợp driver kẹt. Nó không nhận chuột vật lý, không chứng minh capture của desktop đã hoạt động.
 
 ## Ghép các phần lại
 
-Trong project hoàn chỉnh, các bước nối với nhau theo một đường rõ ràng: sự kiện chuột mở hoặc đóng nét; mỗi `MOUSE_MOTION` tạo một đoạn; `sampleStroke` chia đoạn thành nhiều điểm; `stampCircle` đặt đầu bút tại từng điểm; `putPixel` bảo vệ biên; cuối cùng texture đưa kết quả lên cửa sổ. Test tự động kiểm tra phần hình học, còn danh sách thử trực tiếp kiểm tra chuột và hiển thị.
+Mã hoàn chỉnh cuối trang gồm CMake, framebuffer, brush, hình học, trạng thái nét, presentation, main và tests. ZIP chứa starter, sáu checkpoint và final độc lập; không cần Node.js để build C++ sau khi giải nén.
 
-Chạy `project_3_checkpoint_3` rồi `project_3_final`, cố gắng thực hiện cùng một động tác kéo nhanh để so bản chưa nội suy với bản hoàn chỉnh. Sau đó chạy CTest. Phần **Mã nguồn hoàn chỉnh** cuối trang là đúng bộ file đã dùng để build chương trình và tạo ZIP tải về; bạn không phải tự ghép các đoạn code trong bài.
+Sau khi CTest thành công, thử riêng trên desktop:
+
+1. Click không kéo, hover, kéo nhanh, thả ở vị trí mới; tạo nhiều nét xa nhau.
+2. Kéo ra ngoài ảnh rồi quay lại khi còn giữ nút: không tự nối; thả/nhấn lại mới vẽ.
+3. Mất focus, minimize/restore, resize đổi tỉ lệ và thử HiDPI nếu có màn hình phù hợp. Tranh không mất, bút không lệch.
+4. Đổi màu/bán kính hoặc C trong lúc giữ chuột: nét hiện tại kết thúc, không có đoạn nối cũ.
+5. Chạy checkpoint 3 và 4, cùng S rồi D để so đối chứng. D xóa tranh; không dùng trên ảnh muốn giữ.
+6. Thoát bằng Escape và Close ở hai lần chạy.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `ceil` thành `floor`. Phép kiểm tra đoạn dài 17 pixel với `spacing = 8` phải phát hiện khoảng cách vượt ngưỡng.
-2. Đổi điều kiện vòng lặp thành `< steps`. Phép kiểm tra điểm cuối phải thất bại.
-3. Bỏ nhánh `segmentLength == 0`. Trường hợp `samePoint` đi vào phép chia cho 0 và bộ test phải báo lỗi.
+1. Trong `sampleStroke`, thay `std::ceil` bằng `std::floor` khi tính số khoảng. Với đoạn dài 17 pixel và khoảng cách tối đa 8 pixel, hai khoảng là chưa đủ: mỗi khoảng sẽ dài 8,5 pixel. Phép kiểm tra khoảng cách phải báo lỗi.
+2. Bỏ dòng `points.push_back(end)` ở cuối `sampleStroke`. Chạy lại CTest: phép kiểm tra điểm cuối phải báo lỗi vì danh sách không còn chứa đúng vị trí kết thúc đoạn.
+3. Bỏ lời gọi `moveStroke` trong `endStroke`. Khi vị trí thả chuột khác mẫu di chuyển cuối cùng, ứng dụng sẽ bỏ sót đoạn này; trường hợp kiểm tra vị trí chỉ có trong sự kiện thả nút phải phát hiện được lỗi.
+4. Bỏ lời gọi `cancelStroke` trong `clearPainting` hoặc `chooseColor`. Nếu nét cũ vẫn tiếp tục sau khi xóa tranh hoặc đổi màu, các phép kiểm tra trạng thái nét phải báo lỗi, dù công thức nội suy không thay đổi.
 
-Mỗi thí nghiệm chỉ sửa một dòng, nhưng phá vỡ một điều kiện khác nhau và phải nhận được thông báo tương ứng. Sau từng lần thử, hãy hoàn tác thay đổi rồi chạy lại test.
+Hoàn tác từng thay đổi rồi chạy lại, không sửa nhiều lỗi cố ý cùng lúc.
 
 ## Tự kiểm tra kết quả
 
-- CTest báo `project_3_validation` passed.
-- Điểm đầu và điểm cuối được giữ cho cả đoạn ngang lẫn đoạn chéo.
-- Mọi khoảng liên tiếp nằm trong ngưỡng.
-- Click đơn, kéo nhanh, kéo ra ngoài cửa sổ và mất focus đều được xử lý đúng trong ứng dụng hoàn chỉnh.
-- Đổi màu, đổi bán kính, xóa bảng vẽ và Escape đều làm đúng chức năng.
+- Starter, các checkpoint và final build được; CTest Debug/Release thành công.
+- Hai đầu, spacing và giới hạn số điểm được kiểm bằng đáp án cụ thể.
+- Brush r = 2 có 13/6 pixel; không ghi ngoài ảnh.
+- Up/cancel/nét mới, lấy thưa endpoint và công cụ được kiểm qua cùng hàm app gọi.
+- SDL smoke kết thúc hữu hạn; thao tác người dùng được ghi nhận riêng, không suy từ tests.
+- Bạn giải thích được giới hạn của nội suy và của bằng chứng kiểm thử.
 
 ## Bài tập mở rộng
 
-Hãy thêm kiểm tra ngẫu nhiên cho 1.000 cặp điểm với `spacing` dương. Tính tổng độ dài của đường gấp khúc trả về rồi so với khoảng cách thẳng từ đầu đến cuối. Sau đó tách `stampCircle` để chạy trên một bảng vẽ nhỏ trong test, kiểm tra tính đối xứng và việc cắt hình ở mép.
+Thêm test bán kính 3 với số pixel đã tính tay. Thử đường gấp khúc sát cạnh và kiểm vùng giữa hai nét vẫn là nền. Nếu muốn undo hoặc lưu BMP, thiết kế dữ liệu và bộ nhớ trước: đó là tính năng mở rộng, chưa nằm trong Mini Paint này.
 
-Project tiếp theo sẽ đi sâu hơn vào rasterization: thay vì đóng dấu đầu bút, chúng ta tự xây DDA, Bresenham, hình chữ nhật và midpoint circle từng bước.
+[Project tiếp theo: bộ công cụ vẽ 2D](/projects/tiny-2d-rasterizer).

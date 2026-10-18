@@ -1,209 +1,229 @@
 #ifndef LAB_CHECKPOINT
 #define LAB_CHECKPOINT 6
 #endif
-#if LAB_CHECKPOINT >= 1
-#include "lab.hpp"
-#endif
-#include <SDL3/SDL.h>
-#include <algorithm>
-#if LAB_CHECKPOINT >= 3
-#include <array>
-#endif
+#include "presentation.hpp"
+#include "view.hpp"
 #if LAB_CHECKPOINT >= 6
-#include <chrono>
+#include "benchmark.hpp"
+#include <string_view>
 #endif
-#include <cstdint>
-#if LAB_CHECKPOINT >= 1
 #include <cstdio>
-#endif
 #include <cstdlib>
 #include <iostream>
-#if LAB_CHECKPOINT >= 6
-#include <utility>
-#endif
-#include <vector>
 
 namespace {
-constexpr int kCanvasWidth = 960;
-constexpr int kCanvasHeight = 540;
-
-std::uint32_t rgba(std::uint8_t red, std::uint8_t green, std::uint8_t blue, std::uint8_t alpha = 255) {
-    return (std::uint32_t(red) << 24) | (std::uint32_t(green) << 16) | (std::uint32_t(blue) << 8) | alpha;
-}
-#if LAB_CHECKPOINT >= 1
-void putPixel(std::vector<std::uint32_t>& pixels, lab::Point point, std::uint32_t color) {
-    if (point.x < 0 || point.y < 0 || point.x >= kCanvasWidth || point.y >= kCanvasHeight) {
-        return;
+#if LAB_CHECKPOINT >= 2
+void handleKey(SDL_Keycode key, bool shift, lab::Scene& scene) {
+    if (key == SDLK_D) {
+        scene.algorithm = lab::Algorithm::Dda;
     }
-    const std::size_t index = std::size_t(point.y) * std::size_t(kCanvasWidth) + std::size_t(point.x);
-    pixels[index] = color;
-}
-#endif
+    if (key == SDLK_B) {
+        scene.algorithm = lab::Algorithm::Bresenham;
+    }
 #if LAB_CHECKPOINT >= 3
-void drawHandle(std::vector<std::uint32_t>& pixels, lab::Point center, std::uint32_t color) {
-    constexpr int kHandleRadius = 6;
-    for (int y = center.y - kHandleRadius; y <= center.y + kHandleRadius; ++y) {
-        for (int x = center.x - kHandleRadius; x <= center.x + kHandleRadius; ++x) {
-            putPixel(pixels, {x, y}, color);
-        }
+    if (key == SDLK_1) {
+        scene.tool = lab::Tool::Line;
+        scene.inspectedStep = 0;
     }
-}
+    if (key == SDLK_O) {
+        lab::selectOctant(scene);
+    }
+    if (key == SDLK_Z) {
+        scene.zoom = !scene.zoom;
+    }
+    if (key == SDLK_LEFT && scene.inspectedStep > 0) {
+        --scene.inspectedStep;
+    }
+    if (key == SDLK_RIGHT) {
+        ++scene.inspectedStep;
+    }
+    if (key == SDLK_HOME) {
+        scene.inspectedStep = 0;
+    }
+    if (key == SDLK_END) {
+        scene.inspectedStep = 1'048'576;
+    }
+    int dx = 0;
+    int dy = 0;
+    // D dành cho DDA; dùng I/J/K/L để không chồng phím chọn thuật toán.
+    if (key == SDLK_J) {
+        dx = -1;
+    }
+    if (key == SDLK_L) {
+        dx = 1;
+    }
+    if (key == SDLK_I) {
+        dy = -1;
+    }
+    if (key == SDLK_K) {
+        dy = 1;
+    }
+    if (dx != 0 || dy != 0) {
+        scene.dragged = 1;
+        if (shift) {
+            scene.dragged = 0;
+        }
+        lab::Point handle = lab::secondHandle(scene);
+        if (shift) {
+            handle = scene.a;
+        }
+        const auto point = lab::imagePoint(handle.x + dx, handle.y + dy);
+        if (point) {
+            lab::moveHandle(scene, *point);
+        }
+        lab::cancelDrag(scene);
+    }
+#if LAB_CHECKPOINT >= 4
+    if (key == SDLK_2) {
+        scene.tool = lab::Tool::Rectangle;
+        scene.inspectedStep = 0;
+    }
+    if (key == SDLK_F) {
+        scene.filled = !scene.filled;
+        scene.inspectedStep = 0;
+    }
+#endif
+#if LAB_CHECKPOINT >= 5
+    if (key == SDLK_3) {
+        scene.tool = lab::Tool::Circle;
+        scene.inspectedStep = 0;
+    }
+    if (key == SDLK_LEFTBRACKET) {
+        scene.radius = std::max(0, scene.radius - 1);
+    }
+    if (key == SDLK_RIGHTBRACKET) {
+        scene.radius = std::min(256, scene.radius + 1);
+    }
 #endif
 #if LAB_CHECKPOINT >= 6
-void drawInspector(
-    std::vector<std::uint32_t>& pixels,
-    const std::vector<lab::Point>& linePoints,
-    std::size_t inspectedStep
-) {
-    constexpr int kInspectorCells = 9;
-    constexpr int kInspectorCellSize = 16;
-    constexpr int kInspectorOriginX = 24;
-    constexpr int kInspectorOriginY = 360;
-    constexpr int kInspectorHalf = kInspectorCells / 2;
-    const lab::Point selectedPoint = linePoints[inspectedStep];
-
-    for (int gridY = 0; gridY < kInspectorCells; ++gridY) {
-        for (int gridX = 0; gridX < kInspectorCells; ++gridX) {
-            const lab::Point inspectedPoint{
-                selectedPoint.x + gridX - kInspectorHalf,
-                selectedPoint.y + gridY - kInspectorHalf,
-            };
-            const bool belongsToLine = std::find(linePoints.begin(), linePoints.end(), inspectedPoint) != linePoints.end();
-            const bool isSelected = inspectedPoint == selectedPoint;
-            std::uint32_t cellColor = rgba(22, 31, 53);
-            if (belongsToLine) {
-                cellColor = rgba(83, 240, 174);
-            }
-            if (isSelected) {
-                cellColor = rgba(239, 125, 66);
-            }
-
-            const int left = kInspectorOriginX + gridX * kInspectorCellSize;
-            const int top = kInspectorOriginY + gridY * kInspectorCellSize;
-            for (int y = top + 1; y < top + kInspectorCellSize; ++y) {
-                for (int x = left + 1; x < left + kInspectorCellSize; ++x) {
-                    putPixel(pixels, {x, y}, cellColor);
-                }
-            }
-        }
+    if (key == SDLK_4) {
+        scene.tool = lab::Tool::Gallery;
     }
-}
 #endif
-#if LAB_CHECKPOINT >= 3
-constexpr std::array<lab::Point, 8> kOctantOffsets{{
-    {9, 2},
-    {2, 9},
-    {-2, 9},
-    {-9, 2},
-    {-9, -2},
-    {-2, -9},
-    {2, -9},
-    {9, -2},
-}};
-#endif
-#if LAB_CHECKPOINT >= 6
-void benchmarkLines() {
-    constexpr int kLineCount = 20'000;
-    constexpr int kRoundCount = 7;
-    using Segment = std::pair<lab::Point, lab::Point>;
-    std::vector<Segment> segments;
-    segments.reserve(kLineCount);
-    for (int index = 0; index < kLineCount; ++index) {
-        segments.push_back({
-            {(index * 37) % kCanvasWidth, (index * 53) % kCanvasHeight},
-            {(index * 97 + 211) % kCanvasWidth, (index * 29 + 71) % kCanvasHeight},
-        });
-    }
-
-    // Chạy thử cả hai thuật toán trước để lần đo đầu không chịu chi phí khởi động.
-    std::size_t warmupChecksum = 0;
-    for (int index = 0; index < 500; ++index) {
-        const auto [start, end] = segments[std::size_t(index)];
-        warmupChecksum += lab::dda(start, end).size();
-        warmupChecksum += lab::bresenham(start, end).size();
-    }
-    const auto run = [&](bool useDda) {
-        std::array<double, kRoundCount> milliseconds{};
-        std::size_t checksum = 0;
-        for (int round = 0; round < kRoundCount; ++round) {
-            const auto begin = std::chrono::steady_clock::now();
-            for (const auto& [start, end] : segments) {
-                if (useDda) {
-                    checksum += lab::dda(start, end).size();
-                } else {
-                    checksum += lab::bresenham(start, end).size();
-                }
-            }
-            const auto elapsed = std::chrono::steady_clock::now() - begin;
-            milliseconds[std::size_t(round)] = std::chrono::duration<double, std::milli>(elapsed).count();
-        }
-        std::sort(milliseconds.begin(), milliseconds.end());
-        return std::pair{milliseconds[kRoundCount / 2], checksum};
-    };
-    const auto [ddaMedian, ddaChecksum] = run(true);
-    const auto [bresenhamMedian, bresenhamChecksum] = run(false);
-#ifdef NDEBUG
-    constexpr const char* kBuildType = "Release";
 #else
-    constexpr const char* kBuildType = "Debug";
+    (void)shift;
 #endif
-    SDL_Log("%s | %d lines x %d rounds | median: DDA %.3f ms, "
-            "Bresenham %.3f ms | checksums %zu/%zu | warmup %zu",
-            kBuildType, kLineCount, kRoundCount, ddaMedian, bresenhamMedian, ddaChecksum, bresenhamChecksum, warmupChecksum);
 }
 #endif
+
+void updateTitle(SDL_Window* window, const lab::Scene& scene, const lab::SceneFrame& frame) {
+#if LAB_CHECKPOINT >= 3
+    char title[300]{};
+    if (scene.tool == lab::Tool::Line && !frame.line.empty()) {
+        const auto& step = frame.line[scene.inspectedStep];
+        if (scene.algorithm == lab::Algorithm::Dda) {
+            std::snprintf(title, sizeof(title), "DDA | step %zu/%zu | pixel (%d,%d) | continuous (%.3f,%.3f) | D/B O Z Left/Right IJKL Shift", scene.inspectedStep + 1, frame.line.size(), step.point.x, step.point.y, step.x, step.y);
+        } else {
+            std::snprintf(title, sizeof(title), "Bresenham | step %zu/%zu | pixel (%d,%d) | error %d e2 %d | move X=%d Y=%d | D/B O Z Left/Right", scene.inspectedStep + 1, frame.line.size(), step.point.x, step.point.y, step.error, step.doubledError, step.movesX, step.movesY);
+        }
+    } else {
+#if LAB_CHECKPOINT >= 6
+        constexpr const char* kTools = "1 line 2 rect 3 circle 4 gallery | F fill Z zoom | T benchmark/cancel";
+#elif LAB_CHECKPOINT >= 5
+        constexpr const char* kTools = "1 line 2 rect 3 circle | F fill Z zoom | [/] radius";
+#elif LAB_CHECKPOINT >= 4
+        constexpr const char* kTools = "1 line 2 rect | F fill Z zoom";
+#else
+        constexpr const char* kTools = "1 line | D/B O Z Left/Right";
+#endif
+        std::snprintf(title, sizeof(title), "2D Rasterizer | %zu generated pixels | %s", frame.points.size(), kTools);
+    }
+    SDL_SetWindowTitle(window, title);
+#elif LAB_CHECKPOINT >= 2
+    (void)frame;
+    if (scene.algorithm == lab::Algorithm::Dda) {
+        SDL_SetWindowTitle(window, "DDA | D/B: compare algorithms");
+    } else {
+        SDL_SetWindowTitle(window, "Bresenham | D/B: compare algorithms");
+    }
+#elif LAB_CHECKPOINT >= 1
+    (void)scene;
+    (void)frame;
+    SDL_SetWindowTitle(window, "DDA | A(220,270) -> B(740,150)");
+#else
+    (void)window;
+    (void)scene;
+    (void)frame;
+#endif
+}
 } // namespace
 
-int main() {
-    // Setup: tạo window, renderer, texture và CPU pixel buffer theo thứ tự.
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
+int main(int argc, char** argv) {
+    bool smoke = false;
+#if LAB_CHECKPOINT >= 6
+    if (argc == 2 && std::string_view(argv[1]) == "--benchmark") {
+        lab::Benchmark benchmark;
+        lab::beginBenchmark(benchmark);
+        while (benchmark.active) {
+            lab::advanceBenchmark(benchmark);
+        }
+        lab::printBenchmark(benchmark);
+        if (!benchmark.complete) {
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--smoke") {
+        smoke = true;
+    } else if (argc != 1) {
+        std::cerr << "Usage: project_4_final [--smoke|--benchmark]\n";
         return EXIT_FAILURE;
     }
-    SDL_Window* window = SDL_CreateWindow("Project 04 - Tiny 2D Rasterizer", kCanvasWidth, kCanvasHeight, 0);
+#else
+    (void)argc;
+    (void)argv;
+#endif
+
+    // Setup: SDL chỉ hiển thị texture; mọi primitive được rasterize vào ảnh CPU.
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::cerr << "SDL_Init: " << SDL_GetError() << '\n';
+        return EXIT_FAILURE;
+    }
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (smoke) {
+        flags |= SDL_WINDOW_HIDDEN;
+    }
+    SDL_Window* window = SDL_CreateWindow("Project 04 - 2D Rasterizer", lab::Framebuffer::width, lab::Framebuffer::height, flags);
     if (!window) {
-        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << '\n';
+        std::cerr << "SDL_CreateWindow: " << SDL_GetError() << '\n';
         SDL_Quit();
         return EXIT_FAILURE;
     }
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     if (!renderer) {
-        std::cerr << "SDL_CreateRenderer failed: " << SDL_GetError() << '\n';
+        std::cerr << "SDL_CreateRenderer: " << SDL_GetError() << '\n';
         SDL_DestroyWindow(window);
         SDL_Quit();
         return EXIT_FAILURE;
     }
-    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, kCanvasWidth, kCanvasHeight);
-    if (!texture) {
-        std::cerr << "Texture creation failed: " << SDL_GetError() << '\n';
+    SDL_Texture* texture = lab::createFramebufferTexture(renderer);
+    if (!texture || !SDL_SetRenderLogicalPresentation(renderer, lab::Framebuffer::width, lab::Framebuffer::height, SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
+        std::cerr << "Texture/logical presentation: " << SDL_GetError() << '\n';
+        SDL_DestroyTexture(texture);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
         return EXIT_FAILURE;
     }
-    std::vector<std::uint32_t> pixels(std::size_t(kCanvasWidth) * std::size_t(kCanvasHeight));
 
-    // Hai đầu đoạn thẳng; các bài sau sẽ bổ sung trạng thái kéo và pixel đang quan sát.
+    lab::Framebuffer framebuffer;
+    lab::Scene scene;
+    lab::SceneFrame frame;
     bool running = true;
     bool failed = false;
-#if LAB_CHECKPOINT >= 1
-#if LAB_CHECKPOINT >= 2
-    bool useDda = false;
-#endif
-    lab::Point endpointA{220, 270};
-    lab::Point endpointB{740, 150};
+    bool dirty = true;
+    int smokeFrames = 0;
 #if LAB_CHECKPOINT >= 3
-    int draggedEndpoint = -1;
+    SDL_MouseID owner = 0;
+    const auto cancelDrag = [&]() {
+        lab::cancelDrag(scene);
+        SDL_CaptureMouse(false);
+    };
 #endif
 #if LAB_CHECKPOINT >= 6
-    std::size_t inspectedStep = 0;
-#endif
-#if LAB_CHECKPOINT >= 3
-    std::size_t octantPreset = 0;
-#endif
+    lab::Benchmark benchmark;
 #endif
 
-    // Mỗi frame xử lý input trước, sau đó rasterize lại toàn bộ canvas.
     while (running) {
         SDL_Event event{};
         while (SDL_PollEvent(&event)) {
@@ -214,206 +234,130 @@ int main() {
                 if (event.key.key == SDLK_ESCAPE) {
                     running = false;
                 }
+                if (event.key.repeat) {
+                    continue;
+                }
+#if LAB_CHECKPOINT >= 3
+                cancelDrag();
+#endif
 #if LAB_CHECKPOINT >= 2
-                if (!event.key.repeat && event.key.key == SDLK_D) {
-                    useDda = true;
-                }
-                if (!event.key.repeat && event.key.key == SDLK_B) {
-                    useDda = false;
-                }
+                handleKey(event.key.key, (event.key.mod & SDL_KMOD_SHIFT) != 0, scene);
+                dirty = true;
 #endif
 #if LAB_CHECKPOINT >= 6
-                if (!event.key.repeat && event.key.key == SDLK_LEFT && inspectedStep > 0) {
-                    --inspectedStep;
-                }
-                if (!event.key.repeat && event.key.key == SDLK_RIGHT) {
-                    ++inspectedStep;
-                }
-                if (!event.key.repeat && event.key.key == SDLK_HOME) {
-                    inspectedStep = 0;
-                }
-#endif
-#if LAB_CHECKPOINT >= 3
-                if (!event.key.repeat && event.key.key == SDLK_O) {
-                    const lab::Point offset = kOctantOffsets[octantPreset];
-                    endpointA = {kCanvasWidth / 2, kCanvasHeight / 2};
-                    endpointB = {
-                        endpointA.x + offset.x * 22,
-                        endpointA.y + offset.y * 22,
-                    };
-                    octantPreset = (octantPreset + 1) % kOctantOffsets.size();
-#if LAB_CHECKPOINT >= 6
-                    inspectedStep = 0;
-#endif
-                }
-#endif
-#if LAB_CHECKPOINT >= 6
-                if (!event.key.repeat && event.key.key == SDLK_T) {
-                    benchmarkLines();
+                if (event.key.key == SDLK_T) {
+                    if (benchmark.active) {
+                        benchmark.active = false;
+                        lab::printBenchmark(benchmark);
+                    } else {
+                        lab::beginBenchmark(benchmark);
+                    }
                 }
 #endif
             }
 #if LAB_CHECKPOINT >= 3
+            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED || event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
+                cancelDrag();
+            }
+            const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_MOUSE_MOTION;
+            if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+                std::cerr << "Mouse coordinates: " << SDL_GetError() << '\n';
+                failed = true;
+                running = false;
+                break;
+            }
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
-                const lab::Point mouse{
-                    int(event.button.x),
-                    int(event.button.y),
-                };
-                const auto squaredDistance = [](lab::Point left, lab::Point right) {
-                    const int dx = right.x - left.x;
-                    const int dy = right.y - left.y;
-                    return dx * dx + dy * dy;
-                };
-                const int distanceToA = squaredDistance(mouse, endpointA);
-                const int distanceToB = squaredDistance(mouse, endpointB);
-                if (distanceToA <= distanceToB) {
-                    draggedEndpoint = 0;
-                    endpointA = mouse;
-                } else {
-                    draggedEndpoint = 1;
-                    endpointB = mouse;
-                }
-#if LAB_CHECKPOINT >= 6
-                inspectedStep = 0;
-#endif
-                if (!SDL_CaptureMouse(true)) {
-                    std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+                const auto point = lab::imagePoint(event.button.x, event.button.y);
+                if (point && lab::beginDrag(scene, *point)) {
+                    owner = event.button.which;
+                    if (!SDL_CaptureMouse(true)) {
+                        SDL_Log("Capture unavailable: %s", SDL_GetError());
+                    }
+                    dirty = true;
                 }
             }
-            if (event.type == SDL_EVENT_MOUSE_MOTION && draggedEndpoint >= 0) {
-                const lab::Point mouse{int(event.motion.x), int(event.motion.y)};
-                if (draggedEndpoint == 0) {
-                    endpointA = mouse;
+            if (event.type == SDL_EVENT_MOUSE_MOTION && scene.dragged >= 0 && event.motion.which == owner) {
+                const auto point = lab::imagePoint(event.motion.x, event.motion.y);
+                if (!point || (event.motion.state & SDL_BUTTON_LMASK) == 0) {
+                    cancelDrag();
                 } else {
-                    endpointB = mouse;
+                    lab::moveHandle(scene, *point);
+                    dirty = true;
                 }
-#if LAB_CHECKPOINT >= 6
-                inspectedStep = 0;
-#endif
             }
-            if ((event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) || event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-                draggedEndpoint = -1;
-                SDL_CaptureMouse(false);
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && event.button.which == owner) {
+                const auto point = lab::imagePoint(event.button.x, event.button.y);
+                if (point) {
+                    lab::endDrag(scene, *point);
+                    dirty = true;
+                }
+                cancelDrag();
             }
 #endif
         }
         if (!running) {
             break;
         }
-        std::fill(pixels.begin(), pixels.end(), rgba(11, 16, 32));
-#if LAB_CHECKPOINT >= 1
-#if LAB_CHECKPOINT == 1
-        const auto linePoints = lab::dda(endpointA, endpointB);
-#else
-        std::vector<lab::Point> linePoints;
-        if (useDda) {
-            linePoints = lab::dda(endpointA, endpointB);
-        } else {
-            linePoints = lab::bresenham(endpointA, endpointB);
-        }
-#endif
 #if LAB_CHECKPOINT >= 6
-        inspectedStep = std::min(inspectedStep, linePoints.size() - 1);
-#endif
-        for (lab::Point point : linePoints) {
-            putPixel(pixels, point, rgba(83, 240, 174));
+        if (benchmark.active) {
+            lab::advanceBenchmark(benchmark);
+            char title[150]{};
+            std::snprintf(title, sizeof(title), "Benchmark | round %d/7 | %zu/%zu lines | T: cancel | Escape: quit", benchmark.round + 1, benchmark.cursor, benchmark.segments.size());
+            SDL_SetWindowTitle(window, title);
+            if (!benchmark.active) {
+                lab::printBenchmark(benchmark);
+                dirty = true;
+            }
+        }
+        if (smoke) {
+            scene.zoom = true;
+            if (smokeFrames == 3) {
+                scene.tool = lab::Tool::Rectangle;
+                scene.filled = true;
+                SDL_SetWindowSize(window, 1200, 650);
+            }
+            if (smokeFrames == 6) {
+                scene.tool = lab::Tool::Circle;
+                scene.filled = true;
+            }
+            if (smokeFrames == 9) {
+                scene.tool = lab::Tool::Gallery;
+            }
+            dirty = true;
         }
 #endif
-#if LAB_CHECKPOINT >= 4
-        for (lab::Point point : lab::filledRectangle({70, 70}, {210, 145})) {
-            putPixel(pixels, point, rgba(31, 43, 68));
+        if (dirty) {
+            frame = lab::renderScene(framebuffer, scene);
+            if (!lab::uploadFramebuffer(texture, framebuffer)) {
+                std::cerr << "SDL_UpdateTexture: " << SDL_GetError() << '\n';
+                failed = true;
+                break;
+            }
+            updateTitle(window, scene, frame);
+            dirty = false;
         }
-        for (lab::Point point : lab::rectangle({70, 70}, {210, 145})) {
-            putPixel(pixels, point, rgba(239, 125, 66));
+        if (!lab::presentFramebuffer(renderer, texture)) {
+            std::cerr << "SDL present: " << SDL_GetError() << '\n';
+            failed = true;
+            break;
         }
-#endif
-#if LAB_CHECKPOINT >= 5
-        const lab::Point canvasCenter{
-            kCanvasWidth / 2,
-            kCanvasHeight / 2,
-        };
-        for (lab::Point point : lab::circle(canvasCenter, 110)) {
-            putPixel(pixels, point, rgba(49, 87, 228));
+        if (smoke && ++smokeFrames >= 12) {
+            break;
         }
-#endif
-#if LAB_CHECKPOINT >= 3
-        drawHandle(pixels, endpointA, rgba(239, 125, 66));
-        drawHandle(pixels, endpointB, rgba(49, 87, 228));
-#endif
 #if LAB_CHECKPOINT >= 6
-        const lab::Point selectedPoint = linePoints[inspectedStep];
-        drawInspector(pixels, linePoints, inspectedStep);
-        char title[220]{};
-#if LAB_CHECKPOINT >= 2
-        if (!useDda) {
-            const auto trace = lab::traceBresenham(endpointA, endpointB);
-            const auto& step = trace[inspectedStep];
-            const char* movementX = "";
-            const char* movementY = "";
-            if (step.movesX) {
-                movementX = "X";
-            }
-            if (step.movesY) {
-                movementY = "Y";
-            }
-#if LAB_CHECKPOINT >= 3
-            std::snprintf(title, sizeof(title), "Bresenham | step %zu/%zu | p=(%d,%d) | error=%d e2=%d | move %s%s | Left/Right: inspect | O: octant", inspectedStep, linePoints.size() - 1, step.point.x, step.point.y, step.error, step.doubledError, movementX, movementY);
-#else
-            std::snprintf(title, sizeof(title), "Bresenham | step %zu/%zu | p=(%d,%d) | error=%d e2=%d | move %s%s | Left/Right: inspect", inspectedStep, linePoints.size() - 1, step.point.x, step.point.y, step.error, step.doubledError, movementX, movementY);
-#endif
+        if (benchmark.active) {
+            SDL_Delay(1);
         } else
 #endif
         {
-            double t = 0.0;
-            if (linePoints.size() > 1) {
-                t = double(inspectedStep) / double(linePoints.size() - 1);
-            }
-#if LAB_CHECKPOINT >= 3
-            std::snprintf(title, sizeof(title), "DDA | step %zu/%zu | p=(%d,%d) | t=%.3f | Left/Right: inspect | O: octant", inspectedStep, linePoints.size() - 1, selectedPoint.x, selectedPoint.y, t);
-#else
-            std::snprintf(title, sizeof(title), "DDA | step %zu/%zu | p=(%d,%d) | t=%.3f | Left/Right: inspect", inspectedStep, linePoints.size() - 1, selectedPoint.x, selectedPoint.y, t);
-#endif
+            SDL_Delay(10);
         }
-        SDL_SetWindowTitle(window, title);
-#elif LAB_CHECKPOINT >= 3
-        if (useDda) {
-            SDL_SetWindowTitle(window, "DDA | kéo A/B bằng chuột | O: thử tám octant | D/B: đổi thuật toán");
-        } else {
-            SDL_SetWindowTitle(window, "Bresenham | kéo A/B bằng chuột | O: thử tám octant | D/B: đổi thuật toán");
-        }
-#elif LAB_CHECKPOINT >= 2
-        if (useDda) {
-            SDL_SetWindowTitle(window, "DDA | D/B: đổi thuật toán");
-        } else {
-            SDL_SetWindowTitle(window, "Bresenham | D/B: đổi thuật toán");
-        }
-#elif LAB_CHECKPOINT >= 1
-        SDL_SetWindowTitle(window, "DDA | đoạn cố định A(220,270) - B(740,150)");
-#endif
-        if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), kCanvasWidth * int(sizeof(std::uint32_t)))) {
-            std::cerr << "SDL_UpdateTexture failed: " << SDL_GetError() << '\n';
-            failed = true;
-            break;
-        }
-        if (!SDL_RenderClear(renderer)) {
-            std::cerr << "SDL_RenderClear failed: " << SDL_GetError() << '\n';
-            failed = true;
-            break;
-        }
-        if (!SDL_RenderTexture(renderer, texture, nullptr, nullptr)) {
-            std::cerr << "SDL_RenderTexture failed: " << SDL_GetError() << '\n';
-            failed = true;
-            break;
-        }
-        if (!SDL_RenderPresent(renderer)) {
-            std::cerr << "SDL_RenderPresent failed: " << SDL_GetError() << '\n';
-            failed = true;
-            break;
-        }
-        SDL_Delay(1);
     }
 
-    // Cleanup theo thứ tự ngược với setup.
+    // Cleanup: không để capture tiếp tục tồn tại sau khi thoát.
+#if LAB_CHECKPOINT >= 3
+    cancelDrag();
+#endif
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

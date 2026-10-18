@@ -298,7 +298,9 @@ test("interactive labs expose only the controls needed by each lesson", async ()
   }
 
   const dda = await render("/projects/tiny-2d-rasterizer/01-dda");
-  assert.match(await dda.text(), /Stepper được khóa ở DDA/i);
+  const ddaHtml = await dda.text();
+  assert.match(ddaHtml, /<dt>Thuật toán<\/dt>\s*<dd>DDA<\/dd>/);
+  assert.doesNotMatch(ddaHtml, /<option\b[^>]*value="bresenham"/i);
   const spaces = await render("/projects/coordinate-map/01-hai-he-toa-do");
   assert.match(await spaces.text(), /Camera được giữ cố định/i);
   const vectors = await render("/projects/vector-playground/04-cong-tru-vector");

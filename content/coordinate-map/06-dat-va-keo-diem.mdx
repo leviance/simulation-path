@@ -1,0 +1,164 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt, chọn và kéo nhiều điểm
+
+## Vấn đề cần giải quyết
+
+Camera đã dùng được. Bây giờ ta làm phần khiến bản đồ trở thành một công cụ: click vùng trống để đặt điểm; click vào điểm có sẵn để chọn và kéo nó.
+
+Không dùng một biến markerWorld rồi ghi đè mỗi lần click. Ta giữ vector points, chỉ số selected và trạng thái draggingPoint. Pan vẫn dùng chuột phải; kéo điểm dùng chuột trái.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có hai phép đổi khác nhau trong cùng thao tác:
+
+- **Chọn điểm:** worldToScreen từng điểm rồi đo khoảng cách với chuột bằng pixel.
+- **Di chuyển điểm:** screenToWorld vị trí chuột rồi ghi lại world coordinate.
+
+Bán kính chọn là 10 screen pixel, không phải 10 world unit. Nếu dùng world distance với ngưỡng cố định, zoom gần sẽ làm vùng chọn quá lớn, zoom xa lại quá khó chọn.
+
+Khi click lệch tâm điểm 6 pixel, ta không muốn điểm nhảy ngay vào giữa chuột. Lưu độ lệch lúc nắm:
+
+$$
+G = P - screenToWorld(S_{down}),\qquad
+P' = screenToWorld(S_{move}) + G
+$$
+
+G là grabOffset trong world space. Nó tồn tại cho đúng lần kéo đó.
+
+<InteractiveLab demo="coordinate" mode="coordinate-points" />
+
+Đặt ba điểm rồi kéo một điểm từ sát mép chấm. Sau đó zoom ra xa và thử chọn lại. Muốn dùng bàn phím: chọn P trong danh sách, mũi tên di chuyển điểm; Shift+mũi tên pan. Khi chưa chọn điểm, mũi tên dời dấu chữ thập và Enter đặt/chọn điểm ở đó. Tab vẫn rời Canvas bình thường.
+
+## Viết code từng bước
+
+### Bước 1 — Tìm điểm được vẽ trên cùng
+
+```cpp title="include/scene.hpp — hit-test trong screen space"
+inline int hitPoint(const Scene& scene, Vec2 screen) {
+    for (int index = static_cast<int>(scene.points.size()) - 1; index >= 0; --index) {
+        if (distance(scene.camera.worldToScreen(scene.points[index]), screen) <= 10.0) {
+            return index;
+        }
+    }
+    return -1;
+}
+```
+
+Duyệt ngược vector vì điểm sau được vẽ sau. Nếu hai điểm chồng nhau, điểm trên cùng được chọn. Quy tắc này **không phải tìm điểm gần nhất trong mọi điểm**: ta chọn điểm trên cùng đầu tiên lọt bán kính 10 px.
+
+### Bước 2 — Chọn điểm cũ hoặc thêm điểm mới
+
+```cpp title="include/scene.hpp — bắt đầu một lần kéo điểm"
+inline void beginPointDrag(Scene& scene, Vec2 screen) {
+    cancelDrag(scene);
+    if (!finite(screen)) {
+        return;
+    }
+    scene.selected = hitPoint(scene, screen);
+    const Vec2 world = scene.camera.screenToWorld(screen);
+    if (scene.selected < 0) {
+        if (scene.points.size() >= 256) {
+            return;
+        }
+        scene.points.push_back(world);
+        scene.selected = static_cast<int>(scene.points.size()) - 1;
+    }
+    const Vec2 point = scene.points[scene.selected];
+    scene.grabOffset = {point.x - world.x, point.y - world.y};
+    scene.draggingPoint = true;
+}
+```
+
+cancelDrag ngắt pan trước. Nếu không hit điểm nào, screenToWorld cho vị trí world của điểm mới. Giới hạn 256 điểm ngăn người dùng vô tình tạo dữ liệu không giới hạn; đã đủ cho bài thực hành này. Khi đủ điểm, click vùng trống không tạo thêm hoặc bật kéo giả.
+
+Nếu click điểm cũ, không sửa points ngay. Ta chỉ lưu selected và grabOffset. Nhờ vậy điểm không nhảy lúc nhấn chuột.
+
+### Bước 3 — Chỉ sửa đúng điểm đang kéo
+
+```cpp title="include/scene.hpp — di chuyển theo world coordinate và grab offset"
+inline void movePoint(Scene& scene, Vec2 screen) {
+    if (!scene.draggingPoint || scene.selected < 0 || !finite(screen)) {
+        return;
+    }
+    const Vec2 world = scene.camera.screenToWorld(screen);
+    scene.points[scene.selected] = {world.x + scene.grabOffset.x, world.y + scene.grabOffset.y};
+}
+```
+
+Tất cả điểm còn lại giữ nguyên. Khi pan/zoom/resize, không gọi hàm này: những thao tác đó chỉ đổi cách nhìn.
+
+### Bước 4 — Nối với vòng event đã có
+
+Ở button-down trái, main kiểm tra chuột nằm trong ảnh rồi gọi beginPointDrag. Chỉ khi draggingPoint thực sự bật mới ghi ownerButton = SDL_BUTTON_LEFT và capture.
+
+Ở mouse-motion, chỉ mouse trùng owner được điều khiển. Mặt nạ nút vẫn phải còn nhấn; nếu không, cancelDrag. Nếu panning thì dùng delta camera; nếu không thì gọi movePoint. Hai thao tác không cùng chạy.
+
+Button-up giữ mẫu cuối trước khi hủy:
+
+```cpp title="src/main.cpp — kết thúc đúng nút và đúng mouse"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.which == owner && event.button.button == ownerButton) {
+    const lab::Vec2 screen{event.button.x, event.button.y};
+    if (scene.panning) {
+        scene.camera.pan({screen.x - scene.previousScreen.x, screen.y - scene.previousScreen.y});
+    }
+    else {
+        lab::movePoint(scene, screen);
+    }
+    cancelDrag();
+    dirty = true;
+}
+```
+
+Đừng chỉ tắt draggingPoint mà bỏ qua vị trí button-up: sự kiện cuối có thể tới sau motion cuối, nhất là khi kéo nhanh.
+
+### Bước 5 — Xóa điểm và quan sát nhãn
+
+```cpp title="include/scene.hpp — xóa và bỏ lựa chọn cũ"
+inline void eraseSelected(Scene& scene) {
+    cancelDrag(scene);
+    if (scene.selected >= 0) {
+        scene.points.erase(scene.points.begin() + scene.selected);
+        scene.selected = -1;
+    }
+}
+```
+
+Main gọi hàm này bằng Delete. Tab trong **ứng dụng desktop SDL** lần lượt chọn điểm; mũi tên dời điểm đã chọn mỗi lần một screen pixel. Canvas dùng danh sách HTML thay cho Tab để không giữ bàn phím bên trong lab.
+
+presentation.hpp vẽ P1, P2… và tọa độ world cạnh điểm. Chỉ số nhãn đổi sau khi xóa; ở đây nó không phải ID lưu trữ lâu dài.
+
+```bash title="Terminal — chạy checkpoint 6"
+cmake --build build --config Debug --target project_5_checkpoint_6 --parallel 2
+.\build\Debug\project_5_checkpoint_6.exe
+```
+
+## Ghép các phần lại
+
+Scene giữ points và selected; Camera2D chỉ đổi hệ. Hit-test hỏi screen distance, kéo ghi world point, renderer dựng lại từ dữ liệu.
+
+Trong ứng dụng SDL, capture cho phép nhận thả chuột ngoài window; khi mất focus/hidden, resize, pause, reset camera hoặc zoom, main hủy capture. Canvas cũng hủy khi pointercancel, mất capture, blur, tab trình duyệt bị ẩn hoặc rời vùng tương tác. Những callback này không tự ý thêm mẫu kéo mới.
+
+Điểm trùng nhau vẫn là dữ liệu hợp lệ; click chọn điểm trên cùng. Xóa nó rồi click lại để chọn điểm bên dưới.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng khoảng cách world với ngưỡng 10. Ở 55 px/unit, bán kính chọn thành 550 pixel. Đổi zoom để thấy vùng chọn sai thay đổi.
+2. Bỏ grabOffset khi movePoint. Click lệch tâm làm điểm nhảy vào chuột.
+3. Gọi movePoint cả khi panning. Kéo camera đồng thời sửa điểm đã chọn.
+4. Bỏ cancelDrag khi mất focus. Giữ chuột, Alt+Tab, thả rồi quay lại để thấy vì sao trạng thái kéo cần dọn.
+
+## Tự kiểm tra kết quả
+
+- Click vùng trống thêm điểm, click gần điểm không thêm bản sao.
+- Hit-test lấy đúng biên 10 px và không đổi theo zoom.
+- Nắm lệch tâm không làm điểm nhảy; button-up giữ vị trí cuối.
+- Pan/zoom/resize không sửa points.
+- Delete xóa và bỏ selected cũ; 256 điểm là giới hạn thật.
+- Chuột khác/nút khác không kết thúc hoặc chiếm thao tác của owner.
+
+## Bài tập mở rộng
+
+Thêm ID tăng dần cho mỗi điểm để nhãn không đổi sau Delete. Tách ID khỏi index trong vector; index là vị trí lưu, không phải danh tính điểm.
+
+[Bài tiếp: kiểm chứng và chạy bản hoàn chỉnh](/projects/coordinate-map/07-round-trip-test).

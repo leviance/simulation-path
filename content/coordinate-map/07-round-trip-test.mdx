@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Ứng dụng nhìn có vẻ đúng chưa đủ. Hai phép đổi sai giống nhau vẫn có thể round trip đúng; một điểm cũng có thể giữ screen position khi bạn vô tình sửa world coordinate trong lúc zoom.
+
+Bài cuối dùng số cụ thể, invariant và kiểm tra cửa sổ thật để tách những lỗi đó. Mã hoàn chỉnh của toàn bộ project, gồm tests và CMake, có ở cuối trang và trong ZIP.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có ba lớp kiểm chứng:
+
+| Lớp | Kiểm tra | Bắt được lỗi |
+|---|---|---|
+| Fixture độc lập | (2,1) → (590,215) tại camera mặc định | Sai gốc, dấu Y hoặc tỉ lệ |
+| Invariant | Round trip, zoom anchor, points không đổi khi resize | Mất tính nghịch, trôi điểm, sửa nhầm dữ liệu |
+| Desktop | Input, capture, nhãn, tương phản và HiDPI | Lỗi kết nối SDL hoặc trải nghiệm không thể thấy qua CPU test |
+
+Với số thực, kiểm tra khoảng cách nhỏ hơn epsilon thay vì bằng tuyệt đối:
+
+$$
+\|screenToWorld(worldToScreen(P))-P\| < 10^{-9}
+$$
+
+Ngưỡng này áp dụng trong miền tọa độ của bài kiểm thử. Nó không hứa double có độ chính xác tuyệt đối ở mọi giá trị lớn tùy ý.
+
+<InteractiveLab demo="coordinate" mode="coordinate-points" />
+
+Thử lần lượt đặt điểm, kéo điểm, pan, zoom, reset và pause. Round-trip error của Canvas đang đo theo screen pixel; HUD C++ đo theo world unit. Hai giá trị không nên so trực tiếp nếu chưa đổi đơn vị.
+
+## Viết code từng bước
+
+### Bước 1 — Dùng test runner không bị tắt ở Release
+
+tests/tests.cpp include view.hpp, không include SDL; vì vậy chạy không mở cửa sổ. Hàm check ghi lỗi và tăng số lần thất bại:
+
+```cpp title="tests/tests.cpp — báo lỗi bằng mã thoát thật"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        std::cerr << "FAILED: " << label << '\n';
+        ++failures;
+    }
+}
+```
+
+Cuối main trả EXIT_FAILURE khi failures khác 0. Không dùng assert cho các kiểm tra nghiệm thu vì NDEBUG có thể loại bỏ chúng.
+
+### Bước 2 — Bắt đầu từ một kết quả biết trước
+
+```cpp title="tests/tests.cpp — fixture không chỉ dựa vào hai phép nghịch"
+lab::Camera2D camera;
+check(near(camera.worldToScreen({2.0, 1.0}), {590.0, 215.0}), "independent forward fixture fixes axis direction and origin");
+check(near(camera.screenToWorld({590.0, 215.0}), {2.0, 1.0}), "independent inverse fixture");
+```
+
+Sau đó tests lặp qua nhiều tâm camera, viewport, scale 5–800 và điểm âm/dương. Đổi một dấu trong worldToScreen rồi chạy lại: fixture phải thất bại, ngay cả nếu bạn sửa chiều nghịch sai tương ứng.
+
+### Bước 3 — Kiểm tra hành vi, không chỉ hàm đơn lẻ
+
+Bản tests đầy đủ còn kiểm tra: camera pan đúng lượng, anchor không trôi khi clamp zoom, invalid factor không sửa camera, grid cách nhau 40–100 px, hit-test ở đúng biên, grab offset, cancel, Delete, giới hạn điểm và pixel raster thật.
+
+Một invariant quan trọng:
+
+```cpp title="tests/tests.cpp — camera và resize không được sửa dữ liệu điểm"
+const auto points = scene.points;
+scene.camera.pan({130.0, -90.0});
+scene.camera.zoomAt(cursor, 1.8);
+scene.camera.viewportPixels = {1280.0, 720.0};
+check(scene.points == points, "pan zoom resize never mutate world points");
+check(near(scene.camera.worldToScreen(scene.camera.centerWorld), {640.0, 360.0}), "resized viewport center");
+```
+
+Round trip không phát hiện được việc bạn đã sửa nhầm vector points. Vì thế cần một kiểm tra dữ liệu độc lập như trên.
+
+### Bước 4 — Build và chạy cả hai cấu hình
+
+```bash title="Terminal — build toàn bộ và kiểm tra Debug/Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Release\project_5_final.exe
+```
+
+Final mặc định đủ chức năng, không cần bật checkpoint. BUILD_CHECKPOINTS chỉ thêm starter và bảy target học tập. CMake 3.24+, C++20 và SDL 3.4.8 được khóa trong gói. Ở Linux/macOS với generator một cấu hình, dùng build directory Debug/Release riêng cùng CMAKE_BUILD_TYPE.
+
+Có thể chạy final với --smoke: mở window ẩn, chạy 12 frame có sửa scene/resize rồi thoát. Đây chỉ kiểm tra khởi tạo, render và cleanup; nó **không thay kiểm thử input bằng tay**.
+
+## Ghép các phần lại
+
+Phần cuối bài hiển thị tất cả file của final: Camera2D trong lab.hpp; points/hit-test/drag trong scene.hpp; primitive/ảnh CPU trong framebuffer.hpp; grid/cảnh trong view.hpp; texture, resize và nhãn trong presentation.hpp; vòng event trong main.cpp. Không phải ghép thêm code từ những bài khác.
+
+Framebuffer đổi theo kích thước logic của window, tối đa 4096 × 4096 để có giới hạn bộ nhớ rõ ràng. Texture mới được tạo trước khi bỏ texture cũ. Khi lỗi cấp phát hoặc lỗi SDL, ứng dụng báo lỗi và thoát thay vì tiếp tục với trạng thái nửa cũ nửa mới.
+
+## Thử làm sai để hiểu đúng
+
+1. Đảo dấu Y trong cả hai phép đổi. Round trip có thể vẫn đạt, nhưng fixture vị trí điểm phải thất bại.
+2. Trong handler resize, nhân tọa độ tất cả points theo tỉ lệ window. Kiểm tra invariant points phải thất bại.
+3. Bỏ grabOffset. Test nắm lệch tâm không làm điểm nhảy phải thất bại.
+4. Xóa dòng tăng failures trong check. Dù có log lỗi, CTest có thể báo đạt: runner cũng cần được đọc và hiểu.
+
+## Tự kiểm tra kết quả
+
+- CTest đạt Debug và Release; starter, cả bảy checkpoint, final đều build được.
+- Mở final: có hai trục khác màu, nhãn số, lưới, điểm (2,1) và tọa độ con trỏ.
+- Đặt ít nhất năm điểm, chọn điểm chồng nhau, kéo lệch tâm rồi Delete.
+- Pan cả hai chiều, zoom tại bốn góc, zoom tới biên rồi R: world coordinate không trôi.
+- Kéo ra ngoài window rồi thả; Alt+Tab khi đang kéo; resize/pause giữa lần kéo: không bị kẹt capture.
+- Thử màn hình 100% và 200% nếu có; trỏ vào tâm điểm và đọc đúng tọa độ.
+- Canvas có thể dùng mouse/keyboard, pause/reset, không tự chạy animation; reduced-motion không tạo chuyển động thừa.
+- Test tự động và smoke không được ghi nhận thay cho checklist desktop chưa thực hiện.
+
+## Bài tập mở rộng
+
+Thêm “lưu/mở danh sách điểm” bằng một file text. Chỉ lưu world coordinate và ID, không lưu screen coordinate. Sau khi mở lại ở viewport khác, các điểm phải còn đúng trên cùng mặt phẳng.
+
+[Project tiếp: bảng vector kéo-thả](/projects/vector-playground).

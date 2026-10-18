@@ -24,7 +24,10 @@ export function componentCallback(file, name, env) {
   return findCallback(
     file,
     (node, tree) => {
-      if (ts.isFunctionDeclaration(node) && node.name?.text === name) return node.getText(tree);
+      if (ts.isFunctionDeclaration(node) && node.name?.text === name) {
+        // Function declarations may be exported; the test evaluates an expression.
+        return node.getText(tree).replace(/^export\s+(?:default\s+)?/, "");
+      }
       if (!ts.isVariableDeclaration(node) || node.name.getText(tree) !== name || !node.initializer)
         return;
       const expression = node.initializer;

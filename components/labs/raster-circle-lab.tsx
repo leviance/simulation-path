@@ -6,154 +6,174 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { clamp, type Point } from "@/lib/labs/geometry";
-import { midpointCircleSteps } from "@/lib/labs/raster";
+import { filledCircle, midpointCircleSteps } from "@/lib/labs/raster";
 import { LabReadout, setupCanvas, useCanvasSize } from "./lab-shared";
-import { drawRasterGrid, rasterGridMetrics, rasterPointFromEvent } from "./raster-grid";
+import { drawRasterGrid, drawRasterPixels, rasterGridMetrics } from "./raster-grid";
+import { useRasterDrag } from "./use-raster-drag";
 
 export default function RasterCircleLab() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const size = useCanvasSize(canvasRef);
-  const initialCenter = { x: 10, y: 7 };
-  const initialRadius = 5;
-  const [center, setCenter] = useState(initialCenter);
-  const [radius, setRadius] = useState(initialRadius);
+  const [center, setCenter] = useState<Point>({ x: 10, y: 7 });
+  const [radius, setRadius] = useState(5);
+  const [filled, setFilled] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [paused, setPaused] = useState(false);
-  const dragging = useRef(false);
   const columns = 21;
   const rows = 15;
+  const grid = useMemo(() => rasterGridMetrics(size, columns, rows), [size]);
   const steps = useMemo(() => midpointCircleSteps(center, radius), [center, radius]);
   const visibleStep = clamp(stepIndex, 0, steps.length - 1);
-  const currentStep = steps[visibleStep];
-  const visiblePixels = useMemo(() => {
-    const unique = new Map<string, Point>();
-    for (const step of steps.slice(0, visibleStep + 1)) {
-      for (const point of step.points) {
-        unique.set(`${point.x},${point.y}`, point);
-      }
-    }
-    return [...unique.values()];
-  }, [steps, visibleStep]);
-  const currentPixelKeys = useMemo(
-    () => new Set(currentStep.points.map((point) => `${point.x},${point.y}`)),
-    [currentStep],
+  const current = steps[visibleStep];
+  const pixels = useMemo(
+    () =>
+      filled
+        ? filledCircle(center, radius)
+        : [
+            ...new Map(
+              steps
+                .slice(0, visibleStep + 1)
+                .flatMap((step) => step.points)
+                .map((point) => [`${point.x},${point.y}`, point]),
+            ).values(),
+          ],
+    [center, radius, filled, steps, visibleStep],
   );
-  const grid = useMemo(() => rasterGridMetrics(size, columns, rows), [size]);
+  const moveCenter = (point: Point) => {
+    setCenter({
+      x: clamp(point.x, radius, columns - radius - 1),
+      y: clamp(point.y, radius, rows - radius - 1),
+    });
+    setStepIndex(0);
+  };
+  const drag = useRasterDrag(canvasRef, size, grid, columns, rows, paused, moveCenter, moveCenter);
+  const changeRadius = (value: number) => {
+    drag.release();
+    setRadius(value);
+    setCenter((point) => ({
+      x: clamp(point.x, value, columns - value - 1),
+      y: clamp(point.y, value, rows - value - 1),
+    }));
+    setStepIndex(0);
+  };
+  const reset = () => {
+    drag.release();
+    setCenter({ x: 10, y: 7 });
+    setRadius(5);
+    setFilled(false);
+    setStepIndex(0);
+    setPaused(false);
+  };
+  const togglePause = () => {
+    drag.release();
+    setPaused((value) => !value);
+  };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (
+      event.key === " " ||
+      event.key.startsWith("Arrow") ||
+      ["PageUp", "PageDown", "Home", "End"].includes(event.key)
+    ) {
+      event.preventDefault();
+    }
+    if (event.key === "Escape") {
+      drag.release();
+      return;
+    }
+    if (event.key === " " && !event.repeat) {
+      event.preventDefault();
+      togglePause();
+      return;
+    }
+    if (event.key.toLowerCase() === "r" && !event.repeat) {
+      event.preventDefault();
+      reset();
+      return;
+    }
+    if (paused) return;
+    if (event.key === "[" || event.key === "]") {
+      event.preventDefault();
+      changeRadius(clamp(radius + (event.key === "]" ? 1 : -1), 0, 6));
+      return;
+    }
+    if (!filled && ["PageUp", "PageDown", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      drag.release();
+      setStepIndex(
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? steps.length - 1
+            : clamp(visibleStep + (event.key === "PageDown" ? 1 : -1), 0, steps.length - 1),
+      );
+      return;
+    }
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    drag.release();
+    moveCenter({
+      x: center.x + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0),
+      y: center.y + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0),
+    });
+  };
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx) return;
     setupCanvas(ctx, size);
     drawRasterGrid(ctx, grid, columns, rows);
-    const { cell, ox, oy } = grid;
+    // Đường đỏ chỉ minh họa đường cong lý tưởng, không tạo pixel của rasterizer.
     ctx.beginPath();
     ctx.arc(
-      ox + (center.x + 0.5) * cell,
-      oy + (center.y + 0.5) * cell,
-      radius * cell,
+      grid.ox + (center.x + 0.5) * grid.cell,
+      grid.oy + (center.y + 0.5) * grid.cell,
+      radius * grid.cell,
       0,
-      Math.PI * 2,
+      2 * Math.PI,
     );
     ctx.strokeStyle = "#ff6b6b";
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    for (const point of visiblePixels) {
-      const isCurrent = currentPixelKeys.has(`${point.x},${point.y}`);
-      ctx.fillStyle = paused ? "#6f7d9c" : isCurrent ? "#fff" : "#53f0ae";
-      ctx.fillRect(ox + point.x * cell + 2, oy + point.y * cell + 2, cell - 4, cell - 4);
-    }
-    ctx.beginPath();
-    ctx.arc(ox + (center.x + 0.5) * cell, oy + (center.y + 0.5) * cell, 4, 0, Math.PI * 2);
+    drawRasterPixels(ctx, grid, pixels, "#53f0ae", columns, rows);
+    if (!filled) drawRasterPixels(ctx, grid, current.points, "#ffffff", columns, rows);
     ctx.fillStyle = "#ffb454";
-    ctx.fill();
-    ctx.fillStyle = "#9aa6c1";
+    ctx.fillRect(
+      grid.ox + (center.x + 0.4) * grid.cell,
+      grid.oy + (center.y + 0.4) * grid.cell,
+      grid.cell / 5,
+      grid.cell / 5,
+    );
+    ctx.fillStyle = "#b6c3df";
     ctx.font = "11px ui-monospace";
     ctx.fillText(
-      `bước ${visibleStep + 1}/${steps.length} · (x,y)=(${currentStep.x},${currentStep.y}) · decision=${currentStep.decision}`,
-      20,
+      filled
+        ? `Tô tới viền midpoint · ${pixels.length} pixel`
+        : `Bước ${visibleStep + 1}/${steps.length} · (x,y)=(${current.x},${current.y}) · decision=${current.decision}`,
+      16,
       22,
     );
-  }, [
-    center,
-    currentPixelKeys,
-    currentStep,
-    grid,
-    paused,
-    radius,
-    size,
-    steps.length,
-    visiblePixels,
-    visibleStep,
-  ]);
-
-  const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) =>
-    rasterPointFromEvent(event, grid, {
-      minX: radius,
-      maxX: columns - radius - 1,
-      minY: radius,
-      maxY: rows - radius - 1,
-    });
-
-  const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (paused) return;
-    dragging.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setCenter(pointFromEvent(event));
-    setStepIndex(0);
-  };
-
-  const moveCenter = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (paused || !dragging.current) return;
-    setCenter(pointFromEvent(event));
-  };
-
-  const stopDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragging.current = false;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (paused || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-    event.preventDefault();
-    setCenter((current) => ({
-      x: clamp(
-        current.x + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0),
-        radius,
-        columns - radius - 1,
-      ),
-      y: clamp(
-        current.y + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0),
-        radius,
-        rows - radius - 1,
-      ),
-    }));
-  };
-
-  const changeRadius = (nextRadius: number) => {
-    setRadius(nextRadius);
-    setCenter((current) => ({
-      x: clamp(current.x, nextRadius, columns - nextRadius - 1),
-      y: clamp(current.y, nextRadius, rows - nextRadius - 1),
-    }));
-    setStepIndex(0);
-  };
-
-  const reset = () => {
-    setCenter(initialCenter);
-    setRadius(initialRadius);
-    setStepIndex(0);
-    setPaused(false);
-  };
+  }, [size, grid, center, radius, filled, pixels, current, visibleStep, steps.length]);
 
   return (
     <div className="lab-body">
       <div className="lab-controls">
+        <label>
+          Preset bán kính
+          <select
+            value={radius}
+            disabled={paused}
+            onChange={(event) => changeRadius(Number(event.target.value))}
+          >
+            {Array.from({ length: 7 }, (_, value) => (
+              <option key={value} value={value}>
+                r = {value}
+              </option>
+            ))}
+          </select>
+        </label>
         <label>
           Bán kính
           <input
@@ -161,59 +181,99 @@ export default function RasterCircleLab() {
             min="0"
             max="6"
             value={radius}
-            onChange={(event) => changeRadius(Number(event.target.value))}
             disabled={paused}
+            onChange={(event) => changeRadius(Number(event.target.value))}
           />
           <output>{radius}</output>
         </label>
         <label>
-          Bước
-          <input
-            type="range"
-            min="0"
-            max={steps.length - 1}
-            value={visibleStep}
-            onChange={(event) => setStepIndex(Number(event.target.value))}
+          Kiểu vẽ
+          <select
+            value={filled ? "filled" : "outline"}
             disabled={paused}
-          />
-          <output>
-            {visibleStep + 1}/{steps.length}
-          </output>
+            onChange={(event) => {
+              drag.release();
+              setFilled(event.target.value === "filled");
+              setStepIndex(0);
+            }}
+          >
+            <option value="outline">Đường viền midpoint</option>
+            <option value="filled">Tô tới viền midpoint</option>
+          </select>
         </label>
-        <button
-          onClick={() => setStepIndex(Math.max(0, visibleStep - 1))}
-          disabled={paused || visibleStep === 0}
-        >
-          Bước trước
-        </button>
-        <button
-          onClick={() => setStepIndex(Math.min(steps.length - 1, visibleStep + 1))}
-          disabled={paused || visibleStep === steps.length - 1}
-        >
-          Bước tiếp
-        </button>
-        <button onClick={() => setPaused((value) => !value)}>
-          {paused ? "Tiếp tục" : "Tạm dừng"}
-        </button>
+        {!filled && (
+          <>
+            <label>
+              Bước
+              <input
+                type="range"
+                min="0"
+                max={steps.length - 1}
+                value={visibleStep}
+                disabled={paused}
+                onChange={(event) => {
+                  drag.release();
+                  setStepIndex(Number(event.target.value));
+                }}
+              />
+              <output>
+                {visibleStep + 1}/{steps.length}
+              </output>
+            </label>
+            <button
+              disabled={paused || visibleStep === 0}
+              onClick={() => {
+                drag.release();
+                setStepIndex(visibleStep - 1);
+              }}
+            >
+              Bước trước
+            </button>
+            <button
+              disabled={paused || visibleStep === steps.length - 1}
+              onClick={() => {
+                drag.release();
+                setStepIndex(visibleStep + 1);
+              }}
+            >
+              Bước tiếp
+            </button>
+          </>
+        )}
+        <button onClick={togglePause}>{paused ? "Tiếp tục" : "Tạm dừng"}</button>
         <button onClick={reset}>Đặt lại</button>
       </div>
       <canvas
         ref={canvasRef}
-        onPointerDown={startDrag}
-        onPointerMove={moveCenter}
-        onPointerUp={stopDrag}
-        onPointerCancel={stopDrag}
-        onKeyDown={onKeyDown}
         tabIndex={0}
-        aria-label="Lưới midpoint circle; kéo tâm hoặc dùng phím mũi tên và chọn từng bước bằng thanh điều khiển"
+        aria-label="Lưới midpoint circle: kéo tâm, mũi tên dịch tâm, ngoặc vuông đổi bán kính, PageUp/PageDown chọn bước"
+        onPointerDown={drag.startDrag}
+        onPointerMove={drag.moveDrag}
+        onPointerUp={drag.endDrag}
+        onPointerCancel={(event) => drag.endDrag(event, true)}
+        onLostPointerCapture={drag.release}
+        onBlur={drag.release}
+        onKeyDown={onKeyDown}
       />
+      <p className="control-hint">
+        Trắng: các điểm từ một phép phản chiếu, xanh: pixel đã vẽ, đỏ: đường tròn lý tưởng. Hình đặc
+        tô các hàng ngang tới chính đường viền midpoint; r = 2 có 21 pixel, khác brush kiểm tâm
+        trong đĩa ở Project 03 (13 pixel). Mũi tên dịch tâm, [ và ] đổi bán kính; Space tạm dừng, R
+        đặt lại. Không có hoạt ảnh tự chạy.
+      </p>
       <LabReadout
         items={[
           { label: "Tâm", value: `(${center.x}, ${center.y})` },
-          { label: "Offset đang tính", value: `(${currentStep.x}, ${currentStep.y})` },
-          { label: "decision trước bước", value: currentStep.decision },
-          { label: "Pixel mới sau phản chiếu", value: currentStep.points.length },
-          { label: "Tổng pixel đang thấy", value: visiblePixels.length },
+          { label: "Bán kính", value: radius },
+          {
+            label: "Offset đang tính",
+            value: filled ? "Đã tô toàn hình" : `(${current.x}, ${current.y})`,
+          },
+          {
+            label: "decision trước bước",
+            value: filled ? "Không dùng trong bước tô" : current.decision,
+          },
+          { label: "Tổng pixel đang thấy", value: pixels.length },
         ]}
       />
     </div>

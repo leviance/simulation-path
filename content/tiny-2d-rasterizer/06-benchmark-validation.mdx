@@ -1,156 +1,272 @@
-# Kiểm chứng và đo hiệu năng có thể lặp lại
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng rồi mới đo tốc độ
 
 ## Vấn đề cần giải quyết
 
-Rasterizer có thể vẽ đúng vài hình quen thuộc nhưng vẫn sai với tọa độ âm, một octant ít thử hoặc hai góc hình chữ nhật bị đảo. Tương tự, dù Bresenham thường được giới thiệu là nhanh hơn DDA, một phép đo thiếu kiểm soát có thể bị trình biên dịch loại bỏ hoặc bị chi phí cấp phát che lấp.
+Ứng dụng đã có các hình, nhưng một ảnh đẹp chưa chứng minh thuật toán đúng. Một vài đường chéo dễ che lỗi ở hướng khác; đường tròn lớn dễ che một điểm chéo sai; benchmark có thể trông nhanh chỉ vì không thực sự dùng những pixel vừa tính.
 
-Ta cần trả lời riêng hai câu hỏi. Test xác nhận các hàm giữ đúng điều kiện hình học. Benchmark đo hai cách cài đặt trên cùng một bộ dữ liệu và phải sử dụng kết quả để trình biên dịch không được phép bỏ công việc.
+Bài này hoàn thiện ba việc: có đáp án để kiểm hình học, có bảng hình mẫu để quan sát toàn bộ công cụ, và có một phép đo DDA/Bresenham đủ rõ để người khác lặp lại.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Phần kiểm chứng cần những điều kiện cụ thể, không dựa vào ảnh chụp “trông có vẻ đúng”:
+Một đường hợp lệ cần giữ hai đầu, đúng số pixel theo trục dài, liên thông và gần đường lý tưởng. Đó là những điều có thể kiểm độc lập mà không sao chép vòng lặp Bresenham vào test.
 
-- đường thẳng giữ hai đầu, có đúng số điểm và liên thông ở cả hai hướng;
-- đường tròn đối xứng;
-- hình chữ nhật không phụ thuộc thứ tự hai góc và có số pixel đúng;
-- DDA xử lý được hai đầu trùng nhau.
+Khoảng cách vuông góc từ pixel P tới đường qua A/B:
 
-Benchmark phải chạy cùng số đoạn thẳng trên một bộ đầu vào có thể tạo lại chính xác. Biến `checksum` cộng dồn số pixel trả về để kết quả có ảnh hưởng quan sát được; nếu không, trình biên dịch có thể loại bỏ phần tính toán. Thời gian hiện tại vẫn bao gồm việc cấp phát `std::vector`. Đây là đặc điểm của API đang đo và phải được ghi rõ khi kết luận.
+$$
+\delta =
+\frac{|d_y(P_x-A_x)-d_x(P_y-A_y)|}
+{\sqrt{d_x^2+d_y^2}}
+$$
+
+Đoạn dài 0 phải kiểm riêng trước phép chia. Những trường hợp đang xét dùng ngưỡng 0,500001 pixel để chừa một dung sai nhỏ cho tính toán double.
+
+Không bắt buộc DDA và Bresenham, hoặc hai chiều của cùng một đoạn, cho cùng tập pixel khi đường nằm giữa hai lựa chọn. So sự khác nhau không đồng nghĩa đã tìm được lỗi.
+
+<InteractiveLab demo="raster" mode="raster-validation" />
+
+Chọn “Giữa hai lựa chọn”, đi tới cuối rồi đảo A/B. Cả hai kết quả có thể hợp lệ. Canvas dùng để hiểu quy tắc; **benchmark phải chạy trong C++**, không suy thời gian C++ từ tốc độ mô phỏng TypeScript.
 
 ## Viết code từng bước
 
-### Bước 1 — Chọn một pixel để quan sát thật kỹ
+### Bước 1 — Viết phép kiểm vẫn chạy ở Release
 
-Ở checkpoint cuối, phím trái/phải dịch `inspectedStep` qua danh sách pixel mà thuật toán vừa tạo. Phím Home quay lại pixel đầu tiên:
+tests/tests.cpp include view.hpp và benchmark.hpp, nên nó gọi đúng các hàm mà app sử dụng. Hàm check không dựa vào assert:
 
-```cpp title="src/main.cpp — điều khiển bước đang quan sát"
-std::size_t inspectedStep = 0;
-```
 
-```cpp title="src/main.cpp — phím điều khiển inspector"
-if (!event.key.repeat && event.key.key == SDLK_LEFT && inspectedStep > 0) {
-    --inspectedStep;
-}
-if (!event.key.repeat && event.key.key == SDLK_RIGHT) {
-    ++inspectedStep;
-}
-if (!event.key.repeat && event.key.key == SDLK_HOME) {
-    inspectedStep = 0;
+```cpp title="tests/tests.cpp — ghi nhận lỗi mà không phụ thuộc NDEBUG"
+void check(bool condition, std::string_view label) {
+    if (condition) {
+        return;
+    }
+    if (failures < 20) {
+        std::cerr << "FAILED: " << label << '\n';
+    }
+    ++failures;
 }
 ```
 
-Người dùng có thể bấm phải nhiều lần hơn số pixel hiện có, hoặc kéo endpoint khiến đoạn thẳng ngắn đi. Vì vậy, sau khi tạo `linePoints`, ta luôn chặn chỉ số vào phần tử cuối:
+Cuối main, failures khác 0 trả EXIT_FAILURE; thành công trả EXIT_SUCCESS. CTest nhận được trạng thái thật ở cả Debug và Release. Giới hạn 20 dòng log chỉ để một lỗi lặp không tạo hàng nghìn dòng; bộ đếm vẫn ghi nhận tất cả lỗi.
 
-```cpp title="src/main.cpp — giữ chỉ số trong phạm vi hợp lệ"
-inspectedStep = std::min(inspectedStep, linePoints.size() - 1);
-```
+Đây là phép kiểm đường thẳng:
 
-`drawInspector` lấy pixel đang chọn làm tâm của một lưới 9×9. Với mỗi ô, hàm đổi tọa độ tương đối về một `Point`, kiểm tra điểm đó có nằm trong `linePoints` hay không rồi tô một ô 16×16. Màu xanh đánh dấu đường thẳng; màu cam đánh dấu đúng bước đang quan sát. Trong vòng render, nơi gọi chỉ còn một dòng:
 
-```cpp title="src/main.cpp — vẽ inspector từ kết quả đã có"
-drawInspector(pixels, linePoints, inspectedStep);
-```
-
-Mã đầy đủ của helper nằm trong `main.cpp` ở cuối bài. Hàm này cố ý đứng ngoài DDA và Bresenham: thuật toán chỉ trả về `Point`, còn công cụ quan sát đọc kết quả đã có. Nhờ tách hai trách nhiệm, việc thêm inspector không thể âm thầm làm thay đổi pixel mà thuật toán chọn.
-
-### Bước 2 — Kiểm tra tám hướng theo cả hai chiều
-
-```cpp title="tests/tests.cpp — hai đầu đoạn và tính liên thông"
-for (lab::Point end : octantEndpoints) {
-    const auto ddaForward = lab::dda({0, 0}, end);
-    const auto ddaReverse = lab::dda(end, {0, 0});
-    const auto forward = lab::bresenham({0, 0}, end);
-    const auto reverse = lab::bresenham(end, {0, 0});
-    checkConnectedLine(ddaForward, {0, 0}, end);
-    checkConnectedLine(ddaReverse, end, {0, 0});
-    checkConnectedLine(forward, {0, 0}, end);
-    checkConnectedLine(reverse, end, {0, 0});
+```cpp title="tests/tests.cpp — đáp án hình học độc lập cho một đường"
+void checkLine(const std::vector<lab::LineStep>& steps, lab::Point start, lab::Point end) {
+    check(!steps.empty(), "valid line has pixels");
+    if (steps.empty()) {
+        return;
+    }
+    check(steps.front().point == start, "line keeps start");
+    check(steps.back().point == end, "line keeps end");
+    const int dx = end.x - start.x;
+    const int dy = end.y - start.y;
+    const int expectedCount = std::max(std::abs(dx), std::abs(dy)) + 1;
+    check(steps.size() == static_cast<std::size_t>(expectedCount), "major axis determines count");
+    const double length = std::hypot(static_cast<double>(dx), static_cast<double>(dy));
+    for (std::size_t index = 0; index < steps.size(); ++index) {
+        const lab::Point point = steps[index].point;
+        if (length > 0.0) {
+            const double cross = static_cast<double>(dy) * (point.x - start.x) - static_cast<double>(dx) * (point.y - start.y);
+            check(std::abs(cross) / length <= 0.500001, "pixel stays close to ideal line");
+        }
+        if (index == 0) {
+            continue;
+        }
+        const lab::Point previous = steps[index - 1].point;
+        const int distanceX = std::abs(point.x - previous.x);
+        const int distanceY = std::abs(point.y - previous.y);
+        check(std::max(distanceX, distanceY) == 1, "neighbor pixels are connected and unique");
+    }
 }
 ```
 
-`checkConnectedLine` được dùng cho cả DDA lẫn Bresenham và gọi hàm `check` luôn hoạt động trong Debug lẫn Release. Hàm kiểm tra phần tử đầu, phần tử cuối, số pixel và khoảng cách giữa hai pixel liền nhau. Nó không bắt hai chiều phải chọn cùng pixel khi đường lý tưởng nằm đúng giữa hai lựa chọn; bài 3 đã giải thích vì sao đó không phải hành vi mặc định của Bresenham.
+testLines duyệt X/Y từ −24 tới 24 quanh một gốc dịch chuyển: **2.401 trường hợp**, mỗi trường hợp kiểm DDA/Bresenham ở cả hai chiều. Nó còn có đáp án error/e2 cụ thể, làm tròn số âm và các đầu vào bị từ chối.
 
-### Bước 3 — Kiểm tra hình dạng, không chỉ tính đối xứng của đường tròn
+Khoảng cách đúng không đủ nếu thiếu đầu mút; hai đầu đúng không đủ nếu có lỗ ở giữa. Vì vậy cần nhiều tiêu chí cùng lúc, không chọn một tiêu chí tiện nhất.
 
-```cpp title="tests/tests.cpp — tính đối xứng của đường tròn"
-const auto circlePoints = lab::circle({0, 0}, 8);
-check(std::adjacent_find(circlePoints.begin(), circlePoints.end()) == circlePoints.end(), "circle contains no duplicate pixels");
-check(contains(circlePoints, {8, 0}), "circle keeps its right cardinal point");
-check(contains(circlePoints, {0, -8}), "circle keeps its top cardinal point");
-for (lab::Point point : circlePoints) {
-    check(contains(circlePoints, {-point.x, point.y}), "circle is symmetric across Y");
-    check(contains(circlePoints, {point.y, point.x}), "circle is symmetric across the diagonal");
-    const double distanceFromCenter = std::hypot(double(point.x), double(point.y));
-    check(std::abs(distanceFromCenter - 8.0) <= 0.55, "circle pixels stay close to the requested radius");
+### Bước 2 — Kiểm các primitive còn lại và đường đi của input
+
+Bộ test còn bao gồm:
+
+- **544 kích thước rectangle**: 32 độ rộng × 17 độ cao. Đáp án độc lập xét pixel nằm trên bốn biên hoặc trong toàn vùng; kiểm cả đảo/cắt chéo thứ tự hai góc và không trùng pixel.
+- **129 bán kính circle**, từ 0 tới 128 tại tâm dịch chuyển: bốn điểm ngoài cùng, đối xứng, độ lệch bán kính tối đa 0,55 và không trùng. Hình đặc chứa viền, mỗi hàng liên tục. Bán kính 1/2 có số đếm cụ thể để kiểm nhánh decision = 0.
+- **Ảnh thật**: fillRect ghi 12 ô, fillCircle ở góc ảnh còn tám ô; putPixel không ghi ngoài biên; inspector đọc đúng màu CPU.
+- **Trạng thái kéo thật**: vị trí chỉ có ở up vẫn được nhận; hover không kéo tiếp; lần kéo đang có không bị chiếm; ra ngoài ảnh kết thúc kéo; bán kính bị giới hạn đúng.
+- **Giới hạn dữ liệu**: từ chối số rất lớn trước abs/phép đổi int/cấp phát, không thử bằng một vòng lặp vô hạn.
+
+Đáp án rectangle không gọi lại Bresenham. Test dùng hai `std::set<Point>` là expectedFill và expectedOutline, duyệt mọi X/Y trong hình bao từ first tới second. Trong mỗi ô, phần quyết định là:
+
+
+```cpp title="tests/tests.cpp — tạo đáp án viền độc lập"
+expectedFill.insert({x, y});
+if (x == first.x || x == second.x || y == first.y || y == second.y) {
+    expectedOutline.insert({x, y});
 }
 ```
 
-Đối xứng thôi chưa đủ: một tập điểm méo nhưng được phản chiếu đều vẫn có thể vượt qua test. Vì thế ta còn kiểm tra danh sách không trùng, có các điểm ngoài cùng `(±r,0)`, `(0,±r)` và mỗi pixel cách tâm gần bằng bán kính. Ngưỡng `0.55` cho phép sai số lượng tử hóa nhỏ hơn một pixel nhưng vẫn bắt được đường tròn có bán kính sai rõ rệt.
+Các hàm test đầy đủ nằm trong phần mã cuối trang và ZIP; không có một phiên bản mô hình rút gọn chỉ dùng để làm test xanh.
 
-### Bước 4 — Kiểm tra hình chữ nhật bằng kết quả tính tay
+### Bước 3 — Chuẩn bị dữ liệu trước vùng đo
 
-```cpp title="tests/tests.cpp — rectangle reversed corners"
-const auto outline = lab::rectangle({4, 3}, {1, 1});
-check(outline.size() == 10, "rectangle outline has a unique inclusive perimeter");
-const auto filled = lab::filledRectangle({4, 3}, {1, 1});
-check(filled.size() == 12, "filled rectangle contains width times height pixels");
-check(lab::rectangle({2, 2}, {2, 2}) == std::vector<lab::Point>{{2, 2}}, "one-point outline is not duplicated");
-check(lab::rectangle({1, 1}, {4, 1}).size() == 4, "horizontal rectangle edge keeps every pixel");
-check(lab::rectangle({1, 1}, {4, 3}) == lab::rectangle({4, 3}, {1, 1}), "rectangle is independent of corner order");
-```
+include/benchmark.hpp tạo 20.000 đoạn trong phạm vi ảnh bằng seed cố định:
 
-Hình chữ nhật lấy cả hai biên nên rộng 4, cao 3 và phần đặc có 12 pixel. Đường viền không lặp góc có `2×4 + 2×3 - 4 = 10` pixel. Ba phép kiểm tra cuối bao phủ thêm hình một điểm, hình một hàng và trường hợp đảo hai góc — những trường hợp vòng lặp thông thường rất dễ bỏ sót.
 
-### Bước 5 — Tạo dữ liệu trước khi bắt đầu đo
-
-```cpp title="src/main.cpp — tạo các đoạn thẳng trước khi đo"
-using Segment = std::pair<lab::Point, lab::Point>;
-std::vector<Segment> segments;
-segments.reserve(kLineCount);
-for (int index = 0; index < kLineCount; ++index) {
-    segments.push_back({
-        {(index * 37) % kCanvasWidth, (index * 53) % kCanvasHeight},
-        {(index * 97 + 211) % kCanvasWidth, (index * 29 + 71) % kCanvasHeight},
-    });
+```cpp title="include/benchmark.hpp — bộ dữ liệu đầu vào lặp lại được"
+inline std::vector<Segment> benchmarkData(int count) {
+    std::uint32_t seed = 0x2D04u;
+    const auto next = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return seed;
+    };
+    std::vector<Segment> segments;
+    for (int index = 0; index < count; ++index) {
+        const Point start{static_cast<int>(next() % 960u), static_cast<int>(next() % 540u)};
+        const Point end{static_cast<int>(next() % 960u), static_cast<int>(next() % 540u)};
+        segments.push_back({start, end});
+    }
+    return segments;
 }
 ```
 
-Sau một lượt chạy làm nóng, mỗi thuật toán được đo bảy lần trên đúng vector `segments`. Chỉ vòng gọi DDA hoặc Bresenham nằm giữa hai mốc `steady_clock`; thời gian tạo dữ liệu không được tính vào kết quả. Bảy số đo được sắp xếp và lấy giá trị giữa làm median. Dòng kết quả phải ghi cấu hình Release/Debug, `20.000 lines × 7 rounds`, đơn vị millisecond và `checksum` riêng của từng thuật toán.
+Cả hai thuật toán nhận cùng vector segments, không tự sinh dữ liệu riêng. Một bộ dữ liệu cố định không đại diện cho mọi ứng dụng; nó giúp tái hiện phép đo. Khi đổi phân bố độ dài/hướng, phải ghi rõ đó là một phép thử khác.
 
-### Bước 6 — Build, chạy test rồi mới benchmark
+Trước bảy lượt chính, harness chạy tối đa 500 đoạn để làm nóng. Mỗi lượt đổi thuật toán chạy trước: DDA rồi Bresenham, lượt sau đảo lại. Làm vậy giảm một loại thiên lệch thứ tự, không loại hết ảnh hưởng của cache, CPU boost hoặc hệ điều hành.
 
-```bash title="Terminal — kiểm tra Project 04"
-cmake -S examples/project-04-tiny-2d-rasterizer -B examples/project-04-tiny-2d-rasterizer/build -DBUILD_TESTING=ON -DBUILD_CHECKPOINTS=ON
-cmake --build examples/project-04-tiny-2d-rasterizer/build --config Debug
-ctest --test-dir examples/project-04-tiny-2d-rasterizer/build -C Debug --output-on-failure
-cmake --build examples/project-04-tiny-2d-rasterizer/build --config Release
-ctest --test-dir examples/project-04-tiny-2d-rasterizer/build -C Release --output-on-failure
+### Bước 4 — Buộc kết quả pixel được sử dụng
+
+
+```cpp title="include/benchmark.hpp — đọc cả tọa độ chứ không chỉ số phần tử"
+inline std::uint64_t consumePixels(const std::vector<LineStep>& steps, std::uint64_t checksum) {
+    for (const LineStep& step : steps) {
+        checksum ^= static_cast<std::uint32_t>(step.point.x);
+        checksum *= 1099511628211ull;
+        checksum ^= static_cast<std::uint32_t>(step.point.y);
+        checksum *= 1099511628211ull;
+    }
+    return checksum;
+}
 ```
 
-Debug thuận tiện để tìm lỗi bằng warning và debugger. Release xác nhận test vẫn thực sự hoạt động khi tối ưu hóa được bật, đồng thời là cấu hình nên dùng để so hiệu năng. Chạy `project_4_final` bản Release rồi bấm T. Một lần bấm đã gồm lượt làm nóng và bảy lượt đo; chương trình tự báo median thay vì để người chạy tùy ý chọn kết quả đẹp nhất.
+Nếu chỉ cộng vector.size(), ta chỉ quan sát độ dài. Ở đây mọi X/Y đi vào checksum được in cuối phép đo; các pixel giữa đoạn không thể trở thành dữ liệu vô dụng chỉ vì không đưa lên SDL.
+
+Checksum không chứng minh hình học đúng và có thể có va chạm. Nó bảo đảm phép đo sử dụng tọa độ; correctness vẫn dựa vào các test riêng. Cũng **không bắt buộc checksum DDA bằng Bresenham**, vì quy tắc chọn pixel ở trường hợp hòa có thể khác.
+
+Trong measureBatch, algorithm được chọn từ algorithmIndex (0 là DDA, 1 là Bresenham). checksum lấy từ kết quả đã lưu; benchmark.cursor và end xác định đợt đang chạy, tối đa 128 đoạn. Phần nằm giữa hai lần đọc đồng hồ là:
+
+
+```cpp title="include/benchmark.hpp — đo rasterization và tiêu thụ kết quả"
+const auto begin = std::chrono::steady_clock::now();
+for (std::size_t index = benchmark.cursor; index < end; ++index) {
+    const Segment& segment = benchmark.segments[index];
+    const auto steps = lineSteps(segment.start, segment.end, algorithm);
+    checksum = consumePixels(steps, checksum);
+}
+const auto elapsed = std::chrono::steady_clock::now() - begin;
+```
+
+Đồng hồ steady_clock bao quanh việc tạo vector LineStep, rasterize và hash. Sinh segments, thao tác SDL và thời gian giữa các đợt không nằm trong vùng này. Vì vậy đây không phải thời gian thuần của phép cộng/chia, cũng không phải FPS.
+
+Sau đoạn này, hàm lưu checksum và cộng elapsed, đổi sang millisecond, vào ô milliseconds[algorithmIndex][round]. Đợt làm nóng chỉ cập nhật warmupChecksum, không cộng vào thời gian đo. Toàn bộ measureBatch ở phần mã cuối trang thể hiện cả phần chọn đầu vào và lưu kết quả này.
+
+### Bước 5 — Trả quyền cho event loop sau mỗi đợt
+
+
+```cpp title="include/benchmark.hpp — lập lịch phép đo hữu hạn"
+inline void advanceBenchmark(Benchmark& benchmark) {
+    if (!benchmark.active) {
+        return;
+    }
+    const auto age = std::chrono::steady_clock::now() - benchmark.started;
+    if (age > std::chrono::seconds(30)) {
+        benchmark.active = false;
+        return;
+    }
+    std::size_t limit = benchmark.segments.size();
+    if (benchmark.warming) {
+        limit = std::min(limit, std::size_t(500));
+    }
+    const std::size_t end = std::min(benchmark.cursor + 128, limit);
+    int first = benchmark.round % 2;
+    measureBatch(benchmark, first, end);
+    measureBatch(benchmark, 1 - first, end);
+    benchmark.cursor = end;
+    if (benchmark.cursor < limit) {
+        return;
+    }
+    benchmark.cursor = 0;
+    if (benchmark.warming) {
+        benchmark.warming = false;
+        return;
+    }
+    ++benchmark.round;
+    if (benchmark.round == Benchmark::rounds) {
+        benchmark.active = false;
+        benchmark.complete = true;
+    }
+}
+```
+
+Mỗi lần gọi xử lý tối đa 128 đoạn cho mỗi thuật toán rồi trả về main. Event loop tiếp tục nhận input và present giữa các đợt; T lần nữa hủy phép đo, Escape thoát app.
+
+milliseconds lưu tổng thời gian các đợt của từng lượt. Sau bảy lượt, median lấy số giữa của bảy tổng ấy, không phải median của từng đợt. Thời gian thực từ lúc nhấn T tới khi xong thường dài hơn vì có cả input/render/nghỉ giữa các lần gọi.
+
+Nếu quá 30 giây, active về false nhưng complete vẫn false. Chương trình phải báo chưa hoàn thành và **không công bố median**. Đây là giới hạn an toàn, không phải cách bỏ những mẫu chậm rồi vẫn báo đạt.
+
+### Bước 6 — Chạy bản hoàn chỉnh và ghi nhận đúng loại bằng chứng
+
+```bash title="Terminal — build tất cả checkpoint và kiểm cả hai cấu hình"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
+
+Với Ninja/Makefiles, dùng thư mục build riêng và CMAKE_BUILD_TYPE tương ứng. Không mở thêm một lượt build khác trong khi lượt này đang chạy.
+
+```bash title="Terminal — ứng dụng và benchmark không cần window"
+.\build\Release\project_4_final.exe
+.\build\Release\project_4_final.exe --benchmark
+```
+
+Bản final có 1: Line, 2: Rectangle, 3: Circle, 4: bảng hình mẫu. Bảng này dùng chính drawLine/drawRect/fillRect/drawCircle/fillCircle, không phải ảnh dựng sẵn. Z ẩn/hiện zoom; F đổi viền/đặc; D/B chọn thuật toán line; [/] đổi bán kính. Các điều khiển kéo/phím của bài trước vẫn hoạt động.
+
+T chạy cùng benchmark như --benchmark nhưng theo từng đợt trong event loop. Hãy đo Release, đọc số đoạn/lượt, đơn vị ms, phạm vi đo và checksum; lưu nhiều lần chạy nếu muốn so. Kết quả trên một máy không chứng minh Bresenham luôn nhanh hơn trong mọi chương trình.
+
+```bash title="Terminal — kiểm đường hiển thị SDL hữu hạn"
+.\build\Debug\project_4_final.exe --smoke
+```
+
+Smoke mở window ẩn, chạy 12 frame, đổi tool/kiểu tô, resize, upload/present rồi thoát. Khi tự động hóa, luôn đặt timeout ngoài 15 giây để bảo vệ cả trường hợp driver kẹt. Smoke không nhận chuột vật lý, không thay thế kiểm tra thao tác desktop.
 
 ## Ghép các phần lại
 
-Ứng dụng hoàn chỉnh dùng D/B để chuyển giữa hai cách vẽ đường, đồng thời hiển thị hình chữ nhật và đường tròn để kiểm tra việc ghép các hàm. Phím T chạy benchmark; chương trình test gọi trực tiếp các hàm thuần. Thứ tự làm việc nên là: **kiểm tra tính đúng → cố định dữ liệu → đo → giải thích kết quả**.
+Bộ công cụ cuối cùng có hình học thuần, các hàm ghi ảnh, trạng thái thao tác, inspector đọc ảnh thật và một benchmark hữu hạn. CMake dùng C++20/SDL 3.4.8; ZIP gồm starter, sáu checkpoint, final và tests độc lập.
 
-Benchmark hiện tính cả chi phí tạo và trả về `std::vector`. Nếu sau này đổi API sang callback ghi trực tiếp vào framebuffer, phải đo lại từ đầu; kết luận của cách cài đặt cũ không tự động đúng với kiến trúc mới.
+Sau khi CTest qua, thử riêng trên desktop: kéo cả hai tay nắm; chọn đủ công cụ; F/[ và ]; Z/Left/Right; resize khác tỉ lệ, mất focus, rời vùng ảnh và thử HiDPI nếu có. Nhấn 4 để quan sát bảng hình mẫu, rồi T để xác nhận ứng dụng vẫn nhận lệnh hủy.
+
+Ghi ba loại kết quả riêng: kiểm CPU, smoke SDL, thao tác desktop. Không lấy một loại để tuyên bố cả ba đã đạt.
 
 ## Thử làm sai để hiểu đúng
 
-1. Xóa `checksum` rồi build Release. Trình biên dịch có thể loại bỏ phép tính không tạo ra kết quả quan sát được và làm số đo mất ý nghĩa.
-2. Dùng seed theo thời gian riêng cho mỗi thuật toán. DDA và Bresenham không còn chạy trên cùng dữ liệu nên kết quả không thể so sánh công bằng.
-3. Chỉ đo một đoạn thẳng rất ngắn. Chi phí đọc đồng hồ và cấp phát sẽ lấn át phần thuật toán; hãy tăng số đoạn rồi quan sát khi median bắt đầu ổn định.
+1. Xóa một tọa độ ở giữa vector line nhưng giữ hai đầu. Kiểm tra số lượng/liên thông phải báo lỗi dù ảnh lớn có thể khó nhận ra khe nhỏ.
+2. Đổi consumePixels thành chỉ đọc size. Bạn sẽ không còn phát hiện việc một pixel giữa đoạn đổi tọa độ mà số lượng giữ nguyên; kiểm checksum riêng trong tests phải báo lỗi.
+3. Chuyển benchmarkData vào giữa hai lần đọc đồng hồ. Số đo giờ bao gồm sinh dữ liệu, không còn là phạm vi đã công bố.
+4. Bỏ kiểm complete trước khi in median. Hủy bằng T; nếu vẫn xuất một kết quả “đầy đủ”, báo cáo đã dùng các lượt chưa hoàn thành.
 
 ## Tự kiểm tra kết quả
 
-- CTest vượt qua các kiểm tra tám octant, đối xứng, hình chữ nhật và DDA với hai đầu trùng nhau.
-- DDA và Bresenham đều giữ hai đầu khi kéo quanh tâm.
-- Phím T in median của bảy lượt, cấu hình build, đơn vị và `checksum` ổn định giữa các lần chạy cùng bản build.
-- Kết quả Release được phân biệt với Debug.
-- Bạn giải thích được benchmark hiện bao gồm cả chi phí cấp phát vector.
+- Starter, sáu checkpoint, final và CTest build/chạy được; phép kiểm không bị NDEBUG loại ở Release.
+- Hàng nghìn line, hàng trăm kích thước rectangle và các circle nhỏ/lớn được kiểm bằng tiêu chí rõ ràng.
+- Năm hàm vẽ/tô hoạt động trong app C++; bảng hình mẫu dùng chính những hàm đó.
+- Benchmark dùng cùng dữ liệu, đọc tọa độ thật, có warm-up/bảy lượt/median, nêu đúng vùng đo và hủy được.
+- Bằng chứng thao tác desktop được ghi riêng; mô phỏng Canvas và smoke không bị trình bày như thay thế app.
+- Phần mã hoàn chỉnh và ZIP chứa đủ header, main, CMake, tests để build độc lập.
 
 ## Bài tập mở rộng
 
-Hãy chia dữ liệu thành các nhóm đường ngắn/dài và dốc thấp/cao rồi báo median riêng cho từng nhóm. Sau đó đổi API để nhận callback `plot(Point)`, loại bỏ việc cấp phát vector, đo lại trên cùng các đầu đoạn và ghi rõ API đã thay đổi.
+Thêm một bộ dữ liệu chỉ có đoạn rất ngắn, một bộ chỉ có đoạn dốc cao rồi đo lại. Ghi cả median lẫn phân bố độ dài; vì sao kết luận có thể đổi? Nếu muốn đo một API không tạo trace, hãy thêm đường đo mới và công bố rõ nó khác harness hiện tại.
 
-Project 05 tiếp tục dùng framebuffer, `putPixel` và cách kiểm tra hình học trên lưới pixel, nhưng không cần gọi DDA hay Bresenham. Lưới tọa độ chỉ gồm các đường ngang và dọc nên có thể vẽ bằng vòng lặp đơn giản; phần mới cần tập trung là chuyển đổi ổn định giữa world space và screen space khi camera pan/zoom.
+[Project tiếp theo: bản đồ tọa độ kéo-thả](/projects/coordinate-map).

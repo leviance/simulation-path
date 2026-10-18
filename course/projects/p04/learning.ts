@@ -3,173 +3,177 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p04-l01": {
-      focus:
-        "Dùng DDA để chuyển một đoạn thẳng liên tục thành danh sách pixel, chọn số bước theo trục thay đổi nhiều hơn rồi làm tròn từng điểm.",
+      focus: "Bắt đầu với framebuffer trống chạy được, thêm DDA rồi nối kết quả vào phần hiển thị.",
       expected:
-        "Checkpoint chạy với một đoạn thẳng DDA cố định. DDA giữ đúng hai đầu, vẽ được đường ngang, dọc, chéo và xử lý đoạn có độ dài 0.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Checkpoint 1 vẽ được A(220,270) → B(740,150). Danh sách bước giữ tọa độ liên tục để đối chiếu với pixel đã làm tròn.",
+      files: [
+        "include/framebuffer.hpp",
+        "include/presentation.hpp",
+        "include/lab.hpp",
+        "include/drawing.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Chọn số bước theo trục dài",
+          title: "Chạy starter trước",
           explanation:
-            "`max(abs(dx), abs(dy))` bảo đảm mỗi bước không nhảy quá một pixel trên cả hai trục.",
+            "Cửa sổ nền trống xác nhận phần SDL/texture hoạt động. Ảnh logic 960 × 540 giữ nguyên khi resize.",
         },
         {
-          title: "Nội suy từng điểm",
+          title: "Nội suy theo trục dài",
           explanation:
-            "Với chỉ số từ 0 đến `steps`, điểm liên tục là `start + (end - start) × index / steps`, sau đó `lround` chọn pixel gần nhất.",
+            "Dùng max(|dx|,|dy|), tính t bằng số thực và lround; đoạn dài 0 tạo một bản ghi.",
         },
         {
-          title: "Xử lý hai đầu trùng nhau",
-          explanation: "Khi `steps == 0`, hàm phải trả `{start}` trước phép chia.",
-        },
-        {
-          title: "Vẽ danh sách pixel",
+          title: "Đưa pixel lên màn hình",
           explanation:
-            "Ứng dụng gọi `putPixel` cho từng `Point`; thao tác kéo và công cụ phóng to được để sang bài sau để checkpoint đầu không bị quá tải.",
+            "plotSteps gọi putPixel; renderScene xóa hình cũ rồi rasterize lại, upload khi dữ liệu thay đổi.",
         },
       ],
     },
     "p04-l02": {
       focus:
-        "Viết Bresenham bằng số nguyên: biến `error` giữ sai lệch tích lũy và quyết định khi nào bước X, Y hoặc cả hai.",
+        "Từ lựa chọn hai pixel trên một đường dốc thấp tới Bresenham dùng chung cho mọi hướng.",
       expected:
-        "Đường vẽ liền mạch, có đủ pixel đầu/cuối và vòng lặp chính không dùng phép chia hay số thực.",
-      files: ["include/lab.hpp"],
+        "D/B đổi thuật toán trong cùng checkpoint. Pixel vẽ và error/e2 dùng chung vector LineStep, không có vòng trace riêng.",
+      files: [
+        "include/lab.hpp",
+        "include/drawing.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Tách khoảng cách và hướng",
+          title: "Hiểu phép thử",
           explanation:
-            "`stepX`/`stepY` là ±1 nên cùng một vòng lặp có thể đi sang trái, sang phải, lên hoặc xuống.",
+            "So vị trí đường lý tưởng với trung điểm giữa hai pixel; sai số ở đây không phải khoảng cách Euclidean.",
         },
         {
-          title: "Xuất phát từ phép thử trung điểm",
+          title: "Giữ error trước bước",
           explanation:
-            "Hàm đường thẳng cho biết trung điểm giữa hai pixel ứng viên nằm ở phía nào; nhân đôi kết quả loại được phân số 1/2.",
+            "movesX và movesY cùng đọc doubledError; hai nhánh if độc lập cho phép bước chéo.",
         },
         {
-          title: "Giữ sai số có dấu",
+          title: "Giữ nơi hiển thị",
           explanation:
-            "Bản đối xứng lưu `dy` âm; `error = dx + dy` và `e2 = 2 × error` tạo hai phép so dùng được cho mọi độ dốc.",
-        },
-        {
-          title: "Giữ hai if độc lập",
-          explanation:
-            "Một bước chéo cần cập nhật cả X lẫn Y, vì vậy nhánh thứ hai không được đổi thành `else if`.",
+            "Chỉ thay nguồn danh sách bước; framebuffer, texture và cách present không đổi.",
         },
       ],
     },
     "p04-l03": {
-      focus:
-        "Kiểm tra Bresenham ở tám octant, xác nhận hai đầu, số pixel và tính liên thông theo cả hai chiều mà không giả định sai về trường hợp bằng nhau.",
+      focus: "Biến đường cố định thành công cụ kéo hai đầu, đổi octant và đọc pixel thật.",
       expected:
-        "Kéo một đầu quanh đầu còn lại không làm hỏng bất kỳ hướng nào; cả tám octant đều giữ hai đầu và mỗi bước chỉ đi tối đa một pixel trên mỗi trục.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chuột/HiDPI/letterbox dùng tọa độ logic đúng một lần. Z bật inspector 9 × 9, Left/Right chọn bước; không kẹt kéo khi rời vùng ảnh.",
+      files: ["include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tách độ lớn và hướng",
+          title: "Giữ thao tác có chủ",
           explanation:
-            "`abs(dx)`/`abs(dy)` xử lý độ dốc cao hoặc thấp, còn `stepX`/`stepY` xử lý hướng; không cần tám cách cài đặt riêng.",
+            "begin/move/end thuần C++; SDL lọc nút trái và MouseID, giữ điểm cuối của sự kiện thả nút.",
         },
         {
-          title: "Kiểm tra cả hai chiều",
+          title: "Đổi tọa độ an toàn",
           explanation:
-            "A→B và B→A đều phải liên thông và giữ hai đầu. Khi đường lý tưởng đi đúng giữa hai lựa chọn, mỗi chiều có thể chọn một pixel khác nhau.",
+            "Kiểm kết quả SDL_ConvertEventToRenderCoordinates, từ chối vùng ngoài ảnh trước khi floor sang int.",
         },
         {
-          title: "Dùng dữ liệu lặp lại được",
+          title: "Phóng to ảnh thật",
           explanation:
-            "Phím O đặt đúng tám độ lệch dốc cao/thấp quanh tâm, giúp tái hiện lỗi bằng cùng một bộ dữ liệu.",
+            "Chụp 81 màu trước khi vẽ overlay để inspector không tự đọc dữ liệu vừa ghi.",
+        },
+        {
+          title: "Thử tám phía",
+          explanation:
+            "O dùng tám độ lệch cố định; hai chiều có thể khác ở trường hợp hòa nhưng vẫn phải liên thông.",
         },
       ],
     },
     "p04-l04": {
-      focus:
-        "Tạo đường viền hình chữ nhật từ bốn đoạn Bresenham và hình đặc từ các hàng pixel, với quy ước lấy cả hai biên.",
+      focus: "Dùng đoạn thẳng để ghép viền, dùng hàng ngang để tô hình chữ nhật.",
       expected:
-        "Hình chữ nhật đúng dù hai góc được đưa vào theo thứ tự nào. Phần viền không hở và phần tô không vượt quá cạnh phải hoặc cạnh dưới.",
-      files: ["src/main.cpp", "include/lab.hpp"],
+        "1/2 đổi Line/Rectangle, F đổi kiểu tô. Đảo hai góc vẫn đúng; một hàng/cột/điểm không bị mất hoặc đếm lặp.",
+      files: [
+        "include/lab.hpp",
+        "include/drawing.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Tính bốn cạnh bằng min/max",
-          explanation:
-            "Tính `left`, `right`, `top`, `bottom` trước giúp hàm nhận hai góc theo bất kỳ thứ tự nào.",
+          title: "Thống nhất quy ước",
+          explanation: "Hai đầu là chỉ số pixel và đều được lấy: width = right − left + 1.",
         },
         {
-          title: "Dùng lại Bresenham cho đường viền",
+          title: "Ghép và loại trùng",
           explanation:
-            "Bốn cạnh gọi cùng hàm vẽ đường đã được kiểm thử, không cần thêm một cách xử lý biên khác.",
+            "Bốn cạnh dùng Bresenham, sortUnique bỏ góc lặp; quy tắc suy biến được kiểm bằng đáp án độc lập.",
         },
         {
-          title: "Tô theo từng hàng",
-          explanation: "Mỗi hàng là một đoạn X liên tục, dễ hiểu và truy cập bộ nhớ tuần tự.",
-        },
-        {
-          title: "Đối chiếu bằng Rectangle Lab",
+          title: "Tô theo hàng",
           explanation:
-            "Kéo và đảo hai góc để kiểm tra `min/max`; đổi sang hình đặc để so số pixel với `width × height`.",
+            "filledRectangle duyệt Y rồi X; giới hạn 1.024 mỗi cạnh bảo vệ cấp phát, putPixel bảo vệ ảnh.",
         },
       ],
     },
     "p04-l05": {
-      focus:
-        "Tính một octant bằng biến `decision` của midpoint circle, phản chiếu sang tám phía rồi loại các điểm trùng trên trục và đường chéo.",
+      focus: "Tự viết midpoint circle rồi tô đặc dựa trên chính viền vừa tạo.",
       expected:
-        "Đường tròn đối xứng qua hai trục và hai đường chéo. Bán kính 0 trả về đúng một điểm tại tâm.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "3 chọn Circle, F đổi kiểu tô, [/] đổi radius 0–256. Bán kính 2 cho viền 12 pixel và hình đặc 21 pixel, không nhầm với brush Project 03.",
+      files: [
+        "include/lab.hpp",
+        "include/drawing.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Suy ra phép thử trung điểm",
+          title: "Suy ra decision",
           explanation:
-            "Dấu của `F(x−1/2, y+1) = x² + y² − r²` cho biết nên giữ X hay giảm X ở hàng kế tiếp.",
+            "F(x−1/2,y+1) = decision + 1/4; decision < 0 chọn giữ X, còn bằng 0 phải giảm X.",
         },
         {
-          title: "Chỉ tính một octant",
+          title: "Tạo tám điểm",
           explanation:
-            "Bắt đầu tại `(r,0)`, tăng Y và chỉ giảm X khi `decision` cho biết trung điểm đã nằm ngoài đường tròn.",
+            "Tính một octant, đổi dấu/hoán vị rồi sortUnique để bỏ điểm trùng trên trục và đường chéo.",
         },
         {
-          title: "Phản chiếu sang tám phía",
-          explanation: "Hoán đổi X/Y và đổi dấu tạo đủ tám vị trí tương ứng quanh tâm.",
-        },
-        {
-          title: "Loại pixel trùng",
+          title: "Tô tới viền",
           explanation:
-            "Tại `y = 0` hoặc `x = y`, các phép phản chiếu có thể trùng nhau; `sort` và `unique` làm kết quả dễ đếm và kiểm thử hơn.",
+            "Mỗi hàng lưu độ vươn xa nhất của outline, sau đó ghi một span liên tục. Hình đặc chứa chính viền midpoint.",
         },
       ],
     },
     "p04-l06": {
       focus:
-        "Hoàn thiện pixel inspector, kiểm tra hình dạng thay vì chỉ nhìn ảnh, rồi benchmark nhiều lượt trên cùng dữ liệu mà không tính thời gian tạo đầu vào.",
+        "Có đáp án độc lập cho hình học, kiểm input và đọc pixel, rồi đo hai thuật toán trên cùng dữ liệu.",
       expected:
-        "Toàn bộ CTest đều đạt. `project_4_final` quan sát được từng pixel, chuyển được giữa DDA và Bresenham; kết quả đo ghi rõ lượng công việc, cấu hình build và đơn vị thời gian.",
-      files: ["src/main.cpp", "tests/tests.cpp", "include/lab.hpp"],
+        "2.401 trường hợp line, 544 kích thước rect, 129 bán kính; benchmark 20.000 đoạn × 7 lượt có warm-up, checksum tọa độ và deadline.",
+      files: ["include/benchmark.hpp", "include/view.hpp", "src/main.cpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Đúng trước, nhanh sau",
+          title: "Kiểm trước khi đo",
           explanation:
-            "Không benchmark một cách cài đặt chưa vượt qua kiểm tra tám octant và hai đầu trùng nhau.",
+            "CTest dùng cùng hàm app gọi và vẫn hoạt động ở Release; không chỉ kiểm vài ảnh đẹp.",
         },
         {
-          title: "Tách inspector khỏi thuật toán",
+          title: "Đọc kết quả thật",
           explanation:
-            "Phím trái/phải chỉ thay đổi `inspectedStep`; lưới phóng to đọc `linePoints` đã có và không can thiệp vào DDA/Bresenham.",
+            "consumePixels hash cả tọa độ bên trong, không chỉ size. Không bắt buộc checksum DDA bằng Bresenham.",
         },
         {
-          title: "Kiểm tra đường tròn có đúng bán kính",
+          title: "Không khóa event loop",
           explanation:
-            "Ngoài đối xứng, test còn xác nhận bốn điểm ngoài cùng, không có pixel trùng và sai lệch bán kính nằm trong ngưỡng.",
+            "advanceBenchmark xử lý 128 đoạn mỗi thuật toán rồi trả quyền, T hủy; 30 giây thì dừng mà không báo median.",
         },
         {
-          title: "Làm nóng rồi đo nhiều lượt",
+          title: "Nêu đúng phạm vi",
           explanation:
-            "Chạy nhiều lượt giúp giảm ảnh hưởng của cache lạnh, bộ lập lịch và độ phân giải đồng hồ.",
-        },
-        {
-          title: "Sử dụng kết quả",
-          explanation:
-            "Benchmark phải tiêu thụ kết quả, chẳng hạn cộng số pixel vào `checksum`, để trình biên dịch không loại bỏ công việc.",
+            "Median cộng thời gian kernel của từng round, gồm allocation/trace/hash; không phải FPS hoặc thời gian thuần phép cộng.",
         },
       ],
     },
@@ -179,11 +183,6 @@ const learning = {
       {
         label: "Rasterization",
         href: "/glossary#rasterization",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Framebuffer",
-        href: "/glossary#framebuffer",
         kind: "Thuật ngữ",
       },
       {
@@ -199,8 +198,8 @@ const learning = {
         kind: "Thuật ngữ",
       },
       {
-        label: "Invariant",
-        href: "/glossary#invariant",
+        label: "Bounds check",
+        href: "/glossary#bounds-check",
         kind: "Thuật ngữ",
       },
     ],
@@ -211,9 +210,19 @@ const learning = {
         kind: "Thuật ngữ",
       },
       {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
+        label: "Đổi tọa độ event theo renderer",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
+      },
+      {
+        label: "Logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
+      },
+      {
+        label: "Mouse capture",
+        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
+        kind: "SDL API",
       },
     ],
     "p04-l04": [
@@ -242,18 +251,13 @@ const learning = {
     ],
     "p04-l06": [
       {
-        label: "CTest command-line reference",
+        label: "CTest timeout và cấu hình build",
         href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
         kind: "CMake",
       },
       {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Octant",
-        href: "/glossary#octant",
+        label: "Median của benchmark",
+        href: "/glossary#benchmark-median",
         kind: "Thuật ngữ",
       },
     ],

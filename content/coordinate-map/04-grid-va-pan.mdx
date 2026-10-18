@@ -1,121 +1,145 @@
-# Vẽ lưới và kéo camera trong thế giới cố định
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lưới động và kéo camera
 
 ## Vấn đề cần giải quyết
 
-Chỉ có hai trục thì rất khó cảm nhận tỉ lệ và vị trí camera. Bài này sẽ vẽ đường lưới tại các tọa độ world nguyên đang nằm trong vùng nhìn, sau đó dùng nút chuột phải để kéo bản đồ. Điểm đánh dấu và lưới không đổi tọa độ world; chỉ `centerWorld` thay đổi.
+Hai trục cho biết gốc và chiều, nhưng chưa giúp bạn đọc một điểm ở xa gốc. Ta cần lưới world-space và cách kéo góc nhìn tới vùng muốn quan sát.
+
+Nếu cứ kẻ cách nhau 55 pixel trên ảnh, lưới sẽ không còn đại diện đúng đơn vị world khi đổi zoom. Bài này sinh lưới từ camera, rồi thêm pan bằng chuột phải.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Thế giới có thể kéo dài vô hạn, nhưng ta chỉ cần vẽ phần đang nhìn thấy. Trước hết, đổi hai góc màn hình về world:
+Đổi hai góc ảnh về world để biết khoảng đang nhìn thấy. Với một bước lưới h, các đường đứng nằm tại x = k × h; đường ngang tại y = k × h. Đường đầu tiên bên trái là ceil(left/h) × h.
 
-```text
-bottomLeft = screenToWorld(0, height)
-topRight   = screenToWorld(width, 0)
-```
+Ta chọn h trong dãy 1, 2, 5 nhân lũy thừa của 10 sao cho mỗi ô rộng ít nhất 40 pixel. Ví dụ s = 55 thì h = 1; s = 5 thì h = 10; s = 800 thì h = 0,05. Đổi bước lưới chỉ đổi đường kẻ phụ, không đổi điểm hoặc trục.
 
-Các đường dọc dùng `gridX` từ `floor(bottomLeft.x)` đến `ceil(topRight.x)`. Mỗi tọa độ world `(gridX,0)` đi qua `worldToScreen` để lấy X trên màn hình. Các đường ngang được tạo tương tự theo Y.
+Pan có nghĩa là dời cảnh theo tay. Kéo sang phải dx pixel, camera phải nhìn sang trái dx/s world unit:
 
-Pan bắt đầu từ độ dời chuột trên màn hình. Khi kéo hình ảnh sang phải 55 pixel ở tỉ lệ 55 pixel/đơn vị, tâm camera phải đi **sang trái** một đơn vị world. Theo chiều dọc, kéo xuống làm screen Y tăng, trong khi world Y hướng lên, nên `centerWorld.y` tăng:
+$$
+c_x' = c_x - \frac{d_x}{s},\qquad
+c_y' = c_y + \frac{d_y}{s}
+$$
 
-```text
-center.x -= deltaScreen.x / scale
-center.y += deltaScreen.y / scale
-```
+<InteractiveLab demo="coordinate" mode="coordinate-pan" />
 
-Ví dụ, camera đang ở `(3,-2)`. Kéo sang phải 55 pixel ở tỉ lệ 55 pixel/đơn vị đưa tâm tới `(2,-2)`; kéo xuống tiếp 110 pixel đưa tâm tới `(2,0)`. Nội dung đi cùng hướng tay kéo vì tâm camera dịch ngược chiều cảnh ở X và tuân theo quy ước đảo Y ở trục dọc.
+Kéo chuột phải hoặc dùng Shift+mũi tên. Quan sát: P1 vẫn là (2,1), chỉ screen coordinate thay đổi. Chọn preset Phóng gần để thấy bước lưới thay đổi.
 
 ## Viết code từng bước
 
-### Bước 1 — Tìm phần thế giới đang nằm trong viewport
+### Bước 1 — Chọn bước lưới dễ đọc
 
-```cpp title="src/main.cpp — trước khi sinh grid"
-const lab::Vec2 worldBottomLeft = camera.screenToWorld({0.0, double(height)});
-const lab::Vec2 worldTopRight = camera.screenToWorld({double(width), 0.0});
+```cpp title="include/lab.hpp — chọn bước từ dãy 1–2–5"
+inline double gridSpacing(double pixelsPerUnit) {
+    if (!std::isfinite(pixelsPerUnit) || pixelsPerUnit <= 0.0) {
+        return 1.0;
+    }
+    const double target = 40.0 / pixelsPerUnit;
+    const double power = std::pow(10.0, std::floor(std::log10(target)));
+    for (double multiplier : {1.0, 2.0, 5.0, 10.0}) {
+        const double step = multiplier * power;
+        if (step >= target) {
+            return step;
+        }
+    }
+    return power * 10.0;
+}
 ```
 
-Tên hai góc được đặt theo world space. Pixel `(0,height)` nằm ở góc trái dưới của thế giới vì trục Y đã bị đảo.
+target là khoảng world tương ứng 40 screen pixel. power chọn hàng đơn vị, hàng chục hoặc phần thập phân; vòng for chọn mức đầu tiên không nhỏ hơn target. Khoảng cách screen nằm khoảng 40–100 px.
 
-### Bước 2 — Vẽ các đường lưới dọc đang nhìn thấy
+### Bước 2 — Vẽ phần lưới đang thấy
 
-```cpp title="src/main.cpp — grid theo X nguyên"
-for (int gridX = int(std::floor(worldBottomLeft.x)); gridX <= int(std::ceil(worldTopRight.x)); ++gridX) {
-    const int screenX = int(std::lround(camera.worldToScreen({double(gridX), 0.0}).x));
-    std::uint32_t color = rgba(29, 41, 67);
-    if (gridX == 0) {
-        color = rgba(99, 112, 141);
+```cpp title="include/view.hpp — sinh lưới từ world bounds"
+inline void drawGrid(Framebuffer& image, const Camera2D& camera) {
+    const Vec2 bottomLeft = camera.screenToWorld({0.0, static_cast<double>(image.height)});
+    const Vec2 topRight = camera.screenToWorld({static_cast<double>(image.width), 0.0});
+    const double spacing = gridSpacing(camera.scale());
+    const double firstX = std::ceil(bottomLeft.x / spacing) * spacing;
+    const double firstY = std::ceil(bottomLeft.y / spacing) * spacing;
+    const int columns = static_cast<int>(std::ceil((topRight.x - bottomLeft.x) / spacing)) + 1;
+    const int rows = static_cast<int>(std::ceil((topRight.y - bottomLeft.y) / spacing)) + 1;
+    for (int index = 0; index < columns; ++index) {
+        const double worldX = firstX + index * spacing;
+        const int x = static_cast<int>(std::lround(camera.worldToScreen({worldX, 0.0}).x));
+        vertical(image, x, kGrid);
     }
-    for (int y = 0; y < height; ++y) {
-        putPixel(screenX, y, color);
+    for (int index = 0; index < rows; ++index) {
+        const double worldY = firstY + index * spacing;
+        const int y = static_cast<int>(std::lround(camera.worldToScreen({0.0, worldY}).y));
+        horizontal(image, y, kGrid);
     }
 }
 ```
 
-Lưới ngang dùng cùng cách với `gridY` và tọa độ screen Y. Trục tại world 0 được tô sáng hơn các đường còn lại. Màu nằm ngay trong đoạn code nên checkpoint có thể build độc lập, không phụ thuộc một biến chưa được giải thích ở nơi khác.
+bottomLeft/topRight là hai góc world của viewport. ceil đưa đường đầu tiên vào vùng nhìn. columns/rows được tính từ độ rộng vùng nhìn, không phải tọa độ tuyệt đối.
 
-### Bước 3 — Đổi độ dời chuột thành độ dời camera
+Vòng lặp dùng index nguyên rồi tính first + index × spacing. Không cộng dồn worldX cho tới khi vượt right: cách đó dễ mắc lỗi số thực ở tọa độ rất lớn. Mỗi đường được worldToScreen rồi vẽ qua vertical/horizontal.
 
-```cpp title="include/lab.hpp — Camera2D::pan"
+Trong renderScene, gọi drawGrid trước khi vẽ trục và điểm. Trục có màu riêng, không phụ thuộc một đường grid có tình cờ rơi đúng số 0 hay không. presentation.hpp thêm nhãn số cạnh đường kẻ; khi gốc đi khỏi ảnh, nhãn được giữ gần mép để vẫn đọc được.
+
+### Bước 3 — Viết pan trong Camera2D
+
+```cpp title="include/lab.hpp — đổi pixel delta sang world delta"
 void pan(Vec2 deltaPixels) {
-    const double pixelsPerWorldUnit = scale();
-    centerWorld.x -= deltaPixels.x / pixelsPerWorldUnit;
-    centerWorld.y += deltaPixels.y / pixelsPerWorldUnit;
+    if (!finite(deltaPixels)) {
+        return;
+    }
+    centerWorld.x -= deltaPixels.x / scale();
+    centerWorld.y += deltaPixels.y / scale();
 }
 ```
 
-Hàm nhận độ dời theo pixel vì đó là dữ liệu sự kiện chuột cung cấp; camera tự chịu trách nhiệm đổi sang đơn vị world. Nơi gọi không cần biết tỉ lệ hiện tại.
+scale là pixel/world, nên deltaPixels/scale là world. Dấu của X âm vì camera đi ngược cảnh. Dấu Y dương vì screen Y hướng xuống.
 
-### Bước 4 — Tính độ dời giữa hai sự kiện chuột
+### Bước 4 — Nối kéo chuột phải
 
-```cpp title="src/main.cpp — pan bằng nút chuột phải"
-if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {
-    draggingPoint = false;
-    panning = true;
-    previousScreen = {event.button.x, event.button.y};
-    if (!SDL_CaptureMouse(true)) {
-        std::cerr << "Mouse capture failed: " << SDL_GetError() << '\n';
+Main giữ owner là mouse đang kéo, ownerButton là nút, previousScreen là mẫu trước. Khi nhấn phải bên trong ảnh, bật panning và capture. Khi motion của đúng owner tới, khối này xử lý:
+
+```cpp title="src/main.cpp — cập nhật từ từng mẫu chuột"
+if (ownerButton != 0 && event.motion.which == owner) {
+    if ((event.motion.state & SDL_BUTTON_MASK(ownerButton)) == 0) {
+        cancelDrag();
+    } else if (scene.panning) {
+        const lab::Vec2 delta{scene.cursorScreen.x - scene.previousScreen.x, scene.cursorScreen.y - scene.previousScreen.y};
+        scene.camera.pan(delta);
+        scene.previousScreen = scene.cursorScreen;
     }
 }
-if (event.type == SDL_EVENT_MOUSE_MOTION && panning) {
-    const lab::Vec2 currentScreen{event.motion.x, event.motion.y};
-    camera.pan(currentScreen - previousScreen);
-    previousScreen = currentScreen;
-}
 ```
 
-`previousScreen` phải được cập nhật sau khi độ dời đã được dùng. Thả chuột hoặc mất focus sẽ đặt `panning = false` và nhả mouse capture. Kéo trái và kéo phải loại trừ nhau, vì một sự kiện chuyển động không nên vừa kéo điểm đánh dấu vừa pan camera.
+Cập nhật previousScreen ngay sau pan. Nếu quên, mẫu tiếp theo sẽ cộng lại quãng kéo cũ và cảnh chạy nhanh dần.
 
-### Bước 5 — Đặt lại camera nhưng giữ kích thước mới
+Khi thả đúng nút/owner, main còn áp dụng delta cuối trong button-up rồi cancelDrag. Mất focus, window hidden, resize hoặc pause cũng hủy capture. Không cần tiếp tục giữ nút sau khi ứng dụng đã mất focus.
 
-```cpp title="src/main.cpp — phím R"
-const lab::Vec2 viewport = camera.viewportPixels;
-camera = {};
-camera.viewportPixels = viewport;
+```bash title="Terminal — chạy checkpoint 4"
+cmake --build build --config Debug --target project_5_checkpoint_4 --parallel 2
+.\build\Debug\project_5_checkpoint_4.exe
 ```
-
-Gán camera mặc định đưa tâm và tỉ lệ về giá trị ban đầu. Tuy nhiên, nếu không phục hồi `viewportPixels`, cửa sổ đã resize sẽ quay lại dùng kích thước 960×540 trong các phép chuyển đổi.
 
 ## Ghép các phần lại
 
-Mỗi lần vẽ, `screenToWorld` xác định khoảng world đang nhìn thấy; các tọa độ nguyên được đưa qua `worldToScreen` để tạo lưới. Pan chỉ sửa tâm camera, nên ở lần vẽ tiếp theo cả lưới và điểm đánh dấu tự xuất hiện ở vị trí mới. Không cần vòng lặp sửa tọa độ từng vật thể.
+Camera quyết định bounds → gridSpacing chọn đơn vị đường kẻ → drawGrid tạo ảnh mới. Pan chỉ sửa centerWorld rồi đặt dirty; nó không kéo bitmap cũ và không sửa points.
 
-Chạy checkpoint 4 và giữ nút phải để “nắm” bản đồ. Nội dung phải đi cùng hướng tay kéo, còn `centerWorld.x` đổi theo hướng ngược lại. Sau khi pan, kéo điểm bằng nút trái vẫn phải đặt `markerWorld` đúng dưới con trỏ.
+Resize tạo framebuffer/texture đúng kích thước logic mới, cập nhật viewportPixels, hủy drag cũ rồi dựng lại. Với world point giữ nguyên, screen coordinate thay đổi theo tâm viewport mới là đúng.
 
 ## Thử làm sai để hiểu đúng
 
-1. Cộng `delta.x` vào tâm camera thay vì trừ. Bản đồ trượt ngược hướng tay kéo.
-2. Bỏ phép chia cho tỉ lệ. Ở mức 55 px/unit, kéo 55 pixel làm camera dịch 55 world unit thay vì đúng 1 unit.
-3. Sinh đường lưới từ một khoảng tọa độ cố định. Pan đủ xa làm lưới biến mất vì chương trình không tính lại phần world đang nhìn thấy.
+1. Giữ gridSpacing luôn bằng 1 rồi đặt tỉ lệ 5 px/unit. Lưới trở nên quá dày. Trả lại bước thích nghi.
+2. Đổi dấu X trong pan thành cộng. Cảnh đi ngược tay.
+3. Bỏ cập nhật previousScreen. Kéo đều và quan sát cảnh tăng tốc vì delta bị tính lặp.
+4. Chỉ đổi kích thước texture mà không đổi viewportPixels. Gốc camera không còn ở giữa ảnh sau resize.
 
 ## Tự kiểm tra kết quả
 
-- Lưới phủ kín viewport sau pan và resize.
-- Hai trục world 0 có màu khác các đường lưới thường.
-- Kéo phải sang phải làm nội dung đi sang phải.
-- Điểm đánh dấu giữ nguyên tọa độ world khi chỉ pan camera.
-- R đặt lại tâm và tỉ lệ nhưng giữ kích thước viewport hiện tại.
+- Grid và điểm dùng cùng worldToScreen; nhãn thể hiện đơn vị world.
+- Ở 55 px/unit, kéo (55, 27.5) px làm centerWorld đổi thành (−1, 0.5).
+- Điểm trên screen dịch đúng (55, 27.5) px theo tay, points không đổi.
+- Chỉ đúng nút và đúng mouse owner được kéo camera.
+- Thả chuột, resize, pause hoặc mất focus không để trạng thái pan bị kẹt.
 
 ## Bài tập mở rộng
 
-Hãy thay đổi khoảng cách lưới theo mức zoom để các đường không quá dày, chẳng hạn dùng dãy `1–2–5 × 10ⁿ`. Thêm đường chính và đường phụ. Hiển thị `centerWorld` trên thanh tiêu đề và dự đoán dấu thay đổi trước khi kéo.
+Bổ sung đường chính đậm hơn sau mỗi năm ô lưới. Dùng chỉ số world của đường để quyết định màu; đừng đếm từ mép window, vì mép thay đổi khi pan.
 
-Bài sau sẽ zoom quanh con trỏ mà không làm điểm world đang được trỏ tới bị trượt đi.
+[Bài tiếp: zoom quanh con trỏ](/projects/coordinate-map/05-zoom-quanh-cursor).

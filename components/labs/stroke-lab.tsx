@@ -1,220 +1,417 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { interpolateStroke } from "@/lib/labs/stroke";
-import { type Point } from "@/lib/labs/geometry";
-import { LabReadout, canvasPoint, setupCanvas, useCanvasSize } from "./lab-shared";
+import type { Point } from "@/lib/labs/geometry";
+import {
+  insidePaint,
+  maximumRawPoints,
+  maximumStrokes,
+  paintHeight,
+  paintWidth,
+  renderPaint,
+  strokePresets,
+} from "@/lib/labs/paint";
+import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
+import { drawStrokeLab, strokeBoard } from "./stroke-lab-view";
 import type { InteractiveLabMode } from "./types";
-
-const strokePresets: Record<string, Point[]> = {
-  curve: [
-    { x: 0.09, y: 0.54 },
-    { x: 0.21, y: 0.25 },
-    { x: 0.39, y: 0.66 },
-    { x: 0.62, y: 0.29 },
-    { x: 0.86, y: 0.54 },
-  ],
-  line: [
-    { x: 0.09, y: 0.5 },
-    { x: 0.29, y: 0.5 },
-    { x: 0.53, y: 0.5 },
-    { x: 0.86, y: 0.5 },
-  ],
-  corner: [
-    { x: 0.12, y: 0.68 },
-    { x: 0.12, y: 0.26 },
-    { x: 0.46, y: 0.26 },
-    { x: 0.79, y: 0.65 },
-  ],
-};
 
 export default function StrokeLab({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bitmapRef = useRef<HTMLCanvasElement | null>(null);
   const size = useCanvasSize(canvasRef);
-  const [rawPoints, setRawPoints] = useState<Point[]>(strokePresets.curve);
-  const [preset, setPreset] = useState("curve");
-  const initialInterpolation = mode === "stroke-interpolation";
+  const reducedMotion = useReducedMotion();
+  const brushOnly = mode === "stroke-brush";
+  const samplingOnly = mode === "stroke-sampling";
+  const initialPreset = brushOnly ? "dot" : mode === "stroke-validation" ? "separate" : "line";
+  const initialInterpolation = !brushOnly && !samplingOnly;
+  const [paths, setPaths] = useState<Point[][]>(strokePresets[initialPreset]);
+  const pathsRef = useRef(paths);
+  const owner = useRef<number | null>(null);
+  const keyboardDrawing = useRef(false);
+  const [preset, setPreset] = useState(initialPreset);
   const [interpolate, setInterpolate] = useState(initialInterpolation);
-  const [radius, setRadius] = useState(11);
+  const [radius, setRadius] = useState(brushOnly ? 2 : 6);
   const [sampleEvery, setSampleEvery] = useState(1);
+  const [showSamples, setShowSamples] = useState(true);
   const [paused, setPaused] = useState(false);
-  const drawing = useRef(false);
+  const [message, setMessage] = useState("");
+  const [cursor, setCursor] = useState<Point>({ x: 160, y: 90 });
 
-  const inputPoints = useMemo(() => {
-    const pixelPoints = rawPoints.map((point) => ({
-      x: point.x * size.width,
-      y: point.y * size.height,
-    }));
-    if (sampleEvery <= 1 || pixelPoints.length <= 2) return pixelPoints;
-    const sampled = pixelPoints.filter((_, index) => index % sampleEvery === 0);
-    const last = pixelPoints.at(-1)!;
-    if (sampled.at(-1) !== last) sampled.push(last);
-    return sampled;
-  }, [rawPoints, sampleEvery, size.height, size.width]);
-  const brushPoints = useMemo(
-    () => (interpolate ? interpolateStroke(inputPoints, radius * 0.8) : inputPoints),
-    [inputPoints, interpolate, radius],
+  const result = useMemo(
+    () => renderPaint(paths, radius, sampleEvery, interpolate),
+    [paths, radius, sampleEvery, interpolate],
   );
-  const maximumGap = (points: Point[]) =>
-    points
-      .slice(1)
-      .reduce(
-        (largest, point, index) =>
-          Math.max(largest, Math.hypot(point.x - points[index].x, point.y - points[index].y)),
-        0,
-      );
-  const inputGap = maximumGap(inputPoints);
-  const stampGap = maximumGap(brushPoints);
+
+  const releasePointer = useCallback(() => {
+    keyboardDrawing.current = false;
+    const id = owner.current;
+    owner.current = null;
+    const canvas = canvasRef.current;
+    if (id !== null && canvas?.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+  }, []);
+
+  const replacePaths = useCallback((next: Point[][]) => {
+    pathsRef.current = next;
+    setPaths(next);
+  }, []);
+
+  const eventPoint = useCallback(
+    (event: { clientX: number; clientY: number; currentTarget: HTMLCanvasElement }): Point => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return { x: -1, y: -1 };
+      const x = ((event.clientX - rect.left) / rect.width) * size.width;
+      const y = ((event.clientY - rect.top) / rect.height) * size.height;
+      const board = strokeBoard(size);
+      return { x: (x - board.ox) / board.scale, y: (y - board.oy) / board.scale };
+    },
+    [size],
+  );
+
+  const beginPath = useCallback(
+    (point: Point): boolean => {
+      const current = pathsRef.current;
+      if (!insidePaint(point)) return false;
+      if (current.length >= maximumStrokes || current.flat().length >= maximumRawPoints) {
+        setMessage("Mẫu thử đã đầy (8 nét hoặc 128 điểm). Hãy xóa để tiếp tục.");
+        return false;
+      }
+      replacePaths([...current, [point]]);
+      setPreset("custom");
+      setCursor(point);
+      setMessage("");
+      return true;
+    },
+    [replacePaths],
+  );
+
+  const appendPoint = useCallback(
+    (point: Point, endpoint = false): boolean => {
+      if (!insidePaint(point)) {
+        releasePointer();
+        setMessage("Đã ra ngoài vùng vẽ. Thả rồi nhấn lại để bắt đầu nét mới.");
+        return false;
+      }
+      const current = pathsRef.current;
+      const path = current.at(-1);
+      const previous = path?.at(-1);
+      if (!path || !previous || (point.x === previous.x && point.y === previous.y)) return false;
+      const count = current.flat().length;
+      // Dành một chỗ cho pointerup; không để thinning làm mất endpoint.
+      if (count >= maximumRawPoints - (endpoint ? 0 : 1)) {
+        if (endpoint) releasePointer();
+        setMessage("Đã đủ số điểm của mẫu thử. Hãy xóa để vẽ tiếp.");
+        return false;
+      }
+      replacePaths([...current.slice(0, -1), [...path, point]]);
+      setCursor(point);
+      return true;
+    },
+    [releasePointer, replacePaths],
+  );
+
+  const startStroke = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      if (brushOnly || paused || event.button !== 0 || !event.isPrimary || owner.current !== null)
+        return;
+      const point = eventPoint(event);
+      if (!beginPath(point)) return;
+      keyboardDrawing.current = false;
+      owner.current = event.pointerId;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.currentTarget.focus();
+    },
+    [brushOnly, paused, eventPoint, beginPath],
+  );
+
+  const moveStroke = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      if (paused || event.pointerId !== owner.current) return;
+      if ((event.buttons & 1) === 0) {
+        releasePointer();
+        return;
+      }
+      appendPoint(eventPoint(event));
+    },
+    [paused, eventPoint, appendPoint, releasePointer],
+  );
+
+  const endStroke = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>, cancelled = false) => {
+      if (event.pointerId !== owner.current) return;
+      if (!cancelled && !paused) appendPoint(eventPoint(event), true);
+      releasePointer();
+    },
+    [paused, eventPoint, appendPoint, releasePointer],
+  );
+
+  const reset = useCallback(() => {
+    releasePointer();
+    replacePaths(strokePresets[initialPreset]);
+    setPreset(initialPreset);
+    setInterpolate(initialInterpolation);
+    setRadius(brushOnly ? 2 : 6);
+    setSampleEvery(1);
+    setShowSamples(true);
+    setPaused(false);
+    setCursor({ x: 160, y: 90 });
+    setMessage("");
+  }, [releasePointer, replacePaths, initialPreset, initialInterpolation, brushOnly]);
+
+  const clear = useCallback(() => {
+    releasePointer();
+    replacePaths([]);
+    setPreset("custom");
+    setMessage("");
+  }, [releasePointer, replacePaths]);
+
+  const togglePaused = useCallback(() => {
+    releasePointer();
+    setPaused((value) => !value);
+  }, [releasePointer]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-    ctx.fillStyle = "#11182b";
-    ctx.fillRect(16, 16, size.width - 32, size.height - 32);
-    ctx.fillStyle = paused ? "#6f7d9c" : "#53f0ae";
-    for (const point of brushPoints) {
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = "#fff";
-    for (const point of inputPoints) {
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = "#9aa6c1";
-    ctx.font = "11px ui-monospace";
-    ctx.fillText(
-      `${inputPoints.length} INPUT SAMPLES → ${brushPoints.length} BRUSH STAMPS`,
-      28,
-      size.height - 28,
-    );
-  }, [brushPoints, inputPoints, paused, radius, size]);
+    const onBlur = () => releasePointer();
+    const onHidden = () => {
+      if (document.hidden) releasePointer();
+    };
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onHidden);
+      releasePointer();
+    };
+  }, [releasePointer]);
 
-  const startStroke = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (paused) return;
-    drawing.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setPreset("custom");
-    const point = canvasPoint(event, event.currentTarget);
-    setRawPoints([{ x: point.x / size.width, y: point.y / size.height }]);
-  };
-  const moveStroke = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!paused && drawing.current) {
-      const point = canvasPoint(event, event.currentTarget);
-      setRawPoints((points) => [...points, { x: point.x / size.width, y: point.y / size.height }]);
-    }
-  };
-  const reset = () => {
-    setPreset("curve");
-    setRawPoints(strokePresets.curve);
-    setInterpolate(initialInterpolation);
-    setRadius(11);
-    setSampleEvery(1);
-    setPaused(false);
-  };
+  useEffect(() => {
+    releasePointer();
+  }, [size.width, size.height, releasePointer]);
+
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx) return;
+    const bitmap = bitmapRef.current ?? document.createElement("canvas");
+    bitmapRef.current = bitmap;
+    bitmap.width = paintWidth;
+    bitmap.height = paintHeight;
+    const imageContext = bitmap.getContext("2d");
+    if (!imageContext) return;
+    const image = imageContext.createImageData(paintWidth, paintHeight);
+    result.pixels.forEach((pixel, index) => {
+      image.data[index * 4] = pixel >>> 24;
+      image.data[index * 4 + 1] = (pixel >>> 16) & 255;
+      image.data[index * 4 + 2] = (pixel >>> 8) & 255;
+      image.data[index * 4 + 3] = pixel & 255;
+    });
+    imageContext.putImageData(image, 0, 0);
+    drawStrokeLab(
+      ctx,
+      size,
+      bitmap,
+      result.input,
+      showSamples,
+      cursor,
+      brushOnly ? radius : undefined,
+    );
+  }, [result, size, showSamples, cursor, brushOnly, radius]);
+
+  const keyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLCanvasElement>) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (
+        ![
+          "ArrowLeft",
+          "ArrowRight",
+          "ArrowUp",
+          "ArrowDown",
+          "Enter",
+          "Escape",
+          "Delete",
+          " ",
+          "r",
+          "R",
+        ].includes(event.key)
+      )
+        return;
+      event.preventDefault();
+      if (event.repeat) return;
+      if (event.key === " ") {
+        togglePaused();
+        return;
+      }
+      if (event.key.toLowerCase() === "r") {
+        reset();
+        return;
+      }
+      if (paused) return;
+      if (brushOnly) return;
+      if (event.key === "Escape") {
+        releasePointer();
+        return;
+      }
+      if (event.key === "Delete") {
+        clear();
+        return;
+      }
+      if (event.key === "Enter") {
+        const wasDrawing = keyboardDrawing.current;
+        releasePointer();
+        if (!wasDrawing) keyboardDrawing.current = beginPath(cursor);
+        return;
+      }
+      const next = { ...cursor };
+      if (event.key === "ArrowLeft") next.x -= 20;
+      if (event.key === "ArrowRight") next.x += 20;
+      if (event.key === "ArrowUp") next.y -= 20;
+      if (event.key === "ArrowDown") next.y += 20;
+      if (!insidePaint(next)) return;
+      if (keyboardDrawing.current) appendPoint(next, true);
+      else setCursor(next);
+    },
+    [cursor, paused, brushOnly, togglePaused, reset, releasePointer, clear, beginPath, appendPoint],
+  );
 
   return (
     <div className="lab-body">
+      <p>
+        Ảnh thử 320×180 pixel dùng cùng công thức tô tròn và nội suy với C++ (960×540). Thay tham số
+        sẽ vẽ lại mẫu để so sánh, không phải đổi màu các nét cũ trong Mini Paint.
+        {!brushOnly && " Các chấm trắng chỉ đánh dấu input, không thuộc ảnh pixel."}
+      </p>
       <div className="lab-controls">
         <label>
-          Preset
+          Mẫu thử
           <select
+            disabled={paused || brushOnly}
             value={preset}
             onChange={(event) => {
-              const value = event.target.value;
-              setPreset(value);
-              if (strokePresets[value]) setRawPoints(strokePresets[value]);
+              releasePointer();
+              setPreset(event.target.value);
+              replacePaths(strokePresets[event.target.value]);
+              setMessage("");
             }}
-            disabled={paused}
           >
-            <option value="curve">Đường cong</option>
+            <option value="dot">Một chấm</option>
             <option value="line">Đường thẳng</option>
             <option value="corner">Góc gấp</option>
+            <option value="separate">Hai nét rời</option>
             {preset === "custom" && <option value="custom">Tự vẽ</option>}
           </select>
         </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={interpolate}
-            onChange={(event) => setInterpolate(event.target.checked)}
-            disabled={paused}
-          />{" "}
-          Nội suy
-        </label>
+        {!brushOnly && (
+          <label>
+            Giữ 1 trên N mẫu
+            <input
+              disabled={paused}
+              type="range"
+              min="1"
+              max="8"
+              step="1"
+              value={sampleEvery}
+              onChange={(event) => {
+                releasePointer();
+                setSampleEvery(Number(event.target.value));
+              }}
+            />
+            <output>1/{sampleEvery}</output>
+          </label>
+        )}
+        {!brushOnly && (
+          <label className="check">
+            <input
+              type="checkbox"
+              disabled={paused || samplingOnly}
+              checked={interpolate}
+              onChange={(event) => {
+                releasePointer();
+                setInterpolate(event.target.checked);
+              }}
+            />
+            Nội suy
+          </label>
+        )}
         <label>
-          Sampling{" "}
+          Bán kính bút
           <input
-            type="range"
-            min="1"
-            max="6"
-            value={sampleEvery}
-            onChange={(event) => setSampleEvery(Number(event.target.value))}
             disabled={paused}
-          />
-          <output>1/{sampleEvery}</output>
-        </label>
-        <label>
-          Brush{" "}
-          <input
             type="range"
-            min="4"
-            max="24"
+            min="2"
+            max="16"
             value={radius}
-            onChange={(event) => setRadius(Number(event.target.value))}
-            disabled={paused}
+            onChange={(event) => {
+              releasePointer();
+              setRadius(Number(event.target.value));
+            }}
           />
-          <output>{radius}px</output>
+          <output>{radius} pixel ảnh</output>
         </label>
-        <button onClick={() => setPaused((value) => !value)}>
-          {paused ? "Tiếp tục" : "Tạm dừng"}
-        </button>
+        {!brushOnly && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={showSamples}
+              onChange={(event) => setShowSamples(event.target.checked)}
+            />
+            Hiện mẫu chuột
+          </label>
+        )}
+        <button onClick={togglePaused}>{paused ? "Tiếp tục" : "Tạm dừng"}</button>
         <button onClick={reset}>Đặt lại</button>
-        <button
-          onClick={() => {
-            setPreset("custom");
-            setRawPoints([]);
-          }}
-          disabled={paused}
-        >
+        <button disabled={paused} onClick={clear}>
           Xóa
         </button>
       </div>
       <canvas
         ref={canvasRef}
+        tabIndex={0}
+        aria-label={
+          brushOnly
+            ? "Canvas phóng to từng pixel của đầu bút tròn; đổi bán kính bằng thanh điều khiển"
+            : "Canvas thử đầu bút và nội suy; Enter mở nét, mũi tên nối đoạn, Delete xóa, Space tạm dừng"
+        }
         onPointerDown={startStroke}
         onPointerMove={moveStroke}
-        onPointerUp={() => {
-          drawing.current = false;
+        onPointerUp={(event) => endStroke(event)}
+        onPointerCancel={(event) => endStroke(event, true)}
+        onLostPointerCapture={(event) => {
+          if (event.pointerId === owner.current) owner.current = null;
         }}
-        onPointerCancel={() => {
-          drawing.current = false;
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Delete" && !paused) setRawPoints([]);
-        }}
-        tabIndex={0}
-        aria-label="Canvas vẽ stroke; điều chỉnh sampling và nội suy để lấp khoảng trống giữa các mouse sample"
+        onBlur={releasePointer}
+        onKeyDown={keyDown}
       />
       <LabReadout
         items={[
-          { label: "Input samples", value: inputPoints.length },
-          { label: "Brush stamps", value: brushPoints.length },
-          { label: "Khoảng cách sample lớn nhất", value: `${inputGap.toFixed(1)} px` },
-          { label: "Khoảng cách stamp lớn nhất", value: `${stampGap.toFixed(1)} px` },
-          { label: "Nội suy", value: interpolate ? "Đang bật" : "Đang tắt" },
+          { label: "Số nét độc lập", value: paths.length },
+          { label: "Mẫu được giữ", value: result.input.flat().length },
+          { label: "Số dấu bút", value: result.stamps.flat().length },
+          { label: "Khoảng input lớn nhất", value: result.inputGap.toFixed(2) + " px" },
+          { label: "Khoảng dấu bút lớn nhất", value: result.stampGap.toFixed(2) + " px" },
+          { label: "Ngưỡng spacing", value: (radius * 0.8).toFixed(2) + " px" },
+          { label: "Pixel đã tô", value: result.markedPixels },
+          { label: "Con trỏ bàn phím", value: cursor.x + ", " + cursor.y },
         ]}
       />
+      <p role="status">{message}</p>
+      <p>
+        {brushOnly ? (
+          "Chế độ này phóng to một đầu bút để đếm pixel; đổi bán kính để thử công thức đường tròn."
+        ) : (
+          <>
+            Nội suy chỉ nối thẳng hai mẫu, không khôi phục đường cong đã mất. Click/kéo để thêm nét;
+            ra ngoài vùng ảnh sẽ kết thúc nét. Với bàn phím: Enter bắt đầu/kết thúc nét; mũi tên
+            dịch con trỏ cam 20 pixel và chỉ vẽ khi nét đang mở. Tab rời Canvas. Tạm dừng khóa việc
+            vẽ và chỉnh mẫu.
+          </>
+        )}{" "}
+        {reducedMotion && "Lab không tự chạy hoạt ảnh; các thao tác thủ công vẫn dùng được."}
+      </p>
     </div>
   );
 }

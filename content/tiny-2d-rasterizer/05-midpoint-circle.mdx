@@ -1,154 +1,252 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Midpoint circle: tính một phần tám rồi phản chiếu
+# Vẽ và tô đường tròn
 
 ## Vấn đề cần giải quyết
 
-Nếu kiểm tra mọi pixel trong hình vuông bao bằng điều kiện gần `x² + y² = r²`, số vị trí phải xét tăng theo diện tích và rất khó chọn độ dày đường viền nhất quán. Midpoint circle chỉ đi dọc một phần tám đường tròn, dùng một biến quyết định nguyên để chọn bước tiếp theo rồi phản chiếu sang bảy phía còn lại.
+Ta muốn thêm hai hàm vào bộ công cụ: drawCircle vẽ viền một pixel và fillCircle tô đặc. Cả hai phải hoạt động trong ứng dụng C++, không chỉ có công thức hoặc bài tập để người học tự bổ sung.
+
+Có thể xét mọi pixel trong hình vuông bao như brush của Mini Paint, nhưng vẽ **viền** theo cách đó vừa tốn công vừa khó thống nhất độ dày. Midpoint circle chỉ tính một phần tám chu vi rồi phản chiếu; sau khi có viền, ta dùng các hàng ngang để tô tới chính viền ấy.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Bắt đầu tại `(r,0)` rồi tăng `y` từng bước. Ở hàng kế tiếp, ta chỉ phải chọn giữa hai pixel: giữ nguyên X tại `(x, y+1)`, hoặc giảm X tại `(x-1, y+1)`. Câu hỏi còn lại là pixel nào nằm gần đường tròn lý tưởng hơn.
-
-Ta mô tả đường tròn tâm gốc bằng hàm:
+Xét đường tròn tâm gốc với hàm:
 
 $$
 F(x,y)=x^2+y^2-r^2
 $$
 
-Nếu `F` âm, điểm đang nằm trong đường tròn; nếu `F` dương, điểm nằm ngoài. Thay vì tính khoảng cách tới cả hai pixel, midpoint circle kiểm tra trung điểm nằm giữa chúng:
+F âm ở trong, dương ở ngoài. Bắt đầu tại (r,0) và đi xuống từng hàng. Ở hàng tiếp theo chỉ cần chọn một trong hai điểm: giữ X tại (x,y+1), hoặc giảm X tại (x−1,y+1).
+
+Trung điểm giữa hai ứng viên là M = (x−1/2,y+1). Ta giữ X khi F(M) âm; ngược lại giảm X. Vì x,y nguyên, F(M) luôn có phần lẻ 1/4. Đặt:
 
 $$
-M=\left(x-\frac{1}{2},\ y+1\right)
+d = F(x-1/2,y+1)-1/4,\qquad d_0=1-r
 $$
 
-- `F(M) ≤ 0`: trung điểm còn ở trong đường tròn, nên giữ X và chọn `(x, y+1)`.
-- `F(M) > 0`: trung điểm đã ra ngoài, nên giảm X và chọn `(x-1, y+1)`.
+d là số nguyên. F(M) âm tương đương `d < 0`; **d = 0 vẫn có F(M) = 1/4 ở ngoài**, nên phải chọn nhánh giảm X. Đây là lý do code dùng `<`, không phải `<=`.
 
-`decision` là dạng số nguyên đã rút gọn của phép kiểm tra này. Tại `(r,0)`, giá trị ban đầu được chọn là `1-r`. Sau mỗi bước, ta không tính lại bình phương từ đầu mà cộng phần thay đổi:
+Sau mỗi bước, công thức cập nhật chỉ còn phép cộng:
 
-```text
-nếu giữ X:    decision += 2*y + 1
-nếu giảm X:  decision += 2*(y - x) + 1
-```
+- Tăng Y trước; nếu giữ X, cộng 2Y + 1 vào decision.
+- Nếu giảm X, giảm nó trước rồi cộng 2(Y−X) + 1.
+- Dừng khi `X < Y` vì đã đi qua đường chéo 45 độ.
 
-Trong hai công thức trên, `y` đã được tăng và `x` đã được giảm nếu nhánh thứ hai được chọn. Đây chính là thứ tự câu lệnh sẽ xuất hiện trong code.
+Với r = 5, các trạng thái trước bước là:
 
-Một điểm offset `(x,y)` tạo tám hoán vị/dấu:
+| Offset | decision | Chuyển tiếp |
+|---|---:|---|
+| (5,0) | −4 | Giữ X → (5,1) |
+| (5,1) | −1 | Giữ X → (5,2) |
+| (5,2) | 4 | Giảm X → (4,3) |
+| (4,3) | 3 | Qua đường chéo rồi dừng |
 
-```text
-(±x, ±y), (±y, ±x)
-```
-
-Khi `x == y`, `x == 0` hoặc `y == 0`, một số phép phản chiếu cho cùng tọa độ. Các điểm trùng sẽ được loại ở cuối hàm.
-
-Với `radius = 5`, `decision` bắt đầu ở `1 - 5 = -4`. Chỉ bốn lần lặp là đủ để tạo dữ liệu cho toàn bộ đường tròn:
-
-| offset được phản chiếu | `decision` trước bước | cập nhật |
-|---:|---:|---|
-| `(5,0)` | −4 | tăng Y, giữ X → `d=-1` |
-| `(5,1)` | −1 | tăng Y, giữ X → `d=4` |
-| `(5,2)` | 4 | tăng Y, giảm X → `(4,3)`, `d=3` |
-| `(4,3)` | 3 | tăng Y, giảm X → `(3,4)`, dừng |
-
-Mỗi hàng trong bảng tạo tối đa tám pixel sau khi phản chiếu. Khi `x < y`, thuật toán đã đi qua đường chéo 45 độ; những phần còn lại chính là ảnh đối xứng của các điểm đã có.
+Mỗi offset tạo các điểm (±x,±y) và (±y,±x). Trên trục hoặc đường chéo, một số điểm trùng nhau và phải được loại.
 
 <InteractiveLab demo="raster" mode="raster-circle" />
 
-Kéo thanh **Bước** từ trái sang phải. Các pixel màu trắng là những điểm vừa được tạo từ offset `(x,y)` hiện tại; pixel xanh là kết quả của các bước trước. Đường tròn đỏ chỉ đóng vai trò tham chiếu cho đường cong lý tưởng, không tham gia vào thuật toán.
+Đi từng bước với r = 5 rồi thử r = 1. Sau đó chọn “Tô tới viền midpoint”. Canvas giữ cả đường tròn trong lưới nhỏ để dễ quan sát; chương trình C++ cho phép hình bị cắt ở cạnh ảnh và dùng putPixel bảo vệ vùng nhớ.
 
 ## Viết code từng bước
 
-### Bước 1 — Viết hàm thêm tám điểm đối xứng
+### Bước 1 — Tạo tám điểm đối xứng
 
-```cpp title="include/lab.hpp — tám điểm đối xứng"
-inline void appendSymmetricCirclePoints(std::vector<Point>& points, Point center, int x, int y) {
-    points.push_back({center.x + x, center.y + y});
-    points.push_back({center.x + y, center.y + x});
-    points.push_back({center.x - y, center.y + x});
-    points.push_back({center.x - x, center.y + y});
-    points.push_back({center.x - x, center.y - y});
-    points.push_back({center.x - y, center.y - x});
-    points.push_back({center.x + y, center.y - x});
-    points.push_back({center.x + x, center.y - y});
+Trong include/lab.hpp, dùng lại Point và sortUnique:
+
+
+```cpp title="include/lab.hpp — phản chiếu một offset quanh tâm"
+inline std::vector<Point> symmetricCirclePoints(Point center, int x, int y) {
+    std::vector<Point> points{
+        {center.x + x, center.y + y},
+        {center.x + y, center.y + x},
+        {center.x - y, center.y + x},
+        {center.x - x, center.y + y},
+        {center.x - x, center.y - y},
+        {center.x - y, center.y - x},
+        {center.x + y, center.y - x},
+        {center.x + x, center.y - y},
+    };
+    sortUnique(points);
+    return points;
 }
 ```
 
-Mọi tọa độ đều được cộng với `center`, vì vậy phần tính toán bên trong chỉ cần làm việc với độ lệch quanh gốc `(0,0)`.
+Hàm nhận offset, không nhận tọa độ tuyệt đối trên window. Cộng center vào từng hoán vị mới tạo được pixel trên ảnh.
 
-### Bước 2 — Khởi tạo điểm ngoài cùng bên phải
+Khi y = 0, tám công thức chỉ cho bốn vị trí khác nhau. Khi x = y, đổi chỗ X/Y cũng trùng. sortUnique bảo đảm mỗi bước chỉ chứa các điểm duy nhất.
 
-```cpp title="include/lab.hpp — trạng thái ban đầu của circle"
-int x = std::max(0, radius);
-int y = 0;
-int decision = 1 - x;
-```
+### Bước 2 — Đi qua một phần tám chu vi
 
-Bán kính âm được đổi thành 0; sau khi loại các điểm trùng, kết quả chỉ còn tâm. Với bán kính dương, thuật toán bắt đầu ở điểm ngoài cùng bên phải của đường tròn.
+Mỗi bản ghi giữ offset, decision trước bước và các điểm phản chiếu:
 
-### Bước 3 — Tiến cho tới đường chéo 45 độ
 
-```cpp title="include/lab.hpp — vòng lặp midpoint circle"
-while (x >= y) {
-    appendSymmetricCirclePoints(points, center, x, y);
-    ++y;
-    if (decision <= 0) {
-        decision += 2 * y + 1;
-    } else {
-        --x;
-        decision += 2 * (y - x) + 1;
-    }
-}
-```
-
-Vòng lặp chỉ chạy khi `x >= y`. Sau đường chéo, những điểm mới sẽ trùng với các hoán vị đã thêm. Nếu `decision <= 0`, thuật toán giữ X và chỉ tăng Y; nếu `decision > 0`, nó giảm X đồng thời tăng Y.
-
-### Bước 4 — Loại các điểm trùng do đối xứng
-
-```cpp title="include/lab.hpp — kết thúc circle"
-std::sort(points.begin(), points.end());
-points.erase(std::unique(points.begin(), points.end()), points.end());
-return points;
-```
-
-Việc sắp xếp rồi loại trùng còn làm thứ tự kết quả ổn định giữa các lần chạy, thuận tiện cho kiểm thử và quan sát bằng debugger.
-
-### Bước 5 — Vẽ đường tròn lên framebuffer
-
-```cpp title="src/main.cpp — vẽ đường tròn ở tâm cửa sổ"
-const lab::Point canvasCenter{
-    kCanvasWidth / 2,
-    kCanvasHeight / 2,
+```cpp title="include/lab.hpp — dữ liệu một bước midpoint"
+struct CircleStep {
+    int x{};
+    int y{};
+    int decision{};
+    std::vector<Point> points;
 };
-for (lab::Point point : lab::circle(canvasCenter, 110)) {
-    putPixel(pixels, point, rgba(49, 87, 228));
+```
+
+
+```cpp title="include/lab.hpp — toàn bộ vòng lặp midpoint"
+inline std::vector<CircleStep> circleSteps(Point center, int radius) {
+    if (!validPoint(center) || radius < 0 || radius > 256) {
+        return {};
+    }
+    int x = radius;
+    int y = 0;
+    int decision = 1 - radius;
+    std::vector<CircleStep> steps;
+    while (x >= y) {
+        steps.push_back({x, y, decision, symmetricCirclePoints(center, x, y)});
+        ++y;
+        if (decision < 0) {
+            decision += 2 * y + 1;
+        } else {
+            --x;
+            decision += 2 * (y - x) + 1;
+        }
+    }
+    return steps;
 }
 ```
 
-Đường tròn dùng cùng `putPixel`, vì vậy những điểm nằm ngoài cửa sổ được bỏ qua theo đúng quy tắc đã áp dụng cho mọi primitive khác.
+Đọc theo đúng thứ tự đã suy ra: lưu trạng thái → tăng y → xét decision cũ → cập nhật decision và x nếu cần. Không đưa công thức cập nhật lên trước ++y mà vẫn dùng cùng biểu thức.
+
+Bán kính hợp lệ là 0–256. Bán kính âm hoặc quá giới hạn trả kết quả rỗng, không bị tự đổi thành một hình khác. Với radius = 0, vòng lặp đầu tạo tâm; sau đó dừng, không cần một thuật toán riêng.
+
+### Bước 3 — Gộp thành đường viền hoàn chỉnh
+
+
+```cpp title="include/lab.hpp — lấy tập pixel của cả đường tròn"
+inline std::vector<Point> circle(Point center, int radius) {
+    std::vector<Point> points;
+    for (const CircleStep& step : circleSteps(center, radius)) {
+        points.insert(points.end(), step.points.begin(), step.points.end());
+    }
+    sortUnique(points);
+    return points;
+}
+```
+
+sortUnique ở đây loại trùng **giữa các bước**, ngoài bước loại trùng bên trong từng phép phản chiếu. Thứ tự sau sắp xếp không phải thứ tự chạy quanh chu vi; cần quan sát diễn tiến thì đọc circleSteps.
+
+Với r = 1, đường viền có bốn điểm ngoài cùng. Nếu dùng `decision <= 0`, thuật toán còn thêm bốn điểm chéo: ảnh nhỏ này giúp phát hiện khác biệt mà đường tròn lớn dễ che đi.
+
+### Bước 4 — Tô đặc bằng độ rộng của từng hàng
+
+Để hình đặc chứa đúng đường viền đã tạo, ta tìm pixel xa tâm nhất trên mỗi hàng. Nếu hàng có extent = 2 thì tô từ center.x−2 tới center.x+2.
+
+
+```cpp title="include/lab.hpp — tô mọi hàng tới viền midpoint"
+inline std::vector<Point> filledCircle(Point center, int radius) {
+    const auto outline = circle(center, radius);
+    if (outline.empty()) {
+        return {};
+    }
+    std::vector<int> extents(static_cast<std::size_t>(2 * radius + 1), -1);
+    for (Point point : outline) {
+        const std::size_t row = static_cast<std::size_t>(point.y - center.y + radius);
+        extents[row] = std::max(extents[row], std::abs(point.x - center.x));
+    }
+
+    std::vector<Point> points;
+    for (int row = 0; row <= 2 * radius; ++row) {
+        const int extent = extents[static_cast<std::size_t>(row)];
+        for (int x = center.x - extent; x <= center.x + extent; ++x) {
+            points.push_back({x, center.y - radius + row});
+        }
+    }
+    return points;
+}
+```
+
+extents có 2r + 1 phần tử, tương ứng các hàng từ center.y−r tới center.y+r. Ban đầu −1 nghĩa là chưa có điểm biên. Các pixel outline cập nhật độ vươn xa nhất bằng max.
+
+Lượt duyệt cuối tạo một span liên tục trên mỗi hàng. Các hàng khác nhau có Y khác nhau nên không lặp pixel; lần này không cần sortUnique cho kết quả tô.
+
+Một ví dụ quan trọng với r = 2:
+
+| Độ lệch Y | Bề rộng hàng theo viền midpoint |
+|---:|---:|
+| −2 | 3 |
+| −1 | 5 |
+| 0 | 5 |
+| 1 | 5 |
+| 2 | 3 |
+
+Tổng là **21 pixel**, còn đường viền có 12 pixel. Brush Project 03 dùng điều kiện tâm pixel nằm trong đĩa, `dx² + dy² <= r²`, nên cùng r = 2 chỉ có **13 pixel**. Hai kết quả dùng hai quy tắc khác nhau, không phải sai số do Canvas hoặc SDL.
+
+Ở đây ta chọn tô tới viền midpoint để drawCircle/fillCircle khớp nhau. Nếu muốn diện tích theo quy tắc tâm trong đĩa, hãy đặt tên và kiểm thử riêng; đừng thay âm thầm một hàm rồi vẫn cho rằng nó chứa cùng viền.
+
+### Bước 5 — Ghi vào ảnh và thêm công cụ Circle
+
+Trong include/drawing.hpp:
+
+
+```cpp title="include/drawing.hpp — vẽ viền đường tròn"
+inline void drawCircle(Framebuffer& framebuffer, Point center, int radius, std::uint32_t color) {
+    plotPoints(framebuffer, circle(center, radius), color);
+}
+```
+
+
+```cpp title="include/drawing.hpp — tô đặc đường tròn"
+inline void fillCircle(Framebuffer& framebuffer, Point center, int radius, std::uint32_t color) {
+    plotPoints(framebuffer, filledCircle(center, radius), color);
+}
+```
+
+Hai hàm dùng lại plotPoints/putPixel. Không có SDL_RenderPoint hoặc API circle ở giữa.
+
+Checkpoint 5 có Tool::Circle, phím 3 chọn công cụ này. A là tâm; tay nắm thứ hai ở bên phải tâm, cách radius pixel. Kéo tay nắm ấy đo khoảng cách tới tâm rồi làm tròn/giới hạn về 0–256. Phím [ và ] thay bán kính từng đơn vị; F đổi viền/đặc.
+
+Phần render chọn circle hoặc filledCircle giống cách rectangle chọn viền/đặc ở bài trước:
+
+
+```cpp title="include/view.hpp — vẽ kiểu circle đang chọn"
+if (scene.tool == Tool::Circle) {
+    if (scene.filled) {
+        frame.points = filledCircle(scene.a, scene.radius);
+    } else {
+        frame.points = circle(scene.a, scene.radius);
+    }
+    plotPoints(framebuffer, frame.points, kLineColor);
+}
+```
+
+Ảnh được xóa rồi dựng lại khi hình học đổi, nên kéo tâm không để lại vệt. Một phần hình có thể nằm ngoài ảnh; vector hình học vẫn chứa phần đó, còn putPixel chỉ ghi phần trong ảnh. Số pixel báo trên title là số pixel sinh ra, không nhất thiết là số ô còn nhìn thấy sau khi bị cắt.
+
+```bash title="Terminal — chạy checkpoint 5"
+cmake --build build --config Debug --target project_4_checkpoint_5 --parallel 2
+.\build\Debug\project_4_checkpoint_5.exe
+```
 
 ## Ghép các phần lại
 
-Vòng lặp midpoint chỉ tính khoảng một phần tám chu vi. Mỗi trạng thái tạo tối đa tám điểm đối xứng, rồi `sort`/`unique` loại các tọa độ bị lặp. Phần hiển thị không cần biết `decision`; nó chỉ nhận danh sách `Point` giống như với DDA, Bresenham và hình chữ nhật.
+Tâm/bán kính → circleSteps tính một octant → phản chiếu và loại trùng → circle tạo viền → filledCircle tạo các span khi cần → plotPoints ghi ảnh. Inspector vẫn đọc màu từ framebuffer, không tự đoán pixel theo công thức circle.
 
-Hãy đặt breakpoint ở đầu vòng `while`, dùng bán kính 5 rồi so `x`, `y`, `decision` với bảng trên. Y tăng sau mỗi bước; X chỉ giảm khi `decision` dương. Vòng lặp dừng gần đường chéo vì bảy phần còn lại đã được tạo bằng đối xứng.
+Thử r = 0, 1, 2, 5 trước khi tăng lên hàng trăm. Các trường hợp nhỏ có thể đếm tay nên hữu ích hơn việc chỉ nhìn một vòng tròn lớn có vẻ cân.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chỉ thêm bốn tổ hợp `(±x, ±y)`. Đường tròn sẽ thiếu các phần cần hoán đổi X với Y.
-2. Dừng vòng lặp khi `x > y` thay vì `x >= y`. Điểm trên đường chéo có thể bị bỏ và để lại khe giữa hai phần đối xứng.
-3. Bỏ bước loại trùng. Hình vẫn có vẻ đúng vì tô một pixel hai lần không đổi màu, nhưng số phần tử và mọi code giả định một tập điểm duy nhất đều sai.
+1. Đổi `decision < 0` thành `decision <= 0`. Với r = 1, kiểm lại số điểm và bốn ô chéo; so với quy tắc F(M) = decision + 1/4.
+2. Chỉ phản chiếu (±x,±y), bỏ các hoán vị X/Y. Đường tròn mất những phần gần trục dọc.
+3. Bỏ sortUnique. Hình có thể giống nhau nhưng tập kết quả chứa pixel lặp, làm sai số đếm.
+4. Trong filledCircle, chỉ ghi hai đầu mỗi hàng thay vì duyệt cả span. Hình không còn đặc dù đường viền vẫn đúng.
 
 ## Tự kiểm tra kết quả
 
-- Đường tròn có đủ đối xứng qua hai trục và hai đường chéo.
-- Bán kính 0 trả về đúng tâm.
-- Kết quả không chứa pixel trùng lặp.
-- Mọi pixel phản chiếu qua X/Y cũng tồn tại.
-- Thuật toán không duyệt toàn bộ hình vuông bao.
+- Circle ở tâm bất kỳ có đủ bốn điểm ngoài cùng, đối xứng qua hai trục và đường chéo.
+- r = 0 cho một điểm; r = 1 có viền bốn điểm; r = 2 có viền 12 và hình đặc 21 pixel.
+- Không trùng pixel; mỗi hàng hình đặc liên tục và chứa các pixel của viền tương ứng.
+- 3/F/[ và ] hoạt động trong SDL3; kéo được tâm/bán kính; resize không đổi hình học.
+- Bạn giải thích được vì sao hình đặc ở đây khác brush Project 03, thay vì chỉ nhớ con số 21.
 
 ## Bài tập mở rộng
 
-Hãy viết `filledCircle` bằng cách biến mỗi cặp `(x,y)` thành các đoạn ngang. Tô màu khác nhau cho tám phần để kiểm chứng phép đối xứng. Khi bán kính tăng, so sánh số lần lặp của midpoint với số pixel trong hình vuông bao.
+Viết một hàm tô theo điều kiện tâm pixel trong đĩa rồi so hai quy tắc ở r = 1, 2, 3. Tô màu các ô chỉ có ở một kết quả. Điều gì thay đổi khi bán kính lớn? Không dùng sự giống nhau ở kích thước lớn để bỏ qua khác biệt về định nghĩa.
 
-Bài cuối sẽ kiểm tra hình học trước, sau đó mới đo hiệu năng bằng một benchmark có `checksum` để phép tính không bị trình biên dịch loại bỏ.
+[Bài tiếp: kiểm chứng rồi mới đo tốc độ](/projects/tiny-2d-rasterizer/06-benchmark-validation).

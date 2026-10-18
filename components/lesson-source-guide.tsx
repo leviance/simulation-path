@@ -252,7 +252,7 @@ export async function LessonSourceGuide({
       <section className="source-reading-route" aria-labelledby="source-reading-route-title">
         <header>
           <span>03 / LẦN THEO CODE</span>
-          <h3 id="source-reading-route-title">Đọc ba phần này theo thứ tự</h3>
+          <h3 id="source-reading-route-title">Đọc các phần này theo thứ tự</h3>
           <p>
             Tìm biến hoặc hàm được nhắc ở mỗi bước, xem dữ liệu đi vào từ đâu và kết quả được dùng ở
             chỗ nào. Cách đọc này dễ theo dõi hơn việc đi từ dòng đầu đến dòng cuối của{" "}
