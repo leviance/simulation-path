@@ -2,6 +2,12 @@
 
 Repository được tổ chức để đủ 78 project không biến thành một ứng dụng có vài file trung tâm khổng lồ. Mỗi project sở hữu nội dung, metadata giảng dạy, metadata Canvas và source C++ của chính nó. Các registry chỉ chứa metadata nhẹ hoặc hàm `import()` và được sinh tự động.
 
+## Tài liệu tham chiếu roadmap
+
+[Product Specification v4 — 78 project](docs/specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md) là nguồn chuẩn về sản phẩm cuối, phạm vi, quy mô và tiêu chí nghiệm thu của từng project. Đọc phần tương ứng trước khi xây dựng hoặc review nội dung, source và mô phỏng.
+
+`course/roadmap.ts` là metadata triển khai cho tên, thứ tự và học phần trên website; `course/projects.json` quản lý catalog đã phát hành. Hai file này không thay thế đặc tả sản phẩm. Project đã phát hành hoặc đã qua tests không mặc nhiên được xem là đáp ứng toàn bộ spec.
+
 ## Cấu trúc chính
 
 ```text

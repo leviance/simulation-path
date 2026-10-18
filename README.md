@@ -55,7 +55,9 @@ Các project được xếp theo dependency. Mỗi phần dùng trực tiếp c�
 | Tự xây UI cho simulator                 |   65–72 | Widget tree, layout, markup, style, event binding và scripting nhỏ           |
 | Các project cầu nối tùy chọn            |   73–78 | Quaternion, BVH, thread pool, Fourier, Monte Carlo và floating point         |
 
-Roadmap đầy đủ, tên từng project và trạng thái phát hành nằm trong [`course/roadmap.ts`](./course/roadmap.ts) và được hiển thị tại trang `/roadmap` khi website chạy local.
+[Product Specification v4 — 78 project](./docs/specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md) là tài liệu tham chiếu chuẩn cho roadmap: sản phẩm cuối, phạm vi, quy mô, tương tác và tiêu chí nghiệm thu của từng project. Project 01–72 thuộc lộ trình chính; Project 73–78 là các nhánh cầu nối tùy chọn.
+
+Website hiển thị roadmap tại `/roadmap` khi chạy local. Metadata nằm trong [`course/roadmap.ts`](./course/roadmap.ts), còn catalog đã phát hành nằm trong [`course/projects.json`](./course/projects.json). Nội dung hiện có cần được đối chiếu với đặc tả khi review; trạng thái phát hành không đồng nghĩa đã đáp ứng toàn bộ yêu cầu sản phẩm.
 
 ## Cách học một project
 
