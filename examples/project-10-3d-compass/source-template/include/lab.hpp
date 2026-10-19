@@ -1,17 +1,12 @@
 #pragma once
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <utility>
-
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 6
+#define LAB_CHECKPOINT 7
 #endif
+#include <algorithm>
+#include <cmath>
 
 namespace lab {
-#if LAB_CHECKPOINT >= 1
+// Vec3 luôn ở world space, không chứa pixel hay góc camera.
 struct Vec2 {
     double x{};
     double y{};
@@ -23,80 +18,87 @@ struct Vec3 {
     double z{};
 };
 
+inline bool finite(Vec3 value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
 inline Vec3 add(Vec3 left, Vec3 right) {
     return {left.x + right.x, left.y + right.y, left.z + right.z};
+}
+
+inline Vec3 subtract(Vec3 left, Vec3 right) {
+    return {left.x - right.x, left.y - right.y, left.z - right.z};
 }
 
 inline Vec3 scale(Vec3 vector, double scalar) {
     return {vector.x * scalar, vector.y * scalar, vector.z * scalar};
 }
 
-// Đây là phép chiếu axonometric để vẽ sơ đồ, chưa phải perspective camera.
-inline Vec2 projectIsometric(Vec3 point) {
-    constexpr double cos30 = 0.86602540378443864676;
-    return {
-        (point.x - point.z) * cos30,
-        point.y + (point.x + point.z) * 0.5,
-    };
-}
-#endif
-
-#if LAB_CHECKPOINT >= 2
-struct Triangle {
-    Vec3 a{};
-    Vec3 b{};
-    Vec3 c{};
-};
-
-inline Vec3 subtract(Vec3 left, Vec3 right) {
-    return {left.x - right.x, left.y - right.y, left.z - right.z};
-}
-
-inline std::pair<Vec3, Vec3> triangleEdges(const Triangle& triangle) {
-    return {
-        subtract(triangle.b, triangle.a),
-        subtract(triangle.c, triangle.a),
-    };
-}
-
-inline Vec3 triangleCentroid(const Triangle& triangle) {
-    return scale(add(add(triangle.a, triangle.b), triangle.c), 1.0 / 3.0);
-}
-#endif
-
-#if LAB_CHECKPOINT >= 3
-inline Vec3 cross(Vec3 left, Vec3 right) {
-    return {
-        left.y * right.z - left.z * right.y,
-        left.z * right.x - left.x * right.z,
-        left.x * right.y - left.y * right.x,
-    };
-}
-
-inline Vec3 triangleRawNormal(const Triangle& triangle) {
-    const auto [edgeAB, edgeAC] = triangleEdges(triangle);
-    return cross(edgeAB, edgeAC);
-}
-#endif
-
-#if LAB_CHECKPOINT >= 4
 inline double dot(Vec3 left, Vec3 right) {
     return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
 inline double magnitude(Vec3 vector) {
-    return std::sqrt(dot(vector, vector));
+    return std::hypot(vector.x, vector.y, vector.z);
 }
 
-inline Vec3 normalize(Vec3 vector, double epsilon = 1e-9) {
+inline Vec3 normalize(Vec3 vector) {
     const double length = magnitude(vector);
-    if (length <= epsilon) {
+    if (!std::isfinite(length) || length == 0.0) {
         return {};
     }
     return scale(vector, 1.0 / length);
 }
 
+#if LAB_CHECKPOINT >= 2
+struct Triangle {
+    Vec3 p0{-1.0, -1.0, 0.0};
+    Vec3 p1{1.0, -1.0, 0.0};
+    Vec3 p2{0.0, 1.0, 1.0};
+};
+
+struct Edges {
+    Vec3 a{};
+    Vec3 b{};
+};
+
+inline Edges triangleEdges(const Triangle& triangle) {
+    return {subtract(triangle.p1, triangle.p0), subtract(triangle.p2, triangle.p0)};
+}
+
+inline Vec3 triangleCentroid(const Triangle& triangle) {
+    return scale(add(add(triangle.p0, triangle.p1), triangle.p2), 1.0 / 3.0);
+}
+#endif
+
+#if LAB_CHECKPOINT >= 3
+inline Vec3 cross(Vec3 left, Vec3 right) {
+    return {left.y * right.z - left.z * right.y, left.z * right.x - left.x * right.z, left.x * right.y - left.y * right.x};
+}
+
+inline Vec3 triangleRawNormal(const Triangle& triangle) {
+    const Edges edges = triangleEdges(triangle);
+    return cross(edges.a, edges.b);
+}
+
+// Miền editor: mỗi tọa độ trong [-2,2]. Tách ngưỡng diện tích và ngưỡng góc.
+inline bool normalHasDirection(const Triangle& triangle) {
+    const Edges edges = triangleEdges(triangle);
+    const double lengthA = magnitude(edges.a);
+    const double lengthB = magnitude(edges.b);
+    const double crossLength = magnitude(triangleRawNormal(triangle));
+    if (lengthA == 0.0 || lengthB == 0.0 || crossLength <= 1e-10) {
+        return false;
+    }
+    return crossLength / (lengthA * lengthB) > 1e-6;
+}
+#endif
+
+#if LAB_CHECKPOINT >= 4
 inline Vec3 triangleUnitNormal(const Triangle& triangle) {
+    if (!normalHasDirection(triangle)) {
+        return {};
+    }
     return normalize(triangleRawNormal(triangle));
 }
 
@@ -107,23 +109,23 @@ inline double triangleArea(const Triangle& triangle) {
 
 #if LAB_CHECKPOINT >= 5
 inline Triangle reverseWinding(const Triangle& triangle) {
-    return {triangle.a, triangle.c, triangle.b};
+    return {triangle.p0, triangle.p2, triangle.p1};
 }
 
-inline double facingAmount(const Triangle& triangle, Vec3 viewDirection) {
-    return dot(triangleUnitNormal(triangle), normalize(viewDirection));
+// towardViewer trỏ từ centroid tới eye, không phải hướng từ eye nhìn vào cảnh.
+inline double facingAmount(const Triangle& triangle, Vec3 towardViewer) {
+    return dot(triangleUnitNormal(triangle), normalize(towardViewer));
 }
 #endif
 
-#if LAB_CHECKPOINT >= 6
-inline bool isDegenerate(const Triangle& triangle, double epsilon = 1e-9) {
-    return magnitude(triangleRawNormal(triangle)) <= epsilon;
-}
-
+#if LAB_CHECKPOINT >= 7
 inline double orthogonalityError(const Triangle& triangle) {
-    const auto [edgeAB, edgeAC] = triangleEdges(triangle);
-    const Vec3 normal = triangleRawNormal(triangle);
-    return std::max(std::abs(dot(normal, edgeAB)), std::abs(dot(normal, edgeAC)));
+    if (!normalHasDirection(triangle)) {
+        return 0.0;
+    }
+    const Edges edges = triangleEdges(triangle);
+    const Vec3 unit = triangleUnitNormal(triangle);
+    return std::max(std::abs(dot(unit, normalize(edges.a))), std::abs(dot(unit, normalize(edges.b))));
 }
 #endif
 } // namespace lab

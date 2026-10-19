@@ -1,44 +1,45 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
     label: "TRANSFORM LAB",
-    title: "Một điểm đi qua các phép biến đổi như thế nào?",
+    title: "Một hình vuông đi qua những phép biến đổi nào?",
     description:
-      "Điều chỉnh hình vuông và theo dõi local point, các bước trung gian, vector cơ sở, ma trận ghép cùng determinant trên một hệ trục.",
+      "Hình gốc, hình sau biến đổi và basis dùng chung world unit; từ bài 6 cả lưới local cũng đi qua ma trận.",
   },
   modes: {
     "transform-local": {
-      title: "Local space giúp hình vuông giữ dữ liệu gốc ra sao?",
-      description:
-        "Kéo gốc của vật thể nhưng giữ nguyên bốn local point; world point chỉ được tính khi chuẩn bị vẽ.",
+      title: "Vẽ hình vuông từ bốn đỉnh local",
+      description: "Dựng hình nhìn thấy được trước: đỉnh, cạnh, basis và đổi world/screen.",
     },
     "transform-scale": {
-      title: "Scale thay đổi từng trục và hướng của hình thế nào?",
-      description:
-        "Đổi scale X/Y, thử giá trị 0 và số âm rồi quan sát kích thước, phép phản chiếu cùng determinant.",
+      title: "Co giãn, phản chiếu và ép phẳng hình",
+      description: "Giữ nguyên dữ liệu gốc, đổi scaleX/Y và nhìn cả scale âm lẫn scale 0.",
     },
     "transform-rotation": {
-      title: "Sin và cos xoay hai vector cơ sở thế nào?",
-      description:
-        "Điều chỉnh góc để theo dõi trục X, trục Y và bốn đỉnh cùng quay mà độ dài cạnh không đổi.",
+      title: "Xoay hình từ hai vector cơ sở",
+      description: "Suy công thức từ sin/cos, giữ góc trong radian và kiểm độ dài.",
     },
     "transform-shear": {
-      title: "Shear làm nghiêng hình nhưng vẫn giữ các cạnh song song ra sao?",
-      description:
-        "Điều chỉnh shear X/Y và quan sát một tọa độ nhận thêm một phần của tọa độ còn lại.",
+      title: "Làm xiên hình rồi tự viết Mat2",
+      description: "Tính shear đồng thời, đọc hai cột cơ sở và nhân ma trận 2×2.",
     },
     "transform-matrix": {
-      title: "Ma trận ghép thay thế chuỗi hàm như thế nào?",
-      description:
-        "Theo dõi một đỉnh qua từng bước và so kết quả tuần tự với kết quả từ một ma trận 3×3 duy nhất.",
+      title: "Dịch chuyển bằng Mat3: điểm khác hướng ở đâu?",
+      description: "Tự viết Mat3 và phép nhân; translation nằm ở cột cuối, không phải hàng cuối.",
     },
     "transform-order": {
-      title: "Vì sao đổi thứ tự lại tạo ra một hình khác?",
+      title: "Đổi thứ tự và biến đổi cả lưới",
+      description: "So T·R·H·S với T·S·H·R bằng cùng tham số, không tráo slider.",
+    },
+    "transform-input": {
+      title: "Tự làm slider trong ứng dụng SDL3",
       description:
-        "Chuyển giữa hai thứ tự ghép, so vị trí các đỉnh và dùng determinant để kiểm tra tỉ lệ diện tích.",
+        "Vẽ track/nút kéo, hit-test, capture và đổi input sang tọa độ logic đúng một lần.",
+    },
+    "transform-full": {
+      title: "Hoàn thiện editor và kiểm chứng kết quả",
+      description: "Kiểm bằng số biết trước, hai cách tính độc lập, diện tích có dấu và CTest.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

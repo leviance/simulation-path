@@ -85,7 +85,7 @@ test("roadmap contains exactly 78 ordered projects and correct release states", 
   );
   assert.match(
     compactManifestSource,
-    /prerequisites: \["Project 02 — delta time", "Project 05 — đổi world\/screen space", "Project 06 — vector, độ dài và mouse drag"\]/,
+    /prerequisites: \["Project 02 — delta time và vòng lặp theo thời gian", "Project 04 — tự vẽ line\/circle trên framebuffer", "Project 05–06 — đổi world\/screen và kéo điểm"\]/,
   );
   assert.match(
     compactManifestSource,

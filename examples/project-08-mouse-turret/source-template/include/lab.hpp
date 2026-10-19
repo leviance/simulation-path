@@ -1,30 +1,25 @@
 #pragma once
-
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 6
+#define LAB_CHECKPOINT 7
 #endif
-
-#if LAB_CHECKPOINT >= 1
+#include <algorithm>
 #include <cmath>
 
 namespace lab {
-
-// Các phép toán được giữ độc lập với SDL để có thể kiểm tra bằng CTest.
-inline constexpr double kPi = 3.14159265358979323846;
-inline constexpr double kTau = 2.0 * kPi;
-inline constexpr double kDirectionEpsilon = 1e-12;
-
 struct Vec2 {
     double x{};
     double y{};
 };
+inline constexpr double kPi = 3.14159265358979323846;
+inline constexpr double kTau = 2.0 * kPi;
 
-inline Vec2 add(Vec2 left, Vec2 right) {
-    return {left.x + right.x, left.y + right.y};
+#if LAB_CHECKPOINT >= 0
+inline Vec2 add(Vec2 a, Vec2 b) {
+    return {a.x + b.x, a.y + b.y};
 }
 
-inline Vec2 subtract(Vec2 left, Vec2 right) {
-    return {left.x - right.x, left.y - right.y};
+inline Vec2 subtract(Vec2 a, Vec2 b) {
+    return {a.x - b.x, a.y - b.y};
 }
 
 inline Vec2 scale(Vec2 vector, double scalar) {
@@ -36,40 +31,50 @@ inline double length(Vec2 vector) {
 }
 
 inline bool hasDirection(Vec2 vector) {
-    const double magnitude = length(vector);
-    return std::isfinite(magnitude) && magnitude > kDirectionEpsilon;
+    return std::isfinite(vector.x) && std::isfinite(vector.y) && (vector.x != 0.0 || vector.y != 0.0);
 }
 
+// Từ Project 06: scale trước để không bình phương số quá lớn/nhỏ.
 inline Vec2 normalize(Vec2 vector) {
-    const double magnitude = length(vector);
-    if (!std::isfinite(magnitude) || magnitude <= kDirectionEpsilon) {
+    if (!hasDirection(vector)) {
         return {};
     }
-    return scale(vector, 1.0 / magnitude);
+    const double largest = std::max(std::abs(vector.x), std::abs(vector.y));
+    const Vec2 scaled{vector.x / largest, vector.y / largest};
+    const double magnitude = length(scaled);
+    return {scaled.x / magnitude, scaled.y / magnitude};
 }
 
 inline double normalizeAngle(double angle) {
     if (!std::isfinite(angle)) {
         return 0.0;
     }
-    double normalized = std::fmod(angle, kTau);
-    if (normalized < 0.0) {
-        normalized += kTau;
+    double result = std::fmod(angle, kTau);
+    if (result < 0.0) {
+        result += kTau;
     }
-    if (normalized >= kTau) {
+    if (result >= kTau || result == 0.0) {
         return 0.0;
     }
-    return normalized;
+    return result;
 }
 
 inline Vec2 directionFromAngle(double angle) {
     return {std::cos(angle), std::sin(angle)};
 }
+#endif
 
 #if LAB_CHECKPOINT >= 2
-// Dot product thu hai vector thành một scalar.
-inline double dot(Vec2 left, Vec2 right) {
-    return left.x * right.x + left.y * right.y;
+inline double dot(Vec2 a, Vec2 b) {
+    return a.x * b.x + a.y * b.y;
+}
+
+// Normalize từng vector, không chia cho tích hai độ dài có thể overflow.
+inline double cosineBetween(Vec2 a, Vec2 b) {
+    if (!hasDirection(a) || !hasDirection(b)) {
+        return 0.0;
+    }
+    return std::clamp(dot(normalize(a), normalize(b)), -1.0, 1.0);
 }
 #endif
 
@@ -78,32 +83,18 @@ inline double clampCosine(double value) {
     if (!std::isfinite(value)) {
         return 0.0;
     }
-    if (value < -1.0) {
-        return -1.0;
-    }
-    if (value > 1.0) {
-        return 1.0;
-    }
-    return value;
+    return std::clamp(value, -1.0, 1.0);
 }
 
-inline double cosineBetween(Vec2 left, Vec2 right) {
-    if (!hasDirection(left) || !hasDirection(right)) {
+inline double angleBetween(Vec2 a, Vec2 b) {
+    if (!hasDirection(a) || !hasDirection(b)) {
         return 0.0;
     }
-    return clampCosine(dot(left, right) / (length(left) * length(right)));
-}
-
-inline double angleBetween(Vec2 left, Vec2 right) {
-    if (!hasDirection(left) || !hasDirection(right)) {
-        return 0.0;
-    }
-    return std::acos(cosineBetween(left, right));
+    return std::acos(clampCosine(cosineBetween(a, b)));
 }
 #endif
 
 #if LAB_CHECKPOINT >= 4
-// Projection và rejection tách vector thành hai thành phần vuông góc.
 inline double scalarProjection(Vec2 vector, Vec2 onto) {
     if (!hasDirection(onto)) {
         return 0.0;
@@ -125,52 +116,44 @@ inline Vec2 rejection(Vec2 vector, Vec2 onto) {
 #endif
 
 #if LAB_CHECKPOINT >= 5
-// crossZ giữ dấu trái/phải cần thiết cho góc quay.
-inline double crossZ(Vec2 left, Vec2 right) {
-    return left.x * right.y - left.y * right.x;
+inline double crossZ(Vec2 a, Vec2 b) {
+    return a.x * b.y - a.y * b.x;
 }
 
 inline double signedAngleBetween(Vec2 from, Vec2 to) {
     if (!hasDirection(from) || !hasDirection(to)) {
         return 0.0;
     }
-    const Vec2 fromUnit = normalize(from);
-    const Vec2 toUnit = normalize(to);
-    return std::atan2(crossZ(fromUnit, toUnit), dot(fromUnit, toUnit));
+    const Vec2 a = normalize(from);
+    const Vec2 b = normalize(to);
+    const double sine = crossZ(a, b);
+    const double cosine = dot(a, b);
+    // Đối nhau chính xác: hai đường đều ngắn; chọn chiều dương, kể cả sine=-0.
+    if (sine == 0.0 && cosine < 0.0) {
+        return kPi;
+    }
+    return std::atan2(sine, cosine);
 }
 
 inline double rotateTowards(double currentAngle, Vec2 targetDirection, double maximumStep) {
+    const double current = normalizeAngle(currentAngle);
     if (!std::isfinite(maximumStep) || maximumStep <= 0.0 || !hasDirection(targetDirection)) {
-        return normalizeAngle(currentAngle);
+        return current;
     }
-    const Vec2 currentDirection = directionFromAngle(currentAngle);
-    const double remainingAngle = signedAngleBetween(currentDirection, targetDirection);
-    double step = remainingAngle;
-    if (step < -maximumStep) {
-        step = -maximumStep;
-    }
-    if (step > maximumStep) {
-        step = maximumStep;
-    }
-    return normalizeAngle(currentAngle + step);
+    const double remaining = signedAngleBetween(directionFromAngle(current), targetDirection);
+    const double step = std::clamp(remaining, -maximumStep, maximumStep);
+    return normalizeAngle(current + step);
 }
 #endif
 
 #if LAB_CHECKPOINT >= 6
-inline bool isWithinViewCone(Vec2 forward, Vec2 toTarget, double halfAngle) {
-    if (!hasDirection(forward) || !hasDirection(toTarget) || !std::isfinite(halfAngle)) {
+inline bool isWithinViewCone(Vec2 forward, Vec2 targetDirection, double halfAngle) {
+    if (!hasDirection(forward) || !hasDirection(targetDirection) || !std::isfinite(halfAngle)) {
         return false;
     }
-    double safeHalfAngle = halfAngle;
-    if (safeHalfAngle < 0.0) {
-        safeHalfAngle = 0.0;
-    }
-    if (safeHalfAngle > kPi) {
-        safeHalfAngle = kPi;
-    }
-    return cosineBetween(forward, toTarget) >= std::cos(safeHalfAngle);
+    const double safeHalfAngle = std::clamp(halfAngle, 0.0, kPi);
+    // Dung sai cosine để một điểm đúng biên không chớp màu bởi sai số số thực.
+    return cosineBetween(forward, targetDirection) >= std::cos(safeHalfAngle) - 1e-12;
 }
 #endif
-
 } // namespace lab
-#endif

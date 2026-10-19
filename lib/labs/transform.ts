@@ -14,6 +14,27 @@ export type Matrix3 = readonly [
 
 export type TransformOrder = "scale-shear-rotate" | "rotate-shear-scale";
 
+export type Matrix2 = readonly [number, number, number, number];
+
+export function transformVector2(matrix: Matrix2, vector: Point): Point {
+  return {
+    x: matrix[0] * vector.x + matrix[1] * vector.y,
+    y: matrix[2] * vector.x + matrix[3] * vector.y,
+  };
+}
+
+export function multiplyMatrices2(left: Matrix2, right: Matrix2): Matrix2 {
+  const result = [0, 0, 0, 0];
+  for (let row = 0; row < 2; row++) {
+    for (let column = 0; column < 2; column++) {
+      for (let index = 0; index < 2; index++) {
+        result[row * 2 + column] += left[row * 2 + index] * right[index * 2 + column];
+      }
+    }
+  }
+  return result as unknown as Matrix2;
+}
+
 export interface TransformParameters {
   scaleX: number;
   scaleY: number;
@@ -78,13 +99,14 @@ export function multiplyMatrices(left: Matrix3, right: Matrix3): Matrix3 {
 }
 
 export function transformPoint(matrix: Matrix3, point: Point): Point {
+  // Affine contract: last row is [0,0,1]; no projective divide or silent fallback.
   const x = matrix[0] * point.x + matrix[1] * point.y + matrix[2];
   const y = matrix[3] * point.x + matrix[4] * point.y + matrix[5];
-  const w = matrix[6] * point.x + matrix[7] * point.y + matrix[8];
-  if (!Number.isFinite(w) || Math.abs(w) <= 1e-12) {
-    return { x: 0, y: 0 };
-  }
-  return { x: x / w, y: y / w };
+  return { x, y };
+}
+
+export function transformDirection(matrix: Matrix3, direction: Point): Point {
+  return transformVector2([matrix[0], matrix[1], matrix[3], matrix[4]], direction);
 }
 
 export function composeTransform(parameters: TransformParameters, order: TransformOrder): Matrix3 {

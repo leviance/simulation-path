@@ -1,144 +1,101 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Dựng tam giác và hai vector cạnh
+# Vẽ tam giác và hai vector cạnh
 
 ## Vấn đề cần giải quyết
 
-La bàn đã giúp ta nhìn thấy ba chiều, nhưng chưa có bề mặt để tính normal. Ở checkpoint này, ta sẽ đưa tam giác ABC lên màn hình và cho phép chỉnh từng đỉnh. Quan trọng hơn, ta phải biến ba point thành đúng hai vector mà cross product cần dùng.
-
-Một lỗi dễ mắc là lấy ba cạnh `AB`, `BC`, `CA` rồi chọn tùy ý hai cạnh. Công thức normal thuận tiện nhất dùng hai vector **cùng xuất phát từ A**: `AB` và `AC`. Hai vector này được tính từ point, không phải dữ liệu lưu song song.
+Ta đã nhìn thấy ba trục. Giờ thêm một tam giác và hai vector xuất phát từ cùng điểm để chuẩn bị cho cross product. Chưa vẽ normal ở bài này; cần kiểm hai đầu vào trước.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với ba point:
+Để không lẫn tên điểm với tên vector, ta gọi các đỉnh là P0/P1/P2. Hai cạnh là:
 
 $$
-A=(a_x,a_y,a_z),\quad B=(b_x,b_y,b_z),\quad C=(c_x,c_y,c_z)
+A=P_1-P_0,\qquad B=P_2-P_0.
 $$
 
-hai vector cạnh là:
+A và B là độ dời, không phải tọa độ điểm P1/P2. Nếu P0 thay đổi thì cả hai vector đều thay đổi. Nếu dịch **cả ba điểm** cùng một độ dời, A/B giữ nguyên.
 
-$$
-\overrightarrow{AB}=B-A
-$$
-
-$$
-\overrightarrow{AC}=C-A
-$$
-
-Ví dụ, nếu `A=(1,1,0)` và `B=(3,2,4)` thì `AB=(2,1,4)`. Vector đó có nghĩa “đi từ A tới B”, không phải vị trí của B.
+Mỗi tọa độ đỉnh được giới hạn [-2,2] world. Giới hạn này giữ editor dễ quan sát, không phải điều kiện toán học để một tam giác tồn tại.
 
 <InteractiveLab demo="normal" mode="normal-edges" />
 
-Chọn A rồi kéo nó. Cả `AB` lẫn `AC` cùng thay đổi vì chúng dùng chung điểm đầu. Chọn B thì chỉ `AB` đổi; chọn C thì chỉ `AC` đổi. Đây là cách nhanh nhất để kiểm tra ta đã dựng đúng dữ liệu.
-
 ## Viết code từng bước
 
-### Bước 1 — Lưu ba đỉnh và thêm phép trừ Vec3
+### Bước 1 — Lưu ba đỉnh, không lưu bản sao hai cạnh
 
-`Triangle` chỉ giữ dữ liệu gốc. Chưa có `edgeAB`, `normal` hay diện tích bên trong struct.
-
-```cpp title="include/lab.hpp — dữ liệu tam giác và phép trừ"
+```cpp title="include/lab.hpp — ba điểm có thể chỉnh lúc chạy"
 struct Triangle {
-    Vec3 a{};
-    Vec3 b{};
-    Vec3 c{};
+    Vec3 p0{-1.0, -1.0, 0.0};
+    Vec3 p1{1.0, -1.0, 0.0};
+    Vec3 p2{0.0, 1.0, 1.0};
 };
+```
 
-inline Vec3 subtract(Vec3 left, Vec3 right) {
-    return {left.x - right.x, left.y - right.y, left.z - right.z};
+```cpp title="include/lab.hpp — suy lại hai cạnh từ cùng P0"
+inline Edges triangleEdges(const Triangle& triangle) {
+    return {subtract(triangle.p1, triangle.p0), subtract(triangle.p2, triangle.p0)};
 }
 ```
 
-Không lưu kết quả dẫn xuất giúp ta tránh một câu hỏi khó chịu: sau khi kéo C, ai chịu trách nhiệm cập nhật `edgeAC` cũ?
+Edges có hai trường a/b. Không dùng P1 trực tiếp thay cho A trừ khi P0 đúng là zero; lỗi đó thường bị che bởi ví dụ có gốc ở (0,0,0).
 
-### Bước 2 — Tính hai cạnh cùng gốc
+### Bước 2 — Chọn một đỉnh và đổi dữ liệu world
 
-`std::pair` trả hai vector theo đúng thứ tự AB rồi AC. Structured binding ở chỗ gọi giúp tên vẫn rõ ràng.
-
-```cpp title="include/lab.hpp — dựng AB và AC từ ba point"
-inline std::pair<Vec3, Vec3> triangleEdges(const Triangle& triangle) {
-    return {
-        subtract(triangle.b, triangle.a),
-        subtract(triangle.c, triangle.a),
-    };
+```cpp title="include/scene.hpp — trả đúng đỉnh đang chọn"
+inline Vec3& selectedVertex(Scene& scene) {
+    if (scene.selected == 0) {
+        return scene.triangle.p0;
+    }
+    if (scene.selected == 1) {
+        return scene.triangle.p1;
+    }
+    return scene.triangle.p2;
 }
 ```
 
-Hàm nhận `const Triangle&` vì nó chỉ đọc dữ liệu. Hai vector được tạo lại mỗi lần gọi và luôn khớp với frame hiện tại.
-
-### Bước 3 — Tạo một tam giác nhìn rõ cả ba chiều
-
-Đặt dữ liệu khởi đầu trong một hàm riêng để phím Reset và lúc setup dùng cùng giá trị.
-
-```cpp title="src/main.cpp — trạng thái ban đầu của tam giác"
-lab::Triangle defaultTriangle() {
-    return {
-        {-1.25, -0.75, 0.25},
-        {1.20, -0.45, -0.35},
-        {0.10, 1.15, 0.75},
-    };
+```cpp title="include/scene.hpp — clamp từng thành phần sau input"
+inline void moveVertex(Scene& scene, Vec3 delta) {
+    if (!finite(delta)) {
+        return;
+    }
+    Vec3& vertex = selectedVertex(scene);
+    vertex.x = std::clamp(vertex.x + delta.x, -2.0, 2.0);
+    vertex.y = std::clamp(vertex.y + delta.y, -2.0, 2.0);
+    vertex.z = std::clamp(vertex.z + delta.z, -2.0, 2.0);
 }
 ```
 
-Ba giá trị Z không bằng nhau, vì vậy việc đổi Z sẽ có hiệu quả nhìn thấy được trên sơ đồ.
+Nhấn 1/2/3 chọn P0/P1/P2. Phím mũi tên đổi X/Y mỗi lần 0.1, PageUp/Down đổi Z. Dấu Y vẫn là world Y-up; không đảo input chỉ vì screen Y hướng xuống.
 
-### Bước 4 — Chọn đỉnh và chỉnh từng thành phần
+### Bước 3 — Nối cạnh và vẽ hai vector
 
-Ta dùng `1`, `2`, `3` để chọn A, B, C. Các phím mũi tên đổi X/Y; Q và E đổi Z.
+Trong renderScene của checkpoint 02, line3D nối P0→P1→P2→P0. Hai arrow3D đi từ P0 đến P0+A và P0+B. A màu cam, B cyan; đỉnh đang chọn màu vàng. Source checkpoint có đầy đủ đoạn gọi này, cùng marker và nhãn P0/P1/P2.
 
-```cpp title="src/main.cpp — điều khiển đỉnh đang chọn"
-if (event.key.key >= SDLK_1 && event.key.key <= SDLK_3) {
-    selected = int(event.key.key - SDLK_1);
-}
-lab::Vec3& vertex = selectedVertex(triangle, selected);
-if (event.key.key == SDLK_LEFT) {
-    vertex.x -= 0.1;
-}
-if (event.key.key == SDLK_RIGHT) {
-    vertex.x += 0.1;
-}
-```
-
-Q/E được xử lý cùng kiểu:
-
-```cpp title="src/main.cpp — chỉnh thành phần Z và reset"
-if (event.key.key == SDLK_Q) {
-    vertex.z -= 0.1;
-}
-if (event.key.key == SDLK_E) {
-    vertex.z += 0.1;
-}
-if (!event.key.repeat && event.key.key == SDLK_R) {
-    triangle = defaultTriangle();
-    selected = 0;
-}
-```
-
-Kéo chuột chỉ thay X/Y và giữ nguyên Z. Nhờ vậy cùng một `Triangle` có thể được điều khiển bằng chuột lẫn bàn phím mà không có hai trạng thái tách rời.
+Cùng một hàm line3D vẽ cả tam giác lẫn vector, nên tất cả dùng đúng camera perspective của bài trước.
 
 ## Ghép các phần lại
 
-Build `project_10_checkpoint_2`. Tam giác có AB màu cam, AC màu xanh và cạnh BC màu sáng. Đỉnh đang chọn có chấm vàng lớn hơn. Title bar cho biết `selected`, AB và AC để bạn đối chiếu với hình.
+Build project_10_checkpoint_2. Chọn P0 rồi di chuyển: cả hai cạnh đổi. Sau đó chỉ đổi P2.Z bằng PageUp: vector B và tam giác đổi, vector A giữ nguyên.
 
-Nhấn `1`, rồi tăng X của A: cả hai vector cạnh phải giảm thành phần X cùng một lượng. Reset, chọn `2` và tăng Z của B: chỉ AB đổi Z. Nếu kết quả khác, hãy sửa phép trừ trước khi sang cross product.
+Dùng F2 cho tam giác 3–4. Từ P0=(−1.5,−2,0), hai cạnh là A=(3,0,0), B=(0,4,0). Tọa độ điểm đều nằm trong miền editor dù độ dài cạnh có thể lớn hơn 2.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `subtract(triangle.b, triangle.a)` thành `subtract(triangle.a, triangle.b)`. AB sẽ quay ngược và raw normal ở bài sau cũng đổi hướng.
-2. Tính cạnh thứ hai bằng `C-B`. Hai vector không còn cùng gốc về mặt hình học; cross của chúng có thể vẫn vuông góc với mặt nhưng winding trở nên khó đọc và giáo trình mất quy ước thống nhất.
-3. Lưu AB vào một biến ngoài vòng lặp rồi kéo B. Đường vẽ có thể đổi theo point nhưng số trên title vẫn cũ, cho thấy dữ liệu dẫn xuất đã lệch khỏi nguồn.
+1. Cố ý thay A bằng P1. Ở preset có P0 khác zero, mũi tên không còn kết thúc tại P1 nếu vẫn cộng P0 khi vẽ. Khôi phục phép trừ P1−P0.
+
+2. Chỉ lưu hai cạnh một lần khi khởi tạo. Di chuyển P0: tam giác đổi nhưng vector giữ dữ liệu cũ. Đưa triangleEdges trở lại đường render/readout để mọi kết quả dùng cùng state.
 
 ## Tự kiểm tra kết quả
 
-- `triangleEdges` trả đúng `B−A` và `C−A` ở cả ba thành phần.
-- Phím 1–3 chọn đúng chấm A, B, C.
-- Arrow chỉ đổi X/Y; Q/E chỉ đổi Z của đỉnh đang chọn.
-- Kéo A làm cả AB và AC đổi, kéo B chỉ làm AB đổi.
-- Reset khôi phục cả ba point và chọn lại A.
+- A/B luôn xuất phát từ P0 và đi tới P1/P2.
+- P0 đổi thì cả hai cạnh đổi; chỉ P2 đổi thì chỉ B đổi.
+- Chọn/sửa đỉnh không làm camera đổi góc.
+- Chỉnh Z làm thay đổi perspective, không bị bỏ qua như dữ liệu trang trí.
+- Reset khôi phục đỉnh, camera và trạng thái pause.
 
 ## Bài tập mở rộng
 
-Vẽ hai mũi tên AB và AC với arrowhead thay vì chỉ dùng cạnh tam giác. Sau đó thêm phím `Tab` để chuyển tuần tự A → B → C → A.
+Thêm thao tác dịch cả tam giác cùng một vector. Kiểm trước và sau rằng hai vector cạnh không đổi, chỉ vị trí của chúng trong cảnh thay đổi.
 
-Bài tiếp theo sẽ dùng đúng `cross(AB,AC)` để dựng vector vuông góc với mặt tam giác.
+[Bài tiếp theo: Tự tính và vẽ cross product](/projects/3d-compass/03-cross-product-va-raw-normal).

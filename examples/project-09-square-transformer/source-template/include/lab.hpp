@@ -1,15 +1,11 @@
 #pragma once
-
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 6
+#define LAB_CHECKPOINT 8
 #endif
-
-#if LAB_CHECKPOINT >= 1
 #include <array>
 #include <cmath>
 
 namespace lab {
-
 inline constexpr double kPi = 3.14159265358979323846;
 
 struct Vec2 {
@@ -19,17 +15,21 @@ struct Vec2 {
 
 using Square = std::array<Vec2, 4>;
 
-inline Vec2 add(Vec2 left, Vec2 right) {
-    return {left.x + right.x, left.y + right.y};
+struct TransformParameters {
+    double scaleX{1.0};
+    double scaleY{1.0};
+    double angle{};
+    double shearX{};
+    double shearY{};
+    Vec2 translation{};
+};
+
+inline Vec2 add(Vec2 a, Vec2 b) {
+    return {a.x + b.x, a.y + b.y};
 }
 
 inline Square makeSquare(double halfExtent) {
-    return {
-        Vec2{-halfExtent, -halfExtent},
-        Vec2{halfExtent, -halfExtent},
-        Vec2{halfExtent, halfExtent},
-        Vec2{-halfExtent, halfExtent},
-    };
+    return {Vec2{-halfExtent, -halfExtent}, Vec2{halfExtent, -halfExtent}, Vec2{halfExtent, halfExtent}, Vec2{-halfExtent, halfExtent}};
 }
 
 #if LAB_CHECKPOINT >= 2
@@ -42,29 +42,51 @@ inline Vec2 scalePoint(Vec2 point, double scaleX, double scaleY) {
 inline Vec2 rotatePoint(Vec2 point, double angle) {
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    return {
-        cosine * point.x - sine * point.y,
-        sine * point.x + cosine * point.y,
-    };
+    return {cosine * point.x - sine * point.y, sine * point.x + cosine * point.y};
 }
 #endif
 
 #if LAB_CHECKPOINT >= 4
+// Hai phương trình cùng dùng tọa độ cũ, không sửa x trước khi tính y.
 inline Vec2 shearPoint(Vec2 point, double shearX, double shearY) {
-    return {
-        point.x + shearX * point.y,
-        shearY * point.x + point.y,
-    };
+    return {point.x + shearX * point.y, shearY * point.x + point.y};
+}
+
+// Row-major storage; vector là cột. Hai cột là ảnh của (1,0) và (0,1).
+struct Mat2 {
+    std::array<double, 4> values{};
+
+    [[nodiscard]] double at(int row, int column) const {
+        return values[static_cast<std::size_t>(row * 2 + column)];
+    }
+};
+
+inline Vec2 transformVector(Mat2 matrix, Vec2 vector) {
+    return {matrix.at(0, 0) * vector.x + matrix.at(0, 1) * vector.y, matrix.at(1, 0) * vector.x + matrix.at(1, 1) * vector.y};
+}
+
+inline Mat2 multiply(Mat2 left, Mat2 right) {
+    Mat2 result{};
+    for (int row = 0; row < 2; ++row) {
+        for (int column = 0; column < 2; ++column) {
+            double value = 0.0;
+            for (int index = 0; index < 2; ++index) {
+                value += left.at(row, index) * right.at(index, column);
+            }
+            result.values[static_cast<std::size_t>(row * 2 + column)] = value;
+        }
+    }
+    return result;
 }
 #endif
 
 #if LAB_CHECKPOINT >= 5
-// Mat3 dùng row-major storage và nhân với column vector [x y 1]^T.
+// Affine 3x3: hàng cuối luôn là [0,0,1]. Không phải API projection tổng quát.
 struct Mat3 {
     std::array<double, 9> values{};
 
     [[nodiscard]] double at(int row, int column) const {
-        return values[std::size_t(row * 3 + column)];
+        return values[static_cast<std::size_t>(row * 3 + column)];
     }
 };
 
@@ -98,7 +120,7 @@ inline Mat3 multiply(Mat3 left, Mat3 right) {
             for (int index = 0; index < 3; ++index) {
                 value += left.at(row, index) * right.at(index, column);
             }
-            result.values[std::size_t(row * 3 + column)] = value;
+            result.values[static_cast<std::size_t>(row * 3 + column)] = value;
         }
     }
     return result;
@@ -107,19 +129,15 @@ inline Mat3 multiply(Mat3 left, Mat3 right) {
 inline Vec2 transformPoint(Mat3 matrix, Vec2 point) {
     const double x = matrix.at(0, 0) * point.x + matrix.at(0, 1) * point.y + matrix.at(0, 2);
     const double y = matrix.at(1, 0) * point.x + matrix.at(1, 1) * point.y + matrix.at(1, 2);
-    const double w = matrix.at(2, 0) * point.x + matrix.at(2, 1) * point.y + matrix.at(2, 2);
-    if (!std::isfinite(w) || std::abs(w) <= 1e-12) {
-        return {};
-    }
-    return {x / w, y / w};
+    return {x, y};
 }
 
-inline Square transformSquare(Square square, Mat3 matrix) {
-    Square result{};
-    for (std::size_t index = 0; index < square.size(); ++index) {
-        result[index] = transformPoint(matrix, square[index]);
-    }
-    return result;
+inline Mat2 linearPart(Mat3 matrix) {
+    return {{{matrix.at(0, 0), matrix.at(0, 1), matrix.at(1, 0), matrix.at(1, 1)}}};
+}
+
+inline Vec2 transformDirection(Mat3 matrix, Vec2 direction) {
+    return transformVector(linearPart(matrix), direction);
 }
 #endif
 
@@ -129,41 +147,36 @@ enum class TransformOrder {
     RotateShearScale,
 };
 
-struct TransformParameters {
-    double scaleX{1.0};
-    double scaleY{1.0};
-    double angle{};
-    double shearX{};
-    double shearY{};
-    Vec2 translation{};
-};
-
 inline Mat3 composeTransform(TransformParameters parameters, TransformOrder order) {
     const Mat3 translation = translationMatrix(parameters.translation);
     const Mat3 scale = scaleMatrix(parameters.scaleX, parameters.scaleY);
     const Mat3 shear = shearMatrix(parameters.shearX, parameters.shearY);
     const Mat3 rotation = rotationMatrix(parameters.angle);
-
     if (order == TransformOrder::RotateShearScale) {
         return multiply(translation, multiply(scale, multiply(shear, rotation)));
     }
     return multiply(translation, multiply(rotation, multiply(shear, scale)));
 }
+#endif
 
+#if LAB_CHECKPOINT >= 8
 inline double determinantLinearPart(Mat3 matrix) {
     return matrix.at(0, 0) * matrix.at(1, 1) - matrix.at(0, 1) * matrix.at(1, 0);
 }
 
-inline double polygonArea(const Square& polygon) {
+// Diện tích có dấu: giữ thông tin hướng, không gọi det=0 là giữ chiều.
+inline double signedArea(const Square& polygon) {
     double doubledArea = 0.0;
     for (std::size_t index = 0; index < polygon.size(); ++index) {
         const Vec2 current = polygon[index];
         const Vec2 next = polygon[(index + 1) % polygon.size()];
         doubledArea += current.x * next.y - current.y * next.x;
     }
-    return std::abs(doubledArea) * 0.5;
+    return doubledArea * 0.5;
+}
+
+inline double polygonArea(const Square& polygon) {
+    return std::abs(signedArea(polygon));
 }
 #endif
-
 } // namespace lab
-#endif

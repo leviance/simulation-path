@@ -1,153 +1,185 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
 const learning = {
   guides: {
     "p12-l01": {
-      focus:
-        "Bắt đầu từ framebuffer và projection của Project 11; tạo Triangle3, project riêng A/B/C, rồi nối đúng ba cạnh chỉ khi mọi vertex đều visible.",
+      focus: "Từ framebuffer và phép chiếu P11, vẽ ba cạnh, các đỉnh và nền 3D.",
       expected:
-        "Tam giác có ba cạnh màu và ba marker A/B/C xuất hiện trên lưới. Preset near/behind/outside ẩn toàn bộ cạnh thay vì dùng screen value không hợp lệ.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Nối ba điểm thành tam giác 3D; thử số biết trước và quan sát kết quả ở checkpoint của bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Lưu ba vertex trong world space",
+          title: "Chạy bộ khung trước",
           explanation:
-            "Triangle3 chỉ nhóm A, B, C; mỗi vertex vẫn là Vec3 và chưa chứa pixel. Tam giác mặc định được đặt trước camera để checkpoint đầu có hình nhìn thấy ngay.",
+            "Framebuffer, putPixel/drawLine và projection an toàn từ P11 đều có trong Starter; chưa thêm rotation.",
         },
         {
-          title: "Project từng vertex nhưng giữ status",
+          title: "Chiếu ba đỉnh có status",
           explanation:
-            "projectTriangle gọi projectPerspective ba lần. Kết quả screen chỉ được dùng sau khi cả ba status đều là Visible.",
+            "Triangle3 giữ world coordinates, TriangleProjection giữ từng kết quả và không giả pixel ở (0,0).",
         },
         {
-          title: "Nối cạnh cuối trở lại A",
-          explanation:
-            "Ba đoạn AB, BC và CA khép tam giác. Màu khác nhau cùng marker đỉnh giúp phát hiện nhanh việc nối sai chỉ số.",
+          title: "Vẽ cạnh theo đoạn 3D",
+          explanation: "AB/BC/CA dùng line3D để clip từng đoạn; marker chỉ vẽ nếu đỉnh visible.",
         },
       ],
     },
     "p12-l02": {
-      focus:
-        "Tính centroid làm pivot, trừ pivot khỏi ba world vertex để tạo local triangle, rồi cộng modelPosition lại ở ranh giới local→world.",
+      focus: "Tách local vertex khỏi vị trí model để chuẩn bị xoay quanh centroid.",
       expected:
-        "Dấu chữ thập đỏ nằm tại centroid. Dịch model bằng sliders hoặc phím làm cả hình và pivot đi cùng nhau; local centroid vẫn bằng zero.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Đặt pivot bằng local space; thử số biết trước và quan sát kết quả ở checkpoint của bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tìm điểm trung bình của ba vertex",
+          title: "Tìm centroid",
           explanation:
-            "Centroid là trung bình từng thành phần. Với triangle mặc định, pivot nằm tại (0,0,6), thuận tiện để kiểm tra bằng tay.",
+            "Trung bình ba đỉnh mặc định cho (0,0,6); đây là pivot đã chọn, không phải camera.",
         },
         {
-          title: "Đưa pivot về local origin",
-          explanation:
-            "toLocalTriangle lấy mỗi world vertex trừ pivot. Ba local vertex mô tả hình dạng quanh gốc, không còn mang vị trí trong scene.",
+          title: "Đưa hình dạng về local",
+          explanation: "Trừ pivot ở cả ba đỉnh, giữ local triangle gốc bất biến qua frame.",
         },
         {
-          title: "Cộng model position sau cùng",
+          title: "Cộng vị trí ở cuối",
           explanation:
-            "translateTriangle dựng world triangle mới mỗi frame. Rotation ở các bài sau sẽ chen vào giữa local triangle và translation này.",
+            "World=rotatedLocal+modelPosition; quay world trước khi trừ pivot sẽ thành orbit.",
         },
       ],
     },
     "p12-l03": {
-      focus:
-        "Nhìn dọc trục X để biến rotation 3D thành rotation 2D trên mặt phẳng Y–Z, rồi áp dụng cùng rotateX cho ba local vertex.",
+      focus: "Suy phép quay cặp Y/Z, rồi ghép local → rotated → world.",
       expected:
-        "W/S thay pitch; X của từng local vertex giữ nguyên, Y/Z chạy trên đường tròn và độ dài từ pivot không đổi.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Quay quanh X bằng sin và cos; thử số biết trước và quan sát kết quả ở checkpoint của bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Giữ trục quay làm thành phần bất biến",
+          title: "Giữ X, nhìn mặt phẳng YZ",
           explanation:
-            "Rotation quanh X không thay x. Cặp (y,z) đóng vai trò như (x,y) của rotation 2D đã học ở Project 09.",
+            "Dùng lại rotation 2D; dương quanh X đưa +Y về +Z theo quy tắc bàn tay phải.",
         },
         {
-          title: "Viết hai phương trình sin/cos",
-          explanation:
-            "y′=cos·y−sin·z và z′=sin·y+cos·z. Viết chúng từ dữ liệu cũ trong một Vec3 mới để tránh dùng y đã cập nhật khi tính z.",
+          title: "Tính từ tọa độ cũ",
+          explanation: "Trả Vec3 mới, không dùng y đã cập nhật để tính z.",
         },
         {
-          title: "Luôn rotate từ local triangle gốc",
-          explanation:
-            "Mỗi frame gọi rotateTriangleX(localTriangle,pitch). Không sửa dồn rotatedLocal của frame trước nên hình không tích lũy sai số.",
+          title: "Ghép vào local pipeline",
+          explanation: "Mỗi frame rotateTriangleX từ local gốc, rồi translate và project.",
         },
       ],
     },
     "p12-l04": {
-      focus:
-        "Thêm rotateY, rotateZ, EulerAngles và hai order XYZ/ZYX; áp dụng từng hàm tuần tự để thấy rotation 3D không giao hoán.",
+      focus: "Tự viết quay Y/Z, so XYZ với ZYX và phân biệt trục cố định với trục local.",
       expected:
-        "W/S, A/D, Q/E điều khiển pitch/yaw/roll. O đổi order và làm orientation thay đổi với angle tổng quát dù edge lengths vẫn giữ nguyên.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Ghép X/Y/Z và thử hai thứ tự; thử số biết trước và quan sát kết quả ở checkpoint của bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Xoay hai mặt phẳng còn lại",
-          explanation:
-            "Rotation Y xoay X/Z và giữ Y; rotation Z xoay X/Y và giữ Z. Dấu được chọn theo cùng quy tắc bàn tay phải với rotateX.",
+          title: "Viết Y và Z bằng cùng quy ước",
+          explanation: "Quanh Y giữ Y, quanh Z giữ Z; dùng số 90° để khóa dấu.",
         },
         {
-          title: "Đặt tên ba angle theo vai trò",
+          title: "Tách từng thao tác",
           explanation:
-            "Pitch dùng X, yaw dùng Y, roll dùng Z. Struct giữ đơn vị radian và tránh truyền ba double không rõ nghĩa.",
+            "rotateEuler đặt kết quả vào biến sau mỗi lần quay, không giấu thứ tự trong biểu thức dài.",
         },
         {
-          title: "Viết thứ tự thành code có thể đọc",
-          explanation:
-            "XYZ gọi rotateX rồi Y rồi Z; ZYX làm ngược lại. Biến tạm `rotated` cho thấy chính xác phép nào chạy trước mà chưa cần matrix.",
+          title: "So hai order theo trục cố định",
+          explanation: "XYZ là X trước, Y tiếp, Z cuối; khác hệ trục local tự quay.",
         },
       ],
     },
     "p12-l05": {
-      focus:
-        "Đổi mouse delta thành yaw/pitch, clamp pitch ở ±89°, capture mouse giữa button down/up và pause animation khi người dùng bắt đầu kéo.",
+      focus: "Suy normal từ cạnh đã quay, vẽ mũi tên 3D và kiểm hướng độc lập.",
       expected:
-        "Kéo ngang đổi yaw, kéo dọc đổi pitch; thả chuột ngoài canvas vẫn kết thúc drag. Sensitivity thay đổi lượng angle trên mỗi pixel.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Cho normal quay cùng tam giác; thử số biết trước và quan sát kết quả ở checkpoint của bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Dùng delta thay vì vị trí tuyệt đối",
-          explanation:
-            "Orientation cần biết chuột vừa đi bao xa, không cần biết cursor đang ở pixel nào. xrel/yrel cho cảm giác kéo giống nhau ở mọi kích thước cửa sổ.",
+          title: "Suy normal từ cạnh world",
+          explanation: "cross(B−A,C−A) dùng hình học sau quay, không dùng các screen point.",
         },
         {
-          title: "Đổi pixel thành radian có kiểm soát",
+          title: "Vẽ mũi tên world",
           explanation:
-            "sensitivity mang đơn vị radian/pixel. Y màn hình tăng xuống nên deltaY được trừ khỏi pitch để kéo lên làm model ngẩng lên.",
+            "Normal unit được vẽ dài 1.2 world từ centroid; các cánh cũng được project cùng cảnh.",
         },
         {
-          title: "Capture và nhả chuột thành một cặp",
+          title: "Đối chiếu hai cách",
           explanation:
-            "Mouse down bật capture; mouse up luôn tắt capture. Nhờ vậy drag không kẹt khi pointer rời cửa sổ trước khi người dùng thả nút.",
+            "Cross cạnh đã quay phải khớp normal local quay cùng angles/order; translation không đổi hướng.",
         },
       ],
     },
     "p12-l06": {
       focus:
-        "Cập nhật Euler angles bằng angular velocity×dt, viết inverse theo thứ tự đảo, đo edge-length error và khóa mọi invariant bằng CTest.",
+        "Giữ chỗ nắm, pointer owner và mẫu thả cuối; object không bị khóa pitch như FPS camera.",
       expected:
-        "Auto rotation có pause/step; edge error và round-trip error ở gần 10⁻¹⁵. Starter, sáu checkpoint, final và tests build ở Debug/Release.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Kéo chuột để xoay, Q/E để roll; thử số biết trước và quan sát kết quả ở checkpoint của bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Cập nhật ba angle bằng cùng delta time",
+          title: "Đổi logical delta sang góc",
           explanation:
-            "advanceEulerAngles clamp dt vào [0,0.1] rồi cộng angular velocity×dt. Animation vì vậy không phụ thuộc FPS và không nhảy xa sau debugger.",
+            "Lưu previous mouse, nhân sensitivity rad/logical px và wrap góc, không khóa pitch ±89°.",
         },
         {
-          title: "Đảo cả dấu lẫn thứ tự",
+          title: "Giữ một owner",
           explanation:
-            "Inverse của XYZ chạy Z⁻¹, Y⁻¹, X⁻¹. Chỉ đổi dấu nhưng giữ nguyên thứ tự sẽ không trở về point ban đầu với angle tổng quát.",
+            "Nhấn trái trong viewport bắt đầu capture, nhấn không sửa góc, pointer khác không chen vào.",
         },
         {
-          title: "Đo invariant của hình",
+          title: "Kết thúc thao tác đầy đủ",
           explanation:
-            "Rotation phải giữ ba edge lengths. maximumEdgeLengthError so từng cạnh trước/sau, còn round-trip test kiểm tra chiều ngược độc lập.",
+            "Up nhận mẫu cuối; lost button/capture failure/blur/resize/reset/preset/order/slider hủy drag.",
+        },
+      ],
+    },
+    "p12-l07": {
+      focus: "Cập nhật góc bằng dt, pause/step/reset và tách hình chính khỏi overlay.",
+      expected:
+        "Tự quay và xem cảnh không có debug; thử số biết trước và quan sát kết quả ở checkpoint của bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Tích lũy angle bằng dt",
+          explanation:
+            "Angular velocity cố định, dt stall cap 0.1, góc wrap về [-π,π] để số không tăng mãi.",
         },
         {
-          title: "Chạy bản hoàn chỉnh",
+          title: "Giữ pause và step rõ ràng",
+          explanation: "Space toggle một lần, N tiến 0.1s khi paused; thao tác tay dừng auto.",
+        },
+        {
+          title: "Tách hình chính khỏi debug",
           explanation:
-            "Sau CTest, thử translation, ba angle, hai order, mouse drag, auto rotation, pause/step, reset và resize trên project_12_final.",
+            "Ẩn normal/ghost/pivot/HUD, giữ tam giác wireframe và lưới world; reduced-motion vẫn step được.",
+        },
+      ],
+    },
+    "p12-l08": {
+      focus: "Dùng đáp án tính tay, invariant, inverse và toàn bộ source để nghiệm thu.",
+      expected:
+        "Kiểm chứng và chạy bản hoàn chỉnh; thử số biết trước và quan sát kết quả ở checkpoint của bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Khóa oracle số trước",
+          explanation:
+            "Basis và các tổ hợp 90° có đáp án tính tay, không tạo expected bằng inverse.",
+        },
+        {
+          title: "Thêm invariant và inverse",
+          explanation: "Giữ edge lengths, centroid, normal; inverse đảo thứ tự lẫn dấu.",
+        },
+        {
+          title: "Chạy sản phẩm độc lập",
+          explanation:
+            "Build mọi checkpoint và tests ở Debug/Release, chạy CTest rồi thử executable final.",
         },
       ],
     },
@@ -159,39 +191,61 @@ const learning = {
         href: "/glossary#perspective-projection",
         kind: "Thuật ngữ",
       },
-      { label: "View frustum", href: "/glossary#view-frustum", kind: "Thuật ngữ" },
-      { label: "Wireframe", href: "/glossary#wireframe", kind: "Thuật ngữ" },
     ],
     "p12-l02": [
-      { label: "Pivot", href: "/glossary#pivot", kind: "Thuật ngữ" },
-      { label: "Local space", href: "/glossary#local-space", kind: "Thuật ngữ" },
-      { label: "World space", href: "/glossary#world-space", kind: "Thuật ngữ" },
+      {
+        label: "Pivot",
+        href: "/glossary#pivot",
+        kind: "Thuật ngữ",
+      },
     ],
     "p12-l03": [
-      { label: "3D rotation", href: "/glossary#rotation-3d", kind: "Thuật ngữ" },
-      { label: "Unit circle", href: "/glossary#unit-circle", kind: "Thuật ngữ" },
-      { label: "Radian", href: "/glossary#radian", kind: "Thuật ngữ" },
+      {
+        label: "3D rotation",
+        href: "/glossary#rotation-3d",
+        kind: "Thuật ngữ",
+      },
     ],
     "p12-l04": [
-      { label: "Euler angles", href: "/glossary#euler-angles", kind: "Thuật ngữ" },
-      { label: "Rotation order", href: "/glossary#rotation-order", kind: "Thuật ngữ" },
-      { label: "Non-commutative", href: "/glossary#non-commutative", kind: "Thuật ngữ" },
+      {
+        label: "Rotation order",
+        href: "/glossary#rotation-order",
+        kind: "Thuật ngữ",
+      },
     ],
     "p12-l05": [
-      { label: "Pointer capture", href: "/glossary#pointer-capture", kind: "Thuật ngữ" },
-      { label: "Mouse delta", href: "/glossary#mouse-delta", kind: "Thuật ngữ" },
-      { label: "Euler angles", href: "/glossary#euler-angles", kind: "Thuật ngữ" },
+      {
+        label: "Normal vector",
+        href: "/glossary#normal-vector",
+        kind: "Thuật ngữ",
+      },
     ],
     "p12-l06": [
-      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
-      { label: "Round-trip test", href: "/glossary#round-trip-test", kind: "Thuật ngữ" },
       {
-        label: "CTest command-line reference",
-        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
-        kind: "CMake",
+        label: "Pointer capture",
+        href: "/glossary#pointer-capture",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
+      },
+    ],
+    "p12-l07": [
+      {
+        label: "Variable timestep",
+        href: "/glossary#variable-timestep",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p12-l08": [
+      {
+        label: "Round-trip test",
+        href: "/glossary#round-trip-test",
+        kind: "Thuật ngữ",
       },
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;

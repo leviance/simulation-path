@@ -3,39 +3,38 @@ import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
   base: {
     label: "UNIT CIRCLE LAB",
-    title: "Một góc tạo ra chuyển động và đồ thị như thế nào?",
+    title: "Một góc, một chiếc kim và hai đồ thị",
     description:
-      "Đổi góc, vận tốc hoặc kéo đầu kim để đối chiếu radian, sin, cos, projection và atan2.",
+      "Đối chiếu cùng một góc trên đường tròn, hai hình chiếu và lịch sử sin/cos. Bản cuối luôn hiển thị đủ các phần.",
   },
   modes: {
     "angle-radians": {
-      title: "Một vòng có bao nhiêu radian?",
-      description:
-        "Chọn các góc quen thuộc và quan sát cung góc trước khi dùng sin hoặc cos để tính tọa độ.",
+      title: "Từ một đường tròn có sẵn đến góc radian",
+      description: "Chạy bộ khung, đo góc bằng độ dài cung và đưa góc về một vòng.",
     },
     "angle-sincos": {
-      title: "Cosine và sine đặt đầu kim ở đâu?",
-      description: "Đổi angle để xem trực tiếp endpoint=(cos(angle), sin(angle)) trên unit circle.",
+      title: "Đặt đầu kim bằng sin và cos",
+      description: "Viết tọa độ từ góc, rồi đưa điểm toán học lên màn hình.",
     },
     "angle-motion": {
-      title: "Vận tốc góc quyết định chu kỳ ra sao?",
-      description:
-        "Cho kim chạy theo delta time, đổi radian/giây và đối chiếu thời gian cần để hoàn thành một vòng.",
+      title: "Cho kim quay theo thời gian",
+      description: "Đổi vận tốc góc, quay ngược, tạm dừng và kiểm tra chu kỳ.",
     },
     "angle-projections": {
-      title: "Hai hình chiếu có đúng bằng cos và sin?",
-      description:
-        "Hai đoạn chiếu tách endpoint thành thành phần X màu xanh dương và thành phần Y màu xanh lá.",
+      title: "Nhìn thấy sin và cos trên hai trục",
+      description: "Vẽ đường dóng, hai thành phần có dấu và nhãn giá trị.",
     },
     "angle-graphs": {
-      title: "Chuyển động tròn trở thành hai đồ thị nào?",
-      description:
-        "Theo dõi cùng một angle trên unit circle và hai đường sin/cos lệch pha một phần tư chu kỳ.",
+      title: "Từ kim quay đến hai đồ thị theo thời gian",
+      description: "Lấy mẫu 60 Hz đúng timestamp và tự vẽ cửa sổ lịch sử 6 giây.",
     },
     "angle-atan2": {
-      title: "Kéo một điểm rồi khôi phục angle bằng atan2",
-      description:
-        "Kéo đầu kim qua bốn góc phần tư và so góc suy ra với endpoint được tạo lại từ sin/cos.",
+      title: "Kéo đầu kim để chọn góc bằng atan2",
+      description: "Xử lý bốn góc phần tư, vùng tâm, grab offset và capture.",
+    },
+    "angle-full": {
+      title: "Ghép bản hoàn chỉnh và kiểm chứng",
+      description: "Đối chiếu hình, số, lịch sử và kiểm thử độc lập ở Debug/Release.",
     },
   },
 } satisfies ProjectLabMeta;

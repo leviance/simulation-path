@@ -1,127 +1,100 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Từ dot product đến góc sai lệch
+# Từ cosine đến góc sai lệch
 
 ## Vấn đề cần giải quyết
 
-Normalized dot cho biết hai hướng giống nhau tới mức nào, nhưng người dùng thường nghĩ bằng góc: nòng súng còn lệch mục tiêu 12°, 45° hay 90°? Ta cần đảo phép cosine để lấy `θ`.
-
-Có hai bẫy cần xử lý trước. Thứ nhất, zero vector không có hướng nên góc với nó không được định nghĩa. Thứ hai, phép tính số thực có thể cho `1.0000000000000002` dù kết quả toán học là 1; truyền số đó vào `acos` sẽ trả `NaN`.
+Normalized dot đã cho biết mức độ cùng hướng. Có lúc ta cần trả lời cụ thể hơn: nòng đang lệch mục tiêu bao nhiêu độ? Bài này đổi cosine thành góc, nhưng chưa quyết định quay trái hay phải.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Từ công thức của bài trước:
+Với hai hướng hợp lệ, cosine bằng dot của hai vector đơn vị. Hàm acos làm chiều ngược lại: cosine → góc trong [0,π]. Cùng hướng cho 0, vuông góc cho π/2, ngược hướng cho π.
 
-$$
-a\cdot b=|a||b|\cos(\theta)
-$$
+Góc này **không có dấu**. Mục tiêu ở 45° bên trái và 45° bên phải đều cho π/4. Không thể dùng riêng acos để quyết định chiều quay.
 
-chia cho hai độ dài rồi lấy `acos`:
-
-$$
-\theta=\arccos\left(\frac{a\cdot b}{|a||b|}\right)
-$$
-
-`acos` trả một góc trong `[0,π]`, tương đương `[0°,180°]`. Đây là **góc không dấu**: nó nói lệch bao nhiêu, chưa nói mục tiêu nằm bên trái hay bên phải nòng súng.
+Một điểm khác cần giữ rõ: góc giữa vector zero với một hướng không được xác định. Helper có thể trả 0 để không sinh NaN, nhưng UI không được biến quy ước đó thành kết luận “góc lệch bằng 0”.
 
 <InteractiveLab demo="turret" mode="turret-angle" />
 
-Chọn các preset 0°, 90° và 180° rồi đối chiếu `normalized dot` với `angle error`. Sau đó kéo mục tiêu thật gần tâm; góc chỉ có ý nghĩa cho tới khi vector vẫn còn một hướng đủ lớn.
+Chọn Vuông trái rồi Vuông phải: unsigned angle cùng gần 90°. Chọn Trùng tâm: normalized dot và unsigned angle phải ghi không xác định, dù raw dot vẫn bằng 0.
 
 ## Viết code từng bước
 
-### Bước 1 — Nhận biết vector có hướng hay không
+### Bước 1 — Giữ cosine trong miền của acos
 
-Đừng kiểm tra `x == 0 && y == 0` ở nhiều nơi. Đặt một tiêu chuẩn chung dựa trên độ dài:
+Trong include/lab.hpp:
 
-```cpp title="include/lab.hpp — kiểm tra hướng hợp lệ"
-inline constexpr double kDirectionEpsilon = 1e-12;
-
-inline bool hasDirection(Vec2 vector) {
-    const double magnitude = length(vector);
-    return std::isfinite(magnitude) && magnitude > kDirectionEpsilon;
-}
-```
-
-Ngưỡng rất nhỏ tránh chia cho một số gần zero. Kiểm tra `isfinite` cũng loại `NaN` và vô cực trước khi chúng lan sang phần còn lại của mô phỏng.
-
-### Bước 2 — Bảo vệ miền của acos
-
-```cpp title="include/lab.hpp — clampCosine"
+```cpp title="include/lab.hpp — bảo vệ đầu vào hàm lượng giác ngược"
 inline double clampCosine(double value) {
     if (!std::isfinite(value)) {
         return 0.0;
     }
-    if (value < -1.0) {
-        return -1.0;
-    }
-    if (value > 1.0) {
-        return 1.0;
-    }
-    return value;
+    return std::clamp(value, -1.0, 1.0);
 }
 ```
 
-Đây không phải “sửa” một kết quả sai lớn. Nó chỉ chặn phần sai số cực nhỏ ở biên của miền cosine. Nếu phép tính cho 1.2, bạn vẫn nên tìm lỗi ở dữ liệu thay vì trông chờ `clamp` che nó đi.
+Trong số thực lý tưởng, cosine nằm trong [−1,1]. Trong floating point, một phép tính hợp lệ có thể trả 1+1e−16. acos của số đó không còn là một góc thực. Clamp xử lý sai số ở biên; nó không phải cách hợp thức hóa một raw dot chưa normalize.
 
-### Bước 3 — Tách cosine và góc thành hai hàm
+### Bước 2 — Viết angleBetween và kiểm hướng trước
 
-```cpp title="include/lab.hpp — cosineBetween và angleBetween"
-inline double cosineBetween(Vec2 left, Vec2 right) {
-    if (!hasDirection(left) || !hasDirection(right)) {
+```cpp title="include/lab.hpp — góc không dấu chỉ có nghĩa khi cả hai hướng tồn tại"
+inline double angleBetween(Vec2 a, Vec2 b) {
+    if (!hasDirection(a) || !hasDirection(b)) {
         return 0.0;
     }
-    return clampCosine(dot(left, right) / (length(left) * length(right)));
+    return std::acos(clampCosine(cosineBetween(a, b)));
 }
+```
 
-inline double angleBetween(Vec2 left, Vec2 right) {
-    if (!hasDirection(left) || !hasDirection(right)) {
+Hàm nhận vector bất kỳ có hướng, không yêu cầu caller đã normalize. Khi thiếu hướng, nó trả 0 theo chính sách kỹ thuật. Comment và UI phải nói rõ trường hợp ấy.
+
+### Bước 3 — Giữ cùng một cách tính cosine
+
+```cpp title="include/lab.hpp — normalize riêng trước khi tính cosine"
+inline double cosineBetween(Vec2 a, Vec2 b) {
+    if (!hasDirection(a) || !hasDirection(b)) {
         return 0.0;
     }
-    return std::acos(cosineBetween(left, right));
+    return std::clamp(dot(normalize(a), normalize(b)), -1.0, 1.0);
 }
 ```
 
-`cosineBetween` dùng được ở những nơi chỉ cần so ngưỡng; `angleBetween` dành cho lúc thật sự cần một góc để hiển thị hoặc đo đạc.
+cosineBetween đã clamp một lần vì đó cũng là giá trị được hiển thị trực tiếp ở bài 2. angleBetween vẫn dùng clampCosine ở ranh acos để thể hiện rõ miền hợp lệ của hàm. Không lấy độ dài hai mũi tên debug trên ảnh để tính góc.
 
-### Bước 4 — Hiển thị góc bằng degree, giữ tính toán bằng radian
+### Bước 4 — Chỉ hiển thị một góc khi scene có hướng thao tác
 
-```cpp title="src/main.cpp — góc sai lệch trên thanh tiêu đề"
-const double angleError = lab::angleBetween(forward, targetOffset);
+Trước khi đọc kết quả, presentation kiểm chính sách vùng tâm:
 
-std::snprintf(
-    title,
-    sizeof(title),
-    "normalized dot %.3f | unsigned angle %.1f deg",
-    alignment,
-    angleError * 180.0 / lab::kPi
-);
+```cpp title="include/scene.hpp — điều kiện hiển thị góc trong mô phỏng"
+inline bool targetHasDirection(const Scene& scene) {
+    return length(scene.targetOffset) >= 8.0 / kPixelsPerUnit;
+}
 ```
 
-`angleError` vẫn là radian. Phép nhân `180/π` chỉ xảy ra tại ranh giới hiển thị; các bài sau tiếp tục dùng radian.
+Native dùng bool valid trong presentFramebuffer; Canvas dùng result.valid. Nếu false, chỉ ghi thông báo chưa có hướng, không hiển thị 0° hay 90° như một phép đo. Muốn đổi radian sang degree để đọc, nhân 180/π ở phần trình bày; phần toán vẫn làm việc bằng radian.
 
 ## Ghép các phần lại
 
-Build `project_8_checkpoint_3`. Di chuyển mục tiêu một vòng quanh tháp pháo. Góc tăng từ 0° tới 180° khi đi về phía sau, rồi giảm đối xứng ở nửa còn lại. Đó là hành vi đúng của góc không dấu.
+Build project_8_checkpoint_3. Khi target=(4,3), forward=(1,0), cosine≈0.8 và angle≈0.643501 rad≈36.8699°. Kiểm cả bộ số thay vì chỉ so một con số sau cùng.
 
-Nếu muốn biết nên quay trái hay phải, chỉ `angleBetween` là chưa đủ: mục tiêu trên và dưới trục X đều có thể lệch 45°. Ta sẽ bổ sung dấu ở bài 5; trước đó, bài 4 dùng chính hướng nòng để tách vector mục tiêu thành hai phần có ý nghĩa hình học.
+Đổi góc nòng bằng A/D hoặc slider, rồi đối chiếu lại các hướng mẫu. Checkpoint này chưa tự quay; như vậy bạn có thể giữ một câu hỏi đứng yên cho tới khi hiểu nó.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ `clampCosine`, rồi gọi trực tiếp `acos(1.0 + 1e-12)` trong một phép thử. Kết quả không còn là số hữu hạn.
-2. Dùng `acos(dot(forward,targetOffset))` mà không chia độ dài. Chỉ cần mục tiêu cách tâm hơn một pixel, đối số đã dễ vượt ngoài `[-1,1]`.
-3. Trả 90° cho zero vector vì `cosineBetween` đang trả 0. Trong project, ta chủ động cho `angleBetween` trả 0 trước; zero vector được xem là “không có lệnh quay”, không phải một hướng vuông góc.
+1. Gọi acos(rawDot) thay vì acos(normalizedDot). Target ở (5,0) cho rawDot=5, ngoài miền của acos.
+2. Bỏ clamp rồi thử riêng clampCosine với 1+1e−12 và −1−1e−12. Không cần chờ lỗi ngẫu nhiên trong UI mới kiểm được chính sách biên.
+3. Khi target trùng tâm, in angleBetween=0 rồi ghi “đúng hướng”. Đây là lỗi diễn giải, dù executable không crash.
 
 ## Tự kiểm tra kết quả
 
-- Hai hướng cùng chiều cho góc gần 0.
-- Hai hướng vuông góc cho góc gần `π/2`.
-- Hai hướng ngược chiều cho góc gần `π`.
-- `clampCosine(1 + 10⁻¹²)` trả 1 và `clampCosine(-1 - 10⁻¹²)` trả -1.
-- Mục tiêu đúng tâm không làm xuất hiện `NaN` trên thanh tiêu đề.
+- Các mốc 0/90/180° đúng trong sai số 1e-9 radian.
+- Hai hướng lệch trái/phải cùng độ lớn tạo cùng unsigned angle.
+- Target=(4,3) cho khoảng 36.8699° với nòng hướng X dương.
+- Clamp đầu vào hơi vượt hai biên không sinh NaN.
+- Vùng tâm hiển thị chưa có hướng, không coi fallback là góc đo.
 
 ## Bài tập mở rộng
 
-Vẽ một cung nhỏ biểu diễn `angleError` và ghi số degree cạnh cung. Sau đó thử phân loại “gần thẳng hướng” bằng `angleError < 10°`; nhớ đổi 10° sang radian trước khi so sánh.
+Tạo hai target đối xứng qua forward và ghi lại dot cùng unsigned angle. Giải thích vì sao cả hai thông tin vẫn chưa đủ để chọn chiều quay.
 
-Bài tiếp theo không chỉ đo góc. Ta sẽ trả lời hai câu hỏi cụ thể hơn: mục tiêu nằm bao xa dọc theo đường ngắm và lệch khỏi đường ngắm bao nhiêu pixel.
+Tiếp theo: [mục tiêu nằm dọc đường ngắm bao xa?](/projects/mouse-turret/04-projection-va-do-lech).

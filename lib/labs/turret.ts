@@ -1,43 +1,46 @@
-import { clamp, hasDirection, length, normalize, scale, subtract, type Point } from "./geometry.ts";
+import { clamp, scale, subtract, type Point } from "./geometry.ts";
 import { normalizeAngle, pointOnUnitCircle } from "./angle.ts";
 
-export function dot(left: Point, right: Point) {
-  return left.x * right.x + left.y * right.y;
+export function turretHasDirection(vector: Point) {
+  return (
+    Number.isFinite(vector.x) && Number.isFinite(vector.y) && (vector.x !== 0 || vector.y !== 0)
+  );
+}
+
+export function turretNormalize(vector: Point): Point {
+  if (!turretHasDirection(vector)) return { x: 0, y: 0 };
+  const largest = Math.max(Math.abs(vector.x), Math.abs(vector.y));
+  const scaled = { x: vector.x / largest, y: vector.y / largest };
+  const magnitude = Math.hypot(scaled.x, scaled.y);
+  return { x: scaled.x / magnitude, y: scaled.y / magnitude };
+}
+
+export function dot(a: Point, b: Point) {
+  return a.x * b.x + a.y * b.y;
 }
 
 export function clampCosine(value: number) {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return clamp(value, -1, 1);
+  return Number.isFinite(value) ? clamp(value, -1, 1) : 0;
 }
 
-export function cosineBetween(left: Point, right: Point) {
-  if (!hasDirection(left) || !hasDirection(right)) {
-    return 0;
-  }
-  return clampCosine(dot(left, right) / (length(left) * length(right)));
+export function cosineBetween(a: Point, b: Point) {
+  if (!turretHasDirection(a) || !turretHasDirection(b)) return 0;
+  return clampCosine(dot(turretNormalize(a), turretNormalize(b)));
 }
 
-export function angleBetween(left: Point, right: Point) {
-  if (!hasDirection(left) || !hasDirection(right)) {
-    return 0;
-  }
-  return Math.acos(cosineBetween(left, right));
+export function angleBetween(a: Point, b: Point) {
+  if (!turretHasDirection(a) || !turretHasDirection(b)) return 0;
+  return Math.acos(clampCosine(cosineBetween(a, b)));
 }
 
 export function scalarProjection(vector: Point, onto: Point) {
-  if (!hasDirection(onto)) {
-    return 0;
-  }
-  return dot(vector, normalize(onto));
+  if (!turretHasDirection(onto)) return 0;
+  return dot(vector, turretNormalize(onto));
 }
 
 export function vectorProjection(vector: Point, onto: Point): Point {
-  if (!hasDirection(onto)) {
-    return { x: 0, y: 0 };
-  }
-  const unitOnto = normalize(onto);
+  if (!turretHasDirection(onto)) return { x: 0, y: 0 };
+  const unitOnto = turretNormalize(onto);
   return scale(unitOnto, dot(vector, unitOnto));
 }
 
@@ -45,33 +48,34 @@ export function rejection(vector: Point, onto: Point): Point {
   return subtract(vector, vectorProjection(vector, onto));
 }
 
-export function crossZ(left: Point, right: Point) {
-  return left.x * right.y - left.y * right.x;
+export function crossZ(a: Point, b: Point) {
+  return a.x * b.y - a.y * b.x;
 }
 
 export function signedAngleBetween(from: Point, to: Point) {
-  if (!hasDirection(from) || !hasDirection(to)) {
-    return 0;
-  }
-  const fromUnit = normalize(from);
-  const toUnit = normalize(to);
-  return Math.atan2(crossZ(fromUnit, toUnit), dot(fromUnit, toUnit));
+  if (!turretHasDirection(from) || !turretHasDirection(to)) return 0;
+  const a = turretNormalize(from),
+    b = turretNormalize(to);
+  const sine = crossZ(a, b),
+    cosine = dot(a, b);
+  if (sine === 0 && cosine < 0) return Math.PI;
+  return Math.atan2(sine, cosine);
 }
 
 export function rotateTowards(currentAngle: number, targetDirection: Point, maximumStep: number) {
-  if (!Number.isFinite(maximumStep) || maximumStep <= 0 || !hasDirection(targetDirection)) {
-    return normalizeAngle(currentAngle);
-  }
-  const currentDirection = pointOnUnitCircle(currentAngle);
-  const remainingAngle = signedAngleBetween(currentDirection, targetDirection);
-  const step = clamp(remainingAngle, -maximumStep, maximumStep);
-  return normalizeAngle(currentAngle + step);
+  const current = normalizeAngle(currentAngle);
+  if (!Number.isFinite(maximumStep) || maximumStep <= 0 || !turretHasDirection(targetDirection))
+    return current;
+  const remaining = signedAngleBetween(pointOnUnitCircle(current), targetDirection);
+  return normalizeAngle(current + clamp(remaining, -maximumStep, maximumStep));
 }
 
-export function isWithinViewCone(forward: Point, toTarget: Point, halfAngle: number) {
-  if (!hasDirection(forward) || !hasDirection(toTarget) || !Number.isFinite(halfAngle)) {
+export function isWithinViewCone(forward: Point, targetDirection: Point, halfAngle: number) {
+  if (
+    !turretHasDirection(forward) ||
+    !turretHasDirection(targetDirection) ||
+    !Number.isFinite(halfAngle)
+  )
     return false;
-  }
-  const safeHalfAngle = clamp(halfAngle, 0, Math.PI);
-  return cosineBetween(forward, toTarget) >= Math.cos(safeHalfAngle);
+  return cosineBetween(forward, targetDirection) >= Math.cos(clamp(halfAngle, 0, Math.PI)) - 1e-12;
 }

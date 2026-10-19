@@ -1,44 +1,45 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
     label: "ROTATION LAB",
-    title: "Một tam giác 3D thay đổi thế nào khi xoay quanh từng trục?",
+    title: "Tam giác và normal quay cùng nhau thế nào?",
     description:
-      "Theo dõi local triangle, pivot, world triangle và ảnh perspective; điều chỉnh từng angle hoặc kéo trực tiếp để thấy rotation giữ hình nhưng thay đổi orientation.",
+      "Perspective thật, rotation trực tiếp sin/cos, pivot, hai order và chuột/keyboard.",
   },
   modes: {
     "rotation-triangle": {
-      title: "Ba vertex được chiếu và nối thành tam giác ra sao?",
-      description:
-        "Di chuyển cả triangle trong world space, xem ba projection result và chỉ nối cạnh khi mọi vertex đều visible.",
+      title: "Nối ba điểm thành tam giác 3D",
+      description: "Từ framebuffer và phép chiếu P11, vẽ ba cạnh, các đỉnh và nền 3D.",
     },
     "rotation-pivot": {
-      title: "Vì sao phải đưa vertex về quanh pivot trước khi xoay?",
-      description:
-        "So local vertex với world vertex, kéo model position và quan sát centroid luôn trùng với pivot đã chọn.",
+      title: "Đặt pivot bằng local space",
+      description: "Tách local vertex khỏi vị trí model để chuẩn bị xoay quanh centroid.",
     },
     "rotation-x": {
-      title: "Rotation X thực chất là vòng tròn nào?",
-      description:
-        "Giữ X, xoay cặp Y/Z trên mặt phẳng vuông góc với trục X và theo dõi độ dài vector không đổi.",
+      title: "Quay quanh X bằng sin và cos",
+      description: "Suy phép quay cặp Y/Z, rồi ghép local → rotated → world.",
     },
     "rotation-euler": {
-      title: "XYZ và ZYX có cho cùng một orientation không?",
-      description:
-        "Điều chỉnh pitch/yaw/roll rồi đổi order để thấy các rotation 3D nói chung không giao hoán.",
+      title: "Ghép X/Y/Z và thử hai thứ tự",
+      description: "Tự viết quay Y/Z, so XYZ với ZYX và phân biệt trục cố định với trục local.",
+    },
+    "rotation-normal": {
+      title: "Cho normal quay cùng tam giác",
+      description: "Suy normal từ cạnh đã quay, vẽ mũi tên 3D và kiểm hướng độc lập.",
     },
     "rotation-mouse": {
-      title: "Mouse delta được đổi thành yaw và pitch thế nào?",
+      title: "Kéo chuột để xoay, Q/E để roll",
       description:
-        "Kéo ngang/dọc trên canvas, theo dõi delta, sensitivity và giới hạn pitch trong khi pointer capture đang hoạt động.",
+        "Giữ chỗ nắm, pointer owner và mẫu thả cuối; object không bị khóa pitch như FPS camera.",
     },
-    "rotation-validation": {
-      title: "Làm sao biết rotation không làm méo tam giác?",
-      description:
-        "Chạy, pause hoặc step animation; đo edge-length error và rotate→inverse round-trip error ở mọi orientation.",
+    "rotation-motion": {
+      title: "Tự quay và xem cảnh không có debug",
+      description: "Cập nhật góc bằng dt, pause/step/reset và tách hình chính khỏi overlay.",
+    },
+    "rotation-full": {
+      title: "Kiểm chứng và chạy bản hoàn chỉnh",
+      description: "Dùng đáp án tính tay, invariant, inverse và toàn bộ source để nghiệm thu.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

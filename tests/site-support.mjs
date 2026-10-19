@@ -26,9 +26,9 @@ const lessonSectionIds = [
   "bài-tập-mở-rộng",
   "ma-chay-duoc-sau-bai",
 ];
-const serverPromise = import(new URL("../dist/server/index.js", import.meta.url)).then(
-  (module) => module.default,
-);
+// Source-only checks must not eagerly import a missing or interrupted production build.
+// Route tests still load the real server on their first render call.
+let serverPromise;
 const maxRenderedRouteCacheEntries = 64;
 const renderedRoutes = new Map();
 let authoredLessonsPromise;
@@ -37,7 +37,9 @@ async function render(route = "/") {
   let rendered = renderedRoutes.get(route);
   if (!rendered) {
     rendered = (async () => {
-      const server = await serverPromise;
+      const server = await (serverPromise ??= import(
+        new URL("../dist/server/index.js", import.meta.url)
+      ).then((module) => module.default));
       const response = await server(
         new Request(`http://localhost${route}`, { headers: { accept: "text/html" } }),
       );

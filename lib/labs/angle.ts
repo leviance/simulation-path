@@ -7,7 +7,8 @@ export function normalizeAngle(angle: number) {
     return 0;
   }
   const remainder = angle % TAU;
-  return remainder < 0 ? remainder + TAU : remainder;
+  const normalized = remainder < 0 ? remainder + TAU : remainder;
+  return normalized >= TAU || normalized === 0 ? 0 : normalized;
 }
 
 export function pointOnUnitCircle(angle: number): Point {

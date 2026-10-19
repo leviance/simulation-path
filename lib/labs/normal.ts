@@ -10,12 +10,7 @@ export interface Triangle3 {
   c: Vec3;
 }
 
-export interface DiagramPoint {
-  x: number;
-  y: number;
-}
-
-export const NORMAL_EPSILON = 1e-9;
+export const NORMAL_EPSILON = 1e-10;
 
 export function add3(left: Vec3, right: Vec3): Vec3 {
   return { x: left.x + right.x, y: left.y + right.y, z: left.z + right.z };
@@ -42,12 +37,12 @@ export function cross3(left: Vec3, right: Vec3): Vec3 {
 }
 
 export function magnitude3(vector: Vec3): number {
-  return Math.sqrt(dot3(vector, vector));
+  return Math.hypot(vector.x, vector.y, vector.z);
 }
 
-export function normalize3(vector: Vec3, epsilon = NORMAL_EPSILON): Vec3 {
+export function normalize3(vector: Vec3, epsilon = 0): Vec3 {
   const length = magnitude3(vector);
-  if (length <= epsilon) return { x: 0, y: 0, z: 0 };
+  if (!Number.isFinite(length) || length <= epsilon) return { x: 0, y: 0, z: 0 };
   return scale3(vector, 1 / length);
 }
 
@@ -64,7 +59,9 @@ export function triangleRawNormal(triangle: Triangle3): Vec3 {
 }
 
 export function triangleUnitNormal(triangle: Triangle3): Vec3 {
-  return normalize3(triangleRawNormal(triangle));
+  return isDegenerateTriangle(triangle)
+    ? { x: 0, y: 0, z: 0 }
+    : normalize3(triangleRawNormal(triangle));
 }
 
 export function triangleArea(triangle: Triangle3): number {
@@ -80,23 +77,20 @@ export function reverseWinding(triangle: Triangle3): Triangle3 {
 }
 
 export function isDegenerateTriangle(triangle: Triangle3, epsilon = NORMAL_EPSILON): boolean {
-  return magnitude3(triangleRawNormal(triangle)) <= epsilon;
+  const { ab, ac } = triangleEdges(triangle),
+    a = magnitude3(ab),
+    b = magnitude3(ac),
+    n = magnitude3(triangleRawNormal(triangle));
+  return !Number.isFinite(n) || a === 0 || b === 0 || n <= epsilon || n / (a * b) <= 1e-6;
 }
 
 export function orthogonalityError(triangle: Triangle3): number {
   const { ab, ac } = triangleEdges(triangle);
-  const normal = triangleRawNormal(triangle);
-  return Math.max(Math.abs(dot3(normal, ab)), Math.abs(dot3(normal, ac)));
+  const normal = triangleUnitNormal(triangle);
+  return Math.max(Math.abs(dot3(normal, normalize3(ab))), Math.abs(dot3(normal, normalize3(ac))));
 }
 
-export function facingAmount(triangle: Triangle3, viewDirection: Vec3): number {
-  return dot3(triangleUnitNormal(triangle), normalize3(viewDirection));
-}
-
-export function projectIsometric(point: Vec3): DiagramPoint {
-  const cos30 = Math.sqrt(3) * 0.5;
-  return {
-    x: (point.x - point.z) * cos30,
-    y: point.y + (point.x + point.z) * 0.5,
-  };
+// Hướng từ centroid tới eye, không phải hướng camera nhìn vào cảnh.
+export function facingAmount(triangle: Triangle3, towardViewer: Vec3): number {
+  return dot3(triangleUnitNormal(triangle), normalize3(towardViewer));
 }

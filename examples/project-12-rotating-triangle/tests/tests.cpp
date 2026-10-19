@@ -1,134 +1,129 @@
-#include "lab.hpp"
-
-#include <cmath>
+#include "view.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
 
 namespace {
+// Explicit check vẫn hoạt động khi Release bật NDEBUG.
 int failures = 0;
 
-bool nearlyEqual(double left, double right, double epsilon = 1e-9) {
-    return std::abs(left - right) <= epsilon;
-}
-
-bool nearlyEqual(lab::Vec3 left, lab::Vec3 right, double epsilon = 1e-9) {
-    return nearlyEqual(left.x, right.x, epsilon) && nearlyEqual(left.y, right.y, epsilon) &&
-        nearlyEqual(left.z, right.z, epsilon);
-}
-
-void check(bool condition, std::string_view label) {
-    if (condition) {
-        return;
+void check(bool condition, std::string_view message) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
     }
-    std::cerr << "FAILED: " << label << '\n';
-    ++failures;
+}
+
+bool close(double a, double b, double epsilon = 1e-9) {
+    return std::isfinite(a) && std::abs(a - b) <= epsilon;
+}
+
+bool close(lab::Vec3 a, lab::Vec3 b, double epsilon = 1e-9) {
+    return close(a.x, b.x, epsilon) && close(a.y, b.y, epsilon) && close(a.z, b.z, epsilon);
+}
+
+// Các expected tính tay khóa dấu và thứ tự, không sinh từ inverse.
+void numericRotationOracles() {
+    const lab::Vec3 p{1.0, 2.0, 3.0};
+    const double quarter = lab::kPi * 0.5;
+    check(close(lab::rotateX(p, quarter), {1.0, -3.0, 2.0}), "X90 numeric oracle");
+    check(close(lab::rotateY(p, quarter), {3.0, 2.0, -1.0}), "Y90 numeric oracle");
+    check(close(lab::rotateZ(p, quarter), {-2.0, 1.0, 3.0}), "Z90 numeric oracle");
+    check(close(lab::rotateEuler(p, {quarter, quarter, 0.0}, lab::RotationOrder::Xyz), {2.0, -3.0, -1.0}), "XYZ X90 then Y90 oracle");
+    check(close(lab::rotateEuler(p, {quarter, quarter, 0.0}, lab::RotationOrder::Zyx), {3.0, 1.0, 2.0}), "ZYX Y90 then X90 oracle");
+    for (double angle : {0.0, 2.0 * lab::kPi}) {
+        check(close(lab::rotateX(p, angle), p), "X zero/full turn");
+        check(close(lab::rotateY(p, angle), p), "Y zero/full turn");
+        check(close(lab::rotateZ(p, angle), p), "Z zero/full turn");
+    }
+}
+
+// Invariant hình học bổ sung cho oracle số, không thay thế nó.
+void geometryAndNormal() {
+    const auto original = lab::defaultWorldTriangle();
+    const auto local = lab::toLocalTriangle(original);
+    check(close(lab::triangleCentroid(original), {0.0, 0.0, 6.0}), "centroid numeric oracle");
+    check(close(lab::triangleCentroid(local), {}), "local centroid origin");
+    check(close(lab::triangleRawNormal(original), {-1.71, 0.51, 6.45}), "raw cross numeric oracle");
+    for (auto order : {lab::RotationOrder::Xyz, lab::RotationOrder::Zyx}) {
+        for (double angle : {-2.0, -0.5, 0.0, 0.7, 2.5}) {
+            const lab::EulerAngles angles{angle, 0.7, -0.3};
+            const auto rotated = lab::rotateTriangle(local, angles, order);
+            const auto world = lab::translateTriangle(rotated, {1.0, -1.0, 7.0});
+            check(lab::maximumEdgeLengthError(local, rotated) < 1e-9, "three edge lengths invariant");
+            check(close(lab::triangleCentroid(world), {1.0, -1.0, 7.0}), "rotation around centroid then translate");
+            check(lab::rotationRoundTripError(local.a, angles, order) < 1e-9, "inverse in reversed order");
+            check(lab::normalRotationError(local, rotated, angles, order) < 1e-9, "normal from cross agrees with rotated original");
+            check(close(lab::magnitude(lab::triangleUnitNormal(world)), 1.0), "unit normal length");
+            check(close(lab::triangleRawNormal(world), lab::triangleRawNormal(rotated)), "translation does not rotate normal");
+        }
+    }
+    check(!lab::normalHasDirection({{}, {}, {1.0, 0.0, 0.0}}), "degenerate triangle has no normal direction");
+}
+
+// Kiểm input và thời gian không cần khởi tạo SDL hoặc mở window.
+void inputAndClock() {
+    const auto angles = lab::applyMouseDrag({}, 20.0, -10.0, 0.01);
+    check(close(angles.yaw, 0.2) && close(angles.pitch, 0.1), "mouse delta signs");
+    check(close(lab::applyMouseDrag({}, 0.0, -200.0, 0.01).pitch, 2.0), "object pitch passes 90 degrees");
+    check(close(lab::applyMouseDrag({}, NAN, 1.0, 0.01).yaw, 0.0), "nonfinite delta rejected");
+    check(close(lab::advanceEulerAngles({}, {1.0, 2.0, 3.0}, NAN).pitch, 0.0), "nonfinite dt rejected");
+    check(close(lab::advanceEulerAngles({}, {1.0, 2.0, 3.0}, 5.0).yaw, 0.2), "stalled frame capped");
+    lab::EulerAngles a{};
+    lab::EulerAngles b{};
+    for (int i = 0; i < 60; ++i) {
+        a = lab::advanceEulerAngles(a, {0.35, 0.55, 0.2}, 1.0 / 60.0);
+    }
+    for (int i = 0; i < 20; ++i) {
+        b = lab::advanceEulerAngles(b, {0.35, 0.55, 0.2}, 0.05);
+    }
+    check(close(a.pitch, b.pitch) && close(a.yaw, b.yaw) && close(a.roll, b.roll), "equal simulation time independent of dt partition");
+    lab::Scene scene;
+    lab::moveModel(scene, {NAN, 1.0, 0.0});
+    check(close(scene.position, {0.0, 0.0, 6.0}), "invalid model delta atomic");
+    lab::moveModel(scene, {100.0, 100.0, 100.0});
+    check(close(scene.position, {4.0, 4.0, 15.0}), "model bounds");
+}
+
+// Pixel oracle xác nhận geometry chính vẫn được vẽ khi tắt debug.
+void projectionAndPixels() {
+    lab::Scene scene;
+    auto projection = lab::projectTriangle(lab::worldTriangle(scene), scene.camera, scene.lens, lab::viewportFor());
+    check(projection.allVisible, "default triangle projects");
+    const lab::Viewport viewport{10.0, 20.0, 800.0, 600.0};
+    auto lens = scene.lens;
+    lens.verticalFovRadians = lab::kPi * 0.5;
+    const auto oracle = lab::projectPerspective({1.0, 0.5, 4.0}, scene.camera, lens, viewport);
+    check(oracle.screen && close(oracle.screen->x, 485.0) && close(oracle.screen->y, 282.5), "P11 projection retained");
+    lab::applyPreset(scene, 3);
+    projection = lab::projectTriangle(lab::worldTriangle(scene), scene.camera, scene.lens, lab::viewportFor());
+    check(!projection.allVisible && projection.vertices[0].status == lab::ProjectionStatus::BeforeNearPlane, "near preset reproduces unsafe vertex");
+    lab::Framebuffer image;
+    lab::applyPreset(scene, 2);
+    lab::renderScene(image, scene);
+    check(std::count(image.pixels.begin(), image.pixels.end(), lab::kMarker) > 0, "normal arrow rendered");
+    scene.debug = false;
+    lab::renderScene(image, scene);
+    check(std::count(image.pixels.begin(), image.pixels.end(), lab::kMarker) == 0, "debug normal hidden");
+    check(std::count(image.pixels.begin(), image.pixels.end(), 0xFFB454FFu) > 0, "clean triangle retained");
+    check(std::count(image.pixels.begin(), image.pixels.end(), lab::kGrid) > 0, "clean actual depth grid retained");
+    lab::Scene partial;
+    const lab::Triangle3 crossing{{-0.1, 0.0, 0.2}, {0.5, -0.5, 2.0}, {0.0, 0.5, 2.0}};
+    const auto result = lab::projectTriangle(crossing, partial.camera, partial.lens, lab::viewportFor());
+    image.clear(lab::kBackground);
+    lab::drawProjectedTriangle(image, crossing, result, partial);
+    check(!result.allVisible && std::count(image.pixels.begin(), image.pixels.end(), lab::kShape) > 0, "one rejected vertex does not discard every edge");
 }
 } // namespace
 
 int main() {
-    const lab::Triangle3 worldTriangle = lab::defaultWorldTriangle();
-    const lab::Vec3 pivot = lab::triangleCentroid(worldTriangle);
-    const lab::Triangle3 localTriangle = lab::toLocalTriangle(worldTriangle);
-
-    // Local/world split phải giữ nguyên hình và đặt centroid local đúng tại gốc.
-    check(nearlyEqual(pivot, {0.0, 0.0, 6.0}), "default triangle pivot");
-    check(nearlyEqual(lab::triangleCentroid(localTriangle), {}), "local centroid is origin");
-    const lab::Triangle3 restoredWorld = lab::translateTriangle(localTriangle, pivot);
-    check(nearlyEqual(restoredWorld.a, worldTriangle.a), "local to world vertex A");
-    check(nearlyEqual(restoredWorld.b, worldTriangle.b), "local to world vertex B");
-    check(nearlyEqual(restoredWorld.c, worldTriangle.c), "local to world vertex C");
-
-    // Ba phép quay 90° khóa dấu sin/cos theo quy tắc bàn tay phải.
-    const double quarterTurn = lab::kPi * 0.5;
-    check(nearlyEqual(lab::rotateX({1.0, 2.0, 3.0}, quarterTurn), {1.0, -3.0, 2.0}), "rotate X quarter turn");
-    check(nearlyEqual(lab::rotateY({1.0, 2.0, 3.0}, quarterTurn), {3.0, 2.0, -1.0}), "rotate Y quarter turn");
-    check(nearlyEqual(lab::rotateZ({1.0, 2.0, 3.0}, quarterTurn), {-2.0, 1.0, 3.0}), "rotate Z quarter turn");
-
-    const lab::EulerAngles angles{0.35, -0.70, 0.25};
-    const lab::Vec3 sample{1.2, -0.8, 0.4};
-    const lab::Vec3 xyz = lab::rotateEuler(sample, angles, lab::RotationOrder::Xyz);
-    const lab::Vec3 zyx = lab::rotateEuler(sample, angles, lab::RotationOrder::Zyx);
-    check(lab::magnitude(lab::subtract(xyz, zyx)) > 1e-4, "rotation order changes orientation");
-    check(nearlyEqual(lab::magnitude(xyz), lab::magnitude(sample)), "XYZ preserves vector length");
-    check(nearlyEqual(lab::magnitude(zyx), lab::magnitude(sample)), "ZYX preserves vector length");
-
-    // Mouse mapping và pitch clamp được kiểm tra không cần SDL event loop.
-    const lab::EulerAngles dragged = lab::applyMouseDrag({}, 20.0, -10.0, 0.01);
-    check(nearlyEqual(dragged.yaw, 0.2), "mouse X changes yaw");
-    check(nearlyEqual(dragged.pitch, 0.1), "mouse Y changes pitch with screen convention");
-    const lab::EulerAngles clamped = lab::applyMouseDrag({}, 0.0, -10000.0, 0.01);
-    const lab::EulerAngles clampedNegative = lab::applyMouseDrag({}, 0.0, 10000.0, 0.01);
-    check(nearlyEqual(clamped.pitch, 89.0 * lab::kPi / 180.0), "mouse pitch clamps at positive limit");
-    check(
-        nearlyEqual(clampedNegative.pitch, -89.0 * lab::kPi / 180.0),
-        "mouse pitch clamps at negative limit"
-    );
-
-    // Rotation không được làm méo cạnh và inverse phải quay về đúng point.
-    const lab::Triangle3 rotatedXyz = lab::rotateTriangle(localTriangle, angles, lab::RotationOrder::Xyz);
-    const lab::Triangle3 rotatedZyx = lab::rotateTriangle(localTriangle, angles, lab::RotationOrder::Zyx);
-    check(lab::maximumEdgeLengthError(localTriangle, rotatedXyz) < 1e-9, "XYZ edge lengths invariant");
-    check(lab::maximumEdgeLengthError(localTriangle, rotatedZyx) < 1e-9, "ZYX edge lengths invariant");
-    check(lab::rotationRoundTripError(sample, angles, lab::RotationOrder::Xyz) < 1e-9, "XYZ round trip");
-    check(lab::rotationRoundTripError(sample, angles, lab::RotationOrder::Zyx) < 1e-9, "ZYX round trip");
-
-    const lab::EulerAngles velocity{1.0, 2.0, 3.0};
-    const lab::EulerAngles noBackwardTime = lab::advanceEulerAngles({}, velocity, -1.0);
-    const lab::EulerAngles clampedFrame = lab::advanceEulerAngles({}, velocity, 1.0);
-    check(nearlyEqual(noBackwardTime.pitch, 0.0), "negative delta time is clamped");
-    check(nearlyEqual(clampedFrame.pitch, 0.1), "large delta time is clamped");
-    check(nearlyEqual(clampedFrame.yaw, 0.2), "clamped frame updates yaw");
-
-    // Projection của cả triangle chỉ visible khi cả ba vertex đều hợp lệ.
-    const lab::Camera3D camera{};
-    const lab::PerspectiveLens lens{};
-    const lab::TriangleProjection visible = lab::projectTriangle(worldTriangle, camera, lens, 0.5, 960, 640);
-    lab::Triangle3 behindTriangle = worldTriangle;
-    behindTriangle.a = {0.0, 0.0, -1.0};
-    const lab::TriangleProjection behind = lab::projectTriangle(
-        behindTriangle,
-        camera,
-        lens,
-        0.5,
-        960,
-        640
-    );
-    lab::Triangle3 nearTriangle = worldTriangle;
-    nearTriangle.a = {0.0, 0.0, 0.4};
-    const lab::TriangleProjection beforeNear = lab::projectTriangle(
-        nearTriangle,
-        camera,
-        lens,
-        0.5,
-        960,
-        640
-    );
-    lab::Triangle3 outsideTriangle = worldTriangle;
-    outsideTriangle.a = {20.0, 0.0, 6.0};
-    const lab::TriangleProjection outside = lab::projectTriangle(
-        outsideTriangle,
-        camera,
-        lens,
-        0.5,
-        960,
-        640
-    );
-    check(visible.visible, "default projected triangle is visible");
-    check(!behind.visible, "one vertex behind camera hides complete triangle");
-    check(behind.a.status == lab::ProjectionStatus::BehindCamera, "behind status is preserved");
-    check(!beforeNear.visible, "one vertex before near plane hides complete triangle");
-    check(
-        beforeNear.a.status == lab::ProjectionStatus::BeforeNearPlane,
-        "before-near status is preserved"
-    );
-    check(!outside.visible, "one vertex outside frustum hides complete triangle");
-    check(outside.a.status == lab::ProjectionStatus::OutsideFrustum, "outside status is preserved");
-
+    numericRotationOracles();
+    geometryAndNormal();
+    inputAndClock();
+    projectionAndPixels();
     if (failures != 0) {
-        std::cerr << failures << " validation check(s) failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All Project 12 validation checks passed\n";
+    std::cout << "Rotation, normal, projection, input and pixel oracles passed\n";
     return EXIT_SUCCESS;
 }

@@ -1,139 +1,119 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Từ FOV và aspect ratio tới NDC và pixel
+# Chọn FOV và hình dạng viewport
 
 ## Vấn đề cần giải quyết
 
-Perspective divide đã tạo cảm giác gần–xa, nhưng `0.38*min(width,height)` chỉ là một focal length chọn bằng mắt. Ta chưa thể trả lời lens rộng bao nhiêu, biên nhìn nằm ở đâu hoặc resize cửa sổ ngang có làm hình méo không.
-
-Bài này chuẩn hóa kết quả thành NDC. Từ đó, mọi viewport—960×640 hay 1280×720—đều dùng chung biên `[-1,+1]`, còn bước đổi sang pixel chỉ nằm ở cuối pipeline.
+Perspective đã hoạt động nhưng độ mở của camera vẫn cố định. Ta cần một thông số dễ hiểu hơn một hằng số pixel: field of view. Đồng thời, viewport có thể rộng hoặc vuông; chỉ kéo dãn ảnh cuối sẽ làm sai hình học.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Lens được mô tả bằng vertical field of view. Xét nửa trên của frustum, cạnh đối diện có chiều cao chuẩn hóa 1:
+Vertical FOV là góc mở từ cạnh dưới tới cạnh trên. Xét nửa khung nhìn ở mặt phẳng depth 1: nửa chiều cao world bằng tan(vFOV/2). Muốn cạnh trên về NDC.y=1, ta nhân với nghịch đảo:
 
 $$
-\tan\left(\frac{FOV_y}{2}\right)=\frac{1}{f}
+f=\frac{1}{\tan(vFOV/2)},\quad a=\frac{w}{h},\quad
+n_x=\frac{x f}{z a},\quad n_y=\frac{y f}{z}.
 $$
 
-Do đó:
+FOV phải đổi từ độ sang radian trước khi gọi tan. FOV rộng làm f nhỏ, nên điểm tiến gần tâm hơn. FOV là góc, f không có đơn vị; focalPixels=h×f/2 mới là độ dài tính theo pixel.
+
+Screen có origin riêng (vₓ,vᵧ), không mặc định (0,0):
 
 $$
-f=\frac{1}{\tan(FOV_y/2)}
+s_x=v_x+\frac{n_x+1}{2}w,\qquad
+s_y=v_y+\frac{1-n_y}{2}h.
 $$
 
-Sau perspective divide:
-
-$$
-x_{ndc}=\frac{x\,f}{z\,aspect},\qquad y_{ndc}=\frac{y\,f}{z}
-$$
-
-với `aspect = width/height`. Vì FOV được chốt theo chiều dọc, viewport rộng hơn phải chứa thêm không gian theo chiều ngang.
+Đây là tọa độ liên tục trên viewport. NDC.x=+1 nằm trên **cạnh phải** vₓ+w, không phải chỉ số pixel cuối. Pixel raster nằm ở miền nửa kín [vₓ,vₓ+w); hàm vẽ chịu trách nhiệm clip, không sửa công thức bằng width−1 rồi làm lệch tỉ lệ.
 
 <InteractiveLab demo="projection" mode="projection-fov" />
 
-Kéo vertical FOV từ 35° lên 90°: focal scale giảm và marker tiến về tâm. Thay kích thước panel bằng cách resize cửa sổ; NDC/pixel cập nhật nhưng point không bị kéo sai tỉ lệ.
-
 ## Viết code từng bước
 
-### Bước 1 — Lưu FOV bằng radian
+Mở checkpoint 04 để đối chiếu sau khi tự viết. Các đoạn dưới nằm trong đúng file ghi ở tiêu đề; giữ phần khung từ bài trước, không tạo thêm một main khác. Mỗi lần ghép xong một bước, build lại target của bài:
 
-`std::tan` nhận radian, nên lens khởi tạo 60° bằng phép đổi rõ ràng:
+```powershell title="Build checkpoint 04"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_11_checkpoint_4
+.\build\Debug\project_11_checkpoint_4.exe
+```
 
-```cpp title="include/lab.hpp — lens và vertical FOV"
+### Bước 1 — Đổi góc mở thành focal scale
+
+```cpp title="include/lab.hpp — lens có FOV và hai plane"
 struct PerspectiveLens {
-    double verticalFovRadians{60.0 * kPi / 180.0};
+    double verticalFovRadians = kPi / 3.0;
+    double nearPlane = 0.5;
+    double farPlane = 16.0;
 };
+```
 
+```cpp title="include/lab.hpp — dùng tangent của nửa góc"
 inline double verticalFocalScale(const PerspectiveLens& lens) {
     return 1.0 / std::tan(lens.verticalFovRadians * 0.5);
 }
 ```
 
-Focal scale là số không thứ nguyên. Nó không phụ thuộc số pixel và vì thế có thể test độc lập.
+Mặc định 60°=π/3. validLens đã chặn góc không nằm trong (0,π); UI giới hạn hẹp hơn [25°,110°] để thí nghiệm dễ quan sát.
 
-### Bước 2 — Đưa camera point vào NDC
+### Bước 2 — Chuẩn hóa đúng chiều FOV
 
-Aspect ratio chỉ xuất hiện ở X vì lens đang dùng vertical FOV:
-
-```cpp title="include/lab.hpp — camera space sang NDC"
+```cpp title="include/lab.hpp — camera point tới NDC"
 inline Vec2 cameraToNdc(Vec3 cameraPoint, const PerspectiveLens& lens, double aspectRatio) {
+    const Vec2 divided = perspectiveDivide(cameraPoint);
     const double focalScale = verticalFocalScale(lens);
-    return {
-        cameraPoint.x * focalScale / (cameraPoint.z * aspectRatio),
-        cameraPoint.y * focalScale / cameraPoint.z,
-    };
+    return {divided.x * focalScale / aspectRatio, divided.y * focalScale};
 }
 ```
 
-Ở bước này, `(-1,+1)` đã mang nghĩa biên viewport chứ chưa phải góc pixel cụ thể.
+Tại sao chỉ X chia aspect? FOV đang đo chiều dọc. Khi w tăng mà h giữ nguyên, camera thấy rộng hơn theo X; cùng một world displacement chiếm phần nhỏ hơn bề ngang. Nhân aspect vào Y sẽ thay đổi cả góc dọc, trái với định nghĩa.
 
-### Bước 3 — Đổi NDC sang quy ước pixel của SDL
+### Bước 3 — Đổi NDC sang viewport có origin
 
-NDC có tâm `(0,0)` và Y tăng lên; framebuffer có gốc trên-trái và Y tăng xuống:
-
-```cpp title="include/lab.hpp — NDC sang screen space"
-inline Vec2 ndcToScreen(Vec2 ndc, int width, int height) {
-    return {
-        (ndc.x + 1.0) * 0.5 * width,
-        (1.0 - ndc.y) * 0.5 * height,
-    };
+```cpp title="include/lab.hpp — đặt ảnh trong bảng logic"
+inline Vec2 ndcToScreen(Vec2 ndc, const Viewport& viewport) {
+    return {viewport.x + (ndc.x + 1.0) * 0.5 * viewport.width, viewport.y + (1.0 - ndc.y) * 0.5 * viewport.height};
 }
 ```
 
-Ta viết luôn chiều ngược để bài cuối kéo marker và đo round-trip error:
-
-```cpp title="include/lab.hpp — screen space trở lại NDC"
-inline Vec2 screenToNdc(Vec2 screen, int width, int height) {
-    return {
-        screen.x * 2.0 / width - 1.0,
-        1.0 - screen.y * 2.0 / height,
-    };
-}
-```
-
-### Bước 4 — Ghép đúng thứ tự trong render loop
-
-Width và height hiện tại tạo aspect ratio sau mỗi resize:
-
-```cpp title="src/main.cpp — NDC rồi mới tới pixel"
-const lab::Vec2 ndc = lab::cameraToNdc(cameraPoint, lens, double(width) / double(height));
-screen = lab::ndcToScreen(ndc, width, height);
-```
-
-Phím ngoặc vuông thay FOV trong khoảng an toàn:
-
-```cpp title="src/main.cpp — giảm vertical FOV"
-if (event.key.key == SDLK_LEFTBRACKET) {
-    lens.verticalFovRadians = std::max(
-        25.0 * lab::kPi / 180.0,
-        lens.verticalFovRadians - 2.0 * lab::kPi / 180.0
-    );
+```cpp title="include/scene.hpp — ba viewport thật, không scale ảnh méo"
+inline Viewport viewportFor(const Scene& scene) {
+    if (scene.aspect == 1) {
+        return {150.0, 100.0, 800.0, 600.0};
+    }
+    if (scene.aspect == 2) {
+        return {250.0, 100.0, 600.0, 600.0};
+    }
+    return {};
 }
 ```
 
 ## Ghép các phần lại
 
-Build `project_11_checkpoint_4`. Point trên trục nhìn phải ở `(width/2,height/2)`. Với point lệch tâm, `[` thu hẹp FOV và đẩy marker xa tâm; `]` mở rộng FOV và kéo nó gần tâm.
+projectPerspective thay nhánh focal tạm của bài 3 bằng cameraToNdc rồi ndcToScreen. Render marker và lưới tự nhận thay đổi vì cùng đi qua hàm này.
 
-Resize từ 960×640 sang một cửa sổ rộng. Vertical framing giữ nguyên vì `ndc.y` không dùng aspect; horizontal framing mở rộng vì `ndc.x` chia cho aspect mới. Đây là hành vi đúng của vertical FOV, không phải lỗi scale.
+Trong SDL, +/− thay FOV, V chuyển 16:9 → 4:3 → 1:1. Trong Canvas dùng Vertical FOV và Aspect. Cả ba viewport có cùng tâm (550,400), nhưng kích thước khác nhau. Khi thử số, nhớ focalPixels còn phụ thuộc chiều cao.
+
+Window resize vẫn **letterbox bảng logic 1100×800**, không đổi aspect ngầm và không làm méo ảnh. Muốn kiểm aspect của phép chiếu, dùng V/Aspect. Hai việc này khác nhau; việc kéo window rộng mà scene không đổi FOV là chủ ý của bản triển khai này.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ aspect ratio. Cùng một scene sẽ bị kéo ngang khi viewport thay tỉ lệ.
-2. Nhân X với aspect thay vì chia. Viewport càng rộng thì point càng dễ văng khỏi màn hình.
-3. Tính screen Y bằng `(ndc.y+1)/2*height`. NDC Y=+1 sẽ xuống đáy thay vì lên đỉnh.
+1. Giữ point, đổi FOV 60°→90°. Displacement giảm, không phải tăng; f giảm từ √3 xuống 1. Nếu ngược, hãy kiểm tan và radian.
+
+2. Bỏ phép chia aspect ở ndc.x, chọn viewport 16:9. Cùng world length trên X/Y sẽ không còn cùng scale pixel. Khôi phục chia aspect.
+
+3. Dùng viewport (10,20,800,600), FOV90°, point (1,0.5,4): tính focalPixels=300, screen=(485,282.5). Không dùng inverse làm expected cho test này.
 
 ## Tự kiểm tra kết quả
 
-- NDC `(0,0)` đổi thành tâm viewport.
-- NDC `(-1,+1)` đổi thành pixel `(0,0)`.
-- NDC `(+1,-1)` đổi thành `(width,height)` ở biên ngoài cùng.
-- FOV lớn hơn cho focal scale nhỏ hơn và marker gần tâm hơn.
-- Resize thay aspect ratio nhưng không làm sai vertical framing.
+- FOV60° có focal scale √3; FOV90° có focal scale 1.
+- Point trên trục nhìn nằm đúng tâm viewport, kể cả viewport có origin khác 0.
+- X/Y cùng dùng focalPixels theo chiều cao, không bị kéo méo ở các aspect.
+- NDC +1 được hiểu là cạnh liên tục, marker không ghi sang panel.
+- Resize và đổi Aspect được mô tả/hoạt động đúng hai nhiệm vụ riêng.
 
 ## Bài tập mở rộng
 
-Vẽ bốn marker có NDC cố định tại các góc `±0.8`. Sau đó resize cửa sổ và kiểm tra chúng luôn giữ vị trí tương đối 10% cách biên, bất kể số pixel.
+Thêm chế độ nhập focalPixels thay vì FOV. Suy lại vFOV=2×atan(h/(2×focalPixels)) và kiểm rằng hai chế độ cho cùng pixel.
 
-Ta vẫn đang ép point ở trước camera bằng một giới hạn tạm. Bài sau sẽ bỏ giới hạn đó, cho phép dữ liệu sai xuất hiện và phân loại an toàn trước khi vẽ.
+[Sang bài tiếp theo — Chặn điểm không thể nhìn thấy](/projects/perspective-point/05-near-plane-va-view-frustum).

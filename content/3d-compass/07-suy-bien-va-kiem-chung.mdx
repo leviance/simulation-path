@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện la bàn và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Bản final phải xử lý được cả tam giác rõ ràng lẫn ba đỉnh thẳng hàng hoặc gần thẳng hàng. Bài cuối kiểm chính sách “có hướng normal” và đóng gói executable, không chỉ dừng ở hình minh họa nhìn có vẻ đúng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai lý do khác nhau có thể làm normal không tin cậy: cạnh/cross quá nhỏ trong đơn vị world, hoặc hai cạnh gần song song. Ta kiểm:
+
+$$
+\|N\|\le10^{-10}\ \text{world}^2
+\quad\lor\quad
+\frac{\|N\|}{\|A\|\|B\|}\le10^{-6}.
+$$
+
+Tỉ số thứ hai là |sinθ|, không có đơn vị. Với cạnh zero, phải dừng trước phép chia. Đây là **chính sách editor trong miền tọa độ [-2,2]**, không phải một định lý rằng mọi tam giác nhỏ đều suy biến.
+
+Near-collinear có thể vẫn có area dương rất nhỏ. Ta giữ số đo đó, chỉ không vẽ một hướng normal quá nhạy. Không ghi facing=0 hay error=0 như bằng chứng đúng khi không có hướng.
+
+<InteractiveLab demo="normal" mode="normal-full" />
+
+## Viết code từng bước
+
+### Bước 1 — Dùng một guard cho mọi nhánh normal
+
+```cpp title="include/lab.hpp — tách diện tích rất nhỏ khỏi góc rất nhỏ"
+inline bool normalHasDirection(const Triangle& triangle) {
+    const Edges edges = triangleEdges(triangle);
+    const double lengthA = magnitude(edges.a);
+    const double lengthB = magnitude(edges.b);
+    const double crossLength = magnitude(triangleRawNormal(triangle));
+    if (lengthA == 0.0 || lengthB == 0.0 || crossLength <= 1e-10) {
+        return false;
+    }
+    return crossLength / (lengthA * lengthB) > 1e-6;
+}
+```
+
+triangleUnitNormal, hai mũi tên normal và facing đều đi qua guard này. F3 thẳng hàng, F4 trùng hai đỉnh, F5 gần thẳng hàng phải hiện trạng thái không xác định. F5 có measured area khác 0, không bị ép về 0.
+
+### Bước 2 — Kiểm vuông góc theo tỉ lệ
+
+```cpp title="include/lab.hpp — dot của các hướng đơn vị"
+inline double orthogonalityError(const Triangle& triangle) {
+    if (!normalHasDirection(triangle)) {
+        return 0.0;
+    }
+    const Edges edges = triangleEdges(triangle);
+    const Vec3 unit = triangleUnitNormal(triangle);
+    return std::max(std::abs(dot(unit, normalize(edges.a))), std::abs(dot(unit, normalize(edges.b))));
+}
+```
+
+Sai số này không tăng chỉ vì bạn phóng to hai cạnh. Hàm trả fallback 0 khi không có normal để tránh NaN, nhưng UI phải ghi undefined trong trường hợp đó. Một mình dot≈0 chưa đủ chứng minh cross đúng: hàm cross luôn trả zero cũng thỏa điều kiện này.
+
+### Bước 3 — Thêm oracle độc lập
+
+```cpp title="tests/tests.cpp — diện tích từ ba độ dài cạnh, không gọi cross"
+double heron(const lab::Triangle& triangle) {
+    const double a = lab::magnitude(lab::subtract(triangle.p1, triangle.p0));
+    const double b = lab::magnitude(lab::subtract(triangle.p2, triangle.p1));
+    const double c = lab::magnitude(lab::subtract(triangle.p0, triangle.p2));
+    const double half = (a + b + c) * 0.5;
+    return std::sqrt(std::max(0.0, half * (half - a) * (half - b) * (half - c)));
+}
+```
+
+Tests còn kiểm X×Y=Z, ví dụ đầy đủ (1,2,3)×(4,−2,1)=(8,11,−10), 61 tam giác hữu hạn, winding, perspective theo depth, near/far intersection, input clamp và pixel thực. Heron là phép đối chiếu khác, không thay expected result số biết trước.
+
+### Bước 4 — Build cả app và tests
+
+```bash title="Terminal — Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Release\project_10_final.exe
+```
+
+Không chỉ build --target project_10_final rồi chạy CTest: test executable cũng phải được build. Tests dùng check/EXIT_FAILURE, không phụ thuộc assert bị tắt bởi NDEBUG.
+
+## Ghép các phần lại
+
+Bản final có đầy đủ X/Y/Z, A/B, tam giác, raw cross từ P0, unit normal từ centroid và camera perspective orbit. Không có hidden-surface removal nên đây vẫn là wireframe debug view, không phải một renderer mặt kín.
+
+ZIP gồm README, CMakeLists.txt, starter, bảy checkpoint, final và tests. Phần **Toàn bộ mã nguồn của dự án** phía dưới hiển thị đủ mọi file. lab.hpp giữ math, camera.hpp giữ basis/projection/clipping, scene.hpp giữ state, framebuffer.hpp/view.hpp vẽ CPU, presentation.hpp hiển thị ảnh/chữ, main.cpp quản lý SDL/input.
+
+Mỗi checkpoint chạy độc lập. Trong repository giáo trình chỉ sửa source-template, không sửa output được sinh rồi chép ngược về nguồn.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay cross bằng hàm luôn trả zero rồi chỉ kiểm dot(N,A),dot(N,B). Các dot vẫn bằng 0 nhưng bài toán sai. Dùng basis/numeric oracle và kiểm độ dài để phát hiện, sau đó khôi phục cross.
+
+2. Xóa kiểm góc tương đối, chỉ giữ ngưỡng diện tích. Phóng to một cặp cạnh gần song song có thể vượt ngưỡng area trong khi hướng vẫn rất nhạy. Khôi phục hai ngưỡng và kiểm F5.
+
+3. Chỉ đổi camera để mặt thành edge-on rồi gọi đó là degenerate. Kiểm area world và raw cross: chúng không đổi. Đưa việc phân loại suy biến về hình học, không dựa trên diện tích ảnh chiếu.
+
+## Tự kiểm tra kết quả
+
+- Basis và ví dụ ba thành phần đúng; cross vuông góc hai cạnh trong sai số.
+- Tam giác 3–4 có raw length=12, unit length=1, area=6; Heron đối chiếu area.
+- Đảo winding đổi dấu normal, giữ area; camera đổi facing, giữ vertices.
+- Near/far clip được kiểm bằng giao điểm giải tích; depth xa làm hình nhỏ hơn.
+- F3/F4/F5 không vẽ normal giả hoặc gán front/back; F5 giữ area nhỏ khác 0.
+- Debug và Release chạy CTest. Hidden --smoke kiểm init/present/thoát, không thay QA desktop.
+- QA trực tiếp còn cần mouse/keyboard, thả ngoài, resize, DPI, blur và pause/reset.
+
+## Bài tập mở rộng
+
+Thêm một tam giác thứ hai có cùng normal nhưng diện tích khác. Viết test phân biệt hướng, độ dài raw cross và area; giải thích vì sao unit normal không đủ chứa cả ba thông tin.
+
+[Tiếp tục Project 11 — Chiếu một điểm 3D](/projects/perspective-point).

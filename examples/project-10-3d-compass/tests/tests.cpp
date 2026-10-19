@@ -1,73 +1,132 @@
-#include "lab.hpp"
-
-#include <cmath>
+#include "view.hpp"
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string_view>
 
 namespace {
 int failures = 0;
 
-bool nearlyEqual(double left, double right, double epsilon = 1e-9) {
-    return std::abs(left - right) <= epsilon;
+bool near(double left, double right, double epsilon = 1e-8) {
+    return std::isfinite(left) && std::isfinite(right) && std::abs(left - right) <= epsilon;
 }
 
-bool nearlyEqual(lab::Vec3 left, lab::Vec3 right, double epsilon = 1e-9) {
-    return nearlyEqual(left.x, right.x, epsilon) && nearlyEqual(left.y, right.y, epsilon) &&
-        nearlyEqual(left.z, right.z, epsilon);
+bool near(lab::Vec3 left, lab::Vec3 right) {
+    return near(left.x, right.x) && near(left.y, right.y) && near(left.z, right.z);
 }
 
 void check(bool condition, std::string_view label) {
-    if (condition) {
-        return;
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAILED: " << label << '\n';
     }
-    std::cerr << "FAILED: " << label << '\n';
-    ++failures;
+}
+
+// Heron không gọi cross/triangleArea, dùng ba độ dài cạnh.
+double heron(const lab::Triangle& triangle) {
+    const double a = lab::magnitude(lab::subtract(triangle.p1, triangle.p0));
+    const double b = lab::magnitude(lab::subtract(triangle.p2, triangle.p1));
+    const double c = lab::magnitude(lab::subtract(triangle.p0, triangle.p2));
+    const double half = (a + b + c) * 0.5;
+    return std::sqrt(std::max(0.0, half * (half - a) * (half - b) * (half - c)));
 }
 } // namespace
 
 int main() {
-    // Kiểm tra các phép Vec3 cơ bản trước khi ghép chúng thành normal của tam giác.
-    check(nearlyEqual(lab::add({1.0, 2.0, 3.0}, {-4.0, 5.0, 1.0}), {-3.0, 7.0, 4.0}), "Vec3 addition");
-    check(nearlyEqual(lab::subtract({1.0, 2.0, 3.0}, {-4.0, 5.0, 1.0}), {5.0, -3.0, 2.0}), "Vec3 subtraction");
-    check(nearlyEqual(lab::dot({1.0, 2.0, 3.0}, {4.0, -5.0, 2.0}), 0.0), "3D dot product");
+    // Nghiệm biết trước bắt lỗi dấu/toán tử trước khi kiểm invariant.
+    check(near(lab::cross({1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}), {0.0, 0.0, 1.0}), "X cross Y");
+    check(near(lab::cross({0.0, 1.0, 0.0}, {1.0, 0.0, 0.0}), {0.0, 0.0, -1.0}), "Y cross X");
+    check(near(lab::cross({1.0, 2.0, 3.0}, {4.0, -2.0, 1.0}), {8.0, 11.0, -10.0}), "three components numeric oracle");
+    lab::Scene scene;
+    lab::applyPreset(scene, 1);
+    check(near(lab::triangleRawNormal(scene.triangle), {0.0, 0.0, 12.0}), "3-4 cross");
+    check(near(lab::triangleArea(scene.triangle), 6.0), "3-4 area");
+    check(near(lab::magnitude(lab::triangleUnitNormal(scene.triangle)), 1.0), "unit length");
 
-    const lab::Vec3 xAxis{1.0, 0.0, 0.0};
-    const lab::Vec3 yAxis{0.0, 1.0, 0.0};
-    const lab::Vec3 zAxis{0.0, 0.0, 1.0};
-    check(nearlyEqual(lab::cross(xAxis, yAxis), zAxis), "X cross Y is Z");
-    check(nearlyEqual(lab::cross(yAxis, xAxis), lab::scale(zAxis, -1.0)), "cross order changes sign");
+    for (int sample = 0; sample < 61; ++sample) {
+        lab::Triangle triangle{{-0.7, 0.2, -0.3}, {(sample % 7 - 3) * 0.4, (sample % 9 - 4) * 0.3, (sample % 5 - 2) * 0.5}, {(sample % 11 - 5) * 0.3, (sample % 13 - 6) * 0.25, (sample % 3 - 1) * 0.7}};
+        const lab::Edges edges = lab::triangleEdges(triangle);
+        const lab::Vec3 normal = lab::triangleRawNormal(triangle);
+        check(near(lab::dot(normal, edges.a), 0.0), "cross perpendicular A");
+        check(near(lab::dot(normal, edges.b), 0.0), "cross perpendicular B");
+        check(near(lab::triangleArea(triangle), heron(triangle), 1e-7), "area independent Heron");
+        const lab::Triangle reversed = lab::reverseWinding(triangle);
+        check(near(lab::triangleRawNormal(reversed), lab::scale(normal, -1.0)), "winding flips cross");
+        check(near(lab::triangleArea(reversed), lab::triangleArea(triangle)), "winding preserves area");
+        check(lab::orthogonalityError(triangle) < 1e-8, "relative error bounded");
+    }
+    for (const int index : {2, 3, 4}) {
+        lab::applyPreset(scene, index);
+        check(!lab::normalHasDirection(scene.triangle), "degenerate and near-collinear have no trusted direction");
+        check(near(lab::triangleUnitNormal(scene.triangle), {}), "safe fallback is finite");
+    }
+    check(lab::triangleArea(scene.triangle) > 0.0, "near-collinear measured area not forced zero");
+    const lab::Triangle small{{}, {1e-4, 0.0, 0.0}, {0.0, 1e-4, 0.0}};
+    check(lab::normalHasDirection(small), "small perpendicular edges can still define a normal");
 
-    // Tam giác vuông 3×4 có raw normal dài 12 và diện tích 6.
-    const lab::Triangle rightTriangle{{0.0, 0.0, 0.0}, {3.0, 0.0, 0.0}, {0.0, 4.0, 0.0}};
-    const auto [edgeAB, edgeAC] = lab::triangleEdges(rightTriangle);
-    const lab::Vec3 rawNormal = lab::triangleRawNormal(rightTriangle);
-    check(nearlyEqual(edgeAB, {3.0, 0.0, 0.0}), "edge AB");
-    check(nearlyEqual(edgeAC, {0.0, 4.0, 0.0}), "edge AC");
-    check(nearlyEqual(rawNormal, {0.0, 0.0, 12.0}), "raw normal magnitude and direction");
-    check(nearlyEqual(lab::dot(rawNormal, edgeAB), 0.0), "normal perpendicular to AB");
-    check(nearlyEqual(lab::dot(rawNormal, edgeAC), 0.0), "normal perpendicular to AC");
-    check(nearlyEqual(lab::magnitude(lab::triangleUnitNormal(rightTriangle)), 1.0), "unit normal length");
-    check(nearlyEqual(lab::triangleArea(rightTriangle), 6.0), "triangle area from cross");
+    // Perspective oracle độc lập: ở yaw=pitch=0, eye=(0,0,radius).
+    const lab::Camera camera{0.0, 0.0, 9.0};
+    check(near(lab::worldToCamera({1.0, 2.0, 3.0}, camera), {1.0, 2.0, 6.0}), "camera basis numeric oracle");
+    const auto nearPoint = lab::projectPerspective({1.0, 0.0, 2.0});
+    const auto farPoint = lab::projectPerspective({1.0, 0.0, 4.0});
+    check(nearPoint.visible && farPoint.visible, "perspective points visible");
+    check(near(nearPoint.screen.x - 550.0, 2.0 * (farPoint.screen.x - 550.0)), "far point appears smaller");
+    check(!lab::projectPerspective({1.0, 1.0, 0.0}).visible, "reject eye plane before divide");
+    check(!lab::projectPerspective({0.0, 0.0, 31.0}).visible, "reject beyond far plane");
+    lab::Vec3 start{0.0, 0.0, -1.0};
+    lab::Vec3 end{2.0, 0.0, 1.0};
+    check(lab::clipDepth(start, end) && near(start.x, 1.2) && start.z == 0.2, "near clipping analytic intersection");
+    check(lab::projectPerspective(start).visible, "clipped boundary remains visible");
+    start = {0.0, 0.0, 29.0};
+    end = {2.0, 0.0, 31.0};
+    check(lab::clipDepth(start, end) && near(end.x, 1.0) && end.z == 30.0, "far clipping");
+    start = {0.0, 0.0, -1.0};
+    end = {1.0, 1.0, 0.0};
+    check(!lab::clipDepth(start, end), "both behind reject");
+    start = {std::numeric_limits<double>::quiet_NaN(), 0.0, 1.0};
+    check(!lab::clipDepth(start, end), "nonfinite segment rejected");
 
-    const lab::Triangle reversed = lab::reverseWinding(rightTriangle);
-    check(nearlyEqual(lab::triangleRawNormal(reversed), lab::scale(rawNormal, -1.0)), "reversed winding flips normal");
-    check(nearlyEqual(lab::triangleArea(reversed), lab::triangleArea(rightTriangle)), "reversed winding preserves area");
+    lab::applyPreset(scene, 1);
+    scene.camera = camera;
+    const lab::Vec3 toward = lab::subtract(lab::cameraEye(scene.camera), lab::triangleCentroid(scene.triangle));
+    check(lab::facingAmount(scene.triangle, toward) > 0.0, "front toward actual eye");
+    check(lab::facingAmount(lab::reverseWinding(scene.triangle), toward) < 0.0, "back after reverse");
+    const auto triangleBefore = scene.triangle;
+    lab::orbit(scene.camera, 9999.0, 9999.0);
+    check(near(scene.triangle.p0, triangleBefore.p0), "orbit does not edit geometry");
+    check(scene.camera.pitch <= 1.2 && std::abs(scene.camera.yaw) <= lab::kPi, "camera clamps and wraps");
+    scene.selected = 1;
+    lab::moveVertex(scene, {99.0, -99.0, 99.0});
+    check(near(scene.triangle.p1, {2.0, -2.0, 2.0}), "vertex clamp");
+    const double yaw = scene.camera.yaw;
+    lab::advanceScene(scene, -1.0);
+    check(scene.camera.yaw == yaw, "negative dt ignored");
 
-    // Trường hợp suy biến phải được báo rõ và không sinh NaN.
-    const lab::Triangle collinear{{-1.0, -1.0, -1.0}, {0.0, 0.0, 0.0}, {2.0, 2.0, 2.0}};
-    check(lab::isDegenerate(collinear), "collinear triangle is degenerate");
-    check(nearlyEqual(lab::triangleUnitNormal(collinear), {}), "degenerate normal stays finite zero");
-    check(std::isfinite(lab::facingAmount(collinear, {1.0, -1.0, 1.0})), "degenerate facing is finite");
-    check(nearlyEqual(lab::orthogonalityError(rightTriangle), 0.0), "orthogonality validation");
-
-    const lab::Vec2 projectedOrigin = lab::projectIsometric({0.0, 0.0, 0.0});
-    check(nearlyEqual(projectedOrigin.x, 0.0) && nearlyEqual(projectedOrigin.y, 0.0), "diagram keeps origin");
-
+    // Kiểm raster thật: floor, axes, A/B, raw và unit đều có pixel trong final.
+    lab::applyPreset(scene, 0);
+    lab::Framebuffer image;
+    lab::renderScene(image, scene);
+    for (const auto color : {lab::kAxisX, lab::kAxisY, lab::kShape, 0xFFB454FFu, 0x53DFEFFFu, lab::kMarker, 0xE6A0FFFFu}) {
+        bool found = false;
+        for (const auto pixel : image.pixels) {
+            if (pixel == color) {
+                found = true;
+            }
+        }
+        check(found, "required visible layer has pixels");
+    }
+    lab::applyPreset(scene, 2);
+    lab::renderScene(image, scene);
+    bool fakeUnit = false;
+    for (const auto pixel : image.pixels) {
+        if (pixel == 0xE6A0FFFFu) {
+            fakeUnit = true;
+        }
+    }
+    check(!fakeUnit, "no fake unit arrow for degenerate triangle");
     if (failures != 0) {
-        std::cerr << failures << " validation check(s) failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All Project 10 validation checks passed\n";
+    std::cout << "Project 10 math/camera/raster checks passed\n";
     return EXIT_SUCCESS;
 }

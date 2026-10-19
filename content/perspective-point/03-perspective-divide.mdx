@@ -1,114 +1,186 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Perspective divide từ tam giác đồng dạng
+# Vì sao điểm ở xa tiến về tâm?
 
 ## Vấn đề cần giải quyết
 
-Camera space đã cho biết point cách camera bao xa, nhưng checkpoint 2 vẫn vẽ X/Y với cùng scale ở mọi Z. Một point ở cách 2 đơn vị và một point ở cách 20 đơn vị có cùng X sẽ lệch tâm như nhau. Hình đó giống bản vẽ kỹ thuật, không giống cách ta nhìn không gian.
-
-Ta cần tìm giao điểm giữa tia đi từ camera qua point và một mặt phẳng ảnh đặt trước camera. Công thức `x/z` không xuất hiện như một mẹo; nó là kết quả trực tiếp của hai tam giác đồng dạng.
+Lưới XY hiện tại không cho cảm giác xa gần: tăng Z từ 4 lên 8 mà điểm vẫn ở nguyên chỗ. Bài này thay bản xem trước bằng perspective thật. Ta cũng chiếu các đường lưới world để người xem có mốc so sánh, chứ không chỉ làm đĩa nhỏ đi.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Xét mặt phẳng X–Z. Camera ở gốc, point là `(x,z)` và mặt phẳng ảnh tạm đặt tại `z=1`. Tam giác lớn có cạnh ngang x, cạnh sâu z; tam giác nhỏ có cạnh ngang x′, cạnh sâu 1. Hai tam giác cùng góc nên:
+Tưởng tượng một tia đi từ camera ở gốc qua point (x,y,z). Tia cắt mặt phẳng ảnh tưởng tượng ở depth 1. Trong mặt phẳng XZ, tam giác nhỏ và tam giác tới point là hai tam giác đồng dạng:
 
 $$
-\frac{x'}{1}=\frac{x}{z}\quad\Rightarrow\quad x'=\frac{x}{z}
+\frac{x'}{1}=\frac{x}{z},\qquad \frac{y'}{1}=\frac{y}{z}.
 $$
 
-Lập luận tương tự theo Y:
+Vì thế x′=x/z, y′=y/z. Với (1,0.5,4), kết quả (0.25,0.125); đổi riêng Z thành 8 cho (0.125,0.0625). Ta thu hẹp **độ lệch khỏi tâm**, không chia trực tiếp tọa độ pixel tuyệt đối.
 
-$$
-y'=\frac{y}{z}
-$$
-
-Nếu giữ X/Y và nhân Z lên 2, cả hai độ lệch bị chia đôi. Đây là phần cốt lõi của perspective.
+Checkpoint này dùng focal scale tạm bằng 1: tương đương vertical FOV 90°. Nó chưa đọc slider FOV; bài 4 mới thay hệ số tạm bằng lens thật. Guard near/far đã được cung cấp cùng helper để chương trình an toàn ngay từ lần chia đầu tiên. Bài 5 sẽ bóc tách từng trạng thái của guard.
 
 <InteractiveLab demo="projection" mode="projection-divide" />
 
-Giữ P.X/P.Y rồi kéo P.Z. Quan sát tia ở sơ đồ X–Z và dòng `perspective divide`. Đưa point xa hơn: marker tiến dần về tâm nhưng không đổi sang phía đối diện.
-
 ## Viết code từng bước
 
-### Bước 1 — Viết đúng một hàm cho phép chia
+Mở checkpoint 03 để đối chiếu sau khi tự viết. Các đoạn dưới nằm trong đúng file ghi ở tiêu đề; giữ phần khung từ bài trước, không tạo thêm một main khác. Mỗi lần ghép xong một bước, build lại target của bài:
 
-Hàm nhận camera point và trả hai tỉ lệ chưa mang đơn vị pixel:
+```powershell title="Build checkpoint 03"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_11_checkpoint_3
+.\build\Debug\project_11_checkpoint_3.exe
+```
 
-```cpp title="include/lab.hpp — perspective divide"
+### Bước 1 — Viết phép chia từ tỉ lệ vừa suy ra
+
+```cpp title="include/lab.hpp — tọa độ trên mặt phẳng ảnh depth 1"
 inline Vec2 perspectiveDivide(Vec3 cameraPoint) {
     return {cameraPoint.x / cameraPoint.z, cameraPoint.y / cameraPoint.z};
 }
 ```
 
-Ta chưa xử lý Z bằng 0 trong hàm nhỏ này. Checkpoint 3 tạm giữ point trước camera; bài 5 sẽ đặt lớp bảo vệ ở đầu pipeline, nơi có đủ thông tin để trả status rõ ràng.
+Hàm nhỏ này không tự biết near plane. Caller có trách nhiệm kiểm depth trước; không gọi nó tùy tiện ở mọi nơi trong renderer.
 
-### Bước 2 — Giữ một khoảng depth tối thiểu trong checkpoint trung gian
+### Bước 2 — Ghép thành phép chiếu có guard
 
-Khi chưa có near plane, input Q/E hoặc camera Z có thể đẩy point qua camera. Đoạn bảo vệ tạm thời giữ world Z nhỉnh hơn camera Z:
+Checkpoint 3 cung cấp ProjectionStatus, ProjectionResult và validLens trong lab.hpp. ProjectionResult có cameraPoint và hai optional là ndc/screen; hãy giữ các khai báo này khi chép hàm dưới. Chưa cần học hết enum ngay: bài 5 sẽ giải thích ý nghĩa từng nhánh. Chúng có mặt sớm để bản chạy thử luôn an toàn.
 
-```cpp title="src/main.cpp — giới hạn tạm trước khi có near plane"
-const double minimumDepth = camera.position.z + 0.1;
-if (worldPoint.z < minimumDepth) {
-    worldPoint.z = minimumDepth;
+```cpp title="include/lab.hpp — pipeline an toàn với focal scale tạm"
+inline ProjectionResult projectPerspective(Vec3 worldPoint, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
+    ProjectionResult result;
+    if (!finite(worldPoint) || !finite(camera.position) || !validLens(lens, viewport)) {
+        return result;
+    }
+    const Vec3 cameraPoint = worldToCamera(worldPoint, camera);
+    result.cameraPoint = cameraPoint;
+    if (!finite(cameraPoint)) {
+        return result;
+    }
+    // Các guard đã có từ bài 3 để checkpoint không chia cho 0.
+    // Bài 5 giải thích và đưa từng trạng thái ra giao diện.
+    if (cameraPoint.z <= 0.0) {
+        result.status = ProjectionStatus::BehindCamera;
+        return result;
+    }
+    if (cameraPoint.z < lens.nearPlane) {
+        result.status = ProjectionStatus::BeforeNearPlane;
+        return result;
+    }
+    if (cameraPoint.z > lens.farPlane) {
+        result.status = ProjectionStatus::BeyondFarPlane;
+        return result;
+    }
+    const double aspectRatio = viewport.width / viewport.height;
+    const Vec2 divided = perspectiveDivide(cameraPoint);
+    // Ở bài 3 mặt phẳng ảnh tạm có focal scale = 1.
+    const Vec2 ndc{divided.x / aspectRatio, divided.y};
+    const Vec2 screen{viewport.x + viewport.width * 0.5 + ndc.x * viewport.width * 0.5, viewport.y + viewport.height * 0.5 - ndc.y * viewport.height * 0.5};
+    if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || !std::isfinite(screen.x) || !std::isfinite(screen.y)) {
+        return result;
+    }
+    result.ndc = ndc;
+    result.screen = screen;
+    result.status = ProjectionStatus::OutsideFrustum;
+    if (isInsideNdc(ndc)) {
+        result.status = ProjectionStatus::Visible;
+    }
+    return result;
 }
 ```
 
-Đây không phải thiết kế cuối. Nó chỉ giúp checkpoint 3 và 4 không chia cho zero trong lúc ta tập trung vào công thức.
+Theo thứ tự: kiểm finite/lens, đổi world sang camera, chặn depth, mới divide và chuyển về screen. X chia aspect để hình tròn không bị kéo rộng khi viewport không vuông. result.screen là optional: thiếu giá trị nghĩa là chưa có ảnh hợp lệ, không phải marker ở góc (0,0).
 
-### Bước 3 — Tách kết quả chia khỏi camera point
+### Bước 3 — Dùng cùng phép chiếu cho lưới và điểm
 
-Trong render loop, giữ ba biến có ba ý nghĩa khác nhau:
-
-```cpp title="src/main.cpp — tạo camera point rồi mới chia"
-const lab::Vec3 cameraPoint = lab::worldToCamera(worldPoint, camera);
-screen = previewToScreen(cameraPoint, width, height);
-```
-
-```cpp title="src/main.cpp — xem kết quả chia trên framebuffer"
-const lab::Vec2 divided = lab::perspectiveDivide(cameraPoint);
-const double previewFocalLength = std::min(width, height) * 0.38;
-screen = {
-    width * 0.5 + divided.x * previewFocalLength,
-    height * 0.5 - divided.y* previewFocalLength,
-};
-```
-
-`previewFocalLength` chỉ phóng tỉ lệ không thứ nguyên thành số pixel để quan sát. Nó phụ thuộc kích thước cửa sổ và chưa diễn tả một lens có FOV cụ thể.
-
-### Bước 4 — Dùng depth để gợi ý kích thước marker
-
-Một point toán học không có kích thước, nhưng marker UI nhỏ dần giúp mắt đọc depth nhanh hơn:
-
-```cpp title="src/main.cpp — marker nhỏ dần khi Z tăng"
-if (cameraPoint.z > 0.0) {
-    markerRadius = std::clamp(int(std::lround(34.0 / cameraPoint.z)), 3, 14);
+```cpp title="include/view.hpp — đoạn world qua camera rồi mới raster"
+inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene, std::uint32_t color) {
+    start = worldToCamera(start, scene.camera);
+    end = worldToCamera(end, scene.camera);
+    if (!clipDepth(start, end, scene.lens)) {
+        return;
+    }
+    const Camera3D origin{};
+    const Viewport viewport = viewportFor(scene);
+    const auto a = projectPerspective(start, origin, scene.lens, viewport);
+    const auto b = projectPerspective(end, origin, scene.lens, viewport);
+    if (!a.screen || !b.screen) {
+        return;
+    }
+    Vec2 from = *a.screen;
+    Vec2 to = *b.screen;
+    if (!clipScreen(from, to, viewport)) {
+        return;
+    }
+    drawLine(image, static_cast<int>(std::lround(from.x)), static_cast<int>(std::lround(from.y)), static_cast<int>(std::lround(to.x)), static_cast<int>(std::lround(to.y)), color);
 }
 ```
 
-Điều kiện Z dương giữ phép chia phụ trợ này an toàn. Kích thước marker không tham gia vào tọa độ projection.
+line3D biến đổi cả hai đầu mút sang camera space, cắt ở near/far rồi chiếu. Sau bước đó clipScreen giới hạn đoạn trong viewport, cuối cùng mới làm tròn sang int và gọi Bresenham. Các helper clipping được cung cấp ở checkpoint 3 để bài này tập trung vào phép chia; bài 5 sẽ giải thích đầy đủ.
+
+```cpp title="include/view.hpp — cảnh nền có tọa độ world"
+inline void drawDepthScene(Framebuffer& image, const Scene& scene) {
+    // Các đường này là hình học 3D thật, không phải lưới 2D dán sau marker.
+    for (int x = -4; x <= 4; ++x) {
+        const double position = static_cast<double>(x);
+        line3D(image, {position, -1.5, 1.0}, {position, -1.5, 16.0}, scene, kGrid);
+    }
+    for (int z = 1; z <= 16; ++z) {
+        const double depth = static_cast<double>(z);
+        line3D(image, {-4.0, -1.5, depth}, {4.0, -1.5, depth}, scene, kGrid);
+    }
+    // Bốn khung cùng kích thước world, xa dần về +Z.
+    for (double z : {2.0, 4.0, 8.0, 12.0}) {
+        line3D(image, {-3.0, -1.5, z}, {-3.0, 2.0, z}, scene, kGhost);
+        line3D(image, {-3.0, 2.0, z}, {3.0, 2.0, z}, scene, kGhost);
+        line3D(image, {3.0, 2.0, z}, {3.0, -1.5, z}, scene, kGhost);
+    }
+    if (scene.debug) {
+        line3D(image, {-2.0, 0.0, 4.0}, {2.0, 0.0, 4.0}, scene, kAxisX);
+        line3D(image, {0.0, -1.5, 4.0}, {0.0, 2.0, 4.0}, scene, kShape);
+        line3D(image, {0.0, 0.0, 1.0}, {0.0, 0.0, 16.0}, scene, kAxisY);
+    }
+}
+```
 
 ## Ghép các phần lại
 
-Build `project_11_checkpoint_3`. Đặt camera về gốc, point lần lượt tại `(2,1,4)` và `(2,1,8)`. Dòng `divide` phải đổi từ gần `(0.5,0.25)` thành `(0.25,0.125)`; độ lệch pixel so với tâm cũng giảm một nửa.
+Trong renderScene, thay nhánh preview bằng drawDepthScene và projectPerspective cho point; chỉ gọi drawPointMarker khi status là Visible và screen có giá trị. Đọc bản hoàn chỉnh của hàm để tránh giữ cả hai nhánh vẽ marker:
 
-Sau đó di chuyển camera theo Z. Công thức luôn dùng `cameraPoint`, vì vậy camera tiến gần point có cùng tác dụng làm depth nhỏ đi.
+```cpp title="include/view.hpp — perspective áp dụng cho vị trí và bán kính"
+inline void renderScene(Framebuffer& image, const Scene& scene) {
+    image.clear(kBackground);
+    const Viewport viewport = viewportFor(scene);
+    [[maybe_unused]] const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
+    drawDepthScene(image, scene);
+    const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewport);
+    if (projected.status == ProjectionStatus::Visible && projected.screen) {
+        // Bán kính world 0.12, vị trí cũng được chiếu perspective; không giả depth bằng size.
+        double focalPixels = viewport.height * 0.5;
+        const int radius = static_cast<int>(std::clamp(std::lround(0.12 * focalPixels / projected.cameraPoint.z), 3L, 30L));
+        drawPointMarker(image, *projected.screen, radius, viewport, scene.debug);
+    }
+}
+```
+
+Bốn khung cùng kích thước world ở Z=2/4/8/12 thu nhỏ dần vì chính các đầu mút của chúng được chia cho depth. Đĩa có bán kính world 0.12; bán kính pixel bị giới hạn [3,30] để vẫn dễ nhìn và không gây vòng lặp lớn. Đây là ký hiệu của một điểm sáng, chưa phải sphere renderer.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chia X cho `worldPoint.z` nhưng Y cho `cameraPoint.z`. Camera di chuyển sẽ làm hai trục co giãn khác nhau.
-2. Dùng `x*z`. Point ở xa chạy ra khỏi tâm thay vì tiến về tâm.
-3. Trả thẳng pixel từ `perspectiveDivide`. Hàm toán sẽ phụ thuộc width/height và khó test quy luật gấp đôi depth.
+1. Thay x/z bằng x, giữ nguyên code đổi size marker. Bạn sẽ thấy đĩa nhỏ hơn nhưng tâm không tiến về giữa. Đó là fake depth; khôi phục perspectiveDivide.
+
+2. Chọn preset Xa gấp đôi: X/Y giữ nguyên, Z tăng 4→8. Đo displacement so với tâm: cả X và Y phải giảm một nửa. Đừng so trực tiếp screen.x của hai lần.
+
+3. Bỏ guard rồi thử Z=0 là một thí nghiệm trên bản sao, không đưa vào bản final. Dự đoán Inf/NaN, sau đó giữ lại guard để lỗi không tới rasterizer.
 
 ## Tự kiểm tra kết quả
 
-- `(2,1,4)` cho divided `(0.5,0.25)`.
-- Giữ X/Y và tăng camera-space Z gấp đôi làm độ lệch khỏi tâm giảm đúng một nửa.
-- Point nằm trên trục nhìn `(0,0,z)` luôn ở tâm với mọi Z dương.
-- Camera tiến gần point làm marker rời tâm xa hơn.
-- Không có phép chia nào dùng world-space Z trực tiếp.
+- cameraPoint được tính trước phép chia và world point không bị sửa.
+- Z tăng gấp đôi làm displacement giảm một nửa.
+- Các khung/lưới world cùng tuân một camera/projection với point.
+- Point behind/near không đi vào chia; đoạn lưới được cắt trước raster.
+- Ở checkpoint 3 focal scale bằng 1, không giả rằng lens FOV đã hoạt động.
 
 ## Bài tập mở rộng
 
-Vẽ hai point có cùng X/Y nhưng depth lần lượt 3 và 6, dùng hai màu khác nhau. Đo khoảng cách từ mỗi marker tới tâm và in tỉ số; kết quả phải gần 2.
+Đặt thêm hai điểm có cùng X/Y và Z lần lượt 2,4,8. Ghi vị trí dự đoán trước khi chạy; dùng center làm gốc khi so tỉ lệ.
 
-Checkpoint này còn một magic number là `previewFocalLength`. Bài tiếp theo sẽ thay nó bằng lens có vertical FOV, aspect ratio và NDC.
+[Sang bài tiếp theo — Chọn FOV và hình dạng viewport](/projects/perspective-point/04-fov-aspect-ndc-va-pixel).

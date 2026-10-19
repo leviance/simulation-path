@@ -4,52 +4,37 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Starter của Project 12 đã có cửa sổ, framebuffer, `putPixel`, `drawLine`, streaming texture và toàn bộ phép chiếu một point từ Project 11. Khi chạy, bạn chỉ thấy lưới. Ta chưa xoay gì cả; việc đầu tiên là chứng minh ba vertex 3D có thể đi qua projection rồi tạo thành một tam giác nhìn thấy được.
+Ở P11 ta đã đưa một point 3D tới đúng vị trí trên màn hình. Bây giờ hãy giữ lại phép chiếu đó, thêm hai point nữa và nối thành tam giác. Chưa cần quay ngay: trước hết phải thấy được ba đỉnh, ba cạnh và cảnh nền có chiều sâu.
 
-Điểm dễ sai nằm ở status. Mỗi vertex có thể visible, behind, before-near hoặc outside. Nếu A hợp lệ nhưng B ở sau camera, `B.screen` không phải pixel để đem nối cạnh. Vì vậy checkpoint đầu phải giữ kết quả projection của từng vertex và chỉ vẽ khi cả ba cùng hợp lệ.
-
-## Bắt đầu từ chương trình nào?
-
-Giải nén source của Project 12 rồi build target `project_12_starter` trước khi sửa code:
-
-```bash title="Terminal — kiểm tra starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_12_starter
-```
-
-Starter phải mở được cửa sổ 960×640 với nền lưới, nhưng chưa có tam giác. Nếu cửa sổ chưa xuất hiện, hãy dừng ở đây và sửa lỗi build/SDL trước; rotation không thể giải thích một lỗi khởi tạo renderer.
-
-Trong project này, `include/lab.hpp` giữ các kiểu dữ liệu và hàm toán không phụ thuộc SDL. `src/main.cpp` giữ window, event loop, framebuffer và phần vẽ. Ta sẽ thêm dữ liệu tam giác vào header trước, sau đó mới nối nó với render loop. Cách chia này cho phép CTest kiểm tra toán mà không cần mở cửa sổ.
+Tải ZIP ở trang tổng quan, giải nén rồi mở thư mục có CMakeLists.txt. Starter đã có framebuffer, putPixel, drawLine, window/renderer/texture và projection từ P11. Chạy project_12_starter trước: cửa sổ chỉ có sàn lưới cùng các khung world ở depth 4/8/12. Ta sẽ vẽ tam giác lên nền ấy.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Tam giác gồm ba point:
+Triangle3 chỉ là ba Vec3. Chúng vẫn là world coordinates, chưa phải pixel:
 
-$$
-T=(A,B,C)
-$$
+- A=(-1.4,-0.9,5.7)
+- B=(1.3,-0.7,6.4)
+- C=(0.1,1.6,5.9)
 
-Sau projection, ta cần ba đoạn khép kín:
+Camera nhìn +Z, Y hướng lên. Mỗi đỉnh đi qua worldToCamera, guard near/far, perspective divide rồi NDC→screen như P11. Ba cạnh là AB, BC, CA; cạnh cuối phải nối trở về A.
 
-$$
-AB,\quad BC,\quad CA
-$$
-
-Không phải `AB, AC, BC` theo thứ tự bất kỳ. Chuỗi A→B→C→A giúp phần render và winding ở những project sau cùng dùng một quy ước nhất quán.
-
-Ở cửa sổ 960×640, ba vertex mặc định phải rơi xấp xỉ tại A=(344,408), B=(593,381), C=(489,170). Đây không phải các hằng số để chép vào code; chúng là mốc kiểm tra. Nếu kết quả lệch rất xa, lỗi nằm trong projection hoặc kích thước framebuffer chứ chưa nằm ở `drawLine`.
+Có hai việc khác nhau: projectTriangle cho biết **từng đỉnh** có visible hay không; line3D cắt và chiếu **từng đoạn cạnh**. Một đỉnh ngoài frustum không có nghĩa mọi cạnh đều mất. Đây là lý do ta giữ cả world triangle lẫn projection result, không chỉ ba pixel rồi vứt dữ liệu 3D.
 
 <InteractiveLab demo="rotation3d" mode="rotation-triangle" />
 
-Đổi **Trạng thái projection** qua bốn preset. Khi một vertex ra khỏi vùng nhìn, toàn bộ triangle biến mất và phần đọc số báo lý do. Đây là giới hạn có chủ ý; clipping từng cạnh sẽ được học ở Project 18.
-
 ## Viết code từng bước
 
-### Bước 1 — Nhóm ba Vec3 nhưng chưa đổi chúng thành pixel
+Giữ bộ khung và các hàm của bài trước; sửa đúng file ghi trên từng code block. Không tạo một main thứ hai. Sau mỗi bước, build target checkpoint 01 để đối chiếu:
 
-Mở `include/lab.hpp`. `Triangle3` chỉ lưu dữ liệu hình học:
+```powershell title="Build checkpoint 01"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_12_checkpoint_1 --parallel 2
+.\build\Debug\project_12_checkpoint_1.exe
+```
 
-```cpp title="include/lab.hpp — ba vertex trong world space"
+### Bước 1 — Lưu ba đỉnh bằng dữ liệu world
+
+```cpp title="include/lab.hpp — tam giác chưa chứa tọa độ screen"
 struct Triangle3 {
     Vec3 a{};
     Vec3 b{};
@@ -57,138 +42,110 @@ struct Triangle3 {
 };
 ```
 
-Triangle mặc định nằm quanh Z=6, đủ xa near plane và lệch depth một chút để khi xoay ta nhìn thấy chiều sâu:
-
-```cpp title="include/lab.hpp — tam giác khởi đầu trước camera"
+```cpp title="include/lab.hpp — ba đỉnh đặt trước camera"
 inline Triangle3 defaultWorldTriangle() {
-    return {
-        {-1.4, -0.9, 5.7},
-        {1.3, -0.7, 6.4},
-        {0.1, 1.6, 5.9},
-    };
+    return {{-1.4, -0.9, 5.7}, {1.3, -0.7, 6.4}, {0.1, 1.6, 5.9}};
 }
 ```
 
-### Bước 2 — Giữ đủ ba ProjectionResult
+Các số có Z khác nhau để ngay từ hình đứng yên bạn đã có một tam giác nằm trong không gian, không chỉ hình phẳng được gắn một nhãn “3D”.
 
-Không trả về ba `Vec2` rời, vì như vậy caller không còn biết vertex nào không hợp lệ:
+### Bước 2 — Chiếu từng đỉnh và giữ status
 
-```cpp title="include/lab.hpp — kết quả chiếu của cả tam giác"
-struct TriangleProjection {
-    bool visible{};
-    ProjectionResult a{};
-    ProjectionResult b{};
-    ProjectionResult c{};
-};
-```
-
-Hàm gọi projection của Project 11 ba lần rồi tổng hợp status:
-
-```cpp title="include/lab.hpp — chỉ visible khi cả ba vertex visible"
-TriangleProjection result{};
-result.a = projectPerspective(triangle.a, camera, lens, nearPlane, width, height);
-result.b = projectPerspective(triangle.b, camera, lens, nearPlane, width, height);
-result.c = projectPerspective(triangle.c, camera, lens, nearPlane, width, height);
-result.visible = result.a.status == ProjectionStatus::Visible &&
-    result.b.status == ProjectionStatus::Visible &&
-    result.c.status == ProjectionStatus::Visible;
-return result;
-```
-
-### Bước 3 — Từ chối screen value không hợp lệ trước khi vẽ
-
-`drawProjectedTriangle` trả về ngay nếu thiếu một vertex:
-
-```cpp title="src/main.cpp — guard trước khi đọc screen"
-if (!projection.visible) {
-    return;
+```cpp title="include/lab.hpp — không biến đỉnh bị loại thành pixel giả"
+inline TriangleProjection projectTriangle(const Triangle3& triangle, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
+    TriangleProjection result;
+    result.vertices = {projectPerspective(triangle.a, camera, lens, viewport), projectPerspective(triangle.b, camera, lens, viewport), projectPerspective(triangle.c, camera, lens, viewport)};
+    result.allVisible = true;
+    for (const auto& vertex : result.vertices) {
+        if (vertex.status != ProjectionStatus::Visible) {
+            result.allVisible = false;
+        }
+    }
+    return result;
 }
 ```
 
-Sau guard, ba screen point mới được làm tròn thành pixel:
+result.vertices giữ đủ ba ProjectionResult từ P11. allVisible là số đo tổng hợp để đọc debug, **không** phải điều kiện xóa cả hình. Đỉnh bị near/behind loại sẽ không có screen, còn outside vẫn có số chiếu hữu hạn.
 
-```cpp title="src/main.cpp — ba cạnh AB BC CA"
-drawLine(pixels, width, height, ax, ay, bx, by, rgba(255, 180, 84));
-drawLine(pixels, width, height, bx, by, cx, cy, rgba(83, 240, 174));
-drawLine(pixels, width, height, cx, cy, ax, ay, rgba(132, 169, 255));
-fillCircle(pixels, width, height, ax, ay, 7, rgba(255, 226, 108));
-fillCircle(pixels, width, height, bx, by, 7, rgba(247, 249, 255));
-fillCircle(pixels, width, height, cx, cy, 7, rgba(196, 132, 255));
-```
+### Bước 3 — Nối cạnh và đưa ảnh lên SDL
 
-### Bước 4 — Ghép projection vào render loop
-
-Mỗi frame dùng width/height hiện tại, nên resize tự cập nhật aspect ratio:
-
-```cpp title="src/main.cpp — project triangle trong frame hiện tại"
-const lab::TriangleProjection projection = lab::projectTriangle(
-    worldTriangle,
-    camera,
-    lens,
-    nearPlane,
-    width,
-    height
-);
-drawProjectedTriangle(pixels, width, height, projection);
-```
-
-### Bước 5 — Đưa framebuffer mới lên cửa sổ
-
-`drawProjectedTriangle` chỉ thay đổi mảng `pixels` trong RAM. Nếu dừng ở đó, cửa sổ vẫn giữ frame cũ. Cuối mỗi vòng lặp, hãy upload mảng này vào streaming texture, copy texture sang renderer rồi present:
-
-```cpp title="src/main.cpp — upload framebuffer và present"
-if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), width* int(sizeof(std::uint32_t)))) {
-    std::cerr << "SDL_UpdateTexture failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
-if (!SDL_RenderClear(renderer)) {
-    std::cerr << "SDL_RenderClear failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
-if (!SDL_RenderTexture(renderer, texture, nullptr, nullptr)) {
-    std::cerr << "SDL_RenderTexture failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
-}
-if (!SDL_RenderPresent(renderer)) {
-    std::cerr << "SDL_RenderPresent failed: " << SDL_GetError() << '\n';
-    failed = true;
-    break;
+```cpp title="include/view.hpp — cạnh world được clip trước raster"
+inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene, std::uint32_t color) {
+    start = worldToCamera(start, scene.camera);
+    end = worldToCamera(end, scene.camera);
+    if (!clipDepth(start, end, scene.lens)) {
+        return;
+    }
+    const Camera3D origin{};
+    const auto a = projectPerspective(start, origin, scene.lens, viewportFor());
+    const auto b = projectPerspective(end, origin, scene.lens, viewportFor());
+    if (!a.screen || !b.screen) {
+        return;
+    }
+    Vec2 from = *a.screen;
+    Vec2 to = *b.screen;
+    if (clipScreen(from, to, viewportFor())) {
+        drawLine(image, static_cast<int>(std::lround(from.x)), static_cast<int>(std::lround(from.y)), static_cast<int>(std::lround(to.x)), static_cast<int>(std::lround(to.y)), color);
+    }
 }
 ```
 
-Pitch truyền cho `SDL_UpdateTexture` là số byte của một hàng: `width * sizeof(std::uint32_t)`. Nhầm `width` thành tổng số pixel hoặc bỏ `sizeof` thường tạo ra hình sọc, lệch hàng hoặc đọc quá vùng nhớ. Ba lời gọi render phía sau không tính lại geometry; chúng chỉ đưa frame vừa hoàn thành ra màn hình.
+Hàm này kế thừa P11: đổi cả hai đầu sang camera space, clip depth, chiếu rồi clip screen, cuối cùng mới làm tròn để gọi Bresenham. Khi project một endpoint camera-space, ta dùng camera origin để không trừ camera.position lần nữa.
+
+```cpp title="include/view.hpp — AB, BC, CA là ba lời gọi rõ ràng"
+inline void drawProjectedTriangle(Framebuffer& image, const Triangle3& world, const TriangleProjection& projection, const Scene& scene) {
+    line3D(image, world.a, world.b, scene, 0xFFB454FFu);
+    line3D(image, world.b, world.c, scene, kShape);
+    line3D(image, world.c, world.a, scene, kAxisY);
+    if (scene.debug) {
+        for (const auto& vertex : projection.vertices) {
+            if (vertex.status == ProjectionStatus::Visible && vertex.screen) {
+                marker(image, *vertex.screen, kWhite);
+            }
+        }
+    }
+}
+```
+
+Marker trắng chỉ vẽ khi endpoint visible. Các cạnh vẫn được xét riêng, nên preset cắt near có thể giữ lại phần nhìn thấy của chúng.
 
 ## Ghép các phần lại
 
-Build đúng target của bài này:
+renderScene vẽ nền trước, dựng world triangle rồi chiếu và nối các cạnh. Chưa có rotation; scene.position chỉ dịch cả tam giác. Giữ phần upload từ Starter:
 
-```bash title="Terminal — chạy kết quả cuối bài 1"
-cmake --build build --config Debug --target project_12_checkpoint_1
+```cpp title="src/main.cpp — upload framebuffer sau khi vẽ"
+if (dirty) {
+    lab::renderScene(image, scene);
+    if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), lab::Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))) || !lab::presentFramebuffer(renderer, texture, scene)) {
+        std::cerr << SDL_GetError() << '\n';
+        failed = true;
+        break;
+    }
+    dirty = false;
+}
 ```
 
-Bạn phải thấy ba marker A/B/C và ba cạnh màu khép kín trên nền lưới. Resize sang cửa sổ rộng hoặc gần vuông; hình vẫn dùng đúng perspective và không kéo méo theo aspect ratio.
-
-Checkpoint này chưa có local space hay rotation. Đó là điểm quan trọng: nếu tam giác sai ngay bây giờ, ta chỉ cần kiểm tra dữ liệu vertex, status và cách nối cạnh.
+Build checkpoint 1. AB màu cam, BC xanh lá, CA xanh lam; ba marker trắng nằm ở đầu cạnh. Mũi tên dịch XY, PageUp/Down dịch Z từng nấc 0.1 world. R về trạng thái đầu, Esc thoát. Resize letterbox bảng logic 1100×800, không tự kéo dãn hình.
 
 ## Thử làm sai để hiểu đúng
 
-1. Nối AB, BC nhưng quên CA. Hình trông như một góc mở, không còn là wireframe triangle khép kín.
-2. Bỏ guard `projection.visible`. Chọn preset behind; code bắt đầu đọc `screen` của kết quả chưa được tính hợp lệ.
-3. Gộp ba vertex thành pixel ngay trong `Triangle3`. Bài rotation sau sẽ xoay pixel 2D thay vì dữ liệu 3D.
+1. Bỏ cạnh CA. Hình chỉ còn hai đoạn dù ba marker vẫn đủ. Khôi phục và kiểm đường khép kín trước khi thêm rotation.
+
+2. Chọn Cắt near. A có camera Z=0.4, trước near 0.5. Kiểm status A, rồi quan sát phần cạnh còn trong khung; không dùng allVisible=false để xóa toàn bộ hình.
+
+3. Thay một Z bằng 0 trong một bản sao. Point phải bị guard loại trước chia, không được tạo pixel Inf rồi đưa vào drawLine.
 
 ## Tự kiểm tra kết quả
 
-- Tam giác mặc định cho status visible ở cả A, B và C.
-- Ba cạnh đi theo thứ tự AB, BC, CA và dùng ba màu phân biệt.
-- Mỗi vertex có marker riêng để nhìn ra việc nối sai.
-- Một vertex không visible làm toàn bộ triangle không được vẽ.
-- Resize không làm thay đổi dữ liệu world-space trong `Triangle3`.
+- Starter chạy được và chỉ có nền; checkpoint 1 thêm tam giác rõ ràng.
+- Ba cạnh đúng AB/BC/CA, giữ world point riêng với screen result.
+- Endpoint không visible không tạo marker giả.
+- Cạnh được cắt ở near/far và viewport, không làm rasterizer chạy vô hạn.
+- Model đi xa thì hình thu hẹp theo perspective, không chỉ đổi size marker.
 
 ## Bài tập mở rộng
 
-Thêm chữ A/B/C vào title bar cùng camera-space Z của từng vertex. Sau đó thử đổi riêng Z của B và dự đoán marker nào tiến gần tâm nhất trước khi chạy.
+Thêm ba nhãn A/B/C trong debug HUD bằng kết quả project từng đỉnh. Chỉ đặt nhãn khi screen có giá trị và điểm thật sự visible.
 
-Bài tiếp theo sẽ tách hình dạng khỏi vị trí bằng pivot và local space. Đây là bước bắt buộc trước khi nói “xoay quanh tâm tam giác”.
+[Sang bài tiếp theo — Đặt pivot bằng local space](/projects/rotating-triangle/02-pivot-va-local-space).

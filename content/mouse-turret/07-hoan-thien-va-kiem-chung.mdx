@@ -1,0 +1,122 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện tháp pháo và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Một nòng pháo quay mượt chưa đủ để kết luận dot, góc, projection và steering đều đúng. Bài cuối chạy bản hoàn chỉnh rồi kiểm bằng những dữ kiện không phụ thuộc vào chính các helper đang được kiểm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta tách ba loại bằng chứng. Phần toán dùng fixture cùng/vuông/ngược hướng, công thức chiếu chưa normalize và chênh góc bằng remainder. Phần trình bày render vào ảnh CPU để kiểm các lớp thật sự có mặt. Input/capture/DPI và cảm giác sử dụng cần QA desktop riêng.
+
+Không tạo expected của rotateTowards bằng cách gọi lại signedAngleBetween rồi clamp y hệt implementation. Nếu cả hai chỗ cùng sai quy ước dấu, test vẫn có thể xanh.
+
+<InteractiveLab demo="turret" mode="turret-full" />
+
+Đặt một target bên trái hoặc phía sau, tiến từng bước rồi theo dõi cùng lúc nòng, hai hướng, góc sai lệch và phép chiếu. Bỏ Theo chuột khi cần giữ số để đối chiếu. Bản cuối không dùng một mode để ẩn các lớp cốt lõi.
+
+## Viết code từng bước
+
+### Bước 1 — Chạy toàn bộ project độc lập
+
+Giải nén ZIP, đứng tại thư mục chứa CMakeLists.txt:
+
+```bash title="Terminal — build Debug và chạy final"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+.\build\Debug\project_8_final.exe
+```
+
+Target gồm starter, checkpoint_1…7, final và tests. Không cần ghép các code block mới chạy được: final đã chứa toàn bộ chương trình. Phần cuối bài có **toàn bộ mã nguồn của dự án** để đọc từng file.
+
+### Bước 2 — Giữ kiểm tra hoạt động cả ở Release
+
+Trong tests/tests.cpp:
+
+```cpp title="tests/tests.cpp — check không bị tắt bởi NDEBUG"
+void check(bool condition, std::string_view label) {
+    if (!condition) {
+        std::cerr << "FAIL: " << label << '\n';
+        ++failures;
+    }
+}
+```
+
+Main trả EXIT_FAILURE nếu failures khác 0; không dùng assert làm bằng chứng duy nhất vì Release có thể loại nó. Các phép so gần đúng phải từ chối NaN.
+
+### Bước 3 — Kiểm projection bằng công thức độc lập
+
+```cpp title="tests/tests.cpp — oracle dùng axis chưa normalize"
+void checkProjection(lab::Vec2 vector, lab::Vec2 axis) {
+    const lab::Vec2 parallel = lab::vectorProjection(vector, axis);
+    const lab::Vec2 residual = lab::rejection(vector, axis);
+    // Oracle dùng trực tiếp công thức chiếu lên axis chưa normalize.
+    const double coefficient = (vector.x * axis.x + vector.y * axis.y) / (axis.x * axis.x + axis.y * axis.y);
+    const lab::Vec2 expected{coefficient * axis.x, coefficient * axis.y};
+    check(nearPoint(parallel, expected), "projection independent oracle");
+    check(nearPoint(lab::add(parallel, residual), vector), "projection plus rejection reconstructs vector");
+    check(near(lab::dot(parallel, residual), 0.0), "projection and rejection orthogonal");
+}
+```
+
+Ở đây expected dùng axis×dot(v,axis)/dot(axis,axis), còn implementation dùng normalize(axis). Hai cách khác nhau giúp phát hiện lỗi scale. Câu kiểm projection plus rejection reconstructs vector và tích vuông góc bổ sung invariant, không thay oracle.
+
+Checkpoint 07 thêm ô reconstruction error trên HUD để nhìn sai số khôi phục vector khi thao tác. Vì rejection được định nghĩa bằng v−projection, chỉ thấy sai số ấy gần 0 chưa đủ chứng minh phép chiếu đúng; vẫn cần oracle và kiểm vuông góc ở trên.
+
+### Bước 4 — Kiểm steering trên vòng tròn góc
+
+```cpp title="tests/tests.cpp — đo sai lệch góc qua ranh 0/2π"
+double angleDistance(double a, double b) {
+    return std::abs(std::remainder(a - b, lab::kTau));
+}
+```
+
+Tests lấy desired−current bằng std::remainder, xử lý tie rồi clamp để tạo expected. Có fixture 359°→1°, trái/phải 90°, hai hướng đối nhau, góc còn lại nhỏ hơn một bước và turnSpeed=0.
+
+Để so FPS, tests dùng một target đứng yên: 120 bước 1/120 s, 10 bước 0,1 s và chuỗi 0,013+0,027+0,06 s đều đưa nòng tới góc giải tích biết trước. Không mở rộng kết luận ấy sang các chuỗi mouse khác thời điểm.
+
+### Bước 5 — Kiểm hình và build Release
+
+renderScene được gọi vào framebuffer thật; tests đếm pixel màu của forward, target direction, projection/rejection và thân/nòng trắng. Test miền target còn kiểm nhiều hướng để projection không chạy khỏi bảng.
+
+```bash title="Terminal — kiểm Release và giữ thời gian chạy có giới hạn"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
+
+Mỗi executable nhận --smoke: window ẩn, 12 frame, thử preset/resize rồi thoát. Runner tự động phải có hard timeout ngoài 15 giây. Smoke không giả lập chuột thật và không chứng minh mọi DPI đều đúng.
+
+## Ghép các phần lại
+
+File giữ đúng một vai trò: lab.hpp là toán, scene.hpp là state/transform/update, framebuffer.hpp là primitive CPU, view.hpp ghép hình, presentation.hpp upload/nhãn SDL, main.cpp quản lý event/timing/cleanup. CMake dùng C++20, SDL 3.4.8 khóa checksum và SDL3::SDL3.
+
+Bảng logic cố định 1100×760 được letterbox khi resize. SDL_ConvertEventToRenderCoordinates đổi input về bảng ấy; không tự nhân DPI. Một owner quản lý mỗi lần kéo, mouse-up áp dụng mẫu cuối; blur/hidden/resize/reset/preset hủy capture.
+
+Normalize/cosine được thử cả số hữu hạn subnormal/gần DBL_MAX. Phép chiếu và steering của scene dùng miền world hữu hạn đã công bố. Fallback zero không phải một hướng hoặc một góc đo được.
+
+Project 8 đã hoàn chỉnh về chức năng khi mọi lớp hiện cùng lúc và nòng thật sự bị giới hạn tốc độ. Kết quả build, CTest, smoke và QA desktop vẫn phải ghi riêng, không gộp thành một lời khẳng định “đã kiểm mọi thứ”.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi steering thành snap trực tiếp theo atan2. Hình vẫn đuổi target nhưng test giới hạn bước phải thất bại.
+2. Chuẩn hóa target trước khi chiếu và dùng cùng helper để tạo expected. Test tự so với nó có thể đạt; oracle axis chưa normalize và fixture (4,3) phải bắt lỗi.
+3. Ẩn projection ở mode cuối. Phần toán vẫn đạt, nhưng không còn đáp ứng sản phẩm trực quan của project.
+4. Chỉ chạy Debug rồi giả định Release cũng có check. Hãy cố ý làm sai một fixture và xác nhận cả hai cấu hình báo thất bại.
+
+## Tự kiểm tra kết quả
+
+- Starter, bảy checkpoint, final và tests build độc lập ở Debug/Release.
+- Dot, unsigned/signed angle, projection và steering qua fixtures/oracle độc lập.
+- Zero/near-center, hai hướng đối nhau và hai biên cone có chính sách rõ ràng, không sinh NaN trong scene.
+- Bản final có thân/nòng, hai hướng, projection/rejection, dot và góc cùng lúc.
+- ZIP chứa README, CMake, starter, checkpoint, final và tests; không kèm build/dependency cache.
+- QA desktop: hover theo chuột, tắt follow, preset, capture kéo/thả ngoài, focus, resize, DPI 100%/200%, keyboard, reduced-motion.
+- Không coi browser handler test hoặc window ẩn là bằng chứng đã thử chuột/DPI thật.
+
+## Bài tập mở rộng
+
+Thêm target chạy theo một đường đã biết rồi ghi log góc nòng, góc mong muốn và sai lệch theo thời gian. Đánh giá độ trễ bám mục tiêu; không tự gọi đó là dự đoán đường đạn.
+
+Tiếp theo: [Project 09 — biến đổi hình vuông](/projects/square-transformer) sẽ dùng sin/cos để xoay cả một hình, không chỉ hướng nòng.

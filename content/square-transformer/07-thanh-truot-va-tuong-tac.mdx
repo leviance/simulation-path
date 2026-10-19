@@ -1,0 +1,160 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tự làm slider trong ứng dụng SDL3
+
+## Vấn đề cần giải quyết
+
+Bàn phím đủ để học toán, nhưng bản editor hoàn chỉnh phải có slider ngay trong cửa sổ SDL3. Ta sẽ tự vẽ track và nút kéo trên ảnh CPU, rồi nối vị trí chuột với một giá trị. Không dùng UI thư viện để làm thay phần này.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một slider là đoạn [left,left+width]. Với mouse X trên bảng logic:
+
+$$
+u=\operatorname{clamp}\left(\frac{x-left}{width},0,1\right),\qquad
+value=min+u(max-min).
+$$
+
+Track bắt đầu x=960, rộng 270. Có bảy dòng cách nhau 66 pixel logic. Bảng logic không thay đổi khi resize; SDL letterbox lo trình bày. Vì vậy phải gọi SDL_ConvertEventToRenderCoordinates **đúng một lần** trước hit-test. Không nhân thêm device-pixel-ratio hay tự chia kích thước cửa sổ lần nữa.
+
+Một lần kéo có một owner. Bắt đầu trên track thì tiếp tục kéo track đó kể cả khi ra ngoài; không đổi sang slider khác khi đi ngang qua. Thả chuột phải nhận mẫu cuối trước khi xóa owner.
+
+<InteractiveLab demo="transform" mode="transform-input" />
+
+## Viết code từng bước
+
+### Bước 1 — Mô tả slider bằng dữ liệu
+
+```cpp title="include/controls.hpp — nhãn và miền giá trị"
+struct Slider {
+    const char* label;
+    double minimum;
+    double maximum;
+    double step;
+};
+```
+
+kSliders chứa scaleX/Y trong [-2,2], góc trong [-π,π], shearX/Y trong [-1,1], translation X/Y trong [-2,2]. step dùng khi điều khiển bằng phím; kéo chuột lấy giá trị liên tục.
+
+### Bước 2 — Viết setter dùng chung
+
+```cpp title="include/controls.hpp — kiểm finite và clamp trước khi đổi scene"
+inline void setParameter(Scene& scene, int index, double value) {
+    if (index < 0 || index >= 7 || !std::isfinite(value)) {
+        return;
+    }
+    const Slider& slider = kSliders[static_cast<std::size_t>(index)];
+    value = std::clamp(value, slider.minimum, slider.maximum);
+    auto& p = scene.parameters;
+    switch (index) {
+    case 0:
+        p.scaleX = value;
+        break;
+    case 1:
+        p.scaleY = value;
+        break;
+    case 2:
+        p.angle = value;
+        scene.paused = true;
+        break;
+    case 3:
+        p.shearX = value;
+        break;
+    case 4:
+        p.shearY = value;
+        break;
+    case 5:
+        p.translation.x = value;
+        break;
+    case 6:
+        p.translation.y = value;
+        break;
+    }
+}
+```
+
+Góc chỉnh bằng tay sẽ pause animation để không bị frame sau ghi đè. Các tham số khác vẫn chỉnh được khi hình đang quay. Đây là lựa chọn của editor, không phải quy luật của phép biến đổi.
+
+### Bước 3 — Hit-test và đổi vị trí sang giá trị
+
+```cpp title="include/controls.hpp — mỗi track có vùng nhấn rộng hơn nét vẽ"
+inline int hitSlider(Vec2 screen) {
+    for (int index = 0; index < 7; ++index) {
+        if (screen.x >= kTrackLeft - 12.0 && screen.x <= kTrackLeft + kTrackWidth + 12.0 && std::abs(screen.y - sliderY(index)) <= 16.0) {
+            return index;
+        }
+    }
+    return -1;
+}
+```
+
+```cpp title="include/controls.hpp — clamp ở hai đầu track"
+inline void updateSlider(Scene& scene, int index, double screenX) {
+    const Slider& slider = kSliders.at(static_cast<std::size_t>(index));
+    const double fraction = std::clamp((screenX - kTrackLeft) / kTrackWidth, 0.0, 1.0);
+    setParameter(scene, index, slider.minimum + fraction * (slider.maximum - slider.minimum));
+}
+```
+
+Dòng đầu chọn index khi mouse-down; mouse-move chỉ cập nhật index đã chọn. Nếu mouse đi ra ngoài track, fraction vẫn được clamp ở 0 hoặc 1.
+
+### Bước 4 — Ghi nhớ thao tác kéo và kết thúc an toàn
+
+```cpp title="src/main.cpp — owner và hai thao tác kéo riêng"
+int activeSlider = -1;
+bool draggingObject = false;
+SDL_MouseID owner{};
+lab::Vec2 dragOffset{};
+std::uint64_t previous = SDL_GetTicks();
+const auto cancelDrag = [&]() {
+    activeSlider = -1;
+    draggingObject = false;
+    SDL_CaptureMouse(false);
+};
+const auto updateDrag = [&](lab::Vec2 point) {
+    if (activeSlider >= 0) {
+        lab::updateSlider(scene, activeSlider, point.x);
+    } else if (draggingObject) {
+        scene.parameters.translation = lab::boundedTranslation(lab::add(lab::screenToWorld(point), dragOffset));
+    }
+    dirty = true;
+};
+```
+
+activeSlider≥0 nghĩa là kéo slider; draggingObject nghĩa là kéo trong viewport. Với viewport, dragOffset giữ điểm nắm nên nhấn không làm tâm hình nhảy tới chuột. updateDrag dùng cùng world/screen conversion với renderer.
+
+Nhánh SDL_EVENT_MOUSE_BUTTON_DOWN thử hitSlider trước, rồi mới thử inViewport. Chỉ khi đã chọn thao tác mới gọi SDL_CaptureMouse(true); nếu capture thất bại thì cancelDrag ngay. Mouse-move kiểm which==owner và còn SDL_BUTTON_LMASK. Mouse-up đúng owner gọi updateDrag bằng tọa độ thả, sau đó cancelDrag. Tất cả nhánh này có nguyên vẹn trong src/main.cpp của checkpoint 07, không dùng dấu ba chấm thay phần xử lý sự kiện.
+
+### Bước 5 — Vẽ UI và nối bàn phím
+
+renderScene vẽ track và nút kéo từ parameterValue, không lưu một bộ giá trị UI thứ hai. Up/Down chọn slider, Left/Right đổi giá trị theo step; màu vàng cho biết dòng đang được chọn. Space chạy/pause rotation với tốc độ 0.45 rad/s, N tiến 0.1 s khi pause, R identity, F1–F5 preset. Góc dùng std::remainder để luôn nằm trong miền slider.
+
+## Ghép các phần lại
+
+Build project_9_checkpoint_7. Kéo thử từng slider ở hai đầu, rồi kéo thả ngoài cửa sổ. Nhấn trong viewport rồi di chuyển một đoạn: translation thay đổi tương đối, không nhảy tâm. Kéo viewport chỉ là cách đổi translation bổ sung; hai slider translation vẫn phải hoạt động.
+
+Resize, mất focus, reset, preset, đổi order và pause đều hủy capture. Scene vẫn giữ tham số qua resize. Không cấp lại framebuffer mỗi mouse-move hoặc mỗi ResizeObserver.
+
+Canvas dùng slider HTML có thể Tab tới. Khi focus nằm trên Canvas, các phím mũi tên đổi translation; khi focus nằm trên slider, để trình duyệt xử lý bàn phím mặc định. Reduced motion tắt chạy tự động nhưng vẫn cho chỉnh tay/tiến từng bước.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ clamp fraction rồi kéo xa khỏi track. Giá trị sẽ vượt miền editor thay vì dừng ở min/max; khôi phục clamp và thử lại cả hai đầu.
+
+2. Bỏ updateDrag ở mouse-up. Thử nhấn rồi thả ở vị trí mới: thao tác có thể bỏ mất mẫu thả cuối. Khôi phục cập nhật trước cancelDrag, đối chiếu cả trường hợp có ít mouse-move.
+
+3. Bỏ cancelDrag khi mất focus, bắt đầu kéo rồi Alt-Tab. Khi quay lại, slider có thể tiếp tục bị điều khiển bởi thao tác cũ. Khôi phục hủy capture và kiểm cả resize/reset.
+
+## Tự kiểm tra kết quả
+
+- Cả bảy slider SDL3 thay đổi tham số thật, không chỉ hiển thị.
+- Nhấn viewport không làm hình nhảy; thả ngoài không làm capture mắc kẹt.
+- Chuột khác owner không thay đổi thao tác; mất nút trái hủy kéo.
+- Resize/HiDPI không khiến hit-test lệch khỏi track; cần kiểm trực tiếp trên máy.
+- Tab rời Canvas được, không chặn shortcut hệ thống hay phím của slider HTML.
+
+## Bài tập mở rộng
+
+Thêm nút “Snap góc 15°”. Đặt việc làm tròn ở một nơi dùng chung cho mouse và keyboard, rồi mô tả vì sao không nên snap lại mọi tham số trong render.
+
+[Bài tiếp theo: Hoàn thiện editor và kiểm chứng kết quả](/projects/square-transformer/08-hoan-thien-va-kiem-chung).

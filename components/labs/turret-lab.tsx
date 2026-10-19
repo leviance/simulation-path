@@ -1,398 +1,456 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { normalizeAngle, TAU } from "@/lib/labs/angle";
+import { dot } from "@/lib/labs/turret";
 import {
-  add as addVectors,
-  clamp,
-  length as vectorLength,
-  normalize as normalizeVector,
-  scale as scaleVector,
-  subtract as subtractVectors,
-  type Point,
-} from "@/lib/labs/geometry";
-import { normalizeAngle, pointOnUnitCircle, TAU } from "@/lib/labs/angle";
-import {
-  angleBetween,
-  cosineBetween,
-  crossZ,
-  dot,
-  isWithinViewCone,
-  rejection,
-  rotateTowards,
-  scalarProjection,
-  signedAngleBetween,
-  vectorProjection,
-} from "@/lib/labs/turret";
-import {
-  LabReadout,
-  canvasPoint,
-  drawLine,
-  setupCanvas,
-  useCanvasSize,
-  useReducedMotion,
-} from "./lab-shared";
+  turretScene,
+  turretLayers,
+  turretResults,
+  turretScreenToWorld,
+  setTurretTarget,
+  applyTurretPreset,
+  advanceTurret,
+  type TurretScene,
+} from "@/lib/labs/turret-scene";
+import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
+import { drawTurretLab, turretPointFromEvent } from "./turret-lab-view";
 import type { InteractiveLabMode } from "./types";
 
 export default function TurretLab({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const size = useCanvasSize(canvasRef);
   const reducedMotion = useReducedMotion();
-  const initialTarget = { x: 220, y: 120 };
-  const initialAngle = 0;
-  const [target, setTarget] = useState<Point>(initialTarget);
-  const [turretAngle, setTurretAngle] = useState(initialAngle);
-  const turretAngleRef = useRef(initialAngle);
-  const [turnSpeed, setTurnSpeed] = useState(Math.PI / 2);
-  const [halfViewAngle, setHalfViewAngle] = useState((35 * Math.PI) / 180);
+  const [scene, setScene] = useState(turretScene);
+  const sceneRef = useRef(scene);
   const [paused, setPaused] = useState(false);
-  const dragging = useRef(false);
-
-  const showDot = mode !== "turret-scene";
-  const showAngle =
-    mode === undefined ||
-    ["turret-angle", "turret-projection", "turret-rotation", "turret-view-cone"].includes(mode);
-  const showProjection =
-    mode === undefined ||
-    ["turret-projection", "turret-rotation", "turret-view-cone"].includes(mode);
-  const canRotate = mode === undefined || mode === "turret-rotation" || mode === "turret-view-cone";
-  const showCone = mode === undefined || mode === "turret-view-cone";
-
-  const setTurretAngleValue = useCallback((value: number) => {
-    const normalized = normalizeAngle(value);
-    turretAngleRef.current = normalized;
-    setTurretAngle(normalized);
-  }, []);
-
-  const advanceSimulation = useCallback(
-    (requestedDeltaTime: number) => {
-      const deltaTime = clamp(requestedDeltaTime, 0, 0.1);
-      setTurretAngleValue(rotateTowards(turretAngleRef.current, target, turnSpeed * deltaTime));
-    },
-    [setTurretAngleValue, target, turnSpeed],
-  );
+  const pausedRef = useRef(false);
+  const owner = useRef<number | null>(null);
+  const previousMode = useRef(mode);
+  const layers = turretLayers(mode);
+  const result = turretResults(scene);
+  const updateScene = (next: TurretScene) => {
+    sceneRef.current = next;
+    setScene(next);
+  };
+  const pause = (value: boolean) => {
+    pausedRef.current = value;
+    setPaused(value);
+  };
+  const release = () => {
+    const id = owner.current;
+    owner.current = null;
+    const canvas = canvasRef.current;
+    if (id !== null && canvas?.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+    if (sceneRef.current.dragging) updateScene({ ...sceneRef.current, dragging: false });
+  };
+  const reset = () => {
+    release();
+    pause(true);
+    updateScene({ ...turretScene(), followMouse: false });
+  };
+  const togglePause = () => {
+    release();
+    pause(!pausedRef.current);
+  };
+  const choosePreset = (index: number) => {
+    release();
+    pause(true);
+    updateScene(applyTurretPreset(sceneRef.current, index));
+  };
+  const changeHeading = (angle: number) => {
+    release();
+    pause(true);
+    updateScene({ ...sceneRef.current, turretAngle: normalizeAngle(angle) });
+  };
+  const toggleFollow = (enabled: boolean) => {
+    release();
+    updateScene({ ...sceneRef.current, followMouse: enabled });
+  };
+  const step = () => {
+    release();
+    pause(true);
+    updateScene(advanceTurret(sceneRef.current, 0.1));
+  };
 
   useEffect(() => {
-    if (!canRotate || paused || reducedMotion) return;
-    let animationFrame = 0;
+    const blur = () => {
+      release();
+      pause(true);
+    };
+    const hidden = () => {
+      if (document.hidden) blur();
+    };
+    window.addEventListener("blur", blur);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", blur);
+      document.removeEventListener("visibilitychange", hidden);
+      release();
+    };
+  }, []);
+  useEffect(() => {
+    release();
+    if (previousMode.current !== mode) {
+      previousMode.current = mode;
+      reset();
+    }
+  }, [size.width, size.height, size.dpr, mode]);
+  useEffect(() => {
+    if (reducedMotion) {
+      release();
+      pause(true);
+    }
+  }, [reducedMotion]);
+  useEffect(() => {
+    if (!layers.rotation || paused || reducedMotion) return;
+    let frame = 0;
     let previous = performance.now();
     const animate = (now: number) => {
-      advanceSimulation((now - previous) / 1000);
+      const deltaTime = Math.min(0.1, Math.max(0, (now - previous) / 1000));
       previous = now;
-      animationFrame = requestAnimationFrame(animate);
+      if (!document.hidden && !pausedRef.current)
+        updateScene(advanceTurret(sceneRef.current, deltaTime));
+      frame = requestAnimationFrame(animate);
     };
-    animationFrame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationFrame);
-  }, [advanceSimulation, canRotate, paused, reducedMotion]);
-
-  const forward = useMemo(() => pointOnUnitCircle(turretAngle), [turretAngle]);
-  const targetDirection = useMemo(() => normalizeVector(target), [target]);
-  const rawDot = dot(forward, target);
-  const normalizedDot = cosineBetween(forward, target);
-  const unsignedAngle = angleBetween(forward, target);
-  const signedAngle = signedAngleBetween(forward, target);
-  const parallel = vectorProjection(target, forward);
-  const perpendicular = rejection(target, forward);
-  const locked = isWithinViewCone(forward, target, halfViewAngle);
-
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [layers.rotation, paused, reducedMotion, mode]);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-
-    const center = { x: size.width / 2, y: size.height / 2 };
-    const toScreen = (point: Point) => ({ x: center.x + point.x, y: center.y - point.y });
-    const targetScreen = toScreen(target);
-
-    for (let x = center.x % 40; x < size.width; x += 40) {
-      drawLine(ctx, { x, y: 0 }, { x, y: size.height }, "#18233a");
-    }
-    for (let y = center.y % 40; y < size.height; y += 40) {
-      drawLine(ctx, { x: 0, y }, { x: size.width, y }, "#18233a");
-    }
-    drawLine(ctx, { x: 0, y: center.y }, { x: size.width, y: center.y }, "#394662", 1.5);
-    drawLine(ctx, { x: center.x, y: 0 }, { x: center.x, y: size.height }, "#394662", 1.5);
-
-    const drawWorldArrow = (vector: Point, color: string, label: string, width = 3) => {
-      const end = toScreen(vector);
-      drawLine(ctx, center, end, color, width);
-      const backward = normalizeVector(subtractVectors(center, end));
-      const side = { x: -backward.y, y: backward.x };
-      const base = addVectors(end, scaleVector(backward, 13));
-      drawLine(ctx, end, addVectors(base, scaleVector(side, 6)), color, width);
-      drawLine(ctx, end, subtractVectors(base, scaleVector(side, 6)), color, width);
-      ctx.fillStyle = color;
-      ctx.font = "700 11px ui-monospace";
-      ctx.fillText(label, end.x + 9, end.y - 9);
-    };
-
-    if (showCone) {
-      const lower = pointOnUnitCircle(turretAngle - halfViewAngle);
-      const upper = pointOnUnitCircle(turretAngle + halfViewAngle);
-      drawWorldArrow(scaleVector(lower, 190), "#5b6884", "−halfAngle", 1.5);
-      drawWorldArrow(scaleVector(upper, 190), "#5b6884", "+halfAngle", 1.5);
-    }
-
-    drawLine(ctx, center, targetScreen, "#46536e", 1.5);
-
-    if (showProjection) {
-      drawWorldArrow(parallel, "#84a9ff", "projection", 3);
-      drawLine(ctx, toScreen(parallel), targetScreen, "#ff6b6b", 3);
-      ctx.fillStyle = "#ff6b6b";
-      ctx.font = "700 11px ui-monospace";
-      ctx.fillText(
-        "rejection",
-        (toScreen(parallel).x + targetScreen.x) / 2 + 7,
-        (toScreen(parallel).y + targetScreen.y) / 2 - 7,
-      );
-    }
-
-    if (showAngle && vectorLength(target) > 1e-12) {
-      ctx.beginPath();
-      ctx.arc(center.x, center.y, 48, -turretAngle, -(turretAngle + signedAngle), signedAngle > 0);
-      ctx.strokeStyle = "#ffb454";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-    }
-
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, 27, 0, TAU);
-    ctx.fillStyle = "#2c3752";
-    ctx.fill();
-    drawWorldArrow(scaleVector(forward, 115), "#ffe26c", "forward", 4);
-
-    ctx.beginPath();
-    ctx.arc(targetScreen.x, targetScreen.y, 9, 0, TAU);
-    ctx.fillStyle = showCone && locked ? "#53f0ae" : "#ff6b6b";
-    ctx.fill();
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    drawLine(
-      ctx,
-      { x: targetScreen.x - 15, y: targetScreen.y },
-      { x: targetScreen.x + 15, y: targetScreen.y },
-      "#ffffff",
-    );
-    drawLine(
-      ctx,
-      { x: targetScreen.x, y: targetScreen.y - 15 },
-      { x: targetScreen.x, y: targetScreen.y + 15 },
-      "#ffffff",
-    );
-  }, [
-    forward,
-    halfViewAngle,
-    locked,
-    parallel,
-    showAngle,
-    showCone,
-    showProjection,
-    signedAngle,
-    size,
-    target,
-    turretAngle,
-  ]);
-
-  const targetFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const point = canvasPoint(event, event.currentTarget);
-    return { x: point.x - size.width / 2, y: size.height / 2 - point.y };
-  };
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawTurretLab(ctx, size, scene, turretLayers(mode));
+  }, [size, scene, mode]);
 
   const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragging.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setTarget(targetFromEvent(event));
-  };
-
-  const moveTarget = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (dragging.current) setTarget(targetFromEvent(event));
-  };
-
-  const stopDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragging.current = false;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+    if (!event.isPrimary || event.button !== 0 || owner.current !== null) return;
+    const screen = turretPointFromEvent(event, size);
+    if (!screen) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    owner.current = event.pointerId;
+    updateScene({
+      ...setTurretTarget(sceneRef.current, turretScreenToWorld(screen)),
+      dragging: true,
+    });
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      release();
     }
   };
-
+  const moveTarget = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (owner.current !== null && owner.current !== event.pointerId) return;
+    if (owner.current !== null && (event.buttons & 1) === 0) {
+      release();
+      return;
+    }
+    if (
+      owner.current === null &&
+      (!sceneRef.current.followMouse ||
+        event.pointerType !== "mouse" ||
+        !event.isPrimary ||
+        event.buttons !== 0)
+    )
+      return;
+    const screen = turretPointFromEvent(event, size, owner.current !== null);
+    if (!screen) {
+      if (owner.current !== null) release();
+      return;
+    }
+    updateScene(setTurretTarget(sceneRef.current, turretScreenToWorld(screen)));
+  };
+  const stopDrag = (event: ReactPointerEvent<HTMLCanvasElement>, cancelled = false) => {
+    if (owner.current !== event.pointerId || (!cancelled && event.button !== 0)) return;
+    const screen = turretPointFromEvent(event, size, true);
+    if (!cancelled && screen)
+      updateScene(setTurretTarget(sceneRef.current, turretScreenToWorld(screen)));
+    release();
+  };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    const delta: Record<string, Point> = {
-      ArrowLeft: { x: -10, y: 0 },
-      ArrowRight: { x: 10, y: 0 },
-      ArrowUp: { x: 0, y: 10 },
-      ArrowDown: { x: 0, y: -10 },
-    };
-    if (!delta[event.key]) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const key = event.key;
+    if (
+      ![
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        " ",
+        "r",
+        "R",
+        "s",
+        "S",
+        "a",
+        "A",
+        "d",
+        "D",
+        "f",
+        "F",
+        "Escape",
+      ].includes(key)
+    )
+      return;
     event.preventDefault();
-    setTarget((current) => addVectors(current, delta[event.key]));
+    if (key === " ") {
+      if (!event.repeat) togglePause();
+      return;
+    }
+    if (key === "Escape") {
+      release();
+      return;
+    }
+    if (key.toLowerCase() === "r") {
+      if (!event.repeat) reset();
+      return;
+    }
+    if (key.toLowerCase() === "f") {
+      if (!event.repeat) toggleFollow(!sceneRef.current.followMouse);
+      return;
+    }
+    if (key.toLowerCase() === "s") {
+      if (!event.repeat && layers.rotation && (pausedRef.current || reducedMotion)) step();
+      return;
+    }
+    if (["a", "d"].includes(key.toLowerCase())) {
+      changeHeading(
+        sceneRef.current.turretAngle + ((key.toLowerCase() === "d" ? 1 : -1) * Math.PI) / 36,
+      );
+      return;
+    }
+    release();
+    const delta = { x: 0, y: 0 };
+    if (key === "ArrowLeft") delta.x = -0.25;
+    if (key === "ArrowRight") delta.x = 0.25;
+    if (key === "ArrowUp") delta.y = 0.25;
+    if (key === "ArrowDown") delta.y = -0.25;
+    updateScene({
+      ...setTurretTarget(sceneRef.current, {
+        x: sceneRef.current.targetOffset.x + delta.x,
+        y: sceneRef.current.targetOffset.y + delta.y,
+      }),
+      followMouse: false,
+    });
   };
 
-  const reset = () => {
-    setTarget(initialTarget);
-    setTurretAngleValue(initialAngle);
-    setTurnSpeed(Math.PI / 2);
-    setHalfViewAngle((35 * Math.PI) / 180);
-    setPaused(false);
-  };
-
-  const presets = [
-    { label: "Cùng hướng", value: { x: 230, y: 0 } },
-    { label: "Vuông góc", value: { x: 0, y: 190 } },
-    { label: "Ngược hướng", value: { x: -230, y: 0 } },
-    {
-      label: "Chéo 35°",
-      value: { x: Math.cos((35 * Math.PI) / 180) * 230, y: Math.sin((35 * Math.PI) / 180) * 230 },
-    },
-  ];
-
+  const undefinedDirection = "Không xác định (vùng tâm)";
   return (
     <div className="lab-body">
       <div className="lab-controls">
         <label>
           Vị trí mẫu
           <select
-            defaultValue="custom"
+            value="custom"
             onChange={(event) => {
-              const preset = presets[Number(event.target.value)];
-              if (preset) setTarget(preset.value);
-              event.target.value = "custom";
+              if (event.target.value !== "custom") choosePreset(Number(event.target.value));
             }}
           >
-            <option value="custom">Tự kéo</option>
-            {presets.map((preset, index) => (
-              <option key={preset.label} value={index}>
-                {preset.label}
+            <option value="custom">Chọn trường hợp…</option>
+            {[
+              "Cùng hướng, gần",
+              "Cùng hướng, xa",
+              "Vuông trái",
+              "Vuông phải",
+              "Ngược hướng",
+              "Trùng tâm",
+              "Đúng biên vùng nhìn",
+            ].map((label, index) => (
+              <option key={label} value={index}>
+                {label}
               </option>
             ))}
           </select>
         </label>
-        {!canRotate && (
-          <label>
-            Góc nòng
-            <input
-              type="range"
-              min="0"
-              max={TAU}
-              step={Math.PI / 180}
-              value={turretAngle}
-              onChange={(event) => setTurretAngleValue(Number(event.target.value))}
-            />
-            <output>{((turretAngle * 180) / Math.PI).toFixed(0)}°</output>
-          </label>
-        )}
-        {canRotate && (
+        <label>
+          <input
+            type="checkbox"
+            checked={scene.followMouse}
+            onChange={(event) => toggleFollow(event.target.checked)}
+          />
+          Theo chuột
+        </label>
+        <label>
+          Góc nòng
+          <input
+            type="range"
+            min="0"
+            max={TAU}
+            step={Math.PI / 180}
+            value={scene.turretAngle}
+            onChange={(event) => changeHeading(Number(event.target.value))}
+          />
+          <output>{((scene.turretAngle * 180) / Math.PI).toFixed(1)}°</output>
+        </label>
+        {layers.rotation && (
           <label>
             Tốc độ quay
             <input
               type="range"
               min="0"
               max={TAU}
-              step="0.1"
-              value={turnSpeed}
-              onChange={(event) => setTurnSpeed(Number(event.target.value))}
+              step="0.05"
+              value={scene.turnSpeed}
+              onChange={(event) => {
+                release();
+                updateScene({ ...sceneRef.current, turnSpeed: Number(event.target.value) });
+              }}
             />
-            <output>{turnSpeed.toFixed(2)} rad/s</output>
+            <output>{scene.turnSpeed.toFixed(3)} rad/s</output>
           </label>
         )}
-        {showCone && (
+        {layers.cone && (
           <label>
-            Nửa góc khóa
+            Nửa góc vùng nhìn
             <input
               type="range"
               min={(5 * Math.PI) / 180}
-              max={(90 * Math.PI) / 180}
+              max={Math.PI / 2}
               step={Math.PI / 180}
-              value={halfViewAngle}
-              onChange={(event) => setHalfViewAngle(Number(event.target.value))}
+              value={scene.halfViewAngle}
+              onChange={(event) => {
+                release();
+                updateScene({ ...sceneRef.current, halfViewAngle: Number(event.target.value) });
+              }}
             />
-            <output>{((halfViewAngle * 180) / Math.PI).toFixed(0)}°</output>
+            <output>{((scene.halfViewAngle * 180) / Math.PI).toFixed(1)}°</output>
           </label>
         )}
-        {reducedMotion && canRotate && (
-          <span className="control-hint">Đã bật giảm chuyển động; dùng nút Tiến 0,1 s.</span>
+        {layers.rotation && (
+          <button onClick={togglePause}>{paused ? "Tiếp tục" : "Tạm dừng"}</button>
         )}
-        {canRotate && (
-          <button onClick={() => setPaused((value) => !value)}>
-            {paused ? "Tiếp tục" : "Tạm dừng"}
-          </button>
-        )}
-        {canRotate && (paused || reducedMotion) && (
-          <button onClick={() => advanceSimulation(0.1)}>Tiến 0,1 s</button>
-        )}
+        {layers.rotation && (paused || reducedMotion) && <button onClick={step}>Tiến 0,1 s</button>}
         <button onClick={reset}>Đặt lại</button>
       </div>
+      <p>
+        Di chuột trong bảng để đặt mục tiêu; bỏ Theo chuột để giữ vị trí và đọc số. Chạm/kéo hoặc
+        phím mũi tên cũng đặt mục tiêu. Pause chỉ dừng nòng quay, vẫn cho sửa mục tiêu. A/D đổi góc
+        nòng và tạm dừng; Tab chuyển focus bình thường.
+      </p>
+      {reducedMotion && layers.rotation && (
+        <p>Đã bật giảm chuyển động: không tự quay; dùng Tiến 0,1 s.</p>
+      )}
       <canvas
         ref={canvasRef}
+        style={{ height: "clamp(360px, 54vw, 560px)", touchAction: "none" }}
         onPointerDown={startDrag}
         onPointerMove={moveTarget}
         onPointerUp={stopDrag}
-        onPointerCancel={stopDrag}
-        onLostPointerCapture={() => {
-          dragging.current = false;
+        onPointerCancel={(event) => stopDrag(event, true)}
+        onLostPointerCapture={(event) => {
+          if (owner.current === event.pointerId) release();
         }}
         onKeyDown={onKeyDown}
         tabIndex={0}
-        aria-label="Tháp pháo và mục tiêu; kéo hoặc nhấn các phím mũi tên để di chuyển mục tiêu"
+        aria-label="Tháp pháo 2D: di chuột hoặc dùng phím mũi tên đặt mục tiêu; Space tạm dừng; S tiến một bước; A/D đổi hướng nòng"
       />
       <LabReadout
         items={[
           {
             label: "targetOffset",
-            value: `(${target.x.toFixed(1)}, ${target.y.toFixed(1)}) · length=${vectorLength(target).toFixed(1)} px`,
+            value:
+              "(" +
+              scene.targetOffset.x.toFixed(3) +
+              ", " +
+              scene.targetOffset.y.toFixed(3) +
+              ") world",
           },
-          { label: "forward", value: `(${forward.x.toFixed(3)}, ${forward.y.toFixed(3)})` },
-          ...(showDot
+          {
+            label: "forward",
+            value: "(" + result.forward.x.toFixed(3) + ", " + result.forward.y.toFixed(3) + ")",
+          },
+          {
+            label: "target direction",
+            value: result.valid
+              ? "(" +
+                result.targetDirection.x.toFixed(3) +
+                ", " +
+                result.targetDirection.y.toFixed(3) +
+                ")"
+              : undefinedDirection,
+          },
+          ...(layers.dot
             ? [
-                { label: "raw dot", value: rawDot.toFixed(3) },
-                { label: "normalized dot", value: normalizedDot.toFixed(6) },
-              ]
-            : []),
-          ...(showAngle
-            ? [
+                { label: "raw dot", value: result.rawDot.toFixed(4) + " world" },
                 {
-                  label: "angle error",
-                  value: `${((unsignedAngle * 180) / Math.PI).toFixed(2)}°; signed ${((signedAngle * 180) / Math.PI).toFixed(2)}°`,
+                  label: "normalized dot",
+                  value: result.valid ? result.normalizedDot.toFixed(6) : undefinedDirection,
                 },
               ]
             : []),
-          ...(showProjection
+          ...(layers.angle
             ? [
                 {
-                  label: "scalar projection",
-                  value: `${scalarProjection(target, forward).toFixed(2)} px`,
+                  label: "unsigned angle",
+                  value: result.valid
+                    ? ((result.angleError * 180) / Math.PI).toFixed(3) + "°"
+                    : undefinedDirection,
                 },
+              ]
+            : []),
+          ...(layers.projection
+            ? [
                 {
-                  label: "rejection length",
-                  value: `${vectorLength(perpendicular).toFixed(2)} px`,
+                  label: "projection",
+                  value:
+                    "(" +
+                    result.parallel.x.toFixed(3) +
+                    ", " +
+                    result.parallel.y.toFixed(3) +
+                    ") world",
+                },
+                { label: "scalar projection", value: result.scalar.toFixed(4) + " world" },
+                {
+                  label: "rejection",
+                  value:
+                    "(" +
+                    result.residual.x.toFixed(3) +
+                    ", " +
+                    result.residual.y.toFixed(3) +
+                    ") world",
                 },
                 {
                   label: "projection · rejection",
-                  value: dot(parallel, perpendicular).toExponential(2),
+                  value: dot(result.parallel, result.residual).toExponential(2),
                 },
               ]
             : []),
-          ...(canRotate
+          ...(layers.rotation
             ? [
                 {
-                  label: "crossZ",
-                  value: `${crossZ(forward, targetDirection).toFixed(6)} · ${signedAngle > 1e-9 ? "quay ngược chiều kim đồng hồ" : signedAngle < -1e-9 ? "quay theo chiều kim đồng hồ" : "đã thẳng hướng"}`,
+                  label: "signed error",
+                  value: result.valid
+                    ? ((result.signedError * 180) / Math.PI).toFixed(3) + "°"
+                    : undefinedDirection,
+                },
+                { label: "turnSpeed", value: scene.turnSpeed.toFixed(3) + " rad/s" },
+              ]
+            : []),
+          ...(layers.cone
+            ? [
+                {
+                  label: "trong vùng nhìn",
+                  value: result.locked
+                    ? "Có (chỉ xét góc)"
+                    : result.valid
+                      ? "Không"
+                      : "Không — chưa có hướng",
                 },
               ]
             : []),
-          ...(showCone
+          ...(mode === undefined || mode === "turret-full"
             ? [
                 {
-                  label: "view cone",
-                  value: `${normalizedDot.toFixed(4)} ${locked ? "≥" : "<"} cos(${((halfViewAngle * 180) / Math.PI).toFixed(0)}°)=${Math.cos(halfViewAngle).toFixed(4)} · ${locked ? "LOCKED" : "SEARCHING"}`,
+                  label: "reconstruction error",
+                  value:
+                    Math.hypot(
+                      result.parallel.x + result.residual.x - scene.targetOffset.x,
+                      result.parallel.y + result.residual.y - scene.targetOffset.y,
+                    ).toExponential(2) + " world",
                 },
               ]
             : []),

@@ -1,581 +1,409 @@
 "use client";
-
 import {
+  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { add3, magnitude3, subtract3, type Vec3 } from "@/lib/labs/normal";
-import { projectPerspective, type ProjectionResult } from "@/lib/labs/projection";
+import type { Vec3 } from "@/lib/labs/normal";
+import type { EulerAngles, RotationOrder } from "@/lib/labs/rotation3d";
 import {
-  DEFAULT_WORLD_TRIANGLE,
-  advanceEulerAngles,
-  applyRotationMouseDrag,
-  maximumEdgeLengthError3,
-  projectTriangle3,
-  rotateEuler3,
-  rotateTriangle3,
-  rotationRoundTripError3,
-  rotationTriangleCentroid,
-  toLocalTriangle3,
-  translateTriangle3,
-  triangleEdgeLengths3,
-  type EulerAngles,
-  type RotationOrder,
-} from "@/lib/labs/rotation3d";
-import {
-  LabReadout,
-  canvasPoint,
-  drawLine,
-  setupCanvas,
-  useCanvasSize,
-  useReducedMotion,
-} from "./lab-shared";
+  initialRotationScene,
+  rotationStage,
+  rotationPreset,
+  rotationResults,
+  changeRotationAngle,
+  setRotationPosition,
+  moveRotationModel,
+  applyMouseDrag,
+  advanceRotation,
+  type RotationScene,
+} from "@/lib/labs/rotation3d-scene";
+import { drawRotationLab, rotationPointFromEvent } from "./rotation3d-lab-view";
+import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
-
-const DEG_TO_RAD = Math.PI / 180;
-const RAD_TO_DEG = 180 / Math.PI;
-const INITIAL_MODEL_POSITION = rotationTriangleCentroid(DEFAULT_WORLD_TRIANGLE);
-const INITIAL_ANGLES: EulerAngles = { pitch: 18 * DEG_TO_RAD, yaw: 25 * DEG_TO_RAD, roll: 0 };
-const ANGULAR_VELOCITY: EulerAngles = {
-  pitch: 20 * DEG_TO_RAD,
-  yaw: 32 * DEG_TO_RAD,
-  roll: 12 * DEG_TO_RAD,
-};
-
-function formatVec3(point: Vec3) {
-  return `(${point.x.toFixed(2)}, ${point.y.toFixed(2)}, ${point.z.toFixed(2)})`;
-}
-
-function formatEdges(edges: readonly [number, number, number]) {
-  return `AB=${edges[0].toFixed(3)} · BC=${edges[1].toFixed(3)} · CA=${edges[2].toFixed(3)}`;
-}
-
-function formatProjection(vertex: ProjectionResult) {
-  if (vertex.status !== "visible") return vertex.status;
-  return `visible · screen (${vertex.screen.x.toFixed(1)}, ${vertex.screen.y.toFixed(1)}) · camera Z=${vertex.cameraPoint.z.toFixed(2)}`;
-}
-
+const format = (p: Vec3) => "(" + [p.x, p.y, p.z].map((x) => x.toFixed(4)).join(", ") + ")";
 export default function Rotation3dLab({ mode }: { mode?: InteractiveLabMode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastPointer = useRef<{ x: number; y: number } | null>(null);
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const [modelPosition, setModelPosition] = useState<Vec3>(INITIAL_MODEL_POSITION);
-  const [angles, setAngles] = useState<EulerAngles>(() =>
-    mode === "rotation-triangle" || mode === "rotation-pivot"
-      ? { pitch: 0, yaw: 0, roll: 0 }
-      : INITIAL_ANGLES,
-  );
-  const [order, setOrder] = useState<RotationOrder>("xyz");
-  const [sensitivity, setSensitivity] = useState(0.008);
-  const [mouseDelta, setMouseDelta] = useState({ x: 0, y: 0 });
-  const [dragging, setDragging] = useState(false);
-  const [paused, setPaused] = useState(true);
-  const [preset, setPreset] = useState("visible");
-
-  const showPivot = mode !== "rotation-triangle";
-  const showPitch =
-    mode === undefined ||
-    ["rotation-x", "rotation-euler", "rotation-mouse", "rotation-validation"].includes(mode);
-  const showEuler =
-    mode === undefined ||
-    ["rotation-euler", "rotation-mouse", "rotation-validation"].includes(mode);
-  const showMouse = mode === undefined || ["rotation-mouse", "rotation-validation"].includes(mode);
-  const showValidation = mode === undefined || mode === "rotation-validation";
-
-  const camera = useMemo(() => ({ position: { x: 0, y: 0, z: 0 } }), []);
-  const lens = useMemo(() => ({ verticalFovRadians: 60 * DEG_TO_RAD }), []);
-  const localTriangle = useMemo(() => toLocalTriangle3(DEFAULT_WORLD_TRIANGLE), []);
-  const activeAngles = useMemo<EulerAngles>(
-    () => ({
-      pitch: showPitch ? angles.pitch : 0,
-      yaw: showEuler ? angles.yaw : 0,
-      roll: showEuler ? angles.roll : 0,
-    }),
-    [angles, showEuler, showPitch],
-  );
-  const rotatedLocal = useMemo(
-    () => rotateTriangle3(localTriangle, activeAngles, showEuler ? order : "xyz"),
-    [activeAngles, localTriangle, order, showEuler],
-  );
-  const worldTriangle = useMemo(
-    () => translateTriangle3(rotatedLocal, modelPosition),
-    [modelPosition, rotatedLocal],
-  );
-  const projection = useMemo(
-    () => projectTriangle3(worldTriangle, camera, lens, 0.5, size.width, size.height),
-    [camera, lens, size.height, size.width, worldTriangle],
-  );
-  const edgeError = maximumEdgeLengthError3(localTriangle, rotatedLocal);
-  const roundTripError = rotationRoundTripError3(
-    localTriangle.a,
-    activeAngles,
-    showEuler ? order : "xyz",
-  );
-  const otherOrder: RotationOrder = order === "xyz" ? "zyx" : "xyz";
-  const otherOrderA = rotateEuler3(localTriangle.a, activeAngles, otherOrder);
-  const orderDifference = magnitude3(subtract3(rotatedLocal.a, otherOrderA));
-
-  useEffect(() => {
-    if (!showValidation || paused || reducedMotion) return;
-    let animationFrame = 0;
-    let previous = performance.now();
-    const animate = (now: number) => {
-      const deltaTime = (now - previous) / 1000;
-      previous = now;
-      setAngles((current) => advanceEulerAngles(current, ANGULAR_VELOCITY, deltaTime));
-      animationFrame = requestAnimationFrame(animate);
-    };
-    animationFrame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationFrame);
-  }, [paused, reducedMotion, showValidation]);
-
-  useEffect(() => {
+  const canvasRef = useRef<HTMLCanvasElement>(null),
+    size = useCanvasSize(canvasRef),
+    reducedMotion = useReducedMotion(),
+    stage = rotationStage(mode);
+  const [scene, setScene] = useState<RotationScene>(initialRotationScene),
+    sceneRef = useRef(scene),
+    drag = useRef<{ id: number; previous: { x: number; y: number } } | null>(null);
+  const [captured, setCaptured] = useState(false);
+  const commit = useCallback((next: RotationScene) => {
+    sceneRef.current = next;
+    setScene(next);
+  }, []);
+  const cancelDrag = useCallback(() => {
+    const active = drag.current;
+    drag.current = null;
+    setCaptured(false);
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-
-    for (let x = 0; x < size.width; x += 40) {
-      drawLine(ctx, { x, y: 0 }, { x, y: size.height }, "#18233a");
-    }
-    for (let y = 0; y < size.height; y += 40) {
-      drawLine(ctx, { x: 0, y }, { x: size.width, y }, "#18233a");
-    }
-    drawLine(
-      ctx,
-      { x: size.width * 0.5, y: 0 },
-      { x: size.width * 0.5, y: size.height },
-      "#26334d",
-    );
-    drawLine(
-      ctx,
-      { x: 0, y: size.height * 0.5 },
-      { x: size.width, y: size.height * 0.5 },
-      "#26334d",
-    );
-
-    const drawProjection = (
-      points: readonly { screen: { x: number; y: number } }[],
-      colors: readonly string[],
-      width: number,
-    ) => {
-      for (let index = 0; index < 3; index += 1) {
-        drawLine(ctx, points[index].screen, points[(index + 1) % 3].screen, colors[index], width);
-      }
-    };
-
-    if (showPitch) {
-      const unrotatedWorld = translateTriangle3(localTriangle, modelPosition);
-      const ghost = projectTriangle3(unrotatedWorld, camera, lens, 0.5, size.width, size.height);
-      if (ghost.visible) {
-        drawProjection(ghost.vertices, ["#394662", "#394662", "#394662"], 1.5);
-      }
-    }
-
-    if (projection.visible) {
-      drawProjection(projection.vertices, ["#ffb454", "#53f0ae", "#84a9ff"], 3);
-      const labels = ["A", "B", "C"];
-      const colors = ["#ffe26c", "#f7f9ff", "#c484ff"];
-      for (const [index, vertex] of projection.vertices.entries()) {
-        ctx.beginPath();
-        ctx.arc(vertex.screen.x, vertex.screen.y, 7, 0, Math.PI * 2);
-        ctx.fillStyle = colors[index];
-        ctx.fill();
-        ctx.fillStyle = "#f7f9ff";
-        ctx.font = "700 11px ui-monospace";
-        ctx.fillText(labels[index], vertex.screen.x + 10, vertex.screen.y - 9);
-      }
-    } else {
-      ctx.fillStyle = "#ff6b6b";
-      ctx.font = "700 13px ui-monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(
-        "Không nối cạnh: ít nhất một vertex không visible",
-        size.width * 0.5,
-        size.height * 0.5,
-      );
-      ctx.textAlign = "start";
-    }
-
-    if (showPivot) {
-      const pivotProjection = projectPerspective(
-        modelPosition,
-        camera,
-        lens,
-        0.5,
-        size.width,
-        size.height,
-      );
-      if (pivotProjection.status === "visible") {
-        drawLine(
-          ctx,
-          { x: pivotProjection.screen.x - 9, y: pivotProjection.screen.y },
-          { x: pivotProjection.screen.x + 9, y: pivotProjection.screen.y },
-          "#ff6b6b",
-          2,
-        );
-        drawLine(
-          ctx,
-          { x: pivotProjection.screen.x, y: pivotProjection.screen.y - 9 },
-          { x: pivotProjection.screen.x, y: pivotProjection.screen.y + 9 },
-          "#ff6b6b",
-          2,
-        );
-      }
-    }
-
-    if (showEuler) {
-      const axes = [
-        { vector: { x: 1, y: 0, z: 0 }, color: "#ff6b6b", label: "X" },
-        { vector: { x: 0, y: 1, z: 0 }, color: "#53f0ae", label: "Y" },
-        { vector: { x: 0, y: 0, z: 1 }, color: "#84a9ff", label: "Z" },
-      ];
-      const origin = projectPerspective(modelPosition, camera, lens, 0.5, size.width, size.height);
-      if (origin.status === "visible") {
-        for (const axis of axes) {
-          const rotatedAxis = rotateEuler3(axis.vector, activeAngles, order);
-          const endpoint = projectPerspective(
-            add3(modelPosition, rotatedAxis),
-            camera,
-            lens,
-            0.5,
-            size.width,
-            size.height,
-          );
-          if (endpoint.status === "visible") {
-            drawLine(ctx, origin.screen, endpoint.screen, axis.color, 2);
-            ctx.fillStyle = axis.color;
-            ctx.fillText(axis.label, endpoint.screen.x + 5, endpoint.screen.y - 5);
-          }
-        }
-      }
-    }
-  }, [
-    activeAngles,
-    camera,
-    lens,
-    localTriangle,
-    modelPosition,
-    order,
-    projection,
-    showEuler,
-    showPitch,
-    showPivot,
-    size,
-  ]);
-
-  const applyPreset = (value: string) => {
-    setPreset(value);
-    setPaused(true);
-    if (value === "near") {
-      // local A có z=-0.3, vì vậy model Z=0.7 đặt A tại z=0.4, trước near plane 0.5.
-      setModelPosition({ x: 0, y: 0, z: 0.7 });
-    } else if (value === "behind") {
-      setModelPosition({ x: 0, y: 0, z: -1 });
-    } else if (value === "outside") {
-      setModelPosition({ x: 12, y: 0, z: 6 });
-    } else {
-      setModelPosition(INITIAL_MODEL_POSITION);
-    }
+    if (active && canvas?.hasPointerCapture(active.id)) canvas.releasePointerCapture(active.id);
+  }, []);
+  const reset = useCallback(
+    (index = 0) => {
+      cancelDrag();
+      commit(rotationPreset(index));
+    },
+    [cancelDrag, commit],
+  );
+  const editAngle = (key: keyof EulerAngles, value: number) => {
+    cancelDrag();
+    commit(changeRotationAngle(sceneRef.current, key, value));
   };
-
-  const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!showMouse) return;
-    lastPointer.current = canvasPoint(event, event.currentTarget);
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setDragging(true);
-    setPaused(true);
+  const editPosition = (axis: keyof Vec3, value: number) => {
+    cancelDrag();
+    commit(setRotationPosition(sceneRef.current, axis, value));
   };
-
+  const editSensitivity = (value: number) => {
+    if (!Number.isFinite(value)) return;
+    cancelDrag();
+    commit({
+      ...sceneRef.current,
+      paused: true,
+      sensitivity: Math.max(0.002, Math.min(0.02, value)),
+    });
+  };
+  const setOrder = (order: RotationOrder) => {
+    cancelDrag();
+    commit({ ...sceneRef.current, paused: true, order });
+  };
+  const togglePause = () => {
+    cancelDrag();
+    commit({ ...sceneRef.current, paused: reducedMotion ? true : !sceneRef.current.paused });
+  };
+  const toggleDebug = () => {
+    cancelDrag();
+    commit({ ...sceneRef.current, debug: !sceneRef.current.debug });
+  };
   const moveDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!showMouse || !lastPointer.current) return;
-    const point = canvasPoint(event, event.currentTarget);
-    const delta = { x: point.x - lastPointer.current.x, y: point.y - lastPointer.current.y };
-    lastPointer.current = point;
-    setMouseDelta(delta);
-    setAngles((current) => applyRotationMouseDrag(current, delta.x, delta.y, sensitivity));
+    const active = drag.current;
+    if (!active || active.id !== event.pointerId) return;
+    const p = rotationPointFromEvent(event, size, true);
+    if (!p) return;
+    const s = sceneRef.current;
+    const angles = applyMouseDrag(
+      s.angles,
+      p.x - active.previous.x,
+      p.y - active.previous.y,
+      s.sensitivity,
+    );
+    active.previous = p;
+    commit({ ...s, angles, paused: true });
   };
-
-  const stopDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    lastPointer.current = null;
-    setDragging(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+  const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (stage < 6 || !event.isPrimary || event.button !== 0 || drag.current) return;
+    const p = rotationPointFromEvent(event, size);
+    if (!p) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    drag.current = { id: event.pointerId, previous: p };
+    commit({ ...sceneRef.current, paused: true });
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setCaptured(true);
+    } catch {
+      drag.current = null;
+      setCaptured(false);
     }
   };
-
-  const reset = () => {
-    setModelPosition(INITIAL_MODEL_POSITION);
-    setAngles(showPitch ? INITIAL_ANGLES : { pitch: 0, yaw: 0, roll: 0 });
-    setOrder("xyz");
-    setSensitivity(0.008);
-    setMouseDelta({ x: 0, y: 0 });
-    setDragging(false);
-    setPaused(true);
-    setPreset("visible");
+  const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId) return;
+    if (event.pointerType === "mouse" && (event.buttons & 1) === 0) {
+      cancelDrag();
+      return;
+    }
+    moveDrag(event);
   };
-
+  const pointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId || event.button !== 0) return;
+    moveDrag(event);
+    cancelDrag();
+  };
+  const pointerCancel = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id === event.pointerId) cancelDrag();
+  };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    const angleStep = event.shiftKey ? 10 * DEG_TO_RAD : 3 * DEG_TO_RAD;
-    let handled = true;
-    let pauseAfterInput = true;
-    if (showPitch && event.key.toLowerCase() === "w") {
-      setAngles((current) => ({ ...current, pitch: current.pitch + angleStep }));
-    } else if (showPitch && event.key.toLowerCase() === "s") {
-      setAngles((current) => ({ ...current, pitch: current.pitch - angleStep }));
-    } else if (showEuler && event.key.toLowerCase() === "a") {
-      setAngles((current) => ({ ...current, yaw: current.yaw - angleStep }));
-    } else if (showEuler && event.key.toLowerCase() === "d") {
-      setAngles((current) => ({ ...current, yaw: current.yaw + angleStep }));
-    } else if (showEuler && event.key.toLowerCase() === "q") {
-      setAngles((current) => ({ ...current, roll: current.roll - angleStep }));
-    } else if (showEuler && event.key.toLowerCase() === "e") {
-      setAngles((current) => ({ ...current, roll: current.roll + angleStep }));
-    } else if (showEuler && event.key.toLowerCase() === "o") {
-      setOrder((current) => (current === "xyz" ? "zyx" : "xyz"));
-    } else if (showPivot && event.key === "ArrowLeft") {
-      setModelPosition((current) => ({ ...current, x: current.x - 0.1 }));
-    } else if (showPivot && event.key === "ArrowRight") {
-      setModelPosition((current) => ({ ...current, x: current.x + 0.1 }));
-    } else if (showPivot && event.key === "ArrowDown") {
-      setModelPosition((current) => ({ ...current, y: current.y - 0.1 }));
-    } else if (showPivot && event.key === "ArrowUp") {
-      setModelPosition((current) => ({ ...current, y: current.y + 0.1 }));
-    } else if (showPivot && event.key === "PageDown") {
-      setModelPosition((current) => ({ ...current, z: current.z - 0.1 }));
-    } else if (showPivot && event.key === "PageUp") {
-      setModelPosition((current) => ({ ...current, z: current.z + 0.1 }));
-    } else if (event.key.toLowerCase() === "r") {
-      reset();
-    } else if (showValidation && event.key === " ") {
-      setPaused((current) => !current);
-      pauseAfterInput = false;
-    } else if (showValidation && event.key === "." && paused) {
-      setAngles((current) => advanceEulerAngles(current, ANGULAR_VELOCITY, 1 / 60));
-    } else {
-      handled = false;
-    }
-    if (handled) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.key === "Tab") return;
+    const key = event.key.toLowerCase();
+    if (key === "r") {
       event.preventDefault();
-      if (pauseAfterInput) setPaused(true);
+      if (!event.repeat) reset();
+      return;
+    }
+    if (stage >= 7 && key === " ") {
+      event.preventDefault();
+      if (!event.repeat) togglePause();
+      return;
+    }
+    if (stage >= 7 && key === "n") {
+      event.preventDefault();
+      if (!event.repeat && sceneRef.current.paused) commit(advanceRotation(sceneRef.current, 0.1));
+      return;
+    }
+    if (stage >= 7 && key === "f") {
+      event.preventDefault();
+      if (!event.repeat) toggleDebug();
+      return;
+    }
+    if (stage >= 4 && key === "o") {
+      event.preventDefault();
+      if (!event.repeat) setOrder(sceneRef.current.order === "xyz" ? "zyx" : "xyz");
+      return;
+    }
+    const angleKeys: Record<string, [keyof EulerAngles, number]> = {
+      w: ["pitch", 1],
+      s: ["pitch", -1],
+      a: ["yaw", -1],
+      d: ["yaw", 1],
+      q: ["roll", -1],
+      e: ["roll", 1],
+    };
+    if (angleKeys[key] && stage >= 3) {
+      const [axis, sign] = angleKeys[key];
+      if (stage < 4 && axis !== "pitch") return;
+      event.preventDefault();
+      editAngle(axis, sceneRef.current.angles[axis] + (sign * 5 * Math.PI) / 180);
+      return;
+    }
+    const delta: Record<string, Vec3> = {
+      ArrowLeft: { x: -0.1, y: 0, z: 0 },
+      ArrowRight: { x: 0.1, y: 0, z: 0 },
+      ArrowUp: { x: 0, y: 0.1, z: 0 },
+      ArrowDown: { x: 0, y: -0.1, z: 0 },
+      PageUp: { x: 0, y: 0, z: 0.1 },
+      PageDown: { x: 0, y: 0, z: -0.1 },
+    };
+    if (delta[event.key]) {
+      event.preventDefault();
+      cancelDrag();
+      commit(moveRotationModel(sceneRef.current, delta[event.key]));
     }
   };
-
-  const stepAnimation = () => {
-    setAngles((current) => advanceEulerAngles(current, ANGULAR_VELOCITY, 1 / 60));
-  };
-
+  useEffect(() => {
+    const pause = () => {
+      cancelDrag();
+      commit({ ...sceneRef.current, paused: true });
+    };
+    const hidden = () => {
+      if (document.hidden) pause();
+    };
+    window.addEventListener("blur", pause);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", pause);
+      document.removeEventListener("visibilitychange", hidden);
+      cancelDrag();
+    };
+  }, [cancelDrag, commit]);
+  useEffect(() => {
+    cancelDrag();
+    commit(initialRotationScene());
+  }, [mode, cancelDrag, commit]);
+  useEffect(() => {
+    // Resize releases capture, preserving model position and orientation.
+    cancelDrag();
+    commit({ ...sceneRef.current, paused: true });
+  }, [size.width, size.height, size.dpr, cancelDrag, commit]);
+  useEffect(() => {
+    if (reducedMotion) {
+      cancelDrag();
+      commit({ ...sceneRef.current, paused: true });
+    }
+  }, [reducedMotion, cancelDrag, commit]);
+  useEffect(() => {
+    if (stage < 7 || scene.paused || reducedMotion) return;
+    let frame = 0,
+      previous = performance.now();
+    const animate = (now: number) => {
+      if (sceneRef.current.paused) return;
+      const dt = Math.min(0.1, Math.max(0, (now - previous) / 1000));
+      previous = now;
+      commit(advanceRotation(sceneRef.current, dt));
+      frame = requestAnimationFrame(animate);
+    };
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [stage, scene.paused, reducedMotion, commit]);
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawRotationLab(ctx, size, scene, stage);
+  }, [size, scene, stage]);
+  const r = rotationResults(scene, stage),
+    debug = stage < 7 || scene.debug;
   return (
     <div className="lab-body">
       <div className="lab-controls">
-        {!showPivot && (
+        <label>
+          Preset
+          <select
+            aria-label="Tam giác mẫu"
+            value=""
+            onChange={(e) => reset(Number(e.target.value))}
+          >
+            <option value="" disabled>
+              Chọn thí nghiệm
+            </option>
+            {["Mặc định", "Hai góc 90°", "Góc tổng quát", "Cắt near", "Lệch ra ngoài"].map(
+              (name, i) => (
+                <option key={i} value={i}>
+                  {name}
+                </option>
+              ),
+            )}
+          </select>
+        </label>
+        {(["x", "y", "z"] as const).map((axis) => (
+          <label key={axis}>
+            Model.{axis.toUpperCase()}
+            <input
+              type="range"
+              aria-label={"Model." + axis.toUpperCase()}
+              min={axis === "z" ? 0.1 : -4}
+              max={axis === "z" ? 15 : 4}
+              step=".1"
+              value={scene.position[axis]}
+              onChange={(e) => editPosition(axis, Number(e.target.value))}
+            />
+            <output>{scene.position[axis].toFixed(2)}</output>
+          </label>
+        ))}
+        {(["pitch", "yaw", "roll"] as const)
+          .filter((key) => (key === "pitch" ? stage >= 3 : stage >= 4))
+          .map((key) => (
+            <label key={key}>
+              {key}
+              <input
+                type="range"
+                aria-label={"Góc " + key}
+                min="-180"
+                max="180"
+                step="1"
+                value={(scene.angles[key] * 180) / Math.PI}
+                onChange={(e) => editAngle(key, (Number(e.target.value) * Math.PI) / 180)}
+              />
+              <output>{((scene.angles[key] * 180) / Math.PI).toFixed(2)}°</output>
+            </label>
+          ))}
+        {stage >= 4 && (
           <label>
-            Trạng thái projection
-            <select value={preset} onChange={(event) => applyPreset(event.target.value)}>
-              <option value="visible">Cả ba vertex visible</option>
-              <option value="near">Có vertex trước near</option>
-              <option value="behind">Có vertex sau camera</option>
-              <option value="outside">Có vertex ngoài frustum</option>
+            Rotation order
+            <select
+              aria-label="Rotation order"
+              value={scene.order}
+              onChange={(e) => setOrder(e.target.value as RotationOrder)}
+            >
+              <option value="xyz">X → Y → Z</option>
+              <option value="zyx">Z → Y → X</option>
             </select>
           </label>
         )}
-        {showPivot &&
-          (["x", "y", "z"] as const).map((axis) => (
-            <label key={axis}>
-              Model.{axis.toUpperCase()}
-              <input
-                type="range"
-                min={axis === "z" ? "1" : "-4"}
-                max={axis === "z" ? "10" : "4"}
-                step="0.1"
-                value={modelPosition[axis]}
-                onChange={(event) => {
-                  setModelPosition((current) => ({
-                    ...current,
-                    [axis]: Number(event.target.value),
-                  }));
-                  setPaused(true);
-                  setPreset("custom");
-                }}
-              />
-              <output>{modelPosition[axis].toFixed(1)}</output>
-            </label>
-          ))}
-        {showPitch && (
-          <label>
-            Pitch X
-            <input
-              type="range"
-              min="-180"
-              max="180"
-              step="1"
-              value={angles.pitch * RAD_TO_DEG}
-              onChange={(event) => {
-                setAngles((current) => ({
-                  ...current,
-                  pitch: Number(event.target.value) * DEG_TO_RAD,
-                }));
-                setPaused(true);
-              }}
-            />
-            <output>{(angles.pitch * RAD_TO_DEG).toFixed(0)}°</output>
-          </label>
-        )}
-        {showEuler && (
-          <>
-            <label>
-              Yaw Y
-              <input
-                type="range"
-                min="-180"
-                max="180"
-                step="1"
-                value={angles.yaw * RAD_TO_DEG}
-                onChange={(event) => {
-                  setAngles((current) => ({
-                    ...current,
-                    yaw: Number(event.target.value) * DEG_TO_RAD,
-                  }));
-                  setPaused(true);
-                }}
-              />
-              <output>{(angles.yaw * RAD_TO_DEG).toFixed(0)}°</output>
-            </label>
-            <label>
-              Roll Z
-              <input
-                type="range"
-                min="-180"
-                max="180"
-                step="1"
-                value={angles.roll * RAD_TO_DEG}
-                onChange={(event) => {
-                  setAngles((current) => ({
-                    ...current,
-                    roll: Number(event.target.value) * DEG_TO_RAD,
-                  }));
-                  setPaused(true);
-                }}
-              />
-              <output>{(angles.roll * RAD_TO_DEG).toFixed(0)}°</output>
-            </label>
-            <label>
-              Rotation order
-              <select
-                value={order}
-                onChange={(event) => setOrder(event.target.value as RotationOrder)}
-              >
-                <option value="xyz">X → Y → Z</option>
-                <option value="zyx">Z → Y → X</option>
-              </select>
-            </label>
-          </>
-        )}
-        {showMouse && (
+        {stage >= 6 && (
           <label>
             Mouse sensitivity
             <input
+              aria-label="Mouse sensitivity"
               type="range"
-              min="0.002"
-              max="0.02"
-              step="0.001"
-              value={sensitivity}
-              onChange={(event) => setSensitivity(Number(event.target.value))}
+              min=".002"
+              max=".02"
+              step=".001"
+              value={scene.sensitivity}
+              onChange={(e) => editSensitivity(Number(e.target.value))}
             />
-            <output>{sensitivity.toFixed(3)} rad/px</output>
+            <output>{scene.sensitivity.toFixed(3)} rad/logical px</output>
           </label>
         )}
-        {showValidation && (
-          <button onClick={() => setPaused((current) => !current)}>
-            {paused ? "Chạy" : "Tạm dừng"}
-          </button>
+        {stage >= 7 && (
+          <>
+            <button onClick={togglePause} disabled={reducedMotion}>
+              {scene.paused ? "Tự quay" : "Tạm dừng"}
+            </button>
+            <button
+              disabled={!scene.paused}
+              onClick={() => commit(advanceRotation(sceneRef.current, 0.1))}
+            >
+              Tiến 0.1 s
+            </button>
+            <button onClick={toggleDebug} aria-pressed={scene.debug}>
+              {scene.debug ? "Ẩn debug" : "Hiện debug"}
+            </button>
+          </>
         )}
-        {showValidation && (paused || reducedMotion) && (
-          <button onClick={stepAnimation}>Tiến một bước</button>
-        )}
-        <button onClick={reset}>Đặt lại</button>
+        <button onClick={() => reset()}>Đặt lại</button>
       </div>
       <canvas
         ref={canvasRef}
-        onPointerDown={startDrag}
-        onPointerMove={moveDrag}
-        onPointerUp={stopDrag}
-        onPointerCancel={stopDrag}
-        onLostPointerCapture={() => {
-          lastPointer.current = null;
-          setDragging(false);
-        }}
-        onKeyDown={onKeyDown}
+        style={{ height: "clamp(380px,58vw,560px)", touchAction: "none" }}
         tabIndex={0}
-        aria-label="Tam giác 3D qua local space, rotation X Y Z và perspective; kéo chuột hoặc dùng W/S, A/D, Q/E, các phím mũi tên, O, Space, dấu chấm và R"
+        onPointerDown={startDrag}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerCancel={pointerCancel}
+        onLostPointerCapture={pointerCancel}
+        onKeyDown={onKeyDown}
+        onBlur={() => {
+          cancelDrag();
+          commit({ ...sceneRef.current, paused: true });
+        }}
+        aria-label="Tam giác 3D perspective và normal: kéo ngang yaw, dọc pitch, Q/E roll; O đổi rotation order"
       />
-      <LabReadout
-        items={[
-          { label: "local centroid", value: formatVec3(rotationTriangleCentroid(localTriangle)) },
-          ...(!showPivot
-            ? projection.vertices.map((vertex, index) => ({
-                label: `vertex ${["A", "B", "C"][index]}`,
-                value: formatProjection(vertex),
-              }))
-            : []),
-          ...(showPivot
-            ? [
-                { label: "local A", value: formatVec3(localTriangle.a) },
-                { label: "world A", value: formatVec3(worldTriangle.a) },
-                { label: "model position / pivot", value: formatVec3(modelPosition) },
-              ]
-            : []),
-          ...(showPitch
-            ? [
-                {
-                  label: "pitch / yaw / roll",
-                  value: `${(activeAngles.pitch * RAD_TO_DEG).toFixed(1)}° · ${(activeAngles.yaw * RAD_TO_DEG).toFixed(1)}° · ${(activeAngles.roll * RAD_TO_DEG).toFixed(1)}°`,
-                },
-                {
-                  label: "local A → rotated A",
-                  value: `${formatVec3(localTriangle.a)} → ${formatVec3(rotatedLocal.a)}`,
-                },
-                {
-                  label: "|A| trước / sau",
-                  value: `${magnitude3(localTriangle.a).toFixed(6)} / ${magnitude3(rotatedLocal.a).toFixed(6)}`,
-                },
-              ]
-            : []),
-          ...(showEuler
-            ? [
-                { label: "rotation order", value: order.toUpperCase() },
-                { label: "A: chênh lệch giữa hai order", value: orderDifference.toFixed(6) },
-              ]
-            : []),
-          {
-            label: "projection",
-            value: projection.visible
-              ? "3/3 visible — đã nối cạnh"
-              : "ẩn — có vertex không visible",
-          },
-          ...(showMouse
-            ? [
-                {
-                  label: "mouse delta",
-                  value: `(${mouseDelta.x.toFixed(1)}, ${mouseDelta.y.toFixed(1)}) px`,
-                },
-                { label: "pointer capture", value: dragging ? "đang kéo" : "đã nhả" },
-              ]
-            : []),
-          ...(showValidation
-            ? [
-                { label: "edge lengths", value: formatEdges(triangleEdgeLengths3(rotatedLocal)) },
-                { label: "edge-length error", value: edgeError.toExponential(2) },
-                { label: "round-trip error", value: roundTripError.toExponential(2) },
-              ]
-            : []),
-        ]}
-      />
+      <p>
+        Camera nhìn +Z; object quay quanh centroid theo các trục world cố định. XYZ nghĩa là làm X
+        trước, Y tiếp, Z cuối; không phải yaw/pitch quanh trục local đang quay. Kéo trong viewport
+        từ bài 6: nhấn không đổi góc, mỗi logical pixel đổi sensitivity radian, thả nhận mẫu cuối.
+        Q/E đổi roll 5° mỗi nấc. Pitch được wrap, không khóa ở ±89°; Euler vẫn có những tư thế mà
+        hai trục điều khiển trùng hướng. Resize/HiDPI letterbox bảng logic, không thay vị trí world.{" "}
+        {reducedMotion ? "Reduced motion: tự quay tắt, vẫn dùng step được." : ""}
+      </p>
+      {debug && (
+        <LabReadout
+          items={[
+            { label: "model position / pivot", value: format(scene.position) },
+            ...(stage >= 2
+              ? [
+                  { label: "local A", value: format(r.local.a) },
+                  { label: "world A", value: format(r.world.a) },
+                ]
+              : []),
+            ...(stage >= 3
+              ? [
+                  {
+                    label: "pitch / yaw / roll",
+                    value: [r.angles.pitch, r.angles.yaw, r.angles.roll]
+                      .map((a) => ((a * 180) / Math.PI).toFixed(2) + "°")
+                      .join(" / "),
+                  },
+                ]
+              : []),
+            ...(stage >= 4
+              ? [
+                  { label: "rotation order", value: scene.order.toUpperCase() },
+                  { label: "order difference", value: r.orderDifference.toExponential(3) },
+                ]
+              : []),
+            ...r.vertices.map((vertex, i) => ({
+              label: "vertex " + ["A", "B", "C"][i],
+              value: vertex.status,
+            })),
+            ...(stage >= 5 ? [{ label: "unit normal", value: format(r.normal) }] : []),
+            ...(stage >= 6
+              ? [{ label: "pointer capture", value: captured ? "đang kéo" : "đã nhả" }]
+              : []),
+            ...(stage >= 8
+              ? [
+                  { label: "edge-length error", value: r.edgeError.toExponential(2) },
+                  { label: "round-trip error", value: r.roundTrip.toExponential(2) },
+                  { label: "normal rotation error", value: r.normalError.toExponential(2) },
+                ]
+              : []),
+          ]}
+        />
+      )}
     </div>
   );
 }

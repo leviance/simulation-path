@@ -356,7 +356,6 @@ test("Normal Lab matches Vec3, cross, winding and degenerate formulas", async ()
     isDegenerateTriangle,
     magnitude3,
     orthogonalityError,
-    projectIsometric,
     reverseWinding,
     scale3,
     triangleArea,
@@ -419,7 +418,14 @@ test("Normal Lab matches Vec3, cross, winding and degenerate formulas", async ()
   assert.equal(isDegenerateTriangle(collinear), true);
   assert.deepEqual(triangleUnitNormal(collinear), { x: 0, y: 0, z: 0 });
   assert.ok(Number.isFinite(facingAmount(collinear, { x: 1, y: -1, z: 1 })));
-  assert.deepEqual(projectIsometric({ x: 0, y: 0, z: 0 }), { x: 0, y: 0 });
+  const { projectCompassPoint, worldToCompassCamera } =
+    await import("../lib/labs/normal-camera.ts");
+  assert.deepEqual(worldToCompassCamera({ x: 1, y: 2, z: 3 }, { yaw: 0, pitch: 0, radius: 9 }), {
+    x: 1,
+    y: 2,
+    z: 6,
+  });
+  assert.deepEqual(projectCompassPoint({ x: 0, y: 0, z: 9 }), { x: 550, y: 410 });
 });
 
 test("Projection Lab preserves depth, FOV, visibility and round-trip invariants", async () => {

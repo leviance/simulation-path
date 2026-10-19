@@ -1,86 +1,53 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đưa các phép biến đổi vào ma trận 3×3
+# Dịch chuyển bằng Mat3: điểm khác hướng ở đâu?
 
 ## Vấn đề cần giải quyết
 
-Đến checkpoint 4, cách tính từng đỉnh đã đúng nhưng chuỗi biến tạm sẽ dài dần khi ta thêm translation hoặc muốn truyền phép biến đổi sang hàm khác. Ta cần một giá trị có thể mang toàn bộ chuỗi `Scale → Shear → Rotate → Translate`.
-
-Ma trận 3×3 giải quyết việc đó. Bài này không bỏ các hàm cũ; chúng trở thành đáp án độc lập để kiểm tra cách cài đặt ma trận.
+Mat2 đã xoay, co và làm xiên hình, nhưng không thể đưa gốc (0,0) tới nơi khác: bất kỳ ma trận tuyến tính nào nhân vector zero cũng trả zero. Ta cần thêm translation mà vẫn ghép được bằng phép nhân ma trận.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta viết point 2D thành column vector có thêm thành phần 1:
+Thêm thành phần thứ ba để biểu diễn **điểm** bằng (x,y,1) và **hướng** bằng (x,y,0):
 
 $$
-p=\begin{bmatrix}x\\y\\1\end{bmatrix}
+\begin{bmatrix}a&b&t_x\\c&d&t_y\\0&0&1\end{bmatrix}
+\begin{bmatrix}x\\y\\1\end{bmatrix}
+=
+\begin{bmatrix}ax+by+t_x\\cx+dy+t_y\\1\end{bmatrix}.
 $$
 
-Nhờ hàng và cột thứ ba, translation cũng nằm trong một phép nhân:
+Với hướng có thành phần cuối 0, translation nhân 0 nên biến mất. Vì vậy basis là direction; điểm cuối của basis trên hình phải là transformedOrigin + transformedDirection.
 
-$$
-T=\begin{bmatrix}1&0&t_x\\0&1&t_y\\0&0&1\end{bmatrix}
-$$
-
-Rotation dùng đúng bốn hệ số đã suy ở bài 3:
-
-$$
-R=\begin{bmatrix}\cos\theta&-\sin\theta&0\\\sin\theta&\cos\theta&0\\0&0&1\end{bmatrix}
-$$
-
-Với column vector, tích sau được đọc từ phải sang trái:
-
-$$
-p_{world}=T\,R\,H\,S\,p_{local}
-$$
-
-Point đi qua scale trước, rồi shear, rotation và cuối cùng mới translation.
+Ở project này Mat3 chỉ dùng cho **affine transform**, hàng cuối luôn [0,0,1]. Ta không chia cho w hay trả bừa (0,0) khi nhận một matrix projective không thuộc hợp đồng. Translation ở **cột cuối**; hàng cuối có nhiệm vụ khác.
 
 <InteractiveLab demo="transform" mode="transform-matrix" />
 
-Đường màu cam đánh dấu một đỉnh qua các bước 0–4. Giá trị `direct vs matrix` phải luôn gần 0: chuỗi hàm và composed matrix đang giải cùng một bài toán.
-
 ## Viết code từng bước
 
-### Bước 1 — Chốt layout của Mat3
+### Bước 1 — Nâng cấu trúc lên chín ô
 
-`values` lưu theo row-major để `at(row,column)` dễ đọc. Điều này chỉ nói cách chín số nằm trong bộ nhớ; point vẫn là column vector trong phép toán.
-
-```cpp title="include/lab.hpp — Mat3 row-major"
+```cpp title="include/lab.hpp — row-major với ba cột"
 struct Mat3 {
     std::array<double, 9> values{};
 
     [[nodiscard]] double at(int row, int column) const {
-        return values[std::size_t(row * 3 + column)];
+        return values[static_cast<std::size_t>(row * 3 + column)];
     }
 };
 ```
 
-Đừng dùng cụm “row-major” để tự đoán phải nhân vector bên trái hay bên phải ma trận. Hai lựa chọn đó độc lập với storage layout.
-
-### Bước 2 — Tạo các ma trận có tên rõ ràng
-
-Mỗi hàm factory phản ánh đúng công thức của một bài trước. Ví dụ:
-
-```cpp title="include/lab.hpp — scaleMatrix và rotationMatrix"
-inline Mat3 scaleMatrix(double scaleX, double scaleY) {
-    return {{{scaleX, 0.0, 0.0, 0.0, scaleY, 0.0, 0.0, 0.0, 1.0}}};
-}
-
-inline Mat3 rotationMatrix(double angle) {
-    const double cosine = std::cos(angle);
-    const double sine = std::sin(angle);
-    return {{{cosine, -sine, 0.0, sine, cosine, 0.0, 0.0, 0.0, 1.0}}};
+```cpp title="include/lab.hpp — translation nằm ở cột cuối"
+inline Mat3 translationMatrix(Vec2 offset) {
+    return {{{1.0, 0.0, offset.x, 0.0, 1.0, offset.y, 0.0, 0.0, 1.0}}};
 }
 ```
 
-`translationMatrix` đặt `offset.x/y` ở cột cuối. `shearMatrix` đặt `shearX` tại hàng X, cột Y và `shearY` tại hàng Y, cột X.
+Đối chiếu kĩ vị trí offset.x/offset.y trong mảng: index 2 và 5, không phải 6 và 7.
 
-### Bước 3 — Nhân ma trận bằng ba vòng lặp
+### Bước 2 — Mở rộng phép nhân hàng–cột
 
-Mỗi ô của kết quả là dot product giữa một hàng bên trái và một cột bên phải:
-
-```cpp title="include/lab.hpp — matrix multiplication"
+```cpp title="include/lab.hpp — tự nhân ma trận 3×3"
 inline Mat3 multiply(Mat3 left, Mat3 right) {
     Mat3 result{};
     for (int row = 0; row < 3; ++row) {
@@ -89,71 +56,65 @@ inline Mat3 multiply(Mat3 left, Mat3 right) {
             for (int index = 0; index < 3; ++index) {
                 value += left.at(row, index) * right.at(index, column);
             }
-            result.values[std::size_t(row * 3 + column)] = value;
+            result.values[static_cast<std::size_t>(row * 3 + column)] = value;
         }
     }
     return result;
 }
 ```
 
-Ba vòng lặp dài hơn chín biểu thức viết tay, nhưng cho ta đúng một quy tắc để kiểm tra và dùng lại.
+Cách tính giống Mat2, chỉ đổi kích thước vòng lặp. Chưa nên tối ưu thành chín biểu thức khó đối chiếu.
 
-### Bước 4 — Biến đổi một point
+### Bước 3 — Tách API cho điểm và hướng
 
-```cpp title="include/lab.hpp — transformPoint"
+```cpp title="include/lab.hpp — áp affine matrix vào điểm"
 inline Vec2 transformPoint(Mat3 matrix, Vec2 point) {
     const double x = matrix.at(0, 0) * point.x + matrix.at(0, 1) * point.y + matrix.at(0, 2);
     const double y = matrix.at(1, 0) * point.x + matrix.at(1, 1) * point.y + matrix.at(1, 2);
-    const double w = matrix.at(2, 0) * point.x + matrix.at(2, 1) * point.y + matrix.at(2, 2);
-    if (!std::isfinite(w) || std::abs(w) <= 1e-12) {
-        return {};
-    }
-    return {x / w, y / w};
+    return {x, y};
 }
 ```
 
-Với affine matrix của project này, `w` luôn bằng 1. Ta vẫn giữ phép chia và kiểm tra biên để hàm nói đúng ý nghĩa của homogeneous coordinate và không phát tán `NaN` nếu matrix hỏng.
-
-### Bước 5 — Ghép rồi áp dụng cùng ma trận cho mọi đỉnh
-
-Checkpoint 5 cố định một thứ tự. Việc xuống dòng phản ánh cây phép nhân; `S` nằm gần point nhất nên chạy trước.
-
-```cpp title="src/main.cpp — tạo matrix của checkpoint 5"
-lab::Mat3 matrix = lab::multiply(
-    lab::translationMatrix(translation),
-    lab::multiply(
-        lab::rotationMatrix(angle),
-        lab::multiply(lab::shearMatrix(shearX, shearY), lab::scaleMatrix(scaleX, scaleY))
-    )
-);
-
-transformedSquare = lab::transformSquare(localSquare, matrix);
+```cpp title="include/lab.hpp — bỏ translation khi biến đổi hướng"
+inline Vec2 transformDirection(Mat3 matrix, Vec2 direction) {
+    return transformVector(linearPart(matrix), direction);
+}
 ```
 
-Hai vector cơ sở được tạo bằng cách biến đổi origin, `(92,0)` và `(0,92)` với cùng matrix. Vì thế chúng không phải hình trang trí; chúng cho thấy trực tiếp hai trục local đã trở thành gì.
+linearPart lấy khối 2×2 ở góc trên trái. transformDirection dùng khối đó qua transformVector. Khi vẽ basis, worldPoint((1,0))−worldPoint((0,0)) chính là direction đã biến đổi; không normalize vì ta muốn thấy scale và shear.
+
+### Bước 4 — Thay Mat2 bằng Mat3 trong đường vẽ
+
+```cpp title="include/scene.hpp — chuỗi T·R·H·S đầu tiên"
+inline Mat3 sceneMatrix(const Scene& scene) {
+    const auto& p = scene.parameters;
+    return multiply(translationMatrix(p.translation), multiply(rotationMatrix(p.angle), multiply(shearMatrix(p.shearX, p.shearY), scaleMatrix(p.scaleX, p.scaleY))));
+}
+```
+
+worldPoint gọi transformPoint(sceneMatrix(scene), local). Cả shape và basis đi qua đường này, nên không có hai phiên bản toán khác nhau cho hình và debug.
 
 ## Ghép các phần lại
 
-Build `project_9_checkpoint_5`. Hình phải giữ nguyên so với checkpoint 4 khi dùng cùng tham số. Kéo chuột trái để đổi translation; hình xám đi theo vị trí nhưng không scale/rotate/shear, giúp bạn thấy translation được tách khỏi phần mô tả hình dạng.
+Build project_9_checkpoint_5, nhấn F5. Translation=(1,0.5) đưa local origin tới world(1,0.5); hình gốc xám vẫn ở world origin để đối chiếu. Bên phải đã có ba hàng ma trận; các slider SDL3 xuất hiện ở bài 7.
 
-Nếu hình nhảy ngay khi đổi sang matrix, đừng sửa bằng dấu trừ ngẫu nhiên. Chọn P2, tính qua từng hàm của checkpoint 4 rồi so với `transformPoint(matrix,P2)`. Sai khác bắt đầu ở phép nào sẽ chỉ ra matrix factory hoặc thứ tự nhân bị lỗi.
+Canvas cho kéo để đổi translation từ bài này. Đó là dịch chuyển cả vật thể trong world, không phải pan camera. Hình không cần dịch bằng mouse trong checkpoint C++ 05; bạn vẫn có preset và có thể đổi tham số trực tiếp trước khi build.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi tích thành `S×H×R×T` nhưng vẫn giữ column vector. Translation sẽ bị các ma trận bên trái scale, shear và xoay theo.
-2. Đặt `offset.x/y` ở hàng cuối thay vì cột cuối. Đó là layout dành cho quy ước row vector; transformPoint hiện tại sẽ không đọc translation ở đó.
-3. Viết `result[row,column] += left[index,column] * right[row,index]`. Identity có thể chưa lộ hết lỗi; hãy dùng matrix có cả rotation và shear để kiểm tra.
+1. Đưa tx/ty xuống hàng cuối rồi giữ nguyên transformPoint. Hình không dịch như dự đoán vì hàm đọc translation ở cột cuối. Khôi phục affine layout [a,b,tx; c,d,ty; 0,0,1].
+
+2. Dùng transformPoint(matrix,ex) làm hướng mà không trừ transformedOrigin. Tăng translation: mũi tên bị dài/nghiêng theo vị trí vật thể. Sửa bằng transformDirection hoặc hiệu hai transformed point; hướng không còn nhận translation.
 
 ## Tự kiểm tra kết quả
 
-- Identity matrix giữ nguyên mọi point.
-- Mỗi matrix factory cho cùng kết quả với hàm point tương ứng.
-- `transformPoint(T, {2,-1})` với translation `(3,5)` trả `(5,4)`.
-- Matrix ghép cho P2 giống chuỗi ba hàm cũ rồi cộng translation.
-- Hai vector cơ sở bắt đầu tại transformed origin và đi theo đúng trục của hình.
+- Identity giữ điểm và hướng.
+- Translation(3,5) đưa point(2,−1) tới (5,4), nhưng direction(2,−1) vẫn là (2,−1).
+- Mat3 có hàng cuối [0,0,1] ở cả hai toán hạng và tích.
+- Kết quả Mat3 khớp chuỗi scale→shear→rotate→translate ở sai số nhỏ.
 
 ## Bài tập mở rộng
 
-Viết `transpose(Mat3)` rồi in cả matrix và transpose để thấy row biến thành column. Sau đó viết một hàm chỉ biến đổi direction bằng cách dùng homogeneous component `w=0`; translation không được làm direction thay đổi.
+Tự viết phép trừ hai transformed point rồi kiểm nó bằng transformDirection của hiệu hai point gốc. Giải thích vì sao translation tự triệt tiêu.
 
-Bài cuối sẽ tạo hai tích ma trận từ cùng tham số, đổi qua lại bằng phím O và dùng determinant cùng diện tích để kiểm chứng kết quả.
+[Bài tiếp theo: Đổi thứ tự và biến đổi cả lưới](/projects/square-transformer/06-thu-tu-va-luoi).

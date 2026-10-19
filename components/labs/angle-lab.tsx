@@ -1,315 +1,208 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { TAU, pointOnUnitCircle } from "@/lib/labs/angle";
 import {
-  angleFromPoint,
-  mapSampleTimeToX,
-  normalizeAngle,
-  pointOnUnitCircle,
-  projectOntoXAxis,
-  projectOntoYAxis,
-  TAU,
-} from "@/lib/labs/angle";
-import {
-  LabReadout,
-  canvasPoint,
-  drawLine,
-  setupCanvas,
-  useCanvasSize,
-  useReducedMotion,
-} from "./lab-shared";
+  circleScene,
+  circleLayers,
+  advanceCircle,
+  setCircleAngle,
+  beginCircleDrag,
+  moveCircleNeedle,
+  type CircleScene,
+} from "@/lib/labs/unit-circle";
+import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
+import { circlePointFromEvent, drawAngleLab } from "./angle-lab-view";
 import type { InteractiveLabMode } from "./types";
 
 export default function AngleLab({ mode }: { mode?: InteractiveLabMode }) {
-  type WaveSample = { time: number; sine: number; cosine: number };
-
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const size = useCanvasSize(canvasRef);
   const reducedMotion = useReducedMotion();
-  const initialAngle = (35 * Math.PI) / 180;
-  const initialSpeed = Math.PI / 2;
-  const [inputAngle, setInputAngle] = useState(initialAngle);
-  const angleRef = useRef(initialAngle);
-  const [angularSpeed, setAngularSpeed] = useState(initialSpeed);
+  const [scene, setScene] = useState(() =>
+    mode === "angle-radians" ? setCircleAngle(circleScene(), 0) : circleScene(),
+  );
+  const sceneRef = useRef(scene);
+  const owner = useRef<number | null>(null);
+  const previousMode = useRef(mode);
   const [paused, setPaused] = useState(false);
-  const [waveSamples, setWaveSamples] = useState<WaveSample[]>([]);
-  const elapsedTime = useRef(0);
-  const sampleAccumulator = useRef(0);
-  const dragging = useRef(false);
-  const canAnimate = mode === undefined || mode === "angle-motion" || mode === "angle-graphs";
-  const canDrag = mode === undefined || mode === "angle-atan2";
-  const showProjections =
-    mode === undefined ||
-    mode === "angle-sincos" ||
-    mode === "angle-projections" ||
-    mode === "angle-graphs" ||
-    mode === "angle-atan2";
-  const showGraphs = mode === undefined || mode === "angle-graphs";
-  const showArc = mode === "angle-radians";
-  const visibleHistorySeconds = 6;
-  const sampleInterval = 1 / 60;
-  const maximumSamples = 360;
-  const angle = normalizeAngle(inputAngle);
-  const direction = useMemo(() => pointOnUnitCircle(angle), [angle]);
-  const period =
-    Math.abs(angularSpeed) <= 1e-12 ? Number.POSITIVE_INFINITY : TAU / Math.abs(angularSpeed);
-
-  const clearWaveHistory = useCallback(() => {
-    elapsedTime.current = 0;
-    sampleAccumulator.current = 0;
-    setWaveSamples([]);
-  }, []);
-
-  const setAngleValue = useCallback((nextAngle: number) => {
-    angleRef.current = nextAngle;
-    setInputAngle(nextAngle);
-  }, []);
-
-  const setAngleManually = useCallback(
-    (nextAngle: number) => {
-      setAngleValue(nextAngle);
-      clearWaveHistory();
-    },
-    [clearWaveHistory, setAngleValue],
-  );
-
-  const advanceSimulation = useCallback(
-    (requestedDeltaTime: number) => {
-      const deltaTime = Math.min(Math.max(requestedDeltaTime, 0), 0.1);
-      const nextAngle = normalizeAngle(angleRef.current + angularSpeed * deltaTime);
-      setAngleValue(nextAngle);
-      elapsedTime.current += deltaTime;
-      sampleAccumulator.current += deltaTime;
-
-      if (showGraphs && sampleAccumulator.current >= sampleInterval) {
-        const sampleDirection = pointOnUnitCircle(nextAngle);
-        const newestTime = elapsedTime.current;
-        setWaveSamples((current) => {
-          const nextSamples = [
-            ...current,
-            {
-              time: newestTime,
-              sine: sampleDirection.y,
-              cosine: sampleDirection.x,
-            },
-          ];
-          return nextSamples.slice(-maximumSamples);
-        });
-        sampleAccumulator.current %= sampleInterval;
-      }
-    },
-    [angularSpeed, maximumSamples, sampleInterval, setAngleValue, showGraphs],
-  );
+  const pausedRef = useRef(false);
+  const layers = circleLayers(mode);
+  const direction = pointOnUnitCircle(scene.angle);
+  const period = scene.angularSpeed === 0 ? Infinity : TAU / Math.abs(scene.angularSpeed);
+  const updateScene = (next: CircleScene) => {
+    sceneRef.current = next;
+    setScene(next);
+  };
+  const pause = (value: boolean) => {
+    pausedRef.current = value;
+    setPaused(value);
+  };
+  const release = () => {
+    const id = owner.current;
+    owner.current = null;
+    const canvas = canvasRef.current;
+    if (id !== null && canvas?.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+    if (sceneRef.current.dragging) updateScene({ ...sceneRef.current, dragging: false });
+  };
+  const manualAngle = (angle: number) => {
+    release();
+    pause(true);
+    updateScene(setCircleAngle(sceneRef.current, angle));
+  };
+  const togglePause = () => {
+    release();
+    pause(!pausedRef.current);
+  };
+  const reset = () => {
+    release();
+    const next = circleScene();
+    updateScene(mode === "angle-radians" ? setCircleAngle(next, 0) : next);
+    pause(true);
+  };
 
   useEffect(() => {
-    if (!canAnimate || paused || reducedMotion) return;
-    let animationFrame = 0;
+    const blur = () => {
+      release();
+      pause(true);
+    };
+    const hidden = () => {
+      if (document.hidden) blur();
+    };
+    window.addEventListener("blur", blur);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", blur);
+      document.removeEventListener("visibilitychange", hidden);
+      release();
+    };
+  }, []);
+  useEffect(() => {
+    release();
+    if (previousMode.current !== mode) {
+      previousMode.current = mode;
+      reset();
+    }
+  }, [size.width, size.height, size.dpr, mode]);
+  useEffect(() => {
+    if (reducedMotion) {
+      release();
+      pause(true);
+    }
+  }, [reducedMotion]);
+  useEffect(() => {
+    if (!layers.animate || paused || reducedMotion) return;
+    let frame = 0;
     let previous = performance.now();
     const animate = (now: number) => {
-      const deltaTime = (now - previous) / 1000;
+      const deltaTime = Math.min(0.1, Math.max(0, (now - previous) / 1000));
       previous = now;
-      advanceSimulation(deltaTime);
-      animationFrame = requestAnimationFrame(animate);
+      if (!document.hidden && !pausedRef.current)
+        updateScene(advanceCircle(sceneRef.current, deltaTime));
+      frame = requestAnimationFrame(animate);
     };
-    animationFrame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationFrame);
-  }, [advanceSimulation, canAnimate, paused, reducedMotion]);
-
-  const layout = useMemo(() => {
-    const center = {
-      x: showGraphs ? size.width * 0.27 : size.width * 0.5,
-      y: size.height * 0.54,
-    };
-    const horizontalLimit = showGraphs ? size.width * 0.19 : size.width * 0.28;
-    const radius = Math.max(70, Math.min(horizontalLimit, size.height * 0.31));
-    return { center, radius };
-  }, [showGraphs, size.height, size.width]);
-
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [layers.animate, paused, reducedMotion, mode]);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-    const { center, radius } = layout;
-    const endpoint = {
-      x: center.x + direction.x * radius,
-      y: center.y - direction.y * radius,
-    };
-
-    drawLine(
-      ctx,
-      { x: center.x - radius - 18, y: center.y },
-      { x: center.x + radius + 18, y: center.y },
-      "#63708d",
-      1.5,
-    );
-    drawLine(
-      ctx,
-      { x: center.x, y: center.y - radius - 18 },
-      { x: center.x, y: center.y + radius + 18 },
-      "#63708d",
-      1.5,
-    );
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, radius, 0, TAU);
-    ctx.strokeStyle = "#7e8ba6";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    if (showArc && inputAngle > 1e-6) {
-      const arcRadius = radius * 0.32;
-      ctx.beginPath();
-      ctx.arc(center.x, center.y, arcRadius, 0, -inputAngle, true);
-      ctx.strokeStyle = "#ffb454";
-      ctx.lineWidth = 4;
-      ctx.stroke();
-      ctx.fillStyle = "#ffb454";
-      ctx.font = "700 11px ui-monospace";
-      ctx.fillText(`s/r = θ = ${(inputAngle / Math.PI).toFixed(2)}π`, center.x + 12, center.y + 24);
-    }
-
-    if (showProjections) {
-      const cosineProjection = projectOntoXAxis(direction);
-      const sineProjection = projectOntoYAxis(direction);
-      const cosinePoint = { x: center.x + cosineProjection.x * radius, y: center.y };
-      const sinePoint = { x: center.x, y: center.y - sineProjection.y * radius };
-      drawLine(ctx, endpoint, cosinePoint, "#46536e", 1.5);
-      drawLine(ctx, endpoint, sinePoint, "#46536e", 1.5);
-      drawLine(ctx, center, cosinePoint, "#84a9ff", 3);
-      drawLine(ctx, center, sinePoint, "#53f0ae", 3);
-      ctx.fillStyle = "#84a9ff";
-      ctx.font = "700 11px ui-monospace";
-      ctx.fillText(`cos=${direction.x.toFixed(3)}`, cosinePoint.x - 35, center.y + 18);
-      ctx.fillStyle = "#53f0ae";
-      ctx.fillText(`sin=${direction.y.toFixed(3)}`, center.x + 8, sinePoint.y - 8);
-    }
-
-    drawLine(ctx, center, endpoint, "#ffe26c", 3);
-    ctx.beginPath();
-    ctx.arc(endpoint.x, endpoint.y, 7, 0, TAU);
-    ctx.fillStyle = "#ffe26c";
-    ctx.fill();
-    ctx.strokeStyle = "#ffffff";
-    ctx.stroke();
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "700 11px ui-monospace";
-    ctx.fillText(`${(inputAngle / Math.PI).toFixed(2)}π`, center.x + 12, center.y - 12);
-
-    if (showGraphs) {
-      const left = size.width * 0.52;
-      const right = size.width - 24;
-      const top = 44;
-      const bottom = size.height - 34;
-      const middle = (top + bottom) / 2;
-      const amplitude = (bottom - top) * 0.42;
-      drawLine(ctx, { x: left, y: middle }, { x: right, y: middle }, "#46536e");
-      drawLine(ctx, { x: left, y: top }, { x: left, y: bottom }, "#46536e");
-
-      if (waveSamples.length >= 2) {
-        const newestTime = waveSamples[waveSamples.length - 1].time;
-        const drawHistory = (key: "sine" | "cosine", color: string) => {
-          ctx.beginPath();
-          let started = false;
-          for (const sample of waveSamples) {
-            if (sample.time < newestTime - visibleHistorySeconds) continue;
-            const x = mapSampleTimeToX(sample.time, newestTime, visibleHistorySeconds, left, right);
-            const y = middle - sample[key] * amplitude;
-            if (!started) {
-              ctx.moveTo(x, y);
-              started = true;
-            } else {
-              ctx.lineTo(x, y);
-            }
-          }
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-        };
-        drawHistory("sine", "#53f0ae");
-        drawHistory("cosine", "#84a9ff");
-      }
-
-      drawLine(ctx, { x: right, y: top }, { x: right, y: bottom }, "#ffe26c", 1.5);
-      ctx.fillStyle = "#9aa6c1";
-      ctx.font = "10px ui-monospace";
-      ctx.fillText("−6 s", left, bottom + 15);
-      ctx.fillText("bây giờ", right - 38, bottom + 15);
-      ctx.fillStyle = "#53f0ae";
-      ctx.fillText("sin", left + 8, top + 14);
-      ctx.fillStyle = "#84a9ff";
-      ctx.fillText("cos", left + 40, top + 14);
-    }
-  }, [direction, inputAngle, layout, showArc, showGraphs, showProjections, size, waveSamples]);
-
-  const angleFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const point = canvasPoint(event, event.currentTarget);
-    return angleFromPoint({
-      x: point.x - layout.center.x,
-      y: layout.center.y - point.y,
-    });
-  };
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawAngleLab(ctx, size, scene, circleLayers(mode));
+  }, [size, scene, mode]);
 
   const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!canDrag) return;
-    const point = canvasPoint(event, event.currentTarget);
-    const endpoint = {
-      x: layout.center.x + direction.x * layout.radius,
-      y: layout.center.y - direction.y * layout.radius,
-    };
-    if (Math.hypot(point.x - endpoint.x, point.y - endpoint.y) > 18) return;
-    dragging.current = true;
-    if (canAnimate) setPaused(true);
-    clearWaveHistory();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setAngleValue(angleFromEvent(event));
-  };
-
-  const dragPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!dragging.current) return;
-    setAngleValue(angleFromEvent(event));
-  };
-
-  const stopDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragging.current = false;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+    if (!layers.drag || !event.isPrimary || event.button !== 0 || owner.current !== null) return;
+    const screen = circlePointFromEvent(event, size);
+    if (!screen) return;
+    const next = beginCircleDrag(sceneRef.current, screen);
+    if (!next.dragging) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    pause(true);
+    updateScene(next);
+    owner.current = event.pointerId;
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      release();
     }
   };
-
+  const dragPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (owner.current !== event.pointerId) return;
+    if ((event.buttons & 1) === 0) {
+      release();
+      return;
+    }
+    const screen = circlePointFromEvent(event, size, true);
+    if (!screen) {
+      release();
+      return;
+    }
+    updateScene(moveCircleNeedle(sceneRef.current, screen));
+  };
+  const stopDrag = (event: ReactPointerEvent<HTMLCanvasElement>, cancelled = false) => {
+    if (owner.current !== event.pointerId || (!cancelled && event.button !== 0)) return;
+    const screen = circlePointFromEvent(event, size, true);
+    if (!cancelled && screen) updateScene(moveCircleNeedle(sceneRef.current, screen));
+    release();
+  };
+  const step = () => {
+    release();
+    pause(true);
+    updateScene(advanceCircle(sceneRef.current, 0.1));
+  };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (
+      ![
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        " ",
+        "r",
+        "R",
+        "s",
+        "S",
+        "Escape",
+      ].includes(event.key)
+    )
+      return;
     event.preventDefault();
-    const step = Math.PI / 36;
-    setAngleManually(
-      normalizeAngle(angleRef.current + (event.key === "ArrowRight" ? step : -step)),
-    );
+    if (event.key === " ") {
+      if (!event.repeat) togglePause();
+      return;
+    }
+    if (event.key === "Escape") {
+      release();
+      return;
+    }
+    if (event.key.toLowerCase() === "r") {
+      if (!event.repeat) reset();
+      return;
+    }
+    if (event.key.toLowerCase() === "s") {
+      if (!event.repeat && layers.animate && (pausedRef.current || reducedMotion)) step();
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      manualAngle(sceneRef.current.angle + ((event.key === "ArrowRight" ? 1 : -1) * Math.PI) / 36);
+    } else if (layers.animate) {
+      release();
+      updateScene({
+        ...sceneRef.current,
+        angularSpeed: Math.min(
+          TAU,
+          Math.max(-TAU, sceneRef.current.angularSpeed + (event.key === "ArrowUp" ? 0.25 : -0.25)),
+        ),
+      });
+    }
   };
-
-  const reset = () => {
-    setAngleValue(initialAngle);
-    setAngularSpeed(initialSpeed);
-    setPaused(false);
-    clearWaveHistory();
-  };
-
-  const presets = [
-    { value: 0, label: "0°" },
-    { value: 1, label: "1 rad" },
-    { value: Math.PI / 2, label: "90° · π/2" },
-    { value: Math.PI, label: "180° · π" },
-    { value: (3 * Math.PI) / 2, label: "270° · 3π/2" },
-    { value: TAU, label: "360° · 2π" },
-  ];
-  const selectedPreset =
-    presets.find(({ value }) => Math.abs(value - inputAngle) <= 1e-9)?.value.toString() ?? "custom";
 
   return (
     <div className="lab-body">
@@ -317,115 +210,114 @@ export default function AngleLab({ mode }: { mode?: InteractiveLabMode }) {
         <label>
           Mốc góc
           <select
-            value={selectedPreset}
+            value="custom"
             onChange={(event) => {
-              if (event.target.value !== "custom") setAngleManually(Number(event.target.value));
+              if (event.target.value !== "custom") manualAngle(Number(event.target.value));
             }}
           >
-            <option value="custom">Tự chỉnh</option>
-            {presets.map((preset) => (
-              <option key={preset.label} value={preset.value}>
-                {preset.label}
+            <option value="custom">Chọn một góc…</option>
+            {[
+              [0, "0°"],
+              [1, "1 rad"],
+              [Math.PI / 2, "90° · π/2"],
+              [Math.PI, "180° · π"],
+              [(3 * Math.PI) / 2, "270° · 3π/2"],
+              [TAU, "360° · 2π"],
+              [-Math.PI / 4, "−45°"],
+            ].map(([value, label]) => (
+              <option key={String(label)} value={value}>
+                {label}
               </option>
             ))}
           </select>
         </label>
         <label>
-          Góc
+          Góc (radian)
           <input
             type="range"
-            min="0"
-            max={TAU}
+            min={-TAU}
+            max={2 * TAU}
             step={Math.PI / 180}
-            value={inputAngle}
-            onChange={(event) => setAngleManually(Number(event.target.value))}
+            value={scene.requestedAngle}
+            onChange={(event) => manualAngle(Number(event.target.value))}
           />
-          <output>{(inputAngle / Math.PI).toFixed(2)}π</output>
+          <output>{scene.requestedAngle.toFixed(3)} rad</output>
         </label>
-        {canAnimate && (
+        {layers.animate && (
           <label>
             Vận tốc góc
             <input
               type="range"
               min={-TAU}
               max={TAU}
-              step="0.1"
-              value={angularSpeed}
-              onChange={(event) => setAngularSpeed(Number(event.target.value))}
+              step="0.05"
+              value={scene.angularSpeed}
+              onChange={(event) => {
+                release();
+                updateScene({ ...sceneRef.current, angularSpeed: Number(event.target.value) });
+              }}
             />
-            <output>{angularSpeed.toFixed(2)} rad/s</output>
+            <output>{scene.angularSpeed.toFixed(3)} rad/s</output>
           </label>
         )}
-        {reducedMotion && canAnimate && (
-          <span className="control-hint">
-            Đã bật giảm chuyển động; dùng nút Tiến 0,1 s để quan sát từng bước.
-          </span>
+        {layers.animate && (
+          <button onClick={togglePause}>{paused ? "Tiếp tục" : "Tạm dừng"}</button>
         )}
-        {canAnimate && (
-          <button onClick={() => setPaused((value) => !value)}>
-            {paused ? "Tiếp tục" : "Tạm dừng"}
-          </button>
-        )}
-        {canAnimate && (paused || reducedMotion) && (
-          <button onClick={() => advanceSimulation(0.1)}>Tiến 0,1 s</button>
-        )}
+        {layers.animate && (paused || reducedMotion) && <button onClick={step}>Tiến 0,1 s</button>}
         <button onClick={reset}>Đặt lại</button>
       </div>
+      {reducedMotion && layers.animate && (
+        <p>Đã bật giảm chuyển động: mô phỏng không tự chạy; dùng Tiến 0,1 s.</p>
+      )}
+      <p>
+        Đổi góc bằng tay sẽ tạm dừng và bắt đầu lịch sử mới.{" "}
+        {layers.drag
+          ? "Kéo chấm vàng, hoặc dùng ←/→ để đổi góc. Sát tâm thì giữ góc cũ."
+          : "Dùng các mốc hoặc thanh góc; thao tác kéo được thêm ở bài atan2."}{" "}
+        Tab chuyển focus như bình thường.
+      </p>
       <canvas
         ref={canvasRef}
+        style={{ height: "clamp(360px, 54vw, 560px)", touchAction: "none" }}
         onPointerDown={startDrag}
         onPointerMove={dragPoint}
         onPointerUp={stopDrag}
-        onPointerCancel={stopDrag}
-        onLostPointerCapture={() => {
-          dragging.current = false;
+        onPointerCancel={(event) => stopDrag(event, true)}
+        onLostPointerCapture={(event) => {
+          if (owner.current === event.pointerId) release();
         }}
         onKeyDown={onKeyDown}
         tabIndex={0}
-        aria-label="Unit circle với kim quay; dùng thanh góc, các mốc có sẵn, phím trái phải hoặc kéo đầu kim trong bài atan2"
+        aria-label="Đường tròn đơn vị: góc radian, kim quay, hình chiếu X/Y và đồ thị sin/cos theo từng bài. Trái/phải đổi góc; Space tạm dừng; S tiến một bước."
       />
       <LabReadout
         items={[
           {
             label: "angle",
-            value: `${inputAngle.toFixed(4)} rad = ${((inputAngle * 180) / Math.PI).toFixed(1)}°${Math.abs(inputAngle - angle) > 1e-12 ? `; sau normalize = ${angle.toFixed(4)} rad` : ""}`,
+            value:
+              scene.angle.toFixed(5) + " rad = " + ((scene.angle * 180) / Math.PI).toFixed(2) + "°",
           },
-          { label: "endpoint", value: `(${direction.x.toFixed(4)}, ${direction.y.toFixed(4)})` },
           {
-            label: "cos² + sin²",
-            value: (direction.x * direction.x + direction.y * direction.y).toFixed(9),
+            label: "góc vừa nhập / s/r",
+            value: scene.requestedAngle.toFixed(5) + " rad; góc sau normalize ở ô angle",
           },
-          ...(showArc
+          {
+            label: "endpoint (cos, sin)",
+            value: "(" + direction.x.toFixed(5) + ", " + direction.y.toFixed(5) + ")",
+          },
+          { label: "cos² + sin²", value: (direction.x ** 2 + direction.y ** 2).toFixed(12) },
+          ...(layers.animate
             ? [
-                {
-                  label: "độ dài cung",
-                  value: `s = r × θ; s/r = ${inputAngle.toFixed(4)}${Math.abs(inputAngle - 1) <= 1e-9 ? " nên s = r" : ""}`,
-                },
-              ]
-            : []),
-          ...(canAnimate
-            ? [
-                { label: "angularSpeed", value: `${angularSpeed.toFixed(3)} rad/s` },
                 {
                   label: "period",
-                  value: Number.isFinite(period) ? `${period.toFixed(3)} s` : "∞",
+                  value: Number.isFinite(period) ? period.toFixed(4) + " s" : "∞ (đứng yên)",
                 },
               ]
             : []),
-          ...(showGraphs
+          ...(layers.graphs
             ? [
-                {
-                  label: "history",
-                  value: `${waveSamples.length} mẫu · cửa sổ ${visibleHistorySeconds.toFixed(0)} s`,
-                },
-              ]
-            : []),
-          ...(canDrag
-            ? [
-                {
-                  label: "atan2",
-                  value: `atan2(${direction.y.toFixed(3)}, ${direction.x.toFixed(3)}) → ${angle.toFixed(3)} rad`,
-                },
+                { label: "history", value: scene.samples.length + "/361 mẫu · 60 Hz · 6 s" },
+                { label: "simulation time", value: scene.elapsedTime.toFixed(3) + " s" },
               ]
             : []),
         ]}

@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tự quay và xem cảnh không có debug
+
+## Vấn đề cần giải quyết
+
+Ta đã xoay bằng input thật. Tự quay chỉ là một chế độ bổ sung để quan sát lâu hơn và lặp lại thí nghiệm, không được thay chuột/QE bằng một animation có sẵn. Bài này thêm thời gian, pause/step và một chế độ xem sạch.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi angle được cập nhật từ angular velocity:
+
+$$
+\theta_{\rm next}=\operatorname{wrap}(\theta+\omega\Delta t).
+$$
+
+Velocity mặc định là (0.35,0.55,0.20) rad/s cho pitch/yaw/roll. Ta vẫn dựng hình lại từ local vertices, không quay dồn các vertex của frame trước. Wrap giữ góc hữu hạn; nó không làm tam giác giật vì orientation trước/sau cách nhau 2π là như nhau.
+
+Dt được giới hạn tối đa 0.1 s, dt âm/NaN/Inf bị bỏ. Đây là simulation time có cap: debugger đứng lâu không khiến chương trình bù toàn bộ thời gian đã mất. Cùng tổng dt hợp lệ phải cho cùng orientation trong sai số.
+
+Debug là lớp giải thích, không phải toàn bộ sản phẩm. Tam giác wireframe chính và các khung world phải còn khi ẩn debug; normal, ghost, pivot, axes, nhãn và số đo mới là phần bị tắt.
+
+<InteractiveLab demo="rotation3d" mode="rotation-motion" />
+
+## Viết code từng bước
+
+Giữ bộ khung và các hàm của bài trước; sửa đúng file ghi trên từng code block. Không tạo một main thứ hai. Sau mỗi bước, build target checkpoint 07 để đối chiếu:
+
+```powershell title="Build checkpoint 07"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_12_checkpoint_7 --parallel 2
+.\build\Debug\project_12_checkpoint_7.exe
+```
+
+### Bước 1 — Cập nhật góc, không cập nhật vertex
+
+```cpp title="include/lab.hpp — angular velocity nhân dt rồi wrap"
+inline EulerAngles advanceEulerAngles(EulerAngles angles, EulerAngles velocity, double deltaTime) {
+    if (!finiteAngles(angles) || !finiteAngles(velocity) || !std::isfinite(deltaTime) || deltaTime <= 0.0) {
+        return angles;
+    }
+    const double step = std::min(deltaTime, 0.1);
+    angles.pitch = wrapAngle(angles.pitch + velocity.pitch * step);
+    angles.yaw = wrapAngle(angles.yaw + velocity.yaw * step);
+    angles.roll = wrapAngle(angles.roll + velocity.roll * step);
+    return angles;
+}
+```
+
+```cpp title="include/scene.hpp — velocity của chế độ tự quay"
+inline void advanceScene(Scene& scene, double deltaTime) {
+    scene.angles = advanceEulerAngles(scene.angles, {0.35, 0.55, 0.20}, deltaTime);
+}
+```
+
+Angle state sống qua frame, localTriangle không đổi. Hãy giữ phân biệt này: angle được tích lũy theo thời gian là đúng; vertex được xoay dồn rồi dùng làm đầu vào tiếp là không cần thiết và dễ tích lũy lỗi.
+
+### Bước 2 — Pause và step rõ ràng
+
+```cpp title="src/main.cpp — Space, N và F không lặp theo key-repeat"
+if (event.key.key == SDLK_SPACE && !event.key.repeat) {
+    scene.paused = !scene.paused;
+}
+if (event.key.key == SDLK_N && !event.key.repeat && scene.paused) {
+    lab::advanceScene(scene, 0.1);
+}
+if (event.key.key == SDLK_F && !event.key.repeat) {
+    scene.debug = !scene.debug;
+}
+```
+
+Trong vòng lặp, previousTicks vẫn cập nhật kể cả đang pause. Chỉ !scene.paused mới advanceScene liên tục. Space toggle đúng một lần, N tiến0.1 s khi paused. Slider, keyboard rotation, order và mouse down đều pause để thao tác tay không tranh state với auto.
+
+### Bước 3 — Đưa debug ra khỏi hình chính
+
+```cpp title="include/presentation.hpp — ẩn HUD nhưng vẫn present ảnh CPU"
+if (!scene.debug) {
+    return SDL_RenderPresent(renderer);
+}
+```
+
+renderScene luôn vẽ lưới và tam giác. Các nhánh scene.debug chỉ bao ghost/pivot/axes/normal; vì vậy F không biến viewport thành nền trống. Cả native và Canvas có cùng quy tắc này.
+
+## Ghép các phần lại
+
+Build checkpoint 7, bật Tự quay, pause rồi nhấn N/Tiến0.1 s. Ẩn debug để nhìn một cảnh perspective gọn: chỉ tam giác màu giữa lưới/khung xa gần. Hiện debug lại không đổi orientation.
+
+Blur/hidden/resize pause và hủy capture; quay lại không tự chạy. Reduced-motion trên web vô hiệu hóa tự quay nhưng giữ nút step, slider và chuột. Callback rAF còn chờ phải kiểm paused trước khi advance để một frame cũ không lén sửa state sau pause.
+
+Các phím W/S/A/D/Q/E là chỉnh góc theo nấc 5°, không được quảng cáo là angular velocity theo dt. Chỉ chế độ tự quay ở bài này có vận tốc rad/s đã xác định.
+
+## Thử làm sai để hiểu đúng
+
+1. Cộng một góc cố định mỗi frame thay vì ω×dt. So ở hai FPS sẽ quay khác tốc độ. Khôi phục dt và kiểm tổng góc sau 1 s.
+
+2. So một bước dt=1 s với60 bước1/60 s rồi cho rằng solver sai. Bước1s đã bị cap0.1 s. Muốn so phân hoạch, dùng các bước đều không vượt cap, chẳng hạn20×0.05 s.
+
+3. Đặt lệnh vẽ tam giác vào trong scene.debug. Nhấn F sẽ làm mất cả sản phẩm. Đưa geometry chính ra ngoài nhánh debug.
+
+## Tự kiểm tra kết quả
+
+- Với60×1/60 s và20×0.05 s, orientation trùng trong sai số.
+- Dt âm/nonfinite bị bỏ, dt stall cap0.1 s; angle không tăng vô hạn.
+- Space không bị toggle nhiều lần khi giữ phím; N chỉ advance khi paused.
+- Input tay dừng auto; hidden/blur/resize pause bền vững.
+- Ẩn debug vẫn có tam giác, lưới và depth; hiện debug không reset hình.
+- Reduced-motion giữ được việc chỉnh tay và single-step.
+
+## Bài tập mở rộng
+
+Thêm một preset velocity chỉ quay quanh Y. Dự đoán normal sau 1 s bằng rotateY rồi so với normal từ cạnh world; không dùng hình chiếu screen làm expected.
+
+[Sang bài tiếp theo — Kiểm chứng và chạy bản hoàn chỉnh](/projects/rotating-triangle/08-hoan-thien-va-kiem-chung).

@@ -45,42 +45,42 @@
     "id": "07",
     "slug": "unit-circle",
     "sourceDirectory": "project-07-unit-circle",
-    "checkpointCount": 6,
+    "checkpointCount": 7,
     "demoId": "angle"
   },
   {
     "id": "08",
     "slug": "mouse-turret",
     "sourceDirectory": "project-08-mouse-turret",
-    "checkpointCount": 6,
+    "checkpointCount": 7,
     "demoId": "turret"
   },
   {
     "id": "09",
     "slug": "square-transformer",
     "sourceDirectory": "project-09-square-transformer",
-    "checkpointCount": 6,
+    "checkpointCount": 8,
     "demoId": "transform"
   },
   {
     "id": "10",
     "slug": "3d-compass",
     "sourceDirectory": "project-10-3d-compass",
-    "checkpointCount": 6,
+    "checkpointCount": 7,
     "demoId": "normal"
   },
   {
     "id": "11",
     "slug": "perspective-point",
     "sourceDirectory": "project-11-perspective-point",
-    "checkpointCount": 6,
+    "checkpointCount": 8,
     "demoId": "projection"
   },
   {
     "id": "12",
     "slug": "rotating-triangle",
     "sourceDirectory": "project-12-rotating-triangle",
-    "checkpointCount": 6,
+    "checkpointCount": 8,
     "demoId": "rotation3d"
   },
   {

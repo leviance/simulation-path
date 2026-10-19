@@ -1,44 +1,46 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
     label: "PROJECTION LAB",
-    title: "Một điểm 3D đi qua projection pipeline như thế nào?",
-    description:
-      "Di chuyển point và camera, rồi theo dõi world space, camera space, perspective divide, NDC, pixel cùng các điều kiện visibility trên hai góc nhìn liên kết.",
+    title: "Điểm 3D đi tới pixel nào?",
+    description: "Điều khiển điểm sáng, so độ sâu, FOV/aspect và từng trạng thái bị loại.",
   },
   modes: {
     "projection-point": {
-      title: "Làm sao biết dữ liệu Vec3 và marker đã hoạt động?",
-      description:
-        "Điều khiển X/Y/Z của một point; bản xem trước tạm dùng X/Y để xác nhận input và phần vẽ trước khi projection xuất hiện.",
+      title: "Vẽ điểm sáng và điều khiển ba tọa độ",
+      description: "Dựng marker trên framebuffer, rồi nối WASD/QE với world point bằng delta time.",
     },
     "projection-camera": {
-      title: "Camera di chuyển làm tọa độ của point đổi ra sao?",
-      description:
-        "So world point với camera point = world point − camera position trên sơ đồ nhìn từ cạnh.",
+      title: "Đặt camera vào không gian",
+      description: "Giữ world point riêng và đổi gốc tọa độ bằng vị trí camera.",
     },
     "projection-divide": {
-      title: "Vì sao chia cho Z làm điểm ở xa tiến về tâm?",
-      description:
-        "Giữ X/Y cố định, thay đổi depth và quan sát x/z, y/z cùng vị trí marker trên màn hình.",
+      title: "Vì sao điểm ở xa tiến về tâm?",
+      description: "Từ tam giác đồng dạng đến x/z, y/z và một cảnh lưới có chiều sâu thật.",
     },
     "projection-fov": {
-      title: "FOV và aspect ratio biến kết quả chia thành NDC thế nào?",
-      description:
-        "Điều chỉnh vertical FOV và kích thước viewport để theo dõi focal scale, NDC rồi pixel.",
+      title: "Chọn FOV và hình dạng viewport",
+      description: "Tự tính focal scale, NDC và pixel; đổi aspect mà không kéo méo cảnh.",
     },
     "projection-visibility": {
-      title: "Khi nào một point không được phép ghi pixel?",
-      description:
-        "Đưa point qua camera, near plane và biên frustum để phân biệt behind, before-near, outside và visible.",
+      title: "Chặn điểm không thể nhìn thấy",
+      description: "Phân biệt behind, near, far, outside và invalid trước khi vẽ.",
     },
     "projection-motion": {
-      title: "Projection có giữ đúng khi point bay qua nhiều depth?",
+      title: "Cho điểm bay, dừng và bước từng nhịp",
       description:
-        "Chạy, pause hoặc step quỹ đạo; theo dõi round-trip error và mọi trạng thái projection trong thời gian thực.",
+        "Tách điều khiển tay khỏi quỹ đạo thời gian, không để hai nguồn input tranh nhau.",
+    },
+    "projection-drag": {
+      title: "Kéo điểm mà không làm mất depth",
+      description:
+        "Đảo phép chiếu tại một độ sâu đã biết và quản lý pointer capture đúng chủ sở hữu.",
+    },
+    "projection-full": {
+      title: "Hoàn thiện demo và kiểm chứng",
+      description:
+        "Tắt debug để xem cảnh sạch; kiểm tra bằng nghiệm tính tay, biên và mã hoàn chỉnh.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

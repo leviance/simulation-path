@@ -112,10 +112,12 @@ test("Canvas supports keyboard input, pause and reset", async ({ page }) => {
 
 test("Project 09 Transform Lab composes, reorders and drags the square", async ({ page }) => {
   const errors = captureBrowserErrors(page);
-  await page.goto("/projects/square-transformer/06-thu-tu-phep-bien-doi-va-validation");
+  await page.goto("/projects/square-transformer/08-hoan-thien-va-kiem-chung");
 
-  const canvas = page.locator('canvas[aria-label^="Hình vuông sau biến đổi"]');
+  const canvas = page.locator('canvas[aria-label^="Hình vuông và hệ cơ sở"]');
   await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute("height", /\d+/);
+  await page.getByLabel("Preset biến đổi", { exact: true }).selectOption("4");
   const controls = page.locator(".lab-controls");
   const worldPoint = page.locator(".lab-readout div").filter({ hasText: "world P2" }).locator("dd");
   const initialPoint = await worldPoint.textContent();
@@ -126,7 +128,7 @@ test("Project 09 Transform Lab composes, reorders and drags the square", async (
   await page.getByLabel("scaleX").fill("-1");
   await expect(
     page.locator(".lab-readout div").filter({ hasText: "determinant" }).locator("dd"),
-  ).toContainText("đã phản chiếu");
+  ).toContainText("đảo chiều");
 
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
@@ -138,166 +140,117 @@ test("Project 09 Transform Lab composes, reorders and drags the square", async (
   }
   await expect(worldPoint).not.toHaveText(initialPoint ?? "");
 
-  await page.getByRole("button", { name: "Đặt lại" }).click();
+  await page.getByRole("button", { name: "Đặt lại identity", exact: true }).click();
   await expect(controls.getByLabel("Thứ tự")).toHaveValue("scale-shear-rotate");
   expect(errors).toEqual([]);
 });
 
-test("Project 10 Normal Lab flips winding and handles a degenerate triangle", async ({ page }) => {
-  const errors = captureBrowserErrors(page);
-  await page.goto("/projects/3d-compass/06-tam-giac-suy-bien-va-validation");
-
-  const canvas = page.locator('canvas[aria-label^="La bàn ba trục"]');
-  await expect(canvas).toBeVisible();
-  const controls = page.locator(".lab-controls");
-  const rawNormal = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "raw normal" })
-    .locator("dd");
-  const area = page.locator(".lab-readout div").filter({ hasText: "diện tích" }).locator("dd");
-  const initialNormal = await rawNormal.textContent();
-  const initialArea = await area.textContent();
-
-  await page.getByRole("button", { name: "Đảo B ↔ C" }).click();
-  await expect(rawNormal).not.toHaveText(initialNormal ?? "");
-  await expect(area).toHaveText(initialArea ?? "");
-
-  const preset = controls.locator("label").filter({ hasText: "Preset" }).locator("select");
-  await preset.selectOption("line");
-  await expect(
-    page.locator(".lab-readout div").filter({ hasText: "unit normal" }).locator("dd"),
-  ).toContainText("không xác định");
-  await expect(
-    page.locator(".lab-readout div").filter({ hasText: "validation" }).locator("dd"),
-  ).toContainText("degenerate");
-
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  if (box) {
-    await page.mouse.move(box.x + box.width * 0.51, box.y + box.height * 0.26);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.32);
-    await page.mouse.up();
-  }
-  expect(errors).toEqual([]);
-});
-
-test("Project 11 Projection Lab exposes visibility, FOV, keyboard and inverse drag", async ({
+test("Project 10 Normal Lab flips winding, keeps perspective and rejects undefined normal", async ({
   page,
 }) => {
   const errors = captureBrowserErrors(page);
-  await page.goto("/projects/perspective-point/06-diem-bay-va-validation");
-
-  const canvas = page.locator('canvas[aria-label^="Projection pipeline"]');
-  await expect(canvas).toBeVisible();
-  const controls = page.locator(".lab-controls");
-  const status = page.locator(".lab-readout div").filter({ hasText: "trạng thái" }).locator("dd");
-  const pixel = page.locator(".lab-readout div").filter({ hasText: "pixel" }).locator("dd");
-  const worldPoint = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "world point" })
-    .locator("dd");
-
-  await controls.getByLabel("Tình huống").selectOption("behind");
-  await expect(status).toContainText("behind");
-  await controls.getByLabel("Tình huống").selectOption("near");
-  await expect(status).toContainText("before-near");
-  await controls.getByLabel("Tình huống").selectOption("outside");
-  await expect(status).toContainText("outside");
-  await controls.getByLabel("Tình huống").selectOption("visible");
-  await expect(status).toContainText("visible");
-
-  const initialPixel = await pixel.textContent();
-  await controls.getByLabel("Vertical FOV").fill("90");
-  await expect(pixel).not.toHaveText(initialPixel ?? "");
-
-  const initialPoint = await worldPoint.textContent();
+  await page.goto("/projects/3d-compass/07-suy-bien-va-kiem-chung");
+  const canvas = page.locator('canvas[aria-label^="La bàn ba trục perspective"]');
+  await expect(canvas).toHaveAttribute("height", /\d+/);
+  const readout = (label: string) =>
+    page
+      .locator(".lab-readout > div")
+      .filter({ has: page.getByText(label, { exact: true }) })
+      .locator("dd");
+  const raw = await readout("raw cross").textContent(),
+    area = await readout("area").textContent();
+  await page.getByRole("button", { name: "Đảo winding", exact: true }).click();
+  await expect(readout("raw cross")).not.toHaveText(raw!);
+  await expect(readout("area")).toHaveText(area!);
+  await page.getByLabel("Tam giác mẫu", { exact: true }).selectOption("2");
+  await expect(readout("unit normal")).toHaveText("Không xác định");
+  await expect(readout("normal status")).toContainText("Suy biến");
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
   await canvas.focus();
-  await canvas.press("ArrowRight");
-  await expect(worldPoint).not.toHaveText(initialPoint ?? "");
-
-  const pointBeforeDrag = await worldPoint.textContent();
-  const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  if (box) {
-    await canvas.click({ position: { x: box.width * 0.82, y: box.height * 0.58 } });
-  }
-  await expect(worldPoint).not.toHaveText(pointBeforeDrag ?? "");
-
-  await page.getByRole("button", { name: "Tiến một bước" }).click();
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(controls.getByLabel("Vertical FOV")).toHaveValue("60");
+  await canvas.press("d");
+  await expect(readout("camera eye")).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("Project 12 Rotation Lab changes order, captures drag and preserves geometry", async ({
+test("Project 11 Projection Lab exposes guarded depth, FOV, keyboard and clean scene", async ({
   page,
 }) => {
   const errors = captureBrowserErrors(page);
-  await page.goto("/projects/rotating-triangle/06-animation-va-validation");
+  await page.goto("/projects/perspective-point/08-hoan-thien-va-kiem-chung");
+  const canvas = page.locator('canvas[aria-label^="Điểm sáng 3D"]');
+  await expect(canvas).toHaveAttribute("height", /\d+/);
+  const read = (label: string) =>
+    page
+      .locator(".lab-readout > div")
+      .filter({ has: page.getByText(label, { exact: true }) })
+      .locator("dd");
+  const preset = page.getByLabel("Điểm mẫu", { exact: true });
+  for (const [value, status] of [
+    ["3", "behind"],
+    ["2", "before-near"],
+    ["4", "beyond-far"],
+    ["5", "outside"],
+    ["0", "visible"],
+  ]) {
+    await preset.selectOption(value);
+    await expect(read("trạng thái")).toHaveText(status);
+  }
+  const old = await read("pixel").textContent();
+  await page.getByLabel("Vertical FOV", { exact: true }).focus();
+  await page.getByLabel("Vertical FOV", { exact: true }).press("End");
+  await expect(read("pixel")).not.toHaveText(old!);
+  await canvas.focus();
+  await canvas.press("e");
+  await expect(read("world point")).toContainText("4.1000");
+  await page.getByRole("button", { name: "Tiến 0.1 s", exact: true }).click();
+  await expect(read("elapsed")).toHaveText("0.100 s");
+  await page.getByRole("button", { name: "Ẩn debug", exact: true }).click();
+  await expect(page.locator(".lab-readout")).toHaveCount(0);
+  await page.getByRole("button", { name: "Hiện debug", exact: true }).click();
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(read("world point")).toHaveText("(1.0000, 0.6000, 4.0000)");
+  expect(errors).toEqual([]);
+});
 
-  const canvas = page.locator('canvas[aria-label^="Tam giác 3D"]');
-  const controls = page.locator(".lab-controls");
-  await expect(canvas).toBeVisible();
-  const angles = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "pitch / yaw / roll" })
-    .locator("dd");
-  const edgeError = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "edge-length error" })
-    .locator("dd");
-  const roundTrip = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "round-trip error" })
-    .locator("dd");
-  const captureState = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "pointer capture" })
-    .locator("dd");
-
-  const initialAngles = await angles.textContent();
-  await controls.getByLabel("Yaw Y").fill("70");
-  await expect(angles).not.toHaveText(initialAngles ?? "");
-  await controls.getByLabel("Rotation order").selectOption("zyx");
-  await expect(
-    page.locator(".lab-readout div").filter({ hasText: "rotation order" }).locator("dd"),
-  ).toHaveText("ZYX");
-
-  const beforeDrag = await angles.textContent();
+test("Project 12 Rotation Lab changes order, owns mouse input and rotates its normal", async ({
+  page,
+}) => {
+  const errors = captureBrowserErrors(page);
+  await page.goto("/projects/rotating-triangle/08-hoan-thien-va-kiem-chung");
+  const canvas = page.locator('canvas[aria-label^="Tam giác 3D perspective"]');
+  await expect(canvas).toHaveAttribute("height", /\d+/);
+  const read = (label: string) =>
+    page
+      .locator(".lab-readout > div")
+      .filter({ has: page.getByText(label, { exact: true }) })
+      .locator("dd");
+  await page.getByLabel("Tam giác mẫu", { exact: true }).selectOption("2");
+  const normal = await read("unit normal").textContent();
+  await page.getByLabel("Rotation order", { exact: true }).selectOption("zyx");
+  await expect(read("rotation order")).toHaveText("ZYX");
+  await expect(read("unit normal")).not.toHaveText(normal!);
   await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  if (box) {
-    await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.45);
-    await page.mouse.down();
-    await expect(captureState).toHaveText("đang kéo");
-    await page.mouse.move(box.x + box.width * 0.68, box.y + box.height * 0.58);
-    await page.mouse.up();
-  }
-  await expect(angles).not.toHaveText(beforeDrag ?? "");
-  await expect(captureState).toHaveText("đã nhả");
-  const edgeErrorValue = Number(await edgeError.textContent());
-  const roundTripValue = Number(await roundTrip.textContent());
-  expect(Number.isFinite(edgeErrorValue)).toBe(true);
-  expect(Number.isFinite(roundTripValue)).toBe(true);
-  expect(edgeErrorValue).toBeLessThan(1e-9);
-  expect(roundTripValue).toBeLessThan(1e-9);
-
-  await page.getByRole("button", { name: "Tiến một bước" }).click();
+  if (!box) throw Error("No triangle canvas");
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.mouse.down();
+  await expect(read("pointer capture")).toHaveText("đang kéo");
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.45);
+  await page.mouse.up();
+  await expect(read("pointer capture")).toHaveText("đã nhả");
+  for (const label of ["edge-length error", "round-trip error", "normal rotation error"])
+    expect(Number(await read(label).textContent())).toBeLessThan(1e-9);
   await canvas.focus();
-  await canvas.press("Space");
-  await expect(page.getByRole("button", { name: "Tạm dừng" })).toBeVisible();
-  await canvas.press("Space");
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(controls.getByLabel("Rotation order")).toHaveValue("xyz");
-
+  await canvas.press("e");
+  await page.getByRole("button", { name: "Tiến 0.1 s", exact: true }).click();
+  await page.getByRole("button", { name: "Ẩn debug", exact: true }).click();
+  await expect(page.locator(".lab-readout")).toHaveCount(0);
+  await page.getByRole("button", { name: "Hiện debug", exact: true }).click();
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(read("rotation order")).toHaveText("XYZ");
   await page.goto("/projects/rotating-triangle/01-noi-ba-diem-thanh-tam-giac-3d");
-  await page.getByLabel("Trạng thái projection").selectOption("near");
-  await expect(
-    page.locator(".lab-readout div").filter({ hasText: "vertex A" }).locator("dd"),
-  ).toHaveText("before-near");
+  await page.getByLabel("Tam giác mẫu", { exact: true }).selectOption("3");
+  await expect(read("vertex A")).toHaveText("before-near");
   expect(errors).toEqual([]);
 });
 

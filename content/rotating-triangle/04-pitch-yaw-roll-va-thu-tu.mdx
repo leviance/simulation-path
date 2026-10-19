@@ -1,85 +1,78 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Ghép pitch, yaw, roll theo thứ tự
+# Ghép X/Y/Z và thử hai thứ tự
 
 ## Vấn đề cần giải quyết
 
-Rotation X chỉ cho model gật quanh một trục. Muốn điều khiển orientation tự do hơn, ta cần rotation Y và Z. Nhưng “có đủ ba hàm” vẫn chưa đủ: rotate X rồi Y nói chung không cho cùng kết quả với Y rồi X.
-
-Bài này chưa dùng ma trận. Ta gọi từng hàm trên một biến tạm, nhờ vậy thứ tự thực thi hiện rõ trong code và có thể đổi bằng phím O.
+Xoay quanh X đã đúng. Muốn tam giác đổi orientation theo mọi hướng, ta thêm Y và Z. Nhưng ở 3D, gọi X rồi Y không giống gọi Y rồi X. Bài này sẽ viết thứ tự thành các bước dễ đọc và kiểm bằng số, không giấu nó trong matrix.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ba tên quen dùng trong project:
+Giữ nguyên quy tắc bàn tay phải:
 
-- pitch: rotation quanh X;
-- yaw: rotation quanh Y;
-- roll: rotation quanh Z.
+$$
+R_Y(x,y,z)=(x\cos\theta+z\sin\theta,\ y,\ -x\sin\theta+z\cos\theta),
+$$
+$$
+R_Z(x,y,z)=(x\cos\theta-y\sin\theta,\ x\sin\theta+y\cos\theta,\ z).
+$$
 
-Rotation Y giữ Y và xoay X/Z. Rotation Z giữ Z và xoay X/Y. Với order XYZ, point đi qua X trước, rồi Y, cuối cùng Z. Mỗi bước nhận point đã thay đổi từ bước trước, nên đổi order sẽ đổi các trục mà bước sau đang nhìn thấy.
+Ta gọi góc quanh X là pitch, quanh Y là yaw, quanh Z là roll. Tên này chỉ đặt vai trò cho ba con số; không tự biến chúng thành camera FPS hay một mô hình máy bay.
 
-Tên pitch/yaw/roll có nhiều quy ước trong engine và tài liệu đồ họa. Project này chốt một quy ước duy nhất: point được quay quanh các trục tọa độ X, Y, Z cố định, angle lưu bằng radian, và tên order mô tả đúng thứ tự lời gọi hàm. Khi đối chiếu với thư viện khác, hãy kiểm tra quy ước của thư viện thay vì chỉ nhìn ba chữ XYZ.
+**Quy ước của project:** mọi phép quay đều theo các trục world cố định. XYZ nghĩa là áp dụng X trước, lấy kết quả quay Y, rồi quay Z. Không đọc ngược thứ tự từ tên và không gọi nó là ba phép quanh trục local đang quay. Ví dụ (1,2,3), X=Y=90°, Z=0:
+
+- XYZ: X90 cho (1,-3,2), Y90 cho (2,-3,-1).
+- ZYX: Y90 cho (3,2,-1), X90 cho (3,1,2).
+
+Hai kết quả khác nhau dù cả hai đều giữ độ dài. Đây là sự không giao hoán, không phải lỗi rounding.
 
 <InteractiveLab demo="rotation3d" mode="rotation-euler" />
 
-Đặt cả ba angle khác 0 rồi đổi Rotation order. Tam giác đổi orientation ngay, nhưng pivot và chiều dài cạnh không đổi. Nếu chỉ một angle khác 0, hai order phải cho cùng kết quả.
-
 ## Viết code từng bước
 
-### Bước 1 — Viết rotation Y từ mặt phẳng X–Z
+Giữ bộ khung và các hàm của bài trước; sửa đúng file ghi trên từng code block. Không tạo một main thứ hai. Sau mỗi bước, build target checkpoint 04 để đối chiếu:
 
-Theo quy tắc bàn tay phải:
+```powershell title="Build checkpoint 04"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_12_checkpoint_4 --parallel 2
+.\build\Debug\project_12_checkpoint_4.exe
+```
 
-```cpp title="include/lab.hpp — rotation quanh Y"
+### Bước 1 — Viết hai phép quay còn lại
+
+```cpp title="include/lab.hpp — quay quanh Y, giữ Y"
 inline Vec3 rotateY(Vec3 point, double angle) {
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    return {
-        cosine * point.x + sine * point.z,
-        point.y,
-        -sine * point.x + cosine * point.z,
-    };
+    return {cosine * point.x + sine * point.z, point.y, -sine * point.x + cosine * point.z};
 }
 ```
 
-### Bước 2 — Viết rotation Z như rotation 2D quen thuộc
-
-Z giữ nguyên, X/Y dùng đúng công thức trên mặt phẳng màn hình toán học:
-
-```cpp title="include/lab.hpp — rotation quanh Z"
+```cpp title="include/lab.hpp — quay quanh Z, giữ Z"
 inline Vec3 rotateZ(Vec3 point, double angle) {
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    return {
-        cosine * point.x - sine * point.y,
-        sine * point.x + cosine * point.y,
-        point.z,
-    };
+    return {cosine * point.x - sine * point.y, sine * point.x + cosine * point.y, point.z};
 }
 ```
 
-### Bước 3 — Đặt tên angle và order
+Với point (1,2,3), Y90 phải ra (3,2,-1); Z90 phải ra (-2,1,3). Hai ví dụ khóa dấu sin trước khi ghép công thức.
 
-Struct tránh ba tham số `double` không biết thuộc trục nào:
+### Bước 2 — Đặt tên cho dữ liệu góc
 
-```cpp title="include/lab.hpp — trạng thái Euler bằng radian"
+```cpp title="include/lab.hpp — radian nằm trong struct có ý nghĩa"
 struct EulerAngles {
     double pitch{};
     double yaw{};
     double roll{};
 };
-
-enum class RotationOrder {
-    Xyz,
-    Zyx,
-};
 ```
 
-### Bước 4 — Viết thứ tự bằng control flow tường minh
+Scene giữ thêm RotationOrder::Xyz hoặc ::Zyx. Không truyền ba double không rõ góc nào và không đổi chúng sang degree ở giữa hàm toán.
 
-Không nén ba lời gọi vào một biểu thức khó đọc:
+### Bước 3 — Ghép tuần tự bằng biến trung gian
 
-```cpp title="include/lab.hpp — áp dụng XYZ hoặc ZYX"
+```cpp title="include/lab.hpp — thứ tự code chính là thứ tự thao tác"
 inline Vec3 rotateEuler(Vec3 point, EulerAngles angles, RotationOrder order) {
     if (order == RotationOrder::Zyx) {
         Vec3 rotated = rotateZ(point, angles.roll);
@@ -92,50 +85,38 @@ inline Vec3 rotateEuler(Vec3 point, EulerAngles angles, RotationOrder order) {
 }
 ```
 
-Với order XYZ, code chạy X→Y→Z đúng như tên. Sau này khi chuyển sang matrix, thứ tự nhân sẽ được đối chiếu với chuỗi này.
-
-Đừng viết `rotateZ(rotateY(rotateX(point,...),...),...)` ngay trong bài học. Biểu thức đó chạy đúng nhưng rất khó đặt breakpoint và dễ đọc thứ tự từ ngoài vào trong. Ba câu lệnh với biến `rotated` cho phép bạn xem giá trị sau từng trục trong debugger.
-
-### Bước 5 — Cho người học đổi order ngay khi chạy
-
-Phím O không thay angle, chỉ đổi cách áp dụng:
-
-```cpp title="src/main.cpp — đổi rotation order"
-if (!event.key.repeat && event.key.key == SDLK_O) {
-    if (order == lab::RotationOrder::Xyz) {
-        order = lab::RotationOrder::Zyx;
-    } else {
-        order = lab::RotationOrder::Xyz;
-    }
+```cpp title="include/lab.hpp — cùng một order cho cả ba đỉnh"
+inline Triangle3 rotateTriangleX(const Triangle3& triangle, double angle) {
+    return {rotateX(triangle.a, angle), rotateX(triangle.b, angle), rotateX(triangle.c, angle)};
 }
 ```
 
+Nhánh Zyx thực hiện Z→Y→X; nhánh còn lại X→Y→Z. Mỗi hàm vẫn quay quanh trục cố định của hệ tọa độ đang biểu diễn vector. Không rotate local axes rồi truyền chúng làm trục mới.
+
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy kết quả cuối bài 4"
-cmake --build build --config Debug --target project_12_checkpoint_4
-```
+worldTriangle thay rotateTriangleX bằng rotateTriangle(localTriangle,scene.angles,scene.order), sau đó vẫn translate như trước. W/S sửa pitch, A/D sửa yaw, Q/E sửa roll; O đổi order và pause tự động để so hình không bị trôi.
 
-W/S đổi pitch, A/D đổi yaw, Q/E đổi roll. Đặt khoảng 20°/35°/15°, ghi lại orientation rồi nhấn O. Hình phải đổi; nhấn O lần nữa phải trở lại orientation cũ vì angle chưa thay. Trong Canvas, dòng `A: chênh lệch giữa hai order` phải lớn hơn 0 khi có ít nhất hai angle khác 0.
-
-Hai order đều bắt đầu lại từ local triangle và đều translate sau rotation. Chúng khác orientation, không khác pivot hay kích thước.
+Chọn preset Hai góc 90°, đổi XYZ/ZYX. Với default triangle, hai orientation khác nhau; readout order difference đo độ lệch local A giữa hai cách. Nếu một hoặc hai góc bằng zero, đôi khi hai order trùng nhau; điều đó không chứng minh phép quay luôn giao hoán.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi nhãn order nhưng vẫn gọi cùng chuỗi hàm. UI nói ZYX nhưng hình không thay đổi.
-2. Dùng degree trực tiếp với `std::sin`. 90 được hiểu là 90 radian, không phải một phần tư vòng.
-3. Cho ZYX chạy rotateX trước. Tên enum và hành vi không còn khớp, khiến inverse ở bài cuối rất dễ viết sai.
+1. Viết cùng một chuỗi X→Y→Z trong cả hai nhánh. Nhãn order vẫn đổi nhưng hình không đổi; oracle (2,-3,-1) so (3,1,2) sẽ bắt lỗi. Khôi phục hai chuỗi khác nhau.
+
+2. Đưa 90 trực tiếp vào std::sin/std::cos thay vì π/2. Quay sẽ không phải 90°. Chỉ đổi degree→radian ở input/hiển thị.
+
+3. Chỉ thử ba góc đều zero rồi kết luận order đúng. Thêm hai góc 90° hoặc góc tổng quát để test thật sự phân biệt được các nhánh.
 
 ## Tự kiểm tra kết quả
 
-- rotateY 90° đổi `(1,2,3)` thành `(3,2,-1)`.
-- rotateZ 90° đổi `(1,2,3)` thành `(-2,1,3)`.
-- Chỉ một angle khác 0 cho cùng kết quả ở XYZ và ZYX.
-- Ba angle tổng quát làm hai order khác nhau.
-- Cả hai order giữ khoảng cách của vertex tới local origin.
+- Y90 và Z90 đúng các đáp án số trong bài.
+- XYZ và ZYX cho kết quả khác với hai góc 90°.
+- Ba edge lengths vẫn giữ nguyên ở cả hai order.
+- Code, dropdown và mô tả cùng nói một quy ước trục world cố định.
+- Model position không đổi khi đổi order; không rotate dồn hình của frame trước.
 
 ## Bài tập mở rộng
 
-Thêm order YXZ bằng một nhánh mới và ghi ba point kết quả cho cùng input. Không sao chép công thức sin/cos; chỉ ghép lại ba hàm đã có.
+Thêm order YXZ. Viết chuỗi gọi hàm trước, tính một expected 90° bằng tay rồi mới thêm dropdown và tests.
 
-Bài tiếp theo sẽ biến mouse delta thành yaw/pitch. Phần toán vẫn gọi `rotateEuler`; input mới chỉ thay cách tạo angles.
+[Sang bài tiếp theo — Cho normal quay cùng tam giác](/projects/rotating-triangle/05-normal-quay-cung-tam-giac).

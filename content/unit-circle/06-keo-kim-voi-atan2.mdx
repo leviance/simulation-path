@@ -1,0 +1,166 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo đầu kim để chọn góc bằng atan2
+
+## Vấn đề cần giải quyết
+
+Đến đây ta đã đi từ góc tới một điểm. Bây giờ làm chiều ngược lại: người dùng nắm chấm vàng, kéo nó và chương trình suy ra góc mới. Nếu chỉ viết atan(y/x), bạn sẽ mất dấu góc phần tư và gặp phép chia cho 0 ngay trên trục dọc.
+
+## Hiểu ý tưởng trước khi viết code
+
+atan2(y,x) nhận riêng hai thành phần nên biết hướng nằm ở góc phần tư nào. Kết quả thường nằm trong [−π,π]; normalizeAngle đưa nó về [0,2π).
+
+Trước tiên phải đổi chuột về hệ tọa độ toán học: direction=((mouseX−275)/185,(390−mouseY)/185). Đổi Y đúng một lần như lúc vẽ ngược trở lại.
+
+Ngay tại tâm không có hướng. Hàm toán atan2(0,0) có thể cho 0, nhưng thao tác kéo không nên giật kim về bên phải khi chuột lướt qua tâm. Ta đặt một vùng 8 pixel logic quanh tâm, trong đó giữ góc trước đó.
+
+<InteractiveLab demo="angle" mode="angle-atan2" />
+
+Kéo từ chấm vàng, không phải bất kỳ vị trí nào trên vòng tròn. Nắm lệch một chút ở mép chấm rồi di chuột chậm: kim không được nhảy góc ngay lúc nhấn. Đồ thị vẫn hiện; mỗi lần đổi góc bằng tay bắt đầu lịch sử mới và mô phỏng ở trạng thái pause.
+
+## Viết code từng bước
+
+### Bước 1 — Suy góc từ hướng trong hệ toán
+
+Thêm vào include/lab.hpp:
+
+```cpp title="include/lab.hpp — atan2 nhận Y trước, X sau"
+inline double angleFromDirection(Vec2 direction) {
+    if (!std::isfinite(direction.x) || !std::isfinite(direction.y) || (direction.x == 0.0 && direction.y == 0.0)) {
+        return 0.0;
+    }
+    return normalizeAngle(std::atan2(direction.y, direction.x));
+}
+```
+
+Trong miền input bình thường, direction hữu hạn. NaN/infinity dùng fallback 0. Ta không dùng epsilon để gọi mọi vector nhỏ là zero trong hàm toán; vùng chết thuộc thao tác màn hình, được xử lý riêng.
+
+### Bước 2 — Chỉ chọn endpoint và giữ độ lệch góc lúc nắm
+
+Thêm hai trường vào struct Scene trong include/scene.hpp:
+
+
+```cpp title="include/scene.hpp — trạng thái của một lần kéo"
+bool dragging{};
+double angularGrabOffset{};
+```
+
+Sau đó thêm beginDrag bên ngoài struct:
+
+```cpp title="include/scene.hpp — hit-test bán kính 18 pixel và giữ chỗ nắm"
+inline bool beginDrag(Scene& scene, Vec2 screen) {
+    const Vec2 endpoint = worldToScreen(unitDirection(scene.angle));
+    if (!std::isfinite(screen.x) || !std::isfinite(screen.y) || std::hypot(screen.x - endpoint.x, screen.y - endpoint.y) > 18.0) {
+        return false;
+    }
+    // Nắm ở mép chấm không làm kim nhảy góc ngay lúc nhấn.
+    scene.angularGrabOffset = scene.angle - angleFromDirection(screenToDirection(screen));
+    scene.dragging = true;
+    return true;
+}
+```
+
+angularGrabOffset là góc kim trừ góc chuột lúc nhấn. Nếu nắm đúng giữa chấm thì offset gần 0; nếu nắm mép chấm, lần di chuyển đầu tiên vẫn giữ hướng kim. Hiệu này có thể vượt π gần ranh 0/2π; normalizeAngle sau phép cộng vẫn cho hướng đúng.
+
+### Bước 3 — Đổi góc khi đang kéo, bỏ qua vùng tâm
+
+```cpp title="include/scene.hpp — cập nhật kim từ mẫu chuột"
+inline bool moveNeedle(Scene& scene, Vec2 screen) {
+    if (!scene.dragging) {
+        return false;
+    }
+    const Vec2 direction = screenToDirection(screen);
+    if (!std::isfinite(direction.x) || !std::isfinite(direction.y) || std::hypot(direction.x, direction.y) < 8.0 / kRadius) {
+        return false;
+    }
+    setManualAngle(scene, angleFromDirection(direction) + scene.angularGrabOffset);
+    return true;
+}
+```
+
+Độ lớn direction là số world unit; nhân ngược bán kính cho pixel logic. Khi khoảng cách tới tâm nhỏ hơn 8 pixel, hàm không đổi angle hoặc lịch sử. Chuột ra ngoài vùng đó thì kim lại nhận hướng mới; không cố đo một hướng không tồn tại tại tâm.
+
+### Bước 4 — Ghép với input SDL và vòng đời capture
+
+Trong src/main.cpp, trước vòng while(running), khai báo owner và một đường hủy dùng chung:
+
+
+```cpp title="src/main.cpp — owner và cách thả capture"
+SDL_MouseID owner{};
+const auto cancelDrag = [&]() {
+    lab::cancelDrag(scene);
+    SDL_CaptureMouse(false);
+};
+```
+
+Trong event loop, đổi input sang bảng logic trước hit-test. Không tự nhân DPI lần nữa. Mouse-down nhận đúng nút trái; nếu SDL_CaptureMouse thất bại thì hủy drag:
+
+
+```cpp title="src/main.cpp — đổi tọa độ và bắt đầu kéo bằng chuột trái"
+const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_MOUSE_MOTION;
+if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    std::cerr << SDL_GetError() << '\n';
+    failed = true;
+    running = false;
+    break;
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !scene.dragging) {
+    if (lab::beginDrag(scene, {event.button.x, event.button.y})) {
+        owner = event.button.which;
+        paused = true;
+        if (!SDL_CaptureMouse(true)) {
+            cancelDrag();
+        }
+    }
+}
+```
+
+
+
+Hai nhánh sau xử lý motion và mẫu cuối lúc thả:
+
+```cpp title="src/main.cpp — chỉ owner được kéo và thả"
+if (event.type == SDL_EVENT_MOUSE_MOTION && scene.dragging && event.motion.which == owner) {
+    if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
+        cancelDrag();
+    } else {
+        dirty = lab::moveNeedle(scene, {event.motion.x, event.motion.y}) || dirty;
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && scene.dragging && event.button.which == owner) {
+    dirty = lab::moveNeedle(scene, {event.button.x, event.button.y}) || dirty;
+    cancelDrag();
+}
+```
+
+Không chỉ đặt dragging=false ở button-up: phải áp dụng tọa độ cuối trước khi thả capture. Focus lost, hidden, resize, reset và Space đều đi qua cancelDrag; thoát chương trình cũng thả capture. Khi đổi góc bằng phím/preset, caller hủy lần kéo hiện tại trước khi đặt dữ liệu mới.
+
+## Ghép các phần lại
+
+Build project_7_checkpoint_6. Kéo sẽ pause, không tự chạy lại sau khi thả; bạn chủ động Space hoặc bấm Tiếp tục trên Canvas. Điều này giúp đặt chính xác một góc rồi đọc số/hình.
+
+Canvas dùng pointerId cho cùng nguyên tắc owner và hỗ trợ touch/pen primary. Vùng letterbox không phải bảng input; pointer capture cho phép tiếp tục nhận mẫu sau khi kéo ra ngoài. Resize giữ angle/history nhưng hủy thao tác kéo cũ vì bố cục màn hình vừa đổi.
+
+Bản này đã có đầy đủ hình học và đồ thị. Bài cuối thêm cách kiểm chứng độc lập và hướng dẫn chạy toàn bộ project, không giấu tính năng cuối trong một code snippet khó ghép.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng atan(y/x) thay atan2. Thử hai hướng (1,1) và (−1,−1): phép chia có cùng kết quả dù hai hướng đối nhau.
+2. Không giữ angularGrabOffset. Nắm vào mép trên/dưới chấm: kim sẽ nhảy ngay tới hướng con trỏ.
+3. Bỏ vùng chết rồi kéo qua đúng tâm. Góc có thể nhảy về 0 hoặc đổi rất mạnh chỉ vì một pixel.
+4. Thả capture trước khi áp dụng mẫu button-up. Nếu mẫu thả khác mẫu motion cuối, kim dừng ở vị trí cũ.
+
+## Tự kiểm tra kết quả
+
+- Kéo qua cả bốn góc phần tư và qua ranh 0/2π không đảo chiều sai.
+- Nhấn ngoài vùng 18 pixel quanh endpoint không bắt đầu drag.
+- Nắm lệch chấm không gây nhảy góc; gần tâm giữ góc cũ.
+- Chỉ pointer/mouse owner được di chuyển kim; nút phải không bắt đầu kéo.
+- Thả ngoài window, Alt+Tab, resize hoặc reset không để capture bị kẹt.
+- Sau khi thả, resume cho cả kim và đồ thị chạy tiếp từ điều kiện mới.
+
+## Bài tập mở rộng
+
+Thêm một dấu nhỏ minh họa vùng tâm 8 pixel chỉ trong debug mode. Nếu muốn bấm bất kỳ chỗ nào để đặt góc, làm một tương tác riêng có tên rõ; đừng âm thầm đổi quy tắc “kéo endpoint”.
+
+Tiếp theo: [ghép bản hoàn chỉnh và kiểm chứng](/projects/unit-circle/07-hoan-thien-va-kiem-chung).

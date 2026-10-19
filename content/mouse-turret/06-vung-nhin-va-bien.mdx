@@ -1,0 +1,95 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm tra vùng nhìn bằng dot product
+
+## Vấn đề cần giải quyết
+
+Tháp pháo đã biết quay. Ta thêm một câu hỏi đơn giản: target hiện nằm trong vùng hướng mà nòng đang nhìn hay chưa? Phần này giúp dùng dot để ra quyết định trực tiếp, không nhất thiết gọi acos mỗi frame.
+
+## Hiểu ý tưởng trước khi viết code
+
+Vùng nhìn đối xứng quanh forward, có nửa góc α=halfViewAngle. Target hợp lệ nằm trong vùng nếu |θ|≤α. Vì cosine giảm từ 1 xuống −1 khi góc không dấu tăng từ 0 tới π, điều kiện tương đương normalizedDot≥cos(α).
+
+Nếu halfViewAngle=35°, tổng độ mở là 70°, không phải 35°. Phép kiểm này chỉ xét góc: không phát hiện vật cản, không đo tầm bắn và không mô phỏng bắn đạn. Vòng tròn xám bán kính 6.5 chỉ giữ miền thao tác trong bảng.
+
+<InteractiveLab demo="turret" mode="turret-view-cone" />
+
+Tạm dừng rồi chọn Đúng biên vùng nhìn. Target phải được coi là trong vùng ở dung sai đã nêu. Di chuyển ra ngoài một khoảng rõ ràng để thấy đổi màu. Thử cả hai phía, không chỉ phía Y dương.
+
+## Viết code từng bước
+
+### Bước 1 — Thêm nửa góc, không lưu riêng cờ locked
+
+Trong struct Scene của include/scene.hpp, thêm:
+
+```cpp title="include/scene.hpp — nửa góc vùng nhìn mặc định"
+double halfViewAngle = 35.0 * kPi / 180.0;
+```
+
+locked phải được suy lại từ heading và target hiện tại. Nếu giữ nó như state cập nhật ở một chỗ khác, có thể đổi target mà màu chưa đổi.
+
+### Bước 2 — Viết điều kiện bằng cosine
+
+```cpp title="include/lab.hpp — kiểm hướng, miền góc và hai biên"
+inline bool isWithinViewCone(Vec2 forward, Vec2 targetDirection, double halfAngle) {
+    if (!hasDirection(forward) || !hasDirection(targetDirection) || !std::isfinite(halfAngle)) {
+        return false;
+    }
+    const double safeHalfAngle = std::clamp(halfAngle, 0.0, kPi);
+    // Dung sai cosine để một điểm đúng biên không chớp màu bởi sai số số thực.
+    return cosineBetween(forward, targetDirection) >= std::cos(safeHalfAngle) - 1e-12;
+}
+```
+
+Hàm nhận halfAngle hữu hạn rồi giới hạn trong [0,π]. UI chỉ cho 5°–90° để thí nghiệm dễ quan sát. Dung sai 1e-12 ở **cosine** giữ một điểm đúng biên không chớp màu vì sai số rounding. Nó không phải dung sai 1e-12 radian; gần các cực trị cosine, quan hệ giữa sai số góc và sai số cosine khác nhau.
+
+Với vector zero, hàm trả false. Scene còn kiểm thêm vùng tâm 8 pixel: một target rất gần tâm có thể khác zero về số học nhưng UI vẫn chưa dùng hướng đó để ngắm.
+
+### Bước 3 — Vẽ hai cạnh vùng nhìn
+
+Trong include/view.hpp:
+
+```cpp title="include/view.hpp — hai tia đối xứng quanh góc nòng"
+inline void drawCone(Framebuffer& image, const Scene& scene) {
+    const Vec2 lower = scale(directionFromAngle(scene.turretAngle - scene.halfViewAngle), kTargetRadius);
+    const Vec2 upper = scale(directionFromAngle(scene.turretAngle + scene.halfViewAngle), kTargetRadius);
+    lineBetween(image, kOrigin, worldToScreen(lower), kGuide);
+    lineBetween(image, kOrigin, worldToScreen(upper), kGuide);
+}
+```
+
+Hai tia dùng turretAngle±halfViewAngle nên quay cùng nòng. Chiều dài 6.5 world là giới hạn minh họa của bảng, không được đưa nó vào isWithinViewCone như một điều kiện range bí mật.
+
+### Bước 4 — Suy màu từ dữ liệu hiện tại
+
+renderScene gọi drawCone trước các vector; sau khi vẽ thân/nòng, targetColor mặc định đỏ và chỉ đổi xanh khi targetHasDirection(scene) và isWithinViewCone cùng true. Vẫn giữ dot, góc và projection trên HUD.
+
+F7 tạo target đúng cạnh dương để thử; phím [/] đổi nửa góc từng 1°. Trên Canvas, dùng slider Nửa góc vùng nhìn. Khi dùng preset, follow tắt và mô phỏng pause để bạn có thể giữ nguyên điều kiện biên.
+
+## Ghép các phần lại
+
+Build project_8_checkpoint_6. So phép kiểm dot với angleBetween(forward,targetOffset)≤halfViewAngle trên các target có hướng nằm cách biên một khoảng đủ lớn. Ở đúng biên, dùng đúng dung sai cosine của hàm, đừng trộn với một dung sai góc tùy ý.
+
+Mục tiêu ngược hướng có normalized dot≈−1 nên không nằm trong UI cone tối đa 90°. Target trong vùng tâm cũng không được khóa, kể cả fallback angleBetween đang trả 0.
+
+## Thử làm sai để hiểu đúng
+
+1. So raw dot với cos(halfAngle). Target xa trên một hướng ngoài cone có thể bị coi là trong cone chỉ vì độ dài tăng.
+2. Dùng toàn bộ độ mở làm halfViewAngle. Vùng được kiểm rộng gấp đôi điều bạn định vẽ.
+3. Chỉ kiểm signedAngle≤halfAngle mà không kiểm phía âm. Mọi target lệch rất xa về bên phải có thể được chấp nhận.
+4. Gọi target trùng tâm là locked vì angleBetween fallback=0. Đó là lỗi ý nghĩa dù công thức so sánh không crash.
+
+## Tự kiểm tra kết quả
+
+- Đúng cả hai biên ±halfAngle trong dung sai cosine 1e-12.
+- Ra ngoài biên 1e-5 rad trong miền UI cho kết quả false.
+- Cùng hướng được nhận, ngược hướng bị loại; target zero/near-center không khóa.
+- Đổi khoảng cách trên cùng một tia không làm đổi phép kiểm góc.
+- Hai cạnh vẽ quay cùng nòng; mọi lớp vector/projection vẫn còn.
+- UI nói rõ đây là vùng nhìn theo góc, không phải range hoặc occlusion.
+
+## Bài tập mở rộng
+
+Thêm một điều kiện range riêng có tên rõ, rồi báo riêng “đúng góc” và “đủ gần”. Đừng sửa isWithinViewCone để nó âm thầm làm hai việc.
+
+Tiếp theo: [hoàn thiện tháp pháo và kiểm chứng](/projects/mouse-turret/07-hoan-thien-va-kiem-chung).

@@ -1,167 +1,195 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
 const learning = {
   guides: {
     "p09-l01": {
-      focus:
-        "Bắt đầu từ cửa sổ và framebuffer đã chạy được; thêm Vec2, bốn local point, phép đổi world sang screen và hàm nối bốn cạnh thành hình vuông.",
-      expected:
-        "Một hình vuông xanh lá nằm giữa lưới, bốn đỉnh được đánh dấu rõ và không thay đổi khi resize. Source chỉ lưu bốn điểm quanh local origin, không chứa tọa độ pixel cố định.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Dựng hình nhìn thấy được trước: đỉnh, cạnh, basis và đổi world/screen.",
+      expected: "Hình vuông có bốn đỉnh và hai basis, dữ liệu local không đổi.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đặt dữ liệu quanh local origin",
+          title: "Giữ hình dạng trong local",
           explanation:
-            "makeSquare tạo bốn đỉnh theo thứ tự chạy quanh biên. Half extent quyết định kích thước nhưng tâm hình vẫn là `(0,0)`.",
+            "makeSquare trả bốn điểm quanh gốc, theo thứ tự quanh biên. drawSquare đóng cạnh cuối về điểm đầu.",
         },
         {
-          title: "Chỉ đổi sang pixel khi vẽ",
+          title: "Chỉ đổi Y ở biên vẽ",
           explanation:
-            "worldToScreen cộng tâm cửa sổ và đảo dấu Y. Các hàm toán học không cần biết kích thước framebuffer hay quy ước trục của SDL.",
+            "worldToScreen cộng (450,400), nhân 50 pixel/world và đảo Y; phép toán không phụ thuộc kích thước cửa sổ.",
         },
         {
-          title: "Nối cả cạnh cuối về cạnh đầu",
+          title: "Nối cảnh đã chạy được",
           explanation:
-            "Chỉ số `(index+1)%size` giúp đỉnh cuối nối lại đỉnh 0, vì vậy polygon luôn khép kín mà không cần một lệnh vẽ riêng.",
+            "Starter có ảnh CPU/texture. Thêm drawSquare và hai basis trong renderScene trước khi học scale.",
         },
       ],
     },
     "p09-l02": {
-      focus:
-        "Viết scalePoint theo hai trục, thêm phím điều khiển và luôn tạo lại bốn world point từ localSquare thay vì sửa dồn kết quả cũ.",
-      expected:
-        "A/D đổi chiều rộng, S/W đổi chiều cao; scale bằng 0 ép hình xuống một đoạn thẳng và scale âm phản chiếu hình qua trục tương ứng.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Giữ nguyên dữ liệu gốc, đổi scaleX/Y và nhìn cả scale âm lẫn scale 0.",
+      expected: "Scale âm phản chiếu; scale 0 ép hình xuống đoạn thẳng.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Nhân đúng thành phần",
+          title: "Nhân từng thành phần",
           explanation:
-            "scaleX chỉ nhân với x, scaleY chỉ nhân với y. Hai tham số khác nhau tạo non-uniform scale thay vì phóng to đồng đều.",
+            "scalePoint không sửa đầu vào. Scale X âm phản chiếu qua trục Y; scale X bằng 0 ép hình lên trục Y.",
         },
         {
-          title: "Tính lại từ localSquare",
+          title: "Tính lại từ gốc",
           explanation:
-            "Trong mỗi frame, transformedSquare bắt đầu lại từ bốn đỉnh gốc. Cách này tránh việc nhân scale lặp lại rồi làm sai số và kích thước tăng dần ngoài ý muốn.",
+            "transformedSquare luôn bắt đầu từ makeSquare, không dùng kết quả frame trước.",
         },
         {
-          title: "Giữ cả trường hợp 0 và số âm",
-          explanation:
-            "Đây không phải input lỗi. Scale 0 cho thấy phép biến đổi làm mất một chiều; scale âm vừa co giãn vừa đảo chiều trục.",
+          title: "Thử ba dấu của scale",
+          explanation: "So giá trị dương, 0 và âm bằng A/D, S/W, rồi R để về identity.",
         },
       ],
     },
     "p09-l03": {
-      focus:
-        "Suy công thức rotation từ ảnh của hai vector cơ sở, viết rotatePoint và áp dụng rotation sau scale cho từng local point.",
-      expected:
-        "Phím trái/phải xoay hình quanh local origin; khi scaleX=scaleY=1, độ dài cạnh và diện tích không đổi ở mọi góc.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Suy công thức từ sin/cos, giữ góc trong radian và kiểm độ dài.",
+      expected: "Rotation dương quay ngược chiều kim đồng hồ trong world Y-up.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Xoay hai vector cơ sở",
-          explanation:
-            "Trục X đơn vị trở thành `(cos,sin)`, còn trục Y trở thành `(-sin,cos)`. Một điểm là tổ hợp của hai trục nên nhận đúng công thức rotation 2D.",
+          title: "Suy ảnh của hai basis",
+          explanation: "ex thành (cos,sin), ey thành (−sin,cos); đó là hai cột của rotation.",
         },
         {
-          title: "Dùng radian trong phép tính",
+          title: "Giữ radian trong state",
           explanation:
-            "Mỗi lần nhấn phím chỉ đổi 5° sang radian. std::sin và std::cos luôn nhận angle theo radian, giống Project 07.",
+            "Q/E đổi π/36 mỗi lần; world Y-up quyết định chiều góc dương, không đảo Y trong rotatePoint.",
         },
         {
-          title: "Xoay kết quả của scale",
-          explanation:
-            "Checkpoint 3 dùng `rotatePoint(scalePoint(point,...), angle)`. Viết lồng rõ ràng như vậy giúp thấy phép nào xảy ra trước khi ma trận xuất hiện.",
+          title: "Kiểm rotation thuần",
+          explanation: "Reset scale về (1,1) trước khi kiểm độ dài và góc vuông.",
         },
       ],
     },
     "p09-l04": {
-      focus:
-        "Thêm shearPoint, điều khiển riêng shearX/shearY và đặt shear giữa scale với rotation trong chuỗi tính trực tiếp.",
-      expected:
-        "J/L và K/I làm hệ trục bị xiên; các cạnh đối diện vẫn song song. Đặt cả shearX và shearY khác 0 cho thấy diện tích có thể thay đổi dù mỗi công thức trông như chỉ trượt một tọa độ.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Tính shear đồng thời, đọc hai cột cơ sở và nhân ma trận 2×2.",
+      expected: "Mat2 làm cùng phép tuyến tính với công thức thành phần.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đọc công thức theo sự phụ thuộc",
-          explanation:
-            "Shear X giữ y và cộng `shearX×y` vào x. Shear Y giữ x và cộng `shearY×x` vào y; cả hai kết quả phải dùng tọa độ đầu vào cũ.",
+          title: "Shear dùng hai tọa độ cũ",
+          explanation: "Hai phương trình đồng thời khác hai shear nối tiếp; det(H)=1−hx·hy.",
         },
         {
-          title: "Không cập nhật x rồi dùng x mới cho y",
+          title: "Đọc cột của Mat2",
           explanation:
-            "Tạo và trả về Vec2 mới giúp hai phương trình được tính đồng thời. Sửa point.x trước sẽ vô tình tạo ra một phép biến đổi khác.",
+            "Hai cột là ảnh của ex/ey. Row-major là cách lưu, không tự quyết hướng của vector.",
         },
         {
-          title: "Đối chiếu với rotation",
-          explanation:
-            "Rotation giữ góc vuông và độ dài khi không scale. Shear giữ tính song song nhưng thường làm góc vuông biến mất.",
+          title: "Nhân hàng với cột",
+          explanation: "Tính tay [[1,2],[3,4]]·[[2,0],[1,2]], sau đó dùng R·H·S thật trong render.",
         },
       ],
     },
     "p09-l05": {
-      focus:
-        "Biểu diễn từng phép toán bằng Mat3, tự viết matrix multiplication và thay chuỗi hàm trên bốn đỉnh bằng một composed matrix.",
-      expected:
-        "Hình không nhảy khi chuyển sang cách tính bằng ma trận. Kéo chuột thay đổi translation; hai vector cơ sở đỏ/xanh cho thấy phần tuyến tính của ma trận.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Tự viết Mat3 và phép nhân; translation nằm ở cột cuối, không phải hàng cuối.",
+      expected: "Translation nằm ở cột cuối; direction không bị dịch chuyển.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Chốt quy ước trước khi nhân",
+          title: "Thêm thành phần 1 hoặc 0",
           explanation:
-            "Mat3 lưu row-major nhưng nhân với column vector `[x,y,1]ᵀ`. Storage order và hướng của vector là hai khái niệm riêng, không được suy từ nhau.",
+            "Điểm nhận translation; hướng không nhận translation vì thành phần cuối là 0.",
         },
         {
-          title: "Viết phép nhân ba vòng lặp",
+          title: "Viết Mat3 affine",
           explanation:
-            "Mỗi ô kết quả là dot product giữa một hàng của ma trận trái và một cột của ma trận phải. Bản tổng quát dễ kiểm tra hơn chín công thức chép tay.",
+            "Translation ở cột cuối và hàng cuối giữ [0,0,1]; không trộn với ma trận projection.",
         },
         {
-          title: "Đọc phép ghép từ phải sang trái",
+          title: "Thay đường render",
           explanation:
-            "Với column vector, `T×R×H×S×p` nghĩa là p đi qua scale, shear, rotation rồi translation. Ma trận đứng sát điểm nhất chạy trước.",
-        },
-        {
-          title: "Dùng hàng thứ ba cho translation",
-          explanation:
-            "Thành phần 1 trong `[x,y,1]ᵀ` cho phép translation xuất hiện trong cùng phép nhân ma trận, thay vì phải cộng riêng sau cùng.",
+            "worldPoint gọi transformPoint(sceneMatrix,local); basis lấy hiệu hai point hoặc transformDirection.",
         },
       ],
     },
     "p09-l06": {
-      focus:
-        "Đóng gói tham số và thứ tự trong composeTransform, dùng determinant cùng diện tích polygon để kiểm tra kết quả, rồi chạy toàn bộ CTest và bản final.",
-      expected:
-        "Phím O đổi thứ tự và hình thay đổi ngay; title bar hiển thị determinant cùng area ratio khớp nhau. Tests qua ở Debug/Release và mọi điều khiển final hoạt động sau resize.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+      focus: "So T·R·H·S với T·S·H·R bằng cùng tham số, không tráo slider.",
+      expected: "Hai order dùng cùng tham số cho hai hình khác ở preset ghép.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tạo hai tích ma trận khác nhau",
-          explanation:
-            "Scale–Shear–Rotate dùng `T×R×H×S`; Rotate–Shear–Scale dùng `T×S×H×R`. Chúng dùng cùng tham số nhưng không cho cùng kết quả nói chung.",
+          title: "Giữ tham số, chỉ đổi tích",
+          explanation: "O chọn T·R·H·S hoặc T·S·H·R; translation vẫn ở ngoài trong cả hai.",
         },
         {
-          title: "So ma trận với chuỗi hàm",
-          explanation:
-            "Test tính một điểm bằng từng hàm theo thứ tự rồi so với transformPoint của ma trận ghép. Đây là cách bắt lỗi đảo thứ tự trực tiếp nhất.",
+          title: "Đưa cả lưới qua matrix",
+          explanation: "Biến đổi hai đầu mỗi đường lưới bằng cùng worldPoint dùng cho shape.",
         },
         {
-          title: "Kiểm tra diện tích bằng determinant",
+          title: "Kiểm bằng một điểm cụ thể",
+          explanation: "Scale(2,1) và quay 90° cho (−1,2) hoặc (−2,1) từ điểm (1,1).",
+        },
+      ],
+    },
+    "p09-l07": {
+      focus: "Vẽ track/nút kéo, hit-test, capture và đổi input sang tọa độ logic đúng một lần.",
+      expected: "Bảy slider SDL3 hoạt động bằng chuột và bàn phím, capture có owner.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/controls.hpp",
+        "src/main.cpp",
+      ],
+      steps: [
+        {
+          title: "Từ track tới giá trị",
           explanation:
-            "Shoelace formula đo diện tích polygon sau biến đổi. Tỉ số diện tích phải bằng trị tuyệt đối determinant của khối 2×2 phía trên bên trái.",
+            "Hit-test chọn slider một lần; fraction được clamp rồi map sang miền đã khai báo.",
         },
         {
-          title: "Chạy bản hoàn chỉnh",
+          title: "Giữ owner và điểm nắm",
           explanation:
-            "Sau CTest, mở project_9_final và thử scale âm, scale 0, cả hai shear, kéo chuột, đổi order, reset cùng resize trước khi kết thúc project.",
+            "Một capture cho mỗi thao tác; viewport drag giữ offset; mouse-up nhận mẫu cuối rồi hủy.",
+        },
+        {
+          title: "Đổi input đúng một lần",
+          explanation:
+            "SDL_ConvertEventToRenderCoordinates đưa mouse về bảng logic; resize/blur/reset hủy kéo và không nhân DPI lần nữa.",
+        },
+      ],
+    },
+    "p09-l08": {
+      focus: "Kiểm bằng số biết trước, hai cách tính độc lập, diện tích có dấu và CTest.",
+      expected: "Có source đầy đủ, test active Debug/Release và kiểm chứng diện tích có dấu.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/controls.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Không chỉ kiểm ảnh nhìn hợp lý",
+          explanation:
+            "Dùng số biết trước, oracle hệ số khai triển và so từng đỉnh; diện tích không bắt được mọi lỗi order.",
+        },
+        {
+          title: "Giữ dấu diện tích",
+          explanation:
+            "Signed area/4≈det; absolute area/4≈|det|. Gần 0 được ghi rõ là suy biến/gần suy biến.",
+        },
+        {
+          title: "Chạy đủ hai cấu hình",
+          explanation:
+            "Build tất cả target rồi CTest Debug/Release; sau smoke vẫn cần QA slider/capture/DPI trực tiếp.",
         },
       ],
     },
   },
   references: {
     "p09-l01": [
-      { label: "Local space", href: "/glossary#local-space", kind: "Thuật ngữ" },
-      { label: "World space", href: "/glossary#world-space", kind: "Thuật ngữ" },
-      { label: "Rasterization", href: "/glossary#rasterization", kind: "Thuật ngữ" },
+      {
+        label: "Local space",
+        href: "/glossary#local-space",
+        kind: "Thuật ngữ",
+      },
     ],
     "p09-l02": [
       {
@@ -169,18 +197,20 @@ const learning = {
         href: "/glossary#scalar-multiplication",
         kind: "Thuật ngữ",
       },
-      { label: "Local space", href: "/glossary#local-space", kind: "Thuật ngữ" },
-      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
     ],
     "p09-l03": [
-      { label: "Radian", href: "/glossary#radian", kind: "Thuật ngữ" },
-      { label: "Unit circle", href: "/glossary#unit-circle", kind: "Thuật ngữ" },
-      { label: "Vector 2D", href: "/glossary#vector-2d", kind: "Thuật ngữ" },
+      {
+        label: "Radian",
+        href: "/glossary#radian",
+        kind: "Thuật ngữ",
+      },
     ],
     "p09-l04": [
-      { label: "Shear", href: "/glossary#shear", kind: "Thuật ngữ" },
-      { label: "Affine transform", href: "/glossary#affine-transform", kind: "Thuật ngữ" },
-      { label: "Local space", href: "/glossary#local-space", kind: "Thuật ngữ" },
+      {
+        label: "Shear",
+        href: "/glossary#shear",
+        kind: "Thuật ngữ",
+      },
     ],
     "p09-l05": [
       {
@@ -188,19 +218,28 @@ const learning = {
         href: "/glossary#transformation-matrix",
         kind: "Thuật ngữ",
       },
-      { label: "Affine transform", href: "/glossary#affine-transform", kind: "Thuật ngữ" },
-      { label: "Row-major order", href: "/glossary#row-major-order", kind: "Thuật ngữ" },
     ],
     "p09-l06": [
-      { label: "Determinant", href: "/glossary#determinant", kind: "Thuật ngữ" },
-      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
       {
-        label: "CTest command-line reference",
-        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
-        kind: "CMake",
+        label: "Affine transform",
+        href: "/glossary#affine-transform",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p09-l07": [
+      {
+        label: "Pointer capture",
+        href: "/glossary#pointer-capture",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p09-l08": [
+      {
+        label: "Determinant",
+        href: "/glossary#determinant",
+        kind: "Thuật ngữ",
       },
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;

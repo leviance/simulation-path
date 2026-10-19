@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép bản hoàn chỉnh và kiểm chứng
+
+## Vấn đề cần giải quyết
+
+Một chiếc kim quay đẹp mắt chưa chứng minh được phép toán, input và đồ thị cùng đúng. Bài cuối chốt bản chạy hoàn chỉnh và dùng các dữ kiện độc lập để phát hiện lỗi, kể cả những lỗi mắt thường khó thấy ở FPS cao.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta kiểm ba tầng khác nhau. Tầng toán dùng mốc góc và đẳng thức lượng giác. Tầng mô phỏng dùng nghiệm θ(t)=θ0+ωt để kiểm góc và từng mẫu theo timestamp. Tầng trình bày/input kiểm hình thực tế và thao tác desktop.
+
+Không so một hàm với chính nó để tạo “expected”. Ví dụ, nếu advanceScene và helper expected cùng mắc lỗi lấy góc cuối frame, hai kết quả vẫn khớp. Expected của mẫu phải lấy từ sin(θ0+ωt) với t là timestamp đã ghi.
+
+<InteractiveLab demo="angle" mode="angle-full" />
+
+Bản đầy đủ phải luôn thấy đường tròn, kim, hình chiếu và hai đồ thị. Chọn mốc 0°, bấm tiến vài bước, đổi tốc độ âm, rồi kéo đầu kim. Đọc lịch sử thay đổi đúng theo quy tắc: đổi tốc độ giữ dữ liệu cũ, đặt góc bắt đầu đoạn mới.
+
+## Viết code từng bước
+
+### Bước 1 — Chạy final trước khi đọc tests
+
+Mở terminal tại thư mục project đã giải nén:
+
+```bash title="Terminal — build toàn bộ và chạy final"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+.\build\Debug\project_7_final.exe
+```
+
+Final đã có đủ main, headers và tests, không cần ghép các đoạn trong bài. Các target starter/checkpoint được build độc lập để đối chiếu. Danh sách file ở cuối bài chứa **toàn bộ mã nguồn của dự án**.
+
+### Bước 2 — Dùng check thay assert để Release vẫn kiểm tra
+
+Trong tests/tests.cpp, các kiểm tra dùng bộ đếm lỗi và kết thúc bằng EXIT_FAILURE:
+
+```cpp title="tests/tests.cpp — kiểm tra không bị tắt bởi NDEBUG"
+void check(bool condition, std::string_view message) {
+    if (!condition) {
+        std::cerr << "FAIL: " << message << '\n';
+        ++failures;
+    }
+}
+```
+
+Đừng dùng assert làm tiêu chí duy nhất: build Release có thể tắt nó. So sánh gần đúng phải từ chối NaN thay vì để một điều kiện sai số vô tình lọt qua.
+
+### Bước 3 — Kiểm vòng tròn và góc đi-về
+
+```cpp title="tests/tests.cpp — so góc với cách đo khoảng cách qua ranh một vòng"
+void checkRoundTrip(double original) {
+    const double restored = lab::angleFromDirection(lab::unitDirection(original));
+    const double expected = lab::normalizeAngle(original);
+    const double difference = std::abs(restored - expected);
+    check(std::min(difference, lab::kTau - difference) < 1e-9, "angle round trip across seam");
+}
+```
+
+0 và gần 2π có thể là hai biểu diễn sát nhau của cùng hướng; khoảng cách góc ngắn nhất tránh báo lỗi giả tại ranh. Trong main của tests còn có các fixture độc lập 0/π/2/π/3π/2, góc âm, góc rất lớn và số âm subnormal.
+
+### Bước 4 — Kiểm cả lịch sử, không chỉ góc cuối
+
+```cpp title="tests/tests.cpp — nghiệm giải tích tại từng timestamp"
+void checkHistory(const lab::Scene& scene, double initialAngle, double speed) {
+    check(scene.samples.size() <= lab::kMaximumSamples, "bounded history");
+    double previous = -1.0;
+    for (const lab::WaveSample& sample : scene.samples) {
+        check(sample.time > previous, "strictly increasing sample timestamp");
+        check(sample.time <= scene.elapsedTime + 1e-10, "no future samples");
+        // Nghiệm giải tích độc lập, không gọi lại advanceScene để tạo expected.
+        const double angle = initialAngle + speed * sample.time;
+        check(near(sample.sine, std::sin(angle)), "sample sine uses its own timestamp");
+        check(near(sample.cosine, std::cos(angle)), "sample cosine uses its own timestamp");
+        previous = sample.time;
+    }
+}
+```
+
+Tests chạy cùng một giây theo chuỗi 120 Hz, 10 Hz và chuỗi 0,013+0,027+0,06 giây. Chúng phải có cùng góc cuối, cùng 61 timestamp và cùng giá trị mẫu. Còn test 100 giây xác nhận dung lượng dừng ở 361, không chỉ vừa đầy trong một frame.
+
+### Bước 5 — Kiểm ảnh thật rồi build Release
+
+Test CPU renderScene vào framebuffer rồi đếm pixel màu ở vùng vòng tròn và vùng graph. Nó chứng minh các lớp được rasterize thật, không chỉ có số trả về từ hàm toán. Nhãn sai vị trí, DPI hoặc hành vi capture vẫn cần desktop QA.
+
+```bash title="Terminal — kiểm lại cấu hình Release"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
+
+Final có --smoke cho hệ thống kiểm thử: mở window ẩn, vẽ 12 frame, thử resize rồi thoát. Đặt timeout 15 giây bên ngoài khi chạy tự động. Smoke không thay được thử chuột thật.
+
+## Ghép các phần lại
+
+Ranh giới file rõ ràng: lab.hpp giữ toán và mẫu; scene.hpp giữ trạng thái/update/input thuần; framebuffer.hpp rasterize primitive; view.hpp ghép hình; presentation.hpp upload/nhãn SDL; main.cpp quản lý window/event/timing/cleanup.
+
+Bản cuối không dùng SDL_RenderLine/Point/FillRect để né rasterizer, không có chart library tạo sóng thay dữ liệu, không tải thư viện toán vector. SDL 3.4.8 được khóa trong CMake, link qua SDL3::SDL3.
+
+Bảng logic cố định là lựa chọn có chủ ý: resize chỉ đổi presentation, không cấp lại framebuffer mỗi event. Đây không phải thay đổi phương trình hay giảm sản phẩm; input được đưa về đúng bảng logic trước khi xử lý.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay check bằng assert rồi build Release. Đừng coi executable thoát 0 là bằng chứng các biểu thức vẫn được kiểm.
+2. Trong bộ sinh mẫu, dùng góc cuối frame cho mọi timestamp. Test so góc cuối vẫn có thể đạt, nhưng checkHistory phải phát hiện sine/cosine sai ở các mốc giữa frame.
+3. Ẩn graph trong mode atan2/final. Phần toán vẫn đạt, nhưng sản phẩm không còn đáp ứng yêu cầu nhìn đồng thời kim, hình chiếu và hai đồ thị.
+
+## Tự kiểm tra kết quả
+
+- Build starter, bảy checkpoint, final và tests ở Debug/Release.
+- CTest phát hiện lỗi cố ý rồi đạt lại sau khi hoàn tác.
+- 2π tương ứng một vòng; sin²+cos² gần 1 trong sai số 1e-9.
+- Bộ mẫu khớp nghiệm độc lập, giữ 60 Hz qua nhiều chuỗi frame và không vượt 361.
+- Ảnh CPU có kim, cả hai hình chiếu và cả hai đồ thị cùng lúc.
+- Thử thủ công: nắm mép chấm, thả ngoài cửa sổ, Alt+Tab, resize, DPI 100%/200%, pause/reset, tốc độ 0/âm.
+- Ghi riêng kết quả build/CTest, smoke và desktop QA; không dùng một kết quả để thay cho cả ba.
+
+## Bài tập mở rộng
+
+Thêm xuất CSV lịch sử theo timestamp và kiểm bằng một chương trình độc lập. Hoặc thêm vận tốc góc thay đổi theo thời gian: khi đó phải đổi cả nghiệm tham chiếu và cách lấy mẫu, không chỉ thay UI.
+
+Project 07 kết thúc ở đây. [Project 08 — tháp pháo ngắm theo chuột](/projects/mouse-turret) sẽ dùng hướng và góc để quyết định một vật đang nhìn về đâu.

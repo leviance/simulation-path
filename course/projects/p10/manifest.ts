@@ -1,5 +1,4 @@
 import type { PublishedProjectEditorial } from "../../types";
-
 const project = {
   prerequisites: [
     "Project 04 — vẽ line trên framebuffer",
@@ -8,51 +7,56 @@ const project = {
     "Project 09 — local space và phép biến đổi",
   ],
   summary:
-    "Dựng một la bàn ba trục và một tam giác trong không gian, sau đó tự tính cross product để tìm vector pháp tuyến, diện tích và chiều quay của mặt.",
-  challenge: {
-    timebox: "150–210 phút",
-    mission:
-      "Tự xây dựng một mô phỏng SDL3 hiển thị ba trục X/Y/Z cùng một tam giác 3D có thể chỉnh sửa, rồi tính và vẽ vector pháp tuyến của tam giác từ chính ba đỉnh đó.",
-    outcome:
-      "Cửa sổ hiển thị la bàn 3D, tam giác ABC, hai cạnh AB và AC cùng vector normal xuất phát từ tâm tam giác. Người dùng có thể chọn từng đỉnh, di chuyển nó theo ba trục, đảo winding và quan sát diện tích hoặc trạng thái suy biến thay đổi ngay.",
-    requirements: [
-      "Tự xây dựng Vec3 cùng các phép cộng, trừ, nhân scalar, dot product, magnitude và normalize.",
-      "Vẽ ba trục X/Y/Z bằng một phép chiếu axonometric cố định chỉ dùng cho sơ đồ minh họa.",
-      "Lưu tam giác bằng ba đỉnh A, B, C và dựng hai vector cạnh AB=B−A, AC=C−A.",
-      "Tự cài đặt cross product đầy đủ ba thành phần và dùng cross(AB,AC) làm normal chưa chuẩn hóa.",
-      "Chuẩn hóa normal khi độ dài đủ lớn; không chia cho 0 khi ba đỉnh thẳng hàng hoặc trùng nhau.",
-      "Tính diện tích tam giác bằng một nửa độ dài của cross product.",
-      "Cho phép đảo B và C để quan sát winding đổi chiều normal nhưng không đổi diện tích.",
-      "Hỗ trợ reset, resize, chọn/kéo đỉnh và hiển thị tọa độ, normal, area cùng trạng thái front/back hoặc degenerate trên title bar.",
-    ],
-    constraints: [
-      "Không dùng GLM, Eigen, OpenGL, SDL_RenderGeometry hoặc hàm cross product có sẵn.",
-      "Các hàm toán học phải độc lập với SDL để CTest chạy mà không mở cửa sổ.",
-      "Phép chiếu trong project chỉ là cách vẽ sơ đồ axonometric; không được trình bày như perspective camera.",
-      "Normal phải luôn được tính lại từ vị trí ba đỉnh hiện tại, không lưu một vector normal dễ bị cũ dữ liệu.",
-    ],
-    definitionOfDone: [
-      "cross((1,0,0),(0,1,0)) trả (0,0,1) và vuông góc với cả hai vector đầu vào.",
-      "Tam giác vuông có cạnh 3 và 4 cho normal dài 12, unit normal dài 1 và diện tích 6.",
-      "Đổi thứ tự B,C làm normal đổi dấu nhưng diện tích không đổi trong sai số 10⁻⁹.",
-      "Ba điểm thẳng hàng được báo degenerate; chương trình không tạo NaN hoặc vẽ unit normal giả.",
-      "Kéo hoặc chỉnh một đỉnh làm cạnh, normal, diện tích và nhãn front/back cập nhật trong cùng frame.",
-      "CTest vượt qua; starter, sáu checkpoint và final build được ở Debug lẫn Release.",
-    ],
-  },
+    "Dựng một cảnh perspective với X/Y/Z, hai vector A/B, tam giác và normal. Tự viết Vec3, cross và mũi tên 3D; đổi camera, winding và tọa độ để kiểm hình học.",
   duration: "7–8 giờ",
   objectives: [
-    "Mở rộng tư duy vector từ hai lên ba thành phần mà không trộn point với pixel",
-    "Hiểu cross product qua hình học của hai cạnh và quy tắc bàn tay phải",
-    "Dùng độ dài, hướng và dấu của normal để kiểm tra diện tích, winding và tam giác suy biến",
+    "Nhìn thấy dữ liệu Vec3 qua camera perspective, không dùng sơ đồ axonometric thay thế",
+    "Tự suy hai cạnh, cross product và mũi tên 3D",
+    "Phân biệt raw cross, unit normal, diện tích và độ dài phóng đại khi vẽ",
+    "Dùng vị trí eye thật để đọc front/back/edge-on; không nhầm với occlusion hay culling",
+    "Xử lý suy biến có ngưỡng rõ ràng và kiểm bằng số biết trước, Heron, invariants",
   ],
+  challenge: {
+    timebox: "180–240 phút tự thử trước khi xem lời giải",
+    mission:
+      "Tự xây dựng một ứng dụng SDL3 có camera perspective hiển thị ba trục X/Y/Z, hai vector A=P1−P0 và B=P2−P0 cùng tam giác P0/P1/P2. Tự tính và vẽ cross vector, normal; đổi winding hoặc camera để kiểm hướng.",
+    outcome:
+      "Viewport có grid 3D, trục có nhãn, tam giác, vector A cam, B cyan, raw cross vàng từ P0 và unit normal tím từ centroid. Có điều khiển đỉnh/camera, preset, pause/reset và số đo không thay thế hình.",
+    requirements: [
+      "Tự viết Vec3, cộng/trừ/scale/dot/magnitude/normalize, cross và debug arrows 3D.",
+      "Perspective thật: world→camera rồi x/z,y/z; near/far clip đoạn trước khi chia, không dùng projectIsometric.",
+      "Ba đỉnh trong [-2,2] world; chọn P0/P1/P2, sửa X/Y/Z lúc chạy. Không sửa dữ liệu đỉnh khi orbit.",
+      "Vector A/B và tam giác cùng lấy từ state hiện tại; normal luôn tính lại, không lưu bản cũ.",
+      "Đảo P1/P2 làm cross đổi dấu, unit normal đổi hướng nhưng giữ diện tích.",
+      "Raw cross hiển thị dài min(0.2×|N|,2.2) world; unit normal vẽ 1.4 world. Đây là scale vẽ, không phải giá trị toán.",
+      "Normal không tin cậy nếu |cross|≤1e−10 world² hoặc sin(góc A,B)≤1e−6; UI báo undefined, không giả front/back.",
+      "Facing dùng normalize(eye−centroid), dấu dương gọi front theo quy ước này; edge-on nếu |facing|≤1e−6.",
+      "Camera orbit yaw/pitch/radius; chuột một owner, mẫu thả cuối, capture hủy khi blur/hidden/resize/reset/preset/winding/pause.",
+      "Bảng logic 1100×800, letterbox và HiDPI; đổi input qua SDL đúng một lần; Canvas dùng cùng công thức.",
+      "Có preset 3–4, thẳng hàng, hai đỉnh trùng, gần thẳng hàng; auto orbit có dt clamp, pause và manual step.",
+    ],
+    constraints: [
+      "Không GLM/Eigen/OpenGL/engine hoặc cross có sẵn. SDL chỉ window/input/timing/presentation/chữ ASCII.",
+      "Đây là wireframe debug view, chưa có hidden-surface removal, lighting hoặc backface culling.",
+      "Các ngưỡng là chính sách editor trong miền hữu hạn, không hứa xử lý mọi double tùy ý.",
+      "Canvas hỗ trợ bài học, không thay executable C++ hoàn chỉnh.",
+    ],
+    definitionOfDone: [
+      "X×Y=Z, Y×X=−Z; N vuông góc cả hai vector trong sai số.",
+      "Tam giác cạnh 3–4 có |cross|=12, unit length=1, area=6; đối chiếu diện tích bằng Heron độc lập.",
+      "Winding đảo normal nhưng không đổi camera hoặc area; orbit đổi facing nhưng không sửa vertices.",
+      "Điểm xa có độ lệch screen nhỏ hơn ở cùng camera XY; clip near/far giữ đoạn cắt mặt phẳng.",
+      "Degenerate/near-collinear không vẽ normal giả; measured area nhỏ vẫn giữ, không ép về 0.",
+      "Starter, bảy checkpoint, final và tests build Debug/Release; CTest active dưới NDEBUG.",
+      "QA desktop riêng: mouse/keyboard, resize, DPI, mất focus, thả ngoài; hidden smoke không thay bước đó.",
+    ],
+  },
   lessons: [
     {
       id: "p10-l01",
       slug: "01-vec3-va-la-ban-ba-truc",
-      title: "Từ Vec2 đến Vec3 và la bàn ba trục",
-      summary:
-        "Tạo Vec3, giữ dữ liệu trong không gian và dùng một phép chiếu axonometric cố định để vẽ ba trục lên framebuffer.",
+      title: "Dựng ba trục trong một cảnh perspective",
+      summary: "Tạo Vec3, chiếu điểm theo độ sâu và vẽ la bàn X/Y/Z.",
       order: 1,
       estimatedMinutes: 55,
       demoId: "normal",
@@ -60,19 +64,17 @@ const project = {
     {
       id: "p10-l02",
       slug: "02-tam-giac-va-hai-vector-canh",
-      title: "Dựng tam giác và hai vector cạnh",
-      summary:
-        "Lưu ba đỉnh ABC, tính AB và AC bằng phép trừ rồi thêm thao tác chọn, kéo và chỉnh từng tọa độ.",
+      title: "Vẽ tam giác và hai vector cạnh",
+      summary: "Tạo P0/P1/P2, suy vector A và B rồi chỉnh từng tọa độ.",
       order: 2,
-      estimatedMinutes: 60,
+      estimatedMinutes: 55,
       demoId: "normal",
     },
     {
       id: "p10-l03",
       slug: "03-cross-product-va-raw-normal",
-      title: "Tính cross product và raw normal",
-      summary:
-        "Tự viết công thức ba thành phần, dựng normal từ AB×AC và kiểm tra nó vuông góc với cả hai cạnh.",
+      title: "Tự tính và vẽ cross product",
+      summary: "Dự đoán hướng bằng tay phải, viết ba thành phần và vẽ mũi tên 3D.",
       order: 3,
       estimatedMinutes: 60,
       demoId: "normal",
@@ -80,9 +82,8 @@ const project = {
     {
       id: "p10-l04",
       slug: "04-unit-normal-va-dien-tich",
-      title: "Chuẩn hóa normal và đo diện tích",
-      summary:
-        "Tách hướng khỏi độ lớn, vẽ mũi tên có chiều dài ổn định và đọc diện tích từ độ dài raw normal.",
+      title: "Tách hướng normal khỏi diện tích",
+      summary: "So raw cross với unit normal và kiểm bằng tam giác 3–4.",
       order: 4,
       estimatedMinutes: 55,
       demoId: "normal",
@@ -90,24 +91,30 @@ const project = {
     {
       id: "p10-l05",
       slug: "05-winding-va-quy-tac-ban-tay-phai",
-      title: "Winding và quy tắc bàn tay phải",
-      summary:
-        "Đảo thứ tự B,C để thấy normal đổi hướng, sau đó dùng dot product phân biệt mặt đang hướng về hay quay khỏi người xem.",
+      title: "Đảo winding và đọc mặt theo camera",
+      summary: "Đổi P1/P2, giữ diện tích và phân biệt front/back/edge-on.",
       order: 5,
       estimatedMinutes: 55,
       demoId: "normal",
     },
     {
       id: "p10-l06",
-      slug: "06-tam-giac-suy-bien-va-validation",
-      title: "Tam giác suy biến và kiểm chứng",
-      summary:
-        "Xử lý trường hợp cross gần zero, thêm preset phá lỗi và dùng CTest để xác nhận toàn bộ bản hoàn chỉnh.",
+      slug: "06-camera-perspective-va-input",
+      title: "Xoay camera và xử lý input an toàn",
+      summary: "Orbit giữ điểm nắm, letterbox/HiDPI, near/far clipping và pause.",
       order: 6,
-      estimatedMinutes: 60,
+      estimatedMinutes: 65,
+      demoId: "normal",
+    },
+    {
+      id: "p10-l07",
+      slug: "07-suy-bien-va-kiem-chung",
+      title: "Hoàn thiện la bàn và kiểm chứng",
+      summary: "Phân biệt zero/gần thẳng hàng, kiểm hình học độc lập và chạy bản đầy đủ.",
+      order: 7,
+      estimatedMinutes: 65,
       demoId: "normal",
     },
   ],
 } satisfies PublishedProjectEditorial;
-
 export default project;

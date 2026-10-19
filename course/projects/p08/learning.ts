@@ -3,151 +3,154 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p08-l01": {
-      focus:
-        "Bắt đầu từ cửa sổ, framebuffer và hệ trục đã chạy được; thêm kiểu Vec2, thân tháp pháo, nòng súng cố định và mục tiêu lấy vị trí trực tiếp từ chuột.",
+      focus: "Chạy starter, vẽ thân/nòng, đổi mouse sang world và hiện hai hướng.",
       expected:
-        "Tháp pháo nằm giữa cửa sổ, nòng súng hướng sang phải và mục tiêu đi theo chuột. Kéo resize vẫn giữ tháp pháo ở tâm và phép đổi trục Y không bị đảo ngược.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chạy checkpoint 01 rồi đối chiếu hình, số và thí nghiệm trong bài; bản final có đủ các lớp cùng lúc.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Giữ dữ liệu trong world space",
+          title: "Chạy starter trước",
           explanation:
-            "targetOffset là độ dời từ tâm tháp pháo tới chuột, với X hướng sang phải và Y hướng lên. Tọa độ pixel chỉ được tạo ra ở bước vẽ.",
+            "Bảng có grid, trục và miền thao tác. Khi nó đã chạy, thêm state rồi mới vẽ thân/nòng.",
         },
         {
-          title: "Suy hướng nòng từ một góc",
+          title: "Giữ target trong world",
           explanation:
-            "directionFromAngle trả `(cos(angle), sin(angle))`. Nhân hướng đơn vị này với chiều dài nòng rồi mới đổi sang screen space.",
+            "screenToWorld đảo Y đúng một lần; boundedTarget giới hạn miền input, không làm thay phép ngắm.",
         },
         {
-          title: "Vẽ đủ cảnh trước khi thêm toán",
+          title: "Bật input và vẽ hai hướng",
           explanation:
-            "Checkpoint đầu phải nhìn thấy được tháp pháo, đường nối và mục tiêu. Nhờ vậy các bài sau chỉ thêm một câu hỏi toán học vào một chương trình đã quan sát được.",
+            "Mouse hover mặc định đặt target; forward và target direction có cùng chiều dài hiển thị để so hướng.",
         },
       ],
     },
     "p08-l02": {
-      focus:
-        "Tự cài đặt dot product và so sánh kết quả thô với kết quả sau khi chuẩn hóa để đo mức độ cùng hướng của nòng súng và mục tiêu.",
+      focus: "So raw dot với normalized dot bằng các hướng và khoảng cách biết trước.",
       expected:
-        "Thanh tiêu đề cho thấy normalized dot gần 1 khi mục tiêu ở phía trước, gần 0 khi nằm vuông góc và gần -1 khi ở phía sau; thay đổi khoảng cách không làm giá trị này đổi.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chạy checkpoint 02 rồi đối chiếu hình, số và thí nghiệm trong bài; bản final có đủ các lớp cùng lúc.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Nhân các thành phần tương ứng",
+          title: "Viết dot theo thành phần",
           explanation:
-            "dot(left,right) bằng left.x×right.x + left.y×right.y. Kết quả là một số, không phải một vector mới.",
+            "Kết quả là scalar; khi forward có độ dài 1, raw dot đo thành phần target dọc forward.",
         },
         {
-          title: "Nhận ra độ dài có trong dot thô",
-          explanation:
-            "Hai vector cùng hướng nhưng dài gấp đôi sẽ làm dot thô đổi. Vì bài toán cần so hướng, cả hai vector phải có độ dài 1.",
+          title: "Bỏ ảnh hưởng độ dài",
+          explanation: "Normalize riêng hai vector trước khi dot để tránh tích độ dài overflow.",
         },
         {
-          title: "Đối chiếu ba mốc",
-          explanation:
-            "Hai hướng đơn vị cùng chiều, vuông góc và ngược chiều tạo ra các giá trị lần lượt 1, 0 và -1.",
+          title: "Thử cùng/vuông/ngược",
+          explanation: "Đổi preset gần/xa cùng hướng để thấy normalized dot không đổi.",
         },
       ],
     },
     "p08-l03": {
-      focus:
-        "Dùng công thức dot = |a||b|cos(theta) để suy góc không dấu, đồng thời xử lý zero vector và sai số khiến cosine vượt nhẹ khỏi [-1,1].",
+      focus: "Dùng acos, clamp và phân biệt góc đo được với trường hợp chưa có hướng.",
       expected:
-        "Góc hiển thị nằm trong [0°,180°], đúng tại các preset 0°, 90° và 180°. Đưa mục tiêu vào tâm không làm xuất hiện NaN hay khiến chương trình lỗi.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chạy checkpoint 03 rồi đối chiếu hình, số và thí nghiệm trong bài; bản final có đủ các lớp cùng lúc.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Chia bỏ hai độ dài",
-          explanation:
-            "cosineBetween lấy dot chia cho tích độ dài của hai vector. Khi một vector không có hướng, hàm trả 0 theo quy ước an toàn của project.",
+          title: "Suy góc từ cosine",
+          explanation: "acos trả [0,π], chưa cho biết cần quay trái hay phải.",
         },
         {
-          title: "Chặn trước khi gọi acos",
-          explanation:
-            "Sai số số thực có thể tạo 1.0000000000000002; clampCosine đưa giá trị về miền hợp lệ của acos.",
+          title: "Giữ đầu vào trong miền",
+          explanation: "Clamp cosine vì sai số floating point có thể đưa nó hơi ra ngoài [-1,1].",
         },
         {
-          title: "Hiểu giới hạn của góc không dấu",
+          title: "Không gán nghĩa cho fallback",
           explanation:
-            "acos chỉ trả góc từ 0 tới π. Nó cho biết lệch bao nhiêu, nhưng chưa cho biết nên quay trái hay quay phải.",
+            "Hàm toán trả 0 khi thiếu hướng; UI phải ghi không xác định, không coi đó là góc đã ngắm đúng.",
         },
       ],
     },
     "p08-l04": {
-      focus:
-        "Tách vector từ tháp pháo tới mục tiêu thành phần song song với nòng súng và phần còn lại vuông góc với nòng.",
+      focus: "Tách projection và rejection, kiểm dấu và tính vuông góc.",
       expected:
-        "Mũi tên xanh nằm trên trục nòng súng; đoạn đỏ nối đầu projection với mục tiêu. Hai phần cộng lại đúng targetOffset và dot của chúng gần bằng 0.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chạy checkpoint 04 rồi đối chiếu hình, số và thí nghiệm trong bài; bản final có đủ các lớp cùng lúc.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Lấy khoảng cách có dấu dọc theo trục",
+          title: "Chiếu lên hướng đơn vị",
           explanation:
-            "scalarProjection bằng dot(vector, unitAxis). Giá trị âm cho biết mục tiêu nằm phía sau hướng nòng.",
+            "Scalar projection có dấu; vector projection dùng cùng đơn vị world với targetOffset.",
         },
         {
-          title: "Biến scalar thành vector",
+          title: "Tách phần còn lại",
           explanation:
-            "Nhân unitAxis với scalar projection để nhận một vector thực sự nằm trên hướng nòng súng.",
+            "Rejection bằng vector ban đầu trừ projection, vẽ từ điểm chiếu tới mục tiêu.",
         },
         {
-          title: "Lấy phần lệch còn lại",
-          explanation:
-            "rejection = vector − projection. Độ dài của rejection chính là khoảng cách vuông góc từ mục tiêu tới đường ngắm vô hạn.",
+          title: "Kiểm bằng hai cách",
+          explanation: "Khôi phục vector và kiểm vuông góc; thêm oracle dùng axis chưa normalize.",
         },
       ],
     },
     "p08-l05": {
-      focus:
-        "Bổ sung dấu cho góc bằng cross product 2D, rồi viết rotateTowards để nòng súng quay theo tốc độ hữu hạn và delta time mà không vượt qua mục tiêu.",
+      focus: "Tự viết crossZ, signed angle và steering không vượt mục tiêu.",
       expected:
-        "Nòng súng chọn đúng chiều quay ngắn nhất, không giật thẳng tới chuột và không rung khi gần chạm hướng đích. Space, phím lên/xuống và R hoạt động đúng.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chạy checkpoint 05 rồi đối chiếu hình, số và thí nghiệm trong bài; bản final có đủ các lớp cùng lúc.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đọc dấu của crossZ",
-          explanation:
-            "crossZ(from,to) dương nghĩa là to nằm ngược chiều kim đồng hồ so với from; âm nghĩa là quay theo chiều kim đồng hồ.",
+          title: "Dấu cross chọn chiều",
+          explanation: "Trong world Y lên, cross dương nghĩa quay ngược kim đồng hồ.",
         },
         {
-          title: "Lấy góc có dấu bằng atan2",
-          explanation:
-            "atan2(cross,dot) kết hợp cả độ lệch và phía của mục tiêu, trả góc ngắn nhất trong [-π,π].",
+          title: "atan2 giữ cả dấu lẫn độ lớn",
+          explanation: "Góc có dấu nằm trong [-π,π]; đúng đối nhau thì chọn chiều dương có chủ ý.",
         },
         {
           title: "Giới hạn bước quay",
           explanation:
-            "maximumStep = turnSpeed×deltaTime. Clamp sai số góc vào [-maximumStep,maximumStep] giúp giữ tốc độ và tự dừng đúng tại mục tiêu.",
+            "Clamp sai số vào ±turnSpeed×deltaTime, không dùng một hệ số lerp tùy frame.",
         },
       ],
     },
     "p08-l06": {
-      focus:
-        "Dùng normalized dot để kiểm tra vùng khóa, hoàn thiện các điều khiển và xác nhận mọi bất biến toán học bằng CTest cùng bản final.",
+      focus: "Dùng nửa góc, xử lý hai biên và nói rõ phép kiểm tra chỉ xét góc.",
       expected:
-        "Hai cạnh vùng khóa đi theo nòng súng; mục tiêu đổi xanh đúng khi angleError không vượt halfViewAngle. Tất cả tests qua ở Debug và Release, bản final chạy đủ pause/reset/resize.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Chạy checkpoint 06 rồi đối chiếu hình, số và thí nghiệm trong bài; bản final có đủ các lớp cùng lúc.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "So cosine thay vì gọi acos mỗi frame",
-          explanation:
-            "Trong khoảng [0,π], góc càng nhỏ thì cosine càng lớn. Vì vậy `cosineBetween >= cos(halfAngle)` tương đương mục tiêu nằm trong cone.",
+          title: "Dùng nửa góc",
+          explanation: "Vùng đối xứng quanh forward có tổng độ mở gấp đôi halfViewAngle.",
         },
         {
-          title: "Chặn tham số vùng nhìn",
+          title: "Xét cả hai biên",
           explanation:
-            "halfAngle được giữ trong [0,π]; zero vector và giá trị không hữu hạn đều bị từ chối thay vì vô tình khóa mục tiêu.",
+            "Normalized dot không mang dấu trái/phải nhưng đủ cho phép kiểm vùng đối xứng.",
         },
         {
-          title: "Kiểm tra các đẳng thức cấu trúc",
+          title: "Nêu đúng phạm vi",
           explanation:
-            "Tests không chỉ so vài ảnh mẫu: projection+rejection phải khôi phục vector, hai phần phải vuông góc và mỗi bước quay phải tuân thủ giới hạn.",
+            "Đây chỉ là phép kiểm góc; vòng tròn 6.5 là miền thao tác, không phải range hay occlusion.",
+        },
+      ],
+    },
+    "p08-l07": {
+      focus: "Ghép bản đầy đủ, kiểm bằng oracle độc lập và thử input/HiDPI.",
+      expected:
+        "Chạy checkpoint 07 rồi đối chiếu hình, số và thí nghiệm trong bài; bản final có đủ các lớp cùng lúc.",
+      files: ["tests/tests.cpp", "src/main.cpp", "include/presentation.hpp"],
+      steps: [
+        {
+          title: "Dùng dữ kiện độc lập",
+          explanation:
+            "Dot/cardinal fixtures, projection trên axis chưa normalize và remainder cho steering.",
         },
         {
-          title: "Chạy lại bản hoàn chỉnh",
+          title: "Kiểm hình thật",
+          explanation: "Render vào framebuffer rồi kiểm pixel của thân/nòng và các lớp vector.",
+        },
+        {
+          title: "Chạy đầy đủ nhưng có giới hạn",
           explanation:
-            "Sau CTest, build target project_8_final ở cả Debug và Release rồi kiểm tra chuột, phím, pause, reset và resize trực tiếp.",
+            "Build tối đa hai compiler; CTest và smoke có timeout; browser/desktop QA làm riêng.",
         },
       ],
     },
@@ -155,24 +158,14 @@ const learning = {
   references: {
     "p08-l01": [
       {
-        label: "SDL_MouseMotionEvent",
-        href: "https://wiki.libsdl.org/SDL3/SDL_MouseMotionEvent",
-        kind: "SDL API",
-      },
-      {
-        label: "Vector 2D",
-        href: "/glossary#vector-2d",
-        kind: "Thuật ngữ",
-      },
-      {
         label: "World space",
         href: "/glossary#world-space",
         kind: "Thuật ngữ",
       },
       {
-        label: "Screen space",
-        href: "/glossary#screen-space",
-        kind: "Thuật ngữ",
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
       },
     ],
     "p08-l02": [
@@ -181,31 +174,11 @@ const learning = {
         href: "/glossary#dot-product",
         kind: "Thuật ngữ",
       },
-      {
-        label: "Normalization",
-        href: "/glossary#normalization",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Zero vector",
-        href: "/glossary#zero-vector",
-        kind: "Thuật ngữ",
-      },
     ],
     "p08-l03": [
       {
-        label: "Dot product",
-        href: "/glossary#dot-product",
-        kind: "Thuật ngữ",
-      },
-      {
         label: "Angle between",
         href: "/glossary#angle-between",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Normalization",
-        href: "/glossary#normalization",
         kind: "Thuật ngữ",
       },
     ],
@@ -215,59 +188,31 @@ const learning = {
         href: "/glossary#vector-projection",
         kind: "Thuật ngữ",
       },
-      {
-        label: "Dot product",
-        href: "/glossary#dot-product",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Zero vector",
-        href: "/glossary#zero-vector",
-        kind: "Thuật ngữ",
-      },
     ],
     "p08-l05": [
-      {
-        label: "SDL_GetTicks",
-        href: "https://wiki.libsdl.org/SDL3/SDL_GetTicks",
-        kind: "SDL API",
-      },
       {
         label: "2D cross product",
         href: "/glossary#cross-product-2d",
         kind: "Thuật ngữ",
       },
-      {
-        label: "atan2",
-        href: "/glossary#atan2",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Delta time",
-        href: "/glossary#delta-time",
-        kind: "Thuật ngữ",
-      },
     ],
     "p08-l06": [
-      {
-        label: "CTest command-line reference",
-        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
-        kind: "CMake",
-      },
       {
         label: "View cone",
         href: "/glossary#view-cone",
         kind: "Thuật ngữ",
       },
+    ],
+    "p08-l07": [
       {
-        label: "Dot product",
-        href: "/glossary#dot-product",
+        label: "Round-trip test",
+        href: "/glossary#round-trip-test",
         kind: "Thuật ngữ",
       },
       {
-        label: "Invariant",
-        href: "/glossary#invariant",
-        kind: "Thuật ngữ",
+        label: "CTest command-line reference",
+        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
+        kind: "CMake",
       },
     ],
   },

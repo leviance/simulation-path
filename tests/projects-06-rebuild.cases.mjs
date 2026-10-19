@@ -84,6 +84,25 @@ test("Project 06 rebuild separates geometry, input, arithmetic, units and interp
 });
 
 test("Project 06 rebuild exports the entire runnable project and keeps required results in final Canvas", async () => {
+  const references = [
+    ["01-vec2-va-do-doi", "vector-2d", "Vector 2D"],
+    ["02-magnitude-va-arrow-head", "magnitude", "Magnitude"],
+    ["03-keo-endpoint", "pointer-capture", "Pointer capture"],
+    ["04-cong-tru-vector", "vector-addition", "Vector addition"],
+    ["05-hieu-vector", "vector-subtraction", "Vector subtraction"],
+    ["06-scalar-va-distance", "distance", "Distance"],
+    ["07-vector-don-vi", "normalization", "Normalization"],
+    ["08-lerp-va-validation", "linear-interpolation", "Linear interpolation"],
+  ];
+  for (const [slug, anchor, label] of references) {
+    const response = await render("/projects/vector-playground/" + slug);
+    assert.equal(response.status, 200, slug);
+    assert.match(
+      await response.text(),
+      new RegExp('href="/glossary#' + anchor + '"[^>]*>' + label + "</a>"),
+      slug + " glossary reference",
+    );
+  }
   const html = await (await render("/projects/vector-playground/08-lerp-va-validation")).text();
   assert.match(html, /Toàn bộ mã nguồn của dự án/);
   for (const file of [

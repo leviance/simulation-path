@@ -1,205 +1,263 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
 const learning = {
   guides: {
     "p11-l01": {
-      focus:
-        "Bắt đầu từ cửa sổ và framebuffer đã chạy được; thêm Vec3, marker có hình dạng dễ nhận biết, bản xem trước X/Y và input riêng cho cả ba tọa độ.",
+      focus: "Dựng marker trên framebuffer, rồi nối WASD/QE với world point bằng delta time.",
       expected:
-        "Một điểm sáng có viền, tâm và hai nét chữ thập xuất hiện trên lưới. Arrows đổi X/Y, Q/E đổi Z trên title bar; source chưa giả vờ rằng bản xem trước này là perspective.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Vẽ điểm sáng và điều khiển ba tọa độ; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tạo dữ liệu Vec3 trước khi nghĩ tới camera",
-          explanation:
-            "worldPoint giữ X/Y/Z theo world unit. Hàm vẽ chỉ nhận một Vec2 tạm nên không làm mất thành phần Z của dữ liệu gốc.",
+          title: "Giữ ba tọa độ trước khi vẽ",
+          explanation: "Tạo Vec3 và Scene; chỉ hàm preview tạm bỏ qua Z, không sửa dữ liệu world.",
         },
         {
-          title: "Vẽ một marker đủ rõ để gỡ lỗi",
+          title: "Vẽ marker từ các pixel",
           explanation:
-            "Hai circle và hai đường chữ thập dễ nhìn hơn một pixel đơn. Ta có thể xác nhận framebuffer, tọa độ tâm và resize trước khi công thức projection xuất hiện.",
+            "Tâm sáng, đĩa xanh và crosshair được clip vào viewport; nối renderScene với SDL_UpdateTexture.",
         },
         {
-          title: "Nối input với đúng thành phần",
+          title: "Giữ phím theo thời gian",
           explanation:
-            "Arrows sửa X/Y còn Q/E sửa Z. Ở checkpoint này Z chỉ hiện trên title; đó là bằng chứng dữ liệu 3D hoạt động dù hình vẽ tạm chưa dùng depth.",
+            "Đọc scancode sau PollEvent, normalize direction và nhân speed×dt; di chuyển tay dừng quỹ đạo.",
         },
       ],
     },
     "p11-l02": {
-      focus:
-        "Thêm Camera3D và cặp hàm worldToCamera/cameraToWorld; di chuyển camera bằng WASD/Z/X rồi dùng cameraPoint cho bản xem trước.",
-      expected:
-        "worldPoint đứng yên nhưng cameraPoint đổi ngược chiều khi camera di chuyển. Camera tiến +1 theo X làm cameraPoint.x giảm đúng 1.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Giữ world point riêng và đổi gốc tọa độ bằng vị trí camera.",
+      expected: "Đặt camera vào không gian; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Giữ world point và camera point thành hai biến",
+          title: "Đặt camera và chiều nhìn",
           explanation:
-            "worldPoint là vị trí trong scene; cameraPoint trả lời point nằm đâu so với camera. Ghi đè biến đầu tiên sẽ làm camera movement tích lũy sai.",
+            "Camera ở position, nhìn +Z và chưa xoay; không dùng ngầm basis orbit của P10.",
         },
         {
-          title: "Đổi gốc bằng một phép trừ",
+          title: "Trừ vị trí camera",
           explanation:
-            "Camera của project này chưa xoay, nên worldToCamera chỉ cần worldPoint−camera.position. Dấu trừ giải thích vì sao camera đi phải làm scene trượt trái.",
+            "worldToCamera đổi gốc, không ghi đè scene.point; camera đi phải làm điểm đi trái trong preview.",
         },
         {
-          title: "Viết luôn phép đổi ngược",
-          explanation:
-            "cameraToWorld cộng lại camera.position. Cặp hàm đối xứng vừa giúp preset/drag ở bài sau, vừa tạo được round-trip test rõ ràng.",
+          title: "Viết cặp hàm đổi ngược",
+          explanation: "cameraToWorld cộng lại vị trí; ví dụ số kiểm được từng thành phần.",
         },
       ],
     },
     "p11-l03": {
-      focus:
-        "Suy perspectiveDivide từ hai cặp tam giác đồng dạng, thay bản xem trước song song bằng x/z và y/z rồi quan sát depth làm thay đổi độ lệch.",
+      focus: "Từ tam giác đồng dạng đến x/z, y/z và một cảnh lưới có chiều sâu thật.",
       expected:
-        "Giữ X/Y và tăng Z gấp đôi làm marker gần tâm đúng một nửa. Điểm chưa bị biến thành pixel cho tới sau khi perspective divide hoàn tất.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Vì sao điểm ở xa tiến về tâm?; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đặt mặt phẳng ảnh ở depth bằng 1",
-          explanation:
-            "Tia từ camera qua point cắt mặt phẳng này. Tam giác nhỏ và tam giác chứa point có cùng góc, nên tỉ lệ ngang là x′/1=x/z.",
+          title: "Suy hai tỉ lệ từ tam giác đồng dạng",
+          explanation: "Mặt phẳng ảnh tạm ở Z=1 cho x′=x/z và y′=y/z.",
         },
         {
-          title: "Chia cả X lẫn Y cho cùng depth",
+          title: "Chặn depth rồi mới chia",
           explanation:
-            "perspectiveDivide trả Vec2 `(x/z,y/z)`. Z càng lớn thì cả hai độ lệch càng nhỏ; đây chính là cảm giác vật ở xa tiến về tâm.",
+            "Guard near/far đã đi cùng helper để checkpoint không nổ số; bài 5 sẽ giải thích các nhánh.",
         },
         {
-          title: "Giữ focal length xem trước tách khỏi phép chia",
+          title: "Chiếu cả nền và điểm",
           explanation:
-            "Checkpoint 3 nhân kết quả với một số pixel tạm để nhìn thấy marker. Bài sau mới thay con số này bằng focal scale suy từ FOV.",
+            "line3D clip near/far rồi screen, lưới cùng camera với marker nên depth không chỉ là kích thước đĩa.",
         },
       ],
     },
     "p11-l04": {
-      focus:
-        "Dùng vertical FOV để tính focal scale, xét aspect ratio, tạo NDC rồi đổi NDC sang pixel với quy ước trục Y của màn hình.",
+      focus: "Tự tính focal scale, NDC và pixel; đổi aspect mà không kéo méo cảnh.",
       expected:
-        "Point trên trục nhìn nằm đúng tâm sau resize. FOV rộng hơn đưa marker gần tâm hơn; NDC (−1,+1) tới góc trên trái và (+1,−1) tới góc dưới phải.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chọn FOV và hình dạng viewport; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Suy focal scale từ nửa FOV",
+          title: "Từ nửa góc đến focal scale",
           explanation:
-            "Ở cạnh trên của khung nhìn, tan(FOV/2)=1/focalScale. Vì vậy focalScale=1/tan(FOV/2), không phải một magic number theo pixel.",
+            "f=1/tan(vFOV/2), focalPixels=height×f/2; con số tạm bài 3 được thay bằng lens thật.",
         },
         {
-          title: "Chuẩn hóa X theo aspect ratio",
+          title: "Đưa camera point về NDC",
           explanation:
-            "FOV được chọn theo chiều dọc. Viewport rộng hơn chứa nhiều không gian ngang hơn, nên ndc.x phải chia thêm width/height để hình không bị kéo ngang.",
+            "X chia thêm aspect=width/height, Y không chia aspect vì đây là vertical FOV.",
         },
         {
-          title: "Đổi NDC sang pixel ở bước cuối",
-          explanation:
-            "NDC dùng tâm (0,0), còn framebuffer dùng góc trên trái và Y hướng xuống. ndcToScreen vừa scale nửa kích thước vừa đảo dấu Y.",
+          title: "Đổi NDC sang screen liên tục",
+          explanation: "Viewport có origin riêng; +1 là cạnh phải, không phải chỉ số pixel hợp lệ.",
         },
       ],
     },
     "p11-l05": {
-      focus:
-        "Gói pipeline trong ProjectionResult và phân loại behind, before-near, outside, visible theo đúng thứ tự trước khi vẽ marker.",
+      focus: "Phân biệt behind, near, far, outside và invalid trước khi vẽ.",
       expected:
-        "Bốn preset cho bốn nhãn khác nhau; point không visible không ghi marker. Đưa Z qua 0 không tạo NaN hoặc số pixel cực lớn.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chặn điểm không thể nhìn thấy; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Chặn Z không dương trước phép chia",
+          title: "Phân loại trước phép chia",
           explanation:
-            "Point sau camera không có ảnh hợp lệ trong mô hình này. Kiểm tra cameraPoint.z≤0 phải chạy trước cameraToNdc để tránh chia cho zero hoặc đảo hình.",
+            "Invalid, behind, before-near, beyond-far trả screen/NDC trống; chỉ depth hợp lệ đi tiếp.",
         },
         {
-          title: "Dành một vùng an toàn bằng near plane",
+          title: "Phân biệt ngoài góc nhìn và ngoài depth",
           explanation:
-            "Ngay trước camera, x/z tăng quá nhanh và rất nhạy với sai số. Near plane loại bỏ vùng 0<Z<near trước khi projection xảy ra.",
+            "Outside vẫn có số chiếu hữu hạn, nhưng marker không vẽ; không clamp điểm đó vào cạnh.",
         },
         {
-          title: "Kiểm tra frustum trong NDC",
+          title: "Cắt đoạn khác loại bỏ điểm",
           explanation:
-            "Sau khi chia an toàn, point chỉ nằm trong viewport nếu |ndc.x|≤1 và |ndc.y|≤1. Screen pixel ngoài khung không được xem là visible.",
+            "Lưới cắt đoạn ở giao điểm near/far, rồi mới chiếu và clip screen để Bresenham có công việc hữu hạn.",
         },
       ],
     },
     "p11-l06": {
-      focus:
-        "Cho point bay bằng elapsed time, thêm pause/step/drag với phép đổi ngược ở depth cố định và khóa các tính chất projection bằng CTest.",
+      focus: "Tách điều khiển tay khỏi quỹ đạo thời gian, không để hai nguồn input tranh nhau.",
       expected:
-        "Quỹ đạo không phụ thuộc FPS, kéo chuột giữ nguyên depth, round-trip error dưới 10⁻⁹ và starter/sáu checkpoint/final build ở Debug lẫn Release.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Cho điểm bay, dừng và bước từng nhịp; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tính quỹ đạo từ elapsed time",
+          title: "Tách hai nguồn điều khiển",
           explanation:
-            "flightPoint là hàm thuần của thời gian, không cộng một quãng đường cố định mỗi frame. advanceFlightTime chặn dt trong [0,0.1] để debugger không làm point nhảy xa.",
+            "WASD/QE dịch điểm hiện tại; quỹ đạo là hàm vị trí tuyệt đối của elapsed, không cộng dồn delta vào point.",
         },
         {
-          title: "Đổi pixel ngược về một depth đã biết",
+          title: "Chạy bằng elapsed time",
           explanation:
-            "Một pixel đơn lẻ không xác định được vị trí 3D duy nhất. Khi giữ cameraDepth hiện tại, ta đảo NDC và focal scale để tìm lại X/Y rồi cộng camera.position.",
+            "flightPoint dùng sin/cos để depth đi từ 2 đến 10; advanceFlightTime giới hạn dt và bỏ nonfinite.",
         },
         {
-          title: "Kiểm tra từng invariant không cần SDL",
+          title: "Dừng và kiểm từng nhịp",
           explanation:
-            "Tests khóa tâm viewport, quy luật gấp đôi depth, ảnh hưởng của FOV, bốn status, NDC round trip, inverse tại depth cố định và dt clamp.",
+            "Space chỉ toggle một lần, N tiến 0.1s khi paused, reset/preset đưa scene về trạng thái tái lập.",
+        },
+      ],
+    },
+    "p11-l07": {
+      focus: "Đảo phép chiếu tại một độ sâu đã biết và quản lý pointer capture đúng chủ sở hữu.",
+      expected:
+        "Kéo điểm mà không làm mất depth; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Một pixel chỉ cho một tia",
+          explanation: "Giữ cameraDepth rồi đảo NDC và focal để chọn duy nhất một camera point.",
         },
         {
-          title: "Chạy bản hoàn chỉnh",
+          title: "Giữ chỗ nắm và chủ sở hữu",
           explanation:
-            "Sau CTest, mở project_11_final; thử camera, FOV, near plane, bốn preset, pause/step, drag, resize và reset trước khi kết thúc project.",
+            "Hit-test gần marker, lưu offset/depth/mouse ID, nhận delta qua tọa độ logic đã đổi đúng một lần.",
+        },
+        {
+          title: "Kết thúc cả khi ra ngoài",
+          explanation:
+            "Up nhận mẫu cuối; lost capture/blur/resize/input thay đổi hủy drag và không để inverse dùng lens cũ.",
+        },
+      ],
+    },
+    "p11-l08": {
+      focus: "Tắt debug để xem cảnh sạch; kiểm tra bằng nghiệm tính tay, biên và mã hoàn chỉnh.",
+      expected:
+        "Hoàn thiện demo và kiểm chứng; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Tạo bản xem sạch",
+          explanation:
+            "F tắt HUD, axes và crosshair, giữ lưới và khung world để vẫn thấy perspective.",
+        },
+        {
+          title: "Dùng expected không sinh từ hàm cần kiểm",
+          explanation:
+            "FOV 90° và viewport có origin cho pixel tính tay; round-trip chỉ là phép kiểm bổ sung.",
+        },
+        {
+          title: "Build toàn bộ rồi chạy CTest",
+          explanation:
+            "Tám checkpoint có sản phẩm tăng dần; Debug/Release đều chạy explicit check, không dùng assert bị NDEBUG tắt.",
         },
       ],
     },
   },
   references: {
     "p11-l01": [
-      { label: "Vector 3D", href: "/glossary#vector-3d", kind: "Thuật ngữ" },
-      { label: "Framebuffer", href: "/glossary#framebuffer", kind: "Thuật ngữ" },
-      { label: "World space", href: "/glossary#world-space", kind: "Thuật ngữ" },
+      {
+        label: "Vector 3D",
+        href: "/glossary#vector-3d",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "SDL_GetKeyboardState",
+        href: "https://wiki.libsdl.org/SDL3/SDL_GetKeyboardState",
+        kind: "SDL API",
+      },
     ],
     "p11-l02": [
-      { label: "Camera space", href: "/glossary#camera-space", kind: "Thuật ngữ" },
-      { label: "Vector subtraction", href: "/glossary#vector-subtraction", kind: "Thuật ngữ" },
-      { label: "Round-trip test", href: "/glossary#round-trip-test", kind: "Thuật ngữ" },
+      {
+        label: "Camera space",
+        href: "/glossary#camera-space",
+        kind: "Thuật ngữ",
+      },
     ],
     "p11-l03": [
+      {
+        label: "Similar triangles",
+        href: "/glossary#similar-triangles",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p11-l04": [
+      {
+        label: "Field of view",
+        href: "/glossary#field-of-view",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p11-l05": [
+      {
+        label: "Near plane",
+        href: "/glossary#near-plane",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p11-l06": [
+      {
+        label: "Variable timestep",
+        href: "/glossary#variable-timestep",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p11-l07": [
       {
         label: "Perspective projection",
         href: "/glossary#perspective-projection",
         kind: "Thuật ngữ",
       },
       {
-        label: "Perspective divide",
-        href: "/glossary#perspective-divide",
-        kind: "Thuật ngữ",
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
       },
-      { label: "Similar triangles", href: "/glossary#similar-triangles", kind: "Thuật ngữ" },
-    ],
-    "p11-l04": [
-      { label: "Field of view", href: "/glossary#field-of-view", kind: "Thuật ngữ" },
-      { label: "Aspect ratio", href: "/glossary#aspect-ratio", kind: "Thuật ngữ" },
       {
-        label: "Normalized device coordinates",
-        href: "/glossary#normalized-device-coordinates",
-        kind: "Thuật ngữ",
+        label: "SDL_CaptureMouse",
+        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
+        kind: "SDL API",
       },
     ],
-    "p11-l05": [
-      { label: "Near plane", href: "/glossary#near-plane", kind: "Thuật ngữ" },
-      { label: "View frustum", href: "/glossary#view-frustum", kind: "Thuật ngữ" },
-      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
-    ],
-    "p11-l06": [
-      { label: "Variable timestep", href: "/glossary#variable-timestep", kind: "Thuật ngữ" },
-      { label: "Round-trip test", href: "/glossary#round-trip-test", kind: "Thuật ngữ" },
+    "p11-l08": [
       {
-        label: "CTest command-line reference",
-        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
-        kind: "CMake",
+        label: "Round-trip test",
+        href: "/glossary#round-trip-test",
+        kind: "Thuật ngữ",
       },
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;

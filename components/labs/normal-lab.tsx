@@ -1,467 +1,381 @@
 "use client";
-
 import {
   useEffect,
-  useMemo,
+  useCallback,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { dot3, type Vec3 } from "@/lib/labs/normal";
+import { compassEye, orbitCompass } from "@/lib/labs/normal-camera";
 import {
-  add3,
-  dot3,
-  facingAmount,
-  isDegenerateTriangle,
-  magnitude3,
-  normalize3,
-  orthogonalityError,
-  projectIsometric,
-  reverseWinding,
-  scale3,
-  triangleArea,
-  triangleCentroid,
-  triangleEdges,
-  triangleRawNormal,
-  triangleUnitNormal,
-  type Triangle3,
-  type Vec3,
-} from "@/lib/labs/normal";
-import {
-  LabReadout,
-  canvasPoint,
-  drawLine,
-  setupCanvas,
-  useCanvasSize,
-  useReducedMotion,
-} from "./lab-shared";
+  initialCompassScene,
+  compassStage,
+  compassResults,
+  compassPreset,
+  compassVertices,
+  changeCompassVertex,
+  moveCompassVertex,
+  flipCompass,
+  advanceCompass,
+  type CompassScene,
+  type CompassVertex,
+} from "@/lib/labs/normal-scene";
+import { drawCompassLab, compassPointFromEvent } from "./normal-lab-view";
+import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 
-type VertexName = "a" | "b" | "c";
-
-const INITIAL_TRIANGLE: Triangle3 = {
-  a: { x: -1.25, y: -0.75, z: 0.25 },
-  b: { x: 1.2, y: -0.45, z: -0.35 },
-  c: { x: 0.1, y: 1.15, z: 0.75 },
-};
-const VIEW_DIRECTION = normalize3({ x: 1, y: -1, z: 1 });
-const VERTICES: readonly VertexName[] = ["a", "b", "c"];
-
-function copyTriangle(triangle: Triangle3): Triangle3 {
-  return {
-    a: { ...triangle.a },
-    b: { ...triangle.b },
-    c: { ...triangle.c },
-  };
-}
-
-function formatVec3(vector: Vec3, digits = 2) {
-  return `(${vector.x.toFixed(digits)}, ${vector.y.toFixed(digits)}, ${vector.z.toFixed(digits)})`;
-}
-
-function drawArrow(
-  ctx: CanvasRenderingContext2D,
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-  color: string,
-  width = 2,
-) {
-  drawLine(ctx, start, end, color, width);
-  const angle = Math.atan2(end.y - start.y, end.x - start.x);
-  const headLength = 10;
-  drawLine(
-    ctx,
-    end,
-    {
-      x: end.x - Math.cos(angle - Math.PI / 6) * headLength,
-      y: end.y - Math.sin(angle - Math.PI / 6) * headLength,
-    },
-    color,
-    width,
-  );
-  drawLine(
-    ctx,
-    end,
-    {
-      x: end.x - Math.cos(angle + Math.PI / 6) * headLength,
-      y: end.y - Math.sin(angle + Math.PI / 6) * headLength,
-    },
-    color,
-    width,
-  );
-}
-
+const format = (p: Vec3) => `(${p.x.toFixed(4)}, ${p.y.toFixed(4)}, ${p.z.toFixed(4)})`;
 export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const dragging = useRef(false);
-  const [triangle, setTriangle] = useState<Triangle3>(() => copyTriangle(INITIAL_TRIANGLE));
-  const [selected, setSelected] = useState<VertexName>("c");
-  const [paused, setPaused] = useState(true);
-
-  const showTriangle = mode !== "normal-axes";
-  const showNormal =
-    mode === undefined ||
-    ["normal-cross", "normal-unit-area", "normal-winding", "normal-degenerate"].includes(mode);
-  const showUnitNormal =
-    mode === undefined ||
-    ["normal-unit-area", "normal-winding", "normal-degenerate"].includes(mode);
-  const showWinding =
-    mode === undefined || mode === "normal-winding" || mode === "normal-degenerate";
-  const showDegenerate = mode === undefined || mode === "normal-degenerate";
-
-  const edges = useMemo(() => triangleEdges(triangle), [triangle]);
-  const rawNormal = useMemo(() => triangleRawNormal(triangle), [triangle]);
-  const unitNormal = useMemo(() => triangleUnitNormal(triangle), [triangle]);
-  const area = useMemo(() => triangleArea(triangle), [triangle]);
-  const degenerate = useMemo(() => isDegenerateTriangle(triangle, 1e-5), [triangle]);
-  const facing = useMemo(() => facingAmount(triangle, VIEW_DIRECTION), [triangle]);
-
-  useEffect(() => {
-    if (!showDegenerate || paused || reducedMotion) return;
-    let animationFrame = 0;
-    let previous = performance.now();
-    const animate = (now: number) => {
-      const deltaTime = Math.min((now - previous) / 1000, 0.1);
-      previous = now;
-      setTriangle((current) => {
-        const midpoint = scale3(add3(current.a, current.b), 0.5);
-        const blend = Math.min(1, deltaTime * 0.8);
-        return {
-          ...current,
-          c: add3(
-            current.c,
-            scale3(
-              {
-                x: midpoint.x - current.c.x,
-                y: midpoint.y - current.c.y,
-                z: midpoint.z - current.c.z,
-              },
-              blend,
-            ),
-          ),
-        };
-      });
-      animationFrame = requestAnimationFrame(animate);
-    };
-    animationFrame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationFrame);
-  }, [paused, reducedMotion, showDegenerate]);
-
-  const updateSelected = (update: (current: Vec3) => Vec3) => {
-    setTriangle((current) => ({ ...current, [selected]: update(current[selected]) }));
-  };
-
-  useEffect(() => {
+  const canvasRef = useRef<HTMLCanvasElement>(null),
+    size = useCanvasSize(canvasRef),
+    reducedMotion = useReducedMotion(),
+    stage = compassStage(mode);
+  const [scene, setScene] = useState<CompassScene>(initialCompassScene),
+    sceneRef = useRef(scene),
+    drag = useRef<{ id: number; previous: { x: number; y: number } } | null>(null);
+  const commit = useCallback((next: CompassScene) => {
+    sceneRef.current = next;
+    setScene(next);
+  }, []);
+  const cancelDrag = useCallback(() => {
+    const active = drag.current;
+    drag.current = null;
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-
-    const scale = Math.min(size.width, size.height) * 0.25;
-    const center = { x: size.width * 0.5, y: size.height * 0.54 };
-    const toScreen = (point: Vec3) => {
-      const projected = projectIsometric(point);
-      return { x: center.x + projected.x * scale, y: center.y - projected.y * scale };
-    };
-
-    const axisData = [
-      { endpoint: { x: 1.65, y: 0, z: 0 }, label: "X", color: "#ff6b6b" },
-      { endpoint: { x: 0, y: 1.65, z: 0 }, label: "Y", color: "#53f0ae" },
-      { endpoint: { x: 0, y: 0, z: 1.65 }, label: "Z", color: "#84a9ff" },
-    ];
-    for (const axis of axisData) {
-      const endpoint = toScreen(axis.endpoint);
-      drawArrow(ctx, toScreen({ x: 0, y: 0, z: 0 }), endpoint, axis.color, 2.5);
-      ctx.fillStyle = axis.color;
-      ctx.font = "700 12px ui-monospace";
-      ctx.fillText(axis.label, endpoint.x + 8, endpoint.y - 7);
-    }
-
-    if (!showTriangle) {
-      const point = triangle.c;
-      const xPart = { x: point.x, y: 0, z: 0 };
-      const xyPart = { x: point.x, y: point.y, z: 0 };
-      drawLine(ctx, toScreen({ x: 0, y: 0, z: 0 }), toScreen(xPart), "#ff6b6b", 2);
-      drawLine(ctx, toScreen(xPart), toScreen(xyPart), "#53f0ae", 2);
-      drawLine(ctx, toScreen(xyPart), toScreen(point), "#84a9ff", 2);
-      const screen = toScreen(point);
-      ctx.beginPath();
-      ctx.arc(screen.x, screen.y, 7, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffe26c";
-      ctx.fill();
-      ctx.fillStyle = "#f7f9ff";
-      ctx.fillText("P", screen.x + 9, screen.y - 8);
-      return;
-    }
-
-    const a = toScreen(triangle.a);
-    const b = toScreen(triangle.b);
-    const c = toScreen(triangle.c);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineTo(c.x, c.y);
-    ctx.closePath();
-    ctx.fillStyle = facing >= 0 ? "rgba(83, 240, 174, 0.13)" : "rgba(196, 132, 255, 0.13)";
-    ctx.fill();
-    drawLine(ctx, a, b, "#ffb454", 3);
-    drawLine(ctx, a, c, "#53f0ae", 3);
-    drawLine(ctx, b, c, "#d6ddef", 2);
-
-    if (showNormal && !degenerate) {
-      const centroid = triangleCentroid(triangle);
-      const displayNormal = showUnitNormal ? scale3(unitNormal, 1.1) : scale3(rawNormal, 0.18);
-      drawArrow(ctx, toScreen(centroid), toScreen(add3(centroid, displayNormal)), "#c484ff", 3);
-    }
-
-    for (const name of VERTICES) {
-      const screen = toScreen(triangle[name]);
-      ctx.beginPath();
-      ctx.arc(screen.x, screen.y, name === selected ? 8 : 6, 0, Math.PI * 2);
-      ctx.fillStyle = name === selected ? "#ffe26c" : "#f7f9ff";
-      ctx.fill();
-      ctx.fillStyle = "#f7f9ff";
-      ctx.font = "700 11px ui-monospace";
-      ctx.fillText(name.toUpperCase(), screen.x + 9, screen.y - 8);
-    }
-  }, [
-    degenerate,
-    facing,
-    rawNormal,
-    selected,
-    showNormal,
-    showTriangle,
-    showUnitNormal,
-    size,
-    triangle,
-    unitNormal,
-  ]);
-
-  const screenScale = Math.min(size.width, size.height) * 0.25;
-  const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const point = canvasPoint(event, event.currentTarget);
-    return { point, center: { x: size.width * 0.5, y: size.height * 0.54 } };
+    if (active && canvas?.hasPointerCapture(active.id)) canvas.releasePointerCapture(active.id);
+  }, []);
+  const reset = useCallback(
+    (index = 0) => {
+      cancelDrag();
+      commit(compassPreset(index));
+    },
+    [cancelDrag, commit],
+  );
+  const flip = () => {
+    cancelDrag();
+    commit(flipCompass(sceneRef.current));
   };
-
+  const togglePause = () => {
+    cancelDrag();
+    commit({ ...sceneRef.current, paused: reducedMotion ? true : !sceneRef.current.paused });
+  };
+  const moveOrbit = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const active = drag.current;
+    if (!active || active.id !== event.pointerId) return;
+    const point = compassPointFromEvent(event, size, true);
+    if (!point) return;
+    const current = sceneRef.current,
+      camera = orbitCompass(
+        current.camera,
+        point.x - active.previous.x,
+        point.y - active.previous.y,
+      );
+    active.previous = point;
+    commit({ ...current, camera });
+  };
   const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!showTriangle) {
-      dragging.current = true;
-      event.currentTarget.setPointerCapture(event.pointerId);
-      return;
-    }
-    const { point, center } = pointFromEvent(event);
-    let nearest: VertexName | undefined;
-    let nearestDistance = 18;
-    for (const name of VERTICES) {
-      const projected = projectIsometric(triangle[name]);
-      const screen = {
-        x: center.x + projected.x * screenScale,
-        y: center.y - projected.y * screenScale,
-      };
-      const distance = Math.hypot(screen.x - point.x, screen.y - point.y);
-      if (distance <= nearestDistance) {
-        nearest = name;
-        nearestDistance = distance;
-      }
-    }
-    if (!nearest) return;
-    setSelected(nearest);
-    dragging.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const moveVertex = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!dragging.current) return;
-    const deltaX = event.movementX / (screenScale * (Math.sqrt(3) * 0.5));
-    const deltaY = -event.movementY / screenScale - deltaX * 0.5;
-    updateSelected((current) => ({ ...current, x: current.x + deltaX, y: current.y + deltaY }));
-  };
-
-  const stopDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragging.current = false;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    const delta = 0.1;
-    const changes: Record<string, Vec3> = {
-      ArrowLeft: { x: -delta, y: 0, z: 0 },
-      ArrowRight: { x: delta, y: 0, z: 0 },
-      ArrowDown: { x: 0, y: -delta, z: 0 },
-      ArrowUp: { x: 0, y: delta, z: 0 },
-      q: { x: 0, y: 0, z: -delta },
-      e: { x: 0, y: 0, z: delta },
-    };
-    if (event.key === "1" || event.key === "2" || event.key === "3") {
-      setSelected(VERTICES[Number(event.key) - 1]);
-      return;
-    }
-    const change = changes[event.key];
-    if (!change) return;
+    if (stage < 6 || !event.isPrimary || event.button !== 0 || drag.current) return;
+    const point = compassPointFromEvent(event, size);
+    if (!point) return;
     event.preventDefault();
-    updateSelected((current) => add3(current, change));
-  };
-
-  const applyPreset = (value: string) => {
-    setPaused(true);
-    if (value === "right") {
-      setTriangle({ a: { x: 0, y: 0, z: 0 }, b: { x: 2, y: 0, z: 0 }, c: { x: 0, y: 1.5, z: 0 } });
-    } else if (value === "line") {
-      setTriangle({
-        a: { x: -1.5, y: -0.5, z: 0 },
-        b: { x: 0, y: 0, z: 0 },
-        c: { x: 1.5, y: 0.5, z: 0 },
-      });
-    } else if (value === "near") {
-      setTriangle({
-        a: { x: -1.5, y: -0.5, z: 0 },
-        b: { x: 0, y: 0, z: 0 },
-        c: { x: 1.5, y: 0.5001, z: 0 },
-      });
-    } else {
-      setTriangle(copyTriangle(INITIAL_TRIANGLE));
+    event.currentTarget.focus({ preventScroll: true });
+    drag.current = { id: event.pointerId, previous: point };
+    commit({ ...sceneRef.current, paused: true });
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      drag.current = null;
     }
-    setSelected("c");
   };
-
-  const collapseOneStep = () => {
-    setTriangle((current) => {
-      const midpoint = scale3(add3(current.a, current.b), 0.5);
-      return {
-        ...current,
-        c: add3(
-          current.c,
-          scale3(
-            {
-              x: midpoint.x - current.c.x,
-              y: midpoint.y - current.c.y,
-              z: midpoint.z - current.c.z,
-            },
-            0.12,
-          ),
-        ),
-      };
+  const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId) return;
+    if (event.pointerType === "mouse" && (event.buttons & 1) === 0) {
+      cancelDrag();
+      return;
+    }
+    moveOrbit(event);
+  };
+  const pointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId || event.button !== 0) return;
+    moveOrbit(event);
+    cancelDrag();
+  };
+  const pointerCancel = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id === event.pointerId) cancelDrag();
+  };
+  const setCamera = (key: "yaw" | "pitch" | "radius", value: number) => {
+    if (!Number.isFinite(value)) return;
+    cancelDrag();
+    const limits = { yaw: [-Math.PI, Math.PI], pitch: [-1.2, 1.2], radius: [7, 12] },
+      [min, max] = limits[key];
+    commit({
+      ...sceneRef.current,
+      paused: true,
+      camera: { ...sceneRef.current.camera, [key]: Math.max(min, Math.min(max, value)) },
     });
   };
-
-  const selectedPoint = triangle[selected];
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.key === "Tab") return;
+    const key = event.key.toLowerCase();
+    if (key === "r" && !event.repeat) {
+      event.preventDefault();
+      reset();
+      return;
+    }
+    if (stage >= 2 && ["1", "2", "3"].includes(key)) {
+      event.preventDefault();
+      cancelDrag();
+      commit({ ...sceneRef.current, selected: compassVertices[Number(key) - 1] });
+      return;
+    }
+    if (stage >= 5 && key === "f" && !event.repeat) {
+      event.preventDefault();
+      flip();
+      return;
+    }
+    if (stage >= 6 && key === " ") {
+      event.preventDefault();
+      if (!event.repeat) togglePause();
+      return;
+    }
+    if (stage >= 6 && key === "n" && !event.repeat && sceneRef.current.paused) {
+      event.preventDefault();
+      commit(advanceCompass(sceneRef.current, 0.1));
+      return;
+    }
+    if (["a", "d", "w", "s"].includes(key)) {
+      event.preventDefault();
+      cancelDrag();
+      const camera = orbitCompass(
+        sceneRef.current.camera,
+        key === "a" ? -6 : key === "d" ? 6 : 0,
+        key === "w" ? 6 : key === "s" ? -6 : 0,
+      );
+      commit({ ...sceneRef.current, camera, paused: true });
+      return;
+    }
+    if (key === "+" || key === "=" || key === "-") {
+      event.preventDefault();
+      setCamera("radius", sceneRef.current.camera.radius + (key === "-" ? 0.5 : -0.5));
+      return;
+    }
+    const deltas: Record<string, Vec3> = {
+      ArrowLeft: { x: -0.1, y: 0, z: 0 },
+      ArrowRight: { x: 0.1, y: 0, z: 0 },
+      ArrowUp: { x: 0, y: 0.1, z: 0 },
+      ArrowDown: { x: 0, y: -0.1, z: 0 },
+      PageUp: { x: 0, y: 0, z: 0.1 },
+      PageDown: { x: 0, y: 0, z: -0.1 },
+    };
+    if (stage >= 2 && deltas[event.key]) {
+      event.preventDefault();
+      cancelDrag();
+      commit(moveCompassVertex(sceneRef.current, deltas[event.key]));
+    }
+  };
+  useEffect(() => {
+    const pause = () => {
+      cancelDrag();
+      commit({ ...sceneRef.current, paused: true });
+    };
+    const hidden = () => {
+      if (document.hidden) pause();
+    };
+    window.addEventListener("blur", pause);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", pause);
+      document.removeEventListener("visibilitychange", hidden);
+      cancelDrag();
+    };
+  }, [cancelDrag, commit]);
+  useEffect(() => {
+    cancelDrag();
+    commit(initialCompassScene());
+  }, [mode, cancelDrag, commit]);
+  useEffect(() => {
+    // Resize releases capture and pauses, preserving world geometry.
+    cancelDrag();
+    commit({ ...sceneRef.current, paused: true });
+  }, [size.width, size.height, size.dpr, cancelDrag, commit]);
+  useEffect(() => {
+    if (reducedMotion) commit({ ...sceneRef.current, paused: true });
+  }, [reducedMotion, commit]);
+  useEffect(() => {
+    if (stage < 6 || scene.paused || reducedMotion) return;
+    let frame = 0,
+      previous = performance.now();
+    const animate = (now: number) => {
+      if (sceneRef.current.paused) return;
+      const dt = Math.min(0.1, Math.max(0, (now - previous) / 1000));
+      previous = now;
+      commit(advanceCompass(sceneRef.current, dt));
+      frame = requestAnimationFrame(animate);
+    };
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [stage, scene.paused, reducedMotion, commit]);
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawCompassLab(ctx, size, scene, stage);
+  }, [size, scene, stage]);
+  const r = compassResults(scene);
   return (
     <div className="lab-body">
       <div className="lab-controls">
         <label>
           Preset
-          <select defaultValue="spatial" onChange={(event) => applyPreset(event.target.value)}>
-            <option value="spatial">Tam giác trong không gian</option>
-            <option value="right">Tam giác vuông 3×2</option>
-            <option value="near">Gần thẳng hàng</option>
-            <option value="line">Thẳng hàng</option>
+          <select
+            aria-label="Tam giác mẫu"
+            value=""
+            onChange={(event) => reset(Number(event.target.value))}
+          >
+            <option value="" disabled>
+              Chọn thí nghiệm
+            </option>
+            <option value="0">Mặc định</option>
+            <option value="1">Tam giác 3–4</option>
+            <option value="2">Thẳng hàng</option>
+            <option value="3">Hai đỉnh trùng</option>
+            <option value="4">Gần thẳng hàng</option>
           </select>
         </label>
-        {showTriangle && (
-          <label>
-            Đỉnh đang chọn
-            <select
-              value={selected}
-              onChange={(event) => setSelected(event.target.value as VertexName)}
-            >
-              <option value="a">A</option>
-              <option value="b">B</option>
-              <option value="c">C</option>
-            </select>
-          </label>
+        {stage >= 2 && (
+          <>
+            <label>
+              Đỉnh đang chọn
+              <select
+                value={scene.selected}
+                onChange={(event) => {
+                  cancelDrag();
+                  commit({ ...sceneRef.current, selected: event.target.value as CompassVertex });
+                }}
+              >
+                {compassVertices.map((key, i) => (
+                  <option key={key} value={key}>
+                    P{i}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {(["x", "y", "z"] as const).map((axis) => (
+              <label key={axis}>
+                Đỉnh {axis.toUpperCase()}
+                <input
+                  type="range"
+                  min="-2"
+                  max="2"
+                  step="0.1"
+                  value={scene.triangle[scene.selected][axis]}
+                  onChange={(event) => {
+                    cancelDrag();
+                    commit(changeCompassVertex(sceneRef.current, axis, Number(event.target.value)));
+                  }}
+                />
+                <output>{scene.triangle[scene.selected][axis].toFixed(3)}</output>
+              </label>
+            ))}
+          </>
         )}
-        {(["x", "y", "z"] as const).map((axis) => (
-          <label key={axis}>
-            {showTriangle ? `${selected.toUpperCase()}.${axis}` : `P.${axis}`}
+        {(["yaw", "pitch", "radius"] as const).map((key) => (
+          <label key={key}>
+            Camera {key}
             <input
               type="range"
-              min="-2"
-              max="2"
-              step="0.05"
-              value={selectedPoint[axis]}
-              onChange={(event) =>
-                updateSelected((current) => ({ ...current, [axis]: Number(event.target.value) }))
-              }
+              min={key === "yaw" ? -Math.PI : key === "pitch" ? -1.2 : 7}
+              max={key === "yaw" ? Math.PI : key === "pitch" ? 1.2 : 12}
+              step={key === "radius" ? 0.1 : 0.01}
+              value={scene.camera[key]}
+              onChange={(event) => setCamera(key, Number(event.target.value))}
             />
-            <output>{selectedPoint[axis].toFixed(2)}</output>
+            <output>{scene.camera[key].toFixed(3)}</output>
           </label>
         ))}
-        {showWinding && (
-          <button onClick={() => setTriangle((current) => reverseWinding(current))}>
-            Đảo B ↔ C
-          </button>
+        {stage >= 5 && <button onClick={flip}>Đảo winding</button>}
+        {stage >= 6 && (
+          <>
+            <button onClick={togglePause} disabled={reducedMotion}>
+              {scene.paused ? "Chạy orbit" : "Tạm dừng"}
+            </button>
+            <button
+              disabled={!scene.paused}
+              onClick={() => commit(advanceCompass(sceneRef.current, 0.1))}
+            >
+              Tiến 0.1 s
+            </button>
+          </>
         )}
-        {showDegenerate && (
-          <button onClick={() => setPaused((current) => !current)}>
-            {paused ? "Tự làm phẳng" : "Tạm dừng"}
-          </button>
-        )}
-        {showDegenerate && (paused || reducedMotion) && (
-          <button onClick={collapseOneStep}>Tiến một bước</button>
-        )}
-        <button onClick={() => applyPreset("spatial")}>Đặt lại</button>
+        <button onClick={() => reset()}>Đặt lại</button>
       </div>
       <canvas
         ref={canvasRef}
+        style={{ height: "clamp(380px,58vw,560px)", touchAction: "none" }}
         onPointerDown={startDrag}
-        onPointerMove={moveVertex}
-        onPointerUp={stopDrag}
-        onPointerCancel={stopDrag}
-        onLostPointerCapture={() => {
-          dragging.current = false;
-        }}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerCancel={pointerCancel}
+        onLostPointerCapture={pointerCancel}
         onKeyDown={onKeyDown}
+        onBlur={() => {
+          cancelDrag();
+          commit({ ...sceneRef.current, paused: true });
+        }}
         tabIndex={0}
-        aria-label="La bàn ba trục và tam giác 3D; chọn hoặc kéo đỉnh, dùng phím mũi tên và Q/E để đổi tọa độ"
+        aria-label="La bàn ba trục perspective, vector A B và normal; A/D W/S xoay camera, mũi tên sửa đỉnh"
       />
+      <p>
+        Vector A=P1−P0, B=P2−P0. Vàng: raw cross vẽ dài min(0.2×|N|,2.2) world; tím: unit normal vẽ
+        dài 1.4 world. Độ phóng đại chỉ dành cho hình, không đổi số đo. Từ bài 6, kéo trong viewport
+        để orbit; nhấn không làm camera nhảy. Tab tới slider rồi dùng bàn phím mặc định; khi focus ở
+        Canvas, 1–3 chọn đỉnh, mũi tên XY, PageUp/Down Z, F đảo winding, Space pause, N tiến từng
+        bước.{" "}
+        {reducedMotion ? "Reduced motion: tự động orbit bị tắt, chỉnh tay vẫn dùng được." : ""}
+      </p>
       <LabReadout
         items={[
-          ...(showTriangle
+          { label: "camera eye", value: format(compassEye(scene.camera)) },
+          ...(stage >= 2
             ? [
-                { label: "AB = B − A", value: formatVec3(edges.ab) },
-                { label: "AC = C − A", value: formatVec3(edges.ac) },
+                { label: "vector A", value: format(r.edges.ab) },
+                { label: "vector B", value: format(r.edges.ac) },
               ]
-            : [{ label: "P trong 3D", value: formatVec3(triangle.c) }]),
-          ...(showNormal
+            : []),
+          ...(stage >= 3
             ? [
-                { label: "raw normal", value: formatVec3(rawNormal) },
+                { label: "raw cross", value: format(r.raw) },
                 {
-                  label: "kiểm tra vuông góc",
-                  value: `N·AB=${dot3(rawNormal, edges.ab).toExponential(1)} · N·AC=${dot3(rawNormal, edges.ac).toExponential(1)}`,
+                  label: "dot(N,A) / dot(N,B)",
+                  value:
+                    dot3(r.raw, r.edges.ab).toExponential(2) +
+                    " / " +
+                    dot3(r.raw, r.edges.ac).toExponential(2),
                 },
               ]
             : []),
-          ...(showUnitNormal
+          ...(stage >= 4
             ? [
-                {
-                  label: "unit normal",
-                  value: degenerate
-                    ? "không xác định"
-                    : `${formatVec3(unitNormal)} · length=${magnitude3(unitNormal).toFixed(3)}`,
-                },
-                { label: "diện tích", value: `${area.toFixed(4)} = |AB×AC| / 2` },
+                { label: "unit normal", value: r.valid ? format(r.unit) : "Không xác định" },
+                { label: "area", value: r.area.toExponential(5) + " world²" },
               ]
             : []),
-          ...(showWinding
+          ...(stage >= 5
             ? [
                 {
-                  label: "winding / facing",
-                  value: degenerate
-                    ? "degenerate"
-                    : `${facing >= 0 ? "front" : "back"} · dot=${facing.toFixed(3)}`,
+                  label: "facing",
+                  value: r.status + (r.facing === null ? "" : " · " + r.facing.toFixed(5)),
                 },
               ]
             : []),
-          ...(showDegenerate
+          ...(stage >= 7
             ? [
                 {
-                  label: "validation",
-                  value: `${degenerate ? "degenerate" : "valid"} · orthogonality error=${orthogonalityError(triangle).toExponential(2)}`,
+                  label: "orthogonality error",
+                  value: r.valid
+                    ? r.error.toExponential(2)
+                    : "Không xác định (không có normal tin cậy)",
                 },
+                { label: "normal status", value: r.valid ? "Có hướng" : "Suy biến/gần thẳng hàng" },
               ]
             : []),
         ]}

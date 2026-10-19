@@ -1,0 +1,139 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Bản final đã có tam giác wireframe, normal, mouse yaw/pitch, Q/E roll và hai order. Trước khi gọi nó hoàn chỉnh, ta cần biết vì sao nó đúng: không chỉ vì hình trông giống một vật đang quay.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một test round-trip có thể bị đánh lừa nếu chiều xuôi và chiều ngược cùng sai một quy ước. Hãy đặt oracle số lên trước:
+
+- X90(1,2,3)=(1,-3,2)
+- Y90(1,2,3)=(3,2,-1)
+- Z90(1,2,3)=(-2,1,3)
+- X=Y=90°, roll 0: XYZ→(2,-3,-1), ZYX→(3,1,2)
+
+Sau đó mới thêm invariant: norm, ba edge lengths, centroid sau translation và normal quay theo hình.
+
+Inverse cần đảo **thứ tự lẫn dấu**. Nếu chiều xuôi làm X→Y→Z, chiều ngược phải Z⁻¹→Y⁻¹→X⁻¹. Chỉ đổi dấu rồi vẫn làm X→Y→Z không hoàn tác được một order tổng quát.
+
+<InteractiveLab demo="rotation3d" mode="rotation-full" />
+
+## Viết code từng bước
+
+Giữ bộ khung và các hàm của bài trước; sửa đúng file ghi trên từng code block. Không tạo một main thứ hai. Sau mỗi bước, build target checkpoint 08 để đối chiếu:
+
+```powershell title="Build checkpoint 08"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_12_checkpoint_8 --parallel 2
+.\build\Debug\project_12_checkpoint_8.exe
+```
+
+### Bước 1 — Dùng đáp án tính tay
+
+```cpp title="tests/tests.cpp — các số biết trước phân biệt cả dấu và thứ tự"
+void numericRotationOracles() {
+    const lab::Vec3 p{1.0, 2.0, 3.0};
+    const double quarter = lab::kPi * 0.5;
+    check(close(lab::rotateX(p, quarter), {1.0, -3.0, 2.0}), "X90 numeric oracle");
+    check(close(lab::rotateY(p, quarter), {3.0, 2.0, -1.0}), "Y90 numeric oracle");
+    check(close(lab::rotateZ(p, quarter), {-2.0, 1.0, 3.0}), "Z90 numeric oracle");
+    check(close(lab::rotateEuler(p, {quarter, quarter, 0.0}, lab::RotationOrder::Xyz), {2.0, -3.0, -1.0}), "XYZ X90 then Y90 oracle");
+    check(close(lab::rotateEuler(p, {quarter, quarter, 0.0}, lab::RotationOrder::Zyx), {3.0, 1.0, 2.0}), "ZYX Y90 then X90 oracle");
+    for (double angle : {0.0, 2.0 * lab::kPi}) {
+        check(close(lab::rotateX(p, angle), p), "X zero/full turn");
+        check(close(lab::rotateY(p, angle), p), "Y zero/full turn");
+        check(close(lab::rotateZ(p, angle), p), "Z zero/full turn");
+    }
+}
+```
+
+Không gọi rotateEuler để sinh expected cho chính rotateEuler. 0 và 2π là test cần có, nhưng chưa đủ phát hiện một hàm luôn trả point đầu vào; các góc 90° mới khóa dấu và hành vi thật.
+
+### Bước 2 — Viết inverse đọc được từng thao tác
+
+```cpp title="include/lab.hpp — đảo thứ tự trước khi đổi dấu"
+inline Vec3 inverseRotateEuler(Vec3 point, EulerAngles angles, RotationOrder order) {
+    if (order == RotationOrder::Zyx) {
+        Vec3 restored = rotateX(point, -angles.pitch);
+        restored = rotateY(restored, -angles.yaw);
+        return rotateZ(restored, -angles.roll);
+    }
+    Vec3 restored = rotateZ(point, -angles.roll);
+    restored = rotateY(restored, -angles.yaw);
+    return rotateX(restored, -angles.pitch);
+}
+```
+
+```cpp title="include/lab.hpp — đo sai lệch trên đủ ba cạnh"
+inline double maximumEdgeLengthError(const Triangle3& original, const Triangle3& rotated) {
+    const auto before = triangleEdgeLengths(original);
+    const auto after = triangleEdgeLengths(rotated);
+    double error = 0.0;
+    for (std::size_t i = 0; i < before.size(); ++i) {
+        error = std::max(error, std::abs(before[i] - after[i]));
+    }
+    return error;
+}
+```
+
+Rotation giữ nguyên hình; đo cả ba cạnh để không vô tình chấp nhận một phép biến đổi chỉ giữ đúng một cạnh.
+
+### Bước 3 — Kiểm normal bằng hai con đường
+
+```cpp title="include/lab.hpp — cross cạnh đã quay so với normal local đã quay"
+inline double normalRotationError(const Triangle3& local, const Triangle3& rotated, EulerAngles angles, RotationOrder order) {
+    const Vec3 expected = rotateEuler(triangleUnitNormal(local), angles, order);
+    return magnitude(subtract(triangleUnitNormal(rotated), expected));
+}
+```
+
+Đây là phép kiểm bổ sung: hai cách dùng chung một số primitive nên vẫn cần raw cross biết trước (-1.71,0.51,6.45) và các oracle rotation. Tests còn kiểm centroid, inverse, dt partition, invalid input, P11 projection oracle và pixel thật của clean/debug view.
+
+## Ghép các phần lại
+
+**Project 12 đã hoàn chỉnh.** ZIP có README, CMakeLists.txt, starter, tám checkpoint, final và tests. Phần **Toàn bộ mã nguồn của dự án** phía dưới hiển thị đủ file để chạy, không chỉ một hàm hoặc một đoạn main bị cắt.
+
+```powershell title="Build và kiểm tra cả Debug lẫn Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+.\build\Debug\project_12_final.exe
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Release\project_12_final.exe
+```
+
+C++20, CMake≥3.24 và SDL3.4.8 được dùng thống nhất; CMake FetchContent link qua SDL3::SDL3. Mặc định build final/tests; bật BUILD_CHECKPOINTS để học từng bài. Tests dùng check và EXIT_FAILURE, không dùng assert bị NDEBUG tắt ở Release.
+
+projection.hpp giữ camera/guard/clipping từ P11; lab.hpp giữ triangle/rotation/normal; scene.hpp giữ state/preset; framebuffer.hpp và view.hpp vẽ CPU; presentation.hpp trình bày texture/HUD; main.cpp quản lý SDL/input/lifecycle. Trong repository chỉ sửa source-template, không sửa các snapshot sinh tự động.
+
+Giới hạn có chủ ý: camera tịnh tiến đã cố định cho bài này, scene wireframe chưa có che khuất, Euler có cấu hình mà hai trục điều khiển trùng hướng. Ta chưa dùng matrix/quaternion và không giả rằng pitch clamp của camera giải quyết được các giới hạn đó.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay rotateX bằng hàm trả nguyên input. Tests0/2π vẫn có thể qua, nhưng X90 và các order oracle phải thất bại. Khôi phục và giữ các đáp án độc lập.
+
+2. Trong inverse, đổi dấu nhưng giữ nguyên order. Dùng angles tổng quát0.4/0.7/-0.3 để thấy round-trip lỗi; khôi phục thứ tự đảo.
+
+3. Cho normal giữ cố định trong world. Tests edge lengths vẫn xanh nhưng normalRotationError phải đỏ. Khôi phục normal từ cạnh đã quay.
+
+4. Cố làm một check sai rồi chạy Release. CTest phải trả failure; sau đó khôi phục. Không chấp nhận suite chỉ hoạt động ở Debug.
+
+## Tự kiểm tra kết quả
+
+- Oracle 0/2π/90° và hai order đúng; không chỉ có round-trip tự xác nhận.
+- Edge error, inverse error, normal error dưới 10⁻⁹ ở cả hai order.
+- Local triangle bất biến, world centroid trùng model position; translation không đổi normal.
+- Mỗi cạnh clip an toàn trước raster; một đỉnh bị loại không xóa mọi cạnh.
+- Mouse/keyboard/reset/preset/capture được kiểm bằng các handler thật; hidden smoke chỉ xác nhận init/present/resize/thoát.
+- Starter, tám checkpoint, final/tests build ở Debug và Release; CTest không mở window.
+- QA desktop vẫn cần chuột thật, thả ngoài, HiDPI, blur, Tab, reduced-motion và chuyển bài; không coi unit harness là kiểm thử trình duyệt.
+
+## Bài tập mở rộng
+
+Thêm một tam giác thứ hai có cùng local shape nhưng model position khác. Dùng chung rotation để chứng minh shape/orientation tách biệt với vị trí; viết test rằng normal của hai hình bằng nhau dù screen triangle khác nhau.
+
+[Tiếp tục Project 13 — Khối lập phương wireframe](/projects/wireframe-cube).

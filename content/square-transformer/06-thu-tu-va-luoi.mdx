@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi thứ tự và biến đổi cả lưới
+
+## Vấn đề cần giải quyết
+
+Ta đã có nhiều phép biến đổi trong một ma trận, nhưng chưa chứng minh thứ tự là một phần của dữ liệu. Bài này giữ nguyên mọi tham số và chỉ đổi cách ghép. Đồng thời, ta cho cả lưới local đi qua ma trận để thấy hình vuông chỉ là một phần của hệ trục đang biến đổi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với column vector, ma trận sát điểm nhất tác động trước:
+
+$$
+M_1=T\,R\,H\,S,\qquad M_2=T\,S\,H\,R.
+$$
+
+M1 thực hiện Scale→Shear→Rotate→Translate. M2 thực hiện Rotate→Shear→Scale→Translate. Translation vẫn ở ngoài trong cả hai; đây không phải phép so mọi hoán vị.
+
+Ví dụ đơn giản: p=(1,1), scale=(2,1), góc=90°, shear=0, translation=0. Scale rồi rotate cho (−1,2); rotate rồi scale cho (−2,1). Nếu scale đồng đều hoặc tất cả là identity, hai order có thể cho cùng kết quả. Điều đó không chứng minh phép nhân giao hoán.
+
+<InteractiveLab demo="transform" mode="transform-order" />
+
+## Viết code từng bước
+
+### Bước 1 — Đặt tên cho hai thứ tự
+
+```cpp title="include/lab.hpp — đổi thứ tự không đổi tham số"
+enum class TransformOrder {
+    ScaleShearRotate,
+    RotateShearScale,
+};
+```
+
+### Bước 2 — Ghép ma trận theo đúng quy ước
+
+```cpp title="include/lab.hpp — đọc thứ tự từ phải sang trái"
+inline Mat3 composeTransform(TransformParameters parameters, TransformOrder order) {
+    const Mat3 translation = translationMatrix(parameters.translation);
+    const Mat3 scale = scaleMatrix(parameters.scaleX, parameters.scaleY);
+    const Mat3 shear = shearMatrix(parameters.shearX, parameters.shearY);
+    const Mat3 rotation = rotationMatrix(parameters.angle);
+    if (order == TransformOrder::RotateShearScale) {
+        return multiply(translation, multiply(scale, multiply(shear, rotation)));
+    }
+    return multiply(translation, multiply(rotation, multiply(shear, scale)));
+}
+```
+
+Mỗi biến tên rõ loại phép biến đổi. Đừng sửa vị trí tham số trong TransformParameters để giả lập đổi order; cùng một bộ số phải đi vào cả hai nhánh.
+
+### Bước 3 — Giữ đường tính trực tiếp làm đối chiếu
+
+```cpp title="include/scene.hpp — hai chuỗi hàm tương ứng với hai order"
+inline Vec2 directTransform(Vec2 point, const Scene& scene) {
+    const auto& p = scene.parameters;
+    if (scene.order == TransformOrder::RotateShearScale) {
+        const Vec2 rotated = rotatePoint(point, p.angle);
+        const Vec2 sheared = shearPoint(rotated, p.shearX, p.shearY);
+        return add(scalePoint(sheared, p.scaleX, p.scaleY), p.translation);
+    }
+    point = scalePoint(point, p.scaleX, p.scaleY);
+    point = shearPoint(point, p.shearX, p.shearY);
+    point = rotatePoint(point, p.angle);
+    point = add(point, p.translation);
+    return point;
+}
+```
+
+Chuỗi hàm nhìn từ trên xuống; tích ma trận nhìn từ phải sang trái. Hai cách đọc khác nhau nhưng phải mô tả cùng một đường đi.
+
+### Bước 4 — Biến đổi cả lưới local
+
+```cpp title="include/view.hpp — các đường lưới dùng cùng worldPoint"
+// Cả lưới local đi qua cùng ma trận, không chỉ hai trục.
+for (int index = -2; index <= 2; ++index) {
+    const double value = static_cast<double>(index);
+    worldLine(image, worldPoint({value, -2.0}, scene), worldPoint({value, 2.0}, scene), 0x335E59FFu);
+    worldLine(image, worldPoint({-2.0, value}, scene), worldPoint({2.0, value}, scene), 0x335E59FFu);
+}
+```
+
+Mỗi đường lưới cần biến đổi cả hai endpoint. Các đường x/y nguyên từ −2 tới 2 đi qua đúng matrix dùng cho square; world grid xám vẫn đứng yên. Chỉ vẽ hai basis rồi gọi đó là cả lưới biến đổi là chưa đủ.
+
+## Ghép các phần lại
+
+Build project_9_checkpoint_6. F5 chọn preset ghép, O đổi order mà không reset scale/góc/shear/translation. So P2 và các đường lưới, không chỉ nhìn hình tổng thể.
+
+Đỏ và xanh lam lần lượt là ảnh của hai basis; độ dài của chúng có ý nghĩa nên không normalize. Khi basis gần trùng nhau, nhãn và số giúp nhận ra hình đang gần suy biến.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong một bản thử, đảo hai toán hạng của multiply. Chạy rotation thuần trước: lỗi có thể bị che vì các phép còn lại là identity. Chuyển sang F5 và so P2; bộ tham số không giao hoán sẽ lộ sai thứ tự. Khôi phục tích đúng.
+
+2. Giữ hình theo M1 nhưng cố ý vẽ lưới theo M2. Nhấn O và quan sát đỉnh hình không còn nằm đúng trên các giao điểm tương ứng của lưới. Đưa cả hai về cùng worldPoint.
+
+3. Chọn identity rồi đổi O. Hình không đổi là kết quả đúng, không phải bằng chứng order không quan trọng. Chọn lại F5 để đối chiếu.
+
+## Tự kiểm tra kết quả
+
+- Ví dụ (1,1), scale(2,1), rotation 90° cho đúng hai kết quả (−1,2) và (−2,1).
+- O chỉ đổi order; mọi tham số giữ nguyên.
+- Hình, basis và transformed grid cùng dùng một matrix.
+- Identity cho hình không đổi ở cả hai order; đây là kết quả hợp lệ.
+
+## Bài tập mở rộng
+
+Thêm một thứ tự có translation ở trong, chẳng hạn R·T·S. Trước khi code, dự đoán local origin nằm ở đâu sau rotation rồi kiểm bằng một ví dụ số.
+
+[Bài tiếp theo: Tự làm slider trong ứng dụng SDL3](/projects/square-transformer/07-thanh-truot-va-tuong-tac).

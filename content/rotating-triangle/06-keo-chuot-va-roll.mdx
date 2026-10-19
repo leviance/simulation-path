@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo chuột để xoay, Q/E để roll
+
+## Vấn đề cần giải quyết
+
+Slider và phím đủ để đo công thức, nhưng thao tác xoay sẽ trực quan hơn khi kéo chuột. Ta cần cảm giác nhấn ở đâu cũng không làm hình giật, kéo ra ngoài vẫn nhận được mẫu thả cuối và chỉ đúng pointer đang kéo mới được đổi góc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Không lấy vị trí chuột làm góc tuyệt đối. Lưu previousMouse, rồi mỗi lần nhận input:
+
+$$
+\Delta yaw=\Delta x\,s,\qquad \Delta pitch=-\Delta y\,s.
+$$
+
+s là sensitivity, đơn vị radian trên một logical pixel. Dấu trừ ở Y đổi chiều màn hình tăng xuống thành pitch tăng khi kéo lên. Native và Canvas đều quy chuột về bảng logic 1100×800; DPR chỉ dành cho backing buffer, không nhân thêm vào delta.
+
+Đây là **xoay object**, không phải nhìn quanh bằng FPS camera. Vì vậy pitch được phép đi qua 90°; wrap chỉ đưa góc về [-π,π], không khóa ở ±89°. Euler vẫn có những tư thế mà hai trục điều khiển trùng hướng; project này chưa dùng quaternion/arcball để giải quyết cách tương tác đó. Công thức rotation vẫn giữ hình đúng.
+
+<InteractiveLab demo="rotation3d" mode="rotation-mouse" />
+
+## Viết code từng bước
+
+Giữ bộ khung và các hàm của bài trước; sửa đúng file ghi trên từng code block. Không tạo một main thứ hai. Sau mỗi bước, build target checkpoint 06 để đối chiếu:
+
+```powershell title="Build checkpoint 06"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_12_checkpoint_6 --parallel 2
+.\build\Debug\project_12_checkpoint_6.exe
+```
+
+### Bước 1 — Đổi delta thành radian và kiểm input
+
+```cpp title="include/lab.hpp — object quay qua mọi pitch, không gắn camera clamp"
+inline EulerAngles applyMouseDrag(EulerAngles angles, double deltaX, double deltaY, double sensitivity) {
+    if (!finiteAngles(angles) || !std::isfinite(deltaX) || !std::isfinite(deltaY) || !std::isfinite(sensitivity) || sensitivity < 0.002 || sensitivity > 0.02) {
+        return angles;
+    }
+    angles.yaw = wrapAngle(angles.yaw + deltaX * sensitivity);
+    angles.pitch = wrapAngle(angles.pitch - deltaY * sensitivity);
+    return angles;
+}
+```
+
+Hàm từ chối delta/sensitivity không hữu hạn trước khi sửa góc nào. UI giới hạn sensitivity [0.002,0.02]. Wrap giữ số không tăng mãi; nó không thay orientation vì các góc cách nhau 2π là cùng phép quay.
+
+### Bước 2 — Giữ previous sample và owner
+
+```cpp title="src/main.cpp — capture có vòng đời ngắn và dữ liệu riêng"
+bool dragging = false;
+SDL_MouseID owner{};
+lab::Vec2 previousMouse{};
+const auto cancelDrag = [&]() {
+    dragging = false;
+    SDL_CaptureMouse(false);
+};
+const auto updateDrag = [&](lab::Vec2 mouse) {
+    scene.angles = lab::applyMouseDrag(scene.angles, mouse.x - previousMouse.x, mouse.y - previousMouse.y, scene.sensitivity);
+    previousMouse = mouse;
+    dirty = true;
+};
+```
+
+Down chỉ lưu previousMouse và owner, chưa gọi updateDrag. Vì vậy nhấn không làm góc đổi. Q/E vẫn sửa roll bằng các nấc 5°; chuột chỉ điều khiển yaw/pitch.
+
+### Bước 3 — Quy đổi event và nhận mẫu cuối
+
+```cpp title="src/main.cpp — chỉ đúng mouse owner được điều khiển drag"
+const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    failed = true;
+    running = false;
+    break;
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !dragging) {
+    const auto viewport = lab::viewportFor();
+    if (event.button.x >= viewport.x && event.button.x <= viewport.x + viewport.width && event.button.y >= viewport.y && event.button.y <= viewport.y + viewport.height) {
+        owner = event.button.which;
+        previousMouse = {event.button.x, event.button.y};
+        dragging = true;
+        scene.paused = true;
+        if (!SDL_CaptureMouse(true)) {
+            cancelDrag();
+        }
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_MOTION && dragging && event.motion.which == owner) {
+    if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
+        cancelDrag();
+    } else {
+        updateDrag({event.motion.x, event.motion.y});
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && dragging && event.button.which == owner) {
+    updateDrag({event.button.x, event.button.y});
+    cancelDrag();
+}
+```
+
+SDL_ConvertEventToRenderCoordinates xử lý window, HiDPI và letterbox. Capture bật trong khoảng down→up; motion chỉ nhận owner còn giữ nút trái. Up gọi updateDrag trước cancelDrag để không mất đoạn di chuyển cuối. Capture failure hủy thao tác, không để dragging=true giả.
+
+## Ghép các phần lại
+
+Build checkpoint 6, kéo trong viewport. Kéo ngang 25 logical pixel ở sensitivity 0.008 làm yaw tăng 0.2 radian; kéo lên10 pixel làm pitch tăng 0.08 radian. Vị trí đặt chuột lúc nhấn không quyết định góc bắt đầu.
+
+Canvas dùng pointerId và setPointerCapture, native dùng SDL_MouseID. Cả hai hủy drag khi blur/hidden/resize, reset/preset, đổi order/sensitivity hoặc chỉnh state bằng phím/slider. Mẫu từ pointer khác không được thay previous sample. Nếu nút trái đã mất mà motion vẫn đến, hủy thao tác.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán yaw=mouse.x×s trong down. Nhấn ở hai vị trí khác nhau làm hình giật sang hai góc. Khôi phục delta và kiểm down không đổi orientation.
+
+2. Bỏ owner check. Một pointer thứ hai có thể sửa previous sample của pointer đầu, tạo bước nhảy. Khôi phục ID và thử một foreign motion trong unit harness.
+
+3. Chỉ xử lý motion, không dùng tọa độ của up. Kéo rồi thả nhanh có thể thiếu mẫu cuối. Khôi phục updateDrag trước release.
+
+4. Nhân delta thêm devicePixelRatio sau khi đã đổi về logical coordinates. Tốc độ kéo sẽ khác giữa màn hình; bỏ phép nhân thừa.
+
+## Tự kiểm tra kết quả
+
+- Down không đổi angles, nút phải/ngoài viewport/foreign pointer không khởi tạo hoặc chiếm thao tác.
+- Delta X/Y có dấu và đơn vị đúng; Q/E đổi roll.
+- Pitch đi qua ±90°, không tự gán giới hạn của camera FPS.
+- Up nhận mẫu cuối; lost button, cancel, capture failure dọn state.
+- Blur/resize/reset/preset/order/slider không để lại capture cũ.
+- Tab và các tổ hợp Ctrl/Alt/Meta không bị Canvas chặn.
+
+## Bài tập mở rộng
+
+Thêm chế độ đảo chiều Y bằng một checkbox. Đổi dấu đúng tại một chỗ trong công thức input; rotation math không được thay đổi theo tùy chọn này.
+
+[Sang bài tiếp theo — Tự quay và xem cảnh không có debug](/projects/rotating-triangle/07-chuyen-dong-va-che-do-demo).

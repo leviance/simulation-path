@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xoay camera và xử lý input an toàn
+
+## Vấn đề cần giải quyết
+
+Các phím đã cho đổi camera từ bài đầu. Bây giờ ta thêm orbit bằng chuột và chạy tự động, rồi kiểm cách đưa event vào bảng logic. Hình đúng nhưng thao tác kéo bị nhảy, dính chuột hoặc lệch khi resize vẫn là một editor chưa hoàn chỉnh.
+
+## Hiểu ý tưởng trước khi viết code
+
+Orbit chỉ đổi yaw/pitch quanh world origin, không đổi vertices. Khi nhấn, lưu vị trí chuột trước đó; khi di chuyển:
+
+$$
+yaw\mathrel{+}=0.008\Delta x,\qquad pitch\mathrel{+}=0.008\Delta y.
+$$
+
+Góc tính bằng radian. Pitch clamp ở [-1.2,1.2] để không vượt hai cực; yaw wrap bằng remainder. Radius trong [7,12]. Miền này cùng giới hạn vertices giúp hình học luôn hữu hạn, nhưng line renderer vẫn có clip near/far để xử lý đúng đoạn giao mặt phẳng.
+
+Clip phải xảy ra trong camera space **trước khi chia depth**. Một đầu bị khuất sau near không có nghĩa là bỏ cả đoạn nếu đầu kia còn nhìn thấy.
+
+<InteractiveLab demo="normal" mode="normal-camera" />
+
+## Viết code từng bước
+
+### Bước 1 — Viết orbit chỉ sửa camera
+
+```cpp title="include/camera.hpp — đổi góc bằng delta, không sửa đỉnh"
+inline void orbit(Camera& camera, double dx, double dy) {
+    if (!std::isfinite(dx) || !std::isfinite(dy)) {
+        return;
+    }
+    camera.yaw = std::remainder(camera.yaw + dx * 0.008, 2.0 * kPi);
+    camera.pitch = std::clamp(camera.pitch + dy * 0.008, -1.2, 1.2);
+}
+```
+
+Nhấn chuột chưa đổi góc. Cập nhật previousMouse sau mỗi move để delta kế tiếp tính từ mẫu mới, kể cả khi pitch vừa chạm biên.
+
+### Bước 2 — Clip đoạn theo độ sâu
+
+```cpp title="include/camera.hpp — giao near/far trong camera space"
+inline bool clipDepth(Vec3& start, Vec3& end) {
+    if (!finite(start) || !finite(end)) {
+        return false;
+    }
+    for (const auto plane : {std::pair<double, double>{0.2, 1.0}, std::pair<double, double>{30.0, -1.0}}) {
+        const double distanceStart = (start.z - plane.first) * plane.second;
+        const double distanceEnd = (end.z - plane.first) * plane.second;
+        if (distanceStart < 0.0 && distanceEnd < 0.0) {
+            return false;
+        }
+        if (distanceStart < 0.0 || distanceEnd < 0.0) {
+            const double fraction = distanceStart / (distanceStart - distanceEnd);
+            Vec3 hit = add(start, scale(subtract(end, start), fraction));
+            hit.z = plane.first;
+            if (distanceStart < 0.0) {
+                start = hit;
+            } else {
+                end = hit;
+            }
+        }
+    }
+    return true;
+}
+```
+
+distanceStart/distanceEnd là khoảng cách có dấu đến plane. Cùng ở ngoài thì bỏ đoạn; chỉ một đầu ở ngoài thì tìm fraction và thay đầu đó. hit.z được đặt đúng plane để sai số làm tròn không đẩy giao điểm ra ngoài lại ngay bước projection.
+
+line3D sau đó project hai đầu hợp lệ, clip screen vào viewport rồi mới đổi sang int cho Bresenham. Phần clip màn hình chỉ giới hạn việc vẽ, không sửa world state.
+
+### Bước 3 — Lưu một owner và nhận mẫu thả cuối
+
+```cpp title="src/main.cpp — trạng thái orbit và cách hủy capture"
+bool dragging = false;
+SDL_MouseID owner{};
+lab::Vec2 previousMouse{};
+std::uint64_t previousTicks = SDL_GetTicks();
+const auto cancelDrag = [&]() {
+    dragging = false;
+    SDL_CaptureMouse(false);
+};
+const auto updateOrbit = [&](lab::Vec2 point) {
+    lab::orbit(scene.camera, point.x - previousMouse.x, point.y - previousMouse.y);
+    previousMouse = point;
+    dirty = true;
+};
+```
+
+Trước hit-test, gọi SDL_ConvertEventToRenderCoordinates một lần cho mouse event. Chỉ nhận nút trái trong viewport; lưu event.button.which làm owner. Nếu SDL_CaptureMouse(true) thất bại thì hủy thao tác ngay. Mouse-move đúng owner mới gọi updateOrbit; mất SDL_BUTTON_LMASK thì cancelDrag.
+
+Ở mouse-up, updateOrbit bằng vị trí thả rồi cancelDrag. Blur/hidden/resize/reset/preset/winding/pause cũng hủy capture. Source checkpoint có đủ các nhánh SDL_EVENT_MOUSE_BUTTON_DOWN/MOTION/UP, không lược bỏ bằng dấu ba chấm.
+
+### Bước 4 — Chạy orbit theo thời gian
+
+```cpp title="include/scene.hpp — yaw tăng theo radian mỗi giây"
+inline void advanceScene(Scene& scene, double deltaTime) {
+    if (!std::isfinite(deltaTime) || deltaTime <= 0.0 || deltaTime > 0.1) {
+        return;
+    }
+    scene.camera.yaw = std::remainder(scene.camera.yaw + 0.35 * deltaTime, 2.0 * kPi);
+}
+```
+
+Vòng lặp clamp dt tối đa 0.1 s. Tốc độ 0.35 rad/s nhân dt, không tăng một lượng cố định mỗi frame. Space pause, N tiến 0.1 s khi pause. Không có lý do gì để sửa hình học trong advanceScene.
+
+## Ghép các phần lại
+
+Build project_10_checkpoint_6. Nhấn rồi kéo: hình không nhảy ở mouse-down. Tiếp tục kéo ra ngoài viewport; owner vẫn giữ thao tác cho đến khi thả hoặc bị hủy. Resize giữ vertices/camera rồi pause, không reset cảnh.
+
+Bảng logic 1100×800 dùng SDL letterbox/HiDPI. Không nhân device-pixel-ratio thêm sau SDL convert. Canvas dùng cùng bảng logic, nhưng quy đổi bounding rect/CSS và DPR theo đường riêng của trình duyệt. Reduced motion tắt auto orbit, không tắt chỉnh tay.
+
+## Thử làm sai để hiểu đúng
+
+1. Gán yaw trực tiếp bằng mouse X ở mouse-down. Camera sẽ nhảy dù bạn chỉ nhấn để bắt đầu kéo. Khôi phục mô hình lưu mẫu trước và dùng delta.
+
+2. Bỏ updateOrbit ở mouse-up. Thao tác có ít mouse-move có thể bỏ mất chuyển động cuối. Khôi phục cập nhật rồi mới release capture.
+
+3. Với camera-space segment từ z=−1 tới z=1, bỏ cả đoạn vì đầu đầu tiên ở sau near. Một phần nhìn thấy bị mất. Khôi phục clip và kiểm giao near z=0.2 thay vì bỏ cả đoạn.
+
+## Tự kiểm tra kết quả
+
+- Mouse-down không đổi camera; move/up đúng owner mới thay đổi.
+- Mất nút trái, blur, resize hoặc reset không để capture dính.
+- Near/far clipping giữ phần trong miền; không chia tại z≤0.
+- Auto orbit không phụ thuộc số frame ở cùng tổng dt được chấp nhận; stall bị clamp được ghi rõ.
+- Tab rời Canvas được; slider HTML dùng keyboard mặc định, shortcut hệ thống không bị chặn.
+
+## Bài tập mở rộng
+
+Thêm nút đổi camera về góc nhìn +X/+Y/+Z. Với góc nhìn dọc một trục, dự đoán trục nào có thể co thành một điểm trong ảnh chiếu rồi đối chiếu.
+
+[Bài tiếp theo: Hoàn thiện la bàn và kiểm chứng](/projects/3d-compass/07-suy-bien-va-kiem-chung).

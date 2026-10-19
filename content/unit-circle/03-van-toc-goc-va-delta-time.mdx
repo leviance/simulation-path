@@ -1,119 +1,117 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Vận tốc góc, delta time và chu kỳ
+# Cho kim quay theo thời gian
 
 ## Vấn đề cần giải quyết
 
-Đầu kim đã được tính đúng từ một góc tĩnh. Để nó quay, cách dễ nghĩ nhất là cộng một lượng nhỏ vào `angle` mỗi frame. Cách đó lặp lại lỗi của Project 02: máy render nhiều frame hơn sẽ làm kim quay nhanh hơn.
-
-Ta cần mô tả tốc độ bằng radian mỗi giây rồi nhân với thời gian thật đã trôi qua.
+Đầu kim đã đặt đúng theo góc. Bây giờ ta muốn nó quay 90° mỗi giây, dù máy vẽ 30 hay 120 frame trong giây đó. Bạn đã gặp ý tưởng delta time ở Project 02; lần này đại lượng được cập nhật là góc, không phải vị trí ô vuông.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ba đại lượng có đơn vị khác nhau:
-
-- `angle`: radian;
-- `angularSpeed`: radian/giây;
-- `deltaTime`: giây.
-
-Do đó:
+Góc angle đo bằng radian. Vận tốc góc angularSpeed đo bằng radian/giây. Trong khoảng deltaTime giây, góc tăng angularSpeed × deltaTime radian.
 
 $$
-angle_{new}=angle_{old}+angularSpeed\times deltaTime
+\theta_{new}=\operatorname{normalize}(\theta_{old}+\omega\Delta t)
 $$
 
-Đơn vị ở vế cộng thêm là `(rad/s) × s = rad`, khớp với `angle`. Nếu `angularSpeed = π/2 rad/s`, kim đi một phần tư vòng mỗi giây và cần 4 giây cho một vòng:
-
-$$
-period=\frac{2\pi}{|angularSpeed|}
-$$
+Với ω=π/2 rad/s, kim đi một phần tư vòng trong 1 giây và hết một vòng trong 4 giây. ω âm thì quay ngược; ω=0 thì đứng yên. Chu kỳ T=2π/|ω| chỉ hữu hạn khi tốc độ khác 0.
 
 <InteractiveLab demo="angle" mode="angle-motion" />
 
-Kéo `angularSpeed` qua giá trị âm để xem chiều quay đảo lại. Khi độ lớn của vận tốc tiến gần 0, chu kỳ (`period`) tăng rất lớn; tại đúng 0, kim đứng yên nên thời gian hoàn thành một vòng là vô hạn.
+Bấm Tạm dừng, dùng Tiến 0,1 s rồi quan sát góc tăng khoảng 0,15708 rad ở tốc độ mặc định. Đưa tốc độ về 0, rồi sang âm. Nếu hệ thống bật giảm chuyển động, mô phỏng không tự chạy; nút tiến vẫn cho phép xem từng bước.
 
 ## Viết code từng bước
 
-### Bước 1 — Gói quy tắc cập nhật vào hàm thuần
+### Bước 1 — Thêm vận tốc vào scene
 
-```cpp title="include/lab.hpp — advanceAngle"
+Trong struct Scene của include/scene.hpp, thêm trường:
+
+
+```cpp title="include/scene.hpp — vận tốc góc ban đầu"
+double angularSpeed = kPi / 2.0;
+```
+
+angle vẫn là nguồn dữ liệu cho đầu kim. Ta không lưu một vận tốc riêng cho X hoặc Y.
+
+Trong include/lab.hpp, viết phần toán cập nhật:
+
+```cpp title="include/lab.hpp — góc tăng theo radian mỗi giây"
 inline double advanceAngle(double angle, double angularSpeed, double deltaTime) {
-    if (!std::isfinite(angularSpeed) || !std::isfinite(deltaTime)) {
+    if (!std::isfinite(angularSpeed) || !std::isfinite(deltaTime) || deltaTime < 0.0) {
         return normalizeAngle(angle);
     }
     return normalizeAngle(angle + angularSpeed * deltaTime);
 }
 ```
 
-Hàm chuẩn hóa sau khi cộng, nên góc không tăng mãi qua hàng triệu vòng. Dữ liệu thời gian không hợp lệ bị bỏ qua thay vì truyền NaN vào sin/cos.
+Hàm này không tự chặn deltaTime hợp lệ thành một số nhỏ khác. NaN, infinity hoặc thời gian âm bị từ chối; ở miền ứng dụng, tốc độ nằm trong [−2π,2π] rad/s.
 
-### Bước 2 — Tính chu kỳ và xử lý tốc độ bằng 0
+### Bước 2 — Ghép phép toán vào scene
 
-```cpp title="include/lab.hpp — periodFromAngularSpeed"
+```cpp title="include/scene.hpp — một bước mô phỏng"
+inline void advanceScene(Scene& scene, double deltaTime) {
+    if (!std::isfinite(deltaTime) || deltaTime <= 0.0 || deltaTime > 0.1) {
+        return;
+    }
+    scene.angle = advanceAngle(scene.angle, scene.angularSpeed, deltaTime);
+}
+```
+
+Ta chấp nhận bước tối đa 0,1 giây để giữ chi phí mỗi frame có giới hạn khi thêm đồ thị. Quy tắc này thuộc mô phỏng: gọi trực tiếp với 1 giây sẽ không cập nhật. Đừng dùng nó rồi kết luận phương trình góc sai; hãy chia thành các bước hợp lệ.
+
+### Bước 3 — Đo thời gian ở vòng lặp SDL
+
+Trong src/main.cpp, previousTicks được đặt trước while(running). Sau khi xử lý input, đoạn sau đo frame mới:
+
+```cpp title="src/main.cpp — đo thời gian thực rồi cập nhật khi không pause"
+const std::uint64_t now = SDL_GetTicks();
+const double deltaTime = std::min(0.1, static_cast<double>(now - previousTicks) / 1000.0);
+previousTicks = now;
+if (!paused) {
+    lab::advanceScene(scene, deltaTime);
+    dirty = true;
+}
+```
+
+SDL_GetTicks trả millisecond; chia 1000.0 để được giây. previousTicks vẫn cập nhật khi pause, nên lúc tiếp tục không cộng dồn toàn bộ thời gian đã dừng.
+
+Giới hạn 0,1 giây tránh bước nhảy lớn khi bạn dừng ở breakpoint. Đổi lại, mô phỏng không bù toàn bộ wall time bị bỏ qua; góc và đồ thị sau này dùng cùng **thời gian mô phỏng đã chấp nhận**.
+
+### Bước 4 — Đọc chu kỳ và thử điều khiển
+
+```cpp title="include/lab.hpp — chu kỳ từ độ lớn vận tốc góc"
 inline double periodFromAngularSpeed(double angularSpeed) {
-    if (!std::isfinite(angularSpeed) || std::abs(angularSpeed) <= 1e-12) {
+    if (!std::isfinite(angularSpeed) || angularSpeed == 0.0) {
         return std::numeric_limits<double>::infinity();
     }
     return kTau / std::abs(angularSpeed);
 }
 ```
 
-`abs` làm chu kỳ luôn dương dù kim quay thuận hay ngược. Giá trị vô cực diễn đạt đúng tình huống này hơn một con số tùy ý như 999999 giây.
-
-### Bước 3 — Đo delta time từ đồng hồ SDL
-
-```cpp title="src/main.cpp — thời gian của một frame"
-const std::uint64_t currentTicks = SDL_GetTicks();
-double deltaTime = double(currentTicks - previousTicks) / 1000.0;
-previousTicks = currentTicks;
-deltaTime = std::min(deltaTime, 0.1);
-if (!paused) {
-    angle = lab::advanceAngle(angle, angularSpeed, deltaTime);
-}
-```
-
-`SDL_GetTicks` trả millisecond nên phải chia 1000. Giới hạn 0,1 giây ngăn một lần dừng ở breakpoint làm kim nhảy qua một đoạn quá lớn khi tiếp tục chạy chương trình.
-
-### Bước 4 — Điều khiển chuyển động mà không thay công thức
-
-```cpp title="src/main.cpp — pause và thay đổi vận tốc góc"
-if (!event.key.repeat && event.key.key == SDLK_SPACE) {
-    paused = !paused;
-}
-if (event.key.key == SDLK_UP) {
-    angularSpeed = std::min(2.0 * lab::kPi, angularSpeed + 0.25);
-}
-if (event.key.key == SDLK_DOWN) {
-    angularSpeed = std::max(-2.0 * lab::kPi, angularSpeed - 0.25);
-}
-```
-
-Phím chỉ sửa `paused` hoặc `angularSpeed`. Công thức cập nhật vẫn nằm ở một nơi và không có nhánh riêng cho quay thuận/quay ngược.
+Space pause/resume; ↑/↓ đổi vận tốc từng 0,25 rad/s; S tiến 0,1 s khi đang dừng. ←/→ và F1–F5 đổi góc bằng tay nên tạm dừng, tránh kim tự chạy ngay sau khi bạn vừa chọn mốc. R đưa scene về góc 35° và tốc độ π/2 rồi giữ ở trạng thái dừng.
 
 ## Ghép các phần lại
 
-Chạy checkpoint 3, bấm Space vài lần rồi thay đổi vận tốc bằng phím lên/xuống. Thanh tiêu đề hiển thị `angle`, `angularSpeed` và `period`. Khi tốc độ đổi dấu, hướng quay đổi nhưng độ lớn của một vòng vẫn là `2π`.
+Build project_7_checkpoint_3. Sau mỗi frame, angle được cập nhật một lần, sau đó renderScene dùng lại cách vẽ của bài 2. Đừng lấy một deltaTime trong update rồi lấy deltaTime khác cho đồ thị về sau.
 
-Trong Canvas, sau khi bấm **Tạm dừng**, thanh góc và các mốc vẫn hoạt động. Nhờ vậy bạn có thể đặt kim đúng 0°, 90° hoặc 180° để kiểm tra mà không phải đuổi theo một điểm đang chuyển động.
-
-Điều cần giữ từ Project 02 là: cùng tổng thời gian phải cho cùng kết quả. 60 bước `1/60 s` và 30 bước `1/30 s` đều mô phỏng đúng một giây.
+Cửa sổ mất focus hoặc bị ẩn sẽ pause; bạn chủ động nhấn Space để chạy lại. Vòng lặp có SDL_Delay(16) để không quay CPU vô ích. Delay không phải đồng hồ mô phỏng: vị trí vẫn do deltaTime đo được quyết định.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thay cập nhật bằng `angle += 0.02`. Tốc độ lập tức phụ thuộc FPS.
-2. Quên chia millisecond cho 1000. Kim quay nhanh hơn dự kiến một nghìn lần.
-3. Tính period bằng `2π/angularSpeed` mà không lấy trị tuyệt đối. Quay ngược tạo một “thời gian” âm.
+1. Đổi scene.angle thành normalizeAngle(scene.angle + 0.01) mỗi frame. So số vòng trong 4 giây khi thêm Delay 16 và Delay 33: tốc độ sẽ phụ thuộc FPS.
+2. Bỏ phép chia 1000.0 sau SDL_GetTicks. Đại lượng deltaTime trở thành millisecond; advanceScene từ chối nhiều frame vì vượt 0,1 giây.
+3. Chỉ cập nhật previousTicks khi không pause. Tạm dừng vài giây rồi tiếp tục để thấy vì sao cần đo lại mốc thời gian kể cả lúc không mô phỏng.
 
 ## Tự kiểm tra kết quả
 
-- `angularSpeed = π` cho period 2 giây.
-- Tốc độ `-π` quay ngược nhưng vẫn có period 2 giây.
-- Tốc độ 0 làm kim đứng yên và period là infinity.
-- 30 bước và 60 bước với cùng tổng thời gian cho cùng góc cuối.
-- Space không làm mất góc hiện tại.
+- Mặc định một vòng mất xấp xỉ 4 giây khi không có hitch dài; sai số frame cuối là bình thường.
+- angularSpeed âm đổi chiều, không làm chu kỳ âm.
+- Tốc độ 0 giữ nguyên góc; period hiển thị vô hạn.
+- Khi pause, S tiến đúng một bước 0,1 giây; Space không bị toggle liên tục bởi key repeat.
+- Hai chuỗi bước có cùng tổng thời gian được chấp nhận cho cùng góc trong sai số số thực.
 
 ## Bài tập mở rộng
 
-Thêm phím đổi trực tiếp giữa các preset `π/4`, `π/2`, `π` rad/s. Sau đó viết chế độ ping-pong: góc chỉ chạy trong một cung giới hạn rồi đảo `angularSpeed` khi chạm hai đầu.
+Tạo hai Scene giống nhau. Cho một scene chạy 120 bước 1/120 giây, scene kia chạy 10 bước 0,1 giây. Dự đoán góc cuối bằng θ0+ωt, rồi đối chiếu cả hai với dự đoán đó.
 
-Bài sau không thêm trạng thái mới; nó dùng endpoint hiện tại để giải thích hình chiếu và ý nghĩa trực quan của sin/cos.
+Tiếp theo: [nhìn thấy sin và cos trên hai trục](/projects/unit-circle/04-hinh-chieu-len-hai-truc).

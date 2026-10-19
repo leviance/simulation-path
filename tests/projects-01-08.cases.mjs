@@ -167,7 +167,7 @@ test("Project 07 connects radian, sin-cos, motion, graphs and atan2 in one progr
   const first = await readFile(path.join(directory, "01-radian-va-vong-tron-don-vi.mdx"), "utf8");
   assert.match(first, /Một radian là góc chắn một cung có độ dài đúng bằng bán kính/i);
   assert.match(first, /normalizeAngle/);
-  assert.match(first, /drawCircleOutline/);
+  assert.match(first, /drawCircle/);
 
   const second = await readFile(path.join(directory, "02-sin-cos-thanh-toa-do.mdx"), "utf8");
   assert.match(second, /unitDirection/);
@@ -181,26 +181,26 @@ test("Project 07 connects radian, sin-cos, motion, graphs and atan2 in one progr
   const fourth = await readFile(path.join(directory, "04-hinh-chieu-len-hai-truc.mdx"), "utf8");
   assert.match(fourth, /projectOntoXAxis/);
   assert.match(fourth, /vector thành phần.*đường dóng/is);
-  assert.match(fourth, /centerX, centerY, cosineX, centerY/);
+  assert.match(fourth, /lineBetween\(image, kCenter, cosinePoint, kCosine\)/);
 
   const fifth = await readFile(path.join(directory, "05-do-thi-sin-cos.mdx"), "utf8");
   assert.match(fifth, /appendWaveSample/);
   assert.match(fifth, /mapSampleTimeToX/);
-  assert.match(fifth, /kVisibleHistorySeconds = 6\.0/);
-  assert.match(fifth, /sampleAccumulator/);
+  assert.match(fifth, /kVisibleHistorySeconds\s*=\s*6\.0/);
+  assert.match(fifth, /nextSampleIndex/);
 
-  const final = await readFile(path.join(directory, "06-atan2-va-validation.mdx"), "utf8");
-  assert.match(final, /atan2\(y,x\)/i);
+  const final = await readFile(path.join(directory, "07-hoan-thien-va-kiem-chung.mdx"), "utf8");
+  assert.match(
+    await readFile(path.join(directory, "06-keo-kim-voi-atan2.mdx"), "utf8"),
+    /atan2\(y,x\)/i,
+  );
   assert.match(final, /angleFromDirection\(lab::unitDirection\(original\)\)/);
   assert.match(final, /Project 08/);
 
-  const labSource = await readFile(
-    path.join(workspace, "components", "labs", "angle-lab.tsx"),
-    "utf8",
-  );
-  assert.match(labSource, /Math\.hypot\(point\.x - endpoint\.x, point\.y - endpoint\.y\) > 18/);
-  assert.match(labSource, /mapSampleTimeToX\(sample\.time, newestTime, visibleHistorySeconds/);
-  assert.doesNotMatch(labSource, /const sampleAngle = TAU \* index/);
+  const model = await readFile(path.join(workspace, "lib/labs/unit-circle.ts"), "utf8");
+  assert.match(model, /Math\.hypot\(screen\.x - endpoint\.x, screen\.y - endpoint\.y\) > 18/);
+  assert.match(model, /nextSampleIndex \* sampleInterval/);
+  assert.match(model, /samples: samples\.slice\(-maximumSamples\)/);
 });
 
 test("Project 08 builds a visible turret before teaching dot, projection and rotation", async () => {
@@ -220,7 +220,7 @@ test("Project 08 builds a visible turret before teaching dot, projection and rot
     path.join(directory, "01-bo-khung-thap-phao-va-muc-tieu.mdx"),
     "utf8",
   );
-  assert.match(first, /tháp pháo ở giữa cửa sổ/i);
+  assert.match(first, /tháp pháo ở giữa vùng vẽ/i);
   assert.match(first, /SDL_EVENT_MOUSE_MOTION/);
   assert.match(first, /drawTarget/);
 
@@ -244,8 +244,11 @@ test("Project 08 builds a visible turret before teaching dot, projection and rot
   assert.match(fifth, /turnSpeed \* deltaTime/);
   assert.match(fifth, /rotateTowards/);
 
-  const final = await readFile(path.join(directory, "06-vung-khoa-va-validation.mdx"), "utf8");
-  assert.match(final, /isWithinViewCone/);
+  const final = await readFile(path.join(directory, "07-hoan-thien-va-kiem-chung.mdx"), "utf8");
+  assert.match(
+    await readFile(path.join(directory, "06-vung-nhin-va-bien.mdx"), "utf8"),
+    /isWithinViewCone/,
+  );
   assert.match(final, /projection plus rejection reconstructs vector/);
   assert.match(final, /Project 8 đã hoàn chỉnh/i);
 
@@ -254,11 +257,9 @@ test("Project 08 builds a visible turret before teaching dot, projection and rot
     "utf8",
   );
   assert.match(labSource, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(
-    labSource,
-    /rotateTowards\(turretAngleRef\.current, target, turnSpeed \* deltaTime\)/,
-  );
-  assert.match(labSource, /cosineBetween\(forward, target\)/);
+  assert.match(labSource, /advanceTurret\(sceneRef\.current, deltaTime\)/);
+  const model = await readFile(path.join(workspace, "lib/labs/turret-scene.ts"), "utf8");
+  assert.match(model, /cosineBetween\(forward, target\)/);
 });
 
 test("Project 09 teaches direct transforms before matrix composition and order", async () => {
@@ -290,28 +291,27 @@ test("Project 09 teaches direct transforms before matrix composition and order",
 
   const shear = await readFile(path.join(directory, "04-shear-va-he-truc-bi-xien.mdx"), "utf8");
   assert.match(shear, /shearPoint/);
-  assert.match(shear, /Scale → Shear → Rotate/);
+  assert.match(shear, /scale→shear→rotate/i);
+  assert.match(shear, /struct Mat2/);
 
   const matrix = await readFile(path.join(directory, "05-ma-tran-affine-3x3.mdx"), "utf8");
   assert.match(matrix, /struct Mat3/);
   assert.match(matrix, /inline Mat3 multiply/);
   assert.match(matrix, /transformPoint/);
 
-  const final = await readFile(
-    path.join(directory, "06-thu-tu-phep-bien-doi-va-validation.mdx"),
-    "utf8",
-  );
-  assert.match(final, /composeTransform/);
-  assert.match(final, /absolute determinant matches area ratio/);
-  assert.match(final, /Project 09 đã hoàn chỉnh/i);
+  const final = await readFile(path.join(directory, "08-hoan-thien-va-kiem-chung.mdx"), "utf8");
+  assert.match(final, /compose\/multiply/);
+  assert.match(final, /signedArea/);
+  assert.match(final, /CTest/);
 
   const labSource = await readFile(
     path.join(workspace, "components", "labs", "transform-lab.tsx"),
     "utf8",
   );
   assert.match(labSource, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(labSource, /composeTransform\(parameters/);
-  assert.match(labSource, /determinantLinearPart\(matrix\)/);
+  const model = await readFile(path.join(workspace, "lib/labs/transform-scene.ts"), "utf8");
+  assert.match(model, /composeTransform\(scene\.parameters,\s*scene\.order\)/);
+  assert.match(model, /determinantLinearPart\(matrix\)/);
 });
 
 test("Project 10 builds a visible 3D compass before triangle normals", async () => {
@@ -330,23 +330,24 @@ test("Project 10 builds a visible 3D compass before triangle normals", async () 
   const first = await readFile(path.join(directory, "01-vec3-va-la-ban-ba-truc.mdx"), "utf8");
   assert.match(first, /Bộ khung.*framebuffer.*drawLine/is);
   assert.match(first, /struct Vec3/);
-  assert.match(first, /projectIsometric/);
+  assert.match(first, /projectPerspective/);
+  assert.match(first, /worldToCamera/);
   assert.match(first, /drawAxes/);
   assert.match(first, /SDL_UpdateTexture/);
 
   const edges = await readFile(path.join(directory, "02-tam-giac-va-hai-vector-canh.mdx"), "utf8");
   assert.match(edges, /triangleEdges/);
-  assert.match(edges, /B−A/);
-  assert.match(edges, /C−A/);
+  assert.match(edges, /A=P_1-P_0/);
+  assert.match(edges, /B=P_2-P_0/);
 
   const cross = await readFile(path.join(directory, "03-cross-product-va-raw-normal.mdx"), "utf8");
   assert.match(cross, /inline Vec3 cross/);
-  assert.match(cross, /N.*AB.*N.*AC/is);
+  assert.match(cross, /dot\(N,A\).*dot\(N,B\)/is);
 
   const unit = await readFile(path.join(directory, "04-unit-normal-va-dien-tich.mdx"), "utf8");
   assert.match(unit, /triangleUnitNormal/);
   assert.match(unit, /triangleArea/);
-  assert.match(unit, /length <= epsilon/);
+  assert.match(unit, /normalHasDirection/);
 
   const winding = await readFile(
     path.join(directory, "05-winding-va-quy-tac-ban-tay-phai.mdx"),
@@ -355,21 +356,19 @@ test("Project 10 builds a visible 3D compass before triangle normals", async () 
   assert.match(winding, /reverseWinding/);
   assert.match(winding, /facingAmount/);
 
-  const final = await readFile(
-    path.join(directory, "06-tam-giac-suy-bien-va-validation.mdx"),
-    "utf8",
-  );
-  assert.match(final, /isDegenerate/);
+  const final = await readFile(path.join(directory, "07-suy-bien-va-kiem-chung.mdx"), "utf8");
+  assert.match(final, /normalHasDirection/);
   assert.match(final, /orthogonalityError/);
-  assert.match(final, /Project 10 đã hoàn chỉnh/i);
+  assert.match(final, /CTest/);
 
   const labSource = await readFile(
     path.join(workspace, "components", "labs", "normal-lab.tsx"),
     "utf8",
   );
   assert.match(labSource, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(labSource, /triangleRawNormal\(triangle\)/);
-  assert.match(labSource, /isDegenerateTriangle\(triangle/);
+  const model = await readFile(path.join(workspace, "lib/labs/normal-scene.ts"), "utf8");
+  assert.match(model, /triangleRawNormal\(triangle\)/);
+  assert.match(model, /isDegenerateTriangle\(triangle/);
 });
 
 test("Project 11 derives perspective from a visible point before adding visibility guards", async () => {
@@ -417,15 +416,16 @@ test("Project 11 derives perspective from a visible point before adding visibili
     "utf8",
   );
   assert.ok(
-    visibility.indexOf("cameraPoint.z <= 0.0") < visibility.indexOf("cameraToNdc"),
+    visibility.indexOf("cameraPoint.z <= 0.0") <
+      visibility.lastIndexOf("const Vec2 ndc = cameraToNdc"),
     "Project 11 must reject unsafe depth before perspective division",
   );
   assert.match(visibility, /ProjectionStatus/);
   assert.match(visibility, /isInsideNdc/);
 
-  const final = await readFile(path.join(directory, "06-diem-bay-va-validation.mdx"), "utf8");
+  const final = await readFile(path.join(directory, "08-hoan-thien-va-kiem-chung.mdx"), "utf8");
   assert.match(final, /screenToCameraAtDepth/);
-  assert.match(final, /advanceFlightTime/);
+  assert.match(final, /quỹ đạo/i);
   assert.match(final, /Project 11 đã hoàn chỉnh/i);
 
   const labSource = await readFile(
@@ -433,7 +433,7 @@ test("Project 11 derives perspective from a visible point before adding visibili
     "utf8",
   );
   assert.match(labSource, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(labSource, /projectPerspective\(/);
+  assert.match(labSource, /pointDisplay\(/);
   assert.match(labSource, /screenToCameraAtDepth\(/);
 });
 
@@ -475,12 +475,12 @@ test("Project 12 draws a projected triangle before deriving rotation and mouse c
   assert.match(euler, /RotationOrder/);
   assert.match(euler, /rotateEuler/);
 
-  const mouse = await readFile(path.join(directory, "05-keo-chuot-de-xoay.mdx"), "utf8");
+  const mouse = await readFile(path.join(directory, "06-keo-chuot-va-roll.mdx"), "utf8");
   assert.match(mouse, /applyMouseDrag/);
   assert.match(mouse, /SDL_CaptureMouse\(true\)/);
   assert.match(mouse, /SDL_CaptureMouse\(false\)/);
 
-  const final = await readFile(path.join(directory, "06-animation-va-validation.mdx"), "utf8");
+  const final = await readFile(path.join(directory, "08-hoan-thien-va-kiem-chung.mdx"), "utf8");
   assert.match(final, /inverseRotateEuler/);
   assert.match(final, /maximumEdgeLengthError/);
   assert.match(final, /Project 12 đã hoàn chỉnh/i);
@@ -490,11 +490,11 @@ test("Project 12 draws a projected triangle before deriving rotation and mouse c
     "utf8",
   );
   assert.match(labSource, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(labSource, /z: 0\.7/);
-  assert.match(labSource, /formatProjection\(vertex\)/);
+  const scene = await readFile(path.join(workspace, "lib/labs/rotation3d-scene.ts"), "utf8");
+  assert.match(scene, /position.z = 0\.7/);
   assert.match(labSource, /pointer capture/);
-  assert.match(labSource, /rotateTriangle3\(/);
-  assert.match(labSource, /maximumEdgeLengthError3\(/);
+  assert.match(scene, /rotateTriangle3\(/);
+  assert.match(scene, /maximumEdgeLengthError3\(/);
 });
 
 test("Project 02 checkpoints preserve drawing, movement and measured FPS progression", async () => {

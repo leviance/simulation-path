@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện editor và kiểm chứng kết quả
+
+## Vấn đề cần giải quyết
+
+Editor đã có đủ chức năng. Tuy vậy một hình trông hợp lý chưa đủ chứng minh ma trận đúng. Bài cuối thêm số đo, test bằng dữ liệu biết trước và kiểm hình học độc lập, rồi đóng gói source hoàn chỉnh để bạn tiếp tục phát triển.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với ma trận affine M, phần tuyến tính A là khối 2×2 góc trên trái:
+
+$$
+\det A=ad-bc,\qquad
+\frac{Area(MP)}{Area(P)}=|\det A|.
+$$
+
+Diện tích có dấu còn giữ thông tin hướng. det âm đảo chiều đi quanh polygon; det bằng 0 là suy biến. UI dùng ngưỡng |det|≤10⁻¹⁰ để ghi “suy biến/gần suy biến”; đó là chính sách hiển thị, không biến một số nhỏ khác 0 thành số 0 trong phép toán.
+
+Trong project này det=scaleX·scaleY·(1−shearX·shearY) ở cả hai order, vì rotation có determinant 1 và translation không đổi diện tích. Vì vậy **diện tích đúng chưa đủ bắt lỗi đảo order**: cần kiểm thêm tọa độ cụ thể.
+
+<InteractiveLab demo="transform" mode="transform-full" />
+
+## Viết code từng bước
+
+### Bước 1 — Đo determinant và diện tích từ bốn đỉnh
+
+```cpp title="include/lab.hpp — đọc khối tuyến tính"
+inline double determinantLinearPart(Mat3 matrix) {
+    return matrix.at(0, 0) * matrix.at(1, 1) - matrix.at(0, 1) * matrix.at(1, 0);
+}
+```
+
+```cpp title="include/lab.hpp — shoelace giữ dấu của polygon"
+inline double signedArea(const Square& polygon) {
+    double doubledArea = 0.0;
+    for (std::size_t index = 0; index < polygon.size(); ++index) {
+        const Vec2 current = polygon[index];
+        const Vec2 next = polygon[(index + 1) % polygon.size()];
+        doubledArea += current.x * next.y - current.y * next.x;
+    }
+    return doubledArea * 0.5;
+}
+```
+
+polygonArea lấy abs(signedArea). Đừng lấy abs trước khi kiểm winding; bạn sẽ mất thông tin phản chiếu. Với square local nửa cạnh 1, diện tích ban đầu là 4.
+
+### Bước 2 — So hai đường tính nhưng hiểu giới hạn của phép so
+
+```cpp title="include/scene.hpp — chuỗi hàm đối chiếu với matrix"
+inline Vec2 directTransform(Vec2 point, const Scene& scene) {
+    const auto& p = scene.parameters;
+    if (scene.order == TransformOrder::RotateShearScale) {
+        const Vec2 rotated = rotatePoint(point, p.angle);
+        const Vec2 sheared = shearPoint(rotated, p.shearX, p.shearY);
+        return add(scalePoint(sheared, p.scaleX, p.scaleY), p.translation);
+    }
+    point = scalePoint(point, p.scaleX, p.scaleY);
+    point = shearPoint(point, p.shearX, p.shearY);
+    point = rotatePoint(point, p.angle);
+    point = add(point, p.translation);
+    return point;
+}
+```
+
+HUD hiển thị direct/matrix error cho P2. Nó bắt được nhiều lỗi ghép, nhưng hai đường có thể cùng chép sai công thức rotation. Vì vậy tests/tests.cpp còn có số biết trước: quarter turn, phép nhân Mat2 cho bốn ô, điểm/hướng dưới translation và oracle khai triển không gọi compose/multiply.
+
+### Bước 3 — Chạy CTest ở cả Debug lẫn Release
+
+```bash title="Terminal — build cả executable và tests, không chỉ target final"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Release\project_9_final.exe
+```
+
+Đừng thêm --target project_9_final vào hai lệnh build dùng cho CTest: bạn sẽ quên build test executable. Tests dùng check và EXIT_FAILURE, không dùng assert bị tắt bởi NDEBUG.
+
+Các ca gồm 41 bộ tham số × hai order, bốn đỉnh, so Mat2/Mat3/chuỗi hàm với oracle, diện tích có dấu, suy biến, slider hai đầu, NaN input, round-trip world/screen và pixel thực của shape/basis/grid.
+
+## Ghép các phần lại
+
+Bản final có đầy đủ hình gốc, hình/lưới sau biến đổi, basis, bảy slider, ma trận và số đo. Source tải xuống gồm README, CMakeLists.txt, starter, tám checkpoint, final, tests; phần **Toàn bộ mã nguồn của dự án** phía dưới hiển thị đủ mọi file.
+
+Math không phụ thuộc SDL: lab.hpp chứa Vec2/Mat2/Mat3; scene.hpp ghép trạng thái; controls.hpp xử lý slider; framebuffer.hpp/view.hpp vẽ CPU; presentation.hpp đưa ảnh/chữ ra SDL; main.cpp quản lý vòng đời và sự kiện. Không chép source đã sinh ngược về source-template.
+
+Starter và từng checkpoint vẫn chạy độc lập. Khi muốn học lại, build target project_9_checkpoint_N tương ứng thay vì tự xóa các phần của final.
+
+## Thử làm sai để hiểu đúng
+
+1. Đảo thứ tự nhân nhưng chỉ chạy kiểm diện tích: test có thể vẫn qua vì determinant không đổi. Dùng thêm điểm (1,1), scale(2,1), quay 90°; so (−1,2) với (−2,1) để bắt lỗi. Khôi phục order đúng.
+
+2. Trong UI thử gọi det=0 là giữ chiều, rồi chọn preset scale 0. Hình đã mất một chiều nên nhãn đó không mô tả được hướng. Khôi phục nhãn suy biến/gần suy biến.
+
+3. Trong bản test thử, thay check bằng assert và chèn một điều kiện sai. So Debug với Release: NDEBUG có thể tắt assert. Khôi phục check/EXIT_FAILURE để cả hai cấu hình cùng báo lỗi.
+
+## Tự kiểm tra kết quả
+
+- Identity, scale âm/0, rotation 90°, shear đồng thời và hai order đều có kết quả số biết trước.
+- Tọa độ khớp oracle độc lập; không chỉ so hai hàm dùng chung công thức.
+- Signed area/4≈det và absolute area/4≈|det|; sai số phù hợp miền tham số hữu hạn.
+- Debug và Release đều chạy CTest; smoke chỉ kiểm khởi tạo/presentation/thoát, không thay QA desktop.
+- QA trực tiếp: bảy slider, keyboard, giữ điểm nắm, thả ngoài, capture, resize, DPI và focus.
+- ZIP phải khớp source hiện tại, không đưa compiler output hoặc snapshot sinh tự động vào Git.
+
+## Bài tập mở rộng
+
+Thêm một polygon bất kỳ nhưng giữ cùng pipeline. Sau đó tìm một lỗi nhân ma trận mà kiểm diện tích không phát hiện được, viết test tọa độ cho lỗi đó và giải thích test đang độc lập ở điểm nào.
+
+[Tiếp tục Project 10 — La bàn 3D](/projects/3d-compass).

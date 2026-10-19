@@ -1,232 +1,130 @@
 #pragma once
-
-#include <algorithm>
+#include "projection.hpp"
 #include <array>
-#include <cmath>
 
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 6
+#define LAB_CHECKPOINT 8
 #endif
 
 namespace lab {
-// Project 12 giữ projection nền từ Project 11 để tập trung vào rotation của model.
-constexpr double kPi = 3.14159265358979323846;
-
-struct Vec2 {
-    double x{};
-    double y{};
-};
-
-struct Vec3 {
-    double x{};
-    double y{};
-    double z{};
-};
-
-inline Vec3 add(Vec3 left, Vec3 right) {
-    return {left.x + right.x, left.y + right.y, left.z + right.z};
+// Rotation dùng radian và trục world cố định, chưa dùng ma trận/quaternion.
+inline Vec3 add(Vec3 a, Vec3 b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
-inline Vec3 subtract(Vec3 left, Vec3 right) {
-    return {left.x - right.x, left.y - right.y, left.z - right.z};
+inline Vec3 subtract(Vec3 a, Vec3 b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
 
-inline double magnitude(Vec3 vector) {
-    return std::hypot(vector.x, vector.y, vector.z);
+inline Vec3 scale(Vec3 p, double factor) {
+    return {p.x * factor, p.y * factor, p.z * factor};
 }
 
-struct Camera3D {
-    Vec3 position{};
-};
-
-struct PerspectiveLens {
-    double verticalFovRadians{60.0 * kPi / 180.0};
-};
-
-enum class ProjectionStatus {
-    Visible,
-    BehindCamera,
-    BeforeNearPlane,
-    OutsideFrustum,
-};
-
-struct ProjectionResult {
-    ProjectionStatus status{ProjectionStatus::BehindCamera};
-    Vec3 cameraPoint{};
-    Vec2 ndc{};
-    Vec2 screen{};
-};
-
-inline Vec3 worldToCamera(Vec3 worldPoint, const Camera3D& camera) {
-    return subtract(worldPoint, camera.position);
+inline double magnitude(Vec3 p) {
+    return std::hypot(p.x, p.y, p.z);
 }
 
-inline Vec2 cameraToNdc(Vec3 cameraPoint, const PerspectiveLens& lens, double aspectRatio) {
-    const double focalScale = 1.0 / std::tan(lens.verticalFovRadians * 0.5);
-    return {
-        cameraPoint.x * focalScale / (cameraPoint.z * aspectRatio),
-        cameraPoint.y * focalScale / cameraPoint.z,
-    };
+inline Vec3 cross(Vec3 a, Vec3 b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 
-inline Vec2 ndcToScreen(Vec2 ndc, int width, int height) {
-    return {
-        (ndc.x + 1.0) * 0.5 * width,
-        (1.0 - ndc.y) * 0.5 * height,
-    };
-}
-
-inline ProjectionResult projectPerspective(
-    Vec3 worldPoint,
-    const Camera3D& camera,
-    const PerspectiveLens& lens,
-    double nearPlane,
-    int width,
-    int height
-) {
-    ProjectionResult result{};
-    result.cameraPoint = worldToCamera(worldPoint, camera);
-    if (result.cameraPoint.z <= 0.0) {
-        result.status = ProjectionStatus::BehindCamera;
-        return result;
+inline Vec3 normalize(Vec3 p) {
+    const double length = magnitude(p);
+    if (!finite(p) || length <= 1e-12) {
+        return {};
     }
-    if (result.cameraPoint.z < nearPlane) {
-        result.status = ProjectionStatus::BeforeNearPlane;
-        return result;
-    }
-
-    result.ndc = cameraToNdc(result.cameraPoint, lens, double(width) / double(height));
-    result.screen = ndcToScreen(result.ndc, width, height);
-    if (std::abs(result.ndc.x) > 1.0 || std::abs(result.ndc.y) > 1.0) {
-        result.status = ProjectionStatus::OutsideFrustum;
-        return result;
-    }
-    result.status = ProjectionStatus::Visible;
-    return result;
+    return scale(p, 1.0 / length);
 }
 
+struct EulerAngles {
+    double pitch{};
+    double yaw{};
+    double roll{};
+};
+enum class RotationOrder {
+    Xyz,
+    Zyx,
+};
+
+inline bool finiteAngles(EulerAngles angles) {
+    return std::isfinite(angles.pitch) && std::isfinite(angles.yaw) && std::isfinite(angles.roll);
+}
+
+inline double wrapAngle(double angle) {
+    double wrapped = std::fmod(angle, 2.0 * kPi);
+    if (wrapped > kPi) {
+        wrapped -= 2.0 * kPi;
+    }
+    if (wrapped < -kPi) {
+        wrapped += 2.0 * kPi;
+    }
+    return wrapped;
+}
 #if LAB_CHECKPOINT >= 1
-// Ba vertex được project riêng; chỉ một TriangleProjection hoàn chỉnh mới được nối cạnh.
 struct Triangle3 {
     Vec3 a{};
     Vec3 b{};
     Vec3 c{};
 };
 
-struct TriangleProjection {
-    bool visible{};
-    ProjectionResult a{};
-    ProjectionResult b{};
-    ProjectionResult c{};
-};
-
 inline Triangle3 defaultWorldTriangle() {
-    return {
-        {-1.4, -0.9, 5.7},
-        {1.3, -0.7, 6.4},
-        {0.1, 1.6, 5.9},
-    };
+    return {{-1.4, -0.9, 5.7}, {1.3, -0.7, 6.4}, {0.1, 1.6, 5.9}};
 }
 
-inline TriangleProjection projectTriangle(
-    const Triangle3& triangle,
-    const Camera3D& camera,
-    const PerspectiveLens& lens,
-    double nearPlane,
-    int width,
-    int height
-) {
-    TriangleProjection result{};
-    result.a = projectPerspective(triangle.a, camera, lens, nearPlane, width, height);
-    result.b = projectPerspective(triangle.b, camera, lens, nearPlane, width, height);
-    result.c = projectPerspective(triangle.c, camera, lens, nearPlane, width, height);
-    result.visible = result.a.status == ProjectionStatus::Visible &&
-        result.b.status == ProjectionStatus::Visible &&
-        result.c.status == ProjectionStatus::Visible;
+inline Triangle3 translateTriangle(const Triangle3& triangle, Vec3 translation) {
+    return {add(triangle.a, translation), add(triangle.b, translation), add(triangle.c, translation)};
+}
+
+struct TriangleProjection {
+    std::array<ProjectionResult, 3> vertices{};
+    bool allVisible = false;
+};
+
+inline TriangleProjection projectTriangle(const Triangle3& triangle, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
+    TriangleProjection result;
+    result.vertices = {projectPerspective(triangle.a, camera, lens, viewport), projectPerspective(triangle.b, camera, lens, viewport), projectPerspective(triangle.c, camera, lens, viewport)};
+    result.allVisible = true;
+    for (const auto& vertex : result.vertices) {
+        if (vertex.status != ProjectionStatus::Visible) {
+            result.allVisible = false;
+        }
+    }
     return result;
 }
 #endif
-
 #if LAB_CHECKPOINT >= 2
-// Local triangle đặt centroid tại gốc; modelPosition chịu trách nhiệm đưa nó về world space.
 inline Vec3 triangleCentroid(const Triangle3& triangle) {
-    return {
-        (triangle.a.x + triangle.b.x + triangle.c.x) / 3.0,
-        (triangle.a.y + triangle.b.y + triangle.c.y) / 3.0,
-        (triangle.a.z + triangle.b.z + triangle.c.z) / 3.0,
-    };
+    return scale(add(add(triangle.a, triangle.b), triangle.c), 1.0 / 3.0);
 }
 
 inline Triangle3 toLocalTriangle(const Triangle3& triangle) {
     const Vec3 pivot = triangleCentroid(triangle);
-    return {
-        subtract(triangle.a, pivot),
-        subtract(triangle.b, pivot),
-        subtract(triangle.c, pivot),
-    };
-}
-
-inline Triangle3 translateTriangle(const Triangle3& triangle, Vec3 translation) {
-    return {
-        add(triangle.a, translation),
-        add(triangle.b, translation),
-        add(triangle.c, translation),
-    };
+    return {subtract(triangle.a, pivot), subtract(triangle.b, pivot), subtract(triangle.c, pivot)};
 }
 #endif
-
 #if LAB_CHECKPOINT >= 3
-// Rotation X là rotation 2D của cặp Y/Z; thành phần X được giữ nguyên.
+// X giữ nguyên; cặp (Y,Z) quay như một vector 2D.
 inline Vec3 rotateX(Vec3 point, double angle) {
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    return {
-        point.x,
-        cosine * point.y - sine * point.z,
-        sine * point.y + cosine * point.z,
-    };
+    return {point.x, cosine * point.y - sine * point.z, sine * point.y + cosine * point.z};
 }
 
 inline Triangle3 rotateTriangleX(const Triangle3& triangle, double angle) {
-    return {
-        rotateX(triangle.a, angle),
-        rotateX(triangle.b, angle),
-        rotateX(triangle.c, angle),
-    };
+    return {rotateX(triangle.a, angle), rotateX(triangle.b, angle), rotateX(triangle.c, angle)};
 }
 #endif
-
 #if LAB_CHECKPOINT >= 4
-// EulerAngles dùng radian; RotationOrder ghi rõ phép nào được áp dụng trước.
-struct EulerAngles {
-    double pitch{};
-    double yaw{};
-    double roll{};
-};
-
-enum class RotationOrder {
-    Xyz,
-    Zyx,
-};
-
 inline Vec3 rotateY(Vec3 point, double angle) {
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    return {
-        cosine * point.x + sine * point.z,
-        point.y,
-        -sine * point.x + cosine * point.z,
-    };
+    return {cosine * point.x + sine * point.z, point.y, -sine * point.x + cosine * point.z};
 }
 
 inline Vec3 rotateZ(Vec3 point, double angle) {
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    return {
-        cosine * point.x - sine * point.y,
-        sine * point.x + cosine * point.y,
-        point.z,
-    };
+    return {cosine * point.x - sine * point.y, sine * point.x + cosine * point.y, point.z};
 }
 
 inline Vec3 rotateEuler(Vec3 point, EulerAngles angles, RotationOrder order) {
@@ -241,32 +139,48 @@ inline Vec3 rotateEuler(Vec3 point, EulerAngles angles, RotationOrder order) {
 }
 
 inline Triangle3 rotateTriangle(const Triangle3& triangle, EulerAngles angles, RotationOrder order) {
-    return {
-        rotateEuler(triangle.a, angles, order),
-        rotateEuler(triangle.b, angles, order),
-        rotateEuler(triangle.c, angles, order),
-    };
+    return {rotateEuler(triangle.a, angles, order), rotateEuler(triangle.b, angles, order), rotateEuler(triangle.c, angles, order)};
 }
 #endif
-
 #if LAB_CHECKPOINT >= 5
-// Mouse delta điều khiển orientation, còn pitch được giữ khỏi hai cực ±90°.
-inline EulerAngles applyMouseDrag(
-    EulerAngles angles,
-    double deltaX,
-    double deltaY,
-    double sensitivity
-) {
-    constexpr double pitchLimit = 89.0 * kPi / 180.0;
-    angles.yaw += deltaX * sensitivity;
-    angles.pitch -= deltaY * sensitivity;
-    angles.pitch = std::clamp(angles.pitch, -pitchLimit, pitchLimit);
+// Normal được suy từ hình học đã quay, không từ vị trí ảnh trên màn hình.
+inline Vec3 triangleRawNormal(const Triangle3& triangle) {
+    return cross(subtract(triangle.b, triangle.a), subtract(triangle.c, triangle.a));
+}
+
+inline Vec3 triangleUnitNormal(const Triangle3& triangle) {
+    return normalize(triangleRawNormal(triangle));
+}
+
+inline bool normalHasDirection(const Triangle3& triangle) {
+    return magnitude(triangleRawNormal(triangle)) > 1e-10;
+}
+#endif
+#if LAB_CHECKPOINT >= 6
+// Đây là xoay object, không phải FPS camera: không khóa pitch tại ±89°.
+inline EulerAngles applyMouseDrag(EulerAngles angles, double deltaX, double deltaY, double sensitivity) {
+    if (!finiteAngles(angles) || !std::isfinite(deltaX) || !std::isfinite(deltaY) || !std::isfinite(sensitivity) || sensitivity < 0.002 || sensitivity > 0.02) {
+        return angles;
+    }
+    angles.yaw = wrapAngle(angles.yaw + deltaX * sensitivity);
+    angles.pitch = wrapAngle(angles.pitch - deltaY * sensitivity);
     return angles;
 }
 #endif
-
-#if LAB_CHECKPOINT >= 6
-// Inverse chạy các rotation ngược dấu theo thứ tự đảo lại.
+#if LAB_CHECKPOINT >= 7
+inline EulerAngles advanceEulerAngles(EulerAngles angles, EulerAngles velocity, double deltaTime) {
+    if (!finiteAngles(angles) || !finiteAngles(velocity) || !std::isfinite(deltaTime) || deltaTime <= 0.0) {
+        return angles;
+    }
+    const double step = std::min(deltaTime, 0.1);
+    angles.pitch = wrapAngle(angles.pitch + velocity.pitch * step);
+    angles.yaw = wrapAngle(angles.yaw + velocity.yaw * step);
+    angles.roll = wrapAngle(angles.roll + velocity.roll * step);
+    return angles;
+}
+#endif
+#if LAB_CHECKPOINT >= 8
+// Đảo thứ tự thao tác rồi đổi dấu từng góc, không chỉ đổi dấu trong cùng order.
 inline Vec3 inverseRotateEuler(Vec3 point, EulerAngles angles, RotationOrder order) {
     if (order == RotationOrder::Zyx) {
         Vec3 restored = rotateX(point, -angles.pitch);
@@ -279,39 +193,26 @@ inline Vec3 inverseRotateEuler(Vec3 point, EulerAngles angles, RotationOrder ord
 }
 
 inline std::array<double, 3> triangleEdgeLengths(const Triangle3& triangle) {
-    return {
-        magnitude(subtract(triangle.b, triangle.a)),
-        magnitude(subtract(triangle.c, triangle.b)),
-        magnitude(subtract(triangle.a, triangle.c)),
-    };
+    return {magnitude(subtract(triangle.b, triangle.a)), magnitude(subtract(triangle.c, triangle.b)), magnitude(subtract(triangle.a, triangle.c))};
 }
 
 inline double maximumEdgeLengthError(const Triangle3& original, const Triangle3& rotated) {
-    const std::array<double, 3> before = triangleEdgeLengths(original);
-    const std::array<double, 3> after = triangleEdgeLengths(rotated);
+    const auto before = triangleEdgeLengths(original);
+    const auto after = triangleEdgeLengths(rotated);
     double error = 0.0;
-    for (std::size_t index = 0; index < before.size(); ++index) {
-        error = std::max(error, std::abs(before[index] - after[index]));
+    for (std::size_t i = 0; i < before.size(); ++i) {
+        error = std::max(error, std::abs(before[i] - after[i]));
     }
     return error;
 }
 
 inline double rotationRoundTripError(Vec3 point, EulerAngles angles, RotationOrder order) {
-    const Vec3 rotated = rotateEuler(point, angles, order);
-    const Vec3 restored = inverseRotateEuler(rotated, angles, order);
-    return magnitude(subtract(restored, point));
+    return magnitude(subtract(inverseRotateEuler(rotateEuler(point, angles, order), angles, order), point));
 }
 
-inline EulerAngles advanceEulerAngles(
-    EulerAngles angles,
-    EulerAngles angularVelocity,
-    double deltaTime
-) {
-    const double safeDeltaTime = std::clamp(deltaTime, 0.0, 0.1);
-    angles.pitch += angularVelocity.pitch * safeDeltaTime;
-    angles.yaw += angularVelocity.yaw * safeDeltaTime;
-    angles.roll += angularVelocity.roll * safeDeltaTime;
-    return angles;
+inline double normalRotationError(const Triangle3& local, const Triangle3& rotated, EulerAngles angles, RotationOrder order) {
+    const Vec3 expected = rotateEuler(triangleUnitNormal(local), angles, order);
+    return magnitude(subtract(triangleUnitNormal(rotated), expected));
 }
 #endif
 } // namespace lab

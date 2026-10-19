@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho điểm bay, dừng và bước từng nhịp
+
+## Vấn đề cần giải quyết
+
+Điều khiển tay đủ để kiểm công thức, nhưng khó lặp lại cùng một thí nghiệm. Ta thêm quỹ đạo tự động để điểm đi qua nhiều depth và có thể dừng ở đúng thời điểm. Quan trọng là không để input tay và quỹ đạo cùng sửa point trong một frame.
+
+## Hiểu ý tưởng trước khi viết code
+
+Quỹ đạo là một hàm vị trí tuyệt đối của elapsed time:
+
+$$
+x(t)=2.2\sin(0.9t),\quad y(t)=1.3\cos(1.3t),\quad
+z(t)=6+4\sin(0.55t).
+$$
+
+Z đi từ 2 đến 10 world, nên bạn thấy rõ điểm tiến gần/rời xa, ngay cả khi không đổi size marker. Cùng t phải cho cùng point, bất kể t được tích lũy bằng 20 hay 60 frame.
+
+Có hai kiểu thao tác khác nhau: WASD/QE dịch point hiện tại, còn Chạy quỹ đạo đặt point theo công thức trên. Vì vậy khi bật chạy hoặc nhấn N lần đầu sau chỉnh tay, điểm chuyển đến vị trí của quỹ đạo tại elapsed tương ứng; đây không phải lệnh “bay tiếp theo hướng vừa bấm”. Pause giữ elapsed, R/preset đặt elapsed=0. Input tay tạm dừng quỹ đạo.
+
+Clamp dt tối đa 0.1s ngăn một frame bị treo làm nhảy quá xa. Nó không cố bù toàn bộ wall-clock time đã mất khi debugger dừng; hãy gọi đúng đây là simulation elapsed time.
+
+<InteractiveLab demo="projection" mode="projection-motion" />
+
+## Viết code từng bước
+
+Mở checkpoint 06 để đối chiếu sau khi tự viết. Các đoạn dưới nằm trong đúng file ghi ở tiêu đề; giữ phần khung từ bài trước, không tạo thêm một main khác. Mỗi lần ghép xong một bước, build lại target của bài:
+
+```powershell title="Build checkpoint 06"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_11_checkpoint_6
+.\build\Debug\project_11_checkpoint_6.exe
+```
+
+### Bước 1 — Viết quỹ đạo thành hàm thuần
+
+```cpp title="include/lab.hpp — một thời điểm xác định một vị trí"
+inline Vec3 flightPoint(double timeSeconds) {
+    return {std::sin(0.9 * timeSeconds) * 2.2, std::cos(1.3 * timeSeconds) * 1.3, 6.0 + std::sin(0.55 * timeSeconds) * 4.0};
+}
+```
+
+Tại t=0, point=(0,1.3,6). Không thêm điểm cũ vào kết quả này; nếu cộng dồn, bạn đang tích phân một hàm vị trí như vận tốc.
+
+### Bước 2 — Tích lũy thời gian an toàn
+
+```cpp title="include/lab.hpp — bỏ dt không hợp lệ và giới hạn frame bị trễ"
+inline double advanceFlightTime(double current, double deltaTime) {
+    if (!std::isfinite(current) || !std::isfinite(deltaTime) || deltaTime <= 0.0) {
+        return current;
+    }
+    return current + std::min(deltaTime, 0.1);
+}
+```
+
+```cpp title="include/scene.hpp — cập nhật đúng một nguồn point"
+inline void advanceScene(Scene& scene, double deltaTime) {
+    if (!std::isfinite(deltaTime) || deltaTime <= 0.0) {
+        return;
+    }
+    scene.elapsed = advanceFlightTime(scene.elapsed, deltaTime);
+    scene.point = flightPoint(scene.elapsed);
+}
+```
+
+main.cpp chỉ gọi advanceScene liên tục khi !paused. Khối WASD/QE gọi movePoint trước và đặt paused=true, vì vậy quỹ đạo không ghi đè thao tác tay ở cuối frame.
+
+### Bước 3 — Pause và step không phụ thuộc key-repeat
+
+```cpp title="src/main.cpp — Space đổi mode, N tiến một bước"
+if (event.key.key == SDLK_SPACE && !event.key.repeat) {
+    scene.paused = !scene.paused;
+}
+if (event.key.key == SDLK_N && !event.key.repeat && scene.paused) {
+    lab::advanceScene(scene, 0.1);
+}
+```
+
+Mỗi lần nhấn Space chỉ toggle một lần nhờ !event.key.repeat. N chỉ chạy khi paused. Trong Canvas có hai button tương đương; reduced-motion tắt chạy tự động nhưng vẫn cho step và các slider.
+
+## Ghép các phần lại
+
+Build checkpoint 6. Thử Chạy/Pause, tiến 0.1s và reset. So quỹ đạo tại elapsed=1s khi chia thành nhiều dt nhỏ: vị trí phải trùng. FOV và camera không làm đổi công thức world, chỉ đổi cách nhìn.
+
+Chuyển tab, mất focus hoặc resize sẽ pause. Khi quay lại, ứng dụng không tự bay tiếp. Đây là lựa chọn để người học không mất vị trí đang quan sát và không gặp một dt khổng lồ sau thời gian tab ẩn.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay scene.point=flightPoint(t) bằng phép cộng kết quả đó vào point. Quỹ đạo trôi rất nhanh; giải thích vì sao vị trí không thể được cộng như vận tốc, rồi khôi phục.
+
+2. Bỏ !repeat ở Space. Giữ phím sẽ bật/tắt liên tục theo OS key-repeat. Khôi phục và kiểm giữ Space chỉ đổi một lần.
+
+3. Dùng 60 bước 1/60s và 20 bước 0.05s. Tổng đều là 1s, nên point bằng nhau trong sai số. Đừng dùng một bước 1s để so vì dt bị cap thành 0.1s.
+
+## Tự kiểm tra kết quả
+
+- Tại t=0 công thức cho (0,1.3,6), depth nằm trong [2,10].
+- Cùng simulation elapsed cho cùng point ở nhiều phân hoạch dt hợp lệ.
+- Negative/NaN/Inf dt không làm state nhiễm lỗi; dt lớn chỉ tăng 0.1s.
+- Input tay dừng tự động, pause giữ elapsed, reset/preset đặt elapsed về 0.
+- Hidden/blur/resize pause; reduced-motion vẫn dùng step được.
+
+## Bài tập mở rộng
+
+Thêm lựa chọn tốc độ thời gian 0.5×/1×/2×. Hãy nói rõ cap áp dụng trước hay sau nhân tốc độ và viết test cho lựa chọn đó.
+
+[Sang bài tiếp theo — Kéo điểm mà không làm mất depth](/projects/perspective-point/07-keo-diem-tai-depth-co-dinh).

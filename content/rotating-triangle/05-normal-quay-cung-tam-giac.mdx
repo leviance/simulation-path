@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho normal quay cùng tam giác
+
+## Vấn đề cần giải quyết
+
+Đặc tả không chỉ yêu cầu tam giác quay: normal phải quay cùng nó. Nếu giữ một mũi tên cố định trong world rồi chỉ xoay các cạnh, hình trông có vẻ động nhưng thông tin hình học đã sai. Bài này thêm normal có nguồn gốc rõ ràng và vẽ nó trong cùng camera perspective.
+
+## Hiểu ý tưởng trước khi viết code
+
+Dùng đúng hai cạnh sau khi đã quay:
+
+$$
+N=(B_w-A_w)\times(C_w-A_w),\qquad \hat N=N/\lVert N\rVert.
+$$
+
+Với tam giác mặc định, raw normal là (-1.71,0.51,6.45). Đây là đáp án tính tay từ A/B/C, không suy từ ảnh screen. Khi chỉ có rotation, normal local quay cùng R sẽ trùng hướng normal lấy từ cross của cạnh đã quay:
+
+$$
+\hat N_{\rm world}=R(\hat N_{\rm local}).
+$$
+
+Translation không đổi normal vì model position bị triệt tiêu trong B−A và C−A. Điều này đang đúng cho rotation thuần; đừng tự áp dụng cùng cách xử lý cho nonuniform scale hoặc shear.
+
+Mũi tên bắt đầu ở centroid, vẽ dài 1.2 world. Normal unit có độ dài 1 trong số đo; 1.2 chỉ là độ phóng đại lúc vẽ, không sửa giá trị toán học.
+
+<InteractiveLab demo="rotation3d" mode="rotation-normal" />
+
+## Viết code từng bước
+
+Giữ bộ khung và các hàm của bài trước; sửa đúng file ghi trên từng code block. Không tạo một main thứ hai. Sau mỗi bước, build target checkpoint 05 để đối chiếu:
+
+```powershell title="Build checkpoint 05"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_12_checkpoint_5 --parallel 2
+.\build\Debug\project_12_checkpoint_5.exe
+```
+
+### Bước 1 — Suy normal từ hình học world
+
+```cpp title="include/lab.hpp — hai cạnh chung gốc A"
+inline Vec3 triangleRawNormal(const Triangle3& triangle) {
+    return cross(subtract(triangle.b, triangle.a), subtract(triangle.c, triangle.a));
+}
+```
+
+```cpp title="include/lab.hpp — chuẩn hóa sau khi có raw cross"
+inline Vec3 triangleUnitNormal(const Triangle3& triangle) {
+    return normalize(triangleRawNormal(triangle));
+}
+```
+
+cross và normalize đã học ở P10. Giữ lại normalHasDirection để không vẽ mũi tên giả cho tam giác suy biến. Tam giác mặc định của P12 không suy biến, nhưng helper vẫn phải xử lý trường hợp không có hướng.
+
+### Bước 2 — Vẽ thân và cánh trong world space
+
+```cpp title="include/view.hpp — một mũi tên 3D, không phải icon dán lên ảnh"
+inline void arrow3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene) {
+    const Vec3 delta = subtract(end, start);
+    const double length = magnitude(delta);
+    if (length <= 1e-12) {
+        return;
+    }
+    const Vec3 direction = normalize(delta);
+    Vec3 side = cross(direction, {0.0, 1.0, 0.0});
+    if (magnitude(side) < 0.1) {
+        side = cross(direction, {1.0, 0.0, 0.0});
+    }
+    side = normalize(side);
+    const double head = std::min(0.2, length * 0.25);
+    const Vec3 back = subtract(end, scale(direction, head));
+    line3D(image, start, end, scene, kMarker);
+    line3D(image, end, add(back, scale(side, head * 0.5)), scene, kMarker);
+    line3D(image, end, subtract(back, scale(side, head * 0.5)), scene, kMarker);
+}
+```
+
+side là một vector vuông góc direction; nếu direction gần song song với Y thì dùng X làm reference thay thế. Ba đoạn của mũi tên đều đi qua line3D, nên camera, near/far và perspective giống tam giác.
+
+### Bước 3 — Gắn normal vào centroid sau rotation
+
+```cpp title="include/view.hpp — lấy world triangle đã quay để dựng normal"
+if (scene.debug && normalHasDirection(world)) {
+    const Vec3 center = triangleCentroid(world);
+    const Vec3 endpoint = add(center, scale(triangleUnitNormal(world), 1.2));
+    arrow3D(image, center, endpoint, scene);
+}
+```
+
+Đừng cộng model position vào normal như cộng vào một point. Ta chỉ cộng center khi tạo endpoint để vẽ mũi tên; bản thân hướng vẫn là vector unit.
+
+## Ghép các phần lại
+
+Build checkpoint 5. Bạn thấy mũi tên vàng từ pivot/centroid; W/S, A/D, Q/E và đổi order làm cả hình lẫn normal thay orientation. Chỉ dịch model thì gốc mũi tên đi theo, hướng normal không đổi.
+
+Readout unit normal cho ba thành phần world. Dùng preset Góc tổng quát để thấy cả ba thành phần thay đổi; đừng chỉ kiểm một góc mà normal vô tình trùng trục quay nên giữ nguyên.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính normal từ defaultWorldTriangle thay vì worldTriangle(scene). Mũi tên sẽ giữ hướng khi hình quay. Khôi phục lấy các cạnh đã quay.
+
+2. Lấy cross của hai screen edges rồi gọi đó là normal world. Kết quả không có đủ thông tin 3D và thay đổi sai theo camera. Quay lại cross của Vec3 world.
+
+3. Chỉ dịch model theo X. Nếu normal đổi hướng, rất có thể bạn đã cộng position vào vector trước normalize. Đối chiếu (B+M)−(A+M)=B−A.
+
+## Tự kiểm tra kết quả
+
+- Raw cross ban đầu đúng (-1.71,0.51,6.45).
+- Unit normal có length gần 1, vuông góc hai cạnh world.
+- Normal quay theo góc và order, nhưng không đổi hướng chỉ vì translation.
+- Mũi tên thân/cánh là các đoạn 3D; độ dài vẽ 1.2 không đổi giá trị unit.
+- Normal suy biến không tạo hướng giả.
+
+## Bài tập mở rộng
+
+Đảo B/C rồi giữ nguyên angles. Dự đoán normal đổi dấu, hình giữ cùng ba vị trí và độ dài cạnh; viết test cho điều đó.
+
+[Sang bài tiếp theo — Kéo chuột để xoay, Q/E để roll](/projects/rotating-triangle/06-keo-chuot-va-roll).

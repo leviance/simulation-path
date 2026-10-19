@@ -3,40 +3,38 @@ import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
   base: {
     label: "TURRET LAB",
-    title: "Tháp pháo quyết định quay về phía nào?",
+    title: "Từ hướng mục tiêu tới quyết định quay",
     description:
-      "Kéo mục tiêu để quan sát dot product, góc, projection, chiều quay và vùng khóa trên cùng một hình vẽ.",
+      "Di chuột, giữ target hoặc chọn preset; đọc dot, góc và hình chiếu trên cùng tháp pháo. Bản đầy đủ không ẩn các lớp cốt lõi.",
   },
   modes: {
     "turret-scene": {
-      title: "Tọa độ chuột trở thành hướng tới mục tiêu thế nào?",
-      description:
-        "Kéo mục tiêu quanh tháp pháo và đối chiếu độ dời trong world space với vị trí pixel trên Canvas.",
+      title: "Vẽ tháp pháo rồi đặt mục tiêu bằng chuột",
+      description: "Chạy starter, vẽ thân/nòng, đổi mouse sang world và hiện hai hướng.",
     },
     "turret-dot": {
-      title: "Dot product đang đo hướng hay khoảng cách?",
-      description:
-        "Đặt mục tiêu cùng hướng, vuông góc hoặc ngược hướng rồi thay đổi khoảng cách để so raw dot với normalized dot.",
+      title: "Dot product đo điều gì giữa hai vector?",
+      description: "So raw dot với normalized dot bằng các hướng và khoảng cách biết trước.",
     },
     "turret-angle": {
-      title: "Làm sao đổi normalized dot thành góc?",
-      description:
-        "Theo dõi cosine và góc từ acos; trường hợp mục tiêu trùng tâm được xử lý riêng để không sinh NaN.",
+      title: "Từ cosine đến góc sai lệch",
+      description: "Dùng acos, clamp và phân biệt góc đo được với trường hợp chưa có hướng.",
     },
     "turret-projection": {
-      title: "Mục tiêu nằm dọc đường ngắm bao xa và lệch bao nhiêu?",
-      description:
-        "Vector xanh là projection lên hướng nòng; đoạn đỏ là rejection vuông góc còn lại.",
+      title: "Mục tiêu nằm dọc đường ngắm bao xa?",
+      description: "Tách projection và rejection, kiểm dấu và tính vuông góc.",
     },
     "turret-rotation": {
-      title: "Góc có dấu chọn chiều quay như thế nào?",
-      description:
-        "Tháp pháo quay từng bước theo turnSpeed × deltaTime và tự dừng khi chạm đúng hướng mục tiêu.",
+      title: "Chọn chiều quay và giới hạn tốc độ",
+      description: "Tự viết crossZ, signed angle và steering không vượt mục tiêu.",
     },
     "turret-view-cone": {
-      title: "Khi nào mục tiêu được xem là đã khóa?",
-      description:
-        "Điều chỉnh half-angle và so normalized dot với cos(halfAngle) ngay trên hai cạnh vùng nhìn.",
+      title: "Kiểm tra vùng nhìn bằng dot product",
+      description: "Dùng nửa góc, xử lý hai biên và nói rõ phép kiểm tra chỉ xét góc.",
+    },
+    "turret-full": {
+      title: "Hoàn thiện tháp pháo và kiểm chứng",
+      description: "Ghép bản đầy đủ, kiểm bằng oracle độc lập và thử input/HiDPI.",
     },
   },
 } satisfies ProjectLabMeta;

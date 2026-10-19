@@ -1,126 +1,116 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Shear và hệ trục bị xiên
+# Làm xiên hình rồi tự viết Mat2
 
 ## Vấn đề cần giải quyết
 
-Rotation làm cả hai trục quay cùng nhau nên góc vuông giữa chúng được giữ nguyên. Shear làm một việc khác: càng đi xa theo một trục, điểm càng bị đẩy dọc theo trục kia. Hình vuông biến thành hình bình hành, nhưng hai cặp cạnh đối diện vẫn song song.
-
-Ta sẽ thêm hai tham số `shearX` và `shearY`, đặt phép shear sau scale nhưng trước rotation. Đây là phép biến đổi cuối cùng được viết bằng công thức thành phần; bài sau sẽ gom cả ba vào ma trận.
+Scale thay độ dài hai trục; rotation quay chúng mà giữ vuông góc. Giờ ta làm hệ trục bị xiên bằng shear. Từ đó, hai cột của một ma trận 2×2 sẽ có ý nghĩa hình học cụ thể.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Shear theo cả hai trục dùng hai phương trình:
+Ta dùng **shear đồng thời theo hai trục**:
 
 $$
-x'=x+k_xy
+x'=x+h_x y,\qquad y'=h_y x+y.
 $$
 
-$$
-y'=k_yx+y
-$$
+Ví dụ p=(2,4), hx=0.5, hy=−0.25 cho (4,3.5). Nếu sửa x thành 4 rồi mới tính y, bạn sẽ ra 3: đó là một phép khác.
 
-Với `shearX = 0.5`, điểm `(2,4)` trở thành `(4,4)`: Y càng lớn thì điểm càng bị đẩy sang phải. Với `shearY = -0.25`, cùng điểm đầu vào trở thành `(2,3.5)`.
-
-Hai phương trình phải đọc cùng một `(x,y)` ban đầu. Nếu tính x mới trước rồi dùng x mới để tính y, bạn đã ghép hai shear liên tiếp chứ không còn dùng đúng công thức trên.
+Ma trận H có hai cột (1,hy) và (hx,1), chính là ảnh của ex và ey. Không được nói mọi shear đều giữ diện tích: ở đây det(H)=1−hx·hy. Khi hx=hy=1, hai cột trùng nhau và hình bị ép thành đoạn. Hai shear một trục **nối tiếp** có ma trận khác và determinant 1.
 
 <InteractiveLab demo="transform" mode="transform-shear" />
 
-Đặt scale và angle về giá trị trung tính, sau đó chỉ thay `shearX`. Quan sát cạnh trên và dưới trượt ngược hướng nhưng vẫn song song. Tiếp theo đặt cả `shearX` và `shearY` khác 0; area ratio cho thấy diện tích lúc này có thể thay đổi.
-
 ## Viết code từng bước
 
-### Bước 1 — Trả về một point mới
+### Bước 1 — Viết công thức thành phần để đối chiếu
 
-Thêm hàm thuần sau vào `include/lab.hpp`:
-
-```cpp title="include/lab.hpp — shearPoint"
+```cpp title="include/lab.hpp — hai đầu ra cùng dùng đầu vào cũ"
 inline Vec2 shearPoint(Vec2 point, double shearX, double shearY) {
-    return {
-        point.x + shearX * point.y,
-        shearY * point.x + point.y,
-    };
+    return {point.x + shearX * point.y, shearY * point.x + point.y};
 }
 ```
 
-Danh sách khởi tạo chỉ được đánh giá từ `point.x` và `point.y` cũ. Không có phép gán trung gian làm dữ liệu của phương trình thứ hai thay đổi.
+Checkpoint 04 giữ đường tính trực tiếp scale→shear→rotate để đối chiếu với Mat2.
 
-### Bước 2 — Tạo hai tham số độc lập
+### Bước 2 — Tạo Mat2 và áp vào vector
 
-Giá trị ban đầu chỉ shear theo X để hình dễ đọc:
+```cpp title="include/lab.hpp — lưu bốn ô theo hàng"
+struct Mat2 {
+    std::array<double, 4> values{};
 
-```cpp title="src/main.cpp — trạng thái shear"
-double shearX = 0.35;
-double shearY = 0.0;
+    [[nodiscard]] double at(int row, int column) const {
+        return values[static_cast<std::size_t>(row * 2 + column)];
+    }
+};
 ```
 
-Các phím J/L điều khiển X; K/I điều khiển Y. Giới hạn `[-1.5,1.5]` đủ rộng để quan sát mà hình không lập tức chạy khỏi cửa sổ.
-
-```cpp title="src/main.cpp — phím điều chỉnh shear"
-if (event.key.key == SDLK_J) {
-    shearX = std::max(-1.5, shearX - 0.1);
-}
-if (event.key.key == SDLK_L) {
-    shearX = std::min(1.5, shearX + 0.1);
-}
-if (event.key.key == SDLK_K) {
-    shearY = std::max(-1.5, shearY - 0.1);
-}
-if (event.key.key == SDLK_I) {
-    shearY = std::min(1.5, shearY + 0.1);
+```cpp title="include/lab.hpp — hai hàng nhân một vector cột"
+inline Vec2 transformVector(Mat2 matrix, Vec2 vector) {
+    return {matrix.at(0, 0) * vector.x + matrix.at(0, 1) * vector.y, matrix.at(1, 0) * vector.x + matrix.at(1, 1) * vector.y};
 }
 ```
 
-### Bước 3 — Gọi từng phép theo đúng thứ tự đã chọn
+Row-major chỉ nói index=row*2+column. Ta chọn column vector độc lập với cách lưu đó. Cột đầu là ảnh của ex, cột sau là ảnh của ey.
 
-Mỗi local point đi qua ba biến có tên. Đọc từ trên xuống chính là thứ tự chạy:
+### Bước 3 — Tự viết phép nhân hai ma trận
 
-```cpp title="src/main.cpp — Scale → Shear → Rotate"
-for (std::size_t index = 0; index < transformedSquare.size(); ++index) {
-    const lab::Vec2 scaled = lab::scalePoint(localSquare[index], scaleX, scaleY);
-    const lab::Vec2 sheared = lab::shearPoint(scaled, shearX, shearY);
-    transformedSquare[index] = lab::rotatePoint(sheared, angle);
+```cpp title="include/lab.hpp — mỗi ô là một hàng nhân một cột"
+inline Mat2 multiply(Mat2 left, Mat2 right) {
+    Mat2 result{};
+    for (int row = 0; row < 2; ++row) {
+        for (int column = 0; column < 2; ++column) {
+            double value = 0.0;
+            for (int index = 0; index < 2; ++index) {
+                value += left.at(row, index) * right.at(index, column);
+            }
+            result.values[static_cast<std::size_t>(row * 2 + column)] = value;
+        }
+    }
+    return result;
 }
 ```
 
-Ta chưa đổi thứ tự trong bài này. Mục tiêu trước mắt là có một kết quả chuẩn, dễ đặt breakpoint và dùng để đối chiếu khi chuyển sang ma trận.
+Với A=[[1,2],[3,4]] và B=[[2,0],[1,2]], A·B=[[4,4],[10,8]]. Hãy tính tay bốn ô trước khi chạy test; ví dụ ô (0,0)=1·2+2·1=4.
 
-### Bước 4 — Reset không được bỏ sót tham số mới
+### Bước 4 — Dùng Mat2 thật trong đường render
 
-```cpp title="src/main.cpp — bổ sung shear vào reset"
-if (!event.key.repeat && event.key.key == SDLK_R) {
-    scaleX = 1.25;
-    scaleY = 0.8;
-    angle = lab::kPi / 6.0;
-    shearX = 0.35;
-    shearY = 0.0;
+```cpp title="include/scene.hpp — ghép R·H·S để áp S trước"
+inline Mat2 sceneLinearMatrix(const Scene& scene) {
+    const auto& p = scene.parameters;
+    const double c = std::cos(p.angle);
+    const double s = std::sin(p.angle);
+    const Mat2 scale{{{p.scaleX, 0.0, 0.0, p.scaleY}}};
+    const Mat2 shear{{{1.0, p.shearX, p.shearY, 1.0}}};
+    const Mat2 rotation{{{c, -s, s, c}}};
+    return multiply(rotation, multiply(shear, scale));
 }
 ```
 
-Mỗi khi thêm trạng thái điều khiển, hãy cập nhật reset ngay trong cùng checkpoint. Nếu không, người học phải đóng chương trình mới quay lại ví dụ chuẩn.
+worldPoint của checkpoint 04 gọi transformVector(sceneLinearMatrix(scene), local). Đây là ma trận dùng để vẽ, không phải một type khai báo cho đủ. directTransform vẫn tính theo ba hàm riêng, giúp đối chiếu ở bài cuối.
 
 ## Ghép các phần lại
 
-Build `project_9_checkpoint_4`. Nhấn R, dùng phím phải vài lần để đưa angle gần 0 rồi thử J/L. Sau đó giữ shear cố định và xoay: toàn bộ hệ trục đã xiên phải quay như một khối.
+Build project_9_checkpoint_4. J/L đổi hx, K/I đổi hy trong [-1,1]. Reset rồi chỉ tăng hx để thấy các cạnh ngang vẫn ngang còn hai cạnh kia nghiêng. Bật cả hai shear để thấy vì sao giả định giữ diện tích không còn đúng.
 
-Đường xám vẫn là hình local chưa biến đổi. Nếu đường xanh có các cạnh đối diện không còn song song, lỗi nằm ở cách tính point hoặc thứ tự đỉnh, không phải ở việc “shear vốn làm méo tùy ý”.
+Preset F4 đặt hx=hy=1; hai basis nằm cùng một đường. Hai giá trị vẫn hữu hạn và chương trình không cần nghịch đảo để vẽ.
 
 ## Thử làm sai để hiểu đúng
 
-1. Viết `point.x += shearX * point.y`, rồi dùng `point.x` mới trong công thức Y. Đặt cả hai shear khác 0 và so với Transform Lab; kết quả sẽ lệch.
-2. Dùng `x'=x+shearX*x`. Đây chỉ là scale X được viết bằng cách khác; hình không nghiêng theo Y.
-3. Đặt shear sau rotation trong vòng lặp. Chương trình vẫn chạy nhưng shear diễn ra theo world axes thay vì local axes đã chọn, vì vậy hình khác checkpoint chuẩn.
+1. Trong một hàm thử, sửa point.x trước rồi dùng x mới để tính y. Với (2,4), hx=0.5, hy=−0.25, kết quả sai thành (4,3), không phải (4,3.5). Khôi phục hai phương trình dùng đầu vào cũ.
+
+2. Thử đặt value=0 một lần ở ngoài cả hai vòng row/column trong multiply. So cả bốn ô với [[4,4],[10,8]]; các ô sau bị cộng dồn. Đưa value trở lại bên trong vòng column.
+
+3. Chọn F4 để hx=hy=1. Hai cột trùng hướng và diện tích bằng 0; đây là shear đồng thời suy biến, không phải lỗi renderer. Reset sau khi quan sát.
 
 ## Tự kiểm tra kết quả
 
-- `shearPoint({2,4}, 0.5, 0)` trả `(4,4)`.
-- `shearPoint({2,4}, 0, -0.25)` trả `(2,3.5)`.
-- Shear `(0,0)` giữ nguyên mọi point.
-- Với chỉ một hệ số shear khác 0, diện tích hình được giữ nguyên.
-- Hai cặp cạnh đối diện của kết quả luôn song song.
+- Shear đồng thời cho (4,3.5) ở ví dụ trên.
+- Mat2 multiply cho đủ bốn số [[4,4],[10,8]], không chỉ đúng một vector.
+- Các cạnh đối song song sau phép tuyến tính; góc vuông không được bảo toàn nói chung.
+- hx=hy=1 tạo hình suy biến, không crash và không xuất hiện số vô hạn.
 
 ## Bài tập mở rộng
 
-Vẽ riêng ảnh của hai vector `(80,0)` và `(0,80)` sau shear. Dùng chúng làm hai cạnh xuất phát từ gốc để tự dựng lại hình bình hành mà không biến đổi bốn đỉnh. Đây là hình ảnh trực quan chuẩn bị cho hai cột đầu của ma trận.
+Viết riêng shear X rồi shear Y nối tiếp, tính ma trận của chúng và so với H đang dùng. Nêu một điểm mà hai kết quả khác nhau.
 
-Bài tiếp theo thay ba lời gọi `scalePoint`, `shearPoint`, `rotatePoint` bằng một `Mat3` duy nhất nhưng vẫn phải cho đúng cùng kết quả.
+[Bài tiếp theo: Dịch chuyển bằng Mat3: điểm khác hướng ở đâu?](/projects/square-transformer/05-ma-tran-affine-3x3).
