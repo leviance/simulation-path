@@ -1,56 +1,54 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Nhìn quanh bằng inverse yaw và pitch
+# Nhìn quanh bằng phép quay ngược
 
 ## Vấn đề cần giải quyết
 
-Camera position cho phép đổi chỗ đứng, nhưng camera vẫn luôn nhìn theo +Z. Một camera FPS còn phải quay trái/phải bằng yaw và nhìn lên/xuống bằng pitch. Nếu lấy công thức xoay model của Project 12 rồi áp thẳng lên world point, căn phòng sẽ quay quanh world origin thay vì quanh mắt người xem.
+Ta đã đi được nhưng hướng nhìn vẫn cố định. Khi quay đầu sang phải, vật trước đó ở phía trước phải chạy sang bên trái ảnh. Ta cần đổi vector tương đối sang hệ trục của camera.
 
-Ta cần hoàn tác pose của camera, không phải xoay thế giới theo một model transform mới.
+Đây là chỗ dễ nhầm với P12/P13: xoay object và xoay camera không dùng cùng phép biến đổi lên world point.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Camera orientation trong project này đưa một vector local ra world space theo thứ tự:
+Chốt quy ước: yaw dương quay về +X, pitch dương nhìn lên +Y, camera view luôn lấy +Z làm phía trước. Orientation của camera là:
 
 $$
-v_{world}=R_y(yaw)\,R_x(-pitch)\,v_{camera}
+R_{camera}=R_y(yaw)R_x(-pitch).
 $$
 
-Muốn đi chiều ngược lại, ta đảo thứ tự và đổi dấu góc:
+Muốn đưa world vào view, hoàn tác theo thứ tự ngược:
 
 $$
-v_{camera}=R_x(pitch)\,R_y(-yaw)\,(p_{world}-camera.position)
+p_{view}=R_x(pitch)R_y(-yaw)(p_{world}-camera.position).
 $$
 
-Dấu của pitch có vẻ khác Project 12 vì ta chọn pitch dương là **nhìn lên**, trong khi công thức `rotateX` dương đưa vector +Z về phía −Y. Orientation vì thế dùng `-pitch`; phép nghịch đảo dùng `+pitch`.
+Dấu cộng trước pitch không phải lỗi: vì orientation dùng −pitch để ngẩng đầu, inverse phải dùng +pitch. Viết lại cả chuỗi rõ ràng dễ kiểm tra hơn ghi nhớ “camera thì đổi dấu mọi góc”.
 
 <InteractiveLab demo="fps-camera" mode="camera-orientation" />
 
+Chọn yaw=90°. Camera nhìn theo +X nên thấy tường bên phải. Trần và sàn phải quay theo **cùng view transform**, còn world point vẫn là (2,1,12).
+
 ## Viết code từng bước
 
-### Bước 1 — Giữ hai rotation tường minh
+### Bước 1 — Dùng lại phép quay vector của P12
 
-Ta chưa dùng matrix để người học còn nhìn thấy cặp thành phần nào đang quay:
+`rotateY` trong `rotation.hpp`:
 
-```cpp title="include/lab.hpp — rotation quanh Y"
+```cpp title="include/rotation.hpp — rotateY"
 inline Vec3 rotateY(Vec3 point, double angle) {
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    return {
-        cosine * point.x + sine * point.z,
-        point.y,
-        -sine * point.x + cosine * point.z,
-    };
+    return {cosine * point.x + sine * point.z, point.y, -sine * point.x + cosine * point.z};
 }
 ```
 
-`rotateX` giữ X, đồng thời xoay cặp Y/Z theo cùng mẫu sin/cos.
+Với góc −90°, vector (3,0,0) đi thành (0,0,3). Đó là đáp án ta cần khi camera quay +90° và một điểm nằm cách nó 3 unit theo +X.
 
-### Bước 2 — Translation phải xảy ra trước
+### Bước 2 — Ghép inverse theo đúng thứ tự
 
-Hàm view transform hoàn chỉnh có đúng ba dòng dữ liệu:
+Trong `lab.hpp`, thêm:
 
-```cpp title="include/lab.hpp — inverse yaw và pitch của camera"
+```cpp title="include/lab.hpp — worldToCamera"
 inline Vec3 worldToCamera(Vec3 worldPoint, const FpsCamera& camera) {
     const Vec3 relative = worldToCameraTranslation(worldPoint, camera);
     const Vec3 yawNeutral = rotateY(relative, -camera.yaw);
@@ -58,62 +56,64 @@ inline Vec3 worldToCamera(Vec3 worldPoint, const FpsCamera& camera) {
 }
 ```
 
-`relative` lấy mắt người xem làm gốc. `yawNeutral` đổi vector ấy về trục camera chưa pitch. Dòng cuối đưa hướng nhìn hiện tại về +Z.
+Các biến `relative` và `yawNeutral` cho thấy trạng thái trung gian. Đừng gộp hết thành một biểu thức dài khi đang học.
 
-### Bước 3 — Đổi wrapper projection sang view transform mới
+Trừ position trước: ta quay **độ dời từ mắt đến vật**, không quay vị trí tuyệt đối quanh world origin. Sau đó hoàn tác yaw, rồi pitch.
 
-Phần perspective không hề thay đổi:
+### Bước 3 — Chặn pitch và giữ yaw hữu hạn
 
-```cpp title="src/main.cpp — project qua view transform có orientation"
-const lab::Vec3 cameraPoint = lab::worldToCamera(worldPoint, camera);
-return lab::projectCameraPoint(cameraPoint, lens, nearPlane, width, height);
-```
+Ta vẫn cần điều khiển keyboard để kiểm công thức trước khi dùng mouse:
 
-Đây là một dấu hiệu thiết kế tốt: projection nhận camera-space point và không cần biết camera dùng yaw/pitch ra sao.
-
-### Bước 4 — Thêm phím nhìn quanh để debug
-
-Mỗi lần nhấn đổi đúng một angle. Mouse look được dành cho bài 6:
-
-```cpp title="src/main.cpp — điều chỉnh yaw và pitch bằng IJKL"
-if (event.key.key == SDLK_J) {
-    camera = lab::applyKeyboardLook(camera, -lookStep, 0.0);
-}
-if (event.key.key == SDLK_L) {
-    camera = lab::applyKeyboardLook(camera, lookStep, 0.0);
-}
-if (event.key.key == SDLK_I) {
-    camera = lab::applyKeyboardLook(camera, 0.0, lookStep);
-}
-if (event.key.key == SDLK_K) {
-    camera = lab::applyKeyboardLook(camera, 0.0, -lookStep);
+```cpp title="include/lab.hpp — applyKeyboardLook"
+inline FpsCamera applyKeyboardLook(FpsCamera camera, double yawDelta, double pitchDelta) {
+    if (!finiteCamera(camera) || !std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) {
+        return camera;
+    }
+    constexpr double limit = 89.0 * kPi / 180.0;
+    camera.yaw = wrapAngle(camera.yaw + yawDelta);
+    camera.pitch = std::clamp(camera.pitch + pitchDelta, -limit, limit);
+    return camera;
 }
 ```
+
+I/K ngẩng/cúi, J/L trái/phải, nấc 3°. Đây là góc nhìn FPS không roll, nên giới hạn pitch ±89° là lựa chọn có chủ ý. P12 xoay object tự do không bị giới hạn như vậy.
+
+### Bước 4 — Đổi hàm tại ranh giới view
+
+```cpp title="include/scene.hpp — viewPoint"
+inline Vec3 viewPoint(Vec3 world, const Scene& scene) {
+    const FpsCamera camera = activeCamera(scene);
+    return worldToCamera(world, camera);
+}
+```
+
+Tất cả cạnh vẫn đi qua cùng clip/projection sau khi có camera-space endpoints. Không có vòng lặp sửa worldRoom để tạo ảnh quay ngược.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build inverse camera rotation"
+```bash title="Terminal — chạy checkpoint 3"
 cmake --build build --config Debug --target project_14_checkpoint_3
+./build/Debug/project_14_checkpoint_3.exe
 ```
 
-Nhấn `L`: yaw tăng, camera nhìn sang phải và scene trôi sang trái. Nhấn `I`: pitch tăng, camera nhìn lên nên ceiling đi về gần crosshair. Arrow keys vẫn kiểm tra translation độc lập.
+Thử yaw 0°, 90°, 180°. Bạn lần lượt nhìn cuối phòng, tường phải rồi cửa vào. Khi vừa tịnh tiến vừa quay, camera phải quay quanh chính mắt, không chạy vòng quanh tâm phòng.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `rotateY(relative, camera.yaw)` thay vì `-camera.yaw`. Dự đoán scene quay cùng hay ngược chiều khi nhấn L, sau đó hoàn tác.
-2. Xoay `worldPoint` trước rồi mới trừ position. Đặt camera X khác 0 và quan sát room quay quanh một điểm không còn là camera; hoàn tác thứ tự.
-3. Đổi hai dòng rotation thành pitch trước, yaw sau. Với yaw và pitch cùng khác zero, theo dõi point mẫu trong Canvas rồi trả về thứ tự nghịch đảo đúng.
+1. Dùng +yaw trong view. Quay đầu sang phải làm vật chạy cùng chiều, và oracle yaw 90° không còn cho camera +Z.
+2. Quay world point trước rồi trừ position. Khi camera không ở origin, bạn tạo quỹ đạo giả quanh gốc.
+3. Đảo hai phép quay ở một pose có cả yaw và pitch khác 0. Một số góc riêng vẫn đúng nhưng nhìn chéo bị sai.
+4. Bỏ pitch clamp. Nhìn vượt đỉnh đầu có thể lật camera, làm điều khiển FPS mất hướng đứng.
 
 ## Tự kiểm tra kết quả
 
-- Camera `(yaw=0,pitch=0)` cho kết quả giống checkpoint 2.
-- Point nằm trên hướng nhìn biến thành camera point gần `(0,0,depth)`.
-- Yaw +90° làm camera nhìn theo +X.
-- Room geometry không có trường yaw/pitch và vẫn không đổi.
-- Perspective divide chỉ chạy sau khi view transform hoàn tất.
+- Camera (1,2,3), yaw=90°, pitch=0: world (4,2,3) đi vào view (0,0,3).
+- Pitch dương làm nhìn lên, không phải đưa camera lên cao.
+- Room vertices bất biến; chỉ pose thay đổi.
+- Pose lệch vị trí vẫn xoay quanh mắt, không orbit quanh một vật.
 
 ## Bài tập mở rộng
 
-Thêm phím `H` đặt yaw về 0 nhưng giữ nguyên position và pitch. Hãy dùng thao tác này để phân biệt lỗi translation với lỗi orientation.
+Viết ba cột world → relative → sau inverse yaw → view cho một điểm. Chọn pose không có góc nào bằng 0 để trường hợp đổi nhầm thứ tự không bị che giấu.
 
-Bài tiếp theo sẽ suy trực tiếp ba trục forward/right/up từ cùng yaw/pitch và đo xem chúng có thật sự vuông góc hay không.
+Bài tiếp theo: [Dựng ba trục forward, right, up](/projects/fps-camera-room/04-forward-right-up-cua-camera).

@@ -1,39 +1,46 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
     label: "WIREFRAME CUBE LAB",
-    title: "Tám vertex và mười hai edge tạo thành cube như thế nào?",
+    title: "Từ tám điểm trong không gian đến cube điều khiển được",
     description:
-      "Theo dõi index, topology, projection cache, rotation và camera-space depth của một cube được raster hoàn toàn trên CPU.",
+      "Dùng cùng dữ liệu và công thức với C++: vertex cache, clipping, hai phép chiếu, chuyển động và chiều sâu.",
   },
   modes: {
     "cube-vertices": {
-      title: "Quy ước index có đặt đúng tám góc của cube không?",
-      description:
-        "Thay half extent, xem local coordinate của từng index và kiểm tra tám projection marker trước khi nối bất kỳ cạnh nào.",
+      title: "Từ một điểm đến tám đỉnh của cube",
+      description: "Đặt hai lớp bốn đỉnh trong local space, chạy bộ khung SDL và xem từng index.",
     },
     "cube-edges": {
-      title: "Mười hai cặp index khép thành sáu mặt ra sao?",
+      title: "Nối mười hai cạnh từ index",
       description:
-        "Chọn một edge để highlight, đọc hai endpoint và đếm degree của mỗi vertex mà không viết tọa độ màn hình trong edge list.",
+        "Tách vị trí khỏi quan hệ nối, cache phép chiếu và vẽ các đoạn đã clip bằng Bresenham.",
     },
     "cube-transform": {
-      title: "Một topology có thể đi theo mọi orientation không?",
+      title: "Xoay hình dạng rồi mới đặt vào world",
       description:
-        "Đổi pitch, yaw, roll và rotation order; tám vertex thay đổi còn mười hai cặp index được giữ nguyên.",
+        "Dùng lại rotation trực tiếp của P12 trên tám local vertex; quan sát pivot và hai thứ tự.",
+    },
+    "cube-projection": {
+      title: "Hai phép chiếu cho cùng một cube",
+      description:
+        "Suy công thức orthographic, so kích thước hai lớp Z và giữ cùng quy ước clipping.",
+    },
+    "cube-input": {
+      title: "Di chuyển, kéo chuột và zoom",
+      description:
+        "Đọc keyboard state theo dt, giữ pointer owner và tách zoom phép chiếu khỏi đổi khoảng cách.",
     },
     "cube-depth": {
-      title: "Depth ordering giúp wireframe dễ đọc đến đâu?",
+      title: "Làm rõ chiều sâu, giữ bản demo sạch",
       description:
-        "So sánh màu phẳng với depth cue, xem average camera Z và thứ tự far-to-near của các edge đang visible.",
+        "Sắp cạnh theo Z, đổi độ sáng, thêm tự quay/pause/step và ẩn overlay mà không ẩn cube.",
     },
     "cube-validation": {
-      title: "Làm sao biết cube vẫn là cube khi đang chuyển động?",
+      title: "Kiểm chứng và chạy ứng dụng hoàn chỉnh",
       description:
-        "Kéo, chạy, pause hoặc single-step rồi theo dõi visible edges, projection count, edge error và rotation round trip.",
+        "Khóa đáp án tính tay, thử clipping/tương tác và build toàn bộ mã nguồn độc lập.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

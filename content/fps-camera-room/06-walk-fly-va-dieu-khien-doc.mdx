@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm Fly và điều khiển độ cao
+
+## Vấn đề cần giải quyết
+
+Đi bộ phù hợp để hiểu camera FPS, nhưng đặc tả còn cần điều khiển độ cao. Ta thêm Fly mà không phá hành vi Walk đã kiểm tra.
+
+Hai mode phải có ý nghĩa rõ ràng: Walk đi ngang và đứng ở độ cao mắt; Fly đi theo hướng đang nhìn, đồng thời Q/E hạ/nâng camera theo world Y.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong Fly, hướng tổng là:
+
+$$
+d=r\,s+f\,a+(0,1,0)\,lift.
+$$
+
+W dùng full forward, không phải groundForward. Camera up $u$ có thể nghiêng; ta chủ động chọn Q/E theo **world up** để lên/xuống thẳng đứng, không trượt chéo theo đầu đang nghiêng.
+
+Vì f và world up không vuông góc khi pitch≠0, chỉ normalize bộ ba axis input trước khi ghép chưa đủ. Ta chuẩn hóa **tổng direction world** ở cuối, như `advanceCamera` của bài trước.
+
+<InteractiveLab demo="fps-camera" mode="camera-fly" />
+
+Đặt pitch=45°, chuyển Fly, bấm bước W 0.1s. Y và Z cùng tăng khoảng $0.35/\sqrt2\approx0.247487$. Trong Walk, cùng thao tác chỉ tăng Z=0.35, Y giữ 1.6.
+
+## Viết code từng bước
+
+### Bước 1 — Cho M đổi mode rõ ràng
+
+Trong `Scene`, `fly=false` mặc định. Thêm:
+
+```cpp title="include/scene.hpp — changeMode"
+inline void changeMode(Scene& scene) {
+    scene.fly = !scene.fly;
+    if (!scene.fly) {
+        scene.camera.position.y = 1.6;
+    }
+    scene.demo = false;
+}
+```
+
+Chuyển về Walk đặt Y=1.6 ngay, không đợi frame movement tiếp theo. Tắt demo để mode change không khiến camera tự đi theo một hướng mới ngoài ý muốn.
+
+Đây là quy ước của viewer, không phải mô phỏng trọng lực hoặc nhân vật rơi xuống đất.
+
+### Bước 2 — Chọn đúng forward trong movementDirection
+
+```cpp title="include/lab.hpp — movementDirection"
+inline Vec3 movementDirection(const FpsCamera& camera, MoveInput input, MovementMode mode) {
+    const CameraBasis basis = cameraBasis(camera);
+    Vec3 forward = groundForward(camera);
+    static_cast<void>(mode);
+    if (mode == MovementMode::Fly) {
+        forward = basis.forward;
+    }
+    Vec3 direction = add(scale(basis.right, input.strafe), scale(forward, input.advance));
+    if (mode == MovementMode::Fly) {
+        direction.y += input.lift;
+    }
+    return direction;
+}
+```
+
+Hai nhánh Fly có hai nhiệm vụ riêng: chọn forward 3D và cộng lift vào Y. Khi Walk, lift bị bỏ qua hoàn toàn.
+
+Không thay `basis.up` vào nhánh lift nếu vẫn mô tả Q/E là world Y. Hai lựa chọn đều có thể dùng trong một ứng dụng, nhưng code và lời giải thích phải trùng nhau.
+
+### Bước 3 — Đọc thêm Q/E nhưng giữ cùng pipeline
+
+Trong main, mở hai biến đã dành sẵn:
+
+```cpp title="src/main.cpp — đoạn ghép"
+bool down = false;
+bool up = false;
+down = keys[SDL_SCANCODE_Q];
+up = keys[SDL_SCANCODE_E];
+```
+
+`makeMoveInput` nhận down/up để tạo lift=−1/+1. Các nhánh keyboard state còn lại không đổi; `advanceScene` chọn MovementMode theo `scene.fly` rồi gọi cùng hàm movement:
+
+```cpp title="include/scene.hpp — advanceScene"
+inline void advanceScene(Scene& scene, MoveInput input, double deltaTime) {
+    if (scene.paused) {
+        return;
+    }
+    MovementMode mode = MovementMode::Walk;
+    if (scene.fly) {
+        mode = MovementMode::Fly;
+    }
+    scene.camera = advanceCamera(scene.camera, input, mode, scene.speed, deltaTime);
+}
+```
+
+### Bước 4 — So tốc độ khi vừa tiến vừa lên
+
+Ở pitch=45°, giữ W+E tạo direction có Y lớn hơn Z trước normalize. Sau normalize, tổng quãng đường trong 0.1s vẫn là 0.35. Nếu normalize input axes trước rồi cộng basis.forward với world Y mà không kiểm direction, tổng speed có thể vượt 3.5.
+
+Khi hai hướng gần triệt tiêu, chương trình vẫn chuẩn hóa hướng tổng khác zero theo digital-input rule; đó là lựa chọn điều khiển, không phải solver vật lý.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 6"
+cmake --build build --config Debug --target project_14_checkpoint_6
+./build/Debug/project_14_checkpoint_6.exe
+```
+
+M đổi Walk/Fly, W/S tiến/lùi, A/D strafe, Q/E xuống/lên trong Fly. IJKL nhìn quanh. Bản này chưa relative mouse; bạn vẫn kiểm được tất cả công thức bằng keyboard hoặc slider.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng full forward cho cả hai mode. Walk không còn giữ cao độ khi ngẩng đầu.
+2. Dùng camera.up cho Q/E nhưng ghi “world Y”. Ở pitch=45°, E sẽ đẩy camera cả theo Z.
+3. Chỉ normalize input=(strafe,advance,lift), không normalize direction cuối. Fly W+E có thể chạy nhanh hơn W.
+4. Chuyển Fly→Walk nhưng giữ Y hiện tại. “Walk” lúc đó có thể đi ngang sát trần, trái quy ước mắt Y=1.6.
+
+## Tự kiểm tra kết quả
+
+- Ví dụ pitch=45° khớp số 0.247487 cho mỗi thành phần Y/Z của bước Fly W.
+- Q/E không đổi X/Z nếu dùng riêng.
+- W+D+E không vượt 3.5 unit/s trước khi chạm biên.
+- Đổi về Walk trả Y=1.6 và giữ yaw/pitch; geometry không đổi.
+
+## Bài tập mở rộng
+
+Thêm một mode “camera-local lift” dùng camera.up, đặt tên khác Fly hiện tại. So E ở pitch=45° và giải thích hai quỹ đạo; không thay âm thầm ý nghĩa của Q/E trong mode đã học.
+
+Bài tiếp theo: [Nhìn quanh bằng relative mouse mode](/projects/fps-camera-room/07-relative-mouse-mode-va-pitch-clamp).

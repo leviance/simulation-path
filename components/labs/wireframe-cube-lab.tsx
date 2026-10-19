@@ -1,507 +1,511 @@
 "use client";
-
 import {
+  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { Vec3 } from "@/lib/labs/normal";
-import type { EulerAngles, RotationOrder } from "@/lib/labs/rotation3d";
+import type { EulerAngles } from "@/lib/labs/rotation3d";
+import { CUBE_EDGES, hasValidCubeTopology } from "@/lib/labs/wireframe-cube";
 import {
-  CUBE_EDGES,
-  advanceCubeAngles,
-  applyCubeMouseDrag,
-  cubeRotationRoundTripError,
-  cubeVertexDegrees,
-  hasValidCubeTopology,
-  makeCubeVertices,
-  maximumCubeEdgeLengthError,
-  projectWireframeCube,
-  rotateCubeVertices,
-  translateCubeVertices,
-  visibleCubeEdgesBackToFront,
-} from "@/lib/labs/wireframe-cube";
-import {
-  LabReadout,
-  canvasPoint,
-  drawLine,
-  setupCanvas,
-  useCanvasSize,
-  useReducedMotion,
-} from "./lab-shared";
+  initialCubeScene,
+  cubeStage,
+  cubePreset,
+  cubeResults,
+  cubeDirection,
+  changeCubeAngle,
+  setCubePosition,
+  moveCube,
+  zoomCube,
+  dragCube,
+  advanceCube,
+  type CubeScene,
+} from "@/lib/labs/wireframe-cube-scene";
+import { drawCubeLab, cubePointFromEvent } from "./wireframe-cube-lab-view";
+import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
-
-const DEG_TO_RAD = Math.PI / 180;
-const RAD_TO_DEG = 180 / Math.PI;
-const INITIAL_POSITION: Vec3 = { x: 0, y: 0, z: 6 };
-const INITIAL_ANGLES: EulerAngles = { pitch: 18 * DEG_TO_RAD, yaw: 28 * DEG_TO_RAD, roll: 0 };
-const ANGULAR_VELOCITY: EulerAngles = {
-  pitch: 16 * DEG_TO_RAD,
-  yaw: 26 * DEG_TO_RAD,
-  roll: 10 * DEG_TO_RAD,
-};
-
-function formatVec3(point: Vec3) {
-  return `(${point.x.toFixed(2)}, ${point.y.toFixed(2)}, ${point.z.toFixed(2)})`;
-}
-
-function mixChannel(from: number, to: number, amount: number) {
-  return Math.round(from + (to - from) * Math.max(0, Math.min(1, amount)));
-}
-
-function edgeColor(depthFactor: number, depthCue: boolean) {
-  if (!depthCue) return "rgb(132 169 255)";
-  return `rgb(${mixChannel(54, 168, depthFactor)} ${mixChannel(72, 236, depthFactor)} ${mixChannel(112, 255, depthFactor)})`;
-}
-
+const format = (p: Vec3) => "(" + [p.x, p.y, p.z].map((x) => x.toFixed(3)).join(", ") + ")";
 export default function WireframeCubeLab({ mode }: { mode?: InteractiveLabMode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastPointer = useRef<{ x: number; y: number } | null>(null);
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const showEdges = mode !== "cube-vertices";
-  const showTransform =
-    mode === undefined || ["cube-transform", "cube-depth", "cube-validation"].includes(mode);
-  const showDepth = mode === undefined || ["cube-depth", "cube-validation"].includes(mode);
-  const showInteraction = mode === undefined || mode === "cube-validation";
-
-  const [halfExtent, setHalfExtent] = useState(1.2);
-  const [modelPosition, setModelPosition] = useState<Vec3>(INITIAL_POSITION);
-  const [angles, setAngles] = useState<EulerAngles>(() =>
-    showTransform ? INITIAL_ANGLES : { pitch: 0, yaw: 0, roll: 0 },
-  );
-  const [order, setOrder] = useState<RotationOrder>("xyz");
+  const canvasRef = useRef<HTMLCanvasElement>(null),
+    size = useCanvasSize(canvasRef),
+    reducedMotion = useReducedMotion(),
+    stage = cubeStage(mode);
+  const [scene, setScene] = useState<CubeScene>(initialCubeScene),
+    sceneRef = useRef(scene);
+  const drag = useRef<{ id: number; previous: { x: number; y: number } } | null>(null);
+  const keys = useRef(new Set<string>());
+  const [moving, setMoving] = useState(false),
+    [captured, setCaptured] = useState(false);
   const [selectedVertex, setSelectedVertex] = useState(0);
-  const [selectedEdge, setSelectedEdge] = useState(0);
-  const [depthCue, setDepthCue] = useState(true);
-  const [showVertices, setShowVertices] = useState(true);
-  const [sensitivity, setSensitivity] = useState(0.008);
-  const [mouseDelta, setMouseDelta] = useState({ x: 0, y: 0 });
-  const [dragging, setDragging] = useState(false);
-  const [paused, setPaused] = useState(true);
-
-  const localVertices = useMemo(() => makeCubeVertices(halfExtent), [halfExtent]);
-  const activeAngles = useMemo<EulerAngles>(
-    () => (showTransform ? angles : { pitch: 0, yaw: 0, roll: 0 }),
-    [angles, showTransform],
+  const commit = useCallback((next: CubeScene) => {
+    sceneRef.current = next;
+    setScene(next);
+  }, []);
+  const cancelDrag = useCallback(() => {
+    const active = drag.current;
+    drag.current = null;
+    setCaptured(false);
+    const canvas = canvasRef.current;
+    if (active && canvas?.hasPointerCapture(active.id)) canvas.releasePointerCapture(active.id);
+  }, []);
+  const stopInput = useCallback(() => {
+    keys.current.clear();
+    setMoving(false);
+    cancelDrag();
+  }, [cancelDrag]);
+  const reset = useCallback(
+    (index = 0) => {
+      stopInput();
+      setSelectedVertex(0);
+      commit(cubePreset(index));
+    },
+    [stopInput, commit],
   );
-  const rotatedLocal = useMemo(
-    () => rotateCubeVertices(localVertices, activeAngles, order),
-    [activeAngles, localVertices, order],
-  );
-  const worldVertices = useMemo(
-    () => translateCubeVertices(rotatedLocal, modelPosition),
-    [modelPosition, rotatedLocal],
-  );
-  const camera = useMemo(() => ({ position: { x: 0, y: 0, z: 0 } }), []);
-  const lens = useMemo(() => ({ verticalFovRadians: 60 * DEG_TO_RAD }), []);
-  const projection = useMemo(
-    () => projectWireframeCube(worldVertices, camera, lens, 0.5, size.width, size.height),
-    [camera, lens, size.height, size.width, worldVertices],
-  );
-  const visibleEdges = useMemo(() => visibleCubeEdgesBackToFront(projection), [projection]);
-  const degrees = useMemo(() => cubeVertexDegrees(), []);
-  const edgeError = maximumCubeEdgeLengthError(localVertices, rotatedLocal);
-  const roundTripError = cubeRotationRoundTripError(localVertices, activeAngles, order);
-
-  useEffect(() => {
-    if (!showInteraction || paused || reducedMotion) return;
-    let animationFrame = 0;
-    let previous = performance.now();
-    const animate = (now: number) => {
-      const deltaTime = (now - previous) / 1000;
-      previous = now;
-      setAngles((current) => advanceCubeAngles(current, ANGULAR_VELOCITY, deltaTime));
-      animationFrame = requestAnimationFrame(animate);
+  const editAngle = (axis: keyof EulerAngles, value: number) => {
+    stopInput();
+    commit(changeCubeAngle(sceneRef.current, axis, value));
+  };
+  const editPosition = (axis: keyof Vec3, value: number) => {
+    stopInput();
+    commit(setCubePosition(sceneRef.current, axis, value));
+  };
+  const editScale = (value: number) => {
+    if (!Number.isFinite(value)) return;
+    stopInput();
+    commit({ ...sceneRef.current, paused: true, halfExtent: Math.max(0.5, Math.min(2, value)) });
+  };
+  const editSensitivity = (value: number) => {
+    if (!Number.isFinite(value)) return;
+    stopInput();
+    commit({
+      ...sceneRef.current,
+      paused: true,
+      sensitivity: Math.max(0.002, Math.min(0.02, value)),
+    });
+  };
+  const toggleProjection = () => {
+    stopInput();
+    const s = sceneRef.current;
+    commit({
+      ...s,
+      paused: true,
+      projection: s.projection === "perspective" ? "orthographic" : "perspective",
+    });
+  };
+  const togglePause = () => {
+    stopInput();
+    commit({ ...sceneRef.current, paused: reducedMotion ? true : !sceneRef.current.paused });
+  };
+  const toggleDebug = () => {
+    stopInput();
+    commit({ ...sceneRef.current, debug: !sceneRef.current.debug });
+  };
+  const zoom = (steps: number) => {
+    stopInput();
+    commit(zoomCube(sceneRef.current, steps));
+  };
+  const moveDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const active = drag.current;
+    if (!active || active.id !== event.pointerId) return;
+    const point = cubePointFromEvent(event, size, true);
+    if (!point) return;
+    commit(dragCube(sceneRef.current, point.x - active.previous.x, point.y - active.previous.y));
+    active.previous = point;
+  };
+  const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (stage < 5 || !event.isPrimary || event.button !== 0 || drag.current) return;
+    const point = cubePointFromEvent(event, size);
+    if (!point) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    keys.current.clear();
+    setMoving(false);
+    drag.current = { id: event.pointerId, previous: point };
+    commit({ ...sceneRef.current, paused: true });
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setCaptured(true);
+    } catch {
+      drag.current = null;
+      setCaptured(false);
+    }
+  };
+  const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId) return;
+    if (event.pointerType === "mouse" && (event.buttons & 1) === 0) {
+      cancelDrag();
+      return;
+    }
+    moveDrag(event);
+  };
+  const pointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId || event.button !== 0) return;
+    moveDrag(event);
+    cancelDrag();
+  };
+  const pointerCancel = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id === event.pointerId) cancelDrag();
+  };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.key === "Tab") return;
+    const key = event.key.toLowerCase();
+    if (stage >= 5 && ["w", "a", "s", "d", "q", "e"].includes(key)) {
+      event.preventDefault();
+      cancelDrag();
+      keys.current.add(key);
+      setMoving(true);
+      commit({ ...sceneRef.current, paused: true });
+      return;
+    }
+    if (key === "r") {
+      event.preventDefault();
+      if (!event.repeat) reset();
+      return;
+    }
+    if (stage >= 4 && key === "p") {
+      event.preventDefault();
+      if (!event.repeat) toggleProjection();
+      return;
+    }
+    if (stage >= 5 && (key === "+" || key === "=" || key === "-")) {
+      event.preventDefault();
+      zoom(key === "-" ? -1 : 1);
+      return;
+    }
+    if (stage >= 6 && key === " ") {
+      event.preventDefault();
+      if (!event.repeat) togglePause();
+      return;
+    }
+    if (stage >= 6 && key === "n") {
+      event.preventDefault();
+      if (!event.repeat && sceneRef.current.paused) commit(advanceCube(sceneRef.current, 0.1));
+      return;
+    }
+    if (stage >= 6 && key === "f") {
+      event.preventDefault();
+      if (!event.repeat) toggleDebug();
+      return;
+    }
+    if (stage >= 6 && key === "c") {
+      event.preventDefault();
+      if (!event.repeat) {
+        stopInput();
+        commit({ ...sceneRef.current, depthCue: !sceneRef.current.depthCue });
+      }
+      return;
+    }
+    if (stage >= 3 && key === "o") {
+      event.preventDefault();
+      if (!event.repeat) {
+        stopInput();
+        commit({
+          ...sceneRef.current,
+          paused: true,
+          order: sceneRef.current.order === "xyz" ? "zyx" : "xyz",
+        });
+      }
+      return;
+    }
+    const angleKeys: Record<string, [keyof EulerAngles, number]> = {
+      ArrowUp: ["pitch", 1],
+      ArrowDown: ["pitch", -1],
+      ArrowLeft: ["yaw", -1],
+      ArrowRight: ["yaw", 1],
+      PageUp: ["roll", 1],
+      PageDown: ["roll", -1],
     };
-    animationFrame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationFrame);
-  }, [paused, reducedMotion, showInteraction]);
-
+    if (stage >= 3 && angleKeys[event.key]) {
+      event.preventDefault();
+      const [axis, sign] = angleKeys[event.key];
+      editAngle(axis, sceneRef.current.angles[axis] + (sign * 5 * Math.PI) / 180);
+    }
+  };
+  const onKeyUp = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    const key = event.key.toLowerCase();
+    if (!keys.current.has(key)) return;
+    event.preventDefault();
+    keys.current.delete(key);
+    setMoving(keys.current.size > 0);
+  };
+  useEffect(() => {
+    const pause = () => {
+      stopInput();
+      commit({ ...sceneRef.current, paused: true });
+    };
+    const hidden = () => {
+      if (document.hidden) pause();
+    };
+    window.addEventListener("blur", pause);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", pause);
+      document.removeEventListener("visibilitychange", hidden);
+      stopInput();
+    };
+  }, [stopInput, commit]);
+  useEffect(() => {
+    stopInput();
+    commit(initialCubeScene());
+  }, [mode, stopInput, commit]);
+  useEffect(() => {
+    stopInput();
+    commit({ ...sceneRef.current, paused: true });
+  }, [size.width, size.height, size.dpr, stopInput, commit]);
+  useEffect(() => {
+    if (reducedMotion) {
+      stopInput();
+      commit({ ...sceneRef.current, paused: true });
+    }
+  }, [reducedMotion, stopInput, commit]);
   useEffect(() => {
     const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    setupCanvas(context, size);
-
-    for (let x = 0; x < size.width; x += 40) {
-      drawLine(context, { x, y: 0 }, { x, y: size.height }, "#18233a");
-    }
-    for (let y = 0; y < size.height; y += 40) {
-      drawLine(context, { x: 0, y }, { x: size.width, y }, "#18233a");
-    }
-
-    if (showTransform) {
-      const unrotatedWorld = translateCubeVertices(localVertices, modelPosition);
-      const ghost = projectWireframeCube(
-        unrotatedWorld,
-        camera,
-        lens,
-        0.5,
-        size.width,
-        size.height,
-      );
-      for (const edge of CUBE_EDGES) {
-        if (ghost.vertices[edge.from].status !== "visible") continue;
-        if (ghost.vertices[edge.to].status !== "visible") continue;
-        drawLine(
-          context,
-          ghost.vertices[edge.from].screen,
-          ghost.vertices[edge.to].screen,
-          "#33415f",
-        );
-      }
-    }
-
-    if (showEdges) {
-      for (const item of visibleEdges) {
-        const edge = CUBE_EDGES[item.edgeIndex];
-        drawLine(
-          context,
-          projection.vertices[edge.from].screen,
-          projection.vertices[edge.to].screen,
-          item.edgeIndex === selectedEdge
-            ? "#ffb454"
-            : edgeColor(item.depthFactor, showDepth && depthCue),
-          item.edgeIndex === selectedEdge ? 4 : 2.5,
-        );
-      }
-    }
-
-    if (showVertices) {
-      for (const [index, vertex] of projection.vertices.entries()) {
-        if (vertex.status !== "visible") continue;
-        context.beginPath();
-        context.arc(
-          vertex.screen.x,
-          vertex.screen.y,
-          index === selectedVertex ? 8 : 5,
-          0,
-          Math.PI * 2,
-        );
-        context.fillStyle = index < 4 ? "#ffbe5c" : "#5cecb9";
-        context.fill();
-        context.fillStyle = "#f7f9ff";
-        context.font = "700 11px ui-monospace";
-        context.fillText(String(index), vertex.screen.x + 8, vertex.screen.y - 7);
-      }
-    }
-
-    if (projection.vertices.some((vertex) => vertex.status !== "visible")) {
-      context.fillStyle = "#ff6b6b";
-      context.font = "700 12px ui-monospace";
-      context.fillText("Edge có endpoint không visible sẽ được bỏ qua", 16, 24);
-    }
-  }, [
-    camera,
-    depthCue,
-    lens,
-    localVertices,
-    modelPosition,
-    projection,
-    selectedEdge,
-    selectedVertex,
-    showDepth,
-    showEdges,
-    showTransform,
-    showVertices,
-    size,
-    visibleEdges,
-  ]);
-
-  const reset = () => {
-    setHalfExtent(1.2);
-    setModelPosition(INITIAL_POSITION);
-    setAngles(showTransform ? INITIAL_ANGLES : { pitch: 0, yaw: 0, roll: 0 });
-    setOrder("xyz");
-    setSelectedVertex(0);
-    setSelectedEdge(0);
-    setDepthCue(true);
-    setShowVertices(true);
-    setSensitivity(0.008);
-    setMouseDelta({ x: 0, y: 0 });
-    setDragging(false);
-    setPaused(true);
-  };
-
-  const startDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!showInteraction) return;
-    lastPointer.current = canvasPoint(event, event.currentTarget);
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setDragging(true);
-    setPaused(true);
-  };
-
-  const moveDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!showInteraction || !lastPointer.current) return;
-    const point = canvasPoint(event, event.currentTarget);
-    const delta = { x: point.x - lastPointer.current.x, y: point.y - lastPointer.current.y };
-    lastPointer.current = point;
-    setMouseDelta(delta);
-    setAngles((current) => applyCubeMouseDrag(current, delta.x, delta.y, sensitivity));
-  };
-
-  const stopDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    lastPointer.current = null;
-    setDragging(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    const step = event.shiftKey ? 10 * DEG_TO_RAD : 3 * DEG_TO_RAD;
-    let handled = true;
-    let pauseAfterInput = true;
-    const key = event.key.toLowerCase();
-
-    if (showTransform && key === "w")
-      setAngles((current) => ({ ...current, pitch: current.pitch + step }));
-    else if (showTransform && key === "s")
-      setAngles((current) => ({ ...current, pitch: current.pitch - step }));
-    else if (showTransform && key === "a")
-      setAngles((current) => ({ ...current, yaw: current.yaw - step }));
-    else if (showTransform && key === "d")
-      setAngles((current) => ({ ...current, yaw: current.yaw + step }));
-    else if (showTransform && key === "q")
-      setAngles((current) => ({ ...current, roll: current.roll - step }));
-    else if (showTransform && key === "e")
-      setAngles((current) => ({ ...current, roll: current.roll + step }));
-    else if (showTransform && key === "o")
-      setOrder((current) => (current === "xyz" ? "zyx" : "xyz"));
-    else if (showDepth && key === "c") setDepthCue((current) => !current);
-    else if (showInteraction && key === "v") setShowVertices((current) => !current);
-    else if (event.key === "ArrowLeft")
-      setModelPosition((current) => ({ ...current, x: current.x - 0.1 }));
-    else if (event.key === "ArrowRight")
-      setModelPosition((current) => ({ ...current, x: current.x + 0.1 }));
-    else if (event.key === "ArrowDown")
-      setModelPosition((current) => ({ ...current, y: current.y - 0.1 }));
-    else if (event.key === "ArrowUp")
-      setModelPosition((current) => ({ ...current, y: current.y + 0.1 }));
-    else if (event.key === "PageDown")
-      setModelPosition((current) => ({ ...current, z: current.z - 0.1 }));
-    else if (event.key === "PageUp")
-      setModelPosition((current) => ({ ...current, z: current.z + 0.1 }));
-    else if (key === "r") reset();
-    else if (showInteraction && event.key === " ") {
-      setPaused((current) => !current);
-      pauseAfterInput = false;
-    } else if (showInteraction && event.key === "." && paused) {
-      setAngles((current) => advanceCubeAngles(current, ANGULAR_VELOCITY, 1 / 60));
-    } else handled = false;
-
-    if (handled) {
+    if (stage < 5 || !canvas) return;
+    const wheel = (event: WheelEvent) => {
+      if (
+        event.ctrlKey ||
+        event.metaKey ||
+        !cubePointFromEvent(
+          { ...event, clientX: event.clientX, clientY: event.clientY, currentTarget: canvas },
+          size,
+        )
+      )
+        return;
       event.preventDefault();
-      if (pauseAfterInput) setPaused(true);
-    }
-  };
-
-  const selectedEdgeData = CUBE_EDGES[selectedEdge];
-  const farToNear = visibleEdges
-    .slice(0, 6)
-    .map((edge) => `#${edge.edgeIndex} z=${edge.averageDepth.toFixed(2)}`)
-    .join(" → ");
-
+      stopInput();
+      const unit = event.deltaMode === 1 ? 3 : event.deltaMode === 2 ? 1 : 100;
+      commit(zoomCube(sceneRef.current, -event.deltaY / unit));
+    };
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", wheel);
+  }, [stage, size, stopInput, commit]);
+  useEffect(() => {
+    if (stage < 5 || (!moving && (stage < 6 || scene.paused || reducedMotion))) return;
+    let frame = 0,
+      previous = performance.now();
+    const animate = (now: number) => {
+      const dt = Math.min(0.1, Math.max(0, (now - previous) / 1000));
+      previous = now;
+      let next = sceneRef.current;
+      if (keys.current.size > 0) next = moveCube(next, cubeDirection(keys.current), dt);
+      else if (stage >= 6 && !next.paused && !reducedMotion) next = advanceCube(next, dt);
+      if (next !== sceneRef.current) commit(next);
+      frame = requestAnimationFrame(animate);
+    };
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [stage, moving, scene.paused, reducedMotion, commit]);
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawCubeLab(ctx, size, scene, stage);
+  }, [size, scene, stage]);
+  const r = cubeResults(scene, stage),
+    debug = stage < 6 || scene.debug;
   return (
     <div className="lab-body">
       <div className="lab-controls">
         <label>
+          Preset
+          <select aria-label="Cube mẫu" value="" onChange={(e) => reset(Number(e.target.value))}>
+            <option value="" disabled>
+              Chọn thí nghiệm
+            </option>
+            {["Mặc định", "Nhìn chính diện", "Ở xa", "Cắt near", "Lệch khỏi khung"].map(
+              (name, i) => (
+                <option value={i} key={i}>
+                  {name}
+                </option>
+              ),
+            )}
+          </select>
+        </label>
+        <label>
           Half extent
           <input
+            aria-label="Half extent"
             type="range"
-            min="0.5"
+            min=".5"
             max="2"
-            step="0.1"
-            value={halfExtent}
-            onChange={(event) => setHalfExtent(Number(event.target.value))}
+            step=".1"
+            value={scene.halfExtent}
+            onChange={(e) => editScale(Number(e.target.value))}
           />
-          <output>{halfExtent.toFixed(1)}</output>
+          <output>{scene.halfExtent.toFixed(1)}</output>
         </label>
-        {!showEdges && (
-          <label>
-            Vertex index
-            <select
-              value={selectedVertex}
-              onChange={(event) => setSelectedVertex(Number(event.target.value))}
-            >
-              {localVertices.map((_, index) => (
-                <option key={index} value={index}>
-                  {index}
-                </option>
-              ))}
-            </select>
+        <label>
+          Vertex index
+          <select
+            aria-label="Vertex index"
+            value={selectedVertex}
+            onChange={(e) => setSelectedVertex(Number(e.target.value))}
+          >
+            {r.local.map((_, i) => (
+              <option key={i} value={i}>
+                {i}
+              </option>
+            ))}
+          </select>
+        </label>
+        {(["x", "y", "z"] as const).map((axis) => (
+          <label key={axis}>
+            Model.{axis.toUpperCase()}
+            <input
+              aria-label={"Model." + axis.toUpperCase()}
+              type="range"
+              min={axis === "z" ? 0.1 : -6}
+              max={axis === "z" ? 15 : 6}
+              step=".1"
+              value={scene.position[axis]}
+              onChange={(e) => editPosition(axis, Number(e.target.value))}
+            />
+            <output>{scene.position[axis].toFixed(2)}</output>
           </label>
-        )}
-        {showEdges && (
-          <label>
-            Edge
-            <select
-              value={selectedEdge}
-              onChange={(event) => setSelectedEdge(Number(event.target.value))}
-            >
-              {CUBE_EDGES.map((edge, index) => (
-                <option key={index} value={index}>
-                  #{index}: {edge.from} → {edge.to}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {showTransform &&
+        ))}
+        {stage >= 3 &&
           (["pitch", "yaw", "roll"] as const).map((axis) => (
             <label key={axis}>
-              {axis[0].toUpperCase() + axis.slice(1)}
+              {axis}
               <input
+                aria-label={"Góc " + axis}
                 type="range"
                 min="-180"
                 max="180"
                 step="1"
-                value={angles[axis] * RAD_TO_DEG}
-                onChange={(event) => {
-                  setAngles((current) => ({
-                    ...current,
-                    [axis]: Number(event.target.value) * DEG_TO_RAD,
-                  }));
-                  setPaused(true);
-                }}
+                value={(scene.angles[axis] * 180) / Math.PI}
+                onChange={(e) => editAngle(axis, (Number(e.target.value) * Math.PI) / 180)}
               />
-              <output>{(angles[axis] * RAD_TO_DEG).toFixed(0)}°</output>
+              <output>{((scene.angles[axis] * 180) / Math.PI).toFixed(1)}°</output>
             </label>
           ))}
-        {showTransform && (
-          <label>
-            Rotation order
-            <select
-              value={order}
-              onChange={(event) => setOrder(event.target.value as RotationOrder)}
+        {stage >= 4 && <button onClick={toggleProjection}>Phép chiếu: {scene.projection}</button>}
+        {stage >= 5 && (
+          <>
+            <button onClick={() => zoom(-1)}>Thu nhỏ</button>
+            <button onClick={() => zoom(1)}>Phóng to</button>
+            <label>
+              Sensitivity
+              <input
+                aria-label="Sensitivity"
+                type="range"
+                min=".002"
+                max=".02"
+                step=".001"
+                value={scene.sensitivity}
+                onChange={(e) => editSensitivity(Number(e.target.value))}
+              />
+              <output>{scene.sensitivity.toFixed(3)}</output>
+            </label>
+          </>
+        )}
+        {stage >= 6 && (
+          <>
+            <button onClick={togglePause} disabled={reducedMotion}>
+              {scene.paused ? "Tự quay" : "Tạm dừng"}
+            </button>
+            <button
+              disabled={!scene.paused}
+              onClick={() => commit(advanceCube(sceneRef.current, 0.1))}
             >
-              <option value="xyz">X → Y → Z</option>
-              <option value="zyx">Z → Y → X</option>
-            </select>
-          </label>
+              Tiến 0.1 s
+            </button>
+            <button onClick={toggleDebug} aria-pressed={scene.debug}>
+              {scene.debug ? "Ẩn debug" : "Hiện debug"}
+            </button>
+            <label className="check">
+              <input
+                aria-label="Depth cue"
+                type="checkbox"
+                checked={scene.depthCue}
+                onChange={(e) => {
+                  stopInput();
+                  commit({ ...sceneRef.current, depthCue: e.target.checked });
+                }}
+              />
+              Depth cue
+            </label>
+          </>
         )}
-        {showDepth && (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={depthCue}
-              onChange={(event) => setDepthCue(event.target.checked)}
-            />
-            Depth cue
-          </label>
-        )}
-        {showInteraction && (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={showVertices}
-              onChange={(event) => setShowVertices(event.target.checked)}
-            />
-            Vertex markers
-          </label>
-        )}
-        {showInteraction && (
-          <label>
-            Sensitivity
-            <input
-              type="range"
-              min="0.002"
-              max="0.02"
-              step="0.001"
-              value={sensitivity}
-              onChange={(event) => setSensitivity(Number(event.target.value))}
-            />
-            <output>{sensitivity.toFixed(3)}</output>
-          </label>
-        )}
-        {showInteraction && (
-          <button onClick={() => setPaused((current) => !current)}>
-            {paused ? "Chạy" : "Tạm dừng"}
-          </button>
-        )}
-        {showInteraction && (paused || reducedMotion) && (
-          <button
-            onClick={() =>
-              setAngles((current) => advanceCubeAngles(current, ANGULAR_VELOCITY, 1 / 60))
-            }
-          >
-            Tiến một bước
-          </button>
-        )}
-        <button onClick={reset}>Đặt lại</button>
+        <button onClick={() => reset()}>Đặt lại</button>
       </div>
       <canvas
         ref={canvasRef}
-        onPointerDown={startDrag}
-        onPointerMove={moveDrag}
-        onPointerUp={stopDrag}
-        onPointerCancel={stopDrag}
-        onLostPointerCapture={() => {
-          lastPointer.current = null;
-          setDragging(false);
-        }}
-        onKeyDown={onKeyDown}
+        style={{ height: "clamp(380px,58vw,560px)", touchAction: "none" }}
         tabIndex={0}
-        aria-label="Cube wireframe gồm tám vertex và mười hai edge; dùng phím hoặc kéo chuột để đổi orientation"
+        onPointerDown={startDrag}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerCancel={pointerCancel}
+        onLostPointerCapture={pointerCancel}
+        onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
+        onBlur={() => {
+          stopInput();
+          commit({ ...sceneRef.current, paused: true });
+        }}
+        aria-label="Cube wireframe 3D: kéo chuột xoay, WASD/QE di chuyển, wheel zoom, P đổi phép chiếu"
       />
-      <LabReadout
-        items={[
-          {
-            label: "topology",
-            value: hasValidCubeTopology() ? "8 vertex · 12 edge · degree 3" : "không hợp lệ",
-          },
-          { label: "projection cache", value: `${projection.projectionCount} kết quả / frame` },
-          ...(!showEdges
-            ? [
-                {
-                  label: `local vertex ${selectedVertex}`,
-                  value: formatVec3(localVertices[selectedVertex]),
-                },
-                { label: "projection status", value: projection.vertices[selectedVertex].status },
-              ]
-            : []),
-          ...(showEdges
-            ? [
-                {
-                  label: `edge #${selectedEdge}`,
-                  value: `${selectedEdgeData.from} → ${selectedEdgeData.to}`,
-                },
-                {
-                  label: "endpoint degree",
-                  value: `${degrees[selectedEdgeData.from]} / ${degrees[selectedEdgeData.to]}`,
-                },
-                { label: "visible edges", value: `${visibleEdges.length} / 12` },
-              ]
-            : []),
-          ...(showTransform
-            ? [
-                {
-                  label: "local 0 → world 0",
-                  value: `${formatVec3(localVertices[0])} → ${formatVec3(worldVertices[0])}`,
-                },
-                { label: "rotation order", value: order.toUpperCase() },
-                { label: "max edge error", value: edgeError.toExponential(2) },
-              ]
-            : []),
-          ...(showDepth
-            ? [{ label: "far → near (6 edge đầu)", value: farToNear || "không có edge visible" }]
-            : []),
-          ...(showInteraction
-            ? [
-                { label: "round-trip error", value: roundTripError.toExponential(2) },
-                {
-                  label: "mouse delta",
-                  value: `(${mouseDelta.x.toFixed(1)}, ${mouseDelta.y.toFixed(1)}) px`,
-                },
-                { label: "pointer capture", value: dragging ? "đang kéo" : "đã nhả" },
-              ]
-            : []),
-        ]}
-      />
+      <p>
+        Camera nhìn +Z, Y hướng lên. WASD/QE dịch chuyển theo trục world (W/S: +Z/−Z, A/D: −X/+X,
+        Q/E: −Y/+Y); phím mũi tên đổi pitch/yaw, PageUp/Down đổi roll. P đổi phép chiếu, +/− hoặc
+        wheel đổi độ phóng đại. R đặt lại, O đổi thứ tự XYZ/ZYX theo trục world cố định. Space tạm
+        dừng/tự quay, N tiến 0.1 s, F ẩn debug. Đặt focus vào Canvas để dùng phím; Tab vẫn chuyển
+        focus bình thường.{" "}
+        {reducedMotion
+          ? "Reduced motion: tự quay tắt; vẫn có thể tự di chuyển và tiến từng bước."
+          : ""}
+      </p>
+      {debug && (
+        <LabReadout
+          items={[
+            {
+              label: "topology",
+              value: hasValidCubeTopology() ? "8 vertex · 12 edge · degree 3" : "không hợp lệ",
+            },
+            { label: "local vertex " + selectedVertex, value: format(r.local[selectedVertex]) },
+            { label: "world vertex " + selectedVertex, value: format(r.world[selectedVertex]) },
+            { label: "vertex status", value: r.vertices[selectedVertex].status },
+            { label: "projection cache", value: r.projectionCount + " kết quả / frame" },
+            ...(stage >= 2
+              ? [
+                  { label: "visible edges", value: r.edges.length + " / 12" },
+                  { label: "extra clip projections", value: String(r.extraProjections) },
+                  {
+                    label: "edge list",
+                    value: CUBE_EDGES.map((e) => e.from + "–" + e.to).join(", "),
+                  },
+                ]
+              : []),
+            ...(stage >= 3 ? [{ label: "rotation order", value: scene.order.toUpperCase() }] : []),
+            ...(stage >= 4 ? [{ label: "projection", value: r.active.projection }] : []),
+            ...(stage >= 5
+              ? [
+                  { label: "zoom", value: scene.zoom.toFixed(2) + "×" },
+                  { label: "model position", value: format(scene.position) },
+                  { label: "pointer capture", value: captured ? "đang kéo" : "đã nhả" },
+                ]
+              : []),
+            ...(stage >= 6
+              ? [
+                  {
+                    label: "far → near",
+                    value: r.edges
+                      .map((e) => "#" + e.edgeIndex + " z=" + e.averageDepth.toFixed(2))
+                      .join(" → "),
+                  },
+                ]
+              : []),
+            ...(stage >= 7
+              ? [
+                  { label: "max edge error", value: r.edgeError.toExponential(2) },
+                  { label: "round-trip error", value: r.roundTrip.toExponential(2) },
+                ]
+              : []),
+          ]}
+        />
+      )}
     </div>
   );
 }

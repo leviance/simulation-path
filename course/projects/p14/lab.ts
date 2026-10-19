@@ -1,49 +1,56 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
     label: "FPS CAMERA LAB",
-    title: "Camera làm gì để một căn phòng đứng yên trông như đang chuyển động?",
+    title: "Đi trong phòng bằng camera, không xoay cả world",
     description:
-      "Quan sát room geometry, view transform, camera basis, WASD và mouse look trong cùng hệ tọa độ mà source C++ sử dụng.",
+      "Cùng convention với C++: view inverse, basis, Walk/Fly, clipping và các thí nghiệm kiểm chứng.",
   },
   modes: {
     "camera-room": {
-      title: "Một căn phòng wireframe cần những segment nào?",
+      title: "Dựng căn phòng trước khi cho camera đi",
       description:
-        "Xem floor grid, khung tường và từng world-space segment trước khi camera có thể di chuyển hoặc xoay.",
+        "Sinh sàn, tường, trần và mốc quan sát trong world; vẽ từ vị trí mắt cố định bằng renderer CPU của P13.",
     },
     "camera-translation": {
-      title: "Vì sao camera đi sang phải làm căn phòng trôi sang trái?",
+      title: "Đổi gốc tọa độ về vị trí camera",
       description:
-        "Thay camera position và so sánh world point với point sau phép trừ position trong camera space.",
+        "Trừ camera position, quan sát vật trôi ngược chiều mà không sửa một world vertex nào.",
     },
     "camera-orientation": {
-      title: "Inverse yaw và pitch đổi hướng nhìn ra sao?",
-      description:
-        "Kéo yaw/pitch rồi theo dõi một world point đi qua translation, inverse yaw và inverse pitch.",
+      title: "Nhìn quanh bằng phép quay ngược",
+      description: "Suy đúng dấu và thứ tự inverse yaw/pitch theo quy ước +Z trước, +Y lên.",
     },
     "camera-basis": {
-      title: "Forward, right và up có thật sự trực chuẩn?",
+      title: "Dựng ba trục forward, right, up",
       description:
-        "Quan sát ba trục camera, magnitude và dot product khi yaw/pitch thay đổi gần giới hạn.",
+        "Từ yaw/pitch suy basis, so dot product với cách quay ngược và kiểm tra số biết trước.",
     },
     "camera-movement": {
-      title: "WASD phải được đổi từ input axis sang world velocity thế nào?",
+      title: "Đi bộ theo hướng nhìn với WASD",
       description:
-        "Giữ phím hoặc dùng nút bước, đổi FPS và so sánh quãng đường sau cùng một khoảng thời gian.",
+        "Đọc keyboard state, tạo direction trong world và nhân speed × dt, không bay khi nhìn lên.",
+    },
+    "camera-fly": {
+      title: "Thêm Fly và điều khiển độ cao",
+      description:
+        "Tách forward đầy đủ khỏi groundForward, dùng Q/E theo world Y và chuẩn hóa tổng hướng.",
     },
     "camera-mouse-look": {
-      title: "Mouse delta điều khiển yaw/pitch mà không cần vị trí tuyệt đối ra sao?",
+      title: "Nhìn quanh bằng relative mouse mode",
       description:
-        "Kéo trong Canvas bằng pointer capture, thay sensitivity và quan sát pitch dừng ở giới hạn an toàn.",
+        "Click để bật SDL relative mode, dùng delta không nhân dt và dọn input khi thoát hoặc mất focus.",
+    },
+    "camera-bounds": {
+      title: "Giữ camera trong phòng, hoàn thiện bản demo",
+      description:
+        "Giới hạn sáu biên ngoài, pause/step/reset, chế độ sạch và đi thử tự động có thể dừng.",
     },
     "camera-validation": {
-      title: "Camera còn đúng khi vừa đi, vừa nhìn và chạm tường không?",
+      title: "Kiểm chứng camera và chạy bản hoàn chỉnh",
       description:
-        "Điều khiển camera hoàn chỉnh rồi theo dõi bounds, basis error, view round trip và trạng thái pointer capture.",
+        "Khóa phép view bằng oracle độc lập, kiểm basis/movement/clipping và build toàn bộ source.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

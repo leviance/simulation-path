@@ -1,58 +1,58 @@
 import type { PublishedProjectEditorial } from "../../types";
-
 const project = {
   prerequisites: [
-    "Project 02 — keyboard state, normalize và delta time",
-    "Project 11 — camera space và perspective projection",
-    "Project 13 — wireframe geometry và projection cache",
+    "Project 02 — keyboard state và delta time",
+    "Project 11 — phép chiếu perspective",
+    "Project 12 — rotation trực tiếp bằng sin/cos",
+    "Project 13 — wireframe CPU và clipping từng đoạn",
   ],
   summary:
-    "Giữ căn phòng đứng yên trong world space, tự viết view transform cho camera có position, yaw và pitch rồi điều khiển người xem bằng WASD cùng relative mouse mode của SDL3.",
+    "Tự viết camera FPS để đi bộ hoặc bay trong một căn phòng wireframe 3D. World giữ nguyên; position, yaw và pitch của camera quyết định view transform.",
   challenge: {
-    timebox: "240–320 phút",
+    timebox: "4–6 giờ thử tự làm trước khi đọc hướng dẫn",
     mission:
-      "Tự xây dựng một chương trình SDL3 cho phép người dùng đi bộ và nhìn quanh trong một căn phòng wireframe, chỉ dùng framebuffer CPU và các phép toán vector/rotation đã tự viết.",
+      "Tự xây dựng ứng dụng C++/SDL3 cho phép đi trong một căn phòng 3D bằng WASD và nhìn quanh bằng relative mouse mode, có Walk/Fly cùng điều khiển độ cao.",
     outcome:
-      "Người dùng nhìn căn phòng theo góc nhìn thứ nhất, di chuyển bằng WASD theo hướng camera, xoay nhìn bằng chuột không bị kẹt ở mép cửa sổ và không thể đi xuyên qua tường. Title bar hiển thị position, yaw, pitch, số segment visible và sai số kiểm chứng camera basis.",
+      "Viewport chiếm toàn cửa sổ, có sàn/tường/trần và nhiều mốc cố định. Người dùng đi từ cửa vào đến cuối phòng, nhìn lại phía sau, bay lên/xuống và chuyển sang chế độ trình diễn không có debug.",
     requirements: [
-      "Tạo căn phòng từ danh sách Segment3 trong world space; geometry không được dịch chuyển ngược lại mỗi khi camera đi.",
-      "Đổi world point sang camera space bằng cách trừ camera position rồi áp dụng inverse yaw và inverse pitch theo đúng thứ tự.",
-      "Tính forward, right và up từ yaw/pitch; ba vector phải có độ dài gần 1 và vuông góc từng đôi.",
-      "W/S đi theo forward nằm trên mặt sàn, A/D đi theo right; input chéo phải được normalize trước khi nhân speed và deltaTime.",
-      "Đọc keyboard state liên tục, chặn deltaTime quá lớn và khóa camera ở eye height cố định.",
-      "Dùng SDL_SetWindowRelativeMouseMode cho mouse look; nhấn Escape hoặc mất focus phải trả con trỏ về trạng thái bình thường.",
-      "Clamp pitch nhỏ hơn 90 độ để tránh lật camera; yaw có thể wrap để không tăng vô hạn.",
-      "Giữ camera trong RoomBounds với một khoảng margin và kiểm tra view round trip, basis cùng movement bằng CTest không cần window.",
+      "Room 12×22×4 với floor grid, khung tường/trần và ít nhất hai mốc lệch trái/phải; không chỉ orbit quanh một cube.",
+      "Giữ room vertices trong world bất biến, tự viết world→view từ camera position/yaw/pitch, chưa dùng matrix library.",
+      "Suy forward/right/up gần orthonormal; yaw dương hướng +X, pitch dương nhìn lên, camera view nhìn +Z.",
+      "WASD đi theo camera; Walk giữ Y=1.6 và bỏ pitch khỏi hướng đi; Fly dùng forward đầy đủ cùng Q/E theo world Y.",
+      "Movement dùng keyboard state × dt và chuẩn hóa tổng hướng world để đi chéo/đi bay không nhanh hơn.",
+      "Native click bật SDL relative mouse mode, Esc nhả; pause/reset/preset/mode/focus loss/resize/cleanup không giữ chuột hoặc phím kẹt.",
+      "Clip near/far trước perspective divide và clip screen trước Bresenham; giữ phần đoạn còn nhìn thấy dù endpoint outside.",
+      "Có pause/step, preset/reset và ẩn debug vẫn giữ cảnh 3D; CTest không cần window và source hoàn chỉnh tải được.",
     ],
     constraints: [
-      "Không dùng OpenGL, glm, matrix library, quaternion, Z-buffer, collision engine hoặc physics engine.",
-      "Không xoay hay translate room geometry để giả chuyển động; chỉ view transform được phép phụ thuộc camera state.",
-      "Pitch không được đưa vào hướng đi trên mặt sàn, nếu không nhìn lên sẽ khiến W làm camera bay.",
-      "Không dùng mouse position tuyệt đối rồi warp thủ công mỗi frame; SDL3 đã cung cấp relative mouse mode theo từng window.",
-      "Project này chưa cắt segment qua near plane; segment có endpoint không visible vẫn được bỏ qua như Project 13.",
+      "Không dùng OpenGL, SDL line primitives, GLM, quaternion hoặc physics/collision engine để thay phần phải tự viết.",
+      "Các hộp chỉ là mốc quan sát, có thể đi xuyên; chỉ chặn sáu biên phòng bằng AABB clamp, không gọi đó là collision solver tổng quát.",
+      "Không warp mouse thủ công; relative delta không nhân dt hoặc DPR, không đổi theo kích thước framebuffer.",
+      "Canvas drag có pointer capture là thí nghiệm công thức, không được mô tả như relative mode vô hạn của SDL.",
     ],
     definitionOfDone: [
-      "Camera đứng yên ở trạng thái mặc định nhìn thấy căn phòng, floor grid và crosshair rõ ràng.",
-      "worldToCamera rồi cameraToWorld trả point ban đầu với sai số không quá 10⁻⁹ ở nhiều pose.",
-      "Forward/right/up có magnitude 1 và dot từng đôi gần 0; forward của yaw 90° hướng theo +X.",
-      "Cùng một input trong một giây đi gần cùng quãng đường ở 30, 60 và 144 FPS; đi chéo không nhanh hơn đi thẳng.",
-      "Camera không vượt RoomBounds, pitch luôn nằm trong giới hạn và relative mouse mode được nhả khi mất focus.",
-      "CTest vượt qua; starter, bảy checkpoint và final build được ở Debug lẫn Release.",
+      "Đi được từ Z=2 đến gần Z=22 và quay nhìn lại; world endpoints không đổi qua mọi thao tác.",
+      "View có đáp án tính tay cho translation và yaw 90°; basis length≈1, dot≈0 và inverse error dưới 10⁻⁹.",
+      "Từ trạng thái không chạm biên, 30/60/144 bước trong 1 giây đều đi 3.5 unit; đi chéo và Fly+lift không vượt tốc độ đó.",
+      "Walk nhìn lên vẫn đi ngang; Fly nhìn lên và giữ W làm tăng Y; Q/E dùng world Y; đổi về Walk trả Y=1.6.",
+      "Nhả relative mode và dừng input đúng khi mất focus/reset/pause; không tự bật capture lại sau focus regain.",
+      "Starter, 9 checkpoint, final và CTest build/chạy Debug lẫn Release; các đường qua near/screen không làm treo hoặc văng hình.",
     ],
   },
-  duration: "9–10 giờ",
+  duration: "10–12 giờ",
   objectives: [
-    "Hiểu camera movement là phép biến đổi ngược từ world space sang camera space",
-    "Tự dựng camera basis và biến input WASD thành chuyển động theo hướng nhìn",
-    "Dùng relative mouse mode, delta time và bounds để hoàn thiện một camera FPS ổn định",
+    "Phân biệt xoay object với đổi hệ tọa độ theo camera",
+    "Suy camera basis và view inverse bằng vector/sin/cos trước ma trận",
+    "Hoàn thiện Walk/Fly, relative mouse và lifecycle input an toàn",
+    "Kiểm chứng camera bằng oracle độc lập, invariant và ứng dụng C++ thực sự",
   ],
   lessons: [
     {
       id: "p14-l01",
       slug: "01-dung-can-phong-wireframe",
-      title: "Dựng căn phòng wireframe đứng yên",
+      title: "Dựng căn phòng trước khi cho camera đi",
       summary:
-        "Tạo RoomBounds, sinh wall/floor grid thành Segment3 và project căn phòng từ một camera cố định trước khi thêm điều khiển.",
+        "Sinh sàn, tường, trần và mốc quan sát trong world; vẽ từ vị trí mắt cố định bằng renderer CPU của P13.",
       order: 1,
       estimatedMinutes: 65,
       demoId: "fps-camera",
@@ -60,9 +60,9 @@ const project = {
     {
       id: "p14-l02",
       slug: "02-camera-position-va-view-translation",
-      title: "Đưa camera position vào view transform",
+      title: "Đổi gốc tọa độ về vị trí camera",
       summary:
-        "Trừ camera position khỏi world point, quan sát căn phòng dịch ngược chiều và kiểm tra geometry world-space không bị sửa.",
+        "Trừ camera position, quan sát vật trôi ngược chiều mà không sửa một world vertex nào.",
       order: 2,
       estimatedMinutes: 60,
       demoId: "fps-camera",
@@ -70,9 +70,8 @@ const project = {
     {
       id: "p14-l03",
       slug: "03-inverse-yaw-va-pitch",
-      title: "Nhìn quanh bằng inverse yaw và pitch",
-      summary:
-        "Biến camera orientation thành hai phép quay ngược trên point tương đối, giữ quy ước camera nhìn theo +Z.",
+      title: "Nhìn quanh bằng phép quay ngược",
+      summary: "Suy đúng dấu và thứ tự inverse yaw/pitch theo quy ước +Z trước, +Y lên.",
       order: 3,
       estimatedMinutes: 75,
       demoId: "fps-camera",
@@ -80,9 +79,9 @@ const project = {
     {
       id: "p14-l04",
       slug: "04-forward-right-up-cua-camera",
-      title: "Tự dựng forward, right và up",
+      title: "Dựng ba trục forward, right, up",
       summary:
-        "Suy ba trục camera từ yaw/pitch, kiểm tra magnitude và dot product trước khi dùng chúng cho movement.",
+        "Từ yaw/pitch suy basis, so dot product với cách quay ngược và kiểm tra số biết trước.",
       order: 4,
       estimatedMinutes: 70,
       demoId: "fps-camera",
@@ -90,34 +89,53 @@ const project = {
     {
       id: "p14-l05",
       slug: "05-wasd-theo-huong-nhin-va-delta-time",
-      title: "Di chuyển WASD theo hướng camera",
+      title: "Đi bộ theo hướng nhìn với WASD",
       summary:
-        "Đọc keyboard state, normalize hai trục input và cập nhật position bằng speed nhân deltaTime trên mặt phẳng XZ.",
+        "Đọc keyboard state, tạo direction trong world và nhân speed × dt, không bay khi nhìn lên.",
       order: 5,
       estimatedMinutes: 80,
       demoId: "fps-camera",
     },
     {
       id: "p14-l06",
-      slug: "06-relative-mouse-mode-va-pitch-clamp",
-      title: "Mouse look không mắc ở mép cửa sổ",
+      slug: "06-walk-fly-va-dieu-khien-doc",
+      title: "Thêm Fly và điều khiển độ cao",
       summary:
-        "Bật relative mouse mode theo window, dùng xrel/yrel cho yaw/pitch và dọn trạng thái đúng khi Escape hoặc focus-lost.",
+        "Tách forward đầy đủ khỏi groundForward, dùng Q/E theo world Y và chuẩn hóa tổng hướng.",
       order: 6,
-      estimatedMinutes: 70,
+      estimatedMinutes: 65,
       demoId: "fps-camera",
     },
     {
       id: "p14-l07",
-      slug: "07-gioi-han-can-phong-va-validation",
-      title: "Giữ camera trong phòng và kiểm chứng",
+      slug: "07-relative-mouse-mode-va-pitch-clamp",
+      title: "Nhìn quanh bằng relative mouse mode",
       summary:
-        "Clamp position theo RoomBounds, thêm pause/reset/readout và khóa các invariant của view transform, basis, movement bằng CTest.",
+        "Click để bật SDL relative mode, dùng delta không nhân dt và dọn input khi thoát hoặc mất focus.",
       order: 7,
       estimatedMinutes: 80,
       demoId: "fps-camera",
     },
+    {
+      id: "p14-l08",
+      slug: "08-gioi-han-phong-va-che-do-demo",
+      title: "Giữ camera trong phòng, hoàn thiện bản demo",
+      summary:
+        "Giới hạn sáu biên ngoài, pause/step/reset, chế độ sạch và đi thử tự động có thể dừng.",
+      order: 8,
+      estimatedMinutes: 75,
+      demoId: "fps-camera",
+    },
+    {
+      id: "p14-l09",
+      slug: "09-hoan-thien-va-kiem-chung",
+      title: "Kiểm chứng camera và chạy bản hoàn chỉnh",
+      summary:
+        "Khóa phép view bằng oracle độc lập, kiểm basis/movement/clipping và build toàn bộ source.",
+      order: 9,
+      estimatedMinutes: 75,
+      demoId: "fps-camera",
+    },
   ],
 } satisfies PublishedProjectEditorial;
-
 export default project;

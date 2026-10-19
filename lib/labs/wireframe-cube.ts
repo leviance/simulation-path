@@ -94,7 +94,15 @@ export function projectWireframeCube(
 }
 
 export function isCubeEdgeValid(edge: CubeEdge) {
-  return edge.from >= 0 && edge.from < 8 && edge.to >= 0 && edge.to < 8 && edge.from !== edge.to;
+  return (
+    Number.isInteger(edge.from) &&
+    Number.isInteger(edge.to) &&
+    edge.from >= 0 &&
+    edge.from < 8 &&
+    edge.to >= 0 &&
+    edge.to < 8 &&
+    edge.from !== edge.to
+  );
 }
 
 export function cubeVertexDegrees() {

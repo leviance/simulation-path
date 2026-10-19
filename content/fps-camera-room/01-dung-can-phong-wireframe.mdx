@@ -1,128 +1,161 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Dựng căn phòng wireframe đứng yên
+# Dựng căn phòng trước khi cho camera đi
 
 ## Vấn đề cần giải quyết
 
-Project 13 chỉ có một cube nằm trước camera. Với góc nhìn thứ nhất, ta cần một thế giới đủ lớn để nhận ra mình đang đi tới, lùi lại hay xoay đầu. Bài đầu tiên chưa đụng tới WASD: mục tiêu chỉ là dựng một căn phòng dễ đọc và giữ toàn bộ tọa độ của nó trong world space.
+Ở P13, ta đứng ngoài nhìn một cube và thay đổi vị trí của nó. Bây giờ ta bước **vào trong một căn phòng**. Sàn, tường và các mốc đứng yên; về sau chỉ camera di chuyển. Nếu vẫn xoay cả room theo chuột, bạn chưa viết camera FPS.
 
-Starter đã có cửa sổ SDL3, framebuffer, Bresenham, resize và crosshair. Sau khi vẽ xong, đường `SDL_UpdateTexture` → `SDL_RenderTexture` → `SDL_RenderPresent` vẫn đưa mảng pixel lên cửa sổ như các project trước. Bạn sẽ bổ sung dữ liệu 3D cùng phép chiếu đã quen từ Project 11. Làm theo thứ tự này giúp ta biết căn phòng đã đúng trước khi camera bắt đầu thay đổi.
+Trước khi thêm WASD, hãy dựng một cảnh đủ rõ để nhận ra mình đang ở đâu. Bài này có phòng rộng 12, dài 22, cao 4 world unit, sàn lưới, khung tường/trần và hai hộp mốc lệch trái/phải.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Căn phòng dùng trục Y làm chiều cao, camera nhìn về +Z. Bounds mặc định là:
+World dùng +Y hướng lên. Phòng nằm trong X=[−6,6], Y=[0,4], Z=[0,22]. Mắt ban đầu ở (0,1.6,2), nhìn theo +Z. Điểm sàn vì thế có camera Y=−1.6; nếu đặt mắt ngay trên sàn, lưới dễ thu thành một đường ngang.
 
-$$
-x\in[-6,6],\quad y\in[0,4],\quad z\in[0,22]
-$$
-
-Floor grid không được tạo bằng vài đường dài từ đầu tới cuối phòng. Project này chưa có near-plane clipping; nếu một line dài có đầu nằm sau camera, bỏ cả line sẽ làm mất phần còn ở phía trước. Ta chia grid thành các segment dài hai world unit để từng đoạn biến mất riêng lẻ.
+Mỗi cạnh là một `Segment3` gồm hai tọa độ world và màu. Danh sách `RoomGeometry` được tạo một lần, không sửa sau mỗi frame. Hai hộp dùng cùng quy ước tám đỉnh/mười hai cạnh của P13; chúng là **mốc quan sát, chưa có collision**.
 
 <InteractiveLab demo="fps-camera" mode="camera-room" />
 
+Nhìn sàn hội tụ và hộp cam/hộp xanh ở hai độ sâu khác nhau. Preset chưa thay góc nhìn ở bài này: camera còn cố định để bạn kiểm tra geometry trước.
+
 ## Viết code từng bước
 
-### Bước 1 — Đặt tên cho bounds và segment
+### Bước 1 — Chạy bộ khung CPU trước
 
-`RoomBounds` là nguồn sự thật duy nhất cho cả geometry lẫn collision ở bài cuối. `SegmentKind` chỉ phục vụ màu vẽ, không thay đổi phép toán:
+Tải ZIP, giải nén và mở terminal tại `CMakeLists.txt`:
 
-```cpp title="include/lab.hpp — dữ liệu căn phòng trong world space"
-struct RoomBounds {
-    double minX{-6.0};
-    double maxX{6.0};
-    double floorY{0.0};
-    double ceilingY{4.0};
-    double minZ{0.0};
-    double maxZ{22.0};
-};
-
-enum class SegmentKind {
-    Floor,
-    Wall,
-    Ceiling,
-};
-
-struct Segment3 {
-    Vec3 from{};
-    Vec3 to{};
-    SegmentKind kind{SegmentKind::Wall};
-};
+```bash title="Terminal — kiểm tra Starter"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_14_starter
+./build/Debug/project_14_starter.exe
 ```
 
-### Bước 2 — Sinh floor grid theo từng cell
+Starter đã có framebuffer 1100×800, Bresenham, projection/near–far clipping từ P13, SDL window/texture và crosshair. Chưa có phòng. Resize/HiDPI letterbox bảng logic nên không kéo méo ảnh.
 
-Vòng ngoài chọn một đường song song trục Z; vòng trong chẻ đường ấy thành nhiều đoạn ngắn. `std::min` xử lý cell cuối nếu kích thước phòng không chia hết cho spacing:
+Các file toán nằm trong `projection.hpp` và `rotation.hpp`; `main.cpp` chỉ xử lý SDL, upload ảnh bằng `SDL_UpdateTexture` và present. Ta không cần viết lại vòng lặp SDL từ đầu.
 
-```cpp title="include/lab.hpp — chia floor grid thành segment ngắn"
-for (double x = bounds.minX; x <= bounds.maxX + 1e-9; x += gridSpacing) {
-    for (double z = bounds.minZ; z < bounds.maxZ - 1e-9; z += gridSpacing) {
-        const double nextZ = std::min(z + gridSpacing, bounds.maxZ);
-        appendSegment(room, {x, bounds.floorY, z}, {x, bounds.floorY, nextZ}, SegmentKind::Floor);
+### Bước 2 — Thêm dữ liệu căn phòng
+
+`room.hpp` có `RoomBounds`, `Segment3` và alias vector. Mỗi lần thêm cạnh chỉ làm một việc:
+
+```cpp title="include/room.hpp — appendSegment"
+inline void appendSegment(RoomGeometry& room, Vec3 from, Vec3 to, std::uint32_t color) {
+    room.push_back({from, to, color});
+}
+```
+
+Tạo các đường sàn theo X/Z, thêm cột tường và thanh trần. Những đoạn dài vẫn an toàn vì renderer clip thật; không cần chặt đường thành nhiều mẩu để che lỗi visibility.
+
+```cpp title="include/room.hpp — makeRoomGeometry"
+inline RoomGeometry makeRoomGeometry(const RoomBounds& b, double gridSpacing) {
+    RoomGeometry room;
+    if (!std::isfinite(gridSpacing) || gridSpacing < 0.5 || gridSpacing > 4.0 ||
+        !std::isfinite(b.minX) || !std::isfinite(b.maxX) || !std::isfinite(b.minZ) || !std::isfinite(b.maxZ) ||
+        !std::isfinite(b.floorY) || !std::isfinite(b.ceilingY) ||
+        b.maxX <= b.minX || b.maxZ <= b.minZ || b.ceilingY <= b.floorY ||
+        b.maxX - b.minX > 100.0 || b.maxZ - b.minZ > 100.0) {
+        return room;
     }
+    // Đoạn dài vẫn đúng vì renderer clip near/far và screen trước Bresenham.
+    for (double x = b.minX; x <= b.maxX + 1e-9; x += gridSpacing) {
+        appendSegment(room, {x, b.floorY, b.minZ}, {x, b.floorY, b.maxZ}, 0x4484AEFFu);
+    }
+    for (double z = b.minZ; z <= b.maxZ + 1e-9; z += gridSpacing) {
+        appendSegment(room, {b.minX, b.floorY, z}, {b.maxX, b.floorY, z}, 0x4484AEFFu);
+        appendSegment(room, {b.minX, b.floorY, z}, {b.minX, b.ceilingY, z}, 0x7DA5EEFFu);
+        appendSegment(room, {b.maxX, b.floorY, z}, {b.maxX, b.ceilingY, z}, 0x7DA5EEFFu);
+        appendSegment(room, {b.minX, b.ceilingY, z}, {b.maxX, b.ceilingY, z}, 0x7570BEFFu);
+    }
+    for (double x = b.minX; x <= b.maxX + 1e-9; x += gridSpacing) {
+        appendSegment(room, {x, b.floorY, b.minZ}, {x, b.ceilingY, b.minZ}, 0x7DA5EEFFu);
+        appendSegment(room, {x, b.floorY, b.maxZ}, {x, b.ceilingY, b.maxZ}, 0x7DA5EEFFu);
+    }
+    appendSegment(room, {b.minX, b.ceilingY, b.minZ}, {b.minX, b.ceilingY, b.maxZ}, 0x7570BEFFu);
+    appendSegment(room, {b.maxX, b.ceilingY, b.minZ}, {b.maxX, b.ceilingY, b.maxZ}, 0x7570BEFFu);
+    // Các mốc lệch trái/phải giúp người xem nhận ra mình đang đi, không orbit.
+    appendBox(room, {-3.0, 0.75, 8.0}, {0.8, 0.75, 0.8}, 0xFFB454FFu);
+    appendBox(room, {3.0, 1.1, 16.0}, {1.0, 1.1, 1.0}, 0x53F0AEFFu);
+    appendSegment(room, {b.minX, 2.0, b.maxZ}, {b.maxX, 2.0, b.maxZ}, 0xFFB454FFu);
+    return room;
 }
 ```
 
-Sau đó làm một lượt tương tự theo trục X, rồi thêm ceiling frame, bốn cột góc, rail hai bên và các post ở tường cuối. Tất cả endpoint đều lấy từ `bounds`, không rải số kích thước phòng trong render loop.
+Vòng đầu giữ X, nối từ đầu đến cuối phòng; vòng tiếp theo giữ Z và dựng một lát khung ngang. `appendBox` tái dùng vertex/edge list của cube, rồi append các cạnh vào cùng room. Grid spacing bị giới hạn để input lỗi không tạo vòng lặp vô tận.
 
-### Bước 3 — Tạo geometry đúng một lần
+### Bước 3 — Đổi từ world về mắt cố định rồi clip
 
-Room không thay đổi theo frame, vì vậy đặt nó ngoài vòng lặp chính:
+`viewPoint` ở checkpoint 1 trừ mắt mặc định (0,1.6,2). Chưa đọc camera position do người dùng điều khiển. Renderer xử lý từng đoạn:
 
-```cpp title="src/main.cpp — tạo room trước render loop"
-const lab::RoomBounds roomBounds{};
-const lab::RoomGeometry room = lab::makeRoomGeometry(roomBounds, 2.0);
-```
-
-Nếu bạn đặt lời gọi này trong `while (running)`, chương trình sẽ cấp phát lại cả vector dù căn phòng không hề đổi.
-
-### Bước 4 — Project hai đầu rồi mới vẽ
-
-Checkpoint 1 chưa có camera pose. Hàm `drawRoom` xem tọa độ room như camera-space coordinate của một camera cố định và chỉ vẽ khi cả hai endpoint visible:
-
-```cpp title="src/main.cpp — project rồi raster từng room segment"
-const lab::ProjectionResult from = lab::projectCameraPoint(segment.from, lens, nearPlane, width, height);
-const lab::ProjectionResult to = lab::projectCameraPoint(segment.to, lens, nearPlane, width, height);
-if (from.status != lab::ProjectionStatus::Visible || to.status != lab::ProjectionStatus::Visible) {
-    continue;
+```cpp title="include/view.hpp — projectRoomSegment"
+inline std::optional<std::array<Vec2, 2>> projectRoomSegment(Vec3 worldA, Vec3 worldB, const Scene& scene) {
+    Vec3 a = viewPoint(worldA, scene);
+    Vec3 b = viewPoint(worldB, scene);
+    if (!clipDepth(a, b, scene.lens)) {
+        return std::nullopt;
+    }
+    const auto pa = projectPerspective(a, Camera3D{}, scene.lens, viewportFor());
+    const auto pb = projectPerspective(b, Camera3D{}, scene.lens, viewportFor());
+    if (!pa.screen || !pb.screen) {
+        return std::nullopt;
+    }
+    Vec2 from = *pa.screen;
+    Vec2 to = *pb.screen;
+    if (!clipScreen(from, to, viewportFor())) {
+        return std::nullopt;
+    }
+    return std::array<Vec2, 2>{from, to};
 }
-drawLine(
-    pixels,
-    width,
-    height,
-    int(std::lround(from.screen.x)),
-    int(std::lround(from.screen.y)),
-    int(std::lround(to.screen.x)),
-    int(std::lround(to.screen.y)),
-    segmentColor(segment.kind)
-);
 ```
+
+Near/far clip trong camera space trước khi chia Z. Hai screen point còn ở số thực được clip tiếp vào viewport trước khi làm tròn. Vì vậy một cột bị cắt một phần ở mép cửa sổ vẫn còn phần nhìn thấy, không biến mất nguyên cột.
+
+### Bước 4 — Raster room bằng Bresenham
+
+```cpp title="include/view.hpp — drawRoom"
+inline RenderStats drawRoom(Framebuffer& image, const RoomGeometry& room, const Scene& scene) {
+    RenderStats stats;
+    for (const Segment3& segment : room) {
+        const auto screen = projectRoomSegment(segment.from, segment.to, scene);
+        if (!screen) {
+            continue;
+        }
+        const Vec2 a = (*screen)[0];
+        const Vec2 b = (*screen)[1];
+        drawLine(image, static_cast<int>(std::lround(a.x)), static_cast<int>(std::lround(a.y)), static_cast<int>(std::lround(b.x)), static_cast<int>(std::lround(b.y)), segment.color);
+        ++stats.visibleSegments;
+    }
+    return stats;
+}
+```
+
+Màu sàn xanh lam đậm, tường xanh sáng, trần tím; hai hộp cam/xanh lá giúp phân biệt vị trí. SDL không vẽ line hay tính camera thay ta.
 
 ## Ghép các phần lại
 
-Build checkpoint đầu:
+Trước vòng lặp, main tạo `worldRoom` rồi giữ const. Mỗi frame gọi `renderScene(image,scene,worldRoom)`, upload framebuffer và vẽ HUD bổ trợ.
 
-```bash title="Terminal — build căn phòng tĩnh"
+```bash title="Terminal — chạy checkpoint 1"
 cmake --build build --config Debug --target project_14_checkpoint_1
+./build/Debug/project_14_checkpoint_1.exe
 ```
 
-Bạn phải thấy floor grid hội tụ về phía tường cuối, khung ceiling và crosshair ở chính giữa. Title bar cho biết số segment total và số segment có hai endpoint visible.
+Mặc định room có 96 segment, nhưng số segment raster được nhỏ hơn vì có phần sau mắt hoặc ngoài frustum. 96 không phải số cạnh luôn phải hiện trên ảnh.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `gridSpacing` thành `0`. Dự đoán số segment trước khi chạy; guard phải trả room rỗng thay vì lặp vô hạn. Hoàn tác về `2.0` sau khi quan sát.
-2. Thay các cell dọc Z bằng một segment duy nhất từ `minZ` tới `maxZ`. Khi camera được thêm ở bài sau, dự đoán line sẽ biến mất sớm ra sao khi endpoint gần đi qua sau camera; hoàn tác để giữ geometry đã chia nhỏ.
-3. Chuyển `makeRoomGeometry` vào trong render loop. Dùng debugger đặt breakpoint để thấy nó chạy mỗi frame, rồi đưa lời gọi trở lại trước loop.
+1. Đặt mắt ở Y=0. Các đường sàn nằm cùng cao độ với camera; cảm giác đứng trong phòng biến mất dù geometry không đổi.
+2. Bỏ depth clip, thay bằng “hai đầu đều Visible”. Nhìn cạnh dài sát camera: những phần vẫn nhìn thấy cũng bị xóa.
+3. Tạo room trong mỗi frame rồi trừ camera position trực tiếp vào các endpoint. Bạn đã trộn dữ liệu world với view; bài sau sẽ khó kiểm tra world có thật sự đứng yên hay không.
 
 ## Tự kiểm tra kết quả
 
-- `room.size()` lớn hơn 100 và không tăng theo thời gian.
-- Mọi endpoint nằm trong `RoomBounds`.
-- Crosshair không phụ thuộc geometry và luôn ở giữa framebuffer sau resize.
-- Không gọi `drawLine` trước khi kiểm tra status của cả hai endpoint.
-- Checkpoint 1 build và chạy mà chưa cần `FpsCamera`.
+- Thấy sàn, tường, trần và hai hộp mốc; không chỉ một cube giữa màn hình.
+- Room nằm trong bounds đã chọn, mắt ở trong phòng và cao hơn sàn.
+- Clip xảy ra trước int/Bresenham; không có spike hoặc đường khổng lồ.
+- RoomGeometry giữ nguyên khi resize; SDL chỉ đổi cách trình bày bảng logic.
 
 ## Bài tập mở rộng
 
-Thêm một rail ngang ở cao độ `y=3`. Hãy sinh nó từ `bounds` và `gridSpacing`, không viết nhiều lời gọi `appendSegment` có tọa độ Z lặp lại.
+Thêm một đường màu ở giữa tường cuối để nhận ra hướng +Z, nhưng không tạo thêm “camera” bằng cách dịch cả căn phòng. Giữ một tọa độ world làm mốc để theo dõi ở bài sau.
 
-Bài tiếp theo sẽ giữ nguyên vector `room` này và chỉ thêm camera position vào view transform.
+Bài tiếp theo: [Đổi gốc tọa độ về vị trí camera](/projects/fps-camera-room/02-camera-position-va-view-translation).

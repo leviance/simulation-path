@@ -1,0 +1,139 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nhìn quanh bằng relative mouse mode
+
+## Vấn đề cần giải quyết
+
+Dùng vị trí chuột tuyệt đối để nhìn quanh sẽ hết chỗ kéo khi cursor chạm mép cửa sổ. Một camera FPS cần nhận độ dời liên tục mà không tự warp chuột về giữa mỗi frame.
+
+SDL có relative mouse mode theo từng window. Ta chỉ bật khi người dùng click vào viewport, và phải có đường nhả rõ ràng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mouse motion đã cho một **độ dời**, không phải vận tốc:
+
+$$
+yaw_{new}=yaw+s\,xrel,\qquad pitch_{new}=pitch-s\,yrel.
+$$
+
+Không nhân dt lần nữa. Nếu cùng một mouse delta cho góc khác nhau khi FPS đổi, code đã trộn đơn vị. Sensitivity ở native là radian trên đơn vị delta SDL, không phải pixel framebuffer.
+
+Đọc [SDL_SetWindowRelativeMouseMode](https://wiki.libsdl.org/SDL3/SDL_SetWindowRelativeMouseMode): khi window có focus và mode bật, SDL tiếp tục báo relative motion ở mép cửa sổ. API có thể thất bại; state của ứng dụng phải phản ánh kết quả thật.
+
+<InteractiveLab demo="fps-camera" mode="camera-mouse-look" />
+
+Canvas dùng kéo chuột với pointer capture để thử công thức. Nó **không khóa cursor vô hạn** như SDL relative mode. Drag tính theo CSS pixel, không nhân DPR; giữ đúng pointer owner, nhận mẫu thả cuối và hủy khi mất focus.
+
+## Viết code từng bước
+
+### Bước 1 — Đổi delta thành yaw/pitch
+
+Trong `lab.hpp`:
+
+```cpp title="include/lab.hpp — applyMouseLook"
+inline FpsCamera applyMouseLook(FpsCamera camera, double deltaX, double deltaY, double sensitivity) {
+    if (!std::isfinite(deltaX) || !std::isfinite(deltaY) || !std::isfinite(sensitivity) || sensitivity < 0.001 || sensitivity > 0.02) {
+        return camera;
+    }
+    return applyKeyboardLook(camera, deltaX * sensitivity, -deltaY * sensitivity);
+}
+```
+
+`applyKeyboardLook` từ bài 3 đã wrap yaw và clamp pitch ±89°. Hai loại input vì thế không dùng hai quy tắc giới hạn khác nhau. Sensitivity có khoảng hợp lệ; NaN hoặc delta lỗi không lan vào camera.
+
+### Bước 2 — Hỏi SDL, không tự đặt cờ thành công
+
+Trong `main.cpp`:
+
+```cpp title="src/main.cpp — setMouseLook"
+bool setMouseLook(SDL_Window* window, bool enabled, bool& active) {
+    const bool success = SDL_SetWindowRelativeMouseMode(window, enabled);
+    active = SDL_GetWindowRelativeMouseMode(window);
+    if (!success) {
+        std::cerr << "Relative mouse mode: " << SDL_GetError() << '\n';
+    }
+    return success;
+}
+```
+
+Sau lời gọi, `active` được đọc lại bằng `SDL_GetWindowRelativeMouseMode`. Nếu bật thất bại, chương trình báo lỗi nhưng không giả vờ cursor đã khóa.
+
+Click trái trong vùng vẽ mới bật mode. Chỉ vị trí click tuyệt đối được đổi sang tọa độ logical để bỏ qua letterbox bars; **không** đổi xrel/yrel theo tỉ lệ render:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !mouseLookActive) {
+    // Chỉ absolute click đổi sang logical coordinates; relative xrel/yrel KHÔNG đổi.
+    if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+        failed = true;
+        running = false;
+        break;
+    }
+    if (event.button.x >= 0.0 && event.button.x < 1100.0 && event.button.y >= 0.0 && event.button.y < 800.0) {
+        scene.paused = false;
+        scene.demo = false;
+        setMouseLook(window, true, mouseLookActive);
+    }
+}
+```
+
+### Bước 3 — Dùng xrel/yrel trực tiếp
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (event.type == SDL_EVENT_MOUSE_MOTION && mouseLookActive && !scene.paused && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0) {
+    scene.camera = lab::applyMouseLook(scene.camera, event.motion.xrel, event.motion.yrel, scene.sensitivity);
+    dirty = true;
+}
+```
+
+Relative mode không cần giữ nút trái sau click. Đây là khác biệt với Canvas drag. Window phải còn focus và scene không paused mới cập nhật góc.
+
+Đừng gọi `SDL_ConvertEventToRenderCoordinates` cho motion ở nhánh này: đổi kích thước framebuffer không được thay sensitivity của cùng delta SDL. [SDL_MouseMotionEvent](https://wiki.libsdl.org/SDL3/SDL_MouseMotionEvent) mô tả xrel/yrel là thành phần chuyển động tương đối.
+
+### Bước 4 — Có một hàm kết thúc input dùng chung
+
+```cpp title="src/main.cpp — đoạn ghép"
+const auto stopInput = [&]() {
+    inputArmed = false;
+    scene.demo = false;
+    if ((mouseLookActive || SDL_GetWindowRelativeMouseMode(window)) && !setMouseLook(window, false, mouseLookActive)) {
+        failed = true;
+        running = false;
+    }
+};
+```
+
+Focus-lost, hidden/minimized, resize, reset/preset, M và Space đều đi qua đây. Esc khi đang look sẽ nhả mouse và pause; Esc lần nữa khi đã nhả mới thoát ứng dụng native. Khi trở lại window, không tự khóa cursor.
+
+`inputArmed=false` buộc thả hết movement keys trước phiên mới. Với Canvas, xóa tập phím và bỏ key-repeat nếu chưa có key-down mới. Nhờ vậy reset trong lúc giữ W không tự đi tiếp ngay sau reset.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 7"
+cmake --build build --config Debug --target project_14_checkpoint_7
+./build/Debug/project_14_checkpoint_7.exe
+```
+
+Native: click vào cảnh để nhìn quanh; Esc nhả, Space tiếp tục/pause, R reset. IJKL vẫn dùng được nếu không muốn khóa cursor. −/+ chỉnh sensitivity, [/] chỉnh speed.
+
+Thử rê lâu sang một phía để xác nhận native không bị mép cửa sổ chặn. Không thể dùng Canvas drag làm bằng chứng cho yêu cầu này.
+
+## Thử làm sai để hiểu đúng
+
+1. Nhân xrel/yrel với dt. Cùng quãng rê chuột sẽ cho góc nhỏ hơn ở FPS cao.
+2. Set active=true trước khi biết API thành công. UI báo đang khóa nhưng hệ điều hành chưa bật mode.
+3. Bỏ xử lý focus-lost. Alt-Tab khi đang đi/nhìn có thể để camera trôi hoặc trạng thái cursor sai.
+4. Dùng `event.motion.x` như delta. Góc đổi theo vị trí cursor, nhảy ngay khi click và kẹt ở biên.
+
+## Tự kiểm tra kết quả
+
+- Delta (20,−10) với sensitivity=0.0025 cho yaw +0.05, pitch +0.025 rad.
+- Pitch dừng ±89°, yaw hữu hạn, mouse delta không nhân dt/DPR.
+- Escape, pause, reset và mất focus đều nhả relative mode.
+- Focus trở lại không tự khóa chuột; phím giữ cũ không tự khởi động.
+- Native rê qua mép vẫn nhận motion; Canvas chỉ được nghiệm thu như thí nghiệm drag.
+
+## Bài tập mở rộng
+
+Cố ý làm đường bật relative mode trả false trong một wrapper thử nghiệm. Kiểm tra rằng cờ active/UI không báo đang khóa và keyboard vẫn có thể điều khiển/thoát chương trình.
+
+Bài tiếp theo: [Giữ camera trong phòng, hoàn thiện bản demo](/projects/fps-camera-room/08-gioi-han-phong-va-che-do-demo).

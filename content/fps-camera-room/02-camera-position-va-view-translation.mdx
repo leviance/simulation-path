@@ -1,107 +1,101 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đưa camera position vào view transform
+# Đổi gốc tọa độ về vị trí camera
 
 ## Vấn đề cần giải quyết
 
-Căn phòng đã xuất hiện, nhưng mọi point đang được hiểu như thể camera nằm tại world origin. Nếu cộng camera position vào room endpoint để tạo cảm giác di chuyển, ta sẽ làm bẩn geometry gốc và sớm không còn biết tường thật sự nằm ở đâu.
+Căn phòng đã có chiều sâu. Ta muốn bước sang phải và tiến về phía trước. Việc phải đổi là **vị trí người nhìn**, không phải vị trí từng thanh tường.
 
-Camera movement phải được giải quyết ở view transform: room đứng yên; ta đổi cách quan sát nó.
+Bài này chỉ tịnh tiến camera, chưa xoay. Tách hai việc giúp bạn nhận ra một dấu trừ sai trước khi sin/cos làm hình khó đoán hơn.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với camera chưa xoay, camera-space point chỉ là độ dời từ camera tới world point:
+Một world point mô tả vị trí so với gốc world. Camera cần biết point nằm ở đâu **so với mắt**:
 
 $$
-p_{camera}=p_{world}-camera.position
+p_{camera}=p_{world}-camera.position.
 $$
 
-Nếu camera đi thêm `(+1,0,0)`, mọi camera-space X giảm 1. Vì vậy căn phòng trôi sang trái trên màn hình dù world coordinate không đổi. Đây không phải mẹo vẽ; nó là kết quả trực tiếp của việc đổi gốc tọa độ.
+Ví dụ camera=(1,1.6,2), world point=(3,2,8) thì vector tương đối là (2,0.4,6). Camera sang +X làm X tương đối nhỏ đi, nên vật trôi sang trái trên ảnh. Đây là hệ quả của đổi gốc tọa độ, không phải ta thật sự kéo vật sang trái.
 
 <InteractiveLab demo="fps-camera" mode="camera-translation" />
 
+Kéo **Camera X** và **Camera Z**. Theo dõi world point (2,1,12): world không đổi, còn số ở dòng “sau trừ position” thay đổi. Room được dựng lại trên ảnh chứ không bị sửa endpoint.
+
 ## Viết code từng bước
 
-### Bước 1 — Tạo state cho camera
+### Bước 1 — Giữ state riêng cho camera
 
-Eye height 1.6 đặt camera cao hơn floor nhưng thấp hơn ceiling. Yaw/pitch đã có chỗ trong struct, dù checkpoint này chưa sử dụng chúng:
+Trong `lab.hpp`, `FpsCamera` có position, yaw, pitch. Bài này mới dùng position:
 
-```cpp title="include/lab.hpp — camera pose tối thiểu"
+```cpp title="include/lab.hpp — đoạn ghép"
 struct FpsCamera {
     Vec3 position{0.0, 1.6, 2.0};
-    double yaw{};
-    double pitch{};
-};
 ```
 
-### Bước 2 — Viết translation thành một hàm có tên
+Tên `position` là tọa độ world của mắt. Nó không phải tọa độ screen, không cần nhân aspect ratio hay pixel ratio.
 
-Không nhét phép trừ vào công thức projection. Tách hàm giúp bài sau chèn inverse rotation đúng vị trí:
+### Bước 2 — Viết phép đổi gốc thành một hàm nhỏ
 
-```cpp title="include/lab.hpp — đưa world point về gốc camera"
+```cpp title="include/lab.hpp — worldToCameraTranslation"
 inline Vec3 worldToCameraTranslation(Vec3 worldPoint, const FpsCamera& camera) {
     return subtract(worldPoint, camera.position);
 }
 ```
 
-Tên `worldToCameraTranslation` nhấn mạnh đây mới chỉ là phần translation của view transform, chưa phải lời giải hoàn chỉnh cho camera có orientation.
+Hàm trả một Vec3 mới. Tham số camera là const; room và camera đều không bị thay trong quá trình tính một point.
 
-### Bước 3 — Project camera-space point như cũ
+Không viết `camera.position-worldPoint`: nó quay ngược cả hướng Z, đẩy phần phòng trước mặt ra sau camera.
 
-`projectCameraPoint` không cần biết camera nằm đâu. Wrapper mới nối đúng hai giai đoạn:
+### Bước 3 — Đưa state vào renderer ở một chỗ
 
-```cpp title="src/main.cpp — nối view translation với projection"
-const lab::Vec3 cameraPoint = lab::worldToCameraTranslation(worldPoint, camera);
-return lab::projectCameraPoint(cameraPoint, lens, nearPlane, width, height);
+`viewPoint` là điểm nối giữa geometry và phép chiếu:
+
+```cpp title="include/scene.hpp — viewPoint"
+inline Vec3 viewPoint(Vec3 world, const Scene& scene) {
+    const FpsCamera camera = activeCamera(scene);
+    return worldToCameraTranslation(world, camera);
+}
 ```
 
-Room loop chỉ thay lời gọi project; `segment.from` và `segment.to` vẫn được đọc qua `const` reference.
+Trong `projectRoomSegment`, cả hai endpoint đều đi qua hàm này rồi mới clip/project. Nếu chỉ đổi cube marker mà quên sàn hoặc tường, mỗi phần cảnh sẽ sống trong một hệ khác nhau.
 
-### Bước 4 — Di chuyển thử theo world axes
+### Bước 4 — Đi thử bằng phím theo world axes
 
-Arrow keys ở checkpoint 2 cố ý chưa phụ thuộc hướng nhìn:
+Ở checkpoint 2, mũi tên chỉ là nấc 0.2 unit để kiểm phép trừ. Đây chưa phải hệ WASD theo hướng nhìn:
 
-```cpp title="src/main.cpp — đổi camera position bằng phím mũi tên"
-if (event.key.key == SDLK_LEFT) {
-    camera = lab::moveCameraWorld(camera, -0.2, 0.0);
-}
+```cpp title="src/main.cpp — đoạn ghép"
 if (event.key.key == SDLK_RIGHT) {
-    camera = lab::moveCameraWorld(camera, 0.2, 0.0);
-}
-if (event.key.key == SDLK_UP) {
-    camera = lab::moveCameraWorld(camera, 0.0, 0.2);
-}
-if (event.key.key == SDLK_DOWN) {
-    camera = lab::moveCameraWorld(camera, 0.0, -0.2);
+    scene.camera.position.x += 0.2;
 }
 ```
 
-Đây là dụng cụ kiểm tra view translation, chưa phải điều khiển FPS cuối cùng.
+Phải đổi `scene.camera.position`, không tìm rồi trừ 0.2 vào mọi `Segment3`. Main vẫn truyền `worldRoom` const cho drawRoom.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build camera translation"
+```bash title="Terminal — chạy checkpoint 2"
 cmake --build build --config Debug --target project_14_checkpoint_2
+./build/Debug/project_14_checkpoint_2.exe
 ```
 
-Nhấn Right: camera X tăng và room trôi sang trái. Nhấn Up: camera tiến về +Z, các khoảng grid gần trông rộng dần. Nhấn `R` để trở về `(0,1.6,2)`.
+Trái/phải thay camera X, lên/xuống thay Z; R đặt lại. Camera tiến +Z làm các mốc gần hơn và có thể đi qua chúng. Clip near giữ các cạnh an toàn khi bạn đi sát hoặc vượt mặt phẳng chứa cạnh.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi phép trừ thành `add(worldPoint, camera.position)`. Dự đoán chiều trôi khi nhấn Right, quan sát rồi hoàn tác.
-2. Cộng `camera.position` trực tiếp vào mọi `segment.from/to`. Đi qua lại vài lần và quan sát geometry tích lũy sai số; hoàn tác để room trở lại bất biến.
-3. Đặt camera Y bằng 0. Crosshair nằm sát floor và phần lớn grid đổi hình; đưa Y về eye height 1.6.
+1. Đảo phép trừ. Điểm trước mắt có Z âm; cảnh thường trống thay vì “đi ngược”.
+2. Cộng position mỗi frame vào room vertices. Đứng yên một lúc rồi reset camera: căn phòng đã trôi khỏi vị trí gốc.
+3. Chỉ dùng camera.position.x, bỏ Y/Z. Bạn có thể strafe nhưng độ cao mắt và khoảng cách lại sai dù HUD vẫn thay số.
 
 ## Tự kiểm tra kết quả
 
-- `worldToCameraTranslation({3,2,8})` với camera `(1,1.6,2)` trả gần `(2,0.4,6)`.
-- Nhấn Right làm cảnh đi trái; nhấn Left làm cảnh đi phải.
-- `room[0]` giữ nguyên endpoint sau mọi lần di chuyển.
-- Camera position được tạo ngoài loop và không reset mỗi frame.
-- Checkpoint 2 chưa cần sin/cos hoặc keyboard state liên tục.
+- Ví dụ (3,2,8) trừ (1,1.6,2) cho (2,0.4,6).
+- Camera +X làm vật trôi trái; camera +Z làm vật trước mặt gần hơn.
+- Màu, số segment và world endpoints không đổi theo camera.
+- Reset phục hồi pose, không cần tái tạo geometry để “sửa” phòng.
 
 ## Bài tập mở rộng
 
-Hiển thị camera position trên title bar với hai chữ số sau dấu phẩy. Sau đó đổi bước Arrow từ `0.2` thành `1.0` để cảm nhận vì sao movement theo từng key event chưa đủ mượt.
+Tính camera-space của cùng world point khi camera=(−2,1.6,5). Dự đoán point sẽ ở bên nào của tâm ảnh rồi mới chỉnh slider để kiểm tra.
 
-Bài tiếp theo thêm yaw/pitch và giải thích vì sao rotation của view phải dùng dấu ngược.
+Bài tiếp theo: [Nhìn quanh bằng phép quay ngược](/projects/fps-camera-room/03-inverse-yaw-va-pitch).

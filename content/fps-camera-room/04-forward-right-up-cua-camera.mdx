@@ -1,121 +1,121 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Tự dựng forward, right và up
+# Dựng ba trục forward, right, up
 
 ## Vấn đề cần giải quyết
 
-View transform đã biết cách nhìn từ camera, nhưng code chưa có câu trả lời trực tiếp cho ba câu hỏi: camera đang nhìn hướng nào, bên phải nằm ở đâu, và phía trên của khung hình là hướng nào? Không có các vector này, phím W/A/S/D chỉ có thể bám world axes như Arrow keys ở checkpoint 2.
+“W đi về trước” mới chỉ là lời nói. Ta cần một vector world mô tả phía trước của camera, một vector sang phải và một vector lên trên.
 
-Trước khi dùng basis cho movement, ta sẽ dựng và kiểm chứng nó như một đối tượng toán học độc lập.
+Ba hướng này còn là cách kiểm tra view transform ở bài trước. Nếu ba công thức không thống nhất với inverse yaw/pitch, bạn có thể nhìn về một phía nhưng lại đi sang phía khác.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với yaw quanh Y và pitch dương nhìn lên:
+Với yaw $y$ và pitch $p$, forward có hình chiếu trên XZ dài $\cos p$, còn thành phần đứng là $\sin p$:
 
 $$
-forward=(\sin yaw\cos pitch,\ \sin pitch,\ \cos yaw\cos pitch)
+f=(\sin y\cos p,\ \sin p,\ \cos y\cos p).
 $$
 
-FPS camera không roll nên right luôn nằm trên mặt phẳng XZ:
+Camera không roll nên right nằm ngang:
 
 $$
-right=(\cos yaw,\ 0,\ -\sin yaw)
+r=(\cos y,\ 0,\ -\sin y).
 $$
 
-Up phải theo cùng orientation:
+Up phải vuông góc với cả hai, đồng thời theo đúng orientation:
 
 $$
-up=(-\sin yaw\sin pitch,\ \cos pitch,\ -\cos yaw\sin pitch)
+u=(-\sin y\sin p,\ \cos p,\ -\cos y\sin p).
 $$
 
-Ba vector đúng phải có magnitude 1 và dot product từng đôi bằng 0 trong sai số số thực.
+Ở yaw=0, pitch=30°: f≈(0,0.5,0.866), r=(1,0,0), u≈(0,0.866,−0.5). **Camera up không còn là world up** (0,1,0).
 
 <InteractiveLab demo="fps-camera" mode="camera-basis" />
 
+Đổi hai góc và đọc forward/right/up, basis error. Right không bị nghiêng theo pitch; up có thay đổi. Cảnh chính vẫn là phòng 3D, không bị thay bằng một minimap.
+
 ## Viết code từng bước
 
-### Bước 1 — Gom ba trục vào một kiểu dữ liệu
+### Bước 1 — Viết ba vector thành các dòng dễ đối chiếu
 
-```cpp title="include/lab.hpp — kiểu dữ liệu camera basis"
-struct CameraBasis {
-    Vec3 forward{};
-    Vec3 right{};
-    Vec3 up{};
-};
-```
+Trong `lab.hpp`:
 
-Trả cả ba cùng lúc đảm bảo mọi nơi dùng chung một quy ước yaw/pitch.
-
-### Bước 2 — Tính sin/cos đúng một lần
-
-```cpp title="include/lab.hpp — dựng basis từ yaw và pitch"
+```cpp title="include/lab.hpp — cameraBasis"
 inline CameraBasis cameraBasis(const FpsCamera& camera) {
     const double sinYaw = std::sin(camera.yaw);
     const double cosYaw = std::cos(camera.yaw);
     const double sinPitch = std::sin(camera.pitch);
     const double cosPitch = std::cos(camera.pitch);
-
-    return {
-        {sinYaw * cosPitch, sinPitch, cosYaw * cosPitch},
-        {cosYaw, 0.0, -sinYaw},
-        {-sinYaw * sinPitch, cosPitch, -cosYaw * sinPitch},
-    };
+    CameraBasis basis;
+    basis.forward = {sinYaw * cosPitch, sinPitch, cosYaw * cosPitch};
+    basis.right = {cosYaw, 0.0, -sinYaw};
+    basis.up = {-sinYaw * sinPitch, cosPitch, -cosYaw * sinPitch};
+    return basis;
 }
 ```
 
-Không gọi `normalize` ở đây. Công thức lượng giác phải tự sinh unit vectors; nếu cần normalize để che sai số lớn, rất có thể dấu hoặc thành phần đã viết sai.
+Mỗi vector phải xuất phát từ cùng hai góc. Không lấy forward bằng sin/cos rồi “ước lượng” up bằng cách đổi vài dấu theo hình trên màn hình.
 
-### Bước 3 — Tách hướng đi trên mặt sàn
+### Bước 2 — Kiểm length và dot product từng đôi
 
-Người chơi nhìn lên nhưng phím W không nên làm camera bay. Ta giữ một forward chỉ phụ thuộc yaw:
+Hàm dot đã có trong bộ khung:
 
-```cpp title="include/lab.hpp — forward dùng cho đi bộ"
+```cpp title="include/lab.hpp — dot"
+inline double dot(Vec3 a, Vec3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+```
+
+Dùng nó để kiểm $\lVert f\rVert,\lVert r\rVert,\lVert u\rVert\approx1$ và $f\cdot r,f\cdot u,r\cdot u\approx0$. Sai số thường quanh $10^{-16}$ với double; không đòi bằng 0 tuyệt đối.
+
+Trực chuẩn chưa đủ chốt quy ước dấu. Cần thêm đáp án riêng: yaw=90°, pitch=0 cho f=(1,0,0), r=(0,0,−1), u=(0,1,0).
+
+### Bước 3 — So basis với view transform
+
+Gọi $v=world-camera.position$. Cùng một camera-space point phải tính được theo cách khác:
+
+$$
+p_{view}=(v\cdot r,\ v\cdot u,\ v\cdot f).
+$$
+
+Cách này độc lập về phép tính với chuỗi rotateY/rotateX: một bên dùng dot với ba trục world, bên kia hoàn tác rotation. Test cuối project sẽ đối chiếu cả hai trên nhiều pose, không chỉ quay rồi quay ngược.
+
+### Bước 4 — Chuẩn bị hướng đi trên sàn
+
+Ta cần một forward bỏ pitch nhưng **vẫn có độ dài 1**, không chỉ đặt f.y=0 rồi giữ nguyên X/Z:
+
+```cpp title="include/lab.hpp — groundForward"
 inline Vec3 groundForward(const FpsCamera& camera) {
     return {std::sin(camera.yaw), 0.0, std::cos(camera.yaw)};
 }
 ```
 
-`cameraBasis.forward` dùng cho hướng nhìn; `groundForward` dùng cho movement. Hai tên khác nhau ngăn việc vô tình trộn hai ý nghĩa.
-
-### Bước 4 — Đưa forward lên title để kiểm tra nhanh
-
-```cpp title="src/main.cpp — đọc camera forward trong runtime"
-const lab::CameraBasis basis = lab::cameraBasis(camera);
-std::snprintf(
-    title,
-    sizeof(title),
-    "P14 | forward (%.2f %.2f %.2f) | %zu segments | IJKL/arrows/R",
-    basis.forward.x,
-    basis.forward.y,
-    basis.forward.z,
-    visibleSegments
-);
-```
+Nếu chỉ xóa Y của forward, nhìn gần thẳng lên sẽ làm bước chân chậm lại vì phần XZ rất ngắn. GroundForward được suy trực tiếp từ yaw nên không gặp lỗi đó.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build camera basis"
+```bash title="Terminal — chạy checkpoint 4"
 cmake --build build --config Debug --target project_14_checkpoint_4
+./build/Debug/project_14_checkpoint_4.exe
 ```
 
-Đặt yaw 0°: forward là `(0,0,1)`. Quay yaw 90°: forward gần `(1,0,0)`. Tăng pitch: forward Y tăng, nhưng right Y vẫn bằng 0.
+HUD native hiện ba vector; Canvas hiện thêm basis error. Bài này chưa có WASD, ta chỉ kiểm hệ trục để bài sau không phải debug movement và basis cùng lúc.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `right.z` từ `-sinYaw` thành `sinYaw`. Ở yaw 45°, xem dot(forward,right) rời khỏi 0 rồi hoàn tác.
-2. Giữ `up=(0,1,0)` khi pitch khác 0. Canvas sẽ cho thấy dot(forward,up) khác 0; khôi phục công thức up.
-3. Dùng full forward cho movement thử nghiệm trong Canvas khi pitch 60°. Dự đoán camera Y thay đổi thế nào, rồi trở về `groundForward`.
+1. Giữ u=(0,1,0) khi pitch≠0. Dot u·f khác 0: bộ trục không còn trực chuẩn.
+2. Đổi dấu Z của right. Tư thế yaw=0 có thể trông gần đúng nhưng yaw=90° làm strafe sai phía.
+3. Lấy forward rồi đặt Y=0 mà không chuẩn hóa. Nhìn lên làm độ dài hướng đi giảm; tốc độ sẽ phụ thuộc pitch.
 
 ## Tự kiểm tra kết quả
 
-- Ở pose mặc định: forward `(0,0,1)`, right `(1,0,0)`, up `(0,1,0)`.
-- Mỗi vector có magnitude gần 1 với sai số dưới $10^{-12}$.
-- Ba dot product từng đôi gần 0.
-- Yaw 90° đưa forward sang +X và right sang −Z.
-- Pitch không làm `groundForward.y` khác 0.
+- Đáp án pitch=30° và yaw=90° khớp các vector đã cho.
+- Length≈1 và dot từng đôi≈0 ở nhiều góc, kể cả pitch gần ±89°.
+- Dot(relative,basis) khớp view inverse.
+- GroundForward có Y=0 và length=1, không đổi khi chỉ thay pitch.
 
 ## Bài tập mở rộng
 
-Viết một hàm trả handedness bằng `dot(cross(right, up), forward)`. Với quy ước hiện tại, ghi lại dấu của kết quả và giải thích nó liên quan thế nào tới thứ tự các trục.
+Dùng cross product kiểm tra $r\times u=f$. Giải thích vì sao một bộ trục có length/dot đúng nhưng đổi dấu một trục vẫn có thể sai handedness.
 
-Bài tiếp theo biến input WASD thành velocity bằng `groundForward`, `right`, normalize và delta time.
+Bài tiếp theo: [Đi bộ theo hướng nhìn với WASD](/projects/fps-camera-room/05-wasd-theo-huong-nhin-va-delta-time).

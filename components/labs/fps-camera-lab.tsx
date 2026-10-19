@@ -1,557 +1,548 @@
 "use client";
-
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { Vec3 } from "@/lib/labs/normal";
 import {
-  DEFAULT_ROOM_BOUNDS,
-  advanceFpsCameraInRoom,
-  applyFpsMouseLook,
-  cameraBasisFps,
-  fpsBasisError,
-  fpsViewRoundTripError,
-  makeRoomGeometry,
-  projectFpsPoint,
-  rotateFpsX,
-  rotateFpsY,
-  worldToCameraTranslationFps,
-  type FpsCamera,
-  type MoveInput,
-  type RoomSegmentKind,
-} from "@/lib/labs/fps-camera";
-import {
-  LabReadout,
-  canvasPoint,
-  drawLine,
-  setupCanvas,
-  useCanvasSize,
-  useReducedMotion,
-} from "./lab-shared";
+  initialFpsScene,
+  fpsStage,
+  fpsPreset,
+  fpsResults,
+  fpsInput,
+  turnFpsCamera,
+  lookFpsScene,
+  advanceFpsScene,
+  toggleFpsMode,
+  clampFpsRoom,
+  fpsInsideRoom,
+  type FpsScene,
+  type FpsInput,
+} from "@/lib/labs/fps-camera-scene";
+import { FPS_ROOM_GEOMETRY } from "@/lib/labs/fps-camera-room";
+import { drawFpsLab, fpsPointFromEvent } from "./fps-camera-lab-view";
+import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
-
-const DEG_TO_RAD = Math.PI / 180;
-const RAD_TO_DEG = 180 / Math.PI;
-const INITIAL_CAMERA: FpsCamera = {
-  position: { x: 0, y: 1.6, z: 2 },
-  yaw: 0,
-  pitch: 0,
-};
-const INSPECTED_POINT: Vec3 = { x: 2, y: 1, z: 12 };
-
-function formatVec3(point: Vec3) {
-  return `(${point.x.toFixed(2)}, ${point.y.toFixed(2)}, ${point.z.toFixed(2)})`;
-}
-
-function segmentColor(kind: RoomSegmentKind) {
-  if (kind === "floor") return "#4484ae";
-  if (kind === "ceiling") return "#7570be";
-  return "#7da5ee";
-}
-
-function inputFromKeys(keys: ReadonlySet<string>): MoveInput {
-  let strafe = 0;
-  let advance = 0;
-  if (keys.has("a")) strafe -= 1;
-  if (keys.has("d")) strafe += 1;
-  if (keys.has("s")) advance -= 1;
-  if (keys.has("w")) advance += 1;
-  return { strafe, advance };
-}
-
+const format = (p: Vec3) => "(" + [p.x, p.y, p.z].map((x) => x.toFixed(3)).join(", ") + ")";
 export default function FpsCameraLab({ mode }: { mode?: InteractiveLabMode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastPointer = useRef<{ x: number; y: number } | null>(null);
-  const pressedKeys = useRef(new Set<string>());
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const showTranslation = mode !== "camera-room";
-  const showOrientation =
-    mode === undefined ||
-    [
-      "camera-orientation",
-      "camera-basis",
-      "camera-movement",
-      "camera-mouse-look",
-      "camera-validation",
-    ].includes(mode);
-  const showBasis = mode === undefined || ["camera-basis", "camera-validation"].includes(mode);
-  const showMovement =
-    mode === undefined || ["camera-movement", "camera-validation"].includes(mode);
-  const showMouse = mode === undefined || ["camera-mouse-look", "camera-validation"].includes(mode);
-  const showValidation = mode === undefined || mode === "camera-validation";
-
-  const [camera, setCamera] = useState<FpsCamera>(INITIAL_CAMERA);
-  const [selectedSegment, setSelectedSegment] = useState(0);
-  const [speed, setSpeed] = useState(3.5);
-  const [fps, setFps] = useState(60);
-  const [sensitivity, setSensitivity] = useState(0.006);
-  const [margin, setMargin] = useState(0.35);
-  const [lastInput, setLastInput] = useState<MoveInput>({ strafe: 0, advance: 0 });
-  const [mouseDelta, setMouseDelta] = useState({ x: 0, y: 0 });
-  const [pointerCaptured, setPointerCaptured] = useState(false);
-  const [paused, setPaused] = useState(false);
-
-  const room = useMemo(() => makeRoomGeometry(DEFAULT_ROOM_BOUNDS, 2), []);
-  const activeCamera = useMemo<FpsCamera>(
-    () => ({
-      position: showTranslation ? camera.position : INITIAL_CAMERA.position,
-      yaw: showOrientation ? camera.yaw : 0,
-      pitch: showOrientation ? camera.pitch : 0,
-    }),
-    [camera, showOrientation, showTranslation],
-  );
-  const lens = useMemo(() => ({ verticalFovRadians: 60 * DEG_TO_RAD }), []);
-  const projectedSegments = useMemo(
-    () =>
-      room.map((segment, index) => ({
-        index,
-        segment,
-        from: projectFpsPoint(segment.from, activeCamera, lens, 0.35, size.width, size.height),
-        to: projectFpsPoint(segment.to, activeCamera, lens, 0.35, size.width, size.height),
-      })),
-    [activeCamera, lens, room, size.height, size.width],
-  );
-  const visibleSegments = projectedSegments.filter(
-    (segment) => segment.from.status === "visible" && segment.to.status === "visible",
-  );
-  const basis = cameraBasisFps(activeCamera);
-  const translatedPoint = worldToCameraTranslationFps(INSPECTED_POINT, activeCamera);
-  const afterYaw = rotateFpsY(translatedPoint, -activeCamera.yaw);
-  const insideBounds =
-    camera.position.x >= DEFAULT_ROOM_BOUNDS.minX + margin - 1e-9 &&
-    camera.position.x <= DEFAULT_ROOM_BOUNDS.maxX - margin + 1e-9 &&
-    camera.position.z >= DEFAULT_ROOM_BOUNDS.minZ + margin - 1e-9 &&
-    camera.position.z <= DEFAULT_ROOM_BOUNDS.maxZ - margin + 1e-9;
-
-  const moveOnce = useCallback(
-    (input: MoveInput, deltaTime = 1 / fps) => {
-      if (!showMovement || paused) return;
-      setLastInput(input);
-      setCamera((current) =>
-        advanceFpsCameraInRoom(current, input, speed, deltaTime, DEFAULT_ROOM_BOUNDS, 1.6, margin),
-      );
-    },
-    [fps, margin, paused, showMovement, speed],
-  );
-
-  useEffect(() => {
-    if (!showMovement || paused || reducedMotion) return;
-    let animationFrame = 0;
-    let previous = performance.now();
-    const animate = (now: number) => {
-      const input = inputFromKeys(pressedKeys.current);
-      const deltaTime = (now - previous) / 1000;
-      previous = now;
-      if (input.strafe !== 0 || input.advance !== 0) moveOnce(input, deltaTime);
-      animationFrame = requestAnimationFrame(animate);
-    };
-    animationFrame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationFrame);
-  }, [moveOnce, paused, reducedMotion, showMovement]);
-
-  useEffect(() => {
+  const canvasRef = useRef<HTMLCanvasElement>(null),
+    size = useCanvasSize(canvasRef),
+    reducedMotion = useReducedMotion(),
+    stage = fpsStage(mode);
+  const [scene, setScene] = useState<FpsScene>(initialFpsScene),
+    sceneRef = useRef(scene);
+  const drag = useRef<{ id: number; previous: { x: number; y: number } } | null>(null),
+    keys = useRef(new Set<string>());
+  const [captured, setCaptured] = useState(false),
+    [moving, setMoving] = useState(false),
+    [fps, setFps] = useState(60);
+  const commit = useCallback((next: FpsScene) => {
+    sceneRef.current = next;
+    setScene(next);
+  }, []);
+  const cancelLook = useCallback(() => {
+    const active = drag.current;
+    drag.current = null;
+    setCaptured(false);
     const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    setupCanvas(context, size);
-
-    for (const item of visibleSegments) {
-      drawLine(
-        context,
-        item.from.screen,
-        item.to.screen,
-        item.index === selectedSegment ? "#ffb454" : segmentColor(item.segment.kind),
-        item.index === selectedSegment ? 3.5 : 1.5,
-      );
-    }
-
-    const center = { x: size.width * 0.5, y: size.height * 0.5 };
-    drawLine(
-      context,
-      { x: center.x - 8, y: center.y },
-      { x: center.x + 8, y: center.y },
-      "#f4f7ff",
-      1.5,
-    );
-    drawLine(
-      context,
-      { x: center.x, y: center.y - 8 },
-      { x: center.x, y: center.y + 8 },
-      "#f4f7ff",
-      1.5,
-    );
-
-    if (showTranslation) {
-      const map = { x: 16, y: 16, width: 136, height: 176 };
-      context.fillStyle = "rgb(9 16 31 / 85%)";
-      context.fillRect(map.x, map.y, map.width, map.height);
-      context.strokeStyle = "#465572";
-      context.strokeRect(map.x, map.y, map.width, map.height);
-      const mapPoint = (point: Vec3) => ({
-        x:
-          map.x +
-          ((point.x - DEFAULT_ROOM_BOUNDS.minX) /
-            (DEFAULT_ROOM_BOUNDS.maxX - DEFAULT_ROOM_BOUNDS.minX)) *
-            map.width,
-        y:
-          map.y +
-          (1 -
-            (point.z - DEFAULT_ROOM_BOUNDS.minZ) /
-              (DEFAULT_ROOM_BOUNDS.maxZ - DEFAULT_ROOM_BOUNDS.minZ)) *
-            map.height,
-      });
-      const cameraOnMap = mapPoint(activeCamera.position);
-      const forwardEnd = mapPoint({
-        x: activeCamera.position.x + basis.forward.x * 2,
-        y: activeCamera.position.y,
-        z: activeCamera.position.z + basis.forward.z * 2,
-      });
-      const rightEnd = mapPoint({
-        x: activeCamera.position.x + basis.right.x * 1.5,
-        y: activeCamera.position.y,
-        z: activeCamera.position.z + basis.right.z * 1.5,
-      });
-      drawLine(context, cameraOnMap, forwardEnd, "#5cecb9", 3);
-      drawLine(context, cameraOnMap, rightEnd, "#ffb454", 3);
-      context.beginPath();
-      context.arc(cameraOnMap.x, cameraOnMap.y, 5, 0, Math.PI * 2);
-      context.fillStyle = insideBounds ? "#f4f7ff" : "#ff6b6b";
-      context.fill();
-      context.fillStyle = "#d9e2f2";
-      context.font = "12px ui-monospace";
-      context.fillText("top view", map.x + 8, map.y + 16);
-      context.fillText(
-        `pitch ${(activeCamera.pitch * RAD_TO_DEG).toFixed(0)}°`,
-        map.x + 8,
-        map.y + map.height - 8,
-      );
-    }
-  }, [activeCamera, basis, insideBounds, selectedSegment, showTranslation, size, visibleSegments]);
-
-  const reset = () => {
-    setCamera(INITIAL_CAMERA);
-    setSelectedSegment(0);
-    setSpeed(3.5);
-    setFps(60);
-    setSensitivity(0.006);
-    setMargin(0.35);
-    setLastInput({ strafe: 0, advance: 0 });
-    setMouseDelta({ x: 0, y: 0 });
-    setPointerCaptured(false);
-    setPaused(false);
-    pressedKeys.current.clear();
-    lastPointer.current = null;
+    if (active && canvas?.hasPointerCapture(active.id)) canvas.releasePointerCapture(active.id);
+  }, []);
+  const stopInput = useCallback(() => {
+    keys.current.clear();
+    setMoving(false);
+    cancelLook();
+  }, [cancelLook]);
+  const reset = useCallback(
+    (index = 0) => {
+      stopInput();
+      setFps(60);
+      commit(fpsPreset(index));
+    },
+    [stopInput, commit],
+  );
+  const editPosition = (axis: keyof Vec3, value: number) => {
+    if (!Number.isFinite(value)) return;
+    stopInput();
+    const s = sceneRef.current;
+    let camera = { ...s.camera, position: { ...s.camera.position, [axis]: value } };
+    camera = clampFpsRoom(camera, s.fly, stage >= 8 ? s.margin : 0.35);
+    commit({ ...s, demo: false, camera });
   };
-
-  const startLook = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!showMouse) return;
-    lastPointer.current = canvasPoint(event, event.currentTarget);
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setPointerCaptured(true);
+  const editAngle = (axis: "yaw" | "pitch", value: number) => {
+    if (!Number.isFinite(value)) return;
+    stopInput();
+    const s = sceneRef.current;
+    commit({
+      ...s,
+      demo: false,
+      camera: turnFpsCamera(
+        s.camera,
+        axis === "yaw" ? value - s.camera.yaw : 0,
+        axis === "pitch" ? value - s.camera.pitch : 0,
+      ),
+    });
   };
-
+  const editNumber = (key: "speed" | "sensitivity" | "margin", value: number) => {
+    if (!Number.isFinite(value)) return;
+    stopInput();
+    const s = sceneRef.current;
+    const min = key === "speed" ? 1 : key === "sensitivity" ? 0.001 : 0,
+      max = key === "speed" ? 7 : key === "sensitivity" ? 0.02 : 1;
+    const next = { ...s, demo: false, [key]: Math.max(min, Math.min(max, value)) };
+    if (stage >= 8) next.camera = clampFpsRoom(next.camera, next.fly, next.margin);
+    commit(next);
+  };
+  const changeMode = () => {
+    stopInput();
+    commit(toggleFpsMode(sceneRef.current));
+  };
+  const togglePause = () => {
+    stopInput();
+    commit({ ...sceneRef.current, demo: false, paused: !sceneRef.current.paused });
+  };
+  const toggleDebug = () => {
+    commit({ ...sceneRef.current, debug: !sceneRef.current.debug });
+  };
+  const toggleDemo = () => {
+    stopInput();
+    commit({
+      ...sceneRef.current,
+      demo: reducedMotion ? false : !sceneRef.current.demo,
+      paused: false,
+    });
+  };
+  const stepInput = (input: FpsInput, dt = 0.1) => {
+    stopInput();
+    const s = sceneRef.current;
+    const next = advanceFpsScene({ ...s, paused: false, demo: false }, input, dt, stage);
+    commit({ ...next, paused: s.paused });
+  };
+  const runSecond = () => {
+    stopInput();
+    let next = { ...sceneRef.current, paused: false, demo: false };
+    for (let i = 0; i < fps; i++)
+      next = advanceFpsScene(next, { strafe: 0, advance: 1, lift: 0 }, 1 / fps, stage);
+    commit({ ...next, paused: sceneRef.current.paused });
+  };
   const moveLook = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!showMouse || !lastPointer.current) return;
-    const point = canvasPoint(event, event.currentTarget);
-    const delta = { x: point.x - lastPointer.current.x, y: point.y - lastPointer.current.y };
-    lastPointer.current = point;
-    setMouseDelta(delta);
-    setCamera((current) => applyFpsMouseLook(current, delta.x, delta.y, sensitivity));
+    const active = drag.current;
+    if (!active || active.id !== event.pointerId) return;
+    const p = fpsPointFromEvent(event, size, true);
+    if (!p) return;
+    commit(lookFpsScene(sceneRef.current, p.x - active.previous.x, p.y - active.previous.y));
+    active.previous = p;
   };
-
-  const stopLook = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    lastPointer.current = null;
-    setPointerCaptured(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+  const startLook = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (stage < 7 || !event.isPrimary || event.button !== 0 || drag.current) return;
+    const p = fpsPointFromEvent(event, size);
+    if (!p) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    drag.current = { id: event.pointerId, previous: p };
+    commit({ ...sceneRef.current, paused: false, demo: false });
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setCaptured(true);
+    } catch {
+      drag.current = null;
+      setCaptured(false);
     }
   };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    const key = event.key.toLowerCase();
-    if (showMovement && ["w", "a", "s", "d"].includes(key)) {
-      pressedKeys.current.add(key);
-      moveOnce(inputFromKeys(pressedKeys.current));
-      event.preventDefault();
+  const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId) return;
+    if (event.pointerType === "mouse" && (event.buttons & 1) === 0) {
+      cancelLook();
       return;
     }
-    if (showOrientation && event.key.startsWith("Arrow")) {
-      const angleStep = event.shiftKey ? 10 * DEG_TO_RAD : 3 * DEG_TO_RAD;
-      setCamera((current) => {
-        if (event.key === "ArrowLeft") return applyFpsMouseLook(current, -1, 0, angleStep);
-        if (event.key === "ArrowRight") return applyFpsMouseLook(current, 1, 0, angleStep);
-        if (event.key === "ArrowUp") return applyFpsMouseLook(current, 0, -1, angleStep);
-        return applyFpsMouseLook(current, 0, 1, angleStep);
+    moveLook(event);
+  };
+  const pointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId || event.button !== 0) return;
+    moveLook(event);
+    cancelLook();
+  };
+  const pointerCancel = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id === event.pointerId) cancelLook();
+  };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.key === "Tab") return;
+    const key = event.key.toLowerCase();
+    const movementKeys = stage >= 6 ? ["w", "a", "s", "d", "q", "e"] : ["w", "a", "s", "d"];
+    if (stage >= 5 && movementKeys.includes(key)) {
+      event.preventDefault();
+      if (sceneRef.current.paused || (event.repeat && !keys.current.has(key))) return;
+      keys.current.add(key);
+      setMoving(true);
+      commit({ ...sceneRef.current, demo: false });
+      return;
+    }
+    if (key === "r") {
+      event.preventDefault();
+      if (!event.repeat) reset();
+      return;
+    }
+    if (key === "escape") {
+      event.preventDefault();
+      stopInput();
+      commit({ ...sceneRef.current, demo: false, paused: true });
+      return;
+    }
+    if (stage >= 6 && key === "m") {
+      event.preventDefault();
+      if (!event.repeat) changeMode();
+      return;
+    }
+    if (stage >= 5 && key === " ") {
+      event.preventDefault();
+      if (!event.repeat) togglePause();
+      return;
+    }
+    if (stage >= 8 && key === "t") {
+      event.preventDefault();
+      if (!event.repeat) toggleDemo();
+      return;
+    }
+    if (stage >= 8 && key === "f") {
+      event.preventDefault();
+      if (!event.repeat) toggleDebug();
+      return;
+    }
+    if (stage >= 8 && key === "n") {
+      event.preventDefault();
+      if (!event.repeat && sceneRef.current.paused) stepInput({ strafe: 0, advance: 1, lift: 0 });
+      return;
+    }
+    const lookKeys: Record<string, ["yaw" | "pitch", number]> = {
+      j: ["yaw", -1],
+      l: ["yaw", 1],
+      i: ["pitch", 1],
+      k: ["pitch", -1],
+      ArrowLeft: ["yaw", -1],
+      ArrowRight: ["yaw", 1],
+      ArrowUp: ["pitch", 1],
+      ArrowDown: ["pitch", -1],
+    };
+    if (stage >= 3 && (lookKeys[key] || lookKeys[event.key])) {
+      event.preventDefault();
+      const [axis, sign] = lookKeys[key] || lookKeys[event.key];
+      cancelLook();
+      const s = sceneRef.current;
+      commit({
+        ...s,
+        demo: false,
+        camera: turnFpsCamera(
+          s.camera,
+          axis === "yaw" ? (sign * 3 * Math.PI) / 180 : 0,
+          axis === "pitch" ? (sign * 3 * Math.PI) / 180 : 0,
+        ),
       });
-      event.preventDefault();
+      return;
     }
-    if (event.key === " ") {
-      setPaused((current) => !current);
-      event.preventDefault();
-    }
-    if (key === "r") reset();
   };
-
   const onKeyUp = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    pressedKeys.current.delete(event.key.toLowerCase());
+    const key = event.key.toLowerCase();
+    if (!keys.current.has(key)) return;
+    event.preventDefault();
+    keys.current.delete(key);
+    setMoving(keys.current.size > 0);
   };
-
-  const selected = room[Math.min(selectedSegment, room.length - 1)];
-  const inputLength = Math.hypot(lastInput.strafe, lastInput.advance);
-  const afterPitch = rotateFpsX(afterYaw, activeCamera.pitch);
-
+  useEffect(() => {
+    const pause = () => {
+      stopInput();
+      commit({ ...sceneRef.current, paused: true, demo: false });
+    };
+    const hidden = () => {
+      if (document.hidden) pause();
+    };
+    window.addEventListener("blur", pause);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", pause);
+      document.removeEventListener("visibilitychange", hidden);
+      stopInput();
+    };
+  }, [stopInput, commit]);
+  useEffect(() => {
+    stopInput();
+    commit(initialFpsScene());
+    setFps(60);
+  }, [mode, stopInput, commit]);
+  useEffect(() => {
+    stopInput();
+    commit({ ...sceneRef.current, demo: false });
+  }, [size.width, size.height, size.dpr, stopInput, commit]);
+  useEffect(() => {
+    if (reducedMotion) {
+      stopInput();
+      commit({ ...sceneRef.current, demo: false });
+    }
+  }, [reducedMotion, stopInput, commit]);
+  useEffect(() => {
+    if (stage < 5 || scene.paused || (!moving && (!scene.demo || reducedMotion))) return;
+    let frame = 0,
+      previous = performance.now();
+    const animate = (now: number) => {
+      const dt = Math.min(0.1, Math.max(0, (now - previous) / 1000));
+      previous = now;
+      const s = sceneRef.current;
+      if (s.paused) return;
+      let input = fpsInput(keys.current);
+      if (s.demo && !reducedMotion && keys.current.size === 0)
+        input = { strafe: 0, advance: 1, lift: 0 };
+      commit(advanceFpsScene(s, input, dt, stage));
+      frame = requestAnimationFrame(animate);
+    };
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [stage, scene.paused, scene.demo, moving, reducedMotion, commit]);
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawFpsLab(ctx, size, scene, stage);
+  }, [size, scene, stage]);
+  const r = fpsResults(scene, stage),
+    debug = stage < 8 || scene.debug;
   return (
     <div className="lab-body">
       <div className="lab-controls">
-        {mode === "camera-room" && (
-          <label>
-            Segment
-            <input
-              type="range"
-              min="0"
-              max={room.length - 1}
-              value={selectedSegment}
-              onChange={(event) => setSelectedSegment(Number(event.target.value))}
-            />
-            <output>#{selectedSegment}</output>
-          </label>
-        )}
-        {showTranslation && (
-          <label>
-            Camera X
-            <input
-              type="range"
-              min={DEFAULT_ROOM_BOUNDS.minX + margin}
-              max={DEFAULT_ROOM_BOUNDS.maxX - margin}
-              step="0.1"
-              value={camera.position.x}
-              onChange={(event) =>
-                setCamera((current) => ({
-                  ...current,
-                  position: { ...current.position, x: Number(event.target.value) },
-                }))
-              }
-            />
-            <output>{camera.position.x.toFixed(1)}</output>
-          </label>
-        )}
-        {mode === "camera-translation" && (
-          <label>
-            Camera Z
-            <input
-              type="range"
-              min={DEFAULT_ROOM_BOUNDS.minZ + margin}
-              max={DEFAULT_ROOM_BOUNDS.maxZ - margin}
-              step="0.1"
-              value={camera.position.z}
-              onChange={(event) =>
-                setCamera((current) => ({
-                  ...current,
-                  position: { ...current.position, z: Number(event.target.value) },
-                }))
-              }
-            />
-            <output>{camera.position.z.toFixed(1)}</output>
-          </label>
-        )}
-        {showOrientation && (
-          <label>
-            Yaw
-            <input
-              type="range"
-              min="-180"
-              max="180"
-              value={camera.yaw * RAD_TO_DEG}
-              onChange={(event) =>
-                setCamera((current) => ({
-                  ...current,
-                  yaw: Number(event.target.value) * DEG_TO_RAD,
-                }))
-              }
-            />
-            <output>{(camera.yaw * RAD_TO_DEG).toFixed(0)}°</output>
-          </label>
-        )}
-        {showOrientation && (
-          <label>
-            Pitch
-            <input
-              type="range"
-              min="-89"
-              max="89"
-              value={camera.pitch * RAD_TO_DEG}
-              onChange={(event) =>
-                setCamera((current) => ({
-                  ...current,
-                  pitch: Number(event.target.value) * DEG_TO_RAD,
-                }))
-              }
-            />
-            <output>{(camera.pitch * RAD_TO_DEG).toFixed(0)}°</output>
-          </label>
-        )}
-        {showMovement && (
-          <label>
-            FPS giả lập
-            <select value={fps} onChange={(event) => setFps(Number(event.target.value))}>
-              <option value="30">30 FPS</option>
-              <option value="60">60 FPS</option>
-              <option value="144">144 FPS</option>
-            </select>
-          </label>
-        )}
-        {showMovement && (
-          <label>
-            Speed
-            <input
-              type="range"
-              min="1"
-              max="7"
-              step="0.5"
-              value={speed}
-              onChange={(event) => setSpeed(Number(event.target.value))}
-            />
-            <output>{speed.toFixed(1)} u/s</output>
-          </label>
-        )}
-        {showMovement &&
-          [
-            ["W", { strafe: 0, advance: 1 }],
-            ["A", { strafe: -1, advance: 0 }],
-            ["S", { strafe: 0, advance: -1 }],
-            ["D", { strafe: 1, advance: 0 }],
-          ].map(([label, input]) => (
-            <button key={label as string} onClick={() => moveOnce(input as MoveInput)}>
-              Bước {label as string}
-            </button>
+        <label>
+          Preset
+          <select aria-label="Camera mẫu" value="" onChange={(e) => reset(Number(e.target.value))}>
+            <option value="" disabled>
+              Chọn thí nghiệm
+            </option>
+            {["Cửa vào", "Nhìn từ cuối phòng", "Yaw 90°", "Nhìn lên", "Sát tường"].map(
+              (name, i) => (
+                <option key={i} value={i}>
+                  {name}
+                </option>
+              ),
+            )}
+          </select>
+        </label>
+        {stage >= 2 &&
+          (["x", "z"] as const).map((axis) => (
+            <label key={axis}>
+              Camera {axis.toUpperCase()}
+              <input
+                aria-label={"Camera " + axis.toUpperCase()}
+                type="range"
+                min={axis === "x" ? -5.65 : 0.35}
+                max={axis === "x" ? 5.65 : 21.65}
+                step=".1"
+                value={scene.camera.position[axis]}
+                onChange={(e) => editPosition(axis, Number(e.target.value))}
+              />
+              <output>{scene.camera.position[axis].toFixed(2)}</output>
+            </label>
           ))}
-        {showMouse && (
+        {stage >= 6 && scene.fly && (
+          <label>
+            Camera Y
+            <input
+              aria-label="Camera Y"
+              type="range"
+              min=".35"
+              max="3.65"
+              step=".1"
+              value={scene.camera.position.y}
+              onChange={(e) => editPosition("y", Number(e.target.value))}
+            />
+            <output>{scene.camera.position.y.toFixed(2)}</output>
+          </label>
+        )}
+        {stage >= 3 &&
+          (["yaw", "pitch"] as const).map((axis) => (
+            <label key={axis}>
+              {axis}
+              <input
+                aria-label={axis === "yaw" ? "Yaw" : "Pitch"}
+                type="range"
+                min={axis === "yaw" ? -180 : -89}
+                max={axis === "yaw" ? 180 : 89}
+                step="1"
+                value={(scene.camera[axis] * 180) / Math.PI}
+                onChange={(e) => editAngle(axis, (Number(e.target.value) * Math.PI) / 180)}
+              />
+              <output>{((scene.camera[axis] * 180) / Math.PI).toFixed(1)}°</output>
+            </label>
+          ))}
+        {stage >= 5 && (
+          <>
+            <label>
+              Speed
+              <input
+                aria-label="Speed"
+                type="range"
+                min="1"
+                max="7"
+                step=".5"
+                value={scene.speed}
+                onChange={(e) => editNumber("speed", Number(e.target.value))}
+              />
+              <output>{scene.speed.toFixed(1)} world/s</output>
+            </label>
+            <label>
+              FPS thí nghiệm
+              <select
+                aria-label="FPS thí nghiệm"
+                value={fps}
+                onChange={(e) => setFps(Number(e.target.value))}
+              >
+                {[30, 60, 144].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button onClick={runSecond}>Đi W trong 1 giây</button>
+            <button onClick={togglePause}>{scene.paused ? "Tiếp tục" : "Tạm dừng"}</button>
+            {[
+              ["W", 0, 1, 0],
+              ["A", -1, 0, 0],
+              ["S", 0, -1, 0],
+              ["D", 1, 0, 0],
+              ...(stage >= 6
+                ? [
+                    ["Q", 0, 0, -1],
+                    ["E", 0, 0, 1],
+                  ]
+                : []),
+            ].map(([label, strafe, advance, lift]) => (
+              <button
+                key={String(label)}
+                onClick={() =>
+                  stepInput({
+                    strafe: Number(strafe),
+                    advance: Number(advance),
+                    lift: Number(lift),
+                  })
+                }
+              >
+                Bước {label} 0.1 s
+              </button>
+            ))}
+          </>
+        )}
+        {stage >= 6 && <button onClick={changeMode}>Mode: {scene.fly ? "Fly" : "Walk"}</button>}
+        {stage >= 7 && (
           <label>
             Sensitivity
             <input
+              aria-label="Sensitivity"
               type="range"
-              min="0.002"
-              max="0.02"
-              step="0.001"
-              value={sensitivity}
-              onChange={(event) => setSensitivity(Number(event.target.value))}
+              min=".001"
+              max=".02"
+              step=".0005"
+              value={scene.sensitivity}
+              onChange={(e) => editNumber("sensitivity", Number(e.target.value))}
             />
-            <output>{sensitivity.toFixed(3)}</output>
+            <output>{scene.sensitivity.toFixed(4)} rad/input unit</output>
           </label>
         )}
-        {showValidation && (
-          <label>
-            Wall margin
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={margin}
-              onChange={(event) => setMargin(Number(event.target.value))}
-            />
-            <output>{margin.toFixed(2)}</output>
-          </label>
+        {stage >= 8 && (
+          <>
+            <label>
+              Wall margin
+              <input
+                aria-label="Wall margin"
+                type="range"
+                min="0"
+                max="1"
+                step=".05"
+                value={scene.margin}
+                onChange={(e) => editNumber("margin", Number(e.target.value))}
+              />
+              <output>{scene.margin.toFixed(2)}</output>
+            </label>
+
+            <button onClick={toggleDemo} disabled={reducedMotion}>
+              {scene.demo ? "Dừng đi thử" : "Đi thử tự động"}
+            </button>
+            <button onClick={toggleDebug}>{scene.debug ? "Ẩn debug" : "Hiện debug"}</button>
+          </>
         )}
-        {showMovement && (
-          <button onClick={() => setPaused((current) => !current)}>
-            {paused ? "Tiếp tục" : "Tạm dừng"}
-          </button>
-        )}
-        <button onClick={reset}>Đặt lại</button>
+        <button onClick={() => reset()}>Đặt lại</button>
       </div>
       <canvas
         ref={canvasRef}
+        style={{ height: "clamp(380px,58vw,560px)", touchAction: "none" }}
+        tabIndex={0}
         onPointerDown={startLook}
-        onPointerMove={moveLook}
-        onPointerUp={stopLook}
-        onPointerCancel={stopLook}
-        onLostPointerCapture={() => {
-          lastPointer.current = null;
-          setPointerCaptured(false);
-        }}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerCancel={pointerCancel}
+        onLostPointerCapture={pointerCancel}
         onKeyDown={onKeyDown}
         onKeyUp={onKeyUp}
         onBlur={() => {
-          pressedKeys.current.clear();
-          lastPointer.current = null;
-          setPointerCaptured(false);
+          stopInput();
+          commit({ ...sceneRef.current, paused: true, demo: false });
         }}
-        tabIndex={0}
-        aria-label="Căn phòng wireframe nhìn qua camera FPS; dùng WASD, phím mũi tên hoặc kéo chuột theo bài học hiện tại"
+        aria-label="Căn phòng wireframe camera FPS: WASD đi, M Walk/Fly, Q/E lên xuống, kéo chuột hoặc IJKL nhìn quanh"
       />
-      <LabReadout
-        items={[
-          { label: "room geometry", value: `${room.length} world-space segments` },
-          { label: "visible segments", value: `${visibleSegments.length} / ${room.length}` },
-          ...(mode === "camera-room"
-            ? [
-                { label: `segment #${selectedSegment}`, value: `${selected.kind}` },
-                {
-                  label: "world endpoints",
-                  value: `${formatVec3(selected.from)} → ${formatVec3(selected.to)}`,
-                },
-              ]
-            : []),
-          ...(showTranslation
-            ? [
-                { label: "camera position", value: formatVec3(activeCamera.position) },
-                { label: "world point", value: formatVec3(INSPECTED_POINT) },
-                { label: "sau trừ position", value: formatVec3(translatedPoint) },
-              ]
-            : []),
-          ...(showOrientation
-            ? [
-                {
-                  label: "yaw / pitch",
-                  value: `${(activeCamera.yaw * RAD_TO_DEG).toFixed(1)}° / ${(activeCamera.pitch * RAD_TO_DEG).toFixed(1)}°`,
-                },
-                { label: "sau inverse yaw", value: formatVec3(afterYaw) },
-                { label: "sau inverse pitch", value: formatVec3(afterPitch) },
-              ]
-            : []),
-          ...(showBasis
-            ? [
-                { label: "forward", value: formatVec3(basis.forward) },
-                { label: "right", value: formatVec3(basis.right) },
-                { label: "up", value: formatVec3(basis.up) },
-                { label: "basis error", value: fpsBasisError(activeCamera).toExponential(2) },
-              ]
-            : []),
-          ...(showMovement
-            ? [
-                { label: "input axis", value: `(${lastInput.strafe}, ${lastInput.advance})` },
-                { label: "input length", value: inputLength.toFixed(3) },
-                { label: "dt mỗi bước", value: `${(1000 / fps).toFixed(2)} ms` },
-              ]
-            : []),
-          ...(showMouse
-            ? [
-                {
-                  label: "mouse delta",
-                  value: `(${mouseDelta.x.toFixed(1)}, ${mouseDelta.y.toFixed(1)}) px`,
-                },
-                { label: "pointer capture", value: pointerCaptured ? "đang nhìn" : "đã nhả" },
-              ]
-            : []),
-          ...(showValidation
-            ? [
-                { label: "room bounds", value: insideBounds ? "bên trong" : "vượt giới hạn" },
-                {
-                  label: "round-trip error",
-                  value: fpsViewRoundTripError(INSPECTED_POINT, activeCamera).toExponential(2),
-                },
-              ]
-            : []),
-        ]}
-      />
+      <p>
+        World đứng yên; camera ở trong phòng 12×22×4. Walk giữ Y=1.6 và chỉ dùng yaw để đi; Fly dùng
+        forward đầy đủ, Q/E đổi world Y. IJKL hoặc mũi tên đổi góc 3°; M đổi mode, R reset, Esc nhả
+        thao tác. Space pause, N bước W 0.1s khi paused, T đi thử, F debug. Canvas dùng drag/pointer
+        capture, KHÔNG phải relative mouse mode vô hạn của SDL. Delta drag tính bằng CSS pixel,
+        không nhân DPR. Các hộp chỉ là mốc, collision giới hạn ở sáu biên ngoài. FPS thí nghiệm chỉ
+        chia 1 giây thành N bước, không ép browser chạy ở N FPS.
+        {reducedMotion
+          ? " Reduced motion: tắt đi thử tự động; vẫn điều khiển tay và step được."
+          : ""}
+      </p>
+      {debug && (
+        <LabReadout
+          items={[
+            { label: "room geometry", value: FPS_ROOM_GEOMETRY.length + " world-space segments" },
+            { label: "visible segments", value: String(r.segments.length) },
+            { label: "camera position", value: format(r.camera.position) },
+            { label: "world point", value: format(r.world) },
+            { label: "sau trừ position", value: format(r.translated) },
+            ...(stage >= 3
+              ? [
+                  { label: "view point", value: format(r.view) },
+                  {
+                    label: "yaw / pitch",
+                    value:
+                      ((r.camera.yaw * 180) / Math.PI).toFixed(1) +
+                      "° / " +
+                      ((r.camera.pitch * 180) / Math.PI).toFixed(1) +
+                      "°",
+                  },
+                ]
+              : []),
+            ...(stage >= 4
+              ? [
+                  { label: "forward", value: format(r.basis.forward) },
+                  { label: "right", value: format(r.basis.right) },
+                  { label: "up", value: format(r.basis.up) },
+                  { label: "basis error", value: r.basisError.toExponential(2) },
+                ]
+              : []),
+            ...(stage >= 6 ? [{ label: "movement mode", value: scene.fly ? "Fly" : "Walk" }] : []),
+            ...(stage >= 7
+              ? [{ label: "pointer capture", value: captured ? "đang nhìn" : "đã nhả" }]
+              : []),
+            ...(stage >= 8
+              ? [
+                  {
+                    label: "room bounds",
+                    value: fpsInsideRoom(scene) ? "bên trong" : "vượt giới hạn",
+                  },
+                ]
+              : []),
+            ...(stage >= 9
+              ? [{ label: "round-trip error", value: r.roundTrip.toExponential(2) }]
+              : []),
+          ]}
+        />
+      )}
     </div>
   );
 }

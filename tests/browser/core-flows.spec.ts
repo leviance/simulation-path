@@ -254,128 +254,84 @@ test("Project 12 Rotation Lab changes order, owns mouse input and rotates its no
   expect(errors).toEqual([]);
 });
 
-test("Project 13 Wireframe Cube Lab keeps indexed topology, cache and depth controls", async ({
+test("Project 13 Cube Lab has projection, movement, zoom and recoverable drag", async ({
   page,
 }) => {
   const errors = captureBrowserErrors(page);
-  await page.goto("/projects/wireframe-cube/05-tuong-tac-va-validation");
-
+  await page.goto("/projects/wireframe-cube/07-hoan-thien-va-kiem-chung");
   const canvas = page.locator('canvas[aria-label^="Cube wireframe"]');
-  const controls = page.locator(".lab-controls");
-  const projectionCache = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "projection cache" })
-    .locator("dd");
-  const visibleEdges = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "visible edges" })
-    .locator("dd");
-  const edgeError = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "max edge error" })
-    .locator("dd");
-  const captureState = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "pointer capture" })
-    .locator("dd");
-
-  await expect(canvas).toBeVisible();
-  await expect(projectionCache).toHaveText("8 kết quả / frame");
-  await expect(visibleEdges).toHaveText("12 / 12");
-  expect(Number(await edgeError.textContent())).toBeLessThan(1e-9);
-
-  await controls.getByLabel("Edge").selectOption("6");
-  await expect(
-    page.locator(".lab-readout div").filter({ hasText: "edge #6" }).locator("dd"),
-  ).toHaveText("6 → 7");
-  await controls.getByLabel("Depth cue").uncheck();
-  await expect(controls.getByLabel("Depth cue")).not.toBeChecked();
-  await controls.getByLabel("Rotation order").selectOption("zyx");
-
-  const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  if (box) {
-    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.45);
-    await page.mouse.down();
-    await expect(captureState).toHaveText("đang kéo");
-    await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.58);
-    await page.mouse.up();
-  }
-  await expect(captureState).toHaveText("đã nhả");
-
+  const read = (label: string) =>
+    page
+      .locator(".lab-readout div")
+      .filter({ has: page.locator("dt", { hasText: new RegExp("^" + label + "$") }) })
+      .locator("dd");
+  await expect(read("projection cache")).toHaveText("8 kết quả / frame");
+  await expect(read("visible edges")).toHaveText("12 / 12");
+  expect(Number(await read("max edge error").textContent())).toBeLessThan(1e-9);
   await canvas.focus();
-  await canvas.press("c");
-  await expect(controls.getByLabel("Depth cue")).toBeChecked();
-  await canvas.press("Space");
-  await expect(page.getByRole("button", { name: "Tạm dừng" })).toBeVisible();
-  await canvas.press("Space");
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(controls.getByLabel("Rotation order")).toHaveValue("xyz");
-  await expect(controls.getByLabel("Depth cue")).toBeChecked();
+  await page.keyboard.press("p");
+  await expect(read("projection")).toHaveText("orthographic");
+  await page.getByRole("button", { name: "Phóng to", exact: true }).click();
+  await expect(read("zoom")).not.toHaveText("1.00×");
+  await canvas.focus();
+  await page.keyboard.down("d");
+  await page.waitForTimeout(200);
+  await page.keyboard.up("d");
+  await expect(read("model position")).not.toHaveText("(0.000, 0.000, 6.000)");
+  const box = await canvas.boundingBox();
+  if (box) {
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.4);
+    await expect(read("pointer capture")).toHaveText("đang kéo");
+    await page.mouse.up();
+    await expect(read("pointer capture")).toHaveText("đã nhả");
+  }
+  await page.getByRole("button", { name: "Ẩn debug", exact: true }).click();
+  await expect(canvas).toBeVisible();
+  await expect(page.getByRole("button", { name: "Hiện debug", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(read("projection")).toHaveText("perspective");
+  await expect(read("zoom")).toHaveText("1.00×");
   expect(errors).toEqual([]);
 });
 
-test("Project 14 FPS Camera Lab moves, looks, captures the pointer and respects bounds", async ({
-  page,
-}) => {
+test("Project 14 FPS camera has Walk/Fly, bounds, drag and clean scene", async ({ page }) => {
   const errors = captureBrowserErrors(page);
-  await page.goto("/projects/fps-camera-room/07-gioi-han-can-phong-va-validation");
-
+  await page.goto("/projects/fps-camera-room/09-hoan-thien-va-kiem-chung");
   const canvas = page.locator('canvas[aria-label^="Căn phòng wireframe"]');
-  const controls = page.locator(".lab-controls");
-  const position = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "camera position" })
-    .locator("dd");
-  const angles = page.locator(".lab-readout div").filter({ hasText: "yaw / pitch" }).locator("dd");
-  const basisError = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "basis error" })
-    .locator("dd");
-  const roundTrip = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "round-trip error" })
-    .locator("dd");
-  const captureState = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "pointer capture" })
-    .locator("dd");
-
-  await expect(canvas).toBeVisible();
-  await expect(position).toHaveText("(0.00, 1.60, 2.00)");
-  await expect(
-    page.locator(".lab-readout div").filter({ hasText: "room bounds" }).locator("dd"),
-  ).toHaveText("bên trong");
-  expect(Number(await basisError.textContent())).toBeLessThan(1e-9);
-  expect(Number(await roundTrip.textContent())).toBeLessThan(1e-9);
-
-  await controls.getByLabel("FPS giả lập").selectOption("30");
-  await page.getByRole("button", { name: "Bước W" }).click();
-  await expect(position).not.toHaveText("(0.00, 1.60, 2.00)");
-
-  const beforeDrag = await angles.textContent();
+  const read = (label: string) =>
+    page
+      .locator(".lab-readout div")
+      .filter({ has: page.locator("dt", { hasText: new RegExp("^" + label + "$") }) })
+      .locator("dd");
+  await expect(read("camera position")).toHaveText("(0.000, 1.600, 2.000)");
+  expect(Number(await read("basis error").textContent())).toBeLessThan(1e-9);
+  await page.getByLabel("FPS thí nghiệm", { exact: true }).selectOption("30");
+  await page.getByRole("button", { name: "Đi W trong 1 giây", exact: true }).click();
+  await expect(read("camera position")).toHaveText("(0.000, 1.600, 5.500)");
+  await page.getByRole("button", { name: "Mode: Walk", exact: true }).click();
+  await expect(read("movement mode")).toHaveText("Fly");
+  await page.getByRole("button", { name: "Bước E 0.1 s", exact: true }).click();
+  await expect(read("camera position")).toHaveText("(0.000, 1.950, 5.500)");
+  await page.getByLabel("Wall margin", { exact: true }).fill("1");
+  await page.getByLabel("Camera X", { exact: true }).fill("5.65");
+  await expect(read("room bounds")).toHaveText("bên trong");
   const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
   if (box) {
-    await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.45);
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
     await page.mouse.down();
-    await expect(captureState).toHaveText("đang nhìn");
-    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.58);
+    await expect(read("pointer capture")).toHaveText("đang nhìn");
+    await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.45);
     await page.mouse.up();
+    await expect(read("pointer capture")).toHaveText("đã nhả");
   }
-  await expect(angles).not.toHaveText(beforeDrag ?? "");
-  await expect(captureState).toHaveText("đã nhả");
-
-  await controls.getByLabel("Pitch").fill("89");
-  await expect(controls.getByLabel("Pitch")).toHaveValue("89");
-  await page.getByRole("button", { name: "Tạm dừng" }).click();
-  const pausedPosition = await position.textContent();
-  await page.getByRole("button", { name: "Bước D" }).click();
-  await expect(position).toHaveText(pausedPosition ?? "");
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(position).toHaveText("(0.00, 1.60, 2.00)");
-  await expect(controls.getByLabel("Yaw")).toHaveValue("0");
-  await expect(controls.getByLabel("Pitch")).toHaveValue("0");
+  await page.getByRole("button", { name: "Ẩn debug", exact: true }).click();
+  await expect(canvas).toBeVisible();
+  await expect(page.getByRole("button", { name: "Hiện debug", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(read("camera position")).toHaveText("(0.000, 1.600, 2.000)");
+  await expect(read("movement mode")).toHaveText("Walk");
   expect(errors).toEqual([]);
 });
 

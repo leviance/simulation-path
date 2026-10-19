@@ -1,46 +1,64 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Di chuyển WASD theo hướng camera
+# Đi bộ theo hướng nhìn với WASD
 
 ## Vấn đề cần giải quyết
 
-Arrow keys đang di chuyển theo world X/Z từng nấc của key event. Cách đó vừa giật, vừa không biết camera đang nhìn hướng nào. Camera FPS cần đọc trạng thái phím mỗi frame, tạo một vector input, đổi nó sang world velocity rồi nhân với thời gian thật.
+Camera nhìn đúng rồi; giờ W phải đưa người xem đi về phía đang nhìn. A/D phải strafe theo right chứ không luôn cộng X world như bài 2.
 
-Project 02 đã dạy delta time và lỗi đi chéo nhanh hơn. Bài này áp dụng lại hai kiến thức ấy trong một basis 3D, đồng thời giữ người xem trên mặt sàn.
+Ta cũng cần giữ tốc độ không phụ thuộc số frame hoặc tốc độ key-repeat. Việc đọc input, đổi hướng và nhân dt sẽ được viết thành ba bước riêng.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hai input axis được tạo từ bốn phím:
+Với input strafe $s$ và advance $a$:
 
 $$
-strafe=D-A,\qquad advance=W-S
+d=r\,s+groundForward\,a.
 $$
 
-Sau khi normalize khi cần, world velocity là:
+Digital input chỉ có các nấc −1/0/+1. Khi $d\ne0$, lấy hướng unit rồi cập nhật:
 
 $$
-velocity=right\cdot strafe+groundForward\cdot advance
+position_{new}=position_{old}+\frac{d}{\lVert d\rVert}\ speed\ \Delta t.
 $$
 
-Vị trí frame kế tiếp:
-
-$$
-position'=position+velocity\cdot speed\cdot dt
-$$
-
-Pitch không xuất hiện trong `groundForward`, vì đây là đi bộ chứ không phải free-fly camera.
+W+D trước chuẩn hóa dài $\sqrt2$; nếu không chia length, đi chéo sẽ nhanh hơn. Walk bỏ pitch khỏi forward nên ngẩng đầu không làm camera bay hoặc bước chậm.
 
 <InteractiveLab demo="fps-camera" mode="camera-movement" />
 
+Đặt lại, chọn FPS thí nghiệm 30 và bấm “Đi W trong 1 giây”; ghi Camera Z. Làm lại với 60/144. Từ Z=2, speed=3.5, cả ba phải đến Z=5.5. Selector chỉ chia một giây thành N bước tính, không ép browser chạy ở N FPS.
+
 ## Viết code từng bước
 
-### Bước 1 — Đổi bốn bool thành hai axis rõ ràng
+### Bước 1 — Đọc state sau vòng PollEvent
 
-Viết từng nhánh để người học nhìn thấy phím nào đóng góp dấu nào:
+`SDL_GetKeyboardState` dùng **scancode** để index mảng bool. Ta đọc sau khi đã xử lý hết event trong frame.
 
-```cpp title="include/lab.hpp — gộp trạng thái WASD thành MoveInput"
-inline MoveInput makeMoveInput(bool left, bool right, bool backward, bool forward) {
-    MoveInput input{};
+```cpp title="src/main.cpp — đoạn ghép"
+if ((SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0) {
+    const bool* keys = SDL_GetKeyboardState(nullptr);
+    bool down = false;
+    bool up = false;
+    const bool held = keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_W] || down || up;
+    if (!held) {
+        inputArmed = true;
+    }
+    if (inputArmed && !scene.paused) {
+        movement = lab::makeMoveInput(keys[SDL_SCANCODE_A], keys[SDL_SCANCODE_D], keys[SDL_SCANCODE_S], keys[SDL_SCANCODE_W], down, up);
+        if (held) {
+            scene.demo = false;
+        }
+    }
+}
+```
+
+Hai biến down/up đang false, dành cho bài Fly sau. `inputArmed` ngăn phím giữ từ trước reset/focus change tự khởi động lại: phải thả hết phím rồi mới nhận một phiên mới. Chỉ window có input focus được đọc movement.
+
+Từng `if` tạo axis rõ ràng; A+D triệt tiêu, W+S cũng vậy:
+
+```cpp title="include/lab.hpp — makeMoveInput"
+inline MoveInput makeMoveInput(bool left, bool right, bool backward, bool forward, bool down, bool up) {
+    MoveInput input;
     if (left) {
         input.strafe -= 1.0;
     }
@@ -53,83 +71,98 @@ inline MoveInput makeMoveInput(bool left, bool right, bool backward, bool forwar
     if (forward) {
         input.advance += 1.0;
     }
-    return input;
-}
-```
-
-W+S hoặc A+D tự triệt tiêu về 0 mà không cần thêm trường hợp đặc biệt.
-
-### Bước 2 — Chỉ normalize khi input dài hơn 1
-
-```cpp title="include/lab.hpp — ngăn movement chéo nhanh hơn"
-inline MoveInput normalizeMoveInput(MoveInput input) {
-    const double length = std::hypot(input.strafe, input.advance);
-    if (length > 1.0) {
-        input.strafe /= length;
-        input.advance /= length;
+    if (down) {
+        input.lift -= 1.0;
+    }
+    if (up) {
+        input.lift += 1.0;
     }
     return input;
 }
 ```
 
-Điều kiện `>1` giữ được cường độ của analog input nhỏ nếu sau này bạn thay keyboard bằng gamepad.
+### Bước 2 — Đổi input sang direction trong world
 
-### Bước 3 — Ghép basis thành velocity
-
-`right` đã nằm trên XZ; forward dành cho đi bộ cũng bỏ pitch:
-
-```cpp title="include/lab.hpp — cập nhật camera bằng speed và delta time"
-const MoveInput input = normalizeMoveInput(rawInput);
-const Vec3 forward = groundForward(camera);
-const CameraBasis basis = cameraBasis(camera);
-const Vec3 strafeVelocity = multiply(basis.right, input.strafe* speed);
-const Vec3 forwardVelocity = multiply(forward, input.advance* speed);
-const Vec3 velocity = add(strafeVelocity, forwardVelocity);
-const double safeDeltaTime = std::clamp(deltaTime, 0.0, 0.1);
-camera.position = add(camera.position, multiply(velocity, safeDeltaTime));
+```cpp title="include/lab.hpp — movementDirection"
+inline Vec3 movementDirection(const FpsCamera& camera, MoveInput input, MovementMode mode) {
+    const CameraBasis basis = cameraBasis(camera);
+    Vec3 forward = groundForward(camera);
+    static_cast<void>(mode);
+    Vec3 direction = add(scale(basis.right, input.strafe), scale(forward, input.advance));
+    return direction;
+}
 ```
 
-Chặn `dt` ở 0.1 giây ngăn một lần dừng ở debugger biến thành cú nhảy xuyên cả phòng.
+Ta chưa dùng Fly nên mode chưa làm thay đổi hướng. Giữ tên mode ở interface để bài sau thêm nhánh mà không phải đổi cách main gọi hàm.
 
-### Bước 4 — Đọc keyboard state sau khi bơm event
+Đây là nơi input-space trở thành world-space. Không đem strafe/advance trực tiếp cộng vào X/Z nếu camera đã quay yaw.
 
-```cpp title="src/main.cpp — đọc WASD liên tục mỗi frame"
-const bool* keyboard = SDL_GetKeyboardState(nullptr);
-const lab::MoveInput movement = lab::makeMoveInput(
-    keyboard[SDL_SCANCODE_A],
-    keyboard[SDL_SCANCODE_D],
-    keyboard[SDL_SCANCODE_S],
-    keyboard[SDL_SCANCODE_W]
-);
-camera = lab::advanceCamera(camera, movement, 3.5, deltaTime);
+### Bước 3 — Chuẩn hóa và nhân đúng một lần với dt
+
+```cpp title="include/lab.hpp — advanceCamera"
+inline FpsCamera advanceCamera(FpsCamera camera, MoveInput input, MovementMode mode, double speed, double deltaTime) {
+    if (!finiteCamera(camera) || !std::isfinite(input.strafe) || !std::isfinite(input.advance) || !std::isfinite(input.lift) || !std::isfinite(speed) || speed < 0.0 || !std::isfinite(deltaTime) || deltaTime <= 0.0) {
+        return camera;
+    }
+    const Vec3 direction = movementDirection(camera, input, mode);
+    const double length = magnitude(direction);
+    if (!finite(direction) || !std::isfinite(length) || length <= 1e-12) {
+        return camera;
+    }
+    // Digital input: chuẩn hóa tổng hướng world, kể cả forward và lift không vuông góc khi fly.
+    const Vec3 unitDirection = scale(direction, 1.0 / length);
+    const double distance = speed * std::min(deltaTime, 0.1);
+    const Vec3 candidate = add(camera.position, scale(unitDirection, distance));
+    if (finite(candidate)) {
+        camera.position = candidate;
+    }
+    return camera;
+}
 ```
 
-`SDL_PollEvent` phải chạy trước lời gọi này để SDL cập nhật state. Không chuyển đoạn đọc phím lên đầu frame.
+Input số lỗi bị bỏ qua. Direction gần zero không được chia length. `std::min(dt,0.1)` chỉ bảo vệ một frame khựng; sau khi chương trình bị treo một giây, ta không cố “bù” toàn bộ bằng một bước lớn.
+
+Đây là digital movement. Nếu sau này thêm joystick analog, cần định nghĩa riêng cách giữ cường độ input nhỏ; không ngầm cho mọi giá trị analog chạy tối đa.
+
+### Bước 4 — Tính dt ở main loop
+
+Trước loop lưu `previousTicks`; mỗi frame tính:
+
+```cpp title="src/main.cpp — đoạn ghép"
+const auto now = SDL_GetTicks();
+const double deltaTime = std::min(0.1, static_cast<double>(now - previousTicks) / 1000.0);
+previousTicks = now;
+```
+
+`advanceScene` gọi update đúng một lần với dt này. Không nhân dt thêm vào `movement`, cũng không gọi move một bước nữa ngay trong key-down. IJKL vẫn là nấc góc rời rạc để nhìn quanh.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build camera movement"
+```bash title="Terminal — chạy checkpoint 5"
 cmake --build build --config Debug --target project_14_checkpoint_5
+./build/Debug/project_14_checkpoint_5.exe
 ```
 
-Giữ W để đi theo yaw hiện tại, A/D để strafe. Dùng IJKL đổi hướng rồi thử W lần nữa. Nhìn lên cao vẫn không làm camera Y rời 1.6.
+Click focus vào Canvas trước khi giữ WASD. Trong native, WASD hoạt động khi cửa sổ có focus dù chuột chưa khóa. [ và ] đổi speed 1–7 world/s.
+
+Checkpoint này chưa chặn biên phòng; đó là bài 8. Nếu đi lạc ra ngoài, R về cửa vào. Các đường qua camera vẫn được clip an toàn.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ `normalizeMoveInput`, đi W một giây rồi W+D một giây. Đo hai quãng đường và xác nhận tỉ lệ gần $\sqrt{2}$ trước khi hoàn tác.
-2. Bỏ `deltaTime` khỏi phép nhân. So sánh Canvas ở 30 và 144 FPS, sau đó trả `dt` vào công thức.
-3. Thay `groundForward` bằng `basis.forward`, đặt pitch 60° rồi giữ W. Quan sát Y thay đổi và hoàn tác.
+1. Di chuyển trong `SDL_EVENT_KEY_DOWN` thay vì đọc state. Tốc độ phụ thuộc key-repeat của hệ điều hành và có quãng dừng đầu tiên khi giữ phím.
+2. Không normalize direction. W+D nhanh hơn W dù cùng speed.
+3. Dùng full forward trong Walk. Nhìn lên rồi giữ W làm tăng Y; bạn vô tình viết Fly.
+4. Nhân dt ở cả input lẫn update. Quãng đường một giây thay đổi theo số frame.
 
 ## Tự kiểm tra kết quả
 
-- Đi thẳng một giây với speed 3.5 cho quãng đường gần 3.5 world unit.
-- W+D có cùng quãng đường với W trong cùng thời gian.
-- 30, 60 và 144 FPS cho vị trí cuối gần nhau.
-- W đi theo yaw; A/D luôn vuông góc với hướng đi tới.
-- `deltaTime` được clamp và camera Y vẫn bằng eye height.
+- 30/60/144 bước trong một giây cho cùng quãng đường 3.5, khi không chạm biên.
+- Yaw=90° và W đi theo +X; A/D strafe theo camera right.
+- Pitch không đổi tốc độ/hướng đi trên XZ.
+- Phím đối nghịch triệt tiêu; mất focus không tiếp tục bước từ một key-up bị thất lạc.
 
 ## Bài tập mở rộng
 
-Thêm sprint bằng Left Shift với speed 6.0 nhưng không sửa `MoveInput`. Speed là đặc tính chuyển động; nó không nên bị trộn vào việc đọc hướng input.
+Thử W+D đúng một giây ở yaw=0. Dự đoán mỗi thành phần X/Z tăng $3.5/\sqrt2$ thay vì 3.5, rồi kiểm số đọc. Tổng quãng đường vẫn là 3.5.
 
-Bài tiếp theo thay IJKL bằng mouse delta liên tục và dùng relative mouse mode đúng API SDL3.
+Bài tiếp theo: [Thêm Fly và điều khiển độ cao](/projects/fps-camera-room/06-walk-fly-va-dieu-khien-doc).

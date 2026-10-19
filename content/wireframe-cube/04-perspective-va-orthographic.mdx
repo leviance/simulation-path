@@ -1,0 +1,158 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hai phép chiếu cho cùng một cube
+
+## Vấn đề cần giải quyết
+
+Cube ở gần trông lớn hơn: perspective đang làm đúng nhiệm vụ. Nhưng bản vẽ kỹ thuật thường cần giữ tỉ lệ dù vật nằm ở độ sâu nào. Ta sẽ thêm orthographic và cho phím P đổi phép chiếu, không thay dữ liệu cube.
+
+Đây không phải cách vẽ cube isometric bằng vài đoạn 2D. Cả hai chế độ đều bắt đầu từ tám tọa độ X/Y/Z thật, cùng transform và camera.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với $a=W/H$ và $f=1/\tan(FOV_y/2)$, perspective dùng:
+
+$$
+x_{ndc}=\frac{fx_c}{az_c},\qquad y_{ndc}=\frac{fy_c}{z_c}.
+$$
+
+Orthographic bỏ phụ thuộc tỉ lệ vào Z. Chọn nửa chiều cao vùng nhìn là $H_o$:
+
+$$
+x_{ndc}=\frac{x_c}{aH_o},\qquad y_{ndc}=\frac{y_c}{H_o}.
+$$
+
+Z vẫn dùng để kiểm tra near/far và tạo depth cue, chỉ không còn nằm trong mẫu số tính kích thước ảnh.
+
+Để so hai ảnh công bằng, chọn $H_o=z_{ref}\tan(FOV_y/2)$ với $z_{ref}=6$. Hai phép cho cùng tỉ lệ ở mặt phẳng camera Z=6; **không** thể trùng đồng thời cả mặt trước lẫn mặt sau của cube.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-projection" />
+
+Chọn “Nhìn chính diện”, rồi bấm **Phép chiếu**. Trong perspective, hình vuông ở xa nhỏ hơn. Trong ortho, hai vòng có thể chồng lên nhau hoàn toàn khi nhìn dọc trục Z; các cạnh song song hướng nhìn thu thành điểm. Hãy đổi yaw để thấy lại đủ cấu trúc.
+
+## Viết code từng bước
+
+### Bước 1 — Thêm lựa chọn, giữ nguyên geometry
+
+`Scene::projection` có hai giá trị. `worldCube` không đọc lựa chọn này: thay phép chiếu không được làm thay model position, angles hoặc edge list.
+
+Trong `scene.hpp`, thêm hàm orthographic. Phần đầu kiểm tra input và depth; phần cuối mới tính NDC:
+
+```cpp title="include/scene.hpp — projectOrthographic"
+inline ProjectionResult projectOrthographic(Vec3 world, const Scene& scene) {
+    ProjectionResult result;
+    if (!finite(world) || !finite(scene.camera.position) || !validLens(scene.lens, viewportFor()) || !std::isfinite(scene.zoom) || scene.zoom < 0.5 || scene.zoom > 2.0) {
+        return result;
+    }
+    result.cameraPoint = worldToCamera(world, scene.camera);
+    if (!finite(result.cameraPoint)) {
+        return result;
+    }
+    if (result.cameraPoint.z <= 0.0) {
+        result.status = ProjectionStatus::BehindCamera;
+        return result;
+    }
+    if (result.cameraPoint.z < scene.lens.nearPlane) {
+        result.status = ProjectionStatus::BeforeNearPlane;
+        return result;
+    }
+    if (result.cameraPoint.z > scene.lens.farPlane) {
+        result.status = ProjectionStatus::BeyondFarPlane;
+        return result;
+    }
+    const double halfHeight = 6.0 * std::tan(scene.lens.verticalFovRadians * 0.5) / scene.zoom;
+    const double aspect = viewportFor().width / viewportFor().height;
+    const Vec2 ndc{result.cameraPoint.x / (halfHeight * aspect), result.cameraPoint.y / halfHeight};
+    const Vec2 screen = ndcToScreen(ndc, viewportFor());
+    if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || !std::isfinite(screen.x) || !std::isfinite(screen.y)) {
+        return result;
+    }
+    result.ndc = ndc;
+    result.screen = screen;
+    result.status = ProjectionStatus::OutsideFrustum;
+    if (isInsideNdc(ndc)) {
+        result.status = ProjectionStatus::Visible;
+    }
+    return result;
+}
+```
+
+Không chia cho Z trong nhánh này. Điểm Z≤0, trước near hoặc sau far vẫn không có screen. Chúng ta chủ động giữ cùng vùng depth của perspective để toggle không làm vật phía sau camera bỗng xuất hiện.
+
+### Bước 2 — Dùng chung bước NDC sang screen
+
+`ndcToScreen` đã có từ P11:
+
+```cpp title="include/projection.hpp — ndcToScreen"
+inline Vec2 ndcToScreen(Vec2 ndc, const Viewport& viewport) {
+    return {viewport.x + (ndc.x + 1.0) * 0.5 * viewport.width, viewport.y + (1.0 - ndc.y) * 0.5 * viewport.height};
+}
+```
+
+Công thức đổi dấu Y đúng một lần, vì world Y lên còn screen Y xuống. Điểm NDC (1,0) nằm trên cạnh phải liên tục x=1100, không phải pixel index hợp lệ; clip/raster sẽ giữ việc ghi pixel trong bounds.
+
+Ví dụ FOV=90°, viewport 1100×800, P=(1,0.5,4): perspective ra (650,350), ortho ra khoảng (616.667,366.667). Đổi Z thành 8: perspective ra (600,375), còn ortho giữ nguyên. Các con số này sẽ thành test độc lập ở bài 7.
+
+### Bước 3 — Chọn projection ở một nơi
+
+`projectCube` và `projectSegment` đều đi qua hàm chung:
+
+```cpp title="include/scene.hpp — projectVertex"
+inline ProjectionResult projectVertex(Vec3 world, const Scene& scene) {
+    if (!std::isfinite(scene.zoom) || scene.zoom < 0.5 || scene.zoom > 2.0) {
+        return {};
+    }
+    if (scene.projection == ProjectionMode::Orthographic) {
+        return projectOrthographic(world, scene);
+    }
+    return projectPerspective(world, scene.camera, zoomedLens(scene), viewportFor());
+}
+```
+
+Vì thế sàn, marker và cạnh cùng dùng một phép chiếu. Không thể để cube ở ortho còn grid vẫn perspective. `zoomedLens` lúc này nhận zoom=1; bài sau mới cho người dùng thay giá trị.
+
+### Bước 4 — Toggle bằng event, không bằng phím đang giữ
+
+Trong `main.cpp`, dùng key-down và chặn repeat:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (event.key.key == SDLK_P && !event.key.repeat) {
+    if (scene.projection == lab::ProjectionMode::Perspective) {
+        scene.projection = lab::ProjectionMode::Orthographic;
+    } else {
+        scene.projection = lab::ProjectionMode::Perspective;
+    }
+    scene.paused = true;
+}
+```
+
+Giữ phím P không được chuyển qua lại hàng chục lần. Event chỉ đổi lựa chọn và đánh dấu frame cần vẽ lại; toàn bộ transform chain vẫn giữ nguyên.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 4"
+cmake --build build --config Debug --target project_13_checkpoint_4
+./build/Debug/project_13_checkpoint_4.exe
+```
+
+Dùng P để đổi, F2 về chính diện, F3 đưa cube ra xa. Native chưa có điều khiển zoom ở checkpoint này. Trong Canvas, kéo Model.Z để đối chiếu: perspective thay kích thước, ortho không đổi kích thước khi chỉ dịch theo Z trong vùng nhìn.
+
+## Thử làm sai để hiểu đúng
+
+1. Thêm phép chia Z vào công thức ortho. Khi dịch Z, cube lại co/giãn: bạn vừa biến nó thành một dạng perspective khác.
+2. Bỏ aspect ratio trong X. Với viewport không vuông, hình bị kéo ngang; resize letterbox không sửa được lỗi công thức.
+3. Chỉ đổi cube, không đổi grid. Hai phần cảnh có độ hội tụ khác nhau, khiến người xem tưởng trục hoặc model sai.
+
+## Tự kiểm tra kết quả
+
+- Các kết quả số FOV=90° khớp ví dụ, không lấy ảnh chụp làm đáp án.
+- P giữ nguyên local/world vertices và thứ tự index.
+- Chính diện ortho có thể chồng đỉnh; quay lệch sẽ phân biệt lại các cạnh.
+- Near/far và screen clipping hoạt động ở cả hai chế độ.
+- Grid, axes và cube dùng cùng `projectVertex`.
+
+## Bài tập mở rộng
+
+Chọn một điểm bất kỳ trên Z=6 và chứng minh hai NDC bằng nhau khi zoom=1. Sau đó thử Z=3 và dự đoán perspective lớn gấp bao nhiêu so với ortho trước khi kéo slider.
+
+Bài tiếp theo: [Di chuyển, kéo chuột và zoom](/projects/wireframe-cube/05-di-chuyen-keo-chuot-va-zoom).

@@ -1,0 +1,148 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng camera và chạy bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Một camera trông “giống game FPS” vẫn có thể sai dấu, tăng tốc khi đi chéo, bị rời trạng thái relative lúc pause hoặc xóa cạnh quá sớm. Ta cần kiểm số và thử ứng dụng, không chỉ nhìn một pose mặc định.
+
+Bài cuối có toàn bộ source của project. Các snippet dưới đây giúp hiểu cách nghiệm thu; chúng không thay cho các file hoàn chỉnh và ZIP ở cuối bài.
+
+## Hiểu ý tưởng trước khi viết code
+
+Dùng ba loại bằng chứng:
+
+- Oracle tính tay để khóa convention: translation, yaw/pitch 90°, pixel FOV 90°, Fly pitch 45°.
+- Invariant để kiểm nhiều pose: basis trực chuẩn, view khớp dot(relative,basis), inverse trả đúng world.
+- Biên và lifecycle: dt, normalization, near/far/screen clipping, bounds, relative mode và mất focus.
+
+Round trip không tự chứng minh convention đúng: hai hàm sai tương thích vẫn có thể đảo nhau. Vì thế phải có oracle và cách tính độc lập.
+
+<InteractiveLab demo="fps-camera" mode="camera-validation" />
+
+Đọc basis error/round-trip error khi vừa đổi pose vừa đi. Sai số phải dưới $10^{-9}$ trong quy mô này. Đây là sai số world/vector, không phải độ lệch pixel được làm tròn.
+
+## Viết code từng bước
+
+### Bước 1 — Viết inverse view đúng thứ tự
+
+Trong `lab.hpp`:
+
+```cpp title="include/lab.hpp — cameraToWorld"
+inline Vec3 cameraToWorld(Vec3 point, const FpsCamera& camera) {
+    const Vec3 pitchRestored = rotateX(point, -camera.pitch);
+    const Vec3 yawRestored = rotateY(pitchRestored, camera.yaw);
+    return add(yawRestored, camera.position);
+}
+```
+
+View đã trừ position, quay −yaw rồi +pitch. Inverse làm −pitch trước, +yaw tiếp, cuối cùng cộng position.
+
+```cpp title="include/lab.hpp — viewRoundTripError"
+inline double viewRoundTripError(Vec3 world, const FpsCamera& camera) {
+    return magnitude(subtract(cameraToWorld(worldToCamera(world, camera), camera), world));
+}
+```
+
+Thử nhiều điểm ở nhiều phía, không chỉ một điểm nằm thẳng trước camera. Một world point sau mắt vẫn phải round-trip đúng; visibility là bước sau.
+
+### Bước 2 — Kiểm basis bằng length/dot và oracle
+
+```cpp title="include/lab.hpp — basisError"
+inline double basisError(const FpsCamera& camera) {
+    const CameraBasis basis = cameraBasis(camera);
+    double error = 0.0;
+    error = std::max(error, std::abs(magnitude(basis.forward) - 1.0));
+    error = std::max(error, std::abs(magnitude(basis.right) - 1.0));
+    error = std::max(error, std::abs(magnitude(basis.up) - 1.0));
+    error = std::max(error, std::abs(dot(basis.forward, basis.right)));
+    error = std::max(error, std::abs(dot(basis.forward, basis.up)));
+    return std::max(error, std::abs(dot(basis.right, basis.up)));
+}
+```
+
+Trong tests, camera=(1,2,3), yaw=90° phải đưa world=(4,2,3) về view=(0,0,3):
+
+```cpp title="tests/tests.cpp — đoạn ghép"
+lab::FpsCamera camera;
+camera.position = {1.0, 2.0, 3.0};
+camera.yaw = lab::kPi / 2.0;
+check(same(lab::worldToCameraTranslation({4.0, 2.0, 3.0}, camera), {3.0, 0.0, 0.0}), "translation oracle");
+check(same(lab::worldToCamera({4.0, 2.0, 3.0}, camera), {0.0, 0.0, 3.0}), "yaw 90 independent view oracle");
+check(same(lab::cameraBasis(camera).right, {0.0, 0.0, -1.0}), "yaw 90 right oracle");
+camera.yaw = 0.0;
+camera.pitch = lab::kPi / 2.0;
+check(same(lab::worldToCamera({1.0, 5.0, 3.0}, camera), {0.0, 0.0, 3.0}), "pitch 90 independent view oracle");
+```
+
+Các kiểm tra tiếp theo so view với dot(relative,right/up/forward) trên 60 pose. Expected này không gọi lại chính chuỗi rotateY/rotateX để sinh đáp án.
+
+### Bước 3 — Kiểm movement và renderer, không chỉ rotation
+
+Trong `tests/tests.cpp`, các chuỗi 30/60/144 bước đều mô phỏng đúng một giây:
+
+```cpp title="tests/tests.cpp — đoạn ghép"
+for (int fps : {30, 60, 144}) {
+    lab::FpsCamera walked;
+    for (int frame = 0; frame < fps; ++frame) {
+        walked = lab::advanceCamera(walked, {0.0, 1.0, 0.0}, lab::MovementMode::Walk, 3.5, 1.0 / fps);
+    }
+    check(same(walked.position, {0.0, 1.6, 5.5}), "one second movement independent of frame count");
+}
+```
+
+Test còn khóa diagonal speed, Walk bỏ pitch/lift, Fly 45° có đáp án $0.35/\sqrt2$, Fly+lift không vượt speed, dt âm/NaN bị bỏ qua và các phím đối nghịch triệt tiêu.
+
+Renderer được gọi thật vào framebuffer với năm preset. Chế độ sạch phải còn pixel màu sàn/tường; world endpoint đầu tiên vẫn là (−6,0,0)→(−6,0,22). Các đoạn qua near/far và cả hai đầu ngoài trái/phải phải giữ phần nhìn thấy.
+
+### Bước 4 — Build và chạy CTest ở hai cấu hình
+
+```bash title="Terminal — build toàn bộ và kiểm chứng"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+./build/Release/project_14_final.exe
+```
+
+Cần C++20, CMake≥3.24; SDL khóa 3.4.8 bằng FetchContent và link `SDL3::SDL3`. Lần configure đầu cần mạng. Với Ninja/Makefiles một cấu hình, dùng CMAKE_BUILD_TYPE và tìm executable trực tiếp trong build/.
+
+Tests dùng `check` trả EXIT_FAILURE, không dùng assert có thể bị tắt bởi NDEBUG. Native `--smoke` chạy 12 frame ẩn để kiểm resource/resize/upload/present; nó không chứng minh relative mouse và input trên desktop hoạt động đúng.
+
+## Ghép các phần lại
+
+Bộ source độc lập chia theo trách nhiệm:
+
+- `framebuffer.hpp`: pixel và Bresenham từ P04/P13.
+- `projection.hpp`, `rotation.hpp`: toán nền trước camera.
+- `lab.hpp`: FpsCamera, view, basis, movement và kiểm sai số.
+- `room.hpp`: world geometry dựng một lần.
+- `scene.hpp`: state, mode, bounds và update.
+- `view.hpp`: clip từng đoạn và raster vào framebuffer.
+- `presentation.hpp`, `src/main.cpp`: SDL, relative mode, timing, texture và HUD.
+- `tests/tests.cpp`: oracle, invariant và các trường hợp biên.
+
+Starter, chín checkpoint và final đều có source đầy đủ. Target mặc định là final và tests; bật BUILD_CHECKPOINTS mới thêm các bước học. Không copy các snippet thành một main.cpp duy nhất.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dấu yaw trong view nhưng cũng sửa inverse để vẫn round-trip. Oracle yaw 90° và dot-reference phải báo sai.
+2. Normalize input axes trước rồi bỏ normalize direction Fly. Test W+E khi pitch≠0 phải bắt tăng tốc.
+3. Bỏ screen/depth clip. Renderer test cạnh xuyên viewport/near phải thất bại hoặc phát hiện điểm không hữu hạn.
+4. Xóa xử lý focus-lost rồi thử giữ W và Alt-Tab. Dù CTest số vẫn qua, sản phẩm chưa đạt nghiệm thu input.
+
+## Tự kiểm tra kết quả
+
+- Đi được một quãng dài trong phòng, quay nhìn lại, không orbit một cube.
+- View, basis, movement có oracle độc lập; world vertices giữ nguyên.
+- Walk/Fly, WASD/QE, relative mouse, reset, pause/step và showcase chạy trên executable.
+- Rê chuột qua mép, Esc, blur/hidden, resize/HiDPI và reset khi giữ phím không để input kẹt.
+- Tắt debug vẫn giữ phòng đầy đủ; các hộp chỉ là mốc, bounds chỉ chặn biên ngoài.
+- CTest qua Debug/Release; còn phải thử input/HiDPI trực tiếp trên desktop.
+
+## Bài tập mở rộng
+
+Thêm một mốc đánh số sau lưng camera và đi từ đầu phòng đến cuối phòng rồi quay lại. Ghi cùng world coordinate của mốc trước/sau; chỉ camera-space và screen-space được phép đổi.
+
+Tiếp theo, [Project 15 — Máy soi pipeline 3D](/projects/3d-pipeline-inspector) sẽ viết các bước model/view/projection thành ma trận và theo dõi từng tọa độ.

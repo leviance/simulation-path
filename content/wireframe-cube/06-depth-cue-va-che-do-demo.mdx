@@ -1,0 +1,145 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Làm rõ chiều sâu, giữ bản demo sạch
+
+## Vấn đề cần giải quyết
+
+Wireframe không có mặt đặc. Các cạnh trước/sau chồng lên nhau, nên dù toán đúng người xem vẫn có thể hiểu nhầm chiều sâu. Ta thêm màu theo camera Z và chế độ tự quay để dễ quan sát, nhưng không được gọi đó là loại cạnh khuất.
+
+Đồng thời, bản demo cần một chế độ sạch. Ẩn debug phải bỏ thông tin phụ, không được làm mất chính cube đang trình diễn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với một đoạn đã cắt depth, lấy:
+
+$$
+z_{avg}=\frac{z_a+z_b}{2},\qquad
+t=\frac{z_{far}-z_{avg}}{z_{far}-z_{near}}.
+$$
+
+Camera nhìn +Z nên Z lớn hơn là xa hơn. Cạnh gần có $t$ gần 1 và sáng hơn. Nếu tất cả average Z bằng nhau, chọn t=1 để tránh chia 0.
+
+Sắp xa trước/gần sau chỉ quyết định pixel nào ghi sau tại giao điểm. Với các đoạn giao nhau có độ sâu thay đổi dọc cạnh, average Z **không** đảm bảo occlusion đúng. Project 17 mới có Z-buffer cho mặt đặc.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-depth" />
+
+Tắt **Depth cue** rồi bật lại, so độ sáng với thứ tự **far → near**. Bấm **Ẩn debug**: các marker/index/readout và world axes biến mất, nhưng cube, sàn cùng mốc chiều sâu vẫn còn.
+
+## Viết code từng bước
+
+### Bước 1 — Sắp danh sách cạnh sau clipping
+
+Bổ sung vào cuối `buildEdges`, sau khi đã thu được các đoạn vẽ được:
+
+```cpp title="include/pipeline.hpp — đoạn ghép"
+std::stable_sort(frame.edges.begin(), frame.edges.begin() + frame.count, [](const RenderEdge& a, const RenderEdge& b) {
+    return a.screen.averageDepth > b.screen.averageDepth;
+});
+if (frame.count > 0) {
+    const double farthest = frame.edges[0].screen.averageDepth;
+    const double nearest = frame.edges[frame.count - 1].screen.averageDepth;
+    const double range = farthest - nearest;
+    if (range > 1e-12) {
+        for (std::size_t i = 0; i < frame.count; ++i) {
+            frame.edges[i].depthFactor = (farthest - frame.edges[i].screen.averageDepth) / range;
+        }
+    }
+}
+return frame;
+```
+
+Dùng `stable_sort` để các cạnh có cùng average Z giữ thứ tự index cũ, tránh đổi thứ tự không cần thiết giữa những tư thế đối xứng. Đây chỉ có 12 phần tử nên ưu tiên sự rõ ràng thay vì thuật toán phức tạp.
+
+Độ sâu dùng camera space, không dùng screen Y hay khoảng cách 2D tới tâm. Ở nhánh depth clip, endpoint đã nằm trên near/far trước khi lấy trung bình.
+
+### Bước 2 — Đổi màu mà không đổi geometry
+
+`edgeColor` nhận depth factor và cờ depth cue:
+
+```cpp title="include/view.hpp — edgeColor"
+inline std::uint32_t edgeColor(double depthFactor, bool depthCue) {
+    if (!depthCue) {
+        return 0x84A9FFFFu;
+    }
+    const double t = std::clamp(depthFactor, 0.0, 1.0);
+    const auto r = static_cast<std::uint32_t>(54.0 + 114.0 * t);
+    const auto g = static_cast<std::uint32_t>(72.0 + 164.0 * t);
+    const auto b = static_cast<std::uint32_t>(112.0 + 143.0 * t);
+    return (r << 24) | (g << 16) | (b << 8) | 255u;
+}
+```
+
+Khi tắt C, ta dùng cùng một màu cho mọi cạnh, nhưng vẫn giữ cùng screen segments và thứ tự vẽ. Màu không được sửa dữ liệu world hay điều kiện visibility.
+
+Trong `renderScene`, cube luôn được vẽ. Chỉ phần marker và axes phụ mới kiểm tra `scene.debug`. Grid là bối cảnh giúp nhận biết không gian, nên vẫn giữ ở chế độ sạch.
+
+### Bước 3 — Tự quay từ vận tốc góc và dt
+
+Thêm vào `scene.hpp`:
+
+```cpp title="include/scene.hpp — advanceScene"
+inline void advanceScene(Scene& scene, double deltaTime) {
+    if (!std::isfinite(deltaTime) || deltaTime <= 0.0) {
+        return;
+    }
+    const double step = std::min(deltaTime, 0.1);
+    scene.angles.pitch = wrapAngle(scene.angles.pitch + 0.35 * step);
+    scene.angles.yaw = wrapAngle(scene.angles.yaw + 0.55 * step);
+    scene.angles.roll = wrapAngle(scene.angles.roll + 0.20 * step);
+}
+```
+
+Vận tốc góc lần lượt 0.35/0.55/0.20 rad/s. Góc được wrap để không tăng vô hạn. Mỗi frame vẫn quay **local vertices gốc** theo góc hiện tại, không quay dồn các world vertex.
+
+Trong main loop, chỉ gọi khi không paused:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (!scene.paused) {
+    lab::advanceScene(scene, deltaTime);
+    dirty = true;
+}
+```
+
+Space toggle tự quay; N tiến 0.1s khi paused. Thao tác tay như kéo, di chuyển hoặc zoom sẽ dừng auto để không tranh quyền điều khiển với người dùng. Canvas tôn trọng reduced-motion: không tự quay, vẫn dùng step và thao tác trực tiếp được.
+
+### Bước 4 — Cho chế độ sạch đi qua cùng renderer
+
+Sau khi upload texture, `presentFramebuffer` chọn có vẽ HUD hay không:
+
+```cpp title="include/presentation.hpp — đoạn ghép"
+if (!scene.debug) {
+    return SDL_RenderPresent(renderer);
+}
+```
+
+Không tạo một ảnh cube khác dành cho Showcase. Cùng một framebuffer vẫn được present, chỉ không phủ chữ và debug marker lên nó. Nhờ thế chế độ đẹp và chế độ kiểm tra không thể âm thầm dùng hai hình học khác nhau.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 6"
+cmake --build build --config Debug --target project_13_checkpoint_6
+./build/Debug/project_13_checkpoint_6.exe
+```
+
+Thử Space, N, C, F và R. Khi đứng yên, chương trình không cần dựng lại framebuffer liên tục; input, animation, expose hoặc resize sẽ đánh dấu dirty. Trong Canvas, redraw đi theo scene/size, không tạo vòng lặp ResizeObserver tự kích chính mình.
+
+## Thử làm sai để hiểu đúng
+
+1. Đảo comparator thành gần trước. Tại chỗ các cạnh giao nhau, cạnh xa có thể đè màu lên cạnh gần. Cube vẫn đủ 12 cạnh nhưng thứ tự thể hiện sai mục đích.
+2. Bỏ trường hợp range≈0. Ở tư thế chính diện một số giá trị có thể trùng; màu sinh NaN là lỗi của chuẩn hóa, không phải projection.
+3. Đặt toàn bộ vòng lặp vẽ cube vào `if (scene.debug)`. Bấm F chỉ còn nền: bạn đã tắt sản phẩm chính thay vì overlay.
+4. Cho animation chạy đồng thời với drag. Cube vẫn quay khi bạn đang cố đặt một tư thế chính xác; cần dừng auto trước thao tác tay.
+
+## Tự kiểm tra kết quả
+
+- Danh sách Z giảm dần; depth factor luôn trong [0,1].
+- C chỉ đổi màu, không đổi số cạnh hoặc vertex.
+- F giữ cube và nền 3D; Space/N không làm mất khả năng điều khiển.
+- Step 0.1s tăng yaw 0.055 rad; dt âm hoặc không hữu hạn bị bỏ qua.
+- Reduced-motion không tự bật animation trở lại sau reset.
+
+## Bài tập mở rộng
+
+Tìm một tư thế có hai cạnh giao nhau trên ảnh nhưng độ sâu thay đổi dọc cạnh. Giải thích bằng hình vẽ vì sao average Z không thể thay cho kiểm tra độ sâu từng pixel.
+
+Bài tiếp theo: [Kiểm chứng và chạy ứng dụng hoàn chỉnh](/projects/wireframe-cube/07-hoan-thien-va-kiem-chung).

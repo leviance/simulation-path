@@ -30,7 +30,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
       "examples",
       projectDirectoryBySlug.get(lesson.project),
     );
-    // Project 01–12 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
+    // Project 01–14 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
     const projectNumber = Number(
       projectDirectoryBySlug.get(lesson.project).match(/^project-(\d+)-/)[1],
     );
@@ -58,7 +58,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
         : path.join(checkpointDirectory, relative);
       const source = await readFile(sourcePath, "utf8");
       assert.ok(
-        projectNumber <= 12 || projectNumber >= 56
+        projectNumber <= 14 || projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
         `${lesson.file} drifts from checkpoint ${lessonNumber}: ${title}`,
@@ -108,8 +108,8 @@ test("C++ validation remains active in both Debug and Release", async () => {
     ["3d-compass", "07-suy-bien-va-kiem-chung.mdx"],
     ["perspective-point", "08-hoan-thien-va-kiem-chung.mdx"],
     ["rotating-triangle", "08-hoan-thien-va-kiem-chung.mdx"],
-    ["wireframe-cube", "05-tuong-tac-va-validation.mdx"],
-    ["fps-camera-room", "07-gioi-han-can-phong-va-validation.mdx"],
+    ["wireframe-cube", "07-hoan-thien-va-kiem-chung.mdx"],
+    ["fps-camera-room", "09-hoan-thien-va-kiem-chung.mdx"],
     ["3d-pipeline-inspector", "07-ghep-mvp-va-validation.mdx"],
     ["triangle-rasterizer", "07-barycentric-va-validation.mdx"],
     ["solid-cube-z-buffer", "07-kiem-chung-doc-lap-draw-order.mdx"],

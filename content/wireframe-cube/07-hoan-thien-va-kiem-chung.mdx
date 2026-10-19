@@ -1,0 +1,160 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy ứng dụng hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Một ảnh cube trông hợp lý chưa chứng minh chương trình đúng. Sai index, đổi dấu sin, bỏ cạnh qua near hay dùng frame-based movement đều có thể chưa lộ trong tư thế mặc định.
+
+Bài cuối khóa những điều đã học bằng đáp án tính tay, invariant và thử trực tiếp. Cuối bài có **toàn bộ mã nguồn của dự án**, không phải danh sách snippet phải tự đoán chỗ ghép.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có ba nhóm bằng chứng bổ sung nhau:
+
+- **Đáp án độc lập:** tọa độ index, quay 90°, số pixel với FOV=90°. Bắt sai dấu hoặc sai tỉ lệ.
+- **Invariant:** degree=3, cạnh dài $2h$, tâm bằng model position. Bắt biến dạng hoặc topology lỗi.
+- **Biên và lifecycle:** near/far/screen clipping, dt, wheel, blur/capture/reset. Bắt lỗi không xuất hiện ở hình mặc định.
+
+Quay rồi quay ngược là test hữu ích nhưng không thay đáp án độc lập: hai hàm có thể sai cùng quy ước và vẫn đảo nhau đúng.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-validation" />
+
+Đọc **max edge error** và **round-trip error** khi đổi mọi góc. Với double và dữ liệu ở quy mô này, sai số phải nhỏ hơn $10^{-9}$. Đây là sai số tính toán, không phải khoảng cách pixel.
+
+## Viết code từng bước
+
+### Bước 1 — Kiểm topology và chiều dài cạnh
+
+Thêm `hasValidCubeTopology` trong `lab.hpp`:
+
+```cpp title="include/lab.hpp — hasValidCubeTopology"
+inline bool hasValidCubeTopology() {
+    std::array<int, kCubeVertexCount> degree{};
+    for (std::size_t i = 0; i < kCubeEdges.size(); ++i) {
+        const Edge edge = kCubeEdges[i];
+        if (!isEdgeValid(edge)) {
+            return false;
+        }
+        ++degree[edge.from];
+        ++degree[edge.to];
+        for (std::size_t j = 0; j < i; ++j) {
+            const Edge other = kCubeEdges[j];
+            if ((edge.from == other.from && edge.to == other.to) || (edge.from == other.to && edge.to == other.from)) {
+                return false;
+            }
+        }
+    }
+    return std::all_of(degree.begin(), degree.end(), [](int value) {
+        return value == 3;
+    });
+}
+```
+
+Hàm kiểm tra bounds/self-edge trước khi tăng degree, kiểm cạnh trùng ở cả hai hướng rồi xác nhận degree. Chỉ kiểm `size()==12` không bắt được cạnh trùng hoặc đường chéo sai.
+
+Sai số chiều dài được đo trên tất cả các cạnh:
+
+```cpp title="include/lab.hpp — maximumCubeEdgeLengthError"
+inline double maximumCubeEdgeLengthError(const CubeVertices& before, const CubeVertices& after) {
+    double error = 0.0;
+    for (const Edge edge : kCubeEdges) {
+        const double a = magnitude(subtract(before[edge.to], before[edge.from]));
+        const double b = magnitude(subtract(after[edge.to], after[edge.from]));
+        error = std::max(error, std::abs(a - b));
+    }
+    return error;
+}
+```
+
+Test local h=1.25 phải cho từng cạnh dài 2.5. Sau rotation XYZ và ZYX, so lại với local; sau translation, trung bình tám điểm phải bằng position.
+
+### Bước 2 — Khóa phép chiếu bằng số tính tay
+
+Với FOV=90° và viewport 1100×800, điểm (1,0.5,4) perspective phải ra (650,350), không gọi lại projection để tạo expected:
+
+```cpp title="tests/tests.cpp — đoạn ghép"
+lab::Scene scene;
+scene.lens.verticalFovRadians = lab::kPi / 2.0;
+const auto p4 = lab::projectVertex({1.0, 0.5, 4.0}, scene);
+const auto p8 = lab::projectVertex({1.0, 0.5, 8.0}, scene);
+check(p4.screen && near(p4.screen->x, 650.0) && near(p4.screen->y, 350.0), "perspective Z4 oracle");
+check(p8.screen && near(p8.screen->x, 600.0) && near(p8.screen->y, 375.0), "perspective Z8 oracle");
+scene.projection = lab::ProjectionMode::Orthographic;
+const auto o4 = lab::projectVertex({1.0, 0.5, 4.0}, scene);
+const auto o8 = lab::projectVertex({1.0, 0.5, 8.0}, scene);
+check(o4.screen && near(o4.screen->x, 616.6666666666666) && near(o4.screen->y, 366.6666666666667), "ortho independent oracle");
+check(o4.screen && o8.screen && near(o4.screen->x, o8.screen->x) && near(o4.screen->y, o8.screen->y), "ortho scale ignores depth");
+```
+
+Ở ortho, mốc Zref=6 cho X≈616.667 và Y≈366.667 dù depth là 4 hay 8. Test còn kiểm Z=6 khớp tỉ lệ giữa hai phép, near/far inclusive, Z=0, NaN và đoạn xuyên viewport dù hai đầu đều outside.
+
+### Bước 3 — Kiểm chuỗi thao tác chứ không chỉ hàm riêng
+
+Trong `tests/tests.cpp`, movement được chạy với hai chuỗi dt:
+
+```cpp title="tests/tests.cpp — đoạn ghép"
+lab::Scene sixty;
+lab::Scene hundred;
+for (int i = 0; i < 60; ++i) {
+    lab::moveModel(sixty, {1.0, 0.0, 0.0}, 1.0 / 60.0);
+}
+for (int i = 0; i < 100; ++i) {
+    lab::moveModel(hundred, {1.0, 0.0, 0.0}, 0.01);
+}
+check(near(sixty.position.x, 2.0) && near(hundred.position.x, 2.0), "dt independent movement");
+```
+
+Các kiểm tra tiếp theo khóa đường chéo không tăng tốc, zoom không sửa position, zoom bounds, delta chuột và dt stall cap. Chúng chạy không cần SDL window.
+
+Renderer cũng được gọi thật vào framebuffer ở mọi preset và cả hai phép chiếu. Với debug tắt, test đếm pixel màu cube và grid để bắt lỗi “F làm biến mất vật thể”. Test C++ dùng `check` và trả EXIT_FAILURE, không dùng `assert` có thể bị vô hiệu trong Release.
+
+### Bước 4 — Build và chạy cả Debug lẫn Release
+
+```bash title="Terminal — nghiệm thu source tải về"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+./build/Release/project_13_final.exe
+```
+
+Target mặc định là final và tests; bật `BUILD_CHECKPOINTS` mới thêm Starter cùng bảy checkpoint. CMake dùng C++20 và khóa SDL 3.4.8 qua FetchContent, link `SDL3::SDL3`. Lần configure đầu cần mạng; các lần sau dùng dependency đã tải.
+
+## Ghép các phần lại
+
+Bản hoàn chỉnh được chia theo nhiệm vụ, không nhét cả ứng dụng vào một `main.cpp`:
+
+- `framebuffer.hpp`: bảng pixel và Bresenham.
+- `projection.hpp`, `rotation.hpp`: toán từ P11/P12.
+- `lab.hpp`: tám đỉnh, edge list và kiểm chứng hình học.
+- `scene.hpp`: state, transform, hai phép chiếu và input math.
+- `pipeline.hpp`: cache endpoint, depth/screen clipping, danh sách cạnh.
+- `view.hpp`: nền 3D và raster cube.
+- `presentation.hpp`, `src/main.cpp`: SDL resource, input, upload và HUD.
+- `tests/tests.cpp`: đáp án độc lập và các trường hợp biên.
+
+Phần source đầy đủ phía dưới dùng đúng các file tải trong ZIP. Muốn chạy ngay, build `project_13_final`; muốn học từng bước, đối chiếu `checkpoints/01` đến `07`. Không chép các snippet vào nhau thành một file duy nhất.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay 0–4 bằng 0–6 trong edge list. Hình có đường chéo; test độ dài cạnh và degree phải báo lỗi thay vì vẫn “xanh” vì đủ 12 phần tử.
+2. Đổi dấu sin trong rotateY. Test quay 90° phải thất bại dù round-trip có thể vẫn qua nếu inverse cũng bị sửa giống vậy.
+3. Bỏ chuẩn hóa direction hoặc nhân dt. Test chuỗi thời gian/đường chéo phải phát hiện.
+4. Bỏ depth clipping, chọn preset “Cắt near”, kéo và zoom. Không được nghiệm thu nếu xuất hiện spike, treo raster hoặc cạnh biến mất vô lý.
+
+## Tự kiểm tra kết quả
+
+- Đủ tám đỉnh/mười hai cạnh, hình không biến dạng ở mọi góc.
+- Perspective/ortho khác nhau đúng lý do; P không đổi world geometry.
+- Kéo chuột, WASD/QE, wheel, +/−, R đều chạy trên executable thật.
+- Nhấn rồi thả ngoài cửa sổ, đổi focus, resize và reset không để thao tác kẹt.
+- Cube lớn, viewport toàn cửa sổ, có chiều sâu; ẩn debug vẫn thấy cube và nền.
+- CTest qua cả Debug/Release. Kiểm thử số không thay thế lượt thử input/HiDPI trên desktop của bạn.
+
+## Bài tập mở rộng
+
+Thay dữ liệu cube bằng một khối hộp có ba half extent khác nhau. Giữ nguyên edge list, transform, clipping và rasterizer; chỉ đổi expected chiều dài cạnh. Nếu phải viết lại vòng vẽ cho từng hình, ranh giới geometry/topology của bạn còn chưa rõ.
+
+Tiếp theo, [Project 14 — Camera FPS](/projects/fps-camera-room) sẽ giữ vật thể đứng yên và di chuyển chính camera.

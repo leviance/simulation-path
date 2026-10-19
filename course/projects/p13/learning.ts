@@ -1,164 +1,257 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
 const learning = {
   guides: {
     "p13-l01": {
-      focus:
-        "Thay ba biến vertex riêng của Project 12 bằng CubeVertices có tám phần tử, chốt quy ước index và project đúng tám marker trước khi tạo edge.",
+      focus: "Đặt hai lớp bốn đỉnh trong local space, chạy bộ khung SDL và xem từng index.",
       expected:
-        "Tám marker xuất hiện thành hai lớp bốn điểm. Đổi half extent làm cube lớn/nhỏ quanh cùng tâm; readout cho thấy index và dấu X/Y/Z tương ứng.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Từ một điểm đến tám đỉnh của cube; chạy checkpoint rồi đối chiếu hiện tượng và số đọc trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/pipeline.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Chốt quy ước index trước",
+          title: "Chạy Starter từ nền P12",
           explanation:
-            "Index 0–3 thuộc lớp local Z âm, 4–7 thuộc lớp local Z dương; thứ tự X/Y giống nhau ở hai lớp. Quy ước này trở thành hợp đồng cho edge list.",
+            "Bộ khung giữ framebuffer, phép quay sin/cos, phép chiếu an toàn và SDL presentation; chưa có cube.",
         },
         {
-          title: "Sinh tám góc từ half extent",
-          explanation:
-            "Mỗi coordinate chỉ nhận -h hoặc +h. Hàm trả std::array có kích thước cố định để compiler và tests cùng biết cube luôn có tám vertex.",
+          title: "Đặt index nhất quán",
+          explanation: "0–3 là vòng Z âm, 4–7 là vòng Z dương; viết đủ tám tổ hợp ±h.",
         },
         {
-          title: "Project mỗi vertex thành một marker",
+          title: "Chiếu và vẽ marker",
           explanation:
-            "Checkpoint đầu chưa nối cạnh. Nếu một marker sai, ta chỉ cần kiểm tra index, world position và projection thay vì debug cả topology.",
+            "Cộng model position để cube ở trước camera; cache tám kết quả rồi chỉ vẽ marker visible.",
         },
       ],
     },
     "p13-l02": {
       focus:
-        "Tạo std::array<Edge,12>, project tám vertex đúng một lần rồi dùng endpoint index để nối các edge hợp lệ.",
+        "Tách vị trí khỏi quan hệ nối, cache phép chiếu và vẽ các đoạn đã clip bằng Bresenham.",
       expected:
-        "Cube có 12 cạnh, edge được chọn trong Canvas đổi màu và mỗi vertex có degree bằng 3. Projection count vẫn bằng 8, không tăng thành 24.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Nối mười hai cạnh từ index; chạy checkpoint rồi đối chiếu hiện tượng và số đọc trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/pipeline.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Tách geometry khỏi topology",
-          explanation:
-            "CubeVertices giữ vị trí; kCubeEdges chỉ giữ quan hệ. Một Edge không biết world, screen hoặc màu và vì vậy tái sử dụng được sau mọi transform.",
+          title: "Tách vị trí khỏi topology",
+          explanation: "Edge chỉ giữ hai index; ba nhóm bốn cạnh khép kín hai vòng và nối hai lớp.",
         },
         {
-          title: "Project theo vertex, không theo edge",
+          title: "Dùng cache đỉnh",
           explanation:
-            "projectCube tạo một cache tám ProjectionResult. Hai hoặc ba edge dùng chung một vertex đều đọc lại cùng entry thay vì gọi perspective divide lần nữa.",
+            "projectCube thực hiện tám phép chiếu gốc; mỗi cạnh tra hai endpoint trong mảng.",
         },
         {
-          title: "Guard từng endpoint",
+          title: "Clip trước raster",
           explanation:
-            "Một edge chỉ được vẽ khi cả from và to đều Visible. Đây là cách bỏ an toàn cả đoạn; clipping thật được giữ cho Project 18.",
+            "Cắt near/far trước divide, screen trước int; chỉ chiếu bổ sung endpoint mới, rồi Bresenham tự viết.",
         },
       ],
     },
     "p13-l03": {
       focus:
-        "Rotate tám local vertex bằng cùng EulerAngles/RotationOrder của Project 12, sau đó translate toàn bộ cube tới modelPosition.",
+        "Dùng lại rotation trực tiếp của P12 trên tám local vertex; quan sát pivot và hai thứ tự.",
       expected:
-        "W/S, A/D, Q/E đổi orientation; O đổi order. Cube quay quanh tâm, mười hai edge không đổi index và mọi cạnh giữ cùng độ dài.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Xoay hình dạng rồi mới đặt vào world; chạy checkpoint rồi đối chiếu hiện tượng và số đọc trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/pipeline.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Giữ local cube bất biến",
-          explanation:
-            "Mỗi frame bắt đầu từ tám góc ±halfExtent. rotatedLocal và worldVertices là hai array mới, nên input state không bị trộn vào geometry gốc.",
+          title: "Giữ bản local gốc",
+          explanation: "Không xoay dồn world vertices frame trước; lấy lại ±h mỗi frame.",
         },
         {
-          title: "Transform bằng một vòng lặp",
-          explanation:
-            "Thay vì viết rotate cho A/B/C, vòng lặp theo index áp dụng cùng công thức cho tám vertex. Đây là bước đầu để code hoạt động với mesh lớn hơn.",
+          title: "Áp cùng rotation cho tám điểm",
+          explanation: "rotateCube gọi rotateEuler trên từng local vertex, cùng angles và order.",
         },
         {
-          title: "Giữ edge list nguyên vẹn",
+          title: "Translate ở cuối",
           explanation:
-            "Transform thay tọa độ nhưng không đổi quan hệ giữa index. kCubeEdges vì vậy là constexpr và không cần dựng lại mỗi frame.",
+            "Pivot chính là scene.position; phép cộng cuối không làm cube quay quanh camera.",
         },
       ],
     },
     "p13-l04": {
-      focus:
-        "Tạo danh sách edge visible kèm average camera-space Z, sort xa→gần và ánh xạ depth sang độ sáng của line.",
+      focus: "Suy công thức orthographic, so kích thước hai lớp Z và giữ cùng quy ước clipping.",
       expected:
-        "Bật depth cue làm cạnh gần sáng hơn; tắt nó trả mọi cạnh về cùng màu. Danh sách depth luôn giảm dần nhưng visible edge count không đổi.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Hai phép chiếu cho cùng một cube; chạy checkpoint rồi đối chiếu hiện tượng và số đọc trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/pipeline.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Dùng depth đã có trong projection cache",
-          explanation:
-            "Mỗi ProjectionResult giữ cameraPoint.z. Average của hai endpoint cho một depth đại diện mà không cần project hoặc transform lại.",
+          title: "Suy tỉ lệ không phụ thuộc Z",
+          explanation: "Orthographic chia X/Y cho halfWidth/halfHeight, vẫn kiểm tra near/far.",
         },
         {
-          title: "Vẽ xa trước, gần sau",
+          title: "Chọn mốc để so công bằng",
           explanation:
-            "Sort giảm dần theo depth cho phép line gần ghi đè line xa tại giao điểm. Đây chỉ là painter-style ordering cho line, không phải Z-buffer.",
+            "HalfHeight=6tan(FOV/2) tại zoom=1; chỉ trùng tỉ lệ perspective trên mặt phẳng Z=6.",
         },
         {
-          title: "Depth cue không thay geometry",
+          title: "Chuyển P mà không sửa geometry",
           explanation:
-            "normalizeDepth chỉ tạo hệ số màu. Tắt depth cue phải giữ nguyên endpoint, visibility, thứ tự edge và các phép đo hình học.",
+            "Giữ nguyên local/world vertex và dùng chung clip/raster path cho hai phép chiếu.",
         },
       ],
     },
     "p13-l05": {
       focus:
-        "Hoàn thiện mouse capture, auto rotation và các invariant cho topology, projection count, edge length, inverse cùng depth order.",
+        "Đọc keyboard state theo dt, giữ pointer owner và tách zoom phép chiếu khỏi đổi khoảng cách.",
       expected:
-        "Cube kéo được bằng chuột, tự quay độc lập FPS và reset sạch. CTest qua; title/readout báo 8 projections, tối đa 12 visible edges và sai số gần zero.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Di chuyển, kéo chuột và zoom; chạy checkpoint rồi đối chiếu hiện tượng và số đọc trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/pipeline.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Tái sử dụng đường input đã kiểm chứng",
-          explanation:
-            "Mouse delta chỉ sửa EulerAngles; capture được nhả ở mouse-up và focus-lost. Rotation math không biết SDL event.",
+          title: "Dịch chuyển bằng state và dt",
+          explanation: "Đọc sau PollEvent, tạo direction, chuẩn hóa đường chéo rồi nhân 2 world/s.",
         },
         {
-          title: "Đếm cấu trúc trước khi nhìn hình",
+          title: "Giữ một chủ thao tác",
           explanation:
-            "Tests khóa 8 vertex, 12 edge duy nhất, index hợp lệ và degree 3. Một cube trông gần đúng vẫn thất bại nếu topology nối nhầm.",
+            "Nhấn trái trong viewport, capture, lấy delta logical; thả nhận mẫu cuối và mọi đường hủy phải nhả.",
         },
         {
-          title: "Đo geometry và pipeline",
+          title: "Zoom có giới hạn",
           explanation:
-            "Mười hai edge phải giữ length 2h; rotate→inverse trả vertex gốc; projection count bằng 8 và visible edges được sort giảm dần theo depth.",
+            "Wheel/+/− đổi scale theo hàm mũ, không thay position; dùng W/S để thay khoảng cách.",
+        },
+      ],
+    },
+    "p13-l06": {
+      focus:
+        "Sắp cạnh theo Z, đổi độ sáng, thêm tự quay/pause/step và ẩn overlay mà không ẩn cube.",
+      expected:
+        "Làm rõ chiều sâu, giữ bản demo sạch; chạy checkpoint rồi đối chiếu hiện tượng và số đọc trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/pipeline.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
+      steps: [
+        {
+          title: "Suy average camera Z",
+          explanation:
+            "Lấy trung bình endpoint sau depth clip, sắp xa trước gần sau, chuẩn hóa độ sáng.",
         },
         {
-          title: "Chạy bản hoàn chỉnh",
+          title: "Cập nhật góc bằng dt",
+          explanation: "Tự quay 0.35/0.55/0.20 rad/s, cap stall 0.1s, Space pause, N step.",
+        },
+        {
+          title: "Tách overlay khỏi hình chính",
+          explanation: "F ẩn marker/trục/HUD; cube và sàn không nằm trong nhánh debug.",
+        },
+      ],
+    },
+    "p13-l07": {
+      focus: "Khóa đáp án tính tay, thử clipping/tương tác và build toàn bộ mã nguồn độc lập.",
+      expected:
+        "Kiểm chứng và chạy ứng dụng hoàn chỉnh; chạy checkpoint rồi đối chiếu hiện tượng và số đọc trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/pipeline.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Khóa đáp án độc lập",
           explanation:
-            "Sau CTest, kiểm tra keyboard, mouse, order, depth cue, marker, animation, pause/step, reset và resize trên project_13_final.",
+            "Index, degree và phép chiếu FOV 90° có expected tính tay; không dùng chính hàm đang test làm đáp án.",
+        },
+        {
+          title: "Thêm kiểm tra hình học và biên",
+          explanation:
+            "Độ dài cạnh, inverse, clip near/far/screen, khoảng thời gian khác nhau và giới hạn zoom.",
+        },
+        {
+          title: "Build và kiểm tra sản phẩm",
+          explanation:
+            "ZIP chứa toàn bộ header/src/tests, CMake pin SDL, starter và bảy checkpoint độc lập.",
         },
       ],
     },
   },
   references: {
     "p13-l01": [
-      { label: "Vertex index", href: "/glossary#vertex-index", kind: "Thuật ngữ" },
-      { label: "Local space", href: "/glossary#local-space", kind: "Thuật ngữ" },
-      { label: "Wireframe", href: "/glossary#wireframe", kind: "Thuật ngữ" },
+      {
+        label: "Local space",
+        href: "/glossary#local-space",
+        kind: "Thuật ngữ",
+      },
     ],
     "p13-l02": [
-      { label: "Edge list", href: "/glossary#edge-list", kind: "Thuật ngữ" },
-      { label: "Mesh topology", href: "/glossary#mesh-topology", kind: "Thuật ngữ" },
-      { label: "View frustum", href: "/glossary#view-frustum", kind: "Thuật ngữ" },
+      {
+        label: "Framebuffer",
+        href: "/glossary#framebuffer",
+        kind: "Thuật ngữ",
+      },
     ],
     "p13-l03": [
-      { label: "3D rotation", href: "/glossary#rotation-3d", kind: "Thuật ngữ" },
-      { label: "Rotation order", href: "/glossary#rotation-order", kind: "Thuật ngữ" },
-      { label: "Pivot", href: "/glossary#pivot", kind: "Thuật ngữ" },
+      {
+        label: "3D rotation",
+        href: "/glossary#rotation-3d",
+        kind: "Thuật ngữ",
+      },
     ],
     "p13-l04": [
-      { label: "Depth cue", href: "/glossary#depth-cue", kind: "Thuật ngữ" },
-      { label: "Camera space", href: "/glossary#camera-space", kind: "Thuật ngữ" },
-      { label: "Wireframe", href: "/glossary#wireframe", kind: "Thuật ngữ" },
+      {
+        label: "Perspective projection",
+        href: "/glossary#perspective-projection",
+        kind: "Thuật ngữ",
+      },
     ],
     "p13-l05": [
-      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
-      { label: "Pointer capture", href: "/glossary#pointer-capture", kind: "Thuật ngữ" },
       {
-        label: "CTest command-line reference",
-        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
-        kind: "CMake",
+        label: "Pointer capture",
+        href: "/glossary#pointer-capture",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p13-l06": [
+      {
+        label: "Variable timestep",
+        href: "/glossary#variable-timestep",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p13-l07": [
+      {
+        label: "Round-trip test",
+        href: "/glossary#round-trip-test",
+        kind: "Thuật ngữ",
       },
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;

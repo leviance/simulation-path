@@ -1,225 +1,334 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
 const learning = {
   guides: {
     "p14-l01": {
       focus:
-        "Bắt đầu từ framebuffer chạy được, mô tả căn phòng bằng RoomBounds và Segment3 rồi project từng segment khi camera còn ở pose cố định.",
+        "Sinh sàn, tường, trần và mốc quan sát trong world; vẽ từ vị trí mắt cố định bằng renderer CPU của P13.",
       expected:
-        "Cửa sổ hiện floor grid, khung bốn tường và crosshair. Title bar báo số segment tổng cộng cùng số segment đang visible; chưa có WASD hoặc mouse look.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Dựng căn phòng trước khi cho camera đi: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Chốt kích thước world space",
+          title: "Chạy Starter CPU",
           explanation:
-            "RoomBounds giữ min/max X, floor/ceiling Y và min/max Z. Mọi segment được sinh một lần từ cùng bộ bounds nên tests và movement dùng chung một nguồn sự thật.",
+            "Bảng logic 1100×800, framebuffer/Bresenham/projection/clip từ P13; chưa có room.",
         },
         {
-          title: "Sinh lưới thành các đoạn ngắn",
+          title: "Dựng world một lần",
           explanation:
-            "Floor grid được chia theo từng cell thay vì một line dài xuyên qua camera. Khi chưa có near-plane clipping, các đoạn đã đi ra sau camera biến mất riêng lẻ mà phần còn lại vẫn còn.",
+            "RoomBounds 12×22×4, floor grid và hai hộp mốc; renderer chỉ nhận const geometry.",
         },
         {
-          title: "Project rồi mới raster line",
-          explanation:
-            "Mỗi Segment3 project hai endpoint. Chỉ khi cả hai Visible, Bresenham mới nhận screen coordinate đã làm tròn.",
+          title: "Clip từng đoạn rồi raster",
+          explanation: "Đổi từ mắt cố định (0,1.6,2), clip depth trước divide và screen trước int.",
         },
       ],
     },
     "p14-l02": {
       focus:
-        "Thêm FpsCamera.position và đổi world point sang camera space bằng worldPoint - camera.position, không sửa RoomGeometry.",
+        "Trừ camera position, quan sát vật trôi ngược chiều mà không sửa một world vertex nào.",
       expected:
-        "Arrow keys đổi camera position theo world axes. Camera sang +X làm room trôi sang trái; segment đầu tiên giữ nguyên world coordinate trước và sau thao tác.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Đổi gốc tọa độ về vị trí camera: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Giữ geometry đứng yên",
+          title: "Giữ room bất biến",
           explanation:
-            "RoomGeometry được tạo trước render loop và truyền vào bằng const reference. Không có vòng lặp nào cộng position vào các endpoint của phòng.",
+            "Chỉ Scene.camera thay đổi, không cộng/trừ ngược position vào từng endpoint.",
         },
         {
-          title: "Trừ camera position",
-          explanation:
-            "Point camera-space là độ dời từ camera tới world point. Vì vậy phép trừ tự tạo chuyển động ngược chiều trên màn hình.",
+          title: "Trừ vị trí mắt",
+          explanation: "World point trừ camera.position cho vector tương đối, cùng đơn vị world.",
         },
         {
-          title: "Đi thử theo world axes",
-          explanation:
-            "Checkpoint này cố ý dùng Arrow keys theo X/Z cố định để tách camera translation khỏi hướng nhìn sẽ được thêm ở bài sau.",
+          title: "Đối chiếu số trước khi nhìn ảnh",
+          explanation: "Camera (1,1.6,2), point (3,2,8) cho (2,0.4,6).",
         },
       ],
     },
     "p14-l03": {
-      focus:
-        "Sau translation, áp dụng rotateY với -yaw rồi rotateX với +pitch để hoàn tác orientation của camera trước perspective divide.",
+      focus: "Suy đúng dấu và thứ tự inverse yaw/pitch theo quy ước +Z trước, +Y lên.",
       expected:
-        "J/L xoay yaw, I/K xoay pitch; room quay ngược chiều thao tác nhìn. Pitch dương đưa hướng nhìn lên nhưng camera-space forward vẫn là +Z.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Nhìn quanh bằng phép quay ngược: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Translation luôn đi trước rotation",
-          explanation:
-            "Ta cần vector từ camera tới point rồi mới đổi vector ấy sang các trục camera. Xoay world point tuyệt đối quanh origin sẽ tạo quỹ đạo sai.",
+          title: "Chốt orientation",
+          explanation: "Camera dùng Ry(yaw)Rx(-pitch); pitch dương nhìn lên, yaw dương quay phải.",
         },
         {
-          title: "Hoàn tác yaw",
-          explanation:
-            "Camera quay +yaw trong world space tương đương quay point tương đối -yaw vào camera space. Dấu âm là phần cốt lõi của view transform.",
+          title: "Đảo thao tác theo thứ tự",
+          explanation: "Trừ position, Ry(-yaw), rồi Rx(+pitch); không đổi dấu tùy cảm giác ảnh.",
         },
         {
-          title: "Hoàn tác pitch theo đúng quy ước",
-          explanation:
-            "Với camera nhìn +Z và pitch dương nhìn lên, orientation dùng local rotation -pitch; phép nghịch đảo trong worldToCamera vì vậy dùng +pitch.",
+          title: "Tách điều khiển bàn phím",
+          explanation: "IJKL đổi góc 3°, yaw wrap và pitch clamp ±89°; chưa relative mouse.",
         },
       ],
     },
     "p14-l04": {
       focus:
-        "Tính forward/right/up trong world space từ yaw/pitch và xác nhận chúng tạo một orthonormal camera basis.",
+        "Từ yaw/pitch suy basis, so dot product với cách quay ngược và kiểm tra số biết trước.",
       expected:
-        "Canvas hiện ba vector có magnitude 1, dot từng đôi gần 0. Yaw 90° làm forward hướng +X; pitch chỉ nghiêng forward/up và không làm right đổi độ dài.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Dựng ba trục forward, right, up: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Suy forward từ hai góc",
-          explanation:
-            "cos(pitch) là độ dài projection của forward trên mặt phẳng XZ; sin(yaw) và cos(yaw) chia projection đó cho X/Z.",
+          title: "Suy forward",
+          explanation: "Hình chiếu ngang dài cos(pitch); Y là sin(pitch).",
         },
         {
-          title: "Right chỉ phụ thuộc yaw",
+          title: "Giữ right ngang",
           explanation:
-            "FPS camera không roll, nên right luôn nằm ngang: (cos(yaw), 0, -sin(yaw)). Đây cũng là hướng strafe.",
+            "Camera không roll: right=(cos(yaw),0,-sin(yaw)); up không luôn bằng world Y.",
         },
         {
-          title: "Dựng up cho cùng orientation",
+          title: "Kiểm trực chuẩn độc lập",
           explanation:
-            "Up được tính theo cùng yaw/pitch thay vì giữ cứng (0,1,0). Dot product và magnitude cho biết ba công thức có thật sự thống nhất.",
+            "Length gần 1, dot từng đôi gần 0, view point cũng bằng dot relative với từng trục.",
         },
       ],
     },
     "p14-l05": {
       focus:
-        "Đổi bốn trạng thái WASD thành hai input axis, normalize khi cần rồi phối hợp groundForward/right thành velocity theo world space.",
+        "Đọc keyboard state, tạo direction trong world và nhân speed × dt, không bay khi nhìn lên.",
       expected:
-        "WASD đi theo yaw hiện tại, không bay khi nhìn lên. W+D có cùng speed với W; đổi FPS trong Canvas vẫn cho quãng đường gần bằng nhau sau một giây.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Đi bộ theo hướng nhìn với WASD: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Gộp phím thành hai axis",
-          explanation:
-            "right-left tạo strafe và forward-backward tạo advance. Cặp giá trị này còn ở input space, chưa phải world velocity.",
+          title: "Đọc state sau event",
+          explanation: "Từng if cập nhật strafe/advance; không dùng key-repeat làm đồng hồ.",
         },
         {
-          title: "Normalize input chéo",
-          explanation:
-            "Vector (1,1) dài √2. Chỉ normalize khi length lớn hơn 1 để analog input nhỏ vẫn giữ được cường độ.",
+          title: "Đổi input sang world direction",
+          explanation: "Right×strafe + groundForward×advance; groundForward chỉ phụ thuộc yaw.",
         },
         {
-          title: "Nhân speed và deltaTime",
+          title: "Chuẩn hóa và nhân dt",
           explanation:
-            "groundForward bỏ pitch, right giữ trên XZ. Tổng hai hướng được nhân speed×dt đã clamp rồi cộng đúng một lần vào camera.position.",
+            "Digital input: chuẩn hóa tổng hướng khác 0, tốc độ 3.5 world/s, cap stall dt 0.1.",
         },
       ],
     },
     "p14-l06": {
       focus:
-        "Dùng SDL_SetWindowRelativeMouseMode cho cửa sổ, đọc xrel/yrel để sửa yaw/pitch và luôn nhả mode ở Escape/focus-lost/cleanup.",
+        "Tách forward đầy đủ khỏi groundForward, dùng Q/E theo world Y và chuẩn hóa tổng hướng.",
       expected:
-        "Click để khóa góc nhìn, rê chuột liên tục dù chạm mép màn hình, Escape để nhả. Pitch dừng ở ±89° và yaw được wrap về một khoảng hữu hạn.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Thêm Fly và điều khiển độ cao: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Bật mode theo đúng window",
-          explanation:
-            "SDL3 gắn relative mode với SDL_Window. Chỉ đặt mouseLookActive=true sau khi API trả thành công để state nội bộ không nói khác hệ điều hành.",
+          title: "Giữ hai mode rõ ràng",
+          explanation: "Walk đứng Y=1.6, Fly dùng forward 3D; M đổi mode, về Walk trả eye height.",
         },
         {
-          title: "Dùng delta, không dùng vị trí",
-          explanation:
-            "event.motion.xrel/yrel là độ dịch chuyển kể từ sự kiện trước. Sensitivity đổi pixel thành radian và không phụ thuộc kích thước cửa sổ.",
+          title: "Thêm lift theo world Y",
+          explanation: "Q xuống, E lên; đây không phải camera.up đã nghiêng.",
         },
         {
-          title: "Có đường thoát ở mọi tình huống",
+          title: "Chuẩn hóa sau khi cộng hướng",
           explanation:
-            "Escape, focus-lost và cleanup đều gọi disable. Nhờ vậy cursor không bị giữ hoặc ẩn sau khi người dùng rời ứng dụng.",
+            "Trong Fly, forward và world Y không luôn vuông góc; normalize ba axis input trước chưa đủ.",
         },
       ],
     },
     "p14-l07": {
       focus:
-        "Clamp camera vào RoomBounds, khóa eye height và kiểm thử view round trip, basis, movement theo dt, diagonal speed, pitch cùng bounds.",
+        "Click để bật SDL relative mode, dùng delta không nhân dt và dọn input khi thoát hoặc mất focus.",
       expected:
-        "Camera dừng trước tường theo margin, reset sạch pose và input. Title/Canvas báo basis error cùng round-trip error gần zero; CTest qua Debug và Release.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Nhìn quanh bằng relative mouse mode: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Clamp sau movement",
+          title: "Bật mode bằng thao tác rõ ràng",
           explanation:
-            "Tính candidate position trước, sau đó clamp X/Z vào bounds trừ margin và đặt Y về eyeHeight. Geometry cùng camera orientation không bị sửa.",
+            "Chỉ click trong viewport mới bật relative; state đọc lại từ SDL sau kết quả API.",
         },
         {
-          title: "Viết phép biến đổi ngược",
+          title: "Dùng relative delta",
           explanation:
-            "cameraToWorld đảo ngược đúng thứ tự rotation rồi cộng position. Round-trip nhiều point giúp bắt lỗi dấu và lỗi order mà nhìn hình khó thấy.",
+            "xrel/yrel không đổi sang logical framebuffer và không nhân dt; mỗi event đã là độ dời.",
         },
         {
-          title: "Đo basis và movement",
+          title: "Kết thúc input đầy đủ",
           explanation:
-            "Tests kiểm magnitude/dot, yaw 90°, nhiều chuỗi dt và quãng đường chéo. Đây là các invariant độc lập với framebuffer.",
+            "Esc, pause, reset/preset, mode, blur/hidden/resize và cleanup nhả relative; held keys phải thả trước khi nhận lại.",
+        },
+      ],
+    },
+    "p14-l08": {
+      focus:
+        "Giới hạn sáu biên ngoài, pause/step/reset, chế độ sạch và đi thử tự động có thể dừng.",
+      expected:
+        "Giữ camera trong phòng, hoàn thiện bản demo: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
+      steps: [
+        {
+          title: "Clamp candidate sau movement",
+          explanation: "X/Z có margin, Fly thêm Y; Walk giữ eye height, không có collision engine.",
         },
         {
-          title: "Chạy bản hoàn chỉnh",
+          title: "Tách overlay và cảnh",
           explanation:
-            "Sau CTest, kiểm tra WASD, click-to-look, Escape, focus-lost, resize, reset, pause và va vào cả bốn phía của room.",
+            "F tắt chữ/crosshair nhưng giữ phòng/hộp/sàn; world không có bản render giả riêng.",
+        },
+        {
+          title: "Pause, step, demo đều dùng cùng update",
+          explanation:
+            "Space pause, N bước W 0.1s, T đi thử; reduced-motion tắt auto trong Canvas.",
+        },
+      ],
+    },
+    "p14-l09": {
+      focus:
+        "Khóa phép view bằng oracle độc lập, kiểm basis/movement/clipping và build toàn bộ source.",
+      expected:
+        "Kiểm chứng camera và chạy bản hoàn chỉnh: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+      files: [
+        "include/lab.hpp",
+        "include/room.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Dùng đáp án không tự sinh",
+          explanation:
+            "View yaw 90°, projection FOV 90° và fly pitch 45° đều có expected tính tay.",
+        },
+        {
+          title: "Thêm invariant và biên",
+          explanation:
+            "Basis, dot oracle, inverse, dt partition, diagonal/fly speed, near/far/screen, bounds.",
+        },
+        {
+          title: "Build và thử sản phẩm",
+          explanation:
+            "Source độc lập, SDL 3.4.8, Debug/Release, CTest và checklist input/HiDPI trên desktop.",
         },
       ],
     },
   },
   references: {
     "p14-l01": [
-      { label: "Wireframe", href: "/glossary#wireframe", kind: "Thuật ngữ" },
-      { label: "World space", href: "/glossary#world-space", kind: "Thuật ngữ" },
-      { label: "View frustum", href: "/glossary#view-frustum", kind: "Thuật ngữ" },
+      {
+        label: "world-space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
+      },
     ],
     "p14-l02": [
-      { label: "View transform", href: "/glossary#view-transform", kind: "Thuật ngữ" },
-      { label: "Camera space", href: "/glossary#camera-space", kind: "Thuật ngữ" },
+      {
+        label: "view-transform",
+        href: "/glossary#view-transform",
+        kind: "Thuật ngữ",
+      },
     ],
     "p14-l03": [
-      { label: "FPS camera", href: "/glossary#fps-camera", kind: "Thuật ngữ" },
-      { label: "Euler angles", href: "/glossary#euler-angles", kind: "Thuật ngữ" },
-      { label: "Rotation order", href: "/glossary#rotation-order", kind: "Thuật ngữ" },
+      {
+        label: "fps-camera",
+        href: "/glossary#fps-camera",
+        kind: "Thuật ngữ",
+      },
     ],
     "p14-l04": [
-      { label: "Camera basis", href: "/glossary#camera-basis", kind: "Thuật ngữ" },
-      { label: "Dot product", href: "/glossary#dot-product", kind: "Thuật ngữ" },
-      { label: "Normalization", href: "/glossary#normalization", kind: "Thuật ngữ" },
+      {
+        label: "camera-basis",
+        href: "/glossary#camera-basis",
+        kind: "Thuật ngữ",
+      },
     ],
     "p14-l05": [
-      { label: "Delta time", href: "/glossary#delta-time", kind: "Thuật ngữ" },
-      { label: "Variable timestep", href: "/glossary#variable-timestep", kind: "Thuật ngữ" },
-      { label: "Normalization", href: "/glossary#normalization", kind: "Thuật ngữ" },
+      {
+        label: "delta-time",
+        href: "/glossary#delta-time",
+        kind: "Thuật ngữ",
+      },
     ],
     "p14-l06": [
+      {
+        label: "camera-basis",
+        href: "/glossary#camera-basis",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p14-l07": [
+      {
+        label: "relative-mouse-mode",
+        href: "/glossary#relative-mouse-mode",
+        kind: "Thuật ngữ",
+      },
       {
         label: "SDL_SetWindowRelativeMouseMode",
         href: "https://wiki.libsdl.org/SDL3/SDL_SetWindowRelativeMouseMode",
         kind: "SDL API",
       },
-      { label: "Relative mouse mode", href: "/glossary#relative-mouse-mode", kind: "Thuật ngữ" },
-      { label: "Mouse delta", href: "/glossary#mouse-delta", kind: "Thuật ngữ" },
     ],
-    "p14-l07": [
-      { label: "Room bounds", href: "/glossary#room-bounds", kind: "Thuật ngữ" },
-      { label: "Round-trip test", href: "/glossary#round-trip-test", kind: "Thuật ngữ" },
+    "p14-l08": [
       {
-        label: "CTest command-line reference",
-        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
-        kind: "CMake",
+        label: "room-bounds",
+        href: "/glossary#room-bounds",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p14-l09": [
+      {
+        label: "round-trip-test",
+        href: "/glossary#round-trip-test",
+        kind: "Thuật ngữ",
       },
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;

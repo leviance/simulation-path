@@ -1,0 +1,234 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Di chuyển, kéo chuột và zoom
+
+## Vấn đề cần giải quyết
+
+Một cube chỉ xoay được chưa phải sản phẩm hoàn chỉnh. Ta cần đi được theo ba trục world, đổi khoảng cách quan sát, phóng to/thu nhỏ và kéo chuột mà không bị “kẹt” khi thả ngoài cửa sổ.
+
+Bài này có ba loại input với ba cách xử lý khác nhau: state cho di chuyển liên tục, event cho toggle/zoom, và một phiên drag có chủ sở hữu cho chuột.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tốc độ tịnh tiến là 2 world unit/s. Từ các phím đang giữ, tạo direction rồi chuẩn hóa:
+
+$$
+\Delta p=2\,\Delta t\,\frac{d}{\lVert d\rVert},\quad d\ne0.
+$$
+
+A/D là −X/+X, Q/E là −Y/+Y, W/S là +Z/−Z. Camera nhìn +Z nên W đẩy **model** ra xa. Đây là điều khiển vật theo world, không phải camera FPS của P14.
+
+Kéo ngang đổi yaw, kéo dọc đổi pitch:
+
+$$
+\Delta yaw=s\Delta x,\qquad \Delta pitch=-s\Delta y.
+$$
+
+$s$ đo bằng radian/logical pixel. Không dùng physical pixel nhân DPR lần nữa.
+
+<InteractiveLab demo="wireframe-cube" mode="cube-input" />
+
+Click vào Canvas rồi giữ D trong một giây, sau đó giữ D+E. Cả hai phải đi quãng đường như nhau, nhưng hướng khác nhau. Tab ra ngoài: vật dừng, không tiếp tục trôi vì thiếu key-up.
+
+## Viết code từng bước
+
+### Bước 1 — Dịch chuyển bằng keyboard state và dt
+
+`SDL_PollEvent` phải chạy trước khi đọc state. API trả mảng bool, index bằng SDL scancode, không phải keycode. Xem [SDL_GetKeyboardState](https://wiki.libsdl.org/SDL3/SDL_GetKeyboardState).
+
+Tạo `previousTicks = SDL_GetTicks()` một lần trước vòng lặp. Sau khi xử lý hết event trong mỗi frame, đổi khoảng ticks sang giây:
+
+```cpp title="src/main.cpp — đoạn ghép"
+const auto now = SDL_GetTicks();
+const double deltaTime = std::min(0.1, static_cast<double>(now - previousTicks) / 1000.0);
+previousTicks = now;
+```
+
+Tiếp đó đọc mảng phím và tạo `direction{}`. Từng nhánh `if` chỉ thay một thành phần, nên có thể giữ nhiều phím cùng lúc; phím đối nghịch tự triệt tiêu:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if ((SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0) {
+    const bool* keys = SDL_GetKeyboardState(nullptr);
+    lab::Vec3 direction{};
+    if (keys[SDL_SCANCODE_A]) {
+        direction.x -= 1.0;
+    }
+    if (keys[SDL_SCANCODE_D]) {
+        direction.x += 1.0;
+    }
+    if (keys[SDL_SCANCODE_Q]) {
+        direction.y -= 1.0;
+    }
+    if (keys[SDL_SCANCODE_E]) {
+        direction.y += 1.0;
+    }
+    if (keys[SDL_SCANCODE_S]) {
+        direction.z -= 1.0;
+    }
+    if (keys[SDL_SCANCODE_W]) {
+        direction.z += 1.0;
+    }
+    if (lab::magnitude(direction) > 0.0) {
+        cancelDrag();
+        lab::moveModel(scene, direction, deltaTime);
+        dirty = true;
+    }
+}
+```
+
+Phần trên gọi `moveModel`; hãy thêm hàm đó vào `scene.hpp`:
+
+```cpp title="include/scene.hpp — moveModel"
+inline void moveModel(Scene& scene, Vec3 direction, double deltaTime) {
+    if (!finite(direction) || !std::isfinite(deltaTime) || deltaTime <= 0.0) {
+        return;
+    }
+    const double length = magnitude(direction);
+    if (length <= 0.0) {
+        return;
+    }
+    // W/S: +Z/-Z, A/D: -X/+X, Q/E: -Y/+Y. Chuẩn hóa để chéo không nhanh hơn.
+    const double distance = 2.0 * std::min(deltaTime, 0.1);
+    const Vec3 delta = scale(direction, distance / length);
+    scene.position.x = std::clamp(scene.position.x + delta.x, -6.0, 6.0);
+    scene.position.y = std::clamp(scene.position.y + delta.y, -6.0, 6.0);
+    scene.position.z = std::clamp(scene.position.z + delta.z, 0.1, 15.0);
+    scene.paused = true;
+}
+```
+
+Hàm không xử lý direction=0 bằng phép chia. Chuẩn hóa ngăn D+E nhanh gấp $\sqrt2$. Giới hạn dt=0.1 chỉ bảo vệ frame bị khựng; không có nghĩa ta “bù” đầy đủ thời gian sau khi máy treo. Position được giới hạn để thao tác vẫn có thể reset và quan sát được.
+
+Trong native, phép đọc state chỉ chạy khi window có input focus. Canvas lưu tập phím đang giữ, cập nhật bằng rAF và xóa tập đó khi blur/hidden/reset/resize. Không dùng key-repeat để làm vật di chuyển.
+
+### Bước 2 — Giữ drag theo tọa độ logic
+
+Các mouse event được đổi bằng [SDL_ConvertEventToRenderCoordinates](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates) trước khi lấy tọa độ. Letterbox hoặc HiDPI không được làm sensitivity đổi theo kích thước cửa sổ.
+
+Đây là hàm đổi delta thành góc:
+
+```cpp title="include/scene.hpp — applyMouseDrag"
+inline EulerAngles applyMouseDrag(EulerAngles angles, double deltaX, double deltaY, double sensitivity) {
+    if (!finiteAngles(angles) || !std::isfinite(deltaX) || !std::isfinite(deltaY) || !std::isfinite(sensitivity) || sensitivity < 0.002 || sensitivity > 0.02) {
+        return angles;
+    }
+    angles.yaw = wrapAngle(angles.yaw + deltaX * sensitivity);
+    angles.pitch = wrapAngle(angles.pitch - deltaY * sensitivity);
+    return angles;
+}
+```
+
+Khi nhấn trái trong viewport, lưu `previousMouse` và `owner`, rồi capture. **Nhấn chỉ chọn điểm bắt đầu, không đổi góc.** Đoạn bắt đầu phiên trong `main.cpp` phải lưu owner trước khi nhận các mẫu kéo:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !dragging) {
+    const auto viewport = lab::viewportFor();
+    if (event.button.x >= viewport.x && event.button.x <= viewport.x + viewport.width && event.button.y >= viewport.y && event.button.y <= viewport.y + viewport.height) {
+        owner = event.button.which;
+        previousMouse = {event.button.x, event.button.y};
+        dragging = true;
+        scene.paused = true;
+        if (!SDL_CaptureMouse(true)) {
+            cancelDrag();
+        }
+    }
+}
+```
+
+Trước nhánh trên, các mouse event đã được đổi sang render coordinates:
+
+```cpp title="src/main.cpp — đoạn ghép"
+const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    failed = true;
+    running = false;
+    break;
+}
+```
+
+Khi di chuyển đúng mouse ID, tính chênh lệch với mẫu trước rồi cập nhật:
+
+```cpp title="src/main.cpp — đoạn ghép"
+const auto updateDrag = [&](lab::Vec2 mouse) {
+    scene.angles = lab::applyMouseDrag(scene.angles, mouse.x - previousMouse.x, mouse.y - previousMouse.y, scene.sensitivity);
+    previousMouse = mouse;
+    dirty = true;
+};
+```
+
+Khi thả đúng owner, nhận mẫu cuối rồi nhả capture:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && dragging && event.button.which == owner) {
+    updateDrag({event.button.x, event.button.y});
+    cancelDrag();
+}
+```
+
+Những đường khác cũng phải kết thúc phiên: mất nút trái, blur/hidden, resize, reset/preset, đổi điều khiển hoặc capture thất bại. Canvas còn kiểm tra pointer ID để một ngón tay khác không “chiếm” phiên đang kéo. Pitch được wrap, không khóa như camera FPS.
+
+### Bước 3 — Zoom bằng tỉ lệ, không sửa tọa độ model
+
+Mỗi nấc zoom nhân một hệ số thay vì cộng kích thước tùy tiện:
+
+```cpp title="include/scene.hpp — zoomScene"
+inline void zoomScene(Scene& scene, double steps) {
+    if (!std::isfinite(steps)) {
+        return;
+    }
+    scene.zoom = std::clamp(scene.zoom * std::exp(std::clamp(steps, -20.0, 20.0) * 0.12), 0.5, 2.0);
+    scene.paused = true;
+}
+```
+
+Wheel lấy số thực `event.wheel.y`, xử lý hướng `SDL_MOUSEWHEEL_FLIPPED`; không làm tròn thành tick nguyên vì touchpad có bước nhỏ. Xem [SDL_MouseWheelEvent](https://wiki.libsdl.org/SDL3/SDL_MouseWheelEvent).
+
+Perspective thay FOV để focal scale nhân zoom:
+
+```cpp title="include/scene.hpp — zoomedLens"
+inline PerspectiveLens zoomedLens(const Scene& scene) {
+    PerspectiveLens lens = scene.lens;
+    lens.verticalFovRadians = 2.0 * std::atan(std::tan(scene.lens.verticalFovRadians * 0.5) / scene.zoom);
+    return lens;
+}
+```
+
+Ortho dùng $H_o=6\tan(FOV_y/2)/zoom$. Cả hai có giới hạn 0.5×–2× và giữ mốc so sánh Z=6. Dùng +/− thay wheel nếu cần điều khiển bằng keyboard.
+
+### Bước 4 — Phân biệt zoom và đổi khoảng cách
+
+W/S sửa position.z nên thay khoảng cách giữa model và camera. Wheel sửa zoom nên tác động cả grid lẫn cube, không đổi world vertex.
+
+Trong orthographic, W/S không làm cube lớn/nhỏ; wheel vẫn làm được. Trong perspective cả hai có thể đổi kích thước cube, nhưng quan hệ cube với cảnh khác nhau. Hai hành vi phải được dạy riêng, không gọi chung là “đưa camera lại gần”.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 5"
+cmake --build build --config Debug --target project_13_checkpoint_5
+./build/Debug/project_13_checkpoint_5.exe
+```
+
+WASD/QE dịch chuyển; kéo trái xoay; mũi tên và PageUp/Down vẫn xoay theo nấc; wheel hoặc +/− zoom; P đổi phép chiếu; R reset. [ và ] chỉnh sensitivity native. Reset phải đưa position, angles, projection và zoom về mặc định, đồng thời hủy drag.
+
+Canvas chỉ chặn wheel trong vùng vẽ, không chặn cuộn toàn trang; Ctrl/Cmd+wheel vẫn dành cho browser zoom.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ chuẩn hóa direction. Giữ D+E sẽ nhanh hơn D dù cùng thời gian; không phải lỗi dt.
+2. Dùng tọa độ physical pixel để tính delta nhưng giữ sensitivity theo logical pixel. Kéo sau resize/HiDPI sẽ nhạy khác nhau.
+3. Bỏ nhánh focus-lost. Giữ phím hoặc kéo rồi chuyển cửa sổ: thao tác có thể tiếp tục dù người dùng đã rời ứng dụng.
+4. Trong ortho, dùng wheel và quan sát world vertex: nếu Z thay đổi, bạn đã trộn zoom với dịch chuyển.
+
+## Tự kiểm tra kết quả
+
+- 60 bước 1/60s và 100 bước 0.01s đều dịch 2 unit trên một trục.
+- Đi chéo không tăng tốc; phím đối nghịch triệt tiêu.
+- Nhấn chuột không làm nhảy góc, thả ngoài canvas kết thúc drag.
+- Resize/blur/reset nhả capture và dừng movement.
+- Wheel có giới hạn và không đổi position; P không làm nhảy geometry.
+
+## Bài tập mở rộng
+
+Thêm nút “Về giữa nhưng giữ góc”: chỉ đặt position=(0,0,6), giữ angles/projection/zoom. Giải thích vì sao nút này khác Reset toàn bộ.
+
+Bài tiếp theo: [Làm rõ chiều sâu, giữ bản demo sạch](/projects/wireframe-cube/06-depth-cue-va-che-do-demo).

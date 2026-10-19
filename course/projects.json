@@ -87,14 +87,14 @@
     "id": "13",
     "slug": "wireframe-cube",
     "sourceDirectory": "project-13-wireframe-cube",
-    "checkpointCount": 5,
+    "checkpointCount": 7,
     "demoId": "wireframe-cube"
   },
   {
     "id": "14",
     "slug": "fps-camera-room",
     "sourceDirectory": "project-14-fps-camera-room",
-    "checkpointCount": 7,
+    "checkpointCount": 9,
     "demoId": "fps-camera"
   },
   {

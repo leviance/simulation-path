@@ -1,0 +1,137 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ camera trong phòng, hoàn thiện bản demo
+
+## Vấn đề cần giải quyết
+
+Camera đã đi/nhìn/bay được nhưng vẫn có thể rời phòng. Ta cần chặn biên ngoài, dọn thao tác khi pause/reset và có một chế độ xem sạch để cảnh chính dễ quan sát.
+
+Không thêm collision engine ở đây. Hai hộp là mốc quan sát; người dùng vẫn có thể đi xuyên chúng. Chỉ sáu biên của căn phòng được giới hạn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sau khi movement tạo candidate position, clamp:
+
+$$
+X\in[minX+m,maxX-m],\quad Z\in[minZ+m,maxZ-m].
+$$
+
+Fly thêm $Y\in[floorY+m,ceilingY-m]$. Walk đặt Y=1.6. Với m=0.35, X lớn nhất là 5.65, Z nhỏ nhất 0.35; Fly thấp nhất Y=0.35.
+
+Đây là AABB clamp của một điểm camera có margin. Nó không tính thân người, va chạm hộp, trượt theo mặt nghiêng, trọng lực hay time of impact.
+
+<InteractiveLab demo="fps-camera" mode="camera-bounds" />
+
+Chọn preset “Sát tường”, giữ W để tiến theo +X. Camera dừng ở X=5.65. Chuyển Fly và dùng Q/E tới sàn/trần. Tăng margin lên 1: giới hạn phải được áp lại ngay dù bạn không đang di chuyển.
+
+## Viết code từng bước
+
+### Bước 1 — Clamp sau khi đã có candidate
+
+Trong `scene.hpp`:
+
+```cpp title="include/scene.hpp — clampCameraToRoom"
+inline FpsCamera clampCameraToRoom(FpsCamera camera, const RoomBounds& b, bool fly, double margin) {
+    if (!finiteCamera(camera) || !std::isfinite(margin)) {
+        return camera;
+    }
+    // Bounds là room mặc định; margin bị chặn trước khi dùng std::clamp.
+    const double safeMargin = std::clamp(margin, 0.0, 1.0);
+    camera.position.x = std::clamp(camera.position.x, b.minX + safeMargin, b.maxX - safeMargin);
+    camera.position.z = std::clamp(camera.position.z, b.minZ + safeMargin, b.maxZ - safeMargin);
+    if (fly) {
+        camera.position.y = std::clamp(camera.position.y, b.floorY + safeMargin, b.ceilingY - safeMargin);
+    } else {
+        camera.position.y = 1.6;
+    }
+    return camera;
+}
+```
+
+Bounds của project cố định, margin được giới hạn 0–1 nên min/max hợp lệ. Không truyền một bounds tùy ý nhỏ hơn hai lần margin vào `std::clamp`.
+
+Chúng ta giữ camera orientation khi chạm tường. Chỉ position bị chặn; không quay người nhìn ra hướng khác để “đẩy” camera vào trong.
+
+### Bước 2 — Giữ một đường update chung
+
+```cpp title="include/scene.hpp — advanceScene"
+inline void advanceScene(Scene& scene, MoveInput input, double deltaTime) {
+    if (scene.paused) {
+        return;
+    }
+    MovementMode mode = MovementMode::Walk;
+    if (scene.fly) {
+        mode = MovementMode::Fly;
+    }
+    scene.camera = advanceCamera(scene.camera, input, mode, scene.speed, deltaTime);
+    scene.camera = clampCameraToRoom(scene.camera, scene.bounds, scene.fly, scene.margin);
+}
+```
+
+Camera paused không bước. Khi hoạt động, movement chạy trước, clamp sau. Clamp vẫn được áp khi input bằng zero, để thay margin không chờ người dùng giữ phím mới có hiệu lực.
+
+### Bước 3 — Step và demo phải dùng cùng movement
+
+N khi paused tạm cho phép một bước W=0.1s, rồi trả trạng thái pause:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (!event.key.repeat && event.key.key == SDLK_N && scene.paused) {
+    scene.paused = false;
+    lab::advanceScene(scene, {0.0, 1.0, 0.0}, 0.1);
+    scene.paused = true;
+}
+```
+
+T bật “đi thử”: chỉ cấp input advance=1 vào cùng `advanceScene`, không đặt sẵn một quỹ đạo camera đẹp mắt bỏ qua bounds. Đến tường thì camera dừng. Input tay sẽ tắt demo.
+
+Canvas reduced-motion tắt auto, nhưng vẫn cho thao tác trực tiếp và step. “FPS thí nghiệm” chỉ dành cho bài đo quãng đường; rAF đi tay dùng thời gian thực.
+
+### Bước 4 — Tách overlay, không tách hình học
+
+Renderer luôn vẽ room rồi mới quyết định có crosshair hay không:
+
+```cpp title="include/view.hpp — renderScene"
+inline RenderStats renderScene(Framebuffer& image, const Scene& scene, const RoomGeometry& room) {
+    image.clear(kBackground);
+    RenderStats stats;
+    stats = drawRoom(image, room, scene);
+    // Crosshair là overlay. Cảnh phòng không phụ thuộc cờ debug.
+    if (scene.debug) {
+        drawLine(image, 542, 400, 558, 400, kWhite);
+        drawLine(image, 550, 392, 550, 408, kWhite);
+    }
+    return stats;
+}
+```
+
+`presentFramebuffer` cũng bỏ HUD khi debug=false. F vì thế giữ phòng, sàn, trần và hai hộp màu; chỉ bỏ thông tin phụ. Không có một ảnh scene khác được vẽ giả dành riêng cho Showcase.
+
+## Ghép các phần lại
+
+```bash title="Terminal — chạy checkpoint 8"
+cmake --build build --config Debug --target project_14_checkpoint_8
+./build/Debug/project_14_checkpoint_8.exe
+```
+
+Space pause/tiếp tục; N bước W 0.1s khi paused; T đi thử; F debug/showcase. R trả pose, mode, speed, sensitivity và trạng thái demo về mặc định, đồng thời nhả input. Focus-lost pause; trở lại thì Space hoặc click trong cảnh để tiếp tục, không tự capture lại.
+
+## Thử làm sai để hiểu đúng
+
+1. Clamp trước movement nhưng không clamp candidate. Frame kế tiếp vẫn vượt tường một khoảng speed×dt.
+2. Dùng eye height=1.6 cho cả Fly. Q/E không bao giờ đổi độ cao dù UI ghi Fly.
+3. Chỉ clamp khi có input. Đang sát tường rồi tăng margin sẽ để camera ngoài vùng mới.
+4. Đặt drawRoom vào nhánh debug. F làm biến mất sản phẩm chính, không còn là chế độ trình diễn sạch.
+
+## Tự kiểm tra kết quả
+
+- Camera không vượt X/Z có margin; Fly còn bị chặn cả sàn và trần.
+- Walk luôn Y=1.6; hộp mốc chưa có collision, không quảng cáo ngược lại.
+- Pause dừng movement/demo và nhả mouse; step chỉ đi đúng 0.1s.
+- F không làm mất phòng; R phục hồi cả state lẫn input lifecycle.
+- Margin change áp ngay trong Canvas; native dùng margin cố định 0.35.
+
+## Bài tập mở rộng
+
+Cho phép camera trượt dọc tường: giữ W+D vào một góc và quan sát clamp từng thành phần. Giải thích vì sao quãng đường thực đi được khi chạm biên có thể nhỏ hơn speed×dt, không phải lỗi frame-rate independence.
+
+Bài tiếp theo: [Kiểm chứng camera và chạy bản hoàn chỉnh](/projects/fps-camera-room/09-hoan-thien-va-kiem-chung).
