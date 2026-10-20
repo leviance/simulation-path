@@ -108,9 +108,25 @@ ctest --test-dir build -C Release --output-on-failure --timeout 30
 
 Cần C++20, CMake≥3.24; SDL khóa 3.4.8 bằng FetchContent và link `SDL3::SDL3`. Lần configure đầu cần mạng. Với Ninja/Makefiles một cấu hình, dùng CMAKE_BUILD_TYPE và tìm executable trực tiếp trong build/.
 
+CTest mặc định include `final/include`, tức là kiểm bản hoàn chỉnh đi kèm ZIP. Nếu bạn đã tự viết cả project trong `starter`, hãy đổi dòng `target_include_directories(project_14_tests PRIVATE final/include)` thành `target_include_directories(project_14_tests PRIVATE starter/include)` trong `CMakeLists.txt` của bản ZIP đang học, configure lại rồi build target `project_14_tests`. Nếu không đổi đường dẫn này, CTest qua chưa chứng minh phần bạn vừa sửa đã đúng.
+
 Tests dùng `check` trả EXIT_FAILURE, không dùng assert có thể bị tắt bởi NDEBUG. Native `--smoke` chạy 12 frame ẩn để kiểm resource/resize/upload/present; nó không chứng minh relative mouse và input trên desktop hoạt động đúng.
 
 ## Ghép các phần lại
+
+Bắt đầu nghiệm thu từ preset cửa vào, tốc độ 3.5. CTest kiểm công thức, còn các thao tác sau kiểm ứng dụng SDL thực sự:
+
+| Thao tác | Kết quả cần quan sát |
+| --- | --- |
+| Giữ W khoảng 5 giây, rồi dùng J/L quay lại | Đi qua các mốc từ đầu phòng về cuối phòng; hộp không quay quanh camera như khi orbit |
+| Nhìn lên, giữ W ở Walk; đổi M rồi thử lại ở Fly | Walk giữ Y=1.6; Fly thay đổi cả Y và Z; E chỉ tăng world Y |
+| Click vào cảnh rồi rê qua mép cửa sổ | Native vẫn nhận chuyển động; nhấn Esc phải trả cursor và pause |
+| Pause, thả hết phím, click vào cảnh nhưng chưa rê chuột | HUD đổi sang ACTIVE và relative look ngay, không giữ chữ PAUSED cũ |
+| Giữ W rồi R, Alt-Tab hoặc resize | Nhả look, dừng phiên input cũ; thả phím rồi chủ động tiếp tục, không tự khóa cursor khi quay lại |
+| Space, N, rồi F | Mỗi lần N chỉ bước W 0.1s khi pause; F bỏ chữ/crosshair nhưng giữ nguyên phòng |
+| Đổi tỉ lệ cửa sổ và màn hình có scaling khác nhau | Không kéo méo phòng, không đổi sensitivity theo framebuffer; click ở dải letterbox không bắt chuột |
+
+Nếu một bước chưa đạt, đừng coi các test toán đã qua là bằng chứng thay thế. Đặc biệt, `--smoke` không có thao tác chuột thật và không xác minh hành vi relative mode của hệ điều hành.
 
 Bộ source độc lập chia theo trách nhiệm:
 

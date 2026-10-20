@@ -335,74 +335,67 @@ test("Project 14 FPS camera has Walk/Fly, bounds, drag and clean scene", async (
   expect(errors).toEqual([]);
 });
 
-test("Project 15 Pipeline Lab steps stages, classifies presets and preserves MVP", async ({
+test("Project 15 rebuilt inspector exposes all stages, lens controls and safe capture", async ({
   page,
 }) => {
   const errors = captureBrowserErrors(page);
   await page.goto("/projects/3d-pipeline-inspector/07-ghep-mvp-va-validation");
-
-  const canvas = page.locator('canvas[aria-label^="Pipeline 3D"]');
-  const controls = page.locator(".lab-controls");
-  const selectedStage = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "stage đang chọn" })
-    .locator("dd");
-  const stageValue = page.locator(".lab-readout div").filter({ hasText: "giá trị" }).locator("dd");
-  const status = page.locator(".lab-readout div").filter({ hasText: "trạng thái" }).locator("dd");
-  const agreement = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "MVP agreement error" })
-    .locator("dd");
-  const captureState = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "pointer capture" })
-    .locator("dd");
-
+  const canvas = page.locator('canvas[aria-label^="Máy soi pipeline 3D"]'),
+    controls = page.locator(".lab-controls");
+  const readout = (label: string) =>
+    page.locator(".lab-readout div").filter({ hasText: label }).locator("dd");
   await expect(canvas).toBeVisible();
-  await expect(selectedStage).toHaveText("SCREEN");
-  expect(Number(await agreement.textContent())).toBeLessThan(1e-9);
-
-  await controls.getByLabel("Stage").selectOption("1");
-  await expect(selectedStage).toHaveText("WORLD");
-  const beforeYaw = await stageValue.textContent();
-  await controls.getByLabel("Model yaw").fill("75");
-  await expect(stageValue).not.toHaveText(beforeYaw ?? "");
-
-  await controls.getByLabel("Tình huống").selectOption("near");
-  await expect(status).toContainText("before-near");
-  await controls.getByLabel("Tình huống").selectOption("behind");
-  await expect(status).toContainText("behind");
-  await controls.getByLabel("Tình huống").selectOption("far");
-  await expect(status).toContainText("beyond-far");
-  await controls.getByLabel("Tình huống").selectOption("outside");
-  await expect(status).toContainText("outside");
-  await controls.getByLabel("Tình huống").selectOption("visible");
-  await expect(status).toContainText("visible");
-
+  await controls.getByLabel("Pipeline preset").selectOption("1");
+  await expect(readout("WORLD")).toHaveText("(1.00000, 1.00000, 4.00000, 1.00000)");
+  await expect(readout("SCREEN")).toHaveText("(550.00000, 210.00000)");
+  await expect(readout("MVP agreement error")).not.toContainText("invalid");
+  const world = await readout("WORLD").textContent();
+  await controls.getByLabel("Far plane", { exact: true }).fill("8");
+  await expect(readout("WORLD")).toHaveText(world!);
+  await controls.getByLabel("Pipeline preset").selectOption("3");
+  await expect(readout("NDC")).toContainText("—");
+  await expect(readout("SCREEN")).toContainText("—");
+  await controls.getByLabel("Pipeline preset").selectOption("6");
+  await expect(readout("NDC")).toContainText("—");
+  await controls.getByLabel("Pipeline preset").selectOption("0");
+  await expect(controls.getByLabel("Thao tác kéo", { exact: true })).toHaveValue("model");
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   if (box) {
-    await canvas.hover({
-      position: {
-        x: Math.round(box.width * 0.52),
-        y: Math.round(box.height * 0.48),
-      },
-    });
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await expect(captureState).toHaveText("đang kéo");
-    await page.mouse.move(box.x + box.width * 0.64, box.y + box.height * 0.56);
+    await expect(readout("pointer capture")).toHaveText("đang kéo");
+    await canvas.press("r");
+    await expect(readout("pointer capture")).toHaveText("đã nhả");
     await page.mouse.up();
+    const cameraYaw = await controls.getByLabel("Camera yaw", { exact: true }).inputValue();
+    const cameraPitch = await controls.getByLabel("Camera pitch", { exact: true }).inputValue();
+    const modelYaw = await controls.getByLabel("Model yaw", { exact: true }).inputValue();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 20, box.y + box.height / 2 + 20);
+    await page.mouse.up();
+    await expect(controls.getByLabel("Model yaw", { exact: true })).not.toHaveValue(modelYaw);
+    await expect(controls.getByLabel("Camera yaw", { exact: true })).toHaveValue(cameraYaw);
+    await expect(controls.getByLabel("Camera pitch", { exact: true })).toHaveValue(cameraPitch);
+    await controls.getByLabel("Thao tác kéo", { exact: true }).selectOption("view");
+    const rotatedModelYaw = await controls.getByLabel("Model yaw", { exact: true }).inputValue();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    const fixedWorld = await readout("WORLD").textContent();
+    await page.mouse.move(box.x + box.width / 2 + 20, box.y + box.height / 2 + 20);
+    await page.mouse.up();
+    await expect(readout("WORLD")).toHaveText(fixedWorld!);
+    await expect(controls.getByLabel("Model yaw", { exact: true })).toHaveValue(rotatedModelYaw);
+    await expect(controls.getByLabel("Camera yaw", { exact: true })).not.toHaveValue(cameraYaw);
+    await expect(controls.getByLabel("Camera pitch", { exact: true })).not.toHaveValue(cameraPitch);
   }
-  await expect(captureState).toHaveText("đã nhả");
-
-  await page.getByRole("button", { name: "Tiếp tục" }).click();
-  await expect(page.getByRole("button", { name: "Tạm dừng" })).toBeVisible();
-  await page.getByRole("button", { name: "Tạm dừng" }).click();
-  await page.getByRole("button", { name: "Tiến một bước" }).click();
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(selectedStage).toHaveText("SCREEN");
-  await expect(status).toContainText("visible");
-  expect(Number(await agreement.textContent())).toBeLessThan(1e-9);
+  await controls.getByRole("button", { name: "Tiến một bước", exact: true }).click();
+  await controls.getByRole("button", { name: "Ẩn debug", exact: true }).click();
+  await expect(page.locator(".lab-readout")).toHaveCount(0);
+  await expect(canvas).toBeVisible();
+  await controls.getByRole("button", { name: "Hiện debug", exact: true }).click();
+  await expect(readout("WORLD")).toBeVisible();
   expect(errors).toEqual([]);
 });
 

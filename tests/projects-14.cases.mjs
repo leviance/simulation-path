@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { compile } from "@mdx-js/mdx";
 import { courseMdxOptions } from "../lib/mdx-options.mjs";
-import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import { codeTokens, isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
 import { workspace, render } from "./site-support.mjs";
 
 const root = path.join(workspace, "examples/project-14-fps-camera-room");
@@ -41,6 +41,15 @@ test("Project 14 rebuild has nine teachable checkpoints with literal four-space 
         "utf8",
       );
       assert.ok(isContiguousCodeExcerpt(snippet, source), file + ": " + title);
+      // Một excerpt khớp source vẫn có thể bị cắt giữa khai báo struct/hàm.
+      const stack = [];
+      const pairs = { "}": "{", ")": "(", "]": "[" };
+      for (const token of codeTokens(snippet)) {
+        if (["{", "(", "["].includes(token)) stack.push(token);
+        else if (Object.hasOwn(pairs, token))
+          assert.equal(stack.pop(), pairs[token], file + ": incomplete block " + title);
+      }
+      assert.equal(stack.length, 0, file + ": unfinished block " + title);
       const actual = source.split(/\r?\n/),
         lines = snippet.split(/\r?\n/);
       const start = actual.findIndex((_, offset) =>
@@ -180,18 +189,35 @@ test("Project 14 rebuild implements the required native FPS product progressivel
   const first = await lesson(lessons[0]);
   assert.match(first, /const lab::RoomGeometry worldRoom = room/);
   assert.match(first, /inline RenderStats renderScene/);
+  assert.match(first, /inline void appendBox/);
+  assert.match(first, /inline bool presentFramebuffer/);
+  assert.match(first, /char value\[256\]/);
   assert.match(await lesson(lessons[1]), /inline FpsCamera activeCamera/);
   assert.match(await lesson(lessons[2]), /return scene.camera;/);
   assert.match(await lesson(lessons[3]), /struct CameraBasis/);
+  assert.match(await lesson(lessons[3]), /const CameraBasis basis = cameraBasis\(camera\)/);
   const movement = await lesson(lessons[4]);
   for (const symbol of [
     "struct MoveInput",
     "enum class MovementMode",
     "bool inputArmed = true",
+    "lab::MoveInput movement{}",
     "inline void advanceScene",
     "lab::advanceScene(scene, movement, deltaTime)",
   ])
     assert.ok(movement.includes(symbol), symbol);
+  assert.match(movement, /const char\* state = "ACTIVE"/);
+  assert.match(await lesson(lessons[5]), /const char\* mode = "WALK:/);
+  assert.match(await lesson(lessons[6]), /const char\* look = "mouse released:/);
+  assert.match(
+    await lesson(lessons[8]),
+    /target_include_directories\(project_14_tests PRIVATE starter\/include\)/,
+  );
+  assert.match(main, /setMouseLook\(window, true, mouseLookActive\);\s*dirty = true;/);
+  assert.match(
+    await source("final/include/presentation.hpp"),
+    /SDL_SetRenderDrawColor\(renderer, 17, 24, 43, 255\) \|\| !SDL_RenderClear\(renderer\)/,
+  );
   assert.match(
     main,
     /\/\/ Nhả relative mode[^\n]*\n\s*stopInput\(\);\s*SDL_DestroyTexture\(texture\);\s*SDL_DestroyRenderer\(renderer\);\s*SDL_DestroyWindow\(window\);\s*SDL_Quit\(\);/,

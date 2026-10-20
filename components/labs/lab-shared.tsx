@@ -19,7 +19,10 @@ export function useReducedMotion() {
   );
 }
 
-export function useCanvasSize(canvasRef: RefObject<HTMLCanvasElement | null>): CanvasSize {
+export function useCanvasSize(
+  canvasRef: RefObject<HTMLCanvasElement | null>,
+  onResize?: () => void,
+): CanvasSize {
   const [size, setSize] = useState<CanvasSize>({ width: 760, height: 340, dpr: 1 });
 
   useEffect(() => {
@@ -27,6 +30,7 @@ export function useCanvasSize(canvasRef: RefObject<HTMLCanvasElement | null>): C
     if (!canvas) return;
 
     let pendingFrame: number | null = null;
+    let previousSize: CanvasSize | null = null;
 
     const sync = () => {
       pendingFrame = null;
@@ -42,6 +46,16 @@ export function useCanvasSize(canvasRef: RefObject<HTMLCanvasElement | null>): C
       // when its CSS size is not yet available.
       if (canvas.width !== bitmapWidth) canvas.width = bitmapWidth;
       if (canvas.height !== bitmapHeight) canvas.height = bitmapHeight;
+
+      if (
+        previousSize === null ||
+        previousSize.width !== width ||
+        previousSize.height !== height ||
+        previousSize.dpr !== dpr
+      ) {
+        previousSize = { width, height, dpr };
+        onResize?.();
+      }
 
       setSize((current) =>
         current.width === width && current.height === height && current.dpr === dpr
@@ -67,7 +81,7 @@ export function useCanvasSize(canvasRef: RefObject<HTMLCanvasElement | null>): C
       window.removeEventListener("resize", scheduleSync);
       if (pendingFrame !== null) cancelAnimationFrame(pendingFrame);
     };
-  }, [canvasRef]);
+  }, [canvasRef, onResize]);
 
   return size;
 }

@@ -1,49 +1,47 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
     label: "3D PIPELINE LAB",
-    title: "Một vertex thay đổi thế nào trên đường từ model tới pixel?",
+    title: "Cùng một vertex, sáu hệ tọa độ",
     description:
-      "Dừng ở từng stage, thay model/camera/lens và đọc riêng local, world, camera, clip, NDC cùng screen value bằng đúng quy ước của source C++.",
+      "Chọn điểm trên mô hình và thay đổi transform/lens; đọc giá trị trung gian bên cạnh cảnh 3D.",
   },
   modes: {
     "pipeline-local": {
-      title: "Máy soi cần giữ lại những trạng thái nào?",
+      title: "Dựng cảnh 3D và bảng theo dõi vertex",
       description:
-        "Chọn một local vertex, đi dọc pipeline rail và phân biệt dữ liệu đầu vào với marker cuối trên viewport.",
+        "Từ bộ khung CPU của P13/P14, chọn vertex và hiện Local thật; các stage chưa viết để trống có giải thích.",
     },
     "pipeline-homogeneous": {
-      title: "Vì sao point dùng w=1 còn direction dùng w=0?",
+      title: "Thêm w để tịnh tiến bằng ma trận",
       description:
-        "So sánh cùng một Vec3 sau translation matrix để nhìn thấy homogeneous w quyết định phép tịnh tiến có tác dụng hay không.",
+        "Tự viết Mat4 và phép nhân; dùng cùng xyz để kiểm sự khác nhau giữa point w=1 và direction w=0.",
     },
     "pipeline-model": {
-      title: "Model matrix đổi local space thành world space ra sao?",
+      title: "Đưa mô hình từ local ra world",
       description:
-        "Thay scale, yaw và position; local vertex đứng yên trong khi world vertex phản ánh đúng thứ tự scale → rotate → translate.",
+        "Scale, xoay rồi tịnh tiến bằng M=T×Ry×S; nối cả bảng số lẫn renderer sang model matrix.",
     },
     "pipeline-view": {
-      title: "Camera di chuyển nhưng world vertex có bị sửa không?",
+      title: "Viết lại camera bằng view matrix",
       description:
-        "Điều chỉnh camera position/yaw/pitch rồi theo dõi view matrix đưa world point sang camera space bằng pose nghịch đảo.",
+        "Đổi công thức camera của P14 thành V, giữ world đứng yên và kiểm bằng inverse yaw/pitch tường minh.",
     },
     "pipeline-projection": {
-      title: "Projection matrix đặt gì vào clip.w?",
+      title: "Giữ mẫu số trong clip.w",
       description:
-        "Thay FOV, near và far rồi quan sát clip vector trước phép chia; clip.w luôn mang camera-space depth.",
+        "Suy từng hàng của perspective matrix từ FOV, aspect và hai điều kiện near/far; matrix chưa chia cho w.",
     },
     "pipeline-viewport": {
-      title: "Khi nào một clip point được phép trở thành pixel?",
+      title: "Chia cho w và tìm pixel trên màn hình",
       description:
-        "Thử visible/near/behind/far/outside, kiểm tra w và depth rồi mới chia sang NDC và ánh xạ vào viewport.",
+        "Giữ stage không tồn tại dưới dạng optional, phân loại clip và thay đường tham chiếu bằng renderer dùng P.",
     },
     "pipeline-validation": {
-      title: "Ba matrix riêng và một MVP matrix có thật sự cho cùng kết quả?",
+      title: "Ghép MVP và kiểm chứng bản hoàn chỉnh",
       description:
-        "Bước qua toàn pipeline, đổi preset và theo dõi sai số giữa hai đường tính cùng các invariant của clip/NDC.",
+        "Theo ví dụ tính tay qua đủ sáu stage, thêm pause/step/clean và chạy source độc lập cùng CTest.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

@@ -43,6 +43,9 @@ Trong `lab.hpp`, khai báo kiểu kết quả trước hàm tính:
 ```cpp title="include/lab.hpp — đoạn ghép"
 struct CameraBasis {
     Vec3 forward{};
+    Vec3 right{};
+    Vec3 up{};
+};
 ```
 
 Mỗi field là một vector world, không phải ba tọa độ screen. Sau đó thêm hàm tính:
@@ -106,7 +109,17 @@ cmake --build build --config Debug --target project_14_checkpoint_4
 ./build/Debug/project_14_checkpoint_4.exe
 ```
 
-HUD native hiện ba vector; Canvas hiện thêm basis error. Bài này chưa có WASD, ta chỉ kiểm hệ trục để bài sau không phải debug movement và basis cùng lúc.
+Để nhìn thấy kết quả trên ứng dụng SDL, thêm đoạn dưới vào `presentFramebuffer` trong `presentation.hpp`, sau dòng thông tin góc nhìn. Hàm đã có biến `camera` và buffer `value`; ta dùng lại chúng, không khai báo một camera thứ hai:
+
+```cpp title="include/presentation.hpp — hiện ba trục trên HUD"
+const CameraBasis basis = cameraBasis(camera);
+std::snprintf(value, sizeof(value), "forward (%.2f %.2f %.2f) right (%.2f %.2f %.2f) up (%.2f %.2f %.2f)", basis.forward.x, basis.forward.y, basis.forward.z, basis.right.x, basis.right.y, basis.right.z, basis.up.x, basis.up.y, basis.up.z);
+if (!text(renderer, 16, 82, value)) {
+    return false;
+}
+```
+
+HUD native hiện ba vector; Canvas hiện thêm basis error. Bài này chưa có WASD. Hãy kiểm tra các trục trước, rồi mới dùng chúng để tính hướng đi ở bài sau.
 
 ## Thử làm sai để hiểu đúng
 

@@ -109,6 +109,18 @@ Khi hai hướng gần triệt tiêu, chương trình vẫn chuẩn hóa hướn
 
 ## Ghép các phần lại
 
+Thêm dòng nhắc mode vào cuối phần HUD trong `presentFramebuffer`, trước lệnh present cuối hàm. Đổi mode phải đổi cả hành vi lẫn thông tin hiển thị:
+
+```cpp title="include/presentation.hpp — phân biệt Walk và Fly"
+const char* mode = "WALK: Y=1.6, pitch does not change horizontal direction";
+if (scene.fly) {
+    mode = "FLY: W/S follow view; Q/E down/up along WORLD Y";
+}
+if (!text(renderer, 16, 742, mode)) {
+    return false;
+}
+```
+
 ```bash title="Terminal — chạy checkpoint 6"
 cmake --build build --config Debug --target project_14_checkpoint_6
 ./build/Debug/project_14_checkpoint_6.exe

@@ -1,51 +1,133 @@
 #pragma once
-
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <optional>
 
 #ifndef LAB_CHECKPOINT
 #define LAB_CHECKPOINT 7
 #endif
 
 namespace lab {
-#if LAB_CHECKPOINT >= 1
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kDivideEpsilon = 1e-9;
 
 struct Vec2 {
-    double x{};
-    double y{};
+    double x = 0.0;
+    double y = 0.0;
 };
 
 struct Vec3 {
-    double x{};
-    double y{};
-    double z{};
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
 };
 
-inline Vec2 previewLocalVertex(Vec3 point, double pixelsPerUnit) {
-    return {point.x * pixelsPerUnit, point.y * pixelsPerUnit};
+// Kiểu dữ liệu cho inspector; phép toán Mat4 được thêm từ checkpoint 2.
+struct Vec4 {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+    double w = 0.0;
+};
+
+struct ModelTransform {
+    Vec3 position{0.0, 1.0, 6.0};
+    Vec3 scale{1.2, 0.9, 1.0};
+    double yaw = kPi / 9.0;
+};
+
+struct Camera3D {
+    Vec3 position{0.0, 1.6, 0.0};
+    double yaw = 0.0;
+    double pitch = 0.0;
+};
+
+struct PerspectiveLens {
+    double verticalFovRadians = kPi / 3.0;
+    double nearPlane = 0.5;
+    double farPlane = 30.0;
+};
+
+struct Viewport {
+    double width = 1100.0;
+    double height = 560.0;
+};
+
+inline bool finite(Vec2 v) {
+    return std::isfinite(v.x) && std::isfinite(v.y);
 }
-#endif
+
+inline bool finite(Vec3 v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
+inline bool finite(Vec4 v) {
+    return finite(Vec3{v.x, v.y, v.z}) && std::isfinite(v.w);
+}
+
+inline Vec3 add(Vec3 a, Vec3 b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+inline Vec3 subtract(Vec3 a, Vec3 b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+inline Vec3 scaleVector(Vec3 a, double s) {
+    return {a.x * s, a.y * s, a.z * s};
+}
+
+inline Vec3 xyz(Vec4 v) {
+    return {v.x, v.y, v.z};
+}
+
+inline double magnitude(Vec3 v) {
+    return std::hypot(v.x, v.y, v.z);
+}
+
+inline double wrapAngle(double angle) {
+    if (!std::isfinite(angle)) {
+        return 0.0;
+    }
+    return std::remainder(angle, 2.0 * kPi);
+}
+
+inline Vec3 rotateY(Vec3 p, double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {cosine * p.x + sine * p.z, p.y, -sine * p.x + cosine * p.z};
+}
+
+inline Vec3 rotateX(Vec3 p, double angle) {
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    return {p.x, cosine * p.y - sine * p.z, sine * p.y + cosine * p.z};
+}
+
+inline bool validLens(const PerspectiveLens& lens) {
+    return std::isfinite(lens.verticalFovRadians) && lens.verticalFovRadians > 0.0 && lens.verticalFovRadians < kPi &&
+        std::isfinite(lens.nearPlane) && std::isfinite(lens.farPlane) &&
+        lens.nearPlane > 0.0 && lens.farPlane > lens.nearPlane;
+}
+
+inline bool validViewport(Viewport viewport) {
+    return std::isfinite(viewport.width) && std::isfinite(viewport.height) && viewport.width > 0.0 && viewport.height > 0.0 &&
+        std::isfinite(viewport.width / viewport.height);
+}
 
 #if LAB_CHECKPOINT >= 2
-// Mat4 lưu theo row-major, nhưng mọi phép biến đổi dùng column vector.
-struct Vec4 {
-    double x{};
-    double y{};
-    double z{};
-    double w{};
-};
-
+// Storage row-major KHÔNG quyết định convention nhân vector.
 struct Mat4 {
     std::array<double, 16> values{};
 
     double& at(int row, int column) {
-        return values[std::size_t(row * 4 + column)];
+        return values[static_cast<std::size_t>(row * 4 + column)];
     }
 
     double at(int row, int column) const {
-        return values[std::size_t(row * 4 + column)];
+        return values[static_cast<std::size_t>(row * 4 + column)];
     }
 };
 
@@ -57,36 +139,16 @@ inline Vec4 toDirection(Vec3 direction) {
     return {direction.x, direction.y, direction.z, 0.0};
 }
 
-inline Vec3 xyz(Vec4 vector) {
-    return {vector.x, vector.y, vector.z};
-}
-
-inline Vec3 add(Vec3 left, Vec3 right) {
-    return {left.x + right.x, left.y + right.y, left.z + right.z};
-}
-
-inline Vec3 subtract(Vec3 left, Vec3 right) {
-    return {left.x - right.x, left.y - right.y, left.z - right.z};
-}
-
-inline Vec3 multiply(Vec3 vector, double scalar) {
-    return {vector.x * scalar, vector.y * scalar, vector.z * scalar};
-}
-
-inline double magnitude(Vec3 vector) {
-    return std::hypot(vector.x, vector.y, vector.z);
-}
-
 inline Mat4 identityMatrix() {
-    Mat4 matrix{};
+    Mat4 result;
     for (int index = 0; index < 4; ++index) {
-        matrix.at(index, index) = 1.0;
+        result.at(index, index) = 1.0;
     }
-    return matrix;
+    return result;
 }
 
-inline Mat4 multiply(Mat4 left, Mat4 right) {
-    Mat4 result{};
+inline Mat4 multiply(const Mat4& left, const Mat4& right) {
+    Mat4 result;
     for (int row = 0; row < 4; ++row) {
         for (int column = 0; column < 4; ++column) {
             double sum = 0.0;
@@ -99,62 +161,42 @@ inline Mat4 multiply(Mat4 left, Mat4 right) {
     return result;
 }
 
-inline Vec4 transform(Mat4 matrix, Vec4 vector) {
-    return {
-        matrix.at(0, 0) * vector.x + matrix.at(0, 1) * vector.y +
-            matrix.at(0, 2) * vector.z + matrix.at(0, 3) * vector.w,
-        matrix.at(1, 0) * vector.x + matrix.at(1, 1) * vector.y +
-            matrix.at(1, 2) * vector.z + matrix.at(1, 3) * vector.w,
-        matrix.at(2, 0) * vector.x + matrix.at(2, 1) * vector.y +
-            matrix.at(2, 2) * vector.z + matrix.at(2, 3) * vector.w,
-        matrix.at(3, 0) * vector.x + matrix.at(3, 1) * vector.y +
-            matrix.at(3, 2) * vector.z + matrix.at(3, 3) * vector.w,
-    };
+inline Vec4 transform(const Mat4& matrix, Vec4 vector) {
+    Vec4 result;
+    result.x = matrix.at(0, 0) * vector.x + matrix.at(0, 1) * vector.y + matrix.at(0, 2) * vector.z + matrix.at(0, 3) * vector.w;
+    result.y = matrix.at(1, 0) * vector.x + matrix.at(1, 1) * vector.y + matrix.at(1, 2) * vector.z + matrix.at(1, 3) * vector.w;
+    result.z = matrix.at(2, 0) * vector.x + matrix.at(2, 1) * vector.y + matrix.at(2, 2) * vector.z + matrix.at(2, 3) * vector.w;
+    result.w = matrix.at(3, 0) * vector.x + matrix.at(3, 1) * vector.y + matrix.at(3, 2) * vector.z + matrix.at(3, 3) * vector.w;
+    return result;
 }
 
 inline Mat4 translationMatrix(Vec3 translation) {
-    Mat4 matrix = identityMatrix();
-    matrix.at(0, 3) = translation.x;
-    matrix.at(1, 3) = translation.y;
-    matrix.at(2, 3) = translation.z;
-    return matrix;
+    Mat4 result = identityMatrix();
+    result.at(0, 3) = translation.x;
+    result.at(1, 3) = translation.y;
+    result.at(2, 3) = translation.z;
+    return result;
 }
 #endif
 
 #if LAB_CHECKPOINT >= 3
-struct ModelTransform {
-    Vec3 position{0.3, -0.2, 6.0};
-    Vec3 scale{1.2, 0.9, 1.0};
-    double yaw{20.0 * kPi / 180.0};
-};
-
 inline Mat4 scaleMatrix(Vec3 scale) {
-    Mat4 matrix = identityMatrix();
-    matrix.at(0, 0) = scale.x;
-    matrix.at(1, 1) = scale.y;
-    matrix.at(2, 2) = scale.z;
-    return matrix;
+    Mat4 result = identityMatrix();
+    result.at(0, 0) = scale.x;
+    result.at(1, 1) = scale.y;
+    result.at(2, 2) = scale.z;
+    return result;
 }
 
 inline Mat4 rotationYMatrix(double angle) {
-    Mat4 matrix = identityMatrix();
+    Mat4 result = identityMatrix();
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    matrix.at(0, 0) = cosine;
-    matrix.at(0, 2) = sine;
-    matrix.at(2, 0) = -sine;
-    matrix.at(2, 2) = cosine;
-    return matrix;
-}
-
-inline Vec3 rotateY(Vec3 point, double angle) {
-    const double cosine = std::cos(angle);
-    const double sine = std::sin(angle);
-    return {
-        cosine * point.x + sine * point.z,
-        point.y,
-        -sine * point.x + cosine * point.z,
-    };
+    result.at(0, 0) = cosine;
+    result.at(0, 2) = sine;
+    result.at(2, 0) = -sine;
+    result.at(2, 2) = cosine;
+    return result;
 }
 
 inline Mat4 modelMatrix(const ModelTransform& model) {
@@ -164,47 +206,27 @@ inline Mat4 modelMatrix(const ModelTransform& model) {
     return multiply(translation, multiply(rotation, scale));
 }
 
+// Đường tham chiếu không nhân Mat4: scale từng tọa độ -> sin/cos -> cộng position.
 inline Vec3 modelPointDirect(Vec3 localPoint, const ModelTransform& model) {
-    const Vec3 scaled = {
-        localPoint.x * model.scale.x,
-        localPoint.y * model.scale.y,
-        localPoint.z * model.scale.z,
-    };
-    const Vec3 rotated = rotateY(scaled, model.yaw);
-    return add(rotated, model.position);
+    const Vec3 scaled{localPoint.x * model.scale.x, localPoint.y * model.scale.y, localPoint.z * model.scale.z};
+    return add(rotateY(scaled, model.yaw), model.position);
 }
 #endif
 
 #if LAB_CHECKPOINT >= 4
-struct Camera3D {
-    Vec3 position{};
-    double yaw{};
-    double pitch{};
-};
-
 inline Mat4 rotationXMatrix(double angle) {
-    Mat4 matrix = identityMatrix();
+    Mat4 result = identityMatrix();
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    matrix.at(1, 1) = cosine;
-    matrix.at(1, 2) = -sine;
-    matrix.at(2, 1) = sine;
-    matrix.at(2, 2) = cosine;
-    return matrix;
-}
-
-inline Vec3 rotateX(Vec3 point, double angle) {
-    const double cosine = std::cos(angle);
-    const double sine = std::sin(angle);
-    return {
-        point.x,
-        cosine * point.y - sine * point.z,
-        sine * point.y + cosine * point.z,
-    };
+    result.at(1, 1) = cosine;
+    result.at(1, 2) = -sine;
+    result.at(2, 1) = sine;
+    result.at(2, 2) = cosine;
+    return result;
 }
 
 inline Mat4 viewMatrix(const Camera3D& camera) {
-    const Mat4 inverseTranslation = translationMatrix(multiply(camera.position, -1.0));
+    const Mat4 inverseTranslation = translationMatrix(scaleVector(camera.position, -1.0));
     const Mat4 inverseYaw = rotationYMatrix(-camera.yaw);
     const Mat4 inversePitch = rotationXMatrix(camera.pitch);
     return multiply(inversePitch, multiply(inverseYaw, inverseTranslation));
@@ -212,28 +234,23 @@ inline Mat4 viewMatrix(const Camera3D& camera) {
 
 inline Vec3 worldToCameraDirect(Vec3 worldPoint, const Camera3D& camera) {
     const Vec3 relative = subtract(worldPoint, camera.position);
-    const Vec3 yawNeutral = rotateY(relative, -camera.yaw);
-    return rotateX(yawNeutral, camera.pitch);
+    return rotateX(rotateY(relative, -camera.yaw), camera.pitch);
 }
 #endif
 
 #if LAB_CHECKPOINT >= 5
-struct PerspectiveLens {
-    double verticalFovRadians{60.0 * kPi / 180.0};
-    double nearPlane{0.5};
-    double farPlane{30.0};
-};
-
+// Tiền điều kiện: validLens(lens), aspectRatio hữu hạn và >0.
+// Convention +Z trước, NDC z trong [0,1]; không chép ma trận OpenGL nhìn -Z.
 inline Mat4 projectionMatrix(const PerspectiveLens& lens, double aspectRatio) {
-    Mat4 matrix{};
+    Mat4 result;
     const double focalScale = 1.0 / std::tan(lens.verticalFovRadians * 0.5);
     const double depthRange = lens.farPlane - lens.nearPlane;
-    matrix.at(0, 0) = focalScale / aspectRatio;
-    matrix.at(1, 1) = focalScale;
-    matrix.at(2, 2) = lens.farPlane / depthRange;
-    matrix.at(2, 3) = -lens.nearPlane * lens.farPlane / depthRange;
-    matrix.at(3, 2) = 1.0;
-    return matrix;
+    result.at(0, 0) = focalScale / aspectRatio;
+    result.at(1, 1) = focalScale;
+    result.at(2, 2) = lens.farPlane / depthRange;
+    result.at(2, 3) = -lens.nearPlane * lens.farPlane / depthRange;
+    result.at(3, 2) = 1.0;
+    return result;
 }
 #endif
 
@@ -244,121 +261,151 @@ enum class PipelineStatus {
     BeforeNearPlane,
     BeyondFarPlane,
     OutsideFrustum,
+    Invalid,
 };
 
 struct PipelineTrace {
-    Vec4 local{};
-    Vec4 world{};
-    Vec4 camera{};
-    Vec4 clip{};
-    Vec3 ndc{};
-    Vec2 screen{};
-    PipelineStatus status{PipelineStatus::BehindCamera};
+    std::optional<Vec4> local;
+    std::optional<Vec4> world;
+    std::optional<Vec4> camera;
+    std::optional<Vec4> clip;
+    std::optional<Vec3> ndc;
+    std::optional<Vec2> screen;
+    PipelineStatus status = PipelineStatus::Invalid;
 };
 
-inline Vec3 perspectiveDivide(Vec4 clipPoint) {
-    return {
-        clipPoint.x / clipPoint.w,
-        clipPoint.y / clipPoint.w,
-        clipPoint.z / clipPoint.w,
-    };
+inline std::optional<Vec3> perspectiveDivide(Vec4 clipPoint) {
+    if (!finite(clipPoint) || clipPoint.w <= kDivideEpsilon) {
+        return std::nullopt;
+    }
+    const Vec3 ndc{clipPoint.x / clipPoint.w, clipPoint.y / clipPoint.w, clipPoint.z / clipPoint.w};
+    if (!finite(ndc)) {
+        return std::nullopt;
+    }
+    return ndc;
 }
 
-inline Vec2 ndcToScreen(Vec3 ndc, int width, int height) {
-    return {
-        (ndc.x + 1.0) * 0.5 * double(width),
-        (1.0 - ndc.y) * 0.5 * double(height),
-    };
+inline std::optional<Vec2> ndcToScreen(Vec3 ndc, Viewport viewport) {
+    if (!finite(ndc) || !validViewport(viewport)) {
+        return std::nullopt;
+    }
+    const Vec2 screen{(ndc.x + 1.0) * 0.5 * viewport.width, (1.0 - ndc.y) * 0.5 * viewport.height};
+    if (!finite(screen)) {
+        return std::nullopt;
+    }
+    return screen;
 }
 
-inline bool insideNdc(Vec3 ndc) {
-    return std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0 && ndc.z >= 0.0 &&
-        ndc.z <= 1.0;
-}
-
-inline PipelineTrace tracePipeline(
-    Vec3 localVertex,
-    const ModelTransform& model,
-    const Camera3D& camera,
-    const PerspectiveLens& lens,
-    int viewportWidth,
-    int viewportHeight
-) {
-    PipelineTrace trace{};
+inline PipelineTrace tracePipeline(Vec3 localVertex, const ModelTransform& model, const Camera3D& camera, const PerspectiveLens& lens, Viewport viewport) {
+    PipelineTrace trace;
+    if (!finite(localVertex)) {
+        return trace;
+    }
     trace.local = toPoint(localVertex);
-    trace.world = transform(modelMatrix(model), trace.local);
-    trace.camera = transform(viewMatrix(camera), trace.world);
-    const double aspectRatio = double(viewportWidth) / double(viewportHeight);
-    trace.clip = transform(projectionMatrix(lens, aspectRatio), trace.camera);
-
-    if (trace.camera.z <= 0.0 || trace.clip.w <= 0.0) {
+    if (!finite(model.position) || !finite(model.scale) || !std::isfinite(model.yaw)) {
+        return trace;
+    }
+    const Vec4 world = transform(modelMatrix(model), *trace.local);
+    if (!finite(world)) {
+        return trace;
+    }
+    trace.world = world;
+    if (!finite(camera.position) || !std::isfinite(camera.yaw) || !std::isfinite(camera.pitch)) {
+        return trace;
+    }
+    const Vec4 view = transform(viewMatrix(camera), world);
+    if (!finite(view)) {
+        return trace;
+    }
+    trace.camera = view;
+    if (!validLens(lens) || !validViewport(viewport)) {
+        return trace;
+    }
+    const Vec4 clip = transform(projectionMatrix(lens, viewport.width / viewport.height), view);
+    if (!finite(clip)) {
+        return trace;
+    }
+    trace.clip = clip;
+    if (clip.w <= kDivideEpsilon) {
         trace.status = PipelineStatus::BehindCamera;
         return trace;
     }
-    if (trace.camera.z < lens.nearPlane) {
+    trace.ndc = perspectiveDivide(clip);
+    if (!trace.ndc) {
+        return trace;
+    }
+    trace.screen = ndcToScreen(*trace.ndc, viewport);
+    if (!trace.screen) {
+        return trace;
+    }
+    // Giữ NDC/screen hữu hạn kể cả điểm bị clip; không dùng (0,0) làm giá trị giả.
+    const double epsilon = 1e-10 * std::max(1.0, std::abs(clip.w));
+    if (clip.z < -epsilon) {
         trace.status = PipelineStatus::BeforeNearPlane;
-        return trace;
-    }
-    if (trace.camera.z > lens.farPlane) {
+    } else if (clip.z > clip.w + epsilon) {
         trace.status = PipelineStatus::BeyondFarPlane;
-        return trace;
-    }
-
-    trace.ndc = perspectiveDivide(trace.clip);
-    if (!insideNdc(trace.ndc)) {
+    } else if (std::abs(clip.x) > clip.w + epsilon || std::abs(clip.y) > clip.w + epsilon) {
         trace.status = PipelineStatus::OutsideFrustum;
-        return trace;
+    } else {
+        trace.status = PipelineStatus::Visible;
     }
-    trace.screen = ndcToScreen(trace.ndc, viewportWidth, viewportHeight);
-    trace.status = PipelineStatus::Visible;
     return trace;
+}
+
+inline const char* statusName(PipelineStatus status) {
+    switch (status) {
+    case PipelineStatus::Visible:
+        return "visible";
+    case PipelineStatus::BehindCamera:
+        return "behind / w too small";
+    case PipelineStatus::BeforeNearPlane:
+        return "before-near";
+    case PipelineStatus::BeyondFarPlane:
+        return "beyond-far";
+    case PipelineStatus::OutsideFrustum:
+        return "outside";
+    case PipelineStatus::Invalid:
+        return "invalid input";
+    }
+    return "invalid input";
 }
 #endif
 
 #if LAB_CHECKPOINT >= 7
-inline Mat4 mvpMatrix(
-    const ModelTransform& model,
-    const Camera3D& camera,
-    const PerspectiveLens& lens,
-    double aspectRatio
-) {
+inline Mat4 mvpMatrix(const ModelTransform& model, const Camera3D& camera, const PerspectiveLens& lens, double aspectRatio) {
     const Mat4 viewModel = multiply(viewMatrix(camera), modelMatrix(model));
     return multiply(projectionMatrix(lens, aspectRatio), viewModel);
 }
 
 inline double maxAbsDifference(Vec4 left, Vec4 right) {
+    if (!finite(left) || !finite(right)) {
+        return std::numeric_limits<double>::infinity();
+    }
     double error = 0.0;
     error = std::max(error, std::abs(left.x - right.x));
     error = std::max(error, std::abs(left.y - right.y));
     error = std::max(error, std::abs(left.z - right.z));
-    error = std::max(error, std::abs(left.w - right.w));
-    return error;
+    return std::max(error, std::abs(left.w - right.w));
 }
 
-inline double pipelineAgreementError(
-    Vec3 localVertex,
-    const ModelTransform& model,
-    const Camera3D& camera,
-    const PerspectiveLens& lens,
-    int viewportWidth,
-    int viewportHeight
-) {
-    const PipelineTrace separate = tracePipeline(
-        localVertex,
-        model,
-        camera,
-        lens,
-        viewportWidth,
-        viewportHeight
-    );
-    const double aspectRatio = double(viewportWidth) / double(viewportHeight);
-    const Vec4 composed = transform(mvpMatrix(model, camera, lens, aspectRatio), toPoint(localVertex));
-    return maxAbsDifference(separate.clip, composed);
+inline double pipelineAgreementError(Vec3 localVertex, const ModelTransform& model, const Camera3D& camera, const PerspectiveLens& lens, Viewport viewport) {
+    const PipelineTrace separate = tracePipeline(localVertex, model, camera, lens, viewport);
+    if (!separate.local || !separate.clip) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const Vec4 composed = transform(mvpMatrix(model, camera, lens, viewport.width / viewport.height), *separate.local);
+    return maxAbsDifference(*separate.clip, composed);
 }
 
 inline double advanceModelYaw(double yaw, double angularSpeed, double deltaTime) {
-    const double safeDeltaTime = std::clamp(deltaTime, 0.0, 0.1);
-    return std::remainder(yaw + angularSpeed * safeDeltaTime, 2.0 * kPi);
+    if (!std::isfinite(yaw) || !std::isfinite(angularSpeed) || !std::isfinite(deltaTime) || deltaTime <= 0.0) {
+        return yaw;
+    }
+    const double next = yaw + angularSpeed * std::min(deltaTime, 0.1);
+    if (!std::isfinite(next)) {
+        return yaw;
+    }
+    return wrapAngle(next);
 }
 #endif
 } // namespace lab

@@ -67,6 +67,14 @@ const auto stopInput = [&]() {
 
 `SDL_GetKeyboardState` dùng **scancode** để index mảng bool. Ta đọc sau khi đã xử lý hết event trong frame.
 
+Ngay sau vòng `while (SDL_PollEvent(&event))` và nhánh `if (!running)`, khai báo input của frame hiện tại. Biến này phải nằm **bên trong** vòng lặp chính để mỗi frame bắt đầu với input bằng 0; nếu đặt trước vòng lặp, một phím đã thả có thể để lại hướng đi cũ:
+
+```cpp title="src/main.cpp — input mới cho mỗi frame"
+lab::MoveInput movement{};
+```
+
+Tiếp đó đọc các phím và điền vào `movement`:
+
 ```cpp title="src/main.cpp — đoạn ghép"
 if ((SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0) {
     const bool* keys = SDL_GetKeyboardState(nullptr);
@@ -192,6 +200,40 @@ if (lab::magnitude(lab::subtract(before, scene.camera.position)) > 0.0) {
 Hàm này chọn Walk và chuyển state vào `advanceCamera`; ở bài sau ta thêm nhánh Fly tại chính chỗ đó. `advanceScene` gọi update đúng một lần với dt này. Không nhân dt thêm vào `movement`, cũng không gọi move một bước nữa ngay trong key-down. IJKL vẫn là nấc góc rời rạc để nhìn quanh.
 
 ## Ghép các phần lại
+
+Xóa bốn nhánh mũi tên cộng/trừ `camera.position` từ bài 2. Từ đây chỉ `advanceScene` thay vị trí theo input; không giữ thêm một đường di chuyển phụ bằng key-repeat.
+
+Thứ tự trong vòng lặp chính là: xử lý hết event → thoát nếu `!running` → tính `deltaTime` → tạo `movement` rỗng → đọc keyboard state → gọi `advanceScene` → vẽ lại nếu vị trí đổi. `previousTicks` vẫn được cập nhật khi pause hoặc không có phím, để lúc tiếp tục không lấy cả thời gian đã nghỉ làm một bước đi.
+
+Trong nhánh key-down, thêm phím Space cùng hai phím đổi tốc độ. `dirty` đã được đặt ở đầu nhánh này nên HUD sẽ phản ánh trạng thái mới:
+
+```cpp title="src/main.cpp — pause và tốc độ đi"
+if (event.key.key == SDLK_LEFTBRACKET) {
+    scene.speed = std::max(1.0, scene.speed - 0.5);
+}
+if (event.key.key == SDLK_RIGHTBRACKET) {
+    scene.speed = std::min(7.0, scene.speed + 0.5);
+}
+if (!event.key.repeat && event.key.key == SDLK_SPACE) {
+    stopInput();
+    scene.paused = !scene.paused;
+}
+```
+
+Trong `presentFramebuffer`, thêm trạng thái pause và nhắc phím điều khiển sau các dòng basis, trước `return SDL_RenderPresent(renderer);` cuối hàm:
+
+```cpp title="include/presentation.hpp — hiển thị trạng thái đi bộ"
+const char* state = "ACTIVE";
+if (scene.paused) {
+    state = "PAUSED";
+}
+if (!text(renderer, 16, 126, state)) {
+    return false;
+}
+if (!text(renderer, 16, 722, "WASD: move at 3.5 world/s | [ ]: speed | keyboard movement works while cursor is released")) {
+    return false;
+}
+```
 
 ```bash title="Terminal — chạy checkpoint 5"
 cmake --build build --config Debug --target project_14_checkpoint_5

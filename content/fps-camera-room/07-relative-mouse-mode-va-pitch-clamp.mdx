@@ -72,11 +72,14 @@ if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTT
         scene.paused = false;
         scene.demo = false;
         setMouseLook(window, true, mouseLookActive);
+        dirty = true;
     }
 }
 ```
 
 ### Bước 3 — Dùng xrel/yrel trực tiếp
+
+`dirty=true` cần có ngay sau click: bật look hoặc tiếp tục từ pause đã làm đổi trạng thái trên HUD, kể cả khi chưa có mouse motion. Nếu bỏ dòng này, chữ “PAUSED” hoặc “mouse released” có thể còn trên ảnh cho đến lần rê chuột tiếp theo.
 
 ```cpp title="src/main.cpp — đoạn ghép"
 if (event.type == SDL_EVENT_MOUSE_MOTION && mouseLookActive && !scene.paused && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0) {
@@ -107,6 +110,18 @@ Focus-lost, hidden/minimized, resize, reset/preset, M và Space đều đi qua �
 `inputArmed=false` buộc thả hết movement keys trước phiên mới. Với Canvas, xóa tập phím và bỏ key-repeat nếu chưa có key-down mới. Nhờ vậy reset trong lúc giữ W không tự đi tiếp ngay sau reset.
 
 ## Ghép các phần lại
+
+Trong `presentFramebuffer`, thêm trạng thái chuột sau dòng Walk/Fly và trước lệnh present cuối hàm. Cờ `mouseLookActive` đã được main truyền vào; đừng suy trạng thái capture chỉ từ việc người dùng vừa click:
+
+```cpp title="include/presentation.hpp — hiển thị relative look"
+const char* look = "mouse released: click in viewport to enable relative look";
+if (mouseLookActive) {
+    look = "RELATIVE mouse look | Esc releases | -/+: sensitivity | M toggles Walk/Fly";
+}
+if (!text(renderer, 16, 762, look)) {
+    return false;
+}
+```
 
 ```bash title="Terminal — chạy checkpoint 7"
 cmake --build build --config Debug --target project_14_checkpoint_7

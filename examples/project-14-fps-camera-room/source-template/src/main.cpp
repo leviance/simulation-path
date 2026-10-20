@@ -204,6 +204,7 @@ int main(int argc, char** argv) {
                     scene.paused = false;
                     scene.demo = false;
                     setMouseLook(window, true, mouseLookActive);
+                    dirty = true;
                 }
             }
             if (event.type == SDL_EVENT_MOUSE_MOTION && mouseLookActive && !scene.paused && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0) {

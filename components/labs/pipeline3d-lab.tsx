@@ -1,715 +1,513 @@
 "use client";
-
 import {
+  useCallback,
   useEffect,
-  useMemo,
+  useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  DEFAULT_PIPELINE_CAMERA,
-  DEFAULT_PIPELINE_LENS,
-  DEFAULT_PIPELINE_MODEL,
-  advancePipelineYaw,
-  pipelineAgreementError,
-  pipelineModelPointDirect,
-  pipelineToDirection,
-  pipelineToPoint,
-  pipelineTransform,
-  pipelineTranslationMatrix,
-  pipelineWorldToCameraDirect,
-  trace3dPipeline,
-  type PipelineCamera,
-  type PipelineLens,
-  type PipelineModel,
-  type PipelineStatus,
-  type PipelineTrace,
-  type PipelineVec3,
-  type PipelineVec4,
-} from "@/lib/labs/pipeline3d";
-import { LabReadout, drawLine, setupCanvas, useCanvasSize, useReducedMotion } from "./lab-shared";
+  initialInspector,
+  inspectorStage,
+  inspectorPreset,
+  inspectorResults,
+  inspectorViewport,
+  inspectorPick,
+  editInspector,
+  inspectorParameterValue,
+  advanceInspector,
+  formatInspectorValue,
+  INSPECTOR_STAGES,
+  type InspectorScene,
+  type InspectorParameter,
+} from "@/lib/labs/pipeline-inspector";
+import { drawInspector, inspectorPointFromEvent } from "./pipeline3d-lab-view";
+import { LabReadout, useCanvasSize, useReducedMotion, usePauseOnReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 
-const DEG_TO_RAD = Math.PI / 180;
-const RAD_TO_DEG = 180 / Math.PI;
-const INITIAL_LOCAL: PipelineVec3 = { x: 1, y: 0.75, z: 0.5 };
-const STAGES = ["LOCAL", "WORLD", "CAMERA", "CLIP", "NDC", "SCREEN"] as const;
-
-const MODE_STAGE: Record<string, number> = {
-  "pipeline-local": 0,
-  "pipeline-homogeneous": 0,
-  "pipeline-model": 1,
-  "pipeline-view": 2,
-  "pipeline-projection": 3,
-  "pipeline-viewport": 5,
-  "pipeline-validation": 5,
-};
-
-function cloneModel(): PipelineModel {
-  return {
-    position: { ...DEFAULT_PIPELINE_MODEL.position },
-    scale: { ...DEFAULT_PIPELINE_MODEL.scale },
-    yaw: DEFAULT_PIPELINE_MODEL.yaw,
-  };
-}
-
-function cloneCamera(): PipelineCamera {
-  return {
-    position: { ...DEFAULT_PIPELINE_CAMERA.position },
-    yaw: DEFAULT_PIPELINE_CAMERA.yaw,
-    pitch: DEFAULT_PIPELINE_CAMERA.pitch,
-  };
-}
-
-function cloneLens(): PipelineLens {
-  return { ...DEFAULT_PIPELINE_LENS };
-}
-
-function formatVec3(value: PipelineVec3) {
-  return `(${value.x.toFixed(3)}, ${value.y.toFixed(3)}, ${value.z.toFixed(3)})`;
-}
-
-function formatVec4(value: PipelineVec4) {
-  return `(${value.x.toFixed(3)}, ${value.y.toFixed(3)}, ${value.z.toFixed(3)}, ${value.w.toFixed(3)})`;
-}
-
-function statusText(status: PipelineStatus) {
-  if (status === "visible") return "visible — được phép vẽ";
-  if (status === "behind") return "behind — sau camera";
-  if (status === "before-near") return "before-near — quá sát camera";
-  if (status === "beyond-far") return "beyond-far — vượt far plane";
-  return "outside — ngoài frustum";
-}
-
-function stageValue(trace: PipelineTrace, stage: number) {
-  if (stage === 0) return formatVec4(trace.local);
-  if (stage === 1) return formatVec4(trace.world);
-  if (stage === 2) return formatVec4(trace.camera);
-  if (stage === 3) return formatVec4(trace.clip);
-  if (stage === 4) return formatVec3(trace.ndc);
-  return `(${trace.screen.x.toFixed(1)}, ${trace.screen.y.toFixed(1)}) px`;
-}
-
-function presetState(value: string) {
-  const localVertex = { ...INITIAL_LOCAL };
-  const model = cloneModel();
-  const camera = cloneCamera();
-  const lens = cloneLens();
-
-  if (value === "near") {
-    localVertex.x = 0.1;
-    localVertex.y = 0.1;
-    localVertex.z = 0;
-    model.position = { x: 0, y: 0, z: 0.2 };
-  } else if (value === "behind") {
-    localVertex.x = 0;
-    localVertex.y = 0;
-    localVertex.z = 0;
-    model.position = { x: 0, y: 0, z: -2 };
-  } else if (value === "far") {
-    localVertex.x = 0;
-    localVertex.y = 0;
-    localVertex.z = 0;
-    model.position = { x: 0, y: 0, z: lens.farPlane + 4 };
-  } else if (value === "outside") {
-    localVertex.x = 0;
-    localVertex.y = 0;
-    localVertex.z = 0;
-    model.position = { x: 12, y: 0, z: 4 };
-  }
-  return { localVertex, model, camera, lens };
-}
-
+const DEG = Math.PI / 180;
 export default function Pipeline3dLab({ mode }: { mode?: InteractiveLabMode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const dragStart = useRef<{ x: number; y: number } | null>(null);
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const availableStage = MODE_STAGE[mode ?? "pipeline-validation"] ?? 5;
-  const [localVertex, setLocalVertex] = useState<PipelineVec3>({ ...INITIAL_LOCAL });
-  const [model, setModel] = useState<PipelineModel>(cloneModel);
-  const [camera, setCamera] = useState<PipelineCamera>(cloneCamera);
-  const [lens, setLens] = useState<PipelineLens>(cloneLens);
-  const [selectedStage, setSelectedStage] = useState(() => availableStage);
-  const [preset, setPreset] = useState("visible");
-  const [homogeneousKind, setHomogeneousKind] = useState<"point" | "direction">("point");
-  const [translationX, setTranslationX] = useState(2);
-  const [paused, setPaused] = useState(true);
-  const [capturing, setCapturing] = useState(false);
+  return <Pipeline3dScene key={mode ?? "default"} mode={mode} />;
+}
 
-  const showHomogeneous = mode === "pipeline-homogeneous";
-  const showModel = mode === "pipeline-model";
-  const showView = mode === "pipeline-view";
-  const showProjection = mode === "pipeline-projection";
-  const showViewport = mode === "pipeline-viewport";
-  const showValidation = mode === undefined || mode === "pipeline-validation";
-
-  const viewport = useMemo(() => {
-    const top = 116;
-    const left = 24;
-    const sideWidth = size.width >= 620 ? Math.min(230, size.width * 0.28) : 0;
-    const gap = sideWidth > 0 ? 22 : 0;
-    return {
-      left,
-      top,
-      width: Math.max(220, size.width - left * 2 - sideWidth - gap),
-      height: Math.max(170, size.height - top - 24),
-      sideLeft: size.width - left - sideWidth,
-      sideWidth,
-    };
-  }, [size.height, size.width]);
-
-  const trace = useMemo(
-    () => trace3dPipeline(localVertex, model, camera, lens, viewport.width, viewport.height),
-    [camera, lens, localVertex, model, viewport.height, viewport.width],
+function Pipeline3dScene({ mode }: { mode?: InteractiveLabMode }) {
+  const dragHelpId = useId();
+  const canvasRef = useRef<HTMLCanvasElement>(null),
+    reducedMotion = useReducedMotion();
+  const stage = inspectorStage(mode);
+  const [scene, setScene] = useState<InspectorScene>(initialInspector),
+    sceneRef = useRef(scene);
+  const drag = useRef<{ id: number; cssX: number; cssY: number } | null>(null);
+  const [dragMode, setDragMode] = useState<"model" | "view">("model");
+  const dragModeRef = useRef<"model" | "view">("model");
+  const [captured, setCaptured] = useState(false);
+  const commit = useCallback((s: InspectorScene) => {
+    sceneRef.current = s;
+    setScene(s);
+  }, []);
+  const cancelPointer = useCallback(() => {
+    const active = drag.current;
+    drag.current = null;
+    setCaptured(false);
+    const canvas = canvasRef.current;
+    if (active && canvas?.hasPointerCapture(active.id)) canvas.releasePointerCapture(active.id);
+  }, []);
+  const pauseForEnvironment = useCallback(() => {
+    cancelPointer();
+    commit({ ...sceneRef.current, paused: true });
+  }, [cancelPointer, commit]);
+  const size = useCanvasSize(canvasRef, pauseForEnvironment);
+  usePauseOnReducedMotion(pauseForEnvironment);
+  const reset = useCallback(
+    (index = 0) => {
+      cancelPointer();
+      dragModeRef.current = "model";
+      setDragMode("model");
+      commit(inspectorPreset(index));
+    },
+    [cancelPointer, commit],
   );
-
+  const edit = (key: InspectorParameter, value: number) => {
+    cancelPointer();
+    commit(editInspector(sceneRef.current, key, value));
+  };
+  const changeDragMode = (value: string) => {
+    if (stage < 3 || (value !== "model" && value !== "view")) return;
+    if (value === "view" && stage < 4) return;
+    cancelPointer();
+    dragModeRef.current = value;
+    setDragMode(value);
+    commit({ ...sceneRef.current, paused: true });
+  };
+  const selectVertex = (index: number) => {
+    if (!Number.isInteger(index) || index < 0 || index >= 8) return;
+    cancelPointer();
+    commit({ ...sceneRef.current, selectedVertex: index, paused: true });
+  };
+  const selectStage = (index: number) => {
+    if (!Number.isInteger(index) || index < 0 || index > 5) return;
+    commit({ ...sceneRef.current, selectedStage: index });
+  };
+  const togglePause = () => {
+    cancelPointer();
+    const s = sceneRef.current;
+    commit({ ...s, paused: stage < 7 || reducedMotion ? true : !s.paused });
+  };
+  const step = () => {
+    cancelPointer();
+    const s = sceneRef.current;
+    if (stage < 7 || !s.paused) return;
+    commit({ ...advanceInspector({ ...s, paused: false }, 1 / 30), paused: true });
+  };
+  const toggleDebug = () => {
+    cancelPointer();
+    commit({ ...sceneRef.current, debug: !sceneRef.current.debug, paused: true });
+  };
+  const movePointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const active = drag.current;
+    if (!active || active.id !== event.pointerId) return;
+    const p = inspectorPointFromEvent(event, size, sceneRef.current, true);
+    if (!p) return;
+    const dx = p.cssX - active.cssX,
+      dy = p.cssY - active.cssY;
+    active.cssX = p.cssX;
+    active.cssY = p.cssY;
+    let s = sceneRef.current;
+    if (stage >= 4 && dragModeRef.current === "view") {
+      s = editInspector(s, "cameraYaw", s.camera.yaw + dx * 0.006);
+      s = editInspector(s, "cameraPitch", s.camera.pitch - dy * 0.004);
+    } else if (stage >= 3) {
+      s = editInspector(s, "modelYaw", s.model.yaw + dx * 0.006);
+    } else {
+      const local = s.vertices[s.selectedVertex];
+      s = editInspector(s, "localX", local.x + dx / 75);
+      s = editInspector(s, "localY", local.y - dy / 75);
+    }
+    commit(s);
+  };
+  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!event.isPrimary || event.button !== 0 || drag.current) return;
+    const p = inspectorPointFromEvent(event, size, sceneRef.current);
+    if (!p) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    let s = { ...sceneRef.current, paused: true };
+    const picked = inspectorPick(p, s, stage);
+    if (picked !== null) s = { ...s, selectedVertex: picked };
+    commit(s);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      drag.current = { id: event.pointerId, cssX: p.cssX, cssY: p.cssY };
+      setCaptured(true);
+    } catch {
+      drag.current = null;
+      setCaptured(false);
+    }
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId) return;
+    if (event.pointerType === "mouse" && (event.buttons & 1) === 0) {
+      cancelPointer();
+      return;
+    }
+    movePointer(event);
+  };
+  const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId || event.button !== 0) return;
+    movePointer(event);
+    cancelPointer();
+  };
+  const onPointerCancel = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id === event.pointerId) cancelPointer();
+  };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.key === "Tab") return;
+    const key = event.key.toLowerCase();
+    if (key === "r") {
+      event.preventDefault();
+      if (!event.repeat) reset();
+      return;
+    }
+    if (key === "escape") {
+      event.preventDefault();
+      cancelPointer();
+      commit({ ...sceneRef.current, paused: true });
+      return;
+    }
+    if (stage >= 7 && [" ", "n", "f"].includes(key)) {
+      event.preventDefault();
+      if (event.repeat) return;
+      if (key === " ") togglePause();
+      else if (key === "n") step();
+      else toggleDebug();
+      return;
+    }
+    if (/^[1-6]$/.test(key)) {
+      event.preventDefault();
+      selectStage(Number(key) - 1);
+      return;
+    }
+    if (key === "v") {
+      event.preventDefault();
+      if (!event.repeat) selectVertex((sceneRef.current.selectedVertex + 1) % 8);
+      return;
+    }
+    const commands: Record<string, [InspectorParameter, number, number]> = {
+      arrowleft: ["localX", -0.1, 1],
+      arrowright: ["localX", 0.1, 1],
+      arrowup: ["localY", 0.1, 1],
+      arrowdown: ["localY", -0.1, 1],
+      pageup: ["localZ", 0.1, 1],
+      pagedown: ["localZ", -0.1, 1],
+      a: ["modelX", -0.2, 3],
+      d: ["modelX", 0.2, 3],
+      w: ["modelZ", 0.2, 3],
+      s: ["modelZ", -0.2, 3],
+      q: ["modelYaw", -5 * DEG, 3],
+      e: ["modelYaw", 5 * DEG, 3],
+      u: ["scaleX", -0.1, 3],
+      o: ["scaleX", 0.1, 3],
+      z: ["cameraZ", -0.2, 4],
+      x: ["cameraZ", 0.2, 4],
+      j: ["cameraYaw", -5 * DEG, 4],
+      l: ["cameraYaw", 5 * DEG, 4],
+      i: ["cameraPitch", 5 * DEG, 4],
+      k: ["cameraPitch", -5 * DEG, 4],
+      "[": ["fov", -5 * DEG, 5],
+      "]": ["fov", 5 * DEG, 5],
+      "-": ["near", -0.1, 5],
+      "=": ["near", 0.1, 5],
+      "+": ["near", 0.1, 5],
+      "9": ["far", -1, 5],
+      "0": ["far", 1, 5],
+    };
+    const command = commands[key];
+    if (!command || stage < command[2]) return;
+    event.preventDefault();
+    const [parameter, delta] = command;
+    edit(parameter, inspectorParameterValue(sceneRef.current, parameter) + delta);
+  };
   useEffect(() => {
-    if (!showValidation || paused || reducedMotion) return;
-    let frame = 0;
-    let previous = performance.now();
+    const pause = () => {
+      cancelPointer();
+      commit({ ...sceneRef.current, paused: true });
+    };
+    const hidden = () => {
+      if (document.hidden) pause();
+    };
+    window.addEventListener("blur", pause);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", pause);
+      document.removeEventListener("visibilitychange", hidden);
+      cancelPointer();
+    };
+  }, [cancelPointer, commit]);
+  useEffect(() => {
+    if (stage < 7 || scene.paused || reducedMotion) return;
+    let frame = 0,
+      previous = performance.now();
     const animate = (now: number) => {
-      const deltaTime = (now - previous) / 1000;
+      const s = sceneRef.current;
+      if (s.paused) return;
+      const dt = (now - previous) / 1000;
       previous = now;
-      setModel((current) => ({
-        ...current,
-        yaw: advancePipelineYaw(current.yaw, 35 * DEG_TO_RAD, deltaTime),
-      }));
+      commit(advanceInspector(s, dt));
       frame = requestAnimationFrame(animate);
     };
     frame = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frame);
-  }, [paused, reducedMotion, showValidation]);
-
+  }, [stage, scene.paused, reducedMotion, commit]);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    setupCanvas(ctx, size);
-
-    const railLeft = 35;
-    const railRight = size.width - 35;
-    const railY = 55;
-    drawLine(ctx, { x: railLeft, y: railY }, { x: railRight, y: railY }, "#394662", 2);
-    ctx.textAlign = "center";
-    ctx.font = "700 10px ui-monospace";
-
-    STAGES.forEach((label, stage) => {
-      const x = railLeft + (stage * (railRight - railLeft)) / (STAGES.length - 1);
-      const available = stage <= availableStage;
-      ctx.beginPath();
-      ctx.arc(x, railY, stage === selectedStage ? 9 : 7, 0, Math.PI * 2);
-      ctx.fillStyle = stage === selectedStage ? "#ffbe52" : available ? "#68a0ef" : "#303b54";
-      ctx.fill();
-      ctx.fillStyle = available ? "#dce7ff" : "#65718a";
-      ctx.fillText(label, x, railY + 25);
-    });
-    ctx.textAlign = "start";
-
-    ctx.strokeStyle = "#405071";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(viewport.left, viewport.top, viewport.width, viewport.height);
-    drawLine(
-      ctx,
-      { x: viewport.left + viewport.width / 2, y: viewport.top },
-      { x: viewport.left + viewport.width / 2, y: viewport.top + viewport.height },
-      "#26334d",
-    );
-    drawLine(
-      ctx,
-      { x: viewport.left, y: viewport.top + viewport.height / 2 },
-      { x: viewport.left + viewport.width, y: viewport.top + viewport.height / 2 },
-      "#26334d",
-    );
-
-    let markerX = viewport.left + viewport.width / 2;
-    let markerY = viewport.top + viewport.height / 2;
-    let markerVisible = true;
-    if (availableStage >= 5) {
-      markerVisible = trace.status === "visible";
-      markerX = viewport.left + trace.screen.x;
-      markerY = viewport.top + trace.screen.y;
-    } else {
-      let point: PipelineVec3 = trace.local;
-      if (availableStage === 1) point = trace.world;
-      if (availableStage === 2 || availableStage === 3) point = trace.camera;
-      markerX += point.x * 34;
-      markerY -= point.y * 34;
-    }
-
-    if (markerVisible && Number.isFinite(markerX) && Number.isFinite(markerY)) {
-      ctx.beginPath();
-      ctx.arc(markerX, markerY, 11, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffbe5233";
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(markerX, markerY, 5, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffe070";
-      ctx.fill();
-      drawLine(ctx, { x: markerX - 15, y: markerY }, { x: markerX + 15, y: markerY }, "#ffe070");
-      drawLine(ctx, { x: markerX, y: markerY - 15 }, { x: markerX, y: markerY + 15 }, "#ffe070");
-    } else {
-      ctx.fillStyle = "#ff7b86";
-      ctx.font = "700 12px ui-monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(
-        statusText(trace.status),
-        viewport.left + viewport.width / 2,
-        viewport.top + viewport.height / 2,
-      );
-      ctx.textAlign = "start";
-    }
-
-    ctx.fillStyle = "#9fb0d0";
-    ctx.font = "700 11px ui-monospace";
-    ctx.fillText(
-      `${STAGES[selectedStage]} ${stageValue(trace, selectedStage)}`,
-      viewport.left + 10,
-      viewport.top + 19,
-    );
-
-    if (viewport.sideWidth > 0) {
-      const sideTop = viewport.top + 12;
-      const sideBottom = viewport.top + viewport.height - 12;
-      const originX = viewport.sideLeft + 18;
-      const zScale = Math.max(3, (viewport.sideWidth - 36) / 35);
-      const yCenter = (sideTop + sideBottom) / 2;
-      ctx.fillStyle = "#9fb0d0";
-      ctx.fillText("X–Z TRACE", viewport.sideLeft, viewport.top - 10);
-      drawLine(ctx, { x: originX, y: sideTop }, { x: originX, y: sideBottom }, "#394662");
-      drawLine(
-        ctx,
-        { x: viewport.sideLeft, y: yCenter },
-        { x: viewport.sideLeft + viewport.sideWidth, y: yCenter },
-        "#394662",
-      );
-      const stagePoints = [
-        { label: "L", value: trace.local, color: "#7e8da8" },
-        { label: "W", value: trace.world, color: "#68a0ef" },
-        { label: "C", value: trace.camera, color: "#ffbe52" },
-      ];
-      stagePoints.forEach((entry) => {
-        const x = originX + Math.max(-2, Math.min(32, entry.value.z)) * zScale;
-        const y = yCenter - Math.max(-5, Math.min(5, entry.value.x)) * 12;
-        ctx.beginPath();
-        ctx.arc(x, y, 5, 0, Math.PI * 2);
-        ctx.fillStyle = entry.color;
-        ctx.fill();
-        ctx.fillStyle = "#dce7ff";
-        ctx.fillText(entry.label, x + 7, y - 7);
-      });
-    }
-  }, [availableStage, selectedStage, size, trace, viewport]);
-
-  const setLocalAxis = (axis: keyof PipelineVec3, value: number) => {
-    setLocalVertex((current) => ({ ...current, [axis]: value }));
-    setPreset("custom");
-    setPaused(true);
-  };
-
-  const applyPreset = (value: string) => {
-    const next = presetState(value);
-    setPreset(value);
-    setLocalVertex(next.localVertex);
-    setModel(next.model);
-    setCamera(next.camera);
-    setLens(next.lens);
-    setPaused(true);
-  };
-
-  const reset = () => {
-    setLocalVertex({ ...INITIAL_LOCAL });
-    setModel(cloneModel());
-    setCamera(cloneCamera());
-    setLens(cloneLens());
-    setSelectedStage(availableStage);
-    setPreset("visible");
-    setHomogeneousKind("point");
-    setTranslationX(2);
-    setPaused(true);
-    setCapturing(false);
-  };
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragStart.current = { x: event.clientX, y: event.clientY };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setCapturing(true);
-  };
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const previous = dragStart.current;
-    if (!previous || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    const deltaX = event.clientX - previous.x;
-    const deltaY = event.clientY - previous.y;
-    dragStart.current = { x: event.clientX, y: event.clientY };
-    setPaused(true);
-    setPreset("custom");
-    if (availableStage >= 1) {
-      setModel((current) => ({ ...current, yaw: current.yaw + deltaX * 0.01 }));
-      if (availableStage >= 2) {
-        setCamera((current) => ({
-          ...current,
-          pitch: Math.max(
-            -89 * DEG_TO_RAD,
-            Math.min(89 * DEG_TO_RAD, current.pitch - deltaY * 0.006),
-          ),
-        }));
-      }
-    } else {
-      setLocalVertex((current) => ({
-        ...current,
-        x: Math.max(-4, Math.min(4, current.x + deltaX / 45)),
-        y: Math.max(-3, Math.min(3, current.y - deltaY / 45)),
-      }));
-    }
-  };
-
-  const stopPointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragStart.current = null;
-    setCapturing(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    const key = event.key.toLowerCase();
-    if (showValidation && event.key === "ArrowLeft")
-      setSelectedStage((current) => Math.max(0, current - 1));
-    else if (showValidation && event.key === "ArrowRight")
-      setSelectedStage((current) => Math.min(5, current + 1));
-    else if (event.key === "ArrowLeft") setLocalAxis("x", localVertex.x - 0.1);
-    else if (event.key === "ArrowRight") setLocalAxis("x", localVertex.x + 0.1);
-    else if (event.key === "ArrowUp") setLocalAxis("y", localVertex.y + 0.1);
-    else if (event.key === "ArrowDown") setLocalAxis("y", localVertex.y - 0.1);
-    else if (key === "a" && availableStage >= 1)
-      setModel((current) => ({ ...current, yaw: current.yaw - 5 * DEG_TO_RAD }));
-    else if (key === "d" && availableStage >= 1)
-      setModel((current) => ({ ...current, yaw: current.yaw + 5 * DEG_TO_RAD }));
-    else if (key === "w" && availableStage >= 2)
-      setCamera((current) => ({
-        ...current,
-        position: { ...current.position, z: current.position.z + 0.2 },
-      }));
-    else if (key === "s" && availableStage >= 2)
-      setCamera((current) => ({
-        ...current,
-        position: { ...current.position, z: current.position.z - 0.2 },
-      }));
-    else if (key === " " && showValidation) setPaused((current) => !current);
-    else return;
-    event.preventDefault();
-  };
-
-  const homogeneousInput =
-    homogeneousKind === "point" ? pipelineToPoint(localVertex) : pipelineToDirection(localVertex);
-  const homogeneousOutput = pipelineTransform(
-    pipelineTranslationMatrix({ x: translationX, y: 1, z: 3 }),
-    homogeneousInput,
-  );
-  const modelDirect = pipelineModelPointDirect(localVertex, model);
-  const modelError = Math.hypot(
-    trace.world.x - modelDirect.x,
-    trace.world.y - modelDirect.y,
-    trace.world.z - modelDirect.z,
-  );
-  const cameraDirect = pipelineWorldToCameraDirect(trace.world, camera);
-  const viewError = Math.hypot(
-    trace.camera.x - cameraDirect.x,
-    trace.camera.y - cameraDirect.y,
-    trace.camera.z - cameraDirect.z,
-  );
-  const agreement = pipelineAgreementError(
-    localVertex,
-    model,
-    camera,
-    lens,
-    viewport.width,
-    viewport.height,
-  );
-
-  const readout = [
-    { label: "stage đang chọn", value: STAGES[selectedStage] },
-    { label: "giá trị", value: stageValue(trace, selectedStage) },
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) drawInspector(ctx, size, scene, stage);
+  }, [size, scene, stage]);
+  const r = inspectorResults(scene, stage),
+    v = inspectorViewport(scene);
+  const controls: {
+    key: InspectorParameter;
+    label: string;
+    min: number;
+    max: number;
+    step: number;
+    stage: number;
+    angle?: boolean;
+  }[] = [
+    { key: "localX", label: "Local X", min: -4, max: 4, step: 0.1, stage: 1 },
+    { key: "localY", label: "Local Y", min: -4, max: 4, step: 0.1, stage: 1 },
+    { key: "localZ", label: "Local Z", min: -4, max: 4, step: 0.1, stage: 1 },
+    { key: "modelX", label: "Model X", min: -12, max: 12, step: 0.1, stage: 3 },
+    { key: "modelZ", label: "Model Z", min: -4, max: 34, step: 0.1, stage: 3 },
+    { key: "modelYaw", label: "Model yaw", min: -180, max: 180, step: 1, stage: 3, angle: true },
+    { key: "scaleX", label: "Scale X", min: -2, max: 2, step: 0.1, stage: 3 },
+    { key: "cameraZ", label: "Camera Z", min: -4, max: 8, step: 0.1, stage: 4 },
+    { key: "cameraYaw", label: "Camera yaw", min: -180, max: 180, step: 1, stage: 4, angle: true },
+    {
+      key: "cameraPitch",
+      label: "Camera pitch",
+      min: -89,
+      max: 89,
+      step: 1,
+      stage: 4,
+      angle: true,
+    },
+    { key: "fov", label: "Vertical FOV", min: 25, max: 110, step: 1, stage: 5, angle: true },
+    {
+      key: "near",
+      label: "Near plane",
+      min: 0.05,
+      max: scene.lens.farPlane - 0.05,
+      step: 0.05,
+      stage: 5,
+    },
+    {
+      key: "far",
+      label: "Far plane",
+      min: scene.lens.nearPlane + 0.05,
+      max: 60,
+      step: 0.05,
+      stage: 5,
+    },
   ];
-  if (showHomogeneous) {
-    readout.push({ label: "đầu vào homogeneous", value: formatVec4(homogeneousInput) });
-    readout.push({ label: "sau translation", value: formatVec4(homogeneousOutput) });
-  } else if (showModel) {
-    readout.push({ label: "local vertex", value: formatVec4(trace.local) });
-    readout.push({ label: "model direct error", value: modelError.toExponential(2) });
-  } else if (showView) {
-    readout.push({ label: "world vertex", value: formatVec4(trace.world) });
-    readout.push({ label: "view direct error", value: viewError.toExponential(2) });
-  } else if (showProjection) {
-    readout.push({ label: "camera depth", value: trace.camera.z.toFixed(3) });
-    readout.push({ label: "clip.w", value: trace.clip.w.toFixed(3) });
-  } else if (showViewport) {
-    readout.push({ label: "trạng thái", value: statusText(trace.status) });
-    readout.push({ label: "screen pixel", value: stageValue(trace, 5) });
-  } else if (showValidation) {
-    readout.push({ label: "trạng thái", value: statusText(trace.status) });
-    readout.push({ label: "MVP agreement error", value: agreement.toExponential(2) });
-    readout.push({ label: "pointer capture", value: capturing ? "đang kéo" : "đã nhả" });
-  } else {
-    readout.push({ label: "local vertex", value: formatVec3(localVertex) });
-  }
-
   return (
     <div className="lab-body">
       <div className="lab-controls">
-        {(mode === "pipeline-local" || showHomogeneous) &&
-          (["x", "y", "z"] as const).map((axis) => (
-            <label key={axis}>
-              Local {axis.toUpperCase()}
-              <input
-                type="range"
-                min="-4"
-                max="4"
-                step="0.1"
-                value={localVertex[axis]}
-                onChange={(event) => setLocalAxis(axis, Number(event.target.value))}
-              />
-              <output>{localVertex[axis].toFixed(1)}</output>
-            </label>
-          ))}
-        {showHomogeneous && (
-          <label>
-            Loại dữ liệu
-            <select
-              value={homogeneousKind}
-              onChange={(event) => setHomogeneousKind(event.target.value as "point" | "direction")}
-            >
-              <option value="point">Point · w=1</option>
-              <option value="direction">Direction · w=0</option>
-            </select>
-          </label>
-        )}
-        {showHomogeneous && (
-          <label>
-            Translation X
-            <input
-              type="range"
-              min="-4"
-              max="4"
-              step="0.1"
-              value={translationX}
-              onChange={(event) => setTranslationX(Number(event.target.value))}
-            />
-            <output>{translationX.toFixed(1)}</output>
-          </label>
-        )}
-        {(showModel || showValidation) && (
-          <label>
-            Model yaw
-            <input
-              type="range"
-              min="-180"
-              max="180"
-              value={model.yaw * RAD_TO_DEG}
-              onChange={(event) =>
-                setModel((current) => ({
-                  ...current,
-                  yaw: Number(event.target.value) * DEG_TO_RAD,
-                }))
-              }
-            />
-            <output>{(model.yaw * RAD_TO_DEG).toFixed(0)}°</output>
-          </label>
-        )}
-        {showModel && (
-          <label>
-            Scale X
-            <input
-              type="range"
-              min="-2"
-              max="2"
-              step="0.1"
-              value={model.scale.x}
-              onChange={(event) =>
-                setModel((current) => ({
-                  ...current,
-                  scale: { ...current.scale, x: Number(event.target.value) },
-                }))
-              }
-            />
-            <output>{model.scale.x.toFixed(1)}</output>
-          </label>
-        )}
-        {(showModel || showValidation) && (
-          <label>
-            Model Z
-            <input
-              type="range"
-              min="-4"
-              max="34"
-              step="0.1"
-              value={model.position.z}
-              onChange={(event) => {
-                setModel((current) => ({
-                  ...current,
-                  position: { ...current.position, z: Number(event.target.value) },
-                }));
-                setPreset("custom");
-              }}
-            />
-            <output>{model.position.z.toFixed(1)}</output>
-          </label>
-        )}
-        {(showView || showValidation) && (
-          <label>
-            Camera Z
-            <input
-              type="range"
-              min="-4"
-              max="8"
-              step="0.1"
-              value={camera.position.z}
-              onChange={(event) =>
-                setCamera((current) => ({
-                  ...current,
-                  position: { ...current.position, z: Number(event.target.value) },
-                }))
-              }
-            />
-            <output>{camera.position.z.toFixed(1)}</output>
-          </label>
-        )}
-        {showView && (
-          <label>
-            Camera yaw
-            <input
-              type="range"
-              min="-90"
-              max="90"
-              value={camera.yaw * RAD_TO_DEG}
-              onChange={(event) =>
-                setCamera((current) => ({
-                  ...current,
-                  yaw: Number(event.target.value) * DEG_TO_RAD,
-                }))
-              }
-            />
-            <output>{(camera.yaw * RAD_TO_DEG).toFixed(0)}°</output>
-          </label>
-        )}
-        {showView && (
-          <label>
-            Camera pitch
-            <input
-              type="range"
-              min="-60"
-              max="60"
-              value={camera.pitch * RAD_TO_DEG}
-              onChange={(event) =>
-                setCamera((current) => ({
-                  ...current,
-                  pitch: Number(event.target.value) * DEG_TO_RAD,
-                }))
-              }
-            />
-            <output>{(camera.pitch * RAD_TO_DEG).toFixed(0)}°</output>
-          </label>
-        )}
-        {(showProjection || showViewport || showValidation) && (
-          <label>
-            Vertical FOV
-            <input
-              type="range"
-              min="25"
-              max="110"
-              value={lens.verticalFovRadians * RAD_TO_DEG}
-              onChange={(event) =>
-                setLens((current) => ({
-                  ...current,
-                  verticalFovRadians: Number(event.target.value) * DEG_TO_RAD,
-                }))
-              }
-            />
-            <output>{(lens.verticalFovRadians * RAD_TO_DEG).toFixed(0)}°</output>
-          </label>
-        )}
-        {showProjection && (
-          <label>
-            Near plane
-            <input
-              type="range"
-              min="0.1"
-              max="2"
-              step="0.1"
-              value={lens.nearPlane}
-              onChange={(event) =>
-                setLens((current) => ({ ...current, nearPlane: Number(event.target.value) }))
-              }
-            />
-            <output>{lens.nearPlane.toFixed(1)}</output>
-          </label>
-        )}
-        {(showViewport || showValidation) && (
-          <label>
-            Tình huống
-            <select value={preset} onChange={(event) => applyPreset(event.target.value)}>
-              <option value="visible">Visible</option>
-              <option value="near">Before near</option>
-              <option value="behind">Behind camera</option>
-              <option value="far">Beyond far</option>
-              <option value="outside">Outside frustum</option>
-              {preset === "custom" && <option value="custom">Tự chỉnh</option>}
-            </select>
-          </label>
-        )}
-        {showValidation && (
-          <label>
-            Stage
-            <select
-              value={selectedStage}
-              onChange={(event) => setSelectedStage(Number(event.target.value))}
-            >
-              {STAGES.map((stage, index) => (
-                <option key={stage} value={index}>
-                  {stage}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {showValidation && (
-          <button onClick={() => setPaused((current) => !current)}>
-            {paused ? "Tiếp tục" : "Tạm dừng"}
-          </button>
-        )}
-        {showValidation && (
-          <button
-            onClick={() =>
-              setModel((current) => ({
-                ...current,
-                yaw: advancePipelineYaw(current.yaw, 35 * DEG_TO_RAD, 1 / 30),
-              }))
-            }
+        <label>
+          Preset
+          <select
+            aria-label="Pipeline preset"
+            value=""
+            onChange={(e) => reset(Number(e.target.value))}
           >
-            Tiến một bước
-          </button>
+            <option value="" disabled>
+              Chọn thí nghiệm
+            </option>
+            {[
+              "Cảnh mặc định",
+              "Ví dụ tính tay",
+              "Before near",
+              "Behind camera",
+              "Beyond far",
+              "Outside XY",
+              "w = 0",
+            ].map((label, i) => (
+              <option key={i} value={i}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Vertex
+          <select
+            aria-label="Vertex"
+            value={scene.selectedVertex}
+            onChange={(e) => selectVertex(Number(e.target.value))}
+          >
+            {scene.vertices.map((_, i) => (
+              <option key={i} value={i}>
+                {i}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Stage
+          <select
+            aria-label="Stage"
+            value={scene.selectedStage}
+            onChange={(e) => selectStage(Number(e.target.value))}
+          >
+            {INSPECTOR_STAGES.map((s, i) => (
+              <option key={s} value={i}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+        {stage >= 3 && (
+          <label>
+            Thao tác kéo
+            <select
+              aria-label="Thao tác kéo"
+              aria-describedby={dragHelpId}
+              value={dragMode}
+              onChange={(e) => changeDragMode(e.target.value)}
+            >
+              <option value="model">Xoay mô hình</option>
+              <option value="view" disabled={stage < 4}>
+                Đổi góc nhìn{stage < 4 ? " — từ bài 4" : ""}
+              </option>
+            </select>
+          </label>
         )}
-        <button onClick={reset}>Đặt lại</button>
+        {controls
+          .filter((c) => stage >= c.stage)
+          .map((c) => {
+            const scale = c.angle ? DEG : 1,
+              value = inspectorParameterValue(scene, c.key) / scale;
+            return (
+              <label key={c.key}>
+                {c.label}
+                <input
+                  aria-label={c.label}
+                  type="range"
+                  min={c.min}
+                  max={c.max}
+                  step={c.step}
+                  value={value}
+                  onChange={(e) => edit(c.key, Number(e.target.value) * scale)}
+                />
+                <output>
+                  {value.toFixed(2)}
+                  {c.angle ? "°" : ""}
+                </output>
+              </label>
+            );
+          })}
+        <button onClick={togglePause} disabled={stage < 7 || reducedMotion}>
+          {scene.paused ? "Tiếp tục" : "Tạm dừng"}
+        </button>
+        <button onClick={step} disabled={stage < 7 || !scene.paused}>
+          Tiến một bước
+        </button>
+        {stage >= 7 && (
+          <button onClick={toggleDebug}>{scene.debug ? "Ẩn debug" : "Hiện debug"}</button>
+        )}
+        <button onClick={() => reset()}>Đặt lại</button>
       </div>
       <canvas
         ref={canvasRef}
         tabIndex={0}
-        role="img"
-        aria-label="Pipeline 3D từ local vertex qua Model, View, Projection tới pixel"
-        onKeyDown={onKeyDown}
+        style={{
+          height: scene.debug ? "clamp(320px,42vw,440px)" : "clamp(380px,58vw,580px)",
+          touchAction: "none",
+        }}
+        aria-label="Máy soi pipeline 3D: click chọn vertex, kéo để biến đổi, bàn phím và slider có cùng chức năng"
+        aria-describedby={dragHelpId}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={stopPointer}
-        onPointerCancel={stopPointer}
-        onLostPointerCapture={() => {
-          dragStart.current = null;
-          setCapturing(false);
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onLostPointerCapture={onPointerCancel}
+        onKeyDown={onKeyDown}
+        onBlur={() => {
+          cancelPointer();
+          commit({ ...sceneRef.current, paused: true });
         }}
       />
-      <LabReadout items={readout} />
+      <p id={dragHelpId}>
+        {stage < 3
+          ? "Kéo để sửa local X/Y của vertex đang chọn."
+          : dragMode === "model"
+            ? "Xoay mô hình: kéo ngang để xoay khối quanh trục Y của nó. Kéo dọc không có tác dụng; camera và lưới tọa độ world giữ nguyên."
+            : "Đổi góc nhìn: kéo ngang để đổi camera yaw, kéo dọc để đổi camera pitch. Mô hình và hệ tọa độ world không xoay; bạn đang nhìn chúng từ một hướng khác."}
+        {stage >= 3
+          ? " Mỗi lần kéo chỉ tác động đến chế độ đã chọn. Thanh điều khiển và bàn phím vẫn chỉnh được từng thông số riêng."
+          : ""}
+      </p>
+      <p>
+        Vertex màu vàng là điểm đang theo dõi. Local cũng gọi là model space; WORLD là kết quả sau
+        M. Bảng luôn giữ đủ sáu stage khi bật debug; dấu — nghĩa là chưa có giá trị, không phải tọa
+        độ 0. Viewport logic {v.width}×{v.height}; số SCREEN không phải CSS pixel của Canvas. Trước
+        bài 6, ảnh 3D dùng công thức tham chiếu P11 để đối chiếu bảng đang xây. Từ bài 3 có chế độ
+        Xoay mô hình; từ bài 4 có thêm Đổi góc nhìn. Delta kéo tính bằng CSS pixel, không nhân DPR.
+        R đặt lại, V chọn vertex, 1–6 chọn stage. Phím biến đổi giống bảng điều khiển SDL trong bài;
+        Tab và tổ hợp Ctrl/Alt/Meta vẫn dành cho browser.
+        {reducedMotion ? " Reduced motion: tắt tự quay; vẫn chỉnh tay và tiến một bước được." : ""}
+      </p>
+      {scene.debug && (
+        <>
+          <LabReadout
+            items={r.values.map((value, i) => ({
+              label: INSPECTOR_STAGES[i] + (i === scene.selectedStage ? " · đang chọn" : ""),
+              value: formatInspectorValue(value),
+            }))}
+          />
+          <LabReadout
+            items={[
+              {
+                label: "trạng thái",
+                value: stage >= 6 ? r.trace.status : "ảnh tham chiếu; pipeline chưa đủ stage",
+              },
+              { label: "pointer capture", value: captured ? "đang kéo" : "đã nhả" },
+              ...(stage === 2
+                ? [
+                    {
+                      label: "point sau translation(2,1,3)",
+                      value: formatInspectorValue(r.translatedPoint),
+                    },
+                    {
+                      label: "direction sau translation(2,1,3)",
+                      value: formatInspectorValue(r.translatedDirection),
+                    },
+                  ]
+                : []),
+              ...(stage >= 3
+                ? [
+                    {
+                      label: "model direct error",
+                      value: Number.isFinite(r.modelError) ? r.modelError.toExponential(2) : "—",
+                    },
+                  ]
+                : []),
+              ...(stage >= 7
+                ? [
+                    {
+                      label: "MVP agreement error",
+                      value:
+                        r.agreement !== null && Number.isFinite(r.agreement)
+                          ? r.agreement.toExponential(2)
+                          : "— invalid input",
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </>
+      )}
     </div>
   );
 }

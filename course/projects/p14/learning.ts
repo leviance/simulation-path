@@ -5,12 +5,13 @@ const learning = {
       focus:
         "Sinh sàn, tường, trần và mốc quan sát trong world; vẽ từ vị trí mắt cố định bằng renderer CPU của P13.",
       expected:
-        "Dựng căn phòng trước khi cho camera đi: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "Thấy phòng có sàn, tường, trần và hai hộp màu từ mắt cố định; resize không làm méo ảnh.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
         "include/scene.hpp",
         "include/view.hpp",
+        "include/presentation.hpp",
         "src/main.cpp",
       ],
       steps: [
@@ -34,7 +35,7 @@ const learning = {
       focus:
         "Trừ camera position, quan sát vật trôi ngược chiều mà không sửa một world vertex nào.",
       expected:
-        "Đổi gốc tọa độ về vị trí camera: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "Đổi Camera X/Z làm cảnh dịch ngược chiều trên ảnh; tọa độ world của các cạnh vẫn giữ nguyên.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
@@ -61,7 +62,7 @@ const learning = {
     "p14-l03": {
       focus: "Suy đúng dấu và thứ tự inverse yaw/pitch theo quy ước +Z trước, +Y lên.",
       expected:
-        "Nhìn quanh bằng phép quay ngược: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "IJKL quay quanh vị trí mắt; yaw 90° nhìn về tường +X, pitch dương nhìn lên mà không đưa camera lên cao.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
@@ -88,12 +89,13 @@ const learning = {
       focus:
         "Từ yaw/pitch suy basis, so dot product với cách quay ngược và kiểm tra số biết trước.",
       expected:
-        "Dựng ba trục forward, right, up: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "HUD hiện forward/right/up khớp các góc biết trước; các vector dài 1 và vuông góc từng đôi.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
         "include/scene.hpp",
         "include/view.hpp",
+        "include/presentation.hpp",
         "src/main.cpp",
       ],
       steps: [
@@ -117,12 +119,13 @@ const learning = {
       focus:
         "Đọc keyboard state, tạo direction trong world và nhân speed × dt, không bay khi nhìn lên.",
       expected:
-        "Đi bộ theo hướng nhìn với WASD: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "WASD đi theo yaw, đi chéo không nhanh hơn; 30/60/144 bước trong một giây đều đi 3.5 unit khi chưa chạm biên.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
         "include/scene.hpp",
         "include/view.hpp",
+        "include/presentation.hpp",
         "src/main.cpp",
       ],
       steps: [
@@ -145,12 +148,13 @@ const learning = {
       focus:
         "Tách forward đầy đủ khỏi groundForward, dùng Q/E theo world Y và chuẩn hóa tổng hướng.",
       expected:
-        "Thêm Fly và điều khiển độ cao: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "Walk giữ Y=1.6; Fly đi theo hướng nhìn, Q/E chỉ đổi world Y và tổng tốc độ không tăng khi giữ nhiều phím.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
         "include/scene.hpp",
         "include/view.hpp",
+        "include/presentation.hpp",
         "src/main.cpp",
       ],
       steps: [
@@ -173,12 +177,13 @@ const learning = {
       focus:
         "Click để bật SDL relative mode, dùng delta không nhân dt và dọn input khi thoát hoặc mất focus.",
       expected:
-        "Nhìn quanh bằng relative mouse mode: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "Click bật relative look, rê chuột không kẹt ở mép; Esc, pause và mất focus nhả chuột đúng lúc.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
         "include/scene.hpp",
         "include/view.hpp",
+        "include/presentation.hpp",
         "src/main.cpp",
       ],
       steps: [
@@ -203,7 +208,7 @@ const learning = {
       focus:
         "Giới hạn sáu biên ngoài, pause/step/reset, chế độ sạch và đi thử tự động có thể dừng.",
       expected:
-        "Giữ camera trong phòng, hoàn thiện bản demo: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "Camera dừng ở biên ngoài; pause/step/reset hoạt động và ẩn debug vẫn thấy toàn cảnh phòng.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
@@ -232,12 +237,13 @@ const learning = {
       focus:
         "Khóa phép view bằng oracle độc lập, kiểm basis/movement/clipping và build toàn bộ source.",
       expected:
-        "Kiểm chứng camera và chạy bản hoàn chỉnh: chạy checkpoint và đối chiếu số, hình ảnh cùng thí nghiệm trong bài.",
+        "Chạy final độc lập, CTest qua Debug/Release và hoàn thành checklist kiểm chuột, focus, resize trên desktop.",
       files: [
         "include/lab.hpp",
         "include/room.hpp",
         "include/scene.hpp",
         "include/view.hpp",
+        "include/presentation.hpp",
         "src/main.cpp",
         "tests/tests.cpp",
       ],

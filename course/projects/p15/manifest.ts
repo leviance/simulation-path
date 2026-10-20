@@ -1,59 +1,59 @@
 import type { PublishedProjectEditorial } from "../../types";
-
 const project = {
   prerequisites: [
-    "Project 09 — column vector, transformation matrix và thứ tự nhân",
-    "Project 11 — perspective divide, NDC và viewport",
-    "Project 14 — view transform của camera có position, yaw và pitch",
+    "Project 09 — column vector và thứ tự nhân ma trận",
+    "Project 11 — perspective, NDC và viewport",
+    "Project 13 — vertex/edge list, clipping và Bresenham",
+    "Project 14 — camera position, inverse yaw và pitch",
   ],
   summary:
-    "Xây một máy soi pipeline trên CPU để theo dõi cùng một vertex từ local space qua Model, View, Projection, clip space, NDC và cuối cùng tới pixel trên màn hình.",
+    "Tự viết Mat4 và máy soi pipeline 3D: chọn một vertex trên mô hình, thay transform hoặc lens và theo dõi đủ sáu hệ tọa độ trên bảng cập nhật realtime.",
   challenge: {
-    timebox: "260–340 phút",
+    timebox: "4–6 giờ thử tự làm trước khi đọc hướng dẫn",
     mission:
-      "Tự xây dựng một chương trình SDL3 theo dõi một vertex khi nó đi qua pipeline 3D. Người dùng có thể dừng ở từng chặng, sau đó thay đổi model, camera hoặc lens để thấy chính xác dữ liệu bắt đầu đổi từ đâu.",
+      "Tự xây dựng một ứng dụng C++/SDL3 có viewport 3D và bảng LOCAL/WORLD/VIEW/CLIP/NDC/SCREEN cho cùng một vertex. Mục tiêu là nhìn thấy dữ liệu đổi ở bước nào khi bạn sửa model, camera hoặc lens.",
     outcome:
-      "Cửa sổ hiển thị sơ đồ Local → World → Camera → Clip → NDC → Screen, một viewport chứa điểm cuối cùng và thanh tiêu đề ghi chặng đang chọn cùng tọa độ tương ứng. Người dùng có thể đi lần lượt qua từng chặng, xoay model, di chuyển camera, đổi FOV và thử các tình huống visible/near/behind/outside.",
+      "Một mô hình wireframe nằm trên lưới sàn có chiều sâu, tám vertex chọn được và một bảng sáu dòng hiện ngay trong cửa sổ. Phím/slider đổi transform, FOV, near/far; ẩn debug vẫn giữ cảnh 3D.",
     requirements: [
-      "Bắt đầu bằng một local vertex và một inspector nhìn thấy được trước khi thêm matrix hoặc perspective.",
-      "Tự viết Vec4, Mat4, identity, matrix multiplication và matrix–vector multiplication theo quy ước column vector.",
-      "Dựng model matrix từ scale, yaw rotation và translation; chứng minh local point có w=1 nhận translation còn direction có w=0 thì không.",
-      "Dựng view matrix bằng các phép nghịch đảo của camera pose và đối chiếu kết quả với view transform tường minh của Project 14.",
-      "Dựng perspective projection matrix cho camera nhìn theo +Z; clip.w phải giữ camera-space Z để perspective divide dùng đúng mẫu số.",
-      "Chỉ perspective divide sau khi kiểm tra clip.w, sau đó đổi NDC sang pixel và phân loại behind, before-near, beyond-far, outside hoặc visible.",
-      "Ghép MVP theo thứ tự Projection × View × Model và chứng minh kết quả giống chạy ba matrix riêng rẽ.",
-      "Cho phép chọn chặng, thử các cấu hình gây lỗi, tạm dừng, tiến từng bước, đặt lại, đổi kích thước cửa sổ, dùng bàn phím và kéo chuột; toàn bộ phép toán phải kiểm thử được mà không mở window.",
+      "Tự viết Mat4 row-major storage, nhân column vector, identity và phép nhân hai ma trận.",
+      "Dựng M=T×Ry×S, V=Rx(pitch)×Ry(-yaw)×T(-camera.position), P cho view nhìn +Z và NDC z trong [0,1].",
+      "Giữ riêng local/model-space, world, view, clip, NDC, screen; không ghi đè input hoặc chỉ hiện một giá trị trên title bar.",
+      "Cho phép chọn vertex; thay local XYZ, model X/Z/yaw/scaleX, camera Z/yaw/pitch và lens FOV/near/far khi đang chạy.",
+      "Giải thích point w=1, direction w=0 và vì sao projection tạo clip.w=view.z; phép chia cho w là bước riêng, không phải phép nhân ma trận.",
+      "Không chia khi w≤epsilon; giữ NDC/screen hữu hạn của điểm bị clip để soi lỗi, nhưng chỉ vẽ vertex nằm trong vùng nhìn.",
+      "Viewport chính có perspective, lưới sàn, trục và wireframe; clip đoạn trước divide và screen trước Bresenham.",
+      "Có preset tính tay, visible/near/behind/far/outside/w=0, pause/step/reset, debug/clean và source độc lập tải được.",
     ],
     constraints: [
-      "Không dùng OpenGL, GLM, Eigen, DirectXMath, SDL_RenderGeometry hoặc matrix/projection API có sẵn.",
-      "Dùng row-major storage nhưng column vector; không đổi quy ước ở giữa project.",
-      "Không ghi đè local vertex bằng world/camera/clip value; PipelineTrace phải giữ riêng từng stage để inspector không nói dối dữ liệu.",
-      "Không chia clip.xyz cho w khi w≤0 hoặc camera depth nằm ngoài near/far; không clamp một vertex lỗi vào viewport để giả visible.",
-      "Project này chỉ theo dõi point; chưa raster triangle, chưa Z-buffer và chưa cắt primitive qua near plane.",
+      "Không dùng OpenGL, GLM, Eigen, DirectXMath, SDL_RenderGeometry hoặc engine để thay phần toán/rendering cần tự viết.",
+      "Column vector và quy ước +Z phải được giữ xuyên suốt; storage row-major không đổi thứ tự tác động.",
+      "Stage chưa tính được phải hiện — cùng lý do; không dùng tọa độ (0,0) giả hoặc clamp điểm lỗi vào màn hình.",
+      "Ảnh tham chiếu P11 chỉ hỗ trợ các bài đầu; final phải dùng Mat4 và perspective divide mới cho renderer.",
+      "Chưa tô triangle hoặc Z-buffer. Cạnh wireframe được clip để cảnh đúng, không biến point inspector thành bài clipping tam giác.",
+      "Canvas hỗ trợ học, không thay executable SDL; browser không biên dịch hoặc chạy C++.",
     ],
     definitionOfDone: [
-      "Identity giữ nguyên Vec4; translation thay point w=1 nhưng không thay direction w=0.",
-      "Model matrix cho kết quả giống scale → rotate Y → translate thực hiện bằng các hàm thành phần.",
-      "View matrix cho kết quả giống phép trừ camera position rồi inverse yaw/pitch trong sai số 10⁻⁹.",
-      "Projection tạo clip.w=camera.z; near plane đổi thành NDC.z≈0 và far plane thành NDC.z≈1.",
-      "MVP ghép cho cùng clip point với ba matrix riêng; đổi thứ tự nhân phải làm test dữ liệu không giao hoán thất bại.",
-      "Mỗi tình huống mẫu được phân loại đúng, điểm visible nằm trong viewport và mọi giá trị trung gian vẫn hữu hạn.",
-      "CTest vượt qua; starter, bảy checkpoint và final build sạch warning ở Debug lẫn Release.",
+      "Preset tính tay: local(1,1,0) → world(1,1,4) → view(0,1,4) → clip(0,1,27/8,4) → NDC(0,1/4,27/32) → screen(550,210) trên viewport 1100×560.",
+      "T×S và S×T có đáp án độc lập khác nhau; translation tác động point nhưng không tác động direction.",
+      "Model và view khớp các đường tính vô hướng; MVP khớp pipeline rời trong sai số 10⁻⁹, không dùng phép so này thay oracle tính tay.",
+      "FOV/near/far không sửa local/world/view; các biên near/far vẫn visible trong tolerance, w=0/âm không sinh NDC/screen giả.",
+      "Tám vertex chọn được, đủ sáu dòng cập nhật trong window; phím near/far hoạt động, ẩn debug giữ mô hình và chiều sâu.",
+      "Starter, bảy checkpoint, final và CTest build/chạy Debug lẫn Release; renderer, finite guards và vòng đời Canvas có regression tests.",
     ],
   },
-  duration: "10–11 giờ",
+  duration: "10–12 giờ",
   objectives: [
-    "Nhìn pipeline 3D như một chuỗi đổi hệ tọa độ có dữ liệu trung gian kiểm tra được",
-    "Mở rộng affine matrix 2D thành Mat4 và hiểu vai trò của homogeneous w",
-    "Dựng, ghép và kiểm chứng Model, View, Projection theo một quy ước nhất quán",
+    "Theo dõi một vertex qua từng hệ tọa độ mà không phải đoán từ hình ảnh cuối",
+    "Tự dựng và ghép Mat4, phân biệt homogeneous w với tọa độ screen",
+    "Viết code renderer và inspector cùng dùng một pipeline, kiểm chứng bằng số tính tay",
   ],
   lessons: [
     {
       id: "p15-l01",
       slug: "01-dung-may-soi-vertex",
-      title: "Dựng máy soi cho một vertex",
+      title: "Dựng cảnh 3D và bảng theo dõi vertex",
       summary:
-        "Bắt đầu từ framebuffer chạy được, đặt một local vertex vào sơ đồ pipeline và vẽ marker trước khi xuất hiện bất kỳ matrix nào.",
+        "Từ bộ khung CPU của P13/P14, chọn vertex và hiện Local thật; các stage chưa viết để trống có giải thích.",
       order: 1,
       estimatedMinutes: 60,
       demoId: "pipeline3d",
@@ -61,9 +61,9 @@ const project = {
     {
       id: "p15-l02",
       slug: "02-vec4-va-mat4",
-      title: "Từ Vec3 sang Vec4 và Mat4",
+      title: "Thêm w để tịnh tiến bằng ma trận",
       summary:
-        "Mở rộng ma trận affine của Project 09 lên 4×4, tự viết phép nhân và dùng w để phân biệt point với direction.",
+        "Tự viết Mat4 và phép nhân; dùng cùng xyz để kiểm sự khác nhau giữa point w=1 và direction w=0.",
       order: 2,
       estimatedMinutes: 80,
       demoId: "pipeline3d",
@@ -71,9 +71,9 @@ const project = {
     {
       id: "p15-l03",
       slug: "03-model-matrix-local-to-world",
-      title: "Model matrix đưa local vertex ra world space",
+      title: "Đưa mô hình từ local ra world",
       summary:
-        "Ghép scale, rotation Y và translation theo đúng thứ tự, rồi quan sát mỗi tham số bắt đầu làm dữ liệu thay đổi từ chặng World.",
+        "Scale, xoay rồi tịnh tiến bằng M=T×Ry×S; nối cả bảng số lẫn renderer sang model matrix.",
       order: 3,
       estimatedMinutes: 75,
       demoId: "pipeline3d",
@@ -81,9 +81,9 @@ const project = {
     {
       id: "p15-l04",
       slug: "04-view-matrix-world-to-camera",
-      title: "View matrix hoàn tác camera pose",
+      title: "Viết lại camera bằng view matrix",
       summary:
-        "Đưa inverse translation, inverse yaw và inverse pitch vào Mat4 rồi đối chiếu với công thức view tường minh đã học ở Project 14.",
+        "Đổi công thức camera của P14 thành V, giữ world đứng yên và kiểm bằng inverse yaw/pitch tường minh.",
       order: 4,
       estimatedMinutes: 80,
       demoId: "pipeline3d",
@@ -91,9 +91,9 @@ const project = {
     {
       id: "p15-l05",
       slug: "05-projection-matrix-va-clip-space",
-      title: "Projection matrix tạo clip space và w",
+      title: "Giữ mẫu số trong clip.w",
       summary:
-        "Dựng perspective matrix từ FOV, aspect, near và far; theo dõi vì sao clip.w nhận camera-space Z trước khi chia phối cảnh.",
+        "Suy từng hàng của perspective matrix từ FOV, aspect và hai điều kiện near/far; matrix chưa chia cho w.",
       order: 5,
       estimatedMinutes: 85,
       demoId: "pipeline3d",
@@ -101,9 +101,9 @@ const project = {
     {
       id: "p15-l06",
       slug: "06-perspective-divide-ndc-va-viewport",
-      title: "Từ clip space tới pixel an toàn",
+      title: "Chia cho w và tìm pixel trên màn hình",
       summary:
-        "Kiểm tra w/depth, thực hiện perspective divide, đổi NDC sang viewport và giữ trạng thái lỗi thay vì vẽ tọa độ giả.",
+        "Giữ stage không tồn tại dưới dạng optional, phân loại clip và thay đường tham chiếu bằng renderer dùng P.",
       order: 6,
       estimatedMinutes: 75,
       demoId: "pipeline3d",
@@ -111,9 +111,9 @@ const project = {
     {
       id: "p15-l07",
       slug: "07-ghep-mvp-va-validation",
-      title: "Ghép MVP và kiểm chứng toàn pipeline",
+      title: "Ghép MVP và kiểm chứng bản hoàn chỉnh",
       summary:
-        "Nhân Projection × View × Model, hoàn thiện chọn chặng, tình huống mẫu và chuyển động; sau đó dùng CTest để khóa các điều kiện đúng trước khi ghép mã hoàn chỉnh.",
+        "Theo ví dụ tính tay qua đủ sáu stage, thêm pause/step/clean và chạy source độc lập cùng CTest.",
       order: 7,
       estimatedMinutes: 90,
       demoId: "pipeline3d",

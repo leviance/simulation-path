@@ -1,117 +1,147 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Dựng máy soi cho một vertex
+# Dựng cảnh 3D và bảng theo dõi vertex
 
 ## Vấn đề cần giải quyết
 
-Ở các project trước, ta thường chỉ quan tâm hai đầu của quá trình: một vertex 3D được khai báo trong code và một marker xuất hiện trên màn hình. Khi marker nằm sai chỗ, nguyên nhân có thể đến từ model rotation, camera, projection hoặc phép đổi NDC sang pixel. Nếu mọi giá trị đều dùng chung một biến `point`, ta không còn biết stage nào làm dữ liệu sai lần đầu tiên.
+Ở Project 14, bạn đã biết đưa một điểm world về phía camera rồi chiếu lên màn hình. Nhưng nếu hình đột nhiên lệch sang trái, bạn sẽ tìm lỗi ở phép scale, camera hay projection?
 
-Project 15 sẽ xây một **máy soi pipeline**. Thay vì chỉ trả pixel cuối, chương trình giữ lại sáu trạng thái của cùng một vertex:
+Ta sẽ làm một **máy soi pipeline**: chọn một vertex trên mô hình và đọc tọa độ của chính nó ở từng bước Local → World → View → Clip → NDC → Screen. Bài đầu dựng nơi quan sát trước; chưa viết ma trận mà vẫn có cảnh 3D chạy được để đối chiếu.
 
-$$
-Local \rightarrow World \rightarrow Camera \rightarrow Clip \rightarrow NDC \rightarrow Screen
-$$
-
-Checkpoint đầu chưa viết matrix. Mục tiêu trước mắt là dựng framebuffer, pipeline rail và một local vertex nhìn thấy được. Các stage chưa tồn tại phải được hiển thị là “đang chờ”, không dùng tọa độ giả để lấp chỗ trống.
+Trước khi đọc tiếp, hãy thử đề bài ở trang tổng quan. Đích đến không phải một cửa sổ có mỗi dòng tọa độ trên title bar: bản cuối phải hiện đủ sáu dòng ngay trong cửa sổ, có điều khiển transform, FOV, near/far và chế độ xem sạch.
 
 ## Hiểu ý tưởng trước khi viết code
 
-`Local` mô tả vertex tương đối với gốc riêng của model. Nếu một khối lập phương có tâm tại local origin thì đỉnh `(1, 1, 1)` vẫn giữ nguyên dù cả khối được đặt ở đâu trong world.
+Một vertex không có sáu vị trí độc lập. Đó là **cùng một điểm được mô tả trong sáu hệ tọa độ**. Local còn gọi là model space; nhân model matrix mới cho world, không phải Local và Model là hai phép biến đổi liên tiếp.
 
-Ta chọn vertex:
-
-$$
-p_{local}=(1.0,\ 0.75,\ 0.5)
-$$
-
-Để checkpoint đầu có hình, ta dùng một phép xem trước song song rất đơn giản:
-
-$$
-preview=(local.x,local.y)\times pixelsPerUnit
-$$
-
-Đây **không phải perspective projection**. Nó chỉ giúp xác nhận framebuffer, trục X/Y và marker hoạt động trước khi pipeline thật xuất hiện.
+Ta dùng lại tám vertex và mười hai cạnh từ Project 13. Điểm đang chọn được tô vàng. Lưới sàn và ba trục là hình học 3D thật, giúp bạn nhận ra độ sâu; chúng không thay thế bảng số.
 
 <InteractiveLab demo="pipeline3d" mode="pipeline-local" />
 
+Chọn một vertex, kéo Local X/Y hoặc dùng mũi tên. Mô hình biến dạng vì bạn sửa **một vertex**, không phải dịch toàn model. Dòng LOCAL thay đổi; năm dòng sau còn dấu — là đúng. Ảnh ở bài này dùng phép chiếu tham chiếu đã học ở P11, chưa phải bằng chứng rằng MVP mới đã hoạt động.
+
 ## Viết code từng bước
 
-### Bước 1 — Tạo kiểu dữ liệu đúng với bài toán
+### Bước 1 — Chạy Starter trong thư mục học riêng
 
-`Vec3` giữ local coordinate; `Vec2` chỉ dùng cho preview trên framebuffer:
+Tải ZIP ở trang project, giải nén riêng và mở terminal tại CMakeLists.txt:
 
-```cpp title="include/lab.hpp — local vertex và preview 2D"
-struct Vec3 {
-    double x{};
-    double y{};
-    double z{};
+```bash title="Terminal — chạy bộ khung"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_15_starter --parallel 2
+./build/Debug/project_15_starter.exe
+```
+
+Starter có SDL window/renderer/texture, framebuffer 1100×800, Bresenham và clip đoạn từ P13/P14. Bạn sẽ thấy lưới sàn, còn mô hình và sáu dòng dữ liệu chưa có.
+
+Trong suốt project, viết vào starter/include và starter/src rồi build target project_15_starter. Các target checkpoint/final chạy **bản tham khảo riêng**, không tự nhận phần bạn vừa sửa. Không viết bài tập trong source-template của repository website: hãy làm trong bản ZIP.
+
+### Bước 2 — Hiểu state trước khi nối renderer
+
+Trong scene.hpp, bộ khung đã có state và vertex/edge list. Không cần tự đoán một biến model hoặc camera ở đâu ra:
+
+```cpp title="include/scene.hpp — state đã có trong Starter"
+struct Scene {
+    std::array<Vec3, 8> vertices = kVertices;
+    std::size_t selectedVertex = 6;
+    int selectedStage = 0;
+    ModelTransform model{};
+    Camera3D camera{};
+    PerspectiveLens lens{};
+    bool debug = true;
+    bool paused = true;
 };
+```
 
-inline Vec2 previewLocalVertex(Vec3 point, double pixelsPerUnit) {
-    return {point.x * pixelsPerUnit, point.y * pixelsPerUnit};
+selectedVertex là index 0–7. selectedStage chỉ chọn dòng cần chú ý, không làm năm dòng khác biến mất. model/camera/lens được chuẩn bị sẵn để mỗi bài thêm phép toán mà không phải đổi interface của cả ứng dụng.
+
+### Bước 3 — Vẽ cạnh và đánh dấu vertex
+
+Thay drawScene trong view.hpp bằng bản sau. drawContext, activeModelPoint, activeViewPoint, drawWorldLine và visibleVertex đã có trong Starter; các bài 3/4/6 sẽ thay từng bộ chuyển tiếp đó bằng Mat4:
+
+```cpp title="include/view.hpp — vẽ mô hình từ vertex list"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear(kBackground);
+    drawContext(image, scene);
+    for (const auto& edge : kEdges) {
+        const Vec3 a = activeModelPoint(scene.vertices[edge[0]], scene);
+        const Vec3 b = activeModelPoint(scene.vertices[edge[1]], scene);
+        drawWorldLine(image, a, b, scene, kGhost);
+    }
+    for (std::size_t index = 0; index < scene.vertices.size(); ++index) {
+        const auto point = visibleVertex(scene.vertices[index], scene);
+        if (!point) {
+            continue;
+        }
+        std::uint32_t color = kShape;
+        int radius = 3;
+        if (index == scene.selectedVertex) {
+            color = kMarker;
+            radius = 7;
+        }
+        disc(image, static_cast<int>(std::lround(point->x)), static_cast<int>(std::lround(point->y)), radius, color);
+    }
+    // Cảnh không nằm trong nhánh debug. Chỉ có đường phân cách bảng số là overlay.
+    if (scene.debug) {
+        drawLine(image, 0, 560, 1099, 560, kGhost);
+    }
 }
 ```
 
-Không thêm trường `screenX` vào `Vec3`. Một kiểu dữ liệu không nên vừa là local point vừa giả làm screen point.
+Với mỗi cạnh, ta đổi cả hai local endpoint sang world rồi mới gọi drawWorldLine. Hàm này tiếp tục đổi sang view, clip near/far, chiếu, clip screen và gọi Bresenham. Chỉ sửa mô hình trong một nơi; không vẽ thêm một bản 2D khác để đánh dấu vị trí điểm.
 
-### Bước 2 — Tạo framebuffer trước pipeline
+Vòng sau vẽ vertex nhỏ màu xanh, riêng điểm được chọn có bán kính 7 và màu vàng. SDL chỉ trình bày framebuffer, không vẽ mesh thay ta.
 
-Starter đã có đủ chuỗi SDL3: tạo window, renderer, streaming texture và một `std::vector<std::uint32_t>` theo row-major layout. Mỗi frame xóa buffer rồi present texture:
+### Bước 4 — Đưa Local vào bảng số
 
-```cpp title="src/main.cpp — framebuffer CPU chạy độc lập với pipeline"
-clearCanvas(pixels);
-const ViewportRect viewport = makeViewport(width, height);
-drawViewport(pixels, width, height, viewport);
+Thay inspectScene trong scene.hpp. Inspector không tính lại một vị trí “gần giống” để minh họa; nó đọc đúng vertex mà renderer đang dùng:
+
+```cpp title="include/scene.hpp — dòng LOCAL đầu tiên"
+inline Inspection inspectScene(const Scene& scene) {
+    Inspection result;
+    if (scene.selectedVertex >= scene.vertices.size()) {
+        result.status = "invalid vertex index";
+        return result;
+    }
+    const Vec3 local = scene.vertices[scene.selectedVertex];
+    if (finite(local)) {
+        result.rows[0].value = Vec4{local.x, local.y, local.z, 1.0};
+    }
+    return result;
+}
 ```
 
-Pipeline sau này chỉ quyết định **pixel nào cần đánh dấu**. Việc lưu pixel và present không cần biết Model/View/Projection hoạt động ra sao.
-Sau khi vẽ xong, `SDL_UpdateTexture` chép framebuffer lên streaming texture như các project CPU trước.
-
-### Bước 3 — Dựng sáu vị trí trên pipeline rail
-
-Rail được vẽ từ trái sang phải. `availableStage` cho biết checkpoint hiện đã tính được tới đâu; `selectedStage` cho biết ô đang được đọc:
-
-```cpp title="src/main.cpp — vẽ pipeline rail"
-drawPipelineRail(pixels, width, height, activeStage, availableStage);
-```
-
-Checkpoint 1 đặt `availableStage = 0`, vì mới chỉ có Local. World tới Screen vẫn hiện bằng màu mờ để người học biết đích đến nhưng không nhầm rằng dữ liệu đã tồn tại.
-
-### Bước 4 — Vẽ marker local bằng preview có nhãn rõ ràng
-
-```cpp title="src/main.cpp — marker xem trước của local vertex"
-const lab::Vec2 preview = lab::previewLocalVertex(localVertex, 54.0);
-drawPreviewMarker(pixels, width, height, viewport, preview.x, preview.y, rgba(255, 196, 88));
-```
-
-Title bar ghi `LOCAL vertex` và ba tọa độ. Khi thay X/Y, marker di chuyển; thay Z không đổi preview. Đó là hành vi cố ý vì phép xem trước chưa có chiều sâu.
+Vec4 ở đây mới là kiểu chứa dữ liệu để bảng có đủ chỗ cho w. Chưa có phép nhân Mat4. Bốn thành phần Local là (x,y,z,1); bài sau sẽ giải thích số 1 cuối cùng.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build máy soi checkpoint 1"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+Main của Starter đã tạo Scene và Framebuffer trước vòng lặp. Mỗi khi dirty, nó gọi drawScene, inspectScene, SDL_UpdateTexture rồi presentFramebuffer. Bạn chỉ thay hai hàm trên, không thêm một vòng lặp SDL thứ hai.
+
+presentFramebuffer đã dành sáu dòng cho inspector. optional rỗng được in thành —, không phải (0,0,0). V chọn vertex tiếp theo; click gần một điểm cũng chọn được. Mũi tên sửa local X/Y, PageUp/PageDown sửa local Z; R đặt lại.
+
+```bash title="Terminal — đối chiếu checkpoint 1"
 cmake --build build --config Debug --target project_15_checkpoint_1
+./build/Debug/project_15_checkpoint_1.exe
 ```
 
-Mở executable và resize cửa sổ. Rail phải giữ đủ sáu node, viewport không có pixel vượt biên và marker local vẫn nằm quanh tâm.
+Sau khi đối chiếu, nhớ build Starter của bạn để kiểm phần tự viết. Hai target này không phải hai tên của cùng source.
 
 ## Thử làm sai để hiểu đúng
 
-1. Gán `localVertex.x += 0.01` trong render loop. Marker sẽ tự trôi dù chưa có input; hoàn tác để local data trở lại bất biến.
-2. Dùng `point.z` thay cho `point.y` trong `previewLocalVertex`. Thay Z rồi quan sát marker đi theo chiều dọc; sau đó phục hồi trục Y.
-3. Đặt `availableStage = 5`. Rail sẽ nói rằng Screen đã sẵn sàng dù chưa hề có projection. Đây là lỗi giao diện nhưng cũng là lỗi mô hình tư duy.
+1. Chọn vertex 6 rồi đổi Local X. Nếu cả mô hình cùng dịch, bạn đang sửa model.position thay vì scene.vertices[6]. Khôi phục phép sửa đúng field và quan sát các cạnh nối với vertex đó.
+2. Đặt giá trị 0 vào mọi stage chưa viết. Bạn sẽ không phân biệt được một kết quả thật ở origin với bước còn thiếu. Trả các optional về rỗng.
+3. Xóa depth clip rồi chọn điểm sát camera. Các cạnh có thể kéo dài bất thường; khôi phục đường clip đoạn đã có trong bộ khung.
 
 ## Tự kiểm tra kết quả
 
-- Window, renderer, texture và framebuffer được tạo với đường báo lỗi rõ ràng.
-- Local vertex được lưu một lần và không bị screen coordinate ghi đè.
-- Rail có đúng sáu stage theo thứ tự Local → World → Camera → Clip → NDC → Screen.
-- Chỉ Local được đánh dấu là đã có dữ liệu.
-- Preview X/Y đổi marker; Z chưa ảnh hưởng và được giải thích đúng.
-- Resize tạo lại texture và buffer theo kích thước pixel mới.
+- Lưới sàn có chiều sâu, mô hình là tám vertex nối bằng mười hai cạnh.
+- Chọn vertex 0–7 làm marker vàng và dòng LOCAL cùng chuyển sang điểm đó.
+- Sửa local XYZ không tự sửa model hoặc camera.
+- Năm stage chưa xây hiện —. Không quảng cáo ảnh tham chiếu là pipeline mới đã hoàn chỉnh.
+- Resize chỉ đổi cách trình bày bảng logic; không tạo framebuffer bằng kích thước màn hình không giới hạn.
 
 ## Bài tập mở rộng
 
-Thêm một local vertex thứ hai nhưng vẫn chỉ cho phép chọn một vertex để đưa qua inspector. Đừng tạo hai pipeline song song; mục tiêu là học cách thay **đầu vào** mà không làm giao diện bị nhân đôi.
+Trước khi chỉnh vertex 6, ghi lại các vertex còn lại. Sau khi chỉnh, chỉ những cạnh kề điểm đó được đổi hình. Dùng điều này để kiểm tra renderer có thật sự đọc vertex/edge list hay không.
 
-Bài tiếp theo sẽ mở rộng `Vec3` thành `Vec4`, tự viết `Mat4` và giải thích vì sao một point cần `w=1` trong khi một direction cần `w=0`.
+Bài tiếp theo: [Thêm w để tịnh tiến bằng ma trận](/projects/3d-pipeline-inspector/02-vec4-va-mat4).

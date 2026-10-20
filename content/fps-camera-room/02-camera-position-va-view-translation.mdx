@@ -31,6 +31,9 @@ Trong `lab.hpp`, `FpsCamera` có position, yaw, pitch. Bài này mới dùng pos
 ```cpp title="include/lab.hpp — đoạn ghép"
 struct FpsCamera {
     Vec3 position{0.0, 1.6, 2.0};
+    double yaw = 0.0;
+    double pitch = 0.0;
+};
 ```
 
 Tên `position` là tọa độ world của mắt. Nó không phải tọa độ screen, không cần nhân aspect ratio hay pixel ratio.

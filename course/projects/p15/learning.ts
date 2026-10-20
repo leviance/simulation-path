@@ -1,177 +1,160 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
 const learning = {
   guides: {
     "p15-l01": {
       focus:
-        "Bắt đầu từ framebuffer CPU đã chạy được, tạo một local vertex và vẽ pipeline rail cùng viewport marker trước khi đưa matrix vào chương trình.",
+        "Thêm mô hình vào viewport đã chạy được; chỉ Local là dữ liệu inspector thật ở bài này.",
       expected:
-        "Cửa sổ hiện sáu stage Local/World/Camera/Clip/NDC/Screen. Checkpoint đầu chỉ có local value thật; các stage chưa xây được ghi rõ là pending, không giả vờ đã project.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Chọn vertex 0–7 bằng V hoặc click, sửa local XYZ và thấy cả mô hình lẫn dòng LOCAL thay đổi.",
+      files: ["include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Giữ local vertex làm nguồn sự thật",
+          title: "Chạy Starter trước",
           explanation:
-            "Vertex được đặt quanh local origin và không bị ghi đè trong render loop. Mỗi stage sau sẽ nhận đầu vào từ stage trước rồi lưu vào một trường khác.",
+            "Ảnh lưới sàn dùng công thức P11 từ bộ khung; chưa có model hay giá trị inspector.",
         },
         {
-          title: "Dựng rail trước công thức",
+          title: "Vẽ từ vertex/edge list",
           explanation:
-            "drawPipelineRail chia chiều ngang thành sáu vị trí cố định, đánh dấu stage đang chọn và cho người học một nơi để quan sát dữ liệu dần xuất hiện.",
+            "drawScene đổi local point qua bộ chuyển tiếp rồi raster cạnh; vertex đang chọn được đánh dấu vàng.",
         },
         {
-          title: "Cho checkpoint đầu có hình nhìn thấy ngay",
+          title: "Hiện Local thật",
           explanation:
-            "Local X/Y được vẽ bằng một preview scale đơn giản trong viewport. Đây chưa phải perspective; nhãn và title phải nói rõ để không trộn hai phép chiếu.",
+            "inspectScene đưa đúng local XYZ vào dòng đầu, các dòng chưa viết giữ optional rỗng.",
         },
       ],
     },
     "p15-l02": {
-      focus:
-        "Tạo Vec4/Mat4, identity, matrix multiplication và matrix–vector multiplication; dùng w=1 cho point và w=0 cho direction.",
+      focus: "Viết Mat4 và phép nhân rõ từng hàng; phân biệt point với direction bằng w.",
       expected:
-        "Point và direction có cùng xyz trước translation. Sau cùng translation matrix, point đổi xyz còn direction giữ nguyên; identity không thay cả bốn thành phần.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Translation(2,1,3) dịch point nhưng giữ nguyên direction; identity giữ đủ bốn thành phần.",
+      files: ["include/lab.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Chốt quy ước lưu và nhân",
+          title: "Đọc row-major đúng nghĩa",
           explanation:
-            "Mat4 lưu row-major để đọc phần tử bằng at(row,column), nhưng vector đứng bên phải matrix. Mỗi output row là dot product giữa row đó và column vector.",
+            "at(row,column) truy cập row*4+column; đây là cách lưu, không phải convention vector.",
         },
         {
-          title: "Đưa Vec3 vào homogeneous space",
-          explanation:
-            "toPoint đặt w=1 vì position phải nhận translation; toDirection đặt w=0 vì một hướng không có vị trí để tịnh tiến.",
+          title: "Nhân vector bằng từng hàng",
+          explanation: "Mỗi tọa độ đầu ra là dot của một hàng matrix với vector bốn thành phần.",
         },
         {
-          title: "Tự nhân trước khi ghép",
-          explanation:
-            "multiply(Mat4,Mat4) dùng ba vòng lặp nhỏ và không tối ưu sớm. CTest khóa identity, thứ tự và từng phần tử trước khi matrix đi vào pipeline.",
+          title: "Kiểm thứ tự bằng số",
+          explanation: "T×S và S×T phải khác nhau trên cùng input, không chỉ test identity.",
         },
       ],
     },
     "p15-l03": {
-      focus:
-        "Dựng model matrix bằng Translation × RotationY × Scale rồi đổi local vertex sang world point mà không sửa local data.",
-      expected:
-        "Scale, model yaw và model position chỉ làm World cùng các stage phía sau đổi. Local giữ nguyên; direction test không nhận phần translation.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Dựng M=T×Ry×S và thay đường đổi local→world ở cả renderer lẫn inspector.",
+      expected: "Đổi model X/Z/yaw/scaleX làm WORLD và các stage sau đổi; LOCAL vẫn giữ nguyên.",
+      files: ["include/lab.hpp", "include/scene.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đọc thứ tự từ phải sang trái",
+          title: "Scale quanh local origin",
           explanation:
-            "Với column vector, matrix gần vertex chạy trước. T×R×S×p nghĩa là scale local point, xoay kết quả rồi mới đặt model vào world space.",
+            "Kể cả scale X âm hoặc bằng 0, phép forward vẫn tính được mà không cần inverse M.",
         },
         {
-          title: "Không cập nhật dồn world vertex",
-          explanation:
-            "Mỗi frame gọi modelMatrix(model) rồi nhân lại với local vertex ban đầu. Cách này tránh sai số tích lũy và giữ inspector có nguồn đầu vào ổn định.",
+          title: "Ghép M",
+          explanation: "Matrix gần vector tác động trước: scale, rotate, rồi translate.",
         },
         {
-          title: "Đối chiếu bằng công thức thành phần",
+          title: "Nối hai nơi sử dụng",
           explanation:
-            "Test chạy một đường scale→rotateY→add position không qua matrix. Hai kết quả phải trùng để bắt lỗi dấu hoặc thứ tự nhân.",
+            "activeModelPoint phục vụ hình; inspectScene phục vụ bảng. Cả hai đọc cùng state và modelMatrix.",
         },
       ],
     },
     "p15-l04": {
-      focus:
-        "Biểu diễn view transform thành View = RotationX(+pitch) × RotationY(−yaw) × Translation(−position).",
-      expected:
-        "Camera sang phải làm camera-space X của vertex giảm; yaw dương quay world ngược lại trong camera space. World value vẫn không thay đổi.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Biểu diễn inverse camera của P14 bằng V=Rx(pitch)×Ry(-yaw)×T(-position).",
+      expected: "Camera thay đổi VIEW trở đi, không thay WORLD; yaw 90° đưa hướng +X về view +Z.",
+      files: ["include/lab.hpp", "include/scene.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Hoàn tác translation trước",
-          explanation:
-            "Translation(−camera.position) nằm gần world vector nhất nên chạy trước. Nó biến world point thành độ dời tính từ mắt người xem.",
+          title: "Đổi gốc về mắt",
+          explanation: "Translation(-position) đứng bên phải nên chạy trước.",
         },
         {
-          title: "Hoàn tác orientation theo thứ tự ngược",
+          title: "Hoàn tác orientation",
           explanation:
-            "Quy ước FPS của Project 14 cần inverse yaw rồi inverse pitch. Khi viết dưới dạng column-vector matrix, phép chạy sau nằm bên trái.",
+            "Inverse yaw trước, inverse pitch sau; không chỉ đổi dấu mà giữ nguyên thứ tự.",
         },
         {
-          title: "Giữ một đường tính tham chiếu",
-          explanation:
-            "worldToCameraDirect dùng phép trừ và hai hàm rotate. CTest so nó với view matrix ở nhiều camera pose để matrix không che mất lỗi logic.",
+          title: "Đối chiếu P14",
+          explanation: "Công thức sin/cos vô hướng là đường tham chiếu độc lập với phép nhân Mat4.",
         },
       ],
     },
     "p15-l05": {
-      focus:
-        "Dựng perspective matrix cho camera nhìn +Z, đưa camera point thành clip vector và giữ camera depth trong clip.w.",
-      expected:
-        "Thay FOV làm clip.x/clip.y đổi nhưng camera point không đổi. clip.w luôn bằng camera.z; near/far quyết định cách clip.z ánh xạ vào khoảng 0..w.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Suy P cho camera nhìn +Z và depth 0..1; thêm điều khiển FOV/near/far.",
+      expected: "FOV đổi clip X/Y, near/far đổi clip Z, còn clip.w luôn bằng view.z.",
+      files: ["include/lab.hpp", "include/scene.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đưa focal scale vào hai hàng đầu",
-          explanation:
-            "f=1/tan(FOV/2). Hàng X dùng f/aspect, hàng Y dùng f để vertical FOV giữ đúng khi viewport thay đổi.",
+          title: "Suy hệ số focal",
+          explanation: "f=1/tan(FOV/2), hàng X dùng f/aspect còn Y dùng f.",
         },
         {
-          title: "Ánh xạ depth bằng near và far",
-          explanation:
-            "Hai hệ số ở hàng Z được chọn để sau phép chia, camera.z=near cho NDC.z=0 và camera.z=far cho NDC.z=1.",
+          title: "Giải hai điều kiện depth",
+          explanation: "Chọn A,B sao cho z=near cho NDC z=0, z=far cho NDC z=1.",
         },
         {
-          title: "Đặt camera.z vào w",
+          title: "Giữ lens hợp lệ",
           explanation:
-            "Hàng cuối (0,0,1,0) tạo clip.w=z. Matrix chưa chia gì cả; clip space cố ý giữ numerator và denominator riêng.",
+            "Near luôn nhỏ hơn far; bảng CLIP có số nhưng NDC/SCREEN chưa viết vẫn hiện —.",
         },
       ],
     },
     "p15-l06": {
-      focus:
-        "Phân loại depth/w trước, chia clip.xyz cho w, kiểm tra NDC và chỉ đổi point visible sang pixel.",
+      focus: "Chia cho w có guard, phân loại clip và chuyển renderer sang P→divide→viewport.",
       expected:
-        "Preset visible cho marker trong viewport; near/behind/far/outside báo đúng status và không dùng screen coordinate không hợp lệ để vẽ.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "w≤epsilon giữ NDC/SCREEN rỗng; điểm outside vẫn có số hữu hạn để soi nhưng không được vẽ marker.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Guard trước phép chia",
+          title: "Phân biệt không tồn tại và bị cắt",
           explanation:
-            "Camera depth≤0 là behind; 0<depth<near là before-near; depth>far là beyond-far. Các trường hợp này dừng trước perspective divide.",
+            "Positive w có thể cho NDC ngoài vùng nhìn; dữ liệu đó hữu ích cho inspector, khác với w=0.",
         },
         {
-          title: "Chia cả ba thành phần clip",
-          explanation:
-            "NDC = (clip.x/w, clip.y/w, clip.z/w). X/Y mô tả vị trí trong khung; Z nằm trong 0..1 để chuẩn bị cho Z-buffer ở Project 17.",
+          title: "Kiểm sáu biên clip",
+          explanation: "Với +Z và depth 0..1: -w≤x,y≤w và 0≤z≤w, có tolerance cho sai số.",
         },
         {
-          title: "Viewport chỉ nhận NDC hợp lệ",
+          title: "Đổi đường render",
           explanation:
-            "NDC X/Y ngoài [-1,1] là outside. Chỉ status Visible mới được đổi sang pixel với Y đảo chiều theo framebuffer.",
+            "projectViewPoint không dùng công thức tham chiếu nữa; wireframe vẫn clip đoạn trước divide.",
         },
       ],
     },
     "p15-l07": {
-      focus:
-        "Ghép MVP = Projection × View × Model, thêm stage selection/preset/pause/reset và kiểm thử kết quả ghép với pipeline chạy rời.",
+      focus: "Ghép MVP nhưng giữ pipeline rời cho bảng; khóa convention bằng ví dụ tính tay.",
       expected:
-        "Left/Right chọn stage, A/D xoay model, W/S đổi camera Z, 1–5 chọn preset, Space pause và R reset. Sai số separate-vs-MVP gần zero ở mọi trạng thái hữu hạn.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Đủ sáu dòng có đáp án, MVP error nhỏ; Space/N/F hoạt động và final chạy độc lập từ ZIP.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
       steps: [
         {
-          title: "Ghép từ phải sang trái",
+          title: "Theo một oracle từ đầu tới cuối",
           explanation:
-            "Model gần local vertex nhất, View đứng giữa, Projection ở ngoài cùng. Viết ngược thứ tự sẽ cho kết quả khác ngay khi model và camera cùng có translation/rotation.",
+            "Tính local→world→view→clip→NDC→screen bằng số cụ thể, không dùng code đang test để sinh expected.",
         },
         {
-          title: "Giữ PipelineTrace cho inspector",
+          title: "So hai đường tính",
           explanation:
-            "MVP giúp tính nhanh clip point, nhưng inspector vẫn chạy từng matrix để lưu World/Camera/Clip/NDC/Screen. Hai đường phục vụ hai mục đích và được so sai số mỗi frame.",
+            "P×V×M áp một lần phải bằng ba phép transform rời; vẫn giữ rời để inspector đọc được từng stage.",
         },
         {
-          title: "Khóa invariant thay vì chỉ nhìn hình",
+          title: "Hoàn thiện thao tác và nghiệm thu",
           explanation:
-            "CTest kiểm point/direction, model direct-vs-matrix, view direct-vs-matrix, near/far mapping, status, viewport và separate-vs-MVP ở Debug lẫn Release.",
-        },
-        {
-          title: "Chạy bản hoàn chỉnh",
-          explanation:
-            "Sau test, thử resize, stage navigation, năm preset, pause/step/reset và chỉnh đồng thời model, camera, FOV để chắc dữ liệu phía trước stage không bị ảnh hưởng sai.",
+            "Pause/step/reset, clean view, input lifecycle, CTest Debug/Release và checklist desktop.",
         },
       ],
     },

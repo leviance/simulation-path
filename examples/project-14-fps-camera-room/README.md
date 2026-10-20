@@ -22,6 +22,8 @@ Hai hộp chỉ là mốc: có thể đi xuyên chúng. Chỉ sáu biên ngoài 
 
 Học từ starter/, đối chiếu checkpoints/01..09/. Mỗi snapshot và final/ có đầy đủ header/src, không phải tập snippet cần đoán chỗ ghép.
 
+Giải nén ZIP vào thư mục học riêng. Khi tự viết tiếp trong `starter/`, build và chạy target `project_14_starter`; target checkpoint và final vẫn chạy bản tham khảo, không tự chứa các thay đổi của bạn.
+
 ## Build và chạy
 
 Cần CMake ≥3.24, C++20; Windows dùng Visual Studio 2022 Desktop development with C++. FetchContent tải SDL **3.4.8** ở lần configure đầu, link `SDL3::SDL3`.
@@ -36,6 +38,8 @@ ctest --test-dir build -C Release --output-on-failure --timeout 30
 ```
 
 Target mặc định final và tests. Option thêm starter, checkpoint_1..9. Với Ninja/Makefiles, chọn CMAKE_BUILD_TYPE và tìm executable trực tiếp trong build/.
+
+CTest mặc định kiểm `final/include`. Sau khi tự hoàn thiện Starter, muốn kiểm chính mã của mình thì đổi `target_include_directories(project_14_tests PRIVATE final/include)` thành `target_include_directories(project_14_tests PRIVATE starter/include)` trong CMakeLists của bản ZIP đang học, configure lại và build target `project_14_tests`. CTest qua trên bản tham khảo không chứng minh mã bạn vừa sửa đã đúng.
 
 ## Điều khiển final
 

@@ -377,7 +377,7 @@ test("every project teaches its visible starting point before new abstractions",
     [
       "3d-pipeline-inspector",
       "01-dung-may-soi-vertex.mdx",
-      ["Vec3", "drawPipelineRail", "drawPreviewMarker", "SDL_UpdateTexture"],
+      ["Scene", "drawScene", "inspectScene", "SDL_UpdateTexture"],
     ],
     [
       "triangle-rasterizer",

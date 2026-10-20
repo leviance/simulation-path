@@ -35,15 +35,16 @@ export interface PipelineLens {
   farPlane: number;
 }
 
-export type PipelineStatus = "visible" | "behind" | "before-near" | "beyond-far" | "outside";
+export type PipelineStatus =
+  "visible" | "behind" | "before-near" | "beyond-far" | "outside" | "invalid";
 
 export interface PipelineTrace {
-  local: PipelineVec4;
-  world: PipelineVec4;
-  camera: PipelineVec4;
-  clip: PipelineVec4;
-  ndc: PipelineVec3;
-  screen: PipelineVec2;
+  local: PipelineVec4 | null;
+  world: PipelineVec4 | null;
+  camera: PipelineVec4 | null;
+  clip: PipelineVec4 | null;
+  ndc: PipelineVec3 | null;
+  screen: PipelineVec2 | null;
   status: PipelineStatus;
 }
 
@@ -238,25 +239,42 @@ export function pipelineProjectionMatrix(lens: PipelineLens, aspectRatio: number
   ]);
 }
 
-export function pipelinePerspectiveDivide(clipPoint: PipelineVec4): PipelineVec3 {
-  return {
+export function pipelineFinite3(v: PipelineVec3): boolean {
+  return [v.x, v.y, v.z].every(Number.isFinite);
+}
+export function pipelineFinite4(v: PipelineVec4): boolean {
+  return pipelineFinite3(v) && Number.isFinite(v.w);
+}
+export function pipelineValidLens(lens: PipelineLens): boolean {
+  return (
+    [lens.verticalFovRadians, lens.nearPlane, lens.farPlane].every(Number.isFinite) &&
+    lens.verticalFovRadians > 0 &&
+    lens.verticalFovRadians < Math.PI &&
+    lens.nearPlane > 0 &&
+    lens.farPlane > lens.nearPlane
+  );
+}
+export function pipelineValidViewport(width: number, height: number): boolean {
+  return [width, height, width / height].every(Number.isFinite) && width > 0 && height > 0;
+}
+export function pipelinePerspectiveDivide(clipPoint: PipelineVec4): PipelineVec3 | null {
+  if (!pipelineFinite4(clipPoint) || clipPoint.w <= 1e-9) return null;
+  const ndc = {
     x: clipPoint.x / clipPoint.w,
     y: clipPoint.y / clipPoint.w,
     z: clipPoint.z / clipPoint.w,
   };
+  return pipelineFinite3(ndc) ? ndc : null;
 }
-
 export function pipelineNdcToScreen(
   ndc: PipelineVec3,
   width: number,
   height: number,
-): PipelineVec2 {
-  return {
-    x: (ndc.x + 1) * 0.5 * width,
-    y: (1 - ndc.y) * 0.5 * height,
-  };
+): PipelineVec2 | null {
+  if (!pipelineFinite3(ndc) || !pipelineValidViewport(width, height)) return null;
+  const screen = { x: (ndc.x + 1) * 0.5 * width, y: (1 - ndc.y) * 0.5 * height };
+  return Number.isFinite(screen.x) && Number.isFinite(screen.y) ? screen : null;
 }
-
 export function trace3dPipeline(
   localVertex: PipelineVec3,
   model: PipelineModel,
@@ -265,61 +283,47 @@ export function trace3dPipeline(
   width: number,
   height: number,
 ): PipelineTrace {
-  const local = pipelineToPoint(localVertex);
-  const world = pipelineTransform(pipelineModelMatrix(model), local);
-  const cameraPoint = pipelineTransform(pipelineViewMatrix(camera), world);
-  const clip = pipelineTransform(pipelineProjectionMatrix(lens, width / height), cameraPoint);
-  const emptyNdc = { x: 0, y: 0, z: 0 };
-  const emptyScreen = { x: 0, y: 0 };
-
-  if (cameraPoint.z <= 0 || clip.w <= 0) {
-    return {
-      local,
-      world,
-      camera: cameraPoint,
-      clip,
-      ndc: emptyNdc,
-      screen: emptyScreen,
-      status: "behind",
-    };
-  }
-  if (cameraPoint.z < lens.nearPlane) {
-    return {
-      local,
-      world,
-      camera: cameraPoint,
-      clip,
-      ndc: emptyNdc,
-      screen: emptyScreen,
-      status: "before-near",
-    };
-  }
-  if (cameraPoint.z > lens.farPlane) {
-    return {
-      local,
-      world,
-      camera: cameraPoint,
-      clip,
-      ndc: emptyNdc,
-      screen: emptyScreen,
-      status: "beyond-far",
-    };
-  }
-
-  const ndc = pipelinePerspectiveDivide(clip);
-  const inside = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && ndc.z >= 0 && ndc.z <= 1;
-  if (!inside) {
-    return { local, world, camera: cameraPoint, clip, ndc, screen: emptyScreen, status: "outside" };
-  }
-  return {
-    local,
-    world,
-    camera: cameraPoint,
-    clip,
-    ndc,
-    screen: pipelineNdcToScreen(ndc, width, height),
-    status: "visible",
+  const trace: PipelineTrace = {
+    local: null,
+    world: null,
+    camera: null,
+    clip: null,
+    ndc: null,
+    screen: null,
+    status: "invalid",
   };
+  if (!pipelineFinite3(localVertex)) return trace;
+  trace.local = pipelineToPoint(localVertex);
+  if (
+    !pipelineFinite3(model.position) ||
+    !pipelineFinite3(model.scale) ||
+    !Number.isFinite(model.yaw)
+  )
+    return trace;
+  const world = pipelineTransform(pipelineModelMatrix(model), trace.local);
+  if (!pipelineFinite4(world)) return trace;
+  trace.world = world;
+  if (!pipelineFinite3(camera.position) || ![camera.yaw, camera.pitch].every(Number.isFinite))
+    return trace;
+  const view = pipelineTransform(pipelineViewMatrix(camera), world);
+  if (!pipelineFinite4(view)) return trace;
+  trace.camera = view;
+  if (!pipelineValidLens(lens) || !pipelineValidViewport(width, height)) return trace;
+  const clip = pipelineTransform(pipelineProjectionMatrix(lens, width / height), view);
+  if (!pipelineFinite4(clip)) return trace;
+  trace.clip = clip;
+  if (clip.w <= 1e-9) return { ...trace, status: "behind" };
+  trace.ndc = pipelinePerspectiveDivide(clip);
+  if (!trace.ndc) return trace;
+  trace.screen = pipelineNdcToScreen(trace.ndc, width, height);
+  if (!trace.screen) return trace;
+  const epsilon = 1e-10 * Math.max(1, Math.abs(clip.w));
+  if (clip.z < -epsilon) trace.status = "before-near";
+  else if (clip.z > clip.w + epsilon) trace.status = "beyond-far";
+  else if (Math.abs(clip.x) > clip.w + epsilon || Math.abs(clip.y) > clip.w + epsilon)
+    trace.status = "outside";
+  else trace.status = "visible";
+  return trace;
 }
 
 export function pipelineMvpMatrix(
@@ -344,10 +348,12 @@ export function pipelineAgreementError(
   height: number,
 ) {
   const separate = trace3dPipeline(localVertex, model, camera, lens, width, height).clip;
+  if (!separate) return Infinity;
   const composed = pipelineTransform(
     pipelineMvpMatrix(model, camera, lens, width / height),
     pipelineToPoint(localVertex),
   );
+  if (!pipelineFinite4(composed)) return Infinity;
   return Math.max(
     Math.abs(separate.x - composed.x),
     Math.abs(separate.y - composed.y),
@@ -357,7 +363,9 @@ export function pipelineAgreementError(
 }
 
 export function advancePipelineYaw(yaw: number, speed: number, deltaTime: number) {
-  const safeDeltaTime = Math.max(0, Math.min(deltaTime, 0.1));
+  if (![yaw, speed, deltaTime].every(Number.isFinite) || deltaTime <= 0) return yaw;
+  const safeDeltaTime = Math.min(deltaTime, 0.1);
   const next = yaw + speed * safeDeltaTime;
+  if (!Number.isFinite(next)) return yaw;
   return Math.atan2(Math.sin(next), Math.cos(next));
 }

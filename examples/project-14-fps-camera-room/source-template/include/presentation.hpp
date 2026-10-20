@@ -24,7 +24,8 @@ inline bool text(SDL_Renderer* renderer, float x, float y, const char* value) {
 inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene, const RenderStats& stats, bool mouseLookActive) {
     static_cast<void>(stats);
     static_cast<void>(mouseLookActive);
-    if (!SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
+    // Màu vẽ của HUD còn lưu từ frame trước; đặt lại nền trước khi clear toàn target.
+    if (!SDL_SetRenderDrawColor(renderer, 17, 24, 43, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
         return false;
     }
     if (!scene.debug) {
