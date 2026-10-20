@@ -40,6 +40,15 @@ inline void changeMode(Scene& scene) {
 }
 ```
 
+Nối phím M trong nhánh key-down của main, chặn repeat và hủy input cũ trước khi đổi mode:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (!event.key.repeat && event.key.key == SDLK_M) {
+    stopInput();
+    lab::changeMode(scene);
+}
+```
+
 Chuyển về Walk đặt Y=1.6 ngay, không đợi frame movement tiếp theo. Tắt demo để mode change không khiến camera tự đi theo một hướng mới ngoài ý muốn.
 
 Đây là quy ước của viewer, không phải mô phỏng trọng lực hoặc nhân vật rơi xuống đất.

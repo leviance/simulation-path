@@ -364,7 +364,7 @@ test("C++ lessons use four-space indentation and complete source is documented",
     );
     assert.match(
       finalMain,
-      /\/\/ (?:Cleanup|Giải phóng|Texture phụ thuộc)/,
+      /\/\/ (?:Cleanup|Giải phóng|Texture phụ thuộc|Nhả relative mode)/,
       `${directory}/main needs a cleanup comment`,
     );
     assert.match(

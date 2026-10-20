@@ -38,7 +38,14 @@ $$
 
 ### Bước 1 — Viết ba vector thành các dòng dễ đối chiếu
 
-Trong `lab.hpp`:
+Trong `lab.hpp`, khai báo kiểu kết quả trước hàm tính:
+
+```cpp title="include/lab.hpp — đoạn ghép"
+struct CameraBasis {
+    Vec3 forward{};
+```
+
+Mỗi field là một vector world, không phải ba tọa độ screen. Sau đó thêm hàm tính:
 
 ```cpp title="include/lab.hpp — cameraBasis"
 inline CameraBasis cameraBasis(const FpsCamera& camera) {

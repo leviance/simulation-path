@@ -49,7 +49,18 @@ Không viết `camera.position-worldPoint`: nó quay ngược cả hướng Z, �
 
 ### Bước 3 — Đưa state vào renderer ở một chỗ
 
-`viewPoint` là điểm nối giữa geometry và phép chiếu:
+Trước hết thay `activeCamera` trong `scene.hpp`: ở bài 1 nó luôn trả camera mặc định, nên chỉ sửa `scene.camera` chưa đủ làm ảnh thay đổi.
+
+```cpp title="include/scene.hpp — đoạn ghép"
+inline FpsCamera activeCamera(const Scene& scene) {
+    FpsCamera camera = scene.camera;
+    camera.yaw = 0.0;
+    camera.pitch = 0.0;
+    return camera;
+}
+```
+
+Ở bước này ta dùng position từ state, còn ép yaw/pitch về 0 để tách translation khỏi rotation. Sau đó thay `viewPoint`, điểm nối giữa geometry và phép chiếu:
 
 ```cpp title="include/scene.hpp — viewPoint"
 inline Vec3 viewPoint(Vec3 world, const Scene& scene) {
@@ -65,8 +76,17 @@ Trong `projectRoomSegment`, cả hai endpoint đều đi qua hàm này rồi m�
 Ở checkpoint 2, mũi tên chỉ là nấc 0.2 unit để kiểm phép trừ. Đây chưa phải hệ WASD theo hướng nhìn:
 
 ```cpp title="src/main.cpp — đoạn ghép"
+if (event.key.key == SDLK_LEFT) {
+    scene.camera.position.x -= 0.2;
+}
 if (event.key.key == SDLK_RIGHT) {
     scene.camera.position.x += 0.2;
+}
+if (event.key.key == SDLK_UP) {
+    scene.camera.position.z += 0.2;
+}
+if (event.key.key == SDLK_DOWN) {
+    scene.camera.position.z -= 0.2;
 }
 ```
 

@@ -132,7 +132,33 @@ Màu sàn xanh lam đậm, tường xanh sáng, trần tím; hai hộp cam/xanh 
 
 ## Ghép các phần lại
 
-Trước vòng lặp, main tạo `worldRoom` rồi giữ const. Mỗi frame gọi `renderScene(image,scene,worldRoom)`, upload framebuffer và vẽ HUD bổ trợ.
+Trong main, thay phần room rỗng của Starter bằng đoạn khởi tạo sau, trước vòng lặp:
+
+```cpp title="src/main.cpp — đoạn ghép"
+lab::Scene scene;
+lab::RoomGeometry room;
+room = lab::makeRoomGeometry(scene.bounds, 2.0);
+// Geometry được tạo một lần; vòng lặp chỉ đọc const reference ở renderer.
+const lab::RoomGeometry worldRoom = room;
+```
+
+Sau đó thay body `renderScene` trong `view.hpp` để gọi `drawRoom`. Nếu chỉ thêm các hàm ở trên mà giữ renderer rỗng của Starter, phòng sẽ chưa xuất hiện:
+
+```cpp title="include/view.hpp — đoạn ghép"
+inline RenderStats renderScene(Framebuffer& image, const Scene& scene, const RoomGeometry& room) {
+    image.clear(kBackground);
+    RenderStats stats;
+    stats = drawRoom(image, room, scene);
+    // Crosshair là overlay. Cảnh phòng không phụ thuộc cờ debug.
+    if (scene.debug) {
+        drawLine(image, 542, 400, 558, 400, kWhite);
+        drawLine(image, 550, 392, 550, 408, kWhite);
+    }
+    return stats;
+}
+```
+
+Main vẫn gọi `renderScene(image,scene,worldRoom)` mỗi lần cần vẽ lại, upload framebuffer và vẽ HUD bổ trợ. Khi tự viết, build lại target Starter của bạn; checkpoint là bản tham khảo để đối chiếu:
 
 ```bash title="Terminal — chạy checkpoint 1"
 cmake --build build --config Debug --target project_14_checkpoint_1

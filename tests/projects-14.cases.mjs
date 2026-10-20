@@ -174,6 +174,28 @@ test("Project 14 rebuild implements the required native FPS product progressivel
     /inline FpsCamera clampCameraToRoom/,
   );
   assert.doesNotMatch(await source("checkpoints/08/include/lab.hpp"), /inline Vec3 cameraToWorld/);
+
+  const lesson = async (slug) =>
+    readFile(path.join(workspace, "content/fps-camera-room", slug + ".mdx"), "utf8");
+  const first = await lesson(lessons[0]);
+  assert.match(first, /const lab::RoomGeometry worldRoom = room/);
+  assert.match(first, /inline RenderStats renderScene/);
+  assert.match(await lesson(lessons[1]), /inline FpsCamera activeCamera/);
+  assert.match(await lesson(lessons[2]), /return scene.camera;/);
+  assert.match(await lesson(lessons[3]), /struct CameraBasis/);
+  const movement = await lesson(lessons[4]);
+  for (const symbol of [
+    "struct MoveInput",
+    "enum class MovementMode",
+    "bool inputArmed = true",
+    "inline void advanceScene",
+    "lab::advanceScene(scene, movement, deltaTime)",
+  ])
+    assert.ok(movement.includes(symbol), symbol);
+  assert.match(
+    main,
+    /\/\/ Nhả relative mode[^\n]*\n\s*stopInput\(\);\s*SDL_DestroyTexture\(texture\);\s*SDL_DestroyRenderer\(renderer\);\s*SDL_DestroyWindow\(window\);\s*SDL_Quit\(\);/,
+  );
   const tests = await source("tests/tests.cpp");
   assert.match(tests, /yaw 90 independent view oracle/);
   assert.match(tests, /fly pitch45 independent movement oracle/);

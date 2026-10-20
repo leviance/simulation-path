@@ -76,6 +76,24 @@ inline FpsCamera applyKeyboardLook(FpsCamera camera, double yawDelta, double pit
 }
 ```
 
+Trong nhánh key-down của main, thêm từng lời gọi sau:
+
+```cpp title="src/main.cpp — đoạn ghép"
+const double step = 3.0 * lab::kPi / 180.0;
+if (event.key.key == SDLK_J) {
+    scene.camera = lab::applyKeyboardLook(scene.camera, -step, 0.0);
+}
+if (event.key.key == SDLK_L) {
+    scene.camera = lab::applyKeyboardLook(scene.camera, step, 0.0);
+}
+if (event.key.key == SDLK_I) {
+    scene.camera = lab::applyKeyboardLook(scene.camera, 0.0, step);
+}
+if (event.key.key == SDLK_K) {
+    scene.camera = lab::applyKeyboardLook(scene.camera, 0.0, -step);
+}
+```
+
 I/K ngẩng/cúi, J/L trái/phải, nấc 3°. Đây là góc nhìn FPS không roll, nên giới hạn pitch ±89° là lựa chọn có chủ ý. P12 xoay object tự do không bị giới hạn như vậy.
 
 ### Bước 4 — Đổi hàm tại ranh giới view
@@ -87,7 +105,15 @@ inline Vec3 viewPoint(Vec3 world, const Scene& scene) {
 }
 ```
 
-Tất cả cạnh vẫn đi qua cùng clip/projection sau khi có camera-space endpoints. Không có vòng lặp sửa worldRoom để tạo ảnh quay ngược.
+Đồng thời bỏ việc ép yaw/pitch về 0 trong `activeCamera` của bài trước. Từ đây renderer phải đọc đủ pose:
+
+```cpp title="include/scene.hpp — đoạn ghép"
+inline FpsCamera activeCamera(const Scene& scene) {
+    return scene.camera;
+}
+```
+
+Nếu quên thay hàm này, các slider/HUD vẫn đổi góc nhưng căn phòng không quay trên ảnh. Tất cả cạnh vẫn đi qua cùng clip/projection sau khi có camera-space endpoints. Không có vòng lặp sửa worldRoom để tạo ảnh quay ngược.
 
 ## Ghép các phần lại
 

@@ -32,6 +32,39 @@ W+D trước chuẩn hóa dài $\sqrt2$; nếu không chia length, đi chéo s�
 
 ### Bước 1 — Đọc state sau vòng PollEvent
 
+Thêm hai kiểu trong `lab.hpp` trước các hàm movement:
+
+```cpp title="include/lab.hpp — đoạn ghép"
+struct MoveInput {
+    double strafe = 0.0;
+    double advance = 0.0;
+    double lift = 0.0;
+};
+
+enum class MovementMode {
+    Walk,
+    Fly,
+};
+```
+
+`strafe/advance` mô tả input, chưa phải tọa độ world. `lift` và giá trị Fly được dành cho bài sau; hiện tại main truyền down/up=false.
+
+Trong main, khai báo state đồng hồ và cờ nhận input trước lambda `stopInput` và trước vòng lặp:
+
+```cpp title="src/main.cpp — đoạn ghép"
+bool inputArmed = true;
+std::uint64_t previousTicks = SDL_GetTicks();
+```
+
+Thay `stopInput` của Starter để reset có thể hủy phím giữ cũ:
+
+```cpp title="src/main.cpp — đoạn ghép"
+const auto stopInput = [&]() {
+    inputArmed = false;
+    scene.demo = false;
+};
+```
+
 `SDL_GetKeyboardState` dùng **scancode** để index mảng bool. Ta đọc sau khi đã xử lý hết event trong frame.
 
 ```cpp title="src/main.cpp — đoạn ghép"
@@ -134,7 +167,29 @@ const double deltaTime = std::min(0.1, static_cast<double>(now - previousTicks) 
 previousTicks = now;
 ```
 
-`advanceScene` gọi update đúng một lần với dt này. Không nhân dt thêm vào `movement`, cũng không gọi move một bước nữa ngay trong key-down. IJKL vẫn là nấc góc rời rạc để nhìn quanh.
+Thêm `advanceScene` vào `scene.hpp`, rồi giữ lời gọi một lần mỗi frame từ main:
+
+```cpp title="include/scene.hpp — đoạn ghép"
+inline void advanceScene(Scene& scene, MoveInput input, double deltaTime) {
+    if (scene.paused) {
+        return;
+    }
+    MovementMode mode = MovementMode::Walk;
+    scene.camera = advanceCamera(scene.camera, input, mode, scene.speed, deltaTime);
+}
+```
+
+Trong main, sau khi có movement và deltaTime, cập nhật và đánh dấu ảnh cần vẽ lại:
+
+```cpp title="src/main.cpp — đoạn ghép"
+const lab::Vec3 before = scene.camera.position;
+lab::advanceScene(scene, movement, deltaTime);
+if (lab::magnitude(lab::subtract(before, scene.camera.position)) > 0.0) {
+    dirty = true;
+}
+```
+
+Hàm này chọn Walk và chuyển state vào `advanceCamera`; ở bài sau ta thêm nhánh Fly tại chính chỗ đó. `advanceScene` gọi update đúng một lần với dt này. Không nhân dt thêm vào `movement`, cũng không gọi move một bước nữa ngay trong key-down. IJKL vẫn là nấc góc rời rạc để nhìn quanh.
 
 ## Ghép các phần lại
 

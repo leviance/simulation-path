@@ -82,7 +82,26 @@ if (!event.key.repeat && event.key.key == SDLK_N && scene.paused) {
 }
 ```
 
-T bật “đi thử”: chỉ cấp input advance=1 vào cùng `advanceScene`, không đặt sẵn một quỹ đạo camera đẹp mắt bỏ qua bounds. Đến tường thì camera dừng. Input tay sẽ tắt demo.
+T bật “đi thử”. Thêm nhánh toggle vào key-down:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (!event.key.repeat && event.key.key == SDLK_T) {
+    const bool wasDemo = scene.demo;
+    stopInput();
+    scene.demo = !wasDemo;
+    scene.paused = false;
+}
+```
+
+Sau khi đọc phím và trước `advanceScene`, cấp input cho demo:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (scene.demo && !scene.paused) {
+    movement.advance = 1.0;
+}
+```
+
+Nó chỉ cấp input advance=1 vào cùng `advanceScene`, không đặt sẵn một quỹ đạo camera đẹp mắt bỏ qua bounds. Đến tường thì camera dừng. Input tay sẽ tắt demo.
 
 Canvas reduced-motion tắt auto, nhưng vẫn cho thao tác trực tiếp và step. “FPS thí nghiệm” chỉ dành cho bài đo quãng đường; rAF đi tay dùng thời gian thực.
 
@@ -101,6 +120,14 @@ inline RenderStats renderScene(Framebuffer& image, const Scene& scene, const Roo
         drawLine(image, 550, 392, 550, 408, kWhite);
     }
     return stats;
+}
+```
+
+Thêm phím F vào key-down; geometry không đổi khi cờ này đảo:
+
+```cpp title="src/main.cpp — đoạn ghép"
+if (!event.key.repeat && event.key.key == SDLK_F) {
+    scene.debug = !scene.debug;
 }
 ```
 
