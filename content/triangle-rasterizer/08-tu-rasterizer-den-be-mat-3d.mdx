@@ -1,0 +1,216 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa rasterizer vào cảnh 3D
+
+## Vấn đề cần giải quyết
+
+Ta đã tô được tam giác trên mặt phẳng màn hình. Ở bài cuối, hãy đặt ba đỉnh vào không gian 3D, thêm lưới sàn để dễ nhận biết chiều sâu, rồi thử dịch chuyển camera, thay đổi FOV và kéo từng đỉnh. Ta không cần viết một thuật toán tô mới: phép chiếu đưa ba đỉnh 3D về Triangle2, sau đó rasterizer vừa xây sẽ làm phần còn lại.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong bài này, camera chưa xoay và luôn nhìn theo chiều +Z. Ta dùng lại phép chiếu đã học ở Project 11:
+
+$$P_{view}=P_{world}-C,\quad f_{pixel}=\frac{h}{2\tan(FOV_y/2)},\quad s_x=\frac w2+f_{pixel}\frac{x}{z},\quad s_y=\frac h2-f_{pixel}\frac{y}{z}.$$
+
+Ba đỉnh mặc định có độ sâu 4, 5.5 và 6.5 khi camera ở gốc tọa độ. Mỗi đỉnh được chia cho Z của chính nó, nên khi dịch camera theo trục Z, các đỉnh không dịch chuyển trên màn hình với cùng một tỉ lệ. Màu ở đây biểu diễn barycentric trong **screen space**. Ta chưa dùng phép nội suy có hiệu chỉnh phối cảnh (perspective-correct interpolation) cho các thuộc tính như tọa độ UV.
+
+Khi bắt đầu kéo một đỉnh, ta lưu độ sâu của nó so với camera và độ lệch giữa vị trí chuột với đỉnh. Từ vị trí chuột mới, ta đảo phép chiếu tại độ sâu đã lưu rồi cộng camera.position để tìm tọa độ world. Trong một lần kéo, camera và FOV phải giữ nguyên; nếu người dùng đổi chúng, ta kết thúc thao tác kéo trước.
+
+Bản này chưa có Z-buffer và chưa cho xoay camera. Nếu một đỉnh nằm ngoài khoảng near=0.5 đến far=20, chương trình tạm bỏ cả tam giác. Cách cắt phần tam giác vượt qua mặt phẳng near sẽ được học ở Project 18. Không bỏ kiểm tra độ sâu để cố vẽ các điểm phía sau camera.
+
+<InteractiveLab demo="triangle-raster" mode="triangle-scene" />
+
+## Viết code từng bước
+
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Các đường dẫn ở tiêu đề code block tính từ Starter. Khi thay hàm, thay bản cũ chứ không thêm một định nghĩa trùng tên.
+
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_starter --parallel 2
+.\build\Debug\project_16_starter.exe
+```
+
+Checkpoint 08 là **bản tham khảo sau bài**, build độc lập bằng target project_16_checkpoint_8. Chạy checkpoint không kiểm chứng mã bạn vừa sửa trong Starter.
+
+### Bước 1 — Mở dữ liệu world đã có trong bộ khung
+
+Trong Scene của starter/include/scene.hpp, đổi worldMode từ false thành true:
+
+```cpp title="include/scene.hpp — bản hoàn chỉnh khởi đầu ở cảnh 3D"
+bool worldMode = true;
+```
+
+Scene.world, Camera và space.hpp đã có từ Starter để bạn không phải viết lại kiến thức P11. Đọc hai hàm sau, **không dán thêm định nghĩa trùng tên**. Guard depth nằm trước chia; outside theo X/Y vẫn trả số screen để bounds cắt phần ảnh:
+
+```cpp title="include/space.hpp — projector cũ đưa dữ liệu tới rasterizer mới"
+inline std::optional<Vec2> projectWorld(Vec3 world, const Camera& camera, int width, int height) {
+    if (!finite(world) || !finite(camera.position) || width <= 0 || height <= 0 || !std::isfinite(camera.fov) || camera.fov <= 0.0 || camera.fov >= 3.141592653589793) {
+        return std::nullopt;
+    }
+    const Vec3 view{world.x - camera.position.x, world.y - camera.position.y, world.z - camera.position.z};
+    if (!finite(view) || view.z < 0.5 || view.z > 20.0) {
+        return std::nullopt;
+    }
+    const double focal = height * 0.5 / std::tan(camera.fov * 0.5);
+    const Vec2 screen{width * 0.5 + focal * view.x / view.z, height * 0.5 - focal * view.y / view.z};
+    if (!finite(screen)) {
+        return std::nullopt;
+    }
+    return screen;
+}
+```
+
+```cpp title="include/space.hpp — ba projector phải có kết quả"
+inline std::optional<Triangle2> projectTriangle(const std::array<Vec3, 3>& vertices, const Camera& camera, int width, int height) {
+    const auto a = projectWorld(vertices[0], camera, width, height);
+    const auto b = projectWorld(vertices[1], camera, width, height);
+    const auto c = projectWorld(vertices[2], camera, width, height);
+    if (!a || !b || !c) {
+        return std::nullopt;
+    }
+    return Triangle2{*a, *b, *c};
+}
+```
+
+### Bước 2 — Dùng lại rasterizer cho ảnh chiếu
+
+screenTriangle đã chọn worldMode trong Scene, nên renderScene tự nhận Triangle2 mới. Chỉ thêm nhánh sau **sau clear coverage và trước screenTriangle** để hiện nền 3D:
+
+```cpp title="include/view.hpp — grid thuộc scene, không thuộc debug"
+if (scene.worldMode) {
+    drawWorldGrid(image, scene);
+}
+```
+
+Không sửa callback RGB hoặc rasterizeTriangle. Nếu bạn tạo một cách tô khác cho scene 3D, tests 2D vừa xây sẽ không còn kiểm đường render thật.
+
+### Bước 3 — Nối điều khiển và phép kéo ngược
+
+Đặt các nhánh sau ở cuối handleKey, trước ba dòng (void). Chúng đổi state, reset scan, không tự vẽ pixel:
+
+```cpp title="include/controls.hpp — scene 3D, clean, depth, camera và FOV"
+if (!repeat && key == SDLK_B) {
+    scene.worldMode = !scene.worldMode;
+    resetScan(scene);
+}
+if (!repeat && key == SDLK_F) {
+    scene.debug = !scene.debug;
+    resetScan(scene);
+}
+if (key == SDLK_PAGEUP || key == SDLK_PAGEDOWN) {
+    Vec3& point = scene.world[static_cast<std::size_t>(scene.selected)];
+    double change = 0.1;
+    if (key == SDLK_PAGEDOWN) {
+        change = -0.1;
+    }
+    point.z = std::clamp(point.z + change, 2.5, 10.0);
+    resetScan(scene);
+}
+if (key == SDLK_J || key == SDLK_L) {
+    double change = 0.1;
+    if (key == SDLK_J) {
+        change = -0.1;
+    }
+    scene.camera.position.x = std::clamp(scene.camera.position.x + change, -1.5, 1.5);
+    resetScan(scene);
+}
+if (key == SDLK_U || key == SDLK_O) {
+    double change = 0.1;
+    if (key == SDLK_U) {
+        change = -0.1;
+    }
+    scene.camera.position.z = std::clamp(scene.camera.position.z + change, -1.0, 1.0);
+    resetScan(scene);
+}
+if (key == SDLK_EQUALS || key == SDLK_PLUS || key == SDLK_MINUS) {
+    double change = -0.03490658503988659;
+    if (key == SDLK_MINUS) {
+        change = -change;
+    }
+    scene.camera.fov = std::clamp(scene.camera.fov + change, 0.6981317007977318, 1.7453292519943295);
+    resetScan(scene);
+}
+```
+
+beginDrag/updateDrag đã có từ bài 1. Trong worldMode, updateDrag gọi inverse dưới; sau đó chỉ sửa world của đỉnh được chọn. Nhắc lại offset giúp click không làm hình giật:
+
+```cpp title="include/space.hpp — inverse của P11 tại depth đã biết"
+inline std::optional<Vec3> worldAtScreen(Vec2 screen, double depth, const Camera& camera, int width, int height) {
+    if (!finite(screen) || !std::isfinite(depth) || depth < 0.5 || depth > 20.0 || !finite(camera.position) || width <= 0 || height <= 0 || !std::isfinite(camera.fov) || camera.fov <= 0.0 || camera.fov >= 3.141592653589793) {
+        return std::nullopt;
+    }
+    const double focal = height * 0.5 / std::tan(camera.fov * 0.5);
+    const Vec3 world{camera.position.x + (screen.x - width * 0.5) * depth / focal, camera.position.y - (screen.y - height * 0.5) * depth / focal, camera.position.z + depth};
+    if (!finite(world)) {
+        return std::nullopt;
+    }
+    return world;
+}
+```
+
+### Bước 4 — Tắt lớp giải thích, giữ bề mặt
+
+presentation.hpp trong Starter đã có nhánh dưới sau SDL_RenderTexture. F đổi scene.debug; vì fill/grid không nằm trong if(scene.debug), hình vẫn còn:
+
+```cpp title="include/presentation.hpp — clean không bỏ scene"
+if (!scene.debug) {
+    return SDL_RenderPresent(renderer);
+}
+```
+
+Viewport debug là 1100×600, clean là 1100×800. Đổi aspect làm hình chiếu đổi là đúng; world không đổi. Chuột đi qua SDL_ConvertEventToRenderCoordinates, còn Canvas dùng CSS mapping một lần, không nhân DPR vào mouse.
+
+### Bước 5 — Kiểm mã của mình, không chỉ kiểm bản mẫu
+
+ZIP có README, CMake, Starter, tám checkpoint, final và tests. Toàn bộ source ở cuối bài tải từng file khi mở; chúng không phải các snippet cần tự đoán chỗ nối. CTest mặc định include final/include để kiểm bản mẫu. Muốn kiểm Starter đã làm xong, đổi đúng dòng này trong CMakeLists.txt của ZIP:
+
+```cmake title="CMakeLists.txt — chọn mã người học để test"
+target_include_directories(project_16_tests PRIVATE starter/include)
+```
+
+Configure lại và build cả app lẫn tests:
+
+```powershell title="Kiểm chứng Starter Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_starter project_16_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --target project_16_starter project_16_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
+
+Tests dùng check/EXIT_FAILURE, không dùng assert bị NDEBUG tắt. Oracle của projector với viewport 800×600, FOV90°, P=(1,0.5,4) là (475,262.5); đây là tọa độ tính tay, không lấy expected từ inverse. Tests cũng kiểm RGB/weights, toàn buffer quad, limit chung, ảnh CPU clean còn grid/fill và kéo giữ depth.
+
+## Ghép các phần lại
+
+Project 16 đã hoàn chỉnh khi cả bàn raster và cảnh 3D đều hoạt động. Chạy project_16_starter sau khi tự viết; project_16_final là bản tham khảo hoàn chỉnh. App không phụ thuộc website để chạy.
+
+Native: 1 mặc định 3D; 2 đảo geometry và màu; 3 suy biến; 4 triangle cắt viewport ở bàn 2D; 5 quad chung cạnh; B đổi 2D/3D; Tab chọn vertex; mũi tên sửa XY; PageUp/Down sửa world Z; J/L camera X; U/O camera Z; +/− FOV; T fill rule; C màu; F clean; Space scan; N một bước; R reset. Các thao tác thay scene hủy drag trước khi đổi state.
+
+Canvas bài này là cảnh 3D pixel-by-pixel với slider/keyboard và preset riêng; bàn phóng đại từng pixel vẫn có ở bài 1–7. Reduced motion chặn tự quét nhưng vẫn cho step. Resize letterbox board; không reset world hay tăng framebuffer theo kích thước window.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ đổi size handle khi Z đổi nhưng giữ screen XY. Đây là fake depth; phải dùng X/Z, Y/Z cho cả bề mặt và lưới.
+
+2. Đưa drawWorldGrid hoặc fill vào if(scene.debug). F sẽ làm mất sản phẩm; đưa chúng ra ngoài nhánh overlay.
+
+3. Đổi camera ngay khi đang kéo mà không hủy capture. Depth/offset cũ không còn cùng phép chiếu; hủy trước mọi lệnh đổi lens, preset, camera hay viewport.
+
+4. Chạy CTest với final/include rồi kết luận Starter đúng. Sửa tạm một công thức trong Starter: chỉ suite trỏ starter/include mới bắt được lỗi, sau đó khôi phục.
+
+## Tự kiểm tra kết quả
+
+- Tam giác RGB thật có world XYZ và perspective, không chỉ outline hoặc lưới ô 2D.
+- Camera/FOV không sửa world; tăng depth làm displacement nhỏ đi.
+- Clean mode vẫn có mặt tam giác và lưới sàn, không có HUD/bounds/handle.
+- Weights tổng gần 1; identity A/B/C đúng ở cả hai winding; quad không crack/overlap.
+- Depth bị loại trước chia; đây chưa phải near-plane polygon clipping.
+- Starter, tám checkpoint, final và tests build Debug/Release; check vẫn chạy ở Release.
+- --smoke là kiểm tra init/present/resize/thoát ẩn, không thay QA chuột/HiDPI thật.
+- Sau kiểm thử tự động, hãy mở ứng dụng và thử chuột, bàn phím, resize cùng chế độ clean; một lần smoke chạy thành công chưa chứng minh các thao tác này đúng.
+
+## Bài tập mở rộng
+
+Đặt hai tam giác ở hai depth khác nhau nhưng cùng ảnh chiếu. Ghi lại hạn chế draw-order của bản hiện tại; Project 17 sẽ giải quyết bằng Z-buffer, không bằng cách đổi màu để giấu mặt sau.
+
+[Tiếp tục Project 17 — Khối lập phương đặc](/projects/solid-cube-z-buffer).

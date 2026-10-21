@@ -1,4 +1,4 @@
-#include "lab.hpp"
+#include "view.hpp"
 
 #include <array>
 #include <cmath>
@@ -209,6 +209,44 @@ int main() {
     check(atA.red == 255 && atA.green == 0 && atA.blue == 0, "vertex A keeps its color");
     check(middle.red == 64 && middle.green == 64 && middle.blue == 128, "color interpolation rounds channels");
 
+    // Đảo winding không được đổi ý nghĩa của weights A/B/C theo input gốc.
+    const auto atOriginalB = lab::sampleTriangle(negative, negative.b, lab::FillRule::Inclusive);
+    check(nearlyEqual(atOriginalB.barycentric.b, 1.0), "reversed input keeps B weight at original B");
+    const auto atOriginalC = lab::sampleTriangle(negative, negative.c, lab::FillRule::Inclusive);
+    check(nearlyEqual(atOriginalC.barycentric.c, 1.0), "reversed input keeps C weight at original C");
+    check(lab::isEmpty(lab::triangleBounds({{-30.0, 0.0}, {-20.0, 10.0}, {-10.0, 0.0}}, 8, 8)), "fully outside bounds are empty");
+    check(lab::isEmpty(lab::triangleBounds({{NAN, 0.0}, {1.0, 2.0}, {2.0, 0.0}}, 8, 8)), "invalid coordinates never cast to int");
+
+    // Oracle perspective độc lập: focalPixels=300, không lấy expected từ inverse.
+    lab::Camera camera;
+    camera.fov = 3.141592653589793 * 0.5;
+    const auto projected = lab::projectWorld({1.0, 0.5, 4.0}, camera, 800, 600);
+    check(projected && nearlyEqual(projected->x, 475.0) && nearlyEqual(projected->y, 262.5), "3D independent projection oracle");
+    check(!lab::projectWorld({0.0, 0.0, 0.0}, camera, 800, 600), "3D depth rejected before divide");
+    const auto inverse = lab::worldAtScreen({475.0, 262.5}, 4.0, camera, 800, 600);
+    check(inverse && nearlyEqual(inverse->x, 1.0) && nearlyEqual(inverse->y, 0.5) && inverse->z == 4.0, "3D drag inverse oracle");
+    lab::Scene scene;
+    lab::Framebuffer image;
+    std::vector<std::uint8_t> coverage(lab::Framebuffer::width * lab::Framebuffer::height);
+    scene.debug = false;
+    const auto clean = lab::renderScene(image, coverage, scene);
+    check(scene.worldMode && clean.primary.coveredCount > 0, "clean final retains actual 3D filled triangle");
+    check(std::count(image.pixels.begin(), image.pixels.end(), lab::kGrid) > 0, "clean final retains projected world grid");
+    lab::applyPreset(scene, 5);
+    scene.candidateLimit = 0;
+    const auto paused = lab::renderScene(image, coverage, scene);
+    check(paused.primary.testedCount == 0 && paused.secondary.testedCount == 0, "both triangles obey one step budget");
+    lab::applyPreset(scene, 1);
+    const auto before = lab::screenTriangle(scene);
+    lab::DragState drag;
+    check(before && lab::beginDrag(scene, {before->a.x + 4.0, before->a.y}, drag), "3D vertex hit test");
+    const double oldDepth = scene.world[0].z;
+    if (before && drag.index == 0) {
+        lab::updateDrag(scene, drag, {before->a.x + 14.0, before->a.y});
+        const auto after = lab::screenTriangle(scene);
+        check(after && nearlyEqual(after->a.x, before->a.x + 10.0), "3D drag preserves grab offset");
+        check(scene.world[0].z == oldDepth, "3D drag keeps world depth with fixed camera");
+    }
     if (failures != 0) {
         std::cerr << failures << " validation check(s) failed\n";
         return EXIT_FAILURE;

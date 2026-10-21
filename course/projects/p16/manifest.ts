@@ -11,9 +11,9 @@ const project = {
   challenge: {
     timebox: "300–390 phút",
     mission:
-      "Tự xây dựng một chương trình SDL3 nhận ba vertex trong screen space và tô kín chính xác các pixel thuộc tam giác. Người dùng phải kéo được từng vertex, quan sát candidate pixel, đổi fill rule và kiểm tra hai tam giác dùng chung cạnh không để hở hoặc tô đè.",
+      "Tự xây dựng một ứng dụng SDL3 tô kín tam giác bằng CPU. Có bàn thực hành screen space để soi từng pixel, cùng cảnh 3D thật: chiếu ba world vertex xuống màn hình rồi dùng chính rasterizer vừa viết để nội suy RGB.",
     outcome:
-      "Cửa sổ hiển thị tam giác màu trên CPU framebuffer, ba handle A/B/C, bounding box và sample pixel đang xét. Bản hoàn chỉnh có preset đảo winding, triangle suy biến, triangle cắt mép viewport và một quad ghép từ hai triangle; title bar báo candidate, covered, overlap và barycentric error.",
+      "Tam giác RGB đứng trên lưới sàn 3D, đổi camera/depth/FOV và kéo được từng vertex. Chuyển sang bàn raster 2D để kiểm cạnh chung, winding và suy biến; HUD hiện stats thật, nút F tắt debug nhưng vẫn giữ bề mặt và không gian.",
     requirements: [
       "Khởi đầu bằng framebuffer chạy được, ba screen vertex, wireframe và thao tác kéo vertex trước khi viết thuật toán tô.",
       "Tính bounding box nguyên nhỏ nhất chứa tam giác, clamp vào framebuffer và chỉ duyệt pixel trong vùng đó.",
@@ -24,13 +24,14 @@ const project = {
       "Áp dụng top-left rule để mỗi pixel trên cạnh chung chỉ thuộc về một triangle; tình huống quad phải không có pixel bị tô hai lần.",
       "Từ ba edge value suy ra barycentric weights, kiểm tổng gần 1 và dùng chúng để nội suy RGB.",
       "Có preset, drag, pause, single-step, reset, resize và CTest cho phần toán thuần không cần mở window.",
+      "Bản cuối có world XYZ, camera tịnh tiến, perspective và lưới sàn 3D; clean mode giữ bề mặt RGB, không chỉ là lưới pixel 2D.",
     ],
     constraints: [
       "Không dùng SDL_RenderGeometry, OpenGL, GLM hoặc một triangle rasterizer có sẵn.",
       "Không quét toàn framebuffer nếu bounding box nhỏ hơn; candidate count phải xuất phát từ bounds đã clamp.",
       "Không dùng phép chia cho area khi triangle suy biến; trường hợp đó phải trả coveredCount bằng 0.",
       "Không round vertex về integer trước khi tính edge function; chỉ sample pixel nằm tại nửa đơn vị.",
-      "Không thêm Z-buffer, perspective-correct interpolation hoặc near-plane clipping vào Project 16.",
+      "Chưa có Z-buffer hay perspective-correct interpolation. Triangle có vertex ngoài near/far bị từ chối nguyên triangle; clipping đa giác được học ở Project 18.",
     ],
     definitionOfDone: [
       "Bounding box chứa đủ candidate pixel và không phát sinh chỉ số ngoài framebuffer, kể cả triangle cắt mép.",
@@ -39,7 +40,7 @@ const project = {
       "Raster callback được gọi đúng coveredCount và candidateLimit cho phép dừng ở một bước xác định.",
       "Inclusive rule tô cạnh chung hai lần, còn top-left rule chỉ giao mỗi sample trên cạnh cho đúng một triangle.",
       "Màu tại vertex khớp màu gốc và màu bên trong là tổ hợp barycentric hữu hạn.",
-      "CTest vượt qua; starter, bảy checkpoint và final build sạch warning ở Debug lẫn Release.",
+      "CTest vượt qua; Starter, tám checkpoint và final build sạch warning ở Debug lẫn Release.",
     ],
   },
   duration: "11–12 giờ",
@@ -116,6 +117,16 @@ const project = {
       summary:
         "Đổi edge values thành barycentric weights, nội suy RGB, thêm pause/single-step/preset và khóa các invariant bằng CTest cùng source final.",
       order: 7,
+      estimatedMinutes: 100,
+      demoId: "triangle-raster",
+    },
+    {
+      id: "p16-l08",
+      slug: "08-tu-rasterizer-den-be-mat-3d",
+      title: "Đưa rasterizer vào cảnh 3D",
+      summary:
+        "Chiếu ba world vertex, kéo tại depth cố định, đổi camera/FOV và kiểm bản hoàn chỉnh ở clean mode.",
+      order: 8,
       estimatedMinutes: 100,
       demoId: "triangle-raster",
     },

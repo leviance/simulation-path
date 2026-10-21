@@ -4,26 +4,33 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ghép hai triangle thành một quad. Nếu coverage dùng `edge >= 0` cho mọi cạnh, sample nằm đúng đường chéo được cả hai triangle nhận. Với màu đục cuối cùng bạn có thể không thấy lỗi, nhưng blending sẽ làm cạnh đậm hơn và depth/stencil update sẽ chạy hai lần.
-
-Đổi tất cả thành `edge > 0` lại tạo vấn đề ngược: không triangle nào nhận sample biên, để lại khe hở. Ta cần một quy tắc bất đối xứng nhưng nhất quán: **top-left rule**.
+Hai tam giác ghép thành quad có chung một đường chéo. Nếu mọi cạnh đều dùng >=0, mẫu nằm trên đường chéo được nhận hai lần. Đổi hết sang >0 lại tạo khe hở. Ta cần giao quyền sở hữu biên, không nới hoặc thu cả tam giác.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Sau khi winding được chuẩn hóa dương trong screen space Y-down, một cạnh được gọi là top-left khi:
+Với winding dương và Y-down, cạnh đi lên hoặc cạnh ngang đi sang phải là top-left. Edge dương được nhận, edge âm bị loại, vùng gần zero chỉ được nhận khi cạnh có nhãn top-left.
 
-- cạnh đi lên: `deltaY < 0`; hoặc
-- cạnh nằm ngang và đi sang phải: `deltaY = 0 && deltaX > 0`.
-
-Edge value dương luôn được nhận. Edge value âm luôn bị loại. Edge value bằng zero chỉ được nhận nếu cạnh là top-left.
+Hai triangle đi qua cạnh chung theo hai hướng ngược nhau, nên chỉ một phía nhận sample trên cạnh. Quy tắc đúng phải giữ quad kín khi đổi đường chéo hoặc dịch subpixel, không chỉ đúng một pixel ta tình cờ chọn.
 
 <InteractiveLab demo="triangle-raster" mode="triangle-top-left" />
 
 ## Viết code từng bước
 
-### Bước 1 — Nhận diện hướng cạnh
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Các đường dẫn ở tiêu đề code block tính từ Starter. Khi thay hàm, thay bản cũ chứ không thêm một định nghĩa trùng tên.
 
-```cpp title="include/lab.hpp — top-left edge trong screen space Y-down"
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_starter --parallel 2
+.\build\Debug\project_16_starter.exe
+```
+
+Checkpoint 06 là **bản tham khảo sau bài**, build độc lập bằng target project_16_checkpoint_6. Chạy checkpoint không kiểm chứng mã bạn vừa sửa trong Starter.
+
+### Bước 1 — Nhận diện hướng của cạnh
+
+Đặt hai helper dưới trong lab.hpp, trước sampleTriangle:
+
+```cpp title="include/lab.hpp — top-left trong quy ước Y-down"
 inline bool isTopLeftEdge(Vec2 a, Vec2 b, double epsilon = 1e-9) {
     const double deltaX = b.x - a.x;
     const double deltaY = b.y - a.y;
@@ -33,11 +40,9 @@ inline bool isTopLeftEdge(Vec2 a, Vec2 b, double epsilon = 1e-9) {
 }
 ```
 
-Quy tắc này gắn với cả hướng Y và winding. Nếu engine của bạn dùng Y-up hoặc winding âm, đừng sao chép biểu thức mà không chuyển quy ước.
+### Bước 2 — Xử lý rõ vùng edge bằng zero
 
-### Bước 2 — Tách phép chấp nhận một cạnh
-
-```cpp title="include/lab.hpp — inclusive và top-left dùng chung epsilon"
+```cpp title="include/lab.hpp — inclusive và top-left"
 inline bool acceptsEdge(double edgeValue, bool topLeft, FillRule rule, double epsilon = 1e-9) {
     if (edgeValue > epsilon) {
         return true;
@@ -52,48 +57,75 @@ inline bool acceptsEdge(double edgeValue, bool topLeft, FillRule rule, double ep
 }
 ```
 
-Nhánh edge zero nằm cuối và dễ kiểm. Không nhét epsilon, rule và hướng cạnh vào một biểu thức boolean dài.
+### Bước 3 — Thay ba điều kiện inclusive
 
-### Bước 3 — Áp dụng cùng rule cho ba cạnh
+Trong sampleTriangle, thay (void)rule và sample.inside cũ bằng:
 
-```cpp title="include/lab.hpp — ba cạnh cùng tham gia quyết định coverage"
+```cpp title="include/lab.hpp — ba cạnh dùng cùng rule"
 const bool insideAB = acceptsEdge(sample.edgeAB, isTopLeftEdge(triangle.a, triangle.b), rule);
 const bool insideBC = acceptsEdge(sample.edgeBC, isTopLeftEdge(triangle.b, triangle.c), rule);
 const bool insideCA = acceptsEdge(sample.edgeCA, isTopLeftEdge(triangle.c, triangle.a), rule);
 sample.inside = insideAB && insideBC && insideCA;
 ```
 
-Hai triangle chung cạnh đi qua cạnh đó theo hướng ngược nhau. Vì vậy chỉ một hướng được gắn nhãn top-left và sample biên có đúng một owner.
+Trong renderScene, ngay sau FillRule rule=Inclusive thêm rule=scene.rule. Sau lần rasterize triangle chính, thêm nhánh dưới. Scene.second và preset 5 đã có từ Starter; lúc này chúng mới tham gia raster:
 
-### Bước 4 — Đếm overdraw thay vì chỉ nhìn màu
+```cpp title="include/view.hpp — hai triangle dùng chung một budget"
+if (scene.shared && !scene.worldMode) {
+    // Một budget chung cho cả hai triangle; triangle thứ hai không chạy lén khi pause.
+    const std::size_t remaining = scene.candidateLimit - result.primary.testedCount;
+    result.secondary = rasterizeTriangle(scene.second, Framebuffer::width, height, rule, remaining, [&](int x, int y, Barycentric) {
+        const std::size_t index = static_cast<std::size_t>(y) * Framebuffer::width + static_cast<std::size_t>(x);
+        ++coverage[index];
+        std::uint32_t color = kGhost;
+        if (coverage[index] > 1) {
+            ++result.overlap;
+            color = kAxisX;
+        }
+        image.putPixel(x, y, color);
+    });
+}
+```
 
-Main tạo một coverage buffer byte. Mỗi callback tăng counter của pixel; giá trị lớn hơn 1 được vẽ đỏ và đưa vào `overlapCount`. Preset 5 khiến đường chéo đi qua nhiều pixel center, nên bạn nhìn thấy khác biệt ngay giữa hai rule.
+### Bước 4 — Cho người học chọn rule
+
+Thêm nhánh T vào handleKey:
+
+```cpp title="include/controls.hpp — đổi rule rồi tính lại coverage"
+if (!repeat && key == SDLK_T) {
+    if (scene.rule == FillRule::TopLeft) {
+        scene.rule = FillRule::Inclusive;
+    } else {
+        scene.rule = FillRule::TopLeft;
+    }
+    resetScan(scene);
+}
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build shared-edge checkpoint"
-cmake --build build --config Debug --target project_16_checkpoint_6
-```
+Build Starter, nhấn 5 để mở quad ở bàn 2D. T chuyển top-left/inclusive. Bộ đếm coverage tăng trong callback; sample có count>1 được vẽ đỏ, không suy overlap bằng màu cuối cùng. Limit dùng chung: triangle thứ hai chỉ được xét phần budget còn lại, không tô lén toàn bộ khi đang pause.
 
-Nhấn `5`, rồi `T` để đổi rule. Inclusive phải báo overlap dương và có đường đỏ; top-left giữ quad kín nhưng overlap về 0.
+Trong Canvas, chọn preset Hai tam giác chung cạnh và so hai rule. Các cạnh debug có thể che một vài pixel; hãy nhìn cả overlap và coverage buffer trong tests.
 
 ## Thử làm sai để hiểu đúng
 
-1. Gọi cả edge zero là outside. Đường chéo mất owner ở cả hai triangle; đổi sang preset quad để nhìn khe.
-2. Dùng `deltaY > 0` cho `goesUp` dù screen Y tăng xuống. Quyền sở hữu đổi sai; test sample chung có thể thành 0 hoặc 2.
-3. Bỏ normalize winding trước `isTopLeftEdge`. Preset đảo B/C không còn cho cùng coverage; phục hồi quy ước dương trước rule.
+1. Cho mọi edge zero là outside. Đường chéo có thể hở; khôi phục quyền sở hữu một phía.
+
+2. Không chuẩn hóa winding trước khi xét top-left. Input âm không còn đi cùng quy ước hướng cạnh; trả normalize về trước phép thử.
+
+3. Cho triangle thứ hai dùng limit vô hạn khi triangle đầu paused. Tested count không còn biểu diễn bước toàn scene; dùng remaining.
 
 ## Tự kiểm tra kết quả
 
-- Inclusive rule nhận sample đúng cạnh ở cả hai triangle.
-- Top-left rule giao sample cạnh chung cho đúng một triangle.
-- Quad không có khe hở khi dùng top-left rule.
-- Overlap buffer báo 0 với preset 5 và top-left.
-- Đảo winding ban đầu không thay owner sau normalize.
-- Epsilon được dùng nhất quán cho dấu edge và horizontal edge.
+- Inclusive có owner=2 tại sample đúng cạnh chung; top-left có owner=1.
+- Quad không có crack hoặc overlap ở mọi tâm pixel bên trong.
+- Hai đường chéo của cùng quad tạo cùng coverage buffer.
+- Đảo winding và dịch quad 0.2 pixel vẫn giữ một owner.
+- Cả hai triangle tuân cùng candidateLimit.
 
 ## Bài tập mở rộng
 
-Chia một rectangle theo đường chéo còn lại rồi lặp test. Sau đó dịch cả bốn vertex thêm `(0.25,0.25)` và giải thích vì sao ít sample nằm đúng cạnh hơn nhưng quy tắc vẫn phải đúng.
+Với quad (1,1)..(6,6) trên buffer 8×8, tự tạo expected bằng các khoảng x/y của rectangle rồi so toàn buffer. Không dùng sampleTriangle để sinh expected.
 
-Bài cuối sẽ tận dụng chính ba edge value để tính barycentric weights, nội suy màu và hoàn thiện bộ validation.
+[Sang bài tiếp theo — Nội suy màu và kiểm chứng rasterizer](/projects/triangle-rasterizer/07-barycentric-va-validation).

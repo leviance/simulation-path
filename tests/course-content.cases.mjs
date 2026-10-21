@@ -382,7 +382,7 @@ test("every project teaches its visible starting point before new abstractions",
     [
       "triangle-rasterizer",
       "01-dung-khung-tam-giac-screen-space.mdx",
-      ["Triangle2", "makeDefaultTriangle", "drawLine", "SDL_UpdateTexture"],
+      ["Triangle2", "drawOutline", "beginDrag", "SDL_UpdateTexture"],
     ],
     [
       "solid-cube-z-buffer",

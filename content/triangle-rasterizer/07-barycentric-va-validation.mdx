@@ -4,47 +4,58 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Coverage mới trả lời “pixel có thuộc triangle không”. Một renderer còn phải biết thuộc tính tại pixel đó: màu, depth, normal, UV. Ba edge value đã chứa đúng thông tin cần thiết. Chia mỗi edge đối diện cho area tạo barycentric weights.
-
-Ta sẽ dùng weights để pha màu đỏ ở A, xanh lá ở B và xanh dương ở C. Đây không chỉ là hiệu ứng: Project 17 sẽ nội suy depth bằng cùng cấu trúc, còn Project 20 sẽ mở rộng sang perspective-correct interpolation.
+Coverage đã chọn được pixel; bây giờ ta dùng ba tỉ lệ diện tích để tìm màu. Mục tiêu không phải một gradient có vẻ mượt, mà là màu gắn đúng với từng vertex, kể cả khi winding bị đảo.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với triangle đã có area dương:
+Trên triangle chuẩn hóa:
 
-$$
-w_A=\frac{E_{BC}(P)}{area},\qquad
-w_B=\frac{E_{CA}(P)}{area},\qquad
-w_C=\frac{E_{AB}(P)}{area}
-$$
+$$w_A=E_{BC}/area,\quad w_B=E_{CA}/area,\quad w_C=E_{AB}/area,\quad w_A+w_B+w_C=1.$$
 
-Điểm nằm trong có các weight không âm theo tolerance và:
+Trong sampleTriangle, ta có thể đã đổi B và C ở bản sao để xử lý winding. Vì màu vẫn gắn với các đỉnh ban đầu, ta phải đổi hai trọng số tương ứng về đúng thứ tự trước khi tính màu. Nếu bỏ bước này, tam giác vẫn được tô kín, tổng các trọng số vẫn bằng 1, nhưng màu của B và C lại bị tráo. Đây là lý do chỉ kiểm tổng bằng 1 chưa đủ để kết luận phép nội suy đúng.
 
-$$
-w_A+w_B+w_C=1
-$$
-
-Tại A, $w_A=1$ và hai weight còn lại bằng 0. Ghép đúng edge **đối diện** với vertex là phần dễ nhầm nhất.
+RGB thuần đỏ/xanh lá/xanh dương biểu diễn ba weights. Tại vertex toán học B phải có weight B=1; không có nghĩa mọi pixel gần B đều là màu xanh thuần, vì ta lấy mẫu tại tâm pixel.
 
 <InteractiveLab demo="triangle-raster" mode="triangle-barycentric" />
 
 ## Viết code từng bước
 
-### Bước 1 — Lưu weights ngay trong CoverageSample
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Các đường dẫn ở tiêu đề code block tính từ Starter. Khi thay hàm, thay bản cũ chứ không thêm một định nghĩa trùng tên.
 
-```cpp title="include/lab.hpp — edge đối diện tạo weight tương ứng"
-sample.barycentric = {
-    sample.edgeBC / area,
-    sample.edgeCA / area,
-    sample.edgeAB / area,
-};
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_starter --parallel 2
+.\build\Debug\project_16_starter.exe
 ```
 
-Phép chia chỉ chạy sau guard degenerate của bài 4. Raster loop truyền cấu trúc này cho callback mà không cần tính lại.
+Checkpoint 07 là **bản tham khảo sau bài**, build độc lập bằng target project_16_checkpoint_7. Chạy checkpoint không kiểm chứng mã bạn vừa sửa trong Starter.
 
-### Bước 2 — Nội suy từng channel
+### Bước 1 — Theo weights về đúng vertex gốc
 
-```cpp title="include/lab.hpp — pha ba màu vertex bằng cùng weights"
+Đoạn này đã nằm trong sampleTriangle từ bài 4, hãy đọc lại trước khi viết shading:
+
+```cpp title="include/lab.hpp — đổi lại weights, không đổi geometry gốc"
+sample.barycentric = {sample.edgeBC / area, sample.edgeCA / area, sample.edgeAB / area};
+// Edge dùng triangle chuẩn hóa; weights vẫn thuộc A/B/C của input gốc.
+if (reversed) {
+    std::swap(sample.barycentric.b, sample.barycentric.c);
+}
+```
+
+### Bước 2 — Chỉ lượng tử hóa khi ghi channel
+
+Thêm các hàm dưới vào cuối lab.hpp. Color đã có từ Starter:
+
+```cpp title="include/lab.hpp — finite, clamp rồi round"
+inline std::uint8_t toByte(double value) {
+    if (!std::isfinite(value)) {
+        return 0;
+    }
+    return static_cast<std::uint8_t>(std::lround(std::clamp(value, 0.0, 255.0)));
+}
+```
+
+```cpp title="include/lab.hpp — một bộ weights cho mọi channel"
 inline Color interpolateColor(Color colorA, Color colorB, Color colorC, Barycentric weights) {
     return {
         toByte(weights.a * colorA.red + weights.b * colorB.red + weights.c * colorC.red),
@@ -55,93 +66,80 @@ inline Color interpolateColor(Color colorA, Color colorB, Color colorC, Barycent
 }
 ```
 
-`toByte` clamp về `0..255` rồi round. Bản thân weight vẫn giữ `double`; chỉ dữ liệu framebuffer mới bị lượng tử hóa thành byte.
-
-### Bước 3 — Đo invariant tổng weight
-
-```cpp title="include/lab.hpp — sai số tổng barycentric"
+```cpp title="include/lab.hpp — đo sai số tổng"
 inline double barycentricSumError(Barycentric weights) {
     return std::abs(weights.a + weights.b + weights.c - 1.0);
 }
 ```
 
-Đo bằng số giúp phát hiện lỗi ghép cạnh hoặc area. Đừng chỉ nhìn gradient “có vẻ mượt”.
-
-### Bước 4 — Biến vòng raster thành stepper thật
-
-`Space` đặt `candidateLimit=0` và pause. `N` tăng limit một đơn vị; `Up/Down` thay 100. Chính `rasterizeTriangle` dừng khi `testedCount >= safeLimit`, nên chế độ bước không có bản sao riêng của thuật toán.
-
-### Bước 5 — Kiểm tra toàn bộ quad, không chỉ một sample trên cạnh
-
-Một sample đúng chưa chứng minh cả đường chéo đúng. Test cuối rasterize hai triangle vào
-một mảng đếm; callback tăng số chủ của từng pixel:
-
-Helper `sharedEdgeCoverageCount` vẫn kiểm nhanh một sample đúng trên cạnh chung. Phép
-kiểm toàn buffer dưới đây mở rộng cùng ý tưởng cho mọi pixel của quad, cả khi đổi đường
-chéo và dịch subpixel.
-
-```cpp title="tests/tests.cpp — coverage buffer của cả quad"
-std::vector<int> owners(std::size_t(width* height), 0);
-for (const lab::Triangle2& triangle : triangles) {
-    lab::rasterizeTriangle(
-        triangle,
-        width,
-        height,
-        lab::FillRule::TopLeft,
-        [&](int x, int y, lab::Barycentric) {
-            ++owners[std::size_t(y * width + x)];
-        }
-    );
+```cpp title="include/lab.hpp — helper kiểm owner tại một sample"
+inline int sharedEdgeCoverageCount(Triangle2 first, Triangle2 second, Vec2 samplePosition, FillRule rule) {
+    int count = 0;
+    if (sampleTriangle(first, samplePosition, rule).inside) {
+        ++count;
+    }
+    if (sampleTriangle(second, samplePosition, rule).inside) {
+        ++count;
+    }
+    return count;
 }
 ```
 
-Mọi tâm pixel nằm trong quad phải có giá trị 1; pixel ngoài quad phải bằng 0. Test chạy
-lại sau khi đổi sang đường chéo còn lại và sau khi dịch cả quad thêm 0.2 pixel. Hai
-coverage buffer phải giống nhau. Như vậy bộ test bắt được cả khe hở, tô đè và lỗi chỉ
-xuất hiện khi vertex không nằm đúng tọa độ nguyên.
+### Bước 3 — Dùng màu trong callback đang có
 
-Test chạy thuần C++ và không tạo cửa sổ SDL. Bộ test còn kiểm bounds, winding, pixel
-center, sample ngoài tam giác, triangle suy biến, số lần callback và phép nội suy màu.
+Thêm packColor trước renderScene trong view.hpp, sau đó thay lambda shade cũ bằng lambda mới. Không thay vòng raster:
+
+```cpp title="include/view.hpp — đóng gói RGBA8888"
+inline std::uint32_t packColor(Color color) {
+    return (std::uint32_t(color.red) << 24U) | (std::uint32_t(color.green) << 16U) | (std::uint32_t(color.blue) << 8U) | color.alpha;
+}
+```
+
+```cpp title="include/view.hpp — callback RGB của ba vertex"
+const auto shade = [&](int x, int y, Barycentric weights) {
+    const std::size_t index = static_cast<std::size_t>(y) * Framebuffer::width + static_cast<std::size_t>(x);
+    ++coverage[index];
+    std::uint32_t color = kShape;
+    if (scene.barycentricColor) {
+        color = packColor(interpolateColor(scene.colors[0], scene.colors[1], scene.colors[2], weights));
+    }
+    image.putPixel(x, y, color);
+};
+```
+
+Trong controls.hpp thêm phím C để so màu đơn với nội suy:
+
+```cpp title="include/controls.hpp — shading không thay coverage"
+if (!repeat && key == SDLK_C) {
+    scene.barycentricColor = !scene.barycentricColor;
+    resetScan(scene);
+}
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build và kiểm chứng Project 16"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-```
+Build Starter. C chỉ đổi shading: geometry, bounds và coveredCount phải giữ nguyên. Preset 2 đảo cả vị trí B/C lẫn thuộc tính đi kèm nên gradient vật lý vẫn như cũ. Ở Canvas, preset đảo thứ tự giữ quy ước màu gắn theo tên input; chú ý phân biệt đổi tên vertex với làm sai weights.
 
-Sau khi CTest pass, chạy `project_16_final` và kiểm tra theo thứ tự:
-
-1. Kéo A/B/C; fill, bounds và count phải cập nhật cùng frame.
-2. Nhấn `1–4`; triangle thường, đảo winding, suy biến và cắt viewport đều ổn định.
-3. Nhấn `5`, dùng `T` so inclusive với top-left; chỉ inclusive có overlap đỏ.
-4. Nhấn `C`; geometry và coverage giữ nguyên, chỉ shading đổi.
-5. Nhấn `Space`, `N`, `Up/Down`; tested count đi theo candidate limit.
-6. Resize rồi nhấn `R`; triangle trở lại vùng nhìn thấy và không có pixel ngoài bounds.
+tests/tests.cpp có oracle cho vertex B/C của input negative, hai đường chéo quad, subpixel shift và màu (0.25,0.25,0.5) → RGB (64,64,128). Bài 8 sẽ nối 3D và chỉ cách chạy toàn tests trên Starter của bạn.
 
 ## Thử làm sai để hiểu đúng
 
-1. Gán weight A bằng `edgeAB/area`. Màu đỏ không còn nằm tại A và test màu vertex thất bại; phục hồi edge đối diện BC.
-2. Làm tròn từng weight trước khi nội suy. Toàn triangle chỉ còn vài mảng màu lớn; chỉ round ở bước đổi channel sang byte.
-3. Đếm overlap bằng màu cuối trên framebuffer. Triangle thứ hai có thể ghi đè và che lịch sử; dùng coverage counter riêng.
-4. Cho triangle suy biến tiếp tục vào phép chia. Preset 3 tạo giá trị không hữu hạn; phục hồi early return trước weights.
+1. Bỏ đổi weights B/C sau normalize. Coverage vẫn đúng và tổng vẫn bằng 1, nhưng test weight B tại input.b thất bại.
+
+2. Round từng weight trước nội suy. Gradient thành mảng; giữ double tới toByte.
+
+3. Chỉ kiểm tổng=1. Dùng weights (A,C,B) vẫn qua test tổng; thêm oracle ở từng vertex và test màu cụ thể.
 
 ## Tự kiểm tra kết quả
 
-- $w_A$, $w_B$, $w_C$ lần lượt lấy từ cạnh BC, CA, AB.
-- Tổng weight của sample không suy biến có sai số không quá $10^{-9}$.
-- Màu tại A/B/C khớp màu vertex tương ứng.
-- Đảo winding không đổi coverage hoặc gradient sau normalize.
-- Triangle suy biến tô 0 pixel và không tạo NaN.
-- Top-left rule cho đúng một chủ trên toàn bộ cạnh chung; đổi đường chéo hoặc dịch subpixel không tạo khe hay tô đè.
-- `coveredCount` bằng số callback; stepper dừng đúng `candidateLimit`.
-- Starter, bảy checkpoint, final và tests build sạch warning ở Debug lẫn Release.
+- Tại từng vertex gốc, weight của chính nó bằng 1 cho cả hai winding.
+- Color (0.25,0.25,0.5) cho (64,64,128) khi ba màu gốc là RGB thuần.
+- C không đổi coverage và candidate count.
+- Đổi geometry và thuộc tính cùng nhau không làm gradient đổi nhầm.
+- Degenerate vẫn không chia hoặc shade.
 
 ## Bài tập mở rộng
 
-Gắn một giá trị depth số thực vào mỗi vertex rồi nội suy nó trong callback, nhưng chỉ hiển thị depth thành grayscale. Chưa so depth giữa nhiều triangle và chưa tạo Z-buffer; mục tiêu là xác nhận cùng barycentric weights nội suy được một scalar khác màu.
+Nội suy một scalar bằng cùng weights rồi hiển thị grayscale. Đây là bước chuẩn bị cho depth ở P17, chưa phải Z-buffer.
 
-Project 16 đã hoàn chỉnh. Project 17 sẽ dùng triangle rasterizer này cho sáu mặt cube, thêm depth buffer và giải quyết che khuất đúng theo từng pixel.
+[Sang bài tiếp theo — Đưa rasterizer vào cảnh 3D](/projects/triangle-rasterizer/08-tu-rasterizer-den-be-mat-3d).

@@ -4,31 +4,37 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Bounding box chỉ nói “pixel này đáng để kiểm tra”. Để biết sample nằm trong triangle, ta cần ba phép thử: sample nằm về phía trong của cạnh `AB`, `BC` và `CA` hay không.
-
-Edge function trả lời câu hỏi đó bằng một cross product 2D. Nhưng dấu của nó phụ thuộc vào hướng cạnh và winding của triangle, nên ta phải chốt quy ước trước khi dùng dấu.
+Một điểm nằm trong bounding box chưa chắc nằm trong tam giác. Ta cần biết điểm đang ở phía nào của từng cạnh. Edge function giải quyết việc đó bằng phép nhân và trừ; trước hết phải chốt dấu.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với cạnh $A\rightarrow B$ và sample $P$:
+Với cạnh A→B và sample P:
 
-$$
-E_{AB}(P)=(B_x-A_x)(P_y-A_y)-(B_y-A_y)(P_x-A_x)
-$$
+$$E_{AB}(P)=(B_x-A_x)(P_y-A_y)-(B_y-A_y)(P_x-A_x).$$
 
-- `E > 0`: P nằm ở một half-plane của cạnh.
-- `E < 0`: P nằm ở half-plane còn lại.
-- `E = 0`: P nằm đúng trên đường AB.
+E=0 nghĩa là P nằm trên đường thẳng AB, nhưng chưa chắc nằm trên đoạn AB. Khi thay P bằng C, kết quả là hai lần diện tích có dấu của tam giác ABC, gọi là signed double area. Trên màn hình, Y tăng xuống dưới nên thứ tự A→B→C cho area dương sẽ trông như đi thuận chiều kim đồng hồ. Ta dùng tên Positive/Negative theo dấu của số, tránh nhầm với hệ tọa độ Y hướng lên trong sách toán.
 
-Khi thay `P=C`, kết quả chính là hai lần diện tích có dấu của tam giác ABC.
+A=(0,0), B=(4,0), C=(0,4) cho area=16. Đổi B/C cho −16; đây là đáp án tính tay, không lấy từ một helper khác.
 
 <InteractiveLab demo="triangle-raster" mode="triangle-edge" />
 
 ## Viết code từng bước
 
-### Bước 1 — Viết edge function không giấu phép trừ
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Các đường dẫn ở tiêu đề code block tính từ Starter. Khi thay hàm, thay bản cũ chứ không thêm một định nghĩa trùng tên.
 
-```cpp title="include/lab.hpp — orient2D của cạnh và sample"
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_starter --parallel 2
+.\build\Debug\project_16_starter.exe
+```
+
+Checkpoint 03 là **bản tham khảo sau bài**, build độc lập bằng target project_16_checkpoint_3. Chạy checkpoint không kiểm chứng mã bạn vừa sửa trong Starter.
+
+### Bước 1 — Viết cross product rõ hai vector
+
+Thêm các hàm sau vào lab.hpp, sau phần bounds:
+
+```cpp title="include/lab.hpp — AB nhân chéo AP"
 inline double orient2D(Vec2 a, Vec2 b, Vec2 point) {
     const Vec2 edge{b.x - a.x, b.y - a.y};
     const Vec2 offset{point.x - a.x, point.y - a.y};
@@ -36,23 +42,22 @@ inline double orient2D(Vec2 a, Vec2 b, Vec2 point) {
 }
 ```
 
-Hai vector tạm làm công thức dài hơn một chút nhưng cho thấy rõ đang tính `AB × AP`, rất phù hợp với code học tập.
-
-### Bước 2 — Dùng cùng hàm để đo area
-
-```cpp title="include/lab.hpp — area có dấu giữ nguyên hệ số 2"
+```cpp title="include/lab.hpp — dùng cùng quy ước cho area"
 inline double signedDoubleArea(const Triangle2& triangle) {
     return orient2D(triangle.a, triangle.b, triangle.c);
 }
 ```
 
-Không chia 2 vì coverage chỉ cần dấu và tỉ lệ. Giữ “double area” còn tránh thêm một phép nhân/chia trong mọi sample.
+### Bước 2 — Phân loại trước khi chia
 
-### Bước 3 — Gọi winding theo dấu số, không theo cảm giác nhìn
+Winding là enum đã có trong Starter. classifyWinding từ chối dữ liệu không hữu hạn và area gần 0:
 
-```cpp title="include/lab.hpp — phân loại positive negative degenerate"
+```cpp title="include/lab.hpp — positive, negative và degenerate"
 inline Winding classifyWinding(const Triangle2& triangle, double epsilon = 1e-9) {
     const double area = signedDoubleArea(triangle);
+    if (!finite(triangle) || !std::isfinite(area)) {
+        return Winding::Degenerate;
+    }
     if (area > epsilon) {
         return Winding::Positive;
     }
@@ -63,11 +68,9 @@ inline Winding classifyWinding(const Triangle2& triangle, double epsilon = 1e-9)
 }
 ```
 
-Trong screen space, Y tăng xuống dưới. Triangle có area số dương thường nhìn giống clockwise trên màn hình. Tên `Positive` vì vậy chính xác hơn việc gọi cứng là `CounterClockwise`.
+### Bước 3 — Chuẩn hóa bản sao, không sửa geometry gốc
 
-### Bước 4 — Chuẩn hóa bằng một phép swap
-
-```cpp title="include/lab.hpp — đưa mọi triangle không suy biến về area dương"
+```cpp title="include/lab.hpp — swap B/C trong bản sao"
 inline Triangle2 normalizePositiveWinding(Triangle2 triangle) {
     if (classifyWinding(triangle) == Winding::Negative) {
         std::swap(triangle.b, triangle.c);
@@ -76,33 +79,37 @@ inline Triangle2 normalizePositiveWinding(Triangle2 triangle) {
 }
 ```
 
-Đổi B với C không thay tập ba điểm. Nó chỉ đảo hướng đi quanh biên, nhờ đó coverage test có thể dùng cùng một điều kiện dấu cho mọi input.
+Trong renderScene, sau const int height, thêm các phép đo dưới; HUD đọc trực tiếp result.area và ba edge này:
+
+```cpp title="include/view.hpp — số đo của sample do người học chọn"
+result.area = signedDoubleArea(triangle);
+result.sample.position = scene.sample;
+result.sample.edgeAB = orient2D(triangle.a, triangle.b, scene.sample);
+result.sample.edgeBC = orient2D(triangle.b, triangle.c, scene.sample);
+result.sample.edgeCA = orient2D(triangle.c, triangle.a, scene.sample);
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build edge-function checkpoint"
-cmake --build build --config Debug --target project_16_checkpoint_3
-```
-
-Click vài điểm trong và ngoài wireframe để title bar đọc ba edge value. Kéo C qua đường AB: area tiến về 0, triangle suy biến rồi đổi dấu.
+Build Starter rồi click nền để chọn sample. Mỗi cạnh dương/âm thay đổi theo phía của sample. Kéo một đỉnh qua cạnh đối diện, quan sát area qua 0. Chưa dùng màu RGB để đo dấu: chỉ số area/edge mới là dữ liệu cần kiểm ở bài này.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi công thức thành `AP × AB`. Mọi dấu đảo nhưng area và coverage có thể vẫn “trông hợp lý” nếu bạn vô tình đảo điều kiện theo; test giá trị area cụ thể sẽ phát hiện quy ước đổi.
-2. Bỏ epsilon và chỉ so `area == 0`. Ba điểm gần thẳng hàng vẫn tạo weight rất lớn ở bài sau; phục hồi vùng degenerate nhỏ.
-3. Swap A với B nhưng tài liệu và test nói B/C. Dấu vẫn đổi, song quy ước input bị lệch; dùng đúng một phép swap đã công bố.
+1. Đổi AB×AP thành AP×AB. Area +16 thành −16; khôi phục để giữ quy ước đã công bố.
+
+2. Dùng giá trị tuyệt đối cho cả ba edge. Bạn sẽ không còn biết sample ở phía nào; không lấy abs trước coverage.
+
+3. Đổi B/C ngay trong Scene thay vì bản sao. Thuộc tính đi kèm đỉnh có thể bị tách khỏi geometry; giữ dữ liệu gốc và chuẩn hóa cục bộ.
 
 ## Tự kiểm tra kết quả
 
-- `orient2D(A,B,P)` bằng `AB × AP` theo đúng thứ tự.
-- Triangle `(0,0),(4,0),(0,4)` có signed double area bằng 16.
-- Đổi B/C làm area đổi từ +16 thành -16.
-- `normalizePositiveWinding` đưa cả hai input về area +16.
-- Ba điểm thẳng hàng được phân loại `Degenerate`.
-- Chưa có phép chia cho area trong đường xử lý degenerate.
+- Oracle area của (0,0),(4,0),(0,4) bằng +16.
+- Ba điểm thẳng hàng được nhận diện trước phép chia.
+- HUD hiển thị edge thật, không chỉ đổi title cửa sổ.
+- Chuẩn hóa không ghi ngược vào triangle input.
 
 ## Bài tập mở rộng
 
-Vẽ ba đường cạnh kéo dài hết Canvas và tô mờ half-plane dương của từng cạnh. Phần giao của ba vùng chính là tam giác sau khi winding đã chuẩn hóa.
+Tính tay E_AB tại P=(1,1), (1,−1), (8,0). Giải thích vì sao điểm cuối nằm trên đường thẳng dù ở ngoài đoạn AB.
 
-Bài tiếp theo sẽ đặt sample tại tâm pixel và ghép ba edge test thành một quyết định coverage hoàn chỉnh.
+[Sang bài tiếp theo — Lấy mẫu tại tâm pixel và quyết định coverage](/projects/triangle-rasterizer/04-pixel-center-va-coverage).

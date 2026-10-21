@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -16,7 +17,6 @@ import {
   rasterizeTriangleCoverage,
   sampleRasterTriangle,
   sharedTriangleEdgeOwnership,
-  triangleCandidateCount,
   triangleSignedDoubleArea,
   triangleWinding,
   type RasterPoint,
@@ -25,12 +25,13 @@ import {
 } from "@/lib/labs/triangle-raster";
 import {
   LabReadout,
-  canvasPoint,
   setupCanvas,
   useCanvasSize,
   useReducedMotion,
+  usePauseOnReducedMotion,
 } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
+import TriangleSceneLab from "./triangle-scene-lab";
 
 const COLUMNS = 24;
 const ROWS = 16;
@@ -82,8 +83,12 @@ function vertexAt(triangle: RasterTriangle, key: "a" | "b" | "c") {
 }
 
 export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode }) {
+  if (mode === "triangle-scene" || mode === undefined) return <TriangleSceneLab />;
+  return <TriangleRasterWorkbench key={mode} mode={mode} />;
+}
+
+function TriangleRasterWorkbench({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const size = useCanvasSize(canvasRef);
   const reducedMotion = useReducedMotion();
   const initialPreset = mode === "triangle-top-left" ? "shared" : "normal";
   const initialValue = presetValue(initialPreset);
@@ -98,7 +103,35 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
   const [barycentricColor, setBarycentricColor] = useState(true);
   const [candidateLimit, setCandidateLimit] = useState(Number.POSITIVE_INFINITY);
   const [paused, setPaused] = useState(true);
-  const draggedVertex = useRef<"a" | "b" | "c" | null>(null);
+  const draggedVertex = useRef<{ key: "a" | "b" | "c"; id: number; offset: RasterPoint } | null>(
+    null,
+  );
+  const generation = useRef(0);
+  const cancelPointer = useCallback(() => {
+    generation.current++;
+    const active = draggedVertex.current;
+    draggedVertex.current = null;
+    if (active && canvasRef.current?.hasPointerCapture(active.id))
+      canvasRef.current.releasePointerCapture(active.id);
+  }, []);
+  const pauseEnvironment = useCallback(() => {
+    cancelPointer();
+    setPaused(true);
+  }, [cancelPointer]);
+  const size = useCanvasSize(canvasRef, pauseEnvironment);
+  usePauseOnReducedMotion(pauseEnvironment);
+  useEffect(() => {
+    const hidden = () => {
+      if (document.hidden) pauseEnvironment();
+    };
+    window.addEventListener("blur", pauseEnvironment);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", pauseEnvironment);
+      document.removeEventListener("visibilitychange", hidden);
+      cancelPointer();
+    };
+  }, [pauseEnvironment, cancelPointer]);
 
   const grid = useMemo(() => {
     const cell = Math.max(
@@ -119,11 +152,17 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
   const secondary = useMemo(
     () =>
       secondTriangle
-        ? rasterizeTriangleCoverage(secondTriangle, COLUMNS, ROWS, fillRule)
+        ? rasterizeTriangleCoverage(
+            secondTriangle,
+            COLUMNS,
+            ROWS,
+            fillRule,
+            Math.max(0, candidateLimit - primary.testedCount),
+          )
         : undefined,
-    [fillRule, secondTriangle],
+    [fillRule, secondTriangle, candidateLimit, primary.testedCount],
   );
-  const candidateCount = primary.candidateCount;
+  const candidateCount = primary.candidateCount + (secondary?.candidateCount ?? 0);
 
   const samplePosition = useMemo(
     () =>
@@ -140,7 +179,9 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
   useEffect(() => {
     if (paused || !Number.isFinite(candidateLimit) || candidateLimit >= candidateCount) return;
     if (reducedMotion) return;
+    const version = generation.current;
     const frame = requestAnimationFrame(() => {
+      if (version !== generation.current) return;
       setCandidateLimit((current) => Math.min(candidateCount, current + 8));
     });
     return () => cancelAnimationFrame(frame);
@@ -304,6 +345,7 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
   ]);
 
   const applyPreset = (name: Exclude<PresetName, "custom">) => {
+    cancelPointer();
     const next = presetValue(name);
     setPreset(name);
     setTriangle(next.first);
@@ -322,7 +364,12 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
   };
 
   const fromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const point = canvasPoint(event, event.currentTarget);
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const point = {
+      x: ((event.clientX - rect.left) * size.width) / rect.width,
+      y: ((event.clientY - rect.top) * size.height) / rect.height,
+    };
     return {
       x: Math.max(-4, Math.min(COLUMNS + 4, (point.x - grid.left) / grid.cell)),
       y: Math.max(-4, Math.min(ROWS + 4, (point.y - grid.top) / grid.cell)),
@@ -330,7 +377,11 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!event.isPrimary || event.button !== 0 || draggedVertex.current) return;
     const point = fromEvent(event);
+    if (!point) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
     let nearest: "a" | "b" | "c" | null = null;
     let distance = 0.8;
     for (const key of ["a", "b", "c"] as const) {
@@ -342,8 +393,17 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
       }
     }
     if (nearest) {
-      draggedVertex.current = nearest;
-      event.currentTarget.setPointerCapture(event.pointerId);
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        draggedVertex.current = {
+          key: nearest,
+          id: event.pointerId,
+          offset: { x: point.x - triangle[nearest].x, y: point.y - triangle[nearest].y },
+        };
+      } catch {
+        return;
+      }
+      setPaused(true);
       setPreset("custom");
       setSecondTriangle(undefined);
       return;
@@ -354,23 +414,65 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
     });
   };
 
-  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const key = draggedVertex.current;
-    if (!key) return;
+  const movePointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const active = draggedVertex.current;
+    if (!active || active.id !== event.pointerId) return;
     const point = fromEvent(event);
-    setTriangle((current) => ({ ...current, [key]: point }));
+    if (!point) return;
+    setTriangle((current) => ({
+      ...current,
+      [active.key]: { x: point.x - active.offset.x, y: point.y - active.offset.y },
+    }));
     setCandidateLimit(Number.POSITIVE_INFINITY);
     setPaused(true);
   };
+  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (draggedVertex.current?.id !== event.pointerId) return;
+    if (event.pointerType === "mouse" && (event.buttons & 1) === 0) {
+      cancelPointer();
+      return;
+    }
+    movePointer(event);
+  };
 
   const stopPointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    draggedVertex.current = null;
+    if (draggedVertex.current?.id === event.pointerId) cancelPointer();
+  };
+  const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0 || draggedVertex.current?.id !== event.pointerId) return;
+    movePointer(event);
+    stopPointer(event);
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.ctrlKey || event.altKey || event.metaKey || event.key === "Tab") return;
+    if (
+      ![
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "t",
+        "r",
+        "n",
+        " ",
+        "arrowleft",
+        "arrowright",
+        "arrowup",
+        "arrowdown",
+      ].includes(event.key.toLowerCase())
+    )
+      return;
+    if (
+      event.repeat &&
+      [" ", "t", "r", "n", "1", "2", "3", "4", "5"].includes(event.key.toLowerCase())
+    ) {
+      event.preventDefault();
+      return;
+    }
+    cancelPointer();
+    if (event.key !== " ") setPaused(true);
     if (event.key >= "1" && event.key <= "5") {
       const names = ["normal", "reversed", "degenerate", "clipped", "shared"] as const;
       applyPreset(names[Number(event.key) - 1]);
@@ -387,6 +489,10 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
     }
     if (event.key === " ") {
       event.preventDefault();
+      if (reducedMotion) {
+        setPaused(true);
+        return;
+      }
       if (candidateLimit >= candidateCount || !Number.isFinite(candidateLimit))
         setCandidateLimit(0);
       setPaused((current) => !current);
@@ -408,6 +514,11 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
   };
 
   const startOrPause = () => {
+    cancelPointer();
+    if (reducedMotion) {
+      setPaused(true);
+      return;
+    }
     if (candidateLimit >= candidateCount || !Number.isFinite(candidateLimit)) {
       if (reducedMotion) {
         setCandidateLimit(candidateCount);
@@ -454,7 +565,11 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
             <select
               aria-label="Quy tắc tô cạnh"
               value={fillRule}
-              onChange={(event) => setFillRule(event.target.value as TriangleFillRule)}
+              onChange={(event) => {
+                cancelPointer();
+                setPaused(true);
+                setFillRule(event.target.value as TriangleFillRule);
+              }}
             >
               <option value="inclusive">Inclusive (≥ 0)</option>
               <option value="top-left">Top-left</option>
@@ -467,7 +582,11 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
             <select
               aria-label="Điểm lấy mẫu pixel"
               value={sampleAtCenter ? "center" : "corner"}
-              onChange={(event) => setSampleAtCenter(event.target.value === "center")}
+              onChange={(event) => {
+                cancelPointer();
+                setPaused(true);
+                setSampleAtCenter(event.target.value === "center");
+              }}
             >
               <option value="center">Tâm (x+0.5, y+0.5)</option>
               <option value="corner">Góc (x, y)</option>
@@ -480,7 +599,11 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
             <select
               aria-label="Cách tô màu tam giác"
               value={barycentricColor ? "barycentric" : "solid"}
-              onChange={(event) => setBarycentricColor(event.target.value === "barycentric")}
+              onChange={(event) => {
+                cancelPointer();
+                setPaused(true);
+                setBarycentricColor(event.target.value === "barycentric");
+              }}
             >
               <option value="barycentric">Barycentric RGB</option>
               <option value="solid">Màu đơn</option>
@@ -500,6 +623,7 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
           <button
             type="button"
             onClick={() => {
+              cancelPointer();
               setCandidateLimit((current) =>
                 Math.min(candidateCount, Number.isFinite(current) ? current + 1 : 1),
               );
@@ -521,11 +645,11 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
         onKeyDown={onKeyDown}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={stopPointer}
+        onPointerUp={onPointerUp}
         onPointerCancel={stopPointer}
-        onLostPointerCapture={() => {
-          draggedVertex.current = null;
-        }}
+        onLostPointerCapture={stopPointer}
+        onBlur={pauseEnvironment}
+        style={{ height: "clamp(320px,50vw,500px)", touchAction: "none" }}
       />
       <LabReadout
         items={[
@@ -551,10 +675,16 @@ export default function TriangleRasterLab({ mode }: { mode?: InteractiveLabMode 
           },
           {
             label: "Tested / covered / Σw error",
-            value: `${primary.testedCount}/${triangleCandidateCount(primary.bounds)} · ${primary.coveredCount} · ${barycentricSumError(selectedSample.barycentric).toExponential(1)}`,
+            value: `${primary.testedCount + (secondary?.testedCount ?? 0)}/${candidateCount} · ${primary.coveredCount + (secondary?.coveredCount ?? 0)} · ${winding === "degenerate" ? "không xác định" : barycentricSumError(selectedSample.barycentric).toExponential(1)}`,
           },
         ]}
       />
+      <p>
+        Edge values và area hiển thị theo winding đã chuẩn hóa. Barycentric A/B/C vẫn thuộc vertex
+        input gốc, không bị tráo khi normalize. Mỗi ô là một pixel logic được phóng đại; preset đảo
+        B/C đổi vị trí các tên vertex nên màu đi theo tên input. Scene 3D ở bài 8 cho thử đảo cả
+        geometry lẫn thuộc tính để so gradient vật lý.
+      </p>
       <p className="sr-only">
         A ở ({triangle.a.x.toFixed(1)}, {triangle.a.y.toFixed(1)}), B ở ({triangle.b.x.toFixed(1)},{" "}
         {triangle.b.y.toFixed(1)}), C ở ({triangle.c.x.toFixed(1)}, {triangle.c.y.toFixed(1)}).

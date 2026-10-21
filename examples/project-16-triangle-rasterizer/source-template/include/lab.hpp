@@ -1,5 +1,4 @@
 #pragma once
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -8,12 +7,11 @@
 #include <utility>
 
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 7
+#define LAB_CHECKPOINT 8
 #endif
 
 namespace lab {
-#if LAB_CHECKPOINT >= 1
-// Rasterizer nhận ba vertex đã ở screen space; pipeline 3D không nằm trong module này.
+// Các kiểu dữ liệu có sẵn trong Starter; thuật toán được thêm qua từng bài.
 struct Vec2 {
     double x{};
     double y{};
@@ -25,15 +23,67 @@ struct Triangle2 {
     Vec2 c{};
 };
 
+struct IntRect {
+    int minX{};
+    int minY{};
+    int maxX{-1};
+    int maxY{-1};
+};
+enum class Winding {
+    Positive,
+    Negative,
+    Degenerate
+};
+
+enum class FillRule {
+    Inclusive,
+    TopLeft
+};
+
+struct Barycentric {
+    double a{};
+    double b{};
+    double c{};
+};
+
+struct CoverageSample {
+    Vec2 position{};
+    double edgeAB{};
+    double edgeBC{};
+    double edgeCA{};
+    Barycentric barycentric{};
+    bool inside{};
+};
+
+struct RasterStats {
+    IntRect bounds{};
+    std::size_t candidateCount{};
+    std::size_t testedCount{};
+    std::size_t coveredCount{};
+    bool degenerate{};
+};
+
+struct Color {
+    std::uint8_t red{};
+    std::uint8_t green{};
+    std::uint8_t blue{};
+    std::uint8_t alpha{255};
+};
+
+inline bool finite(Vec2 point) {
+    return std::isfinite(point.x) && std::isfinite(point.y);
+}
+
+inline bool finite(const Triangle2& triangle) {
+    return finite(triangle.a) && finite(triangle.b) && finite(triangle.c);
+}
+
+#if LAB_CHECKPOINT >= 1
 inline Triangle2 makeDefaultTriangle(int width, int height) {
-    const double centerX = double(width) * 0.5;
-    const double centerY = double(height) * 0.52;
-    const double radius = double(std::min(width, height)) * 0.31;
-    return {
-        {centerX, centerY - radius},
-        {centerX + radius * 0.92, centerY + radius * 0.72},
-        {centerX - radius * 0.92, centerY + radius * 0.72},
-    };
+    const double centerX = width * 0.5;
+    const double centerY = height * 0.5;
+    const double radius = std::min(width, height) * 0.32;
+    return {{centerX, centerY - radius}, {centerX + radius, centerY + radius}, {centerX - radius, centerY + radius}};
 }
 
 inline Vec2 vertexAt(const Triangle2& triangle, int index) {
@@ -48,33 +98,28 @@ inline Vec2 vertexAt(const Triangle2& triangle, int index) {
 #endif
 
 #if LAB_CHECKPOINT >= 2
-// IntRect dùng hai đầu inclusive để khớp trực tiếp với vòng for trên chỉ số pixel.
-struct IntRect {
-    int minX{};
-    int minY{};
-    int maxX{-1};
-    int maxY{-1};
-};
-
 inline bool isEmpty(IntRect bounds) {
     return bounds.maxX < bounds.minX || bounds.maxY < bounds.minY;
 }
 
 inline IntRect triangleBounds(const Triangle2& triangle, int width, int height) {
-    if (width <= 0 || height <= 0) {
+    if (width <= 0 || height <= 0 || !finite(triangle)) {
         return {};
     }
-
     const double minimumX = std::min({triangle.a.x, triangle.b.x, triangle.c.x});
     const double minimumY = std::min({triangle.a.y, triangle.b.y, triangle.c.y});
     const double maximumX = std::max({triangle.a.x, triangle.b.x, triangle.c.x});
     const double maximumY = std::max({triangle.a.y, triangle.b.y, triangle.c.y});
-
+    // Phải kiểm rời nhau trước clamp; triangle ngoài màn hình có bounds rỗng.
+    if (maximumX < 0.0 || maximumY < 0.0 || minimumX >= width || minimumY >= height) {
+        return {};
+    }
     IntRect bounds{};
-    bounds.minX = std::clamp(int(std::floor(minimumX)), 0, width - 1);
-    bounds.minY = std::clamp(int(std::floor(minimumY)), 0, height - 1);
-    bounds.maxX = std::clamp(int(std::ceil(maximumX)) - 1, 0, width - 1);
-    bounds.maxY = std::clamp(int(std::ceil(maximumY)) - 1, 0, height - 1);
+    // Clamp double trước int: không cast NaN/Inf hoặc số vượt miền int.
+    bounds.minX = static_cast<int>(std::clamp(std::floor(minimumX), 0.0, double(width - 1)));
+    bounds.minY = static_cast<int>(std::clamp(std::floor(minimumY), 0.0, double(height - 1)));
+    bounds.maxX = static_cast<int>(std::clamp(std::ceil(maximumX) - 1.0, -1.0, double(width - 1)));
+    bounds.maxY = static_cast<int>(std::clamp(std::ceil(maximumY) - 1.0, -1.0, double(height - 1)));
     return bounds;
 }
 
@@ -82,20 +127,11 @@ inline std::size_t candidatePixelCount(IntRect bounds) {
     if (isEmpty(bounds)) {
         return 0;
     }
-    const std::size_t columns = std::size_t(bounds.maxX - bounds.minX + 1);
-    const std::size_t rows = std::size_t(bounds.maxY - bounds.minY + 1);
-    return columns * rows;
+    return static_cast<std::size_t>(bounds.maxX - bounds.minX + 1) * static_cast<std::size_t>(bounds.maxY - bounds.minY + 1);
 }
 #endif
 
 #if LAB_CHECKPOINT >= 3
-// Dấu của orient2D vừa cho winding vừa cho biết sample thuộc half-plane nào.
-enum class Winding {
-    Positive,
-    Negative,
-    Degenerate,
-};
-
 inline double orient2D(Vec2 a, Vec2 b, Vec2 point) {
     const Vec2 edge{b.x - a.x, b.y - a.y};
     const Vec2 offset{point.x - a.x, point.y - a.y};
@@ -108,6 +144,9 @@ inline double signedDoubleArea(const Triangle2& triangle) {
 
 inline Winding classifyWinding(const Triangle2& triangle, double epsilon = 1e-9) {
     const double area = signedDoubleArea(triangle);
+    if (!finite(triangle) || !std::isfinite(area)) {
+        return Winding::Degenerate;
+    }
     if (area > epsilon) {
         return Winding::Positive;
     }
@@ -126,31 +165,9 @@ inline Triangle2 normalizePositiveWinding(Triangle2 triangle) {
 #endif
 
 #if LAB_CHECKPOINT >= 4
-// Coverage giữ dữ liệu trung gian để lab và test giải thích được quyết định nhận/loại.
-enum class FillRule {
-    Inclusive,
-    TopLeft,
-};
-
-struct Barycentric {
-    double a{};
-    double b{};
-    double c{};
-};
-
-struct CoverageSample {
-    Vec2 position{};
-    double edgeAB{};
-    double edgeBC{};
-    double edgeCA{};
-    Barycentric barycentric{};
-    bool inside{};
-};
-
 inline Vec2 pixelCenter(int x, int y) {
     return {double(x) + 0.5, double(y) + 0.5};
 }
-
 #if LAB_CHECKPOINT >= 6
 inline bool isTopLeftEdge(Vec2 a, Vec2 b, double epsilon = 1e-9) {
     const double deltaX = b.x - a.x;
@@ -173,25 +190,26 @@ inline bool acceptsEdge(double edgeValue, bool topLeft, FillRule rule, double ep
     return topLeft;
 }
 #endif
-
 inline CoverageSample sampleTriangle(Triangle2 triangle, Vec2 samplePosition, FillRule rule) {
-    triangle = normalizePositiveWinding(triangle);
     CoverageSample sample{};
     sample.position = samplePosition;
-    const double area = signedDoubleArea(triangle);
-    if (std::abs(area) <= 1e-9) {
+    if (!finite(samplePosition) || classifyWinding(triangle) == Winding::Degenerate) {
         return sample;
     }
-
+    const bool reversed = classifyWinding(triangle) == Winding::Negative;
+    triangle = normalizePositiveWinding(triangle);
+    const double area = signedDoubleArea(triangle);
     sample.edgeAB = orient2D(triangle.a, triangle.b, samplePosition);
     sample.edgeBC = orient2D(triangle.b, triangle.c, samplePosition);
     sample.edgeCA = orient2D(triangle.c, triangle.a, samplePosition);
-    sample.barycentric = {
-        sample.edgeBC / area,
-        sample.edgeCA / area,
-        sample.edgeAB / area,
-    };
-
+    if (!std::isfinite(sample.edgeAB) || !std::isfinite(sample.edgeBC) || !std::isfinite(sample.edgeCA)) {
+        return sample;
+    }
+    sample.barycentric = {sample.edgeBC / area, sample.edgeCA / area, sample.edgeAB / area};
+    // Edge dùng triangle chuẩn hóa; weights vẫn thuộc A/B/C của input gốc.
+    if (reversed) {
+        std::swap(sample.barycentric.b, sample.barycentric.c);
+    }
 #if LAB_CHECKPOINT >= 6
     const bool insideAB = acceptsEdge(sample.edgeAB, isTopLeftEdge(triangle.a, triangle.b), rule);
     const bool insideBC = acceptsEdge(sample.edgeBC, isTopLeftEdge(triangle.b, triangle.c), rule);
@@ -206,24 +224,9 @@ inline CoverageSample sampleTriangle(Triangle2 triangle, Vec2 samplePosition, Fi
 #endif
 
 #if LAB_CHECKPOINT >= 5
-// Callback tách phép chọn pixel khỏi cách shade và cách lưu framebuffer.
-struct RasterStats {
-    IntRect bounds{};
-    std::size_t candidateCount{};
-    std::size_t testedCount{};
-    std::size_t coveredCount{};
-    bool degenerate{};
-};
-
+// Callback chỉ được gọi cho pixel đạt coverage; không phụ thuộc SDL.
 template <typename ShadePixel>
-RasterStats rasterizeTriangle(
-    Triangle2 triangle,
-    int width,
-    int height,
-    FillRule rule,
-    std::size_t candidateLimit,
-    ShadePixel shadePixel
-) {
+RasterStats rasterizeTriangle(Triangle2 triangle, int width, int height, FillRule rule, std::size_t candidateLimit, ShadePixel shadePixel) {
     RasterStats stats{};
     stats.bounds = triangleBounds(triangle, width, height);
     stats.candidateCount = candidatePixelCount(stats.bounds);
@@ -231,20 +234,17 @@ RasterStats rasterizeTriangle(
     if (stats.degenerate || stats.candidateCount == 0) {
         return stats;
     }
-
     const std::size_t safeLimit = std::min(candidateLimit, stats.candidateCount);
     for (int y = stats.bounds.minY; y <= stats.bounds.maxY; ++y) {
         for (int x = stats.bounds.minX; x <= stats.bounds.maxX; ++x) {
             if (stats.testedCount >= safeLimit) {
                 return stats;
             }
-
             const CoverageSample sample = sampleTriangle(triangle, pixelCenter(x, y), rule);
             ++stats.testedCount;
             if (!sample.inside) {
                 continue;
             }
-
             ++stats.coveredCount;
             shadePixel(x, y, sample.barycentric);
         }
@@ -253,35 +253,17 @@ RasterStats rasterizeTriangle(
 }
 
 template <typename ShadePixel>
-RasterStats rasterizeTriangle(
-    Triangle2 triangle,
-    int width,
-    int height,
-    FillRule rule,
-    ShadePixel shadePixel
-) {
-    return rasterizeTriangle(
-        triangle,
-        width,
-        height,
-        rule,
-        std::numeric_limits<std::size_t>::max(),
-        shadePixel
-    );
+RasterStats rasterizeTriangle(Triangle2 triangle, int width, int height, FillRule rule, ShadePixel shadePixel) {
+    return rasterizeTriangle(triangle, width, height, rule, std::numeric_limits<std::size_t>::max(), shadePixel);
 }
 #endif
 
 #if LAB_CHECKPOINT >= 7
-// Barycentric weights nội suy mọi channel bằng cùng một phép tổ hợp tuyến tính.
-struct Color {
-    std::uint8_t red{};
-    std::uint8_t green{};
-    std::uint8_t blue{};
-    std::uint8_t alpha{255};
-};
-
 inline std::uint8_t toByte(double value) {
-    return std::uint8_t(std::lround(std::clamp(value, 0.0, 255.0)));
+    if (!std::isfinite(value)) {
+        return 0;
+    }
+    return static_cast<std::uint8_t>(std::lround(std::clamp(value, 0.0, 255.0)));
 }
 
 inline Color interpolateColor(Color colorA, Color colorB, Color colorC, Barycentric weights) {

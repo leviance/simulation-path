@@ -4,107 +4,122 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Với framebuffer `1920×1080`, quét cả màn hình nghĩa là hơn hai triệu coverage test cho một triangle, dù triangle chỉ chiếm một góc nhỏ. Trước khi hỏi pixel có nằm **trong** triangle hay không, ta nên loại ngay mọi pixel chắc chắn nằm ngoài hình chữ nhật bao quanh nó.
-
-Bounding box không quyết định coverage. Nó chỉ tạo một danh sách candidate đủ nhỏ mà không bỏ sót pixel có khả năng thuộc triangle.
+Quét toàn framebuffer cho một tam giác nhỏ sẽ làm hàng trăm nghìn phép thử vô ích. Ta khoanh vùng trước, nhưng cần phân biệt hình chữ nhật chứa candidate với tập pixel thực sự thuộc tam giác.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Giả sử X lớn nhất của vertex là `20.2`. Pixel có tâm X bằng `20.5` vẫn là candidate, nên chỉ số cuối là `20`:
+Với minX=2.2 và maxX=20.2, ta chọn chỉ số từ floor(2.2)=2 tới ceil(20.2)−1=20. Đây là bounds **bảo thủ** của các ô giao với AABB, không phải tập tâm pixel tối thiểu: tâm 20.5 vẫn được thử rồi coverage có thể loại.
 
-$$
-maxX=\lceil 20.2\rceil-1=20
-$$
+$$minX=\lfloor \min(A_x,B_x,C_x)\rfloor,\qquad maxX=\lceil\max(A_x,B_x,C_x)\rceil-1.$$
 
-Với X lớn nhất đúng bằng `20.0`, pixel chỉ số `19` có tâm `19.5` là ô cuối nằm trước biên:
-
-$$
-maxX=\lceil 20.0\rceil-1=19
-$$
-
-Đầu nhỏ nhất dùng `floor`. Sau đó cả bốn giá trị phải được clamp vào framebuffer.
+IntRect dùng hai đầu inclusive. Phải kiểm triangle nằm hẳn ngoài viewport trước clamp, nếu không hai min/max ngoài trái có thể cùng bị ép thành 0 và tạo một cột candidate giả.
 
 <InteractiveLab demo="triangle-raster" mode="triangle-bounds" />
 
 ## Viết code từng bước
 
-### Bước 1 — Dùng rectangle có hai đầu inclusive
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Các đường dẫn ở tiêu đề code block tính từ Starter. Khi thay hàm, thay bản cũ chứ không thêm một định nghĩa trùng tên.
 
-```cpp title="include/lab.hpp — bounds theo chỉ số pixel"
-struct IntRect {
-    int minX{};
-    int minY{};
-    int maxX{-1};
-    int maxY{-1};
-};
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_starter --parallel 2
+.\build\Debug\project_16_starter.exe
+```
 
+Checkpoint 02 là **bản tham khảo sau bài**, build độc lập bằng target project_16_checkpoint_2. Chạy checkpoint không kiểm chứng mã bạn vừa sửa trong Starter.
+
+### Bước 1 — Đọc quy ước rectangle rỗng
+
+IntRect đã có trong Starter. Thêm isEmpty vào lab.hpp:
+
+```cpp title="include/lab.hpp — rectangle rỗng khi max nhỏ hơn min"
 inline bool isEmpty(IntRect bounds) {
     return bounds.maxX < bounds.minX || bounds.maxY < bounds.minY;
 }
 ```
 
-Giá trị `max=-1` làm rectangle mặc định rỗng. Vòng raster sau này có thể viết `x <= maxX` mà không phải nhớ một quy ước half-open khác.
+### Bước 2 — Clamp trước khi đổi sang int
 
-### Bước 2 — Lấy min/max từ đúng ba vertex
+Thêm triangleBounds sau isEmpty. Dữ liệu NaN/Inf trả rỗng; floor/ceil còn là double khi clamp nên không cast số ngoài miền int:
 
-Hàm `triangleBounds` nhận triangle cùng kích thước framebuffer và trả một `IntRect` đã clamp:
-
-```cpp title="include/lab.hpp — đổi min max liên tục thành IntRect"
-const double minimumX = std::min({triangle.a.x, triangle.b.x, triangle.c.x});
-const double minimumY = std::min({triangle.a.y, triangle.b.y, triangle.c.y});
-const double maximumX = std::max({triangle.a.x, triangle.b.x, triangle.c.x});
-const double maximumY = std::max({triangle.a.y, triangle.b.y, triangle.c.y});
-
-IntRect bounds{};
-bounds.minX = std::clamp(int(std::floor(minimumX)), 0, width - 1);
-bounds.minY = std::clamp(int(std::floor(minimumY)), 0, height - 1);
-bounds.maxX = std::clamp(int(std::ceil(maximumX)) - 1, 0, width - 1);
-bounds.maxY = std::clamp(int(std::ceil(maximumY)) - 1, 0, height - 1);
-return bounds;
+```cpp title="include/lab.hpp — bounds an toàn, kể cả triangle nằm ngoài"
+inline IntRect triangleBounds(const Triangle2& triangle, int width, int height) {
+    if (width <= 0 || height <= 0 || !finite(triangle)) {
+        return {};
+    }
+    const double minimumX = std::min({triangle.a.x, triangle.b.x, triangle.c.x});
+    const double minimumY = std::min({triangle.a.y, triangle.b.y, triangle.c.y});
+    const double maximumX = std::max({triangle.a.x, triangle.b.x, triangle.c.x});
+    const double maximumY = std::max({triangle.a.y, triangle.b.y, triangle.c.y});
+    // Phải kiểm rời nhau trước clamp; triangle ngoài màn hình có bounds rỗng.
+    if (maximumX < 0.0 || maximumY < 0.0 || minimumX >= width || minimumY >= height) {
+        return {};
+    }
+    IntRect bounds{};
+    // Clamp double trước int: không cast NaN/Inf hoặc số vượt miền int.
+    bounds.minX = static_cast<int>(std::clamp(std::floor(minimumX), 0.0, double(width - 1)));
+    bounds.minY = static_cast<int>(std::clamp(std::floor(minimumY), 0.0, double(height - 1)));
+    bounds.maxX = static_cast<int>(std::clamp(std::ceil(maximumX) - 1.0, -1.0, double(width - 1)));
+    bounds.maxY = static_cast<int>(std::clamp(std::ceil(maximumY) - 1.0, -1.0, double(height - 1)));
+    return bounds;
+}
 ```
 
-Clamp xảy ra trước vòng lặp. Nhờ vậy `putPixel` vẫn có bounds check phòng thủ, nhưng rasterizer không chủ động sinh hàng nghìn tọa độ sai.
+### Bước 3 — Đếm candidate, chưa gọi chúng là covered
 
-### Bước 3 — Đếm candidate bằng kiểu đủ rộng
-
-```cpp title="include/lab.hpp — số pixel cần đưa qua coverage test"
+```cpp title="include/lab.hpp — đếm hàng nhân cột"
 inline std::size_t candidatePixelCount(IntRect bounds) {
     if (isEmpty(bounds)) {
         return 0;
     }
-    const std::size_t columns = std::size_t(bounds.maxX - bounds.minX + 1);
-    const std::size_t rows = std::size_t(bounds.maxY - bounds.minY + 1);
-    return columns * rows;
+    return static_cast<std::size_t>(bounds.maxX - bounds.minX + 1) * static_cast<std::size_t>(bounds.maxY - bounds.minY + 1);
 }
 ```
 
-Hai đầu inclusive nên phải cộng 1. Rectangle `[2,3]..[5,7]` có `4×5=20` candidate, không phải `3×4`.
+Trong renderScene, sau const int height và trước nhánh if (scene.debug), thêm:
+
+```cpp title="include/view.hpp — nối bounds vào kết quả render"
+result.primary.bounds = triangleBounds(triangle, Framebuffer::width, height);
+result.primary.candidateCount = candidatePixelCount(result.primary.bounds);
+```
+
+Trong if (scene.debug), sau phần handle, thêm khối vẽ rectangle dưới. screenLine đã có từ Starter:
+
+```cpp title="include/view.hpp — vẽ candidate box, không tô nó"
+const IntRect bounds = result.primary.bounds;
+if (!isEmpty(bounds)) {
+    const Vec2 a{double(bounds.minX), double(bounds.minY)};
+    const Vec2 b{double(bounds.maxX), double(bounds.minY)};
+    const Vec2 c{double(bounds.maxX), double(bounds.maxY)};
+    const Vec2 d{double(bounds.minX), double(bounds.maxY)};
+    screenLine(image, a, b, height, kMarker);
+    screenLine(image, b, c, height, kMarker);
+    screenLine(image, c, d, height, kMarker);
+    screenLine(image, d, a, height, kMarker);
+}
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build bounding-box checkpoint"
-cmake --build build --config Debug --target project_16_checkpoint_2
-```
-
-Kéo một vertex sát từng mép cửa sổ. Viền vàng có thể bị cắt theo viewport nhưng title không được báo index âm hoặc lớn hơn `width-1`, `height-1`.
+Build Starter. HUD nhận FrameStats từ renderScene nên candidate count xuất phát từ bounds thật. Dùng preset 4 để triangle cắt mép. Một triangle nằm hoàn toàn ngoài phải có bounds rỗng; không được dùng clamp để kéo geometry trở lại màn hình.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ `-1` khỏi `ceil(maximumX)-1`. Candidate box rộng thêm một cột khi vertex nằm đúng biên nguyên; test count sẽ bắt lỗi off-by-one.
-2. Dùng `int(minimumX)` thay cho `floor`. Với vertex âm, ép kiểu tiến về zero và có thể bỏ sai một cột trước khi clamp.
-3. Nhân rows×columns bằng `int` rồi mới đổi sang `size_t`. Kích thước cực lớn có thể overflow trước khi chuyển kiểu; phục hồi phép chuyển từng thừa số.
+1. Bỏ kiểm rời nhau trước clamp rồi đưa cả ba đỉnh ra ngoài trái. Bounds giả xuất hiện ở cột 0; khôi phục kiểm sớm.
+
+2. Cast floor(minimumX) sang int trước clamp rồi dùng số rất lớn hoặc NaN trong test. Đây có thể là chuyển đổi không hợp lệ; giữ kiểm finite và clamp double.
+
+3. Đếm max−min mà quên +1. Rectangle [2,3]..[5,7] sẽ báo 12 thay vì 20; kiểm hai đầu inclusive.
 
 ## Tự kiểm tra kết quả
 
-- Bounds dùng `floor(min)` và `ceil(max)-1` cho cả hai trục.
-- Hai đầu của `IntRect` được hiểu thống nhất là inclusive.
-- Bounds luôn nằm trong framebuffer sau clamp.
-- Candidate count của `[2,3]..[5,7]` bằng 20.
-- Triangle cắt mép viewport không gây tọa độ pixel âm trong vòng raster tương lai.
-- Chưa pixel nào được nhận chỉ vì nằm trong bounding box.
+- [2,3]..[5,7] có 20 candidate.
+- Triangle ngoài hoàn toàn trả 0 candidate; dữ liệu invalid không được cast sang int.
+- Triangle cắt mép có bounds trong [0,width−1]×[0,height−1].
+- Bounding box chưa quyết định pixel nào sẽ được tô.
 
 ## Bài tập mở rộng
 
-Hiển thị phần trăm `candidate / (width×height)` trong title bar. Thử một triangle nhỏ, một triangle phủ gần hết màn hình và ghi lại khi bounding box giúp nhiều nhất.
+Đo tỉ lệ candidate/(width×height) cho tam giác lớn và nhỏ. Dùng count, đừng kết luận từ một lần đo thời gian có SDL present.
 
-Bài tiếp theo sẽ viết edge function để phân đôi mặt phẳng bởi từng cạnh và giải thích vì sao thứ tự A-B-C làm dấu đổi chiều.
+[Sang bài tiếp theo — Edge function và chiều đi quanh tam giác](/projects/triangle-rasterizer/03-edge-function-va-winding).

@@ -4,92 +4,100 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Một pixel không phải điểm toán học; nó là một ô vuông nhỏ. Rasterizer một mẫu cần chọn một vị trí đại diện nhất quán. Nếu dùng `(x,y)`, ta đang kiểm góc trên trái của ô. Project này dùng tâm pixel `(x+0.5,y+0.5)`.
-
-Sai khác nửa pixel gần như không thấy ở giữa triangle, nhưng nó quyết định hàng pixel sát cạnh được nhận hay loại. Đây là nguyên nhân quen thuộc của hình bị lệch hoặc hai cạnh đối xứng lại cho coverage khác nhau.
+Biết một điểm nằm về phía nào của từng cạnh, ta có thể kiểm tra nó có nằm trong cả ba nửa mặt phẳng của tam giác hay không. Tuy nhiên, pixel là một ô vuông chứ không phải một điểm. Ta sẽ lấy tâm ô làm điểm đại diện để quyết định có tô pixel đó hay không — đây là phép kiểm tra coverage. C++, Canvas và tests đều phải lấy mẫu theo cùng quy ước.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Sau `normalizePositiveWinding`, sample $P$ nằm trong hoặc trên biên triangle khi:
+Pixel (x,y) lấy mẫu tại tâm (x+0.5,y+0.5). Sau khi chuẩn hóa winding dương:
 
-$$
-E_{AB}(P)\ge0\quad\land\quad E_{BC}(P)\ge0\quad\land\quad E_{CA}(P)\ge0
-$$
+$$inside=E_{AB}(P)\ge0\ \land\ E_{BC}(P)\ge0\ \land\ E_{CA}(P)\ge0.$$
 
-Checkpoint này dùng biên inclusive. Bài 6 sẽ tinh chỉnh trường hợp edge value bằng zero để hai triangle chung cạnh không cùng nhận sample.
+Bài này dùng biên inclusive với epsilon nhỏ. Bài 6 sẽ giải quyết quyền sở hữu cạnh chung. CoverageSample cũng giữ ba tỉ lệ edge/area; bài 7 sẽ dùng chúng để nội suy màu. Chúng phải thuộc A/B/C **của input gốc**, kể cả khi bản sao đã swap B/C.
 
 <InteractiveLab demo="triangle-raster" mode="triangle-center" />
 
 ## Viết code từng bước
 
-### Bước 1 — Tạo tâm pixel ở đúng nửa đơn vị
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Các đường dẫn ở tiêu đề code block tính từ Starter. Khi thay hàm, thay bản cũ chứ không thêm một định nghĩa trùng tên.
 
-```cpp title="include/lab.hpp — quy ước sample một lần cho toàn rasterizer"
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_starter --parallel 2
+.\build\Debug\project_16_starter.exe
+```
+
+Checkpoint 04 là **bản tham khảo sau bài**, build độc lập bằng target project_16_checkpoint_4. Chạy checkpoint không kiểm chứng mã bạn vừa sửa trong Starter.
+
+### Bước 1 — Tạo sample tại tâm pixel
+
+```cpp title="include/lab.hpp — nửa pixel là một quy ước chung"
 inline Vec2 pixelCenter(int x, int y) {
     return {double(x) + 0.5, double(y) + 0.5};
 }
 ```
 
-Không cộng `0.5` rải rác trong `main.cpp`. Một hàm dùng chung giúp C++ test và Canvas lab giữ đúng cùng quy ước.
+### Bước 2 — Viết toàn bộ phép thử một sample
 
-### Bước 2 — Tính area trước ba phép chia
+CoverageSample, Barycentric và FillRule đã có trong Starter; không khai báo lại. Thêm sampleTriangle sau pixelCenter:
 
-```cpp title="include/lab.hpp — dừng sớm khi area gần zero"
-triangle = normalizePositiveWinding(triangle);
-CoverageSample sample{};
-sample.position = samplePosition;
-const double area = signedDoubleArea(triangle);
-if (std::abs(area) <= 1e-9) {
+```cpp title="include/lab.hpp — guard, ba edge, weights và coverage"
+inline CoverageSample sampleTriangle(Triangle2 triangle, Vec2 samplePosition, FillRule rule) {
+    CoverageSample sample{};
+    sample.position = samplePosition;
+    if (!finite(samplePosition) || classifyWinding(triangle) == Winding::Degenerate) {
+        return sample;
+    }
+    const bool reversed = classifyWinding(triangle) == Winding::Negative;
+    triangle = normalizePositiveWinding(triangle);
+    const double area = signedDoubleArea(triangle);
+    sample.edgeAB = orient2D(triangle.a, triangle.b, samplePosition);
+    sample.edgeBC = orient2D(triangle.b, triangle.c, samplePosition);
+    sample.edgeCA = orient2D(triangle.c, triangle.a, samplePosition);
+    if (!std::isfinite(sample.edgeAB) || !std::isfinite(sample.edgeBC) || !std::isfinite(sample.edgeCA)) {
+        return sample;
+    }
+    sample.barycentric = {sample.edgeBC / area, sample.edgeCA / area, sample.edgeAB / area};
+    // Edge dùng triangle chuẩn hóa; weights vẫn thuộc A/B/C của input gốc.
+    if (reversed) {
+        std::swap(sample.barycentric.b, sample.barycentric.c);
+    }
+    static_cast<void>(rule);
+    sample.inside = sample.edgeAB >= -1e-9 && sample.edgeBC >= -1e-9 && sample.edgeCA >= -1e-9;
     return sample;
 }
 ```
 
-`sample` mặc định có `inside=false` và weight bằng 0. Triangle suy biến vì vậy rời hàm an toàn mà không tạo `NaN`.
+Hàm kiểm finite/degenerate trước chia. Ba edge lấy trên triangle chuẩn hóa; nếu đã đảo winding, chỉ đổi lại weights B/C để callback vẫn hiểu đúng thuộc tính gốc. (void)rule giữ interface cho bài 6, chưa giả rằng top-left đã hoạt động.
 
-### Bước 3 — Giữ cả ba edge value
+### Bước 3 — Đưa kết quả vào renderer
 
-```cpp title="include/lab.hpp — ba phép thử half-plane"
-sample.edgeAB = orient2D(triangle.a, triangle.b, samplePosition);
-sample.edgeBC = orient2D(triangle.b, triangle.c, samplePosition);
-sample.edgeCA = orient2D(triangle.c, triangle.a, samplePosition);
+Sau các số đo edge ở bài 3, thêm dòng dưới; nó thay dữ liệu sample bằng phép kiểm tại tâm pixel:
+
+```cpp title="include/view.hpp — pixel center được dùng thật"
+result.sample = sampleTriangle(triangle, {std::floor(scene.sample.x) + 0.5, std::floor(scene.sample.y) + 0.5}, scene.rule);
 ```
-
-Ta chưa thu gọn thành một biểu thức bool. Edge values còn được dùng để giải thích sample, tính barycentric weights và kiểm lỗi.
-
-### Bước 4 — Ghép quyết định inclusive
-
-```cpp title="include/lab.hpp — coverage ở checkpoint 4"
-static_cast<void>(rule);
-sample.inside = sample.edgeAB >= -1e-9 && sample.edgeBC >= -1e-9 && sample.edgeCA >= -1e-9;
-```
-
-`-epsilon` tránh một sample toán học nằm trên biên bị loại chỉ vì sai số dấu cực nhỏ. `rule` đã có trong interface để checkpoint sau mở rộng mà không phải đổi toàn bộ lời gọi.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build pixel-center checkpoint"
-cmake --build build --config Debug --target project_16_checkpoint_4
-```
-
-Click một pixel sát cạnh rồi chuyển Canvas lab giữa `corner` và `center`. Marker xanh nghĩa là được phủ, đỏ nghĩa là bị loại; title bar cho ba con số giúp giải thích quyết định.
+Build Starter, click gần một cạnh và đọc inside cùng ba edge trong HUD. Canvas cho đổi Corner/Center để nhìn sai khác nửa pixel; executable chính luôn dùng center. Không tô toàn triangle ở bài này: ta đang kiểm một sample trước khi bọc nó trong vòng lặp.
 
 ## Thử làm sai để hiểu đúng
 
-1. Trả `{double(x),double(y)}` trong `pixelCenter`. Di chuyển một cạnh qua hàng pixel và ghi lại lúc coverage đổi; sau đó trả offset 0.5.
-2. Dùng `||` giữa ba edge test. Mọi sample chỉ cần nằm đúng phía một cạnh sẽ được nhận, gần như cả bounding box bị tô.
-3. Chia edge value cho area trước khi kiểm degenerate. Preset ba điểm thẳng hàng tạo `NaN` hoặc infinity; phục hồi early return.
+1. Đổi && thành || trong sample.inside. Chỉ cần đúng phía một cạnh là sample được nhận, gần như cả bounds sẽ có vẻ inside; khôi phục phép giao.
+
+2. Bỏ guard degenerate rồi thử preset 3. Area=0 không thể làm mẫu số; giữ early return.
+
+3. Bỏ swap weights B/C khi reversed. Coverage vẫn có thể đúng, nhưng thuộc tính ở B/C bị đổi chỗ; ghi lại lỗi để so ở bài 7.
 
 ## Tự kiểm tra kết quả
 
-- Pixel `(1,1)` có sample position `(1.5,1.5)`.
-- Coverage luôn chạy trên triangle đã chuẩn hóa winding.
-- Ba edge values được lưu riêng trong `CoverageSample`.
-- Sample chỉ được nhận khi cả ba half-plane chấp nhận nó.
-- Triangle suy biến trả `inside=false` và weight hữu hạn bằng 0.
-- Đảo B/C không thay kết quả coverage của cùng sample.
+- pixelCenter(1,1)=(1.5,1.5).
+- Cả ba cạnh phải chấp nhận sample; một edge âm là đủ loại.
+- Suy biến/invalid không chia cho area và không tô pixel.
+- Weights của input negative vẫn cho B=1 tại chính input.b.
 
 ## Bài tập mở rộng
 
-Thêm chế độ 4-sample đơn giản tại bốn điểm quanh tâm pixel và tô độ sáng theo số sample được nhận. Đây là một bước đầu để hiểu anti-aliasing, nhưng không thay thuật toán một mẫu của source chính.
+Với triangle (0,0),(4,0),(0,4), tính ba edge tại (1.5,1.5) và (3.5,3.5). Dùng số cụ thể để giải thích quyết định.
 
-Bài tiếp theo sẽ đặt coverage test vào hai vòng `for` qua bounding box và lần đầu tô kín tam giác.
+[Sang bài tiếp theo — Viết vòng lặp tô kín tam giác](/projects/triangle-rasterizer/05-vong-lap-raster).

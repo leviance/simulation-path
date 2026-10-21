@@ -38,6 +38,11 @@ const lab = {
       description:
         "Ghép hai triangle thành quad và so inclusive với top-left rule; sample bị tô hai lần được đánh dấu rõ trên đường chéo.",
     },
+    "triangle-scene": {
+      title: "Cùng một rasterizer, một bề mặt 3D thật",
+      description:
+        "Đổi camera Z/FOV, kéo vertex ở depth cố định và xem RGB từ barycentric screen-space. Tắt debug vẫn giữ lưới world và bề mặt.",
+    },
     "triangle-barycentric": {
       title: "Ba edge value biến thành màu bên trong ra sao?",
       description:

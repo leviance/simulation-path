@@ -4,33 +4,31 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Project 15 kết thúc ở một `screen` point. Muốn vẽ bề mặt, ta cần ba point như vậy và một thuật toán trả lời câu hỏi khó hơn vẽ ba cạnh: **pixel nào thực sự nằm bên trong tam giác?**
-
-Đừng vội viết công thức. Nếu window, framebuffer, thứ tự ba đỉnh hoặc thao tác kéo đang sai, một rasterizer đúng vẫn tạo hình khó hiểu. Checkpoint đầu chỉ dựng bộ khung nhìn thấy được: ba screen vertex `A`, `B`, `C`, wireframe và ba handle có thể kéo.
+Ở Project 15, ta đã đưa các đỉnh của mô hình đến screen space. Từ ba đỉnh đó, làm thế nào để vẽ được cả bề mặt tam giác? Trước khi tô các pixel bên trong, ta cần nhìn thấy tam giác và kéo được từng đỉnh. Bài này dựng bộ khung tương tác ấy; sau khi hoàn thiện thuật toán tô, ta sẽ dùng nó để vẽ tam giác trong cảnh 3D ở bài cuối.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Từ đây, mỗi vertex đã ở screen space:
+Rasterizer nhận Triangle2 gồm ba Vec2. Trong hệ tọa độ này, X tăng sang phải, Y tăng xuống dưới và khoảng cách được tính bằng pixel. Tọa độ đỉnh vẫn là số thực; ta chỉ làm tròn khi vẽ cạnh bằng Bresenham. Khung vẽ giữ kích thước 1100×800, trong đó vùng tam giác chiếm 1100×600 khi bật HUD. Khi thay đổi kích thước cửa sổ hoặc dùng màn hình HiDPI, SDL co giãn ảnh theo kiểu letterbox; dữ liệu tam giác và kích thước framebuffer không đổi.
 
-- gốc `(0,0)` nằm ở góc trên trái;
-- X tăng sang phải;
-- Y tăng xuống dưới;
-- đơn vị là pixel, nhưng tọa độ vertex vẫn là số thực.
-
-Ta giữ rasterization tách khỏi pipeline 3D. Một triangle đến từ model hay do người dùng kéo chuột đều đi vào cùng một `Triangle2`.
+Starter đã có các kiểu dữ liệu trong lab.hpp, Scene/DragState trong scene.hpp, framebuffer/Bresenham, SDL init/upload/present và projector từ P11 trong space.hpp. Các kiểu bên dưới là phần **đọc lại**, không phải yêu cầu khai báo thêm.
 
 <InteractiveLab demo="triangle-raster" mode="triangle-frame" />
 
 ## Viết code từng bước
 
-### Bước 1 — Tạo kiểu dữ liệu đúng với bài toán
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Các đường dẫn ở tiêu đề code block tính từ Starter. Khi thay hàm, thay bản cũ chứ không thêm một định nghĩa trùng tên.
 
-```cpp title="include/lab.hpp — ba vertex trong screen space"
-struct Vec2 {
-    double x{};
-    double y{};
-};
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_starter --parallel 2
+.\build\Debug\project_16_starter.exe
+```
 
+Checkpoint 01 là **bản tham khảo sau bài**, build độc lập bằng target project_16_checkpoint_1. Chạy checkpoint không kiểm chứng mã bạn vừa sửa trong Starter.
+
+### Bước 1 — Biết dữ liệu nào đang được sửa
+
+```cpp title="include/lab.hpp — đọc ba vertex đã có"
 struct Triangle2 {
     Vec2 a{};
     Vec2 b{};
@@ -38,76 +36,233 @@ struct Triangle2 {
 };
 ```
 
-`double` cho phép vertex nằm giữa hai pixel. Ta chưa đổi chúng thành `int`; làm tròn sớm sẽ phá hỏng phép lấy mẫu ở các bài sau.
+Thêm vertexAt trong namespace lab của lab.hpp để mọi nơi đọc cùng thứ tự A/B/C:
 
-### Bước 2 — Tạo triangle theo kích thước cửa sổ
-
-```cpp title="include/lab.hpp — triangle mặc định co theo viewport"
-inline Triangle2 makeDefaultTriangle(int width, int height) {
-    const double centerX = double(width) * 0.5;
-    const double centerY = double(height) * 0.52;
-    const double radius = double(std::min(width, height)) * 0.31;
-    return {
-        {centerX, centerY - radius},
-        {centerX + radius * 0.92, centerY + radius * 0.72},
-        {centerX - radius * 0.92, centerY + radius * 0.72},
-    };
+```cpp title="include/lab.hpp — chọn đúng một vertex"
+inline Vec2 vertexAt(const Triangle2& triangle, int index) {
+    if (index == 0) {
+        return triangle.a;
+    }
+    if (index == 1) {
+        return triangle.b;
+    }
+    return triangle.c;
 }
 ```
 
-Triangle được dựng quanh giữa cửa sổ thay vì đóng đinh ở `960×640`. Khi resize, `R` luôn tạo lại một hình hợp lý cho kích thước hiện tại.
+### Bước 2 — Vẽ ảnh trước khi nhận chuột
 
-### Bước 3 — Nối đúng ba cạnh
+screenLine đã có trong Starter: nó clip rồi mới làm tròn và gọi drawLine. Thêm drawOutline vào view.hpp trước renderScene, sau đó thay renderScene bằng bản của bài này:
 
-Wireframe gồm `AB`, `BC`, `CA`. Mỗi tọa độ chỉ được làm tròn tại lúc gọi primitive vẽ line:
-
-```cpp title="src/main.cpp — đường cạnh AB dùng primitive framebuffer"
-drawLine(
-    pixels,
-    width,
-    height,
-    int(std::lround(triangle.a.x)),
-    int(std::lround(triangle.a.y)),
-    int(std::lround(triangle.b.x)),
-    int(std::lround(triangle.b.y)),
-    color
-);
+```cpp title="include/view.hpp — ba cạnh AB, BC, CA"
+inline void drawOutline(Framebuffer& image, const Triangle2& triangle, int height, std::uint32_t color) {
+    screenLine(image, triangle.a, triangle.b, height, color);
+    screenLine(image, triangle.b, triangle.c, height, color);
+    screenLine(image, triangle.c, triangle.a, height, color);
+}
 ```
 
-Hai cạnh còn lại dùng cùng cách gọi. Màu handle A/B/C lần lượt là đỏ, xanh lá và xanh dương; quy ước này sẽ được dùng lại khi nội suy màu ở bài cuối.
+```cpp title="include/view.hpp — ảnh đầu tiên và handle"
+inline FrameStats renderScene(Framebuffer& image, std::vector<std::uint8_t>& coverage, const Scene& scene) {
+    image.clear(kBackground);
+    std::fill(coverage.begin(), coverage.end(), std::uint8_t(0));
+    FrameStats result;
+    const auto projected = screenTriangle(scene);
+    if (!projected) {
+        result.rejected = true;
+        return result;
+    }
+    const Triangle2 triangle = *projected;
+    const int height = viewportHeight(scene);
+    if (scene.debug) {
+        drawOutline(image, triangle, height, kWhite);
+        for (int i = 0; i < 3; ++i) {
+            const Vec2 point = vertexAt(triangle, i);
+            if (point.x >= 0.0 && point.x < Framebuffer::width && point.y >= 0.0 && point.y < height) {
+                disc(image, static_cast<int>(std::lround(point.x)), static_cast<int>(std::lround(point.y)), 5, kMarker);
+            }
+        }
+    }
+    return result;
+}
+```
 
-Cuối frame, chương trình vẫn dùng `SDL_UpdateTexture` để chép CPU framebuffer sang streaming texture, rồi `SDL_RenderTexture` và `SDL_RenderPresent`. Triangle rasterizer ở các bài sau chỉ thay nội dung mảng pixel; nó không thay chuỗi present đã kiểm chứng này.
+### Bước 3 — Tách việc chọn và sửa đỉnh
 
-### Bước 4 — Kéo vertex nhưng không sửa vertex khác
+Thêm ba hàm dưới trong scene.hpp. beginDrag chỉ nhận khi gần một handle, lưu khoảng lệch chỗ nắm nên click không làm tâm nhảy. updateDrag sửa đúng đỉnh đã chọn. Nhánh worldMode dùng projector/inverse đã có từ P11; bài 8 sẽ dùng nó, hiện tại worldMode=false.
 
-`nearestVertex` tìm handle gần mouse nhất trong bán kính 18 pixel. Khi đã chọn, `editableVertex` trả reference tới đúng `a`, `b` hoặc `c`; mouse motion chỉ ghi vào reference đó. `SDL_CaptureMouse(true)` giữ thao tác kéo ngay cả khi con trỏ tạm rời window.
+```cpp title="include/scene.hpp — tham chiếu tới đỉnh cần sửa"
+inline Vec2& editableVertex(Triangle2& triangle, int index) {
+    if (index == 0) {
+        return triangle.a;
+    }
+    if (index == 1) {
+        return triangle.b;
+    }
+    return triangle.c;
+}
+```
+
+```cpp title="include/scene.hpp — hit-test và grab offset"
+inline bool beginDrag(const Scene& scene, Vec2 mouse, DragState& drag) {
+    const auto triangle = screenTriangle(scene);
+    if (!triangle || !finite(mouse)) {
+        return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+        const Vec2 point = vertexAt(*triangle, i);
+        if (std::hypot(mouse.x - point.x, mouse.y - point.y) <= 18.0) {
+            drag.index = i;
+            drag.offset = {mouse.x - point.x, mouse.y - point.y};
+            drag.depth = scene.world[static_cast<std::size_t>(i)].z - scene.camera.position.z;
+            return true;
+        }
+    }
+    return false;
+}
+```
+
+```cpp title="include/scene.hpp — ghi dữ liệu thay vì vẽ đè pixel"
+inline void updateDrag(Scene& scene, const DragState& drag, Vec2 mouse) {
+    if (drag.index < 0 || drag.index > 2 || !finite(mouse)) {
+        return;
+    }
+    const Vec2 target{mouse.x - drag.offset.x, mouse.y - drag.offset.y};
+    if (scene.worldMode) {
+        const auto point = worldAtScreen(target, drag.depth, scene.camera, 1100, viewportHeight(scene));
+        if (point) {
+            scene.world[static_cast<std::size_t>(drag.index)] = {std::clamp(point->x, -6.0, 6.0), std::clamp(point->y, -4.0, 4.0), point->z};
+        }
+    } else {
+        editableVertex(scene.triangle, drag.index) = {std::clamp(target.x, -200.0, 1300.0), std::clamp(target.y, -200.0, 1000.0)};
+        scene.shared = false;
+    }
+    scene.selected = drag.index;
+    resetScan(scene);
+}
+```
+
+### Bước 4 — Nối SDL event với các hàm vừa viết
+
+Trong main.cpp, trước while (running), thêm state kéo và lambda hủy:
+
+```cpp title="src/main.cpp — state sống qua các frame"
+lab::DragState drag;
+SDL_MouseID owner{};
+const auto cancelDrag = [&]() {
+    drag = {};
+    SDL_CaptureMouse(false);
+};
+```
+
+Bên trong SDL_PollEvent, sau nhánh key-down, thêm toàn bộ khối sau. SDL_ConvertEventToRenderCoordinates chạy đúng một lần để mouse dùng cùng board với framebuffer:
+
+```cpp title="src/main.cpp — down, motion và mẫu thả cuối"
+const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    failed = true;
+    running = false;
+    break;
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && drag.index < 0) {
+    const lab::Vec2 mouse{event.button.x, event.button.y};
+    if (mouse.x >= 0.0 && mouse.x < 1100.0 && mouse.y >= 0.0 && mouse.y < lab::viewportHeight(scene)) {
+        if (lab::beginDrag(scene, mouse, drag)) {
+            owner = event.button.which;
+            scene.selected = drag.index;
+            scene.paused = true;
+            if (!SDL_CaptureMouse(true)) {
+                cancelDrag();
+            }
+        } else {
+            scene.sample = mouse;
+        }
+        dirty = true;
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_MOTION && drag.index >= 0 && event.motion.which == owner) {
+    if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
+        cancelDrag();
+    } else {
+        lab::updateDrag(scene, drag, {event.motion.x, event.motion.y});
+        dirty = true;
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && drag.index >= 0 && event.button.which == owner) {
+    lab::updateDrag(scene, drag, {event.button.x, event.button.y});
+    cancelDrag();
+    dirty = true;
+}
+```
+
+Gọi cancelDrag() trước handleKey, trong nhánh focus/hidden/minimize/resize và trước SDL_DestroyTexture khi thoát. Thay handleKey rỗng trong controls.hpp bằng:
+
+```cpp title="include/controls.hpp — keyboard chọn và di chuyển vertex"
+inline void handleKey(Scene& scene, SDL_Keycode key, bool repeat) {
+    if (!repeat && (key == SDLK_R || (key >= SDLK_1 && key <= SDLK_5))) {
+        int preset = 1;
+        if (key != SDLK_R) {
+            preset = static_cast<int>(key - SDLK_0);
+        }
+        applyPreset(scene, preset);
+    }
+    if (!repeat && key == SDLK_TAB) {
+        scene.selected = (scene.selected + 1) % 3;
+    }
+
+    Vec2 delta{};
+    if (key == SDLK_LEFT) {
+        delta.x = -1.0;
+    }
+    if (key == SDLK_RIGHT) {
+        delta.x = 1.0;
+    }
+    if (key == SDLK_UP) {
+        delta.y = -1.0;
+    }
+    if (key == SDLK_DOWN) {
+        delta.y = 1.0;
+    }
+    if (delta.x != 0.0 || delta.y != 0.0) {
+        if (scene.worldMode) {
+            Vec3& point = scene.world[static_cast<std::size_t>(scene.selected)];
+            point.x = std::clamp(point.x + delta.x * 0.1, -6.0, 6.0);
+            point.y = std::clamp(point.y - delta.y * 0.1, -4.0, 4.0);
+        } else {
+            Vec2& point = editableVertex(scene.triangle, scene.selected);
+            point.x = std::clamp(point.x + delta.x, -200.0, 1300.0);
+            point.y = std::clamp(point.y + delta.y, -200.0, 1000.0);
+            scene.shared = false;
+        }
+        resetScan(scene);
+    }
+    (void)scene;
+    (void)key;
+    (void)repeat;
+}
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build bộ khung Project 16"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_16_checkpoint_1
-```
-
-Kéo lần lượt cả ba handle rồi nhấn `R`. Chưa có pixel fill ở checkpoint này; khoảng trống bên trong là chủ ý.
+main.cpp đã gọi renderScene trước SDL_UpdateTexture, rồi presentFramebuffer trình bày ảnh. Giữ nguyên đường này; không tạo thêm main hoặc vòng lặp. Build Starter: kéo từng handle, dùng Tab chọn vertex và mũi tên dịch một pixel. Nhấn R về mặc định. Mouse owner khác/nút phải không được giành thao tác; thả chuột nhận mẫu cuối trước khi release capture.
 
 ## Thử làm sai để hiểu đúng
 
-1. Làm tròn ba vertex ngay khi tạo `Triangle2`. Sau đó resize vài lần và để ý chuyển động bị giật theo pixel; hoàn tác để giữ tọa độ số thực.
-2. Nối `AB`, `BC` rồi lại `AB`. Đường `CA` biến mất; đây là cách nhanh để thấy thứ tự topology cũng cần kiểm tra.
-3. Cập nhật cả ba vertex bằng mouse delta. Tam giác bị kéo nguyên khối thay vì sửa hình; phục hồi reference tới đúng handle.
+1. Nối AB, BC rồi lại AB. Cạnh CA biến mất; khôi phục ba cạnh đúng thứ tự để loại lỗi topology trước khi viết fill.
+
+2. Bỏ grabOffset trong updateDrag. Nhấn lệch tâm làm đỉnh giật tới chuột; khôi phục và kiểm down không thay geometry.
+
+3. Không nhận mouse-button-up cuối. Kéo nhanh rồi thả có thể bỏ vị trí cuối; dùng updateDrag trước cancelDrag.
 
 ## Tự kiểm tra kết quả
 
-- Window, renderer, streaming texture và CPU framebuffer khởi tạo có kiểm lỗi.
-- Có đúng ba screen vertex số thực và ba cạnh `AB`, `BC`, `CA`.
-- Kéo A không làm B hoặc C thay đổi.
-- Pointer vẫn thuộc thao tác kéo khi đi qua mép window.
-- `R` và resize tạo lại triangle phù hợp với kích thước mới.
-- Chưa có `SDL_RenderGeometry` hoặc hàm fill tam giác có sẵn.
+- Starter vẽ outline và ba handle, chưa có fill.
+- Triangle2 giữ số thực; drawLine chỉ nhận tọa độ đã clip.
+- Kéo giữ offset, chỉ đúng mouse owner được sửa đỉnh.
+- Reset/blur/resize/keyboard kết thúc capture; resize không tự tạo một triangle khác.
 
 ## Bài tập mở rộng
 
-Thêm phím `Tab` để chọn A, B, C theo vòng và dùng arrow key dịch vertex đang chọn mỗi lần một pixel. Giữ đường mouse hiện tại; hai cách nhập phải cùng sửa `Triangle2`.
+Đổi màu handle đang được chọn. Lưu selected trong Scene và dùng nó khi vẽ; không suy selection từ màu pixel.
 
-Bài tiếp theo sẽ khoanh vùng nhỏ nhất có thể chứa pixel của triangle. Đây là bước giúp rasterizer không phải kiểm tra toàn màn hình.
+[Sang bài tiếp theo — Khoanh vùng pixel bằng bounding box](/projects/triangle-rasterizer/02-khoanh-vung-bounding-box).

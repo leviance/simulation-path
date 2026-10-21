@@ -54,6 +54,7 @@ export function triangleSignedDoubleArea(triangle: RasterTriangle) {
 
 export function triangleWinding(triangle: RasterTriangle, epsilon = 1e-9): TriangleWinding {
   const area = triangleSignedDoubleArea(triangle);
+  if (!Number.isFinite(area)) return "degenerate";
   if (area > epsilon) return "positive";
   if (area < -epsilon) return "negative";
   return "degenerate";
@@ -69,7 +70,24 @@ export function triangleBounds(
   width: number,
   height: number,
 ): RasterBounds {
-  if (width <= 0 || height <= 0) return { minX: 0, minY: 0, maxX: -1, maxY: -1 };
+  const points = [
+    triangle.a.x,
+    triangle.a.y,
+    triangle.b.x,
+    triangle.b.y,
+    triangle.c.x,
+    triangle.c.y,
+  ];
+  if (
+    width <= 0 ||
+    height <= 0 ||
+    !points.every(Number.isFinite) ||
+    Math.max(triangle.a.x, triangle.b.x, triangle.c.x) < 0 ||
+    Math.max(triangle.a.y, triangle.b.y, triangle.c.y) < 0 ||
+    Math.min(triangle.a.x, triangle.b.x, triangle.c.x) >= width ||
+    Math.min(triangle.a.y, triangle.b.y, triangle.c.y) >= height
+  )
+    return { minX: 0, minY: 0, maxX: -1, maxY: -1 };
   const minX = Math.max(
     0,
     Math.min(width - 1, Math.floor(Math.min(triangle.a.x, triangle.b.x, triangle.c.x))),
@@ -79,11 +97,11 @@ export function triangleBounds(
     Math.min(height - 1, Math.floor(Math.min(triangle.a.y, triangle.b.y, triangle.c.y))),
   );
   const maxX = Math.max(
-    0,
+    -1,
     Math.min(width - 1, Math.ceil(Math.max(triangle.a.x, triangle.b.x, triangle.c.x)) - 1),
   );
   const maxY = Math.max(
-    0,
+    -1,
     Math.min(height - 1, Math.ceil(Math.max(triangle.a.y, triangle.b.y, triangle.c.y)) - 1),
   );
   return { minX, minY, maxX, maxY };
@@ -120,6 +138,7 @@ export function sampleRasterTriangle(
   position: RasterPoint,
   rule: TriangleFillRule = "top-left",
 ): TriangleCoverageSample {
+  const reversed = triangleWinding(source) === "negative";
   const triangle = normalizeTriangleWinding(source);
   const area = triangleSignedDoubleArea(triangle);
   const empty: TriangleCoverageSample = {
@@ -130,7 +149,21 @@ export function sampleRasterTriangle(
     barycentric: { a: 0, b: 0, c: 0 },
     inside: false,
   };
-  if (Math.abs(area) <= 1e-9) return empty;
+  if (
+    ![
+      source.a.x,
+      source.a.y,
+      source.b.x,
+      source.b.y,
+      source.c.x,
+      source.c.y,
+      position.x,
+      position.y,
+      area,
+    ].every(Number.isFinite) ||
+    Math.abs(area) <= 1e-9
+  )
+    return empty;
 
   const edgeAB = triangleOrient2d(triangle.a, triangle.b, position);
   const edgeBC = triangleOrient2d(triangle.b, triangle.c, position);
@@ -144,7 +177,9 @@ export function sampleRasterTriangle(
     edgeAB,
     edgeBC,
     edgeCA,
-    barycentric: { a: edgeBC / area, b: edgeCA / area, c: edgeAB / area },
+    barycentric: reversed
+      ? { a: edgeBC / area, b: edgeAB / area, c: edgeCA / area }
+      : { a: edgeBC / area, b: edgeCA / area, c: edgeAB / area },
     inside,
   };
 }
