@@ -158,6 +158,20 @@ if (!scene.debug) {
 }
 ```
 
+Khi còn bật debug, ta cần biết mình đang sửa đỉnh nào và camera ở đâu. Trong presentFramebuffer, chèn khối dưới **sau dòng area/edge của bài 3 và trước dòng weights của bài 4**. Hai vị trí Y=706 và Y=752 giữ chữ tách khỏi các dòng đã có:
+
+```cpp title="include/presentation.hpp — chỉ dẫn điều khiển và tọa độ world"
+std::snprintf(line, sizeof(line), "B 2D/3D | F clean | Tab select v%d | arrows XY PageUp/Down Z | J/L camera X U/O camera Z | +/- FOV %.0f", scene.selected, scene.camera.fov * 180.0 / 3.141592653589793);
+if (!SDL_RenderDebugText(renderer, 16, 706, line)) {
+    return false;
+}
+const Vec3 point = scene.world[static_cast<std::size_t>(scene.selected)];
+std::snprintf(line, sizeof(line), "world (%.2f %.2f %.2f) | camera (%.2f %.2f %.2f) | paused %d", point.x, point.y, point.z, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z, static_cast<int>(scene.paused));
+if (!SDL_RenderDebugText(renderer, 16, 752, line)) {
+    return false;
+}
+```
+
 Viewport debug là 1100×600, clean là 1100×800. Đổi aspect làm hình chiếu đổi là đúng; world không đổi. Chuột đi qua SDL_ConvertEventToRenderCoordinates, còn Canvas dùng CSS mapping một lần, không nhân DPR vào mouse.
 
 ### Bước 5 — Kiểm mã của mình, không chỉ kiểm bản mẫu

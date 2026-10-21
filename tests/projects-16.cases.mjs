@@ -105,6 +105,57 @@ test("Project 16 rebuild compiles every MDX lesson with real math, One Dark and 
   }
 });
 
+test("Project 16 teaches every new raster helper and the HUD changes promised by each lesson", async () => {
+  for (const [index, slug] of lessons.entries()) {
+    const snapshot = index === 0 ? "starter" : "checkpoints/" + String(index).padStart(2, "0");
+    const before = await readFile(path.join(root, snapshot, "include/lab.hpp"), "utf8");
+    const current = await readFile(
+      path.join(root, "checkpoints", String(index + 1).padStart(2, "0"), "include/lab.hpp"),
+      "utf8",
+    );
+    const mdx = await readFile(
+      path.join(workspace, "content/triangle-rasterizer", slug + ".mdx"),
+      "utf8",
+    );
+    const snippets = [...mdx.matchAll(/```cpp title="[^"]+"\r?\n([\s\S]*?)\r?\n```/g)].map(
+      (m) => m[1],
+    );
+    // Kiểm định nghĩa đầy đủ, không chỉ tên hàm hoặc một lời gọi trong tests.
+    for (const signature of current.matchAll(
+      /^(?:inline [^\r\n]+|RasterStats rasterizeTriangle[^\r\n]+) \{/gm,
+    )) {
+      if (before.includes(signature[0])) continue;
+      const tokens = codeTokens(current.slice(signature.index));
+      let depth = 0;
+      let end = 0;
+      for (; end < tokens.length; end++) {
+        if (tokens[end] === "{") depth++;
+        if (tokens[end] === "}" && --depth === 0) break;
+      }
+      const definition = tokens.slice(0, end + 1).join(" ");
+      assert.ok(
+        snippets.some((snippet) => isContiguousCodeExcerpt(definition, snippet)),
+        slug + " does not teach complete new helper: " + signature[0],
+      );
+    }
+  }
+  for (const [index, markers] of [
+    [2, ["area2 %.2f", "16, 684", "scene.sample.x - 4.0"]],
+    [3, ["weights %.4f", "16, 730", "static_cast<int>(stats.sample.inside)"]],
+    [7, ["Tab select v%d", "world (%.2f", "16, 752"]],
+  ]) {
+    const mdx = await readFile(
+      path.join(workspace, "content/triangle-rasterizer", lessons[index] + ".mdx"),
+      "utf8",
+    );
+    const code = [...mdx.matchAll(/```cpp title="[^"]+"\r?\n([\s\S]*?)\r?\n```/g)]
+      .map((m) => m[1])
+      .join("\n");
+    for (const marker of markers)
+      assert.ok(code.includes(marker), lessons[index] + " missing " + marker);
+  }
+});
+
 test("Project 16 rebuild delivers a real native 3D product and preserves a teachable 2D rasterizer", async () => {
   const get = (f) => readFile(path.join(root, f), "utf8");
   const math = await get("final/include/lab.hpp"),

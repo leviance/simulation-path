@@ -77,6 +77,19 @@ Sau các số đo edge ở bài 3, thêm dòng dưới; nó thay dữ liệu sam
 result.sample = sampleTriangle(triangle, {std::floor(scene.sample.x) + 0.5, std::floor(scene.sample.y) + 0.5}, scene.rule);
 ```
 
+### Bước 4 — Bổ sung inside và weights vào HUD
+
+Trong presentFramebuffer của presentation.hpp, thêm khối sau **sau phần in area/edge ở bài 3 và trước lệnh return cuối hàm**. Dòng này dùng kết quả sampleTriangle vừa trả về; chỉ thêm phép tính trong view.hpp thì HUD chưa thể hiện inside hay weights:
+
+```cpp title="include/presentation.hpp — hiển thị kết quả của coverage test"
+std::snprintf(line, sizeof(line), "weights %.4f %.4f %.4f | inside %d", stats.sample.barycentric.a, stats.sample.barycentric.b, stats.sample.barycentric.c, static_cast<int>(stats.sample.inside));
+if (!SDL_RenderDebugText(renderer, 16, 730, line)) {
+    return false;
+}
+```
+
+inside=1 nghĩa là sample được nhận, inside=0 là bị loại. Với tam giác suy biến, sampleTriangle trả weights bằng 0 để tránh phép chia không hợp lệ; không diễn giải ba số 0 đó như tọa độ barycentric của một điểm hợp lệ.
+
 ## Ghép các phần lại
 
 Build Starter, click gần một cạnh và đọc inside cùng ba edge trong HUD. Canvas cho đổi Corner/Center để nhìn sai khác nửa pixel; executable chính luôn dùng center. Không tô toàn triangle ở bài này: ta đang kiểm một sample trước khi bọc nó trong vòng lặp.

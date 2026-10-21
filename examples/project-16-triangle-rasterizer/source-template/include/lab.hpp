@@ -79,13 +79,6 @@ inline bool finite(const Triangle2& triangle) {
 }
 
 #if LAB_CHECKPOINT >= 1
-inline Triangle2 makeDefaultTriangle(int width, int height) {
-    const double centerX = width * 0.5;
-    const double centerY = height * 0.5;
-    const double radius = std::min(width, height) * 0.32;
-    return {{centerX, centerY - radius}, {centerX + radius, centerY + radius}, {centerX - radius, centerY + radius}};
-}
-
 inline Vec2 vertexAt(const Triangle2& triangle, int index) {
     if (index == 0) {
         return triangle.a;

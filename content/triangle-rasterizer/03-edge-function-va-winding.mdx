@@ -89,6 +89,26 @@ result.sample.edgeBC = orient2D(triangle.b, triangle.c, scene.sample);
 result.sample.edgeCA = orient2D(triangle.c, triangle.a, scene.sample);
 ```
 
+### Bước 4 — Hiện điểm đang đo và đọc số trên HUD
+
+Các phép tính trên mới ghi vào FrameStats, chưa tự đưa chữ lên cửa sổ. Trong renderScene, đặt hai lệnh dưới ở cuối nhánh if (scene.debug), sau phần vẽ bounding box. Dấu cộng đỏ đánh dấu vị trí bạn vừa click:
+
+```cpp title="include/view.hpp — đánh dấu sample đang đo"
+screenLine(image, {scene.sample.x - 4.0, scene.sample.y}, {scene.sample.x + 4.0, scene.sample.y}, height, kAxisX);
+screenLine(image, {scene.sample.x, scene.sample.y - 4.0}, {scene.sample.x, scene.sample.y + 4.0}, height, kAxisX);
+```
+
+Mở presentation.hpp, tìm presentFramebuffer. Trước return SDL_RenderPresent(renderer) **cuối hàm**, thêm khối dưới. Không chèn vào nhánh trả sớm khi scene.debug=false, vì nhánh đó dành cho ảnh không có HUD:
+
+```cpp title="include/presentation.hpp — đọc area và ba edge từ FrameStats"
+std::snprintf(line, sizeof(line), "area2 %.2f | sample (%.1f %.1f) edges %.2f %.2f %.2f", stats.area, stats.sample.position.x, stats.sample.position.y, stats.sample.edgeAB, stats.sample.edgeBC, stats.sample.edgeCA);
+if (!SDL_RenderDebugText(renderer, 16, 684, line)) {
+    return false;
+}
+```
+
+Biến line đã có trong bộ khung. snprintf ghi số thành chuỗi; SDL_RenderDebugText vẽ chuỗi ấy tại (16,684), bên dưới vùng tam giác. Chúng chỉ trình bày kết quả, không tính lại edge bằng một công thức khác.
+
 ## Ghép các phần lại
 
 Build Starter rồi click nền để chọn sample. Mỗi cạnh dương/âm thay đổi theo phía của sample. Kéo một đỉnh qua cạnh đối diện, quan sát area qua 0. Chưa dùng màu RGB để đo dấu: chỉ số area/edge mới là dữ liệu cần kiểm ở bài này.

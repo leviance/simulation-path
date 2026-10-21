@@ -58,7 +58,7 @@ const learning = {
     "p16-l03": {
       focus: "Đo area/edge thật trong HUD, nhận biết winding và chuẩn hóa bản sao.",
       expected: "Area oracle bằng +16; đổi B/C cho −16; click sample làm edge HUD thay đổi thật.",
-      files: ["include/lab.hpp", "include/view.hpp"],
+      files: ["include/lab.hpp", "include/view.hpp", "include/presentation.hpp"],
       steps: [
         {
           title: "Xác định dữ liệu đầu vào",
@@ -80,7 +80,7 @@ const learning = {
       focus: "Lấy mẫu tại tâm pixel, guard suy biến rồi ghép ba half-plane.",
       expected:
         "Pixel (1,1) được thử tại (1.5,1.5); ba edge cùng quyết định inside, degenerate không chia.",
-      files: ["include/lab.hpp", "include/view.hpp"],
+      files: ["include/lab.hpp", "include/view.hpp", "include/presentation.hpp"],
       steps: [
         {
           title: "Xác định dữ liệu đầu vào",

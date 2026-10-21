@@ -75,6 +75,17 @@ RasterStats rasterizeTriangle(Triangle2 triangle, int width, int height, FillRul
 
 safeLimit không vượt candidateCount. Degenerate trả ngay, tested tăng đúng một lần cho sample; covered tăng ngay trước callback. Vòng lặp chỉ chạy trong bounds đã clamp.
 
+Một số test cần tô hết tam giác mà không truyền candidateLimit. Thêm overload dưới **ngay sau hàm vừa viết**, vẫn trong namespace lab. Đây là hàm cùng tên với danh sách tham số ngắn hơn; nó gọi lại đúng vòng raster ở trên, không tạo một thuật toán thứ hai:
+
+```cpp title="include/lab.hpp — dùng cùng rasterizer khi không cần dừng từng bước"
+template <typename ShadePixel>
+RasterStats rasterizeTriangle(Triangle2 triangle, int width, int height, FillRule rule, ShadePixel shadePixel) {
+    return rasterizeTriangle(triangle, width, height, rule, std::numeric_limits<std::size_t>::max(), shadePixel);
+}
+```
+
+Giá trị max của size_t đóng vai trò “không giới hạn”; safeLimit vẫn chặn số lượt xét ở candidateCount. Không cần cấp phát một buffer lớn tương ứng với giá trị này.
+
 ### Bước 3 — Nối callback vào ảnh CPU
 
 Trong renderScene, sau sampleTriangle và trước if(scene.debug), thêm block sau. coverage đã được cấp phát một lần trong main và truyền vào renderScene; nó được clear ở đầu lần vẽ, không cấp phát lại trong từng callback:
