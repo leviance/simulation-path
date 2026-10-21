@@ -3,13 +3,13 @@ const learning = {
   guides: {
     "p11-l01": {
       focus: "Dựng marker trên framebuffer, rồi nối WASD/QE với world point bằng delta time.",
-      expected:
-        "Vẽ điểm sáng và điều khiển ba tọa độ; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      expected: "Starter hiện marker; WASD/QE đổi đúng world XYZ, còn preview XY chưa phụ thuộc Z.",
       files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Giữ ba tọa độ trước khi vẽ",
-          explanation: "Tạo Vec3 và Scene; chỉ hàm preview tạm bỏ qua Z, không sửa dữ liệu world.",
+          title: "Đọc ba tọa độ trước khi vẽ",
+          explanation:
+            "Vec3 và Scene đã có trong Starter; giữ world point riêng, chỉ preview tạm bỏ qua Z.",
         },
         {
           title: "Vẽ marker từ các pixel",
@@ -25,7 +25,7 @@ const learning = {
     },
     "p11-l02": {
       focus: "Giữ world point riêng và đổi gốc tọa độ bằng vị trí camera.",
-      expected: "Đặt camera vào không gian; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+      expected: "Camera đi sang phải làm marker đi trái, trong khi world point giữ nguyên.",
       files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
@@ -47,8 +47,14 @@ const learning = {
     "p11-l03": {
       focus: "Từ tam giác đồng dạng đến x/z, y/z và một cảnh lưới có chiều sâu thật.",
       expected:
-        "Vì sao điểm ở xa tiến về tâm?; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
-      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+        "Độ lệch khỏi tâm giảm một nửa khi tăng depth gấp đôi; lưới và khung nền cũng đi qua phép chiếu.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Suy hai tỉ lệ từ tam giác đồng dạng",
@@ -68,9 +74,14 @@ const learning = {
     },
     "p11-l04": {
       focus: "Tự tính focal scale, NDC và pixel; đổi aspect mà không kéo méo cảnh.",
-      expected:
-        "Chọn FOV và hình dạng viewport; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
-      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+      expected: "FOV90° và viewport (10,20,800,600) đưa point (1,0.5,4) tới pixel (485,282.5).",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Từ nửa góc đến focal scale",
@@ -91,7 +102,7 @@ const learning = {
     "p11-l05": {
       focus: "Phân biệt behind, near, far, outside và invalid trước khi vẽ.",
       expected:
-        "Chặn điểm không thể nhìn thấy; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+        "Sau camera, trước near và vượt far không có NDC/screen; outside vẫn có số hữu hạn nhưng không được vẽ.",
       files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
@@ -114,8 +125,14 @@ const learning = {
     "p11-l06": {
       focus: "Tách điều khiển tay khỏi quỹ đạo thời gian, không để hai nguồn input tranh nhau.",
       expected:
-        "Cho điểm bay, dừng và bước từng nhịp; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
-      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+        "Space chạy/dừng, N tiến 0.1s; input tay dừng quỹ đạo và nhiều chuỗi dt cùng tổng cho cùng điểm.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Tách hai nguồn điều khiển",
@@ -137,7 +154,7 @@ const learning = {
     "p11-l07": {
       focus: "Đảo phép chiếu tại một độ sâu đã biết và quản lý pointer capture đúng chủ sở hữu.",
       expected:
-        "Kéo điểm mà không làm mất depth; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+        "Kéo giữ chỗ nắm và camera depth; thả ngoài, blur và đổi input đều kết thúc đúng thao tác cũ.",
       files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
@@ -159,11 +176,12 @@ const learning = {
     "p11-l08": {
       focus: "Tắt debug để xem cảnh sạch; kiểm tra bằng nghiệm tính tay, biên và mã hoàn chỉnh.",
       expected:
-        "Hoàn thiện demo và kiểm chứng; tự kiểm bằng số biết trước và thí nghiệm trong bài.",
+        "Clean mode vẫn giữ cảnh 3D; CTest chạy được với Starter hoàn chỉnh ở cả Debug và Release.",
       files: [
         "include/lab.hpp",
         "include/scene.hpp",
         "include/view.hpp",
+        "include/presentation.hpp",
         "src/main.cpp",
         "tests/tests.cpp",
       ],

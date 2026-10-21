@@ -25,13 +25,17 @@ Lỗi round-trip chỉ có nghĩa khi point visible và inverse có kết quả.
 
 ## Viết code từng bước
 
-Mở checkpoint 08 để đối chiếu sau khi tự viết. Các đoạn dưới nằm trong đúng file ghi ở tiêu đề; giữ phần khung từ bài trước, không tạo thêm một main khác. Mỗi lần ghép xong một bước, build lại target của bài:
+Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
 
-```powershell title="Build checkpoint 08"
+Build và chạy đúng mã bạn vừa viết:
+
+```powershell title="Chạy mã đang học trong Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_checkpoint_8
-.\build\Debug\project_11_checkpoint_8.exe
+cmake --build build --config Debug --target project_11_starter --parallel 2
+.\build\Debug\project_11_starter.exe
 ```
+
+**Checkpoint 08 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/08 hoặc build riêng target project_11_checkpoint_8; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
 
 ### Bước 1 — Tắt debug mà vẫn giữ cảnh 3D
 
@@ -41,7 +45,15 @@ if (!scene.debug) {
 }
 ```
 
-Phím F đổi scene.debug. drawDepthScene vẫn vẽ lưới và các khung tại Z=2/4/8/12; chỉ axes/crosshair/HUD bị tắt. Canvas cũng có nút Ẩn debug, ẩn cả readout. Một cảnh trống khi tắt debug là sai yêu cầu: hình học nền không được phụ thuộc lớp giải thích.
+Trong SDL_EVENT_KEY_DOWN, sau phần Space/N, thêm:
+
+```cpp title="src/main.cpp — F chỉ đổi debug một lần khi nhấn"
+if (event.key.key == SDLK_F && !event.key.repeat) {
+    scene.debug = !scene.debug;
+}
+```
+
+Đặt nhánh if (!scene.debug) trong presentFramebuffer **sau SDL_RenderTexture và trước các lệnh vẽ HUD**. Nếu đặt trước upload/vẽ ảnh, chế độ sạch có thể chỉ hiện nền cũ. Phím F đổi scene.debug. drawDepthScene vẫn vẽ lưới và các khung tại Z=2/4/8/12; chỉ axes/crosshair/HUD bị tắt. Canvas cũng có nút Ẩn debug, ẩn cả readout. Một cảnh trống khi tắt debug là sai yêu cầu: hình học nền không được phụ thuộc lớp giải thích.
 
 ### Bước 2 — Viết test với đáp án độc lập
 
@@ -54,15 +66,17 @@ void knownProjection() {
     // Tính tay bằng focalPixels = 300, không gọi inverse để tạo expected.
     const auto point = lab::projectPerspective({1.0, 0.5, 4.0}, camera, lens, viewport);
     check(point.status == lab::ProjectionStatus::Visible && point.screen.has_value(), "analytic point visible");
-    check(close(point.screen->x, 485.0) && close(point.screen->y, 282.5), "independent analytic pixel");
+    check(point.screen && close(point.screen->x, 485.0) && close(point.screen->y, 282.5), "independent analytic pixel");
     const auto farther = lab::projectPerspective({1.0, 0.5, 8.0}, camera, lens, viewport);
-    check(close(farther.screen->x, 447.5) && close(farther.screen->y, 301.25), "double depth halves displacement");
+    check(farther.screen && close(farther.screen->x, 447.5) && close(farther.screen->y, 301.25), "double depth halves displacement");
     const auto centered = lab::projectPerspective({0.0, 0.0, 4.0}, camera, lens, viewport);
-    check(close(centered.screen->x, 410.0) && close(centered.screen->y, 320.0), "viewport origin included");
+    check(centered.screen && close(centered.screen->x, 410.0) && close(centered.screen->y, 320.0), "viewport origin included");
     const auto translated = lab::worldToCamera({3.0, 2.0, 8.0}, {{1.0, -1.0, 2.0}});
     check(close(translated.x, 2.0) && close(translated.y, 3.0) && close(translated.z, 6.0), "world minus camera");
 }
 ```
+
+tests/tests.cpp trong ZIP đã có hàm check, close, các case và main gọi chúng. Giữ nguyên file này; không tạo thêm một main trùng tên. check chỉ ghi nhận lỗi và tăng biến failures, nó không dừng chương trình ngay. Vì vậy mọi lần đọc optional đều nằm sau điều kiện point.screen && ...; nếu quên guard, chính test có thể đọc dữ liệu không tồn tại thay vì báo lỗi projection.
 
 Tests còn kiểm near/far chính xác, invalid FOV/viewport/NaN, giao điểm clipping tính tay, ảnh CPU có lưới/marker ở clean mode và không vẽ marker behind. check ghi failure và trả EXIT_FAILURE; không dùng assert bị tắt ở Release.
 
@@ -99,6 +113,26 @@ cmake --build build --config Release --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 30
 .\build\Release\project_11_final.exe
 ```
+
+### Kiểm tra đúng mã bạn đã viết
+
+CTest mặc định dùng final/include để kiểm bản mẫu đi kèm ZIP. Kết quả đó **không chứng minh Starter của bạn đúng**. Khi Starter đã hoàn thành đủ tám bài, mở CMakeLists.txt trong thư mục ZIP đã giải nén và đổi đúng dòng include của target tests:
+
+```cmake title="CMakeLists.txt — chạy tests với mã đang học"
+target_include_directories(project_11_tests PRIVATE starter/include)
+```
+
+Dòng cũ kết thúc bằng final/include. Không đổi include của các target khác. Configure lại rồi build cả Starter lẫn tests:
+
+```powershell title="Kiểm chứng Starter ở Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_11_starter project_11_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --target project_11_starter project_11_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
+
+Ở các bài đầu, Starter chưa có đủ hàm để dùng toàn bộ tests cuối project; hãy kiểm bằng các quan sát trong bài. Sau bài 8, test phải chạy trực tiếp trên Starter. Muốn kiểm lại bản mẫu final, đổi include về final/include và configure lại.
 
 Không cần tự viết lại các file từ trí nhớ: final là bản hoàn chỉnh. lab.hpp giữ math/guard/inverse, scene.hpp giữ state/quỹ đạo/preset, framebuffer.hpp và view.hpp vẽ CPU, presentation.hpp đưa texture/chữ lên SDL, main.cpp quản lý input/lifecycle. Canvas không thay executable này.
 

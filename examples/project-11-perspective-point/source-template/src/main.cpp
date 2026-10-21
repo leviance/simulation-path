@@ -81,12 +81,15 @@ int main(int argc, char** argv) {
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
             }
-            if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN) {
+            if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
                 scene.paused = true;
                 dirty = true;
 #if LAB_CHECKPOINT >= 7
                 cancelDrag();
 #endif
+            }
+            if (event.type == SDL_EVENT_WINDOW_EXPOSED || event.type == SDL_EVENT_WINDOW_SHOWN || event.type == SDL_EVENT_WINDOW_RESTORED) {
+                dirty = true;
             }
             if (event.type == SDL_EVENT_KEY_DOWN) {
                 dirty = true;
@@ -106,46 +109,59 @@ int main(int argc, char** argv) {
                 }
 #if LAB_CHECKPOINT >= 2
                 if (event.key.key == SDLK_J) {
+                    scene.paused = true;
                     scene.camera.position.x = std::max(-2.0, scene.camera.position.x - 0.1);
                 }
                 if (event.key.key == SDLK_L) {
+                    scene.paused = true;
                     scene.camera.position.x = std::min(2.0, scene.camera.position.x + 0.1);
                 }
                 if (event.key.key == SDLK_I) {
+                    scene.paused = true;
                     scene.camera.position.y = std::min(2.0, scene.camera.position.y + 0.1);
                 }
                 if (event.key.key == SDLK_K) {
+                    scene.paused = true;
                     scene.camera.position.y = std::max(-2.0, scene.camera.position.y - 0.1);
                 }
                 if (event.key.key == SDLK_U) {
+                    scene.paused = true;
                     scene.camera.position.z = std::max(-2.0, scene.camera.position.z - 0.1);
                 }
                 if (event.key.key == SDLK_O) {
+                    scene.paused = true;
                     scene.camera.position.z = std::min(2.0, scene.camera.position.z + 0.1);
                 }
 #endif
 #if LAB_CHECKPOINT >= 4
                 if (event.key.key == SDLK_EQUALS) {
+                    scene.paused = true;
                     scene.lens.verticalFovRadians = std::max(25.0 * lab::kPi / 180.0, scene.lens.verticalFovRadians - lab::kPi / 180.0);
                 }
                 if (event.key.key == SDLK_MINUS) {
+                    scene.paused = true;
                     scene.lens.verticalFovRadians = std::min(110.0 * lab::kPi / 180.0, scene.lens.verticalFovRadians + lab::kPi / 180.0);
                 }
                 if (event.key.key == SDLK_V && !event.key.repeat) {
+                    scene.paused = true;
                     scene.aspect = (scene.aspect + 1) % 3;
                 }
 #endif
 #if LAB_CHECKPOINT >= 5
                 if (event.key.key == SDLK_LEFTBRACKET) {
+                    scene.paused = true;
                     scene.lens.nearPlane = std::max(0.1, scene.lens.nearPlane - 0.1);
                 }
                 if (event.key.key == SDLK_RIGHTBRACKET) {
+                    scene.paused = true;
                     scene.lens.nearPlane = std::min(2.0, scene.lens.nearPlane + 0.1);
                 }
                 if (event.key.key == SDLK_SEMICOLON) {
+                    scene.paused = true;
                     scene.lens.farPlane = std::max(8.0, scene.lens.farPlane - 0.5);
                 }
                 if (event.key.key == SDLK_APOSTROPHE) {
+                    scene.paused = true;
                     scene.lens.farPlane = std::min(24.0, scene.lens.farPlane + 0.5);
                 }
 #endif
@@ -180,6 +196,7 @@ int main(int argc, char** argv) {
                     dragDepth = projected.cameraPoint.z;
                     dragging = true;
                     scene.paused = true;
+                    dirty = true;
                     if (!SDL_CaptureMouse(true)) {
                         cancelDrag();
                     }

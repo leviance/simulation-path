@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import * as math from "../lib/labs/projection-point.ts";
 import * as model from "../lib/labs/projection-scene.ts";
 import { componentCallback, componentEffect } from "./lab-handler-support.mjs";
@@ -190,8 +191,10 @@ async function harness(stage = 8) {
   env.commit = (next) => (sceneRef.current = next);
   for (const name of [
     "cancelDrag",
+    "pauseForEnvironment",
     "reset",
     "togglePause",
+    "step",
     "toggleDebug",
     "editPoint",
     "editCamera",
@@ -351,11 +354,16 @@ test("P11 actual lifecycle cleans listeners and capture on hidden, resize and mo
   assert.equal(h.drag.current, null);
   const before = h.sceneRef.current.point;
   h.sceneRef.current.paused = false;
-  (await componentEffect("projection-lab.tsx", "Resize releases", h))();
+  h.pauseForEnvironment();
   assert.equal(h.sceneRef.current.paused, true);
   assert.deepEqual(h.sceneRef.current.point, before);
-  (await componentEffect("projection-lab.tsx", "initialPointScene()", h))();
-  assert.deepEqual(h.sceneRef.current, model.initialPointScene());
+  const source = await readFile(
+    new URL("../components/labs/projection-lab.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /<ProjectionScene key=\{mode \?\? "projection-full"\} mode=\{mode\}/);
+  assert.match(source, /useCanvasSize\(canvasRef, pauseForEnvironment\)/);
+  assert.match(source, /usePauseOnReducedMotion\(pauseForEnvironment\)/);
   cleanup();
   assert.deepEqual(removed.sort(), ["blur", "visibilitychange"]);
 });
@@ -385,10 +393,28 @@ test("P11 actual animation caps stalled frame, reduced-motion pauses, cleanup ca
   h.commit(paused);
   callback(10000);
   assert.equal(h.sceneRef.current, paused, "queued frame must not advance a paused scene");
-  (
-    await componentEffect("projection-lab.tsx", "if (reducedMotion)", { ...h, reducedMotion: true })
-  )();
+  h.pauseForEnvironment();
   assert.equal(h.sceneRef.current.paused, true);
+});
+
+test("P11 actual step cancels a drag before changing depth and cannot run while flying", async () => {
+  const h = await harness(),
+    p = model.pointDisplay(h.sceneRef.current, 8).screen;
+  h.startDrag(h.event(p.x, p.y));
+  h.onKeyDown({ key: "n", repeat: false, preventDefault() {} });
+  assert.equal(h.drag.current, null);
+  assert.equal(h.captured.size, 0);
+  near(h.sceneRef.current.elapsed, 0.1);
+  const afterStep = h.sceneRef.current;
+  h.pointerUp(h.event(p.x + 100, p.y));
+  assert.equal(h.sceneRef.current, afterStep, "old drag cannot overwrite a step");
+  h.commit({ ...afterStep, paused: false });
+  const flying = h.sceneRef.current;
+  h.step();
+  assert.equal(h.sceneRef.current, flying);
+  const early = await harness(5);
+  early.step();
+  assert.deepEqual(early.sceneRef.current, model.initialPointScene());
 });
 test("P11 actual clean renderer keeps depth geometry/marker and hides overlays, rejects behind marker", async () => {
   const lines = [],

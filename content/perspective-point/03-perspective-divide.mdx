@@ -22,13 +22,17 @@ Checkpoint này dùng focal scale tạm bằng 1: tương đương vertical FOV 
 
 ## Viết code từng bước
 
-Mở checkpoint 03 để đối chiếu sau khi tự viết. Các đoạn dưới nằm trong đúng file ghi ở tiêu đề; giữ phần khung từ bài trước, không tạo thêm một main khác. Mỗi lần ghép xong một bước, build lại target của bài:
+Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
 
-```powershell title="Build checkpoint 03"
+Build và chạy đúng mã bạn vừa viết:
+
+```powershell title="Chạy mã đang học trong Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_checkpoint_3
-.\build\Debug\project_11_checkpoint_3.exe
+cmake --build build --config Debug --target project_11_starter --parallel 2
+.\build\Debug\project_11_starter.exe
 ```
+
+**Checkpoint 03 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/03 hoặc build riêng target project_11_checkpoint_3; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
 
 ### Bước 1 — Viết phép chia từ tỉ lệ vừa suy ra
 
@@ -42,7 +46,36 @@ Hàm nhỏ này không tự biết near plane. Caller có trách nhiệm kiểm 
 
 ### Bước 2 — Ghép thành phép chiếu có guard
 
-Checkpoint 3 cung cấp ProjectionStatus, ProjectionResult và validLens trong lab.hpp. ProjectionResult có cameraPoint và hai optional là ndc/screen; hãy giữ các khai báo này khi chép hàm dưới. Chưa cần học hết enum ngay: bài 5 sẽ giải thích ý nghĩa từng nhánh. Chúng có mặt sớm để bản chạy thử luôn an toàn.
+Thêm các khai báo dưới vào namespace lab, sau worldToCamera/cameraToWorld và trước projectPerspective. ProjectionResult có cameraPoint và hai optional là ndc/screen. isInsideNdc cũng phải có trước khi projectPerspective gọi nó.
+
+```cpp title="include/lab.hpp — khai báo trước projectPerspective"
+enum class ProjectionStatus {
+    Visible,
+    BehindCamera,
+    BeforeNearPlane,
+    BeyondFarPlane,
+    OutsideFrustum,
+    Invalid,
+};
+
+struct ProjectionResult {
+    ProjectionStatus status = ProjectionStatus::Invalid;
+    Vec3 cameraPoint{};
+    std::optional<Vec2> ndc;
+    std::optional<Vec2> screen;
+};
+
+inline bool validLens(const PerspectiveLens& lens, const Viewport& viewport) {
+    return std::isfinite(lens.verticalFovRadians) && lens.verticalFovRadians > 0.0 && lens.verticalFovRadians < kPi &&
+        std::isfinite(lens.nearPlane) && std::isfinite(lens.farPlane) && lens.nearPlane > 0.0 && lens.farPlane > lens.nearPlane &&
+        std::isfinite(viewport.x) && std::isfinite(viewport.y) && std::isfinite(viewport.width) && std::isfinite(viewport.height) && viewport.width > 0.0 && viewport.height > 0.0;
+}
+inline bool isInsideNdc(Vec2 ndc) {
+    return std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
+}
+```
+
+Chưa cần học hết enum ngay: bài 5 sẽ giải thích ý nghĩa từng nhánh. Chúng có mặt sớm để bản chạy thử luôn an toàn.
 
 ```cpp title="include/lab.hpp — pipeline an toàn với focal scale tạm"
 inline ProjectionResult projectPerspective(Vec3 worldPoint, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
@@ -90,6 +123,35 @@ inline ProjectionResult projectPerspective(Vec3 worldPoint, const Camera3D& came
 Theo thứ tự: kiểm finite/lens, đổi world sang camera, chặn depth, mới divide và chuyển về screen. X chia aspect để hình tròn không bị kéo rộng khi viewport không vuông. result.screen là optional: thiếu giá trị nghĩa là chưa có ảnh hợp lệ, không phải marker ở góc (0,0).
 
 ### Bước 3 — Dùng cùng phép chiếu cho lưới và điểm
+
+Thêm clipDepth vào lab.hpp, sau projectPerspective. Bài này bạn có thể dùng helper như một hộp công cụ: nó chỉ giữ phần đoạn nằm giữa near và far. Bài 5 sẽ giải thích cách tính giao điểm bên trong, sau khi ta đã hiểu vì sao phải chia cho Z.
+
+```cpp title="include/lab.hpp — helper cắt depth trước khi chia"
+inline bool clipDepth(Vec3& start, Vec3& end, const PerspectiveLens& lens) {
+    if (!finite(start) || !finite(end)) {
+        return false;
+    }
+    for (const auto& plane : {Vec2{lens.nearPlane, 1.0}, Vec2{lens.farPlane, -1.0}}) {
+        const double a = (start.z - plane.x) * plane.y;
+        const double b = (end.z - plane.x) * plane.y;
+        if (a < 0.0 && b < 0.0) {
+            return false;
+        }
+        if (a < 0.0 || b < 0.0) {
+            const double t = a / (a - b);
+            Vec3 hit{start.x + t * (end.x - start.x), start.y + t * (end.y - start.y), plane.x};
+            if (a < 0.0) {
+                start = hit;
+            } else {
+                end = hit;
+            }
+        }
+    }
+    return true;
+}
+```
+
+clipScreen và drawLine đã có trong Starter. Thêm line3D và drawDepthScene vào view.hpp **trước renderScene**; như vậy hàm vẽ đã được khai báo khi renderScene gọi tới.
 
 ```cpp title="include/view.hpp — đoạn world qua camera rồi mới raster"
 inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene, std::uint32_t color) {
@@ -162,6 +224,62 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
 ```
 
 Bốn khung cùng kích thước world ở Z=2/4/8/12 thu nhỏ dần vì chính các đầu mút của chúng được chia cho depth. Đĩa có bán kính world 0.12; bán kính pixel bị giới hạn [3,30] để vẫn dễ nhìn và không gây vòng lặp lớn. Đây là ký hiệu của một điểm sáng, chưa phải sphere renderer.
+
+### Hiển thị số đo của phép chiếu
+
+HUD cũ vẫn ghi “XY PREVIEW ONLY”. Thêm statusText rồi **thay presentFramebuffer** trong presentation.hpp bằng hai hàm dưới; không giữ cả hai phiên bản presentFramebuffer. Chúng chỉ đọc kết quả để hiển thị, không tự chiếu lại theo một công thức khác. NDC/screen bị loại sẽ hiện “undefined” thay cho tọa độ giả.
+
+```cpp title="include/presentation.hpp — tên của từng trạng thái"
+inline const char* statusText(ProjectionStatus status) {
+    switch (status) {
+    case ProjectionStatus::Visible:
+        return "visible";
+    case ProjectionStatus::BehindCamera:
+        return "behind";
+    case ProjectionStatus::BeforeNearPlane:
+        return "before-near";
+    case ProjectionStatus::BeyondFarPlane:
+        return "beyond-far";
+    case ProjectionStatus::OutsideFrustum:
+        return "outside";
+    default:
+        return "invalid";
+    }
+}
+```
+
+```cpp title="include/presentation.hpp — số đo đi cùng ảnh perspective"
+inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene) {
+    // Letterbox phải dùng màu nền, không dùng lại màu chữ của frame trước.
+    if (!SDL_SetRenderDrawColor(renderer, 17, 24, 43, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
+        return false;
+    }
+    if (!text(renderer, 16, 14, "PROJECT 11 | WASD: XY, Q/E: Z | IJKL U/O: camera | +/- FOV | V aspect | R reset | Esc quit") || !text(renderer, 16, 34, "F1 default, F2 far, F3 near, F4 behind, F5 beyond-far, F6 outside | [ ] near, ; ' far")) {
+        return false;
+    }
+    char value[230]{};
+    std::snprintf(value, sizeof(value), "world (%.3f, %.3f, %.3f) | camera at (%.2f, %.2f, %.2f)", scene.point.x, scene.point.y, scene.point.z, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z);
+    if (!text(renderer, 16, 58, value)) {
+        return false;
+    }
+    const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewportFor(scene));
+    std::snprintf(value, sizeof(value), "camera point (%.3f, %.3f, %.3f) | status %s", projected.cameraPoint.x, projected.cameraPoint.y, projected.cameraPoint.z, statusText(projected.status));
+    if (!text(renderer, 16, 80, value)) {
+        return false;
+    }
+    if (projected.screen && projected.ndc) {
+        std::snprintf(value, sizeof(value), "NDC (%.4f, %.4f) -> screen (%.2f, %.2f), continuous viewport coordinates", projected.ndc->x, projected.ndc->y, projected.screen->x, projected.screen->y);
+    } else {
+        std::snprintf(value, sizeof(value), "NDC / screen: undefined (depth rejected before division)");
+    }
+    if (!text(renderer, 16, 724, value)) {
+        return false;
+    }
+    return SDL_RenderPresent(renderer);
+}
+```
+
+Build lại project_11_starter. Giữ nguyên point X/Y và dùng Q/E thay Z; so vị trí marker với các khung nền trước khi đọc tiếp.
 
 ## Thử làm sai để hiểu đúng
 

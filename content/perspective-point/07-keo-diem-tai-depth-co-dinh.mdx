@@ -25,13 +25,17 @@ Nhấn lên mép marker không được làm tâm nhảy đến chuột. Lưu gr
 
 ## Viết code từng bước
 
-Mở checkpoint 07 để đối chiếu sau khi tự viết. Các đoạn dưới nằm trong đúng file ghi ở tiêu đề; giữ phần khung từ bài trước, không tạo thêm một main khác. Mỗi lần ghép xong một bước, build lại target của bài:
+Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
 
-```powershell title="Build checkpoint 07"
+Build và chạy đúng mã bạn vừa viết:
+
+```powershell title="Chạy mã đang học trong Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_checkpoint_7
-.\build\Debug\project_11_checkpoint_7.exe
+cmake --build build --config Debug --target project_11_starter --parallel 2
+.\build\Debug\project_11_starter.exe
 ```
+
+**Checkpoint 07 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/07 hoặc build riêng target project_11_checkpoint_7; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
 
 ### Bước 1 — Viết inverse với depth bắt buộc
 
@@ -55,7 +59,20 @@ Hàm trả optional giống chiều xuôi: depth không thuộc [near,far] hoặ
 
 ### Bước 2 — Nối chuột logic với inverse
 
-Khối cập nhật thao tác kéo trong main.cpp:
+Trong main.cpp, **trước while (running)** và sau các biến scene/dirty, thêm state của thao tác kéo và hàm hủy. owner lưu mouse đang điều khiển, grabOffset giữ chỗ nắm, dragDepth giữ độ sâu. Lambda dùng [&] để đọc/sửa những biến đó, vì thế chúng phải được khai báo trước lambda:
+
+```cpp title="src/main.cpp — state và thao tác hủy nằm ngoài vòng lặp"
+bool dragging = false;
+SDL_MouseID owner{};
+lab::Vec2 grabOffset{};
+double dragDepth = 0.0;
+const auto cancelDrag = [&]() {
+    dragging = false;
+    SDL_CaptureMouse(false);
+};
+```
+
+Đặt updateDrag ngay sau cancelDrag, vẫn trước while (running):
 
 ```cpp title="src/main.cpp — giữ offset và depth trong suốt thao tác"
 const auto updateDrag = [&](lab::Vec2 mouse) {
@@ -90,6 +107,7 @@ if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTT
         dragDepth = projected.cameraPoint.z;
         dragging = true;
         scene.paused = true;
+        dirty = true;
         if (!SDL_CaptureMouse(true)) {
             cancelDrag();
         }
@@ -108,13 +126,33 @@ if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON
 }
 ```
 
+Đặt toàn bộ khối mouse event trên **bên trong vòng SDL_PollEvent**, sau nhánh xử lý bàn phím. Không đặt nó sau vòng poll: lúc đó event có thể không còn là sự kiện bạn muốn xử lý.
+
 SDL_ConvertEventToRenderCoordinates đổi vị trí từ window/HiDPI/letterbox về bảng logic đúng một lần. Capture chỉ bật khi nhấn gần một marker visible; pointer down không sửa point. Motion chỉ nhận đúng mouse owner và còn giữ nút trái. Up nhận mẫu cuối trước cancelDrag. Nếu capture thất bại, thao tác bị hủy.
 
 Canvas dùng cùng inverse, nhưng pointerId và setPointerCapture của trình duyệt thay SDL_MouseID. Đừng nhân DPR vào mouse thêm lần nữa: DPR chỉ dành cho backing buffer.
 
 ## Ghép các phần lại
 
-Build checkpoint 7, pause, nhấn lệch tâm marker khoảng 10 pixel rồi kéo. Marker phải giữ khoảng lệch đó và giữ nguyên cameraDepth. Nhấn lên nền không làm điểm nhảy.
+Còn ba chỗ phải gọi cancelDrag để state cũ không sống quá lâu:
+
+- Trong nhánh SDL_EVENT_KEY_DOWN, đặt cancelDrag() ngay sau dirty=true, trước khi xử lý Space/N, reset, camera hay lens.
+- Trong nhánh đọc phím liên tục ở bài 1, gọi cancelDrag() trong if (length > 0 ...), **trước movePoint**.
+- Trước SDL_DestroyTexture ở cuối main, gọi cancelDrag() để nhả capture trước khi hủy window.
+
+Thay nhánh lifecycle cũ bằng nhánh dưới; focus/resize không được để chuột tiếp tục điều khiển theo cameraDepth cũ:
+
+```cpp title="src/main.cpp — hủy kéo và pause khi môi trường thay đổi"
+if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
+    scene.paused = true;
+    dirty = true;
+    cancelDrag();
+}
+```
+
+Ngay khi bắt đầu kéo, paused=true và dirty=true: HUD phải hiện PAUSED kể cả khi bạn mới nhấn giữ mà chưa di chuyển chuột. Trong Canvas, phím N/nút tiến một bước cũng nhả capture trước khi đặt point theo quỹ đạo; mẫu thả của thao tác cũ không được ghi đè bước mới.
+
+Build lại project_11_starter, pause, nhấn lệch tâm marker khoảng 10 pixel rồi kéo. Marker phải giữ khoảng lệch đó và giữ nguyên cameraDepth. Nhấn lên nền không làm điểm nhảy.
 
 Blur/hidden/resize, reset, preset và input thay camera/lens đều hủy capture. Nếu không hủy, thao tác cũ có thể tiếp tục dùng cameraDepth hoặc offset đã lỗi thời. Trong Canvas, đổi bất kỳ slider/preset nào cũng kết thúc drag; phím Tab vẫn ra khỏi Canvas bình thường.
 

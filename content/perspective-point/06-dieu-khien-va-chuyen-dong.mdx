@@ -25,13 +25,17 @@ Clamp dt tối đa 0.1s ngăn một frame bị treo làm nhảy quá xa. Nó kh�
 
 ## Viết code từng bước
 
-Mở checkpoint 06 để đối chiếu sau khi tự viết. Các đoạn dưới nằm trong đúng file ghi ở tiêu đề; giữ phần khung từ bài trước, không tạo thêm một main khác. Mỗi lần ghép xong một bước, build lại target của bài:
+Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
 
-```powershell title="Build checkpoint 06"
+Build và chạy đúng mã bạn vừa viết:
+
+```powershell title="Chạy mã đang học trong Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_checkpoint_6
-.\build\Debug\project_11_checkpoint_6.exe
+cmake --build build --config Debug --target project_11_starter --parallel 2
+.\build\Debug\project_11_starter.exe
 ```
+
+**Checkpoint 06 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/06 hoặc build riêng target project_11_checkpoint_6; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
 
 ### Bước 1 — Viết quỹ đạo thành hàm thuần
 
@@ -64,7 +68,7 @@ inline void advanceScene(Scene& scene, double deltaTime) {
 }
 ```
 
-main.cpp chỉ gọi advanceScene liên tục khi !paused. Khối WASD/QE gọi movePoint trước và đặt paused=true, vì vậy quỹ đạo không ghi đè thao tác tay ở cuối frame.
+Thêm flightPoint và advanceFlightTime vào cuối namespace lab trong lab.hpp. Thêm advanceScene vào namespace lab trong scene.hpp, sau movePoint/applyPreset. Hàm advanceScene chủ động cập nhật một bước; chính main.cpp quyết định có gọi nó liên tục hay không bằng !paused. Khối WASD/QE gọi movePoint trước và đặt paused=true, vì vậy quỹ đạo không ghi đè thao tác tay ở cuối frame.
 
 ### Bước 3 — Pause và step không phụ thuộc key-repeat
 
@@ -81,7 +85,31 @@ Mỗi lần nhấn Space chỉ toggle một lần nhờ !event.key.repeat. N ch�
 
 ## Ghép các phần lại
 
-Build checkpoint 6. Thử Chạy/Pause, tiến 0.1s và reset. So quỹ đạo tại elapsed=1s khi chia thành nhiều dt nhỏ: vị trí phải trùng. FOV và camera không làm đổi công thức world, chỉ đổi cách nhìn.
+Trong main.cpp, đặt khối dưới **sau phần đọc WASD/QE và trước if (dirty)**. Nếu bạn chỉ thêm hàm advanceScene mà quên gọi ở vòng lặp, Space sẽ đổi paused nhưng điểm vẫn đứng yên.
+
+```cpp title="src/main.cpp — chạy quỹ đạo sau khi xử lý input tay"
+if (!scene.paused) {
+    lab::advanceScene(scene, deltaTime);
+    dirty = true;
+}
+```
+
+Trong presentFramebuffer, sau dòng lens và trước SDL_RenderPresent, thêm trạng thái và thời gian:
+
+```cpp title="include/presentation.hpp — đọc simulation elapsed và pause"
+const char* state = "PAUSED";
+if (!scene.paused) {
+    state = "FLYING";
+}
+std::snprintf(value, sizeof(value), "t %.3f s | %s | Space pause, N step 0.1s, mouse drag from lesson 7, F debug from lesson 8", scene.elapsed, state);
+if (!text(renderer, 16, 768, value)) {
+    return false;
+}
+```
+
+Bộ khung đã xử lý focus lost, hidden/minimize và resize: đặt paused=true và dirty=true. Khi cửa sổ được hiện lại hoặc bị yêu cầu vẽ lại, nó đặt dirty=true để ảnh không bị trống. Giữ các nhánh đó; đừng thay bằng việc chạy quỹ đạo trong mọi frame.
+
+Build lại project_11_starter. Thử Chạy/Pause, tiến 0.1s và reset. So quỹ đạo tại elapsed=1s khi chia thành nhiều dt nhỏ: vị trí phải trùng. FOV và camera không làm đổi công thức world, chỉ đổi cách nhìn.
 
 Chuyển tab, mất focus hoặc resize sẽ pause. Khi quay lại, ứng dụng không tự bay tiếp. Đây là lựa chọn để người học không mất vị trí đang quan sát và không gặp một dt khổng lồ sau thời gian tab ẩn.
 

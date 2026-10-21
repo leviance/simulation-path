@@ -26,11 +26,11 @@ void knownProjection() {
     // Tính tay bằng focalPixels = 300, không gọi inverse để tạo expected.
     const auto point = lab::projectPerspective({1.0, 0.5, 4.0}, camera, lens, viewport);
     check(point.status == lab::ProjectionStatus::Visible && point.screen.has_value(), "analytic point visible");
-    check(close(point.screen->x, 485.0) && close(point.screen->y, 282.5), "independent analytic pixel");
+    check(point.screen && close(point.screen->x, 485.0) && close(point.screen->y, 282.5), "independent analytic pixel");
     const auto farther = lab::projectPerspective({1.0, 0.5, 8.0}, camera, lens, viewport);
-    check(close(farther.screen->x, 447.5) && close(farther.screen->y, 301.25), "double depth halves displacement");
+    check(farther.screen && close(farther.screen->x, 447.5) && close(farther.screen->y, 301.25), "double depth halves displacement");
     const auto centered = lab::projectPerspective({0.0, 0.0, 4.0}, camera, lens, viewport);
-    check(close(centered.screen->x, 410.0) && close(centered.screen->y, 320.0), "viewport origin included");
+    check(centered.screen && close(centered.screen->x, 410.0) && close(centered.screen->y, 320.0), "viewport origin included");
     const auto translated = lab::worldToCamera({3.0, 2.0, 8.0}, {{1.0, -1.0, 2.0}});
     check(close(translated.x, 2.0) && close(translated.y, 3.0) && close(translated.z, 6.0), "world minus camera");
 }

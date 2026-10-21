@@ -65,6 +65,8 @@ test("Project 11 rebuild has eight teachable checkpoints with literal four-space
       file + " needs observable experiments",
     );
     assert.doesNotMatch(mdx, /Checkpoint đang xây|TODO|lorem ipsum/);
+    assert.match(mdx, /--target project_11_starter --parallel 2/);
+    assert.match(mdx, /bản tham khảo sau bài này/);
     for (const role of [
       "Vấn đề cần giải quyết",
       "Hiểu ý tưởng trước khi viết code",
@@ -127,6 +129,32 @@ test("Project 11 rebuild uses genuine depth geometry, safe projection, owned inv
     assert.ok(main.includes(text));
   const hud = await source("final/include/presentation.hpp");
   assert.match(hud, /if \(!scene.debug\)/);
+  assert.ok(
+    hud.indexOf("SDL_SetRenderDrawColor(renderer, 17, 24, 43, 255)") <
+      hud.indexOf("SDL_RenderClear(renderer)"),
+  );
+  assert.match(main, /SDL_EVENT_WINDOW_MINIMIZED/);
+  assert.match(main, /SDL_EVENT_WINDOW_EXPOSED/);
+  assert.match(main, /dragging = true;\s+scene.paused = true;\s+dirty = true;/);
+  for (const key of [
+    "J",
+    "L",
+    "I",
+    "K",
+    "U",
+    "O",
+    "EQUALS",
+    "MINUS",
+    "V",
+    "LEFTBRACKET",
+    "RIGHTBRACKET",
+    "SEMICOLON",
+    "APOSTROPHE",
+  ])
+    assert.match(
+      main,
+      new RegExp(`if \\(event.key.key == SDLK_${key}[^\\n]*\\) \\{\\s+scene.paused = true;`),
+    );
   assert.doesNotMatch(await source("checkpoints/02/include/lab.hpp"), /perspectiveDivide/);
   assert.match(
     await source("checkpoints/03/include/lab.hpp"),
@@ -141,13 +169,52 @@ test("Project 11 rebuild uses genuine depth geometry, safe projection, owned inv
   assert.doesNotMatch(tests, /\bassert\s*\(/);
 });
 
+test("Project 11 rebuild teaches declarations, call sites and testing the learner's own source", async () => {
+  const lesson = async (i) =>
+    readFile(path.join(workspace, "content/perspective-point", lessons[i - 1] + ".mdx"), "utf8");
+  assert.match(await lesson(1), /không khai báo thêm một Vec3 hay Scene trùng tên/);
+  assert.match(await lesson(2), /if \(event.key.key == SDLK_J\)/);
+  for (const declaration of [
+    "enum class ProjectionStatus",
+    "struct ProjectionResult",
+    "inline bool validLens",
+    "inline bool isInsideNdc",
+    "inline bool clipDepth",
+    "inline const char* statusText",
+    "inline bool presentFramebuffer",
+  ])
+    assert.ok((await lesson(3)).includes(declaration), declaration);
+  assert.match(await lesson(4), /focalPixels \*= verticalFocalScale/);
+  assert.match(await lesson(4), /SDLK_EQUALS/);
+  assert.match(await lesson(5), /SDLK_APOSTROPHE/);
+  assert.match(await lesson(6), /if \(!scene.paused\) \{\s+lab::advanceScene\(scene, deltaTime\)/);
+  for (const declaration of [
+    "bool dragging = false;",
+    "SDL_MouseID owner{};",
+    "lab::Vec2 grabOffset{};",
+    "double dragDepth = 0.0;",
+    "const auto cancelDrag",
+  ])
+    assert.ok((await lesson(7)).includes(declaration), declaration);
+  assert.match(
+    await lesson(8),
+    /target_include_directories\(project_11_tests PRIVATE starter\/include\)/,
+  );
+  assert.match(await lesson(8), /point.screen && close\(point.screen->x, 485.0\)/);
+});
+
 test("Project 11 rebuild renders all eight routes and complete runnable source", async () => {
+  const overview = await render("/projects/perspective-point");
+  assert.equal(overview.status, 200);
+  assert.match(await overview.text(), /Thử thách|thử tự làm/i);
   for (const slug of lessons) {
     const response = await render("/projects/perspective-point/" + slug);
     assert.equal(response.status, 200);
     const html = await response.text();
     assert.match(html, /data-theme="one-dark-pro"/);
     assert.doesNotMatch(html, /Checkpoint đang xây/);
+    assert.ok(html.includes("project_11_starter"), slug + " must show the learner target");
+    assert.ok(html.includes("bản tham khảo sau bài này"), slug + " must distinguish the reference");
   }
   const html = await (await render("/projects/perspective-point/" + lessons.at(-1))).text();
   assert.match(html, /Toàn bộ mã nguồn của dự án/);
@@ -172,4 +239,9 @@ test("Project 11 rebuild renders all eight routes and complete runnable source",
   ])
     assert.ok(html.includes(label), label);
   assert.match(html, /projects\/rotating-triangle/);
+  assert.match(html, /project-11-perspective-point\.zip/);
+  assert.match(
+    html.replace(/<[^>]*>/g, ""),
+    /target_include_directories\(project_11_tests PRIVATE starter\/include\)/,
+  );
 });

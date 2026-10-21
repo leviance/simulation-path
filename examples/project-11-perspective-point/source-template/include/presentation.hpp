@@ -39,7 +39,8 @@ inline const char* statusText(ProjectionStatus status) {
 }
 #endif
 inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene) {
-    if (!SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
+    // Letterbox phải dùng màu nền, không dùng lại màu chữ của frame trước.
+    if (!SDL_SetRenderDrawColor(renderer, 17, 24, 43, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
         return false;
     }
 #if LAB_CHECKPOINT >= 8

@@ -8,7 +8,7 @@ Bạn sẽ thấy một điểm sáng giữa lưới mặt phẳng và bốn khu
 
 Thử tự làm trong 180–240 phút: dựng window/framebuffer, lưu Vec3, nối WASD/QE với delta time, rồi tự suy x/z và y/z. Camera nhìn +Z, Y lên trên, vị trí camera tách khỏi world point. Thêm vertical FOV, aspect, near/far và từ chối point không nhìn thấy. Không dùng OpenGL projection, GLM hoặc Eigen.
 
-Giữ X/Y, tăng camera Z gấp đôi phải giảm displacement khỏi tâm một nửa. Thay đổi size đĩa mà không thay vị trí theo x/z,y/z chưa phải perspective.
+Giữ camera cố định và giữ X/Y của điểm, tăng camera-space Z của điểm gấp đôi phải giảm displacement khỏi tâm một nửa. Thay đổi size đĩa mà không thay vị trí theo x/z,y/z chưa phải perspective.
 
 ## Cần chuẩn bị
 
@@ -36,7 +36,16 @@ ctest --test-dir build --output-on-failure --timeout 30
 ./build/project_11_final
 ~~~
 
-Mặc định chỉ build final và tests. BUILD_CHECKPOINTS=ON thêm starter và tám checkpoint độc lập. Target project_11_checkpoint_1 … project_11_checkpoint_8 cho phép chạy sản phẩm sau mỗi bài.
+Mặc định chỉ build final và tests. BUILD_CHECKPOINTS=ON thêm starter và tám checkpoint độc lập. Target project_11_checkpoint_1 … project_11_checkpoint_8 chạy các bản tham khảo sau mỗi bài. Chúng không tự nhận mã bạn sửa trong Starter.
+
+Khi học từ ZIP, viết tiếp trong starter/include và starter/src, sau đó build/run đúng target:
+
+~~~powershell
+cmake --build build --config Debug --target project_11_starter --parallel 2
+.\build\Debug\project_11_starter.exe
+~~~
+
+Sau khi hoàn thành tám bài, đổi dòng target_include_directories(project_11_tests PRIVATE final/include) trong CMakeLists.txt của bản ZIP thành target_include_directories(project_11_tests PRIVATE starter/include). Configure lại và build cả project_11_starter lẫn project_11_tests rồi chạy CTest để kiểm chính mã đã học. Nếu giữ final/include, CTest chỉ kiểm bản mẫu final; Starter ở các bài đầu chưa đủ hàm để chạy toàn bộ tests cuối project.
 
 ## Hành trình tám bài
 
@@ -61,7 +70,7 @@ Mặc định chỉ build final và tests. BUILD_CHECKPOINTS=ON thêm starter v�
 - F1 mặc định; F2 xa gấp đôi; F3 trước near; F4 sau camera; F5 vượt far; F6 ngoài góc nhìn.
 - R reset, Esc thoát.
 
-Chạy quỹ đạo đặt point theo flightPoint(elapsed), không tiếp tục hướng input tay. Bật chạy sau khi chỉnh tay có thể chuyển point đến vị trí quỹ đạo tương ứng. Pause giữ elapsed; reset/preset đưa elapsed=0. Focus lost, hidden và resize pause và hủy drag. Khi chỉnh camera/lens/aspect, thao tác drag hiện tại cũng bị hủy.
+Chạy quỹ đạo đặt point theo flightPoint(elapsed), không tiếp tục hướng input tay. Bật chạy sau khi chỉnh tay có thể chuyển point đến vị trí quỹ đạo tương ứng. Pause giữ elapsed; reset/preset đưa elapsed=0. Chỉnh camera/lens/aspect cũng pause. Focus lost, hidden/minimize và resize pause và hủy drag. Khi chỉnh camera/lens/aspect, thao tác drag hiện tại cũng bị hủy.
 
 Resize/HiDPI letterbox bảng logic 1100×800, không âm thầm đổi góc nhìn. V đổi kích thước viewport thật; dùng nó để thử aspect. Mouse event được đổi qua SDL_ConvertEventToRenderCoordinates đúng một lần.
 
@@ -88,7 +97,7 @@ Chạy executable với --smoke để mở hidden window, render vài frame, th�
 - src/main.cpp: init/input/lifecycle/present/cleanup.
 - tests/tests.cpp: correctness không cần window.
 
-Trong repository giáo trình, source-template là nguồn chuẩn. starter/checkpoints/final được sinh; không sửa output rồi chép ngược.
+Trong repository giáo trình, source-template là nguồn chuẩn. starter/checkpoints/final được sinh; không sửa output rồi chép ngược. Quy tắc đó dành cho người phát triển giáo trình. Trong ZIP tải về, Starter là bản làm việc của người học; hãy sửa Starter theo hướng dẫn bên trên.
 
 Camera chưa xoay, marker là ký hiệu đĩa của một point, scene wireframe chưa có che khuất. Những phần này được mở rộng ở các project sau.
 

@@ -22,15 +22,21 @@ Ví dụ world point (3,2,8), camera (1,-1,2) cho camera point (2,3,6). Điểm 
 
 ## Viết code từng bước
 
-Mở checkpoint 02 để đối chiếu sau khi tự viết. Các đoạn dưới nằm trong đúng file ghi ở tiêu đề; giữ phần khung từ bài trước, không tạo thêm một main khác. Mỗi lần ghép xong một bước, build lại target của bài:
+Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
 
-```powershell title="Build checkpoint 02"
+Build và chạy đúng mã bạn vừa viết:
+
+```powershell title="Chạy mã đang học trong Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_checkpoint_2
-.\build\Debug\project_11_checkpoint_2.exe
+cmake --build build --config Debug --target project_11_starter --parallel 2
+.\build\Debug\project_11_starter.exe
 ```
 
+**Checkpoint 02 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/02 hoặc build riêng target project_11_checkpoint_2; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+
 ### Bước 1 — Giữ camera thành dữ liệu riêng
+
+Camera3D và trường Scene::camera đã có từ Starter. Đây là khai báo cần đọc lại, không phải một struct mới cần dán thêm:
 
 ```cpp title="include/lab.hpp — camera chưa có góc quay"
 struct Camera3D {
@@ -58,7 +64,7 @@ inline Vec3 cameraToWorld(Vec3 point, const Camera3D& camera) {
 }
 ```
 
-Đặt worldToCamera ngay trước previewPoint, không sau khi đã nhân pixel:
+Thêm worldToCamera và cameraToWorld vào namespace lab của lab.hpp. Sau đó thay renderScene bằng hàm dưới: đặt worldToCamera ngay trước previewPoint, không sau khi đã nhân pixel:
 
 ```cpp title="include/view.hpp — preview lấy tọa độ nhìn từ camera"
 inline void renderScene(Framebuffer& image, const Scene& scene) {
@@ -77,9 +83,40 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
 }
 ```
 
+### Bước 4 — Nối phím điều khiển camera
+
+Trong nhánh SDL_EVENT_KEY_DOWN của main.cpp, đặt sáu nhánh dưới **sau phần R/F1–F6** đã có. Đầu nhánh key-down đã đặt dirty=true, vì thế camera đổi là ảnh được vẽ lại. Mỗi lần chỉnh camera cũng đặt paused=true, để quỹ đạo không chạy tiếp khi bạn đang đo tọa độ.
+
+```cpp title="src/main.cpp — camera đổi riêng, world point giữ nguyên"
+if (event.key.key == SDLK_J) {
+    scene.paused = true;
+    scene.camera.position.x = std::max(-2.0, scene.camera.position.x - 0.1);
+}
+if (event.key.key == SDLK_L) {
+    scene.paused = true;
+    scene.camera.position.x = std::min(2.0, scene.camera.position.x + 0.1);
+}
+if (event.key.key == SDLK_I) {
+    scene.paused = true;
+    scene.camera.position.y = std::min(2.0, scene.camera.position.y + 0.1);
+}
+if (event.key.key == SDLK_K) {
+    scene.paused = true;
+    scene.camera.position.y = std::max(-2.0, scene.camera.position.y - 0.1);
+}
+if (event.key.key == SDLK_U) {
+    scene.paused = true;
+    scene.camera.position.z = std::max(-2.0, scene.camera.position.z - 0.1);
+}
+if (event.key.key == SDLK_O) {
+    scene.paused = true;
+    scene.camera.position.z = std::min(2.0, scene.camera.position.z + 0.1);
+}
+```
+
 ## Ghép các phần lại
 
-Build checkpoint 2, dùng J/L để dời camera X, I/K cho Y, U/O cho Z. Mỗi nấc là 0.1 world, camera bị giới hạn [-2,2] ở từng trục. WASD/QE vẫn điều khiển point. Trong Canvas có ba slider Camera.X/Y/Z tương ứng.
+Build lại project_11_starter, dùng J/L để dời camera X, I/K cho Y, U/O cho Z. Mỗi nấc là 0.1 world, camera bị giới hạn [-2,2] ở từng trục. WASD/QE vẫn điều khiển point. Trong Canvas có ba slider Camera.X/Y/Z tương ứng.
 
 Giữ point cố định và tăng Camera.X: marker đi trái. Tăng Camera.Z hiện chỉ đổi số đo Z vì preview vẫn chưa perspective. Đừng thêm phép chia cho đến bài kế tiếp; ở đây ta đang kiểm riêng việc đổi gốc.
 

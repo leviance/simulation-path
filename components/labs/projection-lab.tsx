@@ -28,12 +28,15 @@ import {
   type PointScene,
 } from "@/lib/labs/projection-scene";
 import { drawProjectionLab, projectionPointFromEvent } from "./projection-lab-view";
-import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
+import { LabReadout, useCanvasSize, useReducedMotion, usePauseOnReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 const format = (p: Vec3) => "(" + [p.x, p.y, p.z].map((n) => n.toFixed(4)).join(", ") + ")";
 export default function ProjectionLab({ mode }: { mode?: InteractiveLabMode }) {
+  return <ProjectionScene key={mode ?? "projection-full"} mode={mode} />;
+}
+
+function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null),
-    size = useCanvasSize(canvasRef),
     reducedMotion = useReducedMotion(),
     stage = pointStage(mode);
   const [scene, setScene] = useState<PointScene>(initialPointScene),
@@ -49,6 +52,12 @@ export default function ProjectionLab({ mode }: { mode?: InteractiveLabMode }) {
     const canvas = canvasRef.current;
     if (active && canvas?.hasPointerCapture(active.id)) canvas.releasePointerCapture(active.id);
   }, []);
+  const pauseForEnvironment = useCallback(() => {
+    cancelDrag();
+    commit({ ...sceneRef.current, paused: true });
+  }, [cancelDrag, commit]);
+  const size = useCanvasSize(canvasRef, pauseForEnvironment);
+  usePauseOnReducedMotion(pauseForEnvironment);
   const reset = useCallback(
     (index = 0) => {
       cancelDrag();
@@ -59,6 +68,12 @@ export default function ProjectionLab({ mode }: { mode?: InteractiveLabMode }) {
   const togglePause = () => {
     cancelDrag();
     commit({ ...sceneRef.current, paused: reducedMotion ? true : !sceneRef.current.paused });
+  };
+  const step = () => {
+    cancelDrag();
+    const s = sceneRef.current;
+    if (stage < 6 || !s.paused) return;
+    commit(advancePoint(s, 0.1));
   };
   const toggleDebug = () => {
     cancelDrag();
@@ -148,7 +163,7 @@ export default function ProjectionLab({ mode }: { mode?: InteractiveLabMode }) {
     }
     if (stage >= 6 && key === "n") {
       event.preventDefault();
-      if (!event.repeat && sceneRef.current.paused) commit(advancePoint(sceneRef.current, 0.1));
+      if (!event.repeat) step();
       return;
     }
     if (stage >= 8 && key === "f") {
@@ -190,18 +205,6 @@ export default function ProjectionLab({ mode }: { mode?: InteractiveLabMode }) {
       cancelDrag();
     };
   }, [cancelDrag, commit]);
-  useEffect(() => {
-    cancelDrag();
-    commit(initialPointScene());
-  }, [mode, cancelDrag, commit]);
-  useEffect(() => {
-    // Resize releases capture, preserving world point and selected viewport.
-    cancelDrag();
-    commit({ ...sceneRef.current, paused: true });
-  }, [size.width, size.height, size.dpr, cancelDrag, commit]);
-  useEffect(() => {
-    if (reducedMotion) commit({ ...sceneRef.current, paused: true });
-  }, [reducedMotion, commit]);
   useEffect(() => {
     if (stage < 6 || scene.paused || reducedMotion) return;
     let frame = 0,
@@ -329,10 +332,7 @@ export default function ProjectionLab({ mode }: { mode?: InteractiveLabMode }) {
             <button onClick={togglePause} disabled={reducedMotion}>
               {scene.paused ? "Cho điểm bay" : "Tạm dừng"}
             </button>
-            <button
-              disabled={!scene.paused}
-              onClick={() => commit(advancePoint(sceneRef.current, 0.1))}
-            >
+            <button disabled={!scene.paused} onClick={step}>
               Tiến 0.1 s
             </button>
           </>
