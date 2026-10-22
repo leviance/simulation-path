@@ -1,133 +1,121 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Xoay model và loại mặt quay lưng
+# Xoay mô hình khác với đổi góc nhìn
 
 ## Vấn đề cần giải quyết
 
-Nếu chỉ xoay vertex để vẽ nhưng vẫn dùng normal local-space, hình học và ánh sáng sẽ kể hai câu chuyện khác nhau: tetrahedron quay, còn vùng sáng đứng yên trên từng face. Ta cần normal trong cùng camera space với geometry đã transform.
+Kéo cube và orbit camera đều làm ảnh trên màn hình đổi. Nhưng chúng không được gây cùng một tác động lên ánh sáng. Xoay cube đổi hướng mặt so với đèn. Đổi góc nhìn chỉ đổi chỗ đứng quan sát, không xoay cube hoặc nguồn sáng.
 
-Tetrahedron là vật thể kín và lồi. Những face có mặt ngoài quay khỏi camera không thể nhìn thấy, vì vậy ta loại chúng trước clipping và rasterization. Lighting và culling dùng cùng normal nhưng hai hướng khác nhau: lighting so với đèn, culling so với camera.
+Ta sẽ bổ sung lựa chọn riêng **Xoay mô hình / Đổi góc nhìn**. Grid là mốc world-space: khi xoay mô hình, grid đứng yên; khi đổi góc nhìn, grid và cube cùng đổi hình chiếu.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Project này không có non-uniform scale. Cách rõ ràng nhất là:
-
-1. xoay bốn vertex local-space;
-2. translate chúng tới camera space;
-3. lấy lại ba vertex của từng face;
-4. tính cross product mới từ geometry đã transform.
-
-Camera nằm tại origin. Với face centroid `C`, vector từ face tới camera là:
+Lighting vẫn tính ở world space:
 
 $$
-V=normalize(-C)
+d=\max(0,N_{\mathrm{world}}\cdot L_{\mathrm{world}})
 $$
 
-Giữ face khi `dot(N,V)>0`.
+Nếu muốn đổi cả hai hướng sang view space, chỉ áp dụng inverse rotation R_v. Không cộng/trừ camera position vào direction:
+
+$$
+(R_vN)\cdot(R_vL)=N\cdot L
+$$
+
+Điều này đúng vì R_v là phép quay bảo toàn góc. Nếu đổi camera mà diffuse của cùng face ID thay đổi, hãy tìm lỗi trộn không gian trước khi chỉnh công thức Lambert.
+
+Culling là câu hỏi khác. Muốn biết face có hướng về camera không, ta dùng vector tới camera; muốn biết face có nhận diffuse không, ta dùng vector tới đèn. Một mặt có thể nhìn thấy nhưng đang tối.
 
 <InteractiveLab demo="lambert" mode="lambert-culling" />
 
 ## Viết code từng bước
 
-### Bước 1 — Xoay một point quanh X và Y
+### Bước 1 — Tách state của camera và model
 
-```cpp title="include/lab.hpp — rotation quanh X"
-inline Vec3 rotateX(Vec3 point, double angle) {
-    const double cosine = std::cos(angle);
-    const double sine = std::sin(angle);
-    return {
-        point.x,
-        point.y * cosine - point.z * sine,
-        point.y * sine + point.z * cosine,
-    };
-}
-```
+Camera có yaw, pitch và distance riêng. Scene giữ dragTarget để biết một thao tác kéo đang sửa đối tượng nào:
 
-```cpp title="include/lab.hpp — rotation quanh Y"
-inline Vec3 rotateY(Vec3 point, double angle) {
-    const double cosine = std::cos(angle);
-    const double sine = std::sin(angle);
-    return {
-        point.x * cosine + point.z * sine,
-        point.y,
-        -point.x * sine + point.z * cosine,
-    };
-}
-```
-
-Thứ tự cố định là X rồi Y. Đổi thứ tự sẽ cho orientation khác; điều đó không sai về toán, nhưng Canvas và C++ phải cùng một quy ước.
-
-### Bước 2 — Transform array vertex, giữ nguyên face indices
-
-```cpp title="include/lab.hpp — local mesh sang camera space"
-inline TetrahedronMesh transformMesh(
-    const TetrahedronMesh& localMesh,
-    double pitch,
-    double yaw,
-    Vec3 translation
-) {
-    TetrahedronMesh transformed = localMesh;
-    for (std::size_t index = 0; index < localMesh.vertices.size(); ++index) {
-        Vec3 point = rotateX(localMesh.vertices[index], pitch);
-        point = rotateY(point, yaw);
-        transformed.vertices[index] = add(point, translation);
+```cpp title="include/scene.hpp — hai thao tác kéo không dùng chung góc"
+inline void rotateSelection(Scene& scene, double dx, double dy) {
+    scene.paused = true;
+    if (scene.dragTarget == DragTarget::camera) {
+        scene.camera.yaw += dx;
+        scene.camera.pitch = std::clamp(scene.camera.pitch + dy, -1.4, 1.4);
+        return;
     }
-    return transformed;
+    scene.yaw += dx;
+    scene.pitch = std::clamp(scene.pitch + dy, -1.4, 1.4);
 }
 ```
 
-Topology được sao chép nguyên vẹn. Không có vòng lặp transform riêng trong từng face, nên vertex dùng chung không thể nhận hai kết quả hơi khác nhau.
+Trong SDL, M đổi mode. Trước checkpoint 6 chỉ có nhánh model; từ bài này nhánh camera được thêm vào. WASD/phím mũi tên cũng thao tác theo mode đã chọn, vì thế mọi chức năng kéo đều có cách dùng bằng bàn phím.
 
-### Bước 3 — Tính hướng từ face tới camera
+### Bước 2 — Dịch position, nhưng không dịch direction
 
-```cpp title="include/lab.hpp — front-facing test trong camera space"
-inline bool isFrontFacing(const std::array<Vec3, 3>& cameraVertices) {
-    const Vec3 unitNormal = faceUnitNormal(cameraVertices);
-    const Vec3 toCamera = normalize(scale(faceCentroid(cameraVertices), -1.0));
-    return dot(unitNormal, toCamera) > 0.0;
+```cpp title="include/geometry.hpp — position trừ camera trước khi inverse rotation"
+inline Vec3 worldToView(Vec3 p, const Camera& camera) {
+    return rotateX(rotateY(subtract(p, cameraPosition(camera)), -camera.yaw), -camera.pitch);
 }
 ```
 
-Đây là culling, không phải lighting. Một face có thể hướng về đèn nhưng quay lưng camera; ta không cần tốn clipping và rasterization cho nó.
-
-### Bước 4 — Nối drag và keyboard vào cùng pitch/yaw
-
-```cpp title="src/main.cpp — mouse delta xoay model và tạm dừng auto-rotate"
-if (event.type == SDL_EVENT_MOUSE_MOTION && dragging) {
-    yaw += double(event.motion.xrel) * 0.008;
-    pitch += double(event.motion.yrel) * 0.008;
-    pitch = std::clamp(pitch, -1.4, 1.4);
+```cpp title="include/geometry.hpp — direction chỉ nhận inverse rotation"
+inline Vec3 directionToView(Vec3 direction, const Camera& camera) {
+    return rotateX(rotateY(direction, -camera.yaw), -camera.pitch);
 }
 ```
 
-`WASD` và arrow cũng sửa đúng hai biến này. Pointer capture giữ drag liên tục khi cursor đi qua mép window; mouse-up nhả capture.
+Camera nhìn về origin. worldToView dùng inverse yaw rồi inverse pitch, tức thứ tự ngược với phép tạo cameraPosition. directionToView không trừ cameraPosition vì một hướng không có vị trí.
+
+Renderer tiếp tục tính lighting bằng normalWorld và lightWorld; directionToView chủ yếu được dùng trong test chứng minh tính bất biến của dot.
+
+### Bước 3 — Cull bằng hướng tới camera, không dùng diffuse
+
+```cpp title="include/render.hpp — loại mặt quay lưng với người quan sát"
+inline bool isFrontFacing(const Triangle3& worldVertices, const Camera& camera) {
+    const Vec3 normal = faceUnitNormal(worldVertices);
+    const Vec3 toCamera = subtract(cameraPosition(camera), faceCentroid(worldVertices));
+    return dot(normal, toCamera) > 0.0;
+}
+```
+
+Normal ở world space, nên toCamera cũng ở world space. Không cần chuẩn hóa toCamera vì chỉ kiểm dấu. Culling chạy trước near clip để bớt công việc; Z-buffer vẫn chạy sau rasterization để giải quyết che khuất.
+
+C có thể tắt culling. Ảnh cube kín phải không đổi vì depth test vẫn giữ mặt gần nhất, dù số triangle/fragments được xử lý tăng.
+
+### Bước 4 — Chọn đúng đại lượng khi kiểm tra
+
+Giữ selectedFace cố định, không chọn “mặt gần camera nhất” ở từng frame. Cho đèn đứng yên và chuyển sang Đổi góc nhìn. Đọc diffuse của face ấy: nó phải giữ nguyên kể cả khi face đi ra phía khuất.
+
+Inspector vẫn tính lighting cho mặt bị cull, vì nếu bỏ số liệu ngay khi mặt khuất, ta không thể theo dõi cùng một mặt để kiểm bất biến.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint rotation và culling"
+```bash title="Terminal — chạy checkpoint 6"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_19_checkpoint_6
-ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Kéo chậm qua nhiều orientation. Mũi tên normal phải bám theo face. Mỗi frame, `visible + culled = 4`; tại hướng tổng quát thường có một hoặc hai face nhìn thấy.
+Thử theo thứ tự: chọn face → pause đèn → bật debug → kéo ở mode model → ghi diffuse → đặt lại → kéo ở mode camera. Lần đầu diffuse thay đổi; lần sau nó giữ nguyên. Sau đó bật/tắt C để đối chiếu culling với depth-only rendering.
+
+Wheel hoặc slider thay khoảng cách camera trong khoảng 3–9. Thao tác này thay kích thước hình chiếu, không tạo distance attenuation cho directional light.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tính normal từ `localMesh` sau khi đã vẽ `cameraMesh`. Vùng sáng dính vào face theo local orientation; luôn tính N và L trong cùng space.
-2. Cull bằng `dot(normal, surfaceToLight)`. Đổi preset đèn làm geometry biến mất dù camera không đổi; culling phải dùng `toCamera`.
-3. Transform ba vertex trong từng face. Vertex chung bị tính lặp, code phình to và dễ lệch rotation order; transform indexed vertex array một lần.
-4. Dùng `centroid` thay vì `-centroid` cho `toCamera`. Mọi quyết định culling bị đảo; tên vector phải đúng cả hướng.
+1. Dùng worldToView cho L như một position. Camera translation bị trừ vào hướng đèn; thay distance sẽ làm cube đổi sáng. Khôi phục directionToView hoặc giữ lighting ở world space.
+2. Chỉ quay N sang view space mà để L trong world space. Orbit camera làm diffuse đổi sai; đưa cả hai về cùng một không gian.
+3. Cull bằng điều kiện diffuse > 0. Những mặt nhìn thấy nhưng tối bị biến mất; khôi phục dot(normal,toCamera).
 
 ## Tự kiểm tra kết quả
 
-- Rotation và translation bảo toàn độ dài mọi cạnh.
-- Normal được recompute từ camera-space face vertices và luôn có length gần 1.
-- `visibleFaces + culledFaces == 4` ở mọi orientation hữu hạn.
-- Đổi light preset không làm culling count đổi.
-- Drag, WASD/arrow, pause, single-step và reset cùng sửa một model state.
+- Hai chế độ kéo chỉnh hai nhóm góc riêng.
+- Model rotation đổi normal world và có thể đổi diffuse.
+- Camera orbit giữ nguyên diffuse của cùng face khi model/đèn không đổi.
+- Camera translation không tham gia directionToView.
+- Culling không dùng diffuse và không thay thế depth test.
+- Mặt khuất vẫn có telemetry để kiểm tra.
+- Hủy kéo, mất focus và đổi mode đều nhả capture.
 
 ## Bài tập mở rộng
 
-Thêm chế độ debug vẽ face quay lưng bằng wireframe mờ thay vì bỏ hẳn. Culling decision vẫn phải được tính như cũ; chỉ phần hiển thị debug được phép nhìn thấy culled face.
+Viết test lấy một normal và L bất kỳ, đổi cả hai qua directionToView với 20 camera khác nhau rồi so dot trước/sau. Dùng tolerance thay vì == vì phép quay dùng số thực.
 
-Bài cuối sẽ thay wireframe bằng bề mặt được rasterize và ghép lại near-plane clipping từ Project 18 để pipeline vẫn an toàn khi model tiến sát camera.
+[Bài tiếp theo: hoàn thiện và kiểm chứng](./07-ghep-pipeline-va-kiem-chung).

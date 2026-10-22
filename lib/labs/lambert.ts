@@ -18,6 +18,7 @@ export interface LambertColor {
 export interface LambertFace {
   indices: readonly [number, number, number];
   baseColor: LambertColor;
+  side: number;
 }
 
 export interface LambertMesh {
@@ -25,19 +26,35 @@ export interface LambertMesh {
   faces: LambertFace[];
 }
 
-export const lambertTetrahedron: LambertMesh = {
+export const lambertCube: LambertMesh = {
   vertices: [
-    { x: 1, y: 1, z: 1 },
-    { x: -1, y: -1, z: 1 },
-    { x: -1, y: 1, z: -1 },
+    { x: -1, y: -1, z: -1 },
     { x: 1, y: -1, z: -1 },
+    { x: 1, y: 1, z: -1 },
+    { x: -1, y: 1, z: -1 },
+    { x: -1, y: -1, z: 1 },
+    { x: 1, y: -1, z: 1 },
+    { x: 1, y: 1, z: 1 },
+    { x: -1, y: 1, z: 1 },
   ],
   faces: [
-    { indices: [1, 2, 3], baseColor: { red: 244, green: 114, blue: 126 } },
-    { indices: [0, 3, 2], baseColor: { red: 91, green: 197, blue: 255 } },
-    { indices: [0, 1, 3], baseColor: { red: 255, green: 190, blue: 92 } },
-    { indices: [0, 2, 1], baseColor: { red: 126, green: 231, blue: 164 } },
-  ],
+    [0, 2, 1],
+    [0, 3, 2],
+    [5, 7, 4],
+    [5, 6, 7],
+    [4, 3, 0],
+    [4, 7, 3],
+    [1, 6, 5],
+    [1, 2, 6],
+    [3, 6, 2],
+    [3, 7, 6],
+    [4, 1, 5],
+    [4, 0, 1],
+  ].map((indices, i) => ({
+    indices: indices as [number, number, number],
+    side: Math.floor(i / 2),
+    baseColor: { red: 100, green: 180, blue: 240 },
+  })),
 };
 
 export function lambertAdd(left: LambertVec3, right: LambertVec3): LambertVec3 {
@@ -70,7 +87,7 @@ export function lambertLength(value: LambertVec3) {
 
 export function lambertNormalize(value: LambertVec3): LambertVec3 {
   const magnitude = lambertLength(value);
-  if (magnitude <= 1e-12) return { x: 0, y: 0, z: 0 };
+  if (!Number.isFinite(magnitude) || magnitude <= 1e-12) return { x: 0, y: 0, z: 0 };
   return lambertScale(value, 1 / magnitude);
 }
 
@@ -130,9 +147,12 @@ export function transformLambertMesh(
   };
 }
 
-export function lambertIsFrontFacing(vertices: readonly LambertVec3[]) {
+export function lambertIsFrontFacing(
+  vertices: readonly LambertVec3[],
+  camera: LambertVec3 = { x: 0, y: 0, z: 0 },
+) {
   const normal = lambertFaceNormal(vertices);
-  const toCamera = lambertNormalize(lambertScale(lambertFaceCentroid(vertices), -1));
+  const toCamera = lambertSubtract(camera, lambertFaceCentroid(vertices));
   return lambertDot(normal, toCamera) > 0;
 }
 
@@ -143,7 +163,7 @@ export function lambertLightingSample(
   diffuseStrength: number,
 ) {
   const dotValue = lambertDot(lambertNormalize(normal), lambertNormalize(surfaceToLight));
-  const diffuse = Math.max(0, dotValue);
+  const diffuse = Math.min(1, Math.max(0, dotValue));
   const intensity = Math.max(0, Math.min(1, ambient + diffuseStrength * diffuse));
   return { dotValue, diffuse, intensity };
 }
@@ -162,7 +182,8 @@ export function projectLambertVertex(
   height: number,
   verticalFov = (60 * Math.PI) / 180,
 ): LambertVec2 | undefined {
-  if (vertex.z < 1 || width <= 0 || height <= 0) return undefined;
+  if (!Object.values(vertex).every(Number.isFinite) || vertex.z < 0.5 || width <= 0 || height <= 0)
+    return undefined;
   const aspect = width / height;
   const focalScale = 1 / Math.tan(verticalFov * 0.5);
   const ndcX = (vertex.x * focalScale) / (aspect * vertex.z);

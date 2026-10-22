@@ -51,8 +51,8 @@ test("near-plane intersection shares one t across position and color", () => {
 });
 
 test("Lambert Lab keeps winding, lighting and culling conventions aligned with C++", () => {
-  for (const face of lambert.lambertTetrahedron.faces) {
-    const vertices = lambert.lambertFaceVertices(lambert.lambertTetrahedron, face);
+  for (const face of lambert.lambertCube.faces) {
+    const vertices = lambert.lambertFaceVertices(lambert.lambertCube, face);
     const normal = lambert.lambertFaceNormal(vertices);
     assert.equal(lambert.lambertHasOutwardWinding(vertices), true);
     assert.ok(Math.abs(lambert.lambertLength(normal) - 1) < 1e-12);
@@ -74,11 +74,11 @@ test("Lambert Lab keeps winding, lighting and culling conventions aligned with C
     intensity: 0.2,
   });
 
-  const cameraMesh = lambert.transformLambertMesh(lambert.lambertTetrahedron, 0.35, -0.55);
+  const cameraMesh = lambert.transformLambertMesh(lambert.lambertCube, 0.35, -0.55);
   const visible = cameraMesh.faces.filter((face) =>
     lambert.lambertIsFrontFacing(lambert.lambertFaceVertices(cameraMesh, face)),
   );
-  assert.ok(visible.length > 0 && visible.length < 4);
+  assert.ok(visible.length > 0 && visible.length < 12);
   assert.ok(lambert.projectLambertVertex(cameraMesh.vertices[0], 640, 480));
 });
 

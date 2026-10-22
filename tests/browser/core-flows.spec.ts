@@ -566,53 +566,47 @@ test("Project 18 final keeps camera independent, clears held keys and retains a 
   expect(errors).toEqual([]);
 });
 
-test("Project 19 Lambert Lab changes light, material and model without browser errors", async ({
+test("Project 19 Lambert Lab separates light, model and camera with stable HiDPI sizing", async ({
   page,
 }) => {
   const errors = captureBrowserErrors(page);
   await page.goto("/projects/lambert-tetrahedron/07-ghep-pipeline-va-kiem-chung");
-
-  const canvas = page.locator('canvas[aria-label^="Tetrahedron flat-shaded"]');
+  const canvas = page.getByRole("img", { name: "Cube chiếu sáng Lambert bằng CPU với đèn orbit" });
   const controls = page.locator(".lab-controls");
-  const dotDiffuse = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "dot → diffuse" })
-    .locator("dd");
-  const intensity = page.locator(".lab-readout div").filter({ hasText: "Intensity" }).locator("dd");
-  const visible = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "Visible / culled" })
-    .locator("dd");
-
   await expect(canvas).toBeVisible();
-  await expect(dotDiffuse).toContainText("→");
-  await expect(visible).toHaveText(/[1-3] \/ [1-3]/);
-
+  await controls.getByRole("button", { name: "Hiện debug" }).click();
+  const intensity = page.locator(".lab-readout div").filter({ hasText: "Intensity" }).locator("dd");
   const initialIntensity = await intensity.textContent();
-  await controls.getByLabel("Preset hướng đèn").selectOption("back");
+  await controls.getByLabel("Preset hướng đèn").selectOption("4");
   await expect(intensity).not.toHaveText(initialIntensity ?? "");
-  await controls.getByLabel("Face đang theo dõi").selectOption("2");
-  await controls.getByLabel("Cường độ ambient").fill("0.3");
-  await expect(controls.getByLabel("Cường độ ambient")).toHaveValue("0.3");
-  await controls.getByLabel("Cường độ diffuse").fill("0.6");
-  await expect(controls.getByLabel("Cường độ diffuse")).toHaveValue("0.6");
-
-  await page.getByRole("button", { name: /Lighting/ }).click();
-  await page.getByRole("button", { name: /Normal/ }).click();
-  await page.getByRole("button", { name: "Tiến một bước" }).click();
-
+  await page.getByLabel("Face đang theo dõi").selectOption("2");
+  await controls.getByLabel("Ambient", { exact: true }).fill("0.3");
+  await controls.getByLabel("Diffuse strength", { exact: true }).fill("0.6");
+  await expect(controls.getByLabel("Ambient", { exact: true })).toHaveValue("0.3");
+  const model = page
+    .locator(".lab-readout div")
+    .filter({ hasText: "Model yaw / camera yaw" })
+    .locator("dd");
+  const dot = page.locator(".lab-readout div").filter({ hasText: "dot → diffuse" }).locator("dd");
+  const before = await dot.textContent();
+  await controls.getByLabel("Thao tác kéo").selectOption("camera");
+  await canvas.focus();
+  await canvas.press("ArrowRight");
+  await expect(dot).toHaveText(before ?? "");
+  await expect(model).not.toHaveText("0.600 / 0.000");
   const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
   if (box) {
-    await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.48);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width * 0.58, box.y + box.height * 0.56);
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.6);
     await page.mouse.up();
+    const after = await canvas.boundingBox();
+    expect(after?.width).toBeCloseTo(box.width, 0);
   }
-
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(controls.getByLabel("Preset hướng đèn")).toHaveValue("front");
-  await expect(controls.getByLabel("Face đang theo dõi")).toHaveValue("0");
+  await canvas.press("Tab");
+  await expect(canvas).not.toBeFocused();
+  await controls.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(controls.getByRole("button", { name: "Hiện debug" })).toBeVisible();
   expect(errors).toEqual([]);
 });
 

@@ -1,49 +1,47 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
-    label: "FLAT LAMBERT LIGHTING LAB",
-    title: "Một mặt sáng lên vì normal hay vì màu material?",
+    label: "CPU LAMBERT LIGHTING",
+    title: "Xoay đèn, nhìn mặt sáng lên",
     description:
-      "Xoay tetrahedron và đổi hướng đèn để theo dõi face normal, surfaceToLight, dot, diffuse và intensity bằng cùng quy ước như source C++.",
+      "Cube đặc với perspective, depth và flat shading tính trên CPU. Xoay mô hình và đổi góc nhìn là hai thao tác riêng.",
   },
   modes: {
     "lambert-mesh": {
-      title: "Bốn face dùng chung vertex như thế nào?",
+      title: "Dựng cube đặc trước khi bật đèn",
       description:
-        "Tắt lighting để nhìn baseColor, chọn từng face và đối chiếu ba index với bốn vertex của indexed mesh.",
+        "Kế thừa Z-buffer và near clip để có cube tám đỉnh, mười hai tam giác chạy được ngay từ checkpoint đầu.",
     },
     "lambert-normal": {
-      title: "Normal có thật sự hướng ra ngoài?",
+      title: "Từ hai cạnh đến normal hướng ra ngoài",
       description:
-        "Hiện normal của face được chọn, đổi winding thử nghiệm và đọc outward test từ dot(normal, faceCentroid).",
+        "Tính normal từ world-space vertex; kiểm winding và hai tam giác trên cùng một mặt.",
     },
     "lambert-light": {
-      title: "surfaceToLight đang chỉ về đâu?",
+      title: "Đặt đèn trong không gian và cho đèn orbit",
       description:
-        "Thử bốn preset và theo dõi mũi tên hướng từ bề mặt về nguồn sáng, không phải hướng tia sáng truyền xuống vật thể.",
+        "Thống nhất surfaceToLight, đặt hướng bằng hai góc và cập nhật quỹ đạo theo thời gian.",
     },
     "lambert-dot": {
-      title: "Dot product biến góc thành độ sáng ra sao?",
+      title: "Mặt hướng về đèn sáng hơn như thế nào?",
       description:
-        "Đọc dot thô và diffuse đã clamp khi face cùng hướng, vuông góc hoặc quay lưng với đèn.",
+        "Dùng dot product của hai vector đơn vị, thử ba góc 0°, 90°, 180° rồi tô từng mặt trên CPU.",
     },
     "lambert-material": {
-      title: "Ambient và baseColor đóng vai trò gì?",
+      title: "Giữ màu vật liệu, thêm ambient",
       description:
-        "Thay ambient, diffuseStrength và material để thấy intensity là hệ số ánh sáng còn baseColor là màu của bề mặt.",
+        "Tách baseColor khỏi cường độ sáng; thêm ambient, strength và thí nghiệm một màu/sáu màu.",
     },
     "lambert-culling": {
-      title: "Face sáng nhưng quay lưng camera có cần vẽ?",
+      title: "Xoay mô hình khác với đổi góc nhìn",
       description:
-        "Xoay mô hình, hiện normal và theo dõi visible/culled count để tách lighting khỏi back-face culling.",
+        "Tách model rotation khỏi camera orbit; giữ đèn trong world space và culling độc lập với lighting.",
     },
     "lambert-validation": {
-      title: "Toàn pipeline có giữ đúng các invariant?",
+      title: "Hoàn thiện renderer và kiểm chứng độc lập",
       description:
-        "Chạy, dừng hoặc tiến từng bước; kiểm normal length, intensity range, face count, near-plane safety và pixel coverage.",
+        "Giữ một màu cho cả face sau clipping; đối chiếu renderer với ray/AABB và bàn giao source hoàn chỉnh.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

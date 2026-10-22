@@ -221,7 +221,7 @@ function DepthWorkbench({ mode }: { mode?: InteractiveLabMode }) {
   }, [stage, scene.paused, reducedMotion, commit]);
   const v = depthViewport(stage, scene);
   return (
-    <div className="lab-stack">
+    <div className="lab-body">
       <div className="lab-controls">
         <label>
           Góc nhìn
@@ -402,6 +402,8 @@ function DepthWorkbench({ mode }: { mode?: InteractiveLabMode }) {
       )}
       <canvas
         ref={canvasRef}
+        className="lab-canvas"
+        style={{ height: "clamp(360px,50vw,560px)" }}
         tabIndex={0}
         role="img"
         aria-label="Khối lập phương sáu mặt màu: CPU Z-buffer, culling và camera"

@@ -1,200 +1,176 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Ghép pipeline chiếu sáng và kiểm chứng
+# Hoàn thiện renderer và kiểm chứng độc lập
 
 ## Vấn đề cần giải quyết
 
-Các checkpoint trước đã cho ta từng mảnh: mesh, normal, light, diffuse, material, rotation và culling. Một renderer hoàn chỉnh cần đặt chúng đúng thứ tự rồi đưa face qua near clipping, projection và top-left rasterizer. Sai thứ tự có thể tạo hình đúng ở vị trí mặc định nhưng nổ khi model tiến sát camera.
+Cube đổi sáng nhìn hợp lý chưa đủ chứng minh renderer đúng. Nếu normal bị đảo hoặc culling và depth cùng sai theo một cách, ảnh mặc định vẫn có thể “đẹp”. Bài cuối chốt đường đi của dữ liệu và kiểm ảnh bằng một phương pháp không dùng triangle rasterizer.
 
-Final sẽ tô mỗi face bằng **một màu duy nhất**. Đây là flat shading: lighting được tính một lần từ face normal, không nội suy normal theo pixel. Màu phải được chốt trước clipping để hai triangle sinh ra từ cùng một face không có đường đổi sáng ở giữa.
+Ta cũng dọn chế độ trình diễn: tắt bảng số và vectors nhưng giữ perspective, grid và cube được chiếu sáng. Canvas giúp thử công thức; **sản phẩm chính vẫn là executable C++/SDL3 tải về và chạy độc lập**.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một frame đi qua chuỗi duy nhất:
+Một triangle đi qua pipeline:
 
 $$
-local\ mesh \to camera\ mesh \to face\ normal \to lighting \to cull
-\to near\ clip \to project \to rasterize
+\text{local}\to\text{world}\to
+\{\text{normal, lighting, culling}\}\to
+\text{view}\to\text{near clip}\to\text{project}\to\text{raster}\to\text{depth}
 $$
 
-Tetrahedron lồi cho phép ta chưa cần Z-buffer: sau back-face culling, các face nhìn thấy chỉ gặp nhau ở biên silhouette và cạnh chung. Top-left rule giao pixel biên cho đúng một triangle. Với mesh lõm hoặc nhiều vật thể chồng nhau, giả định này không còn đủ — đó là phạm vi project sau.
+Flat color thuộc face gốc. Clipper có thể tạo thêm vertex, nhưng không tạo thêm một mặt vật liệu mới hoặc một normal mới. Hai triangle sau fan tiếp tục dùng cùng shadedColor.
+
+Để đối chiếu, ta bắn một ray qua tâm từng pixel. Đưa ray về local space rồi giao với cube [−1,1]³ bằng slab method. Mặt AABB bị chạm cho normal là một vector trục; từ đó tính màu Lambert dự kiến. Cách này không gọi clipNear, orient2D, rasterizeTriangle hoặc sampleFace.
 
 <InteractiveLab demo="lambert" mode="lambert-validation" />
 
 ## Viết code từng bước
 
-### Bước 1 — Cắt face trong camera space
+### Bước 1 — Giữ một màu từ face gốc tới fragment
 
-```cpp title="include/lab.hpp — Sutherland–Hodgman cho near plane"
-inline ClippedPolygon clipTriangleToNearPlane(
-    const Triangle3& triangle,
-    double nearPlane,
-    double epsilon = 1e-9
-) {
-    ClippedPolygon output{};
-    Vec3 previous = triangle.vertices.back();
-    bool previousInside = isInsideNearPlane(previous, nearPlane, epsilon);
+Trong include/render.hpp, đoạn cuối mỗi face là:
 
-    for (const Vec3 current : triangle.vertices) {
-        const bool currentInside = isInsideNearPlane(current, nearPlane, epsilon);
-        if (currentInside && !previousInside) {
-            appendVertex(output, intersectNearPlane(previous, current, nearPlane));
-        }
-        if (currentInside) {
-            appendVertex(output, current);
-        }
-        if (!currentInside && previousInside) {
-            appendVertex(output, intersectNearPlane(previous, current, nearPlane));
-        }
-
-        previous = current;
-        previousInside = currentInside;
+```cpp title="include/render.hpp — clip và fan không tính lại lighting"
+const auto polygon = clipNear(viewVertices, 0.5);
+// Mọi triangle sinh ra từ face đều dùng lại một shadedColor.
+for (std::size_t i = 1; i + 1 < polygon.size(); ++i) {
+    const auto a = projectVertex(polygon[0], image.width, viewHeight);
+    const auto b = projectVertex(polygon[i], image.width, viewHeight);
+    const auto c = projectVertex(polygon[i + 1], image.width, viewHeight);
+    if (!a || !b || !c) {
+        continue;
     }
-    return output;
+    ++stats.clippedTriangles;
+    rasterizeTriangle({*a, *b, *c}, image.width, viewHeight, [&](int x, int y, double inverseZ) {
+        ++stats.covered;
+        const std::size_t pixel = std::size_t(y) * std::size_t(image.width) + std::size_t(x);
+        if (inverseZ <= image.inverseDepth[pixel]) {
+            return;
+        }
+        image.inverseDepth[pixel] = inverseZ;
+        image.owner[pixel] = int(index);
+        image.pixels[pixel] = packColor(sample.lighting.shadedColor);
+        ++stats.passed;
+    });
 }
 ```
 
-Đây là cùng nguyên lý Project 18, nhưng vertex clipping chỉ cần position. `displayColor` đã được tính cho face gốc và được callback raster dùng chung, nên vertex mới không cần nội suy color.
+Color được lấy từ sample của face, không từ ID pixel, depth hoặc thứ tự triangle. Callback chỉ làm depth test rồi ghi màu. Clear inverseDepth về 0 đầu frame; nếu quên, frame cũ sẽ chặn mặt mới.
 
-### Bước 2 — Chia polygon rồi project từng triangle an toàn
+### Bước 2 — Dựng một reference không dùng rasterizer
 
-```cpp title="include/lab.hpp — triangle fan giữ topology sau clip"
-inline TriangleBatch triangulateFan(const ClippedPolygon& polygon) {
-    TriangleBatch batch{};
-    if (polygon.count < 3) {
-        return batch;
+Trong tests/tests.cpp, rayCube chỉ dùng origin/direction local và ba cặp slab:
+
+```cpp title="tests/tests.cpp — reference ray với cube local"
+std::optional<RayHit> rayCube(lab::Vec3 origin, lab::Vec3 direction) {
+    double enter = -1e30, leave = 1e30;
+    lab::Vec3 enterNormal;
+    const std::array<double, 3> o = {origin.x, origin.y, origin.z};
+    const std::array<double, 3> d = {direction.x, direction.y, direction.z};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (std::abs(d[axis]) < 1e-12) {
+            if (o[axis] < -1 || o[axis] > 1) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        double near = (-1 - o[axis]) / d[axis], far = (1 - o[axis]) / d[axis];
+        double sign = -1;
+        if (near > far) {
+            std::swap(near, far);
+            sign = 1;
+        }
+        if (near > enter) {
+            enter = near;
+            enterNormal = {};
+            if (axis == 0) {
+                enterNormal.x = sign;
+            }
+            if (axis == 1) {
+                enterNormal.y = sign;
+            }
+            if (axis == 2) {
+                enterNormal.z = sign;
+            }
+        }
+        leave = std::min(leave, far);
     }
-
-    for (std::size_t index = 1; index + 1 < polygon.count; ++index) {
-        batch.triangles[batch.count] = {
-            {polygon.vertices[0], polygon.vertices[index], polygon.vertices[index + 1]},
-        };
-        ++batch.count;
+    if (enter > leave || leave <= 0 || enter <= 0) {
+        return std::nullopt;
     }
-    return batch;
+    return RayHit{enter, enterNormal};
 }
 ```
 
-Projection vẫn có guard `z < near → nullopt`. Guard không thay clipper; nó là hàng rào cuối ngăn phép chia lỗi nếu một invariant bị phá.
+Mỗi axis tạo một khoảng t của đoạn ray nằm trong slab. Giao ba khoảng cho enter/leave. Normal lưu lại trục đã tạo enter lớn nhất: đó là mặt đầu tiên ray chạm.
 
-### Bước 3 — Tính lighting đúng một lần cho mỗi face
+Đây là reference dành riêng cho cube lồi của project, không phải một OBJ ray tracer. Nó đủ độc lập để bắt sai coverage, depth hoặc màu mà các test dot riêng lẻ không thấy.
 
-```cpp title="src/main.cpp — cull, shade rồi mới clip"
-const auto vertices = lab::faceVertices(mesh, face);
-if (!lab::isFrontFacing(vertices)) {
-    ++frameStats.culledFaces;
-    continue;
+### Bước 3 — So cả ảnh, không chỉ một pixel thuận lợi
+
+Test chạy bốn tư thế model/camera và bốn hướng đèn. Với mỗi pixel:
+
+- Nếu ray không chạm cube, owner phải là −1.
+- Nếu ray chạm, pixel phải có owner và inverse depth gần bằng 1/t.
+- Quay normal trục từ local sang world, tự tính dot với L rồi tính RGB dự kiến.
+- Mọi pixel được cube phủ phải khớp màu, không chỉ checksum tổng.
+
+```cpp title="tests/tests.cpp — RGB dự đoán từ normal mặt AABB"
+const auto normalWorld = lab::rotateY(lab::rotateX(hit->localNormal, scene.pitch), scene.yaw);
+const double cosine = normalWorld.x * light.surfaceToLight.x + normalWorld.y * light.surfaceToLight.y + normalWorld.z * light.surfaceToLight.z;
+const double intensity = std::min(1.0, scene.ambient + scene.diffuseStrength * std::max(0.0, cosine));
+const auto byte = [&](double base) {
+    return std::uint32_t(std::lround(base * intensity));
+};
+const auto expected = (byte(100) << 24U) | (byte(180) << 16U) | (byte(240) << 8U) | 255U;
+if (image.pixels[p] != expected || !close(image.inverseDepth[p], 1.0 / hit->distance, 1e-8)) {
+    ++errors;
 }
-++frameStats.visibleFaces;
-
-const lab::Vec3 normal = lab::faceUnitNormal(vertices);
-const lab::Color displayColor = faceDisplayColor(
-    face,
-    normal,
-    light,
-    lightingEnabled
-);
 ```
 
-`normal`, `light` và `vertices` đều ở cùng quy ước camera-space direction. `displayColor` không được tính lại sau khi polygon bốn đỉnh bị chia thành hai triangle.
+Ngoài oracle, test còn đảo draw order, tắt culling và tắt lighting. Hai phép đầu không được đổi ảnh; phép cuối được đổi màu nhưng không được đổi owner hoặc depth. Một lỗi geometry không được che bằng việc đổi đèn.
 
-### Bước 4 — Ghi một màu phẳng qua raster callback
+### Bước 4 — Dọn chế độ trình diễn và đường thoát lỗi
 
-```cpp title="src/main.cpp — top-left coverage chỉ quyết định pixel nào được ghi"
-const lab::RasterStats rasterStats = lab::rasterizeTriangle(
-    *screenTriangle,
-    width,
-    height,
-    [&](int x, int y) {
-        putPixel(pixels, width, height, x, y, packedColor(displayColor));
-    }
-);
-frameStats.coveredPixels += rasterStats.coveredCount;
-```
+Checkpoint 7 mặc định tắt debug. F bật lại bảng số; N bật vectors, T chọn triangle. Khi tắt debug, grid và ký hiệu đèn vẫn giúp người xem hiểu scene 3D. Đèn không tạo shadow; grid không phải một mặt đang nhận ánh sáng.
 
-Không có interpolation trong callback vì đây là flat shading. Tách coverage khỏi color giúp ta tái sử dụng chính top-left rasterizer cho material khác về sau.
-
-### Bước 5 — Kiểm dữ liệu trung gian, không chỉ ảnh cuối
-
-```cpp title="tests/tests.cpp — normal, ambient và coverage đều có hợp đồng"
-check(nearlyEqual(lab::length(normal), 1.0), "face normal has unit length");
-check(nearlyEqual(unlit.intensity, 0.2), "back-facing surface keeps ambient light");
-check(stats.coveredCount == callbackCount, "covered count equals shade callback count");
-```
-
-Final title bar cũng đọc dot, diffuse, intensity, visible/culled, triangle và pixel count từ chính dữ liệu production. Một frame trông lạ có đủ manh mối để lần ngược stage đầu tiên sai.
-
-### Bước 6 — Chứng minh lighting không làm thay đổi geometry
-
-Các test đơn lẻ cho dot product chưa bắt được lỗi ghép pipeline, chẳng hạn một nhánh
-lighting vô tình bỏ qua culling hoặc rasterize tập face khác. Vì vậy test chạy toàn bộ
-pipeline hai lần với cùng camera mesh nhưng hai hướng đèn khác nhau:
-
-```cpp title="tests/tests.cpp — đổi đèn chỉ được đổi màu"
-const PipelineSummary frontPass = runPipeline(
-    lab::makeDirectionalLight({0.0, 0.0, -1.0})
-);
-const PipelineSummary sidePass = runPipeline(
-    lab::makeDirectionalLight({1.0, 0.0, 0.0})
-);
-
-check(
-    frontPass.visibleFaceMask == sidePass.visibleFaceMask,
-    "changing light direction does not change back-face culling"
-);
-check(
-    frontPass.coveredCount == sidePass.coveredCount,
-    "changing light direction does not change raster coverage"
-);
-check(
-    !nearlyEqual(frontPass.colorChecksum, sidePass.colorChecksum),
-    "changing light direction changes the shaded face colors"
-);
-```
-
-`runPipeline` vẫn đi qua culling, clipping, projection và rasterization thật. Test này
-khóa đúng ranh giới trách nhiệm: ánh sáng thay màu của face, không thay hình học hay
-quyền sở hữu pixel.
+main kiểm mọi bước tạo tài nguyên/upload/present và giải phóng mouse capture trước khi hủy window. Nhánh --smoke mở window ẩn, đổi preset, resize, đổi debug rồi tự kết thúc sau tám frame; không dùng vòng chạy vô hạn để test.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build toàn Project 19 ở hai cấu hình"
+Tại thư mục gốc của ZIP:
+
+```bash title="Terminal — build và test toàn bộ Project 19"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
 cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
 cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
+ctest --test-dir build -C Release --output-on-failure --timeout 30
 ```
 
-Sau khi tests pass, chạy `project_19_final` và kiểm theo thứ tự:
+Chạy project_19_final rồi kiểm: 1–4 đổi đèn; Space chạy/dừng; dấu chấm tiến một bước; L/P đổi lighting/material; M chuyển model/camera; WASD/kéo điều khiển mode đó; Q/E và [/] chỉnh đèn; N/T xem vector; C đối chiếu culling; F chuyển trình diễn/debug; R reset.
 
-1. Bấm `1–4`; front/back phải làm các nhóm face khác nhau sáng.
-2. Nhấn `L`; geometry giữ nguyên, chỉ chuyển giữa baseColor và shadedColor.
-3. Nhấn `N` và `Tab`; normal trắng phải bám đúng face đang đọc trên title.
-4. Kéo hoặc dùng `WASD`/arrow; dot đổi liên tục, còn normal length vẫn gần 1.
-5. Nhấn `Space`, `.` và `R`; auto-rotate, single-step và reset không tạo state thứ hai.
-6. Resize cửa sổ; aspect ratio, framebuffer và texture cùng cập nhật.
+Phần **Toàn bộ mã nguồn của dự án** dưới bài cung cấp CMakeLists, mọi header, main và tests; ZIP chứa cả starter, từng checkpoint và final. Build final mặc định, chỉ bật BUILD_CHECKPOINTS khi cần đối chiếu các bài. Trên Linux/macOS, executable thường nằm trực tiếp trong build thay vì build/Debug.
 
 ## Thử làm sai để hiểu đúng
 
-1. Project trước rồi mới near clip. Cạnh gần camera phóng nổ vì phép chia Z đã xảy ra; clip camera-space geometry trước.
-2. Shade từng output triangle sau triangle fan. Nếu normal được tính lại quanh cạnh clip, cùng face có thể xuất hiện đường sáng; giữ normal và color của face gốc.
-3. Rasterize cả bốn face rồi hy vọng draw order đúng. Không có Z-buffer, mặt sau có thể ghi đè mặt trước; cull outward back face trước.
-4. Chỉ nhìn ảnh mặc định. Lỗi dấu có thể ẩn ở một orientation; luôn thử front/back, lighting off và nhiều rotation.
+1. Trong callback raster, đổi shadedColor sang baseColor. Oracle phải báo sai RGB dù coverage và depth vẫn đúng. Khôi phục màu đã chiếu sáng.
+2. Quên clear depth trước frame. Xoay cube làm xuất hiện vùng giữ ảnh cũ; test frame độc lập có thể không bắt lỗi lifecycle, nên renderScene phải chịu trách nhiệm clear.
+3. Đổi L nhưng cũng vô tình đổi scene.yaw trong handler. Test “lighting changes color only” hoặc thao tác giữ cube đứng yên sẽ phát hiện geometry thay đổi. Tách hai state.
 
 ## Tự kiểm tra kết quả
 
-- Cả bốn face có outward unit normal, vuông góc với hai cạnh.
-- Diffuse cho aligned/perpendicular/opposite lần lượt `1/0/0`.
-- Intensity và color luôn nằm trong miền hợp lệ; mặt không nhận diffuse vẫn giữ ambient.
-- Rotation giữ độ dài cạnh; `visible + culled = 4`.
-- Near clipping không sinh vertex trước plane hoặc dữ liệu không hữu hạn.
-- Projected triangle phủ pixel và `coveredCount` bằng số callback.
-- Đổi hướng đèn làm màu thay đổi nhưng giữ nguyên tập face nhìn thấy và raster coverage.
-- Starter, bảy checkpoint, final và tests build sạch warning ở Debug lẫn Release.
+- Cube tám vertex, mười hai triangle; normal/winding nhất quán.
+- Diffuse không dương ở mặt quay lưng đèn, ambient giữ đúng phần nền.
+- Đèn orbit, model rotation và camera orbit điều khiển riêng.
+- Flat color được giữ sau near clip; perspective/depth không phụ thuộc draw order.
+- Reference ray/AABB khớp coverage, inverse depth và RGB ở nhiều tư thế.
+- Starter, cả bảy checkpoint, final và tests build ở Debug lẫn Release.
+- Mã đầy đủ có comment, thụt 4 spaces, có cách chạy và kiểm tra.
+- Resize/HiDPI, pointer cancel, Tab và reduced motion không làm mất điều khiển.
 
 ## Bài tập mở rộng
 
-Thêm một màu riêng cho directional light và nhân nó theo từng channel với material. Giữ nguyên `surfaceToLight`, diffuse và ambient tests; bổ sung test để ánh sáng đỏ không tăng channel xanh.
+Thay cube bằng một mesh lồi khác, giữ lighting pipeline nhưng thay reference AABB bằng một cách kiểm phù hợp. Đừng tự động dùng test cube để tuyên bố mesh mới đúng. Với non-uniform scale, cần giải thích normal matrix hoặc tính lại normal từ vertex đã transform như ta đang làm.
 
-Project 19 đã hoàn chỉnh. Bạn không chỉ có một vật thể “trông như được chiếu đèn”, mà có một pipeline có thể giải thích từng con số từ winding của face cho tới màu RGBA ghi vào pixel.
+Project 19 đã hoàn chỉnh: từ bề mặt không ánh sáng, bạn đã tự tính hướng mặt, đặt đèn trong world space và giải thích được màu của từng pixel. [Project 20 tiếp tục với texture và perspective correction](/projects/perspective-checkerboard).

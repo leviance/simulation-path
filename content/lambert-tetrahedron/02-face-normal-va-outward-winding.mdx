@@ -1,126 +1,109 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Tính face normal và kiểm tra winding
+# Từ hai cạnh đến normal hướng ra ngoài
 
 ## Vấn đề cần giải quyết
 
-Muốn biết một mặt quay về đèn bao nhiêu, trước hết ta phải mô tả “mặt đang quay về đâu”. Đại lượng đó là **face normal**. Sai normal không làm chương trình crash; nó chỉ làm mặt đáng lẽ sáng trở nên tối, vì vậy đây là loại lỗi rất dễ bị chữa tạm bằng dấu trừ ở chỗ khác.
+Muốn biết một mặt có hướng về đèn hay không, ta cần biết mặt đó đang hướng về đâu. Ba vị trí vertex chưa trả lời trực tiếp câu hỏi ấy. Ta sẽ dựng một vector vuông góc với mặt, hướng ra ngoài cube: face normal.
 
-Ta sẽ tính normal từ chính ba vertex theo thứ tự của face, chuẩn hóa nó và kiểm chứng hướng ra ngoài bằng local centroid. Khi checkpoint này xong, winding không còn là thứ ta đoán bằng mắt.
+Đừng tính normal từ tọa độ pixel. Perspective đã làm biến dạng góc và độ dài. Ta lấy ba vertex **sau model rotation, trước view/projection**, nên normal thuộc world space.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với face `A → B → C`, tạo hai cạnh cùng gốc:
+Với triangle có winding A–B–C:
 
 $$
-\vec{e}_{AB}=B-A,\qquad \vec{e}_{AC}=C-A
+E_{AB}=B-A,\qquad E_{AC}=C-A,\qquad
+N=\frac{E_{AB}\times E_{AC}}{\|E_{AB}\times E_{AC}\|}
 $$
 
-Cross product cho raw normal:
+Cross product cho hướng vuông góc và còn mang độ lớn liên quan tới diện tích. Chuẩn hóa bỏ phần độ lớn để normal chỉ còn hướng. Triangle suy biến cho raw normal bằng 0; trả vector 0 thay vì chia cho 0. Triangle đó cũng không phủ pixel.
+
+Để kiểm chiều ra ngoài, gọi C là tâm triangle và O là tâm cube. Với cube lồi quanh origin:
 
 $$
-\vec{n}_{raw}=\vec{e}_{AB}\times\vec{e}_{AC},\qquad
-\hat{n}=\frac{\vec{n}_{raw}}{\lVert\vec{n}_{raw}\rVert}
+N\cdot(C-O)>0
 $$
 
-Đổi B và C sẽ đảo dấu cross product. Với tetrahedron có tâm tại local origin, vector từ tâm tới face là `faceCentroid`. Normal hướng ra ngoài khi `dot(rawNormal, faceCentroid) > 0`.
+Đây là phép kiểm cho mesh lồi này, không phải thuật toán sửa winding cho mesh tùy ý.
 
 <InteractiveLab demo="lambert" mode="lambert-normal" />
 
 ## Viết code từng bước
 
-### Bước 1 — Viết dot, cross và length thành hàm có tên
+### Bước 1 — Tính normal từ hai cạnh cùng gốc
 
-```cpp title="include/lab.hpp — ba phép toán sẽ được test riêng"
-inline double dot(Vec3 left, Vec3 right) {
-    return left.x * right.x + left.y * right.y + left.z * right.z;
-}
+Thêm vào include/geometry.hpp sau faceCentroid:
 
-inline Vec3 cross(Vec3 left, Vec3 right) {
-    return {
-        left.y * right.z - left.z * right.y,
-        left.z * right.x - left.x * right.z,
-        left.x * right.y - left.y * right.x,
-    };
-}
-
-inline double length(Vec3 value) {
-    return std::sqrt(dot(value, value));
-}
-```
-
-Không nhét toàn bộ công thức vào render loop. Những hàm nhỏ này làm code gọi đọc giống lời giải toán, đồng thời giúp CTest chỉ ra đúng phép toán bị sai.
-
-### Bước 2 — Chuẩn hóa an toàn
-
-```cpp title="include/lab.hpp — tránh chia cho vector gần zero"
-inline Vec3 normalize(Vec3 value) {
-    const double magnitude = length(value);
-    if (magnitude <= 1e-12) {
-        return {};
-    }
-    return scale(value, 1.0 / magnitude);
-}
-```
-
-Triangle suy biến có raw normal gần zero. Trả về zero vector giúp giá trị vẫn hữu hạn; test hoặc telemetry sau đó có thể báo geometry lỗi. Chia thẳng sẽ tạo NaN và làm lỗi lan tới màu pixel.
-
-### Bước 3 — Tính normal từ đúng thứ tự A–B–C
-
-```cpp title="include/lab.hpp — raw normal và unit normal của face"
-inline Vec3 faceRawNormal(const std::array<Vec3, 3>& vertices) {
+```cpp title="include/geometry.hpp — cross và normalize trên world-space vertices"
+inline Vec3 faceUnitNormal(const Triangle3& vertices) {
     const Vec3 edgeAB = subtract(vertices[1], vertices[0]);
     const Vec3 edgeAC = subtract(vertices[2], vertices[0]);
-    return cross(edgeAB, edgeAC);
-}
-
-inline Vec3 faceUnitNormal(const std::array<Vec3, 3>& vertices) {
-    return normalize(faceRawNormal(vertices));
+    return normalize(cross(edgeAB, edgeAC));
 }
 ```
 
-Hàm nhận geometry đã giải index, nên sau này cùng code chạy được cho local-space lẫn camera-space vertex. Điều bắt buộc là ba vertex phải ở **cùng một không gian tọa độ**.
+Cả hai cạnh đều bắt đầu ở A. Đổi thứ tự cross sẽ đảo normal. Trong renderCube, worldMesh đã được xoay trước khi gọi hàm; ta không giữ lại một normal local-space rồi giả sử nó vẫn đúng sau khi xoay.
 
-### Bước 4 — Biến outward winding thành một phép kiểm
+### Bước 2 — Kiểm winding bằng một điều kiện có thể đo
 
-```cpp title="include/lab.hpp — normal phải chỉ từ tâm mesh ra face"
-inline bool hasOutwardWinding(
-    const std::array<Vec3, 3>& vertices,
-    Vec3 meshCentroid = {}
-) {
-    const Vec3 fromMeshToFace = subtract(faceCentroid(vertices), meshCentroid);
-    return dot(faceRawNormal(vertices), fromMeshToFace) > 0.0;
+```cpp title="include/geometry.hpp — kiểm normal so với tâm cube"
+inline bool hasOutwardWinding(const Triangle3& vertices, Vec3 meshCenter = {}) {
+    return dot(faceUnitNormal(vertices), subtract(faceCentroid(vertices), meshCenter)) > 0.0;
 }
 ```
 
-Mặc định `meshCentroid` là origin vì tetrahedron đang cân quanh `(0,0,0)`. Đây là phép kiểm dành cho mesh lồi trong tình huống này, không phải thuật toán tổng quát để sửa winding của mọi mesh lõm.
+Tâm cube ở origin nên tham số meshCenter mặc định bằng 0. Nếu sau này thêm model translation, phải truyền tâm đã dịch chuyển, không dùng origin một cách máy móc.
+
+Lấy triangle trước với A = (−1,−1,−1), B = (1,1,−1), C = (1,−1,−1). Cross có thành phần Z âm, còn centroid cũng ở Z âm. Dot dương cho thấy normal hướng ra ngoài.
+
+### Bước 3 — Kiểm cả phương, độ dài và hai triangle cùng mặt
+
+Trong tests/tests.cpp, vòng lặp qua từng face có các phép kiểm sau:
+
+```cpp title="tests/tests.cpp — độ dài và tính vuông góc"
+check(lab::hasOutwardWinding(t), "outward winding");
+check(close(lab::length(n), 1), "unit normal");
+check(close(lab::dot(n, lab::subtract(t[1], t[0])), 0), "normal perpendicular AB");
+check(close(lab::dot(n, lab::subtract(t[2], t[0])), 0), "normal perpendicular AC");
+```
+
+Một normal dài 1 chưa chắc vuông góc; một vector vuông góc chưa chắc hướng ra ngoài. Ba loại kiểm tra này bổ sung cho nhau. Test còn so sánh normal của cặp triangle trên cùng mặt: dot của chúng phải gần 1, không phải −1.
+
+### Bước 4 — Vẽ mũi tên bám vào mặt
+
+Trong include/view.hpp, điểm đầu là centroid; điểm cuối là centroid + 0.85N. Chọn Normal trong Canvas hoặc nhấn N trong SDL để bật. Dùng T/select để chuyển face. Mũi tên trắng phải quay cùng cube, trong khi grid giữ nguyên.
+
+Normal của mặt sau có thể được vẽ đè lên cube khi debug; đây là một overlay để đọc hướng, không phải geometry được depth-test như mặt đặc.
 
 ## Ghép các phần lại
 
-Checkpoint 2 vẽ normal của face được chọn bằng một đoạn trắng từ centroid. Nhấn `Tab` để đi qua đủ bốn face.
-
-```bash title="Terminal — build và chạy test normal"
+```bash title="Terminal — chạy checkpoint 2"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_19_checkpoint_2
-cmake --build build --config Debug --target project_19_tests
-ctest --test-dir build -C Debug --output-on-failure
 ```
+
+Đầu tiên chọn triangle 0 rồi triangle 1. Chúng thuộc cùng mặt trước, do đó mũi tên có cùng hướng dù điểm đặt khác nhau. Xoay cube khoảng một phần tư vòng và xem ba thành phần normal đổi theo.
+
+Bật debug trong Canvas để đọc Normal world. Tắt debug sẽ ẩn cả mũi tên lẫn bảng số liệu; mô hình vẫn được vẽ bình thường.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `cross(edgeAB,edgeAC)` thành `cross(edgeAC,edgeAB)`. Mũi tên quay vào trong và outward test fail; không chữa bằng cách phủ dấu trừ ở lighting.
-2. Bỏ `normalize` rồi dùng raw normal cho dot. Face lớn nhận “nhiều ánh sáng” hơn chỉ vì diện tích; dot lúc này không còn là cosine.
-3. Lấy `edgeAB=B` và `edgeAC=C` mà quên trừ A. Kết quả chỉ tình cờ đúng khi A nằm ở origin; giữ hai vector cạnh cùng gốc.
+1. Đảo hai index của một triangle. Chỉ normal của triangle ấy quay vào trong; wireframe và depth có thể vẫn nhìn đúng. Khôi phục winding.
+2. Bỏ normalize, đọc độ dài normal. Với cube cạnh 2, raw cross có độ dài 4; dùng nó để lấy dot sẽ tạo hệ số sáng vượt 1.
+3. Lấy normal từ mesh chưa xoay rồi kéo cube. Mũi tên không bám theo mặt; chuyển phép tính về worldMesh.
 
 ## Tự kiểm tra kết quả
 
-- Cả bốn face thỏa `hasOutwardWinding` trong local space.
-- Mỗi unit normal có length gần 1 và dot với hai cạnh gần 0.
-- Đổi thứ tự hai index làm đúng face đó thất bại trong test.
-- Normal được vẽ từ face centroid, không từ world origin.
-- Zero-length input không sinh infinity hoặc NaN.
+- Normal của mọi triangle dài gần 1 và vuông góc với cả AB, AC.
+- Cả 12 triangle vượt outward test; cặp triangle mỗi mặt có normal trùng hướng.
+- Xoay mesh không làm thay đổi độ dài cạnh hoặc phá winding.
+- Mũi tên trắng bắt đầu ở centroid của đúng triangle đang chọn.
+- Triangle suy biến không tạo NaN.
+- Không dùng tọa độ screen hoặc camera translation để tính normal world.
 
 ## Bài tập mở rộng
 
-Thêm một test tạo cùng triangle nhưng nhân mọi position với 3. Raw normal sẽ dài gấp 9 lần, còn unit normal phải giữ nguyên. Giải thích vì sao cross product mang hệ số diện tích bình phương theo scale cạnh.
+Thêm một test dịch cả cube và meshCenter cùng vector (3,−2,5). Outward test phải giữ kết quả. Nếu chỉ dịch geometry mà quên tâm, test có thể sai ở một số mặt — hãy giải thích bằng dot product.
 
-Bài tiếp theo chưa lấy dot ngay. Ta sẽ chốt hướng của vector ánh sáng trước để không phải đoán dấu ở toàn bộ pipeline.
+[Bài tiếp theo: đặt hướng đèn](./03-thong-nhat-huong-den).

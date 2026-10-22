@@ -1,104 +1,107 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Thống nhất hướng đèn trước khi lấy dot
+# Đặt đèn trong không gian và cho đèn orbit
 
 ## Vấn đề cần giải quyết
 
-Cụm từ “hướng ánh sáng” có hai cách hiểu trái ngược: hướng tia sáng truyền **từ đèn xuống bề mặt**, hoặc hướng vector **từ bề mặt tới đèn**. Cả hai đều hợp lý trong lời nói. Nếu biến chỉ mang tên `lightDirection`, người đọc phải tự đoán rồi thử thêm dấu trừ cho tới khi hình có vẻ đúng.
+Ta đã có hướng của mặt. Tiếp theo cần hướng của đèn. Cụm từ “hướng ánh sáng” rất dễ gây nhầm: đang nói về hướng tia sáng bay tới mặt hay hướng từ mặt nhìn về nguồn sáng? Nếu hai phần code dùng hai nghĩa khác nhau, mặt tối sẽ thành mặt sáng.
 
-Project 19 chọn một quy ước duy nhất: `surfaceToLight` luôn chỉ từ bề mặt về phía nguồn sáng. Directional light ở rất xa, nên vector này giống nhau tại mọi face.
+Ta chọn một tên duy nhất: **surfaceToLight luôn chỉ từ bề mặt về phía nguồn sáng**. Normal và surfaceToLight đều ở world space.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Directional light không cần position và không suy giảm theo khoảng cách. Nó chỉ giữ một unit vector:
+Directional light mô tả các tia song song, giống ánh sáng từ một nguồn rất xa. Mọi mặt dùng cùng một vector L, không lấy lightPosition − faceCenter và không chia theo khoảng cách.
+
+Ta điều khiển hướng bằng azimuth quanh trục Y và elevation so với mặt phẳng XZ:
 
 $$
-\hat{L}=normalize(surfaceToLight)
+L=(\cos e\sin a,\ \sin e,\ -\cos e\cos a)
 $$
 
-Nếu đèn ở phía camera và camera nhìn theo `+Z`, bề mặt hướng về camera có normal gần `-Z`; preset front vì thế dùng `surfaceToLight=(0,0,-1)`. Hướng tia photon sẽ là `-surfaceToLight`, nhưng ta không cần lưu vector thứ hai.
+Khi a = 0, e = 0, L = (0,0,−1): đèn ở phía trước cube. Khi a = π, L đổi sang +Z. Dấu đèn màu vàng nằm trên một quỹ đạo bán kính 2.2 chỉ để thể hiện hướng; nó **không biến đèn thành point light**.
 
 <InteractiveLab demo="lambert" mode="lambert-light" />
 
 ## Viết code từng bước
 
-### Bước 1 — Để tên field giữ luôn quy ước
+### Bước 1 — Chuẩn hóa hướng tại nơi tạo đèn
 
-```cpp title="include/lab.hpp — directional light tối thiểu"
-struct DirectionalLight {
-    // surfaceToLight luôn chỉ từ bề mặt về phía nguồn sáng.
-    Vec3 surfaceToLight{};
-};
-```
+Starter đã khai báo DirectionalLight để các header dùng chung kiểu dữ liệu. Từ bài này, thêm hàm tạo đèn dưới đây vào include/lighting.hpp:
 
-Comment hữu ích, nhưng tên field mới là thứ xuất hiện ở mọi call site. Khi đọc `dot(normal, light.surfaceToLight)`, ta không phải lục lại tài liệu để quyết định dấu.
-
-### Bước 2 — Chuẩn hóa khi tạo light
-
-```cpp title="include/lab.hpp — lưu unit vector ngay từ đầu"
+```cpp title="include/lighting.hpp — chuẩn hóa hướng về nguồn sáng"
 inline DirectionalLight makeDirectionalLight(Vec3 surfaceToLight) {
-    DirectionalLight light{};
-    light.surfaceToLight = normalize(surfaceToLight);
-    return light;
+    // Đây là hướng TỚI đèn, không phải hướng truyền của tia sáng.
+    return {normalize(surfaceToLight)};
 }
 ```
 
-Ta không normalize lại trong từng face, từng frame. Hàm khởi tạo biến một input như `(0,4,-1)` thành hướng đơn vị; sau đó mọi dot product có cùng ý nghĩa.
+Bên trong frame, ta tạo đèn một lần rồi dùng lại cho mọi face. Không cần chuẩn hóa cùng một L ở từng pixel. Hướng 0 không phải một đèn có ý nghĩa; normalize trả 0 để tránh NaN, còn các preset/orbit luôn tạo hướng khác 0.
 
-### Bước 3 — Dùng bốn preset có chủ đích
+### Bước 2 — Biến hai góc thành một vector world
 
-```cpp title="src/main.cpp — front, top, side và back"
-lab::DirectionalLight lightPreset(int preset) {
-    if (preset == 1) {
-        return lab::makeDirectionalLight({0.0, 0.0, -1.0});
-    }
-    if (preset == 2) {
-        return lab::makeDirectionalLight({0.0, 1.0, -0.25});
-    }
-    if (preset == 3) {
-        return lab::makeDirectionalLight({1.0, 0.15, -0.25});
-    }
-    return lab::makeDirectionalLight({0.0, 0.0, 1.0});
+```cpp title="include/lighting.hpp — hướng đèn trên mặt cầu đơn vị"
+inline DirectionalLight orbitLight(double azimuth, double elevation) {
+    const double radius = std::cos(elevation);
+    return makeDirectionalLight({radius * std::sin(azimuth), std::sin(elevation), -radius * std::cos(azimuth)});
 }
 ```
 
-Front/back là cặp đối chứng bắt lỗi đảo dấu. Top/side buộc nhiều face nhận các giá trị khác nhau, thay vì chỉ kiểm một trường hợp thẳng trục quá dễ.
+radius ở đây là cos(elevation), tức bán kính đường tròn chiếu xuống XZ; không phải khoảng cách tới đèn. Hai góc quyết định hướng, không quyết định cường độ.
 
-### Bước 4 — Cho mọi input sửa cùng một light
+Preset 1/2/3/4 lần lượt đặt đèn trước/trên/phải/sau. Preset trên dùng elevation = 1.4 rad để vẫn đọc được mũi tên trên hình chiếu, thay vì nằm đúng ở cực.
 
-```cpp title="src/main.cpp — phím 1–4 thay đúng một nguồn dữ liệu"
-if (key >= SDLK_1 && key <= SDLK_4) {
-    lightPresetIndex = int(key - SDLK_0);
-    light = lightPreset(lightPresetIndex);
+### Bước 3 — Cho đèn orbit theo thời gian
+
+Trong include/scene.hpp, state giữ lightAzimuth, lightElevation và paused. Event chỉ đổi state; advanceScene mới cập nhật thời gian:
+
+```cpp title="include/scene.hpp — một bước orbit có giới hạn dt"
+inline bool advanceScene(Scene& scene, double deltaSeconds) {
+    if (!scene.paused && std::isfinite(deltaSeconds) && deltaSeconds > 0) {
+        scene.lightAzimuth = std::remainder(scene.lightAzimuth + std::min(deltaSeconds, 0.05) * 0.65, 6.283185307179586);
+        return true;
+    }
+    return false;
 }
 ```
 
-Canvas lab dùng dropdown, source SDL dùng phím số, nhưng cả hai đều thay một `surfaceToLight`. Không có preset name ở một nơi và một dấu trừ bí mật ở nơi khác.
+Tốc độ góc là 0.65 rad/s. std::remainder giữ góc trong miền hữu hạn khi chạy lâu. Clamp dt bảo vệ khi cửa sổ vừa bị treo hoặc mất focus; mô phỏng này không cố chạy bù thời gian đã mất.
+
+Dấu chấm gọi đúng một bước 1/60 giây rồi trở về paused. Nó không phụ thuộc tốc độ frame ngay lúc bấm.
+
+### Bước 4 — Dùng cùng state cho input và hình vẽ
+
+Q/E chỉnh azimuth, [ và ] chỉnh elevation. Khi kéo cube hoặc sửa góc đèn, ta pause để kết quả đứng yên cho việc đo. Space mới bật auto-orbit trở lại. Browser reduced motion khóa auto-orbit nhưng vẫn cho tiến một bước.
+
+Mũi tên vàng xuất phát từ cùng centroid với normal trắng. Hai vector phải cùng hệ tọa độ, vì bài sau sẽ lấy dot giữa chúng.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint hướng đèn"
+```bash title="Terminal — chạy checkpoint 3"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_19_checkpoint_3
 ```
 
-Chạy target và bấm `1–4`. Ở checkpoint này wireframe vẫn dùng baseColor; hãy nhìn mũi tên vàng và title bar để xác nhận hướng trước khi nó được phép ảnh hưởng độ sáng.
+Bật N, chọn một face rồi lần lượt nhấn 1 và 4. Mũi tên vàng phải đổi sang hướng đối diện. Lúc này cube chưa nhận Lambert nên **đổi đèn chưa làm màu đổi**; đây là hành vi đúng của checkpoint 3.
+
+Chạy Space để thấy dấu đèn orbit. Pause, tiến một bước và đọc góc: azimuth tăng khoảng 0.010833 rad. Kéo cube không kéo nguồn sáng theo cube.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi tên field thành `lightDirection` rồi truyền lúc là hướng photon, lúc là hướng tới đèn. Hai preset có thể đúng nhưng preset khác sai; phục hồi tên có nghĩa.
-2. Bỏ normalize khỏi `makeDirectionalLight`. Preset `(0,1,-0.25)` có length khác 1, nên dot ở bài sau mang cả độ dài input.
-3. Dùng `abs(dot)` để front và back cùng sáng. Cách này che lỗi quy ước và biến vật liệu một mặt thành hai mặt; diffuse phải clamp chứ không lấy trị tuyệt đối.
+1. Đổi dấu Z trong orbitLight. Preset trước sẽ thành đèn phía sau; so ngay với normal của mặt trước rồi khôi phục.
+2. Quay L bằng cùng model rotation. Đèn bị dính vào cube; góc giữa N và L không đổi khi xoay cả hai. Khôi phục L trong world space.
+3. Cộng 0.65 mỗi frame thay vì 0.65 × dt. Máy nhanh làm đèn quay nhanh hơn; quay lại phép cập nhật theo giây.
 
 ## Tự kiểm tra kết quả
 
-- `surfaceToLight` của mọi preset có length gần 1.
-- Front là `(0,0,-1)` và back là `(0,0,1)` trong quy ước camera hiện tại.
-- Mũi tên vàng, readout XYZ và field C++ cùng chỉ từ surface về light.
-- Phím `1–4` không đổi orientation của model hoặc selected face.
-- Chưa có intensity hay material trong checkpoint 3.
+- L có độ dài gần 1 với mọi góc đèn.
+- Preset trước và sau cho hai hướng đối nhau.
+- Đèn và mô hình điều khiển độc lập.
+- Pause thực sự dừng; single-step tiến đúng 1/60 giây.
+- Mất focus, hủy kéo hoặc resize không để pointer capture bị giữ.
+- Chưa có diffuse ở checkpoint này; dấu đèn là visualization của hướng, không phải nguồn sáng điểm.
 
 ## Bài tập mở rộng
 
-Thêm preset “diagonal” từ vector `(1,1,-1)`. Trước khi chạy, hãy tự tính mỗi thành phần sau normalize; sau đó so với title/readout trong debugger.
+Từ L, tự viết hàm trả hướng truyền của tia sáng. Kết quả phải bằng −L. Vẽ nó bằng màu khác và giải thích tại sao không được dùng trực tiếp vector này trong công thức Lambert sắp học.
 
-Bài tiếp theo sẽ dùng đúng hai unit vector đã chuẩn bị — face normal và `surfaceToLight` — để nhận một hệ số diffuse có thể giải thích bằng góc.
+[Bài tiếp theo: dot product thành độ sáng](./04-lambert-diffuse-tu-dot-product).

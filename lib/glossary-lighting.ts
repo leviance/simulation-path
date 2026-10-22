@@ -3,6 +3,12 @@ import type { GlossaryTerm } from "./glossary";
 // Lighting terms live in their own shard so the shared glossary stays below the source budget.
 export const lightingGlossaryTerms: GlossaryTerm[] = [
   {
+    id: "flat-shading",
+    term: "Flat shading",
+    definition:
+      "Tính ánh sáng bằng một normal cho cả face và dùng cùng màu trên toàn bộ face. Trong Project 19, hai triangle đồng phẳng của một mặt cube có cùng normal nên không xuất hiện đường chéo đổi sáng.",
+  },
+  {
     id: "face-normal",
     term: "Face normal",
     definition:

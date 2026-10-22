@@ -30,7 +30,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
       "examples",
       projectDirectoryBySlug.get(lesson.project),
     );
-    // Project 01–18 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
+    // Project 01–19 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
     const projectNumber = Number(
       projectDirectoryBySlug.get(lesson.project).match(/^project-(\d+)-/)[1],
     );
@@ -58,7 +58,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
         : path.join(checkpointDirectory, relative);
       const source = await readFile(sourcePath, "utf8");
       assert.ok(
-        projectNumber <= 18 || projectNumber >= 56
+        projectNumber <= 19 || projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
         `${lesson.file} drifts from checkpoint ${lessonNumber}: ${title}`,
