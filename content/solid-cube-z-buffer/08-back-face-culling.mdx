@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Loại mặt quay lưng trước khi rasterize
+
+## Vấn đề cần giải quyết
+
+Khối đặc có các mặt quay ra xa camera. Ta có thể bỏ chúng trước khi rasterize, nhưng không được nhầm phép loại mặt này với việc chọn bề mặt gần nhất tại pixel.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mesh của bài 1 đã có winding hướng ra ngoài. Với camera nhìn +Z và screen Y-down, mặt hướng về camera có signed area dương:
+
+$$A_2=E_{AB}(C),\qquad frontFacing=A_2>\varepsilon.$$
+
+Phải xét trước normalizeWinding. Nếu xét sau chuẩn hóa, mọi triangle không suy biến đều có cùng dấu và culling mất ý nghĩa.
+
+Cube lồi là một trường hợp đặc biệt: các mặt trước không che nhau ở vùng trong. Vì thế bật culling có thể giấu lỗi khi tắt depth test. Với bề mặt giao nhau hoặc nhiều vật thể, vẫn cần Z-buffer.
+
+<InteractiveLab demo="z-buffer" mode="depth-culling" />
+
+## Viết code từng bước
+
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Phần nào ghi “đã có” thì chỉ đọc lại; khi thay hàm hoặc struct, thay bản cũ thay vì tạo thêm định nghĩa trùng tên.
+
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_17_starter --parallel 2
+.\build\Debug\project_17_starter.exe
+```
+
+Checkpoint 08 là **bản tham khảo sau bài**, chạy độc lập bằng target project_17_checkpoint_8. Nó không nhận các thay đổi bạn vừa viết trong Starter.
+
+### Bước 1 — Chốt quy ước từ mesh tới screen
+
+orient2D trong raster.hpp đã có từ bộ khung Project 16. Đọc lại để biết chính xác dấu đang dùng:
+
+```cpp title="include/raster.hpp — signed area theo screen Y-down"
+inline double orient2D(const ScreenVertex& a, const ScreenVertex& b, double x, double y) {
+    return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+}
+```
+
+
+Không đổi B/C tùy hứng trong makeCubeMesh. Tests lấy cross product của cạnh trong local space và kiểm dot(normal,point)>0 cho đủ 12 triangle; đây là oracle hướng ra ngoài độc lập với screen winding.
+
+### Bước 2 — Loại trước khi chuẩn hóa
+
+Thêm isFrontFacing trước renderCube trong render.hpp:
+
+```cpp title="include/render.hpp — winding gốc, không phải normalized"
+inline bool isFrontFacing(const ScreenTriangle& triangle) {
+    return validTriangle(triangle) && orient2D(triangle.a, triangle.b, triangle.c.x, triangle.c.y) > 1e-9;
+}
+```
+
+
+Trong renderCube, sau kiểm validTriangle và trước ++submittedCount, thêm:
+
+```cpp title="include/render.hpp — mặt bị cull không đi qua raster"
+if (cullEnabled && !isFrontFacing(triangle)) {
+    ++stats.culledCount;
+    continue;
+}
+```
+
+
+Không gọi normalizeWinding trước nhánh này. Rasterizer vẫn tự normalize bản sao sau khi culling đã quyết định.
+
+### Bước 3 — Cho bật tắt và kiểm image invariance
+
+Trong handleKey thêm phím C:
+
+```cpp title="include/controls.hpp — culling là công tắc độc lập"
+if (!repeat && key == SDLK_C) {
+    scene.cullEnabled = !scene.cullEnabled;
+}
+```
+
+
+HUD đã có submitted/culled từ Starter. Khi depth bật và camera ở ngoài cube, bật C phải giảm số triangle được rasterize mà không đổi ảnh nhìn thấy. Tests lặp nhiều góc, so toàn color/depth giữa culling bật/tắt và draw order xuôi/ngược.
+
+## Ghép các phần lại
+
+Build Starter, chọn preset 1, bật depth rồi thử C. Ảnh giữ nguyên nhưng culled tăng. Ở góc nhìn thẳng, một số mặt chỉ có area≈0; số triangle bị loại không nhất thiết luôn là sáu.
+
+Để xem lỗi khi tắt Z-buffer, hãy tắt culling rồi nhấn D/O. Không dùng kết quả đẹp của riêng cube lồi để kết luận depth test không cần thiết.
+
+## Thử làm sai để hiểu đúng
+
+1. Đặt culling sau normalizeWinding: mọi mặt cùng dấu. Đưa nó về trước rasterizeTriangle.
+
+2. Đảo winding một triangle trong mesh: một nửa mặt có thể biến mất khi bật C. Khôi phục topology hướng ra ngoài.
+
+3. Bật culling và tắt depth rồi kết luận mọi mesh đều đúng: thử hai bề mặt giao nhau để phân biệt hai bài toán.
+
+## Tự kiểm tra kết quả
+
+- Winding cả 12 triangle hướng ra ngoài theo oracle cross/dot.
+- Culling dùng diện tích có dấu trước normalize.
+- Culling bật/tắt giữ cùng ảnh và nearest depth khi depth bật.
+- Mặt bị cull không tăng covered/pass/reject; số culled là dữ liệu thật.
+
+## Bài tập mở rộng
+
+Giải thích vì sao camera đi vào bên trong một mesh kín sẽ làm quy tắc culling mặt ngoài khác kỳ vọng. Project này giới hạn camera ở ngoài cube.
+
+[Sang bài tiếp theo — Camera, cảnh 3D sạch và bản hoàn chỉnh](/projects/solid-cube-z-buffer/09-camera-va-ban-hoan-chinh).

@@ -465,7 +465,7 @@ test("Project 17 Z-buffer Lab keeps the image independent from draw order", asyn
     .locator("dd");
 
   await expect(canvas).toBeVisible();
-  await controls.getByLabel("Góc nhìn cube").selectOption("overlap");
+  await controls.getByLabel("Góc nhìn cube").selectOption("3");
   await expect(difference).toHaveText("0 color · 0 depth");
   await expect(fragments).toHaveText(/\d+ \/ \d+/);
 
@@ -477,6 +477,7 @@ test("Project 17 Z-buffer Lab keeps the image independent from draw order", asyn
   await controls.getByLabel("Depth test").check();
   await expect(difference).toHaveText("0 color · 0 depth");
   await page.getByRole("button", { name: /Tạm dừng|Cho cube quay/ }).click();
+  await page.getByRole("button", { name: "Tạm dừng", exact: true }).click();
   await page.getByRole("button", { name: "Tiến một bước" }).click();
   await page.getByRole("button", { name: "Đặt lại" }).click();
   await expect(difference).toHaveText("0 color · 0 depth");

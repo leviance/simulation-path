@@ -1,0 +1,147 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Camera, cảnh 3D sạch và bản hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Ta đã có bộ render cube đúng về che khuất. Bài cuối nối nó với một cảnh dễ quan sát: mô hình quay tại chỗ, camera dịch độc lập, lưới world giữ nguyên và một phím tắt các lớp chẩn đoán.
+
+## Hiểu ý tưởng trước khi viết code
+
+World và camera không phải cùng một thứ. Khi đổi góc mô hình, chỉ các vertex của cube quay; lưới sàn không quay theo. Khi dịch camera, cả cube và lưới dùng cùng phép trừ vị trí camera trước projection.
+
+$$P_{view}=P_{world}-C.$$
+
+Camera X nằm trong [-1,1], Z trong [-0.5,0.5], nhìn cố định +Z. Các giới hạn này giữ camera ngoài cube và tránh cắt near/far. Bản này chưa có polygon clipping, lighting hoặc texture; không bỏ guard depth để giả rằng chúng đã được giải quyết.
+
+<InteractiveLab demo="z-buffer" mode="depth-scene" />
+
+## Viết code từng bước
+
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Phần nào ghi “đã có” thì chỉ đọc lại; khi thay hàm hoặc struct, thay bản cũ thay vì tạo thêm định nghĩa trùng tên.
+
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_17_starter --parallel 2
+.\build\Debug\project_17_starter.exe
+```
+
+Checkpoint 09 là **bản tham khảo sau bài**, chạy độc lập bằng target project_17_checkpoint_9. Nó không nhận các thay đổi bạn vừa viết trong Starter.
+
+### Bước 1 — Nối điều khiển camera và clean mode
+
+Trong handleKey, thêm các nhánh dưới trước (void). Chúng chỉ sửa state; main đã hủy capture trước khi gọi handler:
+
+```cpp title="include/controls.hpp — camera và clean độc lập với góc model"
+if (!repeat && key == SDLK_F) {
+    scene.debug = !scene.debug;
+    scene.depthView = false;
+}
+if (key == SDLK_J) {
+    scene.camera.x = std::max(-1.0, scene.camera.x - 0.1);
+}
+if (key == SDLK_L) {
+    scene.camera.x = std::min(1.0, scene.camera.x + 0.1);
+}
+if (key == SDLK_I) {
+    scene.camera.z = std::min(0.5, scene.camera.z + 0.1);
+}
+if (key == SDLK_K) {
+    scene.camera.z = std::max(-0.5, scene.camera.z - 0.1);
+}
+```
+
+
+F xóa depthView để clean trở về sáu màu. J/L dịch X, I/K dịch Z; các phím mũi tên vẫn xoay mô hình.
+
+### Bước 2 — Giữ không gian khi tắt debug
+
+drawWorldGrid đã có trong view.hpp của Starter. Trong renderScene, thêm lời gọi sau sau depth.clear và trước renderCube:
+
+```cpp title="include/view.hpp — grid là nền scene, không phải overlay"
+drawWorldGrid(targets.image, scene);
+```
+
+
+viewportHeight và nhánh trả sớm của presentFramebuffer đã có từ bộ khung. Đọc lại, không thêm định nghĩa trùng:
+
+```cpp title="include/scene.hpp — đổi vùng ảnh, không đổi buffer"
+inline int viewportHeight(const Scene& scene) {
+    if (scene.debug) {
+        return 600;
+    }
+    return 800;
+}
+```
+
+
+
+```cpp title="include/presentation.hpp — không vẽ HUD trong clean"
+if (!scene.debug) {
+    return SDL_RenderPresent(renderer);
+}
+```
+
+
+Debug dùng 1100×600, clean dùng 1100×800. Aspect thay đổi nên hình chiếu có thể khác, nhưng geometry không đổi. Fill/grid ở ngoài if(scene.debug), vì tắt overlay không được làm mất sản phẩm.
+
+### Bước 3 — Hiện camera và chạy mã của chính mình
+
+Trong presentFramebuffer, trước (void)probe, thêm:
+
+```cpp title="include/presentation.hpp — tọa độ camera thật"
+std::snprintf(line, sizeof(line), "J/L camera X %.2f | I/K camera Z %.2f | model angles do not rotate the world grid", scene.camera.x, scene.camera.z);
+if (!SDL_RenderDebugText(renderer, 16, 746, line)) {
+    return false;
+}
+```
+
+
+ZIP chứa README, Starter, chín checkpoint, final, tests và CMake. Phần toàn bộ mã nguồn cuối bài cho xem từng file, không phải các mảnh cần đoán chỗ nối.
+
+CTest mặc định kiểm final/include. Sau khi viết đủ chín bài, đổi đúng dòng trong CMakeLists.txt **của ZIP bạn giải nén** để kiểm Starter:
+
+```cmake title="CMakeLists.txt — chọn mã người học"
+target_include_directories(project_17_tests PRIVATE starter/include)
+```
+
+```powershell title="Kiểm chứng Starter Debug và Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_17_starter project_17_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --target project_17_starter project_17_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
+
+Tests dùng check/EXIT_FAILURE, không dùng assert bị NDEBUG tắt. Chúng so toàn bộ ảnh qua nhiều góc, kiểm winding bằng cross/dot, phép chiếu near/far tính tay, culling, input sai, buffer bounds và ảnh CPU clean còn cube/grid.
+
+## Ghép các phần lại
+
+Project 17 đã hoàn chỉnh khi cube đặc đủ 12 triangle, depth và culling là hai công tắc riêng, kéo/keyboard hoạt động và clean vẫn giữ cảnh 3D. Chạy project_17_starter để kiểm mã vừa viết; project_17_final là bản tham khảo hoàn chỉnh, chạy độc lập với website.
+
+Native: 1/2/3 preset; kéo/mũi tên xoay model; O đảo order; D depth; V depth view; C culling; F clean; J/L camera X; I/K camera Z; Space pause/resume; N bước góc khi paused; R reset; Esc thoát. Click chọn pixel. Resize/blur/hidden hủy capture và pause.
+
+Canvas tôn trọng reduced motion và có controls dùng bàn phím. Độ phân giải thấp chỉ để học từng pixel, không thay executable C++/SDL3. --smoke chỉ mở cửa sổ ẩn, render hữu hạn, thử resize/clean rồi thoát; vẫn cần tự thử chuột/keyboard/HiDPI sau kiểm thử tự động.
+
+## Thử làm sai để hiểu đúng
+
+1. Quay lưới theo góc cube: model và world bị trộn. Chỉ áp dụng rotateCubeVertex cho mesh.
+
+2. Đặt fill/grid trong if(debug): F làm cửa sổ trống. Giữ chúng ngoài overlay.
+
+3. Chạy tests của final rồi kết luận Starter đúng: sửa một công thức trong Starter và kiểm target_include_directories để thấy khác biệt.
+
+## Tự kiểm tra kết quả
+
+- Cube có 12 triangle, 6 màu; Z-buffer CPU và culling tự viết, không API geometry/GPU depth.
+- Đảo order không đổi kết quả khi depth bật; tắt depth/culling thấy lỗi rõ.
+- Camera dịch không sửa góc model; kéo model không sửa camera/lưới.
+- Clean giữ cube và lưới phối cảnh, không HUD/inspector/depth view.
+- Starter và bản tham khảo build Debug/Release; CTest kiểm đúng thư mục include bạn muốn.
+- Không coi smoke hoặc tests callback là kiểm tra browser trực tiếp.
+
+## Bài tập mở rộng
+
+Đặt thêm một cube phía sau cube đầu và đảo cả thứ tự hai vật thể. Giữ cùng depth buffer cho cả scene; đây là cách thấy rõ culling không giải quyết che khuất giữa các vật thể.
+
+[Tiếp tục Project 18 — Cắt tam giác tại near plane](/projects/near-plane-clipper).

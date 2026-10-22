@@ -8,6 +8,16 @@ const lab = {
       "Xoay cube, đảo draw order và chọn một pixel để theo dõi từng fragment. Lab dùng cùng NDC depth, barycentric interpolation và phép compare/write như source C++.",
   },
   modes: {
+    "depth-culling": {
+      title: "Mặt quay lưng khác mặt bị che ở đâu?",
+      description:
+        "Culling xét winding gốc trước normalize; số triangle giảm nhưng Z-buffer vẫn chịu trách nhiệm cho fragment chồng nhau.",
+    },
+    "depth-scene": {
+      title: "Khối lập phương trong cảnh 3D hoàn chỉnh",
+      description:
+        "Dịch camera X/Z, xoay mô hình, đổi depth/culling và tắt debug. Lưới world không quay theo mô hình.",
+    },
     "depth-cube": {
       title: "Mười hai triangle ghép thành cube đặc ra sao?",
       description:

@@ -4,149 +4,323 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Project 13 mới nối các đỉnh cube bằng đường thẳng. Lần này ta cần bề mặt thật: mỗi mặt là một hình vuông, mỗi hình vuông được chia thành hai triangle để đi qua rasterizer của Project 16. Kết quả là tám vertex và mười hai triangle.
-
-Checkpoint đầu **chưa có Z-buffer**. Một vài mặt sẽ che nhau sai khi cube xoay; ta cố ý giữ lỗi đó để bài sau có một vấn đề thật cần giải quyết. Mục tiêu trước mắt là tạo được một đường đi hoàn chỉnh từ mesh tới pixel:
-
-$$
-\text{8 local vertices}\rightarrow\text{rotate}\rightarrow\text{project}\rightarrow
-\text{12 screen triangles}\rightarrow\text{color buffer}
-$$
-
-Nếu bạn đang tự làm thử thách, hãy bắt đầu từ `starter/`. Nó đã có window, renderer, streaming texture, CPU framebuffer, event loop và xử lý resize. Bạn chỉ cần xây phần geometry và rasterization; đừng viết lại hạ tầng SDL đã ổn định.
+Project 16 đã tô được một tam giác. Bây giờ ta dùng đúng rasterizer đó cho mười hai tam giác ghép thành khối lập phương. Trước khi xử lý che khuất, hãy làm cho khối xuất hiện và xoay được bằng chuột. Việc một mặt ở xa ghi đè mặt gần ở bài này là lỗi có chủ ý; ta sẽ dùng nó để kiểm chứng Z-buffer.
 
 ## Hiểu ý tưởng trước khi viết code
+
+Mỗi mặt vuông gồm hai tam giác. Tám vị trí được dùng chung qua index, còn màu thuộc từng mặt. Mỗi frame chỉ biến đổi tám đỉnh một lần, rồi tra lại ba đỉnh cho từng triangle.
+
+$$P_{view}=R_xR_yP_{local}+(0,0,4.2)-C.$$
+
+Ta quay quanh tâm local trước, sau đó mới dịch ra trước camera. Các kiểu CubeMesh, ScreenVertex, Scene và RenderTargets đã có trong Starter. raster.hpp là phần top-left/coverage của Project 16; geometry.hpp đã có phép quay và projectVertex. DepthBuffer lúc này chỉ là stub, chưa cấp phát hay so sánh depth.
 
 <InteractiveLab demo="z-buffer" mode="depth-cube" />
 
 ## Viết code từng bước
 
-### Bước 1 — Tổ chức mesh trước khi viết vòng render
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Phần nào ghi “đã có” thì chỉ đọc lại; khi thay hàm hoặc struct, thay bản cũ thay vì tạo thêm định nghĩa trùng tên.
 
-Một cách dễ viết nhưng khó mở rộng là khai báo 36 position — ba position cho mỗi triangle. Cube thực ra chỉ có tám corner, vì vậy ta lưu tám `Vec3` rồi cho triangle tham chiếu bằng index:
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_17_starter --parallel 2
+.\build\Debug\project_17_starter.exe
+```
 
-```cpp title="include/lab.hpp — một triangle tham chiếu ba vertex"
-struct IndexedTriangle {
-    std::array<std::size_t, 3> indices{};
-    Color color{};
-    const char* faceName{};
-};
+Checkpoint 01 là **bản tham khảo sau bài**, chạy độc lập bằng target project_17_checkpoint_1. Nó không nhận các thay đổi bạn vừa viết trong Starter.
 
+### Bước 1 — Khai báo đủ sáu mặt, không bỏ năm mặt còn lại
+
+CubeMesh đã có trong geometry.hpp; đọc lại cấu trúc này, không khai báo trùng:
+
+```cpp title="include/geometry.hpp — dữ liệu đã có"
 struct CubeMesh {
     std::array<Vec3, 8> vertices{};
     std::array<IndexedTriangle, 12> triangles{};
 };
 ```
 
-`faceName` chưa ảnh hưởng tới hình. Nó là nhãn chẩn đoán để pixel inspector ở bài cuối có thể báo fragment đến từ mặt nào. Giữ thông tin này ngay trong mesh giúp ta không phải đoán ngược từ màu.
 
-Hai triangle của mặt trước dùng chung đường chéo `0→2`:
+Thêm toàn bộ makeCubeMesh dưới trong namespace lab. Mỗi cặp triangle có cùng màu và winding hướng ra ngoài; bài 8 sẽ dùng chính winding này để culling:
 
-```cpp title="include/lab.hpp — hai triangle đầu của mặt front"
-IndexedTriangle{{0, 1, 2}, {239, 90, 102, 255}, "front"},
-    IndexedTriangle{{0, 2, 3}, {239, 90, 102, 255}, "front"},
+```cpp title="include/geometry.hpp — đủ tám đỉnh và mười hai triangle"
+inline CubeMesh makeCubeMesh() {
+    return {
+        {
+            Vec3{-1.0, -1.0, -1.0},
+            Vec3{1.0, -1.0, -1.0},
+            Vec3{1.0, 1.0, -1.0},
+            Vec3{-1.0, 1.0, -1.0},
+            Vec3{-1.0, -1.0, 1.0},
+            Vec3{1.0, -1.0, 1.0},
+            Vec3{1.0, 1.0, 1.0},
+            Vec3{-1.0, 1.0, 1.0},
+        },
+        {
+            IndexedTriangle{{0, 2, 1}, {239, 90, 102, 255}, "front"},
+            IndexedTriangle{{0, 3, 2}, {239, 90, 102, 255}, "front"},
+            IndexedTriangle{{5, 7, 4}, {92, 140, 246, 255}, "back"},
+            IndexedTriangle{{5, 6, 7}, {92, 140, 246, 255}, "back"},
+            IndexedTriangle{{4, 3, 0}, {169, 112, 232, 255}, "left"},
+            IndexedTriangle{{4, 7, 3}, {169, 112, 232, 255}, "left"},
+            IndexedTriangle{{1, 6, 5}, {74, 214, 166, 255}, "right"},
+            IndexedTriangle{{1, 2, 6}, {74, 214, 166, 255}, "right"},
+            IndexedTriangle{{3, 6, 2}, {246, 184, 72, 255}, "top"},
+            IndexedTriangle{{3, 7, 6}, {246, 184, 72, 255}, "top"},
+            IndexedTriangle{{4, 1, 5}, {55, 190, 220, 255}, "bottom"},
+            IndexedTriangle{{4, 0, 1}, {55, 190, 220, 255}, "bottom"},
+        },
+    };
+}
 ```
 
-Năm mặt còn lại được khai báo tương tự. Mỗi mặt có màu riêng để khi che khuất sai, ta nhìn ra ngay mặt nào vừa ghi đè mặt nào.
 
-### Bước 2 — Project tám vertex đúng một lần
 
-Mười hai triangle có tổng cộng 36 lần tham chiếu vertex, nhưng chỉ có tám position khác nhau. Vì vậy mỗi frame ta quay và project tám vertex trước:
+### Bước 2 — Chiếu tám đỉnh rồi tra index
 
-```cpp title="include/lab.hpp — cache ScreenVertex của cả cube"
-inline std::array<ScreenVertex, 8> projectCube(
-    const CubeMesh& mesh,
-    int width,
-    int height,
-    double angleX,
-    double angleY
-) {
+Thêm hai hàm sau vào geometry.hpp, sau makeCubeMesh. rotateCubeVertex và projectVertex đã có từ bộ khung; không dán lại chúng:
+
+```cpp title="include/geometry.hpp — một phép chiếu cho mỗi vertex"
+inline std::array<ScreenVertex, 8> projectCube(const CubeMesh& mesh, int width, int height, double angleX, double angleY, Vec3 camera = {}) {
     std::array<ScreenVertex, 8> result{};
     for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
-        Vec3 cameraPoint = rotateCubeVertex(mesh.vertices[index], angleX, angleY);
-        cameraPoint.z += 4.2;
-        result[index] = projectVertex(cameraPoint, width, height);
+        const Vec3 rotated = rotateCubeVertex(mesh.vertices[index], angleX, angleY);
+        const Vec3 view{rotated.x - camera.x, rotated.y - camera.y, rotated.z + 4.2 - camera.z};
+        result[index] = projectVertex(view, width, height);
     }
     return result;
 }
 ```
 
-Cube được dựng quanh local origin, quay tại đó rồi mới dịch tới `z=4.2`. Nếu dịch trước rồi quay, cả tâm cube sẽ chạy vòng quanh camera thay vì cube xoay tại chỗ.
 
-`projectVertex` trả ba giá trị trong cùng một cấu trúc:
 
-```cpp title="include/lab.hpp — đầu ra cần cho rasterizer và bài depth sau"
-struct ScreenVertex {
-    double x{};
-    double y{};
-    double ndcDepth{};
-};
-```
-
-Bài này chỉ dùng `x` và `y`; `ndcDepth` được giữ lại vì nó là depth đúng sau perspective divide. Ta chưa so sánh nó.
-
-### Bước 3 — Từ index thành ScreenTriangle
-
-Vòng render duyệt mười hai triangle. Mỗi lần, nó lấy ba `ScreenVertex` đã cache rồi gọi đúng rasterizer top-left của Project 16:
-
-```cpp title="src/main.cpp — draw list chưa có depth test"
-const auto screenVertices = lab::projectCube(mesh, width, height, angleX, angleY);
-
-for (std::size_t position = 0; position < mesh.triangles.size(); ++position) {
-    std::size_t triangleIndex = position;
-    const lab::ScreenTriangle triangle = lab::screenTriangle(
-        mesh.triangles[triangleIndex],
-        screenVertices
-    );
-
-    lab::rasterizeTriangle(
-        triangle,
-        width,
-        height,
-        [&](int x, int y, lab::Barycentric weights, const lab::ScreenTriangle& normalized) {
-            const std::size_t index =
-                std::size_t(y) * std::size_t(width) + std::size_t(x);
-            static_cast<void>(weights);
-            pixels[index] = lab::packColor(normalized.color);
-        }
-    );
+```cpp title="include/geometry.hpp — tra ba đỉnh bằng index"
+inline ScreenTriangle screenTriangle(
+    const IndexedTriangle& triangle,
+    const std::array<ScreenVertex, 8>& vertices
+) {
+    return {
+        vertices[triangle.indices[0]],
+        vertices[triangle.indices[1]],
+        vertices[triangle.indices[2]],
+        triangle.color,
+        triangle.faceName,
+    };
 }
 ```
 
-Callback không tự kiểm tra coverage. Nó chỉ được gọi khi tâm pixel đã nằm trong triangle theo top-left rule. Tách hai việc này giữ code dễ đọc: rasterizer quyết định **pixel nào**, còn callback quyết định **ghi gì**.
 
-Cuối frame vẫn là chuỗi quen thuộc `SDL_UpdateTexture` → `SDL_RenderTexture` → `SDL_RenderPresent`. Z-buffer sau này chỉ thay quyết định trước lúc ghi `pixels[index]`; nó không thay cách SDL đưa framebuffer lên màn hình.
+Camera mặc định ở gốc. Tham số camera để sẵn cho bài cuối; chưa có thao tác đổi camera trong bài này.
+
+### Bước 3 — Nối mesh với rasterizer
+
+Thêm renderCube vào render.hpp. Nó không sort triangle. Callback chỉ được gọi khi coverage đã chấp nhận pixel:
+
+```cpp title="include/render.hpp — vòng vẽ cube chưa có depth test"
+inline RenderStats renderCube(const CubeMesh& mesh, int width, int height, double angleX, double angleY, bool reverseOrder, bool depthEnabled, std::vector<std::uint32_t>& colorBuffer, DepthBuffer& depthBuffer, bool cullEnabled = false, Vec3 camera = {}, PixelProbe* probe = nullptr) {
+    RenderStats stats{};
+    if (width <= 0 || height <= 0 || std::size_t(width) > colorBuffer.size() / std::size_t(height)) {
+        return stats;
+    }
+    (void)depthBuffer;
+    const auto vertices = projectCube(mesh, width, height, angleX, angleY, camera);
+    for (std::size_t position = 0; position < mesh.triangles.size(); ++position) {
+        std::size_t index = position;
+        const auto& indexed = mesh.triangles[index];
+        if (std::any_of(indexed.indices.begin(), indexed.indices.end(), [&](std::size_t v) {
+                return v >= vertices.size();
+            })) {
+            ++stats.invalidCount;
+            continue;
+        }
+        const ScreenTriangle triangle = screenTriangle(indexed, vertices);
+        if (!validTriangle(triangle)) {
+            ++stats.invalidCount;
+            continue;
+        }
+        ++stats.submittedCount;
+        stats.coveredCount += rasterizeTriangle(triangle, width, height, [&](int x, int y, Barycentric weights, const ScreenTriangle& normalized) {
+            double depth = 0.0;
+            DepthTestResult test{1.0, depth, true};
+            if (probe && x == probe->x && y == probe->y) {
+                probe->traces.push_back({index, weights, depth, test.storedDepth, test.passed});
+            }
+            if (!test.passed) {
+                ++stats.rejectedCount;
+                return;
+            }
+            colorBuffer[std::size_t(y) * std::size_t(width) + std::size_t(x)] = packColor(normalized.color);
+            ++stats.passedCount;
+        });
+    }
+    (void)reverseOrder;
+    (void)depthEnabled;
+    (void)cullEnabled;
+    return stats;
+}
+```
+
+
+DepthTestResult ở đây luôn passed=true và depth=0 chỉ là dữ liệu giữ chỗ, chưa phải kết quả Z-buffer. RenderStats đếm số triangle/fragment thật. Khi thêm depth test ở bài 5, ta sẽ thay đúng quyết định này, không viết một rasterizer khác.
+
+### Bước 4 — Đưa ảnh vào vòng lặp SDL đang có
+
+Thay renderScene trong view.hpp bằng hàm sau:
+
+```cpp title="include/view.hpp — clear color rồi vẽ toàn mesh"
+inline RenderStats renderScene(RenderTargets& targets, const Scene& scene) {
+    targets.image.clear(kBackground);
+    targets.probe.x = scene.inspectX;
+    targets.probe.y = scene.inspectY;
+    targets.probe.traces.clear();
+    RenderStats stats{};
+    const CubeMesh mesh = makeCubeMesh();
+    stats = renderCube(mesh, Framebuffer::width, viewportHeight(scene), scene.angleX, scene.angleY, scene.reverseOrder, scene.depthEnabled, targets.image.pixels, targets.depth, scene.cullEnabled, scene.camera, &targets.probe);
+    return stats;
+}
+```
+
+
+main.cpp đã gọi renderScene khi dirty=true, sau đó dùng SDL_UpdateTexture → SDL_RenderTexture → SDL_RenderPresent. RenderTargets sống ngoài vòng lặp; không tạo một color buffer mới cho từng triangle. Vì hạ tầng này có sẵn, bạn không cần viết lại SDL init hoặc present.
+
+### Bước 5 — Cho người học tự xoay khối
+
+Trong scene.hpp, thêm beginDrag và updateDrag sau DragState:
+
+```cpp title="include/scene.hpp — lưu pose ban đầu và chọn pixel"
+inline void beginDrag(Scene& scene, Vec2 mouse, DragState& drag) {
+    if (!std::isfinite(mouse.x) || !std::isfinite(mouse.y)) {
+        drag = {};
+        return;
+    }
+    drag = {true, mouse, scene.angleX, scene.angleY};
+    scene.inspectX = std::clamp(static_cast<int>(mouse.x), 0, Framebuffer::width - 1);
+    scene.inspectY = std::clamp(static_cast<int>(mouse.y), 0, viewportHeight(scene) - 1);
+    scene.paused = true;
+}
+```
+
+
+
+```cpp title="include/scene.hpp — delta kéo đổi góc mô hình"
+inline void updateDrag(Scene& scene, const DragState& drag, Vec2 mouse) {
+    if (!drag.active || !std::isfinite(mouse.x) || !std::isfinite(mouse.y)) {
+        return;
+    }
+    scene.angleX = std::remainder(drag.angleX + (mouse.y - drag.start.y) * 0.008, 6.283185307179586);
+    scene.angleY = std::remainder(drag.angleY + (mouse.x - drag.start.x) * 0.008, 6.283185307179586);
+    scene.paused = true;
+}
+```
+
+
+Thay handleKey trong controls.hpp bằng bản này:
+
+```cpp title="include/controls.hpp — mũi tên, preset và reset"
+inline void handleKey(Scene& scene, SDL_Keycode key, bool repeat) {
+    if (!repeat && (key == SDLK_R || (key >= SDLK_1 && key <= SDLK_3))) {
+        int preset = 1;
+        if (key != SDLK_R) {
+            preset = static_cast<int>(key - SDLK_0);
+        }
+        resetScene(scene, preset);
+    }
+    if (key == SDLK_LEFT) {
+        scene.angleY -= 0.08;
+        scene.paused = true;
+    }
+    if (key == SDLK_RIGHT) {
+        scene.angleY += 0.08;
+        scene.paused = true;
+    }
+    if (key == SDLK_UP) {
+        scene.angleX -= 0.08;
+        scene.paused = true;
+    }
+    if (key == SDLK_DOWN) {
+        scene.angleX += 0.08;
+        scene.paused = true;
+    }
+
+    (void)scene;
+    (void)key;
+    (void)repeat;
+}
+```
+
+
+Trong main.cpp, trước while(running), thêm state capture:
+
+```cpp title="src/main.cpp — owner của lần kéo"
+lab::DragState drag;
+SDL_MouseID owner{};
+const auto cancelDrag = [&]() {
+    drag = {};
+    SDL_CaptureMouse(false);
+};
+```
+
+
+Trong SDL_PollEvent, sau nhánh xử lý window, thêm khối mouse dưới:
+
+```cpp title="src/main.cpp — down, motion và mẫu thả cuối"
+const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    failed = true;
+    running = false;
+    break;
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !drag.active) {
+    const lab::Vec2 mouse{event.button.x, event.button.y};
+    if (mouse.x >= 0.0 && mouse.x < 1100.0 && mouse.y >= 0.0 && mouse.y < lab::viewportHeight(scene)) {
+        lab::beginDrag(scene, mouse, drag);
+        owner = event.button.which;
+        if (!SDL_CaptureMouse(true)) {
+            cancelDrag();
+        }
+        dirty = true;
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_MOTION && drag.active && event.motion.which == owner) {
+    if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
+        cancelDrag();
+    } else {
+        lab::updateDrag(scene, drag, {event.motion.x, event.motion.y});
+        dirty = true;
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && drag.active && event.button.which == owner) {
+    lab::updateDrag(scene, drag, {event.button.x, event.button.y});
+    cancelDrag();
+    dirty = true;
+}
+```
+
+
+Gọi cancelDrag() trước handleKey, trong nhánh focus-lost/hidden/minimize/resize và trước SDL_DestroyTexture khi thoát. Mẫu mouse-up phải được dùng trước khi nhả capture; không để một lần kéo cũ ghi đè state sau reset.
 
 ## Ghép các phần lại
 
-### Build checkpoint đầu
+Build project_17_starter. Kéo ngang/dọc hoặc dùng các phím mũi tên để xoay mô hình; 1/2/3 chọn góc mẫu, R đặt lại. Khung vẽ logic là 1100×800, vùng hình 1100×600 khi bật HUD. Resize/HiDPI chỉ thay letterbox, không đổi số pixel của buffer.
 
-```bash title="Terminal — build cube đặc chưa có Z-buffer"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_17_checkpoint_1
-```
-
-Chạy target, kéo chuột để xoay cube và nhấn `R` để đặt lại góc nhìn. Bạn cần thấy một khối sáu màu, dù màu của mặt gần/xa đôi lúc chưa đúng.
+Hãy quan sát mặt che sai khi xoay. Đừng chữa bằng cách đổi thứ tự cố định cho riêng một góc nhìn, vì bài sau cần giữ lại lỗi này.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi vị trí `cameraPoint.z += 4.2` lên trước `rotateCubeVertex`. Cube quay thành một quỹ đạo lớn; đưa translation về sau rotation.
-2. Sửa triangle thứ hai của mặt front thành `{0, 3, 2}`. Hai triangle có winding không nhất quán; outline có thể vẫn giống nhưng top-left ownership và các project culling sau sẽ khó kiểm chứng.
-3. Project ba vertex bên trong từng triangle. Hình không đổi, nhưng bạn thực hiện 36 phép transform thay vì 8; phục hồi cache `screenVertices`.
-4. Gọi API fill geometry của SDL thay cho `rasterizeTriangle`. Chương trình có hình nhưng bạn mất barycentric weights và không còn chỗ để tự viết depth test.
+1. Đổi translation sang trước rotation: tâm khối chạy vòng quanh camera. Trả lại thứ tự quay tại local origin rồi mới dịch.
+
+2. Xóa một trong hai triangle của một mặt: xuất hiện nửa mặt bị thiếu, dù tám vertex vẫn đủ.
+
+3. Chỉ lưu mouse cuối thay vì pose lúc bắt đầu kéo: dễ cộng delta nhiều lần. Giữ góc ban đầu và tính delta từ đúng điểm nắm.
 
 ## Tự kiểm tra kết quả
 
-- `makeCubeMesh` có đúng 8 vertex, 12 triangle và 6 `faceName` khác nhau.
-- Mọi index nằm trong đoạn `0..7`; hai triangle của mỗi mặt dùng cùng màu.
-- Cube được quay quanh local origin rồi dịch về phía +Z.
-- Tám vertex chỉ được project một lần mỗi frame.
-- Cả mười hai triangle đi qua cùng `rasterizeTriangle` và cùng callback ghi color.
-- Kéo chuột, `R` và resize không truy cập ngoài framebuffer.
-- Chưa có sort, depth compare hoặc Z-buffer ở checkpoint này.
+- Mesh có 8 vertex, 12 triangle và 6 màu; không dùng SDL_RenderGeometry.
+- Cube xuất hiện trước khi bàn tới Z-buffer; cả 12 triangle cùng đi qua rasterizeTriangle.
+- Kéo sửa góc mô hình, không đổi camera; reset/resize/blur hủy capture.
+- Chưa có depth compare hay sort triangle.
 
 ## Bài tập mở rộng
 
-Thêm một bộ đếm số lần `projectVertex` được gọi và in nó lên title bar. Giá trị phải luôn là 8, không phải 12 hay 36.
+Đếm số lần projectVertex được gọi trong projectCube. Giải thích vì sao kết quả là 8 thay vì 36.
 
-Bài tiếp theo sẽ không thêm công thức mới. Ta chỉ đảo draw list để chứng minh hình hiện tại đang phụ thuộc vào lệnh nào chạy sau.
+[Sang bài tiếp theo — Tái hiện lỗi che khuất do thứ tự vẽ](/projects/solid-cube-z-buffer/02-loi-thu-tu-ve).

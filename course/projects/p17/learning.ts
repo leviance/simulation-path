@@ -3,175 +3,230 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p17-l01": {
-      focus:
-        "Dựng mesh cube có tám vertex dùng chung và mười hai indexed triangle, rồi đưa từng triangle qua projection cùng rasterizer Project 16.",
-      expected:
-        "Cube đặc có sáu màu xuất hiện trên CPU framebuffer và xoay được bằng chuột. Một số mặt che sai nhau là lỗi có chủ ý của checkpoint đầu.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Dựng đủ mesh và vòng fill trước khi viết Z-buffer.",
+      expected: "Khối đủ 12 triangle, kéo và phím xoay hoạt động dù chưa có depth test.",
+      files: [
+        "include/geometry.hpp",
+        "include/raster.hpp",
+        "include/render.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/controls.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Mô tả topology trước khi render",
-          explanation:
-            "CubeMesh giữ tám position và mười hai bộ ba index. Hai triangle của cùng một mặt dùng chung màu và cùng đường chéo, nên dữ liệu hình học có thể kiểm tra riêng.",
+          title: "Xác định phần đang thay",
+          explanation: "Dựng đủ mesh và vòng fill trước khi viết Z-buffer.",
         },
         {
-          title: "Project tám vertex đúng một lần",
+          title: "Viết và chạy mã trong Starter",
           explanation:
-            "Mỗi frame biến đổi tám vertex thành ScreenVertex rồi các triangle chỉ tra index. Cách này tránh tính lại phép quay và projection 36 lần.",
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
         },
         {
-          title: "Tái dùng raster callback",
+          title: "Đối chiếu kết quả",
           explanation:
-            "Mỗi ScreenTriangle đi qua top-left rasterizer Project 16; callback ban đầu chỉ ghi màu mặt vào color buffer.",
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
         },
       ],
     },
     "p17-l02": {
-      focus:
-        "Giữ nguyên scene nhưng đảo draw list để chứng minh color buffer hiện tại mô tả thứ tự lệnh, không mô tả bề mặt gần camera.",
-      expected:
-        "Nhấn O làm các vùng màu đổi rõ dù camera, cube và projection không đổi. Góc overlap cho thấy một triangle không thể được xếp đúng bằng một vị trí duy nhất.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Cô lập draw order mà không đổi winding/góc quay.",
+      expected: "Đảo order thấy lỗi rõ, mesh và pose giữ nguyên.",
+      files: ["include/render.hpp", "include/controls.hpp"],
       steps: [
         {
-          title: "Đảo index, không đảo geometry",
-          explanation:
-            "triangleIndexAt chỉ thay triangle nào được gửi vào rasterizer trước. Đây là thí nghiệm có kiểm soát: mọi dữ liệu khác giữ nguyên.",
+          title: "Xác định phần đang thay",
+          explanation: "Cô lập draw order mà không đổi winding/góc quay.",
         },
         {
-          title: "Nhìn color overwrite như log",
+          title: "Viết và chạy mã trong Starter",
           explanation:
-            "Không có depth test, callback sau luôn ghi đè callback trước. Màu cuối vì vậy chỉ cho biết fragment nào đến sau.",
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
         },
         {
-          title: "Tách triệu chứng khỏi giải pháp",
+          title: "Đối chiếu kết quả",
           explanation:
-            "Checkpoint này chưa thêm Z-buffer. Người học phải nhìn được lỗi và mô tả điều kiện đúng trước khi cài cấu trúc dữ liệu mới.",
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
         },
       ],
     },
     "p17-l03": {
-      focus:
-        "Tạo DepthBuffer có vòng đời song song với color buffer: cùng kích thước, cùng index, clear đầu frame và resize cùng lúc.",
-      expected:
-        "Title bar báo đúng width×height. Resize nhiều lần không crash; mỗi frame bắt đầu với toàn bộ depth bằng 1.0 nhưng hình vẫn chưa được sửa.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Cùng row stride, kiểm kích thước trước cấp phát và clear theo frame.",
+      expected: "Buffer (4,3) có 12 số, index(2,1)=6, invalid resize không đổi dữ liệu.",
+      files: ["include/depth.hpp", "include/render.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Một pixel, một ô depth",
-          explanation:
-            "index=y×width+x được dùng cho cả hai buffer. Không cần map hoặc cấu trúc lồng nhau vì vòng raster vốn đi theo row-major.",
+          title: "Xác định phần đang thay",
+          explanation: "Cùng row stride, kiểm kích thước trước cấp phát và clear theo frame.",
         },
         {
-          title: "Clear về giá trị xa nhất",
+          title: "Viết và chạy mã trong Starter",
           explanation:
-            "Projection của project tạo NDC depth trong [0,1], nên 1.0 là mốc khởi đầu hợp lệ để mọi fragment gần hơn có thể pass.",
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
         },
         {
-          title: "Resize như một giao dịch",
+          title: "Đối chiếu kết quả",
           explanation:
-            "Sau khi texture mới tạo thành công, color buffer và depth buffer mới cùng nhận kích thước pixel mới.",
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
         },
       ],
     },
     "p17-l04": {
-      focus:
-        "Đưa ndcDepth đi cùng mỗi ScreenVertex và nội suy scalar đó bằng chính barycentric weights mà coverage test đã tính.",
-      expected:
-        "Cube hiển thị grayscale đổi mượt theo chiều sâu. Một triangle nghiêng không còn một depth phẳng chung cho toàn bộ mặt.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Depth sau perspective divide, weights đi cùng normalized triangle.",
+      expected: "near=1 cho 0; far=10 cho 1; view Z=4 cho NDC 5/6.",
+      files: [
+        "include/geometry.hpp",
+        "include/depth.hpp",
+        "include/render.hpp",
+        "include/presentation.hpp",
+      ],
       steps: [
         {
-          title: "Giữ depth sau perspective divide",
-          explanation:
-            "projectVertex trả screen x/y và ndcDepth trong cùng ScreenVertex, tránh ghép nhầm dữ liệu từ hai không gian.",
+          title: "Xác định phần đang thay",
+          explanation: "Depth sau perspective divide, weights đi cùng normalized triangle.",
         },
         {
-          title: "Nội suy tại fragment",
+          title: "Viết và chạy mã trong Starter",
           explanation:
-            "interpolateNdcDepth dùng wA, wB, wC của sample. Đây là phép nội suy tuyến tính hợp lệ với NDC depth trên screen space.",
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
         },
         {
-          title: "Hiển thị trước khi so sánh",
+          title: "Đối chiếu kết quả",
           explanation:
-            "Grayscale biến con số khó nhìn thành gradient, giúp bắt lỗi depth đảo chiều hoặc dùng cùng một giá trị cho cả triangle.",
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
         },
       ],
     },
     "p17-l05": {
-      focus:
-        "Cài depth test và depth write thành một thao tác rõ thứ tự, sau đó chỉ ghi color nếu fragment vượt phép thử.",
-      expected:
-        "Bật D làm mặt gần che mặt xa đúng; đảo O không còn thay hình. Tắt D quay lại lỗi Painter để so trực tiếp.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Compare rồi write đúng pixel; từ chối dữ liệu không hợp lệ.",
+      expected: "Depth 0.25 thắng 0.75; fail không sửa color/depth, depth tắt không ghi depth.",
+      files: [
+        "include/depth.hpp",
+        "include/render.hpp",
+        "include/scene.hpp",
+        "include/controls.hpp",
+        "include/presentation.hpp",
+      ],
       steps: [
         {
-          title: "Đọc depth cũ trước",
-          explanation:
-            "DepthTestResult lưu storedDepth trước phép ghi, newDepth và passed để inspector/test giải thích được quyết định.",
+          title: "Xác định phần đang thay",
+          explanation: "Compare rồi write đúng pixel; từ chối dữ liệu không hợp lệ.",
         },
         {
-          title: "So nhỏ hơn vì near bằng zero",
+          title: "Viết và chạy mã trong Starter",
           explanation:
-            "newDepth < storedDepth bám đúng convention đã chốt. Đổi dấu mà không đổi projection sẽ cho mặt xa thắng.",
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
         },
         {
-          title: "Ghi hai buffer cùng nhánh pass",
+          title: "Đối chiếu kết quả",
           explanation:
-            "Depth pass cập nhật depth trước, rồi callback ghi đúng color tại cùng index. Nhánh fail không được đụng vào buffer nào.",
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
         },
       ],
     },
     "p17-l06": {
-      focus:
-        "Gom projection, mười hai draw call và fragment path vào renderCube, rồi thêm animation có delta time và controls dùng chung trạng thái.",
-      expected:
-        "Cube quay liên tục hoặc từng bước; title bar báo covered/pass/reject. Kéo chuột, pause và resize không tạo nhánh renderer thứ hai.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Dùng dt và một render path cho cả animation lẫn thao tác tay.",
+      expected: "Các chuỗi dt nhỏ cùng tổng thời gian cho cùng góc, pause/step không nhảy pose.",
+      files: ["include/scene.hpp", "include/controls.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Project vertex một lần mỗi frame",
-          explanation:
-            "renderCube tạo mảng tám ScreenVertex rồi duyệt draw order. Mọi face vẫn đi qua cùng rasterizeTriangle và depth callback.",
+          title: "Xác định phần đang thay",
+          explanation: "Dùng dt và một render path cho cả animation lẫn thao tác tay.",
         },
         {
-          title: "Đếm ở đúng tầng",
+          title: "Viết và chạy mã trong Starter",
           explanation:
-            "covered đếm fragment coverage, passed/rejected đếm kết quả depth. Ba số không thay thế nhau và giúp phát hiện clear hoặc compare sai.",
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
         },
         {
-          title: "Animation không làm đổi thuật toán",
+          title: "Đối chiếu kết quả",
           explanation:
-            "Delta time chỉ sửa angleY. Pause, N và drag đều tạo scene mới rồi gọi lại cùng renderCube.",
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
         },
       ],
     },
     "p17-l07": {
-      focus:
-        "Thêm depth visualization và kiểm chứng toàn buffer giữa draw order xuôi/ngược bằng CTest chạy được ở Debug lẫn Release.",
-      expected:
-        "V hiển thị vùng gần sáng hơn. Với D bật, hai order có color/depth difference bằng zero; CTest pass và source final chạy độc lập.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+      focus: "So từng pixel thay vì chỉ so checksum hoặc bộ đếm.",
+      expected: "Color/depth cuối khớp khi đổi order; NaN không qua so sánh.",
+      files: ["include/render.hpp", "include/view.hpp", "include/controls.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Biến depth thành ảnh chẩn đoán",
-          explanation:
-            "depthShade chỉ đọc buffer sau khi render và đổi [0,1] thành grayscale. Nó không can thiệp depth test.",
+          title: "Xác định phần đang thay",
+          explanation: "So từng pixel thay vì chỉ so checksum hoặc bộ đếm.",
         },
         {
-          title: "So toàn bộ output",
+          title: "Viết và chạy mã trong Starter",
           explanation:
-            "Test render cùng cube hai lần, chỉ đổi draw order, rồi so mọi pixel color và depth thay vì chọn một ảnh chụp đẹp.",
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
         },
         {
-          title: "Giữ đối chứng âm",
+          title: "Đối chiếu kết quả",
           explanation:
-            "Test tắt depth và yêu cầu hai color buffer khác nhau. Nếu đối chứng không còn khác, bài test order-independence có thể đang dùng scene quá dễ.",
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
+        },
+      ],
+    },
+    "p17-l08": {
+      focus: "Loại mặt quay lưng trước normalize, không dùng thay depth test.",
+      expected: "Culling giảm số triangle mà giữ cùng ảnh với Z-buffer bật.",
+      files: [
+        "include/geometry.hpp",
+        "include/raster.hpp",
+        "include/render.hpp",
+        "include/controls.hpp",
+      ],
+      steps: [
+        {
+          title: "Xác định phần đang thay",
+          explanation: "Loại mặt quay lưng trước normalize, không dùng thay depth test.",
+        },
+        {
+          title: "Viết và chạy mã trong Starter",
+          explanation:
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
+        },
+        {
+          title: "Đối chiếu kết quả",
+          explanation:
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
+        },
+      ],
+    },
+    "p17-l09": {
+      focus: "Giữ lưới world/camera độc lập và kiểm Starter hoàn chỉnh.",
+      expected: "Clean có cube/grid 3D; chạy tests trỏ đúng Starter ở Debug và Release.",
+      files: [
+        "include/view.hpp",
+        "include/scene.hpp",
+        "include/controls.hpp",
+        "include/presentation.hpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Xác định phần đang thay",
+          explanation: "Giữ lưới world/camera độc lập và kiểm Starter hoàn chỉnh.",
+        },
+        {
+          title: "Viết và chạy mã trong Starter",
+          explanation:
+            "Theo các vị trí chèn/thay trong bài; build project_17_starter. Checkpoint chỉ là bản tham khảo độc lập.",
+        },
+        {
+          title: "Đối chiếu kết quả",
+          explanation:
+            "Thử cả trường hợp đúng và lỗi có chủ ý; đọc số liệu thật thay vì chỉ nhìn ảnh.",
         },
       ],
     },
   },
   references: {
+    "p17-l08": [
+      { label: "Back-face culling", href: "/glossary#back-face-culling", kind: "Thuật ngữ" },
+    ],
+    "p17-l09": [{ label: "Camera space", href: "/glossary#camera-space", kind: "Thuật ngữ" }],
     "p17-l01": [
       { label: "Indexed mesh", href: "/glossary#indexed-mesh", kind: "Thuật ngữ" },
       { label: "Rasterization", href: "/glossary#rasterization", kind: "Thuật ngữ" },

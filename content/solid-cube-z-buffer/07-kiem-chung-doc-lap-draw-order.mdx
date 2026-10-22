@@ -4,52 +4,39 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Một góc cube đẹp chưa chứng minh Z-buffer đúng. Lỗi clear, dấu compare hoặc depth gắn sai vertex có thể chỉ xuất hiện ở góc khác. Definition of Done của Project 17 là một invariant trên **toàn bộ output**:
-
-> Cùng mesh, camera và góc quay; đảo thứ tự mười hai triangle không được làm đổi bất kỳ pixel color hoặc depth nào khi depth test bật.
-
-Bài cuối thêm hai dụng cụ: depth view để nhìn buffer và CTest để so hai lần render. Ta cũng giữ một đối chứng âm: tắt depth phải làm hai order khác nhau ở scene overlap, nếu không test có thể đang dùng một tình huống quá dễ.
-
-Với `Depth test` bật, readout “Chênh lệch khi đảo order” phải là `0 color · 0 depth`. Tắt depth và dùng preset overlap; color difference phải lớn hơn zero.
+Nhìn một ảnh đẹp chưa đủ để kết luận Z-buffer đúng. Ta cần giữ nguyên scene, vẽ hai lần với hai thứ tự triangle và so kết quả ở mọi pixel. Đồng thời, depth view và pixel inspector giúp tìm chỗ sai thay vì đoán từ màu.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta cần cả kiểm tra trực quan và invariant tự động. Depth view giúp hiểu dữ liệu, còn CTest so toàn buffer để không bỏ sót một pixel sai.
+Color buffer phải giống từng phần tử. Depth là số thực nên so với tolerance nhỏ, nhưng NaN không được coi là bằng nhau. Chỉ so tổng, checksum hoặc pass/reject count có thể bỏ sót hai pixel đổi chỗ.
+
+Độ sáng của depth view chỉ là cách trình bày. Giá trị clear=1 được tô nền tối; các depth nhỏ hơn sáng hơn. Không dùng ảnh grayscale đã lượng tử hóa để so độ chính xác của buffer gốc.
 
 <InteractiveLab demo="z-buffer" mode="depth-validate" />
 
 ## Viết code từng bước
 
-### Bước 1 — Hiển thị depth mà không sửa thuật toán
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Phần nào ghi “đã có” thì chỉ đọc lại; khi thay hàm hoặc struct, thay bản cũ thay vì tạo thêm định nghĩa trùng tên.
 
-Depth view chỉ chạy sau `renderCube`. Nó đọc từng depth và thay color buffer bằng grayscale để debug:
-
-```cpp title="include/lab.hpp — gần sáng, far/clear tối"
-inline std::uint8_t depthShade(double depth) {
-    if (!std::isfinite(depth) || depth >= 1.0) {
-        return 12;
-    }
-    const double brightness =
-        (1.0 - std::clamp(depth, 0.0, 1.0)) * 235.0 + 20.0;
-    return std::uint8_t(std::lround(brightness));
-}
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_17_starter --parallel 2
+.\build\Debug\project_17_starter.exe
 ```
 
-`V` không đổi projection, compare hay depth buffer; nó chỉ chọn cách trình bày kết quả. Nếu depth view nằm trong callback raster, việc bật V có thể vô tình thay color/depth path cần kiểm tra.
+Checkpoint 07 là **bản tham khảo sau bài**, chạy độc lập bằng target project_17_checkpoint_7. Nó không nhận các thay đổi bạn vừa viết trong Starter.
 
-### Bước 2 — So depth buffer với tolerance
+### Bước 1 — So toàn bộ depth buffer
 
-```cpp title="include/lab.hpp — kiểm mọi ô depth"
-inline bool buffersNearlyEqual(
-    const std::vector<double>& first,
-    const std::vector<double>& second,
-    double epsilon = 1e-9
-) {
-    if (first.size() != second.size()) {
+Thêm buffersNearlyEqual vào render.hpp, sau renderCube:
+
+```cpp title="include/render.hpp — so số thực và từ chối NaN"
+inline bool buffersNearlyEqual(const std::vector<double>& first, const std::vector<double>& second, double epsilon = 1e-9) {
+    if (first.size() != second.size() || !std::isfinite(epsilon) || epsilon < 0.0) {
         return false;
     }
-    for (std::size_t index = 0; index < first.size(); ++index) {
-        if (std::abs(first[index] - second[index]) > epsilon) {
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        if (!std::isfinite(first[i]) || !std::isfinite(second[i]) || std::abs(first[i] - second[i]) > epsilon) {
             return false;
         }
     }
@@ -57,95 +44,119 @@ inline bool buffersNearlyEqual(
 }
 ```
 
-Color là integer RGBA nên test bằng equality tuyệt đối. Depth là `double`; cùng scene hiện tại đáng ra cho cùng phép tính, nhưng tolerance nhỏ làm contract bền hơn trước khác biệt compiler mà vẫn bắt được sai surface.
 
-### Bước 3 — Render hai frame chỉ khác order
+Hàm kiểm cả kích thước và từng giá trị. Color buffer là số nguyên packed RGBA, dùng so sánh vector trực tiếp.
 
-Test helper tạo buffer `160×120`, clear giống chương trình thật rồi gọi `renderCube`:
+### Bước 2 — Hiện depth và pixel được chọn
 
-```cpp title="tests/tests.cpp — hai lần render có cùng scene"
-const RenderedFrame normal = render(false, true);
-const RenderedFrame reversed = render(true, true);
+Thêm depthShade vào render.hpp:
 
-check(
-    normal.colors == reversed.colors,
-    "color buffer is independent of draw order"
-);
-check(
-    lab::buffersNearlyEqual(
-        normal.depths.values(),
-        reversed.depths.values()
-    ),
-    "depth buffer is independent of draw order"
-);
+```cpp title="include/render.hpp — chỉ đổi cách nhìn depth"
+inline std::uint8_t depthShade(double depth) {
+    if (!std::isfinite(depth) || depth >= 1.0) {
+        return 12;
+    }
+    return std::uint8_t(std::lround((1.0 - std::clamp(depth, 0.0, 1.0)) * 235.0 + 20.0));
+}
 ```
 
-Test không chụp screenshot và không cần SDL. Nó so mọi phần tử buffer, vì một pixel sai ở góc cũng là renderer sai.
 
-### Bước 4 — Giữ đối chứng âm
+Trong renderScene, sau renderCube và trước return stats, thêm hai nhánh sau:
 
-```cpp title="tests/tests.cpp — scene thật sự làm lộ lỗi khi tắt depth"
-const RenderedFrame painterNormal = render(false, false);
-const RenderedFrame painterReversed = render(true, false);
-
-check(
-    painterNormal.colors != painterReversed.colors,
-    "without a depth test the cube depends on triangle order"
-);
+```cpp title="include/view.hpp — grayscale không thay depth buffer"
+if (scene.debug && scene.depthView) {
+    for (std::size_t i = 0; i < targets.image.pixels.size(); ++i) {
+        const auto shade = depthShade(targets.depth.values()[i]);
+        targets.image.pixels[i] = packColor({shade, shade, shade, 255});
+    }
+}
 ```
 
-Nếu assertion này thất bại, chưa chắc Z-buffer sai; có thể góc test tình cờ không làm hai order khác nhau. Khi đó hãy chọn scene có nhiều face overlap hơn thay vì xóa đối chứng.
 
-### Bộ test còn khóa những gì?
 
-- mesh có 8 vertex, 12 triangle, 6 face và mọi index hợp lệ;
-- near maps về depth 0, far maps về 1, depth tăng theo camera Z;
-- `DepthBuffer` có đúng số phần tử, row-major index và resize/clear đúng;
-- barycentric example nội suy `0.20/0.50/0.80` thành `0.50`;
-- fragment gần pass, fragment xa và equal-depth fail;
-- renderer tạo cả pass lẫn reject;
-- mọi depth cuối hữu hạn và nằm trong `[0,1]`.
+```cpp title="include/view.hpp — đánh dấu pixel đang đọc"
+if (scene.debug) {
+    screenLine(targets.image, {double(scene.inspectX - 4), double(scene.inspectY)}, {double(scene.inspectX + 4), double(scene.inspectY)}, viewportHeight(scene), kWhite);
+    screenLine(targets.image, {double(scene.inspectX), double(scene.inspectY - 4)}, {double(scene.inspectX), double(scene.inspectY + 4)}, viewportHeight(scene), kWhite);
+}
+```
+
+
+Trong handleKey, thêm phím V:
+
+```cpp title="include/controls.hpp — bật tắt depth view"
+if (!repeat && key == SDLK_V && scene.debug) {
+    scene.depthView = !scene.depthView;
+}
+```
+
+
+Inspector vẫn dùng trace thật của callback từ bài 4–5; không suy ngược depth từ màu cuối.
+
+### Bước 3 — Đọc bộ kiểm chứng độc lập trong ZIP
+
+Các đoạn dưới đã nằm trong tests/tests.cpp của ZIP. Chúng là mã **đọc để đối chiếu**, không dán vào main SDL:
+
+```cpp title="tests/tests.cpp — một frame giữ color, depth và stats"
+struct RenderedFrame {
+    std::vector<std::uint32_t> colors{};
+    lab::DepthBuffer depths{1, 1};
+    lab::RenderStats stats{};
+};
+```
+
+
+
+```cpp title="tests/tests.cpp — render scene vào buffer thuần CPU"
+RenderedFrame render(bool reverseOrder, bool depthEnabled) {
+    constexpr int width = 160;
+    constexpr int height = 120;
+    RenderedFrame frame{
+        std::vector<std::uint32_t>(std::size_t(width) * std::size_t(height), 0x090f1dffU),
+        lab::DepthBuffer(width, height),
+        {},
+    };
+    frame.stats = lab::renderCube(
+        lab::makeCubeMesh(),
+        width,
+        height,
+        -0.42,
+        0.68,
+        reverseOrder,
+        depthEnabled,
+        frame.colors,
+        frame.depths
+    );
+    return frame;
+}
+```
+
+
+Tests gọi render(false,true) và render(true,true), so colors trực tiếp, rồi dùng buffersNearlyEqual cho depths. Khi depth tắt, chúng phải thấy colors khác nhau. Bài 9 sẽ chỉ cách đổi target tests từ final/include sang Starter của bạn sau khi hoàn tất cả module.
 
 ## Ghép các phần lại
 
-### Build, test và chạy bản hoàn chỉnh
+Build Starter. V bật/tắt grayscale; click pixel để đọc trace. Trong Canvas, Chênh lệch khi đảo order phải là 0 color · 0 depth khi Depth test bật. Tắt depth rồi đảo order để tạo một trường hợp sai thật.
 
-```bash title="Terminal — kiểm chứng Debug và Release"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-```
-
-Sau khi CTest pass, chạy `project_17_final`:
-
-1. Dùng `1–3` để thử ba góc nhìn.
-2. Bật `D`, nhấn `O`: hình không đổi.
-3. Tắt `D`, nhấn `O`: preset 3 phải đổi màu ở vùng overlap.
-4. Bật lại `D`, nhấn `V`: gần sáng, xa tối, background gần đen.
-5. Dùng `Space`, `N`, drag và `R`; tất cả phải đi qua cùng renderer.
-6. Resize liên tục; cube vẫn đúng và buffer không lệch kích thước.
+Bài này hoàn thiện kiểm chứng Z-buffer, chưa phải điểm kết thúc module: ta còn culling và cảnh 3D sạch ở hai bài sau. Bộ tests trong ZIP kiểm bản final mặc định; đừng dùng kết quả ấy để khẳng định Starter chưa viết xong đã đúng.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chỉ so checksum tổng màu. Hai pixel đổi chỗ có thể giữ cùng tổng; so từng phần tử buffer.
-2. Bỏ đối chứng depth-off vì “final không dùng”. Khi đó test có thể pass với scene không hề tạo xung đột visibility.
-3. Dùng tolerance depth quá lớn như `0.1`. Hai mặt khác nhau cũng có thể bị xem là bằng; giữ tolerance quanh sai số số học, không quanh sai số thị giác.
-4. Cho depth view ghi ngược trở lại depth buffer. Sau lần nhấn V, renderer bị đổi dữ liệu; depth view chỉ được đọc.
+1. Cho NaN vào hai buffer rồi chỉ kiểm abs(a-b)>epsilon: so sánh với NaN có thể không báo sai. Giữ kiểm isfinite.
+
+2. So tổng depth thay vì từng pixel: đổi chỗ hai giá trị vẫn giữ nguyên tổng. So đầy đủ vị trí.
+
+3. Yêu cầu passCount bằng nhau giữa hai draw order: đó là thống kê trung gian, không phải ảnh cuối. So color/depth cuối.
 
 ## Tự kiểm tra kết quả
 
-- Depth view chỉ đọc depth buffer sau render.
-- Hai order với depth bật có color buffer giống tuyệt đối và depth buffer sai khác không quá `1e-9`.
-- Hai order với depth tắt tạo color buffer khác nhau ở scene test.
-- Test chạy trong Release vì runner không dựa vào `assert` bị tắt bởi `NDEBUG`.
-- Starter, bảy checkpoint và final đều build độc lập.
-- ZIP chứa README, CMakeLists, starter, checkpoints, final và tests.
-- Toàn bộ controls vẫn hoạt động sau resize.
+- Depth bật: color giống hoàn toàn, depth giống trong tolerance.
+- Depth tắt: preset có mặt chồng nhau cho ảnh khác khi đảo order.
+- NaN, khác kích thước hoặc tolerance sai không được báo bằng nhau.
+- Depth view không sửa buffer dùng cho compare.
 
 ## Bài tập mở rộng
 
-Thêm pixel inspector vào C++: click để lưu `(x,y)`, rồi trong callback ghi lại chuỗi `faceName`, `storedDepth`, `newDepth`, `passed` của riêng pixel đó. Giới hạn log tối đa 12 dòng mỗi frame để terminal vẫn đọc được.
+Thêm test đổi chỗ hai phần tử depth nhưng giữ nguyên tổng. buffersNearlyEqual phải phát hiện được.
 
-Project 17 đã hoàn chỉnh. Bạn đã có một renderer CPU biết chọn bề mặt gần nhất theo từng pixel. Project 18 sẽ xử lý vấn đề xảy ra **trước** rasterization: triangle cắt qua near plane phải được clip thay vì project dữ liệu không hợp lệ.
+[Sang bài tiếp theo — Loại mặt quay lưng trước khi rasterize](/projects/solid-cube-z-buffer/08-back-face-culling).
