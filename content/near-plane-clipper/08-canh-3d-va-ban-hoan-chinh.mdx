@@ -1,0 +1,242 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cảnh 3D sạch và toàn bộ mã hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Phần toán đã đúng, nhưng một mặt cắt và vài con số chưa phải sản phẩm cuối. Bài cuối đặt bề mặt vào một cảnh phối cảnh dễ đọc, cho camera dịch độc lập và tắt toàn bộ overlay mà vẫn giữ hình 3D.
+
+## Hiểu ý tưởng trước khi viết code
+
+World và camera là hai dữ liệu khác nhau. depthOffset chỉ dịch tam giác theo Z; lưới sàn không dùng offset đó. Cả hai cùng đổi từ world sang camera space bằng:
+
+$$P_{view}=P_{world}-C.$$
+
+Camera nhìn cố định +Z, X trong [−1,1], Z trong [−0.5,0.5]. Đây là camera dịch để quan sát, không phải FPS/orbit đầy đủ. Scene chỉ có một bề mặt nhằm tập trung vào clipping; chưa tích hợp Z-buffer, culling, far-plane polygon clipping hay perspective-correct color.
+
+Debug dành 1100×600 cho ảnh, 200 hàng dưới cho HUD/mặt cắt. Clean dùng toàn bộ 1100×800. Aspect thay đổi nên hình chiếu có thể khác, nhưng vị trí world và kết quả clipping không đổi.
+
+<InteractiveLab demo="near-plane" mode="near-showcase" />
+
+## Viết code từng bước
+
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Khi thay một hàm hoặc struct, xóa bản cũ rồi đặt bản mới vào đúng namespace; không để hai định nghĩa trùng tên. Các phần ghi “đã có” chỉ để đọc lại, không chép thêm lần nữa.
+
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_starter --parallel 2
+.\build\Debug\project_18_starter.exe
+```
+
+Checkpoint 08 là **bản tham khảo sau bài**, chạy độc lập bằng target project_18_checkpoint_8. Nó không nhận các thay đổi bạn viết trong Starter.
+
+### Bước 1 — Vẽ lưới world qua cùng camera
+
+Trong view.hpp, thêm drawWorldGrid trước renderScene:
+
+```cpp title="include/view.hpp — lưới phối cảnh không đi theo vật thể"
+inline void drawWorldGrid(Framebuffer& image, const Scene& scene) {
+    const auto line = [&](Vec3 a, Vec3 b) {
+        ClipVertex p{{a.x - scene.camera.x, a.y - scene.camera.y, a.z - scene.camera.z}, {}}, q{{b.x - scene.camera.x, b.y - scene.camera.y, b.z - scene.camera.z}, {}};
+        const bool inP = isInsideNearPlane(p, scene.nearPlane), inQ = isInsideNearPlane(q, scene.nearPlane);
+        if (!inP && !inQ) {
+            return;
+        }
+        if (inP != inQ) {
+            const auto hit = intersectNearPlane(p, q, scene.nearPlane);
+            if (!hit) {
+                return;
+            }
+            if (!inP) {
+                p = *hit;
+            } else {
+                q = *hit;
+            }
+        }
+        const Viewport viewport{0, 0, Framebuffer::width, viewportHeight(scene)};
+        const auto x = projectVertex(p, 1.0471975511965976, viewport, scene.nearPlane), y = projectVertex(q, 1.0471975511965976, viewport, scene.nearPlane);
+        if (x && y) {
+            screenLine(image, x->position, y->position, viewport.height, kGrid);
+        }
+    };
+    for (int x = -6; x <= 6; ++x) {
+        line({double(x), -1.8, 2.0}, {double(x), -1.8, 9.0});
+    }
+    for (int z = 2; z <= 9; ++z) {
+        line({-6.0, -1.8, double(z)}, {6.0, -1.8, double(z)});
+    }
+}
+```
+
+Mỗi đoạn grid được trừ camera, clip near trước divide rồi clip screen trước Bresenham. Ta không bỏ cả đoạn chỉ vì một endpoint outside. Sau `image.clear(kBackground);` trong renderScene, thêm:
+
+```cpp title="include/view.hpp — grid là nền scene, không phải debug"
+drawWorldGrid(image, scene);
+```
+
+Giữ lời gọi này ngoài if(scene.debug), trước vòng tô tam giác. Trong Scene, đổi preset mặc định từ 1 thành 2 để bản hoàn chỉnh mở ngay ví dụ đang cắt:
+
+```cpp title="include/scene.hpp — mặc định một đỉnh outside"
+int preset{2};
+```
+
+
+
+### Bước 2 — Tách camera và chế độ sạch khỏi geometry
+
+Thay handleKey bằng bản hoàn chỉnh dưới để thêm F và J/L/I/K:
+
+```cpp title="include/controls.hpp — camera độc lập và clean mode"
+inline void handleKey(Scene& scene, SDL_Keycode key, bool repeat) {
+    if (!repeat && (key == SDLK_R || (key >= SDLK_1 && key <= SDLK_5))) {
+        int preset = scene.preset;
+        if (key != SDLK_R) {
+            preset = static_cast<int>(key - SDLK_0);
+        }
+        resetScene(scene, preset);
+    }
+    if (key == SDLK_W) {
+        scene.nearPlane = std::min(2.0, scene.nearPlane + 0.05);
+        scene.paused = true;
+    }
+    if (key == SDLK_S) {
+        scene.nearPlane = std::max(0.25, scene.nearPlane - 0.05);
+        scene.paused = true;
+    }
+    if (!repeat && key == SDLK_V) {
+        scene.clipping = !scene.clipping;
+        scene.paused = true;
+    }
+    if (!repeat && key == SDLK_SPACE) {
+        scene.paused = !scene.paused;
+    }
+    if (!repeat && key == SDLK_N && scene.paused) {
+        stepSweep(scene, 0.08);
+    }
+    if (!repeat && key == SDLK_F) {
+        scene.debug = !scene.debug;
+    }
+    if (key == SDLK_J) {
+        scene.camera.x = std::max(-1.0, scene.camera.x - 0.1);
+        scene.paused = true;
+    }
+    if (key == SDLK_L) {
+        scene.camera.x = std::min(1.0, scene.camera.x + 0.1);
+        scene.paused = true;
+    }
+    if (key == SDLK_I) {
+        scene.camera.z = std::min(0.5, scene.camera.z + 0.1);
+        scene.paused = true;
+    }
+    if (key == SDLK_K) {
+        scene.camera.z = std::max(-0.5, scene.camera.z - 0.1);
+        scene.paused = true;
+    }
+
+    (void)scene;
+    (void)key;
+    (void)repeat;
+}
+```
+
+Thay presentFramebuffer bằng bản hoàn chỉnh, giữ createFramebufferTexture như cũ:
+
+```cpp title="include/presentation.hpp — upload CPU, HUD và clean"
+inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene, const FrameStats& stats) {
+    if (!SDL_SetRenderDrawColor(renderer, 17, 24, 43, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr)) {
+        return false;
+    }
+    if (!scene.debug) {
+        return SDL_RenderPresent(renderer);
+    }
+    if (!SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
+        return false;
+    }
+    if (!SDL_RenderDebugText(renderer, 16, 616, "Project 18 | drag / hold A,D depth | W,S near | 1..5 preset R reset")) {
+        return false;
+    }
+    if (!SDL_RenderDebugText(renderer, 770, 616, "ZX: gray before / green after")) {
+        return false;
+    }
+    char line[256]{};
+    std::snprintf(line, sizeof(line), "near %.2f | offset %.2f | Space sweep N step | V clip %d", scene.nearPlane, scene.depthOffset, static_cast<int>(scene.clipping));
+    if (!SDL_RenderDebugText(renderer, 16, 642, line)) {
+        return false;
+    }
+    std::snprintf(line, sizeof(line), "inside %d outside %d on %d | valid %d", stats.clip.inputCounts.inside, stats.clip.inputCounts.outside, stats.clip.inputCounts.onPlane, static_cast<int>(stats.clip.inputCounts.valid));
+    if (!SDL_RenderDebugText(renderer, 16, 668, line)) {
+        return false;
+    }
+    std::snprintf(line, sizeof(line), "polygon %zu | output triangles %zu | rendered %zu | pixels %zu", stats.clip.polygon.count, stats.clip.batch.count, stats.renderedTriangles, stats.covered);
+    if (!SDL_RenderDebugText(renderer, 16, 694, line)) {
+        return false;
+    }
+    std::snprintf(line, sizeof(line), "max near violation %.3g | candidates %zu", maximumNearPlaneViolation(stats.clip.polygon, scene.nearPlane), stats.candidates);
+    if (!SDL_RenderDebugText(renderer, 16, 720, line)) {
+        return false;
+    }
+    std::snprintf(line, sizeof(line), "J,L camera X %.2f | I,K camera Z %.2f | F clean/debug", scene.camera.x, scene.camera.z);
+    if (!SDL_RenderDebugText(renderer, 16, 746, line)) {
+        return false;
+    }
+    (void)stats;
+    return SDL_RenderPresent(renderer);
+}
+```
+
+Nhánh trả sớm ở clean chỉ bỏ chữ HUD; ảnh CPU vẫn đã có bề mặt/lưới. Trong renderScene, drawProfile vẫn nằm trong if(scene.debug). Cũng có thể thêm lệnh F ở frame 6 của nhánh --smoke trong main để kiểm finite smoke qua clean; nó không phải điều khiển thường của người dùng.
+
+### Bước 3 — Chạy và kiểm mã của chính mình
+
+ZIP chứa README, Starter, tám checkpoint chạy độc lập, final, tests và CMake. Phần toàn bộ mã nguồn cuối bài hiển thị từng file hoàn chỉnh; không phải một tập mảnh rời để đoán chỗ ghép.
+
+CTest mặc định dùng final/include. Sau khi viết đủ tám bài, đổi đúng dòng sau trong **CMakeLists.txt của ZIP đã giải nén**, không sửa generator của website:
+
+```cmake title="CMakeLists.txt — kiểm mã người học"
+target_include_directories(project_18_tests PRIVATE starter/include)
+```
+
+Chạy lại configure, build app và test ở cả hai cấu hình:
+
+```powershell title="Build và kiểm Starter Debug/Release"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_starter project_18_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --target project_18_starter project_18_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
+
+Runner dùng check/EXIT_FAILURE, không dùng assert bị Release tắt. Native test gồm oracle giao điểm/RGB, bốn topology, sáu hoán vị, winding/diện tích, contact điểm/đoạn, invalid input, sweep 1001 vị trí toán nhỏ và mask ray/triangle. Nó còn render scene CPU clean để chứng minh còn surface/grid; không chỉ kiểm helper math.
+
+Nếu muốn chạy bản tham khảo hoàn chỉnh, build target project_18_final rồi mở executable trong build/Debug. Nó không nhận thay đổi từ Starter.
+
+## Ghép các phần lại
+
+Project 18 đã hoàn chỉnh khi có một ứng dụng SDL3 tương tác: tam giác đi xuyên camera, phần còn nhìn thấy vẫn được clip và tô; debug before/after tắt riêng; clean giữ cảnh phối cảnh. Chạy project_18_starter để kiểm mã vừa học, project_18_final để xem bản tham khảo.
+
+Native: 1–5 preset; giữ A/D hoặc kéo ngang đổi độ sâu; W/S đổi near; V so clip/discard; Space chạy/dừng sweep; N bước khi paused; F clean/debug; J/L camera X; I/K camera Z; R reset tình huống đang chọn; Esc thoát. Resize/blur/hidden nhả capture, xóa held input và pause.
+
+Canvas dùng đúng công thức nhưng buffer 220×120 hoặc 220×160 để minh họa; C++ tô 1100×600 hoặc 1100×800. --smoke chỉ tạo cửa sổ ẩn và render hữu hạn. CTest/callback tests không thay việc tự thử mouse/keyboard/HiDPI trong cửa sổ thật.
+
+## Thử làm sai để hiểu đúng
+
+1. Đưa depthOffset vào lưới: vật thể kéo cả world đi cùng, mất đối chứng không gian. Chỉ tam giác nhận offset.
+
+2. Đặt cả grid/raster trong if(debug): F làm scene biến mất. Chỉ HUD và mặt cắt thuộc debug.
+
+3. Chạy CTest mặc định rồi kết luận Starter đúng: làm sai một dòng trong Starter, kiểm include path của project_18_tests và chạy lại để thấy sự khác biệt.
+
+## Tự kiểm tra kết quả
+
+- Viewport phối cảnh chiếm vùng chính, clean còn RGB surface cùng grid.
+- 0/1/2/3 đỉnh inside được xử lý, contact điểm/đoạn không tạo triangle giả.
+- World preset không đổi khi dịch camera; grid không nhận offset của tam giác.
+- Starter, 8 checkpoint và final build Debug/Release; tests kiểm đúng include của source bạn muốn.
+- Có toàn bộ source và ZIP; không dùng OpenGL/GLM/SDL_RenderGeometry hay thư viện clipping.
+- Không gọi callback tests hoặc hidden smoke là kiểm thử browser/desktop tương tác trực tiếp.
+
+## Bài tập mở rộng
+
+Thêm một tam giác thứ hai rồi thử che khuất với kiến thức Z-buffer của P17. Giữ clipper trước projection cho từng primitive; không thay near clipping bằng depth test. Đây là mở rộng sau khi bản một tam giác đã được kiểm đúng.
+
+[Tiếp tục Project 19 — Chiếu sáng Lambert cho tetrahedron](/projects/lambert-tetrahedron).

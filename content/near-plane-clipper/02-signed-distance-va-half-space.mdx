@@ -1,100 +1,140 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Phân loại vertex bằng signed distance
+# Signed distance: đỉnh đang ở phía nào?
 
 ## Vấn đề cần giải quyết
 
-Clipper phải quyết định từng vertex thuộc miền giữ lại hay miền bị cắt. Viết rải rác các điều kiện `z > near`, `z >= near` và `z + epsilon >= near` sẽ khiến một vertex đúng trên plane lúc được nhận, lúc bị loại. Tệ hơn, hai cạnh gặp cùng vertex có thể đưa ra hai quyết định khác nhau và sinh điểm trùng.
-
-Ta cần một quy ước duy nhất, có tên và có thể kiểm thử.
+Trước khi cắt cạnh, ta cần trả lời một câu hỏi đơn giản: mỗi đỉnh nằm ở phía được giữ hay phía bị bỏ? Nếu câu trả lời này khác điều kiện của phép projection, một polygon vừa được nhận vẫn có thể biến mất ở bước kế tiếp.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Vì near plane song song với mặt phẳng XY, signed distance chưa chuẩn hóa chỉ cần:
+Một mặt phẳng có normal n và offset b cho biểu thức d(P)=n·P+b. Với near plane, n=(0,0,1), b=−near nên:
 
-$$
-d = z - near
-$$
+$$d(P)=z-near.$$
 
-- `d > 0`: vertex ở phía camera nhìn thấy;
-- `d < 0`: vertex nằm giữa camera và near plane;
-- `|d| ≤ epsilon`: xem như nằm trên plane.
-
-Ta giữ half-space `d ≥ -epsilon`. Việc coi vertex on-plane là inside giúp polygon đóng kín và tránh tạo lại chính vertex đó như một giao điểm mới.
+Giữ `d >= 0`, kể cả điểm đúng trên biên. Epsilon ở đây chỉ dùng cho nhãn onPlane: `abs(d) <= epsilon`. Một điểm có d=−0.5×10⁻⁹ vẫn ở ngoài, dù được báo là gần plane. Vì vậy onPlane không phải nhóm thứ ba tách khỏi inside/outside; tổng inside+outside bằng 3, còn onPlane là số đo bổ sung.
 
 <InteractiveLab demo="near-plane" mode="near-classify" />
 
 ## Viết code từng bước
 
-### Bước 1 — Đặt phép đo vào một hàm thuần
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Khi thay một hàm hoặc struct, xóa bản cũ rồi đặt bản mới vào đúng namespace; không để hai định nghĩa trùng tên. Các phần ghi “đã có” chỉ để đọc lại, không chép thêm lần nữa.
 
-```cpp title="include/lab.hpp — khoảng cách có dấu tới near plane"
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_starter --parallel 2
+.\build\Debug\project_18_starter.exe
+```
+
+Checkpoint 02 là **bản tham khảo sau bài**, chạy độc lập bằng target project_18_checkpoint_2. Nó không nhận các thay đổi bạn viết trong Starter.
+
+### Bước 1 — Biểu diễn plane bằng dữ liệu rõ nghĩa
+
+Plane và NearPlaneCounts đã có trong types.hpp; đọc lại, không chép thêm struct trùng tên:
+
+```cpp title="include/types.hpp — mặt phẳng và số liệu chẩn đoán"
+struct Plane {
+    Vec3 normal{0.0, 0.0, 1.0};
+    double offset{-1.0};
+};
+
+struct NearPlaneCounts {
+    int inside{};
+    int outside{};
+    int onPlane{};
+    bool valid{true};
+};
+```
+
+Với n có độ dài 1, d chính là khoảng cách có dấu theo đơn vị world. Ta không tự coi mọi normal bất kỳ là unit; bài này dùng normal (0,0,1).
+
+### Bước 2 — Viết phép phân loại và giữ biên chính xác
+
+Trong clip.hpp, bên trong namespace lab, thêm lần lượt bốn hàm sau. signedDistance trả NaN nếu đầu vào lỗi; classifyTriangle dùng cờ valid thay vì để dữ liệu sai âm thầm trở thành outside.
+
+```cpp title="include/clip.hpp — signed distance và half-space chính xác"
+inline double signedDistance(const ClipVertex& vertex, const Plane& plane) {
+    if (!isFinite(vertex) || !std::isfinite(plane.normal.x) || !std::isfinite(plane.normal.y) || !std::isfinite(plane.normal.z) || !std::isfinite(plane.offset)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return plane.normal.x * vertex.position.x + plane.normal.y * vertex.position.y + plane.normal.z * vertex.position.z + plane.offset;
+}
+
 inline double signedDistanceToNearPlane(const ClipVertex& vertex, double nearPlane) {
-    return vertex.position.z - nearPlane;
+    return signedDistance(vertex, {{0.0, 0.0, 1.0}, -nearPlane});
+}
+
+inline bool isInsideNearPlane(const ClipVertex& vertex, double nearPlane) {
+    const double d = signedDistanceToNearPlane(vertex, nearPlane);
+    return std::isfinite(nearPlane) && nearPlane > 0.0 && std::isfinite(d) && d >= 0.0;
+}
+
+inline NearPlaneCounts classifyTriangle(const Triangle3& triangle, double nearPlane, double epsilon = 1e-9) {
+    NearPlaneCounts counts{};
+    if (!std::isfinite(nearPlane) || nearPlane <= 0.0 || !std::isfinite(epsilon) || epsilon < 0.0) {
+        counts.valid = false;
+        return counts;
+    }
+    for (int i = 0; i < 3; ++i) {
+        const double d = signedDistanceToNearPlane(vertexAt(triangle, i), nearPlane);
+        if (!std::isfinite(d)) {
+            return {0, 0, 0, false};
+        }
+        if (std::abs(d) <= epsilon) {
+            ++counts.onPlane;
+        }
+        if (d >= 0.0) {
+            ++counts.inside;
+        } else {
+            ++counts.outside;
+        }
+    }
+    return counts;
 }
 ```
 
-Hàm không đọc biến global và không biết SDL. Test có thể đưa vào một vertex bất kỳ rồi so trực tiếp kết quả âm, zero hoặc dương.
+Không thay d≥0 bằng d≥−epsilon. projectVertex đã có guard z≥near; hai bước phải đồng ý với nhau. Counts không sửa một tọa độ nào.
 
-### Bước 2 — Chốt quy ước biên bằng epsilon
+### Bước 3 — Đưa kết quả thật lên HUD
 
-```cpp title="include/lab.hpp — half-space được giữ"
-inline bool isInsideNearPlane(
-    const ClipVertex& vertex,
-    double nearPlane,
-    double epsilon = 1e-9
-) {
-    return signedDistanceToNearPlane(vertex, nearPlane) >= -epsilon;
+Trong renderScene, sau khi gán stats.source và trước khi tạo renderBatch, thêm:
+
+```cpp title="include/view.hpp — phân loại một lần cho frame"
+stats.clip.inputCounts = classifyTriangle(stats.source, scene.nearPlane);
+```
+
+Trong presentFramebuffer, sau dòng HUD ở Y=642 và trước `(void)stats`, thêm khối sau:
+
+```cpp title="include/presentation.hpp — đọc counts của pipeline"
+std::snprintf(line, sizeof(line), "inside %d outside %d on %d | valid %d", stats.clip.inputCounts.inside, stats.clip.inputCounts.outside, stats.clip.inputCounts.onPlane, static_cast<int>(stats.clip.inputCounts.valid));
+if (!SDL_RenderDebugText(renderer, 16, 668, line)) {
+    return false;
 }
 ```
 
-`epsilon` không kéo cả một vùng lớn vào trong. Nó chỉ hấp thụ sai số cỡ `10⁻⁹` quanh biên, nơi phép biến đổi số thực có thể cho `0.9999999999999999` thay vì `1.0`.
-
-### Bước 3 — Đếm ba trạng thái mà không sửa triangle
-
-```cpp title="include/lab.hpp — phân loại toàn primitive"
-const double distance = signedDistanceToNearPlane(vertexAt(triangle, index), nearPlane);
-if (std::abs(distance) <= epsilon) {
-    ++counts.onPlane;
-    ++counts.inside;
-} else if (distance > 0.0) {
-    ++counts.inside;
-} else {
-    ++counts.outside;
-}
-```
-
-`onPlane` đồng thời được tính vào `inside`. Vì vậy tổng `inside + outside` luôn bằng 3, còn `onPlane` là thông tin phụ để debug trường hợp grazing.
-
-### Bước 4 — Dùng cùng hàm cho màu marker
-
-Main không tự viết lại phép so sánh Z. Nó gọi `isInsideNearPlane`; vertex outside đổi sang màu cam, vertex inside giữ màu RGB gốc. Khi preset 5 đặt A và C đúng trên plane, cả hai phải được giữ.
+Ba số inside/outside/on là output đã tính trong renderScene. Viewport vẫn dùng discard của bài trước; bài này chưa tạo giao điểm.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint phân loại"
-cmake --build build --config Debug --target project_18_checkpoint_2
-```
-
-Chọn năm preset rồi dịch triangle bằng `A/D`. Theo dõi title bar: `inside + outside` phải luôn bằng 3; `onPlane` chỉ khác zero khi vertex nằm trong tolerance quanh đường vàng.
+Chạy Starter: preset 1 phải báo 3/0/0, preset 2 là 2/1/0, preset 3 là 1/2/0, preset 4 là 0/3/0. Preset 5 có hai đỉnh đúng biên: inside=3, outside=0, on=2. Thử đổi near bằng W/S để thấy số đếm đổi theo geometry thật.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi điều kiện thành `distance > 0`. Preset on-plane mất vertex biên; trả lại `>= -epsilon`.
-2. Dùng `epsilon = 0.1`. Một vùng sâu 0.1 đơn vị trước plane bị coi là hợp lệ và có thể qua projection; giảm về tolerance chỉ dành cho sai số số thực.
-3. Tính `near - z` nhưng giữ nguyên điều kiện dương là inside. Toàn bộ phân loại đảo ngược; hoặc giữ công thức `z-near`, hoặc đổi đồng thời quy ước dấu.
+1. Đổi inside thành `d > 0`: preset 5 mất hai điểm biên. Khôi phục `>=`.
+
+2. Dùng `d >= -epsilon` rồi giữ guard projection cũ: điểm hơi ngoài được nhận ở đầu pipeline nhưng bị loại ở cuối. Đây là lỗi cần tránh, không phải cách làm mượt biên.
+
+3. Tính onPlane bằng d==0: đúng cho endpoint đặt tay, nhưng kém hữu ích khi đọc số sau transform. Giữ epsilon cho chẩn đoán, không cho quyết định geometry.
 
 ## Tự kiểm tra kết quả
 
-- `z=0.25`, `near=1` cho signed distance `-0.75`.
-- Vertex đúng trên plane là inside và on-plane.
-- Vertex `z=2.25` là inside, không phải on-plane.
-- `inside + outside == 3` cho mọi preset và mọi depth offset hữu hạn.
-- Màu marker và count dùng chung `isInsideNearPlane`.
-- Chưa có vertex mới được sinh ra ở checkpoint 2.
+- Bốn trường hợp inside 0/1/2/3 có counts tương ứng.
+- Inside+outside luôn bằng ba với input hợp lệ; onPlane được đếm độc lập.
+- Điểm z=near ở trong; z=near−0.5×10⁻⁹ ở ngoài.
+- Geometry không thay đổi sau classify; viewport chưa dùng clipping.
 
 ## Bài tập mở rộng
 
-Hiển thị `d(A)`, `d(B)`, `d(C)` ngay cạnh marker trong mặt cắt. Dùng dấu `+` cho giá trị dương để người xem phân biệt rõ hai half-space.
+Tạo một tam giác có một đỉnh gần biên ở phía ngoài và hai đỉnh xa hơn. Ghi cả counts lẫn việc projectVertex có nhận đỉnh đó hay không; hai quyết định phải thống nhất.
 
-Bài tiếp theo xét một cạnh có hai đầu khác phía và tìm đúng điểm mà signed distance đi qua zero.
+[Sang bài tiếp theo — Tìm giao điểm thật trên một cạnh](/projects/near-plane-clipper/03-giao-diem-canh-va-near-plane).

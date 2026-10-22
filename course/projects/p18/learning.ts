@@ -3,180 +3,207 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p18-l01": {
-      focus:
-        "Dựng một cảnh chẩn đoán có hai góc nhìn và cho cùng Triangle3 đi qua near plane trước khi đưa bất kỳ công thức clipping nào vào code.",
+      focus: "Bắt đầu từ cửa sổ chạy được, rồi dựng tam giác và tái hiện lỗi bỏ cả hình.",
       expected:
-        "Mặt cắt bên trái cho thấy ba depth và near plane; viewport bên phải có thể so discard-whole với kết quả sẽ clip. A/D, drag, preset và reset đều sửa cùng một depthOffset.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Tam giác RGB đi theo Z bằng A/D và kéo chuột; mặt cắt cho biết đỉnh nào đang ra ngoài.",
+      files: [
+        "include/types.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/controls.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Giữ triangle trong camera space",
+          title: "Đọc bộ khung trước khi thêm hình",
           explanation:
-            "ClipVertex mang position XYZ và color. Z là khoảng cách theo hướng nhìn; chưa vertex nào được chia cho Z ở checkpoint đầu.",
+            "Starter đã có SDL, framebuffer và rasterizer P16. Ta chỉ thêm dữ liệu tam giác, không viết lại các phần đã học.",
         },
         {
-          title: "Vẽ mặt cắt để nhìn thấy dữ liệu gây lỗi",
+          title: "Tách vật thể khỏi camera",
           explanation:
-            "Mặt cắt dùng trục ngang là Z và trục dọc là X. Near plane thành một đường đứng nên ta nhìn ngay cạnh nào đang cắt qua half-space.",
+            "Preset và depthOffset tạo geometry world; cameraTriangle trừ vị trí mắt để có đầu vào camera space.",
         },
         {
-          title: "Tạo một đối chứng sai nhưng an toàn",
+          title: "Nối vòng lặp thật",
           explanation:
-            "Chế độ discard-whole không thực hiện phép chia nguy hiểm; nó bỏ cả triangle nếu có vertex lỗi. Hình biến mất sớm là bằng chứng ta cần clip primitive, không phải clamp kết quả.",
+            "Held input dùng dt; kéo chuột có owner và nhận tọa độ cuối khi thả. renderScene chỉ vẽ nguyên tam giác còn đủ ba đỉnh hợp lệ.",
         },
       ],
     },
     "p18-l02": {
-      focus:
-        "Biểu diễn near plane bằng signed distance d=z−near và dùng một quy ước epsilon duy nhất cho inside, outside và on-plane.",
+      focus: "Biểu diễn mặt phẳng và chốt một quy ước biên dùng xuyên suốt pipeline.",
       expected:
-        "A/B/C được tô theo phân loại; title bar báo inside/outside/onPlane. Preset on-plane giữ vertex nằm đúng biên thay vì lúc nhận lúc loại.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "HUD đếm inside/outside chính xác; onPlane là thông tin chẩn đoán, không làm thay đổi vùng giữ.",
+      files: ["include/clip.hpp", "include/view.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Biến phép so sánh thành một đại lượng có dấu",
-          explanation:
-            "d âm nghĩa là vertex nằm giữa camera và near plane; d dương là vùng được giữ. Giá trị d còn dùng để giải giao điểm ở bài sau.",
+          title: "Viết signed distance",
+          explanation: "Plane có normal và offset. Với near plane, công thức còn d=z−near.",
         },
         {
-          title: "Xem on-plane là inside",
+          title: "Phân biệt phép quyết định với số đo gần biên",
           explanation:
-            "Điểm trên biên là geometry hợp lệ. Điều kiện d≥−epsilon tránh mất điểm vì sai số nhỏ sau nhiều phép biến đổi.",
+            "Inside dùng d≥0; abs(d)≤epsilon chỉ tăng onPlane. Tổng inside+outside vẫn bằng ba.",
         },
         {
-          title: "Đếm để kiểm tra trước khi sửa topology",
+          title: "Đưa output lên HUD",
           explanation:
-            "NearPlaneCounts giúp preset nói rõ trường hợp 0, 1, 2 hay 3 vertex outside. Bước này chưa sinh vertex mới.",
+            "renderScene gọi classifyTriangle rồi presentFramebuffer đọc chính kết quả đó, không tự phân loại lần nữa.",
         },
       ],
     },
     "p18-l03": {
-      focus:
-        "Giải điểm cắt giữa một segment có hai đầu khác phía và near plane, sau đó nội suy mọi thuộc tính bằng cùng tham số t.",
-      expected:
-        "Mỗi cạnh crossing có marker trắng đúng trên plane. Lab hiển thị t trong [0,1], position và RGB của giao điểm; di chuyển triangle không tạo NaN.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      focus: "Tìm giao điểm thật trên đoạn thẳng, không sửa Z của vertex đầu vào.",
+      expected: "Mỗi cạnh crossing có marker trắng; position và RGB của giao điểm dùng cùng t.",
+      files: ["include/clip.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Giải t từ riêng thành phần Z",
+          title: "Giải t rồi nội suy",
           explanation:
-            "Trên segment start→end, z(t)=start.z+t(end.z−start.z). Đặt z(t)=near cho công thức trực tiếp và dễ test.",
+            "Từ z(t)=start.z+t(end.z−start.z), giải t trong [0,1] và dùng chung cho mọi thành phần.",
         },
         {
-          title: "Dùng lại t cho toàn bộ ClipVertex",
+          title: "Trả optional khi không có giao điểm",
           explanation:
-            "X, Y và ba channel màu phải nằm cùng một vị trí trên cạnh. Nội suy màu bằng t khác sẽ tạo một đường gãy màu ngay tại biên clip.",
+            "Đoạn song song ngoài plane hoặc giao của đường thẳng nằm ngoài segment không tạo vertex giả.",
         },
         {
-          title: "Ghim Z về đúng plane",
+          title: "Quan sát cạnh rất ngắn",
           explanation:
-            "Sau nội suy, code đặt result.position.z=near để loại phần dư số học rất nhỏ và tạo invariant rõ cho projection.",
+            "Không gọi mọi dz nhỏ là song song: hai đầu cách plane ±2⁻⁴² vẫn có một giao điểm thật.",
         },
       ],
     },
     "p18-l04": {
-      focus:
-        "Duyệt ba cạnh có hướng bằng một bước Sutherland–Hodgman và xây output list có tối đa bốn ClipVertex theo đúng thứ tự biên.",
+      focus: "Cắt ba cạnh có hướng và lưu lại biên polygon không trùng endpoint.",
       expected:
-        "All-inside giữ ba vertex; one-outside tạo bốn; two-outside tạo ba; all-outside tạo zero. Tiến từng cạnh cho thấy vertex nào được giữ hoặc giao điểm nào được thêm.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Các trường hợp thường cho 3/4/3/0 đỉnh; tiếp xúc có thể chỉ còn một điểm hoặc một đoạn.",
+      files: ["include/clip.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Bắt đầu cạnh đầu bằng previous=input.back",
+          title: "Thêm vertex có kiểm soát",
           explanation:
-            "Triangle là một vòng kín, nên cạnh C→A phải được xử lý như A→B và B→C. Khởi tạo previous bằng phần tử cuối tránh bỏ quên cạnh đóng vòng.",
+            "Bỏ bản sao liền kề; nếu vượt capacity thì đánh dấu invalid, không cắt cụt dữ liệu âm thầm.",
         },
         {
-          title: "Viết bốn chuyển trạng thái bằng ba nhánh",
+          title: "Duyệt vòng kín",
           explanation:
-            "Out→in thêm intersection rồi current; in→out chỉ thêm intersection; in→in thêm current; out→out không thêm gì.",
+            "Bắt đầu từ C→A, rồi A→B và B→C. Crossing thêm giao điểm; current inside thì giữ current.",
         },
         {
-          title: "Giữ capacity bốn như một invariant",
+          title: "Đóng vòng đúng một lần",
           explanation:
-            "Một triangle bị cắt bởi một plane chỉ có thể tăng từ ba lên tối đa bốn vertex. std::array làm giới hạn đó lộ rõ trong kiểu dữ liệu.",
+            "Bỏ đỉnh cuối nếu trùng đỉnh đầu, rồi nối output bằng đường xanh lá trong mặt cắt.",
         },
       ],
     },
     "p18-l05": {
-      focus:
-        "Chuyển output polygon lồi về định dạng triangle mà rasterizer đã hiểu bằng triangle fan neo tại vertex zero.",
+      focus: "Đổi polygon lồi về tam giác mà rasterizer đã hiểu.",
       expected:
-        "Polygon ba vertex tạo một triangle; polygon bốn vertex tạo hai triangle dùng chung đường chéo; polygon dưới ba vertex không tạo draw call.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Quad tạo hai tam giác có winding nhất quán; điểm, đoạn và tam giác thẳng hàng không tạo diện tích giả.",
+      files: ["include/clip.hpp", "include/view.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Giữ nguyên thứ tự polygon",
+          title: "Đo diện tích trong 3D",
           explanation:
-            "Clipper đã phát vertex theo thứ tự quanh biên. Fan (0,i,i+1) giữ winding đó và không cần sort theo góc.",
+            "Cross product nhận ra fan suy biến; không chỉ nhìn mặt cắt ZX vì nó đã bỏ mất Y.",
         },
         {
-          title: "Tách topology khỏi rasterization",
+          title: "Neo fan tại đỉnh 0",
           explanation:
-            "TriangleBatch chỉ chứa tối đa hai Triangle3. Bước này chưa project và chưa tô pixel, nên count được test độc lập.",
+            "Tạo (0,1,2), sau đó (0,2,3) nếu có đỉnh thứ tư. Không sắp xếp lại output của clipper.",
         },
         {
-          title: "Kiểm đường chéo chung",
+          title: "Hiện đường chéo và số lượng",
           explanation:
-            "Hai triangle của quad dùng chung cạnh 0→2. Top-left rule Project 16 sẽ giao pixel biên cho đúng một triangle khi rasterize.",
+            "HUD đọc TriangleBatch thật; đường chéo tím chỉ hỗ trợ quan sát, chưa có nghĩa renderer đã dùng batch.",
         },
       ],
     },
     "p18-l06": {
-      focus:
-        "Đưa từng output triangle qua projection guard, viewport transform và rasterizer top-left; giữ màu giao điểm đi xuyên suốt tới framebuffer.",
+      focus: "Nối toàn bộ clip→fan→project→raster vào renderer thật.",
       expected:
-        "Viewport chỉ nhận vertex z≥near và hiển thị liên tục phần polygon còn lại. coveredCount bằng callback count; không tọa độ screen nào trở thành NaN hoặc infinity.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Preset one-out vẫn còn bề mặt RGB; đổi discard thì mất cả hình, dù đầu vào không đổi.",
+      files: ["include/clip.hpp", "include/scene.hpp", "include/controls.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Guard trước phép chia",
+          title: "Gom kết quả một lần",
           explanation:
-            "projectVertex trả optional rỗng nếu z<near. Đây là dây an toàn cuối; thuật toán đúng vẫn phải đưa toàn bộ output qua guard này.",
+            "ClipResult giữ counts, polygon và batch của cùng một lần chạy, tránh clip lại cho từng phần HUD.",
         },
         {
-          title: "Project từng ClipVertex mới",
+          title: "Giữ guard trước phép chia",
           explanation:
-            "Giao điểm nằm trên near plane được project như vertex thật. Không dùng screen-space intersection vì đường thẳng sau perspective divide không còn nội suy theo cùng t camera-space.",
+            "Projection chỉ nhận z≥near. Rasterizer giới hạn bounding box trước chuyển sang chỉ số nguyên.",
         },
         {
-          title: "Tái dùng coverage và top-left rule",
+          title: "Thay renderScene và bật policy",
           explanation:
-            "Mỗi ScreenTriangle đi qua edge function tại pixel center. Hai triangle fan không tô đè đường chéo và callback nhận màu barycentric.",
+            "Thay toàn bộ hàm đang dùng, đặt mặc định clipping=true và thêm V để đối chiếu với discard.",
         },
       ],
     },
     "p18-l07": {
-      focus:
-        "Ghép controls, sweep và telemetry, rồi khóa mọi trường hợp topology cùng giới hạn số học bằng CTest không mở SDL window.",
+      focus: "Quét vật thể qua camera và kiểm đúng bằng dữ liệu, không chỉ nhìn hình.",
       expected:
-        "Năm preset, A/D, drag, Space, N, V và R hoạt động sau resize. Sweep qua plane không nổ hình; CTest pass ở Debug lẫn Release.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Sweep có giới hạn, pause/step hoạt động; oracle diện tích và ray/triangle kiểm kết quả độc lập.",
+      files: [
+        "include/scene.hpp",
+        "include/controls.hpp",
+        "include/clip.hpp",
+        "include/presentation.hpp",
+        "tests/tests.cpp",
+      ],
       steps: [
         {
-          title: "Gom kết quả của một frame",
+          title: "Tiến theo thời gian",
           explanation:
-            "ClipResult giữ input counts, polygon và triangle batch. Title bar lấy số liệu từ chính output thuật toán thay vì tự suy đoán lại.",
+            "advanceScene ưu tiên held input; nếu đang chạy sweep mới dùng tốc độ 0.75 unit/s, dt giới hạn 0.05 s.",
         },
         {
-          title: "Đo violation thay vì chỉ nhìn hình",
+          title: "Đo vi phạm biên",
           explanation:
-            "maximumNearPlaneViolation phải không vượt 10⁻⁹. isFinite kiểm cả position lẫn color trước khi projection nhận dữ liệu.",
+            "Mọi output vertex hợp lệ có z≥near. Polygon invalid phải báo infinity thay vì nhìn như lỗi bằng zero.",
         },
         {
-          title: "Chạy đủ bốn topology và trường hợp grazing",
+          title: "Dùng oracle khác thuật toán",
           explanation:
-            "CTest kiểm 3/4/3/0 polygon vertex, 1/2/1/0 triangle, vertex on-plane không bị nhân đôi và projection từ chối input chưa clip.",
+            "Kiểm diện tích 3/4 và 1/4; so mask raster với ray gặp tam giác gốc; quét 1001 vị trí chỉ chạy toán nhỏ.",
+        },
+      ],
+    },
+    "p18-l08": {
+      focus: "Hoàn thiện cảnh phối cảnh, camera độc lập và ứng dụng tải về.",
+      expected:
+        "Clean mode giữ lưới world cùng bề mặt; toàn bộ mã người học chạy và kiểm được ngoài website.",
+      files: [
+        "include/view.hpp",
+        "include/scene.hpp",
+        "include/controls.hpp",
+        "include/presentation.hpp",
+      ],
+      steps: [
+        {
+          title: "Vẽ world bằng cùng camera",
+          explanation:
+            "Lưới sàn không đi theo depthOffset. Nó chỉ trừ camera rồi clip các đoạn trước khi project.",
         },
         {
-          title: "So trực tiếp với discard-whole",
+          title: "Tách sản phẩm khỏi debug",
           explanation:
-            "Phím V giữ nguyên scene và chỉ đổi cách xử lý primitive. Sự khác nhau trên viewport giải thích rõ lợi ích của clipping hơn một hình chụp tĩnh.",
+            "F đổi viewport và ẩn HUD/mặt cắt, không bỏ rasterization hoặc lưới phối cảnh.",
+        },
+        {
+          title: "Kiểm đúng source đã viết",
+          explanation:
+            "CTest mặc định dùng final/include. Sau tám bài, chuyển tests sang starter/include để kiểm mã của chính mình ở Debug/Release.",
         },
       ],
     },
   },
   references: {
+    "p18-l08": [{ label: "Camera space", href: "/glossary#camera-space", kind: "Thuật ngữ" }],
     "p18-l01": [
       { label: "Camera space", href: "/glossary#camera-space", kind: "Thuật ngữ" },
       { label: "Near plane", href: "/glossary#near-plane", kind: "Thuật ngữ" },

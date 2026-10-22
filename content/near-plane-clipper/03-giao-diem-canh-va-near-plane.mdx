@@ -1,107 +1,131 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Tìm giao điểm trên cạnh và giữ thuộc tính
+# Tìm giao điểm thật trên một cạnh
 
 ## Vấn đề cần giải quyết
 
-Khi một đầu cạnh inside và đầu kia outside, near plane cắt cạnh ở một điểm nằm giữa. Thay vertex outside bằng một điểm có `z=near` nhưng giữ nguyên X/Y sẽ bẻ cạnh theo hướng Z, làm silhouette giật khi triangle chuyển động. Giao điểm phải thực sự nằm trên segment 3D.
-
-Ngoài position, vertex mới còn cần color. Nếu position dùng một tham số mà color dùng tham số khác, hình đúng nhưng gradient bị đứt ngay tại biên clip.
+Ta biết cạnh nào đi qua near plane, nhưng vẫn chưa biết phải cắt ở đâu. Không thể lấy đỉnh ngoài rồi đổi riêng Z thành near: cách đó di chuyển điểm theo hướng khác cạnh ban đầu, làm biến dạng hình và màu.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một điểm trên cạnh từ `start` tới `end` là:
+Trên đoạn S→E, mọi thành phần dùng chung một tham số:
 
-$$
-P(t)=start+t(end-start),\qquad 0\le t\le1
-$$
+$$P(t)=S+t(E-S),\qquad t=\frac{near-S_z}{E_z-S_z}.$$
 
-Ta chỉ cần giải thành phần Z tại `P.z = near`:
+Ví dụ S=(−2,0,0.5), E=(2,2,1.5), near=1 cho t=0.5 và P=(0,1,1). Nếu kênh đỏ hai đầu là 0 và 100 thì giao điểm có đỏ=50. Position và color dùng chung t, vì chúng cùng mô tả một điểm trên cạnh.
 
-$$
-t=\frac{near-start.z}{end.z-start.z}
-$$
-
-Sau đó cùng `t` được dùng cho X, Y, Z và từng channel màu. Vì clipper chỉ gọi hàm khi hai đầu khác phía, mẫu số không thể bằng zero trong trường hợp hình học bình thường; guard nhỏ vẫn được giữ để hàm an toàn khi dùng riêng.
+Đây là giao của **segment**, không chỉ của đường thẳng kéo dài. t ngoài [0,1] nghĩa là không có giao trên đoạn. Đoạn song song nằm ngoài plane cũng không có giao; không bịa ra điểm bằng cách clamp t hoặc sửa Z.
 
 <InteractiveLab demo="near-plane" mode="near-intersection" />
 
 ## Viết code từng bước
 
-### Bước 1 — Viết phép mix dễ đọc
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Khi thay một hàm hoặc struct, xóa bản cũ rồi đặt bản mới vào đúng namespace; không để hai định nghĩa trùng tên. Các phần ghi “đã có” chỉ để đọc lại, không chép thêm lần nữa.
 
-```cpp title="include/lab.hpp — nội suy một scalar"
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_starter --parallel 2
+.\build\Debug\project_18_starter.exe
+```
+
+Checkpoint 03 là **bản tham khảo sau bài**, chạy độc lập bằng target project_18_checkpoint_3. Nó không nhận các thay đổi bạn viết trong Starter.
+
+### Bước 1 — Nội suy toàn bộ dữ liệu của vertex
+
+Trong clip.hpp, sau classifyTriangle, thêm mix và interpolateVertex:
+
+```cpp title="include/clip.hpp — cùng một t cho vị trí và RGB"
 inline double mix(double start, double end, double t) {
     return start + (end - start) * t;
 }
-```
 
-Tên `mix` cho biết đây là một tổ hợp giữa hai giá trị. Ta không giấu `t` trong operator hoặc một lambda capture vì người học cần lần theo đúng tham số này qua mọi thuộc tính.
-
-### Bước 2 — Nội suy toàn bộ ClipVertex
-
-```cpp title="include/lab.hpp — position và color dùng chung t"
 inline ClipVertex interpolateVertex(const ClipVertex& start, const ClipVertex& end, double t) {
-    return {
-        {
-            mix(start.position.x, end.position.x, t),
-            mix(start.position.y, end.position.y, t),
-            mix(start.position.z, end.position.z, t),
-        },
-        {
-            mix(start.color.red, end.color.red, t),
-            mix(start.color.green, end.color.green, t),
-            mix(start.color.blue, end.color.blue, t),
-        },
-    };
+    return {{mix(start.position.x, end.position.x, t), mix(start.position.y, end.position.y, t), mix(start.position.z, end.position.z, t)}, {mix(start.color.red, end.color.red, t), mix(start.color.green, end.color.green, t), mix(start.color.blue, end.color.blue, t)}};
 }
 ```
 
-Khi project sau thêm normal hoặc UV, chúng phải đi vào chính hàm nội suy vertex này. Clipping không chỉ xử lý geometry; nó phải bảo toàn dữ liệu gắn với geometry.
+Color chưa đổi sang uint8_t; chỉ lúc packColor vào framebuffer mới làm tròn. Đây là nội suy thuộc tính trên cạnh trong camera space, chưa phải perspective-correct interpolation của fragment.
 
-### Bước 3 — Giải t và chặn nó trong đoạn
+### Bước 2 — Tìm giao thật, trả rỗng khi không có
 
-```cpp title="include/lab.hpp — segment gặp near plane"
-const double unclampedT = (nearPlane - start.position.z) / depthChange;
-const double t = std::clamp(unclampedT, 0.0, 1.0);
-ClipVertex result = interpolateVertex(start, end, t);
-result.position.z = nearPlane;
-return result;
+Thêm intersectNearPlane ngay sau interpolateVertex:
+
+```cpp title="include/clip.hpp — giao segment-plane có kiểm tra"
+inline std::optional<ClipVertex> intersectNearPlane(const ClipVertex& start, const ClipVertex& end, double nearPlane) {
+    if (!isFinite(start) || !isFinite(end) || !std::isfinite(nearPlane) || nearPlane <= 0.0) {
+        return std::nullopt;
+    }
+    // Endpoint trên plane được trả nguyên vẹn để tránh sinh bản sao hơi lệch.
+    if (start.position.z == nearPlane) {
+        return start;
+    }
+    if (end.position.z == nearPlane) {
+        return end;
+    }
+    const double change = end.position.z - start.position.z;
+    if (!std::isfinite(change) || change == 0.0) {
+        return std::nullopt;
+    }
+    const double t = (nearPlane - start.position.z) / change;
+    if (!std::isfinite(t) || t < 0.0 || t > 1.0) {
+        return std::nullopt;
+    }
+    ClipVertex result = interpolateVertex(start, end, t);
+    if (!isFinite(result)) {
+        return std::nullopt;
+    }
+    result.position.z = nearPlane;
+    return result;
+}
 ```
 
-Clamp không sửa một cạnh phân loại sai; nó chỉ bảo vệ hàm khỏi sai số cực nhỏ làm `t` thành `1.0000000000000002`. Dòng gán Z cuối tạo invariant chính xác cho output dù phép mix để lại một phần dư ở bit cuối.
+Hai endpoint đúng trên plane được trả nguyên vẹn. Với cạnh crossing còn lại, ta tính t thật rồi mới đặt Z của **điểm giao mới** bằng near để bỏ phần dư số học. Đỉnh đầu vào không bị sửa. Điều này khác hoàn toàn việc ghim Z của mọi đỉnh outside.
 
-### Bước 4 — Chỉ vẽ marker khi cạnh thật sự crossing
+Không dùng một ngưỡng dz tùy ý để kết luận song song. Hai đầu ở z=1±2⁻⁴² có dz rất nhỏ nhưng vẫn cắt near=1 ở t=0.5; kiểm `change == 0` xử lý đúng trường hợp này. Input không hữu hạn bị từ chối trước mọi phép tính.
 
-Main duyệt `AB`, `BC`, `CA`. Nếu hai đầu có cùng `inside` thì không có giao điểm cần thêm. Nếu khác nhau, `intersectNearPlane` trả marker trắng nằm đúng trên đường vàng.
+### Bước 3 — Hiện giao điểm trong mặt cắt đang có
+
+Trong drawProfile của view.hpp, sau vòng vẽ ba marker nguồn và trước dấu đóng hàm, thêm vòng dưới:
+
+```cpp title="include/view.hpp — chỉ vẽ giao điểm trên cạnh crossing"
+for (int i = 0; i < 3; ++i) {
+    const auto a = vertexAt(stats.source, i), b = vertexAt(stats.source, (i + 1) % 3);
+    if (isInsideNearPlane(a, scene.nearPlane) != isInsideNearPlane(b, scene.nearPlane)) {
+        const auto p = intersectNearPlane(a, b, scene.nearPlane);
+        if (p) {
+            const auto q = profilePoint(*p);
+            if (q.x >= 770 && q.x <= 1070 && q.y >= 644 && q.y <= 784) {
+                disc(image, static_cast<int>(q.x), static_cast<int>(q.y), 3, kWhite);
+            }
+        }
+    }
+}
+```
+
+Marker trắng phải nằm trên đường near màu vàng. Viewport chính vẫn chưa clip; marker giúp ta kiểm chứng công thức độc lập trước khi dùng nó để tạo polygon. Canvas hiển thị cả hai t nếu có hai cạnh crossing.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint giao điểm"
-cmake --build build --config Debug --target project_18_checkpoint_3
-```
-
-Dùng preset one-outside: phải có hai marker vì hai cạnh nối A với vùng inside đều cắt plane. Preset two-outside cũng có hai marker. All-inside, all-outside và on-plane không được sinh marker crossing giả.
+Build Starter, chọn preset 2 và kéo chậm. Hai cạnh cắt near có hai marker trắng; màu, vị trí giao điểm thay đổi theo đầu vào thật. Khi một đỉnh vừa chạm biên, endpoint trả về không bị lệch vị trí hoặc màu. Nếu cả cạnh nằm ngoài và song song, optional phải rỗng.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `t=(near-start.z)/end.z`. Marker trượt khỏi đường vàng khi đổi depth; khôi phục mẫu số `end.z-start.z`.
-2. Gán `result.position.z=near` nhưng giữ `x=start.x`, `y=start.y`. Cạnh bị bẻ và viewport sẽ giật; nội suy đủ XYZ.
-3. Nội suy color với `1-t`. Marker nằm đúng nhưng màu đổi về phía vertex đối diện; dùng cùng t cho geometry và attribute.
-4. Gọi hàm cho một cạnh có hai đầu cùng Z. Guard sẽ trả kết quả hữu hạn nhưng đó không phải giao điểm có ý nghĩa; clip loop phải kiểm transition trước.
+1. Thay t thật bằng 0.5: marker chỉ đúng khi plane cắt đúng giữa cạnh. Các preset khác sẽ lệch.
+
+2. Clamp t vào [0,1] khi hai đầu cùng ở ngoài: bạn biến giao của đường kéo dài thành một endpoint giả. Khôi phục trả nullopt.
+
+3. Nội suy màu bằng t² nhưng vị trí bằng t: giao điểm đúng hình học nhưng màu bị gãy. Tất cả thuộc tính phải dùng chung t.
 
 ## Tự kiểm tra kết quả
 
-- `t` của một cạnh crossing nằm trong `[0,1]`.
-- `intersection.position.z` bằng `near` trong sai số `10⁻⁹`.
-- X, Y và RGB đều bằng `start + t(end-start)`.
-- Đổi hướng cạnh cho cùng position và color giao điểm trong tolerance.
-- One-outside và two-outside đều có đúng hai cạnh crossing.
-- Không có NaN khi triangle quét sát near plane.
+- Ví dụ tính tay cho P=(0,1,1), đỏ=50.
+- Cạnh đảo chiều cho cùng vị trí/màu giao; tham số mới bằng 1−t.
+- Song song ngoài plane hoặc t ngoài segment trả nullopt.
+- Cạnh crossing rất ngắn vẫn có giao thật; đầu vào và endpoint trên plane không bị sửa.
 
 ## Bài tập mở rộng
 
-Thêm một scalar `temperature` vào `ClipVertex`, gán ba giá trị khác nhau và nội suy nó bằng cùng `t`. In nhiệt độ của marker trong title bar; chưa cần dùng nó để tô màu.
+Viết test cho cạnh có một endpoint đúng trên near và endpoint còn lại ở ngoài. So toàn bộ ClipVertex trả về với endpoint gốc, không chỉ so Z.
 
-Bài tiếp theo sẽ dùng giao điểm này trong một vòng lặp topology: đầu vào ba vertex có thể trở thành polygon chứa từ zero tới bốn vertex.
+[Sang bài tiếp theo — Cắt tam giác thành một polygon có thứ tự](/projects/near-plane-clipper/04-clip-triangle-thanh-polygon).
 

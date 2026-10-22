@@ -5,18 +5,23 @@ const lab = {
     label: "NEAR-PLANE CLIPPING LAB",
     title: "Một triangle đổi hình ra sao khi đi qua near plane?",
     description:
-      "Kéo triangle theo trục Z và xem cùng lúc mặt cắt camera space với viewport sau clipping. Mọi count, giao điểm và màu dùng cùng công thức như source C++.",
+      "Kéo tam giác đi xuyên camera và quan sát phần bề mặt được giữ lại. Mặt cắt ZX, giao điểm và số liệu giúp kiểm tra từng bước; công thức khớp với C++.",
   },
   modes: {
+    "near-showcase": {
+      title: "Tam giác 3D đi xuyên camera",
+      description:
+        "Kéo hoặc giữ A/D cho bề mặt qua near plane. Camera độc lập; clean mode giữ lưới phối cảnh, debug hiện mặt cắt ZX before/after.",
+    },
     "near-scene": {
       title: "Lỗi thật nằm trước hay sau phép projection?",
       description:
-        "So cách bỏ cả triangle với clipper khi chỉ một vertex đi qua near plane; mặt cắt bên trái cho biết dữ liệu camera-space nào gây ra khác biệt.",
+        "Dựng tam giác trước, rồi kéo nó qua near plane để thấy vì sao bỏ cả hình khi một đỉnh ra ngoài là chưa đúng. Bài đầu chưa nối clipper vào renderer.",
     },
     "near-classify": {
       title: "Ba signed distance chia triangle thành trường hợp nào?",
       description:
-        "Đọc d=z−near tại A/B/C và thử vertex nằm đúng trên plane để chốt quy ước inside cùng epsilon.",
+        "Đọc d=z−near tại A/B/C. Điểm đúng trên biên được giữ; điểm hơi phía trước vẫn ở ngoài, dù HUD đánh dấu là gần plane.",
     },
     "near-intersection": {
       title: "Giao điểm nằm ở đâu trên mỗi cạnh cắt plane?",
@@ -36,7 +41,7 @@ const lab = {
     "near-raster": {
       title: "Projection trở nên an toàn ở điểm nào?",
       description:
-        "Chỉ output vertex có z≥near mới qua phép chia phối cảnh; viewport bên phải rasterize các triangle đã clip bằng top-left rule.",
+        "Chỉ output vertex có z≥near mới qua phép chia phối cảnh; viewport chính tô các tam giác đã clip bằng top-left rule.",
     },
     "near-validation": {
       title: "Sweep qua near plane có giữ mọi invariant?",

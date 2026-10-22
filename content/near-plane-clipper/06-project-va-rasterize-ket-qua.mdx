@@ -1,122 +1,169 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Project và rasterize phần còn nhìn thấy
+# Nối clipper vào renderer đang chạy
 
 ## Vấn đề cần giải quyết
 
-Đến đây ta có zero, một hoặc hai `Triangle3` với mọi vertex ở `z ≥ near`. Chúng vẫn ở camera space; framebuffer cần screen coordinate. Đây là lúc nối clipper với projection Project 15 và rasterizer Project 16.
-
-Điểm quan trọng không phải viết thêm một renderer mới. Ta đặt một guard trước phép chia, đổi từng output triangle sang screen space rồi tái dùng đúng coverage/top-left rule đã kiểm chứng.
+Đến đây debug đã có polygon và fan đúng, nhưng bề mặt vẫn biến mất theo cách discard cũ. Bài này thay đúng đường dữ liệu của renderer: chỉ những tam giác sau clip mới được project và tô pixel.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với camera nhìn theo +Z và vertical FOV:
+Pipeline hoàn chỉnh là classify → clip polygon → triangulate → project → rasterize. ClipForRender gom kết quả cho một frame; HUD đọc lại kết quả đó, không clip thêm một lần riêng cho bảng số.
 
-$$
-x_{ndc}=\frac{x\,f}{aspect\,z},\qquad
-y_{ndc}=\frac{y\,f}{z},\qquad
-f=\frac{1}{\tan(FOV_y/2)}
-$$
+Projection vẫn giữ guard z≥near trước phép chia. Đây là hàng rào bảo vệ dữ liệu sai, không phải thuật toán clipping. Nếu có một đỉnh outside, ta phải sinh giao điểm đúng trên cạnh; không thể chỉ trả nullopt cho cả tam giác và xem như đã xử lý xong.
 
-Sau clipping, `z` tối thiểu bằng `near`, nên mẫu số không tiến về zero. Giao điểm mới được project như bất kỳ vertex nào khác. Ta không tìm giao điểm trong screen space: perspective divide là phép phi tuyến theo Z, nên nội suy sau phép chia không còn tương đương với cạnh 3D ban đầu.
+Màu tại giao điểm được nội suy trong camera space. Sau projection, rasterizer ở project này dùng barycentric tuyến tính trên màn hình; chưa có perspective-correct interpolation. Khi cắt làm thay topology, màu có thể khác cách phối màu của tam giác chưa cắt. Ta kiểm đúng giao điểm và geometry, không hứa màu xuyên perspective chính xác như texture renderer.
 
 <InteractiveLab demo="near-plane" mode="near-raster" />
 
 ## Viết code từng bước
 
-### Bước 1 — Giữ guard ngay trong API projection
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Khi thay một hàm hoặc struct, xóa bản cũ rồi đặt bản mới vào đúng namespace; không để hai định nghĩa trùng tên. Các phần ghi “đã có” chỉ để đọc lại, không chép thêm lần nữa.
 
-```cpp title="include/lab.hpp — từ chối dữ liệu chưa clip trước phép chia"
-if (vertex.position.z < nearPlane || viewport.width <= 0 || viewport.height <= 0) {
-    return std::nullopt;
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_starter --parallel 2
+.\build\Debug\project_18_starter.exe
+```
+
+Checkpoint 06 là **bản tham khảo sau bài**, chạy độc lập bằng target project_18_checkpoint_6. Nó không nhận các thay đổi bạn viết trong Starter.
+
+### Bước 1 — Gom một kết quả clipping duy nhất
+
+Trong clip.hpp, thêm clipForRender sau triangulateFan:
+
+```cpp title="include/clip.hpp — một input, một polygon, một batch"
+inline ClipResult clipForRender(const Triangle3& triangle, double nearPlane) {
+    ClipResult result{};
+    result.inputCounts = classifyTriangle(triangle, nearPlane);
+    result.polygon = clipTriangleToNearPlane(triangle, nearPlane);
+    result.batch = triangulateFan(result.polygon);
+    return result;
 }
 ```
 
-Guard không thay clipper; nó phát hiện vi phạm hợp đồng. Nếu một regression đưa vertex outside vào đây, hàm trả rỗng thay vì tạo infinity rồi để rasterizer duyệt một bounding box khổng lồ.
+Trong Scene ở scene.hpp, thay dòng khởi tạo clipping=false thành dòng dưới. Không thêm một field thứ hai:
 
-### Bước 2 — Đổi camera position sang NDC rồi pixel
-
-```cpp title="include/lab.hpp — projection và viewport transform"
-const double aspectRatio = double(viewport.width) / double(viewport.height);
-const double focalScale = 1.0 / std::tan(verticalFovRadians * 0.5);
-const double ndcX = vertex.position.x * focalScale / (aspectRatio * vertex.position.z);
-const double ndcY = vertex.position.y * focalScale / vertex.position.z;
-
-return ScreenVertex{
-    {
-        double(viewport.left) + (ndcX + 1.0) * 0.5 * double(viewport.width),
-        double(viewport.top) + (1.0 - ndcY) * 0.5 * double(viewport.height),
-    },
-    vertex.color,
-};
+```cpp title="include/scene.hpp — mặc định dùng phần sau clip"
+bool clipping{true};
 ```
 
-Color được chuyển nguyên vẹn sang `ScreenVertex`. Nó đã được nội suy đúng tại giao điểm ở camera space; rasterizer tiếp tục nội suy bên trong triangle bằng barycentric weights.
 
-### Bước 3 — Chỉ tạo ScreenTriangle khi cả ba vertex hợp lệ
 
-```cpp title="include/lab.hpp — optional khóa hợp đồng cho cả primitive"
-const auto a = projectVertex(triangle.a, verticalFovRadians, viewport, nearPlane);
-const auto b = projectVertex(triangle.b, verticalFovRadians, viewport, nearPlane);
-const auto c = projectVertex(triangle.c, verticalFovRadians, viewport, nearPlane);
-if (!a || !b || !c) {
-    return std::nullopt;
-}
-return ScreenTriangle{*a, *b, *c};
-```
+### Bước 2 — Thay renderScene để dùng batch mới
 
-Không có nhánh “project hai vertex rồi đoán vertex thứ ba”. Một output triangle hợp lệ phải project được cả ba.
+Thay toàn bộ renderScene trong view.hpp bằng bản dưới, không giữ các lời gọi phân loại/clip/fan rời của bài 2–5 ở ngoài hàm:
 
-### Bước 4 — Tái dùng top-left raster loop
-
-`rasterizeScreenTriangle` chuẩn hóa winding, clamp bounding box, lấy mẫu `(x+0.5,y+0.5)` và kiểm ba edge. Callback nhận màu barycentric rồi mới đổi channel `double` về byte framebuffer.
-
-```cpp title="src/main.cpp — batch đi qua cùng một rasterizer"
-const lab::RasterStats stats = lab::rasterizeScreenTriangle(
-    *projected,
-    width,
-    height,
-    [&](int x, int y, lab::Color color) {
-        putPixel(
-            pixels,
-            width,
-            height,
-            x,
-            y,
-            rgba(toByte(color.red), toByte(color.green), toByte(color.blue))
-        );
+```cpp title="include/view.hpp — clip trước projection rồi tô pixel thật"
+inline FrameStats renderScene(Framebuffer& image, const Scene& scene) {
+    image.clear(kBackground);
+    FrameStats stats{};
+    stats.source = cameraTriangle(scene);
+    stats.clip = clipForRender(stats.source, scene.nearPlane);
+    TriangleBatch renderBatch{};
+    if (scene.clipping) {
+        renderBatch = stats.clip.batch;
     }
-);
+    if (!scene.clipping) {
+        const auto& t = stats.source;
+        if (t.a.position.z >= scene.nearPlane && t.b.position.z >= scene.nearPlane && t.c.position.z >= scene.nearPlane) {
+            renderBatch.triangles[0] = t;
+            renderBatch.count = 1;
+        } else {
+            stats.discarded = true;
+        }
+    }
+    const Viewport viewport{0, 0, Framebuffer::width, viewportHeight(scene)};
+    for (std::size_t i = 0; i < renderBatch.count; ++i) {
+        const auto projected = projectTriangle(renderBatch.triangles[i], 1.0471975511965976, viewport, scene.nearPlane);
+        if (!projected) {
+            continue;
+        }
+        ++stats.renderedTriangles;
+        const auto raster = rasterizeScreenTriangle(*projected, viewport.width, viewport.height, [&](int x, int y, Color color) {
+            image.putPixel(x, y, packColor(color));
+        });
+        stats.candidates += raster.candidateCount;
+        stats.covered += raster.coveredCount;
+    }
+    if (scene.debug) {
+        drawProfile(image, stats, scene);
+    }
+    (void)scene;
+    return stats;
+}
 ```
+
+scene.clipping chọn batch đã cắt; discard vẫn là một đối chứng có thể bật riêng. projectTriangle trả optional, rasterizer giới hạn bounding box theo viewport trước vòng pixel. Color double chỉ đổi thành RGBA8888 tại packColor. Các hàm này đã có trong Starter và được liệt kê đầy đủ ở phần mã nguồn cuối bài.
+
+### Bước 3 — So hai cách xử lý mà không đổi đầu vào
+
+Trong handleKey của controls.hpp, trước `(void)scene`, thêm:
+
+```cpp title="include/controls.hpp — đổi policy bằng V"
+if (!repeat && key == SDLK_V) {
+    scene.clipping = !scene.clipping;
+    scene.paused = true;
+}
+```
+
+Đọc lại projectVertex đã có trong raster.hpp. Guard chạy trước phép chia, không sau khi đã tạo infinity:
+
+```cpp title="include/raster.hpp — hàng rào trước phép chia"
+inline std::optional<ScreenVertex> projectVertex(
+    const ClipVertex& vertex,
+    double verticalFovRadians,
+    const Viewport& viewport,
+    double nearPlane
+) {
+    if (!isFinite(vertex) || !std::isfinite(nearPlane) || nearPlane <= 0.0 || !std::isfinite(verticalFovRadians) || verticalFovRadians <= 0.0 || verticalFovRadians >= 3.141592653589793 || vertex.position.z < nearPlane || viewport.width <= 0 || viewport.height <= 0) {
+        return std::nullopt;
+    }
+
+    const double aspectRatio = double(viewport.width) / double(viewport.height);
+    const double focalScale = 1.0 / std::tan(verticalFovRadians * 0.5);
+    const double ndcX = vertex.position.x * focalScale / (aspectRatio * vertex.position.z);
+    const double ndcY = vertex.position.y * focalScale / vertex.position.z;
+
+    if (!std::isfinite(ndcX) || !std::isfinite(ndcY)) {
+        return std::nullopt;
+    }
+    return ScreenVertex{
+        {
+            double(viewport.left) + (ndcX + 1.0) * 0.5 * double(viewport.width),
+            double(viewport.top) + (1.0 - ndcY) * 0.5 * double(viewport.height),
+        },
+        vertex.color,
+    };
+}
+```
+
+Main đã nhả capture và held input trước lệnh thay state. Nhấn V vì vậy không mang theo thao tác kéo cũ để ghi đè scene.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint render hoàn chỉnh"
-cmake --build build --config Debug --target project_18_checkpoint_6
-```
+Build Starter, chọn preset 2. Lần đầu tiên bề mặt RGB vẫn hiện dù A ở trước near. Nhấn V: cùng geometry đó biến mất ở discard; nhấn lại thì phần còn hợp lệ trở lại. Đừng thay near/offset giữa hai lần so sánh.
 
-Chọn one-outside rồi kéo qua đường vàng. Phần trên viewport phải co dần liên tục. Chuyển sang “Bỏ cả triangle” hoặc nhấn `V`: cùng scene biến mất ngay khi một vertex outside, giúp đối chiếu mà không đưa phép chia nguy hiểm trở lại.
+Nội dung Canvas trước bài này chỉ cho xem kết quả trung gian trong mặt cắt. Từ bài 6, viewport chính mới thực sự rasterize các tam giác đầu ra. Một pixel thuộc đường chéo fan không được tô hai lần.
 
 ## Thử làm sai để hiểu đúng
 
-1. Project triangle gốc rồi clip NDC. Đường biên chuyển động sai vì t được tính sau phép chia; quay lại clip trong camera space.
-2. Clamp `z` outside lên `near`. Silhouette nối tới một point sai X/Y và giật khi crossing; dùng intersection trên cạnh.
-3. Bỏ guard `z<near`. Một regression trong clipper có thể tạo bounding box cực lớn hoặc NaN; giữ optional như hợp đồng runtime.
-4. Dùng inclusive rule cho hai triangle fan. Pixel trên đường chéo có hai owner; phục hồi top-left rule từ Project 16.
+1. Đưa projectTriangle trước clipForRender: một đỉnh outside làm optional rỗng và hình vẫn biến mất. Đổi lại thứ tự.
+
+2. Bỏ guard z≥near để thử preset có điểm sau camera: phép chia có thể đảo dấu/phóng lớn hình. Không dùng đường này trong bản cuối.
+
+3. Nối batch vào HUD nhưng vẫn rasterize stats.source: bảng đếm có vẻ đúng mà ảnh vẫn sai. renderBatch mới là dữ liệu cần đi vào vòng vẽ.
 
 ## Tự kiểm tra kết quả
 
-- `projectVertex` trả rỗng cho mọi vertex có `z < near`.
-- Vertex trên near plane project ra tọa độ hữu hạn.
-- One-outside tạo hai screen triangle; two-outside tạo một.
-- All-outside không gọi rasterizer.
-- Bounding box được clamp vào framebuffer trước vòng pixel.
-- `coveredCount` bằng đúng số lần callback chạy.
-- Gradient không có đường gãy màu tại giao điểm hoặc đường chéo fan.
+- Preset 2 tạo hai output triangle và có pixel thật trên viewport.
+- V chỉ đổi policy; source/camera/near/offset không đổi.
+- Mọi output vertex có z≥near; input chưa clip bị projection từ chối.
+- Raster loop có giới hạn theo viewport, top-left không tô đè đường chéo fan.
 
 ## Bài tập mở rộng
 
-Thêm một chế độ chỉ hiển thị wireframe của output batch trên viewport. Dùng cùng `projectTriangle`; không viết một công thức projection thứ hai cho wireframe.
+Thêm bộ đếm số lần shade callback chạy và so với coveredCount. Sau đó đảo winding của input để kiểm màu vẫn đi đúng vertex, không hoán đổi nhầm hai kênh do đổi thứ tự hình học.
 
-Bài cuối sẽ biến các quan sát trên thành invariant tự động, rồi hoàn thiện sweep, preset và mã nguồn chạy độc lập.
+[Sang bài tiếp theo — Quét qua camera và kiểm bằng oracle độc lập](/projects/near-plane-clipper/07-sweep-qua-camera-va-validation).
 

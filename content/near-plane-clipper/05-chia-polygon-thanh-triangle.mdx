@@ -1,100 +1,125 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Chia polygon đã clip thành triangle
+# Chia polygon thành những tam giác hợp lệ
 
 ## Vấn đề cần giải quyết
 
-Rasterizer Project 16 nhận đúng ba vertex. Clipper lại có thể trả polygon bốn vertex khi chỉ một vertex gốc nằm outside. Không thể bỏ vertex thứ tư, cũng không thể truyền một “triangle bốn đỉnh”. Ta cần đổi polygon lồi về zero, một hoặc hai triangle mà không làm thay đổi vùng được phủ.
+Polygon sau clip có thể là tam giác hoặc tứ giác, nhưng rasterizer của ta chỉ nhận Triangle3. Ta cần chia phần được giữ thành 0, 1 hoặc 2 tam giác mà không đảo winding, không tạo diện tích giả cho tiếp xúc điểm/đoạn.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Sutherland–Hodgman giữ thứ tự vertex quanh biên và near plane không làm polygon lõm. Vì vậy ta có thể neo tại `v0` rồi tạo:
+Polygon của một tam giác sau khi cắt bởi một half-space vẫn lồi. Vì vậy có thể neo fan tại v₀:
 
-$$
-(v_0,v_1,v_2),\;(v_0,v_2,v_3),\ldots
-$$
+$$T_0=(v_0,v_1,v_2),\qquad T_1=(v_0,v_2,v_3).$$
 
-Đó là triangle fan. Với Project 18, polygon chỉ có tối đa bốn vertex nên batch chỉ cần tối đa hai triangle. Đường chéo `v0–v2` là cạnh chung; top-left rule sẽ xử lý quyền sở hữu pixel ở bài sau.
+Tam giác thứ hai chỉ tồn tại khi có đỉnh thứ tư. Không cần sort hoặc tìm tâm polygon. Hai tam giác dùng chung đường chéo 0→2; top-left rule sẽ giao pixel trên đường chéo cho đúng một bên khi render ở bài sau.
+
+Một vùng chỉ còn điểm hoặc đoạn không có diện tích 3D. Cross product của hai cạnh có độ dài zero thì bỏ tam giác fan đó. Không dùng diện tích trong mặt cắt ZX vì góc nhìn này đã bỏ mất Y và có thể làm một tam giác thật trông như đoạn thẳng.
 
 <InteractiveLab demo="near-plane" mode="near-triangulate" />
 
 ## Viết code từng bước
 
-### Bước 1 — Đặt giới hạn batch vào kiểu dữ liệu
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Khi thay một hàm hoặc struct, xóa bản cũ rồi đặt bản mới vào đúng namespace; không để hai định nghĩa trùng tên. Các phần ghi “đã có” chỉ để đọc lại, không chép thêm lần nữa.
 
-```cpp title="include/lab.hpp — clip một triangle tạo tối đa hai triangle"
-struct TriangleBatch {
-    std::array<Triangle3, 2> triangles{};
-    std::size_t count{};
-};
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_starter --parallel 2
+.\build\Debug\project_18_starter.exe
 ```
 
-Không cần `std::vector` cho một giới hạn hình học đã biết. `count` vẫn cần thiết vì array có capacity hai nhưng output hợp lệ có thể là zero hoặc một.
+Checkpoint 05 là **bản tham khảo sau bài**, chạy độc lập bằng target project_18_checkpoint_5. Nó không nhận các thay đổi bạn viết trong Starter.
 
-### Bước 2 — Loại polygon không đủ diện tích trước vòng lặp
+### Bước 1 — Đo diện tích trước phép chiếu
 
-```cpp title="include/lab.hpp — dưới ba vertex không thể tạo triangle"
-TriangleBatch batch{};
-if (polygon.count < 3) {
-    return batch;
+Thêm triangleAreaSquared vào clip.hpp, sau clipTriangleToNearPlane:
+
+```cpp title="include/clip.hpp — bình phương độ dài cross product"
+inline double triangleAreaSquared(const Triangle3& triangle) {
+    const Vec3 a{triangle.b.position.x - triangle.a.position.x, triangle.b.position.y - triangle.a.position.y, triangle.b.position.z - triangle.a.position.z};
+    const Vec3 b{triangle.c.position.x - triangle.a.position.x, triangle.c.position.y - triangle.a.position.y, triangle.c.position.z - triangle.a.position.z};
+    const Vec3 n{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+    return n.x * n.x + n.y * n.y + n.z * n.z;
 }
 ```
 
-Ta không lặp lại một vertex để “đủ ba”. Polygon rỗng là kết quả hợp lệ khi primitive nằm hoàn toàn ngoài; draw list của frame đó đơn giản có zero triangle.
+Giá trị này là bình phương của hai lần diện tích, không phải diện tích trực tiếp. Ta chỉ cần kiểm nó hữu hạn và lớn hơn zero; dùng sqrt để tính diện tích trong các test tính tay.
 
-### Bước 3 — Sinh fan bằng chỉ số dễ kiểm tra
+### Bước 2 — Tạo batch tối đa hai tam giác
 
-```cpp title="include/lab.hpp — fan (0, i, i+1)"
+Thêm triangulateFan ngay sau helper diện tích:
+
+```cpp title="include/clip.hpp — fan giữ thứ tự winding"
 inline TriangleBatch triangulateFan(const ClippedPolygon& polygon) {
     TriangleBatch batch{};
-    if (polygon.count < 3) {
+    if (!polygon.valid || polygon.count > 4) {
+        batch.valid = false;
         return batch;
     }
-
-    for (std::size_t index = 1; index + 1 < polygon.count; ++index) {
-        batch.triangles[batch.count] = {
-            polygon.vertices[0],
-            polygon.vertices[index],
-            polygon.vertices[index + 1],
-        };
-        ++batch.count;
+    for (std::size_t i = 1; i + 1 < polygon.count; ++i) {
+        const Triangle3 t{polygon.vertices[0], polygon.vertices[i], polygon.vertices[i + 1]};
+        const double area = triangleAreaSquared(t);
+        if (!isFinite(t.a) || !isFinite(t.b) || !isFinite(t.c) || !std::isfinite(area)) {
+            return {{}, 0, false};
+        }
+        if (area > 0.0) {
+            batch.triangles[batch.count++] = t;
+        }
     }
     return batch;
 }
 ```
 
-Với count 3, loop chạy một lần tại `index=1`. Với count 4, nó chạy tại `1` và `2`. Điều kiện `index + 1 < count` diễn tả trực tiếp việc triangle cần vertex kế tiếp.
+`count < 3` tự nhiên không vào vòng. `count > 4` hoặc polygon invalid làm batch invalid. Với mỗi bộ ba, kiểm dữ liệu và diện tích trước khi thêm; input malformed không được tràn array. Chưa có back-face culling ở bài này, nên hai chiều winding đều có thể vẽ.
 
-### Bước 4 — Vẽ đường chéo chỉ để debug
+### Bước 3 — Đọc đúng batch và hiện đường chéo
 
-Checkpoint vẽ outline từng output triangle màu tím trong mặt cắt. Khi polygon có bốn vertex, đường `v0–v2` xuất hiện; nó không phải cạnh silhouette mới và không được thay màu ở viewport.
+Trong renderScene, sau dòng clipTriangleToNearPlane, thêm:
+
+```cpp title="include/view.hpp — batch để debug"
+stats.clip.batch = triangulateFan(stats.clip.polygon);
+```
+
+Trong drawProfile, sau vòng vẽ polygon, thêm:
+
+```cpp title="include/view.hpp — đường chéo fan màu tím"
+if (stats.clip.polygon.count == 4) {
+    line(stats.clip.polygon.vertices[0], stats.clip.polygon.vertices[2], kFanColor);
+}
+```
+
+Trong presentFramebuffer, sau HUD counts ở Y=668, thêm:
+
+```cpp title="include/presentation.hpp — count polygon và triangle thật"
+std::snprintf(line, sizeof(line), "polygon %zu | output triangles %zu | rendered %zu | pixels %zu", stats.clip.polygon.count, stats.clip.batch.count, stats.renderedTriangles, stats.covered);
+if (!SDL_RenderDebugText(renderer, 16, 694, line)) {
+    return false;
+}
+```
+
+Ở checkpoint này, rendered/pixels vẫn thuộc đối chứng discard. Polygon và triangle có thể đã tồn tại trong stats nhưng chưa được tô trên viewport; ta sẽ nối đúng đường dữ liệu ở bài kế.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint triangle fan"
-cmake --build build --config Debug --target project_18_checkpoint_5
-```
-
-Preset one-outside phải báo `polygon 4 → triangles 2`. Two-outside là `3 → 1`; all-outside là `0 → 0`. Dịch triangle bằng A/D để nhìn count đổi đúng lúc vertex đi qua plane.
+Preset 2 phải cho polygon 4, batch 2 và một đường chéo tím trên mặt cắt. Preset 1/3 cho batch 1; preset 4 cho batch 0. Trường hợp chỉ điểm/đoạn phải cho batch 0 dù polygon.count không bằng zero.
 
 ## Thử làm sai để hiểu đúng
 
-1. Luôn tạo đúng một triangle từ ba phần tử đầu. One-outside mất một góc của polygon; khôi phục vòng fan.
-2. Tạo triangle thứ hai là `(v1,v2,v3)`. Hai triangle có vùng chồng và không phủ đúng quad theo mọi hình dạng; neo cả hai tại `v0`.
-3. Sort polygon trước khi fan. Winding có thể đổi và đường chéo cắt ngoài polygon; dùng thứ tự clipper đã bảo toàn.
-4. Với count zero vẫn đọc `vertices[0]`. Dữ liệu default che lỗi trong Debug nhưng topology là vô nghĩa; early return trước mọi truy cập.
+1. Dùng thứ tự (0,2,1) cho tam giác đầu nhưng (0,2,3) cho tam giác sau: winding không còn nhất quán. Khôi phục thứ tự quanh biên.
+
+2. Cho count=2 chạy một triangle bằng cách lặp endpoint: bạn có draw call nhưng không có diện tích. Không gọi đó là geometry hợp lệ.
+
+3. Tính cross trong ZX: có thể loại nhầm tam giác có diện tích trong 3D. Giữ đủ XYZ.
 
 ## Tự kiểm tra kết quả
 
-- Polygon count 0, 1 hoặc 2 tạo zero triangle.
-- Count 3 tạo đúng `(v0,v1,v2)`.
-- Count 4 tạo `(v0,v1,v2)` và `(v0,v2,v3)`.
-- Hai triangle của quad dùng chung đúng cạnh `v0–v2`.
-- Winding của fan theo cùng thứ tự quanh biên với polygon.
-- Không có sort theo screen X/Y hoặc phép project trong checkpoint này.
+- Polygon 3/4 đỉnh không suy biến cho batch 1/2.
+- Tiếp xúc điểm/đoạn và ba điểm thẳng hàng không tạo triangle giả.
+- Tổng diện tích fan bằng diện tích vùng giữ, winding theo biên nguồn.
+- Đường chéo là debug, chưa thay đổi renderBatch ở bài này.
 
 ## Bài tập mở rộng
 
-Viết hàm tính tổng signed area của triangle fan trong mặt phẳng XZ và so với signed area của polygon bằng công thức shoelace. Hai giá trị phải bằng nhau trong tolerance.
+Với tam giác có một đỉnh outside ở z=0.5 và hai đỉnh inside ở z=1.5, near=1 cắt giữa hai cạnh. Tính tay phần bị bỏ bằng 1/4 diện tích; kiểm tổng diện tích fan còn 3/4.
 
-Bài tiếp theo mới đưa batch qua phép chia phối cảnh. Tại đó, guard projection sẽ trở thành hàng rào cuối ngăn dữ liệu chưa clip lọt vào rasterizer.
+[Sang bài tiếp theo — Nối clipper vào renderer đang chạy](/projects/near-plane-clipper/06-project-va-rasterize-ket-qua).

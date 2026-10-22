@@ -534,6 +534,38 @@ test("Project 18 Near-plane Lab clips topology, compares discard and captures po
   expect(errors).toEqual([]);
 });
 
+test("Project 18 final keeps camera independent, clears held keys and retains a clean Canvas", async ({
+  page,
+}) => {
+  const errors = captureBrowserErrors(page);
+  await page.goto("/projects/near-plane-clipper/08-canh-3d-va-ban-hoan-chinh");
+  const canvas = page.locator('canvas[aria-label^="Mặt cắt camera space"]');
+  const controls = page.locator(".lab-controls");
+  const offset = controls.getByLabel("Độ dịch tam giác theo Z", { exact: true });
+  const cameraX = controls.getByLabel("Camera X", { exact: true });
+  await expect(canvas).toBeVisible();
+  await expect(offset).toHaveValue("0");
+  await cameraX.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(cameraX).toHaveValue("0.1");
+  await expect(offset).toHaveValue("0");
+  await canvas.focus();
+  await page.keyboard.down("d");
+  try {
+    await expect.poll(async () => Number(await offset.inputValue())).toBeGreaterThan(0);
+  } finally {
+    await page.keyboard.up("d");
+  }
+  await controls.getByRole("button", { name: "Ẩn debug", exact: true }).click();
+  await expect(controls.getByRole("button", { name: "Hiện debug", exact: true })).toBeVisible();
+  await expect(canvas).toBeVisible();
+  await expect(page.locator(".lab-readout")).toHaveCount(0);
+  await controls.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(offset).toHaveValue("0");
+  await expect(cameraX).toHaveValue("0");
+  expect(errors).toEqual([]);
+});
+
 test("Project 19 Lambert Lab changes light, material and model without browser errors", async ({
   page,
 }) => {

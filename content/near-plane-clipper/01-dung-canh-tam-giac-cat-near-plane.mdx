@@ -1,53 +1,51 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Dựng cảnh tam giác cắt qua near plane
+# Dựng tam giác trước, rồi làm nó đi qua near plane
 
 ## Vấn đề cần giải quyết
 
-Project 15 đã tránh phép chia khi một **point** nằm trước near plane. Với triangle, bỏ point lỗi chưa đủ: ba vertex nối thành một primitive. Chỉ cần A đi vào vùng `z < near` mà ta bỏ luôn cả triangle, phần còn nhìn thấy cũng biến mất. Nếu vẫn project A, phép chia cho một Z rất nhỏ làm hình phóng ra hàng nghìn pixel hoặc đổi hướng khi Z qua zero.
-
-Checkpoint đầu chưa sửa lỗi. Ta dựng một chương trình có thể **nhìn thấy nguyên nhân**: nửa trái là mặt cắt camera space với trục ngang Z, nửa phải là viewport. Triangle chuyển động dọc Z nhưng toàn bộ position vẫn ở camera space.
+Ở Project 17, ta tránh đưa hình đi quá sát camera. Bây giờ hãy thử làm điều ngược lại: kéo một tam giác xuyên qua vị trí mắt. Nếu chỉ kiểm ba đỉnh rồi bỏ cả tam giác khi một đỉnh ra ngoài, phần còn nhìn thấy cũng biến mất. Bài này dựng ứng dụng chạy được để quan sát lỗi đó trước khi sửa.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Near plane không phải một hiệu ứng trang trí trên màn hình. Nó là mặt phẳng `z = near` trong camera space. Vì vậy thứ tự đúng phải là:
+Camera nhìn theo +Z, world Y hướng lên. Near plane nằm tại Z=near; ta chỉ giữ phía z≥near. Dữ liệu đi theo thứ tự: camera-space triangle → clip → project → rasterize. Bài đầu chưa viết clipper, nên chỉ vẽ nguyên tam giác khi cả ba đỉnh đều ở phía được giữ. Đây là đối chứng discard-whole an toàn, không phải cách giải cuối cùng.
 
-$$
-\text{camera-space triangle}\;\longrightarrow\;\text{clip}\;\longrightarrow\;\text{project}\;\longrightarrow\;\text{rasterize}
-$$
-
-Ta dùng chế độ `discard-whole` làm đối chứng: nếu một vertex không hợp lệ, bỏ cả triangle **trước khi chia**. Cách này an toàn nhưng sai về hình học; nó cho ta thấy chính xác phần clipper phải cải thiện.
+Starter đã có window, renderer, texture RGBA8888, framebuffer 1100×800 và rasterizer top-left của P16. Mở src/main.cpp và chạy trước: bạn phải thấy cửa sổ cùng HUD, chưa có bề mặt. Các kiểu trong types.hpp, các hàm project/raster trong raster.hpp và mặt cắt cơ bản trong view.hpp đã được cấp sẵn. Ta sẽ tự viết phần clipping, không cần bắt đầu lại từ SDL_Init.
 
 <InteractiveLab demo="near-plane" mode="near-scene" />
 
 ## Viết code từng bước
 
-### Bước 1 — Giữ position và color trong cùng một vertex
+Viết tiếp trong **starter/include** và **starter/src** của ZIP đã giải nén. Đường dẫn trên code block tính từ Starter. Khi thay một hàm hoặc struct, xóa bản cũ rồi đặt bản mới vào đúng namespace; không để hai định nghĩa trùng tên. Các phần ghi “đã có” chỉ để đọc lại, không chép thêm lần nữa.
 
-```cpp title="include/lab.hpp — dữ liệu đầu vào còn ở camera space"
-struct Vec3 {
-    double x{};
-    double y{};
-    double z{};
-};
+```powershell title="Build mã đang học"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_starter --parallel 2
+.\build\Debug\project_18_starter.exe
+```
 
-struct Color {
-    double red{};
-    double green{};
-    double blue{};
-};
+Checkpoint 01 là **bản tham khảo sau bài**, chạy độc lập bằng target project_18_checkpoint_1. Nó không nhận các thay đổi bạn viết trong Starter.
 
+### Bước 1 — Dựng tam giác RGB và tách world khỏi camera
+
+Đọc lại hai kiểu đã có trong types.hpp. Color dùng double để không làm tròn RGB giữa các lần cắt:
+
+```cpp title="include/types.hpp — dữ liệu đã có trong Starter"
 struct ClipVertex {
     Vec3 position{};
     Color color{};
 };
+
+struct Triangle3 {
+    ClipVertex a{};
+    ClipVertex b{};
+    ClipVertex c{};
+};
 ```
 
-`Color` dùng `double`, chưa đổi về byte. Khi clipping sinh vertex mới giữa một cạnh, màu của vertex đó cũng nằm giữa hai màu đầu cạnh; làm tròn ở đây sẽ tạo vệt màu không liên tục.
+Thêm các hàm dưới vào namespace lab trong scene.hpp, trước advanceScene. Preset 1 nằm hoàn toàn trong vùng giữ; preset 2 có một đỉnh trước near. Mỗi frame tạo bản sao mới từ preset, cộng depthOffset rồi trừ camera: không sửa dồn dữ liệu gốc.
 
-### Bước 2 — Tạo triangle có một vertex trước near plane
-
-```cpp title="include/lab.hpp — tình huống one-outside mặc định"
+```cpp title="include/scene.hpp — tam giác gốc, năm tình huống và camera space"
 inline Triangle3 makeDefaultTriangle() {
     return {
         {{-1.15, -0.85, 0.45}, {255.0, 92.0, 106.0}},
@@ -55,63 +53,273 @@ inline Triangle3 makeDefaultTriangle() {
         {{0.00, 1.05, 2.25}, {93.0, 145.0, 255.0}},
     };
 }
-```
 
-Với `near = 1.0`, A có Z bằng `0.45` nên nằm trong khoảng camera–near plane. B và C vẫn ở phía nhìn thấy. Đây là tình huống quan trọng nhất: output đúng không còn là triangle gốc, nhưng cũng chưa phải rỗng.
+inline Triangle3 presetTriangle(int preset) {
+    if (preset == 1) {
+        return {
+            {{-1.0, -0.8, 2.1}, {255.0, 92.0, 106.0}},
+            {{1.1, -0.7, 3.2}, {78.0, 232.0, 163.0}},
+            {{0.0, 1.0, 2.6}, {93.0, 145.0, 255.0}},
+        };
+    }
+    if (preset == 2) {
+        return makeDefaultTriangle();
+    }
+    if (preset == 3) {
+        return {
+            {{-1.1, -0.8, 0.35}, {255.0, 92.0, 106.0}},
+            {{1.1, -0.7, 0.55}, {78.0, 232.0, 163.0}},
+            {{0.0, 1.0, 2.8}, {93.0, 145.0, 255.0}},
+        };
+    }
+    if (preset == 4) {
+        return {
+            {{-1.0, -0.8, 0.25}, {255.0, 92.0, 106.0}},
+            {{1.0, -0.7, 0.45}, {78.0, 232.0, 163.0}},
+            {{0.0, 1.0, 0.65}, {93.0, 145.0, 255.0}},
+        };
+    }
+    return {
+        {{-1.0, -0.8, 1.0}, {255.0, 92.0, 106.0}},
+        {{1.0, -0.7, 2.8}, {78.0, 232.0, 163.0}},
+        {{0.0, 1.0, 1.0}, {93.0, 145.0, 255.0}},
+    };
+}
 
-### Bước 3 — Dịch cả primitive bằng một biến có tên
-
-```cpp title="include/lab.hpp — cùng một depthOffset cho ba vertex"
-inline Triangle3 moveAlongDepth(Triangle3 triangle, double depthOffset) {
-    triangle.a.position.z += depthOffset;
-    triangle.b.position.z += depthOffset;
-    triangle.c.position.z += depthOffset;
-    return triangle;
+inline Triangle3 cameraTriangle(const Scene& scene) {
+    Triangle3 t = moveAlongDepth(presetTriangle(scene.preset), scene.depthOffset);
+    for (auto* v : {&t.a, &t.b, &t.c}) {
+        v->position.x -= scene.camera.x;
+        v->position.y -= scene.camera.y;
+        v->position.z -= scene.camera.z;
+    }
+    return t;
 }
 ```
 
-`baseTriangle` không bị ghi đè mỗi frame. Phím `A/D`, drag và sweep chỉ thay `depthOffset`; `R` đưa offset về zero. Nhờ vậy một lần reset luôn trở lại đúng preset, không tích lũy sai số qua hàng nghìn frame.
+X/Y/Z là vị trí hình học; RGB đi kèm từng đỉnh. Mặt cắt ZX cố ý bỏ Y để cho thấy độ sâu, còn viewport phía trên vẫn dùng đủ ba tọa độ.
 
-### Bước 4 — Vẽ mặt cắt bằng Z và X
+### Bước 2 — Cho vật thể đi theo Z, rồi tô bề mặt đầu tiên
 
-Trong `sideViewPoint`, Z đi theo chiều ngang, X đi theo chiều dọc. Near plane trở thành đường đứng màu vàng. Đây chỉ là dụng cụ debug; nó không tham gia projection ở viewport.
+Thêm moveDepthOffset, beginDrag và updateDrag, sau đó thay advanceScene đang rỗng. Giữ A nghĩa là tiến về camera (giảm Z), D là ra xa. Held state được nhân dt; kéo dùng độ lệch từ điểm bắt đầu để không bị nhảy khi nhấn chuột.
 
-```cpp title="src/main.cpp — ánh xạ camera space sang mặt cắt chẩn đoán"
-const double normalizedDepth = (vertex.position.z + 0.5) / 6.0;
-const double normalizedHorizontal = (vertex.position.x + 1.8) / 3.6;
-return {
-    left + normalizedDepth * (right - left),
-    bottom - normalizedHorizontal*(bottom - top),
+```cpp title="include/scene.hpp — giới hạn độ sâu và kéo chuột"
+inline bool moveDepthOffset(Scene& scene, double offset) {
+    if (!std::isfinite(offset)) {
+        return false;
+    }
+    const double next = std::clamp(offset, -4.0, 3.0);
+    if (next == scene.depthOffset) {
+        return false;
+    }
+    scene.depthOffset = next;
+    return true;
+}
+
+inline void beginDrag(Scene& scene, double mouseX, DragState& drag) {
+    if (!std::isfinite(mouseX)) {
+        drag = {};
+        return;
+    }
+    drag = {true, mouseX, scene.depthOffset};
+    scene.paused = true;
+}
+
+inline void updateDrag(Scene& scene, const DragState& drag, double mouseX) {
+    if (drag.active && std::isfinite(mouseX)) {
+        moveDepthOffset(scene, drag.depthOffset + (mouseX - drag.startX) * 0.012);
+    }
+}
+```
+
+
+
+```cpp title="include/scene.hpp — cập nhật từ held input"
+inline bool advanceScene(Scene& scene, double deltaSeconds, int heldAxis) {
+    if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
+        return false;
+    }
+    const double dt = std::min(deltaSeconds, 0.05);
+    if (heldAxis != 0) {
+        return moveDepthOffset(scene, scene.depthOffset + heldAxis * dt);
+    }
+    return false;
+}
+```
+
+Thay renderScene trong view.hpp bằng bản dưới. Nó project tam giác còn nguyên, rasterize ra pixel rồi ghi framebuffer bằng putPixel. Khi một đỉnh có `z < near`, batch rỗng: ta đã tái hiện đúng lỗi muốn giải quyết.
+
+```cpp title="include/view.hpp — vẽ tam giác qua pipeline CPU đang có"
+inline FrameStats renderScene(Framebuffer& image, const Scene& scene) {
+    image.clear(kBackground);
+    FrameStats stats{};
+    stats.source = cameraTriangle(scene);
+    TriangleBatch renderBatch{};
+    if (!scene.clipping) {
+        const auto& t = stats.source;
+        if (t.a.position.z >= scene.nearPlane && t.b.position.z >= scene.nearPlane && t.c.position.z >= scene.nearPlane) {
+            renderBatch.triangles[0] = t;
+            renderBatch.count = 1;
+        } else {
+            stats.discarded = true;
+        }
+    }
+    const Viewport viewport{0, 0, Framebuffer::width, viewportHeight(scene)};
+    for (std::size_t i = 0; i < renderBatch.count; ++i) {
+        const auto projected = projectTriangle(renderBatch.triangles[i], 1.0471975511965976, viewport, scene.nearPlane);
+        if (!projected) {
+            continue;
+        }
+        ++stats.renderedTriangles;
+        const auto raster = rasterizeScreenTriangle(*projected, viewport.width, viewport.height, [&](int x, int y, Color color) {
+            image.putPixel(x, y, packColor(color));
+        });
+        stats.candidates += raster.candidateCount;
+        stats.covered += raster.coveredCount;
+    }
+    if (scene.debug) {
+        drawProfile(image, stats, scene);
+    }
+    (void)scene;
+    return stats;
+}
+```
+
+
+
+### Bước 3 — Nối bàn phím và chuột vào vòng lặp SDL
+
+Thay handleKey rỗng trong controls.hpp để chọn preset và near:
+
+```cpp title="include/controls.hpp — reset và điều khiển near"
+inline void handleKey(Scene& scene, SDL_Keycode key, bool repeat) {
+    if (!repeat && (key == SDLK_R || (key >= SDLK_1 && key <= SDLK_5))) {
+        int preset = scene.preset;
+        if (key != SDLK_R) {
+            preset = static_cast<int>(key - SDLK_0);
+        }
+        resetScene(scene, preset);
+    }
+    if (key == SDLK_W) {
+        scene.nearPlane = std::min(2.0, scene.nearPlane + 0.05);
+        scene.paused = true;
+    }
+    if (key == SDLK_S) {
+        scene.nearPlane = std::max(0.25, scene.nearPlane - 0.05);
+        scene.paused = true;
+    }
+
+    (void)scene;
+    (void)key;
+    (void)repeat;
+}
+```
+
+Trong main.cpp, sau previousTicks và trước while(running), thêm state kéo cùng hàm nhả capture:
+
+```cpp title="src/main.cpp — state kéo và cleanup"
+lab::DragState drag;
+SDL_MouseID owner{};
+const auto cancelDrag = [&]() {
+    drag = {};
+    SDL_CaptureMouse(false);
 };
 ```
 
-## Ghép các phần lại
+Trong vòng PollEvent, thay đoạn từ nhánh KEY_DOWN đến hết nhánh WINDOW_RESTORED bằng toàn bộ khối dưới. Các nhánh QUIT ở trước vẫn giữ nguyên. Như vậy cleanup khi blur/resize và xử lý keyboard cũ không bị bỏ sót.
 
-```bash title="Terminal — build checkpoint dựng cảnh"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_18_checkpoint_1
+```cpp title="src/main.cpp — một owner cho cả vòng kéo"
+if (event.type == SDL_EVENT_KEY_DOWN) {
+    cancelDrag();
+    if (event.key.key == SDLK_A || event.key.key == SDLK_D) {
+        if (event.key.key == SDLK_A) {
+            held.toward = true;
+        } else {
+            held.away = true;
+        }
+        scene.paused = true;
+    } else {
+        held = {};
+        lab::handleKey(scene, event.key.key, event.key.repeat);
+    }
+    dirty = true;
+}
+if (event.type == SDL_EVENT_KEY_UP) {
+    if (event.key.key == SDLK_A) {
+        held.toward = false;
+    }
+    if (event.key.key == SDLK_D) {
+        held.away = false;
+    }
+}
+if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_MINIMIZED || event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+    cancelDrag();
+    scene.paused = true;
+    held = {};
+    dirty = true;
+}
+if (event.type == SDL_EVENT_WINDOW_EXPOSED || event.type == SDL_EVENT_WINDOW_SHOWN || event.type == SDL_EVENT_WINDOW_RESTORED) {
+    dirty = true;
+}
+const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    failed = true;
+    running = false;
+    break;
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !drag.active) {
+    const lab::Vec2 mouse{event.button.x, event.button.y};
+    if (mouse.x >= 0.0 && mouse.x < 1100.0 && mouse.y >= 0.0 && mouse.y < lab::viewportHeight(scene)) {
+        held = {};
+        lab::beginDrag(scene, mouse.x, drag);
+        owner = event.button.which;
+        if (!SDL_CaptureMouse(true)) {
+            cancelDrag();
+        }
+        dirty = true;
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_MOTION && drag.active && event.motion.which == owner) {
+    if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
+        cancelDrag();
+    } else {
+        lab::updateDrag(scene, drag, event.motion.x);
+        dirty = true;
+    }
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && drag.active && event.button.which == owner) {
+    lab::updateDrag(scene, drag, event.button.x);
+    cancelDrag();
+    dirty = true;
+}
 ```
 
-Chạy target rồi dùng `1–5`, `A/D`, kéo chuột trong nửa trái và nhấn `R`. Ở checkpoint này nửa phải chưa tô triangle; ta chỉ kiểm tra scene, input và phép resize trước khi thêm thuật toán.
+Phần đo dt và gọi advanceScene bên dưới PollEvent đã có trong Starter. Trước SDL_DestroyTexture ở cuối main, thêm `cancelDrag();`. Tọa độ chuột được SDL đổi sang board logic đúng một lần; mẫu MOUSE_BUTTON_UP cuối cùng vẫn được nhận trước khi nhả capture.
+
+## Ghép các phần lại
+
+Build project_18_starter rồi thử preset 1: phải thấy một bề mặt ba màu. Giữ A cho nó tiến về near; một lúc sau cả hình biến mất, dù mặt cắt vẫn có đỉnh nằm phía được giữ. Chọn preset 2 sẽ thấy lỗi ngay. Không chữa bằng cách bỏ guard projection: chương trình cần cắt geometry trước phép chia.
+
+Trong Canvas bài này, mặc định cũng là all-inside và chỉ dùng discard. Các bài sau lần lượt hiện counts, giao điểm, polygon rồi mới nối clipper vào hình trên viewport.
 
 ## Thử làm sai để hiểu đúng
 
-1. Project A dù `z=0.45`, sau đó kéo triangle về camera. Tọa độ screen tăng rất nhanh; hoàn tác và giữ mọi vertex ở camera space.
-2. Nếu A outside thì bỏ A nhưng vẫn nối B với C như một triangle ba đỉnh. Primitive không còn đủ topology để rasterize; đừng biến “thiếu vertex” thành dữ liệu giả.
-3. Cộng mouse delta trực tiếp vào ba Z hiện tại mỗi frame. Reset không còn chính xác và chuyển động tích lũy; quay lại `baseTriangle + depthOffset`.
+1. Xóa phép trừ camera trong cameraTriangle rồi dịch camera ở bản cuối: tam giác và lưới không còn dùng cùng hệ tọa độ. Khôi phục phép trừ trước khi học tiếp.
+
+2. Nhân chuyển động thêm một lần dt trong main: vật di chuyển chậm bất thường và phụ thuộc tốc độ khung hình. advanceScene đã nhân dt.
+
+3. Đặt z của đỉnh ngoài thành near: đỉnh đó bị kéo lệch, silhouette và màu thay đổi sai. Không giữ cách chữa này.
 
 ## Tự kiểm tra kết quả
 
-- Window, renderer, streaming texture và CPU framebuffer đều kiểm lỗi ngay sau khi tạo.
-- Triangle có ba `ClipVertex`; mỗi vertex giữ camera-space position và color.
-- Mặt cắt hiển thị Z theo chiều ngang, X theo chiều dọc và near plane tại `z=1`.
-- `1–5`, `A/D`, drag, `Space`, `N` và `R` không tạo một bản sao trạng thái thứ hai.
-- Resize tạo lại texture và framebuffer đúng kích thước pixel mới.
-- Chưa có perspective divide hoặc clipping trong checkpoint 1.
+- Starter hiện tam giác RGB ở preset 1, không chỉ có bảng số hoặc mặt cắt.
+- Preset 2 bị discard toàn bộ; đây là lỗi được giữ có chủ đích trước khi có clipper.
+- A/D dùng held state; giữ cả hai thì dừng. Kéo không nhảy độ sâu ở lần nhấn đầu.
+- Thả chuột nhận mẫu cuối; blur/resize/reset hủy thao tác cũ. Input không sửa dữ liệu preset.
 
 ## Bài tập mở rộng
 
-Thêm một đường tại `z=0` để đánh dấu camera origin và một mũi tên chỉ chiều +Z. Không đổi dữ liệu triangle; chỉ mở rộng mặt cắt chẩn đoán.
+Thay riêng vị trí Z của A trong makeDefaultTriangle, đo thời điểm cả hình bị discard. Ghi lại phần nào đáng lẽ vẫn còn nhìn thấy; bài 3–6 sẽ giữ lại đúng phần đó.
 
-Bài tiếp theo sẽ biến câu “vertex ở phía nào” thành một con số có dấu. Con số đó vừa phân loại vertex, vừa dẫn tới công thức tìm giao điểm.
+[Sang bài tiếp theo — Signed distance: đỉnh đang ở phía nào?](/projects/near-plane-clipper/02-signed-distance-va-half-space).
 
