@@ -4,13 +4,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ta đã có đủ thao tác, nhưng một demo chạy được chưa chắc đã đúng. Bài cuối tách hai việc: xem một cảnh 3D sạch và kiểm phép chiếu bằng dữ liệu có đáp án biết trước. Sau đó bạn có thể tải hoặc chép toàn bộ source để chạy độc lập.
+Hãy cho điểm bay, tạm dừng rồi kéo nó tới một vị trí khác. Nếu các thao tác đều chạy, ta đã có sản phẩm để xem thử. Nhưng nhìn bằng mắt vẫn khó phát hiện một dấu trừ sai hay việc quên cộng viewport origin.
+
+Bài cuối sẽ thêm chế độ ẩn thông tin debug để quan sát cảnh, sau đó kiểm công thức bằng một ví dụ tính tay. Cuối bài có toàn bộ mã nguồn chạy độc lập; bạn cũng sẽ biết cách chạy tests trên chính Starter mình vừa viết, thay vì chỉ kiểm bản mẫu.
 
 ## Hiểu ý tưởng trước khi viết code
 
 Round-trip rất hữu ích nhưng không phải bằng chứng duy nhất. Nếu chiều xuôi và chiều ngược cùng sai một quy ước, chúng vẫn có thể trả về điểm cũ.
 
-Vì vậy cần một oracle tính tay. Chọn FOV90°, viewport origin (10,20), width800, height600. focalPixels=600/2=300. Với P=(1,0.5,4), camera tại origin:
+Vì vậy cần một đáp án được tính độc lập, còn gọi là oracle. Chọn FOV 90°, viewport có gốc (10,20), rộng 800 và cao 600 pixel. Khi đó focalPixels=600/2=300. Với P=(1,0.5,4) và camera tại gốc:
 
 $$
 s_x=10+400+300\frac{1}{4}=485,\quad

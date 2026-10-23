@@ -102,17 +102,29 @@ export function screenToCameraAtDepth(
   return finitePoint(p) ? p : null;
 }
 export function clipPointDepth(start: Vec3, end: Vec3, lens: PointLens): [Vec3, Vec3] | null {
-  if (!finitePoint(start) || !finitePoint(end)) return null;
+  if (
+    !finitePoint(start) ||
+    !finitePoint(end) ||
+    !Number.isFinite(lens.nearPlane) ||
+    !Number.isFinite(lens.farPlane) ||
+    lens.nearPlane <= 0 ||
+    lens.farPlane <= lens.nearPlane
+  )
+    return null;
   for (const [plane, sign] of [
     [lens.nearPlane, 1],
     [lens.farPlane, -1],
   ]) {
     const a = (start.z - plane) * sign,
       b = (end.z - plane) * sign;
+    if (![a, b].every(Number.isFinite)) return null;
     if (a < 0 && b < 0) return null;
     if (a < 0 || b < 0) {
-      const t = a / (a - b),
+      const denominator = a - b;
+      if (!Number.isFinite(denominator)) return null;
+      const t = a / denominator,
         hit = { x: start.x + t * (end.x - start.x), y: start.y + t * (end.y - start.y), z: plane };
+      if (!finitePoint(hit)) return null;
       if (a < 0) start = hit;
       else end = hit;
     }
@@ -124,9 +136,26 @@ export function clipPointScreen(
   end: Point2,
   v: PointViewport,
 ): [Point2, Point2] | null {
-  if (![start.x, start.y, end.x, end.y].every(Number.isFinite)) return null;
+  if (
+    ![
+      start.x,
+      start.y,
+      end.x,
+      end.y,
+      v.x,
+      v.y,
+      v.width,
+      v.height,
+      v.x + v.width,
+      v.y + v.height,
+    ].every(Number.isFinite) ||
+    v.width <= 0 ||
+    v.height <= 0
+  )
+    return null;
   const dx = end.x - start.x,
     dy = end.y - start.y;
+  if (![dx, dy].every(Number.isFinite)) return null;
   let first = 0,
     last = 1;
   for (const [direction, distance] of [

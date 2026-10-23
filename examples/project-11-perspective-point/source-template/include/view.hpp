@@ -4,7 +4,14 @@
 
 namespace lab {
 inline bool clipScreen(Vec2& start, Vec2& end, const Viewport& viewport) {
+    // Không để dữ liệu lỗi đi tới lround hoặc vòng lặp raster.
+    if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(end.x) || !std::isfinite(end.y) || !std::isfinite(viewport.x) || !std::isfinite(viewport.y) || !std::isfinite(viewport.width) || !std::isfinite(viewport.height) || viewport.width <= 0.0 || viewport.height <= 0.0 || !std::isfinite(viewport.x + viewport.width) || !std::isfinite(viewport.y + viewport.height)) {
+        return false;
+    }
     const Vec2 delta{end.x - start.x, end.y - start.y};
+    if (!std::isfinite(delta.x) || !std::isfinite(delta.y)) {
+        return false;
+    }
     double first = 0.0;
     double last = 1.0;
     const auto boundary = [&](double direction, double distance) {
@@ -27,7 +34,7 @@ inline bool clipScreen(Vec2& start, Vec2& end, const Viewport& viewport) {
     return true;
 }
 
-#if LAB_CHECKPOINT >= 3
+#if LAB_CHECKPOINT >= 5
 // Hai đầu mút ở world space; cắt đoạn trong camera space.
 inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene, std::uint32_t color) {
     start = worldToCamera(start, scene.camera);
@@ -105,7 +112,9 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
     const Viewport viewport = viewportFor(scene);
     [[maybe_unused]] const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
 #if LAB_CHECKPOINT >= 3
+#if LAB_CHECKPOINT >= 5
     drawDepthScene(image, scene);
+#endif
     const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewport);
     if (projected.status == ProjectionStatus::Visible && projected.screen) {
         // Bán kính world 0.12, vị trí cũng được chiếu perspective; không giả depth bằng size.

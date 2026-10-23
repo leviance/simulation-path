@@ -7,13 +7,13 @@ const project = {
     "Project 08 — vector hướng, atan2 và thao tác kéo chuột",
   ],
   summary:
-    "Kéo nòng pháo để chọn hướng cùng vận tốc đầu, bắn một viên đạn chịu trọng lực rồi đặt quỹ đạo do Explicit Euler tính cạnh nghiệm giải tích để nhìn thấy sai số tích phân thay vì chỉ đọc một con số.",
+    "Xây bãi bắn 2D có pháo, quỹ đạo Euler và đường đối chứng giải tích. Kéo chuột để ngắm, đổi trọng lực hoặc bước thời gian, giữ lại vài lần bắn và đo sai số hiện tại, lớn nhất, trung bình.",
   challenge: {
     timebox: "420–540 phút",
     mission:
       "Tự xây dựng một mô phỏng pháo 2D bằng C++20 và SDL3. Người dùng kéo chuột để chọn góc bắn cùng tốc độ, bấm phím để khai hỏa, sau đó quan sát viên đạn được cập nhật bằng Explicit Euler và so trực tiếp với quỹ đạo giải tích trong cùng hệ tọa độ.",
     outcome:
-      "Một bãi thử có pháo, vector vận tốc đầu, đường dự đoán giải tích, trail số, viên đạn tham chiếu và đoạn nối biểu diễn sai số. Người dùng có thể đổi góc, tốc độ, fixed dt, bắn lại, pause, tiến từng bước và đọc thời gian bay, tầm xa cùng sai số hiện tại.",
+      "Một bãi bắn có pháo và đạn chuyển động thật, đường vàng giải tích, trail Euler màu xanh cùng đoạn nối sai số. Có thể đổi góc, tốc độ, trọng lực và dt cho lần bắn tiếp theo; giữ tối đa bốn phát trước để so sánh, pause, tiến từng bước và đọc current/max/mean position error.",
     requirements: [
       "Dựng một WorldView đổi world point có trục Y hướng lên thành screen point có trục Y hướng xuống và dùng cùng phép đổi cho pháo, quỹ đạo lẫn con trỏ.",
       "Biến vector kéo chuột thành speed và angle có giới hạn rõ ràng; kéo gần như bằng 0 không được sinh NaN hoặc hướng rác.",
@@ -23,7 +23,8 @@ const project = {
       "Dùng accumulator và fixed timestep để số bước vật lý không phụ thuộc nhịp render; giới hạn frame time cùng số substep để tránh spiral of death.",
       "Giải phương trình bậc hai để tìm thời điểm chạm đất giải tích; ở đường số phải nội suy đoạn cuối để viên đạn dừng đúng mặt đất.",
       "Vẽ đồng thời analytic trajectory, numerical trail và exact reference tại cùng elapsed time; hiện Euclidean position error bằng mét.",
-      "Có controls bằng chuột và bàn phím cho fire, pause/resume, single-step, reset, angle, speed và fixed dt.",
+      "Có controls bằng chuột và bàn phím cho fire, pause/resume, single-step, reset, angle, speed, gravity và fixed dt. Mỗi shot chụp tham số lúc bắn; sửa cấu hình không làm đổi phát đang bay.",
+      "Ghi thời gian, vị trí và sai số sau mỗi bước vật lý, kể cả t=0 và bước chạm đất. Tính max/mean theo các sample đó, không theo render frame; giữ lịch sử tối đa bốn phát và có preset bắn thấp, bắn cao, trọng lực yếu.",
       "Kèm starter, bảy checkpoint chạy độc lập, final, README và CTest không mở SDL window.",
     ],
     constraints: [
@@ -40,7 +41,8 @@ const project = {
       "Một chuỗi frame time khác nhau nhưng có cùng tổng thời gian tạo cùng số fixed step và cùng state số.",
       "Giảm fixed dt làm sai số Explicit Euler tại cùng thời điểm giảm rõ ràng.",
       "Numerical impact nằm trên ground trong epsilon, không xuyên xuống dưới và elapsed chỉ nhận phần thời gian thật của bước cuối.",
-      "Pause không làm mất accumulator; single-step tiến đúng một fixed dt; reset phục hồi toàn bộ cấu hình ban đầu.",
+      "Pause không làm mất accumulator; single-step tiến một fixed dt của shot (hoặc phần cuối tới impact); reset phục hồi cấu hình ban đầu và xóa lịch sử.",
+      "Current/max/mean error khớp đối chứng độc lập bằng tổng cấp số cộng của Euler. Mỗi cấu hình g=2,5–25 m/s² và dt=1/15–1/240 chạm đất trước giới hạn 8.192 sample.",
       "Canvas xử lý DPR, pointer capture, reduced motion và controls bằng bàn phím; readout văn bản giải thích được trạng thái hiện tại.",
       "Starter, bảy checkpoint và final build sạch warning ở Debug/Release; CTest cùng test Canvas đều vượt qua.",
     ],
@@ -49,7 +51,7 @@ const project = {
   objectives: [
     "Đổi thao tác kéo chuột thành một vận tốc đầu có đơn vị và component rõ ràng",
     "Phân biệt nghiệm giải tích với mô phỏng số của cùng một hệ động lực học",
-    "Dùng fixed timestep, impact interpolation và phép đo sai số để kiểm chứng một mô phỏng",
+    "Dùng fixed timestep, nội suy chạm đất và current/max/mean error để kiểm chứng một mô phỏng",
   ],
   lessons: [
     {

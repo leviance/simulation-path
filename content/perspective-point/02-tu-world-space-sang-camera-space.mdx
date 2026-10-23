@@ -4,7 +4,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Hiện point được vẽ như thể người quan sát luôn ở gốc. Nếu dời camera sang phải thì điểm cần xuất hiện ở bên nào? Ta sẽ thêm camera nhưng chưa cho nó xoay, để trả lời bằng một phép trừ dễ kiểm tra.
+Ở bài trước, ta vẽ điểm như thể người quan sát luôn đứng ở gốc tọa độ. Giờ giữ điểm đứng yên và dời camera sang phải: trên màn hình, điểm phải dịch sang trái. Làm sao tính được điều đó mà không sửa vị trí thật của điểm?
+
+Ta sẽ lưu riêng vị trí camera và tính tọa độ của điểm so với camera. Camera trong project này chưa xoay, nên việc đổi hệ tọa độ chỉ cần một phép trừ.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -16,7 +18,7 @@ $$
 
 Ví dụ world point (3,2,8), camera (1,-1,2) cho camera point (2,3,6). Điểm trong world không hề chạy. Chỉ gốc mà ta dùng để đo nó thay đổi.
 
-Đừng gọi camera-space Z là khoảng cách Euclidean. Nó là độ sâu theo trục nhìn; point lệch sang bên có distance lớn hơn Z.
+Lưu ý Z trong camera space là độ sâu theo trục nhìn, không phải độ dài đoạn nối camera tới điểm. Chẳng hạn P=(3,0,4) có Z=4 nhưng cách camera 5 đơn vị. Phép chiếu ở bài sau cần số 4, không phải số 5.
 
 <InteractiveLab demo="projection" mode="projection-camera" />
 

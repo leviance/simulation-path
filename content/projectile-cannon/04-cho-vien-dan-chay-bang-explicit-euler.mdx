@@ -49,7 +49,21 @@ inline ProjectileState launchProjectile(const BallisticLaunch& launch) {
 }
 ```
 
-Main đồng thời lưu `firedLaunch`. Exact ghost về sau phải dùng điều kiện đầu của chính phát bắn đang bay, không dùng aim preview mà người dùng vừa kéo sang hướng khác.
+Ta lưu điều kiện đầu trong `Shot::launch`, trạng thái thay đổi trong `Shot::projectile`, và bước thời gian của lần bắn trong `Shot::fixedDt`. Cả ba được chụp lúc bắn. Bản tham chiếu phải dùng `shot.launch`, không dùng góc ngắm mà người dùng vừa chỉnh.
+
+```cpp title="include/simulation.hpp — bắt đầu một lần bắn có dữ liệu riêng"
+inline Shot startShot(const Settings& settings) {
+    Shot shot{};
+    shot.launch = makeLaunch(settings);
+    shot.projectile = launchProjectile(shot.launch);
+    shot.fixedDt = settings.fixedDt;
+    shot.exists = true;
+    recordSample(shot);
+    return shot;
+}
+```
+
+`recordSample` lưu cả điểm ban đầu tại `t=0`. Hàm `fire` đặt shot này vào `Experiment::current`; lần bắn cũ được chuyển vào lịch sử tối đa bốn lần. Nhờ vậy bạn có thể ngắm lại rồi bắn mà không xóa dấu vết của lần thử trước.
 
 ### Bước 3 — Giữ rõ velocity đầu bước
 
@@ -64,9 +78,9 @@ Biến `startVelocity` làm thứ tự thuật toán hiện ra ngay trong code. 
 
 ### Bước 4 — Trail lấy state sau mỗi step
 
-Mỗi lần update thành công, main thêm `projectile.position` vào `numericalTrail`. Trail là dữ liệu hiển thị; xóa trail không được làm thay đổi state vật lý.
+Mỗi lần `stepShot` cập nhật thành công, `recordSample` thêm một bản sao của `elapsed` và `position` vào `samples`. Phần vẽ nối các `sample.position` thành trail. Không lưu tham chiếu tới một biến position đang thay đổi: làm vậy sẽ khiến toàn bộ trail dồn vào chấm cuối cùng.
 
-Ở riêng checkpoint 4, `deltaSeconds` của render frame được đưa thẳng vào Euler để bạn có thể nhìn thấy vấn đề. Bài tiếp theo sẽ thay đường này bằng accumulator cùng fixed dt.
+Ở riêng checkpoint 4 của C++, thời gian render frame được đưa thẳng vào Euler, giới hạn mỗi bước tối đa 0,1 giây. Trước khi học cách chạm đất ở bài 6, chương trình tạm dừng khi đạn xuống dưới −2 m hoặc sau 30 giây; log cũng có giới hạn hữu hạn. Canvas dùng đường chạy hoàn thiện có fixed step và ground impact để bạn thử ổn định; dùng nút bước để quan sát đúng phép Euler của bài này.
 
 ## Ghép các phần lại
 
@@ -82,7 +96,7 @@ Nhấn `Enter` để fire, `Space` để pause và `N` để đi đúng một b�
 
 1. Update velocity trước position. Đường xanh chuyển từ phía trên đường analytic xuống phía dưới; bạn đã đổi sang semi-implicit Euler.
 2. Quên tăng `elapsed`. Viên đạn xanh bay nhưng exact ghost đứng ở muzzle, khiến phép so không còn cùng thời điểm.
-3. Đọc `aimVelocity` mỗi frame thay vì giữ `firedLaunch`. Kéo nòng giữa lúc viên đạn bay sẽ bẻ quỹ đạo như có động cơ vô hình.
+3. Đọc vận tốc từ `settings` mỗi frame thay vì giữ `Shot::launch`. Kéo nòng giữa lúc viên đạn bay sẽ bẻ quỹ đạo như có động cơ vô hình.
 4. Dùng pixel position làm state rồi cộng m/s. Kết quả phụ thuộc scale của cửa sổ và không còn đơn vị nhất quán.
 
 ## Tự kiểm tra kết quả
@@ -90,7 +104,7 @@ Nhấn `Enter` để fire, `Space` để pause và `N` để đi đúng một b�
 - Fire đặt position về muzzle, velocity về initial velocity và elapsed về 0.
 - Một bước 0,1 s với velocity (10,20) dịch position đúng (1,2) mét trước khi gravity đổi velocity.
 - `elapsed` tăng đúng tổng các `dt` đã dùng.
-- Exact ghost được tính từ `firedLaunch` tại `projectile.elapsed`.
+- Chấm tham chiếu được tính từ `Shot::launch` tại `projectile.elapsed`.
 - Thay aim khi projectile đang bay không sửa state hiện tại.
 - Trail chỉ chứa các position numerical, không gọi analytic formula để “nắn” đường.
 

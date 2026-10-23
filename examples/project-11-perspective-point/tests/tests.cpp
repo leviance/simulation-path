@@ -92,6 +92,22 @@ void clippingAndPixels() {
     a = {0.0, 0.0, 15.0};
     b = {2.0, 0.0, 17.0};
     check(lab::clipDepth(a, b, lens) && close(b.x, 1.0) && b.z == 16.0, "analytic far intersection");
+    for (const double near : {std::numeric_limits<double>::quiet_NaN(), -1.0, 0.0, 16.0}) {
+        auto invalid = lens;
+        invalid.nearPlane = near;
+        a = {0.0, 0.0, 1.0};
+        b = {1.0, 1.0, 2.0};
+        check(!lab::clipDepth(a, b, invalid), "clipping rejects invalid near/far before interpolation");
+    }
+    auto invalid = lens;
+    invalid.farPlane = std::numeric_limits<double>::infinity();
+    check(!lab::clipDepth(a, b, invalid), "clipping rejects infinite far");
+    lab::Vec2 from{0.0, 0.0};
+    lab::Vec2 to{1.0, 1.0};
+    check(!lab::clipScreen(from, to, {NAN, 0.0, 100.0, 100.0}), "screen clipping rejects NaN viewport");
+    check(!lab::clipScreen(from, to, {0.0, 0.0, 0.0, 100.0}), "screen clipping rejects zero width");
+    from.x = NAN;
+    check(!lab::clipScreen(from, to, {}), "screen clipping rejects nonfinite endpoint");
     lab::Framebuffer image;
     lab::Scene scene;
     scene.debug = false;

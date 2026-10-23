@@ -6,7 +6,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 Project 22 mở sang phần vật lý, nhưng ta không bắt đầu bằng một phương trình. Việc đầu tiên là dựng được một bãi thử có thể điều khiển: mặt đất, thân pháo, nòng pháo và một mũi tên cho biết viên đạn **sắp** nhận vận tốc nào.
 
-Starter đã có window SDL3, renderer, streaming texture, CPU framebuffer, event loop và xử lý resize. Nó còn vẽ sẵn một khẩu pháo cố định để bạn có một đầu ra nhìn thấy ngay khi build. Checkpoint 1 chỉ thêm phần thật sự mới: hệ tọa độ của bãi bắn và thao tác kéo chuột để chọn initial velocity.
+Hãy tải ZIP ở trang tổng quan, giải nén rồi chạy **starter trước khi sửa code**. Bạn sẽ thấy một khẩu pháo đứng yên trên mặt đất. Window, renderer, streaming texture và framebuffer là phần ta mang theo từ các project trước; chúng được giữ nguyên trong mã tải về, không phải để bạn tự đoán lại.
+
+```bash title="Terminal — chạy bộ khung trước"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_22_starter
+./build/Debug/project_22_starter.exe
+```
+
+Starter dùng vùng vẽ logic 1000×650, trong đó 90 pixel cuối dành cho hướng dẫn và số đo. Khi resize, SDL thêm khoảng trống quanh hình để giữ tỷ lệ. Phần mới của checkpoint 1 là biến thao tác kéo thành hướng ngắm và tốc độ đầu.
 
 Ta cần giữ một ranh giới rõ từ đầu:
 
@@ -38,6 +46,8 @@ Kéo đầu mũi tên theo nhiều hướng, kể cả ngang sang trái hoặc g
 ## Viết code từng bước
 
 ### Bước 1 — Viết hai phép đổi đối xứng nhau
+
+Trong `include/lab.hpp`, `Vec2` chứa hai số thực và `WorldView` chứa gốc màn hình cùng số pixel ứng với một mét. Phần vẽ gọi `worldToScreen`; phần vật lý không biết kích thước cửa sổ.
 
 ```cpp title="include/lab.hpp — world point thành screen point"
 inline Vec2 worldToScreen(Vec2 worldPoint, const WorldView& view) {
@@ -77,7 +87,25 @@ Hàm `aimFromScreenDrag` trả `valid=false` cho drag có độ dài gần zero 
 
 ### Bước 4 — Giữ chuột tới khi người dùng nhả
 
-Khi nhận mouse down, final gọi `SDL_CaptureMouse(true)`. Nhờ vậy việc kéo vẫn tiếp tục nếu con trỏ vượt ra ngoài cửa sổ. Mouse up và focus lost đều phải nhả capture; đây là một cặp acquire/release giống quản lý tài nguyên.
+Tọa độ từ SDL mouse event là tọa độ cửa sổ, chưa chắc trùng với vùng vẽ logic khi resize hoặc dùng màn hình HiDPI. Đổi chúng trước khi tính vector:
+
+```cpp title="src/main.cpp — đổi event về tọa độ vùng vẽ"
+const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+    failed = true;
+    running = false;
+    break;
+}
+```
+
+Sau đó `updateAim` lấy vị trí miệng nòng trong cùng hệ tọa độ, gọi `aimFromScreenDrag` và chỉ nhận kết quả hợp lệ. Ta bắt đầu kéo khi giữ nút trái, ghi lại `pointerOwner`, rồi gọi `SDL_CaptureMouse(true)`. Nếu capture thất bại thì không nhận thao tác kéo. Mouse up của đúng con trỏ phải lấy cả tọa độ cuối trước khi nhả:
+
+```cpp title="src/main.cpp — không bỏ sót sample cuối khi nhả chuột"
+updateAim(event.button.x, event.button.y);
+cancelDrag();
+```
+
+Mất focus hoặc resize cũng gọi `cancelDrag`. Không nhả capture chỉ vì một con trỏ khác phát sự kiện.
 
 ## Ghép các phần lại
 
@@ -89,12 +117,12 @@ cmake --build build --config Debug --target project_22_checkpoint_1
 ./build/Debug/project_22_checkpoint_1.exe
 ```
 
-Kéo chuột quanh nòng pháo. Title bar phải đổi speed và angle liên tục. Resize cửa sổ chỉ thay khoảng cách pixel giữa các vạch lưới; các con số m/s và độ không đổi.
+Kéo chuột quanh nòng pháo. Dòng `NEXT` bên dưới hình phải đổi speed và angle liên tục. Phím trái/phải đổi tốc độ; lên/xuống đổi góc. Resize chỉ thay cách trình bày, không đổi đơn vị vật lý. Vùng vẽ giữ tỷ lệ nên thao tác ngắm không bị lệch trên màn hình HiDPI.
 
 ## Thử làm sai để hiểu đúng
 
 1. Bỏ dấu trừ trước `screenDelta.y`. Kéo lên sẽ tạo vận tốc Y âm và nòng pháo bị ép về góc thấp nhất.
-2. Dùng `pixelsPerMeter` thay cho `pixelsPerSpeed`. Resize cửa sổ làm cùng một độ dài drag tạo speed khác.
+2. Dùng `pixelsPerMeter` thay cho `pixelsPerSpeed`. Khi vùng nhìn tự co để chứa một quỹ đạo xa hơn, độ nhạy ngắm sẽ đổi dù người dùng không yêu cầu.
 3. Bỏ kiểm tra drag gần zero rồi click đúng muzzle. Theo dõi `atan2(0,0)` và giải thích vì sao một hướng không tồn tại không nên được chấp nhận như input mới.
 4. Không nhả mouse capture khi mất focus. Thử Alt+Tab giữa lúc kéo để thấy state input bị kẹt ra sao.
 

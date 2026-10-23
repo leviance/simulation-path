@@ -4,7 +4,6 @@
 #define LAB_CHECKPOINT 7
 #endif
 
-#if LAB_CHECKPOINT >= 1
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -69,6 +68,7 @@ inline Vec2 screenToWorld(Vec2 screenPoint, const WorldView& view) {
     };
 }
 
+#if LAB_CHECKPOINT >= 1
 struct AimSelection {
     Vec2 velocity{};
     double speed{};
@@ -105,6 +105,8 @@ inline AimSelection aimFromScreenDrag(
     const double angle = clampValue(std::atan2(rawVelocity.y, rawVelocity.x), safeMinimumAngle, safeMaximumAngle);
     return {{speed * std::cos(angle), speed * std::sin(angle)}, speed, angle, true};
 }
+
+#endif
 
 #if LAB_CHECKPOINT >= 2
 inline Vec2 velocityFromPolar(double speed, double angleRadians) {
@@ -323,4 +325,3 @@ inline TrajectoryComparison compareProjectile(const BallisticLaunch& launch, con
 #endif
 
 } // namespace lab
-#endif

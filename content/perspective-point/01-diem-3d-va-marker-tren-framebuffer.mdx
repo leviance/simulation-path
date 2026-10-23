@@ -10,13 +10,13 @@ Tải ZIP ở trang tổng quan, giải nén rồi mở thư mục có CMakeList
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta lưu vị trí bằng ba số, nhưng tạm vẽ hai số đầu trên một lưới song song:
+Một điểm 3D cần ba tọa độ X, Y, Z. Nhưng ta chưa cần giải quyết cả phép chiếu ngay. Trước hết, hãy dùng X/Y để đặt điểm lên màn hình, còn Z vẫn được lưu trong dữ liệu để kiểm tra phím Q/E:
 
 $$
 s_x=c_x+70x,\qquad s_y=c_y-70y.
 $$
 
-70 là số pixel trên một world unit của bản xem trước. Dấu trừ ở Y đổi quy ước Y hướng lên trong world sang Y hướng xuống trên màn hình. Z vẫn nằm trong dữ liệu, chỉ chưa tham gia phép vẽ. Đây **không phải perspective projection**; nếu tăng Z mà hình chưa đổi, checkpoint này vẫn đúng.
+Trong công thức, (cₓ,cᵧ) là tâm viewport; mỗi đơn vị trong world tạm ứng với 70 pixel. Dấu trừ ở Y đổi chiều từ Y hướng lên trong world sang Y hướng xuống trên màn hình. Đây **không phải perspective projection**: tăng Z mà hình chưa đổi là đúng với mục đích của bản xem trước này. Đến bài 3, ta sẽ thay công thức đó bằng phép chiếu có độ sâu.
 
 Điểm sáng không phải một pixel quá nhỏ để quan sát. Ta vẽ một đĩa xanh có tâm trắng và crosshair vàng. Bán kính lúc này cố định 10 pixel; đến bài 3 cả vị trí lẫn kích thước sẽ phụ thuộc độ sâu.
 

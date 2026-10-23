@@ -69,9 +69,9 @@ const project = {
       id: "p11-l03",
       slug: "03-perspective-divide",
       title: "Vì sao điểm ở xa tiến về tâm?",
-      summary: "Từ tam giác đồng dạng đến x/z, y/z và một cảnh lưới có chiều sâu thật.",
+      summary: "Nhìn hai tam giác đồng dạng, tự viết x/z, y/z rồi kiểm vị trí điểm sáng.",
       order: 3,
-      estimatedMinutes: 70,
+      estimatedMinutes: 60,
       demoId: "projection",
     },
     {
@@ -87,9 +87,9 @@ const project = {
       id: "p11-l05",
       slug: "05-near-plane-va-view-frustum",
       title: "Chặn điểm không thể nhìn thấy",
-      summary: "Phân biệt behind, near, far, outside và invalid trước khi vẽ.",
+      summary: "Kiểm vùng nhìn, cắt đoạn ở near/far rồi dựng lưới sàn và bốn khung 3D.",
       order: 5,
-      estimatedMinutes: 60,
+      estimatedMinutes: 80,
       demoId: "projection",
     },
     {

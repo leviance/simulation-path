@@ -1,4 +1,5 @@
 #include "lab.hpp"
+#include "simulation.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -111,6 +112,72 @@ int main() {
     const double fineError = lab::compareProjectile(launch, fine).error;
     check(coarseError > mediumError && mediumError > fineError, "Explicit Euler position error decreases when fixed dt becomes smaller");
     check(nearlyEqual(coarseError / mediumError, 4.0, 1e-8), "first-order Euler error scales linearly with dt");
+
+    lab::Experiment experiment{};
+    lab::fire(experiment);
+    const lab::BallisticLaunch savedLaunch = experiment.current.launch;
+    const double savedDt = experiment.current.fixedDt;
+    experiment.settings.gravity = 3.0;
+    experiment.settings.speed = 4.0;
+    experiment.settings.fixedDt = 1.0 / 240.0;
+    lab::singleStep(experiment);
+    check(nearlyEqual(experiment.current.projectile.elapsed, savedDt), "next-shot dt does not change the current shot");
+    check(nearlyEqual(experiment.current.launch.acceleration.y, savedLaunch.acceleration.y), "next-shot gravity never mutates the fired launch");
+    check(nearlyEqual(experiment.current.launch.velocity.x, savedLaunch.velocity.x), "aim changes never mutate the fired velocity");
+
+    for (int index = 0; index < 8; ++index) {
+        lab::fire(experiment);
+    }
+    check(experiment.history.size() == 4, "history retains exactly the latest four shots");
+    experiment = {};
+    check(!experiment.current.exists && experiment.history.empty() && experiment.paused, "reset clears history and restores pause");
+
+    // Đối chứng độc lập bằng tổng cấp số cộng, không gọi analyticPosition.
+    for (const double gravity : {2.5, 9.81, 25.0}) {
+        for (const double dt : {1.0 / 15.0, 1.0 / 60.0, 1.0 / 240.0}) {
+            lab::Settings settings{};
+            settings.gravity = gravity;
+            settings.fixedDt = dt;
+            lab::Shot shot = lab::startShot(settings);
+            for (int index = 0; index < 8000 && shot.projectile.active; ++index) {
+                lab::stepShot(shot, dt);
+            }
+            check(!shot.projectile.active && !shot.logLimitReached, "all supported gravity/dt flights terminate before logger capacity");
+            check(nearlyEqual(shot.projectile.position.y, 0.0), "logged flight lands at ground");
+            double expectedSum = 0.0;
+            double expectedMaximum = 0.0;
+            for (const auto& sample : shot.samples) {
+                double whole = std::floor(sample.elapsed / dt + 1e-8);
+                double fraction = sample.elapsed / dt - whole;
+                if (fraction < 0.0) {
+                    fraction = 0.0;
+                }
+                const double expected = 0.5 * gravity * dt * dt * (whole + fraction * fraction);
+                check(nearlyEqual(sample.error, expected, 1e-7), "sample error matches arithmetic-series oracle including fractional impact");
+                expectedSum += expected;
+                expectedMaximum = std::max(expectedMaximum, expected);
+            }
+            check(shot.errors.count == shot.samples.size(), "error denominator includes initial and final samples exactly once");
+            check(nearlyEqual(shot.errors.maximum, expectedMaximum, 1e-7), "maximum error matches every actual physics sample");
+            check(nearlyEqual(shot.errors.mean(), expectedSum / double(shot.samples.size()), 1e-7), "mean error matches independent per-sample average");
+        }
+    }
+
+    lab::Settings longestFlight{};
+    longestFlight.speed = 32.0;
+    longestFlight.angle = 85.0 * lab::kPi / 180.0;
+    longestFlight.gravity = 2.5;
+    longestFlight.fixedDt = 1.0 / 240.0;
+    lab::Shot longest = lab::startShot(longestFlight);
+    for (int index = 0; index < 8000 && longest.projectile.active; ++index) {
+        lab::stepShot(longest, longest.fixedDt);
+    }
+    check(!longest.projectile.active && !longest.logLimitReached && nearlyEqual(longest.projectile.position.y, 0.0), "longest supported flight lands before capacity");
+    experiment.current = longest;
+    experiment.current.substeps = 3;
+    const std::size_t landedSamples = experiment.current.samples.size();
+    lab::singleStep(experiment);
+    check(experiment.current.substeps == 3 && experiment.current.samples.size() == landedSamples, "single step after landing does not invent a step or sample");
 
     if (failures != 0) {
         std::cerr << failures << " checks failed.\n";

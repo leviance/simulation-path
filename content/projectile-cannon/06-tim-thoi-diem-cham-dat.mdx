@@ -33,7 +33,7 @@ Sau đó `impact=lerp(pa,pb,alpha)` và elapsed chỉ cộng `alpha*dt`.
 
 <InteractiveLab demo="projectile" mode="projectile-impact" />
 
-Dấu X hồng dưới ground là sample Euler thô. Chấm xanh nằm trên ground là state sau interpolation. Readout “Impact interpolation” cho biết bước cuối đã dùng bao nhiêu phần.
+Dấu X hồng dưới đất là kết quả Euler trước khi nội suy; bật lưới/debug để thấy nó. Chấm xanh dừng trên mặt đất là trạng thái sau nội suy. Đọc thời gian chạm đất trong readout rồi so với nghiệm giải tích. Hai mốc có thể khác nhau vì bản thân Euler vẫn có sai số.
 
 ## Viết code từng bước
 
@@ -76,7 +76,7 @@ if (before.position.y < groundY || state.position.y > groundY) {
 }
 ```
 
-`uncorrectedPosition` được giữ trong result để Canvas vẽ dấu X. Đây là một công cụ debug hữu ích: ta thấy rõ interpolation đã sửa dữ liệu nào.
+`uncorrectedPosition` được giữ trong kết quả để Canvas và ứng dụng C++ vẽ dấu X. Dấu này cho biết nội suy đã thay đổi mẫu nào, không phải một viên đạn thứ hai.
 
 ### Bước 4 — Nội suy toàn bộ state liên quan
 

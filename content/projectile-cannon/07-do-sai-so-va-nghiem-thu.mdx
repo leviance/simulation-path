@@ -4,112 +4,134 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Hai đường trên màn hình trông gần nhau chưa đủ để kết luận integrator đúng. Scale có thể che sai số; góc bắn này có thể vô tình dễ; hoặc ta đang so numerical state ở 1,03 s với analytic state ở 1,00 s.
+Đường xanh gần đường vàng đến mức khó phân biệt. Liệu Euler đã đủ chính xác, hay bãi bắn đang thu nhỏ nên ta không nhìn ra sai lệch? Cảm giác từ một bức hình không trả lời được câu hỏi đó.
 
-Final cần biến đối chứng thành số đo có đơn vị, rồi dùng số đo đó để kiểm một tính chất mạnh hơn: khi fixed dt nhỏ đi, sai số Explicit Euler tại cùng thời điểm phải giảm. Đồng thời ta hoàn thiện controls để người học có thể lặp lại thí nghiệm mà không sửa code.
+Bài cuối bổ sung ba số đo: sai số tại thời điểm đang xem, sai số lớn nhất và sai số trung bình của lần bắn. Sau đó ta thử cùng điều kiện đầu với nhiều dt. Mục tiêu không phải làm mọi số đo thành zero, mà là hiểu và kiểm chứng được điều gì khiến chúng thay đổi.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ở elapsed time $t_n$ của numerical state, lấy:
+Với mỗi mẫu ở thời điểm $t_n$, lấy nghiệm giải tích tại **đúng thời điểm ấy**:
 
 $$
-p_{exact}=analyticPosition(launch,t_n)
+e_n=\lVert p_n-p_{exact}(t_n)\rVert
 $$
 
-Sai số vị trí là Euclidean distance:
+Với $N$ mẫu đã ghi:
 
 $$
-error=\lVert p_{numeric}-p_{exact}\rVert
+e_{max}=\max(e_0,\ldots,e_{N-1}),\qquad e_{mean}=\frac{1}{N}\sum_{n=0}^{N-1}e_n
 $$
 
-Explicit Euler là integrator bậc một. Trong thí nghiệm acceleration không đổi, giảm `dt` bốn lần làm global position error tại cùng thời điểm giảm xấp xỉ bốn lần. Đây là kiểm tra convergence; nó mạnh hơn một ngưỡng kiểu “error < 1 m” vì một implementation sai vẫn có thể tình cờ qua ngưỡng ở một case.
+Ta tính cả mẫu ban đầu `t=0` và mẫu chạm đất cuối cùng. Mean ở đây là trung bình số học **theo sample vật lý**, không phải theo frame và cũng không phải trung bình theo thời gian. Bước cuối có thể ngắn hơn dt nhưng vẫn là một sample trong phép tính này.
 
 <InteractiveLab demo="projectile" mode="projectile-validation" />
 
-Chọn 1/15 s, bắn và pause quanh 1 giây; ghi error. Lặp lại với 1/60 s. Đường xanh phải tiến gần đường vàng rõ ràng. Khi đổi dt, lab đưa phát bắn về trạng thái chờ để hai thí nghiệm không trộn nhiều step size trong cùng một trail.
+Chọn dt rồi bắn. Nếu sửa góc, tốc độ, trọng lực hoặc dt khi đạn đang bay, phát cũ vẫn giữ tham số đã chụp lúc bắn. Bấm **Bắn lại** mới áp dụng cấu hình mới. Bốn phát trước được giữ bằng đường xám và bảng số liệu; Đặt lại xóa cả lịch sử. Tắt lưới/debug để xem hai quỹ đạo trên nền sạch.
 
 ## Viết code từng bước
 
-### Bước 1 — So hai position tại cùng elapsed
+### Bước 1 — Đo khoảng cách tại cùng thời điểm
 
-```cpp title="include/lab.hpp — comparison mang cả hai nghiệm"
+```cpp title="include/lab.hpp — một phép so không làm đổi mô phỏng"
 inline TrajectoryComparison compareProjectile(const BallisticLaunch& launch, const ProjectileState& numerical) {
     const Vec2 analytic = analyticPosition(launch, numerical.elapsed);
     return {analytic, numerical.position, numerical.elapsed, positionError(numerical.position, analytic)};
 }
 ```
 
-`TrajectoryComparison` giúp phần vẽ, title bar và tests dùng cùng định nghĩa. Nó không sửa numerical state và không dùng analytic result để kéo viên đạn xanh về đường vàng.
+`positionError` dùng `hypot` qua hàm `length`, nên kết quả có đơn vị mét. Đừng đưa tọa độ screen vào đây: khi vùng nhìn tự thu nhỏ để chứa quỹ đạo xa hơn, sai số vật lý không được thay đổi.
 
-### Bước 2 — Dùng distance thay vì sai số từng trục
+Một chi tiết dễ hiểu nhầm: Euler thường chạm đất muộn hơn nghiệm chính xác. Ở sample cuối đó, công thức giải tích có thể cho Y âm. Ta vẫn đánh giá công thức tại cùng `elapsed` để đo sai số tích phân. Đó là nghiệm tự do được kéo dài để đối chứng, không phải mô phỏng viên đạn xuyên đất. Nếu muốn so hai **điểm hạ cánh**, hãy dùng một số đo riêng vì thời gian của chúng khác nhau.
 
-```cpp title="include/lab.hpp — position error mang đơn vị mét"
-inline double positionError(Vec2 numerical, Vec2 analytic) {
-    return length(subtract(numerical, analytic));
+### Bước 2 — Cộng thống kê tại nơi ghi sample
+
+```cpp title="include/simulation.hpp — ghi một mẫu đúng một lần"
+shot.samples.push_back({shot.projectile.elapsed, shot.projectile.position, error});
+++shot.errors.count;
+shot.errors.sum += error;
+shot.errors.maximum = std::max(shot.errors.maximum, error);
+```
+
+Trong `recordSample`, `error` được tính bằng `compareProjectile(shot.launch, shot.projectile)`. Chỉ thêm mẫu sau một physics step thành công, hoặc lúc tạo shot ở `t=0`. Không cộng thống kê trong hàm render: ở 144 FPS, cùng một trạng thái vật lý có thể được vẽ nhiều lần.
+
+```cpp title="include/simulation.hpp — xử lý cả trường hợp chưa có mẫu"
+double mean() const {
+    if (count == 0) {
+        return 0.0;
+    }
+    return sum / static_cast<double>(count);
 }
 ```
 
-Error luôn không âm và bất biến khi xoay hệ trục. Readout ghi `m`; nếu sau này hiển thị pixel error, đó phải là một đại lượng khác có tên khác.
+Log có giới hạn 8.192 mẫu. Nếu chạm giới hạn, mô phỏng dừng và hiện cảnh báo; nó không âm thầm bỏ mẫu cũ rồi vẫn gọi mean là trung bình toàn bộ lần bắn. Các cấu hình được hỗ trợ đều chạm đất trước giới hạn này, kể cả dt=1/240 và g=2,5.
 
-### Bước 3 — Mọi control đi qua một state rõ ràng
+### Bước 3 — Giữ một đường cập nhật cho animation và nút bước
 
-Final dùng:
-
-- kéo chuột hoặc phím mũi tên để sửa aim cho **phát tiếp theo**;
-- `Enter` tạo lại `firedLaunch`, projectile, trail và accumulator;
-- `Space` pause/resume nhưng không xóa remainder;
-- `N` chạy đúng một fixed step rồi pause;
-- `[`/`]` đổi fixed dt;
-- `R` trả angle, speed, dt và toàn bộ simulation state về mặc định.
-
-Title bar hiện speed, angle, dt, elapsed, error, substep và dropped time. Một màn hình bất thường vì thế có dữ liệu để chẩn đoán, không chỉ có một chấm biến mất.
-
-### Bước 4 — Test convergence bằng cùng duration
-
-CTest chạy Explicit Euler tới đúng 1 giây với ba step size. Mỗi duration chia hết cho dt nên comparison không bị lệch thời gian. Điều kiện cần kiểm là:
-
-```cpp title="include/lab.hpp — đại lượng dùng trong convergence test"
-const Vec2 analytic = analyticPosition(launch, numerical.elapsed);
-return {analytic, numerical.position, numerical.elapsed, positionError(numerical.position, analytic)};
+```cpp title="include/simulation.hpp — một bước của cùng shot"
+inline void stepShot(Shot& shot, double dt) {
+    if (!shot.projectile.active) {
+        return;
+    }
+    shot.impact = explicitEulerStepToGround(shot.projectile, shot.launch.acceleration, dt, 0.0);
+    recordSample(shot);
+}
 ```
 
-Phần test còn kiểm tỷ lệ error giữa 1/15 và 1/60 gần 4 trong hệ acceleration đều này. Nếu đổi integrator ở Project 23, tỷ lệ sẽ kể cho ta biết order hội tụ đã thay đổi.
+Animation lấy kế hoạch từ accumulator rồi gọi hàm này. Nút `N` cũng gọi nó một lần với `shot.fixedDt`, sau đó pause. Sửa tham số chỉ sửa `Experiment::settings`; Enter mới gọi `startShot`. `R` phục hồi mặc định và xóa lịch sử. Khi mất focus, app pause và nhả capture, không tự chạy tiếp sau khi quay lại.
+
+### Bước 4 — Kiểm bằng một đối chứng độc lập
+
+Với gia tốc không đổi và $n$ bước đều dài $h$, tổng các vận tốc đầu bước cho:
+
+$$
+p_n=p_0+n h v_0+\frac{n(n-1)}{2}h^2 a
+$$
+
+Trừ nghiệm giải tích tại $t=nh$, sai số độ lớn là $|a|nh^2/2=|a|th/2$. CTest dùng tổng cấp số cộng này để kiểm từng mẫu, rồi tự cộng lại max/mean. Nó không chỉ gọi lại `compareProjectile` làm giá trị mong đợi. Với bước chạm đất dài $\alpha h$, biểu thức sai số trở thành $|a|h^2(n+\alpha^2)/2$, trong đó $n$ là số bước trọn trước bước cuối.
 
 ## Ghép các phần lại
 
-Build và chạy toàn bộ source:
+Build Starter, bảy checkpoint và final ở cả hai cấu hình:
 
-```bash title="Terminal — nghiệm thu Project 22"
+```bash title="Terminal — nghiệm thu toàn bộ mã tải về"
 cmake -S . -B build-all -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build-all --config Debug
-ctest --test-dir build-all -C Debug --output-on-failure
-cmake --build build-all --config Release
-ctest --test-dir build-all -C Release --output-on-failure
+cmake --build build-all --config Debug --parallel 2
+ctest --test-dir build-all -C Debug --output-on-failure --timeout 30
+cmake --build build-all --config Release --parallel 2
+ctest --test-dir build-all -C Release --output-on-failure --timeout 30
 ./build-all/Debug/project_22_final.exe
 ```
 
-Đừng chỉ build final. Starter và từng checkpoint là sản phẩm người học sẽ chạy trong quá trình đọc; một macro branch hỏng ở checkpoint 3 vẫn là lỗi phát hành dù final hoạt động.
+Để kiểm hội tụ công bằng, giữ nguyên launch, g=9,81 và so ở cùng thời điểm 1 giây, trước khi chạm đất. Đừng so hai max error của hai chuyến bay có thời lượng khác nhau rồi kết luận chỉ do dt.
+
+| dt      | Error tại 1 giây | Mean của các mẫu từ 0 đến 1 giây |
+| ------- | ---------------- | -------------------------------- |
+| 1/15 s  | 0,327 m          | 0,1635 m                         |
+| 1/60 s  | 0,08175 m        | 0,040875 m                       |
+| 1/240 s | 0,0204375 m      | 0,01021875 m                     |
+
+Trong bài toán này, fixed dt nhỏ đi bốn lần làm sai số ở cùng thời điểm giảm bốn lần, phù hợp với Explicit Euler bậc một. Tests còn kiểm round-trip tọa độ, hướng kéo, accumulator, nội suy chạm đất, giới hạn lịch sử và việc sửa cấu hình không làm đổi shot hiện tại. Không dùng `assert`: các kiểm tra vẫn chạy khi Release định nghĩa `NDEBUG`.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tính exact position bằng `aim` hiện tại thay vì `firedLaunch`. Kéo nòng khi viên đạn đang bay làm error nhảy dù numerical state không đổi.
-2. So numerical impact với exact impact nhưng bỏ qua khác biệt elapsed. Bạn đang gộp cả sai số thời gian lẫn vị trí mà không nói rõ.
-3. Trộn 1/15 và 1/120 trong cùng một phát bắn rồi dùng kết quả để kết luận convergence. Thí nghiệm không còn một biến độc lập duy nhất.
-4. Dùng `assert` trong CTest. Release có thể định nghĩa `NDEBUG` và xóa toàn bộ phép kiểm, tạo một bài test luôn pass.
+1. Lấy nghiệm tham chiếu từ `settings` đang chỉnh thay vì `shot.launch`. Kéo nòng lúc bay làm error nhảy dù viên đạn không nhận lực mới.
+2. Cộng `error` mỗi render frame. Thử một frame được vẽ lặp lại mà không chạy physics; count đã đổi dù không có mẫu vật lý mới.
+3. Chỉ tính mean bằng `(maximum + minimum)/2`. Cách này tình cờ đúng với dãy tuyến tính của vài thí nghiệm, nhưng sai với một dãy kiểm đơn giản như 0, 1, 9.
+4. Trộn hai dt trong cùng shot. Kết quả không còn là phép đo hội tụ với một bước thời gian cố định.
 
 ## Tự kiểm tra kết quả
 
-- Error bằng zero tại t=0 và chỉ so hai position ở cùng elapsed.
-- Với cùng launch và duration, error ở 1/60 nhỏ hơn 1/15; error ở 1/240 nhỏ hơn 1/60.
-- Đổi aim giữa lúc bay không thay `firedLaunch` hoặc numerical trail.
-- Đổi fixed dt đưa mô phỏng về trạng thái chờ trước khi bắn lại.
-- Pause, step, fire và reset không tạo hai nhánh update physics khác nhau.
-- Ground impact nằm đúng Y=0; exact marker và numerical marker được phân biệt rõ.
-- Debug và Release CTest đều chạy thật và pass.
-- Starter, bảy checkpoint và final đều có source hoàn chỉnh, comment cùng khoảng cách khối dễ đọc.
+- Hiện cùng lúc pháo, đạn Euler, đường tham chiếu và trail số.
+- Kéo chuột hoặc phím mũi tên đổi hướng/tốc độ; G/H đổi g; `[`/`]` đổi dt cho phát tiếp theo.
+- Fire, pause, step và reset hoạt động; mất focus không khiến input bị kẹt.
+- Error bằng zero tại t=0. Current/max/mean đều dùng mẫu vật lý ở cùng thời điểm tham chiếu.
+- Giảm dt cho sai số nhỏ hơn khi so cùng launch và cùng thời gian.
+- Bước cuối dừng đúng Y=0, chỉ tiêu thụ phần thời gian đã dùng; không thêm mẫu sau impact.
+- Lịch sử giữ tối đa bốn shot; reset xóa toàn bộ và trở về trạng thái pause.
+- Debug/Release CTest đều chạy thật; bản cuối không cần trình duyệt để hoạt động.
 
 ## Bài tập mở rộng
 
-Tạo một bảng tự động chạy cùng launch ở các dt 1/15, 1/30, 1/60, 1/120 và ghi `dt`, error tại 1 giây, `error_previous/error_current`. Đừng chạy bốn projectile bằng render frame; hãy gọi trực tiếp hàm step thuần để bảng có thể được kiểm thử lặp lại.
+Thêm số đo sai lệch tầm xa giữa điểm Euler hạ cánh và điểm giải tích hạ cánh. Đặt tên `rangeError`, ghi rõ hai thời gian hạ cánh có thể khác nhau, và giữ nó tách biệt với position error tại cùng t. Sau đó thử trọng lực yếu để xem chỉ nhìn hình có còn đủ nhận ra sai số không.
 
-Project 22 đã tạo được ngôn ngữ chung cho numerical methods: state, fixed dt, reference và error. Project 23 sẽ giữ cùng bài toán nhưng cho Explicit Euler, Verlet và RK4 chạy cạnh nhau để so stability, accuracy cùng chi phí trên mỗi bước.
+Ở Project 23, ta sẽ dùng state, bước thời gian và cách đo này để so các integrator trên cùng một hệ dao động.

@@ -20,7 +20,7 @@ $$
 p(t)=p_0+v_0t+\frac{1}{2}at^2
 $$
 
-Trong project này $a=(0,-9.81)$ m/s². Vì $a_x=0$, X tăng tuyến tính. Y có hạng $t^2$, tạo thành parabol. Ở apex, vertical velocity bằng zero:
+Mặc định $a=(0,-9.81)$ m/s². Ta lưu độ lớn trọng lực `g` dưới dạng số dương, rồi đặt `acceleration.y = -g` vì trục Y hướng lên. Phím G/H hoặc slider đổi `g` trong khoảng 2,5–25 m/s². Vì $a_x=0$, X tăng đều, còn hạng $t^2$ uốn đường bay xuống. Tại đỉnh quỹ đạo, vận tốc dọc bằng zero:
 
 $$
 t_{apex}=-\frac{v_{0y}}{a_y}
@@ -28,7 +28,7 @@ $$
 
 <InteractiveLab demo="projectile" mode="projectile-analytic" />
 
-Đổi speed và angle. Marker tròn trên đường vàng là apex; hình vuông dưới đất là impact sẽ được giải chính xác ở bài 6. Canvas final đã có nghiệm đó để bạn thấy đích đến, còn checkpoint 3 hiện chỉ dùng một time horizon đủ dài — một khác biệt được ghi rõ thay vì giấu bằng một con số “gần đúng”.
+Giữ góc và tốc độ, giảm trọng lực để thấy đường bay cao hơn và xa hơn. Chấm vàng trên cao đánh dấu đỉnh; chấm vàng trên mặt đất là nơi nghiệm giải tích kết thúc. Canvas đã dùng phép tìm giao điểm của bài 6. Trong chương trình C++ checkpoint 3, ta vẫn dùng một khoảng thời gian ước lượng để vẽ đường — đó chưa phải thời gian chạm đất chính xác.
 
 ## Viết code từng bước
 
@@ -43,6 +43,8 @@ struct BallisticLaunch {
 ```
 
 Một `BallisticLaunch` không thay đổi sau khi fire. Slider có thể chỉnh aim cho phát bắn tiếp theo, nhưng không được sửa velocity của viên đạn đã ở trên không.
+
+`Settings` là cấu hình đang chỉnh; `makeLaunch(settings)` chụp nó thành một bài toán có điều kiện đầu cụ thể. `scene.hpp` chỉ lấy mẫu và nối các điểm từ bài toán đó. Tăng số đoạn vẽ không có nghĩa là tăng độ chính xác của mô phỏng số.
 
 ### Bước 2 — Viết nghiệm position thành các hạng có tên
 

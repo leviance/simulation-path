@@ -151,20 +151,38 @@ inline ProjectionResult projectPerspective(Vec3 worldPoint, const Camera3D& came
     return result;
 }
 
+#endif
+#if LAB_CHECKPOINT >= 5
 // Cắt đoạn 3D ở near/far TRƯỚC khi chia. Trả endpoint đúng trên plane.
 inline bool clipDepth(Vec3& start, Vec3& end, const PerspectiveLens& lens) {
-    if (!finite(start) || !finite(end)) {
+    if (!finite(start) || !finite(end) || !std::isfinite(lens.nearPlane) || !std::isfinite(lens.farPlane) || lens.nearPlane <= 0.0 || lens.farPlane <= lens.nearPlane) {
         return false;
     }
-    for (const auto& plane : {Vec2{lens.nearPlane, 1.0}, Vec2{lens.farPlane, -1.0}}) {
-        const double a = (start.z - plane.x) * plane.y;
-        const double b = (end.z - plane.x) * plane.y;
+
+    struct DepthPlane {
+        double depth;
+        double direction;
+    };
+
+    for (const auto& plane : {DepthPlane{lens.nearPlane, 1.0}, DepthPlane{lens.farPlane, -1.0}}) {
+        const double a = (start.z - plane.depth) * plane.direction;
+        const double b = (end.z - plane.depth) * plane.direction;
+        if (!std::isfinite(a) || !std::isfinite(b)) {
+            return false;
+        }
         if (a < 0.0 && b < 0.0) {
             return false;
         }
         if (a < 0.0 || b < 0.0) {
-            const double t = a / (a - b);
-            Vec3 hit{start.x + t * (end.x - start.x), start.y + t * (end.y - start.y), plane.x};
+            const double denominator = a - b;
+            if (!std::isfinite(denominator)) {
+                return false;
+            }
+            const double t = a / denominator;
+            Vec3 hit{start.x + t * (end.x - start.x), start.y + t * (end.y - start.y), plane.depth};
+            if (!finite(hit)) {
+                return false;
+            }
             if (a < 0.0) {
                 start = hit;
             } else {

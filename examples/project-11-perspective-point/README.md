@@ -18,32 +18,32 @@ C++20 compiler; Visual Studio 2022 trên Windows, GCC hoặc Clang trên Linux/m
 
 Chạy trong thư mục có CMakeLists.txt:
 
-~~~powershell
+```powershell
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --parallel 2
 ctest --test-dir build -C Debug --output-on-failure --timeout 30
 .\build\Debug\project_11_final.exe
 cmake --build build --config Release --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 30
-~~~
+```
 
 Với generator single-config như Ninja:
 
-~~~bash
+```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_CHECKPOINTS=ON
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure --timeout 30
 ./build/project_11_final
-~~~
+```
 
 Mặc định chỉ build final và tests. BUILD_CHECKPOINTS=ON thêm starter và tám checkpoint độc lập. Target project_11_checkpoint_1 … project_11_checkpoint_8 chạy các bản tham khảo sau mỗi bài. Chúng không tự nhận mã bạn sửa trong Starter.
 
 Khi học từ ZIP, viết tiếp trong starter/include và starter/src, sau đó build/run đúng target:
 
-~~~powershell
+```powershell
 cmake --build build --config Debug --target project_11_starter --parallel 2
 .\build\Debug\project_11_starter.exe
-~~~
+```
 
 Sau khi hoàn thành tám bài, đổi dòng target_include_directories(project_11_tests PRIVATE final/include) trong CMakeLists.txt của bản ZIP thành target_include_directories(project_11_tests PRIVATE starter/include). Configure lại và build cả project_11_starter lẫn project_11_tests rồi chạy CTest để kiểm chính mã đã học. Nếu giữ final/include, CTest chỉ kiểm bản mẫu final; Starter ở các bài đầu chưa đủ hàm để chạy toàn bộ tests cuối project.
 
@@ -51,9 +51,9 @@ Sau khi hoàn thành tám bài, đổi dòng target_include_directories(project_
 
 1. Vẽ marker trên framebuffer, lưu Vec3 và bắt WASD/QE theo dt. Preview XY chưa perspective.
 2. Đổi world sang camera bằng phép trừ; camera chưa xoay.
-3. Suy perspective divide bằng tam giác đồng dạng, chiếu cả point lẫn nền world. Focal scale tạm bằng 1; helper guard/clipping có sẵn trong checkpoint để chia an toàn.
+3. Suy x/z, y/z từ hai tam giác đồng dạng, chiếu một điểm với focal scale tạm bằng 1. Guard depth có mặt trước lần chia đầu tiên; Canvas có hình nhìn ngang để đối chiếu.
 4. Thay hệ số tạm bằng 1/tan(vFOV/2), thêm NDC, viewport origin và aspect.
-5. Đọc đầy đủ các guard; phân biệt invalid/behind/before-near/beyond-far/outside/visible.
+5. Kiểm các trạng thái bị loại, tự tính giao điểm near/far rồi viết line3D. Dùng cùng phép chiếu để dựng lưới sàn và bốn khung 3D; không vẽ sẵn nền bằng tọa độ pixel.
 6. Quỹ đạo từ elapsed time; pause/step/reset, input tay dừng auto.
 7. Inverse tại depth đã biết; kéo giữ offset và mouse owner.
 8. Clean/debug mode, oracle tính tay, round-trip và bản source đầy đủ.

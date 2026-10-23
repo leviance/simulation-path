@@ -4,7 +4,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Perspective đã hoạt động nhưng độ mở của camera vẫn cố định. Ta cần một thông số dễ hiểu hơn một hằng số pixel: field of view. Đồng thời, viewport có thể rộng hoặc vuông; chỉ kéo dãn ảnh cuối sẽ làm sai hình học.
+Bạn đã thấy điểm tiến về tâm khi đi xa. Nhưng vì sao camera ở bài trước lại dùng focal scale bằng 1? Nếu muốn thấy một vùng rộng hơn mà không di chuyển camera, ta cần thay đổi góc nhìn, gọi là field of view (FOV).
+
+Bài này nối góc FOV với công thức chiếu và xử lý cả trường hợp viewport rộng hoặc vuông. Ta phải tính lại phép chiếu cho hình dạng mới, không kéo dãn ảnh đã vẽ.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -16,6 +18,10 @@ n_x=\frac{x f}{z a},\quad n_y=\frac{y f}{z}.
 $$
 
 FOV phải đổi từ độ sang radian trước khi gọi tan. FOV rộng làm f nhỏ, nên điểm tiến gần tâm hơn. FOV là góc, f không có đơn vị; focalPixels=h×f/2 mới là độ dài tính theo pixel.
+
+NDC (Normalized Device Coordinates) là bước trung gian trước pixel: tâm ảnh là (0,0), hai cạnh trái/phải có X=−1/+1, hai cạnh dưới/trên có Y=−1/+1. Nhờ vậy, cùng một phép chiếu có thể dùng với nhiều kích thước viewport.
+
+Vì FOV được đo theo chiều dọc, chiều ngang phải tính thêm aspect a=w/h. Có thể kiểm ngay: độ lệch X theo pixel bằng (x/z)×f/a×w/2, rút gọn thành (x/z)×f×h/2. Hệ số pixel trên cả hai trục vì thế bằng nhau. Nếu quên chia X cho aspect, viewport rộng sẽ kéo cảnh theo chiều ngang.
 
 Screen có origin riêng (vₓ,vᵧ), không mặc định (0,0):
 
@@ -106,14 +112,13 @@ const Vec2 ndc = cameraToNdc(cameraPoint, lens, aspectRatio);
 const Vec2 screen = ndcToScreen(ndc, viewport);
 ```
 
-Giữ nguyên các guard và cách gán ProjectionResult. Tiếp theo, thay renderScene bằng hàm dưới để **bán kính marker cũng dùng focal mới**, không chỉ tâm marker và lưới:
+Giữ nguyên các guard và cách gán ProjectionResult. Tiếp theo, thay renderScene bằng hàm dưới để **bán kính marker cũng dùng focal mới**, không chỉ tâm marker:
 
 ```cpp title="include/view.hpp — cùng focal cho tâm và bán kính"
 inline void renderScene(Framebuffer& image, const Scene& scene) {
     image.clear(kBackground);
     const Viewport viewport = viewportFor(scene);
     [[maybe_unused]] const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
-    drawDepthScene(image, scene);
     const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewport);
     if (projected.status == ProjectionStatus::Visible && projected.screen) {
         // Bán kính world 0.12, vị trí cũng được chiếu perspective; không giả depth bằng size.

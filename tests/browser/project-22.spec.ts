@@ -13,7 +13,7 @@ test("Project 22 Projectile Lab aims, steps and measures Euler error", async ({ 
   const errors = captureBrowserErrors(page);
   await page.goto("/projects/projectile-cannon/07-do-sai-so-va-nghiem-thu");
 
-  const canvas = page.locator('canvas[aria-label^="Mô phỏng projectile"]');
+  const canvas = page.locator('canvas[aria-label^="Bãi bắn"]');
   const controls = page.locator(".lab-controls");
   const elapsed = page
     .locator(".lab-readout div")
@@ -34,6 +34,10 @@ test("Project 22 Projectile Lab aims, steps and measures Euler error", async ({ 
   await page.getByRole("button", { name: "Tiến một bước" }).click();
   await expect(elapsed).toContainText("0.067 s / 1");
   await expect(positionError).not.toHaveText("0.00000 m");
+  await controls.getByLabel("Trọng lực g").press("Home");
+  await expect(
+    page.locator(".lab-readout div").filter({ hasText: "Phát đang xem: g / dt" }).locator("dd"),
+  ).toContainText("9.81 m/s²");
 
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
@@ -46,8 +50,8 @@ test("Project 22 Projectile Lab aims, steps and measures Euler error", async ({ 
   }
   await expect(captureState).toHaveText("đã nhả");
 
-  await controls.getByLabel("Góc bắn").fill("60");
-  await controls.getByLabel("Tốc độ đầu").fill("24");
+  await controls.getByLabel("Góc bắn").press("End");
+  await controls.getByLabel("Tốc độ đầu").press("End");
   await page.getByRole("button", { name: "Bắn lại" }).click();
   await page.getByRole("button", { name: /Tạm dừng|Tiếp tục/ }).click();
   await page.getByRole("button", { name: "Tiến một bước" }).click();

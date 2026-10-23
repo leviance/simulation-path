@@ -4,7 +4,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Marker đã đi tới đúng pixel. Bây giờ hãy kéo nó bằng chuột. Bài toán ngược có một điểm dễ nhầm: một pixel không xác định duy nhất một vị trí 3D. Cả một tia đi qua camera đều chiếu tới pixel đó.
+Điểm sáng đã xuất hiện ở đúng vị trí. Bây giờ ta muốn nhấn chuột lên nó và kéo sang chỗ khác. Chuột chỉ cho hai tọa độ màn hình, trong khi vị trí cần sửa lại có ba tọa độ. Ta phải chọn thêm một điều kiện mới tìm được đáp án duy nhất.
+
+Hãy nhớ tia ở bài 3: nhiều điểm trên cùng tia từ camera đều có chung ảnh trên màn hình. Trong bài này, điều kiện được chọn là giữ nguyên độ sâu của điểm lúc bắt đầu kéo.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -13,11 +15,12 @@ Ta chọn giữ camera-space depth hiện tại. Khi đã biết z, đảo các 
 $$
 n_x=\frac{2(s_x-v_x)}{w}-1,\quad n_y=1-\frac{2(s_y-v_y)}{h},
 $$
+
 $$
 x=n_x z\tan(vFOV/2)a,\quad y=n_y z\tan(vFOV/2).
 $$
 
-Kết quả là camera point; cộng camera.position mới trở về world point. Đừng giữ world Z bằng cách đoán khi camera thay đổi; thao tác kéo lưu cameraDepth rồi cố định camera/lens cho tới khi thả.
+Kết quả là tọa độ trong camera space; cộng camera.position mới trở về world space để cập nhật scene.point. Ta lưu cameraDepth ngay khi nhấn chuột. Nếu người dùng đổi camera, FOV hoặc viewport giữa chừng, ta kết thúc thao tác kéo thay vì tiếp tục dùng dữ liệu của góc nhìn cũ.
 
 Nhấn lên mép marker không được làm tâm nhảy đến chuột. Lưu grabOffset=mouse−screenCenter; khi kéo, targetCenter=mouse−grabOffset. Chỉ một pointer được quyền điều khiển thao tác.
 

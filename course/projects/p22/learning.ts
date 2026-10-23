@@ -7,7 +7,7 @@ const learning = {
         "Dựng một bãi thử nhìn thấy được từ starter, định nghĩa WorldView và biến thao tác kéo từ nòng pháo thành velocity trong world space.",
       expected:
         "Mặt đất, pháo và mũi tên ngắm xuất hiện ngay. Kéo sang phải/lên tạo velocity có X/Y dương, góc và speed không vượt giới hạn, pointer được giữ tới lúc nhả.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+      files: ["include/lab.hpp", "include/framebuffer.hpp", "include/scene.hpp", "src/main.cpp"],
       steps: [
         {
           title: "Chốt hệ đơn vị trước khi nhận input",
@@ -31,7 +31,7 @@ const learning = {
         "Đi qua lại giữa biểu diễn polar (speed, angle) và Cartesian (vx, vy), rồi vẽ hai component cộng thành initial velocity.",
       expected:
         "Đổi angle giữ nguyên speed; đổi speed giữ nguyên hướng. Component ngang/dọc ghép đầu-đuôi chạm đúng đầu vector vận tốc.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+      files: ["include/lab.hpp", "include/scene.hpp", "tests/tests.cpp"],
       steps: [
         {
           title: "Tách component bằng sin và cos",
@@ -54,7 +54,7 @@ const learning = {
       focus:
         "Cài nghiệm giải tích của chuyển động acceleration không đổi và lấy mẫu nó thành đường dự đoán có apex cùng ground impact.",
       expected:
-        "Đường vàng bắt đầu đúng muzzle, tiếp tuyến ban đầu cùng hướng velocity và đi qua apex khi vy=0. Ở checkpoint này điểm cuối vẫn dùng một horizon ước lượng; exact ground root được bổ sung ở bài 6.",
+        "Đường vàng bắt đầu tại nòng pháo, đi lên theo vận tốc đầu rồi cong xuống vì trọng lực. G/H đổi g; checkpoint 3 vẫn vẽ bằng thời gian ước lượng, bài 6 mới tìm đúng điểm chạm đất.",
       files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
       steps: [
         {
@@ -78,7 +78,7 @@ const learning = {
       focus:
         "Tạo ProjectileState và cài đúng thứ tự Explicit Euler: position nhận velocity cũ, sau đó velocity mới nhận acceleration.",
       expected:
-        "Bấm fire tạo một state mới tại muzzle. Mỗi lần step tăng elapsed đúng dt, trail số đi gần đường vàng nhưng sai số tăng dần.",
+        "Bấm fire tạo Shot riêng, chụp lại launch và dt. Nút bước tiến state rồi ghi sample; đường xanh gần đường vàng nhưng sai số tăng dần. Tối đa bốn shot trước được giữ lại.",
       files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
       steps: [
         {
@@ -150,7 +150,7 @@ const learning = {
       focus:
         "Hoàn thiện fire/pause/step/reset, overlay analytic-numerical và một bộ validation đo convergence thay vì chỉ nhìn quỹ đạo có vẻ đúng.",
       expected:
-        "Đổi dt rồi bắn lại làm error thay đổi có quy luật; dt nhỏ hơn giảm error. Debug/Release CTest pass và mọi control giữ cùng một SimulationState.",
+        "Đổi dt rồi bắn lại; so tại cùng thời gian để thấy error giảm. Current/max/mean lấy từ sample vật lý, không phải frame; Debug/Release CTest kiểm bằng đối chứng tổng cấp số cộng độc lập.",
       files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
       steps: [
         {
@@ -159,9 +159,9 @@ const learning = {
             "positionError dùng hypot giữa numerical và analytic position tại cùng elapsed; readout ghi mét để con số có ý nghĩa.",
         },
         {
-          title: "Bắn lại khi đổi điều kiện đầu",
+          title: "Chụp tham số cho từng lần bắn",
           explanation:
-            "Aim chỉnh initial state cho lần fire tiếp theo; projectile đang bay không bị đổi velocity giữa chừng vì slider hoặc drag.",
+            "Góc, tốc độ, g và dt đang chỉnh chỉ dành cho phát tiếp theo. Shot hiện tại giữ nguyên launch, dt, samples và thống kê; lịch sử lưu tối đa bốn shot trước.",
         },
         {
           title: "Kiểm convergence bằng nhiều dt",

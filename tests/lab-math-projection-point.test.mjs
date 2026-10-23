@@ -124,6 +124,43 @@ test("P11 near/far and screen clipping have analytic intersections and bounded o
   near(line[0].x, v.x);
   near(line[1].x, v.x + v.width);
 });
+test("P11 clipping rejects invalid depth planes, viewport and overflowing arithmetic", () => {
+  const s = model.initialPointScene();
+  const a = { x: 0, y: 0, z: 1 },
+    b = { x: 1, y: 1, z: 2 };
+  for (const nearPlane of [NaN, -1, 0, 16, Infinity]) {
+    assert.equal(math.clipPointDepth(a, b, { ...s.lens, nearPlane }), null);
+  }
+  for (const farPlane of [NaN, 0, 0.5, Infinity]) {
+    assert.equal(math.clipPointDepth(a, b, { ...s.lens, farPlane }), null);
+  }
+  assert.equal(
+    math.clipPointDepth(
+      { x: -Number.MAX_VALUE, y: 0, z: 0 },
+      { x: Number.MAX_VALUE, y: 0, z: 2 },
+      s.lens,
+    ),
+    null,
+  );
+  const from = { x: 0, y: 0 },
+    to = { x: 1, y: 1 },
+    v = model.viewportFor(s);
+  for (const viewport of [
+    { ...v, x: NaN },
+    { ...v, width: 0 },
+    { ...v, height: -1 },
+    { ...v, y: Infinity },
+    { ...v, x: Number.MAX_VALUE, width: Number.MAX_VALUE },
+  ]) {
+    assert.equal(math.clipPointScreen(from, to, viewport), null);
+  }
+  assert.equal(math.clipPointScreen({ x: NaN, y: 0 }, to, v), null);
+  assert.equal(
+    math.clipPointScreen({ x: -Number.MAX_VALUE, y: 0 }, { x: Number.MAX_VALUE, y: 1 }, v),
+    null,
+  );
+  assert.deepEqual(a, { x: 0, y: 0, z: 1 }, "Canvas clipping does not mutate input points");
+});
 test("P11 model bounds nonfinite input and presets; same simulation elapsed produces same flight", () => {
   const s = model.initialPointScene();
   assert.equal(model.movePoint(s, { x: NaN, y: 1, z: 0 }), s);
@@ -459,4 +496,72 @@ test("P11 actual clean renderer keeps depth geometry/marker and hides overlays, 
   arcs.length = 0;
   draw(ctx, { width: 1100, height: 800, dpr: 2 }, model.pointPreset(3), 8);
   assert.equal(arcs.length, 0);
+  lines.length = 0;
+  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 3);
+  assert.equal(
+    lines.some((l) => l.color === "#28334d" || l.color === "#74839f"),
+    false,
+    "first divide lesson has no unexplained 3D scene",
+  );
+  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 5);
+  assert.ok(
+    lines.some((l) => l.color === "#74839f"),
+    "clipping lesson introduces world frames",
+  );
+});
+test("P11 actual side-section draws similar triangles, tracks depth and does not divide behind camera", async () => {
+  for (const [coordinate, z] of [
+    [1, 4],
+    [1, 8],
+    [-0.5, 4],
+    [0, 4],
+    [1, -1],
+    [1, 0],
+  ]) {
+    const lines = [],
+      labels = [],
+      arcs = [],
+      transforms = [];
+    const noop = () => {};
+    const ctx = {
+      beginPath: noop,
+      moveTo: noop,
+      lineTo: noop,
+      closePath: noop,
+      fill: noop,
+      setLineDash: noop,
+      arc: (...a) => arcs.push(a),
+      fillText: (s) => labels.push(s),
+    };
+    const size = { width: 760, height: 260, dpr: 2 };
+    const ratio = z > 0 ? coordinate / z : null;
+    (
+      await componentEffect("projection-geometry.tsx", "const origin =", {
+        canvasRef: { current: { getContext: () => ctx } },
+        size,
+        point: { x: coordinate, y: 0, z },
+        coordinate,
+        ratio,
+        axisName: "X",
+        setupCanvas: (_ctx, value) => transforms.push(value.dpr),
+        drawLine: (_ctx, from, to, color) => lines.push({ from, to, color }),
+      })
+    )();
+    assert.deepEqual(transforms, [2]);
+    if (ratio === null) {
+      assert.equal(arcs.length, 0);
+      assert.ok(labels.some((label) => label.includes("Z ≤ 0")));
+    } else {
+      assert.equal(arcs.length, 2);
+      const scale = Math.min(
+        (760 - 112) / Math.max(2, z),
+        (130 - 38) / Math.max(1, Math.abs(coordinate), Math.abs(ratio)),
+      );
+      near(arcs[0][0], 42 + z * scale);
+      near(arcs[0][1], 130 - coordinate * scale);
+      near(arcs[1][0], 42 + scale);
+      near(arcs[1][1], 130 - ratio * scale);
+      assert.ok(lines.some((line) => line.color === "#ffe26c"));
+    }
+  }
 });

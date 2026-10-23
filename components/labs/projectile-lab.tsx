@@ -1,6 +1,6 @@
 "use client";
-
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -9,474 +9,242 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  PROJECTILE_GRAVITY,
-  analyticProjectilePosition,
   compareProjectileState,
-  explicitEulerProjectileStepToGround,
-  launchProjectileState,
-  planProjectileFixedSteps,
-  projectileAdd,
   projectileAimFromScreenDrag,
-  projectileTimeToApex,
-  projectileVelocityFromPolar,
   projectileWorldToScreen,
-  sampleAnalyticProjectile,
   solveProjectileGroundImpactTime,
-  type ProjectileImpactResult,
-  type ProjectileLaunch,
-  type ProjectileState,
-  type ProjectileVec2,
-  type ProjectileWorldView,
 } from "@/lib/labs/projectile";
+import {
+  advanceProjectileFlight,
+  createProjectileFlight,
+  projectileDefaults,
+  projectileLaunch,
+  projectileMeanError,
+  projectileView,
+  stepProjectileFlight,
+  type ProjectileSettings,
+} from "@/lib/labs/projectile-flight";
 import {
   LabReadout,
   canvasPoint,
-  drawLine,
-  setupCanvas,
   useCanvasSize,
+  usePauseOnReducedMotion,
   useReducedMotion,
 } from "./lab-shared";
+import { drawProjectileView } from "./projectile-view";
 import type { InteractiveLabMode } from "./types";
 
-const MUZZLE = { x: 0, y: 1.2 };
-const MINIMUM_SPEED = 4;
-const MAXIMUM_SPEED = 32;
-const MINIMUM_ANGLE = (5 * Math.PI) / 180;
-const MAXIMUM_ANGLE = (85 * Math.PI) / 180;
-const AIM_PIXELS_PER_SPEED = 5;
-
-interface FlightState {
-  launch: ProjectileLaunch;
-  projectile: ProjectileState;
-  trail: ProjectileVec2[];
-  accumulator: number;
-  substeps: number;
-  droppedTime: number;
-  impact: ProjectileImpactResult | null;
-}
-
-function makeLaunch(speed: number, angleRadians: number): ProjectileLaunch {
-  return {
-    position: { ...MUZZLE },
-    velocity: projectileVelocityFromPolar(speed, angleRadians),
-    acceleration: { x: 0, y: PROJECTILE_GRAVITY },
-  };
-}
-
-function makeIdleFlight(launch: ProjectileLaunch): FlightState {
-  return {
-    launch,
-    projectile: { ...launchProjectileState(launch), active: false },
-    trail: [],
-    accumulator: 0,
-    substeps: 0,
-    droppedTime: 0,
-    impact: null,
-  };
-}
-
-function makeActiveFlight(launch: ProjectileLaunch): FlightState {
-  const projectile = launchProjectileState(launch);
-  return {
-    launch,
-    projectile,
-    trail: [{ ...projectile.position }],
-    accumulator: 0,
-    substeps: 0,
-    droppedTime: 0,
-    impact: null,
-  };
-}
-
-function advanceFlight(current: FlightState, frameSeconds: number, fixedDeltaSeconds: number) {
-  if (!current.projectile.active) return current;
-  const plan = planProjectileFixedSteps(
-    current.accumulator,
-    frameSeconds,
-    fixedDeltaSeconds,
-    16,
-    0.1,
-  );
-  let projectile = current.projectile;
-  let impact = current.impact;
-  const newSamples: ProjectileVec2[] = [];
-  for (let step = 0; step < plan.steps && projectile.active; step += 1) {
-    impact = explicitEulerProjectileStepToGround(
-      projectile,
-      current.launch.acceleration,
-      fixedDeltaSeconds,
-      0,
-    );
-    projectile = impact.state;
-    newSamples.push({ ...projectile.position });
-  }
-  return {
-    ...current,
-    projectile,
-    trail: [...current.trail, ...newSamples].slice(-1200),
-    accumulator: plan.remainder,
-    substeps: plan.steps,
-    droppedTime: current.droppedTime + plan.droppedTime,
-    impact,
-  };
-}
-
-function viewForSize(width: number, height: number): ProjectileWorldView {
-  return {
-    screenOrigin: { x: 48, y: height - 42 },
-    pixelsPerMeter: Math.max(2, Math.min((width - 76) / 110, (height - 72) / 48)),
-  };
-}
-
-function drawArrow(
-  context: CanvasRenderingContext2D,
-  start: ProjectileVec2,
-  end: ProjectileVec2,
-  color: string,
-  width = 2,
-) {
-  drawLine(context, start, end, color, width);
-  const angle = Math.atan2(end.y - start.y, end.x - start.x);
-  const wing = 10;
-  drawLine(
-    context,
-    end,
-    { x: end.x - wing * Math.cos(angle - 0.45), y: end.y - wing * Math.sin(angle - 0.45) },
-    color,
-    width,
-  );
-  drawLine(
-    context,
-    end,
-    { x: end.x - wing * Math.cos(angle + 0.45), y: end.y - wing * Math.sin(angle + 0.45) },
-    color,
-    width,
-  );
-}
-
-function drawWorldPolyline(
-  context: CanvasRenderingContext2D,
-  points: ProjectileVec2[],
-  view: ProjectileWorldView,
-  color: string,
-  width: number,
-) {
-  if (points.length < 2) return;
-  context.beginPath();
-  points.forEach((point, index) => {
-    const screen = projectileWorldToScreen(point, view);
-    if (index === 0) context.moveTo(screen.x, screen.y);
-    else context.lineTo(screen.x, screen.y);
-  });
-  context.strokeStyle = color;
-  context.lineWidth = width;
-  context.stroke();
-}
-
-function startsWithFlight(mode?: InteractiveLabMode) {
-  return (
-    mode === "projectile-euler" ||
-    mode === "projectile-timestep" ||
-    mode === "projectile-impact" ||
-    mode === "projectile-validation"
-  );
-}
-
+const modes = [
+  "projectile-aim",
+  "projectile-components",
+  "projectile-analytic",
+  "projectile-euler",
+  "projectile-timestep",
+  "projectile-impact",
+  "projectile-validation",
+];
 export default function ProjectileLab({ mode }: { mode?: InteractiveLabMode }) {
+  const stage = mode ? Math.max(1, modes.indexOf(mode) + 1) : 7;
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const [speed, setSpeed] = useState(28);
-  const [angleDegrees, setAngleDegrees] = useState(50);
-  const [fixedDeltaSeconds, setFixedDeltaSeconds] = useState(1 / 30);
-  const [paused, setPaused] = useState(true);
-  const [showAnalytic, setShowAnalytic] = useState(true);
-  const [showComponents, setShowComponents] = useState(mode === "projectile-components");
+  const drag = useRef<{ id: number; muzzle: { x: number; y: number } } | null>(null);
   const [capturing, setCapturing] = useState(false);
-  const initialLaunch = useMemo(() => makeLaunch(28, (50 * Math.PI) / 180), []);
-  const [flight, setFlight] = useState<FlightState>(() => {
-    if (startsWithFlight(mode)) return makeActiveFlight(initialLaunch);
-    return makeIdleFlight(initialLaunch);
-  });
-  const dragging = useRef(false);
-
-  const angleRadians = (angleDegrees * Math.PI) / 180;
-  const previewLaunch = useMemo(() => makeLaunch(speed, angleRadians), [angleRadians, speed]);
-  const previewImpactTime = solveProjectileGroundImpactTime(previewLaunch, 0) ?? 6;
-  const analyticSamples = useMemo(
-    () => sampleAnalyticProjectile(previewLaunch, previewImpactTime, 120),
-    [previewImpactTime, previewLaunch],
+  const cancel = useCallback(() => {
+    const id = drag.current?.id;
+    drag.current = null;
+    const canvas = canvasRef.current;
+    if (id !== undefined && canvas?.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+    setCapturing(false);
+  }, []);
+  const size = useCanvasSize(canvasRef, cancel);
+  const reducedMotion = useReducedMotion();
+  const [settings, setSettings] = useState(projectileDefaults);
+  const [flight, setFlight] = useState(() => createProjectileFlight(projectileDefaults(), false));
+  const current = useRef(flight);
+  const commit = useCallback((next: typeof flight) => {
+    current.current = next;
+    setFlight(next);
+  }, []);
+  const [history, setHistory] = useState<(typeof flight)[]>([]);
+  const [paused, setPaused] = useState(true);
+  const [debug, setDebug] = useState(true);
+  const suspend = useCallback(() => {
+    cancel();
+    setPaused(true);
+  }, [cancel]);
+  usePauseOnReducedMotion(suspend);
+  const preview = useMemo(() => projectileLaunch(settings), [settings]);
+  const view = useMemo(
+    () =>
+      projectileView(size.width, size.height, [
+        preview,
+        ...history.map((s) => s.launch),
+        ...(flight.exists ? [flight.launch] : []),
+      ]),
+    [size, preview, history, flight.exists, flight.launch],
   );
-  const view = useMemo(() => viewForSize(size.width, size.height), [size]);
 
   useEffect(() => {
-    if (paused || reducedMotion) return;
-    let request = 0;
-    let previous = performance.now();
+    const hidden = () => {
+      if (document.hidden) suspend();
+    };
+    window.addEventListener("blur", suspend);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", suspend);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [suspend]);
+  useEffect(() => {
+    if (paused || reducedMotion || !flight.projectile.active) return;
+    let request = 0,
+      previous = performance.now();
     const animate = (now: number) => {
-      const frameSeconds = Math.max(0, (now - previous) / 1000);
+      commit(advanceProjectileFlight(current.current, (now - previous) / 1000));
       previous = now;
-      setFlight((current) => advanceFlight(current, frameSeconds, fixedDeltaSeconds));
-      request = requestAnimationFrame(animate);
+      if (current.current.projectile.active) request = requestAnimationFrame(animate);
     };
     request = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(request);
-  }, [fixedDeltaSeconds, paused, reducedMotion]);
-
+  }, [paused, reducedMotion, flight.projectile.active, commit]);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    setupCanvas(context, size);
-
-    for (let meters = 0; meters <= 110; meters += 10) {
-      drawLine(
-        context,
-        projectileWorldToScreen({ x: meters, y: 0 }, view),
-        projectileWorldToScreen({ x: meters, y: 48 }, view),
-        "#1d2940",
-      );
-    }
-    for (let meters = 0; meters <= 40; meters += 10) {
-      drawLine(
-        context,
-        projectileWorldToScreen({ x: 0, y: meters }, view),
-        projectileWorldToScreen({ x: 110, y: meters }, view),
-        "#1d2940",
-      );
-    }
-    drawLine(
-      context,
-      projectileWorldToScreen({ x: 0, y: 0 }, view),
-      projectileWorldToScreen({ x: 110, y: 0 }, view),
-      "#6f8f72",
-      3,
-    );
-
-    if (showAnalytic) drawWorldPolyline(context, analyticSamples, view, "#ffd166", 2);
-    drawWorldPolyline(context, flight.trail, view, "#53f0ae", 2.5);
-
-    const muzzleScreen = projectileWorldToScreen(MUZZLE, view);
-    const pivotScreen = projectileWorldToScreen({ x: 0, y: 0.65 }, view);
-    context.fillStyle = "#344564";
-    context.fillRect(pivotScreen.x - 22, pivotScreen.y - 10, 44, 20);
-    context.beginPath();
-    context.arc(pivotScreen.x, pivotScreen.y, 13, 0, Math.PI * 2);
-    context.fillStyle = "#d5deef";
-    context.fill();
-    const barrelEnd = {
-      x: pivotScreen.x + Math.cos(angleRadians) * 46,
-      y: pivotScreen.y - Math.sin(angleRadians) * 46,
-    };
-    drawLine(context, pivotScreen, barrelEnd, "#d5deef", 5);
-
-    const aimScreenDelta = {
-      x: previewLaunch.velocity.x * AIM_PIXELS_PER_SPEED,
-      y: -previewLaunch.velocity.y * AIM_PIXELS_PER_SPEED,
-    };
-    const aimEnd = projectileAdd(muzzleScreen, aimScreenDelta);
-    drawArrow(context, muzzleScreen, aimEnd, "#70d6ff", 2.5);
-    context.beginPath();
-    context.arc(aimEnd.x, aimEnd.y, 7, 0, Math.PI * 2);
-    context.fillStyle = capturing ? "#ffffff" : "#70d6ff";
-    context.fill();
-
-    if (showComponents || mode === "projectile-components") {
-      const horizontalEnd = {
-        x: muzzleScreen.x + previewLaunch.velocity.x * AIM_PIXELS_PER_SPEED,
-        y: muzzleScreen.y,
-      };
-      drawArrow(context, muzzleScreen, horizontalEnd, "#ffb454", 2);
-      drawArrow(context, horizontalEnd, aimEnd, "#c792ea", 2);
-    }
-
-    const apexTime = projectileTimeToApex(previewLaunch);
-    if (apexTime !== null) {
-      const apex = projectileWorldToScreen(
-        analyticProjectilePosition(previewLaunch, apexTime),
-        view,
-      );
-      context.beginPath();
-      context.arc(apex.x, apex.y, 4, 0, Math.PI * 2);
-      context.fillStyle = "#ffd166";
-      context.fill();
-    }
-    const exactImpact = projectileWorldToScreen(
-      analyticProjectilePosition(previewLaunch, previewImpactTime),
-      view,
-    );
-    context.strokeStyle = "#ffd166";
-    context.lineWidth = 2;
-    context.strokeRect(exactImpact.x - 4, exactImpact.y - 4, 8, 8);
-
-    if (flight.trail.length > 0) {
-      const numerical = projectileWorldToScreen(flight.projectile.position, view);
-      const comparison = compareProjectileState(flight.launch, flight.projectile);
-      const analytic = projectileWorldToScreen(comparison.analytic, view);
-      drawLine(context, analytic, numerical, "#ff7b86", 1.5);
-      context.beginPath();
-      context.arc(numerical.x, numerical.y, 6, 0, Math.PI * 2);
-      context.fillStyle = "#53f0ae";
-      context.fill();
-      context.beginPath();
-      context.arc(analytic.x, analytic.y, 4, 0, Math.PI * 2);
-      context.fillStyle = "#ff7b86";
-      context.fill();
-    }
-
-    if (flight.impact?.impacted) {
-      const belowGround = projectileWorldToScreen(flight.impact.uncorrectedPosition, view);
-      context.strokeStyle = "#ff7b86";
-      context.lineWidth = 1.5;
-      context.beginPath();
-      context.moveTo(belowGround.x - 4, belowGround.y - 4);
-      context.lineTo(belowGround.x + 4, belowGround.y + 4);
-      context.moveTo(belowGround.x + 4, belowGround.y - 4);
-      context.lineTo(belowGround.x - 4, belowGround.y + 4);
-      context.stroke();
-    }
-
-    context.fillStyle = "#aab6cf";
-    context.font = "11px ui-monospace";
-    context.fillText("ANALYTIC", 14, 20);
-    context.fillStyle = "#ffd166";
-    context.fillRect(82, 14, 22, 3);
-    context.fillStyle = "#aab6cf";
-    context.fillText("EXPLICIT EULER", 120, 20);
-    context.fillStyle = "#53f0ae";
-    context.fillRect(220, 14, 22, 3);
-  }, [
-    analyticSamples,
-    angleRadians,
-    capturing,
-    flight,
-    mode,
-    previewImpactTime,
-    previewLaunch,
-    showAnalytic,
-    showComponents,
-    size,
-    view,
-  ]);
+    const context = canvasRef.current?.getContext("2d");
+    if (context) drawProjectileView(context, size, view, preview, flight, history, stage, debug);
+  }, [size, view, preview, flight, history, stage, debug]);
 
   const fire = () => {
-    setFlight(makeActiveFlight(previewLaunch));
+    cancel();
+    const finished = current.current;
+    if (finished.exists) setHistory((previous) => [...previous, finished].slice(-4));
+    commit(createProjectileFlight(settings));
     setPaused(reducedMotion);
   };
-
+  const step = () => {
+    cancel();
+    const working = current.current.exists ? current.current : createProjectileFlight(settings);
+    commit(stepProjectileFlight(working));
+    setPaused(true);
+  };
   const reset = () => {
-    const launch = makeLaunch(28, (50 * Math.PI) / 180);
-    setSpeed(28);
-    setAngleDegrees(50);
-    setFixedDeltaSeconds(1 / 30);
+    cancel();
+    setSettings(projectileDefaults());
+    commit(createProjectileFlight(projectileDefaults(), false));
+    setHistory([]);
     setPaused(true);
-    setShowAnalytic(true);
-    setShowComponents(mode === "projectile-components");
-    setFlight(makeIdleFlight(launch));
+    setDebug(true);
   };
-
-  const stepOnce = () => {
-    setFlight((current) => {
-      let working = current;
-      if (working.trail.length === 0) working = makeActiveFlight(previewLaunch);
-      if (!working.projectile.active) return working;
-      const impact = explicitEulerProjectileStepToGround(
-        working.projectile,
-        working.launch.acceleration,
-        fixedDeltaSeconds,
-        0,
-      );
-      return {
-        ...working,
-        projectile: impact.state,
-        trail: [...working.trail, { ...impact.state.position }],
-        substeps: 1,
-        impact,
-      };
-    });
-    setPaused(true);
+  const preset = (id: number) => {
+    cancel();
+    const next = { ...projectileDefaults(), speed: 24 };
+    if (id === 1) next.angleDegrees = 18;
+    if (id === 2) next.angleDegrees = 75;
+    if (id === 3) {
+      next.gravity = 3;
+      next.fixedDt = 1 / 15;
+    }
+    setSettings(next);
   };
-
-  const simulateSlowFrame = () => {
-    setFlight((current) => {
-      const working = current.trail.length === 0 ? makeActiveFlight(previewLaunch) : current;
-      return advanceFlight(working, 0.12, fixedDeltaSeconds);
-    });
-    setPaused(true);
-  };
-
-  const updateAimFromPointer = (point: ProjectileVec2) => {
-    const muzzleScreen = projectileWorldToScreen(MUZZLE, view);
+  const aim = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!drag.current || drag.current.id !== event.pointerId) return;
     const selection = projectileAimFromScreenDrag(
-      muzzleScreen,
-      point,
-      AIM_PIXELS_PER_SPEED,
-      MINIMUM_SPEED,
-      MAXIMUM_SPEED,
-      MINIMUM_ANGLE,
-      MAXIMUM_ANGLE,
+      drag.current.muzzle,
+      canvasPoint(event, event.currentTarget),
+      5,
+      4,
+      32,
+      Math.PI / 36,
+      (85 * Math.PI) / 180,
     );
-    if (!selection.valid) return;
-    setSpeed(selection.speed);
-    setAngleDegrees((selection.angleRadians * 180) / Math.PI);
+    if (selection.valid)
+      setSettings((previous) => ({
+        ...previous,
+        speed: selection.speed,
+        angleDegrees: (selection.angleRadians * 180) / Math.PI,
+      }));
   };
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragging.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
+  const pointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0 || drag.current) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      cancel();
+      return;
+    }
+    drag.current = { id: event.pointerId, muzzle: projectileWorldToScreen(preview.position, view) };
     setCapturing(true);
-    updateAimFromPointer(canvasPoint(event, event.currentTarget));
+    aim(event);
   };
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!dragging.current) return;
-    updateAimFromPointer(canvasPoint(event, event.currentTarget));
-  };
-
-  const stopPointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    dragging.current = false;
-    setCapturing(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+  const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId) return;
+    if (!(event.buttons & 1)) {
+      cancel();
+      return;
     }
+    aim(event);
   };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (event.key === "Enter") fire();
-    if (event.key.toLowerCase() === "n") stepOnce();
-    if (event.key.toLowerCase() === "r") reset();
-    if (event.key === " ") {
-      event.preventDefault();
-      setPaused((current) => !current);
-    }
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      event.preventDefault();
-      setSpeed((current) =>
-        Math.min(
-          MAXIMUM_SPEED,
-          Math.max(MINIMUM_SPEED, current + (event.key === "ArrowLeft" ? -1 : 1)),
+  const pointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId || event.button !== 0) return;
+    aim(event);
+    cancel();
+  };
+  const keyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
+    const key = event.key.toLowerCase();
+    const arrows = ["arrowleft", "arrowright", "arrowup", "arrowdown"].includes(key);
+    const action =
+      key === "r" ||
+      key === "f" ||
+      (stage >= 4 && ["enter", " ", "n", "1", "2", "3"].includes(key));
+    const parameter =
+      (stage >= 3 && ["g", "h"].includes(key)) || (stage >= 5 && ["[", "]"].includes(key));
+    if (!arrows && !action && !parameter) return;
+    event.preventDefault();
+    if (event.repeat && action) return;
+    cancel();
+    if (key === "r") reset();
+    else if (key === "f") setDebug((value) => !value);
+    else if (key === "enter") fire();
+    else if (key === "n") step();
+    else if (key === " " && !reducedMotion && current.current.projectile.active)
+      setPaused((value) => !value);
+    else if (["1", "2", "3"].includes(key)) preset(Number(key));
+    else
+      setSettings((previous) => ({
+        ...previous,
+        speed: Math.min(
+          32,
+          Math.max(4, previous.speed + (key === "arrowright" ? 1 : key === "arrowleft" ? -1 : 0)),
         ),
-      );
-    }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      setAngleDegrees((current) =>
-        Math.min(85, Math.max(5, current + (event.key === "ArrowDown" ? -1 : 1))),
-      );
-    }
+        angleDegrees: Math.min(
+          85,
+          Math.max(
+            5,
+            previous.angleDegrees + (key === "arrowup" ? 1 : key === "arrowdown" ? -1 : 0),
+          ),
+        ),
+        gravity: Math.min(
+          25,
+          Math.max(2.5, previous.gravity + (key === "h" ? 0.5 : key === "g" ? -0.5 : 0)),
+        ),
+        fixedDt: Math.min(
+          1 / 15,
+          Math.max(1 / 240, previous.fixedDt * (key === "[" ? 2 : key === "]" ? 0.5 : 1)),
+        ),
+      }));
   };
-
   const comparison = compareProjectileState(flight.launch, flight.projectile);
-  const exactImpactTime = solveProjectileGroundImpactTime(previewLaunch, 0);
-  const exactRange = exactImpactTime
-    ? analyticProjectilePosition(previewLaunch, exactImpactTime).x
-    : null;
-  const impactText = flight.impact?.impacted
-    ? `${flight.impact.stepFraction.toFixed(3)} bước · y thô ${flight.impact.uncorrectedPosition.y.toFixed(3)} m`
-    : "chưa chạm đất";
-
+  const mean = projectileMeanError(flight);
+  const change = (patch: Partial<ProjectileSettings>) => {
+    cancel();
+    setSettings((previous) => ({ ...previous, ...patch }));
+  };
   return (
     <div className="lab-stack">
+      <p>
+        Thông số dưới đây dành cho <strong>phát tiếp theo</strong>. Đường vàng và chấm đỏ luôn đối
+        chiếu với phát đang xem; đường xám là tối đa bốn phát trước.
+      </p>
       <div className="lab-controls">
         <label>
           Góc bắn
@@ -485,137 +253,223 @@ export default function ProjectileLab({ mode }: { mode?: InteractiveLabMode }) {
             type="range"
             min="5"
             max="85"
-            step="1"
-            value={angleDegrees}
-            onChange={(event) => setAngleDegrees(Number(event.target.value))}
+            value={settings.angleDegrees}
+            onChange={(e) => change({ angleDegrees: Number(e.target.value) })}
           />
-          <output>{angleDegrees.toFixed(0)}°</output>
+          <output>{settings.angleDegrees.toFixed(1)}°</output>
         </label>
         <label>
           Tốc độ đầu
           <input
             aria-label="Tốc độ đầu"
             type="range"
-            min={MINIMUM_SPEED}
-            max={MAXIMUM_SPEED}
-            step="1"
-            value={speed}
-            onChange={(event) => setSpeed(Number(event.target.value))}
+            min="4"
+            max="32"
+            value={settings.speed}
+            onChange={(e) => change({ speed: Number(e.target.value) })}
           />
-          <output>{speed.toFixed(0)} m/s</output>
+          <output>{settings.speed.toFixed(1)} m/s</output>
         </label>
-        <label>
-          Fixed dt
-          <select
-            aria-label="Fixed dt"
-            value={fixedDeltaSeconds}
-            onChange={(event) => {
-              const next = Number(event.target.value);
-              setFixedDeltaSeconds(next);
-              setFlight(makeIdleFlight(previewLaunch));
+        {stage >= 3 && (
+          <label>
+            Trọng lực g
+            <input
+              aria-label="Trọng lực g"
+              type="range"
+              min="2.5"
+              max="25"
+              step="0.01"
+              value={settings.gravity}
+              onChange={(e) => change({ gravity: Number(e.target.value) })}
+            />
+            <output>{settings.gravity.toFixed(2)} m/s²</output>
+          </label>
+        )}
+        {stage >= 5 && (
+          <label>
+            Fixed dt
+            <select
+              aria-label="Fixed dt"
+              value={settings.fixedDt}
+              onChange={(e) => change({ fixedDt: Number(e.target.value) })}
+            >
+              {[15, 30, 60, 120, 240].map((n) => (
+                <option key={n} value={1 / n}>
+                  1/{n} s
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {stage >= 4 && (
+          <>
+            <label>
+              Preset
+              <select
+                aria-label="Preset"
+                value="0"
+                onChange={(e) => preset(Number(e.target.value))}
+              >
+                <option value="0">Chọn cấu hình</option>
+                <option value="1">Bắn thấp</option>
+                <option value="2">Bắn cao</option>
+                <option value="3">Trọng lực yếu</option>
+              </select>
+            </label>
+            <button type="button" onClick={fire}>
+              Bắn lại
+            </button>
+            <button
+              type="button"
+              disabled={reducedMotion || !flight.projectile.active}
+              onClick={() => setPaused((value) => !value)}
+            >
+              {paused ? "Tiếp tục" : "Tạm dừng"}
+            </button>
+            <button type="button" onClick={step}>
+              Tiến một bước
+            </button>
+          </>
+        )}
+        {stage === 5 && (
+          <button
+            type="button"
+            onClick={() => {
+              const working = current.current.exists
+                ? current.current
+                : createProjectileFlight(settings);
+              commit(advanceProjectileFlight(working, 0.12));
               setPaused(true);
             }}
           >
-            <option value={1 / 15}>1/15 s</option>
-            <option value={1 / 30}>1/30 s</option>
-            <option value={1 / 60}>1/60 s</option>
-            <option value={1 / 120}>1/120 s</option>
-          </select>
-        </label>
-        <label className="check">
-          <input
-            aria-label="Hiện nghiệm giải tích"
-            type="checkbox"
-            checked={showAnalytic}
-            onChange={(event) => setShowAnalytic(event.target.checked)}
-          />
-          Nghiệm giải tích
-        </label>
-        <label className="check">
-          <input
-            aria-label="Hiện component vận tốc"
-            type="checkbox"
-            checked={showComponents}
-            onChange={(event) => setShowComponents(event.target.checked)}
-          />
-          vx / vy
-        </label>
-        <button type="button" onClick={fire}>
-          Bắn lại
-        </button>
-        <button type="button" disabled={reducedMotion} onClick={() => setPaused((value) => !value)}>
-          {paused ? "Tiếp tục" : "Tạm dừng"}
-        </button>
-        <button type="button" onClick={stepOnce}>
-          Tiến một bước
-        </button>
-        {mode === "projectile-timestep" && (
-          <button type="button" onClick={simulateSlowFrame}>
             Mô phỏng frame 120 ms
           </button>
         )}
+        <label className="check">
+          <input
+            aria-label="Lưới và thành phần vận tốc"
+            type="checkbox"
+            checked={debug}
+            onChange={(e) => setDebug(e.target.checked)}
+          />
+          Lưới / debug
+        </label>
         <button type="button" onClick={reset}>
           Đặt lại
         </button>
-        {reducedMotion && <span className="control-hint">Reduced motion: dùng nút bước</span>}
       </div>
-
       <canvas
         ref={canvasRef}
+        className="lab-canvas"
+        style={{ height: 420, touchAction: "none" }}
         tabIndex={0}
         role="img"
-        aria-label="Mô phỏng projectile so sánh quỹ đạo giải tích với Explicit Euler"
-        onKeyDown={onKeyDown}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={stopPointer}
-        onPointerCancel={stopPointer}
-        onLostPointerCapture={() => {
-          dragging.current = false;
-          setCapturing(false);
+        aria-label="Bãi bắn: quỹ đạo giải tích màu vàng và Explicit Euler màu xanh"
+        onKeyDown={keyDown}
+        onPointerDown={pointerDown}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerCancel={(e) => {
+          if (drag.current?.id === e.pointerId) cancel();
         }}
+        onLostPointerCapture={(e) => {
+          if (drag.current?.id === e.pointerId) cancel();
+        }}
+        onBlur={cancel}
       />
-
+      <p>
+        Phím mũi tên: ngắm; Enter: bắn; Space: pause; N: một bước; G/H: giảm/tăng g; [ / ]: đổi dt;
+        R: đặt lại. Tab rời Canvas.{" "}
+        {reducedMotion && "Reduced motion đang bật: chỉ tiến bằng nút bước."}
+      </p>
       <LabReadout
         items={[
-          { label: "Góc / tốc độ", value: `${angleDegrees.toFixed(1)}° / ${speed.toFixed(1)} m/s` },
           {
-            label: "vx / vy",
-            value: `${previewLaunch.velocity.x.toFixed(3)} / ${previewLaunch.velocity.y.toFixed(3)} m/s`,
+            label: "Góc / tốc độ kế tiếp",
+            value: `${settings.angleDegrees.toFixed(1)}° / ${settings.speed.toFixed(1)} m/s`,
           },
-          {
-            label: "Fixed dt / accumulator",
-            value: `${fixedDeltaSeconds.toFixed(5)} / ${flight.accumulator.toFixed(5)} s`,
-          },
-          {
-            label: "Elapsed / substep",
-            value: `${flight.projectile.elapsed.toFixed(3)} s / ${flight.substeps}`,
-          },
-          {
-            label: "Numerical position",
-            value: `(${flight.projectile.position.x.toFixed(3)}, ${flight.projectile.position.y.toFixed(3)}) m`,
-          },
-          {
-            label: "Analytic position",
-            value: `(${comparison.analytic.x.toFixed(3)}, ${comparison.analytic.y.toFixed(3)}) m`,
-          },
-          { label: "Position error", value: `${comparison.error.toFixed(5)} m` },
-          {
-            label: "Exact flight / range",
-            value:
-              exactImpactTime && exactRange !== null
-                ? `${exactImpactTime.toFixed(3)} s / ${exactRange.toFixed(3)} m`
-                : "không có nghiệm",
-          },
-          { label: "Impact interpolation", value: impactText },
-          { label: "Thời gian bị bỏ", value: `${flight.droppedTime.toFixed(4)} s` },
           { label: "pointer capture", value: capturing ? "đang kéo" : "đã nhả" },
+          ...(stage >= 4
+            ? [
+                {
+                  label: "Phát đang xem: g / dt",
+                  value: flight.exists
+                    ? `${(-flight.launch.acceleration.y).toFixed(2)} m/s² / ${flight.fixedDt.toFixed(5)} s`
+                    : "chưa bắn",
+                },
+                {
+                  label: "Elapsed / substep",
+                  value: `${flight.projectile.elapsed.toFixed(3)} s / ${flight.substeps}`,
+                },
+                {
+                  label: "Accumulator / thời gian bị bỏ",
+                  value: `${flight.accumulator.toFixed(5)} / ${flight.droppedTime.toFixed(5)} s`,
+                },
+                {
+                  label: "Position error",
+                  value: `${flight.exists ? comparison.error.toFixed(5) : "0.00000"} m`,
+                },
+                {
+                  label: "Impact",
+                  value: flight.impact?.impacted
+                    ? `t=${flight.projectile.elapsed.toFixed(4)} s, y=0`
+                    : "chưa chạm đất",
+                },
+              ]
+            : []),
+          ...(stage >= 7
+            ? [
+                {
+                  label: "Max / mean position error",
+                  value: `${flight.errors.maximum.toFixed(5)} / ${mean.toFixed(5)} m`,
+                },
+                { label: "Số sample", value: String(flight.errors.count) },
+              ]
+            : []),
         ]}
       />
+      {stage >= 7 && (
+        <p>
+          Mean là trung bình số học của các sample vật lý, gồm t=0 và bước chạm đất; không phải
+          trung bình mỗi frame hay tích phân theo thời gian. Khi nghiệm số chạm đất muộn, nghiệm
+          giải tích dùng để đo sai số vẫn được đánh giá tại cùng thời điểm, kể cả khi nó đã xuống
+          dưới y=0.
+        </p>
+      )}
+      {flight.logLimitReached && (
+        <p role="status">Đã chạm giới hạn 8.192 sample; mô phỏng dừng an toàn.</p>
+      )}
+      {history.length > 0 && (
+        <div className="table-scroll">
+          <table>
+            <caption>Các lần bắn trước — kể cả lần dừng giữa chừng</caption>
+            <thead>
+              <tr>
+                <th>g</th>
+                <th>dt</th>
+                <th>t</th>
+                <th>Max error</th>
+                <th>Mean error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((shot, index) => (
+                <tr key={index}>
+                  <td>{(-shot.launch.acceleration.y).toFixed(2)}</td>
+                  <td>{shot.fixedDt.toFixed(5)}</td>
+                  <td>{shot.projectile.elapsed.toFixed(3)}</td>
+                  <td>{shot.errors.maximum.toFixed(5)}</td>
+                  <td>{projectileMeanError(shot).toFixed(5)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <p className="sr-only">
-        Vận tốc đầu có hai component {previewLaunch.velocity.x.toFixed(3)} và{" "}
-        {previewLaunch.velocity.y.toFixed(3)} mét trên giây. Sai số vị trí hiện tại là{" "}
-        {comparison.error.toFixed(5)} mét. {impactText}.
+        Sai số vị trí {flight.exists ? comparison.error.toFixed(5) : 0} mét. Max{" "}
+        {flight.errors.maximum.toFixed(5)}, mean {mean.toFixed(5)} mét. Thời gian chạm đất giải tích{" "}
+        {solveProjectileGroundImpactTime(flight.launch, 0)?.toFixed(4)} giây.
       </p>
     </div>
   );

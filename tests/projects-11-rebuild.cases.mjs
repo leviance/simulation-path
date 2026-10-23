@@ -160,6 +160,9 @@ test("Project 11 rebuild uses genuine depth geometry, safe projection, owned inv
     await source("checkpoints/03/include/lab.hpp"),
     /const Vec2 divided = perspectiveDivide/,
   );
+  assert.doesNotMatch(await source("checkpoints/03/include/lab.hpp"), /inline bool clipDepth/);
+  assert.doesNotMatch(await source("checkpoints/04/include/view.hpp"), /line3D|drawDepthScene/);
+  assert.match(await source("checkpoints/05/include/view.hpp"), /inline void drawDepthScene/);
   assert.doesNotMatch(await source("checkpoints/05/include/lab.hpp"), /flightPoint/);
   assert.doesNotMatch(await source("checkpoints/06/src/main.cpp"), /SDL_CaptureMouse/);
   assert.match(await source("checkpoints/07/src/main.cpp"), /SDL_CaptureMouse/);
@@ -179,11 +182,18 @@ test("Project 11 rebuild teaches declarations, call sites and testing the learne
     "struct ProjectionResult",
     "inline bool validLens",
     "inline bool isInsideNdc",
-    "inline bool clipDepth",
     "inline const char* statusText",
     "inline bool presentFramebuffer",
   ])
     assert.ok((await lesson(3)).includes(declaration), declaration);
+  assert.doesNotMatch(await lesson(3), /inline bool clipDepth|inline void line3D/);
+  assert.match(await lesson(3), /623\.125,363\.4375/);
+  for (const declaration of [
+    "inline bool clipDepth",
+    "inline void line3D",
+    "inline void drawDepthScene",
+  ])
+    assert.ok((await lesson(5)).includes(declaration), declaration);
   assert.match(await lesson(4), /focalPixels \*= verticalFocalScale/);
   assert.match(await lesson(4), /SDLK_EQUALS/);
   assert.match(await lesson(5), /SDLK_APOSTROPHE/);

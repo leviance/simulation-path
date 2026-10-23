@@ -68,7 +68,7 @@ export function drawProjectionLab(
     const clipped = clipPointScreen(pa.screen, pb.screen, v);
     if (clipped) drawLine(ctx, clipped[0], clipped[1], color, 1.5);
   };
-  if (stage >= 3) {
+  if (stage >= 5) {
     for (let x = -4; x <= 4; x++) line({ x, y: -1.5, z: 1 }, { x, y: -1.5, z: 16 }, "#28334d");
     for (let z = 1; z <= 16; z++) line({ x: -4, y: -1.5, z }, { x: 4, y: -1.5, z }, "#28334d");
     for (const z of [2, 4, 8, 12]) {
@@ -81,7 +81,7 @@ export function drawProjectionLab(
       line({ x: 0, y: -1.5, z: 4 }, { x: 0, y: 2, z: 4 }, "#53f0ae");
       line({ x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 16 }, "#84a9ff");
     }
-  } else {
+  } else if (stage < 3) {
     for (let d = -280; d <= 280; d += 70) {
       drawLine(ctx, { x: 550 + d, y: 120 }, { x: 550 + d, y: 680 }, "#28334d");
       drawLine(ctx, { x: 30, y: 400 + d }, { x: 1070, y: 400 + d }, "#28334d");
@@ -121,7 +121,13 @@ export function drawProjectionLab(
   if (debug) {
     ctx.fillStyle = "#e1e8fa";
     ctx.font = "18px ui-monospace";
-    ctx.fillText("Các khung world có cùng kích thước ở depth 2 / 4 / 8 / 12.", 30, 738);
+    ctx.fillText(
+      stage >= 5
+        ? "Các khung world có cùng kích thước ở depth 2 / 4 / 8 / 12."
+        : "Bài 5 sẽ thêm lưới và các khung 3D; lúc này hãy theo dõi tâm điểm sáng.",
+      30,
+      738,
+    );
     ctx.fillText(
       "Resize giữ bảng logic; đổi Aspect để kiểm khung nhìn, không kéo dãn ảnh.",
       30,

@@ -16,7 +16,7 @@ const lab = {
     },
     "projection-divide": {
       title: "Vì sao điểm ở xa tiến về tâm?",
-      description: "Từ tam giác đồng dạng đến x/z, y/z và một cảnh lưới có chiều sâu thật.",
+      description: "Nhìn hai tam giác đồng dạng, tự viết x/z, y/z rồi kiểm vị trí điểm sáng.",
     },
     "projection-fov": {
       title: "Chọn FOV và hình dạng viewport",
@@ -24,7 +24,7 @@ const lab = {
     },
     "projection-visibility": {
       title: "Chặn điểm không thể nhìn thấy",
-      description: "Phân biệt behind, near, far, outside và invalid trước khi vẽ.",
+      description: "Kiểm vùng nhìn, cắt đoạn ở near/far rồi dựng lưới sàn và bốn khung 3D.",
     },
     "projection-motion": {
       title: "Cho điểm bay, dừng và bước từng nhịp",

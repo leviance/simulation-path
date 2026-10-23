@@ -5,7 +5,7 @@ const lab = {
     label: "PROJECTILE LAB",
     title: "Một cú kéo chuột trở thành quỹ đạo như thế nào?",
     description:
-      "Chọn góc, tốc độ và fixed dt rồi theo dõi vận tốc đầu, nghiệm giải tích, từng bước Explicit Euler, impact cùng sai số bằng đúng biến trong source C++.",
+      "Kéo chuột để ngắm; đổi góc, tốc độ, trọng lực và dt rồi bắn. Đặt quỹ đạo Euler cạnh nghiệm giải tích, giữ các phát trước và đọc sai số tại mỗi mẫu cùng max/mean.",
   },
   modes: {
     "projectile-aim": {
@@ -41,7 +41,7 @@ const lab = {
     "projectile-validation": {
       title: "Sai số có giảm khi fixed dt nhỏ đi không?",
       description:
-        "Bắn lại với nhiều dt, overlay analytic/numerical và kiểm position error, impact cùng controls trong một mô phỏng hoàn chỉnh.",
+        "Bắn lại với nhiều dt và g, so hai đường ở cùng thời điểm. Max/mean được tính trên sample vật lý, kể cả t=0 và bước chạm đất; bốn phát trước được giữ để đối chiếu.",
     },
   },
 } satisfies ProjectLabMeta;

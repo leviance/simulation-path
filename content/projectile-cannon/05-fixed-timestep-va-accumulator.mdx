@@ -71,18 +71,21 @@ if (availableSteps > maximumSteps) {
 }
 ```
 
-Nếu app bị dừng ở debugger 5 giây, cố mô phỏng bù 300 bước có thể khiến frame tiếp theo cũng trễ, rồi backlog tiếp tục tăng: spiral of death. Final giới hạn frame time ở 0,1 s và tối đa 16 substep. Phần bỏ đi được cộng vào `droppedTime`; ta không giấu việc simulation đã chậm hơn real time.
+Nếu chương trình bị dừng ở debugger 5 giây, cố chạy bù toàn bộ có thể khiến frame tiếp theo cũng trễ, rồi lượng việc tồn tiếp tục tăng: spiral of death. Bản cuối chỉ nhận tối đa 0,1 giây từ mỗi frame và chạy tối đa 32 bước vật lý. Thời gian phải bỏ được cộng vào `droppedTime`. Trong miền dt từ 1/15 đến 1/240 giây, frame clamp thường can thiệp trước giới hạn 32 bước.
 
-### Bước 4 — Main chỉ thi hành plan
+### Bước 4 — Shot thi hành plan, main chỉ chuyển thời gian vào
 
-```cpp title="src/main.cpp — render frame có thể sinh nhiều physics step"
-const lab::FixedStepPlan plan = lab::planFixedSteps(accumulator, frameSeconds, fixedDeltaSeconds, 16, 0.1);
-accumulator = plan.remainder;
-substepsLastFrame = plan.steps;
-droppedTime += plan.droppedTime;
+```cpp title="include/simulation.hpp — mọi substep đi qua cùng một hàm"
+const FixedStepPlan plan = planFixedSteps(shot.accumulator, frameSeconds, shot.fixedDt, 32, 0.1);
+shot.accumulator = plan.remainder;
+shot.droppedTime += plan.droppedTime;
+for (int index = 0; index < plan.steps && shot.projectile.active; ++index) {
+    stepShot(shot, shot.fixedDt);
+    ++shot.substeps;
+}
 ```
 
-Vòng `for` ngay sau đó gọi Euler đúng `plan.steps` lần, luôn với cùng `fixedDeltaSeconds`.
+Vòng lặp có thể dừng sớm khi đạn đã chạm đất. Vì vậy `substeps` đếm số bước thực chạy, không chép nguyên số bước dự định. `N` cũng gọi `stepShot`, nên nút bước không thể vô tình dùng một integrator khác. Bấm **Mô phỏng frame 120 ms** ở Canvas: tại dt=1/60, chỉ 100 ms được nhận, tạo sáu bước, còn 20 ms xuất hiện trong số đo thời gian bị bỏ.
 
 ## Ghép các phần lại
 
@@ -92,13 +95,13 @@ cmake --build build --config Debug --target project_22_checkpoint_5
 ./build/Debug/project_22_checkpoint_5.exe
 ```
 
-Chạy cùng một phát bắn ở cửa sổ bình thường và trong lúc kéo-resize liên tục. Nếu không chạm guard, state tại cùng số physics step phải giống nhau dù số render frame khác nhau.
+Phím `[`/`]` thay dt **cho lần bắn kế tiếp**; Enter mới áp dụng giá trị đó. Phát đang bay giữ dt cũ. Resize hoặc mất focus chủ động pause; việc tiếp tục không được cộng cả khoảng thời gian đã pause. Dùng test với nhiều chuỗi frame time để kiểm tính độc lập của physics, thay vì so hai ảnh ở hai thời điểm khác nhau.
 
 ## Thử làm sai để hiểu đúng
 
 1. Gán `accumulator=0` sau mỗi frame. Những frame ngắn hơn fixed dt bị mất thời gian và mô phỏng chạy chậm.
 2. Dùng `if` thay `while`/số `steps`. Frame 40 ms với fixed dt 1/60 chỉ chạy một bước rồi backlog tăng mãi.
-3. Không giới hạn frame time hoặc substep. Dừng debugger vài giây và quan sát app mất bao lâu mới phản hồi input.
+3. Trong một test thuần, gọi `planFixedSteps(0,5,1.0/60.0,4,0.1)` và kiểm chỉ có bốn bước. Đừng bỏ guard trong app để cố tạo treo máy; giá trị trả về đã cho thấy vì sao giới hạn là cần thiết.
 4. Giữ accumulator khi bắn lại. Phát bắn mới có thể nhận ngay một bước “thừa” từ phát cũ và bắt đầu ở elapsed khác 0.
 
 ## Tự kiểm tra kết quả
@@ -108,7 +111,7 @@ Chạy cùng một phát bắn ở cửa sổ bình thường và trong lúc ké
 - Remainder luôn nằm trong `[0,fixedDt)` khi không chạm guard.
 - Pause giữ accumulator nhưng không cộng frame time đang pause.
 - Fire/reset đưa accumulator và dropped-time stats về 0.
-- Frame quá lớn tạo tối đa 16 step và báo `droppedTime > 0`.
+- Frame quá lớn tạo tối đa 32 step và báo `droppedTime > 0`; test riêng còn thử giới hạn bốn bước.
 
 ## Bài tập mở rộng
 

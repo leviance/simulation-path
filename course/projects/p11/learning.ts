@@ -45,9 +45,9 @@ const learning = {
       ],
     },
     "p11-l03": {
-      focus: "Từ tam giác đồng dạng đến x/z, y/z và một cảnh lưới có chiều sâu thật.",
+      focus: "Nhìn hai tam giác đồng dạng, tự viết x/z, y/z rồi kiểm vị trí điểm sáng.",
       expected:
-        "Độ lệch khỏi tâm giảm một nửa khi tăng depth gấp đôi; lưới và khung nền cũng đi qua phép chiếu.",
+        "Tăng Z gấp đôi làm độ lệch khỏi tâm giảm một nửa; hình nhìn ngang giải thích được vì sao.",
       files: [
         "include/lab.hpp",
         "include/scene.hpp",
@@ -66,9 +66,9 @@ const learning = {
             "Guard near/far đã đi cùng helper để checkpoint không nổ số; bài 5 sẽ giải thích các nhánh.",
         },
         {
-          title: "Chiếu cả nền và điểm",
+          title: "Vẽ đúng kết quả vừa tính",
           explanation:
-            "line3D clip near/far rồi screen, lưới cùng camera với marker nên depth không chỉ là kích thước đĩa.",
+            "Thay nhánh preview bằng projectPerspective, đọc pixel trên HUD và so với tâm viewport.",
         },
       ],
     },
@@ -100,9 +100,9 @@ const learning = {
       ],
     },
     "p11-l05": {
-      focus: "Phân biệt behind, near, far, outside và invalid trước khi vẽ.",
+      focus: "Kiểm vùng nhìn, cắt đoạn ở near/far rồi dựng lưới sàn và bốn khung 3D.",
       expected:
-        "Sau camera, trước near và vượt far không có NDC/screen; outside vẫn có số hữu hạn nhưng không được vẽ.",
+        "Điểm bị loại đúng lý do; đoạn đi xuyên near vẫn giữ phần nhìn thấy và cảnh nền có chiều sâu thật.",
       files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
@@ -118,7 +118,7 @@ const learning = {
         {
           title: "Cắt đoạn khác loại bỏ điểm",
           explanation:
-            "Lưới cắt đoạn ở giao điểm near/far, rồi mới chiếu và clip screen để Bresenham có công việc hữu hạn.",
+            "Tính giao điểm near/far rồi viết line3D; dùng nó dựng lưới sàn và bốn khung world ở Z=2/4/8/12.",
         },
       ],
     },

@@ -4,7 +4,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Điều khiển tay đủ để kiểm công thức, nhưng khó lặp lại cùng một thí nghiệm. Ta thêm quỹ đạo tự động để điểm đi qua nhiều depth và có thể dừng ở đúng thời điểm. Quan trọng là không để input tay và quỹ đạo cùng sửa point trong một frame.
+Bạn đã có thể dùng Q/E đưa điểm lại gần hoặc ra xa giữa các khung 3D. Nhưng giữ phím bằng tay khó cho hai lần chạy giống nhau. Ta sẽ cho điểm bay theo thời gian, có thể tạm dừng và tiến từng nhịp để quan sát lại cùng một vị trí.
+
+Vẫn giữ điều khiển tay, nhưng mỗi lúc chỉ một cách được quyền đổi vị trí: bấm WASD/QE thì dừng quỹ đạo. Nếu không, điểm vừa được bạn dịch chuyển sẽ bị công thức tự động kéo về ngay trong cùng frame.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -15,7 +17,7 @@ x(t)=2.2\sin(0.9t),\quad y(t)=1.3\cos(1.3t),\quad
 z(t)=6+4\sin(0.55t).
 $$
 
-Z đi từ 2 đến 10 world, nên bạn thấy rõ điểm tiến gần/rời xa, ngay cả khi không đổi size marker. Cùng t phải cho cùng point, bất kể t được tích lũy bằng 20 hay 60 frame.
+Trong công thức này, Z thay đổi từ 2 đến 10 đơn vị, còn X/Y dao động sang hai bên và lên xuống. Nhờ vậy điểm đi qua nhiều độ sâu chứ không chỉ chạy trên một mặt phẳng. Tại cùng thời điểm t, ta phải thu được cùng một vị trí, dù trước đó chương trình đã chạy 20 hay 60 frame.
 
 Có hai kiểu thao tác khác nhau: WASD/QE dịch point hiện tại, còn Chạy quỹ đạo đặt point theo công thức trên. Vì vậy khi bật chạy hoặc nhấn N lần đầu sau chỉnh tay, điểm chuyển đến vị trí của quỹ đạo tại elapsed tương ứng; đây không phải lệnh “bay tiếp theo hướng vừa bấm”. Pause giữ elapsed, R/preset đặt elapsed=0. Input tay tạm dừng quỹ đạo.
 

@@ -4,7 +4,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Phép chia x/z đúng về hình học nhưng không thể áp dụng cho mọi dữ liệu. Point ở sau camera không nên lộn ngược lên màn hình; point sát Z=0 không được tạo tọa độ cực lớn. Ta sẽ đọc lại guard đã dùng từ bài 3 và biến nó thành hành vi có thể kiểm tra.
+Đến đây ta đã chiếu được một điểm, đổi FOV và thay hình dạng viewport. Giờ hãy đưa điểm về sát camera: nếu cứ chia cho Z, vị trí trên màn hình có thể lớn tới mức không còn dùng để vẽ được.
+
+Các nhánh kiểm tra ở bài 3 đã ngăn trường hợp đó. Bài này ta sẽ kiểm chứng từng nhánh, rồi giải quyết một bài toán mới: **một đoạn thẳng có đầu nằm ngoài vùng nhìn thì có phải bỏ cả đoạn không?** Từ cách cắt đoạn đó, ta mới dựng thêm lưới sàn và bốn khung 3D để điểm sáng có cảnh nền đối chiếu.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -37,7 +39,9 @@ cmake --build build --config Debug --target project_11_starter --parallel 2
 
 **Checkpoint 05 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/05 hoặc build riêng target project_11_checkpoint_5; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
 
-### Bước 1 — Trả kết quả có trạng thái, không trả pixel giả
+### Bước 1 — Đọc kết quả trước khi quyết định vẽ
+
+ProjectionResult đã được thêm ở bài 3. Mở khai báo đó để đối chiếu, không khai báo thêm một struct trùng tên:
 
 ```cpp title="include/lab.hpp — status và hai giá trị tùy chọn"
 struct ProjectionResult {
@@ -50,50 +54,26 @@ struct ProjectionResult {
 
 `std::optional<Vec2>` cho phép phân biệt không có ảnh với ảnh ở (0,0). Muốn dùng screen, caller phải kiểm có giá trị; status còn quyết định có nên vẽ hay không.
 
-### Bước 2 — Đặt guard trước công thức chiếu
+### Bước 2 — Kiểm tra vì sao điểm bị loại
+
+Trong projectPerspective, ba nhánh dưới nằm **trước** lời gọi cameraToNdc. Giữ nguyên thứ tự này; đây là đoạn cần đọc lại, không phải một hàm mới để dán thêm:
 
 ```cpp title="include/lab.hpp — kiểm depth rồi mới gọi cameraToNdc"
-inline ProjectionResult projectPerspective(Vec3 worldPoint, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
-    ProjectionResult result;
-    if (!finite(worldPoint) || !finite(camera.position) || !validLens(lens, viewport)) {
-        return result;
-    }
-    const Vec3 cameraPoint = worldToCamera(worldPoint, camera);
-    result.cameraPoint = cameraPoint;
-    if (!finite(cameraPoint)) {
-        return result;
-    }
-    // Các guard đã có từ bài 3 để checkpoint không chia cho 0.
-    // Bài 5 giải thích và đưa từng trạng thái ra giao diện.
-    if (cameraPoint.z <= 0.0) {
-        result.status = ProjectionStatus::BehindCamera;
-        return result;
-    }
-    if (cameraPoint.z < lens.nearPlane) {
-        result.status = ProjectionStatus::BeforeNearPlane;
-        return result;
-    }
-    if (cameraPoint.z > lens.farPlane) {
-        result.status = ProjectionStatus::BeyondFarPlane;
-        return result;
-    }
-    const double aspectRatio = viewport.width / viewport.height;
-    const Vec2 ndc = cameraToNdc(cameraPoint, lens, aspectRatio);
-    const Vec2 screen = ndcToScreen(ndc, viewport);
-    if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || !std::isfinite(screen.x) || !std::isfinite(screen.y)) {
-        return result;
-    }
-    result.ndc = ndc;
-    result.screen = screen;
-    result.status = ProjectionStatus::OutsideFrustum;
-    if (isInsideNdc(ndc)) {
-        result.status = ProjectionStatus::Visible;
-    }
+if (cameraPoint.z <= 0.0) {
+    result.status = ProjectionStatus::BehindCamera;
+    return result;
+}
+if (cameraPoint.z < lens.nearPlane) {
+    result.status = ProjectionStatus::BeforeNearPlane;
+    return result;
+}
+if (cameraPoint.z > lens.farPlane) {
+    result.status = ProjectionStatus::BeyondFarPlane;
     return result;
 }
 ```
 
-Đọc lần lượt các return sớm. Kết quả mặc định là Invalid; chỉ nhánh đã xác nhận mới đổi status. Sau khi chia vẫn kiểm finite lần nữa để lỗi overflow không thành tọa độ raster.
+Behind khác before-near: Z âm nghĩa là điểm nằm sau camera; Z dương nhưng nhỏ hơn near nghĩa là điểm vẫn ở phía trước, chỉ là quá gần. Tương tự, vượt far khác ra ngoài cạnh trái/phải của ảnh. Hai loại lỗi cần hai phép kiểm khác nhau.
 
 ```cpp title="include/lab.hpp — hai biên góc nhìn trong NDC"
 inline bool isInsideNdc(Vec2 ndc) {
@@ -103,22 +83,42 @@ inline bool isInsideNdc(Vec2 ndc) {
 
 ### Bước 3 — Cắt đoạn lưới thay vì xóa cả đoạn
 
-Một point bị loại có thể bỏ luôn. Nhưng một đoạn cắt qua near plane vẫn có phần nhìn thấy được. Ta tìm giao điểm bằng t=a/(a−b), với a/b là signed distance theo depth:
+Một điểm không nhìn thấy thì có thể bỏ. Nhưng đoạn từ A=(−1,0,0) đến B=(1,0,2) vẫn đi xuyên qua near=0.5. Nếu bỏ cả đoạn chỉ vì A không hợp lệ, đường lưới sẽ biến mất quá sớm.
+
+Viết đoạn theo tham số P(t)=A+t(B−A). Riêng trục Z cho 0+t×2=0.5, nên t=0.25. Thế lại X được −1+0.25×2=−0.5. Phần còn lại phải bắt đầu ở (−0.5,0,0.5).
+
+Để dùng cùng cách tính cho cả near và far, ta quy ước a/b là khoảng cách có dấu: không âm ở phía được giữ lại. Khi đó t=a/(a−b). Với near, lấy Z−near; với far, lấy far−Z. Thêm clipDepth vào lab.hpp, sau projectPerspective:
 
 ```cpp title="include/lab.hpp — near/far clipping trước perspective divide"
 inline bool clipDepth(Vec3& start, Vec3& end, const PerspectiveLens& lens) {
-    if (!finite(start) || !finite(end)) {
+    if (!finite(start) || !finite(end) || !std::isfinite(lens.nearPlane) || !std::isfinite(lens.farPlane) || lens.nearPlane <= 0.0 || lens.farPlane <= lens.nearPlane) {
         return false;
     }
-    for (const auto& plane : {Vec2{lens.nearPlane, 1.0}, Vec2{lens.farPlane, -1.0}}) {
-        const double a = (start.z - plane.x) * plane.y;
-        const double b = (end.z - plane.x) * plane.y;
+
+    struct DepthPlane {
+        double depth;
+        double direction;
+    };
+
+    for (const auto& plane : {DepthPlane{lens.nearPlane, 1.0}, DepthPlane{lens.farPlane, -1.0}}) {
+        const double a = (start.z - plane.depth) * plane.direction;
+        const double b = (end.z - plane.depth) * plane.direction;
+        if (!std::isfinite(a) || !std::isfinite(b)) {
+            return false;
+        }
         if (a < 0.0 && b < 0.0) {
             return false;
         }
         if (a < 0.0 || b < 0.0) {
-            const double t = a / (a - b);
-            Vec3 hit{start.x + t * (end.x - start.x), start.y + t * (end.y - start.y), plane.x};
+            const double denominator = a - b;
+            if (!std::isfinite(denominator)) {
+                return false;
+            }
+            const double t = a / denominator;
+            Vec3 hit{start.x + t * (end.x - start.x), start.y + t * (end.y - start.y), plane.depth};
+            if (!finite(hit)) {
+                return false;
+            }
             if (a < 0.0) {
                 start = hit;
             } else {
@@ -130,11 +130,74 @@ inline bool clipDepth(Vec3& start, Vec3& end, const PerspectiveLens& lens) {
 }
 ```
 
-Cả hai endpoint ngoài cùng phía thì bỏ. Nếu chỉ một endpoint ngoài, thay nó bằng giao điểm và gán Z đúng bằng plane; cách gán này tránh sai số rất nhỏ làm guard sau đó loại nhầm giao điểm. Sau khi chiếu, clipScreen lại cắt theo bốn cạnh viewport trước khi làm tròn sang int.
+DepthPlane ghi rõ hai thông tin: vị trí mặt phẳng và chiều được giữ lại. Near dùng direction=+1, far dùng direction=−1. Cả hai đầu mút nằm ngoài cùng một phía thì bỏ. Nếu chỉ một đầu mút nằm ngoài, thay nó bằng giao điểm. Gán Z của giao điểm đúng bằng plane.depth để tránh sai số rất nhỏ khiến guard loại nhầm điểm vừa cắt.
+
+Guard đầu hàm cũng kiểm near/far: NaN không làm phép so sánh `<` trả true, nên chỉ kiểm hai đầu mút là chưa đủ. Hàm trả false khi không thể tạo đoạn hữu hạn; caller không dùng lại đoạn đó để vẽ.
+
+### Bước 4 — Chiếu một đoạn thẳng, rồi ghép thành cảnh nền
+
+clipScreen và drawLine đã có trong Starter. Thêm hai hàm dưới vào view.hpp, **trước renderScene**. line3D nhận hai đầu mút world; chỉ sau khi đổi về camera và cắt depth, ta mới được phép chiếu chúng:
+
+```cpp title="include/view.hpp — giữ phần đoạn nhìn thấy được"
+inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene, std::uint32_t color) {
+    start = worldToCamera(start, scene.camera);
+    end = worldToCamera(end, scene.camera);
+    if (!clipDepth(start, end, scene.lens)) {
+        return;
+    }
+    const Camera3D origin{};
+    const Viewport viewport = viewportFor(scene);
+    const auto a = projectPerspective(start, origin, scene.lens, viewport);
+    const auto b = projectPerspective(end, origin, scene.lens, viewport);
+    if (!a.screen || !b.screen) {
+        return;
+    }
+    Vec2 from = *a.screen;
+    Vec2 to = *b.screen;
+    if (!clipScreen(from, to, viewport)) {
+        return;
+    }
+    drawLine(image, static_cast<int>(std::lround(from.x)), static_cast<int>(std::lround(from.y)), static_cast<int>(std::lround(to.x)), static_cast<int>(std::lround(to.y)), color);
+}
+```
+
+Vì start/end đã ở camera space, hai lời gọi projectPerspective dùng camera tại gốc. Nếu truyền scene.camera lần nữa, ta sẽ trừ vị trí camera hai lần. Sau phép chiếu, clipScreen cắt theo bốn cạnh viewport để Bresenham không phải duyệt một đoạn dài nằm ngoài màn hình. Đầu mút nằm ngoài NDC vẫn có thể thuộc một đoạn cắt qua ảnh, nên ở đây ta kiểm screen có giá trị, không yêu cầu cả hai status đều Visible.
+
+```cpp title="include/view.hpp — lưới sàn và bốn khung cùng kích thước"
+inline void drawDepthScene(Framebuffer& image, const Scene& scene) {
+    // Các đường này là hình học 3D thật, không phải lưới 2D dán sau marker.
+    for (int x = -4; x <= 4; ++x) {
+        const double position = static_cast<double>(x);
+        line3D(image, {position, -1.5, 1.0}, {position, -1.5, 16.0}, scene, kGrid);
+    }
+    for (int z = 1; z <= 16; ++z) {
+        const double depth = static_cast<double>(z);
+        line3D(image, {-4.0, -1.5, depth}, {4.0, -1.5, depth}, scene, kGrid);
+    }
+    // Bốn khung cùng kích thước world, xa dần về +Z.
+    for (double z : {2.0, 4.0, 8.0, 12.0}) {
+        line3D(image, {-3.0, -1.5, z}, {-3.0, 2.0, z}, scene, kGhost);
+        line3D(image, {-3.0, 2.0, z}, {3.0, 2.0, z}, scene, kGhost);
+        line3D(image, {3.0, 2.0, z}, {3.0, -1.5, z}, scene, kGhost);
+    }
+    if (scene.debug) {
+        line3D(image, {-2.0, 0.0, 4.0}, {2.0, 0.0, 4.0}, scene, kAxisX);
+        line3D(image, {0.0, -1.5, 4.0}, {0.0, 2.0, 4.0}, scene, kShape);
+        line3D(image, {0.0, 0.0, 1.0}, {0.0, 0.0, 16.0}, scene, kAxisY);
+    }
+}
+```
+
+Vòng lặp đầu vẽ đường dọc sàn, vòng thứ hai vẽ đường ngang. Ba cạnh của mỗi khung có cùng tọa độ X/Y; chỉ Z thay đổi. Chúng thu nhỏ dần vì cùng đi qua phép chia cho Z, không phải vì ta vẽ sẵn bốn hình chữ nhật có kích thước pixel khác nhau.
 
 ## Ghép các phần lại
 
-Các helper và status trong bài này đã được thêm ở bài 3–4. Đọc lại để hiểu từng return, **không dán thêm một bản projectPerspective hay ProjectionResult trùng tên**.
+Trong renderScene, thêm drawDepthScene ngay trước phép chiếu điểm. Vẽ nền trước, vẽ marker sau để đường lưới không tô đè lên điểm sáng:
+
+```cpp title="include/view.hpp — gọi cảnh nền trước marker"
+drawDepthScene(image, scene);
+const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewport);
+```
 
 Để thí nghiệm thay đổi near/far khi đang chạy, thêm bốn nhánh sau vào SDL_EVENT_KEY_DOWN, sau phần FOV/aspect:
 

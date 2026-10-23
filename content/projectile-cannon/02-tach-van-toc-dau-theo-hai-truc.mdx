@@ -62,13 +62,13 @@ Angle của zero vector không có ý nghĩa. Hàm trả 0 như một giá trị
 
 ### Bước 3 — Vẽ component theo phép cộng đầu-đuôi
 
-```cpp title="src/main.cpp — vx đi trước, vy nối tiếp"
-const lab::Vec2 horizontalEnd = lab::add(muzzleScreen, {aimVelocity.x * kAimPixelsPerSpeed, 0.0});
-drawArrow(pixels, width, height, muzzleScreen, horizontalEnd, kHorizontal);
-drawArrow(pixels, width, height, horizontalEnd, lab::add(muzzleScreen, aimScreenDelta), kVertical);
+```cpp title="include/scene.hpp — vx đi trước, vy nối tiếp"
+const Vec2 horizontal = add(muzzle, {velocity.x * 5.0, 0.0});
+drawArrow(frame, muzzle, horizontal, 0xffb454ffU);
+drawArrow(frame, horizontal, aimEnd, 0xc792eaffU);
 ```
 
-Component Y được đổi dấu khi chuyển thành `aimScreenDelta`, vì vậy arrow tím đi lên màn hình khi `vy > 0`. Dữ liệu velocity vẫn giữ Y dương trong world space.
+Ở đây `muzzle` và `aimEnd` đã là tọa độ màn hình. `horizontal` lấy đúng X của đầu mũi tên nhưng giữ Y tại nòng pháo. Vì thế đoạn thứ nhất chỉ nằm ngang, đoạn thứ hai chỉ đi dọc và cả hai ghép lại đúng bằng vector ban đầu. Dấu trừ khi tính Y của `aimEnd` làm mũi tên tím đi lên khi `vy > 0`; dữ liệu vận tốc vẫn giữ Y dương.
 
 ## Ghép các phần lại
 
@@ -85,7 +85,7 @@ cmake --build build --config Debug --target project_22_checkpoint_2
 1. Đưa degree thẳng vào `std::sin`. Với 50, hàm hiểu 50 radian; readout và nòng pháo không còn thống nhất.
 2. Hoán đổi sine và cosine. Ở 45° hình vẫn có vẻ đúng, vì hai giá trị bằng nhau; thử 20° để lỗi lộ rõ.
 3. Vẽ arrow `vy` từ muzzle thay vì từ `horizontalEnd`. Hai component vẫn đúng riêng lẻ nhưng không còn minh họa phép cộng vector.
-4. Dùng `std::atan(vy/vx)` rồi thử góc 85°. Sai số tăng mạnh khi `vx` nhỏ, và quadrant trái không thể phân biệt.
+4. Dùng `std::atan(vy/vx)` với các vector `(1,1)`, `(-1,-1)` và `(0,1)` trong một test thuần. Hai vector đầu có cùng thương dù ngược hướng; vector cuối làm xuất hiện phép chia cho zero. Trong miền 5°–85° của UI, lỗi góc phần tư chưa lộ ra, nên chỉ kéo slider không đủ để kiểm hàm này.
 
 ## Tự kiểm tra kết quả
 

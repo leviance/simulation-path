@@ -28,6 +28,8 @@ import {
   type PointScene,
 } from "@/lib/labs/projection-scene";
 import { drawProjectionLab, projectionPointFromEvent } from "./projection-lab-view";
+import { ProjectionGeometry } from "./projection-geometry";
+import { ProjectionControls } from "./projection-controls";
 import { LabReadout, useCanvasSize, useReducedMotion, usePauseOnReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 const format = (p: Vec3) => "(" + [p.x, p.y, p.z].map((n) => n.toFixed(4)).join(", ") + ")";
@@ -79,18 +81,34 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
     cancelDrag();
     commit({ ...sceneRef.current, debug: !sceneRef.current.debug });
   };
-  const editPoint = (axis: keyof Vec3, value: number) => {
-    cancelDrag();
-    commit(changePoint(sceneRef.current, { ...sceneRef.current.point, [axis]: value }));
-  };
-  const editCamera = (axis: keyof Vec3, value: number) => {
-    cancelDrag();
-    commit(changePointCamera(sceneRef.current, axis, value));
-  };
-  const editLens = (key: keyof PointLens, value: number) => {
-    cancelDrag();
-    commit(changePointLens(sceneRef.current, key, value));
-  };
+  const editPoint = useCallback(
+    (axis: keyof Vec3, value: number) => {
+      cancelDrag();
+      commit(changePoint(sceneRef.current, { ...sceneRef.current.point, [axis]: value }));
+    },
+    [cancelDrag, commit],
+  );
+  const editCamera = useCallback(
+    (axis: keyof Vec3, value: number) => {
+      cancelDrag();
+      commit(changePointCamera(sceneRef.current, axis, value));
+    },
+    [cancelDrag, commit],
+  );
+  const editLens = useCallback(
+    (key: keyof PointLens, value: number) => {
+      cancelDrag();
+      commit(changePointLens(sceneRef.current, key, value));
+    },
+    [cancelDrag, commit],
+  );
+  const editAspect = useCallback(
+    (aspect: number) => {
+      cancelDrag();
+      commit({ ...sceneRef.current, paused: true, aspect });
+    },
+    [cancelDrag, commit],
+  );
   const moveDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const active = drag.current;
     if (!active || active.id !== event.pointerId) return;
@@ -231,119 +249,19 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
   const debug = stage < 8 || scene.debug;
   return (
     <div className="lab-body">
-      <div className="lab-controls">
-        <label>
-          Preset
-          <select aria-label="Điểm mẫu" value="" onChange={(e) => reset(Number(e.target.value))}>
-            <option value="" disabled>
-              Chọn thí nghiệm
-            </option>
-            {["Mặc định", "Xa gấp đôi", "Trước near", "Sau camera", "Vượt far", "Ngoài khung"].map(
-              (name, i) => (
-                <option key={i} value={i}>
-                  {name}
-                </option>
-              ),
-            )}
-          </select>
-        </label>
-        {(["x", "y", "z"] as const).map((axis) => (
-          <label key={axis}>
-            Point.{axis.toUpperCase()}
-            <input
-              type="range"
-              aria-label={`Point.${axis.toUpperCase()}`}
-              min={axis === "z" ? -2 : -6}
-              max={axis === "z" ? 20 : 6}
-              step=".05"
-              value={scene.point[axis]}
-              onChange={(e) => editPoint(axis, Number(e.target.value))}
-            />
-            <output>{scene.point[axis].toFixed(3)}</output>
-          </label>
-        ))}
-        {stage >= 2 &&
-          (["x", "y", "z"] as const).map((axis) => (
-            <label key={axis}>
-              Camera.{axis.toUpperCase()}
-              <input
-                type="range"
-                aria-label={`Camera.${axis.toUpperCase()}`}
-                min="-2"
-                max="2"
-                step=".1"
-                value={scene.camera.position[axis]}
-                onChange={(e) => editCamera(axis, Number(e.target.value))}
-              />
-              <output>{scene.camera.position[axis].toFixed(2)}</output>
-            </label>
-          ))}
-        {stage >= 4 && (
-          <>
-            <label>
-              Vertical FOV
-              <input
-                type="range"
-                aria-label="Vertical FOV"
-                min="25"
-                max="110"
-                step="1"
-                value={(scene.lens.verticalFovRadians * 180) / Math.PI}
-                onChange={(e) =>
-                  editLens("verticalFovRadians", (Number(e.target.value) * Math.PI) / 180)
-                }
-              />
-              <output>{((scene.lens.verticalFovRadians * 180) / Math.PI).toFixed(0)}°</output>
-            </label>
-            <label>
-              Aspect
-              <select
-                value={scene.aspect}
-                onChange={(e) => {
-                  cancelDrag();
-                  commit({ ...sceneRef.current, paused: true, aspect: Number(e.target.value) });
-                }}
-              >
-                <option value="0">16:9</option>
-                <option value="1">4:3</option>
-                <option value="2">1:1</option>
-              </select>
-            </label>
-          </>
-        )}
-        {stage >= 5 &&
-          (["nearPlane", "farPlane"] as const).map((key) => (
-            <label key={key}>
-              {key === "nearPlane" ? "Near plane" : "Far plane"}
-              <input
-                type="range"
-                aria-label={key === "nearPlane" ? "Near plane" : "Far plane"}
-                min={key === "nearPlane" ? 0.1 : 8}
-                max={key === "nearPlane" ? 2 : 24}
-                step=".1"
-                value={scene.lens[key]}
-                onChange={(e) => editLens(key, Number(e.target.value))}
-              />
-              <output>{scene.lens[key].toFixed(2)}</output>
-            </label>
-          ))}
-        {stage >= 6 && (
-          <>
-            <button onClick={togglePause} disabled={reducedMotion}>
-              {scene.paused ? "Cho điểm bay" : "Tạm dừng"}
-            </button>
-            <button disabled={!scene.paused} onClick={step}>
-              Tiến 0.1 s
-            </button>
-          </>
-        )}
-        {stage >= 8 && (
-          <button aria-pressed={scene.debug} onClick={toggleDebug}>
-            {scene.debug ? "Ẩn debug" : "Hiện debug"}
-          </button>
-        )}
-        <button onClick={() => reset()}>Đặt lại</button>
-      </div>
+      <ProjectionControls
+        scene={scene}
+        stage={stage}
+        reducedMotion={reducedMotion}
+        reset={reset}
+        togglePause={togglePause}
+        step={step}
+        toggleDebug={toggleDebug}
+        editPoint={editPoint}
+        editCamera={editCamera}
+        editLens={editLens}
+        editAspect={editAspect}
+      />
       <canvas
         ref={canvasRef}
         style={{ height: "clamp(380px,58vw,560px)", touchAction: "none" }}
@@ -363,10 +281,11 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
       <p>
         Camera nhìn theo +Z; Y hướng lên. WASD/QE trong Canvas dịch từng nấc 0.1 world; ứng dụng SDL
         dùng trạng thái phím và delta time để di chuyển liên tục. Từ bài 7, nhấn gần marker rồi kéo:
-        giữ depth, giữ chỗ nắm, chỉ XY thay đổi. Các khung 3D cùng kích thước ở depth 2/4/8/12;
-        resize giữ bảng logic, Aspect thay đổi khung nhìn thật.{" "}
+        giữ depth, giữ chỗ nắm, chỉ XY thay đổi. Từ bài 5, các khung 3D cùng kích thước nằm ở depth
+        2/4/8/12; resize giữ bảng logic, Aspect thay đổi khung nhìn thật.{" "}
         {reducedMotion ? "Reduced motion: tự động bay bị tắt; vẫn có thể tiến từng bước." : ""}
       </p>
+      {(stage === 3 || stage === 4) && <ProjectionGeometry scene={scene} />}
       {debug && (
         <LabReadout
           items={[
