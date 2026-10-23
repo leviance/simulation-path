@@ -30,6 +30,9 @@ test("Project 23 Integrator Race steps, measures cost and resets its experiment"
     .locator("dd");
 
   await expect(canvas).toBeVisible();
+  await expect
+    .poll(() => canvas.evaluate((node: HTMLCanvasElement) => node.width))
+    .toBeGreaterThan(300);
   await expect(elapsed).toHaveText("0.000 s / 0");
   await page.getByRole("button", { name: "Tiến một bước" }).click();
   await expect(evaluations).toHaveText("1 / 2 / 4");
@@ -42,14 +45,66 @@ test("Project 23 Integrator Race steps, measures cost and resets its experiment"
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   if (box) {
-    await page.mouse.move(box.x + box.width * 0.72, box.y + 45);
+    await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+    const scale = Math.min(box.width / 1100, box.height / 820);
+    const left = box.x + (box.width - 1100 * scale) / 2;
+    const top = box.y + (box.height - 820 * scale) / 2;
+    await page.mouse.move(left + 810 * scale, top + 140 * scale);
     await page.mouse.down();
     await expect(capture).toContainText("đang kéo");
-    await page.mouse.move(box.x + box.width * 0.64, box.y + 45);
+    await page.mouse.move(left + 700 * scale, top + 140 * scale);
     await page.mouse.up();
   }
   await expect(capture).toContainText("đã nhả");
   await page.getByRole("button", { name: "Đặt lại" }).click();
   await expect(elapsed).toHaveText("0.000 s / 0");
+  expect(errors).toEqual([]);
+});
+
+test("Project 23 changes integrators fairly and measures actual JavaScript runtime", async ({
+  page,
+}) => {
+  const errors = captureBrowserErrors(page);
+  await page.goto("/projects/integrator-race/08-do-runtime-va-hoan-thien-cuoc-dua");
+  const canvas = page.locator('canvas[aria-label^="Cuộc đua integrator"]');
+  await expect(canvas).toBeVisible();
+  await expect
+    .poll(() => canvas.evaluate((node: HTMLCanvasElement) => node.width))
+    .toBeGreaterThan(300);
+  const elapsed = page
+    .locator(".lab-readout div")
+    .filter({ hasText: "Elapsed / step" })
+    .locator("dd");
+  const evaluations = page
+    .locator(".lab-readout div")
+    .filter({ hasText: "Force evaluations" })
+    .locator("dd");
+  await page.getByRole("button", { name: "Tiến một bước" }).click();
+  await expect(evaluations).toHaveText("1 / 2 / 4");
+  await page.getByLabel("Integrator làn 1", { exact: true }).selectOption("rk4");
+  await expect(elapsed).toHaveText("0.000 s / 0");
+  await page.getByRole("button", { name: "Tiến một bước" }).click();
+  await expect(evaluations).toHaveText("4 / 2 / 4");
+  await page.getByRole("button", { name: "Đo runtime", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Benchmark JavaScript" });
+  await expect(panel.getByRole("status")).toContainText("Đã đo xong");
+  await expect(panel.locator("tbody tr")).toHaveCount(3);
+  await expect(panel.locator("caption")).toContainText("không phải thời gian C++/SDL3");
+  await expect(elapsed).toHaveText("0.033 s / 1");
+  await page.getByRole("button", { name: "Ẩn debug", exact: true }).click();
+  await expect(page.locator(".lab-readout")).toHaveCount(0);
+  await expect(canvas).toBeVisible();
+  await page.getByRole("button", { name: "Hiện debug", exact: true }).click();
+  await page.getByLabel("Fixed dt", { exact: true }).selectOption({ label: "1/60 s" });
+  await expect(elapsed).toHaveText("0.000 s / 0");
+  await expect(panel).toHaveCount(0);
+  await canvas.focus();
+  await canvas.press("Control+n");
+  await expect(elapsed).toHaveText("0.000 s / 0");
+  await canvas.press("n");
+  await expect(elapsed).toHaveText("0.017 s / 1");
+  await canvas.press("Space");
+  await page.getByRole("button", { name: "Tạm dừng", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Tiếp tục", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });

@@ -5,43 +5,48 @@ const lab = {
     label: "INTEGRATOR RACE LAB",
     title: "Ba integrator nhìn cùng một lực sẽ đi khác nhau ra sao?",
     description:
-      "Kéo initial position, đổi stiffness cùng fixed dt rồi theo dõi exact ghost, phase-space error, energy drift và force-evaluation count của Euler, Velocity Verlet, RK4.",
+      "Ba làn dùng cùng hệ lò xo và thời gian. Kéo khối để đặt x₀, đổi solver mỗi làn, xem sai số rồi đo runtime riêng với workload hữu hạn.",
   },
   modes: {
     "integrator-system": {
       title: "Một harmonic oscillator được mô tả bằng state nào?",
       description:
-        "Kéo mass để đổi initial position và quan sát acceleration, angular frequency, exact state cùng total energy trước khi tích phân số.",
+        "Kéo khối để chọn vị trí đầu, đọc gia tốc và tần số góc. Khung trắng cho thấy nghiệm giải tích trước khi ta viết các phương pháp tích phân.",
     },
     "integrator-euler": {
-      title: "Euler lấy đạo hàm ở đâu và làm energy trôi ra sao?",
+      title: "Euler lấy đạo hàm ở đâu, và vì sao năng lượng tăng?",
       description:
-        "Tiến từng bước lane Euler; position dùng velocity đầu bước, velocity dùng acceleration tại position đầu bước.",
+        "Tiến làn Euler từng bước: vị trí mới dùng vận tốc cũ, vận tốc mới dùng gia tốc tính tại vị trí đầu bước.",
     },
     "integrator-verlet": {
-      title: "Velocity Verlet dùng hai acceleration thế nào?",
+      title: "Velocity Verlet dùng gia tốc ở hai đầu bước thế nào?",
       description:
-        "Theo dõi a0, position mới, a1 và velocity mới; so energy drift với Euler ở cùng dt.",
+        "Theo dõi a₀, vị trí mới, a₁ và vận tốc mới; so độ lệch năng lượng với Euler ở cùng dt.",
     },
     "integrator-rk4": {
-      title: "Bốn stage RK4 đánh giá phase space ở đâu?",
+      title: "RK4 lấy mẫu tại bốn trạng thái nào?",
       description:
-        "Xem k1–k4, weights 1-2-2-1 và số derivative evaluation được trả cho độ chính xác cao hơn.",
+        "Xem k₁–k₄, cách ghép theo trọng số 1-2-2-1 và bốn lần tính đạo hàm trong mỗi bước.",
     },
     "integrator-lockstep": {
-      title: "Một race công bằng cần khóa những gì?",
+      title: "Muốn so ba phương pháp công bằng, cần giữ nguyên những gì?",
       description:
-        "Ba lane dùng cùng initial state, parameters, fixed dt và step count; evaluation counter là khác biệt được phép.",
+        "Ba làn có cùng điều kiện đầu, tham số, dt và số bước. Đổi solver của từng làn rồi quan sát số lần tính lực khác nhau.",
     },
     "integrator-energy": {
-      title: "State error và energy drift kể hai câu chuyện nào?",
+      title: "Sai số trạng thái khác độ lệch năng lượng thế nào?",
       description:
-        "Chuyển graph giữa position và relative energy drift, đọc exact ghost cùng phase-space error đã chuẩn hóa.",
+        "Xem đồ thị vị trí, sai số trạng thái và độ lệch năng lượng; mỗi mẫu được ghi sau một bước physics, không phải sau mỗi frame.",
     },
     "integrator-validation": {
-      title: "Integrator nào thắng khi đổi dt và thời lượng?",
+      title: "Giảm dt có đưa kết quả lại gần đáp án đúng không?",
       description:
-        "Đổi giữa các mức fixed dt, chạy nhanh 20 giây và so convergence, stability cùng error per force evaluation.",
+        "Giữ cùng thời điểm khi đổi dt, dùng công thức năng lượng độc lập và phân biệt lượng công việc với thời gian chạy.",
+    },
+    "integrator-benchmark": {
+      title: "Thêm độ chính xác phải trả bao nhiêu thời gian?",
+      description:
+        "Đo runtime thật bằng các batch hữu hạn có thể hủy. Số đo ở đây là JavaScript của trình duyệt; ứng dụng SDL3 đo riêng bằng C++.",
     },
   },
 } satisfies ProjectLabMeta;

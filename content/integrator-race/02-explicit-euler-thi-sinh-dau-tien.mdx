@@ -4,94 +4,163 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ta đã biết acceleration tại mọi position, nhưng chương trình vẫn chưa biết đi từ state hiện tại sang state kế tiếp. Máy tính không chạy liên tục; nó lấy một bước thời gian hữu hạn `dt`. Explicit Euler đánh giá derivative tại **đầu bước** rồi tạm coi giá trị đó không đổi trong cả bước.
+Khung trắng đã cho biết vật đúng ra phải ở đâu. Bây giờ ta thêm khối đỏ chạy bằng Euler, không được lấy vị trí từ sin/cos. Với lò xo, gia tốc phải được tính lại tại mỗi bước vì nó phụ thuộc vị trí hiện tại.
 
-Điều cần học không phải hai dòng công thức ngắn, mà là chúng đang đọc state nào. Nếu cập nhật velocity trước rồi mới dùng nó cho position, bạn đã viết semi-implicit Euler — một phương pháp khác có energy behavior khác.
+Bài này chỉ làn 1 có solver số; hai làn còn lại tiếp tục hiện bản đối chứng. Đừng cho phương pháp chưa học chạy ngầm rồi gọi đó là một checkpoint hoàn chỉnh.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với state đầu bước $(x_n,v_n)$:
+Nếu biết vị trí xₙ, vận tốc vₙ và bước thời gian h, Euler xem vận tốc và gia tốc ở đầu bước như không đổi trong cả khoảng h:
 
 $$
-x_{n+1}=x_n+v_n\Delta t
+a_n=-\frac{k}{m}x_n,\qquad x_{n+1}=x_n+h v_n,\qquad v_{n+1}=v_n+h a_n.
 $$
 
-$$
-v_{n+1}=v_n+a(x_n)\Delta t
-$$
+Cả hai vế phải đều dùng **state cũ**. Với m=1, k=4, x₀=1, v₀=0, h=0.1: a₀=−4, x₁=1, v₁=−0.4. Việc x chưa đổi trong bước đầu không phải lỗi: Euler dùng v₀=0 cho cả khoảng.
 
-Trên phase space $(x,v/\omega)$, nghiệm exact đi theo một đường tròn. Euler bước theo tiếp tuyến của đường tròn; điểm mới nằm hơi ra ngoài. Lặp lại nhiều lần làm bán kính tăng, tương đương hệ số học ngày càng nhiều energy dù bài toán không có nguồn năng lượng.
+Trong mặt phẳng (x,v/ω), nghiệm đúng là một đường tròn. Euler đi theo tiếp tuyến nên bước ra ngoài đường tròn. Đây là lý do biên độ và năng lượng tăng, không phải lỗi pixel.
 
 <InteractiveLab demo="integrator-race" mode="integrator-euler" />
 
-Chọn `dt = 1/15 s`, bấm “Tiến một bước” vài lần rồi chạy nhanh 20 giây. Khối đỏ và exact ghost tách nhau; energy drift dương tăng rõ. Sau đó giảm `dt` để thấy lỗi chậm lại chứ không biến mất hoàn toàn.
-
 ## Viết code từng bước
 
-### Bước 1 — Trả cả kết quả lẫn chi phí
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ, không dán thêm hàm trùng tên. **Checkpoint 02 là bản tham khảo sau bài này**; build target checkpoint chỉ chạy mã mẫu, không kiểm phần bạn vừa sửa trong Starter.
 
-```cpp title="include/lab.hpp — một step có state và số lần tính lực"
-struct IntegratorStepResult {
-    OscillatorState state{};
-    int forceEvaluations{};
-};
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_starter --parallel 2
+.\build\Debug\project_23_starter.exe
 ```
 
-Nếu chỉ trả `OscillatorState`, UI phải tự biết Euler tốn bao nhiêu lần tính lực. Đưa cost vào kết quả khiến phép đếm nằm ngay cạnh code thực sự gọi acceleration.
+### Bước 1 — Giữ state cũ và trả thêm lượng công việc
 
-### Bước 2 — Lấy acceleration trước khi sửa state
+IntegratorStepResult đã có trong Starter: state mới và forceEvaluations. Giá trị 0 nghĩa là bước bị từ chối, không phải một bước hợp lệ “miễn phí”. validStep và checkedStep kiểm dữ liệu đầu/cuối để state lỗi không đi tiếp vào renderer.
 
-```cpp title="include/lab.hpp — derivative tại đầu bước"
-const double acceleration = oscillatorAcceleration(current.position, parameters);
-OscillatorState next{};
-next.position = current.position + current.velocity * deltaSeconds;
-next.velocity = current.velocity + acceleration * deltaSeconds;
-next.elapsed = current.elapsed + deltaSeconds;
-return {next, 1};
-```
+Thêm hàm này vào lab.hpp:
 
-`current` là `const`, nên không có nguy cơ dòng thứ nhất làm thay dữ liệu mà dòng thứ hai đọc. Các biến `acceleration` và `next` hơi dài hơn cách viết gộp, nhưng đặt breakpoint vào từng phép tính rất dễ.
-
-### Bước 3 — Từ chối một step không hợp lệ
-
-```cpp title="include/lab.hpp — không cho thời gian đi lùi"
-if (!validParameters(parameters) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
-    return {current, 0};
+```cpp title="include/lab.hpp — hai phép cập nhật đều dùng state đầu bước"
+inline IntegratorStepResult explicitEulerStep(const OscillatorState& current, const OscillatorParameters& parameters, double dt) {
+    if (!validStep(current, parameters, dt)) {
+        return {current, 0};
+    }
+    const double acceleration = oscillatorAcceleration(current.position, parameters);
+    OscillatorState next;
+    // Cả hai dòng đều đọc trạng thái đầu bước, không đọc next.velocity.
+    next.position = current.position + current.velocity * dt;
+    next.velocity = current.velocity + acceleration * dt;
+    next.elapsed = current.elapsed + dt;
+    return checkedStep(current, next, 1);
 }
 ```
 
-`forceEvaluations == 0` báo rằng state không được cập nhật. Đây là tín hiệu rõ hơn việc lặng lẽ tăng `elapsed` dù `dt` hỏng.
 
-### Bước 4 — Đặt lane đỏ cạnh exact ghost
+### Bước 2 — Đưa Euler vào bộ chọn
 
-Main giữ `eulerState` riêng và vẽ nó bằng màu đỏ. Exact ghost được lấy ở đúng `eulerState.elapsed`, không phải ở thời gian render ước lượng. Nhờ vậy đoạn lệch ta nhìn thấy thực sự là integration error.
+Sau bài 1, Starter chưa có hàm chọn phương pháp tích phân. Thêm stepIntegrator ngay sau explicitEulerStep trong lab.hpp. Hiện tại hàm chỉ biết Euler; hai case còn lại sẽ được thêm ở các bài sau:
+
+```cpp title="include/lab.hpp — chỉ phương pháp đã viết mới chạy"
+inline IntegratorStepResult stepIntegrator(IntegratorKind kind, const OscillatorState& current, const OscillatorParameters& parameters, double dt) {
+    switch (kind) {
+    case IntegratorKind::explicitEuler:
+        return explicitEulerStep(current, parameters, dt);
+    default:
+        (void)parameters;
+        (void)dt;
+        return {current, 0};
+    }
+}
+```
+
+
+### Bước 3 — Nối solver vào mỗi bước physics
+
+Thay toàn bộ stepScene trong scene.hpp bằng hàm dưới. laneCount=1 là có chủ đích: chỉ làn đỏ được tích phân. beforeLast giữ trạng thái đầu bước. Bản Canvas cũng lưu dữ liệu tương ứng để minh họa đúng bước vừa tính; nó không đọc state trực tiếp từ ứng dụng C++.
+
+```cpp title="include/scene.hpp — một bước của làn đầu"
+inline bool stepScene(Scene& scene) {
+    if (scene.warning[0] != '\0') {
+        return false;
+    }
+    const double dt = fixedDelta(scene);
+    const IntegratorRace before = scene.race;
+    // Các bài đầu chỉ chạy những phương pháp người học đã viết.
+    auto next = scene.race;
+    constexpr std::size_t laneCount = 1;
+    for (std::size_t index = 0; index < laneCount; ++index) {
+        const auto result = stepIntegrator(next.lanes[index].kind, next.lanes[index].state, scene.parameters, dt);
+        if (result.forceEvaluations == 0) {
+            scene.warning = "Invalid numerical step.";
+            stopJobs(scene);
+            return false;
+        }
+        next.lanes[index].state = result.state;
+        next.lanes[index].forceEvaluations += static_cast<std::size_t>(result.forceEvaluations);
+    }
+    ++next.stepCount;
+    scene.race = next;
+    scene.beforeLast = before;
+    scene.elapsed += dt;
+    ++scene.substeps;
+    // Không clamp state vật lý để che việc Euler đang phân kỳ.
+    for (const auto& lane : scene.race.lanes) {
+        if (std::abs(lane.state.position) > 1e6 || std::abs(lane.state.velocity) > 1e6) {
+            scene.warning = "Divergence exceeds safety range (1e6). Reset or reduce dt.";
+            stopJobs(scene);
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+
+Trong view.hpp, thay laneAvailable để phần vẽ biết làn đỏ đã có numerical state. Đây chỉ là chọn nguồn dữ liệu để vẽ, không quyết định phương pháp tích phân:
+
+```cpp title="include/view.hpp — bật khối màu của làn đầu"
+inline bool laneAvailable(std::size_t index) {
+    return index == 0;
+}
+```
+
 
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy Explicit Euler"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_23_checkpoint_2
-./build/Debug/project_23_checkpoint_2.exe
+Trong main.cpp, thêm hai nhánh chỉnh dt vào SDL_EVENT_KEY_DOWN để có thể thử các bước lớn/nhỏ:
+
+```cpp title="src/main.cpp — chọn dt lớn hơn"
+if (event.key.key == SDLK_LEFTBRACKET) {
+    lab::setStepIndex(scene, scene.dtIndex - 1);
+}
 ```
 
-Nhấn Space để chạy. Ở checkpoint này `frameSeconds` được dùng trực tiếp để người học thấy solver đã hoạt động; fixed timestep chung chỉ xuất hiện khi cả ba lane được đưa vào một cuộc đua công bằng ở bài 5.
+
+```cpp title="src/main.cpp — chọn dt nhỏ hơn"
+if (event.key.key == SDLK_RIGHTBRACKET) {
+    lab::setStepIndex(scene, scene.dtIndex + 1);
+}
+```
+
+Chúng reset thí nghiệm vì đổi dt giữa chừng sẽ khiến hai lần chạy khó so sánh. Planner đã có từ Project 22, nên Euler nhận fixed dt chứ không nhận frameSeconds thay đổi theo FPS.
+
+Chọn preset Nhìn rõ một bước, nhấn N một lần: khối đỏ vẫn ở x=1, v=−0.4 và số lần tính lực là 1. Khung trắng đã ở gần x=0.9800666. Khi chạy thêm, độ lệch phải thể hiện cả trên vị trí khối lẫn mặt phẳng trạng thái.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi thứ tự: cập nhật `next.velocity` rồi tính `next.position` từ velocity mới. Dự đoán energy sẽ tăng hay bị chặn, chạy thử, sau đó hoàn tác. Kết quả khác không chứng minh Euler “ngẫu nhiên”; bạn đã đổi integrator.
-2. Trả `forceEvaluations=2` dù chỉ gọi acceleration một lần. Graph không đổi nhưng bảng cost sai; hoàn tác và giữ phép đếm cạnh lời gọi thật.
-3. Dùng `exact.position` làm `next.position` sau mỗi step. Sai số sẽ bằng zero vì solver đang chép đáp án. Hoàn tác để exact chỉ đo.
+1. Viết next.position bằng next.velocity thay cho current.velocity. Kết quả bước đầu thành x=0.96. Bạn vừa đổi sang một quy tắc cập nhật khác, không phải “sửa Euler”; hoàn tác để giữ phép so đúng tên.
+
+2. Giữ điều kiện đầu, chạy với 1/30 rồi 1/60 s. Sai số tích lũy chậm hơn ở dt nhỏ nhưng Euler vẫn tăng năng lượng trong oscillator không lực cản.
+
+3. Cố gọi bước với dt=0 hoặc NaN trong test. Kết quả phải giữ nguyên state và forceEvaluations=0.
 
 ## Tự kiểm tra kết quả
 
-- Một step từ `(x=1,v=0)`, `k/m=4`, `dt=0.1` cho `x=1`, `v=-0.4`.
-- Elapsed tăng đúng một `dt` và force counter tăng đúng 1.
-- `dt <= 0` giữ nguyên state và không tăng counter.
-- Lane đỏ dùng position/velocity của chính nó; không đọc state từ ghost.
-- Với oscillator dài hạn và `dt` hữu hạn, Euler energy tăng; giảm `dt` làm tốc độ trôi giảm.
+- Euler không đọc nghiệm chính xác.
+- Ví dụ một bước cho x₁=1, v₁=−0.4, một lần tính lực.
+- Chỉ làn đỏ thay đổi numerical state; hai làn chưa học không tăng evaluation count.
+- Đổi dt làm cả thí nghiệm bắt đầu lại, không trộn lịch sử của hai dt.
 
 ## Bài tập mở rộng
 
-Vẽ phase point `(x, v/omega)` của Euler sau mỗi step. Nối các điểm và giải thích vì sao đường xoắn ra ngoài tương ứng energy growth.
+Tự khai triển E₁=½mv₁²+½kx₁² từ hai công thức Euler. Bạn sẽ thu được E₁=E₀(1+ω²h²). Với h>0 và ω>0, năng lượng luôn tăng, dù h rất nhỏ.
 
-Bài tiếp theo thêm Velocity Verlet. Nó hỏi acceleration hai lần, nhưng đổi lại dùng thông tin ở cả đầu lẫn cuối step.
+[Sang bài 3 — Velocity Verlet](/projects/integrator-race/03-velocity-verlet-va-hai-lan-tinh-luc).

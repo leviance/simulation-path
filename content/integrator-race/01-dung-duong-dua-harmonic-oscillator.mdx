@@ -4,128 +4,220 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ta muốn so ba integrator, nhưng chưa thể bắt đầu bằng ba công thức cập nhật. Nếu mỗi thuật toán chạy một bài toán hơi khác nhau, “cuộc đua” sẽ không nói lên điều gì. Bài đầu tiên vì thế chỉ làm một việc: dựng cùng một hệ mass–spring cho cả ba lane và tạo một trọng tài độc lập.
+Ở Project 22, ta so một quỹ đạo Euler với nghiệm giải tích. Lần này lực không còn là một vector không đổi: lò xo kéo mạnh hay yếu tùy vị trí của vật. Ta sẽ cho ba cách cập nhật cùng giải bài toán đó, để nhìn thấy vì sao chúng cho kết quả khác nhau.
 
-Starter đã mở window SDL3, tạo renderer, streaming texture, CPU framebuffer và vẽ ba đường ray. Ba khối chưa chuyển động; đây là đầu ra có chủ đích để người học kiểm tra phần SDL trước khi chạm vào vật lý. Checkpoint 1 bổ sung state, lực lò xo, năng lượng và exact ghost.
+Trước khi so thuật toán, cần một bàn thí nghiệm nhìn thấy được. Tải ZIP ở trang tổng quan rồi mở thư mục có CMakeLists.txt. Starter đã có window SDL3, renderer, texture, framebuffer và ba đường ray. Input cơ bản cũng được nối sẵn từ Project 22. Mỗi file có một việc: lab.hpp tính toán; scene.hpp giữ thí nghiệm; view.hpp vẽ pixel; presentation.hpp vẽ chữ và đưa ảnh lên SDL; main.cpp nhận input và gọi vòng lặp.
 
-Ta dùng một harmonic oscillator một chiều:
-
-$$
-m\frac{d^2x}{dt^2}=-kx
-$$
-
-`position` dùng mét, `velocity` dùng mét/giây, `elapsed` dùng giây. Tọa độ pixel chỉ tồn tại trong phần vẽ. Nhờ vậy resize cửa sổ không thể làm thay đổi chu kỳ dao động.
+Starter chưa có phương trình nên các khối chỉ đứng yên. Bài này cho khung trắng chuyển động bằng nghiệm chính xác; các khối màu chỉ bắt đầu tích phân số từ bài 2.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Chia hai vế cho mass cho ta acceleration tại một position:
+x là **độ lệch khỏi vị trí cân bằng**, không phải chiều dài lò xo hay tọa độ của bức tường. Khi x dương, lực phải hướng âm; khi x âm, lực phải hướng dương.
 
 $$
-a(x)=-\frac{k}{m}x
+F=-kx,\qquad a(x)=-\frac{k}{m}x,\qquad \omega=\sqrt{k/m}.
 $$
 
-Dấu trừ rất đáng để dừng lại kiểm tra: khi $x>0$, acceleration âm; khi $x<0$, acceleration dương. Cả hai đều kéo vật về equilibrium $x=0$.
-
-Với $\omega=\sqrt{k/m}$, nghiệm chính xác từ initial state $(x_0,v_0)$ là:
+Với x₀ và v₀ tại thời điểm bắt đầu, nghiệm không có lực cản là:
 
 $$
-x(t)=x_0\cos(\omega t)+\frac{v_0}{\omega}\sin(\omega t)
+x(t)=x_0\cos(\omega t)+\frac{v_0}{\omega}\sin(\omega t),\qquad
+v(t)=-x_0\omega\sin(\omega t)+v_0\cos(\omega t).
 $$
 
-$$
-v(t)=-x_0\omega\sin(\omega t)+v_0\cos(\omega t)
-$$
+Năng lượng tổng là E=½mv²+½kx². Nó phải giữ nguyên trong nghiệm chính xác. Khi k=0, không dùng công thức có phép chia cho ω=0: vật chuyển động thẳng đều x=x₀+v₀t.
+
+Ở đây position dùng mét, velocity dùng m/s, stiffness dùng N/m, mass dùng kg. Chỉ phần vẽ mới đổi sang pixel. Kéo khối hoặc dùng mũi tên trái/phải để chọn x₀, rồi thử dấu của gia tốc.
 
 <InteractiveLab demo="integrator-race" mode="integrator-system" />
 
-Kéo mass sang hai phía và nhìn dấu của acceleration trong readout. Khung trắng là exact ghost. Ở bài này nó là vật duy nhất được phép chạy theo công thức đóng; từ bài sau các khối màu phải tự tích phân từng bước.
-
 ## Viết code từng bước
 
-### Bước 1 — Tách parameters khỏi state
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ, không dán thêm hàm trùng tên. **Checkpoint 01 là bản tham khảo sau bài này**; build target checkpoint chỉ chạy mã mẫu, không kiểm phần bạn vừa sửa trong Starter.
 
-```cpp title="include/lab.hpp — dữ liệu có đơn vị rõ ràng"
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_starter --parallel 2
+.\build\Debug\project_23_starter.exe
+```
+
+### Bước 1 — Đọc dữ liệu và cách đặt khối lên màn hình
+
+Hai struct dưới **đã có trong Starter**; không khai báo thêm bản trùng tên:
+
+```cpp title="include/lab.hpp — parameters và state"
 struct OscillatorParameters {
-    double mass{1.0};
-    double stiffness{4.0};
+    double mass = 1.0;
+    double stiffness = 4.0;
 };
 
 struct OscillatorState {
-    double position{};
-    double velocity{};
-    double elapsed{};
+    double position = 0.0;
+    double velocity = 0.0;
+    double elapsed = 0.0;
 };
 ```
 
-`mass` và `stiffness` mô tả hệ vật lý; `OscillatorState` mô tả hệ đang ở đâu. Không đặt `screenX` trong state, bởi pixel không phải đại lượng mà integrator giải.
+Vị trí cân bằng nằm ở pixel 560, tỉ lệ 100 pixel cho mỗi mét:
 
-### Bước 2 — Viết acceleration thành hàm thuần
+```cpp title="include/view.hpp — chỉ đổi đơn vị tại phần vẽ"
+inline double positionToScreen(double position) {
+    return 560.0 + 100.0 * position;
+}
+```
 
-```cpp title="include/lab.hpp — lực luôn kéo về equilibrium"
+Hàm vẽ lò xo dưới cũng được cung cấp trong Starter. Đọc vòng lặp: nó nối 12 đoạn gấp khúc tới cạnh khối, không tham gia tính lực. Muốn hình lò xo đẹp hơn, sửa ở đây; đừng đổi phương trình vật lý để khớp hình:
+
+```cpp title="include/view.hpp — lò xo là hình minh họa của state"
+inline void drawSpring(Framebuffer& image, double massX, double centerY, std::uint32_t color) {
+    double previousX = 55.0;
+    double previousY = centerY;
+    for (int segment = 1; segment <= 12; ++segment) {
+        const double x = 55.0 + (massX - 16.0 - 55.0) * static_cast<double>(segment) / 12.0;
+        double y = centerY;
+        if (segment < 12) {
+            if (segment % 2 == 0) {
+                y -= 8.0;
+            } else {
+                y += 8.0;
+            }
+        }
+        drawLine(image, previousX, previousY, x, y, color);
+        previousX = x;
+        previousY = y;
+    }
+}
+```
+
+
+### Bước 2 — Viết lực và năng lượng
+
+Thêm các hàm sau vào namespace lab trong lab.hpp. validParameters và finiteState đã có trong Starter; chúng từ chối dữ liệu không hữu hạn. Dữ liệu lỗi không được trả gia tốc 0 rồi bị hiểu nhầm là một vật chuyển động tự do.
+
+```cpp title="include/lab.hpp — tần số góc"
+inline double angularFrequency(const OscillatorParameters& parameters) {
+    if (!validParameters(parameters)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return std::sqrt(parameters.stiffness / parameters.mass);
+}
+```
+
+
+```cpp title="include/lab.hpp — gia tốc luôn kéo về gốc"
 inline double oscillatorAcceleration(double position, const OscillatorParameters& parameters) {
     if (!std::isfinite(position) || !validParameters(parameters)) {
-        return 0.0;
+        return std::numeric_limits<double>::quiet_NaN();
     }
     return -(parameters.stiffness / parameters.mass) * position;
 }
 ```
 
-Hàm không giữ state ẩn và không biết SDL. Vì thế CTest có thể hỏi trực tiếp acceleration ở $x=1$, $x=-1$ và $x=0$. `mass <= 0` bị chặn trước phép chia; `stiffness < 0` cũng bị từ chối vì nó tạo một hệ đẩy vật ra xa equilibrium, không còn là bài toán của project này.
 
-### Bước 3 — Tính năng lượng để có một invariant
-
-```cpp title="include/lab.hpp — kinetic cộng potential"
-const double kinetic = 0.5 * parameters.mass * state.velocity * state.velocity;
-const double potential = 0.5 * parameters.stiffness * state.position * state.position;
-return kinetic + potential;
+```cpp title="include/lab.hpp — động năng cộng thế năng"
+inline double oscillatorEnergy(const OscillatorState& state, const OscillatorParameters& parameters) {
+    if (!validParameters(parameters) || !finiteState(state)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double kinetic = 0.5 * parameters.mass * state.velocity * state.velocity;
+    const double potential = 0.5 * parameters.stiffness * state.position * state.position;
+    return kinetic + potential;
+}
 ```
 
-Hệ lý tưởng không ma sát bảo toàn $E=\frac12mv^2+\frac12kx^2$. Đây chưa phải integrator; nó là thước đo giúp ta thấy một solver đang bơm thêm hay làm mất năng lượng.
 
-### Bước 4 — Tạo trọng tài từ initial state
+### Bước 3 — Cho khung đối chứng chuyển động
 
-```cpp title="include/lab.hpp — exact state tại một elapsed bất kỳ"
-const double phase = omega * time;
-const double cosine = std::cos(phase);
-const double sine = std::sin(phase);
-const double position = initial.position * cosine + initial.velocity * sine / omega;
-const double velocity = -initial.position * omega * sine + initial.velocity * cosine;
-return {position, velocity, time};
+Thêm analyticOscillatorState sau các hàm trên. Tham số time là khoảng thời gian kể từ initial; elapsed của kết quả cộng thêm mốc ban đầu:
+
+```cpp title="include/lab.hpp — nghiệm chính xác không phụ thuộc integrator"
+inline OscillatorState analyticOscillatorState(const OscillatorState& initial, const OscillatorParameters& parameters, double time) {
+    if (!finiteState(initial) || !validParameters(parameters) || !std::isfinite(time) || time < 0.0) {
+        return invalidState();
+    }
+    const double omega = angularFrequency(parameters);
+    if (omega == 0.0) {
+        return {initial.position + initial.velocity * time, initial.velocity, initial.elapsed + time};
+    }
+    const double phase = omega * time;
+    const double position = initial.position * std::cos(phase) + initial.velocity * std::sin(phase) / omega;
+    const double velocity = -initial.position * omega * std::sin(phase) + initial.velocity * std::cos(phase);
+    return {position, velocity, initial.elapsed + time};
+}
 ```
 
-Ta truyền `initial` vào hàm thay vì đọc state đang chạy. Nghiệm exact vì thế không bị nhiễm sai số từ Euler, Verlet hoặc RK4. Trường hợp `stiffness == 0` được xử lý riêng như chuyển động thẳng đều để tránh chia cho $\omega=0$.
+Trong scene.hpp, thay hàm stepScene còn đang trả false bằng:
+
+```cpp title="include/scene.hpp — bài đầu chỉ tiến đồng hồ đối chứng"
+inline bool stepScene(Scene& scene) {
+    if (scene.warning[0] != '\0') {
+        return false;
+    }
+    const double dt = fixedDelta(scene);
+    scene.elapsed += dt;
+    ++scene.substeps;
+    // Không clamp state vật lý để che việc Euler đang phân kỳ.
+    for (const auto& lane : scene.race.lanes) {
+        if (std::abs(lane.state.position) > 1e6 || std::abs(lane.state.velocity) > 1e6) {
+            scene.warning = "Divergence exceeds safety range (1e6). Reset or reduce dt.";
+            stopJobs(scene);
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+
+Trong view.hpp, thay displayedPosition và renderScene của Starter bằng hai hàm dưới. Nếu giữ bản cũ chỉ trả initial.position, đồng hồ đã chạy nhưng hình vẫn đứng yên:
+
+```cpp title="include/view.hpp — lấy vị trí của khung đối chứng"
+inline double displayedPosition(const Scene& scene, std::size_t index) {
+    if (laneAvailable(index)) {
+        return scene.race.lanes[index].state.position;
+    }
+    return analyticOscillatorState(scene.initial, scene.parameters, scene.elapsed).position;
+}
+```
+
+
+```cpp title="include/view.hpp — đưa vị trí mới vào ảnh"
+inline void renderScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    double exactPosition = scene.initial.position;
+    exactPosition = analyticOscillatorState(scene.initial, scene.parameters, scene.elapsed).position;
+    for (std::size_t index = 0; index < 3; ++index) {
+        drawLane(image, index, displayedPosition(scene, index), exactPosition, laneAvailable(index), scene.debug);
+    }
+}
+```
+
 
 ## Ghép các phần lại
 
-Build starter trước, rồi checkpoint 1:
+advanceFrame đã dùng fixed-step planner từ Project 22 và gọi stepScene. Nhánh Space/N trong main.cpp cũng đã nối sẵn. Vì vậy sau khi thêm các hàm trên, Space làm khung trắng chuyển động, N tiến đúng một dt.
 
-```bash title="Terminal — kiểm tra scene trước và sau khi có model"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_23_starter
-cmake --build build --config Debug --target project_23_checkpoint_1
-./build/Debug/project_23_checkpoint_1.exe
-```
+renderScene lấy exactPosition rồi gọi drawLane. Ba làn cùng dùng một nghiệm, nên cả ba khung trắng phải trùng nhau theo chiều ngang. Đây mới là bản đối chứng, chưa phải ba solver khác nhau. Không dùng sin/cos để sửa các khối màu ở những bài tiếp theo.
 
-Kéo mass để đổi `x0`, nhấn Space và quan sát exact ghost. Với mặc định $m=1$, $k=4$, readout phải cho $\omega=2$ rad/s và chu kỳ $T=2\pi/\omega=\pi$ giây.
+Thử preset Nhìn rõ một bước: x₀=1, v₀=0, m=1, k=4. Khi t=π/4 s, khung trắng phải đi qua x=0 với v=−2 m/s; năng lượng bằng 2 J. Đó là đáp án tính trước để kiểm code, không phải số do solver tự xác nhận.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ dấu trừ trong `oscillatorAcceleration`. Trước khi chạy, hãy dự đoán vật sẽ trở về giữa hay lao ra xa; chạy vài giây, quan sát rồi hoàn tác thay đổi.
-2. Lưu `position` bằng pixel và đổi kích thước cửa sổ. Nếu chu kỳ hoặc energy đổi, bạn đã để rendering can thiệp vào physics; hoàn tác và đưa phép đổi mét–pixel về hàm vẽ.
-3. Dùng state hiện tại làm `initial` cho exact solution mỗi frame. Exact ghost sẽ bám theo sai số và mất vai trò đối chứng. Hoàn tác để exact luôn nhận snapshot ban đầu.
+1. Đổi dấu âm trong gia tốc thành dương rồi đặt x₀>0. Readout lực sẽ hướng ra xa vị trí cân bằng, trái với mô hình lò xo. Khôi phục dấu trước khi học tiếp.
+
+2. Chọn v₀ khác 0. Nếu bỏ hạng v₀/ω trong nghiệm, vị trí ở t=0 vẫn có thể đúng nhưng chuyển động ngay sau đó sai. Đối chiếu cả x(0) lẫn v(0).
+
+3. Đặt k=0 và v₀=1. Vật phải đi thẳng đều, không xuất hiện NaN do chia cho ω.
 
 ## Tự kiểm tra kết quả
 
-- Starter vẽ đủ ba lane dù chưa có công thức vật lý.
-- `mass > 0`, `stiffness >= 0`; input hỏng không tạo NaN.
-- Acceleration trái dấu với position và bằng zero tại equilibrium.
-- Exact state tại `t=0` khớp chính xác initial state.
-- Sau một phần tư chu kỳ với `x0=1, v0=0`, position gần zero và velocity gần `-2 m/s`.
-- Total energy của exact state không đổi trong tolerance.
-- Kéo mass giữ pointer capture cho tới khi nhả.
+- Ba đường ray và khối nhìn thấy được, không chỉ có công thức hay console.
+- Nghiệm chính xác nhận đúng x₀/v₀; vị trí cân bằng không bị nhầm với bức tường.
+- Khi m=1, k=4 thì ω=2 rad/s, chu kỳ π s.
+- Input đổi initial state làm đồng hồ về 0; resize không đổi đơn vị vật lý.
 
 ## Bài tập mở rộng
 
-Cho initial velocity khác zero và đánh dấu vị trí biên mà vật sẽ đạt tới. Hãy suy ra amplitude từ energy thay vì thử quét thời gian.
+Đổi mass từ 1 lên 4 nhưng giữ k=4. Dự đoán chu kỳ mới trước khi chạy. Vì ω giảm từ 2 xuống 1, chu kỳ phải tăng gấp đôi.
 
-Bài tiếp theo sẽ đặt Explicit Euler lên lane đỏ. Nó chỉ tính acceleration một lần mỗi step, rất rẻ, nhưng harmonic oscillator sẽ phơi bày cái giá của cách lấy đạo hàm ở đầu bước.
+[Sang bài 2 — Explicit Euler](/projects/integrator-race/02-explicit-euler-thi-sinh-dau-tien).

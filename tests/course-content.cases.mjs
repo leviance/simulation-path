@@ -6,6 +6,16 @@ import { lessonSections } from "../lib/lesson-sections.mjs";
 import { lessonSectionUsages, mdxProse } from "../scripts/mdx-contracts.mjs";
 import { workspace, render, authoredLessons } from "./site-support.mjs";
 
+const hasTranslatedMathIdentifier = (source) =>
+  [...source.matchAll(/\$\$([\s\S]*?)\$\$/g)].some(([, math]) =>
+    /(?:vận tốc|bán kính|tỉ lệ)/i.test(math),
+  );
+
+test("math terminology validation reads formulas, not prose between two formulas", () => {
+  assert.equal(hasTranslatedMathIdentifier("$$x=v t$$\nTỉ lệ sai số.\n$$E=2$$"), false);
+  assert.equal(hasTranslatedMathIdentifier("$$x=\\text{vận tốc} t$$"), true);
+});
+
 test("every lesson follows the content contract without escaped formatting artifacts", async () => {
   for (const lesson of await authoredLessons()) {
     const source = await readFile(
@@ -57,9 +67,9 @@ test("every lesson follows the content contract without escaped formatting artif
       /(?:Unit phép kiểm thử|phép phép biến đổi|việc lấy mẫu rate|khung hình-based|circular bút|integer lưới|con trỏ điểm neo|event vòng lặp|main vòng lặp)/i,
       `${lesson.file} contains machine-translated phrasing`,
     );
-    assert.doesNotMatch(
-      source,
-      /\$\$[^$]*(?:vận tốc|bán kính|tỉ lệ)[^$]*\$\$/i,
+    assert.equal(
+      hasTranslatedMathIdentifier(source),
+      false,
       `${lesson.file} translates a mathematical identifier`,
     );
     const experiment = source.slice(byRole.experiments.end, byRole.validation.start);
@@ -231,6 +241,7 @@ test("interactive labs expose only the controls needed by each lesson", async ()
     ["integrator-race/05-cho-ba-integrator-chay-lockstep.mdx", "integrator-lockstep"],
     ["integrator-race/06-do-phase-error-va-energy-drift.mdx", "integrator-energy"],
     ["integrator-race/07-stress-test-convergence-va-nghiem-thu.mdx", "integrator-validation"],
+    ["integrator-race/08-do-runtime-va-hoan-thien-cuoc-dua.mdx", "integrator-benchmark"],
     ["collision-tank/01-dung-be-va-dan-bong-deterministic.mdx", "collision-scene"],
     ["collision-tank/02-cho-bong-chuyen-dong-fixed-timestep.mdx", "collision-motion"],
     ["collision-tank/03-xu-ly-va-cham-voi-tuong.mdx", "collision-walls"],

@@ -1,106 +1,286 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đo sai số trong phase space và energy drift
+# Đo sai số trạng thái và độ lệch năng lượng
 
 ## Vấn đề cần giải quyết
 
-Một khối có thể đứng gần exact position nhưng chạy sai hướng. Ngược lại, một solver có position lệch vì chậm pha dù amplitude và energy vẫn hợp lý. Chỉ nhìn khoảng cách ngang tại một frame không đủ để phân biệt các trường hợp đó.
+Nhìn ba khối chạy cạnh nhau giúp phát hiện sai lệch lớn, nhưng chưa đủ để kết luận. Một khối có thể ở đúng x mà sai v; một phương pháp có thể giữ năng lượng gần đúng nhưng lệch nhịp dao động.
 
-Ta cần ba phép đo có câu hỏi riêng: position error hỏi “lệch vị trí bao nhiêu?”, phase-space error hỏi “toàn bộ state lệch bao nhiêu?”, energy drift hỏi “solver đã tự thêm hoặc làm mất bao nhiêu phần năng lượng?”. Đại lượng thứ hai không phải một góc phase; nó là khoảng cách giữa hai điểm trong phase space đã chuẩn hóa.
+Ta sẽ ghi state sau từng bước physics, đo bằng cùng một nghiệm chính xác rồi vẽ ba loại đồ thị. Chạy lại một frame đang pause không được tạo thêm mẫu.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ở thời gian của numerical state, lấy exact state $(x_e,v_e)$. Position error là $|x_n-x_e|$. Với phase-space error, không thể cộng trực tiếp mét và mét/giây. Khi $\omega>0$, ta chia velocity difference cho angular frequency:
+Sai số vị trí là |x_num−x_exact|. Muốn so cả state, phải xử lý việc x mang mét còn v mang m/s. Với ω>0, chia độ lệch vận tốc cho ω để cùng có đơn vị mét:
 
 $$
-e_{phase\ space}=\sqrt{(x_n-x_e)^2+\left(\frac{v_n-v_e}{\omega}\right)^2}
+e_s=\sqrt{(x_{\rm num}-x_{\rm exact})^2+
+\left(\frac{v_{\rm num}-v_{\rm exact}}{\omega}\right)^2}.
 $$
 
-Cả hai thành phần lúc này đều mang mét. Relative energy drift là:
+Đây là **sai số trạng thái trong phase space**, không phải sai số góc pha. Nó chỉ có nghĩa theo cách chuẩn hóa này khi ω>0. Nếu k=0, hiển thị “không xác định” cho metric đó; vẫn có thể xem sai số x riêng.
 
-$$
-d_E=\frac{E_n-E_0}{E_0}
-$$
-
-Dấu dương nghĩa là solver bơm energy; dấu âm nghĩa là solver làm mất energy.
+Độ lệch năng lượng tương đối là (E−E₀)/E₀. Dương nghĩa là thừa năng lượng; âm nghĩa là thiếu. Khi E₀=0, tỉ số không xác định, không trả 0 để làm đẹp bảng. Đồ thị dùng tỉ số, không dùng phần trăm: 0.1 tương đương 10%.
 
 <InteractiveLab demo="integrator-race" mode="integrator-energy" />
 
-Chuyển Graph sang Energy drift. Chạy nhanh nhiều lần ở `dt=1/15 s`. Đừng chỉ hỏi đường nào gần zero nhất: xem đường tăng một chiều hay dao động bị chặn, rồi đối chiếu với phase-space error.
-
 ## Viết code từng bước
 
-### Bước 1 — Lấy exact state ở cùng elapsed
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ, không dán thêm hàm trùng tên. **Checkpoint 06 là bản tham khảo sau bài này**; build target checkpoint chỉ chạy mã mẫu, không kiểm phần bạn vừa sửa trong Starter.
 
-```cpp title="include/lab.hpp — không so lệch đồng hồ"
-const OscillatorState exact = analyticOscillatorState(initial, parameters, numerical.elapsed);
-const double positionDifference = numerical.position - exact.position;
-const double velocityDifference = numerical.velocity - exact.velocity;
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_starter --parallel 2
+.\build\Debug\project_23_starter.exe
 ```
 
-Nếu exact dùng render time còn numerical dùng fixed-step time, phép đo đã chứa cả phần accumulator chưa chạy. Dùng `numerical.elapsed` loại sai lệch đó.
+### Bước 1 — Đo so với đúng thời điểm
 
-### Bước 2 — Đưa velocity difference về đơn vị mét
+Thêm kiểu dữ liệu và hàm dưới vào lab.hpp:
 
-```cpp title="include/lab.hpp — phase-space error có đơn vị nhất quán"
-const double omega = angularFrequency(parameters);
-double phaseSpaceError = std::numeric_limits<double>::quiet_NaN();
-if (omega > kIntegratorEpsilon) {
-    const double scaledVelocityDifference = velocityDifference / omega;
-    phaseSpaceError = std::hypot(positionDifference, scaledVelocityDifference);
+```cpp title="include/lab.hpp — giá trị chưa xác định không mang zero giả"
+struct IntegratorMetrics {
+    double positionError = std::numeric_limits<double>::quiet_NaN();
+    double phaseSpaceError = std::numeric_limits<double>::quiet_NaN();
+    double relativeEnergyDrift = std::numeric_limits<double>::quiet_NaN();
+};
+```
+
+
+```cpp title="include/lab.hpp — so cả x, v và năng lượng"
+inline IntegratorMetrics integratorMetrics(const OscillatorState& numerical, const OscillatorState& initial, const OscillatorParameters& parameters) {
+    if (!finiteState(numerical) || !finiteState(initial) || !validParameters(parameters) || numerical.elapsed < initial.elapsed) {
+        return {};
+    }
+    const OscillatorState exact = analyticOscillatorState(initial, parameters, numerical.elapsed - initial.elapsed);
+    const double positionDifference = numerical.position - exact.position;
+    const double velocityDifference = numerical.velocity - exact.velocity;
+    const double omega = angularFrequency(parameters);
+    IntegratorMetrics metrics;
+    metrics.positionError = std::abs(positionDifference);
+    if (omega > 0.0) {
+        metrics.phaseSpaceError = std::hypot(positionDifference, velocityDifference / omega);
+    }
+    const double initialEnergy = oscillatorEnergy(initial, parameters);
+    if (initialEnergy > 0.0 && std::isfinite(initialEnergy)) {
+        metrics.relativeEnergyDrift = (oscillatorEnergy(numerical, parameters) - initialEnergy) / initialEnergy;
+    }
+    return metrics;
 }
 ```
 
-Khi stiffness bằng zero, $\omega=0$ và phép chuẩn hóa không tồn tại. Hàm trả `NaN` cho riêng metric này để UI hiện “không áp dụng”; nó không trộn mét với mét/giây thành một con số có vẻ hợp lệ.
+Nghiệm chính xác nhận numerical.elapsed trừ mốc initial.elapsed. Không lấy thời gian đồng hồ máy làm t đối chứng.
 
-### Bước 3 — Giữ dấu của energy drift
+### Bước 2 — Ghi một mẫu cho mỗi state physics
 
-```cpp title="include/lab.hpp — drift tương đối với initial energy"
-const double initialEnergy = oscillatorEnergy(initial, parameters);
-double relativeEnergyDrift = 0.0;
-if (initialEnergy > kIntegratorEpsilon) {
-    relativeEnergyDrift = (oscillatorEnergy(numerical, parameters) - initialEnergy) / initialEnergy;
+Trong scene.hpp, thêm HistorySample trước Scene:
+
+```cpp title="include/scene.hpp — một hàng gồm ba làn và nghiệm đúng"
+struct HistorySample {
+    double time = 0.0;
+    double exactPosition = 0.0;
+    std::array<double, 3> positions{};
+    std::array<double, 3> errors{};
+    std::array<double, 3> energies{};
+};
+```
+
+Thêm member này vào Scene:
+
+```cpp title="include/scene.hpp — bộ đệm lịch sử có giới hạn"
+std::deque<HistorySample> history;
+```
+
+Thêm recordSample sau Scene và trước resetExperiment:
+
+```cpp title="include/scene.hpp — không lấy mẫu trong renderer"
+inline void recordSample(Scene& scene) {
+    HistorySample sample;
+    sample.time = scene.elapsed;
+    sample.exactPosition = analyticOscillatorState(scene.initial, scene.parameters, scene.elapsed).position;
+    for (std::size_t index = 0; index < scene.race.lanes.size(); ++index) {
+        const auto& state = scene.race.lanes[index].state;
+        const auto metrics = integratorMetrics(state, scene.initial, scene.parameters);
+        sample.positions[index] = state.position;
+        sample.errors[index] = metrics.phaseSpaceError;
+        sample.energies[index] = metrics.relativeEnergyDrift;
+    }
+    scene.history.push_back(sample);
+    if (scene.history.size() > kHistoryLimit) {
+        scene.history.pop_front();
+    }
 }
 ```
 
-Không lấy `abs` ở đây. `+5%` và `-5%` có cùng độ lớn nhưng mô tả hai hành vi khác nhau.
+Trong resetExperiment, sau khi đã reset race và elapsed, thêm:
 
-### Bước 4 — Trả ba câu trả lời tách biệt
-
-```cpp title="include/lab.hpp — metrics không gộp thành một điểm số"
-return {std::abs(positionDifference), phaseSpaceError, relativeEnergyDrift};
+```cpp title="include/scene.hpp — giữ cả mẫu ban đầu t=0"
+scene.history.clear();
+recordSample(scene);
 ```
 
-Không tạo một “score” chung bằng cách cộng error và cost. Người dùng cần thấy trade-off, không cần một con số che mất tiêu chí.
+Trong stepScene, ghi mẫu ngay sau khi tăng elapsed:
+
+```cpp title="include/scene.hpp — giữ cả từng bước khi chạy nhiều substep"
+scene.elapsed += dt;
+++scene.substeps;
+recordSample(scene);
+```
+
+Bộ đệm giữ 1.201 mẫu gần nhất. Đây là giới hạn hiển thị, không phải thay đổi dt hay bỏ bước physics.
+
+### Bước 3 — Đưa history thành đồ thị có thang đo rõ ràng
+
+Thêm các helper sau vào view.hpp trước renderScene. Cả ba đường dùng **cùng một thang dọc**. Chỗ không có metric hữu hạn thì không được vẽ thành 0:
+
+```cpp title="include/view.hpp — scale và các đường dữ liệu"
+struct GraphScale {
+    double extent = 1.0;
+    double firstTime = 0.0;
+    double lastTime = 1.0;
+};
+
+inline double graphValue(const HistorySample& sample, Graph graph, std::size_t lane) {
+    if (graph == Graph::error) {
+        return sample.errors[lane];
+    }
+    if (graph == Graph::energy) {
+        return sample.energies[lane];
+    }
+    return sample.positions[lane];
+}
+
+inline GraphScale graphScale(const Scene& scene) {
+    GraphScale scale;
+    double largest = 1e-6;
+    for (const auto& sample : scene.history) {
+        if (scene.graph == Graph::position) {
+            largest = std::max(largest, std::abs(sample.exactPosition));
+        }
+        for (std::size_t index = 0; index < 3; ++index) {
+            const double value = graphValue(sample, scene.graph, index);
+            if (std::isfinite(value)) {
+                largest = std::max(largest, std::abs(value));
+            }
+        }
+    }
+    scale.extent = largest * 1.1;
+    if (!scene.history.empty()) {
+        scale.firstTime = scene.history.front().time;
+        scale.lastTime = std::max(scale.firstTime + fixedDelta(scene), scene.history.back().time);
+    }
+    return scale;
+}
+
+inline double graphY(double value, const Scene& scene, const GraphScale& scale) {
+    if (scene.graph == Graph::error) {
+        return 650.0 - value / scale.extent * 210.0;
+    }
+    return 545.0 - value / scale.extent * 105.0;
+}
+
+inline void drawGraph(Framebuffer& image, const Scene& scene) {
+    const auto scale = graphScale(scene);
+    if (scene.debug) {
+        for (int y = 440; y <= 650; y += 35) {
+            drawLine(image, 40, y, 1060, y, kGrid);
+        }
+    }
+    for (std::size_t index = 1; index < scene.history.size(); ++index) {
+        const auto& a = scene.history[index - 1];
+        const auto& b = scene.history[index];
+        const double x0 = 40.0 + 1020.0 * (a.time - scale.firstTime) / (scale.lastTime - scale.firstTime);
+        const double x1 = 40.0 + 1020.0 * (b.time - scale.firstTime) / (scale.lastTime - scale.firstTime);
+        if (scene.graph == Graph::position) {
+            drawLine(image, x0, graphY(a.exactPosition, scene, scale), x1, graphY(b.exactPosition, scene, scale), kExact);
+        }
+        for (std::size_t lane = 0; lane < 3; ++lane) {
+            drawLine(image, x0, graphY(graphValue(a, scene.graph, lane), scene, scale), x1, graphY(graphValue(b, scene.graph, lane), scene, scale), kColors[lane]);
+        }
+    }
+}
+```
+
+Cuối renderScene, sau khi vẽ các làn, gọi:
+
+```cpp title="include/view.hpp — vẽ history đã được physics ghi trước đó"
+drawGraph(image, scene);
+```
+
 
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy checkpoint có metrics và graph"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_23_checkpoint_6
-./build/Debug/project_23_checkpoint_6.exe
+Trong presentFramebuffer, thay dòng placeholder “First understand each step…” bằng phần nhãn và thang đo:
+
+```cpp title="include/presentation.hpp — ghi đơn vị và cửa sổ thời gian"
+const char* label = "POSITION x(t), m | white exact, lane 1 red, lane 2 green, lane 3 purple";
+if (scene.graph == Graph::error) {
+    label = "STATE ERROR sqrt(dx^2 + (dv/omega)^2), m | not an angle error";
+}
+if (scene.graph == Graph::energy) {
+    label = "RELATIVE ENERGY (E-E0)/E0 | signed ratio, NOT percent | undefined if E0=0";
+}
+const auto scale = graphScale(scene);
+if (!text(renderer, 40, 416, label)) {
+    return false;
+}
+std::snprintf(value, sizeof(value), "Vertical extent %.3e | time %.3f .. %.3f s | last %zu physics samples (limit %zu)", scale.extent, scale.firstTime, scale.lastTime, scene.history.size(), kHistoryLimit);
+if (!text(renderer, 40, 670, value)) {
+    return false;
+}
 ```
 
-Nhấn G để đổi position/energy graph. History chỉ lấy mẫu định kỳ, không phải mỗi pixel hoặc mỗi render call; state vật lý vẫn được cập nhật ở mọi fixed step.
+Bản đầy đủ ở cuối bài còn vẽ ba hàng metrics bên dưới đồ thị. Có thể đối chiếu hoặc chép nguyên hàm presentFramebuffer để ghép phần trình bày; nó chỉ đọc state, không tự ghi history.
+
+Thêm phím G vào main.cpp để chuyển position → error → energy:
+
+```cpp title="src/main.cpp — đổi loại đồ thị"
+if (event.key.key == SDLK_G) {
+    scene.graph = static_cast<lab::Graph>((static_cast<int>(scene.graph) + 1) % 3);
+}
+```
+
+Thay requestFastRun đang là stub trong scene.hpp:
+
+```cpp title="include/scene.hpp — yêu cầu một job hữu hạn, không khóa event loop"
+inline void requestFastRun(Scene& scene) {
+    stopJobs(scene);
+    if (scene.warning[0] == '\0') {
+        scene.fastRemaining = static_cast<int>(std::lround(20.0 / fixedDelta(scene)));
+    }
+}
+```
+
+Và nối Enter:
+
+```cpp title="src/main.cpp — tua thêm cùng một khoảng thời gian mô phỏng"
+if (event.key.key == SDLK_RETURN) {
+    lab::requestFastRun(scene);
+}
+```
+
+
+advanceFrame đã chỉ chạy tối đa 128 bước tua nhanh mỗi lần gọi. Vì recordSample nằm trong stepScene, từng bước đó đều được ghi, không chỉ state cuối mỗi frame. Sau khi job xong, thí nghiệm vẫn pause.
+
+Đường Euler có thể làm thang dọc rộng ra và các đường kia nằm sát 0. Đó không phải bằng chứng chúng chính xác tuyệt đối; đọc số đo scientific notation và ghi lại thang dọc trước khi so hai ảnh.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tính `hypot(dx, dv)` mà không chia omega. Đổi stiffness và quan sát phase-space error thay đổi đơn vị ngầm; hoàn tác cách cộng mét với m/s.
-2. Dùng `abs(E-E0)` rồi kết luận solver nào bơm năng lượng. Dấu đã bị xóa; hoàn tác để readout giữ tăng/giảm.
-3. Lấy exact ở `performance.now()` thay vì numerical elapsed. Pause rồi single-step sẽ làm error nhảy không liên quan solver; hoàn tác.
+1. Chuyển recordSample sang renderScene rồi pause. Resize hoặc vẽ lại sẽ thêm các mẫu trùng dù physics không tiến. Khôi phục vị trí ghi trong stepScene.
+
+2. Dùng frame time làm thời gian đối chứng. Chạy nhanh 20 giây simulation gần như ngay lập tức, bạn sẽ so t mô phỏng với một wall-clock rất ngắn.
+
+3. Đặt x₀=v₀=0. Năng lượng tuyệt đối bằng 0, nhưng relative drift phải ghi không xác định. Đừng gán 0 cho một tỉ số 0/0.
 
 ## Tự kiểm tra kết quả
 
-- Tất cả metrics bằng zero tại initial state.
-- Exact state luôn được tính ở `numerical.elapsed`.
-- Phase-space error chuẩn hóa `dv` bằng omega trước `hypot` và báo không áp dụng khi `omega=0`.
-- Energy drift giữ dấu và được chia initial energy.
-- Euler dài hạn có drift dương tăng mạnh ở dt thô.
-- Verlet energy dao động quanh ban đầu và bị chặn trong preset ổn định.
-- Position graph và energy graph dùng cùng history timestamps.
+- History có mẫu t=0, mỗi bước physics và state cuối của job tua nhanh.
+- Render/pause không thêm mẫu; đồ thị không chứa hai cấu hình khác nhau.
+- Sai số state đã đưa dv/ω về cùng đơn vị mét với dx.
+- Khi ω=0 hoặc E₀=0, metric tương ứng không giả thành zero.
+- Ba đường dùng cùng scale, có đơn vị và khoảng thời gian hiện trên đồ thị.
 
 ## Bài tập mở rộng
 
-Thêm phase plot với trục X là `position`, trục Y là `velocity/omega`. Dùng cùng màu ba lane và vẽ exact circle mờ; không thay thế các metrics hiện tại.
+Tạo hai state có cùng x nhưng khác v. Sai số vị trí có thể bằng 0 trong khi sai số trạng thái vẫn dương. Giải thích vì sao chỉ quan sát vị trí dễ bỏ sót lỗi.
 
-Bài cuối sẽ tự động hóa điều mắt thường vừa quan sát bằng convergence test và long-run stability test.
+[Sang bài 7 — Kiểm chứng solver](/projects/integrator-race/07-stress-test-convergence-va-nghiem-thu).

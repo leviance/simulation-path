@@ -7,13 +7,13 @@ const project = {
     "Project 09 — hiểu rằng thứ tự cập nhật có thể làm kết quả thay đổi",
   ],
   summary:
-    "Cho Explicit Euler, Velocity Verlet và RK4 tích phân cùng một harmonic oscillator trong lockstep, rồi so position, phase, energy drift, convergence và số lần tính lực thay vì chọn thuật toán chỉ bằng cảm giác.",
+    "Cho Euler, Velocity Verlet và RK4 giải cùng một hệ lò xo; nhìn chuyển động, đo sai số và năng lượng, rồi benchmark để hiểu cái giá của độ chính xác.",
   challenge: {
     timebox: "450–570 phút",
     mission:
       "Tự xây dựng một cuộc đua integrator bằng C++20 và SDL3. Ba khối có cùng mass, spring, initial position và fixed timestep phải được cập nhật song song bằng Explicit Euler, Velocity Verlet và RK4; nghiệm giải tích đóng vai trò trọng tài độc lập.",
     outcome:
-      "Một cửa sổ có ba lane oscillator, exact ghost, graph position/energy và bảng số liệu trên title bar. Người dùng có thể kéo mass để chọn amplitude, đổi stiffness cùng fixed dt, pause, single-step, chạy nhanh một khoảng thời gian và quan sát sai số/chi phí của từng integrator.",
+      "Một dashboard SDL3 có ba làn lò xo chuyển động, khung trắng làm đối chứng, đồ thị vị trí/sai số/năng lượng và số đo ngay trong cửa sổ. Kéo khối để chọn x₀, thay dt hoặc integrator của mỗi làn, chạy từng bước và đo runtime bằng đồng hồ thật.",
     requirements: [
       "Mô hình harmonic oscillator bằng `x'' = -(k/m)x`, kiểm `mass > 0`, `stiffness >= 0` và giữ đơn vị nhất quán.",
       "Cài nghiệm giải tích cho cả position và velocity từ cùng initial state để làm reference không phụ thuộc integrator.",
@@ -22,9 +22,10 @@ const project = {
       "Cài classical RK4 trên first-order phase state `(x,v)` với bốn derivative evaluation và weights 1-2-2-1.",
       "Cho ba integrator chạy lockstep: cùng fixed dt, cùng số step, cùng initial state và cùng oscillator parameters.",
       "Đo position error, phase-space error đã chuẩn hóa theo angular frequency và relative energy drift tại cùng elapsed time.",
-      "Theo dõi số acceleration/force evaluation để so accuracy với computational cost thay vì chỉ so error.",
+      "Đếm force evaluation và đo runtime thật bằng benchmark riêng: cùng initial state, cùng N bước mỗi trajectory, warmup và median của 5 batch; không tính vẽ hay ghi history vào thời gian solver.",
       "Có nhiều mức fixed dt để thử từ nhẹ đến khắc nghiệt; reset toàn bộ race khi đổi initial condition, stiffness hoặc dt để thí nghiệm chỉ thay một biến.",
-      "Kèm starter, bảy checkpoint chạy độc lập, final, README và CTest không mở SDL window.",
+      "Chọn lại integrator cho từng làn khi ứng dụng đang mở; mỗi lần đổi phải reset cả ba làn. Chế độ sạch vẫn giữ các khối, khung đối chứng và đồ thị.",
+      "Kèm Starter, tám checkpoint chạy độc lập, final, README và CTest không mở SDL window.",
     ],
     constraints: [
       "Không dùng thư viện ODE, physics engine hoặc solver có sẵn.",
@@ -32,7 +33,8 @@ const project = {
       "Không gọi ba integrator với ba `dt` hoặc số step khác nhau trong cùng một race.",
       "Không gọi Velocity Verlet là position Verlet; project này lưu cả position lẫn velocity và dùng hai acceleration evaluation.",
       "Không gộp bốn stage RK4 thành một biểu thức không tên; mỗi `k1`–`k4` phải đọc và kiểm tra được.",
-      "Không kết luận integrator tốt hơn chỉ từ một ảnh hoặc một ngưỡng error; phải xét stability, convergence và evaluation cost.",
+      "Không coi số lần tính lực là runtime, không lấy error chia cho số lần tính lực để xếp hạng. Benchmark có giới hạn workload, chạy từng batch ngắn và hủy được khi đổi cấu hình.",
+      "Không kết luận một integrator luôn tốt hơn chỉ từ một ảnh: phải xét stability, convergence, năng lượng và chi phí đo được. Số đo JavaScript không đại diện cho C++.",
     ],
     definitionOfDone: [
       "Analytic state đúng initial condition tại t=0, có angular frequency `sqrt(k/m)` và bảo toàn total energy trong tolerance.",
@@ -41,11 +43,13 @@ const project = {
       "Với dt đủ nhỏ, cả ba tiến gần analytic state; giảm dt làm error của từng phương pháp giảm.",
       "Trong bài toán oscillator dài hạn, Euler thể hiện energy growth, Velocity Verlet giữ energy bị chặn và RK4 có phase/state error nhỏ hơn tại cùng dt hợp lý.",
       "Phase-space error chỉ được tính khi angular frequency dương; velocity difference được chia cho angular frequency trước khi ghép với position difference.",
-      "Canvas xử lý DPR, pointer capture, reduced motion và controls bằng bàn phím; graph có giải thích văn bản thay thế.",
-      "Starter, bảy checkpoint và final build sạch warning ở Debug/Release; CTest cùng Canvas math tests đều vượt qua.",
+      "History ghi sau từng bước physics, gồm t=0 và bước cuối khi tua nhanh; chỉ giữ 1.201 mẫu gần nhất để bộ nhớ có giới hạn. Không ghi thêm mẫu khi pause hoặc vẽ lại.",
+      "Benchmark thật cho ba phương pháp, cùng workload và có checksum; không assert một thứ hạng runtime phụ thuộc phần cứng. Đổi cấu hình hủy số đo cũ.",
+      "Canvas và SDL dùng bảng logic 1100×820; input không bị nhân DPR hai lần. Kéo giữ offset, nhận mẫu thả cuối, bỏ pointer khác và nhả capture khi blur/resize/reset.",
+      "Starter, tám checkpoint và final build sạch warning ở Debug/Release; CTest, Canvas math tests, kiểm route và ZIP đều đạt.",
     ],
   },
-  duration: "14–16 giờ",
+  duration: "14–18 giờ",
   objectives: [
     "Hiểu từng integrator như một quy tắc lấy mẫu derivative, không phải tên gọi để học thuộc",
     "Đánh giá numerical method bằng accuracy, stability, energy behavior và computational cost",
@@ -105,7 +109,7 @@ const project = {
     {
       id: "p23-l06",
       slug: "06-do-phase-error-va-energy-drift",
-      title: "Đo sai số trong phase space và energy drift",
+      title: "Đo sai số trạng thái và độ lệch năng lượng",
       summary:
         "So numerical state với exact state trong phase space, chuẩn hóa velocity và vẽ energy drift theo thời gian.",
       order: 6,
@@ -115,11 +119,21 @@ const project = {
     {
       id: "p23-l07",
       slug: "07-stress-test-convergence-va-nghiem-thu",
-      title: "Stress test, convergence và nghiệm thu",
+      title: "Kiểm chứng solver trước khi đo tốc độ",
       summary:
-        "Thử nhiều dt, đo error per evaluation, kiểm convergence order cùng long-run stability và hoàn thiện controls.",
+        "Giữ cùng thời điểm để kiểm bậc hội tụ, dùng công thức năng lượng độc lập và chạy CTest ở Debug/Release.",
       order: 7,
       estimatedMinutes: 120,
+      demoId: "integrator-race",
+    },
+    {
+      id: "p23-l08",
+      slug: "08-do-runtime-va-hoan-thien-cuoc-dua",
+      title: "Đo runtime và hoàn thiện cuộc đua",
+      summary:
+        "Tách benchmark khỏi render, warmup rồi đo từng batch có thể hủy; đặt sai số cạnh chi phí thực và chạy toàn bộ mã hoàn chỉnh.",
+      order: 8,
+      estimatedMinutes: 110,
       demoId: "integrator-race",
     },
   ],

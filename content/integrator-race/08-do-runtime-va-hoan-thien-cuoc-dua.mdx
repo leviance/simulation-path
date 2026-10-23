@@ -1,0 +1,316 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo runtime và hoàn thiện cuộc đua
+
+## Vấn đề cần giải quyết
+
+Ở bài 7, ta đã biết cách phát hiện một solver sai. Giờ mới nên hỏi: để có kết quả chính xác hơn, máy phải làm thêm bao nhiêu việc, và mất bao nhiêu thời gian?
+
+Một bước Euler gọi hàm gia tốc một lần; Velocity Verlet gọi hai lần; RK4 gọi bốn lần. Nhưng **1/2/4 không phải số đo runtime**. Chi phí còn gồm các phép toán khác, kiểm tra dữ liệu, cách compiler tối ưu và máy đang chạy gì khác. Bài cuối sẽ đo thật, đặt kết quả cạnh sai số và hoàn thiện ứng dụng chạy độc lập.
+
+## Hiểu ý tưởng trước khi viết code
+
+Không đo một frame dashboard: frame còn chứa vẽ, upload texture, input và chờ màn hình. Ta cần một workload chỉ làm phép tích phân.
+
+Mỗi trajectory bắt đầu lại từ cùng initial state, chạy N=floor(2/dt) bước. Một batch lặp 16 trajectory như vậy. Không nối chúng thành một chuyến chạy dài: cách đó vừa đổi bài toán, vừa dễ làm Euler tràn số.
+
+Sau warmup, đo 5 batch bằng clock tăng đơn điệu, rồi lấy median. Thời gian một bước bằng thời gian batch chia số bước **thực sự đã chạy**. Checksum giữ kết quả tính còn được sử dụng; nó không phải số đo accuracy.
+
+C++ Debug không đại diện cho C++ Release; JavaScript trong Canvas càng không đại diện cho ứng dụng SDL3. Không viết test buộc RK4 luôn chậm hơn Verlet: thứ hạng còn phụ thuộc phần cứng và implementation.
+
+<InteractiveLab demo="integrator-race" mode="integrator-benchmark" />
+
+Bấm **Đo runtime**. Mỗi frame chỉ chạy một batch ngắn, nên vẫn có thể bấm Dừng job hoặc sửa cấu hình để hủy. Đổi dt khi đang đo: kết quả cũ phải bị bỏ, không được gắn vào thí nghiệm mới.
+
+## Viết code từng bước
+
+Tiếp tục sửa **starter/include** và **starter/src**. **Checkpoint 08 là bản tham khảo sau bài này**; chạy target tham khảo không kiểm chứng code trong Starter.
+
+```powershell title="Chạy mã đang viết trong Starter"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_starter --parallel 2
+.\build\Debug\project_23_starter.exe
+```
+
+### Bước 1 — Khóa workload và giữ kết quả
+
+Mở include/benchmark.hpp của Starter. File khung đã có include và namespace lab; thêm phần dưới vào namespace. runIntegrator được viết ở bài 7. Trong runBenchmarkWork, mỗi vòng bắt đầu từ config.initial, không từ state cuối của vòng trước.
+
+Trước hết khai báo cấu hình, viết workload và hàm lấy median. Mỗi lần chạy lại phải xuất phát từ cùng điều kiện đầu:
+
+
+```cpp title="include/benchmark.hpp — workload hữu hạn và clock thật"
+struct BenchmarkConfig {
+    OscillatorParameters parameters{};
+    OscillatorState initial{2.5, 0.0, 0.0};
+    double dt = 1.0 / 30.0;
+    int repetitions = 16;
+    int samples = 5;
+};
+
+struct BenchmarkWork {
+    double checksum = 0.0;
+    std::size_t steps = 0;
+    std::size_t forceEvaluations = 0;
+    bool valid = false;
+};
+
+inline bool validBenchmarkConfig(const BenchmarkConfig& config) {
+    return validStep(config.initial, config.parameters, config.dt) && config.dt >= 1.0 / 240.0 && config.dt <= 0.25 && config.repetitions >= 1 && config.repetitions <= 32 && config.samples >= 3 && config.samples <= 7;
+}
+
+// Mỗi trajectory bắt đầu lại từ cùng initial. Không nối hàng nghìn giây Euler.
+inline BenchmarkWork runBenchmarkWork(IntegratorKind kind, const BenchmarkConfig& config, int repetitions) {
+    BenchmarkWork work;
+    if (!validBenchmarkConfig(config) || repetitions < 1 || repetitions > 32) {
+        return work;
+    }
+    const auto expectedSteps = static_cast<std::size_t>(std::floor((2.0 + kIntegratorEpsilon) / config.dt));
+    // Mỗi trajectory phải đọc đầu vào lại; tránh hoist cả phép tính ra ngoài vòng lặp.
+    volatile double inputPosition = config.initial.position;
+    for (int repetition = 0; repetition < repetitions; ++repetition) {
+        OscillatorState initial = config.initial;
+        initial.position = inputPosition;
+        const auto run = runIntegrator(kind, initial, config.parameters, 2.0, config.dt);
+        if (run.steps != expectedSteps) {
+            return {};
+        }
+        work.checksum += run.state.position + 0.125 * run.state.velocity;
+        work.steps += run.steps;
+        work.forceEvaluations += run.forceEvaluations;
+    }
+    work.valid = std::isfinite(work.checksum) && work.steps > 0;
+    return work;
+}
+
+inline double median(std::vector<double> values) {
+    if (values.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    for (const double value : values) {
+        if (!std::isfinite(value) || value < 0.0) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    std::sort(values.begin(), values.end());
+    const std::size_t middle = values.size() / 2;
+    if (values.size() % 2 == 0) {
+        return 0.5 * values[middle - 1] + 0.5 * values[middle];
+    }
+    return values[middle];
+}
+
+```
+
+### Bước 2 — Tách warmup, khoảng đo và hiển thị
+
+Thêm phần còn lại ngay sau median. Job giữ cấu hình riêng, những batch đã đo và hạn chót. Mỗi lần gọi advanceBenchmark chỉ làm một phần việc rồi trả quyền điều khiển cho vòng lặp SDL:
+
+```cpp title="include/benchmark.hpp — warmup và đo từng batch"
+struct BenchmarkRow {
+    IntegratorKind kind = IntegratorKind::explicitEuler;
+    double microsecondsPerStep = 0.0;
+    double phaseSpaceError = 0.0;
+    BenchmarkWork work{};
+};
+
+struct BenchmarkJob {
+    BenchmarkConfig config{};
+    std::vector<BenchmarkRow> rows;
+    std::vector<double> timings;
+    bool running = false;
+    bool warmed = false;
+    bool failed = false;
+    std::chrono::steady_clock::time_point deadline{};
+};
+
+inline BenchmarkJob makeBenchmark(const BenchmarkConfig& config) {
+    BenchmarkJob job;
+    job.config = config;
+    job.running = validBenchmarkConfig(config);
+    job.failed = !job.running;
+    job.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    return job;
+}
+
+// Dùng checksum SAU khoảng đo để compiler không loại phần tính toán.
+inline volatile double benchmarkSink = 0.0;
+
+inline void advanceBenchmark(BenchmarkJob& job) {
+    if (!job.running) {
+        return;
+    }
+    if (std::chrono::steady_clock::now() > job.deadline) {
+        job.running = false;
+        job.failed = true;
+        return;
+    }
+    const IntegratorKind kind = kDefaultKinds[job.rows.size()];
+    if (!job.warmed) {
+        const auto warmup = runBenchmarkWork(kind, job.config, 3);
+        benchmarkSink = warmup.checksum;
+        job.warmed = warmup.valid;
+        job.running = warmup.valid;
+        job.failed = !warmup.valid;
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const auto work = runBenchmarkWork(kind, job.config, job.config.repetitions);
+    const auto end = std::chrono::steady_clock::now();
+    benchmarkSink = work.checksum;
+    if (!work.valid) {
+        job.running = false;
+        job.failed = true;
+        return;
+    }
+    const double microseconds = std::chrono::duration<double, std::micro>(end - start).count();
+    job.timings.push_back(microseconds / static_cast<double>(work.steps));
+    if (job.timings.size() == static_cast<std::size_t>(job.config.samples)) {
+        const auto run = runIntegrator(kind, job.config.initial, job.config.parameters, 2.0, job.config.dt);
+        const double error = integratorMetrics(run.state, job.config.initial, job.config.parameters).phaseSpaceError;
+        job.rows.push_back({kind, median(job.timings), error, work});
+        job.timings.clear();
+        job.warmed = false;
+        job.running = job.rows.size() < kDefaultKinds.size();
+    }
+    // Mỗi lần gọi chỉ đo một batch; vòng lặp SDL vẫn nhận được input giữa các batch.
+}
+```
+
+
+Những chỗ cần đọc kỹ:
+
+- Workload từ chối số vòng ngoài giới hạn; runIntegrator cũng kiểm số bước trước khi ép sang kiểu số nguyên.
+- Ba trajectory warmup không được thêm vào timings.
+- start/end chỉ bao quanh workload. Đọc checksum, tính sai số và thêm hàng vào bảng đều nằm ngoài khoảng đó.
+- timings lưu thời gian trên **mỗi bước**, không phải thời gian cả batch. steps và forceEvaluations được giữ riêng để kiểm lượng công việc.
+- advanceBenchmark trả về sau một batch. Deadline 5 giây chặn cả job kéo dài; giới hạn vòng lặp giữ từng lần gọi hữu hạn.
+
+Velocity Verlet ở đây cố ý tính cả a₀ và a₁ mỗi bước. Bản có cache a₁ cho bước sau sẽ có cost khác. Nếu thử tối ưu đó, coi là một thí nghiệm mới và đo lại, không sửa số đếm để kết quả trông đẹp hơn.
+
+### Bước 3 — Gắn job vào Scene và vòng lặp
+
+Trong Scene, thêm BenchmarkJob benchmark và bool showBenchmark=false. Reset phải bỏ cả job lẫn kết quả cũ. Khi blur, resize hoặc dừng, chỉ đặt running=false để không còn batch nào chạy tiếp.
+
+Hàm sau chụp cấu hình lúc bấm B, không sửa numerical state của ba làn:
+
+
+```cpp title="include/scene.hpp — bắt đầu một phép đo riêng"
+inline void requestBenchmark(Scene& scene) {
+    stopJobs(scene);
+    scene.showBenchmark = true;
+    scene.benchmark = makeBenchmark({scene.parameters, scene.initial, fixedDelta(scene), 16, 5});
+}
+```
+
+
+Ở đầu advanceFrame, trước nhánh tua nhanh và trước physics, thêm:
+
+
+```cpp title="include/scene.hpp — mỗi frame nhiều nhất một batch"
+if (scene.benchmark.running) {
+    advanceBenchmark(scene.benchmark);
+    return;
+}
+```
+
+
+Đừng dùng while(job.running) trong event handler: UI sẽ không nhận input cho tới khi cả job xong. Vòng lặp SDL phải lấy lại quyền điều khiển sau mỗi batch.
+
+Trong SDL_EVENT_KEY_DOWN, thêm phím B:
+
+
+```cpp title="src/main.cpp — gọi benchmark bằng bàn phím"
+if (event.key.key == SDLK_B) {
+    lab::requestBenchmark(scene);
+}
+```
+
+
+Ngay sau khi tính bool active ở cuối vòng lặp main.cpp, thêm trạng thái benchmark vào điều kiện. Nếu bỏ dòng này, job đã được tạo nhưng scene đang pause nên advanceFrame sẽ không bao giờ được gọi:
+
+```cpp title="src/main.cpp — job vẫn cần được tick khi physics pause"
+bool active = !scene.paused || scene.fastRemaining > 0;
+active = active || scene.benchmark.running;
+```
+
+Trong nhánh Space, thêm kiểm tra job ngay sau bool hadJob để hủy benchmark mà không vô tình cho physics chạy tiếp:
+
+```cpp title="src/main.cpp — Space chỉ dừng job đang chạy"
+hadJob = hadJob || scene.benchmark.running;
+```
+
+
+## Ghép các phần lại
+
+Bảng trong presentFramebuffer đọc job.rows để vẽ ngay trong cửa sổ, không dồn số liệu lên title bar. Mở toàn bộ include/presentation.hpp ở cuối bài để ghép cùng HUD đã có: tên solver, median µs/step, sai số tại T=N×dt, steps/batch và force evaluations/batch.
+
+Trong renderScene của view.hpp, thay lời gọi drawGraph cũ bằng nhánh dưới. Bảng benchmark dùng cùng vùng phía dưới ba lò xo; nếu vẫn vẽ đồ thị khi bảng đang mở, hai phần sẽ chồng lên nhau:
+
+```cpp title="include/view.hpp — nhường vùng đồ thị cho bảng benchmark"
+if (!scene.showBenchmark) {
+    drawGraph(image, scene);
+}
+```
+
+Trong nhánh phím G của main.cpp, thêm dòng sau để trở lại đồ thị khi người dùng đổi loại dữ liệu đang xem:
+
+```cpp title="src/main.cpp — trở lại đồ thị bằng phím G"
+scene.showBenchmark = false;
+```
+
+Thêm phím F:
+
+
+```cpp title="src/main.cpp — giữ cảnh khi ẩn debug"
+if (event.key.key == SDLK_F) {
+    scene.debug = !scene.debug;
+}
+```
+
+
+Chế độ sạch vẫn phải có ba lò xo, tên phương pháp, khung đối chứng và đồ thị. Chỉ ẩn chi tiết kiểm tra và lưới, không biến dashboard thành cửa sổ trống.
+
+Sau khi Starter đã có đủ tám bài, đổi include của target tests trong CMakeLists.txt bản ZIP để kiểm **chính mã bạn viết**:
+
+```cmake title="CMakeLists.txt — thay final/include bằng starter/include cho target tests"
+target_include_directories(project_23_tests PRIVATE starter/include)
+```
+
+```powershell title="Nghiệm thu Starter hoàn chỉnh ở hai cấu hình"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_23_starter project_23_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --target project_23_starter project_23_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Release\project_23_starter.exe
+```
+
+Nếu giữ final/include, CTest chỉ kiểm bản mẫu. Build tất cả checkpoint và final bằng cmake --build build --config Release --parallel 2 khi cần đối chiếu. Không lấy kết quả chạy bản mẫu làm bằng chứng cho bài làm chưa ghép xong.
+
+Bấm B trong SDL3 để đo C++ Release; bấm Đo runtime trong Canvas để đo JavaScript. So mỗi ngôn ngữ với chính nó, ghi dt, initial state, m/k, N và cấu hình build cùng kết quả.
+
+## Thử làm sai để hiểu đúng
+
+1. Đưa renderScene vào khoảng đo. Resize hoặc ẩn lưới làm runtime đổi dù solver không đổi. Hoàn tác, chỉ đo workload.
+
+2. Dùng state cuối trajectory trước làm initial của trajectory sau. Euler tích lũy năng lượng qua thời gian dài hơn; không còn cùng bài toán với hai phương pháp kia. Khôi phục reset mỗi trajectory.
+
+3. Trong khi đo, đổi k hoặc dt. Job phải dừng và bỏ bảng cũ, không xuất hiện hàng trộn cấu hình mới/cũ.
+
+4. Lấy error chia force evaluations để xếp hạng. Một phương pháp tính lực thừa sẽ được “thưởng” bằng mẫu số lớn. Đặt hai số cạnh nhau, hoặc chọn cùng accuracy mục tiêu rồi so runtime.
+
+## Tự kiểm tra kết quả
+
+- Mặc định có đủ ba solver và chuyển động thật. Phím 1/2/3 đổi solver mỗi làn; [ / ] đổi dt; mọi thay đổi đều reset cả ba làn.
+- Kéo giữ chỗ nắm, nhận mẫu thả cuối; resize/blur/reset nhả capture và pause.
+- History gồm t=0 và mỗi bước physics, kể cả tua nhanh; chỉ giữ 1.201 mẫu gần nhất.
+- Benchmark có clock thật, workload hữu hạn, warmup riêng, median 5 batch và checksum. Pause hoặc đổi cấu hình không để job cũ chạy tiếp.
+- CTest vẫn chạy ở Release. Expected chính đến từ nghiệm tính tay, công thức năng lượng và bậc hội tụ.
+- Gói ZIP có CMake, Starter, tám checkpoint, final và tests. Không cần trình duyệt để chạy C++.
+
+## Bài tập mở rộng
+
+Đặt mục tiêu sai số trạng thái dưới 10⁻³ m tại T=2 s. Tìm dt đủ nhỏ cho từng solver, kiểm cùng initial condition rồi đo runtime. Kết luận phải nêu accuracy, thời lượng và phần cứng; đừng chỉ nói “RK4 thắng”.
+
+Ở Project 24, ta sẽ dùng state, fixed step và invariant cho một bể bóng va chạm.

@@ -4,93 +4,119 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Euler dùng duy nhất acceleration ở đầu step. Với một lò xo, acceleration thay đổi ngay khi position thay đổi, nên giả định đó nhanh chóng lạc hậu. Velocity Verlet bổ sung một lần hỏi lực tại position mới và dùng cả hai đầu step để cập nhật velocity.
+Euler chỉ dùng thông tin ở đầu khoảng thời gian. Với lò xo, khi vật đã đi sang vị trí mới, lực cũng thay đổi. Velocity Verlet tận dụng thêm lực ở cuối bước để cập nhật vận tốc.
 
-Tên gọi cần chính xác: project này lưu cả `position` lẫn `velocity`, vì vậy ta đang cài **Velocity Verlet**, không phải một biến thể position-only rồi suy velocity bằng cách khác.
+Ta thêm phương pháp này vào làn xanh, còn giữ nguyên Euler để nhìn hai cách cập nhật cạnh nhau.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Quy trình phải diễn ra đúng thứ tự:
+Trước tiên tính a₀ tại vị trí cũ. Dự đoán x₁ có thêm phần dịch chuyển do gia tốc; từ x₁ tính được a₁. Cuối cùng lấy trung bình hai gia tốc:
 
 $$
-a_0=a(x_0)
+a_0=-\frac{k}{m}x_0,\quad x_1=x_0+h v_0+\frac12 a_0h^2,
+$$
+$$
+a_1=-\frac{k}{m}x_1,\quad v_1=v_0+\frac12(a_0+a_1)h.
 $$
 
-$$
-x_1=x_0+v_0\Delta t+\frac12a_0\Delta t^2
-$$
+Với dữ liệu x₀=1, v₀=0, k=4, m=1, h=0.1, các mốc lần lượt là **−4 → 0.98 → −3.92 → −0.396**. Bốn con số đó giúp tìm đúng dòng sai, thay vì chỉ nhìn khối có vẻ dao động ổn.
 
-$$
-a_1=a(x_1)
-$$
-
-$$
-v_1=v_0+\frac12(a_0+a_1)\Delta t
-$$
+Ở đây gia tốc chỉ phụ thuộc vị trí. Nếu thêm lực cản phụ thuộc vận tốc, không được tùy tiện thế vào công thức này rồi giữ nguyên lời giải thích.
 
 <InteractiveLab demo="integrator-race" mode="integrator-verlet" />
 
-Giữ `dt` ở 1/15 s và chạy nhanh. Lane xanh có thể lệch pha dần, nhưng amplitude không nổ như Euler. Chuyển graph sang Energy drift: đường Verlet thường dao động quanh mức ban đầu thay vì tăng một chiều.
-
 ## Viết code từng bước
 
-### Bước 1 — Tính acceleration đầu bước
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ, không dán thêm hàm trùng tên. **Checkpoint 03 là bản tham khảo sau bài này**; build target checkpoint chỉ chạy mã mẫu, không kiểm phần bạn vừa sửa trong Starter.
 
-```cpp title="include/lab.hpp — lần tính lực thứ nhất"
-const double accelerationStart = oscillatorAcceleration(current.position, parameters);
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_starter --parallel 2
+.\build\Debug\project_23_starter.exe
 ```
 
-Đây là $a_0$. Giữ tên `Start` giúp ta không vô tình dùng nó ở nơi cần acceleration cuối bước.
+### Bước 1 — Viết đúng chuỗi a₀, x₁, a₁, v₁
 
-### Bước 2 — Tìm position mới trước
+Thêm hàm vào lab.hpp, sau explicitEulerStep:
 
-```cpp title="include/lab.hpp — dự đoán position bằng Taylor bậc hai"
-const double position = current.position + current.velocity * deltaSeconds + 0.5 * accelerationStart * deltaSeconds * deltaSeconds;
+```cpp title="include/lab.hpp — hai lần tính gia tốc ở hai vị trí"
+inline IntegratorStepResult velocityVerletStep(const OscillatorState& current, const OscillatorParameters& parameters, double dt) {
+    if (!validStep(current, parameters, dt)) {
+        return {current, 0};
+    }
+    const double accelerationStart = oscillatorAcceleration(current.position, parameters);
+    const double position = current.position + current.velocity * dt + 0.5 * accelerationStart * dt * dt;
+    const double accelerationEnd = oscillatorAcceleration(position, parameters);
+    const double velocity = current.velocity + 0.5 * (accelerationStart + accelerationEnd) * dt;
+    return checkedStep(current, {position, velocity, current.elapsed + dt}, 2);
+}
 ```
 
-Hạng $\frac12a_0\Delta t^2$ là điểm khác dễ thấy so với Euler. Ta chưa sửa `current`; `position` chỉ là ứng viên ở cuối step.
+accelerationEnd phải đọc position vừa tính, không đọc current.position lần nữa. Đây là điểm khác biệt quan trọng, không phải chỉ thêm một hệ số 0.5.
 
-### Bước 3 — Hỏi lực tại position mới
+### Bước 2 — Cho dispatcher gọi phương pháp mới
 
-```cpp title="include/lab.hpp — lần tính lực thứ hai"
-const double accelerationEnd = oscillatorAcceleration(position, parameters);
-const double velocity = current.velocity + 0.5 * (accelerationStart + accelerationEnd) * deltaSeconds;
-return {{position, velocity, current.elapsed + deltaSeconds}, 2};
+Thay stepIntegrator bằng:
+
+```cpp title="include/lab.hpp — thêm case Velocity Verlet"
+inline IntegratorStepResult stepIntegrator(IntegratorKind kind, const OscillatorState& current, const OscillatorParameters& parameters, double dt) {
+    switch (kind) {
+    case IntegratorKind::explicitEuler:
+        return explicitEulerStep(current, parameters, dt);
+    case IntegratorKind::velocityVerlet:
+        return velocityVerletStep(current, parameters, dt);
+    default:
+        (void)parameters;
+        (void)dt;
+        return {current, 0};
+    }
+}
 ```
 
-Hai acceleration được lấy trung bình trước khi nhân `dt`. Vì `accelerationEnd` phụ thuộc `position`, không thể chuyển dòng này lên trước Bước 2.
 
-### Bước 4 — Giữ lane xanh độc lập
+### Bước 3 — Mở làn thứ hai
 
-Checkpoint 3 thêm `verletState`, nhưng không sửa `eulerState`. Cả hai bắt đầu từ cùng `initial`, còn mỗi lần update chỉ đọc state của lane mình. Đây là chuẩn bị cho lockstep chặt chẽ ở bài 5.
+Trong stepScene, đổi laneCount=1 thành 2. Không đổi dt hay điều kiện đầu riêng cho làn xanh:
+
+```cpp title="include/scene.hpp — hai phương pháp đã có"
+constexpr std::size_t laneCount = 2;
+```
+
+
+Trong view.hpp, cập nhật laneAvailable để hiện khối số ở hai làn:
+
+```cpp title="include/view.hpp — hai làn đã có numerical state"
+inline bool laneAvailable(std::size_t index) {
+    return index < 2;
+}
+```
+
 
 ## Ghép các phần lại
 
-```bash title="Terminal — so Euler và Velocity Verlet"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_23_checkpoint_3
-./build/Debug/project_23_checkpoint_3.exe
-```
+Chọn preset Nhìn rõ một bước, nhấn N và đọc a₀ → x₁ → a₁ → v₁ trong Canvas. Trên SDL3, làn xanh và làn đỏ đều nhận một dt; khung trắng là cùng một nghiệm ở cùng t.
 
-Ở `x=1`, `v=0`, `k/m=4`, `dt=0.1`, hãy tự tính trước: $a_0=-4$, $x_1=0.98$, $a_1=-3.92$, $v_1=-0.396$. CTest dùng đúng các con số này để bắt lỗi thứ tự.
+Mỗi bước của implementation này tốn hai lần gọi acceleration. Ta cố ý chưa cache a₁ cho bước sau để thứ tự tính rõ ràng. Đừng gọi nó là position Verlet: state ở đây luôn có cả x và v.
+
+Với hệ lò xo tuyến tính, Velocity Verlet ổn định khi `hω < 2`. Trong vùng đó, năng lượng thường dao động quanh giá trị ban đầu thay vì tăng đều như Euler; điều này không có nghĩa là năng lượng đúng tuyệt đối.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tính `accelerationEnd` từ `current.position` thay vì `position`. Hai lần gọi cho cùng một kết quả; dự đoán hành vi, chạy rồi hoàn tác.
-2. Bỏ hệ số `0.5` trong position. Một step nhỏ có thể vẫn trông hợp lý, nhưng test số cụ thể sẽ fail. Hoàn tác thay đổi.
-3. Chỉ trả cost bằng 1 vì “cùng một hàm acceleration”. Cost đếm số lần evaluation, không đếm số hàm khác nhau; hoàn tác về 2.
+1. Tính accelerationEnd ở current.position. Ví dụ một bước vẫn có x₁=0.98 nhưng v₁ trở thành −0.4. So từng mốc sẽ tìm được lỗi nhanh hơn so vị trí riêng lẻ.
+
+2. Bỏ hệ số 0.5 ở phần a₀h². Khối xanh nhận gia tốc dịch chuyển quá mạnh; kiểm lại expected x₁=0.98.
+
+3. Tăng k và dt để hω tiến gần 2. Đừng suy từ một thí nghiệm nhẹ rằng phương pháp này ổn định với mọi bước thời gian.
 
 ## Tự kiểm tra kết quả
 
-- Chuỗi phụ thuộc là `a0 → x1 → a1 → v1`, không đảo thứ tự.
-- Một step mẫu cho `x1=0.98`, `v1=-0.396`.
-- Force counter tăng 2 mỗi step.
-- Elapsed chỉ tăng một `dt`, không tăng lần nữa khi tính `a1`.
-- Ở cùng `dt` dài hạn, energy drift của Verlet bị chặn tốt hơn Euler.
-- Exact ghost vẫn chỉ làm đối chứng.
+- Một bước cho x₁=0.98, v₁=−0.396; force evaluations tăng 2.
+- a₁ dùng x₁, không dùng lại x₀.
+- Hai làn dùng cùng initial state và fixed dt.
+- Độ lệch năng lượng bị chặn trong vùng ổn định, không bị “sửa” bằng nghiệm chính xác.
 
 ## Bài tập mở rộng
 
-Lưu `accelerationEnd` của step hiện tại để dùng lại làm `accelerationStart` ở step sau. Đo lại cost thực tế và nêu điều kiện khiến cache hợp lệ; đừng áp dụng nếu parameters thay đổi giữa hai step.
+Tính lại một bước với v₀=1 thay vì 0. Dự đoán x₁ trước khi chạy, rồi kiểm a₁ và v₁. Ví dụ có v₀ khác 0 giúp lộ những dòng vô tình bỏ hạng vận tốc.
 
-Bài tiếp theo đi theo một hướng khác: RK4 đánh giá derivative tại bốn state tạm rồi lấy trung bình có trọng số.
+[Sang bài 4 — RK4](/projects/integrator-race/04-rk4-va-bon-lan-tham-slope).
