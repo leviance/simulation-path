@@ -4,53 +4,66 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-UV là tọa độ liên tục, còn texture là một array màu rời rạc. Trước khi nội suy UV trên triangle, ta cần một quy tắc hoàn chỉnh để biến `(u,v)` thành texel `(x,y)`: texture có kích thước bao nhiêu, UV bằng 1 đi đâu, và UV âm được clamp hay lặp lại?
+Bài trước mới cho ta một tấm bảng trống. Bây giờ cần một ảnh để dán lên nó. Ta tự tạo bàn cờ thay vì tải PNG để nhìn được toàn bộ dữ liệu: ảnh rộng bao nhiêu, mỗi pixel nằm ở đâu và UV chọn màu thế nào.
 
-Ta dùng checker procedural thay vì đọc file ảnh để phần cần học không bị lẫn với image decoder. Bàn cờ có cạnh sắc nên sai lệch UV hiện ra rất rõ ở các bài sau.
+Trong bài này, **chưa dán ảnh lên quad**. Ta xem ảnh nguồn riêng và viết một sampler có thể kiểm tra bằng vài giá trị cụ thể. Sau đó mới nối sampler vào rasterizer.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với texture `width × height`, nearest sampling làm hai bước:
+Một pixel trong texture gọi là **texel**, để phân biệt với pixel đầu ra của framebuffer. Ảnh nguồn 64 × 64 gồm 8 × 8 ô cờ; mỗi ô rộng 8 texel.
 
-1. đưa UV về miền hợp lệ theo address mode;
-2. đổi sang integer texel rồi clamp index cuối.
+UV là tọa độ liên tục. Với cách lấy mẫu nearest của project này, texel thứ x sở hữu khoảng `[x/width, (x+1)/width)`. Vì vậy:
 
-Clamp dùng `clamp(u,0,1)`. Repeat dùng `u-floor(u)`, nên `-0.1` trở thành `0.9` thay vì một số âm. Với UV đúng bằng 1, clamp chọn texel cuối còn repeat quay về texel 0.
+$$
+x=\min(\lfloor u\,width\rfloor,width-1),\qquad
+y=\min(\lfloor v\,height\rfloor,height-1)
+$$
+
+Ta xử lý UV ngoài miền **trước** khi chuyển sang integer. Clamp ép về `[0,1]`; repeat giữ phần lẻ `value−floor(value)`. Chẳng hạn `−0.1` repeat thành `0.9`, không phải một chỉ số âm.
 
 <InteractiveLab demo="perspective-texture" mode="texture-sampling" />
 
 ## Viết code từng bước
 
-### Bước 1 — Lưu texture theo row-major
+### Bước 1 — Tạo bộ nhớ ảnh nguồn
 
-```cpp title="include/lab.hpp — ảnh nguồn nằm hoàn toàn trong CPU memory"
+Thêm `include/sampler.hpp`, giữ nó độc lập với SDL:
+
+```cpp title="include/sampler.hpp — texture có kích thước và texel riêng"
 struct Texture2D {
     int width{};
     int height{};
-    std::vector<Color> texels{};
+    std::vector<Color> texels;
 };
 ```
 
-Giống framebuffer, texel `(x,y)` nằm tại `y*width+x`. Điểm khác là framebuffer là đích vẽ, còn texture là nguồn màu được sample.
+Trong `makeCheckerTexture`, kiểm kích thước trước khi cấp phát, rồi resize `texels` thành `width × height`. Không dùng chung mảng này với framebuffer: xoay quad không được làm thay đổi ảnh nguồn.
 
-### Bước 2 — Sinh bàn cờ bằng parity của cell
+### Bước 2 — Tô hai màu theo ô cờ
 
-```cpp title="include/lab.hpp — checker texture có số ô độc lập resolution"
-const int cellX = x * cells / width;
-const int cellY = y * cells / height;
-Color color{236.0, 240.0, 248.0};
-if ((cellX + cellY) % 2 != 0) {
-    color = {38.0, 48.0, 72.0};
+```cpp title="include/sampler.hpp — mỗi texel được ghi đúng một lần"
+for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+        const int cellX = x * cells / width;
+        const int cellY = y * cells / height;
+        Color color{236, 240, 248};
+        if ((cellX + cellY) % 2 != 0) {
+            color = {38, 48, 72};
+        }
+        texture.texels[std::size_t(y) * std::size_t(width) + std::size_t(x)] = color;
+    }
 }
-texture.texels[std::size_t(y) * std::size_t(width) + std::size_t(x)] = color;
 ```
 
-Texture mặc định 64×64 nhưng có 8×8 ô. Resolution và số checker cell là hai khái niệm khác nhau; mỗi ô hiện rộng tám texel.
+`cellX` và `cellY` là vị trí **ô cờ**, không phải texel. Chẵn thì sáng, lẻ thì tối. Dòng cuối vẫn là row-major quen thuộc từ Project 01. Hai màu cố định giúp kết quả không phụ thuộc light/dark theme của website.
 
-### Bước 3 — Address UV trước khi chọn texel
+### Bước 3 — Đưa UV về miền được phép
 
-```cpp title="include/lab.hpp — clamp hoặc repeat có tên rõ"
+```cpp title="include/sampler.hpp — clamp và repeat có quy ước rõ ràng"
 inline double addressCoordinate(double value, AddressMode mode) {
+    if (!std::isfinite(value)) {
+        return 0;
+    }
     if (mode == AddressMode::clamp) {
         return std::clamp(value, 0.0, 1.0);
     }
@@ -58,46 +71,49 @@ inline double addressCoordinate(double value, AddressMode mode) {
 }
 ```
 
-Không dùng `%` trực tiếp với số âm. Công thức phần thập phân dương làm `-1.1`, `-0.1` và `0.9` cùng trỏ tới một vị trí lặp.
+Không dùng `%` với số nguyên sau khi nhân UV: bạn sẽ đánh mất phần lẻ và xử lý số âm sai. Sampler còn từ chối NaN/infinity trước khi đọc mảng; việc `addressCoordinate` trả 0 cho input không hữu hạn không có nghĩa đó là UV hợp lệ.
 
-### Bước 4 — Khóa index trong array
+### Bước 4 — Tìm chỉ số rồi đọc texel
 
-```cpp title="include/lab.hpp — UV bằng 1 không được tạo index width"
-int x = int(std::floor(addressedU * double(texture.width)));
-int y = int(std::floor(addressedV * double(texture.height)));
-x = std::clamp(x, 0, texture.width - 1);
-y = std::clamp(y, 0, texture.height - 1);
+```cpp title="include/sampler.hpp — tọa độ texel sau addressing"
+const double u = addressCoordinate(uv.x, mode);
+const double v = addressCoordinate(uv.y, mode);
+const int x = std::min(int(std::floor(u * texture.width)), texture.width - 1);
+const int y = std::min(int(std::floor(v * texture.height)), texture.height - 1);
+return {x, y};
 ```
 
-Với clamp, `u=1` tạm tạo `x=width`, rồi bước cuối đưa nó về `width-1`. Với repeat, addressed U đã là 0 nên tự chọn texel đầu.
+Nhánh clamp tại U bằng 1 tạo `floor(1×64)=64`, nên cần `min(...,63)`. Repeat tại U bằng 1 đã trở thành 0 trước bước này.
+
+`sampleNearest` kiểm kích thước/mảng/UV, gọi `nearestTexelIndex`, rồi đọc `texels[y×width+x]`. Nó trả `Color`, chưa ghi vào framebuffer; ở bài sau, rasterizer mới quyết định màu ấy đi vào pixel nào.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checker texture và test sampler"
-cmake --build build --config Debug --target project_20_checkpoint_2
-cmake --build build --config Debug --target project_20_tests
-ctest --test-dir build -C Debug --output-on-failure
-```
+Build `project_20_checkpoint_2`. Cửa sổ vẫn có quad wireframe và thêm preview bàn cờ ở góc phải. Dùng `J/L` để giảm/tăng U, `I/K` để giảm/tăng V; `T` đổi clamp/repeat. Dấu cộng trên preview chỉ texel đang được chọn.
 
-Checkpoint 2 vẽ texture preview ở góc cửa sổ nhưng chưa phủ nó lên quad. Trong lab, kéo U/V vượt miền 0..1 rồi đổi clamp/repeat để thấy chính xác texel được chọn.
+Trên Canvas, kéo trên ảnh hoặc dùng hai thanh UV. Cả hai cách đều gọi cùng quy tắc nearest; các thanh còn cho phép thử UV ngoài miền.
+
+```bash title="Terminal — chạy sampler"
+cmake --build build --config Debug --target project_20_checkpoint_2
+.\build\Debug\project_20_checkpoint_2.exe
+```
 
 ## Thử làm sai để hiểu đúng
 
-1. Tính `x=int(u*width)` rồi truy cập ngay. `u=1` đọc ngoài vector; luôn clamp index cuối hoặc định nghĩa mapping khác có test.
-2. Repeat bằng `std::fmod(value,1.0)` và giữ kết quả âm. UV `-0.1` tạo index âm; dùng `value-floor(value)`.
-3. Dùng framebuffer width khi sample texture. Resize window sẽ đổi pattern dù texture không đổi; sampler chỉ dùng kích thước `Texture2D`.
-4. Tạo checker texture lại mỗi frame. Dữ liệu nguồn bất biến bị cấp phát vô ích; tạo một lần trước event loop.
+1. Bỏ `min(..., width−1)` rồi thử UV `(1,1)` với clamp. Chỉ số 64 nằm ngoài ảnh; đừng chờ đến lúc đọc mảng mới sửa lỗi.
+2. Thay `floor` bằng `round` mà vẫn giữ công thức `u×width`. Ranh giới texel thay đổi; test ở U gần `1/64` sẽ lộ lỗi quy ước.
+3. Dùng UV `(-0.1,1.1)` với repeat. Ảnh 64 × 64 phải chọn texel `(57,6)`; nếu nhận số âm, addressing đang sai.
 
 ## Tự kiểm tra kết quả
 
-- Texture 64×64 chứa đúng 4096 texel theo row-major.
-- Hai checker cell kề nhau trả màu khác nhau.
-- Clamp `(1,1)` chọn `(63,63)`; repeat `(1,1)` chọn `(0,0)`.
-- Repeat UV âm luôn tạo index trong bounds.
-- Resize cửa sổ không thay texture source hoặc kết quả của cùng UV.
+- Mảng có đúng 4096 texel và hai màu bàn cờ khác nhau rõ ràng.
+- Clamp `(1,1)` chọn `(63,63)`; repeat chọn `(0,0)`.
+- Repeat xử lý được UV âm mà không đọc ngoài mảng.
+- Marker/texel index đổi khi điều chỉnh UV; hình học quad không bị sửa.
+- Không có bilinear filtering hay mipmap trong sampler này.
 
 ## Bài tập mở rộng
 
-Thêm address mode `mirrorRepeat`: đoạn 0..1 đi xuôi, 1..2 đi ngược. Viết test cho `u=-0.25`, `0.25`, `1.25`, `2.25` trước khi nối nó vào UI.
+Đổi ảnh nguồn thành 80 × 48 nhưng vẫn giữ 8 ô theo mỗi chiều. Kiểm lại chỉ số row-major và UV ở bốn góc; đừng vô tình giả định width luôn bằng height.
 
-Bài tiếp theo sẽ lấy barycentric weights tại pixel và dùng sampler này để tô checker lên quad bằng cách affine — cách chạy được nhưng sai khi mặt phẳng nghiêng.
+[Bài tiếp theo: đưa UV từ ba đỉnh tới từng pixel.](/projects/perspective-checkerboard/03-noi-suy-uv-affine-trong-rasterizer)

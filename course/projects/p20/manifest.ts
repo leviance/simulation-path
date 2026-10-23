@@ -8,9 +8,9 @@ const project = {
     "Project 18 — near-plane clipping phải nội suy mọi vertex attribute bằng cùng t",
   ],
   summary:
-    "Dán texture bàn cờ lên một quad nghiêng và tự sửa biến dạng do nội suy UV tuyến tính trong screen space: mang 1/z, u/z và v/z qua projection, nội suy bằng barycentric rồi chia lại tại từng pixel.",
+    "Tự dán bàn cờ lên một mặt phẳng 3D có thể xoay. Giữ lại cách nội suy affine để thấy nó sai ở đâu, rồi sửa bằng 1/z, u/z, v/z và kiểm kết quả bằng giao ray–plane.",
   challenge: {
-    timebox: "390–480 phút",
+    timebox: "3–4 giờ",
     mission:
       "Tự xây dựng một chương trình SDL3 hiển thị bàn cờ trên mặt phẳng 3D nghiêng. Chương trình phải so sánh được affine UV với perspective-correct UV, chỉ ra sai số tại pixel được chọn và giữ texture liên tục qua đường chéo chung của hai triangle.",
     outcome:
@@ -25,7 +25,7 @@ const project = {
       "Tại pixel, nội suy ba đại lượng trên bằng cùng barycentric weights rồi khôi phục `u=(u/z)/(1/z)` và `v=(v/z)/(1/z)`.",
       "Clip triangle với near plane trong camera space và nội suy position cùng UV bằng đúng một tham số t trước projection.",
       "Hai triangle của quad dùng chung vertex/UV và top-left rule; diagonal không được nứt, chồng pixel hoặc đổi texel đột ngột trong chế độ correct.",
-      "Có bốn tình huống front/medium/steep/near; cho phép kéo chuột để đổi độ nghiêng và độ sâu, chọn affine/perspective-correct/so sánh, tạm dừng, tiến từng bước, đặt lại, đổi kích thước cửa sổ và xem số liệu của pixel.",
+      "Có bốn tư thế chính diện/nghiêng vừa/nghiêng mạnh/qua near plane; kéo chuột để xoay quad, dùng wheel hoặc thanh khoảng cách để đổi độ sâu; có affine/corrected/so sánh, pause, single-step, reset và pixel inspector.",
       "Tách texture math, clipping, projection và rasterization khỏi SDL để CTest chạy không mở window.",
     ],
     constraints: [
@@ -39,7 +39,7 @@ const project = {
     definitionOfDone: [
       "Checker texture có kích thước hợp lệ; nearest clamp/repeat trả đúng texel ở biên, ngoài miền và UV âm.",
       "Affine và perspective-correct UV bằng nhau khi ba depth bằng nhau, nhưng khác có thể đo được khi quad nghiêng.",
-      "Perspective-correct UV khớp reference trong sai số 10⁻⁹ và denominator luôn hữu hạn, dương với triangle hợp lệ.",
+      "Perspective-correct UV khớp reference ray–plane độc lập trong sai số 10⁻⁹; coverage và màu khớp cả khi đổi diagonal hoặc đảo winding.",
       "Near clipping dùng cùng t cho XYZ và UV; mọi output Z không nhỏ hơn near quá tolerance.",
       "Hai triangle dùng top-left rule không overlap và tổng coverage không tạo khe trên diagonal chung.",
       "Selected pixel báo barycentric sum gần 1, UV hữu hạn, texel index hợp lệ và affine error không âm.",
@@ -47,7 +47,7 @@ const project = {
       "CTest vượt qua; starter, tám checkpoint và final build sạch warning ở Debug lẫn Release.",
     ],
   },
-  duration: "14–16 giờ",
+  duration: "12–16 giờ",
   objectives: [
     "Hiểu vì sao thuộc tính tuyến tính trên bề mặt 3D không còn tuyến tính sau perspective divide",
     "Tự suy ra và cài đặt perspective-correct interpolation bằng reciprocal depth",
@@ -57,9 +57,9 @@ const project = {
     {
       id: "p20-l01",
       slug: "01-dung-quad-nghieng-va-uv",
-      title: "Dựng quad nghiêng và gắn UV",
+      title: "Dựng mặt phẳng có thể xoay và gắn UV",
       summary:
-        "Dựng bốn TexturedVertex dùng chung, hai triangle có winding đúng và vẽ bộ khung projected quad trước khi lấy mẫu texture.",
+        "Từ bộ khung SDL chạy được, tạo bốn vertex, nối thành hai triangle và quay cả mặt phẳng mà không làm biến dạng nó.",
       order: 1,
       estimatedMinutes: 70,
       demoId: "perspective-texture",
@@ -87,9 +87,9 @@ const project = {
     {
       id: "p20-l04",
       slug: "04-do-sai-so-do-perspective",
-      title: "Đo sai số thay vì chỉ nhìn texture méo",
+      title: "Chọn một pixel và tìm UV đúng bằng hình học",
       summary:
-        "Chọn một pixel, đọc λ, affine UV và reference UV để thấy perspective divide đã phá tính tuyến tính ở đâu.",
+        "Bắn ray qua tâm pixel, tìm giao với mặt phẳng và đọc UV để có cách đối chiếu không lặp lại công thức nội suy.",
       order: 4,
       estimatedMinutes: 80,
       demoId: "perspective-texture",
@@ -97,7 +97,7 @@ const project = {
     {
       id: "p20-l05",
       slug: "05-suy-ra-reciprocal-depth",
-      title: "Suy ra công thức reciprocal depth",
+      title: "Vì sao phải mang theo 1/z, u/z và v/z?",
       summary:
         "Biến mỗi vertex thành 1/z, u/z, v/z và chứng minh vì sao ba đại lượng này mới nội suy tuyến tính trong screen space.",
       order: 5,
@@ -127,7 +127,7 @@ const project = {
     {
       id: "p20-l08",
       slug: "08-ghep-texture-mapper-va-validation",
-      title: "Ghép texture mapper và kiểm chứng",
+      title: "Hoàn thiện ứng dụng và kiểm chứng cả ảnh",
       summary:
         "Hoàn thiện chế độ so sánh, các tình huống mẫu, thao tác kéo chuột và bảng số liệu; dùng CTest kiểm tra lấy mẫu texture, trường hợp affine trùng perspective-correct, clipping và cạnh chung.",
       order: 8,

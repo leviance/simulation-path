@@ -92,6 +92,14 @@ test("every lesson follows the content contract without escaped formatting artif
 
 test("interactive labs expose only the controls needed by each lesson", async () => {
   const expectedModes = new Map([
+    ["perspective-checkerboard/01-dung-quad-nghieng-va-uv.mdx", "texture-quad"],
+    ["perspective-checkerboard/02-tao-checker-texture-va-sample-texel.mdx", "texture-sampling"],
+    ["perspective-checkerboard/03-noi-suy-uv-affine-trong-rasterizer.mdx", "texture-affine"],
+    ["perspective-checkerboard/04-do-sai-so-do-perspective.mdx", "texture-error"],
+    ["perspective-checkerboard/05-suy-ra-reciprocal-depth.mdx", "texture-reciprocal"],
+    ["perspective-checkerboard/06-khoi-phuc-uv-perspective-correct.mdx", "texture-correct"],
+    ["perspective-checkerboard/07-clip-near-plane-ma-khong-lam-roi-uv.mdx", "texture-clip"],
+    ["perspective-checkerboard/08-ghep-texture-mapper-va-validation.mdx", "texture-validation"],
     ["hello-pixels/02-framebuffer-la-gi.mdx", "pixel-memory"],
     ["hello-pixels/03-putpixel-va-rgba.mdx", "pixel-rgba"],
     ["hello-pixels/04-pattern-dau-tien.mdx", "pixel-patterns"],
@@ -405,6 +413,11 @@ test("every project teaches its visible starting point before new abstractions",
       "lambert-tetrahedron",
       "01-dung-tetrahedron-tu-indexed-mesh.mdx",
       ["makeCube", "rasterizeTriangle", "inverseDepth", "SDL_CreateWindow", "SDL_UpdateTexture"],
+    ],
+    [
+      "perspective-checkerboard",
+      "01-dung-quad-nghieng-va-uv.mdx",
+      ["makeQuad", "projectVertex", "drawLine", "SDL_CreateRenderer", "SDL_UpdateTexture"],
     ],
     [
       "projectile-cannon",

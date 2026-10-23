@@ -1,243 +1,165 @@
 #include "lab.hpp"
-
-#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string_view>
-#include <vector>
 
 namespace {
 int failures = 0;
 
-// Runner này vẫn kiểm tra điều kiện trong Release, không phụ thuộc assert/NDEBUG.
+// Không dùng assert: mọi điều kiện vẫn chạy trong Release.
 void check(bool condition, std::string_view label) {
-    if (condition) {
-        return;
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << label << '\n';
     }
-    ++failures;
-    std::cerr << "FAIL: " << label << '\n';
 }
 
-bool nearlyEqual(double left, double right, double tolerance = 1e-9) {
-    return std::abs(left - right) <= tolerance;
+bool close(double a, double b, double tolerance = 1e-9) {
+    return std::abs(a - b) <= tolerance;
 }
 
-bool sameColor(lab::Color left, lab::Color right) {
-    return nearlyEqual(left.red, right.red) && nearlyEqual(left.green, right.green) &&
-        nearlyEqual(left.blue, right.blue);
+double length(lab::Vec3 a, lab::Vec3 b) {
+    return std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z);
+}
+
+struct Image {
+    std::vector<int> owners = std::vector<int>(240 * 180);
+    std::vector<lab::Vec2> uv = std::vector<lab::Vec2>(240 * 180);
+    std::vector<lab::Color> colors = std::vector<lab::Color>(240 * 180);
+};
+
+Image render(lab::Scene scene, bool corrected, bool alternative = false, bool reversed = false) {
+    Image image;
+    auto quad = lab::makeQuad(scene.yaw, scene.pitch, scene.distance);
+    if (alternative) {
+        quad.faces = {{{0, 3, 1}, {1, 3, 2}}};
+    }
+    if (reversed) {
+        for (auto& face : quad.faces) {
+            std::swap(face[1], face[2]);
+        }
+    }
+    const auto texture = lab::makeCheckerTexture();
+    lab::RenderStats stats;
+    for (std::size_t face = 0; face < 2; ++face) {
+        lab::renderTexturedTriangle(lab::quadTriangle(quad, face), {0, 0, 240, 180}, scene, corrected, texture, stats, [&](lab::RasterSample sample, lab::Vec2 uv, lab::Color color) {
+            const std::size_t pixel = std::size_t(sample.y * 240 + sample.x);
+            ++image.owners[pixel];
+            image.uv[pixel] = uv;
+            image.colors[pixel] = color;
+        });
+    }
+    return image;
+}
+
+void verifyImages() {
+    for (int preset = 1; preset <= 4; ++preset) {
+        lab::Scene scene;
+        lab::applyPreset(scene, preset);
+        const auto image = render(scene, true);
+        const auto affine = render(scene, false);
+        const auto alternative = render(scene, true, true);
+        const auto reversed = render(scene, true, false, true);
+        std::size_t covered = 0;
+        std::size_t errors = 0;
+        double maximumAffineError = 0;
+        for (int y = 0; y < 180; ++y) {
+            for (int x = 0; x < 240; ++x) {
+                const auto pixel = std::size_t(y * 240 + x);
+                const auto rayUv = lab::referenceUvFromRay(scene, {x + 0.5, y + 0.5}, {0, 0, 240, 180});
+                if (image.owners[pixel] > 1 || image.owners[pixel] != alternative.owners[pixel] || image.owners[pixel] != reversed.owners[pixel] || image.owners[pixel] != affine.owners[pixel]) {
+                    ++errors;
+                }
+                if (bool(rayUv) != (image.owners[pixel] == 1)) {
+                    ++errors;
+                }
+                if (!rayUv || image.owners[pixel] != 1) {
+                    continue;
+                }
+                ++covered;
+                if (lab::uvDistance(image.uv[pixel], *rayUv) > 1e-9 || lab::uvDistance(alternative.uv[pixel], *rayUv) > 1e-9 || lab::uvDistance(reversed.uv[pixel], *rayUv) > 1e-9) {
+                    ++errors;
+                }
+                maximumAffineError = std::max(maximumAffineError, lab::uvDistance(affine.uv[pixel], *rayUv));
+                // Màu dự đoán từ ô cờ tại ray hit, không gọi sampler của renderer.
+                const double cellX = rayUv->x * 8;
+                const double cellY = rayUv->y * 8;
+                if (std::abs(cellX - std::round(cellX)) > 1e-8 && std::abs(cellY - std::round(cellY)) > 1e-8) {
+                    lab::Color expected{236, 240, 248};
+                    if ((int(std::floor(cellX)) + int(std::floor(cellY))) % 2 != 0) {
+                        expected = {38, 48, 72};
+                    }
+                    if (lab::packColor(image.colors[pixel]) != lab::packColor(expected)) {
+                        ++errors;
+                    }
+                }
+            }
+        }
+        check(covered > 100, "preset renders a visible quad");
+        check(errors == 0, "ray-plane oracle agrees with coverage, UV, RGB, both diagonals and reversed winding");
+        if (preset == 1) {
+            check(maximumAffineError < 1e-9, "affine and perspective agree at constant depth");
+        }
+        if (preset == 3) {
+            check(maximumAffineError > 0.1, "steep pose exposes significant affine distortion");
+        }
+    }
 }
 } // namespace
 
 int main() {
-    const lab::TexturedQuad quad = lab::makeTiltedQuad();
-    check(quad.vertices.size() == 4, "quad has four shared vertices");
-    check(quad.faces.size() == 2, "quad has two indexed triangles");
-    check(nearlyEqual(quad.vertices[0].uv.x, 0.0), "near-left corner starts at u zero");
-    check(nearlyEqual(quad.vertices[2].uv.y, 0.0), "top-right corner starts at v zero");
+    const auto texture = lab::makeCheckerTexture();
+    check(texture.texels.size() == 4096, "64 by 64 texels in row-major storage");
+    check(lab::nearestTexelIndex(texture, {1, 1}, lab::AddressMode::clamp) == std::array<int, 2>{63, 63}, "clamp maps one to last texel");
+    check(lab::nearestTexelIndex(texture, {1, 1}, lab::AddressMode::repeat) == std::array<int, 2>{0, 0}, "repeat maps one to zero");
+    check(lab::nearestTexelIndex(texture, {-0.1, 1.1}, lab::AddressMode::repeat) == std::array<int, 2>{57, 6}, "negative UV repeats with positive fractional part");
+    check(lab::makeCheckerTexture(-1, 8).texels.empty(), "invalid dimensions rejected");
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    check(lab::packColor(lab::sampleNearest(texture, {nan, 0}, lab::AddressMode::clamp)) == lab::packColor({255, 0, 255}), "nonfinite UV rejected before integer conversion");
+    check(lab::packColor(lab::sampleNearest({}, {0, 0}, lab::AddressMode::clamp)) == lab::packColor({255, 0, 255}), "malformed texture rejected");
 
-    // Texture sampling phải có behavior rõ ràng ở biên và ngoài miền UV.
-    const lab::Texture2D texture = lab::makeCheckerTexture(8, 8, 4);
-    check(texture.texels.size() == 64, "checker texture owns width times height texels");
-    check(
-        lab::nearestTexelIndex(texture, {1.0, 1.0}, lab::AddressMode::clamp) ==
-            std::array<int, 2>{7, 7},
-        "clamp maps uv one to the last texel"
-    );
-    check(
-        lab::nearestTexelIndex(texture, {1.0, 1.0}, lab::AddressMode::repeat) ==
-            std::array<int, 2>{0, 0},
-        "repeat wraps uv one to texel zero"
-    );
-    check(
-        lab::nearestTexelIndex(texture, {-0.1, 1.1}, lab::AddressMode::repeat) ==
-            std::array<int, 2>{7, 0},
-        "repeat handles negative uv with a positive wrapped coordinate"
-    );
-    check(
-        !sameColor(
-            lab::sampleNearest(texture, {0.1, 0.1}, lab::AddressMode::clamp),
-            lab::sampleNearest(texture, {0.3, 0.1}, lab::AddressMode::clamp)
-        ),
-        "neighbor checker cells use different colors"
-    );
-
-    constexpr double verticalFov = 1.0471975511965976;
-    constexpr double nearPlane = 1.0;
-    const lab::Viewport viewport{0, 0, 640, 480};
-    const auto tiltedScreen = lab::projectTriangle(
-        lab::quadTriangle(quad, 0),
-        verticalFov,
-        viewport,
-        nearPlane
-    );
-    check(tiltedScreen.has_value(), "tilted textured triangle projects");
-    if (tiltedScreen) {
-        const lab::Barycentric weights{0.2, 0.3, 0.5};
-        const lab::Vec2 affine = lab::interpolateAffineUv(*tiltedScreen, weights);
-        const lab::Vec2 reference = lab::referenceUvFromCameraDepths(*tiltedScreen, weights);
-        const auto corrected = lab::interpolatePerspectiveUv(*tiltedScreen, weights);
-        check(corrected.has_value(), "positive reciprocal depth produces corrected uv");
-        if (corrected) {
-            check(
-                lab::uvDistance(*corrected, reference) <= 1e-12,
-                "reciprocal interpolation matches camera-depth reference"
-            );
-            check(
-                lab::uvDistance(affine, *corrected) > 0.05,
-                "tilted triangle exposes measurable affine error"
-            );
-        }
-        check(
-            lab::reciprocalDepthDenominator(*tiltedScreen, weights) > 0.0,
-            "valid projected triangle keeps a positive reciprocal denominator"
-        );
+    for (int preset = 1; preset <= 4; ++preset) {
+        lab::Scene scene;
+        lab::applyPreset(scene, preset);
+        const auto quad = lab::makeQuad(scene.yaw, scene.pitch, scene.distance);
+        check(close(length(quad.vertices[0].position, quad.vertices[1].position), 3.2), "tilt preserves horizontal edge length");
+        check(close(length(quad.vertices[1].position, quad.vertices[2].position), 2), "tilt preserves vertical edge length");
     }
 
-    const lab::TexturedQuad flatQuad = lab::makeTiltedQuad(4.0, 4.0);
-    const auto flatScreen = lab::projectTriangle(
-        lab::quadTriangle(flatQuad, 0),
-        verticalFov,
-        viewport,
-        nearPlane
-    );
-    check(flatScreen.has_value(), "constant-depth triangle projects");
-    if (flatScreen) {
-        const lab::Barycentric weights{0.2, 0.3, 0.5};
-        const auto corrected = lab::interpolatePerspectiveUv(*flatScreen, weights);
-        check(corrected.has_value(), "constant depth has a valid denominator");
-        if (corrected) {
-            check(
-                lab::uvDistance(lab::interpolateAffineUv(*flatScreen, weights), *corrected) <= 1e-12,
-                "affine and perspective uv agree at constant depth"
-            );
-        }
+    const lab::TexturedVertex a{{-1, 0, 0.5}, {0, 1}};
+    const lab::TexturedVertex b{{1, 1, 3}, {1, 0}};
+    const auto hit = lab::intersectNearPlane(a, b, 1);
+    const auto reverseHit = lab::intersectNearPlane(b, a, 1);
+    check(close(hit.position.x, -0.6) && hit.position.z == 1 && close(hit.uv.x, 0.2) && close(hit.uv.y, 0.8), "intersection uses same t for XYZ and UV");
+    check(hit.position.x == reverseHit.position.x && hit.uv.x == reverseHit.uv.x, "shared edge intersection is direction independent");
+    const auto clipped = lab::clipTriangleToNearPlane({a, b, {{0, 1, 2}, {0.5, 0}}}, 1);
+    check(clipped.size() == 4, "one outside vertex creates clipped quad");
+    for (const auto& vertex : clipped) {
+        check(vertex.position.z >= 1 && lab::isFinite(vertex.uv), "clipped attributes finite and inside exact half-space");
     }
+    const lab::Viewport viewport{0, 0, 240, 180};
+    check(!lab::projectVertex({{0, 0, 0.9999999999}, {}}, viewport), "projection rejects even slightly behind near plane");
+    check(!lab::projectVertex({{nan, 0, 2}, {}}, viewport), "projection rejects nonfinite position");
+    lab::ScreenTriangle invalid{};
+    check(!lab::interpolatePerspectiveUv(invalid, {1, 0, 0}), "zero denominator rejected");
 
-    const lab::TexturedTriangle crossing{{{
-        {{-1.0, -0.8, 0.5}, {0.0, 1.0}},
-        {{1.0, -0.8, 3.0}, {1.0, 1.0}},
-        {{0.0, 0.9, 2.0}, {0.5, 0.0}},
-    }}};
-    const lab::ClippedPolygon polygon = lab::clipTriangleToNearPlane(crossing, nearPlane);
-    check(polygon.count == 4, "one outside textured vertex clips to a quad");
-    for (std::size_t index = 0; index < polygon.count; ++index) {
-        check(lab::isFinite(polygon.vertices[index].position), "clipped position remains finite");
-        check(lab::isFinite(polygon.vertices[index].uv), "clipped uv remains finite");
-        check(
-            polygon.vertices[index].position.z >= nearPlane - 1e-9,
-            "clipped vertex stays beyond near plane"
-        );
-    }
-    const lab::TexturedVertex intersection = lab::intersectNearPlane(
-        crossing.vertices[0],
-        crossing.vertices[1],
-        nearPlane
-    );
-    const double t = (nearPlane - 0.5) / (3.0 - 0.5);
-    check(nearlyEqual(intersection.position.z, nearPlane), "intersection lies on near plane");
-    check(nearlyEqual(intersection.uv.x, t), "intersection uv uses the same t as position");
+    lab::Scene scene;
+    check(scene.paused && !scene.debug && scene.compare, "final opens in clean paused comparison");
+    const auto initial = scene;
+    check(lab::advanceScene(scene, 0.5, true), "single step advances while paused");
+    check(close(scene.phase, 1.0 / 60), "single step is deterministic");
+    scene = initial;
+    check(!lab::advanceScene(scene, 1), "paused scene remains unchanged");
+    lab::DragState drag;
+    lab::beginDrag(scene, drag, {10, 10});
+    lab::updateDrag(scene, drag, {110, 30});
+    check(drag.moved && close(scene.yaw, initial.yaw + 0.8), "drag rotates rigid model");
 
-    std::size_t callbackCount = 0;
-    const lab::TextureRenderStats renderStats = lab::renderTexturedTriangle(
-        lab::quadTriangle(quad, 0),
-        texture,
-        viewport,
-        verticalFov,
-        nearPlane,
-        lab::InterpolationMode::perspectiveCorrect,
-        lab::AddressMode::clamp,
-        viewport.width,
-        viewport.height,
-        [&](const lab::TexturedPixel& sample) {
-            check(std::isfinite(sample.color.red), "sampled texture color remains finite");
-            check(lab::isFinite(sample.selectedUv), "selected uv remains finite");
-            check(sample.denominator > 0.0, "render callback keeps a positive denominator");
-            ++callbackCount;
-        }
-    );
-    check(renderStats.triangleCount == 1, "safe face stays one triangle after clipping");
-    check(renderStats.coveredCount > 0, "textured triangle covers pixels");
-    check(renderStats.coveredCount == callbackCount, "coverage equals texture write count");
-    check(renderStats.maximumUvError > 0.0, "tilted face reports non-zero affine error");
-
-    // Rasterize cả quad, không chỉ một face. Mỗi pixel chỉ có một owner và hai
-    // cách chia đường chéo phải tạo cùng một vùng phủ.
-    const std::array<lab::TexturedTriangle, 2> originalFaces{
-        lab::quadTriangle(quad, 0),
-        lab::quadTriangle(quad, 1),
-    };
-    const std::array<lab::TexturedTriangle, 2> alternativeFaces{
-        lab::TexturedTriangle{{{quad.vertices[0], quad.vertices[3], quad.vertices[1]}}},
-        lab::TexturedTriangle{{{quad.vertices[1], quad.vertices[3], quad.vertices[2]}}},
-    };
-    const auto renderCoverage = [&](const std::array<lab::TexturedTriangle, 2>& faces) {
-        std::vector<int> owners(std::size_t(viewport.width * viewport.height), 0);
-        for (const lab::TexturedTriangle& face : faces) {
-            lab::renderTexturedTriangle(
-                face,
-                texture,
-                viewport,
-                verticalFov,
-                nearPlane,
-                lab::InterpolationMode::perspectiveCorrect,
-                lab::AddressMode::clamp,
-                viewport.width,
-                viewport.height,
-                [&](const lab::TexturedPixel& sample) {
-                    const std::size_t index = std::size_t(sample.y * viewport.width + sample.x);
-                    ++owners[index];
-                }
-            );
-        }
-        return owners;
-    };
-
-    const std::vector<int> originalCoverage = renderCoverage(originalFaces);
-    const std::vector<int> alternativeCoverage = renderCoverage(alternativeFaces);
-    bool hasCoveredPixel = false;
-    bool hasOverlap = false;
-    bool sameCoverage = true;
-    for (std::size_t index = 0; index < originalCoverage.size(); ++index) {
-        hasCoveredPixel = hasCoveredPixel || originalCoverage[index] > 0;
-        hasOverlap = hasOverlap || originalCoverage[index] > 1 || alternativeCoverage[index] > 1;
-        if ((originalCoverage[index] > 0) != (alternativeCoverage[index] > 0)) {
-            sameCoverage = false;
-        }
-    }
-    check(hasCoveredPixel, "two quad faces cover at least one pixel");
-    check(!hasOverlap, "top-left rule gives every covered quad pixel one owner");
-    check(sameCoverage, "changing the shared diagonal leaves no crack in quad coverage");
-
-    // Hai face gốc phải khôi phục cùng UV và texel ở mọi điểm trên diagonal 0–2.
-    const auto firstScreen = lab::projectTriangle(originalFaces[0], verticalFov, viewport, nearPlane);
-    const auto secondScreen = lab::projectTriangle(originalFaces[1], verticalFov, viewport, nearPlane);
-    check(firstScreen.has_value() && secondScreen.has_value(), "both shared-edge faces project");
-    if (firstScreen && secondScreen) {
-        for (const double tAlongEdge : {0.25, 0.5, 0.75}) {
-            const auto firstUv = lab::interpolatePerspectiveUv(
-                *firstScreen,
-                {1.0 - tAlongEdge, tAlongEdge, 0.0}
-            );
-            const auto secondUv = lab::interpolatePerspectiveUv(
-                *secondScreen,
-                {1.0 - tAlongEdge, 0.0, tAlongEdge}
-            );
-            check(firstUv.has_value() && secondUv.has_value(), "shared-edge uv is recoverable");
-            if (!firstUv || !secondUv) {
-                continue;
-            }
-            check(
-                lab::uvDistance(*firstUv, *secondUv) <= 1e-12,
-                "both faces agree on uv along their shared edge"
-            );
-            check(
-                lab::nearestTexelIndex(texture, *firstUv, lab::AddressMode::clamp) ==
-                    lab::nearestTexelIndex(texture, *secondUv, lab::AddressMode::clamp),
-                "both faces choose the same texel along their shared edge"
-            );
-        }
-    }
-
+    verifyImages();
+    lab::Framebuffer image;
+    const auto stats = lab::renderScene(image, initial);
+    check(stats.covered > 100 && image.pixels.size() == 960 * 640, "complete CPU scene renders");
     if (failures != 0) {
         std::cerr << failures << " checks failed.\n";
         return EXIT_FAILURE;

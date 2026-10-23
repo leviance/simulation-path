@@ -2,142 +2,115 @@ export interface TextureVec2 {
   x: number;
   y: number;
 }
-
-export interface TextureVec3 {
-  x: number;
-  y: number;
+export interface TextureVec3 extends TextureVec2 {
   z: number;
 }
-
 export interface TextureVertex {
   position: TextureVec3;
   uv: TextureVec2;
 }
-
-export interface TextureQuad {
-  vertices: TextureVertex[];
-  faces: Array<readonly [number, number, number]>;
-}
-
 export type TextureTriangle = readonly [TextureVertex, TextureVertex, TextureVertex];
-
 export interface TextureBarycentric {
   a: number;
   b: number;
   c: number;
 }
-
 export type TextureAddressMode = "clamp" | "repeat";
 export type TextureInterpolationMode = "affine" | "perspective";
+export interface TextureQuad {
+  vertices: TextureVertex[];
+  faces: [number, number, number][];
+}
+export const textureLight = [236, 240, 248] as const;
+export const textureDark = [38, 48, 72] as const;
 
-export const textureDepthPresets = {
-  front: { near: 4, far: 4 },
-  medium: { near: 2.5, far: 5 },
-  steep: { near: 1.5, far: 7 },
-  near: { near: 0.65, far: 4.5 },
-} as const;
-
-export function makeTextureQuad(nearDepth: number, farDepth: number): TextureQuad {
+export function textureRotateX(p: TextureVec3, angle: number): TextureVec3 {
+  const cosine = Math.cos(angle),
+    sine = Math.sin(angle);
+  return { x: p.x, y: cosine * p.y - sine * p.z, z: sine * p.y + cosine * p.z };
+}
+export function textureRotateY(p: TextureVec3, angle: number): TextureVec3 {
+  const cosine = Math.cos(angle),
+    sine = Math.sin(angle);
+  return { x: cosine * p.x + sine * p.z, y: p.y, z: -sine * p.x + cosine * p.z };
+}
+export function makeTextureQuad(yaw: number, pitch: number, distance: number): TextureQuad {
+  const vertices: TextureVertex[] = [
+    { position: { x: -1.6, y: -1, z: 0 }, uv: { x: 0, y: 1 } },
+    { position: { x: 1.6, y: -1, z: 0 }, uv: { x: 1, y: 1 } },
+    { position: { x: 1.6, y: 1, z: 0 }, uv: { x: 1, y: 0 } },
+    { position: { x: -1.6, y: 1, z: 0 }, uv: { x: 0, y: 0 } },
+  ];
+  for (const vertex of vertices) {
+    vertex.position = textureRotateY(textureRotateX(vertex.position, pitch), yaw);
+    vertex.position.z += distance;
+  }
   return {
-    vertices: [
-      { position: { x: -1.6, y: -1, z: nearDepth }, uv: { x: 0, y: 1 } },
-      { position: { x: 1.6, y: -1, z: farDepth }, uv: { x: 1, y: 1 } },
-      { position: { x: 1.6, y: 1, z: farDepth }, uv: { x: 1, y: 0 } },
-      { position: { x: -1.6, y: 1, z: nearDepth }, uv: { x: 0, y: 0 } },
-    ],
+    vertices,
     faces: [
       [0, 2, 1],
       [0, 3, 2],
     ],
   };
 }
-
 export function projectTextureVertex(
   vertex: TextureVertex,
   width: number,
   height: number,
   nearPlane = 1,
 ): TextureVec2 | undefined {
-  if (vertex.position.z < nearPlane || width <= 0 || height <= 0) return undefined;
-  const focalScale = 1 / Math.tan(Math.PI / 6);
-  const aspect = width / height;
-  const ndcX = (vertex.position.x * focalScale) / (aspect * vertex.position.z);
-  const ndcY = (vertex.position.y * focalScale) / vertex.position.z;
-  return { x: (ndcX * 0.5 + 0.5) * width, y: (0.5 - ndcY * 0.5) * height };
+  const p = vertex.position;
+  if (
+    ![p.x, p.y, p.z, vertex.uv.x, vertex.uv.y, nearPlane].every(Number.isFinite) ||
+    p.z < nearPlane ||
+    nearPlane <= 0 ||
+    width <= 0 ||
+    height <= 0
+  )
+    return;
+  const focalPixels = (height * 0.5) / Math.tan(Math.PI / 6);
+  return {
+    x: width * 0.5 + (focalPixels * p.x) / p.z,
+    y: height * 0.5 - (focalPixels * p.y) / p.z,
+  };
 }
-
-export function textureBarycentricAtPoint(
-  triangle: readonly [TextureVec2, TextureVec2, TextureVec2],
-  point: TextureVec2,
-): TextureBarycentric | undefined {
-  const [a, b, c] = triangle;
-  const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
-  if (Math.abs(denominator) <= 1e-12) return undefined;
-  const weightA = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
-  const weightB = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
-  return { a: weightA, b: weightB, c: 1 - weightA - weightB };
+export function textureEdge(a: TextureVec2, b: TextureVec2, p: TextureVec2) {
+  return (a.y - b.y) * p.x + (b.x - a.x) * p.y + (a.x * b.y - a.y * b.x);
 }
-
-export function textureBarycentricIsInside(weights: TextureBarycentric, epsilon = 1e-9) {
-  return weights.a >= -epsilon && weights.b >= -epsilon && weights.c >= -epsilon;
+export function textureTopLeft(a: TextureVec2, b: TextureVec2) {
+  return b.y < a.y || (b.y === a.y && b.x > a.x);
 }
-
-function weightedUv(
-  vertices: readonly [TextureVertex, TextureVertex, TextureVertex],
-  weights: TextureBarycentric,
+export function interpolateTextureAffineUv(
+  vertices: TextureTriangle,
+  w: TextureBarycentric,
 ): TextureVec2 {
   return {
-    x: weights.a * vertices[0].uv.x + weights.b * vertices[1].uv.x + weights.c * vertices[2].uv.x,
-    y: weights.a * vertices[0].uv.y + weights.b * vertices[1].uv.y + weights.c * vertices[2].uv.y,
+    x: w.a * vertices[0].uv.x + w.b * vertices[1].uv.x + w.c * vertices[2].uv.x,
+    y: w.a * vertices[0].uv.y + w.b * vertices[1].uv.y + w.c * vertices[2].uv.y,
   };
 }
-
-export function interpolateTextureAffineUv(
-  vertices: readonly [TextureVertex, TextureVertex, TextureVertex],
-  weights: TextureBarycentric,
-) {
-  return weightedUv(vertices, weights);
+export function reciprocalTextureDenominator(vertices: TextureTriangle, w: TextureBarycentric) {
+  return w.a / vertices[0].position.z + w.b / vertices[1].position.z + w.c / vertices[2].position.z;
 }
-
-export function reciprocalTextureDenominator(
-  vertices: readonly [TextureVertex, TextureVertex, TextureVertex],
-  weights: TextureBarycentric,
-) {
-  return (
-    weights.a / vertices[0].position.z +
-    weights.b / vertices[1].position.z +
-    weights.c / vertices[2].position.z
-  );
-}
-
 export function interpolateTexturePerspectiveUv(
-  vertices: readonly [TextureVertex, TextureVertex, TextureVertex],
-  weights: TextureBarycentric,
+  vertices: TextureTriangle,
+  w: TextureBarycentric,
 ): TextureVec2 | undefined {
-  const weightedA = weights.a / vertices[0].position.z;
-  const weightedB = weights.b / vertices[1].position.z;
-  const weightedC = weights.c / vertices[2].position.z;
-  const denominator = weightedA + weightedB + weightedC;
-  if (Math.abs(denominator) <= 1e-12) return undefined;
-  return {
-    x:
-      (weightedA * vertices[0].uv.x + weightedB * vertices[1].uv.x + weightedC * vertices[2].uv.x) /
-      denominator,
-    y:
-      (weightedA * vertices[0].uv.y + weightedB * vertices[1].uv.y + weightedC * vertices[2].uv.y) /
-      denominator,
+  const a = w.a / vertices[0].position.z,
+    b = w.b / vertices[1].position.z,
+    c = w.c / vertices[2].position.z;
+  const denominator = a + b + c;
+  if (!Number.isFinite(denominator) || denominator <= 0) return;
+  const uv = {
+    x: (a * vertices[0].uv.x + b * vertices[1].uv.x + c * vertices[2].uv.x) / denominator,
+    y: (a * vertices[0].uv.y + b * vertices[1].uv.y + c * vertices[2].uv.y) / denominator,
   };
+  if (Number.isFinite(uv.x) && Number.isFinite(uv.y)) return uv;
 }
-
-export function textureUvDistance(left: TextureVec2, right: TextureVec2) {
-  return Math.hypot(right.x - left.x, right.y - left.y);
-}
-
 export function addressTextureCoordinate(value: number, mode: TextureAddressMode) {
-  if (mode === "clamp") return Math.max(0, Math.min(1, value));
-  return value - Math.floor(value);
+  if (!Number.isFinite(value)) return 0;
+  return mode === "clamp" ? Math.max(0, Math.min(1, value)) : value - Math.floor(value);
 }
-
 export function nearestTextureTexel(
   uv: TextureVec2,
   width: number,
@@ -145,91 +118,60 @@ export function nearestTextureTexel(
   mode: TextureAddressMode,
 ) {
   if (width <= 0 || height <= 0) return { x: 0, y: 0 };
-  const u = addressTextureCoordinate(uv.x, mode);
-  const v = addressTextureCoordinate(uv.y, mode);
   return {
-    x: Math.max(0, Math.min(width - 1, Math.floor(u * width))),
-    y: Math.max(0, Math.min(height - 1, Math.floor(v * height))),
+    x: Math.min(width - 1, Math.floor(addressTextureCoordinate(uv.x, mode) * width)),
+    y: Math.min(height - 1, Math.floor(addressTextureCoordinate(uv.y, mode) * height)),
   };
 }
-
-export function checkerTextureIsLight(uv: TextureVec2, cells: number, mode: TextureAddressMode) {
-  const texel = nearestTextureTexel(uv, cells, cells, mode);
-  return (texel.x + texel.y) % 2 === 0;
+export function checkerTextureColor(uv: TextureVec2, mode: TextureAddressMode) {
+  if (!Number.isFinite(uv.x) || !Number.isFinite(uv.y)) return [255, 0, 255] as const;
+  const texel = nearestTextureTexel(uv, 64, 64, mode);
+  return (Math.floor(texel.x / 8) + Math.floor(texel.y / 8)) % 2 === 0 ? textureLight : textureDark;
 }
-
-function mix(start: number, end: number, t: number) {
-  return start + (end - start) * t;
+export function textureUvDistance(a: TextureVec2, b: TextureVec2) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
-
 export function intersectTextureNearPlane(
   start: TextureVertex,
   end: TextureVertex,
   nearPlane: number,
 ) {
-  const depthChange = end.position.z - start.position.z;
-  const t =
-    Math.abs(depthChange) <= 1e-12
-      ? 0
-      : Math.max(0, Math.min(1, (nearPlane - start.position.z) / depthChange));
+  // Canonical edge direction avoids different intersection rounding on shared edges.
+  let a = start,
+    b = end;
+  if (a.position.z > b.position.z) [a, b] = [b, a];
+  const t = (nearPlane - a.position.z) / (b.position.z - a.position.z);
   return {
-    t,
+    t: start === a ? t : 1 - t,
     vertex: {
       position: {
-        x: mix(start.position.x, end.position.x, t),
-        y: mix(start.position.y, end.position.y, t),
+        x: a.position.x + (b.position.x - a.position.x) * t,
+        y: a.position.y + (b.position.y - a.position.y) * t,
         z: nearPlane,
       },
-      uv: { x: mix(start.uv.x, end.uv.x, t), y: mix(start.uv.y, end.uv.y, t) },
+      uv: { x: a.uv.x + (b.uv.x - a.uv.x) * t, y: a.uv.y + (b.uv.y - a.uv.y) * t },
     },
   };
 }
-
-export function clipTextureTriangleNearPlane(
-  vertices: readonly [TextureVertex, TextureVertex, TextureVertex],
-  nearPlane: number,
-  epsilon = 1e-9,
-) {
+export function clipTextureTriangleNearPlane(vertices: TextureTriangle, nearPlane = 1) {
   const output: TextureVertex[] = [];
-  let previous = vertices[2];
-  let previousInside = previous.position.z >= nearPlane - epsilon;
+  if (
+    !Number.isFinite(nearPlane) ||
+    nearPlane <= 0 ||
+    vertices.some(
+      (v) => ![v.position.x, v.position.y, v.position.z, v.uv.x, v.uv.y].every(Number.isFinite),
+    )
+  )
+    return output;
+  let previous = vertices[2],
+    previousInside = previous.position.z >= nearPlane;
   for (const current of vertices) {
-    const currentInside = current.position.z >= nearPlane - epsilon;
-    if (currentInside && !previousInside) {
+    const inside = current.position.z >= nearPlane;
+    if (inside !== previousInside)
       output.push(intersectTextureNearPlane(previous, current, nearPlane).vertex);
-    }
-    if (currentInside) output.push(current);
-    if (!currentInside && previousInside) {
-      output.push(intersectTextureNearPlane(previous, current, nearPlane).vertex);
-    }
+    if (inside) output.push(current);
     previous = current;
-    previousInside = currentInside;
+    previousInside = inside;
   }
   return output;
-}
-
-export function inspectTextureTriangles(
-  triangles: readonly TextureTriangle[],
-  point: TextureVec2,
-  width: number,
-  height: number,
-) {
-  for (const [triangleIndex, vertices] of triangles.entries()) {
-    const projected = vertices.map((vertex) => projectTextureVertex(vertex, width, height));
-    if (!projected[0] || !projected[1] || !projected[2]) continue;
-    const weights = textureBarycentricAtPoint([projected[0], projected[1], projected[2]], point);
-    if (!weights || !textureBarycentricIsInside(weights)) continue;
-    const affineUv = interpolateTextureAffineUv(vertices, weights);
-    const correctedUv = interpolateTexturePerspectiveUv(vertices, weights);
-    if (!correctedUv) continue;
-    return {
-      triangleIndex,
-      weights,
-      affineUv,
-      correctedUv,
-      denominator: reciprocalTextureDenominator(vertices, weights),
-      error: textureUvDistance(affineUv, correctedUv),
-    };
-  }
-  return undefined;
 }

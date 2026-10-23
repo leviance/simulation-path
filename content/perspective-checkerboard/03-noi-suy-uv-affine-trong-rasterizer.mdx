@@ -4,106 +4,102 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Mỗi vertex đã có UV, nhưng phần lớn pixel nằm giữa ba vertex. Project 16 cho ta barycentric weights tại pixel center; cách trực tiếp nhất là dùng chúng để trộn UV rồi sample checker texture.
+Ta đã có một mặt phẳng biết quay và một ảnh nguồn biết lấy mẫu. Việc còn thiếu là nối chúng: **pixel này trên mặt phẳng phải đọc UV nào?** Rasterizer của Project 16 đã trả barycentric weights; thử dùng chúng để trộn UV ở ba đỉnh.
 
-Cách đó được gọi là affine interpolation trong screen space. Nó là một baseline quan trọng: coverage, top-left rule và texture sampler đều hoạt động, nhưng khi depth ba vertex khác nhau, checker không bám đúng lên bề mặt 3D.
+Cách này hợp lý nếu chỉ nhìn màn hình, và cũng là cách dễ viết nhất. Ta cố ý giữ nó thành một phiên bản chạy được. Bạn cần thấy nó làm sai điều gì trước khi học công thức sửa.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với weights `λA+λB+λC=1`, affine UV là:
+Với một pixel thuộc triangle, ba weights thỏa tổng gần bằng 1. Nội suy affine là:
 
 $$
 uv_{affine}=\lambda_Auv_A+\lambda_Buv_B+\lambda_Cuv_C
 $$
 
-Nếu triangle song song màn hình và ba Z bằng nhau, cách này đúng. Khi triangle nghiêng, perspective divide làm khoảng cách screen không còn tỷ lệ tuyến tính với khoảng cách trên surface; raw UV vẫn bị trộn như thể phép chia Z chưa xảy ra.
+Weights này đo vị trí **trên triangle đã chiếu xuống màn hình**. Khi cả mặt phẳng có cùng Z, nó hoạt động đúng. Khi mặt phẳng nghiêng, perspective divide làm thay đổi tỉ lệ gần/xa; UV trên bề mặt không còn biến thiên đều theo khoảng cách màn hình.
+
+Ta chưa sửa điều đó ở bài này. Geometry, coverage và sampler phải chạy đúng trước; chỉ phép nội suy UV còn là bản affine.
 
 <InteractiveLab demo="perspective-texture" mode="texture-affine" />
 
 ## Viết code từng bước
 
-### Bước 1 — Không vứt camera depth sau projection
+### Bước 1 — Lấy weights tại tâm pixel
 
-```cpp title="include/lab.hpp — ScreenVertex của checkpoint affine"
-struct ScreenVertex {
-    Vec2 position{};
-    Vec2 uv{};
-    double cameraDepth{};
-};
-```
+`include/raster.hpp` dùng edge function dạng đường thẳng `Ax+By+C`. Giá trị trên ba cạnh cho biết pixel nằm trong triangle hay không:
 
-Checkpoint 3 chưa dùng depth để sửa UV, nhưng lưu nó ngay ở ranh giới projection. Bài 4 cần depth làm reference; bài 5 biến nó thành reciprocal attributes.
-
-### Bước 2 — Project position, chuyển nguyên UV qua stage
-
-```cpp title="include/lab.hpp — projection chỉ đổi geometry"
-result.position = {
-    double(viewport.left) + (ndcX * 0.5 + 0.5) * double(viewport.width),
-    double(viewport.top) + (0.5 - ndcY * 0.5) * double(viewport.height),
-};
-result.uv = vertex.uv;
-result.cameraDepth = vertex.position.z;
-```
-
-Raw UV không bị perspective divide. Chính điểm này tạo ra nhu cầu perspective correction, không phải vì UV bản thân sai.
-
-### Bước 3 — Nội suy hai thành phần bằng cùng λ
-
-```cpp title="include/lab.hpp — affine UV tại raster sample"
-inline Vec2 interpolateAffineUv(const ScreenTriangle& triangle, Barycentric weights) {
-    return {
-        weights.a * triangle.vertices[0].uv.x +
-            weights.b * triangle.vertices[1].uv.x +
-            weights.c * triangle.vertices[2].uv.x,
-        weights.a * triangle.vertices[0].uv.y +
-            weights.b * triangle.vertices[1].uv.y +
-            weights.c * triangle.vertices[2].uv.y,
-    };
+```cpp title="include/raster.hpp — edge function trên screen space"
+inline double edgeFunction(Vec2 a, Vec2 b, Vec2 p) {
+    return (a.y - b.y) * p.x + (b.x - a.x) * p.y + (a.x * b.y - a.y * b.x);
 }
 ```
 
-Không round UV. Sampler mới là nơi đổi tọa độ liên tục sang texel index.
+Tại pixel `(x,y)`, dùng tâm `(x+0.5,y+0.5)`, không dùng góc trái trên. Rasterizer chia mỗi giá trị cạnh cho area để lấy λ. Top-left rule giải quyết trường hợp giá trị cạnh bằng 0: cạnh chung chỉ thuộc một triangle, không cộng thêm epsilon để cả hai cùng nhận.
 
-### Bước 4 — Sample texture trong callback coverage
+### Bước 2 — Đổi winding thì đổi cả UV
 
-```cpp title="src/main.cpp — coverage quyết định pixel, UV quyết định màu"
-const lab::Vec2 affineUv = lab::interpolateAffineUv(screen, sample.barycentric);
-lab::Vec2 selectedUv = affineUv;
-const lab::Color color = lab::sampleNearest(
-    texture,
-    selectedUv,
-    lab::AddressMode::clamp
-);
-putPixel(pixels, width, height, sample.x, sample.y, packedColor(color));
+Rasterizer chuẩn hóa area về dương:
+
+```cpp title="include/raster.hpp — đổi cả ScreenVertex, không chỉ position"
+if (area < 0) {
+    std::swap(triangle[1], triangle[2]);
+    area = -area;
+}
 ```
 
-Top-left rasterizer không biết texture. Nó chỉ trả sample position và barycentric weights; callback chọn cách nội suy cùng cách shade.
+`ScreenVertex` chứa cả position và UV. Nếu chỉ swap hai position rồi trộn UV theo thứ tự cũ, ảnh có thể bị lật dù coverage vẫn đúng. Vì thế callback nhận **cả triangle đã chuẩn hóa** lẫn weights:
+
+```cpp title="include/raster.hpp — thứ tự weights khớp thứ tự thuộc tính"
+shadePixel(triangle, RasterSample{x, y, {a / area, b / area, c / area}});
+```
+
+### Bước 3 — Viết hàm nội suy affine
+
+Thêm `include/interpolation.hpp`:
+
+```cpp title="include/interpolation.hpp — UV tuyến tính trên màn hình"
+inline Vec2 interpolateAffineUv(const ScreenTriangle& triangle, Barycentric weights) {
+    const double u = weights.a * triangle[0].uv.x + weights.b * triangle[1].uv.x + weights.c * triangle[2].uv.x;
+    const double v = weights.a * triangle[0].uv.y + weights.b * triangle[1].uv.y + weights.c * triangle[2].uv.y;
+    return {u, v};
+}
+```
+
+Đừng clamp ở đây. Hàm này chỉ chịu trách nhiệm trộn thuộc tính; clamp/repeat vẫn do sampler xử lý.
+
+### Bước 4 — Nối UV tới framebuffer
+
+Trong `renderTexturedTriangle`, sau coverage, tạo `affineUv` rồi dùng nó làm `selectedUv`. Cuối callback:
+
+```cpp title="include/render.hpp — sampler trả màu, callback ghi pixel"
+write(sample, selectedUv, sampleNearest(texture, selectedUv, scene.address));
+++stats.covered;
+```
+
+Hàm `write` được truyền từ `renderScene`; nó gọi `putPixel` cho `sample.x/sample.y`. Chương trình không dùng SDL để dán texture lên geometry: SDL chỉ trình bày framebuffer CPU cuối cùng.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build affine texture mapper"
-cmake --build build --config Debug --target project_20_checkpoint_3
-```
+Build `project_20_checkpoint_3`. So phím `1` chính diện với phím `3` nghiêng mạnh. Hãy nhìn đường chia giữa hai triangle: đường biên quad vẫn đúng, nhưng kích thước/hướng các ô cờ có thể thay đổi thiếu tự nhiên qua diagonal.
 
-So preset front với steep. Front phải giống một bàn cờ chữ nhật. Steep vẫn nằm đúng trong silhouette nhưng các ô gần/xa phân bố thiếu tự nhiên và hai triangle có thể lộ khác biệt theo diagonal.
+Đường đi nay đã đủ: `quad → projectVertex → rasterizeTriangle → interpolateAffineUv → sampleNearest → putPixel`. Giữ đường đi này trong đầu; các bài sau chỉ thay đúng bước nội suy, không viết lại toàn bộ renderer.
 
 ## Thử làm sai để hiểu đúng
 
-1. Nội suy integer texel index ở vertex. Làm tròn trước khiến UV nhảy theo mảng block lớn; nội suy UV double rồi sample ở pixel.
-2. Lấy barycentric ở góc `(x,y)` thay vì pixel center. Coverage và UV không còn nói về cùng sample; giữ `(x+0.5,y+0.5)`.
-3. Đổi winding bằng swap screen position nhưng không swap UV/depth. Weights trỏ sang attribute sai; swap cả `ScreenVertex`.
-4. Kết luận sampler làm méo texture. Preview đã chứng minh sampler ổn; biến dạng chỉ xuất hiện sau affine interpolation trên depth khác nhau.
+1. Dùng tọa độ `(x,y)` thay cho tâm pixel. Marker và coverage sẽ lệch nửa pixel; khôi phục `+0.5`.
+2. Swap position nhưng giữ UV theo thứ tự cũ. Texture sai mà silhouette không đổi: coverage không đủ để chứng minh shading đúng.
+3. Chia quad thành nhiều triangle nhỏ để ảnh trông bớt méo. Đây chỉ là cách che sai số affine; project yêu cầu sửa công thức trên hai triangle gốc.
 
 ## Tự kiểm tra kết quả
 
-- Rasterizer dùng top-left coverage và barycentric sum gần 1.
-- UV được nội suy ở dạng double, sau đó nearest sampler mới chọn texel.
-- Front quad cho checker đều và hai triangle nối khít.
-- Steep quad vẫn đúng silhouette nhưng checker affine méo có thể nhìn thấy.
-- Checkpoint 3 chưa có `1/z`, `u/z` hoặc `v/z`.
+- Bàn cờ được tô bằng sampler đã viết ở bài 2.
+- Mỗi pixel trên cạnh chung có đúng một owner.
+- Chính diện cho kết quả hợp lý; nghiêng mạnh lộ distortion rõ.
+- Quay quad không đổi ảnh nguồn hoặc UV ở bốn góc.
+- Bài này chưa có tùy chọn corrected trong Canvas.
 
 ## Bài tập mở rộng
 
-Tạm thay checker bằng gradient `color=(u*255,v*255,0)`. Gradient giúp nhìn UV liên tục, còn checker giúp nhìn texel boundary. Giữ cả hai bằng một enum debug rồi quay về checker trước bài 4.
+Đổi diagonal của quad như bài 1. Bản affine có thể thay cách méo bên trong dù bề ngoài không đổi. Ghi lại hiện tượng ấy; bản corrected ở bài 6 phải loại bỏ sự phụ thuộc không mong muốn này.
 
-Bài tiếp theo sẽ biến nhận xét “trông méo” thành một sai số UV cụ thể tại pixel được chọn.
+[Bài tiếp theo: tìm UV đúng tại pixel bằng một cách độc lập.](/projects/perspective-checkerboard/04-do-sai-so-do-perspective)

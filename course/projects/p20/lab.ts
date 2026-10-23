@@ -1,54 +1,48 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
-    label: "PERSPECTIVE TEXTURE LAB",
-    title: "Cùng một pixel, affine UV và corrected UV lệch nhau bao nhiêu?",
+    label: "CPU TEXTURE LAB",
+    title: "Cùng một mặt phẳng, hai cách dán bàn cờ",
     description:
-      "Nghiêng quad, chọn pixel và theo dõi barycentric weights, 1/z, UV cùng texel bằng đúng công thức của source C++.",
+      "Quay mặt phẳng để thấy affine méo ở đâu; bật corrected rồi kiểm UV bằng giao ray–plane độc lập.",
   },
   modes: {
     "texture-quad": {
-      title: "Bốn corner chia sẻ geometry và UV ra sao?",
-      description:
-        "Xem projected quad, đường chéo hai triangle và nhãn UV tại từng corner trước khi texture tham gia.",
+      title: "Mặt phẳng quay, UV vẫn nằm ở bốn góc",
+      description: "Chưa tô texture: kiểm hình học, chiều sâu và UV trước.",
     },
     "texture-sampling": {
-      title: "Một cặp UV chọn texel nào?",
+      title: "UV này chọn texel nào?",
       description:
-        "Di chuyển UV trên bàn cờ procedural và so clamp với repeat, đặc biệt ở biên 1.0 và UV âm.",
+        "Chọn UV, thử clamp/repeat và quan sát ô texel được đánh dấu trên ảnh nguồn 64 × 64.",
     },
     "texture-affine": {
-      title: "Barycentric affine làm bàn cờ méo thế nào?",
+      title: "Tô bàn cờ bằng affine trước",
       description:
-        "Render raw UV bằng λ trong screen space và tăng độ nghiêng để nhìn các ô gần camera bị phân bố sai.",
+        "So tư thế chính diện với nghiêng mạnh; đây là bản đối chứng chưa sửa perspective.",
     },
     "texture-error": {
-      title: "Sai số affine nằm ở pixel nào?",
+      title: "Đo UV đúng tại tâm pixel",
       description:
-        "Chọn một pixel trong quad và đọc riêng affine UV, reference UV cùng độ lệch Euclidean.",
+        "Chọn pixel trong quad, so affine UV với giao ray–plane; click ngoài quad không tạo số liệu giả.",
     },
     "texture-reciprocal": {
-      title: "Vì sao phải mang 1/z, u/z và v/z?",
-      description:
-        "Theo dõi ba reciprocal attributes tại vertex và tổ hợp barycentric của chúng ở sample được chọn.",
+      title: "Mang theo 1/z, u/z và v/z",
+      description: "Ảnh chưa đổi; kiểm denominator dương và tìm hiểu dữ liệu sẽ dùng để sửa UV.",
     },
     "texture-correct": {
-      title: "Phép chia cuối khôi phục UV ra sao?",
-      description:
-        "So affine và perspective-correct trên cùng quad; inspector hiển thị denominator cùng UV sau khi chia.",
+      title: "Chia lại tại pixel, bàn cờ hết gãy theo diagonal",
+      description: "M đổi affine/corrected, C bật so sánh; hai ảnh dùng cùng geometry và sampler.",
     },
     "texture-clip": {
-      title: "Vertex mới trên near plane nhận UV nào?",
-      description:
-        "Đưa cạnh gần camera xuyên near plane và kiểm position cùng UV của intersection dùng chung tham số t.",
+      title: "Mặt phẳng đi xuyên near plane",
+      description: "Preset 4 cắt một phần quad; UV phải liên tục sau clipping và projection.",
     },
     "texture-validation": {
-      title: "Texture mapper có giữ mọi invariant?",
+      title: "Texture mapper hoàn chỉnh",
       description:
-        "Thử bốn preset, compare mode, drag và single-step; theo dõi coverage, barycentric sum, UV error và texel index.",
+        "So sánh A/B, xoay quad, chạy/dừng, tiến từng bước và bật debug để kiểm công thức.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

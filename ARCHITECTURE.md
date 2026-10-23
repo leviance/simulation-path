@@ -72,7 +72,7 @@ Danh sách module thuật ngữ được khai báo một lần trong `scripts/gl
 
 ## Giới hạn chống phình file
 
-Code block C++ của Project 01–19 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này. Project 20–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
+Code block C++ của Project 01–20 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này. Project 21–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
 
 `npm run check:architecture` áp dụng các budget:
 
@@ -108,5 +108,7 @@ CI bắt đầu từ checkout chỉ có nguồn chuẩn: kiểm tra Git không t
 ## ZIP tải về
 
 `npm run package:projects` tính SHA-256 từ đường dẫn và nội dung source. Digest trong `public/downloads/manifest.json` khớp thì ZIP được giữ nguyên; chỉ project thay đổi mới gọi CMake để nén lại. `npm run check:packages` kiểm tra manifest, giải nén vào thư mục tạm và so sánh từng byte với source; ZIP cũ hoặc thiếu asset sẽ làm CI thất bại.
+
+Khi agent kiểm tra ZIP, dùng tiến trình local qua process supervisor để giải nén và đối chiếu, với timeout và khả năng hủy độc lập. Nếu chỉ sửa một project, có thể kiểm tra đầy đủ gói của project đó; không dùng kết quả này để tuyên bố tất cả ZIP đã khớp. Trên trình duyệt, kiểm liên kết tải trỏ đúng gói. Không dùng cơ chế tự động theo dõi download nếu công cụ không bảo đảm thao tác chờ có thể được ngắt độc lập; tham số timeout của một lời gọi công cụ không thay thế được watchdog của tiến trình local.
 
 Khi project mới cần kiểm thử nội dung riêng, tạo suite theo đợt phát hành, ví dụ `tests/projects-09-13.cases.mjs`, rồi import nó từ `tests/rendered-html.test.mjs`. Không nối toàn bộ regression vào một file duy nhất.

@@ -1,103 +1,110 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đo sai số thay vì chỉ nhìn texture méo
+# Chọn một pixel và tìm UV đúng bằng hình học
 
 ## Vấn đề cần giải quyết
 
-Một hình checker có thể trông lạ vì nhiều nguyên nhân: UV corner sai, winding đảo, sampler đọc nhầm row hoặc affine interpolation. Chỉ nhìn ảnh không cho biết stage nào sai.
+Bàn cờ trông méo chưa cho ta một phép kiểm chắc chắn. Có thể sampler sai, UV ở góc sai, hoặc ảnh nguồn vốn đã không đều. Muốn sửa có căn cứ, hãy chọn một pixel rồi hỏi: **nếu kéo một tia từ camera xuyên qua tâm pixel, nó chạm vị trí nào trên mặt phẳng?**
 
-Checkpoint 4 thêm pixel inspector. Ta chọn đúng một sample đã qua coverage, lưu barycentric weights, affine UV và một reference UV được reweight bằng camera depth. Khoảng cách giữa hai UV cho một con số có thể test.
+Vì quad là một hình chữ nhật phẳng, ta tìm được UV của điểm chạm bằng hình học, không cần dùng barycentric hoặc công thức perspective-correct. Đây là reference riêng cho quad của project, không phải ray tracer cho mọi mesh.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Reference tạm thời reweight barycentric weights theo reciprocal depth:
+Camera ở origin. Hướng ray qua tâm pixel là phép đảo đơn giản của projection:
 
 $$
-w_i=\frac{\lambda_i/z_i}{\lambda_A/z_A+\lambda_B/z_B+\lambda_C/z_C}
+D_{view}=\left(\frac{x_{pixel}-W/2}{f},\frac{H/2-y_{pixel}}{f},1\right)
 $$
 
+Quad được quay X rồi Y và dịch ra `distance`. Đưa ray về local bằng thứ tự ngược: trừ translation, quay `−yaw` quanh Y rồi quay `−pitch` quanh X. Ở local, mặt phẳng vẫn là `z=0` nên:
+
 $$
-uv_{reference}=w_Auv_A+w_Buv_B+w_Cuv_C
+O_z+tD_z=0\quad\Rightarrow\quad t=-O_z/D_z
 $$
 
-Bài 5 sẽ suy ra công thức này. Hiện tại ta dùng nó như một oracle: khi `zA=zB=zC`, mọi `1/z` giống nhau và weights trở lại đúng λ; khi depth khác nhau, hai UV tách ra.
+Từ điểm chạm local `(x,y,0)`, đọc UV theo kích thước quad:
+
+$$
+u=\frac{x+1.6}{3.2},\qquad v=\frac{1-y}{2}
+$$
+
+Không normalize D: thành phần view Z bằng 1 giúp t chính là độ sâu camera. Từ chối `t < 1` vì điểm ấy nằm sau near plane.
 
 <InteractiveLab demo="perspective-texture" mode="texture-error" />
 
 ## Viết code từng bước
 
-### Bước 1 — Reweight bằng camera depth
+### Bước 1 — Đưa ray về local
 
-```cpp title="include/lab.hpp — reference UV độc lập với raw affine UV"
-const double weightedA = weights.a / triangle.vertices[0].cameraDepth;
-const double weightedB = weights.b / triangle.vertices[1].cameraDepth;
-const double weightedC = weights.c / triangle.vertices[2].cameraDepth;
-const double denominator = weightedA + weightedB + weightedC;
+Thêm `referenceUvFromRay` trong `include/reference.hpp`. Hàm nhận `Scene`, tâm pixel và viewport. Sau khi tính `focalPixels`, dựng ray và đảo transform:
+
+```cpp title="include/reference.hpp — ray dùng chung quy ước camera với projection"
+const Vec3 ray{(pixel.x - viewport.left - viewport.width * 0.5) / focalPixels, (viewport.top + viewport.height * 0.5 - pixel.y) / focalPixels, 1};
+const Vec3 origin = rotateX(rotateY({0, 0, -scene.distance}, -scene.yaw), -scene.pitch);
+const Vec3 direction = rotateX(rotateY(ray, -scene.yaw), -scene.pitch);
 ```
 
-Denominator gần zero được chặn. Với triangle hợp lệ hoàn toàn trước camera, ba depth dương và weights bên trong không âm nên denominator cũng dương.
+Ta quay **cả origin và direction**. Chỉ quay direction mà quên origin sẽ làm ray xuất phát từ một camera local sai vị trí.
 
-### Bước 2 — Trộn UV bằng weights đã sửa
+### Bước 2 — Giải t và đọc UV
 
-```cpp title="include/lab.hpp — chia một lần sau khi cộng tử số"
-const double numeratorU = weightedA * triangle.vertices[0].uv.x + weightedB * triangle.vertices[1].uv.x + weightedC * triangle.vertices[2].uv.x;
-const double numeratorV = weightedA * triangle.vertices[0].uv.y + weightedB * triangle.vertices[1].uv.y + weightedC * triangle.vertices[2].uv.y;
-return {numeratorU / denominator, numeratorV / denominator};
+Nếu `direction.z` gần 0, ray gần song song mặt phẳng: trả `nullopt`. Với ray còn lại:
+
+```cpp title="include/reference.hpp — giao mặt phẳng rồi đọc tọa độ trên tấm bảng"
+const double t = -origin.z / direction.z;
+if (!std::isfinite(t) || t < 1) {
+    return std::nullopt;
+}
+const double x = origin.x + direction.x * t;
+const double y = origin.y + direction.y * t;
+const Vec2 uv{(x + 1.6) / 3.2, (1 - y) / 2.0};
 ```
 
-Đây chưa phải API final; nó đọc depth trực tiếp để làm chuẩn so sánh. Bài 5 sẽ chuẩn bị reciprocal attributes ngay tại projected vertex.
+Cuối hàm, từ chối UV ngoài quad và giá trị không hữu hạn. Tolerance nhỏ ở biên chỉ phục vụ đối chiếu hình học; nó không được dùng để nới top-left coverage của rasterizer.
 
-### Bước 3 — Đo khoảng cách trong UV space
+### Bước 3 — Chọn đúng pixel đang được tô
 
-```cpp title="include/lab.hpp — error không phụ thuộc resolution texture"
-inline double uvDistance(Vec2 left, Vec2 right) {
-    const double deltaU = right.x - left.x;
-    const double deltaV = right.y - left.y;
-    return std::sqrt(deltaU * deltaU + deltaV * deltaV);
+`Scene::sample` lưu vị trí tương đối trong viewport. Đổi nó thành chỉ số pixel bằng floor:
+
+```cpp title="include/render.hpp — selected pixel có chỉ số nguyên"
+const int selectedX = viewport.left + int(std::floor(scene.sample.x * viewport.width));
+const int selectedY = viewport.top + int(std::floor(scene.sample.y * viewport.height));
+```
+
+Trong callback raster, chỉ ghi inspector nếu sample khớp hai chỉ số ấy và ray có giao điểm hợp lệ. Ray dùng `(sample.x+0.5,sample.y+0.5)`, đúng tâm mà coverage vừa kiểm. Không tính UV ở vị trí con trỏ liên tục rồi so với UV của pixel bên cạnh.
+
+### Bước 4 — Đo độ lệch liên tục trước khi so màu
+
+```cpp title="include/reference.hpp — độ lệch trong UV space"
+inline double uvDistance(Vec2 a, Vec2 b) {
+    return std::hypot(a.x - b.x, a.y - b.y);
 }
 ```
 
-Error ở UV space dễ so giữa texture 64×64 và 1024×1024. Muốn đổi sang sai lệch texel, nhân U error với width và V error với height.
-
-### Bước 4 — Chỉ cập nhật inspector khi sample được phủ
-
-```cpp title="src/main.cpp — marker đọc đúng callback đang shade"
-if (sample.x == selectedX && sample.y == selectedY) {
-    inspection.covered = true;
-    inspection.barycentric = sample.barycentric;
-    inspection.affineUv = affineUv;
-    inspection.correctedUv = referenceUv;
-}
-```
-
-Click ngoài quad làm `covered=false`, thay vì báo một bộ UV được ngoại suy không hề dùng để vẽ.
+Hai UV khác nhau vẫn có thể cùng rơi vào một ô cờ và cho cùng màu. Bởi vậy ta so UV trước sampler, không lấy “màu giống nhau” làm bằng chứng nội suy đúng.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint đo affine error"
-cmake --build build --config Debug --target project_20_checkpoint_4
-ctest --test-dir build -C Debug --output-on-failure
-```
+Build `project_20_checkpoint_4`, click một pixel trong quad. Chuyển từ preset 1 sang 3: chính diện cho sai số gần zero, nghiêng mạnh cho sai số rõ rệt. Click ngoài quad phải báo không được phủ, không giữ bộ số của pixel cũ.
 
-Chọn một pixel gần giữa quad rồi đổi front/medium/steep. Front phải cho error gần zero. Ở steep, di chuyển marker dọc chiều sâu để thấy error thay đổi chứ không phải một hằng số toàn face.
+Trên Canvas, chọn “Chọn pixel” để kéo marker mà không xoay mặt phẳng. Hai thanh Pixel X/Y cho phép làm cùng việc bằng bàn phím. Nếu chọn chế độ xoay, một click ngắn vẫn chọn pixel, còn một drag đủ dài mới quay quad.
 
 ## Thử làm sai để hiểu đúng
 
-1. So texel color thay vì UV. Hai UV khác nhau vẫn có thể rơi vào cùng checker cell và che lỗi; đo tọa độ liên tục trước sampler.
-2. Tính reference bằng một barycentric mới ở tọa độ integer khác sample. Hai phép đo không còn cùng pixel; dùng đúng `RasterSample`.
-3. Cho click ngoài triangle vẫn cập nhật inspector bằng negative weights. Đó là extrapolation, không phải pixel được render; giữ cờ `covered`.
-4. Chỉ kiểm preset steep. Một thuật toán sai có thể vẫn tạo error dương; constant-depth front phải là test agreement bằng zero.
+1. Dùng một bản sao của công thức corrected làm reference. Hai hàm có thể cùng sai theo một cách và vẫn cho test xanh. Giữ reference hình học này độc lập.
+2. Đảo phép quay theo thứ tự `−X` rồi `−Y`. Phép quay không giao hoán; thử đồng thời yaw và pitch để thấy giao điểm sai.
+3. Click ngoài quad nhưng vẫn hiện giá trị gần nhất. Người học sẽ tưởng pixel ấy được tô; reset trạng thái `covered` ở mỗi frame.
 
 ## Tự kiểm tra kết quả
 
-- Inspector chỉ hợp lệ ở pixel top-left coverage đã nhận.
-- `λA+λB+λC` sai không quá tolerance.
-- Front quad cho affine/reference UV gần bằng nhau.
-- Steep quad có sample trong lòng face với UV error đo được lớn hơn zero.
-- UV distance hữu hạn, không âm và độc lập texture resolution.
+- Inspector lấy dữ liệu từ callback của chính pixel đang được rasterize.
+- Tổng λ gần 1, affine UV và reference UV đều hữu hạn khi sample hợp lệ.
+- Reference không gọi hàm nội suy UV hoặc dùng barycentric weights.
+- Chính diện cho error gần zero; nghiêng mạnh làm error tăng ở vùng giữa mặt phẳng.
+- Click ngoài vùng phủ báo ngoài quad.
 
 ## Bài tập mở rộng
 
-Tạo heatmap chỉ dùng `uvDistance` làm độ sáng, không sample checker. Vùng vertex phải tối vì cả hai phương pháp trùng đúng UV vertex; vùng giữa tilted face sẽ sáng hơn.
+Đổi vị trí marker dọc một hàng pixel và ghi affine error. Đừng mong mọi pixel có cùng sai số: tại vertex hai cách cùng phải trả đúng UV gốc, còn giữa bề mặt sự khác biệt mới rõ.
 
-Bài tiếp theo sẽ giải thích vì sao phép reweight theo `1/z` không phải một mẹo sửa ảnh, mà là hệ quả trực tiếp của perspective divide.
+[Bài tiếp theo: suy ra dữ liệu cần mang qua perspective divide.](/projects/perspective-checkerboard/05-suy-ra-reciprocal-depth)

@@ -1,113 +1,144 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Dựng quad nghiêng và gắn UV
+# Dựng mặt phẳng có thể xoay và gắn UV
 
 ## Vấn đề cần giải quyết
 
-Mục tiêu của Project 20 là dán một bàn cờ lên mặt phẳng 3D nghiêng. Nhưng “dán texture” không bắt đầu từ sampler; nó bắt đầu từ việc xác định **điểm nào trên bề mặt tương ứng với điểm nào trên ảnh**. Ta cần một quad có geometry rõ ràng, hai triangle dùng chung vertex và một cặp UV tại mỗi corner.
+Đặt một tấm bàn cờ trước mặt: khi bạn nghiêng nó, các ô ở xa phải nhỏ lại. Ta sẽ tự vẽ tấm bàn cờ ấy bằng CPU, giữ một bản sai để so sánh rồi sửa cách dán ảnh. Nhưng trước khi có ảnh, ta cần một mặt phẳng **thật sự quay trong 3D**, không phải một hình thang được kéo góc trên màn hình.
 
-Checkpoint đầu dựng lại đầy đủ window, renderer, CPU framebuffer và streaming texture. Sau đó nó project quad rồi vẽ wireframe cùng đường chéo chung. Chưa có ô cờ nào được tô: nếu silhouette, winding hoặc aspect ratio sai, ta muốn nhìn thấy lỗi đó trước khi texture che lên.
+Hãy tải ZIP ở trang tổng quan và build starter trước. Nó đã có window, renderer, streaming texture và framebuffer như các project trước. Trong `src/main.cpp`, việc tạo renderer vẫn rất bình thường, không có API vẽ 3D nào của SDL:
+
+```cpp title="src/main.cpp — tạo renderer và xử lý khi thất bại"
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (!renderer) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+Starter mở một nền tối và dòng hướng dẫn. Ta giữ bộ khung đó, thêm dữ liệu quad trong `geometry.hpp`, rồi nối phép chiếu và vẽ cạnh trong `render.hpp`. Chưa cần sửa sampler hay nghĩ đến công thức `u/z`.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Position trả lời vertex nằm ở đâu trong camera space. UV trả lời vertex đó chạm vào đâu trên texture:
+**Position nói đỉnh nằm ở đâu; UV nói đỉnh đó chạm vào đâu trên ảnh nguồn.** Quad rộng 3.2, cao 2, ban đầu nằm trên mặt phẳng local `z=0`. Bốn góc có UV lần lượt là `(0,1)`, `(1,1)`, `(1,0)`, `(0,0)`. U tăng sang phải; V tăng xuống dưới ảnh, nên góc trên có V bằng 0.
+
+Hai triangle dùng index `{0,2,1}` và `{0,3,2}`. Chúng dùng chung hai đỉnh 0 và 2 trên đường chéo. Đừng tạo hai bản sao UV rồi hy vọng sau này chúng luôn được sửa giống nhau.
+
+Camera đặt tại origin và nhìn theo `+Z`. Quay mặt phẳng quanh X, tiếp đến Y, rồi đưa nó ra trước camera:
 
 $$
-TexturedVertex=(x,y,z,u,v)
+P_{view}=R_Y(yaw)R_X(pitch)P_{local}+(0,0,distance)
 $$
 
-Project này dùng U tăng sang phải, V tăng xuống dưới. Bốn corner lần lượt nhận `(0,1)`, `(1,1)`, `(1,0)`, `(0,0)`. Quad được chia theo diagonal `0–2`; hai triangle phải tham chiếu đúng cùng vertex 0 và 2, không sao chép UV.
+Phép quay giữ nguyên chiều dài cạnh. Nếu chỉ tăng Z của cạnh phải mà giữ nguyên X/Y, cạnh ngang sẽ dài ra: đó là **biến dạng mặt phẳng**, không phải xoay.
 
 <InteractiveLab demo="perspective-texture" mode="texture-quad" />
 
 ## Viết code từng bước
 
-### Bước 1 — Đặt position và UV trong cùng một vertex
+### Bước 1 — Thêm vertex có cả position và UV
 
-```cpp title="include/lab.hpp — vertex mang geometry cùng texture coordinate"
+Trong `include/geometry.hpp`, thêm kiểu sau. `Vec2` và `Vec3` đã có trong starter:
+
+```cpp title="include/geometry.hpp — thuộc tính đi cùng vị trí"
 struct TexturedVertex {
     Vec3 position{};
     Vec2 uv{};
 };
 
-struct TexturedTriangle {
-    std::array<TexturedVertex, 3> vertices{};
+using TexturedTriangle = std::array<TexturedVertex, 3>;
+
+struct TexturedQuad {
+    std::array<TexturedVertex, 4> vertices{};
+    std::array<std::array<std::size_t, 3>, 2> faces{{{0, 2, 1}, {0, 3, 2}}};
 };
 ```
 
-UV không phải dữ liệu trang trí đặt ở một array không liên quan. Clipping ở bài 7 sẽ sinh vertex mới; khi đó position và UV phải được nội suy bằng cùng tham số cạnh.
+Ta dùng array vì số đỉnh và face ở đây cố định. `faces` chỉ chứa index; dữ liệu position và UV vẫn nằm ở bốn vertex gốc.
 
-### Bước 2 — Dựng quad bằng bốn vertex dùng chung
+### Bước 2 — Tạo hình chữ nhật local rồi quay cả bốn đỉnh
 
-```cpp title="include/lab.hpp — cạnh trái gần camera, cạnh phải ở xa"
-inline TexturedQuad makeTiltedQuad(double nearDepth = 2.2, double farDepth = 6.2) {
-    return {
-        {{
-            {{-1.6, -1.0, nearDepth}, {0.0, 1.0}},
-            {{1.6, -1.0, farDepth}, {1.0, 1.0}},
-            {{1.6, 1.0, farDepth}, {1.0, 0.0}},
-            {{-1.6, 1.0, nearDepth}, {0.0, 0.0}},
-        }},
-        {{{0, 2, 1}, {0, 3, 2}}},
-    };
+```cpp title="include/geometry.hpp — tạo quad không làm thay đổi chiều dài cạnh"
+inline TexturedQuad makeQuad(double yaw, double pitch, double distance) {
+    TexturedQuad quad;
+    quad.vertices[0] = {{-1.6, -1, 0}, {0, 1}};
+    quad.vertices[1] = {{1.6, -1, 0}, {1, 1}};
+    quad.vertices[2] = {{1.6, 1, 0}, {1, 0}};
+    quad.vertices[3] = {{-1.6, 1, 0}, {0, 0}};
+    for (auto& vertex : quad.vertices) {
+        vertex.position = rotateY(rotateX(vertex.position, pitch), yaw);
+        vertex.position.z += distance;
+    }
+    return quad;
 }
 ```
 
-Camera nhìn theo `+Z`. Cạnh trái có Z nhỏ hơn nên hiện lớn hơn sau projection; cạnh phải ở xa nên co lại. Hai face dùng winding hướng mặt trước về camera.
+`rotateX` và `rotateY` dùng sin/cos từ Project 12. UV không tham gia phép quay: một góc của tấm bàn cờ vẫn là góc ấy, dù tấm bàn quay đi đâu. Chỉ position thay đổi.
 
-### Bước 3 — Giải một face thành triangle thật
+### Bước 3 — Chiếu đỉnh xuống viewport
 
-```cpp title="include/lab.hpp — topology index trở thành ba TexturedVertex"
-inline TexturedTriangle quadTriangle(const TexturedQuad& quad, std::size_t faceIndex) {
-    const auto& face = quad.faces[faceIndex];
-    return {{
-        quad.vertices[face[0]],
-        quad.vertices[face[1]],
-        quad.vertices[face[2]],
-    }};
+`projectVertex` từ chối vertex có `z < 1`; near plane của project là 1. Sau các kiểm tra đầu hàm, phần tính screen position là:
+
+```cpp title="include/geometry.hpp — dùng chiều cao viewport để tính focal length"
+const double focalPixels = double(viewport.height) * 0.5 / std::tan(3.141592653589793 / 6.0);
+ScreenVertex output;
+output.position = {viewport.left + viewport.width * 0.5 + focalPixels * vertex.position.x / vertex.position.z, viewport.top + viewport.height * 0.5 - focalPixels * vertex.position.y / vertex.position.z};
+output.uv = vertex.uv;
+```
+
+FOV theo chiều dọc là 60°. Cùng một `focalPixels` được dùng cho X và Y, nên một đơn vị ngang không bị kéo khác một đơn vị dọc. Dấu trừ ở screen Y đổi quy ước Y lên trên của 3D sang Y xuống dưới của framebuffer.
+
+### Bước 4 — Nối cạnh bằng code CPU đã biết
+
+Trong `renderScene`, sau khi lấy `quad` và `viewport`, duyệt index của từng face:
+
+```cpp title="include/render.hpp — wireframe của hai triangle"
+for (const auto& face : quad.faces) {
+    for (std::size_t edge = 0; edge < face.size(); ++edge) {
+        const auto a = projectVertex(quad.vertices[face[edge]], viewport);
+        const auto b = projectVertex(quad.vertices[face[(edge + 1) % face.size()]], viewport);
+        if (a && b) {
+            drawLine(image, a->position, b->position, {60, 220, 170}, viewport);
+        }
+    }
 }
 ```
 
-Rasterizer về sau nhận triangle, còn scene giữ indexed quad. Hàm này là ranh giới rõ giữa dữ liệu mesh và primitive gửi vào pipeline.
-
-### Bước 4 — Project cạnh trước khi tô bề mặt
-
-```cpp title="src/main.cpp — cùng một viewport cho mọi corner"
-const double ndcX = point.x * focalScale / (aspect * point.z);
-const double ndcY = point.y * focalScale / point.z;
-projected[index] = {
-    double(viewport.left) + (ndcX * 0.5 + 0.5) * double(viewport.width),
-    double(viewport.top) + (0.5 - ndcY * 0.5) * double(viewport.height),
-};
-```
-
-Checkpoint 1 nối các điểm projected theo face indices. Đường chéo bị vẽ hai lần không gây hại ở wireframe; khi tô pixel, top-left rule sẽ giao cạnh đó cho đúng một triangle.
+`drawLine` là Bresenham trên framebuffer, không phải `SDL_RenderLine`. Cạnh chung được vẽ hai lần ở bước wireframe, chưa ảnh hưởng kết quả. Tới bài tô kín, ta sẽ giao pixel cạnh chung cho đúng một triangle.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint quad và UV"
+Đường đi của một frame là `makeQuad → projectVertex → drawLine → SDL_UpdateTexture → presentFramebuffer`. SDL chỉ nhận ảnh CPU đã vẽ xong. `SDL_SetRenderLogicalPresentation` giữ khung logic 960 × 640 và thêm letterbox khi resize; input được đổi về khung ấy bằng `SDL_ConvertEventToRenderCoordinates`.
+
+```bash title="Terminal — chạy bản đầu tiên có quad"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_20_checkpoint_1
+# Windows / Visual Studio
+.\build\Debug\project_20_checkpoint_1.exe
+# Linux/macOS với generator một cấu hình
+./build/project_20_checkpoint_1
 ```
 
-Chạy target và thử phím `1–4`. Front có hai cạnh cùng depth và trông như rectangle; medium/steep tạo hình thang; near cố ý đưa cạnh trái qua near plane để dùng ở bài 7.
+Thử phím `1` chính diện, `2` nghiêng vừa, `3` nghiêng mạnh; kéo chuột hoặc giữ WASD để quay. Wheel đổi khoảng cách. Các thao tác này chỉ sửa `Scene`; frame sau tạo lại quad từ hình chữ nhật local, nên không tích lũy biến dạng.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi UV vertex 2 từ `(1,0)` thành `(0,0)`. Wireframe không đổi, nhưng texture ở bài sau bị gập; geometry đúng không chứng minh attribute đúng.
-2. Tạo sáu vertex độc lập cho hai triangle. Chỉ cần sửa UV một bản sao ở diagonal, texture sẽ có seam; giữ bốn vertex chung.
-3. Dùng faces `{0,1,2}` và `{0,2,3}` mà không kiểm winding theo camera convention. Coverage có thể bị đảo hoặc culling sau này sai; giữ thứ tự đã xác nhận.
+1. Bỏ phép chia cho Z trong projection. Đỉnh gần/xa không còn tạo chiều sâu; bạn đang nhìn một bản gần orthographic.
+2. Chuyển dòng cộng `distance` lên trước phép quay. Tấm bàn sẽ quay quanh camera thay vì quay quanh tâm của nó. Khôi phục thứ tự quay rồi tịnh tiến.
+3. Đổi UV ở một góc nhưng không đổi position. Wireframe không đổi: đây là cách nhận ra geometry và thuộc tính ảnh là hai việc khác nhau. Khôi phục UV trước bài sau.
 
 ## Tự kiểm tra kết quả
 
-- Quad có bốn `TexturedVertex`, hai face và diagonal dùng chung index 0/2.
-- Bốn UV phủ đúng miền `[0,1]×[0,1]`, V tăng xuống dưới texture.
-- Front tạo rectangle projected; steep tạo hình thang nhưng không tự giao nhau.
-- Resize cập nhật aspect ratio, framebuffer và streaming texture.
-- Checkpoint 1 chưa tạo checker texture và chưa nội suy UV tại pixel.
+- Starter và checkpoint 1 đều mở được cửa sổ; resize không kéo méo hoặc làm mất điều khiển.
+- Quad có bốn vertex và hai triangle dùng chung diagonal 0–2.
+- Quay không làm đổi chiều dài cạnh 3.2 và 2 trong 3D.
+- Chính diện thấy hình chữ nhật; nghiêng thấy cạnh xa co lại tự nhiên.
+- Bài này chưa có checker texture, affine UV hay corrected UV trong Canvas.
 
 ## Bài tập mở rộng
 
-Thêm test đếm số lần mỗi index xuất hiện trong hai face. Sau đó đổi diagonal sang `1–3`, cập nhật faces nhưng giữ bốn UV corner; wireframe vẫn phải phủ cùng một quad.
+Đổi diagonal sang 1–3 bằng hai face `{0,3,1}` và `{1,3,2}`. Hình bên ngoài phải giữ nguyên. Ta sẽ dùng phép đổi này để bắt lỗi texture ở cuối project.
 
-Bài tiếp theo sẽ tạo ảnh nguồn đầu tiên: một checker texture procedural có thể lấy mẫu độc lập với geometry.
+[Bài tiếp theo: tạo ảnh bàn cờ và tự lấy mẫu texel.](/projects/perspective-checkerboard/02-tao-checker-texture-va-sample-texel)

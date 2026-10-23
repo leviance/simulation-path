@@ -616,7 +616,7 @@ test("Project 20 Perspective Texture Lab compares UV paths and keeps controls re
   const errors = captureBrowserErrors(page);
   await page.goto("/projects/perspective-checkerboard/08-ghep-texture-mapper-va-validation");
 
-  const canvas = page.locator('canvas[aria-label^="Quad nghiêng với texture affine"]');
+  const canvas = page.locator('canvas[aria-label^="Mặt phẳng 3D so sánh texture affine"]');
   const controls = page.locator(".lab-controls");
   const affine = page.locator(".lab-readout div").filter({ hasText: "Affine UV" }).locator("dd");
   const corrected = page
@@ -625,29 +625,30 @@ test("Project 20 Perspective Texture Lab compares UV paths and keeps controls re
     .locator("dd");
   const denominator = page
     .locator(".lab-readout div")
-    .filter({ hasText: "1/z denominator / error" })
+    .filter({ hasText: "1/z denominator" })
     .locator("dd");
   const texel = page.locator(".lab-readout div").filter({ hasText: "Texel" }).locator("dd");
 
   await expect(canvas).toBeVisible();
+  await controls.getByRole("button", { name: "Hiện debug", exact: true }).click();
   await expect(affine).toContainText("(");
   await expect(corrected).toContainText("(");
-  await expect(denominator).toContainText("/");
-  await expect(texel).toContainText("clamp");
+  await expect(denominator).toHaveText(/0\.\d+/);
+  await expect(texel).toContainText("(");
 
-  await controls.getByLabel("Độ nghiêng của quad texture").selectOption("near");
+  await controls.getByLabel("Tư thế mặt phẳng").selectOption("4");
   await expect(affine).not.toHaveText("—");
   await expect(corrected).not.toHaveText("—");
   await expect(denominator).not.toHaveText("—");
 
-  await controls.getByLabel("Độ nghiêng của quad texture").selectOption("steep");
+  await controls.getByLabel("Tư thế mặt phẳng").selectOption("3");
   await controls.getByLabel("Cách nội suy texture").selectOption("affine");
   await expect(controls.getByLabel("Cách nội suy texture")).toHaveValue("affine");
   await controls.getByLabel("Cách nội suy texture").selectOption("compare");
   await controls.getByLabel("Texture address mode").selectOption("repeat");
-  await expect(texel).toContainText("repeat");
-  await controls.getByLabel("Độ sâu cạnh xa").fill("7.5");
-  await expect(controls.getByLabel("Độ sâu cạnh xa")).toHaveValue("7.5");
+  await expect(controls.getByLabel("Texture address mode")).toHaveValue("repeat");
+  await controls.getByLabel("Khoảng cách", { exact: true }).fill("4.5");
+  await expect(controls.getByLabel("Khoảng cách", { exact: true })).toHaveValue("4.5");
 
   await page.getByRole("button", { name: "Tiến một bước" }).click();
   const box = await canvas.boundingBox();
@@ -660,13 +661,13 @@ test("Project 20 Perspective Texture Lab compares UV paths and keeps controls re
   }
 
   await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(controls.getByLabel("Độ nghiêng của quad texture")).toHaveValue("medium");
+  await expect(controls.getByLabel("Tư thế mặt phẳng")).toHaveValue("2");
   await expect(controls.getByLabel("Cách nội suy texture")).toHaveValue("compare");
   await expect(controls.getByLabel("Texture address mode")).toHaveValue("clamp");
 
   const finalHeader = page
     .locator(".checkpoint-source .source-file")
-    .filter({ hasText: "include/lab.hpp" });
+    .filter({ hasText: "include/interpolation.hpp" });
   await finalHeader.locator("summary").click();
   await expect(finalHeader.locator('[data-theme="one-dark-pro"]')).toBeVisible();
   await expect(finalHeader).toContainText("interpolatePerspectiveUv");

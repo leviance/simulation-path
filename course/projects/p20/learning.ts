@@ -1,200 +1,193 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
 const learning = {
   guides: {
     "p20-l01": {
       focus:
-        "Dựng một quad 3D nghiêng bằng bốn TexturedVertex dùng chung, gắn UV vào từng corner và chia bề mặt thành đúng hai triangle có winding hướng về camera.",
+        "Mở starter trước, rồi tạo bốn vertex có UV và nối thành mặt phẳng. Quay tất cả vertex bằng cùng phép quay trước khi chiếu xuống framebuffer.",
       expected:
-        "Checkpoint mở SDL3, project quad, vẽ cạnh ngoài cùng đường chéo chung. Bốn nhãn UV khớp corner; preset front/medium/steep/near chỉ đổi depth, không đổi topology hoặc UV.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Cửa sổ hiện một quad wireframe có thể kéo/xoay; phím 1–3 đổi tư thế. Chiều dài cạnh trong 3D không đổi. Bài này chưa tô texture.",
+      files: ["include/geometry.hpp", "include/render.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Gắn UV vào cùng vertex với position",
+          title: "Chạy bộ khung SDL",
           explanation:
-            "TexturedVertex giữ camera-space XYZ và UV. Khi clipping sinh vertex mới ở bài 7, hai phần dữ liệu này buộc phải đi cùng nhau.",
+            "Starter đã tạo window, renderer, streaming texture và framebuffer. Xem đường đi renderScene → SDL_UpdateTexture → presentFramebuffer trước khi thêm quad.",
         },
         {
-          title: "Dùng bốn vertex cho hai triangle",
+          title: "Gắn UV vào từng đỉnh",
           explanation:
-            "Hai face tham chiếu cùng corner 0 và 2 trên diagonal. Không sao chép vertex nghĩa là position và UV ở cạnh chung không thể lệch nhau.",
+            "Bốn vertex có cả position lẫn UV. Hai triangle tham chiếu chung vertex trên đường chéo, không giữ các bản sao rời nhau.",
         },
         {
-          title: "Project geometry trước khi tô texture",
+          title: "Quay rồi mới chiếu",
           explanation:
-            "Checkpoint đầu chỉ vẽ wireframe. Ta kiểm camera convention, aspect ratio và winding trước để lỗi texture về sau không lẫn với lỗi geometry.",
+            "makeQuad quay quanh X rồi Y, sau đó cộng distance. projectVertex chia X/Y cho Z; drawLine nối các đỉnh đã chiếu.",
         },
       ],
     },
     "p20-l02": {
       focus:
-        "Tạo checker texture trong CPU memory và biến một cặp UV liên tục thành texel index bằng nearest sampling có address mode rõ ràng.",
+        "Tạo ảnh bàn cờ 64 × 64 trong bộ nhớ, rồi tự chọn texel từ UV. Làm rõ clamp/repeat trước khi dán ảnh lên mặt phẳng.",
       expected:
-        "Texture preview hiện bàn cờ 8×8. UV 1 clamp tới texel cuối; repeat quay về texel 0; UV âm repeat vẫn cho index dương hợp lệ.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Preview bàn cờ và marker texel; J/L đổi U, I/K đổi V, T đổi clamp/repeat trong ứng dụng SDL. UV âm và UV bằng 1 không đọc ngoài mảng.",
+      files: ["include/sampler.hpp", "include/render.hpp", "include/controls.hpp"],
       steps: [
         {
-          title: "Sinh texel theo row-major",
+          title: "Sinh ảnh nguồn",
           explanation:
-            "Texture2D giữ width, height và vector Color. Checker dùng parity của cellX+cellY; index vẫn là y×width+x như framebuffer.",
+            "Màu sáng/tối nằm trong vector texels theo row-major; ảnh nguồn không đổi khi xoay mặt phẳng.",
         },
         {
-          title: "Address UV trước khi đổi sang integer",
+          title: "Đưa UV về miền hợp lệ",
           explanation:
-            "Clamp giữ miền 0..1; repeat dùng value−floor(value), không dùng modulo nguyên cho số âm.",
+            "Clamp giữ UV trong [0,1]; repeat lấy phần lẻ value−floor(value), kể cả khi value âm.",
         },
         {
-          title: "Định nghĩa behavior tại UV bằng 1",
+          title: "Tìm texel và đọc màu",
           explanation:
-            "Clamp phải chọn width−1; repeat phải quay về 0. Test biên này ngăn truy cập texel width nằm ngoài array.",
+            "Lấy floor(u×width), chặn chỉ số ở width−1. Quy ước là các ô texel nửa mở, không round UV×(width−1).",
         },
       ],
     },
     "p20-l03": {
       focus:
-        "Tái dùng barycentric weights của top-left rasterizer để nội suy trực tiếp raw UV trong screen space và tạo đối chứng affine chạy được.",
+        "Lấy barycentric weights từ rasterizer và dùng chúng để trộn raw UV. Đây là bản affine đối chứng, cố ý chưa sửa perspective.",
       expected:
-        "Quad được tô checker texture bằng affine UV. Preset front nhìn đúng; preset steep làm các ô bị kéo theo chiều sâu dù coverage và đường biên vẫn đúng.",
-      files: ["include/lab.hpp", "src/main.cpp"],
+        "Mặt phẳng được tô bàn cờ. Chính diện trông đúng; nghiêng mạnh thấy các ô bị kéo lệch và có thể lộ nếp ở diagonal.",
+      files: ["include/raster.hpp", "include/interpolation.hpp", "include/render.hpp"],
       steps: [
         {
-          title: "Giữ camera depth khi project vertex",
-          explanation:
-            "ScreenVertex cần screen position, raw UV và cameraDepth. Bước này chưa sửa perspective nhưng không vứt thông tin Z sau phép chia.",
+          title: "Xác định pixel thuộc triangle nào",
+          explanation: "Kiểm tại tâm pixel và dùng top-left rule để cạnh chung có đúng một owner.",
         },
         {
-          title: "Lấy λ tại pixel center",
+          title: "Giữ đỉnh và thuộc tính cùng thứ tự",
           explanation:
-            "Rasterizer chạy top-left coverage như Project 16 và trả λA/λB/λC cho đúng triangle đã chuẩn hóa winding.",
+            "Nếu đổi winding, rasterizer trả cả ScreenTriangle đã đổi và weights tương ứng; UV không được dùng theo thứ tự cũ.",
         },
         {
-          title: "Nội suy UV affine có chủ đích",
+          title: "Nối weights tới sampler",
           explanation:
-            "uv=λA·uvA+λB·uvB+λC·uvC. Đây là baseline cần giữ để so sánh, không phải code tạm sẽ bị xóa ngay.",
+            "interpolateAffineUv tạo UV, sampleNearest trả màu, callback ghi framebuffer. Geometry đúng không có nghĩa nội suy thuộc tính đã đúng.",
         },
       ],
     },
     "p20-l04": {
       focus:
-        "Chọn một pixel nằm trong quad và đo khoảng cách giữa affine UV với reference UV có bù camera depth, thay vì kết luận texture méo chỉ bằng mắt.",
+        "Tạo pixel inspector và một phép đo UV độc lập: ray qua tâm pixel giao với mặt phẳng local z=0.",
       expected:
-        "Pixel inspector báo barycentric sum gần 1, hai cặp UV cùng error. Front có error gần 0; steep tạo error dương rõ rệt ở vùng giữa face.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Click trong quad thấy λ, affine UV, ray UV và độ lệch. Chính diện gần zero; nghiêng mạnh có sai số rõ. Click ngoài quad báo ngoài quad.",
+      files: ["include/reference.hpp", "include/render.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Giữ pixel inspector trên chính raster sample",
+          title: "Đảo phép quay của scene",
           explanation:
-            "Marker chỉ hợp lệ khi callback coverage thật sự nhận pixel. Inspector không tự ước lượng UV bằng một đường code khác.",
+            "Đưa gốc và hướng ray về local bằng quay −Y rồi −X. Không dùng barycentric để tìm giao điểm.",
         },
         {
-          title: "Dùng camera depths làm oracle",
+          title: "Giải mặt phẳng local",
           explanation:
-            "Reference reweight mỗi λ bằng 1/z trước khi trộn UV. Bài sau sẽ suy ra vì sao phép reweight này đúng.",
+            "Với origin.z+t×direction.z=0, tìm t rồi đọc x/y. UV lấy từ kích thước quad 3.2 × 2.",
         },
         {
-          title: "Đo UV distance",
+          title: "So đúng tâm pixel đang vẽ",
           explanation:
-            "Khoảng cách Euclidean giữa hai cặp UV là zero khi cùng depth và tăng khi perspective distortion mạnh hơn.",
+            "Inspector chỉ nhận dữ liệu trong callback raster tại selectedX/selectedY. Không so một điểm liên tục khác với sample đã tô.",
         },
       ],
     },
     "p20-l05": {
       focus:
-        "Suy ra dữ liệu phải rời projection cùng mỗi vertex: oneOverZ, uOverZ và vOverZ, thay vì cố sửa raw UV sau khi đã nội suy sai.",
+        "Suy ra weights trên bề mặt từ weights trên màn hình và xác định ba giá trị phải mang qua projection.",
       expected:
-        "Inspector hiện denominator dương. Mỗi projected vertex thỏa uOverZ=uv.x×oneOverZ và vOverZ=uv.y×oneOverZ; không có phép chia cho Z tại pixel trước khi nội suy.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Ảnh vẫn là affine. Inspector thêm denominator 1/z dương; ScreenVertex mới có oneOverZ, uOverZ, vOverZ.",
+      files: ["include/geometry.hpp", "include/interpolation.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Nhìn perspective divide như một phép đổi tham số",
+          title: "Bắt đầu bằng ví dụ hai depth",
           explanation:
-            "Screen position chứa X/Z và Y/Z. Raw UV tuyến tính trên mặt phẳng 3D vì thế không còn tuyến tính theo khoảng cách screen.",
+            "Giữa hai điểm trên màn hình không nhất thiết là giữa hai điểm trên bề mặt; ví dụ z=2 và z=6 cho u=0.25 thay vì 0.5.",
         },
         {
-          title: "Chuẩn bị reciprocal attributes tại vertex",
+          title: "Chuẩn bị dữ liệu tại vertex",
           explanation:
-            "Project vertex tính 1/z một lần rồi nhân nó với U và V. Ba đại lượng này sẽ dùng cùng λ ở pixel.",
+            "Sau phép chiếu, giữ 1/z, u/z, v/z cùng vị trí screen. Không nội suy z rồi đảo ở cuối.",
         },
         {
-          title: "Nội suy denominator riêng",
+          title: "Nội suy denominator",
           explanation:
-            "D=λA/zA+λB/zB+λC/zC. D chính là reciprocal depth tại sample và phải hữu hạn, dương cho triangle trước camera.",
+            "D=λA/zA+λB/zB+λC/zC. Bài này chỉ thêm dữ liệu và cách đọc D, chưa đổi màu đang vẽ.",
         },
       ],
     },
     "p20-l06": {
       focus:
-        "Nội suy u/z, v/z và 1/z bằng cùng barycentric weights, chia lại tại pixel rồi dùng corrected UV để sample texture.",
+        "Khôi phục UV bằng cách chia hai tử số u/z và v/z cho cùng denominator; giữ affine trong chế độ A/B.",
       expected:
-        "Compare view cho thấy affine méo còn corrected checker co đều theo perspective. Front cho hai nửa giống nhau; steep làm sai khác rõ mà silhouette không đổi.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "M đổi affine/corrected, C bật so sánh hai viewport. Corrected UV khớp ray UV; front cho hai cách gần như trùng nhau.",
+      files: ["include/interpolation.hpp", "include/render.hpp", "include/controls.hpp"],
       steps: [
         {
-          title: "Tính hai tử số",
-          explanation: "U'=Σλi(ui/zi) và V'=Σλi(vi/zi). Không trộn raw UV vào bước này.",
+          title: "Tính tử số",
+          explanation: "Dùng đúng weights đã dùng cho D để cộng uOverZ và vOverZ.",
         },
         {
-          title: "Chia cả hai cho cùng denominator",
+          title: "Chia một lần tại pixel",
           explanation:
-            "u=U'/D và v=V'/D. D gần zero bị từ chối thay vì tạo infinity rồi clamp texture coordinate.",
+            "Chỉ khôi phục u/v sau khi cộng xong; từ chối denominator không hữu hạn hoặc không dương.",
         },
         {
-          title: "Giữ affine làm chế độ đối chứng",
+          title: "So cùng một scene",
           explanation:
-            "Phím M và compare view chỉ đổi hàm interpolateUv; geometry, coverage, texture và address mode giữ nguyên.",
+            "Hai viewport có cùng kích thước và cùng quad, texture, sampler, rasterizer; chỉ cách nội suy UV khác nhau.",
         },
       ],
     },
     "p20-l07": {
       focus:
-        "Clip textured triangle tại near plane trong camera space, nội suy position cùng UV bằng một tham số t rồi mới tạo reciprocal attributes qua projection.",
+        "Cho mặt phẳng xuyên near plane mà không làm mất UV; clip TexturedVertex trong camera space trước projection.",
       expected:
-        "Preset near không phóng nổ hoặc làm mất cả quad. Intersection có z=near và UV nằm đúng trên cạnh; polygon 4 đỉnh chia thành hai triangle giữ checker liên tục.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Preset 4 vẫn hiện phần quad trước near plane. Shared edge không nứt; corrected texture giữ cùng UV qua các triangle sinh từ clipping.",
+      files: ["include/clip.hpp", "include/render.hpp", "include/scene.hpp"],
       steps: [
         {
-          title: "Clip TexturedVertex chứ không chỉ Vec3",
+          title: "Dùng một t cho cả cạnh",
           explanation:
-            "intersectNearPlane giải t từ Z, dùng cùng t cho XYZ và UV rồi ghim output Z đúng near.",
+            "Giải t bằng Z rồi nội suy cả XYZ và UV. Không nội suy 1/z bằng t camera-space.",
         },
         {
-          title: "Giữ polygon order khi chia fan",
+          title: "Giữ miền inside chính xác",
           explanation:
-            "Sutherland–Hodgman phát 0..4 vertex theo biên; triangle fan giữ winding và UV edge không cần sort lại.",
+            "Clip với z≥1, ghim intersection về z=1. Không nới epsilon rồi để projection từ chối đỉnh vừa được giữ.",
         },
         {
-          title: "Chỉ tính 1/z sau clipping",
+          title: "Tính reciprocal sau khi clip",
           explanation:
-            "Vertex mới chưa project. projectVertex nhận UV đã clip rồi mới tạo 1/z, u/z, v/z; không nội suy reciprocal data bằng t camera-space.",
+            "Fan triangulation tạo primitive mới; projectVertex tính 1/z, u/z, v/z từ vertex đã clip.",
         },
       ],
     },
     "p20-l08": {
       focus:
-        "Ghép quad, sampling, affine/correct interpolation, near clipping và controls thành một texture mapper có telemetry cùng CTest đầy đủ.",
+        "Bàn giao chương trình hoàn chỉnh có chế độ trình diễn/debug, điều khiển rõ ràng và các test kiểm cả ảnh thay vì tự so công thức với chính nó.",
       expected:
-        "Bốn preset, M/C/T, drag, A/D, Space, single-step và reset hoạt động sau resize. CTest pass ở Debug/Release; title bar báo coverage, max UV error và selected texel.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Final mở ở so sánh A/B sạch; F hiện debug. Starter, tám checkpoint và final chạy độc lập; CTest kiểm cả Debug và Release.",
+      files: ["include/scene.hpp", "include/controls.hpp", "src/main.cpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Cho hai viewport dùng cùng scene",
+          title: "Giữ cảnh sạch để nhìn distortion",
           explanation:
-            "Compare render affine và correct từ cùng quad, texture, clipping và rasterizer. Chỉ interpolation mode khác nhau.",
+            "Ẩn wireframe/inspector nhưng giữ bàn cờ tương phản, grid chiều sâu và nhãn A/B.",
         },
         {
-          title: "Khóa shared edge",
+          title: "Quản lý input và thời gian",
           explanation:
-            "Hai face dùng chung vertex 0/2 và top-left rule. Diagonal có một owner, không nứt hoặc overdraw do coverage.",
+            "Pause/reset hủy drag, focus lost và resize dừng animation; single-step luôn tiến 1/60 giây. --smoke tự kết thúc sau tám frame.",
         },
         {
-          title: "Kiểm các trường hợp làm công thức lộ lỗi",
+          title: "Đối chiếu từng pixel",
           explanation:
-            "CTest dùng constant depth, steep depth, UV âm, UV=1, near crossing và raster callback count thay vì chỉ preset mặc định.",
-        },
-        {
-          title: "Giữ runtime state nhỏ",
-          explanation:
-            "Preset, drag và animation chỉ sửa quad depths; texture source không được tạo lại mỗi frame hoặc đổi theo view mode.",
+            "Ray–plane kiểm coverage, UV và màu của cả quad ở bốn tư thế. Đổi diagonal hoặc winding không được thay kết quả corrected.",
         },
       ],
     },
@@ -202,36 +195,30 @@ const learning = {
   references: {
     "p20-l01": [
       { label: "UV coordinates", href: "/glossary#uv-coordinates", kind: "Thuật ngữ" },
-      { label: "Mesh topology", href: "/glossary#mesh-topology", kind: "Thuật ngữ" },
-      { label: "Winding order", href: "/glossary#winding-order", kind: "Thuật ngữ" },
+      {
+        label: "SDL logical presentation",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation",
+        kind: "SDL API",
+      },
     ],
     "p20-l02": [
-      { label: "Texel", href: "/glossary#texel", kind: "Thuật ngữ" },
       { label: "Nearest sampling", href: "/glossary#nearest-texture-sampling", kind: "Thuật ngữ" },
       { label: "Texture address mode", href: "/glossary#texture-address-mode", kind: "Thuật ngữ" },
     ],
     "p20-l03": [
-      { label: "Affine interpolation", href: "/glossary#affine-interpolation", kind: "Thuật ngữ" },
       {
         label: "Barycentric coordinates",
         href: "/glossary#barycentric-coordinates",
         kind: "Thuật ngữ",
       },
-      { label: "Pixel center", href: "/glossary#pixel-center", kind: "Thuật ngữ" },
+      { label: "Top-left rule", href: "/glossary#top-left-rule", kind: "Thuật ngữ" },
     ],
     "p20-l04": [
       { label: "Perspective divide", href: "/glossary#perspective-divide", kind: "Thuật ngữ" },
-      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
-      { label: "Distance", href: "/glossary#distance", kind: "Thuật ngữ" },
+      { label: "Pixel center", href: "/glossary#pixel-center", kind: "Thuật ngữ" },
     ],
     "p20-l05": [
       { label: "Reciprocal depth", href: "/glossary#reciprocal-depth", kind: "Thuật ngữ" },
-      { label: "Camera space", href: "/glossary#camera-space", kind: "Thuật ngữ" },
-      {
-        label: "Perspective projection",
-        href: "/glossary#perspective-projection",
-        kind: "Thuật ngữ",
-      },
     ],
     "p20-l06": [
       {
@@ -239,20 +226,19 @@ const learning = {
         href: "/glossary#perspective-correct-interpolation",
         kind: "Thuật ngữ",
       },
-      { label: "Texture mapping", href: "/glossary#texture-mapping", kind: "Thuật ngữ" },
-      { label: "Reciprocal depth", href: "/glossary#reciprocal-depth", kind: "Thuật ngữ" },
     ],
     "p20-l07": [
-      { label: "Clipping", href: "/glossary#clipping", kind: "Thuật ngữ" },
+      { label: "Near-plane clipping", href: "/glossary#clipping", kind: "Thuật ngữ" },
       { label: "Vertex attribute", href: "/glossary#vertex-attribute", kind: "Thuật ngữ" },
-      { label: "Triangle fan", href: "/glossary#triangle-fan", kind: "Thuật ngữ" },
     ],
     "p20-l08": [
-      { label: "Top-left rule", href: "/glossary#top-left-rule", kind: "Thuật ngữ" },
+      {
+        label: "SDL input coordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
+      },
       { label: "Texture mapping", href: "/glossary#texture-mapping", kind: "Thuật ngữ" },
-      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;
