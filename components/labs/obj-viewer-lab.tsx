@@ -1,315 +1,294 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent,
+  type PointerEvent,
 } from "react";
 import {
   OBJ_PRESETS,
   buildObjScene,
   normalizeObjMesh,
-  objBoundsCenter,
-  objBoundsMaxExtent,
-  objMeshBounds,
+  objStage,
   parseObjSource,
+  objFaceIndexLabels,
   type ObjPreset,
 } from "@/lib/labs/obj-viewer";
-import { renderZTriangles, zFrameDifference } from "@/lib/labs/z-buffer";
 import {
-  LabReadout,
-  canvasPoint,
-  drawLine,
-  setupCanvas,
-  useCanvasSize,
-  useReducedMotion,
-} from "./lab-shared";
+  advanceObjViewer,
+  initialObjViewer,
+  turnObjViewer,
+  type ObjViewerState,
+} from "@/lib/labs/obj-controls";
+import { createZFrame, zFrameDifference } from "@/lib/labs/z-buffer";
+import { renderObjFrame } from "@/lib/labs/obj-frame";
+import { drawObjViewer, OBJ_WIDTH, OBJ_HEIGHT } from "./obj-viewer-view";
+import { LabReadout, useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 
-const BUFFER_WIDTH = 72;
-const BUFFER_HEIGHT = 48;
-
-function presetForMode(mode?: InteractiveLabMode): ObjPreset {
-  if (mode === "obj-indices") return "slash";
-  if (mode === "obj-triangulation") return "negative";
-  if (mode === "obj-validation") return "malformed";
-  return "rocket";
-}
-
-function startsSolid(mode?: InteractiveLabMode) {
-  return mode === "obj-shading" || mode === "obj-render" || mode === "obj-validation";
-}
-
-function formatVector(value: { x: number; y: number; z: number } | null | undefined) {
-  if (!value) return "—";
-  return `(${value.x.toFixed(2)}, ${value.y.toFixed(2)}, ${value.z.toFixed(2)})`;
-}
-
 export default function ObjViewerLab({ mode }: { mode?: InteractiveLabMode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const initialPreset = presetForMode(mode);
-  const [preset, setPreset] = useState<ObjPreset>(initialPreset);
+  return <Workbench key={mode ?? "obj-validation"} mode={mode} />;
+}
+
+function Workbench({ mode }: { mode?: InteractiveLabMode }) {
+  const stage = objStage(mode),
+    help = useId(),
+    canvasRef = useRef<HTMLCanvasElement>(null);
+  const initialPreset: ObjPreset =
+    stage === 3 ? "triangle" : stage === 4 ? "negative" : stage >= 5 ? "cube" : "rocket";
+  const [preset, setPreset] = useState<ObjPreset | "custom">(initialPreset);
   const [draft, setDraft] = useState<string>(OBJ_PRESETS[initialPreset]);
   const [source, setSource] = useState<string>(OBJ_PRESETS[initialPreset]);
-  const [angle, setAngle] = useState({ x: -0.35, y: 0.65 });
-  const [solid, setSolid] = useState(startsSolid(mode));
-  const [cullBackfaces, setCullBackfaces] = useState(mode === "obj-shading");
-  const [reverseOrder, setReverseOrder] = useState(false);
-  const [showBounds, setShowBounds] = useState(mode === "obj-normalize");
-  const [selectedTriangle, setSelectedTriangle] = useState(0);
-  const [paused, setPaused] = useState(true);
+  const [selected, setSelected] = useState(0);
+  const [notice, setNotice] = useState("");
+  const [difference, setDifference] = useState("chưa kiểm tra");
+  const [state, setState] = useState(() => initialObjViewer(stage));
+  const current = useRef(state),
+    fileEpoch = useRef(0);
+  const drag = useRef<{ id: number; x: number; y: number; start: ObjViewerState } | null>(null);
   const [capturing, setCapturing] = useState(false);
-  const drag = useRef<{
-    pointerX: number;
-    pointerY: number;
-    angleX: number;
-    angleY: number;
-  } | null>(null);
-
-  const parsed = useMemo(() => parseObjSource(source), [source]);
-  const normalization = useMemo(() => normalizeObjMesh(parsed.mesh), [parsed.mesh]);
-  const mesh = normalization?.mesh ?? parsed.mesh;
-  const scene = useMemo(
-    () => buildObjScene(mesh, BUFFER_WIDTH, BUFFER_HEIGHT, angle.x, angle.y, cullBackfaces),
-    [angle, cullBackfaces, mesh],
-  );
-  const frame = useMemo(
-    () =>
-      renderZTriangles(scene.triangles, BUFFER_WIDTH, BUFFER_HEIGHT, {
-        reverseOrder,
-      }),
-    [reverseOrder, scene.triangles],
-  );
-  const reversedFrame = useMemo(
-    () =>
-      renderZTriangles(scene.triangles, BUFFER_WIDTH, BUFFER_HEIGHT, {
-        reverseOrder: !reverseOrder,
-      }),
-    [reverseOrder, scene.triangles],
-  );
-  const difference = zFrameDifference(frame, reversedFrame);
-  const selected = parsed.mesh.triangles[selectedTriangle];
-  const selectedScene = scene.triangles.find(
-    (triangle) => triangle.sourceFace === selected?.sourceFace,
-  );
-  const originalBounds = objMeshBounds(parsed.mesh);
-  const normalizedBounds = objMeshBounds(mesh);
-
-  useEffect(() => {
-    if (paused || reducedMotion) return;
-    let previous = performance.now();
-    let request = 0;
-    const animate = (now: number) => {
-      const deltaSeconds = Math.min(0.05, (now - previous) / 1000);
-      previous = now;
-      setAngle((current) => ({ ...current, y: current.y + deltaSeconds * 0.45 }));
-      request = requestAnimationFrame(animate);
-    };
-    request = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(request);
-  }, [paused, reducedMotion]);
-
-  const layout = useMemo(() => {
-    const cell = Math.max(
-      3,
-      Math.floor(Math.min((size.width - 36) / BUFFER_WIDTH, (size.height - 36) / BUFFER_HEIGHT)),
-    );
-    return {
-      cell,
-      left: Math.round((size.width - cell * BUFFER_WIDTH) / 2),
-      top: Math.round((size.height - cell * BUFFER_HEIGHT) / 2),
-    };
-  }, [size]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    setupCanvas(context, size);
-
-    const toCanvas = (point: { x: number; y: number }) => ({
-      x: layout.left + point.x * layout.cell,
-      y: layout.top + point.y * layout.cell,
-    });
-
-    if (solid) {
-      for (let y = 0; y < BUFFER_HEIGHT; y += 1) {
-        for (let x = 0; x < BUFFER_WIDTH; x += 1) {
-          const color = frame.colors[y * BUFFER_WIDTH + x];
-          context.fillStyle = `rgb(${color.red} ${color.green} ${color.blue})`;
-          context.fillRect(
-            layout.left + x * layout.cell,
-            layout.top + y * layout.cell,
-            layout.cell + 0.25,
-            layout.cell + 0.25,
-          );
-        }
-      }
-    } else {
-      for (const triangle of scene.triangles) {
-        const a = toCanvas(triangle.a);
-        const b = toCanvas(triangle.b);
-        const c = toCanvas(triangle.c);
-        drawLine(context, a, b, "#70d6ff", 1.25);
-        drawLine(context, b, c, "#70d6ff", 1.25);
-        drawLine(context, c, a, "#70d6ff", 1.25);
-      }
-    }
-
-    if (mode === "obj-vertices" || mode === "obj-faces" || mode === "obj-indices") {
-      scene.projectedPositions.forEach((point, index) => {
-        const canvasPoint = toCanvas(point);
-        context.beginPath();
-        context.arc(canvasPoint.x, canvasPoint.y, 4, 0, Math.PI * 2);
-        context.fillStyle = "#ffd166";
-        context.fill();
-        context.fillStyle = "#f5f7ff";
-        context.font = "700 10px ui-monospace";
-        context.fillText(String(index + 1), canvasPoint.x + 6, canvasPoint.y - 5);
-      });
-    }
-
-    if (selectedScene) {
-      const a = toCanvas(selectedScene.a);
-      const b = toCanvas(selectedScene.b);
-      const c = toCanvas(selectedScene.c);
-      drawLine(context, a, b, "#ffbe52", 3);
-      drawLine(context, b, c, "#ffbe52", 3);
-      drawLine(context, c, a, "#ffbe52", 3);
-    }
-
-    if (showBounds && scene.projectedPositions.length > 0) {
-      const xs = scene.projectedPositions.map((point) => point.x);
-      const ys = scene.projectedPositions.map((point) => point.y);
-      const minimum = toCanvas({ x: Math.min(...xs), y: Math.min(...ys) });
-      const maximum = toCanvas({ x: Math.max(...xs), y: Math.max(...ys) });
-      context.strokeStyle = "#c792ea";
-      context.lineWidth = 2;
-      context.setLineDash([6, 4]);
-      context.strokeRect(minimum.x, minimum.y, maximum.x - minimum.x, maximum.y - minimum.y);
-      context.setLineDash([]);
-    }
-
-    context.strokeStyle = "#344564";
-    context.lineWidth = 1;
-    context.strokeRect(
-      layout.left - 0.5,
-      layout.top - 0.5,
-      BUFFER_WIDTH * layout.cell + 1,
-      BUFFER_HEIGHT * layout.cell + 1,
-    );
-
-    if (parsed.diagnostics.length > 0) {
-      context.fillStyle = "#ff7b86";
-      context.font = "700 13px ui-monospace";
-      context.textAlign = "center";
-      context.fillText(
-        `Parser dừng an toàn: ${parsed.diagnostics.length} diagnostic`,
-        size.width / 2,
-        size.height / 2,
-      );
-      context.textAlign = "start";
-    }
-  }, [
-    frame,
-    layout,
-    mode,
-    parsed.diagnostics.length,
-    scene,
-    selectedScene,
-    showBounds,
-    size,
-    solid,
-  ]);
-
-  const applyPreset = (next: ObjPreset) => {
-    setPreset(next);
-    setDraft(OBJ_PRESETS[next]);
-    setSource(OBJ_PRESETS[next]);
-    setSelectedTriangle(0);
-    setPaused(true);
-  };
-
-  const reset = () => {
-    setDraft(OBJ_PRESETS[preset]);
-    setSource(OBJ_PRESETS[preset]);
-    setAngle({ x: -0.35, y: 0.65 });
-    setSolid(startsSolid(mode));
-    setCullBackfaces(mode === "obj-shading");
-    setReverseOrder(false);
-    setShowBounds(mode === "obj-normalize");
-    setSelectedTriangle(0);
-    setPaused(true);
-  };
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const point = canvasPoint(event, event.currentTarget);
-    drag.current = {
-      pointerX: point.x,
-      pointerY: point.y,
-      angleX: angle.x,
-      angleY: angle.y,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setCapturing(true);
-  };
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!drag.current) return;
-    const point = canvasPoint(event, event.currentTarget);
-    setAngle({
-      x: drag.current.angleX + (point.y - drag.current.pointerY) * 0.008,
-      y: drag.current.angleY + (point.x - drag.current.pointerX) * 0.008,
-    });
-    setPaused(true);
-  };
-
-  const stopPointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+  const commit = useCallback((next: ObjViewerState) => {
+    current.current = next;
+    setState(next);
+    setDifference("chưa kiểm tra");
+  }, []);
+  const cancel = useCallback(() => {
+    const active = drag.current;
     drag.current = null;
     setCapturing(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
+    if (active && canvasRef.current?.hasPointerCapture(active.id))
+      canvasRef.current.releasePointerCapture(active.id);
+  }, []);
+  const pause = useCallback(() => {
+    cancel();
+    commit({ ...current.current, paused: true });
+  }, [cancel, commit]);
+  const size = useCanvasSize(canvasRef, pause),
+    reducedMotion = useReducedMotion();
+  usePauseOnReducedMotion(pause);
+  const invalidateFiles = useCallback(() => {
+    fileEpoch.current++;
+  }, []);
+  useEffect(() => {
+    const hidden = () => {
+      if (document.hidden) pause();
+    };
+    window.addEventListener("blur", pause);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      invalidateFiles();
+      window.removeEventListener("blur", pause);
+      document.removeEventListener("visibilitychange", hidden);
+      cancel();
+    };
+  }, [cancel, pause, invalidateFiles]);
+  useEffect(() => {
+    if (state.paused || reducedMotion) return;
+    let id = 0,
+      previous: number | undefined;
+    const tick = (time: number) => {
+      if (previous === undefined || time - previous >= 32) {
+        const dt = previous === undefined ? 0 : (time - previous) / 1000;
+        previous = time;
+        commit(advanceObjViewer(current.current, dt));
+      }
+      id = requestAnimationFrame(tick);
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+  }, [state.paused, reducedMotion, commit]);
 
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    const key = event.key.toLowerCase();
-    if (key === "r") reset();
-    if (key === "w") setSolid((current) => !current);
-    if (key === "c") setCullBackfaces((current) => !current);
-    if (key === "o") setReverseOrder((current) => !current);
-    if (key === "n") {
-      setAngle((current) => ({ ...current, y: current.y + 0.08 }));
-      setPaused(true);
-    }
-    if (event.key === " ") {
-      event.preventDefault();
-      setPaused((current) => !current);
-    }
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      event.preventDefault();
-      const direction = event.key === "ArrowLeft" ? -1 : 1;
-      setSelectedTriangle((current) => {
-        const count = Math.max(1, parsed.mesh.triangles.length);
-        return (current + direction + count) % count;
-      });
-    }
-  };
-
-  const diagnosticText = parsed.diagnostics[0]
+  const parsed = useMemo(() => parseObjSource(source, stage), [source, stage]);
+  const normalization = useMemo(
+    () => (stage >= 5 ? normalizeObjMesh(parsed.mesh) : null),
+    [parsed.mesh, stage],
+  );
+  const error = parsed.diagnostics[0]
     ? `line ${parsed.diagnostics[0].line}: ${parsed.diagnostics[0].message}`
-    : "không có";
-  const selectedIndices = selected
-    ? selected.indices.map((index) => `${index + 1}→${index}`).join(" · ")
-    : "—";
-  const beforeCenter = originalBounds ? objBoundsCenter(originalBounds) : null;
-  const afterCenter = normalizedBounds ? objBoundsCenter(normalizedBounds) : null;
+    : "";
+  const mesh = useMemo(
+    () =>
+      error
+        ? { positions: [], triangles: [], sourceFaceCount: 0 }
+        : (normalization?.mesh ?? parsed.mesh),
+    [error, normalization, parsed.mesh],
+  );
+  const scene = useMemo(
+    () =>
+      buildObjScene(
+        mesh,
+        OBJ_WIDTH,
+        OBJ_HEIGHT,
+        state.angleX,
+        state.angleY,
+        state.culling,
+        { yaw: state.cameraYaw, pitch: state.cameraPitch, distance: state.distance },
+        stage,
+      ),
+    [
+      mesh,
+      state.angleX,
+      state.angleY,
+      state.cameraYaw,
+      state.cameraPitch,
+      state.distance,
+      state.culling,
+      stage,
+    ],
+  );
+  const rendered = useMemo(
+    () =>
+      state.solid && stage >= 6
+        ? renderObjFrame(scene.triangles, OBJ_WIDTH, OBJ_HEIGHT, {
+            reverseOrder: state.reverse,
+            depthEnabled: stage >= 7,
+          })
+        : { frame: createZFrame(OBJ_WIDTH, OBJ_HEIGHT), message: "", candidates: 0 },
+    [scene, state.solid, state.reverse, stage],
+  );
+  const frame = rendered.frame;
+  useEffect(() => {
+    const context = canvasRef.current?.getContext("2d");
+    if (context)
+      drawObjViewer(context, size, scene, frame, state, stage, selected, error || rendered.message);
+  }, [scene, frame, state, size, stage, selected, error, rendered.message]);
 
+  const change = (patch: Partial<ObjViewerState>) => {
+    cancel();
+    commit({ ...current.current, ...patch });
+  };
+  const reset = () => {
+    fileEpoch.current++;
+    cancel();
+    commit(initialObjViewer(stage));
+    setSelected(0);
+    setNotice("");
+  };
+  const loadSource = (text: string) => {
+    pause();
+    if (text.length > 2 * 1024 * 1024) {
+      setNotice(
+        "Canvas chỉ nhận tối đa 2 MiB để không chặn trang. Dùng ứng dụng C++ cho file lớn hơn.",
+      );
+      return;
+    }
+    const preview = parseObjSource(text, stage);
+    if (preview.mesh.triangles.length > 6000) {
+      setNotice(
+        "Canvas giới hạn 6.000 triangle; file chưa được nạp. Dùng viewer C++ cho mesh lớn hơn.",
+      );
+      return;
+    }
+    setSource(text);
+    setDraft(text);
+    setSelected(0);
+    setNotice("");
+    setDifference("chưa kiểm tra");
+  };
+  const applyPreset = (next: ObjPreset) => {
+    fileEpoch.current++;
+    setPreset(next);
+    loadSource(OBJ_PRESETS[next]);
+  };
+  const step = () => change({ ...advanceObjViewer(current.current, 1 / 60, true), paused: true });
+  const checkOrder = () => {
+    pause();
+    const forward = renderObjFrame(scene.triangles, OBJ_WIDTH, OBJ_HEIGHT);
+    const reverse = renderObjFrame(scene.triangles, OBJ_WIDTH, OBJ_HEIGHT, {
+      reverseOrder: true,
+    });
+    if (forward.message || reverse.message) {
+      setDifference("không chạy: mesh vượt ngân sách Canvas");
+      return;
+    }
+    const result = zFrameDifference(forward.frame, reverse.frame);
+    setDifference(`${result.colorPixels} color · ${result.depthPixels} depth`);
+  };
+
+  const pointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0 || drag.current) return;
+    event.currentTarget.focus();
+    const rect = event.currentTarget.getBoundingClientRect();
+    drag.current = {
+      id: event.pointerId,
+      x: (event.clientX - rect.left) / rect.width,
+      y: (event.clientY - rect.top) / rect.width,
+      start: current.current,
+    };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      drag.current = null;
+      setCapturing(false);
+      commit({ ...current.current, paused: true });
+      return;
+    }
+    setCapturing(true);
+    commit({ ...current.current, paused: true });
+    event.preventDefault();
+  };
+  const pointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
+    const active = drag.current;
+    if (!active || active.id !== event.pointerId) return;
+    if (event.type !== "pointerup" && (event.buttons & 1) === 0) {
+      cancel();
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    commit(
+      turnObjViewer(
+        active.start,
+        ((event.clientX - rect.left) / rect.width - active.x) * 6.4,
+        ((event.clientY - rect.top) / rect.width - active.y) * 6.4,
+      ),
+    );
+  };
+  const pointerUp = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (drag.current?.id !== event.pointerId || event.button !== 0) return;
+    pointerMove(event);
+    cancel();
+  };
+  const keyDown = (event: KeyboardEvent<HTMLCanvasElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
+    const key = event.key.toLowerCase();
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+      event.preventDefault();
+      let x = 0,
+        y = 0;
+      if (event.key === "ArrowLeft") x = -0.08;
+      if (event.key === "ArrowRight") x = 0.08;
+      if (event.key === "ArrowUp") y = -0.08;
+      if (event.key === "ArrowDown") y = 0.08;
+      cancel();
+      commit(turnObjViewer(current.current, x, y));
+      return;
+    }
+    if (event.repeat) return;
+    if (key === "r") reset();
+    if (key === ".") step();
+    if (key === "f") change({ debug: !current.current.debug });
+    if (key === "g") change({ grid: !current.current.grid });
+    if (stage >= 6 && key === "n") change({ normals: !current.current.normals });
+    if (stage >= 6 && key === "c") change({ culling: !current.current.culling });
+    if (stage >= 7 && key === "o") change({ reverse: !current.current.reverse });
+    if (stage >= 8 && key === "w") change({ solid: !current.current.solid });
+    if (stage >= 8 && key === "v") change({ cameraDrag: !current.current.cameraDrag });
+    if (key === " ") {
+      event.preventDefault();
+      if (!reducedMotion) change({ paused: !current.current.paused });
+    }
+  };
+
+  const indexLabels = useMemo(
+    () => objFaceIndexLabels(source, parsed.mesh, selected),
+    [source, parsed.mesh, selected],
+  );
+  const selectedScene = scene.triangles.find((t) => t.sourceTriangle === selected);
   return (
     <div className="lab-stack">
       <div className="lab-controls">
@@ -318,139 +297,270 @@ export default function ObjViewerLab({ mode }: { mode?: InteractiveLabMode }) {
           <select
             aria-label="OBJ mẫu"
             value={preset}
-            onChange={(event) => applyPreset(event.target.value as ObjPreset)}
+            onChange={(e) => applyPreset(e.target.value as ObjPreset)}
           >
-            <option value="rocket">Rocket nhiều face</option>
-            <option value="slash">Quad có v/vt/vn</option>
+            <option value="rocket">Rocket nhỏ</option>
+            <option value="cube">Cube: 6 quad</option>
+            <option value="triangle">Triangle có slash</option>
+            <option value="slash">Quad có slash</option>
             <option value="negative">Pentagon index âm</option>
             <option value="malformed">Input có lỗi</option>
+            <option value="custom" disabled>
+              File/source của bạn
+            </option>
           </select>
         </label>
+        {stage >= 8 && (
+          <label>
+            Thao tác kéo
+            <select
+              aria-label="Thao tác kéo"
+              value={state.cameraDrag ? "camera" : "model"}
+              onChange={(e) => change({ cameraDrag: e.target.value === "camera", paused: true })}
+            >
+              <option value="model">Xoay model</option>
+              <option value="camera">Camera orbit</option>
+            </select>
+          </label>
+        )}
+        {stage >= 8 && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={state.solid}
+              onChange={(e) => change({ solid: e.target.checked })}
+            />
+            Solid
+          </label>
+        )}
+        {stage >= 6 && (
+          <>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={state.normals}
+                onChange={(e) => change({ normals: e.target.checked })}
+              />
+              Normals
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={state.culling}
+                onChange={(e) => change({ culling: e.target.checked })}
+              />
+              Back-face culling
+            </label>
+          </>
+        )}
+        {stage >= 7 && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={state.reverse}
+              onChange={(e) => change({ reverse: e.target.checked })}
+            />
+            Đảo draw order
+          </label>
+        )}
         <label className="check">
           <input
             type="checkbox"
-            checked={solid}
-            onChange={(event) => setSolid(event.target.checked)}
+            checked={state.debug}
+            onChange={(e) => change({ debug: e.target.checked })}
           />
-          Solid
+          Thông tin debug
         </label>
         <label className="check">
           <input
             type="checkbox"
-            checked={cullBackfaces}
-            onChange={(event) => setCullBackfaces(event.target.checked)}
+            checked={state.grid}
+            onChange={(e) => change({ grid: e.target.checked })}
           />
-          Back-face culling
+          Grid và axes
         </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={reverseOrder}
-            onChange={(event) => setReverseOrder(event.target.checked)}
-          />
-          Đảo draw order
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={showBounds}
-            onChange={(event) => setShowBounds(event.target.checked)}
-          />
-          Xem bounds
-        </label>
-        <button type="button" onClick={() => setPaused((current) => !current)}>
-          {paused ? "Cho model quay" : "Tạm dừng"}
-        </button>
+        {stage >= 7 && (
+          <label>
+            Khoảng cách camera
+            <input
+              aria-label="Khoảng cách camera"
+              type="range"
+              min="1.1"
+              max="9"
+              step="0.1"
+              value={state.distance}
+              onChange={(e) => change({ distance: Number(e.target.value), paused: true })}
+            />
+          </label>
+        )}
         <button
           type="button"
-          onClick={() => {
-            setAngle((current) => ({ ...current, y: current.y + 0.08 }));
-            setPaused(true);
-          }}
+          disabled={reducedMotion}
+          onClick={() => change({ paused: !current.current.paused })}
         >
+          {state.paused || reducedMotion ? "Cho model quay" : "Tạm dừng"}
+        </button>
+        <button type="button" onClick={step}>
           Tiến một bước
         </button>
         <button type="button" onClick={reset}>
           Đặt lại
         </button>
+        {stage >= 7 && (
+          <button type="button" onClick={checkOrder}>
+            Kiểm tra thứ tự
+          </button>
+        )}
       </div>
-
+      <canvas
+        ref={canvasRef}
+        style={{ width: "100%", height: "420px", touchAction: "none" }}
+        tabIndex={0}
+        role="img"
+        aria-label="OBJ mesh được parse, chuẩn hóa và render bằng CPU Z-buffer"
+        aria-describedby={help}
+        onKeyDown={keyDown}
+        onPointerDown={pointerDown}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerCancel={(e) => {
+          if (drag.current?.id === e.pointerId) cancel();
+        }}
+        onLostPointerCapture={(e) => {
+          if (drag.current?.id === e.pointerId) cancel();
+        }}
+        onBlur={pause}
+      />
+      <p id={help}>
+        Kéo hoặc dùng phím mũi tên. R đặt lại, Space chạy/dừng, dấu chấm tiến 1/60 giây. Tab rời
+        Canvas.
+        {stage >= 8
+          ? " V đổi model/camera; W đổi solid/wireframe; N xem normals."
+          : " Các công cụ chưa học sẽ xuất hiện ở bài sau."}{" "}
+        {reducedMotion ? "Đã tắt tự quay theo reduced motion; bạn vẫn có thể tiến từng bước." : ""}
+      </p>
       <label className="lab-source-editor">
         Nguồn OBJ đang thử
         <textarea
           aria-label="Nguồn OBJ"
           value={draft}
+          maxLength={2 * 1024 * 1024}
           spellCheck={false}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(e) => setDraft(e.target.value)}
         />
         <button
           type="button"
           onClick={() => {
-            setSource(draft);
-            setSelectedTriangle(0);
-            setPaused(true);
+            fileEpoch.current++;
+            setPreset("custom");
+            loadSource(draft);
           }}
         >
           Nạp source vào parser
         </button>
       </label>
-
-      <canvas
-        ref={canvasRef}
-        tabIndex={0}
-        role="img"
-        aria-label="OBJ mesh được parse, chuẩn hóa và render bằng CPU Z-buffer"
-        onKeyDown={onKeyDown}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={stopPointer}
-        onPointerCancel={stopPointer}
-        onLostPointerCapture={() => {
-          drag.current = null;
-          setCapturing(false);
-        }}
-      />
-
-      <LabReadout
-        items={[
-          {
-            label: "Lines / diagnostic",
-            value: `${parsed.lineCount} / ${parsed.diagnostics.length}`,
-          },
-          {
-            label: "Position / source face",
-            value: `${parsed.mesh.positions.length} / ${parsed.mesh.sourceFaceCount}`,
-          },
-          { label: "Triangle sau fan", value: String(parsed.mesh.triangles.length) },
-          { label: "OBJ index → vector index", value: selectedIndices },
-          {
-            label: "Center trước → sau",
-            value: `${formatVector(beforeCenter)} → ${formatVector(afterCenter)}`,
-          },
-          {
-            label: "Max extent / uniform scale",
-            value: `${originalBounds ? objBoundsMaxExtent(originalBounds).toFixed(3) : "—"} / ${normalization?.uniformScale.toFixed(3) ?? "—"}`,
-          },
-          {
-            label: "Normal / intensity",
-            value: `${formatVector(selectedScene?.normal)} / ${selectedScene?.intensity.toFixed(3) ?? "—"}`,
-          },
-          {
-            label: "Fragment pass / reject",
-            value: `${frame.passedCount} / ${frame.rejectedCount}`,
-          },
-          {
-            label: "Chênh lệch khi đảo order",
-            value: `${difference.colorPixels} color · ${difference.depthPixels} depth`,
-          },
-          { label: "Diagnostic đầu tiên", value: diagnosticText },
-          { label: "pointer capture", value: capturing ? "đang kéo" : "đã nhả" },
-        ]}
-      />
-      <p className="sr-only">
-        Parser đọc {parsed.mesh.positions.length} position, {parsed.mesh.sourceFaceCount} source
-        face và tạo {parsed.mesh.triangles.length} triangle. {diagnosticText}.
-      </p>
+      {stage >= 8 && (
+        <label>
+          Mở file OBJ (tối đa 2 MiB / 6.000 triangle trong Canvas)
+          <input
+            aria-label="Mở file OBJ"
+            type="file"
+            accept=".obj"
+            onChange={async (e) => {
+              const file = e.target.files?.[0],
+                epoch = ++fileEpoch.current;
+              e.target.value = "";
+              if (!file) return;
+              pause();
+              if (file.size > 2 * 1024 * 1024) {
+                setNotice("File quá 2 MiB; chưa nạp vào Canvas. Dùng viewer C++.");
+                return;
+              }
+              try {
+                const text = await file.text();
+                if (epoch === fileEpoch.current) {
+                  setPreset("custom");
+                  loadSource(text);
+                }
+              } catch {
+                if (epoch === fileEpoch.current)
+                  setNotice("Không đọc được file OBJ; dữ liệu cũ được giữ nguyên.");
+              }
+            }}
+          />
+        </label>
+      )}
+      <p role="status">{notice || error || rendered.message || "Parser không phát hiện lỗi."}</p>
+      {state.debug && (
+        <LabReadout
+          items={[
+            {
+              label: "Position / source face",
+              value: `${parsed.mesh.positions.length} / ${parsed.mesh.sourceFaceCount}`,
+            },
+            { label: "Triangle sau fan", value: String(parsed.mesh.triangles.length) },
+            {
+              label: "OBJ index → vector index",
+              value: indexLabels,
+            },
+            {
+              label: "Model X / Y",
+              value: `${state.angleX.toFixed(3)} / ${state.angleY.toFixed(3)}`,
+            },
+            ...(stage >= 8
+              ? [
+                  {
+                    label: "Camera yaw / pitch",
+                    value: `${state.cameraYaw.toFixed(3)} / ${state.cameraPitch.toFixed(3)}`,
+                  },
+                ]
+              : []),
+            ...(stage >= 5
+              ? [
+                  {
+                    label: "Uniform scale",
+                    value: normalization?.uniformScale.toFixed(4) ?? "không normalize được",
+                  },
+                ]
+              : []),
+            ...(stage >= 6
+              ? [
+                  {
+                    label: "Normal / intensity",
+                    value: selectedScene
+                      ? `${selectedScene.normal.x.toFixed(2)}, ${selectedScene.normal.y.toFixed(2)}, ${selectedScene.normal.z.toFixed(2)} / ${selectedScene.intensity.toFixed(3)}`
+                      : "—",
+                  },
+                ]
+              : []),
+            ...(stage >= 7
+              ? [
+                  { label: "Triangle cắt near", value: String(scene.clippedCount) },
+                  {
+                    label: "Fragment pass / reject",
+                    value: `${frame.passedCount} / ${frame.rejectedCount}`,
+                  },
+                  { label: "Chênh lệch khi đảo order", value: difference },
+                ]
+              : []),
+            { label: "Diagnostic đầu tiên", value: error || "không có" },
+            { label: "pointer capture", value: capturing ? "đang kéo" : "đã nhả" },
+          ]}
+        />
+      )}
+      {stage >= 2 && state.debug && (
+        <label>
+          Triangle đang xem
+          <input
+            aria-label="Triangle đang xem"
+            type="range"
+            min="0"
+            max={Math.max(0, parsed.mesh.triangles.length - 1)}
+            value={selected}
+            onChange={(e) => setSelected(Number(e.target.value))}
+          />
+        </label>
+      )}
     </div>
   );
 }

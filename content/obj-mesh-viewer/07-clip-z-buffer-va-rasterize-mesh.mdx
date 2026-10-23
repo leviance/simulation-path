@@ -4,100 +4,228 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Checkpoint 6 đã tô được mặt nhưng còn hai điểm yếu cố ý: triangle cắt near plane bị bỏ cả mặt, và fragment đến sau ghi đè fragment trước. Với vài chục face, “đổi draw order tới khi trông ổn” không còn là chiến lược khả thi.
+Painter chỉ ghi màu theo thứ tự face trong file. Face nằm xa nhưng được đọc sau vẫn có thể đè lên face gần. Đến gần model còn lộ vấn đề khác: một vertex đi qua near plane có thể làm cả triangle biến mất nếu ta chỉ kiểm từng vertex rồi bỏ face.
 
-Ta ghép lại pipeline đã tự xây ở Project 16–19. Mỗi source triangle phải đi qua đúng một đường: tra index → model/camera transform → face normal/culling → near clipping → projection → top-left rasterization → interpolate NDC depth → depth test/write → color write.
+Bài này ghép near clipping → projection → top-left coverage → Z-buffer cho mọi triangle của OBJ. Đây là pipeline đã học ở Project 17–19, nay cần hoạt động với hàng nghìn triangle chứ không chỉ vài mặt được chọn sẵn.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Near clipping hoạt động trên polygon camera space. Với một vertex ngoài và hai vertex trong, triangle biến thành quad rồi được chia thành hai triangle. Mọi output thỏa:
+Near plane là z = 0.7 trong camera space. Clip **trước** phép chia perspective. Một triangle cắt plane có thể thành polygon bốn corner, rồi được chia thành hai triangle để rasterize.
+
+Với cạnh từ S tới E cắt plane:
 
 $$
-z\ge near
+t=\frac{z_{near}-S_z}{E_z-S_z},\qquad P=S+t(E-S)
 $$
 
-Sau projection, mỗi covered pixel có barycentric weights. NDC depth được nội suy:
+Depth lưu trong buffer là NDC depth, không phải raw camera Z:
 
 $$
-z_p=\lambda_Az_A+\lambda_Bz_B+\lambda_Cz_C
+d(z)=\frac{f}{f-n}-\frac{nf}{(f-n)z},\qquad n=0.7,\ f=20
 $$
 
-Vì near ánh xạ về 0, far ánh xạ về 1, fragment pass khi `newDepth < storedDepth`. Đây là điều làm output độc lập với thứ tự face trong OBJ.
+Sau projection, NDC depth được nội suy bằng barycentric weights tại tâm pixel. Giá trị nhỏ hơn thắng depth test. Đừng nội suy camera Z tuyến tính trên màn hình; Project 20 đã cho thấy phép chiếu thay đổi cách nội suy một thuộc tính 3D.
 
 <InteractiveLab demo="obj-viewer" mode="obj-render" />
 
-Bật Solid và đảo draw order. Readout chênh lệch phải giữ `0 color · 0 depth`. Tắt back-face culling để tăng số fragment overlap; Z-buffer vẫn phải giữ invariant.
+Giảm khoảng cách camera để model cắt near plane. Xem số triangle bị cắt và thử “Kiểm tra thứ tự”. Chỉ chạy phép so toàn buffer khi bạn yêu cầu, không render đối chứng hai lần ở mọi animation frame.
 
 ## Viết code từng bước
 
-### Bước 1 — Clip trong camera space trước projection
+### Bước 1 — Tính một giao điểm nhất quán cho cạnh chung
 
-```cpp title="include/lab.hpp — cạnh cắt near plane dùng cùng tham số t"
-const double t = std::clamp((nearPlane - start.z) / denominator, 0.0, 1.0);
-Vec3 result = start + (end - start) * t;
-result.z = nearPlane;
-return result;
-```
-
-`clipTriangleToNearPlane` chạy Sutherland–Hodgman trên ba cạnh, có thể trả 0, 3 hoặc 4 corner. Chỉ sau đó vòng triangle fan mới gọi `projectVertex`.
-
-### Bước 2 — Ghi color chỉ trong nhánh depth pass
-
-```cpp title="include/lab.hpp — fragment path của mọi OBJ triangle"
-const std::size_t index = depths.index(x, y);
-const double newDepth = interpolateDepth(triangle, weights);
-if (newDepth >= depths.values[index]) {
-    ++stats.rejectedFragments;
-    return;
+```cpp title="include/render.hpp — đưa giao điểm đúng lên near plane"
+inline Vec3 intersectNearPlane(Vec3 start, Vec3 end, double nearPlane) {
+    // Cạnh dùng chung luôn được tính theo cùng chiều để khớp bit giao điểm.
+    if (start.z > end.z) {
+        std::swap(start, end);
+    }
+    const double denominator = end.z - start.z;
+    if (std::abs(denominator) <= 1e-12) {
+        return {start.x, start.y, nearPlane};
+    }
+    const double t = std::clamp((nearPlane - start.z) / denominator, 0.0, 1.0);
+    Vec3 result = start + (end - start) * t;
+    result.z = nearPlane;
+    return result;
 }
-depths.values[index] = newDepth;
-colors[index] = packColor(triangle.color);
-++stats.passedFragments;
 ```
 
-Depth và color dùng cùng row-major index. Nhánh reject không thay buffer nào; nhánh pass cập nhật cả cặp dữ liệu của pixel.
+Đổi thứ tự hai đầu cạnh theo Z trước khi tính giúp hai triangle dùng chung cạnh nhận cùng cách làm tròn. Gán result.z về nearPlane để phép kiểm projection không loại một điểm vì sai số rất nhỏ ở giao tuyến.
 
-### Bước 3 — So toàn output giữa hai draw order
+### Bước 2 — Clip polygon rồi mới chia lại
 
-```cpp title="tests/tests.cpp — invariant mạnh hơn một ảnh đẹp"
-const RenderedFrame forward = render(pyramid.mesh, false);
-const RenderedFrame reversed = render(pyramid.mesh, true);
-check(forward.colors == reversed.colors, "Z-buffer color output is independent of OBJ face order");
-check(
-    lab::depthBuffersNearlyEqual(forward.depths.values, reversed.depths.values),
-    "Z-buffer depth output is independent of OBJ face order"
-);
+```cpp title="include/render.hpp — Sutherland–Hodgman với một plane"
+inline std::vector<Vec3> clipTriangleToNearPlane(
+    Vec3 a,
+    Vec3 b,
+    Vec3 c,
+    double nearPlane
+) {
+    const std::array<Vec3, 3> input{a, b, c};
+    std::vector<Vec3> output{};
+    Vec3 previous = input.back();
+    bool previousInside = previous.z >= nearPlane;
+    for (const Vec3 current : input) {
+        const bool currentInside = current.z >= nearPlane;
+        if (previousInside && currentInside) {
+            output.push_back(current);
+        } else if (previousInside && !currentInside) {
+            output.push_back(intersectNearPlane(previous, current, nearPlane));
+        } else if (!previousInside && currentInside) {
+            output.push_back(intersectNearPlane(previous, current, nearPlane));
+            output.push_back(current);
+        }
+        previous = current;
+        previousInside = currentInside;
+    }
+    return output;
+}
 ```
 
-Test dùng toàn bộ buffer chứ không chọn một pixel thuận tiện. Nó cũng tắt culling để tạo nhiều overlap và buộc depth reject thực sự xảy ra.
+Đọc vòng lặp theo hai câu hỏi: cạnh có cắt plane không, và endpoint hiện tại có nằm trong không. Output giữ winding, có thể rỗng, có ba hoặc bốn corner. Không clamp Z của vertex ngoài vào plane: cách đó kéo méo geometry thay vì cắt cạnh.
+
+### Bước 3 — Ghép các bước thành một renderer dùng chung
+
+Đây là toàn bộ hàm render solid ở checkpoint 7. Đọc theo các đoạn, đừng bỏ qua callback cuối vì đó là nơi depth thực sự quyết định màu pixel:
+
+```cpp title="include/render.hpp — parser mesh đi tới color và depth buffer"
+inline RenderStats renderObjMesh(
+    const ObjMesh& mesh,
+    int width,
+    int height,
+    const RenderOptions& options,
+    std::vector<std::uint32_t>& colors,
+    DepthBuffer& depths
+) {
+    constexpr std::uint32_t clearColor = 0x090f1dffU;
+    colors.assign(std::size_t(width) * std::size_t(height), clearColor);
+    if (depths.width != width || depths.height != height) {
+        depths.resize(width, height);
+    } else {
+        depths.clear();
+    }
+
+    RenderStats stats{};
+    stats.sourceTriangles = mesh.triangles.size();
+    const Color base{92, 190, 246, 255};
+    const OrbitCamera camera{options.cameraYaw, options.cameraPitch, options.distance};
+    const Vec3 lightDirection = worldToCamera({-0.45, -0.75, -1.0}, camera) - worldToCamera({}, camera);
+    // Mỗi position chỉ transform một lần, kể cả khi nhiều face cùng tham chiếu nó.
+    std::vector<Vec3> cameraPositions{};
+    cameraPositions.reserve(mesh.positions.size());
+    for (const Vec3 position : mesh.positions) {
+        cameraPositions.push_back(worldToCamera(rotateModelPoint(position, options.angleX, options.angleY), camera));
+    }
+    for (std::size_t position = 0; position < mesh.triangles.size(); ++position) {
+        std::size_t triangleIndex = position;
+        if (options.reverseOrder) {
+            triangleIndex = mesh.triangles.size() - 1 - position;
+        }
+        const ObjTriangle& source = mesh.triangles[triangleIndex];
+        const Vec3 a = cameraPositions[source.indices[0]];
+        const Vec3 b = cameraPositions[source.indices[1]];
+        const Vec3 c = cameraPositions[source.indices[2]];
+        const std::optional<Vec3> normal = faceNormal(a, b, c);
+        if (!normal) {
+            ++stats.degenerateTriangles;
+            continue;
+        }
+        if (options.cullBackfaces && !isFrontFacing(*normal, a, b, c)) {
+            ++stats.culledTriangles;
+            continue;
+        }
+
+        const std::vector<Vec3> polygon = clipTriangleToNearPlane(
+            a,
+            b,
+            c,
+            options.nearPlane
+        );
+        if (polygon.size() < 3) {
+            ++stats.clippedTriangles;
+            continue;
+        }
+        if (polygon.size() != 3) {
+            ++stats.clippedTriangles;
+        }
+        const Color color = shadeColor(base, lambertIntensity(*normal, lightDirection));
+        for (std::size_t fanIndex = 1; fanIndex + 1 < polygon.size(); ++fanIndex) {
+            const std::optional<ScreenVertex> screenA = projectVertex(
+                polygon[0],
+                width,
+                height,
+                options.nearPlane
+            );
+            const std::optional<ScreenVertex> screenB = projectVertex(
+                polygon[fanIndex],
+                width,
+                height,
+                options.nearPlane
+            );
+            const std::optional<ScreenVertex> screenC = projectVertex(
+                polygon[fanIndex + 1],
+                width,
+                height,
+                options.nearPlane
+            );
+            if (!screenA || !screenB || !screenC) {
+                continue;
+            }
+            ++stats.rasterizedTriangles;
+            stats.coveredFragments += rasterizeTriangle(
+                {*screenA, *screenB, *screenC, color, source.sourceFace},
+                width,
+                height,
+                [&](int x, int y, Barycentric weights, const ScreenTriangle& triangle) {
+                    const std::size_t index = depths.index(x, y);
+                    const double newDepth = interpolateDepth(triangle, weights);
+                    if (!std::isfinite(newDepth) || newDepth < -1e-9 || newDepth > 1.0 || newDepth >= depths.values[index]) {
+                        ++stats.rejectedFragments;
+                        return;
+                    }
+                    depths.values[index] = std::max(0.0, newDepth);
+                    colors[index] = packColor(triangle.color);
+                    ++stats.passedFragments;
+                }
+            );
+        }
+    }
+    return stats;
+}
+```
+
+Đầu hàm, color/depth được clear cho frame mới. Position dùng chung được transform **một lần** vào cameraPositions, rồi mỗi face chỉ tra index. Với model 2.976 triangle, cách này tránh tính sin/cos và view transform lặp lại ba lần cho mỗi face.
+
+Sau culling, near clipping có thể tạo một polygon. Vòng fan chiếu từng triangle con và gửi vào rasterizer. Rasterizer chuẩn hóa winding cùng dữ liệu vertex; callback nhận đúng ScreenTriangle tương ứng với weights, không dùng thứ tự vertex cũ.
+
+Ở callback, chỉ fragment có depth hữu hạn, trong miền hợp lệ và nhỏ hơn depth đã lưu mới được ghi. Color và depth dùng cùng index. Nếu chỉ ghi color mà quên cập nhật depth, model có thể “trông đúng” ở một góc nhưng mất order independence.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build full CPU-pipeline checkpoint"
-cmake --build build --config Debug --target project_21_checkpoint_7
-ctest --test-dir build -C Debug --output-on-failure
+```powershell title="Terminal — checkpoint 7 với model gần 3.000 triangle"
+cmake --build build --config Release --target project_21_checkpoint_7 --parallel 2
+./build/Release/project_21_checkpoint_7.exe assets/faceted-sphere.obj
 ```
 
-Nhấn `O` để đảo face order, `C` để đổi culling, kéo chuột để đổi góc. Hình solid phải ổn định trong mọi tổ hợp; chỉ số culled/pass/reject có thể thay đổi theo góc.
+Model lớn có 1.490 position và 2.976 triangle, không phải cùng một model nhỏ được ghi nhãn lớn hơn. Cuộn chuột để đến gần, xoay để nhìn nhiều góc; O đảo draw order. Solid phải giữ nguyên vùng nhìn thấy khi đổi order, trừ thống kê pass/reject có thể đổi theo thứ tự xử lý.
 
 ## Thử làm sai để hiểu đúng
 
-1. Project trước rồi mới clip. Giảm camera distance để một vertex tiến sát camera và quan sát tọa độ màn hình tăng mất kiểm soát.
-2. Clear depth sau mỗi triangle. Mọi fragment lại gặp 1.0 và face cuối cùng thắng như Painter path.
-3. Đổi compare thành `newDepth > storedDepth` nhưng vẫn clear 1.0. Không fragment hợp lệ nào có thể pass.
-4. Ghi color trước câu `if`. Mặt xa tồn tại trong color buffer dù depth báo reject.
+1. Trong một bản sao, bỏ phép ghi depth nhưng giữ phép so depth. CTest so toàn buffer và đối chứng ray–triangle phải bắt lỗi; một ảnh ở góc thuận tiện không đủ chứng minh renderer đúng.
+
+2. Đổi clip thành “nếu một vertex ở ngoài thì bỏ cả face”. Khi đến gần sphere, vùng model biến mất thành từng triangle lớn. So với bản đúng: giao tuyến near plane phải cắt liên tục.
 
 ## Tự kiểm tra kết quả
 
-- Mọi corner sau clipping có Z không nhỏ hơn near trừ tolerance.
-- Projection không nhận vertex phía sau near plane.
-- `covered = passed + rejected` trong fragment path có depth test.
-- Depth cuối hữu hạn và nằm trong `[0,1]`.
-- Đảo draw order không đổi color hoặc depth output.
-- Triangle clip thành quad tạo đúng hai raster triangle.
+- Không vertex nằm sau near plane được gửi vào projection.
+- Color/depth có cùng kích thước; mọi depth lưu hữu hạn trong [0,1].
+- Đảo thứ tự face không đổi color/depth của model, không chỉ tổng số pixel.
+- Model 2.976 triangle render được ở viewport native.
+- Depth tại tâm pixel khớp đối chứng ray–triangle độc lập, kể cả khi model cắt near plane.
 
 ## Bài tập mở rộng
 
-Thêm far-plane clipping với cùng cấu trúc half-space. So số triangle bị clip khi đưa model ra xa thay vì để NDC depth lớn hơn 1 tự fail ở depth buffer.
+Thêm debug depth grayscale, nhưng giữ chế độ solid mặc định. Đổi màu hiển thị không được làm thay giá trị depth dùng cho kiểm tra.
 
-Bài cuối sẽ hoàn thiện asset lookup, diagnostic, controls, resize và bộ kiểm chứng để project có thể tải về chạy độc lập.
+[Bài cuối: mở model, camera orbit và nghiệm thu ứng dụng](/projects/obj-mesh-viewer/08-load-file-controls-va-validation).

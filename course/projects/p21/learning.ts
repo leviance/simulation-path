@@ -3,194 +3,199 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p21-l01": {
-      focus:
-        "Mở OBJ như một text stream, đọc riêng record v và biến danh sách position thành point cloud có thể xoay trên framebuffer.",
+      focus: "Chạy starter rồi đọc từng record v; kiểm position trước khi nối mặt.",
       expected:
-        "Rocket xuất hiện dưới dạng các điểm. Title bar báo đúng số dòng và vertex; comment, dòng trống hoặc record chưa hỗ trợ không tạo position rác.",
-      files: ["include/lab.hpp", "src/main.cpp", "assets/low-poly-rocket.obj"],
+        "18 position của rocket xuất hiện thành point cloud, có path/vertex count ở HUD và diagnostic theo dòng.",
+      files: ["include/mesh.hpp", "include/obj-parser.hpp", "include/viewer.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đọc theo dòng thay vì theo token toàn file",
+          title: "Chạy bộ khung SDL trước",
           explanation:
-            "Mỗi vòng getline giữ lại line number để diagnostic sau này trỏ đúng nơi. istringstream chỉ xử lý nội dung của một record.",
+            "Theo renderViewer → SDL_UpdateTexture → presentFramebuffer để thấy dữ liệu mới cần nối vào đâu.",
         },
         {
-          title: "Chỉ nhận record v hoàn chỉnh",
+          title: "Đọc một dòng thành một position",
           explanation:
-            "Ba tọa độ X/Y/Z phải đọc thành công và hữu hạn trước khi push vào positions; dòng sai được ghi diagnostic, không tạo Vec3 mặc định.",
+            "Giữ lineNumber, bỏ comment và chỉ lưu XYZ khi đã đọc trọn dòng, hữu hạn, trong giới hạn.",
         },
         {
-          title: "Tạo output nhìn thấy ngay",
+          title: "Project và vẽ marker",
           explanation:
-            "Point cloud dùng phép quay và projection quen thuộc, nhờ vậy người học biết file đã được đọc đúng trước khi parser face xuất hiện.",
+            "drawPoints dùng modelToCamera, projectVertex và putPixel; chưa xử lý face hoặc normalize.",
         },
       ],
     },
     "p21-l02": {
-      focus:
-        "Đọc face triangle với position index dương, đổi từ quy ước 1-based của OBJ sang 0-based của std::vector và vẽ wireframe.",
+      focus: "Đọc face triangle, đổi index một lần ở parser rồi vẽ ba cạnh từ indexed mesh.",
       expected:
-        "Các điểm rời được nối thành rocket wireframe. Index 1 trỏ positions[0]; index 0 hoặc lớn hơn số vertex tạo diagnostic theo dòng.",
-      files: ["include/lab.hpp", "src/main.cpp", "assets/low-poly-rocket.obj"],
+        "Rocket có 18 position và 32 triangle; index 0 hoặc ngoài mảng bị báo lỗi, không tạo face một phần.",
+      files: ["include/mesh.hpp", "include/obj-parser.hpp", "include/viewer.hpp"],
       steps: [
         {
-          title: "Thu đủ corner của một face",
+          title: "Giữ topology bằng index",
           explanation:
-            "Parser đọc token tới hết dòng thay vì giả định luôn có đúng ba giá trị. Checkpoint này chỉ chấp nhận ba corner nhưng đã giữ cấu trúc để mở rộng.",
+            "ObjTriangle lưu ba index nội bộ cùng sourceFace/sourceLine, không chép lại XYZ.",
         },
         {
-          title: "Đổi index tại biên parser",
+          title: "Kiểm trước khi cast",
           explanation:
-            "Hàm resolve trả std::optional<size_t>; code phía sau chỉ nhìn 0-based index hợp lệ và không cần nhớ quy ước của file.",
+            "from_chars phải đọc hết token; kiểm khoảng hợp lệ bằng kiểu có dấu rồi mới đổi sang size_t.",
         },
         {
-          title: "Dựng indexed wireframe",
+          title: "Nối các cạnh của mesh",
           explanation:
-            "Mỗi ObjTriangle tham chiếu ba position đã tồn tại. Vòng render project position một lần rồi nối ba cạnh theo index.",
+            "drawMeshEdges đọc position qua index và gửi các đoạn tới framebuffer; wireframe chưa có hidden-surface removal.",
         },
       ],
     },
     "p21-l03": {
       focus:
-        "Tách position field khỏi face token có slash và giải negative index tương đối với số position tại chính dòng face.",
+        "Mở rộng resolver cho bốn dạng face token và index âm, không thêm quy ước file vào renderer.",
       expected:
-        "Các preset v/vt/vn, v//vn và negative đều tạo cùng geometry; token thiếu position, index 0 hoặc index ngoài mảng bị từ chối rõ ràng.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Cùng position index tạo cùng geometry dù token có slash; -1 trỏ position mới nhất tại dòng face.",
+      files: ["include/obj-parser.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Cắt token tại slash đầu tiên",
+          title: "Nhận đúng cú pháp suffix",
           explanation:
-            "Project 21 chưa dùng UV/normal trong file, nhưng vẫn chấp nhận cú pháp chứa chúng bằng cách parse riêng phần position trước slash.",
+            "v/vt, v//vn, v/vt/vn hợp lệ; 1/, 1///2 và suffix 0 bị từ chối. Thuộc tính chưa dùng chỉ được kiểm cú pháp.",
         },
         {
-          title: "Tách hai công thức index",
-          explanation:
-            "Index dương dùng raw−1; index âm dùng positionCount+raw. Hai nhánh đều kiểm phạm vi trước khi đổi sang size_t.",
+          title: "Resolve relative index tại dòng face",
+          explanation: "Nhánh dương dùng raw−1, nhánh âm dùng positionCount+raw bằng kiểu có dấu.",
         },
         {
-          title: "Khóa case khó bằng test nhỏ",
+          title: "Giữ cùng hợp đồng nội bộ",
           explanation:
-            "CTest đưa nhiều token khác nhau vào cùng resolver và kiểm index kết quả, thay vì chỉ hy vọng asset mẫu vô tình bao phủ đủ cú pháp.",
+            "Mọi nhánh trả index 0-based đã kiểm, nên code thêm triangle và vẽ cạnh không đổi.",
         },
       ],
     },
     "p21-l04": {
-      focus:
-        "Triangulate polygon lồi bằng fan (v0, vi, vi+1), giữ winding, source face và source line trên mọi triangle sinh ra.",
+      focus: "Dùng fan cho polygon phẳng, lồi và báo rõ trường hợp thuật toán không hỗ trợ.",
       expected:
-        "Triangle tạo 1 triangle, quad tạo 2 và pentagon tạo 3. Canvas tô lần lượt từng fan triangle mà không đổi anchor v0.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Pentagon tạo ba triangle cùng mốc corner 0; cube có sáu source face và 12 triangle.",
+      files: ["include/obj-parser.hpp", "include/mesh.hpp", "assets/cube.obj"],
       steps: [
         {
-          title: "Parse toàn bộ corner trước",
+          title: "Kiểm toàn bộ corner",
           explanation:
-            "Một face chỉ được triangulate sau khi mọi token đã resolve. Nếu một corner sai, cả face bị bỏ để không sinh nửa geometry hợp lệ nửa geometry lỗi.",
+            "Một token sai làm cả face bị bỏ; không giữ triangle con từ phần đầu còn hợp lệ.",
         },
         {
-          title: "Giữ corner đầu làm anchor",
+          title: "Kiểm polygon trước khi fan",
           explanation:
-            "Vòng lặp i=1..N−2 sinh (0,i,i+1). Công thức tạo đúng N−2 triangle và giữ thứ tự corner ban đầu.",
+            "Face phải phẳng, mọi corner cùng phía mỗi cạnh, không có corner trùng; không dùng fan cho mặt lõm.",
         },
         {
-          title: "Mang metadata sang triangle",
+          title: "Giữ winding và xuất xứ",
           explanation:
-            "sourceFace và sourceLine giúp inspector/test quay ngược từ fragment về đúng record f đã sinh ra nó.",
+            "Tạo (0,i,i+1) đúng N−2 lần, giữ sourceFace/sourceLine trên mọi triangle con.",
         },
       ],
     },
     "p21-l05": {
       focus:
-        "Tính axis-aligned bounds, lấy center và uniform scale rồi biến đổi toàn bộ position sang không gian model chuẩn.",
-      expected:
-        "Dù preset rất nhỏ, rất lớn hoặc lệch khỏi origin, model sau normalize vẫn nằm quanh origin với cạnh bounds lớn nhất bằng 2.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Tính bounds rồi dùng một uniform scale; xử lý file lệch origin hoặc khác đơn vị mà không làm méo hình.",
+      expected: "Tâm bounds mới gần origin, cạnh lớn nhất bằng 2; tỷ lệ các extent không đổi.",
+      files: ["include/normalize.hpp", "include/viewer.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Khởi tạo bounds từ vertex thật",
-          explanation:
-            "Min/max bắt đầu bằng position đầu tiên, tránh giá trị 0 giả làm bounds sai khi toàn bộ model nằm cùng một phía origin.",
+          title: "Lấy min/max từ dữ liệu thật",
+          explanation: "Bắt đầu bằng position đầu tiên, không để origin giả làm rộng bounds.",
         },
         {
-          title: "Dùng một scale cho cả ba trục",
-          explanation:
-            "Scale 2/maxExtent áp dụng lên X/Y/Z như nhau. Model vừa khung mà tỷ lệ hình học không bị kéo méo.",
+          title: "Center rồi scale",
+          explanation: "Trừ (min+max)/2 và nhân 2/maxExtent cho cả XYZ; topology giữ nguyên.",
         },
         {
-          title: "Xử lý mesh rỗng hoặc phẳng thành điểm",
+          title: "Nạp một lần, không sửa mỗi frame",
           explanation:
-            "normalizeMesh trả false khi không có position hoặc maxExtent gần zero, thay vì chia cho zero rồi đưa NaN vào renderer.",
+            "Normalize mesh tạm khi mở file; bounds rỗng/co thành điểm báo lỗi trước khi thay model.",
         },
       ],
     },
     "p21-l06": {
       focus:
-        "Tính face normal từ hai cạnh sau model transform, dùng nó cho back-face culling và Lambert intensity trước khi rasterize.",
+        "Tính face normal từ geometry, dùng cùng không gian cho culling và Lambert, rồi kiểm bằng normals overlay.",
       expected:
-        "Mặt quay về nguồn sáng sáng hơn; đảo winding làm normal đổi hướng và trạng thái culling đổi theo. Triangle suy biến bị đếm rồi bỏ qua.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Cube có mặt sáng/tối rõ, normals đổi hướng khi đảo winding; painter ở mốc này chưa giải quyết occlusion.",
+      files: ["include/shading.hpp", "include/raster.hpp", "include/viewer.hpp"],
       steps: [
         {
-          title: "Cross product theo đúng winding",
-          explanation:
-            "normal=normalize(cross(B−A,C−A)). Đổi B và C đảo dấu normal, vì vậy parser không được tự sắp lại corner.",
+          title: "Kiểm cross product trước normalize",
+          explanation: "Triangle thẳng hàng không có normal xác định và không đi tiếp vào shading.",
         },
         {
-          title: "Cull trong camera space",
+          title: "Tách culling khỏi ánh sáng",
           explanation:
-            "Dot giữa normal và vector từ camera tới centroid quyết định mặt quay lưng trước projection; không dùng screen area để đoán lighting.",
+            "Dot với centroid quyết định front-facing; dot với hướng tới nguồn sáng quyết định diffuse.",
         },
         {
-          title: "Tách ambient và diffuse",
+          title: "Ghi màu bằng CPU",
           explanation:
-            "Intensity=ambient+(1−ambient)·max(0,dot(N,L)); clamp trước khi đổi sang byte màu.",
+            "Rasterizer gọi callback ghi màu RGBA vào framebuffer; SDL chỉ trình bày kết quả.",
         },
       ],
     },
     "p21-l07": {
       focus:
-        "Đưa mọi source triangle qua camera transform, culling, near clipping, projection, top-left rasterization và Z-buffer trong một renderMesh.",
+        "Ghép near clipping → projection → top-left → Z-buffer cho toàn bộ mesh, đo trên asset lớn thật.",
       expected:
-        "Solid rocket không nổ hình khi tiến sát camera; fragment xa bị reject và đảo triangle order không đổi toàn bộ color/depth output.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Sphere 2.976 triangle render được; đảo thứ tự không đổi color/depth và pixel khớp ray–triangle reference.",
+      files: [
+        "include/render.hpp",
+        "include/raster.hpp",
+        "tests/reference.hpp",
+        "assets/faceted-sphere.obj",
+      ],
       steps: [
         {
-          title: "Clip trước khi project",
+          title: "Clip trước khi chia perspective",
           explanation:
-            "Sutherland–Hodgman giữ mọi output z≥near rồi triangle fan có thể tạo 0, 1 hoặc 2 triangle an toàn để project.",
+            "Giao cạnh chung được tính nhất quán; polygon sau clip có thể sinh hai triangle.",
         },
         {
-          title: "Nội suy NDC depth tại pixel",
+          title: "Transform position dùng chung một lần",
           explanation:
-            "Rasterizer dùng cùng barycentric weights cho coverage và depth; fragment chỉ ghi color sau khi newDepth nhỏ hơn storedDepth.",
+            "cameraPositions được dựng trước vòng face, tránh lặp phép quay/view cho từng corner.",
         },
         {
-          title: "Đếm tại từng tầng pipeline",
+          title: "Depth quyết định color",
           explanation:
-            "Stats tách source, culled, clipped, rasterized, passed và rejected để một màn hình trống không còn là lỗi mơ hồ.",
+            "Chỉ fragment có NDC depth hợp lệ và gần hơn mới ghi cả depth lẫn color cùng index.",
         },
       ],
     },
     "p21-l08": {
       focus:
-        "Hoàn thiện asset lookup, diagnostic, controls, resize và một bộ validation chạy parser lẫn renderer không cần SDL window.",
+        "Hoàn thiện viewer nhiều model, camera orbit độc lập, file loading có giao dịch và kiểm thử toàn pipeline.",
       expected:
-        "Rocket OBJ load từ thư mục assets, title bar báo path và counts; CTest pass ở Debug/Release, còn preset lỗi trên Canvas chỉ báo lỗi chứ không crash.",
-      files: ["include/lab.hpp", "src/main.cpp", "assets/low-poly-rocket.obj", "tests/tests.cpp"],
+        "Cube/rocket/sphere mở từ file; wireframe/normals/debug, resize, pause/step và file lỗi có hành vi rõ ràng.",
+      files: [
+        "include/geometry.hpp",
+        "include/viewer.hpp",
+        "include/controls.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+        "tests/reference.hpp",
+      ],
       steps: [
         {
-          title: "Thử các asset path có giải thích",
+          title: "Tách model và camera",
           explanation:
-            "Loader thử path cạnh executable và path khi chạy từ project root; nếu thất bại, thông báo liệt kê path thay vì thay mesh ngầm.",
+            "V chọn thao tác; turnViewer chỉ sửa model angle hoặc camera yaw/pitch, không sửa cả hai.",
         },
         {
-          title: "Một state điều khiển, một renderer",
+          title: "Giữ model cũ nếu mở file lỗi",
           explanation:
-            "Drag, pause, step, wireframe, culling và reset chỉ đổi RenderOptions rồi gọi lại cùng pipeline; resize cấp phát lại cả color/depth.",
+            "openModel parse và normalize biến tạm trước khi gán; file drop và CLI path dùng cùng loader.",
         },
         {
-          title: "Validation có đối chứng âm",
+          title: "Nghiệm thu bằng input và pixel thật",
           explanation:
-            "Ngoài happy path, tests còn dùng index 0, out-of-range, face thiếu corner, mesh suy biến và render không Z-buffer để chứng minh phép kiểm thật sự bắt lỗi.",
+            "Debug/Release CTest kiểm ba asset, ray–triangle depth, order independence và overlays; smoke có tám frame hữu hạn.",
         },
       ],
     },

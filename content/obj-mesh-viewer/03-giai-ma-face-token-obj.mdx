@@ -4,114 +4,112 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Một OBJ ngoài thực tế hiếm khi chỉ có `f 1 2 3`. Corner có thể là `7/4/2`, nghĩa là position 7, texture coordinate 4 và normal 2. Khi chưa có UV hoặc vertex normal trong renderer, ta vẫn phải đọc đúng position thay vì từ chối cả model hoặc cố parse chuỗi có slash như một integer.
+Một file OBJ xuất từ phần mềm 3D thường không viết face đơn giản như `f 1 2 3`. Bạn có thể gặp `f 1/1/1 2/2/1 3/3/1` hoặc index âm. Nếu đưa cả chuỗi `1/1/1` vào parser integer, model hợp lệ sẽ không mở được.
 
-OBJ còn cho phép index âm. `-1` là phần tử mới nhất tại dòng face, `-2` là phần tử ngay trước đó. Đây không phải số âm sau khi resolve; nó là cách tham chiếu tương đối trong file.
+Ta mở rộng đúng hàm resolver của bài trước. Renderer vẫn nhận ba position index 0-based; nó không cần biết face ban đầu có slash hay không.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Bốn dạng corner thường gặp:
+Bốn dạng corner là `v`, `v/vt`, `v//vn`, `v/vt/vn`. Chữ `v` trong các ký hiệu này là **position index**, không phải keyword bắt đầu dòng. Phần sau slash lần lượt tham chiếu texture coordinate và normal của OBJ.
 
-| Token | Position | UV | Normal |
-| --- | ---: | ---: | ---: |
-| `7` | 7 | — | — |
-| `7/4` | 7 | 4 | — |
-| `7//2` | 7 | — | 2 |
-| `7/4/2` | 7 | 4 | 2 |
+Project này tính face normal từ geometry và chưa đọc texture/material. Vì vậy ta kiểm **cú pháp** các suffix nhưng không sử dụng hay tra phạm vi vector vt/vn. Đây không phải parser Wavefront đầy đủ. Các record metadata được đếm là đã nhận diện nhưng chưa dùng.
 
-Project 21 chỉ dùng cột position, nên ta cắt tại slash đầu tiên. Với `positionCount=N`:
+Negative index tính theo số position đã đọc **tại dòng face**:
 
 $$
-resolved(i)=
-\begin{cases}
-i-1 & i>0\\
-N+i & i<0
+i=\begin{cases}
+r-1 & r>0\\
+n+r & r<0
 \end{cases}
 $$
 
-Ví dụ N=5: `1→0`, `5→4`, `-1→4`, `-5→0`. Giá trị `-6` và `0` đều sai.
+Nếu n = 5, `-1` chỉ position[4], `-5` chỉ position[0]. Thêm một dòng v ở sau face không được làm kết quả này thay đổi. Index 0 luôn không hợp lệ.
 
 <InteractiveLab demo="obj-viewer" mode="obj-indices" />
 
-Chuyển giữa preset slash và negative. Geometry phải giữ nguyên khi chỉ thay cách viết token; readout luôn hiển thị index OBJ đã được đổi sang index vector nào.
+Preset đầu là triangle có slash. Đổi face thành `f -3//1 -2//1 -1//1`: geometry phải giữ nguyên. Đừng chọn quad để thử ở mốc này; polygon thuộc bài sau.
 
 ## Viết code từng bước
 
-### Bước 1 — Tách position field trước khi parse số
+### Bước 1 — Tách suffix nhưng không bỏ qua cú pháp hỏng
 
-```cpp title="include/lab.hpp — slash không đi vào std::from_chars"
-const std::size_t slash = token.find('/');
+Đây là nhánh có slash, nằm trước bước parse position integer:
+
+```cpp title="include/obj-parser.hpp — nhận đúng bốn dạng token"
 if (slash != std::string_view::npos) {
+    const std::string_view suffix = token.substr(slash + 1);
+    const std::size_t secondSlash = suffix.find('/');
+    const auto validAttribute = [](std::string_view field) {
+        int value = 0;
+        const auto parsed = std::from_chars(field.data(), field.data() + field.size(), value);
+        return parsed.ec == std::errc{} && parsed.ptr == field.data() + field.size() && value != 0;
+    };
+    if (secondSlash == std::string_view::npos) {
+        if (!validAttribute(suffix)) {
+            return std::nullopt;
+        }
+    } else {
+        const auto texture = suffix.substr(0, secondSlash);
+        const auto normal = suffix.substr(secondSlash + 1);
+        if ((!texture.empty() && !validAttribute(texture)) || !validAttribute(normal)) {
+            return std::nullopt;
+        }
+    }
     token = token.substr(0, slash);
-}
-if (token.empty()) {
-    return std::nullopt;
 }
 ```
 
-`/4/2` có position field rỗng và phải fail. Còn `7//2` tạo substring `7`, đúng phần ta cần.
+Nếu chỉ có một slash, suffix phải là integer khác 0. Nếu có slash thứ hai, field texture có thể rỗng để biểu diễn `v//vn`, nhưng field normal phải tồn tại. Một slash thứ ba sẽ còn trong field normal và khiến `from_chars` không đọc trọn token.
 
-### Bước 2 — Resolve nhánh dương và âm riêng biệt
+Ta không chấp nhận `1/`, `1///2`, `1/foo` hay suffix index 0. “Chưa dùng thuộc tính” không có nghĩa là nên chấp nhận mọi chuỗi phía sau slash.
 
-```cpp title="include/lab.hpp — negative index dựa trên positionCount hiện tại"
+### Bước 2 — Giải index bằng kiểu có dấu
+
+```cpp title="include/obj-parser.hpp — chọn công thức theo dấu của index"
 long long resolved = 0;
 if (rawIndex > 0) {
     resolved = static_cast<long long>(rawIndex) - 1;
 } else {
     resolved = static_cast<long long>(positionCount) + rawIndex;
 }
+```
+
+`resolved` được khai báo là `long long` ngay trước nhánh. Với negative index, không viết `positionCount + rawIndex` trực tiếp: positionCount là unsigned nên phép cộng có thể đổi rawIndex âm thành unsigned.
+
+### Bước 3 — Giữ kiểm phạm vi sau cả hai nhánh
+
+```cpp title="include/obj-parser.hpp — chặn cả hai phía trước khi cast"
 if (resolved < 0 || resolved >= static_cast<long long>(positionCount)) {
     return std::nullopt;
 }
-return static_cast<std::size_t>(resolved);
 ```
 
-Ta không lấy trị tuyệt đối của index âm. Với N=5, `abs(-2)-1` cho 1, nhưng đáp án đúng là 3.
-
-### Bước 3 — Kiểm nhiều cú pháp trên cùng geometry
-
-Test dùng đủ `v/vt/vn`, `v//vn` và negative index trong một face:
-
-```cpp title="tests/tests.cpp — slash và negative cùng trỏ đúng position"
-const lab::ObjLoadResult slashAndNegative = parse(
-    "v 0 0 0\n"
-    "v 1 0 0\n"
-    "v 0 1 0\n"
-    "vt 0 0\n"
-    "vn 0 0 1\n"
-    "f 1/1/1 2//1 -1/1/1\n"
-);
-check(!slashAndNegative.hasErrors(), "slash tokens and negative indices parse");
-check(slashAndNegative.mesh.triangles[0].indices[2] == 2, "negative one resolves to the newest position");
-```
-
-`vt` và `vn` được đếm là record đã nhận diện nhưng chưa dùng. Parser không nên báo lỗi chỉ vì renderer của project hiện tại chưa tiêu thụ thuộc tính đó.
+Sau nhánh kiểm, hàm mới trả `static_cast<std::size_t>(resolved)`. Phần thêm face và phần vẽ wireframe không đổi. Đây là lợi ích của việc gom quy ước file vào một điểm ở parser.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build face-token checkpoint"
-cmake --build build --config Debug --target project_21_checkpoint_3
-ctest --test-dir build -C Debug --output-on-failure
+```powershell title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_21_checkpoint_3 --parallel 2
+./build/Debug/project_21_checkpoint_3.exe
 ```
 
-Asset rocket hiện dùng index dương đơn giản, vì vậy hãy dùng Canvas hoặc test fixture để kiểm slash/negative; một asset duy nhất không thể thay cho unit test có chủ đích.
+Rocket mặc định vẫn phải giống checkpoint 2. Để thử dạng slash bằng C++, tạo một file triangle nhỏ theo nội dung Canvas rồi truyền đường dẫn sau tên executable. Không cần sửa main.cpp để đổi model.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thay `-1` bằng `-4` khi mới có ba position. Resolver phải trả lỗi chứ không wrap thành `size_t` rất lớn.
-2. Bỏ thao tác cắt slash và thử parse `1/1/1`. `from_chars` dừng ở `/`; phép kiểm `parsed.ptr != end` phải bắt phần đuôi chưa dùng.
-3. Thử token `//1`. Position field rỗng nên cả face bị bỏ, dù normal index trông hợp lệ.
+1. Với ba position, thử lần lượt `-1`, `-3`, `-4`. Hai trường hợp đầu hợp lệ; trường hợp cuối nằm ngoài mảng. Đặt một dòng v mới **sau face**: resolver không được quay lại đổi index đã lưu.
+
+2. Thử `1//0` và `1/2/3/4`. Cả hai phải có diagnostic. Sau đó so `f 1 2 3` với `f 1/1/1 2/2/1 3/3/1`: cùng position index thì phải sinh cùng indexed geometry, dù ta chưa dùng vt/vn.
 
 ## Tự kiểm tra kết quả
 
-- Bốn dạng token đều tách đúng position field.
-- Positive và negative index hợp lệ cho cùng kết quả 0-based tương ứng.
-- Index 0, field rỗng, số ngoài mảng hoặc token có chữ đều bị từ chối.
-- Không index âm nào được cast sang `size_t` trước khi kiểm phạm vi.
-- `vt` và `vn` không làm parser mất đồng bộ dòng.
+- Bốn dạng token hợp lệ đều lấy đúng position field.
+- Negative index gắn với số position tại dòng face, không phải tổng cuối file.
+- Index 0, suffix rỗng/sai và position ngoài mảng đều bị chặn.
+- Renderer không chứa thêm logic xử lý slash hay negative index.
 
 ## Bài tập mở rộng
 
-Viết một `FaceToken` giữ cả ba `std::optional<int>` cho position/UV/normal, nhưng chưa đưa nó vào renderer. Test riêng `7//2` để chắc UV thực sự rỗng chứ không bị hiểu thành 0.
+Thêm bảng chẩn đoán token: chuỗi gốc, raw position index, positionCount và resolved index. Bảng này chỉ để giải thích; ObjTriangle vẫn lưu index đã resolve.
 
-Bài tiếp theo sẽ bỏ giả định mỗi face có đúng ba corner và biến polygon thành triangle fan.
+[Bài tiếp theo: chia polygon thành các triangle](/projects/obj-mesh-viewer/04-triangulate-polygon-bang-fan).

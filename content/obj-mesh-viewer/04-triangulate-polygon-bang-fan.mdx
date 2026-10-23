@@ -4,99 +4,136 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-OBJ cho phép record `f` có ba, bốn hoặc nhiều corner. CPU rasterizer của ta chỉ nhận triangle. Nếu parser lấy ba token đầu rồi bỏ phần còn lại, quad mất nửa mặt; nếu tạo triangle ngay khi đọc từng token, một token lỗi ở cuối dòng có thể để lại geometry nửa đúng nửa sai.
+Cube có sáu mặt vuông, nhưng rasterizer chỉ nhận triangle. Từ chối mọi face bốn corner sẽ khiến viewer không mở được một dạng OBJ rất thường gặp. Ta cần chuyển polygon sang triangle **một lần khi đọc file**, không chia lại mỗi frame.
 
-Checkpoint 4 thu toàn bộ corner hợp lệ trước, sau đó triangulate polygon lồi bằng fan. Đây là giới hạn được ghi rõ: triangle fan không xử lý đúng polygon lõm hoặc tự cắt. Một parser production sẽ cần thuật toán triangulation mạnh hơn hoặc yêu cầu asset được triangulate trước.
+Bài này giữ parser position/index từ các bài trước, thay bước “face phải có đúng ba corner” bằng bước kiểm polygon rồi tạo fan.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Giữ corner đầu $v_0$ làm anchor. Với polygon N corner theo cùng winding:
+Với polygon phẳng, lồi có N corner theo thứ tự quanh biên, giữ corner 0 làm mốc:
 
-$$
-T_i=(v_0,v_i,v_{i+1}),\qquad i=1\ldots N-2
-$$
+```text title="Triangle fan — quad và pentagon"
+quad:      (0,1,2), (0,2,3)
+pentagon:  (0,1,2), (0,2,3), (0,3,4)
+```
 
-Pentagon `(0,1,2,3,4)` trở thành:
+Số triangle là N−2. Các triangle giữ nguyên winding của polygon; đừng sort index theo trị số. Số vertex trong file không nói gì về thứ tự không gian.
 
-- `(0,1,2)`
-- `(0,2,3)`
-- `(0,3,4)`
-
-Số triangle luôn là $N-2$. Thứ tự corner không bị sort, nên winding của polygon được truyền sang mỗi triangle.
+Fan **không phải thuật toán triangulation cho mọi polygon**. Với mặt lõm, đường chéo từ corner 0 có thể chạy ra ngoài polygon. Với mặt không phẳng, “mặt” phụ thuộc cách chọn đường chéo. Tiny parser này báo lỗi cho hai trường hợp ấy; hãy export triangulated OBJ nếu model dùng chúng.
 
 <InteractiveLab demo="obj-viewer" mode="obj-triangulation" />
 
-Preset negative là một pentagon. Dùng phím mũi tên trái/phải khi Canvas có focus để chuyển triangle được tô viền vàng; index đầu tiên phải giữ nguyên.
+Preset pentagon dùng negative index để nhắc lại bài trước. Di chuyển thanh chọn triangle từ 0 tới 2: mỗi triangle màu vàng vẫn dùng chung corner 0. Sau đó chọn cube; sáu source face phải tạo 12 triangle.
 
 ## Viết code từng bước
 
-### Bước 1 — Chỉ triangulate sau khi face đã hợp lệ
+### Bước 1 — Đừng thêm triangle khi vẫn đang đọc corner
 
-Vòng parse resolve mọi corner vào một vector tạm. Face ít hơn ba corner dừng trước khi đụng mesh:
+Trong nhánh f, `corners` là vector tạm. Parser chỉ đi tiếp sau khi mọi token đã resolve, số corner từ 3 tới 128 và `faceValid` còn đúng. Nếu corner cuối là `999`, không triangle nào của face ấy được giữ lại.
 
-```cpp title="include/lab.hpp — kiểm đủ corner trước triangle fan"
-if (!faceValid) {
+Giới hạn 128 corner giúp thao tác kiểm polygon có chi phí hữu hạn. Nó được báo bằng diagnostic, không cắt bớt polygon để “cố mở”.
+
+### Bước 2 — Kiểm phạm vi của triangle fan
+
+```cpp title="include/obj-parser.hpp — chỉ fan-fill polygon phù hợp"
+inline bool isConvexPlanarFace(const ObjMesh& mesh, const std::vector<std::size_t>& corners) {
+    const Vec3 origin = mesh.positions[corners[0]];
+    Vec3 area{};
+    double extent = 0.0;
+    for (std::size_t index = 0; index < corners.size(); ++index) {
+        const Vec3 a = mesh.positions[corners[index]] - origin;
+        const Vec3 b = mesh.positions[corners[(index + 1) % corners.size()]] - origin;
+        area = area + cross(a, b);
+        extent = std::max(extent, length(a));
+    }
+    const auto normal = normalized(area, extent * extent * 1e-12);
+    if (!normal) {
+        return false;
+    }
+    const double tolerance = std::max(1e-12, extent * 1e-6);
+    for (std::size_t index = 0; index < corners.size(); ++index) {
+        const Vec3 a = mesh.positions[corners[index]];
+        const Vec3 b = mesh.positions[corners[(index + 1) % corners.size()]];
+        const Vec3 c = mesh.positions[corners[(index + 2) % corners.size()]];
+        if (std::abs(dot(a - origin, *normal)) > tolerance || dot(cross(b - a, c - b), *normal) < -tolerance * extent) {
+            return false;
+        }
+        for (std::size_t other = index + 1; other < corners.size(); ++other) {
+            if (length(a - mesh.positions[corners[other]]) < tolerance) {
+                return false;
+            }
+        }
+        // Mọi corner phải cùng phía mỗi cạnh; kiểm này còn chặn polygon tự cắt.
+        for (const auto corner : corners) {
+            if (dot(cross(b - a, mesh.positions[corner] - a), *normal) < -tolerance * extent) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+```
+
+Vector area là tổng cross product của các cạnh quanh origin tạm. Chuẩn hóa nó cho ta normal của mặt. Mỗi corner phải nằm gần mặt phẳng ấy; các lần rẽ liên tiếp không được quay ngược hướng normal. Phần kiểm corner trùng tránh cạnh có độ dài 0.
+
+Tolerance tăng theo kích thước face để không dùng một epsilon tuyệt đối cho mọi đơn vị. Đây vẫn là tiny parser cho polygon phẳng/lồi đơn giản, không phải công cụ sửa mesh tự cắt. Với dữ liệu ngoài phạm vi, báo lỗi có ích hơn một model trông “gần đúng”.
+
+### Bước 3 — Tạo đúng N−2 triangle
+
+```cpp title="include/obj-parser.hpp — giữ corner đầu và winding"
+inline void appendTriangleFan(
+    ObjMesh& mesh,
+    const std::vector<std::size_t>& corners,
+    std::size_t sourceFace,
+    std::size_t sourceLine
+) {
+    for (std::size_t index = 1; index + 1 < corners.size(); ++index) {
+        mesh.triangles.push_back({
+            {corners[0], corners[index], corners[index + 1]},
+            sourceFace,
+            sourceLine,
+        });
+    }
+}
+```
+
+Vòng lặp bắt đầu ở index 1 và dừng khi index + 1 chạm cuối vector. Với N = 4, hai lần thêm là {0,1,2} và {0,2,3}. Mỗi triangle giữ cùng sourceFace/sourceLine; vì thế đếm source face và đếm triangle là hai thống kê khác nhau.
+
+### Bước 4 — Chỉ fan sau khi validation thành công
+
+```cpp title="include/obj-parser.hpp — face sai không tạo geometry một phần"
+if (!isConvexPlanarFace(result.mesh, corners)) {
+    addDiagnostic(result, lineNumber, "face phải phẳng, lồi và không có corner trùng");
     continue;
 }
-if (corners.size() < 3) {
-    addDiagnostic(result, lineNumber, "record f cần ít nhất ba corner");
-    continue;
-}
-appendTriangleFan(result.mesh, corners, result.sourceFaceCount, lineNumber);
 ```
 
-Đây là một thao tác all-or-nothing. Một index sai ở corner thứ năm không được để bốn corner đầu sinh triangle.
-
-### Bước 2 — Giữ anchor và chạy tới N−2
-
-```cpp title="include/lab.hpp — công thức triangle fan trong code"
-for (std::size_t index = 1; index + 1 < corners.size(); ++index) {
-    mesh.triangles.push_back({
-        {corners[0], corners[index], corners[index + 1]},
-        sourceFace,
-        sourceLine,
-    });
-}
-```
-
-Điều kiện `index + 1 < corners.size()` diễn đạt trực tiếp việc luôn cần hai corner sau anchor; không cần tính `size()-2` trên kiểu unsigned.
-
-### Bước 3 — Khóa topology và metadata bằng test
-
-```cpp title="tests/tests.cpp — quad tạo đúng hai triangle chung anchor"
-check(quad.mesh.triangles.size() == 2, "four-corner face creates N minus two triangles");
-check(quad.mesh.triangles[0].indices == std::array<std::size_t, 3>{0, 1, 2}, "triangle fan starts at corner zero");
-check(quad.mesh.triangles[1].indices == std::array<std::size_t, 3>{0, 2, 3}, "triangle fan keeps winding on the second triangle");
-check(quad.mesh.triangles[0].sourceLine == 5, "triangulated face keeps its source line");
-```
-
-`sourceFace` giống nhau trên mọi triangle của polygon; `sourceLine` giúp diagnostic và pixel inspector quay lại đúng record gốc.
+Ngay sau nhánh này, parser gọi `appendTriangleFan(result.mesh, corners, result.sourceFaceCount, lineNumber)`. Wireframe không cần biết triangle từng đến từ một quad hay một face tam giác.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build polygon checkpoint"
-cmake --build build --config Debug --target project_21_checkpoint_4
-ctest --test-dir build -C Debug --output-on-failure
+```powershell title="Terminal — checkpoint 4 với cube"
+cmake --build build --config Debug --target project_21_checkpoint_4 --parallel 2
+./build/Debug/project_21_checkpoint_4.exe assets/cube.obj
 ```
 
-Rocket asset đã là triangle mesh, nên số source face và triangle bằng nhau. Trên Canvas, quad phải báo `1 face → 2 triangle`, pentagon báo `1 → 3`.
+Số position là 8, source face là 6, triangle là 12. Bạn thấy cả các đường chéo trên mặt vuông: chúng là cạnh nội bộ của fan, không phải vertex mới được thêm vào OBJ.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi vòng lặp thành `(corners[index-1], corners[index], corners[index+1])`. Vẽ pentagon và tìm vùng bị overlap hoặc winding không còn nhất quán.
-2. Push triangle ngay trong lúc đọc token rồi đặt một index sai ở cuối face. Kiểm tra xem geometry nửa vời đã lọt vào mesh như thế nào.
-3. Tạo polygon lõm hình mũi tên. Triangle fan vẫn tạo N−2 triangle nhưng có thể tô ra ngoài polygon; ghi rõ đây là giới hạn, không gọi đó là parser hoàn chỉnh.
+1. Thêm một corner lõm vào preset pentagon bằng cách kéo một vertex vào giữa hình trong source. Parser phải báo face không phù hợp, không tô phần nằm ngoài polygon. Đổi Z của một corner trong quad thành 0.2 để tạo face không phẳng; cũng phải báo lỗi.
+
+2. Đảo **toàn bộ** thứ tự corner của quad. Triangle count không đổi nhưng winding đổi. Sau bài 6, normal/culling phải phản ánh điều đó.
 
 ## Tự kiểm tra kết quả
 
-- Face N corner hợp lệ tạo đúng N−2 triangle.
-- Mọi triangle giữ `corners[0]` làm anchor và giữ winding ban đầu.
-- Face lỗi không sinh bất kỳ triangle nào.
-- `sourceFace` và `sourceLine` được sao chép sang mọi triangle con.
-- Triangle, quad và pentagon đều có test riêng.
+- Triangle, quad, pentagon tạo lần lượt 1, 2, 3 triangle.
+- Mọi triangle con giữ sourceFace/sourceLine và cùng winding.
+- Corner sai ở cuối không để lại triangle dở dang.
+- Face lõm, không phẳng hoặc có corner trùng được báo rõ; không hứa hỗ trợ mọi polygon.
 
 ## Bài tập mở rộng
 
-Tính diện tích có dấu của polygon sau khi chiếu lên mặt phẳng trội nhất và cảnh báo nếu polygon lõm. Không cần viết ear clipping ngay; mục tiêu là phát hiện lúc triangle fan không còn là giả định an toàn.
+Thử một quad có cùng hình nhưng bắt đầu liệt kê corner từ vị trí khác. Đường chéo thay đổi; vùng phủ và normal của mặt phẳng phải giữ nguyên.
 
-Bài tiếp theo sẽ giải quyết một vấn đề khác của file ngoài: model có thể rất lớn, rất nhỏ hoặc nằm xa origin.
+[Bài tiếp theo: đưa model về tâm và scale vừa khung](/projects/obj-mesh-viewer/05-center-va-scale-mesh).

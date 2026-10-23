@@ -35,14 +35,19 @@ test("Project 21 OBJ Viewer parses editable input and preserves Z-buffer output"
     .locator("dd");
 
   await expect(canvas).toBeVisible();
+  await expect(triangles).toHaveText("12");
+  await expect(diagnostic).toHaveText("không có");
+  await controls.getByLabel("OBJ mẫu").selectOption("malformed");
   await expect(diagnostic).toContainText("line 3");
   await controls.getByLabel("OBJ mẫu").selectOption("rocket");
-  await expect(triangles).not.toHaveText("0");
+  await expect(triangles).toHaveText("32");
   await expect(diagnostic).toHaveText("không có");
+  await controls.getByRole("button", { name: "Kiểm tra thứ tự", exact: true }).click();
   await expect(difference).toHaveText("0 color · 0 depth");
 
   await controls.getByLabel("Back-face culling").check();
   await controls.getByLabel("Đảo draw order").check();
+  await controls.getByRole("button", { name: "Kiểm tra thứ tự", exact: true }).click();
   await expect(difference).toHaveText("0 color · 0 depth");
 
   await page.getByLabel("Nguồn OBJ").fill("v 0 0 0\nf 1 0 2");
@@ -63,6 +68,17 @@ test("Project 21 OBJ Viewer parses editable input and preserves Z-buffer output"
     await page.mouse.up();
   }
   await expect(captureState).toHaveText("đã nhả");
+  await controls.getByLabel("Thao tác kéo").selectOption("camera");
+  const modelAngle = page
+    .locator(".lab-readout div")
+    .filter({ hasText: "Model X / Y" })
+    .locator("dd");
+  const before = await modelAngle.innerText();
+  await canvas.press("ArrowRight");
+  await expect(modelAngle).toHaveText(before);
+  await controls.getByLabel("Normals", { exact: true }).check();
+  await canvas.press("Tab");
+  await expect(page.getByLabel("Nguồn OBJ", { exact: true })).toBeFocused();
   await page.getByRole("button", { name: /Tạm dừng|Cho model quay/ }).click();
   await page.getByRole("button", { name: "Tiến một bước" }).click();
   await page.getByRole("button", { name: "Đặt lại" }).click();

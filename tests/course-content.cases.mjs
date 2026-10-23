@@ -407,7 +407,7 @@ test("every project teaches its visible starting point before new abstractions",
     [
       "obj-mesh-viewer",
       "01-doc-vertex-va-ve-point-cloud.mdx",
-      ["parseObj", "renderPointCloud", "SDL_UpdateTexture"],
+      ["parseObj", "drawPoints", "modelToCamera", "projectVertex", "putPixel", "SDL_UpdateTexture"],
     ],
     [
       "lambert-tetrahedron",

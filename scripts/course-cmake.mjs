@@ -49,6 +49,34 @@ function(enable_course_warnings target)
     endif()
 endfunction()
 
+# Chuẩn bị runtime files đúng một lần mỗi build/configuration. Nhiều executable
+# cùng POST_BUILD copy vào một thư mục sẽ tranh chấp file khi build song song.
+get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+set(runtime_directory "\${CMAKE_CURRENT_BINARY_DIR}")
+if(is_multi_config)
+    string(APPEND runtime_directory "/$<CONFIG>")
+endif()
+add_custom_target(project_${projectNumber}_runtime_files
+    COMMAND \${CMAKE_COMMAND} -E make_directory "\${runtime_directory}"
+    VERBATIM
+)
+if(WIN32 AND TARGET SDL3::SDL3-shared)
+    add_custom_command(TARGET project_${projectNumber}_runtime_files POST_BUILD
+        COMMAND \${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:SDL3::SDL3-shared>"
+            "\${runtime_directory}"
+        VERBATIM
+    )
+endif()
+if(EXISTS "\${CMAKE_CURRENT_SOURCE_DIR}/assets")
+    add_custom_command(TARGET project_${projectNumber}_runtime_files POST_BUILD
+        COMMAND \${CMAKE_COMMAND} -E copy_directory
+            "\${CMAKE_CURRENT_SOURCE_DIR}/assets"
+            "\${runtime_directory}/assets"
+        VERBATIM
+    )
+endif()
+
 # Mỗi target biên dịch toàn bộ translation unit trong src của snapshot tương ứng.
 function(add_lab_app name source_directory)
     file(GLOB_RECURSE lab_sources CONFIGURE_DEPENDS
@@ -62,22 +90,7 @@ function(add_lab_app name source_directory)
     add_executable(\${name} \${lab_sources})
     target_include_directories(\${name} PRIVATE \${source_directory}/include)
     target_link_libraries(\${name} PRIVATE SDL3::SDL3)
-    # Windows tìm DLL cạnh executable; áp dụng cả FetchContent lẫn package đã cài.
-    if(WIN32 AND TARGET SDL3::SDL3-shared)
-        add_custom_command(TARGET \${name} POST_BUILD
-            COMMAND \${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:SDL3::SDL3-shared>"
-                "$<TARGET_FILE_DIR:\${name}>"
-            VERBATIM
-        )
-    endif()
-    if(EXISTS "\${CMAKE_CURRENT_SOURCE_DIR}/assets")
-        add_custom_command(TARGET \${name} POST_BUILD
-            COMMAND \${CMAKE_COMMAND} -E copy_directory
-                "\${CMAKE_CURRENT_SOURCE_DIR}/assets"
-                "$<TARGET_FILE_DIR:\${name}>/assets"
-        )
-    endif()
+    add_dependencies(\${name} project_${projectNumber}_runtime_files)
 ${shaderSetup}    enable_course_warnings(\${name})
 endfunction()
 

@@ -218,7 +218,16 @@ test("generated CMake compiles every translation unit and shares immutable asset
   assert.match(source, /GLOB_RECURSE lab_sources CONFIGURE_DEPENDS/);
   assert.match(source, /src\/\*\.cpp/);
   assert.match(source, /add_executable\(\$\{name\} \$\{lab_sources\}\)/);
-  assert.match(source, /copy_directory[\s\S]*TARGET_FILE_DIR/);
+  assert.match(source, /copy_directory[\s\S]*\$\{runtime_directory\}\/assets/);
+  assert.match(source, /add_dependencies\(\$\{name\} project_9_runtime_files\)/);
+  assert.equal(
+    (source.match(/copy_directory/g) ?? []).length,
+    1,
+    "immutable assets are copied by one shared target",
+  );
+  assert.match(source, /get_property\(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG\)/);
+  assert.match(source, /set\(runtime_directory "\$\{CMAKE_CURRENT_BINARY_DIR\}"\)/);
+  assert.match(source, /if\(is_multi_config\)\s+string\(APPEND runtime_directory "\/\$<CONFIG>"\)/);
 });
 
 test("generated CMake exposes checkpoint shaders for live editing", () => {
@@ -231,8 +240,16 @@ test("generated CMake exposes checkpoint shaders for live editing", () => {
 test("generated CMake copies the selected Windows SDL runtime beside every app target", () => {
   const source = courseCmake({ id: "43", checkpointCount: 8 });
   assert.match(source, /if\(WIN32 AND TARGET SDL3::SDL3-shared\)/);
-  assert.match(source, /add_custom_command\(TARGET \$\{name\} POST_BUILD[\s\S]*copy_if_different/);
-  assert.match(source, /"\$<TARGET_FILE:SDL3::SDL3-shared>"\s+"\$<TARGET_FILE_DIR:\$\{name\}>"/);
+  assert.match(
+    source,
+    /add_custom_command\(TARGET project_43_runtime_files POST_BUILD[\s\S]*copy_if_different/,
+  );
+  assert.match(source, /"\$<TARGET_FILE:SDL3::SDL3-shared>"\s+"\$\{runtime_directory\}"/);
+  assert.match(source, /add_dependencies\(\$\{name\} project_43_runtime_files\)/);
+  assert.doesNotMatch(
+    source.slice(source.indexOf("function(add_lab_app")),
+    /copy_if_different|copy_directory/,
+  );
   assert.match(source, /target_link_libraries\(\$\{name\} PRIVATE SDL3::SDL3\)/);
 });
 

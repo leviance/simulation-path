@@ -4,61 +4,51 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Từ Project 13 đến Project 20, geometry đều nằm sẵn trong C++: ta biết chính xác mảng vertex có bao nhiêu phần tử và triangle tham chiếu index nào. Một model tải từ file thì khác. Dòng có thể trống, có comment, có record ta chưa dùng hoặc thậm chí có số hỏng giữa file.
+Đến đây, renderer của ta đã tô được các mặt 3D, nhưng geometry vẫn nằm sẵn trong mã C++. Muốn xem một model khác, ta phải sửa mảng vertex rồi biên dịch lại. Project này bỏ bước đó: ứng dụng đọc một file OBJ và đưa mesh vừa đọc qua chính software renderer của ta.
 
-Checkpoint đầu chưa đọc face. Ta chỉ mở `low-poly-rocket.obj`, thu các record `v x y z` rồi vẽ point cloud trước khi xử lý face. Mốc nhìn có vẻ đơn giản nhưng rất quan trọng: nếu chưa chứng minh file và vertex đúng, nối face hay debug rasterizer chỉ làm phạm vi lỗi rộng thêm.
+Đừng bắt đầu bằng toàn bộ model có hàng nghìn triangle. Bài đầu chỉ đọc position và vẽ các điểm rời. Khi thấy đúng 18 điểm của rocket, ta mới nối chúng thành mặt. Nhờ vậy, nếu hình sai, bạn biết nên kiểm parser hay kiểm renderer.
 
-Starter đã có window, renderer, streaming texture, CPU framebuffer, event loop và resize. Bạn không phải viết lại hạ tầng SDL; phần mới bắt đầu ở đường biên giữa text file và `ObjMesh`.
+Tải ZIP ở trang project, giải nén rồi mở thư mục có `CMakeLists.txt`. Starter đã có window, SDL renderer, streaming texture và framebuffer 800×500. Chạy nó trước:
+
+```powershell title="Terminal — chạy bộ khung trước khi thêm parser"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_21_starter --parallel 2
+./build/Debug/project_21_starter.exe
+```
+
+Bạn sẽ thấy cửa sổ nền tối. Đây chưa phải lỗi thiếu mesh: starter chưa biết đọc OBJ. Trong `src/main.cpp`, vòng lặp gọi `renderViewer`, chuyển `frame.pixels` sang texture bằng `SDL_UpdateTexture`, rồi gọi `presentFramebuffer`. Toàn bộ phần học mới sẽ nối vào đường đi này, không tạo một ứng dụng SDL thứ hai.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Wavefront OBJ là text format. Mỗi dòng là một record độc lập:
+OBJ là file văn bản. Với dòng `v 0.5 -0.8 0`, chữ `v` cho biết ba số tiếp theo là XYZ của một position trong model space. Dòng `f` nói các position nào tạo nên một mặt; ta chưa xử lý nó ở bài này. Dòng bắt đầu bằng `#` là comment.
 
-```text title="assets/low-poly-rocket.obj — vài record đầu"
-# comment không tạo dữ liệu
+```text title="assets/low-poly-rocket.obj — đọc thử bằng trình soạn thảo"
 o LowPolyRocket
 v 0.500000 -0.800000 0.000000
 v 0.353553 -0.800000 0.353553
 ```
 
-Record `v` ở đây là **position**, không phải pixel và cũng chưa phải `ScreenVertex`. Ta giữ nguyên XYZ trong model space. Khi render point cloud, mỗi position mới đi qua phép quay, tịnh tiến tới trước camera và perspective projection:
+Giữ nguyên XYZ khi đọc file. Tọa độ màn hình chỉ được tính lúc vẽ:
 
 $$
 p_{camera}=R_xR_y p_{model}+(0,0,d)
 $$
 
-Đọc theo dòng bằng `std::getline` giúp giữ `lineNumber`. Nếu một dòng lỗi, diagnostic có thể nói “line 17” thay vì chỉ báo “parse failed”. Sau đó `std::istringstream` tách đúng record hiện tại; comment hay lỗi ở dòng khác không làm stream cả file mất trạng thái.
+Camera ban đầu chưa orbit, nên phép view này chính là tịnh tiến model ra trước camera. Phép chiếu và framebuffer vẫn theo quy ước của Project 17: camera nhìn về +Z, +Y hướng lên trong 3D và xuống màn hình sau viewport mapping.
 
 <InteractiveLab demo="obj-viewer" mode="obj-vertices" />
 
-Chọn “Input có lỗi”, sửa `nope` thành một số rồi nhấn **Nạp source vào parser**. Số position phải tăng ngay; face vẫn chưa phải điều kiện để point cloud xuất hiện.
+Trong Canvas, hãy xem số position trước. Bài này cố ý bỏ qua face và chưa normalize model; đó cũng là hành vi của checkpoint C++.
 
 ## Viết code từng bước
 
-### Bước 1 — Đọc file theo từng dòng
+### Bước 1 — Giữ việc đọc text tách khỏi việc mở file
 
-`parseObj` nhận `std::istream&`, không nhận thẳng filename. Nhờ vậy cùng một parser đọc được `std::ifstream` trong app và `std::istringstream` trong CTest:
+`parseObj` nhận `std::istream&`: ứng dụng truyền file stream, còn test truyền chuỗi. Với mỗi dòng, ta giữ số dòng, bỏ comment rồi dùng `std::istringstream` đọc record. Không đọc liên tục cả file bằng một chuỗi `>>`, vì lỗi ở một dòng sẽ khó truy ngược hơn.
 
-```cpp title="include/lab.hpp — giữ line number của từng record"
-std::string line{};
-std::size_t lineNumber = 0;
+Đây là nhánh xử lý `v` trong parser. Nó chỉ thêm position sau khi cả ba tọa độ hợp lệ:
 
-while (std::getline(input, line)) {
-    ++lineNumber;
-    std::istringstream record(line);
-    std::string keyword{};
-    if (!(record >> keyword) || keyword.starts_with('#')) {
-        continue;
-    }
-```
-
-`record >> keyword` tự bỏ whitespace đầu dòng. Nếu dòng chỉ có khoảng trắng, phép đọc fail và vòng lặp đi tiếp. Ta chưa cần tự trim chuỗi hay đếm cột bằng tay.
-
-### Bước 2 — Chỉ lưu một vertex khi cả XYZ hợp lệ
-
-Không được `push_back` trước rồi mới phát hiện Y là chữ. Dòng sai chỉ tạo diagnostic:
-
-```cpp title="include/lab.hpp — parse record v như một giao dịch"
+```cpp title="include/obj-parser.hpp — đọc trọn một position trước khi lưu"
 if (keyword == "v") {
     Vec3 position{};
     if (!(record >> position.x >> position.y >> position.z) ||
@@ -68,58 +58,91 @@ if (keyword == "v") {
         addDiagnostic(result, lineNumber, "record v cần ba tọa độ hữu hạn");
         continue;
     }
+    std::string extra{};
+    if ((record >> extra) || std::max({std::abs(position.x), std::abs(position.y), std::abs(position.z)}) > 1000000.0) {
+        addDiagnostic(result, lineNumber, "chỉ hỗ trợ v x y z, mỗi tọa độ trong [-1e6, 1e6]");
+        continue;
+    }
     result.mesh.positions.push_back(position);
     continue;
 }
 ```
 
-Phép kiểm `std::isfinite` chặn cả `NaN` và infinity. Một số đọc được bởi stream chưa chắc đã an toàn để đi qua `sin`, `cos` và phép chia phối cảnh.
+`Vec3 position{}` là biến tạm của dòng hiện tại. Nếu Y là `nope`, phép đọc thất bại và parser ghi diagnostic, không thêm một vertex giả có Y bằng 0. Kiểm `std::isfinite` chặn NaN/infinity; kiểm token thừa giúp `v 1 2 3oops` không lọt qua.
 
-### Bước 3 — Project position thành điểm nhìn thấy được
+Bản tiny parser này chỉ nhận `v x y z`, chưa nhận vertex weight hay vertex color. Giới hạn tọa độ ±1e6 và giới hạn dung lượng có thông báo rõ; đây là lựa chọn của viewer, không phải giới hạn chung của định dạng OBJ.
 
-Sau khi load, `renderPointCloud` dùng lại camera math đã biết và vẽ marker 5×5 pixel:
+### Bước 2 — Mở file và báo đúng lỗi I/O
 
-```cpp title="src/main.cpp — point cloud xác nhận file đã được đọc"
-const auto projected = projectMeshPositions(mesh, width, height, angleX, angleY, distance);
-for (const std::optional<lab::ScreenVertex>& point : projected) {
-    if (point) {
-        drawPoint(pixels, width, height, *point, 0xffd166ffU);
+```cpp title="include/obj-parser.hpp — mở đường dẫn UTF-8 và giới hạn kích thước"
+inline ObjLoadResult loadObjFile(const std::string& path) {
+    std::error_code error{};
+    const auto nativePath = std::filesystem::path(std::u8string(path.begin(), path.end()));
+    const auto size = std::filesystem::file_size(nativePath, error);
+    if (!error && size > 8 * 1024 * 1024) {
+        ObjLoadResult result{};
+        addDiagnostic(result, 0, "file vượt giới hạn 8 MiB: " + path);
+        return result;
+    }
+    std::ifstream input(nativePath);
+    if (!input) {
+        ObjLoadResult result{};
+        result.opened = false;
+        addDiagnostic(result, 0, "không mở được file: " + path);
+        return result;
+    }
+    return parseObj(input);
+}
+```
+
+`opened = false` chỉ ra lỗi mở file, khác với file mở được nhưng có dòng sai. Chuyển chuỗi UTF-8 thành `std::u8string` giúp đường dẫn có dấu trên Windows được xử lý bởi `std::filesystem`. Không thay một file mất bằng geometry hard-code: làm vậy sẽ khiến người dùng tưởng model của họ đã được đọc.
+
+### Bước 3 — Đưa các position vừa đọc tới framebuffer
+
+```cpp title="include/viewer.hpp — vẽ point cloud từ mesh đã nạp"
+inline void drawPoints(Framebuffer& frame, const ObjMesh& mesh, const ViewerState& state) {
+    for (const Vec3 position : mesh.positions) {
+        const auto screen = projectVertex(modelToCamera(position, state), frame.width, frame.height);
+        if (!screen) {
+            continue;
+        }
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                putPixel(frame, int(std::lround(screen->x)) + dx, int(std::lround(screen->y)) + dy, 0xffd166ffU);
+            }
+        }
     }
 }
 ```
 
-`projectVertex` trả `std::nullopt` khi điểm nằm ngoài miền depth hợp lệ. Vòng vẽ vì thế không bao giờ lấy tọa độ màn hình từ một phép chia không an toàn.
-
-Cuối frame, `SDL_UpdateTexture` vẫn chuyển chính CPU framebuffer này sang streaming texture như các project trước; parser không tạo thêm một đường present riêng.
+`modelToCamera` áp dụng model transform và view transform. `projectVertex` trả về optional; điểm nằm ngoài miền depth không được đổi sang pixel. Marker 5×5 chỉ giúp dễ nhìn hơn, không làm thay đổi dữ liệu OBJ.
 
 ## Ghép các phần lại
 
-Build đúng checkpoint đầu rồi chạy từ thư mục project:
+`main.cpp → openModel → loadObjFile → parseObj` là đường nạp. `renderViewer → drawPoints → modelToCamera → projectVertex → putPixel` là đường vẽ. Đọc theo hai đường này trong checkpoint, thay vì cố hiểu mọi header cùng lúc.
 
-```bash title="Terminal — build point-cloud checkpoint"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_21_checkpoint_1
+```powershell title="Terminal — checkpoint 1"
+cmake --build build --config Debug --target project_21_checkpoint_1 --parallel 2
 ./build/Debug/project_21_checkpoint_1.exe
 ```
 
-Kéo chuột để xoay. Bạn phải thấy 18 marker của rocket. Title bar ghi path asset và số vertex, nên màn hình trống có thể được phân biệt với lỗi “file không mở được”.
+Rocket có **18 position**. Kéo chuột để xem các điểm không nằm trên cùng một mặt phẳng. Cuối cửa sổ có số vertex và đường dẫn asset; grid/axes chỉ là mốc tham chiếu.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi một dòng thành `v 1 nope 3`. Chương trình phải báo đúng line và không thêm `Vec3{1,0,3}` giả.
-2. Xóa hoặc đổi tên thư mục `assets` trong một bản sao của ZIP. Loader phải dừng với các path đã thử, không âm thầm thay bằng cube hard-code.
-3. Bỏ `std::isfinite` rồi nhập `v nan 0 0` trên Canvas. Quan sát vì sao dữ liệu đặc biệt cần bị chặn trước renderer.
+1. Trong Canvas, chọn “Input có lỗi”. Dòng `v 1 nope 0` phải báo lỗi theo số dòng. Sửa `nope` thành số rồi nạp lại. Với bản C++, hãy sửa một bản sao asset: ứng dụng dừng nạp khi có diagnostic, không vẽ một point cloud đã bị mất vertex.
+
+2. Đổi tên thư mục assets cạnh executable trong bản sao thử nghiệm rồi chạy từ một thư mục khác. Thông báo cần chứa đường dẫn không mở được; cửa sổ nền trống không được xem là đã load thành công.
 
 ## Tự kiểm tra kết quả
 
-- Comment và dòng trống không làm tăng số position.
-- Mỗi record `v` hợp lệ tạo đúng một `Vec3` theo thứ tự trong file.
-- Diagnostic của vertex lỗi chứa đúng line number.
-- Point cloud vẫn xoay và resize bằng cùng event loop của starter.
-- Checkpoint chưa giả định face, UV, normal hoặc material đã tồn tại.
+- Starter chạy được trước khi bạn thêm parser.
+- Checkpoint 1 đọc đúng 18 position từ file rocket và vẽ point cloud trước khi xử lý face.
+- Dòng trống/comment không tạo vertex; một dòng hỏng có diagnostic đúng số dòng.
+- Kéo chuột, pause/reset và resize vẫn dùng cùng vòng lặp SDL của starter.
 
 ## Bài tập mở rộng
 
-Thêm màu marker theo trục có trị tuyệt đối lớn nhất của position: X đỏ, Y xanh lá, Z xanh lam. Chỉ thay cách hiển thị; đừng ghi màu trở lại `ObjMesh`.
+Đổi màu marker theo dấu của Z, nhưng không thêm màu vào ObjMesh. Việc hiển thị và dữ liệu model nên còn tách biệt.
 
-Bài tiếp theo sẽ đọc record `f`, đổi index 1-based của OBJ sang index 0-based của `std::vector` và nối point cloud thành wireframe.
+[Bài tiếp theo: đọc face và nối các điểm thành wireframe](/projects/obj-mesh-viewer/02-doc-face-va-index-mot-based).

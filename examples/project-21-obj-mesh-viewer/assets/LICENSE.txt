@@ -1,4 +1,4 @@
-low-poly-rocket.obj was created for Simulation Path.
+low-poly-rocket.obj, cube.obj and faceted-sphere.obj were created for Simulation Path.
 
 To the extent possible under law, the author has dedicated this asset to the
 public domain under CC0 1.0 Universal:

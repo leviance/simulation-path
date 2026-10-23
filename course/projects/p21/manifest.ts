@@ -13,18 +13,19 @@ const project = {
     mission:
       "Tự xây dựng một OBJ mesh viewer bằng C++20 và SDL3. Chương trình phải đọc model từ file thay vì hard-code geometry, chấp nhận các face token OBJ thường gặp, chuẩn hóa model vào khung nhìn và render mesh bằng chính CPU pipeline đã xây ở các project trước.",
     outcome:
-      "Một cửa sổ hiển thị rocket low-poly được nạp từ file OBJ. Người dùng có thể kéo chuột để xoay, bật/tắt back-face culling, đổi wireframe hoặc solid, tạm dừng, tiến từng bước và xem thống kê vertex, source face, triangle, lỗi parser cùng fragment pass/reject.",
+      "Một viewer mở được cube, rocket và sphere 2.976 triangle từ file thật. Người dùng chọn riêng xoay model hoặc camera orbit, bật solid/wireframe/normals, ẩn debug để xem model sạch và nhận lỗi theo path/line khi file không hợp lệ.",
     requirements: [
       "Đọc file theo từng dòng; bỏ qua comment và dòng trống; phân biệt ít nhất record `v` và `f`.",
       "Đổi OBJ position index dương từ 1-based sang 0-based và từ chối index 0 hoặc vượt phạm vi.",
       "Đọc được token `v`, `v/vt`, `v//vn`, `v/vt/vn`; Project 21 chỉ lấy position index nhưng không được parse nhầm phần sau dấu slash.",
       "Hỗ trợ negative index theo đúng số position đã xuất hiện tại dòng face, chẳng hạn `-1` là position mới nhất.",
-      "Triangulate face có từ ba vertex trở lên bằng triangle fan và giữ source line/source face để chẩn đoán.",
+      "Chia face phẳng, lồi thành triangle fan và giữ source line/source face; báo rõ khi gặp face lõm, không phẳng hoặc record ngoài phạm vi.",
       "Tính axis-aligned bounds, đưa tâm bounds về origin và scale đồng đều sao cho cạnh lớn nhất có độ dài 2.",
       "Tính face normal từ winding sau model transform; bỏ triangle suy biến và dùng Lambert diffuse để tạo màu mặt.",
       "Đưa từng triangle qua near-plane clipping, perspective projection, top-left rasterization và Z-buffer trước khi ghi color.",
       "Nếu file không mở được hoặc có dòng sai, báo path, line và nguyên nhân rõ ràng; không crash hoặc âm thầm dùng geometry rác.",
-      "Kèm một asset OBJ có license rõ ràng, starter, tám checkpoint, final và CTest không cần mở window.",
+      "Mở ít nhất hai model trong cùng phiên chạy, có một model gần 3.000 triangle. Tách model transform khỏi camera orbit; có grid/axes, normals overlay và debug ẩn được.",
+      "Kèm ba OBJ CC0, starter, checkpoint, final, README và CTest không cần mở window; không dùng Canvas để thay ứng dụng native.",
     ],
     constraints: [
       "Không dùng tinyobjloader, Assimp, OpenGL, SDL_RenderGeometry hoặc thư viện parser/rasterizer có sẵn.",
@@ -42,14 +43,16 @@ const project = {
       "Normal hữu hạn, có độ dài gần 1; triangle suy biến không đi vào rasterizer.",
       "Mọi vertex gửi vào projection nằm trên hoặc trước near plane; depth cuối hữu hạn trong [0,1].",
       "Đảo draw order không đổi color/depth buffer khi Z-buffer bật.",
-      "Rocket OBJ đi kèm load thành công; thao tác chuột, bàn phím, resize, wireframe/solid, culling và reset đều hoạt động.",
+      "Cube (12), rocket (32) và sphere (2.976 triangle) nạp thành công; lỗi mở model mới giữ model cũ và báo rõ thất bại.",
+      "Xoay model không đổi camera angle; orbit không đổi model angle. Wireframe/solid/normals, grid/debug, chuột/phím, resize và reset đều hoạt động.",
+      "Depth tại từng pixel khớp ray–triangle reference, gồm trường hợp cắt near plane; ghi lại thời gian render sphere ở viewport 800×500.",
       "CTest vượt qua; starter, tám checkpoint và final build sạch warning ở Debug lẫn Release.",
     ],
   },
   duration: "16–18 giờ",
   objectives: [
     "Hiểu cấu trúc tối thiểu của Wavefront OBJ và chuyển index ngoài file thành dữ liệu an toàn trong bộ nhớ",
-    "Biến polygon bất kỳ thành triangle mesh rồi chuẩn hóa model mà không làm đổi tỷ lệ",
+    "Chia polygon phẳng, lồi thành triangle mesh, nhận ra giới hạn của fan và chuẩn hóa model mà không làm đổi tỷ lệ",
     "Ghép parser với renderer CPU hoàn chỉnh và kiểm chứng cả dữ liệu đầu vào lẫn output pixel",
   ],
   lessons: [
@@ -126,9 +129,9 @@ const project = {
     {
       id: "p21-l08",
       slug: "08-load-file-controls-va-validation",
-      title: "Hoàn thiện file loading, controls và validation",
+      title: "Hoàn thiện viewer: mở model, camera và kiểm chứng",
       summary:
-        "Báo lỗi theo path/line, thêm chế độ xem cùng controls và dùng CTest kiểm parser, normalize, clipping, shading lẫn order independence.",
+        "Mở ba model thật, tách camera orbit khỏi model rotation, hoàn thiện normals/debug và so depth với ray–triangle reference.",
       order: 8,
       estimatedMinutes: 120,
       demoId: "obj-viewer",

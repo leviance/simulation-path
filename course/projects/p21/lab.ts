@@ -5,7 +5,7 @@ const lab = {
     label: "OBJ VIEWER LAB",
     title: "Một dòng OBJ trở thành pixel như thế nào?",
     description:
-      "Sửa OBJ mẫu, chọn face và theo dõi parser, triangle fan, bounds, normal cùng CPU Z-buffer bằng đúng quy ước của source C++.",
+      "Đọc và sửa OBJ theo từng mốc: từ point cloud tới solid mesh. So model rotation với camera orbit, xem normals và kiểm Z-buffer; ứng dụng C++ tải về mới là sản phẩm đầy đủ.",
   },
   modes: {
     "obj-vertices": {
@@ -31,12 +31,12 @@ const lab = {
     "obj-normalize": {
       title: "Bounds đưa model về origin mà không làm méo ra sao?",
       description:
-        "So bounds trước/sau, center và uniform scale; tỷ lệ các trục vẫn được giữ nguyên.",
+        "Dịch và scale tọa độ trong source rồi nạp lại: model sau fit không đổi hình, chỉ uniform scale thay đổi.",
     },
     "obj-shading": {
       title: "Winding, face normal và ánh sáng liên hệ thế nào?",
       description:
-        "Xoay model và hướng sáng để đọc normal, dot product, intensity cùng trạng thái front/back-facing.",
+        "Xoay model, bật normals hoặc culling và đọc intensity. Mốc này dùng painter, chưa có Z-buffer.",
     },
     "obj-render": {
       title: "Mesh đi qua clip, rasterizer và Z-buffer ra sao?",
@@ -46,7 +46,7 @@ const lab = {
     "obj-validation": {
       title: "OBJ viewer đã giữ đủ invariant chưa?",
       description:
-        "Thử model hợp lệ/lỗi, solid/wireframe, culling, draw order và kiểm toàn bộ parser cùng renderer.",
+        "Mở OBJ, chọn riêng xoay model/camera orbit, bật wireframe/normals và ẩn debug. So toàn buffer khi chủ động nhấn kiểm thứ tự.",
     },
   },
 } satisfies ProjectLabMeta;

@@ -1,274 +1,75 @@
+import type { ZScreenVertex, ZVec3 } from "./z-buffer.ts";
+import { projectZVertex } from "./z-buffer.ts";
+import type { ObjLabMesh, ObjSceneTriangle } from "./obj-types.ts";
 import {
-  projectZVertex,
-  type ZColor,
-  type ZScreenVertex,
-  type ZTriangle,
-  type ZVec3,
-} from "./z-buffer.ts";
+  rotateObjPoint,
+  objNormalize,
+  objCross,
+  objDot,
+  objSubtract,
+  objAdd,
+  objScale,
+  objShade,
+  objWorldToCamera,
+  type ObjCamera,
+} from "./obj-geometry.ts";
+export * from "./obj-types.ts";
+export * from "./obj-parser.ts";
+export * from "./obj-presets.ts";
+export * from "./obj-geometry.ts";
 
-export interface ObjLabTriangle {
-  indices: [number, number, number];
-  sourceFace: number;
-  sourceLine: number;
+export function objStage(mode?: string) {
+  return (
+    {
+      "obj-vertices": 1,
+      "obj-faces": 2,
+      "obj-indices": 3,
+      "obj-triangulation": 4,
+      "obj-normalize": 5,
+      "obj-shading": 6,
+      "obj-render": 7,
+      "obj-validation": 8,
+    }[mode ?? "obj-validation"] ?? 8
+  );
 }
 
-export interface ObjLabMesh {
-  positions: ZVec3[];
-  triangles: ObjLabTriangle[];
-  sourceFaceCount: number;
-}
-
-export interface ObjLabDiagnostic {
-  line: number;
-  message: string;
-}
-
-export interface ObjLabParseResult {
-  mesh: ObjLabMesh;
-  diagnostics: ObjLabDiagnostic[];
-  lineCount: number;
-  ignoredRecordCount: number;
-}
-
-export interface ObjLabBounds {
-  minimum: ZVec3;
-  maximum: ZVec3;
-}
-
-export interface ObjSceneTriangle extends ZTriangle {
-  sourceFace: number;
-  normal: ZVec3;
-  intensity: number;
-  frontFacing: boolean;
-}
-
-export const OBJ_PRESETS = {
-  rocket: `# Rocket giản lược
-o Rocket
-v 0 1.6 0
-v -0.7 -0.7 -0.5
-v 0.7 -0.7 -0.5
-v 0.7 -0.7 0.5
-v -0.7 -0.7 0.5
-v 0 -1.1 0
-f 1 2 3
-f 1 3 4
-f 1 4 5
-f 1 5 2
-f 2 5 4 3
-f 2 6 3
-f 3 6 4
-f 4 6 5
-f 5 6 2`,
-  slash: `# Cùng position, token có UV/normal
-v -1 -1 0
-v 1 -1 0
-v 1 1 0
-v -1 1 0
-vt 0 1
-vt 1 1
-vt 1 0
-vt 0 0
-vn 0 0 -1
-f 1/1/1 2/2/1 3/3/1 4/4/1`,
-  negative: `# Pentagon dùng index tương đối
-v 0 -1 0
-v 0.95 -0.3 0
-v 0.6 0.9 0
-v -0.6 0.9 0
-v -0.95 -0.3 0
-f -5 -4 -3 -2 -1`,
-  malformed: `# Ba lỗi có line rõ ràng
-v 0 0 0
-v 1 nope 0
-f 1 0 2
-f 1 2 99`,
-} as const;
-
-export type ObjPreset = keyof typeof OBJ_PRESETS;
-
-function add(left: ZVec3, right: ZVec3): ZVec3 {
-  return { x: left.x + right.x, y: left.y + right.y, z: left.z + right.z };
-}
-
-function subtract(left: ZVec3, right: ZVec3): ZVec3 {
-  return { x: left.x - right.x, y: left.y - right.y, z: left.z - right.z };
-}
-
-function scale(value: ZVec3, scalar: number): ZVec3 {
-  return { x: value.x * scalar, y: value.y * scalar, z: value.z * scalar };
-}
-
-export function objDot(left: ZVec3, right: ZVec3) {
-  return left.x * right.x + left.y * right.y + left.z * right.z;
-}
-
-export function objCross(left: ZVec3, right: ZVec3): ZVec3 {
-  return {
-    x: left.y * right.z - left.z * right.y,
-    y: left.z * right.x - left.x * right.z,
-    z: left.x * right.y - left.y * right.x,
-  };
-}
-
-export function objNormalize(value: ZVec3, epsilon = 1e-9): ZVec3 | null {
-  const magnitude = Math.sqrt(objDot(value, value));
-  if (!Number.isFinite(magnitude) || magnitude <= epsilon) return null;
-  return scale(value, 1 / magnitude);
-}
-
-export function resolveObjPositionIndex(token: string, positionCount: number) {
-  const positionField = token.split("/", 1)[0];
-  if (!/^-?\d+$/.test(positionField)) return null;
-  const rawIndex = Number(positionField);
-  if (!Number.isSafeInteger(rawIndex) || rawIndex === 0) return null;
-  const resolved = rawIndex > 0 ? rawIndex - 1 : positionCount + rawIndex;
-  if (resolved < 0 || resolved >= positionCount) return null;
-  return resolved;
-}
-
-export function triangulateObjFace(
-  corners: number[],
-  sourceFace: number,
-  sourceLine: number,
-): ObjLabTriangle[] {
-  const triangles: ObjLabTriangle[] = [];
-  for (let index = 1; index + 1 < corners.length; index += 1) {
-    triangles.push({
-      indices: [corners[0], corners[index], corners[index + 1]],
-      sourceFace,
-      sourceLine,
-    });
-  }
-  return triangles;
-}
-
-export function parseObjSource(source: string): ObjLabParseResult {
-  const positions: ZVec3[] = [];
-  const triangles: ObjLabTriangle[] = [];
-  const diagnostics: ObjLabDiagnostic[] = [];
-  let sourceFaceCount = 0;
-  let ignoredRecordCount = 0;
-  const lines = source.split(/\r?\n/);
-
-  lines.forEach((rawLine, index) => {
-    const lineNumber = index + 1;
-    const fields = rawLine.split("#", 1)[0].trim().split(/\s+/);
-    const keyword = fields[0];
-    if (!keyword || keyword.startsWith("#")) return;
-
-    if (keyword === "v") {
-      const values = fields.slice(1, 4).map(Number);
-      if (values.length !== 3 || values.some((value) => !Number.isFinite(value))) {
-        diagnostics.push({ line: lineNumber, message: "record v cần ba tọa độ hữu hạn" });
-        return;
-      }
-      positions.push({ x: values[0], y: values[1], z: values[2] });
-      return;
+export function clipObjPolygon(input: ZVec3[], nearPlane = 0.7): ZVec3[] {
+  const output: ZVec3[] = [];
+  if (!input.length) return output;
+  let previous = input[input.length - 1];
+  for (const current of input) {
+    const before = previous.z >= nearPlane;
+    const after = current.z >= nearPlane;
+    if (before !== after) {
+      let start = previous,
+        end = current;
+      if (start.z > end.z) [start, end] = [end, start];
+      const t = (nearPlane - start.z) / (end.z - start.z);
+      const hit = objAdd(start, objScale(objSubtract(end, start), t));
+      output.push({ ...hit, z: nearPlane });
     }
-
-    if (keyword === "f") {
-      sourceFaceCount += 1;
-      const corners: number[] = [];
-      for (const token of fields.slice(1)) {
-        const resolved = resolveObjPositionIndex(token, positions.length);
-        if (resolved === null) {
-          diagnostics.push({
-            line: lineNumber,
-            message: `face chứa position index không hợp lệ: ${token}`,
-          });
-          return;
-        }
-        corners.push(resolved);
-      }
-      if (corners.length < 3) {
-        diagnostics.push({ line: lineNumber, message: "record f cần ít nhất ba corner" });
-        return;
-      }
-      triangles.push(...triangulateObjFace(corners, sourceFaceCount, lineNumber));
-      return;
-    }
-
-    ignoredRecordCount += 1;
-  });
-
-  if (positions.length === 0) {
-    diagnostics.push({ line: 0, message: "OBJ không chứa position hợp lệ" });
+    if (after) output.push(current);
+    previous = current;
   }
-  return {
-    mesh: { positions, triangles, sourceFaceCount },
-    diagnostics,
-    lineCount: lines.length,
-    ignoredRecordCount,
-  };
+  return output;
 }
 
-export function objMeshBounds(mesh: ObjLabMesh): ObjLabBounds | null {
-  if (mesh.positions.length === 0) return null;
-  const minimum = { ...mesh.positions[0] };
-  const maximum = { ...mesh.positions[0] };
-  for (const position of mesh.positions) {
-    minimum.x = Math.min(minimum.x, position.x);
-    minimum.y = Math.min(minimum.y, position.y);
-    minimum.z = Math.min(minimum.z, position.z);
-    maximum.x = Math.max(maximum.x, position.x);
-    maximum.y = Math.max(maximum.y, position.y);
-    maximum.z = Math.max(maximum.z, position.z);
+export function objScreenLine(
+  a: ZVec3,
+  b: ZVec3,
+  width: number,
+  height: number,
+): [ZScreenVertex, ZScreenVertex] | null {
+  if (a.z < 0.7 && b.z < 0.7) return null;
+  if (a.z < 0.7 || b.z < 0.7) {
+    const hit = clipObjPolygon([a, b])[0];
+    if (a.z < 0.7) a = hit;
+    else b = hit;
   }
-  return { minimum, maximum };
-}
-
-export function objBoundsCenter(bounds: ObjLabBounds): ZVec3 {
-  return scale(add(bounds.minimum, bounds.maximum), 0.5);
-}
-
-export function objBoundsMaxExtent(bounds: ObjLabBounds) {
-  const extent = subtract(bounds.maximum, bounds.minimum);
-  return Math.max(extent.x, extent.y, extent.z);
-}
-
-export function normalizeObjMesh(mesh: ObjLabMesh, targetExtent = 2) {
-  const bounds = objMeshBounds(mesh);
-  if (!bounds || targetExtent <= 0) return null;
-  const maxExtent = objBoundsMaxExtent(bounds);
-  if (!Number.isFinite(maxExtent) || maxExtent <= 1e-9) return null;
-  const center = objBoundsCenter(bounds);
-  const uniformScale = targetExtent / maxExtent;
-  return {
-    mesh: {
-      ...mesh,
-      positions: mesh.positions.map((position) => scale(subtract(position, center), uniformScale)),
-    },
-    center,
-    uniformScale,
-    before: bounds,
-  };
-}
-
-function rotateObjPoint(point: ZVec3, angleX: number, angleY: number): ZVec3 {
-  const cosineY = Math.cos(angleY);
-  const sineY = Math.sin(angleY);
-  const afterY = {
-    x: point.x * cosineY + point.z * sineY,
-    y: point.y,
-    z: -point.x * sineY + point.z * cosineY,
-  };
-  const cosineX = Math.cos(angleX);
-  const sineX = Math.sin(angleX);
-  return {
-    x: afterY.x,
-    y: afterY.y * cosineX - afterY.z * sineX,
-    z: afterY.y * sineX + afterY.z * cosineX,
-  };
-}
-
-function shade(base: ZColor, intensity: number): ZColor {
-  const safe = Math.max(0, Math.min(1, intensity));
-  return {
-    red: Math.round(base.red * safe),
-    green: Math.round(base.green * safe),
-    blue: Math.round(base.blue * safe),
-  };
+  const first = projectZVertex(a, width, height, 0.7, 20);
+  const last = projectZVertex(b, width, height, 0.7, 20);
+  if (![first.x, first.y, last.x, last.y].every(Number.isFinite)) return null;
+  return [first, last];
 }
 
 export function buildObjScene(
@@ -278,39 +79,73 @@ export function buildObjScene(
   angleX: number,
   angleY: number,
   cullBackfaces: boolean,
+  camera: ObjCamera = { yaw: 0, pitch: 0, distance: 4.2 },
+  stage = 8,
 ) {
   const cameraPositions = mesh.positions.map((position) => {
     const rotated = rotateObjPoint(position, angleX, angleY);
-    return { ...rotated, z: rotated.z + 4.2 };
+    return objWorldToCamera(rotated, camera);
   });
   const projectedPositions: ZScreenVertex[] = cameraPositions.map((position) =>
     projectZVertex(position, width, height, 0.7, 20),
   );
-  const light = objNormalize({ x: -0.45, y: -0.75, z: -1 }) ?? { x: 0, y: 0, z: -1 };
+  const light = objNormalize(
+    objSubtract(
+      objWorldToCamera({ x: -0.45, y: -0.75, z: -1 }, camera),
+      objWorldToCamera({ x: 0, y: 0, z: 0 }, camera),
+    ),
+  ) ?? { x: 0, y: 0, z: -1 };
   const base = { red: 92, green: 190, blue: 246 };
   const triangles: ObjSceneTriangle[] = [];
+  const edges: [ZScreenVertex, ZScreenVertex][] = [];
+  const normalLines: [ZScreenVertex, ZScreenVertex][] = [];
+  let clippedCount = 0;
 
-  for (const triangle of mesh.triangles) {
+  for (const [sourceTriangle, triangle] of mesh.triangles.entries()) {
     const a = cameraPositions[triangle.indices[0]];
     const b = cameraPositions[triangle.indices[1]];
     const c = cameraPositions[triangle.indices[2]];
-    const normal = objNormalize(objCross(subtract(b, a), subtract(c, a)));
+    const normal = objNormalize(objCross(objSubtract(b, a), objSubtract(c, a)));
     if (!normal) continue;
-    const centroid = scale(add(add(a, b), c), 1 / 3);
+    const centroid = objScale(objAdd(objAdd(a, b), c), 1 / 3);
     const frontFacing = objDot(normal, centroid) < 0;
-    if (cullBackfaces && !frontFacing) continue;
     const intensity = Math.max(0.18, 0.18 + 0.82 * Math.max(0, objDot(normal, light)));
-    triangles.push({
-      a: projectedPositions[triangle.indices[0]],
-      b: projectedPositions[triangle.indices[1]],
-      c: projectedPositions[triangle.indices[2]],
-      color: shade(base, intensity),
-      face: `face ${triangle.sourceFace}`,
-      sourceFace: triangle.sourceFace,
-      normal,
-      intensity,
-      frontFacing,
-    });
+    for (const [start, end] of [
+      [a, b],
+      [b, c],
+      [c, a],
+    ]) {
+      const line = objScreenLine(start, end, width, height);
+      if (line) edges.push(line);
+    }
+    if (frontFacing) {
+      const line = objScreenLine(centroid, objAdd(centroid, objScale(normal, 0.12)), width, height);
+      if (line) normalLines.push(line);
+    }
+    if (stage >= 6 && cullBackfaces && !frontFacing) continue;
+    let polygon = [a, b, c];
+    if (stage >= 7) {
+      if (polygon.some((point) => point.z < 0.7)) clippedCount++;
+      polygon = clipObjPolygon(polygon);
+    } else if (polygon.some((point) => point.z < 0.7)) continue;
+    for (let i = 1; i + 1 < polygon.length; i++) {
+      const [screenA, screenB, screenC] = [polygon[0], polygon[i], polygon[i + 1]].map((point) =>
+        projectZVertex(point, width, height, 0.7, 20),
+      );
+      if (![screenA.x, screenB.x, screenC.x].every(Number.isFinite)) continue;
+      triangles.push({
+        a: screenA,
+        b: screenB,
+        c: screenC,
+        color: objShade(base, intensity),
+        face: `face ${triangle.sourceFace}`,
+        sourceFace: triangle.sourceFace,
+        sourceTriangle,
+        normal,
+        intensity,
+        frontFacing,
+      });
+    }
   }
-  return { cameraPositions, projectedPositions, triangles };
+  return { cameraPositions, projectedPositions, triangles, edges, normalLines, clippedCount };
 }

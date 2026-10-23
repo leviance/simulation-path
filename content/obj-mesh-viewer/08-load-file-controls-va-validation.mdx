@@ -1,116 +1,173 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Hoàn thiện file loading, controls và validation
+# Hoàn thiện viewer: mở model, camera và kiểm chứng
 
 ## Vấn đề cần giải quyết
 
-Một renderer đúng công thức vẫn chưa thành ứng dụng dùng được nếu chỉ chạy khi terminal đứng đúng một thư mục, input lỗi làm crash, resize làm depth buffer lệch color buffer hoặc phím điều khiển tạo một nhánh render riêng.
+Một renderer đọc được rocket chưa phải OBJ viewer hoàn chỉnh. Người dùng cần mở model khác mà không sửa mã, xem model từ nhiều góc, bật wireframe/normals để kiểm tra và nhận lỗi rõ ràng nếu file không hợp lệ.
 
-Bài cuối đóng phần “seam” giữa parser, asset và SDL. Final thử một danh sách path rõ ràng, dừng với diagnostic nếu không có model, normalize đúng một lần, rồi mọi tương tác chỉ thay `RenderOptions` trước khi gọi lại cùng `renderObjMesh`.
+Bài cuối giữ toàn bộ pipeline vừa có, bổ sung phần điều khiển và nạp file theo cách không phá scene đang xem. Sản phẩm phải mở được cube, rocket và sphere gần 3.000 triangle từ file thật; Canvas chỉ là nơi hỗ trợ học, không thay ứng dụng C++.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Project có ba loại lỗi khác nhau và cần báo khác nhau:
+Có hai thao tác dễ bị lẫn:
 
-1. **I/O error:** không mở được path nào.
-2. **Syntax/data error:** file mở được nhưng một record có vertex/index sai.
-3. **Geometry error:** parser tạo mesh nhưng index hoặc triangle suy biến không đạt validation.
+- **Xoay model:** đổi model transform. Grid/world axes đứng yên, model đổi hướng trong thế giới.
+- **Camera orbit:** mắt camera di chuyển quanh origin và nhìn về origin. Model transform không đổi; cả model lẫn grid đổi hình chiếu vì ta đổi góc nhìn.
 
-Không nên che ba lỗi này bằng một fallback cube. Fallback làm cửa sổ vẫn đẹp nhưng người dùng tưởng model của mình đã load. Final chọn fail rõ ràng; Canvas dùng preset lỗi để minh họa ứng dụng vẫn sống và hiển thị diagnostic.
+Với camera position E, hướng nhìn F, trục phải R và trục lên U:
+
+$$
+p_{camera}=\big((p-E)\cdot R,\ (p-E)\cdot U,\ (p-E)\cdot F\big)
+$$
+
+Đây là phép đổi hệ trục sau khi đã trừ vị trí camera, không phải xoay các vertex màn hình. Pitch được giới hạn để hướng nhìn không song song world up và làm cross product tạo right vector suy biến.
 
 <InteractiveLab demo="obj-viewer" mode="obj-validation" />
 
-Preset đầu là input lỗi. Sửa source, nạp lại, bật Solid, xoay model, đổi culling và draw order. Cùng một lab cho thấy parser phục hồi mà không reload trang.
+Chọn riêng “Xoay model” hoặc “Camera orbit”, rồi kéo. Theo dõi hai readout góc: đổi camera không được đổi model angle. Bật normals, đổi solid/wireframe, thử một file OBJ của bạn. Canvas giới hạn 2 MiB và 6.000 triangle để tránh chặn trang; giới hạn native được mô tả trong README.
 
 ## Viết code từng bước
 
-### Bước 1 — Thử asset path có thứ tự và giữ path thành công
+### Bước 1 — View transform thật cho camera orbit
 
-```cpp title="src/main.cpp — loader không thay model ngầm"
-for (const std::string& path : candidates) {
-    lab::ObjLoadResult result = lab::loadObjFile(path);
-    if (result.opened) {
-        return {std::move(result), path};
+```cpp title="include/geometry.hpp — tọa độ tương đối trong cơ sở camera"
+inline Vec3 worldToCamera(Vec3 point, const OrbitCamera& camera) {
+    const Vec3 eye = cameraEye(camera);
+    const Vec3 forward = *normalized(Vec3{} - eye);
+    const Vec3 right = *normalized(cross({0.0, 1.0, 0.0}, forward));
+    const Vec3 up = cross(forward, right);
+    const Vec3 relative = point - eye;
+    return {dot(relative, right), dot(relative, up), dot(relative, forward)};
+}
+```
+
+`cameraEye` đặt E trên quỹ đạo quanh origin. `forward` hướng từ E về origin; `right = normalize(upWorld × forward)`; `up = forward × right`. Cả ba trục có độ dài 1 nên đổi camera không làm méo model.
+
+Renderer đưa hướng sáng thế giới qua cùng view transform, bỏ phần tịnh tiến bằng hiệu hai điểm. Vì vậy camera orbit không vô tình biến một nguồn sáng thế giới thành headlight gắn vào mắt.
+
+### Bước 2 — Chỉ thay model sau khi nạp thành công
+
+```cpp title="include/viewer.hpp — nạp có giao dịch"
+inline bool openModel(ViewerModel& model, const std::string& path) {
+    ObjLoadResult loaded = loadObjFile(path);
+    if (!loaded.opened || loaded.hasErrors()) {
+        model.message = path + ": ";
+        for (const auto& diagnostic : loaded.diagnostics) {
+            model.message += "line " + std::to_string(diagnostic.line) + ": " + diagnostic.message + "; ";
+        }
+        return false;
     }
-    lastAttempt = {std::move(result), path};
-}
-return lastAttempt;
-```
-
-CMake copy `assets` cạnh từng executable. Danh sách phụ cho phép chạy từ project root hoặc build directory; title bar ghi path thật đã dùng.
-
-### Bước 2 — Resize color, depth và texture cùng một sự kiện
-
-```cpp title="src/main.cpp — resize ba tài nguyên như một giao dịch"
-SDL_DestroyTexture(texture);
-texture = newTexture;
-width = newWidth;
-height = newHeight;
-pixels.assign(std::size_t(width) * std::size_t(height), kClearColor);
-depthBuffer.resize(width, height);
-```
-
-Texture mới phải tạo thành công trước khi phá texture cũ. Sau đó color buffer và depth buffer nhận cùng kích thước pixel; không frame nào được render với hai stride khác nhau.
-
-### Bước 3 — Validation từ parser tới pixel
-
-`validateMesh` không dereference index sai; nó kiểm phạm vi trước rồi mới gọi `faceNormal`:
-
-```cpp title="include/lab.hpp — validation không tự crash trên input cần kiểm"
-for (const std::size_t index : triangle.indices) {
-    if (index >= mesh.positions.size()) {
-        ++result.invalidIndexCount;
-        indicesValid = false;
+    if (loaded.mesh.triangles.empty()) {
+        model.message = path + ": không có face được hỗ trợ";
+        return false;
     }
-}
-if (!indicesValid) {
-    continue;
+    if (!normalizeMesh(loaded.mesh)) {
+        model.message = path + ": bounds rỗng hoặc suy biến";
+        return false;
+    }
+    model.mesh = std::move(loaded.mesh);
+    model.path = path;
+    model.sourceFaces = loaded.sourceFaceCount;
+    model.ignoredRecords = loaded.ignoredRecordCount;
+    model.message.clear();
+    return true;
 }
 ```
 
-CTest sau đó bao phủ OBJ cơ bản, slash/negative index, triangle fan, diagnostic line, normalization, degenerate normal, near clipping, raster stats và order independence.
+Dữ liệu mới nằm trong biến loaded. Parse lỗi, thiếu face hoặc normalize thất bại thì trả false trước khi gán model.mesh. Model cũ còn nguyên, nhưng model.message chứa path/line để người dùng biết lần nạp vừa rồi không thành công.
+
+Ba loại lỗi cần phân biệt: **I/O error** là không đọc được file; **Syntax/data error** là record/index sai; **Geometry error** là bounds suy biến hoặc face không phù hợp. Không “sửa” index sai bằng clamp và không âm thầm thay bằng cube.
+
+Known metadata như o/g/vt/vn/mtllib được nhận diện, đếm nhưng chưa dùng. Keyword ngoài phạm vi như curv hay l có diagnostic. Kiểm cú pháp suffix không đồng nghĩa hỗ trợ đầy đủ UV, normal hay MTL của Wavefront.
+
+### Bước 3 — Tách state khi kéo model và camera
+
+```cpp title="include/viewer.hpp — một thao tác không sửa cả hai transform"
+inline void turnViewer(ViewerState& state, double horizontal, double vertical) {
+    if (state.cameraDrag) {
+        state.cameraYaw = std::remainder(state.cameraYaw + horizontal, 6.283185307179586);
+        state.cameraPitch = std::clamp(state.cameraPitch + vertical, -1.3, 1.3);
+    } else {
+        state.angleY = std::remainder(state.angleY + horizontal, 6.283185307179586);
+        state.angleX = std::remainder(state.angleX + vertical, 6.283185307179586);
+    }
+    state.paused = true;
+}
+```
+
+Arrow keys cũng gọi hàm này bằng delta angle dựa trên delta time. Mouse drag dùng quãng kéo trong hệ tọa độ logic; SDL_ConvertEventToRenderCoordinates chuyển tọa độ sự kiện về cùng hệ với letterbox. Khi mouse-up có vị trí cuối mới, xử lý vị trí đó trước khi nhả capture.
+
+Focus lost, minimize, resize hoặc hủy tương tác phải nhả capture và pause. Trong Canvas, pointerId xác định người đang kéo; một pointer khác không được kết thúc thao tác của pointer đầu. Tab vẫn rời Canvas, và Ctrl/Alt/Meta không bị shortcut của lab chặn.
+
+### Bước 4 — Pause/step phải dùng cùng luật cập nhật
+
+```cpp title="include/viewer.hpp — step là một khoảng thời gian xác định"
+inline bool advanceViewer(ViewerState& state, double dt, bool singleStep = false) {
+    if (!std::isfinite(dt) || (state.paused && !singleStep)) {
+        return false;
+    }
+    state.angleY = std::remainder(state.angleY + std::clamp(dt, 0.0, 0.05) * 0.45, 6.283185307179586);
+    return true;
+}
+```
+
+Space đổi paused; dấu chấm gọi cùng hàm với dt = 1/60 và singleStep = true. Không tăng một góc tùy ý cho “step”. Khi pause và không có thay đổi, app không rasterize lại. Framebuffer logic cố định 800×500; resize chỉ thay cách trình bày, không nhân chi phí CPU theo màn hình 4K.
 
 ## Ghép các phần lại
 
-Build cả Debug lẫn Release. Hai cấu hình đều phải chạy CTest vì bộ test không dựa vào `assert`:
-
-```bash title="Terminal — nghiệm thu Project 21"
+```powershell title="Terminal — final, toàn bộ checkpoint và CTest"
 cmake -S . -B build-all -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build-all --config Debug
-ctest --test-dir build-all -C Debug --output-on-failure
-cmake --build build-all --config Release
-ctest --test-dir build-all -C Release --output-on-failure
+cmake --build build-all --config Debug --parallel 2
+ctest --test-dir build-all -C Debug --output-on-failure --timeout 30
+cmake --build build-all --config Release --parallel 2
+ctest --test-dir build-all -C Release --output-on-failure --timeout 30
+./build-all/Release/project_21_final.exe
 ```
 
-Chạy `project_21_final`. Controls cuối:
+Với Linux/macOS, dùng -DCMAKE_BUILD_TYPE=Release, chạy ./build-all/project_21_final và không cần --config. README trong ZIP có đủ lệnh riêng cho generator single-config.
 
-- kéo chuột: xoay model;
-- `Space`: chạy/dừng animation;
-- `N`: tiến một bước;
-- `W`: wireframe/solid;
-- `C`: bật/tắt back-face culling;
-- `O`: đảo draw order;
-- `1–3`: đổi camera distance, gồm tình huống sát near plane;
-- `R`: đặt lại toàn bộ state.
+Controls native:
+
+| Thao tác                | Kết quả                                   |
+| ----------------------- | ----------------------------------------- |
+| 1 / 2 / 3               | Mở cube / sphere / rocket từ assets       |
+| Kéo chuột trái, mũi tên | Xoay đối tượng đang chọn                  |
+| V                       | Chọn model hoặc camera orbit              |
+| Cuộn chuột              | Đổi khoảng cách camera                    |
+| W / N / C / O           | Wireframe, normals, culling, draw order   |
+| F / G                   | HUD debug, grid/axes                      |
+| Space / dấu chấm / R    | Run-pause / step 1/60 / reset (giữ model) |
+| Esc                     | Thoát                                     |
+
+Mở file ngoài bằng cách truyền path sau executable hoặc kéo file vào cửa sổ. CMake chép assets cạnh executable; loader tìm tại đó trước, rồi thử assets của working directory. Title bar ghi path thành công; lỗi nạp tiếp theo hiện thông báo và in đầy đủ path/line ra terminal.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chạy executable từ một thư mục không có `assets` và không copy asset cạnh nó. Thông báo phải cho biết path cuối đã thử, không mở cửa sổ với geometry khác.
-2. Khi resize, tạm bỏ `depthBuffer.resize`. AddressSanitizer hoặc bounds check phải phát hiện color/depth không còn cùng số pixel.
-3. Sửa asset thành `f 1 2 999`. Parser báo đúng line và final dừng; không clamp index để “cố vẽ”.
-4. Xóa đối chứng order independence khỏi test rồi cố tình bỏ depth write. Một ảnh ở góc mặc định có thể vẫn trông đúng, cho thấy vì sao test toàn buffer cần thiết.
+1. Mở một OBJ có face `f 1 2 999` khi cube đang hiển thị. Cube phải còn nguyên và có thông báo lần nạp thất bại. Đây không phải fallback thành công: title/path và lỗi phải cho thấy model nào đang được giữ lại.
+
+2. Thử xoay camera rồi bật normals. Nếu chỉ có model đổi góc còn grid đứng yên như cũ, bạn đang sửa nhầm model transform. Nếu cả model angle lẫn camera angle cùng đổi, hai state chưa được tách.
+
+3. Với reduced motion, Canvas không tự quay và không tự chạy lại khi preference đổi về bình thường. Người học vẫn có thể kéo hoặc tiến từng bước.
 
 ## Tự kiểm tra kết quả
 
-- Asset có license, được đóng gói trong ZIP và được copy cạnh mọi target.
-- I/O, parser và geometry diagnostics phân biệt được nhau.
-- Starter, tám checkpoint và final đều chạy độc lập.
-- Wireframe/solid, culling, order, pause/step/reset và resize dùng chung một scene state.
-- Debug và Release CTest đều pass.
-- Final source không phụ thuộc OpenGL, Assimp hoặc tinyobjloader.
+Starter, tám checkpoint và final đều chứa đủ source để build độc lập. Phần **Toàn bộ mã nguồn của dự án** bên dưới cho phép đọc tất cả file final; ZIP chứa cả assets, README, tests và các checkpoint. Không cần tự ghép snippet từ tám trang để có chương trình chạy được.
+
+Nghiệm thu bằng dữ liệu và pixel thật:
+
+- Cube 12 triangle, rocket 32 và sphere 2.976 triangle mở được từ file.
+- Wireframe/solid/normals hoạt động; debug/grid tắt được, viewport vẫn rõ hình 3D.
+- Model/camera có state độc lập, resize không méo, drag kết thúc sạch.
+- File không hỗ trợ báo path/line, không crash hay thay model ngầm.
+- Color/depth không đổi khi đảo order; đối chứng ray–triangle trong tests/reference.hpp khớp depth từng pixel, kể cả near clipping.
+- Debug và Release CTest đều kiểm thật, không dùng assert bị NDEBUG loại bỏ.
+- Dùng --smoke chỉ để kiểm event loop tối đa tám frame; vẫn cần tự thử chuột/phím ở cửa sổ thật.
 
 ## Bài tập mở rộng
 
-Thêm drag-and-drop path bằng SDL drop-file event. Giữ nguyên quy tắc: parse vào một mesh tạm, validate và normalize thành công rồi mới thay mesh đang hiển thị; file lỗi không được phá model hiện tại.
+Thêm chế độ hiển thị bounds 3D, hoặc hỗ trợ ear clipping cho polygon lõm. Nếu mở rộng parser, cập nhật phạm vi README và test tương ứng; đừng đổi thông báo “không hỗ trợ” thành im lặng bỏ qua.
 
-Project 21 đã khép lại phần renderer 3D CPU của roadmap. Project 22 chuyển sang vật lý: chọn góc và vận tốc ban đầu, tích phân quỹ đạo viên đạn rồi so trực tiếp với công thức giải tích.
+Phần tự viết renderer CPU khép lại ở đây. [Project 22](/projects/projectile-cannon) chuyển sang quỹ đạo vật lý; bạn sẽ tiếp tục dùng framebuffer, input và thói quen so kết quả với một đối chứng độc lập.
+
+Tham khảo định dạng: [Wavefront OBJ — Library of Congress](https://www.loc.gov/preservation/digital/formats/fdd/fdd000507.shtml). Khi tích hợp file drop, đối chiếu [SDL_DropEvent](https://wiki.libsdl.org/SDL3/SDL_DropEvent) để dùng đúng API SDL3.
