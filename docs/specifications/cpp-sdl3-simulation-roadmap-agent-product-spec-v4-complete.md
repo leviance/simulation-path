@@ -5,6 +5,8 @@
 
 > **Phạm vi:** 78 project, gồm lộ trình chính **Project 01–72** và sáu project cầu nối tùy chọn **Project 73–78**. Widget Tree, Box Layout, TinyHTML, TinyCSS, TinyFlex, C++ binding và scripting là các project riêng, giữ nguyên số thứ tự từ 66 đến 72.
 
+> **Cách dùng:** số project là định danh sản phẩm, không phải điều kiện buộc phải học tuần tự từ 01 đến 78. Xem Mục 3 để chọn tuyến học, nhận biết phần kế thừa và chuẩn bị kiến thức cầu nối. Mỗi project vẫn có chương trình C++/SDL3 chạy độc lập và phải đạt hợp đồng sản phẩm riêng.
+
 ---
 
 # 0. HỢP ĐỒNG DÀNH CHO AI AGENT
@@ -57,7 +59,7 @@ Các project trong roadmap này là simulation/graphics projects. Vì vậy, t�
 Nguyên tắc:
 
 1. **Main viewport là sản phẩm chính.**  
-   Graph/debug/UI chỉ bổ trợ.
+   Với ứng dụng mô phỏng, graph/debug/UI bổ trợ cho hiện tượng trong viewport. Với bài thí nghiệm toán, số học hoặc compute, biểu đồ, dữ liệu trung gian và dashboard kiểm chứng có thể là đầu ra chính; không phải dựng thêm một scene không liên quan chỉ để có hình ảnh đẹp.
 
 2. **Hiện tượng phải nhìn thấy được.**  
    Dùng color mapping, trails, vectors, lighting, depth, opacity, field glyphs, heatmap, particles, slice, detector image… phù hợp với project.
@@ -104,13 +106,46 @@ Keyframe animation, random motion không liên quan hoặc shader effect chỉ �
 
 ## 0.7. Công nghệ mặc định
 
-- C++20/23.
+- C++20 là chuẩn bắt buộc của source tải về; C++23 chỉ dùng trong phần mở rộng được ghi rõ, không làm tăng yêu cầu của bản chuẩn.
 - SDL3 cho window, input, event, timing và presentation.
+- Khóa SDL 3.4.8, CMake tối thiểu 3.24; tải SDL bằng FetchContent với URL và SHA-256, link qua `SDL3::SDL3`. Không tự nâng dependency khi viết thêm project.
 - Không dùng game engine/physics engine trong critical path.
 - Trước phần OpenGL: không dùng OpenGL/GLM để né phần renderer/toán phải tự học.
 - Từ phần OpenGL trở đi: OpenGL + GLSL được phép.
 - UI core: không dùng ImGui/WebView/Chromium thay TinyUI/TinyHTML/TinyCSS.
 - AI Agent được chọn thư viện hỗ trợ không làm thay phần cốt lõi phải tự viết.
+
+## 0.8. Vai trò học tập và sự nối tiếp của sản phẩm
+
+- **Bài thí nghiệm:** trả lời một câu hỏi cụ thể bằng thao tác, dự đoán và phép kiểm chứng. Một điểm chiếu, hai vector hoặc một mảng số là đầu vào hợp lệ nếu đúng mục tiêu; không cần tạo game hay simulation giả để làm lớn sản phẩm.
+- **Mốc phát triển ứng dụng:** thêm một khả năng cần thiết vào ứng dụng đã có. Phải nói rõ phần giữ lại, phần thay đổi và hành vi mới mà người dùng nhận được.
+- **Project tổng hợp:** tích hợp các khả năng thành ứng dụng có quy trình sử dụng hoàn chỉnh, không chỉ tập hợp nhiều màn hình demo.
+- Những vai trò này không thay đổi số thứ tự, trạng thái chính/tùy chọn hoặc Acceptance Criteria. Không gọi một prototype nhỏ là bài thí nghiệm để né quy mô bắt buộc.
+- Không cố định số bài hoặc số checkpoint. Độ dài phụ thuộc kiến thức mới và sản phẩm; không tạo thêm bài chỉ để đủ một khuôn.
+- Khi nhiều project phát triển cùng sản phẩm, source tải về của mỗi project vẫn tự chứa phần nền cần thiết. Không bắt người học ghép thủ công nhiều ZIP mới chạy được.
+
+## 0.9. Kiểm chứng và đo hiệu năng
+
+Mỗi project phải chỉ rõ ba nhóm bằng chứng: **hành vi sử dụng**, **kết quả thuật toán/mô hình** và **quy mô/chi phí** nếu có yêu cầu về hiệu năng.
+
+- Test phải có fixture hoặc oracle độc lập thích hợp. Gọi cùng một hàm hai lần rồi so kết quả không đủ chứng minh thuật toán đúng.
+- Khi so số thực, công bố đại lượng, đơn vị, chuẩn sai số, ngưỡng tuyệt đối/tương đối và cách xử lý NaN/Inf. Không dùng một epsilon chung cho mọi đại lượng.
+- Với simulation, tách sai số mô hình, sai số không gian, sai số tích phân theo thời gian và sai số số thực. Không dùng hình ảnh đẹp thay kiểm chứng, cũng không mặc định sai khác quỹ đạo dài hạn là bug.
+- Với thống kê, dùng nhiều seed/lần chạy và ghi uncertainty. Không yêu cầu sai số phải giảm đơn điệu ở từng lần lấy mẫu.
+- Benchmark dùng cùng dữ liệu đầu vào, seed, số bước và kernel tương đương; ghi máy, build configuration, N, warm-up, số lần lặp, median và độ phân tán. Benchmark chính dùng Release; phép kiểm tra correctness vẫn chạy Debug và Release.
+- Tách build/rebuild, query/force/update, rendering và thời gian toàn bước. Đối với GPU, tách thời gian kernel đã đồng bộ đúng với thời gian gồm upload/readback; không so thời gian enqueue CPU với thời gian thực thi CPU rồi kết luận GPU nhanh hơn.
+- Công bố số phần tử cấp phát, đang sống, thực sự cập nhật và thực sự vẽ. Nếu chỉ vẽ một tập con để đọc hình rõ hơn, phải ghi rõ; dữ liệu mô phỏng bắt buộc vẫn được cập nhật đầy đủ.
+- Mỗi mốc quy mô phải ghi rõ là **tối thiểu bắt buộc** hay **mở rộng theo phần cứng**. Preset nhỏ dùng để học/debug không thay preset nghiệm thu; máy thiếu khả năng phải báo chưa kiểm chứng được mốc lớn, không tự hạ spec.
+- Không hứa FPS hoặc speedup chung cho mọi máy. Giữ cả các ca mà grid/tree/GPU/SoA không có lợi và giải thích chi phí gây ra kết quả đó.
+
+## 0.10. Phần cứng, giới hạn tài nguyên và an toàn khi chạy
+
+- Trước nhánh GPU phải có bước kiểm tra phiên bản context, extension cần dùng, giới hạn buffer/workgroup và ngân sách bộ nhớ. Nhánh compute cần OpenGL 4.3 hoặc các extension tương đương được kiểm tra cụ thể; hỗ trợ graphics không mặc nhiên đồng nghĩa hỗ trợ compute.
+- Ghi rõ cấu hình đã kiểm thử theo từng nhánh. Hướng dẫn SDL đa nền tảng không phải lời cam kết mọi máy đều chạy được mọi nhánh GPU.
+- Kiểm tra kích thước và phép nhân trước cấp phát; có giới hạn N, timestep, số iteration và số batch. Khi không đủ RAM/VRAM, giữ ứng dụng phản hồi và báo lý do.
+- Benchmark/validation dài phải chia batch hữu hạn, báo tiến độ và cho hủy giữa các batch; không khởi chạy một dispatch GPU không có giới hạn rồi trông chờ nút Cancel có thể ngắt nó.
+- Tuân thủ supervisor, hard timeout và dọn process tree trong ARCHITECTURE.md. Không chạy lại toàn bộ build/test chỉ vì sửa tài liệu; không tự bật dev server khi người dùng chưa yêu cầu.
+- Pause/Reset phải có nghĩa rõ: Pause dừng tiến thời gian mô phỏng; camera, kiểm tra dữ liệu và input UI vẫn sử dụng được. Reset tái tạo đúng preset/seed đã chọn.
 
 ---
 
@@ -156,35 +191,35 @@ AI Agent tự thiết kế curriculum để đưa người học từ kiến th�
 19. **Chiếu đèn lên mô hình: mặt quay về đèn sáng hơn** — Cube/OBJ có mặt sáng tối theo normal; light orbit được.
 20. **Dán bàn cờ lên mặt phẳng nghiêng: sửa texture méo do perspective** — Toggle A/B cho thấy texture affine méo và bản corrected đúng hơn.
 21. **Trình xem mô hình OBJ: xoay một mesh thật bằng renderer tự viết** — Có thể mở cube/icosphere/Suzanne nhỏ, bật wireframe/solid/normals.
-22. **Pháo bắn đạn: kéo chuột chọn góc và vận tốc, so quỹ đạo với công thức** — Quỹ đạo numerical và analytic được vẽ cùng nhau với error.
+22. **Pháo bắn đạn: kéo chuột chọn góc và vận tốc, so quỹ đạo với công thức** — Nhắm mục tiêu 2D, xem độ lệch lần bắn và đối chiếu quỹ đạo numerical/analytic.
 23. **Cuộc đua Integrator: Euler, Verlet và RK4 chạy cạnh nhau** — Một dashboard có 3–4 simulation chạy song song và plot sai số.
 24. **Bể bóng va chạm: hàng trăm quả bóng nảy vào tường và nhau** — Bóng mass/restitution khác nhau va chạm hợp lý, có normal/contact/impulse debug.
 25. **Chuỗi lò xo treo: kéo một khối và xem dao động truyền qua cả dây** — Chain 20–100 mass có damping toggle và graph tổng năng lượng.
 26. **Hai con lắc gần giống nhau nhưng cuối cùng khác hẳn: trực quan hóa chaos** — Nhìn trực tiếp sensitivity to initial conditions mà không nhầm với numerical instability.
-27. **100.000 hạt và chiếc kính lúp: tìm mọi hạt gần con trỏ bằng brute force** — Ứng dụng cho thấy trực tiếp query time và số phép so sánh tăng theo N.
-28. **Chia “thành phố hạt” thành ô: tìm hàng xóm bằng Spatial Grid** — Toggle Brute/Grid, cùng neighbor set nhưng thời gian khác.
-29. **Bản đồ tự chia ô: Quadtree nhìn thấy được và truy vấn bằng vùng chọn** — Visualizer hiển thị node boundaries, visited và pruned nodes.
-30. **Rừng hộp 3D: Octree cho point cloud trong không gian** — Có debug boxes và thống kê node visited.
-31. **Thiên hà hạt: N-body từ O(N²) đến Barnes–Hut** — Galaxy toy có slider theta, runtime và force-error plot.
-32. **Cuộc đua bộ nhớ: 1 triệu particle với AoS và SoA** — Báo cáo throughput AoS vs SoA trên máy của bạn.
+27. **Đàn Boids 2D: hành vi tập thể từ những quy tắc cục bộ** — Đàn tự di chuyển theo separation, alignment và cohesion; tìm hàng xóm brute force làm bản chuẩn.
+28. **Đàn Boids lớn với Spatial Grid** — Nâng cùng mô phỏng lên ít nhất 10.000 cá thể; đối chiếu hàng xóm, steering và chi phí toàn bước với brute force.
+29. **Biên tập bản đồ 2D lớn bằng Quadtree** — Pan/zoom, chọn, di chuyển và xóa đối tượng trên bản đồ ít nhất 100.000 đối tượng có kích thước.
+30. **Khảo sát point cloud 3D bằng Octree** — Khám phá dữ liệu phòng/xưởng ít nhất 100.000 điểm, truy vấn vùng, thống kê và xuất tập điểm đã chọn.
+31. **Thiên hà hạt: N-body từ O(N²) đến Barnes–Hut** — Hệ ít nhất 4.096 vật thể có theta, runtime và force-error plot, tách sai số xấp xỉ khỏi integration error.
+32. **Đài phun hạt CPU: một triệu particle với AoS và SoA** — Hạt có emission, chuyển động, lifetime và tái sử dụng; so hai layout trên cùng workload.
 33. **Vẽ lại tam giác cũ bằng GPU và đối chiếu từng bước với renderer CPU** — CPU triangle và GPU triangle chạy cạnh nhau hoặc toggle.
-34. **Hai renderer, một khối lập phương: F1 CPU, F2 GPU** — Cube/model có thể render CPU hoặc OpenGL và hiển thị frame timings.
+34. **Một model viewer, hai renderer CPU và GPU** — Chuyển model viewer tự viết sang OpenGL, dùng chung mesh/camera và so chi phí hai backend.
 35. **Phòng thí nghiệm shader: sửa GLSL và thấy kết quả ngay** — Compile/reload nhanh; lỗi shader hiện rõ; có gradient/circle/Mandelbrot/noise toy.
 36. **Căn phòng hình khối không mesh: ray-march sphere, box và torus** — Scene 3D procedural với camera, normal, lighting và step-count heatmap.
-37. **Máy tính vector 1 triệu phần tử trên GPU** — Benchmark CPU vs GPU cho vector operations.
+37. **Máy tính vector 1 triệu phần tử trên GPU** — Dashboard kiểm chứng vòng đời compute; tách kernel time và chi phí upload/readback.
 38. **Đài phun 5 triệu hạt: GPU cập nhật và render particle** — Particle fountain/gravity field có profiler và scale ladder tới 5M nếu hardware cho phép.
-39. **Cộng một triệu số theo cây: Reduction và Prefix Sum trên GPU** — GPU sum/min/max/scan khớp CPU.
-40. **“Thành phố hạt” trên GPU: xây grid và tìm hàng xóm song song** — GPU neighbor candidates khớp CPU reference ở N nhỏ rồi scale lớn.
+39. **Cộng một triệu số theo cây: Reduction và Prefix Sum trên GPU** — Kiểm reduction/scan với CPU và dùng prefix sums để tạo offsets/compaction.
+40. **Đàn Boids trên GPU: grid, hàng xóm và steering song song** — Cập nhật đàn ít nhất 100.000 cá thể trên GPU, có preset một triệu và kiểm chứng với CPU ở hệ nhỏ.
 41. **Hai “nguyên tử” hút và đẩy nhau: trực quan hóa Lennard–Jones** — Graph V(r), force arrow và equilibrium region cập nhật realtime.
 42. **Hộp khí 1.000 hạt: Molecular Dynamics CPU đầu tiên** — Box có particles, energy graphs và timestep controls.
 43. **Hộp phân tử tuần hoàn: hạt đi ra một phía và quay lại phía đối diện** — Particles wrap liền mạch; pair distance qua biên đúng.
-44. **Danh sách hàng xóm có vùng đệm: không tìm lại mọi cặp ở mỗi bước** — MD CPU 10k–100k hạt có profiler build-list vs force.
-45. **Molecular Lab GPU: tăng từ 100.000 tới mục tiêu 5 triệu hạt** — GPU MD prototype có profiler và scale ladder.
+44. **Danh sách hàng xóm có vùng đệm: không tìm lại mọi cặp ở mỗi bước** — MD CPU tối thiểu 10.000 hạt; mở rộng 100.000 theo máy, đo build-list và force.
+45. **Molecular Lab GPU: tăng từ 100.000 tới mục tiêu 5 triệu hạt** — MD GPU tối thiểu 100.000 hạt, có profiler và các mốc nâng cao theo phần cứng.
 46. **Hộp cát số: cát rơi, nước giả và cellular automata** — Paint sand/wall/water toy và xem material rơi/chảy.
 47. **Tấm kim loại nóng: nhiệt lan từ nơi bạn click ra toàn mặt phẳng** — Heat map có mouse injection và slider dt/D; có thể cố tình làm solver mất ổn định.
-48. **Bản đồ gió: nhìn thấy gradient, divergence và curl** — Grid arrows + color maps divergence/curl cập nhật realtime.
+48. **Bản đồ gió: nhìn thấy gradient, divergence và curl** — Tracer đi theo vector field, kèm arrows và các bản đồ toán tử để giải thích chuyển động.
 49. **Khói bị chuột khuấy: Stable Fluids 2D từng bước** — Khói chảy theo field; debug pressure/divergence.
-50. **Bể nước bằng hạt: SPH 2D có thể đổ và va vào thành** — 1k→100k particles chảy trong container toy model.
+50. **Bể nước bằng hạt: SPH 2D có thể đổ và va vào thành** — Bể SPH 2D tối thiểu 5.000 hạt, có kiểm density/pressure; các mốc lớn hơn là mở rộng.
 51. **Khối nước 3D trên GPU: SPH hàng trăm nghìn tới hàng triệu hạt** — 3D fluid có camera, profiler và scale ladder.
 52. **Bắn tia vào hình học: chọn điểm chạm plane, sphere, box và triangle** — Geometry lab cho 4 intersection cơ bản.
 53. **Máy cắt lát khối 3D: xem từng lớp mật độ như ảnh CT giả** — Synthetic sphere/Gaussian/layers, slider slice và voxel inspector.
@@ -213,6 +248,93 @@ AI Agent tự thiết kế curriculum để đưa người học từ kiến th�
 76. **Nghe thấy Fourier: tự viết DFT và tách tín hiệu thành tần số** — Tạo và nghe tín hiệu nhiều tone, tự tính DFT rồi xem phổ biên độ/pha; liên hệ trực tiếp waveform, tần số và âm thanh.
 77. **Ném điểm ngẫu nhiên để ước lượng π: Monte Carlo Statistics Lab** — Ước lượng π bằng điểm ngẫu nhiên, quan sát sai số và khoảng tin cậy qua nhiều lần chạy; không chỉ xem một con số tiến gần π.
 78. **Máy soi số thực: khi 0.1 + 0.2 không đúng tuyệt đối** — Quan sát float/double ở dạng số và bit; thử làm tròn, mất phần nhỏ, sai số cộng dồn và lựa chọn phép so sánh phù hợp.
+
+---
+
+# 3. BẢN ĐỒ HỌC VÀ CHUẨN GIẢNG DẠY
+
+## 3.1. Chọn tuyến theo sản phẩm muốn xây
+
+Project 01–72 vẫn thuộc lộ trình chính; Project 73–78 vẫn tùy chọn. Các tuyến dưới đây giúp chọn thứ tự học, không đổi số project và không yêu cầu hoàn thành mọi nhánh nằm trước nó trong tài liệu.
+
+| Tuyến | Kiến thức đầu vào và hướng đi |
+| --- | --- |
+| Nền tảng 2D — 01–05 | C++ cơ bản → SDL, input, timing, framebuffer, primitive và tọa độ. 03–05 có thể dùng chung không gian làm việc 2D. |
+| Toán tương tác — 06–10 | Dùng tọa độ và cách vẽ ở 01–05; liên hệ vector với steering, sin/cos với chuyển động, transform với chỉnh sửa hình và normal với ánh sáng. |
+| Renderer CPU — 11–21 | Dùng nền 2D, vector, lượng giác và transform. Đích chung là OBJ viewer 21; không yêu cầu dựng lại application shell trong mỗi project. |
+| Vật lý — 22–26 | Cần input, vector và timing; không buộc học toàn bộ renderer. Nếu chọn cảnh 3D, chuẩn bị camera/presentation cần thiết. Mỗi hệ có mô hình và phép kiểm chứng riêng. |
+| Không gian và hiệu năng — 27–32 | 27–28 dùng vector, timestep và tọa độ 2D; 29 dùng camera 2D/AABB; 30 cần camera 3D, AABB và frustum; 31 thêm integration và tổng hợp lực bằng cây. 32 không bắt buộc học N-body ở 31. |
+| Graphics GPU — 33–36 | 33 đối chiếu triangle CPU/GPU; 34 chuyển viewer 21 sang hai backend; 35 xây công cụ shader; 36 thêm SDF và ray marching. Không bắt buộc học xong 22–32. |
+| GPU compute — 37–40 | Cần OpenGL/GLSL và kiểm tra phần cứng. 37 cung cấp vòng đời compute, 38 áp dụng cho hệ hạt, 39 cung cấp reduction/scan, 40 kết hợp chúng với Boids 28. |
+| Molecular Dynamics — 41–45 | Cần vector, lực và integration; bổ sung đạo hàm của potential ngay lúc dùng. 41–44 là các mốc của Molecular Lab CPU; 45 cần compute, scan và grid GPU. |
+| Trường và chất lưu — 46–51 | 46 là cellular automata độc lập. 47–49 đi theo dữ liệu trên lưới; 50–51 đi theo hạt. SPH cần integration và tìm hàng xóm; không bắt học MD. Trước 51 phải mở rộng grid, kernel và đơn vị sang 3D. |
+| Ray và tạo ảnh — 52–57 | 52 cần vector/camera; 53 cần mảng 3D và nội suy; 54 thêm graphics GPU. 55–56 nối tích phân theo tia với detector/reconstruction; 57 thêm xác suất. Không bắt học chất lưu trước. |
+| Voxel — 58–64 | Cần mesh, graphics GPU và camera; học phần ray cần thiết trước 60. Không yêu cầu MD, SPH hoặc CT. Dùng một voxel application xuyên suốt bảy mốc. |
+| UI/runtime — 65–72 | Cần input, cách vẽ và một simulation chạy được, có thể chọn 02 hoặc 22. Phát triển cùng control panel qua tree, layout, markup, style, binding và script. |
+| Cầu nối — 73–78 | Học xen kẽ theo Mục 3.3. Không biến project tùy chọn thành prerequisite bắt buộc mà không cung cấp đường học thay thế. |
+
+## 3.2. Sự nối tiếp và vai trò trong từng phần
+
+Các yêu cầu dưới đây xác định bối cảnh sử dụng và phần được kế thừa. Agent vẫn tự chọn số bài, checkpoint và thứ tự giải thích bên trong mỗi project.
+
+- **01–05:** 01 tạo nền pixel; 02 là thí nghiệm input/timing có sản phẩm ô vuông điều khiển được; 03 tạo Paint; 04 đưa primitive vào công cụ vẽ; 05 phát triển không gian 2D có pan/zoom và chỉnh sửa điểm. Không giới thiệu phép trừ trạng thái phím trước khi người học đã thấy cách vẽ và điều khiển ô vuông.
+- **06–10:** giữ visualizer toán có câu hỏi cụ thể. 06 nối vector với vận tốc/steering; 07 nối vòng tròn với đồ thị và thời gian; 08 dùng góc để điều khiển turret có tốc độ quay hữu hạn; 09 là công cụ biến đổi hình. 10 phải công bố bộ chiếu tối thiểu được cung cấp và vị trí gọi nó; 11 mới giải thích/tự xây phần projection, không để prerequisite bị giấu.
+- **11–21:** 11–12 là thí nghiệm projection/rotation; 13–14 xây object viewer và camera; 15 là công cụ chẩn đoán dùng tiếp ở 16–20; 16–18 hoàn thiện bề mặt, depth và clipping; 19–20 thêm ánh sáng/texture; 21 tích hợp thành model viewer. Mesh ở 19 được cung cấp dưới dạng dữ liệu đã đọc nếu parser chưa được dạy ở 21.
+- **22–26:** 22 gắn quỹ đạo với việc nhắm mục tiêu; 23 so integrator trên cùng hệ và giải thích lực lò xo đơn trước chain ở 25; 24 dùng ca va chạm có kiểm chứng trước bể nhiều bóng; 25 phân biệt damping vật lý với sai số số học; 26 phân biệt chaos với integration error.
+- **27–32:** 27–28 là cùng ứng dụng Boids trước/sau tối ưu; 29 là bản đồ có đối tượng mang diện tích; 30 là công cụ khảo sát dữ liệu 3D; 31 giải bài toán tương tác xa bằng xấp xỉ; 32 khảo sát chi phí bộ nhớ bằng đài phun hạt CPU. Không thay sản phẩm bằng việc rê chuột tô màu các điểm hoặc chỉ vẽ các hộp của cây.
+- **33–36:** 33 là bài chuyển tiếp nền tảng, không bị ép thành showcase nâng cao. 34 kế thừa viewer 21; 35 là công cụ làm việc với shader có reload/báo lỗi; 36 tạo cảnh SDF. SDF tìm bề mặt ở 36 khác tích lũy mật độ thể tích ở 54.
+- **37–40:** 37 và 39 là bài thí nghiệm compute có dashboard và dữ liệu kiểm chứng. 39 phải cho thấy scan tạo offsets/compaction dùng được thế nào; 40 phải dùng grid vào steering của đàn Boids động. 38 và 40 là ứng dụng, không phải phép tính lớn được trang trí bằng particle.
+- **41–45:** cùng một Molecular Lab. 41 giải thích mô hình hai hạt, 42 tích hợp nhiều hạt, 43 đổi hình học tương tác qua biên, 44 đổi cách tìm hàng xóm, 45 đổi nơi thực thi sang GPU. Giữ nhất quán đơn vị hoặc reduced units, potential, cutoff, timestep và cách đo năng lượng; nếu đổi mô hình phải có bước đối chiếu riêng.
+- **46–51:** cát/nước cellular ở 46 không phải solver chất lưu. 47 đặt câu hỏi nguồn nhiệt/điều kiện biên; 48 dùng tracer để thấy tác dụng của trường; 49 là công cụ khói Eulerian; 50 mở cách biểu diễn Lagrangian bằng SPH; 51 mở rộng SPH sang 3D/GPU. Không gọi mô hình sau là bản chính xác hơn của mô hình trước chỉ vì trông đẹp hơn.
+- **52–57:** 52 là công cụ hình học dùng lại cho picking; 53–56 dùng chung phantom và các phép quan sát khi hợp lý. Slice của volume, volume compositing, attenuation X-ray và reconstruction CT là bốn công việc khác nhau. 57 là nhánh lấy mẫu ngẫu nhiên, có uncertainty; không gọi kết quả là công cụ chẩn đoán hoặc mô phỏng lâm sàng đã được kiểm định.
+- **58–64:** phát triển một voxel world: chunk → visible faces → edit → greedy mesh → streaming → terrain → sandbox. Cung cấp dataset nhiều chunk đủ rõ trước khi dạy procedural terrain; không giấu terrain generator chưa học trong streaming. 62 có thể dùng job queue có ngân sách mỗi frame; thread pool 75 là mở rộng, không phải prerequisite ngầm.
+- **65–72:** cùng control panel cho simulation thật. 65 là điều khiển trực tiếp; 66 là ownership/input; 67 là measure/arrange; 68 là markup; 69 là cascade/style; 70 là flex layout; 71 là binding; 72 là runtime script. Giữ riêng 66/67 và 69/70. Mỗi mốc phải cho thấy một thay đổi sử dụng được, không chỉ một cây parse hoặc bảng thuộc tính.
+- **73–78:** là công cụ bổ trợ có sản phẩm riêng. Không ép mọi bài cầu nối thành một game; kết quả quan trọng là dự đoán được hành vi, quan sát dữ liệu và kiểm chứng đúng khái niệm.
+
+## 3.3. Kiến thức cầu nối đúng lúc
+
+| Khi cần | Chuẩn bị |
+| --- | --- |
+| Camera/phép quay 12–14 và về sau | Giới thiệu orientation; có thể học 73 khi cần quaternion/SLERP, không buộc học toàn bộ quaternion để đi tiếp. |
+| Picking 3D ở 30, 60 hoặc mesh viewer | Dạy phần ray/AABB/intersection cần dùng từ 52 trước thao tác đó, hoặc công bố rõ phương pháp chọn khác. Mesh lớn có thể học thêm BVH 74. |
+| Integrator 23, 25, 26, 42 | State, đạo hàm, phương trình vi phân và ý nghĩa một bước thời gian được giải thích trên hệ nhỏ trước khi gọi solver. |
+| Potential/force 41–42 | Giải thích đạo hàm, hướng lực và đơn vị; kiểm lực bằng đạo hàm số độc lập ở điểm hợp lệ. |
+| Heat/field/fluid 47–51 | Dạy stencil, gradient/divergence/curl và điều kiện biên tại nơi sử dụng; SPH có kernel/support radius và kiểm tra đơn vị riêng cho 2D/3D. |
+| Reconstruction 56 | Giải thích forward model và backprojection trước. Nếu thêm filtered backprojection, cung cấp cầu nối lọc/Fourier; 76 là nhánh thực hành thêm, không bắt buộc hoàn thành project audio trước CT. |
+| Photon 57 | Giải thích phân phối lấy mẫu, seed, ước lượng và uncertainty; có thể dùng 77 làm bài chuẩn bị nếu thiếu nền thống kê. |
+| Hiệu năng CPU và background jobs | 75 phù hợp sau 32. Dùng ownership, job lifecycle và cancellation đã giải thích; không đưa đa luồng vào chỉ để có thêm kỹ thuật. |
+| So sánh số thực ở 16, 23, 39, 41 và các solver | Giới thiệu tolerance/cancellation/NaN tại chỗ; 78 là project đào sâu, không trì hoãn cảnh báo sai số tới cuối khóa. |
+
+## 3.4. Hợp đồng của bài hướng dẫn, source và Canvas
+
+- Đầu project có thử thách: nhu cầu, kết quả quan sát được, input, giới hạn và Definition of Done. Tách hành vi cần đạt khỏi gợi ý cách giải; thuật toán bắt buộc đặt trong ràng buộc riêng. Có thể đưa gợi ý theo mức để người học tự thử trước.
+- Đầu mỗi bài nói rõ chương trình đang có gì, còn thiếu gì và thay đổi sắp làm giải quyết vấn đề nào. Không dùng câu mở đầu bằng một công thức/idiom chưa có bối cảnh.
+- Đi từ code đang chạy được tới thay đổi nhỏ có thể quan sát; giải thích dữ liệu, biến trạng thái và vị trí gọi hàm. Không chỉ đưa helper rời mà bỏ phần kết nối vào ứng dụng.
+- Có source đầy đủ ở mỗi checkpoint và final, README, assets và tests. Code trong bài phải lấy/đối chiếu từ source checkpoint bằng snippet markers và hợp đồng token; không có lời giải chỉ tồn tại trong bài viết.
+- Code giảng dạy ưu tiên tuyến tính, tên biến rõ, kiểm lỗi tài nguyên từng bước, comment giải thích quyết định và khoảng cách hợp lý giữa các khối. Thụt dòng 4 spaces; không dùng toán tử/lambda/abstraction chỉ để rút ngắn code. Dòng dài có thể cuộn ngang; code block không wrap tùy tiện, dùng One Dark.
+- Nội dung viết bằng tiếng Việt tự nhiên; API, identifier và thuật ngữ cần tra cứu giữ bằng tiếng Anh. Giải thích thuật ngữ trong bối cảnh, không xâu chuỗi danh từ tiếng Anh thay cho một câu rõ nghĩa.
+- Bài có dự đoán trước khi chạy, một thí nghiệm lỗi có mục đích, checklist có thể thực hiện và bài tập chuyển kiến thức sang trường hợp mới. Không lặp cùng một mẫu câu cho đủ cấu trúc.
+- Mỗi Canvas phải trả lời một câu hỏi học tập. Có preset, Pause/Reset, thao tác keyboard, pointer capture khi kéo, DPR, reduced-motion và giải thích văn bản; tham số/tên biến tương ứng với C++. Không dùng Canvas thay bản C++ đúng quy mô.
+- Tách thời gian đọc, tự viết và kiểm chứng; nêu build/setup không tính vào thời lượng học thuần. Không dùng thời gian dự kiến để chấm người học nhanh/chậm.
+- Phần nâng cao giữ profiler/debug khi cần nhưng có chế độ quan sát sạch; giới hạn tài nguyên và controls vẫn tìm được, không bị ẩn khỏi người dùng chỉ vì tắt overlay.
+
+## 3.5. Các phần chung của website và tài liệu
+
+- **Homepage:** giới thiệu sản phẩm đích, đối tượng học và vài tuyến khuyến nghị. Số project/bài/lab lấy từ catalog, không hard-code; công thức minh họa phải đúng, ví dụ `index = y * width + x`.
+- **Roadmap:** mỗi phần có mục đích, sản phẩm đích, prerequisite bắt buộc và hướng đi tiếp. Phân biệt phần cung cấp sẵn với phần tự viết. Project chưa phát hành vẫn có mô tả sản phẩm theo spec và trạng thái rõ, không tạo liên kết tutorial giả.
+- **Getting Started:** tách người tải ZIP để học C++ khỏi người clone website để đóng góp. Nói rõ configure/build/run/debug, target đang sửa và lỗi thường gặp. Dùng `checkpoints/01..NN/` cho cấu trúc tổng quát; ví dụ sáu checkpoint phải ghi là riêng Project 01.
+- **README:** giải thích mục đích, đầu vào, đầu ra, cách chọn tuyến, cách học và phạm vi; thống kê phải khớp catalog. Không mô tả trạng thái phát hành như chứng nhận đã đạt spec.
+- **Downloads:** mỗi project có gói độc lập, yêu cầu compiler/GPU, cách chạy, controls và kết quả mẫu; hiển thị rõ mốc quy mô đã kiểm chứng. Không cần Node.js để build ZIP C++.
+- **Glossary:** định nghĩa theo bối cảnh, công thức/đơn vị khi phù hợp, ví dụ nhỏ và liên kết tới bài sử dụng. Trang thuật ngữ và tìm kiếm dùng cùng nguồn dữ liệu.
+- **Website local:** người dùng tự bật bằng `npm run dev`; không có tài khoản/backend bắt buộc. Theme và tiến độ dùng localStorage; navigation không reset theme hoặc tải nội dung/source của mọi project. Có tìm kiếm, breadcrumb, mục lục, trước/sau, copy code, tải ZIP và giao diện mobile.
+- **Đóng góp mã nguồn mở:** giữ nguồn authored, license/attribution của assets và chỉ dẫn contribution rõ. Output build, thư viện tải về, ZIP và snapshot sinh tự động không đưa vào Git; áp dụng giới hạn file/thư mục của ARCHITECTURE.md.
+
+## 3.6. Nghiệm thu khác với trạng thái phát hành
+
+- Đối chiếu từng yêu cầu với lesson, source C++, Canvas hỗ trợ và bằng chứng kiểm chứng. Chưa có bằng chứng thì ghi **chưa kiểm chứng**, không tự coi là đạt.
+- Tách kết quả unit test, build checkpoint, smoke hữu hạn, kiểm thử desktop và benchmark phần cứng. Một loại bằng chứng không thay các loại còn lại.
+- Khi implementation thấp hơn spec, ghi rõ phần thiếu và kế hoạch đáp ứng. Ví dụ bản 1.000 hạt không đạt Project 44 yêu cầu tối thiểu 10.000 hạt; không sửa tài liệu xuống 1.000 để hợp thức hóa.
+- Đồng bộ tên, mô tả và dependency của spec, roadmap, metadata, thử thách, lesson và source trong đợt triển khai tương ứng. Cập nhật đặc tả không tự biến những bản đang phát hành thành sản phẩm đã đáp ứng yêu cầu mới.
 
 ---
 
@@ -271,6 +393,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture màu/RGBA, row-major 4×3, ảnh 1×1 và tọa độ ngoài bốn cạnh có kết quả biết trước; kiểm signed bounds trước khi đổi index sang kiểu không dấu.
+- Resize/minimize/restore có giới hạn cấp phát; kiểm pitch theo byte và pixel output, không chỉ thấy cửa sổ chưa crash.
 - Không ghi ngoài buffer.
 - Resize liên tục không crash.
 - Giải thích được `index = y*width+x`.
@@ -337,6 +461,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture cùng input chạy nhiều chuỗi dt trong cùng tổng thời gian; so quãng đường với speed × time theo tolerance, kể cả hai phím đối nghịch và mất focus.
+- Hướng dẫn có code vẽ ô vuông, đọc keyboard, cập nhật state và render trong chương trình đầy đủ trước khi giải thích cách gộp trạng thái phím.
 - Đi cùng quãng đường trong 5 giây ở các FPS khác nhau.
 - Giải thích render FPS khác simulation rate thế nào.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -401,6 +527,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture hai sample xa nhau kiểm khoảng cách giữa các dấu brush không vượt ngưỡng theo radius; kiểm stroke một điểm, sát biên và pointer rời vùng vẽ.
+- Đổi sampling rate/interpolation cho triệu chứng dự đoán được; palette và brush size tác động vào nét mới, không làm biến đổi sai ảnh đã vẽ.
 - Nét không đứt ở tốc độ chuột hợp lý.
 - Không ghi ngoài framebuffer.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -467,6 +595,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Kiểm endpoints, tám octant, đường dốc/đứng/ngang, đoạn một điểm và clipping/bounds; circle kiểm đối xứng và radius 0/không hợp lệ.
+- Primitive được dùng như công cụ trong ứng dụng vẽ; benchmark dùng cùng tập đoạn/hình và tách thuật toán khỏi chi phí presentation.
 - Line đúng mọi hướng.
 - Circle đối xứng.
 - Có benchmark, không kết luận cảm tính.
@@ -533,6 +663,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Zoom quanh cursor giữ world point dưới cursor trong tolerance; pan/resize không sửa tọa độ world của đối tượng.
+- Fixture forward/inverse transform có negative coordinates và zoom gần giới hạn; kiểm click/drag ở cùng điểm sau nhiều lần pan/zoom.
 - `screenToWorld(worldToScreen(p))≈p`.
 - Resize không làm đổi logic world position.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -603,7 +735,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
-- `length(normalize(v))≈1`.
+- Zero vector có quy tắc normalize rõ và không sinh NaN; fixture add/sub/lerp kiểm bằng giá trị biết trước, không chỉ nhìn hình.
+- Người học giải thích cách dùng vector hiệu để lấy hướng/vận tốc trong một ví dụ chuyển động nhỏ.
+- `length(normalize(v))≈1` với v khác 0; zero vector có quy tắc riêng.
 - A+B khớp hình bình hành.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -668,6 +802,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture tại 0, π/2, π và 3π/2 kiểm dấu/giá trị; công bố radian và cách chuyển degree, đối chiếu point trên vòng tròn với đồ thị cùng thời điểm.
+- Tốc độ góc theo giây cho cùng góc sau cùng thời gian ở nhiều FPS; pause và đổi tham số giữ quan hệ phase nhất quán giữa các hình.
 - 2π rad đúng một vòng.
 - `sin²+cos²≈1`.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -733,7 +869,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
-- Dot≈1 cùng hướng, 0 vuông, -1 ngược.
+- Kiểm target trùng turret, hai phía qua biên ±π và hướng đối nghịch; mỗi bước không quay quá angularSpeed × dt và không sinh NaN.
+- Đổi target làm turret quay theo giới hạn tốc độ; phép chiếu và dot được đối chiếu bằng fixture vector đã chuẩn hóa.
+- Với hai vector đơn vị, dot≈1 khi cùng hướng, 0 khi vuông góc và -1 khi ngược hướng.
 - Turret chọn chiều quay ngắn hợp lý.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -798,6 +936,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture một điểm với rotate rồi translate và thứ tự ngược có kết quả tính tay; kiểm identity và inverse khi ma trận khả nghịch.
+- Shape, pivot và gizmo dùng cùng transform; singular scale có chính sách rõ, không gọi inverse không tồn tại.
 - Identity giữ shape.
 - Giải thích được vì sao order transform quan trọng.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -863,6 +1003,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Normal bằng 0 ở tam giác suy biến có cách hiển thị/xử lý; camera đổi nhưng quan hệ vuông góc không đổi.
+- Tách rõ phép chiếu cung cấp sẵn cho bài này khỏi Vec3/cross người học tự xây; liên kết tới bài projection 11.
 - `dot(cross(a,b),a)≈0` và với b.
 - Đảo order làm normal đảo chiều.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -930,6 +1072,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Kiểm điểm tại tâm, lệch trục, trên/gần near và phía sau camera; công bố convention, FOV/aspect và điều kiện reject trước phép chia.
+- Fixture tọa độ screen có giá trị tính tay; đổi FOV và z tác động khác nhau nhưng không làm state world tự đổi.
 - Tăng z làm displacement trên screen giảm.
 - Không nổ số khi z→0.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -994,6 +1138,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Phép quay bảo toàn độ dài/cạnh tam giác trong tolerance; đổi thứ tự quay hai trục có fixture thể hiện kết quả khác nhau.
+- Xoay mô hình và đổi camera nếu cùng tồn tại có mode/nhãn riêng; kéo model không vô tình xoay cả hệ tọa độ.
 - 0 rad giữ nguyên.
 - 2π đưa về gần vị trí cũ.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1062,6 +1208,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture cube có vertex/edge biết trước; chuyển perspective/orthographic và resize giữ convention/aspect nhất quán.
+- Xoay model không vô tình quay axes world; near handling, camera và input có checklist độc lập.
 - Mô tả được vertex đi từ model tới pixel.
 - Không dùng SDL line drawing/OpenGL.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1129,6 +1277,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Đi trong phòng theo hướng nhìn với dt; relative mouse bật/tắt khi focus/Escape đúng và không gây cú nhảy camera lúc nhận lại focus.
+- Fixture basis và view transform kiểm camera translation/rotation; giới hạn pitch hoặc quy tắc tránh suy biến được công bố.
 - Basis gần orthonormal.
 - Movement nhất quán với convention đã chọn.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1193,6 +1343,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture vertex có giá trị model/world/view/clip/NDC/screen tính độc lập; chia w đúng giai đoạn và xử lý w không hợp lệ.
+- Thay một stage làm bảng và hình đổi nhất quán; công cụ còn dùng được để debug clipping/depth ở các bài tiếp theo.
 - Tự tính tay một case đơn giản và khớp.
 - Giải thích được vai trò w.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1258,6 +1410,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Triangle suy biến và tọa độ ngoài viewport không chia cho 0/ghi ngoài buffer; kiểm các winding và quy tắc cạnh được công bố.
+- Hai tam giác chung cạnh có fixture coverage không để lỗ theo fill rule; màu barycentric khớp vertex và một điểm trong.
 - `α+β+γ≈1` bên trong.
 - Winding convention nhất quán.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1323,6 +1477,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Hai bề mặt depth khác nhau cho cùng visibility khi đảo thứ tự vẽ; coplanar/tie có chính sách riêng, không hứa mọi màu tie bất biến.
+- Clear/resize depth buffer đúng mỗi frame; culling có ca front/back và không thay thế depth test.
 - Đảo draw order không làm visibility sai.
 - Tắt z-buffer thấy lỗi rõ.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1388,6 +1544,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture 0/1/2/3 vertex trong near plane cho số polygon/triangle và vị trí giao biết trước; attribute được nội suy cùng tham số giao.
+- Triangle qua near không bị discard toàn bộ khi vẫn còn phần hợp lệ; không sửa bằng clamp z hoặc chỉ giới hạn tọa độ screen.
 - Transition ổn định, không spike.
 - Có debug before/after clip.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1452,6 +1610,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Normal/light cùng hướng, vuông góc, ngược hướng có diffuse biết trước; normal dùng đúng space và chuẩn hóa.
+- Nếu có non-uniform scale, dùng normal transform phù hợp hoặc tính lại normal từ hình đã biến đổi; parser chưa học thì mesh được cung cấp rõ.
 - Mặt quay khỏi light không có diffuse dương.
 - Normal/winding nhất quán.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1516,6 +1676,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture pixel trong mặt phẳng nghiêng đối chiếu UV bằng phép nội suy perspective-correct độc lập; affine/correct dùng cùng camera, texture và geometry.
+- Kiểm UV boundaries, near clipping và division hợp lệ; không dùng cảm giác checker đẹp hơn làm oracle duy nhất.
 - Checkerboard không trượt/méo như affine ở góc nghiêng lớn.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -1581,6 +1743,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Parser có fixture record hợp lệ, index sai, mặt suy biến và record ngoài subset công bố; lỗi có vị trí và không làm mất tài nguyên.
+- Ít nhất hai mesh trong phạm vi quy mô đã nêu chạy với camera, solid/wireframe/normals; dùng pipeline 11–20, không dùng renderer thư viện.
 - Model nhỏ render đúng convention.
 - Unsupported line báo lỗi rõ.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1615,6 +1779,7 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 - Khẩu pháo + projectile + trajectory trail.
 - Numerical và analytic trajectory vẽ cùng lúc.
 - Timestep adjustable.
+- Mục tiêu 2D chọn được và độ lệch lần bắn so mục tiêu.
 
 ### Quy mô / độ phức tạp tối thiểu
 
@@ -1649,6 +1814,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Có mục tiêu 2D chọn được; hiển thị độ lệch lần bắn so mục tiêu và đối chiếu analytic/numerical, không cần solver tự ngắm.
+- Error tính tại cùng thời điểm vật lý trên khoảng hữu hạn; không so điểm rơi đã va chạm với nghiệm chưa có va chạm.
 - dt giảm → error giảm theo xu hướng hợp lý.
 - Có max/mean position error.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1713,6 +1880,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Oscillator có nghiệm tham chiếu hoặc reference độc lập; mọi integrator dùng cùng force, state đầu và thời gian mô phỏng.
+- Đo nhiều dt và cùng ngân sách đánh giá lực bên cạnh so cùng dt; không kết luận một integrator luôn tốt nhất từ một biểu đồ.
 - Có số liệu, không chỉ nhìn.
 - Giải thích trade-off accuracy/cost.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1779,8 +1948,10 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
-- Elastic gần bảo toàn momentum/kinetic energy.
-- Inelastic giảm kinetic energy.
+- Ca hai bóng cô lập kiểm hướng normal, mass khác nhau và impulse khi đang tách nhau; không tính overlap correction như một lực bảo toàn.
+- Khi có tường/ngoại lực, ghi trao đổi động lượng với môi trường; không yêu cầu tổng động lượng riêng của các bóng luôn bảo toàn.
+- Va chạm đàn hồi giữa hai bóng cô lập gần bảo toàn động lượng và động năng.
+- Với va chạm không đàn hồi, động năng giảm theo restitution khi không có nguồn làm công bên ngoài.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
 - Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
@@ -1844,8 +2015,10 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture hai mass và chain ngắn kiểm lực hai đầu bằng nhau/ngược chiều, fixed node và chiều lực khi kéo/nén; chain cuối vẫn đủ 20–100 mass.
+- Tách thời gian đang kéo (ngoại lực làm công) với giai đoạn thả; giảm dt để phân biệt damping và numerical drift.
 - Không damping: đo energy drift.
-- Có damping: mechanical energy giảm.
+- Có damping và không còn thao tác kéo/ngoại lực làm công: mechanical energy giảm theo xu hướng trong giới hạn sai số tích phân.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
 - Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
@@ -1910,6 +2083,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Hai hệ dùng cùng solver/dt, khác điều kiện đầu ε công bố; thêm đối chiếu cùng điều kiện đầu ở dt và dt/2 trong cửa sổ ngắn trước khi phân kỳ lớn.
+- Không suy ra chaos chỉ từ solver nổ số; theo dõi năng lượng và loại ca NaN/Inf, ghi thời gian tin cậy của phép so.
 - Divergence vẫn xuất hiện khi dt đủ nhỏ.
 - Energy behavior được theo dõi.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -1925,385 +2100,384 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 # PHẦN V — CẤU TRÚC KHÔNG GIAN, QUY MÔ LỚN VÀ HIỆU NĂNG
 
-## Project 27 — 100.000 hạt và chiếc kính lúp: tìm mọi hạt gần con trỏ bằng brute force
+## Project 27 — Đàn Boids 2D: hành vi tập thể từ những quy tắc cục bộ
 
-**Mức tham vọng trực quan:** Simulation / data-rich visualization
+**Vai trò:** Ứng dụng mô phỏng; bản chuẩn trước khi tối ưu ở Project 28
+
+**Mức tham vọng trực quan:** Đàn chuyển động có cấu trúc, đọc được hướng và tương tác cục bộ
 
 ### Đề bài / mục tiêu sản phẩm
 
-Sinh 100k điểm; rê chuột để highlight tất cả điểm trong radius R bằng quét toàn bộ.
+Tự xây dựng một mô phỏng 2D trong đó các cá thể tự điều chỉnh vận tốc theo ba quy tắc separation, alignment và cohesion. Hành vi đàn phải hình thành từ tương tác cục bộ; brute force là cách tìm hàng xóm để có bản chuẩn dễ kiểm chứng.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Ứng dụng cho thấy trực tiếp query time và số phép so sánh tăng theo N.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Các cá thể có hướng di chuyển, tụ thành đàn và tách nhau khi quá gần. Người dùng thay trọng số để quan sát vai trò từng quy tắc, chọn một cá thể để xem hàng xóm và các vector steering. Không phải một đám điểm chỉ đổi màu khi con trỏ tới gần.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- 100k points/particles visible.
-- Circle query quanh mouse bằng brute force.
-- Counter comparisons + query time.
+- State có ID, position và velocity; tính separation, alignment, cohesion trên hàng xóm nằm trong bán kính đã công bố.
+- Tổng hợp steering, giới hạn acceleration/speed và tích phân theo giây; có quy tắc rõ cho không có hàng xóm, hai cá thể trùng vị trí và velocity bằng 0.
+- Đọc cùng một snapshot cho toàn bước và ghi state mới riêng; không để cá thể cập nhật trước ảnh hưởng cá thể cập nhật sau.
+- Domain 2D hữu hạn với quy tắc biên công bố rõ. Nếu wrap, khoảng cách/hướng tới hàng xóm phải dùng quy tắc biên tương ứng, không chỉ wrap hình vẽ.
+- Preset seed tái lập, Pause/Reset, single-step; hiển thị thời gian tìm hàng xóm, steering/update và tổng số phép kiểm tra.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- N ladder ít nhất 1k,10k,100k.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Có preset 256, 512 và 1.024 cá thể; bản cuối chạy được 1.024 cá thể tương tác thật bằng brute force.
+- Tính hàng xóm cho mọi cá thể ở mỗi bước; không chỉ query quanh cá thể đang chọn. Không dùng grid/tree ở bản chuẩn này.
+- Không đặt yêu cầu FPS chung cho mọi máy; benchmark theo Mục 0.9.
 
 ### Tương tác bắt buộc
 
-- Move mouse query; change N/radius.
+- Đổi số cá thể, seed, bán kính và ba trọng số; Pause/Reset và tiến một bước.
+- Chọn cá thể để xem hàng xóm, ba steering vector và vector tổng. Chế độ quan sát đàn có thể tắt các lớp debug.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Ứng dụng phải trực quan hóa được quy mô dữ liệu lớn bằng point cloud/particles/tree cells/heatmap hoặc overlay tương ứng.
-- Query, visited nodes, neighbor set, approximation hoặc memory/performance comparison phải nhìn thấy được trong UI/viewport, không chỉ in benchmark ra console.
-- Khi dữ liệu lớn, màu sắc/kích thước/opacity cần được dùng có chủ đích để người xem vẫn đọc được cấu trúc thay vì một đám điểm vô nghĩa.
+- Dùng hình có hướng như tam giác/mũi tên; màu và kích thước giúp đọc đàn mà không che toàn cảnh.
+- Bán kính và vector của cá thể được chọn có nhãn/giá trị. Controls không che vùng chuyển động chính.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Brute-force query
-- Benchmark harness
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết neighbor loop, ba quy tắc steering, giới hạn vector, bước cập nhật và benchmark; không dùng flocking/physics engine.
+- C++20/SDL3, presentation CPU theo quy định trước phần OpenGL. Kế thừa vector, timing và camera 2D nhưng giải thích đường đi của dữ liệu.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ benchmark console không visualization.
-- Dùng spatial grid ngay từ đầu.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chuyển động được tạo bằng quỹ đạo, random velocity mới mỗi frame hoặc animation định sẵn thay cho steering.
+- Có một query con trỏ nhưng không tính tương tác cho toàn đàn.
+- Cập nhật in-place làm thay đổi kết quả theo thứ tự duyệt, hoặc dùng displacement cố định mỗi frame.
+- Chỉ có Canvas/video hoặc vài cá thể ở bản cuối.
 
 ### Acceptance Criteria
 
-- Có bảng thời gian theo N.
-- Kết quả query đúng.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Fixture nhỏ có neighbor IDs và steering biết trước: không hàng xóm, một hàng xóm, đối xứng, trùng vị trí và trường hợp qua biên nếu wrap.
+- Self không nằm trong neighbor set; distance/radius và điều kiện tại biên được kiểm độc lập.
+- Cùng seed, snapshot, tham số và dt cho kết quả tái lập; đổi thứ tự lưu trữ rồi ánh xạ theo ID cho cùng bước cập nhật trong tolerance công bố.
+- Speed/acceleration không vượt giới hạn; không có NaN/Inf ở các ca suy biến; so cùng thời gian mô phỏng với nhiều dt để thấy sai số tích phân.
+- Ở preset 1.024 cá thể, thay trọng số làm thay đổi hành vi có thể giải thích; Pause/step/reset và debug cá thể hoạt động.
+- Có bảng công việc/thời gian theo N, source đầy đủ, tests và checklist desktop riêng.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
 
 ---
 
-## Project 28 — Chia “thành phố hạt” thành ô: tìm hàng xóm bằng Spatial Grid
+## Project 28 — Đàn Boids lớn với Spatial Grid
 
-**Mức tham vọng trực quan:** Simulation / data-rich visualization
+**Vai trò:** Nâng cấp hiệu năng của chính ứng dụng Project 27
+
+**Mức tham vọng trực quan:** Đàn lớn có chuyển động thật; grid là công cụ phục vụ mô phỏng
 
 ### Đề bài / mục tiêu sản phẩm
 
-Dùng uniform grid/spatial hash cho cùng bài toán Project 27 và chứng minh kết quả khớp brute force.
+Giữ nguyên luật Boids, quy tắc biên và integrator của Project 27, thay cách tìm hàng xóm bằng uniform spatial grid để chạy đàn lớn. Người học phải biết grid giảm công việc ở đâu và tốn chi phí gì để dựng lại khi đàn di chuyển.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Toggle Brute/Grid, cùng neighbor set nhưng thời gian khác.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Đàn ít nhất 10.000 cá thể chuyển động theo ba quy tắc. Có thể chuyển Brute/Grid ở preset nhỏ trên cùng state, kiểm neighbor/steering và xem toàn bước nhanh hay chậm hơn. Grid và cell occupancy chỉ là lớp debug.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Cùng dataset Project 27.
-- Uniform grid/spatial hash.
-- Toggle brute-force/grid và compare neighbor IDs.
+- Dựng lại grid từ snapshot position của mỗi bước; ánh xạ cell xử lý đúng tọa độ âm và biên domain.
+- Duyệt mọi cell có thể giao bán kính query theo cell size đang chọn, rồi lọc bằng khoảng cách chính xác.
+- Không thay luật steering, không giới hạn số hàng xóm và không bỏ cá thể để tạo speedup.
+- Bản brute force vẫn dùng được cho validation và benchmark nhỏ; có ca phân bố đều, tụ cụm và cell size bất lợi.
+- Tách build grid, candidate query, steering/update và tổng bước; đếm candidate/actual neighbors và occupancy.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- 100k points target; scale thêm nếu máy chịu.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Preset nghiệm thu ít nhất 10.000 cá thể được cập nhật đầy đủ; có preset nhỏ tái dùng fixture Project 27.
+- Dùng cùng snapshot nhỏ để đo cả hai thuật toán. Không buộc chạy brute force 10.000 cá thể liên tục trong UI; phép so lớn phải hữu hạn và hủy được.
+- Scale cao hơn là mở rộng theo máy, không thay ngưỡng bắt buộc.
 
 ### Tương tác bắt buộc
 
-- Mouse query, cell/debug toggle.
+- Đổi N, radius, cell size, seed và trọng số; chọn cá thể; Pause/Reset/single-step.
+- Toggle Brute/Grid ở preset phù hợp và bật cell boundaries, occupancy, candidate/actual neighbors.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Ứng dụng phải trực quan hóa được quy mô dữ liệu lớn bằng point cloud/particles/tree cells/heatmap hoặc overlay tương ứng.
-- Query, visited nodes, neighbor set, approximation hoặc memory/performance comparison phải nhìn thấy được trong UI/viewport, không chỉ in benchmark ra console.
-- Khi dữ liệu lớn, màu sắc/kích thước/opacity cần được dùng có chủ đích để người xem vẫn đọc được cấu trúc thay vì một đám điểm vô nghĩa.
+- Giữ cách đọc hướng đàn ở 27; có chế độ quan sát sạch và chế độ debug grid trên cùng ứng dụng.
+- Hiển thị chi phí dựng grid bên cạnh thời gian query, không chỉ một con số speedup.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Cell indexing/hash
-- Grid build/query
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết cell indexing/storage, build/query và validator so với brute force; không dùng thư viện spatial index.
+- Dùng double buffering như 27. Quy tắc wrap nếu có phải nhất quán ở cả cell lookup và phép đo khoảng cách; không duyệt trùng cell khi radius lớn.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ render grid lines.
-- Không chứng minh query đúng so brute-force.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ vẽ đường kẻ grid hoặc đổi màu theo cell.
+- Tăng hiệu năng bằng cách đổi luật đàn, cắt hàng xóm hoặc bỏ qua chi phí rebuild.
+- Query đúng cho một con trỏ nhưng sai khi cập nhật toàn đàn.
+- Chỉ đạt preset nhỏ hơn 10.000 cá thể.
 
 ### Acceptance Criteria
 
-- Neighbor set khớp reference.
-- Có build/query timings.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Neighbor IDs khớp brute force trên cùng snapshot; kiểm radius nhỏ/bằng/lớn hơn cell size, biên cell, biên domain và cụm rất đặc.
+- Steering và state sau một bước khớp 27 theo tolerance công bố; không dùng quỹ đạo dài phải trùng bit làm oracle duy nhất.
+- Mỗi cá thể được đưa vào đúng cell, candidate không làm đếm trùng actual neighbor và không mất hàng xóm qua biên.
+- Preset 10.000 cá thể có hành vi đàn thực sự; UI và hủy benchmark vẫn phản hồi.
+- Báo median và độ phân tán của toàn bước ở nhiều N/phân bố/cell size, có ca grid không thắng; không tuyên bố luôn nhanh hơn.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
 
 ---
 
-## Project 29 — Bản đồ tự chia ô: Quadtree nhìn thấy được và truy vấn bằng vùng chọn
+## Project 29 — Biên tập bản đồ 2D lớn bằng Quadtree
 
-**Mức tham vọng trực quan:** Simulation / data-rich visualization
+**Vai trò:** Công cụ biên tập; cấu trúc không gian phục vụ thao tác trên bản đồ
+
+**Mức tham vọng trực quan:** Bản đồ có đối tượng mang diện tích, không phải scatter plot
 
 ### Đề bài / mục tiêu sản phẩm
 
-Click thêm point; quadtree tự subdivide và rectangle/circle query chỉ đi qua node cần thiết.
+Tự xây dựng công cụ xem và chỉnh sửa một bản đồ 2D lớn gồm nhà, cây hoặc vùng chức năng biểu diễn bằng hình có kích thước. Quadtree hỗ trợ chọn đối tượng và loại bỏ những đối tượng ngoài viewport khi pan/zoom.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Visualizer hiển thị node boundaries, visited và pruned nodes.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Người dùng tìm một vùng trên bản đồ, kéo chọn các đối tượng, di chuyển hoặc xóa chúng rồi thấy kết quả cập nhật ngay. Bật debug để giải thích node nào được duyệt/cắt; tắt debug vẫn là một công cụ bản đồ sử dụng được.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Interactive quadtree visible boundaries.
-- Points inserted dynamically.
-- Range selection query with visited/pruned nodes.
+- Dataset seed tái lập với ID, loại đối tượng, world position và AABB có diện tích khác nhau; hình vẽ tương ứng với bounds truy vấn.
+- Camera World ↔ Screen, pan/zoom quanh cursor, click-select và rectangle range selection theo giao AABB.
+- Thêm, di chuyển, xóa đối tượng; cập nhật index và selection theo ID ổn định, không để lại bản ghi cũ.
+- Quadtree xử lý đối tượng vắt qua đường chia; công bố quy tắc lưu ở cha hoặc nhân bản có dedup, giới hạn depth/capacity và chính sách root bounds.
+- Viewport culling dùng cùng index; brute-force reference cho query và thống kê số đối tượng/node được xét.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Ít nhất hàng nghìn points.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Bản đồ ít nhất 100.000 đối tượng có kích thước thật; có phân bố đều, cụm dày và đối tượng lớn cắt nhiều quadrant.
+- Pan/zoom chỉ cần vẽ những đối tượng liên quan viewport, nhưng tổng dataset/index phải chứa đủ quy mô nghiệm thu.
 
 ### Tương tác bắt buộc
 
-- Click add; drag query rectangle/circle.
+- Pan/zoom, click chọn, kéo vùng chọn, kéo nhóm đối tượng, thêm/xóa và reset dataset.
+- Toggle tree/query debug và reference check; hiển thị số đã chọn và thao tác đang thực hiện.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Ứng dụng phải trực quan hóa được quy mô dữ liệu lớn bằng point cloud/particles/tree cells/heatmap hoặc overlay tương ứng.
-- Query, visited nodes, neighbor set, approximation hoặc memory/performance comparison phải nhìn thấy được trong UI/viewport, không chỉ in benchmark ra console.
-- Khi dữ liệu lớn, màu sắc/kích thước/opacity cần được dùng có chủ đích để người xem vẫn đọc được cấu trúc thay vì một đám điểm vô nghĩa.
+- Loại đối tượng có màu/hình phân biệt, selection và drag preview rõ. Cảnh quan là bản đồ có cấu trúc chứ không chỉ hàng trăm nghìn chấm.
+- Node boxes và visited/pruned nodes bật được nhưng không phải đầu ra duy nhất.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Quadtree insert/query
-- Visualizer
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết Quadtree insert/remove/update/query, AABB intersection và camera interaction; không dùng thư viện spatial index.
+- Công bố quy tắc inclusive/exclusive ở cạnh và thứ tự chọn khi các đối tượng chồng nhau. Không chỉ index tâm của một đối tượng lớn.
 
 ### Không được coi là hoàn thành nếu
 
-- Một ảnh cây tĩnh.
-- Quadtree chỉ dùng để render nhưng không query.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Quadtree chỉ chứa point rồi dùng point-in-rectangle thay giao hình có diện tích.
+- Cây chỉ vẽ để minh họa, còn mọi thao tác vẫn quét toàn dataset không có so sánh.
+- Di chuyển/xóa làm còn kết quả cũ, trùng ID hoặc mất đối tượng cắt đường chia.
+- Chỉ có dataset vài nghìn đối tượng hoặc ảnh cây tĩnh.
 
 ### Acceptance Criteria
 
-- Query khớp brute force.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Query IDs khớp brute force trước và sau chuỗi thêm/di chuyển/xóa; có fixture nằm trên/cắt split, root edge, ngoài root và nhiều đối tượng chồng nhau.
+- Query không trả ID đã xóa hoặc trùng; di chuyển nhóm giữ selection và có chính sách rollback/báo lỗi nếu vượt root được công bố.
+- Culling không bỏ đối tượng đang giao viewport; kết quả hiển thị ở cùng camera tương đương bản brute force.
+- Tại ít nhất 100.000 đối tượng, hoàn thành được quy trình tìm vùng → chọn → di chuyển → xóa → kiểm lại; có số đo query/update/culling riêng.
+- Test biến đổi tọa độ, thao tác pointer/keyboard và source C++ độc lập được ghi nhận.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
 
 ---
 
-## Project 30 — Rừng hộp 3D: Octree cho point cloud trong không gian
+## Project 30 — Khảo sát point cloud 3D bằng Octree
 
-**Mức tham vọng trực quan:** Simulation / data-rich visualization
+**Vai trò:** Công cụ quan sát và trích xuất dữ liệu 3D
+
+**Mức tham vọng trực quan:** Point cloud có ngữ cảnh không gian, camera/depth và kết quả khảo sát
 
 ### Đề bài / mục tiêu sản phẩm
 
-Sinh point cloud 3D, chia bằng octree và query sphere/frustum trong camera.
+Tự xây dựng công cụ khảo sát một point cloud của căn phòng hoặc nhà xưởng, dùng Octree để tìm vùng quan tâm và culling. Người dùng phải lấy được thông tin và xuất dữ liệu đã chọn, không chỉ xem hộp cây.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Có debug boxes và thống kê node visited.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Di chuyển camera quanh/qua dữ liệu 3D, chọn vùng hộp hoặc cầu, xem count/bounds/centroid và xuất tập điểm. Color theo chiều cao hoặc thuộc tính giúp đọc sàn, tường và vật thể; frustum culling giảm dữ liệu cần vẽ.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Point cloud 3D + octree node boxes.
-- 3D range query/culling.
-- Free camera.
+- Có ít nhất một dataset phòng/xưởng có cấu trúc, được cung cấp dưới dạng XYZ hoặc CSV với schema và đơn vị công bố. Dữ liệu tổng hợp được phép nếu có hình học rõ, không chỉ random cloud.
+- Đọc dataset, giữ ID điểm ổn định và báo lỗi input hỏng; có fixture nhỏ độc lập.
+- Octree với AABB node, giới hạn depth/capacity, sphere query, box query và frustum culling.
+- Di chuyển/đổi kích thước vùng chọn trong world space; lọc theo khoảng chiều cao hoặc thuộc tính có trong dataset.
+- Thống kê count, AABB, centroid của tập đã chọn; export tọa độ và ID ra file theo định dạng đã công bố.
+- Brute-force validator và thống kê visited/pruned nodes; layer debug chỉ bật khi cần.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Tens/hundreds thousands points tùy máy.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Dataset nghiệm thu ít nhất 100.000 điểm 3D thật; không thay bằng một minimap hoặc chỉ vẽ hộp node.
+- Có dữ liệu đều và dữ liệu tập trung trên bề mặt/cụm để khảo sát ảnh hưởng phân bố; giới hạn file/bộ nhớ rõ.
 
 ### Tương tác bắt buộc
 
-- FPS/orbit camera; query sphere/frustum toggle.
+- Camera orbit/free-fly, chọn kiểu box/sphere, đổi vị trí/kích thước vùng, lọc và xóa selection.
+- Export tập đã chọn, toggle frustum culling và node debug; có reset camera về toàn dataset.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Ứng dụng phải trực quan hóa được quy mô dữ liệu lớn bằng point cloud/particles/tree cells/heatmap hoặc overlay tương ứng.
-- Query, visited nodes, neighbor set, approximation hoặc memory/performance comparison phải nhìn thấy được trong UI/viewport, không chỉ in benchmark ra console.
-- Khi dữ liệu lớn, màu sắc/kích thước/opacity cần được dùng có chủ đích để người xem vẫn đọc được cấu trúc thay vì một đám điểm vô nghĩa.
+- Perspective, depth cue và point size/color có chủ đích để đọc cấu trúc phòng/xưởng.
+- Vùng chọn và thống kê rõ, camera không bị reset khi thay filter; empty selection có thông báo, không tạo NaN centroid.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Octree
-- AABB tests
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết Octree build/query, AABB-sphere/box/frustum tests và tính thống kê; không dùng thư viện point-cloud/spatial index thay phần cốt lõi.
+- Nếu dùng ray để đặt vùng chọn, giải thích bài cầu nối ray/camera theo Mục 3.3. Presentation vẫn theo giới hạn CPU trước phần OpenGL.
 
 ### Không được coi là hoàn thành nếu
 
-- Minimap 2D của octree.
-- Chỉ serialize tree không visualize/query.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ có cloud ngẫu nhiên và các hộp debug, không khảo sát hoặc xuất được dữ liệu.
+- Dùng culling nhưng không kiểm tra mất điểm tại cạnh frustum/query.
+- Bản cuối ít hơn 100.000 điểm hoặc không có camera 3D thật.
 
 ### Acceptance Criteria
 
-- Range query khớp brute force.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Sphere/box query và filter trả đúng tập ID so brute force; kiểm điểm trên biên, trùng vị trí, negative coordinates, node split và tập rỗng.
+- Culling không có false negative trên các fixture cạnh/near plane và ảnh so với chế độ không culling tại cùng camera.
+- Count/bounds/centroid khớp fixture độc lập; export đọc lại giữ đúng tập ID và tọa độ trong precision công bố.
+- Với dataset ít nhất 100.000 điểm, hoàn thành quy trình mở → khảo sát → chọn/lọc → xem thống kê → xuất → đọc lại.
+- Báo build/query/culling/render và bộ nhớ riêng; không coi việc giảm điểm trước truy vấn là tăng tốc thuật toán.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
 
 ---
 
 ## Project 31 — Thiên hà hạt: N-body từ O(N²) đến Barnes–Hut
 
-**Mức tham vọng trực quan:** Simulation / data-rich visualization
+**Vai trò:** Ứng dụng mô phỏng và thí nghiệm đánh đổi độ chính xác/chi phí
+
+**Mức tham vọng trực quan:** Thiên hà có cấu trúc động, camera và thông tin xấp xỉ
 
 ### Đề bài / mục tiêu sản phẩm
 
-Mô phỏng lực hấp dẫn cho hàng nghìn vật thể và so brute force với tree approximation.
+Mô phỏng một hệ hấp dẫn nhiều vật thể rồi dùng Barnes–Hut để xấp xỉ ảnh hưởng của các cụm ở xa. Khác grid ở Boids, đây là tương tác xa được tổng hợp theo khối lượng và tâm khối, không phải cắt bỏ mọi vật ngoài một bán kính.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Galaxy toy có slider theta, runtime và force-error plot.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Hệ nhiều nghìn vật thể tạo cụm hoặc đĩa/quỹ đạo theo lực hấp dẫn thật. Người dùng chỉnh theta để quan sát chi phí và sai số lực; chế độ debug chỉ ra node nào được mở hoặc được chấp nhận làm nguồn tổng hợp.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- N-body simulation visible as galaxy/system.
-- Brute-force reference + Barnes–Hut mode.
-- Theta/error/runtime controls.
+- Position, velocity, mass và gravity solver có softening công bố; integrator/timestep cố định giữa hai mode khi so sánh.
+- Direct all-pairs làm reference ở hệ nhỏ hoặc tập đích được chọn; Barnes–Hut có aggregate mass/center of mass và opening criterion.
+- Bỏ self interaction; không chấp nhận node chứa chính target như một nguồn tổng hợp. Có giới hạn depth cho vật thể trùng/gần trùng.
+- Preset seed tái lập, force-error report tại cùng snapshot; năng lượng/động lượng theo thời gian để phân biệt với integration error.
+- Có thể dùng quadtree cho hệ 2D hoặc octree cho hệ 3D, nhưng công bố lựa chọn và không gọi bản 2D là thế giới 3D.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Thousands+ bodies, đủ để thấy scaling.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Bản cuối có preset ít nhất 4.096 vật thể cập nhật bằng gravity thật; reference nhỏ có tối thiểu các ca 2, 3 và 256 vật thể.
+- Force-error sweep theo nhiều theta trên snapshot cố định; reference lớn chạy hữu hạn theo ngân sách, không treo UI.
 
 ### Tương tác bắt buộc
 
-- Pan/zoom/3D camera; theta slider; reset presets.
+- Camera pan/zoom hoặc orbit khi 3D, Pause/Reset/single-step, chọn theta và timestep, chọn preset.
+- Chọn target hoặc tập mẫu để xem direct force, approximate force và accepted/opened nodes.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Ứng dụng phải trực quan hóa được quy mô dữ liệu lớn bằng point cloud/particles/tree cells/heatmap hoặc overlay tương ứng.
-- Query, visited nodes, neighbor set, approximation hoặc memory/performance comparison phải nhìn thấy được trong UI/viewport, không chỉ in benchmark ra console.
-- Khi dữ liệu lớn, màu sắc/kích thước/opacity cần được dùng có chủ đích để người xem vẫn đọc được cấu trúc thay vì một đám điểm vô nghĩa.
-- Galaxy/N-body phải có đủ hạt để tạo cấu trúc thị giác như cụm, disk hoặc quỹ đạo; dùng trail/brightness/size/color theo mass hoặc speed.
-- Có camera pan/zoom hoặc orbit nếu 3D; slider approximation phải phản ánh ngay trong simulation/metrics.
+- Hạt có color/brightness/size theo đại lượng công bố; có cấu trúc đàn sao đọc được và trails có giới hạn tài nguyên.
+- Biểu đồ sai số/chi phí bổ trợ cho simulation, không thay cảnh động.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- N-body solver
-- Barnes–Hut traversal
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết tree aggregation/traversal, gravity và integration; không dùng N-body/physics engine.
+- Công bố softening, đơn vị hoặc reduced units, cách tính norm và chuẩn hóa sai số khi reference force gần 0.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ render random particles không gravity.
-- Dùng Barnes-Hut không có brute-force validation.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Dùng quỹ đạo định sẵn/random motion thay gravity.
+- Gọi radius cutoff là Barnes–Hut hoặc không có force reference.
+- Dùng khác integrator/dt giữa hai mode rồi quy mọi sai khác cho cây.
+- Chỉ mô phỏng vài chục vật thể ở bản cuối.
 
 ### Acceptance Criteria
 
-- Theta nhỏ → error giảm, cost tăng theo xu hướng.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Aggregate mass/center of mass khớp fixture; tree không tự tác động và kết thúc với điểm trùng vị trí.
+- Direct force ở hệ hai/ba vật thể khớp tính tay; Barnes–Hut so với direct tại cùng snapshot bằng absolute error và RMS/relative error có mẫu số được công bố.
+- Sweep theta cho thấy đánh đổi độ chính xác/chi phí trên các dataset tham chiếu; không yêu cầu sai số hay runtime giảm đơn điệu ở mọi snapshot.
+- Thí nghiệm giảm dt giữ theta cố định tách được integration error; giới hạn tolerance không chỉ dựa vào hai quỹ đạo hỗn loạn dài hạn.
+- Preset ít nhất 4.096 vật thể, camera, pause/step, seed và benchmark hữu hạn hoạt động; ghi nhận Debug/Release và desktop riêng.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
 
 ---
 
-## Project 32 — Cuộc đua bộ nhớ: 1 triệu particle với AoS và SoA
+## Project 32 — Đài phun hạt CPU: một triệu particle với AoS và SoA
 
-**Mức tham vọng trực quan:** Simulation / data-rich visualization
+**Vai trò:** Ứng dụng hệ hạt và thí nghiệm bố trí bộ nhớ; không phụ thuộc N-body
+
+**Mức tham vọng trực quan:** Đài phun động, vòng đời hạt rõ và benchmark có thể giải thích
 
 ### Đề bài / mục tiêu sản phẩm
 
-Viết hai layout dữ liệu và benchmark cùng một update loop.
+Tự xây dựng đài phun hạt CPU có emission, gravity, lifetime và tái sử dụng hạt. Lưu cùng state bằng AoS và SoA để đo cách truy cập dữ liệu ảnh hưởng tới chi phí cập nhật; không mặc định một layout luôn thắng.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Báo cáo throughput AoS vs SoA trên máy của bạn.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Hạt được phát ra, bay, hết thời gian sống và được tái sử dụng. Người dùng chuyển layout/workload mà không đổi mô hình; thấy số hạt thực sự được cập nhật, throughput và chi phí render tách riêng.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Benchmark executable with 1M particle records.
-- AoS vs SoA same update loop.
-- Repeated timing report.
+- Particle có ID/slot ổn định, position, velocity, age/lifetime và thuộc tính hiển thị; có emitter, gravity và quy tắc respawn theo seed.
+- Hai container AoS/SoA cùng mô hình, precision và thứ tự ngẫu nhiên theo ID/bước; chuyển layout bảo toàn state.
+- Có workload cập nhật một nhóm field và workload cập nhật đầy đủ vòng đời; tránh kết luận từ một access pattern duy nhất.
+- Benchmark Release có warm-up, nhiều lần lặp, checksum/kết quả quan sát được để tránh dead-code elimination; công bố flags và mọi khác biệt vectorization.
+- Vẽ đài phun và số đo update/render/toàn frame. Nếu vẽ subset, công bố số được vẽ riêng, không giảm số được mô phỏng.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- 1M records or memory-equivalent large N.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Có preset một triệu hạt sống được cập nhật trên CPU ở mỗi bước nghiệm thu; không chỉ cấp phát một triệu record rồi cập nhật vài nghìn.
+- Preset nhỏ để debug vòng đời, preset lớn để đo; không yêu cầu một FPS cố định trên mọi CPU.
 
 ### Tương tác bắt buộc
 
-- CLI or in-app trigger benchmark.
+- Pause/Reset/single-step, đổi AoS/SoA, chọn workload/N, điều chỉnh emitter/gravity/lifetime và chạy/hủy benchmark.
+- Quan sát số alive/updated/rendered, thời gian và lượng bộ nhớ từng container.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Ứng dụng phải trực quan hóa được quy mô dữ liệu lớn bằng point cloud/particles/tree cells/heatmap hoặc overlay tương ứng.
-- Query, visited nodes, neighbor set, approximation hoặc memory/performance comparison phải nhìn thấy được trong UI/viewport, không chỉ in benchmark ra console.
-- Khi dữ liệu lớn, màu sắc/kích thước/opacity cần được dùng có chủ đích để người xem vẫn đọc được cấu trúc thay vì một đám điểm vô nghĩa.
+- Đài phun có hướng phát và quỹ đạo/lifetime nhìn được qua color/size; không dùng mảng số hoặc bảng benchmark làm toàn bộ sản phẩm.
+- Sampling hiển thị nếu có phải tái lập và được ghi rõ; luôn giữ chương trình phản hồi.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Benchmark
-- AoS/SoA containers
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết container, loop cập nhật, vòng đời và benchmark; giữ thuật toán tương đương, không trộn đổi layout với đổi solver.
+- Baseline một luồng CPU, không cần thread pool 75. Không dùng OpenGL/compute để cập nhật hoặc né phần presentation CPU trước 33.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ mô tả cache theory.
-- So hai thuật toán khác nhau làm benchmark không công bằng.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ benchmark một phép cộng trên struct không có ứng dụng hệ hạt.
+- Khác seed/precision/công việc giữa hai bản hoặc tính render/copy cho chỉ một bản.
+- Tuyên bố SoA luôn nhanh hơn, hoặc chỉ cấp phát mà không cập nhật đủ một triệu hạt.
+- Chỉ có Canvas hoặc throughput in console.
 
 ### Acceptance Criteria
 
-- Báo median/average từ nhiều lần.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Fixture nhỏ kiểm emission, gravity, age, hết lifetime và respawn; không có hạt rò rỉ slot hoặc sinh NaN/Inf.
+- AoS/SoA cùng snapshot/seed/dt cho state/checksum tương đương theo tolerance; round-trip layout giữ các field.
+- Tại preset một triệu hạt sống, công bố số updated thực tế và dung lượng; kết quả benchmark phải được sử dụng và đối chiếu.
+- Báo median/độ phân tán cho cả workload ít field và toàn state; tách conversion, update, render và thời gian toàn bước.
+- Giữ các kết quả không có speedup; ghi cấu hình máy/build, giới hạn phép đo và quy trình tái lập.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
 
 ---
 
@@ -2312,7 +2486,9 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ## Project 33 — Vẽ lại tam giác cũ bằng GPU và đối chiếu từng bước với renderer CPU
 
-**Mức tham vọng trực quan:** Advanced GPU / real-time showcase
+**Vai trò:** Bài thí nghiệm chuyển tiếp CPU → GPU
+
+**Mức tham vọng trực quan:** Foundation GPU / đối chiếu pipeline rõ ràng
 
 ### Đề bài / mục tiêu sản phẩm
 
@@ -2341,9 +2517,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Demo GPU phải chạy real-time và có chất lượng trình bày xứng đáng với việc chuyển sang GPU: viewport lớn, chuyển động mượt, depth/lighting/color rõ ràng.
-- Shader project phải có ít nhất một chế độ 'showcase' sạch bên cạnh debug mode.
-- Không chấp nhận chỉ render tam giác/cube rất nhỏ ở giữa cửa sổ mà không có camera, nền hoặc context trực quan phù hợp với đề bài.
+- Tam giác đủ lớn, có nhãn vertex và viewport tương ứng; có thể kéo vertex/đổi màu để so hai pipeline trên cùng input.
+- Có bảng tọa độ/coverage hoặc chế độ difference cho fixture. Không cần thêm camera/lighting không liên quan vào bài chuyển tiếp.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
@@ -2362,7 +2537,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
-- Cùng input cho hình tương đương.
+- Cùng input cho hình tương đương theo quy tắc coverage/color đã công bố; kiểm vertex ở clip/NDC/screen, resize/aspect và winding.
+- Fixture xác định trước kiểm các pixel nằm trong tam giác; khác biệt pixel cạnh do fill rule/precision phải được giải thích và có giới hạn, không dùng ảnh nhìn giống làm bằng chứng duy nhất.
 - Giải thích GPU thay phần nào của CPU pipeline.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -2374,65 +2550,65 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ---
 
-## Project 34 — Hai renderer, một khối lập phương: F1 CPU, F2 GPU
+## Project 34 — Một model viewer, hai renderer CPU và GPU
 
-**Mức tham vọng trực quan:** Advanced GPU / real-time showcase
+**Vai trò:** Nâng cấp model viewer Project 21; so sánh hai backend trên cùng dữ liệu
+
+**Mức tham vọng trực quan:** Mesh thực có camera, depth, culling và frame statistics
 
 ### Đề bài / mục tiêu sản phẩm
 
-Dùng chung Mesh/Camera/Math, chuyển backend render bằng phím.
+Chuyển model viewer CPU đã xây sang OpenGL, giữ chung Mesh, Camera, Math và state ứng dụng. Người dùng chọn backend để hiểu GPU thay phần nào của pipeline và đo chi phí tương ứng.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Cube/model có thể render CPU hoặc OpenGL và hiển thị frame timings.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Cùng mô hình OBJ có thể xoay, xem bằng CPU hoặc GPU mà không đổi tư thế camera/object. Depth/culling và chế độ shading tương ứng có thể đối chiếu; khối lập phương chỉ là fixture debug, không phải toàn bộ sản phẩm cuối.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Cùng cube/mesh/camera render được bằng CPU và GPU backends.
-- Depth/culling GPU.
-- Frame stats.
+- Tái dùng loader/dataset và cấu trúc scene từ 21; không viết hai application tách rời.
+- Backend CPU giữ transform/clipping/raster/depth; backend GPU có vertex/index buffers, shader, uniforms và depth/culling đúng.
+- Ít nhất hai mesh từ viewer 21, gồm một mesh nhiều nghìn triangle; có cube nhỏ để tìm lỗi convention.
+- Camera/object transform, resize, viewport/aspect, light/shading và lựa chọn mesh là state chung.
+- Frame statistics tách CPU preparation/submission, GPU execution khi đo được và presentation; không ép hai bộ đo không tương đương thành một speedup.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Cùng transform/camera cho hai backend.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Giữ khả năng xem mesh thực của 21, không giảm về một cube sau khi chuyển GPU.
+- Cùng input/convention cho hai backend; công bố khác biệt hợp lệ do rasterization/precision và định nghĩa phép so.
 
 ### Tương tác bắt buộc
 
-- F1 CPU/F2 GPU hoặc UI toggle.
+- F1 CPU/F2 GPU hoặc toggle rõ; đổi mesh, orbit/pan/zoom, reset camera, depth/culling và debug normals/wireframe nếu chế độ tương ứng được chọn.
+- Chuyển backend khi đang quan sát không reset scene hoặc làm input mất tác dụng.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Demo GPU phải chạy real-time và có chất lượng trình bày xứng đáng với việc chuyển sang GPU: viewport lớn, chuyển động mượt, depth/lighting/color rõ ràng.
-- Shader project phải có ít nhất một chế độ 'showcase' sạch bên cạnh debug mode.
-- Không chấp nhận chỉ render tam giác/cube rất nhỏ ở giữa cửa sổ mà không có camera, nền hoặc context trực quan phù hợp với đề bài.
+- Model đủ lớn trong viewport, depth/lighting giúp đọc hình; debug convention và chế độ xem sạch đều sử dụng được.
+- Không trang trí scene để che clipping/culling sai; stats không che mô hình chính.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- GPU mesh wrapper nhỏ
-- Uniform handling
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết GPU mesh wrapper, shader/uniform handling và phép đối chiếu; không dùng engine che backend.
+- Shared state tách khỏi resource theo backend; cleanup/resize/switch không rò tài nguyên hoặc tạo state lệch.
 
 ### Không được coi là hoàn thành nếu
 
-- Hai demo tách rời không dùng chung scene state.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Hai demo có camera/mesh state riêng hoặc CPU renderer cũ bị bỏ.
+- Chỉ có cube và bỏ model viewer/mesh thật.
+- Chỉ so FPS mà không giải thích khác biệt công việc hoặc không có kiểm chứng convention.
 
 ### Acceptance Criteria
 
-- Transform nhất quán giữa hai backend.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Tại cùng snapshot, các vertex mẫu có clip/NDC/screen và depth nhất quán trong tolerance; chỉ rõ origin, handedness, winding và depth range.
+- So ảnh fixture ở vùng nội thất tam giác và mặt trước/sau bằng quy tắc coverage/color/depth đã công bố; không yêu cầu mọi pixel cạnh giống bit nếu quy tắc raster khác nhau.
+- Hai mesh thực hoạt động ở cả backend; switch ít nhất 20 lần rồi resize, đổi mesh và kiểm tài nguyên.
+- Camera/shading/culling state không reset khi switch; benchmark dùng cùng scene, resolution và cấu hình sync/VSync.
+- Ghi riêng kết quả build/tests, desktop và phép đo phần cứng.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
 
 ---
 
@@ -2492,6 +2668,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Lỗi compile/link chỉ rõ file/dòng hoặc log tương ứng; shader hỏng không thay program tốt đang dùng và có thể sửa/reload tiếp mà không restart.
+- Giữ gallery ít nhất bốn hiệu ứng theo phạm vi đã nêu, nhưng tất cả chạy trong cùng công cụ; resize/time/mouse uniforms và cleanup có test/checklist riêng.
 - Compile error hữu ích.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -2558,6 +2736,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Ray-sphere có nghiệm giao giải tích để đối chiếu hit distance; ray miss, tiếp tuyến/gần bề mặt và camera trong vật thể có chính sách rõ.
+- Giới hạn max steps/distance/hit epsilon công bố; kiểm ảnh hưởng epsilon và sai số normal, phân biệt tìm bề mặt SDF với tích lũy mật độ ở 54.
 - Có max steps/distance.
 - Phân biệt SDF ray marching với general ray tracing.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -2575,11 +2755,13 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ## Project 37 — Máy tính vector 1 triệu phần tử trên GPU
 
-**Mức tham vọng trực quan:** Advanced GPU / real-time showcase
+**Vai trò:** Bài thí nghiệm vòng đời compute và phép đo
+
+**Mức tham vọng trực quan:** Dashboard kiểm chứng có dữ liệu đầu vào/đầu ra
 
 ### Đề bài / mục tiêu sản phẩm
 
-Dùng compute shader cộng/scale mảng lớn và kiểm tra từng phần tử với CPU.
+Dùng compute shader cộng/scale mảng lớn để hiểu upload → dispatch → synchronization → kiểm kết quả. Đây là nền cho hệ hạt 38 và các pass 39–40, không phải một scene particle giả để minh họa phép cộng.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
@@ -2625,7 +2807,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
-- GPU output khớp CPU tolerance.
+- GPU output khớp CPU theo absolute/relative tolerance công bố; fixture có 0, số âm, dữ liệu biết trước và N không chia hết workgroup.
+- Có ít nhất một preset từ một triệu phần tử; kiểm tail không đọc/ghi ngoài buffer và không để phần tử chưa xử lý bị coi là đúng.
+- Dashboard tách GPU kernel time đã đồng bộ với end-to-end upload/dispatch/readback, có warm-up và nhiều lần lặp; không hứa GPU luôn nhanh hơn.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
 - Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
@@ -2691,6 +2875,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Kiểm kernel ở N nhỏ, N không chia hết workgroup và lifetime/respawn; so một bước position/velocity với CPU oracle.
+- Preset một triệu hạt là bắt buộc; năm triệu là mốc phần cứng riêng. Công bố active/updated/rendered, bộ nhớ và thời gian từng pass.
 - Simulation update thật trên GPU.
 - Không copy toàn bộ về CPU mỗi frame.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -2705,7 +2891,9 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ## Project 39 — Cộng một triệu số theo cây: Reduction và Prefix Sum trên GPU
 
-**Mức tham vọng trực quan:** Advanced GPU / real-time showcase
+**Vai trò:** Bài thí nghiệm primitive song song và ứng dụng tạo offsets/compaction
+
+**Mức tham vọng trực quan:** Dashboard có bước trung gian và kết quả kiểm chứng
 
 ### Đề bài / mục tiêu sản phẩm
 
@@ -2713,7 +2901,7 @@ Tự viết parallel reduction và exclusive scan làm primitive cho GPU grids.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-GPU sum/min/max/scan khớp CPU.
+GPU sum/min/max/exclusive scan khớp CPU. Mảng nhỏ có thể xem từng bước; mảng lớn có số đo. Có fixture dùng scan để tạo cell offsets và compact danh sách ID đang sống, liên hệ trực tiếp với Project 40.
 
 Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
 
@@ -2755,8 +2943,11 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
-- Integer exact.
-- Float ghi rõ non-associativity.
+- Integer exact trên miền đầu vào không overflow đã công bố; fixture gồm N=0/1, không phải power-of-two, qua nhiều workgroup và ít nhất một triệu phần tử.
+- Với float, ghi rõ non-associativity, tolerance và reference chính xác hơn khi cần; không dùng thứ tự cộng CPU làm chân lý bit-exact.
+- Exclusive scan có output[0]=0 khi N>0 và hiệu hai prefix kề nhau đúng input tương ứng; bước carry giữa workgroup có test riêng.
+- Từ counts biết trước tạo đúng cell ranges; fixture compaction giữ đúng tập ID sống và thứ tự được công bố, không trùng/mất ID.
+- Tách thời gian các pass và readback; không dùng synchronization trong một workgroup thay đồng bộ các dispatch.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
 - Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
@@ -2767,68 +2958,70 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ---
 
-## Project 40 — “Thành phố hạt” trên GPU: xây grid và tìm hàng xóm song song
+## Project 40 — Đàn Boids trên GPU: grid, hàng xóm và steering song song
 
-**Mức tham vọng trực quan:** Advanced GPU / real-time showcase
+**Vai trò:** Nâng cấp Boids 28 bằng compute và primitive 37–39
+
+**Mức tham vọng trực quan:** Đàn lớn chuyển động thật, debug pipeline và dữ liệu hàng xóm được kiểm chứng
 
 ### Đề bài / mục tiêu sản phẩm
 
-Chuyển Project 28 lên GPU và tạo contiguous cell ranges.
+Chuyển việc dựng grid, tìm hàng xóm, tính steering và cập nhật đàn Boids từ CPU sang GPU. Giữ mô hình separation/alignment/cohesion của 27–28; contiguous cell ranges là cấu trúc phục vụ mô phỏng, không phải sản phẩm cuối.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-GPU neighbor candidates khớp CPU reference ở N nhỏ rồi scale lớn.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Đàn ít nhất 100.000 cá thể tự di chuyển theo quy tắc cục bộ, được cập nhật và render từ GPU state. Chọn một cá thể để thấy cell/candidates/actual neighbors và steering; dashboard giải thích chi phí từng pass.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- GPU cell grid built from particle positions.
-- Cell offsets/ranges available on GPU.
-- Neighbor query validated with CPU.
+- GPU pipeline có cell indexing, counts, exclusive scan thành offsets, scatter/sắp xếp ID vào cell ranges và neighbor traversal.
+- Dùng scan tự viết ở 39 hoặc pipeline tương đương được giải thích và kiểm chứng đầy đủ; không đọc toàn bộ counts về CPU để dựng ranges mỗi frame.
+- Toàn bộ separation/alignment/cohesion, giới hạn vector và integration chạy trên GPU với read-state/write-state tách biệt.
+- Công bố barriers giữa các pass; không nhầm workgroup barrier với đồng bộ toàn dispatch.
+- CPU brute force/grid làm reference ở preset nhỏ; debug readback hữu hạn cho selected IDs, không copy toàn bộ state mỗi frame.
+- Hỗ trợ cell size/radius, distribution và quy tắc biên như 28. Có ca cell đông; không cắt hàng xóm khi buffer đầy.
+- Cấu trúc GPU grid tách khỏi luật steering để dùng tiếp ở MD/SPH. Khi chuyển từ 2D sang 3D phải dạy thêm indexing, stencil và tests 3D, không mặc định chỉ đổi một hằng số.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Validate at small N, benchmark 100k–1M.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Bản cuối cập nhật ít nhất 100.000 Boids thật; có preset một triệu để nghiệm thu mở rộng theo RAM/VRAM và mật độ.
+- Preset nhỏ cho CPU oracle; preset lớn có ngân sách bộ nhớ, occupancy/candidate counters và giới hạn chạy hữu hạn.
+- Không hứa FPS chung; nếu máy không chạy được mốc một triệu, ghi rõ chưa kiểm chứng mốc mở rộng, không ghi đã đạt.
 
 ### Tương tác bắt buộc
 
-- Debug selected particle/cell/neighbors.
+- N/seed, radius, cell size và ba trọng số; Pause/Reset/single-step, camera 2D và chọn cá thể.
+- Bật cell ranges/neighbor/steering debug ở subset, chạy/hủy validation hoặc benchmark theo batch.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Khi project có dữ liệu GPU lớn, phải có visualization trực tiếp của kết quả tính toán hoặc một dashboard benchmark trực quan nếu bản chất project thuần compute.
-- Các project particle/grid phải dùng viewport 3D hoặc 2D dày đặc phù hợp với dữ liệu; màu theo tốc độ/mật độ/cell/neighbor để thấy cấu trúc.
-- Scale lớn không được đánh đổi thành hình ảnh khó đọc; cần culling/opacity/point size/impostor hoặc camera control phù hợp.
-- Phải có chế độ debug trực quan cell grid/selected particle/neighbors trên một subset nhỏ, bên cạnh benchmark scale lớn.
-- Người dùng phải có thể chọn một particle và thấy candidate/actual neighbors của nó.
+- Cá thể có hướng và color/depth/opacity phù hợp để đọc đàn dày; chọn cá thể không làm đổi mô hình.
+- Có chế độ quan sát sạch và chế độ debug; đồ thị timings/build occupancy bổ trợ cho đàn đang chuyển động.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- GPU grid pipeline
-- CPU/GPU validator
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết compute kernels, GPU grid, scan/scatter, steering và CPU/GPU validator; không dùng thư viện flocking/spatial index thay phần cốt lõi.
+- GPU rendering dùng state GPU trực tiếp. Đổi cell size không thay neighbor predicate; bounds/overflow có kiểm tra.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ color particle by cell.
-- Không tạo data structure dùng được cho neighbor loops.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ tô màu particle theo cell hoặc query một điểm mà không cập nhật toàn đàn.
+- CPU tính steering/integration rồi gọi đó là GPU simulation.
+- Bỏ neighbor để giữ FPS, bỏ grid rebuild khỏi benchmark hoặc đọc toàn bộ state về CPU mỗi frame.
+- Chỉ chạy preset nhỏ hơn 100.000 cá thể ở bản cuối.
 
 ### Acceptance Criteria
 
-- Neighbor logic khớp reference.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Counts/offsets/ranges tạo một phân hoạch hợp lệ: offset tăng không giảm, tổng count=N, mỗi ID xuất hiện đúng một lần và nằm đúng cell.
+- Neighbor IDs khớp CPU ở snapshot nhỏ cho các ca qua biên, cell size nhỏ/lớn hơn radius, empty cell, cell rất đông và vị trí trùng.
+- Ba steering vector và state sau một bước khớp CPU trong tolerance; công bố ảnh hưởng thứ tự cộng số thực, không đòi quỹ đạo dài giống bit.
+- Kích thước dispatch không chia hết workgroup vẫn đúng; mọi stage bounds-check và dùng barrier đúng phạm vi.
+- Preset ít nhất 100.000 cá thể có hành vi Boids, không bỏ cập nhật; selected debug, pause/reset và hủy batch hoạt động.
+- Báo build grid/scan/scatter/neighbors/update/render, bộ nhớ và toàn bước; đánh giá cả phân bố bất lợi và ghi mốc một triệu riêng.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
 
 ---
 
@@ -2837,7 +3030,9 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ## Project 41 — Hai “nguyên tử” hút và đẩy nhau: trực quan hóa Lennard–Jones
 
-**Mức tham vọng trực quan:** Advanced Scientific Simulation / trực quan hóa giàu thông tin
+**Vai trò:** Bài thí nghiệm mô hình lực; nền cho Molecular Lab 42–45
+
+**Mức tham vọng trực quan:** Scientific foundation / hai hạt, đồ thị và kiểm chứng rõ
 
 ### Đề bài / mục tiêu sản phẩm
 
@@ -2886,6 +3081,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Kiểm lực từ âm đạo hàm potential ở vùng hút/đẩy và quanh cực tiểu; sweep bước đạo hàm số để tránh một tolerance che mọi lỗi.
+- r quá nhỏ, đơn vị/reduced units, tham số và giới hạn đồ thị có chính sách rõ. Hai hạt là thí nghiệm mô hình LJ, không đại diện mọi tương tác nguyên tử.
 - Numerical derivative gần analytic.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -2952,6 +3149,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture hai/ba hạt kiểm pair force đối nhau và một bước Velocity Verlet; lực/đơn vị nối rõ với 41.
+- Đo energy drift trên cùng state đầu và thời gian hữu hạn ở nhiều dt; giữ preset 1.000 hạt thật, không che force blow-up bằng clamp không được công bố.
 - Energy drift được định lượng.
 - Không che force blow-up.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -3015,6 +3214,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Wrap position và minimum-image displacement được kiểm riêng tại hai biên, negative coordinates và nhiều lần qua box; nếu có unwrapped state phải giữ nhất quán.
+- Hai hạt qua biên cho lực tương đương ca cùng displacement trong box; công bố cutoff/box constraints để tránh tính ảnh tuần hoàn sai.
 - Hai hạt sát hai biên tương tác như gần nhau.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -3048,7 +3249,7 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- 10k target; aim 100k CPU if reasonable.
+- Bắt buộc đạt ít nhất 10.000 hạt CPU; 100.000 là mục tiêu mở rộng theo phần cứng, với cùng mô hình và kiểm chứng.
 - Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
 
 ### Tương tác bắt buộc
@@ -3078,6 +3279,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Ít nhất 10.000 hạt MD thật ở preset nghiệm thu; 100.000 là mở rộng CPU theo máy, không thay bằng mức 1.000 hạt rồi gọi hoàn thành.
+- Neighbor list không bỏ cặp tiến vào cutoff trước lần rebuild tiếp theo; fixture có hạt qua biên tuần hoàn và chuyển động sát ngưỡng skin.
+- Đo build/rebuild/force/toàn bước; so force cùng snapshot với all-pairs và kiểm cả skin quá nhỏ/quá lớn.
 - Forces trong cutoff khớp reference.
 - Không bỏ neighbor.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -3147,6 +3351,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Đối chiếu small-N force, integration và diagnostics theo từng pass, không chỉ so ảnh; tail workgroup và overflow cell list có kiểm tra.
+- 100.000 hạt là tối thiểu, một triệu là mốc nâng cao và năm triệu là stretch theo phần cứng. Mọi mốc chỉ ghi đạt khi force/neighbor/integration thật đều được thực thi.
+- Giữ nhất quán mô hình ở 41–44; nếu đổi cutoff/precision/integrator phải có phép đo riêng, không quy mọi speedup cho GPU.
 - Small-N GPU step khớp CPU tolerance.
 - 5M chỉ thành công nếu update thật, không chỉ render.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -3214,6 +3421,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture nhỏ kiểm sand/wall/water, biên và số ô vật liệu nếu luật không có source/sink hoặc chuyển loại; seed và update order công bố.
+- Không gọi chuyển động cellular là nghiệm phương trình chất lưu hoặc dùng nó làm bằng chứng solver ở 49–51.
 - Giải thích được update order ảnh hưởng kết quả.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -3247,7 +3456,7 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Grid resolution sufficient for smooth diffusion, e.g. 128²+.
+- Preset nghiệm thu ít nhất 128×128 cells; ghi rõ dx/dy và timestep tương ứng.
 - Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
 
 ### Tương tác bắt buộc
@@ -3277,6 +3486,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Chọn được nguồn nhiệt và điều kiện biên; công bố diffusivity, dt, dx/dy và điều kiện ổn định của chính scheme được dùng.
+- Fixture trường hằng và một nghiệm/tình huống diffusion tham chiếu kiểm update; năng lượng chỉ bảo toàn khi điều kiện biên/nguồn tương ứng cho phép.
 - Có experiment stability vs dt/dx.
 - Nguồn đối xứng giữ symmetry gần đúng.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -3291,7 +3502,9 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ## Project 48 — Bản đồ gió: nhìn thấy gradient, divergence và curl
 
-**Mức tham vọng trực quan:** Advanced Scientific Simulation / trực quan hóa giàu thông tin
+**Vai trò:** Bài thí nghiệm vector calculus và chuyển động trong trường
+
+**Mức tham vọng trực quan:** Trường, tracer và các toán tử đọc được trực tiếp
 
 ### Đề bài / mục tiêu sản phẩm
 
@@ -3308,6 +3521,7 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 - 2D vector field arrows.
 - Presets source/sink/vortex/uniform.
 - Gradient/divergence/curl overlays.
+- Tracer tiến theo cùng vector field với dt để quan sát tác dụng của trường.
 
 ### Quy mô / độ phức tạp tối thiểu
 
@@ -3341,6 +3555,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Scalar potential cho gradient tách khỏi vector field cho divergence/curl; fixture hằng, tuyến tính, source/sink và vortex có đạo hàm biết trước.
+- Tracer di chuyển theo field với dt, bật/tắt được; overlay và tracer dùng cùng dữ liệu chứ không phải hai animation độc lập.
 - Uniform flow divergence≈0.
 - Source/sink có dấu hợp lý.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -3375,7 +3591,7 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Grid 128² or comparable; stable at interactive timestep.
+- Preset nghiệm thu ít nhất 128×128 cells; công bố điều kiện biên, iteration budget và giới hạn timestep.
 - Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
 
 ### Tương tác bắt buộc
@@ -3408,6 +3624,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Ghi chuẩn divergence, residual/iteration pressure trước/sau projection trên fixture có ngưỡng đặt trước; kiểm boundary consistency.
+- Tách ổn định khỏi độ chính xác: dt lớn có thể gây diffusion/lệch quỹ đạo dù không nổ số; ghi giới hạn bước và cách kiểm chứng advection.
 - Projection làm divergence norm giảm mạnh.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -3441,7 +3659,7 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- 1k starting, 5k minimum useful, scale upward.
+- Bắt đầu từ 1.000 hạt; tối thiểu 5.000 hạt ở bản cuối. Các mốc cao hơn, kể cả 100.000, là mở rộng theo phần cứng.
 - Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
 
 ### Tương tác bắt buộc
@@ -3474,6 +3692,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Preset cuối ít nhất 5.000 hạt SPH 2D thật; 1.000 là bước khởi đầu và các mốc cao hơn là mở rộng được ghi rõ.
+- Kernel/support radius và đơn vị 2D được công bố; density/pressure/viscosity và grid neighbors khớp all-pairs trên fixture nhỏ.
+- Có dam-break/đổ nước và ca equilibrium; theo dõi density error, dt, boundary leakage và giới hạn ổn định, không thay fluid bằng bóng nảy.
 - Log density distribution/timestep.
 - Không chỉ đánh giá bằng hình ảnh.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -3540,6 +3761,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Kernel normalization và đơn vị phải đúng 3D; không dùng nguyên hằng số 2D ở 50 cho density/force 3D.
+- Kiểm grid/neighbor, density, pressure, viscosity và một bước integration với CPU oracle nhỏ; reduction/scan dùng được qua nhiều workgroup.
+- 100.000 hạt là tối thiểu, 500.000/một triệu là mốc nâng cao; cảnh động và thống kê density/boundary leakage ghi riêng với profiler.
 - Small-N GPU density/force so CPU reference.
 - Profiler tách từng pass.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -3557,7 +3781,9 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ## Project 52 — Bắn tia vào hình học: chọn điểm chạm plane, sphere, box và triangle
 
-**Mức tham vọng trực quan:** Advanced Scientific Simulation / trực quan hóa giàu thông tin
+**Vai trò:** Công cụ hình học và bài cầu nối cho picking, volume, voxel
+
+**Mức tham vọng trực quan:** Ray/hit/normal rõ, dữ liệu giao có thể kiểm chứng
 
 ### Đề bài / mục tiêu sản phẩm
 
@@ -3606,6 +3832,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture ray song song, origin trong solid, tiếp tuyến, t âm và hit nhiều object kiểm nearest positive hit theo interval công bố.
+- Entry/exit áp dụng đúng cho solid sphere/AABB; plane/triangle là giao bề mặt, không tự tạo hai mặt vào/ra.
+- Hit point, normal và ray vẽ cùng world space; bài có thể dùng sớm để chuẩn bị picking, không phụ thuộc volume/CT.
 - Unit tests edge cases.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -3669,6 +3898,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture volume nhỏ có giá trị voxel biết trước kiểm indexing và nearest/trilinear ở tâm, cạnh, góc và boundary policy.
+- Slice orientation/spacing/unit ghi rõ, thống nhất với camera/phantom; xem slice không được gọi là tái tạo CT từ projections.
 - Synthetic symmetry tạo slice symmetry.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -3734,6 +3965,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Volume hằng và slab có kết quả tham chiếu cho từng mode; MIP/average/alpha compositing phân biệt rõ, không gán cùng ý nghĩa vật lý.
+- Đổi sampling step có so error/time và quy tắc opacity theo độ dài bước khi áp dụng; ray-box interval, empty volume và camera trong volume có fixture.
 - Step size cho tradeoff quality/performance rõ.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -3799,6 +4032,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Phantom đồng nhất/slab cho kết quả attenuation giải tích; kiểm I0, path length, đơn vị μ và ray không đi qua vật.
+- Giữ ít nhất ba nhóm vật liệu trong phantom 3D; nêu giả thiết nguồn/attenuation, phần scattering không mô hình hóa và giới hạn giáo dục, không suy ra hiệu lực lâm sàng.
 - Tăng mu/path length làm intensity giảm đơn điệu.
 - Ghi rõ là mô hình giáo dục.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -3864,6 +4099,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Công bố parallel-beam hoặc fan-beam và dùng forward/backprojection nhất quán; nếu đầu vào là intensity thì giải thích đổi về line integral thay vì backproject grayscale trực tiếp.
+- Phantom đơn giản có projection tính độc lập; đo sai số projection và reconstruction sau normalization công bố, không chỉ kiểm đối xứng.
+- Giữ khoảng 180 góc theo phạm vi; so unfiltered backprojection với phantom để thấy blur. Filtered backprojection là mở rộng có cầu nối lọc/Fourier và phép so riêng, không phải điều kiện ngầm của bản chuẩn.
 - Symmetric phantom cho output symmetry hợp lý.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -3928,6 +4166,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Mỗi photon có trạng thái kết thúc rõ; tổng absorbed/escaped/còn sống hoặc bị dừng theo budget khớp số phát. Scatter là sự kiện có thể lặp, không cộng số scatter events vào tổng trạng thái cuối.
+- Giữ tối thiểu 10.000 photon CPU; có nhiều seed/lần chạy, mô tả estimator, uncertainty và truncation bias; không yêu cầu sai số từng seed giảm đơn điệu.
 - Báo uncertainty, không chỉ ảnh.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -3999,6 +4239,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture empty/solid/single block kiểm indexing và mesh; tọa độ âm/biên chunk có quy tắc ánh xạ rõ.
+- Camera/model/world conventions nối với các bài trước; đủ 16³ cells thật và scene có solid/air, không thay bằng list cube rời không có chunk storage.
 - Indexing đúng biên.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -4064,6 +4306,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Fixture solid chunk, cavity và hai chunk kề nhau kiểm đúng tập mặt theo occupancy; GPU back-face culling không thay visible-face meshing.
+- Không có lỗ hoặc mặt trùng tại biên chunk khi neighbor có/không có dữ liệu theo chính sách công bố.
 - Outer surface không lỗ.
 - Internal faces biến mất.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -4131,6 +4375,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Grid traversal kiểm ray trên mặt/cạnh/góc, hướng có thành phần 0, tọa độ âm, origin trong block và giới hạn reach.
+- Phá đúng first solid hit, đặt ở ô kề đúng normal; cập nhật mesh chunk lân cận khi sửa biên, không đặt block xuyên player nếu policy cấm.
 - Không skip block theo ray.
 - Place cell đúng mặt hit.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -4197,6 +4443,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Greedy mesh khớp tập mặt và vật liệu của visible-face reference trên fixture phẳng, checkerboard, cavity và cạnh chunk.
+- Chỉ gộp mặt có thuộc tính tương thích; benchmark tách meshing time, upload và draw, không đánh đổi mất hình học để giảm triangle.
 - Geometry tương đương visible-face test chunks.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -4267,6 +4515,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Job lifecycle có loaded/queued/building/ready/unload policy; kết quả job cũ không làm sống lại chunk đã hủy hoặc thay mesh của phiên chỉnh sửa mới.
+- Di chuyển qua biên/teleport và quay lại giữ active region theo budget; số chunk/buffer không tăng vô hạn sau nhiều vòng.
+- Nếu chưa đa luồng, job queue theo frame vẫn đáp ứng streaming; nếu dùng worker thì kiểm ownership/teardown và giữ SDL/render ở thread thích hợp.
 - Không race/crash khi di chuyển nhanh.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
 - Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
@@ -4336,6 +4587,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Sampling dùng world coordinates và seed; kiểm cùng biên từ hai chunk và cùng chunk sinh ở thứ tự khác nhau, không reset noise ở mỗi local origin.
+- Đi qua hàng chục chunk cho terrain liên tục, không lặp cùng một tile bằng dịch chuyển; cache/generation budget có giới hạn.
 - Same seed→same terrain.
 - Chunk boundaries liền.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -4414,6 +4667,9 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Chu trình edit → đi đủ xa để unload → quay lại → thoát → chạy lại giữ đúng thay đổi theo seed/world ID; kiểm biên chunk và tọa độ âm.
+- Save/load có version, báo lỗi file hỏng và không ghi đè dữ liệu tốt khi ghi thất bại; tách terrain gốc với delta chỉnh sửa.
+- Chơi 10–20 phút theo checklist: di chuyển/nhảy, collision, edit, streaming, reset/load; ghi memory/resources và lỗi quan sát, không dùng smoke vài giây thay phiên kiểm này.
 - Chơi ổn không leak/crash rõ.
 - World edits lưu/tải.
 - Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
@@ -4483,6 +4739,8 @@ Bản hoàn thành phải là một executable tương tác hoặc tool chạy �
 
 ### Acceptance Criteria
 
+- Control thực sự đổi simulation trong cùng window; Pause chỉ dừng thời gian, Reset tái lập preset, Label phản ánh state hiện tại.
+- Kiểm press/drag/release, pointer rời control, mất focus và keyboard trên control hỗ trợ; capture không làm simulation nhận thao tác trùng.
 - Click chỉ kích hoạt đúng control.
 - Slider vẫn drag ổn khi chuột di chuyển nhanh.
 - Khi UI đang capture mouse, scene không đồng thời nhận cùng thao tác nếu policy không cho phép.
@@ -5493,6 +5751,17 @@ Bạn KHÔNG được thay đổi:
 
 Có thể dùng prototype nhỏ trong quá trình học, nhưng giáo trình phải kết thúc bằng sản phẩm hoàn chỉnh đúng specification.
 ```
+
+---
+
+# PHỤ LỤC D — NGUỒN KỸ THUẬT THAM CHIẾU
+
+Các nguồn này hỗ trợ giải thích mô hình/API; phạm vi sản phẩm và quy mô nghiệm thu vẫn do hợp đồng của từng project trong tài liệu này quy định.
+
+- [Craig Reynolds — Boids](https://www.red3d.com/cwr/boids/): nền tảng hành vi đàn và tương tác cục bộ cho Project 27–28, 40.
+- [SDL3 — CMake](https://wiki.libsdl.org/SDL3/README-cmake): tích hợp SDL bằng CMake/FetchContent và target SDL3.
+- [Khronos — OpenGL 4.3](https://www.khronos.org/news/press/khronos-releases-opengl-4.3-specification-with-major-enhancements): compute shaders và shader storage buffer objects; kiểm phiên bản/khả năng trước nhánh compute.
+- [scikit-image — Radon transform](https://scikit-image.org/docs/stable/auto_examples/transform/plot_radon_transform.html): phân biệt projections, sinogram và reconstruction; nguồn đối chiếu thuật toán, không dùng lời gọi thư viện thay phần tự xây của Project 56.
 
 ---
 
