@@ -1,38 +1,30 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đo thời gian mà không tự đánh lừa mình
+# Đo riêng thời gian truy vấn
 
 ## Vấn đề cần giải quyết
 
-Một FPS counter không cho biết brute-force query mất bao lâu, vì frame còn clear framebuffer, vẽ hàng chục nghìn điểm, upload texture và chờ renderer. Đo một query duy nhất cũng dễ bị nhiễu bởi cache, runtime và timer resolution.
+Một frame còn phải vẽ 100.000 điểm, upload texture và present. Vì thế FPS thấp không tự nói được query chậm bao nhiêu. Ta cần đo đúng đoạn làm việc, giữ cùng dữ liệu và lặp đủ lần để có số trung bình.
 
-Benchmark của bài này dùng một tập query có seed, warm-up đúng code path rồi đo nhiều lượt hữu hạn. Ngoài timing, nó báo exact scan count và checksum; nếu hai con số đó sai, con số microsecond dù đẹp cũng không đáng tin.
+Tiếp tục `project_27_starter` từ Bài 4. Bài này thêm benchmark có warm-up, checksum và `totalScanned`. Mọi phép chạy đều hữu hạn; UI vẫn nhận lệnh hủy giữa các query, không có vòng lặp chờ “đến khi kết quả ổn định”.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với $Q$ query và $R$ repetitions trên $N$ particles:
+Ta tạo 24 vòng tròn bằng seed, chạy warm-up một lượt rồi đo mỗi vòng tròn hai lần: tổng cộng Q=48 query được đo. Với N hạt, lượng công việc chính xác là $N\times48$. Warm-up không nằm trong Q.
 
-$$
-\text{totalScanned}=NQR
-$$
-
-Timing được chuẩn hóa thành:
-
-$$
-t_{query}=\frac{t_{elapsed}}{QR}
-$$
-
-Exact work là phép kiểm logic; timing là phép đo chịu noise của máy. Ta cần cả hai.
+Thời gian trung bình được tính bằng tổng thời gian các lời gọi query chia Q. Generation, reserve, rendering, thời gian chờ frame và tính checksum đều **ngoài vùng đo**. Hai lần đọc đồng hồ vẫn có overhead; đừng diễn giải các số rất nhỏ chính xác tới từng chữ số cuối.
 
 <InteractiveLab demo="brute-force-particle-query" mode="brute-benchmark" />
 
-Chạy benchmark vài lần mà không đổi seed/N/radius. Checksum và total scans phải giữ nguyên; time/query có thể dao động nhẹ.
+Bấm benchmark rồi đọc tiến độ warm-up/đo. Hãy thử hủy giữa chừng. Một kết quả đã hoàn thành mới được đưa vào readout; job dở dang không được giả làm một phép đo đủ 48 query.
 
 ## Viết code từng bước
 
-### Bước 1 — Trả mọi dữ kiện cần diễn giải
+### Bước 1 — Thêm kiểu số đo và bộ query cố định
 
-```cpp title="include/lab.hpp — số đo không bị trộn với FPS"
+Trong `include/lab.hpp`, sau đường query tối ưu, thêm:
+
+```cpp title="include/lab.hpp — số đo cần đủ thông tin để kiểm lại"
 struct BatchMetrics {
     std::size_t queryCount{};
     std::size_t totalScanned{};
@@ -42,75 +34,190 @@ struct BatchMetrics {
 };
 ```
 
-`totalHits` giúp biết workload ghi output, còn checksum kết hợp hit count và nearest index của từng query theo đúng thứ tự.
+```cpp title="include/lab.hpp — tạo câu hỏi trước khi đo"
+inline std::vector<CircleQuery> makeProbeQueries(std::size_t count, const Bounds2D& bounds, double radius, std::uint32_t seed) {
+    std::vector<CircleQuery> queries{};
+    if (!validBounds(bounds) || !std::isfinite(radius) || radius < 0.0) {
+        return queries;
+    }
 
-### Bước 2 — Tạo query set trước khi bấm timer
-
-```cpp title="include/lab.hpp — query centers cũng deterministic"
-const std::vector<Particle> centers = makeParticleCloud(count, bounds, seed);
-queries.reserve(centers.size());
-for (const Particle& center : centers) {
-    queries.push_back({center.position, radius});
+    const std::vector<Particle> centers = makeParticleCloud(count, bounds, seed);
+    queries.reserve(centers.size());
+    for (const Particle& center : centers) {
+        queries.push_back({center.position, radius});
+    }
+    return queries;
 }
 ```
 
-Mọi phiên bản thuật toán sẽ nhận cùng danh sách center/radius. Ta không benchmark random-number generation.
+Seed cho query khác seed cloud nhưng được giữ nguyên giữa các lần đo. Thay đổi vị trí chuột trong khi job chạy không thay bộ query đã tạo; đó là phép đo trên một tập câu hỏi cố định, không phải theo đường rê chuột ngẫu nhiên của người dùng.
 
-### Bước 3 — Warm-up ngoài vùng đo
+### Bước 2 — Dùng thật đầu ra để không đo công việc bị tối ưu bỏ
 
-```cpp title="include/lab.hpp — đi qua query path trước khi bắt đầu timer"
-reserveQueryWorkspace(workspace, particles.size());
-for (const CircleQuery& query : queries) {
-    queryBruteForceSquared(particles, query, workspace);
+Thêm hàm checksum sau trước các hàm benchmark.
+
+```cpp title="include/lab.hpp — checksum dùng cả danh sách hit"
+inline std::uint32_t updateChecksum(std::uint32_t checksum, const QueryWorkspace& workspace) {
+    constexpr std::uint32_t prime = 16777619U;
+    checksum = (checksum ^ std::uint32_t(workspace.hitIndices.size())) * prime;
+    std::size_t encodedNearest = 0U;
+    if (workspace.nearestIndex != kNoParticle) {
+        encodedNearest = workspace.nearestIndex + 1U;
+    }
+    checksum = (checksum ^ std::uint32_t(encodedNearest)) * prime;
+    // Dùng từng index để danh sách kết quả thực sự ảnh hưởng tới checksum.
+    for (const std::size_t index : workspace.hitIndices) {
+        checksum = (checksum ^ static_cast<std::uint32_t>(index + 1U)) * prime;
+    }
+    return checksum;
 }
-
-const auto started = std::chrono::steady_clock::now();
 ```
 
-Warm-up không tăng `metrics.queryCount`. Nó chuẩn bị cùng code path, không giả vờ là dữ liệu đo.
+Checksum nhận số hit, nearest và từng index trong hit list, đúng thứ tự. Nó giúp phát hiện thay đổi và buộc kết quả có ảnh hưởng quan sát được; **không thay thế** test equality vì hash vẫn có thể va chạm. Dùng unsigned 32-bit làm phép cuộn số có quy tắc xác định.
 
-### Bước 4 — Dùng output và dừng ở số vòng hữu hạn
+### Bước 3 — Viết harness đồng bộ cho test và command-line
 
-```cpp title="include/lab.hpp — bounded benchmark loop có checksum"
-for (int repetition = 0; repetition < repetitions; ++repetition) {
+Đặt hàm đầy đủ này sau `makeProbeQueries`.
+
+```cpp title="include/lab.hpp — warm-up và aggregation ngoài vùng đo"
+inline BatchMetrics benchmarkBruteForce(std::span<const Particle> particles, std::span<const CircleQuery> queries, int repetitions, QueryWorkspace& workspace) {
+    BatchMetrics metrics{};
+    if (repetitions <= 0 || repetitions > 32 || queries.empty() || queries.size() > 256 || particles.size() > 100'000) {
+        return metrics;
+    }
+
+    reserveQueryWorkspace(workspace, particles.size());
     for (const CircleQuery& query : queries) {
         queryBruteForceSquared(particles, query, workspace);
-        ++metrics.queryCount;
-        metrics.totalScanned += workspace.scanned;
-        metrics.totalHits += workspace.hitIndices.size();
-        metrics.checksum = updateChecksum(metrics.checksum, workspace);
     }
+
+    for (int repetition = 0; repetition < repetitions; ++repetition) {
+        for (const CircleQuery& query : queries) {
+            const auto started = std::chrono::steady_clock::now();
+            queryBruteForceSquared(particles, query, workspace);
+            const auto finished = std::chrono::steady_clock::now();
+            metrics.elapsedMicroseconds += std::chrono::duration<double, std::micro>(finished - started).count();
+            ++metrics.queryCount;
+            metrics.totalScanned += workspace.scanned;
+            metrics.totalHits += workspace.hitIndices.size();
+            metrics.checksum = updateChecksum(metrics.checksum, workspace);
+        }
+    }
+    return metrics;
 }
 ```
 
-Không có vòng `while` chờ timing “ổn định”. Caller chọn repetitions rõ ràng nên benchmark luôn trả quyền điều khiển.
+Vòng warm-up chạy trước. Trong vòng đo, đồng hồ chỉ bao quanh `queryBruteForceSquared`; đếm work và cập nhật checksum sau khi đã chốt mốc kết thúc. Hàm từ chối hơn 32 repetitions, hơn 256 query hoặc hơn 100.000 hạt để tránh caller vô tình tạo công việc quá lớn. Không có giới hạn thời gian kiểu “chạy đến đủ vài giây” nên số lần gọi được biết trước.
+
+### Bước 4 — Không gọi cả harness trong một event handler
+
+Hàm đồng bộ hữu ích cho test, nhưng UI không nên giữ quyền điều khiển cho cả batch. Trong `include/scene.hpp`, thêm `Job`, `benchmark`, các hằng probe/repetition và hai hàm sau như full source. Job có workspace riêng để kết quả ở kính lúp không bị ghi đè bởi benchmark.
+
+```cpp title="include/scene.hpp — chuẩn bị job trước các frame đo"
+inline void requestBenchmark(Scene& scene, bool scaling) {
+    invalidateMeasurement(scene);
+    scene.job = {};
+    scene.job.active = true;
+    (void)scaling;
+    scene.job.probes = makeProbeQueries(kProbeCount, Scene::bounds, scene.query.radius, scene.seed ^ 0x9e3779b9U);
+    reserveQueryWorkspace(scene.job.workspace, scene.particles.size());
+}
+```
+
+```cpp title="include/scene.hpp — mỗi frame tối đa một query"
+inline void advanceJob(Scene& scene) {
+    if (!scene.job.active) {
+        return;
+    }
+    auto& job = scene.job;
+    std::size_t count = scene.count;
+    if (job.scaling) {
+        count = kStudyCounts[job.row];
+    }
+    const auto active = std::span<const Particle>(scene.particles).first(count);
+    // Tối đa một query mỗi frame. SDL vẫn xử lý input giữa hai lần gọi.
+    if (job.warmup < job.probes.size()) {
+        queryBruteForceSquared(active, job.probes[job.warmup], job.workspace);
+        ++job.warmup;
+        return;
+    }
+    const auto started = std::chrono::steady_clock::now();
+    queryBruteForceSquared(active, job.probes[job.cursor % job.probes.size()], job.workspace);
+    const auto finished = std::chrono::steady_clock::now();
+    job.metrics.elapsedMicroseconds += std::chrono::duration<double, std::micro>(finished - started).count();
+    ++job.metrics.queryCount;
+    job.metrics.totalScanned += job.workspace.scanned;
+    job.metrics.totalHits += job.workspace.hitIndices.size();
+    job.metrics.checksum = updateChecksum(job.metrics.checksum, job.workspace);
+    ++job.cursor;
+    if (job.cursor != job.probes.size() * kRepetitions) {
+        return;
+    }
+    scene.benchmark = job.metrics;
+    job.active = false;
+}
+```
+
+```cpp title="include/scene.hpp — Scene giữ riêng kết quả trực tiếp và job"
+struct Scene {
+    static constexpr Bounds2D bounds{{0, 0}, {1, 1}};
+    std::uint32_t seed{0x00c0ffeeU};
+    std::vector<Particle> particles{};
+    std::size_t count{100'000};
+    bool paused{true};
+    bool debug{true};
+    double phase{};
+    CircleQuery query{{0.5, 0.5}, 0.08};
+    BruteForceResult readable{};
+    std::size_t scanLimit{100'000};
+    double queryMicroseconds{};
+    QueryWorkspace workspace{};
+    bool referenceMatches{true};
+    struct Job {
+        bool active{};
+        bool scaling{};
+        std::size_t row{};
+        std::size_t cursor{};
+        std::size_t warmup{};
+        BatchMetrics metrics{};
+        QueryWorkspace workspace{};
+        std::vector<CircleQuery> probes{};
+    } job{};
+
+    BatchMetrics benchmark{};
+};
+```
+
+Một lần gọi chỉ làm **một** warm-up hoặc **một** query được đo rồi trả về. `main.cpp` gọi `advanceJob(scene)` một lần mỗi vòng event loop nếu job active. Vì thế Esc, resize, mất focus hoặc nút hủy có cơ hội dừng job giữa hai query. Đây không phải worker thread, và không thể ngắt giữa một query đang chạy; với N bị chặn ở 100.000, mỗi lượt có giới hạn công việc rõ ràng.
+
+Khi cursor đạt 48, job chuyển số đo sang `scene.benchmark` rồi tự ngừng. Các khoảng chờ `SDL_Delay` giữa frame không lọt vào tổng query time. Canvas dùng cùng lịch 24 warm-up + 48 query, nhưng số đo JavaScript và C++ là hai môi trường khác nhau, không nên so trực tiếp.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint benchmark"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+```bash title="Terminal — đo bằng bản Release"
+cmake --build build --config Release --target project_27_starter
 cmake --build build --config Release --target project_27_checkpoint_5
 ```
 
-Nhấn `B` ba lần. So checksum/exact scans trước, sau đó mới nhìn microseconds/query. Khi ghi kết quả, luôn ghi cả cấu hình Debug hay Release.
+Nhấn B, chờ job hoàn tất rồi lặp lại. Với cùng N/seed/R, Q, totalScanned, totalHits và checksum phải giữ nguyên; thời gian có thể dao động. Rê tâm kính lúp không làm sai bộ query benchmark. Đổi N, seed hoặc R thì kết quả cũ bị xóa vì nó không còn thuộc cùng workload.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bắt đầu timer trước `makeParticleCloud` và `makeProbeQueries`. Con số đo cả setup, không còn đại diện query; chuyển timer xuống sau warm-up.
-2. In từng hit trong timed loop. Console I/O áp đảo distance check; xóa logging khỏi vùng đo.
-3. Xóa checksum và không đọc result. Compiler có thêm cơ hội loại công việc không quan sát được; giữ checksum trong metrics.
+1. Đưa timer ra ngoài cả batch có `SDL_Delay`. Bạn đang đo độ trễ UI, không phải chi phí query. Khôi phục timer quanh từng query.
+2. Cộng cả warm-up vào totalScanned nhưng vẫn chia thời gian cho 48. Phép kiểm exact work sẽ không còn khớp.
+3. Bỏ checksum rồi chỉ giữ một biến cục bộ không ai đọc. Không còn bằng chứng công việc tạo output được quan sát. Khôi phục việc sử dụng kết quả ngoài vùng đo.
+4. Bấm benchmark rồi đổi R giữa chừng. Job cũ phải dừng và số đo cũ bị xóa; không được gắn radius mới vào kết quả của radius cũ.
 
 ## Tự kiểm tra kết quả
 
-- `queryCount == queries.size() * repetitions`.
-- `totalScanned == N * queryCount`.
-- Cùng workload cho cùng checksum.
-- Warm-up không được cộng vào queryCount.
-- Elapsed time finite và không âm.
-- Query set, reserve và rendering nằm ngoài vùng timer.
+- N=100.000 cho Q=48, totalScanned=4.800.000 sau khi hoàn tất.
+- Warm-up không được cộng vào Q hoặc tổng thời gian.
+- Cùng dữ liệu và query set cho cùng checksum; thời gian finite và không âm.
+- Hủy, reset, blur hoặc resize không để job tiếp tục âm thầm.
+- Bảng SDL và web đều hiển thị được số đo, không chỉ console output.
 
 ## Bài tập mở rộng
 
-Thu 11 timing samples, sắp xếp và báo median thay vì chỉ một lần đo. Vẫn giữ query set, repetition và checksum giống nhau giữa các sample.
+Thu thập năm lần đo hoàn chỉnh và báo median cùng khoảng min–max. Ghi N, R, seed, compiler, chế độ Debug/Release và phần cứng; không xóa lần chậm nhất chỉ vì nó không đẹp.
 
-Bài tiếp theo thay đổi N có kiểm soát để đọc đường tăng chi phí của brute force.
+[Tiếp theo: giữ query set cố định và tăng N](./06-doc-duong-tang-chi-phi-theo-n).

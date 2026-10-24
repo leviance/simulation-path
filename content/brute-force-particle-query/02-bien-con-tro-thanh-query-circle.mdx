@@ -1,103 +1,196 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Biến con trỏ thành một query circle
+# Đặt vòng tròn truy vấn bằng chuột
 
 ## Vấn đề cần giải quyết
 
-Ta đã có 100.000 world positions, còn SDL mouse event lại trả pixel trong cửa sổ. So trực tiếp hai loại tọa độ này sẽ chỉ đúng tình cờ ở một kích thước window. Trước khi nghĩ tới hiệu năng, query cần được mô tả đúng về hình học.
+Đám hạt đã hiện lên. Bây giờ cần đặt một vòng tròn quanh vị trí chuột và trả lời câu hỏi nhỏ nhất: **một hạt cụ thể có nằm trong vòng tròn không?** Ta chưa vội duyệt 100.000 hạt. Viết đúng phép kiểm cho một hạt trước sẽ giúp vòng lặp ở bài sau dễ hiểu hơn.
 
-Bài này tạo `CircleQuery` gồm center trong world space và radius theo world unit. Membership test đầu tiên cố ý dùng `std::hypot`: chậm hơn phiên bản cuối nhưng rất dễ đọc, thích hợp làm reference cho bước tối ưu sau.
+Tiếp tục bài làm trong `starter/` từ cuối Bài 1; `project_27_starter` vẫn là target của bạn. Nếu cần đối chiếu, build `project_27_checkpoint_1` trước. Bài này chỉ thêm center, radius, phép đổi tọa độ và phép kiểm membership.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với particle $p$ và tâm query $c$, ta đặt:
+SDL trả vị trí chuột theo màn hình/window, còn hạt sống trong **world** $[0,1]^2$. Trước tiên SDL đổi event sang logical board bằng `SDL_ConvertEventToRenderCoordinates`; sau đó ta mới đổi điểm logical sang world. Không nhân thêm device-pixel-ratio: làm thế sẽ tính một bước đổi tỉ lệ hai lần.
 
-$$
-\Delta x=p_x-c_x,\qquad \Delta y=p_y-c_y
-$$
-
-$$
-d=\sqrt{\Delta x^2+\Delta y^2}
-$$
-
-Particle là hit khi $d\le r$. Dấu bằng là một quyết định quan trọng: điểm nằm đúng trên đường tròn được tính là ở trong query.
+Với tâm $c$ và điểm $p$, khoảng cách là $d=\sqrt{(p_x-c_x)^2+(p_y-c_y)^2}$. Hạt nằm trong vòng tròn nếu $d\le R$. Dấu bằng chốt quy ước **boundary inclusive**: điểm nằm trên đường tròn cũng được chọn.
 
 <InteractiveLab demo="brute-force-particle-query" mode="brute-circle" />
 
-Kéo kính lúp tới sát biên, đổi radius về zero rồi tăng dần. Readout luôn báo center trong `[0,1]`, dù Canvas rộng hay hẹp.
+Rê chuột, dùng phím mũi tên hoặc đổi R. Readout của bài này chỉ kiểm hạt index 0; chưa chạy vòng lặp tìm mọi hit. R bằng 0 là trường hợp hợp lệ: chỉ điểm trùng tâm mới nằm trong query.
 
 ## Viết code từng bước
 
-### Bước 1 — Đặt tên cho center và radius
+### Bước 1 — Thêm kiểu dữ liệu mô tả câu hỏi
 
-```cpp title="include/lab.hpp — dữ liệu của một circle query"
+Trong `include/lab.hpp`, sau phần sinh dữ liệu, thêm `CircleQuery`. Hạt không cần thay đổi; truy vấn là một dữ liệu riêng.
+
+```cpp title="include/lab.hpp — tâm và bán kính trong cùng world space"
 struct CircleQuery {
     Vec2 center{};
     double radius{};
 };
+```
 
+```cpp title="include/lab.hpp — từ chối đầu vào không có nghĩa"
 inline bool validQuery(const CircleQuery& query) {
     return std::isfinite(query.center.x) && std::isfinite(query.center.y) && std::isfinite(query.radius) && query.radius >= 0.0;
 }
 ```
 
-Radius âm hoặc NaN không có nghĩa hình học hữu ích, vì vậy query path trả kết quả rỗng thay vì tiếp tục với dữ liệu hỏng.
+Bán kính âm hoặc NaN không tạo được vòng tròn có nghĩa. Trong UI ta giới hạn R từ 0 tới 0,35; trong hàm thuần vẫn kiểm đầu vào để test hoặc caller khác không vô tình dùng dữ liệu sai.
 
-### Bước 2 — Đổi mouse pixel về world point
+### Bước 2 — Đổi một điểm logical về world
 
-```cpp title="src/main.cpp — screenToWorld theo đúng WorldView đang vẽ"
-const double x = (screenX - view.left) / view.size;
-const double y = 1.0 - (screenY - view.top) / view.size;
-return {std::clamp(x, 0.0, 1.0), std::clamp(y, 0.0, 1.0)};
+Trong `include/view.hpp`, đặt hai hàm sau cạnh `worldToScreen`.
+
+```cpp title="include/view.hpp — phép đổi ngược và clamp vào vùng dữ liệu"
+inline Vec2 screenToWorld(Vec2 point, const WorldView& view) {
+    return {std::clamp((point.x - view.left) / view.size, 0.0, 1.0), std::clamp(1.0 - (point.y - view.top) / view.size, 0.0, 1.0)};
+}
 ```
 
-Trục Y bị đảo vì Canvas/framebuffer tăng xuống dưới, còn world Y tăng lên trên. Clamp giữ kính lúp trong bounds khi pointer đi ra phần panel hoặc margin.
-
-### Bước 3 — Viết phép kiểm dễ đọc nhất
-
-```cpp title="include/lab.hpp — reference membership test dùng distance"
-const double deltaX = point.x - query.center.x;
-const double deltaY = point.y - query.center.y;
-return std::hypot(deltaX, deltaY) <= query.radius;
+```cpp title="include/view.hpp — chỉ bắt đầu tương tác trong viewport"
+inline bool inViewport(Vec2 point, const WorldView& view) {
+    return point.x >= view.left && point.x <= view.left + view.size && point.y >= view.top && point.y <= view.top + view.size;
+}
 ```
 
-Chưa cần tối ưu `sqrt`. Một reference ngắn, rõ và có test boundary sẽ giúp ta biết phiên bản tối ưu ở bài 4 có còn đúng không.
+Trừ `left/top` để lấy khoảng cách tới gốc khung nhìn, chia `size` để trở về $[0,1]$, rồi đảo Y. Khi đang kéo ra ngoài viewport, clamp giữ tâm ở mép gần nhất. Resize không sửa world center; logical presentation chỉ co giãn bức ảnh.
 
-### Bước 4 — Mouse event chỉ cập nhật query data
+### Bước 3 — Viết phép kiểm một hạt
 
-```cpp title="src/main.cpp — pointer trở thành world-space query center"
-const WorldView view = makeWorldView(width, height);
-query.center = screenToWorld(event.motion.x, event.motion.y, view);
+Thêm hai hàm sau vào `include/lab.hpp`, sau `validQuery`.
+
+```cpp title="include/lab.hpp — bình phương khoảng cách sẽ còn dùng về sau"
+inline double distanceSquared(Vec2 first, Vec2 second) {
+    const double deltaX = first.x - second.x;
+    const double deltaY = first.y - second.y;
+    return deltaX * deltaX + deltaY * deltaY;
+}
 ```
 
-Event handler không tự đi tìm particle và không tô pixel. Nó chỉ cập nhật input của query; vòng xử lý bên dưới sẽ dùng cùng function cho interaction lẫn benchmark.
+```cpp title="include/lab.hpp — phiên bản dễ đọc để làm reference"
+inline bool insideCircleWithDistance(Vec2 point, const CircleQuery& query) {
+    if (!validQuery(query)) {
+        return false;
+    }
+    const double deltaX = point.x - query.center.x;
+    const double deltaY = point.y - query.center.y;
+    return std::hypot(deltaX, deltaY) <= query.radius;
+}
+```
+
+`std::hypot(dx, dy)` tính độ dài vector $(dx,dy)$, tương đương ý nghĩa của công thức căn bậc hai bên trên. Hãy thử tâm (0,0), R=1 với các điểm (1,0), (0,1), (1,1): hai điểm đầu ở biên, điểm cuối ở ngoài. Đừng dùng phép kiểm “X và Y đều nhỏ hơn R”; phép đó chọn hình vuông chứ không phải hình tròn.
+
+### Bước 4 — Vẽ đường tròn từ cùng dữ liệu query
+
+Thay `drawScene` trong `include/view.hpp` bằng phiên bản sau. Hàm `circle` dùng các đoạn thẳng ngắn và đã có trong Starter; radius đổi sang pixel bằng cùng `view.size` đã dùng cho vị trí.
+
+```cpp title="include/view.hpp — vòng tròn không dùng thang tọa độ riêng"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    const WorldView view = makeWorldView(scene.debug);
+    rectangle(image, static_cast<int>(view.left) - 1, 109, static_cast<int>(view.left + view.size) + 1, 731, kGrid, false);
+    for (std::size_t index = 0; index < scene.count; ++index) {
+        const Vec2 point = worldToScreen(scene.particles[index].position, view);
+        image.putPixel(static_cast<int>(std::lround(point.x)), static_cast<int>(std::lround(point.y)), kCloud);
+    }
+    const Vec2 center = worldToScreen(scene.query.center, view);
+    circle(image, center, scene.query.radius * view.size, kLens);
+    drawLine(image, center.x - 5, center.y, center.x + 5, center.y, kLens);
+    drawLine(image, center.x, center.y - 5, center.x, center.y + 5, kLens);
+}
+```
+
+Trong `Scene` thêm `CircleQuery query{{0.5,0.5},0.08};`. Phần nối event đầy đủ nằm ở `src/main.cpp` cuối bài: `moveQuery` gọi `screenToWorld`, mouse motion trong viewport cập nhật tâm, button down chỉ nhận sau capture thành công, button up dùng vị trí cuối rồi nhả capture. Hãy thay đúng các handler này từ source sau bài, không ghép thêm một event loop thứ hai.
+
+
+### Bước 5 — Nối event SDL vào query
+
+
+Trong `main.cpp`, sau lambda `release` và trước vòng `while (running)`, thêm lambda sau. `scene`, `dirty` và renderer đều được tạo trong khung Starter; lambda dùng chúng, không tạo một scene mới.
+
+```cpp title="src/main.cpp — một nơi duy nhất cập nhật tâm"
+    const auto moveQuery = [&](float x, float y) {
+        scene.query.center = lab::screenToWorld({x, y}, lab::makeWorldView(scene.debug));
+        scene.paused = true;
+        dirty = true;
+    };
+```
+
+Trong vòng `while (SDL_PollEvent(&event))`, sau nhánh bàn phím, thêm phép đổi event sau. Các nhánh bên dưới đều dùng event **đã đổi**, không gọi đổi tọa độ lần nữa.
+
+```cpp title="src/main.cpp — window coordinates sang logical board"
+            if (event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+                    failed = true;
+                    running = false;
+                    break;
+                }
+            }
+```
+
+Sau đoạn đổi tọa độ, thêm các nhánh down, motion và up theo đúng thứ tự. `dragging` và `SDL_MouseID owner{}` được khai báo trước event loop; `release` đặt dragging=false rồi gọi `SDL_CaptureMouse(false)`.
+
+```cpp title="src/main.cpp — capture thành công mới bắt đầu kéo"
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !dragging && lab::inViewport({event.button.x, event.button.y}, lab::makeWorldView(scene.debug))) {
+                // Không đổi tâm nếu hệ điều hành từ chối capture.
+                if (SDL_CaptureMouse(true)) {
+                    dragging = true;
+                    owner = event.button.which;
+                    moveQuery(event.button.x, event.button.y);
+                }
+            }
+```
+
+```cpp title="src/main.cpp — rê chuột hoặc kéo bằng đúng thiết bị"
+            if (event.type == SDL_EVENT_MOUSE_MOTION) {
+                if (dragging && event.motion.which == owner) {
+                    if (!(event.motion.state & SDL_BUTTON_LMASK)) {
+                        release();
+                    } else {
+                        moveQuery(event.motion.x, event.motion.y);
+                    }
+                } else if (!dragging && lab::inViewport({event.motion.x, event.motion.y}, lab::makeWorldView(scene.debug))) {
+                    moveQuery(event.motion.x, event.motion.y);
+                }
+            }
+```
+
+```cpp title="src/main.cpp — áp dụng tọa độ cuối trước khi nhả"
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && dragging && event.button.which == owner) {
+                moveQuery(event.button.x, event.button.y);
+                release();
+            }
+```
+
+Cuối phần xử lý mỗi event vẫn giữ `dirty=true` như Starter. Khi mất focus hoặc resize, nhánh đã có gọi `release()` và `stopScene(scene)`. Như vậy thao tác kéo không mắc kẹt dù pointer rời cửa sổ. Các phím W/A/S/D sửa center rồi clamp về [0,1]; Up/Down sửa radius. Toàn bộ nhánh phím nằm trong full `main.cpp` dưới cuối bài để bạn chép cùng phần event một lần, không phải đoán vị trí chèn.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint query circle"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+```bash title="Terminal — build bài làm và bản đối chiếu"
+cmake --build build --config Debug --target project_27_starter
 cmake --build build --config Debug --target project_27_checkpoint_2
 ```
 
-Di chuyển chuột vào bốn góc. Title phải báo center gần `(0,0)`, `(1,0)`, `(0,1)` và `(1,1)` theo đúng world convention.
+C++ dùng W/A/D và S để đổi tâm, Up/Down đổi R. Canvas dùng phím mũi tên để đổi tâm và slider để đổi R. Hai giao diện khác phím nhưng cùng công thức world space. Rê chuột vào bốn góc viewport rồi đọc center; góc trên trái phải gần (0,1), không phải (0,0).
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ phép đảo Y trong `screenToWorld`. Kính lúp đi lên khi chuột đi xuống; khôi phục `1.0 - (...)`.
-2. So distance bằng `< radius`. Test particle đúng trên boundary bị loại; dùng lại `<=`.
-3. Lưu radius bằng pixel nhưng center bằng world unit. Resize làm query thay đổi kích thước trong world; giữ cả hai cùng world space.
+1. Bỏ đảo Y trong hàm đổi ngược. Vòng tròn di chuyển ngược chiều dọc; khôi phục `1.0 - ...`.
+2. So bằng `< R` thay vì `<= R`. Các điểm đúng trên biên bị bỏ sót. Dùng fixture (1,0), R=1 để thấy khác biệt.
+3. Dùng trực tiếp window X/Y như tọa độ world. Sau resize, vòng tròn lệch khỏi chuột. Khôi phục đủ hai bước đổi tọa độ.
 
 ## Tự kiểm tra kết quả
 
-- Mouse giữa vùng vẽ cho center gần `(0.5,0.5)`.
-- Center được clamp vào `[0,1]²`.
-- Radius luôn finite và không âm.
-- Particle cách tâm đúng radius là hit.
-- Particle xa hơn radius một lượng rõ ràng không phải hit.
-- Resize rồi đặt lại cùng world center cho cùng kết quả membership.
+- Tâm viewport ánh xạ về (0,5; 0,5); bốn góc cho đúng hướng trục.
+- Round-trip world → logical → world trả lại điểm ban đầu trong sai số làm tròn.
+- Đổi R không sinh lại dữ liệu; resize không sửa tâm world.
+- R=0, biên R=1 và bán kính âm đều được kiểm riêng.
+- Kéo ra ngoài rồi thả vẫn nhả capture; mất focus không để ứng dụng kẹt trạng thái kéo.
 
 ## Bài tập mở rộng
 
-Cho phép nhập radius bằng pixel rồi đổi nó sang world unit qua `view.size`. Sau resize, kiểm rằng cùng radius pixel sẽ bao phủ một vùng world khác — đó là lựa chọn UI, không phải lỗi transform.
+Vẽ thêm một chấm chỉ hạt index 0, đổi màu theo `insideCircleWithDistance`. Chưa cần nearest hay cả hit list.
 
-Bài tiếp theo dùng circle query này để quét toàn bộ vector và thu mọi hit.
+[Tiếp theo: duyệt toàn bộ mảng và thu thập mọi hit](./03-quet-toan-bo-particles-bang-brute-force).

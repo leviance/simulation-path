@@ -25,6 +25,8 @@ bool closeEnough(double actual, double expected, double tolerance = 1e-12) {
 
 } // namespace
 
+#include "extra-cases.hpp"
+
 int main() {
     failures = 0;
     const lab::Bounds2D bounds{{0.0, 0.0}, {1.0, 1.0}};
@@ -82,6 +84,7 @@ int main() {
     check(lab::particleCountForPreset(lab::ParticlePreset::hundredThousand) == 100'000, "dense preset selects one hundred thousand particles");
     check(closeEnough(lab::distanceSquared({0.0, 0.0}, {3.0, 4.0}), 25.0), "squared distance preserves the three-four-five triangle");
 
+    runExtraCases();
     if (failures != 0) {
         std::cerr << failures << " Project 27 validation check(s) failed\n";
         return EXIT_FAILURE;

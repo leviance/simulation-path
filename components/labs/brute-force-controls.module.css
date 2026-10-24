@@ -1,0 +1,34 @@
+.study {
+  overflow-x: auto;
+  padding: 18px 16px;
+  color: #d2dff2;
+  background: #11182a;
+}
+.study table {
+  width: 100%;
+  min-width: 540px;
+  border-collapse: collapse;
+  font: 12px/1.6 ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.study th, .study td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #34435f;
+  text-align: right;
+  white-space: nowrap;
+}
+.study th {
+  color: #aebbd2;
+  font-weight: 500;
+}
+.study th:first-child, .study td:first-child {
+  text-align: left;
+}
+.study tbody tr:last-child td {
+  border-bottom: 0;
+}
+.study p {
+  padding: 12px;
+  color: #aebbd2;
+  font-size: 13px;
+}

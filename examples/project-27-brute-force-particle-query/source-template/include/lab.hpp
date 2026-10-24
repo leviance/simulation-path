@@ -16,7 +16,6 @@
 namespace lab {
 
 // Mỗi checkpoint mở thêm đúng phần dữ liệu và thuật toán được giải thích trong bài tương ứng.
-#if LAB_CHECKPOINT >= 1
 struct Vec2 {
     double x{};
     double y{};
@@ -31,6 +30,7 @@ struct Bounds2D {
     Vec2 maximum{};
 };
 
+#if LAB_CHECKPOINT >= 1
 inline bool validBounds(const Bounds2D& bounds) {
     return std::isfinite(bounds.minimum.x) && std::isfinite(bounds.minimum.y) && std::isfinite(bounds.maximum.x) && std::isfinite(bounds.maximum.y) && bounds.minimum.x < bounds.maximum.x && bounds.minimum.y < bounds.maximum.y;
 }
@@ -188,6 +188,10 @@ inline std::uint32_t updateChecksum(std::uint32_t checksum, const QueryWorkspace
         encodedNearest = workspace.nearestIndex + 1U;
     }
     checksum = (checksum ^ std::uint32_t(encodedNearest)) * prime;
+    // Dùng từng index để danh sách kết quả thực sự ảnh hưởng tới checksum.
+    for (const std::size_t index : workspace.hitIndices) {
+        checksum = (checksum ^ static_cast<std::uint32_t>(index + 1U)) * prime;
+    }
     return checksum;
 }
 
@@ -207,7 +211,7 @@ inline std::vector<CircleQuery> makeProbeQueries(std::size_t count, const Bounds
 
 inline BatchMetrics benchmarkBruteForce(std::span<const Particle> particles, std::span<const CircleQuery> queries, int repetitions, QueryWorkspace& workspace) {
     BatchMetrics metrics{};
-    if (repetitions <= 0 || queries.empty()) {
+    if (repetitions <= 0 || repetitions > 32 || queries.empty() || queries.size() > 256 || particles.size() > 100'000) {
         return metrics;
     }
 
@@ -216,18 +220,18 @@ inline BatchMetrics benchmarkBruteForce(std::span<const Particle> particles, std
         queryBruteForceSquared(particles, query, workspace);
     }
 
-    const auto started = std::chrono::steady_clock::now();
     for (int repetition = 0; repetition < repetitions; ++repetition) {
         for (const CircleQuery& query : queries) {
+            const auto started = std::chrono::steady_clock::now();
             queryBruteForceSquared(particles, query, workspace);
+            const auto finished = std::chrono::steady_clock::now();
+            metrics.elapsedMicroseconds += std::chrono::duration<double, std::micro>(finished - started).count();
             ++metrics.queryCount;
             metrics.totalScanned += workspace.scanned;
             metrics.totalHits += workspace.hitIndices.size();
             metrics.checksum = updateChecksum(metrics.checksum, workspace);
         }
     }
-    const auto finished = std::chrono::steady_clock::now();
-    metrics.elapsedMicroseconds = std::chrono::duration<double, std::micro>(finished - started).count();
     return metrics;
 }
 #endif

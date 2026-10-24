@@ -1,32 +1,34 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Hoàn thiện kính lúp và nghiệm thu
+# Hoàn thiện kính lúp và kiểm chứng toàn bộ dự án
 
 ## Vấn đề cần giải quyết
 
-Ta đã có thuật toán và phép đo, nhưng một project hoàn chỉnh còn cần reset deterministic, preset workload, pointer capture cân bằng và validation không phụ thuộc cửa sổ. Quan trọng hơn, baseline phải đủ rõ để Project 28 có thể thay candidate search bằng Spatial Grid mà vẫn dùng lại cùng cloud, query set và checksum.
+Đường query và bảng đo đã có. Bài cuối cần biến chúng thành ứng dụng người khác có thể mở, thao tác và hiểu được: rê chuột để chọn vùng, đổi cấu hình mà không giữ số đo cũ, chạy tự động, dừng/reset rõ ràng và có chế độ trình diễn gọn.
 
-Final không cố làm brute force “thắng” bằng mọi giá. Nó ghi trung thực số scans, hit count, time/query và draw sample để người học thấy phần nào là query workload, phần nào chỉ là lựa chọn hiển thị của Canvas.
+Tiếp tục bài làm ở `project_27_starter` từ Bài 6. Đích là **executable C++/SDL3 hoàn chỉnh**, không phải chỉ Canvas. Giữ brute force làm baseline và một oracle đối chiếu cho Spatial Grid của Project 28; chưa được thêm spatial index để làm số đo đẹp hơn.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ba preset 1k, 10k, 100k thay đúng một biến: $N$. Với cùng $Q$ query:
+Ba loại state có vòng đời khác nhau:
 
-$$
-\text{expectedScans}=NQ
-$$
+- Cloud đổi khi seed đổi; N chỉ chọn prefix.
+- Query hiện tại đổi theo con trỏ hoặc auto probe.
+- Benchmark giữ riêng probes cố định; N/R/seed đổi thì phải hủy job và xóa số đo không còn đúng cấu hình.
 
-Một validation tốt kiểm cả output lẫn điều kiện thí nghiệm: seed lặp lại, reference agreement, workspace reuse, exact work và bounded loop. Timing chỉ cần finite; test không áp một ngưỡng microsecond phụ thuộc máy.
+Các hạt không được “bay” theo một animation tùy ý. Auto probe chỉ đưa tâm vòng tròn qua một đường có công thức để bạn quan sát vùng chọn. Nó không được dùng làm query set cho benchmark.
 
 <InteractiveLab demo="brute-force-particle-query" mode="brute-validation" />
 
-Kéo kính lúp, đổi preset/radius, chạy benchmark và scaling rồi reset. Sau reset, cloud, center, radius và trạng thái paused phải trở về mặc định.
+Hãy bắt đầu bằng 100.000 hạt, rê kính lúp rồi chạy scaling. Sau đó thử reset, blur và hủy giữa chừng. Bật/tắt debug để phân biệt vùng chọn với các thông tin phụ trợ; không có chế độ nào được giảm số hạt thật.
 
 ## Viết code từng bước
 
-### Bước 1 — Preset chỉ chọn particle count
+### Bước 1 — Giữ cấu hình preset là dữ liệu
 
-```cpp title="include/lab.hpp — workload preset không đổi thuật toán"
+Trong `include/lab.hpp`, thêm enum và hàm sau. Các mức N này không tạo thuật toán khác.
+
+```cpp title="include/lab.hpp — preset xác định đúng số hạt"
 inline std::size_t particleCountForPreset(ParticlePreset preset) {
     if (preset == ParticlePreset::thousand) {
         return 1'000;
@@ -38,77 +40,177 @@ inline std::size_t particleCountForPreset(ParticlePreset preset) {
 }
 ```
 
-Cloud 100k vẫn được giữ trong memory; `activeParticleCount` tạo span prefix. Chuyển preset vì vậy không sinh lại dữ liệu hoặc đổi seed.
+Enum đi ngay trước hàm với ba giá trị `thousand`, `tenThousand`, `hundredThousand`. Full source cuối bài có cả khai báo, include và namespace. UI cũng cho đổi seed; P chuyển giữa hai seed C++ cung cấp, còn web có ba lựa chọn. Cùng seed và cùng N vẫn phải tái lập cùng dữ liệu.
 
-### Bước 2 — Pointer capture có đường bật và tắt rõ ràng
+### Bước 2 — Reset không để dữ liệu cũ lọt sang thí nghiệm mới
 
-```cpp title="src/main.cpp — kéo kính lúp không bị đứt ở mép cửa sổ"
-dragging = true;
-SDL_CaptureMouse(true);
+Đối chiếu hai hàm sau trong `include/scene.hpp`.
+
+```cpp title="include/scene.hpp — đổi workload xóa đúng số đo không còn hợp lệ"
+inline void invalidateMeasurement(Scene& scene) {
+    stopScene(scene);
+    scene.benchmark = {};
+    scene.rows.clear();
+}
 ```
 
-```cpp title="src/main.cpp — mouse up trả capture cho hệ điều hành"
-dragging = false;
-SDL_CaptureMouse(false);
+```cpp title="include/scene.hpp — reset về một trạng thái đã biết"
+inline void resetScene(Scene& scene) {
+    const bool debug = scene.debug;
+    scene = {};
+    scene.debug = debug;
+    scene.particles = makeParticleCloud(100'000, Scene::bounds, scene.seed);
+    reserveQueryWorkspace(scene.workspace, scene.particles.size());
+}
 ```
 
-Cleanup cũng tắt capture nếu cửa sổ đóng giữa lúc kéo. Mouse motion chỉ sửa query center; nó không tạo particle hoặc chạy benchmark.
+`invalidateMeasurement` không sinh lại cloud; nó dừng chuyển động/job và xóa benchmark/scaling. `resetScene` thì trở về N=100.000, seed mặc định, tâm (0,5;0,5), R=0,08, giữ lựa chọn debug và reserve lại workspace. Hai hành động có mục đích khác nhau nên không gộp thành một hàm “xóa mọi thứ” ở mọi event.
 
-### Bước 3 — Gom invariant vào validation thuần
+Trong `main.cpp`, Space đổi paused, N tăng phase một bước rồi dừng. Khi auto chạy, `phase += min(frameSeconds,0.05)*0.8` và tâm là $(0.5+0.33\cos\phi,\;0.5+0.28\sin(1.7\phi))$. Đây chỉ là đường đi của kính lúp, không phải physics timestep. Full `main.cpp` dưới cuối bài có đầy đủ nhánh phím và vòng lặp; hãy dùng nó để ghép, không thêm một `while` animation thứ hai.
 
-```cpp title="include/lab.hpp — correctness đứng trước timing"
-const BruteForceResult reference = queryBruteForce(first, query);
-QueryWorkspace workspace{};
-queryBruteForceSquared(first, query, workspace);
-const bool matches = reference.hitIndices == workspace.hitIndices && reference.nearestIndex == workspace.nearestIndex;
+### Bước 3 — Chốt chính sách tương tác và hủy
+
+Chuột không chỉ có down/move/up ở trường hợp đẹp. Kiểm source `main.cpp` theo thứ tự này:
+
+1. Button down chỉ nhận nút trái trong viewport; capture phải thành công trước khi đổi tâm.
+2. Lưu `SDL_MouseID owner`; event của thiết bị khác không được cướp hoặc kết thúc drag.
+3. Motion của owner cập nhật tâm; nếu nút trái đã mất thì nhả capture.
+4. Button up dùng tọa độ **cuối cùng** trước khi nhả, tránh mất đoạn di chuyển cuối.
+5. Reset, mất focus, resize, Esc và cleanup đều nhả capture. Resize/blur còn dừng job để không tiếp tục đo trong nền.
+6. Mỗi event được đổi từ window sang logical board đúng một lần; không tự nhân DPR.
+
+Canvas có thêm pointercancel/lostpointercapture và sự kiện ẩn trang. Điều khiển bằng phím không được giữ trang bị khóa: Tab phải rời được Canvas. Reduced motion tắt auto probe, nhưng không cấm query tay hay một job hữu hạn mà người dùng chủ động yêu cầu.
+
+### Bước 4 — Kiểm bằng oracle độc lập, không chỉ gọi lại cùng hàm
+
+CTest mặc định include source ở `final/include`. Bộ test dưới đây bổ sung các ca biên, đối chiếu mọi hit bằng `hypot`, kiểm 24 query trên đủ 100.000 hạt, vòng đời job và cả ảnh CPU.
+
+```cpp title="tests/extra-cases.hpp — kiểm đầu ra và đường chạy thực tế"
+void runExtraCases() {
+    const std::vector<lab::Particle> boundary{{{1, 0}}, {{-1, 0}}, {{0, 1}}, {{0, -1}}, {{1.01, 0}}};
+    lab::QueryWorkspace workspace{};
+    lab::queryBruteForceSquared(boundary, {{0, 0}, 1}, workspace);
+    check(workspace.hitIndices == std::vector<std::size_t>({0, 1, 2, 3}), "inclusive axis boundary and stable tie");
+    check(workspace.nearestIndex == 0, "equal nearest distances retain first index");
+    lab::queryBruteForceSquared(boundary, {{0, 0}, 0}, workspace);
+    check(workspace.hitIndices.empty() && workspace.nearestIndex == 0 && workspace.scanned == 5, "nearest is global even when radius contains nothing");
+    lab::queryBruteForceSquared({}, {{0, 0}, 1}, workspace);
+    check(workspace.scanned == 0 && workspace.nearestIndex == lab::kNoParticle && workspace.hitIndices.empty(), "empty query clears prior results");
+    lab::queryBruteForceSquared(boundary, {{0, 0}, -1}, workspace);
+    check(workspace.scanned == 0 && workspace.hitIndices.empty(), "negative radius rejected");
+
+    lab::Scene scene{};
+    lab::resetScene(scene);
+    const auto original = scene.particles;
+    bool identical = true;
+    lab::resetScene(scene);
+    for (std::size_t index = 0; index < scene.particles.size(); ++index) {
+        identical = identical && scene.particles[index].position.x == original[index].position.x && scene.particles[index].position.y == original[index].position.y;
+    }
+    check(identical, "all one hundred thousand positions reproduce exactly");
+    const auto probes = lab::makeProbeQueries(24, lab::Scene::bounds, 0.08, 0x12345678U);
+    for (const auto& query : probes) {
+        const auto reference = lab::queryBruteForce(scene.particles, query);
+        lab::queryBruteForceSquared(scene.particles, query, workspace);
+        check(reference.hitIndices == workspace.hitIndices && reference.nearestIndex == workspace.nearestIndex, "24 full-scale queries agree with sqrt reference");
+        std::vector<std::size_t> oracle{};
+        std::size_t nearest = lab::kNoParticle;
+        long double nearestDistance = std::numeric_limits<long double>::infinity();
+        for (std::size_t index = 0; index < original.size(); ++index) {
+            const long double dx = static_cast<long double>(original[index].position.x) - query.center.x;
+            const long double dy = static_cast<long double>(original[index].position.y) - query.center.y;
+            const long double d = std::hypot(dx, dy);
+            if (d <= query.radius) oracle.push_back(index);
+            if (d < nearestDistance) {
+                nearestDistance = d;
+                nearest = index;
+            }
+        }
+        check(workspace.hitIndices == oracle && workspace.nearestIndex == nearest, "independent hypot oracle checks complete set");
+    }
+
+    const lab::WorldView view{};
+    for (const lab::Vec2 point : std::vector<lab::Vec2>{{0, 0}, {1, 1}, {0.23, 0.78}}) {
+        const auto restored = lab::screenToWorld(lab::worldToScreen(point, view), view);
+        check(closeEnough(restored.x, point.x) && closeEnough(restored.y, point.y), "logical view round-trip");
+    }
+    lab::requestBenchmark(scene, true);
+    std::size_t frames = 0;
+    while (scene.job.active && frames < 217) {
+        lab::advanceJob(scene);
+        ++frames;
+    }
+    check(frames == 216 && scene.rows.size() == 3, "bounded scaling job uses exactly 216 single-query ticks");
+    for (std::size_t index = 0; index < scene.rows.size(); ++index) {
+        const auto& row = scene.rows[index];
+        lab::QueryWorkspace oracleWorkspace{};
+        const auto oracle = lab::benchmarkBruteForce(std::span<const lab::Particle>(scene.particles).first(row.particleCount), scene.job.probes, 2, oracleWorkspace);
+        check(row.metrics.totalScanned == row.particleCount * 48, "scaling UI exact N times Q");
+        check(row.metrics.checksum == oracle.checksum, "incremental and synchronous benchmark agree");
+    }
+    lab::requestBenchmark(scene, false);
+    lab::advanceJob(scene);
+    lab::stopScene(scene);
+    const auto cursor = scene.job.cursor;
+    lab::advanceJob(scene);
+    check(!scene.job.active && scene.job.cursor == cursor, "cancelled job cannot advance");
+    lab::invalidateMeasurement(scene);
+    check(scene.rows.empty() && scene.benchmark.queryCount == 0, "changed workload clears stale measurements");
+
+    lab::Framebuffer image{};
+    scene.query.radius = 0;
+    lab::refreshQuery(scene);
+    lab::drawScene(image, scene);
+    std::size_t visible = 0;
+    for (const auto& particle : scene.particles) {
+        const auto p = lab::worldToScreen(particle.position, view);
+        const auto color = image.pixels[static_cast<std::size_t>(std::lround(p.y)) * lab::Framebuffer::width + static_cast<std::size_t>(std::lround(p.x))];
+        if (color != lab::kBackground) ++visible;
+    }
+    check(visible == 100'000, "all one hundred thousand particles contribute pixels");
+}
 ```
 
-Hàm validation dùng 2.000 particles để chạy nhanh nhưng vẫn đi qua cùng query functions của final.
+Đừng chỉ viết test “hàm gọi A bằng hàm gọi A”. Oracle ở đây tự duyệt và tính khoảng cách thay vì dùng helper `distanceSquared` của đường tối ưu. Fixture trục tọa độ kiểm đúng biên; fixture tie không chứa một hạt ở tâm để che lỗi chọn index.
 
-### Bước 4 — CTest kiểm exact work, không đoán bằng mắt
-
-```cpp title="tests/tests.cpp — scaling contract của baseline"
-check(rows[0].metrics.totalScanned == 1'000U * probes.size(), "one-thousand row reports exact scan work");
-check(rows[1].metrics.totalScanned == 10'000U * probes.size(), "ten-thousand row reports exact scan work");
-check(rows[2].metrics.totalScanned == 100'000U * probes.size(), "one-hundred-thousand row reports exact scan work");
-```
-
-Không có assertion kiểu “phải nhanh hơn 1 ms”, vì máy khác nhau cho timing khác nhau. Exact work và checksum mới là contract có thể tái lập.
+Test job incremental so checksum/work với harness đồng bộ trên cùng probes. Test ảnh đọc pixel của **từng** hạt sau khi vẽ: nó giúp phát hiện việc vô tình quay lại draw stride 3–4 hạt/lần. Đây vẫn không thay thế việc nhìn cửa sổ và thử chuột thật.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build và test Debug"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
+```bash title="Terminal — build, test và chạy bản hoàn chỉnh"
+cmake -S . -B build
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+# Windows / Visual Studio
+.\build\Release\project_27_final.exe
+# macOS, Linux / single-config generator
+./build/project_27_final
 ```
 
-```bash title="Terminal — build và test Release"
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-```
+Bản final là target mặc định. Thêm `-DBUILD_CHECKPOINTS=ON` khi cần Starter và bảy bản đối chiếu. Muốn CTest kiểm **bài làm của bạn**, đổi include directory của target test từ `final/include` sang `starter/include` sau khi đã hoàn thành đủ API. Đừng xem test final đạt là bằng chứng Starter của mình đúng.
 
-Target `project_27_final` là ứng dụng hoàn chỉnh. ZIP chứa starter, bảy checkpoint, final, tests và README; bạn không cần ghép code block từ website bằng tay.
+Gói ZIP và phần toàn bộ source cuối bài có CMake, mọi header, main, README và tests. Không cần lấy file ở project trước; SDL 3.4.8 được CMake khóa phiên bản khi configure. CMake build backend có thể cần tải SDL lần đầu, không phải tải lại mỗi lần chạy.
 
 ## Thử làm sai để hiểu đúng
 
-1. Khi Canvas chỉ vẽ 30.000 điểm, đổi readout `scanned` thành 30.000. Con số không còn mô tả query 100k; trả nó về output của query function.
-2. Không gọi `SDL_CaptureMouse(false)` khi mouse up. Pointer ownership bị giữ sai; khôi phục nhánh release và cleanup guard.
-3. Viết test bắt timing dưới một ngưỡng tuyệt đối. Test pass trên máy nhanh nhưng fail trên CI; chỉ kiểm timing finite và dùng exact scans/checksum cho correctness.
+1. Capture thất bại nhưng vẫn đặt dragging=true. Hãy giả lập đường thất bại bằng test handler: scene phải giữ nguyên.
+2. Nhấn reset khi đang kéo. Nếu vòng tròn nhảy lại theo event cũ, bạn chưa nhả owner/capture đúng.
+3. Thay hit list bằng một danh sách khác cùng số phần tử. Equality và checksum đầy đủ phải phát hiện; chỉ so count sẽ bỏ lọt.
+4. Đặt `assert` làm kiểm tra duy nhất rồi build Release với NDEBUG. Test có thể không chạy gì. Giữ `check()` báo lỗi và trả EXIT_FAILURE như source được cung cấp.
 
 ## Tự kiểm tra kết quả
 
-- Reset cùng seed tái tạo đúng cloud và query mặc định.
-- Preset 1/2/3 chọn đúng 1k/10k/100k mà không đổi particle order.
-- Pointer capture bật khi drag và tắt khi release/cleanup.
-- Reference và optimized query khớp trên query set deterministic.
-- Capacity workspace không tăng sau reserve.
-- Benchmark có warm-up, checksum lặp lại và loop count hữu hạn.
-- Scaling exact scans tăng 1:10:100.
-- Debug và Release CTest đều đạt.
+- Default vẽ đủ 100.000 hạt; N ladder, R, seed và query theo chuột đều hoạt động.
+- Bảng timing nằm trong UI, có ba dòng đúng N và exact work, không ép thời gian theo một tỉ lệ dựng sẵn.
+- Nearest, boundary inclusive, thứ tự hit và vector rỗng có test độc lập.
+- Bấm hủy/reset, resize hoặc rời cửa sổ không để capture/job bị kẹt.
+- Không dùng grid/tree; giữ baseline brute force cho Project 28.
+- Cả Debug và Release chạy CTest; thử trực tiếp cửa sổ thật và kiểm link ZIP trước khi chia sẻ.
 
 ## Bài tập mở rộng
 
-Lưu kết quả baseline thành CSV gồm N, radius, queryCount, totalHits, totalScanned, checksum và time/query. Project 28 có thể xuất cùng schema để so Spatial Grid mà không đổi tiêu chí.
+Lưu bảng đo ra CSV kèm N, R, seed, Q, compiler/build type. Ở [Project 28 — Spatial Grid](/projects/spatial-grid-neighbor-query), dùng lại cùng dataset và query set để so candidate count với N; không so hai bài toán khác nhau rồi kết luận grid nhanh hơn.
 
-Project 28 sẽ chia cùng “thành phố hạt” thành các ô. Khi đó query chỉ kiểm candidate trong những cell chạm circle, còn baseline Project 27 vẫn là oracle kiểm correctness và mốc đo hiệu năng.
+Bạn đã có một baseline đo được, đọc được và kiểm lại được. **Không tối ưu bằng phỏng đoán**: giữ kết quả của project này để mọi cấu trúc tìm kiếm sau đó phải chứng minh vừa đúng vừa có ích.

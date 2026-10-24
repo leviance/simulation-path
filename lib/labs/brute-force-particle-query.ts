@@ -170,13 +170,16 @@ export function makeParticleProbeQueries(
   radius: number,
   seed: number,
 ) {
-  if (!Number.isInteger(count) || count < 0 || radius < 0) return [];
+  if (!Number.isInteger(count) || count < 0 || !Number.isFinite(radius) || radius < 0) return [];
   return makeParticleCloud(count, bounds, seed).map((center) => ({ center, radius }));
 }
 
 function updateParticleChecksum(checksum: number, result: ParticleQueryWorkspace) {
   let next = Math.imul(checksum ^ result.hitIndices.length, 16777619) >>> 0;
   next = Math.imul(next ^ (result.nearestIndex + 1), 16777619) >>> 0;
+  for (const index of result.hitIndices) {
+    next = Math.imul(next ^ (index + 1), 16777619) >>> 0;
+  }
   return next;
 }
 
@@ -187,8 +190,12 @@ export function runParticleQueryBatch(
   workspace: ParticleQueryWorkspace,
   particleLimit = particles.length,
 ): ParticleBatchMetrics {
-  const safeRepetitions = Math.max(0, Math.trunc(repetitions));
-  const limit = Math.min(Math.max(0, Math.trunc(particleLimit)), particles.length);
+  const safeRepetitions = Number.isFinite(repetitions)
+    ? Math.min(32, Math.max(0, Math.trunc(repetitions)))
+    : 0;
+  const limit = Number.isFinite(particleLimit)
+    ? Math.min(Math.max(0, Math.trunc(particleLimit)), particles.length)
+    : 0;
   let totalScanned = 0;
   let totalHits = 0;
   let checksum = 2166136261;

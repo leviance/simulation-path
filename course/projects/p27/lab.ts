@@ -1,49 +1,47 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
     label: "BRUTE-FORCE PARTICLE QUERY LAB",
-    title: "Chiếc kính lúp phải đọc bao nhiêu particle?",
+    title: "Tìm mọi hạt gần con trỏ",
     description:
-      "Kéo query circle qua particle cloud, đổi N/radius/seed và đo riêng số scans, hits, nearest particle, checksum cùng thời gian trên mỗi query.",
+      "Rê vòng tròn qua 100.000 hạt, đổi N và R rồi đo số lần kiểm cùng thời gian query. Không dùng grid hay tree.",
   },
   modes: {
     "brute-scene": {
-      title: "100.000 particles được tạo và vẽ từ dữ liệu nào?",
+      title: "Dữ liệu 100.000 hạt được tạo và vẽ thế nào?",
       description:
-        "Đổi N và seed để kiểm cloud deterministic; Canvas có thể lấy mẫu khi vẽ nhưng data/query workload vẫn giữ đúng số đã chọn.",
+        "Đổi N và seed rồi quay lại cấu hình cũ; cả Canvas và C++ đều vẽ toàn bộ số hạt đã chọn.",
     },
     "brute-circle": {
-      title: "Pointer trở thành center và radius trong world space ra sao?",
+      title: "Đặt vòng tròn đúng chỗ chuột đang trỏ",
       description:
-        "Kéo kính lúp, đổi radius và đọc world coordinate; particle trên boundary được tính là hit theo quy ước inclusive.",
+        "Đổi vị trí chuột sang world, thay R và kiểm riêng hạt index 0. Điểm trên biên cũng được nhận.",
     },
     "brute-scan": {
-      title: "Brute force đã đi qua mảng theo thứ tự nào?",
+      title: "Đi lần lượt từ hạt đầu tới hạt cuối",
       description:
-        "Giảm scan progress rồi tiến từng bước; hits chỉ đầy đủ khi scanned đạt N vì thuật toán không có thông tin để bỏ qua particle nào.",
+        "Giảm số hạt đã quét rồi tiến từng bước. Danh sách hit chỉ đầy đủ khi đã kiểm đủ N hạt.",
     },
     "brute-squared": {
-      title: "Bỏ sqrt có làm thay đổi kết quả không?",
+      title: "Bỏ phép căn có làm đổi kết quả?",
       description:
-        "Đối chiếu phiên bản distance dễ đọc với squared distance trên cùng cloud/query; hit count và nearest index phải khớp.",
+        "Chạy reference và squared distance trên cùng dữ liệu; đối chiếu toàn bộ hit indices và nearest, không chỉ số hit.",
     },
     "brute-benchmark": {
-      title: "Một con số timing đáng tin cần những gì?",
+      title: "Đo đúng phần việc muốn biết",
       description:
-        "Chạy warm-up rồi đo một query set deterministic; đọc time/query, exact scans và checksum thay vì dùng FPS tổng.",
+        "Chạy 24 warm-up rồi đo 48 query, giữ checksum và exact scans. Job có tiến độ, có thể hủy giữa các query.",
     },
     "brute-scaling": {
-      title: "Chi phí tăng thế nào từ 1.000 lên 100.000 particles?",
+      title: "Tăng N thì phải làm thêm bao nhiêu việc?",
       description:
-        "Chạy cùng query set trên ba prefix và xem time/query cùng total scans tăng theo N.",
+        "Giữ cùng bộ query trên ba prefix 1.000 / 10.000 / 100.000. Đọc số lần kiểm trước, rồi mới so timing.",
     },
     "brute-validation": {
-      title: "Baseline brute force đã đủ rõ để so với Spatial Grid chưa?",
+      title: "Một baseline đủ rõ để dùng lại ở Project 28",
       description:
-        "Kiểm seed, boundary, reference agreement, workspace reuse, exact work, bounded benchmark và interaction trước Project 28.",
+        "Thử kính lúp, auto probe, clean mode và bảng scaling; kiểm cả reset, hủy và mất focus, không chỉ trường hợp chạy thuận lợi.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

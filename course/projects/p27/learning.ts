@@ -1,28 +1,25 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
-const files = ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"];
-
 const learning = {
   guides: {
     "p27-l01": {
       focus:
-        "Thay đám điểm minh họa bằng 100.000 `Particle` thật, được sinh từ cùng một vùng và có thể tạo lại nhờ `seed`.",
+        "Khởi đầu từ khung SDL có sẵn, sinh đủ 100.000 Particle theo seed rồi đưa dữ liệu thật lên framebuffer.",
       expected:
         "Cùng một `seed` luôn tạo lại đúng vị trí theo từng index; đổi `seed` làm đám hạt thay đổi nhưng không hạt nào ra ngoài `[0,1]²`.",
-      files,
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Giữ Particle tối giản",
+          title: "Đọc dữ liệu trước khi vẽ",
           explanation:
             "Ở project này, mỗi hạt chỉ cần vị trí. Index trong vector đóng vai trò định danh ổn định, nên kết quả truy vấn chỉ cần trả về các index.",
         },
         {
-          title: "Dùng PRNG có seed",
+          title: "Dùng lại cùng chuỗi số",
           explanation:
             "`XorShift32` tạo lại cùng chuỗi số sau mỗi lần reset. Nhờ đó phép đo hiệu năng và truy vấn đối chiếu luôn dùng đúng cùng dữ liệu.",
         },
         {
-          title: "Tạo cloud đúng một lần",
+          title: "Vẽ từng hạt từ vector",
           explanation:
             "Sinh dữ liệu trước vòng lặp chính và trước vùng đo thời gian. Mỗi khung hình chỉ đọc vector đã có để vẽ.",
         },
@@ -30,23 +27,23 @@ const learning = {
     },
     "p27-l02": {
       focus:
-        "Đổi vị trí chuột sang world space, tạo một `CircleQuery`, rồi kiểm tra một hạt có nằm trong hình tròn hay không.",
+        "Đặt CircleQuery bằng chuột, đổi tọa độ đúng một lần và hiểu phép kiểm một hạt trước khi viết vòng lặp.",
       expected:
-        "Pointer được clamp vào bounds; point trên boundary được nhận, point ngoài radius bị loại.",
-      files,
+        "Tọa độ chuột được đổi đúng một lần rồi clamp vào world; đọc vị trí tâm, R và phép kiểm riêng hạt index 0.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đổi screen point về world point",
+          title: "Đổi vị trí chuột về world",
           explanation:
             "Tâm truy vấn phải dùng world coordinates. Khi cửa sổ đổi kích thước, chỉ hình vẽ thay đổi; vị trí truy vấn trong thế giới vẫn giữ nguyên.",
         },
         {
-          title: "Tính delta từ center tới particle",
+          title: "Kiểm một hạt trước",
           explanation:
             "Lấy `dx` và `dy` từ tâm đến hạt rồi tính khoảng cách Euclid. Renderer chỉ hiển thị kết quả, không được quyết định hạt nào là hit.",
         },
         {
-          title: "Chốt boundary inclusive",
+          title: "Nhận cả điểm trên biên",
           explanation:
             "Dùng `distance <= radius` để hạt nằm đúng trên đường tròn vẫn được tính là hit. Test và ứng dụng phải dùng cùng quy ước này.",
         },
@@ -54,95 +51,104 @@ const learning = {
     },
     "p27-l03": {
       focus:
-        "Viết phiên bản brute force dễ đọc nhất: duyệt từng hạt, lưu mọi hit và theo dõi hạt gần tâm nhất.",
+        "Viết một full scan dễ đọc, thu mọi hit và xác định nearest kể cả khi vòng tròn không chứa hạt nào.",
       expected:
         "Full query luôn báo scanned=N; scan progress một phần chỉ trả hits trong prefix đã đi qua.",
-      files,
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Không dừng sau hit đầu tiên",
+          title: "Không dừng ở hit đầu",
           explanation:
             "Đề bài cần toàn bộ hạt trong kính lúp, không chỉ hạt đầu tiên. Vì vậy vòng lặp phải chạy đến phần tử cuối cùng.",
         },
         {
-          title: "Giữ nearest tie ổn định",
+          title: "Chọn nearest ổn định",
           explanation:
             "Chỉ thay hạt gần nhất khi khoảng cách mới nhỏ hơn hẳn. Nếu hai hạt cách đều tâm, giữ hạt có index xuất hiện trước.",
         },
         {
-          title: "Đếm scanned độc lập với hits",
+          title: "Đếm việc đã làm, không chỉ kết quả",
           explanation:
             "`hits` cho biết có bao nhiêu hạt nằm trong vòng tròn; `scanned` cho biết thuật toán đã kiểm bao nhiêu hạt. Đây là hai ý nghĩa khác nhau.",
         },
       ],
     },
     "p27-l04": {
-      focus:
-        "Bỏ phép căn bậc hai khỏi vòng lặp và dùng lại bộ đệm kết quả, nhưng vẫn giữ phiên bản dễ đọc để đối chiếu.",
+      focus: "Bỏ phép căn và dùng lại QueryWorkspace nhưng giữ đường reference để kiểm kết quả.",
       expected:
         "Hai phiên bản trả về cùng danh sách hit và cùng hạt gần nhất; vector kết quả không phải cấp phát lại ở mỗi truy vấn.",
-      files,
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "So hai đại lượng bình phương",
+          title: "So khoảng cách bình phương",
           explanation:
             "Vì radius không âm, distance <= radius tương đương distance² <= radius² mà không cần gọi sqrt cho từng particle.",
         },
         {
-          title: "Clear size, không hủy capacity",
+          title: "Giữ sức chứa của vector",
           explanation:
             "`QueryWorkspace` sống qua nhiều lần gọi. `clear()` xóa kết quả cũ nhưng vẫn giữ vùng nhớ đã `reserve()` để dùng tiếp.",
         },
         {
-          title: "Đối chiếu output trước timing",
+          title: "Đối chiếu toàn bộ index",
           explanation:
             "Chỉ đo tốc độ sau khi hai phiên bản cho cùng kết quả. Chạy nhanh hơn nhưng bỏ sót biên hoặc chọn sai hạt gần nhất vẫn là sai.",
         },
       ],
     },
     "p27-l05": {
-      focus:
-        "Đo riêng thời gian truy vấn bằng một bộ dữ liệu cố định, có warm-up, số lần lặp hữu hạn và checksum để chống tối ưu bỏ kết quả.",
+      focus: "Đo riêng query với warm-up, checksum đầy đủ và job hữu hạn có thể hủy.",
       expected:
-        "Benchmark báo đúng số truy vấn, `totalScanned = N × Q × repetitions`, checksum lặp lại được và thời gian trung bình cho mỗi truy vấn.",
-      files,
+        "Sau 24 warm-up, benchmark đo đúng 48 query; totalScanned=N×48, checksum lặp lại được và thời gian không chứa rendering.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+        "include/presentation.hpp",
+      ],
       steps: [
         {
-          title: "Chuẩn bị dữ liệu trước vùng đo",
+          title: "Chuẩn bị dữ liệu ngoài vùng đo",
           explanation:
             "Particle generation, query generation, reserve và render không được tính vào thời gian brute-force scan.",
         },
         {
-          title: "Warm-up đúng code path",
+          title: "Chạy warm-up trước",
           explanation:
             "Chạy thử một lượt trước khi bật đồng hồ để cache và runtime đã đi qua đúng đoạn mã sẽ đo. Lượt này không được cộng vào kết quả.",
         },
         {
-          title: "Giữ checksum cùng exact work",
+          title: "Dùng kết quả và đếm đúng work",
           explanation:
             "Checksum phụ thuộc vào kết quả từng truy vấn; `totalScanned` xác nhận vòng lặp đã thực hiện đúng số lần kiểm dự kiến.",
         },
       ],
     },
     "p27-l06": {
-      focus:
-        "Giữ nguyên các vòng tròn truy vấn, chỉ tăng số hạt từ 1.000 lên 10.000 rồi 100.000 để quan sát chi phí của brute force.",
+      focus: "Giữ cùng probes, chỉ đổi N để so bảng timing và exact work trên ba prefix chuẩn.",
       expected:
-        "Ba dòng kết quả có số lần kiểm theo tỉ lệ 1:10:100; đổi bán kính làm số hit thay đổi nhưng không làm giảm số hạt phải quét.",
-      files,
+        "Ba dòng đều có Q=48, scans=48.000 / 480.000 / 4.800.000; không ép timing tăng đúng mười lần.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+        "include/presentation.hpp",
+      ],
       steps: [
         {
-          title: "Dùng cùng particle storage và query set",
+          title: "Giữ cùng dữ liệu và câu hỏi",
           explanation:
             "Mỗi mốc chỉ lấy một đoạn đầu của cùng vector 100.000 hạt. Không sinh ba cảnh khác nhau vì như vậy phép so sánh sẽ bị nhiễu.",
         },
         {
-          title: "Đọc operation count trước timing",
+          title: "Đọc số lần kiểm trước timing",
           explanation:
             "Thời gian có thể dao động theo máy, còn `N × Q` là số lần kiểm xác định. Hãy đọc con số này trước để thấy trực tiếp độ phức tạp O(N).",
         },
         {
-          title: "Tách radius khỏi complexity",
+          title: "Phân biệt bán kính với độ phức tạp",
           explanation:
             "Bán kính lớn tạo nhiều hit hơn, nhưng brute force vẫn phải kiểm mọi hạt. Chỉ phần chi phí ghi kết quả có thể tăng thêm.",
         },
@@ -150,23 +156,31 @@ const learning = {
     },
     "p27-l07": {
       focus:
-        "Ghép các phần thành ứng dụng hoàn chỉnh rồi kiểm dữ liệu lặp lại được, kết quả đối chiếu, số lần quét và thao tác chuột.",
+        "Hoàn thiện auto probe, clean mode, input lifecycle và bộ test cho ứng dụng SDL hoàn chỉnh.",
       expected:
         "Bản cuối chạy với 100.000 hạt, luôn nhả chuột đúng lúc, phép đo luôn kết thúc và CTest đạt ở cả Debug lẫn Release.",
-      files,
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+        "include/presentation.hpp",
+        "tests/tests.cpp",
+        "tests/extra-cases.hpp",
+      ],
       steps: [
         {
-          title: "Ghép controls nhưng giữ query thuần",
+          title: "Ghép tương tác vào state hiện có",
           explanation:
-            "Chuột và bàn phím chỉ thay tâm, bán kính hoặc số hạt. Ứng dụng, benchmark và test cùng gọi một hàm truy vấn duy nhất.",
+            "Chuột và bàn phím chỉ đổi query hoặc cấu hình; job dùng probes riêng, dừng được và không ghi đè kết quả kính lúp.",
         },
         {
-          title: "Nói rõ draw sample khác workload",
+          title: "Vẽ đủ số hạt đã chọn",
           explanation:
-            "Canvas có thể chỉ vẽ 30.000 điểm để giữ giao diện mượt, nhưng thuật toán vẫn quét đủ N hạt và phần số liệu phải ghi rõ điều đó.",
+            "Canvas và C++ đều đưa toàn bộ N hạt lên ảnh; bitmap nền được dùng lại để tránh vẽ lại đám hạt khi chỉ tâm query thay đổi.",
         },
         {
-          title: "Giữ baseline cho Project 28",
+          title: "Giữ mốc đối chiếu cho Project 28",
           explanation:
             "Lưu lại checksum, bộ truy vấn và bảng tăng trưởng. Project 28 sẽ dùng chính chúng để so Spatial Grid với brute force trên cùng bài toán.",
         },
@@ -180,30 +194,78 @@ const learning = {
         href: "/glossary#deterministic-simulation",
         kind: "Thuật ngữ",
       },
-      { label: "Row-major order", href: "/glossary#row-major-order", kind: "Thuật ngữ" },
+      {
+        label: "Row-major order",
+        href: "/glossary#row-major-order",
+        kind: "Thuật ngữ",
+      },
     ],
     "p27-l02": [
-      { label: "World space", href: "/glossary#world-space", kind: "Thuật ngữ" },
-      { label: "Circle query", href: "/glossary#circle-query", kind: "Thuật ngữ" },
+      {
+        label: "World space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Circle query",
+        href: "/glossary#circle-query",
+        kind: "Thuật ngữ",
+      },
     ],
     "p27-l03": [
-      { label: "Brute-force query", href: "/glossary#brute-force-query", kind: "Thuật ngữ" },
-      { label: "Linear complexity", href: "/glossary#linear-complexity", kind: "Thuật ngữ" },
+      {
+        label: "Brute-force query",
+        href: "/glossary#brute-force-query",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Linear complexity",
+        href: "/glossary#linear-complexity",
+        kind: "Thuật ngữ",
+      },
     ],
     "p27-l04": [
-      { label: "Squared distance", href: "/glossary#squared-distance", kind: "Thuật ngữ" },
-      { label: "Hot loop", href: "/glossary#hot-loop", kind: "Thuật ngữ" },
+      {
+        label: "Squared distance",
+        href: "/glossary#squared-distance",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Hot loop",
+        href: "/glossary#hot-loop",
+        kind: "Thuật ngữ",
+      },
     ],
     "p27-l05": [
-      { label: "Benchmark warm-up", href: "/glossary#benchmark-warm-up", kind: "Thuật ngữ" },
-      { label: "Benchmark checksum", href: "/glossary#benchmark-checksum", kind: "Thuật ngữ" },
+      {
+        label: "Benchmark warm-up",
+        href: "/glossary#benchmark-warm-up",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Benchmark checksum",
+        href: "/glossary#benchmark-checksum",
+        kind: "Thuật ngữ",
+      },
     ],
     "p27-l06": [
-      { label: "Linear complexity", href: "/glossary#linear-complexity", kind: "Thuật ngữ" },
-      { label: "Brute-force query", href: "/glossary#brute-force-query", kind: "Thuật ngữ" },
+      {
+        label: "Linear complexity",
+        href: "/glossary#linear-complexity",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Brute-force query",
+        href: "/glossary#brute-force-query",
+        kind: "Thuật ngữ",
+      },
     ],
     "p27-l07": [
-      { label: "Pointer capture", href: "/glossary#pointer-capture", kind: "Thuật ngữ" },
+      {
+        label: "Pointer capture",
+        href: "/glossary#pointer-capture",
+        kind: "Thuật ngữ",
+      },
       {
         label: "SDL_CaptureMouse",
         href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
@@ -212,5 +274,4 @@ const learning = {
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;
