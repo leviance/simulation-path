@@ -1,225 +1,282 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"];
-
 const learning = {
   guides: {
     "p26-l01": {
-      focus:
-        "Bắt đầu từ hình hai con lắc đang đứng yên, rồi xác định chính xác những đại lượng nào cần lưu trong trạng thái mô phỏng.",
-      expected:
-        "Khi thay đổi `theta`, hai quả nặng di chuyển đúng theo góc mới; chiều dài của mỗi thanh vẫn giữ nguyên.",
-      files,
+      focus: "Tính tư thế từ góc trước khi thêm chuyển động.",
+      expected: "Một con lắc đứng yên trong A; các góc đổi được, chiều dài không đổi.",
+      files: ["include/lab.hpp", "include/view.hpp", "include/presentation.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Chốt góc từ phương thẳng đứng hướng xuống",
+          title: "Chốt quy ước góc",
           explanation:
-            "Với quy ước này, `theta = 0` đặt thanh thẳng xuống. Tọa độ X dùng `sin`; tọa độ Y hướng lên nên dùng `-cos`.",
+            "Cả theta1 và theta2 đo từ phương thẳng đứng hướng xuống; theta2 không phải góc tương đối giữa hai thanh.",
         },
         {
-          title: "Giữ state ở generalized coordinates",
+          title: "Viết geometry rồi nối vào renderer",
           explanation:
-            "Mô phỏng chỉ lưu góc và vận tốc góc. Vị trí quả nặng được tính lại từ các giá trị đó, tránh phải đồng bộ hai bản trạng thái khác nhau.",
+            "Tính bob1, sau đó cộng vector thanh 2 để được bob2. Scene giữ góc; renderer chỉ đọc kết quả suy ra.",
         },
         {
-          title: "Kiểm rod length bằng distance",
+          title: "Kiểm các tư thế có đáp án",
           explanation:
-            "Thử nhiều góc rồi đo khoảng cách từ điểm treo đến quả nặng thứ nhất và giữa hai quả nặng. Kết quả phải bằng `length1` và `length2`, chỉ chênh lệch rất nhỏ do số thực.",
+            "Góc 0 và π/2 cho các tọa độ dễ tính. Resize chỉ thay phép đổi sang pixel, không sửa mô hình.",
         },
       ],
     },
     "p26-l02": {
-      focus:
-        "Biến hệ phương trình liên kết thành một hàm thuần: nhận trạng thái hiện tại và trả về tốc độ thay đổi của bốn thành phần.",
+      focus: "Lập và giải hai phương trình tại cùng một trạng thái.",
       expected:
-        "State thẳng xuống cho alpha bằng zero; hai rod ngang song song cho alpha1=-g với unit parameters và alpha2=0.",
-      files,
+        "Ca thẳng xuống cho hai alpha bằng 0; ca ngang đơn vị cho alpha1=-9,81, alpha2=0 rad/s².",
+      files: ["include/lab.hpp", "include/presentation.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tính shared denominator một lần",
+          title: "Loại lực dọc thanh bằng phép chiếu",
           explanation:
-            "Hai gia tốc góc dùng chung một phần mẫu số. Tính nó một lần, đặt tên rõ ràng và kiểm tra trước khi chia.",
+            "Từ gia tốc hai quả, chiếu Newton lên các tiếp tuyến để có hai phương trình theo alpha1/alpha2.",
         },
         {
-          title: "Không sửa state trong derivative",
+          title: "Giải hệ 2×2 có kiểm tra",
           explanation:
-            "`alpha1` và `alpha2` phải được tính từ cùng một trạng thái đầu vào. Hàm không sửa dữ liệu cũng giúp RK4 gọi lại an toàn với các trạng thái trung gian.",
+            "Đặt tên a11…a22 và rhs1/rhs2 theo công thức; kiểm determinant và output hữu hạn, không sửa mẫu số để giấu lỗi.",
         },
         {
-          title: "Kiểm cấu hình có đáp án",
+          title: "Đối chiếu với lực thật",
           explanation:
-            "Kiểm trạng thái cân bằng và trường hợp hai thanh nằm ngang song song trước. Hai trường hợp có đáp án dễ tính này bắt lỗi dấu nhanh hơn việc chỉ nhìn chuyển động trên màn hình.",
+            "Kiểm thêm mass/length khác nhau bằng residual lực tiếp tuyến; đừng chỉ nhìn hình chạy.",
         },
       ],
     },
     "p26-l03": {
-      focus:
-        "Dùng RK4 với bước thời gian cố định để làm con lắc chuyển động, rồi theo dõi năng lượng để tự kiểm tra phép tích phân.",
+      focus: "Ghép một bước RK4 vào lịch frame và đo cơ năng độc lập.",
       expected:
-        "Mỗi lần tiến một bước làm `elapsed` tăng đúng `dt`; giảm `dt` khiến độ trôi năng lượng nhỏ đi rõ rệt.",
-      files,
+        "Single-step tăng đúng h; graph ΔE có trục giây/Joule và max error tính ở mọi bước.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Tạo bốn state tạm cho k1–k4",
+          title: "Viết bốn mẫu đạo hàm",
           explanation:
-            "Mỗi lần lấy mẫu đạo hàm đọc một trạng thái hoàn chỉnh. Sau khi ghép bốn mẫu, thời gian của kết quả chỉ tăng đúng một bước `dt`.",
+            "Mỗi state tạm bắt đầu từ cùng input; chỉ kết quả cuối tăng elapsed. Lỗi ở một mẫu phải từ chối cả bước.",
         },
         {
-          title: "Tính kinetic từ vận tốc bob",
+          title: "Tách lịch, phép tính và hiển thị",
           explanation:
-            "Quả nặng thứ hai chuyển động do cả hai thanh, vì vậy vận tốc của nó phải gồm đóng góp từ `theta1` lẫn `theta2` trước khi tính động năng.",
+            "Scene dùng candidate trước commit; main gọi advanceFrame trước render. Giới hạn 32 substep/frame và báo thời gian bị bỏ.",
         },
         {
-          title: "Giữ physics tách khỏi render frame",
+          title: "Đo đúng năng lượng của quả dưới",
           explanation:
-            "Mỗi khung hình chỉ nạp thời gian vào `accumulator`. Giới hạn số bước vật lý giúp ứng dụng không cố chạy bù vô hạn sau khi cửa sổ bị treo hoặc dừng ở debugger.",
+            "Vận tốc quả 2 gồm đóng góp cả hai thanh. History lấy theo physics, còn max |ΔE| theo mọi bước chấp nhận.",
         },
       ],
     },
     "p26-l04": {
-      focus:
-        "Tạo hai con lắc chỉ khác nhau một góc rất nhỏ lúc ban đầu và giữ mọi điều kiện còn lại giống hệt nhau.",
-      expected:
-        "Hai elapsed và step count trùng tuyệt đối; thay epsilon chỉ đổi theta2 ban đầu của perturbed lane.",
-      files,
+      focus: "Tạo một cặp chỉ khác theta2 ban đầu và giữ lịch chung.",
+      expected: "Epsilon=0 giữ hai state trùng nhau; thay epsilon/reset tái tạo đúng cặp.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Sao chép initial state trước khi perturb",
+          title: "Sao chép rồi chỉ sửa một góc",
           explanation:
-            "Sao chép trạng thái ban đầu rồi chỉ cộng `epsilon` vào một góc. Mỗi lần reset phải dựng lại đúng cặp trạng thái này.",
+            "Giữ riêng initialPrimary/initialPerturbed. Cả hai dùng chung tham số, solver và h.",
         },
         {
-          title: "Tiến cả hai trong một hàm lockstep",
+          title: "Commit cả cặp",
           explanation:
-            "Trong mỗi bước, cả hai con lắc dùng cùng tham số và cùng `dt`. Chỉ tăng bộ đếm sau khi cả hai đều đã tiến thành công.",
+            "Tính đủ hai candidate rồi mới cập nhật. Không để một con lắc tiến nếu con còn lại lỗi.",
         },
         {
-          title: "Vẽ trail nhưng không dùng trail làm metric",
+          title: "Vẽ hai khung, đo trong một world",
           explanation:
-            "Vệt chuyển động chỉ giúp quan sát. Khi đo độ tách, chương trình phải đọc trực tiếp hai trạng thái ở cùng thời điểm mô phỏng.",
+            "Pivot màn hình khác nhau chỉ để trình bày. E0 của A/B đo riêng, trails lưu world positions.",
         },
       ],
     },
     "p26-l05": {
-      focus:
-        "Xây một cách đo độ tách có tính đến tính tuần hoàn của góc và sự khác đơn vị giữa góc với vận tốc góc.",
+      focus: "Đo độ tách có tính tới góc tuần hoàn và đơn vị.",
       expected:
-        "+179° và -179° cách nhau 2°; phase-space curve bắt đầu ở epsilon rồi hiện rõ các giai đoạn divergence.",
-      files,
+        "Độ tách phase space và khoảng cách quả cuối là hai số khác nhau; trục X lấy thời gian mẫu.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+      ],
       steps: [
         {
-          title: "Wrap difference thay vì normalize state",
+          title: "Wrap hiệu, không wrap quỹ đạo",
           explanation:
-            "Không ép góc trong trạng thái quay về một vòng sau mỗi bước. Chỉ đưa hiệu hai góc về `[-pi, pi]` tại lúc đo.",
+            "Hai hướng +179°/−179° chỉ cách nhau 2°. Giữ góc RK4 liên tục qua nhiều vòng.",
         },
         {
-          title: "Scale omega bằng characteristic time",
+          title: "Chọn norm và công bố quy ước",
           explanation:
-            "Nhân chênh lệch vận tốc góc với `sqrt(meanLength / g)` để đổi nó thành một đại lượng có thể ghép cùng chênh lệch góc.",
+            "Nhân chênh lệch omega với sqrt(meanLength/g) trước khi ghép với góc; so các run với cùng norm.",
         },
         {
-          title: "Vẽ separation trên log scale",
+          title: "Giữ sàn log ở renderer",
           explanation:
-            "Độ tách có thể tăng từ `1e-6` lên gần một đơn vị. Trục log giúp nhìn được cả giai đoạn đầu lẫn lúc hai chuyển động đã khác rõ rệt.",
+            "Dữ liệu d=0 phải còn nguyên. Timestamp không đều không được trải đều theo index; exponent chưa xác định phải được báo đúng.",
         },
       ],
     },
     "p26-l06": {
-      focus:
-        "Ước lượng sai số do bước thời gian và đặt nó cạnh độ tách do nhiễu ban đầu trước khi nói về tính hỗn loạn.",
+      focus: "Đối chiếu bước thời gian trước khi diễn giải divergence.",
       expected:
-        "Full-step primary và half-step reference có cùng elapsed; giảm dt làm shadow error giảm trong validation horizon.",
-      files,
+        "Ở 10 s mặc định, độ tách A/B ổn định khi giảm h còn sai khác h/h2 giảm; không suy rộng sang mọi run.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Tạo shadow từ cùng primary initial state",
+          title: "Cho reference tự chạy từ initial A",
           explanation:
-            "Quỹ đạo tham chiếu bắt đầu từ đúng trạng thái của con lắc chính và không nhận `epsilon`. Chênh lệch chỉ đến từ cách chia bước `dt` và `dt/2`.",
+            "Mỗi bước h tương ứng đủ hai bước h/2. Reference không nhận epsilon và không bị reset về A ở mỗi frame.",
         },
         {
-          title: "Chạy đúng hai half-step",
+          title: "Theo dõi cả năng lượng lẫn phase error",
           explanation:
-            "Phải chạy đủ hai bước `dt/2` rồi mới so với một bước `dt`; lúc ấy hai trạng thái mới cùng thời điểm.",
+            "Năng lượng giữ tốt không bảo đảm pha đúng. Ở thời gian dài, sai số số học cũng có thể bị khuếch đại.",
         },
         {
-          title: "Giới hạn diễn giải finite-time exponent",
+          title: "Chạy thử bằng batch có thể hủy",
           explanation:
-            "`log(d / d0) / t` chỉ mô tả một khoảng thời gian đã chọn. Một lần chạy ngắn chưa đủ để coi nó là Lyapunov exponent đã hội tụ.",
+            "Yêu cầu +10 s rồi xử lý tối đa 32 bước/frame; Space/Backspace dừng job, đổi h reset phép đo.",
         },
       ],
     },
     "p26-l07": {
-      focus:
-        "Ghép phần tương tác vào ứng dụng và kiểm lần lượt hình học, phương trình chuyển động, năng lượng, biên góc, bước đồng bộ và sai số số học.",
+      focus: "Hoàn thiện tương tác và chứng minh ứng dụng C++ đúng phạm vi.",
       expected:
-        "Ba preset luôn reset về cùng trạng thái; thao tác kéo đặt được `theta2`; toàn bộ CTest ở Debug và Release đều đạt.",
-      files,
+        "Ba preset, job 30 s, kéo góc mới, chế độ sạch và tests Debug/Release đều dùng cùng lõi.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+        "tests/extra-cases.hpp",
+      ],
       steps: [
         {
-          title: "Dùng preset cho ba miền chuyển động",
+          title: "Giữ preset là dữ liệu",
           explanation:
-            "`Calm`, `Chaotic` và `Near upright` cho ba điểm xuất phát dễ so sánh mà không cần đổi thuật toán hay bộ tham số vật lý.",
+            "Góc nhỏ/năng lượng cao/gần đỉnh chỉ đổi điều kiện đầu, không tạo thuật toán hay animation riêng.",
         },
         {
-          title: "Cho interaction sửa initial state",
+          title: "Quản lý capture và reset rõ ràng",
           explanation:
-            "Khi kéo quả nặng thứ hai, tính lại `theta2` bằng `atan2` rồi khởi động lại thí nghiệm. Không đổi đột ngột trạng thái giữa một bước tích phân.",
+            "Chọn đúng bob2 A, giữ offset, chỉ commit sau capture thành công; final up/cancel/focus/resize đều có chính sách.",
         },
         {
-          title: "Chạy stress bằng số step hữu hạn",
+          title: "Kiểm đúng bài làm",
           explanation:
-            "Số vòng lặp được tính trước từ `duration / dt`. Nếu trạng thái trở thành vô hạn hoặc `NaN`, phép thử dừng sớm và báo lỗi thay vì treo ứng dụng.",
+            "Tests mặc định include final. Chỉ sang starter/include trong bản ZIP nếu muốn kiểm phần mình viết; đọc full source và README khi đối chiếu.",
         },
       ],
     },
   },
   references: {
     "p26-l01": [
-      { label: "Double pendulum", href: "/glossary#double-pendulum", kind: "Thuật ngữ" },
-      { label: "Unit circle", href: "/glossary#unit-circle", kind: "Thuật ngữ" },
+      {
+        label: "double pendulum",
+        href: "/glossary#double-pendulum",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "unit circle",
+        href: "/glossary#unit-circle",
+        kind: "Thuật ngữ",
+      },
     ],
     "p26-l02": [
-      { label: "Double pendulum", href: "/glossary#double-pendulum", kind: "Thuật ngữ" },
       {
-        label: "Numerical integration",
+        label: "double pendulum",
+        href: "/glossary#double-pendulum",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "numerical integration",
         href: "/glossary#numerical-integration",
         kind: "Thuật ngữ",
       },
     ],
     "p26-l03": [
-      { label: "Runge–Kutta 4", href: "/glossary#runge-kutta-4", kind: "Thuật ngữ" },
-      { label: "Energy drift", href: "/glossary#energy-drift", kind: "Thuật ngữ" },
+      {
+        label: "runge kutta 4",
+        href: "/glossary#runge-kutta-4",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "energy drift",
+        href: "/glossary#energy-drift",
+        kind: "Thuật ngữ",
+      },
     ],
     "p26-l04": [
       {
-        label: "Sensitive dependence",
+        label: "sensitive dependence",
         href: "/glossary#sensitive-dependence",
         kind: "Thuật ngữ",
       },
       {
-        label: "Deterministic simulation",
+        label: "deterministic simulation",
         href: "/glossary#deterministic-simulation",
         kind: "Thuật ngữ",
       },
     ],
     "p26-l05": [
-      { label: "Phase space", href: "/glossary#phase-space", kind: "Thuật ngữ" },
-      { label: "Wrapped angle", href: "/glossary#wrapped-angle", kind: "Thuật ngữ" },
+      {
+        label: "phase space",
+        href: "/glossary#phase-space",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "wrapped angle",
+        href: "/glossary#wrapped-angle",
+        kind: "Thuật ngữ",
+      },
     ],
     "p26-l06": [
       {
-        label: "Numerical shadow",
+        label: "numerical shadow",
         href: "/glossary#numerical-shadow",
         kind: "Thuật ngữ",
       },
       {
-        label: "Finite-time exponent",
+        label: "finite time exponent",
         href: "/glossary#finite-time-exponent",
         kind: "Thuật ngữ",
       },
     ],
     "p26-l07": [
-      { label: "Energy drift", href: "/glossary#energy-drift", kind: "Thuật ngữ" },
+      {
+        label: "energy drift",
+        href: "/glossary#energy-drift",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "double pendulum",
+        href: "/glossary#double-pendulum",
+        kind: "Thuật ngữ",
+      },
       {
         label: "SDL_CaptureMouse",
         href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",

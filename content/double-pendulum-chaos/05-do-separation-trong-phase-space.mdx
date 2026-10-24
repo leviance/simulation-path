@@ -1,100 +1,313 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đo separation trong phase space
+# Đo độ tách mà không nhầm ở biên góc
 
 ## Vấn đề cần giải quyết
 
-Khoảng cách giữa hai quả nặng dễ quan sát nhưng không mô tả đầy đủ trạng thái. Hai quả có thể đi qua cùng vị trí với vận tốc góc khác nhau. Phép trừ góc thông thường cũng gây nhầm: $+179^\circ$ và $-179^\circ$ nằm gần nhau trên đường tròn nhưng lại cho hiệu $358^\circ$.
+Hai vệt đang tách nhau, nhưng “trông khác” chưa phải một phép đo. Ta cần biết độ tách tăng bao nhiêu và ở thời điểm nào. Khoảng cách hai quả cuối cũng chưa mô tả hết: hai hệ có thể gần cùng vị trí nhưng đang đi theo hai hướng khác nhau.
 
-Ta dùng kỹ thuật **wrap angle** để xây một **phase-space** metric đáp ứng ba điều: lấy hiệu góc theo cung ngắn nhất, đổi chênh lệch vận tốc góc về cùng thang đo với góc và chỉ so các trạng thái ở cùng thời điểm.
+Bài này giữ hai phép đo riêng: khoảng cách quả cuối bằng mét và khoảng cách trạng thái trong phase space. Ta còn phải xử lý góc tuần hoàn, nếu không +179° và −179° sẽ bị ghi thành chênh 358° thay vì 2°.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Đặt characteristic time:
+Với mỗi góc, chỉ lấy hiệu nhỏ nhất sau khi quy về một vòng:
 
 $$
-\tau=\sqrt{\frac{(L_1+L_2)/2}{g}}
+\delta\theta_i=\operatorname{wrap}(\tilde\theta_i-\theta_i)\in[-\pi,\pi].
 $$
 
-Sau đó:
+Không wrap góc đang được RK4 tích phân; chỉ wrap hiệu khi so sánh. Để ghép vận tốc góc với góc, chọn thang thời gian đặc trưng:
 
 $$
-d=\sqrt{\Delta\theta_1^2+\Delta\theta_2^2+(\tau\Delta\omega_1)^2+(\tau\Delta\omega_2)^2}
+\tau=\sqrt{\frac{(L_1+L_2)/2}{g}},\qquad
+d=\sqrt{\delta\theta_1^2+\delta\theta_2^2+
+(\tau\delta\omega_1)^2+(\tau\delta\omega_2)^2}.
 $$
+
+Tau có đơn vị giây, nên tau·delta omega có cùng cách biểu diễn không thứ nguyên với góc radian. Đây là một quy ước chọn norm, không phải “khoảng cách vật lý chính xác duy nhất”. Khi so các run, phải giữ cùng mô hình và cùng norm.
+
+Khoảng cách hai quả cuối thì đơn giản là $|p_{2,B}-p_{2,A}|$, lấy từ world geometry. Đừng trừ tọa độ screen giữa hai panel: lúc đầu screen đã cách nhau 530 pixel dù trạng thái gần như trùng.
+
+Ta vẽ d(t) trên trục log để thấy cả mức 1e-4 lẫn mức gần 1. Nếu d=0, log không xác định; renderer vẽ tại sàn 1e-12 và ghi rõ đó chỉ là sàn hiển thị. Số đo d vẫn phải giữ bằng 0.
 
 <InteractiveLab demo="double-pendulum-chaos" mode="chaos-separation" />
 
-Đồ thị dùng trục log vì độ tách có thể tăng từ `1e-6` lên gần một đơn vị. Đường cong không nhất thiết tăng đều; hệ phi tuyến có thể tạm thời tiến gần nhau trước khi tách xa.
+Chọn epsilon=0, tiến vài bước và đọc d: kết quả vẫn phải là 0. Đặt lại với epsilon=1e-4, chạy và đọc đường tím. Các điểm có timestamp thực; tiến vài bước đơn không được làm đồ thị giả vờ mỗi mẫu cách nhau 0,04 s.
 
 ## Viết code từng bước
 
-### Bước 1 — Wrap một angle difference về khoảng ngắn nhất
+Viết phần của bạn trong starter/include và starter/src. Khi thay một hàm, xóa bản cũ rồi thay bằng bản mới, không thêm hàm trùng tên. Các hàm thuộc header đặt trong namespace lab đã có sẵn. Checkpoint 5 là bản tham khảo ở cuối bài; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — xử lý biên cộng trừ pi"
-double wrapped = std::fmod(angle + kPi, 2.0 * kPi);
-if (wrapped < 0.0) {
-    wrapped += 2.0 * kPi;
-}
-wrapped -= kPi;
-```
+### Bước 1 — Xử lý tính tuần hoàn tại đúng chỗ
 
-Ta wrap difference, không wrap state sau từng integration step. Sin/cos vốn tuần hoàn và integrator được phép giữ angle liên tục qua nhiều vòng.
+Trong include/lab.hpp, thêm wrapAngle sau stepTwinPendulums. Hai góc cách nhau nguyên một vòng phải được xem là cùng hướng khi đo.
 
-### Bước 2 — Scale angular velocity bằng time scale
-
-```cpp title="include/lab.hpp — bốn component của phase-space distance"
-const double timeScale = std::sqrt((0.5 * (parameters.length1 + parameters.length2)) / parameters.gravity);
-const double angle1Difference = wrapAngle(second.theta1 - first.theta1);
-const double angle2Difference = wrapAngle(second.theta2 - first.theta2);
-const double omega1Difference = (second.omega1 - first.omega1) * timeScale;
-const double omega2Difference = (second.omega2 - first.omega2) * timeScale;
-```
-
-`omega*timeScale` có đơn vị radian, nên norm không còn cộng trực tiếp radian với radian/giây.
-
-### Bước 3 — Ghép norm và đo bob riêng
-
-```cpp title="include/lab.hpp — phase metric và screen-friendly metric tách biệt"
-return std::hypot(std::hypot(angle1Difference, angle2Difference), std::hypot(omega1Difference, omega2Difference));
-```
-
-Second-bob distance vẫn được hiển thị bằng mét vì dễ hình dung, nhưng nó không thay thế phase-space separation.
-
-### Bước 4 — Tính finite-time exponent có điều kiện
-
-```cpp title="include/lab.hpp — tốc độ tăng trung bình trên cửa sổ hữu hạn"
-if (twins.primary.elapsed > 0.0 && initialSeparation > kChaosEpsilon && metrics.phaseSeparation > kChaosEpsilon) {
-    metrics.finiteTimeExponent = std::log(metrics.phaseSeparation / initialSeparation) / twins.primary.elapsed;
+```cpp title="include/lab.hpp — wrap hiệu góc"
+inline double wrapAngle(double angle) {
+    if (!std::isfinite(angle)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    double wrapped = std::fmod(angle + kPi, 2.0 * kPi);
+    if (wrapped < 0.0) {
+        wrapped += 2.0 * kPi;
+    }
+    wrapped -= kPi;
+    if (wrapped == -kPi && angle > 0.0) {
+        wrapped = kPi;
+    }
+    return wrapped;
 }
 ```
 
-Đây là finite-time estimate. Một giá trị dương trong đoạn ngắn không tự động là Lyapunov exponent hội tụ của toàn attractor.
+### Bước 2 — Viết hai khoảng cách với ý nghĩa khác nhau
+
+Thêm hai hàm dưới. Cả hai đọc state gốc, không đọc vệt hoặc điểm pixel. phaseSpaceSeparation còn kiểm hai nhãn thời gian trước khi tính.
+
+```cpp title="include/lab.hpp — khoảng cách trạng thái"
+inline double phaseSpaceSeparation(const DoublePendulumState& first, const DoublePendulumState& second, const DoublePendulumParameters& parameters) {
+    if (!finiteState(first) || !finiteState(second) || !validParameters(parameters) || !sameTime(first.elapsed, second.elapsed)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double timeScale = std::sqrt((0.5 * parameters.length1 + 0.5 * parameters.length2) / parameters.gravity);
+    const double angle1Difference = wrapAngle(second.theta1 - first.theta1);
+    const double angle2Difference = wrapAngle(second.theta2 - first.theta2);
+    const double omega1Difference = (second.omega1 - first.omega1) * timeScale;
+    const double omega2Difference = (second.omega2 - first.omega2) * timeScale;
+    return std::hypot(std::hypot(angle1Difference, angle2Difference), std::hypot(omega1Difference, omega2Difference));
+}
+```
+
+```cpp title="include/lab.hpp — khoảng cách hai quả cuối theo mét"
+inline double secondBobSeparation(const DoublePendulumState& first, const DoublePendulumState& second, const DoublePendulumParameters& parameters) {
+    const DoublePendulumGeometry firstGeometry = pendulumGeometry(first, parameters);
+    const DoublePendulumGeometry secondGeometry = pendulumGeometry(second, parameters);
+    return length(subtract(secondGeometry.bob2, firstGeometry.bob2));
+}
+```
+
+### Bước 3 — Gom số liệu và xử lý trường hợp chưa có exponent
+
+Thêm TwinMetrics và measureTwins. Thời lượng dùng để tính tốc độ tăng trưởng phải là elapsed hiện tại trừ elapsed ban đầu, không phải thời gian hệ thống kể từ khi mở chương trình.
+
+```cpp title="include/lab.hpp — dữ liệu phép đo"
+struct TwinMetrics {
+    double phaseSeparation{};
+    double secondBobDistance{};
+    double finiteTimeExponent{std::numeric_limits<double>::quiet_NaN()};
+    double relativeEnergyDrift{std::numeric_limits<double>::quiet_NaN()};
+    double perturbedRelativeEnergyDrift{std::numeric_limits<double>::quiet_NaN()};
+    double absoluteEnergyDrift{};
+    double perturbedAbsoluteEnergyDrift{};
+    bool finite{};
+};
+```
+
+```cpp title="include/lab.hpp — đo cặp trạng thái"
+inline TwinMetrics measureTwins(const TwinPendulums& twins, const DoublePendulumParameters& parameters) {
+    TwinMetrics metrics{};
+    metrics.phaseSeparation = phaseSpaceSeparation(twins.primary, twins.perturbed, parameters);
+    metrics.secondBobDistance = secondBobSeparation(twins.primary, twins.perturbed, parameters);
+    const double initialSeparation = phaseSpaceSeparation(twins.initialPrimary, twins.initialPerturbed, parameters);
+    const double duration = twins.primary.elapsed - twins.initialPrimary.elapsed;
+    if (duration > 0.0 && initialSeparation > 0.0 && metrics.phaseSeparation > 0.0) {
+        metrics.finiteTimeExponent = (std::log(metrics.phaseSeparation) - std::log(initialSeparation)) / duration;
+    }
+    const double initialEnergy = pendulumEnergy(twins.initialPrimary, parameters);
+    const double perturbedInitialEnergy = pendulumEnergy(twins.initialPerturbed, parameters);
+    metrics.absoluteEnergyDrift = pendulumEnergy(twins.primary, parameters) - initialEnergy;
+    metrics.perturbedAbsoluteEnergyDrift = pendulumEnergy(twins.perturbed, parameters) - perturbedInitialEnergy;
+    if (std::abs(initialEnergy) > kChaosEpsilon) {
+        metrics.relativeEnergyDrift = metrics.absoluteEnergyDrift / std::abs(initialEnergy);
+    }
+    if (std::abs(perturbedInitialEnergy) > kChaosEpsilon) {
+        metrics.perturbedRelativeEnergyDrift = metrics.perturbedAbsoluteEnergyDrift / std::abs(perturbedInitialEnergy);
+    }
+    metrics.finite = finiteState(twins.primary) && finiteState(twins.perturbed) && std::isfinite(metrics.phaseSeparation) && std::isfinite(metrics.secondBobDistance) && std::isfinite(metrics.absoluteEnergyDrift) && std::isfinite(metrics.perturbedAbsoluteEnergyDrift);
+    return metrics;
+}
+```
+
+Giá trị log(d/d0)/t chỉ là tốc độ tăng trưởng trên một khoảng thời gian cụ thể. Nó có thể âm, thay đổi theo thời lượng hoặc mất ý nghĩa sau khi khoảng cách đã bão hòa. Chưa có renormalization hay giới hạn thời gian vô hạn, nên không gọi nó là Lyapunov exponent đã hội tụ.
+
+Khi t=0 hoặc d0=0 hoặc d=0, để exponent là NaN và hiển thị “chưa xác định”. Nếu E0=0 thì relative drift cũng chưa xác định; absolute energy drift vẫn đo được. Không biến một phép chia không xác định thành số 0 chỉ để bảng nhìn đẹp.
+
+### Bước 4 — Đưa số đo vào history của physics
+
+Thay HistorySample và recordHistory trong include/scene.hpp. Những hàm update khác của bài 4 giữ nguyên.
+
+```cpp title="include/scene.hpp — mẫu có độ tách"
+struct HistorySample {
+    double time{};
+    double energyErrorA{};
+    double energyErrorB{};
+    double physical{};
+};
+```
+
+```cpp title="include/scene.hpp — lấy mẫu cùng thời điểm"
+inline void recordHistory(Scene& scene, bool force = false) {
+    const auto& primary = primaryState(scene);
+    if (!scene.history.empty()) {
+        const double interval = primary.elapsed - scene.history.back().time;
+        if (interval <= 1e-12 || (!force && interval < 0.04 - 1e-12)) {
+            return;
+        }
+    }
+    HistorySample sample{};
+    sample.time = primary.elapsed;
+    sample.energyErrorA = pendulumEnergy(primary, scene.parameters) - scene.initialEnergyA;
+    sample.energyErrorB = pendulumEnergy(perturbedState(scene), scene.parameters) - scene.initialEnergyB;
+    scene.trailA.push_back(pendulumGeometry(primary, scene.parameters).bob2);
+    scene.trailB.push_back(pendulumGeometry(perturbedState(scene), scene.parameters).bob2);
+    if (scene.trailA.size() > 751) {
+        scene.trailA.erase(scene.trailA.begin());
+        scene.trailB.erase(scene.trailB.begin());
+    }
+    sample.physical = phaseSpaceSeparation(primary, perturbedState(scene), scene.parameters);
+    scene.history.push_back(sample);
+    if (scene.history.size() > 751) {
+        scene.history.erase(scene.history.begin());
+    }
+}
+```
+
+### Bước 5 — Vẽ trục log nhưng không sửa dữ liệu
+
+Trong include/view.hpp, thêm separationGraphY và drawSeparationGraph trước drawScene:
+
+```cpp title="include/view.hpp — trục log và thời gian"
+inline double separationGraphY(double value) {
+    const double logarithm = std::log10(std::max(1e-12, value));
+    const double normalized = std::clamp((logarithm + 12.0) / 14.0, 0.0, 1.0);
+    return 730.0 - 140.0 * normalized;
+}
+
+inline void drawSeparationGraph(Framebuffer& image, const Scene& scene) {
+    rectangle(image, 40, 590, 530, 730, kGrid, false);
+    if (scene.history.empty()) {
+        return;
+    }
+    const double first = scene.history.front().time;
+    const double span = std::max(kStepOptions[scene.dtIndex], scene.history.back().time - first);
+    for (std::size_t i = 1; i < scene.history.size(); ++i) {
+        const auto& a = scene.history[i - 1];
+        const auto& b = scene.history[i];
+        const double x0 = graphTimeX(a.time, first, span, 40);
+        const double x1 = graphTimeX(b.time, first, span, 40);
+        drawLine(image, x0, separationGraphY(a.physical), x1, separationGraphY(b.physical), kPhysicalGraph);
+    }
+}
+```
+
+Thay drawScene để gọi graph mới. Graph log và graph ΔE dùng hai trục dọc khác đơn vị, không được ghép chúng vào cùng một biểu đồ:
+
+```cpp title="include/view.hpp — cảnh và hai đồ thị"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    rectangle(image, 40, 100, 530, 530, kGrid, false);
+    rectangle(image, 570, 100, 1060, 530, kGrid, false);
+    const WorldView viewA = makeWorldView(scene.parameters, 0);
+    const WorldView viewB = makeWorldView(scene.parameters, 1);
+    drawTrail(image, scene.trailA, viewA, 0x284c6fff);
+    drawTrail(image, scene.trailB, viewB, 0x66373fff);
+    drawPendulum(image, perturbedState(scene), scene.parameters, viewB, kPerturbed);
+    if (scene.debug) {
+        drawLine(image, viewA.pivotX, viewA.pivotY, viewA.pivotX, viewA.pivotY + 180, kGrid);
+    }
+    drawPendulum(image, primaryState(scene), scene.parameters, viewA, kPrimary);
+    drawEnergyGraph(image, scene);
+    drawSeparationGraph(image, scene);
+}
+```
+
+Cuối cùng thay drawHud bằng bản có nhãn trục log, độ tách và khoảng thời gian:
+
+```cpp title="include/presentation.hpp — chú thích và số đo"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    const auto text = [&](float x, float y, const char* value) {
+        ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
+    };
+    char line[220]{};
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    text(30, 20, line);
+    text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
+    text(30, 64, "Space start/pause | N one step | [ smaller dt | ] larger dt");
+    text(52, 110, "A: primary initial state");
+    text(582, 110, "B: same model, theta2 + epsilon at t=0");
+    std::snprintf(line, sizeof(line), "E_A=%.6f J | max |delta E_A|=%.3e J", pendulumEnergy(primaryState(scene), scene.parameters), scene.maximumEnergyErrorA);
+    text(40, 548, line);
+    text(570, 570, "Energy error Delta E(t) [J]: blue A, red B");
+    std::snprintf(line, sizeof(line), "+/-%.3e J (zero at center)", energyGraphBound(scene));
+    text(580, 596, line);
+    if (!scene.history.empty()) {
+        std::snprintf(line, sizeof(line), "time %.3f -> %.3f s | latest %zu samples", scene.history.front().time, scene.history.back().time, scene.history.size());
+        text(570, 742, line);
+    }
+    std::snprintf(line, sizeof(line), "dt=%.7f s | steps=%zu | substeps=%d | dropped=%.4f s", kStepOptions[scene.dtIndex], scene.steps, scene.substeps, scene.droppedTime);
+    text(30, 766, line);
+    std::snprintf(line, sizeof(line), "E_B=%.6f J | max |delta E_B|=%.3e J", pendulumEnergy(perturbedState(scene), scene.parameters), scene.maximumEnergyErrorB);
+    text(570, 548, line);
+    std::snprintf(line, sizeof(line), "epsilon=%.1e rad | Up/Down: epsilon | 0: identical twins", scene.perturbation);
+    if (scene.debug) {
+        text(30, 84, line);
+    }
+    const auto& twins = scene.twins;
+    const auto twinMetrics = measureTwins(twins, scene.parameters);
+    char growth[40] = "n/a";
+    if (std::isfinite(twinMetrics.finiteTimeExponent)) {
+        std::snprintf(growth, sizeof(growth), "%.5f 1/s", twinMetrics.finiteTimeExponent);
+    }
+    std::snprintf(line, sizeof(line), "bob distance %.5f m | growthT %s (not converged Lya)", twinMetrics.secondBobDistance, growth);
+    text(30, 788, line);
+    text(40, 570, "Phase distance d(t), log10: purple twins");
+    text(48, 596, "1e2 (top) -> 1e-12 (floor, display only)");
+    if (!scene.history.empty()) {
+        const auto& last = scene.history.back();
+        std::snprintf(line, sizeof(line), "t=%.3f s | d=%.3e", last.time, last.physical);
+        text(40, 742, line);
+    }
+    if (!scene.message.empty()) {
+        text(30, 808, scene.message.c_str());
+    }
+    return ok;
+}
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build phase-space measurement"
+Không thêm solver hoặc accumulator mới vào main. Các phép đo đều nằm sau một bước A/B đã chấp nhận, rồi đi vào history và renderer.
+
+Đọc đường tím cùng số d và khoảng cách quả cuối. Hai giá trị có thể tăng giảm khác nhau vì chúng đo hai thứ khác nhau. Trục log hiển thị trong khoảng 1e-12 đến 1e2; nếu điểm ra ngoài, phần vẽ bị cắt chứ state và metric không bị clamp.
+
+Từ thư mục gốc của gói tải về, build đúng bài làm:
+
+```powershell title="Terminal — build và chạy Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_26_checkpoint_5
+cmake --build build --config Debug --target project_26_starter --parallel 2
+.\build\Debug\project_26_starter.exe
 ```
 
-Chạy đến khi curve rời đáy graph. So phase separation với bob distance; hai số có đơn vị và câu hỏi khác nhau.
+Nếu cần đối chiếu, build riêng project_26_checkpoint_5. Source đầy đủ sau bài được trình bày ở cuối trang; dùng nó để kiểm chỗ ghép còn thiếu, không cần đoán vị trí của một đoạn code.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thay `wrapAngle` bằng raw subtraction. Đặt hai góc quanh ±π và quan sát separation nhảy giả; hoàn tác wrapped difference.
-2. Bỏ `timeScale` rồi cộng trực tiếp delta omega. Đổi length/gravity làm metric thay đổi đơn vị ngầm; hoàn tác scaling.
-3. Vẽ separation trên linear axis từ 0 đến 1. Giai đoạn tăng sớm biến mất; hoàn tác log scale có floor rõ ràng.
+1. Lấy abs(thetaB−thetaA) mà không wrap. Kiểm cặp +179°/−179° trước khi tin một đỉnh nhọn trên graph.
+2. Cộng trực tiếp chênh lệch omega vào chênh lệch theta mà không có thang thời gian. Bạn đã trộn hai đơn vị khác nhau.
+3. Dùng index mẫu làm trục X. Tạo các mẫu ở 0, 1 và 4 s: điểm giữa phải nằm ở 1/4 bề ngang, không phải chính giữa.
+4. Gán d=max(d,1e-12) vào metric. Epsilon=0 sẽ không còn được báo đúng; chỉ đặt sàn ở renderer.
 
 ## Tự kiểm tra kết quả
 
-- `wrapAngle(181°)` cho `-179°`.
-- `+179°` và `-179°` được đo cách nhau `2°`.
-- Phase separation ban đầu bằng perturbation khi chỉ theta2 khác.
-- Bob distance có đơn vị mét; phase metric không thứ nguyên.
-- Exponent không được báo khi elapsed hoặc initial separation bằng zero.
+- +179° và −179° cho chênh lệch hướng 2°, không phải 358°.
+- Hai hướng lệch một vòng có wrapped difference gần 0.
+- A/B giống hệt nhau cho d=0 và không tạo exponent giả.
+- Khoảng cách quả cuối lấy trong world space, không đổi chỉ vì hai panel đặt xa nhau.
+- Trục X đọc timestamp, trục dọc log ghi rõ sàn hiển thị; ΔE vẫn là graph Joule riêng.
+- Hai state khác thời điểm bị từ chối khi gọi phép đo phase space.
 
 ## Bài tập mở rộng
 
-Vẽ riêng bốn contribution bình phương của metric. Tìm giai đoạn separation chủ yếu đến từ angular velocity trước khi bob position nhìn thấy khác biệt.
+Tạo hai state có góc giống nhau nhưng omega khác nhau: khoảng cách quả cuối bằng 0, trong khi d phải dương. Sau đó thêm 2π vào một góc của state thử nghiệm; geometry và wrapped difference phải tương đương trong sai số số thực.
 
-Bài sau đặt một đường numerical error cạnh đường perturbation để tránh gán mọi divergence cho chaos.
+Bài tiếp theo: [Kiểm tra lại bằng bước thời gian nhỏ hơn](/projects/double-pendulum-chaos/06-phan-biet-chaos-voi-sai-so-so-hoc).

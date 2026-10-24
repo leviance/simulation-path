@@ -1,105 +1,525 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Phân biệt chaos với sai số số học
+# Kiểm tra lại bằng bước thời gian nhỏ hơn
 
 ## Vấn đề cần giải quyết
 
-Hai quỹ đạo tính bằng số có thể tách nhau vì hai nguyên nhân: điều kiện ban đầu khác nhau hoặc sai số do chia thời gian thành các bước rời rạc. Trong một hệ nhạy, ngay cả sai số rất nhỏ của RK4 cũng có thể bị khuếch đại. Nếu không đo phần sai số này, ta rất dễ nhầm hậu quả của một `dt` quá lớn với tính hỗn loạn của hệ.
+A/B tách nhau có thể vì điều kiện đầu khác, nhưng cũng có thể vì bước thời gian quá thô. Giữ năng lượng gần như không đổi vẫn chưa bảo đảm pha của chuyển động đúng. Ta cần một phép đối chiếu trực tiếp ở cùng thời điểm.
 
-Ta không có nghiệm giải tích để đối chiếu trực tiếp. Thay vào đó, con lắc chính chạy một bước `dt`, còn quỹ đạo tham chiếu bắt đầu từ cùng trạng thái và chạy hai bước `dt/2`.
+Bài này cho một quỹ đạo tham chiếu bắt đầu từ đúng state của A, không có epsilon. Nó tự chạy bằng hai bước h/2 cho mỗi bước h. Ta sẽ đặt sai khác h–h/2 cạnh độ tách A–B, rồi lặp lại cả phép thử khi giảm h.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Sau một full interval:
+Có hai thí nghiệm khác nhau:
+
+- A/B: khác theta2 ban đầu, dùng cùng bước h.
+- A/reference: cùng điều kiện đầu, dùng h và h/2.
+
+Reference phải chạy liên tục từ điều kiện đầu của chính nó. Không được sau mỗi frame lại lấy state mới của A làm điểm xuất phát cho hai half-step; cách đó chỉ đo lỗi cục bộ của một bước.
 
 $$
-y_{n+1}=F_{\Delta t}(y_n)
+y_{n+1}=F_h(y_n),\qquad
+z_{n+1}=F_{h/2}(F_{h/2}(z_n)),\qquad z_0=y_0.
 $$
 
-$$
-y^*_{n+1}=F_{\Delta t/2}(F_{\Delta t/2}(y^*_n))
-$$
+Dùng cùng norm để đo $d_{\varepsilon}(t)=d(y_A,y_B)$ và $d_{\text{num}}(t)=d(y_A,z)$. Reference h/2 vẫn có sai số, không phải nghiệm chính xác hoặc một lời bảo đảm toán học về chaos.
 
-Chỉ so hai trạng thái sau khi thời gian mô phỏng của chúng bằng nhau. Khoảng cách này chưa phải sai số chính xác, nhưng phải giảm khi thu nhỏ `dt` trong miền RK4 còn hội tụ tốt.
+Với điều kiện đầu mặc định, epsilon=1e-4 và horizon 10 s, các số làm tròn từ một lượt kiểm chứng:
+
+| h (s) | d của A/B | d của h/h2 | Max relative energy drift A/B |
+| --- | ---: | ---: | ---: |
+| 1/240 | 0,212308 | 3,49e-5 | 5,29e-7 |
+| 1/480 | 0,212302 | 1,12e-6 | 3,53e-8 |
+| 1/960 | 0,212302 | 1,74e-7 | 2,28e-9 |
+
+Độ tách A/B gần như giữ nguyên khi giảm h, trong khi phần sai khác số giảm rõ. Đây là bằng chứng có ích trong **khoảng 10 giây và cấu hình này**, không phải một ngưỡng áp dụng cho mọi điều kiện đầu.
+
+Khi chạy tới 30 s, chaos cũng có thể khuếch đại truncation error và roundoff. Hai đường có thể cùng lớn dù cơ năng còn được giữ tốt. Lúc đó cần rút ngắn khoảng dự đoán hoặc tiếp tục nghiên cứu hội tụ, không gắn nhãn “hệ bị nổ” chỉ vì hai quỹ đạo không còn trùng.
 
 <InteractiveLab demo="double-pendulum-chaos" mode="chaos-shadow" />
 
-Chạy nhanh 30 giây ở `dt=1/120`, rồi lặp với `1/480` sau reset. Đường vàng là full-step so với half-step; đường tím là primary so với intentional perturbation.
+Bấm “Chạy thử 10 giây”, đọc hai độ tách và max energy error. Đổi h sang 1/480 rồi chạy lại từ đầu; tiếp tục với 1/960. Job có nút dừng và chỉ xử lý tối đa 32 bước/frame. Mỗi lần bấm chạy thử là cộng thêm 10 giây; muốn so từ t=0 phải bấm Đặt lại trước.
 
 ## Viết code từng bước
 
-### Bước 1 — Gắn shadow vào cùng experiment
+Viết phần của bạn trong starter/include và starter/src. Khi thay một hàm, xóa bản cũ rồi thay bằng bản mới, không thêm hàm trùng tên. Các hàm thuộc header đặt trong namespace lab đã có sẵn. Checkpoint 6 là bản tham khảo ở cuối bài; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — shadow bắt đầu từ primary initial state"
+### Bước 1 — Thêm state tham chiếu và phép đo của nó
+
+Trong include/lab.hpp, thêm ChaosExperiment và makeChaosExperiment sau measureTwins. Reference sao chép initial của A, không phải initial của B:
+
+```cpp title="include/lab.hpp — thí nghiệm có reference"
 struct ChaosExperiment {
     TwinPendulums twins{};
     DoublePendulumState halfStepReference{};
 };
 
 inline ChaosExperiment makeChaosExperiment(const DoublePendulumState& initial, double perturbationRadians) {
-    return {makeTwinPendulums(initial, perturbationRadians), initial};
+    ChaosExperiment experiment{};
+    experiment.twins = makeTwinPendulums(initial, perturbationRadians);
+    experiment.halfStepReference = initial;
+    return experiment;
 }
 ```
 
-Shadow không nhận epsilon. Nếu perturb nó, numerical curve sẽ trộn hai nguyên nhân giống đường twin.
+Thêm stepChaosExperiment. Hàm tính hai half-step, bước A/B và kiểm thời gian trước khi commit cả thí nghiệm:
 
-### Bước 2 — Chạy chính xác hai half-step
-
-```cpp title="include/lab.hpp — full step và hai half-step cùng elapsed"
-const DoublePendulumState firstHalf = stepRk4(experiment.halfStepReference, parameters, 0.5 * deltaSeconds);
-const DoublePendulumState secondHalf = stepRk4(firstHalf, parameters, 0.5 * deltaSeconds);
-const std::size_t previousStepCount = experiment.twins.stepCount;
-stepTwinPendulums(experiment.twins, parameters, deltaSeconds);
-```
-
-Ta tính candidate shadow trước, rồi chỉ commit nếu twin full step thực sự tăng count.
-
-### Bước 3 — Commit shadow cùng full step
-
-```cpp title="include/lab.hpp — không cho shadow chạy trước một lane lỗi"
-if (experiment.twins.stepCount > previousStepCount && secondHalf.elapsed > experiment.halfStepReference.elapsed) {
-    experiment.halfStepReference = secondHalf;
+```cpp title="include/lab.hpp — hai half-step thật và một commit"
+inline bool stepChaosExperiment(ChaosExperiment& experiment, const DoublePendulumParameters& parameters, double deltaSeconds) {
+    if (!sameTime(experiment.twins.primary.elapsed, experiment.halfStepReference.elapsed)) {
+        return false;
+    }
+    ChaosExperiment next = experiment;
+    const DoublePendulumState firstHalf = stepRk4(experiment.halfStepReference, parameters, 0.5 * deltaSeconds);
+    const DoublePendulumState secondHalf = stepRk4(firstHalf, parameters, 0.5 * deltaSeconds);
+    if (firstHalf.elapsed <= experiment.halfStepReference.elapsed || secondHalf.elapsed <= firstHalf.elapsed || !stepTwinPendulums(next.twins, parameters, deltaSeconds)) {
+        return false;
+    }
+    if (!sameTime(next.twins.primary.elapsed, secondHalf.elapsed)) {
+        return false;
+    }
+    next.halfStepReference = secondHalf;
+    // Hai half-step đã chạy đủ; chỉ đồng bộ nhãn thời gian để bỏ sai số cộng số thực.
+    next.halfStepReference.elapsed = next.twins.primary.elapsed;
+    experiment = next;
+    return true;
 }
 ```
 
-Invariant elapsed được giữ trong data flow, không sửa bằng cách gán thời gian sau khi hai trajectory đã lệch.
+Dòng gán elapsed của reference chỉ đồng bộ nhãn thời gian sau khi cả hai half-step đã thành công. Nó loại khác biệt cực nhỏ do hai phép cộng số thực so với một phép cộng h; không thay được việc chạy bước thứ hai. State vật lý của reference vẫn là kết quả của hai half-step.
 
-### Bước 4 — Đo numerical separation bằng cùng metric
+Sau đó thêm ChaosMetrics và measureChaos:
 
-```cpp title="include/lab.hpp — hai curve dùng chung phase-space metric"
-metrics.twins = measureTwins(experiment.twins, parameters);
-metrics.numericalSeparation = phaseSpaceSeparation(experiment.twins.primary, experiment.halfStepReference, parameters);
-metrics.finite = metrics.twins.finite && finiteState(experiment.halfStepReference) && std::isfinite(metrics.numericalSeparation);
+```cpp title="include/lab.hpp — đặt hai loại độ tách cạnh nhau"
+struct ChaosMetrics {
+    TwinMetrics twins{};
+    double numericalSeparation{};
+    bool finite{};
+};
+
+inline ChaosMetrics measureChaos(const ChaosExperiment& experiment, const DoublePendulumParameters& parameters) {
+    ChaosMetrics metrics{};
+    metrics.twins = measureTwins(experiment.twins, parameters);
+    metrics.numericalSeparation = phaseSpaceSeparation(experiment.twins.primary, experiment.halfStepReference, parameters);
+    metrics.finite = metrics.twins.finite && finiteState(experiment.halfStepReference) && std::isfinite(metrics.numericalSeparation);
+    return metrics;
+}
 ```
 
-Dùng cùng metric giúp hai curve so sánh được. Tuy nhiên, ở thời gian rất dài cả hai có thể bão hòa vì chaos khuếch đại cả truncation error; validation phải nêu rõ horizon.
+### Bước 2 — Đưa reference, max error và job nhỏ vào Scene
+
+Thay include/scene.hpp bằng bản đầy đủ dưới đây. Các phần đáng chú ý là experiment thay cho twins; resetScene dựng cả ba trajectory; recordHistory thêm numerical/energyErrorReference; stepScene kiểm candidate trước commit.
+
+```cpp title="include/scene.hpp — bản điều phối đầy đủ có reference và batch"
+#pragma once
+#include "lab.hpp"
+#include <string>
+#include <vector>
+
+namespace lab {
+inline constexpr double kStepOptions[]{1.0 / 30.0, 1.0 / 60.0, 1.0 / 120.0, 1.0 / 240.0, 1.0 / 480.0, 1.0 / 960.0};
+inline constexpr int kMaximumSubsteps = 32;
+
+struct HistorySample {
+    double time{};
+    double energyErrorA{};
+    double energyErrorB{};
+    double physical{};
+    double numerical{};
+    double energyErrorReference{};
+};
+
+struct Scene {
+    DoublePendulumParameters parameters{};
+    DoublePendulumState initial{2.0, 0.0, 1.1, 0.0, 0.0};
+    bool paused{true};
+    bool debug{true};
+    std::string message{};
+    int dtIndex{3};
+    double accumulator{};
+    double droppedTime{};
+    int substeps{};
+    std::size_t steps{};
+    double initialEnergyA{};
+    double maximumEnergyErrorA{};
+    std::vector<HistorySample> history{};
+    ChaosExperiment experiment{};
+    double perturbation{1e-4};
+    double initialEnergyB{};
+    double maximumEnergyErrorB{};
+    std::vector<Vec2> trailA{};
+    std::vector<Vec2> trailB{};
+    double maximumEnergyErrorReference{};
+    int fastRemaining{};
+};
+
+inline const DoublePendulumState& primaryState(const Scene& scene) {
+    return scene.experiment.twins.primary;
+}
+
+inline const DoublePendulumState& perturbedState(const Scene& scene) {
+    return scene.experiment.twins.perturbed;
+}
+
+inline void stopScene(Scene& scene) {
+    scene.paused = true;
+    scene.accumulator = 0.0;
+    scene.substeps = 0;
+    scene.fastRemaining = 0;
+}
+
+// Mẫu lấy theo thời gian physics. Bước đơn/cuối job có thể thêm một endpoint.
+inline void recordHistory(Scene& scene, bool force = false) {
+    const auto& primary = primaryState(scene);
+    if (!scene.history.empty()) {
+        const double interval = primary.elapsed - scene.history.back().time;
+        if (interval <= 1e-12 || (!force && interval < 0.04 - 1e-12)) {
+            return;
+        }
+    }
+    HistorySample sample{};
+    sample.time = primary.elapsed;
+    sample.energyErrorA = pendulumEnergy(primary, scene.parameters) - scene.initialEnergyA;
+    sample.energyErrorB = pendulumEnergy(perturbedState(scene), scene.parameters) - scene.initialEnergyB;
+    scene.trailA.push_back(pendulumGeometry(primary, scene.parameters).bob2);
+    scene.trailB.push_back(pendulumGeometry(perturbedState(scene), scene.parameters).bob2);
+    if (scene.trailA.size() > 751) {
+        scene.trailA.erase(scene.trailA.begin());
+        scene.trailB.erase(scene.trailB.begin());
+    }
+    sample.physical = phaseSpaceSeparation(primary, perturbedState(scene), scene.parameters);
+    sample.numerical = phaseSpaceSeparation(primary, scene.experiment.halfStepReference, scene.parameters);
+    sample.energyErrorReference = pendulumEnergy(scene.experiment.halfStepReference, scene.parameters) - scene.initialEnergyA;
+    scene.history.push_back(sample);
+    if (scene.history.size() > 751) {
+        scene.history.erase(scene.history.begin());
+    }
+}
+
+// Đổi điều kiện đầu/dt bắt đầu lại phép đo, không ghép dữ liệu hai thí nghiệm.
+inline void resetScene(Scene& scene) {
+    stopScene(scene);
+    scene.initial.elapsed = 0.0;
+    scene.message.clear();
+    scene.experiment = makeChaosExperiment(scene.initial, scene.perturbation);
+    scene.steps = 0;
+    scene.droppedTime = 0.0;
+    scene.maximumEnergyErrorA = 0.0;
+    scene.initialEnergyA = pendulumEnergy(primaryState(scene), scene.parameters);
+    scene.history.clear();
+    scene.initialEnergyB = pendulumEnergy(perturbedState(scene), scene.parameters);
+    scene.maximumEnergyErrorB = 0.0;
+    scene.trailA.clear();
+    scene.trailB.clear();
+    scene.maximumEnergyErrorReference = 0.0;
+    recordHistory(scene, true);
+}
+
+inline Scene makeScene() {
+    Scene scene{};
+    resetScene(scene);
+    return scene;
+}
+
+inline bool withinExperiment(const DoublePendulumState& state) {
+    return finiteState(state) && std::abs(state.omega1) <= 10000.0 && std::abs(state.omega2) <= 10000.0;
+}
+
+inline bool stepScene(Scene& scene) {
+    if (scene.dtIndex < 0 || scene.dtIndex >= 6) {
+        stopScene(scene);
+        scene.message = "Stopped: invalid dt index.";
+        return false;
+    }
+    const double dt = kStepOptions[scene.dtIndex];
+    bool accepted = false;
+    ChaosExperiment candidate = scene.experiment;
+    accepted = stepChaosExperiment(candidate, scene.parameters, dt);
+    accepted = accepted && withinExperiment(candidate.twins.primary) && withinExperiment(candidate.twins.perturbed) && withinExperiment(candidate.halfStepReference) && measureChaos(candidate, scene.parameters).finite;
+    if (accepted) {
+        scene.experiment = candidate;
+    }
+    if (!accepted) {
+        stopScene(scene);
+        scene.message = "Stopped: invalid, non-finite or unsafe step. Reduce dt or reset; state was not clamped.";
+        return false;
+    }
+    ++scene.steps;
+    ++scene.substeps;
+    scene.maximumEnergyErrorA = std::max(scene.maximumEnergyErrorA, std::abs(pendulumEnergy(primaryState(scene), scene.parameters) - scene.initialEnergyA));
+    scene.maximumEnergyErrorB = std::max(scene.maximumEnergyErrorB, std::abs(pendulumEnergy(perturbedState(scene), scene.parameters) - scene.initialEnergyB));
+    scene.maximumEnergyErrorReference = std::max(scene.maximumEnergyErrorReference, std::abs(pendulumEnergy(scene.experiment.halfStepReference, scene.parameters) - scene.initialEnergyA));
+    recordHistory(scene);
+    return true;
+}
+
+inline void singleStep(Scene& scene) {
+    stopScene(scene);
+    stepScene(scene);
+    recordHistory(scene, true);
+}
+
+inline void requestFast(Scene& scene, double duration = 10.0) {
+    stopScene(scene);
+    if (scene.dtIndex < 0 || scene.dtIndex >= 6 || !std::isfinite(duration) || duration <= 0.0 || duration > 30.0) {
+        scene.message = "Stopped: invalid dt index.";
+        return;
+    }
+    const double dt = kStepOptions[scene.dtIndex];
+    scene.fastRemaining = static_cast<int>(std::lround(duration / dt));
+}
+
+inline void advanceFrame(Scene& scene, double frameSeconds) {
+    scene.substeps = 0;
+    if (scene.dtIndex < 0 || scene.dtIndex >= 6) {
+        stopScene(scene);
+        scene.message = "Stopped: invalid dt index.";
+        return;
+    }
+    if (scene.fastRemaining > 0) {
+        const int batch = std::min(kMaximumSubsteps, scene.fastRemaining);
+        for (int i = 0; i < batch; ++i) {
+            if (!stepScene(scene)) {
+                break;
+            }
+            --scene.fastRemaining;
+        }
+        if (scene.fastRemaining == 0) {
+            recordHistory(scene, true);
+        }
+        return;
+    }
+    if (scene.paused) {
+        return;
+    }
+    const auto plan = planFixedSteps(scene.accumulator, frameSeconds, kStepOptions[scene.dtIndex], kMaximumSubsteps, 0.1);
+    scene.accumulator = plan.remainder;
+    scene.droppedTime += plan.droppedTime;
+    for (int i = 0; i < plan.steps; ++i) {
+        if (!stepScene(scene)) {
+            break;
+        }
+    }
+}
+} // namespace lab
+```
+
+requestFast chỉ tính số bước cần chạy, không thực hiện hàng nghìn bước ngay trong event handler. advanceFrame lấy tối đa 32 bước còn lại ở mỗi frame, nên cửa sổ vẫn nhận được input và lệnh hủy. Trường fastRemaining chỉ giảm khi bước thực sự được chấp nhận.
+
+Ba max energy error được cập nhật ở mọi bước. Quỹ đạo reference dùng E0_A vì bắt đầu từ đúng điều kiện đầu A; B vẫn dùng E0_B riêng.
+
+### Bước 3 — Vẽ numerical separation và năng lượng của reference
+
+Trong include/view.hpp, thay ba hàm sau. Đường vàng dùng cùng trục log với đường tím, còn năng lượng của reference được vẽ bằng màu lục khi bật debug:
+
+```cpp title="include/view.hpp — thang và sai lệch năng lượng của ba trajectory"
+inline double energyGraphBound(const Scene& scene) {
+    double bound = 1e-12;
+    for (const auto& sample : scene.history) {
+        bound = std::max(bound, std::abs(sample.energyErrorA));
+        bound = std::max(bound, std::abs(sample.energyErrorB));
+        if (scene.debug) {
+            bound = std::max(bound, std::abs(sample.energyErrorReference));
+        }
+    }
+    return bound;
+}
+
+inline void drawEnergyGraph(Framebuffer& image, const Scene& scene) {
+    rectangle(image, 570, 590, 1060, 730, kGrid, false);
+    drawLine(image, 570, 660, 1060, 660, kRail);
+    if (scene.history.empty()) {
+        return;
+    }
+    const double first = scene.history.front().time;
+    const double span = std::max(kStepOptions[scene.dtIndex], scene.history.back().time - first);
+    const double bound = energyGraphBound(scene);
+    for (std::size_t i = 1; i < scene.history.size(); ++i) {
+        const auto& a = scene.history[i - 1];
+        const auto& b = scene.history[i];
+        const double x0 = graphTimeX(a.time, first, span, 570);
+        const double x1 = graphTimeX(b.time, first, span, 570);
+        drawLine(image, x0, 660.0 - 70.0 * a.energyErrorA / bound, x1, 660.0 - 70.0 * b.energyErrorA / bound, kPrimary);
+        drawLine(image, x0, 660.0 - 70.0 * a.energyErrorB / bound, x1, 660.0 - 70.0 * b.energyErrorB / bound, kPerturbed);
+        if (scene.debug) {
+            drawLine(image, x0, 660.0 - 70.0 * a.energyErrorReference / bound, x1, 660.0 - 70.0 * b.energyErrorReference / bound, kReference);
+        }
+    }
+}
+```
+
+```cpp title="include/view.hpp — thêm đường numerical trên cùng norm"
+inline void drawSeparationGraph(Framebuffer& image, const Scene& scene) {
+    rectangle(image, 40, 590, 530, 730, kGrid, false);
+    if (scene.history.empty()) {
+        return;
+    }
+    const double first = scene.history.front().time;
+    const double span = std::max(kStepOptions[scene.dtIndex], scene.history.back().time - first);
+    for (std::size_t i = 1; i < scene.history.size(); ++i) {
+        const auto& a = scene.history[i - 1];
+        const auto& b = scene.history[i];
+        const double x0 = graphTimeX(a.time, first, span, 40);
+        const double x1 = graphTimeX(b.time, first, span, 40);
+        drawLine(image, x0, separationGraphY(a.physical), x1, separationGraphY(b.physical), kPhysicalGraph);
+        drawLine(image, x0, separationGraphY(a.numerical), x1, separationGraphY(b.numerical), kNumericalGraph);
+    }
+}
+```
+
+Thay drawScene để hiện reference mờ trong khung A khi bật debug. Reference không có một epsilon khác và không được đưa sang khung B:
+
+```cpp title="include/view.hpp — reference trong cùng khung A"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    rectangle(image, 40, 100, 530, 530, kGrid, false);
+    rectangle(image, 570, 100, 1060, 530, kGrid, false);
+    const WorldView viewA = makeWorldView(scene.parameters, 0);
+    const WorldView viewB = makeWorldView(scene.parameters, 1);
+    drawTrail(image, scene.trailA, viewA, 0x284c6fff);
+    drawTrail(image, scene.trailB, viewB, 0x66373fff);
+    drawPendulum(image, perturbedState(scene), scene.parameters, viewB, kPerturbed);
+    if (scene.debug) {
+        drawPendulum(image, scene.experiment.halfStepReference, scene.parameters, viewA, kReference);
+    }
+    if (scene.debug) {
+        drawLine(image, viewA.pivotX, viewA.pivotY, viewA.pivotX, viewA.pivotY + 180, kGrid);
+    }
+    drawPendulum(image, primaryState(scene), scene.parameters, viewA, kPrimary);
+    drawEnergyGraph(image, scene);
+    drawSeparationGraph(image, scene);
+}
+```
+
+Thay drawHud để đọc cả sai khác số. Số liệu luôn quan trọng hơn việc hai nét vẽ dày có vẻ còn chồng nhau:
+
+```cpp title="include/presentation.hpp — đối chiếu h với h/2"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    const auto text = [&](float x, float y, const char* value) {
+        ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
+    };
+    char line[220]{};
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    text(30, 20, line);
+    text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
+    text(30, 64, "Space start/pause | N one step | [ smaller dt | ] larger dt");
+    text(52, 110, "A: primary initial state");
+    text(582, 110, "B: same model, theta2 + epsilon at t=0");
+    std::snprintf(line, sizeof(line), "E_A=%.6f J | max |delta E_A|=%.3e J", pendulumEnergy(primaryState(scene), scene.parameters), scene.maximumEnergyErrorA);
+    text(40, 548, line);
+    text(570, 570, "Energy error Delta E(t) [J]: blue A, red B");
+    std::snprintf(line, sizeof(line), "+/-%.3e J (zero at center)", energyGraphBound(scene));
+    text(580, 596, line);
+    if (!scene.history.empty()) {
+        std::snprintf(line, sizeof(line), "time %.3f -> %.3f s | latest %zu samples", scene.history.front().time, scene.history.back().time, scene.history.size());
+        text(570, 742, line);
+    }
+    std::snprintf(line, sizeof(line), "dt=%.7f s | steps=%zu | substeps=%d | dropped=%.4f s", kStepOptions[scene.dtIndex], scene.steps, scene.substeps, scene.droppedTime);
+    text(30, 766, line);
+    std::snprintf(line, sizeof(line), "E_B=%.6f J | max |delta E_B|=%.3e J", pendulumEnergy(perturbedState(scene), scene.parameters), scene.maximumEnergyErrorB);
+    text(570, 548, line);
+    std::snprintf(line, sizeof(line), "epsilon=%.1e rad | Up/Down: epsilon | 0: identical twins", scene.perturbation);
+    if (scene.debug) {
+        text(30, 84, line);
+    }
+    const auto& twins = scene.experiment.twins;
+    const auto twinMetrics = measureTwins(twins, scene.parameters);
+    char growth[40] = "n/a";
+    if (std::isfinite(twinMetrics.finiteTimeExponent)) {
+        std::snprintf(growth, sizeof(growth), "%.5f 1/s", twinMetrics.finiteTimeExponent);
+    }
+    std::snprintf(line, sizeof(line), "bob distance %.5f m | growthT %s (not converged Lya)", twinMetrics.secondBobDistance, growth);
+    text(30, 788, line);
+    text(40, 570, "Phase distance d(t), log10: purple twins");
+    text(48, 596, "1e2 (top) -> 1e-12 (floor, display only)");
+    if (!scene.history.empty()) {
+        const auto& last = scene.history.back();
+        std::snprintf(line, sizeof(line), "t=%.3f s | d=%.3e", last.time, last.physical);
+        text(40, 742, line);
+    }
+    text(30, 808, "Enter: +10s in bounded batches | Backspace: stop job");
+    if (scene.debug) {
+        text(580, 128, "Green in A pane: same initial state, dt/2 reference");
+    }
+    const auto metrics = measureChaos(scene.experiment, scene.parameters);
+    std::snprintf(line, sizeof(line), "h/h2: %.3e | finite=%s", metrics.numericalSeparation, metrics.finite ? "yes" : "NO");
+    text(650, 788, line);
+    if (!scene.message.empty()) {
+        text(30, 808, scene.message.c_str());
+    }
+    return ok;
+}
+```
+
+### Bước 4 — Nối job hữu hạn vào main
+
+Trong KEY_DOWN, thay nhánh Space bằng bản này để Space dừng job đang chạy thay vì vô tình chuyển sang một run liên tục:
+
+```cpp title="src/main.cpp — pause có xét job"
+if (key == SDLK_SPACE) {
+                    const bool wasPaused = scene.paused;
+                    const bool hadJob = scene.fastRemaining > 0;
+                    lab::stopScene(scene);
+                    scene.paused = !wasPaused;
+                    if (hadJob) {
+                        scene.paused = true;
+                    }
+                }
+```
+
+Thêm hai nhánh Enter và Backspace sau các phím chỉnh epsilon:
+
+```cpp title="src/main.cpp — yêu cầu chạy thử và hủy"
+if (key == SDLK_RETURN) {
+                    lab::requestFast(scene, 10.0);
+                }
+if (key == SDLK_BACKSPACE) {
+                    lab::stopScene(scene);
+                }
+```
+
+Cuối cùng, ở phần update frame, thay dòng bool advancing cũ bằng hai dòng liên tiếp dưới đây. Job vẫn tiến khi paused=true; paused ở đây chỉ tắt chế độ chạy liên tục.
+
+```cpp title="src/main.cpp — cho batch job dùng cùng vòng update"
+bool advancing = !scene.paused;
+advancing = advancing || scene.fastRemaining > 0;
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build shadow experiment"
+Không đặt một vòng for 2400 bước trong nhánh Enter. Event chỉ gọi requestFast; batch được thực hiện trong advanceFrame ở frame sau. Bấm Backspace hoặc Space để hủy; state đang có và dữ liệu đã đo được giữ lại.
+
+Quy trình kiểm: reset → h=1/240 → chạy 10 s → ghi số; lặp lại từ đầu ở 1/480 và 1/960. Ở SDL dùng [ để giảm h, Enter để cộng 10 s. Trên Canvas dùng các control có tên tương ứng. Đừng so một run ở t=10 s với một run bạn đã bấm hai lần và đang ở t=20 s.
+
+Từ thư mục gốc của gói tải về, build đúng bài làm:
+
+```powershell title="Terminal — build và chạy Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_26_checkpoint_6
+cmake --build build --config Debug --target project_26_starter --parallel 2
+.\build\Debug\project_26_starter.exe
 ```
 
-Phím `[`/`]` chia đôi hoặc nhân đôi dt và reset. Không đổi dt giữa một run vì như vậy graph ghép nhiều thí nghiệm khác nhau.
+Nếu cần đối chiếu, build riêng project_26_checkpoint_6. Source đầy đủ sau bài được trình bày ở cuối trang; dùng nó để kiểm chỗ ghép còn thiếu, không cần đoán vị trí của một đoạn code.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chạy shadow một half-step rồi so với primary full-step. Numerical separation chứa chênh lệch thời gian; hoàn tác đủ hai half-step.
-2. Tạo shadow từ perturbed initial state. Đường vàng bắt đầu ở epsilon thay vì zero; hoàn tác cùng primary initial.
-3. Kết luận solver đúng chỉ vì numerical curve nhỏ ở giây đầu. Tăng duration và chạy convergence nhiều dt; giữ kết luận trong validation horizon đã công bố.
+1. Chạy reference một half-step rồi so với A sau full step. Phép đo đã chứa sai lệch thời gian; hai half-step là bắt buộc.
+2. Khởi tạo reference bằng state đã thêm epsilon. Đường numerical sẽ bắt đầu khác 0 vì một nguyên nhân không phải lỗi h/h2.
+3. Mỗi frame kéo reference trở lại state của A. Bạn chỉ đo một sai khác cục bộ, không còn so hai trajectory tích phân độc lập.
+4. Thấy energy error nhỏ ở 30 s rồi khẳng định mọi tọa độ đều chính xác. Cơ năng và phase error là hai phép đo khác nhau.
 
 ## Tự kiểm tra kết quả
 
-- Primary và shadow bắt đầu từ đúng cùng state.
-- Mỗi full step tương ứng đúng hai half-step.
-- Elapsed của primary, perturbed và shadow giống nhau.
-- Numerical separation ban đầu bằng zero.
-- Trong horizon 10 giây mặc định, numerical separation nhỏ hơn intentional separation.
-- Thu nhỏ dt làm shadow estimate giảm trong miền chưa bão hòa.
+- Reference và A bắt đầu từ cùng state; numerical separation ban đầu bằng 0.
+- Mỗi bước h được so với đủ hai bước h/2; cả ba nhãn thời gian đồng bộ.
+- Thất bại ở reference không làm A/B tiến dở.
+- Ở horizon 10 s mặc định, d A/B nằm khoảng 0,20–0,23 trên cả ba h; numerical separation nhỏ hơn 0,1% d và giảm khi giảm h.
+- Max relative energy drift của cả A/B dưới 1e-6 ở h=1/240 trong phép thử 10 s đã nêu; không suy rộng ngưỡng này sang mọi run.
+- Job chỉ chạy tối đa 32 bước/frame, hủy được, có endpoint cuối và không ghép history của hai cấu hình.
 
 ## Bài tập mở rộng
 
-Thêm shadow `dt/4` chỉ vào test. So `dt`–`dt/2` với `dt/2`–`dt/4` để kiểm RK4 đang ở miền hội tụ trước khi chạy chaos experiment dài.
+Thêm phép đối chiếu h/4 trong tests, không cần thêm một đường nữa vào UI. Ở horizon ngắn, tỷ lệ sai số khi giảm h phải phù hợp với bậc RK4. Sau đó kéo dài horizon và ghi thời điểm phép suy luận đơn giản ấy bắt đầu không còn đáng tin.
 
-Bài cuối đóng gói presets, pointer interaction, bounded fast run và toàn bộ CTest.
+Bài tiếp theo: [Hoàn thiện bàn thí nghiệm và mã nguồn](/projects/double-pendulum-chaos/07-preset-tuong-tac-va-nghiem-thu).

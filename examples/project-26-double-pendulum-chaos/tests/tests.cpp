@@ -1,4 +1,6 @@
 #include "lab.hpp"
+#include "scene.hpp"
+#include "view.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -21,6 +23,8 @@ void check(bool condition, std::string_view label) {
     std::cerr << "FAILED: " << label << '\n';
     ++failures;
 }
+
+#include "extra-cases.hpp"
 
 } // namespace
 
@@ -104,6 +108,7 @@ int main() {
     check(std::abs(calmRun.metrics.twins.relativeEnergyDrift) < 1e-5, "calm preset keeps RK4 energy drift bounded");
     check(std::abs(chaoticRun.metrics.twins.relativeEnergyDrift) < 1e-5, "chaotic preset keeps RK4 energy drift bounded");
 
+    runExtraCases();
     if (failures != 0) {
         std::cerr << failures << " Project 26 validation check(s) failed\n";
         return EXIT_FAILURE;

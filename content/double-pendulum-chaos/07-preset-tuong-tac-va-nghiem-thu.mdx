@@ -1,113 +1,554 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Hoàn thiện thí nghiệm và nghiệm thu
+# Hoàn thiện bàn thí nghiệm và mã nguồn
 
 ## Vấn đề cần giải quyết
 
-Một vệt chuyển động rối mắt có thể gây ấn tượng nhưng chưa tạo thành một thí nghiệm đáng tin. Bài cuối bổ sung ba trạng thái khởi đầu, một mức nhiễu rõ ràng, bước thời gian cố định và chế độ chạy nhanh luôn có số bước giới hạn.
+Phép tính và hai loại đồ thị đã có. Bài cuối biến chúng thành một bàn thí nghiệm có thể dùng lại: chọn điều kiện đầu, sửa góc bằng chuột, chạy nhanh mà vẫn dừng được, xem chế độ sạch và kiểm bài làm bằng tests độc lập.
 
-Phần nghiệm thu không cố chứng minh toàn bộ lý thuyết hỗn loạn từ một quỹ đạo. Nó chỉ kiểm những điều chương trình cam kết: hình học đúng, phương trình đúng ở các ca đã biết, năng lượng không trôi quá mức, hai con lắc chạy đồng bộ và mọi giá trị vẫn hữu hạn trong khoảng thời gian đã chọn.
+Sản phẩm cuối phải là một executable C++/SDL3 thật. Canvas chỉ minh họa cùng mô hình; một graph đẹp trên web không thay thế ứng dụng mà người học tải về và chạy.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ba preset phục vụ ba câu hỏi:
+Ba preset chỉ tạo điều kiện đầu, không có solver riêng:
 
-- **Calm:** chuyển động năng lượng thấp có giữ hai trajectory gần nhau lâu hơn?
-- **Chaotic:** perturbation nhỏ được khuếch đại thế nào trong 10–30 giây?
-- **Near upright:** state gần cân bằng không ổn định nhạy ra sao với epsilon và dt?
+- Calm: theta1=0,2 và theta2=0,3 rad, omega=0. Đây là góc nhỏ, không phải một chứng minh rằng mọi chuyển động năng lượng thấp đều đơn giản.
+- Chaotic: theta1=2 và theta2=1,1 rad, omega=0. Cấu hình này giúp quan sát độ nhạy đã kiểm ở horizon 10 s.
+- Near upright: hai góc gần π, bắt đầu gần tư thế ngược lên.
+
+Kéo quả cuối của A trong bài này là **đặt lại điều kiện đầu**, không phải tác dụng lực lên một hệ đang chạy. Khi bắt đầu kéo, lấy tư thế hiện tại làm initial mới, đưa hai omega về 0 và dựng lại A/B/reference. Vì là một thí nghiệm mới, có thể chọn biểu diễn góc ban đầu trong một vòng; điều đó khác với wrap state sau mỗi bước RK4.
+
+Job 30 s cũng không có thuật toán tích phân riêng. Nó chỉ yêu cầu thêm một số bước hữu hạn rồi để advanceFrame thực hiện tối đa 32 bước/frame. Nếu không có chính sách này, một click handler “hữu hạn” nhưng chạy rất lâu vẫn có thể làm người dùng không bấm được Stop.
 
 <InteractiveLab demo="double-pendulum-chaos" mode="chaos-validation" />
 
-Chạy từng preset 30 giây ở cùng epsilon và dt. Ghi physical separation, numerical separation, energy drift và finite-time exponent; không chỉ chụp trail cuối.
+Bắt đầu bằng job 10 s để đối chiếu các h. Sau đó reset và chạy 30 s để nhìn hai chuyển động khác rõ rệt, cùng giới hạn dự đoán của quỹ đạo h/2. Thử dừng giữa job; đổi preset phải xóa lịch sử thí nghiệm cũ. Khi kéo, phải chạm đúng quả cuối trong khung A, không phải bất kỳ chỗ nào trên Canvas.
 
 ## Viết code từng bước
 
-### Bước 1 — Đặt preset thành initial state thuần
+Viết phần của bạn trong starter/include và starter/src. Khi thay một hàm, xóa bản cũ rồi thay bằng bản mới, không thêm hàm trùng tên. Các hàm thuộc header đặt trong namespace lab đã có sẵn. Checkpoint 7 là bản tham khảo ở cuối bài; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — ba initial condition có tên"
-if (preset == ChaosPreset::calm) {
-    return {0.6, 0.0, 0.8, 0.0, 0.0};
-}
-if (preset == ChaosPreset::nearUpright) {
-    return {kPi - 0.08, 0.0, kPi - 0.16, 0.0, 0.0};
-}
-return {2.0, 0.0, 1.1, 0.0, 0.0};
-```
+### Bước 1 — Tạo preset và một API chạy thử cho tests
 
-Preset chỉ tạo data. Nó không có loop riêng hoặc solver riêng, nên mọi case đi qua cùng `stepChaosExperiment`.
+Trong include/lab.hpp, thêm enum, presetState, ChaosRunResult và runChaosExperiment ở cuối namespace. Các góc được gán bằng tên field để người đọc không phải nhớ thứ tự một dãy số.
 
-### Bước 2 — Fast run dùng duration chia dt
+```cpp title="include/lab.hpp — điều kiện đầu có tên"
+enum class ChaosPreset {
+    calm,
+    chaotic,
+    nearUpright,
+};
 
-```cpp title="include/lab.hpp — stress run có số step hữu hạn"
-const int plannedSteps = int(std::floor(duration / deltaSeconds + kChaosEpsilon));
-for (int step = 0; step < plannedSteps; ++step) {
-    stepChaosExperiment(result.experiment, parameters, deltaSeconds);
-    ++result.steps;
-    if (!measureChaos(result.experiment, parameters).finite) {
-        break;
+inline DoublePendulumState presetState(ChaosPreset preset) {
+    DoublePendulumState state{};
+    if (preset == ChaosPreset::calm) {
+        state.theta1 = 0.2;
+        state.theta2 = 0.3;
+    } else if (preset == ChaosPreset::nearUpright) {
+        state.theta1 = kPi - 0.08;
+        state.theta2 = kPi - 0.16;
+    } else {
+        state.theta1 = 2.0;
+        state.theta2 = 1.1;
     }
+    return state;
 }
 ```
 
-Loop không chờ separation vượt một ngưỡng vì Calm có thể mất rất lâu, còn state lỗi có thể không bao giờ thỏa điều kiện.
+```cpp title="include/lab.hpp — kết quả của một run có budget"
+struct ChaosRunResult {
+    ChaosExperiment experiment{};
+    ChaosMetrics metrics{};
+    int steps{};
+    bool completed{};
+};
 
-### Bước 3 — Pointer sửa theta2 ban đầu rồi reset
-
-```cpp title="src/main.cpp — atan2 theo downward vertical và pointer capture"
-const lab::Vec2 delta = lab::subtract(pointer, geometry.bob1);
-if (lab::length(delta) > 0.1) {
-    initialState.theta2 = std::atan2(delta.x, -delta.y);
-    resetExperiment();
+inline ChaosRunResult runChaosExperiment(ChaosPreset preset, const DoublePendulumParameters& parameters, double perturbationRadians, double duration, double deltaSeconds) {
+    ChaosRunResult result{};
+    result.experiment = makeChaosExperiment(presetState(preset), perturbationRadians);
+    if (!validParameters(parameters) || !std::isfinite(perturbationRadians) || !std::isfinite(duration) || duration < 0.0 || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
+        return result;
+    }
+    const double requested = std::floor(duration / deltaSeconds + kChaosEpsilon);
+    // API headless cũng có budget; không cast một thương vô hạn sang int.
+    if (!std::isfinite(requested) || requested > 120000.0) {
+        return result;
+    }
+    const int plannedSteps = static_cast<int>(requested);
+    for (int step = 0; step < plannedSteps; ++step) {
+        if (!stepChaosExperiment(result.experiment, parameters, deltaSeconds)) {
+            break;
+        }
+        ++result.steps;
+    }
+    result.metrics = measureChaos(result.experiment, parameters);
+    result.completed = result.steps == plannedSteps && result.metrics.finite;
+    return result;
 }
 ```
 
-`SDL_CaptureMouse(true)` giữ drag khi con trỏ ra ngoài window. Interaction không teleport current state giữa một RK4 stage; nó sửa initial data rồi dựng lại experiment.
+runChaosExperiment là API headless cho tests, có số bước dự tính và trần 120.000 bước; thương không hữu hạn bị từ chối trước khi đổi sang int. Không gọi nó từ nhánh Enter của UI. UI vẫn phải dùng job chia batch từ bài 6.
 
-### Bước 4 — Test case nhỏ trước stress
+### Bước 2 — Lưu trạng thái thao tác, không trộn nó với physics
 
-```cpp title="tests/tests.cpp — angle seam và lockstep có đáp án rõ"
-check(closeEnough(lab::phaseSpaceSeparation(seamFirst, seamSecond, parameters), 2.0 * degreesToRadians, 1e-12), "phase-space separation wraps the plus-minus pi seam");
-check(twins.stepCount == 2400, "both pendulums advance through one shared step count");
-check(closeEnough(twins.primary.elapsed, twins.perturbed.elapsed, 1e-12), "twin elapsed times stay lockstep");
+Thay struct Scene và stopScene trong include/scene.hpp. Các trường mới là preset, dragging và dragOffset; giữ nguyên các hàm cập nhật của bài 6.
+
+```cpp title="include/scene.hpp — cấu hình và quyền sở hữu thao tác"
+struct Scene {
+    DoublePendulumParameters parameters{};
+    DoublePendulumState initial{2.0, 0.0, 1.1, 0.0, 0.0};
+    bool paused{true};
+    bool debug{true};
+    std::string message{};
+    int dtIndex{3};
+    double accumulator{};
+    double droppedTime{};
+    int substeps{};
+    std::size_t steps{};
+    double initialEnergyA{};
+    double maximumEnergyErrorA{};
+    std::vector<HistorySample> history{};
+    ChaosExperiment experiment{};
+    double perturbation{1e-4};
+    double initialEnergyB{};
+    double maximumEnergyErrorB{};
+    std::vector<Vec2> trailA{};
+    std::vector<Vec2> trailB{};
+    double maximumEnergyErrorReference{};
+    int fastRemaining{};
+    ChaosPreset preset{ChaosPreset::chaotic};
+    bool dragging{};
+    double dragOffset{};
+};
 ```
 
-Test geometry và derivative bắt lỗi cục bộ; stress run chỉ nên đến sau khi các nền tảng này đã pass.
+```cpp title="include/scene.hpp — dừng cả job và thao tác"
+inline void stopScene(Scene& scene) {
+    scene.paused = true;
+    scene.accumulator = 0.0;
+    scene.substeps = 0;
+    scene.fastRemaining = 0;
+    scene.dragging = false;
+}
+```
+
+Thêm choosePreset trước requestFast:
+
+```cpp title="include/scene.hpp — preset dùng lại cùng reset"
+inline void choosePreset(Scene& scene, ChaosPreset preset) {
+    scene.preset = preset;
+    scene.initial = presetState(preset);
+    resetScene(scene);
+}
+```
+
+### Bước 3 — Kéo đúng quả nặng và giữ lệch điểm cầm
+
+Thêm hai hàm sau. beginAngleDrag chỉ chấp nhận một điểm gần bob2 thật của A. Góc lệch giữa vị trí cầm và tâm quả được giữ lại để không nhảy tư thế ngay khi bấm xuống.
+
+```cpp title="include/scene.hpp — bắt đầu đặt góc mới"
+inline bool beginAngleDrag(Scene& scene, Vec2 pointer, double hitRadius) {
+    if (!std::isfinite(pointer.x) || !std::isfinite(pointer.y) || !std::isfinite(hitRadius) || hitRadius <= 0.0 || !finiteState(primaryState(scene)) || !validParameters(scene.parameters)) {
+        return false;
+    }
+    const auto geometry = pendulumGeometry(primaryState(scene), scene.parameters);
+    if (length(subtract(pointer, geometry.bob2)) > hitRadius) {
+        return false;
+    }
+    const Vec2 delta = subtract(pointer, geometry.bob1);
+    if (length(delta) <= 1e-12) {
+        return false;
+    }
+    const double pointerAngle = std::atan2(delta.x, -delta.y);
+    scene.initial = primaryState(scene);
+    scene.initial.theta1 = wrapAngle(scene.initial.theta1);
+    scene.initial.theta2 = wrapAngle(scene.initial.theta2);
+    scene.initial.omega1 = 0.0;
+    scene.initial.omega2 = 0.0;
+    const double offset = scene.initial.theta2 - pointerAngle;
+    resetScene(scene);
+    scene.dragging = true;
+    scene.dragOffset = offset;
+    return true;
+}
+```
+
+```cpp title="include/scene.hpp — cập nhật góc ban đầu"
+inline void moveAngleDrag(Scene& scene, Vec2 pointer) {
+    if (!scene.dragging || !std::isfinite(pointer.x) || !std::isfinite(pointer.y)) {
+        return;
+    }
+    const auto geometry = pendulumGeometry(scene.initial, scene.parameters);
+    const Vec2 delta = subtract(pointer, geometry.bob1);
+    if (length(delta) <= 0.1) {
+        return;
+    }
+    const double angle = std::atan2(delta.x, -delta.y) + scene.dragOffset;
+    scene.initial.theta2 = wrapAngle(angle);
+    const double offset = scene.dragOffset;
+    resetScene(scene);
+    scene.dragging = true;
+    scene.dragOffset = offset;
+}
+```
+
+Mỗi lần đổi góc đều reset đồng hồ, E0, trails và history. Không giữ omega cũ rồi gán một theta mới giữa run; thao tác đó sẽ bơm năng lượng không được mô hình hóa vào hệ.
+
+### Bước 4 — Hoàn thiện vòng lặp SDL và lifecycle của input
+
+Thay src/main.cpp bằng bản hoàn chỉnh dưới đây. Phần quan trọng cần đọc kỹ là: đổi tọa độ event đúng một lần; tạo candidate trước khi capture; chỉ commit nếu capture thành công; lưu đúng mouse ID; dùng tọa độ BUTTON_UP cuối; hủy capture khi mất focus, ẩn/minimize hoặc resize.
+
+```cpp title="src/main.cpp — ứng dụng hoàn chỉnh"
+#include "presentation.hpp"
+#include <SDL3/SDL_main.h>
+#include <cstdlib>
+#include <iostream>
+#include <string_view>
+
+int main(int argc, char** argv) {
+    const bool smoke = argc > 1 && std::string_view(argv[1]) == "--smoke";
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::cerr << SDL_GetError() << '\n';
+        return EXIT_FAILURE;
+    }
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (smoke) {
+        flags |= SDL_WINDOW_HIDDEN;
+    }
+    SDL_Window* window = SDL_CreateWindow("Project 26 - Double Pendulum", 1100, 820, flags);
+    SDL_Renderer* renderer = nullptr;
+    SDL_Texture* texture = nullptr;
+    if (window) {
+        renderer = SDL_CreateRenderer(window, nullptr);
+    }
+    if (renderer) {
+        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, 1100, 820);
+    }
+    if (!window || !renderer || !texture || !SDL_SetRenderLogicalPresentation(renderer, 1100, 820, SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
+        std::cerr << SDL_GetError() << '\n';
+        SDL_DestroyTexture(texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+    SDL_SetWindowMinimumSize(window, 660, 492);
+    lab::Framebuffer image{};
+    lab::Scene scene = lab::makeScene();
+    bool running = true;
+    bool failed = false;
+    bool dirty = true;
+    int frames = 0;
+    const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    std::uint64_t previous = SDL_GetPerformanceCounter();
+    SDL_MouseID owner = 0;
+    const auto cancelCapture = [&]() {
+        scene.dragging = false;
+        SDL_CaptureMouse(false);
+    };
+    const auto updateDrag = [&](float x, float y) {
+        const auto view = lab::makeWorldView(scene.parameters, 0);
+        lab::moveAngleDrag(scene, lab::screenToWorld({x, y}, view));
+        dirty = true;
+    };
+    while (running) {
+        SDL_Event event{};
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                running = false;
+            }
+            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_MINIMIZED || event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+                cancelCapture();
+                lab::stopScene(scene);
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI))) {
+                const auto key = event.key.key;
+                cancelCapture();
+                if (key == SDLK_ESCAPE) {
+                    running = false;
+                }
+                if (key == SDLK_R) {
+                    lab::resetScene(scene);
+                }
+                if (key == SDLK_F) {
+                    scene.debug = !scene.debug;
+                }
+                if (key == SDLK_A || key == SDLK_D || key == SDLK_W || key == SDLK_S) {
+                    if (key == SDLK_A) {
+                        scene.initial.theta1 -= 0.05;
+                    }
+                    if (key == SDLK_D) {
+                        scene.initial.theta1 += 0.05;
+                    }
+                    if (key == SDLK_S) {
+                        scene.initial.theta2 -= 0.05;
+                    }
+                    if (key == SDLK_W) {
+                        scene.initial.theta2 += 0.05;
+                    }
+                    scene.initial.theta1 = std::clamp(scene.initial.theta1, -lab::kPi, lab::kPi);
+                    scene.initial.theta2 = std::clamp(scene.initial.theta2, -lab::kPi, lab::kPi);
+                    lab::resetScene(scene);
+                }
+                if (key == SDLK_SPACE) {
+                    const bool wasPaused = scene.paused;
+                    const bool hadJob = scene.fastRemaining > 0;
+                    lab::stopScene(scene);
+                    scene.paused = !wasPaused;
+                    if (hadJob) {
+                        scene.paused = true;
+                    }
+                }
+                if (key == SDLK_N) {
+                    lab::singleStep(scene);
+                }
+                if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
+                    const int change = key == SDLK_LEFTBRACKET ? 1 : -1;
+                    scene.dtIndex = std::clamp(scene.dtIndex + change, 0, 5);
+                    lab::resetScene(scene);
+                }
+                if (key == SDLK_UP || key == SDLK_DOWN || key == SDLK_0) {
+                    if (key == SDLK_0) {
+                        scene.perturbation = 0.0;
+                    }
+                    if (key == SDLK_UP) {
+                        scene.perturbation = std::min(1e-2, std::max(1e-8, scene.perturbation * 10.0));
+                    }
+                    if (key == SDLK_DOWN) {
+                        scene.perturbation = scene.perturbation <= 1e-8 ? 0.0 : scene.perturbation / 10.0;
+                    }
+                    lab::resetScene(scene);
+                }
+                if (key >= SDLK_1 && key <= SDLK_3) {
+                    lab::choosePreset(scene, static_cast<lab::ChaosPreset>(key - SDLK_1));
+                }
+                if (key == SDLK_P) {
+                    auto preset = lab::ChaosPreset::calm;
+                    if (scene.preset == lab::ChaosPreset::calm) {
+                        preset = lab::ChaosPreset::chaotic;
+                    }
+                    if (scene.preset == lab::ChaosPreset::chaotic) {
+                        preset = lab::ChaosPreset::nearUpright;
+                    }
+                    lab::choosePreset(scene, preset);
+                }
+                if (key == SDLK_RETURN) {
+                    lab::requestFast(scene, 30.0);
+                }
+                if (key == SDLK_BACKSPACE) {
+                    lab::stopScene(scene);
+                }
+            }
+            // Một lần đổi từ window coordinates sang logical board; không nhân thêm DPR.
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_MOUSE_MOTION) {
+                if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+                    failed = true;
+                    running = false;
+                    break;
+                }
+            }
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !scene.dragging && event.button.x >= 40 && event.button.x <= 530 && event.button.y >= 100 && event.button.y <= 530) {
+                const auto view = lab::makeWorldView(scene.parameters, 0);
+                auto candidate = scene;
+                if (lab::beginAngleDrag(candidate, lab::screenToWorld({event.button.x, event.button.y}, view), 14.0 / view.scale) && SDL_CaptureMouse(true)) {
+                    scene = std::move(candidate);
+                    owner = event.button.which;
+                }
+            }
+            if (event.type == SDL_EVENT_MOUSE_MOTION && scene.dragging && event.motion.which == owner) {
+                if (!(event.motion.state & SDL_BUTTON_LMASK)) {
+                    cancelCapture();
+                    lab::stopScene(scene);
+                } else {
+                    updateDrag(event.motion.x, event.motion.y);
+                }
+            }
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && scene.dragging && event.button.which == owner) {
+                updateDrag(event.button.x, event.button.y);
+                cancelCapture();
+            }
+            dirty = true;
+        }
+        if (!running) {
+            break;
+        }
+        const auto now = SDL_GetPerformanceCounter();
+        const double frameSeconds = static_cast<double>(now - previous) / frequency;
+        previous = now;
+        if (smoke) {
+            ++frames;
+            if (frames < 16) {
+                lab::singleStep(scene);
+            }
+            if (frames == 20) {
+                scene.debug = false;
+            }
+            if (frames == 24 && !SDL_SetWindowSize(window, 880, 656)) {
+                failed = true;
+                break;
+            }
+            if (frames >= 32) {
+                break;
+            }
+            dirty = true;
+        } else {
+            bool advancing = !scene.paused;
+            advancing = advancing || scene.fastRemaining > 0;
+            if (advancing) {
+                lab::advanceFrame(scene, frameSeconds);
+                dirty = true;
+            }
+        }
+        if (dirty) {
+            lab::drawScene(image, scene);
+            if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), 1100 * static_cast<int>(sizeof(std::uint32_t))) || !SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !lab::drawHud(renderer, scene) || !SDL_RenderPresent(renderer)) {
+                std::cerr << SDL_GetError() << '\n';
+                failed = true;
+                break;
+            }
+            dirty = false;
+        }
+        SDL_Delay(16);
+    }
+    cancelCapture();
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return failed ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+```
+
+Không có vòng lặp hàng nghìn step trong nhánh Enter. Enter yêu cầu +30 s; Space hoặc Backspace dừng job. Sau mỗi frame vòng lặp vẫn poll event. dirty tránh render lại liên tục khi đã pause; SDL_Delay(16) tránh vòng lặp nghỉ chiếm toàn bộ một core.
+
+SDL_ConvertEventToRenderCoordinates đưa tọa độ window về logical board 1100×820, đã tính letterbox. Đừng nhân thêm device-pixel-ratio một lần nữa. SDL_CaptureMouse có thể thất bại, nên thao tác chưa được quyền sửa state trước khi kết quả capture thành công. Xem [hợp đồng SDL_CaptureMouse](https://wiki.libsdl.org/SDL3/SDL_CaptureMouse) khi muốn mở rộng tương tác.
+
+### Bước 5 — Giữ giao diện sạch nhưng không mất bằng chứng
+
+Thay drawHud bằng bản cuối. F có thể ẩn lớp debug/reference nhưng vẫn giữ hai cảnh, hai trails, nhãn A/B và hai graph định lượng.
+
+```cpp title="include/presentation.hpp — thông tin bản hoàn chỉnh"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    const auto text = [&](float x, float y, const char* value) {
+        ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
+    };
+    char line[220]{};
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    text(30, 20, line);
+    text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
+    text(30, 64, "Space start/pause | N one step | [ smaller dt | ] larger dt");
+    text(52, 110, "A: primary initial state");
+    text(582, 110, "B: same model, theta2 + epsilon at t=0");
+    std::snprintf(line, sizeof(line), "E_A=%.6f J | max |delta E_A|=%.3e J", pendulumEnergy(primaryState(scene), scene.parameters), scene.maximumEnergyErrorA);
+    text(40, 548, line);
+    text(570, 570, "Energy error Delta E(t) [J]: blue A, red B");
+    std::snprintf(line, sizeof(line), "+/-%.3e J (zero at center)", energyGraphBound(scene));
+    text(580, 596, line);
+    if (!scene.history.empty()) {
+        std::snprintf(line, sizeof(line), "time %.3f -> %.3f s | latest %zu samples", scene.history.front().time, scene.history.back().time, scene.history.size());
+        text(570, 742, line);
+    }
+    std::snprintf(line, sizeof(line), "dt=%.7f s | steps=%zu | substeps=%d | dropped=%.4f s", kStepOptions[scene.dtIndex], scene.steps, scene.substeps, scene.droppedTime);
+    text(30, 766, line);
+    std::snprintf(line, sizeof(line), "E_B=%.6f J | max |delta E_B|=%.3e J", pendulumEnergy(perturbedState(scene), scene.parameters), scene.maximumEnergyErrorB);
+    text(570, 548, line);
+    std::snprintf(line, sizeof(line), "epsilon=%.1e rad | Up/Down: epsilon | 0: identical twins", scene.perturbation);
+    if (scene.debug) {
+        text(30, 84, line);
+    }
+    const auto& twins = scene.experiment.twins;
+    const auto twinMetrics = measureTwins(twins, scene.parameters);
+    char growth[40] = "n/a";
+    if (std::isfinite(twinMetrics.finiteTimeExponent)) {
+        std::snprintf(growth, sizeof(growth), "%.5f 1/s", twinMetrics.finiteTimeExponent);
+    }
+    std::snprintf(line, sizeof(line), "bob distance %.5f m | growthT %s (not converged Lya)", twinMetrics.secondBobDistance, growth);
+    text(30, 788, line);
+    text(40, 570, "Phase distance d(t), log10: purple twins");
+    text(48, 596, "1e2 (top) -> 1e-12 (floor, display only)");
+    if (!scene.history.empty()) {
+        const auto& last = scene.history.back();
+        std::snprintf(line, sizeof(line), "t=%.3f s | d=%.3e", last.time, last.physical);
+        text(40, 742, line);
+    }
+    if (scene.debug) {
+        text(580, 128, "Green in A pane: same initial state, dt/2 reference");
+    }
+    const auto metrics = measureChaos(scene.experiment, scene.parameters);
+    std::snprintf(line, sizeof(line), "h/h2: %.3e | finite=%s", metrics.numericalSeparation, metrics.finite ? "yes" : "NO");
+    text(650, 788, line);
+    std::snprintf(line, sizeof(line), "Space pause | N step | [/] dt | Enter +30s | Backspace stop | remaining %d steps", scene.fastRemaining);
+    text(30, 64, line);
+    text(30, 84, "P/1/2/3 presets | Up/Down epsilon | 0 identical twins | drag A bob2: edit initial angles");
+    if (!scene.message.empty()) {
+        text(30, 808, scene.message.c_str());
+    }
+    return ok;
+}
+```
+
+### Bước 6 — Kiểm bài làm, không kiểm nhầm bản tham khảo
+
+ZIP đã có tests/tests.cpp và tests/extra-cases.hpp. Tests không dùng assert nên vẫn hoạt động ở Release. Các nhóm kiểm gồm hình học, phương trình Newton với mass/length khác nhau, đạo hàm năng lượng, hội tụ RK4, divergence khi giảm h, đồng hồ nguyên tử, job có budget, mô hình kéo và pixel graph có đáp án.
+
+Mặc định target project_26_tests include final/include. Nếu bạn đang viết trong Starter, mở CMakeLists.txt của **bản ZIP đã giải nén** và đổi đúng dòng include của target tests:
+
+```cmake title="CMakeLists.txt — kiểm header trong bài làm"
+target_include_directories(project_26_tests PRIVATE starter/include)
+```
+
+Giữ nguyên các dòng target khác. Chỉ đổi sau khi đã hoàn thành toàn bộ bảy bài vì tests đầy đủ cần các hàm cuối. Không sửa CMake được sinh trong repository của website để làm việc này; lần generate tiếp theo sẽ ghi lại nó.
+
+```powershell title="Terminal — build và kiểm bài làm ở cả hai cấu hình"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_26_starter project_26_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --target project_26_starter project_26_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Release\project_26_starter.exe
+```
+
+Để chạy bản tham khảo độc lập, build target project_26_final rồi chạy executable cùng tên. CTest đọc final mặc định chỉ chứng minh bản final, không chứng minh phần bạn vừa gõ vào Starter.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build và test Debug"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
+R dựng lại đúng initial state/dt/epsilon đang chọn; “Khôi phục mặc định” trên Canvas đưa mọi control về cấu hình ban đầu. Chọn preset chỉ đổi initial state, giữ h và epsilon để thuận tiện so sánh. Trong SDL, 1/2/3 chọn preset, P chuyển lần lượt; A/D và W/S chỉnh góc; Up/Down chỉnh epsilon, 0 tạo cặp giống nhau; [/] đổi h; Space/N/R/F điều khiển chạy và hiển thị.
+
+[ZIP đầy đủ của Project 26](/downloads/project-26-double-pendulum-chaos.zip) chứa README, CMake, Starter, 7 checkpoint, final và tests. Toàn bộ source cuối được trình bày dưới bài theo từng file; không phải tự ghép các code block để có một project chạy được. Không cần physics engine, trình duyệt hay asset bên ngoài để chạy C++.
+
+--smoke chỉ kiểm cửa sổ ẩn, present và resize trong 32 frame. Nó không thay kiểm GUI thực tế. Sau khi các tests số đạt, vẫn phải thử start/pause/reset, kéo/thả, dừng job và chế độ sạch trên cửa sổ đang nhìn thấy.
+
+Từ thư mục gốc của gói tải về, build đúng bài làm:
+
+```powershell title="Terminal — build và chạy Starter"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_26_starter --parallel 2
+.\build\Debug\project_26_starter.exe
 ```
 
-```bash title="Terminal — lặp lại ở Release"
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-```
-
-Target `project_26_final` là ứng dụng hoàn chỉnh. ZIP chứa README, starter, bảy checkpoint, final và tests; không cần ghép code block từ trang web bằng tay.
+Nếu cần đối chiếu, build riêng project_26_checkpoint_7. Source đầy đủ sau bài được trình bày ở cuối trang; dùng nó để kiểm chỗ ghép còn thiếu, không cần đoán vị trí của một đoạn code.
 
 ## Thử làm sai để hiểu đúng
 
-1. Viết fast run bằng `while (phaseSeparation < 1.0)`. Calm preset có thể chạy rất lâu và UI mất quyền điều khiển; hoàn tác số step hữu hạn.
-2. Cho drag sửa current theta2 nhưng giữ omega cũ. Bạn tạo một impulse không được mô hình hóa; hoàn tác sửa initial state rồi reset.
-3. Chỉ kiểm energy drift mà bỏ numerical shadow. Một trajectory giữ energy vẫn có thể có phase error lớn; hoàn tác cả hai metric.
+1. Capture trước khi hit-test hoặc không kiểm kết quả capture. Click nền cũng sửa điều kiện đầu; sửa lại quyền sở hữu thao tác.
+2. Bỏ mẫu BUTTON_UP cuối. Một thao tác ít event motion có thể kết thúc sai vị trí; dùng tọa độ thả rồi mới hủy capture.
+3. Lưu mouse ID nhưng vẫn nhận mọi motion/up. Một thiết bị hoặc pointer khác có thể kết thúc thao tác đang giữ.
+4. Đưa runChaosExperiment vào click handler vì “vòng for có giới hạn”. Giữ run headless trong tests, UI dùng requestFast/advanceFrame.
+5. Chỉ so hình C++ với Canvas sau 30 s và đòi trùng từng pixel. Chaos khuếch đại khác biệt số thực; kiểm phương trình, đồng bộ, năng lượng và hội tụ ở horizon thích hợp.
 
 ## Tự kiểm tra kết quả
 
-- Ba preset tạo đúng initial state và reset deterministic.
-- Geometry giữ nguyên hai rod length.
-- Equilibrium và parallel-horizontal derivative tests pass.
-- RK4 5 giây ở dt=1/480 giữ energy drift trong ngưỡng.
-- Angle seam ±179° cho separation 2°.
-- Primary, perturbed và shadow luôn cùng elapsed.
-- Validation 10 giây giữ state finite và numerical separation nhỏ hơn intentional separation.
-- Canvas hỗ trợ DPR, keyboard, pointer capture, reduced motion, pause, reset và mô tả văn bản.
-- Debug và Release CTest đều pass.
+- Hai con lắc thật chạy cạnh nhau, đủ lâu để thấy divergence; không phải một con lắc hoặc animation sin đặt sẵn.
+- Epsilon=0 tái lập A/B; các run 1/240, 1/480, 1/960 vẫn cho độ tách gần nhau ở 10 s trong cấu hình kiểm chứng.
+- Cơ năng của A/B/reference được theo dõi; không dùng energy drift nhỏ làm bằng chứng duy nhất cho quỹ đạo đúng.
+- Cả ba preset chạy 30 s hữu hạn; job tối đa 32 step/frame, dừng được, reset không nối dữ liệu cũ.
+- Kéo chỉ nhận quả cuối A, không nhảy góc khi cầm lệch, dùng final up, hủy an toàn; mỗi lần chỉnh bắt đầu thí nghiệm mới.
+- Showcasing vẫn có cảnh, trails và graphs; debug chỉ thêm thông tin, không phải đầu ra duy nhất.
+- Starter, 7 checkpoint và final build được; CTest Debug/Release hoạt động; code block khớp checkpoint và gói ZIP chứa đúng source.
 
 ## Bài tập mở rộng
 
-Thêm Poincaré section: chỉ ghi điểm khi `theta2` đi qua zero theo một chiều xác định. Giữ feature trong một module riêng và giải thích rõ interpolation qua crossing trước khi dùng hình điểm để phân loại chuyển động.
+Thêm một báo cáo hội tụ xuất CSV, gồm h, thời lượng, epsilon, d A/B, d h/h2 và max energy error của từng trajectory. Đừng tự gắn nhãn “chaotic/non-chaotic” từ một dấu của exponent. Một hướng mở rộng khác là Poincaré section, nhưng phải giải thích cách nội suy thời điểm crossing trước khi phân loại hình điểm.
 
-Project 26 khép lại phần vật lý và numerical methods đầu tiên. Project 27 sẽ giữ thói quen đo cost/invariant nhưng chuyển sang 100.000 particles, nơi brute force trở thành một vấn đề hiệu năng có thể nhìn và benchmark.
+Tiếp tục lộ trình ở [Project 27 — truy vấn hạt bằng brute force](/projects/brute-force-particle-query).

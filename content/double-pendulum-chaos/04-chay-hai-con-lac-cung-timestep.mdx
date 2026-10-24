@@ -1,36 +1,38 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Cho hai con lắc chạy lockstep
+# Đặt hai điều kiện đầu gần nhau và chạy đồng bộ
 
 ## Vấn đề cần giải quyết
 
-Một quỹ đạo duy nhất không thể cho ta thấy hệ nhạy với điều kiện ban đầu đến mức nào. Ta cần hai con lắc dùng cùng khối lượng, chiều dài, trọng lực, RK4 và bước thời gian; khác biệt duy nhất là một nhiễu rất nhỏ ở `theta2` lúc bắt đầu.
+Một con lắc chuyển động chưa cho biết nó nhạy với điều kiện đầu đến đâu. Ta cần một bản thứ hai dùng đúng cùng mô hình và solver, nhưng có góc ban đầu lệch rất nhỏ.
 
-Nếu hai con lắc chạy khác số bước hoặc khác thời điểm mô phỏng, khoảng cách giữa chúng không còn ý nghĩa. Vì vậy chương trình phải tiến cả hai đồng thời trong cùng một hàm, thay vì trông chờ vòng lặp render luôn gọi đúng thứ tự.
+Bài này tạo A/B, đặt chúng ở hai khung cạnh nhau và vẽ vệt của quả cuối. Hai khung chỉ giúp nhìn cho rõ; không có hai thế giới vật lý khác nhau hoặc hai bộ đồng hồ chạy độc lập.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với primary state $y_0$, perturbed state là:
+Từ điều kiện đầu $y_0=(\theta_1,\omega_1,\theta_2,\omega_2)$ của A, tạo B bằng đúng một thay đổi:
 
 $$
-\tilde y_0=y_0+(0,0,\varepsilon,0)
+\tilde y_0=(\theta_1,\omega_1,\theta_2+\varepsilon,\omega_2).
 $$
 
-Cả hai cùng nhận ánh xạ RK4 $F_{\Delta t}$:
+Mỗi bước, cả hai đi qua cùng hàm RK4 với cùng h. Tính hai candidate trước; chỉ khi cả hai thành công mới thay state và tăng bộ đếm. Nếu B lỗi nhưng A đã tiến, phép so sánh sau đó không còn ở cùng thời điểm.
 
-$$
-y_{n+1}=F_{\Delta t}(y_n),\qquad \tilde y_{n+1}=F_{\Delta t}(\tilde y_n)
-$$
+Giữ hai initial state riêng để reset tái tạo đúng cặp ban đầu. E0 của A và B cũng phải đo riêng: lệch một góc ban đầu có thể làm năng lượng ban đầu lệch rất nhỏ; chênh lệch ấy không phải lỗi solver.
 
 <InteractiveLab demo="double-pendulum-chaos" mode="chaos-twins" />
 
-Chọn nhiễu `1e-6`, tiến vài bước rồi cho mô phỏng chạy. Sau đó đổi sang `1e-2` và reset. Hai vệt tách nhau sớm hơn, trong khi `elapsed` và số bước của hai con lắc vẫn luôn bằng nhau.
+Chọn epsilon=0 rồi chạy: hai hình trong hai khung phải có cùng tư thế và vệt. Đặt lại, chọn 1e-4 rad rồi chạy tiếp. Lúc đầu chúng gần như giống hệt; muốn nhìn sự khác biệt cần chờ đủ thời gian mô phỏng. Chưa được kết luận chaos chỉ từ hình ở bài này.
 
 ## Viết code từng bước
 
-### Bước 1 — Lưu cả initial pair cho deterministic reset
+Viết phần của bạn trong starter/include và starter/src. Khi thay một hàm, xóa bản cũ rồi thay bằng bản mới, không thêm hàm trùng tên. Các hàm thuộc header đặt trong namespace lab đã có sẵn. Checkpoint 4 là bản tham khảo ở cuối bài; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — state của thí nghiệm twin"
+### Bước 1 — Tạo cặp state chỉ khác điều kiện đầu
+
+Trong include/lab.hpp, thêm struct và hai hàm sau các hàm của bài 3. Không tạo B bằng random hoặc đổi vận tốc, vì như vậy ta không còn biết chính xác yếu tố nào đã khác.
+
+```cpp title="include/lab.hpp — dữ liệu A/B và khởi tạo"
 struct TwinPendulums {
     DoublePendulumState initialPrimary{};
     DoublePendulumState initialPerturbed{};
@@ -38,71 +40,328 @@ struct TwinPendulums {
     DoublePendulumState perturbed{};
     std::size_t stepCount{};
 };
-```
 
-Initial state nằm cạnh current state để metric và reset không phải suy ngược từ trail hay UI control.
-
-### Bước 2 — Chỉ perturb đúng một field
-
-```cpp title="include/lab.hpp — tạo initial pair gần nhau"
-DoublePendulumState perturbed = initial;
-perturbed.theta2 += perturbationRadians;
-return {initial, perturbed, initial, perturbed, 0};
-```
-
-Không perturb màu, dt hoặc parameters. Màu chỉ giúp nhìn hai lane và không được đi vào solver.
-
-### Bước 3 — Tiến cả hai trước khi tăng shared count
-
-```cpp title="include/lab.hpp — một lời gọi lockstep"
-const DoublePendulumState primary = stepRk4(twins.primary, parameters, deltaSeconds);
-const DoublePendulumState perturbed = stepRk4(twins.perturbed, parameters, deltaSeconds);
-if (primary.elapsed <= twins.primary.elapsed || perturbed.elapsed <= twins.perturbed.elapsed) {
-    return;
+inline TwinPendulums makeTwinPendulums(const DoublePendulumState& initial, double perturbationRadians) {
+    DoublePendulumState perturbed = initial;
+    perturbed.theta2 += perturbationRadians;
+    TwinPendulums twins{};
+    twins.initialPrimary = initial;
+    twins.initialPerturbed = perturbed;
+    twins.primary = initial;
+    twins.perturbed = perturbed;
+    return twins;
 }
-twins.primary = primary;
-twins.perturbed = perturbed;
-++twins.stepCount;
 ```
 
-Nếu một lane từ chối step, shared count không tăng. Final validation còn kiểm finite state để dừng run có kiểm soát.
-
-### Bước 4 — Trail chỉ là output quan sát
-
-```cpp title="src/main.cpp — lấy bob2 từ state sau step"
-const lab::DoublePendulumGeometry primaryGeometry = lab::pendulumGeometry(primary, parameters);
-const lab::DoublePendulumGeometry perturbedGeometry = lab::pendulumGeometry(perturbed, parameters);
-primaryTrail.push_back(primaryGeometry.bob2);
-perturbedTrail.push_back(perturbedGeometry.bob2);
+```cpp title="include/lab.hpp — một bước đồng bộ và nguyên tử"
+inline bool stepTwinPendulums(TwinPendulums& twins, const DoublePendulumParameters& parameters, double deltaSeconds) {
+    if (!sameTime(twins.primary.elapsed, twins.perturbed.elapsed)) {
+        return false;
+    }
+    const DoublePendulumState primary = stepRk4(twins.primary, parameters, deltaSeconds);
+    const DoublePendulumState perturbed = stepRk4(twins.perturbed, parameters, deltaSeconds);
+    if (primary.elapsed <= twins.primary.elapsed || perturbed.elapsed <= twins.perturbed.elapsed || !sameTime(primary.elapsed, perturbed.elapsed)) {
+        return false;
+    }
+    twins.primary = primary;
+    twins.perturbed = perturbed;
+    ++twins.stepCount;
+    return true;
+}
 ```
 
-Trail được giới hạn 500 điểm để không tăng bộ nhớ theo thời gian. Metric ở bài sau vẫn đọc current state, không đo khoảng cách giữa hai pixel cuối.
+sameTime là helper kiểm nhãn thời gian; bản Starter có sẵn helper cùng các phép kiểm hữu hạn. Tolerance của nó chỉ xử lý sai số cộng số thực rất nhỏ, không cho phép so hai state lệch một physics step. Hàm này không sửa nhãn thời gian của một trajectory chưa chạy.
+
+### Bước 2 — Thay state đơn trong Scene bằng cặp A/B
+
+Thay struct Scene trong include/scene.hpp bằng bản sau. Các phần điều khiển frame và history cũ vẫn được giữ; trường single được thay bằng twins.
+
+```cpp title="include/scene.hpp — state và vệt của hai con lắc"
+struct Scene {
+    DoublePendulumParameters parameters{};
+    DoublePendulumState initial{2.0, 0.0, 1.1, 0.0, 0.0};
+    bool paused{true};
+    bool debug{true};
+    std::string message{};
+    int dtIndex{3};
+    double accumulator{};
+    double droppedTime{};
+    int substeps{};
+    std::size_t steps{};
+    double initialEnergyA{};
+    double maximumEnergyErrorA{};
+    std::vector<HistorySample> history{};
+    TwinPendulums twins{};
+    double perturbation{1e-4};
+    double initialEnergyB{};
+    double maximumEnergyErrorB{};
+    std::vector<Vec2> trailA{};
+    std::vector<Vec2> trailB{};
+};
+```
+
+Thay primaryState và thêm perturbedState ngay sau nó. Những chỗ chỉ đọc A không cần biết Scene đang giữ một state đơn hay một cặp:
+
+```cpp title="include/scene.hpp — truy cập đúng trajectory"
+inline const DoublePendulumState& primaryState(const Scene& scene) {
+    return scene.twins.primary;
+}
+
+inline const DoublePendulumState& perturbedState(const Scene& scene) {
+    return scene.twins.perturbed;
+}
+```
+
+Thay resetScene. E0_B lấy từ initialPerturbed, không lấy từ initialPrimary:
+
+```cpp title="include/scene.hpp — reset cùng điều kiện đầu"
+inline void resetScene(Scene& scene) {
+    stopScene(scene);
+    scene.initial.elapsed = 0.0;
+    scene.message.clear();
+    scene.twins = makeTwinPendulums(scene.initial, scene.perturbation);
+    scene.steps = 0;
+    scene.droppedTime = 0.0;
+    scene.maximumEnergyErrorA = 0.0;
+    scene.initialEnergyA = pendulumEnergy(primaryState(scene), scene.parameters);
+    scene.history.clear();
+    scene.initialEnergyB = pendulumEnergy(perturbedState(scene), scene.parameters);
+    scene.maximumEnergyErrorB = 0.0;
+    scene.trailA.clear();
+    scene.trailB.clear();
+    recordHistory(scene, true);
+}
+```
+
+### Bước 3 — Chỉ ghi vệt và số đo sau bước được chấp nhận
+
+HistorySample cần thêm trường energyErrorB. Thay struct bằng bản này:
+
+```cpp title="include/scene.hpp — mẫu năng lượng của A/B"
+struct HistorySample {
+    double time{};
+    double energyErrorA{};
+    double energyErrorB{};
+};
+```
+
+Thay recordHistory và stepScene. Vệt được lấy từ bob2 của state thật, cùng nhịp lấy mẫu với history. Không dùng các điểm trên vệt để tích phân ngược trở lại.
+
+```cpp title="include/scene.hpp — lấy mẫu hai vệt"
+inline void recordHistory(Scene& scene, bool force = false) {
+    const auto& primary = primaryState(scene);
+    if (!scene.history.empty()) {
+        const double interval = primary.elapsed - scene.history.back().time;
+        if (interval <= 1e-12 || (!force && interval < 0.04 - 1e-12)) {
+            return;
+        }
+    }
+    HistorySample sample{};
+    sample.time = primary.elapsed;
+    sample.energyErrorA = pendulumEnergy(primary, scene.parameters) - scene.initialEnergyA;
+    sample.energyErrorB = pendulumEnergy(perturbedState(scene), scene.parameters) - scene.initialEnergyB;
+    scene.trailA.push_back(pendulumGeometry(primary, scene.parameters).bob2);
+    scene.trailB.push_back(pendulumGeometry(perturbedState(scene), scene.parameters).bob2);
+    if (scene.trailA.size() > 751) {
+        scene.trailA.erase(scene.trailA.begin());
+        scene.trailB.erase(scene.trailB.begin());
+    }
+    scene.history.push_back(sample);
+    if (scene.history.size() > 751) {
+        scene.history.erase(scene.history.begin());
+    }
+}
+```
+
+```cpp title="include/scene.hpp — tiến cả cặp trước khi tăng đồng hồ"
+inline bool stepScene(Scene& scene) {
+    if (scene.dtIndex < 0 || scene.dtIndex >= 6) {
+        stopScene(scene);
+        scene.message = "Stopped: invalid dt index.";
+        return false;
+    }
+    const double dt = kStepOptions[scene.dtIndex];
+    bool accepted = false;
+    TwinPendulums candidate = scene.twins;
+    accepted = stepTwinPendulums(candidate, scene.parameters, dt);
+    accepted = accepted && withinExperiment(candidate.primary) && withinExperiment(candidate.perturbed) && std::isfinite(pendulumEnergy(candidate.primary, scene.parameters)) && std::isfinite(pendulumEnergy(candidate.perturbed, scene.parameters));
+    if (accepted) {
+        scene.twins = candidate;
+    }
+    if (!accepted) {
+        stopScene(scene);
+        scene.message = "Stopped: invalid, non-finite or unsafe step. Reduce dt or reset; state was not clamped.";
+        return false;
+    }
+    ++scene.steps;
+    ++scene.substeps;
+    scene.maximumEnergyErrorA = std::max(scene.maximumEnergyErrorA, std::abs(pendulumEnergy(primaryState(scene), scene.parameters) - scene.initialEnergyA));
+    scene.maximumEnergyErrorB = std::max(scene.maximumEnergyErrorB, std::abs(pendulumEnergy(perturbedState(scene), scene.parameters) - scene.initialEnergyB));
+    recordHistory(scene);
+    return true;
+}
+```
+
+Giữ nguyên singleStep, advanceFrame và planner của bài 3. Chúng gọi stepScene nên tự đi qua phép cập nhật A/B mới, không cần một accumulator thứ hai.
+
+### Bước 4 — Vẽ hai khung và giữ đúng số liệu năng lượng
+
+Thêm drawTrail vào include/view.hpp trước các hàm graph:
+
+```cpp title="include/view.hpp — vệt chuyển động trong world space"
+inline void drawTrail(Framebuffer& image, const std::vector<Vec2>& trail, const WorldView& view, std::uint32_t color) {
+    for (std::size_t i = 1; i < trail.size(); ++i) {
+        const Vec2 first = worldToScreen(trail[i - 1], view);
+        const Vec2 second = worldToScreen(trail[i], view);
+        drawLine(image, first.x, first.y, second.x, second.y, color);
+    }
+}
+```
+
+Thay energyGraphBound và drawEnergyGraph để tính thang theo cả A/B và vẽ thêm đường đỏ:
+
+```cpp title="include/view.hpp — năng lượng của cả hai con lắc"
+inline double energyGraphBound(const Scene& scene) {
+    double bound = 1e-12;
+    for (const auto& sample : scene.history) {
+        bound = std::max(bound, std::abs(sample.energyErrorA));
+        bound = std::max(bound, std::abs(sample.energyErrorB));
+    }
+    return bound;
+}
+
+inline void drawEnergyGraph(Framebuffer& image, const Scene& scene) {
+    rectangle(image, 570, 590, 1060, 730, kGrid, false);
+    drawLine(image, 570, 660, 1060, 660, kRail);
+    if (scene.history.empty()) {
+        return;
+    }
+    const double first = scene.history.front().time;
+    const double span = std::max(kStepOptions[scene.dtIndex], scene.history.back().time - first);
+    const double bound = energyGraphBound(scene);
+    for (std::size_t i = 1; i < scene.history.size(); ++i) {
+        const auto& a = scene.history[i - 1];
+        const auto& b = scene.history[i];
+        const double x0 = graphTimeX(a.time, first, span, 570);
+        const double x1 = graphTimeX(b.time, first, span, 570);
+        drawLine(image, x0, 660.0 - 70.0 * a.energyErrorA / bound, x1, 660.0 - 70.0 * b.energyErrorA / bound, kPrimary);
+        drawLine(image, x0, 660.0 - 70.0 * a.energyErrorB / bound, x1, 660.0 - 70.0 * b.energyErrorB / bound, kPerturbed);
+    }
+}
+```
+
+Thay drawScene. Hai WorldView chỉ khác pivot trên màn hình, không khác state hay chiều dài:
+
+```cpp title="include/view.hpp — A bên trái, B bên phải"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    rectangle(image, 40, 100, 530, 530, kGrid, false);
+    rectangle(image, 570, 100, 1060, 530, kGrid, false);
+    const WorldView viewA = makeWorldView(scene.parameters, 0);
+    const WorldView viewB = makeWorldView(scene.parameters, 1);
+    drawTrail(image, scene.trailA, viewA, 0x284c6fff);
+    drawTrail(image, scene.trailB, viewB, 0x66373fff);
+    drawPendulum(image, perturbedState(scene), scene.parameters, viewB, kPerturbed);
+    if (scene.debug) {
+        drawLine(image, viewA.pivotX, viewA.pivotY, viewA.pivotX, viewA.pivotY + 180, kGrid);
+    }
+    drawPendulum(image, primaryState(scene), scene.parameters, viewA, kPrimary);
+    drawEnergyGraph(image, scene);
+}
+```
+
+Thay drawHud để hiện E_B cùng nhãn A/B. Nếu cùng một tư thế mà hai hình nhìn cách nhau một khoảng lớn, đó là vì hai khung đặt cạnh nhau, không phải một độ tách vật lý:
+
+```cpp title="include/presentation.hpp — nhãn và cơ năng A/B"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    const auto text = [&](float x, float y, const char* value) {
+        ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
+    };
+    char line[220]{};
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    text(30, 20, line);
+    text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
+    text(30, 64, "Space start/pause | N one step | [ smaller dt | ] larger dt");
+    text(52, 110, "A: primary initial state");
+    text(582, 110, "B: same model, theta2 + epsilon at t=0");
+    std::snprintf(line, sizeof(line), "E_A=%.6f J | max |delta E_A|=%.3e J", pendulumEnergy(primaryState(scene), scene.parameters), scene.maximumEnergyErrorA);
+    text(40, 548, line);
+    text(570, 570, "Energy error Delta E(t) [J]: blue A, red B");
+    std::snprintf(line, sizeof(line), "+/-%.3e J (zero at center)", energyGraphBound(scene));
+    text(580, 596, line);
+    if (!scene.history.empty()) {
+        std::snprintf(line, sizeof(line), "time %.3f -> %.3f s | latest %zu samples", scene.history.front().time, scene.history.back().time, scene.history.size());
+        text(570, 742, line);
+    }
+    std::snprintf(line, sizeof(line), "dt=%.7f s | steps=%zu | substeps=%d | dropped=%.4f s", kStepOptions[scene.dtIndex], scene.steps, scene.substeps, scene.droppedTime);
+    text(30, 766, line);
+    std::snprintf(line, sizeof(line), "E_B=%.6f J | max |delta E_B|=%.3e J", pendulumEnergy(perturbedState(scene), scene.parameters), scene.maximumEnergyErrorB);
+    text(570, 548, line);
+    std::snprintf(line, sizeof(line), "epsilon=%.1e rad | Up/Down: epsilon | 0: identical twins", scene.perturbation);
+    if (scene.debug) {
+        text(30, 84, line);
+    }
+    if (!scene.message.empty()) {
+        text(30, 808, scene.message.c_str());
+    }
+    return ok;
+}
+```
+
+### Bước 5 — Cho người dùng chọn mức nhiễu và lặp lại phép thử
+
+Thêm nhánh này vào KEY_DOWN trong main. Up/Down thay epsilon, phím 0 tạo hai điều kiện đầu giống nhau rồi reset.
+
+```cpp title="src/main.cpp — đổi epsilon có reset"
+if (key == SDLK_UP || key == SDLK_DOWN || key == SDLK_0) {
+                    if (key == SDLK_0) {
+                        scene.perturbation = 0.0;
+                    }
+                    if (key == SDLK_UP) {
+                        scene.perturbation = std::min(1e-2, std::max(1e-8, scene.perturbation * 10.0));
+                    }
+                    if (key == SDLK_DOWN) {
+                        scene.perturbation = scene.perturbation <= 1e-8 ? 0.0 : scene.perturbation / 10.0;
+                    }
+                    lab::resetScene(scene);
+                }
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build twin lockstep"
+Main vẫn chỉ gọi advanceFrame một lần. Không copy toàn bộ vòng lặp update cho con lắc B. Space, N, R và [/] tiếp tục dùng lịch chung; chỉ dữ liệu bên trong Scene đã đổi.
+
+Chạy epsilon=0 trước. Nếu tư thế A/B khác nhau trong trường hợp này, hãy sửa sự bất đồng bộ hoặc sự khác tham số trước khi thử một epsilon nhỏ. Sau đó chạy cùng điều kiện đầu với 1e-6, 1e-4 và 1e-2 rad để thấy thời điểm tách hình khác nhau.
+
+Từ thư mục gốc của gói tải về, build đúng bài làm:
+
+```powershell title="Terminal — build và chạy Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_26_checkpoint_4
+cmake --build build --config Debug --target project_26_starter --parallel 2
+.\build\Debug\project_26_starter.exe
 ```
 
-Window title báo epsilon, elapsed và shared step count. `Up`/`Down` đổi epsilon theo bội 10 rồi reset toàn bộ experiment.
+Nếu cần đối chiếu, build riêng project_26_checkpoint_4. Source đầy đủ sau bài được trình bày ở cuối trang; dùng nó để kiểm chỗ ghép còn thiếu, không cần đoán vị trí của một đoạn code.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `frameSeconds` cho primary và fixed dt cho perturbed. Hai lane tách nhau vì thí nghiệm không công bằng; hoàn tác shared dt.
-2. Tăng `stepCount` sau mỗi lane. Count chạy gấp đôi elapsed; hoàn tác chỉ tăng một lần sau khi cả hai thành công.
-3. Perturb current state mỗi frame thay vì chỉ initial state. Bạn đang liên tục ép hệ; hoàn tác perturbation một lần trong factory.
+1. Cộng epsilon vào current state sau mỗi frame. Bạn đang liên tục tác động lên B, không còn thử một sai khác duy nhất lúc bắt đầu.
+2. Cập nhật A trước rồi thoát hàm khi B bị từ chối. Bộ đếm chung sẽ che mất việc hai trajectory đã lệch thời gian; dùng candidate và commit cả cặp.
+3. Dùng E0_A cho đồ thị ΔE_B. Một chênh lệch năng lượng ban đầu hợp lệ sẽ bị ghi nhầm thành drift.
+4. Vẽ vệt bằng tọa độ pixel rồi resize. Vệt sẽ không còn đi cùng mô hình; lưu world position và đổi sang pixel khi vẽ.
 
 ## Tự kiểm tra kết quả
 
-- Perturbed state ban đầu chỉ khác primary ở `theta2` đúng epsilon.
-- Primary và perturbed dùng cùng parameters và dt.
-- Elapsed của hai lane giống nhau sau mọi step.
-- Shared step count bằng elapsed/dt trong sai số số học.
-- Reset cùng preset và epsilon tạo lại đúng cùng pair và trail rỗng.
+- Ban đầu B chỉ khác A ở theta2 đúng epsilon; omega và tham số giống nhau.
+- Epsilon=0 giữ các field của A/B trùng nhau trong cùng run.
+- Một bước làm cả hai tiến cùng thời gian, bộ đếm chỉ tăng một lần.
+- Khi một candidate bị từ chối, cả cặp giữ state cũ.
+- Hai khung và hai vệt nhìn rõ, không cắt mất phần phía trên khi con lắc quay hết vòng.
+- Đổi epsilon/reset không nối một vệt cũ vào thí nghiệm mới.
 
 ## Bài tập mở rộng
 
-Cho phép chọn perturbation ở `theta1` hoặc `omega2`, nhưng chỉ bật một nguồn mỗi lần. Ghi rõ đơn vị và cập nhật initial phase-space separation tương ứng.
+Lưu lại cả cặp initial state, chạy một số bước cố định rồi reset và chạy lại cùng số bước. So các field bằng phép kiểm số thay vì chỉ nhìn hình. Đây là phép thử tính tái lập; nó chưa nói gì về độ chính xác của quỹ đạo.
 
-Bài tiếp theo định nghĩa “tách nhau” bằng một metric, thay vì dựa vào lúc hai đường màu nhìn có vẻ khác.
+Bài tiếp theo: [Đo độ tách mà không nhầm ở biên góc](/projects/double-pendulum-chaos/05-do-separation-trong-phase-space).

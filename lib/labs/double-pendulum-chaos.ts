@@ -50,6 +50,9 @@ export interface DoublePendulumMetrics {
   numericalSeparation: number;
   finiteTimeExponent: number;
   relativeEnergyDrift: number;
+  perturbedRelativeEnergyDrift: number;
+  absoluteEnergyDrift: number;
+  perturbedAbsoluteEnergyDrift: number;
   finite: boolean;
 }
 
@@ -76,6 +79,14 @@ export function finiteDoublePendulumState(state: DoublePendulumState) {
     Number.isFinite(state.omega2) &&
     Number.isFinite(state.elapsed) &&
     state.elapsed >= 0
+  );
+}
+
+export function samePendulumTime(first: number, second: number) {
+  return (
+    Number.isFinite(first) &&
+    Number.isFinite(second) &&
+    Math.abs(first - second) <= 1e-10 * Math.max(1, Math.abs(first), Math.abs(second))
   );
 }
 
@@ -107,46 +118,24 @@ export function doublePendulumDerivative(
   state: DoublePendulumState,
   parameters: DoublePendulumParameters,
 ): DoublePendulumDerivative | null {
-  if (!finiteDoublePendulumState(state) || !validDoublePendulumParameters(parameters)) {
-    return null;
-  }
-
-  const { mass1, mass2, length1, length2, gravity } = parameters;
-  const angleDifference = state.theta1 - state.theta2;
-  const sharedDenominator =
-    2 * mass1 + mass2 - mass2 * Math.cos(2 * state.theta1 - 2 * state.theta2);
-  const denominator1 = length1 * sharedDenominator;
-  const denominator2 = length2 * sharedDenominator;
-  if (
-    Math.abs(denominator1) <= DOUBLE_PENDULUM_EPSILON ||
-    Math.abs(denominator2) <= DOUBLE_PENDULUM_EPSILON
-  ) {
-    return null;
-  }
-
-  const acceleration1 =
-    (-gravity * (2 * mass1 + mass2) * Math.sin(state.theta1) -
-      mass2 * gravity * Math.sin(state.theta1 - 2 * state.theta2) -
-      2 *
-        Math.sin(angleDifference) *
-        mass2 *
-        (state.omega2 * state.omega2 * length2 +
-          state.omega1 * state.omega1 * length1 * Math.cos(angleDifference))) /
-    denominator1;
-  const acceleration2 =
-    (2 *
-      Math.sin(angleDifference) *
-      (state.omega1 * state.omega1 * length1 * (mass1 + mass2) +
-        gravity * (mass1 + mass2) * Math.cos(state.theta1) +
-        state.omega2 * state.omega2 * length2 * mass2 * Math.cos(angleDifference))) /
-    denominator2;
-
-  return {
-    theta1Rate: state.omega1,
-    omega1Rate: acceleration1,
-    theta2Rate: state.omega2,
-    omega2Rate: acceleration2,
-  };
+  if (!finiteDoublePendulumState(state) || !validDoublePendulumParameters(parameters)) return null;
+  const { mass1: m1, mass2: m2, length1: L1, length2: L2, gravity: g } = parameters;
+  const delta = state.theta1 - state.theta2,
+    sine = Math.sin(delta),
+    cosine = Math.cos(delta);
+  const a11 = (m1 + m2) * L1,
+    a12 = m2 * L2 * cosine,
+    a21 = L1 * cosine,
+    a22 = L2;
+  const rhs1 =
+    -m2 * L2 * state.omega2 * state.omega2 * sine - (m1 + m2) * g * Math.sin(state.theta1);
+  const rhs2 = L1 * state.omega1 * state.omega1 * sine - g * Math.sin(state.theta2);
+  const determinant = a11 * a22 - a12 * a21;
+  if (!Number.isFinite(determinant) || determinant <= DOUBLE_PENDULUM_EPSILON) return null;
+  const omega1Rate = (rhs1 * a22 - a12 * rhs2) / determinant;
+  const omega2Rate = (a11 * rhs2 - a21 * rhs1) / determinant;
+  if (!Number.isFinite(omega1Rate) || !Number.isFinite(omega2Rate)) return null;
+  return { theta1Rate: state.omega1, omega1Rate, theta2Rate: state.omega2, omega2Rate };
 }
 
 function stateFromDerivative(
@@ -193,7 +182,7 @@ export function stepDoublePendulumRk4(
 
   const weighted = (first: number, second: number, third: number, fourth: number) =>
     (first + 2 * second + 2 * third + fourth) / 6;
-  return {
+  const next = {
     theta1:
       state.theta1 +
       deltaSeconds * weighted(k1.theta1Rate, k2.theta1Rate, k3.theta1Rate, k4.theta1Rate),
@@ -208,6 +197,7 @@ export function stepDoublePendulumRk4(
       deltaSeconds * weighted(k1.omega2Rate, k2.omega2Rate, k3.omega2Rate, k4.omega2Rate),
     elapsed: state.elapsed + deltaSeconds,
   };
+  return finiteDoublePendulumState(next) && next.elapsed > state.elapsed ? next : null;
 }
 
 export function doublePendulumEnergy(
@@ -237,7 +227,7 @@ export function doublePendulumEnergy(
 }
 
 function characteristicTime(parameters: DoublePendulumParameters) {
-  return Math.sqrt((0.5 * (parameters.length1 + parameters.length2)) / parameters.gravity);
+  return Math.sqrt((0.5 * parameters.length1 + 0.5 * parameters.length2) / parameters.gravity);
 }
 
 export function doublePendulumPhaseSpaceSeparation(
@@ -248,7 +238,8 @@ export function doublePendulumPhaseSpaceSeparation(
   if (
     !finiteDoublePendulumState(first) ||
     !finiteDoublePendulumState(second) ||
-    !validDoublePendulumParameters(parameters)
+    !validDoublePendulumParameters(parameters) ||
+    !samePendulumTime(first.elapsed, second.elapsed)
   ) {
     return Number.NaN;
   }
@@ -296,18 +287,22 @@ export function stepDoublePendulumRace(
   parameters: DoublePendulumParameters,
   deltaSeconds: number,
 ) {
+  if (
+    !samePendulumTime(race.primary.elapsed, race.perturbed.elapsed) ||
+    !samePendulumTime(race.primary.elapsed, race.halfStepReference.elapsed)
+  )
+    return race;
   const primary = stepDoublePendulumRk4(race.primary, parameters, deltaSeconds);
   const perturbed = stepDoublePendulumRk4(race.perturbed, parameters, deltaSeconds);
-  const halfStep = stepDoublePendulumRk4(race.halfStepReference, parameters, 0.5 * deltaSeconds);
-  const halfStepReference = halfStep
-    ? stepDoublePendulumRk4(halfStep, parameters, 0.5 * deltaSeconds)
-    : null;
-  if (!primary || !perturbed || !halfStepReference) return race;
+  const half = stepDoublePendulumRk4(race.halfStepReference, parameters, deltaSeconds / 2);
+  const reference = half ? stepDoublePendulumRk4(half, parameters, deltaSeconds / 2) : null;
+  if (!primary || !perturbed || !reference || !samePendulumTime(primary.elapsed, reference.elapsed))
+    return race;
   return {
     ...race,
     primary,
     perturbed,
-    halfStepReference,
+    halfStepReference: { ...reference, elapsed: primary.elapsed },
     stepCount: race.stepCount + 1,
   };
 }
@@ -332,19 +327,23 @@ export function measureDoublePendulumRace(
     parameters,
   );
   const initialEnergy = doublePendulumEnergy(race.initialPrimary, parameters);
-  const currentEnergy = doublePendulumEnergy(race.primary, parameters);
-  let relativeEnergyDrift = 0;
-  if (Math.abs(initialEnergy) > DOUBLE_PENDULUM_EPSILON) {
-    relativeEnergyDrift = (currentEnergy - initialEnergy) / Math.abs(initialEnergy);
-  }
-  let finiteTimeExponent = Number.NaN;
-  if (
-    race.primary.elapsed > 0 &&
-    initialSeparation > DOUBLE_PENDULUM_EPSILON &&
-    phaseSpaceSeparation > DOUBLE_PENDULUM_EPSILON
-  ) {
-    finiteTimeExponent = Math.log(phaseSpaceSeparation / initialSeparation) / race.primary.elapsed;
-  }
+  const initialPerturbedEnergy = doublePendulumEnergy(race.initialPerturbed, parameters);
+  const absoluteEnergyDrift = doublePendulumEnergy(race.primary, parameters) - initialEnergy;
+  const perturbedAbsoluteEnergyDrift =
+    doublePendulumEnergy(race.perturbed, parameters) - initialPerturbedEnergy;
+  const relativeEnergyDrift =
+    Math.abs(initialEnergy) > DOUBLE_PENDULUM_EPSILON
+      ? absoluteEnergyDrift / Math.abs(initialEnergy)
+      : Number.NaN;
+  const perturbedRelativeEnergyDrift =
+    Math.abs(initialPerturbedEnergy) > DOUBLE_PENDULUM_EPSILON
+      ? perturbedAbsoluteEnergyDrift / Math.abs(initialPerturbedEnergy)
+      : Number.NaN;
+  const duration = race.primary.elapsed - race.initialPrimary.elapsed;
+  const finiteTimeExponent =
+    duration > 0 && initialSeparation > 0 && phaseSpaceSeparation > 0
+      ? (Math.log(phaseSpaceSeparation) - Math.log(initialSeparation)) / duration
+      : Number.NaN;
   const secondBobSeparation = doublePendulumSecondBobSeparation(
     race.primary,
     race.perturbed,
@@ -356,13 +355,18 @@ export function measureDoublePendulumRace(
     numericalSeparation,
     finiteTimeExponent,
     relativeEnergyDrift,
+    perturbedRelativeEnergyDrift,
+    absoluteEnergyDrift,
+    perturbedAbsoluteEnergyDrift,
     finite:
       finiteDoublePendulumState(race.primary) &&
       finiteDoublePendulumState(race.perturbed) &&
       finiteDoublePendulumState(race.halfStepReference) &&
       Number.isFinite(phaseSpaceSeparation) &&
       Number.isFinite(numericalSeparation) &&
-      Number.isFinite(relativeEnergyDrift),
+      Number.isFinite(absoluteEnergyDrift) &&
+      Number.isFinite(perturbedAbsoluteEnergyDrift) &&
+      Number.isFinite(secondBobSeparation),
   };
 }
 
@@ -373,6 +377,7 @@ export function planDoublePendulumFixedSteps(
   maximumSteps: number,
   maximumFrameSeconds: number,
 ): DoublePendulumFixedStepPlan {
+  const empty = { steps: 0, remainder: 0, droppedTime: 0 };
   if (
     !Number.isFinite(accumulator) ||
     accumulator < 0 ||
@@ -380,23 +385,21 @@ export function planDoublePendulumFixedSteps(
     frameSeconds < 0 ||
     !Number.isFinite(fixedDeltaSeconds) ||
     fixedDeltaSeconds <= 0 ||
+    !Number.isSafeInteger(maximumSteps) ||
     maximumSteps <= 0 ||
     !Number.isFinite(maximumFrameSeconds) ||
     maximumFrameSeconds <= 0
-  ) {
-    return { steps: 0, remainder: 0, droppedTime: 0 };
-  }
-  const acceptedFrame = Math.min(frameSeconds, maximumFrameSeconds);
-  let available = accumulator + acceptedFrame;
-  const availableSteps = Math.floor((available + DOUBLE_PENDULUM_EPSILON) / fixedDeltaSeconds);
-  const steps = Math.min(availableSteps, maximumSteps);
-  available -= steps * fixedDeltaSeconds;
-  let droppedTime = Math.max(0, frameSeconds - acceptedFrame);
-  if (availableSteps > maximumSteps) {
-    const discardedSteps = availableSteps - maximumSteps;
-    available -= discardedSteps * fixedDeltaSeconds;
-    droppedTime += discardedSteps * fixedDeltaSeconds;
-  }
-  if (available < 0 && available > -DOUBLE_PENDULUM_EPSILON) available = 0;
-  return { steps, remainder: available, droppedTime };
+  )
+    return empty;
+  const accepted = Math.min(frameSeconds, maximumFrameSeconds);
+  const available = accumulator + accepted;
+  const quotient = Math.floor((available + DOUBLE_PENDULUM_EPSILON) / fixedDeltaSeconds);
+  if (!Number.isFinite(available) || !Number.isSafeInteger(quotient)) return empty;
+  const steps = Math.min(quotient, maximumSteps);
+  const dropped = (quotient - steps) * fixedDeltaSeconds;
+  return {
+    steps,
+    remainder: Math.max(0, available - quotient * fixedDeltaSeconds),
+    droppedTime: Math.max(0, frameSeconds - accepted) + dropped,
+  };
 }

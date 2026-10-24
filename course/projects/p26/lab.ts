@@ -2,46 +2,46 @@ import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
   base: {
-    label: "DOUBLE PENDULUM CHAOS LAB",
-    title: "Một sai khác ban đầu rất nhỏ sẽ lớn lên như thế nào?",
+    label: "DOUBLE PENDULUM LAB",
+    title: "Một sai khác rất nhỏ sẽ lớn lên như thế nào?",
     description:
-      "Cho hai double pendulum chạy lockstep, đổi initial angles, epsilon và fixed dt; quan sát trail, phase-space separation, second-bob distance, energy drift và numerical shadow error.",
+      "Hai con lắc A/B cùng phương trình và solver, chỉ khác một góc ban đầu. Theo dõi độ tách, cơ năng và sai khác h/h2; dùng khoảng quan sát phù hợp trước khi kết luận.",
   },
   modes: {
     "chaos-geometry": {
-      title: "Hai góc quyết định vị trí hai bob như thế nào?",
+      title: "Dựng một con lắc kép từ hai góc",
       description:
-        "Kéo theta1/theta2 và đọc pivot, bob1, bob2; rod length phải giữ nguyên vì position được suy ra từ generalized coordinates.",
+        "Từ khung SDL có sẵn, tính vị trí hai quả nặng rồi vẽ thanh nối; kiểm tra quy ước góc và chiều dài.",
     },
     "chaos-derivative": {
-      title: "Cùng một state tạo ra alpha1 và alpha2 nào?",
+      title: "Tính gia tốc: vì sao hai thanh ảnh hưởng lẫn nhau?",
       description:
-        "Đổi angle và angular velocity rồi đọc angle difference, shared denominator cùng hai angular acceleration trước khi state bị tích phân.",
+        "Lập hai phương trình liên kết, giải hệ 2×2 và kiểm bằng những tư thế có đáp án tính tay.",
     },
     "chaos-rk4": {
-      title: "RK4 giữ energy ra sao khi fixed dt thay đổi?",
+      title: "Cho con lắc chuyển động và kiểm tra cơ năng",
       description:
-        "Tiến từng step hoặc chạy một pendulum; theo dõi mechanical energy và relative drift ở nhiều fixed dt.",
+        "Ghép RK4 với fixed timestep, lấy dữ liệu đồ thị từ physics và theo dõi sai lệch năng lượng.",
     },
     "chaos-twins": {
-      title: "Hai state chỉ lệch epsilon còn trùng nhau được bao lâu?",
+      title: "Đặt hai điều kiện đầu gần nhau và chạy đồng bộ",
       description:
-        "Đổi perturbation, tiến lockstep và theo dõi hai trail; elapsed cùng step count phải luôn giống nhau.",
+        "Tạo con lắc B chỉ lệch theta2 một lượng epsilon; vẽ hai khung và hai vệt chuyển động mà không lệch thời gian.",
     },
     "chaos-separation": {
-      title: "Đo divergence thế nào khi angle đi qua biên ±pi?",
+      title: "Đo độ tách mà không nhầm ở biên góc",
       description:
-        "So raw angle difference với wrapped difference, đọc phase-space distance và logarithmic separation graph.",
+        "Phân biệt khoảng cách hai quả nặng với khoảng cách trạng thái, xử lý góc tuần hoàn và vẽ trục log theo thời gian thực của mẫu.",
     },
     "chaos-shadow": {
-      title: "Đường tách ra vì chaos hay vì dt quá lớn?",
+      title: "Kiểm tra lại bằng bước thời gian nhỏ hơn",
       description:
-        "So intentional twin separation với numerical shadow separation từ cùng initial state chạy hai half-step.",
+        "Thêm quỹ đạo h/2, chạy thử 10 giây có thể hủy và so ba độ phân giải trước khi diễn giải divergence. Bắt đầu bằng job 10 giây; thay h sẽ đặt lại thí nghiệm.",
     },
     "chaos-validation": {
-      title: "Kết luận chaos cần những bằng chứng nào?",
+      title: "Hoàn thiện bàn thí nghiệm và mã nguồn",
       description:
-        "Chạy Calm, Chaotic, Near upright trong thời lượng hữu hạn; kiểm energy, finite state, shadow error, reset và pointer interaction.",
+        "Thêm preset, kéo đặt góc ban đầu, job 30 giây theo batch, chế độ trình diễn và bộ kiểm chứng độc lập.",
     },
   },
 } satisfies ProjectLabMeta;

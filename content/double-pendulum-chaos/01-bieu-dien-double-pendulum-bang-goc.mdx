@@ -1,36 +1,43 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Biểu diễn double pendulum bằng hai góc
+# Dựng một con lắc kép từ hai góc
 
 ## Vấn đề cần giải quyết
 
-Starter đã mở cửa sổ SDL3, tạo framebuffer và vẽ hai con lắc kép đứng yên. Hình ban đầu có vẻ đúng, nhưng vị trí bốn quả nặng đang được viết trực tiếp trong renderer. Nếu ta vừa lưu góc vừa lưu vị trí, hai bản dữ liệu có thể lệch nhau ngay khi mô phỏng bắt đầu chạy.
+Ở Project 25, ta lưu vị trí từng khối rồi nối chúng bằng lò xo. Với con lắc kép, cách đó không còn tiện: hai thanh phải luôn giữ đúng chiều dài, dù hệ đang quay theo hướng nào. Ta sẽ mô tả tư thế bằng hai góc, rồi tính lại vị trí hai quả nặng mỗi lần vẽ.
 
-Trong bài đầu, trạng thái thật của mỗi con lắc chỉ gồm hai góc, hai vận tốc góc và thời gian đã mô phỏng. Đây chính là cách biểu diễn bằng **generalized coordinates**. Mỗi `bob position` luôn được tính lại từ các đại lượng đó, không được lưu thành một bản trạng thái thứ hai.
+Kết quả cuối bài là một con lắc kép đứng yên trong khung A. Bạn đổi góc bằng bàn phím hoặc thanh trượt và thấy hai thanh vẫn nối đúng chỗ. Khung B còn trống có chủ đích; đến bài 4 ta mới thêm con lắc thứ hai.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta đo cả hai góc từ phương thẳng đứng hướng xuống. World Y hướng lên, vì vậy:
+Mô hình gồm hai thanh cứng không có khối lượng và hai quả nặng có kích thước vật lý được bỏ qua, gọi là point mass. Chưa có ma sát, lực cản không khí hay va chạm giữa các thanh.
+
+Đặt gốc world space tại điểm treo, X sang phải, Y hướng lên. Cả hai góc đều đo từ phương thẳng đứng hướng xuống. Đặc biệt, theta2 là góc của thanh thứ hai so với phương thẳng đứng, **không phải góc giữa hai thanh**.
 
 $$
-p_1=(L_1\sin\theta_1,-L_1\cos\theta_1)
+p_1=(L_1\sin\theta_1,-L_1\cos\theta_1),\qquad
+p_2=p_1+(L_2\sin\theta_2,-L_2\cos\theta_2).
 $$
 
-$$
-p_2=p_1+(L_2\sin\theta_2,-L_2\cos\theta_2)
-$$
+Khi hai góc bằng 0, hai quả nằm ở (0,−1) và (0,−2) m. Khi theta1 bằng π/2, quả thứ nhất nằm ở (1,0) m. Hai trường hợp này giúp ta kiểm ngay dấu của sin/cos.
 
-Khi $\theta_1=\theta_2=0$, cả hai bob nằm thẳng dưới pivot. Đây là cấu hình dễ kiểm bằng mắt và bằng test.
+Ta chỉ lưu theta1, omega1, theta2, omega2; omega là vận tốc góc, đơn vị rad/s. Elapsed là thời gian mô phỏng, không phải một tọa độ bổ sung. Cách chọn góc để biểu diễn tư thế được gọi là generalized coordinates. Vị trí quả nặng (bob position) là dữ liệu suy ra, không phải một bản state thứ hai cần cập nhật riêng.
 
 <InteractiveLab demo="double-pendulum-chaos" mode="chaos-geometry" />
 
-Kéo hai thanh trượt hoặc kéo quả nặng thứ hai. Dù góc quay thay đổi thế nào, khoảng cách từ điểm treo đến quả thứ nhất và giữa hai quả vẫn phải bằng đúng 1 m.
+Đưa hai thanh trượt góc về gần 0, rồi thử quay từng thanh một. Đọc hai chiều dài ở phần số liệu: chúng luôn bằng 1 m. Hai khung dùng cùng tỷ lệ mét/pixel; vị trí đặt khung trên trang không phải tọa độ vật lý.
 
 ## Viết code từng bước
 
-### Bước 1 — Tách parameters khỏi state
+Viết phần của bạn trong starter/include và starter/src. Khi thay một hàm, xóa bản cũ rồi thay bằng bản mới, không thêm hàm trùng tên. Các hàm thuộc header đặt trong namespace lab đã có sẵn. Checkpoint 1 là bản tham khảo ở cuối bài; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — tham số vật lý và generalized state"
+### Bước 1 — Đọc khung mã đã có trước khi thêm phần mô phỏng
+
+Giải nén ZIP ở cuối trang tổng quan. Starter đã có CMake, vòng lặp SDL, framebuffer 1100×820, phép đổi world/screen, hàm vẽ đường và hình tròn. Đây là phần công cụ từ các project trước, không phải solver con lắc. Đọc src/main.cpp một lượt: chương trình tạo Scene, gọi drawScene, đưa pixels lên SDL_Texture rồi present.
+
+Trong include/lab.hpp đã có các kiểu sau; giữ nguyên chúng để các bài dùng cùng tên biến:
+
+```cpp title="include/lab.hpp — tham số và trạng thái đã được cấp"
 struct DoublePendulumParameters {
     double mass1{1.0};
     double mass2{1.0};
@@ -48,62 +55,159 @@ struct DoublePendulumState {
 };
 ```
 
-Mass, length và gravity mô tả hệ. Angle, angular velocity và elapsed mô tả trạng thái tức thời. Việc tách này cho phép hai trajectory dùng chung đúng một bộ parameters ở bài 4.
+Mass/length/gravity thuộc về mô hình; góc/vận tốc thuộc về trạng thái. Cả hai góc dùng radian. Không thêm bob1/bob2 vào DoublePendulumState.
 
-### Bước 2 — Suy ra bob thứ nhất
+### Bước 2 — Viết hàm tính hình học từ hai góc
 
-```cpp title="include/lab.hpp — theta1 thành bob1 trong world space"
-DoublePendulumGeometry geometry{};
-geometry.bob1 = {parameters.length1 * std::sin(state.theta1), -parameters.length1* std::cos(state.theta1)};
+Thêm hàm dưới đây sau finiteState trong namespace lab. DoublePendulumGeometry và các hàm Vec2 đã có trong Starter.
+
+```cpp title="include/lab.hpp — suy ra hai vị trí"
+inline DoublePendulumGeometry pendulumGeometry(const DoublePendulumState& state, const DoublePendulumParameters& parameters) {
+    DoublePendulumGeometry geometry{};
+    geometry.bob1 = {parameters.length1 * std::sin(state.theta1), -parameters.length1 * std::cos(state.theta1)};
+    geometry.bob2 = add(geometry.bob1, {parameters.length2 * std::sin(state.theta2), -parameters.length2 * std::cos(state.theta2)});
+    return geometry;
+}
 ```
 
-Dấu âm trước `cos` đến từ world Y hướng lên trong khi angle zero chỉ xuống. Nếu đổi quy ước, phải đổi đồng thời geometry, phương trình động lực học và interaction; không sửa riêng renderer.
+Pivot mặc định là (0,0). Quả thứ hai nối tiếp từ bob1 nên phải cộng vector thanh thứ hai vào bob1; nếu tính cả hai từ pivot, ta sẽ vẽ hai con lắc đơn, không phải một con lắc kép.
 
-### Bước 3 — Đặt bob thứ hai tương đối với bob thứ nhất
+### Bước 3 — Vẽ hai thanh và hai quả nặng
 
-```cpp title="include/lab.hpp — rod thứ hai nối tiếp rod thứ nhất"
-geometry.bob2 = add(geometry.bob1, {parameters.length2 * std::sin(state.theta2), -parameters.length2* std::cos(state.theta2)});
-return geometry;
+Trong include/view.hpp, thêm drawPendulum trước drawScene. WorldView chỉ chứa tỷ lệ và vị trí khung trên màn hình; nó không được làm thay đổi góc của mô hình.
+
+```cpp title="include/view.hpp — vẽ từ geometry"
+inline void drawPendulum(Framebuffer& image, const DoublePendulumState& state, const DoublePendulumParameters& parameters, const WorldView& view, std::uint32_t color) {
+    const auto geometry = pendulumGeometry(state, parameters);
+    const Vec2 pivot = worldToScreen(geometry.pivot, view);
+    const Vec2 bob1 = worldToScreen(geometry.bob1, view);
+    const Vec2 bob2 = worldToScreen(geometry.bob2, view);
+    drawLine(image, pivot.x, pivot.y, bob1.x, bob1.y, color);
+    drawLine(image, bob1.x, bob1.y, bob2.x, bob2.y, color);
+    drawBob(image, bob1, 8, color);
+    drawBob(image, bob2, 11, color);
+    drawBob(image, pivot, 4, kExact);
+}
 ```
 
-`theta2` là góc tuyệt đối so với phương thẳng đứng, không phải góc tương đối giữa hai rod. Vì vậy vector rod thứ hai được cộng thẳng vào `bob1`.
+Thay drawScene hiện có bằng bản dưới. Mỗi frame xóa nền, kẻ hai khung, rồi vẽ trạng thái đang chọn trong khung A. Hàm drawBob và rectangle là công cụ hiển thị đã cấp, không phải phần còn thiếu của solver.
 
-### Bước 4 — Renderer chỉ đọc geometry
-
-```cpp title="src/main.cpp — đưa geometry lên framebuffer SDL3"
-const lab::DoublePendulumGeometry geometry = lab::pendulumGeometry(state, parameters);
-const lab::Vec2 pivot = worldToScreen(geometry.pivot, view);
-const lab::Vec2 bob1 = worldToScreen(geometry.bob1, view);
-const lab::Vec2 bob2 = worldToScreen(geometry.bob2, view);
+```cpp title="include/view.hpp — nối mô hình vào cảnh chính"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    rectangle(image, 40, 100, 530, 530, kGrid, false);
+    rectangle(image, 570, 100, 1060, 530, kGrid, false);
+    const WorldView viewA = makeWorldView(scene.parameters, 0);
+    if (scene.debug) {
+        drawLine(image, viewA.pivotX, viewA.pivotY, viewA.pivotX, viewA.pivotY + 180, kGrid);
+    }
+    drawPendulum(image, primaryState(scene), scene.parameters, viewA, kPrimary);
+}
 ```
 
-Sau khi rods và bob được rasterize vào `pixels`, `SDL_UpdateTexture` đưa đúng framebuffer đó lên cửa sổ. Solver về sau không cần biết pixel hoặc kích thước window.
+### Bước 4 — Cho người học đổi góc và đọc kết quả
+
+Trong src/main.cpp, thêm nhánh này vào khối xử lý SDL_EVENT_KEY_DOWN, ngay sau nhánh phím F. Đây là chỉnh điều kiện đầu, chưa phải chuyển động theo thời gian:
+
+```cpp title="src/main.cpp — đổi góc ban đầu bằng bàn phím"
+if (key == SDLK_A || key == SDLK_D || key == SDLK_W || key == SDLK_S) {
+                    if (key == SDLK_A) {
+                        scene.initial.theta1 -= 0.05;
+                    }
+                    if (key == SDLK_D) {
+                        scene.initial.theta1 += 0.05;
+                    }
+                    if (key == SDLK_S) {
+                        scene.initial.theta2 -= 0.05;
+                    }
+                    if (key == SDLK_W) {
+                        scene.initial.theta2 += 0.05;
+                    }
+                    scene.initial.theta1 = std::clamp(scene.initial.theta1, -lab::kPi, lab::kPi);
+                    scene.initial.theta2 = std::clamp(scene.initial.theta2, -lab::kPi, lab::kPi);
+                    lab::resetScene(scene);
+                }
+```
+
+A/D giảm/tăng theta1; S/W giảm/tăng theta2. Clamp ở đây giới hạn thanh điều khiển trong một vòng, không phải clamp kết quả solver. resetScene chỉ áp lại điều kiện đầu trong bài tĩnh này.
+
+Nếu muốn hiện số tọa độ ngay trong cửa sổ như checkpoint, thay drawHud trong include/presentation.hpp bằng hàm sau. Nó chỉ đọc state, không can thiệp phép tính:
+
+```cpp title="include/presentation.hpp — số liệu hình học trong cửa sổ"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    const auto text = [&](float x, float y, const char* value) {
+        ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
+    };
+    char line[220]{};
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    text(30, 20, line);
+    text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
+    text(30, 64, "Static geometry: angles from downward vertical, rigid massless rods; no integration yet.");
+    text(52, 110, "A: primary initial state");
+    text(582, 110, "Second pendulum is added in lesson 4.");
+    const auto geometry = pendulumGeometry(scene.initial, scene.parameters);
+    std::snprintf(line, sizeof(line), "bob1=(%.4f,%.4f) m | bob2=(%.4f,%.4f) m | L1=L2=1 m", geometry.bob1.x, geometry.bob1.y, geometry.bob2.x, geometry.bob2.y);
+    text(30, 560, line);
+    if (!scene.message.empty()) {
+        text(30, 808, scene.message.c_str());
+    }
+    return ok;
+}
+```
+
+### Bước 5 — Theo đường đi từ hình học tới cửa sổ SDL
+
+Đoạn sau đã có trong main của Starter; đọc nó để hiểu đường đi của dữ liệu, không dán thêm một bản thứ hai. drawScene ghi màu vào image.pixels trên CPU. SDL_UpdateTexture chép vùng nhớ đó sang texture; SDL_RenderTexture đưa texture vào frame đang vẽ; SDL_RenderPresent mới đưa frame ra cửa sổ.
+
+```cpp title="src/main.cpp — framebuffer được đưa lên cửa sổ"
+if (dirty) {
+            lab::drawScene(image, scene);
+            if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), 1100 * static_cast<int>(sizeof(std::uint32_t))) || !SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !lab::drawHud(renderer, scene) || !SDL_RenderPresent(renderer)) {
+                std::cerr << SDL_GetError() << '\n';
+                failed = true;
+                break;
+            }
+            dirty = false;
+        }
+```
+
+Pitch là số byte của một hàng: 1100 pixel nhân kích thước uint32_t. Không truyền chiều dài cả vector làm pitch. dirty cho phép bỏ qua việc upload/render khi hình không đổi; các event chỉnh góc đã đặt dirty=true để frame mới được hiện ngay.
+
+Vì vậy, nếu geometry đúng nhưng cửa sổ trống, hãy lần theo thứ tự: worldToScreen → các hàm raster ghi pixels → SDL_UpdateTexture → SDL_RenderTexture → SDL_RenderPresent. Không sửa công thức alpha để chữa một lỗi presentation.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint geometry"
+Giữ nguyên phần setup/present/cleanup của src/main.cpp. Main đã gọi lab::drawScene(image, scene), nên thay hàm vẽ là đủ nối hình học vào SDL. Không cần gọi pendulumGeometry một lần nữa trong event loop rồi lưu kết quả vào Scene.
+
+Cửa sổ dùng logical presentation: resize chỉ thay kích thước hiển thị và vùng letterbox, không thay chiều dài thanh hoặc góc. Trong ứng dụng C++, nhấn A/D và W/S; trên Canvas, dùng hai thanh trượt. Thao tác kéo chuột sẽ được thêm ở bài cuối, sau khi phép tính đã được kiểm.
+
+Từ thư mục gốc của gói tải về, build đúng bài làm:
+
+```powershell title="Terminal — build và chạy Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_26_checkpoint_1
+cmake --build build --config Debug --target project_26_starter --parallel 2
+.\build\Debug\project_26_starter.exe
 ```
 
-Chạy target rồi resize cửa sổ. Rod length trên world không đổi; chỉ số pixel-per-meter thay đổi để hình vẫn vừa vùng mô phỏng.
+Nếu cần đối chiếu, build riêng project_26_checkpoint_1. Source đầy đủ sau bài được trình bày ở cuối trang; dùng nó để kiểm chỗ ghép còn thiếu, không cần đoán vị trí của một đoạn code.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ dấu âm trước `cos`. Angle zero làm pendulum chỉ lên thay vì xuống; hoàn tác và ghi lại hệ trục đã chọn.
-2. Tính `bob2` từ pivot thay vì từ `bob1`. Hai rod tách rời; hoàn tác phép cộng nối tiếp.
-3. Lưu thêm `bob1` và `bob2` vào `DoublePendulumState`, rồi chỉ sửa theta bằng slider. Quan sát dữ liệu cũ không tự đổi; xóa state trùng lặp.
+1. Bỏ dấu âm trước cos: góc 0 sẽ chỉ lên trên. Sửa lại theo đúng world Y hướng lên.
+2. Tính bob2 từ pivot: hai thanh không còn nối tiếp. Đối chiếu công thức p2=p1+vector thanh 2.
+3. Đổi theta2 thành theta1+theta2 trong renderer nhưng vẫn giữ nguyên ý nghĩa state. Bạn đã lẫn góc tương đối với góc tuyệt đối; khôi phục một quy ước thống nhất.
 
 ## Tự kiểm tra kết quả
 
-- Theta zero đặt bob1 tại `(0,-1)` và bob2 tại `(0,-2)` với length mặc định.
-- Distance pivot–bob1 bằng `length1` ở mọi góc.
-- Distance bob1–bob2 bằng `length2` ở mọi góc.
-- Resize không đổi world geometry.
-- Framebuffer vẫn được present qua `SDL_UpdateTexture` và `SDL_RenderTexture`.
+- Góc 0 đặt hai quả tại (0,−1) và (0,−2) m với tham số mặc định.
+- Theta1=π/2 đặt quả thứ nhất tại (1,0) m.
+- Khoảng cách pivot–bob1 bằng L1; bob1–bob2 bằng L2 ở nhiều góc.
+- Đổi góc làm hình thay đổi nhưng elapsed vẫn bằng 0.
+- Resize không đổi state và không làm một phần quỹ đạo quay tròn bị cắt khỏi khung A.
 
 ## Bài tập mở rộng
 
-Vẽ cung góc thật thay cho label chữ, nhưng tính cung từ cùng quy ước downward vertical. Thêm một test cho angle $\pi/2$ trước khi dùng cung làm tài liệu giải thích.
+Thử các cặp góc (0,π/2), (π/2,0) và (π,π). Tính tay tọa độ hai quả trước khi dùng Canvas kiểm lại. Sau đó viết một hàm kiểm chiều dài hai thanh từ geometry; đừng dùng chính L1/L2 làm kết quả trả về.
 
-Bài tiếp theo biến state này thành derivative: từ hai angle và hai angular velocity, ta tính hai angular acceleration coupled.
+Bài tiếp theo: [Tính gia tốc: vì sao hai thanh ảnh hưởng lẫn nhau?](/projects/double-pendulum-chaos/02-tinh-angular-acceleration-coupled).

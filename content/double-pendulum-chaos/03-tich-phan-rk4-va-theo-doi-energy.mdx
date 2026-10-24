@@ -1,100 +1,449 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Tích phân RK4 và theo dõi energy
+# Cho con lắc chuyển động và kiểm tra cơ năng
 
 ## Vấn đề cần giải quyết
 
-Ta đã có `pendulumDerivative(state)`, nhưng đạo hàm chỉ mô tả trạng thái đang thay đổi theo hướng nào tại một thời điểm. Muốn con lắc chuyển động, chương trình phải tích lũy thay đổi qua nhiều bước thời gian. Project 26 dùng lại RK4 đã học ở Project 23 để ta tập trung vào hệ con lắc kép thay vì học thêm một bộ tích phân mới.
+Hàm derivative mới cho biết hướng thay đổi của state tại một thời điểm. Muốn thấy chuyển động, ta phải dùng nó để tính state sau một khoảng thời gian nhỏ. Bài này dùng lại classical RK4 của Project 23, rồi ghép nó vào vòng lặp SDL.
 
-Một quỹ đạo trông phức tạp chưa chứng minh phép tính đúng. Khi không có ma sát, tổng cơ năng phải gần như được bảo toàn; độ trôi năng lượng vì vậy là dấu hiệu sớm cho thấy `dt` đang quá lớn.
+Ta còn cần một phép kiểm không phụ thuộc vào hình vẽ. Vì mô hình không có ma sát, cơ năng phải gần như không đổi. Đồ thị trong bài vẽ ΔE=E(t)−E(0), không phải một đường năng lượng giả từ độ cao pixel.
 
 ## Hiểu ý tưởng trước khi viết code
 
-RK4 ghép bốn derivative sample:
+Với $y=(\theta_1,\omega_1,\theta_2,\omega_2)$ và hàm đạo hàm f của bài 2:
 
 $$
-y_{n+1}=y_n+\frac{\Delta t}{6}(k_1+2k_2+2k_3+k_4)
+k_1=f(y),\quad k_2=f(y+\tfrac h2k_1),\quad
+k_3=f(y+\tfrac h2k_2),\quad k_4=f(y+hk_3),
+$$
+$$
+y_{\text{next}}=y+\frac h6(k_1+2k_2+2k_3+k_4).
 $$
 
-Potential energy lấy trạng thái thẳng xuống làm zero. Kinetic energy của bob thứ hai phải gồm chuyển động truyền xuống từ cả hai rod.
+Mỗi state tạm bắt đầu từ y, không phải lấy mẫu thứ ba bằng cách cộng tiếp vào state tạm thứ hai. Chỉ kết quả cuối tăng elapsed thêm một h. Nếu một mẫu không hợp lệ, bỏ cả bước; không báo đã mô phỏng thêm thời gian.
+
+Từ hình học, vận tốc hai quả là:
+
+$$
+v_1=L_1\omega_1(\cos\theta_1,\sin\theta_1),\quad
+v_2=v_1+L_2\omega_2(\cos\theta_2,\sin\theta_2).
+$$
+
+Lấy tư thế thẳng xuống làm mốc thế năng 0:
+
+$$
+E=\tfrac12m_1|v_1|^2+\tfrac12m_2|v_2|^2
+ +(m_1+m_2)gL_1(1-\cos\theta_1)+m_2gL_2(1-\cos\theta_2).
+$$
+
+Quả thứ hai nhận vận tốc từ cả hai thanh; chỉ dùng L2·omega2 sẽ bỏ mất một phần động năng. Mốc thế năng ở đây khác cách chọn tại anchor của Project 25, nhưng phép đo E(t)−E(0) vẫn có ý nghĩa như nhau.
+
+Không có damping nên đừng chờ con lắc tự tắt dần. Nếu hình nhanh chóng đứng lại, phóng lớn vô hạn hoặc năng lượng trôi mạnh, cần kiểm solver/dt trước.
 
 <InteractiveLab demo="double-pendulum-chaos" mode="chaos-rk4" />
 
-Chọn `dt = 1/120 s`, tiến vài bước rồi đổi sang `1/480 s` và reset. So hai đồ thị năng lượng trên cùng một khoảng thời gian mô phỏng; không so hai trạng thái ở hai thời điểm khác nhau.
+Tiến một bước ở h=1/240 s: elapsed phải hiện khoảng 0,004 s. Chạy vài giây, pause rồi đọc E_A và max |ΔE|. Đổi sang 1/480 s sẽ bắt đầu lại cùng điều kiện đầu. So các run tại cùng thời gian; trục dọc đồ thị tự đổi thang nên phải đọc giá trị Joule, không chỉ nhìn chiều cao đường.
 
 ## Viết code từng bước
 
-### Bước 1 — Tạo state tạm từ một derivative
+Viết phần của bạn trong starter/include và starter/src. Khi thay một hàm, xóa bản cũ rồi thay bằng bản mới, không thêm hàm trùng tên. Các hàm thuộc header đặt trong namespace lab đã có sẵn. Checkpoint 3 là bản tham khảo ở cuối bài; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — state tạm cho các stage RK4"
+### Bước 1 — Viết phần RK4, chưa đụng đến render
+
+Trong include/lab.hpp, thêm addDerivative và stepRk4 sau pendulumDerivative. Gán từng field giúp ta đối chiếu trực tiếp với state, không phải đoán thứ tự một initializer dài.
+
+```cpp title="include/lab.hpp — tạo state tạm"
 inline DoublePendulumState addDerivative(const DoublePendulumState& state, const DoublePendulumDerivative& derivative, double factor) {
-    return {state.theta1 + derivative.theta1Rate * factor, state.omega1 + derivative.omega1Rate * factor, state.theta2 + derivative.theta2Rate * factor, state.omega2 + derivative.omega2Rate * factor, state.elapsed + factor};
+    DoublePendulumState next = state;
+    next.theta1 += derivative.theta1Rate * factor;
+    next.omega1 += derivative.omega1Rate * factor;
+    next.theta2 += derivative.theta2Rate * factor;
+    next.omega2 += derivative.omega2Rate * factor;
+    next.elapsed += factor;
+    return next;
 }
 ```
 
-`factor` là `dt/2` hoặc `dt`. State tạm chỉ phục vụ việc lấy derivative; output cuối vẫn tăng elapsed đúng một full step.
-
-### Bước 2 — Lấy k1 đến k4 từ bốn state hoàn chỉnh
-
-```cpp title="include/lab.hpp — bốn derivative sample"
-const DoublePendulumDerivative k1 = pendulumDerivative(state, parameters);
-const DoublePendulumDerivative k2 = pendulumDerivative(addDerivative(state, k1, 0.5 * deltaSeconds), parameters);
-const DoublePendulumDerivative k3 = pendulumDerivative(addDerivative(state, k2, 0.5 * deltaSeconds), parameters);
-const DoublePendulumDerivative k4 = pendulumDerivative(addDerivative(state, k3, deltaSeconds), parameters);
-if (!k1.valid || !k2.valid || !k3.valid || !k4.valid) {
-    return state;
+```cpp title="include/lab.hpp — bốn mẫu và một bước hoàn chỉnh"
+inline DoublePendulumState stepRk4(const DoublePendulumState& state, const DoublePendulumParameters& parameters, double deltaSeconds) {
+    if (!finiteState(state) || !validParameters(parameters) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
+        return state;
+    }
+    const DoublePendulumDerivative k1 = pendulumDerivative(state, parameters);
+    if (!k1.valid) {
+        return state;
+    }
+    const DoublePendulumDerivative k2 = pendulumDerivative(addDerivative(state, k1, 0.5 * deltaSeconds), parameters);
+    if (!k2.valid) {
+        return state;
+    }
+    const DoublePendulumDerivative k3 = pendulumDerivative(addDerivative(state, k2, 0.5 * deltaSeconds), parameters);
+    if (!k3.valid) {
+        return state;
+    }
+    const DoublePendulumDerivative k4 = pendulumDerivative(addDerivative(state, k3, deltaSeconds), parameters);
+    if (!k4.valid) {
+        return state;
+    }
+    const auto weighted = [](double first, double second, double third, double fourth) {
+        return (first + 2.0 * second + 2.0 * third + fourth) / 6.0;
+    };
+    DoublePendulumState next = state;
+    next.theta1 += deltaSeconds * weighted(k1.theta1Rate, k2.theta1Rate, k3.theta1Rate, k4.theta1Rate);
+    next.omega1 += deltaSeconds * weighted(k1.omega1Rate, k2.omega1Rate, k3.omega1Rate, k4.omega1Rate);
+    next.theta2 += deltaSeconds * weighted(k1.theta2Rate, k2.theta2Rate, k3.theta2Rate, k4.theta2Rate);
+    next.omega2 += deltaSeconds * weighted(k1.omega2Rate, k2.omega2Rate, k3.omega2Rate, k4.omega2Rate);
+    next.elapsed += deltaSeconds;
+    if (!finiteState(next) || next.elapsed <= state.elapsed) {
+        return state;
+    }
+    return next;
 }
 ```
 
-Không được lấy alpha một lần rồi dùng lại cho bốn stage; như vậy chỉ đổi tên Euler thành RK4.
+State trả về giống input là tín hiệu bước bị từ chối; lớp Scene sẽ kiểm elapsed có thực sự tăng hay không. Không wrap theta trong solver. Góc vượt một vòng vẫn là một giá trị hợp lệ của quỹ đạo đang tích phân.
 
-### Bước 3 — Ghép rate theo weights 1–2–2–1
+### Bước 2 — Đo cơ năng từ chính state đó
 
-```cpp title="include/lab.hpp — cập nhật state và elapsed một lần"
-next.theta1 += deltaSeconds * weighted(k1.theta1Rate, k2.theta1Rate, k3.theta1Rate, k4.theta1Rate);
-next.omega1 += deltaSeconds * weighted(k1.omega1Rate, k2.omega1Rate, k3.omega1Rate, k4.omega1Rate);
-next.theta2 += deltaSeconds * weighted(k1.theta2Rate, k2.theta2Rate, k3.theta2Rate, k4.theta2Rate);
-next.omega2 += deltaSeconds * weighted(k1.omega2Rate, k2.omega2Rate, k3.omega2Rate, k4.omega2Rate);
-next.elapsed += deltaSeconds;
+Thêm hàm dưới sau RK4. Đây là phép tính thuần, không đọc kích thước window hoặc framebuffer.
+
+```cpp title="include/lab.hpp — động năng và thế năng"
+inline double pendulumEnergy(const DoublePendulumState& state, const DoublePendulumParameters& parameters) {
+    if (!finiteState(state) || !validParameters(parameters)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double velocity1Squared = parameters.length1 * parameters.length1 * state.omega1 * state.omega1;
+    const double velocity2X = parameters.length1 * state.omega1 * std::cos(state.theta1) + parameters.length2 * state.omega2 * std::cos(state.theta2);
+    const double velocity2Y = parameters.length1 * state.omega1 * std::sin(state.theta1) + parameters.length2 * state.omega2 * std::sin(state.theta2);
+    const double kinetic = 0.5 * parameters.mass1 * velocity1Squared + 0.5 * parameters.mass2 * (velocity2X * velocity2X + velocity2Y * velocity2Y);
+    const double potential = parameters.mass1 * parameters.gravity * parameters.length1 * (1.0 - std::cos(state.theta1)) + parameters.mass2 * parameters.gravity * (parameters.length1 * (1.0 - std::cos(state.theta1)) + parameters.length2 * (1.0 - std::cos(state.theta2)));
+    return kinetic + potential;
+}
 ```
 
-Các angle không bị wrap sau step. Sin/cos vẫn nhận được angle ngoài một vòng; giữ state liên tục tránh tạo discontinuity không cần thiết trong integrator.
+### Bước 3 — Chia thời gian frame thành các bước vật lý
 
-### Bước 4 — Đo energy từ cùng state
+Thêm FixedStepPlan và planFixedSteps vào cuối include/lab.hpp, vẫn trong namespace lab. Accumulator giữ phần thời gian chưa đủ một bước; tối đa 32 bước/frame và nhận tối đa 0,1 s từ một frame dài.
 
-```cpp title="include/lab.hpp — kinetic và potential energy"
-const double kinetic = 0.5 * parameters.mass1 * velocity1Squared + 0.5 * parameters.mass2 * (velocity2X * velocity2X + velocity2Y * velocity2Y);
-const double potential = parameters.mass1 * parameters.gravity * parameters.length1 * (1.0 - std::cos(state.theta1)) + parameters.mass2 * parameters.gravity * (parameters.length1 * (1.0 - std::cos(state.theta1)) + parameters.length2 * (1.0 - std::cos(state.theta2)));
-return kinetic + potential;
+```cpp title="include/lab.hpp — kế hoạch bước cố định"
+struct FixedStepPlan {
+    int steps{};
+    double remainder{};
+    double droppedTime{};
+};
+
+inline FixedStepPlan planFixedSteps(double accumulator, double frameSeconds, double fixedDeltaSeconds, int maximumSteps, double maximumFrameSeconds) {
+    if (!std::isfinite(accumulator) || accumulator < 0.0 || !std::isfinite(frameSeconds) || frameSeconds < 0.0 || !std::isfinite(fixedDeltaSeconds) || fixedDeltaSeconds <= 0.0 || maximumSteps <= 0 || !std::isfinite(maximumFrameSeconds) || maximumFrameSeconds <= 0.0) {
+        return {};
+    }
+    const double acceptedFrame = std::min(frameSeconds, maximumFrameSeconds);
+    const double available = accumulator + acceptedFrame;
+    const double quotient = std::floor((available + kChaosEpsilon) / fixedDeltaSeconds);
+    if (!std::isfinite(available) || !std::isfinite(quotient) || quotient > 9e15) {
+        return {};
+    }
+    const int steps = static_cast<int>(std::min(quotient, static_cast<double>(maximumSteps)));
+    const double discarded = std::max(0.0, quotient - steps) * fixedDeltaSeconds;
+    const double remainder = std::max(0.0, available - quotient * fixedDeltaSeconds);
+    return {steps, remainder, std::max(0.0, frameSeconds - acceptedFrame) + discarded};
+}
 ```
 
-Energy là metric độc lập với pixel. CTest có thể chạy nó hàng nghìn step mà không mở SDL window.
+Thời gian bị bỏ phải được báo riêng. Solver không nhận một dt khổng lồ để cố bù cho việc cửa sổ vừa bị kéo hoặc debugger vừa dừng lâu.
+
+### Bước 4 — Ghép state, phép đo và lịch cập nhật vào Scene
+
+Thay toàn bộ include/scene.hpp bằng bản dưới. Đây là lớp điều phối, không phải phương trình mới. Đọc theo ba nhóm: Scene lưu initial/single; resetScene tạo mốc E0; stepScene nhận candidate rồi mới cập nhật bộ đếm, max error và history. advanceFrame chỉ thực hiện kế hoạch đã giới hạn.
+
+```cpp title="include/scene.hpp — bản điều phối đầy đủ của bài 3"
+#pragma once
+#include "lab.hpp"
+#include <string>
+#include <vector>
+
+namespace lab {
+inline constexpr double kStepOptions[]{1.0 / 30.0, 1.0 / 60.0, 1.0 / 120.0, 1.0 / 240.0, 1.0 / 480.0, 1.0 / 960.0};
+inline constexpr int kMaximumSubsteps = 32;
+
+struct HistorySample {
+    double time{};
+    double energyErrorA{};
+};
+
+struct Scene {
+    DoublePendulumParameters parameters{};
+    DoublePendulumState initial{2.0, 0.0, 1.1, 0.0, 0.0};
+    bool paused{true};
+    bool debug{true};
+    std::string message{};
+    int dtIndex{3};
+    double accumulator{};
+    double droppedTime{};
+    int substeps{};
+    std::size_t steps{};
+    double initialEnergyA{};
+    double maximumEnergyErrorA{};
+    std::vector<HistorySample> history{};
+    DoublePendulumState single{};
+};
+
+inline const DoublePendulumState& primaryState(const Scene& scene) {
+    return scene.single;
+}
+
+inline void stopScene(Scene& scene) {
+    scene.paused = true;
+    scene.accumulator = 0.0;
+    scene.substeps = 0;
+}
+
+// Mẫu lấy theo thời gian physics. Bước đơn/cuối job có thể thêm một endpoint.
+inline void recordHistory(Scene& scene, bool force = false) {
+    const auto& primary = primaryState(scene);
+    if (!scene.history.empty()) {
+        const double interval = primary.elapsed - scene.history.back().time;
+        if (interval <= 1e-12 || (!force && interval < 0.04 - 1e-12)) {
+            return;
+        }
+    }
+    HistorySample sample{};
+    sample.time = primary.elapsed;
+    sample.energyErrorA = pendulumEnergy(primary, scene.parameters) - scene.initialEnergyA;
+    scene.history.push_back(sample);
+    if (scene.history.size() > 751) {
+        scene.history.erase(scene.history.begin());
+    }
+}
+
+// Đổi điều kiện đầu/dt bắt đầu lại phép đo, không ghép dữ liệu hai thí nghiệm.
+inline void resetScene(Scene& scene) {
+    stopScene(scene);
+    scene.initial.elapsed = 0.0;
+    scene.message.clear();
+    scene.single = scene.initial;
+    scene.steps = 0;
+    scene.droppedTime = 0.0;
+    scene.maximumEnergyErrorA = 0.0;
+    scene.initialEnergyA = pendulumEnergy(primaryState(scene), scene.parameters);
+    scene.history.clear();
+    recordHistory(scene, true);
+}
+
+inline Scene makeScene() {
+    Scene scene{};
+    resetScene(scene);
+    return scene;
+}
+
+inline bool withinExperiment(const DoublePendulumState& state) {
+    return finiteState(state) && std::abs(state.omega1) <= 10000.0 && std::abs(state.omega2) <= 10000.0;
+}
+
+inline bool stepScene(Scene& scene) {
+    if (scene.dtIndex < 0 || scene.dtIndex >= 6) {
+        stopScene(scene);
+        scene.message = "Stopped: invalid dt index.";
+        return false;
+    }
+    const double dt = kStepOptions[scene.dtIndex];
+    bool accepted = false;
+    const DoublePendulumState candidate = stepRk4(scene.single, scene.parameters, dt);
+    accepted = candidate.elapsed > scene.single.elapsed && withinExperiment(candidate) && std::isfinite(pendulumEnergy(candidate, scene.parameters));
+    if (accepted) {
+        scene.single = candidate;
+    }
+    if (!accepted) {
+        stopScene(scene);
+        scene.message = "Stopped: invalid, non-finite or unsafe step. Reduce dt or reset; state was not clamped.";
+        return false;
+    }
+    ++scene.steps;
+    ++scene.substeps;
+    scene.maximumEnergyErrorA = std::max(scene.maximumEnergyErrorA, std::abs(pendulumEnergy(primaryState(scene), scene.parameters) - scene.initialEnergyA));
+    recordHistory(scene);
+    return true;
+}
+
+inline void singleStep(Scene& scene) {
+    stopScene(scene);
+    stepScene(scene);
+    recordHistory(scene, true);
+}
+
+inline void advanceFrame(Scene& scene, double frameSeconds) {
+    scene.substeps = 0;
+    if (scene.dtIndex < 0 || scene.dtIndex >= 6) {
+        stopScene(scene);
+        scene.message = "Stopped: invalid dt index.";
+        return;
+    }
+    if (scene.paused) {
+        return;
+    }
+    const auto plan = planFixedSteps(scene.accumulator, frameSeconds, kStepOptions[scene.dtIndex], kMaximumSubsteps, 0.1);
+    scene.accumulator = plan.remainder;
+    scene.droppedTime += plan.droppedTime;
+    for (int i = 0; i < plan.steps; ++i) {
+        if (!stepScene(scene)) {
+            break;
+        }
+    }
+}
+} // namespace lab
+```
+
+History lấy sau bước physics, cách nhau ít nhất 0,04 s trong chế độ chạy liên tục; bước đơn có thể thêm một mẫu. Chỉ giữ 751 mẫu gần nhất. Max |ΔE| vẫn được cập nhật ở mọi bước, nên lỗi giữa hai điểm trên graph không bị bỏ sót. Guard omega là điều kiện dừng thí nghiệm, không phải một lực cản hoặc phép cắt vận tốc.
+
+### Bước 5 — Vẽ dữ liệu theo giây và Joule
+
+Trong include/view.hpp, thêm ba hàm sau trước drawScene. graphTimeX dùng thời gian của từng mẫu; không trải các mẫu cách đều theo index vì bước đơn có thể làm khoảng lấy mẫu không đều.
+
+```cpp title="include/view.hpp — trục thời gian và đồ thị ΔE"
+inline double graphTimeX(double time, double first, double span, double left) {
+    return left + 490.0 * (time - first) / span;
+}
+
+inline double energyGraphBound(const Scene& scene) {
+    double bound = 1e-12;
+    for (const auto& sample : scene.history) {
+        bound = std::max(bound, std::abs(sample.energyErrorA));
+    }
+    return bound;
+}
+
+inline void drawEnergyGraph(Framebuffer& image, const Scene& scene) {
+    rectangle(image, 570, 590, 1060, 730, kGrid, false);
+    drawLine(image, 570, 660, 1060, 660, kRail);
+    if (scene.history.empty()) {
+        return;
+    }
+    const double first = scene.history.front().time;
+    const double span = std::max(kStepOptions[scene.dtIndex], scene.history.back().time - first);
+    const double bound = energyGraphBound(scene);
+    for (std::size_t i = 1; i < scene.history.size(); ++i) {
+        const auto& a = scene.history[i - 1];
+        const auto& b = scene.history[i];
+        const double x0 = graphTimeX(a.time, first, span, 570);
+        const double x1 = graphTimeX(b.time, first, span, 570);
+        drawLine(image, x0, 660.0 - 70.0 * a.energyErrorA / bound, x1, 660.0 - 70.0 * b.energyErrorA / bound, kPrimary);
+    }
+}
+```
+
+Thay drawScene để gọi graph sau khi vẽ con lắc:
+
+```cpp title="include/view.hpp — cảnh chính và graph"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    rectangle(image, 40, 100, 530, 530, kGrid, false);
+    rectangle(image, 570, 100, 1060, 530, kGrid, false);
+    const WorldView viewA = makeWorldView(scene.parameters, 0);
+    if (scene.debug) {
+        drawLine(image, viewA.pivotX, viewA.pivotY, viewA.pivotX, viewA.pivotY + 180, kGrid);
+    }
+    drawPendulum(image, primaryState(scene), scene.parameters, viewA, kPrimary);
+    drawEnergyGraph(image, scene);
+}
+```
+
+Thay drawHud bằng bản này để đọc được đơn vị, khoảng thời gian và sai lệch lớn nhất ngay trong cửa sổ:
+
+```cpp title="include/presentation.hpp — số liệu năng lượng"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    const auto text = [&](float x, float y, const char* value) {
+        ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
+    };
+    char line[220]{};
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    text(30, 20, line);
+    text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
+    text(30, 64, "Space start/pause | N one step | [ smaller dt | ] larger dt");
+    text(52, 110, "A: primary initial state");
+    text(582, 110, "Second pendulum is added in lesson 4.");
+    std::snprintf(line, sizeof(line), "E_A=%.6f J | max |delta E_A|=%.3e J", pendulumEnergy(primaryState(scene), scene.parameters), scene.maximumEnergyErrorA);
+    text(40, 548, line);
+    text(570, 570, "Energy error Delta E(t) [J]: blue A, red B");
+    std::snprintf(line, sizeof(line), "+/-%.3e J (zero at center)", energyGraphBound(scene));
+    text(580, 596, line);
+    if (!scene.history.empty()) {
+        std::snprintf(line, sizeof(line), "time %.3f -> %.3f s | latest %zu samples", scene.history.front().time, scene.history.back().time, scene.history.size());
+        text(570, 742, line);
+    }
+    std::snprintf(line, sizeof(line), "dt=%.7f s | steps=%zu | substeps=%d | dropped=%.4f s", kStepOptions[scene.dtIndex], scene.steps, scene.substeps, scene.droppedTime);
+    text(30, 766, line);
+    if (!scene.message.empty()) {
+        text(30, 808, scene.message.c_str());
+    }
+    return ok;
+}
+```
+
+### Bước 6 — Nối lịch physics vào vòng lặp SDL
+
+Trong KEY_DOWN của src/main.cpp, thêm ba nhánh sau, sau các phím chỉnh góc:
+
+```cpp title="src/main.cpp — pause, single-step và đổi h"
+if (key == SDLK_SPACE) {
+                    const bool wasPaused = scene.paused;
+                    lab::stopScene(scene);
+                    scene.paused = !wasPaused;
+                }
+if (key == SDLK_N) {
+                    lab::singleStep(scene);
+                }
+if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
+                    const int change = key == SDLK_LEFTBRACKET ? 1 : -1;
+                    scene.dtIndex = std::clamp(scene.dtIndex + change, 0, 5);
+                    lab::resetScene(scene);
+                }
+```
+
+Ở phần cập nhật frame, Starter đang bỏ qua frameSeconds bằng `static_cast<void>(frameSeconds)`. Thay dòng đó bằng:
+
+```cpp title="src/main.cpp — tiến physics trước khi render"
+bool advancing = !scene.paused;
+if (advancing) {
+    lab::advanceFrame(scene, frameSeconds);
+    dirty = true;
+}
+```
+
+FrameSeconds đã được main đo từ SDL_GetPerformanceCounter. Không thay nó bằng fixed h: frame time và integration step là hai vai trò khác nhau.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy một pendulum bằng RK4"
+Thứ tự mỗi frame giờ là: đọc input → lên kế hoạch bước → tính xong state → render → present. Main vẫn không biết cách tính alpha; drawScene cũng không sửa state.
+
+Dùng Space để chạy/dừng, N để tiến một bước, R để đặt lại cùng cấu hình. Phím [ giảm h, ] tăng h và reset. F ẩn chi tiết debug nhưng giữ cảnh và đồ thị. Bản dưới trang có đầy đủ include và thứ tự khai báo nếu bạn gặp lỗi hàm chưa được định nghĩa.
+
+Từ thư mục gốc của gói tải về, build đúng bài làm:
+
+```powershell title="Terminal — build và chạy Starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_26_checkpoint_3
+cmake --build build --config Debug --target project_26_starter --parallel 2
+.\build\Debug\project_26_starter.exe
 ```
 
-Space chạy/dừng, `N` tiến một bước và `R` reset. Accumulator giới hạn 24 substep mỗi frame; phần thời gian bị bỏ được báo thay vì khiến UI đuổi theo vô hạn.
+Nếu cần đối chiếu, build riêng project_26_checkpoint_3. Source đầy đủ sau bài được trình bày ở cuối trang; dùng nó để kiểm chỗ ghép còn thiếu, không cần đoán vị trí của một đoạn code.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `k1` cho cả bốn stage. Energy drift tăng như một phương pháp bậc thấp; hoàn tác bốn state tạm.
-2. Tăng elapsed trong mỗi `addDerivative` rồi cộng tiếp bốn lần vào output. Title báo thời gian nhanh hơn physics; hoàn tác để output chỉ tăng một dt.
-3. Bỏ contribution của rod thứ nhất khỏi velocity bob thứ hai. Energy không còn khớp chuyển động coupled; hoàn tác hai component đầy đủ.
+1. Dùng k1 cho cả bốn mẫu: hình vẫn có thể chuyển động nhưng phương pháp không còn là RK4. So lỗi ở cùng thời gian khi giảm h.
+2. Bỏ vận tốc truyền từ thanh 1 trong động năng quả 2: graph sẽ tố cáo một phép đo sai dù hình học chưa chắc trông bất thường.
+3. Tăng elapsed/bộ đếm khi stepRk4 từ chối bước. Thử input không hữu hạn trong test; thời gian phải giữ nguyên.
+4. Lấy một điểm history mỗi render frame. Thử hai FPS khác nhau với cùng h; dữ liệu graph không được phụ thuộc vào FPS.
 
 ## Tự kiểm tra kết quả
 
-- Single-step tăng elapsed đúng fixed dt.
-- 120 frame nhanh và 30 frame chậm tạo cùng 240 physics step trong một giây với dt=1/240.
-- RK4 5 giây ở dt=1/480 giữ relative energy drift dưới `1e-7` cho preset mặc định.
-- Frame dài bị guard và báo dropped time.
-- Pause/resume không nhận một bước thời gian khổng lồ.
+- Một bước được chấp nhận tăng elapsed đúng h và bộ đếm đúng 1.
+- Hai cách chia một giây thành 120 hoặc 30 render frame cho cùng 240 bước ở h=1/240.
+- Frame 2 s chỉ nhận 0,1 s, báo 1,9 s bị bỏ; không cố chạy bù vô hạn.
+- Preset mặc định ở h=1/480 giữ relative energy drift dưới 1e-7 trong 5 s; đây là ngưỡng của một phép thử cụ thể, không phải chứng chỉ cho mọi run.
+- Đồ thị ghi ΔE bằng Joule, trục ngang là giây, đường 0 ở giữa; max error đọc được ngay cả khi history đã bỏ các điểm cũ.
 
 ## Bài tập mở rộng
 
-Thêm explicit Euler chỉ trong test và chạy cùng duration. So energy drift với RK4, nhưng không dùng sự khác nhau đó làm bằng chứng chaos; đây mới chỉ là sai số integrator.
+Dùng một reference rất mịn ở horizon 1 s và đo khoảng cách trạng thái của các run h=1/30, 1/60, 1/120. Sai số nên giảm gần bậc 4 khi giảm h; tạm thời chưa gọi việc hai đường khác nhau là chaos. Bài 6 sẽ đưa phép đối chiếu này vào sản phẩm.
 
-Bài tiếp theo tạo hai initial state gần nhau và cho chúng đi qua đúng cùng code path.
+Bài tiếp theo: [Đặt hai điều kiện đầu gần nhau và chạy đồng bộ](/projects/double-pendulum-chaos/04-chay-hai-con-lac-cung-timestep).
