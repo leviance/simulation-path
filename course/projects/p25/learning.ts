@@ -1,223 +1,290 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
-const files = ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"];
-
 const learning = {
   guides: {
     "p25-l01": {
-      focus:
-        "Bắt đầu từ cửa sổ SDL3 đã vẽ một chuỗi placeholder, rồi thay bằng topology Particle/Spring thật trong world space.",
+      focus: "Tạo dữ liệu chuỗi trong Starter, dùng lại window/renderer/framebuffer có sẵn.",
       expected:
-        "Checkpoint 1 hiện 18 particles, 17 springs; các đoạn nối đúng index liên tiếp và particle đầu có inverseMass bằng zero.",
-      files,
+        "32 khối và 31 lò xo nằm đúng trong world space; điểm neo là dữ liệu vật lý, không phải hình vẽ đặc biệt.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tách node khỏi edge",
+          title: "Đọc khung chạy trước",
           explanation:
-            "Particle giữ state chuyển động; Spring chỉ giữ hai index cùng tham số vật liệu. Renderer đọc topology thay vì sao chép position.",
+            "Starter đã có SDL resources, event loop, phép đổi tọa độ và cách vẽ. Bạn chỉ thêm dữ liệu vào Scene; không viết một đàn khối khác trong renderer.",
         },
         {
-          title: "Dựng initial state có thể chứng minh",
+          title: "Nối khối bằng index",
           explanation:
-            "Mỗi particle thấp hơn particle trước đúng restLength nên mọi spring bắt đầu với stretch zero.",
+            "Particle giữ trạng thái của khối; Spring chỉ giữ hai index và tham số vật liệu. Với N khối, nối 0–1, 1–2,… sẽ có N−1 spring.",
         },
         {
-          title: "Biểu diễn anchor bằng inverse mass",
+          title: "Tạo trạng thái dễ kiểm",
           explanation:
-            "InverseMass zero cho biết particle không phản ứng với force; dữ liệu này được integration và drag dùng chung.",
+            "Ban đầu khoảng cách bằng restLength. Đầu trên có inverseMass=0; các khối còn lại có inverseMass=1/m.",
         },
       ],
     },
     "p25-l02": {
-      focus: "Tính Hooke force trên đúng một spring trước khi nhân logic lên cả chuỗi.",
+      focus: "Tạm dùng hai khối để xác nhận dấu và hướng lực trước khi nhân lên cả dây.",
       expected:
-        "Kéo giãn cho stretch dương và lực hút; nén cho stretch âm và lực đẩy; coincident endpoints không sinh NaN.",
-      files,
+        "Kéo giãn 0,2 m với k=100 N/m cho lực 20 N; nén đổi dấu và xoay lò xo làm vector lực xoay theo.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Đo delta và distance",
+          title: "Đo chiều dài hiện tại",
           explanation:
-            "Delta đi từ endpoint A sang B; distance là độ dài hiện tại, hoàn toàn khác restLength lưu trong Spring.",
+            "Lấy pB−pA rồi đo độ dài d. L₀ là chiều dài tự nhiên lưu trong Spring, không được cập nhật theo d.",
         },
         {
-          title: "Đổi distance thành stretch có dấu",
+          title: "Suy ra chiều lực",
           explanation:
-            "stretch=distance−restLength; dấu dương kéo hai đầu lại, dấu âm đẩy hai đầu ra.",
+            "Chọn n hướng từ A sang B. Khi d>L₀, lực trên A cùng chiều n; B nhận lực đối dấu. Đây là lý do không đặt dấu trừ vào công thức một cách máy móc.",
         },
         {
-          title: "Đưa scalar force lên direction",
+          title: "Xử lý hình học suy biến",
           explanation:
-            "forceOnA=direction·k·stretch; endpoint B sẽ nhận vector đối của nó ở bài force accumulation.",
+            "Hai đầu trùng nhau không xác định được hướng lực. Trả sample không hợp lệ và dừng bước tính, không chia cho zero hoặc bí mật bỏ spring.",
         },
       ],
     },
     "p25-l03": {
-      focus: "Cộng gravity và mọi cặp spring force vào accumulator trước khi state thay đổi.",
+      focus: "Cộng tất cả lực trên cùng một trạng thái rồi mới đổi vận tốc.",
       expected:
-        "Mỗi substep xóa force cũ; internal spring pair có tổng zero, gravity chỉ tác động dynamic mass và anchor vẫn cố định.",
-      files,
+        "Mỗi khối có một force accumulator; tổng hai lực nội bộ bằng zero, trọng lực là m·g và neo không tự chuyển động.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Xóa accumulator một lần",
+          title: "Xóa lực cũ đúng một lần",
           explanation:
-            "Force thuộc substep hiện tại; quên clear làm cùng một lực bị cộng dồn qua frame như một bug tích phân.",
+            "Force thuộc lần tính hiện tại. Xóa ở đầu substep, không xóa lại mỗi khi xử lý một spring.",
         },
         {
-          title: "Cộng external gravity bằng m·g",
+          title: "Cộng lực nội bộ theo cặp",
           explanation:
-            "Particle lưu inverse mass nên mass được khôi phục bằng 1/inverseMass; fixed particle không nhận gravity.",
+            "Spring A–B cộng +F vào A và −F vào B. Khối giữa nhận đóng góp từ cả hai hàng xóm.",
         },
         {
-          title: "Cộng spring pair đối nhau",
+          title: "Tách tải trọng và phản lực neo",
           explanation:
-            "A nhận +F, B nhận −F. Đây là lực nội bộ nên tổng trên cặp bằng zero dù từng endpoint gia tốc khác nhau.",
+            "Các khối động nhận m·g. Lực spring lên neo vẫn được tính, nhưng neo không được tích phân; giá treo cung cấp phản lực giữ nó đứng yên.",
         },
       ],
     },
     "p25-l04": {
-      focus:
-        "Đưa force accumulation qua semi-implicit Euler và fixed-step accumulator để chuỗi bắt đầu chuyển động.",
+      focus: "Biến lực đã tính thành một bước chuyển động, sau đó nối vào vòng lặp SDL.",
       expected:
-        "Một step cập nhật acceleration, velocity rồi position; anchor không tích phân và các cách chia render frame cho cùng số substep.",
-      files,
+        "Velocity được cập nhật trước position; N chạy đúng một dt, còn frame time chỉ quyết định số substep.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/presentation.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đổi force thành acceleration",
+          title: "Viết một bước cho một khối",
           explanation:
-            "a=F·inverseMass. Công thức chung tự bỏ qua fixed particle khi inverse mass zero.",
+            "Tính a=F/m, v mới, rồi p mới từ chính v ấy. Giữ các biến trung gian để nhìn rõ thứ tự và kiểm được bằng số.",
         },
         {
-          title: "Cập nhật velocity trước position",
+          title: "Tính xong lực của toàn chuỗi",
           explanation:
-            "Semi-implicit Euler dùng velocity mới cho position, thường giữ oscillator bounded tốt hơn explicit Euler ở cùng dt.",
+            "Không vừa cộng lực một spring vừa cập nhật hai endpoint. Những spring sau phải đọc cùng trạng thái cũ.",
         },
         {
-          title: "Chạy đúng fixed dt",
+          title: "Nối vào frame scheduler",
           explanation:
-            "Render time chỉ nạp accumulator; maximum frame và maximum substeps giữ ứng dụng có thể lấy lại điều khiển.",
+            "Giới hạn 32 substep/frame và 0,05 s frame time được nhận. Chỉ bước chấp nhận mới tăng steps và elapsed; pause không tích lũy thời gian chờ.",
         },
       ],
     },
     "p25-l05": {
-      focus:
-        "Thêm damping dựa trên tốc độ thay đổi chiều dài spring, không giảm toàn bộ velocity của particle.",
+      focus: "Thêm lực cản phụ thuộc tốc độ thay đổi chiều dài lò xo.",
       expected:
-        "Relative motion dọc trục tạo damping force; hai endpoint trượt ngang cùng nhau hoặc chuyển động tiếp tuyến không bị cản.",
-      files,
+        "Damping làm mất cơ năng; vận tốc tiếp tuyến không tự bị giảm. Tắt/bật damping giữ state nhưng bắt đầu mốc đo mới.",
+      files: ["include/lab.hpp", "include/scene.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tính relative velocity",
+          title: "Đo vận tốc tương đối dọc trục",
           explanation:
-            "vRelative=vB−vA; chỉ relative motion mới thay đổi khoảng cách hai endpoint.",
+            "Chiếu vB−vA lên n. Nếu hai khối cùng trượt ngang, spring không dài/ngắn thêm nên không có lực cản dọc trục.",
         },
         {
-          title: "Chiếu lên spring direction",
+          title: "Cộng damping vào lực Hooke",
           explanation:
-            "dot(vRelative,direction) bỏ tangent component và cho dấu đang dài ra hay ngắn lại.",
+            "F_A=(k·stretch+c·relativeSpeed)n; B nhận lực đối dấu. c có đơn vị kg/s, khác k có đơn vị N/m.",
         },
         {
-          title: "Cộng elastic và damping scalar",
+          title: "Kiểm bằng công suất",
           explanation:
-            "forceMagnitude=k·stretch+c·relativeSpeed; cùng một direction phân phối force đối nhau lên hai đầu.",
+            "Riêng damping phải cho tổng công suất −c·relativeSpeed². Đây là đáp án độc lập để phát hiện dấu sai hoặc cách giảm toàn bộ velocity.",
         },
       ],
     },
     "p25-l06": {
-      focus:
-        "Biến một mass thành kinematic trong lúc kéo, rồi trả nó về dynamics với release velocity hữu hạn.",
+      focus: "Đưa thao tác kéo vào mô hình, giữ đúng owner và mẫu thả cuối.",
       expected:
-        "Pointer không chọn anchor; mass đi theo target, capture giữ drag ngoài Canvas và wave xuất hiện sau khi thả.",
-      files,
+        "Khối không nhảy khi cầm lệch; hàng xóm phản ứng với target, release velocity tối đa 6 m/s, cancel không bơm thêm vận tốc.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Hit-test dynamic particle",
+          title: "Chọn đúng khối, giữ grab offset",
           explanation:
-            "Tìm particle gần nhất trong bán kính nhưng bỏ qua inverseMass zero để anchor không bị phá.",
+            "Bỏ qua neo và chỉ nhận hit gần khối động. Lưu khoảng lệch giữa tâm khối và con trỏ để không snap tâm tới điểm cầm.",
         },
         {
-          title: "Giữ particle kinematic trong substep",
+          title: "Giữ target trong lúc tích phân",
           explanation:
-            "Spring vẫn đọc target position để tạo force cho hàng xóm, nhưng selected particle không được integrator kéo khỏi pointer.",
+            "Khối đang kéo là kinematic. Spring vẫn đọc vị trí của nó để tạo lực lên hàng xóm; không tích phân chính khối ấy.",
         },
         {
-          title: "Ước lượng và clamp release velocity",
+          title: "Kết thúc thao tác rõ ràng",
           explanation:
-            "Lấy displacement giữa hai pointer sample chia sample time; clamp speed tránh một event gap tạo năng lượng vô hạn.",
+            "Owner mới được move/up. Đọc mẫu up cuối, tính vận tốc thả có giới hạn; hủy thì bỏ vận tốc ấy. Sau can thiệp, bắt đầu lại mốc đo năng lượng.",
         },
       ],
     },
     "p25-l07": {
       focus:
-        "Đo ảnh hưởng đồng thời của stiffness, mass và dt bằng stability index không thứ nguyên.",
+        "Mở điều khiển k/m/dt và 20–100 khối, rồi chủ động quan sát giới hạn của phương pháp số.",
       expected:
-        "Tăng k hoặc dt làm q tăng; preset cố ý xấu tạo energy growth/large stretch, reset luôn khôi phục state hữu hạn.",
-      files,
+        "Có số đo K/Us/Ug, q và sai số neo; preset sai dừng có thông báo, không làm treo UI hoặc clamp state để giả ổn định.",
+      files: [
+        "include/metrics.hpp",
+        "include/scene.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Nhận ra time scale sqrt(m/k)",
+          title: "Đọc thang thời gian của dao động",
           explanation:
-            "Spring cứng hoặc mass nhẹ dao động nhanh hơn; integrator phải lấy mẫu nhanh hơn để theo kịp.",
+            "Một mass–spring có ω=√(k/m). Cứng hơn hoặc nhẹ hơn nghĩa là cần bước thời gian nhỏ hơn.",
         },
         {
-          title: "Dùng q=dt·sqrt(k/m)",
+          title: "Không dùng một ngưỡng q cho mọi hệ",
           explanation:
-            "q không phải lời đảm bảo tuyệt đối cho cả chain, nhưng là chỉ báo so sánh cấu hình minh bạch hơn FPS.",
+            "q=dt·ω chỉ là thang so sánh. Nhiều mode của cả chuỗi và damping cũng ảnh hưởng ổn định.",
         },
         {
-          title: "Để lỗi lộ ra có kiểm soát",
+          title: "Đo lỗi bằng một thí nghiệm lặp lại được",
           explanation:
-            "Không clamp physics state. Canvas dừng fast-run khi state không finite và nút reset luôn sẵn sàng.",
+            "Dùng hai preset chung state ban đầu, giảm dt một nửa rồi đo max |ΔE|. Tách lỗi tích phân khỏi năng lượng mất do damping.",
         },
       ],
     },
     "p25-l08": {
-      focus:
-        "Nghiệm thu bằng topology, force pair, damping projection, drag, energy metrics và long-run stress test.",
+      focus: "Ghép graph và vòng kiểm chứng với cùng source mà người học tải xuống.",
       expected:
-        "Debug/Release CTest pass; stress run không NaN, anchor error gần zero và stretch/speed nằm trong safety envelope.",
-      files,
+        "Graph E/K/Us/Ug có trục thời gian và mốc zero; job 20 giây dừng/hủy được, Starter có thể được kiểm bằng chính tests.",
+      files: [
+        "include/metrics.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+        "tests/extra-cases.hpp",
+      ],
       steps: [
         {
-          title: "Đo từng thành phần energy",
+          title: "Đặt mốc và đơn vị trước khi vẽ",
           explanation:
-            "Kinetic, spring và gravitational potential có ý nghĩa khác nhau; damping cố ý làm mechanical energy giảm.",
+            "E=K+Us+Ug, Ug tính từ anchor nên có thể âm. Graph năng lượng không dùng chung trục với độ lệch x.",
         },
         {
-          title: "Kiểm invariant cục bộ trước stress",
+          title: "Lấy mẫu từ physics",
           explanation:
-            "Lực 20 N, force pair tổng zero và one-step integrator có expected value rõ hơn một ảnh động trông hợp lý.",
+            "Ghi t=0 khi bắt đầu đo, lấy định kỳ tối đa 60 mẫu/giây và thêm mẫu sau bước đơn/cuối job. Giữ 1201 mẫu gần nhất; mỗi frame xử lý tối đa 32 bước.",
         },
         {
-          title: "Chạy stress có ngưỡng",
+          title: "Kiểm bài làm, không chỉ bản mẫu",
           explanation:
-            "Finite, anchor error, maximum stretch và maximum speed biến 'không nổ' thành Definition of Done đo được.",
+            "Đổi include path của target tests sang starter/include. Kiểm nghiệm giải tích, tải trọng treo, damping power, drift, input và graph rồi mới nghiệm thu.",
         },
       ],
     },
   },
   references: {
     "p25-l01": [
-      { label: "Mass–spring system", href: "/glossary#mass-spring-system", kind: "Thuật ngữ" },
-      { label: "Inverse mass", href: "/glossary#inverse-mass", kind: "Thuật ngữ" },
+      {
+        label: "Mass–spring system",
+        href: "/glossary#mass-spring-system",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Inverse mass",
+        href: "/glossary#inverse-mass",
+        kind: "Thuật ngữ",
+      },
     ],
     "p25-l02": [
-      { label: "Hooke's law", href: "/glossary#hookes-law", kind: "Thuật ngữ" },
-      { label: "Spring rest length", href: "/glossary#spring-rest-length", kind: "Thuật ngữ" },
+      {
+        label: "Hooke’s law",
+        href: "/glossary#hookes-law",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Spring rest length",
+        href: "/glossary#spring-rest-length",
+        kind: "Thuật ngữ",
+      },
     ],
     "p25-l03": [
-      { label: "Force accumulation", href: "/glossary#force-accumulation", kind: "Thuật ngữ" },
-      { label: "Gravity acceleration", href: "/glossary#gravity-acceleration", kind: "Thuật ngữ" },
+      {
+        label: "Force accumulation",
+        href: "/glossary#force-accumulation",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Gravity acceleration",
+        href: "/glossary#gravity-acceleration",
+        kind: "Thuật ngữ",
+      },
     ],
     "p25-l04": [
-      { label: "Semi-implicit Euler", href: "/glossary#semi-implicit-euler", kind: "Thuật ngữ" },
-      { label: "Physics accumulator", href: "/glossary#physics-accumulator", kind: "Thuật ngữ" },
+      {
+        label: "Semi-implicit Euler",
+        href: "/glossary#semi-implicit-euler",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Fixed timestep",
+        href: "/glossary#fixed-timestep",
+        kind: "Thuật ngữ",
+      },
     ],
     "p25-l05": [
-      { label: "Axial spring damping", href: "/glossary#axial-spring-damping", kind: "Thuật ngữ" },
-      { label: "Dot product", href: "/glossary#dot-product", kind: "Thuật ngữ" },
+      {
+        label: "Axial spring damping",
+        href: "/glossary#axial-spring-damping",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Dot product",
+        href: "/glossary#dot-product",
+        kind: "Thuật ngữ",
+      },
     ],
     "p25-l06": [
-      { label: "Kinematic drag", href: "/glossary#kinematic-drag", kind: "Thuật ngữ" },
+      {
+        label: "Kinematic drag",
+        href: "/glossary#kinematic-drag",
+        kind: "Thuật ngữ",
+      },
       {
         label: "SDL_CaptureMouse",
         href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
@@ -230,13 +297,29 @@ const learning = {
         href: "/glossary#spring-stability-index",
         kind: "Thuật ngữ",
       },
-      { label: "Energy drift", href: "/glossary#energy-drift", kind: "Thuật ngữ" },
+      {
+        label: "Energy drift",
+        href: "/glossary#energy-drift",
+        kind: "Thuật ngữ",
+      },
     ],
     "p25-l08": [
-      { label: "Mechanical energy", href: "/glossary#mechanical-energy", kind: "Thuật ngữ" },
-      { label: "CTest", href: "/getting-started#final-build", kind: "CMake" },
+      {
+        label: "Mechanical energy",
+        href: "/glossary#mechanical-energy",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Kinetic energy",
+        href: "/glossary#kinetic-energy",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "CTest",
+        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
+        kind: "CMake",
+      },
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;

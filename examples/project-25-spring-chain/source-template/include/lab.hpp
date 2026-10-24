@@ -4,11 +4,11 @@
 #define LAB_CHECKPOINT 8
 #endif
 
-#if LAB_CHECKPOINT >= 1
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace lab {
@@ -44,7 +44,7 @@ inline double lengthSquared(Vec2 value) {
 }
 
 inline double length(Vec2 value) {
-    return std::sqrt(lengthSquared(value));
+    return std::hypot(value.x, value.y);
 }
 
 inline bool finiteVec2(Vec2 value) {
@@ -90,7 +90,7 @@ inline bool validSpring(const Spring& spring, std::size_t particleCount) {
 }
 
 inline bool validChain(const SpringChain& chain) {
-    if (chain.particles.empty() || !finiteVec2(chain.anchorPosition)) {
+    if (chain.particles.size() < 2 || chain.particles.size() > 100 || chain.springs.size() + 1 != chain.particles.size() || !finiteVec2(chain.anchorPosition)) {
         return false;
     }
     for (const Particle& particle : chain.particles) {
@@ -98,8 +98,9 @@ inline bool validChain(const SpringChain& chain) {
             return false;
         }
     }
-    for (const Spring& spring : chain.springs) {
-        if (!validSpring(spring, chain.particles.size())) {
+    for (std::size_t index = 0; index < chain.springs.size(); ++index) {
+        const Spring& spring = chain.springs[index];
+        if (!validSpring(spring, chain.particles.size()) || spring.first != index || spring.second != index + 1) {
             return false;
         }
     }
@@ -108,10 +109,11 @@ inline bool validChain(const SpringChain& chain) {
 
 // Particle đầu tiên có inverseMass bằng zero nên trở thành điểm neo. Các vị trí
 // còn lại cách nhau đúng restLength để initial state dễ kiểm chứng.
+#if LAB_CHECKPOINT >= 1
 inline SpringChain makeVerticalChain(std::size_t particleCount, Vec2 anchorPosition, double restLength, double mass, double radius, double stiffness, double damping) {
     SpringChain chain{};
     chain.anchorPosition = anchorPosition;
-    if (particleCount < 2 || !finiteVec2(anchorPosition) || !std::isfinite(restLength) || restLength <= 0.0 || !std::isfinite(mass) || mass <= 0.0 || !std::isfinite(radius) || radius <= 0.0 || !std::isfinite(stiffness) || stiffness < 0.0 || !std::isfinite(damping) || damping < 0.0) {
+    if (particleCount < 2 || particleCount > 100 || !finiteVec2(anchorPosition) || !std::isfinite(restLength) || restLength <= 0.0 || !std::isfinite(mass) || mass <= 0.0 || !std::isfinite(1.0 / mass) || !std::isfinite(radius) || radius <= 0.0 || !std::isfinite(stiffness) || stiffness < 0.0 || !std::isfinite(damping) || damping < 0.0) {
         return chain;
     }
     chain.particles.reserve(particleCount);
@@ -129,6 +131,9 @@ inline SpringChain makeVerticalChain(std::size_t particleCount, Vec2 anchorPosit
         if (index > 0) {
             chain.springs.push_back({index - 1, index, restLength, stiffness, damping});
         }
+    }
+    if (!validChain(chain)) {
+        return {};
     }
     return chain;
 }
@@ -152,6 +157,9 @@ inline SpringSample sampleElasticSpring(const SpringChain& chain, const Spring& 
     }
     const Particle& first = chain.particles[spring.first];
     const Particle& second = chain.particles[spring.second];
+    if (!finiteParticle(first) || !finiteParticle(second)) {
+        return {};
+    }
     const Vec2 delta = subtract(second.position, first.position);
     const double distance = length(delta);
     if (!std::isfinite(distance) || distance <= kSpringEpsilon) {
@@ -162,7 +170,11 @@ inline SpringSample sampleElasticSpring(const SpringChain& chain, const Spring& 
     const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
     const double relativeSpeed = dot(relativeVelocity, direction);
     const double forceMagnitude = spring.stiffness * stretch;
-    return {true, direction, distance, stretch, relativeSpeed, scale(direction, forceMagnitude)};
+    const Vec2 force = scale(direction, forceMagnitude);
+    if (!finiteVec2(force) || !std::isfinite(relativeSpeed)) {
+        return {};
+    }
+    return {true, direction, distance, stretch, relativeSpeed, force};
 }
 #endif
 
@@ -178,7 +190,7 @@ inline void addGravity(SpringChain& chain, Vec2 gravity) {
         return;
     }
     for (Particle& particle : chain.particles) {
-        if (particle.inverseMass <= kSpringEpsilon) {
+        if (particle.inverseMass == 0.0) {
             continue;
         }
         const double mass = 1.0 / particle.inverseMass;
@@ -199,23 +211,41 @@ inline void addElasticSpringForces(SpringChain& chain) {
     }
 }
 
-inline void accumulateElasticForces(SpringChain& chain, Vec2 gravity, bool gravityEnabled) {
+inline bool accumulateElasticForces(SpringChain& chain, Vec2 gravity, bool gravityEnabled) {
+    if (!validChain(chain) || !finiteVec2(gravity)) {
+        return false;
+    }
+    for (const Spring& spring : chain.springs) {
+        if (!sampleElasticSpring(chain, spring).valid) {
+            return false;
+        }
+    }
     clearForces(chain);
     if (gravityEnabled) {
         addGravity(chain, gravity);
     }
     addElasticSpringForces(chain);
+    return validChain(chain);
 }
 #endif
 
 #if LAB_CHECKPOINT >= 4
-inline void integrateParticle(Particle& particle, double deltaSeconds) {
-    if (!finiteParticle(particle) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0 || particle.inverseMass <= kSpringEpsilon) {
-        return;
+inline bool integrateParticle(Particle& particle, double deltaSeconds) {
+    if (!finiteParticle(particle) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
+        return false;
+    }
+    if (particle.inverseMass == 0.0) {
+        return true;
     }
     const Vec2 acceleration = scale(particle.force, particle.inverseMass);
-    particle.velocity = add(particle.velocity, scale(acceleration, deltaSeconds));
-    particle.position = add(particle.position, scale(particle.velocity, deltaSeconds));
+    const Vec2 nextVelocity = add(particle.velocity, scale(acceleration, deltaSeconds));
+    const Vec2 nextPosition = add(particle.position, scale(nextVelocity, deltaSeconds));
+    if (!finiteVec2(nextVelocity) || !finiteVec2(nextPosition)) {
+        return false;
+    }
+    particle.velocity = nextVelocity;
+    particle.position = nextPosition;
+    return true;
 }
 
 inline void enforceAnchor(SpringChain& chain) {
@@ -228,15 +258,22 @@ inline void enforceAnchor(SpringChain& chain) {
 }
 
 // Semi-implicit Euler cập nhật velocity trước position và luôn phục hồi anchor.
-inline void stepElasticChain(SpringChain& chain, double deltaSeconds, Vec2 gravity, bool gravityEnabled) {
-    if (!validChain(chain) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
-        return;
+inline bool stepElasticChain(SpringChain& chain, double deltaSeconds, Vec2 gravity, bool gravityEnabled) {
+    if (!validChain(chain) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0 || deltaSeconds > 0.1) {
+        return false;
     }
-    accumulateElasticForces(chain, gravity, gravityEnabled);
-    for (Particle& particle : chain.particles) {
-        integrateParticle(particle, deltaSeconds);
+    SpringChain candidate = chain;
+    if (!accumulateElasticForces(candidate, gravity, gravityEnabled)) {
+        return false;
     }
-    enforceAnchor(chain);
+    for (Particle& particle : candidate.particles) {
+        if (!integrateParticle(particle, deltaSeconds)) {
+            return false;
+        }
+    }
+    enforceAnchor(candidate);
+    chain = std::move(candidate);
+    return true;
 }
 
 struct FixedStepPlan {
@@ -246,24 +283,17 @@ struct FixedStepPlan {
 };
 
 inline FixedStepPlan planFixedSteps(double accumulator, double frameSeconds, double fixedDeltaSeconds, int maximumSteps, double maximumFrameSeconds) {
-    if (!std::isfinite(accumulator) || accumulator < 0.0 || !std::isfinite(frameSeconds) || frameSeconds < 0.0 || !std::isfinite(fixedDeltaSeconds) || fixedDeltaSeconds <= 0.0 || maximumSteps <= 0 || !std::isfinite(maximumFrameSeconds) || maximumFrameSeconds <= 0.0) {
+    if (!std::isfinite(accumulator) || accumulator < 0.0 || accumulator > 1.0 || !std::isfinite(frameSeconds) || frameSeconds < 0.0 || !std::isfinite(fixedDeltaSeconds) || fixedDeltaSeconds < 1e-6 || fixedDeltaSeconds > 1.0 || maximumSteps < 1 || maximumSteps > 256 || !std::isfinite(maximumFrameSeconds) || maximumFrameSeconds <= 0.0 || maximumFrameSeconds > 1.0) {
         return {};
     }
     const double acceptedFrame = std::min(frameSeconds, maximumFrameSeconds);
-    double available = accumulator + acceptedFrame;
-    const int availableSteps = int(std::floor((available + kSpringEpsilon) / fixedDeltaSeconds));
-    const int steps = std::min(availableSteps, maximumSteps);
-    available -= double(steps) * fixedDeltaSeconds;
-    double droppedTime = std::max(0.0, frameSeconds - acceptedFrame);
-    if (availableSteps > maximumSteps) {
-        const int discardedSteps = availableSteps - maximumSteps;
-        available -= double(discardedSteps) * fixedDeltaSeconds;
-        droppedTime += double(discardedSteps) * fixedDeltaSeconds;
-    }
-    if (available < 0.0 && available > -kSpringEpsilon) {
-        available = 0.0;
-    }
-    return {steps, available, droppedTime};
+    const double available = accumulator + acceptedFrame;
+    const double availableSteps = std::floor((available + kSpringEpsilon) / fixedDeltaSeconds);
+    const int steps = static_cast<int>(std::min(availableSteps, double(maximumSteps)));
+    const double discarded = std::max(0.0, availableSteps - double(steps)) * fixedDeltaSeconds;
+    const double remainder = std::max(0.0, available - availableSteps * fixedDeltaSeconds);
+    const double dropped = frameSeconds - acceptedFrame + discarded;
+    return {steps, remainder, dropped};
 }
 #endif
 
@@ -277,35 +307,49 @@ inline SpringSample sampleDampedSpring(const SpringChain& chain, const Spring& s
     }
     const double forceMagnitude = spring.stiffness * sample.stretch + spring.damping * sample.relativeSpeed;
     sample.forceOnFirst = scale(sample.direction, forceMagnitude);
+    sample.valid = finiteVec2(sample.forceOnFirst);
     return sample;
 }
 
-inline void accumulateDampedForces(SpringChain& chain, Vec2 gravity, bool gravityEnabled) {
+inline bool accumulateDampedForces(SpringChain& chain, Vec2 gravity, bool gravityEnabled) {
+    if (!validChain(chain) || !finiteVec2(gravity)) {
+        return false;
+    }
+    for (const Spring& spring : chain.springs) {
+        if (!sampleDampedSpring(chain, spring).valid) {
+            return false;
+        }
+    }
     clearForces(chain);
     if (gravityEnabled) {
         addGravity(chain, gravity);
     }
     for (const Spring& spring : chain.springs) {
         const SpringSample sample = sampleDampedSpring(chain, spring);
-        if (!sample.valid) {
-            continue;
-        }
         Particle& first = chain.particles[spring.first];
         Particle& second = chain.particles[spring.second];
         first.force = add(first.force, sample.forceOnFirst);
         second.force = subtract(second.force, sample.forceOnFirst);
     }
+    return validChain(chain);
 }
 
-inline void stepDampedChain(SpringChain& chain, double deltaSeconds, Vec2 gravity, bool gravityEnabled) {
-    if (!validChain(chain) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
-        return;
+inline bool stepDampedChain(SpringChain& chain, double deltaSeconds, Vec2 gravity, bool gravityEnabled) {
+    if (!validChain(chain) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0 || deltaSeconds > 0.1) {
+        return false;
     }
-    accumulateDampedForces(chain, gravity, gravityEnabled);
-    for (Particle& particle : chain.particles) {
-        integrateParticle(particle, deltaSeconds);
+    SpringChain candidate = chain;
+    if (!accumulateDampedForces(candidate, gravity, gravityEnabled)) {
+        return false;
     }
-    enforceAnchor(chain);
+    for (Particle& particle : candidate.particles) {
+        if (!integrateParticle(particle, deltaSeconds)) {
+            return false;
+        }
+    }
+    enforceAnchor(candidate);
+    chain = std::move(candidate);
+    return true;
 }
 #endif
 
@@ -315,17 +359,18 @@ struct DragConstraint {
     std::size_t particleIndex{kNoParticle};
     Vec2 target{};
     Vec2 releaseVelocity{};
+    Vec2 grabOffset{};
 };
 
 inline std::size_t nearestDynamicParticle(const SpringChain& chain, Vec2 point, double maximumDistance) {
-    if (!finiteVec2(point) || !std::isfinite(maximumDistance) || maximumDistance < 0.0) {
+    if (!validChain(chain) || !finiteVec2(point) || !std::isfinite(maximumDistance) || maximumDistance < 0.0) {
         return kNoParticle;
     }
     std::size_t nearest = kNoParticle;
     double nearestDistanceSquared = maximumDistance * maximumDistance;
     for (std::size_t index = 0; index < chain.particles.size(); ++index) {
         const Particle& particle = chain.particles[index];
-        if (particle.inverseMass <= kSpringEpsilon) {
+        if (particle.inverseMass == 0.0) {
             continue;
         }
         const double distanceSquared = lengthSquared(subtract(particle.position, point));
@@ -344,20 +389,25 @@ inline bool beginDrag(SpringChain& chain, DragConstraint& drag, Vec2 point, doub
     }
     drag.active = true;
     drag.particleIndex = index;
-    drag.target = point;
+    drag.target = chain.particles[index].position;
+    drag.grabOffset = subtract(chain.particles[index].position, point);
     drag.releaseVelocity = {};
     chain.particles[index].velocity = {};
     return true;
 }
 
 inline bool moveDrag(SpringChain& chain, DragConstraint& drag, Vec2 target, double sampleSeconds, double maximumReleaseSpeed) {
-    if (!drag.active || drag.particleIndex >= chain.particles.size() || !finiteVec2(target) || !std::isfinite(sampleSeconds) || sampleSeconds <= 0.0 || !std::isfinite(maximumReleaseSpeed) || maximumReleaseSpeed < 0.0) {
+    if (!drag.active || drag.particleIndex == 0 || drag.particleIndex >= chain.particles.size() || !finiteVec2(target) || !std::isfinite(sampleSeconds) || sampleSeconds <= 0.0 || !std::isfinite(maximumReleaseSpeed) || maximumReleaseSpeed < 0.0) {
         return false;
     }
     Particle& particle = chain.particles[drag.particleIndex];
+    target = add(target, drag.grabOffset);
     const Vec2 displacement = subtract(target, drag.target);
     Vec2 sampledVelocity = scale(displacement, 1.0 / sampleSeconds);
     const double sampledSpeed = length(sampledVelocity);
+    if (!finiteVec2(target) || !finiteVec2(sampledVelocity) || !std::isfinite(sampledSpeed)) {
+        return false;
+    }
     if (sampledSpeed > maximumReleaseSpeed && sampledSpeed > kSpringEpsilon) {
         sampledVelocity = scale(sampledVelocity, maximumReleaseSpeed / sampledSpeed);
     }
@@ -369,7 +419,7 @@ inline bool moveDrag(SpringChain& chain, DragConstraint& drag, Vec2 target, doub
 }
 
 inline bool endDrag(SpringChain& chain, DragConstraint& drag) {
-    if (!drag.active || drag.particleIndex >= chain.particles.size()) {
+    if (!drag.active || drag.particleIndex == 0 || drag.particleIndex >= chain.particles.size() || !finiteVec2(drag.releaseVelocity)) {
         return false;
     }
     chain.particles[drag.particleIndex].velocity = drag.releaseVelocity;
@@ -377,95 +427,30 @@ inline bool endDrag(SpringChain& chain, DragConstraint& drag) {
     return true;
 }
 
-inline void stepDampedChainWithDrag(SpringChain& chain, double deltaSeconds, Vec2 gravity, bool gravityEnabled, const DragConstraint& drag) {
-    if (!validChain(chain) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
-        return;
-    }
-    accumulateDampedForces(chain, gravity, gravityEnabled);
-    for (std::size_t index = 0; index < chain.particles.size(); ++index) {
-        if (drag.active && index == drag.particleIndex) {
-            chain.particles[index].position = drag.target;
-            chain.particles[index].velocity = {};
-            continue;
-        }
-        integrateParticle(chain.particles[index], deltaSeconds);
-    }
-    enforceAnchor(chain);
-}
-#endif
-
-#if LAB_CHECKPOINT >= 7
-inline double springStabilityIndex(double stiffness, double mass, double deltaSeconds) {
-    if (!std::isfinite(stiffness) || stiffness < 0.0 || !std::isfinite(mass) || mass <= 0.0 || !std::isfinite(deltaSeconds) || deltaSeconds < 0.0) {
-        return std::numeric_limits<double>::infinity();
-    }
-    return deltaSeconds * std::sqrt(stiffness / mass);
-}
-
-struct ChainMetrics {
-    double kineticEnergy{};
-    double springEnergy{};
-    double gravitationalEnergy{};
-    double maximumStretch{};
-    double maximumSpeed{};
-    double anchorError{};
-    bool finite{true};
-};
-
-// Energy và stretch được đo độc lập với SDL để stability experiment có số liệu.
-inline ChainMetrics measureChain(const SpringChain& chain, Vec2 gravity, bool gravityEnabled) {
-    ChainMetrics metrics{};
-    if (!validChain(chain)) {
-        metrics.finite = false;
-        return metrics;
-    }
-    for (const Particle& particle : chain.particles) {
-        if (!finiteParticle(particle)) {
-            metrics.finite = false;
-            continue;
-        }
-        metrics.maximumSpeed = std::max(metrics.maximumSpeed, length(particle.velocity));
-        if (particle.inverseMass <= kSpringEpsilon) {
-            continue;
-        }
-        const double mass = 1.0 / particle.inverseMass;
-        metrics.kineticEnergy += 0.5 * mass * lengthSquared(particle.velocity);
-        if (gravityEnabled) {
-            metrics.gravitationalEnergy += -mass * dot(gravity, particle.position);
-        }
-    }
-    for (const Spring& spring : chain.springs) {
-        const SpringSample sample = sampleElasticSpring(chain, spring);
-        if (!sample.valid) {
-            metrics.finite = false;
-            continue;
-        }
-        metrics.maximumStretch = std::max(metrics.maximumStretch, std::abs(sample.stretch));
-        metrics.springEnergy += 0.5 * spring.stiffness * sample.stretch * sample.stretch;
-    }
-    metrics.anchorError = length(subtract(chain.particles.front().position, chain.anchorPosition));
-    metrics.finite = metrics.finite && std::isfinite(metrics.kineticEnergy) && std::isfinite(metrics.springEnergy) && std::isfinite(metrics.gravitationalEnergy) && std::isfinite(metrics.maximumStretch) && std::isfinite(metrics.maximumSpeed) && std::isfinite(metrics.anchorError);
-    return metrics;
-}
-#endif
-
-#if LAB_CHECKPOINT >= 8
-inline double totalMechanicalEnergy(const ChainMetrics& metrics) {
-    return metrics.kineticEnergy + metrics.springEnergy + metrics.gravitationalEnergy;
-}
-
-inline bool chainWithinSafetyEnvelope(const SpringChain& chain, const ChainMetrics& metrics, double maximumStretchRatio, double maximumSpeed) {
-    if (!metrics.finite || chain.springs.empty() || !std::isfinite(maximumStretchRatio) || maximumStretchRatio < 0.0 || !std::isfinite(maximumSpeed) || maximumSpeed < 0.0) {
+inline bool stepDampedChainWithDrag(SpringChain& chain, double deltaSeconds, Vec2 gravity, bool gravityEnabled, const DragConstraint& drag) {
+    if (!validChain(chain) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0 || deltaSeconds > 0.1 || (drag.active && (drag.particleIndex == 0 || drag.particleIndex >= chain.particles.size() || !finiteVec2(drag.target)))) {
         return false;
     }
-    double smallestRestLength = std::numeric_limits<double>::infinity();
-    for (const Spring& spring : chain.springs) {
-        smallestRestLength = std::min(smallestRestLength, spring.restLength);
+    SpringChain candidate = chain;
+    if (drag.active) {
+        candidate.particles[drag.particleIndex].position = drag.target;
+        candidate.particles[drag.particleIndex].velocity = {};
     }
-    return metrics.anchorError <= 1e-9 && metrics.maximumStretch <= maximumStretchRatio * smallestRestLength && metrics.maximumSpeed <= maximumSpeed;
+    if (!accumulateDampedForces(candidate, gravity, gravityEnabled)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < candidate.particles.size(); ++index) {
+        if (drag.active && index == drag.particleIndex) {
+            continue;
+        }
+        if (!integrateParticle(candidate.particles[index], deltaSeconds)) {
+            return false;
+        }
+    }
+    enforceAnchor(candidate);
+    chain = std::move(candidate);
+    return true;
 }
 #endif
 
-#if LAB_CHECKPOINT >= 1
 } // namespace lab
-#endif

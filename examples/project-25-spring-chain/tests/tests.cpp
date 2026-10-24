@@ -1,4 +1,7 @@
 #include "lab.hpp"
+#include "metrics.hpp"
+#include "scene.hpp"
+#include "view.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -122,6 +125,8 @@ void testStabilityAndStress() {
     check(nearlyEqual(equilibriumExtension, 0.0204375), "single-mass static extension follows mg over k");
 }
 
+#include "extra-cases.hpp"
+
 } // namespace
 
 int main() {
@@ -130,6 +135,9 @@ int main() {
     testForcesAndIntegration();
     testFixedStepsAndDrag();
     testStabilityAndStress();
+    testProductContract();
+    testIndependentPhysics();
+    testEnergyAndInteraction();
 
     if (failures != 0) {
         std::cerr << failures << " Project 25 validation check(s) failed.\n";

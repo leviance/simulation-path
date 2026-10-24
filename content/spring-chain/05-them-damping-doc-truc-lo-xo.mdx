@@ -1,104 +1,208 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Thêm damping dọc trục lò xo
+# Làm dao động tắt dần bằng damping dọc trục
 
 ## Vấn đề cần giải quyết
 
-Một cách “làm cho êm” rất phổ biến là viết `velocity *= 0.99` cho mọi particle. Nó dễ dùng nhưng không mô tả spring damper: một chuỗi đang bay ngang như vật rắn cũng bị chậm lại dù khoảng cách giữa các mass không thay đổi. Damping của spring chỉ nên phản ứng với tốc độ spring đang dài ra hoặc ngắn lại.
-
-Ta đã có direction từ A sang B. Chỉ cần chiếu relative velocity lên direction đó, ta nhận được axial relative speed có dấu.
+Chuỗi lý tưởng có thể dao động rất lâu. Ta muốn năng lượng cơ học chuyển dần thành phần không được mô hình hóa, thay vì tiếp tục quay qua lại giữa động năng và thế năng. Cách làm phải gắn với chuyển động của lò xo, không phải một phép giảm velocity tùy ý trên mọi khối.
 
 ## Hiểu ý tưởng trước khi viết code
 
-$$
-v_{rel}=v_B-v_A
-$$
+Tốc độ đổi chiều dài là $u=(v_B-v_A)\cdot n$. Damping dọc trục cho:
 
 $$
-v_{axis}=v_{rel}\cdot n
+F_A=(k(d-L_0)+cu)n,\qquad F_B=-F_A.
 $$
 
+Nếu hai đầu đi xa nhau, u dương và lực cản kéo chúng lại. Nếu đang gần nhau, u âm và phần damping chống lại chuyển động ấy. c có đơn vị kg/s; nó không cùng đơn vị với k.
+
+**Bật damping rồi, vì sao dây vẫn đung đưa?** Lực cản ở đây chỉ chống lại việc hai đầu lò xo tiến lại gần hoặc rời xa nhau. Nếu một đoạn dây đang quét ngang nhưng gần như không đổi chiều dài, lực cản này rất nhỏ. Dao động co–giãn có thể giảm nhanh trong khi chuyển động đung đưa còn kéo dài; không thể hứa rằng mọi khối sẽ đứng yên sau một số giây cố định. Mô hình chưa có lực cản không khí tác dụng lên từng khối. Ta cũng không tự đặt vận tốc về 0 khi thấy dây đã chuyển động chậm.
+
+Khi tắt damping và không kéo dây, mô hình lý tưởng không có cơ chế tiêu hao cơ năng. Chương trình vẫn có sai số tích phân, nên phải đo drift thay vì khẳng định máy tính bảo toàn năng lượng tuyệt đối.
+
+Công suất riêng của damping là:
+
 $$
-F_A=(kx+c\,v_{axis})n
+P_D=F_{D,A}\cdot v_A+F_{D,B}\cdot v_B=-cu^2\leq0.
 $$
 
-Khi B đang rời A dọc direction, $v_{axis}>0$ và force trên A hướng về B; force đối trên B kéo nó chậm lại. Nếu hai endpoint cùng bay với một velocity, relative velocity bằng zero. Nếu B chỉ trượt vuông góc spring, dot product cũng bằng zero.
+Ví dụ c=4 kg/s, vận tốc tương đối dọc trục 2 m/s cho công suất −16 W. Thành phần tiếp tuyến 3 m/s không tự tạo lực cản dọc trục.
+
+Đây là tính chất của mô hình lực liên tục. Phép tích phân rời rạc vẫn có sai số; không kết luận mọi sample cơ năng bắt buộc giảm tuyệt đối đơn điệu ở mọi dt.
 
 <InteractiveLab demo="spring-chain" mode="spring-damping" />
 
-So ba preset damping. Sau đó chọn preset “tangent”: endpoint chuyển động vuông góc spring, force damping phải bằng zero dù speed khác zero.
-
 ## Viết code từng bước
 
-### Bước 1 — Tính relative velocity của đúng hai endpoint
+Viết phần của bạn trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm bản trùng tên. **Checkpoint 5 là bản tham khảo ở cuối bài**; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — chuyển động chung bị triệt tiêu"
-const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
-const double relativeSpeed = dot(relativeVelocity, direction);
+```powershell title="Build mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_starter --parallel 2
+.\build\Debug\project_25_starter.exe
 ```
 
-Trừ theo thứ tự B−A để dấu thống nhất với direction A→B và Hooke force đã dùng.
+### Bước 1 — Dùng lại hình học, bổ sung phần lực cản
 
-### Bước 2 — Cộng damping vào scalar force
+Thêm sampleDampedSpring sau phần fixed-step planner trong lab.hpp:
 
-```cpp title="include/lab.hpp — elastic và damping dùng chung direction"
-const double forceMagnitude = spring.stiffness * sample.stretch + spring.damping * sample.relativeSpeed;
-sample.forceOnFirst = scale(sample.direction, forceMagnitude);
-```
-
-Đơn vị của `c` là N·s/m. Nhân với m/s cho newton, cùng đơn vị với `k*stretch`.
-
-### Bước 3 — Phân phối force pair như trước
-
-```cpp title="include/lab.hpp — damping vẫn là nội lực đối nhau"
-Particle& first = chain.particles[spring.first];
-Particle& second = chain.particles[spring.second];
-first.force = add(first.force, sample.forceOnFirst);
-second.force = subtract(second.force, sample.forceOnFirst);
-```
-
-Damping làm mechanical energy giảm nhưng không được tạo net internal force cho cặp.
-
-### Bước 4 — Thay force sampler, giữ nguyên integrator
-
-```cpp title="include/lab.hpp — pipeline không đổi thứ tự"
-accumulateDampedForces(chain, gravity, gravityEnabled);
-for (Particle& particle : chain.particles) {
-    integrateParticle(particle, deltaSeconds);
+```cpp title="include/lab.hpp — sampleDampedSpring"
+inline SpringSample sampleDampedSpring(const SpringChain& chain, const Spring& spring) {
+    SpringSample sample = sampleElasticSpring(chain, spring);
+    if (!sample.valid) {
+        return sample;
+    }
+    const double forceMagnitude = spring.stiffness * sample.stretch + spring.damping * sample.relativeSpeed;
+    sample.forceOnFirst = scale(sample.direction, forceMagnitude);
+    sample.valid = finiteVec2(sample.forceOnFirst);
+    return sample;
 }
-enforceAnchor(chain);
 ```
 
-Tách trách nhiệm giúp ta thay force model mà không chạm vào semi-implicit Euler hoặc fixed-step loop.
+Direction, stretch và relativeSpeed đều lấy từ sampleElasticSpring. Không gọi integrate ở đây và không sửa velocity trong một hàm được đặt tên sample.
+
+### Bước 2 — Cộng lực có damping cho toàn chuỗi
+
+Thêm accumulateDampedForces:
+
+```cpp title="include/lab.hpp — accumulateDampedForces"
+inline bool accumulateDampedForces(SpringChain& chain, Vec2 gravity, bool gravityEnabled) {
+    if (!validChain(chain) || !finiteVec2(gravity)) {
+        return false;
+    }
+    for (const Spring& spring : chain.springs) {
+        if (!sampleDampedSpring(chain, spring).valid) {
+            return false;
+        }
+    }
+    clearForces(chain);
+    if (gravityEnabled) {
+        addGravity(chain, gravity);
+    }
+    for (const Spring& spring : chain.springs) {
+        const SpringSample sample = sampleDampedSpring(chain, spring);
+        Particle& first = chain.particles[spring.first];
+        Particle& second = chain.particles[spring.second];
+        first.force = add(first.force, sample.forceOnFirst);
+        second.force = subtract(second.force, sample.forceOnFirst);
+    }
+    return validChain(chain);
+}
+```
+
+Trình tự vẫn là kiểm dữ liệu, clear, gravity rồi từng cặp lực đối nhau. Hai endpoint không nhất thiết có cùng khối lượng nhưng vẫn nhận hai force đối nhau; gia tốc mới phụ thuộc inverseMass.
+
+### Bước 3 — Viết một bước có damping
+
+Thêm stepDampedChain:
+
+```cpp title="include/lab.hpp — stepDampedChain"
+inline bool stepDampedChain(SpringChain& chain, double deltaSeconds, Vec2 gravity, bool gravityEnabled) {
+    if (!validChain(chain) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0 || deltaSeconds > 0.1) {
+        return false;
+    }
+    SpringChain candidate = chain;
+    if (!accumulateDampedForces(candidate, gravity, gravityEnabled)) {
+        return false;
+    }
+    for (Particle& particle : candidate.particles) {
+        if (!integrateParticle(particle, deltaSeconds)) {
+            return false;
+        }
+    }
+    enforceAnchor(candidate);
+    chain = std::move(candidate);
+    return true;
+}
+```
+
+Không đổi integrator. Sự khác biệt là loại force đưa vào candidate trước khi integrate.
+
+Trong scene.hpp, thay stepScene để chọn lực có/không damping:
+
+```cpp title="include/scene.hpp — stepScene"
+inline bool stepScene(Scene& scene) {
+    if (scene.dtIndex < 0 || scene.dtIndex >= 5 || scene.selected == 0 || scene.selected >= scene.chain.particles.size()) {
+        stopScene(scene);
+        scene.message = "Invalid dt index.";
+        return false;
+    }
+    SpringChain candidate = scene.chain;
+    bool accepted = false;
+    if (scene.dampingEnabled) {
+        accepted = stepDampedChain(candidate, kStepOptions[scene.dtIndex], scene.gravity, scene.gravityEnabled);
+    } else {
+        accepted = stepElasticChain(candidate, kStepOptions[scene.dtIndex], scene.gravity, scene.gravityEnabled);
+    }
+    if (!accepted || !withinExperiment(candidate)) {
+        stopScene(scene);
+        scene.message = "Experiment stopped: invalid/degenerate state or envelope exceeded. Reset or reduce dt.";
+        return false;
+    }
+    scene.traceBefore = scene.chain.particles[scene.selected];
+    scene.traceAfter = candidate.particles[scene.selected];
+    scene.hasTrace = true;
+    scene.chain = std::move(candidate);
+    ++scene.steps;
+    ++scene.substeps;
+    scene.elapsed = double(scene.steps) * kStepOptions[scene.dtIndex];
+    refreshMetrics(scene);
+    return true;
+}
+```
+
+### Bước 4 — Nối toggle với trạng thái đang có
+
+Thay makeScene để cấu hình mặc định của bài bật damping:
+
+```cpp title="include/scene.hpp — makeScene"
+inline Scene makeScene() {
+    Scene scene{};
+    scene.gravityEnabled = true;
+    scene.dampingEnabled = true;
+    rebuildScene(scene);
+    return scene;
+}
+```
+
+Trong main, thêm D:
+
+```cpp title="src/main.cpp — damping toggle"
+if (key == SDLK_D) {
+                    lab::stopScene(scene);
+                    scene.dampingEnabled = !scene.dampingEnabled;
+                    lab::beginMeasurement(scene);
+                }
+```
+
+D dừng mô phỏng và bắt đầu lại mốc đo, nhưng không dựng lại vị trí/vận tốc. Bấm Space chạy tiếp để thấy chính trạng thái ấy có damping hay không. R vẫn trả về preset mặc định.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy chuỗi có axial damping"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_25_checkpoint_5
-./build/Debug/project_25_checkpoint_5.exe
-```
+Build Starter. Chạy một lúc, pause, tắt damping rồi tiếp tục. Đừng so hai lần chạy có vị trí khởi đầu khác nhau rồi đổ toàn bộ chênh lệch cho damping; bài 7 sẽ có hai preset chung state ban đầu.
 
-Chạy checkpoint 4 và 5 cạnh nhau. Cả hai dùng cùng dt và initial state; checkpoint 5 phải tiến dần về trạng thái treo, còn checkpoint 4 tiếp tục trao đổi kinetic/spring/gravity energy.
+Damping dọc trục không đồng nghĩa mọi chuyển động đều tắt nhanh. Một số mode chuyển động đổi chiều dài spring rất ít nên tiêu tán chậm; project không thêm lực cản không khí toàn cục.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `length(relativeVelocity)` thay dot product. Tangent motion bị cản và damping mất dấu; hoàn tác về projection.
-2. Trừ damping scalar khỏi Hooke scalar mà không xét quy ước relative velocity. Một số chuyển động bị khuếch đại; hoàn tác công thức đã kiểm dấu.
-3. Nhân toàn bộ particle velocity với 0.99 sau step. Tịnh tiến chung bị mất energy không thuộc spring; hoàn tác global damping.
+Chỉ đổi một chi tiết mỗi lần. Hãy dự đoán, chạy lại, ghi điều quan sát được rồi hoàn tác trước thí nghiệm tiếp theo.
+
+1. Nhân velocity của mọi khối với 0,99 mỗi frame. Kết quả phụ thuộc render FPS và làm mất cả chuyển động không đổi chiều dài spring.
+
+2. Dùng dấu trừ cho c·relativeSpeed trong F_A của quy ước hiện tại. Damping sẽ cấp năng lượng thay vì lấy đi.
+
+3. Chỉ áp lực cản vào B mà quên phần đối dấu trên A. Tổng lực nội bộ không còn bằng zero.
 
 ## Tự kiểm tra kết quả
 
-- Hai endpoint cùng velocity cho damping force zero.
-- Relative speed 2 m/s dọc spring với `c=4` cho damping contribution 8 N.
-- Relative velocity 3 m/s vuông góc spring cho damping contribution zero.
-- Damping force trên hai endpoint vẫn bằng nhau và ngược dấu.
-- `c=0` cho đúng kết quả checkpoint elastic.
-- Damping dương làm biên độ giảm dần trong stable preset.
-- Integrator và fixed dt không thay đổi khi thêm damping.
+- Lực cản dùng relative velocity, không dùng riêng velocity của B.
+- Chuyển động tiếp tuyến không tạo thêm damping force dọc trục.
+- Trường hợp u=2, c=4 khớp công suất −16 W.
+- Tắt/bật D giữ vị trí và vận tốc, dừng rõ ràng và bắt lại mốc đo.
+- Không có phép nhân toàn bộ velocity để giả làm spring damping.
 
 ## Bài tập mở rộng
 
-Tính damping ratio của một oscillator đơn $\zeta=c/(2\sqrt{km})$ và tạo ba preset underdamped, gần critical và overdamped. Với cả chain, đây chỉ là tham chiếu vì mỗi mode có frequency khác nhau.
+Dựng hai đầu nằm trên trục X. Cho B vận tốc (0,3), rồi (2,3) m/s. Tách phần damping bằng cách lấy forceDamped−forceElastic; chỉ trường hợp thứ hai tạo thành phần cản và công suất phải khớp −c·u².
 
-Bài tiếp theo thêm input quan trọng nhất của project: kéo trực tiếp một mass, giữ nó kinematic trong lúc drag và thả ra để tạo một wave thật sự.
+[Sang bài 6 — Kéo một khối và quan sát dao động lan truyền](/projects/spring-chain/06-keo-tha-mot-khoi-va-truyen-dao-dong)

@@ -1,38 +1,36 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Cộng lực, gravity và neo cố định
+# Cộng lực, trọng lực và giữ điểm neo
 
 ## Vấn đề cần giải quyết
 
-Một particle trong chuỗi có thể nhận lực từ spring phía trên, spring phía dưới và gravity trong cùng substep. Nếu xử lý từng spring rồi lập tức đổi position, spring sau sẽ đọc một state khác spring trước; kết quả phụ thuộc thứ tự vòng lặp. Ta cần đóng băng state, cộng hết lực, rồi mới tích phân ở bài sau.
-
-Force accumulator của mỗi particle chỉ có ý nghĩa trong một physics step: xóa force cũ, cộng external force, cộng mọi internal spring pair. Anchor vẫn có thể nhận reaction force để quan sát, nhưng `inverseMass=0` sẽ ngăn nó gia tốc.
+Một khối ở giữa dây được nối với hai hàng xóm, đồng thời chịu trọng lực. Nếu tính xong một lò xo rồi ghi đè force của khối, lực từ lò xo trước sẽ biến mất. Ta cần một nơi cộng dồn lực của **cùng một lần tính**, không phải cộng dồn qua nhiều frame.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Gravity force trên dynamic particle:
+Với khối i, $F_i=m_i g+\sum F_{\text{spring},i}$. Mỗi liên kết A–B cộng $+F_A$ vào A và $-F_A$ vào B. Vì đây là lực nội bộ, tổng lực của riêng cặp bằng zero; tổng toàn chuỗi vẫn có thể khác zero vì trọng lực và giá treo.
 
-$$
-F_g=m g=\frac{g}{m^{-1}}
-$$
+Quy trình là **xóa toàn bộ force → cộng trọng lực → duyệt mọi spring**. Chưa đổi velocity hay position trong lúc cộng. Điểm neo vẫn nhận lực spring trong accumulator, nhưng ở bài tích phân nó sẽ được bỏ qua. Giá treo cung cấp phản lực giữ điểm ấy cố định.
 
-Mỗi spring tạo một cặp nội lực:
-
-$$
-F_A\mathrel{+}=F_s,\qquad F_B\mathrel{-}=F_s
-$$
-
-Do đó $F_A+F_B=0$ cho riêng spring. Tổng lực toàn hệ vẫn không bằng zero vì gravity và reaction tại anchor là ngoại lực.
+Một mass 0,04 kg nhận trọng lực (0,−0,3924) N. Trong trạng thái treo cân bằng, spring trên cùng phải đỡ cả phần dây phía dưới, không chỉ đỡ một khối.
 
 <InteractiveLab demo="spring-chain" mode="spring-forces" />
 
-Bật/tắt gravity và kéo một particle sang bên khi paused. Các mũi tên đỏ ở particle giữa là tổng của nhiều lực; chọn một spring để xem hai contribution đối nhau trước khi cộng.
-
 ## Viết code từng bước
 
-### Bước 1 — Xóa force từ substep trước
+Viết phần của bạn trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm bản trùng tên. **Checkpoint 3 là bản tham khảo ở cuối bài**; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — accumulator không được nhớ lực cũ"
+```powershell title="Build mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_starter --parallel 2
+.\build\Debug\project_25_starter.exe
+```
+
+### Bước 1 — Xóa lực cũ một lần ở đầu bước
+
+Thêm clearForces vào lab.hpp:
+
+```cpp title="include/lab.hpp — clearForces"
 inline void clearForces(SpringChain& chain) {
     for (Particle& particle : chain.particles) {
         particle.force = {};
@@ -40,73 +38,208 @@ inline void clearForces(SpringChain& chain) {
 }
 ```
 
-Nếu bỏ bước này, gravity giống như lớn thêm sau mỗi frame vì cùng một vector liên tục bị cộng vào accumulator.
+Không đặt clearForces bên trong vòng duyệt spring. Một khối phải giữ tất cả đóng góp trong cùng substep.
 
-### Bước 2 — Đổi inverse mass về mass để tính gravity
+### Bước 2 — Cộng trọng lực đúng theo khối lượng
 
-```cpp title="include/lab.hpp — fixed particle không nhận gravity"
-for (Particle& particle : chain.particles) {
-    if (particle.inverseMass <= kSpringEpsilon) {
-        continue;
+Thêm addGravity sau clearForces:
+
+```cpp title="include/lab.hpp — addGravity"
+inline void addGravity(SpringChain& chain, Vec2 gravity) {
+    if (!finiteVec2(gravity)) {
+        return;
     }
-    const double mass = 1.0 / particle.inverseMass;
-    particle.force = add(particle.force, scale(gravity, mass));
+    for (Particle& particle : chain.particles) {
+        if (particle.inverseMass == 0.0) {
+            continue;
+        }
+        const double mass = 1.0 / particle.inverseMass;
+        particle.force = add(particle.force, scale(gravity, mass));
+    }
 }
 ```
 
-Gravity truyền vào là acceleration `(0,-9.81) m/s²`; nhân mass mới cho force đơn vị newton.
+Gravity là gia tốc m/s², không phải lực N. Nếu chỉ cộng g vào force, khối nặng/nhẹ sẽ có gia tốc sai sau khi nhân inverseMass.
 
-### Bước 3 — Phân phối cặp lực bằng nhau, ngược dấu
+### Bước 3 — Mỗi spring tác động hai đầu đối nhau
 
-```cpp title="include/lab.hpp — một sample cập nhật đúng hai endpoint"
-Particle& first = chain.particles[spring.first];
-Particle& second = chain.particles[spring.second];
-first.force = add(first.force, sample.forceOnFirst);
-second.force = subtract(second.force, sample.forceOnFirst);
-```
+Thêm hàm duyệt liên kết:
 
-Không gọi lại `sampleElasticSpring` sau khi sửa force: force accumulator không tham gia geometry nên sample vẫn chỉ cần tính một lần.
-
-### Bước 4 — Khóa thứ tự của cả bước cộng lực
-
-```cpp title="include/lab.hpp — external trước internal, chưa đổi position"
-clearForces(chain);
-if (gravityEnabled) {
-    addGravity(chain, gravity);
+```cpp title="include/lab.hpp — addElasticSpringForces"
+inline void addElasticSpringForces(SpringChain& chain) {
+    for (const Spring& spring : chain.springs) {
+        const SpringSample sample = sampleElasticSpring(chain, spring);
+        if (!sample.valid) {
+            continue;
+        }
+        Particle& first = chain.particles[spring.first];
+        Particle& second = chain.particles[spring.second];
+        first.force = add(first.force, sample.forceOnFirst);
+        second.force = subtract(second.force, sample.forceOnFirst);
+    }
 }
-addElasticSpringForces(chain);
 ```
 
-Thứ tự gravity/spring không đổi tổng vì đều là phép cộng. Điều bắt buộc là không tích phân xen giữa chúng.
+Lực trên neo không bị xóa riêng sau vòng này. Ta cần nó để đọc phản lực mà giá treo phải cung cấp.
+
+### Bước 4 — Ghép ba pha thành một lần tính lực
+
+Hàm này kiểm dữ liệu và mọi sample trước khi cộng:
+
+```cpp title="include/lab.hpp — accumulateElasticForces"
+inline bool accumulateElasticForces(SpringChain& chain, Vec2 gravity, bool gravityEnabled) {
+    if (!validChain(chain) || !finiteVec2(gravity)) {
+        return false;
+    }
+    for (const Spring& spring : chain.springs) {
+        if (!sampleElasticSpring(chain, spring).valid) {
+            return false;
+        }
+    }
+    clearForces(chain);
+    if (gravityEnabled) {
+        addGravity(chain, gravity);
+    }
+    addElasticSpringForces(chain);
+    return validChain(chain);
+}
+```
+
+Scene quay lại 32 khối và lệch một khối giữa sang X để nhìn được lực phục hồi. Thay rebuildScene:
+
+```cpp title="include/scene.hpp — rebuildScene"
+inline void rebuildScene(Scene& scene) {
+    stopScene(scene);
+    scene.message.clear();
+    scene.chain = makeVerticalChain(static_cast<std::size_t>(scene.count), {0.0, 0.0}, scene.restLength, scene.mass, 0.10, scene.stiffness, scene.damping);
+    scene.selected = scene.chain.particles.size() / 2;
+    scene.chain.particles[scene.selected].position.x += 0.35;
+    beginMeasurement(scene);
+    accumulateElasticForces(scene.chain, scene.gravity, scene.gravityEnabled);
+}
+```
+
+Hàm trả bool để caller biết cả lượt tính có hợp lệ không. Ở solver của bài sau, ta làm trên candidate và chỉ chấp nhận khi toàn bộ bước đúng.
+
+### Bước 5 — Cập nhật input và mũi tên lực
+
+Trong main, thêm G vào nhánh key-down:
+
+```cpp title="src/main.cpp — bật/tắt trọng lực"
+if (key == SDLK_G) {
+                    scene.gravityEnabled = !scene.gravityEnabled;
+                    lab::rebuildScene(scene);
+                }
+```
+
+Fixture không còn là cặp hai khối. Thay makeWorldView về góc nhìn chuỗi và thay drawChain/renderScene để vector lực đọc accumulator:
+
+```cpp title="include/view.hpp — makeWorldView"
+inline WorldView makeWorldView(const Scene& scene) {
+    const double links = double(std::max(2, scene.count) - 1);
+    double expectedExtension = 0.0;
+    if (scene.gravityEnabled && scene.stiffness > 0.0) {
+        expectedExtension = scene.mass * std::abs(scene.gravity.y) * links * (links + 1.0) / (2.0 * scene.stiffness);
+    }
+    const double height = std::max(3.0, links * scene.restLength + expectedExtension + 1.6);
+    return {std::min(110.0, 500.0 / height), 350.0, 130.0};
+}
+```
+
+```cpp title="include/view.hpp — drawChain"
+inline void drawChain(Framebuffer& image, const Scene& scene, const WorldView& view) {
+    for (const auto& spring : scene.chain.springs) {
+        const auto& a = scene.chain.particles[spring.first];
+        const auto& b = scene.chain.particles[spring.second];
+        std::uint32_t color = 0x66738cffU;
+        const double stretch = length(subtract(b.position, a.position)) - spring.restLength;
+        if (stretch > 0.002) {
+            color = 0xe5c07bffU;
+        } else if (stretch < -0.002) {
+            color = 0x56b6c2ffU;
+        }
+        drawCoil(image, worldToScreen(a.position, view), worldToScreen(b.position, view), color);
+    }
+    for (std::size_t i = 0; i < scene.chain.particles.size(); ++i) {
+        const auto& particle = scene.chain.particles[i];
+        const Vec2 center = worldToScreen(particle.position, view);
+        if (i == scene.selected) {
+            drawNode(image, center, std::max(5.0, particle.radius * view.scale + 3.0), 0xffffffffU);
+        }
+        drawNode(image, center, particle.radius * view.scale, i == 0 ? 0xc678ddffU : 0x53f0aeffU);
+        if (scene.debug) {
+            const Vec2 tip = worldToScreen(add(particle.position, scale(particle.force, 0.08)), view);
+            drawForceArrow(image, center, tip);
+        }
+    }
+}
+```
+
+```cpp title="include/view.hpp — renderScene"
+inline void renderScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    const WorldView view = makeWorldView(scene);
+    rectangle(image, 40, 100, 690, 650, kRail, false);
+    if (scene.debug) {
+        for (int row = 1; row <= 10; ++row) {
+            const double y = 100.0 + 50.0 * double(row);
+            drawLine(image, 40, y, 690, y, kGrid);
+        }
+    }
+    drawChain(image, scene, view);
+    const Vec2 anchor = worldToScreen(scene.chain.anchorPosition, view);
+    rectangle(image, int(anchor.x - 20), int(anchor.y - 25), int(anchor.x + 20), int(anchor.y - 10), 0xc678ddffU, true);
+    drawLine(image, anchor.x, anchor.y - 10, anchor.x, anchor.y, 0xc678ddffU);
+}
+```
+
+Thay drawHud để bỏ bảng cặp của bài 2 và hiện điều khiển gravity:
+
+```cpp title="include/presentation.hpp — drawHud"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    char line[200]{};
+    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    if (!SDL_RenderDebugText(renderer, 30, 20, line)) {
+        return false;
+    }
+    if (!SDL_RenderDebugText(renderer, 30, 42, "Space pause | N step (lesson 4+) | R reset | F clean/debug | Esc quit")) {
+        return false;
+    }
+    SDL_RenderDebugText(renderer, 30, 64, "G gravity | D damping (lesson 5+) | Drag or arrows move selected mass (lesson 6+)");
+    if (!scene.message.empty()) {
+        SDL_RenderDebugText(renderer, 30, 790, scene.message.c_str());
+    }
+    return true;
+}
+```
+
 
 ## Ghép các phần lại
 
-```bash title="Terminal — quan sát net force khi state còn đứng yên"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_25_checkpoint_3
-./build/Debug/project_25_checkpoint_3.exe
-```
+Build Starter. Bài này vẫn là ảnh của một trạng thái, không phải animation. G bật/tắt gravity và dựng lại fixture. Các mũi tên đỏ đọc đúng accumulator; chúng có giới hạn chiều dài hiển thị nên hãy dùng số N để so độ lớn chính xác.
 
-Checkpoint 3 vẫn chưa cho time chạy. Particle giữa được kéo lệch để spring force hiện rõ; mũi tên của các mass còn lại chủ yếu hướng xuống do gravity.
+Khối lệch giữa dây bị hai spring kéo về gần trục. Các khối chưa biến dạng còn lại chỉ có trọng lực. Khi tắt gravity, tổng mọi lực nội bộ, kể cả lực trên neo, phải gần zero.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ `clearForces`. Gọi accumulator ba lần và đọc force gravity tăng gấp ba; hoàn tác bước clear.
-2. Cộng `gravity` trực tiếp vào force. Mass khác nhau nhận cùng force thay vì cùng acceleration; hoàn tác về `mass*gravity`.
-3. Cộng cùng `+F` cho cả A và B. Tổng nội lực khác zero và tâm hệ tự gia tốc; hoàn tác endpoint B về phép trừ.
+Chỉ đổi một chi tiết mỗi lần. Hãy dự đoán, chạy lại, ghi điều quan sát được rồi hoàn tác trước thí nghiệm tiếp theo.
+
+1. Gán first.force=F thay vì cộng vào force. Khối giữa sẽ mất đóng góp của một hàng xóm.
+
+2. Xóa force ngay trước mỗi spring. Kết quả phụ thuộc thứ tự duyệt liên kết.
+
+3. Cộng g trực tiếp vào force rồi lại nhân inverseMass. Kiểm mass 0,04 kg sẽ thấy gia tốc không còn −9,81 m/s².
 
 ## Tự kiểm tra kết quả
 
-- Force bắt đầu từ zero ở mỗi lần accumulate.
-- Mass 0.25 kg nhận gravity force `(0,-2.4525) N`.
-- Fixed anchor không nhận gravity.
-- Hai endpoint dynamic của một spring có tổng spring force bằng zero.
-- Một particle giữa nhận contribution từ tối đa hai springs.
-- Thứ tự duyệt springs không đổi tổng force trong sai số floating-point.
-- Chưa có position hoặc velocity nào thay đổi ở checkpoint 3.
+- Mỗi lượt chỉ xóa lực cũ một lần.
+- Tổng hai lực của một spring bằng zero, nhưng từng khối có thể nhận nhiều spring force.
+- Gravity của mass 0,04 kg là −0,3924 N theo Y.
+- Neo có thể có force khác zero mà vẫn không chuyển động; force và acceleration không phải cùng đại lượng.
 
 ## Bài tập mở rộng
 
-Tính và hiển thị reaction force tại anchor. Đừng cộng nó vào gravity của anchor; reaction ở đây chính là spring force đã tích lũy trên particle cố định.
+Tạo chuỗi ba khối động dưới một neo. Tính tay lực căng của từng spring ở trạng thái treo cân bằng: từ dưới lên lần lượt là mg, 2mg, 3mg. Dùng độ giãn bằng lực căng/k để dựng trạng thái ấy, rồi kiểm force trên từng khối động gần zero.
 
-Bài tiếp theo đổi net force thành acceleration rồi cập nhật velocity và position. Đây là lúc chuỗi thật sự bắt đầu rơi, căng và dao động.
+[Sang bài 4 — Cho chuỗi chuyển động bằng semi-implicit Euler](/projects/spring-chain/04-cho-chuoi-chuyen-dong-semi-implicit-euler)

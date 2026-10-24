@@ -1,99 +1,271 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Thí nghiệm stiffness, mass và delta time
+# Thí nghiệm độ cứng, khối lượng và bước thời gian
 
 ## Vấn đề cần giải quyết
 
-Cùng một đoạn code có thể chạy ổn với spring mềm nhưng nổ khi tăng stiffness. Đây không phải vì máy “không đủ FPS”: spring cứng dao động nhanh hơn, trong khi integration dt có thể quá dài để lấy mẫu chuyển động đó. Damping lớn đôi khi che triệu chứng nhưng không sửa một bước thời gian quá thô.
-
-Ta cần một con số kết nối ba tham số quan trọng: stiffness $k$, mass $m$ và $\Delta t$. Với một oscillator đơn, angular frequency là $\omega=\sqrt{k/m}$; nhân với dt cho chỉ số không thứ nguyên $q$.
+Một cấu hình chạy mượt chưa nói rằng phương pháp tích phân sẽ ổn với lò xo cứng hơn, khối nhẹ hơn hoặc dt lớn hơn. Bài này mở các tham số và số khối 20–100 để ta làm thí nghiệm có kiểm soát, thay vì thử ngẫu nhiên rồi chỉ nhìn ảnh.
 
 ## Hiểu ý tưởng trước khi viết code
 
+Một oscillator đơn có tần số góc $\omega=\sqrt{k/m}$; số không thứ nguyên $q=h\sqrt{k/m}$ cho biết một bước thời gian lớn đến đâu so với chuyển động riêng của hệ.
+
+q không phải chứng chỉ ổn định cho mọi chuỗi. Chuỗi có nhiều mode, có mode nhanh hơn oscillator đơn; damping và hình dạng tức thời cũng ảnh hưởng. Đừng lấy ngưỡng q của một mass một chiều áp thẳng cho cả dây.
+
+Ta đo cơ năng:
+
 $$
-q=\Delta t\sqrt{\frac{k}{m}}
+K=\sum_{\text{dynamic }i}\frac12m_i|v_i|^2,\quad
+U_s=\sum_j\frac12k_j(d_j-L_{0,j})^2,\quad
+U_g=-\sum_{\text{dynamic }i}m_i\,g\cdot(p_i-p_{\text{anchor}}).
 $$
 
-$q$ càng lớn nghĩa là một numerical step chiếm phần càng lớn của time scale dao động. Chuỗi nhiều mass có nhiều vibration mode nên không có một ngưỡng duy nhất từ công thức này; ta dùng nó để so cấu hình, sau đó vẫn phải kiểm energy, stretch và finite state.
+Mốc Ug ở anchor làm Ug âm khi khối nằm phía dưới. Điều đó không có gì sai. Độ biến thiên E giữa hai thời điểm không đổi nếu chỉ dời mốc thế năng của cùng hệ.
+
+Khi đổi N mà giữ m, k và restLength, ta đang đổi chiều dài và tổng khối lượng của hệ, **không phải chia mịn cùng một sợi dây vật lý**. Để so dt công bằng, giữ N, tham số và initial state cố định.
 
 <InteractiveLab demo="spring-chain" mode="spring-stability" />
 
-Chạy preset Stable, Borderline và Deliberately unstable. Quan sát $q$, energy trace và maximum stretch. Sau khi case xấu tăng không kiểm soát, nhấn reset; demo phải lấy lại điều khiển ngay.
-
 ## Viết code từng bước
 
-### Bước 1 — Tính chỉ số không thứ nguyên
+Viết phần của bạn trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm bản trùng tên. **Checkpoint 7 là bản tham khảo ở cuối bài**; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — time step so với spring time scale"
-return deltaSeconds * std::sqrt(stiffness / mass);
+```powershell title="Build mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_starter --parallel 2
+.\build\Debug\project_25_starter.exe
 ```
 
-Hàm trả infinity cho input không hợp lệ thay vì một giá trị “ổn” giả. `q` không phụ thuộc render FPS.
+### Bước 1 — Tính chỉ số thời gian và số đo độc lập
 
-### Bước 2 — Đo stretch lớn nhất trong cả chuỗi
+Tạo metrics.hpp trong starter/include, bắt đầu bằng pragma once, include lab.hpp và namespace lab. Thêm springStabilityIndex và ChainMetrics:
 
-```cpp title="include/lab.hpp — metric lấy từ geometry thật"
-for (const Spring& spring : chain.springs) {
-    const SpringSample sample = sampleElasticSpring(chain, spring);
-    if (!sample.valid) {
-        metrics.finite = false;
-        continue;
+```cpp title="include/metrics.hpp — springStabilityIndex"
+inline double springStabilityIndex(double stiffness, double mass, double deltaSeconds) {
+    if (!std::isfinite(stiffness) || stiffness < 0.0 || !std::isfinite(mass) || mass <= 0.0 || !std::isfinite(deltaSeconds) || deltaSeconds < 0.0) {
+        return std::numeric_limits<double>::infinity();
     }
-    metrics.maximumStretch = std::max(metrics.maximumStretch, std::abs(sample.stretch));
-```
-
-Màu spring giúp nhìn vị trí lỗi; `maximumStretch` cho ngưỡng regression test không phụ thuộc ảnh chụp.
-
-### Bước 3 — Không clamp state để giấu instability
-
-```cpp title="include/lab.hpp — finite state là kết quả cần đo"
-metrics.finite = metrics.finite && std::isfinite(metrics.kineticEnergy) && std::isfinite(metrics.springEnergy) && std::isfinite(metrics.gravitationalEnergy) && std::isfinite(metrics.maximumStretch) && std::isfinite(metrics.maximumSpeed) && std::isfinite(metrics.anchorError);
-return metrics;
-```
-
-Canvas fast-run dừng khi metric không finite. Physics code không clamp position, velocity hoặc force để tạo cảm giác ổn định giả.
-
-### Bước 4 — Controls reset về initial state rõ ràng
-
-```cpp title="src/main.cpp — thay stiffness không giữ state cũ"
-if (!event.key.repeat && event.key.key == SDLK_EQUALS) {
-    stiffness = std::min(600.0, stiffness + 20.0);
-    chain = makeDefaultChain(stiffness, damping);
-    paused = true;
+    return deltaSeconds * std::sqrt(stiffness / mass);
 }
 ```
 
-Reset giúp hai preset bắt đầu từ cùng geometry/velocity. Nếu thay k giữa một trạng thái đang stretch, spring potential energy nhảy ngay do người dùng đã đổi chính mô hình.
+```cpp title="include/metrics.hpp — ChainMetrics"
+struct ChainMetrics {
+    double kineticEnergy{};
+    double springEnergy{};
+    double gravitationalEnergy{};
+    double maximumStretch{};
+    double maximumSpeed{};
+    double anchorError{};
+    bool finite{true};
+};
+```
+
+Thêm measureChain bên trong namespace ấy:
+
+```cpp title="include/metrics.hpp — measureChain"
+inline ChainMetrics measureChain(const SpringChain& chain, Vec2 gravity, bool gravityEnabled) {
+    ChainMetrics metrics{};
+    if (!validChain(chain) || !finiteVec2(gravity)) {
+        metrics.finite = false;
+        return metrics;
+    }
+    for (const Particle& particle : chain.particles) {
+        if (!finiteParticle(particle)) {
+            metrics.finite = false;
+            continue;
+        }
+        metrics.maximumSpeed = std::max(metrics.maximumSpeed, length(particle.velocity));
+        if (particle.inverseMass == 0.0) {
+            continue;
+        }
+        const double mass = 1.0 / particle.inverseMass;
+        metrics.kineticEnergy += 0.5 * mass * lengthSquared(particle.velocity);
+        if (gravityEnabled) {
+            metrics.gravitationalEnergy += -mass * dot(gravity, subtract(particle.position, chain.anchorPosition));
+        }
+    }
+    for (const Spring& spring : chain.springs) {
+        const double distance = length(subtract(chain.particles[spring.second].position, chain.particles[spring.first].position));
+        const double stretch = distance - spring.restLength;
+        metrics.maximumStretch = std::max(metrics.maximumStretch, std::abs(stretch));
+        metrics.springEnergy += 0.5 * spring.stiffness * stretch * stretch;
+    }
+    metrics.anchorError = length(subtract(chain.particles.front().position, chain.anchorPosition));
+    metrics.finite = metrics.finite && std::isfinite(metrics.kineticEnergy) && std::isfinite(metrics.springEnergy) && std::isfinite(metrics.gravitationalEnergy) && std::isfinite(metrics.maximumStretch) && std::isfinite(metrics.maximumSpeed) && std::isfinite(metrics.anchorError);
+    return metrics;
+}
+```
+
+Energy được đo từ state hiện tại, không tích lũy từ lời hứa rằng mỗi step “phải giữ nguyên”. Us vẫn tính được khi d=0, dù hướng lực tại đó không xác định và solver phải từ chối bước ấy.
+
+### Bước 2 — Nối số đo vào Scene
+
+Scene đã include metrics.hpp từ khung Starter; file ấy trước bài này chỉ có namespace rỗng. Thêm member trong Scene:
+
+```cpp title="include/scene.hpp — số đo hiện tại"
+ChainMetrics metrics{};
+```
+
+Thay refreshMetrics bằng hàm sau. Các điểm gọi sau commit và trong beginMeasurement đã có từ khung trước:
+
+```cpp title="include/scene.hpp — refreshMetrics"
+inline void refreshMetrics(Scene& scene) {
+    scene.metrics = measureChain(scene.chain, scene.gravity, scene.gravityEnabled);
+}
+```
+
+### Bước 3 — Dựng các preset để so đúng thứ cần so
+
+Thêm applyPreset vào scene.hpp:
+
+```cpp title="include/scene.hpp — applyPreset"
+inline void applyPreset(Scene& scene, int preset) {
+    scene = makeScene();
+    if (preset == 1 || preset == 2) {
+        scene.gravityEnabled = false;
+        scene.dampingEnabled = preset == 2;
+    }
+    if (preset == 3) {
+        scene.gravityEnabled = false;
+        scene.dampingEnabled = false;
+        scene.stiffness = 1200.0;
+        scene.mass = 0.02;
+        scene.dtIndex = 4;
+    }
+    rebuildScene(scene);
+}
+```
+
+Preset 1 và 2 cùng initial state, không gravity, chỉ khác damping. Preset 3 cố tình dùng k=1200, m=0,02 kg, h=1/30 s. Guard dừng khi candidate không hợp lệ hoặc vượt giới hạn thí nghiệm; đó không phải một phép sửa solver cho ổn.
+
+Trong key-down của main, thêm các khối sau:
+
+```cpp title="src/main.cpp — số khối"
+if (key == SDLK_C) {
+                    if (scene.count == 20) {
+                        scene.count = 32;
+                    } else if (scene.count == 32) {
+                        scene.count = 64;
+                    } else if (scene.count == 64) {
+                        scene.count = 100;
+                    } else {
+                        scene.count = 20;
+                    }
+                    lab::rebuildScene(scene);
+                }
+```
+
+```cpp title="src/main.cpp — stiffness"
+if (key == SDLK_K) {
+                    scene.stiffness = scene.stiffness >= 1200.0 ? 60.0 : std::min(1200.0, scene.stiffness * 2.0);
+                    lab::rebuildScene(scene);
+                }
+```
+
+```cpp title="src/main.cpp — mass"
+if (key == SDLK_M) {
+                    scene.mass = scene.mass >= 0.16 ? 0.02 : scene.mass * 2.0;
+                    lab::rebuildScene(scene);
+                }
+```
+
+```cpp title="src/main.cpp — fixed dt"
+if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
+                    scene.dtIndex = std::clamp(scene.dtIndex + (key == SDLK_LEFTBRACKET ? -1 : 1), 0, 4);
+                    lab::rebuildScene(scene);
+                }
+```
+
+```cpp title="src/main.cpp — preset"
+if (key >= SDLK_1 && key <= SDLK_3) {
+                    lab::applyPreset(scene, int(key - SDLK_1) + 1);
+                }
+```
+
+Đổi k/m/dt/N dựng lại cùng loại fixture để không so hai lịch sử khác nhau. Gravity và damping có quy tắc riêng đã nói ở bài trước.
+
+### Bước 4 — Đọc số liệu ngay trong cửa sổ
+
+Thay drawHud trong presentation.hpp:
+
+```cpp title="include/presentation.hpp — drawHud"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    char line[200]{};
+    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    if (!SDL_RenderDebugText(renderer, 30, 20, line)) {
+        return false;
+    }
+    if (!SDL_RenderDebugText(renderer, 30, 42, "Space pause | N step (lesson 4+) | R reset | F clean/debug | Esc quit")) {
+        return false;
+    }
+    SDL_RenderDebugText(renderer, 30, 64, "G gravity | D damping (lesson 5+) | Drag or arrows move selected mass (lesson 6+)");
+    SDL_RenderDebugText(renderer, 30, 680, "C: 20/32/64/100 masses | K stiffness | M mass | [ / ] dt | 1/2: no/with damping | 3: unstable");
+    if (scene.debug) {
+        const auto& m = scene.metrics;
+        std::snprintf(line, sizeof(line), "K=%.6f J | Us=%.6f J | Ug=%.6f J | q=%.4f", m.kineticEnergy, m.springEnergy, m.gravitationalEnergy, springStabilityIndex(scene.stiffness, scene.mass, kStepOptions[scene.dtIndex]));
+        SDL_RenderDebugText(renderer, 30, 720, line);
+        std::snprintf(line, sizeof(line), "max stretch=%.5f m | speed=%.5f m/s | anchor error=%.3e m | dt=%.6f s", m.maximumStretch, m.maximumSpeed, m.anchorError, kStepOptions[scene.dtIndex]);
+        SDL_RenderDebugText(renderer, 30, 740, line);
+    }
+    if (scene.debug && scene.hasTrace) {
+        std::snprintf(line, sizeof(line), "node %zu | p: (%.3f, %.3f) -> (%.3f, %.3f) m | v: (%.3f, %.3f) -> (%.3f, %.3f) m/s", scene.selected, scene.traceBefore.position.x, scene.traceBefore.position.y, scene.traceAfter.position.x, scene.traceAfter.position.y, scene.traceBefore.velocity.x, scene.traceBefore.velocity.y, scene.traceAfter.velocity.x, scene.traceAfter.velocity.y);
+        SDL_RenderDebugText(renderer, 30, 700, line);
+    }
+    SDL_RenderDebugText(renderer, 735, 128, "DISPLACEMENT x (m), by node index");
+    SDL_RenderDebugText(renderer, 735, 384, "Plot clips large x; physics unchanged.");
+    if (!scene.message.empty()) {
+        SDL_RenderDebugText(renderer, 30, 790, scene.message.c_str());
+    }
+    return true;
+}
+```
+
+Góc nhìn có sẵn ước lượng độ giãn tĩnh để chứa chuỗi dài. Công thức chỉ chọn scale hiển thị, không gán một quỹ đạo vào các khối:
+
+```cpp title="include/view.hpp — makeWorldView"
+inline WorldView makeWorldView(const Scene& scene) {
+    const double links = double(std::max(2, scene.count) - 1);
+    double expectedExtension = 0.0;
+    if (scene.gravityEnabled && scene.stiffness > 0.0) {
+        expectedExtension = scene.mass * std::abs(scene.gravity.y) * links * (links + 1.0) / (2.0 * scene.stiffness);
+    }
+    const double height = std::max(3.0, links * scene.restLength + expectedExtension + 1.6);
+    return {std::min(110.0, 500.0 / height), 350.0, 130.0};
+}
+```
+
+Độ giãn dự kiến cộng tải trọng các khối phía dưới từng spring. Chuyển động thật vẫn do lực và integrator tạo ra.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — thí nghiệm stability trong native app"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_25_checkpoint_7
-./build/Debug/project_25_checkpoint_7.exe
-```
+Build Starter. C đổi 20/32/64/100 khối; K đổi k, M đổi m, [ và ] đổi dt. Phím 1/2 chọn hai thí nghiệm không/có damping; 3 chọn cấu hình cố ý sai.
 
-Dùng `[`/`]` đổi dt, `-`/`=` đổi stiffness và `D` đổi damping. Title bar báo $q$, max stretch, max speed và finite state; mỗi thay đổi tham số reset và pause để thí nghiệm có cùng điểm bắt đầu.
+Với preset 1, lấy E=K+Us+Ug tại t=0 và đo max |E(t)−E(0)| trong hai giây. Reset cùng preset, giảm h từ 1/480 xuống 1/960 rồi so. Với source tham khảo, sai số tối đa khoảng 7,8% E₀ ở bản thô và 4,1% ở bản mịn; đây là kết quả của **fixture cụ thể**, không phải ngưỡng mọi mô phỏng đều phải đạt.
+
+Bài này mới hiện các thành phần năng lượng và state. Graph theo thời gian và job đo tự động được ghép ở bài 8.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tăng k từ 120 lên 600 nhưng giữ dt lớn. Kéo mass rồi fast-run; ghi q và dấu hiệu energy growth trước khi reset.
-2. “Sửa” case trên bằng clamp velocity. Hình có thể bớt nổ nhưng energy bị xóa không theo mô hình; hoàn tác clamp và giảm dt.
-3. Tính q từ frameSeconds. Thay render FPS làm cảnh báo đổi dù physics dt giữ nguyên; hoàn tác về fixed delta.
+Chỉ đổi một chi tiết mỗi lần. Hãy dự đoán, chạy lại, ghi điều quan sát được rồi hoàn tác trước thí nghiệm tiếp theo.
+
+1. Tăng k rồi giảm m nhưng vẫn giữ dt lớn, sau đó clamp velocity để trông ổn. Hãy để guard báo dừng và giảm dt thay vì che kết quả.
+
+2. So chuỗi 20 khối với 100 khối rồi gọi chênh lệch là sai số không gian. Hai hệ đang có tổng khối lượng/chiều dài khác nhau.
+
+3. So cơ năng trước và sau khi đổi gravity hoặc mass mà không bắt lại mốc đo. Hamiltonian đang được so đã thay đổi.
 
 ## Tự kiểm tra kết quả
 
-- `k=100`, `m=4`, `dt=0.02` cho q=0.1.
-- Chia dt đôi làm q giảm một nửa.
-- Tăng stiffness bốn lần làm q tăng gấp đôi.
-- Tăng mass bốn lần làm q giảm một nửa.
-- Metric đánh dấu false khi bất kỳ thành phần nào không finite.
-- Anchor error được đo độc lập với stretch.
-- Thay tham số luôn reset accumulator và pause.
-- Stable preset chịu được thao tác kéo mà không tăng energy vô hạn.
+- Các lựa chọn 20/32/64/100 tạo đúng N−1 spring và một neo.
+- Metrics được tính từ state sau bước chấp nhận; anchor error giữ zero.
+- Preset 1/2 bắt đầu cùng vị trí và vận tốc, chỉ khác damping.
+- Đo được drift không damping và mức giảm sai số khi h chia đôi.
+- Preset sai dừng có thông báo, elapsed không tính bước bị từ chối; reset vẫn dùng được.
 
 ## Bài tập mở rộng
 
-Với ba preset dt, đo maximum stretch sau đúng 5 giây mô phỏng từ cùng một displacement. Vẽ error tương đối so với dt nhỏ nhất; đừng dùng wall-clock time.
+Với hai khối động và một neo, lập ma trận độ cứng một chiều rồi tìm hai tần số riêng. Dùng ví dụ nhỏ ấy để giải thích vì sao ngưỡng ổn định của một oscillator đơn không thể được áp nguyên xi cho cả chuỗi.
 
-Bài cuối gom các số đo thành Definition of Done, viết CTest cho công thức cục bộ lẫn stress run 20 giây và bàn giao source hoàn chỉnh.
+[Sang bài 8 — Vẽ đồ thị năng lượng và nghiệm thu ứng dụng](/projects/spring-chain/08-do-energy-stress-test-va-nghiem-thu)

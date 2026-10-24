@@ -1,111 +1,436 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Kéo thả một khối và truyền dao động
+# Kéo một khối và quan sát dao động lan truyền
 
 ## Vấn đề cần giải quyết
 
-Đến đây chuỗi chỉ phản ứng với initial state và gravity. Sản phẩm của project yêu cầu người học kéo một khối rồi nhìn dao động truyền qua cả dây. Input này không đơn giản là ghi position một lần: trong lúc giữ chuột, integrator và pointer cùng muốn điều khiển particle; khi thả, ta còn phải quyết định velocity nào được giữ lại.
-
-Giải pháp là một `DragConstraint` ngắn hạn. Particle được chọn trở thành kinematic: spring vẫn đọc position của nó và truyền force cho hàng xóm, nhưng integration bỏ qua nó. Khi thả, velocity được ước lượng từ các pointer sample gần nhất và clamp để event timing không bơm năng lượng vô hạn.
+Một chuỗi chạy đúng khi không có input vẫn có thể hỏng khi kéo bằng chuột: khối nhảy tâm tới con trỏ, một pointer khác chiếm thao tác, hoặc thả ngoài cửa sổ để lại capture. Ta sẽ đưa input vào mô hình với quy tắc rõ ràng, không cho renderer tự thay state.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hit-test chọn dynamic particle gần pointer nhất trong bán kính $r_{pick}$:
+Trong lúc cầm, khối được chọn là **kinematic**: vị trí do target điều khiển, velocity giữ zero và nó không được tích phân. Spring vẫn đọc vị trí target để tạo lực lên hàng xóm. Nếu mô phỏng đang chạy, bạn sẽ thấy phản ứng lan từ khối ấy qua các liên kết.
 
-$$
-i^*=\arg\min_i \lVert p_i-p_{mouse}\rVert^2
-$$
+Lưu grabOffset = vị trí khối − vị trí con trỏ lúc bắt đầu. Target = con trỏ + grabOffset, nhờ vậy click lệch tâm không làm khối nhảy.
 
-Release velocity:
+Vận tốc thả được ước lượng từ hai target gần nhất và khoảng thời gian giữa chúng, giới hạn 6 m/s. Đây là chính sách input đơn giản: nếu mẫu up trùng target trước, vận tốc thả là zero. Biến dạng đang giữ trong spring vẫn tạo dao động sau khi thả; đây không phải bộ ước lượng vận tốc bàn tay.
 
-$$
-v_{release}=\operatorname{clampLength}\left(\frac{p_{mouse,new}-p_{mouse,old}}{\Delta t_{sample}},v_{max}\right)
-$$
+Chuột có thể đưa công vào hệ. Trong lúc kéo không dùng ΔE để kết luận solver sai; khi bắt đầu/kết thúc/hủy một can thiệp, ta bắt lại mốc đo.
 
 <InteractiveLab demo="spring-chain" mode="spring-drag" />
 
-Kéo mass giữa sang trái, giữ một nhịp rồi thả. Biểu đồ ngang theo particle index cho thấy displacement xuất hiện gần điểm kéo trước, sau đó lan dọc các spring. Thử kéo anchor: nó không được chọn.
-
 ## Viết code từng bước
 
-### Bước 1 — Hit-test nhưng bỏ qua anchor
+Viết phần của bạn trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm bản trùng tên. **Checkpoint 6 là bản tham khảo ở cuối bài**; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — chỉ dynamic particle có thể được kéo"
-for (std::size_t index = 0; index < chain.particles.size(); ++index) {
-    const Particle& particle = chain.particles[index];
-    if (particle.inverseMass <= kSpringEpsilon) {
-        continue;
+```powershell title="Build mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_starter --parallel 2
+.\build\Debug\project_25_starter.exe
+```
+
+### Bước 1 — Chọn khối động và giữ độ lệch lúc cầm
+
+Thêm DragConstraint và nearestDynamicParticle vào lab.hpp:
+
+```cpp title="include/lab.hpp — DragConstraint"
+struct DragConstraint {
+    bool active{};
+    std::size_t particleIndex{kNoParticle};
+    Vec2 target{};
+    Vec2 releaseVelocity{};
+    Vec2 grabOffset{};
+};
+```
+
+```cpp title="include/lab.hpp — nearestDynamicParticle"
+inline std::size_t nearestDynamicParticle(const SpringChain& chain, Vec2 point, double maximumDistance) {
+    if (!validChain(chain) || !finiteVec2(point) || !std::isfinite(maximumDistance) || maximumDistance < 0.0) {
+        return kNoParticle;
     }
-    const double distanceSquared = lengthSquared(subtract(particle.position, point));
-```
-
-So squared distance tránh `sqrt` cho từng candidate. Bán kính chọn dùng world unit nên không đổi khi resize.
-
-### Bước 2 — Ghi target và sample release velocity
-
-```cpp title="include/lab.hpp — pointer sample được đổi sang world velocity"
-const Vec2 displacement = subtract(target, drag.target);
-Vec2 sampledVelocity = scale(displacement, 1.0 / sampleSeconds);
-const double sampledSpeed = length(sampledVelocity);
-if (sampledSpeed > maximumReleaseSpeed && sampledSpeed > kSpringEpsilon) {
-    sampledVelocity = scale(sampledVelocity, maximumReleaseSpeed / sampledSpeed);
+    std::size_t nearest = kNoParticle;
+    double nearestDistanceSquared = maximumDistance * maximumDistance;
+    for (std::size_t index = 0; index < chain.particles.size(); ++index) {
+        const Particle& particle = chain.particles[index];
+        if (particle.inverseMass == 0.0) {
+            continue;
+        }
+        const double distanceSquared = lengthSquared(subtract(particle.position, point));
+        if (distanceSquared <= nearestDistanceSquared) {
+            nearestDistanceSquared = distanceSquared;
+            nearest = index;
+        }
+    }
+    return nearest;
 }
 ```
 
-Clamp chỉ áp lên input velocity, không clamp physics velocity trong các step bình thường.
+Hàm tìm khối bỏ qua inverseMass=0. Bán kính chọn sẽ được đổi từ 9 logical pixel sang world unit, không nhân DPR vào world position.
 
-### Bước 3 — Bỏ selected particle khỏi integration
+Thêm beginDrag:
 
-```cpp title="include/lab.hpp — spring vẫn đọc target nhưng integrator không giành quyền"
-if (drag.active && index == drag.particleIndex) {
-    chain.particles[index].position = drag.target;
+```cpp title="include/lab.hpp — beginDrag"
+inline bool beginDrag(SpringChain& chain, DragConstraint& drag, Vec2 point, double maximumDistance) {
+    const std::size_t index = nearestDynamicParticle(chain, point, maximumDistance);
+    if (index == kNoParticle) {
+        return false;
+    }
+    drag.active = true;
+    drag.particleIndex = index;
+    drag.target = chain.particles[index].position;
+    drag.grabOffset = subtract(chain.particles[index].position, point);
+    drag.releaseVelocity = {};
     chain.particles[index].velocity = {};
-    continue;
+    return true;
 }
-integrateParticle(chain.particles[index], deltaSeconds);
 ```
 
-Velocity trong lúc drag là zero để damping không đọc một giá trị cũ không liên quan. Pointer motion tiếp theo vẫn lưu release velocity riêng trong constraint.
+### Bước 2 — Cập nhật target và dùng đúng mẫu cuối
 
-### Bước 4 — Trả particle về dynamics khi thả
+Thêm moveDrag và endDrag:
 
-```cpp title="include/lab.hpp — release velocity được áp đúng một lần"
-chain.particles[drag.particleIndex].velocity = drag.releaseVelocity;
-drag = {};
-return true;
+```cpp title="include/lab.hpp — moveDrag"
+inline bool moveDrag(SpringChain& chain, DragConstraint& drag, Vec2 target, double sampleSeconds, double maximumReleaseSpeed) {
+    if (!drag.active || drag.particleIndex == 0 || drag.particleIndex >= chain.particles.size() || !finiteVec2(target) || !std::isfinite(sampleSeconds) || sampleSeconds <= 0.0 || !std::isfinite(maximumReleaseSpeed) || maximumReleaseSpeed < 0.0) {
+        return false;
+    }
+    Particle& particle = chain.particles[drag.particleIndex];
+    target = add(target, drag.grabOffset);
+    const Vec2 displacement = subtract(target, drag.target);
+    Vec2 sampledVelocity = scale(displacement, 1.0 / sampleSeconds);
+    const double sampledSpeed = length(sampledVelocity);
+    if (!finiteVec2(target) || !finiteVec2(sampledVelocity) || !std::isfinite(sampledSpeed)) {
+        return false;
+    }
+    if (sampledSpeed > maximumReleaseSpeed && sampledSpeed > kSpringEpsilon) {
+        sampledVelocity = scale(sampledVelocity, maximumReleaseSpeed / sampledSpeed);
+    }
+    drag.target = target;
+    drag.releaseVelocity = sampledVelocity;
+    particle.position = target;
+    particle.velocity = {};
+    return true;
+}
 ```
 
-SDL gọi `SDL_CaptureMouse(true)` khi bắt đầu để tiếp tục nhận motion/up event ngoài cửa sổ, và luôn gọi `SDL_CaptureMouse(false)` khi thả hoặc mất focus.
+```cpp title="include/lab.hpp — endDrag"
+inline bool endDrag(SpringChain& chain, DragConstraint& drag) {
+    if (!drag.active || drag.particleIndex == 0 || drag.particleIndex >= chain.particles.size() || !finiteVec2(drag.releaseVelocity)) {
+        return false;
+    }
+    chain.particles[drag.particleIndex].velocity = drag.releaseVelocity;
+    drag = {};
+    return true;
+}
+```
+
+SampleSeconds là thời gian giữa hai input sample, không phải fixed dt. Chỉ release velocity bị giới hạn theo chính sách input; solver không clamp velocity của một khối đang dao động tự do.
+
+### Bước 3 — Giữ khối kinematic trong mỗi substep
+
+Thêm stepDampedChainWithDrag:
+
+```cpp title="include/lab.hpp — stepDampedChainWithDrag"
+inline bool stepDampedChainWithDrag(SpringChain& chain, double deltaSeconds, Vec2 gravity, bool gravityEnabled, const DragConstraint& drag) {
+    if (!validChain(chain) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0 || deltaSeconds > 0.1 || (drag.active && (drag.particleIndex == 0 || drag.particleIndex >= chain.particles.size() || !finiteVec2(drag.target)))) {
+        return false;
+    }
+    SpringChain candidate = chain;
+    if (drag.active) {
+        candidate.particles[drag.particleIndex].position = drag.target;
+        candidate.particles[drag.particleIndex].velocity = {};
+    }
+    if (!accumulateDampedForces(candidate, gravity, gravityEnabled)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < candidate.particles.size(); ++index) {
+        if (drag.active && index == drag.particleIndex) {
+            continue;
+        }
+        if (!integrateParticle(candidate.particles[index], deltaSeconds)) {
+            return false;
+        }
+    }
+    enforceAnchor(candidate);
+    chain = std::move(candidate);
+    return true;
+}
+```
+
+Đặt target trước khi cộng lực để hàng xóm đọc đúng vị trí đang giữ. Sau đó bỏ qua integration của khối được cầm, không ghim lại cả dây về một hình dạng định sẵn.
+
+Trong Scene, thêm member sau:
+
+```cpp title="include/scene.hpp — ràng buộc đang giữ"
+DragConstraint drag{};
+```
+
+Thay rebuildScene để reset xóa ràng buộc cũ:
+
+```cpp title="include/scene.hpp — rebuildScene"
+inline void rebuildScene(Scene& scene) {
+    stopScene(scene);
+    scene.message.clear();
+    scene.drag = {};
+    scene.chain = makeVerticalChain(static_cast<std::size_t>(scene.count), {0.0, 0.0}, scene.restLength, scene.mass, 0.10, scene.stiffness, scene.damping);
+    scene.selected = scene.chain.particles.size() / 2;
+    scene.chain.particles[scene.selected].position.x += 0.35;
+    beginMeasurement(scene);
+}
+```
+
+Thay stepScene và thêm cancelGesture:
+
+```cpp title="include/scene.hpp — stepScene"
+inline bool stepScene(Scene& scene) {
+    if (scene.dtIndex < 0 || scene.dtIndex >= 5 || scene.selected == 0 || scene.selected >= scene.chain.particles.size()) {
+        stopScene(scene);
+        scene.message = "Invalid dt index.";
+        return false;
+    }
+    SpringChain candidate = scene.chain;
+    bool accepted = false;
+    // Đặt c=0 ở candidate khi tắt damping; không đổi hệ số được lưu trong Scene.
+    if (!scene.dampingEnabled) {
+        for (auto& spring : candidate.springs) {
+            spring.damping = 0.0;
+        }
+    }
+    accepted = stepDampedChainWithDrag(candidate, kStepOptions[scene.dtIndex], scene.gravity, scene.gravityEnabled, scene.drag);
+    for (auto& spring : candidate.springs) {
+        spring.damping = scene.damping;
+    }
+    if (!accepted || !withinExperiment(candidate)) {
+        stopScene(scene);
+        scene.message = "Experiment stopped: invalid/degenerate state or envelope exceeded. Reset or reduce dt.";
+        return false;
+    }
+    scene.traceBefore = scene.chain.particles[scene.selected];
+    scene.traceAfter = candidate.particles[scene.selected];
+    scene.hasTrace = true;
+    scene.chain = std::move(candidate);
+    ++scene.steps;
+    ++scene.substeps;
+    scene.elapsed = double(scene.steps) * kStepOptions[scene.dtIndex];
+    refreshMetrics(scene);
+    return true;
+}
+```
+
+```cpp title="include/scene.hpp — cancelGesture"
+inline void cancelGesture(Scene& scene) {
+    if (!scene.drag.active) {
+        return;
+    }
+    if (scene.drag.active && scene.drag.particleIndex < scene.chain.particles.size()) {
+        scene.chain.particles[scene.drag.particleIndex].velocity = {};
+    }
+    scene.drag = {};
+    beginMeasurement(scene);
+}
+```
+
+Khi tắt damping, candidate dùng c=0 rồi khôi phục hệ số được lưu; công thức và đường đi của integration vẫn như nhau. Cancel đặt velocity của khối đang giữ về zero, không áp releaseVelocity đã lấy từ một mẫu cũ.
+
+### Bước 4 — Nối SDL event với ràng buộc
+
+Trong main, sau previous performance counter và trước cancelCapture, thêm:
+
+```cpp title="src/main.cpp — chủ sở hữu và đồng hồ input"
+SDL_MouseID owner = 0;
+std::uint64_t previousDragSample = 0;
+```
+
+Thay lambda cancelCapture có sẵn, rồi thêm updateDrag ngay sau nó. Frequency đã được Starter tạo trước các lambda:
+
+```cpp title="src/main.cpp — cancelCapture"
+const auto cancelCapture = [&]() {
+        lab::cancelGesture(scene);
+        SDL_CaptureMouse(false);
+    };
+```
+
+```cpp title="src/main.cpp — updateDrag"
+const auto updateDrag = [&](float x, float y) {
+        const auto now = SDL_GetPerformanceCounter();
+        const double sampleSeconds = std::max(0.001, double(now - previousDragSample) / frequency);
+        previousDragSample = now;
+        const auto point = lab::boundedPointer({x, y}, lab::makeWorldView(scene));
+        lab::moveDrag(scene.chain, scene.drag, point, sampleSeconds, 6.0);
+        lab::refreshMetrics(scene);
+        dirty = true;
+    };
+```
+
+Trước nhánh mouse-down, thêm phép đổi tọa độ sự kiện sang logical presentation đúng một lần:
+
+```cpp title="src/main.cpp — logical event coordinates"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+                    failed = true;
+                    running = false;
+                    break;
+                }
+            }
+```
+
+Tiếp theo là ba nhánh down/motion/up, đặt trong vòng PollEvent sau xử lý bàn phím:
+
+```cpp title="src/main.cpp — mouse down"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !scene.drag.active && event.button.x >= 40 && event.button.x <= 690 && event.button.y >= 100 && event.button.y <= 650) {
+                const auto view = lab::makeWorldView(scene);
+                auto candidate = scene.chain;
+                lab::DragConstraint drag{};
+                const auto point = lab::screenToWorld({event.button.x, event.button.y}, view);
+                if (lab::beginDrag(candidate, drag, point, 9.0 / view.scale) && SDL_CaptureMouse(true)) {
+                    scene.chain = std::move(candidate);
+                    scene.drag = drag;
+                    scene.selected = drag.particleIndex;
+                    owner = event.button.which;
+                    previousDragSample = SDL_GetPerformanceCounter();
+                    lab::beginMeasurement(scene);
+                    scene.message = "Dragging: external work; release starts a new energy measurement.";
+                }
+            }
+```
+
+```cpp title="src/main.cpp — mouse motion"
+if (event.type == SDL_EVENT_MOUSE_MOTION && scene.drag.active && event.motion.which == owner) {
+                if (!(event.motion.state & SDL_BUTTON_LMASK)) {
+                    cancelCapture();
+                    lab::stopScene(scene);
+                } else {
+                    updateDrag(event.motion.x, event.motion.y);
+                }
+            }
+```
+
+```cpp title="src/main.cpp — mouse up"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && scene.drag.active && event.button.which == owner) {
+                updateDrag(event.button.x, event.button.y);
+                lab::endDrag(scene.chain, scene.drag);
+                SDL_CaptureMouse(false);
+                lab::beginMeasurement(scene);
+                scene.message = "Released: bounded velocity; measurement restarted.";
+            }
+```
+
+Chỉ commit candidate sau khi SDL_CaptureMouse thành công. Motion/up phải có cùng which với owner. Mẫu up cuối được đưa qua updateDrag trước endDrag, dù chưa có motion tương ứng.
+
+Khung main đã gọi cancelCapture khi blur, hidden, minimize hoặc resize và gọi stopScene. Giữ các nhánh ấy; chỉ xóa bool mà không release capture là chưa đủ.
+
+### Bước 5 — Điều khiển bằng phím và nhìn tín hiệu lan qua index
+
+Thêm nhánh mũi tên trong key-down để có cách dịch khối mà không dùng chuột:
+
+```cpp title="src/main.cpp — dịch khối được chọn"
+if (key == SDLK_LEFT || key == SDLK_RIGHT || key == SDLK_UP || key == SDLK_DOWN) {
+                    auto& particle = scene.chain.particles[scene.selected];
+                    if (key == SDLK_LEFT) {
+                        particle.position.x -= 0.08;
+                    }
+                    if (key == SDLK_RIGHT) {
+                        particle.position.x += 0.08;
+                    }
+                    if (key == SDLK_UP) {
+                        particle.position.y += 0.08;
+                    }
+                    if (key == SDLK_DOWN) {
+                        particle.position.y -= 0.08;
+                    }
+                    particle.velocity = {};
+                    lab::beginMeasurement(scene);
+                    scene.message = "Keyboard move is external work; measurement restarted.";
+                }
+```
+
+Thay renderScene để bổ sung graph x theo index, giữ nó tách khỏi phần energy sẽ viết ở bài cuối:
+
+```cpp title="include/view.hpp — renderScene"
+inline void renderScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    const WorldView view = makeWorldView(scene);
+    rectangle(image, 40, 100, 690, 650, kRail, false);
+    if (scene.debug) {
+        for (int row = 1; row <= 10; ++row) {
+            const double y = 100.0 + 50.0 * double(row);
+            drawLine(image, 40, y, 690, y, kGrid);
+        }
+    }
+    drawChain(image, scene, view);
+    const Vec2 anchor = worldToScreen(scene.chain.anchorPosition, view);
+    rectangle(image, int(anchor.x - 20), int(anchor.y - 25), int(anchor.x + 20), int(anchor.y - 10), 0xc678ddffU, true);
+    drawLine(image, anchor.x, anchor.y - 10, anchor.x, anchor.y, 0xc678ddffU);
+    Vec2 previous{};
+    for (std::size_t i = 0; i < scene.chain.particles.size(); ++i) {
+        const double x = 735.0 + 325.0 * double(i) / double(scene.chain.particles.size() - 1);
+        const double y = std::clamp(260.0 - 60.0 * scene.chain.particles[i].position.x, 150.0, 360.0);
+        if (i > 0) {
+            drawLine(image, previous.x, previous.y, x, y, 0x53f0aeffU);
+        }
+        previous = {x, y};
+    }
+    rectangle(image, 735, 150, 1060, 360, kGrid, false);
+}
+```
+
+Thay drawHud để hiện nhãn graph và lưu ý phần hiển thị bị cắt:
+
+```cpp title="include/presentation.hpp — drawHud"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    char line[200]{};
+    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    if (!SDL_RenderDebugText(renderer, 30, 20, line)) {
+        return false;
+    }
+    if (!SDL_RenderDebugText(renderer, 30, 42, "Space pause | N step (lesson 4+) | R reset | F clean/debug | Esc quit")) {
+        return false;
+    }
+    SDL_RenderDebugText(renderer, 30, 64, "G gravity | D damping (lesson 5+) | Drag or arrows move selected mass (lesson 6+)");
+    if (scene.debug && scene.hasTrace) {
+        std::snprintf(line, sizeof(line), "node %zu | p: (%.3f, %.3f) -> (%.3f, %.3f) m | v: (%.3f, %.3f) -> (%.3f, %.3f) m/s", scene.selected, scene.traceBefore.position.x, scene.traceBefore.position.y, scene.traceAfter.position.x, scene.traceAfter.position.y, scene.traceBefore.velocity.x, scene.traceBefore.velocity.y, scene.traceAfter.velocity.x, scene.traceAfter.velocity.y);
+        SDL_RenderDebugText(renderer, 30, 700, line);
+    }
+    SDL_RenderDebugText(renderer, 735, 128, "DISPLACEMENT x (m), by node index");
+    SDL_RenderDebugText(renderer, 735, 384, "Plot clips large x; physics unchanged.");
+    if (!scene.message.empty()) {
+        SDL_RenderDebugText(renderer, 30, 790, scene.message.c_str());
+    }
+    return true;
+}
+```
+
+Graph độ lệch có khoảng trục cố định; phần ngoài vùng được cắt ở renderer, không có sửa position trong physics.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy drag constraint"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_25_checkpoint_6
-./build/Debug/project_25_checkpoint_6.exe
-```
+Build Starter. Chạy bằng Space, cầm một khối lệch tâm và kéo ngang: tâm khối không được snap tới điểm click. Hàng xóm phải phản ứng từ vị trí đang giữ. Thả để thấy năng lượng spring tiếp tục chuyển thành chuyển động.
 
-Chương trình bắt đầu paused. Kéo một mass để tạo biến dạng, nhả chuột rồi nhấn Space; hoặc resume trước và kéo khi chuỗi đang chạy. Hai cách phải dùng chung physics path.
+Nhấn R hoặc đổi cấu hình giữa lúc cầm, sau đó thả một event cũ: thao tác cũ phải bị bỏ qua. Trên Canvas có dropdown chọn node và các nút dùng bàn phím; mũi tên dịch khối đã chọn 0,08 m, Tab rời Canvas.
 
 ## Thử làm sai để hiểu đúng
 
-1. Cho integrator cập nhật selected particle trong lúc drag. Mass rung quanh pointer và force truyền đi phụ thuộc FPS; hoàn tác nhánh kinematic.
-2. Cho phép chọn particle 0. Anchor bị tách khỏi vị trí neo; hoàn tác kiểm inverse mass.
-3. Không clamp release velocity. Di chuyển chuột rất nhanh hoặc tạo sample time cực nhỏ, rồi quan sát energy tăng đột biến; hoàn tác giới hạn 6 m/s.
+Chỉ đổi một chi tiết mỗi lần. Hãy dự đoán, chạy lại, ghi điều quan sát được rồi hoàn tác trước thí nghiệm tiếp theo.
+
+1. Gán drag.target=point ngay khi down. Click lệch tâm sẽ làm khối nhảy dù con trỏ chưa di chuyển.
+
+2. Nhận mọi pointer move/up mà không kiểm owner. Một pointer lạ có thể kết thúc thao tác đang giữ.
+
+3. Chỉ dùng mẫu motion cuối, không đọc vị trí up. Điểm thả và vận tốc thả sẽ sai nếu mẫu cuối chưa đi qua motion.
+
+4. Đánh giá drift trên một history nối trước/sau kéo. Lúc ấy hệ đã nhận công từ bên ngoài.
 
 ## Tự kiểm tra kết quả
 
-- Hit-test chọn dynamic particle gần nhất trong bán kính 0.3 m.
-- Anchor không thể được chọn.
-- Pointer capture được bật/tắt cân bằng ở mouse up và focus lost.
-- Trong lúc kéo, selected position đúng target và velocity physics bằng zero.
-- Các particle khác vẫn tích phân và phản ứng với spring nối tới selected mass.
-- Release velocity không vượt 6 m/s.
-- Sau release, constraint inactive và particle trở lại integration bình thường.
-- Resize giữa lúc paused không đổi world target.
+- Không kéo được neo; cầm lệch giữ đúng grabOffset.
+- Candidate không được áp nếu capture thất bại.
+- Chỉ owner được move/up; mất nút giữ hoặc cancel không để capture kẹt.
+- Mẫu up cuối được dùng; up tới muộn sau reset không tác động cảnh mới.
+- Khối đang giữ không bị tích phân nhưng spring vẫn tác động hàng xóm.
+- Kết thúc hoặc hủy thao tác bắt lại mốc đo; velocity thả không vượt 6 m/s.
 
 ## Bài tập mở rộng
 
-Thêm chế độ “pluck”: trong lúc kéo luôn đặt release velocity về zero. So wave tạo bởi displacement-only với wave có thêm vận tốc lúc thả.
+Tạo một xung ở node giữa. Sau bước đầu, node kề đã nhận lực nhưng node cách hai cạnh chưa đổi vận tốc ngang; sau bước kế tiếp tín hiệu mới tới node xa hơn. Viết test này để phát hiện lỗi vừa cộng lực một cạnh vừa tích phân ngay.
 
-Bài tiếp theo dùng chính thao tác kéo để stress integrator: tăng stiffness, mass hoặc dt và đo một chỉ số không thứ nguyên thay vì kết luận bằng cảm giác “có vẻ rung mạnh”.
+[Sang bài 7 — Thí nghiệm độ cứng, khối lượng và bước thời gian](/projects/spring-chain/07-thi-nghiem-stiffness-mass-va-delta-time)

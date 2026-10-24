@@ -4,30 +4,35 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Starter đã mở window SDL3, tạo renderer, streaming texture và vẽ một chuỗi gồm các chấm cùng đoạn thẳng. Như vậy ta có một điểm xuất phát nhìn thấy được trước khi học vật lý. Tuy nhiên, các chấm này chỉ là hình vẽ: chưa có `Particle`, chưa có `Spring`, và chương trình không biết chấm nào nối với chấm nào.
+Hãy bắt đầu bằng một chuỗi nhìn thấy được và có dữ liệu rõ ràng. Ta cần biết mỗi khối nằm ở đâu, khối nào nối với khối nào và đầu nào được giữ cố định. Nếu nhảy thẳng vào lực Hooke, một lỗi index hoặc đổi tọa độ cũng rất dễ bị nhầm thành lỗi vật lý.
 
-Checkpoint 1 thay hình placeholder bằng dữ liệu thật. Một `Particle` giữ position, velocity, force và inverse mass. Một `Spring` không sao chép position; nó chỉ giữ index của hai endpoint cùng rest length, stiffness và damping. Với 18 particles nối thành một đường duy nhất, topology phải có đúng 17 springs.
+Bản cuối có chuỗi 32 khối, mở được cấu hình 20, 64 và 100 khối. Bài đầu dựng đủ 32 khối nhưng chưa cho chuyển động. Cặp hai khối ở bài 2 chỉ là thí nghiệm để hiểu lực, không phải sản phẩm cuối.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta có thể xem chuỗi như một graph rất đơn giản:
+Starter đã có window, renderer, texture, framebuffer 1100×820 và event loop. Chạy Starter trước khi sửa: bạn sẽ thấy khung nhìn và giá treo, chưa có chuỗi. Cách trình bày vẫn như các project trước: **Scene → renderScene → framebuffer → SDL_UpdateTexture → present**.
 
-```text title="Topology — mỗi spring là một cạnh giữa hai particle"
-particle:  0 —— 1 —— 2 —— 3 —— ... —— 17
-spring:       0    1    2          16
-```
+Mỗi Particle giữ vị trí, vận tốc, lực và inverseMass. Mỗi Spring giữ hai index cùng restLength, stiffness và damping; nó không sao chép vị trí của khối. Với N khối, nối 0–1, 1–2,…, N−2–N−1 tạo đúng N−1 lò xo.
 
-Spring số `i` nối particle `i` với `i+1`. Particle 0 là anchor. Thay vì rải các nhánh `if (index==0)` khắp solver, ta đặt `inverseMass=0` cho nó; dynamic particles có `inverseMass=1/mass`.
+Ta dùng mét và giây, Y dương hướng lên. Điểm neo ở (0,0), khối sau thấp hơn khối trước 0,22 m. Vì khoảng cách ban đầu bằng restLength, mọi lò xo chưa biến dạng. Đây là trạng thái dễ kiểm, **chưa phải cân bằng khi bật trọng lực**.
 
 <InteractiveLab demo="spring-chain" mode="spring-scene" />
 
-Đổi giữa 8, 18 và 24 particles. Số springs luôn ít hơn số particles đúng một đơn vị. Chọn từng mass để đọc index, position và inverse mass; anchor phải là phần tử duy nhất có inverse mass bằng zero.
-
 ## Viết code từng bước
 
-### Bước 1 — Tách state của particle khỏi tham số của spring
+Viết phần của bạn trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm bản trùng tên. **Checkpoint 1 là bản tham khảo ở cuối bài**; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — hai kiểu dữ liệu có trách nhiệm khác nhau"
+```powershell title="Build mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_starter --parallel 2
+.\build\Debug\project_25_starter.exe
+```
+
+### Bước 1 — Đọc dữ liệu và phần vẽ được cung cấp
+
+Trong lab.hpp của Starter đã có các kiểu sau. Đọc chúng, không khai báo thêm bản trùng:
+
+```cpp title="include/lab.hpp — Particle"
 struct Particle {
     Vec2 position{};
     Vec2 velocity{};
@@ -35,7 +40,9 @@ struct Particle {
     double inverseMass{1.0};
     double radius{0.1};
 };
+```
 
+```cpp title="include/lab.hpp — Spring"
 struct Spring {
     std::size_t first{};
     std::size_t second{};
@@ -45,76 +52,119 @@ struct Spring {
 };
 ```
 
-`radius` chỉ phục vụ hit-test và rendering. Spring force về sau không đọc pixel radius; nó chỉ đọc position của hai endpoint qua index.
+InverseMass là 1/m; riêng zero biểu thị khối không được tích phân. Bán kính ở đây chỉ phục vụ hình vẽ và chọn khối, không có collision giữa các mass.
 
-### Bước 2 — Đặt các particle cách nhau đúng rest length
+Phần vẽ trong view.hpp đã đổi world point thành pixel bằng hàm này:
 
-```cpp title="include/lab.hpp — initial state thẳng đứng và kiểm chứng được"
-for (std::size_t index = 0; index < particleCount; ++index) {
-    Particle particle{};
-    particle.position = {anchorPosition.x, anchorPosition.y - double(index) * restLength};
-    if (index == 0) {
-        particle.inverseMass = 0.0;
-    } else {
-        particle.inverseMass = 1.0 / mass;
+```cpp title="include/view.hpp — worldToScreen"
+inline Vec2 worldToScreen(Vec2 point, const WorldView& view) {
+    return {view.originX + view.scale * point.x, view.originY - view.scale * point.y};
+}
+```
+
+Không ghi pixel ngược vào Particle.position. Scale hiển thị có thể đổi để chuỗi dài vừa khung, còn chiều dài vật lý vẫn là mét.
+
+### Bước 2 — Tạo khối và liên kết trong cùng một vòng lặp
+
+Thêm makeVerticalChain vào lab.hpp, sau các hàm kiểm dữ liệu có sẵn:
+
+```cpp title="include/lab.hpp — makeVerticalChain"
+inline SpringChain makeVerticalChain(std::size_t particleCount, Vec2 anchorPosition, double restLength, double mass, double radius, double stiffness, double damping) {
+    SpringChain chain{};
+    chain.anchorPosition = anchorPosition;
+    if (particleCount < 2 || particleCount > 100 || !finiteVec2(anchorPosition) || !std::isfinite(restLength) || restLength <= 0.0 || !std::isfinite(mass) || mass <= 0.0 || !std::isfinite(1.0 / mass) || !std::isfinite(radius) || radius <= 0.0 || !std::isfinite(stiffness) || stiffness < 0.0 || !std::isfinite(damping) || damping < 0.0) {
+        return chain;
     }
-```
-
-World Y hướng lên, vì vậy trừ `index*restLength` làm chuỗi đi xuống. Khoảng cách giữa hai phần tử kề nhau ban đầu đúng bằng rest length; mọi spring bắt đầu với stretch bằng zero.
-
-### Bước 3 — Tạo đúng N−1 spring bằng index liên tiếp
-
-```cpp title="include/lab.hpp — spring không giữ bản sao position"
-chain.particles.push_back(particle);
-if (index > 0) {
-    chain.springs.push_back({index - 1, index, restLength, stiffness, damping});
+    chain.particles.reserve(particleCount);
+    chain.springs.reserve(particleCount - 1);
+    for (std::size_t index = 0; index < particleCount; ++index) {
+        Particle particle{};
+        particle.position = {anchorPosition.x, anchorPosition.y - double(index) * restLength};
+        if (index == 0) {
+            particle.inverseMass = 0.0;
+        } else {
+            particle.inverseMass = 1.0 / mass;
+        }
+        particle.radius = radius;
+        chain.particles.push_back(particle);
+        if (index > 0) {
+            chain.springs.push_back({index - 1, index, restLength, stiffness, damping});
+        }
+    }
+    if (!validChain(chain)) {
+        return {};
+    }
+    return chain;
 }
 ```
 
-Spring đầu chỉ được tạo sau particle thứ hai. Cách này tránh endpoint trỏ tới phần tử chưa tồn tại và tự cho `N−1` cạnh.
+Giới hạn 100 được kiểm trước reserve. Index 0 có inverseMass=0; khối động có khối lượng m. Khi tạo khối i>0, nối i−1 với i. Vị trí của từng khối chỉ được lưu ở một nơi.
 
-### Bước 4 — Renderer đọc topology thật
+### Bước 3 — Đưa dữ liệu thật vào Scene
 
-```cpp title="src/main.cpp — vẽ spring trước particle"
-for (const lab::Spring& spring : chain.springs) {
-    const lab::Vec2 first = worldToScreen(chain.particles[spring.first].position, view);
-    const lab::Vec2 second = worldToScreen(chain.particles[spring.second].position, view);
-    drawLine(pixels, width, height, int(std::lround(first.x)), int(std::lround(first.y)), int(std::lround(second.x)), int(std::lround(second.y)), springColor(chain, spring));
+Thay rebuildScene trong scene.hpp bằng phiên bản sau:
+
+```cpp title="include/scene.hpp — rebuildScene"
+inline void rebuildScene(Scene& scene) {
+    stopScene(scene);
+    scene.message.clear();
+    scene.chain = makeVerticalChain(static_cast<std::size_t>(scene.count), {0.0, 0.0}, scene.restLength, scene.mass, 0.10, scene.stiffness, scene.damping);
+    beginMeasurement(scene);
 }
 ```
 
-Sau khi vẽ, `SDL_UpdateTexture` đưa CPU framebuffer lên streaming texture như các project trước. Physics state vẫn nằm trong world space; resize chỉ tạo lại texture và `WorldView`.
+Scene đã có count=32, mass=0,04 kg, restLength=0,22 m và các tham số cấu hình. beginMeasurement ở khung này chỉ đặt lại đồng hồ; phần đo năng lượng sẽ được viết sau.
+
+### Bước 4 — Theo dữ liệu tới hình vẽ
+
+Hàm này đã có trong Starter. Renderer chỉ duyệt các liên kết và khối vừa tạo:
+
+```cpp title="include/view.hpp — drawChain"
+inline void drawChain(Framebuffer& image, const Scene& scene, const WorldView& view) {
+    for (const auto& spring : scene.chain.springs) {
+        const auto& a = scene.chain.particles[spring.first];
+        const auto& b = scene.chain.particles[spring.second];
+        std::uint32_t color = 0x66738cffU;
+        drawCoil(image, worldToScreen(a.position, view), worldToScreen(b.position, view), color);
+    }
+    for (std::size_t i = 0; i < scene.chain.particles.size(); ++i) {
+        const auto& particle = scene.chain.particles[i];
+        const Vec2 center = worldToScreen(particle.position, view);
+        if (i == scene.selected) {
+            drawNode(image, center, std::max(5.0, particle.radius * view.scale + 3.0), 0xffffffffU);
+        }
+        drawNode(image, center, particle.radius * view.scale, i == 0 ? 0xc678ddffU : 0x53f0aeffU);
+    }
+}
+```
+
+Lò xo được vẽ thành đường gấp khúc bằng drawCoil; khối được tô bằng drawNode. Không có một chuỗi “để vẽ” khác với chuỗi “để mô phỏng”.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — so starter với checkpoint 1"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_25_starter
-cmake --build build --config Debug --target project_25_checkpoint_1
-./build/Debug/project_25_checkpoint_1.exe
-```
+Build project_25_starter rồi chạy lại. Bạn phải thấy 32 khối, 31 đoạn nối và khối trên cùng được đánh dấu là neo. R dựng lại cùng dữ liệu; F đổi debug. N chưa làm gì ở bài này vì phần tích phân chưa được viết.
 
-Hai chương trình trông gần giống nhau. Điểm khác quan trọng nằm trong dữ liệu: starter vẽ một hình cố định, còn checkpoint 1 gọi `makeVerticalChain` và renderer đi theo các index trong `SpringChain`.
+Trong main, khung chạy đã gọi renderScene, upload framebuffer vào texture rồi present. Không cần tạo window/renderer thứ hai hoặc thêm một vòng lặp SDL khác.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tạo spring kể cả khi `index==0`. Endpoint `index-1` bị tràn thành một `size_t` rất lớn; hoàn tác điều kiện `index>0`.
-2. Lưu position vào cả `Particle` lẫn `Spring`. Di chuyển particle nhưng quên cập nhật spring sẽ làm hình vẽ tách khỏi physics; hoàn tác bản sao.
-3. Đặt anchor bằng một boolean riêng nhưng vẫn để inverse mass bằng 4. Solver sau này vẫn tích phân nó; hoàn tác về một nguồn sự thật là `inverseMass=0`.
+Chỉ đổi một chi tiết mỗi lần. Hãy dự đoán, chạy lại, ghi điều quan sát được rồi hoàn tác trước thí nghiệm tiếp theo.
+
+1. Nối mọi spring trực tiếp từ khối 0 tới khối i, thay vì nối hai index liền kề i−1 và i. Hình trở thành nhiều nhánh cùng nối về neo, không còn là chain.
+
+2. Đặt khoảng cách khởi tạo khác restLength rồi vẫn kết luận lò xo chưa biến dạng. Tính lại d−L₀ trước khi bật physics.
+
+3. Đổi inverseMass của neo thành một số rất nhỏ. Nó vẫn là vật động rất nặng, không phải ràng buộc cố định.
 
 ## Tự kiểm tra kết quả
 
-- Starter mở window và vẽ được chuỗi placeholder trước khi có physics type.
-- Checkpoint 1 tạo đúng 18 particles và 17 springs.
-- Spring `i` nối particle `i` với `i+1`.
-- Mọi initial distance bằng 0.42 m.
-- Particle 0 ở `(0,3.6)` và có inverse mass bằng zero.
-- Các particle còn lại có mass 0.25 kg, tức inverse mass bằng 4.
-- Resize không sửa world position.
-- `SDL_UpdateTexture` vẫn nhận framebuffer có pitch đúng.
+- Default tạo đúng 32 Particle và 31 Spring; link i nối i với i+1.
+- Đầu trên có inverseMass=0; các khối còn lại có inverseMass=25 kg⁻¹.
+- Khoảng cách ban đầu bằng 0,22 m; reset tái tạo cùng dữ liệu.
+- Đổi scale hiển thị không sửa vị trí hoặc chiều dài vật lý.
 
 ## Bài tập mở rộng
 
-Thêm một hàm tạo chuỗi nằm ngang nhưng giữ nguyên `SpringChain`. Renderer và các bài force phía sau không được cần biết scene được dựng theo hướng nào.
+In ra hai index của từng spring và kiểm bằng mắt chuỗi 0–1–2–…–31. Sau đó thử truyền 101 vào hàm tạo trong một test nhỏ: hàm phải từ chối, không cấp phát một chuỗi lớn.
 
-Bài tiếp theo chỉ lấy một spring ra khỏi chuỗi để trả lời câu hỏi quan trọng nhất: kéo dài thêm một đoạn thì nó tác dụng lực bao nhiêu và theo hướng nào?
+[Sang bài 2 — Tính lực Hooke trên một lò xo](/projects/spring-chain/02-tinh-luc-hooke-tren-mot-lo-xo)

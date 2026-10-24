@@ -4,103 +4,232 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ta đã biết hai endpoint của mỗi spring nhưng chưa có lực. Một lỗi thường gặp là viết ngay `force=-k*position`: công thức đó kéo particle về gốc tọa độ, không kéo hai endpoint về đúng khoảng cách nghỉ. Spring phải quan tâm đến **khoảng cách tương đối**, không quan tâm nó đang nằm ở đâu trong world.
-
-Trước khi duyệt cả chuỗi, checkpoint 2 tạo một `SpringSample` cho đúng một spring. Sample ghi lại distance, unit direction, stretch và force trên endpoint thứ nhất để ta nhìn được từng đại lượng trung gian.
+Ta đã có topology nhưng chưa có quy luật khiến hai đầu kéo nhau. Trước khi tính lực cho cả dây, hãy chỉ giữ hai khối để trả lời ba câu hỏi: lò xo đang dài hay ngắn hơn tự nhiên, lực trên A hướng đi đâu, và lực trên B có đối nhau không?
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với $p_A,p_B$ là position và $L_0$ là rest length:
+Gọi A và B là hai đầu. Chọn hướng n **từ A sang B**:
 
 $$
-d=p_B-p_A,\qquad L=\lVert d\rVert,\qquad n=\frac{d}{L}
+\delta=p_B-p_A,\quad d=|\delta|,\quad n=\delta/d,\quad x=d-L_0.
 $$
 
-$$
-x=L-L_0,\qquad F_A=kx\,n,\qquad F_B=-F_A
-$$
+Với quy ước này, lực trên A là $F_A=kxn$, còn $F_B=-F_A$. Khi x dương, A bị kéo về B; khi x âm, A bị đẩy ra xa B. Dấu trừ trong cách viết Hooke một chiều phụ thuộc cách chọn độ dời, không nên chép nó vào mọi vector formula.
 
-Nếu $x>0$, spring bị kéo giãn và $F_A$ hướng từ A sang B. Nếu $x<0$, vector đổi dấu nên A bị đẩy xa B. Dấu đã nằm trong stretch; không cần thêm một nhánh “nén”.
+Ví dụ L₀=1 m, d=1,2 m, k=100 N/m cho độ lớn 20 N. **Canvas của bài đang dùng k=120 N/m**, nên cùng khoảng cách cho 24 N. Góc thay đổi vector lực nhưng không đổi độ lớn khi d giữ nguyên.
 
 <InteractiveLab demo="spring-chain" mode="spring-hooke" />
 
-Kéo slider `distance` qua rest length. Quan sát force đổi dấu đúng tại $L=L_0$. Sau đó xoay endpoint: force phải xoay theo direction nhưng magnitude không đổi khi distance giữ nguyên.
-
 ## Viết code từng bước
 
-### Bước 1 — Đo vector và chiều dài hiện tại
+Viết phần của bạn trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm bản trùng tên. **Checkpoint 2 là bản tham khảo ở cuối bài**; build checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — delta luôn đi từ A sang B"
-const Particle& first = chain.particles[spring.first];
-const Particle& second = chain.particles[spring.second];
-const Vec2 delta = subtract(second.position, first.position);
-const double distance = length(delta);
-if (!std::isfinite(distance) || distance <= kSpringEpsilon) {
-    return {};
+```powershell title="Build mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_starter --parallel 2
+.\build\Debug\project_25_starter.exe
+```
+
+### Bước 1 — Tách kết quả đo khỏi thao tác cộng lực
+
+Thêm SpringSample sau hàm tạo chuỗi. Hàm ở bài này chỉ đọc state và trả kết quả; nó chưa đổi force, velocity hoặc position:
+
+```cpp title="include/lab.hpp — SpringSample"
+struct SpringSample {
+    bool valid{};
+    Vec2 direction{1.0, 0.0};
+    double distance{};
+    double stretch{};
+    double relativeSpeed{};
+    Vec2 forceOnFirst{};
+};
+```
+
+### Bước 2 — Viết lực theo quy ước đã chọn
+
+Thêm hàm sau vào lab.hpp:
+
+```cpp title="include/lab.hpp — sampleElasticSpring"
+inline SpringSample sampleElasticSpring(const SpringChain& chain, const Spring& spring) {
+    if (!validSpring(spring, chain.particles.size())) {
+        return {};
+    }
+    const Particle& first = chain.particles[spring.first];
+    const Particle& second = chain.particles[spring.second];
+    if (!finiteParticle(first) || !finiteParticle(second)) {
+        return {};
+    }
+    const Vec2 delta = subtract(second.position, first.position);
+    const double distance = length(delta);
+    if (!std::isfinite(distance) || distance <= kSpringEpsilon) {
+        return {};
+    }
+    const Vec2 direction = scale(delta, 1.0 / distance);
+    const double stretch = distance - spring.restLength;
+    const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
+    const double relativeSpeed = dot(relativeVelocity, direction);
+    const double forceMagnitude = spring.stiffness * stretch;
+    const Vec2 force = scale(direction, forceMagnitude);
+    if (!finiteVec2(force) || !std::isfinite(relativeSpeed)) {
+        return {};
+    }
+    return {true, direction, distance, stretch, relativeSpeed, force};
 }
 ```
 
-Guard hai tâm trùng nhau ngăn phép chia cho zero. Trả sample không hợp lệ rõ ràng tốt hơn giấu một normal tùy ý vào force liên tục.
+Distance và restLength là hai đại lượng khác nhau. RelativeSpeed đã được đo để dùng ở bài damping, nhưng chưa được cộng vào lực.
 
-### Bước 2 — Chuẩn hóa direction đúng một lần
+Nếu hai tâm trùng nhau, direction không xác định. Sample báo không hợp lệ; ở bước mô phỏng sau, caller sẽ từ chối cả bước thay vì bí mật bỏ liên kết ấy.
 
-```cpp title="include/lab.hpp — direction không mang độ dài"
-const Vec2 direction = scale(delta, 1.0 / distance);
-const double stretch = distance - spring.restLength;
-```
+### Bước 3 — Đổi Scene thành cặp thử nghiệm
 
-Không lấy `abs(stretch)`: dấu âm chính là thông tin spring đang nén và cần đẩy hai đầu ra.
+Thay rebuildScene bằng phiên bản này. Nhánh cặp chỉ phục vụ bài 2:
 
-### Bước 3 — Đổi stretch thành force vector
-
-```cpp title="include/lab.hpp — Hooke scalar rồi mới nhân direction"
-const double forceMagnitude = spring.stiffness * stretch;
-return {true, direction, distance, stretch, relativeSpeed, scale(direction, forceMagnitude)};
-```
-
-Trong quy ước này `forceOnFirst` là lực tác dụng lên A. Bài sau sẽ cộng vector này vào A và trừ khỏi B.
-
-### Bước 4 — Tô màu dựa trên stretch có dấu
-
-```cpp title="src/main.cpp — vàng là kéo giãn, xanh là nén"
-if (sample.valid && sample.stretch > 0.015) {
-    return kStretched;
-}
-if (sample.valid && sample.stretch < -0.015) {
-    return kCompressed;
+```cpp title="include/scene.hpp — rebuildScene"
+inline void rebuildScene(Scene& scene) {
+    stopScene(scene);
+    scene.message.clear();
+    scene.chain = makeVerticalChain(static_cast<std::size_t>(scene.count), {0.0, 0.0}, scene.restLength, scene.mass, 0.10, scene.stiffness, scene.damping);
+    scene.chain = makeVerticalChain(2, {0.0, 0.0}, 1.0, scene.mass, 0.10, scene.stiffness, scene.damping);
+    scene.selected = 1;
+    scene.chain.particles[1].position = {scene.pairDistance * std::cos(scene.pairAngle), scene.pairDistance * std::sin(scene.pairAngle)};
+    beginMeasurement(scene);
 }
 ```
 
-Ngưỡng 0.015 chỉ giảm nhấp nháy màu do sai số hiển thị; nó không thay force calculation.
+### Bước 4 — Nối input với khoảng cách và góc
+
+Trong nhánh key-down của main, thêm xử lý khoảng cách sau:
+
+```cpp title="src/main.cpp — đổi distance"
+if (key == SDLK_LEFT || key == SDLK_RIGHT) {
+                    scene.pairDistance = std::clamp(scene.pairDistance + (key == SDLK_LEFT ? -0.05 : 0.05), 0.1, 1.8);
+                    lab::rebuildScene(scene);
+                }
+```
+
+Thêm nhánh góc ngay sau nó:
+
+```cpp title="src/main.cpp — đổi góc"
+if (key == SDLK_UP || key == SDLK_DOWN) {
+                    scene.pairAngle += key == SDLK_UP ? 0.1 : -0.1;
+                    lab::rebuildScene(scene);
+                }
+```
+
+Mỗi lần đổi dựng lại fixture, không tích phân. Hai mũi tên lực được renderer lấy từ cùng sample; độ dài hiển thị được giới hạn cho dễ nhìn, còn số N trong readout là giá trị thật.
+
+### Bước 5 — Cho native app hiện đúng fixture và lực
+
+Thay makeWorldView trong view.hpp để cặp hai khối được phóng lớn:
+
+```cpp title="include/view.hpp — góc nhìn cho cặp thử nghiệm"
+inline WorldView makeWorldView(const Scene& scene) {
+    static_cast<void>(scene);
+    return {200.0, 240.0, 350.0};
+}
+```
+
+Cập nhật drawChain và renderScene theo phiên bản bài này để màu thể hiện stretch và hai mũi tên đọc cùng một sample:
+
+```cpp title="include/view.hpp — drawChain"
+inline void drawChain(Framebuffer& image, const Scene& scene, const WorldView& view) {
+    for (const auto& spring : scene.chain.springs) {
+        const auto& a = scene.chain.particles[spring.first];
+        const auto& b = scene.chain.particles[spring.second];
+        std::uint32_t color = 0x66738cffU;
+        const double stretch = length(subtract(b.position, a.position)) - spring.restLength;
+        if (stretch > 0.002) {
+            color = 0xe5c07bffU;
+        } else if (stretch < -0.002) {
+            color = 0x56b6c2ffU;
+        }
+        drawCoil(image, worldToScreen(a.position, view), worldToScreen(b.position, view), color);
+    }
+    for (std::size_t i = 0; i < scene.chain.particles.size(); ++i) {
+        const auto& particle = scene.chain.particles[i];
+        const Vec2 center = worldToScreen(particle.position, view);
+        if (i == scene.selected) {
+            drawNode(image, center, std::max(5.0, particle.radius * view.scale + 3.0), 0xffffffffU);
+        }
+        drawNode(image, center, particle.radius * view.scale, i == 0 ? 0xc678ddffU : 0x53f0aeffU);
+    }
+}
+```
+
+```cpp title="include/view.hpp — renderScene"
+inline void renderScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    const WorldView view = makeWorldView(scene);
+    rectangle(image, 40, 100, 690, 650, kRail, false);
+    if (scene.debug) {
+        for (int row = 1; row <= 10; ++row) {
+            const double y = 100.0 + 50.0 * double(row);
+            drawLine(image, 40, y, 690, y, kGrid);
+        }
+    }
+    drawChain(image, scene, view);
+    const Vec2 anchor = worldToScreen(scene.chain.anchorPosition, view);
+    rectangle(image, int(anchor.x - 20), int(anchor.y - 25), int(anchor.x + 20), int(anchor.y - 10), 0xc678ddffU, true);
+    drawLine(image, anchor.x, anchor.y - 10, anchor.x, anchor.y, 0xc678ddffU);
+    const auto pair = sampleElasticSpring(scene.chain, scene.chain.springs.front());
+    const auto a = scene.chain.particles[0].position;
+    const auto b = scene.chain.particles[1].position;
+    drawForceArrow(image, worldToScreen(a, view), worldToScreen(add(a, scale(pair.forceOnFirst, 0.08)), view));
+    drawForceArrow(image, worldToScreen(b, view), worldToScreen(subtract(b, scale(pair.forceOnFirst, 0.08)), view));
+}
+```
+
+Trong presentation.hpp, thay drawHud để hiện khoảng cách, độ giãn và số N. Các helper vẽ node/coil/arrow đã nằm trong Starter; không cần cài lại SDL resources:
+
+```cpp title="include/presentation.hpp — drawHud"
+inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
+    SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
+    char line[200]{};
+    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    if (!SDL_RenderDebugText(renderer, 30, 20, line)) {
+        return false;
+    }
+    if (!SDL_RenderDebugText(renderer, 30, 42, "Space pause | N step (lesson 4+) | R reset | F clean/debug | Esc quit")) {
+        return false;
+    }
+    SDL_RenderDebugText(renderer, 30, 64, "Left/Right: distance | Up/Down: angle. F = k * (distance - restLength) * direction.");
+    const auto sample = sampleElasticSpring(scene.chain, scene.chain.springs.front());
+    std::snprintf(line, sizeof(line), "d=%.3f m | L0=1 m | stretch=%.3f m | F_A=(%.3f, %.3f) N", sample.distance, sample.stretch, sample.forceOnFirst.x, sample.forceOnFirst.y);
+    SDL_RenderDebugText(renderer, 30, 700, line);
+    if (!scene.message.empty()) {
+        SDL_RenderDebugText(renderer, 30, 790, scene.message.c_str());
+    }
+    return true;
+}
+```
+
 
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy checkpoint lực Hooke"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_25_checkpoint_2
-./build/Debug/project_25_checkpoint_2.exe
-```
+Build Starter. Trái/phải đổi d; lên/xuống đổi góc. Với d=1,2 m và góc=0, F_A phải là (24,0) N. Giảm d xuống 0,8 m để thấy lực trên A đổi thành (−24,0) N. Xoay tới gần π/2, thành phần lực phải chuyển từ X sang Y.
 
-Checkpoint cố ý kéo particle giữa sang bên nhưng chưa tích phân. Title bar báo distance, rest length, stretch và force của spring được chọn; mũi tên đỏ biểu diễn `forceOnFirst`.
+Hai khối không chạy vì ta vẫn chưa tích phân. Đó là chủ đích: trước hết xác nhận hàm lực không thay đổi state.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `stretch=restLength-distance`. Lực kéo giãn sẽ đẩy hai đầu xa hơn; hoàn tác thứ tự phép trừ.
-2. Dùng `delta` trực tiếp thay direction. Force bị nhân thêm distance và không còn đúng đơn vị; hoàn tác phép chuẩn hóa.
-3. Dùng `abs(stretch)`. Spring nén tiếp tục kéo hai đầu vào nhau; hoàn tác để giữ dấu.
+Chỉ đổi một chi tiết mỗi lần. Hãy dự đoán, chạy lại, ghi điều quan sát được rồi hoàn tác trước thí nghiệm tiếp theo.
+
+1. Đổi stretch thành L₀−d nhưng giữ nguyên công thức F_A. Lò xo giãn sẽ đẩy hai đầu ra xa nhau.
+
+2. Dùng delta thay direction mà vẫn nhân k·stretch. Độ lớn lực bị nhân thêm distance và sai đơn vị.
+
+3. Cập nhật restLength=d sau mỗi lần kéo. Lò xo mất biến dạng nên không còn lực phục hồi.
 
 ## Tự kiểm tra kết quả
 
-- Distance bằng rest length cho force zero.
-- Kéo giãn 0.2 m với `k=100 N/m` cho magnitude 20 N.
-- Nén 0.2 m cho magnitude 20 N nhưng direction force đảo lại.
-- Xoay spring không đổi magnitude ở cùng stretch.
-- Dịch cả hai endpoint cùng một vector không đổi sample.
-- Hai endpoint trùng nhau trả sample không hợp lệ, không có NaN.
-- `forceOnFirst` nằm dọc spring direction.
+- Kéo giãn và nén cùng 0,2 m tạo lực đối dấu, cùng độ lớn.
+- F_B=−F_A; xoay cặp không làm đổi độ lớn lực.
+- Sample không sửa bất kỳ khối nào.
+- Hai đầu trùng nhau được báo không hợp lệ, không sinh NaN.
 
 ## Bài tập mở rộng
 
-Vẽ riêng hai vector $F_A$ và $F_B$ ở hai đầu spring, rồi kiểm bằng số rằng tổng của chúng bằng zero.
+Tính tay F_A khi d=1,2 m, k=120 N/m và góc=π/4. Hai thành phần đều phải gần 16,97 N. Đổi góc trên Canvas để kiểm, không lấy kết quả từ cùng hàm C++ làm đáp án duy nhất.
 
-Bài tiếp theo làm đúng việc đó cho cả 17 springs, đồng thời cộng gravity vào từng mass trước khi state bắt đầu chuyển động.
+[Sang bài 3 — Cộng lực, trọng lực và giữ điểm neo](/projects/spring-chain/03-cong-luc-gravity-va-neo-co-dinh)

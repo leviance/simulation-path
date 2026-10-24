@@ -1,54 +1,51 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
     label: "SPRING CHAIN LAB",
-    title: "Một dao động truyền qua chuỗi mass–spring như thế nào?",
+    title: "Kéo một khối, quan sát cả chuỗi phản ứng",
     description:
-      "Kéo một mass rồi thả, đổi stiffness, damping, gravity và fixed dt; theo dõi stretch, velocity, energy cùng độ lệch ngang của từng particle.",
+      "Chuỗi 32 mass, mở rộng tới 100; tự tính lực và tích phân, so damping bằng năng lượng thay vì nhìn animation.",
   },
   modes: {
     "spring-scene": {
-      title: "Chuỗi được biểu diễn bằng dữ liệu nào?",
+      title: "Dựng chuỗi khối lượng và lò xo",
       description:
-        "Đọc topology 18 particles–17 springs, rest length và inverse mass; anchor có inverse mass zero nên không phải một ngoại lệ giấu trong renderer.",
+        "Từ khung SDL có sẵn, tạo 32 khối nối bằng 31 lò xo; tách dữ liệu vật lý khỏi tọa độ màn hình.",
     },
     "spring-hooke": {
-      title: "Kéo giãn và nén đổi lực Hooke ra sao?",
-      description:
-        "Chọn một spring, thay distance và đọc direction, stretch cùng hai force vector bằng nhau nhưng ngược chiều.",
+      title: "Tính lực Hooke trên một lò xo",
+      description: "Dùng một cặp khối để hiểu chiều lực khi kéo giãn, nén và xoay cả lò xo.",
     },
     "spring-forces": {
-      title: "Nhiều lực được cộng vào mỗi mass theo thứ tự nào?",
+      title: "Cộng lực, trọng lực và giữ điểm neo",
       description:
-        "Bật gravity và force arrows để phân biệt external force, internal spring pair và reaction tại anchor.",
+        "Xóa lực cũ, cộng từng cặp lực nội bộ và trọng lực; tính xong toàn hệ rồi mới đổi vận tốc.",
     },
     "spring-integration": {
-      title: "Force trở thành chuyển động qua một substep thế nào?",
+      title: "Cho chuỗi chuyển động bằng semi-implicit Euler",
       description:
-        "Single-step semi-implicit Euler và xem force → acceleration → velocity → position trong fixed dt.",
+        "Nối lực với gia tốc, vận tốc và vị trí bằng bước thời gian cố định; đọc một bước tính cụ thể.",
     },
     "spring-damping": {
-      title: "Damping nào làm dao động tắt mà không dính ngang?",
+      title: "Làm dao động tắt dần bằng damping dọc trục",
       description:
-        "So zero/medium/high axial damping; tangent relative velocity được giữ vì không làm spring dài hoặc ngắn.",
+        "Lực cản phụ thuộc tốc độ đổi chiều dài lò xo, không tùy tiện giảm mọi thành phần vận tốc.",
     },
     "spring-drag": {
-      title: "Một lần kéo tạo wave chạy qua chuỗi ra sao?",
+      title: "Kéo một khối và quan sát dao động lan truyền",
       description:
-        "Kéo một mass bằng pointer capture rồi thả; biểu đồ displacement theo index cho thấy tín hiệu đến từng hàng xóm.",
+        "Giữ độ lệch lúc cầm, xử lý đúng pointer owner và mẫu thả cuối; phân biệt lực lò xo với công của chuột.",
     },
     "spring-stability": {
-      title: "Khi nào spring cứng làm integrator mất ổn định?",
+      title: "Thí nghiệm độ cứng, khối lượng và bước thời gian",
       description:
-        "Đổi k, mass và dt để quan sát q=dt·sqrt(k/m), energy growth và finite-state guard thay vì đoán bằng mắt.",
+        "Mở chuỗi 20–100 khối, đo năng lượng và dùng preset sai để hiểu giới hạn ổn định.",
     },
     "spring-validation": {
-      title: "Chuỗi trông mượt có vượt qua stress test không?",
+      title: "Vẽ đồ thị năng lượng và nghiệm thu ứng dụng",
       description:
-        "Chạy nhanh 20 giây, đo kinetic/spring/gravity energy, maximum stretch, speed, anchor error và finite state.",
+        "Ghép graph đúng đơn vị, job 20 giây có thể dừng, đáp án độc lập và mã C++ hoàn chỉnh.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;
