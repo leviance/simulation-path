@@ -4,107 +4,125 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Detection cho biết hai circle overlap, nhưng không nói chúng phải có velocity mới nào. Phản xạ từng ball như va vào một bức tường là sai: ball B cũng chuyển động và có mass; thay đổi của A phải đi kèm thay đổi đối nhau của B.
-
-Ta dùng một normal impulse. Nó chỉ tác động dọc contact normal, không sửa tangent velocity và không dịch position. Checkpoint 5 vì thế đã làm bóng “nảy” nhưng vẫn còn penetration; đó là vấn đề riêng của bài 6.
+Biết hai bóng đang chồng lấn chưa đủ để làm chúng nảy. Nếu phản xạ từng velocity như va vào tường, ta đã coi vật còn lại có khối lượng vô hạn. Với hai vật động, cả hai phải nhận tác động đối nhau và lượng đổi velocity phụ thuộc mass.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Relative velocity của B so với A:
+Gọi n đi từ A sang B và wA=1/mA, wB=1/mB. Vận tốc tương đối dọc normal là:
 
 $$
-v_{rel}=v_B-v_A
+v_n=(v_B-v_A)\cdot n,\qquad
+j=-\frac{(1+e)v_n}{w_A+w_B}.
 $$
 
-Closing speed dọc normal là $v_n=v_{rel}\cdot n$. Với normal A→B, $v_n<0$ nghĩa là hai ball tiến vào nhau. Impulse scalar:
+Chỉ áp dụng khi vn âm: hai vật đang tiến vào nhau. A nhận −j·n, B nhận +j·n; velocity thay đổi bằng impulse nhân inverse mass. Thành phần tiếp tuyến không đổi vì chưa có ma sát.
 
-$$
-j=\frac{-(1+e)v_n}{m_A^{-1}+m_B^{-1}}
-$$
-
-Sau đó:
-
-$$
-v_A'=v_A-jnm_A^{-1},\qquad v_B'=v_B+jnm_B^{-1}
-$$
+Bóng mẫu có mA=1, mB=2, vA=1,5, vB=−0,5, e=1. Ta tính được j=8/3 N·s, vA mới=−7/6, vB mới=5/6 m/s. Momentum trước/sau đều 0,5 kg·m/s; động năng đều 1,375 J. Những phân số này là đối chứng tính tay, không phải output lấy từ chính solver.
 
 <InteractiveLab demo="collision-tank" mode="collision-impulse" />
 
-Mode này bắt đầu bằng đúng hai bóng equal-mass đang overlap và lao vào nhau. Đặt restitution bằng 1, ghi `relative normal speed` cùng `impulse kế tiếp`, rồi tiến một bước: hai velocity phải đổi hướng. Tiến thêm bước nữa để thấy cặp đang tách nhau không nhận impulse lần hai. Positional correction chưa tham gia bài này.
-
 ## Viết code từng bước
 
-### Bước 1 — Kiểm tổng inverse mass
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm hàm trùng tên. **Checkpoint 05 là bản tham khảo sau bài này**; chạy checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — hai static body không thể response bằng velocity"
-const double inverseMassSum = first.inverseMass + second.inverseMass;
-if (inverseMassSum <= kCollisionEpsilon) {
-    return 0.0;
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_starter --parallel 2
+.\build\Debug\project_24_starter.exe
+```
+
+### Bước 1 — Tách công thức j khỏi phép đổi vector
+
+Thêm hai hàm sau vào lab.hpp. validContact từ chối normal không hữu hạn hoặc không có độ dài một; dữ liệu sai không được lan vào velocity.
+
+```cpp title="include/lab.hpp — validContact"
+inline bool validContact(const CircleContact& contact) {
+    return contact.colliding && std::isfinite(contact.normal.x) && std::isfinite(contact.normal.y) && std::abs(lengthSquared(contact.normal) - 1.0) < 1e-8 && std::isfinite(contact.penetration) && contact.penetration >= 0.0;
 }
 ```
 
-`inverseMass=0` nghĩa là body tĩnh. Nếu cả hai cùng tĩnh, không velocity nào được thay đổi và phép chia không hợp lệ.
 
-### Bước 2 — Đo relative normal speed
-
-```cpp title="include/lab.hpp — separating pair không nhận impulse"
-const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
-const double velocityAlongNormal = dot(relativeVelocity, contact.normal);
-if (velocityAlongNormal >= 0.0) {
-    return 0.0;
+```cpp title="include/lab.hpp — normalImpulseMagnitude"
+inline double normalImpulseMagnitude(double normalSpeed, double inverseMassSum, double restitution) {
+    if (!std::isfinite(normalSpeed) || normalSpeed >= 0.0 || !std::isfinite(inverseMassSum) || inverseMassSum <= kCollisionEpsilon || !std::isfinite(restitution)) {
+        return 0.0;
+    }
+    return -(1.0 + std::clamp(restitution, 0.0, 1.0)) * normalSpeed / inverseMassSum;
 }
 ```
 
-Nhánh này ngăn một contact còn overlap nhẹ bị “nảy” liên tục sau khi velocity đã hướng ra ngoài.
 
-### Bước 3 — Tính impulse scalar có restitution
+Hai inverse mass đều zero thì không có vật động để nhận phản ứng. Hàm trả zero thay vì chia cho zero. Nếu một vật đứng yên và vật kia động, mẫu số vẫn hợp lệ.
 
-```cpp title="include/lab.hpp — impulse magnitude luôn dương cho closing contact"
-const double bounce = std::clamp(restitution, 0.0, 1.0);
-const double impulseMagnitude = -(1.0 + bounce) * velocityAlongNormal / inverseMassSum;
-const Vec2 impulse = scale(contact.normal, impulseMagnitude);
+### Bước 2 — Áp impulse có trọng số khối lượng
+
+Thêm applyCollisionImpulse:
+
+```cpp title="include/lab.hpp — applyCollisionImpulse"
+inline double applyCollisionImpulse(Ball& first, Ball& second, const CircleContact& contact, double restitution) {
+    if (!validContact(contact) || !finiteBall(first) || !finiteBall(second) || !std::isfinite(restitution)) {
+        return 0.0;
+    }
+    const double inverseMassSum = first.inverseMass + second.inverseMass;
+    if (inverseMassSum <= kCollisionEpsilon) {
+        return 0.0;
+    }
+    const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
+    const double velocityAlongNormal = dot(relativeVelocity, contact.normal);
+    if (velocityAlongNormal >= 0.0) {
+        return 0.0;
+    }
+    const double bounce = std::clamp(restitution, 0.0, 1.0) * std::min(first.restitution, second.restitution);
+    const double impulseMagnitude = normalImpulseMagnitude(velocityAlongNormal, inverseMassSum, bounce);
+    if (!std::isfinite(impulseMagnitude)) {
+        return 0.0;
+    }
+    const Vec2 impulse = scale(contact.normal, impulseMagnitude);
+    first.velocity = subtract(first.velocity, scale(impulse, first.inverseMass));
+    second.velocity = add(second.velocity, scale(impulse, second.inverseMass));
+    return impulseMagnitude;
+}
 ```
 
-Vì `velocityAlongNormal<0`, $j$ dương. `e=1` cho elastic response dọc normal; `e=0` loại closing speed nhưng không xóa tangent speed.
 
-### Bước 4 — Áp hai thay đổi đối nhau
+e hiệu dụng được chọn bằng scale × min(eA,eB). Đây là quy ước vật liệu được công bố rõ, không phải một định luật kết hợp bắt buộc cho mọi mô phỏng. Các bóng mẫu đặt eA=eB=1 để kiểm trực tiếp công thức.
 
-```cpp title="include/lab.hpp — mỗi body nhận impulse theo inverse mass"
-first.velocity = subtract(first.velocity, scale(impulse, first.inverseMass));
-second.velocity = add(second.velocity, scale(impulse, second.inverseMass));
-return impulseMagnitude;
+### Bước 3 — Nối kết quả với Scene và readout
+
+Trong nhánh xử lý hai bóng ở stepScene, ngay sau khi lưu contact/normal speed, thêm:
+
+```cpp title="include/scene.hpp — giữ j thực sự đã áp dụng"
+scene.lastImpulse = applyCollisionImpulse(candidate[0], candidate[1], contact, scene.restitution);
 ```
 
-Ball nhẹ có inverse mass lớn nên velocity đổi nhiều hơn. Momentum thay đổi của cặp vẫn đối nhau vì nhân mass sẽ triệt inverse mass.
+
+Đừng vẽ vector “impulse” bằng cách lấy velocity mới−cũ rồi gán một chiều dài tùy ý mà không giải thích đơn vị. j trả về chính là lượng impulse dọc normal; normal vàng và số j trong HUD có thể kiểm riêng.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy normal impulse"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_24_checkpoint_5
-./build/Debug/project_24_checkpoint_5.exe
-```
+Bấm N ở cảnh vừa reset. Kiểm j=2,66667, vA≈−1,16667, vB≈0,83333. Ở bước kế tiếp, nếu chúng còn overlap nhưng đã tách nhau, j phải bằng zero.
 
-Ở checkpoint này hãy theo dõi cả `contacts`, `impulses` và `max penetration`. Bóng đã trao đổi velocity nhưng vẫn có thể đè lên nhau vài frame vì chưa có position solve.
+Velocity đã phản ứng đúng nhưng hai hình tròn vẫn có thể còn xuyên nhau. Đó không phải lý do áp impulse thêm lần nữa: bài 6 sẽ sửa phần vị trí còn lại.
+
+Khi e=0, hai vận tốc dọc normal trở thành 1/6 m/s, bằng vận tốc tâm khối. Động năng giảm còn 1/24 J; phần giảm là hành vi của va chạm không đàn hồi, không phải một thất bại của kiểm thử.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ nhánh `velocityAlongNormal>=0`. Một cặp đang rời nhau nhận impulse mới và có thể quay lại; quan sát rồi hoàn tác.
-2. Dùng `velocityA-velocityB` nhưng giữ điều kiện dấu. Closing/separating bị đảo; hoàn tác về cùng quy ước normal.
-3. Cộng cùng impulse vào cả A và B. Tổng momentum tự tăng; hoàn tác hai dấu đối nhau.
+1. Bỏ điều kiện vn>=0. Hai vật đang rời nhau lại nhận impulse và có thể bị kéo vào nhau. Khôi phục guard rồi bước hai lần.
+
+2. Quên chia cho wA+wB. Đổi mass nhưng phản ứng không còn khớp đáp án tính tay.
+
+3. Dùng cùng một delta velocity cho cả hai vật. Với mass khác nhau, tổng momentum sẽ đổi dù không có tác động bên ngoài.
 
 ## Tự kiểm tra kết quả
 
-- Equal-mass head-on, velocity `(+1,0)` và `(-1,0)`, `e=1` đổi velocity cho nhau.
-- Impulse magnitude của case trên bằng 2 khi inverse mass đều bằng 1.
-- Tổng linear momentum của cặp được bảo toàn.
-- Kinetic energy được bảo toàn trong elastic head-on test.
-- Separating contact trả impulse zero và không sửa velocity.
-- Body inverse mass nhỏ nhận thay đổi velocity nhỏ hơn.
-- Tangent component không đổi vì chưa có friction.
+- Cặp mẫu cho j=8/3, vA=−7/6, vB=5/6 khi e=1.
+- Momentum và động năng của cặp cô lập giữ nguyên trong tolerance; e&lt;1 giảm động năng.
+- Cặp đang tách nhau không nhận impulse mới.
+- Velocity tiếp tuyến không đổi; không có friction/rotation ẩn trong code.
 
 ## Bài tập mở rộng
 
-Tạo case mass 1 va vào mass 3 đứng yên. Tính kết quả bằng tay, sau đó thêm vào CTest. Giữ radius bằng nhau để chỉ thay một biến.
+Giữ nguyên cặp mẫu nhưng đặt e=0,5. Tự tính j và hai velocity mới, sau đó kiểm mức giảm động năng. So riêng thành phần normal và tangent trong một cặp va chạm xiên.
 
-Bài tiếp theo giải phần còn thiếu: impulse thay velocity nhưng không tự xóa overlap đã hình thành trong một fixed step hữu hạn.
+[Sang bài 6 — Sửa chồng lấn mà không đổi vận tốc](/projects/collision-tank/06-day-hai-bong-ra-khoi-penetration).

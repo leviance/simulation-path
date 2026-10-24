@@ -1,0 +1,415 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng góc nhìn cho bể 3D
+
+## Vấn đề cần giải quyết
+
+Các test 3D đã qua, nhưng console không thay thế được một bể sphere có chiều sâu. Nếu chỉ vẽ circle lớn/nhỏ theo z rồi giữ nguyên tương tác 2D, người xem vẫn không biết đang nhìn một mô phỏng 3D thật hay một hình minh họa phẳng.
+
+Bài này thêm camera orbit, projection và renderer CPU. **Camera đổi góc nhìn; position/velocity của sphere trong world không bị xoay.**
+
+## Hiểu ý tưởng trước khi viết code
+
+Từ eye nhìn về tâm bể, tạo forward, right, up. Một world point được trừ eye rồi lấy dot với ba vector basis để thành camera coordinates. Với view Z dương:
+
+$$
+x_s=550+620x_v/z_v,\qquad y_s=370-620y_v/z_v.
+$$
+
+Ở mỗi pixel trong silhouette của sphere, ray camera có dạng (rx,ry,1). Giải phương trình ray–sphere lấy mặt trước. Vì ray.z=1, nghiệm t cũng là view-space Z dùng cho depth test.
+
+Không chỉ sort theo tâm sphere. Hai phần bề mặt đang nhìn có depth riêng, và depth buffer phải cho cùng hình khi đổi thứ tự vẽ. Silhouette bounds cũng cần xét độ lệch tâm, không dùng r/z như một hình tròn luôn ở giữa ảnh.
+
+<InteractiveLab demo="collision-tank" mode="collision-camera" />
+
+## Viết code từng bước
+
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm hàm trùng tên. **Checkpoint 10 là bản tham khảo sau bài này**; chạy checkpoint không kiểm phần bạn vừa viết trong Starter.
+
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_starter --parallel 2
+.\build\Debug\project_24_starter.exe
+```
+
+### Bước 1 — Tạo camera basis và phép chiếu
+
+Thêm các kiểu/hàm sau vào projection.hpp:
+
+```cpp title="include/projection.hpp — CameraFrame"
+struct CameraFrame {
+    Vec3 eye{};
+    Vec3 right{};
+    Vec3 up{};
+    Vec3 forward{};
+};
+```
+
+
+```cpp title="include/projection.hpp — makeCamera"
+inline CameraFrame makeCamera(const CameraSettings& settings) {
+    const double pitch = std::clamp(settings.pitch, -1.2, 1.2);
+    const double distance = std::clamp(settings.distance, 22.0, 38.0);
+    const Vec3 eye{distance * std::cos(pitch) * std::sin(settings.yaw), distance * std::sin(pitch), distance * std::cos(pitch) * std::cos(settings.yaw)};
+    const Vec3 forward = unit3(mul3(eye, -1.0));
+    const Vec3 right = unit3(cross3(forward, {0.0, 1.0, 0.0}));
+    return {eye, right, cross3(right, forward), forward};
+}
+```
+
+
+```cpp title="include/projection.hpp — toCamera"
+inline Vec3 toCamera(Vec3 world, const CameraFrame& camera) {
+    const Vec3 delta = sub3(world, camera.eye);
+    return {dot3(delta, camera.right), dot3(delta, camera.up), dot3(delta, camera.forward)};
+}
+```
+
+
+```cpp title="include/projection.hpp — projectCamera"
+inline Vec2 projectCamera(Vec3 point) {
+    return {550.0 + 620.0 * point.x / point.z, 370.0 - 620.0 * point.y / point.z};
+}
+```
+
+
+CameraSettings đã có trong Scene của Starter; yaw/pitch/distance chỉ là tham số góc nhìn. Giới hạn pitch tránh camera nhìn đúng dọc trục up; khoảng cách 22–38 m giữ eye ngoài bể.
+
+### Bước 2 — Tìm mặt trước và ghi Z-buffer
+
+Thêm sphereDepth và DepthBuffer:
+
+```cpp title="include/projection.hpp — sphereDepth"
+inline double sphereDepth(double rx, double ry, Vec3 center, double radius) {
+    if (!std::isfinite(rx) || !std::isfinite(ry) || !finite3(center) || !std::isfinite(radius) || radius <= 0.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const double a = rx * rx + ry * ry + 1.0;
+    const double halfB = -(rx * center.x + ry * center.y + center.z);
+    const double c = dot3(center, center) - radius * radius;
+    const double discriminant = halfB * halfB - a * c;
+    if (discriminant < 0.0 || !std::isfinite(discriminant)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const double depth = (-halfB - std::sqrt(discriminant)) / a;
+    return depth >= 0.2 && depth <= 80.0 ? depth : std::numeric_limits<double>::infinity();
+}
+```
+
+
+```cpp title="include/projection.hpp — DepthBuffer"
+struct DepthBuffer {
+    std::vector<double> values = std::vector<double>(Framebuffer::width * Framebuffer::height, std::numeric_limits<double>::infinity());
+
+    void clear() {
+        std::fill(values.begin(), values.end(), std::numeric_limits<double>::infinity());
+    }
+};
+```
+
+
+Thêm shade trước drawSphere:
+
+```cpp title="include/projection.hpp — shade"
+inline std::uint32_t shade(std::uint32_t color, double light) {
+    const auto channel = [&](int shift) {
+        return static_cast<std::uint32_t>(std::clamp(static_cast<double>((color >> shift) & 255U) * light, 0.0, 255.0));
+    };
+    return (channel(24) << 24) | (channel(16) << 16) | (channel(8) << 8) | 255U;
+}
+```
+
+Phần raster sphere là đây:
+
+```cpp title="include/projection.hpp — drawSphere"
+inline void drawSphere(Framebuffer& image, DepthBuffer& depth, const Sphere& body, const CameraFrame& camera) {
+    const Vec3 c = toCamera(body.position, camera);
+    const double r = body.radius;
+    if (!finiteSphere(body) || !finite3(c) || c.z <= r + 0.2)
+        return;
+    // Biên silhouette chính xác cho từng trục, không dùng r/z sai ở rìa màn hình.
+    const double denominator = c.z * c.z - r * r;
+    const auto bounds = [&](double axis) {
+        const double spread = r * std::sqrt(axis * axis + c.z * c.z - r * r);
+        return std::pair<double, double>{620.0 * (axis * c.z - spread) / denominator, 620.0 * (axis * c.z + spread) / denominator};
+    };
+    const auto bx = bounds(c.x);
+    const auto by = bounds(c.y);
+    const int left = static_cast<int>(std::floor(std::clamp(550.0 + bx.first, 0.0, 1099.0)));
+    const int right = static_cast<int>(std::ceil(std::clamp(550.0 + bx.second, 0.0, 1099.0)));
+    const int top = static_cast<int>(std::floor(std::clamp(370.0 - by.second, 85.0, 650.0)));
+    const int bottom = static_cast<int>(std::ceil(std::clamp(370.0 - by.first, 85.0, 650.0)));
+    const Vec3 light = unit3({-0.4, 0.6, -0.7});
+    for (int y = top; y <= bottom; ++y) {
+        for (int x = left; x <= right; ++x) {
+            const double rx = (static_cast<double>(x) + 0.5 - 550.0) / 620.0;
+            const double ry = (370.0 - static_cast<double>(y) - 0.5) / 620.0;
+            const double z = sphereDepth(rx, ry, c, r);
+            const auto index = static_cast<std::size_t>(y * Framebuffer::width + x);
+            if (z < depth.values[index]) {
+                const Vec3 normal = mul3(sub3({rx * z, ry * z, z}, c), 1.0 / r);
+                const double intensity = 0.25 + 0.75 * std::max(0.0, dot3(normal, light));
+                image.pixels[index] = shade(body.color, intensity);
+                depth.values[index] = z;
+            }
+        }
+    }
+}
+```
+
+
+Mỗi pixel dùng tâm pixel x+0,5/y+0,5, so Z với depth.values rồi mới ghi màu/depth. Công thức bounds tìm đúng silhouette trên mỗi trục; clip liên tục trước khi cast sang int để tọa độ sai không tạo vòng lặp vô hạn.
+
+shade chỉ tô sáng từ normal mặt cầu. line3D vẽ khung bể/lưới sàn, kiểm depth và nội suy 1/z. Không có OpenGL/GLM hay physics engine trong các hàm phụ trợ này.
+
+Thêm phần vẽ đường 3D và ghép cả cảnh. Các cạnh hộp/lưới sàn giúp người xem đọc được chiều sâu:
+
+```cpp title="include/projection.hpp — line3D"
+inline void line3D(Framebuffer& image, DepthBuffer& depth, Vec3 a, Vec3 b, const CameraFrame& camera, std::uint32_t color) {
+    a = toCamera(a, camera);
+    b = toCamera(b, camera);
+    if (!finite3(a) || !finite3(b) || a.z <= 0.2 || b.z <= 0.2)
+        return;
+    const Vec2 pa = projectCamera(a);
+    const Vec2 pb = projectCamera(b);
+    const double span = std::max(std::abs(pa.x - pb.x), std::abs(pa.y - pb.y));
+    if (!std::isfinite(span))
+        return;
+    const int steps = static_cast<int>(std::clamp(std::ceil(span), 1.0, 2200.0));
+    for (int i = 0; i <= steps; ++i) {
+        const double t = static_cast<double>(i) / steps;
+        const double sx = pa.x + (pb.x - pa.x) * t;
+        const double sy = pa.y + (pb.y - pa.y) * t;
+        if (sx < 0.0 || sx > 1099.0 || sy < 85.0 || sy > 650.0)
+            continue;
+        const int x = static_cast<int>(std::lround(sx));
+        const int y = static_cast<int>(std::lround(sy));
+        const double z = 1.0 / ((1.0 - t) / a.z + t / b.z);
+        const auto index = static_cast<std::size_t>(y * 1100 + x);
+        if (z <= depth.values[index] + 0.02) {
+            image.pixels[index] = color;
+        }
+    }
+}
+```
+
+
+```cpp title="include/projection.hpp — drawTank3D"
+inline void drawTank3D(Framebuffer& image, DepthBuffer& depth, const Scene& scene) {
+    depth.clear();
+    const auto camera = makeCamera(scene.camera);
+    for (const auto& body : scene.spheres)
+        drawSphere(image, depth, body, camera);
+    const Vec3 corners[8]{{-8, -5, -6}, {8, -5, -6}, {8, 5, -6}, {-8, 5, -6}, {-8, -5, 6}, {8, -5, 6}, {8, 5, 6}, {-8, 5, 6}};
+    const int edges[12][2]{{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6}, {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+    for (const auto& edge : edges)
+        line3D(image, depth, corners[edge[0]], corners[edge[1]], camera, 0x7187b4ffU);
+    for (int x = -6; x <= 6; x += 2)
+        line3D(image, depth, {static_cast<double>(x), -5, -6}, {static_cast<double>(x), -5, 6}, camera, 0x273d5fffU);
+    for (int z = -4; z <= 4; z += 2)
+        line3D(image, depth, {-8, -5, static_cast<double>(z)}, {8, -5, static_cast<double>(z)}, camera, 0x273d5fffU);
+    if (scene.debug) {
+        for (const auto& contact : scene.sphereStats.debugContacts) {
+            line3D(image, depth, contact.point, add3(contact.point, mul3(contact.normal, 0.7)), camera, 0xffe26cffU);
+            line3D(image, depth, contact.point, add3(contact.point, mul3(contact.normal, std::min(2.0, contact.impulse * 0.2))), camera, 0xff7b72ffU);
+        }
+    }
+}
+```
+
+Sau khi đã ghép đủ renderer, thêm feature flag để chạy nhóm test hình ảnh:
+
+```cpp title="include/projection.hpp — bật nhóm kiểm renderer"
+#define COURSE_HAS_3D_RENDERER 1
+```
+
+
+### Bước 3 — Nối state 3D vào cùng vòng lặp
+
+Trong Scene, thêm các member 3D sau:
+
+```cpp title="include/scene.hpp — state của bể 3D"
+std::vector<Sphere> spheres{};
+SphereStats sphereStats{};
+SphereMetrics sphereMetrics{};
+Vec3 initialMomentum3{};
+Vec3 wallImpulse3{};
+```
+
+Thay beginMeasurement và rebuildScene để chọn đúng không gian và baseline:
+
+```cpp title="include/scene.hpp — beginMeasurement"
+inline void beginMeasurement(Scene& scene) {
+    stopScene(scene);
+    scene.elapsed = 0.0;
+    scene.droppedTime = 0.0;
+    scene.substeps = 0;
+    scene.stats = {};
+    scene.metrics = measureWorld(scene.balls);
+    scene.initialEnergy = scene.metrics.kineticEnergy;
+    scene.initialMomentum = scene.metrics.totalMomentum;
+    scene.wallImpulse = {};
+    scene.history.clear();
+    scene.history.push_back({0.0, scene.initialEnergy, scene.metrics.maximumPenetration});
+    scene.sphereStats = {};
+    scene.sphereMetrics = measureSpheres(scene.spheres);
+    scene.initialMomentum3 = scene.sphereMetrics.momentum;
+    scene.wallImpulse3 = {};
+    if (scene.spatial) {
+        scene.initialEnergy = scene.sphereMetrics.energy;
+        scene.history.clear();
+        scene.history.push_back({0.0, scene.initialEnergy, scene.sphereMetrics.penetration});
+    }
+}
+```
+
+
+```cpp title="include/scene.hpp — rebuildScene"
+inline void rebuildScene(Scene& scene) {
+    scene.message.clear();
+    scene.balls = makeTankBalls(kSceneSeed, scene.elastic);
+    if (scene.count == 64)
+        scene.balls.resize(64);
+    scene.spheres.clear();
+    if (scene.spatial) {
+        scene.spheres = makeSpheres(kSceneSeed, scene.elastic);
+        if (scene.count == 64)
+            scene.spheres.resize(64);
+    }
+    beginMeasurement(scene);
+}
+```
+
+Đó là state thí nghiệm, không phải state của camera.
+
+Thay stepScene bằng phiên bản có nhánh 3D:
+
+```cpp title="include/scene.hpp — stepScene"
+inline bool stepScene(Scene& scene) {
+    const double dt = scene.dt;
+    if (!std::isfinite(dt) || dt < 1e-6 || dt > 1.0 / 30.0) {
+        stopScene(scene);
+        scene.message = "Invalid fixed dt rejected.";
+        return false;
+    }
+    if (scene.spatial) {
+        auto candidate = scene.spheres;
+        const auto stats = stepSpheres(candidate, {dt, scene.restitution, scene.iterations, scene.correction ? 0.8 : 0.0, 0.001});
+        const auto metrics = measureSpheres(candidate);
+        if (!stats.valid || !metrics.finite) {
+            scene.message = "Invalid 3D step rejected; state was not committed.";
+            stopScene(scene);
+            return false;
+        }
+        scene.spheres = std::move(candidate);
+        scene.sphereStats = stats;
+        scene.sphereMetrics = metrics;
+        scene.wallImpulse3 = add3(scene.wallImpulse3, stats.wallImpulse);
+    } else
+    {
+        auto candidate = scene.balls;
+        const auto stats = stepCollisionWorld(candidate, kTankBounds, {dt, scene.restitution, scene.iterations, scene.correction ? 0.8 : 0.0, 0.001});
+        if (!stats.valid) {
+            scene.message = "Invalid 2D step rejected; state was not committed.";
+            stopScene(scene);
+            return false;
+        }
+        scene.stats = stats;
+        scene.balls = std::move(candidate);
+        scene.metrics = measureWorld(scene.balls);
+        scene.wallImpulse = add(scene.wallImpulse, scene.stats.wallImpulse);
+    }
+    scene.elapsed += dt;
+    ++scene.substeps;
+    double energy = scene.metrics.kineticEnergy;
+    double penetration = scene.metrics.maximumPenetration;
+    if (scene.spatial) {
+        energy = scene.sphereMetrics.energy;
+        penetration = scene.sphereMetrics.penetration;
+    }
+    scene.history.push_back({scene.elapsed, energy, penetration});
+    if (scene.history.size() > 601)
+        scene.history.pop_front();
+    return true;
+}
+```
+
+
+Nhánh 3D nhận cùng settings, chỉ commit candidate hợp lệ, cộng Jwall3 và ghi đúng một history sample. Bước 2D vẫn giữ nguyên ý nghĩa.
+
+Thay renderScene bằng phiên bản nhận DepthBuffer:
+
+```cpp title="include/view.hpp — renderScene"
+inline void renderScene(Framebuffer& image, const Scene& scene, DepthBuffer& depth) {
+    image.clear();
+    if (scene.spatial) {
+        drawTank3D(image, depth, scene);
+    } else {
+        drawTank2D(image, scene);
+    }
+    drawHistory(image, scene);
+}
+```
+
+Trong main, tạo buffer cạnh Framebuffer:
+
+```cpp title="src/main.cpp — tạo depth buffer một lần"
+lab::DepthBuffer depth;
+```
+
+Thay lời gọi vẽ trong nhánh dirty:
+
+```cpp title="src/main.cpp — truyền buffer vào renderer"
+lab::renderScene(image, scene, depth);
+```
+
+Thêm nút bàn phím 2/3:
+
+```cpp title="src/main.cpp — chọn không gian đang chạy"
+if (key == SDLK_2 || key == SDLK_3) {
+    scene.spatial = key == SDLK_3;
+    lab::rebuildScene(scene);
+}
+```
+
+
+Thêm hai nhánh mũi tên vào key-down nếu muốn orbit bằng bàn phím như trong bản cuối:
+
+```cpp title="src/main.cpp — orbit bằng mũi tên"
+if (scene.spatial && (key == SDLK_LEFT || key == SDLK_RIGHT))
+    scene.camera.yaw += key == SDLK_LEFT ? -0.1 : 0.1;
+if (scene.spatial && (key == SDLK_UP || key == SDLK_DOWN))
+    scene.camera.pitch = std::clamp(scene.camera.pitch + (key == SDLK_UP ? 0.1 : -0.1), -1.2, 1.2);
+```
+
+Các handler drag/wheel của khung main đã cập nhật CameraSettings khi scene.spatial=true. Đối chiếu toàn bộ main.cpp bài 10 để chắc lời gọi renderScene có thêm depth, không tạo một depth buffer mới cho mỗi sphere.
+
+## Ghép các phần lại
+
+Build Starter, chọn 3D bằng phím 3 rồi bấm N hoặc Space. Phải thấy 256 sphere thực sự có chiều sâu và chuyển động cả ba trục. Kéo để orbit, wheel đổi khoảng cách; mũi tên đổi yaw/pitch trong SDL. Bản Canvas có thêm slider camera dùng được bằng bàn phím.
+
+Chỉ orbit khi pause: ghi lại position/velocity/elapsed trước và sau, chúng phải không đổi. Đổi góc nhìn không phải là reset hoặc quay bể cùng các vector velocity.
+
+Chạy bộ kiểm: ray ở giữa ảnh của sphere tâm (0,0,5), r=1 chạm tại Z=4; ray lệch xa không chạm. Vẽ một sphere đỏ gần và một sphere xanh xa theo hai thứ tự phải cho cùng framebuffer. Canvas cũng dùng ray/sphere và depth buffer, không giả lập 3D bằng CSS transform.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi thứ tự vẽ sphere rồi bỏ depth test. Vật phía xa có thể che vật gần; một góc nhìn đẹp không chứng minh thứ tự đúng.
+
+2. Dùng khoảng cách Euclidean từ eye cho sphere nhưng view-space Z cho đường khung. Hai hệ depth không tương thích; giữ cùng một đại lượng.
+
+3. Orbit bằng cách quay position và velocity. Physics state đã thay đổi chỉ vì người dùng kéo camera; tách lại CameraSettings khỏi world state.
+
+## Tự kiểm tra kết quả
+
+- 3D có 256 sphere với X/Y/Z và vận tốc ba trục, không phải bể 2D bị nghiêng.
+- Ray hit/miss có đáp án độc lập; framebuffer không phụ thuộc thứ tự vẽ.
+- Camera orbit không sửa position, velocity hoặc elapsed của physics.
+- Lưới sàn/khung bể giúp đọc chiều sâu; debug normal/impulse có thể tắt.
+- Nhóm test renderer chạy thêm sau nhóm 2D và 3D physics; spawn còn ở bài 11.
+
+## Bài tập mở rộng
+
+Đặt hai sphere trên gần cùng một ray nhưng lệch độ sâu. Di chuyển camera để chúng che nhau theo cách khác nhau, rồi kiểm framebuffer đổi hợp lý nhưng kinetic energy và world positions không đổi.
+
+[Sang bài 11 — Hoàn thiện spawn, input và nghiệm thu](/projects/collision-tank/11-hoan-thien-spawn-debug-va-nghiem-thu).

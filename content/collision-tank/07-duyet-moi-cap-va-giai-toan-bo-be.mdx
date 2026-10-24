@@ -1,116 +1,241 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Duyệt mọi cặp và giải toàn bộ bể
+# Cho 256 bóng thật sự va vào nhau
 
 ## Vấn đề cần giải quyết
 
-Ta đã giải được một pair, nhưng 144 ball tạo ra 10.296 unordered pair trong mỗi pass. Duyệt cả `(A,B)` lẫn `(B,A)` sẽ áp response hai lần; duyệt `(A,A)` tạo coincident contact giả; tích phân position lại trong từng solver iteration làm thời gian chạy nhanh hơn cấu hình.
-
-World step cần một thứ tự rõ: integrate một lần, sau đó lặp hữu hạn các pass wall/pair. Mỗi pass dùng `i<j` và ghi lại đúng khối lượng công việc.
+Ta đã hiểu phản ứng của một cặp. Bây giờ trở lại mục tiêu chính: **256 bóng thật sự va vào nhau**, không chỉ nảy vào tường. Thêm một vòng lặp thứ hai không khó; điều dễ sai là giải lặp cùng cặp hai lần, tích phân nhiều dt trong một bước hoặc đo nhầm phần xuyên trước/sau solver.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Số unordered pair của N body:
+Với N vật, số cặp không có thứ tự là N(N−1)/2. Với 256 bóng, một lượt có 32.640 cặp; ba lượt có **97.920 pair checks** mỗi physics step.
 
-$$
-P=\binom{N}{2}=\frac{N(N-1)}{2}
-$$
+Một bước gồm: tích phân **một lần**, rồi lặp tường/các cặp I lần, cuối cùng khóa tường lại. Cặp gần tường có thể đẩy tâm ra ngoài khi sửa position, nên chỉ kiểm tường ở đầu lượt chưa đủ.
 
-Với 144 ball, mỗi pass duyệt 10.296 cặp; ba solver iterations vì thế phải báo 30.888 pair checks cho mỗi fixed step, bất kể có bao nhiêu contact thật.
-
-```text
-integrate every body once
-repeat I times:
-    resolve every wall
-    for i = 0..N-1:
-        for j = i+1..N-1:
-            detect and resolve pair(i,j)
-```
+Contact visits có thể gặp lại một cặp qua nhiều iterations; nó không phải số cặp độc nhất. Pair checks chỉ tính công việc của solver, chưa bao gồm lượt đo độc lập ở bài 8.
 
 <InteractiveLab demo="collision-tank" mode="collision-bruteforce" />
 
-Đổi 16/64/144 bóng và xem pair count tăng 120/2.016/10.296 mỗi iteration. Đây là baseline O(N²) có chủ đích. Project 28 mới thay candidate search bằng Spatial Grid và phải cho kết quả gần baseline này.
-
 ## Viết code từng bước
 
-### Bước 1 — Integrate ngoài solver iterations
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm hàm trùng tên. **Checkpoint 07 là bản tham khảo sau bài này**; chạy checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — thời gian chỉ tiến một lần"
-for (Ball& ball : balls) {
-    integrateBall(ball, settings.deltaSeconds);
-}
-
-const int iterations = std::clamp(settings.solverIterations, 1, 8);
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_starter --parallel 2
+.\build\Debug\project_24_starter.exe
 ```
 
-Iterations chỉ cải thiện việc truyền response qua contact chain. Nó không đại diện cho nhiều physics step.
+### Bước 1 — Gom setting và số đo vào đúng nơi
 
-### Bước 2 — Sửa wall trong từng pass
+Thêm các kiểu sau vào lab.hpp:
 
-```cpp title="include/lab.hpp — pair correction có thể đẩy body vào wall"
-for (Ball& ball : balls) {
-    const WallCollisionResult wall = resolveWallCollision(ball, bounds, settings.restitution);
-    stats.wallHits += std::size_t(wall.hitCount);
-    stats.maximumPenetration = std::max(stats.maximumPenetration, wall.deepestPenetration);
+```cpp title="include/lab.hpp — CollisionStepSettings"
+struct CollisionStepSettings {
+    double deltaSeconds{1.0 / 120.0};
+    double restitution{0.96};
+    int solverIterations{3};
+    double correctionPercent{0.8};
+    double penetrationSlop{0.001};
+};
+```
+
+
+```cpp title="include/lab.hpp — DebugContact"
+struct DebugContact {
+    Vec2 point{};
+    Vec2 normal{1.0, 0.0};
+    double penetration = 0.0;
+    double impulse = 0.0;
+};
+```
+
+
+```cpp title="include/lab.hpp — CollisionStepStats"
+struct CollisionStepStats {
+    std::size_t pairChecks{};
+    std::size_t contacts{};
+    std::size_t impulses{};
+    std::size_t wallHits{};
+    double maximumPenetration{};
+    Vec2 wallImpulse{};
+    bool valid = true;
+    std::vector<DebugContact> debugContacts{};
+};
+```
+
+
+Debug chỉ giữ tối đa 48 contact của lượt đầu. Mỗi record giữ normal, điểm hiển thị và j thực sự áp dụng; không giữ một danh sách tăng vô hạn theo thời gian.
+
+### Bước 2 — Duyệt i&lt;j và giải một bước hoàn chỉnh
+
+Thêm stepCollisionWorld:
+
+```cpp title="include/lab.hpp — stepCollisionWorld"
+inline CollisionStepStats stepCollisionWorld(std::vector<Ball>& balls, const TankBounds& bounds, const CollisionStepSettings& settings) {
+    CollisionStepStats stats{};
+    if (!validBounds(bounds) || balls.size() > 512 || !std::isfinite(settings.deltaSeconds) || settings.deltaSeconds <= 0.0 || settings.deltaSeconds > 1.0 / 30.0 || !std::isfinite(settings.restitution) || settings.restitution < 0.0 || settings.restitution > 1.0 || settings.solverIterations < 1 || settings.solverIterations > 8 || !std::isfinite(settings.correctionPercent) || settings.correctionPercent < 0.0 || settings.correctionPercent > 1.0 || !std::isfinite(settings.penetrationSlop) || settings.penetrationSlop < 0.0) {
+        stats.valid = false;
+        return stats;
+    }
+    for (const auto& ball : balls) {
+        if (!finiteBall(ball) || 2.0 * ball.radius > std::min(bounds.maximumX - bounds.minimumX, bounds.maximumY - bounds.minimumY)) {
+            stats.valid = false;
+            return stats;
+        }
+    }
+    for (Ball& ball : balls) {
+        integrateBall(ball, settings.deltaSeconds);
+    }
+
+    const int iterations = std::clamp(settings.solverIterations, 1, 8);
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+        for (Ball& ball : balls) {
+            const WallCollisionResult wall = resolveWallCollision(ball, bounds, settings.restitution);
+            stats.wallHits += std::size_t(wall.hitCount);
+            stats.wallImpulse = add(stats.wallImpulse, wall.wallImpulse);
+            stats.maximumPenetration = std::max(stats.maximumPenetration, wall.deepestPenetration);
+        }
+        for (std::size_t firstIndex = 0; firstIndex < balls.size(); ++firstIndex) {
+            for (std::size_t secondIndex = firstIndex + 1; secondIndex < balls.size(); ++secondIndex) {
+                ++stats.pairChecks;
+                const PairResolutionResult pair = resolveBallPair(balls[firstIndex], balls[secondIndex], settings.restitution, settings.correctionPercent, settings.penetrationSlop);
+                if (!pair.contact.colliding) {
+                    continue;
+                }
+                ++stats.contacts;
+                if (pair.impulseMagnitude > 0.0) {
+                    ++stats.impulses;
+                }
+                if (iteration == 0 && stats.debugContacts.size() < 48) {
+                    const Vec2 point = add(balls[firstIndex].position, scale(pair.contact.normal, balls[firstIndex].radius));
+                    stats.debugContacts.push_back({point, pair.contact.normal, pair.contact.penetration, pair.impulseMagnitude});
+                }
+                stats.maximumPenetration = std::max(stats.maximumPenetration, pair.contact.penetration);
+            }
+        }
+    }
+    // Correction gần tường có thể đẩy tâm ra ngoài. Khóa lại bounds sau lượt cuối.
+    for (auto& ball : balls) {
+        const auto wall = resolveWallCollision(ball, bounds, settings.restitution);
+        stats.wallHits += static_cast<std::size_t>(wall.hitCount);
+        stats.wallImpulse = add(stats.wallImpulse, wall.wallImpulse);
+    }
+    return stats;
 }
 ```
 
-Correction của pair gần biên có thể làm circle xuyên wall một chút; pass kế tiếp đưa nó trở lại.
 
-### Bước 3 — Duyệt mỗi pair đúng một lần
+Guard kiểm toàn bộ state và setting trước khi vật đầu tiên được tích phân. Nếu body cuối chứa NaN, hàm không được để nửa đàn đã đi trước.
 
-```cpp title="include/lab.hpp — j bắt đầu sau i"
-for (std::size_t firstIndex = 0; firstIndex < balls.size(); ++firstIndex) {
-    for (std::size_t secondIndex = firstIndex + 1; secondIndex < balls.size(); ++secondIndex) {
-        ++stats.pairChecks;
-        const PairResolutionResult pair = resolveBallPair(balls[firstIndex], balls[secondIndex], settings.restitution, settings.correctionPercent, settings.penetrationSlop);
-```
+Chú ý vòng cuối resolveWallCollision sau tất cả iterations. Nó không thêm pair check; Jwall của lần đó vẫn phải được cộng.
 
-Pair check tăng trước detection để count bao gồm cả cặp separated. Đó là work mà brute-force loop thật sự đã làm.
+### Bước 3 — Trở lại cảnh lớn và nối vào Scene
 
-### Bước 4 — Phân biệt contact và impulse
+Trong Scene thêm một CollisionStepStats stats. Thay rebuildScene và stepScene bằng các phiên bản bài 7:
 
-```cpp title="include/lab.hpp — một contact có thể chỉ cần correction"
-if (!pair.contact.colliding) {
-    continue;
-}
-++stats.contacts;
-if (pair.impulseMagnitude > 0.0) {
-    ++stats.impulses;
+```cpp title="include/scene.hpp — rebuildScene"
+inline void rebuildScene(Scene& scene) {
+    scene.message.clear();
+    scene.balls = makeTankBalls(kSceneSeed, scene.elastic);
+    if (scene.count == 64)
+        scene.balls.resize(64);
+    beginMeasurement(scene);
 }
 ```
 
-Contacts thường nhiều hơn impulses vì sau iteration đầu, một số pair đã có separating velocity nhưng còn penetration nhỏ.
+
+```cpp title="include/scene.hpp — stepScene"
+inline bool stepScene(Scene& scene) {
+    const double dt = scene.dt;
+    if (!std::isfinite(dt) || dt < 1e-6 || dt > 1.0 / 30.0) {
+        stopScene(scene);
+        scene.message = "Invalid fixed dt rejected.";
+        return false;
+    }
+    {
+        auto candidate = scene.balls;
+        const auto stats = stepCollisionWorld(candidate, kTankBounds, {dt, scene.restitution, scene.iterations, scene.correction ? 0.8 : 0.0, 0.001});
+        if (!stats.valid) {
+            scene.message = "Invalid 2D step rejected; state was not committed.";
+            stopScene(scene);
+            return false;
+        }
+        scene.stats = stats;
+        scene.balls = std::move(candidate);
+    }
+    scene.elapsed += dt;
+    ++scene.substeps;
+    return true;
+}
+```
+
+
+Thêm phím I để đổi số lượt và C để đối chiếu 64/256 bóng:
+
+```cpp title="src/main.cpp — SDLK_I"
+if (key == SDLK_I) {
+    scene.iterations = scene.iterations % 8 + 1;
+    lab::rebuildScene(scene);
+}
+```
+
+
+```cpp title="src/main.cpp — SDLK_C"
+if (key == SDLK_C) {
+    scene.count = scene.count == 256 ? 64 : 256;
+    lab::rebuildScene(scene);
+}
+```
+
 
 ## Ghép các phần lại
 
-```bash title="Terminal — chạy full brute-force solver"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_24_checkpoint_7
-./build/Debug/project_24_checkpoint_7.exe
+Khôi phục 256 bóng rồi bấm N. Counter phải hiện 97.920 ở ba iterations. Vẽ lại khi pause không tăng counter. Khi chọn 64, ba iterations cho 6.048 checks; đây là số công việc thật trong vòng lặp, không phải giá trị được UI tự tính thay solver.
+
+Thay drawTank2D trong view.hpp bằng bản đọc contact của toàn bể:
+
+```cpp title="include/view.hpp — drawTank2D"
+inline void drawTank2D(Framebuffer& image, const Scene& scene) {
+    rectangle(image, 100, 95, 1000, 635, 0x7187b4ffU, false);
+    if (scene.debug) {
+        for (int x = -8; x <= 8; x += 2) {
+            const Vec2 a = worldToScreen({static_cast<double>(x), -6});
+            const Vec2 b = worldToScreen({static_cast<double>(x), 6});
+            drawLine(image, a.x, a.y, b.x, b.y, kGrid);
+        }
+    }
+    for (const auto& ball : scene.balls)
+        drawBall(image, ball);
+    if (scene.debug) {
+        for (const auto& contact : scene.stats.debugContacts) {
+            arrow2D(image, contact.point, contact.normal, 0.5, 0xffe26cffU);
+            if (contact.impulse > 0.0)
+                arrow2D(image, contact.point, contact.normal, std::min(2.0, contact.impulse * 0.2), 0xff7b72ffU);
+        }
+    }
+}
 ```
 
-Nhấn I để đổi 1–5 iterations. Pair checks phải đổi tuyến tính; elapsed mỗi N step vẫn không phụ thuộc iteration count.
+Trong view.hpp, dùng stats.debugContacts khi debug để vẽ normal vàng và vector j đỏ. Phần vẽ mũi tên chỉ đổi dữ liệu sang screen; độ dài vector j được scale và chặn cho dễ nhìn, còn trị số vật lý giữ nguyên trong record. Tắt debug vẫn phải thấy toàn bộ đàn bóng.
 
 ## Thử làm sai để hiểu đúng
 
-1. Cho `secondIndex=0`. Self-pair và duplicate pair xuất hiện; count không còn $N(N-1)/2$. Hoàn tác về `i+1`.
-2. Đặt integration trong vòng iteration. Năm iterations làm tốc độ vật lý gấp năm; hoàn tác movement ra ngoài.
-3. Chỉ tăng pairChecks khi contact tồn tại. Bạn đang đếm kết quả, không đếm work; hoàn tác counter trước detection.
+1. Cho j bắt đầu từ 0. Bạn vừa thêm self-pair và cặp đảo; counter không còn bằng I×N(N−1)/2.
+
+2. Đặt integrateBall vào bên trong vòng iterations. I=3 lúc này làm vật tiến ba dt thay vì chỉ giải tốt hơn trong cùng dt.
+
+3. Bỏ lần khóa tường cuối. Correction gần biên có thể để một phần bóng ở ngoài bể dù lần xử lý tường đầu đã đúng.
 
 ## Tự kiểm tra kết quả
 
-- Mỗi fixed step tích phân mỗi ball đúng một lần.
-- Solver iterations được clamp từ 1 đến 8.
-- Không có self-pair hoặc duplicate reversed pair.
-- Pair checks đúng `I*N*(N-1)/2`.
-- 4 ball, 3 iterations tạo đúng 18 checks.
-- Contact, impulse và wall-hit counters có ý nghĩa riêng.
-- Tăng iterations không thay elapsed hoặc fixed dt.
-- 144 bóng có thể chạy realtime trên cấu hình mục tiêu với baseline này.
+- Cảnh chính có 256 bóng khác khối lượng/bán kính, không phải chỉ hai bóng mẫu.
+- Ba lượt với N=256 cho 97.920 checks; N=64 cho 6.048.
+- Mỗi physics step chỉ tích phân một lần; chỉ solver lặp I lần.
+- Các vật vẫn nằm trong radius-aware bounds sau lượt cuối; debug có thể tắt.
 
 ## Bài tập mở rộng
 
-Ghi thời gian CPU của riêng pair loop cho 16, 64 và 144 ball. Không tối ưu ngay; vẽ time theo pair count và giữ số liệu làm baseline cho Spatial Grid sau này.
+Đo pair-check count với I=1, 3, 5 và N=64, 256. Viết bảng lượng công việc; đừng gọi các con số đếm đó là runtime. Dùng kết quả này làm baseline khi tới project tối ưu tìm láng giềng.
 
-Bài cuối xây validation độc lập: conservation cho case hai bóng và stress test hữu hạn cho cả bể.
+[Sang bài 8 — Kiểm chứng bể 2D trước khi sang 3D](/projects/collision-tank/08-stress-test-bao-toan-va-nghiem-thu).

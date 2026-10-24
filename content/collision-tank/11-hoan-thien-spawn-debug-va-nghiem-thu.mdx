@@ -1,0 +1,223 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện spawn, input và nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Bể đã chạy được trong hai không gian. Phần cuối không thêm một solver mới: ta hoàn thiện đường đi của input, thêm vật thể an toàn và khóa những điều kiện khiến một ứng dụng học tập chạy đáng tin.
+
+Spawn và kick là tác động từ bên ngoài, nên không được nối số đo bảo toàn trước/sau như thể hệ chưa từng bị can thiệp. Gesture bị hủy cũng không được bất ngờ áp lại khi pointer up tới muộn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi lần spawn thử một tập vị trí hữu hạn, thêm tối đa 16 vật thể và tổng không vượt 512. Nếu không có chỗ, báo rõ; không ép vật mới vào state đang bị chiếm.
+
+Kéo có hai ý nghĩa tách biệt: **2D kéo đúng bóng để truyền delta velocity**, **3D kéo để orbit camera**. Kick dùng chênh lệch vị trí con trỏ lúc thả so với lúc bắt đầu, có giới hạn 6 m/s. Nó không phải mô hình lò xo chuột hoặc một lực ma sát ẩn.
+
+Một gesture có pointer owner. Chỉ owner được cập nhật/kết thúc; mẫu thả cuối luôn được đọc. Reset, đổi cấu hình, blur/resize và mất nút giữ phải hủy cả capture lẫn dữ liệu gesture. Reduced motion chặn chạy liên tục nhưng vẫn cho thao tác thủ công và job hữu hạn.
+
+<InteractiveLab demo="collision-tank" mode="collision-final" />
+
+## Viết code từng bước
+
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm hàm trùng tên. **Checkpoint 11 là bản tham khảo sau bài này**; chạy checkpoint không kiểm phần bạn vừa viết trong Starter.
+
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_starter --parallel 2
+.\build\Debug\project_24_starter.exe
+```
+
+### Bước 1 — Spawn có kiểm chỗ trống và giới hạn
+
+Thêm spawnBodies vào scene.hpp:
+
+```cpp title="include/scene.hpp — spawnBodies"
+inline int spawnBodies(Scene& scene) {
+    stopScene(scene);
+    int added = 0;
+    const std::size_t size = scene.spatial ? scene.spheres.size() : scene.balls.size();
+    if (size >= 512) {
+        scene.message = "Capacity 512 reached.";
+        return 0;
+    }
+    if (scene.spatial) {
+        const auto candidates = makeSpheres(kSceneSeed + 1, scene.elastic);
+        for (auto body : candidates) {
+            body.position.x += 1.0;
+            if (body.position.x + body.radius > 8.0)
+                continue;
+            bool free = true;
+            for (const auto& other : scene.spheres) {
+                if (findSphereContact(body, other).colliding) {
+                    free = false;
+                    break;
+                }
+            }
+            if (free && scene.spheres.size() < 512) {
+                scene.spheres.push_back(body);
+                if (++added == 16)
+                    break;
+            }
+        }
+    } else {
+        const auto candidates = makeTankBalls(kSceneSeed + 1, scene.elastic);
+        for (auto body : candidates) {
+            body.position.x = -body.position.x;
+            body.position.y = -body.position.y;
+            body.position.x += 0.55;
+            if (body.position.x + body.radius > kTankBounds.maximumX)
+                continue;
+            bool free = true;
+            for (const auto& other : scene.balls) {
+                if (findCircleContact(body, other).colliding) {
+                    free = false;
+                    break;
+                }
+            }
+            if (free && scene.balls.size() < 512) {
+                scene.balls.push_back(body);
+                if (++added == 16)
+                    break;
+            }
+        }
+    }
+    beginMeasurement(scene);
+    scene.message = "Spawned " + std::to_string(added) + " bodies; measurement baseline restarted.";
+    return added;
+}
+```
+
+
+Ứng viên là lưới lệch khỏi các vị trí khởi tạo cũ; vẫn kiểm chồng lấn với toàn bộ vật đang có và giới hạn tường theo radius. Không dùng một while random “đến khi tìm được”.
+
+Sau khi đủ code, thêm flag của nhóm kiểm spawn:
+
+```cpp title="include/scene.hpp — bật nhóm kiểm spawn"
+#define COURSE_HAS_SPAWN 1
+```
+
+
+Thêm phím B vào key-down:
+
+```cpp title="src/main.cpp — SDLK_B"
+if (key == SDLK_B)
+    lab::spawnBodies(scene);
+```
+
+
+### Bước 2 — Nhận đúng pointer và mẫu thả cuối
+
+Trong main, phần chọn bóng 2D nằm ở nhánh mouse-down; chọn theo hit hình tròn, không chọn bóng gần nhất khi click nền. Owner lưu event.button.which và SDL_CaptureMouse phải thành công trước khi bắt đầu gesture.
+
+Trong main, thêm selected cạnh các biến của gesture:
+
+```cpp title="src/main.cpp — chỉ số bóng được chọn"
+std::size_t selected = 0;
+```
+
+Thay nhánh mouse-down để 2D chỉ nhận hit trên một bóng:
+
+```cpp title="src/main.cpp — bắt đầu gesture có owner"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !dragging) {
+    bool allowed = scene.spatial;
+    if (!scene.spatial) {
+        const auto point = lab::screenToWorld({event.button.x, event.button.y});
+        selected = scene.balls.size();
+        for (std::size_t i = 0; i < scene.balls.size(); ++i) {
+            if (lab::lengthSquared(lab::subtract(point, scene.balls[i].position)) <= scene.balls[i].radius * scene.balls[i].radius) {
+                selected = i;
+                break;
+            }
+        }
+        allowed = selected < scene.balls.size();
+    }
+    if (allowed && SDL_CaptureMouse(true)) {
+        lab::stopScene(scene);
+        dragging = true;
+        owner = event.button.which;
+        start = current = {event.button.x, event.button.y};
+        cameraStart = scene.camera;
+    }
+}
+```
+
+Giữ nhánh motion của Starter: nếu mất nút giữ thì cancel; nếu còn giữ thì chỉ owner được gọi updateDrag. Thay nhánh mouse-up bằng phiên bản sau:
+
+```cpp title="src/main.cpp — nhận mẫu cuối, áp kick, rồi nhả capture"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && dragging && event.button.which == owner) {
+    updateDrag(event.button.x, event.button.y);
+    if (!scene.spatial) {
+        auto change = lab::scale(lab::subtract(lab::screenToWorld(current), lab::screenToWorld(start)), 2.0);
+        const double speed = lab::length(change);
+        if (speed > 6.0)
+            change = lab::scale(change, 6.0 / speed);
+        lab::applyVelocityKick(scene.balls, selected, change);
+        lab::beginMeasurement(scene);
+    }
+    cancelDrag();
+}
+```
+
+
+updateDrag dùng mẫu up cuối ngay cả khi không có motion trước đó. beginMeasurement đặt lại baseline/time/history sau kick; nó không reset mọi bóng về lattice. Trong nhánh 3D, up chỉ hoàn thiện camera rồi nhả capture.
+
+Trong main của Starter đã có các nhánh blur, hidden, minimize, resize/pixel-size để cancelDrag và stopScene. Giữ chúng khi ghép file; không chỉ xóa biến dragging mà quên release capture.
+
+### Bước 3 — Kiểm chính Starter đã hoàn thiện
+
+Nếu chưa làm ở bài 8, đổi target include của tests:
+```cmake title="CMakeLists.txt — nghiệm thu mã do bạn viết"
+target_include_directories(project_24_tests PRIVATE starter/include)
+```
+
+Build Starter và tests:
+```powershell title="Kiểm đầy đủ Starter ở hai cấu hình"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_24_starter project_24_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 45
+cmake --build build --config Release --target project_24_starter project_24_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 45
+.\build\Release\project_24_starter.exe
+```
+
+Output phải có đủ **2D, 3D physics, 3D renderer và spawn**. Nếu chỉ có nhóm 2D, bạn mới kiểm một phần bài làm. Nếu giữ final/include, CTest đang kiểm bản mẫu chứ chưa kiểm Starter.
+
+Có thể build toàn bộ 11 checkpoint và final để đối chiếu:
+```powershell title="Đối chiếu các bản tham khảo chạy độc lập"
+cmake --build build --config Release --parallel 2
+.\build\Release\project_24_final.exe
+```
+
+## Ghép các phần lại
+
+Bản cuối mặc định là 256 bóng 2D; phím 3 chuyển sang 256 sphere 3D. Phím C đổi 64/256 để thấy chi phí brute force; I đổi iterations; E hoặc preset đổi restitution; D tắt/bật correction; F ẩn debug. Thử cùng một trạng thái pause trước khi đưa ra nhận xét về hình ảnh.
+
+Xem hai đồ thị và số đo khi can thiệp: spawn/kick bắt lại mốc đo, còn camera/debug không làm vậy. Đây là lý do không so một K trước spawn với K sau spawn rồi gọi phần tăng là solver tạo năng lượng.
+
+Gói ZIP có README, CMake, Starter, 11 checkpoint, final và tests; toàn bộ source bản cuối có ở dưới. Không cần trình duyệt để chạy ứng dụng C++. Smoke mode --smoke chỉ mở window ẩn và chạy 32 frame hữu hạn để thử render/input plumbing/resize/spawn; nó không thay thế việc kiểm GUI thật.
+
+## Thử làm sai để hiểu đúng
+
+1. Bắt gesture khi capture thất bại rồi vẫn áp kick. Giả lập lỗi capture: state phải giữ nguyên, không có gesture nửa chừng.
+
+2. Bỏ mẫu pointer up cuối. Thả xa vị trí motion cuối sẽ cho sai kick hoặc camera giật về điểm cũ.
+
+3. Đổi restitution/reset trong khi đang kéo rồi tiếp tục nhận up cũ. Handler đã hủy phải bỏ qua up đó, không tác động vào cảnh mới.
+
+4. Gộp history trước/sau spawn. Năng lượng tăng vì thêm vật chứ không phải vì sai impulse. Tách lại baseline và ghi rõ mốc đo.
+
+## Tự kiểm tra kết quả
+
+- Cả hai cảnh chính có 256 vật thể động, vật liệu/khối lượng/bán kính khác nhau; đổi restitution và reset hoạt động.
+- Spawn thêm tối đa 16, kiểm chỗ trống và bounds; báo giới hạn 512, không lặp vô hạn.
+- Pointer owner, capture failure, mẫu thả cuối, blur/resize/reset và keyboard/reduced motion đều được kiểm.
+- Khi e=1, pair conservation và stress kinetic energy gần giữ nguyên; residual có tính Jwall nhỏ.
+- 3D có perspective, ray/sphere surface, depth buffer và camera độc lập physics.
+- Starter, 11 checkpoint và final build ở Debug/Release; tests chạy thật, ZIP có đầy đủ source và không có file biên dịch.
+
+## Bài tập mở rộng
+
+Thêm một bảng đo thời gian solver riêng, giữ workload/seed/cấu hình cố định và chạy từng batch hữu hạn. Đặt runtime cạnh pair checks, không lấy số đếm làm thời gian. Khi học spatial grid sau này, hãy so state với chính brute-force baseline này trước khi so tốc độ.
+
+Sang [Project 25 — Chuỗi lò xo](/projects/spring-chain), ta sẽ thêm lực liên kết thay vì chỉ phản ứng tại contact.

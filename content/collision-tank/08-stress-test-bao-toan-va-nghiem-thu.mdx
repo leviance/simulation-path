@@ -1,101 +1,234 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Stress test, bảo toàn và nghiệm thu
+# Kiểm chứng bể 2D trước khi sang 3D
 
 ## Vấn đề cần giải quyết
 
-Một bể nhiều màu trông vui mắt có thể vẫn sai: một contact bơm energy rất chậm, pair count thiếu vài cặp, static body trôi hoặc NaN chỉ xuất hiện khi hai tâm gần trùng. Final cần test nhỏ có đáp án và stress test lớn có invariant.
+Một bể bóng trông hợp lý vẫn có thể mất động lượng vì sai dấu hoặc đếm overlap sai thời điểm. Trước khi thêm trục Z, ta cần phân biệt rõ thứ gì phải được giữ nguyên và thứ gì đang nhận tác động từ bên ngoài.
 
-Ta dùng hai tầng. Case hai bóng cô lập kiểm momentum/energy chính xác. Run 144 bóng kiểm tính hữu hạn, bounds, pair count và maximum penetration qua nhiều step. Hai tầng bắt các loại lỗi khác nhau.
+Đây là **mốc kiểm chứng bể 2D**, chưa phải kết thúc Project 24. Phần sphere 3D và renderer còn ở ba bài sau.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Tổng linear momentum và kinetic energy:
+Cặp cô lập chỉ nhận hai impulse đối nhau, nên giữ tổng động lượng. Với e=1, nó cũng giữ động năng. Khi e&lt;1, động năng giảm là kết quả mong đợi.
+
+Riêng đàn bóng trong bể không phải hệ cô lập: tường đổi động lượng của nó. Vì đã lưu xung lực tường, ta kiểm:
 
 $$
-P=\sum_i m_iv_i,\qquad K=\sum_i\frac12m_i\lVert v_i\rVert^2
+P=\sum_i m_i v_i,\quad K=\sum_i\frac12m_i\|v_i\|^2,
+\qquad residual=\left\|P-P_0-\sum J_{wall}\right\|.
 $$
 
-Với restitution 1 và không có wall impact trong case hai bóng, cả P lẫn K phải bảo toàn trong tolerance. Trong cả bể, wall đổi momentum của hệ và restitution 0.96 cố ý làm giảm energy; vì vậy readout không dùng “momentum luôn zero” như một luật sai.
+Không bắt P cố định khi bóng nảy vào tường. Độ xuyên còn lại cũng phải quét trên **state sau solver và lần khóa tường cuối**, không lấy maximumPenetration đã ghi trong lúc giải.
+
+History ghi t=0 và từng physics step, giữ tối đa 601 mẫu. Hai đồ thị K (J) và độ xuyên (m) dùng thang dọc riêng; một đường thấp không có nghĩa đại lượng đó gần zero nếu chưa đọc scale.
 
 <InteractiveLab demo="collision-tank" mode="collision-validation" />
 
-Đặt restitution 1, 144 ball, ba iterations và chạy nhanh 2 giây vài lần. Graph tím cho energy drift, vàng cho penetration. Sau đó hạ restitution: energy giảm là kết quả vật liệu, không tự động là integration bug.
-
 ## Viết code từng bước
 
-### Bước 1 — Đo state sau solver một cách độc lập
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm hàm trùng tên. **Checkpoint 08 là bản tham khảo sau bài này**; chạy checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — metrics không đọc CollisionStepStats"
-const double mass = 1.0 / ball.inverseMass;
-metrics.totalMomentum = add(metrics.totalMomentum, scale(ball.velocity, mass));
-metrics.kineticEnergy += 0.5 * mass * lengthSquared(ball.velocity);
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_starter --parallel 2
+.\build\Debug\project_24_starter.exe
 ```
 
-`measureWorld` quét state thật sau step. Nó không tin counter nội bộ, nhờ vậy một lỗi quên ghi stats không che lỗi physics và ngược lại.
+### Bước 1 — Đo độc lập với solver
 
-### Bước 2 — Quét overlap bằng detection đã kiểm thử
+Thêm WorldMetrics và measureWorld vào lab.hpp:
 
-```cpp title="include/lab.hpp — overlap count và max penetration sau step"
-const CircleContact contact = findCircleContact(balls[firstIndex], balls[secondIndex]);
-if (!contact.colliding) {
-    continue;
+```cpp title="include/lab.hpp — WorldMetrics"
+struct WorldMetrics {
+    Vec2 totalMomentum{};
+    double kineticEnergy{};
+    std::size_t overlapCount{};
+    double maximumPenetration{};
+    bool finite{true};
+};
+```
+
+
+```cpp title="include/lab.hpp — measureWorld"
+inline WorldMetrics measureWorld(const std::vector<Ball>& balls) {
+    WorldMetrics metrics{};
+    for (const Ball& ball : balls) {
+        if (!finiteBall(ball)) {
+            metrics.finite = false;
+            continue;
+        }
+        if (ball.inverseMass <= kCollisionEpsilon) {
+            continue;
+        }
+        const double mass = 1.0 / ball.inverseMass;
+        metrics.totalMomentum = add(metrics.totalMomentum, scale(ball.velocity, mass));
+        metrics.kineticEnergy += 0.5 * mass * lengthSquared(ball.velocity);
+    }
+    for (std::size_t firstIndex = 0; firstIndex < balls.size(); ++firstIndex) {
+        for (std::size_t secondIndex = firstIndex + 1; secondIndex < balls.size(); ++secondIndex) {
+            const CircleContact contact = findCircleContact(balls[firstIndex], balls[secondIndex]);
+            if (!contact.colliding) {
+                continue;
+            }
+            ++metrics.overlapCount;
+            metrics.maximumPenetration = std::max(metrics.maximumPenetration, contact.penetration);
+        }
+    }
+    return metrics;
 }
-++metrics.overlapCount;
-metrics.maximumPenetration = std::max(metrics.maximumPenetration, contact.penetration);
 ```
 
-Overlap count không nhất thiết bằng zero vì solver cho phép slop và correction hữu hạn. Tiêu chí hữu ích là penetration bị chặn và không tăng mất kiểm soát.
 
-### Bước 3 — Kiểm elastic head-on bằng số cụ thể
+Lượt quét overlap này tốn N(N−1)/2 checks riêng. Nó không nằm trong stats.pairChecks của solver. Không quảng bá cả chương trình chỉ có đúng từng ấy phép kiểm hình học.
 
-```cpp title="tests/tests.cpp — hai equal mass đổi normal velocity"
-check(closeEnough(impulseMagnitude, 2.0), "elastic equal-mass head-on collision has the expected impulse");
-check(closeEnough(impulseFirst.velocity.x, -1.0) && closeEnough(impulseSecond.velocity.x, 1.0), "elastic equal masses exchange normal velocity");
-check(closeEnough(momentumBefore.x, momentumAfter.x) && closeEnough(momentumBefore.y, momentumAfter.y), "pair impulse conserves linear momentum");
-check(closeEnough(energyBefore, energyAfter), "restitution one conserves pair kinetic energy");
+### Bước 2 — Mở mốc đo và ghi từng bước
+
+Trong Scene thêm metrics, initialEnergy, initialMomentum, wallImpulse và deque history như source ở cuối bài. Thay beginMeasurement để lấy đúng baseline:
+
+```cpp title="include/scene.hpp — beginMeasurement"
+inline void beginMeasurement(Scene& scene) {
+    stopScene(scene);
+    scene.elapsed = 0.0;
+    scene.droppedTime = 0.0;
+    scene.substeps = 0;
+    scene.stats = {};
+    scene.metrics = measureWorld(scene.balls);
+    scene.initialEnergy = scene.metrics.kineticEnergy;
+    scene.initialMomentum = scene.metrics.totalMomentum;
+    scene.wallImpulse = {};
+    scene.history.clear();
+    scene.history.push_back({0.0, scene.initialEnergy, scene.metrics.maximumPenetration});
+}
 ```
 
-Đây là test cô lập, không có wall hoặc thứ tự nhiều contact làm nhiễu kết luận.
 
-### Bước 4 — Stress nhưng vẫn có giới hạn thời gian
+Trong nhánh 2D của stepScene sau khi nhận candidate:
 
-CTest chạy 240 step cho 144 ball, mỗi step kiểm đúng 30.888 pair. Nó xác nhận finite state, bounds, penetration dưới ngưỡng và elastic energy gần bảo toàn. Số step hữu hạn giữ test nhanh; không dùng một vòng `while` chờ scene “ổn”.
+```cpp title="include/scene.hpp — cộng xung lực ngoài và đo state mới"
+scene.metrics = measureWorld(scene.balls);
+scene.initialEnergy = scene.metrics.kineticEnergy;
+```
+
+
+Sau khi tăng elapsed, thêm phần ghi mẫu và giới hạn bộ đệm:
+
+```cpp title="include/scene.hpp — một mẫu cho mỗi bước physics"
+double energy = scene.metrics.kineticEnergy;
+double penetration = scene.metrics.maximumPenetration;
+scene.history.push_back({scene.elapsed, energy, penetration});
+if (scene.history.size() > 601)
+    scene.history.pop_front();
+return true;
+```
+
+
+Thêm momentumResidual:
+
+```cpp title="include/scene.hpp — momentumResidual"
+inline double momentumResidual(const Scene& scene) {
+    return length(subtract(subtract(scene.metrics.totalMomentum, scene.initialMomentum), scene.wallImpulse));
+}
+```
+
+
+Mở toàn bộ scene.hpp của checkpoint 08 để ghép các member. Thêm requestFast và thay advanceFrame bằng hai hàm sau:
+
+```cpp title="include/scene.hpp — requestFast"
+inline void requestFast(Scene& scene) {
+    stopScene(scene);
+    scene.fastRemaining = static_cast<int>(std::lround(2.0 / scene.dt));
+}
+```
+
+
+```cpp title="include/scene.hpp — advanceFrame"
+inline void advanceFrame(Scene& scene, double frameSeconds) {
+    scene.substeps = 0;
+    if (scene.fastRemaining > 0) {
+        const int count = std::min(4, scene.fastRemaining);
+        for (int i = 0; i < count; ++i) {
+            if (!stepScene(scene))
+                break;
+            --scene.fastRemaining;
+        }
+        return;
+    }
+    if (!scene.paused) {
+        const auto plan = planFixedSteps(scene.accumulator, frameSeconds, scene.dt, 4, 0.05);
+        scene.accumulator = plan.remainder;
+        scene.droppedTime += plan.droppedTime;
+        for (int i = 0; i < plan.steps; ++i) {
+            if (!stepScene(scene))
+                break;
+        }
+    }
+}
+```
+
+ Job chỉ gọi tối đa bốn bước mỗi frame; không nhét toàn bộ hai giây mô phỏng vào một event handler.
+
+### Bước 3 — Dùng test có đáp án không phụ thuộc solver
+
+Bộ tests đã nằm trong ZIP. Trong tests.cpp, kiểm cặp equal mass bằng đáp án đổi vận tốc; trong extra-cases.hpp có ca khác khối lượng và đàn 256 bóng. C++ không dùng assert bị loại bởi NDEBUG.
+
+Ở bài này, target tests có thể kiểm trực tiếp phần Starter 2D. Đổi đường include trong CMake:
+```cmake title="CMakeLists.txt — kiểm bài làm, không chỉ bản final tham khảo"
+target_include_directories(project_24_tests PRIVATE starter/include)
+```
+
+Rồi build và chạy hai cấu hình:
+```powershell title="Kiểm phần 2D của Starter"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --target project_24_starter project_24_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 45
+cmake --build build --config Release --target project_24_starter project_24_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 45
+```
+
+Phần 3D chưa được bật trong Starter nên output mới có nhóm 2D. Không lấy lượt này làm bằng chứng rằng toàn bộ Project 24 đã xong.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — nghiệm thu toàn bộ Project 24"
-cmake -S . -B build-all -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build-all --config Debug
-ctest --test-dir build-all -C Debug --output-on-failure
-cmake --build build-all --config Release
-ctest --test-dir build-all -C Release --output-on-failure
-./build-all/Debug/project_24_final.exe
+Ghép drawHistory trong view.hpp và các dòng HUD từ presentation.hpp bài 8. Chúng chỉ đọc dữ liệu, không được ghi thêm sample. Thêm phím H và Enter vào main:
+
+```cpp title="src/main.cpp — SDLK_H"
+if (key == SDLK_H) {
+    scene.elastic = !scene.elastic;
+    scene.restitution = 1.0;
+    lab::rebuildScene(scene);
+}
 ```
 
-Build toàn bộ starter, tám checkpoint, final và tests. Final thêm drag kick, điều khiển `dt`/restitution/iterations cùng title bar metrics; các checkpoint trước vẫn phải compile độc lập.
+
+```cpp title="src/main.cpp — yêu cầu job hữu hạn"
+if (key == SDLK_RETURN)
+    lab::requestFast(scene);
+```
+
+
+Bật preset đàn hồi để mọi eBody=1 và scale=1. Chạy hai giây: động năng gần giữ nguyên, nhưng P của đàn có thể đổi vì tường. Residual sau khi trừ Jwall mới là số cần gần zero. Chuyển về vật liệu khác nhau: động năng giảm.
+
+Bộ kiểm dùng seed cố định, ca tính tay, exact pair count, bounds theo radius, độ xuyên sau solver và stress hữu hạn. Một test sai cần actual/expected cùng ngữ cảnh; đừng nới tolerance chỉ để nó xanh.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng restitution 0.8 nhưng vẫn đòi kinetic energy bảo toàn. Test đang sai kỳ vọng; đổi case conservation về e=1 rồi hoàn tác nhầm lẫn.
-2. Chỉ test `finite=true`. Một solver đứng yên cũng pass; thêm head-on result, pair count và penetration bound.
-3. Spawn bằng clock trong stress test. Khi fail không thể chạy lại đúng scene; hoàn tác về fixed seed.
-4. Dùng vòng stress không giới hạn thời gian. Thay bằng số step cố định và giữ process supervisor cho build/test.
+1. Assert P không đổi trong một bể có tường. Test có thể báo lỗi dù phản xạ đúng. Thay bằng cân bằng xung lực hoặc chọn riêng cặp cô lập.
+
+2. Đo overlap trước khi correction rồi gọi nó là phần xuyên còn lại. So lại bằng một lượt quét sau solver.
+
+3. Ghi history mỗi render frame. Khi pause mà redraw, số mẫu vẫn tăng; tốc độ vẽ đã làm thay đổi thống kê.
 
 ## Tự kiểm tra kết quả
 
-- Cùng seed tái tạo đủ 144 body state.
-- Wall tests bao gồm corner và ball đang đi ra khỏi wall overlap.
-- Detection tests bao gồm separated, overlap và coincident centers.
-- Elastic two-ball test bảo toàn momentum và kinetic energy.
-- Separating contact không nhận impulse; correction không đổi velocity.
-- Pair-count invariant đúng cho nhiều N/iteration.
-- Stress run không NaN, không ra ngoài bounds và penetration bị chặn.
-- Canvas hỗ trợ DPR, pointer capture, keyboard, reduced motion và textual state.
-- Debug/Release CTest đều chạy thật; starter, tám checkpoint và final build sạch.
+- Cặp đàn hồi có đáp án tính tay; e&lt;1 giảm K, không bị gọi là sai bảo toàn.
+- Đàn 256 bóng ở preset đàn hồi có K gần giữ nguyên và residual động lượng nhỏ sau khi trừ Jwall.
+- History chỉ tăng theo physics, có t=0 và mẫu cuối job; giới hạn 601 được ghi rõ.
+- CTest chạy đúng Starter 2D khi đã đổi include; Debug/Release không loại phép kiểm.
+- Bản 3D vẫn là phần việc chưa hoàn thành ở mốc này.
 
 ## Bài tập mở rộng
 
-Xuất CSV mỗi 0.1 giây gồm energy drift, overlap count, maximum penetration, pair checks và contacts. So ba giá trị solver iterations, nhưng giữ seed, dt và restitution cố định.
+Tạo một test gồm một bóng va tường rồi kiểm từng thành phần P−P₀ bằng Jwall. Sau đó đặt e=0,5 và kiểm riêng động lượng trao đổi với tường và phần động năng mất đi; đó là hai câu hỏi khác nhau.
 
-Project 24 đã tạo một baseline collision đúng và đo được. Project 25 sẽ dùng nhiều mass–spring nối thành chuỗi, nơi lực truyền qua hàng xóm thay cho impulse tức thời giữa các circle.
+[Sang bài 9 — Từ va chạm circle đến sphere trong 3D](/projects/collision-tank/09-mo-rong-tu-circle-sang-sphere).

@@ -1,4 +1,4 @@
-#include "lab.hpp"
+#include "view.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -11,7 +11,7 @@ namespace {
 int failures = 0;
 
 bool closeEnough(double actual, double expected, double tolerance = 1e-9) {
-    return std::abs(actual - expected) <= tolerance;
+    return std::isfinite(actual) && std::isfinite(expected) && std::abs(actual - expected) <= tolerance;
 }
 
 // Dùng phép kiểm tường minh để Debug và Release cùng chạy toàn bộ validation.
@@ -28,6 +28,8 @@ bool sameBall(const lab::Ball& first, const lab::Ball& second) {
 }
 
 } // namespace
+
+#include "extra-cases.hpp"
 
 int main() {
     failures = 0;
@@ -143,6 +145,14 @@ int main() {
     const lab::Vec2 velocityBeforeKick = kickBalls[nearest].velocity;
     check(lab::applyVelocityKick(kickBalls, nearest, {1.0, -2.0}), "valid velocity kick is applied");
     check(closeEnough(kickBalls[nearest].velocity.x, velocityBeforeKick.x + 1.0) && closeEnough(kickBalls[nearest].velocity.y, velocityBeforeKick.y - 2.0), "velocity kick adds the requested delta");
+
+    checkExtra2D();
+#ifdef COURSE_HAS_3D
+    checkExtra3D();
+#endif
+#ifdef COURSE_HAS_3D_RENDERER
+    checkRenderer3D();
+#endif
 
     if (failures != 0) {
         std::cerr << failures << " Project 24 validation check(s) failed\n";

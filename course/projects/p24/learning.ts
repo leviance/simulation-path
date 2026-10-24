@@ -4,201 +4,282 @@ const learning = {
   guides: {
     "p24-l01": {
       focus:
-        "Dựng bể nhìn thấy ngay, định nghĩa body bằng world unit và tạo 144 bóng không overlap từ lattice cùng seeded PRNG.",
+        "Tạo 256 quả bóng theo lưới, giữ vị trí trong world space và thay đổi bán kính, khối lượng, vật liệu.",
       expected:
-        "Reset luôn tạo 16×9 ball state giống nhau; mọi tâm cách tường ít nhất một radius và metrics báo zero overlap.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Bể hiện đủ 256 bóng; reset tạo lại cùng trạng thái, các vật không nằm chồng lên nhau.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Giữ geometry và dynamics trong Ball",
+          title: "Đọc khung có sẵn trước khi thêm thuật toán",
           explanation:
-            "Position/radius phục vụ detection; velocity/inverseMass phục vụ response. Color chỉ phục vụ render và không tham gia physics.",
+            "Starter đã mở cửa sổ và vẽ khung bể. Ball giữ world position/velocity, radius, inverseMass và vật liệu; pixel chỉ thuộc renderer.",
         },
         {
-          title: "Spawn theo cell thay vì thử ngẫu nhiên vô hạn",
+          title: "Đặt vật vào các ô không chồng lấn",
           explanation:
-            "Lattice đảm bảo khoảng cách tối thiểu ngay từ công thức; PRNG chỉ chọn hướng/speed nên không cần vòng lặp rejection khó đoán.",
+            "Lưới 16×16 có khoảng cách nhỏ nhất 0,75 m, lớn hơn đường kính lớn nhất 0,48 m. Seed chỉ quyết định vận tốc.",
         },
         {
-          title: "Khóa seed để biến bug thành case lặp lại",
+          title: "Nối dữ liệu với phần vẽ",
           explanation:
-            "Xorshift32 nhỏ, rõ và cho cùng chuỗi trên C++/TypeScript; clock/random_device bị loại khỏi validation path.",
+            "makeTankBalls tạo vật liệu khác nhau; rebuildScene gọi nó rồi renderer duyệt đúng vector đó, không tự tạo bóng riêng.",
         },
       ],
     },
     "p24-l02": {
       focus:
-        "Cho toàn bộ body tiến bằng position += velocity·dt và một accumulator có frame/substep guard.",
+        "Nối vận tốc với vị trí, tách physics khỏi render và công khai thời gian bị bỏ khi chạm giới hạn công việc.",
       expected:
-        "Hai cách chia render frame có cùng tổng thời gian tạo cùng số physics step; single-step chạy đúng một dt.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "N tiến một dt. Các chuỗi frame tạo cùng state nếu chưa chạm giới hạn bốn substep/frame.",
+      files: ["include/lab.hpp", "include/scene.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tích phân một Ball trước",
+          title: "Tiến một vật bằng vận tốc",
           explanation:
-            "integrateBall là hàm thuần với SDL, giữ velocity không đổi và chỉ sửa position khi dt hợp lệ.",
+            "integrateBall chỉ sửa position; không dùng số frame như thời gian và không thay velocity khi chưa có lực/va chạm.",
         },
         {
-          title: "Áp cùng dt cho cả vector body",
+          title: "Dùng một đồng hồ physics",
           explanation:
-            "Một substep duyệt mọi Ball đúng một lần; không body nào nhận frameSeconds riêng.",
+            "Cả đàn nhận cùng dt. stepScene tăng elapsed đúng một dt, còn render không tăng đồng hồ.",
         },
         {
-          title: "Giới hạn catch-up work",
+          title: "Giới hạn phần việc của mỗi frame",
           explanation:
-            "Accumulator clamp frame pause và số substep; droppedTime công khai phần thời gian bị bỏ thay vì treo vòng lặp.",
+            "Accumulator chỉ cho nhiều nhất bốn bước mỗi frame. Phần không xử lý kịp được ghi vào droppedTime, không giấu như một kết quả đúng thời gian thực.",
         },
       ],
     },
     "p24-l03": {
       focus:
-        "Xử lý bốn wall bằng radius-aware limits, hướng velocity và restitution thay vì clamp center vào mép.",
+        "Xét bán kính, hướng chuyển động và restitution; ghi xung lực tường tác dụng lên bóng.",
       expected:
-        "Ball xuyên corner được đưa về hai limit; chỉ incoming component đổi dấu và nhân e, outgoing component giữ nguyên.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Bóng nằm cách tường một radius; thành phần tiếp tuyến giữ nguyên, thành phần đang lao vào tường phản xạ theo e.",
+      files: ["include/lab.hpp", "include/scene.hpp"],
       steps: [
         {
-          title: "Đổi wall thành giới hạn của tâm",
-          explanation:
-            "Left limit là minX+radius, right limit là maxX−radius; nhờ vậy toàn bộ hình tròn nằm trong bể.",
+          title: "Tính giới hạn của tâm",
+          explanation: "Tường trái x=-10 không cho phép tâm nằm ở -10: giới hạn tâm là -10+radius.",
         },
         {
-          title: "Kiểm hướng trước khi phản xạ",
+          title: "Chỉ phản xạ khi vật còn đi ra ngoài",
           explanation:
-            "Một ball còn overlap nhưng đã đi vào trong chỉ cần sửa position; đảo velocity lần nữa sẽ làm nó mắc ở tường.",
+            "Nếu bóng đang đi vào trong, chỉ sửa vị trí; đảo velocity thêm lần nữa sẽ làm nó mắc ở tường.",
         },
         {
-          title: "Áp restitution lên normal component",
+          title: "Giữ xung lực từ tường",
           explanation:
-            "Tường trục-aligned nên normal component là vx hoặc vy; tangent component không bị đổi.",
+            "Lưu Δp=m(vsau-vtrước). Tường là tác động bên ngoài của hệ chỉ gồm các quả bóng.",
         },
       ],
     },
     "p24-l04": {
-      focus:
-        "Tách collision detection thành một hàm trả contact bool, unit normal, penetration và center distance.",
+      focus: "Tìm contact normal và độ xuyên mà chưa thay đổi vị trí hay vận tốc của hai bóng.",
       expected:
-        "Separated pair bị reject bằng squared distance; overlapping pair có normal A→B và coincident centers không sinh NaN.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Hai bóng mẫu có normal A→B và độ xuyên 0,3 m ở t=0; detection không tự làm chúng bật ra.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "So bình phương trước sqrt",
+          title: "Loại sớm cặp ở xa",
           explanation:
-            "distance² >= (rA+rB)² kết thúc sớm cho đa số cặp; sqrt chỉ cần khi contact thật sự tồn tại.",
+            "So distance² với (rA+rB)² trước khi gọi sqrt; tiếp xúc đúng bằng rA+rB không được coi là chồng lấn trong quy ước này.",
         },
         {
-          title: "Chuẩn hóa center delta",
+          title: "Tạo một contact có quy ước rõ",
           explanation:
-            "normal đi từ A sang B và penetration bằng radiusSum−distance; quy ước này được impulse/correction dùng lại.",
+            "Normal đi từ A sang B và luôn có độ dài một; impulse/correction sau này đều dùng cùng quy ước.",
         },
         {
-          title: "Định nghĩa coincident fallback",
+          title: "Xử lý hai tâm trùng nhau",
           explanation:
-            "Khi hai tâm trùng, relative velocity được normalize; nếu nó cũng zero thì dùng (1,0) deterministic.",
+            "Không chia cho zero. Dùng hướng ngược relative velocity làm quy ước; nếu cả hai đứng yên, chọn trục X cố định.",
         },
       ],
     },
     "p24-l05": {
       focus:
-        "Giải velocity bằng normal impulse từ relative speed, restitution và inverse-mass sum.",
+        "Từ vận tốc tương đối và khối lượng khác nhau, suy ra xung lực dọc normal rồi kiểm bằng đáp án tính tay.",
       expected:
-        "Hai equal-mass ball head-on với e=1 đổi velocity; momentum và kinetic energy giữ trong tolerance; separating pair không nhận impulse.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Cặp mA=1, mB=2, vA=1,5, vB=-0,5 với e=1 cho vA=-7/6 và vB=5/6, không phải đảo dấu từng velocity.",
+      files: ["include/lab.hpp", "include/scene.hpp"],
       steps: [
         {
-          title: "Đo closing speed dọc normal",
-          explanation:
-            "dot(vB−vA,n)<0 nghĩa là khoảng cách đang giảm. Giá trị >=0 phải return trước khi tạo impulse.",
+          title: "Kiểm cặp đang tiến vào hay tách nhau",
+          explanation: "vn=dot(vB-vA,n) âm mới cần impulse. Nếu đã tách nhau, trả 0.",
         },
         {
-          title: "Tính impulse scalar",
+          title: "Tính một lượng impulse vô hướng",
           explanation:
-            "j=−(1+e)vn/(invMassA+invMassB); inverse mass zero cho phép static body mà không có nhánh công thức riêng.",
+            "j=-(1+e)vn/(wA+wB). Chọn e hiệu dụng bằng scale nhân min(eA,eB), một quy ước vật liệu được công bố rõ.",
         },
         {
-          title: "Áp hai impulse đối nhau",
+          title: "Phân phối hai tác động đối nhau",
           explanation:
-            "A nhận −j·n·invMassA, B nhận +j·n·invMassB; cặp thay đổi momentum bằng hai lượng đối nhau.",
+            "A nhận -j*n*wA, B nhận +j*n*wB. Kiểm lại động lượng và động năng bằng các số tính tay.",
         },
       ],
     },
     "p24-l06": {
       focus:
-        "Giảm overlap còn sót bằng positional correction có slop/percentage, tách biệt hoàn toàn khỏi velocity impulse.",
+        "Chia phần sửa vị trí theo inverse mass, thêm slop và phân biệt cách này với continuous collision detection.",
       expected:
-        "Correction làm penetration nhỏ đi nhưng velocity không đổi; body nhẹ dịch nhiều hơn body nặng theo inverse mass.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Tách vị trí theo inverse mass nhưng giữ velocity; slop và tỉ lệ sửa không được dùng để che thiếu impulse.",
+      files: ["include/lab.hpp", "include/scene.hpp"],
       steps: [
         {
-          title: "Bỏ qua penetration dưới slop",
-          explanation:
-            "Sai số rất nhỏ không bị solver kéo qua kéo lại; slop là tolerance hình học, không phải restitution.",
+          title: "Chỉ sửa phần vượt slop",
+          explanation: "Slop 0,001 m là dung sai hình học. Nó không phải hệ số restitution.",
         },
         {
-          title: "Chỉ sửa một tỷ lệ hữu hạn",
+          title: "Chia dịch chuyển theo inverse mass",
           explanation:
-            "Percent 0.8 giảm overlap dần và tránh over-correction trong chuỗi contact; giá trị được clamp vào [0,1].",
+            "Vật nhẹ dịch nhiều hơn vật nặng. Nếu một inverseMass bằng 0 thì vật đó không bị dời.",
         },
         {
-          title: "Phân phối bằng inverse mass",
+          title: "Nhận đúng giới hạn của phương pháp",
           explanation:
-            "Cùng correction vector nhưng mỗi body nhân inverseMass riêng; static body không di chuyển.",
+            "Đây là cách giải chồng lấn sau bước rời rạc, không tìm thời điểm va chạm như CCD.",
         },
       ],
     },
     "p24-l07": {
       focus:
-        "Ghép integrate, walls và mọi unordered ball pair vào một fixed step có solver iterations cùng stats minh bạch.",
+        "Duyệt i<j, giải vài lượt hữu hạn, khóa lại tường sau lượt cuối và đếm đúng lượng công việc.",
       expected:
-        "Với N ball và I iterations, pairChecks=I·N(N−1)/2; 144 bóng va nhau mà mỗi pair chỉ được xét một lần mỗi pass.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "256 bóng cho 32.640 cặp/lượt, ba lượt thành 97.920 checks mỗi physics step; vẽ và đo số liệu là việc khác.",
+      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Duyệt secondIndex từ firstIndex+1",
-          explanation:
-            "Vòng i<j loại self-pair và cặp đảo (B,A); count lý thuyết trở thành invariant kiểm được.",
+          title: "Duyệt từng cặp một lần",
+          explanation: "j bắt đầu từ i+1, nên không có self-pair hoặc cặp đảo bị giải thêm.",
         },
         {
-          title: "Lặp solver, không lặp integration",
+          title: "Lặp solver chứ không tích phân nhiều lần",
           explanation:
-            "Position chỉ tiến một lần mỗi fixed step; walls/pairs được giải vài pass để contact chain truyền response.",
+            "Position chỉ tiến một dt. Các lượt tiếp theo chỉ xử lý tường và contact của cùng state.",
         },
         {
-          title: "Đếm work cùng result",
+          title: "Khóa tường sau lượt cuối",
           explanation:
-            "Stats ghi pairChecks, contacts, impulses, wallHits, maxPenetration ngay trong code thực hiện công việc.",
+            "Correction của cặp gần tường có thể đẩy tâm ra ngoài. Giải tường lần cuối rồi mới đo phần xuyên còn lại.",
         },
       ],
     },
     "p24-l08": {
       focus:
-        "Nghiệm thu bằng deterministic reset, pair-count invariant, two-ball conservation và long-run stress metrics.",
+        "Kiểm bảo toàn theo đúng hệ đang xét, ghi mẫu sau từng bước và đo độ xuyên còn lại bằng lượt quét độc lập.",
       expected:
-        "Debug/Release CTest pass; 144-ball stress không NaN, không ra khỏi bounds, penetration bị chặn và elastic energy gần bảo toàn.",
-      files: ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Kiểm được đàn hồi, mất năng lượng và cân bằng động lượng có tường; đây mới là mốc 2D, chưa hoàn thành phần 3D.",
+      files: [
+        "include/lab.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "include/presentation.hpp",
+        "tests/tests.cpp",
+        "tests/extra-cases.hpp",
+      ],
       steps: [
         {
-          title: "Đo momentum và kinetic energy",
+          title: "Chọn đúng hệ khi nói về bảo toàn",
           explanation:
-            "Two-ball isolated test kiểm cả vector momentum và scalar energy; e<1 cố ý giảm energy nên không dùng cùng kỳ vọng.",
+            "Cặp cô lập giữ động lượng; đàn bóng trong bể nhận xung lực tường. Residual dùng P-P0-ΣJwall.",
         },
         {
-          title: "Quét overlap độc lập với solver stats",
+          title: "Đo lại trên state sau solver",
           explanation:
-            "measureWorld duyệt state sau step để phát hiện contact còn sót; không tin tuyệt đối counter được ghi trong lúc giải.",
+            "measureWorld quét độc lập để biết overlap còn lại. Contact count trong lúc giải không trả lời được câu hỏi này.",
         },
         {
-          title: "Đặt correctness trước optimization",
+          title: "Lấy mẫu theo physics",
           explanation:
-            "Pair count O(N²) được hiển thị như baseline. Spatial Grid chỉ hợp lý khi ta đã có kết quả đúng để đối chiếu.",
+            "History có t=0 và từng bước, giữ tối đa 601 mẫu. Hai đồ thị động năng/độ xuyên dùng thang riêng.",
+        },
+      ],
+    },
+    "p24-l09": {
+      focus:
+        "Mở rộng normal và vận tốc sang ba thành phần, giữ nguyên phương trình impulse và kiểm bằng ca va chạm xiên.",
+      expected:
+        "Ví dụ va chạm xiên khớp đủ vx, vy, vz; cùng solver chạy được trên 256 sphere với sáu tường.",
+      files: ["include/sphere.hpp", "tests/extra-cases.hpp"],
+      steps: [
+        {
+          title: "Thêm thành phần Z một cách tường minh",
+          explanation:
+            "Sphere giữ Vec3 position/velocity; dot, normal và khoảng cách đều tính đủ ba thành phần.",
+        },
+        {
+          title: "Giữ nguyên ý nghĩa của impulse",
+          explanation:
+            "Công thức vô hướng j không đổi; phép cộng/trừ vector nay tác động cả Z. Không bỏ trục này trong tests.",
+        },
+        {
+          title: "Kiểm toán trước khi ghép camera",
+          explanation:
+            "Bài này chạy kiểm công thức 3D; cửa sổ còn giữ bể 2D. Bài 10 mới thêm cách nhìn toàn bộ bể 3D.",
+        },
+      ],
+    },
+    "p24-l10": {
+      focus:
+        "Chiếu phối cảnh, tìm mặt trước sphere bằng ray và dùng depth buffer; camera thay đổi góc nhìn chứ không xoay state.",
+      expected:
+        "Chọn 3D hiện 256 sphere chuyển động có chiều sâu; orbit chỉ thay camera, không thay state vật lý.",
+      files: ["include/projection.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Đưa world point vào camera space",
+          explanation: "Tạo basis từ eye nhìn về tâm bể, rồi lấy dot với right/up/forward.",
+        },
+        {
+          title: "Tìm mặt trước của sphere",
+          explanation:
+            "Mỗi pixel trong silhouette giải ray–sphere. Dùng view-space Z cho depth test, không chỉ sort theo tâm.",
+        },
+        {
+          title: "Tách input camera khỏi physics",
+          explanation:
+            "Kéo ở chế độ 3D đổi yaw/pitch. Kiểm world positions, velocity và elapsed không đổi trong lúc chỉ orbit.",
+        },
+      ],
+    },
+    "p24-l11": {
+      focus:
+        "Ghép hai không gian, thêm vật thể có kiểm tra chỗ trống, xử lý capture và kiểm toàn bộ mã tải về.",
+      expected:
+        "Hai không gian, spawn, kick, camera, debug, tests và ZIP đều dùng cùng source đã kiểm chứng.",
+      files: ["include/scene.hpp", "src/main.cpp", "tests/tests.cpp", "tests/extra-cases.hpp"],
+      steps: [
+        {
+          title: "Spawn có giới hạn và có kiểm chỗ trống",
+          explanation:
+            "Mỗi lần thử một danh sách ứng viên hữu hạn, thêm tối đa 16, tổng không quá 512; không chèn vật vào chỗ đang bị chiếm.",
+        },
+        {
+          title: "Giữ đúng chủ sở hữu gesture",
+          explanation:
+            "Chỉ pointer bắt đầu được sửa thao tác; dùng mẫu thả cuối, nhả capture khi blur/resize/reset và không nhận input đã hủy.",
+        },
+        {
+          title: "Kiểm chính mã vừa viết",
+          explanation:
+            "Cuối học phần, đổi include tests sang starter/include để kiểm bài làm. Không lấy kết quả của final tham khảo làm bằng chứng cho Starter.",
         },
       ],
     },
   },
   references: {
     "p24-l01": [
-      { label: "Inverse mass", href: "/glossary#inverse-mass", kind: "Thuật ngữ" },
-      { label: "Vector 2D", href: "/glossary#vector-2d", kind: "Thuật ngữ" },
+      {
+        label: "Inverse mass",
+        href: "/glossary#inverse-mass",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Vector 2D",
+        href: "/glossary#vector-2d",
+        kind: "Thuật ngữ",
+      },
       {
         label: "Deterministic simulation",
         href: "/glossary#deterministic-simulation",
@@ -206,8 +287,16 @@ const learning = {
       },
     ],
     "p24-l02": [
-      { label: "Fixed timestep", href: "/glossary#fixed-timestep", kind: "Thuật ngữ" },
-      { label: "Physics accumulator", href: "/glossary#physics-accumulator", kind: "Thuật ngữ" },
+      {
+        label: "Fixed timestep",
+        href: "/glossary#fixed-timestep",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Physics accumulator",
+        href: "/glossary#physics-accumulator",
+        kind: "Thuật ngữ",
+      },
       {
         label: "Numerical integration",
         href: "/glossary#numerical-integration",
@@ -220,18 +309,50 @@ const learning = {
         href: "/glossary#coefficient-of-restitution",
         kind: "Thuật ngữ",
       },
-      { label: "Contact normal", href: "/glossary#contact-normal", kind: "Thuật ngữ" },
-      { label: "Invariant", href: "/glossary#invariant", kind: "Thuật ngữ" },
+      {
+        label: "Contact normal",
+        href: "/glossary#contact-normal",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Invariant",
+        href: "/glossary#invariant",
+        kind: "Thuật ngữ",
+      },
     ],
     "p24-l04": [
-      { label: "Collision detection", href: "/glossary#collision-detection", kind: "Thuật ngữ" },
-      { label: "Contact normal", href: "/glossary#contact-normal", kind: "Thuật ngữ" },
-      { label: "Penetration depth", href: "/glossary#penetration-depth", kind: "Thuật ngữ" },
+      {
+        label: "Collision detection",
+        href: "/glossary#collision-detection",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Contact normal",
+        href: "/glossary#contact-normal",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Penetration depth",
+        href: "/glossary#penetration-depth",
+        kind: "Thuật ngữ",
+      },
     ],
     "p24-l05": [
-      { label: "Collision impulse", href: "/glossary#collision-impulse", kind: "Thuật ngữ" },
-      { label: "Linear momentum", href: "/glossary#linear-momentum", kind: "Thuật ngữ" },
-      { label: "Kinetic energy", href: "/glossary#kinetic-energy", kind: "Thuật ngữ" },
+      {
+        label: "Collision impulse",
+        href: "/glossary#collision-impulse",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Linear momentum",
+        href: "/glossary#linear-momentum",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Kinetic energy",
+        href: "/glossary#kinetic-energy",
+        kind: "Thuật ngữ",
+      },
     ],
     "p24-l06": [
       {
@@ -239,24 +360,112 @@ const learning = {
         href: "/glossary#positional-correction",
         kind: "Thuật ngữ",
       },
-      { label: "Inverse mass", href: "/glossary#inverse-mass", kind: "Thuật ngữ" },
-      { label: "Penetration depth", href: "/glossary#penetration-depth", kind: "Thuật ngữ" },
+      {
+        label: "Inverse mass",
+        href: "/glossary#inverse-mass",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Penetration depth",
+        href: "/glossary#penetration-depth",
+        kind: "Thuật ngữ",
+      },
     ],
     "p24-l07": [
-      { label: "Pairwise brute force", href: "/glossary#pairwise-brute-force", kind: "Thuật ngữ" },
-      { label: "Collision detection", href: "/glossary#collision-detection", kind: "Thuật ngữ" },
-      { label: "Fixed timestep", href: "/glossary#fixed-timestep", kind: "Thuật ngữ" },
+      {
+        label: "Pairwise brute force",
+        href: "/glossary#pairwise-brute-force",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Collision detection",
+        href: "/glossary#collision-detection",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Fixed timestep",
+        href: "/glossary#fixed-timestep",
+        kind: "Thuật ngữ",
+      },
     ],
     "p24-l08": [
-      { label: "Linear momentum", href: "/glossary#linear-momentum", kind: "Thuật ngữ" },
-      { label: "Kinetic energy", href: "/glossary#kinetic-energy", kind: "Thuật ngữ" },
+      {
+        label: "Linear momentum",
+        href: "/glossary#linear-momentum",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Kinetic energy",
+        href: "/glossary#kinetic-energy",
+        kind: "Thuật ngữ",
+      },
       {
         label: "CTest",
         href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
         kind: "CMake",
       },
     ],
+    "p24-l09": [
+      {
+        label: "Vector 3D",
+        href: "/glossary#vector-3d",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Collision impulse",
+        href: "/glossary#collision-impulse",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Linear momentum",
+        href: "/glossary#linear-momentum",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Kinetic energy",
+        href: "/glossary#kinetic-energy",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p24-l10": [
+      {
+        label: "Camera space",
+        href: "/glossary#camera-space",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Perspective projection",
+        href: "/glossary#perspective-projection",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Depth buffer",
+        href: "/glossary#depth-buffer",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p24-l11": [
+      {
+        label: "Linear momentum",
+        href: "/glossary#linear-momentum",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Kinetic energy",
+        href: "/glossary#kinetic-energy",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "CTest",
+        href: "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
+        kind: "CMake",
+      },
+      {
+        label: "SDL_CaptureMouse",
+        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
+        kind: "SDL API",
+      },
+    ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;

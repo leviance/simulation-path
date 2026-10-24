@@ -11,6 +11,7 @@ export interface CollisionBall {
   radius: number;
   inverseMass: number;
   color: string;
+  restitution?: number;
 }
 
 export interface CollisionTankBounds {
@@ -35,12 +36,21 @@ export interface CollisionStepSettings {
   penetrationSlop: number;
 }
 
+export interface CollisionDebugContact {
+  point: CollisionVec2;
+  normal: CollisionVec2;
+  impulse: number;
+  penetration: number;
+}
 export interface CollisionStepStats {
   pairChecks: number;
   contacts: number;
   impulses: number;
   wallHits: number;
   maximumPenetration: number;
+  wallImpulse: CollisionVec2;
+  debugContacts: CollisionDebugContact[];
+  valid: boolean;
 }
 
 export interface CollisionWorldMetrics {
@@ -95,7 +105,7 @@ export function cloneCollisionBall(ball: CollisionBall): CollisionBall {
   };
 }
 
-function finiteCollisionBall(ball: CollisionBall) {
+export function finiteCollisionBall(ball: CollisionBall) {
   return (
     Number.isFinite(ball.position.x) &&
     Number.isFinite(ball.position.y) &&
@@ -104,11 +114,14 @@ function finiteCollisionBall(ball: CollisionBall) {
     Number.isFinite(ball.radius) &&
     Number.isFinite(ball.inverseMass) &&
     ball.radius > COLLISION_EPSILON &&
-    ball.inverseMass >= 0
+    ball.inverseMass >= 0 &&
+    Number.isFinite(ball.restitution ?? 1) &&
+    (ball.restitution ?? 1) >= 0 &&
+    (ball.restitution ?? 1) <= 1
   );
 }
 
-class CollisionSeededRandom {
+export class CollisionSeededRandom {
   private state: number;
 
   constructor(seed: number) {
@@ -138,7 +151,20 @@ export function makeCollisionLattice(
   speed: number,
   seed: number,
 ) {
-  if (columns <= 0 || rows <= 0 || radius <= 0 || speed < 0) return [];
+  if (
+    !Number.isInteger(columns) ||
+    !Number.isInteger(rows) ||
+    columns <= 0 ||
+    rows <= 0 ||
+    columns * rows > 512 ||
+    !validCollisionBounds(bounds) ||
+    !Number.isFinite(radius) ||
+    radius <= 0 ||
+    !Number.isFinite(speed) ||
+    speed < 0 ||
+    !Number.isInteger(seed)
+  )
+    return [];
   const cellWidth = (bounds.maximumX - bounds.minimumX) / columns;
   const cellHeight = (bounds.maximumY - bounds.minimumY) / rows;
   if (2 * radius > Math.min(cellWidth, cellHeight)) return [];
@@ -170,13 +196,15 @@ export function makeCollisionLattice(
 
 export function integrateCollisionBall(ball: CollisionBall, deltaSeconds: number) {
   if (!finiteCollisionBall(ball) || !Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return;
-  ball.position = collisionAdd(ball.position, collisionScale(ball.velocity, deltaSeconds));
+  if (ball.inverseMass === 0) return;
+  const next = collisionAdd(ball.position, collisionScale(ball.velocity, deltaSeconds));
+  if (Number.isFinite(next.x) && Number.isFinite(next.y)) ball.position = next;
 }
 
 export function planCollisionFixedSteps(
   accumulator: number,
   frameSeconds: number,
-  fixedDeltaSeconds: number,
+  dt: number,
   maximumSteps: number,
   maximumFrameSeconds: number,
 ): CollisionFixedStepPlan {
@@ -185,37 +213,92 @@ export function planCollisionFixedSteps(
     accumulator < 0 ||
     !Number.isFinite(frameSeconds) ||
     frameSeconds < 0 ||
-    !Number.isFinite(fixedDeltaSeconds) ||
-    fixedDeltaSeconds <= 0 ||
-    maximumSteps <= 0 ||
+    !Number.isFinite(dt) ||
+    dt < 1e-6 ||
+    !Number.isInteger(maximumSteps) ||
+    maximumSteps < 1 ||
+    maximumSteps > 256 ||
     !Number.isFinite(maximumFrameSeconds) ||
     maximumFrameSeconds <= 0
-  ) {
+  )
     return { steps: 0, remainder: 0, droppedTime: 0 };
-  }
-  const acceptedFrame = Math.min(frameSeconds, maximumFrameSeconds);
-  let available = accumulator + acceptedFrame;
-  const availableSteps = Math.floor((available + COLLISION_EPSILON) / fixedDeltaSeconds);
-  const steps = Math.min(availableSteps, maximumSteps);
-  available -= steps * fixedDeltaSeconds;
-  let droppedTime = Math.max(0, frameSeconds - acceptedFrame);
-  if (availableSteps > maximumSteps) {
-    const discardedSteps = availableSteps - maximumSteps;
-    available -= discardedSteps * fixedDeltaSeconds;
-    droppedTime += discardedSteps * fixedDeltaSeconds;
-  }
-  if (available < 0 && available > -COLLISION_EPSILON) available = 0;
-  return { steps, remainder: available, droppedTime };
+  const accepted = Math.min(frameSeconds, maximumFrameSeconds),
+    available = accumulator + accepted;
+  const count = Math.floor((available + COLLISION_EPSILON) / dt);
+  if (!Number.isFinite(available) || !Number.isFinite(count))
+    return { steps: 0, remainder: 0, droppedTime: 0 };
+  const steps = Math.min(count, maximumSteps),
+    remainder = Math.max(0, ((available + COLLISION_EPSILON) % dt) - COLLISION_EPSILON);
+  return {
+    steps,
+    remainder,
+    droppedTime:
+      Math.max(0, frameSeconds - accepted) + Math.max(0, available - remainder - steps * dt),
+  };
 }
 
+export function validCollisionBounds(bounds: CollisionTankBounds) {
+  return (
+    [bounds.minimumX, bounds.minimumY, bounds.maximumX, bounds.maximumY].every(Number.isFinite) &&
+    bounds.maximumX > bounds.minimumX &&
+    bounds.maximumY > bounds.minimumY
+  );
+}
+export function validCollisionSettings(s: CollisionStepSettings) {
+  return (
+    Number.isFinite(s.deltaSeconds) &&
+    s.deltaSeconds >= 1e-6 &&
+    s.deltaSeconds <= 1 / 30 &&
+    Number.isFinite(s.restitution) &&
+    s.restitution >= 0 &&
+    s.restitution <= 1 &&
+    Number.isInteger(s.solverIterations) &&
+    s.solverIterations >= 1 &&
+    s.solverIterations <= 8 &&
+    Number.isFinite(s.correctionPercent) &&
+    s.correctionPercent >= 0 &&
+    s.correctionPercent <= 1 &&
+    Number.isFinite(s.penetrationSlop) &&
+    s.penetrationSlop >= 0
+  );
+}
+export function collisionImpulseMagnitude(speed: number, inverseSum: number, restitution: number) {
+  if (
+    !Number.isFinite(speed) ||
+    speed >= 0 ||
+    !Number.isFinite(inverseSum) ||
+    inverseSum <= COLLISION_EPSILON ||
+    !Number.isFinite(restitution)
+  )
+    return 0;
+  return (-(1 + Math.max(0, Math.min(1, restitution))) * speed) / inverseSum;
+}
+function validCollisionContact(c: CircleContact) {
+  return (
+    c.colliding &&
+    Number.isFinite(c.penetration) &&
+    c.penetration >= 0 &&
+    Number.isFinite(c.normal.x) &&
+    Number.isFinite(c.normal.y) &&
+    Math.abs(collisionLengthSquared(c.normal) - 1) < 1e-8
+  );
+}
 export function resolveCollisionWall(
   ball: CollisionBall,
   bounds: CollisionTankBounds,
   restitution: number,
 ) {
-  const result = { hitCount: 0, deepestPenetration: 0 };
-  if (!finiteCollisionBall(ball)) return result;
-  const bounce = Math.max(0, Math.min(1, restitution));
+  const result = { hitCount: 0, deepestPenetration: 0, wallImpulse: { x: 0, y: 0 } };
+  if (
+    !finiteCollisionBall(ball) ||
+    !validCollisionBounds(bounds) ||
+    !Number.isFinite(restitution) ||
+    ball.inverseMass === 0 ||
+    2 * ball.radius > Math.min(bounds.maximumX - bounds.minimumX, bounds.maximumY - bounds.minimumY)
+  )
+    return result;
+  const previous = { ...ball.velocity };
+  const bounce = Math.max(0, Math.min(1, restitution)) * (ball.restitution ?? 1);
   const left = bounds.minimumX + ball.radius;
   if (ball.position.x < left) {
     result.deepestPenetration = Math.max(result.deepestPenetration, left - ball.position.x);
@@ -244,6 +327,10 @@ export function resolveCollisionWall(
     if (ball.velocity.y > 0) ball.velocity.y = -ball.velocity.y * bounce;
     result.hitCount += 1;
   }
+  result.wallImpulse = collisionScale(
+    collisionSubtract(ball.velocity, previous),
+    1 / ball.inverseMass,
+  );
   return result;
 }
 
@@ -257,14 +344,18 @@ export function findCollisionCircleContact(
   const centerDelta = collisionSubtract(second.position, first.position);
   const radiusSum = first.radius + second.radius;
   const distanceSquared = collisionLengthSquared(centerDelta);
-  if (distanceSquared >= radiusSum * radiusSum) {
+  if (
+    !Number.isFinite(distanceSquared) ||
+    !Number.isFinite(radiusSum) ||
+    distanceSquared >= radiusSum * radiusSum
+  ) {
     return { colliding: false, normal: { x: 1, y: 0 }, penetration: 0, centerDistance: 0 };
   }
   if (distanceSquared <= COLLISION_EPSILON * COLLISION_EPSILON) {
     const relativeVelocity = collisionSubtract(second.velocity, first.velocity);
     return {
       colliding: true,
-      normal: collisionNormalizedOr(relativeVelocity, { x: 1, y: 0 }),
+      normal: collisionNormalizedOr(collisionScale(relativeVelocity, -1), { x: 1, y: 0 }),
       penetration: radiusSum,
       centerDistance: 0,
     };
@@ -284,14 +375,22 @@ export function applyCollisionPairImpulse(
   contact: CircleContact,
   restitution: number,
 ) {
-  if (!contact.colliding) return 0;
+  if (
+    !validCollisionContact(contact) ||
+    !finiteCollisionBall(first) ||
+    !finiteCollisionBall(second)
+  )
+    return 0;
   const inverseMassSum = first.inverseMass + second.inverseMass;
   if (inverseMassSum <= COLLISION_EPSILON) return 0;
   const relativeVelocity = collisionSubtract(second.velocity, first.velocity);
   const velocityAlongNormal = collisionDot(relativeVelocity, contact.normal);
   if (velocityAlongNormal >= 0) return 0;
-  const bounce = Math.max(0, Math.min(1, restitution));
-  const impulseMagnitude = (-(1 + bounce) * velocityAlongNormal) / inverseMassSum;
+  const bounce =
+    Math.max(0, Math.min(1, restitution)) *
+    Math.min(first.restitution ?? 1, second.restitution ?? 1);
+  const impulseMagnitude = collisionImpulseMagnitude(velocityAlongNormal, inverseMassSum, bounce);
+  if (!Number.isFinite(impulseMagnitude)) return 0;
   const impulse = collisionScale(contact.normal, impulseMagnitude);
   first.velocity = collisionSubtract(first.velocity, collisionScale(impulse, first.inverseMass));
   second.velocity = collisionAdd(second.velocity, collisionScale(impulse, second.inverseMass));
@@ -305,9 +404,15 @@ export function correctCollisionPenetration(
   correctionPercent: number,
   penetrationSlop: number,
 ) {
-  if (!contact.colliding) return 0;
+  if (
+    !validCollisionContact(contact) ||
+    !finiteCollisionBall(first) ||
+    !finiteCollisionBall(second)
+  )
+    return 0;
   const inverseMassSum = first.inverseMass + second.inverseMass;
   if (inverseMassSum <= COLLISION_EPSILON) return 0;
+  if (!Number.isFinite(correctionPercent) || !Number.isFinite(penetrationSlop)) return 0;
   const percent = Math.max(0, Math.min(1, correctionPercent));
   const slop = Math.max(0, penetrationSlop);
   const magnitude = (Math.max(contact.penetration - slop, 0) * percent) / inverseMassSum;
@@ -322,20 +427,36 @@ export function stepCollisionTank(
   bounds: CollisionTankBounds,
   settings: CollisionStepSettings,
 ) {
-  const balls = sourceBalls.map(cloneCollisionBall);
   const stats: CollisionStepStats = {
     pairChecks: 0,
     contacts: 0,
     impulses: 0,
     wallHits: 0,
     maximumPenetration: 0,
+    wallImpulse: { x: 0, y: 0 },
+    debugContacts: [],
+    valid: true,
   };
+  if (
+    sourceBalls.length > 512 ||
+    !validCollisionBounds(bounds) ||
+    !validCollisionSettings(settings) ||
+    sourceBalls.some(
+      (ball) =>
+        !finiteCollisionBall(ball) ||
+        2 * ball.radius >
+          Math.min(bounds.maximumX - bounds.minimumX, bounds.maximumY - bounds.minimumY),
+    )
+  )
+    return { balls: sourceBalls, stats: { ...stats, valid: false } };
+  const balls = sourceBalls.map(cloneCollisionBall);
   for (const ball of balls) integrateCollisionBall(ball, settings.deltaSeconds);
   const iterations = Math.max(1, Math.min(8, Math.trunc(settings.solverIterations)));
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     for (const ball of balls) {
       const wall = resolveCollisionWall(ball, bounds, settings.restitution);
       stats.wallHits += wall.hitCount;
+      stats.wallImpulse = collisionAdd(stats.wallImpulse, wall.wallImpulse);
       stats.maximumPenetration = Math.max(stats.maximumPenetration, wall.deepestPenetration);
     }
     for (let firstIndex = 0; firstIndex < balls.length; firstIndex += 1) {
@@ -349,6 +470,13 @@ export function stepCollisionTank(
         stats.maximumPenetration = Math.max(stats.maximumPenetration, contact.penetration);
         const impulse = applyCollisionPairImpulse(first, second, contact, settings.restitution);
         if (impulse > 0) stats.impulses += 1;
+        if (iteration === 0 && stats.debugContacts.length < 48)
+          stats.debugContacts.push({
+            point: collisionAdd(first.position, collisionScale(contact.normal, first.radius)),
+            normal: contact.normal,
+            impulse,
+            penetration: contact.penetration,
+          });
         correctCollisionPenetration(
           first,
           second,
@@ -358,6 +486,11 @@ export function stepCollisionTank(
         );
       }
     }
+  }
+  for (const ball of balls) {
+    const wall = resolveCollisionWall(ball, bounds, settings.restitution);
+    stats.wallHits += wall.hitCount;
+    stats.wallImpulse = collisionAdd(stats.wallImpulse, wall.wallImpulse);
   }
   return { balls, stats };
 }
@@ -395,7 +528,7 @@ export function measureCollisionWorld(balls: CollisionBall[]): CollisionWorldMet
 }
 
 export function nearestCollisionBallIndex(balls: CollisionBall[], point: CollisionVec2) {
-  if (balls.length === 0) return -1;
+  if (balls.length === 0 || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return -1;
   let nearestIndex = 0;
   let nearestDistanceSquared = collisionLengthSquared(collisionSubtract(balls[0].position, point));
   for (let index = 1; index < balls.length; index += 1) {
@@ -406,4 +539,20 @@ export function nearestCollisionBallIndex(balls: CollisionBall[], point: Collisi
     }
   }
   return nearestIndex;
+}
+
+export function makeRichCollisionLattice(seed = 0x00c0ffee, elastic = false) {
+  return makeCollisionLattice(
+    16,
+    16,
+    { minimumX: -10, minimumY: -6, maximumX: 10, maximumY: 6 },
+    0.24,
+    2.2,
+    seed,
+  ).map((ball, index) => ({
+    ...ball,
+    radius: 0.18 + 0.02 * (index % 4),
+    inverseMass: 1 / (0.5 + 0.25 * (index % 5)),
+    restitution: elastic ? 1 : 0.7 + 0.15 * (index % 3),
+  }));
 }

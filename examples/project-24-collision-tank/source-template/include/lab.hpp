@@ -1,15 +1,16 @@
 #pragma once
 
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 8
+#define LAB_CHECKPOINT 11
 #endif
 
-#if LAB_CHECKPOINT >= 1
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace lab {
@@ -62,6 +63,7 @@ struct Ball {
     double radius{0.2};
     double inverseMass{1.0};
     std::uint32_t color{0xffffffffU};
+    double restitution{1.0};
 };
 
 struct TankBounds {
@@ -76,7 +78,7 @@ inline bool validBounds(const TankBounds& bounds) {
 }
 
 inline bool finiteBall(const Ball& ball) {
-    return std::isfinite(ball.position.x) && std::isfinite(ball.position.y) && std::isfinite(ball.velocity.x) && std::isfinite(ball.velocity.y) && std::isfinite(ball.radius) && std::isfinite(ball.inverseMass) && ball.radius > kCollisionEpsilon && ball.inverseMass >= 0.0;
+    return std::isfinite(ball.position.x) && std::isfinite(ball.position.y) && std::isfinite(ball.velocity.x) && std::isfinite(ball.velocity.y) && std::isfinite(ball.radius) && std::isfinite(ball.inverseMass) && ball.radius > kCollisionEpsilon && ball.inverseMass >= 0.0 && std::isfinite(ball.restitution) && ball.restitution >= 0.0 && ball.restitution <= 1.0;
 }
 
 struct SeededRandom {
@@ -105,9 +107,10 @@ struct SeededRandom {
 
 // Lattice quyết định vị trí không chồng lấn; PRNG có seed chỉ quyết định vận tốc.
 // Nhờ đó mỗi lần reset đều tái hiện chính xác cùng một initial state.
+#if LAB_CHECKPOINT >= 1
 inline std::vector<Ball> makeBallLattice(int columns, int rows, const TankBounds& bounds, double radius, double speed, std::uint32_t seed) {
     std::vector<Ball> balls{};
-    if (columns <= 0 || rows <= 0 || !validBounds(bounds) || !std::isfinite(radius) || radius <= 0.0 || !std::isfinite(speed) || speed < 0.0) {
+    if (columns <= 0 || rows <= 0 || columns > 512 || rows > 512 || columns * rows > 512 || !validBounds(bounds) || !std::isfinite(radius) || radius <= 0.0 || !std::isfinite(speed) || speed < 0.0) {
         return balls;
     }
     const double cellWidth = (bounds.maximumX - bounds.minimumX) / double(columns);
@@ -140,13 +143,31 @@ inline std::vector<Ball> makeBallLattice(int columns, int rows, const TankBounds
     return balls;
 }
 
+inline std::vector<Ball> makeTankBalls(std::uint32_t seed, bool elastic = false) {
+    const TankBounds bounds{-10.0, -6.0, 10.0, 6.0};
+    auto balls = makeBallLattice(16, 16, bounds, 0.24, 2.2, seed);
+    for (std::size_t index = 0; index < balls.size(); ++index) {
+        balls[index].radius = 0.18 + 0.02 * static_cast<double>(index % 4);
+        balls[index].inverseMass = 1.0 / (0.5 + 0.25 * static_cast<double>(index % 5));
+        balls[index].restitution = elastic ? 1.0 : 0.7 + 0.15 * static_cast<double>(index % 3);
+    }
+    return balls;
+}
+#endif
+
 #if LAB_CHECKPOINT >= 2
 // Movement luôn nhận delta time cố định từ accumulator của vòng lặp chính.
 inline void integrateBall(Ball& ball, double deltaSeconds) {
     if (!finiteBall(ball) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) {
         return;
     }
-    ball.position = add(ball.position, scale(ball.velocity, deltaSeconds));
+    if (ball.inverseMass == 0.0) {
+        return;
+    }
+    const Vec2 next = add(ball.position, scale(ball.velocity, deltaSeconds));
+    if (std::isfinite(next.x) && std::isfinite(next.y)) {
+        ball.position = next;
+    }
 }
 
 struct FixedStepPlan {
@@ -155,32 +176,29 @@ struct FixedStepPlan {
     double droppedTime{};
 };
 
-inline FixedStepPlan planFixedSteps(double accumulator, double frameSeconds, double fixedDeltaSeconds, int maximumSteps, double maximumFrameSeconds) {
-    if (!std::isfinite(accumulator) || accumulator < 0.0 || !std::isfinite(frameSeconds) || frameSeconds < 0.0 || !std::isfinite(fixedDeltaSeconds) || fixedDeltaSeconds <= 0.0 || maximumSteps <= 0 || !std::isfinite(maximumFrameSeconds) || maximumFrameSeconds <= 0.0) {
+inline FixedStepPlan planFixedSteps(double accumulator, double frameSeconds, double dt, int maximumSteps, double maximumFrameSeconds) {
+    if (!std::isfinite(accumulator) || accumulator < 0.0 || !std::isfinite(frameSeconds) || frameSeconds < 0.0 || !std::isfinite(dt) || dt < 1e-6 || maximumSteps < 1 || maximumSteps > 256 || !std::isfinite(maximumFrameSeconds) || maximumFrameSeconds <= 0.0) {
         return {};
     }
-    const double acceptedFrame = std::min(frameSeconds, maximumFrameSeconds);
-    double available = accumulator + acceptedFrame;
-    const int availableSteps = int(std::floor((available + kCollisionEpsilon) / fixedDeltaSeconds));
-    const int steps = std::min(availableSteps, maximumSteps);
-    available -= double(steps) * fixedDeltaSeconds;
-    double droppedTime = std::max(0.0, frameSeconds - acceptedFrame);
-    if (availableSteps > maximumSteps) {
-        const int discardedSteps = availableSteps - maximumSteps;
-        available -= double(discardedSteps) * fixedDeltaSeconds;
-        droppedTime += double(discardedSteps) * fixedDeltaSeconds;
+    const double accepted = std::min(frameSeconds, maximumFrameSeconds);
+    const double available = accumulator + accepted;
+    const double count = std::floor((available + kCollisionEpsilon) / dt);
+    if (!std::isfinite(available) || !std::isfinite(count)) {
+        return {};
     }
-    if (available < 0.0 && available > -kCollisionEpsilon) {
-        available = 0.0;
-    }
-    return {steps, available, droppedTime};
+    const int steps = static_cast<int>(std::min(count, static_cast<double>(maximumSteps)));
+    const double remainder = std::max(0.0, std::fmod(available + kCollisionEpsilon, dt) - kCollisionEpsilon);
+    const double dropped = std::max(0.0, frameSeconds - accepted) + std::max(0.0, available - remainder - static_cast<double>(steps) * dt);
+    return {steps, remainder, dropped};
 }
+
 #endif
 
 #if LAB_CHECKPOINT >= 3
 struct WallCollisionResult {
     int hitCount{};
     double deepestPenetration{};
+    Vec2 wallImpulse{};
 };
 
 // Wall response sửa position trước, rồi chỉ đảo velocity nếu bóng còn lao ra ngoài.
@@ -189,7 +207,11 @@ inline WallCollisionResult resolveWallCollision(Ball& ball, const TankBounds& bo
     if (!finiteBall(ball) || !validBounds(bounds) || !std::isfinite(restitution)) {
         return result;
     }
-    const double bounce = std::clamp(restitution, 0.0, 1.0);
+    if (2.0 * ball.radius > std::min(bounds.maximumX - bounds.minimumX, bounds.maximumY - bounds.minimumY) || ball.inverseMass == 0.0) {
+        return result;
+    }
+    const Vec2 previousVelocity = ball.velocity;
+    const double bounce = std::clamp(restitution, 0.0, 1.0) * ball.restitution;
 
     const double leftLimit = bounds.minimumX + ball.radius;
     if (ball.position.x < leftLimit) {
@@ -227,6 +249,7 @@ inline WallCollisionResult resolveWallCollision(Ball& ball, const TankBounds& bo
         }
         ++result.hitCount;
     }
+    result.wallImpulse = scale(subtract(ball.velocity, previousVelocity), 1.0 / ball.inverseMass);
     return result;
 }
 #endif
@@ -247,12 +270,12 @@ inline CircleContact findCircleContact(const Ball& first, const Ball& second) {
     const Vec2 centerDelta = subtract(second.position, first.position);
     const double radiusSum = first.radius + second.radius;
     const double distanceSquared = lengthSquared(centerDelta);
-    if (distanceSquared >= radiusSum * radiusSum) {
+    if (!std::isfinite(distanceSquared) || !std::isfinite(radiusSum) || distanceSquared >= radiusSum * radiusSum) {
         return {};
     }
     if (distanceSquared <= kCollisionEpsilon * kCollisionEpsilon) {
         const Vec2 relativeVelocity = subtract(second.velocity, first.velocity);
-        const Vec2 fallbackNormal = normalizedOr(relativeVelocity, {1.0, 0.0});
+        const Vec2 fallbackNormal = normalizedOr(scale(relativeVelocity, -1.0), {1.0, 0.0});
         return {true, fallbackNormal, radiusSum, 0.0};
     }
     const double centerDistance = std::sqrt(distanceSquared);
@@ -262,9 +285,20 @@ inline CircleContact findCircleContact(const Ball& first, const Ball& second) {
 #endif
 
 #if LAB_CHECKPOINT >= 5
+inline bool validContact(const CircleContact& contact) {
+    return contact.colliding && std::isfinite(contact.normal.x) && std::isfinite(contact.normal.y) && std::abs(lengthSquared(contact.normal) - 1.0) < 1e-8 && std::isfinite(contact.penetration) && contact.penetration >= 0.0;
+}
+
+inline double normalImpulseMagnitude(double normalSpeed, double inverseMassSum, double restitution) {
+    if (!std::isfinite(normalSpeed) || normalSpeed >= 0.0 || !std::isfinite(inverseMassSum) || inverseMassSum <= kCollisionEpsilon || !std::isfinite(restitution)) {
+        return 0.0;
+    }
+    return -(1.0 + std::clamp(restitution, 0.0, 1.0)) * normalSpeed / inverseMassSum;
+}
+
 // Impulse chỉ tác động dọc contact normal và bỏ qua cặp đang tách xa nhau.
 inline double applyCollisionImpulse(Ball& first, Ball& second, const CircleContact& contact, double restitution) {
-    if (!contact.colliding || !finiteBall(first) || !finiteBall(second) || !std::isfinite(restitution)) {
+    if (!validContact(contact) || !finiteBall(first) || !finiteBall(second) || !std::isfinite(restitution)) {
         return 0.0;
     }
     const double inverseMassSum = first.inverseMass + second.inverseMass;
@@ -276,8 +310,11 @@ inline double applyCollisionImpulse(Ball& first, Ball& second, const CircleConta
     if (velocityAlongNormal >= 0.0) {
         return 0.0;
     }
-    const double bounce = std::clamp(restitution, 0.0, 1.0);
-    const double impulseMagnitude = -(1.0 + bounce) * velocityAlongNormal / inverseMassSum;
+    const double bounce = std::clamp(restitution, 0.0, 1.0) * std::min(first.restitution, second.restitution);
+    const double impulseMagnitude = normalImpulseMagnitude(velocityAlongNormal, inverseMassSum, bounce);
+    if (!std::isfinite(impulseMagnitude)) {
+        return 0.0;
+    }
     const Vec2 impulse = scale(contact.normal, impulseMagnitude);
     first.velocity = subtract(first.velocity, scale(impulse, first.inverseMass));
     second.velocity = add(second.velocity, scale(impulse, second.inverseMass));
@@ -288,7 +325,7 @@ inline double applyCollisionImpulse(Ball& first, Ball& second, const CircleConta
 #if LAB_CHECKPOINT >= 6
 // Positional correction tách hai hình tròn mà không bơm thêm năng lượng vào velocity.
 inline double correctBallPenetration(Ball& first, Ball& second, const CircleContact& contact, double correctionPercent, double penetrationSlop) {
-    if (!contact.colliding || !finiteBall(first) || !finiteBall(second) || !std::isfinite(correctionPercent) || !std::isfinite(penetrationSlop)) {
+    if (!validContact(contact) || !finiteBall(first) || !finiteBall(second) || !std::isfinite(correctionPercent) || !std::isfinite(penetrationSlop)) {
         return 0.0;
     }
     const double inverseMassSum = first.inverseMass + second.inverseMass;
@@ -331,19 +368,36 @@ struct CollisionStepSettings {
     double penetrationSlop{0.001};
 };
 
+struct DebugContact {
+    Vec2 point{};
+    Vec2 normal{1.0, 0.0};
+    double penetration = 0.0;
+    double impulse = 0.0;
+};
+
 struct CollisionStepStats {
     std::size_t pairChecks{};
     std::size_t contacts{};
     std::size_t impulses{};
     std::size_t wallHits{};
     double maximumPenetration{};
+    Vec2 wallImpulse{};
+    bool valid = true;
+    std::vector<DebugContact> debugContacts{};
 };
 
 // Brute-force cố ý duyệt mỗi unordered pair đúng một lần trong mỗi solver iteration.
 inline CollisionStepStats stepCollisionWorld(std::vector<Ball>& balls, const TankBounds& bounds, const CollisionStepSettings& settings) {
     CollisionStepStats stats{};
-    if (!validBounds(bounds) || !std::isfinite(settings.deltaSeconds) || settings.deltaSeconds <= 0.0) {
+    if (!validBounds(bounds) || balls.size() > 512 || !std::isfinite(settings.deltaSeconds) || settings.deltaSeconds <= 0.0 || settings.deltaSeconds > 1.0 / 30.0 || !std::isfinite(settings.restitution) || settings.restitution < 0.0 || settings.restitution > 1.0 || settings.solverIterations < 1 || settings.solverIterations > 8 || !std::isfinite(settings.correctionPercent) || settings.correctionPercent < 0.0 || settings.correctionPercent > 1.0 || !std::isfinite(settings.penetrationSlop) || settings.penetrationSlop < 0.0) {
+        stats.valid = false;
         return stats;
+    }
+    for (const auto& ball : balls) {
+        if (!finiteBall(ball) || 2.0 * ball.radius > std::min(bounds.maximumX - bounds.minimumX, bounds.maximumY - bounds.minimumY)) {
+            stats.valid = false;
+            return stats;
+        }
     }
     for (Ball& ball : balls) {
         integrateBall(ball, settings.deltaSeconds);
@@ -354,6 +408,7 @@ inline CollisionStepStats stepCollisionWorld(std::vector<Ball>& balls, const Tan
         for (Ball& ball : balls) {
             const WallCollisionResult wall = resolveWallCollision(ball, bounds, settings.restitution);
             stats.wallHits += std::size_t(wall.hitCount);
+            stats.wallImpulse = add(stats.wallImpulse, wall.wallImpulse);
             stats.maximumPenetration = std::max(stats.maximumPenetration, wall.deepestPenetration);
         }
         for (std::size_t firstIndex = 0; firstIndex < balls.size(); ++firstIndex) {
@@ -367,9 +422,19 @@ inline CollisionStepStats stepCollisionWorld(std::vector<Ball>& balls, const Tan
                 if (pair.impulseMagnitude > 0.0) {
                     ++stats.impulses;
                 }
+                if (iteration == 0 && stats.debugContacts.size() < 48) {
+                    const Vec2 point = add(balls[firstIndex].position, scale(pair.contact.normal, balls[firstIndex].radius));
+                    stats.debugContacts.push_back({point, pair.contact.normal, pair.contact.penetration, pair.impulseMagnitude});
+                }
                 stats.maximumPenetration = std::max(stats.maximumPenetration, pair.contact.penetration);
             }
         }
+    }
+    // Correction gần tường có thể đẩy tâm ra ngoài. Khóa lại bounds sau lượt cuối.
+    for (auto& ball : balls) {
+        const auto wall = resolveWallCollision(ball, bounds, settings.restitution);
+        stats.wallHits += static_cast<std::size_t>(wall.hitCount);
+        stats.wallImpulse = add(stats.wallImpulse, wall.wallImpulse);
     }
     return stats;
 }
@@ -429,7 +494,7 @@ inline std::size_t nearestBallIndex(const std::vector<Ball>& balls, Vec2 point) 
 }
 
 inline bool applyVelocityKick(std::vector<Ball>& balls, std::size_t index, Vec2 velocityChange) {
-    if (index >= balls.size() || !std::isfinite(velocityChange.x) || !std::isfinite(velocityChange.y)) {
+    if (index >= balls.size() || balls[index].inverseMass == 0.0 || !finiteBall(balls[index]) || !std::isfinite(velocityChange.x) || !std::isfinite(velocityChange.y) || lengthSquared(velocityChange) > 36.0) {
         return false;
     }
     balls[index].velocity = add(balls[index].velocity, velocityChange);
@@ -438,4 +503,3 @@ inline bool applyVelocityKick(std::vector<Ball>& balls, std::size_t index, Vec2 
 #endif
 
 } // namespace lab
-#endif

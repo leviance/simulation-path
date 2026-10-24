@@ -1,120 +1,170 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Dựng bể và đàn bóng deterministic
+# Dựng bể và tạo đàn bóng lặp lại được
 
 ## Vấn đề cần giải quyết
 
-Trước khi nói đến collision, ta cần một scene đủ lớn để lỗi thật sự lộ ra nhưng vẫn chạy lại được. Nếu mỗi lần mở chương trình lại spawn bóng ở vị trí và vận tốc khác nhau, một cặp xuyên nhau hôm nay có thể biến mất ở lần debug tiếp theo.
+Ta muốn nhìn thấy hàng trăm quả bóng chuyển động, nảy vào tường rồi va vào nhau. Nếu bắt đầu bằng công thức impulse ngay, rất khó biết lỗi nằm ở dữ liệu, tọa độ hay phần vẽ. Vì vậy bài đầu chỉ dựng một cảnh **đủ 256 bóng**, không chồng lấn và có thể tạo lại y hệt.
 
-Starter đã mở window SDL3, tạo renderer, streaming texture, CPU framebuffer và vẽ một bể cùng các circle placeholder đứng yên. Checkpoint 1 thay placeholder bằng 144 `Ball` thật: position, radius, velocity và inverse mass đều nằm trong world space; màu chỉ phục vụ rendering. `SDL_UpdateTexture` vẫn là bước đưa framebuffer lên cửa sổ như các project trước.
-
-Scene mặc định dùng lattice 16×9. Lattice đảm bảo không overlap bằng hình học; seeded PRNG chỉ chọn velocity. Ta không cần một vòng lặp “random vị trí cho đến khi may mắn không đè lên bóng cũ”.
-
-Toàn bộ việc dựng scene được gom trong `makeBallLattice`. Hàm nhận số cột, số hàng, bounds, radius, speed và seed; vì vậy bài kiểm thử có thể gọi lại đúng cùng một đầu vào rồi so từng `Ball`, thay vì phải khởi động cửa sổ SDL3 để kiểm tra dữ liệu ban đầu.
+Chưa có va chạm ở bài này. Các bài 2–8 đưa bể 2D tới mốc kiểm chứng; bài 9–11 mới mở rộng sang sphere 3D và ghép ứng dụng cuối. Hai quả bóng trong vài bài giữa là thí nghiệm để hiểu công thức, không phải sản phẩm cuối.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mỗi cell có kích thước:
+Khung Starter đã có SDL3 window, renderer, texture và event loop từ các project trước. Chạy nó sẽ thấy khung bể trống. Luồng dữ liệu vẫn là **Scene → renderScene → framebuffer → SDL_UpdateTexture → present**. Ta chỉ cần thêm dữ liệu vật lý vào đúng luồng ấy.
 
-$$
-w_c=\frac{x_{max}-x_{min}}{columns},\qquad
-h_c=\frac{y_{max}-y_{min}}{rows}
-$$
+Bể dùng x từ −10 đến 10 m, y từ −6 đến 6 m; Y dương hướng lên. Chia 16 cột và 16 hàng cho khoảng cách 1,25 m theo X và 0,75 m theo Y. Đường kính lớn nhất chỉ 0,48 m, nên lưới ban đầu không chồng lấn. Đây là bảo đảm từ hình học, không phải hy vọng rằng vài lần random sẽ tìm được chỗ.
 
-Tâm bóng ở giữa cell. Nếu $2r\le\min(w_c,h_c)$, hai bóng ở hai cell kề nhau không thể chồng lấn lúc spawn. Vận tốc lấy từ angle cùng speed:
-
-$$
-v=(s\cos\theta,s\sin\theta)
-$$
+Mỗi Ball giữ position, velocity, radius, inverseMass và restitution. Với vật động, inverseMass bằng 1/m; khối lượng lớn thì cùng một impulse làm vận tốc đổi ít hơn. Màu chỉ giúp nhận ra vật, không tham gia công thức.
 
 <InteractiveLab demo="collision-tank" mode="collision-scene" />
 
-Đổi giữa 16, 64 và 144 bóng rồi nhấn Đặt lại nhiều lần. Vị trí, màu và hướng chuyển động ban đầu phải lặp lại y hệt. Đây là điều kiện để một lỗi va chạm có thể trở thành regression test.
-
 ## Viết code từng bước
 
-### Bước 1 — Định nghĩa body bằng world unit
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm hàm trùng tên. **Checkpoint 01 là bản tham khảo sau bài này**; chạy checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — geometry và dynamics của một Ball"
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_starter --parallel 2
+.\build\Debug\project_24_starter.exe
+```
+
+### Bước 1 — Đọc kiểu dữ liệu và phần vẽ có sẵn
+
+Mở lab.hpp của Starter. Hai kiểu sau đã có; hãy đọc trước khi viết hàm tạo cảnh:
+
+```cpp title="include/lab.hpp — Ball"
 struct Ball {
     Vec2 position{};
     Vec2 velocity{};
     double radius{0.2};
     double inverseMass{1.0};
     std::uint32_t color{0xffffffffU};
+    double restitution{1.0};
 };
 ```
 
-`position` và `radius` dùng mét giả lập; `velocity` dùng mét/giây. `inverseMass=1/mass` xuất hiện ngay từ đầu vì impulse solver về sau dùng nó trực tiếp. Giá trị zero dành cho body tĩnh, dù scene mặc định chưa cần body tĩnh.
 
-### Bước 2 — Tạo PRNG có state hiển nhiên
+```cpp title="include/lab.hpp — TankBounds"
+struct TankBounds {
+    double minimumX{};
+    double minimumY{};
+    double maximumX{16.0};
+    double maximumY{10.0};
+};
+```
 
-```cpp title="include/lab.hpp — xorshift32 không đọc clock"
-std::uint32_t nextU32() {
-    std::uint32_t value = state;
-    value ^= value << 13U;
-    value ^= value >> 17U;
-    value ^= value << 5U;
-    state = value;
-    return value;
+
+Trong view.hpp, world point chỉ được đổi sang pixel ở bước vẽ:
+
+```cpp title="include/view.hpp — worldToScreen"
+inline Vec2 worldToScreen(Vec2 world) {
+    return {550.0 + 45.0 * world.x, 365.0 - 45.0 * world.y};
 }
 ```
 
-Đây không phải PRNG cho bảo mật. Ta chọn nó vì state chỉ có một số nguyên, dễ đối chiếu giữa C++ và TypeScript, và cùng seed luôn sinh cùng chuỗi.
 
-### Bước 3 — Kiểm cell chứa được circle trước khi spawn
+Đừng lưu lại kết quả này vào Ball.position. Resize hoặc đổi góc nhìn sau này không được làm thay đổi kích thước vật lý của bể.
 
-```cpp title="include/lab.hpp — lattice từ chối cấu hình overlap sẵn"
-const double cellWidth = (bounds.maximumX - bounds.minimumX) / double(columns);
-const double cellHeight = (bounds.maximumY - bounds.minimumY) / double(rows);
-if (2.0 * radius > std::min(cellWidth, cellHeight)) {
+### Bước 2 — Tạo lưới trước, chọn vận tốc sau
+
+SeededRandom đã được cung cấp trong Starter. Thêm makeBallLattice sau kiểu đó. Hàm kiểm số ô trước khi reserve để input sai không tạo một allocation khổng lồ:
+
+```cpp title="include/lab.hpp — makeBallLattice"
+inline std::vector<Ball> makeBallLattice(int columns, int rows, const TankBounds& bounds, double radius, double speed, std::uint32_t seed) {
+    std::vector<Ball> balls{};
+    if (columns <= 0 || rows <= 0 || columns > 512 || rows > 512 || columns * rows > 512 || !validBounds(bounds) || !std::isfinite(radius) || radius <= 0.0 || !std::isfinite(speed) || speed < 0.0) {
+        return balls;
+    }
+    const double cellWidth = (bounds.maximumX - bounds.minimumX) / double(columns);
+    const double cellHeight = (bounds.maximumY - bounds.minimumY) / double(rows);
+    if (2.0 * radius > std::min(cellWidth, cellHeight)) {
+        return balls;
+    }
+
+    constexpr std::uint32_t palette[] = {
+        0x61afefffU,
+        0x98c379ffU,
+        0xe5c07bffU,
+        0xc678ddffU,
+        0xe06c75ffU,
+        0x56b6c2ffU,
+    };
+    SeededRandom random(seed);
+    balls.reserve(std::size_t(columns) * std::size_t(rows));
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            const double positionX = bounds.minimumX + (double(column) + 0.5) * cellWidth;
+            const double positionY = bounds.minimumY + (double(row) + 0.5) * cellHeight;
+            const double angle = 2.0 * kPi * random.nextUnit();
+            const double speedScale = 0.75 + 0.5 * random.nextUnit();
+            const Vec2 velocity{speed * speedScale * std::cos(angle), speed * speedScale * std::sin(angle)};
+            const std::size_t colorIndex = std::size_t(row * columns + column) % std::size(palette);
+            balls.push_back({{positionX, positionY}, velocity, radius, 1.0, palette[colorIndex]});
+        }
+    }
     return balls;
 }
 ```
 
-Nếu radius quá lớn, trả scene rỗng rõ ràng tốt hơn tạo một initial state đã vi phạm điều kiện của collision solver.
 
-### Bước 4 — Đặt tâm giữa cell và chỉ random velocity
+Vị trí chỉ phụ thuộc hàng/cột. Hai lần gọi cùng seed cho cùng dãy góc và độ lớn vận tốc trong cùng implementation. Không dùng clock hay random_device; chúng khiến một lỗi khó tái hiện.
 
-```cpp title="include/lab.hpp — position có chứng minh, velocity có seed"
-const double positionX = bounds.minimumX + (double(column) + 0.5) * cellWidth;
-const double positionY = bounds.minimumY + (double(row) + 0.5) * cellHeight;
-const double angle = 2.0 * kPi * random.nextUnit();
-const double speedScale = 0.75 + 0.5 * random.nextUnit();
-const Vec2 velocity{speed * speedScale * std::cos(angle), speed* speedScale* std::sin(angle)};
+### Bước 3 — Tạo vật liệu khác nhau và đưa vào Scene
+
+Thêm hàm sau ngay sau makeBallLattice:
+
+```cpp title="include/lab.hpp — makeTankBalls"
+inline std::vector<Ball> makeTankBalls(std::uint32_t seed, bool elastic = false) {
+    const TankBounds bounds{-10.0, -6.0, 10.0, 6.0};
+    auto balls = makeBallLattice(16, 16, bounds, 0.24, 2.2, seed);
+    for (std::size_t index = 0; index < balls.size(); ++index) {
+        balls[index].radius = 0.18 + 0.02 * static_cast<double>(index % 4);
+        balls[index].inverseMass = 1.0 / (0.5 + 0.25 * static_cast<double>(index % 5));
+        balls[index].restitution = elastic ? 1.0 : 0.7 + 0.15 * static_cast<double>(index % 3);
+    }
+    return balls;
+}
 ```
 
-Speed dao động quanh giá trị yêu cầu để scene bớt đều, nhưng vẫn bị chặn trong một khoảng biết trước.
+
+Bán kính thay đổi từ 0,18 đến 0,24 m; mass từ 0,5 đến 1,5 kg; restitution là 0,7, 0,85 hoặc 1. Preset elastic sẽ đặt mọi vật liệu về 1 ở bài 8. Chưa cần dùng các tham số đó để phản ứng va chạm.
+
+Thay rebuildScene trong scene.hpp bằng phiên bản của bài này:
+
+```cpp title="include/scene.hpp — rebuildScene"
+inline void rebuildScene(Scene& scene) {
+    scene.message.clear();
+    scene.balls = makeTankBalls(kSceneSeed, scene.elastic);
+    if (scene.count == 64)
+        scene.balls.resize(64);
+    beginMeasurement(scene);
+}
+```
+
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build bể deterministic"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_24_starter
-cmake --build build --config Debug --target project_24_checkpoint_1
-./build/Debug/project_24_checkpoint_1.exe
-```
+Build Starter rồi chạy. renderScene đã duyệt scene.balls và gọi drawBall, nên không cần tạo một vector bóng khác trong renderer. Bạn phải thấy 256 hình tròn có kích thước và màu khác nhau. N chưa làm chúng chuyển động; đó là phần việc của bài 2.
 
-Starter phải vẽ được placeholder trước. Checkpoint 1 phải báo 144 bóng và seed `0x00c0ffee` trên title bar; các bóng vẫn đứng yên vì integration là bài tiếp theo.
+Reset gọi lại hàm tạo cảnh với seed cố định. Đừng nhầm “có thể tái lập” với việc mọi compiler/CPU bắt buộc cho cùng byte số thực: các phép sin/cos có thể lệch rất nhỏ giữa môi trường. Tests so trong tolerance phù hợp.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thay seed cố định bằng tick hiện tại. Chụp velocity của bóng đầu, reset hai lần và quan sát case thay đổi; sau đó hoàn tác để bug có thể lặp lại.
-2. Đặt tâm ở mép cell thay vì `column+0.5`. Bóng biên có thể xuyên wall ngay khi spawn; hoàn tác và kiểm khoảng cách tâm–tường.
-3. Tăng radius vượt nửa cell nhưng bỏ validation. Dự đoán overlap count trước khi chạy, quan sát rồi hoàn tác.
+1. Đổi khoảng cách hàng xuống dưới 0,48 m. Quan sát các bóng chồng lấn ngay ở t=0, trước khi có solver; đừng đổ lỗi đó cho impulse.
+
+2. Dùng vận tốc random từ đồng hồ mỗi lần reset. Bấm reset vài lần rồi thử tái hiện một va chạm: dữ liệu ban đầu đã khác.
+
+3. Lưu worldToScreen vào position. Hình có thể còn hiện trong một cửa sổ, nhưng radius và velocity không còn cùng đơn vị. Hoàn tác trước khi đi tiếp.
 
 ## Tự kiểm tra kết quả
 
-- Starter mở được và vẽ bể trước khi có `Ball` physics state.
-- Checkpoint 1 tạo đúng 144 bóng từ lattice 16×9.
-- Mọi circle nằm hoàn toàn trong `TankBounds`.
-- Initial overlap count bằng zero.
-- Cùng seed tạo position, velocity, radius và màu giống hệt.
-- World state không chứa pixel coordinate; resize chỉ đổi `WorldView`.
-- Source final vẫn trình bày setup, `SDL_UpdateTexture` và cleanup thành các khối rõ ràng.
+- Cảnh chính có đúng 256 bóng, mọi tâm cách mỗi mặt tường ít nhất một radius.
+- Khoảng cách lưới lớn hơn tổng hai bán kính lớn nhất; không có overlap ban đầu.
+- Cùng seed/reset tái tạo cùng vị trí, vận tốc và vật liệu.
+- Không có thuật toán va chạm chạy sớm hoặc một đàn bóng khác được renderer tự sinh.
 
 ## Bài tập mở rộng
 
-Thêm một preset có ba mass khác nhau nhưng giữ cùng radius. Hãy biểu diễn bằng `inverseMass` và màu; chưa thay collision response trong bài này.
+Chọn hai bóng nhẹ/nặng và ghi mass = 1/inverseMass của chúng. Dự đoán vật nào đổi vận tốc nhiều hơn nếu nhận cùng một impulse; giữ dự đoán đó tới bài 5.
 
-Bài tiếp theo cho đàn bóng chuyển động bằng fixed timestep. Việc chúng bay xuyên tường ở checkpoint 2 là lỗi có chủ đích để ta giải từng boundary một.
+[Sang bài 2 — Cho cả đàn bóng chuyển động bằng fixed timestep](/projects/collision-tank/02-cho-bong-chuyen-dong-fixed-timestep).

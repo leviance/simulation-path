@@ -1,101 +1,136 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đẩy hai bóng ra khỏi penetration
+# Sửa chồng lấn mà không đổi vận tốc
 
 ## Vấn đề cần giải quyết
 
-Impulse có thể khiến hai ball bắt đầu rời nhau, nhưng position của chúng vẫn overlap ngay sau response. Nếu nhiều contact tạo thành một cụm, phần overlap còn lại khiến detection lặp lại, wall correction chen vào và scene rung.
-
-Ta thêm positional correction, nhưng không biến nó thành một cú teleport toàn phần thiếu kiểm soát. `penetrationSlop` bỏ qua sai số rất nhỏ; `correctionPercent` chỉ sửa một phần; inverse mass quyết định body nào phải dịch nhiều hơn.
+Sau impulse, hai vật đã rời nhau nhưng hình vẫn có thể chồng lấn trong vài frame. Detection chỉ được gọi sau một bước rời rạc; nó không tự đưa vật về đúng thời điểm vừa chạm. Ta cần một phần sửa vị trí riêng, không tiếp tục đổi velocity để ép hình ảnh tách ra.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Độ correction dùng trong một pass:
+Gọi penetration là độ xuyên vừa phát hiện, s là slop và beta là tỉ lệ sửa. Chọn beta=0,8 và s=0,001 m:
 
 $$
-c=\frac{\max(penetration-slop,0)\,percent}{m_A^{-1}+m_B^{-1}}
+C=\frac{\max(penetration-s,0)\,\beta}{w_A+w_B},\qquad
+p_A'=p_A-n Cw_A,\quad p_B'=p_B+n Cw_B.
 $$
 
-Vector correction là $cn$. Position mới:
+C là hệ số phân phối, **không phải quãng dịch chuyển của mỗi vật**. Dịch chuyển thực còn nhân inverse mass. Vật nhẹ dịch nhiều hơn; tâm khối của cặp không bị dời bởi hai hiệu chỉnh này. Velocity giữ nguyên, nên động năng của mô hình không lực thế ở đây cũng giữ nguyên trong riêng bước correction.
 
-$$
-p_A'=p_A-cn\,m_A^{-1},\qquad p_B'=p_B+cn\,m_B^{-1}
-$$
-
-Velocity không xuất hiện trong công thức này.
+Đây là positional correction sau va chạm rời rạc, không phải CCD. Nếu bóng đi xuyên qua nhau giữa hai lần lấy mẫu mà không overlap tại hai đầu bước, correction không thể biết va chạm đã xảy ra.
 
 <InteractiveLab demo="collision-tank" mode="collision-correction" />
 
-Mode bài này khởi đầu với positional correction tắt. Chạy nhanh 2 giây, ghi overlap/max penetration, rồi bật checkbox và lặp lại sau reset. Impulse count có thể tương tự nhưng geometry ổn định hơn rõ rệt.
-
 ## Viết code từng bước
 
-### Bước 1 — Giữ correction trong miền an toàn
+Tiếp tục viết trong **starter/include** và **starter/src**. Khi thay một hàm, thay bản cũ thay vì dán thêm hàm trùng tên. **Checkpoint 06 là bản tham khảo sau bài này**; chạy checkpoint không kiểm phần bạn vừa viết trong Starter.
 
-```cpp title="include/lab.hpp — clamp percent và slop"
-const double safePercent = std::clamp(correctionPercent, 0.0, 1.0);
-const double safeSlop = std::max(0.0, penetrationSlop);
-const double correctionMagnitude = std::max(contact.penetration - safeSlop, 0.0) * safePercent / inverseMassSum;
+```powershell title="Build đúng mã đang viết"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_starter --parallel 2
+.\build\Debug\project_24_starter.exe
 ```
 
-Slop không “xóa” contact; nó chỉ cho phép một overlap cực nhỏ không bị solver kéo qua kéo lại vì floating-point noise.
+### Bước 1 — Viết phần sửa vị trí độc lập
 
-### Bước 2 — Phân phối correction theo inverse mass
+Thêm correctBallPenetration sau hàm impulse:
 
-```cpp title="include/lab.hpp — body nhẹ dịch xa hơn"
-const Vec2 correction = scale(contact.normal, correctionMagnitude);
-first.position = subtract(first.position, scale(correction, first.inverseMass));
-second.position = add(second.position, scale(correction, second.inverseMass));
-return correctionMagnitude;
+```cpp title="include/lab.hpp — correctBallPenetration"
+inline double correctBallPenetration(Ball& first, Ball& second, const CircleContact& contact, double correctionPercent, double penetrationSlop) {
+    if (!validContact(contact) || !finiteBall(first) || !finiteBall(second) || !std::isfinite(correctionPercent) || !std::isfinite(penetrationSlop)) {
+        return 0.0;
+    }
+    const double inverseMassSum = first.inverseMass + second.inverseMass;
+    if (inverseMassSum <= kCollisionEpsilon) {
+        return 0.0;
+    }
+    const double safePercent = std::clamp(correctionPercent, 0.0, 1.0);
+    const double safeSlop = std::max(0.0, penetrationSlop);
+    const double correctionMagnitude = std::max(contact.penetration - safeSlop, 0.0) * safePercent / inverseMassSum;
+    const Vec2 correction = scale(contact.normal, correctionMagnitude);
+    first.position = subtract(first.position, scale(correction, first.inverseMass));
+    second.position = add(second.position, scale(correction, second.inverseMass));
+    return correctionMagnitude;
+}
 ```
 
-Nếu B là static body (`inverseMass=0`), chỉ A dịch. Nếu mass bằng nhau, hai ball chia đều khoảng sửa.
 
-### Bước 3 — Ghép impulse và correction nhưng không trộn công thức
+Hàm kiểm contact và tổng inverse mass giống phần impulse, nhưng không đọc relative velocity để quyết định lượng sửa. Dù hai vật đã tách nhau về mặt velocity, phần chồng lấn hình học vẫn có thể cần sửa.
 
-```cpp title="include/lab.hpp — một PairResolutionResult vẫn giữ hai kết quả"
-result.contact = findCircleContact(first, second);
-if (!result.contact.colliding) {
+### Bước 2 — Giữ rõ thứ tự detection → impulse → correction
+
+Thêm kiểu kết quả và hàm ghép:
+
+```cpp title="include/lab.hpp — PairResolutionResult"
+struct PairResolutionResult {
+    CircleContact contact{};
+    double impulseMagnitude{};
+    double correctionMagnitude{};
+};
+```
+
+
+```cpp title="include/lab.hpp — resolveBallPair"
+inline PairResolutionResult resolveBallPair(Ball& first, Ball& second, double restitution, double correctionPercent, double penetrationSlop) {
+    PairResolutionResult result{};
+    result.contact = findCircleContact(first, second);
+    if (!result.contact.colliding) {
+        return result;
+    }
+    result.impulseMagnitude = applyCollisionImpulse(first, second, result.contact, restitution);
+    result.correctionMagnitude = correctBallPenetration(first, second, result.contact, correctionPercent, penetrationSlop);
     return result;
 }
-result.impulseMagnitude = applyCollisionImpulse(first, second, result.contact, restitution);
-result.correctionMagnitude = correctBallPenetration(first, second, result.contact, correctionPercent, penetrationSlop);
 ```
 
-Contact được tính một lần cho hai bước. `impulseMagnitude` và `correctionMagnitude` không cộng với nhau vì chúng có đơn vị khác nhau.
 
-### Bước 4 — Cho UI bật/tắt correction độc lập
+Contact được tính một lần trước cả hai thao tác. Trong bài 7, vòng duyệt toàn bể sẽ dùng hàm này. Đừng đổi vị trí trước rồi dùng một normal khác cho impulse của cùng contact.
 
-Canvas truyền `correctionPercent=0` khi checkbox tắt. Cùng detection/impulse vẫn chạy, nên sự khác biệt quan sát được chỉ đến từ position solve.
+### Bước 3 — Cho phép tắt correction để so sánh
+
+Trong nhánh hai bóng của stepScene:
+
+```cpp title="include/scene.hpp — bật/tắt đúng phần sửa position"
+if (scene.correction)
+    scene.lastCorrection = correctBallPenetration(candidate[0], candidate[1], contact, 0.8, 0.001);
+```
+
+
+Thêm phím D trong nhánh key-down của main:
+
+```cpp title="src/main.cpp — SDLK_D"
+if (key == SDLK_D) {
+    scene.correction = !scene.correction;
+    lab::rebuildScene(scene);
+}
+```
+
+
+Thay đổi setting dựng lại ví dụ; nhờ đó so bật/tắt từ cùng điều kiện đầu thay vì từ hai state đã chạy khác nhau.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — thêm positional correction"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_24_checkpoint_6
-./build/Debug/project_24_checkpoint_6.exe
-```
+Ở e=1, bật correction làm hai hình tách nhanh hơn, nhưng velocity sau impulse phải giống khi tắt. Với beta=1 và slop=0 trong một test cặp đơn lẻ, toàn bộ độ xuyên có thể được sửa trong một lần. Trong đàn nhiều vật, sửa toàn phần có thể đẩy vật vào contact khác; beta nhỏ hơn một là một lựa chọn giải lặp, không phải bảo đảm hội tụ ở mọi cấu hình.
 
-Checkpoint C++ dùng percent 0.8 và slop 0.001 world unit. Đây là tham số solver, không phải hằng số vật lý của vật liệu.
+Bộ kiểm sẽ giữ riêng ba bằng chứng: contact đúng hình học, impulse đúng velocity và correction không làm đổi velocity. Một hình đẹp không chứng minh cả ba.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dịch mỗi ball đúng `penetration/2` dù một ball static. Static body sẽ trôi; hoàn tác inverse-mass weighting.
-2. Sửa 120% penetration. Hai ball bị đẩy qua trạng thái separated quá xa và cụm contact rung; hoàn tác clamp percent.
-3. Cộng correction vào velocity thay vì position. Đơn vị sai và energy tăng; hoàn tác để correction không đụng velocity.
+1. Dời mỗi vật một nửa penetration dù mass khác nhau. Tâm khối của cặp bị dời không đúng; thay bằng trọng số inverse mass.
+
+2. Cộng correction vào velocity. Bạn đã đưa một lượng có đơn vị vị trí vào vận tốc và bơm động năng vào mô hình.
+
+3. Đặt beta quá lớn rồi tăng iterations để che rung. Trở lại một cặp đơn, kiểm độ dịch chuyển thực thay vì chỉ nhìn đàn bóng.
 
 ## Tự kiểm tra kết quả
 
-- Correction zero khi penetration nhỏ hơn hoặc bằng slop.
-- Percent nằm trong `[0,1]` và không over-correct một contact đơn.
-- Equal mass chia position correction đều cho hai phía.
-- Static body có inverse mass zero không dịch.
-- Velocity trước/sau positional correction giống nhau.
-- Full correction với slop zero loại overlap của một pair đơn.
-- Bật correction làm maximum penetration của scene giảm rõ so với tắt.
+- Bật/tắt correction không đổi velocity sau impulse của cùng một cặp.
+- Vật nhẹ dịch nhiều hơn vật nặng theo inverse mass; vật static không dịch.
+- Penetration còn lại tiến về slop, không nhất thiết phải zero tuyệt đối.
+- Không gọi thuật toán này là CCD hoặc dùng nó để hứa không tunneling ở mọi dt.
 
 ## Bài tập mở rộng
 
-Cho correction percent thay đổi theo penetration: nhỏ ở contact nông, lớn ở contact sâu. Vẽ hàm bạn chọn và giữ output trong `[0,1]` trước khi đưa vào solver.
+Với hai vật có wA=1, wB=0,5, penetration=0,3, beta=0,8 và slop=0,001, tính C rồi tính riêng độ dịch chuyển của A/B. Kiểm tổng phần tách tăng đúng beta×(penetration−slop).
 
-Bài tiếp theo ghép mọi pair của 144 ball. Đây là lúc correctness của một cặp trở thành một hệ nhiều contact có thứ tự giải hữu hạn.
+[Sang bài 7 — Cho 256 bóng thật sự va vào nhau](/projects/collision-tank/07-duyet-moi-cap-va-giai-toan-bo-be).
