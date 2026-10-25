@@ -1,46 +1,49 @@
 import type { ProjectLabMeta } from "../../labs/types";
+
 const lab = {
   base: {
-    label: "BRUTE-FORCE PARTICLE QUERY LAB",
-    title: "Tìm mọi hạt gần con trỏ",
+    label: "BOIDS 2D LAB",
+    title: "Một đàn hình thành từ những tương tác cục bộ",
     description:
-      "Rê vòng tròn qua 100.000 hạt, đổi N và R rồi đo số lần kiểm cùng thời gian query. Không dùng grid hay tree.",
+      "Chạy, pause, chọn một cá thể và thử ba trọng số. Brute force tìm hàng xóm cho toàn đàn; không có quỹ đạo dựng sẵn.",
   },
   modes: {
-    "brute-scene": {
-      title: "Dữ liệu 100.000 hạt được tạo và vẽ thế nào?",
-      description:
-        "Đổi N và seed rồi quay lại cấu hình cũ; cả Canvas và C++ đều vẽ toàn bộ số hạt đã chọn.",
+    "boids-motion": {
+      title: "Vẽ một cá thể và cho nó di chuyển",
+      description: "Đọc khung SDL, vẽ tam giác theo vận tốc và nối bước cập nhật vào event loop.",
     },
-    "brute-circle": {
-      title: "Đặt vòng tròn đúng chỗ chuột đang trỏ",
-      description:
-        "Đổi vị trí chuột sang world, thay R và kiểm riêng hạt index 0. Điểm trên biên cũng được nhận.",
+    "boids-flock": {
+      title: "Tạo đàn có thể lặp lại và nối hai mép thế giới",
+      description: "ID, seed, 256–1.024 cá thể và ý nghĩa của hai snapshot đọc/ghi.",
     },
-    "brute-scan": {
-      title: "Đi lần lượt từ hạt đầu tới hạt cuối",
-      description:
-        "Giảm số hạt đã quét rồi tiến từng bước. Danh sách hit chỉ đầy đủ khi đã kiểm đủ N hạt.",
+    "boids-neighbors": {
+      title: "Tìm đúng hàng xóm cho từng cá thể",
+      description: "Radius, self, minimum image và vòng lặp mọi cặp có phép kiểm độc lập.",
     },
-    "brute-squared": {
-      title: "Bỏ phép căn có làm đổi kết quả?",
+    "boids-separation": {
+      title: "Separation: tránh chen chúc mà không đổi hướng đột ngột",
       description:
-        "Chạy reference và squared distance trên cùng dữ liệu; đối chiếu toàn bộ hit indices và nearest, không chỉ số hit.",
+        "Từ hướng tránh tới desired velocity và gia tốc có giới hạn, kể cả khi trùng vị trí.",
     },
-    "brute-benchmark": {
-      title: "Đo đúng phần việc muốn biết",
-      description:
-        "Chạy 24 warm-up rồi đo 48 query, giữ checksum và exact scans. Job có tiến độ, có thể hủy giữa các query.",
+    "boids-alignment": {
+      title: "Alignment: điều chỉnh hướng theo hàng xóm",
+      description: "Đọc vận tốc cục bộ, xử lý trung bình bằng 0 và giữ separation đang có.",
     },
-    "brute-scaling": {
-      title: "Tăng N thì phải làm thêm bao nhiêu việc?",
-      description:
-        "Giữ cùng bộ query trên ba prefix 1.000 / 10.000 / 100.000. Đọc số lần kiểm trước, rồi mới so timing.",
+    "boids-cohesion": {
+      title: "Cohesion: tìm về đàn qua cả mép tuần hoàn",
+      description: "Tâm cục bộ từ displacement, không lấy trung bình sai giữa hai mép thế giới.",
     },
-    "brute-validation": {
-      title: "Một baseline đủ rõ để dùng lại ở Project 28",
-      description:
-        "Thử kính lúp, auto probe, clean mode và bảng scaling; kiểm cả reset, hủy và mất focus, không chỉ trường hợp chạy thuận lợi.",
+    "boids-integration": {
+      title: "Ghép ba quy tắc và cập nhật đồng bộ",
+      description: "Trọng số, speed cap, fixed timestep, giới hạn catch-up và kiểm thứ tự duyệt.",
+    },
+    "boids-benchmark": {
+      title: "Quan sát cá thể và đo chi phí toàn đàn",
+      description: "Hoàn thiện controls, chọn/drag, vector debug và benchmark hữu hạn có thể hủy.",
+    },
+    "boids-validation": {
+      title: "Kiểm chứng và chạy dự án Boids hoàn chỉnh",
+      description: "Fixture, oracle chín ảnh, permutation, dt, CTest và gói source độc lập.",
     },
   },
 } satisfies ProjectLabMeta;

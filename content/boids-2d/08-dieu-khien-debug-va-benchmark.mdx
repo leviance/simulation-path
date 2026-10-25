@@ -1,0 +1,246 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Quan sát cá thể và đo chi phí toàn đàn
+
+## Vấn đề cần giải quyết
+
+Nhìn thấy đàn chuyển động mới là một phần của ứng dụng học tập. Ta còn cần chọn cá thể để giải thích vì sao nó rẽ, và đo xem phần nào tiêu tốn thời gian khi tăng N. Một con số FPS không trả lời được cả hai câu hỏi đó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Debug của cá thể được chọn dùng đúng findNeighbors và computeSteering đang dùng trong simulation. Vòng tròn qua mép, danh sách hàng xóm và các vector không được tính bằng một mô hình khác chỉ để trông thuận mắt.
+
+Benchmark phải giữ câu hỏi giống nhau: cùng seed, domain, radius, trọng số, dt và dữ liệu prefix. Mỗi sample bắt đầu lại từ cùng snapshot, không để sample sau đo một đàn đã co cụm khác sample trước. Generation, bản sao snapshot ngoài stepBoids, checksum, draw và SDL_Delay nằm ngoài timer kernel; validation và chuẩn bị output bên trong stepBoids nằm trong totalMs.
+
+Mỗi N có hai warm-up và bảy mẫu, báo median/min/max. Query và steering/update là hai phần trong full step; tổng có thể gồm chi phí chuẩn bị và instrumentation nên không bắt hai cột cộng đúng từng bit thành total. Với số mẫu nhỏ, min–max là mô tả biến thiên của phép đo, không phải khoảng tin cậy thống kê.
+
+Công việc xác định là N(N−1), còn runtime phụ thuộc CPU, compiler, cache, instrumentation và phân bố hàng xóm. N tăng gấp đôi làm số kiểm gần gấp bốn; không bắt số ms phải tăng đúng bốn lần.
+
+<InteractiveLab demo="boids-2d" mode="boids-benchmark" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Giữ dữ liệu đo riêng với đàn đang xem
+
+Trong `include/benchmark.hpp`, thêm hai kiểu dữ liệu sau. `BenchmarkRow` là một dòng kết quả; `BenchmarkJob` giữ tiến độ và một snapshot riêng. Nhờ vậy, kéo một cá thể trên màn hình không làm đổi đầu vào giữa các mẫu đo.
+
+```cpp title="include/benchmark.hpp — BenchmarkRow và BenchmarkJob"
+struct BenchmarkRow {
+    std::size_t count{};
+    std::size_t samples{};
+    std::size_t comparisons{};
+    double medianMs{};
+    double minMs{};
+    double maxMs{};
+    double queryMs{};
+    double updateMs{};
+    std::uint32_t checksum{};
+};
+
+struct BenchmarkJob {
+    bool active{};
+    std::size_t row{};
+    std::size_t warmup{};
+    Params params{};
+    std::vector<Boid> source;
+    std::vector<Metrics> samples;
+    std::vector<BenchmarkRow> rows;
+    std::uint32_t checksum{};
+};
+```
+
+Tạo job từ một đàn 1.024 cá thể rồi lấy prefix 256/512/1.024 khi đo. `active=true` chỉ đánh dấu có việc cần làm; hàm này chưa chạy vòng lặp benchmark.
+
+```cpp title="include/benchmark.hpp — createBenchmark"
+inline BenchmarkJob createBenchmark(std::uint32_t seed, const Params& params) {
+    BenchmarkJob job{};
+    job.active = true;
+    job.params = params;
+    job.source = makeFlock(1024, seed, params);
+    return job;
+}
+```
+
+Thêm `BenchmarkJob job{};` vào cuối struct `Scene` trong `include/scene.hpp`. Sau bước này, Scene sở hữu job; không dùng một biến global khác để giữ bảng đo.
+
+### Bước 2 — Cho phép đo tiến từng bước hữu hạn
+
+Thêm `median` vào `include/benchmark.hpp` trước `tickBenchmark`. Hàm nhận một bản sao của dãy thời gian rồi sắp xếp để lấy phần tử giữa. Nó không sửa thứ tự các mẫu trong job; với bảy mẫu, median là phần tử thứ tư sau sắp xếp.
+
+```cpp title="include/benchmark.hpp — median"
+inline double median(std::vector<double> values) {
+    std::sort(values.begin(), values.end());
+    const std::size_t middle = values.size() / 2;
+    if (values.size() % 2 == 1) {
+        return values.at(middle);
+    }
+    return (values.at(middle - 1) + values.at(middle)) / 2.0;
+}
+```
+
+Trong `include/benchmark.hpp`, `BenchmarkJob` giữ params và source riêng. Đọc `tickBenchmark` dưới đây để thấy một tick chỉ làm một full step.
+
+```cpp title="include/benchmark.hpp — tickBenchmark"
+inline void tickBenchmark(BenchmarkJob& job) {
+    if (!job.active) {
+        return;
+    }
+    constexpr std::array<std::size_t, 3> counts{256, 512, 1024};
+    const std::size_t count = counts.at(job.row);
+    const std::vector<Boid> snapshot(job.source.begin(), job.source.begin() + static_cast<std::ptrdiff_t>(count));
+    std::vector<Boid> output;
+    const Metrics metrics = stepBoids(snapshot, output, job.params, fixedDt);
+    if (job.warmup < 2) {
+        ++job.warmup;
+        return;
+    }
+    job.samples.push_back(metrics);
+    for (const Boid& boid : output) {
+        job.checksum += static_cast<std::uint32_t>(std::llround(boid.position.x * 1000.0));
+        job.checksum += static_cast<std::uint32_t>(std::llround(boid.position.y * 1000.0));
+        job.checksum += boid.id;
+    }
+    if (job.samples.size() < 7) {
+        return;
+    }
+    std::vector<double> total;
+    std::vector<double> query;
+    std::vector<double> update;
+    for (const Metrics& sample : job.samples) {
+        total.push_back(sample.totalMs);
+        query.push_back(sample.queryMs);
+        update.push_back(sample.updateMs);
+    }
+    const double minimum = *std::min_element(total.begin(), total.end());
+    const double maximum = *std::max_element(total.begin(), total.end());
+    job.rows.push_back({count, job.samples.size(), metrics.comparisons, median(total), minimum, maximum, median(query), median(update), job.checksum});
+    ++job.row;
+    job.samples.clear();
+    job.warmup = 0;
+    if (job.row == counts.size()) {
+        job.active = false;
+    }
+}
+```
+
+Mỗi dòng lấy prefix cùng vector 1.024 cá thể. Hai lượt đầu là warm-up, bảy lượt sau bắt đầu từ cùng snapshot. Source copy nằm ngoài timer của stepBoids; checksum cũng nằm ngoài. UI có cơ hội xử lý Cancel giữa các tick.
+
+### Bước 3 — Nối job vào Reset, clock và bàn phím
+
+Trong `include/scene.hpp`, thay ba hàm dưới đây. Reset bỏ job cũ; Pause hủy phần việc còn lại; clock cho job tiến đúng một tick rồi trả quyền điều khiển về event loop. Nhánh benchmark phải nằm trước kiểm tra `paused`, vì job vẫn cần chạy khi đàn trên màn hình đang đứng yên.
+
+```cpp title="include/scene.hpp — resetScene"
+inline void resetScene(Scene& scene) {
+    scene.paused = true;
+    scene.time = 0;
+    scene.steps = 0;
+    scene.accumulator = 0;
+    scene.droppedSeconds = 0;
+    scene.selected = 0;
+    scene.metrics = {};
+    scene.next.clear();
+    scene.boids.clear();
+    scene.boids = makeFlock(scene.count, scene.seed, scene.params);
+    scene.job = {};
+}
+```
+
+```cpp title="include/scene.hpp — stopScene"
+inline void stopScene(Scene& scene) {
+    scene.paused = true;
+    scene.accumulator = 0;
+    scene.job.active = false;
+}
+```
+
+```cpp title="include/scene.hpp — advanceScene"
+inline void advanceScene(Scene& scene, double elapsed) {
+    if (scene.job.active) {
+        tickBenchmark(scene.job);
+        return;
+    }
+    if (scene.paused) {
+        return;
+    }
+    scene.accumulator += elapsed;
+    const double budget = 3.0 * fixedDt;
+    if (scene.accumulator > budget) {
+        scene.droppedSeconds += scene.accumulator - budget;
+        scene.accumulator = budget;
+    }
+    for (int count = 0; count < 3 && scene.accumulator + 1e-12 >= fixedDt; ++count) {
+        stepScene(scene);
+        scene.accumulator -= fixedDt;
+    }
+    scene.accumulator = std::max(0.0, scene.accumulator);
+}
+```
+
+Trong `applyKey` của `src/main.cpp`, thêm nhánh phím B bên cạnh các phím đổi tham số. Giữ nguyên ID, vị trí và thời gian của đàn đang xem: `createBenchmark` tạo dữ liệu riêng, không reset Scene.
+
+```cpp title="src/main.cpp — khởi động job từ phím B"
+if (key == SDLK_B) {
+    lab::stopScene(scene);
+    scene.job = lab::createBenchmark(scene.seed, scene.params);
+}
+```
+
+Ở nhánh Space, trước khi đảo `scene.paused`, nếu `scene.job.active` thì gọi `lab::stopScene(scene)` và `return`. Với Escape trong event loop, thay nhánh thoát ngay bằng nhánh sau; như vậy lần bấm đầu hủy job, lần bấm khi không có job mới đóng cửa sổ.
+
+```cpp title="src/main.cpp — hủy bằng Escape trước khi thoát"
+if (event.key.key == SDLK_ESCAPE) {
+    if (scene.job.active) {
+        lab::stopScene(scene);
+    } else {
+        running = false;
+    }
+} else {
+    applyKey(scene, event.key.key);
+}
+```
+
+Cuối `applyKey`, sau các nhánh đổi tham số và trước phím B, thêm đoạn sau để không giữ một bảng đo gắn với cấu hình đã cũ. F và các phím chọn cá thể không nằm trong hai nhóm này nên vẫn giữ kết quả đo.
+
+```cpp title="src/main.cpp — xóa kết quả khi mô hình thay đổi"
+const bool weightsChanged = key == SDLK_Q || key == SDLK_A || key == SDLK_W || key == SDLK_S || key == SDLK_E || key == SDLK_D;
+const bool limitsChanged = key == SDLK_T || key == SDLK_G || key == SDLK_Y || key == SDLK_H || key == SDLK_U || key == SDLK_J;
+if (weightsChanged || limitsChanged) {
+    scene.job = {};
+}
+```
+
+## Ghép các phần lại
+
+Trong Scene, job giữ params/source riêng. Main gọi tickBenchmark tối đa một lần mỗi frame, còn xử lý event vẫn diễn ra giữa các tick. B chạy phép đo; Escape hủy. Pointer down nhận capture, up/cancel/focus lost/resize nhả capture; renderer dùng tọa độ đã được SDL đổi sang logical board đúng một lần. Các helper trình bày có đầy đủ trong source, không phải phần engine che thuật toán đàn.
+
+```bash
+# Bản làm bài của bạn:
+cmake --build build --config Debug --target project_27_starter
+# Bản tham khảo ở cuối bài:
+cmake --build build --config Debug --target project_27_checkpoint_8
+```
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Dự đoán cột nào đổi nếu đưa SDL_Delay hoặc render vào vùng đo. Chỉ thêm thử ở bản đo riêng rồi so: bạn sẽ đo chi phí frame, không còn riêng kernel cần tối ưu.
+2. Bắt đầu job rồi hủy sau vài tick. Không được còn mẫu mới sau Cancel; rows đã hoàn thành phải được phân biệt với một job đủ ba dòng.
+3. Chạy lại cùng cấu hình và so checksum. Thời gian có thể khác, checksum trong cùng môi trường phải ổn định; vẫn cần kiểm state riêng vì checksum có thể va chạm.
+4. Khi pause, kéo ra ngoài viewport rồi thả, đổi focus và resize. Cá thể không được tiếp tục bám chuột sau khi bạn đã nhả.
+
+## Tự kiểm tra kết quả
+
+- Sau 27 tick có đúng ba dòng, mỗi dòng bảy mẫu đã loại warm-up.
+- Counts 256/512/1024 tương ứng 65.280 / 261.632 / 1.047.552 phép kiểm mỗi bước.
+- Timer là số đo hữu hạn không âm, không có công thức dựng runtime theo N.
+- State của đàn quan sát không bị job thay bằng một preset benchmark khác.
+- Keyboard, pointer owner, final up, cancel, blur và resize đều có thể kiểm riêng.
+
+## Bài tập mở rộng
+
+Đo cùng N với hai bán kính và cùng seed. Số phép kiểm không đổi nhưng chi phí duyệt hàng xóm/steering có thể đổi. Giải thích bảng trước khi đề xuất tối ưu; lưu CPU, compiler và Release flags cùng kết quả.
+
+[Tiếp theo: Kiểm chứng và chạy dự án Boids hoàn chỉnh](./09-kiem-chung-va-du-an-hoan-chinh).

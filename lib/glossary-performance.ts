@@ -3,13 +3,13 @@ export const performanceGlossaryTerms = [
     id: "circle-query",
     term: "Circle query",
     definition:
-      "Truy vấn tìm các điểm nằm trong một đường tròn xác định bởi center và radius. Project 27 dùng world-space circle quanh con trỏ; boundary được nhận bằng điều kiện distance ≤ radius.",
+      "Truy vấn tìm các điểm trong đường tròn center/radius, có quy tắc nhận biên rõ. Project 27 đặt tâm ở từng Boid để tìm hàng xóm trong world space; đây không phải chỉ một query quanh con trỏ.",
   },
   {
     id: "brute-force-query",
     term: "Brute-force query",
     definition:
-      "Cách kiểm lần lượt mọi phần tử có thể là đáp án, không dùng cấu trúc tăng tốc để loại candidate. Với N particles, mỗi circle query của Project 27 luôn đọc N positions.",
+      "Kiểm lần lượt các candidate, chưa dùng cấu trúc không gian để loại sớm. Một query duyệt N phần tử, hoặc N−1 nếu bỏ self. Toàn đàn Boids ở Project 27 làm N query nên có N(N−1) phép kiểm mỗi bước.",
   },
   {
     id: "squared-distance",
@@ -21,13 +21,13 @@ export const performanceGlossaryTerms = [
     id: "hot-loop",
     term: "Hot loop",
     definition:
-      "Đoạn lặp được thực thi rất nhiều lần và chiếm phần đáng kể của workload. Trong Project 27, vòng quét particles là hot loop; allocation, sqrt hoặc logging đặt bên trong đều được nhân lên theo N.",
+      "Đoạn lặp chiếm phần đáng kể của workload. Project 27 quét mọi cặp có hướng: chi phí nhỏ như tạo object, tính khoảng cách hay logging trong vòng trong được lặp gần N² lần mỗi bước.",
   },
   {
     id: "benchmark-warm-up",
     term: "Benchmark warm-up",
     definition:
-      "Một hoặc vài lượt chạy trước khi bắt đầu timer để code path, cache và runtime đi qua trạng thái khởi động. Warm-up phải dùng cùng workload nhưng không được cộng vào queryCount hoặc elapsed time được báo cáo.",
+      "Lượt chạy trước các mẫu chính để code path/cache/runtime qua trạng thái khởi động. Dùng cùng workload; không cộng warm-up vào số samples hoặc phân bố thời gian đang báo cáo.",
   },
   {
     id: "benchmark-checksum",
@@ -39,7 +39,7 @@ export const performanceGlossaryTerms = [
     id: "linear-complexity",
     term: "Linear complexity — O(N)",
     definition:
-      "Chi phí tăng tỉ lệ với số phần tử N. Brute-force particle query kiểm đúng N candidates cho mỗi query, nên tăng cloud từ 10.000 lên 100.000 làm exact scan count tăng mười lần.",
+      "Chi phí tăng tỷ lệ với N, chẳng hạn một lần quét mọi phần tử của mảng. Không nhầm một query O(N) với toàn đàn có N query: bước Boids brute force ở Project 27 là O(N²).",
   },
   {
     id: "spatial-grid",

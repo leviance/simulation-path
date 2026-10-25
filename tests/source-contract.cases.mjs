@@ -119,7 +119,7 @@ test("C++ validation remains active in both Debug and Release", async () => {
     ["collision-tank", "08-stress-test-bao-toan-va-nghiem-thu.mdx"],
     ["spring-chain", "08-do-energy-stress-test-va-nghiem-thu.mdx"],
     ["double-pendulum-chaos", "07-preset-tuong-tac-va-nghiem-thu.mdx"],
-    ["brute-force-particle-query", "07-hoan-thien-kinh-lup-va-nghiem-thu.mdx"],
+    ["boids-2d", "09-kiem-chung-va-du-an-hoan-chinh.mdx"],
     ["spatial-grid-neighbor-query", "08-hoan-thien-spatial-grid-va-nghiem-thu.mdx"],
     ["visible-quadtree", "08-hoan-thien-visible-quadtree-va-nghiem-thu.mdx"],
     ["point-cloud-octree", "09-hoan-thien-point-cloud-octree.mdx"],

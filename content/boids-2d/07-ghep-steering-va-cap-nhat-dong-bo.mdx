@@ -1,0 +1,149 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép ba quy tắc và cập nhật đồng bộ
+
+## Vấn đề cần giải quyết
+
+Ba quy tắc riêng lẻ đều có vẻ đúng, nhưng ghép sai vẫn có thể tạo một đàn phụ thuộc thứ tự vector hoặc đổi hành vi khi FPS tụt. Bài này kiểm lại một bước hoàn chỉnh: ai đọc state nào, giới hạn ở đâu và simulation tiến được bao nhiêu thời gian thật sự.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi steering vector đã bị giới hạn, nhưng tổng có trọng số vẫn có thể lớn hơn maxAcceleration. Vì vậy phải giới hạn tổng lần nữa: $\mathbf a=\operatorname{limit}(w_s\mathbf a_s+w_a\mathbf a_a+w_c\mathbf a_c,a_{max})$. Chỉ giới hạn từng vector là chưa đủ.
+
+Trong toàn bộ vòng lặp, mọi query và steering đọc `boids`, không đọc `output`. Swap chỉ diễn ra sau khi mọi cá thể đã có state mới. Nếu cập nhật in-place, cá thể cuối sẽ nhìn một phần đàn ở tương lai, phần còn lại ở quá khứ.
+
+Clock dùng fixedDt=1/60 s. Thời gian render có thể thay đổi; accumulator quyết định cần thực hiện mấy bước cố định. Bản học có ngân sách tối đa ba bước/frame để UI không mắc trong một vòng chạy bù. Nếu bỏ thời gian thực, phải báo droppedSeconds; time của mô phỏng không được tự nhảy thêm phần chưa tính.
+
+Đây là lựa chọn giữ ứng dụng phản hồi, không làm solver nhanh hơn. Project 28 sẽ giảm chi phí tìm hàng xóm để cùng mô hình có thể tiến gần nhịp thời gian thực ở đàn lớn hơn.
+
+<InteractiveLab demo="boids-2d" mode="boids-integration" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Kiểm lại toàn bộ một bước
+
+Mở `include/simulation.hpp`. Đây là hàm đầy đủ sau khi có cả ba quy tắc; đối chiếu vị trí đọc, ghi và vùng đo thời gian.
+
+```cpp title="include/simulation.hpp — stepBoids"
+inline Metrics stepBoids(const std::vector<Boid>& boids, std::vector<Boid>& output, const Params& params, double dt) {
+    const auto start = std::chrono::steady_clock::now();
+    if (&boids == &output) {
+        throw std::invalid_argument("Read and write buffers must be different");
+    }
+    validateBoids(boids, params);
+    if (!std::isfinite(dt) || dt < 0.0 || dt > 0.05) {
+        throw std::invalid_argument("dt outside [0, 0.05]");
+    }
+    output.resize(boids.size());
+    std::vector<std::size_t> neighbors;
+    neighbors.reserve(boids.size());
+    Metrics metrics{};
+    for (std::size_t index = 0; index < boids.size(); ++index) {
+        const auto queryStart = std::chrono::steady_clock::now();
+        findNeighbors(boids, index, params, neighbors);
+        metrics.comparisons += boids.size() - 1;
+        metrics.neighbors += neighbors.size();
+        const auto queryEnd = std::chrono::steady_clock::now();
+        metrics.queryMs += milliseconds(queryStart, queryEnd);
+        Vec2 acceleration{};
+        const Steering steering = computeSteering(boids, index, neighbors, params);
+        acceleration = steering.acceleration;
+        output[index] = integrateBoid(boids[index], acceleration, params, dt);
+        metrics.updateMs += milliseconds(queryEnd, std::chrono::steady_clock::now());
+    }
+    metrics.totalMs = milliseconds(start, std::chrono::steady_clock::now());
+    return metrics;
+}
+```
+
+`boids` là const, `output` là vector khác. Không swap trong vòng lặp. Params, validation và chuẩn bị buffer nằm trong totalMs; query/update được đo thành hai phần để đọc chi phí.
+
+### Bước 2 — Giữ nhịp mô phỏng tách khỏi nhịp vẽ
+
+Mở `include/scene.hpp` và đối chiếu `advanceScene` có sẵn với bản dưới. Không thay fixedDt bằng một hằng số displacement mỗi frame.
+
+```cpp title="include/scene.hpp — advanceScene"
+inline void advanceScene(Scene& scene, double elapsed) {
+    if (scene.paused) {
+        return;
+    }
+    scene.accumulator += elapsed;
+    const double budget = 3.0 * fixedDt;
+    if (scene.accumulator > budget) {
+        scene.droppedSeconds += scene.accumulator - budget;
+        scene.accumulator = budget;
+    }
+    for (int count = 0; count < 3 && scene.accumulator + 1e-12 >= fixedDt; ++count) {
+        stepScene(scene);
+        scene.accumulator -= fixedDt;
+    }
+    scene.accumulator = std::max(0.0, scene.accumulator);
+}
+```
+
+Tối đa ba bước 1/60 s mỗi frame. Nếu CPU không theo kịp, phần thời gian thực bỏ được cộng vào droppedSeconds. Đồng hồ scene.time chỉ tăng khi thật sự chạy một bước; đây không phải lời hứa chạy cùng tốc độ thời gian thực trên mọi máy.
+
+### Bước 3 — Dừng clock trước khi tiến bằng tay
+
+Hàm `stopScene` trong bộ khung không chỉ đổi nhãn nút. Nó còn xóa phần thời gian chưa đủ một bước đang nằm trong accumulator. Giữ nguyên hàm này trong `include/scene.hpp`:
+
+```cpp title="include/scene.hpp — stopScene"
+inline void stopScene(Scene& scene) {
+    scene.paused = true;
+    scene.accumulator = 0;
+}
+```
+
+Trong `applyKey` của `src/main.cpp`, phím N gọi `stopScene` rồi mới gọi `stepScene`. Vì vậy một lần bấm N luôn tiến đúng một bước và vẫn giữ trạng thái pause. Khi nhấn Space chạy tiếp, chương trình không được lấy thời gian đã đứng yên để chạy bù hàng trăm bước.
+
+Thêm các nhánh Y/H và U/J vào `applyKey` để thử giới hạn trên chính chương trình C++. Chúng chỉ đổi tham số; `integrateBoid` áp dụng speed cap ở bước kế tiếp, còn `computeSteering` áp dụng acceleration cap khi tính lại gia tốc.
+
+```cpp title="src/main.cpp — thay giới hạn vận tốc và gia tốc"
+if (key == SDLK_Y) {
+    scene.params.maxSpeed = std::min(240.0, scene.params.maxSpeed + 5.0);
+}
+if (key == SDLK_H) {
+    scene.params.maxSpeed = std::max(10.0, scene.params.maxSpeed - 5.0);
+}
+if (key == SDLK_U) {
+    scene.params.maxAcceleration = std::min(240.0, scene.params.maxAcceleration + 5.0);
+}
+if (key == SDLK_J) {
+    scene.params.maxAcceleration = std::max(10.0, scene.params.maxAcceleration - 5.0);
+}
+```
+
+## Ghép các phần lại
+
+Theo `stepScene`, bước full đọc state cũ, ghi next rồi swap. Main dùng clock monotonic SDL_GetTicksNS; renderer không được gọi tích phân thêm lần nữa. Y/H thay speed cap và U/J thay acceleration cap trong C++; Canvas có hai slider tương ứng. Hạ speed cap khi pause chỉ tác động giới hạn ở bước tiếp theo, không tự làm thời gian tiến.
+
+```bash
+# Bản làm bài của bạn:
+cmake --build build --config Debug --target project_27_starter
+# Bản tham khảo ở cuối bài:
+cmake --build build --config Debug --target project_27_checkpoint_7
+```
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Thử cập nhật từng boid ngay trong vector đang đọc. Đổi thứ tự lưu theo ID rồi so một bước: kết quả có thể khác nhiều hơn sai số số thực. Bản chuẩn còn chặn việc truyền cùng read/write vector.
+2. Bỏ giới hạn acceleration tổng, đặt cả ba weight=5. Dự đoán độ lớn tổng trước khi bấm N; giới hạn từng thành phần không bảo đảm giới hạn tổng.
+3. Tạm bỏ ngân sách catch-up, tạo một đoạn đứng ứng dụng trong debugger rồi chạy tiếp. Đừng để bản này chạy lâu: CPU có thể mắc chạy bù. Khôi phục giới hạn và đọc droppedSeconds để thấy phần thời gian đã bỏ.
+
+## Tự kiểm tra kết quả
+
+- Snapshot ban đầu không bị thay đổi; reverse storage rồi ghép theo ID cho cùng state một bước trong tolerance 1e-9.
+- Sau mỗi bước, velocity không vượt maxSpeed và acceleration không vượt maxAcceleration.
+- Không có NaN/Inf ở overlap, no-neighbor và vector tổng 0.
+- Mỗi lần single-step tăng time đúng 1/60 s; Pause không thay đổi position.
+- Khi quá tải, UI còn dùng được và droppedSeconds được công bố.
+
+## Bài tập mở rộng
+
+Tắt cả ba trọng số. Chạy cùng input 2 giây bằng ba chuỗi dt có tổng bằng nhau và so nghiệm p0+v0t sau wrap. Sau đó dùng gia tốc hằng nhỏ để đo sai số semi-implicit Euler khi chia đôi dt; không đòi hai quỹ đạo Boids dài phải giống bit.
+
+[Tiếp theo: Quan sát cá thể và đo chi phí toàn đàn](./08-dieu-khien-debug-va-benchmark).

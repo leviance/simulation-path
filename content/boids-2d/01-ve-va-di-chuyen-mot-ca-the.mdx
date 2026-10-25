@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ một cá thể và cho nó di chuyển
+
+## Vấn đề cần giải quyết
+
+Nếu bỏ hết luật đàn, ta còn lại gì? Một cá thể có vị trí, vận tốc và một hình vẽ cho biết nó đang đi đâu. Ta sẽ làm phần đó chạy được trước; nếu một cá thể chưa chuyển động đúng, thêm một nghìn cá thể chỉ làm lỗi khó nhìn hơn.
+
+Starter đã có cửa sổ, event loop, framebuffer, input và clock từ Project 01–02. Nó tạo một `Boid` nhưng hai stub `integrateBoid` và `drawBoid` chưa làm việc. Bạn sẽ thay đúng hai hàm, rồi lần theo chỗ chúng được gọi. Các helper vẽ đường/kiểm biên được cung cấp từ bộ công cụ 2D, không phải thuật toán Boids bị giấu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta chọn world rộng 960, cao 600, +X sang phải và +Y xuống dưới để ánh xạ vào framebuffer dễ đọc. Đây là quy ước của project, không phải mọi hệ tọa độ world đều phải có Y hướng xuống.
+
+Vận tốc có đơn vị world/s. Với dt=1/60 s, cá thể có vx=54 đi thêm 0,9 world unit ở một bước. Không nhân theo FPS; renderer chỉ đọc state đã cập nhật. Công thức dùng velocity mới để tính position là semi-implicit Euler. Khi acceleration=0, nó trở về chuyển động thẳng đều.
+
+$\mathbf v_{new}=\operatorname{limit}(\mathbf v+\mathbf a\,dt,v_{max})$, rồi $\mathbf p_{new}=\operatorname{wrap}(\mathbf p+\mathbf v_{new}\,dt)$.
+
+Tam giác hướng theo velocity: đỉnh trước nằm trên direction, hai góc đuôi nằm hai phía của vector vuông góc. Khi speed gần 0, ta dùng hướng phải để hình vẽ không phải chia cho 0.
+
+<InteractiveLab demo="boids-2d" mode="boids-motion" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Thêm bước cập nhật vị trí
+
+Mở `starter/include/lab.hpp`, thay stub `integrateBoid` bằng hàm dưới đây. `Boid` đã có `id`, `position`, `velocity`; các phép vector được giữ lại từ Project 06.
+
+```cpp title="include/lab.hpp — integrateBoid"
+inline Boid integrateBoid(const Boid& boid, Vec2 acceleration, const Params& params, double dt) {
+    Boid next = boid;
+    next.velocity = limit(add(boid.velocity, multiply(acceleration, dt)), params.maxSpeed);
+    next.position = add(boid.position, multiply(next.velocity, dt));
+    next.position.x = wrap(next.position.x, params.width);
+    next.position.y = wrap(next.position.y, params.height);
+    return next;
+}
+```
+
+Ở bài này acceleration bằng 0. Vì vậy velocity chưa đổi; position tăng theo velocity × dt. Việc giới hạn speed và wrap là chính sách của thế giới, không phải một nguồn lực làm cá thể quay đầu.
+
+### Bước 2 — Vẽ được hướng chuyển động
+
+Trong `include/view.hpp`, thay stub `drawBoid`. Dùng velocity để đặt đỉnh tam giác về phía đang bay, không vẽ một chấm mà không biết đầu/đuôi.
+
+```cpp title="include/view.hpp — drawBoid"
+inline void drawBoid(Framebuffer& image, const Boid& boid, double size, std::uint32_t color) {
+    const Vec2 center = worldToScreen(boid.position);
+    Vec2 direction{1, 0};
+    const double speed = length(boid.velocity);
+    if (speed > vectorEpsilon) {
+        direction = multiply(boid.velocity, 1.0 / speed);
+    }
+    const Vec2 side{-direction.y, direction.x};
+    const Vec2 tip = add(center, multiply(direction, size));
+    const Vec2 tail = subtract(center, multiply(direction, size * 0.7));
+    const Vec2 left = add(tail, multiply(side, size * 0.55));
+    const Vec2 right = subtract(tail, multiply(side, size * 0.55));
+    drawLine(image, tip.x, tip.y, left.x, left.y, color);
+    drawLine(image, left.x, left.y, right.x, right.y, color);
+    drawLine(image, right.x, right.y, tip.x, tip.y, color);
+}
+```
+
+`side` vuông góc với direction nên hai góc đuôi nằm hai bên. `worldToScreen` chỉ thêm offset viewport; resize/DPI được SDL logical presentation xử lý, không sửa position.
+
+### Bước 3 — Đọc chỗ nối vào ứng dụng
+
+Hàm có sẵn trong `include/scene.hpp` gọi bộ cập nhật rồi đổi vai trò hai buffer. Bạn chưa phải viết lại nó; hãy lần theo lời gọi từ `main.cpp` → `advanceScene` → `stepScene`.
+
+```cpp title="include/scene.hpp — stepScene"
+inline void stepScene(Scene& scene) {
+    scene.metrics = stepBoids(scene.boids, scene.next, scene.params, fixedDt);
+    scene.boids.swap(scene.next);
+    scene.time += fixedDt;
+    ++scene.steps;
+}
+```
+
+`stepBoids` đọc vector cũ, ghi vector mới và gọi `integrateBoid`. Sau `swap`, renderer đọc đúng state mới. Đường đưa framebuffer lên texture nằm trong `presentFrame`, không nằm trong hàm tích phân.
+
+## Ghép các phần lại
+
+Trong `src/main.cpp`, vòng lặp xử lý event, gọi `advanceScene`, vẽ `drawScene` rồi `presentFrame`. Bộ khung đã nối các lời gọi đó; đừng thêm một biến position chỉ sống trong renderer. Space chạy/pause, N tiến một bước, R đưa cá thể về x=240, y=300. Sau một bước đầu tiên, x phải gần 240,9 và y vẫn là 300.
+
+```bash
+# Bản làm bài của bạn:
+cmake --build build --config Debug --target project_27_starter
+# Bản tham khảo ở cuối bài:
+cmake --build build --config Debug --target project_27_checkpoint_1
+```
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Dự đoán trước: bỏ `dt` ở phép cộng position sẽ làm một bước đi xa bao nhiêu? Chỉ đổi dòng đó, bấm N một lần rồi đọc position. Nó sẽ đi 54 thay vì 0,9; hoàn tác ngay.
+2. Đặt velocity bằng 0. Hình vẫn có hướng mặc định nhưng position không đổi. Đây là quy tắc hiển thị, không có lực đẩy tự sinh.
+3. Tạm đổi đỉnh tam giác sang vector vuông góc. Cá thể vẫn bay đúng nhưng hình nhìn như đi ngang; lỗi nằm ở cách vẽ, không phải integrator.
+
+## Tự kiểm tra kết quả
+
+- Starter mở khung trống; checkpoint 1 hiện một tam giác chuyển động sang phải.
+- Bấm N làm time tăng đúng 1/60 s và x tăng gần 0,9.
+- Pause giữ position; chọn/quan sát và resize không tạo bước mô phỏng mới.
+- Đi qua biên phải thì xuất hiện ở biên trái, không đổi velocity.
+
+## Bài tập mở rộng
+
+Cho cá thể vận tốc (40,30). Tính trước displacement sau 2 giây, rồi đo bằng time của simulation, không dùng số frame render.
+
+[Tiếp theo: Tạo đàn có thể lặp lại và nối hai mép thế giới](./02-tao-dan-va-mien-tuan-hoan).

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import Link from "@/components/app-link";
+import { progressContentVersions } from "@/course/generated/progress/versions";
+import { migrateProgressContent } from "@/lib/progress-content";
 
 const KEY = "simulation-path-progress-v2";
 const LEGACY_KEY = "simulation-path-progress-v1";
@@ -13,9 +15,14 @@ export interface ProgressState {
   completedLessonIds: string[];
   lastLessonId?: string;
   lastLesson?: { id: string; title: string; href: string };
+  projectContentVersions?: Record<string, number>;
 }
 
-const EMPTY_STATE: ProgressState = { version: 2, completedLessonIds: [] };
+const EMPTY_STATE: ProgressState = {
+  version: 2,
+  completedLessonIds: [],
+  projectContentVersions: { ...progressContentVersions },
+};
 
 function parseProgress(raw: string | null): ProgressState {
   if (!raw) return EMPTY_STATE;
@@ -38,7 +45,18 @@ function parseProgress(raw: string | null): ProgressState {
       typeof (lesson as Record<string, unknown>).href === "string"
         ? (lesson as ProgressState["lastLesson"])
         : undefined;
-    return { version: 2, completedLessonIds, lastLessonId, lastLesson };
+    return {
+      version: 2,
+      ...migrateProgressContent(
+        {
+          completedLessonIds,
+          lastLessonId,
+          lastLesson,
+          projectContentVersions: record.projectContentVersions,
+        },
+        progressContentVersions,
+      ),
+    };
   } catch {
     return EMPTY_STATE;
   }
@@ -104,7 +122,13 @@ export function LessonProgress({
     const completedLessonIds = current.completedLessonIds.includes(lesson.id)
       ? current.completedLessonIds.filter((id) => id !== lesson.id)
       : [...current.completedLessonIds, lesson.id];
-    writeProgress({ version: 2, completedLessonIds, lastLessonId: lesson.id, lastLesson: lesson });
+    writeProgress({
+      ...current,
+      version: 2,
+      completedLessonIds,
+      lastLessonId: lesson.id,
+      lastLesson: lesson,
+    });
   };
 
   return (

@@ -131,7 +131,7 @@ export const roadmapSeed = [
   },
   {
     id: 27,
-    title: "100.000 hạt và chiếc kính lúp: tìm mọi hạt gần con trỏ bằng brute force",
+    title: "Đàn Boids 2D: hành vi tập thể từ những quy tắc cục bộ",
     part: "CẤU TRÚC KHÔNG GIAN VÀ TƯ DUY HIỆU NĂNG",
   },
   {

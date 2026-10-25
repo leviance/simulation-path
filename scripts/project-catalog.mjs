@@ -56,6 +56,12 @@ export function loadProjectCatalog({ checkDirectories = true } = {}) {
       );
     }
     previousNumericId = numericId;
+    if (
+      project.contentRevision !== undefined &&
+      (!Number.isInteger(project.contentRevision) || project.contentRevision < 1)
+    ) {
+      fail(`project ${project.id} contentRevision must be a positive integer`);
+    }
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(project.slug)) {
       fail(`project ${project.id} has an invalid slug`);
     }

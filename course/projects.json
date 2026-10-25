@@ -183,10 +183,11 @@
   },
   {
     "id": "27",
-    "slug": "brute-force-particle-query",
-    "sourceDirectory": "project-27-brute-force-particle-query",
-    "checkpointCount": 7,
-    "demoId": "brute-force-particle-query"
+    "slug": "boids-2d",
+    "contentRevision": 1,
+    "sourceDirectory": "project-27-boids-2d",
+    "checkpointCount": 9,
+    "demoId": "boids-2d"
   },
   {
     "id": "28",

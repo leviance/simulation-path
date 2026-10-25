@@ -1,0 +1,240 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Separation: tránh chen chúc mà không đổi hướng đột ngột
+
+## Vấn đề cần giải quyết
+
+Đến đây ta đã biết ai ở gần, nhưng biết hàng xóm không tự làm cá thể tránh nhau. Separation thêm một lý do để đổi vận tốc: khi bị chen chúc, hướng mong muốn là ra xa những cá thể gần.
+
+Ta không viết collision response ở bài này. Cá thể vẫn có thể giao hình khi dt hoặc giới hạn gia tốc không đủ để tránh; mục tiêu là một hành vi điều khiển, không phải bảo đảm các tam giác không bao giờ chạm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi offset từ i tới j là d. Ta cộng các đóng góp $-\mathbf d/\|\mathbf d\|^2$. Dấu âm hướng ra xa j; độ lớn bằng 1/distance, nên cá thể gần có ảnh hưởng tương đối lớn hơn. Sau đó chuẩn hóa tổng để lấy hướng mong muốn.
+
+Một hướng không phải gia tốc. Ta đặt desiredVelocity trên hướng đó với độ lớn maxSpeed, rồi dùng $\mathbf a=(\mathbf v_{desired}-\mathbf v)/\tau$ với τ=1 giây. Cuối cùng giới hạn độ lớn gia tốc. Cá thể quay dần vì velocity chỉ đổi thêm a×dt.
+
+Nếu tổng hướng bằng 0 hoặc không có hàng xóm, trả 0. Nếu hai vị trí trùng nhau thì không có hướng hình học duy nhất: project chọn một hướng đối nhau theo ID. Chính sách này ngăn chia cho 0 và giữ kết quả không phụ thuộc thứ tự lưu.
+
+<InteractiveLab demo="boids-2d" mode="boids-separation" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Đổi hướng mong muốn thành gia tốc
+
+Trong `include/steering.hpp`, thêm kiểu kết quả sau bên trong namespace `lab`, trước các hàm. Mỗi vector khởi tạo bằng 0. Hai trường alignment/cohesion dành cho các bài sau; khai báo chúng không làm những quy tắc ấy tự hoạt động.
+
+```cpp title="include/steering.hpp — Steering"
+struct Steering {
+    Vec2 separation{};
+    Vec2 alignment{};
+    Vec2 cohesion{};
+    Vec2 acceleration{};
+};
+```
+
+Thêm `desiredSteering` vào `include/steering.hpp`. `responseTime` trong `lab.hpp` bằng 1 giây.
+
+```cpp title="include/steering.hpp — desiredSteering"
+inline Vec2 desiredSteering(Vec2 direction, Vec2 velocity, const Params& params) {
+    const double magnitude = length(direction);
+    if (magnitude <= vectorEpsilon) {
+        return {};
+    }
+    const Vec2 desiredVelocity = multiply(direction, params.maxSpeed / magnitude);
+    const Vec2 velocityChange = subtract(desiredVelocity, velocity);
+    const Vec2 acceleration = multiply(velocityChange, 1.0 / responseTime);
+    return limit(acceleration, params.maxAcceleration);
+}
+```
+
+Không gán velocity mới ngay theo direction: desired velocity trừ velocity hiện tại cho biết cần đổi bao nhiêu. Chia response time ra đơn vị world/s², rồi giới hạn maxAcceleration.
+
+### Bước 2 — Quy định trường hợp trùng vị trí
+
+Thêm `overlapDirection` sau helper trên. Đây là chính sách xử lý suy biến của mô hình, không phải công thức vật lý về va chạm.
+
+```cpp title="include/steering.hpp — overlapDirection"
+inline Vec2 overlapDirection(std::uint32_t a, std::uint32_t b) {
+    double sign = 1.0;
+    if (a < b) {
+        sign = -1.0;
+    }
+    if (((a ^ b) & 1U) == 0U) {
+        return {sign, 0.0};
+    }
+    return {0.0, sign};
+}
+```
+
+Hai ID quyết định một trục và hai hướng đối nhau. Không phụ thuộc index nên đảo thứ tự vector không đổi quy tắc; không gọi random mới mỗi frame.
+
+### Bước 3 — Tính separation từ hàng xóm
+
+Thêm `computeSteering`. Bản ở checkpoint này chỉ có separation; alignment và cohesion chưa được tính.
+
+```cpp title="include/steering.hpp — computeSteering"
+inline Steering computeSteering(const std::vector<Boid>& boids, std::size_t targetIndex, const std::vector<std::size_t>& neighbors, const Params& params) {
+    const Boid& target = boids.at(targetIndex);
+    Vec2 separationSum{};
+    for (std::size_t index : neighbors) {
+        const Boid& other = boids.at(index);
+        const Vec2 offset = displacement(target.position, other.position, params);
+        const double distanceSquared = offset.x * offset.x + offset.y * offset.y;
+        Vec2 away{};
+        if (distanceSquared <= vectorEpsilon * vectorEpsilon) {
+            away = overlapDirection(target.id, other.id);
+        } else {
+            away = multiply(offset, -1.0 / distanceSquared);
+        }
+        separationSum = add(separationSum, away);
+    }
+    Steering steering{};
+    steering.separation = desiredSteering(separationSum, target.velocity, params);
+    Vec2 acceleration = multiply(steering.separation, params.separationWeight);
+    steering.acceleration = limit(acceleration, params.maxAcceleration);
+    return steering;
+}
+```
+
+Mỗi offset đóng góp −offset/distance²: độ lớn tỷ lệ nghịch khoảng cách. Cá thể rất gần có ảnh hưởng hướng lớn hơn cá thể xa. Sau khi cộng, helper đổi hướng đó thành steering có giới hạn.
+
+### Bước 4 — Dùng kết quả trong bước cập nhật
+
+Thay `stepBoids` bằng phiên bản này. Hai dòng lấy `Steering` và gán acceleration là phần nối mới cần chú ý.
+
+```cpp title="include/simulation.hpp — stepBoids"
+inline Metrics stepBoids(const std::vector<Boid>& boids, std::vector<Boid>& output, const Params& params, double dt) {
+    const auto start = std::chrono::steady_clock::now();
+    if (&boids == &output) {
+        throw std::invalid_argument("Read and write buffers must be different");
+    }
+    validateBoids(boids, params);
+    if (!std::isfinite(dt) || dt < 0.0 || dt > 0.05) {
+        throw std::invalid_argument("dt outside [0, 0.05]");
+    }
+    output.resize(boids.size());
+    std::vector<std::size_t> neighbors;
+    neighbors.reserve(boids.size());
+    Metrics metrics{};
+    for (std::size_t index = 0; index < boids.size(); ++index) {
+        const auto queryStart = std::chrono::steady_clock::now();
+        findNeighbors(boids, index, params, neighbors);
+        metrics.comparisons += boids.size() - 1;
+        metrics.neighbors += neighbors.size();
+        const auto queryEnd = std::chrono::steady_clock::now();
+        metrics.queryMs += milliseconds(queryStart, queryEnd);
+        Vec2 acceleration{};
+        const Steering steering = computeSteering(boids, index, neighbors, params);
+        acceleration = steering.acceleration;
+        output[index] = integrateBoid(boids[index], acceleration, params, dt);
+        metrics.updateMs += milliseconds(queryEnd, std::chrono::steady_clock::now());
+    }
+    metrics.totalMs = milliseconds(start, std::chrono::steady_clock::now());
+    return metrics;
+}
+```
+
+Không tính steering chỉ để vẽ mũi tên. Acceleration phải được truyền vào `integrateBoid`, rồi state mới được dùng ở frame sau. Mọi query vẫn đọc cùng snapshot cũ.
+
+### Bước 5 — Vẽ và điều chỉnh steering vừa tính
+
+Thêm helper `drawArrow` vào `include/view.hpp`, trước `drawScene`. Hệ số 1,3 chỉ phóng đại hình vẽ cho dễ đọc, không nhân vào gia tốc của mô phỏng.
+
+```cpp title="include/view.hpp — drawArrow"
+inline void drawArrow(Framebuffer& image, Vec2 origin, Vec2 vector, std::uint32_t color) {
+    const Vec2 start = worldToScreen(origin);
+    const Vec2 end = add(start, multiply(vector, 1.3));
+    drawLine(image, start.x, start.y, end.x, end.y, color);
+    if (length(vector) <= vectorEpsilon) {
+        return;
+    }
+    const double angle = std::atan2(vector.y, vector.x);
+    drawLine(image, end.x, end.y, end.x - 6 * std::cos(angle - 0.5), end.y - 6 * std::sin(angle - 0.5), color);
+    drawLine(image, end.x, end.y, end.x - 6 * std::cos(angle + 0.5), end.y - 6 * std::sin(angle + 0.5), color);
+}
+```
+
+Thay `drawScene` bằng bản dưới đây để gọi helper với đúng kết quả từ `computeSteering`. Ở bài này alignment/cohesion vẫn bằng 0; các bài sau làm chúng hoạt động mà không cần viết một renderer khác.
+
+```cpp title="include/view.hpp — drawScene"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    rectangle(image, 69, 79, 1030, 680, kGrid, false);
+    std::vector<std::size_t> neighbors;
+    findNeighbors(scene.boids, scene.selected, scene.params, neighbors);
+    if (scene.debug) {
+        drawRadius(image, scene.boids.at(scene.selected).position, scene.params.radius);
+    }
+    for (std::size_t index = 0; index < scene.boids.size(); ++index) {
+        std::uint32_t color = 0x53dcb6ff;
+        double size = 4;
+        if (scene.debug && std::find(neighbors.begin(), neighbors.end(), index) != neighbors.end()) {
+            color = 0xf4ca64ff;
+        }
+        if (scene.debug && index == scene.selected) {
+            color = kExact;
+            size = 8;
+        }
+        drawBoid(image, scene.boids[index], size, color);
+    }
+    if (scene.debug) {
+        const Steering steering = computeSteering(scene.boids, scene.selected, neighbors, scene.params);
+        const Vec2 origin = scene.boids.at(scene.selected).position;
+        drawArrow(image, origin, steering.separation, 0xff7b72ff);
+        drawArrow(image, origin, steering.alignment, 0x82b8ffff);
+        drawArrow(image, origin, steering.cohesion, 0x6be89bff);
+        drawArrow(image, origin, steering.acceleration, 0xf4ca64ff);
+    }
+    // Che phần debug ngoài miền mà không dùng SDL vẽ primitive thay framebuffer.
+    rectangle(image, 0, 0, Framebuffer::width - 1, 78, kBackground, true);
+    rectangle(image, 0, 681, Framebuffer::width - 1, Framebuffer::height - 1, kBackground, true);
+    rectangle(image, 0, 79, 68, 680, kBackground, true);
+    rectangle(image, 1031, 79, Framebuffer::width - 1, 680, kBackground, true);
+}
+```
+
+Trong `applyKey` của `src/main.cpp`, thêm Q/A để đổi trọng số separation. Trọng số nhân vào kết quả quy tắc; nó không được thay bán kính tìm hàng xóm.
+
+```cpp title="src/main.cpp — thay trọng số separation"
+if (key == SDLK_Q) {
+    scene.params.separationWeight = std::min(5.0, scene.params.separationWeight + 0.1);
+}
+if (key == SDLK_A) {
+    scene.params.separationWeight = std::max(0.0, scene.params.separationWeight - 0.1);
+}
+```
+
+## Ghép các phần lại
+
+Ở checkpoint này, params.separationWeight có tác dụng còn alignment/cohesion chưa tham gia. Nhấn Q/A trong C++ hoặc dùng slider Separation trên Canvas. Pause, kéo hai cá thể lại gần rồi tiến vài bước; xem vector đỏ và velocity thay đổi, không chỉ khoảng cách trong một ảnh.
+
+```bash
+# Bản làm bài của bạn:
+cmake --build build --config Debug --target project_27_starter
+# Bản tham khảo ở cuối bài:
+cmake --build build --config Debug --target project_27_checkpoint_4
+```
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi dấu −offset thành +offset. Dự đoán hai cá thể sẽ tránh hay lao vào nhau rồi mới chạy. Tác động đảo ngược dù chương trình không crash.
+2. Bỏ nhánh overlap và đặt hai vị trí trùng nhau. Chia cho 0 có thể tạo NaN/Inf; khôi phục trước khi thử các tham số khác.
+3. Tạm gán velocity=desiredVelocity thay vì dùng acceleration. Hình quay tức thì; giảm dt không khôi phục giới hạn tốc độ quay/gia tốc mà bạn đã bỏ.
+
+## Tự kiểm tra kết quả
+
+- Một hàng xóm ở bên phải tạo separation sang trái khi velocity ban đầu bằng 0.
+- Không có hàng xóm hoặc hai đóng góp đối xứng cho vector tổng bằng 0.
+- Cặp trùng vị trí cho hai hướng hữu hạn đối nhau theo ID.
+- Thay separationWeight thực sự làm state sau bước đổi; không chỉ độ dài mũi tên.
+
+## Bài tập mở rộng
+
+Dùng ba cá thể: một gần bên phải và một xa bên trái, cùng nằm trong R. Tính hướng separation dự kiến trước, rồi đổi khoảng cách để tìm lúc tổng đổi dấu.
+
+[Tiếp theo: Alignment: điều chỉnh hướng theo hàng xóm](./05-alignment-dieu-chinh-huong-bay).

@@ -7,6 +7,7 @@ export const glossarySources = [
   { file: "lib/glossary-mesh.ts", name: "meshGlossaryTerms" },
   { file: "lib/glossary-physics.ts", name: "physicsGlossaryTerms" },
   { file: "lib/glossary-performance.ts", name: "performanceGlossaryTerms" },
+  { file: "lib/glossary-boids.ts", name: "boidsGlossaryTerms" },
   { file: "lib/glossary-gpu.ts", name: "gpuGlossaryTerms" },
   { file: "lib/glossary-cellular.ts", name: "cellularGlossaryTerms" },
   { file: "lib/glossary-heat.ts", name: "heatGlossaryTerms" },

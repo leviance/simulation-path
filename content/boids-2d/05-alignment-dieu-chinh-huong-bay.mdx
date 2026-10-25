@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Alignment: điều chỉnh hướng theo hàng xóm
+
+## Vấn đề cần giải quyết
+
+Chỉ tránh nhau thì đàn có thể tản ra mà không có hướng chung. Alignment bổ sung thông tin khác: những cá thể quanh ta đang bay theo hướng nào? Ta vẫn giữ separation; không thay quy tắc cũ bằng quy tắc mới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cộng velocity của những hàng xóm rồi lấy hướng của tổng. Nếu chia tổng cho số hàng xóm trước, hướng sau chuẩn hóa không đổi. Vì vậy code dùng velocitySum trực tiếp và tránh một bước chia không cần thiết.
+
+Trong mô hình này, hướng trung bình được đổi thành desiredVelocity có độ lớn maxSpeed. Nó không bắt velocity mới bằng chính vận tốc trung bình: một cá thể đã cùng hướng nhưng còn chậm vẫn có thể tăng tốc. Hiệu desired−current và responseTime vẫn quyết định gia tốc.
+
+Nếu các vận tốc hàng xóm triệt tiêu hoàn toàn, không có hướng ưu tiên. Ta trả alignment=0 chứ không gán desiredVelocity=0 rồi làm cá thể tự phanh. Đây là một lựa chọn mô hình được công bố, không phải mọi biến thể Boids đều phải làm như vậy.
+
+<InteractiveLab demo="boids-2d" mode="boids-alignment" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Mở rộng hàm đang có
+
+Thay toàn bộ `computeSteering` trong `include/steering.hpp` bằng bản ở dưới; giữ nguyên các helper của Bài 04.
+
+```cpp title="include/steering.hpp — computeSteering"
+inline Steering computeSteering(const std::vector<Boid>& boids, std::size_t targetIndex, const std::vector<std::size_t>& neighbors, const Params& params) {
+    const Boid& target = boids.at(targetIndex);
+    Vec2 separationSum{};
+    Vec2 velocitySum{};
+    for (std::size_t index : neighbors) {
+        const Boid& other = boids.at(index);
+        const Vec2 offset = displacement(target.position, other.position, params);
+        const double distanceSquared = offset.x * offset.x + offset.y * offset.y;
+        Vec2 away{};
+        if (distanceSquared <= vectorEpsilon * vectorEpsilon) {
+            away = overlapDirection(target.id, other.id);
+        } else {
+            away = multiply(offset, -1.0 / distanceSquared);
+        }
+        separationSum = add(separationSum, away);
+        velocitySum = add(velocitySum, other.velocity);
+    }
+    Steering steering{};
+    steering.separation = desiredSteering(separationSum, target.velocity, params);
+    steering.alignment = desiredSteering(velocitySum, target.velocity, params);
+    Vec2 acceleration = multiply(steering.separation, params.separationWeight);
+    acceleration = add(acceleration, multiply(steering.alignment, params.alignmentWeight));
+    steering.acceleration = limit(acceleration, params.maxAcceleration);
+    return steering;
+}
+```
+
+Thêm `velocitySum`, cộng velocity từng hàng xóm rồi gọi `desiredSteering`. Tổng và trung bình cho cùng hướng sau chuẩn hóa khi count>0, nên code không cần chia rồi lại chuẩn hóa. Nếu tổng bằng 0, alignment trả 0, không tự phanh.
+
+### Bước 2 — Build đúng phần vừa sửa
+
+Trong `applyKey` ở `src/main.cpp`, thêm hai nhánh sau để W/S thật sự thay `alignmentWeight`. Không gọi Reset ở đây: ta muốn thấy tác dụng của quy tắc mới trên chính đàn đang quan sát.
+
+```cpp title="src/main.cpp — thay trọng số alignment"
+if (key == SDLK_W) {
+    scene.params.alignmentWeight = std::min(5.0, scene.params.alignmentWeight + 0.1);
+}
+if (key == SDLK_S) {
+    scene.params.alignmentWeight = std::max(0.0, scene.params.alignmentWeight - 0.1);
+}
+```
+
+Build lại `starter` để chạy mã bạn đang viết. Checkpoint 5 là bản tham khảo để đối chiếu, không phải thư mục cần chép đè vào bài làm. Cả hai dùng cùng window, seed và bộ cập nhật đã có.
+
+```bash title="Build bài làm và bản tham khảo sau Bài 05"
+cmake --build build --config Debug --target project_27_starter
+cmake --build build --config Debug --target project_27_checkpoint_5
+```
+
+Nếu compiler báo không có `velocitySum`, kiểm tra biến đã được khai báo trước vòng lặp chưa. Nếu báo thiếu `alignment`, kiểm tra bạn vẫn giữ struct `Steering` từ Bài 04, thay vì tạo một struct khác chỉ có separation.
+
+### Bước 3 — Chạy và quan sát đúng quy tắc mới
+
+Với Windows/Visual Studio, mở lần lượt hai chương trình dưới đây; đóng cửa sổ thứ nhất trước khi chạy lệnh tiếp theo. Với generator single-config, executable nằm trực tiếp trong `build`, không có thư mục `Debug`.
+
+```bash title="Chạy hai bản trên Windows với Visual Studio"
+cmake -E chdir build/Debug ./project_27_starter.exe
+cmake -E chdir build/Debug ./project_27_checkpoint_5.exe
+```
+
+Ở cùng seed và số cá thể, dùng A đưa separation về 0, rồi thay alignment bằng W/S. Khi pause, chọn một cá thể và đọc vector xanh dương; bấm N để xem vận tốc đổi sau đúng một bước. Hướng của vector phải giải thích được bằng velocity hàng xóm, không phải vị trí của chúng so với gốc tọa độ. Trên Linux/macOS với generator single-config, chạy `./build/project_27_starter` và `./build/project_27_checkpoint_5`.
+
+## Ghép các phần lại
+
+Sau khi thay hàm, bật vector xanh dương và so với hướng velocity của hàng xóm. Đặt separationWeight về 0 để quan sát alignment riêng, sau đó bật lại để thấy hai quy tắc cùng tác động. C++ dùng W/S; snapshot và integrator giữ nguyên.
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Dự đoán điều gì xảy ra nếu cộng position thay cho velocity vào velocitySum. Chạy một ca đơn giản: alignment sẽ trỏ về phía liên quan tọa độ gốc, không còn giải thích được bằng hướng hàng xóm. Hoàn tác.
+2. Với hai hàng xóm có velocity đối nhau, thử bỏ kiểm zero direction. Bạn có thể chia cho 0 hoặc tự phanh theo một nhánh khác; so với chính sách đã chọn.
+3. Tạm lấy velocity của phần tử đầu thay cho tổng. Đổi thứ tự vector rồi ghép theo ID: hành vi có thể đổi chỉ vì thứ tự lưu, dấu hiệu sai rõ ràng.
+
+## Tự kiểm tra kết quả
+
+- Một hàng xóm có velocity hướng lên/xuống tạo desired heading tương ứng, không phải hướng từ position của nó tới gốc.
+- Hai velocity đối nhau có tổng 0 cho alignment=0.
+- Vector xanh dương bị giới hạn maxAcceleration trước khi nhân trọng số.
+- Separation của Bài 04 vẫn hoạt động; chỉ alignment là phần mới.
+
+## Bài tập mở rộng
+
+Tạo fixture velocity hiện tại (10,0), hàng xóm (0,20). Tính desired velocity và vector gia tốc trước/sau giới hạn; đối chiếu cả x/y, không chỉ kiểm độ dài.
+
+[Tiếp theo: Cohesion: tìm về đàn qua cả mép tuần hoàn](./06-cohesion-tim-ve-dan).

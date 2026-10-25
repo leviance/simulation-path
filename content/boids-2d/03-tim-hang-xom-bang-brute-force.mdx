@@ -1,0 +1,209 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm đúng hàng xóm cho từng cá thể
+
+## Vấn đề cần giải quyết
+
+Một cá thể không cần phản ứng với mọi cá thể khác. Nó chỉ cần những hàng xóm trong bán kính R. Tuy nhiên, trước khi có grid hay tree, ta vẫn phải kiểm tất cả để biết ai ở trong R. Phân biệt số phép kiểm với số hàng xóm là điểm quan trọng của bài này.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với cá thể i, lấy offset tới j rồi kiểm $d_x^2+d_y^2\le R^2$. Không cần sqrt để quyết định điều kiện. Nhưng offset phải theo miền tuần hoàn: x=1 và x=959 trong world rộng 960 chỉ cách nhau 2, không phải 958.
+
+Ta bỏ self theo ID. Cá thể khác có cùng tọa độ vẫn là một hàng xóm hợp lệ; bán kính 0 không đồng nghĩa luôn không có kết quả.
+
+Một query làm N−1 phép kiểm; toàn đàn có N query nên là $N(N-1)$. Với 1.024 cá thể, mỗi bước làm 1.047.552 phép kiểm có hướng. Ta vẫn kiểm cả i→j và j→i; chưa tối ưu gộp cặp.
+
+<InteractiveLab demo="boids-2d" mode="boids-neighbors" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Đo khoảng cách qua hai mép
+
+Thêm `minimumImage` vào `include/neighbors.hpp`. Không trừ hai tọa độ thô rồi kết luận cá thể sát hai mép ở rất xa nhau.
+
+```cpp title="include/neighbors.hpp — minimumImage"
+inline double minimumImage(double delta, double span) {
+    double result = std::fmod(delta, span);
+    if (result > span / 2.0) {
+        result -= span;
+    }
+    if (result < -span / 2.0) {
+        result += span;
+    }
+    return result;
+}
+```
+
+Nếu chênh lệch lớn hơn nửa chu kỳ, đi qua mép gần hơn. Tại đúng nửa chu kỳ giữ dấu để displacement của hai chiều đối nhau; radius của ứng dụng luôn nhỏ hơn nửa cạnh ngắn nhất.
+
+### Bước 2 — Tạo vector offset dùng chung
+
+Thêm `displacement` ngay sau `minimumImage`. Hàm này trả vector từ a tới ảnh gần nhất của b.
+
+```cpp title="include/neighbors.hpp — displacement"
+inline Vec2 displacement(Vec2 a, Vec2 b, const Params& params) {
+    return {minimumImage(b.x - a.x, params.width), minimumImage(b.y - a.y, params.height)};
+}
+```
+
+Query, separation và cohesion phải dùng cùng quy ước. Chỉ wrap position lúc vẽ nhưng vẫn tính lực bằng khoảng cách thô sẽ tạo một đường đứt tương tác ở mép.
+
+### Bước 3 — Viết vòng tìm hàng xóm
+
+Thêm `findNeighbors`. Hàm nhận vector output để caller giữ được vùng nhớ giữa nhiều query; `clear` không xóa capacity.
+
+```cpp title="include/neighbors.hpp — findNeighbors"
+inline void findNeighbors(const std::vector<Boid>& boids, std::size_t targetIndex, const Params& params, std::vector<std::size_t>& neighbors) {
+    const Boid& target = boids.at(targetIndex);
+    neighbors.clear();
+    const double radiusSquared = params.radius * params.radius;
+    for (std::size_t index = 0; index < boids.size(); ++index) {
+        if (boids[index].id == target.id) {
+            continue;
+        }
+        const Vec2 offset = displacement(target.position, boids[index].position, params);
+        const double distanceSquared = offset.x * offset.x + offset.y * offset.y;
+        if (distanceSquared <= radiusSquared) {
+            neighbors.push_back(index);
+        }
+    }
+}
+```
+
+Bỏ self theo ID, không theo vị trí. Hai cá thể khác ID nhưng trùng vị trí vẫn là hàng xóm khi radius=0. Dùng `<=` để nhận đúng đường biên; chưa thêm epsilon vào radius.
+
+### Bước 4 — Chạy query cho toàn đàn
+
+Thay `stepBoids` trong `include/simulation.hpp` bằng bản dưới. Đây là chỗ thêm `findNeighbors` vào mỗi lượt, trước khi cập nhật cá thể tương ứng.
+
+```cpp title="include/simulation.hpp — stepBoids"
+inline Metrics stepBoids(const std::vector<Boid>& boids, std::vector<Boid>& output, const Params& params, double dt) {
+    const auto start = std::chrono::steady_clock::now();
+    if (&boids == &output) {
+        throw std::invalid_argument("Read and write buffers must be different");
+    }
+    validateBoids(boids, params);
+    if (!std::isfinite(dt) || dt < 0.0 || dt > 0.05) {
+        throw std::invalid_argument("dt outside [0, 0.05]");
+    }
+    output.resize(boids.size());
+    std::vector<std::size_t> neighbors;
+    neighbors.reserve(boids.size());
+    Metrics metrics{};
+    for (std::size_t index = 0; index < boids.size(); ++index) {
+        const auto queryStart = std::chrono::steady_clock::now();
+        findNeighbors(boids, index, params, neighbors);
+        metrics.comparisons += boids.size() - 1;
+        metrics.neighbors += neighbors.size();
+        const auto queryEnd = std::chrono::steady_clock::now();
+        metrics.queryMs += milliseconds(queryStart, queryEnd);
+        Vec2 acceleration{};
+        output[index] = integrateBoid(boids[index], acceleration, params, dt);
+        metrics.updateMs += milliseconds(queryEnd, std::chrono::steady_clock::now());
+    }
+    metrics.totalMs = milliseconds(start, std::chrono::steady_clock::now());
+    return metrics;
+}
+```
+
+Bản này vẫn chưa có steering nên đàn tiếp tục bay thẳng. Metrics đếm N−1 phép kiểm cho mỗi cá thể, tổng N(N−1), dù số hàng xóm thực sự ít hơn nhiều.
+
+### Bước 5 — Hiện bán kính và các hàng xóm vừa tìm được
+
+Trong `include/view.hpp`, thêm `drawRadius` trước `drawScene`. Đây là phần vẽ đường tròn bằng các đoạn thẳng đã học ở phần 2D. Chín ảnh chỉ giúp nhìn vòng tròn liên tục ở hai mép của world cố định 960×600; kết quả query vẫn do `findNeighbors` quyết định.
+
+```cpp title="include/view.hpp — drawRadius"
+inline void drawRadius(Framebuffer& image, Vec2 center, double radius) {
+    // Vẽ chín ảnh để nhìn thấy lân cận liên tục ở hai mép miền tuần hoàn.
+    for (double dx : {-960.0, 0.0, 960.0}) {
+        for (double dy : {-600.0, 0.0, 600.0}) {
+            Vec2 previous{center.x + dx + radius, center.y + dy};
+            for (int sample = 1; sample <= 96; ++sample) {
+                const double angle = sample * 6.2831853071795864769 / 96.0;
+                const Vec2 next{center.x + dx + radius * std::cos(angle), center.y + dy + radius * std::sin(angle)};
+                const Vec2 a = worldToScreen(previous);
+                const Vec2 b = worldToScreen(next);
+                drawLine(image, a.x, a.y, b.x, b.y, 0x6b6038ff);
+                previous = next;
+            }
+        }
+    }
+}
+```
+
+Thay `drawScene` bằng bản dưới đây. Cá thể chọn có màu sáng, hàng xóm màu vàng; renderer chỉ đọc Scene. Việc query thêm cho cá thể đang chọn phục vụ debug, không thay vòng query toàn đàn trong `stepBoids`.
+
+```cpp title="include/view.hpp — drawScene"
+inline void drawScene(Framebuffer& image, const Scene& scene) {
+    image.clear();
+    rectangle(image, 69, 79, 1030, 680, kGrid, false);
+    std::vector<std::size_t> neighbors;
+    findNeighbors(scene.boids, scene.selected, scene.params, neighbors);
+    if (scene.debug) {
+        drawRadius(image, scene.boids.at(scene.selected).position, scene.params.radius);
+    }
+    for (std::size_t index = 0; index < scene.boids.size(); ++index) {
+        std::uint32_t color = 0x53dcb6ff;
+        double size = 4;
+        if (scene.debug && std::find(neighbors.begin(), neighbors.end(), index) != neighbors.end()) {
+            color = 0xf4ca64ff;
+        }
+        if (scene.debug && index == scene.selected) {
+            color = kExact;
+            size = 8;
+        }
+        drawBoid(image, scene.boids[index], size, color);
+    }
+    // Che phần debug ngoài miền mà không dùng SDL vẽ primitive thay framebuffer.
+    rectangle(image, 0, 0, Framebuffer::width - 1, 78, kBackground, true);
+    rectangle(image, 0, 681, Framebuffer::width - 1, Framebuffer::height - 1, kBackground, true);
+    rectangle(image, 0, 79, 68, 680, kBackground, true);
+    rectangle(image, 1031, 79, Framebuffer::width - 1, 680, kBackground, true);
+}
+```
+
+Trong `applyKey` ở `src/main.cpp`, thêm T/G để thay bán kính. Giá trị thay đổi ở `params.radius`, nên cả query lẫn vòng tròn dùng cùng một tham số.
+
+```cpp title="src/main.cpp — thay bán kính tìm hàng xóm"
+if (key == SDLK_T) {
+    scene.params.radius = std::min(240.0, scene.params.radius + 4.0);
+}
+if (key == SDLK_G) {
+    scene.params.radius = std::max(0.0, scene.params.radius - 4.0);
+}
+```
+
+## Ghép các phần lại
+
+Bật debug và chọn một cá thể. Vòng tròn có thể xuất hiện ở cả hai mép vì đó là cùng vùng lân cận tuần hoàn. Renderer tô vàng neighbor indices trả về từ chính hàm query; không tự viết một phép chọn khác chỉ để vẽ. Metrics toàn đàn chỉ đổi khi bấm N hoặc chạy simulation.
+
+```bash
+# Bản làm bài của bạn:
+cmake --build build --config Debug --target project_27_starter
+# Bản tham khảo ở cuối bài:
+cmake --build build --config Debug --target project_27_checkpoint_3
+```
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Pause, kéo cá thể được chọn sát mép trái và tìm một cá thể sát mép phải. Dự đoán kết quả trước khi thay minimumImage bằng phép trừ thô. Đường tương tác qua mép sẽ bị đứt.
+2. Tạm bỏ điều kiện self. Radius nhỏ vẫn báo ít nhất một hàng xóm, và các bước sau có thể tự tác động sai. Hoàn tác rồi kiểm bằng ID.
+3. Chuyển `<=` thành `<`. Fixture khoảng cách 3–4–5 ở đúng R=5 bị loại. Chỉ một ký tự nhưng ý nghĩa đề bài đã đổi.
+
+## Tự kiểm tra kết quả
+
+- Fixture (1,1), (4,5), (959,1) với R=5 cho hai hàng xóm của cá thể đầu.
+- Query không trả self và nhận cá thể khác ID trùng vị trí.
+- Tăng radius làm số hàng xóm đổi nhưng comparisons vẫn bằng N(N−1).
+- Bản này chưa có steering: đàn bay thẳng dù neighbor đã đúng.
+
+## Bài tập mở rộng
+
+Viết oracle khác cách production: thử chín bản sao dịch world của từng điểm và dùng hypot để tìm khoảng cách nhỏ nhất. So tập ID đã sort; đừng chỉ so count.
+
+[Tiếp theo: Separation: tránh chen chúc mà không đổi hướng đột ngột](./04-separation-tranh-chen-chuc).

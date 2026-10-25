@@ -1,0 +1,117 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cohesion: tìm về đàn qua cả mép tuần hoàn
+
+## Vấn đề cần giải quyết
+
+Tránh nhau và cùng hướng vẫn chưa đủ để kéo một cá thể về nhóm đang ở gần. Cohesion cung cấp hướng về tâm cục bộ của hàng xóm. Từ đây cả ba quy tắc cùng tồn tại; trạng thái đàn không được tạo bằng một đường bay chung do ta viết sẵn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong không gian không có biên, ta có thể lấy trung bình position hàng xóm rồi trừ position hiện tại. Nhưng trên miền tuần hoàn, x=1 và x=959 ở gần nhau; trung bình tuyệt đối x=480 đặt tâm ở sai nửa thế giới.
+
+Ta cộng các minimum-image displacement từ cá thể đang xét tới từng hàng xóm. Tâm cục bộ là p + offsetSum/count; hướng tới tâm có cùng hướng với offsetSum. Helper desiredSteering dùng hướng này để tạo gia tốc có giới hạn.
+
+Cohesion không phải lực hấp dẫn Newton: không có mass hoặc nghịch đảo bình phương lực ở đây. Nó là một quy tắc điều khiển. Trọng số lớn có thể làm đàn tụ dày hoặc dao động; hình đẹp không phải bằng chứng một cấu hình luôn tốt.
+
+<InteractiveLab demo="boids-2d" mode="boids-cohesion" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Thêm hướng về tâm lân cận
+
+Thay `computeSteering` bằng bản có `offsetSum` dưới đây. Các offset đều được tính bằng `displacement` đã kiểm ở Bài 03.
+
+```cpp title="include/steering.hpp — computeSteering"
+inline Steering computeSteering(const std::vector<Boid>& boids, std::size_t targetIndex, const std::vector<std::size_t>& neighbors, const Params& params) {
+    const Boid& target = boids.at(targetIndex);
+    Vec2 separationSum{};
+    Vec2 velocitySum{};
+    Vec2 offsetSum{};
+    for (std::size_t index : neighbors) {
+        const Boid& other = boids.at(index);
+        const Vec2 offset = displacement(target.position, other.position, params);
+        const double distanceSquared = offset.x * offset.x + offset.y * offset.y;
+        Vec2 away{};
+        if (distanceSquared <= vectorEpsilon * vectorEpsilon) {
+            away = overlapDirection(target.id, other.id);
+        } else {
+            away = multiply(offset, -1.0 / distanceSquared);
+        }
+        separationSum = add(separationSum, away);
+        velocitySum = add(velocitySum, other.velocity);
+        offsetSum = add(offsetSum, offset);
+    }
+    Steering steering{};
+    steering.separation = desiredSteering(separationSum, target.velocity, params);
+    steering.alignment = desiredSteering(velocitySum, target.velocity, params);
+    steering.cohesion = desiredSteering(offsetSum, target.velocity, params);
+    Vec2 acceleration = multiply(steering.separation, params.separationWeight);
+    acceleration = add(acceleration, multiply(steering.alignment, params.alignmentWeight));
+    acceleration = add(acceleration, multiply(steering.cohesion, params.cohesionWeight));
+    steering.acceleration = limit(acceleration, params.maxAcceleration);
+    return steering;
+}
+```
+
+Tâm cục bộ là position hiện tại cộng offset trung bình. Để chỉ lấy hướng từ cá thể tới tâm, dùng offsetSum là đủ. Không lấy trung bình tọa độ x/y tuyệt đối khi đàn băng qua mép.
+
+### Bước 2 — Build mà không thay phần tích phân
+
+Trong `applyKey` ở `src/main.cpp`, thêm E/D. Cùng một `cohesionWeight` được đọc khi ghép gia tốc và được hiện trong HUD.
+
+```cpp title="src/main.cpp — thay trọng số cohesion"
+if (key == SDLK_E) {
+    scene.params.cohesionWeight = std::min(5.0, scene.params.cohesionWeight + 0.1);
+}
+if (key == SDLK_D) {
+    scene.params.cohesionWeight = std::max(0.0, scene.params.cohesionWeight - 0.1);
+}
+```
+
+Chỉ `computeSteering` thay đổi ở bước này. Giữ nguyên vòng tìm hàng xóm, cách đọc snapshot và `integrateBoid`; nếu đồng thời đổi cả timestep thì sẽ khó biết chuyển động khác đi do đâu.
+
+```bash title="Build bài làm và bản tham khảo sau Bài 06"
+cmake --build build --config Debug --target project_27_starter
+cmake --build build --config Debug --target project_27_checkpoint_6
+```
+
+Kiểm lại ba nơi có `offsetSum`: khai báo trước vòng lặp, cộng `offset` trong vòng lặp và đưa tổng vào `desiredSteering`. Bỏ sót một trong ba nơi sẽ làm cohesion không hoạt động hoặc không biên dịch được.
+
+### Bước 3 — Kiểm hướng ở hai mép thế giới
+
+Trên Windows/Visual Studio, chạy lần lượt bài làm và bản tham khảo; đóng chương trình trước khi chạy lệnh tiếp theo. Với generator single-config, executable nằm trực tiếp trong `build`.
+
+```bash title="Chạy hai bản trên Windows với Visual Studio"
+cmake -E chdir build/Debug ./project_27_starter.exe
+cmake -E chdir build/Debug ./project_27_checkpoint_6.exe
+```
+
+Pause, giảm separation và alignment về 0 bằng A/S, tăng cohesion bằng E. Kéo một cá thể tới gần mép trái, chọn một cá thể gần mép phải rồi quan sát vector xanh lá. Nó phải dùng hướng ngắn qua biên; không được hướng về x=480 chỉ vì trung bình hai tọa độ tuyệt đối. Bấm N để kiểm một bước trước khi chạy liên tục. Trên Linux/macOS với generator single-config, dùng `./build/project_27_starter` và `./build/project_27_checkpoint_6`.
+
+## Ghép các phần lại
+
+C++ dùng E/D để đổi cohesionWeight. Trên Canvas, đặt separation=0, alignment=0 và cohesion>0 để nhìn tác dụng riêng; sau đó trả ba trọng số về cấu hình cân bằng. Chọn cá thể sát mép, xem vector xanh lá hướng về ảnh gần nhất của nhóm bên kia.
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Thay offsetSum bằng tổng position tuyệt đối, rồi trừ position của target. Dự đoán lỗi ở hai mép trước khi chạy: tâm bị kéo về giữa world thay vì đi qua mép.
+2. Bỏ normalization/responseTime và cộng offset thẳng vào velocity mỗi frame. Chuyển động sẽ phụ thuộc scale và FPS, không còn cùng đơn vị điều khiển.
+3. Tăng cohesion cao, giảm separation. Quan sát co cụm rồi bớt dt hoặc trọng số để phân biệt dao động do controller với lỗi NaN/Inf.
+
+## Tự kiểm tra kết quả
+
+- Một hàng xóm ở bên phải cho hướng cohesion sang phải khi velocity ban đầu bằng 0.
+- Hàng xóm qua mép trái/phải được xử lý bằng displacement gần nhất.
+- Hai offset đối xứng triệt tiêu; không có hàng xóm không tạo hướng về gốc world.
+- Đổi ba trọng số làm thay đổi chuyển động thật của đàn, không đổi random mỗi bước.
+
+## Bài tập mở rộng
+
+Dựng fixture một target x=2 và hai hàng xóm x=958, x=6. Tính các offset qua biên và hướng tổng. So với cách trung bình x tuyệt đối để giải thích vì sao cách đó sai.
+
+[Tiếp theo: Ghép ba quy tắc và cập nhật đồng bộ](./07-ghep-steering-va-cap-nhat-dong-bo).

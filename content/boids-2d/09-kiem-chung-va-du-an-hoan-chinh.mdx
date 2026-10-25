@@ -1,0 +1,170 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy dự án Boids hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Một đàn bay trông hợp lý vẫn có thể sai: tự coi mình là hàng xóm, mất tương tác qua mép hoặc cập nhật theo thứ tự lưu. Trước khi thay thuật toán bằng Spatial Grid, ta cần một bản chuẩn có bằng chứng đủ rõ để biết tối ưu có làm đổi mô hình không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bộ test dùng ba lớp. Fixture có đáp án biết trước kiểm những ca rất nhỏ. Oracle query độc lập thử chín ảnh tuần hoàn và dùng hypot, không gọi lại minimumImage để tự xác nhận chính nó. Cuối cùng, các thuộc tính như không đổi snapshot, đảo thứ tự theo ID, giới hạn vector và N(N−1) kiểm cả vòng cập nhật.
+
+Dùng absolute tolerance 1e-9 cho vector/state một bước ở scale world này; ballistic nhiều bước dùng 1e-8. Không thêm epsilon vào điều kiện radius để làm test qua. NaN/Inf luôn là lỗi state, không phải một sai khác được tolerance cho phép.
+
+Hai môi trường C++ và JavaScript có thể khác chút ít ở sin/cos hoặc thứ tự cộng. Kiểm cùng công thức và fixture một bước, không yêu cầu quỹ đạo hỗn loạn dài giống từng bit. Checksum benchmark cũng chỉ so tái lập trong cùng môi trường.
+
+Khi tất cả kiểm toán học đạt, vẫn phải chạy ứng dụng desktop: các unit test không chứng minh capture, resize, code download hoặc Canvas input đã đúng.
+
+<InteractiveLab demo="boids-2d" mode="boids-validation" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Giữ kiểm tra hoạt động trong Release
+
+Ở đầu `tests/tests.cpp`, bên trong namespace đã có, giữ bộ đếm và các helper dưới đây. Không viết lại chúng bằng `assert`: compiler có thể bỏ assert khi build Release. `check` phải ghi nhận lỗi, còn `main` trả mã lỗi cho CTest.
+
+```cpp title="tests/tests.cpp — check, near và same"
+int failures = 0;
+int checks = 0;
+
+void check(bool condition, std::string_view message) {
+    ++checks;
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
+    }
+}
+
+bool near(double a, double b, double tolerance = 1e-9) {
+    return std::abs(a - b) <= tolerance;
+}
+
+bool same(lab::Vec2 a, lab::Vec2 b, double tolerance = 1e-9) {
+    return near(a.x, b.x, tolerance) && near(a.y, b.y, tolerance);
+}
+```
+
+Ngưỡng của `near` dành cho các fixture có scale đã nêu, không phải một epsilon dùng cho mọi bài toán. Truy vấn bán kính vẫn dùng điều kiện hình học đúng như mô hình, không cộng thêm tolerance vào radius.
+
+### Bước 2 — Đọc những kiểm tra có đáp án biết trước
+
+Mở `tests/tests.cpp`. `check` tăng failures và in lỗi; không dùng assert bị tắt ở Release. Đây là nhóm fixture đầu tiên trong bộ test đầy đủ.
+
+```cpp title="tests/tests.cpp — testFixtures"
+void testFixtures() {
+    lab::Params params{};
+    const auto generated = lab::makeFlock(1024, 1U, params);
+    check(near(generated[0].position.x, 270369.0 / 4294967296.0 * 960.0), "known xorshift x");
+    check(near(generated[0].position.y, 67634689.0 / 4294967296.0 * 600.0), "known xorshift y");
+    check(near(lab::wrap(-1, 960), 959), "negative wrap");
+    check(lab::wrap(-1e-20, 960) == 0, "sub-ULP negative wrap stays in domain");
+    check(near(lab::minimumImage(958, 960), -2), "periodic displacement");
+    check(near(lab::minimumImage(480, 960), 480) && near(lab::minimumImage(-480, 960), -480), "half-period antisymmetry");
+    check(near(lab::length(lab::limit({1e-10, 0}, 1e-12)), 1e-12, 1e-20), "tiny vector limit");
+
+    const std::vector<lab::Boid> pair{{0, {100, 100}, {}}, {1, {110, 100}, {0, 20}}};
+    const auto steering = lab::computeSteering(pair, 0, {1}, params);
+    check(same(steering.separation, {-60, 0}), "separation known direction/magnitude");
+    check(same(steering.alignment, {0, 60}), "alignment known direction/magnitude");
+    check(same(steering.cohesion, {60, 0}), "cohesion known direction/magnitude");
+    check(same(steering.acceleration, lab::multiply({-42, 60}, 60.0 / std::hypot(42.0, 60.0))), "weighted sum capped once");
+    check(same(lab::computeSteering(pair, 0, {}, params).acceleration, {}), "no neighbors no artificial braking");
+    const std::vector<lab::Boid> overlap{{0, {100, 100}, {}}, {1, {100, 100}, {}}};
+    const auto a = lab::computeSteering(overlap, 0, {1}, params);
+    const auto b = lab::computeSteering(overlap, 1, {0}, params);
+    check(same(a.separation, lab::multiply(b.separation, -1)), "overlap anti-pair by ID");
+    check(near(lab::length(a.separation), 60), "overlap finite nonzero repulsion");
+
+    params.radius = 5;
+    const std::vector<lab::Boid> boundary{{10, {1, 1}, {}}, {20, {4, 5}, {}}, {30, {959, 1}, {}}};
+    std::vector<std::size_t> neighbors;
+    lab::findNeighbors(boundary, 0, params, neighbors);
+    check(neighbors == std::vector<std::size_t>{1, 2}, "inclusive boundary and periodic seam");
+    params.radius = 0;
+    lab::findNeighbors(overlap, 0, params, neighbors);
+    check(neighbors == std::vector<std::size_t>{1}, "radius zero includes other coincident ID only");
+}
+```
+
+Các hằng số đầu tiên của XorShift là fixture độc lập. Các vector separation/alignment/cohesion có thể tính bằng tay. Những nhóm test tiếp theo đối chiếu query với chín ảnh, đổi thứ tự lưu, dt, preset 1.024 và benchmark.
+
+### Bước 3 — Dùng một oracle không gọi lại thuật toán đang kiểm
+
+Trong `tests/tests.cpp`, đối chiếu hàm `oracle` có sẵn với đoạn dưới; không thêm một bản trùng tên. Nếu tự viết bộ tests từ đầu, đặt hàm trong cùng namespace với các helper ở Bước 1. Thay vì gọi `minimumImage`, oracle xét chín ảnh của mỗi điểm và chọn khoảng cách ngắn nhất bằng `hypot`. Kết quả là các ID đã sắp xếp, để thứ tự lưu trong vector không ảnh hưởng phép so.
+
+```cpp title="tests/tests.cpp — oracle"
+std::vector<std::uint32_t> oracle(const std::vector<lab::Boid>& boids, std::size_t targetIndex, const lab::Params& params) {
+    std::vector<std::uint32_t> result;
+    const lab::Boid& target = boids.at(targetIndex);
+    for (const lab::Boid& other : boids) {
+        if (target.id == other.id) {
+            continue;
+        }
+        double distance = std::numeric_limits<double>::infinity();
+        // Oracle độc lập: tìm khoảng cách nhỏ nhất trong chín ảnh, không gọi minimumImage.
+        for (double x : {-params.width, 0.0, params.width}) {
+            for (double y : {-params.height, 0.0, params.height}) {
+                distance = std::min(distance, std::hypot(other.position.x + x - target.position.x, other.position.y + y - target.position.y));
+            }
+        }
+        if (distance <= params.radius) {
+            result.push_back(other.id);
+        }
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+```
+
+`testReference` trong source đầy đủ đối chiếu toàn bộ tập ID với oracle này. Các nhóm `testStep` và `testValidationAndBenchmark` kiểm snapshot, đổi thứ tự theo ID, dt, giới hạn và phép đo hữu hạn. `main` gọi tất cả các nhóm rồi trả `EXIT_FAILURE` nếu có lỗi; chạy hai bản production giống nhau không thay được một oracle độc lập.
+
+## Ghép các phần lại
+
+Build mọi checkpoint và final, rồi chạy CTest ở Debug lẫn Release. Trong repository, source authored nằm ở source-template; snapshot và ZIP do generator tạo, không đưa chúng vào Git. Trong ZIP, chỉ sửa starter để làm bài; final là mã đầy đủ chạy độc lập. Native có --smoke sáu frame ẩn và --benchmark hữu hạn; hai chế độ này không thay một phiên kiểm desktop.
+
+```bash title="Build và chạy kiểm chứng Debug, Release"
+cmake --build build --config Debug --target project_27_starter
+cmake --build build --config Debug --target project_27_final project_27_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --target project_27_final project_27_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Lệnh trên dùng Visual Studio hoặc generator multi-config. Với Ninja/Makefiles, tạo hai build directory có `CMAKE_BUILD_TYPE=Debug` và `Release` rồi chạy CTest trong từng directory.
+
+Mặc định, `project_27_tests` include `final/include`: kết quả này kiểm bản tham khảo, chưa chứng minh phần bạn sửa trong `starter` đã đúng. Khi đã viết xong toàn bộ chín bài, muốn dùng cùng tests kiểm bài làm, trong **bản ZIP của bạn** đổi dòng include của target tests từ `final/include` thành:
+
+```cmake title="CMakeLists.txt — kiểm bộ header do bạn hoàn thiện"
+target_include_directories(project_27_tests PRIVATE starter/include)
+```
+
+Chạy lại `cmake -S . -B build -DBUILD_CHECKPOINTS=ON`, build target tests rồi chạy hai lệnh CTest ở trên. Chỉ đổi dòng này khi starter đã có đủ mọi thuật toán; ở Bài 05, tests của toàn dự án còn đòi cohesion chưa viết. Trong repository website, không sửa CMake được sinh; thay đổi trên dành cho bản ZIP học tập độc lập.
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi minimumImage thành phép trừ thô: oracle qua biên phải thất bại. Nếu production và oracle cùng gọi một helper sai mà test vẫn xanh, oracle chưa độc lập.
+2. Đổi snapshot thành cập nhật in-place: test permutation phải bắt được. Đừng chỉ chạy cùng thuật toán hai lần cùng thứ tự rồi gọi là kiểm chứng.
+3. Tạm thay check bằng assert và build Release. Nhận ra vì sao test có thể bị tắt hoàn toàn; bản chuẩn phải dùng bộ đếm failures/exit code đang có.
+4. Đổi một tham số trong Canvas rồi đọc cùng biến trong C++. Không dùng hai bộ trọng số hoặc hai cách đo biên mà không giải thích.
+
+## Tự kiểm tra kết quả
+
+- Chạy được 256, 512, 1.024 cá thể; chọn preset lớn và thay từng trọng số thấy hành vi đổi thật.
+- Cùng seed/config tái lập; query khớp oracle đầy đủ ID, không chỉ count.
+- Debug/Release đều chạy các check và trả exit code lỗi nếu cố ý phá fixture.
+- Mọi checkpoint chỉ có thuật toán đã học tới đó; final không chứa LAB_CHECKPOINT ẩn bài sau.
+- ZIP có README, starter, chín checkpoint, final và tests; byte source khớp tài liệu.
+- Kiểm desktop được ghi riêng: navigation, One Dark/copy, ZIP link, Canvas keyboard/mouse, theme và progress.
+
+## Bài tập mở rộng
+
+Thêm một fixture mà bộ test hiện tại chưa có, giải thích lỗi cụ thể nó sẽ phát hiện. Sau đó ghi lại baseline ở ba N. Project 28 sẽ giữ đúng state và quy tắc đàn này, chỉ thay cách tìm hàng xóm — chưa cần viết lại mô hình để có số đo đẹp hơn.
+
+Hiện phần Project 28 trên website vẫn dùng một đám điểm tĩnh để giải thích Spatial Grid; nó chưa phải bước nâng cấp đàn Boids trong đặc tả mới. Giữ bản Boids đã kiểm chứng ở project này làm baseline khi chuyển sang bài toán đàn lớn.
+
+[Trở về roadmap](/roadmap#project-28).

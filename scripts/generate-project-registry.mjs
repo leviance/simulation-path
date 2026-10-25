@@ -345,6 +345,15 @@ const expectedFiles = new Map([
 ]);
 
 const progressLoaderEntries = [];
+const progressContentVersions = Object.fromEntries(
+  projects
+    .filter((project) => project.contentRevision)
+    .map((project) => [`p${project.id}`, project.contentRevision]),
+);
+expectedFiles.set(
+  path.join(progressDirectory, "versions.ts"),
+  `// Generated content revisions. Do not edit by hand.\nexport const progressContentVersions: Readonly<Record<string, number>> = ${JSON.stringify(progressContentVersions, null, 2)};\n`,
+);
 for (const { project, editorial } of authoredProjects) {
   const moduleName = `p${project.id}`;
   const lessons = Object.fromEntries(

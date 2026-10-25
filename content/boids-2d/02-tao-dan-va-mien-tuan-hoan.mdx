@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo đàn có thể lặp lại và nối hai mép thế giới
+
+## Vấn đề cần giải quyết
+
+Một cá thể mới chỉ cho thấy vòng cập nhật hoạt động. Bây giờ ta cần một đàn có thể tái tạo để lần sau thay công thức vẫn so được cùng dữ liệu. Ở cuối bài này đàn chưa có hành vi tập thể: từng cá thể vẫn bay thẳng. Điều đó đúng với phần code đã có.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi cá thể có ID cố định, khác với index là vị trí hiện tại trong vector. Khi đảo thứ tự lưu trữ, ID không đổi. Ta sẽ dùng tính chất này để phát hiện cập nhật in-place về sau.
+
+Seed xác định chuỗi vị trí và góc ban đầu. Không sinh vận tốc ngẫu nhiên lại trong event loop: làm vậy có thể trông đông vui, nhưng không còn là chuyển động do steering.
+
+World tuần hoàn giống một tấm bản đồ có mép trái nối với mép phải, trên nối dưới. `wrap` đưa position về miền hợp lệ. Nó không tạo phản xạ vận tốc như tường.
+
+`stepBoids` đọc vector cũ và ghi vector mới; `stepScene` swap sau khi đã cập nhật hết. Với chuyển động độc lập, cách này có vẻ chưa cần thiết. Khi cá thể bắt đầu đọc hàng xóm, nó bảo đảm mọi cá thể nhìn cùng một thời điểm.
+
+<InteractiveLab demo="boids-2d" mode="boids-flock" />
+
+## Viết code từng bước
+
+Đường dẫn dưới đây tính từ snapshot bạn đang sửa trong ZIP. Code được lấy từ source checkpoint của chính bài này; không cần đoán thân hàm từ một đoạn pseudocode.
+
+### Bước 1 — Thêm bộ sinh theo seed
+
+Trong `include/flock.hpp`, thêm lớp `Random` trước `makeFlock`. Không dùng đồng hồ làm seed ở mỗi frame.
+
+```cpp title="include/flock.hpp — Random"
+class Random {
+public:
+    explicit Random(std::uint32_t seed) : state_(seed) {
+        if (state_ == 0U) {
+            state_ = 0x6d2b79f5U;
+        }
+    }
+
+    double unit() {
+        state_ ^= state_ << 13U;
+        state_ ^= state_ >> 17U;
+        state_ ^= state_ << 5U;
+        return static_cast<double>(state_) / 4294967296.0;
+    }
+
+private:
+    std::uint32_t state_{};
+};
+```
+
+XorShift32 dùng số nguyên unsigned 32 bit. Chia cho 2³² cho giá trị trong [0,1), không sinh đúng cạnh trên. Seed 0 được thay bằng hằng số công bố; bộ sinh này không dành cho mật mã.
+
+### Bước 2 — Tạo đủ cá thể trước vòng lặp
+
+Thêm `makeFlock` sau lớp `Random`. Mỗi cá thể được cấp ID một lần khi tạo đàn.
+
+```cpp title="include/flock.hpp — makeFlock"
+inline std::vector<Boid> makeFlock(std::size_t count, std::uint32_t seed, const Params& params) {
+    if (!validParams(params) || count > 1024) {
+        throw std::invalid_argument("Invalid flock parameters or count > 1024");
+    }
+    std::vector<Boid> boids;
+    boids.reserve(count);
+    Random random{seed};
+    for (std::size_t index = 0; index < count; ++index) {
+        const Vec2 position{random.unit() * params.width, random.unit() * params.height};
+        const double angle = random.unit() * 6.2831853071795864769;
+        const double speed = params.maxSpeed * 0.6;
+        const Vec2 velocity{std::cos(angle) * speed, std::sin(angle) * speed};
+        boids.push_back({static_cast<std::uint32_t>(index), position, velocity});
+    }
+    return boids;
+}
+```
+
+Ba lần lấy mẫu cho position.x, position.y và góc. Mọi cá thể bắt đầu ở 60% speed cap; không đổi vận tốc bằng random ở những bước tiếp theo.
+
+### Bước 3 — Nối đàn vào Reset
+
+Thay `resetScene` trong `include/scene.hpp`. Bản một cá thể được thay bằng `makeFlock(scene.count, scene.seed, scene.params)`.
+
+```cpp title="include/scene.hpp — resetScene"
+inline void resetScene(Scene& scene) {
+    scene.paused = true;
+    scene.time = 0;
+    scene.steps = 0;
+    scene.accumulator = 0;
+    scene.droppedSeconds = 0;
+    scene.selected = 0;
+    scene.metrics = {};
+    scene.next.clear();
+    scene.boids.clear();
+    scene.boids = makeFlock(scene.count, scene.seed, scene.params);
+}
+```
+
+Reset xóa time, metrics và selection cũ rồi tạo đúng cấu hình hiện tại. `next` là vùng ghi cho bước sau; nó không phải một đàn thứ hai có đời sống riêng.
+
+### Bước 4 — Kiểm state và nối phím đổi đàn
+
+Cũng trong `include/flock.hpp`, thêm `validateBoids` dưới đây. Header đã include `<set>`. Tập ID giúp phát hiện trùng danh tính; kiểm số hữu hạn và vị trí ngăn dữ liệu hỏng đi vào bước cập nhật. Đây không phải luật steering mới.
+
+```cpp title="include/flock.hpp — validateBoids"
+inline void validateBoids(const std::vector<Boid>& boids, const Params& params) {
+    if (!validParams(params) || boids.size() > 1024) {
+        throw std::invalid_argument("Invalid domain, parameters or count");
+    }
+    std::set<std::uint32_t> ids;
+    for (const Boid& boid : boids) {
+        if (!ids.insert(boid.id).second) {
+            throw std::invalid_argument("Duplicate boid ID");
+        }
+        if (!std::isfinite(boid.position.x) || !std::isfinite(boid.position.y) || !std::isfinite(boid.velocity.x) || !std::isfinite(boid.velocity.y)) {
+            throw std::invalid_argument("Non-finite boid state");
+        }
+        if (!std::isfinite(length(boid.velocity))) {
+            throw std::invalid_argument("Velocity norm overflow");
+        }
+        if (boid.position.x < 0.0 || boid.position.x >= params.width || boid.position.y < 0.0 || boid.position.y >= params.height) {
+            throw std::invalid_argument("Position outside periodic domain");
+        }
+    }
+}
+```
+
+Trong `applyKey` ở `src/main.cpp`, thêm hai nhánh sau bên cạnh R và các phím chọn cá thể. Nhánh đổi N phải gọi Reset sau khi gán count; chỉ đổi con số trên HUD không tạo ra một đàn mới.
+
+```cpp title="src/main.cpp — đổi số cá thể và seed"
+if (key >= SDLK_1 && key <= SDLK_3) {
+    constexpr std::size_t counts[]{256, 512, 1024};
+    scene.count = counts[key - SDLK_1];
+    lab::resetScene(scene);
+}
+if (key == SDLK_P) {
+    ++scene.seed;
+    lab::resetScene(scene);
+}
+```
+
+Reset vẫn giữ cấu hình world và speed cap hiện tại. Bấm P đổi seed rồi tạo lại cả position và velocity; không rải thêm random vào mỗi frame.
+
+## Ghép các phần lại
+
+Các phím 1/2/3 trong `applyKey` đặt count thành 256/512/1024 rồi gọi resetScene; P đổi seed. Reset giữ params đã chọn nhưng đưa time và selection về đầu. Hãy đọc số N từ state, không suy nó từ số tam giác nhìn thấy: nhiều cá thể có thể chồng pixel.
+
+```bash
+# Bản làm bài của bạn:
+cmake --build build --config Debug --target project_27_starter
+# Bản tham khảo ở cuối bài:
+cmake --build build --config Debug --target project_27_checkpoint_2
+```
+
+Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
+
+## Thử làm sai để hiểu đúng
+
+1. Ghi seed, count và vị trí vài ID. Đổi seed rồi quay về seed cũ trên Canvas. Dự đoán và kiểm toàn bộ state đầu, không chỉ hình có vẻ giống.
+2. Đưa makeFlock vào mỗi frame với cùng seed. Đàn cứ trở về vị trí đầu, chỉ đi được một đoạn rất ngắn; đó là reset liên tục chứ không phải flocking.
+3. Đổi seed theo thời gian mỗi frame. Cá thể nhảy vị trí vì bạn đang thay dữ liệu, không có acceleration nào giải thích bước nhảy. Hoàn tác.
+
+## Tự kiểm tra kết quả
+
+- Có đủ ba preset, ID từ 0 đến N−1 và không bị đổi qua các bước.
+- Cùng seed/cấu hình tạo lại từng position và velocity; seed 0 có chính sách rõ.
+- Mọi position thuộc [0,960)×[0,600), kể cả sau khi qua biên.
+- Resize chỉ đổi cách trình bày, không sinh lại đàn.
+
+## Bài tập mở rộng
+
+Tạo thêm preset hai nhóm vị trí ban đầu nhưng giữ ID và seed tái lập. Chưa thêm luật hút về tâm; quan sát xem hai nhóm có tự duy trì đàn khi chỉ bay thẳng không.
+
+[Tiếp theo: Tìm đúng hàng xóm cho từng cá thể](./03-tim-hang-xom-bang-brute-force).
