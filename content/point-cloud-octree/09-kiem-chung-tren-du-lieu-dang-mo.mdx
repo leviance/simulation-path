@@ -1,0 +1,155 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm lại sau khi đã đổi vùng, lọc và camera
+
+## Vấn đề cần giải quyết
+
+Ảnh đúng ở một camera và query đúng ở một vùng chưa đủ để tin công cụ. Bài này gom các ca dễ sai thành phép kiểm chạy trên dataset đang mở, đồng thời giữ fixture nhỏ độc lập để tránh dùng chính code lỗi làm đáp án cho nó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có ba nhóm bằng chứng khác nhau. Query reference so tập point indices/ID; topology kiểm storage và đường đi trong cây; renderer kiểm clip/depth và ảnh. Một checksum trùng chỉ giúp phát hiện workload lệch, không thay được so tập.
+
+Validator phải an toàn cả khi cây hỏng: child index ngoài vector hoặc cycle không được làm nó lặp mãi. reached đánh dấu node đã tới; stored đếm số lần gặp mỗi point. Internal node rỗng, leaf chứa điểm trong bounds và tổng reachability đều được kiểm.
+
+Runtime reference vẫn dùng predicate production để so traversal với brute. CTest có fixture tọa độ biết trước và oracle long double độc lập để bắt lỗi predicate. Dự đoán: nếu đổi `<=` thành `<` ở cả Tree lẫn Brute, chỉ runtime reference có phát hiện được không?
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-validation" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 09 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — So tập ID chứ không tin số lượng
+
+```cpp title="include/survey/validation.hpp — So tập ID chứ không tin số lượng"
+inline bool sameIndices(const Result& a, const Result& b) {
+    auto first = a.indices;
+    auto second = b.indices;
+    std::sort(first.begin(), first.end());
+    std::sort(second.begin(), second.end());
+    return first == second && std::adjacent_find(first.begin(), first.end()) == first.end();
+}
+```
+
+sameIndices sort bản sao, không sửa result gốc hoặc đưa sort vào query timing. adjacent_find bắt kết quả lặp ngay cả khi hai phương pháp tình cờ trả cùng một danh sách lặp.
+
+### Bước 2 — Kiểm cấu trúc độc lập với query
+
+```cpp title="include/survey/validation.hpp — Kiểm cấu trúc độc lập với query"
+inline std::size_t topologyErrors(const Octree& tree, const std::vector<Point>& points) {
+    std::size_t errors = 0;
+    std::vector<std::size_t> stored(points.size(), 0);
+    std::vector<bool> reached(tree.nodes.size(), false);
+    std::vector<std::size_t> pending{0};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
+        if (index >= tree.nodes.size() || reached[index]) {
+            ++errors;
+            continue;
+        }
+        reached[index] = true;
+        const Node& node = tree.nodes[index];
+        if (node.depth > tree.maximumDepth || !valid(node.bounds)) {
+            ++errors;
+        }
+        if (node.children[0] >= 0) {
+            if (!node.indices.empty()) {
+                ++errors;
+            }
+            for (int child : node.children) {
+                if (child < 0 || std::size_t(child) >= tree.nodes.size()) {
+                    ++errors;
+                    continue;
+                }
+                if (tree.nodes[std::size_t(child)].depth != node.depth + 1) {
+                    ++errors;
+                }
+                pending.push_back(std::size_t(child));
+            }
+        }
+        for (auto pointIndex : node.indices) {
+            if (pointIndex >= points.size()) {
+                ++errors;
+                continue;
+            }
+            ++stored[pointIndex];
+            if (!contains(node.bounds, points[pointIndex].position)) {
+                ++errors;
+            }
+        }
+    }
+    for (auto count : stored) {
+        if (count != 1) {
+            ++errors;
+        }
+    }
+    for (bool seen : reached) {
+        if (!seen) {
+            ++errors;
+        }
+    }
+    return errors;
+}
+```
+
+topologyErrors không tin child indices trước khi kiểm range và reached. Storage count kiểm pointIndex, còn parser đã kiểm ID duy nhất trước khi dựng cây.
+
+### Bước 3 — Chia công việc và hủy đúng lúc
+
+```cpp title="include/survey/validation.hpp — Chia công việc và hủy đúng lúc"
+inline void tickValidation(Job& job, const Scene& scene) {
+    if (!job.active || job.paused) {
+        return;
+    }
+    const auto start = Clock::now();
+    do {
+        const Region& region = job.regions.at(job.queryIndex);
+        const Result indexed = scene.tree.query(scene.points, region);
+        const Result reference = brute(scene.points, region);
+        if (!sameIndices(indexed, reference)) {
+            ++job.errors;
+        }
+        ++job.queryIndex;
+        if (job.queryIndex == job.regions.size()) {
+            job.active = false;
+            job.report = std::to_string(job.queryIndex) + " queries; " + std::to_string(job.errors) + " errors";
+        }
+    } while (job.active && elapsedMs(start) < 6.0);
+}
+```
+
+tickValidation xử lý từng query rồi kiểm ngân sách khoảng 6 ms. Không hứa một query có thể bị ngắt giữa chừng; giới hạn N và deadline ngoài tiến trình giữ tổng công việc hữu hạn.
+
+## Ghép các phần lại
+
+Nhấn V hoặc Kiểm reference và topology sau khi đổi vùng/filter. Job dùng cả vùng hiện tại, các box/sphere có seed, query bao/ngoài root và frustum camera. Thay dataset, camera hoặc filter phải hủy job cũ, không nối hai state vào một report.
+
+Trong tests/tests.cpp, đọc testFrustumAndImages và testLargeWorkflow: một phần dùng kết quả biết trước, một phần render hai framebuffer, một phần đi qua CSV ở N=100000. Những kiểm tra đó chạy không cần window; smoke và thao tác desktop là bằng chứng riêng.
+
+```powershell title="Terminal — chạy checkpoint 09"
+cmake --build build --config Debug --target project_30_checkpoint_9 --parallel 2
+.\build\Debug\project_30_checkpoint_9.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản thử, thêm một pointIndex vào hai leaf. Validator phải báo storage lặp.
+
+2. Đặt một child trỏ về root. Validator phải kết thúc và báo lỗi, không treo chương trình.
+
+3. Đổi boundary trong cả Tree và Brute. Runtime reference có thể vẫn xanh, nhưng fixture độc lập phải thất bại.
+
+## Tự kiểm tra kết quả
+
+- Fixture có boundary, duplicate position/negative coordinates/split/empty và ID không liên tiếp.
+- Cây hỏng được báo lỗi hữu hạn; không cycle hoặc truy cập index sai.
+- Job pause/cancel hoạt động; report không thuộc dataset cũ.
+- Hiểu rõ từng loại test chứng minh gì và chưa chứng minh gì.
+
+## Bài tập mở rộng
+
+Viết ba lỗi cố ý: một lỗi predicate, một lỗi storage, một lỗi renderer. Với mỗi lỗi, dự đoán bộ kiểm nào phải đỏ và bộ nào có thể vẫn xanh.
+
+Bài tiếp theo: [Đo chi phí của công cụ thay vì chỉ đo cây](/projects/point-cloud-octree/10-do-query-culling-render-va-bo-nho).

@@ -146,7 +146,7 @@ export const roadmapSeed = [
   },
   {
     id: 30,
-    title: "Rừng hộp 3D: Octree cho point cloud trong không gian",
+    title: "Khảo sát point cloud 3D bằng Octree",
     part: "CẤU TRÚC KHÔNG GIAN VÀ TƯ DUY HIỆU NĂNG",
   },
   {

@@ -1,182 +1,237 @@
-#include "lab.hpp"
-
-#include <cmath>
+#include "io/files.hpp"
+#include "survey/benchmark.hpp"
+#include "view/render.hpp"
 #include <cstdlib>
 #include <iostream>
-#include <span>
+#include <sstream>
 #include <string_view>
-#include <vector>
 
 namespace {
+std::size_t failures = 0;
+std::size_t checks = 0;
 
-int failures = 0;
-
-void check(bool condition, std::string_view label) {
-    if (condition) {
-        std::cout << "[PASS] " << label << '\n';
-        return;
+void check(bool condition, std::string_view message) {
+    ++checks;
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
     }
-    std::cerr << "[FAIL] " << label << '\n';
-    ++failures;
 }
 
-bool allTopologyChecksPass(const lab::OctreeTopologyReport& report) {
-    return report.everyPointStoredOnce && report.internalNodesEmpty &&
-        report.childIndicesValid && report.childBoundsValid &&
-        report.capacityHonored && report.statisticsMatch;
+std::vector<std::uint32_t> ids(const std::vector<survey::Point>& points, const survey::Result& result) {
+    std::vector<std::uint32_t> output;
+    for (auto index : result.indices) {
+        output.push_back(points.at(index).id);
+    }
+    std::sort(output.begin(), output.end());
+    return output;
 }
 
+// Oracle độc lập dùng long double, không gọi accepts hoặc mayOverlap.
+std::vector<std::uint32_t> oracle(const std::vector<survey::Point>& points, const survey::Region& region) {
+    std::vector<std::uint32_t> output;
+    for (const auto& point : points) {
+        const auto p = point.position;
+        const long double dx = std::abs(static_cast<long double>(p.x) - region.center.x);
+        const long double dy = std::abs(static_cast<long double>(p.y) - region.center.y);
+        const long double dz = std::abs(static_cast<long double>(p.z) - region.center.z);
+        bool hit = dx <= region.half.x && dy <= region.half.y && dz <= region.half.z;
+        if (region.shape == survey::Shape::Sphere) {
+            hit = dx * dx + dy * dy + dz * dz <= static_cast<long double>(region.radius) * region.radius;
+        }
+        if (hit && p.y >= region.minimumHeight && p.y <= region.maximumHeight) {
+            output.push_back(point.id);
+        }
+    }
+    std::sort(output.begin(), output.end());
+    return output;
+}
+
+void testCsv() {
+    const std::vector<std::string> malformed{
+        "x,y,z\n1,2,3\n", "id,x,y,z\n1,0,0,0\n1,1,1,1\n",
+        "id,x,y,z\n2,nan,0,0\n", "id,x,y,z\n2,inf,0,0\n",
+        "id,x,y,z\n-1,0,0,0\n", "id,x,y,z\n4294967296,0,0,0\n",
+        "id,x,y,z\n1,10001,0,0\n", "id,x,y,z\n1,0,0\n",
+        "id,x,y,z\n1,0,0,0,2\n", "id,x,y,z\n1,1oops,0,0\n",
+        "id,x,y,z\n" + std::string(513, '1') + "\n"};
+    for (const auto& text : malformed) {
+        bool rejected = false;
+        try {
+            std::istringstream input(text);
+            static_cast<void>(survey::readCsv(input));
+        } catch (const std::exception&) {
+            rejected = true;
+        }
+        check(rejected, "malformed CSV is rejected without partial data");
+    }
+    std::istringstream empty("id,x,y,z\n");
+    check(survey::readCsv(empty).empty(), "header-only export is valid");
+    std::istringstream longestCrLf("id,x,y,z\r\n1,0." + std::string(503, '0') + ",0,0\r\n");
+    check(survey::readCsv(longestCrLf).size() == 1, "511-byte row also accepts CRLF");
+    const auto fixture = std::filesystem::path(__FILE__).parent_path().parent_path() / "assets/room-fixture.csv";
+    const auto points = survey::readCloudFile(fixture);
+    check(points.size() == 14 && points.front().id == 41, "provided CSV retains non-contiguous IDs and coincident points");
+    const auto root = survey::rootFor(points);
+    for (const auto& point : points) {
+        check(survey::contains(root, point.position), "negative coordinates fit root");
+    }
+}
+
+void testQueries() {
+    const std::vector<survey::Point> points{
+        {40, {-1, 0, 0}}, {8, {1, 0, 0}}, {91, {0, 1, 0}}, {92, {0, 0, 1}}, {1001, {0, 0, 0}}, {7, {0, 0, 0}}, {99, {2, 2, 2}}};
+    const survey::Octree tree(points, 4);
+    check(tree.nodes.size() > 1, "fixture forces a real split");
+    check(survey::topologyErrors(tree, points) == 0, "each point index appears in exactly one leaf");
+    for (const auto& region : survey::validationRegions(tree.nodes[0].bounds)) {
+        check(ids(points, tree.query(points, region)) == oracle(points, region), "box/sphere/filter IDs match independent oracle");
+    }
+    survey::Region sphere{};
+    sphere.shape = survey::Shape::Sphere;
+    sphere.center = {};
+    sphere.radius = 1;
+    check(ids(points, tree.query(points, sphere)) == std::vector<std::uint32_t>({7, 8, 40, 91, 92, 1001}), "sphere includes boundary and coincident IDs");
+    sphere.minimumHeight = 0;
+    sphere.maximumHeight = 0;
+    const auto selected = tree.query(points, sphere);
+    check(ids(points, selected) == std::vector<std::uint32_t>({7, 8, 40, 92, 1001}), "inclusive height filter");
+    const auto summary = survey::statistics(points, selected.indices);
+    check(summary.count == 5, "independent count fixture");
+    check(summary.bounds.minimum.x == -1 && summary.bounds.maximum.x == 1 && summary.bounds.maximum.z == 1, "independent bounds fixture");
+    check(summary.centroid.x == 0 && summary.centroid.y == 0 && std::abs(summary.centroid.z - 0.2) < 1e-15, "independent centroid fixture");
+    const auto none = survey::statistics(points, {});
+    check(none.count == 0 && survey::finite(none.centroid), "empty selection does not create NaN");
+    const std::vector<survey::Point> duplicates(1000, {1, {0, 0, 0}});
+    const survey::Octree coincident(duplicates, 4);
+    check(coincident.nodes.size() <= 1 + 8 * coincident.maximumDepth, "coincident point split is bounded");
+    check(survey::topologyErrors(coincident, duplicates) == 0, "coincident storage is not duplicated");
+}
+
+void testFrustumAndImages() {
+    survey::Camera camera{};
+    camera.freeFly = true;
+    camera.eye = {};
+    camera.yaw = 0;
+    camera.pitch = 0;
+    camera.nearPlane = 1;
+    camera.farPlane = 10;
+    camera.fov = 1.5707963267948966;
+    const std::vector<survey::Point> points{
+        {10, {0, 0, -1}}, {11, {-1, 0, -1}}, {12, {1, 0, -1}}, {13, {0, 1, -1}}, {14, {0, -1, -1}}, {15, {0, 0, -10}}, {20, {0, 0, -0.999}}, {21, {1.001, 0, -1}}, {22, {0, 0, -10.001}}, {23, {0, 0, 1}}};
+    const survey::Octree tree(points, 4);
+    check(ids(points, tree.query(points, survey::cameraFrustum(camera, 1))) == std::vector<std::uint32_t>({10, 11, 12, 13, 14, 15}), "independent near/far/four-side boundary fixture");
+    const auto before = survey::cameraBasis(camera);
+    survey::switchCameraMode(camera);
+    const auto after = survey::cameraBasis(camera);
+    check(survey::dot(before.eye - after.eye, before.eye - after.eye) < 1e-20, "switch mode preserves camera eye");
+    survey::Scene large({{1, {-10000, 0, -10000}}, {2, {10000, 0, 10000}}});
+    survey::refreshVisible(large, 640, 360);
+    check(large.visible.indices.size() == 2, "camera far plane fits allowed large coordinate input");
+    survey::Scene scene(survey::makeRoom(100000));
+    scene.selectionEnabled = true;
+    survey::refreshSelection(scene);
+    survey::Framebuffer indexed(640, 360);
+    survey::Framebuffer reference(640, 360);
+    for (int pose = 0; pose < 3; ++pose) {
+        if (pose == 1) {
+            scene.camera.freeFly = true;
+            scene.camera.eye = {0, 3, 0};
+        }
+        if (pose == 2) {
+            scene.camera.yaw += 1.1;
+            scene.camera.pitch = -0.3;
+        }
+        scene.culling = true;
+        survey::refreshVisible(scene, 640, 360);
+        const auto culled = scene.visible;
+        survey::renderPoints(scene, indexed);
+        check(scene.drawn == culled.indices.size(), "draw every visible point without sampling");
+        scene.culling = false;
+        survey::refreshVisible(scene, 640, 360);
+        survey::renderPoints(scene, reference);
+        check(survey::sameIndices(culled, scene.visible), "culling does not lose visible points");
+        check(indexed.pixels == reference.pixels, "CPU images match pixel for pixel with culling toggled");
+    }
+}
+
+void testLargeWorkflow() {
+    std::ostringstream text;
+    survey::writeCsv(text, survey::makeRoom(100000));
+    std::istringstream input(text.str());
+    survey::Scene scene(survey::readCsv(input));
+    check(scene.points.size() == 100000, "open 100000-point room through CSV parser");
+    check(survey::topologyErrors(scene.tree, scene.points) == 0, "100k topology");
+    scene.selectionEnabled = true;
+    scene.region.center = {0, 0, 0};
+    scene.region.half = {12, 0.1, 9};
+    scene.region.minimumHeight = 0;
+    scene.region.maximumHeight = 0;
+    survey::refreshSelection(scene);
+    check(scene.summary.count == 20000, "floor recipe count is independently known as 20000");
+    check(ids(scene.points, scene.selected) == oracle(scene.points, scene.region), "100k selected IDs match independent oracle");
+    std::ostringstream output;
+    survey::writeCsv(output, survey::selectedPoints(scene.points, scene.selected));
+    std::istringstream restoredInput(output.str());
+    const auto restored = survey::readCsv(restoredInput);
+    const auto expected = survey::selectedPoints(scene.points, scene.selected);
+    check(restored.size() == expected.size(), "export/read-back keeps count");
+    for (std::size_t i = 0; i < restored.size(); ++i) {
+        const auto delta = restored[i].position - expected[i].position;
+        check(restored[i].id == expected[i].id && survey::dot(delta, delta) == 0, "CSV precision preserves IDs and coordinates exactly");
+    }
+    // File IO thật bên cạnh kiểm chuỗi: chỉ tạo/xóa file do test sở hữu.
+    std::filesystem::create_directories(".runtime");
+    const std::filesystem::path outputPath = ".runtime/p30-test-" + std::to_string(survey::Clock::now().time_since_epoch().count()) + ".csv";
+    survey::writeNewCloudFile(outputPath, expected);
+    const auto fromDisk = survey::readCloudFile(outputPath);
+    check(fromDisk.size() == expected.size(), "export file can be opened independently");
+    for (std::size_t i = 0; i < fromDisk.size(); ++i) {
+        const auto delta = fromDisk[i].position - expected[i].position;
+        check(fromDisk[i].id == expected[i].id && survey::dot(delta, delta) == 0, "disk export preserves IDs/coordinates");
+    }
+    bool refusedOverwrite = false;
+    try {
+        survey::writeNewCloudFile(outputPath, {});
+    } catch (const std::exception&) {
+        refusedOverwrite = true;
+    }
+    check(refusedOverwrite && survey::readCloudFile(outputPath).size() == expected.size(), "existing output is not overwritten");
+    std::filesystem::remove(outputPath);
+    auto validation = survey::startValidation(scene);
+    for (std::size_t tick = 0; validation.active && tick < 10000; ++tick) {
+        survey::tickValidation(validation, scene);
+    }
+    check(!validation.active && validation.errors == 0, "finite reference job completes");
+    auto benchmark = survey::startBenchmark(scene);
+    benchmark.paused = true;
+    survey::tickBenchmark(benchmark, scene);
+    check(benchmark.queryIndex == 0, "pause prevents progress");
+    benchmark.paused = false;
+    for (std::size_t tick = 0; benchmark.active && tick < 10000; ++tick) {
+        survey::tickBenchmark(benchmark, scene);
+    }
+    check(!benchmark.active && benchmark.report.find("Brute") != std::string::npos, "benchmark finishes both methods");
+    survey::Scene uniform(survey::makeRoom(100000, 30, true));
+    check(uniform.points.size() == 100000 && survey::topologyErrors(uniform.tree, uniform.points) == 0, "uniform preset uses real 100k points");
+    scene.tree.nodes[0].children[0] = 0;
+    check(!survey::startValidation(scene).active, "corrupt topology stops before query can cycle");
+    check(!survey::startBenchmark(scene).active, "corrupt topology also stops benchmark");
+}
 } // namespace
 
 int main() {
-    const lab::Bounds3D bounds{{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}};
-    const lab::OctreeConfig config{bounds, 16, 10, 1.0 / 1024.0};
-
-    // AABB 3D và split-plane policy.
-    const lab::Bounds3D reversed =
-        lab::normalizeVolume({0.8, 0.7, 0.9}, {0.2, 0.1, 0.3});
-    check(
-        reversed.minimum.x == 0.2 && reversed.minimum.y == 0.1 &&
-            reversed.minimum.z == 0.3 && reversed.maximum.x == 0.8 &&
-            reversed.maximum.y == 0.7 && reversed.maximum.z == 0.9,
-        "normalizeVolume handles all drag directions in 3D"
-    );
-    check(
-        lab::pointInsideVolume(reversed.minimum, reversed) &&
-            lab::pointInsideVolume(reversed.maximum, reversed),
-        "volume boundaries are inclusive"
-    );
-    check(
-        lab::octreeOctant({0.49, 0.49, 0.49}, bounds) == 0 &&
-            lab::octreeOctant({0.50, 0.49, 0.49}, bounds) == 1 &&
-            lab::octreeOctant({0.49, 0.50, 0.49}, bounds) == 2 &&
-            lab::octreeOctant({0.49, 0.49, 0.50}, bounds) == 4 &&
-            lab::octreeOctant({0.50, 0.50, 0.50}, bounds) == 7,
-        "split-plane points choose the positive x y z octant"
-    );
-
-    // Storage và topology.
-    const std::vector<lab::PointSample> points =
-        lab::makePointCloud(30'000, bounds, 0x30c0ffeeU, true);
-    const lab::Octree rootOnly = lab::createRootOctree(points, config);
-    lab::OctreeQueryResult rootResult{};
-    const lab::Bounds3D centerVolume =
-        lab::normalizeVolume({0.44, 0.44, 0.44}, {0.56, 0.56, 0.56});
-    lab::queryOctree(rootOnly, points, centerVolume, rootResult);
-    check(
-        rootOnly.nodes.size() == 1U && rootResult.candidatesChecked == points.size(),
-        "root-only checkpoint remains an N-candidate baseline"
-    );
-
-    const lab::Octree tree = lab::buildOctree(points, config);
-    const lab::OctreeTopologyReport topology =
-        lab::inspectOctreeTopology(tree, points.size());
-    check(topology.everyPointStoredOnce, "each point index appears in exactly one leaf");
-    check(topology.internalNodesEmpty, "internal nodes keep no redistributed point indices");
-    check(topology.childIndicesValid, "all eight child indices are valid");
-    check(topology.childBoundsValid, "every child has the documented octant bounds");
-    check(topology.capacityHonored, "leaf capacity is honored until a split guard stops recursion");
-    check(topology.statisticsMatch, "node and leaf statistics match stored topology");
-
-    // Query probes có chủ đích đi qua world corner, face và ba split planes.
-    const std::vector<lab::PointSample> edgePoints{
-        {{0.0, 0.0, 0.0}},
-        {{0.0, 0.5, 0.5}},
-        {{0.5, 0.0, 0.5}},
-        {{0.5, 0.5, 0.0}},
-        {{0.5, 0.5, 0.5}},
-        {{1.0, 0.5, 0.5}},
-        {{1.0, 1.0, 1.0}},
-    };
-    const lab::Octree edgeTree =
-        lab::buildOctree(edgePoints, {bounds, 1, 10, 1.0 / 1024.0});
-    const std::array<lab::Bounds3D, 5> edgeVolumes{
-        lab::normalizeVolume({0.0, 0.0, 0.0}, {0.1, 0.1, 0.1}),
-        lab::normalizeVolume({0.0, 0.25, 0.25}, {0.0, 0.75, 0.75}),
-        lab::normalizeVolume({0.5, 0.0, 0.0}, {0.5, 1.0, 1.0}),
-        lab::normalizeVolume({0.0, 0.5, 0.0}, {1.0, 0.5, 1.0}),
-        lab::normalizeVolume({0.0, 0.0, 0.5}, {1.0, 1.0, 0.5}),
-    };
-    lab::OctreeQueryResult edgeOctreeResult{};
-    lab::BruteVolumeResult edgeBruteResult{};
-    for (const lab::Bounds3D& edgeVolume : edgeVolumes) {
-        lab::queryOctree(edgeTree, edgePoints, edgeVolume, edgeOctreeResult);
-        lab::queryVolumeBruteForce(edgePoints, edgeVolume, edgeBruteResult);
-        check(
-            lab::octreeMatchesBruteForce(edgeOctreeResult, edgeBruteResult),
-            "corner, face and split-plane volume matches brute force"
-        );
+    try {
+        testCsv();
+        testQueries();
+        testFrustumAndImages();
+        testLargeWorkflow();
+    } catch (const std::exception& error) {
+        ++failures;
+        std::cerr << error.what() << '\n';
     }
-
-    // Exact query và brute-force oracle.
-    const std::vector<lab::Bounds3D> probes = lab::makeVolumeQueries(
-        32,
-        bounds,
-        {0.14, 0.12, 0.10},
-        0x300030U
-    );
-    lab::OctreeQueryResult octreeWorkspace{};
-    lab::BruteVolumeResult bruteWorkspace{};
-    bool allQueriesMatch = true;
-    for (const lab::Bounds3D& probe : probes) {
-        lab::queryOctree(tree, points, probe, octreeWorkspace);
-        lab::queryVolumeBruteForce(points, probe, bruteWorkspace);
-        allQueriesMatch =
-            allQueriesMatch && lab::octreeMatchesBruteForce(octreeWorkspace, bruteWorkspace);
-    }
-    check(allQueriesMatch, "Octree hit sets match the brute-force oracle");
-
-    const lab::BatchMetrics octreeMetrics =
-        lab::benchmarkOctree(tree, points, probes, 2, octreeWorkspace);
-    const lab::BatchMetrics bruteMetrics =
-        lab::benchmarkBruteVolumes(points, probes, 2, bruteWorkspace);
-    check(
-        octreeMetrics.checksum == bruteMetrics.checksum,
-        "Octree and brute benchmark checksums match"
-    );
-    check(
-        bruteMetrics.totalScanned == points.size() * probes.size() * 2U,
-        "brute benchmark reports N times Q times repetitions scans"
-    );
-    check(
-        octreeMetrics.totalCandidates < bruteMetrics.totalScanned,
-        "Octree reduces exact candidate work for the default workload"
-    );
-
-    // Capacity study và phép chiếu phục vụ visualization.
-    const std::array<std::size_t, 4> capacities{8, 16, 32, 64};
-    const std::vector<lab::CapacityStudyRow> rows =
-        lab::makeCapacityStudy(points, bounds, probes, capacities, 1);
-    check(rows.size() == capacities.size(), "capacity study returns one row per preset");
-    check(
-        rows.front().nodeCount > rows.back().nodeCount,
-        "smaller capacity creates more Octree nodes"
-    );
-    check(
-        rows.front().metrics.totalCandidates <= rows.back().metrics.totalCandidates,
-        "smaller capacity does not increase exact candidates on the fixed workload"
-    );
-
-    const lab::ProjectedPoint projected =
-        lab::projectPointWithOrbit({0.5, 0.5, 0.5}, lab::OrbitCamera{});
-    check(
-        projected.visible && std::isfinite(projected.x) &&
-            std::isfinite(projected.y) && std::isfinite(projected.depth),
-        "orbit projection produces finite visible coordinates"
-    );
-
-    const lab::ValidationReport validation =
-        lab::validateOctreeExperiment(bounds, 0x30c0ffeeU);
-    check(allTopologyChecksPass(topology), "all topology checks pass together");
-    check(validation.topologyValid, "final validation accepts topology");
-    check(validation.resultMatchesOracle, "final validation accepts query output");
-    check(validation.candidateWorkReduced, "final validation sees candidate reduction");
-    check(validation.checksumMatches, "final validation sees equal checksums");
-    check(validation.finiteTiming, "final validation sees finite timing");
-    check(validation.projectionFinite, "final validation accepts orbit projection");
-
+    std::cout << "P30 Survey: " << checks << " checks, " << failures << " failures\n";
     if (failures != 0) {
-        std::cerr << failures << " validation check(s) failed.\n";
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

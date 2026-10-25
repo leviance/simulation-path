@@ -1,784 +1,491 @@
 "use client";
 
 import {
+  lazy,
+  Suspense,
+  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type PointerEvent,
 } from "react";
+import { useCanvasSize, useReducedMotion } from "./lab-shared";
+import { CloudSurveyReadout } from "./cloud-survey-readout";
+import { drawCloud, type CloudViewCache } from "./cloud-survey-view";
 import {
-  buildOctree,
-  createBruteVolumeWorkspace,
-  createOctreeQueryWorkspace,
-  createRootOctree,
-  inspectOctreeTopology,
-  makeOctreeCapacityStudy,
-  makeOctreePointCloud,
-  makeVolumeQueries,
-  normalizeVolume,
-  octreeMatchesBruteForce,
-  projectPointWithOrbit,
-  queryOctree,
-  queryVolumeBruteForce,
-  runBruteVolumeBatch,
-  runOctreeVolumeBatch,
-  type Bounds3D,
-  type BruteVolumeBatchMetrics,
-  type OctreeBatchMetrics,
-  type OctreeCapacityStudyRow,
-  type OrbitCamera,
-  type Point3D,
-} from "@/lib/labs/octree";
-import { LabReadout, setupCanvas, useCanvasSize, useReducedMotion } from "./lab-shared";
-import type { InteractiveLabMode } from "./types";
+  cloudModes,
+  createCloudScene,
+  refreshCloud,
+  exportCloud,
+  type CloudScene,
+} from "@/lib/labs/cloud-survey/scene";
+import {
+  cameraBasis,
+  resetCamera,
+  switchCameraMode,
+  translateCamera,
+  type Camera,
+} from "@/lib/labs/cloud-survey/camera";
+import { add, scale, type Vec3 } from "@/lib/labs/cloud-survey/geometry";
+import { maximumCsvBytes } from "@/lib/labs/cloud-survey/csv";
+import type { CloudJob } from "@/lib/labs/cloud-survey/jobs";
 
-const BOUNDS: Bounds3D = {
-  minimum: { x: 0, y: 0, z: 0 },
-  maximum: { x: 1, y: 1, z: 1 },
-};
-const DEFAULT_SEED = 0x30c0ffee;
-const MAXIMUM_POINT_COUNT = 100_000;
-const CAPACITY_PRESETS = [8, 16, 32, 64] as const;
-const BOX_EDGES = [
-  [0, 1],
-  [0, 2],
-  [1, 3],
-  [2, 3],
-  [4, 5],
-  [4, 6],
-  [5, 7],
-  [6, 7],
-  [0, 4],
-  [1, 5],
-  [2, 6],
-  [3, 7],
-] as const;
+const CloudSurveyControls = lazy(() => import("./cloud-survey-controls"));
+const CloudSurveyDiagnostics = lazy(() => import("./cloud-survey-diagnostics"));
 
-interface TimedMetrics<T> {
-  metrics: T;
-  elapsedMilliseconds: number;
-}
-
-interface TimedComparison {
-  octree: TimedMetrics<OctreeBatchMetrics>;
-  bruteForce: TimedMetrics<BruteVolumeBatchMetrics>;
-}
-
-interface ScreenProjection {
+interface Gesture {
+  id: number;
   x: number;
   y: number;
-  depth: number;
-  visible: boolean;
+  camera: Camera;
+  tool: "orbit" | "pan";
 }
-
-function volumeAround(center: Point3D, halfExtent: number) {
-  return normalizeVolume(
-    { x: center.x - halfExtent, y: center.y - halfExtent, z: center.z - halfExtent },
-    { x: center.x + halfExtent, y: center.y + halfExtent, z: center.z + halfExtent },
+function CloudSurveyScene({ mode }: { mode?: string }) {
+  const found = cloudModes.indexOf(mode as (typeof cloudModes)[number]),
+    stage = found < 0 ? 11 : found + 1;
+  const [scene, setScene] = useState(() => createCloudScene(stage));
+  const model = useRef(scene),
+    canvasRef = useRef<HTMLCanvasElement>(null),
+    gesture = useRef<Gesture | null>(null);
+  const cache = useRef<CloudViewCache | null>(null),
+    csvInput = useRef<string | undefined>(undefined),
+    fileEpoch = useRef(0);
+  const downloadUrl = useRef<string | null>(null),
+    mounted = useRef(true);
+  const [tool, setTool] = useState<"orbit" | "pan">("orbit");
+  const [ready, setReady] = useState(false),
+    [renderInfo, setRenderInfo] = useState({ drawn: 0, milliseconds: 0, error: "" });
+  const [job, setJob] = useState<CloudJob | null>(null),
+    jobRef = useRef<CloudJob | null>(null);
+  const [paused, setPaused] = useState(false);
+  const reduced = useReducedMotion();
+  const getScene = useCallback(() => model.current, []);
+  const getJob = useCallback(() => jobRef.current, []);
+  const publishJob = useCallback((value: CloudJob | null) => {
+    jobRef.current = value;
+    setJob(value ? { ...value } : null);
+  }, []);
+  const invalidateFile = useCallback(() => {
+    fileEpoch.current += 1;
+    return fileEpoch.current;
+  }, []);
+  const helpId = `cloud-survey-help-${mode ?? "overview"}`;
+  const publish = useCallback(
+    () =>
+      setScene({
+        ...model.current,
+        camera: { ...model.current.camera },
+        region: { ...model.current.region },
+      }),
+    [],
   );
-}
-
-function boxCorners(bounds: Bounds3D) {
-  return [
-    { x: bounds.minimum.x, y: bounds.minimum.y, z: bounds.minimum.z },
-    { x: bounds.maximum.x, y: bounds.minimum.y, z: bounds.minimum.z },
-    { x: bounds.minimum.x, y: bounds.maximum.y, z: bounds.minimum.z },
-    { x: bounds.maximum.x, y: bounds.maximum.y, z: bounds.minimum.z },
-    { x: bounds.minimum.x, y: bounds.minimum.y, z: bounds.maximum.z },
-    { x: bounds.maximum.x, y: bounds.minimum.y, z: bounds.maximum.z },
-    { x: bounds.minimum.x, y: bounds.maximum.y, z: bounds.maximum.z },
-    { x: bounds.maximum.x, y: bounds.maximum.y, z: bounds.maximum.z },
-  ];
-}
-
-function projectToCanvas(
-  point: Point3D,
-  camera: Omit<OrbitCamera, "aspect">,
-  width: number,
-  height: number,
-): ScreenProjection {
-  const projected = projectPointWithOrbit(point, {
-    ...camera,
-    aspect: width / Math.max(1, height),
-  });
-  const scale = Math.min(width, height) * 0.8;
-  return {
-    x: width * 0.5 + projected.x * scale * 0.5,
-    y: height * 0.5 - projected.y * scale * 0.5,
-    depth: projected.depth,
-    visible: projected.visible,
-  };
-}
-
-function drawBox(
-  context: CanvasRenderingContext2D,
-  bounds: Bounds3D,
-  camera: Omit<OrbitCamera, "aspect">,
-  width: number,
-  height: number,
-  color: string,
-  lineWidth: number,
-) {
-  const projected = boxCorners(bounds).map((corner) =>
-    projectToCanvas(corner, camera, width, height),
-  );
-  context.strokeStyle = color;
-  context.lineWidth = lineWidth;
-  for (const [from, to] of BOX_EDGES) {
-    if (!projected[from].visible || !projected[to].visible) continue;
-    context.beginPath();
-    context.moveTo(projected[from].x, projected[from].y);
-    context.lineTo(projected[to].x, projected[to].y);
-    context.stroke();
-  }
-}
-
-function drawStudy(
-  context: CanvasRenderingContext2D,
-  rows: readonly OctreeCapacityStudyRow[],
-  width: number,
-  height: number,
-) {
-  if (rows.length === 0) return;
-  const left = 36;
-  const right = width - 28;
-  const top = height - 128;
-  const bottom = height - 24;
-  const maximumCandidates = Math.max(...rows.map((row) => row.totalCandidates), 1);
-  const maximumNodes = Math.max(...rows.map((row) => row.nodeCount), 1);
-  const slotWidth = (right - left) / rows.length;
-  context.fillStyle = "rgba(11, 16, 32, 0.88)";
-  context.fillRect(left - 18, top - 16, right - left + 36, bottom - top + 32);
-  context.strokeStyle = "#42516b";
-  context.beginPath();
-  context.moveTo(left, top);
-  context.lineTo(left, bottom);
-  context.lineTo(right, bottom);
-  context.stroke();
-
-  context.font = "11px ui-monospace, monospace";
-  context.textAlign = "start";
-  context.fillStyle = "rgba(229, 192, 123, 0.9)";
-  context.fillRect(left + 4, top + 4, 10, 8);
-  context.fillStyle = "#abb2bf";
-  context.fillText("candidates", left + 18, top + 12);
-  context.fillStyle = "#98c379";
-  context.beginPath();
-  context.arc(left + 104, top + 8, 4, 0, Math.PI * 2);
-  context.fill();
-  context.fillStyle = "#abb2bf";
-  context.fillText("nodes", left + 112, top + 12);
-
-  rows.forEach((row, index) => {
-    const centerX = left + slotWidth * (index + 0.5);
-    const barHeight = (row.totalCandidates / maximumCandidates) * (bottom - top - 12);
-    context.fillStyle = "rgba(229, 192, 123, 0.72)";
-    context.fillRect(centerX - 15, bottom - barHeight, 30, barHeight);
-    const nodeY = bottom - (row.nodeCount / maximumNodes) * (bottom - top - 12);
-    context.fillStyle = "#98c379";
-    context.beginPath();
-    context.arc(centerX, nodeY, 4, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = "#abb2bf";
-    context.font = "11px ui-monospace, monospace";
-    context.textAlign = "center";
-    context.fillText(String(row.leafCapacity), centerX, bottom + 15);
-  });
-  context.textAlign = "start";
-}
-
-function centerAtPhase(phase: number, halfExtent: number): Point3D {
-  const clamp = (value: number) => Math.max(halfExtent, Math.min(1 - halfExtent, value));
-  return {
-    x: clamp(0.5 + Math.cos(phase) * 0.28),
-    y: clamp(0.5 + Math.sin(phase * 1.31) * 0.25),
-    z: clamp(0.5 + Math.sin(phase * 0.83) * 0.27),
-  };
-}
-
-export default function PointCloudOctreeLab({ mode }: { mode?: InteractiveLabMode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const activePointerId = useRef<number | null>(null);
-  const previousPointer = useRef<{ x: number; y: number } | null>(null);
-  const animationFrame = useRef<number | null>(null);
-  const previousTimestamp = useRef<number | null>(null);
-  const autoPhaseRef = useRef(0);
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const [pointCount, setPointCount] = useState(MAXIMUM_POINT_COUNT);
-  const [clustered, setClustered] = useState(true);
-  const [leafCapacity, setLeafCapacity] = useState(16);
-  const [queryCenter, setQueryCenter] = useState<Point3D>({ x: 0.5, y: 0.5, z: 0.5 });
-  const [queryHalfExtent, setQueryHalfExtent] = useState(0.08);
-  const [yaw, setYaw] = useState(0.7);
-  const [pitch, setPitch] = useState(-0.35);
-  const [distance, setDistance] = useState(2.4);
-  const [capturing, setCapturing] = useState(false);
-  const [paused, setPaused] = useState(true);
-  const [autoPhase, setAutoPhase] = useState(0);
-  const [benchmark, setBenchmark] = useState<TimedComparison | null>(null);
-  const [studyRows, setStudyRows] = useState<OctreeCapacityStudyRow[]>([]);
-
-  const rootOnly = mode === "octree-root" || mode === "octree-octants";
-  const showTree = mode !== "octree-octants";
-  const showDistribution = mode !== "octree-octants" && mode !== "octree-root";
-  const showQuery =
-    mode === "octree-query" ||
-    mode === "octree-oracle" ||
-    mode === "octree-benchmark" ||
-    mode === "octree-capacity" ||
-    mode === "octree-validation" ||
-    !mode;
-  const showTopology =
-    mode === "octree-topology" ||
-    mode === "octree-query" ||
-    mode === "octree-oracle" ||
-    mode === "octree-benchmark" ||
-    mode === "octree-capacity" ||
-    mode === "octree-validation" ||
-    !mode;
-  const showOracle =
-    mode === "octree-oracle" ||
-    mode === "octree-benchmark" ||
-    mode === "octree-capacity" ||
-    mode === "octree-validation" ||
-    !mode;
-  const showBenchmark =
-    mode === "octree-benchmark" ||
-    mode === "octree-capacity" ||
-    mode === "octree-validation" ||
-    !mode;
-  const showStudy = mode === "octree-capacity" || mode === "octree-validation" || !mode;
-  const camera = useMemo(
-    () => ({ yaw, pitch, distance, fieldOfViewRadians: Math.PI / 3, nearPlane: 0.1 }),
-    [distance, pitch, yaw],
-  );
-  const allPoints = useMemo(
-    () => makeOctreePointCloud(MAXIMUM_POINT_COUNT, BOUNDS, DEFAULT_SEED, clustered),
-    [clustered],
-  );
-  const points = useMemo(() => allPoints.slice(0, pointCount), [allPoints, pointCount]);
-  const tree = useMemo(() => {
-    const config = {
-      bounds: BOUNDS,
-      leafCapacity,
-      maximumDepth: 10,
-      minimumNodeSize: 1 / 1024,
-    };
-    if (rootOnly) return createRootOctree(points, config);
-    return buildOctree(points, config);
-  }, [leafCapacity, points, rootOnly]);
-  const queryVolume = useMemo(
-    () => volumeAround(queryCenter, queryHalfExtent),
-    [queryCenter, queryHalfExtent],
-  );
-  const result = useMemo(
-    () => queryOctree(tree, points, queryVolume, createOctreeQueryWorkspace()),
-    [points, queryVolume, tree],
-  );
-  const topology = useMemo(() => inspectOctreeTopology(tree, points.length), [points.length, tree]);
-  const oracle = useMemo(() => {
-    if (!showOracle) return null;
-    return queryVolumeBruteForce(points, queryVolume, createBruteVolumeWorkspace());
-  }, [points, queryVolume, showOracle]);
-  const oracleMatches = oracle === null || octreeMatchesBruteForce(result, oracle);
-  const topologyValid = rootOnly || Object.values(topology).every(Boolean);
-  const octantCounts = useMemo(() => {
-    if (mode !== "octree-octants") return [];
-    const counts = Array.from({ length: 8 }, () => 0);
-    for (const point of points) {
-      const octant = (point.x >= 0.5 ? 1 : 0) | (point.y >= 0.5 ? 2 : 0) | (point.z >= 0.5 ? 4 : 0);
-      counts[octant] += 1;
+  const release = useCallback((restore = false) => {
+    const current = gesture.current;
+    gesture.current = null;
+    if (!current) return;
+    if (restore) model.current.camera = current.camera;
+    if (canvasRef.current?.hasPointerCapture(current.id))
+      canvasRef.current.releasePointerCapture(current.id);
+  }, []);
+  const stop = useCallback(() => {
+    const wasDragging = gesture.current !== null;
+    release(true);
+    if (wasDragging) {
+      refreshCloud(model.current);
+      publish();
     }
-    return counts;
-  }, [mode, points]);
-
+    if (jobRef.current) jobRef.current.active = false;
+    jobRef.current = null;
+    setJob(null);
+  }, [release, publish]);
+  const size = useCanvasSize(canvasRef, stop);
+  const change = useCallback(
+    (action: (scene: CloudScene) => void) => {
+      stop();
+      action(model.current);
+      refreshCloud(model.current);
+      publish();
+    },
+    [stop, publish],
+  );
   useEffect(() => {
-    if (paused || reducedMotion) {
-      previousTimestamp.current = null;
-      if (animationFrame.current !== null) cancelAnimationFrame(animationFrame.current);
-      animationFrame.current = null;
+    const frame = requestAnimationFrame(() => {
+      model.current.width = size.width;
+      model.current.height = size.height;
+      refreshCloud(model.current);
+      publish();
+      setReady(true);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [size.width, size.height, publish]);
+  useEffect(() => {
+    const context = canvasRef.current?.getContext("2d");
+    if (!context) return;
+    try {
+      cache.current = drawCloud(context, model.current, size, cache.current);
+      setRenderInfo({
+        drawn: model.current.drawn,
+        milliseconds: model.current.renderMilliseconds,
+        error: "",
+      });
+    } catch (error) {
+      setRenderInfo({ drawn: 0, milliseconds: 0, error: String(error) });
+    }
+  }, [scene, size]);
+  useEffect(() => {
+    mounted.current = true;
+    const hidden = () => {
+      if (document.hidden) stop();
+    };
+    window.addEventListener("blur", stop);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      mounted.current = false;
+      invalidateFile();
+      release();
+      if (jobRef.current) jobRef.current.active = false;
+      if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
+      cache.current = null;
+      window.removeEventListener("blur", stop);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [stop, release, invalidateFile]);
+  useEffect(() => {
+    if (!reduced) return;
+    const frame = requestAnimationFrame(() => setPaused(true));
+    return () => cancelAnimationFrame(frame);
+  }, [reduced]);
+  const point = (event: { clientX: number; clientY: number }, canvas: HTMLCanvasElement) => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) * size.width) / rect.width,
+      y: ((event.clientY - rect.top) * size.height) / rect.height,
+    };
+  };
+  const applyGesture = (position: { x: number; y: number }) => {
+    const current = gesture.current;
+    if (!current) return;
+    const c = { ...current.camera },
+      dx = position.x - current.x,
+      dy = position.y - current.y;
+    if (current.tool === "orbit") {
+      c.yaw -= dx * 0.006;
+      c.pitch = Math.max(-1.45, Math.min(1.45, c.pitch + dy * 0.006));
+    } else {
+      const basis = cameraBasis(c),
+        factor = c.distance * 0.0015;
+      translateCamera(c, add(scale(basis.right, -dx * factor), scale(basis.up, dy * factor)));
+    }
+    model.current.camera = c;
+    refreshCloud(model.current);
+    publish();
+  };
+  const down = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (stage < 2 || event.button !== 0 || !event.isPrimary || gesture.current) return;
+    stop();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
       return;
     }
-    const animate = (timestamp: number) => {
-      const previous = previousTimestamp.current ?? timestamp;
-      const deltaSeconds = Math.min(0.05, (timestamp - previous) / 1000);
-      previousTimestamp.current = timestamp;
-      autoPhaseRef.current += deltaSeconds * 0.48;
-      setAutoPhase(autoPhaseRef.current);
-      setQueryCenter(centerAtPhase(autoPhaseRef.current, queryHalfExtent));
-      animationFrame.current = requestAnimationFrame(animate);
+    const position = point(event, event.currentTarget);
+    gesture.current = {
+      id: event.pointerId,
+      ...position,
+      camera: { ...model.current.camera },
+      tool,
     };
-    animationFrame.current = requestAnimationFrame(animate);
-    return () => {
-      if (animationFrame.current !== null) cancelAnimationFrame(animationFrame.current);
-      animationFrame.current = null;
-      previousTimestamp.current = null;
-    };
-  }, [paused, queryHalfExtent, reducedMotion]);
-
+    event.currentTarget.focus();
+  };
+  const move = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (gesture.current?.id !== event.pointerId) return;
+    if (!(event.buttons & 1)) {
+      release(true);
+      refreshCloud(model.current);
+      publish();
+      return;
+    }
+    applyGesture(point(event, event.currentTarget));
+  };
+  const up = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (gesture.current?.id !== event.pointerId || event.button !== 0) return;
+    applyGesture(point(event, event.currentTarget));
+    release();
+  };
   useEffect(() => {
     const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    setupCanvas(context, size);
-    context.fillStyle = "#0b1020";
-    context.fillRect(0, 0, size.width, size.height);
-
-    if (showTree) {
-      const stride = Math.max(1, Math.ceil(tree.leafCount / 3000));
-      let leafIndex = 0;
-      for (const node of tree.nodes) {
-        if (node.children !== null) continue;
-        if (leafIndex % stride === 0) {
-          const alpha = Math.min(0.48, 0.12 + node.depth * 0.035);
-          drawBox(
-            context,
-            node.bounds,
-            camera,
-            size.width,
-            size.height,
-            `rgba(92, 126, 168, ${alpha})`,
-            0.7,
+    if (!canvas) return;
+    const wheel = (event: WheelEvent) => {
+      if (stage < 2 || event.ctrlKey || event.metaKey) return;
+      event.preventDefault();
+      let delta = event.deltaY;
+      if (event.deltaMode === 1) delta *= 16;
+      if (event.deltaMode === 2) delta *= size.height;
+      change((s) => {
+        if (s.camera.freeFly)
+          translateCamera(
+            s.camera,
+            scale(cameraBasis(s.camera).forward, -Math.max(-600, Math.min(600, delta)) * 0.01),
           );
-        }
-        leafIndex += 1;
-      }
-    } else {
-      drawBox(context, BOUNDS, camera, size.width, size.height, "#4f6b91", 1.2);
-      if (mode === "octree-octants") {
-        for (let octant = 0; octant < 8; octant += 1) {
-          drawBox(
-            context,
-            {
-              minimum: {
-                x: (octant & 1) !== 0 ? 0.5 : 0,
-                y: (octant & 2) !== 0 ? 0.5 : 0,
-                z: (octant & 4) !== 0 ? 0.5 : 0,
-              },
-              maximum: {
-                x: (octant & 1) !== 0 ? 1 : 0.5,
-                y: (octant & 2) !== 0 ? 1 : 0.5,
-                z: (octant & 4) !== 0 ? 1 : 0.5,
-              },
-            },
-            camera,
-            size.width,
-            size.height,
-            "rgba(97, 175, 239, 0.42)",
-            0.8,
+        else
+          s.camera.distance = Math.max(
+            0.1,
+            Math.min(
+              Math.max(500, s.camera.farPlane * 0.8),
+              s.camera.distance * Math.exp(Math.max(-600, Math.min(600, delta)) * 0.001),
+            ),
           );
-        }
-      }
-    }
-
-    const hitSet = new Set(showQuery ? result.hitIndices : []);
-    const drawStride = Math.max(1, Math.ceil(pointCount / 32_000));
-    const projectedPoints: Array<{ index: number; projection: ScreenProjection }> = [];
-    for (let index = 0; index < pointCount; index += drawStride) {
-      projectedPoints.push({
-        index,
-        projection: projectToCanvas(points[index], camera, size.width, size.height),
       });
+    };
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", wheel);
+  }, [stage, size.height, change]);
+  const key = (event: KeyboardEvent<HTMLCanvasElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const pressed = event.key.toLowerCase();
+    if (pressed === "escape") {
+      event.preventDefault();
+      stop();
+      refreshCloud(model.current);
+      publish();
+      return;
     }
-    projectedPoints.sort((a, b) => b.projection.depth - a.projection.depth);
-    for (const entry of projectedPoints) {
-      if (!entry.projection.visible) continue;
-      const hit = hitSet.has(entry.index);
-      context.fillStyle = hit ? "#e5c07b" : "#60738f";
-      const radius = hit ? 2.2 : 1;
-      context.fillRect(
-        entry.projection.x - radius * 0.5,
-        entry.projection.y - radius * 0.5,
-        radius,
-        radius,
-      );
+    if (pressed === " ") {
+      event.preventDefault();
+      setPaused((value) => !value);
+      return;
     }
-    if (showQuery) {
-      drawBox(context, queryVolume, camera, size.width, size.height, "#61afef", 2);
-    }
-    if (showStudy) drawStudy(context, studyRows, size.width, size.height);
-  }, [
-    camera,
-    mode,
-    pointCount,
-    points,
-    queryVolume,
-    result.hitIndices,
-    showStudy,
-    showQuery,
-    showTree,
-    size,
-    studyRows,
-    tree,
-  ]);
-
-  const updateCenterAxis = (axis: keyof Point3D, value: number) => {
-    setQueryCenter((current) => ({ ...current, [axis]: value }));
-    setPaused(true);
-    setBenchmark(null);
-  };
-
-  const stepQuery = () => {
-    const next = autoPhase + 0.08;
-    autoPhaseRef.current = next;
-    setAutoPhase(next);
-    setQueryCenter(centerAtPhase(next, queryHalfExtent));
-    setPaused(true);
-    setBenchmark(null);
-  };
-
-  const runBenchmark = () => {
-    const volumes = makeVolumeQueries(
-      20,
-      BOUNDS,
-      { x: 0.14, y: 0.12, z: 0.1 },
-      DEFAULT_SEED ^ 0x300030,
-    );
-    runOctreeVolumeBatch(tree, points, volumes, 1);
-    const octreeStarted = performance.now();
-    const octreeMetrics = runOctreeVolumeBatch(tree, points, volumes, 2);
-    const octreeElapsed = performance.now() - octreeStarted;
-    runBruteVolumeBatch(points, volumes, 1);
-    const bruteStarted = performance.now();
-    const bruteMetrics = runBruteVolumeBatch(points, volumes, 2);
-    const bruteElapsed = performance.now() - bruteStarted;
-    setBenchmark({
-      octree: { metrics: octreeMetrics, elapsedMilliseconds: octreeElapsed },
-      bruteForce: { metrics: bruteMetrics, elapsedMilliseconds: bruteElapsed },
+    if (
+      stage < 2 ||
+      ![
+        "w",
+        "a",
+        "s",
+        "d",
+        "q",
+        "e",
+        "f",
+        "home",
+        "arrowleft",
+        "arrowright",
+        "arrowup",
+        "arrowdown",
+        "j",
+        "l",
+        "i",
+        "k",
+        "u",
+        "o",
+        "delete",
+        "backspace",
+        "[",
+        "]",
+      ].includes(pressed)
+    )
+      return;
+    event.preventDefault();
+    change((s) => {
+      const basis = cameraBasis(s.camera);
+      const directions: Record<string, Vec3> = {
+        w: basis.forward,
+        s: scale(basis.forward, -1),
+        a: scale(basis.right, -1),
+        d: basis.right,
+        q: { x: 0, y: -1, z: 0 },
+        e: { x: 0, y: 1, z: 0 },
+      };
+      if (directions[pressed]) translateCamera(s.camera, scale(directions[pressed], 0.5));
+      if (pressed === "f") switchCameraMode(s.camera);
+      if (pressed === "home") s.camera = resetCamera(s.tree.nodes[0].bounds);
+      if (pressed === "arrowleft") s.camera.yaw -= 0.1;
+      if (pressed === "arrowright") s.camera.yaw += 0.1;
+      if (pressed === "arrowup") s.camera.pitch = Math.max(-1.45, s.camera.pitch - 0.1);
+      if (pressed === "arrowdown") s.camera.pitch = Math.min(1.45, s.camera.pitch + 0.1);
+      if (stage >= 3) {
+        const axes: Record<string, Vec3> = {
+          j: { x: -0.5, y: 0, z: 0 },
+          l: { x: 0.5, y: 0, z: 0 },
+          i: { x: 0, y: 0.5, z: 0 },
+          k: { x: 0, y: -0.5, z: 0 },
+          u: { x: 0, y: 0, z: -0.5 },
+          o: { x: 0, y: 0, z: 0.5 },
+        };
+        if (axes[pressed]) {
+          s.region.center = add(s.region.center, axes[pressed]);
+          for (const axis of ["x", "y", "z"] as const) {
+            s.region.center[axis] = Math.max(-10000, Math.min(10000, s.region.center[axis]));
+          }
+          s.selectionEnabled = true;
+        }
+        if (pressed === "delete" || pressed === "backspace") s.selectionEnabled = false;
+        if (pressed === "[" || pressed === "]") {
+          const factor = pressed === "[" ? 0.8 : 1.25;
+          s.region.radius = Math.max(0.05, Math.min(1000, s.region.radius * factor));
+          s.region.half = scale(s.region.half, factor);
+          for (const axis of ["x", "y", "z"] as const)
+            s.region.half[axis] = Math.max(0.05, Math.min(1000, s.region.half[axis]));
+          s.selectionEnabled = true;
+        }
+      }
     });
   };
-
-  const runCapacityStudy = () => {
-    const volumes = makeVolumeQueries(
-      10,
-      BOUNDS,
-      { x: 0.14, y: 0.12, z: 0.1 },
-      DEFAULT_SEED ^ 0x300030,
-    );
-    setStudyRows(makeOctreeCapacityStudy(points, BOUNDS, volumes, CAPACITY_PRESETS, 1));
+  const preset = (count: number, uniform: boolean) => {
+    stop();
+    invalidateFile();
+    csvInput.current = undefined;
+    model.current = createCloudScene(stage, count, uniform);
+    model.current.width = size.width;
+    model.current.height = size.height;
+    refreshCloud(model.current);
+    publish();
   };
-
   const reset = () => {
-    const canvas = canvasRef.current;
-    if (
-      canvas !== null &&
-      activePointerId.current !== null &&
-      canvas.hasPointerCapture(activePointerId.current)
-    ) {
-      canvas.releasePointerCapture(activePointerId.current);
+    stop();
+    invalidateFile();
+    model.current = createCloudScene(stage, scene.count, scene.uniform, csvInput.current);
+    model.current.width = size.width;
+    model.current.height = size.height;
+    refreshCloud(model.current);
+    publish();
+  };
+  const open = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    const epoch = invalidateFile();
+    stop();
+    try {
+      if (file.size > maximumCsvBytes) throw Error("CSV vượt 16 MiB");
+      const text = await file.text();
+      if (!mounted.current || fileEpoch.current !== epoch) return;
+      const next = createCloudScene(stage, 0, false, text);
+      next.notice = `Đã mở CSV ${file.name}: ${next.count.toLocaleString("vi-VN")} điểm, đơn vị mét.`;
+      csvInput.current = text;
+      // File đọc bất đồng bộ: dùng viewport hiện tại, không dùng size cũ trong closure.
+      next.width = model.current.width;
+      next.height = model.current.height;
+      refreshCloud(next);
+      model.current = next;
+      publish();
+    } catch (error) {
+      if (mounted.current && fileEpoch.current === epoch) {
+        model.current.notice = String(error);
+        publish();
+      }
     }
-    setPointCount(MAXIMUM_POINT_COUNT);
-    setClustered(true);
-    setLeafCapacity(16);
-    setQueryCenter({ x: 0.5, y: 0.5, z: 0.5 });
-    setQueryHalfExtent(0.08);
-    setYaw(0.7);
-    setPitch(-0.35);
-    setDistance(2.4);
-    setCapturing(false);
-    setPaused(true);
-    setAutoPhase(0);
-    autoPhaseRef.current = 0;
-    setBenchmark(null);
-    setStudyRows([]);
-    activePointerId.current = null;
-    previousPointer.current = null;
   };
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    activePointerId.current = event.pointerId;
-    previousPointer.current = { x: event.clientX, y: event.clientY };
-    setCapturing(true);
-    setPaused(true);
-  };
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const previous = previousPointer.current;
-    if (!capturing || previous === null) return;
-    setYaw((current) => current + (event.clientX - previous.x) * 0.008);
-    setPitch((current) =>
-      Math.max(-1.35, Math.min(1.35, current + (event.clientY - previous.y) * 0.008)),
-    );
-    previousPointer.current = { x: event.clientX, y: event.clientY };
-  };
-
-  const releasePointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+  const exportCsv = () => {
+    stop();
+    const result = exportCloud(model.current);
+    if (!result.matches) {
+      model.current.notice = "Đọc lại CSV không khớp; chưa tạo download.";
+      publish();
+      return;
     }
-    activePointerId.current = null;
-    previousPointer.current = null;
-    setCapturing(false);
+    if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
+    const url = URL.createObjectURL(new Blob([result.csv], { type: "text/csv;charset=utf-8" }));
+    downloadUrl.current = url;
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "cloud-selection.csv";
+    anchor.click();
+    model.current.notice = `CSV: ${result.count} điểm · đọc lại giữ nguyên ID/tọa độ.`;
+    publish();
   };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (event.key === " " && showQuery) {
-      event.preventDefault();
-      setPaused((current) => !current);
-    }
-    if (event.key.toLowerCase() === "n" && showQuery) stepQuery();
-    if (event.key.toLowerCase() === "r") reset();
-    if (event.key.toLowerCase() === "g" && showDistribution) {
-      setClustered((current) => !current);
-      setBenchmark(null);
-      setStudyRows([]);
-    }
-    if (event.key.toLowerCase() === "b" && showBenchmark) runBenchmark();
-    if (event.key.toLowerCase() === "t" && showStudy) runCapacityStudy();
-    if (event.key === "ArrowLeft") setYaw((current) => current - 0.08);
-    if (event.key === "ArrowRight") setYaw((current) => current + 0.08);
-    if (event.key === "ArrowUp") setPitch((current) => Math.max(-1.35, current - 0.08));
-    if (event.key === "ArrowDown") setPitch((current) => Math.min(1.35, current + 0.08));
-  };
-
-  const candidateReduction = 1 - result.candidatesChecked / Math.max(1, pointCount);
-  const benchmarkMatches =
-    benchmark === null ||
-    benchmark.octree.metrics.checksum === benchmark.bruteForce.metrics.checksum;
-  const octreePerQuery = benchmark
-    ? benchmark.octree.elapsedMilliseconds / Math.max(1, benchmark.octree.metrics.queryCount)
-    : 0;
-  const brutePerQuery = benchmark
-    ? benchmark.bruteForce.elapsedMilliseconds /
-      Math.max(1, benchmark.bruteForce.metrics.queryCount)
-    : 0;
-
   return (
-    <>
+    <section
+      data-cloud-count={scene.count}
+      data-cloud-selected={scene.selected.indices.length}
+      data-cloud-visible={scene.visible.indices.length}
+    >
+      <Suspense fallback={<p>Đang tải công cụ điều khiển…</p>}>
+        <CloudSurveyControls
+          scene={scene}
+          tool={tool}
+          setTool={(value) => {
+            stop();
+            setTool(value);
+          }}
+          change={change}
+          preset={preset}
+          reset={reset}
+          frame={() =>
+            change((s) => {
+              s.camera = resetCamera(s.tree.nodes[0].bounds);
+            })
+          }
+          cameraMode={() => change((s) => switchCameraMode(s.camera))}
+          open={open}
+          exportCsv={exportCsv}
+        />
+      </Suspense>
       <canvas
         ref={canvasRef}
-        className="lab-canvas"
         tabIndex={0}
-        aria-label="Point cloud 3D được tổ chức bằng Octree và truy vấn bằng một hộp AABB thể tích"
-        onKeyDown={onKeyDown}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={releasePointer}
-        onPointerCancel={releasePointer}
-        onWheel={(event) => {
-          event.preventDefault();
-          setDistance((current) => Math.max(1.2, Math.min(5, current + event.deltaY * 0.002)));
+        aria-label="Khảo sát point cloud 3D bằng Octree"
+        aria-describedby={helpId}
+        style={{ width: "100%", height: 420, touchAction: "none", display: "block" }}
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={(event) => {
+          if (gesture.current?.id === event.pointerId) {
+            release(true);
+            refreshCloud(model.current);
+            publish();
+          }
         }}
+        onLostPointerCapture={(event) => {
+          if (gesture.current?.id === event.pointerId) {
+            release(true);
+            refreshCloud(model.current);
+            publish();
+          }
+        }}
+        onKeyDown={key}
       />
+      <p id={helpId}>
+        {stage < 2
+          ? "Bài này đọc CSV và vẽ dữ liệu phòng; điều khiển camera bắt đầu ở bài 02."
+          : "Kéo để orbit hoặc pan theo công cụ đã chọn; wheel tiến/lùi. WASD/QE dịch camera, mũi tên đổi hướng, F đổi orbit/free-fly, Home nhìn toàn dataset."}
+        {stage >= 3 &&
+          " J/L, I/K, U/O dời tâm vùng theo X/Y/Z; [ ] đổi kích thước, Delete xóa selection. Escape hủy thao tác đang kéo."}{" "}
+        Dữ liệu đứng yên; Pause chỉ dừng tác vụ kiểm tra/đo, không khóa camera.{" "}
+        {reduced && "Reduced motion: tác vụ bắt đầu ở trạng thái tạm dừng."}
+      </p>
       <div className="lab-controls">
-        <label>
-          Số points
-          <select
-            value={pointCount}
-            onChange={(event) => {
-              setPointCount(Number(event.target.value));
-              setBenchmark(null);
-              setStudyRows([]);
-            }}
-          >
-            <option value={1000}>1.000</option>
-            <option value={10_000}>10.000</option>
-            <option value={100_000}>100.000</option>
-          </select>
-        </label>
-        {showDistribution && (
-          <label>
-            Distribution
-            <select
-              value={clustered ? "clustered" : "uniform"}
-              onChange={(event) => {
-                setClustered(event.target.value === "clustered");
-                setBenchmark(null);
-                setStudyRows([]);
-              }}
-            >
-              <option value="clustered">Clustered</option>
-              <option value="uniform">Uniform</option>
-            </select>
-          </label>
-        )}
-        {showDistribution && (
-          <label>
-            Leaf capacity
-            <select
-              value={leafCapacity}
-              onChange={(event) => {
-                setLeafCapacity(Number(event.target.value));
-                setBenchmark(null);
-                setStudyRows([]);
-              }}
-            >
-              {CAPACITY_PRESETS.map((capacity) => (
-                <option key={capacity} value={capacity}>
-                  {capacity}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {showQuery &&
-          (["x", "y", "z"] as const).map((axis) => (
-            <label key={axis}>
-              Query {axis.toUpperCase()}
-              <input
-                type="range"
-                min={queryHalfExtent}
-                max={1 - queryHalfExtent}
-                step={0.01}
-                value={queryCenter[axis]}
-                onChange={(event) => updateCenterAxis(axis, Number(event.target.value))}
-              />
-            </label>
-          ))}
-        {showQuery && (
-          <label>
-            Nửa cạnh query
-            <input
-              type="range"
-              min={0.03}
-              max={0.22}
-              step={0.01}
-              value={queryHalfExtent}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                setQueryHalfExtent(next);
-                setQueryCenter((current) => ({
-                  x: Math.max(next, Math.min(1 - next, current.x)),
-                  y: Math.max(next, Math.min(1 - next, current.y)),
-                  z: Math.max(next, Math.min(1 - next, current.z)),
-                }));
-                setPaused(true);
-                setBenchmark(null);
-              }}
-            />
-          </label>
-        )}
-        {showQuery && (
-          <button type="button" onClick={() => setPaused((current) => !current)}>
-            {paused ? "Tiếp tục" : "Tạm dừng"}
-          </button>
-        )}
-        {showQuery && (
-          <button type="button" onClick={stepQuery}>
-            Tiến một bước
-          </button>
-        )}
-        {showBenchmark && (
-          <button type="button" onClick={runBenchmark}>
-            So benchmark
-          </button>
-        )}
-        {showStudy && (
-          <button type="button" onClick={runCapacityStudy}>
-            Chạy capacity study
-          </button>
-        )}
-        <button type="button" onClick={reset}>
-          Đặt lại
+        <button type="button" onClick={() => setPaused((value) => !value)}>
+          {paused ? "Tiếp tục tác vụ" : "Tạm dừng tác vụ"}
         </button>
       </div>
-      <LabReadout
-        items={[
-          {
-            label: "Point cloud / world space",
-            value: `${pointCount.toLocaleString("vi-VN")} points · ${clustered ? "clustered" : "uniform"} · seed ${DEFAULT_SEED.toString(16).toUpperCase()}`,
-          },
-          ...(mode === "octree-octants"
-            ? [
-                {
-                  label: "Số point trong octant 0 → 7",
-                  value: octantCounts
-                    .map((count, octant) => `${octant}: ${count.toLocaleString("vi-VN")}`)
-                    .join(" · "),
-                },
-              ]
-            : []),
-          ...(showTree
-            ? [
-                {
-                  label: "Tree topology / rebuild",
-                  value: `${tree.nodes.length.toLocaleString("vi-VN")} nodes · ${tree.leafCount.toLocaleString("vi-VN")} leaves · depth ${tree.maximumObservedDepth} · max leaf ${tree.maximumLeafOccupancy.toLocaleString("vi-VN")} · ${tree.rebuildMilliseconds.toFixed(2)} ms`,
-                },
-              ]
-            : []),
-          ...(showQuery
-            ? [
-                {
-                  label: "Visited / pruned / leaf / candidates / hits",
-                  value: `${result.visitedNodes.toLocaleString("vi-VN")} / ${result.prunedNodes.toLocaleString("vi-VN")} / ${result.visitedLeaves.toLocaleString("vi-VN")} / ${result.candidatesChecked.toLocaleString("vi-VN")} / ${result.hitIndices.length.toLocaleString("vi-VN")}`,
-                },
-                {
-                  label: "Octree candidates / brute scans",
-                  value: `${result.candidatesChecked.toLocaleString("vi-VN")} / ${pointCount.toLocaleString("vi-VN")} · giảm ${(candidateReduction * 100).toFixed(1)}%`,
-                },
-                {
-                  label: "Query center / half extent",
-                  value: `(${queryCenter.x.toFixed(2)}, ${queryCenter.y.toFixed(2)}, ${queryCenter.z.toFixed(2)}) / ${queryHalfExtent.toFixed(2)}`,
-                },
-              ]
-            : []),
-          ...(showTopology || mode === "octree-root"
-            ? [
-                {
-                  label: "Topology / brute-force oracle",
-                  value:
-                    mode === "octree-root"
-                      ? `root-only baseline hợp lệ · capacity chưa được áp dụng · ${result.candidatesChecked.toLocaleString("vi-VN")} candidates`
-                      : `${topologyValid ? "topology hợp lệ" : "TOPOLOGY KHÔNG HỢP LỆ"} · ${showOracle ? (oracleMatches ? "hit set khớp" : "HIT SET KHÔNG KHỚP") : benchmark ? (benchmarkMatches ? "checksum khớp" : "CHECKSUM KHÔNG KHỚP") : "chưa đối chiếu live"}`,
-                },
-              ]
-            : []),
-          ...(showBenchmark
-            ? [
-                {
-                  label: "Benchmark Octree / brute",
-                  value: benchmark
-                    ? `${octreePerQuery.toFixed(3)} / ${brutePerQuery.toFixed(3)} ms/query · ${benchmark.octree.metrics.checksum.toString(16).padStart(8, "0")}`
-                    : "chưa chạy",
-                },
-              ]
-            : []),
-          ...(showStudy
-            ? [
-                {
-                  label: "Capacity study",
-                  value:
-                    studyRows.length === 0
-                      ? "chưa chạy"
-                      : studyRows
-                          .map((row) => {
-                            const candidatesPerQuery =
-                              row.totalCandidates / Math.max(1, row.queryCount);
-                            return `cap ${row.leafCapacity}: ${row.nodeCount.toLocaleString("vi-VN")} nodes, ${Math.round(candidatesPerQuery).toLocaleString("vi-VN")} candidates/query`;
-                          })
-                          .join(" · "),
-                },
-              ]
-            : []),
-          {
-            label: "Draw sample / indexed workload",
-            value: `${Math.min(pointCount, 32_000).toLocaleString("vi-VN")} điểm được vẽ / ${pointCount.toLocaleString("vi-VN")} indices nằm trong leaves`,
-          },
-          {
-            label: "Camera / pointer",
-            value: `yaw ${yaw.toFixed(2)} · pitch ${pitch.toFixed(2)} · distance ${distance.toFixed(2)} / ${capturing ? "đang xoay" : "đã nhả"}`,
-          },
-          {
-            label: "Mô tả thay thế",
-            value: showQuery
-              ? `Octree ${tree.nodes.length} nodes, depth ${tree.maximumObservedDepth}; query thăm ${result.visitedNodes} nodes, prune ${result.prunedNodes}, kiểm ${result.candidatesChecked} candidates và chọn ${result.hitIndices.length} trong ${pointCount} points.`
-              : `Point cloud có ${pointCount} points trong world space; cấu trúc hiện tại có ${tree.nodes.length} nodes và depth ${tree.maximumObservedDepth}.`,
-          },
-        ]}
-      />
-      <p className="lab-hint">
-        Kéo Canvas để xoay camera, cuộn để zoom và nhấn R để reset.
-        {showQuery &&
-          " Các slider di chuyển hộp query theo X/Y/Z; Space chạy/dừng, N tiến một bước."}
-        {showDistribution && " G đổi distribution."}
-        {showBenchmark && " B chạy benchmark."}
-        {showStudy && " T chạy capacity study."} Phím mũi tên cũng xoay camera khi Canvas đang
-        focus.
+      <p role="status">
+        {scene.notice}
+        {renderInfo.error && ` · ${renderInfo.error}`}
       </p>
-    </>
+      <CloudSurveyReadout scene={scene} ready={ready} renderInfo={renderInfo} />
+      <p>
+        Vẽ đủ mọi visible point, không lấy mẫu cloud. Raster có depth buffer, giới hạn 2 triệu
+        pixel; viewport độ phân giải cao được phóng theo DPR. Màu xanh–cam biểu diễn chiều cao Y;
+        vàng là selection.
+      </p>
+      {stage >= 9 && (
+        <Suspense fallback={<p>Đang tải phần kiểm chứng…</p>}>
+          <CloudSurveyDiagnostics
+            stage={stage}
+            paused={paused}
+            job={job}
+            getScene={getScene}
+            getJob={getJob}
+            onJob={publishJob}
+            stop={stop}
+          />
+        </Suspense>
+      )}
+    </section>
   );
+}
+export default function PointCloudOctreeLab({ mode }: { mode?: string }) {
+  return <CloudSurveyScene key={mode ?? "overview"} mode={mode} />;
 }

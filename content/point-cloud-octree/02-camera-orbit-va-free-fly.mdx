@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đi quanh và đi vào bên trong dữ liệu 3D
+
+## Vấn đề cần giải quyết
+
+Bài trước đã vẽ được phòng, nhưng một góc nhìn cố định có thể che khuất gần hết kệ bên trong. Ta cần đi quanh dữ liệu và đi vào phòng để khảo sát. Thao tác này phải đổi camera, không xoay hoặc kéo cả cloud trong world.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy hình dung camera mang theo ba trục: right sang phải, up lên trên và forward nhìn vào cảnh. Orbit đặt eye cách target một distance; free-fly giữ eye trực tiếp và vẫn dùng yaw/pitch để biết hướng nhìn. Khi đổi chế độ, ta tính eye hiện tại trước, tránh cú nhảy đột ngột.
+
+Với point p, đặt delta = p − eye. Depth là tích vô hướng của delta với forward. Chỉ sau khi kiểm frustum/near plane mới chia tọa độ right/up cho depth. Pixel theo phương dọc dùng công thức $y_s=H/2-y_c f/z_c$; dấu trừ đổi +Y world hướng lên thành +Y screen hướng xuống.
+
+Ở đây $f=H/(2\tan(\mathrm{fov}/2))$ là tiêu cự theo pixel logic, còn $y_c$ và $z_c$ là tọa độ theo up/forward của camera, tính bằng mét. `makeLens` tính f một lần và lưu vào `lens.scale`; `project` dùng giá trị ấy cho từng point. yaw, pitch và fov đều tính bằng radian; hệ số 0,006 trong thao tác kéo là radian trên mỗi pixel logic, không phải độ.
+
+Dự đoán: nếu chỉ orbit, ID, tọa độ và bounds dataset có được thay đổi không?
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-camera" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 02 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Dựng basis từ yaw và pitch
+
+```cpp title="include/view/camera.hpp — Dựng basis từ yaw và pitch"
+inline Basis cameraBasis(const Camera& camera) {
+    const Vec3 outward{std::sin(camera.yaw) * std::cos(camera.pitch), std::sin(camera.pitch), std::cos(camera.yaw) * std::cos(camera.pitch)};
+    Vec3 eye = camera.target + outward * camera.distance;
+    if (camera.freeFly) {
+        eye = camera.eye;
+    }
+    const Vec3 forward = outward * -1;
+    const Vec3 right = unit(cross(forward, {0, 1, 0}));
+    return {eye, right, cross(right, forward), forward};
+}
+```
+
+`outward` đi từ target về phía eye. forward lấy hướng ngược lại; right tính bằng cross với world up, rồi up được dựng lại từ right/forward. Pitch được giới hạn để hai hướng không trùng nhau và làm cross gần 0.
+
+### Bước 2 — Chia perspective sau near-plane test
+
+```cpp title="include/view/camera.hpp — Chia perspective sau near-plane test"
+inline Projection project(Vec3 p, const Lens& lens) {
+    const Vec3 delta = p - lens.basis.eye;
+    const double depth = dot(delta, lens.basis.forward);
+    if (!accepts(lens.frustum, p) || depth <= 0) {
+        return {};
+    }
+    return {double(lens.width) * 0.5 + dot(delta, lens.basis.right) * lens.scale / depth, double(lens.height) * 0.5 - dot(delta, lens.basis.up) * lens.scale / depth, depth, true};
+}
+```
+
+Lens được tạo một lần cho mỗi frame; project không tính sin/cos lại cho từng điểm. Tại depth không hợp lệ, hàm trả Projection rỗng trước perspective divide. Các điểm sát mặt cắt được xử lý bằng cùng plane tolerance sẽ học ở bài 06.
+
+### Bước 3 — Nối gesture vào event loop
+
+```cpp title="include/app/application.hpp — Nối gesture vào event loop"
+inline void applyPointer(Scene& scene, const Pointer& pointer, double x, double y) {
+    const double dx = x - pointer.x;
+    const double dy = y - pointer.y;
+    scene.camera = pointer.initialCamera;
+    if (pointer.button == SDL_BUTTON_LEFT) {
+        scene.camera.yaw -= dx * 0.006;
+        scene.camera.pitch = std::clamp(scene.camera.pitch + dy * 0.006, -1.45, 1.45);
+    } else {
+        const Basis basis = cameraBasis(scene.camera);
+        const double scale = scene.camera.distance * 0.0015;
+        translateCamera(scene.camera, basis.right * (-dx * scale) + basis.up * (dy * scale));
+    }
+}
+```
+
+Pointer lưu camera và vị trí lúc down, nên dx/dy là tổng dịch chuyển từ đầu gesture. Không cộng tổng delta vào camera đã đổi của event trước. Event loop gọi applyPointer ở motion và một lần nữa với tọa độ button-up trước khi nhả capture.
+
+## Ghép các phần lại
+
+Trong runApplication, SDL_ConvertEventToRenderCoordinates đổi input sang board logic 1100×800 trước khi xử lý. Viewport chiếm phần trên cao 570 pixel; HUD bên dưới không bắt đầu gesture. Down lưu owner/button và gọi SDL_CaptureMouse(true); motion/up chỉ nhận đúng owner ấy. Focus lost, resize hoặc Escape nhả capture; không để chuột bị giữ sau khi đóng cửa sổ.
+
+Bản SDL: kéo trái để nhìn quanh, kéo phải để pan, wheel tiến/lùi. F đổi orbit/free-fly; WASD/QE di chuyển, Home nhìn toàn dataset. Free-fly dùng keyboard state và dt giới hạn 0,05 s để tốc độ không phụ thuộc số frame. Canvas dùng các bước dịch 0,5 m bằng phím và có công cụ Pan riêng; phần khác biệt điều khiển này không đổi công thức camera.
+
+Vùng chọn vẫn chưa xuất hiện trong checkpoint 02. Hãy đi vào giữa phòng và tìm mặt trong của tường trước khi thêm thao tác khảo sát.
+
+```powershell title="Terminal — chạy checkpoint 02"
+cmake --build build --config Debug --target project_30_checkpoint_2 --parallel 2
+.\build\Debug\project_30_checkpoint_2.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm bỏ near-plane test trong bản thử rồi đưa camera xuyên qua tường: dự đoán point phía sau camera có thể lật sang màn hình. Khôi phục ngay sau khi quan sát.
+
+2. Kéo camera rồi nhấn Escape trước khi thả. Camera phải trở lại trạng thái đầu gesture; event thả muộn không được áp dụng thêm.
+
+3. Đổi orbit/free-fly liên tục tại cùng pose. So eye trước/sau bằng log, không chỉ nhìn bằng mắt.
+
+## Tự kiểm tra kết quả
+
+- Camera đi được quanh và vào trong phòng; point world không bị sửa.
+- Đổi mode giữ eye; Home fit dữ liệu đang mở, không mặc định phòng gốc.
+- Không chia cho depth bằng 0/âm; near/far và giới hạn pitch hoạt động.
+- Capture được cân bằng khi thả, cancel, mất focus, resize và thoát.
+
+## Bài tập mở rộng
+
+Thêm hai nút nhìn từ trên xuống và nhìn ngang một dãy kệ. Chỉ thay camera; chụp lại bounds dataset trước/sau để chứng minh dữ liệu không đổi.
+
+Bài tiếp theo: [Khoanh vùng quan tâm bằng hộp hoặc cầu](/projects/point-cloud-octree/03-vung-chon-hop-va-cau).

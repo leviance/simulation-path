@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ một vùng điểm đến thông tin khảo sát
+
+## Vấn đề cần giải quyết
+
+Đã chọn được một vùng, nhưng người dùng cần câu trả lời cụ thể: có bao nhiêu điểm, chúng chiếm khoảng nào, tâm trung bình ở đâu? Một hộp vàng hoặc hit count đơn lẻ chưa đủ để khảo sát mặt sàn hay tầng kệ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chiều cao là tọa độ Y, không phải khoảng cách tới camera. Filter nhận điểm khi minimumHeight ≤ y ≤ maximumHeight và đồng thời thuộc vùng hình học. Khoảng [0,0] là một lát hợp lệ để chọn đúng sàn trong dataset tổng hợp.
+
+Với N điểm hit, centroid là $\bar p=\frac1N\sum_i p_i$. Bounds lấy min/max từng trục từ point thật. Không dùng bounds node vì node có thể chứa nhiều điểm không được chọn; không dùng center của vùng vì dữ liệu có thể phân bố lệch.
+
+Khi N=0, ta không thực hiện phép chia. C++ giữ count 0 và UI báo không có thống kê; Canvas dùng null cho bounds/centroid. Dự đoán số điểm sàn trước khi bấm preset: recipe dành hai trong mười surface slots cho Y=0.
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-statistics" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 07 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Lọc theo thuộc tính có ý nghĩa
+
+```cpp title="include/model/geometry.hpp — Lọc theo thuộc tính có ý nghĩa"
+inline bool accepts(const Region& region, Vec3 p) {
+    if (p.y < region.minimumHeight || p.y > region.maximumHeight) {
+        return false;
+    }
+    if (region.shape == Shape::Box) {
+        return contains(around(region.center, region.half), p);
+    }
+    if (region.shape == Shape::Sphere) {
+        const Vec3 delta = p - region.center;
+        return dot(delta, delta) <= region.radius * region.radius;
+    }
+    for (const Plane& plane : region.planes) {
+        if (signedDistance(plane, p) < -planeTolerance(plane)) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+Điều kiện height đứng trước kiểm hình học, cùng quy tắc inclusive. Baseline và Tree đều nhận cùng Region; broad phase cũng có thể prune node hoàn toàn ngoài khoảng Y.
+
+### Bước 2 — Tính thống kê từ điểm thật
+
+```cpp title="include/survey/statistics.hpp — Tính thống kê từ điểm thật"
+inline Statistics statistics(const std::vector<Point>& points, const std::vector<std::size_t>& indices) {
+    Statistics result{};
+    if (indices.empty()) {
+        return result;
+    }
+    result.bounds = {points.at(indices.front()).position, points.at(indices.front()).position};
+    Vec3 total{};
+    for (std::size_t index : indices) {
+        const Vec3 p = points.at(index).position;
+        result.bounds.minimum = {std::min(result.bounds.minimum.x, p.x), std::min(result.bounds.minimum.y, p.y), std::min(result.bounds.minimum.z, p.z)};
+        result.bounds.maximum = {std::max(result.bounds.maximum.x, p.x), std::max(result.bounds.maximum.y, p.y), std::max(result.bounds.maximum.z, p.z)};
+        total = total + p;
+    }
+    result.count = indices.size();
+    result.centroid = total * (1.0 / double(result.count));
+    return result;
+}
+```
+
+statistics duyệt indices hit, lấy position gốc rồi cập nhật bounds/total. Trong fixture năm điểm, centroid (0,0,0.2) được tính tay; ở dữ liệu lớn dùng tolerance tuyệt đối 1e-9 m cho trung bình so oracle chính xác hơn.
+
+### Bước 3 — Nối kết quả vào readout
+
+```cpp title="include/survey/scene.hpp — Nối kết quả vào readout"
+inline void refreshSelection(Scene& scene) {
+    scene.selected = Result{};
+    if (scene.selectionEnabled) {
+        if (scene.useTree) {
+            scene.selected = scene.tree.query(scene.points, scene.region);
+        } else {
+            scene.selected = brute(scene.points, scene.region);
+        }
+    }
+    scene.summary = statistics(scene.points, scene.selected.indices);
+}
+```
+
+refreshSelection chỉ đổi selected và summary. Không có resetCamera trong đường đi này; người dùng giữ góc nhìn đang khảo sát khi thử một lớp chiều cao khác.
+
+## Ghép các phần lại
+
+Trong Canvas, bấm Chọn mặt sàn Y = 0. Ở bản SDL, H bật khoảng [0,3], PageUp/PageDown đổi max, giữ Shift để đổi min; đưa khoảng về [0,0] và chỉnh vùng phủ sàn khi cần. Lọc cũng áp dụng cho visible points để đọc lớp đang chọn rõ hơn.
+
+Preset sàn cần box center (0,0,0), half (12,0.1,9), filter [0,0]. Kết quả phải có 20.000 điểm, nhưng centroid X/Z không nhất thiết bằng 0 vì các điểm trên sàn được lấy bằng seed. Count có nghiệm đúng không đồng nghĩa mọi thống kê đều có thể đoán bằng đối xứng.
+
+```powershell title="Terminal — chạy checkpoint 07"
+cmake --build build --config Debug --target project_30_checkpoint_7 --parallel 2
+.\build\Debug\project_30_checkpoint_7.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Thử chia total cho count trước khi kiểm rỗng. Đưa vùng ra ngoài phòng để thấy vì sao phải có nhánh empty.
+
+2. Thay bounds selection bằng bounds node trong bản thử. Chọn một góc leaf và so với fixture.
+
+3. Bật/bỏ filter nhiều lần rồi so camera eye và tọa độ dataset; chúng phải không đổi.
+
+## Tự kiểm tra kết quả
+
+- Count/bounds/centroid khớp fixture tính tay và independent oracle.
+- Preset sàn Y=0 trả 20.000 điểm tại N=100000.
+- Tập rỗng có thông báo, không có NaN/Inf centroid.
+- Filter không reset camera; cùng khoảng được dùng cho selection và viewport.
+
+## Bài tập mở rộng
+
+Tách từng tầng kệ bằng khoảng Y, xuất một bảng count/bounds/centroid cho mỗi tầng. Viết rõ khoảng nào chạm nhau và có thể nhận trùng điểm tại boundary.
+
+Bài tiếp theo: [Xuất tập điểm đã chọn và kiểm bằng cách đọc lại](/projects/point-cloud-octree/08-xuat-csv-va-doc-lai).

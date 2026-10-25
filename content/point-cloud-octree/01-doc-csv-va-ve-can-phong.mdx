@@ -1,0 +1,164 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc CSV và vẽ căn phòng bằng point cloud
+
+## Vấn đề cần giải quyết
+
+Bạn được giao một file quét căn phòng và cần lấy riêng mặt sàn hoặc một dãy kệ. Trước khi nói tới Octree, chương trình phải đọc được file ấy và cho bạn nhận ra mình đang nhìn phần nào của căn phòng. Một đám điểm ngẫu nhiên không giúp kiểm chuyện đó.
+
+Starter đã có window, event loop, framebuffer, depth buffer và phép chiếu từ các project trước, nhưng chưa đưa điểm nào vào scene. Trong bài này, ta hoàn thiện đường đọc CSV rồi lần theo dữ liệu tới pixel. Bạn vẫn sửa trong starter; checkpoint 01 chỉ là bản đối chiếu đã chạy được.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một point có ID và vị trí `(x, y, z)`. World dùng mét, +Y hướng lên; X/Z nằm trên sàn. ID 41 có thể nằm ở hàng đầu file, nhưng không vì vậy mà đổi thành ID 0. Khi cây trả pointIndex, ta phải quay lại vector để lấy đúng ID gốc.
+
+CSV v1 có header `id,x,y,z`, dấu chấm thập phân và không có cột ngầm. File fixture gồm 14 điểm ở góc phòng, giữa tường và hai ID trùng vị trí; đó là dữ liệu kiểm nhỏ, không phải preset nghiệm thu. Preset lớn sinh 100.000 điểm trên sàn, tường, kệ và cột từ seed 30, ghi thành CSV rồi đọc bằng cùng parser. Như vậy đường mở file không bị bỏ qua khi thử dữ liệu lớn.
+
+Dự đoán trước: nếu đổi thứ tự hai hàng CSV mà giữ ID/tọa độ, căn phòng và kết quả khảo sát có thay đổi không?
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-csv" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Khung SDL/raster/camera được cung cấp sẵn để bài này tập trung đọc dữ liệu.
+
+### Bước 1 — Chốt schema trước khi đọc dữ liệu
+
+```cpp title="include/model/geometry.hpp — Chốt schema trước khi đọc dữ liệu"
+struct Point {
+    std::uint32_t id{};
+    Vec3 position{};
+};
+```
+
+`Vec3` được cung cấp ngay phía trên trong geometry.hpp. `position` là world coordinate, chưa qua camera. Kiểu uint32 cho ID nhận từ 0 đến 4.294.967.295; schema không cho ID âm hoặc trùng nhau.
+
+### Bước 2 — Đọc vào vector tạm rồi mới nhận dataset
+
+```cpp title="include/io/csv.hpp — Đọc vào vector tạm rồi mới nhận dataset"
+inline std::vector<Point> readCsv(std::istream& input) {
+    std::size_t bytes = 0;
+    std::string line;
+    if (!csvLine(input, line, bytes) || line != "id,x,y,z") {
+        throw std::runtime_error("Expected CSV header id,x,y,z");
+    }
+    std::vector<Point> points;
+    std::unordered_set<std::uint32_t> ids;
+    std::size_t row = 1;
+    while (csvLine(input, line, bytes)) {
+        ++row;
+        try {
+            std::array<std::string_view, 4> fields{};
+            std::size_t start = 0;
+            for (std::size_t field = 0; field < 4; ++field) {
+                const auto end = line.find(',', start);
+                if ((field < 3 && end == std::string::npos) || (field == 3 && end != std::string::npos)) {
+                    throw std::runtime_error("Expected exactly four fields");
+                }
+                std::size_t length = line.size() - start;
+                if (end != std::string::npos) {
+                    length = end - start;
+                }
+                fields[field] = std::string_view(line).substr(start, length);
+                start += length + 1;
+            }
+            Point point{csvNumber<std::uint32_t>(fields[0]), {csvNumber<double>(fields[1]), csvNumber<double>(fields[2]), csvNumber<double>(fields[3])}};
+            if (!finite(point.position) || std::max({std::abs(point.position.x), std::abs(point.position.y), std::abs(point.position.z)}) > 10000) {
+                throw std::runtime_error("Coordinate must be finite, within +/-10000 metres");
+            }
+            if (points.size() >= maximumPoints || !ids.insert(point.id).second) {
+                throw std::runtime_error("Duplicate ID or point budget exceeded");
+            }
+            points.push_back(point);
+        } catch (const std::exception& error) {
+            throw std::runtime_error("CSV row " + std::to_string(row) + ": " + error.what());
+        }
+    }
+    return points;
+}
+```
+
+Trong `readCsv`, `fields` là bốn lát nhìn vào chuỗi line, chưa copy thành bốn string. Vòng field kiểm đủ dấu phẩy trước khi chuyển số. `csvNumber` yêu cầu đọc hết token; chuỗi `1oops` không được nhận thành số 1. Hàng hợp lệ mới được thêm vào vector. Một exception bỏ toàn bộ vector tạm và mang theo số dòng để người dùng sửa file.
+
+### Bước 3 — Nối parser vào dataset của scene
+
+```cpp title="include/survey/scene.hpp — Nối parser vào dataset của scene"
+inline std::vector<Point> defaultCloud(bool uniform = false) {
+    // Cùng parser cho preset và CSV từ file, không có đường tắt bỏ validation.
+    std::ostringstream text;
+    writeCsv(text, makeRoom(100000, 30, uniform));
+    std::istringstream input(text.str());
+    return readCsv(input);
+}
+```
+
+Starter đang trả vector rỗng ở defaultCloud. Mốc 01 nối `makeRoom → writeCsv → readCsv`. Với lần chạy bình thường, runApplication dùng openDefaultCloud: tạo `.runtime/room-100000.csv` nếu chưa có, sau đó đọc file thật; file có sẵn không bị ghi đè. File bạn chỉ định bằng `--input` cũng đi qua readCloudFile/readCsv.
+
+### Bước 4 — Theo dữ liệu từ point tới pixel
+
+```cpp title="include/view/render.hpp — Theo dữ liệu từ point tới pixel"
+inline void renderPoints(Scene& scene, Framebuffer& image) {
+    const auto start = Clock::now();
+    image.clear();
+    const Lens lens = makeLens(scene.camera, image.width, image.height);
+    std::vector<bool> selected(scene.points.size(), false);
+    for (auto index : scene.selected.indices) {
+        selected[index] = true;
+    }
+    scene.drawn = 0;
+    for (auto index : scene.visible.indices) {
+        const Point& point = scene.points[index];
+        const Projection projected = project(point.position, lens);
+        if (!projected.visible) {
+            continue;
+        }
+        ++scene.drawn;
+        const auto color = pointColor(point.position, selected[index], projected.depth);
+        const int x = std::clamp(int(projected.x), 0, image.width - 1);
+        const int y = std::clamp(int(projected.y), 0, image.height - 1);
+        image.plot(x, y, projected.depth, point.id, color);
+        if (selected[index]) {
+            image.plot(x + 1, y, projected.depth, point.id, color);
+            image.plot(x, y + 1, projected.depth, point.id, color);
+        }
+    }
+    scene.renderMilliseconds = elapsedMs(start);
+}
+```
+
+`renderPoints` nhận visible indices từ baseline brute, lấy Point trong vector rồi gọi project. `image.plot` so depth trước khi ghi pixel; point gần che point xa. Tất cả point được nạp/index đều giữ lại, còn `visible` chỉ là tập giao góc nhìn. Sau hàm này, event loop gọi SDL_UpdateTexture với pitch `image.width * sizeof(uint32_t)`, SDL_RenderTexture rồi SDL_RenderPresent. Khung đó có sẵn, không cần đoán thêm hàm SDL nào.
+
+## Ghép các phần lại
+
+Mở `source-template` để đọc đối chiếu, nhưng tự sửa file cùng tên trong starter của bản ZIP. Trong repository website, source-template là nguồn chuẩn; không sửa snapshot sinh tự động.
+
+Build target `project_30_checkpoint_1` để so với bài, hoặc `project_30_starter` để chạy bản bạn đang viết. Mặc định lần chạy bình thường mở CSV phòng trong `.runtime`. Để thử fixture, truyền `--input assets/room-fixture.csv`; chạy từ thư mục giải nén có assets, hoặc truyền đường dẫn đúng tới file.
+
+Bài đầu chưa mở thao tác camera; góc nhìn mặc định phải đủ thấy cấu trúc phòng. Đường vẽ có sẵn không có nghĩa parser có thể bỏ kiểm lỗi: dữ liệu không hợp lệ phải bị chặn trước khi dựng tree.
+
+```powershell title="Terminal — chạy checkpoint 01"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_30_checkpoint_1 --parallel 2
+.\build\Debug\project_30_checkpoint_1.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi ID 901 trong fixture thành 90. Parser phải báo trùng ID ở hàng lỗi, không mở một phần file.
+
+2. Đổi một tọa độ thành `nan`, thêm cột thứ năm hoặc bỏ một dấu phẩy. Mỗi trường hợp đều phải bị từ chối.
+
+3. Trong một bản thử, cho defaultCloud trả vector rỗng rồi chạy: window vẫn sống nhưng N bằng 0. Khôi phục đường đọc CSV và xác nhận N trở lại 100.000.
+
+## Tự kiểm tra kết quả
+
+- Preset phòng có đúng N=100000 và nhìn ra sàn/tường/kệ/cột, không phải cloud ngẫu nhiên.
+- Fixture giữ nguyên ID không liên tiếp và hai point trùng vị trí.
+- File hỏng báo số hàng/lý do; header-only là tập rỗng hợp lệ.
+- Theo được đường Point → visible index → project → depth buffer → SDL_UpdateTexture.
+
+## Bài tập mở rộng
+
+Tạo một fixture hai phòng bằng 20–40 điểm, giữ đơn vị mét và ID không liên tiếp. Viết ra tọa độ một góc phòng trước khi mở nó, rồi tìm góc đó trong kết quả. Chưa cần tăng số điểm; mục tiêu là đọc đúng dữ liệu.
+
+Bài tiếp theo: [Đi quanh và đi vào bên trong dữ liệu 3D](/projects/point-cloud-octree/02-camera-orbit-va-free-fly).

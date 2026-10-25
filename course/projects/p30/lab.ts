@@ -2,56 +2,58 @@ import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
   base: {
-    label: "POINT CLOUD OCTREE LAB",
-    title: "Xoay cả một rừng hộp, nhưng truy vấn vẫn diễn ra trong world space",
+    label: "POINT CLOUD SURVEY",
+    title: "Đi vào căn phòng và lấy dữ liệu bạn cần",
     description:
-      "Quan sát 100.000 points qua orbit camera, di chuyển query volume và đối chiếu Octree với brute force bằng topology, exact work, checksum và capacity study.",
+      "Xây công cụ khảo sát point cloud của căn phòng/nhà xưởng: mở CSV 100.000 điểm, đi vào dữ liệu 3D, chọn hộp/cầu, lọc chiều cao, đọc thống kê và xuất tập điểm. Octree hỗ trợ query và frustum culling; debug chỉ là lớp giải thích.",
   },
   modes: {
-    "octree-octants": {
-      title: "Ba mặt phẳng giữa tạo ra tám vùng ra sao?",
-      description:
-        "Bit 0/1/2 biểu diễn positive X/Y/Z. Point đúng split plane đi về positive half nên mỗi index luôn có một octant duy nhất.",
+    "cloud-csv": {
+      title: "Đọc CSV và vẽ căn phòng bằng point cloud",
+      description: "Từ khung SDL đến dữ liệu phòng 100.000 điểm, có ID và đơn vị mét.",
     },
-    "octree-root": {
-      title: "Một root leaf chứa 100.000 indices đã tăng tốc chưa?",
+    "cloud-camera": {
+      title: "Đi quanh và đi vào bên trong dữ liệu 3D",
       description:
-        "Root là Octree hợp lệ về storage, nhưng query vẫn exact-test toàn bộ N. Leaf capacity chỉ phát huy tác dụng sau khi split.",
+        "Dùng cùng basis cho orbit, free-fly và phép chiếu; camera không sửa tọa độ điểm.",
     },
-    "octree-split": {
-      title: "Vùng đông point cloud tự chia sâu thế nào?",
-      description:
-        "Đổi distribution và capacity để thấy clustered cloud sinh nhiều hộp nhỏ quanh cụm, còn vùng thưa dừng sớm hơn.",
+    "cloud-regions": {
+      title: "Khoanh vùng quan tâm bằng hộp hoặc cầu",
+      description: "Điều khiển vùng chọn trong world, dựng brute-force reference trước khi có cây.",
     },
-    "octree-topology": {
-      title: "Wireframe đẹp có chứng minh tree đúng không?",
-      description:
-        "Inspector kiểm từng point count, internal storage, child index/bounds, capacity guard và statistics độc lập với renderer.",
+    "cloud-build": {
+      title: "Chia dữ liệu thành tám nhánh mà không mất điểm",
+      description: "Node indices, ba bit octant và các giới hạn dừng split.",
     },
-    "octree-query": {
-      title: "Query volume đã loại được những subtree nào?",
-      description:
-        "Node không overlap bị prune; leaf overlap chỉ tạo candidates. Chỉ point qua exact test cả X, Y, Z mới đổi sang màu vàng.",
+    "cloud-query": {
+      title: "Tìm đúng vùng mà không quét cả căn phòng",
+      description: "AABB–box/sphere broad phase rồi exact-test điểm trong leaf.",
     },
-    "octree-oracle": {
-      title: "Một góc camera có thể che giấu lỗi query nào?",
-      description:
-        "Brute force nhìn dữ liệu world-space thay vì hình vẽ. Canonical hit sets phải khớp dù traversal order của Octree khác thứ tự index.",
+    "cloud-frustum": {
+      title: "Chỉ vẽ phần dữ liệu nằm trong góc nhìn",
+      description: "Sáu mặt frustum, phép thử node bảo thủ và depth-buffer presentation.",
     },
-    "octree-benchmark": {
-      title: "Octree nhanh hơn ở đâu và đã làm ít việc hơn bao nhiêu?",
-      description:
-        "Chạy Octree và brute force trên cùng points, query volumes, repetitions và warm-up; chỉ đọc timing sau khi checksum đã khớp.",
+    "cloud-statistics": {
+      title: "Từ một vùng điểm đến thông tin khảo sát",
+      description: "Giao vùng hình học với khoảng Y, rồi tính count/bounds/centroid.",
     },
-    "octree-capacity": {
-      title: "Capacity nhỏ nhất có phải lựa chọn tốt nhất?",
-      description:
-        "So 8, 16, 32 và 64 bằng node count, depth, rebuild, visited nodes, exact candidates và time/query trên cùng workload.",
+    "cloud-export": {
+      title: "Xuất tập điểm đã chọn và kiểm bằng cách đọc lại",
+      description: "Export ID/tọa độ, công bố precision và xử lý lỗi ghi file.",
     },
-    "octree-validation": {
-      title: "Point Cloud Octree đã đủ chắc để làm nền cho Barnes–Hut chưa?",
+    "cloud-validation": {
+      title: "Kiểm lại sau khi đã đổi vùng, lọc và camera",
+      description: "Oracle độc lập, topology và job validation hữu hạn.",
+    },
+    "cloud-performance": {
+      title: "Đo chi phí của công cụ thay vì chỉ đo cây",
       description:
-        "Nghiệm thu camera, topology, edge probes, oracle, checksum, exact work, timing và interaction bằng cùng source path.",
+        "Workload cố định, warm-up và nhiều mẫu; tách build/query/culling/render/bộ nhớ.",
+    },
+    "cloud-final": {
+      title: "Chạy công cụ hoàn chỉnh và tự nghiệm thu",
+      description:
+        "Build ZIP độc lập và hoàn tất mở → khảo sát → chọn/lọc → thống kê → xuất → đọc lại.",
     },
   },
 } satisfies ProjectLabMeta;

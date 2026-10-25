@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xuất tập điểm đã chọn và kiểm bằng cách đọc lại
+
+## Vấn đề cần giải quyết
+
+Bạn đã xác định được một vùng cần khảo sát tiếp. Bây giờ kết quả phải rời ứng dụng: một file chỉ chứa đúng các point đã chọn, còn ID và tọa độ phải đủ chính xác để mở lại. Ảnh chụp màn hình không thay được dữ liệu ấy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Query dùng pointIndex để tránh copy dữ liệu trong hot path. Export mới chuyển indices thành Point và sắp theo ID. Thứ tự hàng trong file là tiện ích đọc/so, không đổi danh tính dữ liệu.
+
+Readout làm tròn bốn chữ số để dễ xem, nhưng file không được dùng precision ấy. C++ ghi double bằng max_digits10 với classic locale; JavaScript dùng biểu diễn số round-trip. Mỗi runtime đọc lại file do mình ghi phải giữ nguyên số double. Khi trao đổi hai runtime, so tọa độ với tolerance tuyệt đối 1e-12 m, không so byte hai chuỗi CSV.
+
+Dự đoán: tập rỗng nên báo lỗi hay xuất một CSV chỉ có header? Bản chuẩn chọn cách thứ hai để parser có cùng một schema.
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-export" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 08 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Lấy dữ liệu qua pointIndex
+
+```cpp title="include/survey/statistics.hpp — Lấy dữ liệu qua pointIndex"
+inline std::vector<Point> selectedPoints(const std::vector<Point>& points, const Result& selected) {
+    std::vector<Point> output;
+    for (std::size_t index : selected.indices) {
+        output.push_back(points.at(index));
+    }
+    std::sort(output.begin(), output.end(), [](const Point& a, const Point& b) {
+        return a.id < b.id;
+    });
+    return output;
+}
+```
+
+selectedPoints không sinh ID mới và không tra point bằng ID như thể đó là array offset. ID không liên tiếp trong fixture sẽ bắt lỗi nhầm lẫn này.
+
+### Bước 2 — Ghi đủ precision để đọc lại
+
+```cpp title="include/io/csv.hpp — Ghi đủ precision để đọc lại"
+inline void writeCsv(std::ostream& output, const std::vector<Point>& points) {
+    output.imbue(std::locale::classic());
+    output << std::setprecision(std::numeric_limits<double>::max_digits10);
+    output << "id,x,y,z\n";
+    for (const Point& point : points) {
+        output << point.id << ',' << point.position.x << ',' << point.position.y << ',' << point.position.z << '\n';
+    }
+    if (!output) {
+        throw std::runtime_error("CSV write failed");
+    }
+}
+```
+
+writeCsv kiểm lỗi stream sau ghi. setprecision không đổi dữ liệu đang nằm trong scene; nó chỉ quyết định bao nhiêu chữ số cần đưa vào file.
+
+### Bước 3 — Tạo file mới và báo lỗi
+
+```cpp title="include/io/files.hpp — Tạo file mới và báo lỗi"
+inline std::filesystem::path exportSelection(const std::vector<Point>& points, const Result& selected) {
+    std::filesystem::create_directories(".runtime");
+    for (std::size_t suffix = 1; suffix <= 10000; ++suffix) {
+        const std::filesystem::path path = ".runtime/selection-" + std::to_string(suffix) + ".csv";
+        if (!std::filesystem::exists(path)) {
+            writeNewCloudFile(path, selectedPoints(points, selected));
+            return path;
+        }
+    }
+    throw std::runtime_error("Export file budget exhausted");
+}
+```
+
+exportSelection tạo `.runtime/selection-N.csv` với tên chưa tồn tại. Native CLI nhận đường dẫn input riêng, nên có thể mở lại kết quả mà không ghép vào dataset gốc. Code này là công cụ local một tiến trình, không phải API ghi file đồng thời nhiều người.
+
+## Ghép các phần lại
+
+Bản SDL: nhấn X để xuất selection; đọc đường dẫn trong notice rồi chạy lại với `--input .runtime/selection-N.csv`. File không có camera, tree hay selection state; Scene mới dựng tree từ đúng tập điểm được đọc.
+
+Canvas tạo download CSV và tự parse chuỗi trước khi cho tải. Notice báo số point và kết quả round-trip; object URL cũ được revoke khi tạo bản tải mới hoặc unmount. Import có giới hạn 16 MiB, parse vào scene tạm rồi mới thay scene hiện tại; file lỗi không làm mất dữ liệu đang mở.
+
+```powershell title="Terminal — chạy checkpoint 08"
+cmake --build build --config Debug --target project_30_checkpoint_8 --parallel 2
+.\build\Debug\project_30_checkpoint_8.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi precision thành 3 trong một bản thử rồi export các tọa độ không tròn. Đọc lại và đo sai số trước khi khôi phục max_digits10.
+
+2. Xuất một selection có ID 901 đứng gần ID 7. Kiểm file không renumber thành 0,1.
+
+3. Ghi vào một tên file đã tồn tại bằng CLI --generate-room; chương trình phải từ chối thay vì âm thầm ghi đè. Tự thử thêm thư mục không có quyền ghi và ghi rõ hành vi báo lỗi.
+
+## Tự kiểm tra kết quả
+
+- Export/read-back giữ đúng tập ID và tọa độ trong precision đã công bố.
+- Tập rỗng xuất header hợp lệ; duplicate ID/file hỏng bị từ chối khi mở.
+- Không nhầm pointIndex với ID; không đưa camera projection vào CSV.
+- File lỗi không làm partial import; output cũ không bị tự ghi đè.
+
+## Bài tập mở rộng
+
+Dùng một công cụ ngoài như spreadsheet hoặc script nhỏ để đọc CSV đã xuất và tính lại centroid. Ghi rõ công cụ đó có giữ đủ precision hay đã tự làm tròn.
+
+Bài tiếp theo: [Kiểm lại sau khi đã đổi vùng, lọc và camera](/projects/point-cloud-octree/09-kiem-chung-tren-du-lieu-dang-mo).

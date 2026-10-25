@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chỉ vẽ phần dữ liệu nằm trong góc nhìn
+
+## Vấn đề cần giải quyết
+
+Đổi vùng chọn đã nhanh hơn, nhưng camera vẫn phải quét cả dataset để biết điểm nào cần vẽ. Ta sẽ dùng cùng Octree cho góc nhìn. Điều kiện quan trọng nhất là không mất điểm: một phép culling quá mạnh có thể làm ảnh trông nhanh hơn chỉ vì vẽ sai.
+
+## Hiểu ý tưởng trước khi viết code
+
+Frustum là giao của sáu nửa không gian. Với mỗi plane, point ở phía trong thỏa $n\cdot p+d\ge0$. Near/far đo theo forward; bốn mặt bên kết hợp forward với right/up và tan(fov/2). Normal trong code không được chuẩn hóa, nên tolerance phải đi cùng hệ số plane.
+
+Để loại AABB, chọn đỉnh có dot(normal,p) lớn nhất. Nếu ngay cả đỉnh đó còn ngoài plane, mọi điểm trong node đều ngoài. Nếu không chứng minh được, tiếp tục duyệt; culling bảo thủ cho phép thừa ứng viên, không cho phép mất hit.
+
+Dự đoán: camera nằm trong phòng có làm root bị loại chỉ vì tâm root ở phía sau camera không?
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-frustum" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 06 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Viết frustum bằng các nửa không gian
+
+```cpp title="include/view/camera.hpp — Viết frustum bằng các nửa không gian"
+inline Region cameraFrustum(const Camera& camera, double aspect) {
+    const Basis basis = cameraBasis(camera);
+    const double tangent = std::tan(camera.fov * 0.5);
+    Region result{};
+    result.shape = Shape::Frustum;
+    result.planes[0] = {basis.forward, -dot(basis.forward, basis.eye) - camera.nearPlane};
+    result.planes[1] = {basis.forward * -1, dot(basis.forward, basis.eye) + camera.farPlane};
+    const std::array<Vec3, 4> normals{
+        basis.forward * (tangent * aspect) + basis.right,
+        basis.forward * (tangent * aspect) - basis.right,
+        basis.forward * tangent + basis.up,
+        basis.forward * tangent - basis.up};
+    for (std::size_t side = 0; side < 4; ++side) {
+        result.planes[side + 2] = {normals[side], -dot(normals[side], basis.eye)};
+    }
+    return result;
+}
+```
+
+cameraFrustum dùng cùng basis, near/far và aspect với project. Sáu plane hướng vào trong; đảo một normal có thể loại cả nửa cảnh. Tránh viết một bộ hệ số riêng cho culling rồi dùng một camera khác để vẽ.
+
+### Bước 2 — Dùng cùng cây để lấy visible indices
+
+```cpp title="include/survey/scene.hpp — Dùng cùng cây để lấy visible indices"
+inline void refreshVisible(Scene& scene, int width, int height) {
+    Region frustum = cameraFrustum(scene.camera, double(width) / double(height));
+    frustum.minimumHeight = scene.region.minimumHeight;
+    frustum.maximumHeight = scene.region.maximumHeight;
+    if (scene.culling) {
+        scene.visible = scene.tree.query(scene.points, frustum);
+        return;
+    }
+    // Chế độ đối chiếu vẫn clip từng point đúng frustum; chỉ không prune node.
+    scene.visible = brute(scene.points, frustum);
+}
+```
+
+refreshVisible mang height filter sang frustum và query cùng tree. Khi tắt culling, baseline vẫn clip từng point bằng frustum; chỉ bỏ bước prune node. Vì vậy hai chế độ phải trả cùng visible set.
+
+### Bước 3 — Giữ renderer độc lập với cách lấy danh sách
+
+```cpp title="include/view/render.hpp — Giữ renderer độc lập với cách lấy danh sách"
+inline void renderPoints(Scene& scene, Framebuffer& image) {
+    const auto start = Clock::now();
+    image.clear();
+    const Lens lens = makeLens(scene.camera, image.width, image.height);
+    std::vector<bool> selected(scene.points.size(), false);
+    for (auto index : scene.selected.indices) {
+        selected[index] = true;
+    }
+    scene.drawn = 0;
+    for (auto index : scene.visible.indices) {
+        const Point& point = scene.points[index];
+        const Projection projected = project(point.position, lens);
+        if (!projected.visible) {
+            continue;
+        }
+        ++scene.drawn;
+        const auto color = pointColor(point.position, selected[index], projected.depth);
+        const int x = std::clamp(int(projected.x), 0, image.width - 1);
+        const int y = std::clamp(int(projected.y), 0, image.height - 1);
+        image.plot(x, y, projected.depth, point.id, color);
+        if (selected[index]) {
+            image.plot(x + 1, y, projected.depth, point.id, color);
+            image.plot(x, y + 1, projected.depth, point.id, color);
+        }
+    }
+    scene.renderMilliseconds = elapsedMs(start);
+}
+```
+
+Renderer không biết danh sách đến từ Tree hay Brute. Depth buffer xử lý che khuất; khi cùng depth, ID nhỏ hơn thắng để thứ tự traversal không làm ảnh khác nhau. visible là số point qua clip, không phải số pixel cuối còn lộ trên ảnh.
+
+## Ghép các phần lại
+
+Nhấn C hoặc checkbox Frustum culling. Giữ nguyên camera, filter và selection rồi so ảnh. CPU tests render hai framebuffer thật và so pixel, không chỉ so checksum hoặc số point. Fixture riêng đặt điểm đúng near/far và bốn mặt bên để kiểm cả boundary.
+
+Trong Canvas, raster giới hạn 2 triệu pixel để giữ bộ nhớ hữu hạn; đây là giới hạn độ phân giải, không phải lấy mẫu cloud. Aspect dùng kích thước logic của viewport, nên việc làm tròn bitmap theo DPR không đổi tập điểm nằm trong frustum.
+
+```powershell title="Terminal — chạy checkpoint 06"
+cmake --build build --config Debug --target project_30_checkpoint_6 --parallel 2
+.\build\Debug\project_30_checkpoint_6.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Trong bản thử, test tâm node thay positive vertex. Đưa camera vào một node lớn và tìm vùng ảnh bị mất.
+
+2. Đặt point đúng near plane rồi dịch nó ra trước/sau 0,001 m. Boundary phải được nhận, điểm trước near phải bị loại.
+
+3. So cùng camera khi chọn/unselect điểm trùng vị trí khác ID. Tie policy phải làm hai thứ tự query cho cùng pixel.
+
+## Tự kiểm tra kết quả
+
+- Visible IDs giữa Tree và baseline giống nhau tại cùng camera/filter.
+- Ảnh CPU khớp từng pixel; không false negative ở cạnh/near/far plane.
+- Drawn bằng visible trong renderer point; không nhầm với số pixel không bị che.
+- DPR/resize không đổi world/query và không tạo vòng ResizeObserver.
+
+## Bài tập mở rộng
+
+Thêm một ảnh difference giữa hai framebuffer trong bộ kiểm offline. Khi có pixel khác, in cả ID owner và depth ở pixel đó để phân biệt lỗi culling với lỗi paint/depth order.
+
+Bài tiếp theo: [Từ một vùng điểm đến thông tin khảo sát](/projects/point-cloud-octree/07-loc-chieu-cao-va-thong-ke).

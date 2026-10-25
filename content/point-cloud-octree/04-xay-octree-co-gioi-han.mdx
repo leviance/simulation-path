@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chia dữ liệu thành tám nhánh mà không mất điểm
+
+## Vấn đề cần giải quyết
+
+Brute force đang cho đáp án đúng, nhưng mỗi lần dời vùng vẫn kiểm cả 100.000 điểm. Ta sẽ tổ chức dữ liệu thành Octree để những vùng xa có thể được bỏ qua. Bài này chỉ dựng cấu trúc; query vẫn dùng baseline cho tới bài sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một node có AABB, depth, tám child indices và các point indices nếu còn là leaf. Toàn bộ node nằm trong vector; vị trí point chỉ tồn tại trong vector points. Bởi dataset không thay đổi trong lúc khảo sát, ta có thể phân phối cả bucket khi split.
+
+Ba mặt phẳng giữa tạo tám octant. Bit 0 ứng với X, bit 1 với Y, bit 2 với Z; phép >= đưa điểm trên mặt chia về nửa positive. Point giữa ba mặt chọn slot 7, nhưng vẫn chỉ được lưu một lần.
+
+Không phải leaf nào vượt capacity cũng tiếp tục chia được. Bản chuẩn dừng ở depth 14, child half nhỏ hơn 0,0001 m hoặc sắp vượt 262.145 node. Leaf vượt capacity vì guard là hợp lệ; làm rơi điểm để giữ capacity mới là lỗi.
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-build" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 04 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Lưu index thay vì copy tọa độ
+
+```cpp title="include/spatial/octree.hpp — Lưu index thay vì copy tọa độ"
+struct Node {
+    Box bounds{};
+    std::array<int, 8> children{-1, -1, -1, -1, -1, -1, -1, -1};
+    std::vector<std::size_t> indices;
+    std::size_t depth{};
+};
+```
+
+children = -1 nghĩa là leaf, không phải child 0. Node chỉ giữ chỉ số, nên thay thứ tự storage của tree không làm đổi ID dataset. Internal node phải hết indices sau redistribution.
+
+### Bước 2 — Chọn duy nhất một octant
+
+```cpp title="include/spatial/octree.hpp — Chọn duy nhất một octant"
+static std::size_t octant(Vec3 p, Vec3 middle) {
+    std::size_t slot = 0;
+    if (p.x >= middle.x) {
+        slot |= 1;
+    }
+    if (p.y >= middle.y) {
+        slot |= 2;
+    }
+    if (p.z >= middle.z) {
+        slot |= 4;
+    }
+    return slot;
+}
+```
+
+Không kiểm lần lượt contains trên tám hộp rồi chèn vào mọi hộp khớp: child bounds chạm nhau tại split, nên cách đó nhân bản point ở biên. Ba bit cho duy nhất một slot.
+
+### Bước 3 — Split có giới hạn và ownership rõ
+
+```cpp title="include/spatial/octree.hpp — Split có giới hạn và ownership rõ"
+void split(std::size_t index, const std::vector<Point>& points) {
+    const Box box = nodes[index].bounds;
+    const std::size_t depth = nodes[index].depth;
+    const Vec3 middle = (box.minimum + box.maximum) * 0.5;
+    if (nodes[index].indices.size() <= capacity || depth >= maximumDepth || (box.maximum.x - box.minimum.x) * 0.25 < minimumHalf || nodes.size() + 8 > maximumNodes) {
+        return;
+    }
+    // Không giữ Node& qua push_back: vector có thể cấp phát lại.
+    std::vector<std::size_t> old;
+    old.swap(nodes[index].indices);
+    for (std::size_t slot = 0; slot < 8; ++slot) {
+        Box child = box;
+        if (slot & 1) {
+            child.minimum.x = middle.x;
+        } else {
+            child.maximum.x = middle.x;
+        }
+        if (slot & 2) {
+            child.minimum.y = middle.y;
+        } else {
+            child.maximum.y = middle.y;
+        }
+        if (slot & 4) {
+            child.minimum.z = middle.z;
+        } else {
+            child.maximum.z = middle.z;
+        }
+        nodes[index].children[slot] = static_cast<int>(nodes.size());
+        nodes.push_back({child, {-1, -1, -1, -1, -1, -1, -1, -1}, {}, depth + 1});
+    }
+    for (std::size_t pointIndex : old) {
+        const auto slot = octant(points[pointIndex].position, middle);
+        const int child = nodes[index].children[slot];
+        nodes[std::size_t(child)].indices.push_back(pointIndex);
+    }
+    for (std::size_t slot = 0; slot < 8; ++slot) {
+        split(std::size_t(nodes[index].children[slot]), points);
+    }
+}
+```
+
+Trước push_back, swap indices ra old để node cha rỗng chắc chắn. Mỗi lần truy cập parent sau cấp phát đều đi lại qua nodes[index], không giữ reference có thể bị invalidated. Sau khi phân phối, mới đệ quy split các child.
+
+## Ghép các phần lại
+
+Constructor Octree tạo root cube phủ toàn dữ liệu, điền indices 0…N−1 rồi gọi split(0, points). Root được suy ra từ dữ liệu có padding nhỏ, không ép tọa độ về [0,1]. Mở một CSV có tọa độ âm vẫn dựng đúng.
+
+Checkpoint 04 mở T để xem node boxes. Camera và selection từ các bài trước vẫn dùng được, nhưng chưa lấy counters prune làm bằng chứng tăng tốc: đường query của mốc này vẫn là brute. Việc đầu tiên cần tin là storage đúng.
+
+```powershell title="Terminal — chạy checkpoint 04"
+cmake --build build --config Debug --target project_30_checkpoint_4 --parallel 2
+.\build\Debug\project_30_checkpoint_4.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Tạo 1.000 point trùng vị trí nhưng ID khác nhau. Tree phải dừng chia và vẫn giữ đủ điểm.
+
+2. Trong bản thử, đổi >= thành > cho đúng một trục rồi kiểm split-plane fixture; ghi rõ chính sách mới, không để query/insertion hiểu khác nhau.
+
+3. Thử giữ Node& trước push tám children rồi dùng lại reference ấy. Đây là lỗi lifetime; khôi phục truy cập bằng index, không xử lý bằng reserve tùy tiện để che lỗi.
+
+## Tự kiểm tra kết quả
+
+- Mỗi pointIndex nằm đúng một leaf; tổng storage bằng N.
+- Internal nodes rỗng; child depth/bounds phù hợp ba bit.
+- Root chứa cả dữ liệu âm và cực trị; trùng vị trí không tạo cây vô hạn.
+- Không query dữ liệu đã chiếu screen; capacity guard không làm mất điểm.
+
+## Bài tập mở rộng
+
+Thêm một hàm in histogram số điểm trong leaf. So preset phòng với preset đều trong thể tích và giải thích vì sao cùng N nhưng topology khác nhau.
+
+Bài tiếp theo: [Tìm đúng vùng mà không quét cả căn phòng](/projects/point-cloud-octree/05-truy-van-hop-cau-bang-pruning).

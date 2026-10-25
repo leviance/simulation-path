@@ -1,0 +1,139 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khoanh vùng quan tâm bằng hộp hoặc cầu
+
+## Vấn đề cần giải quyết
+
+Bạn đã tìm thấy một dãy kệ bằng camera. Bây giờ cần lấy các điểm của khu vực đó, chứ không chỉ nhìn nó. Bài này thêm vùng hộp/cầu trong world và dùng brute force làm đáp án chuẩn; chưa cần tăng tốc bằng Octree.
+
+## Hiểu ý tưởng trước khi viết code
+
+Vùng hộp được mô tả bởi center và half: minimum = center − half, maximum = center + half. Vùng cầu dùng center và radius. Point là hit của hộp khi cả ba tọa độ nằm trong khoảng đóng; point là hit của cầu khi $\|p-c\|^2\le r^2$.
+
+Các đại lượng này đều tính bằng mét. Một point có thể nằm ở nơi khác trên screen khi camera đổi, nhưng vẫn thuộc cùng một vùng world. Bản chuẩn chỉnh vùng bằng số và phím, không dùng ray từ con trỏ; vì vậy chưa cần kiến thức ray picking ở Project 52.
+
+Dự đoán trước khi chạy: sphere radius 1 quanh gốc có nhận point (1,0,0) không? Còn (1,1,0)?
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-regions" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 03 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Biểu diễn một vùng trong world
+
+```cpp title="include/model/geometry.hpp — Biểu diễn một vùng trong world"
+struct Region {
+    Shape shape = Shape::Box;
+    Vec3 center{0, 2, 0};
+    Vec3 half{3, 2, 3};
+    double radius = 3;
+    double minimumHeight = -10000;
+    double maximumHeight = 10000;
+    std::array<Plane, 6> planes{};
+};
+```
+
+half là nửa kích thước hộp, không phải width/height/depth đầy đủ. Các trường height filter được giữ sẵn với khoảng rộng; đến bài 07 mới mở điều khiển lọc.
+
+### Bước 2 — Kiểm từng điểm bằng hình học thật
+
+```cpp title="include/model/geometry.hpp — Kiểm từng điểm bằng hình học thật"
+inline bool accepts(const Region& region, Vec3 p) {
+    if (p.y < region.minimumHeight || p.y > region.maximumHeight) {
+        return false;
+    }
+    if (region.shape == Shape::Box) {
+        return contains(around(region.center, region.half), p);
+    }
+    if (region.shape == Shape::Sphere) {
+        const Vec3 delta = p - region.center;
+        return dot(delta, delta) <= region.radius * region.radius;
+    }
+    for (const Plane& plane : region.planes) {
+        if (signedDistance(plane, p) < -planeTolerance(plane)) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+`accepts` phân nhánh theo kiểu vùng. Hộp/cầu là exact test của point, không dùng hình chiếu hoặc khoảng cách pixel. Nhánh Frustum phục vụ camera có sẵn; ta sẽ dẫn xuất sáu planes ở bài 06.
+
+### Bước 3 — Đưa thay đổi vào scene
+
+```cpp title="include/app/controls.hpp — Đưa thay đổi vào scene"
+inline bool regionKey(Region& region, SDL_Keycode key) {
+    bool changed = true;
+    if (key == SDLK_J) {
+        region.center.x -= 0.5;
+    } else if (key == SDLK_L) {
+        region.center.x += 0.5;
+    } else if (key == SDLK_I) {
+        region.center.y += 0.5;
+    } else if (key == SDLK_K) {
+        region.center.y -= 0.5;
+    } else if (key == SDLK_U) {
+        region.center.z -= 0.5;
+    } else if (key == SDLK_O) {
+        region.center.z += 0.5;
+    } else if (key == SDLK_1) {
+        region.shape = Shape::Box;
+    } else if (key == SDLK_2) {
+        region.shape = Shape::Sphere;
+    } else if (key == SDLK_LEFTBRACKET) {
+        region.half = region.half * 0.8;
+        region.half.x = std::max(0.05, region.half.x);
+        region.half.y = std::max(0.05, region.half.y);
+        region.half.z = std::max(0.05, region.half.z);
+        region.radius = std::max(0.05, region.radius * 0.8);
+    } else if (key == SDLK_RIGHTBRACKET) {
+        region.half = region.half * 1.25;
+        region.half.x = std::min(1000.0, region.half.x);
+        region.half.y = std::min(1000.0, region.half.y);
+        region.half.z = std::min(1000.0, region.half.z);
+        region.radius = std::min(1000.0, region.radius * 1.25);
+    } else {
+        changed = false;
+    }
+    region.center.x = std::clamp(region.center.x, -10000.0, 10000.0);
+    region.center.y = std::clamp(region.center.y, -10000.0, 10000.0);
+    region.center.z = std::clamp(region.center.z, -10000.0, 10000.0);
+    return changed;
+}
+```
+
+regionKey chỉ đổi Region; event loop gọi refreshSelection sau khi hàm báo changed. Selection giữ pointIndex, không sao chép điểm hoặc xóa các point còn lại khỏi dataset.
+
+## Ghép các phần lại
+
+Checkpoint 03 dùng brute dù trường useTree có tồn tại: trước bài 05, Octree.query vẫn rơi về baseline. Nhấn 1/2 đổi hộp/cầu, J/L dời X, I/K dời Y, U/O dời Z; [ ] đổi kích thước. Lần thay đổi đầu bật selection. Delete/Backspace bỏ selection nhưng N không đổi.
+
+Trên Canvas, nhập tâm và kích thước rồi bấm Chọn vùng hiện tại. Các điểm hit màu vàng; hộp hoặc ba vòng tròn wireframe chỉ mô tả vùng, không phải dataset. Giữ vùng đứng yên, xoay camera và kiểm selected count.
+
+```powershell title="Terminal — chạy checkpoint 03"
+cmake --build build --config Debug --target project_30_checkpoint_3 --parallel 2
+.\build\Debug\project_30_checkpoint_3.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Đặt một fixture có point đúng sáu mặt hộp và trên mặt cầu. Đổi một phép `<=` thành `<` trong bản thử rồi chỉ ra ID nào mất.
+
+2. Thử dùng world point sau projection để test region. Xoay camera và quan sát lỗi count thay đổi; trả test về world space.
+
+3. Đưa vùng ra ngoài phòng để có tập rỗng, sau đó xóa selection. Hai thao tác đều không được xóa dataset.
+
+## Tự kiểm tra kết quả
+
+- Box/sphere có boundary inclusive và nhận điểm âm/trùng vị trí theo đúng ID.
+- Thay camera không đổi hit set của vùng cố định.
+- Đổi tâm/kích thước cập nhật selection; xóa selection giữ nguyên N.
+- Chưa có tuyên bố tăng tốc: candidates vẫn là N ở baseline.
+
+## Bài tập mở rộng
+
+Thiết kế hai vùng hộp và cầu có cùng bounding box nhưng trả các tập điểm khác nhau. Giải thích các góc hộp nằm ngoài cầu bằng một ví dụ tọa độ.
+
+Bài tiếp theo: [Chia dữ liệu thành tám nhánh mà không mất điểm](/projects/point-cloud-octree/04-xay-octree-co-gioi-han).

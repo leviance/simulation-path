@@ -1,0 +1,145 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm đúng vùng mà không quét cả căn phòng
+
+## Vấn đề cần giải quyết
+
+Cây đã giữ đủ dữ liệu, nhưng chương trình vẫn quét toàn bộ point cho mỗi vùng. Ta sẽ thay đúng đường tìm kiếm, giữ nguyên dataset, Region và quy tắc exact test để biết khác biệt đến từ đâu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Node AABB chỉ cho biết nhánh đó có khả năng chứa hit. Với hộp, ta kiểm giao hai AABB. Với cầu, lấy closest point trên AABB bằng clamp từng tọa độ; nếu khoảng cách từ closest point tới tâm lớn hơn radius, toàn node nằm ngoài cầu.
+
+Đây là broad phase. Leaf còn giao vẫn phải exact-test từng point bằng accepts. Nếu chỉ coi mọi point trong leaf là hit, kết quả sẽ thừa khi vùng chọn chỉ chạm một góc leaf.
+
+Dự đoán: sphere nhỏ ở góc root nên giảm candidates, nhưng sphere bao toàn phòng có còn giúp giảm công việc không?
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-query" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 05 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Kiểm khả năng giao trước khi xuống node
+
+```cpp title="include/model/geometry.hpp — Kiểm khả năng giao trước khi xuống node"
+inline bool mayOverlap(const Region& region, Box box) {
+    if (box.maximum.y < region.minimumHeight || box.minimum.y > region.maximumHeight) {
+        return false;
+    }
+    if (region.shape == Shape::Box) {
+        return overlaps(box, around(region.center, region.half));
+    }
+    if (region.shape == Shape::Sphere) {
+        const Vec3 closest{
+            std::clamp(region.center.x, box.minimum.x, box.maximum.x),
+            std::clamp(region.center.y, box.minimum.y, box.maximum.y),
+            std::clamp(region.center.z, box.minimum.z, box.maximum.z)};
+        const Vec3 delta = closest - region.center;
+        return dot(delta, delta) <= region.radius * region.radius;
+    }
+    for (const Plane& plane : region.planes) {
+        Vec3 positive = box.minimum;
+        if (plane.normal.x >= 0) {
+            positive.x = box.maximum.x;
+        }
+        if (plane.normal.y >= 0) {
+            positive.y = box.maximum.y;
+        }
+        if (plane.normal.z >= 0) {
+            positive.z = box.maximum.z;
+        }
+        if (signedDistance(plane, positive) < -planeTolerance(plane)) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+Khoảng cách tới tâm node là điều kiện sai: sphere có thể chạm góc hoặc mặt node dù tâm node xa. Closest point mới cho khoảng cách tối thiểu tới toàn hộp.
+
+### Bước 2 — Duyệt bằng stack và kiểm leaf
+
+```cpp title="include/spatial/octree.hpp — Duyệt bằng stack và kiểm leaf"
+Result query(const std::vector<Point>& points, const Region& region) const {
+    const auto start = Clock::now();
+    Result result{};
+    std::vector<std::size_t> pending{0};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
+        const Node& node = nodes[index];
+        if (!mayOverlap(region, node.bounds)) {
+            result.pruned.push_back(index);
+            continue;
+        }
+        result.visited.push_back(index);
+        if (node.children[0] >= 0) {
+            for (int child : node.children) {
+                pending.push_back(std::size_t(child));
+            }
+        } else {
+            for (std::size_t pointIndex : node.indices) {
+                ++result.candidates;
+                if (accepts(region, points[pointIndex].position)) {
+                    result.indices.push_back(pointIndex);
+                }
+            }
+        }
+    }
+    result.milliseconds = elapsedMs(start);
+    return result;
+}
+```
+
+pending là stack node indices, không phải point IDs. visited và pruned ghi lại công việc traversal; candidates chỉ tăng lúc thật sự test một point. Hit order không thuộc correctness contract.
+
+### Bước 3 — Thay đường query trong ứng dụng
+
+```cpp title="include/survey/scene.hpp — Thay đường query trong ứng dụng"
+inline void refreshSelection(Scene& scene) {
+    scene.selected = Result{};
+    if (scene.selectionEnabled) {
+        if (scene.useTree) {
+            scene.selected = scene.tree.query(scene.points, scene.region);
+        } else {
+            scene.selected = brute(scene.points, scene.region);
+        }
+    }
+}
+```
+
+refreshSelection nhận cùng region và points, chỉ đổi giữa tree.query và brute. Việc tô màu vẫn đọc indices giống trước; không reset camera hay sinh lại dataset khi bấm M.
+
+## Ghép các phần lại
+
+Từ checkpoint 05, Octree.query chạy traversal thật. Nhấn M hoặc nút Tree/Brute để so trên cùng cảnh; giữ nguyên vùng và camera. So tập ID sau khi sort bản sao ngoài khoảng timing; số lượng bằng nhau chưa chứng minh chọn đúng điểm.
+
+Dùng vùng nhỏ ở giữa kệ, vùng cắt split, vùng nằm ngoài root và vùng bao toàn phòng. Counters nên giúp giải thích từng trường hợp, không phải lúc nào cũng phải cho Tree ít thời gian hơn.
+
+```powershell title="Terminal — chạy checkpoint 05"
+cmake --build build --config Debug --target project_30_checkpoint_5 --parallel 2
+.\build\Debug\project_30_checkpoint_5.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ exact test trong leaf ở bản thử. Query nhỏ sát mép phải cho thấy các điểm thừa.
+
+2. Thử dùng tâm node thay closest point cho sphere. Tạo một sphere nhỏ chạm mặt AABB để bắt false negative.
+
+3. Cho vùng bao cả root; ghi lại traversal overhead dù hit set vẫn đúng. Đừng đổi dataset để làm Tree trông có lợi hơn.
+
+## Tự kiểm tra kết quả
+
+- Box/sphere IDs khớp brute ở biên, split, ngoài root, tọa độ âm và vị trí trùng.
+- Không trùng pointIndex; candidates đo công việc test thật.
+- Toggle Tree/Brute giữ nguyên world/region/camera và selection đúng.
+- Không sort/copy/export trong khoảng thời gian query.
+
+## Bài tập mở rộng
+
+Tạo một CSV tập trung điểm vào một mặt phẳng rồi chọn một dải mỏng qua mặt phẳng ấy. Đo candidates và visited, giải thích vì sao hai counters không tăng/giảm cùng nhau.
+
+Bài tiếp theo: [Chỉ vẽ phần dữ liệu nằm trong góc nhìn](/projects/point-cloud-octree/06-frustum-culling-khong-mat-diem).

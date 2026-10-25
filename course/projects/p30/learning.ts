@@ -1,279 +1,405 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = ["include/lab.hpp", "include/render.hpp", "src/main.cpp", "tests/tests.cpp"];
-
 const learning = {
   guides: {
     "p30-l01": {
-      focus:
-        "Giữ bản brute force đang chạy đúng, dựng camera xoay quanh point cloud và tách rõ hộp truy vấn trong world space khỏi hình chiếu dùng để vẽ.",
-      expected:
-        "Point cloud có chiều sâu khi xoay camera; query giữ nguyên khi đổi góc nhìn và point ở ba split planes chọn đúng octant 7.",
-      files,
+      focus: "Từ khung SDL đến dữ liệu phòng 100.000 điểm, có ID và đơn vị mét.",
+      expected: "Cửa sổ hiển thị sàn, tường, kệ và cột; số điểm giữ nguyên sau khi đọc CSV.",
+      files: ["include/io/csv.hpp", "include/model/dataset.hpp", "include/view/render.hpp"],
       steps: [
         {
-          title: "Tạo point cloud deterministic",
+          title: "Chốt schema trước khi đọc dữ liệu",
           explanation:
-            "Với cùng số điểm, cách phân bố và `seed`, chương trình luôn tạo lại đúng cùng dữ liệu. Nhờ đó hình ảnh, test và benchmark có thể so sánh được.",
+            "ID là danh tính, không phải thứ tự hàng. CSV dùng id,x,y,z; Y là chiều cao, mọi tọa độ tính bằng mét.",
         },
         {
-          title: "Chiếu world point qua orbit camera",
+          title: "Đọc vào vector tạm rồi mới nhận dataset",
           explanation:
-            "`yaw` và `pitch` đổi hướng nhìn. Chỉ chia phối cảnh sau khi chắc chắn điểm nằm trước near plane để không sinh tọa độ vô hạn.",
+            "Mỗi hàng phải đủ bốn cột, ID duy nhất và số hữu hạn. Gặp lỗi thì giữ thông báo có số dòng, không dùng nửa file đã đọc.",
         },
         {
-          title: "Giữ query trong world space",
+          title: "Nối dữ liệu với đường vẽ đã có",
           explanation:
-            "Hộp nhìn thấy trên màn hình chỉ là hình chiếu. Khi kiểm một điểm có nằm trong hộp hay không, phải dùng tọa độ gốc X, Y, Z.",
-        },
-        {
-          title: "Mã hóa octant bằng ba bit",
-          explanation:
-            "Nửa dương của X, Y, Z lần lượt bật bit 0, 1, 2. Điểm nằm đúng mặt phẳng chia được đưa về nửa dương để chỉ thuộc một child.",
+            "defaultCloud đi qua writeCsv/readCsv; renderPoints chiếu từng point vào framebuffer/depth buffer trước khi SDL_UpdateTexture present.",
         },
       ],
     },
     "p30-l02": {
-      focus:
-        "Tạo một root node phủ toàn bộ khối lập phương, lưu độ sâu, index các điểm và tám child index; ở bước này root vẫn là một leaf.",
-      expected:
-        "Root phủ [0,1]³, giữ đủ 100.000 indices và query volume vẫn báo candidates bằng N.",
-      files,
+      focus: "Dùng cùng basis cho orbit, free-fly và phép chiếu; camera không sửa tọa độ điểm.",
+      expected: "Orbit, pan, tiến/lùi và đổi chế độ giữ nguyên world; Home nhìn toàn dataset.",
+      files: ["include/view/camera.hpp", "include/app/application.hpp"],
       steps: [
         {
-          title: "Để point vector làm nguồn dữ liệu duy nhất",
+          title: "Dựng basis từ yaw và pitch",
           explanation:
-            "Octree chỉ lưu index. Phần sinh dữ liệu, renderer và brute force đều đọc vị trí từ cùng vector, tránh nhiều bản sao dễ lệch nhau.",
+            "forward hướng vào cảnh; right và up tạo hệ trực chuẩn. Hai chế độ khác vị trí eye chứ không khác phép chiếu.",
         },
         {
-          title: "Nhận diện leaf bằng sentinel",
+          title: "Chia perspective sau near-plane test",
           explanation:
-            "Khi tám child index đều bằng `noNodeIndex`, node vẫn là leaf. Cách này không cần cấp phát và quản lý từng node bằng con trỏ.",
+            "Lens giữ basis/frustum cho cả frame, tránh tính lại trig với từng point. Đi sau near plane không được đem chia cho depth.",
         },
         {
-          title: "Đo root-only baseline",
+          title: "Nối gesture vào event loop",
           explanation:
-            "Việc đặt các điểm vào một root node chưa làm truy vấn nhanh hơn. Khi root còn giữ đủ N điểm, mỗi truy vấn vẫn phải kiểm cả N như brute force.",
+            "Giữ camera lúc bắt đầu kéo và tổng delta; sample pointer-up được áp dụng trước khi nhả capture. Escape hủy gesture.",
         },
       ],
     },
     "p30-l03": {
-      focus:
-        "Khi một leaf đã đầy, chia nó thành tám node con rồi chèn lại toàn bộ index cũ bằng chính `insertAtNode`.",
+      focus: "Điều khiển vùng chọn trong world, dựng brute-force reference trước khi có cây.",
       expected:
-        "Clustered cloud chia sâu quanh bốn cụm; internal nodes không còn pointIndices và recursion luôn dừng.",
-      files,
+        "Đổi tâm/kích thước vùng chọn thay hit set nhưng không reset camera; chạm mặt hộp hoặc mặt cầu vẫn được nhận.",
+      files: ["include/model/geometry.hpp", "include/app/controls.hpp", "include/survey/scene.hpp"],
       steps: [
         {
-          title: "Kiểm ba split guards trước",
+          title: "Biểu diễn một vùng trong world",
           explanation:
-            "Giới hạn độ sâu và kích thước theo cả X, Y, Z giúp phép chia luôn dừng, kể cả khi nhiều điểm trùng vị trí.",
+            "center, half và radius có cùng đơn vị mét với dataset. Không dùng tọa độ sau projection để chọn dữ liệu.",
         },
         {
-          title: "Không giữ reference qua vector growth",
+          title: "Kiểm từng điểm bằng hình học thật",
           explanation:
-            "Thêm tám child có thể làm `std::vector` dời vùng nhớ. Hãy giữ `nodeIndex` rồi truy cập lại parent sau khi tạo xong các node con.",
+            "Hộp xét ba khoảng đóng; cầu xét khoảng cách bình phương. Đây là đáp án chuẩn sẽ dùng khi thay đường tìm kiếm.",
         },
         {
-          title: "Redistribute cũ và mới qua một đường",
+          title: "Đưa thay đổi vào scene",
           explanation:
-            "Mọi index đều đi qua `octreeOctant` và `insertAtNode`, nên quy tắc xử lý điểm trên mặt phẳng chia chỉ tồn tại ở một nơi.",
+            "J/L, I/K, U/O đổi tâm; [ ] đổi kích thước. refreshSelection cập nhật indices rồi renderer tô vàng các điểm được chọn.",
         },
       ],
     },
     "p30-l04": {
-      focus:
-        "Viết một hàm kiểm tra độc lập, duyệt toàn bộ Octree để phát hiện điểm bị mất, lưu trùng, child sai vùng hoặc leaf vượt sức chứa không hợp lệ.",
+      focus: "Node indices, ba bit octant và các giới hạn dừng split.",
       expected:
-        "Mỗi point có insertion count 1; từng child bounds khớp octant bit và leaves+internalNodes bằng node count.",
-      files,
+        "Mỗi point index nằm đúng một leaf; dữ liệu trùng vị trí không làm cây chia vô hạn.",
+      files: ["include/spatial/octree.hpp"],
       steps: [
         {
-          title: "Đếm lại storage theo point index",
+          title: "Lưu index thay vì copy tọa độ",
           explanation:
-            "Dùng một mảng đếm theo index. Giá trị 0 nghĩa là điểm bị mất; lớn hơn 1 nghĩa là điểm đã bị đưa vào nhiều octant.",
+            "Vector points bất biến, node chỉ giữ các chỉ số. Sau này export lấy ID gốc qua pointIndex.",
         },
         {
-          title: "Tính lại child bounds",
+          title: "Chọn duy nhất một octant",
           explanation:
-            "Inspector gọi octreeChildBounds từ parent và octant position thay vì tin bounds mà builder đã lưu.",
+            "Ba phép >= đặt ba bit X/Y/Z. Hai child có thể chạm mặt nhưng một point chỉ đi một đường.",
         },
         {
-          title: "Phân biệt overflow hợp lệ",
+          title: "Split có giới hạn và ownership rõ",
           explanation:
-            "Một leaf chỉ được vượt `capacity` khi đã chạm giới hạn độ sâu hoặc kích thước nhỏ nhất trên ít nhất một trục.",
+            "Chuyển indices ra biến tạm trước khi push tám child; không giữ Node& qua vector reallocation. Depth, minimum size và node budget chặn chia.",
         },
       ],
     },
     "p30-l05": {
-      focus:
-        "Truy vấn AABB theo thứ tự rõ ràng: loại node không giao nhau, đi xuống node con, rồi kiểm chính xác từng điểm trong leaf.",
+      focus: "AABB–box/sphere broad phase rồi exact-test điểm trong leaf.",
       expected:
-        "Query nhỏ thăm một phần tree, candidates ít hơn N và mọi hit đều nằm trong volume theo cả ba trục.",
-      files,
+        "Octree và brute trả cùng tập ID với hộp/cầu; counters cho biết đã bỏ được bao nhiêu công việc.",
+      files: [
+        "include/model/geometry.hpp",
+        "include/spatial/octree.hpp",
+        "include/survey/scene.hpp",
+      ],
       steps: [
         {
-          title: "Prune trước khi hỏi node là leaf",
+          title: "Kiểm khả năng giao trước khi xuống node",
           explanation:
-            "Nếu hộp của node không giao hộp truy vấn, có thể bỏ toàn bộ nhánh mà không cần đọc điểm bên trong.",
+            "Hộp dùng overlap; cầu dùng điểm gần tâm cầu nhất trên AABB. Không dùng khoảng cách tới tâm node.",
         },
         {
-          title: "Duyệt đủ tám child khi parent overlap",
+          title: "Duyệt bằng stack và kiểm leaf",
           explanation:
-            "Hộp truy vấn có thể cắt nhiều octant. Gọi truy vấn cho cả tám child; child không liên quan sẽ dừng ngay ở phép kiểm giao nhau.",
+            "Node bị loại không cần mở children. Node còn giao chỉ cho danh sách ứng viên, chưa phải kết quả.",
         },
         {
-          title: "Exact-test cả X, Y và Z",
+          title: "Thay đường query trong ứng dụng",
           explanation:
-            "Leaf giao hộp truy vấn chỉ giúp thu hẹp danh sách. Từng điểm vẫn phải được kiểm theo cả X, Y và Z trước khi trở thành hit.",
+            "M đổi Tree/Brute trên cùng scene.region và dataset. Giữ indices để so tập, không lấy số hit hay checksum thay correctness.",
         },
       ],
     },
     "p30-l06": {
-      focus:
-        "Chạy cùng các hộp truy vấn bằng Octree và brute force, rồi so hai tập hit mà không buộc chúng phải có cùng thứ tự.",
+      focus: "Sáu mặt frustum, phép thử node bảo thủ và depth-buffer presentation.",
       expected:
-        "Hit sets khớp cho center, corners, faces và split planes; mismatch báo lỗi geometry/storage chứ không phải thứ tự output.",
-      files,
+        "Bật/tắt culling cho cùng ảnh tại cùng camera, kể cả khi camera ở trong phòng và sát near plane.",
+      files: [
+        "include/view/camera.hpp",
+        "include/model/geometry.hpp",
+        "include/survey/scene.hpp",
+        "include/view/render.hpp",
+      ],
       steps: [
         {
-          title: "Giữ brute force thật đơn giản",
+          title: "Viết frustum bằng các nửa không gian",
           explanation:
-            "Oracle quét mọi point và chỉ gọi pointInsideVolume, nên không chia sẻ lỗi traversal với Octree.",
+            "Normal hướng vào trong; near/far và bốn mặt bên cùng dùng basis camera. Plane không cần normalized nếu tolerance đi theo hệ số.",
         },
         {
-          title: "Canonicalize ngoài hot path",
+          title: "Dùng cùng cây để lấy visible indices",
           explanation:
-            "Chỉ sắp xếp bản sao trong lúc kiểm tra. Hàm truy vấn thật giữ thứ tự duyệt tự nhiên và không phải trả thêm chi phí cho việc đối chiếu.",
+            "Chọn positive vertex của AABB để chứng minh cả node ở ngoài một plane. Nếu còn nghi ngờ thì giữ node, không đoán bỏ.",
         },
         {
-          title: "Thêm probe có chủ đích",
+          title: "Giữ renderer độc lập với cách lấy danh sách",
           explanation:
-            "Các hộp đặt ở góc, chạm mặt và đi qua mặt phẳng chia bắt lỗi biên hoặc lỗi chọn bit tốt hơn một bộ test chỉ có dữ liệu ngẫu nhiên.",
+            "Dù danh sách đến từ Tree hay Brute, từng point vẫn phải qua clip/projection/depth test giống nhau. Không lấy mẫu để tạo số đo đẹp.",
         },
       ],
     },
     "p30-l07": {
-      focus:
-        "Đo Octree và brute force bằng cùng điểm, cùng hộp truy vấn, cùng số lần lặp và cùng cách warm-up; báo cả checksum lẫn lượng công việc.",
-      expected:
-        "Checksum giống nhau, brute scans=N×Q×R và timer query không chứa rebuild hay point generation.",
-      files,
+      focus: "Giao vùng hình học với khoảng Y, rồi tính count/bounds/centroid.",
+      expected: "Chọn mặt sàn Y=0 cho 20.000 điểm ở preset phòng; empty selection không sinh NaN.",
+      files: [
+        "include/model/geometry.hpp",
+        "include/survey/statistics.hpp",
+        "include/survey/scene.hpp",
+      ],
       steps: [
         {
-          title: "Warm-up bằng đúng workload",
+          title: "Lọc theo thuộc tính có ý nghĩa",
           explanation:
-            "Lượt warm-up đi qua cùng paths nhưng không cộng vào queryCount hoặc elapsedMicroseconds được báo cáo.",
+            "Y là chiều cao: lọc một lát sàn hoặc tầng kệ. Chạm hai đầu khoảng vẫn được nhận; filter cũng áp dụng cho viewport.",
         },
         {
-          title: "Dùng checksum không phụ thuộc traversal order",
+          title: "Tính thống kê từ điểm thật",
           explanation:
-            "Mỗi truy vấn gộp tập index theo cách không phụ thuộc thứ tự, sau đó mới trộn vào checksum chung của cả lần đo.",
+            "Bounds của selection không phải bounds node hay bounds vùng chọn. Centroid là trung bình tọa độ của các điểm hit.",
         },
         {
-          title: "Tách rebuild khỏi query timing",
+          title: "Nối kết quả vào readout",
           explanation:
-            "Static point cloud build một lần; rebuildMicroseconds được báo riêng thay vì trộn vào query timer.",
+            "refreshSelection gọi statistics sau query. Camera không nằm trong luồng cập nhật filter nên giữ nguyên góc nhìn.",
         },
       ],
     },
     "p30-l08": {
-      focus:
-        "Dựng lại Octree với capacity 8, 16, 32 và 64 trên cùng dữ liệu để xem cấu trúc cây, chi phí dựng và số điểm cần kiểm thay đổi thế nào.",
-      expected:
-        "Checksum giống nhau, brute scans=N×Q×R; capacity 8 sinh nhiều nodes hơn capacity 64 và thường kiểm ít candidates hơn.",
-      files,
+      focus: "Export ID/tọa độ, công bố precision và xử lý lỗi ghi file.",
+      expected: "CSV xuất ra mở được bằng cùng parser; giữ đúng tập ID và tọa độ, kể cả tập rỗng.",
+      files: ["include/survey/statistics.hpp", "include/io/csv.hpp", "include/io/files.hpp"],
       steps: [
         {
-          title: "Chỉ thay leafCapacity",
+          title: "Lấy dữ liệu qua pointIndex",
           explanation:
-            "Maximum depth, minimum node size, points và query volumes được giữ nguyên để thí nghiệm chỉ có một biến.",
+            "Query trả index để tránh copy trong hot path. Khi export mới lấy Point, rồi sắp theo ID cho file dễ đối chiếu.",
         },
         {
-          title: "Lưu topology cùng query metrics",
+          title: "Ghi đủ precision để đọc lại",
           explanation:
-            "Mỗi dòng kết quả ghi số node, độ sâu, mức lấp đầy, thời gian dựng và số liệu truy vấn của đúng cây vừa tạo.",
+            "C++ dùng max_digits10 với classic locale; schema không đổi. Không cắt tọa độ xuống vài chữ số chỉ vì readout đang hiển thị ngắn.",
         },
         {
-          title: "Đọc trade-off theo lifecycle",
+          title: "Tạo file mới và báo lỗi",
           explanation:
-            "Một cảnh phải dựng lại cây thường xuyên có thể cần capacity khác với một cảnh đứng yên nhưng thực hiện rất nhiều truy vấn.",
+            "X ghi vào .runtime/selection-N.csv, không ghi đè file cũ. Export không cần camera hay cây trong file kết quả.",
         },
       ],
     },
     "p30-l09": {
-      focus:
-        "Ghép camera, reset, chuyển động của hộp truy vấn, các lựa chọn phân bố/capacity, benchmark và bảng so sánh thành ứng dụng hoàn chỉnh.",
+      focus: "Oracle độc lập, topology và job validation hữu hạn.",
       expected:
-        "Final giữ một build/query path dùng chung; pointer capture luôn được release và CTest Debug/Release đều pass.",
-      files,
+        "Reference so tập ID trên dataset hiện tại; biên, vị trí trùng, split, vùng rỗng và near plane có fixture riêng.",
+      files: ["include/survey/validation.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Chỉ rebuild khi topology input đổi",
+          title: "So tập ID chứ không tin số lượng",
           explanation:
-            "Xoay camera hoặc di chuyển hộp chỉ thay cách nhìn hay kết quả truy vấn. Chỉ dựng lại cây khi phân bố điểm hoặc capacity thay đổi, đồng thời xóa số đo cũ.",
+            "Hai kết quả có thể cùng count nhưng khác điểm. Canonicalize bản sao ngoài hot path để phát hiện thiếu/trùng indices.",
         },
         {
-          title: "Tách draw sample khỏi indexed workload",
+          title: "Kiểm cấu trúc độc lập với query",
           explanation:
-            "Renderer có thể giới hạn số điểm và hộp được vẽ để giữ tương tác mượt; Octree, truy vấn và test vẫn dùng đủ 100.000 điểm.",
+            "Đếm storage, reachability và containment; đánh dấu node đã tới để validator không lặp vô hạn nếu cây bị hỏng.",
         },
         {
-          title: "Khóa hợp đồng trước Project 31",
+          title: "Chia công việc và hủy đúng lúc",
           explanation:
-            "Project 31 sẽ thêm khối lượng và tâm khối lượng cho Barnes–Hut, nhưng cách lưu index, kiểm cấu trúc và đối chiếu bằng brute force vẫn được giữ lại.",
+            "Mỗi tick xử lý query hữu hạn rồi trả về event loop. Một query riêng vẫn có thể vượt 6 ms; đổi workload phải hủy kết quả cũ.",
+        },
+      ],
+    },
+    "p30-l10": {
+      focus: "Workload cố định, warm-up và nhiều mẫu; tách build/query/culling/render/bộ nhớ.",
+      expected:
+        "Tree và Brute dùng cùng 16 vùng; có median/min/max, checksum và các số đo pipeline riêng, không hứa speedup chung.",
+      files: [
+        "include/survey/benchmark.hpp",
+        "include/spatial/octree.hpp",
+        "include/app/presentation.hpp",
+      ],
+      steps: [
+        {
+          title: "Giữ nguyên câu hỏi khi đổi thuật toán",
+          explanation:
+            "Lấy cùng 16 vùng từ seed, cùng dataset và filter; hai warm-up không tính vào năm mẫu báo cáo.",
+        },
+        {
+          title: "Đo query ở nơi query thực sự chạy",
+          explanation:
+            "Không sort/export/render trong khoảng timing. Job chạy có giới hạn, Pause/Cancel không khóa camera.",
+        },
+        {
+          title: "Tách bộ nhớ với thời gian",
+          explanation:
+            "allocatedBytes chỉ ước tính backing storage C++; không giả là process RSS hoặc bộ nhớ JS. Renderer/depth buffers có ngân sách riêng.",
+        },
+      ],
+    },
+    "p30-l11": {
+      focus: "Build ZIP độc lập và hoàn tất mở → khảo sát → chọn/lọc → thống kê → xuất → đọc lại.",
+      expected:
+        "C++ chạy đủ 100.000 điểm; tests Debug/Release, smoke workflow và giới hạn tài nguyên được ghi riêng với desktop QA.",
+      files: ["src/main.cpp", "include/app/application.hpp", "tests/tests.cpp"],
+      steps: [
+        {
+          title: "Theo dõi toàn bộ đường dữ liệu",
+          explanation:
+            "runApplication mở CSV, dựng Scene/Octree rồi event loop cập nhật camera, selection, jobs và framebuffer. Canvas không thay ứng dụng SDL.",
+        },
+        {
+          title: "Build đúng target đang sửa",
+          explanation:
+            "Final mặc định; BUILD_CHECKPOINTS mở starter và 11 checkpoint. Tests dùng final/include, đổi sang starter/include khi muốn kiểm lời giải của bạn.",
+        },
+        {
+          title: "Nghiệm thu theo hành vi sử dụng",
+          explanation:
+            "Chạy quy trình 100k và mở lại CSV xuất ra. Đối chiếu ảnh culling trên cùng camera, không lấy build/test xanh làm thay cho thao tác desktop.",
         },
       ],
     },
   },
   references: {
     "p30-l01": [
-      { label: "Perspective divide", href: "/glossary#perspective-divide", kind: "Thuật ngữ" },
-      { label: "Octant", href: "/glossary#octant-3d", kind: "Thuật ngữ" },
-      { label: "AABB volume", href: "/glossary#aabb-volume", kind: "Thuật ngữ" },
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
+      },
     ],
     "p30-l02": [
-      { label: "Octree", href: "/glossary#octree", kind: "Thuật ngữ" },
-      { label: "Leaf capacity", href: "/glossary#leaf-capacity", kind: "Thuật ngữ" },
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
+      },
     ],
     "p30-l03": [
-      { label: "Octree node", href: "/glossary#octree-node", kind: "Thuật ngữ" },
-      { label: "Maximum tree depth", href: "/glossary#maximum-tree-depth", kind: "Thuật ngữ" },
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
+      },
     ],
     "p30-l04": [
       {
-        label: "Deterministic simulation",
-        href: "/glossary#deterministic-simulation",
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
         kind: "Thuật ngữ",
       },
-      { label: "Octree node", href: "/glossary#octree-node", kind: "Thuật ngữ" },
     ],
     "p30-l05": [
-      { label: "Spatial pruning", href: "/glossary#spatial-pruning", kind: "Thuật ngữ" },
       {
-        label: "Conservative candidate set",
-        href: "/glossary#conservative-candidate-set",
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
         kind: "Thuật ngữ",
       },
     ],
     "p30-l06": [
-      { label: "Brute-force query", href: "/glossary#brute-force-query", kind: "Thuật ngữ" },
-      { label: "Benchmark checksum", href: "/glossary#benchmark-checksum", kind: "Thuật ngữ" },
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
+      },
     ],
     "p30-l07": [
-      { label: "Benchmark warm-up", href: "/glossary#benchmark-warm-up", kind: "Thuật ngữ" },
-      { label: "Benchmark checksum", href: "/glossary#benchmark-checksum", kind: "Thuật ngữ" },
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
+      },
     ],
     "p30-l08": [
-      { label: "Benchmark warm-up", href: "/glossary#benchmark-warm-up", kind: "Thuật ngữ" },
-      { label: "Leaf capacity", href: "/glossary#leaf-capacity", kind: "Thuật ngữ" },
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
+      },
     ],
     "p30-l09": [
-      { label: "Pointer capture", href: "/glossary#pointer-capture", kind: "Thuật ngữ" },
       {
-        label: "SDL_CaptureMouse",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
-        kind: "SDL API",
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p30-l10": [
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p30-l11": [
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Octree",
+        href: "/glossary#octree",
+        kind: "Thuật ngữ",
       },
     ],
   },

@@ -1,0 +1,153 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy công cụ hoàn chỉnh và tự nghiệm thu
+
+## Vấn đề cần giải quyết
+
+Bạn đã có từng phần của công cụ. Bước cuối là kiểm người khác tải ZIP về vẫn build và khảo sát được một dataset thật mà không có website hoặc source của project khác bên cạnh. Đồng thời phải phân biệt phần đã được test tự động với phần cần tự dùng trên desktop.
+
+## Hiểu ý tưởng trước khi viết code
+
+Main gọi runApplication; model giữ dữ liệu/hình học, io giữ CSV/file, spatial giữ Octree, survey giữ selection/statistics/jobs, view giữ camera/raster và app giữ SDL/input/HUD. Các file đều có trong mã hoàn chỉnh cuối bài và ZIP.
+
+Starter, từng checkpoint và final là các chương trình độc lập, không link chung. Final mặc định; BUILD_CHECKPOINTS mở thêm target học. Checkpoint 11 giữ thuật toán đã hoàn thiện ở bài 10 để tập trung ghép và nghiệm thu, không tạo một thuật toán mới chỉ để có bài cuối.
+
+Dự đoán: CTest và smoke đều xanh nhưng chưa ai kiểm kéo chuột/resize, ta có được ghi desktop QA đã đạt không?
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-final" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 11 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Theo dõi toàn bộ đường dữ liệu
+
+```cpp title="src/main.cpp — Theo dõi toàn bộ đường dữ liệu"
+#include "app/application.hpp"
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+
+int main(int argc, char** argv) {
+    // Parser/build/IO báo lỗi trước khi mở SDL hoặc sau khi đã cleanup tài nguyên.
+    try {
+        return survey::runApplication(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << "Point Cloud Survey: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
+}
+```
+
+Đây là toàn bộ entry point. Header app/application.hpp không phải dependency ẩn phải tải thêm; mở bộ xem mã cuối bài để đọc mọi file của project.
+
+### Bước 2 — Build đúng target đang sửa
+
+```cpp title="include/app/application.hpp — Build đúng target đang sửa"
+if (!SDL_Init(SDL_INIT_VIDEO)) {
+    throw std::runtime_error(SDL_GetError());
+}
+SDL_Window* window = SDL_CreateWindow("Project 30 | Point Cloud Survey", 1100, 800, SDL_WINDOW_RESIZABLE);
+if (!window) {
+    SDL_Quit();
+    throw std::runtime_error(SDL_GetError());
+}
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (!renderer) {
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    throw std::runtime_error(SDL_GetError());
+}
+SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, 1100, 570);
+if (!texture) {
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    throw std::runtime_error(SDL_GetError());
+}
+SDL_SetRenderLogicalPresentation(renderer, 1100, 800, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+SDL_SetRenderVSync(renderer, 1);
+```
+
+Khởi tạo SDL, window, renderer và texture được kiểm từng bước. Framebuffer CPU cấp phát trước SDL để lỗi RAM không bỏ lại window; cuối runApplication có một đường cleanup cho texture/renderer/window/SDL và mouse capture.
+
+### Bước 3 — Nghiệm thu theo hành vi sử dụng
+
+```cpp title="include/app/application.hpp — Nghiệm thu theo hành vi sử dụng"
+inline bool workflow(Scene& scene) {
+    scene.selectionEnabled = true;
+    scene.region = Region{};
+    scene.region.center = {0, 0, 0};
+    scene.region.half = {12, 0.1, 9};
+    scene.region.minimumHeight = 0;
+    scene.region.maximumHeight = 0;
+    refreshSelection(scene);
+    if (scene.points.size() < 100000 || scene.selected.indices.empty()) {
+        return false;
+    }
+    if (!sameIndices(scene.selected, brute(scene.points, scene.region))) {
+        return false;
+    }
+    std::ostringstream output;
+    writeCsv(output, selectedPoints(scene.points, scene.selected));
+    std::istringstream input(output.str());
+    const auto restored = readCsv(input);
+    const auto expected = selectedPoints(scene.points, scene.selected);
+    if (restored.size() != expected.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < restored.size(); ++i) {
+        const Vec3 delta = restored[i].position - expected[i].position;
+        if (restored[i].id != expected[i].id || dot(delta, delta) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+workflow chọn mặt sàn từ N=100000, kiểm IDs, serialize CSV rồi đọc lại. Smoke còn render vùng đã lọc và kiểm drawn=visible; không dùng window rỗng hoặc một dataset vài nghìn điểm thay nghiệm thu.
+
+## Ghép các phần lại
+
+Từ thư mục giải nén có CMakeLists.txt, dùng các lệnh ở dưới. CMake ≥3.24, C++20 và SDL 3.4.8 FetchContent+SHA-256; lần configure đầu cần mạng tải SDL, sau đó dùng cache. Link qua SDL3::SDL3. Bản ZIP không cần Node.js hoặc tài khoản website.
+
+Muốn CTest kiểm lời giải bạn tự viết trong starter, đổi include directory của project_30_tests từ final/include sang starter/include trong CMake của bản ZIP. Chỉ kỳ vọng bộ test toàn tính năng xanh sau khi bạn đã hoàn thiện các bài.
+
+macOS/Linux dùng hai thư mục build-debug/build-release với CMAKE_BUILD_TYPE tương ứng; bỏ -C và chạy executable ngay trong build directory. Chỉ tuyên bố nền tảng bạn thực sự đã build/kiểm.
+
+```cmake title="CMakeLists.txt — kiểm lời giải trong starter"
+target_include_directories(project_30_tests PRIVATE starter/include)
+```
+
+```powershell title="Terminal — build độc lập và nghiệm thu Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Debug\project_30_final.exe --smoke
+.\build\Release\project_30_final.exe --smoke-workflow
+.\build\Release\project_30_final.exe --benchmark
+.\build\Release\project_30_final.exe --input .runtime\selection-1.csv
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Giải nén ZIP sang thư mục mới rồi build. Nếu cần đường dẫn tuyệt đối về repository website thì gói chưa độc lập.
+
+2. Làm sai một boundary trong bản thử rồi chạy CTest Release. Tests dùng check/exit code, không dựa vào assert bị tắt bởi NDEBUG.
+
+3. Đóng window khi job đang chạy, resize/mất focus lúc kéo và nhấn Escape trước thả. Ghi riêng thao tác đã thử; không coi unit tests là kiểm chuột thật.
+
+## Tự kiểm tra kết quả
+
+- Starter, 11 checkpoint và final build; CTest Debug/Release chạy kiểm tra thật.
+- N=100000 hoàn tất mở → khảo sát → chọn/lọc → thống kê → xuất → đọc lại.
+- Box/sphere/filter/culling khớp reference, ảnh CPU và round-trip có bằng chứng riêng.
+- README có schema, đơn vị, controls, precision, giới hạn RAM/file và cách chạy độc lập.
+- Ghi rõ desktop QA hoặc nền tảng nào chưa được kiểm; không sửa spec để khớp hiện trạng.
+
+## Bài tập mở rộng
+
+Viết ghi chú nghiệm thu một trang: chức năng, bằng chứng tự động, thao tác desktop và giới hạn còn lại. Sau đó đọc [Project 31](/roadmap#project-31): Barnes–Hut cho phép xấp xỉ lực, khác với Octree query ở đây vốn phải trả đúng tập điểm.

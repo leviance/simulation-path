@@ -41,6 +41,8 @@ yarn-error.log*
 /work/
 /.tmp/
 /.validation/
+# Local datasets and exports created by the native Point Cloud Survey.
+**/.runtime/
 /.npm-cache/
 /examples/**/build/
 /examples/**/build*/

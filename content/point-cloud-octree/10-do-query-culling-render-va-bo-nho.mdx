@@ -1,0 +1,140 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo chi phí của công cụ thay vì chỉ đo cây
+
+## Vấn đề cần giải quyết
+
+Công cụ đã làm đúng công việc khảo sát. Giờ ta mới hỏi nó tốn gì: dựng cây mất bao lâu, truy vấn chọn và culling có lợi không, render chiếm bao nhiêu thời gian, dữ liệu và index dùng khoảng bao nhiêu bộ nhớ?
+
+## Hiểu ý tưởng trước khi viết code
+
+Benchmark giữ cùng N, seed và 16 vùng cho hai phương pháp. Bỏ hai warm-up rồi lấy năm mẫu theo batch; báo median cùng min/max để thấy độ dao động. Query timing được đo bên trong query, không gộp sort, export hoặc render.
+
+HUD ghi riêng build, selection query, viewport culling và CPU render. Render ở đây là chiếu/raster point trên CPU, không gồm SDL texture upload/present. Bộ nhớ backing được ước tính từ capacity của points/nodes/indices trong C++; không phải RSS toàn tiến trình và không thể dùng thay bộ nhớ object của JavaScript.
+
+Dự đoán: phòng có nhiều điểm trên tường và một cloud đều trong thể tích có nhất thiết cho cùng topology và speedup không?
+
+<InteractiveLab demo="point-cloud-octree" mode="cloud-performance" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter theo những phần đã làm ở bài trước; các đường dẫn bên dưới tính từ snapshot đang sửa. Mã chạy được sau bài và toàn bộ file liên quan nằm ở cuối trang. Checkpoint 10 là bản đối chiếu độc lập, không phải thư mục cần chép đè toàn bộ vào lời giải.
+
+### Bước 1 — Giữ nguyên câu hỏi khi đổi thuật toán
+
+```cpp title="include/survey/benchmark.hpp — Giữ nguyên câu hỏi khi đổi thuật toán"
+inline Job startBenchmark(const Scene& scene) {
+    Job job{};
+    job.active = true;
+    job.benchmark = true;
+    job.regions = validationRegions(scene.tree.nodes[0].bounds);
+    job.regions.resize(16);
+    job.errors = topologyErrors(scene.tree, scene.points);
+    if (job.errors != 0) {
+        job.active = false;
+        job.report = "Topology errors; benchmark not started.";
+    }
+    return job;
+}
+```
+
+startBenchmark lấy đúng 16 vùng cố định. Không chọn lại query sau khi thấy số đo; filter của mỗi vùng thuộc workload đã công bố.
+
+### Bước 2 — Đo query ở nơi query thực sự chạy
+
+```cpp title="include/survey/benchmark.hpp — Đo query ở nơi query thực sự chạy"
+inline void tickBenchmark(Job& job, const Scene& scene) {
+    if (!job.active || job.paused) {
+        return;
+    }
+    const auto start = Clock::now();
+    do {
+        const Region& region = job.regions.at(job.queryIndex);
+        Result result{};
+        if (job.useTree) {
+            result = scene.tree.query(scene.points, region);
+        } else {
+            result = brute(scene.points, region);
+        }
+        job.batchMilliseconds += result.milliseconds;
+        for (auto index : result.indices) {
+            job.checksum += scene.points[index].id + std::uint64_t{1};
+        }
+        ++job.queryIndex;
+        if (job.queryIndex == job.regions.size()) {
+            if (job.iteration >= 2) {
+                job.samples.push_back(job.batchMilliseconds);
+            }
+            job.batchMilliseconds = 0;
+            job.queryIndex = 0;
+            ++job.iteration;
+            if (job.iteration == 7) {
+                auto sorted = job.samples;
+                std::sort(sorted.begin(), sorted.end());
+                std::string method = "Brute";
+                if (job.useTree) {
+                    method = "Tree";
+                }
+                job.report += method + " median/min/max ms per 16 queries: " + std::to_string(sorted[2]) + "/" + std::to_string(sorted[0]) + "/" + std::to_string(sorted[4]) + "; checksum " + std::to_string(job.checksum) + "\n";
+                if (!job.useTree) {
+                    job.active = false;
+                }
+                job.useTree = false;
+                job.iteration = 0;
+                job.samples.clear();
+                job.checksum = 0;
+            }
+        }
+    } while (job.active && elapsedMs(start) < 6.0);
+}
+```
+
+Mỗi lần đi hết 16 vùng tạo một sample. Hai vòng đầu làm nóng đường chạy; năm vòng sau được sort để lấy median/min/max. Checksum cộng ID theo cách không phụ thuộc traversal order, nhưng correctness vẫn dùng so tập ở bài 09.
+
+C++ dùng số nguyên 64-bit cho tổng này; với ngân sách hiện tại, tổng không tràn. Canvas dùng BigInt vì ID uint32 cộng qua nhiều batch có thể vượt giới hạn số nguyên chính xác của Number. Không đổi checksum thành số thực rồi kỳ vọng thứ tự cộng luôn cho cùng kết quả.
+
+### Bước 3 — Tách bộ nhớ với thời gian
+
+```cpp title="include/spatial/octree.hpp — Tách bộ nhớ với thời gian"
+std::size_t allocatedBytes() const {
+    std::size_t bytes = nodes.capacity() * sizeof(Node);
+    for (const Node& node : nodes) {
+        bytes += node.indices.capacity() * sizeof(std::size_t);
+    }
+    return bytes;
+}
+```
+
+allocatedBytes cộng backing storage thực sự do vector cấp phát. Debug boxes, framebuffer/depth buffer và chi phí thư viện/allocator cần ghi riêng; không biến con số này thành lời hứa tổng RAM.
+
+## Ghép các phần lại
+
+Build Release rồi chạy `project_30_final.exe --benchmark`. Lệnh không mở window và có deadline 15 giây; output phải ghi N=100000, seed=30, Q=16, warm-up=2, samples=5. Khi đo trong window, B chia việc qua từng tick; Space pause/resume, Escape cancel, đóng window phải dọn công việc.
+
+Đo riêng preset phòng, preset đều và vùng bao toàn root. Ghi máy, compiler/build configuration và kích thước viewport. Không dùng số mẫu trên máy phát triển để hứa FPS hoặc speedup cho mọi máy; benchmark nhỏ cũng có thể bị nhiễu bởi timer và tải hệ thống.
+
+```powershell title="Terminal — chạy checkpoint 10"
+cmake --build build --config Debug --target project_30_checkpoint_10 --parallel 2
+.\build\Debug\project_30_checkpoint_10.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Thêm sort vào khoảng timing trong bản thử rồi so; bạn đang đo thêm một công việc khác.
+
+2. Dùng vùng gần toàn root và quan sát overhead traversal. Giữ cả kết quả Tree không thắng trong báo cáo.
+
+3. Bật/tắt debug trên cùng camera: query time và render time phải được đọc riêng, không kết luận tree chậm hơn chỉ vì vẽ thêm hộp.
+
+## Tự kiểm tra kết quả
+
+- Hai phương pháp có cùng dataset/query set, số vòng và checksum.
+- Có năm mẫu sau hai warm-up; median/min/max và đơn vị ms/batch rõ.
+- Build/query/culling/CPU render và backing memory tách biệt.
+- Job hữu hạn, có pause/cancel; không tự khởi chạy benchmark vô hạn.
+
+## Bài tập mở rộng
+
+Lập bảng ba workload và giải thích mỗi cột bằng công việc thực tế. Thêm cột texture upload/present bằng một phép đo riêng nếu muốn đánh giá toàn frame, không âm thầm gộp nó vào render.
+
+Bài tiếp theo: [Chạy công cụ hoàn chỉnh và tự nghiệm thu](/projects/point-cloud-octree/11-cong-cu-khao-sat-hoan-chinh).

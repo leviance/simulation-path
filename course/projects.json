@@ -209,8 +209,9 @@
     "id": "30",
     "slug": "point-cloud-octree",
     "sourceDirectory": "project-30-point-cloud-octree",
-    "checkpointCount": 9,
-    "demoId": "point-cloud-octree"
+    "checkpointCount": 11,
+    "demoId": "point-cloud-octree",
+    "contentRevision": 1
   },
   {
     "id": "31",
