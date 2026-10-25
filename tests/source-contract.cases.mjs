@@ -30,7 +30,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
       "examples",
       projectDirectoryBySlug.get(lesson.project),
     );
-    // Project 01–27 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
+    // Project 01–28 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
     const projectNumber = Number(
       projectDirectoryBySlug.get(lesson.project).match(/^project-(\d+)-/)[1],
     );
@@ -58,7 +58,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
         : path.join(checkpointDirectory, relative);
       const source = await readFile(sourcePath, "utf8");
       assert.ok(
-        projectNumber <= 27 || projectNumber >= 56
+        projectNumber <= 28 || projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
         `${lesson.file} drifts from checkpoint ${lessonNumber}: ${title}`,
@@ -120,7 +120,7 @@ test("C++ validation remains active in both Debug and Release", async () => {
     ["spring-chain", "08-do-energy-stress-test-va-nghiem-thu.mdx"],
     ["double-pendulum-chaos", "07-preset-tuong-tac-va-nghiem-thu.mdx"],
     ["boids-2d", "09-kiem-chung-va-du-an-hoan-chinh.mdx"],
-    ["spatial-grid-neighbor-query", "08-hoan-thien-spatial-grid-va-nghiem-thu.mdx"],
+    ["boids-spatial-grid", "10-hoan-thien-dan-boids-lon.mdx"],
     ["visible-quadtree", "08-hoan-thien-visible-quadtree-va-nghiem-thu.mdx"],
     ["point-cloud-octree", "09-hoan-thien-point-cloud-octree.mdx"],
     ["memory-layout-race", "08-hoan-thien-memory-layout-race.mdx"],

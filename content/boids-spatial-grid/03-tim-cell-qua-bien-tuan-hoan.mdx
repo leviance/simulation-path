@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm đủ cell ở hai phía của đường biên
+
+## Vấn đề cần giải quyết
+
+Nếu chỉ xem các cell sát con trỏ trên màn hình, ta rất dễ quên rằng world của Boids nối hai mép với nhau. Một cá thể ở x=1 vẫn có thể nhìn thấy cá thể ở x=959. Grid phải giữ đúng quan hệ đó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trên mỗi trục, xét khoảng [center−R,center+R]. Nếu nó vượt mép, tách thành hai khoảng nằm trong [0,extent]. Chuyển hai đầu mỗi khoảng sang địa chỉ cell, giữ cả đầu trên vì điều kiện neighbor nhận đúng biên radius.
+
+Không dùng máy móc ±ceil(R/S) quanh cell chứa tâm rồi modulo. Với width=960, S=100, tâm x=0 và R=64, ta cần cột 8,9,0. Cell cuối rộng 60 khiến cách ±1 bỏ cột 8.
+
+Loại trùng trên từng trục, rồi lấy mọi cặp row/column. Đó là vùng AABB bao ngoài hình tròn: chấp nhận một số candidate thừa, chưa được bỏ một hàng xóm thật nào.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-wrap" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — Tách khoảng bị cắt bởi mép
+
+Thêm axisCells trong `include/grid/query.hpp`. Radius của ứng dụng luôn nhỏ hơn nửa cạnh ngắn nhất như Project 27.
+
+```cpp title="include/grid/query.hpp — axisCells"
+inline std::vector<std::size_t> axisCells(double center, double radius, double extent, double cellSize) {
+    if (!std::isfinite(center) || !std::isfinite(radius) || !std::isfinite(extent) || !std::isfinite(cellSize) || extent <= 0 || cellSize < 4 || radius < 0 || radius >= extent / 2) {
+        throw std::invalid_argument("Invalid periodic interval");
+    }
+    const double countValue = std::max(1.0, std::ceil(extent / cellSize));
+    if (countValue > 4096) {
+        throw std::invalid_argument("Too many cells on one axis");
+    }
+    const auto count = static_cast<std::size_t>(countValue);
+    const double normalized = wrap(center, extent);
+    const double low = normalized - radius;
+    const double high = normalized + radius;
+    std::vector<std::pair<double, double>> intervals;
+    if (low < 0) {
+        intervals = {{0, high}, {low + extent, extent}};
+    } else if (high >= extent) {
+        intervals = {{low, extent}, {0, high - extent}};
+    } else {
+        intervals = {{low, high}};
+    }
+    std::vector<std::size_t> cells;
+    for (const auto& interval : intervals) {
+        const auto first = static_cast<std::size_t>(std::floor(interval.first / cellSize));
+        const auto last = std::min(count - 1, static_cast<std::size_t>(std::floor(interval.second / cellSize)));
+        for (std::size_t cell = first; cell <= last; ++cell) {
+            if (std::find(cells.begin(), cells.end(), cell) == cells.end()) {
+                cells.push_back(cell);
+            }
+        }
+    }
+    return cells;
+}
+```
+
+Khoảng [x−R,x+R] có thể đi qua 0 hoặc width. Chia thành hai đoạn trong miền giúp dùng cùng phép floor như bước chèn.
+
+### Bước 2 — Giữ cell cuối ngắn trong phép tính
+
+Cập nhật refreshInspection để hiển thị những cell được chọn. Ở checkpoint 3, hàng xóm của toàn đàn vẫn do brute force tìm; vùng cell mới chỉ là lớp debug.
+
+```cpp title="include/app/scene.hpp — refreshInspection"
+inline void refreshInspection(GridScene& scene) {
+    if (!scene.inspectionDirty) {
+        return;
+    }
+    scene.inspectionQuery = {};
+    findNeighbors(scene.boids, scene.selected, scene.params, scene.inspectionQuery.neighbors);
+    scene.inspectionGrid = buildGrid(scene.boids, scene.params, scene.cellSize);
+    const auto& grid = *scene.inspectionGrid;
+    const auto point = scene.boids.at(scene.selected).position;
+    const auto columns = axisCells(point.x, scene.params.radius, grid.width, grid.cellSize);
+    const auto rows = axisCells(point.y, scene.params.radius, grid.height, grid.cellSize);
+    for (std::size_t row : rows) {
+        for (std::size_t column : columns) {
+            scene.inspectionQuery.cells.push_back(row * grid.columns + column);
+        }
+    }
+    scene.inspectionDirty = false;
+}
+```
+
+Với width=960, S=100, cell cuối chỉ rộng 60. Tâm 0, R=64 phải xét cột 8,9,0; ±ceil(R/S) quanh cột 0 sẽ bỏ cột 8.
+
+## Ghép các phần lại
+
+refreshInspection tính tập cột/hàng và ghép thành cells. drawScene dùng tập đó để tô vùng cần đọc. Mọi Boid vẫn chạy bằng brute force; việc có đường kẻ Grid trên màn hình chưa có nghĩa mô phỏng đã được tối ưu.
+
+### Bước 3 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 3; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 3"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_3 --parallel 2
+./build/Debug/project_28_checkpoint_3.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng S=100, chọn cá thể sát mép trái và R=64. So cột 8,9,0 với kết quả dự đoán.
+2. Đổi S=240 và R=240. Một số đoạn có thể rơi lại vào cùng cell; query.cells không được có địa chỉ trùng.
+3. Thử đổi high>=extent thành high>extent. Fixture chạm đúng mép trên sẽ chỉ ra vì sao dấu bằng quan trọng.
+
+## Tự kiểm tra kết quả
+
+- Tâm 0, R=64, extent=960, S=100 trả đúng các cột 0,8,9, không trùng.
+- Tâm 896 với cùng R/S nhận cả cell 0 ở mép đối diện.
+- Tích các tập hàng/cột không truy cập bucket ngoài grid.
+
+## Bài tập mở rộng
+
+Vẽ tay khoảng query qua mép dưới của height=600, S=64. Cell cuối cao bao nhiêu, và cần thêm hàng nào mà cách ±1 dễ bỏ sót?
+
+[Bài tiếp: Từ candidate đến hàng xóm thật sự](/projects/boids-spatial-grid/04-loc-candidate-thanh-hang-xom).

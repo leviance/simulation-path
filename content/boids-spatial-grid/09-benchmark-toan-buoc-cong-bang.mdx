@@ -1,0 +1,153 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo toàn bước, không chỉ đo phần Grid làm nhanh
+
+## Vấn đề cần giải quyết
+
+Nếu chỉ đo query, ta dễ thấy Grid rất nhanh rồi quên nó phải dựng lại sau mỗi bước. Ta cần đo công việc cần để tạo một output hoàn chỉnh, trên đầu vào mà cả hai thuật toán thực sự cùng đọc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi dòng dùng lại input cố định theo seed/layout. Chạy hai lượt warm-up, bỏ hai số đó, rồi thu năm mẫu. Báo median và min–max, không lựa một lần chạy đẹp nhất.
+
+Scale plan có năm dòng: Brute/Grid ở 256 và 1.024, Grid ở 10.000. Cell study dùng N=1.024 với một baseline Brute và sáu S=16,32,64,100,128,240. Chạy cell study cho cả ba layout, đặc biệt Dense.
+
+CPU total gồm validation, copy snapshot, chuẩn bị output, rebuild và các lát query/update. Nó không gồm thời gian chờ frame, render hoặc checksum. Median của từng thành phần không nhất thiết cộng đúng median total.
+
+Checksum tiêu thụ mọi output ngoài kernel. Nó giúp tránh một phép đo không dùng kết quả, nhưng không thay validator tập ID và số thực ở bài 6.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-benchmark" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — Cố định đầu vào của mỗi dòng
+
+Thêm createGridBenchmark. Các case được khai báo hữu hạn; không thêm Brute 10.000 vào vòng chạy UI mặc định.
+
+```cpp title="include/grid/benchmark.hpp — createGridBenchmark"
+inline GridBenchmark createGridBenchmark(const Params& params, std::uint32_t seed, double cellSize, Layout layout, bool studyCells) {
+    GridBenchmark job{};
+    job.params = params;
+    job.seed = seed;
+    job.active = true;
+    if (studyCells) {
+        job.cases.push_back({1024, cellSize, Method::Brute, layout});
+        for (double size : {16.0, 32.0, 64.0, 100.0, 128.0, 240.0}) {
+            job.cases.push_back({1024, size, Method::Grid, layout});
+        }
+    } else {
+        for (std::size_t count : {std::size_t{256}, std::size_t{1024}, std::size_t{10000}}) {
+            if (count <= 1024) {
+                job.cases.push_back({count, cellSize, Method::Brute, Layout::Uniform});
+            }
+            job.cases.push_back({count, cellSize, Method::Grid, Layout::Uniform});
+        }
+    }
+    return job;
+}
+```
+
+Mỗi mẫu đọc lại snapshot cùng seed/layout; warm-up không đẩy đàn sang trạng thái khác.
+
+### Bước 2 — Đo mọi phần cần để có output
+
+Thêm median. Với năm mẫu, phần tử giữa của dãy đã sort là đủ; không cần viết một hệ thống thống kê phức tạp.
+
+```cpp title="include/grid/benchmark.hpp — median"
+inline double median(std::vector<double> values) {
+    std::sort(values.begin(), values.end());
+    return values.at(values.size() / 2);
+}
+```
+
+CPU total gồm validation, copy snapshot, build và các lô query/update; không gồm chờ frame, render hoặc checksum.
+
+### Bước 3 — Báo phân bố chứ không chỉ một lần chạy
+
+Thêm tickGridBenchmark. Một tick chỉ xử lý một lát của StepJob; hủy job không công bố dòng chưa đủ năm mẫu.
+
+```cpp title="include/grid/benchmark.hpp — tickGridBenchmark"
+inline void tickGridBenchmark(GridBenchmark& job) {
+    if (!job.active) {
+        return;
+    }
+    const auto& config = job.cases.at(job.row);
+    if (!job.step) {
+        if (job.input.empty()) {
+            job.input = makeDataset(config.count, job.seed, job.params, config.layout);
+        }
+        job.step = createStep(job.input, job.params, config.cellSize, config.method);
+    }
+    if (!advanceStep(*job.step)) {
+        return;
+    }
+    // Checksum nằm ngoài thời gian kernel, không thay phép so sánh toàn state.
+    for (const Boid& boid : job.step->output) {
+        job.checksum += static_cast<std::uint32_t>(std::llround(boid.position.x * 1024));
+        job.checksum += static_cast<std::uint32_t>(std::llround(boid.position.y * 1024));
+    }
+    if (job.iteration >= 2) {
+        job.samples.push_back(job.step->metrics);
+    }
+    ++job.iteration;
+    job.step.reset();
+    if (job.iteration == 7) {
+        std::vector<double> totals;
+        std::vector<double> builds;
+        std::vector<double> queries;
+        std::vector<double> updates;
+        for (const auto& sample : job.samples) {
+            totals.push_back(sample.totalMs);
+            builds.push_back(sample.buildMs);
+            queries.push_back(sample.queryMs);
+            updates.push_back(sample.updateMs);
+        }
+        const auto limits = std::minmax_element(totals.begin(), totals.end());
+        const auto& work = job.samples.front();
+        job.rows.push_back({config, job.samples.size(), median(totals), *limits.first, *limits.second, median(builds), median(queries), median(updates), work.candidates, work.neighbors, job.checksum});
+        ++job.row;
+        job.iteration = 0;
+        job.input.clear();
+        job.samples.clear();
+        job.checksum = 0;
+        if (job.row == job.cases.size()) {
+            job.active = false;
+        }
+    }
+}
+```
+
+Hai warm-up rồi năm mẫu; median, min và max là dữ liệu của máy đang chạy. Cell study có baseline brute và nhiều S, kể cả layout đặc.
+
+## Ghép các phần lại
+
+B/K tạo benchmark job và giữ mô phỏng ở pause. advanceScene ưu tiên tickGridBenchmark, không đồng thời làm một bước simulation khác. Bảng chỉ thêm dòng sau hai warm-up và năm mẫu; F5/F6 đổi trang, Escape hủy dòng đang đo.
+
+### Bước 4 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 9; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 9"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_9 --parallel 2
+./build/Debug/project_28_checkpoint_9.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Chạy scale plan ở Release, rồi chạy lại để xem độ phân tán. Không đặt test bắt thời gian phải tăng theo một hệ số cố định.
+2. Chạy cell study ở Dense. Cả hai đường đều có N(N−1) neighbors; build/storage/cell traversal có thể làm Grid chậm hơn.
+3. So CPU và wall latency ở Canvas khi tab bận. Đừng lấy độ trễ gồm requestAnimationFrame rồi gọi đó là thời gian query.
+
+## Tự kiểm tra kết quả
+
+- Scale đủ năm dòng; cell study đủ bảy dòng; mỗi dòng có năm mẫu sau hai warm-up.
+- Các cặp Brute/Grid cùng count/layout/seed có tập neighbor và checksum khớp; validator đã chạy riêng.
+- Có số đo Dense nơi Grid không có lợi; báo điều kiện đo, không hứa speedup hoặc FPS chung.
+
+## Bài tập mở rộng
+
+Ghi N, seed, R, S, layout, cấu hình build và máy đo cùng bảng median/min/max. Giải thích một dòng Grid thua dựa trên candidates và occupancy, không chỉ đoán cache.
+
+[Bài tiếp: Hoàn thiện và nghiệm thu đàn Boids lớn](/projects/boids-spatial-grid/10-hoan-thien-dan-boids-lon).

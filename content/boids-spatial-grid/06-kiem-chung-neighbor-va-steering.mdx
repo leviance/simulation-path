@@ -1,0 +1,165 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng Grid có giữ nguyên mô phỏng không
+
+## Vấn đề cần giải quyết
+
+Hai đàn nhìn giống nhau không đủ để kết luận thuật toán tương đương. Một hàng xóm bị mất ở mép có thể chỉ làm quỹ đạo khác rõ sau hàng trăm bước. Ta cần bắt lỗi ngay trên snapshot gây ra nó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đầu tiên so tập hàng xóm. Thứ tự bucket có thể khác thứ tự vector, nên sắp bản sao chỉ số/ID để so tập, không sort trong hot loop của mô phỏng.
+
+Sau đó so từng separation, alignment, cohesion, acceleration và state sau một bước. Tolerance tuyệt đối 1e−9 chấp nhận khác biệt cộng số thực rất nhỏ; nó không cho phép mất hoặc thêm một neighbor ID.
+
+Validator UI giới hạn N≤1.024, xử lý theo lô và không đổi đàn hiện tại. Test thuần còn có oracle độc lập xét chín ảnh tuần hoàn bằng hypot, không gọi minimumImage của production.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-validation" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — So tập hàng xóm trước khi so số thực
+
+Thêm createValidation để giữ snapshot và grid độc lập. Không bắt brute force 10.000 chạy liên tục trong UI.
+
+```cpp title="include/grid/validation.hpp — createValidation"
+inline ValidationJob createValidation(const std::vector<Boid>& flock, const Params& params, double cellSize) {
+    if (flock.size() > 1024) {
+        throw std::invalid_argument("Validate at most 1024 agents");
+    }
+    ValidationJob job{};
+    job.snapshot = flock;
+    job.params = params;
+    job.grid = buildGrid(job.snapshot, params, cellSize);
+    job.active = true;
+    return job;
+}
+```
+
+Sắp thứ tự index/ID để so tập, không ép thứ tự bucket phải giống brute force.
+
+### Bước 2 — So từng steering và state một bước
+
+Thêm tickValidation. Mỗi cá thể phải qua cả so tập lẫn so steering/state, không chỉ so count hoặc checksum.
+
+```cpp title="include/grid/validation.hpp — tickValidation"
+inline void tickValidation(ValidationJob& job, double budgetMs = 6.0) {
+    if (!job.active) {
+        return;
+    }
+    const auto start = Clock::now();
+    while (job.checked < job.snapshot.size()) {
+        const std::size_t index = job.checked;
+        GridQuery query;
+        queryGrid(job.snapshot, index, job.params, *job.grid, query);
+        std::vector<std::size_t> brute;
+        findNeighbors(job.snapshot, index, job.params, brute);
+        // So sánh tập chỉ số vì cả hai cách cùng đọc đúng một snapshot.
+        auto ordered = query.neighbors;
+        std::sort(ordered.begin(), ordered.end());
+        std::sort(brute.begin(), brute.end());
+        bool equal = ordered == brute;
+        const auto gridSteering = computeSteering(job.snapshot, index, query.neighbors, job.params);
+        const auto bruteSteering = computeSteering(job.snapshot, index, brute, job.params);
+        equal = equal && nearVector(gridSteering.separation, bruteSteering.separation);
+        equal = equal && nearVector(gridSteering.alignment, bruteSteering.alignment);
+        equal = equal && nearVector(gridSteering.cohesion, bruteSteering.cohesion);
+        equal = equal && nearVector(gridSteering.acceleration, bruteSteering.acceleration);
+        const auto gridState = integrateBoid(job.snapshot[index], gridSteering.acceleration, job.params, fixedDt);
+        const auto bruteState = integrateBoid(job.snapshot[index], bruteSteering.acceleration, job.params, fixedDt);
+        equal = equal && nearVector(gridState.position, bruteState.position);
+        equal = equal && nearVector(gridState.velocity, bruteState.velocity);
+        if (!equal) {
+            ++job.failures;
+        }
+        ++job.checked;
+        if (milliseconds(start, Clock::now()) >= budgetMs) {
+            break;
+        }
+    }
+    if (job.checked == job.snapshot.size()) {
+        job.active = false;
+    }
+}
+```
+
+Tolerance 1e−9 áp dụng cho separation, alignment, cohesion, acceleration, position và velocity. Không dùng quỹ đạo dài phải trùng bit.
+
+### Bước 3 — Cố ý làm hỏng grid
+
+Đọc oracle trong tests để hiểu vì sao nó không chia sẻ helper khoảng cách với production.
+
+```cpp title="tests/boids-grid-cases.hpp — oracle"
+inline std::vector<std::uint32_t> oracle(const std::vector<lab::Boid>& flock, std::size_t index, const lab::Params& params) {
+    std::vector<std::uint32_t> ids;
+    const auto& target = flock.at(index);
+    for (const auto& other : flock) {
+        if (other.id == target.id) {
+            continue;
+        }
+        double distance = std::numeric_limits<double>::infinity();
+        for (double dx : {-params.width, 0.0, params.width}) {
+            for (double dy : {-params.height, 0.0, params.height}) {
+                distance = std::min(distance, std::hypot(other.position.x + dx - target.position.x, other.position.y + dy - target.position.y));
+            }
+        }
+        if (distance <= params.radius) {
+            ids.push_back(other.id);
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+```
+
+Bỏ một bucket rồi validator phải phát hiện sai khác. Checksum và một vài ảnh nhìn giống nhau không thay được phép kiểm này.
+
+### Bước 4 — Gắn validator vào phím V
+
+Thêm phím V trong applyKey. Ở preset lớn, ứng dụng báo cần chọn đàn nhỏ chứ không âm thầm giảm N.
+
+```cpp title="include/app/controls.hpp — if (key == SDLK_V)"
+if (key == SDLK_V) {
+    stopScene(scene);
+    if (scene.count > 1024) {
+        scene.notice = "Choose N <= 1024 for full validation. No automatic downsampling.";
+    } else {
+        scene.validation = createValidation(scene.boids, scene.params, scene.cellSize);
+    }
+}
+```
+
+Bỏ một bucket rồi validator phải phát hiện sai khác. Checksum và một vài ảnh nhìn giống nhau không thay được phép kiểm này.
+
+## Ghép các phần lại
+
+Phím V dừng công việc cũ rồi tạo ValidationJob. advanceScene ưu tiên tickValidation khi job còn active; renderer chỉ đọc progress/failures, không thay state. Escape gọi stopScene để hủy. Ở đàn lớn, chọn N nhỏ trước khi kiểm; ứng dụng không tự đổi input.
+
+### Bước 5 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 6; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 6"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_6 --parallel 2
+./build/Debug/project_28_checkpoint_6.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Cố ý bỏ một bucket sau khi dựng grid. Validator phải có failures>0; nếu vẫn xanh, bộ kiểm chưa thật sự kiểm gì.
+2. Giữ count đúng nhưng thay một neighbor ID bằng ID khác. So count sẽ bỏ lọt; so tập phải bắt được.
+3. Đổi tolerance thành 0 để xem sai số thứ tự cộng, rồi trả về 1e−9. Không sửa thuật toán bằng cách nới tolerance tùy tiện.
+
+## Tự kiểm tra kết quả
+
+- Validation nhỏ kết thúc sau khi checked=N và failures=0.
+- Fixture qua mép, R/S, trùng vị trí và cụm đặc đều được kiểm.
+- Pause/cancel ngừng validator mà không công bố một bước mô phỏng mới.
+
+## Bài tập mở rộng
+
+Thêm test cố ý làm hỏng Grid và xác nhận bộ kiểm trả thất bại. Một test chỉ chạy đường đúng chưa chứng minh nó sẽ phát hiện sai.
+
+[Bài tiếp: Cell size ảnh hưởng thế nào khi đàn tụ lại?](/projects/boids-spatial-grid/07-cell-size-va-phan-bo-dan).

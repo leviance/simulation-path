@@ -136,7 +136,7 @@ export const roadmapSeed = [
   },
   {
     id: 28,
-    title: "Chia “thành phố hạt” thành ô: tìm hàng xóm bằng Spatial Grid",
+    title: "Đàn Boids lớn với Spatial Grid",
     part: "CẤU TRÚC KHÔNG GIAN VÀ TƯ DUY HIỆU NĂNG",
   },
   {

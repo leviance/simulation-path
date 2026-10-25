@@ -1,0 +1,110 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cell size ảnh hưởng thế nào khi đàn tụ lại?
+
+## Vấn đề cần giải quyết
+
+Một cell size chạy tốt khi đàn rải đều có thể mất lợi ích sau khi đàn tụ lại. Ta cần quan sát điều này trên mô phỏng thật thay vì đo một đám điểm đứng yên rồi suy ra hiệu năng của Boids.
+
+## Hiểu ý tưởng trước khi viết code
+
+Layout chỉ thay vị trí ban đầu. Uniform giữ nguyên bộ sinh của Project 27; clustered gom vào hai vùng; dense gom vào một vùng rất nhỏ. Velocity, seed và ba quy tắc không bị thay để giúp Grid thắng.
+
+S nhỏ tạo nhiều cell rỗng phải ghé qua; S lớn đưa nhiều cá thể xa vào cùng bucket. Không có quy tắc S=R luôn tối ưu. Khi mọi cá thể nằm rất gần nhau, số hàng xóm có hướng là N(N−1): không spatial index nào được phép bỏ các tương tác đó.
+
+Các layout không phụ thuộc S. Đổi cell size trên cùng snapshot mới là phép so có ý nghĩa; đổi cả dữ liệu sẽ làm kết quả lẫn hai nguyên nhân.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-density" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — Giữ seed và cell size độc lập
+
+Thay makeDataset trong `include/grid/dataset.hpp`. Đây là thay đổi lúc reset, không phải một lực mới trong mô phỏng.
+
+```cpp title="include/grid/dataset.hpp — makeDataset"
+inline std::vector<Boid> makeDataset(std::size_t count, std::uint32_t seed, const Params& params, Layout layout) {
+    auto flock = makeFlock(count, seed, params);
+    // Chỉ thay vị trí ban đầu, không đổi vận tốc hoặc quy tắc steering.
+    for (Boid& boid : flock) {
+        if (layout == Layout::Clustered) {
+            const double side = static_cast<double>(boid.id % 2);
+            boid.position.x = params.width * (0.15 + side * 0.5) + boid.position.x * 0.2;
+            boid.position.y = params.height * 0.35 + boid.position.y * 0.2;
+        } else if (layout == Layout::Dense) {
+            boid.position.x = params.width * 0.507 + boid.position.x * 0.0001;
+            boid.position.y = params.height * 0.506 + boid.position.y * 0.0001;
+        }
+    }
+    return flock;
+}
+```
+
+Các layout chỉ biến đổi vị trí ban đầu; vận tốc và luật tương tác không đổi. Đổi S không được làm lại một dataset khác.
+
+### Bước 2 — Đọc occupancy cùng candidates
+
+Thêm nhánh L để chuyển Uniform → Clustered → Dense → Uniform, rồi reset cùng seed.
+
+```cpp title="include/app/controls.hpp — if (key == SDLK_L)"
+if (key == SDLK_L) {
+    if (scene.layout == Layout::Uniform) {
+        scene.layout = Layout::Clustered;
+    } else if (scene.layout == Layout::Clustered) {
+        scene.layout = Layout::Dense;
+    } else {
+        scene.layout = Layout::Uniform;
+    }
+    resetScene(scene);
+}
+```
+
+Cell quá nhỏ tăng số cell duyệt; cell quá lớn chứa nhiều candidate. Khi đàn tụ rất đặc, Grid vẫn phải xét gần mọi cặp.
+
+### Bước 3 — Vẽ occupancy của snapshot đang xem
+
+Trong drawScene, occupancy được lấy từ số phần tử của bucket. Lớp tô màu chỉ là debug; không tham gia steering.
+
+```cpp title="include/app/view.hpp — if (scene.showOccupancy && !grid.buckets[cell].empty())"
+if (scene.showOccupancy && !grid.buckets[cell].empty()) {
+    const double ratio = static_cast<double>(grid.buckets[cell].size()) / std::max(std::size_t{1}, grid.maximumOccupancy);
+    const auto brightness = static_cast<std::uint32_t>(24 + 64 * ratio);
+    const auto color = (brightness << 24U) | (20U << 16U) | (brightness << 8U) | 255U;
+    rectangle(image, left, top, right, bottom, color, true);
+}
+```
+
+Phím L hoặc select tạo lại phân bố có chủ đích. Đây là reset dataset, khác với thao tác M chỉ đổi cách tìm hàng xóm.
+
+## Ghép các phần lại
+
+Phím L đổi layout và reset cùng seed. Đổi S chỉ hủy job/cache cũ, không tạo dataset khác. Khi vẽ, occupancy lấy từ grid của snapshot đang hiển thị; bảng metrics của bước vừa xong vẫn là số đo riêng của bước đó.
+
+### Bước 4 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 7; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 7"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_7 --parallel 2
+./build/Debug/project_28_checkpoint_7.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ N=1.024, seed=1. Đổi Uniform sang Dense rồi đọc max/cell và candidate count.
+2. Trong Dense, thử S=16,64,240. Neighbor count vẫn phải là 1.047.552 ở snapshot ban đầu, không giảm để chạy nhanh hơn.
+3. Tắt debug: đàn vẫn dùng cùng thuật toán và quy tắc. Số đo kernel không được gồm chi phí tô occupancy.
+
+## Tự kiểm tra kết quả
+
+- Cùng seed/layout tạo cùng input; đổi S không đổi position hoặc velocity.
+- Có đủ ba phân bố và lớp occupancy bật/tắt được.
+- Dense không giới hạn neighbor list và không giả định Grid luôn nhanh hơn.
+
+## Bài tập mở rộng
+
+Dự đoán cell size nào làm query tốn nhiều công nhất ở layout của bạn, rồi kiểm bằng counters trước khi nhìn timing. Bài 9 sẽ đo cả chi phí dựng grid.
+
+[Bài tiếp: Cập nhật 10.000 cá thể mà vẫn hủy được](/projects/boids-spatial-grid/08-chia-buoc-tinh-de-ui-phan-hoi).

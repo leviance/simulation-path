@@ -1,0 +1,175 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng Grid để cập nhật cả đàn
+
+## Vấn đề cần giải quyết
+
+Query đúng cho một cá thể chưa chứng minh Grid đúng cho cả đàn. Bây giờ ta đưa nó vào chính vòng mô phỏng, nơi mỗi cá thể phải nhận đúng danh sách hàng xóm của **cùng một snapshot**.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ computeSteering và integrateBoid nguyên như Project 27. Điểm rẽ duy nhất là tìm neighbors bằng brute hay Grid. Sau đó cả hai đường đều dùng cùng Params, fixedDt và quy tắc wrap.
+
+StepJob giữ snapshot đọc và output ghi. Chưa được lấy position đã cập nhật của cá thể trước để tính cá thể sau. Chỉ khi nextIndex=N mới đổi output thành đàn đang hiển thị.
+
+Checkpoint 5 chạy 256 hoặc 1.024 cá thể. Ta chưa mở preset 10.000 cho đến bài 8, khi có cách chia thời gian CPU và hủy bước dở. Mục tiêu ở đây là đúng trước, không phải một con số N trông ấn tượng.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-flock" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — Chọn phương thức mà không reset
+
+Thay createStep trong `include/grid/step.hpp`. Nhánh Grid dựng index từ chính job.snapshot, không từ một scene đang thay đổi.
+
+```cpp title="include/grid/step.hpp — createStep"
+inline StepJob createStep(const std::vector<Boid>& flock, const Params& params, double cellSize, Method method) {
+    const auto start = Clock::now();
+    validateBoids(flock, params);
+    if (method == Method::Brute && flock.size() > 1024) {
+        throw std::invalid_argument("Use Grid for counts above 1024");
+    }
+    StepJob job{};
+    job.snapshot = flock;
+    job.output.resize(flock.size());
+    job.params = params;
+    job.method = method;
+    job.startedAt = start;
+    static_cast<void>(gridGeometry(params, cellSize));
+    if (method == Method::Grid) {
+        const auto buildStart = Clock::now();
+        job.grid = buildGrid(job.snapshot, params, cellSize);
+        job.metrics.buildMs = milliseconds(buildStart, Clock::now());
+        job.metrics.occupiedCells = job.grid->occupiedCells;
+        job.metrics.maximumOccupancy = job.grid->maximumOccupancy;
+    }
+    job.metrics.totalMs = milliseconds(start, Clock::now());
+    return job;
+}
+```
+
+Brute/Grid cùng đọc một đàn hiện tại. Đổi phương thức chỉ hủy job dở, không đổi seed, position hay velocity.
+
+### Bước 2 — Giữ snapshot đọc và output ghi riêng
+
+Thay advanceStep: query có thể khác, nhưng steering và integrator không đổi. Các trường metrics được cộng trên công việc thực tế.
+
+```cpp title="include/grid/step.hpp — advanceStep"
+inline bool advanceStep(StepJob& job, std::size_t maximumAgents = 10000, double budgetMs = 6.0) {
+    if (maximumAgents == 0 || maximumAgents > 10000 || !std::isfinite(budgetMs) || budgetMs <= 0 || budgetMs > 1000) {
+        throw std::invalid_argument("Invalid batch budget");
+    }
+    if (job.cancelled) {
+        return false;
+    }
+    const auto start = Clock::now();
+    const std::size_t stopIndex = std::min(job.snapshot.size(), job.nextIndex + maximumAgents);
+    while (job.nextIndex < stopIndex) {
+        const std::size_t index = job.nextIndex;
+        const auto queryStart = Clock::now();
+        if (job.grid) {
+            queryGrid(job.snapshot, index, job.params, *job.grid, job.query);
+            job.metrics.candidates += job.query.candidates.size();
+            job.metrics.visitedCells += job.query.cells.size();
+        } else {
+            findNeighbors(job.snapshot, index, job.params, job.query.neighbors);
+            job.metrics.candidates += job.snapshot.size() - 1;
+        }
+        const auto queryEnd = Clock::now();
+        job.metrics.queryMs += milliseconds(queryStart, queryEnd);
+        job.metrics.neighbors += job.query.neighbors.size();
+        const auto steering = computeSteering(job.snapshot, index, job.query.neighbors, job.params);
+        job.output[index] = integrateBoid(job.snapshot[index], steering.acceleration, job.params, fixedDt);
+        job.metrics.updateMs += milliseconds(queryEnd, Clock::now());
+        ++job.nextIndex;
+    }
+    job.metrics.totalMs += milliseconds(start, Clock::now());
+    job.metrics.wallMs = milliseconds(job.startedAt, Clock::now());
+    return job.nextIndex == job.snapshot.size();
+}
+```
+
+Một StepJob giữ input và Params của riêng nó. Steering vẫn là hàm đã học; Grid chỉ cung cấp danh sách hàng xóm.
+
+### Bước 3 — Chỉ commit khi đủ cả đàn
+
+Trong `include/app/scene.hpp`, dùng advanceScene để commit cả đàn sau bước đầy đủ. Phần clock đã có trong starter; ở đây cần giữ nguyên dt.
+
+```cpp title="include/app/scene.hpp — advanceScene"
+inline void advanceScene(GridScene& scene, double elapsed) {
+    if (!scene.paused) {
+        scene.accumulator += elapsed;
+        if (scene.accumulator > fixedDt) {
+            scene.droppedSeconds += scene.accumulator - fixedDt;
+            scene.accumulator = fixedDt;
+        }
+        if (!scene.step && scene.accumulator + 1e-12 >= fixedDt) {
+            scene.step = createStep(scene.boids, scene.params, scene.cellSize, scene.method);
+        }
+    }
+    if (scene.step && advanceStep(*scene.step)) {
+        // Không công bố output dở: cả N cá thể đã đọc cùng snapshot cũ.
+        scene.boids.swap(scene.step->output);
+        scene.metrics = scene.step->metrics;
+        scene.step.reset();
+        ++scene.steps;
+        scene.time += fixedDt;
+        scene.accumulator = std::max(0.0, scene.accumulator - fixedDt);
+        scene.inspectionDirty = true;
+    }
+}
+```
+
+Sau khi nextIndex bằng N mới swap. Các checkpoint 5–7 dùng đàn nhỏ; bài 8 bổ sung chia thời gian và preset 10.000.
+
+### Bước 4 — Đổi Brute/Grid bằng phím M
+
+Thêm nhánh phím M trong applyKey. Chỉ đổi method, không gọi resetScene.
+
+```cpp title="include/app/controls.hpp — if (key == SDLK_M)"
+if (key == SDLK_M) {
+    stopScene(scene);
+    if (scene.method == Method::Brute) {
+        scene.method = Method::Grid;
+    } else if (scene.count <= 1024) {
+        scene.method = Method::Brute;
+    } else {
+        scene.notice = "Brute requires N <= 1024. N was not changed.";
+    }
+}
+```
+
+Sau khi nextIndex bằng N mới swap. Các checkpoint 5–7 dùng đàn nhỏ; bài 8 bổ sung chia thời gian và preset 10.000.
+
+## Ghép các phần lại
+
+Phím M đổi method. advanceScene tạo StepJob; advanceStep gọi query phù hợp rồi computeSteering/integrateBoid. Chỉ khi hàm trả hoàn tất mới swap output vào scene. Đây là một đường dữ liệu liền mạch, không phải hai mô phỏng có cấu hình khác nhau.
+
+### Bước 5 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 5; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 5"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_5 --parallel 2
+./build/Debug/project_28_checkpoint_5.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Pause, đổi M qua lại rồi đọc selected position/velocity: state phải giữ nguyên. Sau đó tiến một bước ở mỗi đường từ cùng snapshot bằng validator bài sau.
+2. Thử cập nhật vào snapshot ngay trong vòng lặp. Đảo thứ tự vector Boid sẽ làm lộ sự phụ thuộc thứ tự.
+3. So candidate count: brute ở N=1.024 luôn xét 1.047.552 cặp có hướng; Grid thường ít hơn ở phân bố đều nhưng không hứa trước một tỷ lệ.
+
+## Tự kiểm tra kết quả
+
+- Cả hai đường cùng dùng computeSteering, integrateBoid và fixedDt=1/60.
+- Input không đổi; output chỉ được commit khi đã tính đủ N.
+- Đổi method khi pause không tạo lại đàn hoặc đổi seed.
+
+## Bài tập mở rộng
+
+Chụp một snapshot nhỏ, tự gọi cả hai phương thức và ghép kết quả theo ID. Bài 6 sẽ biến phép kiểm này thành validator trong ứng dụng.
+
+[Bài tiếp: Kiểm chứng Grid có giữ nguyên mô phỏng không](/projects/boids-spatial-grid/06-kiem-chung-neighbor-va-steering).

@@ -96,9 +96,11 @@ export function validateBoidsParams(params: BoidsParams) {
   }
 }
 
-export function validateBoids(boids: readonly Boid[], params: BoidsParams) {
+export function validateBoids(boids: readonly Boid[], params: BoidsParams, maximumCount = 1024) {
   validateBoidsParams(params);
-  if (boids.length > 1024) throw new RangeError("Project 27 limit: 1024 boids");
+  if (!Number.isInteger(maximumCount) || maximumCount < 1 || maximumCount > 10000)
+    throw new RangeError("Invalid flock budget");
+  if (boids.length > maximumCount) throw new RangeError("Flock exceeds supported count");
   const ids = new Set<number>();
   for (const boid of boids) {
     if (!Number.isInteger(boid.id) || boid.id < 0 || boid.id > 0xffffffff || ids.has(boid.id))
@@ -118,9 +120,17 @@ export function validateBoids(boids: readonly Boid[], params: BoidsParams) {
   }
 }
 
-export function makeFlock(count: number, seed: number, params = defaultBoidsParams): Boid[] {
+export function makeFlock(
+  count: number,
+  seed: number,
+  params = defaultBoidsParams,
+  maximumCount = 1024,
+): Boid[] {
   validateBoidsParams(params);
-  if (!Number.isInteger(count) || count < 0 || count > 1024) throw new RangeError("Invalid count");
+  if (!Number.isInteger(maximumCount) || maximumCount < 1 || maximumCount > 10000)
+    throw new RangeError("Invalid flock budget");
+  if (!Number.isInteger(count) || count < 0 || count > maximumCount)
+    throw new RangeError("Invalid count");
   if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff)
     throw new RangeError("Invalid seed");
   let state = seed >>> 0;

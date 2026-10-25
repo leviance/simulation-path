@@ -1,0 +1,93 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng lại grid từ snapshot của đàn
+
+## Vấn đề cần giải quyết
+
+Biết địa chỉ của một điểm chưa giúp neighbor loop nhanh hơn. Ta còn cần biết trong mỗi cell đang có những cá thể nào. Vì đàn luôn chuyển động, danh sách đó chỉ đúng với snapshot đã dùng để dựng nó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi bucket giữ index vào snapshot, không giữ một bản sao của Boid. Chèn index 0,1,…,N−1 đúng một lần: sau đó tổng kích thước buckets phải bằng N, và không có index lặp.
+
+Chi phí dựng grid gồm tạo buckets và chèn toàn đàn, gần O(C+N), với C là số cell. Đây là chi phí **mỗi bước**, không phải khoản trả một lần lúc khởi động.
+
+Grid phục vụ hình debug và grid phục vụ bước mô phỏng có cùng cách dựng, nhưng có vòng đời khác nhau. Cache debug được giữ đến khi hình đang xem đổi; simulation step sẽ dựng grid riêng từ input của nó.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-build" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — Mỗi snapshot có grid riêng
+
+Thêm buildGrid vào `include/grid/storage.hpp`. `validateBoids` thuộc nền Project 27; hàm này đã được nâng budget lên 10.000 nhưng không đổi luật đàn.
+
+```cpp title="include/grid/storage.hpp — buildGrid"
+inline Grid buildGrid(const std::vector<Boid>& snapshot, const Params& params, double cellSize) {
+    validateBoids(snapshot, params);
+    Grid grid = gridGeometry(params, cellSize);
+    grid.buckets.resize(grid.columns * grid.rows);
+    for (std::size_t index = 0; index < snapshot.size(); ++index) {
+        auto& bucket = grid.buckets[gridAddress(snapshot[index].position, grid)];
+        if (bucket.empty()) {
+            ++grid.occupiedCells;
+        }
+        bucket.push_back(index);
+        grid.maximumOccupancy = std::max(grid.maximumOccupancy, bucket.size());
+    }
+    return grid;
+}
+```
+
+Không dùng grid dựng khi reset cho các bước sau. Cá thể có thể vượt cạnh cell dù chỉ di chuyển một khoảng nhỏ.
+
+### Bước 2 — Đưa từng chỉ số vào bucket
+
+Thay refreshInspection trong `include/app/scene.hpp` bằng phiên bản sau. Đây là chỗ nối lớp debug vào dữ liệu đang hiển thị, chưa thay toàn bộ neighbor loop.
+
+```cpp title="include/app/scene.hpp — refreshInspection"
+inline void refreshInspection(GridScene& scene) {
+    if (!scene.inspectionDirty) {
+        return;
+    }
+    scene.inspectionQuery = {};
+    findNeighbors(scene.boids, scene.selected, scene.params, scene.inspectionQuery.neighbors);
+    scene.inspectionGrid = buildGrid(scene.boids, scene.params, scene.cellSize);
+    scene.inspectionDirty = false;
+}
+```
+
+Bucket giữ index vào snapshot, không copy Boid và không đổi ID. Một vòng N lượt là đủ để chèn toàn đàn.
+
+## Ghép các phần lại
+
+Khi commit, drag hoặc đổi tham số, scene đánh dấu inspectionDirty. drawScene gọi refreshInspection trước khi vẽ; khi không có thay đổi thì giữ cache. Mỗi simulation step sẽ có một grid riêng từ bài 5, không mượn cache của renderer.
+
+### Bước 3 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 2; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 2"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_2 --parallel 2
+./build/Debug/project_28_checkpoint_2.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Bấm N nhiều lần và nhìn cá thể vượt cạnh cell. Bucket chứa nó phải đổi theo state mới.
+2. Thử bỏ đánh dấu inspectionDirty khi commit state: đàn vẫn bay nhưng lớp cell có thể đọc dữ liệu cũ. Đặt cờ lại rồi quan sát sự khác biệt.
+3. Trong test, cộng kích thước mọi bucket và đếm số lần xuất hiện của từng index; đừng chỉ nhìn tổng N.
+
+## Tự kiểm tra kết quả
+
+- Mỗi index xuất hiện đúng một lần và nằm trong bucket khớp gridAddress.
+- occupiedCells và maximumOccupancy khớp dữ liệu buckets.
+- Pause/drag/đổi cell size không để debug dùng position mới với grid cũ.
+
+## Bài tập mở rộng
+
+Thử dựng grid cho đàn rỗng trong test thuần. Kết quả nên có geometry hợp lệ, không có occupied cell và maximumOccupancy=0. Bài sau bắt đầu từ cell chứa tâm để tìm vùng cần đọc.
+
+[Bài tiếp: Tìm đủ cell ở hai phía của đường biên](/projects/boids-spatial-grid/03-tim-cell-qua-bien-tuan-hoan).

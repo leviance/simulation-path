@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ đàn Boids đến địa chỉ của một cell
+
+## Vấn đề cần giải quyết
+
+Ở Project 27, mỗi cá thể phải nhìn qua cả đàn để tìm hàng xóm. Tăng từ 1.024 lên 10.000 cá thể sẽ làm số phép kiểm tăng mạnh, dù đa số cặp ở rất xa nhau. Ta cần một cách bỏ qua vùng xa mà không đổi điều cá thể nhìn thấy.
+
+Bài này chưa thay neighbor loop. Ta chỉ trả lời câu hỏi đầu tiên: một position nằm trong cell nào? Starter đã có đàn Boids hoàn chỉnh từ Project 27. Các header `include/boids/` là phần được cung cấp; `include/grid/` chứa kiểu dữ liệu và chỗ để thêm thuật toán mới. Khung SDL, vẽ đàn và đường cập nhật brute force đã chạy được ngay.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chia world 960×600 thành các cell có cạnh S. Với tọa độ đã wrap vào miền, cột là floor(x/S), hàng là floor(y/S), còn địa chỉ một chiều là row×columns+column. Đây vẫn là row-major, nhưng **columns không phải width của world**.
+
+Số cột dùng ceil(width/S). Chẳng hạn S=100 cần 10 cột; cột cuối chỉ rộng 60. Điểm x=959 nằm trong cột 9, còn x=960 đi qua mép và trở thành x=0. Tọa độ −1 cũng wrap thành 959 trước khi chia.
+
+$column=\lfloor wrap(x,W)/S\rfloor$, $index=row\,columns+column$.
+
+Chỉ kiểm budget rồi mới cấp phát buckets. Một domain hợp lệ không có nghĩa mọi cell size đều phù hợp với bộ nhớ.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-address" />
+
+## Viết code từng bước
+
+Tải ZIP ở trang tổng quan. Đứng tại thư mục chứa CMakeLists.txt, chạy `cmake -S . -B build -DBUILD_CHECKPOINTS=ON`. Viết tiếp trên starter, không sửa final. Các đường dẫn trong tiêu đề code block tính từ starter hoặc checkpoint tương ứng.
+
+### Bước 1 — Giữ nguyên đàn của Project 27
+
+Trong `include/grid/coordinates.hpp`, giữ struct Grid đã có và thêm hai hàm dưới đây vào namespace lab. `gridGeometry` chưa cấp phát buckets.
+
+```cpp title="include/grid/coordinates.hpp — gridGeometry"
+inline Grid gridGeometry(const Params& params, double cellSize) {
+    if (!validParams(params) || !std::isfinite(cellSize) || cellSize < 4.0 || cellSize > 1e6) {
+        throw std::invalid_argument("Invalid domain or cell size");
+    }
+    Grid grid{};
+    grid.width = params.width;
+    grid.height = params.height;
+    grid.cellSize = cellSize;
+    grid.columns = static_cast<std::size_t>(std::max(1.0, std::ceil(params.width / cellSize)));
+    grid.rows = static_cast<std::size_t>(std::max(1.0, std::ceil(params.height / cellSize)));
+    if (grid.columns > 4096 || grid.rows > 4096 / grid.columns) {
+        throw std::invalid_argument("Grid exceeds 4096 cells");
+    }
+    return grid;
+}
+
+inline std::size_t gridAddress(Vec2 position, const Grid& grid) {
+    if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
+        throw std::invalid_argument("Invalid grid position");
+    }
+    const double x = wrap(position.x, grid.width);
+    const double y = wrap(position.y, grid.height);
+    const auto column = std::min(grid.columns - 1, static_cast<std::size_t>(std::floor(x / grid.cellSize)));
+    const auto row = std::min(grid.rows - 1, static_cast<std::size_t>(std::floor(y / grid.cellSize)));
+    return row * grid.columns + column;
+}
+```
+
+Starter đã có đầy đủ steering và tích phân. Các header trong include/boids là nền có sẵn; phần mới nằm trong include/grid và include/app.
+
+### Bước 2 — Tạo geometry trước khi cấp phát
+
+Trong `include/app/scene.hpp`, thêm helper này sau struct GridScene. Nó chỉ đọc vị trí của cá thể đang chọn.
+
+```cpp title="include/app/scene.hpp — selectedCell"
+inline std::size_t selectedCell(const GridScene& scene) {
+    const auto geometry = gridGeometry(scene.params, scene.cellSize);
+    return gridAddress(scene.boids.at(scene.selected).position, geometry);
+}
+```
+
+ceil giữ cả cell cuối ngắn. Budget 4.096 cell được kiểm trước khi tạo buckets, không để cell size cực nhỏ làm cấp phát vô hạn.
+
+### Bước 3 — Đọc địa chỉ của một position
+
+Trong `drawLabels` của `include/app/presentation.hpp`, thay dòng ghi thông tin selected bằng lời gọi có `selectedCell(scene)`. Buffer line và renderer đã có trong khung.
+
+```cpp title="include/app/presentation.hpp — selected label"
+std::snprintf(line, sizeof(line), "Selected ID=%u cell=%zu | cells=%zu candidates=%zu neighbors=%zu | drawn=%zu", scene.boids.at(scene.selected).id, selectedCell(scene), scene.inspectionQuery.cells.size(), scene.inspectionQuery.candidates.size(), scene.inspectionQuery.neighbors.size(), scene.drawn);
+```
+
+Wrap đưa tọa độ âm vào miền tuần hoàn; floor chọn cell chứa điểm. Index row-major dùng columns, không dùng chiều rộng world.
+
+## Ghép các phần lại
+
+Event loop gọi presentFrame; drawLabels đọc selectedCell từ position hiện tại. Hai helper geometry/address chưa đổi steering hoặc neighbor loop. Chạy checkpoint 1 để thấy địa chỉ thay đổi khi chọn/kéo, rồi tự nối cùng lời gọi vào starter.
+
+### Bước 4 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 1; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 1"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_1 --parallel 2
+./build/Debug/project_28_checkpoint_1.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Khi pause, chọn cá thể gần mép rồi kéo sang cell khác. Địa chỉ phải đổi ngay; position không đổi chỉ vì bạn thay S.
+2. Tính tay địa chỉ của (959,599) với S=100: row=5, column=9, index=59. Kiểm thêm (−1,−1) bằng test thuần, không cần kéo con trỏ ra ngoài viewport.
+3. Thử thay ceil bằng floor trong bài làm. Cell cuối bị mất; đừng dùng clamp để che việc thiếu cột.
+
+## Tự kiểm tra kết quả
+
+- Starter và checkpoint 1 đều mở được đàn Boids; checkpoint 1 có thêm địa chỉ selected cell.
+- gridAddress(−1,−1) cho 59 với S=100; (960,600) cho 0.
+- Thông số không hữu hạn hoặc grid vượt 4.096 cell bị từ chối trước cấp phát.
+
+## Bài tập mở rộng
+
+Thêm fixture cho domain có width và height đều không chia hết cho S. Ghi rõ điểm nào nằm sát cell cuối. Bài tiếp theo sẽ đưa cả đàn vào những địa chỉ này.
+
+[Bài tiếp: Dựng lại grid từ snapshot của đàn](/projects/boids-spatial-grid/02-dung-grid-tu-snapshot).

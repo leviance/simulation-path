@@ -1,0 +1,120 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện và nghiệm thu đàn Boids lớn
+
+## Vấn đề cần giải quyết
+
+Bản cuối không chỉ là một hình đàn bay đẹp. Người khác phải tải ZIP, build độc lập, chạy đúng 10.000 cá thể và có cách biết một thay đổi đã làm query hoặc steering sai.
+
+## Hiểu ý tưởng trước khi viết code
+
+Source chia ba phần: `include/boids/` giữ mô hình Project 27; `include/grid/` giữ indexing/query/jobs; `include/app/` giữ input, view và SDL. Main chỉ nối vào ứng dụng. Việc tách file không giấu mã: mọi file đầy đủ có trong bộ xem source cuối bài và ZIP.
+
+Final là target mặc định. BUILD_CHECKPOINTS chỉ mở thêm starter và mười bản đối chiếu; không cần viết lại CMake cho từng bài. Mặc định FetchContent lấy đúng SDL 3.4.8 đã khóa checksum và link SDL3::SDL3.
+
+Tests dùng bộ đếm failures và exit code, không dùng assert có thể bị tắt ở Release. CTest kiểm code thuần; smoke hữu hạn kiểm đường SDL cập nhật/vẽ đủ đàn. Kiểm thao tác người dùng trực tiếp vẫn phải ghi riêng.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-final" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — Build từ ZIP độc lập
+
+Đây là toàn bộ `src/main.cpp`. Phần triển khai đầy đủ nằm trong các header đi kèm, không còn stub hay code rút gọn cần đoán.
+
+```cpp title="src/main.cpp — *"
+// SDL resources, event routing and the finite diagnostic modes live in app/.
+#include "app/application.hpp"
+
+int main(int argc, char** argv) {
+    return lab::runApplication(argc, argv);
+}
+```
+
+Final là target mặc định. BUILD_CHECKPOINTS bật starter và mười checkpoint; không cần source của Project 27 nằm cạnh ZIP.
+
+### Bước 2 — Chạy CTest ở hai cấu hình
+
+Đây là toàn bộ entry của tests. Các ca kiểm nằm trong boids-grid-cases.hpp và đều chạy ở cả Debug lẫn Release.
+
+```cpp title="tests/tests.cpp — *"
+#include <cstdlib>
+#include <iostream>
+#include <string_view>
+
+namespace grid_tests {
+int checks = 0;
+int failures = 0;
+
+// Không dùng assert: các phép kiểm vẫn chạy khi Release bật NDEBUG.
+void check(bool condition, std::string_view message) {
+    ++checks;
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
+    }
+}
+} // namespace grid_tests
+
+#include "boids-grid-cases.hpp"
+
+int main() {
+    grid_tests::run();
+    const int failures = grid_tests::failures;
+    if (failures != 0) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+```
+
+Các test thuần không mở cửa sổ. Có oracle chín ảnh, insertion, equivalence, batching, cancellation và cập nhật 10.000.
+
+## Ghép các phần lại
+
+Giữ nguyên bố cục thư mục khi giải nén. Source viewer cuối bài cho xem từng file hoàn chỉnh; ZIP còn có tests và README để build độc lập. Không cần đăng nhập, backend hoặc source từ một project khác.
+
+### Bước 3 — Build và chạy toàn bộ dự án
+
+Đứng tại thư mục giải nén chứa CMakeLists.txt. Trên Visual Studio 2022, executable nằm trong build/Debug hoặc build/Release. Trên Ninja/Make single-config, chọn CMAKE_BUILD_TYPE khi configure và chạy executable ngay trong build.
+
+```bash title="Build, CTest và các lượt chạy hữu hạn"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+./build/Release/project_28_final.exe --smoke-large
+./build/Release/project_28_final.exe --benchmark
+./build/Release/project_28_final.exe --benchmark-cells-dense
+```
+
+Mặc định tests kiểm final/include, tức bản tham khảo. Khi starter của bạn đã có đủ thuật toán, trong bản ZIP học tập đổi include của target tests thành dòng sau, configure/build lại rồi chạy cả hai lệnh CTest ở trên:
+
+```cmake title="CMakeLists.txt — kiểm bài làm đã hoàn thiện"
+target_include_directories(project_28_tests PRIVATE starter/include)
+```
+
+Không sửa CMake được sinh trong repository website. Source hoàn chỉnh từng file có ở phần mã nguồn cuối bài và ZIP; giữ tests cùng README khi chia sẻ bài làm.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm đổi điều kiện `<= radius` thành `< radius` trong bài làm: fixture biên phải thất bại.
+2. Bỏ một lần chèn vào bucket: test insertion và oracle phải bắt được trước khi bạn nhìn ảnh.
+3. Hủy Dense 10.000 giữa bước, đổi method ở đàn nhỏ và đổi S khi pause. Không thao tác nào được dùng lại grid sai snapshot.
+
+## Tự kiểm tra kết quả
+
+- CMake build/run được final, starter và mười checkpoint bằng source trong ZIP, không phụ thuộc repo cha.
+- CTest Debug/Release đều xanh và không tắt check dưới NDEBUG.
+- Smoke lớn báo N=10000, drawn=10000, steps≥1; đàn được cập nhật bằng ba steering thật.
+- Benchmark đủ scale/cell study và có số đo Dense bất lợi; không dùng checksum thay validation.
+- Desktop trực tiếp được ghi riêng: Canvas keyboard/mouse, resize/DPR, theme/progress, code copy và ZIP link.
+
+## Bài tập mở rộng
+
+Chọn một lỗi bạn đã gặp, viết fixture tái hiện nhỏ nhất rồi thêm vào tests. Sau đó hãy chuyển sang Project 29 — Quadtree phục vụ biên tập bản đồ 2D, một sản phẩm khác chứ không phải đổi Grid sang tree chỉ để chọn điểm.
+
+[Trở về roadmap](/roadmap#project-29).

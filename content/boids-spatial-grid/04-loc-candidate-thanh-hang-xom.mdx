@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ candidate đến hàng xóm thật sự
+
+## Vấn đề cần giải quyết
+
+Cell chỉ giúp thu hẹp vùng tìm kiếm. Cá thể ở góc một cell được duyệt có thể vẫn nằm ngoài hình tròn radius. Nếu coi mọi candidate là hàng xóm, Grid sẽ làm thay đổi hành vi đàn dù hình ảnh ban đầu có vẻ hợp lý.
+
+## Hiểu ý tưởng trước khi viết code
+
+Query có ba kết quả khác nhau: cells đã đọc, candidates được xét khoảng cách, và neighbors qua bước lọc. Self không tính vào candidates; hai cá thể khác ID nhưng trùng position vẫn có thể là hàng xóm, kể cả R=0.
+
+Dùng lại displacement và minimumImage của Project 27. Với offset=(dx,dy), nhận neighbor khi dx²+dy²≤R². Không thêm epsilon để làm tập hàng xóm của hai thuật toán khác nhau.
+
+Màu xanh dương trong Canvas là candidate chưa lọt radius; vàng là neighbor thật. Các màu này lấy từ queryGrid đang viết, không phải một query brute force riêng để trang trí.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-exact" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — Tách candidate khỏi neighbor
+
+Thêm queryGrid vào `include/grid/query.hpp`. GridQuery đã có trong starter; ba vector được clear trước mỗi truy vấn để có thể tái sử dụng bộ nhớ.
+
+```cpp title="include/grid/query.hpp — queryGrid"
+inline void queryGrid(const std::vector<Boid>& snapshot, std::size_t targetIndex, const Params& params, const Grid& grid, GridQuery& query) {
+    const Boid& target = snapshot.at(targetIndex);
+    if (grid.width != params.width || grid.height != params.height) {
+        throw std::invalid_argument("Query/grid domain mismatch");
+    }
+    query.cells.clear();
+    query.candidates.clear();
+    query.neighbors.clear();
+    const auto columns = axisCells(target.position.x, params.radius, grid.width, grid.cellSize);
+    const auto rows = axisCells(target.position.y, params.radius, grid.height, grid.cellSize);
+    const double radiusSquared = params.radius * params.radius;
+    for (std::size_t row : rows) {
+        for (std::size_t column : columns) {
+            const std::size_t cell = row * grid.columns + column;
+            query.cells.push_back(cell);
+            for (std::size_t index : grid.buckets.at(cell)) {
+                const Boid& other = snapshot.at(index);
+                if (other.id == target.id) {
+                    continue;
+                }
+                query.candidates.push_back(index);
+                const Vec2 offset = displacement(target.position, other.position, params);
+                if (offset.x * offset.x + offset.y * offset.y <= radiusSquared) {
+                    query.neighbors.push_back(index);
+                }
+            }
+        }
+    }
+}
+```
+
+Candidate chỉ cần thuộc bucket đã chọn. Nó có thể nằm ngoài hình tròn và phải qua bước lọc.
+
+### Bước 2 — Dùng lại displacement của Project 27
+
+Trong refreshInspection, thay phần chỉ tính cell bằng lời gọi queryGrid. Nhờ đó debug đọc đúng kết quả thuật toán mới.
+
+```cpp title="include/app/scene.hpp — refreshInspection"
+inline void refreshInspection(GridScene& scene) {
+    if (!scene.inspectionDirty) {
+        return;
+    }
+    scene.inspectionQuery = {};
+    findNeighbors(scene.boids, scene.selected, scene.params, scene.inspectionQuery.neighbors);
+    scene.inspectionGrid = buildGrid(scene.boids, scene.params, scene.cellSize);
+    const auto& grid = *scene.inspectionGrid;
+    const auto point = scene.boids.at(scene.selected).position;
+    const auto columns = axisCells(point.x, scene.params.radius, grid.width, grid.cellSize);
+    const auto rows = axisCells(point.y, scene.params.radius, grid.height, grid.cellSize);
+    for (std::size_t row : rows) {
+        for (std::size_t column : columns) {
+            scene.inspectionQuery.cells.push_back(row * grid.columns + column);
+        }
+    }
+    queryGrid(scene.boids, scene.selected, scene.params, *scene.inspectionGrid, scene.inspectionQuery);
+    scene.inspectionDirty = false;
+}
+```
+
+Minimum image phải giống ở query, separation và cohesion. Điều kiện `<=` nhận đúng biên radius; self được nhận diện bằng ID.
+
+## Ghép các phần lại
+
+refreshInspection gọi queryGrid cho cá thể được chọn; view dùng chính candidates/neighbors này để tô màu và vẽ steering. Whole-flock step vẫn là brute force ở checkpoint 4. Bài sau mới chuyển đường query của mọi cá thể.
+
+### Bước 3 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 4; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 4"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_4 --parallel 2
+./build/Debug/project_28_checkpoint_4.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Chọn cá thể gần một góc cell. Tăng R một ít: candidate count có thể giữ nguyên trong khi neighbor count tăng.
+2. Đặt hai cá thể khác ID trùng position trong fixture và dùng R=0. Chúng phải nhìn thấy nhau nhưng không trả self.
+3. Cố ý bỏ kiểm khoảng cách: validator ở bài 6 phải phát hiện tập hàng xóm thừa.
+
+## Tự kiểm tra kết quả
+
+- R nhỏ hơn, bằng và lớn hơn S đều cho tập IDs khớp oracle brute force.
+- Cells và candidates không trùng; không cần sort trong vòng cập nhật nóng.
+- Cá thể ở mép đối diện và đúng biên radius được giữ lại.
+
+## Bài tập mở rộng
+
+Tạo một fixture có candidate nằm đúng góc AABB nhưng ngoài hình tròn. Ghi ra cả ba con số cells/candidates/neighbors rồi giải thích vì sao chúng khác nhau.
+
+[Bài tiếp: Dùng Grid để cập nhật cả đàn](/projects/boids-spatial-grid/05-cap-nhat-toan-dan-bang-grid).

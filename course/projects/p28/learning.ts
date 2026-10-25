@@ -1,225 +1,301 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"];
-
 const learning = {
   guides: {
     "p28-l01": {
-      focus:
-        "Giữ nguyên đám hạt và vòng tròn truy vấn của Project 27, rồi học cách xác định một điểm thuộc ô nào trong lưới.",
+      focus: "Ánh xạ position vào grid, xử lý tọa độ âm và cell cuối không đủ rộng.",
       expected:
-        "Với `cellSize = 0.05`, vùng `[0,1]²` tạo thành lưới 20×20; hai mép biên được đưa vào ô đầu và ô cuối đúng quy ước.",
-      files,
+        "Đàn Boids vẫn chạy bằng brute force; chọn hoặc kéo một cá thể thấy địa chỉ cell đổi đúng. Fixture (959,599), S=100 cho index=59; (960,600) wrap về index=0.",
+      files: ["include/grid/coordinates.hpp", "include/app/scene.hpp", "include/app/presentation.hpp"],
       steps: [
         {
-          title: "Tính kích thước grid từ bounds",
+          title: "Giữ nguyên đàn của Project 27",
           explanation:
-            "Dùng `ceil` để ô cuối cùng vẫn phủ phần còn dư khi chiều rộng thế giới không chia hết cho `cellSize`.",
+            "Starter đã có đầy đủ steering và tích phân. Các header trong include/boids là nền có sẵn; phần mới nằm trong include/grid và include/app.",
         },
         {
-          title: "Floor world coordinate về cell coordinate",
+          title: "Tạo geometry trước khi cấp phát",
           explanation:
-            "Dùng `floor` để chọn ô nằm bên dưới và bên trái điểm. Ta đang chia không gian thành vùng, không tìm ô có tâm gần nhất.",
+            "ceil giữ cả cell cuối ngắn. Budget 4.096 cell được kiểm trước khi tạo buckets, không để cell size cực nhỏ làm cấp phát vô hạn.",
         },
         {
-          title: "Clamp maximum boundary",
+          title: "Đọc địa chỉ của một position",
           explanation:
-            "Một điểm đúng tại `xMax` có thể cho chỉ số thô bằng `columns`. Sau khi xác nhận điểm vẫn nằm trong world bounds, đưa nó về `columns - 1`.",
+            "Wrap đưa tọa độ âm vào miền tuần hoàn; floor chọn cell chứa điểm. Index row-major dùng columns, không dùng chiều rộng world.",
         },
       ],
     },
     "p28-l02": {
-      focus:
-        "Tạo một bucket cho mỗi ô và đưa index của từng hạt vào đúng bucket, thay vì sao chép toàn bộ `Particle`.",
+      focus: "Đưa mỗi cá thể vào đúng một bucket và biết khi nào grid đã cũ.",
       expected:
-        "Tổng số phần tử trong các bucket bằng N, mỗi index xuất hiện đúng một lần và số liệu lấp đầy thay đổi hợp lý theo `seed` cùng `cellSize`.",
-      files,
+        "Debug có buckets đúng với state đang xem. Sau single-step hoặc drag, cá thể đã vượt cạnh cell phải xuất hiện trong bucket mới; mỗi index được chèn đúng một lần.",
+      files: ["include/grid/storage.hpp", "include/app/scene.hpp"],
       steps: [
         {
-          title: "Bucket chỉ giữ index",
+          title: "Mỗi snapshot có grid riêng",
           explanation:
-            "Vector hạt vẫn là nguồn dữ liệu duy nhất. Lưới chỉ giữ các chỉ mục để thu hẹp những hạt cần kiểm.",
+            "Không dùng grid dựng khi reset cho các bước sau. Cá thể có thể vượt cạnh cell dù chỉ di chuyển một khoảng nhỏ.",
         },
         {
-          title: "Rebuild theo một vòng lặp",
+          title: "Đưa từng chỉ số vào bucket",
           explanation:
-            "Mỗi hạt được đổi sang địa chỉ ô đúng một lần rồi thêm index vào bucket tương ứng.",
+            "Bucket giữ index vào snapshot, không copy Boid và không đổi ID. Một vòng N lượt là đủ để chèn toàn đàn.",
         },
         {
-          title: "Đếm occupancy để kiểm cấu trúc",
+          title: "Nối grid vào lớp debug",
           explanation:
-            "Số hạt đã chèn, số ô không rỗng và bucket lớn nhất giúp phát hiện hạt bị bỏ sót hoặc lưới đang quá thô.",
+            "refreshInspection chỉ dựng lại khi state hoặc tham số thay đổi. Đây là cache cho hình đang xem, không thay grid riêng của simulation step.",
         },
       ],
     },
     "p28-l03": {
-      focus:
-        "Từ hình chữ nhật bao quanh vòng tròn, xác định dải hàng và cột có khả năng chứa hit rồi xử lý đúng bốn mép của world.",
+      focus: "Chia khoảng tuần hoàn, xử lý cell cuối ngắn và tránh duyệt trùng.",
       expected:
-        "Mọi cell có thể chứa hit đều được thăm; query ở góc không tạo index âm hoặc mở một cell hai lần.",
-      files,
+        "Vùng query nối qua hai mép và không lặp cell. Fixture width=960, S=100, tâm x=0, R=64 nhận các cột 0,8,9; toàn đàn vẫn chạy bằng brute force.",
+      files: ["include/grid/query.hpp", "include/app/scene.hpp"],
       steps: [
         {
-          title: "Lấy AABB của circle",
+          title: "Tách khoảng bị cắt bởi mép",
           explanation:
-            "`center ± radius` cho bốn cạnh của hình chữ nhật bao. Hình này tính rất rẻ và chắc chắn phủ trọn vòng tròn.",
+            "Khoảng [x−R,x+R] có thể đi qua 0 hoặc width. Chia thành hai đoạn trong miền giúp dùng cùng phép floor như bước chèn.",
         },
         {
-          title: "Đổi hai góc AABB thành cell range",
+          title: "Giữ cell cuối ngắn trong phép tính",
           explanation:
-            "Đổi góc nhỏ nhất và lớn nhất thành chỉ số hàng, cột. Hai vòng lặp lồng nhau sau đó thăm mỗi ô đúng một lần.",
+            "Với width=960, S=100, cell cuối chỉ rộng 60. Tâm 0, R=64 phải xét cột 8,9,0; ±ceil(R/S) quanh cột 0 sẽ bỏ cột 8.",
         },
         {
-          title: "Clamp sau overlap test",
+          title: "Loại cell trùng trước khi query",
           explanation:
-            "Nếu hình chữ nhật không chạm world, trả về dải rỗng. Chỉ sau khi biết hai vùng có giao nhau mới giới hạn chỉ số về phạm vi lưới.",
+            "Tập cột và tập hàng đều không trùng; tích Descartes vì thế không lặp bucket. Không sửa bằng cách cắt bớt hàng xóm ở cuối.",
         },
       ],
     },
     "p28-l04": {
-      focus:
-        "Duyệt các bucket vừa chọn, sau đó kiểm khoảng cách bình phương của từng hạt để loại những điểm chỉ nằm trong hình chữ nhật bao.",
+      focus: "Lọc theo khoảng cách của Project 27; bỏ self nhưng giữ cá thể trùng vị trí.",
       expected:
-        "`visitedCells` bằng số ô trong dải, `candidatesChecked` bằng tổng kích thước các bucket đã thăm và kết quả không chứa điểm giả ở bốn góc hình chữ nhật bao.",
-      files,
+        "Selected query phân biệt cells/candidates/neighbors. Điểm ngoài hình tròn không trở thành hàng xóm; khác ID trùng vị trí vẫn được nhận ở R=0.",
+      files: ["include/grid/query.hpp", "include/app/scene.hpp"],
       steps: [
         {
-          title: "Đếm cell trước khi đọc bucket",
+          title: "Tách candidate khỏi neighbor",
           explanation:
-            "`visitedCells` cho biết chi phí duyệt lưới; `candidatesChecked` cho biết có bao nhiêu phép kiểm khoảng cách thật sự được thực hiện.",
+            "Candidate chỉ cần thuộc bucket đã chọn. Nó có thể nằm ngoài hình tròn và phải qua bước lọc.",
         },
         {
-          title: "Không tin candidate cell tuyệt đối",
+          title: "Dùng lại displacement của Project 27",
           explanation:
-            "Một ô chạm hình chữ nhật bao vẫn có thể nằm ngoài vòng tròn. Mỗi hạt lấy từ bucket vẫn phải qua phép kiểm `distance² <= radius²`.",
+            "Minimum image phải giống ở query, separation và cohesion. Điều kiện <= nhận đúng biên radius; self được nhận diện bằng ID.",
         },
         {
-          title: "Chốt nearest tie theo index",
+          title: "Kiểm trên cá thể đang chọn",
           explanation:
-            "Thứ tự duyệt bucket không còn trùng thứ tự toàn cục của vector hạt. Khi hai khoảng cách bằng nhau, hãy chủ động chọn index nhỏ hơn.",
+            "Debug lấy kết quả từ queryGrid thật. Đổi màu vài điểm bằng brute force không chứng minh thuật toán Grid đang dùng là đúng.",
         },
       ],
     },
     "p28-l05": {
-      focus:
-        "Chạy cùng truy vấn bằng brute force để kiểm lưới, rồi so hai tập hit mà không phụ thuộc vào thứ tự duyệt bucket.",
+      focus: "Thay neighbor search, giữ nguyên steering và chỉ đổi state sau một bước đầy đủ.",
       expected:
-        "Cả 32 truy vấn có seed cố định lẫn các ca ở góc và trên biên đều cho cùng tập hit và cùng hạt gần nhất.",
-      files,
+        "N=256 hoặc 1.024 chạy bằng Brute hoặc Grid trên cùng state. M không reset đàn; single-step tăng time đúng 1/60 s sau khi đã cập nhật đủ N.",
+      files: ["include/grid/step.hpp", "include/app/scene.hpp", "include/app/controls.hpp"],
       steps: [
         {
-          title: "So set thay vì thứ tự traversal",
+          title: "Chọn phương thức mà không reset",
           explanation:
-            "Sao chép rồi sắp xếp hai danh sách chỉ trong bước kiểm tra. Hàm truy vấn thật không phải trả thêm chi phí chỉ để có cùng thứ tự với brute force.",
+            "Brute/Grid cùng đọc một đàn hiện tại. Đổi phương thức chỉ hủy job dở, không đổi seed, position hay velocity.",
         },
         {
-          title: "So nearest hit riêng",
+          title: "Giữ snapshot đọc và output ghi riêng",
           explanation:
-            "Hai tập hit bằng nhau chưa đảm bảo quy tắc xử lý khoảng cách bằng nhau giống nhau, vì vậy cần so riêng `nearestIndex`.",
+            "Một StepJob giữ input và Params của riêng nó. Steering vẫn là hàm đã học; Grid chỉ cung cấp danh sách hàng xóm.",
         },
         {
-          title: "Đưa edge cases vào query set",
+          title: "Chỉ commit khi đủ cả đàn",
           explanation:
-            "Tâm ở góc và circle chạm boundary thường làm lộ lỗi clamp mà query giữa world không thấy.",
+            "Sau khi nextIndex bằng N mới swap. Các checkpoint 5–7 dùng đàn nhỏ; bài 8 bổ sung chia thời gian và preset 10.000.",
         },
       ],
     },
     "p28-l06": {
-      focus:
-        "Đo Spatial Grid và brute force bằng đúng cùng dữ liệu, có warm-up và checksum; thời gian dựng lưới được báo riêng.",
+      focus: "Đối chiếu toàn đàn nhỏ: tập hàng xóm, từng steering và state một bước.",
       expected:
-        "Checksum bằng nhau, brute scans=N×Q×R, grid candidates nhỏ hơn baseline và timing của hai path đều finite.",
-      files,
+        "Bấm V để đối chiếu mọi cá thể của đàn nhỏ: checked=N, failures=0. Bỏ một bucket trong fixture phải tạo failures; hủy không đổi state đang xem.",
+      files: [
+        "include/grid/validation.hpp",
+        "include/app/controls.hpp",
+        "tests/boids-grid-cases.hpp",
+      ],
       steps: [
         {
-          title: "Giữ workload chung",
+          title: "So tập hàng xóm trước khi so số thực",
           explanation:
-            "Cả hai thuật toán nhận cùng vector hạt và cùng các vòng tròn truy vấn. Chỉ cách tìm những hạt cần kiểm là khác nhau.",
+            "Sắp thứ tự index/ID để so tập, không ép thứ tự bucket phải giống brute force.",
         },
         {
-          title: "Tách build khỏi query",
+          title: "So từng steering và state một bước",
           explanation:
-            "Scene đứng yên chỉ build một lần; nếu particles chuyển động, rebuild phải được báo thành một chi phí khác.",
+            "Tolerance 1e−9 áp dụng cho separation, alignment, cohesion, acceleration, position và velocity. Không dùng quỹ đạo dài phải trùng bit.",
         },
         {
-          title: "Đọc exact work trước timing",
+          title: "Cố ý làm hỏng grid",
           explanation:
-            "Đọc số hạt đã kiểm và số lần quét trước khi nhìn thời gian. Checksum xác nhận cả hai phía vẫn giải đúng cùng một bài toán.",
+            "Bỏ một bucket rồi validator phải phát hiện sai khác. Checksum và một vài ảnh nhìn giống nhau không thay được phép kiểm này.",
         },
       ],
     },
     "p28-l07": {
-      focus:
-        "Thử bốn giá trị `cellSize` trên cùng dữ liệu để xem kích thước ô ảnh hưởng đến số bucket, số ô phải thăm và số hạt phải kiểm ra sao.",
+      focus: "Thử phân bố đều, hai cụm và cụm rất đặc trên cùng seed; đọc occupancy.",
       expected:
-        "Ô nhỏ thường làm truy vấn thăm nhiều ô hơn nhưng kiểm ít hạt hơn; ô lớn tạo ít bucket hơn nhưng mỗi bucket đông hơn.",
-      files,
+        "Có ba layout tái lập theo seed. Đổi S không đổi input; Dense ở N=1.024 vẫn có đủ 1.047.552 hàng xóm có hướng và occupancy tập trung.",
+      files: ["include/grid/dataset.hpp", "include/app/view.hpp", "include/app/controls.hpp"],
       steps: [
         {
-          title: "Rebuild riêng cho từng cellSize",
+          title: "Giữ seed và cell size độc lập",
           explanation:
-            "Mỗi `cellSize` tạo một cách chia lưới khác, vì vậy phải dựng lại đúng hệ bucket trước khi đo dòng kết quả tương ứng.",
+            "Các layout chỉ biến đổi vị trí ban đầu; vận tốc và luật tương tác không đổi. Đổi S không được làm lại một dataset khác.",
         },
         {
-          title: "Ghi nhiều đại lượng cùng lúc",
+          title: "Đọc occupancy cùng candidates",
           explanation:
-            "Chỉ nhìn thời gian sẽ không biết chi phí đến từ việc thăm quá nhiều ô, kiểm quá nhiều hạt hay các bucket phân bố không đều.",
+            "Cell quá nhỏ tăng số cell duyệt; cell quá lớn chứa nhiều candidate. Khi đàn tụ rất đặc, Grid vẫn phải xét gần mọi cặp.",
         },
         {
-          title: "Chọn preset theo workload",
+          title: "Đổi layout trong ứng dụng",
           explanation:
-            "Radius và mật độ khác nhau có điểm cân bằng khác nhau; 0.05 chỉ là preset hợp lý cho scene này.",
+            "Phím L hoặc select tạo lại phân bố có chủ đích. Đây là reset dataset, khác với thao tác M chỉ đổi cách tìm hàng xóm.",
         },
       ],
     },
     "p28-l08": {
-      focus:
-        "Ghép toàn bộ ứng dụng từ phép đổi tọa độ ô, dựng bucket, truy vấn, đối chiếu đến phép đo và thao tác chuột.",
+      focus: "Chia việc giữa các frame, không cắt hàng xóm và không công bố nửa bước.",
       expected:
-        "Reset luôn đưa ứng dụng về cùng dữ liệu, chuột luôn được nhả đúng lúc, mọi phép đo đều kết thúc và CTest đạt ở Debug lẫn Release.",
-      files,
+        "Preset 10.000 cập nhật và vẽ đủ đàn, progress đi qua các lô nhưng steps/time chỉ đổi sau commit. Pause/Escape hủy được phần đang tính; clock không chạy nhanh ở 120 Hz.",
+      files: ["include/grid/step.hpp", "include/app/scene.hpp", "include/app/controls.hpp", "include/app/application.hpp"],
       steps: [
         {
-          title: "Giữ một query path dùng chung",
+          title: "Chia CPU giữa hai cá thể",
           explanation:
-            "Interactive frame, benchmark và tests gọi cùng build/query functions thay vì ba phiên bản gần giống nhau.",
+            "Một lát tối đa khoảng 6 ms; một cá thể vẫn xét đủ hàng xóm. Ngân sách không phải giới hạn cứng cho từng microsecond.",
         },
         {
-          title: "Không trộn draw sample với indexed workload",
+          title: "Công bố toàn bước hoặc không công bố",
           explanation:
-            "Canvas có thể chỉ vẽ 30k điểm, nhưng grid vẫn chứa đúng N indices và readout nói rõ hai con số.",
+            "UI tiếp tục vẽ snapshot cũ khi job chưa xong. Pause/Reset/drag/đổi tham số hủy phần output dở.",
         },
         {
-          title: "Giữ fixed grid làm baseline tiếp theo",
+          title: "Tách thời gian mô phỏng khỏi thời gian chờ",
           explanation:
-            "Project 29 có thể dùng cùng oracle/query set để xem Quadtree đổi topology và candidate work ra sao.",
+            "Mỗi commit tăng đúng 1/60 s. Clock không tăng nhanh trên màn hình 120 Hz và không chạy bù vô hạn khi đàn quá tải.",
+        },
+      ],
+    },
+    "p28-l09": {
+      focus: "Hai warm-up, năm mẫu đo, median/min/max và trường hợp Grid chậm hơn.",
+      expected:
+        "Scale plan kết thúc với năm dòng, cell study có bảy dòng; mỗi dòng có năm mẫu sau hai warm-up. Bảng hiện rebuild/query/update/total, median/min/max và có thể hủy dòng đang đo.",
+      files: [
+        "include/grid/benchmark.hpp",
+        "include/app/controls.hpp",
+        "include/app/application.hpp",
+      ],
+      steps: [
+        {
+          title: "Cố định đầu vào của mỗi dòng",
+          explanation:
+            "Mỗi mẫu đọc lại snapshot cùng seed/layout; warm-up không đẩy đàn sang trạng thái khác.",
+        },
+        {
+          title: "Đo mọi phần cần để có output",
+          explanation:
+            "CPU total gồm validation, copy snapshot, build và các lô query/update; không gồm chờ frame, render hoặc checksum.",
+        },
+        {
+          title: "Báo phân bố chứ không chỉ một lần chạy",
+          explanation:
+            "Hai warm-up rồi năm mẫu; median, min và max là dữ liệu của máy đang chạy. Cell study có baseline brute và nhiều S, kể cả layout đặc.",
+        },
+      ],
+    },
+    "p28-l10": {
+      focus: "Build Debug/Release, CTest, smoke hữu hạn và mã nguồn đầy đủ chạy độc lập.",
+      expected:
+        "Final build được ở Debug/Release, CTest trả kết quả rõ và smoke lớn báo N=10000, drawn=10000, steps≥1. ZIP có đủ mọi file, tests và README để chạy độc lập.",
+      files: ["src/main.cpp", "tests/tests.cpp", "tests/boids-grid-cases.hpp"],
+      steps: [
+        {
+          title: "Build từ ZIP độc lập",
+          explanation:
+            "Final là target mặc định. BUILD_CHECKPOINTS bật starter và mười checkpoint; không cần source của Project 27 nằm cạnh ZIP.",
+        },
+        {
+          title: "Chạy CTest ở hai cấu hình",
+          explanation:
+            "Các test thuần không mở cửa sổ. Có oracle chín ảnh, insertion, equivalence, batching, cancellation và cập nhật 10.000.",
+        },
+        {
+          title: "Nghiệm thu đúng phạm vi",
+          explanation:
+            "Smoke hữu hạn chứng minh chương trình cập nhật/vẽ đủ đàn; kiểm thao tác desktop trực tiếp vẫn là một việc riêng khi localhost được bật.",
         },
       ],
     },
   },
   references: {
     "p28-l01": [
-      { label: "Spatial Grid", href: "/glossary#spatial-grid", kind: "Thuật ngữ" },
-      { label: "Cell coordinate", href: "/glossary#cell-coordinate", kind: "Thuật ngữ" },
+      {
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
+      },
     ],
     "p28-l02": [
-      { label: "Bucket", href: "/glossary#spatial-bucket", kind: "Thuật ngữ" },
-      { label: "Row-major order", href: "/glossary#row-major-order", kind: "Thuật ngữ" },
+      {
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
+      },
     ],
     "p28-l03": [
       {
-        label: "Conservative candidate set",
-        href: "/glossary#conservative-candidate-set",
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
         kind: "Thuật ngữ",
       },
-      { label: "Circle query", href: "/glossary#circle-query", kind: "Thuật ngữ" },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
+      },
     ],
     "p28-l04": [
-      { label: "Squared distance", href: "/glossary#squared-distance", kind: "Thuật ngữ" },
-      { label: "Hot loop", href: "/glossary#hot-loop", kind: "Thuật ngữ" },
+      {
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
+      },
     ],
     "p28-l05": [
-      { label: "Brute-force query", href: "/glossary#brute-force-query", kind: "Thuật ngữ" },
+      {
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
       {
         label: "Deterministic simulation",
         href: "/glossary#deterministic-simulation",
@@ -227,19 +303,63 @@ const learning = {
       },
     ],
     "p28-l06": [
-      { label: "Benchmark warm-up", href: "/glossary#benchmark-warm-up", kind: "Thuật ngữ" },
-      { label: "Benchmark checksum", href: "/glossary#benchmark-checksum", kind: "Thuật ngữ" },
+      {
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
+      },
     ],
     "p28-l07": [
-      { label: "Grid cell size", href: "/glossary#grid-cell-size", kind: "Thuật ngữ" },
-      { label: "Spatial Grid", href: "/glossary#spatial-grid", kind: "Thuật ngữ" },
+      {
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
+      },
     ],
     "p28-l08": [
-      { label: "Pointer capture", href: "/glossary#pointer-capture", kind: "Thuật ngữ" },
       {
-        label: "SDL_CaptureMouse",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
-        kind: "SDL API",
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p28-l09": [
+      {
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p28-l10": [
+      {
+        label: "Spatial Grid",
+        href: "/glossary#spatial-grid",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Deterministic simulation",
+        href: "/glossary#deterministic-simulation",
+        kind: "Thuật ngữ",
       },
     ],
   },

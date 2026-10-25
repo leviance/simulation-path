@@ -191,10 +191,11 @@
   },
   {
     "id": "28",
-    "slug": "spatial-grid-neighbor-query",
-    "sourceDirectory": "project-28-spatial-grid-neighbor-query",
-    "checkpointCount": 8,
-    "demoId": "spatial-grid-neighbor-query"
+    "slug": "boids-spatial-grid",
+    "sourceDirectory": "project-28-boids-spatial-grid",
+    "checkpointCount": 10,
+    "demoId": "boids-spatial-grid",
+    "contentRevision": 1
   },
   {
     "id": "29",

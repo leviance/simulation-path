@@ -1,0 +1,163 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cập nhật 10.000 cá thể mà vẫn hủy được
+
+## Vấn đề cần giải quyết
+
+Một bước của đàn lớn có thể kéo dài hơn một frame. Nếu làm hết trong một callback, nút Pause hoặc Escape chỉ được xử lý sau khi tính xong. Ta cần nhường CPU mà không biến mô phỏng đồng bộ thành cập nhật từng mảng rời rạc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một lát làm việc dừng **giữa hai cá thể**, khi hết khoảng 6 ms hoặc đạt maximumAgents. Cá thể đang tính vẫn xét đủ hàng xóm; budget không phải lý do cắt danh sách hoặc bỏ cá thể.
+
+Snapshot không thay đổi qua các lát. UI tiếp tục vẽ đàn đã commit trước đó, chỉ hiện progress nextIndex/N. Khi xong cả N, swap đúng một lần. Hủy job thì bỏ output dở; không đẩy nửa đàn sang thời gian mới.
+
+6 ms là ngân sách hợp tác, không phải bảo đảm cứng: một cá thể, GC hoặc OS vẫn có thể làm lát dài hơn. Có giới hạn N và cell count để chặn công việc vô hạn. CPU total cộng thời gian thật đang xử lý; wall latency còn gồm chờ frame.
+
+Clock tích lũy elapsed tính bằng giây. Mỗi commit tăng 1/60 s, và quá tải được ghi vào droppedSeconds. Vì thế màn hình 120 Hz không làm đàn chạy nhanh gấp đôi.
+
+<InteractiveLab demo="boids-spatial-grid" mode="grid-batches" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter từ bài trước. Checkpoint của bài này là bản đối chiếu chạy độc lập; các đường dẫn dưới đây tính từ snapshot bạn đang sửa, không phải đường dẫn của website.
+
+### Bước 1 — Chia CPU giữa hai cá thể
+
+Thay advanceStep bằng bản có kiểm thời gian cuối mỗi cá thể. Không chuyển kiểm budget vào giữa vòng neighbor.
+
+```cpp title="include/grid/step.hpp — advanceStep"
+inline bool advanceStep(StepJob& job, std::size_t maximumAgents = 10000, double budgetMs = 6.0) {
+    if (maximumAgents == 0 || maximumAgents > 10000 || !std::isfinite(budgetMs) || budgetMs <= 0 || budgetMs > 1000) {
+        throw std::invalid_argument("Invalid batch budget");
+    }
+    if (job.cancelled) {
+        return false;
+    }
+    const auto start = Clock::now();
+    const std::size_t stopIndex = std::min(job.snapshot.size(), job.nextIndex + maximumAgents);
+    while (job.nextIndex < stopIndex) {
+        const std::size_t index = job.nextIndex;
+        const auto queryStart = Clock::now();
+        if (job.grid) {
+            queryGrid(job.snapshot, index, job.params, *job.grid, job.query);
+            job.metrics.candidates += job.query.candidates.size();
+            job.metrics.visitedCells += job.query.cells.size();
+        } else {
+            findNeighbors(job.snapshot, index, job.params, job.query.neighbors);
+            job.metrics.candidates += job.snapshot.size() - 1;
+        }
+        const auto queryEnd = Clock::now();
+        job.metrics.queryMs += milliseconds(queryStart, queryEnd);
+        job.metrics.neighbors += job.query.neighbors.size();
+        const auto steering = computeSteering(job.snapshot, index, job.query.neighbors, job.params);
+        job.output[index] = integrateBoid(job.snapshot[index], steering.acceleration, job.params, fixedDt);
+        job.metrics.updateMs += milliseconds(queryEnd, Clock::now());
+        ++job.nextIndex;
+        // Chỉ ngắt giữa hai cá thể: không cắt vòng hàng xóm đang tính dở.
+        if (milliseconds(start, Clock::now()) >= budgetMs) {
+            break;
+        }
+    }
+    job.metrics.totalMs += milliseconds(start, Clock::now());
+    job.metrics.wallMs = milliseconds(job.startedAt, Clock::now());
+    return job.nextIndex == job.snapshot.size();
+}
+```
+
+Một lát tối đa khoảng 6 ms; một cá thể vẫn xét đủ hàng xóm. Ngân sách không phải giới hạn cứng cho từng microsecond.
+
+### Bước 2 — Công bố toàn bước hoặc không công bố
+
+Giữ điều kiện commit trong advanceScene. Pause/Reset/đổi tham số phải gọi stopScene để hủy job dở.
+
+```cpp title="include/app/scene.hpp — advanceScene"
+inline void advanceScene(GridScene& scene, double elapsed) {
+    if (scene.validation.active) {
+        tickValidation(scene.validation);
+        return;
+    }
+    if (!scene.paused) {
+        scene.accumulator += elapsed;
+        if (scene.accumulator > fixedDt) {
+            scene.droppedSeconds += scene.accumulator - fixedDt;
+            scene.accumulator = fixedDt;
+        }
+        if (!scene.step && scene.accumulator + 1e-12 >= fixedDt) {
+            scene.step = createStep(scene.boids, scene.params, scene.cellSize, scene.method);
+        }
+    }
+    if (scene.step && advanceStep(*scene.step)) {
+        // Không công bố output dở: cả N cá thể đã đọc cùng snapshot cũ.
+        scene.boids.swap(scene.step->output);
+        scene.metrics = scene.step->metrics;
+        scene.step.reset();
+        ++scene.steps;
+        scene.time += fixedDt;
+        scene.accumulator = std::max(0.0, scene.accumulator - fixedDt);
+        scene.inspectionDirty = true;
+    }
+}
+```
+
+UI tiếp tục vẽ snapshot cũ khi job chưa xong. Pause/Reset/drag/đổi tham số hủy phần output dở.
+
+### Bước 3 — Mở preset 10.000 sau khi có batch
+
+Bây giờ mới thêm phím 3 mở preset 10.000 cá thể. Bản cuối dùng Grid; Brute bị chặn ở N>1.024.
+
+```cpp title="include/app/controls.hpp — if (key == SDLK_3)"
+if (key == SDLK_3) {
+    scene.count = 10000;
+    resetScene(scene);
+}
+```
+
+Mỗi commit tăng đúng 1/60 s. Clock không tăng nhanh trên màn hình 120 Hz và không chạy bù vô hạn khi đàn quá tải.
+
+### Bước 4 — Hủy công việc bằng Escape
+
+Nối Escape vào event loop như sau: hủy công việc đang chạy trước, chỉ đóng ứng dụng khi không còn job.
+
+```cpp title="include/app/application.hpp — if (event.key.key == SDLK_ESCAPE)"
+if (event.key.key == SDLK_ESCAPE) {
+    if (scene.step || scene.benchmark.active || scene.validation.active) {
+        stopScene(scene);
+    } else {
+        running = false;
+    }
+}
+```
+
+Mỗi commit tăng đúng 1/60 s. Clock không tăng nhanh trên màn hình 120 Hz và không chạy bù vô hạn khi đàn quá tải.
+
+## Ghép các phần lại
+
+Phím 3 tạo đủ 10.000 cá thể; N tạo StepJob trong trạng thái pause. Mỗi vòng event loop làm một lát rồi nhường quyền xử lý input. Khi xong cả đàn, scene mới tăng steps/time và renderer mới nhận position mới. Escape, blur, resize hoặc thay tham số đều hủy phần output dở.
+
+### Bước 5 — Build và chạy mốc đối chiếu
+
+Build cả bài làm và checkpoint 8; chạy lần lượt để đối chiếu đúng thay đổi vừa học. Không chép toàn bộ checkpoint đè lên starter khi chỉ một hàm đang sai.
+
+```bash title="Build và chạy checkpoint 8"
+cmake --build build --config Debug --target project_28_starter project_28_checkpoint_8 --parallel 2
+./build/Debug/project_28_checkpoint_8.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Chọn 10.000, bấm N: progress tăng nhưng steps/time chỉ tăng sau khi đủ cả đàn.
+2. Chọn Dense và 10.000, chạy rồi bấm Pause hoặc Escape khi job đang dở. State đang hiển thị phải giữ nguyên.
+3. Thay budget 6 ms bằng 2 ms. Wall latency có thể tăng vì chờ nhiều frame hơn; danh sách hàng xóm và state một bước vẫn phải như nhau.
+
+## Tự kiểm tra kết quả
+
+- Cập nhật và vẽ đủ 10.000, không downsample hoặc giới hạn hàng xóm.
+- Single-step hoàn tất đúng một bước rồi giữ pause; cancel không commit output dở.
+- Clock không chạy nhanh ở 120 Hz; quá tải không dẫn tới vòng chạy bù vô hạn.
+
+## Bài tập mở rộng
+
+Chạy cùng snapshot với các batch size 1,7,128 và 10.000 trong test thuần. Ghép theo ID và đối chiếu state; biên batch không được trở thành biên của mô hình.
+
+[Bài tiếp: Đo toàn bước, không chỉ đo phần Grid làm nhanh](/projects/boids-spatial-grid/09-benchmark-toan-buoc-cong-bang).

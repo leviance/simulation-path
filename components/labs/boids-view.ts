@@ -9,7 +9,14 @@ import {
 import type { BoidsScene } from "@/lib/labs/boids-scene";
 import type { CanvasSize } from "./lab-shared";
 
-export function boidsView(size: CanvasSize, scene: BoidsScene) {
+export type BoidsViewState = Pick<BoidsScene, "stage" | "params" | "boids" | "selected" | "debug">;
+export interface BoidsDrawOptions {
+  neighbors?: readonly number[];
+  candidates?: readonly number[];
+  underlay?: () => void;
+}
+
+export function boidsView(size: CanvasSize, scene: BoidsViewState) {
   const scale = Math.min(
     (size.width - 32) / scene.params.width,
     (size.height - 32) / scene.params.height,
@@ -25,7 +32,7 @@ export function boidsPointer(
   client: Vec2,
   canvas: HTMLCanvasElement,
   size: CanvasSize,
-  scene: BoidsScene,
+  scene: BoidsViewState,
 ): Vec2 | null {
   const rect = canvas.getBoundingClientRect();
   const point = {
@@ -39,7 +46,7 @@ export function boidsPointer(
   return world;
 }
 
-export function nearestBoid(point: Vec2, scene: BoidsScene): number {
+export function nearestBoid(point: Vec2, scene: BoidsViewState): number {
   let best = 0;
   let distance = Infinity;
   scene.boids.forEach((boid, index) => {
@@ -52,7 +59,12 @@ export function nearestBoid(point: Vec2, scene: BoidsScene): number {
   return best;
 }
 
-export function drawBoids(context: CanvasRenderingContext2D, scene: BoidsScene, size: CanvasSize) {
+export function drawBoids(
+  context: CanvasRenderingContext2D,
+  scene: BoidsViewState,
+  size: CanvasSize,
+  options: BoidsDrawOptions = {},
+) {
   context.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
   context.fillStyle = "#0b1020";
   context.fillRect(0, 0, size.width, size.height);
@@ -61,8 +73,10 @@ export function drawBoids(context: CanvasRenderingContext2D, scene: BoidsScene, 
   const selected = scene.boids[scene.selected];
   if (!selected) return;
   const neighbors =
-    scene.stage >= 3 ? findNeighbors(scene.boids, scene.selected, scene.params) : [];
+    options.neighbors ??
+    (scene.stage >= 3 ? findNeighbors(scene.boids, scene.selected, scene.params) : []);
   const neighborSet = new Set(neighbors);
+  const candidateSet = new Set(options.candidates);
   context.strokeStyle = "#344561";
   context.strokeRect(
     view.left,
@@ -79,6 +93,7 @@ export function drawBoids(context: CanvasRenderingContext2D, scene: BoidsScene, 
     scene.params.height * view.scale,
   );
   context.clip();
+  options.underlay?.();
   if (scene.debug && scene.stage >= 3) {
     context.strokeStyle = "#f4ca6480";
     for (const dx of [-scene.params.width, 0, scene.params.width]) {
@@ -100,7 +115,9 @@ export function drawBoids(context: CanvasRenderingContext2D, scene: BoidsScene, 
         ? "#ffffff"
         : neighborSet.has(index) && scene.debug
           ? "#f4ca64"
-          : "#53dcb6";
+          : candidateSet.has(index) && scene.debug
+            ? "#82b8ff"
+            : "#53dcb6";
     context.beginPath();
     context.moveTo(center.x + direction.x * radius, center.y + direction.y * radius);
     context.lineTo(
