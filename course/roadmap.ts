@@ -141,7 +141,7 @@ export const roadmapSeed = [
   },
   {
     id: 29,
-    title: "Bản đồ tự chia ô: Quadtree nhìn thấy được và truy vấn bằng vùng chọn",
+    title: "Biên tập bản đồ 2D lớn bằng Quadtree",
     part: "CẤU TRÚC KHÔNG GIAN VÀ TƯ DUY HIỆU NĂNG",
   },
   {

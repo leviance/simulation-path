@@ -199,10 +199,11 @@
   },
   {
     "id": "29",
-    "slug": "visible-quadtree",
-    "sourceDirectory": "project-29-visible-quadtree",
-    "checkpointCount": 8,
-    "demoId": "visible-quadtree"
+    "slug": "quadtree-map-editor",
+    "sourceDirectory": "project-29-quadtree-map-editor",
+    "checkpointCount": 11,
+    "demoId": "quadtree-map-editor",
+    "contentRevision": 1
   },
   {
     "id": "30",

@@ -1,0 +1,151 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo riêng query, update và culling
+
+## Vấn đề cần giải quyết
+
+Editor chạy nhanh hơn nhưng chưa biết nhanh ở đâu. Một lần pan gồm query viewport, sắp thứ tự ID, rasterize và present. Một lần move còn có remove/insert. Nếu gom tất cả thành một số FPS, ta không biết Quadtree giúp query hay chỉ do camera nhìn vùng thưa.
+
+## Hiểu ý tưởng trước khi viết code
+
+Benchmark query giữ nguyên dataset, camera và 16 vùng hỏi: viewport hiện tại cùng 15 fixture cố định. Mỗi phương pháp có 2 warm-up rồi 5 samples; một sample là tổng thời gian CPU của 16 query. Báo median cùng min/max, không chỉ lấy lần nhỏ nhất.
+
+Build, update và culling có số riêng trong HUD. Benchmark không đo FPS hay GPU present. Checksum giúp bắt lỗi bỏ tính kết quả, nhưng vẫn cần bài kiểm tập ID ở bài 09. Tree không chắc thắng ở layout dày hoặc nhiều object lớn nằm cha; chi phí truy vấn phụ thuộc dữ liệu và hình dạng vùng hỏi.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-performance" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 10 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Khóa workload trước khi bắt đầu
+
+Chỉ chụp danh sách query boxes và revision, không đổi seed/camera giữa hai lượt:
+
+```cpp title="include/editor/benchmark.hpp — Khóa workload trước khi bắt đầu"
+inline BenchmarkJob createBenchmark(const Quadtree& tree, const Box& view) {
+    BenchmarkJob job{};
+    job.tree = &tree;
+    job.revision = tree.revision;
+    job.active = true;
+    job.boxes.push_back(view);
+    const auto fixtures = queryFixtures(tree.config.root);
+    for (std::size_t index = 4; index < 19; ++index) {
+        job.boxes.push_back(fixtures[index]);
+    }
+    return job;
+}
+```
+
+Q=16 có nghĩa 16 query trong mỗi sample, không phải 16 object. Khi bạn đổi camera rồi chạy lại, đó là một workload khác và nên ghi rõ; không so hai số ở hai camera như cùng phép đo.
+
+### Bước 2 — Đo hữu hạn, bỏ warm-up và chỉ xuất dòng đủ mẫu
+
+Đọc ba bộ đếm riêng: queryIndex trong sample, iteration trong phương pháp, useTree chọn phương pháp. Một tick có thể trả về sớm nhưng trạng thái vẫn giữ để tiếp tục:
+
+```cpp title="include/editor/benchmark.hpp — Đo hữu hạn, bỏ warm-up và chỉ xuất dòng đủ mẫu"
+inline void tickBenchmark(BenchmarkJob& job) {
+    if (!job.active) {
+        return;
+    }
+    if (job.tree->revision != job.revision) {
+        job.active = false;
+        job.stale = true;
+        return;
+    }
+    const auto start = Clock::now();
+    do {
+        const auto& box = job.boxes.at(job.queryIndex);
+        Query result{};
+        if (job.useTree) {
+            result = job.tree->query(box);
+        } else {
+            result = queryBrute(*job.tree, box);
+        }
+        job.elapsed += result.milliseconds;
+        job.candidates += result.candidates;
+        for (std::uint32_t id : result.ids) {
+            job.checksum += id + 1U;
+        }
+        ++job.queryIndex;
+        if (job.queryIndex == job.boxes.size()) {
+            if (job.iteration >= 2) {
+                job.samples.push_back(job.elapsed);
+            }
+            ++job.iteration;
+            job.queryIndex = 0;
+            job.elapsed = 0;
+            if (job.iteration == 7) {
+                auto ordered = job.samples;
+                std::sort(ordered.begin(), ordered.end());
+                job.rows.push_back({job.useTree, job.tree->objects.size(), job.boxes.size(), ordered.size(), ordered[2], ordered[0], ordered[4], job.candidates / 7, job.checksum});
+                if (!job.useTree) {
+                    job.active = false;
+                } else {
+                    job.useTree = false;
+                    job.iteration = 0;
+                    job.samples.clear();
+                    job.candidates = 0;
+                    job.checksum = 0;
+                }
+            }
+        }
+    } while (job.active && milliseconds(start, Clock::now()) < 6.0);
+}
+```
+
+iteration 0–1 không đưa vào samples; đến 7 vòng có đúng 5 mẫu. Sort năm số để lấy ordered[2] làm median. Checksum được tính ngoài timing query; candidates/7 là số exact tests trung bình của một batch 16 query qua cả warm-up và samples. Không công bố dòng dở dang khi người dùng hủy.
+
+### Bước 3 — Tách thời gian cập nhật khỏi query
+
+Thời gian move đo cả translateGroup trên nhóm hiện tại, không tái sử dụng số query hoặc build:
+
+```cpp title="include/editor/document.hpp — Tách thời gian cập nhật khỏi query"
+    bool moveSelection(Point offset) {
+        const auto start = Clock::now();
+        const bool moved = tree.translateGroup(selection, offset);
+        edit = {"move", selection.size(), milliseconds(start, Clock::now())};
+        if (!moved) {
+            edit.action = "rollback";
+            notice = "Move rejected: the whole group keeps its old positions.";
+        } else {
+            notice = "Group committed. IDs and selection were preserved.";
+        }
+        lastQuery.reset();
+        return moved;
+    }
+```
+
+Số moved objects phải đi kèm ms; dời 5 hình không cùng workload với dời 5.000 hình. Khi root từ chối, nhãn rollback phân biệt phép kiểm thất bại với một lần cập nhật thật. Rebuild cũng có nhãn riêng và giữ dữ liệu/selection.
+
+## Ghép các phần lại
+
+Bấm B/Đo query Tree / Brute sau khi kiểm reference. UI vẫn xử lý input giữa các tick và Escape/Hủy thao tác dừng job. Trước khi đo tiếp, ghi N, seed, layout, capacity, camera, Q, sample count và cấu hình build. Để đo release không mở window, chạy .\build\Release\project_29_final.exe --benchmark; CLI có giới hạn số tick và thời gian, không chạy vòng lặp vô hạn.
+
+```bash title="Terminal — build và chạy checkpoint 10 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_10 --parallel 2
+.\build\Debug\project_29_checkpoint_10.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi sang Clustered và pan vào khu dày, rồi Large. Nếu Tree kiểm nhiều candidates hoặc chậm hơn, hãy giải thích bằng node cha/density trước khi sửa capacity.
+
+2. Đưa sort ID hoặc drawScene vào timing query. Số ms tăng nhưng đó là đổi định nghĩa phép đo, không phải index chậm đi. Khôi phục ranh giới timing ban đầu.
+
+3. Đang đo thì bấm Hủy hoặc sửa bản đồ. Dòng chưa đủ năm mẫu không được hiện như kết quả hoàn chỉnh; revision mới không được dùng số cũ.
+
+## Tự kiểm tra kết quả
+
+- Có hai dòng Tree/Brute trên cùng N và Q=16, mỗi dòng samples=5.
+- Hai checksum khớp, reference check vẫn khớp tập ID.
+- Median/min/max có đơn vị ms cho cả batch query, không bị ghi thành FPS hay ms/object.
+- Build/update/culling được trình bày riêng và có thể hủy khi đang chạy.
+
+## Bài tập mở rộng
+
+Lập bảng nhỏ cho capacity 4,16,64 với cùng seed/layout/camera. Ghi cả node count và candidates; kết luận theo workload thay vì chọn một capacity làm “luôn tốt nhất”.
+
+Bài tiếp theo: [Chạy và nghiệm thu Map Editor hoàn chỉnh](/projects/quadtree-map-editor/11-du-an-hoan-chinh-va-nghiem-thu).
+

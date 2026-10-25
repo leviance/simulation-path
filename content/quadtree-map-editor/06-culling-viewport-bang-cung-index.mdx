@@ -1,0 +1,156 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chỉ vẽ phần bản đồ đang nhìn thấy
+
+## Vấn đề cần giải quyết
+
+Selection đã dùng Quadtree, nhưng mỗi lần pan ta vẫn có thể phải kiểm đủ 100.000 hình để biết hình nào cần vẽ. Viewport thực ra cũng là một vùng query. Ta sẽ dùng cùng index cho cả chọn và culling, đồng thời giữ nguyên thứ tự vẽ để click vẫn chọn đúng lớp trên cùng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Viewport màn hình là hình chữ nhật từ (0,0) đến scene.size. Dùng phép nghịch camera lấy góc trên trái trong world; width/height chia cho zoom. Query AABB này cho danh sách visible.
+
+Culling trả lời “cần gửi những object nào cho renderer?”, còn clipping trả lời “pixel nào của object ấy nằm trong vùng vẽ?”. Object chỉ lộ một góc vẫn phải qua culling; clipping xử lý phần còn lại. Không được dùng contains thay intersects.
+
+Danh sách query không có thứ tự. Sort ID tăng dần nằm ngoài timing query để Tree/Brute cho cùng paint order. Không lấy mỗi k-th ID hoặc giới hạn vài nghìn hình để tạo cảm giác nhanh; mọi ID giao viewport đều phải được vẽ.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-culling" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 06 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Tính AABB world của viewport
+
+Hàm này đã được dùng từ baseline. Bây giờ đọc lại vì nó trở thành input của Quadtree:
+
+```cpp title="include/model/geometry.hpp — Tính AABB world của viewport"
+inline Box viewport(const Camera& camera, Point size) {
+    const auto origin = screenToWorld({0, 0}, camera, size);
+    return {origin.x, origin.y, size.x / camera.zoom, size.y / camera.zoom};
+}
+```
+
+origin là góc trên trái, không phải tâm camera. Camera zoom=0.5 với viewport rộng 960 pixel thấy 1.920 world unit theo chiều ngang. Cùng camera và size phải tạo cùng box cho hai phương pháp.
+
+### Bước 2 — Lấy visible qua Document.query
+
+Từ mốc 06, refreshScene gọi Document.query thay queryBrute trực tiếp. Chưa có kéo nhóm nên preview vẫn rỗng:
+
+```cpp title="include/editor/scene.hpp — Lấy visible qua Document.query"
+inline void refreshScene(Scene& scene) {
+    if ((scene.validation.tree && scene.validation.revision != scene.document.tree.revision) || (scene.benchmark.tree && scene.benchmark.revision != scene.document.tree.revision)) {
+        scene.validation = {};
+        scene.benchmark = {};
+    }
+    const Box view = viewport(scene.camera, scene.size);
+    scene.visible = scene.document.query(view);
+    // Chỉ sort phục vụ paint order, nằm ngoài timing của query.
+    std::sort(scene.visible.ids.begin(), scene.visible.ids.end());
+    scene.preview.reset();
+}
+```
+
+refresh chỉ chạy khi input/data/camera đổi; bản đồ tĩnh không cần query lặp vô ích mỗi frame. Revision dùng để bỏ kết quả kiểm/đo đã lỗi thời. Sort sau query để tách chi phí trả lời câu hỏi hình học khỏi chi phí chuẩn bị paint order.
+
+### Bước 3 — Vẽ đủ danh sách visible
+
+drawScene còn vẽ đường phố nền và khung debug. Hãy tìm vòng lặp scene.visible.ids: đó là nơi bắt buộc vẽ đủ danh sách, không phải một mẫu minh họa.
+
+```cpp title="include/graphics/view.hpp — Vẽ đủ danh sách visible"
+inline void drawScene(Framebuffer& image, Scene& scene) {
+    image.clear();
+    const Box view = viewport(scene.camera, scene.size);
+    paintBox(image, scene, scene.document.tree.config.root, 0x18232bff);
+    const auto& root = scene.document.tree.config.root;
+    double spacing = 64;
+    if (scene.camera.zoom < 0.1) {
+        spacing = 512;
+    }
+    for (double x = std::ceil(std::max(root.x, view.x) / spacing) * spacing; x <= std::min(right(root), right(view)); x += spacing) {
+        const auto a = worldToBoard({x, std::max(root.y, view.y)}, scene);
+        const auto b = worldToBoard({x, std::min(bottom(root), bottom(view))}, scene);
+        drawLine(image, a.x, a.y, b.x, b.y, 0x34404bff);
+    }
+    for (double y = std::ceil(std::max(root.y, view.y) / spacing) * spacing; y <= std::min(bottom(root), bottom(view)); y += spacing) {
+        const auto a = worldToBoard({std::max(root.x, view.x), y}, scene);
+        const auto b = worldToBoard({std::min(right(root), right(view)), y}, scene);
+        drawLine(image, a.x, a.y, b.x, b.y, 0x34404bff);
+    }
+    bool moving = false;
+    scene.drawn = 0;
+    for (std::uint32_t id : scene.visible.ids) {
+        if (moving && scene.document.selection.contains(id)) {
+            continue;
+        }
+        drawObject(image, scene, scene.document.tree.objects.at(id), scene.document.selection.contains(id));
+        ++scene.drawn;
+    }
+    if (scene.debug) {
+        const Query* trace = &scene.visible;
+        if (scene.document.lastQuery) {
+            trace = &*scene.document.lastQuery;
+        }
+        const std::unordered_set<int> visited(trace->visited.begin(), trace->visited.end());
+        const std::unordered_set<int> pruned(trace->pruned.begin(), trace->pruned.end());
+        std::size_t boxes = 0;
+        for (std::size_t index = 0; index < scene.document.tree.nodes.size() && boxes < 4096; ++index) {
+            const auto& node = scene.document.tree.nodes[index];
+            if (!intersects(node.box, view)) {
+                continue;
+            }
+            std::uint32_t color = 0x344561ff;
+            if (visited.contains(static_cast<int>(index))) {
+                color = 0x6be89bff;
+            }
+            if (pruned.contains(static_cast<int>(index))) {
+                color = 0xff7b72ff;
+            }
+            paintBox(image, scene, node.box, color, false);
+            ++boxes;
+        }
+    }
+    if (scene.gesture && scene.gesture->tool == Tool::Select) {
+        paintBox(image, scene, normalize(scene.gesture->startWorld, scene.gesture->currentWorld), 0x82b8ffff, false);
+    }
+    // SDL labels nằm ngoài viewport; không để preview/debug vẽ đè lên chúng.
+    rectangle(image, 0, 0, Framebuffer::width - 1, 79, kBackground, true);
+    rectangle(image, 0, 681, Framebuffer::width - 1, Framebuffer::height - 1, kBackground, true);
+    rectangle(image, 0, 80, 69, 680, kBackground, true);
+    rectangle(image, 1031, 80, Framebuffer::width - 1, 680, kBackground, true);
+}
+```
+
+Ở mốc này moving luôn false nên mỗi ID visible tăng drawn đúng một lần. Khi không kéo preview, drawn=visible là kiểm tra rất dễ quan sát. Nền đường phố không có ID và không được tính vào N. Các mặt nạ quanh board giữ chữ HUD không bị hình bản đồ vẽ đè.
+
+## Ghép các phần lại
+
+Phím M chuyển Tree/Brute trên cùng Document; không reset seed, camera hay selection. Sau mỗi lần đổi, refreshScene chạy lại cùng viewport. F tắt debug để đánh giá editor sạch; debug là lớp giải thích, không phải điều kiện để dùng được bản đồ.
+
+```bash title="Terminal — build và chạy checkpoint 06 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_6 --parallel 2
+.\build\Debug\project_29_checkpoint_6.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Thay viewport origin bằng camera.x/y. Pan và zoom: bạn sẽ thấy một nửa vùng nhìn bị culling sai vì nhầm tâm thành góc. Khôi phục `screenToWorld({0,0})`.
+
+2. Giới hạn vòng vẽ ở 200 ID. Thử zoom out: visible không đổi nhưng drawn nhỏ hơn visible, hình mất. Bỏ giới hạn; chỉ được giảm chi tiết mái/cửa, không được bỏ ID.
+
+3. Giữ camera rồi bấm M nhiều lần. Nếu hình chồng đổi lớp, kiểm bước sort, đừng sửa quy tắc topmost để chạy theo thứ tự hash map.
+
+## Tự kiểm tra kết quả
+
+- Cùng viewport, Tree và Brute trả cùng tập visible ID.
+- Khi không có preview, drawn=visible ở cả hai phương pháp.
+- N vẫn 100.000 sau nhiều lần pan/zoom/chuyển M; không có dataset dành riêng cho hình vẽ.
+- Một object giao mép viewport vẫn xuất hiện, không chỉ những hình nằm trọn bên trong.
+
+## Bài tập mở rộng
+
+Ghi ba số ở hai mức zoom: N, visible, candidates. Phân biệt giảm số hình cần vẽ nhờ culling với giảm số AABB cần kiểm nhờ index.
+
+Bài tiếp theo: [Thêm, xóa và cập nhật mà không để lại bản ghi cũ](/projects/quadtree-map-editor/07-them-xoa-va-cap-nhat-theo-id).
+

@@ -1,0 +1,133 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa hình có diện tích vào Quadtree
+
+## Vấn đề cần giải quyết
+
+Brute force đã chọn đúng hình, nhưng mỗi lần vẫn xem đủ 100.000 AABB. Ta muốn bỏ qua cả khu phố xa. Quadtree chia bản đồ thành các ô nhỏ; khó nhất không phải chia bốn ô, mà là đặt một công viên vắt qua đường chia ở đâu để không mất hoặc lặp ID.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn quy tắc đơn giản: một đối tượng chỉ được đẩy xuống con nếu toàn bộ AABB nằm gọn trong con ấy. Nếu cắt đường chia, nó ở lại node cha. Mỗi ID được lưu đúng một lần, kể cả khi node ấy đã có bốn con.
+
+Node chứa box, depth, tập ids và bốn chỉ số children theo NW, NE, SW, SE; +Y vẫn hướng xuống. Ta lưu chỉ số thay vì con trỏ/reference vào vector vì split có thể làm vector cấp phát lại.
+
+Capacity là ngưỡng tách một leaf, không phải giới hạn cứng số object của mọi node. Depth tối đa 12, kích thước con tối thiểu 4 và budget 262.145 node giúp dữ liệu trùng vị trí không làm cây chia mãi. Node cha có nhiều hình lớn vẫn hợp lệ.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-insert" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 04 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Tìm con chứa trọn đối tượng
+
+midX/midY chia box của node. Kiểm cả cạnh phải/dưới của object, không chỉ object.x/y:
+
+```cpp title="include/spatial/quadtree.hpp — Tìm con chứa trọn đối tượng"
+    int childSlot(const Box& box, const Node& node) const {
+        const double midX = node.box.x + node.box.width / 2;
+        const double midY = node.box.y + node.box.height / 2;
+        int column = -1;
+        int row = -1;
+        if (right(box) <= midX) {
+            column = 0;
+        } else if (box.x >= midX) {
+            column = 1;
+        }
+        if (bottom(box) <= midY) {
+            row = 0;
+        } else if (box.y >= midY) {
+            row = 1;
+        }
+        if (column < 0 || row < 0) {
+            return -1;
+        }
+        return row * 2 + column;
+    }
+```
+
+Box kết thúc đúng tại midX có thể vào cột trái; box bắt đầu tại midX vào cột phải. Query chạm biên sẽ duyệt cả hai phía nên vẫn đúng. Nếu không xác định được một cột hoặc hàng chứa trọn box, trả -1 để giữ ở cha. Không ép -1 về slot 0.
+
+### Bước 2 — Chèn và cập nhật nơi lưu ID
+
+insert trước đó đã kiểm root, ID trùng và budget, rồi đưa Object vào objects. insertAt chỉ quyết định bucket lưu ID:
+
+```cpp title="include/spatial/quadtree.hpp — Chèn và cập nhật nơi lưu ID"
+    void insertAt(int nodeIndex, std::uint32_t id) {
+        const auto index = static_cast<std::size_t>(nodeIndex);
+        if (!nodes[index].leaf()) {
+            const int slot = childSlot(objects.at(id).box, nodes[index]);
+            if (slot >= 0) {
+                insertAt(nodes[index].children[static_cast<std::size_t>(slot)], id);
+                return;
+            }
+        }
+        nodes[index].ids.insert(id);
+        location[id] = nodeIndex;
+        if (nodes[index].leaf() && nodes[index].ids.size() > config.capacity && canSplit(nodes[index])) {
+            split(nodeIndex);
+        }
+    }
+```
+
+Nếu node đã chia nhưng không con nào chứa trọn box, vẫn thêm vào node.ids. location[id] ghi đúng chỉ số node để bài sau xóa không phải tìm khắp cây. Với leaf vượt capacity, canSplit kiểm cả ba giới hạn trước khi chia.
+
+### Bước 3 — Chia node và phân phối lại toàn bộ ID cũ
+
+Tạo bốn con xong mới gán children cho cha. Copy danh sách ID cũ trước khi clear rồi đưa từng ID qua lại insertAt:
+
+```cpp title="include/spatial/quadtree.hpp — Chia node và phân phối lại toàn bộ ID cũ"
+    void split(int nodeIndex) {
+        const auto index = static_cast<std::size_t>(nodeIndex);
+        const Box box = nodes[index].box;
+        const int depth = nodes[index].depth;
+        const std::vector<std::uint32_t> previous(nodes[index].ids.begin(), nodes[index].ids.end());
+        std::array<int, 4> children{};
+        for (int slot = 0; slot < 4; ++slot) {
+            children[static_cast<std::size_t>(slot)] = static_cast<int>(nodes.size());
+            const Box child{box.x + (slot % 2) * box.width / 2, box.y + (slot / 2) * box.height / 2, box.width / 2, box.height / 2};
+            nodes.push_back({child, depth + 1, {}, {-1, -1, -1, -1}});
+        }
+        // Không giữ reference vào vector qua push_back: nó có thể vừa realloc.
+        nodes[index].children = children;
+        nodes[index].ids.clear();
+        for (std::uint32_t id : previous) {
+            insertAt(nodeIndex, id);
+        }
+    }
+```
+
+Không bỏ những ID đã tồn tại trước split. insertAt tự đẩy hình nhỏ xuống đúng con và giữ hình cắt split ở cha. box/depth được copy trước push_back; không dùng một reference vào nodes sau khi vector có thể đã realloc. Đây là lỗi C++ dễ bị nhầm thành lỗi thuật toán.
+
+## Ghép các phần lại
+
+Mốc 04 đã xây cây thật khi Document khởi tạo hoặc rebuild. Phím F bật node debug, [ và ] đổi capacity rồi dựng lại index trên cùng dữ liệu. Selection vẫn dùng brute force đến bài 05; culling vẫn dùng brute force đến bài 06. Như vậy ta quan sát riêng việc xây cây trước khi thay đường query.
+
+```bash title="Terminal — build và chạy checkpoint 04 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_4 --parallel 2
+.\build\Debug\project_29_checkpoint_4.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ xét góc trên trái trong childSlot. Dùng layout Large: object sẽ bị nhét vào node không chứa trọn nó; bài kiểm topology và query ở phần diện tích còn lại phải phát hiện lỗi.
+
+2. Bỏ vòng phân phối previous trong split. Đếm số ID lưu trong cây: mất ngay các hình có trước lần chia. Khôi phục rồi kiểm mỗi ID xuất hiện đúng một lần.
+
+3. Cho 1.000 hình cùng tọa độ, capacity=1. Cây phải dừng ở giới hạn cho phép và giữ đủ hình, không bỏ bớt dữ liệu để đáp ứng capacity.
+
+## Tự kiểm tra kết quả
+
+- Tổng số ID lưu bằng N, mỗi ID chỉ xuất hiện một lần.
+- location trỏ về node thực sự giữ ID; node chứa trọn AABB được lưu.
+- ID tại node đã chia phải là hình không nằm gọn trong bất kỳ con nào.
+- Đổi capacity không thay box, ID, selection hoặc kết quả brute force.
+
+## Bài tập mở rộng
+
+Vẽ riêng viền các đối tượng giữ ở node cha. Giải thích vì sao một công viên lớn có thể khiến root giữ nhiều ID mà không có nghĩa cây bị hỏng.
+
+Bài tiếp theo: [Bỏ qua nhánh xa rồi kiểm chính xác](/projects/quadtree-map-editor/05-query-va-prune-cac-nhanh-cay).
+

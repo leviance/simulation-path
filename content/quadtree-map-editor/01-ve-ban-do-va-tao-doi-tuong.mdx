@@ -1,0 +1,178 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ bản đồ có nhà, cây và công viên
+
+## Vấn đề cần giải quyết
+
+Bạn muốn dời một dãy nhà sang bên kia con đường, chứ không phải khoanh vài chấm trên màn hình. Vì vậy, trước khi nói đến Quadtree, ta cần một bản đồ có đối tượng thật: nhà có chiều rộng, cây chiếm một khoảng đất, công viên có thể trải qua nhiều khu phố. Bài này dựng bản đồ ấy trên khung SDL đã quen thuộc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi đối tượng có ba phần: ID để nhận diện, kind để chọn cách vẽ và Box để mô tả phần diện tích nó chiếm. Box dùng tọa độ góc trên trái cùng width/height trong world; không lưu pixel màn hình vào dữ liệu bản đồ.
+
+Ta sinh các khu phố theo hàng/cột, mỗi ô cách nhau 64 world unit. Một chút lệch vị trí và kích thước giúp bản đồ bớt đều tăm tắp. Cùng count, seed và layout sẽ tạo lại cùng dữ liệu; nhờ vậy, sửa thuật toán không đồng nghĩa đổi luôn bài toán đang đo.
+
+100.000 là số đối tượng trong world, không phải số hình phải nhìn thấy cùng lúc. Ngay từ đầu, baseline brute force lọc các AABB giao viewport rồi mới vẽ. Sau này Quadtree chỉ thay cách tìm danh sách đó, không được lén giảm số đối tượng.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-objects" />
+
+## Viết code từng bước
+
+Tải ZIP ở trang tổng quan và mở bản starter. Khung SDL, framebuffer, phép đổi camera cơ bản và các kiểu dữ liệu đã có sẵn để bạn tập trung vào Map Editor. Starter chưa sinh hay vẽ đối tượng nào. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Đọc khung sẵn có và biểu diễn một đối tượng
+
+Mở src/main.cpp: main gọi runApplication trong app/application.hpp. Ứng dụng tạo window, renderer, texture và chạy event loop; graphics/framebuffer.hpp giữ bộ vẽ đã học ở Project 04. Bạn không phải viết lại các phần này. Trước hết, đọc kiểu dữ liệu dùng chung sau:
+
+```cpp title="include/model/dataset.hpp — Đọc khung sẵn có và biểu diễn một đối tượng"
+struct Object {
+    std::uint32_t id{};
+    Kind kind = Kind::House;
+    Box box{};
+};
+```
+
+id không phải địa chỉ bộ nhớ hay vị trí hiện tại trong vector. Khi một ngôi nhà đổi chỗ, id vẫn giữ nguyên. kind không đổi quy tắc hình học: cả ba loại đều dùng box để query. Dấu `{}` khởi tạo các số bằng 0; đối tượng đưa vào bản đồ còn phải qua validateObject để có kích thước dương và nằm trong root.
+
+### Bước 2 — Sinh những khu phố có thể tái lập
+
+Trong starter, makeObjects trả vector rỗng. Giữ phần kiểm tra budget và reserve; thêm vòng lặp sinh dữ liệu dưới đây. Random đã được cung cấp trong cùng file, nên không có dependency ẩn.
+
+```cpp title="include/model/dataset.hpp — Sinh những khu phố có thể tái lập"
+inline std::vector<Object> makeObjects(std::size_t count, std::uint32_t seed, Layout layout) {
+    if (count > maximumObjects) {
+        throw std::invalid_argument("Map object budget exceeded");
+    }
+    std::vector<Object> result;
+    result.reserve(count);
+    Random random{seed};
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto id = static_cast<std::uint32_t>(index);
+        const auto column = id % 400U;
+        const auto row = id / 400U;
+        Kind kind = Kind::House;
+        if (id % 11U == 0) {
+            kind = Kind::Park;
+        } else if (id % 3U == 0) {
+            kind = Kind::Tree;
+        }
+        double width = 16 + random.unit() * 32;
+        double height = 16 + random.unit() * 28;
+        double x = -12800 + column * 64.0 + 6 + random.unit() * 6;
+        double y = -12000 + row * 64.0 + 6 + random.unit() * 6;
+        if (kind == Kind::Tree) {
+            width = 14 + random.unit() * 8;
+            height = width;
+        }
+        if (kind == Kind::Park) {
+            width = 44;
+            height = 44;
+        }
+        if (layout == Layout::Clustered) {
+            const auto cluster = id % 4U;
+            x = -6000 + (cluster % 2U) * 10000.0 + random.unit() * 1800;
+            y = -6000 + (cluster / 2U) * 10000.0 + random.unit() * 1800;
+        }
+        if (layout == Layout::Large && id % 20U == 0) {
+            width = 512 + random.unit() * 1536;
+            height = 256 + random.unit() * 768;
+            x = -15000 + random.unit() * (30000 - width);
+            y = -15000 + random.unit() * (30000 - height);
+        }
+        const Object object{id, kind, {x, y, width, height}};
+        validateObject(object, worldRoot);
+        result.push_back(object);
+    }
+    return result;
+}
+```
+
+column lấy phần dư khi chia ID cho 400, row lấy phần nguyên: ID 400 nằm đầu hàng thứ hai. Chọn loại trước rồi mới chỉnh kích thước tương ứng. Ba layout dùng cùng cấu trúc Object: Districts cho đường phố đều, Clustered gom bốn khu đông đúc, Large thêm hình lớn để ép thuật toán xử lý đối tượng cắt đường chia. reserve chỉ giảm lần cấp phát vector; nó không tạo sẵn đối tượng.
+
+### Bước 3 — Vẽ hình nằm trong đúng Box đang lưu
+
+Tiếp theo thay phần thân rỗng của drawObject. paintBox đổi world sang màn hình và clipping trước khi rasterize; drawLine cũng đã có trong framebuffer.hpp. Ta dựng mái nhà, cửa sổ, thân cây và lối đi từ các tỉ lệ của chính box:
+
+```cpp title="include/graphics/view.hpp — Vẽ hình nằm trong đúng Box đang lưu"
+inline void drawObject(Framebuffer& image, const Scene& scene, const Object& object, bool selected, Point offset = {}, bool valid = true) {
+    const Box box = translate(object.box, offset);
+    std::uint32_t color = 0xe6ba73ff;
+    if (object.kind == Kind::Tree) {
+        color = 0x53b887ff;
+    } else if (object.kind == Kind::Park) {
+        color = 0x315c53ff;
+    }
+    paintBox(image, scene, box, color);
+    if (box.width * scene.camera.zoom >= 6 && box.height * scene.camera.zoom >= 6) {
+        if (object.kind == Kind::House) {
+            const auto left = worldToBoard({box.x, box.y + box.height * 0.36}, scene);
+            const auto tip = worldToBoard({box.x + box.width / 2, box.y}, scene);
+            const auto end = worldToBoard({right(box), box.y + box.height * 0.36}, scene);
+            drawLine(image, left.x, left.y, tip.x, tip.y, 0xad7b62ff);
+            drawLine(image, tip.x, tip.y, end.x, end.y, 0xad7b62ff);
+            paintBox(image, scene, {box.x + box.width * 0.25, box.y + box.height * 0.55, box.width * 0.2, box.height * 0.3}, 0x4d5261ff);
+        } else if (object.kind == Kind::Tree) {
+            paintBox(image, scene, {box.x + box.width * 0.44, box.y + box.height * 0.45, box.width * 0.12, box.height * 0.5}, 0x52725aff);
+        } else {
+            const auto a = worldToBoard({box.x, box.y + box.height / 2}, scene);
+            const auto b = worldToBoard({right(box), box.y + box.height / 2}, scene);
+            drawLine(image, a.x, a.y, b.x, b.y, 0x82b3a2ff);
+        }
+    }
+    if (selected) {
+        std::uint32_t outline = 0xf4ca64ff;
+        if (!valid) {
+            outline = 0xff7b72ff;
+        }
+        paintBox(image, scene, box, outline, false);
+    }
+}
+```
+
+Các chi tiết đều nằm trong AABB ngoài cùng. Khi zoom quá nhỏ, bỏ mái/cửa sổ nhưng vẫn vẽ thân đối tượng; đó là giảm chi tiết hình vẽ, không bỏ bớt ID. selected và offset đã có trong chữ ký để các bài sau thêm viền chọn và preview, hiện cứ giữ giá trị mặc định.
+
+### Bước 4 — Đưa kết quả lên window bằng SDL
+
+Luồng chạy đã được nối sẵn: resetScene tạo Document từ makeObjects; refreshScene lấy visible bằng queryBrute; drawScene gọi drawObject cho từng ID trong visible. Cuối cùng, presentFrame chuyển framebuffer lên texture:
+
+```cpp title="include/app/presentation.hpp — Đưa kết quả lên window bằng SDL"
+inline bool presentFrame(SDL_Renderer* renderer, SDL_Texture* texture, const Framebuffer& image, const Scene& scene, bool changed) {
+    if (changed && !SDL_UpdateTexture(texture, nullptr, image.pixels.data(), Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))))
+        return false;
+    return SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255) && SDL_RenderClear(renderer) && SDL_RenderTexture(renderer, texture, nullptr, nullptr) && drawLabels(renderer, scene) && SDL_RenderPresent(renderer);
+}
+```
+
+changed chỉ tránh upload lại ảnh chưa đổi, không quyết định số đối tượng. Nếu SDL trả false, runApplication báo lỗi và thoát với mã thất bại. Đừng bỏ đường xử lý lỗi vì lúc đó một window trống có thể bị nhầm thành lỗi sinh dữ liệu.
+
+## Ghép các phần lại
+
+Giữ các include của starter. Build từ thư mục gốc ZIP, không phải từ starter/src. Target `project_29_checkpoint_1` chạy độc lập để đối chiếu; target `project_29_starter` là chỗ bạn tự viết. Tại bài này, root mới là nơi giữ toàn bộ ID, chưa chia node và chưa có tương tác chọn.
+
+```bash title="Terminal — build và chạy checkpoint 01 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_1 --parallel 2
+.\build\Debug\project_29_checkpoint_1.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm cho width bằng 0 ở một đối tượng: validateObject phải chặn dữ liệu lỗi. Khôi phục lại rồi chạy; không tắt validator chỉ để window hiện ra.
+
+2. Giữ seed, đổi count 10.000/100.000 rồi Home ở các bài có camera. ID đầu tiên phải giữ dữ liệu như cũ. Nếu hình chỉ xuất hiện ở count lớn, kiểm initialCamera và phạm vi hàng đã sinh, không sửa thuật toán query.
+
+3. Đổi layout Large: nhà/công viên lớn vẫn có diện tích thật, không được vẽ như một điểm ở tâm.
+
+## Tự kiểm tra kết quả
+
+- Ứng dụng mở được với N=100000; có thể phân biệt ba loại đối tượng ở mức zoom ban đầu.
+- visible là số ID giao viewport và drawn phải bằng visible khi chưa có gesture.
+- Source có makeObjects, drawObject và presentFrame nối với nhau; không có bước bắt người học đoán cách đưa hình lên SDL.
+- Build starter đã sửa của bạn, không chỉ chạy checkpoint có sẵn.
+
+## Bài tập mở rộng
+
+Thêm một loại nhà có màu khác nhưng vẫn giữ mái và cửa trong box. Ghi lại điều gì thay đổi ở hình vẽ, điều gì tuyệt đối không được thay đổi ở ID và quy tắc query.
+
+Bài tiếp theo: [Đi lại trên bản đồ bằng camera 2D](/projects/quadtree-map-editor/02-camera-pan-va-zoom-quanh-con-tro).
+

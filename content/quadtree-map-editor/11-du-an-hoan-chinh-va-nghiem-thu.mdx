@@ -1,0 +1,133 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy và nghiệm thu Map Editor hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Bạn đã có từng phần của editor; bước cuối là chứng minh người khác tải ZIP về vẫn build và dùng được mà không có repository website bên cạnh. Đồng thời cần biết kiểm thử đã chứng minh điều gì và thao tác trực tiếp nào còn phải tự kiểm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Source chia theo trách nhiệm: model giữ hình học/dataset, spatial giữ Quadtree, editor giữ document/gesture/jobs, graphics giữ rasterization và app giữ SDL/input/presentation. Main chỉ nối vào runApplication; toàn bộ các header này đều có trong mã hoàn chỉnh cuối bài và ZIP.
+
+Final là target mặc định. BUILD_CHECKPOINTS mở thêm starter và 11 mốc chạy độc lập, không phải 11 chương trình phải link chung. Checkpoint 11 giữ thuật toán đã hoàn thiện ở bài 10 để tập trung build, kiểm và bàn giao.
+
+CMake dùng C++20, tối thiểu 3.24, FetchContent khóa SDL 3.4.8 bằng checksum và link SDL3::SDL3 theo [hướng dẫn SDL chính thức](https://wiki.libsdl.org/SDL3/README-cmake). Lần đầu cần mạng tải SDL; sau đó cache nằm trong build. Không cần đăng nhập website hay cài source của Project 28.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-final" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 11 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Đọc entry point và các file đi kèm
+
+Đây là toàn bộ main, không có phần khởi tạo bị bỏ bằng dấu ba chấm:
+
+```cpp title="src/main.cpp — Đọc entry point và các file đi kèm"
+// Full SDL event handling and resource cleanup are provided in app/application.hpp.
+#include "app/application.hpp"
+
+int main(int argc, char** argv) {
+    return maplab::runApplication(argc, argv);
+}
+```
+
+runApplication kiểm mọi lỗi SDL, tạo texture, route input, vẽ và dọn tài nguyên. Mở bộ xem mã ở cuối bài để đọc trọn từng file; không chỉ copy main vì các header là một phần của ứng dụng, không phải thư viện cần tự đoán.
+
+### Bước 2 — Kiểm đầy đủ một chuỗi biên tập
+
+Smoke workflow không thay thế click thật, nhưng buộc source C++ chạy một chuỗi edits với đủ 100.000 object rồi đối chiếu query sau từng bước:
+
+```cpp title="include/app/application.hpp — Kiểm đầy đủ một chuỗi biên tập"
+inline void smokeWorkflow(Scene& scene) {
+    if (scene.document.tree.objects.size() != 100000) {
+        throw std::runtime_error("Workflow must start with 100000 objects");
+    }
+    const Box region{-12000, -12000, 1200, 1000};
+    scene.document.selectRegion({region.x, region.y}, {right(region), bottom(region)});
+    requireSameQuery(scene.document.tree, region);
+    const auto selected = scene.document.selection;
+    if (selected.empty() || !scene.document.moveSelection({128, 64}) || scene.document.selection != selected) {
+        throw std::runtime_error("Group move did not preserve IDs/selection");
+    }
+    requireSameQuery(scene.document.tree, region);
+    if (!scene.document.addObject({-11500, -11500}, Kind::House)) {
+        throw std::runtime_error("Workflow insert failed");
+    }
+    requireSameQuery(scene.document.tree, region);
+    scene.document.deleteSelection();
+    requireSameQuery(scene.document.tree, region);
+    scene.camera = {-11500, -11500, 0.5};
+    requireSameQuery(scene.document.tree, viewport(scene.camera, scene.size));
+    refreshScene(scene);
+}
+```
+
+Sau thêm rồi xóa, N trở lại 100.000. Camera được đưa tới vùng đã sửa để renderer thực sự vẽ kết quả; regular smoke còn kiểm drawn=visible và thoát sau sáu frame. Tên --smoke-workflow không có nghĩa stress test chạy hàng giờ.
+
+### Bước 3 — Giữ kiểm thử có hiệu lực ở Release
+
+Các hàm fixtures/camera/workflow/gesturesAndJobs chạy bằng bộ đếm failures, không dùng assert bị tắt bởi NDEBUG:
+
+```cpp title="tests/tests.cpp — Giữ kiểm thử có hiệu lực ở Release"
+int main() {
+    fixtures();
+    camera();
+    workflow();
+    gesturesAndJobs();
+    std::cout << "P29 Map Editor: " << checks << " checks, " << failures << " failures\n";
+    if (failures != 0) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+```
+
+Chỉ một check sai cũng trả EXIT_FAILURE cho CTest. CTest này không cần window. SDL smoke kiểm đường ứng dụng riêng, còn keyboard/pointer/resize trực tiếp là một mục nghiệm thu khác; đừng dùng một kết quả để tuyên bố tất cả đã xong.
+
+## Ghép các phần lại
+
+Trong ZIP, chạy từ thư mục có CMakeLists.txt. Để tests kiểm bản starter của bạn, thay dòng include của target test trong CMake của bản ZIP bằng dòng sau; không sửa CMake được sinh trong repository website:
+
+```cmake title="CMakeLists.txt — kiểm mã bạn tự viết trong starter"
+target_include_directories(project_29_tests PRIVATE starter/include)
+```
+
+Sau đó configure và chạy lại CTest. Test toàn tính năng chỉ kỳ vọng pass khi starter của bạn đã hoàn thiện. Mỗi checkpoint có main/include riêng, không ghép file từ các mốc khác nhau.
+
+```bash title="Terminal — build độc lập và nghiệm thu Windows / Visual Studio 2022"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+.\build\Debug\project_29_final.exe --smoke
+.\build\Release\project_29_final.exe --smoke-workflow
+.\build\Release\project_29_final.exe --benchmark
+```
+
+Trên macOS/Linux với generator single-config, cấu hình hai thư mục build-debug/build-release bằng -DCMAKE_BUILD_TYPE tương ứng; bỏ -C và chạy executable ngay trong thư mục build. Không có assets ngoài ZIP phải chép thêm.
+
+## Thử làm sai để hiểu đúng
+
+1. Giải nén sang thư mục mới không nằm trong repository website rồi build. Nếu chỉ chạy được trong repo, kiểm include path/DLL và file đã đóng gói, không thêm đường dẫn tuyệt đối trỏ về máy mình.
+
+2. Trong bản thử, làm sai intersects tại cạnh bằng nhau rồi chạy CTest Release. Test phải thất bại; nếu vẫn xanh vì không chạy check, bản nghiệm thu chưa đáng tin.
+
+3. Đóng window giữa lúc validation/benchmark và nhấn Escape khi kéo. App phải thoát/hủy gọn, không chờ một tiến trình kiểm vô hạn.
+
+## Tự kiểm tra kết quả
+
+- Starter, 11 checkpoint và final build độc lập; CTest Debug/Release đều chạy check thật.
+- Trên N=100000: tìm vùng → chọn → move → add/delete → reference; không ghost, không duplicate, group vượt root giữ nguyên.
+- Tree/Brute giữ cùng visible IDs và paint order, drawn=visible lúc không preview; node debug tắt vẫn dùng editor được.
+- Kiểm trực tiếp cả chuột, keyboard, zoom anchor, focus/cancel, resize và các layout; ghi riêng phần chưa kiểm.
+- Mã hoàn chỉnh có README, tests và mọi source, ZIP không chứa thư viện vendor hay build output cần đưa vào Git.
+
+## Bài tập mở rộng
+
+Viết một ghi chú nghiệm thu ngắn: phần nào có bằng chứng từ CTest, phần nào từ finite smoke, phần nào từ thao tác trực tiếp. Sau đó chọn một mở rộng có ích: lưu/load document, undo/redo hoặc đổi root policy; mô tả invariants mới trước khi viết code.
+
+Tiếp theo, đọc yêu cầu [Project 30 trong roadmap](/roadmap#project-30). Chưa vội mang toàn bộ editor sang 3D: hãy tách điều gì thuộc không gian, điều gì thuộc công cụ biên tập.
+

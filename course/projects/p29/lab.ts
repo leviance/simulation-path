@@ -2,51 +2,59 @@ import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
   base: {
-    label: "VISIBLE QUADTREE LAB",
-    title: "Để vùng đông tự chia nhỏ, vùng thưa được thở",
+    label: "QUADTREE MAP EDITOR",
+    title: "Một bản đồ để chọn, chỉnh sửa và khám phá",
     description:
-      "Kéo selection qua 100.000 particles, đổi distribution và leafCapacity rồi quan sát topology, pruning, candidates, oracle agreement cùng benchmark.",
+      "Nhà, cây và công viên có AABB thật; dùng camera tìm vùng, chọn nhóm, di chuyển hoặc thêm/xóa trên dataset 100.000 đối tượng.",
   },
   modes: {
-    "quadtree-selection": {
-      title: "Hai góc kéo tạo một vùng chọn ổn định ra sao?",
-      description:
-        "Kéo theo bốn hướng và đặt cạnh selection đúng split line; AABB được normalize, boundary vẫn được nhận và child policy luôn là east/north khi bằng nhau.",
+    "map-objects": {
+      title: "Vẽ bản đồ có nhà, cây và công viên",
+      description: "Từ khung SDL đến dataset 100.000 đối tượng có ID, vị trí và kích thước thật.",
     },
-    "quadtree-root": {
-      title: "Một root leaf chứa 100.000 indices giúp được gì?",
-      description:
-        "Root đã là một node hợp lệ nhưng query vẫn đọc toàn bộ N. LeafCapacity chỉ có ý nghĩa khi ta thực sự split và redistribute.",
+    "map-camera": {
+      title: "Đi lại trên bản đồ bằng camera 2D",
+      description: "Pan, zoom giữ điểm dưới con trỏ và đổi tọa độ window/board/world đúng một lần.",
     },
-    "quadtree-split": {
-      title: "Quadtree tự chia theo mật độ như thế nào?",
+    "map-selection": {
+      title: "Chọn đúng đối tượng, không chỉ chọn tâm",
       description:
-        "Đổi clustered/uniform và capacity để nhìn các leaf nhỏ tập trung ở vùng đông, trong khi vùng thưa dừng ở depth thấp hơn.",
+        "Click lớp trên cùng và kéo vùng chọn theo giao AABB, kể cả chạm cạnh và kéo ngược.",
     },
-    "quadtree-topology": {
-      title: "Những đường kẻ có thật sự là một tree đúng?",
-      description:
-        "Readout kiểm storage đúng một leaf, internal nodes rỗng, child indices, capacity guards và thống kê node thay vì chỉ tin hình vẽ.",
+    "map-insert": {
+      title: "Đưa hình có diện tích vào Quadtree",
+      description: "Node index, split có giới hạn và giữ đối tượng cắt đường chia ở node cha.",
     },
-    "quadtree-query": {
-      title: "Selection đã bỏ qua những subtree nào?",
+    "map-query": {
+      title: "Bỏ qua nhánh xa rồi kiểm chính xác",
       description:
-        "Node không overlap bị prune ngay; leaf màu xanh còn overlap mới đóng góp candidates và point vàng mới là exact hit.",
+        "Duyệt cây theo AABB, kiểm cả bucket ở node cha và đo visited/pruned/candidates.",
     },
-    "quadtree-compare": {
-      title: "Traversal khác thứ tự có còn trả đúng cùng kết quả?",
+    "map-culling": {
+      title: "Chỉ vẽ phần bản đồ đang nhìn thấy",
       description:
-        "Canonicalize ngoài hot path để so Quadtree với brute force; kéo qua góc và split line để thử các trường hợp dễ sai nhất.",
+        "Dùng cùng index cho viewport culling, giữ paint order và tách culling khỏi render.",
     },
-    "quadtree-capacity": {
-      title: "Leaf nhỏ hơn có luôn nhanh hơn không?",
+    "map-mutations": {
+      title: "Thêm, xóa và cập nhật mà không để lại bản ghi cũ",
       description:
-        "So capacity 4, 8, 16 và 32: capacity nhỏ giảm candidates nhưng tăng node traversal, memory metadata và rebuild work.",
+        "Lưu node theo ID, remove tại chỗ, insert lại và kiểm toàn bộ proposal trước khi ghi.",
     },
-    "quadtree-validation": {
-      title: "Visible Quadtree đã đủ chắc để làm nền cho Octree chưa?",
-      description:
-        "Nghiệm thu topology, edge queries, oracle, checksum, exact work, timing và interaction bằng cùng một source path.",
+    "map-group-drag": {
+      title: "Kéo cả nhóm: xem trước rồi mới áp dụng",
+      description: "Pointer capture, preview không sửa data và rollback toàn nhóm khi vượt root.",
+    },
+    "map-validation": {
+      title: "Kiểm cây sau khi bản đồ đã thay đổi",
+      description: "Oracle độc lập, topology và query IDs trước/sau chuỗi thêm, di chuyển, xóa.",
+    },
+    "map-performance": {
+      title: "Đo riêng query, update và culling",
+      description: "Cùng dataset/query, hai warm-up + năm mẫu; thử layout dày và đối tượng lớn.",
+    },
+    "map-final": {
+      title: "Chạy và nghiệm thu Map Editor hoàn chỉnh",
+      description: "CMake độc lập, CTest Debug/Release và workflow đầy đủ trên 100.000 đối tượng.",
     },
   },
 } satisfies ProjectLabMeta;

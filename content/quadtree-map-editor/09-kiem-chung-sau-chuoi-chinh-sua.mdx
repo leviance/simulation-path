@@ -1,0 +1,163 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm cây sau khi bản đồ đã thay đổi
+
+## Vấn đề cần giải quyết
+
+Cây có thể trông đẹp nhưng đã mất một ID sau lần xóa, hoặc còn ID ở bucket cũ sau khi di chuyển. Nhìn hình không đủ phát hiện những lỗi ấy. Ta cần kiểm cấu trúc lẫn kết quả query trên trạng thái hiện tại, không chỉ trên dataset lúc mở ứng dụng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có ba lớp kiểm: invariants của storage/location/topology; so sánh tập ID với brute trên cùng world; và oracle hình học độc lập trong tests. Topology đúng không chứng minh query đúng, checksum bằng nhau cũng không thay được so sánh ID.
+
+Validation gồm các fixture cố định tại root edge, ngoài root, nhiều vùng có thể tái lập, cộng viewport và vùng chọn hiện tại. Mỗi tick chạy vài query trong khoảng ngân sách 6 ms rồi trả quyền điều khiển. Đây là chia công việc hợp tác, không phải lời hứa một query lớn nhất luôn dưới 6 ms.
+
+Job giữ revision của world lúc bắt đầu. Nếu bản đồ bị sửa, kết quả ấy không còn áp dụng; job dừng hoặc bị xóa, không gắn nhãn PASS lên dữ liệu mới.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-validation" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 09 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Kiểm nơi lưu và danh tính của mọi object
+
+Kiểm mỗi ID có object, location trỏ đúng node, node chứa trọn box và hình ở internal node không thể đẩy xuống con. Cuối cùng kiểm tổng số và mỗi ID đúng một lần:
+
+```cpp title="include/editor/validation.hpp — Kiểm nơi lưu và danh tính của mọi object"
+inline std::size_t inspectTopology(const Quadtree& tree) {
+    std::size_t failures = 0;
+    std::unordered_map<std::uint32_t, int> stored;
+    for (std::size_t index = 0; index < tree.nodes.size(); ++index) {
+        const auto& node = tree.nodes[index];
+        if (node.depth > tree.config.maximumDepth) {
+            ++failures;
+        }
+        for (std::uint32_t id : node.ids) {
+            ++stored[id];
+            const auto object = tree.objects.find(id);
+            const auto location = tree.location.find(id);
+            if (object == tree.objects.end() || location == tree.location.end()) {
+                ++failures;
+                continue;
+            }
+            if (!contains(node.box, object->second.box) || location->second != static_cast<int>(index) || (!node.leaf() && tree.childSlot(object->second.box, node) >= 0)) {
+                ++failures;
+            }
+        }
+        if (!node.leaf()) {
+            for (int child : node.children) {
+                if (child <= static_cast<int>(index) || static_cast<std::size_t>(child) >= tree.nodes.size()) {
+                    ++failures;
+                } else if (tree.nodes[static_cast<std::size_t>(child)].depth != node.depth + 1) {
+                    ++failures;
+                }
+            }
+        }
+        const bool splitAllowed = node.depth < tree.config.maximumDepth && node.box.width / 2 >= tree.config.minimumSize && node.box.height / 2 >= tree.config.minimumSize && tree.nodes.size() + 4 <= tree.config.maximumNodes;
+        if (node.leaf() && node.ids.size() > tree.config.capacity && splitAllowed) {
+            ++failures;
+        }
+    }
+    if (stored.size() != tree.objects.size() || tree.location.size() != tree.objects.size() || tree.nodes.size() > tree.config.maximumNodes) {
+        ++failures;
+    }
+    for (const auto& [id, object] : tree.objects) {
+        static_cast<void>(object);
+        if (stored[id] != 1) {
+            ++failures;
+        }
+    }
+    return failures;
+}
+```
+
+Leaf vượt capacity chỉ sai khi vẫn được phép split; leaf chạm depth/minimum-size/node-budget có thể giữ nhiều ID. Internal node không bắt buộc rỗng vì nó giữ hình cắt split. Đây là khác biệt quan trọng với cây dành cho điểm.
+
+### Bước 2 — So sánh tập ID qua từng tick
+
+Sort hai danh sách để so tập ID, không so thứ tự duyệt cây với thứ tự hash map:
+
+```cpp title="include/editor/validation.hpp — So sánh tập ID qua từng tick"
+inline void tickValidation(ValidationJob& job) {
+    if (!job.active) {
+        return;
+    }
+    if (job.tree->revision != job.revision) {
+        job.stale = true;
+        job.active = false;
+        return;
+    }
+    const auto start = Clock::now();
+    do {
+        const auto& box = job.boxes.at(job.checked);
+        auto actual = job.tree->query(box).ids;
+        auto expected = queryBrute(*job.tree, box).ids;
+        std::sort(actual.begin(), actual.end());
+        std::sort(expected.begin(), expected.end());
+        if (actual != expected) {
+            ++job.failures;
+        }
+        ++job.checked;
+    } while (job.checked < job.boxes.size() && milliseconds(start, Clock::now()) < 6.0);
+    if (job.checked == job.boxes.size()) {
+        job.active = false;
+    }
+}
+```
+
+Khi revision khác, stale=true và active=false. checked chỉ tăng sau khi query hiện tại được đối chiếu. Bộ đếm failures tích lũy lỗi; topology fail ngay lúc tạo job khiến job không chạy tiếp như thể chỉ cần query khớp.
+
+### Bước 3 — Có oracle không gọi lại cùng intersects
+
+Brute trong ứng dụng dùng cùng intersects với Tree, nên chúng có thể cùng sai ở chạm cạnh. Trong CTest, dùng khoảng hở giữa hai interval làm cách tính khác:
+
+```cpp title="tests/tests.cpp — Có oracle không gọi lại cùng intersects"
+std::vector<std::uint32_t> oracle(const maplab::Quadtree& tree, const maplab::Box& query) {
+    std::vector<std::uint32_t> ids;
+    for (const auto& [id, object] : tree.objects) {
+        const auto& box = object.box;
+        const double gapX = std::max(box.x, query.x) - std::min(box.x + box.width, query.x + query.width);
+        const double gapY = std::max(box.y, query.y) - std::min(box.y + box.height, query.y + query.height);
+        if (gapX <= 0 && gapY <= 0) {
+            ids.push_back(id);
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+```
+
+gap dương nghĩa là hai interval tách rời, bằng 0 là chạm cạnh. Lấy điều kiện ở cả hai trục rồi sort. Các fixture còn đặt đáp án cụ thể tại split/root edge; không lấy chính kết quả production làm expected.
+
+## Ghép các phần lại
+
+Bấm V hoặc nút Kiểm reference và topology. Thử ngay sau add/move/delete trên N=100.000, rồi thử hai layout còn lại. App chia job giữa các vòng event; Canvas dùng requestAnimationFrame chỉ trong lúc job active. Hủy thao tác dừng job; đổi data/index làm kết quả cũ hết hiệu lực. CTest là phần code thuần, không cần mở window.
+
+```bash title="Terminal — build và chạy checkpoint 09 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_9 --parallel 2
+.\build\Debug\project_29_checkpoint_9.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Trong một bản thử riêng, đổi location của một ID thành node sai. Topology phải báo lỗi dù hình vẫn có vẻ đúng; khôi phục trước khi đo.
+
+2. Cố tình bỏ remove ở vị trí cũ khi move. Query các vùng cũ/mới và kiểm storage once; ít nhất một lớp phải phát hiện ghost/duplicate.
+
+3. Bắt đầu kiểm rồi thêm một object. Kết quả cũ phải biến mất hoặc ghi stale, không được giữ thông báo thành công cho revision mới.
+
+## Tự kiểm tra kết quả
+
+- Số query checked bằng số fixtures khi hoàn thành, failures=0.
+- Split contact, root maximum edge, ngoài root, coincident và large-spanning có ca kiểm riêng.
+- Chuỗi chọn/move/add/delete giữ N=100000 ở phép thử đầy đủ và khớp oracle.
+- Tests dùng check + EXIT_FAILURE, vẫn có hiệu lực ở Release.
+
+## Bài tập mở rộng
+
+Thêm fixture mà query chỉ chạm một góc của object lớn ở node cha. Trước tiên viết expected IDs bằng tay, sau đó mới chạy Tree/Brute/oracle.
+
+Bài tiếp theo: [Đo riêng query, update và culling](/projects/quadtree-map-editor/10-do-query-update-va-culling).
+

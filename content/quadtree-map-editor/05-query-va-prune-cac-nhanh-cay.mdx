@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Bỏ qua nhánh xa rồi kiểm chính xác
+
+## Vấn đề cần giải quyết
+
+Cây đã có cấu trúc, nhưng chưa giúp tìm nhanh nếu ta vẫn duyệt toàn bộ objects. Bây giờ ta dùng AABB của node để quyết định nhánh nào không thể có hit, rồi kiểm chính xác các hình trong nhánh còn lại. Kết quả cuối cùng phải giống baseline của bài 03.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nếu query không giao box của node, mọi object lưu dưới node đó cũng không giao query: có thể bỏ cả nhánh. Nếu node giao, chưa được coi mọi object trong đó là hit; cần kiểm lại từng AABB.
+
+Có hai mức công việc khác nhau: visited/pruned đếm node, candidates đếm object đã qua exact test. Với quy tắc giữ hình cắt split ở cha, phải kiểm node.ids ở cả internal node lẫn leaf. Quên bucket của cha là lỗi thường gặp khi chuyển từ Quadtree điểm sang Quadtree hình có diện tích.
+
+Không hứa mọi query đều nhanh. Vùng phủ toàn root hoặc nhiều công viên lớn có thể khiến gần như tất cả hình trở thành candidate.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-query" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 05 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Duyệt bằng stack và bỏ cả nhánh không giao
+
+Stack ban đầu chỉ có root. Mỗi vòng lấy một node, thử box trước, rồi mới kiểm object và đẩy children:
+
+```cpp title="include/spatial/quadtree.hpp — Duyệt bằng stack và bỏ cả nhánh không giao"
+    Query query(const Box& region) const {
+        if (!validBox(region, true)) {
+            throw std::invalid_argument("Invalid query region");
+        }
+        const auto start = Clock::now();
+        Query result{};
+        std::vector<int> stack{0};
+        while (!stack.empty()) {
+            const int index = stack.back();
+            stack.pop_back();
+            const auto& node = nodes.at(static_cast<std::size_t>(index));
+            if (!intersects(node.box, region)) {
+                result.pruned.push_back(index);
+                continue;
+            }
+            result.visited.push_back(index);
+            for (std::uint32_t id : node.ids) {
+                ++result.candidates;
+                if (intersects(objects.at(id).box, region)) {
+                    result.ids.push_back(id);
+                }
+            }
+            if (!node.leaf()) {
+                for (int child : node.children) {
+                    stack.push_back(child);
+                }
+            }
+        }
+        result.milliseconds = milliseconds(start, Clock::now());
+        return result;
+    }
+```
+
+continue ở nhánh pruned là chỗ tiết kiệm công việc. Vòng for trên node.ids không nằm trong điều kiện leaf. result.ids chưa sort; query chỉ trả đúng tập ID, paint order là việc của renderer. Thời gian trong result là thời gian query CPU, chưa gồm vẽ ảnh hay sort để trình bày.
+
+### Bước 2 — Giữ đường tham chiếu đơn giản
+
+Đừng xóa baseline khi thêm cây. Nó đọc cùng objects nhưng không đụng topology:
+
+```cpp title="include/spatial/quadtree.hpp — Giữ đường tham chiếu đơn giản"
+inline Query queryBrute(const Quadtree& tree, const Box& region) {
+    if (!validBox(region, true)) {
+        throw std::invalid_argument("Invalid query region");
+    }
+    const auto start = Clock::now();
+    Query result{};
+    for (const auto& [id, object] : tree.objects) {
+        ++result.candidates;
+        if (intersects(object.box, region)) {
+            result.ids.push_back(id);
+        }
+    }
+    result.milliseconds = milliseconds(start, Clock::now());
+    return result;
+}
+```
+
+Brute kiểm N AABB và dễ hiểu. Đây là đường đối chiếu cho truy vấn khi thao tác editor. Bộ CTest còn có oracle khoảng cách giữa hai interval để tránh việc Tree và Brute cùng gọi một intersects bị viết sai.
+
+### Bước 3 — Đổi đường query mà không đổi yêu cầu chọn
+
+Document giấu lựa chọn phương pháp sau một hàm. selectRegion và pick tiếp tục gọi đúng hàm cũ:
+
+```cpp title="include/editor/document.hpp — Đổi đường query mà không đổi yêu cầu chọn"
+    Query query(const Box& box) const {
+        if (useTree) {
+            return tree.query(box);
+        }
+        return queryBrute(tree, box);
+    }
+```
+
+Không cần viết lại selection khi thay brute bằng cây. Giữ cùng region, dataset và quy tắc chạm biên mới là một phép so sánh công bằng. Mốc 05 dùng Tree cho chọn; mốc sau mới đưa viewport vào cùng đường query.
+
+## Ghép các phần lại
+
+Build checkpoint 05, bật F và kéo một vùng chọn nhỏ. lastQuery giữ trace của lần chọn, vì thế node debug phản ánh query ấy; nếu chưa chọn, debug dùng viewport. Xanh là node đã thăm, đỏ là node bị bỏ qua. Giới hạn 4.096 hộp debug chỉ giảm nét vẽ minh họa, không giới hạn node được query hay object được chọn.
+
+```bash title="Terminal — build và chạy checkpoint 05 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_5 --parallel 2
+.\build\Debug\project_29_checkpoint_5.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ kiểm node.ids khi leaf. Dùng layout Large rồi chọn một góc của hình vắt qua split: brute có hit nhưng Tree mất ID. Bật lại phép kiểm bucket ở mọi node.
+
+2. Bỏ exact test sau khi node giao query. Selection phình theo ô của cây thay vì bám vùng kéo; khôi phục intersects từng object.
+
+3. Zoom ra toàn bản đồ và query toàn root. candidates gần N là kết quả hợp lý, không được cắt bớt query để ép số nhỏ.
+
+## Tự kiểm tra kết quả
+
+- Tập ID Tree bằng Brute cho vùng rỗng, ngoài root, split edge và hình chồng.
+- Query không lặp ID và không bỏ đối tượng nằm ở node cha.
+- Vùng nhỏ trên layout Districts thường kiểm ít AABB hơn N; ghi cả visited/pruned để hiểu chi phí duyệt.
+- Thay thuật toán query không làm đổi camera hoặc selection đã có.
+
+## Bài tập mở rộng
+
+Thêm thống kê số hit/candidates cho một vùng nhỏ và một vùng toàn root. Giải thích vì sao cây sâu hơn không tự động cho query tốt hơn.
+
+Bài tiếp theo: [Chỉ vẽ phần bản đồ đang nhìn thấy](/projects/quadtree-map-editor/06-culling-viewport-bang-cung-index).
+

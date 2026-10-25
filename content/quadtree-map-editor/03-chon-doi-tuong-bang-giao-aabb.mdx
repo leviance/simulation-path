@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn đúng đối tượng, không chỉ chọn tâm
+
+## Vấn đề cần giải quyết
+
+Kéo vùng chọn qua góc một công viên nhưng tâm công viên nằm ngoài vùng: editor có nên chọn nó không? Có, vì người dùng đang khoanh diện tích chứ không chọn tâm điểm. Ta sẽ thống nhất quy tắc đó trước khi tối ưu, để Quadtree sau này có một kết quả chuẩn mà đối chiếu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai AABB giao nhau khi chúng không tách rời trên trục X và cũng không tách rời trên Y. Bản đồ này nhận cả chạm cạnh, nên dùng so sánh có dấu bằng. Vùng query được phép có width/height bằng 0 để biểu diễn một click; đối tượng trong world thì luôn có diện tích dương.
+
+Kéo ngược phải cho cùng kết quả với kéo thuận. normalize lấy min làm góc trên trái, lấy trị tuyệt đối làm kích thước. Khi nhiều hình chồng nhau, click chọn hình vẽ sau cùng: renderer vẽ ID tăng dần, do đó ID lớn nhất là lớp trên cùng. Đây là quy ước rõ ràng, không phụ thuộc thứ tự của unordered_map.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-selection" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 03 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Viết điều kiện giao nhau cho toàn bộ hình
+
+Giữ intersects và contains thành hai phép kiểm riêng. intersects dùng cho selection/culling; contains dùng khi quyết định một node chứa trọn đối tượng.
+
+```cpp title="include/model/geometry.hpp — Viết điều kiện giao nhau cho toàn bộ hình"
+inline bool intersects(const Box& a, const Box& b) {
+    return a.x <= right(b) && right(a) >= b.x && a.y <= bottom(b) && bottom(a) >= b.y;
+}
+```
+
+Một nhà nằm một phần trong vùng vẫn là hit của intersects nhưng không thỏa contains. Ví dụ box từ (0,0) rộng/cao 20 và query tại (20,10) chạm cạnh phải: phải được nhận. Quy tắc này cũng áp dụng ở đường chia của cây, tránh mất hit đúng trên biên.
+
+### Bước 2 — Tạo vùng chọn rồi gom ID vào selection
+
+endGesture phân biệt click và kéo vùng bằng khoảng cách 3 pixel logic. Với kéo vùng, truyền hai world point cho selectRegion:
+
+```cpp title="include/editor/document.hpp — Tạo vùng chọn rồi gom ID vào selection"
+    void selectRegion(Point a, Point b, bool additive = false) {
+        const Box box = normalize(a, b);
+        Query result = query(box);
+        if (!additive) {
+            selection.clear();
+        }
+        for (std::uint32_t id : result.ids) {
+            selection.insert(id);
+        }
+        lastQuery = std::move(result);
+        selectionBox = box;
+        notice = "Range selection uses AABB intersection, including edge contact.";
+    }
+```
+
+Chưa có Quadtree query ở mốc này, Document.query gọi queryBrute. Khi không giữ Shift, selection cũ bị thay; có Shift thì hợp thêm các hit. Set tránh lặp ID. lastQuery giữ thống kê của lần chọn để xem debug, không phải bản sao toàn bộ bản đồ.
+
+### Bước 3 — Click chọn đúng lớp trên cùng
+
+topmost gọi query với box 0×0 và lấy ID lớn nhất trong kết quả. pick sau đó thay selection hoặc bật/tắt riêng ID đó khi giữ Shift:
+
+```cpp title="include/editor/document.hpp — Click chọn đúng lớp trên cùng"
+    void pick(Point point, bool toggle = false) {
+        const Box box{point.x, point.y, 0, 0};
+        const auto top = topmost(point);
+        if (!toggle) {
+            selection.clear();
+        }
+        if (top) {
+            if (toggle && selection.contains(*top)) {
+                selection.erase(*top);
+            } else {
+                selection.insert(*top);
+            }
+        }
+        lastQuery = query(box);
+        selectionBox = box;
+        notice = "Click chooses the highest ID: the last object in paint order.";
+    }
+```
+
+Không lấy result.ids.back(): thứ tự query sẽ thay khi đổi cấu trúc index. Click vùng trống không có top; ở chế độ thường selection được xóa. Vẫn lưu query điểm để người học nhìn được số candidate đã kiểm.
+
+## Ghép các phần lại
+
+Chọn công cụ 1/Chọn đối tượng. Khi pointer-down chỉ lưu hai mốc; trong lúc kéo drawScene vẽ khung normalize(startWorld,currentWorld). Đến pointer-up, endGesture áp dụng cả vị trí cuối cùng rồi gọi pick hoặc selectRegion. Không chạy query chọn vùng cho mọi motion event: thao tác kéo này chỉ cần quyết định selection khi thả.
+
+```bash title="Terminal — build và chạy checkpoint 03 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_3 --parallel 2
+.\build\Debug\project_29_checkpoint_3.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Thay intersects bằng phép chứa tâm. Kéo một dải mỏng qua mép công viên lớn: hình nhìn thấy bị cắt mà không được chọn. Khôi phục phép giao AABB.
+
+2. Đổi `<=` thành `<` ở cạnh phải, rồi click đúng cạnh của fixture. Test chạm split phải thất bại; khôi phục chính sách biên thống nhất.
+
+3. Chọn một nhóm, giữ Shift kéo thêm vùng khác, rồi Shift-click một ID trong nhóm. Hai thao tác có ý nghĩa khác nhau: vùng thêm các hit, click bật/tắt một hit.
+
+## Tự kiểm tra kết quả
+
+- Kéo bốn hướng cho cùng AABB và cùng tập ID.
+- Một góc đối tượng giao vùng vẫn được chọn dù tâm ở ngoài.
+- Click trong vùng chồng chọn ID lớn nhất, không phụ thuộc thứ tự hash map.
+- Không có ID trùng trong selection và world không đổi khi chỉ chọn.
+
+## Bài tập mở rộng
+
+Thêm tùy chọn “chọn những hình nằm trọn trong vùng”. Đặt tên rõ ràng cho hai chế độ và giữ intersects làm chuẩn cho chế độ đang được các test hiện tại kiểm.
+
+Bài tiếp theo: [Đưa hình có diện tích vào Quadtree](/projects/quadtree-map-editor/04-quadtree-va-doi-tuong-cat-duong-chia).
+

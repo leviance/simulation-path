@@ -1,249 +1,412 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = ["include/lab.hpp", "src/main.cpp", "tests/tests.cpp"];
-
 const learning = {
   guides: {
     "p29-l01": {
-      focus:
-        "Bắt đầu từ vùng chọn brute force đang chạy đúng, rồi thống nhất cách chuẩn hóa hai góc, xử lý biên và chọn quadrant trước khi dựng Quadtree.",
+      focus: "Từ khung SDL đến dataset 100.000 đối tượng có ID, vị trí và kích thước thật.",
       expected:
-        "Kéo theo bất kỳ hướng nào cũng tạo cùng `SelectionBox`; điểm nằm trên đường chia chỉ thuộc một quadrant ở phía đông hoặc phía bắc.",
-      files,
+        "Checkpoint mở bản đồ với đủ 100.000 đối tượng. Camera chỉ vẽ phần đang thấy; nhà, cây và công viên phân biệt được bằng hình/màu, không phải một đám điểm.",
+      files: ["include/model/dataset.hpp", "include/graphics/view.hpp", "include/editor/scene.hpp"],
       steps: [
         {
-          title: "Chuẩn hóa hai góc kéo",
+          title: "Dữ liệu có vị trí và kích thước",
           explanation:
-            "Lấy `min` và `max` riêng trên X, Y để vùng chọn không phụ thuộc vào hướng kéo chuột.",
+            "Box.x/y là vị trí góc trên trái trong world; width/height phải dương. ID ổn định và kind cho biết cách vẽ, không dùng chỉ số vector làm danh tính.",
         },
         {
-          title: "Chốt inclusive boundary",
+          title: "Vẽ được một loại đối tượng trước",
           explanation:
-            "Điểm nằm đúng trên cạnh vùng chọn vẫn là hit; hai hộp chỉ chạm cạnh nhau vẫn được coi là có giao nhau.",
+            "Framebuffer và clipping được cung cấp từ bộ vẽ 2D. Hàm drawObject thêm mái, thân cây hoặc lối đi trong chính AABB của đối tượng.",
         },
         {
-          title: "Chọn một child duy nhất trên split line",
+          title: "Nối dataset vào khung SDL",
           explanation:
-            "Dùng `>=` để đưa điểm nằm đúng đường chia về phía đông hoặc phía bắc. Các hộp con có thể chung biên, nhưng mỗi điểm chỉ có một nơi để lưu.",
+            "resetScene tạo Document, dựng baseline rồi lấy danh sách visible. drawScene đọc danh sách đó để vẽ; chưa dùng Quadtree để tăng tốc.",
         },
       ],
     },
     "p29-l02": {
-      focus:
-        "Tạo một root node phủ toàn bộ world, lưu độ sâu, index các hạt và index các node con; ở bước này root vẫn là một leaf duy nhất.",
+      focus: "Pan, zoom giữ điểm dưới con trỏ và đổi tọa độ window/board/world đúng một lần.",
       expected:
-        "Root phủ [0,1]², depth 0, lưu 100.000 indices và vẫn khiến query đọc toàn bộ N giống brute force.",
-      files,
+        "Kéo Pan làm bản đồ dịch theo tay; wheel zoom quanh con trỏ. World position của đối tượng không đổi, Home về đúng vùng có dữ liệu của layout hiện tại.",
+      files: [
+        "include/model/geometry.hpp",
+        "include/editor/scene.hpp",
+        "include/app/application.hpp",
+      ],
       steps: [
         {
-          title: "Node giữ index thay vì copy Particle",
+          title: "Dùng lại cặp biến đổi thuận/nghịch",
           explanation:
-            "Particle vector vẫn là nguồn dữ liệu duy nhất; tree chỉ tổ chức các chỉ mục phục vụ tìm kiếm.",
+            "Screen dùng pixel logic của viewport; world dùng đơn vị bản đồ. Chỉ renderer nhân scale, không sửa world position khi pan/zoom.",
         },
         {
-          title: "Dùng sentinel cho leaf",
+          title: "Pan từ vị trí bắt đầu kéo",
           explanation:
-            "Khi bốn child index đều bằng `noNodeIndex`, node vẫn là leaf. Cách này tránh phải cấp phát và quản lý từng node bằng con trỏ.",
+            "Dùng camera lúc pointer-down và tổng delta, không cộng lại một delta đã áp dụng từ event trước.",
         },
         {
-          title: "Đọc giới hạn của root-only tree",
+          title: "Zoom quanh con trỏ",
           explanation:
-            "Việc bọc dữ liệu trong một node chưa làm truy vấn nhanh hơn. Nếu root còn chứa đủ N hạt, mỗi lần chọn vùng vẫn phải kiểm N phần tử.",
+            "Đo world point trước/sau khi đổi zoom rồi bù camera. SDL chỉ đổi window sang logical board một lần; boardToScreen trừ offset viewport.",
         },
       ],
     },
     "p29-l03": {
-      focus:
-        "Khi một leaf đã đầy, chia nó thành bốn node con rồi chèn lại toàn bộ index cũ bằng cùng một hàm chèn có giới hạn dừng.",
+      focus: "Click lớp trên cùng và kéo vùng chọn theo giao AABB, kể cả chạm cạnh và kéo ngược.",
       expected:
-        "Internal nodes rỗng, clustered cloud chia sâu ở ba cụm và mọi build dừng trước maximumDepth.",
-      files,
+        "Click chọn ID lớn nhất trong các AABB chồng nhau. Kéo qua một góc đối tượng vẫn chọn được dù tâm nằm ngoài vùng; Shift giữ/thêm selection.",
+      files: [
+        "include/model/geometry.hpp",
+        "include/editor/document.hpp",
+        "include/editor/scene.hpp",
+      ],
       steps: [
         {
-          title: "Kiểm split guards trước",
+          title: "Chốt điều kiện giao AABB",
           explanation:
-            "Giới hạn độ sâu và kích thước node nhỏ nhất giúp phép chia luôn dừng, kể cả khi nhiều hạt trùng vị trí.",
+            "Chạm cạnh cũng được nhận. Object phải có diện tích; query có thể rộng/cao bằng 0 để phục vụ click.",
         },
         {
-          title: "Tạo children trước khi giữ reference",
+          title: "Click có thứ tự rõ ràng",
           explanation:
-            "`std::vector` có thể dời vùng nhớ khi thêm node. Vì vậy hãy giữ `nodeIndex` và truy cập lại parent sau khi tạo đủ bốn child.",
+            "Renderer vẽ ID tăng dần, nên click nhận ID lớn nhất. Quy tắc không phụ thuộc thứ tự trả về của Quadtree.",
         },
         {
-          title: "Redistribute bằng cùng hàm insert",
+          title: "Kéo vùng chọn rồi commit selection",
           explanation:
-            "Cả index cũ lẫn index mới đều đi qua cùng hàm chọn quadrant, tránh hai quy tắc khác nhau cho điểm nằm trên đường chia.",
+            "Chuẩn hóa hai góc ở mọi hướng; khi kéo chỉ vẽ rectangle, thả mới cập nhật tập ID. Shift bổ sung hoặc toggle theo thao tác.",
         },
       ],
     },
     "p29-l04": {
-      focus:
-        "Viết một hàm kiểm tra độc lập, duyệt toàn bộ cây để phát hiện hạt bị mất, bị lưu trùng, child index sai hoặc leaf vượt sức chứa không hợp lệ.",
+      focus: "Node index, split có giới hạn và giữ đối tượng cắt đường chia ở node cha.",
       expected:
-        "Mỗi particle có count 1, internal nodes không giữ index và leaves+internalNodes bằng node count.",
-      files,
+        "Cây chia được dữ liệu nhưng mỗi ID vẫn chỉ lưu một lần. Đối tượng vắt qua split ở lại cha; depth/minimum size/node budget chặn chia vô hạn.",
+      files: ["include/spatial/quadtree.hpp"],
       steps: [
         {
-          title: "Đếm lại particle storage",
+          title: "Chọn child bằng toàn bộ AABB",
           explanation:
-            "Dùng một mảng đếm theo index của hạt. Giá trị 0 nghĩa là hạt bị mất; lớn hơn 1 nghĩa là hạt đã bị chèn vào nhiều leaf.",
+            "Chỉ đi xuống nếu cả box nằm trong một child. Object cắt split ở lại cha, không nhân bản và không chỉ index tâm.",
         },
         {
-          title: "Phân biệt overflow hợp lệ",
+          title: "Chia có giới hạn",
           explanation:
-            "Một leaf chỉ được vượt `capacity` khi đã chạm giới hạn độ sâu hoặc kích thước nhỏ nhất nên không thể chia tiếp.",
+            "Capacity là ngưỡng gợi ý split, không phải lý do bỏ đối tượng. Max depth, minimum size và node budget chặn dữ liệu trùng/chật.",
         },
         {
-          title: "Không dùng stats tự báo để tự chứng minh",
+          title: "Giữ index thay vì reference vào vector",
           explanation:
-            "Inspector tính lại leaf/internal count từ nodes và so với số liệu build đã ghi.",
+            "push_back có thể realloc nodes. Sao chép bounds/IDs cần dùng, rồi truy cập lại nodes[nodeIndex] để phân phối.",
         },
       ],
     },
     "p29-l05": {
-      focus:
-        "Truy vấn `SelectionBox` theo thứ tự rõ ràng: loại node không giao nhau, đi xuống các node con, rồi kiểm chính xác từng hạt trong leaf.",
+      focus: "Duyệt cây theo AABB, kiểm cả bucket ở node cha và đo visited/pruned/candidates.",
       expected:
-        "Selection nhỏ chỉ thăm một phần tree; candidates ít hơn N và hit set không chứa point nằm ngoài rectangle.",
-      files,
+        "Query chọn vùng dùng cây thật và khớp brute force. Bucket của node cha vẫn được kiểm; không mất nhà/công viên lớn cắt nhiều quadrant.",
+      files: ["include/spatial/quadtree.hpp", "include/editor/document.hpp"],
       steps: [
         {
-          title: "Prune trước khi hỏi node là leaf",
+          title: "Prune bằng bounds của node",
           explanation:
-            "Nếu hộp của node không giao vùng chọn, có thể bỏ toàn bộ nhánh mà không cần đọc hạt hay đi sâu hơn.",
+            "Nếu node không giao query, toàn bộ subtree có thể bỏ qua vì mọi object trong đó nằm trong bounds ấy.",
         },
         {
-          title: "Recurse đủ bốn child khi overlap",
+          title: "Kiểm bucket ở cả node cha",
           explanation:
-            "Một vùng chọn có thể cắt qua nhiều quadrant. Gọi truy vấn cho cả bốn child; child không liên quan sẽ dừng ngay ở phép kiểm giao nhau.",
+            "Internal node có thể giữ object lớn; chỉ kiểm leaf sẽ làm mất dữ liệu. Mỗi candidate vẫn phải qua intersects.",
         },
         {
-          title: "Exact-test trong leaf",
+          title: "Nối query vào selection",
           explanation:
-            "Leaf giao vùng chọn chỉ giúp thu hẹp danh sách. Từng hạt trong leaf vẫn phải qua phép kiểm point-in-box có tính cả đường biên.",
+            "Document chọn Tree hay Brute trên cùng data và cùng predicate. Sort chỉ để đối chiếu/paint order, không nằm trong hot query.",
         },
       ],
     },
     "p29-l06": {
-      focus:
-        "Chạy cùng các vùng chọn bằng Quadtree và brute force, đặc biệt ở góc world và đường chia, rồi so tập hit mà không phụ thuộc thứ tự duyệt.",
+      focus: "Dùng cùng index cho viewport culling, giữ paint order và tách culling khỏi render.",
       expected:
-        "Canonical hit sets khớp cho mọi probe, kể cả reverse drag, edge query và point đúng selection boundary.",
-      files,
+        "N vẫn là 100.000 nhưng renderer nhận đúng danh sách object giao viewport. Chuyển M Tree/Brute giữ nguyên camera, selection và hình hiển thị.",
+      files: ["include/editor/scene.hpp", "include/graphics/view.hpp", "include/app/controls.hpp"],
       steps: [
         {
-          title: "Canonicalize bản sao ngoài query",
+          title: "Từ camera lấy world viewport",
           explanation:
-            "Quadtree trả kết quả theo thứ tự của cây, còn brute force theo index hạt. Chỉ sắp xếp bản sao trong lúc kiểm tra, không đưa `sort` vào truy vấn thật.",
+            "Viewport là một Box trong world. Culling dùng chính query AABB đã kiểm, không tạo một index chỉ để trang trí.",
         },
         {
-          title: "Giữ cùng selection objects",
+          title: "Vẽ đầy đủ danh sách visible",
           explanation:
-            "Hai algorithm nhận đúng cùng normalized boxes để mismatch chỉ có thể đến từ candidate search hoặc exact test.",
+            "Không lấy mẫu object để giả tăng tốc. Khi zoom xa hình có thể nhỏ, nhưng mọi AABB giao viewport vẫn nằm trong danh sách vẽ.",
         },
         {
-          title: "Thêm edge cases có chủ đích",
+          title: "So hình ở cùng camera",
           explanation:
-            "Center lines, world corners và boundary hits làm lộ lỗi quadrant/overlap dễ hơn random query giữa scene.",
+            "M chỉ đổi cách query; không reset seed hoặc zoom. Candidate/query time tách khỏi sorting và rasterization.",
         },
       ],
     },
     "p29-l07": {
-      focus:
-        "Đo Quadtree và brute force trên cùng dữ liệu, sau đó thử bốn `leafCapacity` để xem cấu trúc cây và số hạt cần kiểm thay đổi thế nào.",
+      focus: "Lưu node theo ID, remove tại chỗ, insert lại và kiểm toàn bộ proposal trước khi ghi.",
       expected:
-        "Checksum giống nhau, brute scans=N×Q×R; capacity 4 tạo nhiều nodes hơn còn capacity 32 thường kiểm nhiều candidates hơn.",
-      files,
+        "Thêm tại camera được ID mới; Delete xóa đúng selection; Shift+mũi tên dời nhóm nhưng giữ ID. Query không còn thấy object đã xóa hoặc vị trí cũ.",
+      files: [
+        "include/spatial/quadtree.hpp",
+        "include/editor/document.hpp",
+        "include/app/controls.hpp",
+      ],
       steps: [
         {
-          title: "Dùng checksum không phụ thuộc hit order",
+          title: "Xóa bằng ID và node sở hữu",
           explanation:
-            "Mỗi query gộp set indices theo phép cộng rồi mới trộn vào checksum tuần tự của workload.",
+            "location cho biết bucket cần gỡ. Không để một bản ghi ở node cũ sau khi object đã biến mất khỏi model.",
         },
         {
-          title: "Tách rebuild khỏi timer query",
+          title: "Kiểm cả nhóm trước khi di chuyển",
           explanation:
-            "Khi đám hạt đứng yên, cây chỉ cần dựng một lần. Bảng kết quả vẫn báo riêng `rebuildMicroseconds` để không che mất chi phí này.",
+            "Tạo proposal và kiểm root cho tất cả ID trước khi remove/insert. Một object vượt biên thì không ghi bất kỳ vị trí nào.",
         },
         {
-          title: "Đọc nodes và candidates cùng timing",
+          title: "Giữ ID và selection qua update",
           explanation:
-            "Capacity nhỏ làm mỗi leaf ít hạt hơn nhưng tạo nhiều node và nhiều bước duyệt hơn. Hãy đọc cả số node, số hạt đã kiểm và thời gian cho mỗi truy vấn.",
+            "Object di chuyển được remove rồi insert lại cùng ID. Thêm mới dùng nextId tăng đơn điệu; xóa không tái sử dụng ID cũ.",
         },
       ],
     },
     "p29-l08": {
-      focus:
-        "Ghép thao tác kéo vùng chọn, reset, đổi cách phân bố hạt, đổi capacity, benchmark và bảng so sánh thành một ứng dụng hoàn chỉnh.",
+      focus: "Pointer capture, preview không sửa data và rollback toàn nhóm khi vượt root.",
       expected:
-        "Bản cuối chỉ có một đường dựng cây và truy vấn dùng chung; chuột luôn được nhả đúng lúc và CTest đạt ở cả Debug lẫn Release.",
-      files,
+        "Trong lúc kéo chỉ có preview. Thả hợp lệ cập nhật cả nhóm; Escape/mất capture hủy, vượt root giữ nguyên mọi vị trí. Preview nhận cả object vừa đi từ ngoài vào viewport.",
+      files: [
+        "include/editor/scene.hpp",
+        "include/graphics/view.hpp",
+        "include/app/application.hpp",
+      ],
       steps: [
         {
-          title: "Rebuild chỉ khi topology input đổi",
+          title: "Tách preview khỏi model",
           explanation:
-            "Kéo vùng chọn chỉ chạy truy vấn mới. Chỉ dựng lại cây khi cách phân bố hạt hoặc `leafCapacity` thay đổi, đồng thời xóa số đo cũ.",
+            "Gesture giữ offset và group bounds. Khi pointer-move, tree và object positions chưa thay đổi.",
         },
         {
-          title: "Giữ workload và draw sample tách biệt",
+          title: "Query cả vùng sẽ đi vào viewport",
           explanation:
-            "Renderer có thể chỉ vẽ 35.000 điểm, nhưng tree/query/tests vẫn xử lý đủ 100.000 particles.",
+            "Dịch viewport ngược offset để tìm các object đã chọn sắp xuất hiện. Chỉ dùng culling cũ sẽ mất preview ở mép.",
         },
         {
-          title: "Chốt giới hạn 2D trước Project 30",
+          title: "Chốt đúng sample cuối và hủy sạch",
           explanation:
-            "Octree tiếp theo sẽ giữ insertion/query contracts nhưng thay bốn quadrant bằng tám octant trong không gian 3D.",
+            "Pointer-up cập nhật vị trí lần cuối rồi commit; cancel/lost capture/blur/resize bỏ preview và khôi phục selection trước gesture.",
+        },
+      ],
+    },
+    "p29-l09": {
+      focus: "Oracle độc lập, topology và query IDs trước/sau chuỗi thêm, di chuyển, xóa.",
+      expected:
+        "Reference check hoàn tất các fixture và viewport với 0 lỗi; cố ý làm hỏng location/bucket phải bị phát hiện. Kết quả cũ bị bỏ khi revision đổi.",
+      files: ["include/editor/validation.hpp", "tests/tests.cpp", "include/app/controls.hpp"],
+      steps: [
+        {
+          title: "Kiểm cấu trúc trước khi query",
+          explanation:
+            "Mỗi ID nằm một lần, location khớp, child index/depth hợp lệ và overflow chỉ xảy ra khi guard chặn split.",
+        },
+        {
+          title: "So IDs với oracle khác cách viết",
+          explanation:
+            "Test dùng interval gap thay vì gọi intersects production. Runtime reference giúp phát hiện lỗi index trên map đang sửa.",
+        },
+        {
+          title: "Kiểm sau chuỗi thao tác",
+          explanation:
+            "Không chỉ kiểm cây mới build: thêm, move group, xóa rồi query lại cả vùng chọn và viewport. Revision cũ không được báo như kết quả hiện tại.",
+        },
+      ],
+    },
+    "p29-l10": {
+      focus: "Cùng dataset/query, hai warm-up + năm mẫu; thử layout dày và đối tượng lớn.",
+      expected:
+        "Benchmark có hai dòng Tree/Brute, mỗi dòng 16 query và 5 samples. Build/update/culling được báo riêng; có hủy và không công bố dòng còn thiếu mẫu.",
+      files: [
+        "include/editor/benchmark.hpp",
+        "include/editor/document.hpp",
+        "include/app/presentation.hpp",
+      ],
+      steps: [
+        {
+          title: "Cố định dataset và tập query",
+          explanation:
+            "Hai phương thức đọc cùng tree objects và 16 Box không đổi. Hai warm-up bị bỏ, sau đó lấy năm mẫu cho mỗi dòng.",
+        },
+        {
+          title: "Tách các loại chi phí",
+          explanation:
+            "Build index, update/edit, query selection và culling có số riêng. Render, checksum và paint-order sorting không nằm trong query timer.",
+        },
+        {
+          title: "Đọc counters trước khi kết luận",
+          explanation:
+            "Đối tượng lớn nằm ở cha và query rộng có thể làm tree xét gần mọi object. Không hứa một hệ số speedup hay FPS chung.",
+        },
+      ],
+    },
+    "p29-l11": {
+      focus: "CMake độc lập, CTest Debug/Release và workflow đầy đủ trên 100.000 đối tượng.",
+      expected:
+        "ZIP build được mọi mốc và final; smoke workflow báo N=100000, drawn=visible, query khớp brute sau các thao tác. Mã hoàn chỉnh từng file có ở cuối bài.",
+      files: ["src/main.cpp", "tests/tests.cpp", "include/app/application.hpp"],
+      steps: [
+        {
+          title: "Build từ source độc lập",
+          explanation:
+            "CMake FetchContent khóa SDL 3.4.8 và link SDL3::SDL3. Final mặc định; BUILD_CHECKPOINTS mở starter và 11 mốc.",
+        },
+        {
+          title: "Chạy test ở hai cấu hình",
+          explanation:
+            "Bộ đếm failures/exit code không bị tắt bởi NDEBUG. Smoke hữu hạn dùng SDL thật và kiểm workflow 100.000 object.",
+        },
+        {
+          title: "Nghiệm thu một công cụ dùng được",
+          explanation:
+            "Tìm vùng, chọn, di chuyển, thêm/xóa và kiểm lại; bật/tắt debug vẫn giữ cùng dữ liệu và thao tác. Canvas không thay executable C++.",
         },
       ],
     },
   },
   references: {
     "p29-l01": [
-      { label: "Quadtree", href: "/glossary#quadtree", kind: "Thuật ngữ" },
+      {
+        label: "Quadtree",
+        href: "/glossary#quadtree",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "World space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p29-l02": [
+      {
+        label: "Camera2D",
+        href: "/glossary#camera-2d",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Screen space",
+        href: "/glossary#screen-space",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p29-l03": [
       {
         label: "Conservative candidate set",
         href: "/glossary#conservative-candidate-set",
         kind: "Thuật ngữ",
       },
-    ],
-    "p29-l02": [
-      { label: "Quadtree node", href: "/glossary#quadtree-node", kind: "Thuật ngữ" },
-      { label: "Leaf capacity", href: "/glossary#leaf-capacity", kind: "Thuật ngữ" },
-    ],
-    "p29-l03": [
-      { label: "Maximum tree depth", href: "/glossary#maximum-tree-depth", kind: "Thuật ngữ" },
-      { label: "Quadtree", href: "/glossary#quadtree", kind: "Thuật ngữ" },
+      {
+        label: "Brute-force query",
+        href: "/glossary#brute-force-query",
+        kind: "Thuật ngữ",
+      },
     ],
     "p29-l04": [
+      {
+        label: "Quadtree node",
+        href: "/glossary#quadtree-node",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Leaf capacity",
+        href: "/glossary#leaf-capacity",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p29-l05": [
+      {
+        label: "Spatial pruning",
+        href: "/glossary#spatial-pruning",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Quadtree",
+        href: "/glossary#quadtree",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p29-l06": [
+      {
+        label: "World space",
+        href: "/glossary#world-space",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Screen space",
+        href: "/glossary#screen-space",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p29-l07": [
+      {
+        label: "Quadtree node",
+        href: "/glossary#quadtree-node",
+        kind: "Thuật ngữ",
+      },
       {
         label: "Deterministic simulation",
         href: "/glossary#deterministic-simulation",
         kind: "Thuật ngữ",
       },
-      { label: "Quadtree node", href: "/glossary#quadtree-node", kind: "Thuật ngữ" },
     ],
-    "p29-l05": [
-      { label: "Spatial pruning", href: "/glossary#spatial-pruning", kind: "Thuật ngữ" },
+    "p29-l08": [
       {
-        label: "Conservative candidate set",
-        href: "/glossary#conservative-candidate-set",
+        label: "Pointer capture",
+        href: "/glossary#pointer-capture",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Camera2D",
+        href: "/glossary#camera-2d",
         kind: "Thuật ngữ",
       },
     ],
-    "p29-l06": [
-      { label: "Brute-force query", href: "/glossary#brute-force-query", kind: "Thuật ngữ" },
-      { label: "Benchmark checksum", href: "/glossary#benchmark-checksum", kind: "Thuật ngữ" },
-    ],
-    "p29-l07": [
-      { label: "Benchmark warm-up", href: "/glossary#benchmark-warm-up", kind: "Thuật ngữ" },
-      { label: "Leaf capacity", href: "/glossary#leaf-capacity", kind: "Thuật ngữ" },
-    ],
-    "p29-l08": [
-      { label: "Pointer capture", href: "/glossary#pointer-capture", kind: "Thuật ngữ" },
+    "p29-l09": [
       {
-        label: "SDL_CaptureMouse",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
-        kind: "SDL API",
+        label: "Brute-force query",
+        href: "/glossary#brute-force-query",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Maximum tree depth",
+        href: "/glossary#maximum-tree-depth",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p29-l10": [
+      {
+        label: "Benchmark warm-up",
+        href: "/glossary#benchmark-warm-up",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Benchmark checksum",
+        href: "/glossary#benchmark-checksum",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p29-l11": [
+      {
+        label: "Quadtree",
+        href: "/glossary#quadtree",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Pointer capture",
+        href: "/glossary#pointer-capture",
+        kind: "Thuật ngữ",
       },
     ],
   },

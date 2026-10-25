@@ -1,0 +1,206 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đi lại trên bản đồ bằng camera 2D
+
+## Vấn đề cần giải quyết
+
+Bản đồ rộng hơn window rất nhiều. Nếu muốn tìm một khu phố khác, ta phải di chuyển camera, không được cộng trừ vị trí của 100.000 đối tượng. Mục tiêu bài này là làm cho bản đồ đi theo tay khi kéo và giữ nguyên địa điểm dưới con trỏ khi cuộn zoom.
+
+## Hiểu ý tưởng trước khi viết code
+
+Camera lưu world point nằm ở giữa viewport và số pixel logic trên một world unit. Với screenCenter là nửa kích thước viewport:
+
+$$s=(p-c)z+screenCenter,\qquad p=c+\frac{s-screenCenter}{z}$$
+
+Pan sang phải nghĩa là giảm camera.x; nhà vẫn nằm nguyên chỗ trong world. Khi zoom, ta đo world point dưới con trỏ trước và sau, rồi bù camera bằng hiệu hai điểm ấy. Đây chính là ý tưởng đã dùng ở Project 05, nay áp dụng vào editor có dữ liệu lớn.
+
+SDL window có thể bị letterbox hoặc có mật độ pixel cao. Tọa độ input phải qua window → logical framebuffer → viewport → world. Mỗi bước chỉ làm một lần.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-camera" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 02 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Dùng chung cặp biến đổi thuận và nghịch
+
+Đọc worldToScreen và hàm nghịch screenToWorld ngay dưới nó. Hai hàm cùng nhận scene.size, tức kích thước viewport logic chứ không phải độ phân giải vật lý của monitor.
+
+```cpp title="include/model/geometry.hpp — Dùng chung cặp biến đổi thuận và nghịch"
+inline Point worldToScreen(Point point, const Camera& camera, Point size) {
+    return {(point.x - camera.x) * camera.zoom + size.x / 2, (point.y - camera.y) * camera.zoom + size.y / 2};
+}
+```
+
+
+
+```cpp title="include/model/geometry.hpp — đổi ngược về world"
+inline Point screenToWorld(Point point, const Camera& camera, Point size) {
+    return {camera.x + (point.x - size.x / 2) / camera.zoom, camera.y + (point.y - size.y / 2) / camera.zoom};
+}
+```
+
+Muốn kiểm một điểm, đổi sang screen rồi đổi ngược lại và đo khoảng cách với điểm ban đầu. Thay camera chỉ làm kết quả screen đổi; box trong Document không được đổi theo.
+
+### Bước 2 — Pan theo tổng quãng kéo kể từ pointer-down
+
+beginGesture lưu camera và startScreen lúc bắt đầu. Khi nhận vị trí mới, tính lại camera từ mốc ấy thay vì cộng tổng delta vào camera hiện tại:
+
+```cpp title="include/editor/scene.hpp — Pan theo tổng quãng kéo kể từ pointer-down"
+inline void moveGesture(Scene& scene, Point screen) {
+    if (!scene.gesture) {
+        return;
+    }
+    auto& gesture = *scene.gesture;
+    if (gesture.tool == Tool::Pan) {
+        scene.camera = gesture.camera;
+        scene.camera.x -= (screen.x - gesture.startScreen.x) / gesture.camera.zoom;
+        scene.camera.y -= (screen.y - gesture.startScreen.y) / gesture.camera.zoom;
+    }
+    const auto world = screenToWorld(screen, scene.camera, scene.size);
+    gesture.currentWorld = world;
+    gesture.offset = {world.x - gesture.startWorld.x, world.y - gesture.startWorld.y};
+    refreshScene(scene);
+}
+```
+
+Ví dụ con trỏ đã đi 10 rồi 20 pixel: hai event phải cho camera lệch tổng 20 pixel, không phải 30. Chia cho zoom chuyển pixel logic sang world unit. currentWorld và offset chuẩn bị cho vùng chọn/kéo nhóm ở bài sau; pan vẫn không sửa Document.
+
+### Bước 3 — Zoom quanh đúng địa điểm dưới con trỏ
+
+Dùng hàm sau thay cho việc chỉ nhân camera.zoom. Clamp 0.05–4 chặn mức zoom khiến phép nghịch mất ý nghĩa hoặc hình quá lớn.
+
+```cpp title="include/model/geometry.hpp — Zoom quanh đúng địa điểm dưới con trỏ"
+inline void zoomAt(Camera& camera, Point anchor, Point size, double zoom) {
+    if (!std::isfinite(zoom)) {
+        throw std::invalid_argument("Invalid zoom");
+    }
+    const auto before = screenToWorld(anchor, camera, size);
+    camera.zoom = std::clamp(zoom, 0.05, 4.0);
+    const auto after = screenToWorld(anchor, camera, size);
+    camera.x += before.x - after.x;
+    camera.y += before.y - after.y;
+}
+```
+
+before và after đều là world point ứng với cùng anchor trên screen. Cộng before-after vào camera đưa điểm cũ trở lại anchor. Hàm boardToScreen trong graphics/view.hpp trừ offset (70,80); đừng trừ lần nữa trong screenToWorld.
+
+
+### Bước 4 — Tạo và kết thúc một lần kéo
+
+Nếu chỉ viết moveGesture, bạn chưa có nơi ghi mốc camera/startScreen. Thêm beginGesture ở scene.hpp; pointer-down chỉ chụp trạng thái, không thay đổi dữ liệu bản đồ.
+
+
+```cpp title="include/editor/scene.hpp — ghi mốc pointer-down"
+inline void beginGesture(Scene& scene, Point screen, bool additive) {
+    if (scene.gesture) {
+        return;
+    }
+    const auto world = screenToWorld(screen, scene.camera, scene.size);
+    Gesture gesture{};
+    gesture.tool = scene.tool;
+    gesture.startScreen = screen;
+    gesture.startWorld = world;
+    gesture.currentWorld = world;
+    gesture.camera = scene.camera;
+    gesture.additive = additive;
+    scene.gesture = std::move(gesture);
+    refreshScene(scene);
+}
+```
+
+
+Ở checkpoint 02, endGesture chưa chọn hay sửa object. Nó áp dụng vị trí cuối rồi dọn gesture. Đến các bài sau ta mới mở rộng chính hàm này, không thêm một event loop thứ hai.
+
+
+```cpp title="include/editor/scene.hpp — hoàn tất pan bằng tọa độ pointer-up"
+inline void endGesture(Scene& scene, Point screen) {
+    if (!scene.gesture) {
+        return;
+    }
+    moveGesture(scene, screen);
+    cancelGesture(scene, false);
+    refreshScene(scene);
+}
+```
+
+
+
+### Bước 5 — Nối ba mouse event với Scene
+
+Trong while(SDL_PollEvent(&event)) của app/application.hpp, đặt các nhánh sau sau bước SDL_ConvertEventToRenderCoordinates đã có sẵn. PointerState và releasePointer nằm ở đầu cùng file; owner nhận which của chuột khởi tạo thao tác.
+
+
+```cpp title="include/app/application.hpp — bắt đầu khi chuột ở trong board"
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !pointer.active) {
+                    const Point board{event.button.x, event.button.y};
+                    if (insideBoard(board, scene)) {
+                        stopWork(scene);
+                        if (SDL_CaptureMouse(true)) {
+                            pointer.active = true;
+                            pointer.owner = event.button.which;
+                            beginGesture(scene, boardToScreen(board), (SDL_GetModState() & SDL_KMOD_SHIFT) != 0);
+                        }
+                    }
+                }
+```
+
+
+insideBoard ngăn người dùng kéo từ vùng HUD. Chỉ bắt đầu gesture khi capture thành công. Motion đi qua boardToScreen đúng một lần; nếu không còn giữ nút trái, hủy thay vì tiếp tục kéo.
+
+
+```cpp title="include/app/application.hpp — chỉ nhận motion của owner"
+                if (event.type == SDL_EVENT_MOUSE_MOTION && pointer.active && event.motion.which == pointer.owner) {
+                    if (!(event.motion.state & SDL_BUTTON_LMASK)) {
+                        releasePointer(pointer);
+                        cancelGesture(scene);
+                        refreshScene(scene);
+                    } else
+                        moveGesture(scene, boardToScreen({event.motion.x, event.motion.y}));
+                }
+```
+
+
+Mouse-up phải đến từ cùng owner và cùng nút. endGesture nhận tọa độ của chính event này; releasePointer nhả capture. Đường mất focus/resize trong khung SDL gọi stopWork và refreshScene, không commit nhầm một lần kéo đã hủy.
+
+
+```cpp title="include/app/application.hpp — áp dụng mẫu cuối rồi nhả capture"
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && pointer.active && event.button.which == pointer.owner) {
+                    endGesture(scene, boardToScreen({event.button.x, event.button.y}));
+                    releasePointer(pointer);
+                }
+```
+
+
+
+## Ghép các phần lại
+
+Trong app/application.hpp, mọi mouse event đi qua SDL_ConvertEventToRenderCoordinates trước khi đọc tọa độ. Wheel dùng mouse_x/mouse_y làm anchor, boardToScreen đưa về viewport rồi gọi zoomAt. Mouse-down trong board gọi beginGesture, motion gọi moveGesture, mouse-up gọi endGesture. Chọn công cụ Pan bằng phím 2. SDL_CaptureMouse chỉ giữ trong một lần kéo và được nhả khi kết thúc/hủy; xem [SDL về đổi tọa độ event](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates) và [mouse capture](https://wiki.libsdl.org/SDL3/SDL_CaptureMouse).
+
+```bash title="Terminal — build và chạy checkpoint 02 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_2 --parallel 2
+.\build\Debug\project_29_checkpoint_2.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ hai dòng bù camera trong zoomAt rồi đặt con trỏ lên mái một ngôi nhà và zoom. Nhà trôi khỏi con trỏ; bật lại hai dòng để thấy sự khác biệt.
+
+2. Cộng delta từ startScreen vào camera hiện tại thay vì gesture.camera. Kéo chậm qua nhiều motion event: bản đồ trượt nhanh dần. Khôi phục cách tính từ mốc ban đầu.
+
+3. Resize window cho có dải letterbox, thử kéo và zoom tại cùng một ngôi nhà. Nếu điểm chọn lệch, kiểm pipeline tọa độ thay vì nhân thêm device-pixel-ratio.
+
+## Tự kiểm tra kết quả
+
+- Pan không thay revision hay vị trí world của đối tượng.
+- Round-trip và điểm dưới cursor sai khác nhỏ hơn 1e-9 trong CTest.
+- Home đưa camera về vùng có dữ liệu cho cả count 10.000 và layout Clustered.
+- Nhả chuột ngoài board hoặc mất focus không để lại trạng thái đang kéo.
+
+## Bài tập mở rộng
+
+Hiện world point dưới con trỏ bên cạnh camera. Dùng nó kiểm bằng mắt rằng zoom không đổi điểm neo, sau đó thêm một test ở camera có tọa độ âm.
+
+Bài tiếp theo: [Chọn đúng đối tượng, không chỉ chọn tâm](/projects/quadtree-map-editor/03-chon-doi-tuong-bang-giao-aabb).
+

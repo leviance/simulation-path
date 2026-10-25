@@ -1,0 +1,156 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo cả nhóm: xem trước rồi mới áp dụng
+
+## Vấn đề cần giải quyết
+
+Nếu cứ cập nhật 100.000 ID theo từng motion event, kéo chuột sẽ vừa tốn công vừa khó hủy. Ta tách hình xem trước khỏi dữ liệu thật: trong lúc kéo, renderer chỉ dịch hình; khi thả hợp lệ mới cập nhật index một lần cho cả nhóm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gesture giữ startWorld, currentWorld, offset, camera ban đầu, bounds của nhóm và selection trước thao tác. Offset bằng currentWorld-startWorld. Dữ liệu trong Document không đổi trong preview.
+
+Có một chi tiết dễ bỏ sót: một object đang ngoài viewport có thể được kéo vào trong. Chỉ lấy visible cũ rồi dịch hình sẽ làm nó biến mất. Để tìm preview, dịch ngược viewport theo -offset, query ở world cũ rồi giữ những ID thuộc selection:
+
+$$previewIDs=Query(viewport-offset)\cap selection$$
+
+Pointer capture giữ cùng một thao tác khi con trỏ ra ngoài Canvas/window. Chỉ pointer khởi tạo gesture được cập nhật/kết thúc nó. Escape, pointer cancel, mất focus hay resize đều hủy preview; không được commit ngầm.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-group-drag" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 08 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Bắt đầu từ một nhóm ổn định
+
+Ở chế độ Move, click vào thành viên đã chọn phải giữ cả nhóm. Chỉ khi click một object chưa chọn mới chuyển sang nhóm một object:
+
+```cpp title="include/editor/scene.hpp — Bắt đầu từ một nhóm ổn định"
+inline void beginGesture(Scene& scene, Point screen, bool additive) {
+    if (scene.gesture) {
+        return;
+    }
+    const auto world = screenToWorld(screen, scene.camera, scene.size);
+    Gesture gesture{};
+    gesture.tool = scene.tool;
+    gesture.startScreen = screen;
+    gesture.startWorld = world;
+    gesture.currentWorld = world;
+    gesture.camera = scene.camera;
+    gesture.additive = additive;
+    if (scene.tool == Tool::Move) {
+        gesture.previousSelection = scene.document.selection;
+        const auto hit = scene.document.topmost(world);
+        if (!hit) {
+            return;
+        }
+        if (!scene.document.selection.contains(*hit)) {
+            scene.document.selection.clear();
+            scene.document.selection.insert(*hit);
+        }
+        gesture.bounds = scene.document.selectionBounds();
+    }
+    scene.gesture = std::move(gesture);
+    refreshScene(scene);
+}
+```
+
+previousSelection giúp Escape khôi phục selection trước lần kéo. bounds tính một lần ở pointer-down để kiểm root trong preview, không lặp quét cả nhóm mỗi motion. Không tìm thấy hit thì không tạo gesture.
+
+### Bước 2 — Query vùng có thể đi vào màn hình
+
+Đọc phần preview mới sau visible. Query inverse viewport làm việc trên dữ liệu chưa đổi, rồi lọc theo selection:
+
+```cpp title="include/editor/scene.hpp — Query vùng có thể đi vào màn hình"
+inline void refreshScene(Scene& scene) {
+    if ((scene.validation.tree && scene.validation.revision != scene.document.tree.revision) || (scene.benchmark.tree && scene.benchmark.revision != scene.document.tree.revision)) {
+        scene.validation = {};
+        scene.benchmark = {};
+    }
+    const Box view = viewport(scene.camera, scene.size);
+    scene.visible = scene.document.query(view);
+    // Chỉ sort phục vụ paint order, nằm ngoài timing của query.
+    std::sort(scene.visible.ids.begin(), scene.visible.ids.end());
+    scene.preview.reset();
+    if (scene.gesture && scene.gesture->tool == Tool::Move) {
+        const Point inverse{-scene.gesture->offset.x, -scene.gesture->offset.y};
+        Query preview = scene.document.query(translate(view, inverse));
+        std::vector<std::uint32_t> selected;
+        for (std::uint32_t id : preview.ids) {
+            if (scene.document.selection.contains(id)) {
+                selected.push_back(id);
+            }
+        }
+        std::sort(selected.begin(), selected.end());
+        preview.ids = std::move(selected);
+        scene.preview = std::move(preview);
+    }
+}
+```
+
+Những object không được chọn vẫn vẽ tại vị trí cũ. Những object được chọn bỏ qua ở lượt visible và chỉ vẽ ở lượt preview để không xuất hiện hai lần. Hai danh sách đều sort ID cho paint order ổn định. Viền đỏ nghĩa là toàn nhóm sẽ bị từ chối khi thả.
+
+### Bước 3 — Thả tại vị trí cuối cùng rồi mới commit
+
+Đừng trông chờ motion event cuối luôn có mặt. endGesture gọi moveGesture bằng chính tọa độ pointer-up trước khi áp dụng thao tác:
+
+```cpp title="include/editor/scene.hpp — Thả tại vị trí cuối cùng rồi mới commit"
+inline void endGesture(Scene& scene, Point screen) {
+    if (!scene.gesture) {
+        return;
+    }
+    moveGesture(scene, screen);
+    const auto& gesture = *scene.gesture;
+    if (gesture.tool == Tool::Select) {
+        const auto distance = std::hypot(screen.x - gesture.startScreen.x, screen.y - gesture.startScreen.y);
+        if (distance <= 3) {
+            scene.document.pick(gesture.currentWorld, gesture.additive);
+        } else {
+            scene.document.selectRegion(gesture.startWorld, gesture.currentWorld, gesture.additive);
+        }
+    }
+    if (gesture.tool == Tool::Add) {
+        scene.document.addObject(gesture.currentWorld, scene.kind);
+    }
+    if (gesture.tool == Tool::Move) {
+        scene.document.moveSelection(gesture.offset);
+    }
+    cancelGesture(scene, false);
+    refreshScene(scene);
+}
+```
+
+Move gọi moveSelection đúng một lần. Dù thành công hay bị root từ chối, cancelGesture(false) chỉ dọn preview, không khôi phục một selection cũ ngoài ý muốn. Đường hủy gọi cancelGesture mặc định để khôi phục selection; không đi qua endGesture.
+
+## Ghép các phần lại
+
+Trong SDL, PointerState lưu active/owner. Sau khi đổi event sang logical coordinates, mouse-down trong board mới SDL_CaptureMouse(true); motion và up kiểm cùng which, up áp dụng tọa độ cuối rồi releasePointer. Canvas dùng setPointerCapture/hasPointerCapture và kiểm pointerId tương tự. Resize/mất focus nhả capture, stopWork và refresh để không có preview treo. Công cụ 3/Di chuyển nhóm là đường bắt đầu; công cụ Pan không sửa selection.
+
+```bash title="Terminal — build và chạy checkpoint 08 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_8 --parallel 2
+.\build\Debug\project_29_checkpoint_8.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Trong refreshScene, dùng visible cũ làm preview. Chọn nhóm ở mép, kéo từ ngoài vào: một số hình tới muộn hoặc mất. Khôi phục inverse viewport query.
+
+2. Bỏ moveGesture ở đầu endGesture. Trong test gửi down rồi up sang vị trí mới mà không motion: nhóm không đi đủ quãng. Khôi phục việc dùng tọa độ cuối.
+
+3. Kéo ra ngoài root rồi thả; sau đó kéo hợp lệ và nhấn Escape trước khi thả. Lần đầu phải rollback cả nhóm, lần sau không có thay đổi nào được ghi.
+
+## Tự kiểm tra kết quả
+
+- Revision và box không đổi trong preview, chỉ đổi sau lần thả hợp lệ.
+- Không có object được chọn bị vẽ cả vị trí cũ lẫn mới.
+- Nhóm từ ngoài vào viewport vẫn đủ hình, không lấy mẫu.
+- Cancel/blur/resize và pointer khác không commit gesture; final-up được áp dụng.
+
+## Bài tập mở rộng
+
+Thêm nhãn offset world và số thành viên nhóm ngay cạnh preview. Tránh ghi toàn bộ Object mỗi motion; giải thích vì sao lưu một offset đủ cho lần dịch chuyển cứng này.
+
+Bài tiếp theo: [Kiểm cây sau khi bản đồ đã thay đổi](/projects/quadtree-map-editor/09-kiem-chung-sau-chuoi-chinh-sua).
+

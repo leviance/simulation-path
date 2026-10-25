@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-function captureBrowserErrors(page: Page) {
+function captureErrors(page: Page) {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
@@ -9,54 +9,67 @@ function captureBrowserErrors(page: Page) {
   return errors;
 }
 
-test("Project 29 rebuilds topology, captures selection and preserves checksum", async ({
+test("P29 overview and first lesson hydrate without timing or ARIA mismatches", async ({
   page,
 }) => {
-  const errors = captureBrowserErrors(page);
-  await page.goto("/projects/visible-quadtree/08-hoan-thien-visible-quadtree-va-nghiem-thu");
+  const errors = captureErrors(page);
+  await page.goto("/projects/quadtree-map-editor");
+  await expect(page.locator(".lab-readout")).not.toContainText("—", { timeout: 15000 });
+  await page.getByRole("button", { name: "Chọn trong viewport", exact: true }).click();
+  await expect
+    .poll(async () =>
+      Number(await page.locator("[data-map-selected]").getAttribute("data-map-selected")),
+    )
+    .toBeGreaterThan(0);
+  const surface = page.locator('canvas[aria-label="Biên tập bản đồ 2D bằng Quadtree"]');
+  const helpId = await surface.getAttribute("aria-describedby");
+  expect(helpId).toBe("quadtree-map-editor-help-overview");
+  await expect(page.locator('[id="' + helpId + '"]')).toHaveCount(1);
+  await page
+    .locator('a[href="/projects/quadtree-map-editor/01-ve-ban-do-va-tao-doi-tuong"]')
+    .first()
+    .click();
+  await expect(surface).toHaveAttribute("aria-describedby", "quadtree-map-editor-help-map-objects");
+  await expect(page.locator(".lab-readout")).not.toContainText("—", { timeout: 15000 });
+  await expect(page.locator("[data-map-count]")).toHaveAttribute("data-map-count", "100000");
+  expect(errors).toEqual([]);
+});
 
-  const canvas = page.locator('canvas[aria-label^="Quadtree"]');
-  const controls = page.locator(".lab-controls");
-  const topology = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "Tree topology / rebuild" })
-    .locator("dd");
-  const match = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "Topology / brute-force oracle" })
-    .locator("dd");
-  const benchmark = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "Benchmark tree / brute" })
-    .locator("dd");
-  const pointer = page
-    .locator(".lab-readout div")
-    .filter({ hasText: "Auto selection / pointer" })
-    .locator("dd");
-
-  await expect(canvas).toBeVisible();
-  await expect(topology).toContainText("depth");
-  await controls.getByLabel("Leaf capacity").selectOption("32");
-  await expect(topology).toContainText("max leaf");
-  await controls.getByLabel("Distribution").selectOption("uniform");
-
-  await canvas.scrollIntoViewIfNeeded();
-  const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  if (box) {
-    await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.35);
-    await page.mouse.down();
-    await expect(pointer).toContainText("đang kéo");
-    await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.6);
-    await page.mouse.up();
-  }
-  await expect(pointer).toContainText("đã nhả");
-
-  await page.getByRole("button", { name: "So benchmark" }).click();
-  await expect(benchmark).not.toHaveText("chưa chạy");
-  await expect(match).toContainText("checksum khớp");
-  await page.getByRole("button", { name: "Chạy capacity study" }).click();
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(benchmark).toHaveText("chưa chạy");
+test("P29 edits the real 100000-object map and checks the edited index", async ({ page }) => {
+  const errors = captureErrors(page);
+  await page.goto("/projects/quadtree-map-editor/11-du-an-hoan-chinh-va-nghiem-thu");
+  const board = page.locator("[data-map-count]");
+  // Canvas has an accessible name but no explicit img role; address the element itself.
+  const surface = page.locator('canvas[aria-label="Biên tập bản đồ 2D bằng Quadtree"]');
+  await expect(surface).toBeVisible();
+  await expect(board).toHaveAttribute("data-map-count", "100000");
+  await expect(page.locator(".lab-readout")).not.toContainText("—", { timeout: 15000 });
+  await page.getByRole("button", { name: "Chọn trong viewport", exact: true }).click();
+  const selection = await board.getAttribute("data-map-selected");
+  expect(Number(selection)).toBeGreaterThan(0);
+  const revision = Number(await board.getAttribute("data-map-revision"));
+  await surface.focus();
+  await surface.press("Shift+ArrowRight");
+  await expect
+    .poll(async () => Number(await board.getAttribute("data-map-revision")))
+    .toBeGreaterThan(revision);
+  await expect(board).toHaveAttribute("data-map-selected", selection!);
+  await page.getByRole("button", { name: "Thêm tại tâm camera", exact: true }).click();
+  await expect(board).toHaveAttribute("data-map-count", "100001");
+  await page.getByRole("button", { name: "Xóa selection", exact: true }).click();
+  await expect(board).toHaveAttribute("data-map-count", "100000");
+  await page.getByRole("button", { name: "Đang dùng Quadtree", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Đang dùng brute force", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Đang dùng brute force", exact: true }).click();
+  await page.getByRole("button", { name: "Kiểm reference và topology", exact: true }).click();
+  await expect(page.getByText(/Reference: (37\/37|38\/38) query · 0 lỗi.*hoàn tất/)).toBeVisible({
+    timeout: 15000,
+  });
+  await expect(page.getByRole("link", { name: /Tải ZIP Dự án/ }).first()).toHaveAttribute(
+    "href",
+    "/downloads/project-29-quadtree-map-editor.zip",
+  );
   expect(errors).toEqual([]);
 });

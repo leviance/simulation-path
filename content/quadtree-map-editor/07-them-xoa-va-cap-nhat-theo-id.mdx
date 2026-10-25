@@ -1,0 +1,164 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm, xóa và cập nhật mà không để lại bản ghi cũ
+
+## Vấn đề cần giải quyết
+
+Editor không thể chỉ đọc bản đồ. Người dùng thêm một cây, xóa một dãy nhà hoặc dời nhóm đối tượng. Nếu chỉ sửa box trong objects, index vẫn trỏ vào vị trí cũ: hình đã đi nhưng query chưa biết. Bài này thêm các thao tác cập nhật dữ liệu và index cùng nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+ID là danh tính ổn định; node giữ ID chứ không giữ bản sao Object. location[id] cho biết bucket đang lưu ID, nên remove không cần quét toàn cây. Di chuyển là tính box mới, xóa khỏi bucket cũ rồi chèn lại cùng ID.
+
+Với nhóm, phải kiểm toàn bộ vị trí đề xuất trước khi ghi bất cứ thay đổi nào. Chỉ một thành viên ra ngoài root cũng từ chối cả nhóm. Root cố định [-16384,16384]²: ứng dụng không tự mở rộng cây hay âm thầm kẹp từng hình vào biên.
+
+Không merge node sau xóa trong phiên bản này. Cây có thể còn node rỗng nhưng query vẫn đúng; lệnh rebuild làm gọn và đổi capacity khi người dùng chủ động yêu cầu. ID mới tăng dần và không tái sử dụng.
+
+<InteractiveLab demo="quadtree-map-editor" mode="map-mutations" />
+
+## Viết code từng bước
+
+Tiếp tục sửa starter đã làm ở bài trước; checkpoint 07 là bản đối chiếu độc lập, không phải một bộ source khác cần chép đè. Đường dẫn dưới đây tính từ snapshot đang sửa, chẳng hạn starter/include/model/dataset.hpp.
+
+### Bước 1 — Xóa ID ở đúng bucket
+
+location là đường tới chỗ lưu, objects là dữ liệu chính. Xóa phải chạm cả hai cùng bucket:
+
+```cpp title="include/spatial/quadtree.hpp — Xóa ID ở đúng bucket"
+    bool remove(std::uint32_t id) {
+        const auto found = location.find(id);
+        if (found == location.end()) {
+            return false;
+        }
+        nodes.at(static_cast<std::size_t>(found->second)).ids.erase(id);
+        location.erase(found);
+        objects.erase(id);
+        ++revision;
+        return true;
+    }
+```
+
+Không tìm thấy ID thì trả false, không đổi revision. Khi đã xóa, query không được trả ID ấy nữa. Mỗi thao tác ghi thành công tăng revision để kết quả kiểm/đo cũ không còn được dùng như kết quả hiện tại.
+
+### Bước 2 — Kiểm cả nhóm trước khi di chuyển
+
+Tạo proposals tách khỏi dữ liệu chính. Vòng đầu chỉ đọc và kiểm root; hai vòng cuối mới thay đổi cây:
+
+```cpp title="include/spatial/quadtree.hpp — Kiểm cả nhóm trước khi di chuyển"
+    bool translateGroup(const std::unordered_set<std::uint32_t>& ids, Point offset) {
+        if (!std::isfinite(offset.x) || !std::isfinite(offset.y)) {
+            return false;
+        }
+        std::vector<Object> proposals;
+        proposals.reserve(ids.size());
+        for (std::uint32_t id : ids) {
+            const auto found = objects.find(id);
+            if (found == objects.end()) {
+                return false;
+            }
+            Object proposal = found->second;
+            proposal.box = translate(proposal.box, offset);
+            if (!validBox(proposal.box) || !contains(config.root, proposal.box)) {
+                return false;
+            }
+            proposals.push_back(proposal);
+        }
+        for (const auto& proposal : proposals) {
+            remove(proposal.id);
+        }
+        for (const auto& proposal : proposals) {
+            insert(proposal);
+        }
+        return true;
+    }
+```
+
+Nếu một ID không tồn tại, offset không hữu hạn hoặc box mới ra ngoài root, return false trước remove đầu tiên. Đây là rollback theo nghĩa không có thay đổi nào được áp dụng. Với dữ liệu hợp lệ, remove rồi insert đưa mỗi ID vào vị trí mới và giữ nguyên loại/kích thước.
+
+### Bước 3 — Thêm đối tượng bằng ID chưa dùng
+
+Document quản lý nextId rộng 64-bit để phát hiện cạn miền uint32 trước khi ép kiểu. Thêm ở tâm camera hoặc bằng công cụ Add đều đi qua hàm này:
+
+```cpp title="include/editor/document.hpp — Thêm đối tượng bằng ID chưa dùng"
+    bool addObject(Point point, Kind kind) {
+        const auto start = Clock::now();
+        double size = 48;
+        if (kind == Kind::Tree) {
+            size = 24;
+        } else if (kind == Kind::Park) {
+            size = 64;
+        }
+        double height = size;
+        if (kind == Kind::House) {
+            height = 32;
+        }
+        const Box box{point.x - size / 2, point.y - size / 2, size, height};
+        if (nextId > std::numeric_limits<std::uint32_t>::max() || tree.objects.size() >= maximumObjects || !validBox(box) || !contains(tree.config.root, box)) {
+            notice = "Cannot add: outside root or object/ID budget exceeded.";
+            return false;
+        }
+        const auto id = static_cast<std::uint32_t>(nextId);
+        tree.insert({id, kind, box});
+        ++nextId;
+        selection.clear();
+        selection.insert(id);
+        lastQuery.reset();
+        edit = {"insert", 1, milliseconds(start, Clock::now())};
+        notice = "Object added. ID will not be reused after deletion.";
+        return true;
+    }
+```
+
+Chỉ tăng nextId sau khi insert thành công. N ban đầu 100.000, budget tối đa 150.000 để còn chỗ thêm; đó là giới hạn công khai chứ không cắt mất data. Đối tượng vừa thêm trở thành selection để có thể di chuyển/xóa ngay.
+
+### Bước 4 — Xóa selection và giữ thống kê thao tác
+
+Không xóa theo vị trí trong vector; đi qua tập ID đã chọn rồi xóa sạch selection:
+
+```cpp title="include/editor/document.hpp — Xóa selection và giữ thống kê thao tác"
+    void deleteSelection() {
+        const auto start = Clock::now();
+        const auto count = selection.size();
+        for (std::uint32_t id : selection) {
+            tree.remove(id);
+        }
+        selection.clear();
+        lastQuery.reset();
+        edit = {"remove", count, milliseconds(start, Clock::now())};
+        notice = "Selection deleted; index has no old IDs.";
+    }
+```
+
+lastQuery cũ không còn đại diện cho world mới nên được bỏ. edit lưu số object và thời gian thao tác, tách khỏi query/culling. moveSelection cũng bọc translateGroup để thông báo thành công hoặc rollback mà không thay ID/selection.
+
+## Ghép các phần lại
+
+Từ checkpoint 07: A thêm tại tâm camera, T đổi loại mới, Delete xóa selection, Shift+mũi tên dời nhóm 8 world unit. Công cụ 4 đặt object tại vị trí thả. Kéo bằng chuột ở chế độ Move được mở ở bài sau để tách thuật toán cập nhật khỏi vòng đời input.
+
+```bash title="Terminal — build và chạy checkpoint 07 trên Windows"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_checkpoint_7 --parallel 2
+.\build\Debug\project_29_checkpoint_7.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ cập nhật objects[id].box, không remove/reinsert. Query cả vị trí cũ và mới, nhất là khi hình đi qua split. Bạn sẽ phát hiện cây không còn chứa trọn object ở bucket đã lưu.
+
+2. Đổi vòng kiểm proposals thành vừa kiểm vừa move. Chọn một hình gần root cùng một hình ở giữa rồi kéo ra ngoài: nhóm bị di chuyển một phần. Khôi phục ba giai đoạn tách biệt.
+
+3. Thêm, xóa rồi thêm lần nữa. ID sau phải mới, không lấy lại ID vừa xóa; nếu không, dữ liệu selection/history bên ngoài rất dễ trỏ nhầm đối tượng.
+
+## Tự kiểm tra kết quả
+
+- Query ở vị trí mới khớp brute, vị trí cũ không còn ghost hit.
+- Thêm/xóa không tạo ID trùng, location và storage luôn khớp.
+- Di chuyển hợp lệ giữ nguyên ID, kind, width/height và selection.
+- Di chuyển không hợp lệ giữ nguyên mọi box và revision.
+
+## Bài tập mở rộng
+
+Lưu một undo command chứa ID cùng box trước/sau của một lần move. Chưa làm undo toàn editor; trước hết chứng minh lệnh move ngược cũng đi qua API cập nhật index, không sửa trực tiếp objects.
+
+Bài tiếp theo: [Kéo cả nhóm: xem trước rồi mới áp dụng](/projects/quadtree-map-editor/08-keo-nhom-preview-va-rollback).
+
