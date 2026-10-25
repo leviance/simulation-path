@@ -137,3 +137,19 @@ test("Project 19 website serves every lesson with final source and source-only Z
   );
   assert.ok(JSON.stringify(manifest).includes("project-19-lambert-tetrahedron"));
 });
+
+test("Project 19 keeps a textual Canvas summary in showcase mode before hydration", async () => {
+  for (const route of [
+    "/projects/lambert-tetrahedron",
+    "/projects/lambert-tetrahedron/" + slugs.at(-1),
+  ]) {
+    const response = await render(route);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /class="lab-readout"/, route);
+    assert.match(html, /Mặt đang theo dõi/);
+    assert.match(html, /Diffuse/);
+    assert.match(html, /Hiện debug/);
+    assert.doesNotMatch(html, /<dt>Normal world<\/dt>/);
+  }
+});

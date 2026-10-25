@@ -25,7 +25,7 @@ interface Props {
   benchmark: () => void;
   stop: () => void;
 }
-export function IntegratorControls({
+export default function IntegratorControls({
   scene,
   reducedMotion,
   edit,

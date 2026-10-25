@@ -381,7 +381,7 @@ function Workbench({ mode }: { mode?: InteractiveLabMode }) {
         {reducedMotion &&
           "Reduced motion: chuyển động tự động đã tắt, bạn vẫn có thể tiến từng bước."}
       </p>
-      {scene.debug && (
+      {scene.debug ? (
         <LabReadout
           items={[
             ...(stage >= 2
@@ -413,6 +413,24 @@ function Workbench({ mode }: { mode?: InteractiveLabMode }) {
               label: "Model yaw / camera yaw",
               value: `${scene.yaw.toFixed(3)} / ${scene.cameraYaw.toFixed(3)}`,
             },
+            { label: "Submitted / culled", value: `${12 - frame.culled} / ${frame.culled}` },
+          ]}
+        />
+      ) : (
+        <LabReadout
+          items={[
+            { label: "Mô hình", value: "Cube · 8 đỉnh · 12 tam giác" },
+            { label: "Mặt đang theo dõi", value: faceNames[selected.side] },
+            ...(stage >= 4
+              ? [
+                  {
+                    label: "Diffuse",
+                    value: scene.lighting
+                      ? selected.sample.diffuse.toFixed(3)
+                      : "Lighting đang tắt",
+                  },
+                ]
+              : []),
             { label: "Submitted / culled", value: `${12 - frame.culled} / ${frame.culled}` },
           ]}
         />

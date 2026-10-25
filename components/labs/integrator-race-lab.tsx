@@ -1,5 +1,7 @@
 "use client";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -31,10 +33,11 @@ import {
   integratorPointFromEvent,
   integratorScreenToPosition,
 } from "./integrator-race-view";
-import { IntegratorControls } from "./integrator-controls";
 import { IntegratorReadout, IntegratorBenchmarkPanel } from "./integrator-readout";
 import { useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
+
+const IntegratorControls = lazy(() => import("./integrator-controls"));
 
 export default function IntegratorRaceLab({ mode }: { mode?: InteractiveLabMode }) {
   return <RaceScene key={mode ?? "integrator-benchmark"} mode={mode} />;
@@ -248,20 +251,22 @@ function RaceScene({ mode }: { mode?: InteractiveLabMode }) {
   }, [scene, size]);
   return (
     <div className="lab-body">
-      <IntegratorControls
-        scene={scene}
-        reducedMotion={reducedMotion}
-        edit={edit}
-        editLane={editLane}
-        preset={preset}
-        setGraph={setGraph}
-        togglePause={togglePause}
-        toggleDebug={toggleDebug}
-        step={step}
-        fast={fast}
-        benchmark={benchmark}
-        stop={stop}
-      />
+      <Suspense fallback={<p role="status">Đang tải bộ điều khiển mô phỏng…</p>}>
+        <IntegratorControls
+          scene={scene}
+          reducedMotion={reducedMotion}
+          edit={edit}
+          editLane={editLane}
+          preset={preset}
+          setGraph={setGraph}
+          togglePause={togglePause}
+          toggleDebug={toggleDebug}
+          step={step}
+          fast={fast}
+          benchmark={benchmark}
+          stop={stop}
+        />
+      </Suspense>
       <canvas
         ref={canvasRef}
         style={{ height: "clamp(500px,62vw,660px)", touchAction: "none" }}

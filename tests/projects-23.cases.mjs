@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { compile } from "@mdx-js/mdx";
@@ -126,7 +126,11 @@ test("Project 23 stages add real algorithms, per-step history, runtime selection
 test("Project 23 overview and all eight lessons expose complete source and downloads", async () => {
   const overview = await render("/projects/integrator-race");
   assert.equal(overview.status, 200);
-  assert.match(await overview.text(), /Nếu tự làm từ đầu, bạn sẽ bắt đầu thế nào/);
+  const overviewHtml = await overview.text();
+  assert.match(overviewHtml, /Nếu tự làm từ đầu, bạn sẽ bắt đầu thế nào/);
+  assert.match(overviewHtml, /aria-label="Fixed dt"/);
+  assert.match(overviewHtml, /aria-label="Integrator làn 1"/);
+  assert.match(overviewHtml, /Tiến một bước/);
   const files = (await readdir(content)).filter((file) => file.endsWith(".mdx")).sort();
   for (const file of files) {
     const response = await render("/projects/integrator-race/" + file.slice(0, -4));
@@ -140,4 +144,25 @@ test("Project 23 overview and all eight lessons expose complete source and downl
       assert.match(html, /project-23-integrator-race.zip/);
     }
   }
+});
+
+test("Project 23 lazily loads controls and keeps its client chunks below 24 KiB", async () => {
+  const directory = path.join(workspace, "dist/client/_next/static/chunks");
+  const files = await readdir(directory);
+  const entry = files.find((file) => /^integrator-race-lab-.*\.js$/.test(file));
+  const controls = files.find((file) => /^integrator-controls-.*\.js$/.test(file));
+  assert.ok(entry, "Missing Integrator Canvas entry");
+  assert.ok(controls, "Controls must be emitted as a separate lazy chunk");
+  for (const file of files.filter((file) => /^integrator-.*\.js$/.test(file))) {
+    const bytes = (await stat(path.join(directory, file))).size;
+    assert.ok(bytes < 24 * 1024, `${file} is unexpectedly large at ${bytes} bytes`);
+  }
+  const manifest = JSON.parse(
+    await readFile(path.join(workspace, "dist/client/.vite/manifest.json"), "utf8"),
+  );
+  const entryInfo = manifest["components/labs/integrator-race-lab.tsx"];
+  const controlsKey = "components/labs/integrator-controls.tsx";
+  assert.ok(entryInfo.dynamicImports.includes(controlsKey), "Controls must stay behind import()");
+  assert.ok(!entryInfo.imports.includes(controlsKey), "Controls must not be statically imported");
+  assert.equal(manifest[controlsKey].isDynamicEntry, true);
 });
