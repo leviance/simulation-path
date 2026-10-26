@@ -1,239 +1,210 @@
 #pragma once
-
 #ifndef LAB_CHECKPOINT
 #define LAB_CHECKPOINT 8
 #endif
-
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace lab {
+inline constexpr std::size_t maximumParticles = 1'000'000;
+inline constexpr std::uint32_t defaultSeed = 0x32c0ffeeU;
+inline constexpr float fixedDt = 1.0F / 120.0F;
 
-inline constexpr std::size_t kParticleFieldCount = 6U;
-inline constexpr float kWorldMinimum = -1.0F;
-inline constexpr float kWorldMaximum = 1.0F;
-
-// Checkpoint 1: AoS giữ toàn bộ state của một particle trong cùng struct.
-#if LAB_CHECKPOINT >= 1
+// [snippet:ParticleAoS]
 struct ParticleAoS {
+    std::uint32_t id{};
+    std::uint32_t generation{};
     float positionX{};
     float positionY{};
     float positionZ{};
     float velocityX{};
     float velocityY{};
     float velocityZ{};
+    float age{};
+    float lifetime{2.5F};
+    float hue{};
 };
 
-static_assert(sizeof(ParticleAoS) == sizeof(float) * kParticleFieldCount);
+// [/snippet:ParticleAoS]
+static_assert(sizeof(float) == 4 && sizeof(ParticleAoS) == 44);
 
-class XorShift32 {
-    public:
-    explicit XorShift32(std::uint32_t seed)
-        : state_(seed) {
-        if (state_ == 0U) {
-            state_ = 0x6d2b79f5U;
+// Metres, seconds and metres/second squared; every dynamic field is float32.
+struct FountainConfig {
+    std::uint32_t seed{defaultSeed};
+    float emitterX{};
+    float emitterZ{};
+    float launchSpeed{9.0F};
+    float spread{2.0F};
+    float gravity{-9.81F};
+    float lifetime{2.5F};
+    float emissionRate{128.0F};
+};
+
+inline void validateConfig(const FountainConfig& config, float dt = fixedDt) {
+    for (float value : {config.emitterX, config.emitterZ, config.launchSpeed, config.spread, config.gravity, config.lifetime, config.emissionRate, dt}) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument("Non-finite fountain input");
         }
     }
-
-    std::uint32_t nextU32() {
-        state_ ^= state_ << 13U;
-        state_ ^= state_ >> 17U;
-        state_ ^= state_ << 5U;
-        return state_;
+    if (dt <= 0 || dt > 1.0F / 30.0F || config.lifetime < 0.5F || config.lifetime > 8 || config.launchSpeed < 1 || config.launchSpeed > 20 || config.spread < 0 || config.spread > 5 || config.gravity < -20 || config.gravity > 0 || config.emissionRate < 0 || config.emissionRate > 2'000'000 || std::abs(config.emitterX) > 10 || std::abs(config.emitterZ) > 10) {
+        throw std::invalid_argument("Fountain parameter budget exceeded");
     }
+}
 
-    float nextSigned() {
-        const double unit = double(nextU32()) / double(std::numeric_limits<std::uint32_t>::max());
-        return float(unit * 2.0 - 1.0);
+// [snippet:randomUnit]
+inline float randomUnit(std::uint32_t seed, std::uint32_t id, std::uint32_t generation, std::uint32_t channel) {
+    std::uint32_t value = seed ^ (id * 0x9e3779b9U) ^ (generation * 0x85ebca6bU) ^ (channel * 0xc2b2ae35U);
+    value ^= value >> 16U;
+    value *= 0x7feb352dU;
+    value ^= value >> 15U;
+    value *= 0x846ca68bU;
+    value ^= value >> 16U;
+    return float(value >> 8U) * (1.0F / 16777216.0F);
+}
+
+// [/snippet:randomUnit]
+
+// [snippet:spawnParticle]
+inline ParticleAoS spawnParticle(std::uint32_t id, std::uint32_t generation, const FountainConfig& config) {
+    ParticleAoS particle{};
+    particle.id = id;
+    particle.generation = generation;
+    const float angle = randomUnit(config.seed, id, generation, 1) * 6.28318530718F;
+    const float radialSpeed = std::sqrt(randomUnit(config.seed, id, generation, 2)) * config.spread;
+    particle.positionX = config.emitterX;
+    particle.positionZ = config.emitterZ;
+    particle.velocityX = std::cos(angle) * radialSpeed;
+    particle.velocityZ = std::sin(angle) * radialSpeed;
+    particle.velocityY = config.launchSpeed * (0.85F + 0.3F * randomUnit(config.seed, id, generation, 3));
+    particle.lifetime = config.lifetime * (0.75F + 0.5F * randomUnit(config.seed, id, generation, 4));
+    particle.hue = randomUnit(config.seed, id, generation, 5);
+    return particle;
+}
+
+// [/snippet:spawnParticle]
+
+inline ParticleAoS warmParticle(std::uint32_t id, const FountainConfig& config) {
+    ParticleAoS particle = spawnParticle(id, 0, config);
+    particle.age = randomUnit(config.seed, particle.id, 0, 6) * particle.lifetime;
+    // Pre-warm initializes a ballistic state, never a scripted trajectory.
+    particle.positionX += particle.velocityX * particle.age;
+    particle.positionY = particle.velocityY * particle.age + 0.5F * config.gravity * particle.age * particle.age;
+    particle.positionZ += particle.velocityZ * particle.age;
+    particle.velocityY += config.gravity * particle.age;
+    return particle;
+}
+
+inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, const FountainConfig& config, bool warm = true) {
+    validateConfig(config);
+    if (count < 1 || count > maximumParticles) {
+        throw std::invalid_argument("Particle count: 1..1000000");
     }
-
-    private:
-    std::uint32_t state_{};
-};
-
-inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, std::uint32_t seed) {
-    std::vector<ParticleAoS> particles{};
-    particles.reserve(count);
-    XorShift32 random{seed};
+    std::vector<ParticleAoS> particles(count);
     for (std::size_t index = 0; index < count; ++index) {
-        ParticleAoS particle{};
-        particle.positionX = random.nextSigned();
-        particle.positionY = random.nextSigned();
-        particle.positionZ = random.nextSigned();
-        particle.velocityX = random.nextSigned() * 0.35F;
-        particle.velocityY = random.nextSigned() * 0.35F;
-        particle.velocityZ = random.nextSigned() * 0.35F;
-        particles.push_back(particle);
+        particles[index].id = std::uint32_t(index);
+#if LAB_CHECKPOINT >= 1
+        if (warm) {
+            particles[index] = warmParticle(std::uint32_t(index), config);
+        }
+#else
+        // The supplied scaffold shows eight manually emitted particles.
+        if (index < 8) {
+            particles[index] = spawnParticle(std::uint32_t(index), 0, config);
+            particles[index].positionY = float(index) * 0.35F;
+        }
+#endif
     }
     return particles;
 }
 
-inline bool allFinite(std::span<const ParticleAoS> particles) {
-    for (const ParticleAoS& particle : particles) {
-        const bool finite = std::isfinite(particle.positionX) &&
-            std::isfinite(particle.positionY) &&
-            std::isfinite(particle.positionZ) &&
-            std::isfinite(particle.velocityX) &&
-            std::isfinite(particle.velocityY) &&
-            std::isfinite(particle.velocityZ);
-        if (!finite) {
+// [snippet:integrateParticle]
+inline void integrateParticle(ParticleAoS& particle, float dt, float gravity) {
+    particle.velocityY += gravity * dt;
+    particle.positionX += particle.velocityX * dt;
+    particle.positionY += particle.velocityY * dt;
+    particle.positionZ += particle.velocityZ * dt;
+    particle.age += dt;
+}
+
+// [/snippet:integrateParticle]
+
+#if LAB_CHECKPOINT >= 2
+// [snippet:advanceParticle]
+inline bool advanceParticle(ParticleAoS& particle, const FountainConfig& config, float dt, bool newlyEmitted = false) {
+    if (newlyEmitted) {
+        particle = spawnParticle(particle.id, 0, config);
+    }
+    const float remaining = particle.lifetime - particle.age;
+    if (dt < remaining) {
+        integrateParticle(particle, dt, config.gravity);
+        return false;
+    }
+    if (particle.generation == std::numeric_limits<std::uint32_t>::max()) {
+        throw std::overflow_error("Particle generation overflow");
+    }
+    particle = spawnParticle(particle.id, particle.generation + 1, config);
+    // Consume the remainder after death, not an additional whole timestep.
+    integrateParticle(particle, dt - remaining, config.gravity);
+    return true;
+}
+
+// [/snippet:advanceParticle]
+
+struct EmissionPlan {
+    std::size_t active{};
+    double remainder{};
+};
+
+// [snippet:planEmission]
+inline EmissionPlan planEmission(std::size_t active, std::size_t capacity, double remainder, const FountainConfig& config, float dt) {
+    validateConfig(config, dt);
+    if (active > capacity || !std::isfinite(remainder) || remainder < 0 || remainder >= 1) {
+        throw std::invalid_argument("Invalid emission state");
+    }
+    const double available = remainder + double(config.emissionRate) * double(dt);
+    const std::size_t births = std::min(capacity - active, std::size_t(std::floor(available)));
+    if (active + births == capacity) {
+        return {capacity, 0};
+    }
+    return {active + births, available - std::floor(available)};
+}
+// [/snippet:planEmission]
+
+enum class MemoryWorkload { gravityOnly,
+                            fullLifecycle };
+
+// [snippet:updateAoSRange]
+inline std::size_t updateAoSRange(std::span<ParticleAoS> particles, std::size_t begin, std::size_t end, const FountainConfig& config, float dt, MemoryWorkload workload, std::size_t oldActive) {
+    std::size_t respawned = 0;
+    if (workload == MemoryWorkload::gravityOnly) {
+        for (std::size_t index = begin; index < end; ++index) {
+            particles[index].velocityY += config.gravity * dt;
+        }
+    } else {
+        for (std::size_t index = begin; index < end; ++index) {
+            if (advanceParticle(particles[index], config, dt, index >= oldActive)) {
+                ++respawned;
+            }
+        }
+    }
+    return respawned;
+}
+
+// [/snippet:updateAoSRange]
+#endif
+
+inline bool finiteParticle(const ParticleAoS& particle) {
+    for (float value : {particle.positionX, particle.positionY, particle.positionZ, particle.velocityX, particle.velocityY, particle.velocityZ, particle.age, particle.lifetime, particle.hue}) {
+        if (!std::isfinite(value)) {
             return false;
         }
     }
-    return true;
+    return particle.age >= 0 && particle.age < particle.lifetime && particle.lifetime > 0;
 }
-#endif
-
-// Checkpoint 2: kernel AoS cập nhật position, còn velocity giữ nguyên.
-#if LAB_CHECKPOINT >= 2
-inline float wrapCoordinate(float value) {
-    float wrapped = value;
-    if (wrapped > kWorldMaximum) {
-        wrapped -= kWorldMaximum - kWorldMinimum;
-    }
-    if (wrapped < kWorldMinimum) {
-        wrapped += kWorldMaximum - kWorldMinimum;
-    }
-    return wrapped;
-}
-
-inline void integrateAoS(std::span<ParticleAoS> particles, float deltaSeconds) {
-    for (ParticleAoS& particle : particles) {
-        particle.positionX = wrapCoordinate(
-            particle.positionX + particle.velocityX * deltaSeconds
-        );
-        particle.positionY = wrapCoordinate(
-            particle.positionY + particle.velocityY * deltaSeconds
-        );
-        particle.positionZ = wrapCoordinate(
-            particle.positionZ + particle.velocityZ * deltaSeconds
-        );
-    }
-}
-
-inline double sumPositionXAoS(std::span<const ParticleAoS> particles) {
-    double sum = 0.0;
-    for (const ParticleAoS& particle : particles) {
-        sum += double(particle.positionX);
-    }
-    return sum;
-}
-
-inline void dampVelocitiesAoS(std::span<ParticleAoS> particles, float factor) {
-    for (ParticleAoS& particle : particles) {
-        particle.velocityX *= factor;
-        particle.velocityY *= factor;
-        particle.velocityZ *= factor;
-    }
-}
-#endif
-
-// Checkpoint 4: SoA giữ mỗi field trong một vector liên tục riêng.
-#if LAB_CHECKPOINT >= 4
-struct ParticlesSoA {
-    std::vector<float> positionX{};
-    std::vector<float> positionY{};
-    std::vector<float> positionZ{};
-    std::vector<float> velocityX{};
-    std::vector<float> velocityY{};
-    std::vector<float> velocityZ{};
-
-    [[nodiscard]] std::size_t size() const {
-        return positionX.size();
-    }
-};
-
-inline ParticlesSoA makeParticlesSoA(std::span<const ParticleAoS> particles) {
-    ParticlesSoA result{};
-    result.positionX.reserve(particles.size());
-    result.positionY.reserve(particles.size());
-    result.positionZ.reserve(particles.size());
-    result.velocityX.reserve(particles.size());
-    result.velocityY.reserve(particles.size());
-    result.velocityZ.reserve(particles.size());
-    for (const ParticleAoS& particle : particles) {
-        result.positionX.push_back(particle.positionX);
-        result.positionY.push_back(particle.positionY);
-        result.positionZ.push_back(particle.positionZ);
-        result.velocityX.push_back(particle.velocityX);
-        result.velocityY.push_back(particle.velocityY);
-        result.velocityZ.push_back(particle.velocityZ);
-    }
-    return result;
-}
-
-inline bool validSoA(const ParticlesSoA& particles) {
-    const std::size_t count = particles.positionX.size();
-    return particles.positionY.size() == count &&
-        particles.positionZ.size() == count &&
-        particles.velocityX.size() == count &&
-        particles.velocityY.size() == count &&
-        particles.velocityZ.size() == count;
-}
-#endif
-
-// Checkpoint 5: SoA chạy cùng công thức và được đối chiếu field-by-field với AoS.
-#if LAB_CHECKPOINT >= 5
-inline void integrateSoA(ParticlesSoA& particles, float deltaSeconds) {
-    if (!validSoA(particles)) {
-        return;
-    }
-    for (std::size_t index = 0; index < particles.size(); ++index) {
-        particles.positionX[index] = wrapCoordinate(
-            particles.positionX[index] + particles.velocityX[index] * deltaSeconds
-        );
-        particles.positionY[index] = wrapCoordinate(
-            particles.positionY[index] + particles.velocityY[index] * deltaSeconds
-        );
-        particles.positionZ[index] = wrapCoordinate(
-            particles.positionZ[index] + particles.velocityZ[index] * deltaSeconds
-        );
-    }
-}
-
-inline double sumPositionXSoA(const ParticlesSoA& particles) {
-    double sum = 0.0;
-    for (const float positionX : particles.positionX) {
-        sum += double(positionX);
-    }
-    return sum;
-}
-
-inline void dampVelocitiesSoA(ParticlesSoA& particles, float factor) {
-    if (!validSoA(particles)) {
-        return;
-    }
-    for (std::size_t index = 0; index < particles.size(); ++index) {
-        particles.velocityX[index] *= factor;
-        particles.velocityY[index] *= factor;
-        particles.velocityZ[index] *= factor;
-    }
-}
-
-inline float maximumLayoutDifference(
-    std::span<const ParticleAoS> aos,
-    const ParticlesSoA& soa
-) {
-    if (aos.size() != soa.size() || !validSoA(soa)) {
-        return std::numeric_limits<float>::infinity();
-    }
-    float maximum = 0.0F;
-    for (std::size_t index = 0; index < aos.size(); ++index) {
-        maximum = std::max(maximum, std::abs(aos[index].positionX - soa.positionX[index]));
-        maximum = std::max(maximum, std::abs(aos[index].positionY - soa.positionY[index]));
-        maximum = std::max(maximum, std::abs(aos[index].positionZ - soa.positionZ[index]));
-        maximum = std::max(maximum, std::abs(aos[index].velocityX - soa.velocityX[index]));
-        maximum = std::max(maximum, std::abs(aos[index].velocityY - soa.velocityY[index]));
-        maximum = std::max(maximum, std::abs(aos[index].velocityZ - soa.velocityZ[index]));
-    }
-    return maximum;
-}
-#endif
-
 } // namespace lab

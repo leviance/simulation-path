@@ -1,250 +1,284 @@
 import type { ProjectLearningAssets } from "../../learning/types";
-
-const files = [
-  "include/particles.hpp",
-  "include/benchmark.hpp",
-  "include/render.hpp",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
-  guides: {
+  "guides": {
     "p32-l01": {
-      focus:
-        "Khóa particle state, seed, N và dung lượng trước khi thay layout; renderer chỉ lấy mẫu để cửa sổ vẫn phản hồi tốt.",
-      expected:
-        "`ParticleAoS` có đúng sáu float, cùng seed tạo lại từng field và một triệu particle chiếm khoảng 24 MB state thuần.",
-      files,
-      steps: [
-        {
-          title: "Bắt đầu từ cửa sổ có hai vùng nhìn thấy được",
-          explanation:
-            "Starter đã có dải memory cells và vùng particle sample. Checkpoint đầu chỉ thay dữ liệu minh họa bằng state thật, nên mỗi thay đổi đều có dấu hiệu quan sát được.",
-        },
-        {
-          title: "Giữ ParticleAoS không có hành vi ẩn",
-          explanation:
-            "Sáu float nằm theo đúng thứ tự position xyz rồi velocity xyz. `static_assert` khóa kích thước 24 byte để padding bất ngờ không làm sai mô hình stride.",
-        },
-        {
-          title: "Sinh một lần, vẽ bằng stride riêng",
-          explanation:
-            "Toàn bộ một triệu particle tồn tại trong vector. Renderer chỉ chọn tối đa 40.000 index để vẽ; benchmark vẫn nhận đủ vector nguồn.",
-        },
+      "focus": "Chạy khung SDL, đọc state của hạt trong không gian 3D và phân biệt khởi tạo warm với chuyển động do solver.",
+      "expected": "Simulation.reset chọn số slot sống; drawFountain chỉ lấy mẫu để vẽ. Số allocated/alive/rendered không phải cùng một đại lượng.",
+      "files": [
+        "include/particles.hpp",
+        "include/simulation.hpp"
       ],
+      "steps": [
+        {
+          "title": "Chạy chương trình nền",
+          "explanation": "Starter đã có window, renderer CPU và camera; build nó trước rồi đọc Body/Particle state, không viết lại SDL từ đầu."
+        },
+        {
+          "title": "Sinh lại cùng đài phun",
+          "explanation": "spawnParticle lấy ngẫu nhiên từ seed/ID/generation; warmParticle chỉ tạo điều kiện đầu có tuổi khác nhau."
+        },
+        {
+          "title": "Đếm đúng dữ liệu",
+          "explanation": "Simulation.reset chọn số slot sống; drawFountain chỉ lấy mẫu để vẽ. Số allocated/alive/rendered không phải cùng một đại lượng."
+        }
+      ]
     },
     "p32-l02": {
-      focus:
-        "Viết AoS integrate kernel đơn giản và tách nó khỏi event handling, rendering, allocation cùng console output.",
-      expected:
-        "Mỗi bước đọc ba velocity, cập nhật ba position, wrap về [-1,1] và giữ mọi giá trị hữu hạn.",
-      files,
-      steps: [
-        {
-          title: "Duyệt vector theo thứ tự index",
-          explanation:
-            "Hot loop dùng range-for trên `std::span<ParticleAoS>`. Không có lookup, pointer chasing hoặc container phụ che mất câu hỏi về memory layout.",
-        },
-        {
-          title: "Dùng cùng một dt cho toàn bộ particle",
-          explanation:
-            "Mỗi position được tiến bằng velocity tương ứng và `1/120 s`. Fixed value giúp hai layout sau này nhận cùng phép tính bit-for-bit.",
-        },
-        {
-          title: "Phân biệt update count với draw count",
-          explanation:
-            "Kernel đi qua đủ một triệu phần tử. Việc framebuffer chỉ chấm một sample không được đổi `particles.size()` hoặc số vòng lặp update.",
-        },
+      "focus": "Thêm emission carry, gravity, age/lifetime và respawn có seed; tiến một bước đầy đủ rồi mới công bố state.",
+      "expected": "beginStep và tickStep ghi vào buffer đích; con trỏ phải đi hết N trước khi đổi buffer và tăng thời gian.",
+      "files": [
+        "include/application.hpp",
+        "include/particles.hpp",
+        "include/simulation.hpp",
+        "src/main.cpp"
       ],
+      "steps": [
+        {
+          "title": "Phát hạt theo bước thời gian",
+          "explanation": "planEmission giữ phần lẻ để tốc độ phát không phụ thuộc số lần render; slot mới được phát ở đầu fixed step."
+        },
+        {
+          "title": "Cho hạt tiến triển",
+          "explanation": "Gravity đổi velocity trước position; khi hết lifetime, giữ ID, tăng generation và dùng phần dt còn lại cho hạt mới."
+        },
+        {
+          "title": "Chỉ công bố bước đã xong",
+          "explanation": "beginStep và tickStep ghi vào buffer đích; con trỏ phải đi hết N trước khi đổi buffer và tăng thời gian."
+        }
+      ]
     },
     "p32-l03": {
-      focus:
-        "Đo AoS trước khi thêm SoA bằng ba workload có tên, warm-up riêng và checksum observable.",
-      expected:
-        "Benchmark chỉ bao quanh kernel, có repetitions hữu hạn và cùng source/workload tạo lại checksum giống nhau.",
-      files,
-      steps: [
-        {
-          title: "Đặt tên cho câu hỏi đang đo",
-          explanation:
-            "`positionX`, `velocityOnly` và `integrate` chạm lượng field khác nhau. Một con số timing không kèm workload không nói được điều gì về layout.",
-        },
-        {
-          title: "Warm-up trước khi bắt đầu timer",
-          explanation:
-            "Một bản sao state đi qua đúng kernel nhưng không góp vào elapsed time. Generation và copy measured state cũng đứng ngoài vùng đo.",
-        },
-        {
-          title: "Đưa output ra khỏi hot loop bằng checksum",
-          explanation:
-            "Kernel trả tổng position.x sau mỗi repetition. Giá trị đó được tích lũy và in sau benchmark để công việc vẫn có thể quan sát.",
-        },
+      "focus": "Đo gravity-only và toàn bộ vòng đời bằng AoS; dùng warm-up, nhiều mẫu và checksum ngoài timer.",
+      "expected": "Checksum và kiểm state đọc đủ các phần tử, tránh một vòng lặp không còn kết quả quan sát được.",
+      "files": [
+        "include/application.hpp",
+        "include/benchmark.hpp",
+        "src/main.cpp"
       ],
+      "steps": [
+        {
+          "title": "Khóa phép đo",
+          "explanation": "Chọn gravity-only hoặc full lifecycle trên cùng dữ liệu warm, cùng seed/dt. Đài phun vẫn luôn dùng full lifecycle."
+        },
+        {
+          "title": "Giữ timer ở đúng chỗ",
+          "explanation": "BenchmarkJob reset/copy ngoài timer, đo từng range có cùng số target và giữ tổng kernel time; không tính thời gian chờ UI."
+        },
+        {
+          "title": "Dùng kết quả sau timer",
+          "explanation": "Checksum và kiểm state đọc đủ các phần tử, tránh một vòng lặp không còn kết quả quan sát được."
+        }
+      ]
     },
     "p32-l04": {
-      focus:
-        "Biểu diễn đúng cùng particle state bằng sáu vector SoA và kiểm invariant trước khi viết kernel thứ hai.",
-      expected:
-        "Sáu vector có cùng size, particle index nối đúng các field và conversion từ AoS cho maximum difference bằng 0.",
-      files,
-      steps: [
-        {
-          title: "Mỗi field có một vùng nhớ liên tục",
-          explanation:
-            "`positionX[0..N)` nằm liền nhau, rồi `positionY` ở allocation riêng. SoA không xóa khái niệm particle; index vẫn là khóa nối sáu mảng.",
-        },
-        {
-          title: "Reserve cả sáu vector trước conversion",
-          explanation:
-            "Conversion chạy ngoài benchmark nhưng vẫn nên rõ ràng và bounded. Reserve tránh mỗi vector tăng capacity nhiều lần khi đẩy một triệu giá trị.",
-        },
-        {
-          title: "Dừng nếu size invariant hỏng",
-          explanation:
-            "Kernel SoA cần đọc cùng index ở sáu mảng. `validSoA` biến giả định đó thành contract có thể test thay vì chờ out-of-bounds.",
-        },
+      "focus": "Tách đủ mười một field thành các mảng; chuyển layout theo batch và có thể hủy mà không đổi snapshot đang xem.",
+      "expected": "Thử AoS → SoA → AoS, kể cả pool chưa đầy. Thời gian và emission carry cũng là state cần giữ.",
+      "files": [
+        "include/application.hpp",
+        "include/simulation.hpp",
+        "include/storage.hpp"
       ],
+      "steps": [
+        {
+          "title": "Giữ đủ mọi field",
+          "explanation": "ParticlesSoA có cả ID, generation, position, velocity, age/lifetime và hue; không bỏ field để có số bộ nhớ đẹp hơn."
+        },
+        {
+          "title": "Chuyển theo batch",
+          "explanation": "beginConversion tạo destination; tickConversion giữ source được dùng cho tới khi sao chép đủ mọi slot."
+        },
+        {
+          "title": "Kiểm round trip",
+          "explanation": "Thử AoS → SoA → AoS, kể cả pool chưa đầy. Thời gian và emission carry cũng là state cần giữ."
+        }
+      ]
     },
     "p32-l05": {
-      focus:
-        "Viết SoA kernels bằng cùng precision và thứ tự phép tính, rồi đối chiếu state chứ chưa kết luận từ timing.",
-      expected:
-        "Cả ba workload cho checksum bằng nhau và maximum field difference bằng 0 sau cùng số bước.",
-      files,
-      steps: [
-        {
-          title: "Giữ công thức song song giữa hai phía",
-          explanation:
-            "Hai kernel chỉ khác cách lấy field từ bộ nhớ. dt, factor, wrap order và kiểu float phải giống hệt để layout là biến độc lập duy nhất.",
-        },
-        {
-          title: "So toàn bộ sáu field",
-          explanation:
-            "Checksum position.x giúp giữ output observable nhưng không đủ bắt lỗi ở velocityZ. `maximumLayoutDifference` duyệt mọi field theo particle index.",
-        },
-        {
-          title: "Reset từ source trước mỗi experiment",
-          explanation:
-            "Không cho một layout chạy thêm một bước rồi so với phía còn lại. Mỗi race bắt đầu từ AoS source và SoA được convert từ chính source đó.",
-        },
+      "focus": "Viết kernel SoA theo cùng thứ tự phép tính float32, giữ ID/generation và kiểm cả các lần hạt được tái sử dụng.",
+      "expected": "tickStep chọn kernel theo layout nhưng cùng planEmission/dt, rồi commit theo cùng quy tắc.",
+      "files": [
+        "include/simulation.hpp",
+        "include/storage.hpp"
       ],
+      "steps": [
+        {
+          "title": "Dùng lại cùng quy tắc",
+          "explanation": "Nhánh bình thường SoA dùng đúng thứ tự phép tính float32; nhánh sinh lại gọi cùng quy tắc theo ID/generation."
+        },
+        {
+          "title": "So cả vòng đời",
+          "explanation": "Không chỉ kiểm vài bước chưa có hạt chết. Chạy đủ lâu để gặp respawn rồi so mọi field và bộ đếm."
+        },
+        {
+          "title": "Nối kernel vào mô phỏng",
+          "explanation": "tickStep chọn kernel theo layout nhưng cùng planEmission/dt, rồi commit theo cùng quy tắc."
+        }
+      ]
     },
     "p32-l06": {
-      focus:
-        "Dùng cache-line model 64 byte để đếm traffic theo field access, không biến mô hình thành lời tiên tri timing.",
-      expected:
-        "Position.x-only cho SoA ít line hơn; integrate đủ sáu field cho lượng useful/loaded bytes tương đương ở workload căn chỉnh.",
-      files,
-      steps: [
-        {
-          title: "Tách useful bytes khỏi loaded bytes",
-          explanation:
-            "Đọc một float chỉ cần 4 byte về mặt thuật toán, nhưng CPU đưa dữ liệu về theo cache line. Phần còn lại có thể hữu ích hoặc thành traffic lãng phí.",
-        },
-        {
-          title: "Đọc stride từ địa chỉ field",
-          explanation:
-            "Hai `positionX` liên tiếp trong AoS cách nhau 24 byte; trong SoA chúng cách 4 byte. Khoảng cách này quyết định bao nhiêu giá trị cùng nằm trên một line.",
-        },
-        {
-          title: "Đổi workload trước khi đổi kết luận",
-          explanation:
-            "Velocity-only dùng ba field, integrate dùng cả sáu. SoA có lợi thế traffic rõ nhất khi hot loop chỉ cần một phần nhỏ của struct.",
-        },
+      "focus": "Đếm cache line của gravity-only và nhận biết giới hạn của mô hình all-field; không gọi nó là số cache miss đo được.",
+      "expected": "Full lifecycle có branch respawn. Mô hình chạm đủ field là upper bound, không phải số cache miss hay lời dự đoán timing.",
+      "files": [
+        "include/application.hpp",
+        "include/benchmark.hpp"
       ],
+      "steps": [
+        {
+          "title": "Đặt giả định trước",
+          "explanation": "Mô hình giả sử base của mỗi mảng nằm trên biên 64 byte. Allocator thật không được coi là luôn có alignment này."
+        },
+        {
+          "title": "Tính cho một field",
+          "explanation": "Gravity-only đọc/ghi velocityY: AoS có stride sizeof(ParticleAoS), SoA có stride sizeof(float)."
+        },
+        {
+          "title": "Nhìn giới hạn của mô hình",
+          "explanation": "Full lifecycle có branch respawn. Mô hình chạm đủ field là upper bound, không phải số cache miss hay lời dự đoán timing."
+        }
+      ]
     },
     "p32-l07": {
-      focus:
-        "Chạy race công bằng bằng warm-up riêng, nhiều sample, median và scaling từ 10k tới một triệu.",
-      expected:
-        "Mỗi row có timing AoS/SoA, traffic, checksum và difference; code không assert layout nào phải nhanh hơn.",
-      files,
-      steps: [
-        {
-          title: "Copy state trước khi timer chạy",
-          explanation:
-            "AoS và SoA đều nhận cùng source. Allocation/conversion được loại khỏi timing vì câu hỏi hiện tại là throughput của kernel, không phải chi phí đổi layout.",
-        },
-        {
-          title: "Dùng median thay vì một lần chạy",
-          explanation:
-            "Mỗi sample đo một kernel invocation từ state tương đương. Median giảm ảnh hưởng của một lần hệ điều hành ngắt hoặc máy đang bận.",
-        },
-        {
-          title: "Đọc đường tăng theo N",
-          explanation:
-            "10k, 100k và 1M giữ cùng seed/workload/repetitions. Timing tăng được giải thích cạnh số cache line, không bằng suy đoán từ FPS.",
-        },
+      "focus": "Đo AoS/SoA với cùng seed và workload ở 10k/100k/1M; đọc median, min/max, chi phí conversion và sai khác state.",
+      "expected": "SoA có thể có lợi khi chỉ chạm velocityY nhưng kém hơn ở vòng đời có branch. Đọc kết quả trên đúng máy/build/workload.",
+      "files": [
+        "include/application.hpp",
+        "include/benchmark.hpp"
       ],
+      "steps": [
+        {
+          "title": "Đối chiếu trước khi tính speedup",
+          "explanation": "Mỗi cặp trial bắt đầu từ cùng source; sai ID/generation hoặc field vượt tolerance là lỗi, dù thời gian đẹp."
+        },
+        {
+          "title": "Đo nhiều lần",
+          "explanation": "Một warm-up và năm mẫu, mỗi mẫu ba pass đủ N; đổi AB/BA, báo median cùng min/max và chi phí reset/conversion riêng."
+        },
+        {
+          "title": "Giữ cả lần không thắng",
+          "explanation": "SoA có thể có lợi khi chỉ chạm velocityY nhưng kém hơn ở vòng đời có branch. Đọc kết quả trên đúng máy/build/workload."
+        }
+      ]
     },
     "p32-l08": {
-      focus:
-        "Ghép controls, sampled renderer, benchmark/scaling và validation thành lifecycle không chạy workload lớn ngoài ý muốn.",
-      expected:
-        "Ứng dụng reset được, pause mặc định, benchmark chỉ chạy khi bấm phím và validation báo riêng từng contract.",
-      files,
-      steps: [
-        {
-          title: "Giữ animation và benchmark là hai đường riêng",
-          explanation:
-            "Animation cho cảm giác state đang sống nhưng không dùng để đo. B và S tạm dừng animation, chạy experiment hữu hạn rồi mới in kết quả.",
-        },
-        {
-          title: "Không tự động chạy scaling một triệu",
-          explanation:
-            "Startup chỉ sinh source và hiển thị scene. Scaling lớn là hành động chủ động để app không đóng băng trong lúc người học chỉ muốn đọc bài.",
-        },
-        {
-          title: "Giữ từng validation có tên",
-          explanation:
-            "Deterministic data, conversion, kernel agreement, traffic model và observable benchmark là các contract độc lập; timing không quyết định pass/fail.",
-        },
+      "focus": "Ghép controls, đài phun, đo hiệu năng và quy trình kiểm chứng đủ một triệu hạt sống thành ứng dụng độc lập.",
+      "expected": "Build mọi checkpoint, CTest Debug/Release, benchmark Release và desktop là các loại bằng chứng riêng; ghi rõ phần chưa kiểm.",
+      "files": [
+        "include/application.hpp",
+        "tests/tests.cpp"
       ],
-    },
+      "steps": [
+        {
+          "title": "Chạy đúng preset nghiệm thu",
+          "explanation": "Bản cuối khởi tạo một triệu slot sống. Workflow kiểm từng slot sau một bước, không chỉ kiểm vector.size()."
+        },
+        {
+          "title": "Đọc telemetry theo phạm vi",
+          "explanation": "Updated là hạt đã cập nhật trong bước commit; sampled là tập chọn để vẽ, rendered còn bị camera cull. Frame và kernel có đồng hồ riêng."
+        },
+        {
+          "title": "Bàn giao ứng dụng",
+          "explanation": "Build mọi checkpoint, CTest Debug/Release, benchmark Release và desktop là các loại bằng chứng riêng; ghi rõ phần chưa kiểm."
+        }
+      ]
+    }
   },
-  references: {
+  "references": {
     "p32-l01": [
-      { label: "Array of Structures", href: "/glossary#array-of-structures", kind: "Thuật ngữ" },
-      { label: "Memory layout", href: "/glossary#memory-layout", kind: "Thuật ngữ" },
+      {
+        "label": "Array of Structures",
+        "href": "/glossary#array-of-structures",
+        "kind": "Thuật ngữ"
+      },
+      {
+        "label": "Memory layout",
+        "href": "/glossary#memory-layout",
+        "kind": "Thuật ngữ"
+      }
     ],
     "p32-l02": [
-      { label: "Hot loop", href: "/glossary#hot-loop", kind: "Thuật ngữ" },
-      { label: "Memory stride", href: "/glossary#memory-stride", kind: "Thuật ngữ" },
+      {
+        "label": "Hot loop",
+        "href": "/glossary#hot-loop",
+        "kind": "Thuật ngữ"
+      },
+      {
+        "label": "Memory stride",
+        "href": "/glossary#memory-stride",
+        "kind": "Thuật ngữ"
+      }
     ],
     "p32-l03": [
-      { label: "Benchmark warm-up", href: "/glossary#benchmark-warm-up", kind: "Thuật ngữ" },
-      { label: "Benchmark checksum", href: "/glossary#benchmark-checksum", kind: "Thuật ngữ" },
+      {
+        "label": "Benchmark warm-up",
+        "href": "/glossary#benchmark-warm-up",
+        "kind": "Thuật ngữ"
+      },
+      {
+        "label": "Benchmark checksum",
+        "href": "/glossary#benchmark-checksum",
+        "kind": "Thuật ngữ"
+      }
     ],
     "p32-l04": [
-      { label: "Structure of Arrays", href: "/glossary#structure-of-arrays", kind: "Thuật ngữ" },
-      { label: "Spatial locality", href: "/glossary#spatial-locality", kind: "Thuật ngữ" },
+      {
+        "label": "Structure of Arrays",
+        "href": "/glossary#structure-of-arrays",
+        "kind": "Thuật ngữ"
+      },
+      {
+        "label": "Spatial locality",
+        "href": "/glossary#spatial-locality",
+        "kind": "Thuật ngữ"
+      }
     ],
     "p32-l05": [
       {
-        label: "Deterministic simulation",
-        href: "/glossary#deterministic-simulation",
-        kind: "Thuật ngữ",
+        "label": "Deterministic simulation",
+        "href": "/glossary#deterministic-simulation",
+        "kind": "Thuật ngữ"
       },
-      { label: "Benchmark checksum", href: "/glossary#benchmark-checksum", kind: "Thuật ngữ" },
+      {
+        "label": "Benchmark checksum",
+        "href": "/glossary#benchmark-checksum",
+        "kind": "Thuật ngữ"
+      }
     ],
     "p32-l06": [
-      { label: "Cache line", href: "/glossary#cache-line", kind: "Thuật ngữ" },
-      { label: "Memory stride", href: "/glossary#memory-stride", kind: "Thuật ngữ" },
+      {
+        "label": "Cache line",
+        "href": "/glossary#cache-line",
+        "kind": "Thuật ngữ"
+      },
+      {
+        "label": "Memory stride",
+        "href": "/glossary#memory-stride",
+        "kind": "Thuật ngữ"
+      }
     ],
     "p32-l07": [
-      { label: "Benchmark median", href: "/glossary#benchmark-median", kind: "Thuật ngữ" },
-      { label: "Benchmark warm-up", href: "/glossary#benchmark-warm-up", kind: "Thuật ngữ" },
+      {
+        "label": "Benchmark median",
+        "href": "/glossary#benchmark-median",
+        "kind": "Thuật ngữ"
+      },
+      {
+        "label": "Benchmark warm-up",
+        "href": "/glossary#benchmark-warm-up",
+        "kind": "Thuật ngữ"
+      }
     ],
     "p32-l08": [
-      { label: "Pointer capture", href: "/glossary#pointer-capture", kind: "Thuật ngữ" },
       {
-        label: "SDL_UpdateTexture",
-        href: "https://wiki.libsdl.org/SDL3/SDL_UpdateTexture",
-        kind: "SDL API",
+        "label": "Pointer capture",
+        "href": "/glossary#pointer-capture",
+        "kind": "Thuật ngữ"
       },
-    ],
-  },
+      {
+        "label": "Benchmark checksum",
+        "href": "/glossary#benchmark-checksum",
+        "kind": "Thuật ngữ"
+      }
+    ]
+  }
 } satisfies ProjectLearningAssets;
-
 export default learning;

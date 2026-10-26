@@ -1,54 +1,43 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
-  base: {
-    label: "MEMORY LAYOUT RACE LAB",
-    title: "Cùng một triệu particle, CPU phải tải những byte nào?",
-    description:
-      "Đổi AoS/SoA và workload, theo dõi memory cells, useful bytes, cache-line traffic, output agreement cùng timing thực trên thiết bị hiện tại.",
+  "base": {
+    "label": "CPU FOUNTAIN · AoS / SoA",
+    "title": "Cùng đài phun, khác cách đặt dữ liệu",
+    "description": "Canvas cập nhật tối đa 20.000 hạt float32 để học mô hình; bản C++ có preset một triệu hạt sống. Đổi layout giữ nguyên state. Màu biểu thị tuổi hạt, không dùng hoạt ảnh định sẵn."
   },
-  modes: {
+  "modes": {
     "layout-scene": {
-      title: "Một triệu particle thực sự gồm những field nào?",
-      description:
-        "Đọc sáu float của mỗi particle, đổi N/seed và phân biệt workload update đủ N với số điểm hữu hạn được lấy mẫu để vẽ.",
+      "title": "Nhìn thấy đài phun trước khi tối ưu",
+      "description": "Chạy khung SDL, đọc state của hạt trong không gian 3D và phân biệt khởi tạo warm với chuyển động do solver."
     },
     "aos-layout": {
-      title: "AoS đặt dữ liệu của từng particle cạnh nhau ra sao?",
-      description:
-        "Mỗi cụm màu là position/velocity của một particle; chọn workload để thấy field cần dùng nằm xen với field không cần dùng.",
+      "title": "Phát hạt, cho rơi và tái sử dụng slot",
+      "description": "Thêm emission carry, gravity, age/lifetime và respawn có seed; tiến một bước đầy đủ rồi mới công bố state."
     },
     "aos-baseline": {
-      title: "Baseline AoS đang đo kernel nào?",
-      description:
-        "Chọn workload, chạy benchmark hữu hạn và đọc timing cạnh checksum thay vì dùng FPS của Canvas.",
+      "title": "Đo một kernel AoS có thể kiểm chứng",
+      "description": "Đo gravity-only và toàn bộ vòng đời bằng AoS; dùng warm-up, nhiều mẫu và checksum ngoài timer."
     },
     "soa-layout": {
-      title: "SoA biến sáu field thành sáu dải liên tục thế nào?",
-      description:
-        "Mỗi hàng chỉ chứa một field; particle index vẫn nối các giá trị thuộc cùng particle giữa sáu mảng.",
+      "title": "Đổi layout mà không làm đổi trạng thái",
+      "description": "Tách đủ mười một field thành các mảng; chuyển layout theo batch và có thể hủy mà không đổi snapshot đang xem."
     },
     "layout-agreement": {
-      title: "Hai layout có còn mô tả đúng cùng state không?",
-      description:
-        "Tiến từng bước hoặc chạy animation; maximum difference phải giữ bằng 0 trước khi timing được xem là có ý nghĩa.",
+      "title": "Chạy cùng vòng đời bằng SoA",
+      "description": "Viết kernel SoA theo cùng thứ tự phép tính float32, giữ ID/generation và kiểm cả các lần hạt được tái sử dụng."
     },
     "cache-lines": {
-      title: "Một field hữu ích kéo theo bao nhiêu cache line?",
-      description:
-        "Đổi giữa position.x, velocity-only và integrate để so useful bytes, loaded bytes và efficiency trong mô hình line 64 byte.",
+      "title": "Giải thích dữ liệu mà vòng lặp chạm tới",
+      "description": "Đếm cache line của gravity-only và nhận biết giới hạn của mô hình all-field; không gọi nó là số cache miss đo được."
     },
     "layout-benchmark": {
-      title: "Timing thay đổi thế nào khi N tăng tới một triệu?",
-      description:
-        "Chạy scaling 10k/100k/1M với cùng seed và workload; đọc AoS/SoA time cạnh traffic model cùng output agreement.",
+      "title": "Đo Release và giữ cả kết quả không nhanh hơn",
+      "description": "Đo AoS/SoA với cùng seed và workload ở 10k/100k/1M; đọc median, min/max, chi phí conversion và sai khác state."
     },
     "layout-validation": {
-      title: "Cuộc đua đã công bằng và có thể lặp lại chưa?",
-      description:
-        "Kiểm seed, conversion, kernel agreement, bounded repetitions, pointer lifecycle và tách rendering khỏi vùng đo trước Project 33.",
-    },
-  },
+      "title": "Hoàn thiện đài phun một triệu hạt",
+      "description": "Ghép controls, đài phun, đo hiệu năng và quy trình kiểm chứng đủ một triệu hạt sống thành ứng dụng độc lập."
+    }
+  }
 } satisfies ProjectLabMeta;
-
 export default lab;

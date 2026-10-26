@@ -226,7 +226,8 @@
     "slug": "memory-layout-race",
     "sourceDirectory": "project-32-memory-layout-race",
     "checkpointCount": 8,
-    "demoId": "memory-layout-race"
+    "demoId": "memory-layout-race",
+    "contentRevision": 1
   },
   {
     "id": "33",

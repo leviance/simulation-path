@@ -1,148 +1,111 @@
 #pragma once
-
-#include "particles.hpp"
-
+#include "simulation.hpp"
 #include <array>
 
 namespace lab {
-
-inline constexpr std::uint32_t kBackgroundColor = 0x0b1020ffU;
-inline constexpr std::array<std::uint32_t, 6> kFieldColors{
-    0x61afefffU,
-    0x56b6c2ffU,
-    0x98c379ffU,
-    0xe5c07bffU,
-    0xd19a66ffU,
-    0xc678ddffU,
+struct Vec3 {
+    double x{}, y{}, z{};
 };
 
-// Framebuffer CPU giữ phần minh họa tách khỏi benchmark: timer không bao giờ đo đoạn vẽ này.
+struct Camera {
+    double yaw{0.45}, pitch{-0.18}, distance{13};
+    Vec3 target{0, 2.5, 0};
+};
+
+struct ScreenPoint {
+    int x{}, y{};
+    bool visible{};
+};
+
+inline ScreenPoint projectPoint(Vec3 point, const Camera& camera, int width, int height) {
+    const double x = point.x - camera.target.x;
+    const double y = point.y - camera.target.y;
+    const double z = point.z - camera.target.z;
+    const double rotatedX = std::cos(camera.yaw) * x - std::sin(camera.yaw) * z;
+    const double rotatedZ = std::sin(camera.yaw) * x + std::cos(camera.yaw) * z;
+    const double rotatedY = std::cos(camera.pitch) * y - std::sin(camera.pitch) * rotatedZ;
+    const double depth = std::sin(camera.pitch) * y + std::cos(camera.pitch) * rotatedZ + camera.distance;
+    if (!std::isfinite(depth) || depth <= 0.1)
+        return {};
+    const double scale = double(height) * 0.86602540378 / depth;
+    const double screenX = width * 0.5 + rotatedX * scale;
+    const double screenY = height * 0.5 - rotatedY * scale;
+    if (screenX < 0 || screenY < 0 || screenX >= width || screenY >= height)
+        return {};
+    return {int(screenX), int(screenY), true};
+}
+
 struct Framebuffer {
-    int width{};
-    int height{};
-    std::vector<std::uint32_t> pixels{};
-
-    void resize(int nextWidth, int nextHeight) {
-        width = std::max(1, nextWidth);
-        height = std::max(1, nextHeight);
-        pixels.assign(std::size_t(width) * std::size_t(height), kBackgroundColor);
-    }
-
-    void clear() {
-        std::fill(pixels.begin(), pixels.end(), kBackgroundColor);
-    }
+    int width{1120}, height{570};
+    std::vector<std::uint32_t> pixels = std::vector<std::uint32_t>(1120 * 570);
 
     void putPixel(int x, int y, std::uint32_t color) {
-        if (x < 0 || y < 0 || x >= width || y >= height) {
-            return;
-        }
-        pixels[std::size_t(y) * std::size_t(width) + std::size_t(x)] = color;
-    }
-
-    void fillRectangle(int left, int top, int rectangleWidth, int rectangleHeight, std::uint32_t color) {
-        for (int y = top; y < top + rectangleHeight; ++y) {
-            for (int x = left; x < left + rectangleWidth; ++x) {
-                putPixel(x, y, color);
-            }
-        }
+        if (x >= 0 && y >= 0 && x < width && y < height)
+            pixels[std::size_t(y) * width + x] = color;
     }
 };
 
-// Sơ đồ dùng cùng sáu màu field để người học nhìn thấy AoS xen kẽ và SoA liên tục.
-inline void drawMemoryDiagram(
-    Framebuffer& framebuffer,
-    bool showSoA,
-    const std::array<bool, 6>& activeFields
-) {
-    const int left = 28;
-    const int top = 32;
-    const int cellWidth = 34;
-    const int cellHeight = 22;
-    constexpr int visibleParticles = 6;
-    if (!showSoA) {
-        int slot = 0;
-        for (int particle = 0; particle < visibleParticles; ++particle) {
-            for (int field = 0; field < int(kParticleFieldCount); ++field) {
-                std::uint32_t color = kFieldColors[std::size_t(field)];
-                if (!activeFields[std::size_t(field)]) {
-                    color = 0x26344cffU;
-                }
-                framebuffer.fillRectangle(
-                    left + slot * cellWidth,
-                    top,
-                    cellWidth - 2,
-                    cellHeight,
-                    color
-                );
-                ++slot;
-            }
-        }
+inline void drawLine(Framebuffer& image, ScreenPoint first, ScreenPoint second, std::uint32_t color) {
+    if (!first.visible || !second.visible)
         return;
-    }
-
-    for (int field = 0; field < int(kParticleFieldCount); ++field) {
-        std::uint32_t color = kFieldColors[std::size_t(field)];
-        if (!activeFields[std::size_t(field)]) {
-            color = 0x26344cffU;
+    int x = first.x, y = first.y;
+    const int dx = std::abs(second.x - x), dy = -std::abs(second.y - y);
+    const int sx = x < second.x ? 1 : -1, sy = y < second.y ? 1 : -1;
+    int error = dx + dy;
+    for (;;) {
+        image.putPixel(x, y, color);
+        if (x == second.x && y == second.y)
+            break;
+        const int twice = 2 * error;
+        if (twice >= dy) {
+            error += dy;
+            x += sx;
         }
-        for (int particle = 0; particle < visibleParticles; ++particle) {
-            framebuffer.fillRectangle(
-                left + particle * cellWidth,
-                top + field * (cellHeight + 5),
-                cellWidth - 2,
-                cellHeight,
-                color
-            );
+        if (twice <= dx) {
+            error += dx;
+            y += sy;
         }
     }
 }
 
-#if LAB_CHECKPOINT >= 1
-// Chỉ lấy mẫu một số particle khi vẽ; kernel benchmark vẫn xử lý đủ toàn bộ mảng.
-inline void drawAoSParticles(
-    Framebuffer& framebuffer,
-    std::span<const ParticleAoS> particles,
-    bool showSoA
-) {
-    int top = 92;
-    if (showSoA) {
-        top = 220;
-    }
-    const int left = 28;
-    const int viewWidth = std::max(1, framebuffer.width - 56);
-    const int viewHeight = std::max(1, framebuffer.height - top - 28);
-    const std::size_t maximumDrawCount = 40'000U;
-    std::size_t stride = 1U;
-    if (particles.size() > maximumDrawCount) {
-        stride = (particles.size() + maximumDrawCount - 1U) / maximumDrawCount;
-    }
-    for (std::size_t index = 0; index < particles.size(); index += stride) {
-        const ParticleAoS& particle = particles[index];
-        const int x = left + int((particle.positionX * 0.5F + 0.5F) * float(viewWidth - 1));
-        const int y = top + int((1.0F - (particle.positionY * 0.5F + 0.5F)) * float(viewHeight - 1));
-        framebuffer.putPixel(x, y, 0x61afefffU);
-    }
+inline std::uint32_t particleColor(const ParticleAoS& particle) {
+    const float life = std::clamp(particle.age / particle.lifetime, 0.0F, 1.0F);
+    const auto red = std::uint32_t(60 + 195 * life);
+    const auto green = std::uint32_t(220 - 125 * life);
+    const auto blue = std::uint32_t(250 - 180 * life + 5 * particle.hue);
+    return red << 24U | green << 16U | blue << 8U | 255U;
 }
-#endif
 
-#if LAB_CHECKPOINT >= 4
-// Bản SoA đọc trực tiếp hai vector position, đúng với access pattern mà sơ đồ đang mô tả.
-inline void drawSoAParticles(Framebuffer& framebuffer, const ParticlesSoA& particles) {
-    const int top = 220;
-    const int left = 28;
-    const int viewWidth = std::max(1, framebuffer.width - 56);
-    const int viewHeight = std::max(1, framebuffer.height - top - 28);
-    const std::size_t maximumDrawCount = 40'000U;
-    std::size_t stride = 1U;
-    if (particles.size() > maximumDrawCount) {
-        stride = (particles.size() + maximumDrawCount - 1U) / maximumDrawCount;
+struct RenderStats {
+    std::size_t sampled{}, rendered{};
+};
+
+// [snippet:drawFountain]
+inline RenderStats drawFountain(Framebuffer& image, const Simulation& simulation, const Camera& camera, std::size_t drawBudget = 40'000) {
+    std::fill(image.pixels.begin(), image.pixels.end(), 0x0b1020ffU);
+    for (int line = -6; line <= 6; ++line) {
+        drawLine(image, projectPoint({double(line), 0, -6}, camera, image.width, image.height), projectPoint({double(line), 0, 6}, camera, image.width, image.height), 0x203249ffU);
+        drawLine(image, projectPoint({-6, 0, double(line)}, camera, image.width, image.height), projectPoint({6, 0, double(line)}, camera, image.width, image.height), 0x203249ffU);
     }
-    for (std::size_t index = 0; index < particles.size(); index += stride) {
-        const int x = left + int((particles.positionX[index] * 0.5F + 0.5F) * float(viewWidth - 1));
-        const int y = top + int((1.0F - (particles.positionY[index] * 0.5F + 0.5F)) * float(viewHeight - 1));
-        framebuffer.putPixel(x, y, 0x98c379ffU);
+    const Vec3 emitter{simulation.config.emitterX, 0, simulation.config.emitterZ};
+    drawLine(image, projectPoint(emitter, camera, image.width, image.height), projectPoint({emitter.x, 1, emitter.z}, camera, image.width, image.height), 0x6be6bbffU);
+    RenderStats stats{};
+    stats.sampled = std::min(simulation.active, drawBudget);
+    for (std::size_t sample = 0; sample < stats.sampled; ++sample) {
+        // Deterministic display sampling, never a reduction of simulation N.
+        const std::size_t index = sample * simulation.active / stats.sampled;
+        const ParticleAoS particle = simulation.particle(index);
+        const auto point = projectPoint({particle.positionX, particle.positionY, particle.positionZ}, camera, image.width, image.height);
+        if (!point.visible)
+            continue;
+        const std::uint32_t color = particleColor(particle);
+        image.putPixel(point.x, point.y, color);
+        if (particle.age < particle.lifetime * 0.3F)
+            image.putPixel(point.x + 1, point.y, color);
+        ++stats.rendered;
     }
+    return stats;
 }
-#endif
 
+// [/snippet:drawFountain]
 } // namespace lab

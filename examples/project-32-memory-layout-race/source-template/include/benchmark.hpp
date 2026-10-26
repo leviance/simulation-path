@@ -1,379 +1,271 @@
 #pragma once
-
-#include "particles.hpp"
-
-#include <chrono>
-#include <string_view>
+#include "simulation.hpp"
+#include <array>
 
 namespace lab {
-
-// Checkpoint 3: workload có tên và checksum observable cho baseline AoS.
 #if LAB_CHECKPOINT >= 3
-enum class MemoryWorkload {
-    positionX,
-    velocityOnly,
-    integrate,
+struct TimingStats {
+    double median{}, minimum{}, maximum{};
 };
 
-enum class MemoryLayout {
-    aos,
-    soa,
-};
-
-inline std::string_view workloadName(MemoryWorkload workload) {
-    if (workload == MemoryWorkload::positionX) {
-        return "position-x";
-    }
-    if (workload == MemoryWorkload::velocityOnly) {
-        return "velocity-only";
-    }
-    return "integrate";
-}
-
-inline double runAoSWorkload(
-    std::vector<ParticleAoS>& particles,
-    MemoryWorkload workload,
-    float deltaSeconds = 1.0F / 120.0F
-) {
-    if (workload == MemoryWorkload::positionX) {
-        return sumPositionXAoS(particles);
-    }
-    if (workload == MemoryWorkload::velocityOnly) {
-        dampVelocitiesAoS(particles, 0.9995F);
-        return sumPositionXAoS(particles);
-    }
-    integrateAoS(particles, deltaSeconds);
-    return sumPositionXAoS(particles);
-}
-
-struct AoSBaseline {
-    std::size_t particleCount{};
-    MemoryWorkload workload{};
-    int repetitions{};
-    double elapsedMilliseconds{};
-    double checksum{};
-};
-
-inline AoSBaseline benchmarkAoSBaseline(
-    std::span<const ParticleAoS> source,
-    MemoryWorkload workload,
-    int repetitions
-) {
-    AoSBaseline result{};
-    result.particleCount = source.size();
-    result.workload = workload;
-    if (source.empty() || repetitions <= 0) {
-        return result;
-    }
-    result.repetitions = repetitions;
-    std::vector<ParticleAoS> warm(source.begin(), source.end());
-    (void)runAoSWorkload(warm, workload);
-
-    std::vector<ParticleAoS> measured(source.begin(), source.end());
-    const auto started = std::chrono::steady_clock::now();
-    for (int repetition = 0; repetition < repetitions; ++repetition) {
-        result.checksum += runAoSWorkload(measured, workload);
-    }
-    const auto finished = std::chrono::steady_clock::now();
-    result.elapsedMilliseconds =
-        std::chrono::duration<double, std::milli>(finished - started).count();
-    return result;
-}
-#endif
-
-#if LAB_CHECKPOINT >= 5
-inline double runSoAWorkload(
-    ParticlesSoA& particles,
-    MemoryWorkload workload,
-    float deltaSeconds = 1.0F / 120.0F
-) {
-    if (workload == MemoryWorkload::positionX) {
-        return sumPositionXSoA(particles);
-    }
-    if (workload == MemoryWorkload::velocityOnly) {
-        dampVelocitiesSoA(particles, 0.9995F);
-        return sumPositionXSoA(particles);
-    }
-    integrateSoA(particles, deltaSeconds);
-    return sumPositionXSoA(particles);
-}
-#endif
-
-// Checkpoint 6: mô hình cache line tách useful bytes khỏi bytes phải nạp.
-#if LAB_CHECKPOINT >= 6
-struct FieldSelection {
-    std::array<std::size_t, kParticleFieldCount> offsets{};
-    std::size_t count{};
-};
-
-inline FieldSelection fieldsForWorkload(MemoryWorkload workload) {
-    FieldSelection selection{};
-    if (workload == MemoryWorkload::positionX) {
-        selection.offsets[0] = 0U;
-        selection.count = 1U;
-        return selection;
-    }
-    if (workload == MemoryWorkload::velocityOnly) {
-        selection.offsets[0] = 3U;
-        selection.offsets[1] = 4U;
-        selection.offsets[2] = 5U;
-        selection.count = 3U;
-        return selection;
-    }
-    for (std::size_t field = 0; field < kParticleFieldCount; ++field) {
-        selection.offsets[field] = field;
-    }
-    selection.count = kParticleFieldCount;
-    return selection;
-}
-
-struct MemoryTrafficEstimate {
-    MemoryLayout layout{};
-    MemoryWorkload workload{};
-    std::size_t particleCount{};
-    std::size_t fieldCount{};
-    std::size_t usefulBytes{};
-    std::size_t cacheLines{};
-    std::size_t loadedBytes{};
-    double efficiency{};
-};
-
-inline MemoryTrafficEstimate estimateMemoryTraffic(
-    MemoryLayout layout,
-    MemoryWorkload workload,
-    std::size_t particleCount,
-    std::size_t cacheLineBytes = 64U
-) {
-    const std::size_t lineSize = std::max(cacheLineBytes, sizeof(float));
-    const FieldSelection fields = fieldsForWorkload(workload);
-    std::size_t cacheLines = 0U;
-    if (layout == MemoryLayout::soa) {
-        const std::size_t bytesPerArray = particleCount * sizeof(float);
-        const std::size_t linesPerArray = (bytesPerArray + lineSize - 1U) / lineSize;
-        cacheLines = linesPerArray * fields.count;
-    } else {
-        const std::size_t strideBytes = kParticleFieldCount * sizeof(float);
-        if (particleCount > 0U && lineSize >= strideBytes) {
-            const std::size_t firstAddress = fields.offsets[0] * sizeof(float);
-            const std::size_t lastParticleOffset =
-                (particleCount - 1U) * kParticleFieldCount;
-            const std::size_t lastFieldOffset = fields.offsets[fields.count - 1U];
-            const std::size_t lastAddress =
-                (lastParticleOffset + lastFieldOffset) * sizeof(float);
-            cacheLines = lastAddress / lineSize - firstAddress / lineSize + 1U;
-        } else {
-            std::size_t previousLine = std::numeric_limits<std::size_t>::max();
-            for (std::size_t index = 0; index < particleCount; ++index) {
-                for (std::size_t field = 0; field < fields.count; ++field) {
-                    const std::size_t byteAddress =
-                        (index * kParticleFieldCount + fields.offsets[field]) * sizeof(float);
-                    const std::size_t line = byteAddress / lineSize;
-                    if (line != previousLine) {
-                        ++cacheLines;
-                        previousLine = line;
-                    }
-                }
-            }
-        }
-    }
-    MemoryTrafficEstimate estimate{};
-    estimate.layout = layout;
-    estimate.workload = workload;
-    estimate.particleCount = particleCount;
-    estimate.fieldCount = fields.count;
-    estimate.usefulBytes = particleCount * fields.count * sizeof(float);
-    estimate.cacheLines = cacheLines;
-    estimate.loadedBytes = cacheLines * lineSize;
-    estimate.efficiency = 1.0;
-    if (estimate.loadedBytes > 0U) {
-        estimate.efficiency = double(estimate.usefulBytes) / double(estimate.loadedBytes);
-    }
-    return estimate;
-}
-#endif
-
-// Checkpoint 7: benchmark đo hai layout trên cùng source và báo median.
-#if LAB_CHECKPOINT >= 7
-inline double medianMilliseconds(std::vector<double> samples) {
-    if (samples.empty()) {
-        return 0.0;
-    }
+// [snippet:summarizeTimes]
+inline TimingStats summarizeTimes(std::vector<double> samples) {
+    if (samples.empty())
+        throw std::invalid_argument("No timing samples");
     std::sort(samples.begin(), samples.end());
-    const std::size_t middle = samples.size() / 2U;
-    if (samples.size() % 2U == 1U) {
-        return samples[middle];
-    }
-    return 0.5 * (samples[middle - 1U] + samples[middle]);
+    return {samples[samples.size() / 2], samples.front(), samples.back()};
 }
 
-struct LayoutBenchmark {
-    std::size_t particleCount{};
-    MemoryWorkload workload{};
-    int repetitions{};
-    double aosMilliseconds{};
-    double soaMilliseconds{};
-    double aosChecksum{};
-    double soaChecksum{};
+// [/snippet:summarizeTimes]
+struct BenchmarkRow {
+    std::size_t count{}, updated{};
+    MemoryWorkload workload{MemoryWorkload::fullLifecycle};
+    TimingStats aos{}, soa{};
+    double copyMs{}, conversionMs{}, checksumAoS{}, checksumSoA{};
     float maximumDifference{};
+    bool paired{};
+};
+enum class BenchmarkPhase { prepare,
+                            reset,
+                            kernel,
+                            verify };
+
+struct BenchmarkJob {
+    bool active{}, paused{}, timedOut{}, paired{};
+    FountainConfig config{};
+    std::vector<std::size_t> sizes{};
+    std::vector<MemoryWorkload> workloads{};
+    std::vector<ParticleAoS> initial{}, workAoS{};
+#if LAB_CHECKPOINT >= 7
+    ParticlesSoA workSoA{};
+#endif
+    std::vector<BenchmarkRow> rows{};
+    std::vector<double> aosTimes{}, soaTimes{};
+    BenchmarkRow row{};
+    BenchmarkPhase phase{BenchmarkPhase::prepare};
+    std::size_t caseIndex{}, target{};
+    int sample{-1}, trial{}, method{}, step{};
+    double kernelMs{};
+    Clock::time_point deadline{};
+    std::string notice{"No benchmark"};
+
+    void start(const FountainConfig& source, std::vector<std::size_t> requestedSizes, std::vector<MemoryWorkload> requestedWorkloads) {
+        validateConfig(source);
+        if (requestedSizes.empty() || requestedSizes.size() > 3 || requestedWorkloads.empty() || requestedWorkloads.size() > 2)
+            throw std::invalid_argument("Benchmark case budget");
+        for (std::size_t count : requestedSizes) {
+            if (count < 1 || count > maximumParticles)
+                throw std::invalid_argument("Benchmark particle budget");
+        }
+        config = source;
+        sizes = std::move(requestedSizes);
+        workloads = std::move(requestedWorkloads);
+#if LAB_CHECKPOINT >= 7
+        paired = true;
+#else
+        paired = false;
+#endif
+        active = true;
+        paused = timedOut = false;
+        rows.clear();
+        caseIndex = 0;
+        deadline = Clock::now() + std::chrono::seconds(30);
+        prepareCase();
+    }
+
+    void prepareCase() {
+        row = {};
+        row.count = sizes[caseIndex / workloads.size()];
+        row.workload = workloads[caseIndex % workloads.size()];
+        row.updated = row.count * 3;
+        row.paired = paired;
+        initial.resize(row.count);
+        workAoS.resize(row.count);
+#if LAB_CHECKPOINT >= 7
+        workSoA.resize(row.count);
+#endif
+        target = 0;
+        phase = BenchmarkPhase::prepare;
+        aosTimes.clear();
+        soaTimes.clear();
+        sample = -1;
+        trial = step = method = 0;
+        kernelMs = 0;
+        notice = "Preparing seeded input; allocation/copy excluded from kernel";
+    }
+
+    void chooseMethod() {
+        // Alternate AB/BA between samples rather than always timing AoS first.
+        method = paired ? (trial + std::max(0, sample) % 2) % 2 : 0;
+        target = 0;
+        step = 0;
+        kernelMs = 0;
+        phase = BenchmarkPhase::reset;
+    }
+
+    void resetUnit() {
+        const std::size_t end = std::min(row.count, target + 4096);
+        const auto started = Clock::now();
+        if (method == 0) {
+            std::copy(initial.begin() + target, initial.begin() + end, workAoS.begin() + target);
+        }
+#if LAB_CHECKPOINT >= 7
+        else {
+            for (std::size_t index = target; index < end; ++index)
+                writeParticle(workSoA, index, initial[index]);
+        }
+#endif
+        if (sample == 0) {
+            if (method == 0)
+                row.copyMs += milliseconds(started);
+            else
+                row.conversionMs += milliseconds(started);
+        }
+        target = end;
+        if (target == row.count) {
+            target = 0;
+            phase = BenchmarkPhase::kernel;
+        }
+    }
+
+    // [snippet:benchmarkKernelUnit]
+    void kernelUnit() {
+        const std::size_t end = std::min(row.count, target + 4096);
+        const auto started = Clock::now();
+        if (method == 0) {
+            updateAoSRange(workAoS, target, end, config, fixedDt, row.workload, row.count);
+        }
+#if LAB_CHECKPOINT >= 7
+        else {
+            updateSoARange(workSoA, target, end, config, fixedDt, row.workload, row.count);
+        }
+#endif
+        kernelMs += milliseconds(started);
+        target = end;
+        if (target != row.count)
+            return;
+        target = 0;
+        if (++step < 3)
+            return;
+        if (sample >= 0) {
+            if (method == 0)
+                aosTimes.push_back(kernelMs);
+            else
+                soaTimes.push_back(kernelMs);
+        }
+        ++trial;
+        if (trial < (paired ? 2 : 1))
+            chooseMethod();
+        else {
+            row.checksumAoS = row.checksumSoA = 0;
+            phase = BenchmarkPhase::verify;
+        }
+    }
+
+    // [/snippet:benchmarkKernelUnit]
+    void verifyUnit() {
+        const std::size_t end = std::min(row.count, target + 4096);
+        for (std::size_t index = target; index < end; ++index) {
+            const auto& first = workAoS[index];
+            if (first.id != index || !finiteParticle(first))
+                throw std::runtime_error("AoS state validation failed");
+            row.checksumAoS += particleChecksum(first);
+#if LAB_CHECKPOINT >= 7
+            const ParticleAoS second = readParticle(workSoA, index);
+            row.checksumSoA += particleChecksum(second);
+            row.maximumDifference = std::max(row.maximumDifference, particleDifference(first, second));
+#endif
+        }
+        target = end;
+        if (target < row.count)
+            return;
+        if (paired && row.maximumDifference > 1e-5F)
+            throw std::runtime_error("AoS/SoA state mismatch");
+        target = 0;
+        trial = 0;
+        ++sample;
+        if (sample < 5) {
+            chooseMethod();
+            return;
+        }
+        row.aos = summarizeTimes(aosTimes);
+#if LAB_CHECKPOINT >= 7
+        row.soa = summarizeTimes(soaTimes);
+#endif
+        rows.push_back(row);
+        if (++caseIndex < sizes.size() * workloads.size())
+            prepareCase();
+        else {
+            active = false;
+            notice = "Complete: 1 warm-up + 5 samples, 3 full-N passes each; checksum verified";
+        }
+    }
+
+    void tick(double budgetMs = 6) {
+        if (!active || paused)
+            return;
+        const auto until = Clock::now() + std::chrono::duration<double, std::milli>(budgetMs);
+        do {
+            if (Clock::now() >= deadline) {
+                active = false;
+                timedOut = true;
+                notice = "INCOMPLETE: 30-second wall deadline (including pauses)";
+                return;
+            }
+            if (phase == BenchmarkPhase::prepare) {
+                const std::size_t end = std::min(row.count, target + 4096);
+                for (std::size_t index = target; index < end; ++index)
+                    initial[index] = warmParticle(std::uint32_t(index), config);
+                target = end;
+                if (target == row.count)
+                    chooseMethod();
+            } else if (phase == BenchmarkPhase::reset)
+                resetUnit();
+            else if (phase == BenchmarkPhase::kernel)
+                kernelUnit();
+            else
+                verifyUnit();
+        } while (active && Clock::now() < until);
+    }
+
+    void cancel() {
+        active = false;
+        notice = "Cancelled; only completed rows retained";
+    }
+};
+#endif
+
+#if LAB_CHECKPOINT >= 6
+struct TrafficModel {
+    std::size_t usefulBytes{}, uniqueLines{}, loadedBytes{};
+    bool upperBound{};
 };
 
-inline LayoutBenchmark benchmarkLayoutRace(
-    std::span<const ParticleAoS> source,
-    MemoryWorkload workload,
-    int repetitions
-) {
-    LayoutBenchmark result{};
-    result.particleCount = source.size();
-    result.workload = workload;
-    if (repetitions <= 0 || source.empty()) {
-        return result;
+// [snippet:modelTraffic]
+inline TrafficModel modelTraffic(std::size_t count, Layout layout, MemoryWorkload workload) {
+    if (count > maximumParticles)
+        throw std::invalid_argument("Traffic model budget");
+    if (count == 0)
+        return {};
+    TrafficModel result{};
+    if (workload == MemoryWorkload::gravityOnly) {
+        result.usefulBytes = count * sizeof(float);
+        if (layout == Layout::aos) {
+            const std::size_t offset = offsetof(ParticleAoS, velocityY);
+            result.uniqueLines = (offset + (count - 1) * sizeof(ParticleAoS)) / 64 + 1;
+        } else
+            result.uniqueLines = (count * sizeof(float) + 63) / 64;
+    } else {
+        // Upper bound assuming all eleven fields are touched. Real respawn
+        // touches ID/generation/hue selectively; this is not a cache-miss count.
+        result.upperBound = true;
+        result.usefulBytes = count * sizeof(ParticleAoS);
+        result.uniqueLines = layout == Layout::aos ? (result.usefulBytes + 63) / 64 : 11 * ((count * sizeof(float) + 63) / 64);
     }
-    result.repetitions = repetitions;
-
-    std::vector<ParticleAoS> warmAoS(source.begin(), source.end());
-    ParticlesSoA warmSoA = makeParticlesSoA(source);
-    (void)runAoSWorkload(warmAoS, workload);
-    (void)runSoAWorkload(warmSoA, workload);
-
-    std::vector<double> aosSamples{};
-    std::vector<double> soaSamples{};
-    aosSamples.reserve(std::size_t(repetitions));
-    soaSamples.reserve(std::size_t(repetitions));
-    for (int repetition = 0; repetition < repetitions; ++repetition) {
-        std::vector<ParticleAoS> aos(source.begin(), source.end());
-        ParticlesSoA soa = makeParticlesSoA(source);
-
-        const auto measureAoS = [&]() {
-            const auto started = std::chrono::steady_clock::now();
-            result.aosChecksum += runAoSWorkload(aos, workload);
-            const auto finished = std::chrono::steady_clock::now();
-            aosSamples.push_back(
-                std::chrono::duration<double, std::milli>(finished - started).count()
-            );
-        };
-        const auto measureSoA = [&]() {
-            const auto started = std::chrono::steady_clock::now();
-            result.soaChecksum += runSoAWorkload(soa, workload);
-            const auto finished = std::chrono::steady_clock::now();
-            soaSamples.push_back(
-                std::chrono::duration<double, std::milli>(finished - started).count()
-            );
-        };
-
-        // Đổi thứ tự qua từng sample để layout chạy sau không luôn có cùng lợi thế cache.
-        if (repetition % 2 == 0) {
-            measureAoS();
-            measureSoA();
-        } else {
-            measureSoA();
-            measureAoS();
-        }
-        result.maximumDifference = std::max(
-            result.maximumDifference,
-            maximumLayoutDifference(aos, soa)
-        );
-    }
-    result.aosMilliseconds = medianMilliseconds(aosSamples);
-    result.soaMilliseconds = medianMilliseconds(soaSamples);
+    result.loadedBytes = result.uniqueLines * 64;
     return result;
 }
 
-struct LayoutScalingRow {
-    std::size_t particleCount{};
-    LayoutBenchmark benchmark{};
-    MemoryTrafficEstimate aosTraffic{};
-    MemoryTrafficEstimate soaTraffic{};
-};
-
-inline std::vector<LayoutScalingRow> makeLayoutScalingStudy(
-    std::span<const std::size_t> counts,
-    std::uint32_t seed,
-    MemoryWorkload workload,
-    int repetitions
-) {
-    std::vector<LayoutScalingRow> rows{};
-    rows.reserve(counts.size());
-    for (const std::size_t count : counts) {
-        const std::vector<ParticleAoS> source = makeParticlesAoS(count, seed);
-        rows.push_back({
-            count,
-            benchmarkLayoutRace(source, workload, repetitions),
-            estimateMemoryTraffic(MemoryLayout::aos, workload, count),
-            estimateMemoryTraffic(MemoryLayout::soa, workload, count),
-        });
-    }
-    return rows;
-}
+// [/snippet:modelTraffic]
 #endif
-
-// Checkpoint 8: validation tách correctness, memory model và timing.
-#if LAB_CHECKPOINT >= 8
-struct MemoryLayoutValidationReport {
-    bool deterministic{};
-    bool conversionExact{};
-    bool kernelsAgree{};
-    bool singleFieldReducesTraffic{};
-    bool fullWorkloadUsesAllBytes{};
-    bool benchmarkObservable{};
-};
-
-inline MemoryLayoutValidationReport validateMemoryLayoutExperiment(std::uint32_t seed) {
-    const std::vector<ParticleAoS> first = makeParticlesAoS(4'096, seed);
-    const std::vector<ParticleAoS> second = makeParticlesAoS(4'096, seed);
-    const ParticlesSoA converted = makeParticlesSoA(first);
-    bool deterministic = first.size() == second.size();
-    for (std::size_t index = 0; deterministic && index < first.size(); ++index) {
-        deterministic = first[index].positionX == second[index].positionX &&
-            first[index].positionY == second[index].positionY &&
-            first[index].positionZ == second[index].positionZ &&
-            first[index].velocityX == second[index].velocityX &&
-            first[index].velocityY == second[index].velocityY &&
-            first[index].velocityZ == second[index].velocityZ;
-    }
-
-    std::vector<ParticleAoS> aos = first;
-    ParticlesSoA soa = converted;
-    integrateAoS(aos, 1.0F / 120.0F);
-    integrateSoA(soa, 1.0F / 120.0F);
-    dampVelocitiesAoS(aos, 0.975F);
-    dampVelocitiesSoA(soa, 0.975F);
-
-    const MemoryTrafficEstimate aosSingle = estimateMemoryTraffic(
-        MemoryLayout::aos,
-        MemoryWorkload::positionX,
-        1'000'000
-    );
-    const MemoryTrafficEstimate soaSingle = estimateMemoryTraffic(
-        MemoryLayout::soa,
-        MemoryWorkload::positionX,
-        1'000'000
-    );
-    const MemoryTrafficEstimate aosFull = estimateMemoryTraffic(
-        MemoryLayout::aos,
-        MemoryWorkload::integrate,
-        16'384
-    );
-    const MemoryTrafficEstimate soaFull = estimateMemoryTraffic(
-        MemoryLayout::soa,
-        MemoryWorkload::integrate,
-        16'384
-    );
-    const LayoutBenchmark benchmark = benchmarkLayoutRace(
-        first,
-        MemoryWorkload::positionX,
-        2
-    );
-    return {
-        deterministic,
-        maximumLayoutDifference(first, converted) == 0.0F,
-        maximumLayoutDifference(aos, soa) == 0.0F,
-        soaSingle.cacheLines < aosSingle.cacheLines,
-        aosFull.efficiency == 1.0 && soaFull.efficiency == 1.0,
-        std::isfinite(benchmark.aosMilliseconds) &&
-            std::isfinite(benchmark.soaMilliseconds) &&
-            benchmark.aosChecksum == benchmark.soaChecksum,
-    };
-}
-#endif
-
 } // namespace lab

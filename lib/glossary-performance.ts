@@ -177,7 +177,7 @@ export const performanceGlossaryTerms = [
     id: "array-of-structures",
     term: "Array of Structures — AoS",
     definition:
-      "Mảng trong đó mỗi phần tử là một struct hoàn chỉnh. `std::vector<ParticleAoS>` của Project 32 đặt position xyz và velocity xyz của particle 0 cạnh nhau, rồi mới tới sáu field của particle 1.",
+      "Mảng trong đó mỗi phần tử là một struct hoàn chỉnh. `std::vector<ParticleAoS>` của Project 32 đặt ID, generation, position, velocity, age/lifetime và hue của một hạt trong cùng record, rồi mới tới record của hạt kế tiếp.",
   },
   {
     id: "structure-of-arrays",
@@ -195,7 +195,7 @@ export const performanceGlossaryTerms = [
     id: "memory-stride",
     term: "Memory stride",
     definition:
-      "Khoảng byte từ một giá trị cần đọc tới giá trị cùng field của phần tử kế tiếp. Với particle sáu float, stride của `positionX` là 24 byte trong AoS nhưng chỉ 4 byte trong SoA.",
+      "Khoảng byte từ một giá trị cần đọc tới giá trị cùng field của phần tử kế tiếp. Trong source Project 32 đã kiểm thử, ParticleAoS có payload 44 byte nên stride của positionX giữa hai record là 44 byte; trong mảng SoA float32, stride là 4 byte. Đọc sizeof và giả định alignment, không tự coi mọi struct đều có cùng kích thước.",
   },
   {
     id: "spatial-locality",
