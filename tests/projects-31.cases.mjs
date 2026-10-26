@@ -1,93 +1,124 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { workspace } from "./site-support.mjs";
+import { compile } from "@mdx-js/mdx";
+import { courseMdxOptions } from "../lib/mdx-options.mjs";
+import { isContiguousCodeExcerpt, codeTokens } from "../scripts/code-snippets.mjs";
+import { workspace, render } from "./site-support.mjs";
+const content = path.join(workspace, "content/barnes-hut-nbody");
+const root = path.join(workspace, "examples/project-31-barnes-hut-nbody");
 
-test("Project 31 publishes a ten-checkpoint Barnes-Hut N-body simulation", async () => {
-  const catalog = JSON.parse(
-    await readFile(path.join(workspace, "course", "projects.json"), "utf8"),
-  );
-  const project = catalog.find((entry) => entry.id === "31");
-  assert.equal(project.slug, "barnes-hut-nbody");
-  assert.equal(project.sourceDirectory, "project-31-barnes-hut-nbody");
-  assert.equal(project.checkpointCount, 10);
-  assert.equal(project.demoId, "barnes-hut-nbody");
+test("Project 31 raw imports follow source content even when examples is not watched", async () => {
+  for (const name of [
+    "starter",
+    ...Array.from({ length: 10 }, (_, i) => String(i + 1)),
+    "final",
+    "common",
+  ]) {
+    const generatedModule = await readFile(
+      path.join(workspace, "lib/generated-checkpoint-sources/p31", name + ".ts"),
+      "utf8",
+    );
+    const imports = [...generatedModule.matchAll(/from "@\/([^"?]+)\?source=([a-f0-9]{16})&raw"/g)];
+    assert.ok(imports.length > 0, name);
+    for (const [, relative, version] of imports) {
+      const bytes = await readFile(path.join(workspace, relative));
+      assert.equal(
+        version,
+        createHash("sha256").update(bytes).digest("hex").slice(0, 16),
+        relative,
+      );
+    }
+  }
 });
-
-test("Project 31 teaches a measured direct-to-Barnes-Hut progression", async () => {
-  const content = path.join(workspace, "content", "barnes-hut-nbody");
-  const source = path.join(workspace, "examples", "project-31-barnes-hut-nbody");
-  const lessons = await Promise.all(
-    [
-      "01-thien-ha-va-trang-thai-body.mdx",
-      "02-luc-hap-dan-va-softening.mdx",
-      "03-direct-n-body-o-n-binh-phuong.mdx",
-      "04-fixed-step-va-symplectic-euler.mdx",
-      "05-mass-octree-va-center-of-mass.mdx",
-      "06-barnes-hut-opening-criterion.mdx",
-      "07-self-force-va-topology-inspector.mdx",
-      "08-theta-accuracy-sweep.mdx",
-      "09-scaling-study.mdx",
-      "10-hoan-thien-barnes-hut-n-body.mdx",
-    ].map((file) => readFile(path.join(content, file), "utf8")),
-  );
-
-  assert.match(lessons[0], /world space.*center of mass.*momentum/is);
-  assert.match(lessons[1], /softening.*3\/2.*sourceMass/is);
-  assert.match(lessons[2], /N−1.*N×\(N−1\).*oracle/is);
-  assert.match(lessons[3], /accumulator.*1\/240.*maximum-step guard.*velocity.*position/is);
-  assert.match(lessons[4], /totalMass.*centerOfMass.*weightedPosition/is);
-  assert.match(lessons[5], /opening criterion.*theta.*approximatedNodes.*exactInteractions/is);
-  assert.match(lessons[6], /node chứa target.*self-force.*everyBodyStoredOnce/is);
-  assert.match(lessons[7], /direct oracle.*target set.*mean\/max relative force error/is);
-  assert.match(lessons[8], /full-system acceleration pass.*N×\(N−1\).*work count/is);
-  assert.match(lessons[9], /CTest.*Debug.*Release.*Project 32.*memory layout/is);
-
-  const core = await readFile(path.join(source, "source-template", "include", "lab.hpp"), "utf8");
-  const tree = await readFile(path.join(source, "source-template", "include", "tree.hpp"), "utf8");
-  const analysis = await readFile(
-    path.join(source, "source-template", "include", "analysis.hpp"),
-    "utf8",
-  );
-  const main = await readFile(path.join(source, "source-template", "src", "main.cpp"), "utf8");
-  const tests = await readFile(path.join(source, "tests", "tests.cpp"), "utf8");
-  const canvas = await readFile(
-    path.join(workspace, "components", "labs", "barnes-hut-nbody-lab.tsx"),
-    "utf8",
-  );
-
-  for (const symbol of [
-    "makeGalaxyBodies",
-    "softenedAcceleration",
-    "directAcceleration",
-    "planFixedSteps",
-    "integrateSymplecticEuler",
-  ]) {
-    assert.ok(core.includes(symbol), `Project 31 core header is missing ${symbol}`);
+test("Project 31 teaches ten complete source-aligned lessons with highlighted code", async () => {
+  const files = (await readdir(content)).filter((file) => file.endsWith(".mdx")).sort();
+  assert.equal(files.length, 10);
+  const catalog = JSON.parse(await readFile(path.join(workspace, "course/projects.json"), "utf8"));
+  assert.equal(catalog.find((project) => project.id === "31").checkpointCount, 10);
+  for (const [index, file] of files.entries()) {
+    const mdx = await readFile(path.join(content, file), "utf8");
+    let examples = 0;
+    for (const [, title, code] of mdx.matchAll(
+      /\x60\x60\x60cpp title="([^"]+)"\r?\n([\s\S]*?)\r?\n\x60\x60\x60/g,
+    )) {
+      const relative = title.split(" — ")[0],
+        source = await readFile(
+          relative.startsWith("tests/")
+            ? path.join(root, relative)
+            : path.join(root, "checkpoints", String(index + 1).padStart(2, "0"), relative),
+          "utf8",
+        );
+      assert.ok(isContiguousCodeExcerpt(code, source), file + ": " + title);
+      const stack = [],
+        pairs = { "}": "{", ")": "(", "]": "[" };
+      for (const token of codeTokens(code)) {
+        if (["{", "(", "["].includes(token)) stack.push(token);
+        else if (Object.hasOwn(pairs, token)) assert.equal(stack.pop(), pairs[token], title);
+      }
+      assert.equal(stack.length, 0, title);
+      for (const line of code.split("\n")) assert.equal(line.match(/^ */)[0].length % 4, 0, title);
+      examples++;
+    }
+    assert.ok(examples >= 3, file + " needs explained complete code steps");
+    for (const heading of [
+      "Vấn đề cần giải quyết",
+      "Hiểu ý tưởng trước khi viết code",
+      "Viết code từng bước",
+      "Ghép các phần lại",
+      "Thử làm sai để hiểu đúng",
+      "Tự kiểm tra kết quả",
+      "Bài tập mở rộng",
+    ])
+      assert.ok(mdx.includes("## " + heading), file + ": " + heading);
+    assert.match(String(await compile(mdx, courseMdxOptions)), /one-dark-pro/);
+    assert.doesNotMatch(mdx, /TODO|Checkpoint đang xây|chắc chắn.*nhanh hơn/);
   }
-  for (const symbol of [
-    "buildMassOctree",
-    "accumulateNodeMass",
-    "barnesHutAcceleration",
-    "inspectMassOctree",
-  ]) {
-    assert.ok(tree.includes(symbol), `Project 31 tree header is missing ${symbol}`);
+});
+test("Project 31 serves overview and every rebuilt lesson with complete source", async () => {
+  const overview = await render("/projects/barnes-hut-nbody");
+  assert.equal(overview.status, 200);
+  const html = await overview.text();
+  assert.match(html, /4.096|4096/);
+  assert.match(html, /class="lab-readout"/);
+  assert.match(html, /THỬ SỨC TRƯỚC KHI XEM LỜI GIẢI/);
+  const files = (await readdir(content)).filter((file) => file.endsWith(".mdx")).sort();
+  for (const file of files) {
+    const response = await render("/projects/barnes-hut-nbody/" + file.slice(0, -4));
+    assert.equal(response.status, 200, file);
+    const body = await response.text();
+    assert.doesNotMatch(
+      body.replace(/<[^>]*>/g, ""),
+      /const double mass = 0\.35/,
+      "Rendered source must not revert to the old galaxy",
+    );
+    assert.match(body, /one-dark-pro/);
+    assert.match(body, /class="lab-readout"/);
+    if (file === files.at(-1)) {
+      assert.match(body, /Toàn bộ mã nguồn của dự án/);
+      assert.match(body, /include\/experiments.hpp/);
+      assert.match(body, /project-31-barnes-hut-nbody.zip/);
+    }
   }
-  for (const symbol of [
-    "measureThetaAccuracy",
-    "makeScalingStudy",
-    "systemDiagnostics",
-    "validateBarnesHutExperiment",
-  ]) {
-    assert.ok(analysis.includes(symbol), `Project 31 analysis header is missing ${symbol}`);
+});
+test("Project 31 splits controls/results/measurement kernels into bounded lazy chunks", async () => {
+  const directory = path.join(workspace, "dist/client/_next/static/chunks"),
+    files = await readdir(directory);
+  for (const prefix of ["barnes-hut-nbody-lab-", "galaxy-controls-", "galaxy-results-"]) {
+    const file = files.find((file) => file.startsWith(prefix) && file.endsWith(".js"));
+    assert.ok(file, prefix);
+    assert.ok((await stat(path.join(directory, file))).size < 24 * 1024, file);
   }
-  assert.match(main, /SDL_CaptureMouse\(true\)/);
-  assert.match(main, /SDL_UpdateTexture/);
-  assert.match(tests, /one-body Barnes-Hut has zero self force/);
-  assert.match(tests, /direct work is exactly N times N-1/);
-  assert.match(canvas, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(canvas, /useReducedMotion/);
-  assert.match(canvas, /Chạy scaling study/);
-  assert.match(canvas, /Sai số lực tại body đang theo dõi/);
+  const manifest = JSON.parse(
+      await readFile(path.join(workspace, "dist/client/.vite/manifest.json"), "utf8"),
+    ),
+    entry = manifest["components/labs/barnes-hut-nbody-lab.tsx"];
+  for (const file of [
+    "components/labs/galaxy-controls.tsx",
+    "components/labs/galaxy-results.tsx",
+    "lib/labs/galaxy/jobs.ts",
+  ])
+    assert.ok(entry.dynamicImports.includes(file), file);
 });

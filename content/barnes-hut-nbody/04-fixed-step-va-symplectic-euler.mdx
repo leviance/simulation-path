@@ -1,96 +1,120 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Fixed step và symplectic Euler
+# Tiến thời gian mà không trộn hai snapshot
 
 ## Vấn đề cần giải quyết
 
-Ta đã tính được acceleration từ một snapshot, nhưng chưa cho body chuyển động. Nếu đưa thẳng frame time vào integrator, cùng một seed có thể cho quỹ đạo khác nhau giữa máy 60 Hz, 144 Hz hoặc một frame vừa bị debugger dừng lại.
-
-Checkpoint 4 dùng accumulator để đổi thời gian render thành các bước physics cố định 1/240 giây, đồng thời đặt guard để một frame chậm không tạo vòng lặp bù vô hạn.
+Bây giờ mới cho state tiến triển. Một frame render không phải một bước vật lý: nó có thể chậm vì vẽ, resize hoặc làm phép đo. Nếu lấy frame time tùy ý làm dt, bạn đã đổi thí nghiệm mỗi khi máy bận.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mỗi frame cộng `frameSeconds` vào accumulator. Khi accumulator còn lớn hơn `fixedDeltaSeconds`, physics tiến một bước rồi trừ đúng `dt`. Render được phép nhanh/chậm khác nhau; physics chỉ thấy cùng một dãy fixed dt.
-
-Symplectic Euler cập nhật theo thứ tự:
+Ta dùng symplectic Euler: tính toàn bộ a từ position cũ, cập nhật velocity, rồi dùng velocity mới cho position. Đây là integrator bậc một, không phải lời hứa bảo toàn energy chính xác.
 
 $$
-\mathbf{v}_{n+1}=\mathbf{v}_n+\mathbf{a}_n\Delta t
+\mathbf v_{n+1}=\mathbf v_n+\mathbf a(\mathbf p_n)\Delta t,\qquad \mathbf p_{n+1}=\mathbf p_n+\mathbf v_{n+1}\Delta t.
 $$
 
-$$
-\mathbf{p}_{n+1}=\mathbf{p}_n+\mathbf{v}_{n+1}\Delta t
-$$
+Một accumulator thông thường biến frame time thành nhiều fixed step. Ở hệ lớn, ứng dụng còn chia ngay một force pass qua nhiều frame. Scheduler ưu tiên hoàn tất một bước trên snapshot cố định, có budget mỗi đợt. Simulated time có thể chậm hơn thời gian thực; không cố bù lag bằng vòng lặp vô hạn.
+
+Checkpoint 04 dùng direct ở N=256. Chưa tăng lên hàng nghìn trước khi có Barnes–Hut, nhưng nguyên tắc commit state đã phải đúng ở đây.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-fixed-step" />
 
-Dùng “Tiến một fixed step” để nhìn đúng một lần cập nhật. Khi bật chạy, Canvas tối đa thực hiện bốn bước cho mỗi frame; `prefers-reduced-motion` giữ mô phỏng pause.
-
 ## Viết code từng bước
 
-### Bước 1 — Clamp frame time và đếm bước có guard
+### Giữ thứ tự cập nhật rõ ràng
 
-```cpp title="include/lab.hpp — planFixedSteps"
-double available = accumulatorSeconds + std::clamp(frameSeconds, 0.0, 0.05);
-int steps = 0;
-while (available >= fixedDeltaSeconds && steps < maximumSteps) {
-    available -= fixedDeltaSeconds;
-    ++steps;
+```cpp title="include/lab.hpp — Giữ thứ tự cập nhật rõ ràng"
+inline void integrateSymplecticEuler(
+    std::vector<Body>& bodies,
+    std::span<const Vec3> accelerations,
+    double deltaSeconds
+) {
+    if (accelerations.size() != bodies.size() || !std::isfinite(deltaSeconds) || deltaSeconds <= 0) {
+        throw std::invalid_argument("Invalid integration input");
+    }
+    for (std::size_t index = 0; index < bodies.size(); ++index) {
+        bodies[index].velocity += accelerations[index] * deltaSeconds;
+        bodies[index].position += bodies[index].velocity * deltaSeconds;
+    }
 }
 ```
 
-Clamp 50 ms chặn cú nhảy lớn sau khi kéo cửa sổ hoặc dừng debugger. `maximumSteps` chặn spiral of death khi physics đã chậm hơn thời gian thực.
+Hai dòng không được tùy tiện đảo chỗ. acceleration[index] thuộc snapshot cũ; velocity mới được dùng cho position mới. Kiểm kích thước vector và dt trước khi truy cập.
 
-### Bước 2 — Báo khi phải bỏ backlog
+### Mở bước chưa được commit
 
-```cpp title="include/lab.hpp — fixed-step guard"
-const bool droppedBacklog = available >= fixedDeltaSeconds;
-if (droppedBacklog) {
-    available = std::fmod(available, fixedDeltaSeconds);
-}
-return {steps, available, droppedBacklog};
-```
-
-Khi máy không kịp xử lý, ta bỏ các **full physics step** còn tồn để tránh vòng lặp bù kéo dài sang frame sau, nhưng vẫn giữ phần thời gian lẻ nhỏ hơn `fixedDeltaSeconds`. Cờ `droppedBacklog` có thể đưa vào telemetry; trong project học tập, nó cho biết preset đã vượt ngân sách frame.
-
-### Bước 3 — Cập nhật velocity trước position
-
-```cpp title="include/lab.hpp — integrateSymplecticEuler"
-for (std::size_t index = 0; index < bodies.size(); ++index) {
-    bodies[index].velocity += accelerations[index] * deltaSeconds;
-    bodies[index].position += bodies[index].velocity * deltaSeconds;
+```cpp title="include/simulation.hpp — Mở bước chưa được commit"
+inline void beginPhysics(Simulation& simulation) {
+    // Freeze this snapshot until all accelerations are ready. No in-place update.
+    simulation.rebuild();
+    simulation.pendingAccelerations.assign(simulation.bodies.size(), {});
+    simulation.nextTarget = 0;
+    simulation.physicsPending = true;
 }
 ```
 
-Hàm nhận cả vector acceleration đã tính xong. Không body nào nhìn thấy state nửa cũ nửa mới.
+pendingAccelerations có một ô cho mỗi target, nextTarget bắt đầu từ 0. Không body nào di chuyển ở đây. Cancel có thể bỏ bước này mà không để nửa hệ ở một thời điểm khác.
+
+### Chia việc nhưng không chia state
+
+```cpp title="include/simulation.hpp — Chia việc nhưng không chia state"
+inline bool advancePhysics(Simulation& simulation, double budgetMilliseconds = 6) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(budgetMilliseconds);
+    while (simulation.nextTarget < simulation.bodies.size()) {
+        const std::size_t target = simulation.nextTarget;
+        simulation.pendingAccelerations[target] = directAcceleration(simulation.bodies, target, gravity, simulation.epsilon).acceleration;
+        ++simulation.nextTarget;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+    }
+    integrateSymplecticEuler(simulation.bodies, simulation.pendingAccelerations, simulation.dt);
+    simulation.physicsPending = false;
+    simulation.time += simulation.dt;
+    ++simulation.steps;
+    simulation.rebuild();
+    // 24 tracked bodies × 64 snapshots; all N bodies still receive gravity.
+    std::vector<Vec3> trail{};
+    for (std::size_t i = 0; i < std::min<std::size_t>(24, simulation.bodies.size()); ++i) {
+        trail.push_back(simulation.bodies[i].position);
+    }
+    simulation.trails.push_back(std::move(trail));
+    if (simulation.trails.size() > 64) {
+        simulation.trails.pop_front();
+    }
+    return true;
+}
+```
+
+Mỗi lần gọi có khoảng 6 ms để tính các target. Nếu chưa đủ, hàm trả false để event loop tiếp tục nhận input. Chỉ sau target cuối mới integrate toàn vector, tăng time đúng một dt và lưu trail có giới hạn.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 4"
+Trong runApplication, N gọi beginPhysics và bật singleStep. Ở các lượt event loop tiếp theo, advancePhysics làm tiếp công việc; không có vòng while chờ khóa cửa sổ. Khi hàm trả true, singleStep tắt. Space cho chạy/dừng, camera vẫn dùng được.
+
+Đổi dt từ 1/240 sang 1/120. Mỗi lần N vẫn là một bước, nhưng khoảng thời gian vật lý lớn gấp đôi. Đó không phải tăng tốc kernel tính lực.
+
+```bash title="Terminal — checkpoint 04"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_31_checkpoint_4
 ```
 
-Nhấn `Space` để chạy/dừng. Preset vẫn giữ 512 bodies vì direct full pass đang làm khoảng 261 nghìn interactions cho mỗi physics step.
+Trên Windows chạy ./build/Debug/project_31_checkpoint_4.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `frameSeconds` làm `dt`. Giới hạn FPS hoặc kéo cửa sổ sẽ đổi quỹ đạo.
-2. Cập nhật position bằng velocity cũ. Đây là explicit Euler; so energy drift lâu dài để thấy khác biệt.
-3. Bỏ maximum-step guard. Tăng N tới khi một frame chậm, accumulator lớn dần và app không thể bắt kịp.
+Integrate mỗi body ngay sau khi có acceleration của nó để thấy lỗi phụ thuộc thứ tự ở bài 03 quay lại. Sau khi khôi phục, thử dt lớn ở preset hai vật: quỹ đạo xấu dù direct force vẫn đúng. Đây là integration error, chưa liên quan Octree.
 
 ## Tự kiểm tra kết quả
 
-- Frame 1/60 s tạo bốn steps 1/240 s.
-- Bốn frame 1/240 s tạo cùng số physics steps.
-- Frame time được clamp ở 0,05 s.
-- Không frame nào chạy quá maximum steps.
-- `droppedBacklog` bật khi remainder vẫn đủ tạo thêm step, nhưng phần lẻ nhỏ hơn một step vẫn được giữ lại.
-- Velocity được cập nhật trước position.
-- Một stress run có softening dương không tạo NaN.
+- Single-step tăng step đúng 1 và time đúng dt, kể cả force pass đi qua nhiều frame.
+- Tất cả body commit cùng lúc; Cancel trước commit giữ nguyên snapshot.
+- Pause không khóa camera; Reset bỏ pending force và tạo lại đúng seed.
+- Trail không vượt 64 snapshot × 24 body; toàn bộ N vẫn nhận gravity.
 
 ## Bài tập mở rộng
 
-Ghi state sau một giây khi frame sequence là 60 lần 1/60 s và khi là 120 lần 1/120 s. So từng position với tolerance nhỏ. Sau đó cố ý dùng variable dt để thấy hai kết quả tách nhau.
+Ghi số target hoàn thành sau mỗi lượt event loop. So simulated time với thời gian thực rồi giải thích vì sao budget mỗi đợt bảo vệ input nhưng không bảo đảm 60 FPS.
 
-Bài tiếp theo chưa tối ưu lực ngay. Ta dựng Mass Octree và chứng minh aggregate của nó đúng trước.
+Bài tiếp theo: [Gộp khối lượng từ lá lên gốc Octree](/projects/barnes-hut-nbody/05-mass-octree-va-center-of-mass).

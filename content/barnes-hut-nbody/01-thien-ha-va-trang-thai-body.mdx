@@ -1,38 +1,98 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Thiên hà và trạng thái của một body
+# Dựng đĩa sao từ một chương trình SDL đang chạy
 
 ## Vấn đề cần giải quyết
 
-Project này sẽ thay một phép tính lực bậc hai bằng Barnes–Hut, nhưng trước hết ta cần một scene mà mình hiểu được. Nếu dữ liệu đầu vào thay đổi ngẫu nhiên sau mỗi lần chạy, hoặc camera vô tình sửa luôn tọa độ vật lý, mọi phép so sánh về sau đều mất ý nghĩa.
-
-Checkpoint 1 bắt đầu từ starter đã mở window, tạo framebuffer và vẽ một thiên hà đứng yên. Việc của ta là chốt state của mỗi body, sinh lại đúng cùng scene từ một seed và đo ba đại lượng toàn hệ: total mass, center of mass và momentum.
+Ta đã dùng Octree để tìm điểm trong một vùng ở Project 30. Bây giờ câu hỏi khác hẳn: nếu mọi vật thể hút mọi vật thể khác, có cách nào giảm số phép tính mà vẫn giữ chuyển động hợp lý? Chưa nên trả lời bằng Barnes–Hut ngay. Trước hết, hãy mở được đĩa sao đứng yên, đổi góc nhìn và biết state nào thuộc về mô phỏng.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mỗi body có ba phần độc lập:
+Starter đã có renderer CPU và event loop. Checkpoint 01 thêm phép đọc tổng khối lượng, tâm khối và momentum; chưa tiến thời gian. Body có position, velocity, mass trong XYZ thật. Đĩa nằm gần mặt phẳng XY nhưng có chiều dày theo Z. Camera tạo pixel để quan sát, không sửa position. Đây là mô hình học thuật dùng reduced units, không phải mô hình thiên hà quan trắc.
 
-- `position`: body đang ở đâu trong world space.
-- `velocity`: position sẽ thay đổi theo hướng nào và nhanh bao nhiêu.
-- `mass`: body đóng góp bao nhiêu vào lực hấp dẫn và center of mass.
-
-Renderer chỉ đọc `position`, chiếu qua orbit camera rồi tạo screen x/y. Đóng cửa sổ là những screen coordinates ấy biến mất; state vật lý vẫn nằm trong vector `bodies`.
-
-Center of mass không phải trung bình cộng position vì các body nặng nhẹ khác nhau:
+G=0,001; central body có mass 120, tổng mass đĩa xấp xỉ 120. Tăng N làm đĩa được lấy mẫu dày hơn, không làm mass tăng tỉ lệ với N. Velocity ban đầu là điều kiện đầu gần quỹ đạo tròn, không phải đường đi sẽ bị áp đặt. Ta trừ cùng bulk velocity khỏi mọi body để bỏ chuyển động tịnh tiến toàn hệ.
 
 $$
-\mathbf{c}=\frac{\sum_i m_i\mathbf{p}_i}{\sum_i m_i}
+\mathbf c=\frac{\sum_i m_i\mathbf p_i}{\sum_i m_i},\qquad\mathbf P=\sum_i m_i\mathbf v_i
 $$
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-scene" />
 
-Kéo Canvas để đổi góc nhìn. `root COM`, total mass và momentum không được thay đổi. Đây là phép thử nhanh để phát hiện bạn đã trộn camera space vào physics state.
-
 ## Viết code từng bước
 
-### Bước 1 — Khai báo state nhỏ nhất có thể chạy lâu dài
+### Giữ một chương trình chạy được
 
-```cpp title="include/lab.hpp — Body"
+```cpp title="src/main.cpp — Giữ một chương trình chạy được"
+int main(int argc, char** argv) {
+    bool smoke = false;
+    bool workflow = false;
+    bool benchmark = false;
+    for (int index = 1; index < argc; ++index) {
+        if (std::strcmp(argv[index], "--smoke") == 0) {
+            smoke = true;
+        } else if (std::strcmp(argv[index], "--smoke-workflow") == 0) {
+            smoke = true;
+            workflow = true;
+        } else if (std::strcmp(argv[index], "--benchmark") == 0) {
+            benchmark = true;
+        } else {
+            std::cerr << "Unknown argument: " << argv[index] << '\n';
+            return EXIT_FAILURE;
+        }
+    }
+    if (benchmark) {
+        std::cerr << "Runtime study starts at checkpoint 09\n";
+        return EXIT_FAILURE;
+    }
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::cerr << SDL_GetError() << '\n';
+        return EXIT_FAILURE;
+    }
+    SDL_Window* window = SDL_CreateWindow("Project 31 | 3D Barnes-Hut galaxy", 1120, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (!window) {
+        std::cerr << SDL_GetError() << '\n';
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+    if (!renderer) {
+        std::cerr << SDL_GetError() << '\n';
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, 1120, 570);
+    if (!texture) {
+        std::cerr << SDL_GetError() << '\n';
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+    SDL_SetRenderLogicalPresentation(renderer, 1120, 820, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    SDL_SetRenderVSync(renderer, 1);
+    int result = EXIT_SUCCESS;
+    try {
+        result = project31::runApplication(window, renderer, texture, smoke, workflow);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        result = EXIT_FAILURE;
+    }
+    // Reverse ownership order on every exit, including bounded-job failures.
+    SDL_CaptureMouse(false);
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return result;
+}
+```
+
+Đọc main theo thứ tự tạo window → renderer → texture, kiểm lỗi rồi gọi runApplication. Khi thất bại, chỉ hủy tài nguyên đã tạo. Starter cung cấp phần trình bày để bạn không phải viết lại SDL từ đầu.
+
+### Tách state khỏi pixel
+
+```cpp title="include/lab.hpp — Tách state khỏi pixel"
 struct Body {
     Vec3 position{};
     Vec3 velocity{};
@@ -40,71 +100,106 @@ struct Body {
 };
 ```
 
-Không lưu screen position, force hay acceleration lâu dài trong `Body`. Screen position thuộc renderer; acceleration sẽ được tính lại từ state hiện tại ở mỗi physics step.
+Không thêm screenX/screenY vào Body. Acceleration được tính lại từ snapshot đầu bước; renderer chỉ đọc position qua include/render.hpp.
 
-### Bước 2 — Sinh central body trước
+### Sinh lại cùng thí nghiệm
 
-```cpp title="include/lab.hpp — central mass"
-std::vector<Body> bodies{};
-bodies.reserve(safeCount);
-bodies.push_back({{}, {}, 120.0});
+```cpp title="include/lab.hpp — Sinh lại cùng thí nghiệm"
+inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed) {
+    if (count > 8192) {
+        throw std::invalid_argument("Body budget: 1..8192");
+    }
+    const std::size_t safeCount = std::max<std::size_t>(1U, count);
+    XorShift32 random(seed);
+    std::vector<Body> bodies{};
+    bodies.reserve(safeCount);
+    bodies.push_back({{}, {}, 120.0});
+
+    for (std::size_t index = 1; index < safeCount; ++index) {
+        const double radius = 0.08 + std::sqrt(random.unit()) * 0.9;
+        const double angle = random.unit() * 6.283185307179586;
+        const double thickness = (random.unit() - 0.5) * 0.08 * (1.1 - radius);
+        // Reduced units: G=0.001, central mass=120, disk mass approximately 120.
+        // Increasing N refines the disk instead of increasing its total mass.
+        const double mass = (0.7 + random.unit() * 0.6) * 120.0 / double(safeCount - 1);
+        const double enclosedMass = 120.0 + 120.0 * radius * radius;
+        const double orbitalSpeed = std::sqrt(0.001 * enclosedMass / radius);
+        const double speedJitter = 0.92 + random.unit() * 0.16;
+        bodies.push_back({
+            {std::cos(angle) * radius, std::sin(angle) * radius, thickness},
+            {
+                -std::sin(angle) * orbitalSpeed * speedJitter,
+                std::cos(angle) * orbitalSpeed * speedJitter,
+                (random.unit() - 0.5) * 0.01,
+            },
+            mass,
+        });
+    }
+
+    Vec3 momentum{};
+    for (const Body& body : bodies) {
+        momentum += body.velocity * body.mass;
+    }
+    double systemMass = 0;
+    for (const Body& body : bodies) {
+        systemMass += body.mass;
+    }
+    // A common velocity shift removes bulk drift without kicking the central body.
+    const Vec3 bulkVelocity = momentum / systemMass;
+    for (Body& body : bodies) {
+        body.velocity = body.velocity - bulkVelocity;
+    }
+    return bodies;
+}
 ```
 
-Body 0 nặng hơn các body quỹ đạo. Chọn index cố định giúp bài sau có một source dễ quan sát và giúp preset hoàn toàn tái lập.
+Cùng count và seed phải cho cùng từng body. Chú ý mass của mỗi sao chia cho count−1. Cuối hàm, bulkVelocity được trừ khỏi toàn hệ; không đẩy riêng central body với velocity lớn để bù momentum.
 
-### Bước 3 — Cân lại momentum ban đầu
+### Dùng đúng trọng số
 
-```cpp title="include/lab.hpp — momentum balance"
-Vec3 momentum{};
-for (const Body& body : bodies) {
-    momentum += body.velocity * body.mass;
+```cpp title="include/lab.hpp — Dùng đúng trọng số"
+inline Vec3 centerOfMass(std::span<const Body> bodies) {
+    double mass = 0.0;
+    Vec3 weightedPosition{};
+    for (const Body& body : bodies) {
+        mass += body.mass;
+        weightedPosition += body.position * body.mass;
+    }
+    if (mass <= 0.0) {
+        return {};
+    }
+    return weightedPosition / mass;
 }
-bodies[0].velocity = momentum * (-1.0 / bodies[0].mass);
 ```
 
-Ta không xóa velocity của cả hệ. Central body nhận phần momentum đối nghịch để tổng $\sum m_i\mathbf{v}_i$ gần 0, nhờ đó thiên hà không tự trôi khỏi origin vì lỗi khởi tạo.
-
-### Bước 4 — Tính center of mass bằng trọng số
-
-```cpp title="include/lab.hpp — centerOfMass"
-for (const Body& body : bodies) {
-    mass += body.mass;
-    weightedPosition += body.position * body.mass;
-}
-if (mass <= 0.0) {
-    return {};
-}
-return weightedPosition / mass;
-```
-
-Đây cũng là đúng công thức mà mỗi Mass Octree node sẽ dùng ở lesson 5. Ta viết bản trực tiếp trước để sau này còn có giá trị đối chiếu.
+weightedPosition là tổng m·p. Chỉ sau khi chia cho tổng mass mới có một vị trí. Tâm hộp bao hoặc trung bình các position không thay thế được nó.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 1"
+Chạy project_31_starter để kiểm môi trường, rồi build checkpoint 01. runApplication gọi Simulation::reset để tạo bodies; drawScene đọc chúng ở mỗi frame. Space chưa tạo physics ở bài này: hình đứng yên là đúng. Xoay/pan/zoom chỉ đổi camera.
+
+Dự đoán trước khi chạy: đổi camera có làm tổng mass hoặc momentum đổi không? Tăng từ 256 lên 4.096 mẫu sau này có làm mass đĩa tăng mười sáu lần không?
+
+```bash title="Terminal — checkpoint 01"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_31_checkpoint_1
 ```
 
-Chạy target, xoay camera và reset vài lần. Cùng seed phải tạo cùng vị trí, velocity, mass và cùng các số đo ở title bar.
+Trên Windows chạy ./build/Debug/project_31_checkpoint_1.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Lưu screen x/y trở lại `body.position`. Xoay camera rồi quan sát center of mass thay đổi dù physics đang pause.
-2. Dùng trung bình position không trọng số. Central body mass 120 gần như mất ảnh hưởng lên center.
-3. Bỏ bước cân momentum. Chạy mô phỏng lâu ở lesson 4 và thấy cả hệ trôi đều theo một hướng.
+Thay tâm khối bằng trung bình cộng các position rồi so hai kết quả. Central body nặng hơn từng sao nên hai đáp án thường khác nhau. Bỏ phép trừ bulkVelocity sẽ làm momentum đầu khác 0; đây là lỗi điều kiện đầu, chưa liên quan Barnes–Hut.
 
 ## Tự kiểm tra kết quả
 
-- Cùng `count` và `seed` tạo từng body giống hệt nhau.
-- Mọi mass dương; position và velocity hữu hạn.
-- Body 0 có mass 120 và nằm tại origin.
-- Total momentum ban đầu có độ lớn dưới `1e-10`.
-- Xoay/zoom camera không thay total mass, center of mass hoặc momentum.
-- Starter và checkpoint 1 đều build độc lập.
+- Starter/checkpoint 01 mở được cửa sổ, có thể đặt lại cùng preset.
+- Cùng seed=0x31c0ffee sinh lại từng position/velocity/mass giống nhau.
+- Mọi mass dương, state hữu hạn; norm momentum đầu dưới 10⁻¹⁰.
+- Camera không sửa bodies hoặc các tổng vật lý.
 
 ## Bài tập mở rộng
 
-Thêm preset hai thiên hà nhỏ bay ngược chiều nhau. Trước khi tính lực, in total momentum và dịch toàn bộ system center of mass về origin. Giữ preset này deterministic để dùng lại khi kiểm Barnes–Hut.
+Thêm preset hai cụm sao tiến lại gần nhau. Chỉ đặt position/velocity đầu; không gán đường đi sau mỗi frame. Solver của bài sau phải quyết định chuyển động.
 
-Bài tiếp theo mới làm hai body hút nhau. Ta sẽ xử lý cự ly gần trước khi cho N body cùng tác dụng lực.
+Bài tiếp theo: [Một vật thể hút vật thể khác như thế nào?](/projects/barnes-hut-nbody/02-luc-hap-dan-va-softening).

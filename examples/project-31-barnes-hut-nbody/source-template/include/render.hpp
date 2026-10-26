@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lab.hpp"
+#include "analysis.hpp"
 
 #include <algorithm>
 #include <array>
@@ -118,12 +118,14 @@ inline ScreenPoint projectToScreen(
     lab::OrbitCamera adjusted = camera;
     adjusted.aspect = double(width) / double(std::max(1, height));
     const lab::ProjectedPoint projected = lab::projectBodyPoint(point, adjusted);
-    const double scale = double(std::min(width, height)) * 0.84;
+    if (!std::isfinite(projected.x) || !std::isfinite(projected.y) || !projected.visible || std::abs(projected.x) > 4 || std::abs(projected.y) > 4) {
+        return {0, 0, projected.depth, false};
+    }
     return {
-        int(std::lround(double(width) * 0.5 + projected.x * scale * 0.5)),
-        int(std::lround(double(height) * 0.47 - projected.y * scale * 0.5)),
+        int(std::lround(double(width) * 0.5 + projected.x * double(width) * 0.5)),
+        int(std::lround(double(height) * 0.47 - projected.y * double(height) * 0.5)),
         projected.depth,
-        projected.visible,
+        projected.visible && std::abs(projected.x) < 4 && std::abs(projected.y) < 4,
     };
 }
 
@@ -148,7 +150,10 @@ inline void drawBodies(
         if (!projected[index].visible) {
             continue;
         }
-        std::uint32_t color = kBody;
+        const double speed = std::clamp(lab::length(bodies[index].velocity) / 1.5, 0.0, 1.0);
+        const auto red = std::uint32_t(80 + speed * 160);
+        const auto blue = std::uint32_t(240 - speed * 130);
+        std::uint32_t color = (red << 24U) | (170U << 16U) | (blue << 8U) | 255U;
         int radius = 1;
         if (index == 0U) {
             color = kCentralBody;

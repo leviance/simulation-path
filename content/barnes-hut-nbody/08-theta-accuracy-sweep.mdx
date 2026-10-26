@@ -1,102 +1,212 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Theta accuracy sweep
+# Đo sai số lực trên cùng một snapshot
 
 ## Vấn đề cần giải quyết
 
-Nói “theta 0,5 thường khá chính xác” không đủ cho một project học tập. Accuracy phụ thuộc distribution, mass ratio, softening và target. Ta cần một thí nghiệm tái lập, trong đó chỉ theta thay đổi còn direct oracle và target set được giữ nguyên.
-
-Checkpoint 8 chạy một theta sweep rồi báo mean/max relative force error cùng lượng công việc.
+Đổi theta rồi nhìn thiên hà khác đi không trả lời được sai số lực là bao nhiêu. Sau vài bước, vị trí đã đổi nên hai solver không còn nhận cùng input. Ta cần dừng physics, giữ một snapshot và hỏi bốn theta cùng một câu hỏi.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với target $i$, relative error là:
+Direct reference đọc mọi source thật cho từng target. Với hệ 4.096 body, ta chọn tập tối đa 32 target, dùng lại đúng tập đó cho theta 0,25; 0,5; 0,8; 1,1. C++ dùng các index cách đều; Canvas còn đưa target đang chọn vào tập mẫu. Không lấy số pixel vẽ hoặc aggregate nodes làm reference.
+
+Một lực gần 0 có thể làm relative error của riêng target rất lớn. Vì vậy bảng có cả absolute RMS và normalized RMS, không chỉ một phần trăm:
 
 $$
-e_i=\frac{\lVert\mathbf{a}^{BH}_i-\mathbf{a}^{direct}_i\rVert}
-{\max(\lVert\mathbf{a}^{direct}_i\rVert,10^{-12})}
+e_{\rm abs}=\sqrt{\frac1K\sum_i\|\mathbf a_i^{BH}-\mathbf a_i^D\|^2},\quad
+e_{\rm RMS}=\sqrt{\frac{\sum_i\|\mathbf a_i^{BH}-\mathbf a_i^D\|^2}{\max(\sum_i\|\mathbf a_i^D\|^2,K\cdot10^{-24})}}.
 $$
 
-Mean error mô tả target điển hình; max error bắt target tệ nhất trong sample. Hai số trả lời hai câu hỏi khác nhau, nên không thay thế nhau.
+Absolute RMS có đơn vị gia tốc. Mẫu số của normalized RMS dùng sàn 10⁻¹² acceleration unit trước khi bình phương. Mean/max relative dùng cùng sàn cho từng target; chúng trả lời câu hỏi khác RMS của cả tập.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-accuracy" />
 
-Các cột vàng là mean error; chấm xanh biểu diễn aggregate+exact work. Đọc chúng theo cặp: giảm work mà error vượt ngưỡng của bài toán không phải là tối ưu thành công.
-
 ## Viết code từng bước
 
-### Bước 1 — Chọn target indices tái lập
+### Đặt tên đại lượng trước khi đo
 
-```cpp title="include/analysis.hpp — deterministic targets"
-const std::size_t targetIndex = std::min(
-    bodies.size() - 1U,
-    index* bodies.size() / count
-);
-targets.push_back(targetIndex);
+```cpp title="include/analysis.hpp — Đặt tên đại lượng trước khi đo"
+struct AccuracyRow {
+    double theta{};
+    double meanRelativeError{};
+    double maximumRelativeError{};
+    ForceMetrics metrics{};
+    double absoluteRmsError{};
+    double normalizedRmsError{};
+};
 ```
 
-Targets trải đều theo index, bao gồm central body khi index đầu bằng 0. Không gọi random bên trong từng theta row.
+Một hàng có theta, sai số và work counters. Relative error không có đơn vị; absolute RMS có đơn vị gia tốc. Không đổi nhãn giữa các đại lượng chỉ để bảng nhìn gọn.
 
-### Bước 2 — Cache direct oracle trước vòng theta
+### Viết phép đo reference dễ đọc
 
-```cpp title="include/analysis.hpp — exact acceleration cache"
-exactAccelerations.push_back(
-    directAcceleration(bodies, targetIndex, gravitationalConstant, softening).acceleration
-);
+```cpp title="include/analysis.hpp — Viết phép đo reference dễ đọc"
+inline std::vector<AccuracyRow> measureThetaAccuracy(
+    std::span<const Body> bodies,
+    std::span<const double> thetaValues,
+    std::size_t sampleCount,
+    double gravitationalConstant,
+    double softening
+) {
+    if (bodies.empty()) {
+        return {};
+    }
+    const BarnesHutTree tree = buildMassOctree(bodies);
+    const std::size_t count = std::min(std::max<std::size_t>(1U, sampleCount), bodies.size());
+    std::vector<std::size_t> targets{};
+    std::vector<Vec3> exactAccelerations{};
+    targets.reserve(count);
+    exactAccelerations.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::size_t targetIndex = std::min(
+            bodies.size() - 1U,
+            index * bodies.size() / count
+        );
+        targets.push_back(targetIndex);
+        exactAccelerations.push_back(
+            directAcceleration(bodies, targetIndex, gravitationalConstant, softening).acceleration
+        );
+    }
+
+    std::vector<AccuracyRow> rows{};
+    for (const double theta : thetaValues) {
+        AccuracyRow row{};
+        double squaredError = 0;
+        double squaredReference = 0;
+        row.theta = theta;
+        for (std::size_t index = 0; index < targets.size(); ++index) {
+            const AccelerationResult approximate = barnesHutAcceleration(
+                tree,
+                bodies,
+                targets[index],
+                theta,
+                gravitationalConstant,
+                softening
+            );
+            const double relativeError =
+                length(approximate.acceleration - exactAccelerations[index]) /
+                std::max(length(exactAccelerations[index]), 1.0e-12);
+            squaredError += lengthSquared(approximate.acceleration - exactAccelerations[index]);
+            squaredReference += lengthSquared(exactAccelerations[index]);
+            row.meanRelativeError += relativeError;
+            row.maximumRelativeError = std::max(row.maximumRelativeError, relativeError);
+            row.metrics.visitedNodes += approximate.metrics.visitedNodes;
+            row.metrics.approximatedNodes += approximate.metrics.approximatedNodes;
+            row.metrics.exactInteractions += approximate.metrics.exactInteractions;
+        }
+        row.meanRelativeError /= double(targets.size());
+        row.absoluteRmsError = std::sqrt(squaredError / double(targets.size()));
+        row.normalizedRmsError = std::sqrt(squaredError / std::max(squaredReference, double(targets.size()) * 1e-24));
+        rows.push_back(row);
+    }
+    return rows;
+}
 ```
 
-Direct result không phụ thuộc theta. Tính một lần vừa giảm thời gian sweep, vừa bảo đảm mọi row dùng đúng cùng oracle values.
+Bản offline này tạo target set, tính direct một lần rồi quét các theta. Nó phù hợp fixture/CLI nhỏ; không gọi cả hàm đồng bộ cho một workload khổng lồ ngay trong click handler.
 
-### Bước 3 — Tính relative error có denominator floor
+### Đưa phép đo vào UI mà không khóa input
 
-```cpp title="include/analysis.hpp — relative force error"
-const double relativeError =
-    length(approximate.acceleration - exactAccelerations[index]) /
-    std::max(length(exactAccelerations[index]), 1.0e-12);
-row.meanRelativeError += relativeError;
-row.maximumRelativeError = std::max(row.maximumRelativeError, relativeError);
+```cpp title="include/experiments.hpp — Đưa phép đo vào UI mà không khóa input"
+struct SurveyJob {
+    std::vector<Body> snapshot{};
+    BarnesHutTree tree{};
+    std::vector<Vec3> reference{};
+    std::vector<AccuracyRow> rows{};
+    std::size_t sample{};
+    std::size_t row{};
+    double epsilon{0.02};
+    double squaredError{};
+    double squaredReference{};
+    bool active{};
+    bool timedOut{};
+    double snapshotTime{};
+    std::chrono::steady_clock::time_point deadline{};
+
+    void start(const Simulation& simulation) {
+        *this = {};
+        snapshot = simulation.bodies;
+        tree = buildMassOctree(snapshot);
+        epsilon = simulation.epsilon;
+        snapshotTime = simulation.time;
+        reference.resize(std::min<std::size_t>(32, snapshot.size()));
+        active = true;
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    }
+
+    // One target per unit of work; UI can pause/cancel between ticks.
+    void tick() {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(6);
+        constexpr std::array<double, 4> angles{0.25, 0.5, 0.8, 1.1};
+        while (active && std::chrono::steady_clock::now() < until) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                active = false;
+                timedOut = true;
+                return;
+            }
+            const std::size_t target = sample * snapshot.size() / reference.size();
+            if (row == 0) {
+                reference[sample] = directAcceleration(snapshot, target, gravity, epsilon).acceleration;
+            }
+            if (rows.size() <= row) {
+                rows.push_back({});
+                rows.back().theta = angles[row];
+            }
+            AccuracyRow& result = rows[row];
+            const auto approximate = barnesHutAcceleration(tree, snapshot, target, angles[row], gravity, epsilon);
+            const double error = length(approximate.acceleration - reference[sample]);
+            const double relative = error / std::max(length(reference[sample]), 1e-12);
+            result.meanRelativeError += relative;
+            result.maximumRelativeError = std::max(result.maximumRelativeError, relative);
+            squaredError += error * error;
+            squaredReference += lengthSquared(reference[sample]);
+            result.metrics.visitedNodes += approximate.metrics.visitedNodes;
+            result.metrics.approximatedNodes += approximate.metrics.approximatedNodes;
+            result.metrics.exactInteractions += approximate.metrics.exactInteractions;
+            ++sample;
+            if (sample == reference.size()) {
+                result.meanRelativeError /= double(reference.size());
+                result.absoluteRmsError = std::sqrt(squaredError / double(reference.size()));
+                result.normalizedRmsError = std::sqrt(squaredError / std::max(squaredReference, double(reference.size()) * 1e-24));
+                sample = 0;
+                squaredError = 0;
+                squaredReference = 0;
+                ++row;
+                active = row < angles.size();
+            }
+        }
+    }
+};
 ```
 
-Floor chỉ bảo vệ phép chia khi exact acceleration gần 0; nó không sửa hay clamp vector lực.
-
-### Bước 4 — Gộp work của đúng các target đã đo
-
-```cpp title="include/analysis.hpp — accuracy work counters"
-row.metrics.visitedNodes += approximate.metrics.visitedNodes;
-row.metrics.approximatedNodes += approximate.metrics.approximatedNodes;
-row.metrics.exactInteractions += approximate.metrics.exactInteractions;
-```
-
-Nhờ vậy mỗi row chứa cả “sai bao nhiêu” và “đã làm bao nhiêu việc”.
+SurveyJob giữ snapshot, tree, epsilon, reference và tiến độ. tick chỉ xử lý một số target trong budget khoảng 6 ms. Tất cả theta nhìn cùng bodies; Reset hay đổi cấu hình hủy job và không nhận report cũ.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 8"
+Trong C++, T gọi survey.start sau khi hủy pending physics. Event loop gọi tick; Space pause/resume và Escape hủy. Canvas dùng Đo sai số theo theta và Hủy tác vụ. Chuyển camera không đổi snapshot nên không làm phép đo mất hiệu lực.
+
+Đọc absolute RMS, normalized RMS và exact+aggregate work cạnh nhau. Nếu theta lớn tiết kiệm nguồn nhưng một vài target có relative error lớn, đó là một kết quả cần giải thích, không phải cớ bỏ target khỏi mẫu.
+
+```bash title="Terminal — checkpoint 08"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Release --target project_31_checkpoint_8
+cmake --build build --config Debug --target project_31_checkpoint_8
 ```
 
-Nhấn `T`. Terminal in bốn rows theta 0,25; 0,5; 0,8; 1,1 với cùng 24 targets. Timing chưa nằm trong bảng này; accuracy test cần ổn định trước.
+Trên Windows chạy ./build/Debug/project_31_checkpoint_8.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Sinh target ngẫu nhiên mới cho mỗi theta. Error rows không còn so cùng workload.
-2. Chỉ so độ lớn acceleration. Hai vector khác hướng nhưng cùng độ lớn sẽ bị coi là đúng.
-3. Chỉ báo mean. Một target gần cụm nặng có error lớn bị che bởi nhiều target dễ.
+Để simulation chạy tiếp trong lúc các theta lần lượt được đo. Các hàng bây giờ đến từ position khác nhau, nên không còn là sweep công bằng. Thử đổi epsilon chỉ cho Barnes–Hut: bạn đang đổi force model, không còn chỉ đo tree approximation.
 
 ## Tự kiểm tra kết quả
 
-- Mỗi theta dùng cùng bodies, target indices, G và softening.
-- Direct acceleration được tính một lần cho mỗi target.
-- Relative error so vector difference, không chỉ scalar magnitude.
-- Theta nhỏ gần 0 khớp direct trong tolerance.
-- Trên preset, theta 0,25 có mean error không lớn hơn theta 1,1.
-- Theta lớn thường có ít exact interactions và nhiều aggregate nodes hơn.
-- Max error luôn lớn hơn hoặc bằng mean error.
-- Accuracy test không dựa vào microseconds.
+- N và thời điểm snapshot được ghi cạnh report; các theta dùng cùng target set/epsilon.
+- Reference của mỗi target đọc đủ N−1 nguồn, không dùng một danh sách cắt bán kính.
+- Absolute/RMS/mean/max finite cả trên fixture có lực triệt tiêu.
+- Pause, cancel và đổi cấu hình không ghi nhận report dở như kết quả hoàn tất.
 
 ## Bài tập mở rộng
 
-Thêm percentile 95 của relative error. So distribution có central mass 120 với distribution mọi mass bằng 1, nhưng giữ positions/velocities giống nhau. Giải thích vì sao cùng theta không nhất thiết cho cùng error profile.
+Thêm target gần lõi và ở rìa. Báo thêm phân vị sai số, nhưng giữ normalized RMS và danh sách target để người khác tái lập. Không assert mọi hàng phải giảm đơn điệu.
 
-Bài tiếp theo giữ accuracy contract và bắt đầu đo scaling theo N.
+Bài tiếp theo: [Đo chi phí thật của hai cách tính lực](/projects/barnes-hut-nbody/09-scaling-study).

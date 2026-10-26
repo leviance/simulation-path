@@ -47,6 +47,8 @@ Generator duyệt đệ quy nên project có thể có nhiều `.cpp`, `.hpp` ho
 
 Các thư mục `starter/`, `checkpoints` và `final/` là output được sinh, không được Git theo dõi. Không sửa trực tiếp trong đó. Generator so sánh byte trước khi ghi nên file không đổi giữ nguyên timestamp và cache Vite. `predev` đồng bộ source và ZIP để Downloads hoạt động ngay trên bản clone mới; ZIP không đổi không bị nén lại. `npm run build` dùng cùng bước chuẩn bị trước khi gọi Vinext.
 
+Thư mục `examples/` không được dev server theo dõi để tránh quét cả cây build. Mỗi import `?raw` trong source module có phiên bản lấy từ hash nội dung. Khi sinh lại checkpoint, module được theo dõi đổi URL của đúng tệp đã thay đổi; Vite tải source mới thay vì giữ bản C++ cũ trong cache. Hash được tính từ output dự kiến nên hoạt động cả trên bản clone chưa có snapshot.
+
 CMake dùng một target `project_N_runtime_files` để chuẩn bị DLL SDL và assets bất biến đúng một lần trong mỗi build/configuration; mọi app target phụ thuộc target này. Không để từng executable cùng POST_BUILD chép vào một thư mục runtime, vì build song song trên Windows có thể tranh chấp file. Generator single-config dùng ngay build directory; Visual Studio và generator multi-config dùng thư mục cấu hình con.
 
 ## File được sinh tự động
@@ -74,7 +76,7 @@ Danh sách module thuật ngữ được khai báo một lần trong `scripts/gl
 
 ## Giới hạn chống phình file
 
-Code block C++ của Project 01–30 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này. Project 31–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
+Code block C++ của Project 01–31 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này. Project 32–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
 
 `npm run check:architecture` áp dụng các budget:
 

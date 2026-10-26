@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
 import { courseCmake } from "./course-cmake.mjs";
 import { reconcileGeneratedFiles } from "./generated-files.mjs";
@@ -182,12 +183,21 @@ function snapshotFiles(project) {
   return { expected, templateFiles, changedPaths };
 }
 
-function sourceModule(project, moduleName, sourceDirectory, relativeFiles) {
+// examples/ stays outside the dev watcher. A content-versioned import gives Vite
+// a fresh raw module when regeneration changes C++, without watching build trees.
+function rawSourceImport(project, relativePath, source) {
+  const version = createHash("sha256").update(source).digest("hex").slice(0, 16);
+  return `@/examples/${project.sourceDirectory}/${toPosix(relativePath)}?source=${version}&raw`;
+}
+
+function sourceModule(project, sourceDirectory, relativeFiles, expected) {
+  const projectDirectory = path.join(workspace, "examples", project.sourceDirectory);
   const displayFiles = relativeFiles.filter(isDisplayableCourseFile);
-  const imports = displayFiles.map(
-    (relativePath, index) =>
-      `import source${index} from "@/examples/${project.sourceDirectory}/${toPosix(path.join(sourceDirectory, relativePath))}?raw";`,
-  );
+  const imports = displayFiles.map((relativePath, index) => {
+    const relative = path.join(sourceDirectory, relativePath);
+    const source = expected.get(path.join(projectDirectory, relative));
+    return `import source${index} from "${rawSourceImport(project, relative, source)}";`;
+  });
   const importIndex = new Map(displayFiles.map((relativePath, index) => [relativePath, index]));
   const entries = relativeFiles.map((relativePath) => {
     const index = importIndex.get(relativePath);
@@ -208,16 +218,17 @@ function sourceModule(project, moduleName, sourceDirectory, relativeFiles) {
   return `${imports.join("\n")}\n\nexport const files = [\n${entries.join("\n")}\n] as const;\n`;
 }
 
-function commonModule(project) {
+function commonModule(project, expected) {
   const projectDirectory = path.join(workspace, "examples", project.sourceDirectory);
   const commonFiles = [
     "CMakeLists.txt",
     ...walkFiles(path.join(projectDirectory, "tests")).map((file) => path.join("tests", file)),
   ].filter((file) => isCourseTextFile(file));
-  const imports = commonFiles.map(
-    (relativePath, index) =>
-      `import source${index} from "@/examples/${project.sourceDirectory}/${toPosix(relativePath)}?raw";`,
-  );
+  const imports = commonFiles.map((relativePath, index) => {
+    const absolute = path.join(projectDirectory, relativePath);
+    const source = expected.get(absolute) ?? readFileSync(absolute);
+    return `import source${index} from "${rawSourceImport(project, relativePath, source)}";`;
+  });
   const entries = commonFiles.map(
     (relativePath, index) =>
       `    { path: ${JSON.stringify(toPosix(relativePath))}, language: ${JSON.stringify(languageFor(relativePath))}, source: source${index} },`,
@@ -266,7 +277,7 @@ for (const project of projects) {
   const generatedProjectDirectory = path.join(generatedSourceDirectory, `p${project.id}`);
   expectedFiles.set(
     path.join(generatedProjectDirectory, "common.ts"),
-    Buffer.from(commonModule(project)),
+    Buffer.from(commonModule(project, expectedFiles)),
   );
   expectedFiles.set(
     path.join(generatedProjectDirectory, "registry.ts"),
@@ -275,7 +286,7 @@ for (const project of projects) {
   for (const snapshot of snapshotDefinitions(project)) {
     expectedFiles.set(
       path.join(generatedProjectDirectory, `${snapshot.key}.ts`),
-      Buffer.from(sourceModule(project, snapshot.key, snapshot.directory, templateFiles)),
+      Buffer.from(sourceModule(project, snapshot.directory, templateFiles, expected)),
     );
   }
   generatedSnapshotRoots.push(

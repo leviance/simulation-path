@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace lab {
@@ -55,11 +56,14 @@ inline bool finiteVector(const Vec3& vector) {
     return std::isfinite(vector.x) && std::isfinite(vector.y) && std::isfinite(vector.z);
 }
 
+// [snippet:Body]
 struct Body {
     Vec3 position{};
     Vec3 velocity{};
     double mass{1.0};
 };
+
+// [/snippet:Body]
 
 class XorShift32 {
     public:
@@ -85,7 +89,11 @@ class XorShift32 {
     std::uint32_t state_{};
 };
 
+// [snippet:makeGalaxyBodies]
 inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed) {
+    if (count > 8192) {
+        throw std::invalid_argument("Body budget: 1..8192");
+    }
     const std::size_t safeCount = std::max<std::size_t>(1U, count);
     XorShift32 random(seed);
     std::vector<Body> bodies{};
@@ -96,9 +104,11 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
         const double radius = 0.08 + std::sqrt(random.unit()) * 0.9;
         const double angle = random.unit() * 6.283185307179586;
         const double thickness = (random.unit() - 0.5) * 0.08 * (1.1 - radius);
-        const double mass = 0.35 + random.unit() * 1.3;
-        const double orbitalSpeed =
-            std::sqrt((120.0 + double(index) * 0.45) / std::max(radius, 0.04)) * 0.055;
+        // Reduced units: G=0.001, central mass=120, disk mass approximately 120.
+        // Increasing N refines the disk instead of increasing its total mass.
+        const double mass = (0.7 + random.unit() * 0.6) * 120.0 / double(safeCount - 1);
+        const double enclosedMass = 120.0 + 120.0 * radius * radius;
+        const double orbitalSpeed = std::sqrt(0.001 * enclosedMass / radius);
         const double speedJitter = 0.92 + random.unit() * 0.16;
         bodies.push_back({
             {std::cos(angle) * radius, std::sin(angle) * radius, thickness},
@@ -115,11 +125,22 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
     for (const Body& body : bodies) {
         momentum += body.velocity * body.mass;
     }
-    bodies[0].velocity = momentum * (-1.0 / bodies[0].mass);
+    double systemMass = 0;
+    for (const Body& body : bodies) {
+        systemMass += body.mass;
+    }
+    // A common velocity shift removes bulk drift without kicking the central body.
+    const Vec3 bulkVelocity = momentum / systemMass;
+    for (Body& body : bodies) {
+        body.velocity = body.velocity - bulkVelocity;
+    }
     return bodies;
 }
 
+// [/snippet:makeGalaxyBodies]
+
 struct OrbitCamera {
+    Vec3 target{};
     double yaw{0.45};
     double pitch{-0.52};
     double distance{2.5};
@@ -136,14 +157,15 @@ struct ProjectedPoint {
 };
 
 inline ProjectedPoint projectBodyPoint(const Vec3& point, const OrbitCamera& camera) {
+    const Vec3 relative = point - camera.target;
     const double cosineYaw = std::cos(camera.yaw);
     const double sineYaw = std::sin(camera.yaw);
-    const double yawX = cosineYaw * point.x - sineYaw * point.z;
-    const double yawZ = sineYaw * point.x + cosineYaw * point.z;
+    const double yawX = cosineYaw * relative.x - sineYaw * relative.z;
+    const double yawZ = sineYaw * relative.x + cosineYaw * relative.z;
     const double cosinePitch = std::cos(camera.pitch);
     const double sinePitch = std::sin(camera.pitch);
-    const double cameraY = cosinePitch * point.y - sinePitch * yawZ;
-    const double rotatedZ = sinePitch * point.y + cosinePitch * yawZ;
+    const double cameraY = cosinePitch * relative.y - sinePitch * yawZ;
+    const double rotatedZ = sinePitch * relative.y + cosinePitch * yawZ;
     const double cameraZ = rotatedZ + camera.distance;
     if (cameraZ <= camera.nearPlane) {
         return {0.0, 0.0, cameraZ, false};
@@ -167,6 +189,7 @@ inline double totalMass(std::span<const Body> bodies) {
     return mass;
 }
 
+// [snippet:centerOfMass]
 inline Vec3 centerOfMass(std::span<const Body> bodies) {
     double mass = 0.0;
     Vec3 weightedPosition{};
@@ -180,6 +203,8 @@ inline Vec3 centerOfMass(std::span<const Body> bodies) {
     return weightedPosition / mass;
 }
 
+// [/snippet:centerOfMass]
+
 inline Vec3 totalMomentum(std::span<const Body> bodies) {
     Vec3 momentum{};
     for (const Body& body : bodies) {
@@ -191,6 +216,7 @@ inline Vec3 totalMomentum(std::span<const Body> bodies) {
 
 // Checkpoint 2: một nguồn khối lượng tạo gia tốc hấp dẫn có softening.
 #if LAB_CHECKPOINT >= 2
+// [snippet:softenedAcceleration]
 inline Vec3 softenedAcceleration(
     const Vec3& targetPosition,
     const Vec3& sourcePosition,
@@ -208,6 +234,8 @@ inline Vec3 softenedAcceleration(
         1.0 / std::pow(softenedDistanceSquared, 1.5);
     return displacement * (gravitationalConstant * sourceMass * inverseDistanceCubed);
 }
+
+// [/snippet:softenedAcceleration]
 #endif
 
 // Checkpoint 3: oracle O(N^2) cộng từng nguồn thật, bỏ đúng target index.
@@ -223,6 +251,7 @@ struct AccelerationResult {
     ForceMetrics metrics{};
 };
 
+// [snippet:directAcceleration]
 inline AccelerationResult directAcceleration(
     std::span<const Body> bodies,
     std::size_t targetIndex,
@@ -230,6 +259,9 @@ inline AccelerationResult directAcceleration(
     double softening
 ) {
     AccelerationResult result{};
+    if (targetIndex >= bodies.size()) {
+        return result;
+    }
     for (std::size_t sourceIndex = 0; sourceIndex < bodies.size(); ++sourceIndex) {
         if (sourceIndex == targetIndex) {
             continue;
@@ -246,6 +278,9 @@ inline AccelerationResult directAcceleration(
     return result;
 }
 
+// [/snippet:directAcceleration]
+
+// [snippet:directAccelerations]
 inline std::vector<Vec3> directAccelerations(
     std::span<const Body> bodies,
     double gravitationalConstant,
@@ -269,6 +304,8 @@ inline std::vector<Vec3> directAccelerations(
     }
     return accelerations;
 }
+
+// [/snippet:directAccelerations]
 #endif
 
 // Checkpoint 4: accumulator biến frame time thành các fixed physics steps có guard.
@@ -285,6 +322,10 @@ inline FixedStepPlan planFixedSteps(
     double fixedDeltaSeconds,
     int maximumSteps
 ) {
+    if (!std::isfinite(accumulatorSeconds) || !std::isfinite(frameSeconds) ||
+        !std::isfinite(fixedDeltaSeconds) || fixedDeltaSeconds <= 0 || maximumSteps < 1) {
+        throw std::invalid_argument("Invalid fixed-step plan");
+    }
     double available = accumulatorSeconds + std::clamp(frameSeconds, 0.0, 0.05);
     int steps = 0;
     while (available >= fixedDeltaSeconds && steps < maximumSteps) {
@@ -300,19 +341,22 @@ inline FixedStepPlan planFixedSteps(
     return {steps, available, droppedBacklog};
 }
 
+// [snippet:integrateSymplecticEuler]
 inline void integrateSymplecticEuler(
     std::vector<Body>& bodies,
     std::span<const Vec3> accelerations,
     double deltaSeconds
 ) {
+    if (accelerations.size() != bodies.size() || !std::isfinite(deltaSeconds) || deltaSeconds <= 0) {
+        throw std::invalid_argument("Invalid integration input");
+    }
     for (std::size_t index = 0; index < bodies.size(); ++index) {
         bodies[index].velocity += accelerations[index] * deltaSeconds;
         bodies[index].position += bodies[index].velocity * deltaSeconds;
     }
 }
+
+// [/snippet:integrateSymplecticEuler]
 #endif
 
 } // namespace lab
-
-#include "analysis.hpp"
-#include "tree.hpp"

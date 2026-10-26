@@ -10,8 +10,9 @@ export default defineConfig({
   server: {
     watch: {
       // These trees contain C++ checkpoints, compiler output and local package
-      // caches. None of them participates in the web module graph, and watching
-      // tens of thousands of files here can starve Vite's RSC transport on Windows.
+      // caches. Watched generated source modules use content-versioned ?raw
+      // imports, so changing a checkpoint does not require watching these trees.
+      // Watching tens of thousands of files can starve RSC transport on Windows.
       ignored: [
         "**/.next/**",
         "**/.npm-cache/**",

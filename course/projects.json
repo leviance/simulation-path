@@ -218,7 +218,8 @@
     "slug": "barnes-hut-nbody",
     "sourceDirectory": "project-31-barnes-hut-nbody",
     "checkpointCount": 10,
-    "demoId": "barnes-hut-nbody"
+    "demoId": "barnes-hut-nbody",
+    "contentRevision": 1
   },
   {
     "id": "32",

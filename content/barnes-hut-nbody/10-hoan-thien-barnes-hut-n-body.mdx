@@ -1,165 +1,156 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Hoàn thiện Barnes–Hut N-body
+# Theo dõi năng lượng và tách sai số theo dt
 
 ## Vấn đề cần giải quyết
 
-Từng hàm đã có test, nhưng app hoàn chỉnh còn một nhóm lỗi lifecycle: đổi theta mà giữ bảng accuracy cũ, reset khi pointer vẫn bị capture, dùng tree của state trước để tính lực state sau, hoặc tính exact energy cho mọi body ở mọi frame rồi tự làm app chậm.
-
-Checkpoint 10 tổ chức lại vòng đời: input thay tham số, fixed step rebuild tree rồi tính lực, renderer chỉ đọc state, còn các thí nghiệm đắt tiền chạy theo lệnh rõ ràng.
+Hình đẹp, lực gần đúng và benchmark chưa đủ khép lại mô phỏng. Ta còn phải biết hệ đang trôi bao nhiêu, năng lượng đổi ra sao và phần sai lệch nào đến từ bước thời gian. Bài cuối nối diagnostics vào ứng dụng thật rồi thực hiện quy trình nghiệm thu 4.096 body.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một physics step Barnes–Hut có thứ tự:
+Động năng dùng mọi body; thế năng dùng mọi cặp $i<j$ đúng một lần và cùng epsilon với solver:
 
-1. Dựng Mass Octree từ positions hiện tại.
-2. Tính toàn bộ accelerations từ cùng tree và cùng body snapshot.
-3. Cập nhật velocity rồi position bằng fixed dt.
-4. Bỏ tree cũ; step sau dựng lại từ positions mới.
+$$
+K=\frac12\sum_i m_i\|\mathbf v_i\|^2,\qquad
+U=-\sum_{i<j}\frac{Gm_im_j}{\sqrt{\|\mathbf p_i-\mathbf p_j\|^2+\epsilon^2}}.
+$$
 
-Camera có lifecycle riêng và không được kích hoạt rebuild. Accuracy/scaling tables là snapshot của tham số tại lúc chạy; khi input đổi, UI phải xóa hoặc ghi rõ chúng đã cũ.
+Không lấy 512 body đầu để gọi là energy toàn hệ 4.096 body. EnergyJob giữ snapshot đầy đủ, chia phép cộng theo first index và ghi N/t cạnh kết quả. C++ lưu mẫu định kỳ khi chạy; Canvas cho chủ động dừng và lấy mẫu, giữ tối đa 64 mẫu. Momentum và center of mass cũng dùng toàn snapshot.
+
+Barnes–Hut có force approximation; symplectic Euler có integration error. Không kỳ vọng E/P bất biến đến machine epsilon. Để tách integration error, dùng hai body bằng mass quay tròn trong potential mềm, giữ theta=0,5, epsilon=0,02, T=1; chỉ đổi dt. Tần số tròn được suy từ lực hướng tâm, không lấy từ integrator:
+
+$$
+\omega^2=\frac{G(m_1+m_2)}{(r^2+\epsilon^2)^{3/2}}.
+$$
+
+Đây là kiểm thời gian ngắn có nghiệm độc lập, không phải so hai quỹ đạo hỗn loạn sau rất lâu.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-validation" />
 
-Chạy mô phỏng, pause, thay theta, chạy theta sweep/scaling study rồi reset. Readout phải giữ topology hợp lệ, pointer đã nhả và zero self-force contract.
-
 ## Viết code từng bước
 
-### Bước 1 — Rebuild trước mỗi Barnes–Hut force pass
+### Cộng đủ hệ mà vẫn nhận input
 
-```cpp title="src/main.cpp — fixed Barnes-Hut step"
-tree = lab::buildMassOctree(bodies);
-const std::vector<lab::Vec3> accelerations = lab::barnesHutAccelerations(
-    tree,
-    bodies,
-    theta,
-    gravitationalConstant,
-    softening
-);
-lab::integrateSymplecticEuler(bodies, accelerations, fixedDeltaSeconds);
-```
+```cpp title="include/experiments.hpp — Cộng đủ hệ mà vẫn nhận input"
+struct EnergyJob {
+    std::vector<Body> snapshot{};
+    SystemDiagnostics result{};
+    double time{};
+    double epsilon{0.02};
+    std::size_t first{};
+    bool active{};
 
-Không body nào được update trước khi toàn bộ acceleration vector hoàn tất.
+    void start(const Simulation& simulation) {
+        *this = {};
+        snapshot = simulation.bodies;
+        time = simulation.time;
+        epsilon = simulation.epsilon;
+        result.centerOfMass = centerOfMass(snapshot);
+        result.momentum = totalMomentum(snapshot);
+        for (const Body& body : snapshot) {
+            result.kineticEnergy += 0.5 * body.mass * lengthSquared(body.velocity);
+        }
+        active = true;
+    }
 
-### Bước 2 — Cache exact diagnostics và chỉ cập nhật khi cần
+    // [snippet:energyBatch]
+    void tick() {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(6);
+        while (first < snapshot.size()) {
+            for (std::size_t second = first + 1; second < snapshot.size(); ++second) {
+                const double r2 = lengthSquared(snapshot[second].position - snapshot[first].position);
+                result.potentialEnergy -= gravity * snapshot[first].mass * snapshot[second].mass / std::sqrt(r2 + epsilon * epsilon);
+            }
+            ++first;
+            if (std::chrono::steady_clock::now() >= until) {
+                return;
+            }
+        }
+        result.totalEnergy = result.kineticEnergy + result.potentialEnergy;
+        active = false;
+    }
 
-Khởi tạo một snapshot có giới hạn và hai cờ lifecycle:
-
-```cpp title="src/main.cpp — diagnostics state"
-const std::size_t diagnosticCount = std::min<std::size_t>(512U, bodies.size());
-lab::SystemDiagnostics diagnostics = lab::systemDiagnostics(
-    std::span<const lab::Body>(bodies).first(diagnosticCount),
-    gravitationalConstant,
-    softening
-);
-bool diagnosticsStale = false;
-std::uint64_t lastDiagnosticsTicks = SDL_GetTicks();
-```
-
-Sau một physics step, đánh dấu snapshot cũ. Trong lúc chạy, phép tính được throttle tối đa bốn lần mỗi giây; khi pause, nó cập nhật ngay:
-
-```cpp title="src/main.cpp — bounded diagnostics lifecycle"
-if (bodiesChanged) {
-    diagnosticsStale = true;
-}
-
-const bool diagnosticsDue = currentTicks - lastDiagnosticsTicks >= 250U;
-if (diagnosticsStale && (paused || diagnosticsDue)) {
-    diagnostics = lab::systemDiagnostics(
-        std::span<const lab::Body>(bodies).first(diagnosticCount),
-        gravitationalConstant,
-        softening
-    );
-    diagnosticsStale = false;
-    lastDiagnosticsTicks = currentTicks;
-}
-```
-
-Title nói rõ diagnostics dùng tối đa 512 bodies. Quan trọng hơn, renderer đọc snapshot đã cache thay vì tự gọi exact potential energy O(N²) ở mọi frame. Nếu không tách lifecycle này, ta có thể làm app chậm rồi nhầm thủ phạm là Barnes–Hut.
-
-### Bước 3 — Tách validation thành các failure modes
-
-```cpp title="include/analysis.hpp — BarnesHutValidationReport"
-struct BarnesHutValidationReport {
-    bool topologyValid{};
-    bool finiteState{};
-    bool zeroSelfForce{};
-    bool thetaAccuracyAcceptable{};
-    bool workReduced{};
+    // [/snippet:energyBatch]
 };
 ```
 
-Timing không nằm trong report correctness. Một máy chậm vẫn có thể tính đúng; một phép tính rất nhanh vẫn có thể sai.
+start giữ snapshot và các tổng O(N). tick tính phần cặp O(N²) theo từng first index; chỉ đánh dấu xong khi cộng hết. Một energy sample phải mang thời điểm của snapshot, không gắn nhãn thời điểm frame vừa vẽ.
 
-Validation còn đắt hơn diagnostics vì nó dựng thêm oracle và accuracy sample, nên final chỉ chạy lại khi mô phỏng đang pause:
+### Giữ mô hình, theta và thời điểm so sánh
 
-```cpp title="src/main.cpp — validation chỉ refresh khi pause"
-if (bodiesChanged) {
-    validationCurrent = false;
-}
-if (paused && !validationCurrent) {
-    validation = lab::validateBarnesHutExperiment(
-        bodies,
-        theta,
-        gravitationalConstant,
-        softening
-    );
-    validationCurrent = true;
+```cpp title="include/experiments.hpp — Giữ mô hình, theta và thời điểm so sánh"
+inline std::vector<TimestepRow> timestepStudy() {
+    std::vector<TimestepRow> rows{};
+    const auto initial = presetBodies(2, 2);
+    const double omega = std::abs(initial[0].velocity.y);
+    const double initialEnergy = systemDiagnostics(initial, gravity, 0.02).totalEnergy;
+    for (const int count : {60, 120, 240}) {
+        auto bodies = initial;
+        const double dt = 1.0 / double(count);
+        for (int step = 0; step < count; ++step) {
+            const auto tree = buildMassOctree(bodies);
+            const auto acceleration = barnesHutAccelerations(tree, bodies, 0.5, gravity, 0.02);
+            integrateSymplecticEuler(bodies, acceleration, dt);
+        }
+        // Exact softened circular orbit at T=1, independent of both integrators.
+        const Vec3 exact{-std::cos(omega), -std::sin(omega), 0};
+        const double energy = systemDiagnostics(bodies, gravity, 0.02).totalEnergy;
+        rows.push_back({dt, length(bodies[0].position - exact), (energy - initialEnergy) / std::abs(initialEnergy)});
+    }
+    return rows;
 }
 ```
 
-### Bước 4 — Nhả pointer capture ở mọi đường kết thúc
+Ba run có cùng initial state, force model và T. Mỗi run chỉ đổi dt. Vị trí exact được tính bằng sin/cos của omega, không gọi lại solver làm expected value.
 
-```cpp title="src/main.cpp — cleanup capture"
-SDL_CaptureMouse(false);
-SDL_DestroyTexture(texture);
-SDL_DestroyRenderer(renderer);
-SDL_DestroyWindow(window);
-SDL_Quit();
+### Nhận kết quả đúng lúc
+
+```cpp title="include/application.hpp — Nhận kết quả đúng lúc"
+        if (energy.active && !jobsPaused) {
+            energy.tick();
+            if (!energy.active) {
+                history.push_back({energy.time, energy.result});
+                if (history.size() > 64) {
+                    history.erase(history.begin());
+                }
+            }
+        }
 ```
 
-Reset cũng gọi `SDL_CaptureMouse(false)` trước khi đưa camera và state về preset.
+Event loop làm tiếp job rồi mới thêm sample vào history khi active chuyển false. Giới hạn history giữ bộ nhớ hữu hạn. Bản final vẫn dùng cùng Scene, renderer và controls đã học, không có một lời giải khác ẩn trong trang.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — configure toàn bộ targets"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+Quy trình cần làm trên bản final: mở preset 4.096, đo E tại t=0; chạy rồi pause, đo lại; chọn target, sweep theta; đổi góc nhìn để kiểm snapshot không đổi; Reset cùng preset/seed. C++ E lấy mẫu năng lượng, I chạy thí nghiệm dt; Canvas có các nút tương ứng.
+
+Bạn cũng có thể bấm N để tiến một bước rồi E để lấy mẫu tiếp theo. Các mẫu trước vẫn được giữ. HUD C++ hiển thị thay đổi năng lượng tương đối và độ dài vector thay đổi động lượng so với mẫu đầu trong lịch sử. Mẫu số năng lượng là max(|Eref|, 10⁻¹² energy unit), để trường hợp energy gần 0 không gây chia cho 0. Đọc `ref t` để biết mốc đối chiếu: lịch sử chỉ giữ 64 mẫu nên mốc này có thể dịch về sau, không phải lúc nào cũng là t=0. Reset hoặc đổi cấu hình sẽ bắt đầu một thí nghiệm mới.
+
+Chạy CTest Debug và Release, rồi thử cửa sổ thật. Build xanh không chứng minh pointer capture, scale HiDPI hoặc phản hồi khi Cancel. Ghi riêng native build/CTest, smoke hữu hạn, Canvas desktop và các phần chưa kiểm chứng. Source đầy đủ, README và ZIP ở cuối trang; không cần ghép mã từ project khác.
+
+Tham khảo cách tổng hợp nguồn xa trong [bài tập Barnes–Hut của Princeton](https://www.cs.princeton.edu/courses/archive/fall03/cs126/assignments/barnes-hut.html) và ý nghĩa mô hình của softening trong [bài viết của Barnes](https://arxiv.org/abs/1205.2729).
+
+```bash title="Terminal — checkpoint 10"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_31_checkpoint_10
 ```
 
-```bash title="Terminal — build và test Debug"
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-```
-
-```bash title="Terminal — build và test Release"
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Target `project_31_final` là source hoàn chỉnh. Starter và checkpoint 1–10 vẫn là các chương trình độc lập, không phải đoạn code rời cần ghép tay.
+Trên Windows chạy ./build/Debug/project_31_checkpoint_10.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Reuse tree sau khi positions đổi. Aggregate và bounds mô tả frame cũ; force error tăng dù traversal code không đổi.
-2. Tính exact energy cho 2.048 bodies ở mọi physics substep. Profiling cho thấy diagnostics lấn át algorithm đang học.
-3. Gộp mọi check thành `valid`. Khi fail, bạn không biết phải nhìn self-force, topology, error hay finite state.
+Cố ý đo energy chỉ trên một prefix rồi ghi N=4.096: số hữu hạn nhưng nhãn sai phạm vi. Khôi phục full snapshot. Thay epsilon giữa hai mẫu nhưng vẫn diễn giải ΔE như một định luật bảo toàn: bạn đã đổi potential. Cuối cùng, giảm dt mà đồng thời đổi theta để thấy thí nghiệm không còn tách được nguồn sai số.
 
 ## Tự kiểm tra kết quả
 
-- Reset tái tạo đúng body state từ seed và xóa kết quả study cũ.
-- Pointer capture được nhả khi mouse up, cancel, reset và thoát.
-- Tree rebuild sau mỗi physics state change, không rebuild chỉ vì camera đổi.
-- Full force pass hoàn tất trước integration.
-- Topology, finite state, zero self-force, theta accuracy và work reduction đều có check riêng.
-- Energy/momentum readout ghi rõ workload bị giới hạn.
-- Diagnostics không chạy lại theo camera frame; validation chỉ refresh khi pause.
-- Theta/scaling tables ghi cùng seed, softening và counts.
-- Starter, checkpoint 1–10 và final build độc lập.
-- CTest pass ở Debug/Release với timeout 20 giây.
-- Canvas có pause/reset, keyboard, DPR, reduced motion và mô tả thay thế.
+- Bản final cập nhật đủ 4.096 body thật; seed, preset, camera, target, theta, dt, pause/reset/step hoạt động.
+- Energy bao đủ N và mọi cặp $i<j$; sample ghi t, momentum và COM cùng phạm vi.
+- Thí nghiệm giảm dt tiến gần nghiệm hai vật tại cùng T, giữ theta và epsilon.
+- Force sweep/RMS, topology/self-force fixtures và benchmark hữu hạn đều có kết quả riêng.
+- Starter, mười checkpoint, final và tests build độc lập; CTest vẫn hoạt động khi NDEBUG bật.
+- README phân biệt kiểm tự động với desktop và không hứa FPS/speedup chung.
 
 ## Bài tập mở rộng
 
-Thêm preset hai galaxy va chạm và một tùy chọn dùng adaptive root padding. Giữ direct oracle trên target sample cố định, rồi xem distribution lệch mạnh làm error/work theo theta thay đổi ra sao.
+Lưu một báo cáo ngắn gồm seed, N, G, epsilon, dt, theta, snapshot time, force RMS, energy/momentum và runtime Release. Chọn một sai lệch chưa giải thích được, thiết kế phép thử chỉ thay một biến thay vì chỉnh tất cả tham số đến khi hình trông đẹp.
 
-Project 32 sẽ giữ cùng N-body workload nhưng chuyển câu hỏi sang memory layout: Array of Structures và Structure of Arrays ảnh hưởng cache, iteration và khả năng xử lý một triệu particle như thế nào.
+Bạn đã có ứng dụng hoàn chỉnh. Xem [README và ZIP](/downloads) để tự chạy và đọc giới hạn kiểm chứng; [Project 32](/projects/memory-layout-race) chuyển sang chi phí bố trí dữ liệu, không thay bài kiểm chứng lực ở đây.

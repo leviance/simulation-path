@@ -1,127 +1,172 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Barnes–Hut opening criterion
+# Khi nào một cụm xa có thể thay bằng một nguồn?
 
 ## Vấn đề cần giải quyết
 
-Mass Octree đã tóm tắt mỗi subtree bằng `totalMass` và `centerOfMass`, nhưng không phải subtree nào cũng nên được coi như một body. Một cụm rất xa trông gần như một nguồn điểm; cùng cụm ấy ở sát target lại có cấu trúc bên trong ảnh hưởng mạnh tới hướng và độ lớn lực.
-
-Checkpoint 6 đưa ra quyết định tại từng internal node: dùng aggregate ngay, hay mở node và hỏi tiếp tám children.
+Cây đã giữ đúng mass và center of mass. Ta muốn một cụm xa được tính như một nguồn duy nhất, nhưng không thể thay mọi internal node bằng aggregate: ở gần, các nguồn phân bố trong cụm không còn tạo lực giống một điểm.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Barnes–Hut dùng tỉ số:
+Gọi s là cạnh hộp node, d là khoảng cách từ target đến centerOfMass. Opening criterion của bản này là $s/d < \theta$. Theta nhỏ thường mở nhiều node hơn; theta lớn thường chấp nhận nhiều aggregate hơn. Không có cam kết error hay runtime giảm đơn điệu ở mọi snapshot.
 
-$$
-\frac{s}{d}<\theta
-$$
+Điều kiện hình học chưa đủ. Node chứa target không được chấp nhận dù s/d nhỏ, vì totalMass của nó chứa cả target. Phải mở tiếp đến leaf, rồi bỏ đúng sourceIndex==targetIndex. Không dùng khoảng cách đến tâm hộp thay cho center of mass.
 
-Trong đó `s` là cạnh node cube, `d` là khoảng cách từ target tới center of mass, và `theta` là opening angle. Theta nhỏ đòi node trông nhỏ hơn khi nhìn từ target, nên traversal mở sâu hơn và gần direct summation hơn.
+Barnes–Hut vẫn tính nguồn xa, chỉ gộp chúng lại. Đây không phải radius cutoff như tìm hàng xóm Boids. Với một phân bố xấu hoặc theta gần 0, lượng việc có thể tiến gần direct.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-opening" />
 
-Kéo theta từ 0,25 lên 1,1. Theo dõi ba số: `approximatedNodes` tăng, `exactInteractions` giảm và force error tăng. Không có theta “đúng tuyệt đối”; có một trade-off cần đo trên workload cụ thể.
-
 ## Viết code từng bước
 
-### Bước 1 — Leaf vẫn dùng source bodies thật
+### Ghi lại quyết định trong chính traversal
 
-```cpp title="include/tree.hpp — leaf traversal"
-for (const std::size_t sourceIndex : node.bodyIndices) {
-    if (sourceIndex == targetIndex) {
-        continue;
-    }
-    result.acceleration += softenedAcceleration(
-        bodies[targetIndex].position,
-        bodies[sourceIndex].position,
-        bodies[sourceIndex].mass,
-        gravitationalConstant,
-        softening
-    );
-    ++result.metrics.exactInteractions;
-}
+```cpp title="include/tree.hpp — Ghi lại quyết định trong chính traversal"
+struct ForceTrace {
+    std::vector<std::size_t> opened{};
+    std::vector<std::size_t> accepted{};
+};
 ```
 
-Leaf capacity có thể lớn hơn một hoặc split guard có thể giữ nhiều body trùng vị trí. Leaf không phải aggregate shortcut; nó là nơi ta quay lại exact work.
+opened và accepted là các node của target đang theo dõi. Chúng không phải danh sách mọi leaf trên màn hình. Ta chỉ bật trace khi cần xem một target, không lưu trace cho toàn bộ 4.096 body.
 
-### Bước 2 — Tính node size và distance trong world space
+### Chọn nguồn tổng hợp hay mở tiếp
 
-```cpp title="include/tree.hpp — opening inputs"
-const Vec3 displacement = node.centerOfMass - bodies[targetIndex].position;
-const double distanceToCenter = length(displacement);
-const double nodeSize = node.bounds.maximum.x - node.bounds.minimum.x;
-const bool containsTarget = pointInsideBounds(bodies[targetIndex].position, node.bounds);
-```
-
-Camera yaw, pitch và perspective divide hoàn toàn không xuất hiện. Thay góc nhìn không được thay traversal.
-
-### Bước 3 — Dùng aggregate source khi node đủ xa
-
-```cpp title="include/tree.hpp — accept aggregate"
-if (
-    !containsTarget && distanceToCenter > 0.0 &&
-    nodeSize / distanceToCenter < theta
+```cpp title="include/tree.hpp — Chọn nguồn tổng hợp hay mở tiếp"
+inline void accumulateBarnesHutNode(
+    const BarnesHutTree& tree,
+    std::span<const Body> bodies,
+    std::size_t targetIndex,
+    std::size_t nodeIndex,
+    double theta,
+    double gravitationalConstant,
+    double softening,
+    AccelerationResult& result,
+    ForceTrace* trace = nullptr
 ) {
-    result.acceleration += softenedAcceleration(
-        bodies[targetIndex].position,
-        node.centerOfMass,
-        node.totalMass,
-        gravitationalConstant,
-        softening
-    );
-    ++result.metrics.approximatedNodes;
-    return;
+    const BarnesHutNode& node = tree.nodes[nodeIndex];
+    ++result.metrics.visitedNodes;
+    if (node.totalMass <= 0.0) {
+        return;
+    }
+
+    if (node.isLeaf()) {
+        for (const std::size_t sourceIndex : node.bodyIndices) {
+            if (sourceIndex == targetIndex) {
+                continue;
+            }
+            result.acceleration += softenedAcceleration(
+                bodies[targetIndex].position,
+                bodies[sourceIndex].position,
+                bodies[sourceIndex].mass,
+                gravitationalConstant,
+                softening
+            );
+            ++result.metrics.exactInteractions;
+        }
+        return;
+    }
+
+    const Vec3 displacement = node.centerOfMass - bodies[targetIndex].position;
+    const double distanceToCenter = length(displacement);
+    const double nodeSize = node.bounds.maximum.x - node.bounds.minimum.x;
+    const bool containsTarget = pointInsideBounds(bodies[targetIndex].position, node.bounds);
+    if (
+        !containsTarget && distanceToCenter > 0.0 &&
+        nodeSize / distanceToCenter < theta
+    ) {
+        result.acceleration += softenedAcceleration(
+            bodies[targetIndex].position,
+            node.centerOfMass,
+            node.totalMass,
+            gravitationalConstant,
+            softening
+        );
+        ++result.metrics.approximatedNodes;
+        if (trace) {
+            trace->accepted.push_back(nodeIndex);
+        }
+        return;
+    }
+
+    if (trace) {
+        trace->opened.push_back(nodeIndex);
+    }
+    for (const std::size_t childIndex : node.children) {
+        accumulateBarnesHutNode(
+            tree,
+            bodies,
+            targetIndex,
+            childIndex,
+            theta,
+            gravitationalConstant,
+            softening,
+            result,
+            trace
+        );
+    }
 }
 ```
 
-Điều kiện `!containsTarget` sẽ được mổ xẻ ở lesson 7. Lúc này hãy coi nó là correctness guard bắt buộc.
+Đọc theo thứ tự: bỏ node rỗng; leaf cộng từng source thật; internal node kiểm containsTarget và s/d; nếu chưa được nhận thì đệ quy vào children. Gia tốc của nguồn tổng hợp dùng đúng softenedAcceleration đã kiểm ở bài 02.
 
-### Bước 4 — Nếu chưa đủ xa, mở đủ tám children
+### Giữ interface đối chiếu với direct
 
-```cpp title="include/tree.hpp — recurse children"
-for (const std::size_t childIndex : node.children) {
-    accumulateBarnesHutNode(
-        tree,
-        bodies,
-        targetIndex,
-        childIndex,
-        theta,
-        gravitationalConstant,
-        softening,
-        result
-    );
+```cpp title="include/tree.hpp — Giữ interface đối chiếu với direct"
+inline AccelerationResult barnesHutAcceleration(
+    const BarnesHutTree& tree,
+    std::span<const Body> bodies,
+    std::size_t targetIndex,
+    double theta,
+    double gravitationalConstant,
+    double softening,
+    ForceTrace* trace = nullptr
+) {
+    AccelerationResult result{};
+    if (targetIndex < bodies.size() && !tree.nodes.empty()) {
+        accumulateBarnesHutNode(
+            tree,
+            bodies,
+            targetIndex,
+            0,
+            theta,
+            gravitationalConstant,
+            softening,
+            result,
+            trace
+        );
+    }
+    return result;
 }
 ```
 
-Empty child dừng ngay vì `totalMass <= 0`. Ta giữ traversal đơn giản trước khi nghĩ đến compact child storage.
+Wrapper trả vector acceleration và work counters như directAcceleration. Integrator không đổi công thức hoặc dt khi bạn đổi solver. Đó là điều kiện để quy sai khác lực cho xấp xỉ thay vì cho một mô hình khác.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 6"
+Từ checkpoint 06, preset mặc định là 4.096 body; advancePhysics dùng Barnes–Hut trừ khi đang ở preset nhỏ và chọn Direct. Sau mỗi commit, rebuild cây cho position mới. Khi theta/epsilon đổi, hủy pending force để không trộn hai cấu hình trong một bước.
+
+Bật F để xem debug. Hộp xanh là node được mở; vàng là aggregate được chấp nhận cho target. Chỉ vẽ tối đa 512 hộp mỗi loại để không che scene; giới hạn này không cắt bớt nguồn lực.
+
+```bash title="Terminal — checkpoint 06"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_31_checkpoint_6
 ```
 
-Checkpoint 6 tăng preset lên 2.048 bodies và dùng Barnes–Hut cho full physics pass. Direct oracle vẫn được gọi cho body đang chọn để title báo relative error live.
+Trên Windows chạy ./build/Debug/project_31_checkpoint_6.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `distance/nodeSize < theta`. Ý nghĩa theta đảo ngược và slider cho kết quả trái trực giác.
-2. Dùng khoảng cách tới node geometric center thay vì center of mass. Cụm lệch density bị đại diện sai vị trí.
-3. Approximate cả leaf bằng aggregate. Khi leaf chứa target, self mass đi thẳng vào source tổng hợp.
+Bỏ containsTarget khỏi điều kiện nhận node và thử theta lớn. So vector với direct ở body gần tâm khối: self-force có thể xuất hiện. Sau khi khôi phục, đặt theta rất nhỏ để thấy kết quả gần direct nhưng lượng việc tăng.
 
 ## Tự kiểm tra kết quả
 
-- Theta gần 0 làm lực tại các target mẫu khớp direct trong tolerance.
-- Theta tăng làm aggregate source count tăng trên cùng scene.
-- `visitedNodes` không được gọi là force interactions.
-- Work dùng cho lực bằng approximated nodes + exact interactions.
-- Camera không thay ba counters của cùng target/state.
-- Empty node không tạo source lực.
-- Full-system pass trả đúng N accelerations trước khi integration bắt đầu.
+- Mọi accepted node đều không chứa position của target.
+- Một body duy nhất có acceleration=0, không có self interaction.
+- Theta gần 0 khớp direct trong absolute tolerance 10⁻¹⁰ trên fixture nhỏ.
+- Đổi Direct/BH ở cùng preset nhỏ giữ cùng integrator/dt và điều kiện đầu khi Reset.
 
 ## Bài tập mở rộng
 
-Tô màu leaf theo việc traversal của body đang chọn đã thăm, bỏ qua hay thay bằng aggregate. Giữ màu trong một buffer debug riêng; đừng đưa trạng thái visualization vào node.
+Đếm riêng visitedNodes, approximatedNodes và exactInteractions cho target gần lõi và ở rìa. Giải thích vì sao chúng không nhất thiết có cùng lượng việc dù N giống nhau.
 
-Bài tiếp theo giải thích vì sao node chứa target phải mở tiếp dù $s/d$ đã nhỏ.
+Bài tiếp theo: [Tìm self-force và lỗi cấu trúc cây](/projects/barnes-hut-nbody/07-self-force-va-topology-inspector).

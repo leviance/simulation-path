@@ -1,253 +1,242 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/lab.hpp",
-  "include/tree.hpp",
-  "include/analysis.hpp",
-  "include/render.hpp",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
   guides: {
     "p31-l01": {
-      focus:
-        "Giữ starter đang vẽ được, đọc state của từng body trong world space và đo total mass, center of mass cùng momentum trước khi thêm lực.",
+      focus: "Mở cửa sổ, vẽ state XYZ qua camera và sinh lại cùng đĩa sao bằng seed cố định.",
       expected:
-        "Cùng seed tạo lại đúng thiên hà; đổi camera không đổi state và tổng momentum ban đầu gần 0.",
-      files,
+        "Gắn seed với preset, giữ tổng mass đĩa gần như không đổi khi tăng N và trừ cùng bulk velocity khỏi toàn hệ.",
+      files: ["src/main.cpp", "include/lab.hpp", "include/simulation.hpp"],
       steps: [
         {
-          title: "Bắt đầu từ một scene nhìn thấy được",
+          title: "Chạy khung SDL trước",
           explanation:
-            "Starter đã tạo window, framebuffer và orbit camera. Bài này chỉ thêm contract cho body state, nên bạn luôn có hình ảnh để kiểm từng thay đổi.",
+            "main tạo từng tài nguyên và trả lỗi ngay nếu không tạo được. runApplication giữ event loop; Simulation::reset sinh bodies trước lần vẽ đầu.",
         },
         {
-          title: "Giữ world state tách khỏi screen projection",
+          title: "Chốt dữ liệu vật lý",
           explanation:
-            "Position, velocity và mass là dữ liệu physics. Screen x/y chỉ được tạo trong renderer rồi bỏ đi sau frame hiện tại.",
+            "Body chỉ giữ position, velocity và mass. Camera không ghi ngược tọa độ màn hình vào vector bodies.",
         },
         {
-          title: "Cân momentum ngay lúc sinh dữ liệu",
+          title: "Sinh lại cùng thí nghiệm",
           explanation:
-            "Tổng momentum của các body quỹ đạo được bù vào velocity của central mass. Nhờ đó toàn thiên hà không tự trôi vì lỗi preset.",
+            "Gắn seed với preset, giữ tổng mass đĩa gần như không đổi khi tăng N và trừ cùng bulk velocity khỏi toàn hệ.",
         },
       ],
     },
     "p31-l02": {
       focus:
-        "Viết gia tốc do một source mass tạo ra và xử lý cự ly gần bằng gravitational softening có ý nghĩa rõ ràng.",
+        "Tự suy ra vector gia tốc, phân biệt mass của nguồn với mass của target và xử lý cự ly gần bằng softening.",
       expected:
-        "Vector gia tốc hướng từ target tới source, tỉ lệ với source mass và luôn hữu hạn khi hai position trùng nhau.",
-      files,
+        "pairAccelerationForSelected đọc hai body trong snapshot; drawScene chuyển vector sang mũi tên, chưa làm physics tự chạy.",
+      files: ["include/lab.hpp", "include/simulation.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Tính displacement một lần",
+          title: "Từ lực đến gia tốc",
           explanation:
-            "Vector source−target vừa cho hướng, vừa cho squared distance. Ta không normalize rồi lại tính distance lần thứ hai.",
+            "Vì đang cập nhật velocity của target, mass target triệt tiêu; sourceMass vẫn phải nằm trong biểu thức.",
         },
         {
-          title: "Đặt epsilon vào distance squared",
+          title: "Xử lý cự ly gần",
           explanation:
-            "Mẫu số dùng `(r² + ε²)^(3/2)`. Epsilon có đơn vị độ dài và làm force chuyển tiếp trơn thay vì clamp đột ngột.",
+            "Cộng epsilon² trước khi lấy lũy thừa 3/2. Đây là mô hình potential đã làm trơn, không phải một chiếc kẹp số tùy ý.",
         },
         {
-          title: "Phân biệt source mass với target mass",
+          title: "Nối với hình đang vẽ",
           explanation:
-            "Ta đang tính acceleration của target, nên công thức chỉ còn source mass. Target mass chỉ cần khi đổi ngược về force.",
+            "pairAccelerationForSelected đọc hai body trong snapshot; drawScene chuyển vector sang mũi tên, chưa làm physics tự chạy.",
         },
       ],
     },
     "p31-l03": {
       focus:
-        "Cộng gia tốc từ mọi source body thật cho từng target và đếm lượng công việc chính xác của direct implementation.",
+        "Viết direct summation đơn giản trước khi tối ưu; kiểm N−1 nguồn và các ca hai, ba vật thể tính tay.",
       expected:
-        "Một target dùng N−1 interactions, full pass dùng N×(N−1) và one-body system trả acceleration bằng 0.",
-      files,
+        "Một target đọc N−1 nguồn; cả pass đọc N(N−1). Đó là lượng việc, không phải số microsecond.",
+      files: ["include/lab.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Bỏ self bằng index",
+          title: "Đọc từng nguồn thật",
           explanation:
-            "Hai body có thể trùng position nhưng vẫn là hai nguồn khác nhau. Vì vậy self-force được loại bằng `sourceIndex == targetIndex`, không phải distance bằng 0.",
+            "Vòng lặp direct bỏ sourceIndex==targetIndex; hai body cùng position nhưng khác index vẫn là hai nguồn hợp lệ.",
         },
         {
-          title: "Giữ oracle dễ đọc",
+          title: "Giữ snapshot bất biến",
           explanation:
-            "Direct path chỉ có hai vòng lặp và gọi softenedAcceleration. Nó không đọc Octree, nên còn khả năng bắt lỗi ở aggregate/traversal.",
+            "directAccelerations trả một vector gia tốc mới. Không cập nhật position ngay bên trong vòng target.",
         },
         {
-          title: "Đếm work trước khi đo time",
+          title: "Đếm lượng việc",
           explanation:
-            "Interaction count không phụ thuộc máy. Đây là bằng chứng O(N²) ổn định hơn một con số microsecond đơn lẻ.",
+            "Một target đọc N−1 nguồn; cả pass đọc N(N−1). Đó là lượng việc, không phải số microsecond.",
         },
       ],
     },
     "p31-l04": {
       focus:
-        "Tách render frames khỏi physics steps bằng accumulator, maximum-step guard và symplectic Euler.",
+        "Tính xong gia tốc của cả snapshot rồi mới cập nhật velocity/position; chia việc theo target để UI vẫn phản hồi.",
       expected:
-        "Một frame 1/60 s tạo bốn bước 1/240 s; frame rất chậm không chạy quá bốn bước và state vẫn hữu hạn.",
-      files,
+        "Pause giữ bước đang tính, Cancel bỏ pending state. Camera vẫn hoạt động; không cố đuổi kịp mọi frame chậm.",
+      files: ["include/lab.hpp", "include/simulation.hpp", "include/application.hpp"],
       steps: [
         {
-          title: "Lập kế hoạch bước trước khi tích phân",
+          title: "Tính lực theo từng đợt",
           explanation:
-            "`planFixedSteps` nhận frame time đã clamp, trả số bước, remainder và cờ dropped backlog. Phần policy được test mà không cần mở window.",
+            "beginPhysics mở một bước trên snapshot hiện tại, giữ nextTarget và pendingAccelerations giữa các frame.",
         },
         {
-          title: "Cập nhật velocity trước position",
+          title: "Commit đúng một fixed step",
           explanation:
-            "Symplectic Euler dùng velocity mới để tiến position. Nó vẫn đơn giản như Euler nhưng thường giữ quỹ đạo hấp dẫn tốt hơn explicit Euler.",
+            "Chỉ khi target cuối cùng xong mới cập nhật velocity rồi position; dt không đổi theo thời gian vẽ frame.",
         },
         {
-          title: "Không che giấu giới hạn của direct baseline",
+          title: "Cho người dùng dừng được",
           explanation:
-            "Checkpoint này dùng 512 bodies. Mục tiêu là khóa timestep/integrator; tăng lên hàng nghìn chỉ hợp lý sau khi có Barnes–Hut.",
+            "Pause giữ bước đang tính, Cancel bỏ pending state. Camera vẫn hoạt động; không cố đuổi kịp mọi frame chậm.",
         },
       ],
     },
     "p31-l05": {
       focus:
-        "Mở rộng Octree của Project 30: leaf giữ body indices, còn mọi node giữ totalMass và centerOfMass.",
+        "Thêm mass và tâm khối vào Octree; kiểm trung bình có trọng số, leaf storage và điểm trùng nhau.",
       expected:
-        "Root bounds chứa đủ bodies, root mass bằng total system mass và root center of mass khớp phép tính trực tiếp.",
-      files,
+        "Dựng lại sau khi bodies đổi. Cây của snapshot cũ không được mang sang tính lực cho vị trí mới.",
+      files: ["include/tree.hpp", "include/simulation.hpp"],
       steps: [
         {
-          title: "Dựng cubic bounds từ state hiện tại",
+          title: "Chia không gian có giới hạn",
           explanation:
-            "Bodies di chuyển nên root phải được tính lại. Cube giúp node size `s` có một nghĩa duy nhất trong opening criterion.",
+            "Dùng index thay reference khi vector nodes thêm phần tử; depth/node-size/node-count ngăn điểm trùng làm cây tách vô hạn.",
         },
         {
-          title: "Giữ insertion và aggregation thành hai pha",
+          title: "Gộp từ lá đi lên",
           explanation:
-            "Pha đầu chỉ quyết định topology/storage. Pha sau đi từ leaves lên root để tính aggregate, dễ test hơn việc cập nhật mass rải rác khi insert.",
+            "Leaf cộng mass thật; internal node cộng children. Tâm khối là weightedPosition/totalMass, không phải tâm hộp.",
         },
         {
-          title: "Dùng mass-weighted center",
+          title: "Đặt cây vào vòng đời",
           explanation:
-            "Center of mass là `Σ(mᵢpᵢ)/Σmᵢ`, không phải trung bình position. Central body nặng phải kéo aggregate center về phía nó.",
+            "Dựng lại sau khi bodies đổi. Cây của snapshot cũ không được mang sang tính lực cho vị trí mới.",
         },
       ],
     },
     "p31-l06": {
       focus:
-        "Duyệt Mass Octree cho một target và quyết định khi nào dùng node aggregate bằng opening criterion `s/d < theta`.",
+        "Dùng s/d < theta nhưng buộc mở node chứa target; vẽ lại đúng các quyết định traversal.",
       expected:
-        "Theta nhỏ mở nhiều node và gần direct hơn; theta lớn tăng approximatedNodes, giảm exactInteractions và tạo sai số đo được.",
-      files,
+        "ForceTrace ghi opened/accepted trong chính traversal tính lực; presentation không suy đoán từ một cây chỉ vẽ các lá.",
+      files: ["include/tree.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Tính s và d trong cùng world space",
+          title: "Hỏi cụm có đủ xa không",
           explanation:
-            "`s` là cạnh node cube; `d` là khoảng cách target tới node center of mass. Screen distance không xuất hiện trong traversal.",
+            "Dùng cạnh node s và khoảng cách d đến centerOfMass. Mỗi target có một quyết định mở/chấp nhận riêng.",
         },
         {
-          title: "Leaf luôn dùng body thật",
-          explanation:
-            "Leaf có thể chứa nhiều body do depth/min-size guard. Ta vẫn cộng từng source và bỏ đúng target index.",
+          title: "Không quên chính target",
+          explanation: "Dù s/d nhỏ, node chứa target vẫn phải mở. Leaf chỉ bỏ đúng index target.",
         },
         {
-          title: "Ghi ba work counters",
+          title: "Vẽ đúng quyết định đã dùng",
           explanation:
-            "Visited nodes mô tả traversal; approximated nodes và exact interactions mới là số nguồn lực thực sự được dùng.",
+            "ForceTrace ghi opened/accepted trong chính traversal tính lực; presentation không suy đoán từ một cây chỉ vẽ các lá.",
         },
       ],
     },
     "p31-l07": {
       focus:
-        "Khóa self-force rule và viết inspector độc lập cho cả topology lẫn mass/center aggregates.",
+        "Dùng fixture độc lập để phát hiện sai mass ở lá, trùng storage và cạnh trỏ về tổ tiên.",
       expected:
-        "One-body tree trả zero acceleration; mỗi body nằm đúng một leaf và mọi internal aggregate khớp tổng children.",
-      files,
+        "Bắt đầu hai/ba vật và vị trí trùng trước khi chạy thiên hà. Timing hoặc ảnh đẹp không thay được đáp án tính tay.",
+      files: ["include/tree.hpp", "tests/tests.cpp", "tests/extended.hpp"],
       steps: [
         {
-          title: "Không approximate node chứa target",
+          title: "Kiểm lá bằng bodies thật",
           explanation:
-            "Aggregate của node đó có mass của chính target. Mở tiếp cho tới leaf là cách rõ ràng để loại self contribution chính xác.",
+            "Mass ở lá cũng có thể sai. Inspector đối chiếu leaf mass và center với bodyIndices, không chỉ cộng các children.",
         },
         {
-          title: "Inspector tự tính lại aggregate",
+          title: "Kiểm quan hệ cha con",
           explanation:
-            "Không tin totalMass/centerOfMass đã lưu. Inspector cộng mass và weighted center từ children rồi so với node.",
+            "Mỗi node trừ root có một cha, child nằm sau parent và sâu hơn một mức. Cạnh quay ngược bị báo lỗi mà không cần recurse vào nó.",
         },
         {
-          title: "Test split-plane và one-body có chủ đích",
+          title: "Dùng fixture có đáp án",
           explanation:
-            "Dữ liệu ngẫu nhiên hiếm khi đánh trúng biên. Case tối giản cho biết ngay lỗi nằm ở octant policy hay traversal.",
+            "Bắt đầu hai/ba vật và vị trí trùng trước khi chạy thiên hà. Timing hoặc ảnh đẹp không thay được đáp án tính tay.",
         },
       ],
     },
     "p31-l08": {
       focus:
-        "Giữ direct results làm oracle và quét nhiều theta trên cùng bodies, target indices, G và softening.",
+        "Giữ nguyên bodies và epsilon, quét nhiều theta; báo absolute/RMS error cùng exact/aggregate work.",
       expected:
-        "Bảng có mean/max relative error cùng visited/aggregate/exact counters; default theta 0.5 giữ mean error dưới ngưỡng đã đặt.",
-      files,
+        "Absolute RMS có đơn vị gia tốc. Normalized RMS dùng tổng bình phương lực reference và sàn K·10⁻²⁴ để tránh chia cho 0.",
+      files: ["include/analysis.hpp", "include/experiments.hpp", "include/application.hpp"],
       steps: [
         {
-          title: "Tính exact targets đúng một lần",
+          title: "Đóng băng snapshot",
           explanation:
-            "Direct acceleration không đổi giữa các theta. Cache oracle results làm sweep nhanh hơn mà vẫn giữ workload công bằng.",
+            "SurveyJob giữ bodies, tree, epsilon và thời điểm đo. Đổi cấu hình thì hủy report cũ.",
         },
         {
-          title: "Chuẩn hóa error theo độ lớn lực",
+          title: "Giữ cùng tập target",
           explanation:
-            "Relative error giúp so body chịu lực mạnh và yếu; mẫu số có floor nhỏ để trường hợp exact gần 0 không nổ số.",
+            "Direct đọc mọi source cho từng target; cả bốn theta dùng lại đúng các reference vector ấy.",
         },
         {
-          title: "Đọc error cạnh work",
+          title: "Đọc RMS có đơn vị",
           explanation:
-            "Một theta chỉ có ý nghĩa khi ta biết nó tiết kiệm bao nhiêu nguồn và làm lệch lực bao nhiêu trên workload cụ thể.",
+            "Absolute RMS có đơn vị gia tốc. Normalized RMS dùng tổng bình phương lực reference và sàn K·10⁻²⁴ để tránh chia cho 0.",
         },
       ],
     },
     "p31-l09": {
       focus:
-        "Đo một full acceleration pass của direct và Barnes–Hut qua nhiều N, giữ kết quả observable và báo work count cạnh timer.",
+        "Tách build, force pass và render; warm-up, median và khoảng min/max trên cùng workload có giới hạn.",
       expected:
-        "Direct pairs đúng N×(N−1); Barnes–Hut work thấp hơn khi N tăng và mỗi row dùng cùng seed/theta/softening.",
-      files,
+        "Bảng runtime không xếp hạng độ đúng. Giữ cả trường hợp chi phí dựng cây khiến BH không có lợi ở hệ nhỏ.",
+      files: ["include/benchmark.hpp", "include/application.hpp"],
       steps: [
         {
-          title: "Đo cùng một câu hỏi",
+          title: "Chốt workload trước đồng hồ",
           explanation:
-            "Cả hai phía phải trả acceleration cho toàn bộ bodies. Không được so full direct pass với một target Barnes–Hut.",
+            "Direct và BH dùng cùng N, seed, epsilon, theta và đủ mọi target. Tree build được ghi riêng.",
         },
         {
-          title: "Tách tree rebuild khỏi force traversal",
+          title: "Đo nhiều mẫu ngắn",
           explanation:
-            "Scaling row đo force pass; tree vẫn báo rebuild riêng trong app. Hai chi phí có lifecycle khác nhau.",
+            "RuntimeJob bỏ một warm-up và lấy median/min/max của năm pass; clock chỉ bao kernel, không bao thời gian đợi frame.",
         },
         {
-          title: "Giữ output sống trong Release",
+          title: "Đặt sai số cạnh chi phí",
           explanation:
-            "Checksum sink đọc acceleration vectors để compiler không thể loại bỏ phép tính chỉ vì benchmark không vẽ kết quả.",
+            "Bảng runtime không xếp hạng độ đúng. Giữ cả trường hợp chi phí dựng cây khiến BH không có lợi ở hệ nhỏ.",
         },
       ],
     },
     "p31-l10": {
       focus:
-        "Ghép simulation, camera, selected-force inspector, theta/scaling experiments và diagnostics vào một final lifecycle rõ ràng.",
+        "Đo năng lượng toàn hệ theo snapshot, thử giảm dt ở hệ có nghiệm tròn và bàn giao ứng dụng 4.096 vật thể.",
       expected:
-        "Reset tái tạo đúng preset, pointer capture luôn được nhả và validation report tách topology, state, self-force, accuracy cùng work reduction.",
-      files,
+        "Thực hiện quy trình 4.096 body, camera/target, pause/step, đo lực và energy, rồi build/test các snapshot. Ghi riêng desktop và smoke.",
+      files: ["include/experiments.hpp", "include/application.hpp", "tests/extended.hpp"],
       steps: [
         {
-          title: "Rebuild đúng lúc physics state đổi",
+          title: "Cộng đủ năng lượng hệ",
           explanation:
-            "Mỗi fixed step làm positions đổi nên Mass Octree phải dựng lại trước force pass kế tiếp. Xoay camera không được rebuild tree.",
+            "EnergyJob đọc mọi cặp i<j của snapshot và dùng cùng potential có softening; ghi N và t cạnh E, momentum và COM.",
         },
         {
-          title: "Giới hạn diagnostics đắt tiền",
+          title: "Giảm dt trên bài toán có nghiệm",
           explanation:
-            "Exact energy là O(N²), nên UI tính trên tối đa 512 bodies và ghi rõ scope. Validation lực dùng target sample cố định.",
+            "Hai vật quay tròn cho phép tính vị trí tại T=1 độc lập. Giữ theta=0,5 và epsilon=0,02, chỉ đổi dt.",
         },
         {
-          title: "Giữ từng failure có tên",
+          title: "Nghiệm thu sản phẩm",
           explanation:
-            "Final report không nén tất cả thành một boolean mù. Topology, finite state, self-force, accuracy và work reduction vẫn là các contract riêng.",
+            "Thực hiện quy trình 4.096 body, camera/target, pause/step, đo lực và energy, rồi build/test các snapshot. Ghi riêng desktop và smoke.",
         },
       ],
     },

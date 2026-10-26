@@ -1,86 +1,102 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Lực hấp dẫn và softening
+# Một vật thể hút vật thể khác như thế nào?
 
 ## Vấn đề cần giải quyết
 
-Nếu dùng thẳng $1/r^2$, hai body đi rất gần nhau sẽ tạo acceleration cực lớn. Chỉ một physics step có thể bắn chúng ra khỏi scene hoặc sinh `inf/NaN`. Giảm `dt` giúp tích phân chính xác hơn nhưng không giải quyết singularity tại $r=0$.
-
-Checkpoint 2 viết lực giữa một target và một source, rồi thêm gravitational softening theo cách trơn và có thể kiểm chứng.
+Đĩa sao đã hiện ra, nhưng chưa có nguyên nhân khiến nó chuyển động. Ta bắt đầu bằng một câu hỏi nhỏ: một source body gây gia tốc gì cho một target body? Viết đúng phép tính này trước sẽ giúp kiểm cả direct solver lẫn Barnes–Hut bằng những ca tính được bằng tay.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Gia tốc của target $i$ do source $j$ tạo ra là:
+Lực hướng từ target về source. Vì tính gia tốc a=F/m_target, mass của target triệt tiêu; sourceMass vẫn còn. Gọi r=source−target, ta dùng Plummer softening:
 
 $$
-\mathbf{a}_{ij}=Gm_j\frac{\mathbf{p}_j-\mathbf{p}_i}
-{\left(\lVert\mathbf{p}_j-\mathbf{p}_i\rVert^2+\varepsilon^2\right)^{3/2}}
+\mathbf a=Gm_s\frac{\mathbf r}{(\|\mathbf r\|^2+\epsilon^2)^{3/2}}.
 $$
 
-Vector displacement đã chứa cả hướng lẫn khoảng cách. `sourceMass` xuất hiện vì ta đang tính acceleration; target mass đã được rút gọn khỏi $F=ma$. Softening $\varepsilon$ có đơn vị độ dài, làm lực chuyển tiếp trơn ở vùng rất gần.
+Epsilon có đơn vị độ dài. Nó thay potential ở cự ly gần; không phải tham số sửa integrator và không phải radius cutoff. Nguồn xa vẫn tác dụng lực. Khi position trùng nhau và epsilon>0, displacement bằng 0 nên gia tốc hữu hạn bằng 0.
+
+Checkpoint 02 vẽ vector của một cặp lên scene đứng yên. Đừng chạy cả thiên hà để đoán dấu của một công thức. Với target tại x=−1, source tại x=1, sourceMass=3, G=1 và epsilon=0,1, thành phần X phải là 6/(4,01)^(3/2).
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-pair-force" />
 
-Chọn một body gần center rồi tăng `softening`. Vector lực ngắn dần. Sau đó chọn body xa: thay đổi nhỏ hơn nhiều, vì $r^2$ đã lớn hơn $\varepsilon^2$.
-
 ## Viết code từng bước
 
-### Bước 1 — Lấy displacement theo đúng chiều
+### Tính gia tốc từ một nguồn
 
-```cpp title="include/lab.hpp — source minus target"
-const Vec3 displacement = sourcePosition - targetPosition;
-const double softenedDistanceSquared =
-    lengthSquared(displacement) + softening * softening;
-```
-
-Đảo phép trừ sẽ làm gravity đẩy thay vì hút. Tên biến `sourcePosition` và `targetPosition` dài hơn một chút nhưng loại bỏ một lỗi rất khó thấy khi có hàng nghìn body.
-
-### Bước 2 — Tính inverse distance cubed
-
-```cpp title="include/lab.hpp — softened denominator"
-if (softenedDistanceSquared <= 0.0 || sourceMass <= 0.0) {
-    return {};
+```cpp title="include/lab.hpp — Tính gia tốc từ một nguồn"
+inline Vec3 softenedAcceleration(
+    const Vec3& targetPosition,
+    const Vec3& sourcePosition,
+    double sourceMass,
+    double gravitationalConstant,
+    double softening
+) {
+    const Vec3 displacement = sourcePosition - targetPosition;
+    const double softenedDistanceSquared =
+        lengthSquared(displacement) + softening * softening;
+    if (softenedDistanceSquared <= 0.0 || sourceMass <= 0.0) {
+        return {};
+    }
+    const double inverseDistanceCubed =
+        1.0 / std::pow(softenedDistanceSquared, 1.5);
+    return displacement * (gravitationalConstant * sourceMass * inverseDistanceCubed);
 }
-const double inverseDistanceCubed =
-    1.0 / std::pow(softenedDistanceSquared, 1.5);
 ```
 
-Ta nhân displacement có độ dài $r$ với mẫu số bậc $3$, nên độ lớn cuối cùng vẫn gần $1/r^2$ khi $r$ lớn hơn epsilon.
+displacement giữ hướng; softenedDistanceSquared giữ độ dài bình phương. Nhân với G·sourceMass/(r²+epsilon²)^(3/2) cho đơn vị length/time². Không normalize vector rồi vô tình làm mất một lũy thừa khoảng cách.
 
-### Bước 3 — Nhân các đại lượng còn lại một lần
+### Lấy dữ liệu từ state đang mở
 
-```cpp title="include/lab.hpp — softenedAcceleration result"
-return displacement * (gravitationalConstant * sourceMass * inverseDistanceCubed);
+```cpp title="include/simulation.hpp — Lấy dữ liệu từ state đang mở"
+inline Vec3 pairAccelerationForSelected(const Simulation& simulation) {
+    const Body& target = simulation.bodies[simulation.selected];
+    const Body& source = simulation.bodies[0];
+    return softenedAcceleration(target.position, source.position, source.mass, gravity, simulation.epsilon);
+}
 ```
 
-Hàm trả acceleration và không sửa state. Nhờ vậy unit test có thể gọi nó cho các case trùng position, đổi mass hoặc đảo target/source mà không cần chạy event loop.
+Target là body được chọn, source là body 0. Hàm không biết pixel hay camera. Đây là điểm nối giúp helper không bị bỏ rời khỏi ứng dụng.
+
+### Gọi phép tính trong đường vẽ
+
+```cpp title="include/presentation.hpp — Gọi phép tính trong đường vẽ"
+inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, const lab::Simulation& simulation) {
+    std::fill(pixels.begin(), pixels.end(), kBackground);
+    drawTrails(pixels, width, height, simulation);
+    drawForceArrow(pixels, width, height, simulation.bodies[simulation.selected], lab::pairAccelerationForSelected(simulation), simulation.camera);
+    drawBodies(pixels, width, height, simulation.bodies, simulation.camera, simulation.selected);
+}
+```
+
+Ở checkpoint 02, drawScene gọi pairAccelerationForSelected rồi drawForceArrow. Mũi tên có chiều dài chuẩn hóa để dễ nhìn; số pixel của nó không đại diện cho norm acceleration. Đọc vector số để so độ lớn.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 2"
+Build checkpoint 02, chọn target khác central body. Preset hai/ba vật giúp nhìn hướng lực rõ hơn một đám sao. Dự đoán: tăng sourceMass ba lần thì acceleration tăng bao nhiêu? Nếu chỉ tăng mass target thì sao?
+
+Hàm pure có thể kiểm mà không mở window. tests/tests.cpp dùng fixture độc lập để kiểm cùng công thức; CTest mặc định kiểm source final, không phải một khẳng định rằng checkpoint đang học đã có mọi chức năng final.
+
+```bash title="Terminal — checkpoint 02"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_31_checkpoint_2
 ```
 
-Checkpoint vẽ vector acceleration của body đang chọn do central body gây ra. Dùng `,` và `.` để chuyển target, `-` và `=` để đổi softening.
+Trên Windows chạy ./build/Debug/project_31_checkpoint_2.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng `targetPosition - sourcePosition`. Vector lực quay ra ngoài và thiên hà sẽ nở thay vì hút.
-2. Viết `r² + epsilon` thay vì `r² + epsilon²`. Hai số hạng khác đơn vị, nên ý nghĩa tham số đổi theo scale của world.
-3. Clamp độ lớn acceleration sau khi tính. Lực bị gãy đột ngột ở ngưỡng; theta accuracy về sau sẽ trộn lỗi clamp với lỗi Barnes–Hut.
+Đổi source−target thành target−source: mũi tên quay sai hướng. Thay lũy thừa 3/2 trong mẫu bằng 1: ở cự ly xa, quy luật giảm không còn inverse-square. Khôi phục code trước khi học bài tiếp.
 
 ## Tự kiểm tra kết quả
 
-- Hai position trùng nhau trả vector 0 hữu hạn.
-- Tăng source mass ba lần làm acceleration tăng ba lần.
-- Target mass không xuất hiện trong hàm acceleration.
-- Vector luôn hướng từ target tới source.
-- Với distance lớn hơn nhiều epsilon, kết quả gần công thức không softening.
-- Checkpoint 2 vẫn chỉ dùng một source, chưa giả vờ là N-body.
+- Fixture hai vật khớp tính tay với absolute tolerance 10⁻¹².
+- Tăng source mass ba lần làm gia tốc tăng ba lần; đổi target mass không đổi gia tốc do nguồn ấy.
+- Position trùng và epsilon>0 không tạo NaN/Inf.
+- Xoay camera không đổi vector gia tốc trong world space.
 
 ## Bài tập mở rộng
 
-Vẽ đồ thị độ lớn acceleration theo distance cho ba epsilon. Đánh dấu vị trí $r=\varepsilon$ và giải thích bằng số vì sao epsilon quá lớn làm sai cả vùng quỹ đạo cần giữ.
+Đặt ba nguồn trên các trục rồi cộng gia tốc bằng tay. Chọn bố trí có hai thành phần triệt tiêu để dùng làm fixture ở bài 03.
 
-Bài tiếp theo sẽ gọi hàm này N−1 lần cho mỗi target để tạo direct oracle.
+Bài tiếp theo: [Cộng tất cả lực và giữ một lời giải đối chứng](/projects/barnes-hut-nbody/03-direct-n-body-o-n-binh-phuong).

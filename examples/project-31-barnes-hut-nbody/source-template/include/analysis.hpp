@@ -6,13 +6,19 @@ namespace lab {
 
 // Checkpoint 8: theta sweep so lực xấp xỉ với direct oracle trên cùng target set.
 #if LAB_CHECKPOINT >= 8
+// [snippet:AccuracyRow]
 struct AccuracyRow {
     double theta{};
     double meanRelativeError{};
     double maximumRelativeError{};
     ForceMetrics metrics{};
+    double absoluteRmsError{};
+    double normalizedRmsError{};
 };
 
+// [/snippet:AccuracyRow]
+
+// [snippet:measureThetaAccuracy]
 inline std::vector<AccuracyRow> measureThetaAccuracy(
     std::span<const Body> bodies,
     std::span<const double> thetaValues,
@@ -43,6 +49,8 @@ inline std::vector<AccuracyRow> measureThetaAccuracy(
     std::vector<AccuracyRow> rows{};
     for (const double theta : thetaValues) {
         AccuracyRow row{};
+        double squaredError = 0;
+        double squaredReference = 0;
         row.theta = theta;
         for (std::size_t index = 0; index < targets.size(); ++index) {
             const AccelerationResult approximate = barnesHutAcceleration(
@@ -56,6 +64,8 @@ inline std::vector<AccuracyRow> measureThetaAccuracy(
             const double relativeError =
                 length(approximate.acceleration - exactAccelerations[index]) /
                 std::max(length(exactAccelerations[index]), 1.0e-12);
+            squaredError += lengthSquared(approximate.acceleration - exactAccelerations[index]);
+            squaredReference += lengthSquared(exactAccelerations[index]);
             row.meanRelativeError += relativeError;
             row.maximumRelativeError = std::max(row.maximumRelativeError, relativeError);
             row.metrics.visitedNodes += approximate.metrics.visitedNodes;
@@ -63,10 +73,14 @@ inline std::vector<AccuracyRow> measureThetaAccuracy(
             row.metrics.exactInteractions += approximate.metrics.exactInteractions;
         }
         row.meanRelativeError /= double(targets.size());
+        row.absoluteRmsError = std::sqrt(squaredError / double(targets.size()));
+        row.normalizedRmsError = std::sqrt(squaredError / std::max(squaredReference, double(targets.size()) * 1e-24));
         rows.push_back(row);
     }
     return rows;
 }
+
+// [/snippet:measureThetaAccuracy]
 #endif
 
 // Checkpoint 9: scaling study báo cả thời gian lẫn số phép tương tác.
@@ -192,7 +206,7 @@ inline SystemDiagnostics systemDiagnostics(
 
 inline bool allFiniteBodies(std::span<const Body> bodies) {
     return std::all_of(bodies.begin(), bodies.end(), [](const Body& body) {
-        return finiteVector(body.position) && finiteVector(body.velocity) && body.mass > 0.0;
+        return finiteVector(body.position) && finiteVector(body.velocity) && std::isfinite(body.mass) && body.mass > 0.0;
     });
 }
 

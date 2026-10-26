@@ -1,63 +1,24 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Self-force và topology inspector
+# Tìm self-force và lỗi cấu trúc cây
 
 ## Vấn đề cần giải quyết
 
-Opening criterion chỉ xét hình học. Nếu internal node chứa target cũng được approximate, `totalMass` của node bao gồm cả mass target. Ta đã biến target thành một phần của source, và hệ bắt đầu tự tác dụng lực lên chính nó.
-
-Đây là lỗi nguy hiểm vì scene vẫn có thể trông ổn ở vài frame đầu. Checkpoint 7 khóa rule chống self-force và bổ sung inspector độc lập cho storage lẫn aggregate.
+Một cây vẽ đẹp vẫn có thể giữ body hai lần hoặc cộng mass sai ở lá. Một thiên hà chuyển động được cũng chưa chứng minh traversal không tự tác động. Ta cần những phép kiểm có đáp án, trước khi xem runtime.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta dùng một quy tắc dễ chứng minh: **node chứa target luôn mở tiếp**. Khi đi tới leaf, vòng source kiểm `sourceIndex == targetIndex` và bỏ đúng self body. Rule này có thể mở nhiều node hơn một số biến thể Barnes–Hut nâng cao, nhưng phù hợp với project học tập vì correctness path nhìn thấy được.
+Inspector không gọi traversal để tự chứng minh traversal đúng. Nó đọc storage và aggregates, đối chiếu leaf với bodies thật, kiểm bounds/quan hệ cha con và đếm số lần mỗi index xuất hiện. Cây này được cấp phát theo thứ tự cha trước con: child phải có index lớn hơn parent, sâu hơn một mức và có đúng một cha.
 
-Inspector không tin renderer hoặc builder. Nó tự đếm body indices, tính lại child bounds, cộng lại child masses và weighted centers.
+Không được chỉ kiểm root mass bằng tổng child mass: nếu cùng một giá trị sai được lan từ leaf lên root, phép kiểm đó vẫn xanh. Leaf cần một reference độc lập là các body thực trong bucket. COM của leaf có mass khác nhau cũng phải được kiểm.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-self-force" />
 
-Chọn central body và tăng theta. Dù nhiều node xa được aggregate, nhánh chứa body 0 vẫn mở đến leaf. Readout luôn ghi `node chứa target luôn mở tiếp`.
-
 ## Viết code từng bước
 
-### Bước 1 — Đặt self-force guard trước opening test
+### Giữ tên cho từng loại lỗi
 
-```cpp title="include/tree.hpp — contains-target guard"
-const bool containsTarget = pointInsideBounds(bodies[targetIndex].position, node.bounds);
-if (
-    !containsTarget && distanceToCenter > 0.0 &&
-    nodeSize / distanceToCenter < theta
-) {
-```
-
-Inclusive bounds cố ý coi target trên split plane là “contained” ở cả parent và child bounds gặp nhau. Insertion vẫn chọn đúng một child bằng octant bit; traversal thà mở thêm một nhánh còn hơn approximate self mass.
-
-### Bước 2 — Đếm body storage theo index
-
-```cpp title="include/tree.hpp — insertion counts"
-for (const std::size_t bodyIndex : node.bodyIndices) {
-    if (bodyIndex >= bodies.size()) {
-        report.childIndicesValid = false;
-    } else {
-        ++insertionCounts[bodyIndex];
-    }
-}
-```
-
-Sau traversal, mỗi count phải đúng 1. Giá trị 0 là body bị mất; lớn hơn 1 là redistribute đã nhân đôi storage.
-
-### Bước 3 — Tính lại aggregate từ children
-
-```cpp title="include/tree.hpp — inspector aggregate"
-childMass += child.totalMass;
-weightedCenter += child.centerOfMass * child.totalMass;
-```
-
-Sau tám child, inspector so `childMass` với `node.totalMass` và `weightedCenter/childMass` với `node.centerOfMass`.
-
-### Bước 4 — Giữ report theo từng contract
-
-```cpp title="include/tree.hpp — topology report"
+```cpp title="include/tree.hpp — Giữ tên cho từng loại lỗi"
 struct BarnesHutTopologyReport {
     bool everyBodyStoredOnce{true};
     bool internalNodesEmpty{true};
@@ -69,37 +30,140 @@ struct BarnesHutTopologyReport {
 };
 ```
 
-Một boolean chung chỉ nói “có lỗi”. Report này cho biết phải nhìn insertion, topology hay aggregation.
+Không nén mọi kết quả thành một boolean từ đầu. Storage, child indices/bounds, mass, center of mass và statistics là các hợp đồng khác nhau; tên lỗi giúp biết cần mở phần source nào.
+
+### Kiểm cấu trúc mà không duyệt theo cạnh hỏng
+
+```cpp title="include/tree.hpp — Kiểm cấu trúc mà không duyệt theo cạnh hỏng"
+inline BarnesHutTopologyReport inspectMassOctree(
+    const BarnesHutTree& tree,
+    std::span<const Body> bodies
+) {
+    BarnesHutTopologyReport report{};
+    std::vector<int> insertionCounts(bodies.size(), 0);
+    std::vector<int> parentCounts(tree.nodes.size(), 0);
+    std::size_t leaves = 0;
+    std::size_t internalNodes = 0;
+    for (std::size_t nodeIndex = 0; nodeIndex < tree.nodes.size(); ++nodeIndex) {
+        const BarnesHutNode& node = tree.nodes[nodeIndex];
+        if (node.isLeaf()) {
+            ++leaves;
+            double leafMass = 0;
+            Vec3 weightedPosition{};
+            for (const std::size_t bodyIndex : node.bodyIndices) {
+                if (bodyIndex >= bodies.size()) {
+                    report.childIndicesValid = false;
+                } else {
+                    ++insertionCounts[bodyIndex];
+                    leafMass += bodies[bodyIndex].mass;
+                    weightedPosition += bodies[bodyIndex].position * bodies[bodyIndex].mass;
+                    report.childBoundsValid = report.childBoundsValid && pointInsideBounds(bodies[bodyIndex].position, node.bounds);
+                }
+            }
+            report.aggregateMassValid = report.aggregateMassValid && nearlyEqual(leafMass, node.totalMass);
+            if (leafMass > 0) {
+                report.centerOfMassValid = report.centerOfMassValid && length(weightedPosition / leafMass - node.centerOfMass) <= 1e-9;
+            }
+            continue;
+        }
+
+        ++internalNodes;
+        report.internalNodesEmpty = report.internalNodesEmpty && node.bodyIndices.empty();
+        double childMass = 0.0;
+        Vec3 weightedCenter{};
+        for (int octant = 0; octant < 8; ++octant) {
+            const std::size_t childIndex = node.children[octant];
+            if (childIndex >= tree.nodes.size()) {
+                report.childIndicesValid = false;
+                continue;
+            }
+            const BarnesHutNode& child = tree.nodes[childIndex];
+            ++parentCounts[childIndex];
+            report.childIndicesValid = report.childIndicesValid && childIndex > nodeIndex && child.depth == node.depth + 1;
+            report.childBoundsValid = report.childBoundsValid &&
+                sameBounds(child.bounds, barnesHutChildBounds(node.bounds, octant));
+            childMass += child.totalMass;
+            weightedCenter += child.centerOfMass * child.totalMass;
+        }
+        report.aggregateMassValid =
+            report.aggregateMassValid && nearlyEqual(childMass, node.totalMass);
+        if (childMass > 0.0) {
+            report.centerOfMassValid = report.centerOfMassValid &&
+                length(weightedCenter / childMass - node.centerOfMass) <= 1.0e-9;
+        }
+    }
+    report.everyBodyStoredOnce = std::all_of(
+        insertionCounts.begin(),
+        insertionCounts.end(),
+        [](int count) {
+            return count == 1;
+        }
+    );
+    for (std::size_t index = 0; index < parentCounts.size(); ++index) {
+        int expected = 1;
+        if (index == 0) {
+            expected = 0;
+        }
+        report.childIndicesValid = report.childIndicesValid && parentCounts[index] == expected;
+    }
+    report.statisticsMatch = leaves == tree.leafCount &&
+        internalNodes == tree.internalNodeCount &&
+        leaves + internalNodes == tree.nodes.size();
+    return report;
+}
+```
+
+Inspector đi tuyến tính qua vector nodes. Nó không recurse theo một cạnh có thể tạo chu trình. parentCounts và điều kiện childIndex>nodeIndex phát hiện cạnh ngược hoặc node không có cha; leaf được đối chiếu mass/COM bằng body thật.
+
+### Dùng fixture để buộc lỗi lộ ra
+
+```cpp title="tests/tests.cpp — Dùng fixture để buộc lỗi lộ ra"
+void testMassOctreeTopology() {
+    const std::vector<lab::Body> bodies = lab::makeGalaxyBodies(512, 0x31c0ffeeU);
+    const lab::BarnesHutTree tree = lab::buildMassOctree(bodies);
+    const lab::BarnesHutTopologyReport report = lab::inspectMassOctree(tree, bodies);
+    check(report.everyBodyStoredOnce, "each body index appears in exactly one leaf");
+    check(report.internalNodesEmpty, "internal nodes do not retain body indices");
+    check(report.childIndicesValid, "every child index points to an existing node");
+    check(report.childBoundsValid, "child bounds match their octant bits");
+    check(report.aggregateMassValid, "each internal mass equals the sum of child masses");
+    check(report.centerOfMassValid, "each center of mass is a mass-weighted child average");
+    check(report.statisticsMatch, "stored topology matches reported tree statistics");
+    check(
+        near(tree.nodes[0].totalMass, lab::totalMass(bodies)),
+        "root aggregate mass equals total system mass"
+    );
+}
+```
+
+Tests đặt cạnh nhau invariant storage và aggregate. Hãy bổ sung fixture tính tay với mass khác nhau; không chỉ dùng hàng trăm body cùng mass rồi xem mọi cờ đều true. CTest mặc định build final/include nên vẫn chạy được toàn bộ tests ở cuối khóa.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 7"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --target project_31_checkpoint_7 project_31_tests
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
+Ở C++, V chạy inspector và đưa từng nhóm kết quả lên dòng trạng thái. Canvas có nút Kiểm cây và self-force. Fixture một body kiểm force bằng 0, còn fixture hai/ba body kiểm số cụ thể. Những phép kiểm này không thay cho việc thử input, camera và pause trên cửa sổ thật.
+
+Trước khi chạy, dự đoán inspector nào sẽ báo lỗi nếu sửa mass của một leaf nhưng không sửa root. Sau đó dự đoán trường hợp sửa cả leaf lẫn tổ tiên cùng một lượng.
+
+```bash title="Terminal — checkpoint 07"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_31_checkpoint_7
 ```
 
-CTest có one-body case, split policy, body storage và aggregate checks. Những test này không mở SDL window.
+Trên Windows chạy ./build/Debug/project_31_checkpoint_7.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Xóa `!containsTarget`. One-body tree có thể tạo acceleration sai khi leaf handling cũng bị aggregate hóa.
-2. So center of mass bằng `==`. Thứ tự cộng floating point khác nhau tạo false failure; dùng tolerance nhỏ.
-3. Cho inspector gọi lại `accumulateNodeMass` rồi so chính dữ liệu nó vừa ghi. Builder và validator dùng chung lỗi, nên test mất ý nghĩa.
+Trong một bản tree dùng riêng cho test, tăng totalMass ở leaf thêm 100. Nếu chỉ so parent với children, có thể bỏ sót khi lỗi được lan lên. Đổi child index trỏ về parent để kiểm inspector báo lỗi và kết thúc. Đừng gọi force traversal trên cây cố ý có chu trình.
 
 ## Tự kiểm tra kết quả
 
-- One-body direct và Barnes–Hut đều trả zero acceleration.
-- One-body traversal không có approximated node.
-- Mỗi body index xuất hiện đúng một leaf.
-- Internal nodes không giữ body indices.
-- Child index/bounds khớp octant policy.
-- Parent mass và center of mass khớp tổng children trong tolerance.
-- Leaf + internal count bằng node count.
-- Topology report không phụ thuộc camera hoặc màu wireframe.
+- Fixture mass/COM khác nhau khớp tính tay trong tolerance công bố.
+- Sửa leaf mass, duplicate body index hoặc child index làm đúng cờ kiểm tra chuyển false.
+- Inspector kết thúc với cạnh tự trỏ, không recurse theo đồ thị hỏng.
+- 256 position trùng nhau kết thúc trong giới hạn depth và không sinh NaN/self-force.
 
 ## Bài tập mở rộng
 
-Tạo tám body đúng trên ba split planes quanh origin và in leaf index của từng body. Sau đó chọn từng target, chạy theta 1,2 và xác nhận nhánh chứa target vẫn mở.
+Viết ca một body bị thiếu khỏi mọi leaf và ca một child có hai parent. Kiểm report cho biết vấn đề cấu trúc, không chỉ báo một sai số lực rất lớn.
 
-Khi topology và self-force đã có test, bài tiếp theo mới định lượng sai số do theta.
+Bài tiếp theo: [Đo sai số lực trên cùng một snapshot](/projects/barnes-hut-nbody/08-theta-accuracy-sweep).

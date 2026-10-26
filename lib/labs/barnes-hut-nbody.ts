@@ -68,6 +68,8 @@ export interface AccuracyRow {
   visitedNodes: number;
   approximatedNodes: number;
   exactInteractions: number;
+  absoluteRmsError: number;
+  normalizedRmsError: number;
 }
 
 export interface SystemDiagnostics {
@@ -79,7 +81,7 @@ export interface SystemDiagnostics {
 }
 
 const ZERO: Vec3 = { x: 0, y: 0, z: 0 };
-const MAXIMUM_NODE_COUNT = 1_000_000;
+const MAXIMUM_NODE_COUNT = 262145;
 
 function add(a: Vec3, b: Vec3): Vec3 {
   return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
@@ -127,6 +129,7 @@ class XorShift32 {
 }
 
 export function makeGalaxyBodies(count: number, seed: number): Body3D[] {
+  if (!Number.isFinite(count) || count < 1 || count > 8192) throw new Error("Body budget: 1..8192");
   const safeCount = Math.max(1, Math.floor(count));
   const random = new XorShift32(seed);
   const bodies: Body3D[] = [
@@ -141,8 +144,8 @@ export function makeGalaxyBodies(count: number, seed: number): Body3D[] {
     const radius = 0.08 + Math.sqrt(random.unit()) * 0.9;
     const angle = random.unit() * Math.PI * 2;
     const thickness = (random.unit() - 0.5) * 0.08 * (1.1 - radius);
-    const mass = 0.35 + random.unit() * 1.3;
-    const orbitalSpeed = Math.sqrt((120 + index * 0.45) / Math.max(radius, 0.04)) * 0.055;
+    const mass = ((0.7 + random.unit() * 0.6) * 120) / (safeCount - 1);
+    const orbitalSpeed = Math.sqrt((0.001 * (120 + 120 * radius * radius)) / radius);
     const speedJitter = 0.92 + random.unit() * 0.16;
     bodies.push({
       position: {
@@ -161,7 +164,9 @@ export function makeGalaxyBodies(count: number, seed: number): Body3D[] {
 
   let momentum = { ...ZERO };
   for (const body of bodies) momentum = add(momentum, scale(body.velocity, body.mass));
-  bodies[0].velocity = scale(momentum, -1 / bodies[0].mass);
+  const systemMass = bodies.reduce((sum, body) => sum + body.mass, 0);
+  const bulkVelocity = scale(momentum, 1 / systemMass);
+  for (const body of bodies) body.velocity = subtract(body.velocity, bulkVelocity);
   return bodies;
 }
 
@@ -309,6 +314,19 @@ export function buildMassOctree(
   bodies: readonly Body3D[],
   config: BarnesHutConfig = { leafCapacity: 1, maximumDepth: 16, minimumNodeSize: 1e-6 },
 ): BarnesHutTree {
+  if (
+    bodies.length > 8192 ||
+    !Number.isInteger(config.leafCapacity) ||
+    config.leafCapacity < 1 ||
+    !Number.isInteger(config.maximumDepth) ||
+    config.maximumDepth < 1 ||
+    config.maximumDepth > 20 ||
+    !Number.isFinite(config.minimumNodeSize) ||
+    config.minimumNodeSize <= 0 ||
+    !allFiniteBodies(bodies)
+  ) {
+    throw new Error("Invalid tree budget/configuration/state");
+  }
   const nodes = [emptyNode(cubicBoundsForBodies(bodies), 0)];
   for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex += 1) {
     insertBody(nodes, bodies, bodyIndex, 0, config);
@@ -358,6 +376,13 @@ export function directAcceleration(
   gravitationalConstant: number,
   softening: number,
 ): AccelerationResult {
+  if (!bodies[targetIndex])
+    return {
+      acceleration: { ...ZERO },
+      visitedNodes: 0,
+      approximatedNodes: 0,
+      exactInteractions: 0,
+    };
   let acceleration = { ...ZERO };
   let exactInteractions = 0;
   for (let sourceIndex = 0; sourceIndex < bodies.length; sourceIndex += 1) {
@@ -384,6 +409,7 @@ export function barnesHutAcceleration(
   theta: number,
   gravitationalConstant: number,
   softening: number,
+  trace?: { opened: number[]; accepted: number[] },
 ): AccelerationResult {
   const metrics: AccelerationResult = {
     acceleration: { ...ZERO },
@@ -433,9 +459,11 @@ export function barnesHutAcceleration(
         ),
       );
       metrics.approximatedNodes += 1;
+      trace?.accepted.push(nodeIndex);
       return;
     }
 
+    trace?.opened.push(nodeIndex);
     for (const childIndex of node.children) visit(childIndex);
   };
 
@@ -448,6 +476,7 @@ export function inspectMassOctree(
   bodies: readonly Body3D[],
 ): BarnesHutTopologyReport {
   const insertionCounts = Array.from({ length: bodies.length }, () => 0);
+  const parentCounts = new Array(tree.nodes.length).fill(0);
   let internalNodesEmpty = true;
   let childIndicesValid = true;
   let childBoundsValid = true;
@@ -461,10 +490,27 @@ export function inspectMassOctree(
     const node = tree.nodes[nodeIndex];
     if (node.children === null) {
       countedLeaves += 1;
+      let leafMass = 0;
+      let weightedPosition = { ...ZERO };
       for (const bodyIndex of node.bodyIndices) {
-        if (bodyIndex >= bodies.length) childIndicesValid = false;
-        else insertionCounts[bodyIndex] += 1;
+        if (!Number.isInteger(bodyIndex) || bodyIndex < 0 || bodyIndex >= bodies.length)
+          childIndicesValid = false;
+        else {
+          insertionCounts[bodyIndex] += 1;
+          leafMass += bodies[bodyIndex].mass;
+          weightedPosition = add(
+            weightedPosition,
+            scale(bodies[bodyIndex].position, bodies[bodyIndex].mass),
+          );
+          childBoundsValid =
+            childBoundsValid && pointInsideBounds(bodies[bodyIndex].position, node.bounds);
+        }
       }
+      aggregateMassValid = aggregateMassValid && Math.abs(leafMass - node.totalMass) <= tolerance;
+      if (leafMass > 0)
+        centerOfMassValid =
+          centerOfMassValid &&
+          length(subtract(scale(weightedPosition, 1 / leafMass), node.centerOfMass)) <= tolerance;
       continue;
     }
 
@@ -474,11 +520,14 @@ export function inspectMassOctree(
     let weightedCenter = { ...ZERO };
     for (let octant = 0; octant < 8; octant += 1) {
       const childIndex = node.children[octant];
-      if (childIndex >= tree.nodes.length) {
+      if (!Number.isInteger(childIndex) || childIndex < 0 || childIndex >= tree.nodes.length) {
         childIndicesValid = false;
         continue;
       }
       const child = tree.nodes[childIndex];
+      parentCounts[childIndex]++;
+      childIndicesValid =
+        childIndicesValid && childIndex > nodeIndex && child.depth === node.depth + 1;
       const expected = barnesHutChildBounds(node.bounds, octant);
       childBoundsValid =
         childBoundsValid &&
@@ -502,7 +551,8 @@ export function inspectMassOctree(
   return {
     everyBodyStoredOnce: insertionCounts.every((count) => count === 1),
     internalNodesEmpty,
-    childIndicesValid,
+    childIndicesValid:
+      childIndicesValid && parentCounts.every((count, index) => count === (index === 0 ? 0 : 1)),
     childBoundsValid,
     aggregateMassValid,
     centerOfMassValid,
@@ -520,6 +570,7 @@ export function measureThetaAccuracy(
   gravitationalConstant: number,
   softening: number,
 ): AccuracyRow[] {
+  if (bodies.length === 0) return [];
   const tree = buildMassOctree(bodies);
   const count = Math.min(Math.max(1, Math.floor(sampleCount)), bodies.length);
   const targets = Array.from({ length: count }, (_, index) =>
@@ -530,6 +581,8 @@ export function measureThetaAccuracy(
   );
 
   return thetaValues.map((theta) => {
+    let squaredError = 0;
+    let squaredReference = 0;
     let totalRelativeError = 0;
     let maximumRelativeError = 0;
     let visitedNodes = 0;
@@ -548,6 +601,8 @@ export function measureThetaAccuracy(
         subtract(approximate.acceleration, exact[sampleIndex].acceleration),
       );
       const relativeError = difference / Math.max(length(exact[sampleIndex].acceleration), 1e-12);
+      squaredError += difference * difference;
+      squaredReference += lengthSquared(exact[sampleIndex].acceleration);
       totalRelativeError += relativeError;
       maximumRelativeError = Math.max(maximumRelativeError, relativeError);
       visitedNodes += approximate.visitedNodes;
@@ -561,6 +616,8 @@ export function measureThetaAccuracy(
       visitedNodes,
       approximatedNodes,
       exactInteractions,
+      absoluteRmsError: Math.sqrt(squaredError / count),
+      normalizedRmsError: Math.sqrt(squaredError / Math.max(squaredReference, count * 1e-24)),
     };
   });
 }
@@ -635,6 +692,10 @@ export function systemDiagnostics(
 
 export function allFiniteBodies(bodies: readonly Body3D[]) {
   return bodies.every(
-    (body) => finiteVector(body.position) && finiteVector(body.velocity) && body.mass > 0,
+    (body) =>
+      finiteVector(body.position) &&
+      finiteVector(body.velocity) &&
+      Number.isFinite(body.mass) &&
+      body.mass > 0,
   );
 }

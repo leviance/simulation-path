@@ -1,823 +1,593 @@
 "use client";
-
 import {
+  lazy,
+  Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
+  type PointerEvent,
+  type KeyboardEvent,
 } from "react";
 import {
-  barnesHutAcceleration,
-  buildMassOctree,
-  directAcceleration,
-  inspectMassOctree,
-  makeGalaxyBodies,
-  measureThetaAccuracy,
-  softenedAcceleration,
-  stepBodiesSymplecticEuler,
-  systemDiagnostics,
-  type AccuracyRow,
-  type BarnesHutTree,
-  type Body3D,
-  type SystemDiagnostics,
-  type Vec3,
-} from "@/lib/labs/barnes-hut-nbody";
-import { projectPointWithOrbit } from "@/lib/labs/octree";
-import { LabReadout, setupCanvas, useCanvasSize, useReducedMotion } from "./lab-shared";
+  createGalaxy,
+  modes,
+  tickPhysics,
+  invalidateExperiment,
+  cancelPhysics,
+  selectedForce,
+  vectorLength,
+  validateGalaxy,
+  type Camera,
+} from "@/lib/labs/galaxy/scene";
+import type { GalaxyJob } from "@/lib/labs/galaxy/jobs";
+import {
+  LabReadout,
+  setupCanvas,
+  useCanvasSize,
+  useReducedMotion,
+  usePauseOnReducedMotion,
+} from "./lab-shared";
+import { drawGalaxy, pickGalaxy } from "./galaxy-view";
+import type { GalaxyAction } from "./galaxy-controls";
 import type { InteractiveLabMode } from "./types";
+const GalaxyControls = lazy(() => import("./galaxy-controls"));
+const GalaxyResults = lazy(() => import("./galaxy-results"));
+const loadJobs = () => import("@/lib/labs/galaxy/jobs");
 
-const DEFAULT_SEED = 0x31c0ffee;
-const GRAVITATIONAL_CONSTANT = 0.001;
-const FIXED_DELTA_SECONDS = 1 / 240;
-const THETA_PRESETS = [0.25, 0.5, 0.8, 1.1] as const;
-
-interface Projection {
-  x: number;
-  y: number;
-  depth: number;
-  visible: boolean;
+export default function BarnesHutNbodyLab({ mode }: { mode?: InteractiveLabMode }) {
+  return <Galaxy key={mode ?? "overview"} mode={mode} />;
 }
-
-interface ScalingRow {
-  count: number;
-  directMilliseconds: number;
-  barnesHutMilliseconds: number;
-  directInteractions: number;
-  barnesHutWork: number;
-}
-
-function magnitude(vector: Vec3) {
-  return Math.hypot(vector.x, vector.y, vector.z);
-}
-
-function projectToCanvas(
-  point: Vec3,
-  yaw: number,
-  pitch: number,
-  distance: number,
-  width: number,
-  height: number,
-): Projection {
-  const normalizedPoint = {
-    x: point.x * 0.5 + 0.5,
-    y: point.y * 0.5 + 0.5,
-    z: point.z * 0.5 + 0.5,
-  };
-  const projected = projectPointWithOrbit(normalizedPoint, {
-    yaw,
-    pitch,
-    distance,
-    fieldOfViewRadians: Math.PI / 3,
-    aspect: width / Math.max(1, height),
-    nearPlane: 0.1,
-  });
-  const scale = Math.min(width, height) * 0.84;
-  return {
-    x: width * 0.5 + projected.x * scale * 0.5,
-    y: height * 0.47 - projected.y * scale * 0.5,
-    depth: projected.depth,
-    visible: projected.visible,
-  };
-}
-
-function drawNodeBounds(
-  context: CanvasRenderingContext2D,
-  tree: BarnesHutTree,
-  yaw: number,
-  pitch: number,
-  distance: number,
-  width: number,
-  height: number,
-) {
-  const leaves = tree.nodes.filter((node) => node.children === null && node.totalMass > 0);
-  const stride = Math.max(1, Math.ceil(leaves.length / 900));
-  leaves.forEach((node, leafIndex) => {
-    if (leafIndex % stride !== 0) return;
-    const minimum = node.bounds.minimum;
-    const maximum = node.bounds.maximum;
-    const corners = [
-      { x: minimum.x, y: minimum.y, z: minimum.z },
-      { x: maximum.x, y: minimum.y, z: minimum.z },
-      { x: maximum.x, y: maximum.y, z: minimum.z },
-      { x: minimum.x, y: maximum.y, z: minimum.z },
-      { x: minimum.x, y: minimum.y, z: maximum.z },
-      { x: maximum.x, y: minimum.y, z: maximum.z },
-      { x: maximum.x, y: maximum.y, z: maximum.z },
-      { x: minimum.x, y: maximum.y, z: maximum.z },
-    ].map((point) => projectToCanvas(point, yaw, pitch, distance, width, height));
-    const edges = [
-      [0, 1],
-      [1, 2],
-      [2, 3],
-      [3, 0],
-      [4, 5],
-      [5, 6],
-      [6, 7],
-      [7, 4],
-      [0, 4],
-      [1, 5],
-      [2, 6],
-      [3, 7],
-    ] as const;
-    context.strokeStyle = `rgba(97, 175, 239, ${Math.min(0.5, 0.12 + node.depth * 0.035)})`;
-    context.lineWidth = 0.8;
-    context.beginPath();
-    for (const [startIndex, endIndex] of edges) {
-      const start = corners[startIndex];
-      const end = corners[endIndex];
-      if (!start.visible || !end.visible) continue;
-      context.moveTo(start.x, start.y);
-      context.lineTo(end.x, end.y);
+function Galaxy({ mode }: { mode?: string }) {
+  const found = modes.indexOf(mode as (typeof modes)[number]),
+    stage = found < 0 ? 10 : found + 1;
+  const [scene, setScene] = useState(() => createGalaxy(stage)),
+    model = useRef(scene);
+  const [job, setJob] = useState<GalaxyJob | null>(null),
+    jobRef = useRef(job);
+  const jobsRuntime = useRef<Awaited<ReturnType<typeof loadJobs>> | null>(null);
+  const requestEpoch = useRef(0),
+    mounted = useRef(true);
+  const [loadingJob, setLoadingJob] = useState(false);
+  const [tool, setTool] = useState<"orbit" | "pan">("orbit");
+  const canvasRef = useRef<HTMLCanvasElement>(null),
+    reduced = useReducedMotion();
+  const gesture = useRef<{
+    id: number;
+    x: number;
+    y: number;
+    startX: number;
+    startY: number;
+    before: Camera;
+  } | null>(null);
+  const publish = useCallback(() => setScene({ ...model.current }), []);
+  const publishJob = useCallback((value: GalaxyJob | null) => {
+    jobRef.current = value;
+    setJob(value ? { ...value } : null);
+  }, []);
+  const release = useCallback((rollback = false) => {
+    const active = gesture.current;
+    gesture.current = null;
+    if (!active) return;
+    if (rollback) model.current.camera = active.before;
+    const canvas = canvasRef.current;
+    if (canvas?.hasPointerCapture(active.id)) canvas.releasePointerCapture(active.id);
+  }, []);
+  const stop = useCallback(() => {
+    requestEpoch.current++;
+    setLoadingJob(false);
+    model.current.paused = true;
+    release();
+    if (jobRef.current) {
+      jobRef.current.paused = true;
+      publishJob(jobRef.current);
     }
-    context.stroke();
-  });
-}
-
-function drawAccuracyGraph(
-  context: CanvasRenderingContext2D,
-  rows: readonly AccuracyRow[],
-  width: number,
-  height: number,
-) {
-  if (rows.length === 0) return;
-  const left = 40;
-  const right = width - 28;
-  const top = height - 132;
-  const bottom = height - 28;
-  const maximumError = Math.max(...rows.map((row) => row.meanRelativeError), 1e-6);
-  const maximumWork = Math.max(
-    ...rows.map((row) => row.exactInteractions + row.approximatedNodes),
-    1,
+    publish();
+  }, [publish, publishJob, release]);
+  const size = useCanvasSize(canvasRef, stop);
+  usePauseOnReducedMotion(stop);
+  const helpId = "galaxy-help-" + (mode ?? "overview");
+  const startMeasurement = useCallback(
+    async (kind: GalaxyJob["kind"]) => {
+      const current = model.current;
+      const revision = current.revision;
+      const request = ++requestEpoch.current;
+      cancelPhysics(current);
+      publishJob(null);
+      setLoadingJob(true);
+      current.notice = "Đang tải phép đo; camera vẫn sử dụng được.";
+      publish();
+      try {
+        const runtime = jobsRuntime.current ?? (await loadJobs());
+        if (
+          !mounted.current ||
+          requestEpoch.current !== request ||
+          model.current !== current ||
+          current.revision !== revision
+        )
+          return;
+        jobsRuntime.current = runtime;
+        setLoadingJob(false);
+        publishJob(runtime.startGalaxyJob(current, kind));
+        current.notice =
+          "Vật lý tạm dừng trong khi đo. Xem tiến độ và kết quả trong bảng bên dưới.";
+        publish();
+      } catch {
+        if (mounted.current && requestEpoch.current === request) {
+          setLoadingJob(false);
+          current.notice = "Không tải được phép đo. Bạn có thể thử lại hoặc đặt lại preset.";
+          publish();
+        }
+      }
+    },
+    [publish, publishJob],
   );
-  const slotWidth = (right - left) / rows.length;
-
-  context.fillStyle = "rgba(11, 16, 32, 0.9)";
-  context.fillRect(left - 20, top - 20, right - left + 40, bottom - top + 40);
-  context.strokeStyle = "#42516b";
-  context.beginPath();
-  context.moveTo(left, top);
-  context.lineTo(left, bottom);
-  context.lineTo(right, bottom);
-  context.stroke();
-
-  context.font = "11px ui-monospace, monospace";
-  context.fillStyle = "#e5c07b";
-  context.fillText("mean error", left + 4, top + 11);
-  context.fillStyle = "#98c379";
-  context.fillText("● work", left + 92, top + 11);
-  rows.forEach((row, index) => {
-    const centerX = left + slotWidth * (index + 0.5);
-    const errorHeight = (row.meanRelativeError / maximumError) * (bottom - top - 18);
-    context.fillStyle = "rgba(229, 192, 123, 0.76)";
-    context.fillRect(centerX - 14, bottom - errorHeight, 28, errorHeight);
-    const work = row.exactInteractions + row.approximatedNodes;
-    const workY = bottom - (work / maximumWork) * (bottom - top - 18);
-    context.fillStyle = "#98c379";
-    context.beginPath();
-    context.arc(centerX, workY, 4, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = "#abb2bf";
-    context.textAlign = "center";
-    context.fillText(row.theta.toFixed(2), centerX, bottom + 15);
-  });
-  context.textAlign = "start";
-}
-
-export default function BarnesHutNBodyLab({ mode }: { mode?: InteractiveLabMode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const activePointerId = useRef<number | null>(null);
-  const previousPointer = useRef<{ x: number; y: number } | null>(null);
-  const animationFrame = useRef<number | null>(null);
-  const previousTimestamp = useRef<number | null>(null);
-  const accumulator = useRef(0);
-  const size = useCanvasSize(canvasRef);
-  const reducedMotion = useReducedMotion();
-  const diagnosticsEnabled = mode === "nbody-validation" || !mode;
-  const [bodyCount, setBodyCount] = useState(512);
-  const [bodies, setBodies] = useState<Body3D[]>(() => makeGalaxyBodies(512, DEFAULT_SEED));
-  const [theta, setTheta] = useState(0.5);
-  const [softening, setSoftening] = useState(0.02);
-  const [selectedBody, setSelectedBody] = useState(1);
-  const [useBarnesHut, setUseBarnesHut] = useState(true);
-  const [paused, setPaused] = useState(true);
-  const [yaw, setYaw] = useState(0.45);
-  const [pitch, setPitch] = useState(-0.52);
-  const [distance, setDistance] = useState(2.5);
-  const [capturing, setCapturing] = useState(false);
-  const [accuracyRows, setAccuracyRows] = useState<AccuracyRow[]>([]);
-  const [scalingRows, setScalingRows] = useState<ScalingRow[]>([]);
-  const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(() =>
-    diagnosticsEnabled
-      ? systemDiagnostics(makeGalaxyBodies(512, DEFAULT_SEED), GRAVITATIONAL_CONSTANT, 0.02)
-      : null,
+  const act = useCallback(
+    (action: GalaxyAction, value = 0) => {
+      const current = model.current;
+      if (action === "run") {
+        requestEpoch.current++;
+        setLoadingJob(false);
+        if (jobRef.current?.active) {
+          jobRef.current.paused = !jobRef.current.paused;
+          publishJob(jobRef.current);
+        } else if (!reduced) {
+          current.paused = !current.paused;
+          publish();
+        }
+        return;
+      }
+      if (action === "camera") {
+        current.camera = { yaw: 0.45, pitch: -0.52, distance: 2.5, x: 0, y: 0 };
+        publish();
+        return;
+      }
+      if (action === "debug") {
+        current.debug = !current.debug;
+        publish();
+        return;
+      }
+      if (action === "validate") {
+        current.notice = Object.entries(validateGalaxy(current))
+          .map(([name, valid]) => name + ": " + (valid ? "đạt" : "LỖI"))
+          .join(" · ");
+        publish();
+        return;
+      }
+      if (action === "selected" && Number.isFinite(value)) {
+        current.selected = Math.max(0, Math.min(current.bodies.length - 1, Math.floor(value)));
+        publish();
+        return;
+      }
+      if (action === "cancel") {
+        requestEpoch.current++;
+        setLoadingJob(false);
+        cancelPhysics(current);
+        current.notice = "Đã hủy tác vụ; trạng thái vật lý đã hoàn tất gần nhất được giữ nguyên.";
+        if (jobRef.current) {
+          jobRef.current.active = false;
+          jobRef.current.notice =
+            "Đã hủy; các dòng đã tính xong được giữ lại, thí nghiệm chưa hoàn tất.";
+          publishJob(jobRef.current);
+        }
+        publish();
+        return;
+      }
+      release();
+      if (["sweep", "runtime", "energy", "dtStudy"].includes(action)) {
+        const kind = action === "dtStudy" ? "dt" : action;
+        void startMeasurement(kind as GalaxyJob["kind"]);
+        return;
+      }
+      requestEpoch.current++;
+      setLoadingJob(false);
+      publishJob(null);
+      if (action === "preset" || action === "reset") {
+        const next = createGalaxy(stage, action === "preset" ? value : current.preset);
+        next.theta = current.theta;
+        next.epsilon = current.epsilon;
+        next.dt = current.dt;
+        next.revision = current.revision + 1;
+        model.current = next;
+        publish();
+        return;
+      }
+      if (action === "step") {
+        cancelPhysics(current);
+        current.singleStep = true;
+        publish();
+        return;
+      }
+      invalidateExperiment(current);
+      if (action === "theta" && Number.isFinite(value))
+        current.theta = Math.max(0.05, Math.min(1.2, value));
+      if (action === "epsilon" && Number.isFinite(value))
+        current.epsilon = Math.max(0.005, Math.min(0.08, value));
+      if (action === "dt" && [1 / 60, 1 / 120, 1 / 240].includes(value)) current.dt = value;
+      if (action === "direct") {
+        if (value === 1 && current.bodies.length > 256)
+          current.notice =
+            "Direct simulation chỉ chạy ở N≤256; reference lực hệ lớn vẫn đọc toàn bộ sources.";
+        else current.direct = value === 1;
+      }
+      publish();
+    },
+    [publish, publishJob, reduced, release, stage, startMeasurement],
   );
-
-  const showPairForce = mode !== "nbody-scene";
-  const showDirect = mode !== "nbody-scene" && mode !== "nbody-pair-force";
-  const showSimulation =
-    mode === "nbody-fixed-step" ||
-    mode === "nbody-mass-tree" ||
-    mode === "nbody-opening" ||
-    mode === "nbody-self-force" ||
-    mode === "nbody-accuracy" ||
-    mode === "nbody-scaling" ||
-    mode === "nbody-validation" ||
-    !mode;
-  const showTree =
-    mode === "nbody-mass-tree" ||
-    mode === "nbody-opening" ||
-    mode === "nbody-self-force" ||
-    mode === "nbody-accuracy" ||
-    mode === "nbody-scaling" ||
-    mode === "nbody-validation" ||
-    !mode;
-  const showBarnesHut =
-    mode === "nbody-opening" ||
-    mode === "nbody-self-force" ||
-    mode === "nbody-accuracy" ||
-    mode === "nbody-scaling" ||
-    mode === "nbody-validation" ||
-    !mode;
-  const showTopology =
-    mode === "nbody-self-force" ||
-    mode === "nbody-accuracy" ||
-    mode === "nbody-scaling" ||
-    mode === "nbody-validation" ||
-    !mode;
-  const showAccuracy =
-    mode === "nbody-accuracy" || mode === "nbody-scaling" || mode === "nbody-validation" || !mode;
-  const showScaling = mode === "nbody-scaling" || mode === "nbody-validation" || !mode;
-  const showDiagnostics = diagnosticsEnabled;
-  const simulateWithBarnesHut = showBarnesHut && useBarnesHut;
-  const captureDiagnostics = (snapshot = bodies, epsilon = softening) => {
-    if (!showDiagnostics) return;
-    setDiagnostics(
-      systemDiagnostics(
-        snapshot.slice(0, Math.min(512, snapshot.length)),
-        GRAVITATIONAL_CONSTANT,
-        epsilon,
-      ),
-    );
-  };
-  const tree = useMemo(() => buildMassOctree(bodies), [bodies]);
-  const topology = useMemo(() => inspectMassOctree(tree, bodies), [bodies, tree]);
-  const topologyValid = Object.values(topology).every(Boolean);
-  const safeSelectedBody = Math.min(selectedBody, bodies.length - 1);
-  const exactResult = useMemo(
-    () => directAcceleration(bodies, safeSelectedBody, GRAVITATIONAL_CONSTANT, softening),
-    [bodies, safeSelectedBody, softening],
-  );
-  const pairAcceleration = useMemo(
-    () =>
-      softenedAcceleration(
-        bodies[safeSelectedBody].position,
-        bodies[0].position,
-        bodies[0].mass,
-        GRAVITATIONAL_CONSTANT,
-        softening,
-      ),
-    [bodies, safeSelectedBody, softening],
-  );
-  const approximateResult = useMemo(
-    () =>
-      barnesHutAcceleration(
-        tree,
-        bodies,
-        safeSelectedBody,
-        theta,
-        GRAVITATIONAL_CONSTANT,
-        softening,
-      ),
-    [bodies, safeSelectedBody, softening, theta, tree],
-  );
-  const relativeError =
-    Math.hypot(
-      approximateResult.acceleration.x - exactResult.acceleration.x,
-      approximateResult.acceleration.y - exactResult.acceleration.y,
-      approximateResult.acceleration.z - exactResult.acceleration.z,
-    ) / Math.max(magnitude(exactResult.acceleration), 1e-12);
-  const advanceOneStep = () => {
-    const nextBodies = stepBodiesSymplecticEuler(
-      bodies,
-      FIXED_DELTA_SECONDS,
-      theta,
-      GRAVITATIONAL_CONSTANT,
-      softening,
-      simulateWithBarnesHut,
-    );
-    setBodies(nextBodies);
-    captureDiagnostics(nextBodies);
-    setAccuracyRows([]);
-    setScalingRows([]);
-  };
-
+  const active =
+    (!scene.paused && stage >= 4) || scene.singleStep || !!(job?.active && !job.paused);
   useEffect(() => {
-    if (paused || reducedMotion) {
-      previousTimestamp.current = null;
-      accumulator.current = 0;
-      if (animationFrame.current !== null) cancelAnimationFrame(animationFrame.current);
-      animationFrame.current = null;
+    if (!active) return;
+    let frame = 0,
+      disposed = false;
+    const tick = () => {
+      if (disposed) return;
+      const current = model.current,
+        measurement = jobRef.current;
+      if (measurement?.active && !measurement.paused) {
+        jobsRuntime.current?.tickGalaxyJob(measurement, current.revision);
+        if (!measurement.active && measurement.energy) {
+          current.history.push(measurement.energy);
+          if (current.history.length > 64) current.history.shift();
+        }
+        publishJob(measurement);
+      } else if (stage >= 4 && (!current.paused || current.singleStep) && !measurement?.active) {
+        if (tickPhysics(current) && measurement) publishJob(null);
+      }
+      publish();
+      if (!disposed) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [active, publish, publishJob, stage]);
+  useEffect(() => {
+    const epoch = requestEpoch;
+    mounted.current = true;
+    const hidden = () => {
+      if (document.hidden) stop();
+    };
+    window.addEventListener("blur", stop);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      mounted.current = false;
+      epoch.current++;
+      window.removeEventListener("blur", stop);
+      document.removeEventListener("visibilitychange", hidden);
+      release();
+      model.current.physics = null;
+      if (jobRef.current) jobRef.current.active = false;
+    };
+  }, [stop, release]);
+  const { bodies, selected, theta, epsilon, tree } = scene;
+  const force = useMemo(
+    () => selectedForce({ bodies, selected, theta, epsilon, tree }),
+    [bodies, selected, theta, epsilon, tree],
+  );
+  useEffect(() => {
+    const context = canvasRef.current?.getContext("2d");
+    if (context) {
+      setupCanvas(context, size);
+      drawGalaxy(context, size.width, size.height, scene, force);
+    }
+  }, [size, scene, force]);
+  const applyGesture = useCallback(
+    (event: PointerEvent<HTMLCanvasElement>) => {
+      const active = gesture.current;
+      if (
+        !active ||
+        active.id !== event.pointerId ||
+        !Number.isFinite(event.clientX) ||
+        !Number.isFinite(event.clientY)
+      )
+        return;
+      const rect = event.currentTarget.getBoundingClientRect(),
+        x = event.clientX - rect.left,
+        y = event.clientY - rect.top;
+      const camera = model.current.camera,
+        dx = x - active.x,
+        dy = y - active.y;
+      if (tool === "orbit") {
+        camera.yaw += dx * 0.006;
+        camera.pitch = Math.max(-1.4, Math.min(1.4, camera.pitch + dy * 0.006));
+      } else {
+        camera.x -= (dx * camera.distance) / size.height;
+        camera.y += (dy * camera.distance) / size.height;
+      }
+      active.x = x;
+      active.y = y;
+      publish();
+    },
+    [publish, size.height, tool],
+  );
+  const down = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (
+      !event.isPrimary ||
+      event.button !== 0 ||
+      gesture.current ||
+      !Number.isFinite(event.clientX) ||
+      !Number.isFinite(event.clientY)
+    )
+      return;
+    const rect = event.currentTarget.getBoundingClientRect(),
+      x = event.clientX - rect.left,
+      y = event.clientY - rect.top;
+    event.currentTarget.focus();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
       return;
     }
-
-    const animate = (timestamp: number) => {
-      const previous = previousTimestamp.current ?? timestamp;
-      const frameSeconds = Math.min(0.05, (timestamp - previous) / 1000);
-      previousTimestamp.current = timestamp;
-      accumulator.current += frameSeconds;
-      let steps = 0;
-      while (accumulator.current >= FIXED_DELTA_SECONDS && steps < 4) {
-        accumulator.current -= FIXED_DELTA_SECONDS;
-        steps += 1;
-      }
-      if (accumulator.current >= FIXED_DELTA_SECONDS) {
-        accumulator.current %= FIXED_DELTA_SECONDS;
-      }
-      if (steps > 0) {
-        setBodies((current) => {
-          let next = current;
-          for (let step = 0; step < steps; step += 1) {
-            next = stepBodiesSymplecticEuler(
-              next,
-              FIXED_DELTA_SECONDS,
-              theta,
-              GRAVITATIONAL_CONSTANT,
-              softening,
-              simulateWithBarnesHut,
-            );
-          }
-          return next;
-        });
-        setAccuracyRows((current) => (current.length === 0 ? current : []));
-        setScalingRows((current) => (current.length === 0 ? current : []));
-      }
-      animationFrame.current = requestAnimationFrame(animate);
+    gesture.current = {
+      id: event.pointerId,
+      x,
+      y,
+      startX: x,
+      startY: y,
+      before: { ...model.current.camera },
     };
-    animationFrame.current = requestAnimationFrame(animate);
-    return () => {
-      if (animationFrame.current !== null) cancelAnimationFrame(animationFrame.current);
-      animationFrame.current = null;
-      previousTimestamp.current = null;
-    };
-  }, [paused, reducedMotion, simulateWithBarnesHut, softening, theta]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    setupCanvas(context, size);
-    context.fillStyle = "#0b1020";
-    context.fillRect(0, 0, size.width, size.height);
-
-    if (showTree) drawNodeBounds(context, tree, yaw, pitch, distance, size.width, size.height);
-    const projected = bodies.map((body, index) => ({
-      index,
-      mass: body.mass,
-      projection: projectToCanvas(body.position, yaw, pitch, distance, size.width, size.height),
-    }));
-    projected.sort((left, right) => right.projection.depth - left.projection.depth);
-    for (const item of projected) {
-      if (!item.projection.visible) continue;
-      const selected = item.index === safeSelectedBody;
-      context.fillStyle = selected ? "#e5c07b" : item.index === 0 ? "#e06c75" : "#abb2bf";
-      const radius = selected ? 4 : item.index === 0 ? 5 : Math.min(2.4, 0.8 + item.mass * 0.45);
-      context.beginPath();
-      context.arc(item.projection.x, item.projection.y, radius, 0, Math.PI * 2);
-      context.fill();
-    }
-
-    const selectedProjection = projectToCanvas(
-      bodies[safeSelectedBody].position,
-      yaw,
-      pitch,
-      distance,
-      size.width,
-      size.height,
-    );
-    if (selectedProjection.visible && showPairForce) {
-      const acceleration =
-        mode === "nbody-pair-force"
-          ? pairAcceleration
-          : simulateWithBarnesHut
-            ? approximateResult.acceleration
-            : exactResult.acceleration;
-      const accelerationMagnitude = magnitude(acceleration);
-      const arrowLength = Math.min(0.16, Math.max(0.025, Math.log1p(accelerationMagnitude) * 0.04));
-      const forceScale = arrowLength / Math.max(accelerationMagnitude, 1e-9);
-      const arrowEnd = projectToCanvas(
-        {
-          x: bodies[safeSelectedBody].position.x + acceleration.x * forceScale,
-          y: bodies[safeSelectedBody].position.y + acceleration.y * forceScale,
-          z: bodies[safeSelectedBody].position.z + acceleration.z * forceScale,
-        },
-        yaw,
-        pitch,
-        distance,
-        size.width,
-        size.height,
+  };
+  const up = (event: PointerEvent<HTMLCanvasElement>) => {
+    const active = gesture.current;
+    if (!active || active.id !== event.pointerId || event.button !== 0) return;
+    applyGesture(event);
+    if (Math.hypot(active.x - active.startX, active.y - active.startY) < 3 && stage >= 2)
+      act("selected", pickGalaxy(model.current, active.x, active.y, size.width, size.height));
+    release();
+  };
+  const key = (event: KeyboardEvent<HTMLCanvasElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.key === "Tab" || event.repeat)
+      return;
+    const current = model.current,
+      k = event.key.toLowerCase();
+    if (k === "escape") {
+      release(true);
+      act("cancel");
+      publish();
+    } else if (k === "r") act("reset");
+    else if (k === "home") act("camera");
+    else if (k === "arrowleft" || k === "arrowright") {
+      current.camera.yaw += k === "arrowleft" ? -0.08 : 0.08;
+      publish();
+    } else if (k === "arrowup" || k === "arrowdown") {
+      current.camera.pitch = Math.max(
+        -1.4,
+        Math.min(1.4, current.camera.pitch + (k === "arrowup" ? -0.08 : 0.08)),
       );
-      context.strokeStyle = "#e5c07b";
-      context.lineWidth = 2;
-      context.beginPath();
-      context.moveTo(selectedProjection.x, selectedProjection.y);
-      context.lineTo(arrowEnd.x, arrowEnd.y);
-      context.stroke();
-    }
-
-    if (showAccuracy) drawAccuracyGraph(context, accuracyRows, size.width, size.height);
-  }, [
-    accuracyRows,
-    approximateResult.acceleration,
-    bodies,
-    distance,
-    exactResult.acceleration,
-    mode,
-    pairAcceleration,
-    pitch,
-    safeSelectedBody,
-    showAccuracy,
-    showPairForce,
-    showTree,
-    size,
-    tree,
-    simulateWithBarnesHut,
-    yaw,
-  ]);
-
-  const reset = (nextCount = bodyCount) => {
-    const canvas = canvasRef.current;
-    if (
-      canvas !== null &&
-      activePointerId.current !== null &&
-      canvas.hasPointerCapture(activePointerId.current)
-    ) {
-      canvas.releasePointerCapture(activePointerId.current);
-    }
-    const nextBodies = makeGalaxyBodies(nextCount, DEFAULT_SEED);
-    setBodies(nextBodies);
-    setSelectedBody(Math.min(1, nextCount - 1));
-    setTheta(0.5);
-    setSoftening(0.02);
-    setUseBarnesHut(true);
-    setPaused(true);
-    setYaw(0.45);
-    setPitch(-0.52);
-    setDistance(2.5);
-    setCapturing(false);
-    setAccuracyRows([]);
-    setScalingRows([]);
-    captureDiagnostics(nextBodies, 0.02);
-    activePointerId.current = null;
-    previousPointer.current = null;
+      publish();
+    } else if (k === "q" || k === "z") {
+      current.camera.distance = Math.max(
+        0.3,
+        Math.min(30, current.camera.distance * (k === "q" ? 1.1 : 1 / 1.1)),
+      );
+      publish();
+    } else if (stage >= 4 && k === " ") act("run");
+    else if (stage >= 4 && k === "n") act("step");
+    else if (stage >= 6 && (k === "[" || k === "]"))
+      act("theta", current.theta + (k === "[" ? -0.05 : 0.05));
+    else if (stage >= 5 && k === "f") act("debug");
+    else if (stage >= 8 && k === "t") act("sweep");
+    else if (stage >= 9 && k === "b") act("runtime");
+    else if (stage >= 10 && k === "e") act("energy");
+    else if (stage >= 10 && k === "i") act("dtStudy");
+    else return;
+    event.preventDefault();
   };
-
-  const runAccuracyStudy = () => {
-    setPaused(true);
-    setAccuracyRows(
-      measureThetaAccuracy(
-        bodies,
-        THETA_PRESETS,
-        Math.min(24, bodies.length),
-        GRAVITATIONAL_CONSTANT,
-        softening,
-      ),
-    );
-  };
-
-  const runScalingStudy = () => {
-    setPaused(true);
-    const rows = [128, 256, 512, 1024].map((count) => {
-      const sample = makeGalaxyBodies(count, DEFAULT_SEED);
-      const sampleTree = buildMassOctree(sample);
-      let directInteractions = 0;
-      let started = performance.now();
-      for (let targetIndex = 0; targetIndex < count; targetIndex += 1) {
-        directInteractions += directAcceleration(
-          sample,
-          targetIndex,
-          GRAVITATIONAL_CONSTANT,
-          softening,
-        ).exactInteractions;
-      }
-      const directMilliseconds = performance.now() - started;
-      let barnesHutWork = 0;
-      started = performance.now();
-      for (let targetIndex = 0; targetIndex < count; targetIndex += 1) {
-        const result = barnesHutAcceleration(
-          sampleTree,
-          sample,
-          targetIndex,
-          theta,
-          GRAVITATIONAL_CONSTANT,
-          softening,
-        );
-        barnesHutWork += result.exactInteractions + result.approximatedNodes;
-      }
-      const barnesHutMilliseconds = performance.now() - started;
-      return {
-        count,
-        directMilliseconds,
-        barnesHutMilliseconds,
-        directInteractions,
-        barnesHutWork,
-      };
-    });
-    setScalingRows(rows);
-  };
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    activePointerId.current = event.pointerId;
-    previousPointer.current = { x: event.clientX, y: event.clientY };
-    setCapturing(true);
-    if (!paused) captureDiagnostics();
-    setPaused(true);
-  };
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const previous = previousPointer.current;
-    if (!capturing || previous === null) return;
-    setYaw((current) => current + (event.clientX - previous.x) * 0.008);
-    setPitch((current) =>
-      Math.max(-1.35, Math.min(1.35, current + (event.clientY - previous.y) * 0.008)),
-    );
-    previousPointer.current = { x: event.clientX, y: event.clientY };
-  };
-
-  const releasePointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    activePointerId.current = null;
-    previousPointer.current = null;
-    setCapturing(false);
-  };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (event.key === " " && showSimulation) {
-      event.preventDefault();
-      setAccuracyRows([]);
-      setScalingRows([]);
-      if (!paused) captureDiagnostics();
-      setPaused((current) => !current);
-    }
-    if (event.key.toLowerCase() === "n" && showSimulation) advanceOneStep();
-    if (event.key.toLowerCase() === "r") reset();
-    if (event.key.toLowerCase() === "t" && showAccuracy) runAccuracyStudy();
-    if (event.key.toLowerCase() === "b" && showScaling) runScalingStudy();
-    if (event.key === "ArrowLeft") setYaw((current) => current - 0.08);
-    if (event.key === "ArrowRight") setYaw((current) => current + 0.08);
-    if (event.key === "ArrowUp") setPitch((current) => Math.max(-1.35, current - 0.08));
-    if (event.key === "ArrowDown") setPitch((current) => Math.min(1.35, current + 0.08));
-  };
-
-  const root = tree.nodes[0];
+  const lastEnergy = scene.history.at(-1);
   return (
-    <>
+    <div className="lab-body">
+      <Suspense fallback={<p role="status">Đang tải điều khiển thiên hà…</p>}>
+        <GalaxyControls
+          scene={scene}
+          job={job}
+          loading={loadingJob}
+          reduced={reduced}
+          tool={tool}
+          setTool={setTool}
+          act={act}
+        />
+      </Suspense>
       <canvas
         ref={canvasRef}
         className="lab-canvas"
+        role="img"
+        aria-label="Thiên hà N-body 3D bằng Barnes–Hut"
+        aria-describedby={helpId}
         tabIndex={0}
-        aria-label="Mô phỏng thiên hà N-body 3D so sánh lực trực tiếp với xấp xỉ Barnes–Hut"
-        onKeyDown={onKeyDown}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={releasePointer}
-        onPointerCancel={releasePointer}
-        onWheel={(event) => {
-          event.preventDefault();
-          setDistance((current) => Math.max(1.3, Math.min(5, current + event.deltaY * 0.002)));
+        style={{ height: "clamp(400px,55vw,560px)", touchAction: "none" }}
+        onPointerDown={down}
+        onPointerMove={(event) => {
+          if (gesture.current?.id === event.pointerId) {
+            if ((event.buttons & 1) === 0) release();
+            else applyGesture(event);
+          }
         }}
+        onPointerUp={up}
+        onPointerCancel={(event) => {
+          if (gesture.current?.id === event.pointerId) {
+            release(true);
+            publish();
+          }
+        }}
+        onLostPointerCapture={(event) => {
+          if (gesture.current?.id === event.pointerId) {
+            release(true);
+            publish();
+          }
+        }}
+        onKeyDown={key}
       />
-      <div className="lab-controls">
-        <label>
-          Số bodies
-          <select
-            value={bodyCount}
-            onChange={(event) => {
-              const nextCount = Number(event.target.value);
-              setBodyCount(nextCount);
-              reset(nextCount);
-            }}
-          >
-            <option value={128}>128</option>
-            <option value={512}>512</option>
-            <option value={1024}>1.024</option>
-          </select>
-        </label>
-        {showBarnesHut && (
-          <label>
-            Algorithm
-            <select
-              value={useBarnesHut ? "barnes-hut" : "direct"}
-              onChange={(event) => {
-                setUseBarnesHut(event.target.value === "barnes-hut");
-                setPaused(true);
-              }}
-            >
-              <option value="barnes-hut">Barnes–Hut</option>
-              <option value="direct">Direct O(N²)</option>
-            </select>
-          </label>
-        )}
-        {showBarnesHut && (
-          <label>
-            Theta: {theta.toFixed(2)}
-            <input
-              type="range"
-              min={0.1}
-              max={1.2}
-              step={0.05}
-              value={theta}
-              onChange={(event) => {
-                setTheta(Number(event.target.value));
-                setPaused(true);
-                setAccuracyRows([]);
-                setScalingRows([]);
-              }}
-            />
-          </label>
-        )}
-        {showPairForce && (
-          <label>
-            Softening: {softening.toFixed(3)}
-            <input
-              type="range"
-              min={0.005}
-              max={0.08}
-              step={0.005}
-              value={softening}
-              onChange={(event) => {
-                const nextSoftening = Number(event.target.value);
-                setSoftening(nextSoftening);
-                setPaused(true);
-                setAccuracyRows([]);
-                setScalingRows([]);
-                captureDiagnostics(bodies, nextSoftening);
-              }}
-            />
-          </label>
-        )}
-        {showPairForce && (
-          <label>
-            Body đang theo dõi
-            <input
-              type="range"
-              min={0}
-              max={Math.max(0, bodies.length - 1)}
-              step={1}
-              value={safeSelectedBody}
-              onChange={(event) => setSelectedBody(Number(event.target.value))}
-            />
-          </label>
-        )}
-        {showSimulation && (
-          <button
-            type="button"
-            onClick={() => {
-              setAccuracyRows([]);
-              setScalingRows([]);
-              if (!paused) captureDiagnostics();
-              setPaused((current) => !current);
-            }}
-          >
-            {paused ? "Tiếp tục" : "Tạm dừng"}
-          </button>
-        )}
-        {showSimulation && (
-          <button type="button" onClick={advanceOneStep}>
-            Tiến một fixed step
-          </button>
-        )}
-        {showAccuracy && (
-          <button type="button" onClick={runAccuracyStudy}>
-            Chạy theta sweep
-          </button>
-        )}
-        {showScaling && (
-          <button type="button" onClick={runScalingStudy}>
-            Chạy scaling study
-          </button>
-        )}
-        <button type="button" onClick={() => reset()}>
-          Đặt lại
-        </button>
-      </div>
+      <p id={helpId}>
+        Kéo để đổi góc nhìn, chọn Pan để dịch camera; nhấp gần một body để theo dõi. Phím mũi tên
+        xoay, Q/Z zoom, Home đặt lại camera, R đặt lại preset.{" "}
+        {stage >= 4 && "Space chạy/dừng, N tiến đúng một bước."}{" "}
+        {stage >= 8 && "T đo theta; Escape hủy tác vụ."} Tab rời Canvas. Camera không đổi state vật
+        lý.
+      </p>
+      <p>
+        Màu xanh → cam: tốc độ 0 → 1,5 length/time unit; hồng: central body; vàng: target. Vẽ mọi
+        body trong viewport, không lấy mẫu mô phỏng. Trails chỉ theo dõi 24 body, giữ 64 snapshot.
+      </p>
       <LabReadout
         items={[
           {
-            label: "Scene / world state",
-            value: `${bodies.length.toLocaleString("vi-VN")} bodies · total mass ${root.totalMass.toFixed(2)} · seed ${DEFAULT_SEED.toString(16).toUpperCase()}`,
-          },
-          ...(showPairForce
-            ? [
-                {
-                  label: "Body đang theo dõi / lực từ body 0",
-                  value: `#${safeSelectedBody} · |a_pair| ${magnitude(pairAcceleration).toExponential(3)} · softening ${softening.toFixed(3)}`,
-                },
-              ]
-            : []),
-          ...(showDirect
-            ? [
-                {
-                  label: "Direct N-body",
-                  value: `|a| ${magnitude(exactResult.acceleration).toExponential(3)} · ${exactResult.exactInteractions.toLocaleString("vi-VN")} interactions cho body #${safeSelectedBody}`,
-                },
-              ]
-            : []),
-          ...(showTree
-            ? [
-                {
-                  label: "Tree / aggregate root",
-                  value: `${tree.nodes.length.toLocaleString("vi-VN")} nodes · depth ${tree.maximumObservedDepth} · COM (${root.centerOfMass.x.toFixed(3)}, ${root.centerOfMass.y.toFixed(3)}, ${root.centerOfMass.z.toFixed(3)})`,
-                },
-              ]
-            : []),
-          ...(showBarnesHut
-            ? [
-                {
-                  label: "Barnes–Hut work",
-                  value: `${approximateResult.visitedNodes.toLocaleString("vi-VN")} nodes visited · ${approximateResult.approximatedNodes.toLocaleString("vi-VN")} aggregate sources · ${approximateResult.exactInteractions.toLocaleString("vi-VN")} exact pairs`,
-                },
-                {
-                  label: "Sai số lực tại body đang theo dõi",
-                  value: `${(relativeError * 100).toFixed(3)}% với θ=${theta.toFixed(2)}`,
-                },
-              ]
-            : []),
-          ...(showTopology
-            ? [
-                {
-                  label: "Topology / self-force contract",
-                  value: `${topologyValid ? "aggregate tree hợp lệ" : "TREE KHÔNG HỢP LỆ"} · node chứa target luôn mở tiếp`,
-                },
-              ]
-            : []),
-          ...(showDiagnostics
-            ? [
-                {
-                  label: "Năng lượng / momentum (tối đa 512 bodies)",
-                  value: diagnostics
-                    ? `E ${diagnostics.totalEnergy.toFixed(4)} · |P| ${magnitude(diagnostics.momentum).toExponential(3)}${paused ? "" : " · snapshot gần nhất khi pause"}`
-                    : "đang tính snapshot đầu tiên…",
-                },
-              ]
-            : []),
-          ...(showAccuracy
-            ? [
-                {
-                  label: "Theta sweep",
-                  value:
-                    accuracyRows.length === 0
-                      ? "chưa chạy — bấm Chạy theta sweep để lấy snapshot hiện tại"
-                      : accuracyRows
-                          .map(
-                            (row) =>
-                              `θ ${row.theta.toFixed(2)}: ${(row.meanRelativeError * 100).toFixed(2)}% / ${(row.exactInteractions + row.approximatedNodes).toLocaleString("vi-VN")} work`,
-                          )
-                          .join(" · "),
-                },
-              ]
-            : []),
-          ...(showScaling
-            ? [
-                {
-                  label: "Scaling study direct / Barnes–Hut",
-                  value:
-                    scalingRows.length === 0
-                      ? "chưa chạy"
-                      : scalingRows
-                          .map(
-                            (row) =>
-                              `${row.count}: ${row.directMilliseconds.toFixed(1)}/${row.barnesHutMilliseconds.toFixed(1)} ms · ${row.directInteractions.toLocaleString("vi-VN")}/${row.barnesHutWork.toLocaleString("vi-VN")} work`,
-                          )
-                          .join(" · "),
-                },
-              ]
-            : []),
-          {
-            label: "Camera / pointer / timestep",
-            value: `yaw ${yaw.toFixed(2)} · pitch ${pitch.toFixed(2)} · ${capturing ? "đang xoay" : "đã nhả"} · dt ${FIXED_DELTA_SECONDS.toFixed(5)} s`,
+            label: "N / step / thời gian mô phỏng",
+            value: scene.bodies.length + " / " + scene.steps + " / " + scene.time.toFixed(5),
           },
           {
-            label: "Mô tả thay thế",
-            value: showBarnesHut
-              ? `Thiên hà có ${bodies.length} bodies. Barnes–Hut dùng ${approximateResult.approximatedNodes} node tổng hợp và ${approximateResult.exactInteractions} tương tác trực tiếp cho body ${safeSelectedBody}; sai số lực ${(relativeError * 100).toFixed(3)}%.`
-              : `Thiên hà có ${bodies.length} bodies trong world space. Camera chỉ thay đổi cách quan sát; state vật lý không đổi khi xoay hoặc zoom.`,
+            label: "Preset / seed / không gian",
+            value: scene.preset + " / 0x31c0ffee / XYZ 3D · G=0,001",
           },
+          {
+            label: "Trạng thái / physics progress",
+            value:
+              (scene.paused ? "Tạm dừng" : "Đang chạy") +
+              " · " +
+              (scene.physics
+                ? scene.physics.target + "/" + scene.bodies.length
+                : "không có bước dở dang"),
+          },
+          ...(stage === 2
+            ? [
+                {
+                  label: "Pair acceleration từ body 0",
+                  value:
+                    "(" +
+                    force.pair.x.toExponential(6) +
+                    ", " +
+                    force.pair.y.toExponential(6) +
+                    ", " +
+                    force.pair.z.toExponential(6) +
+                    ") · norm=" +
+                    vectorLength(force.pair).toExponential(6),
+                },
+              ]
+            : []),
+          ...(stage >= 3
+            ? [
+                {
+                  label: "Direct acceleration của target " + scene.selected,
+                  value:
+                    "(" +
+                    force.exact.acceleration.x.toExponential(3) +
+                    ", " +
+                    force.exact.acceleration.y.toExponential(3) +
+                    ", " +
+                    force.exact.acceleration.z.toExponential(3) +
+                    ") · " +
+                    force.exact.exactInteractions +
+                    " sources",
+                },
+              ]
+            : []),
+          ...(stage >= 5
+            ? [
+                {
+                  label: "Mass Octree / root mass",
+                  value:
+                    scene.tree.nodes.length +
+                    " nodes · M=" +
+                    scene.tree.nodes[0].totalMass.toFixed(5),
+                },
+              ]
+            : []),
+          ...(stage >= 6
+            ? [
+                {
+                  label: "BH / sai số lực tại body đang theo dõi",
+                  value:
+                    "(" +
+                    force.approximate.acceleration.x.toExponential(3) +
+                    ", " +
+                    force.approximate.acceleration.y.toExponential(3) +
+                    ", " +
+                    force.approximate.acceleration.z.toExponential(3) +
+                    ") · |aBH|=" +
+                    vectorLength(force.approximate.acceleration).toExponential(3) +
+                    " · absolute=" +
+                    force.absolute.toExponential(3) +
+                    " · relative=" +
+                    force.relative.toExponential(3),
+                },
+                {
+                  label: "Visited / accepted / exact sources",
+                  value:
+                    force.approximate.visitedNodes +
+                    " / " +
+                    force.approximate.approximatedNodes +
+                    " / " +
+                    force.approximate.exactInteractions,
+                },
+              ]
+            : []),
+          ...(stage >= 10
+            ? [
+                {
+                  label: "Năng lượng toàn hệ / momentum",
+                  value: lastEnergy
+                    ? "N=" +
+                      lastEnergy.count +
+                      " E=" +
+                      lastEnergy.energy.toExponential(5) +
+                      " |P|=" +
+                      vectorLength(lastEnergy.momentum).toExponential(3) +
+                      " tại t=" +
+                      lastEnergy.time.toFixed(5)
+                    : "Chưa đo. Bấm Đo năng lượng toàn hệ trước khi chạy để lấy mốc t=0.",
+                },
+              ]
+            : []),
         ]}
       />
-      <p className="lab-hint">
-        Kéo Canvas để xoay, cuộn để zoom và nhấn R để reset.
-        {showSimulation && " Space chạy/dừng; N tiến đúng một fixed step."}
-        {showAccuracy && " T hoặc nút theta sweep đo accuracy trên snapshot hiện tại."}
-        {showScaling && " B hoặc nút scaling chạy phép so full-system hữu hạn."}
-        {showBarnesHut && " Hạ θ để mở nhiều node hơn; tăng θ để nhận nhiều nguồn tổng hợp hơn."}
-        {showPairForce &&
-          " Độ dài mũi tên acceleration dùng log scale để vẫn đọc được khi độ lớn thay đổi mạnh."}
+      <p>
+        {scene.notice} Physics tiến theo fixed dt, có thể chậm hơn thời gian thực; không chạy vòng
+        bù lag vô hạn.{" "}
+        {reduced &&
+          "Reduced motion: không tự chạy liên tục; các bước và phép đo hữu hạn vẫn dùng được."}
       </p>
-    </>
+      {scene.debug && stage >= 6 && (
+        <p>
+          Debug theo đúng traversal target: xanh = opened, vàng = accepted aggregate; tối đa 512 hộp
+          mỗi loại. Không vẽ hộp của node khác rồi gọi đó là quyết định của target.
+        </p>
+      )}
+      {scene.history.length > 0 && (
+        <table>
+          <caption>
+            Diagnostics đầy đủ N tại từng snapshot; giới hạn 64 mẫu. Lực xấp xỉ và integrator đều có
+            thể gây drift.
+          </caption>
+          <thead>
+            <tr>
+              <th>t</th>
+              <th>E</th>
+              <th>|P|</th>
+              <th>COM (x,y,z)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scene.history.map((sample, i) => (
+              <tr key={i}>
+                <td>{sample.time.toFixed(5)}</td>
+                <td>{sample.energy.toExponential(5)}</td>
+                <td>{vectorLength(sample.momentum).toExponential(3)}</td>
+                <td>
+                  {sample.center.x.toFixed(4)}, {sample.center.y.toFixed(4)},{" "}
+                  {sample.center.z.toFixed(4)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {job && (
+        <Suspense fallback={<p>Đang tải bảng kiểm chứng…</p>}>
+          <GalaxyResults job={job} />
+        </Suspense>
+      )}
+    </div>
   );
 }

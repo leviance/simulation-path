@@ -83,6 +83,7 @@ struct BarnesHutConfig {
     double minimumNodeSize{1.0e-6};
 };
 
+// [snippet:BarnesHutNode]
 struct BarnesHutNode {
     Bounds3D bounds{};
     int depth{};
@@ -105,6 +106,8 @@ struct BarnesHutNode {
     }
 };
 
+// [/snippet:BarnesHutNode]
+
 struct BarnesHutTree {
     BarnesHutConfig config{};
     std::vector<BarnesHutNode> nodes{};
@@ -121,6 +124,7 @@ inline bool nodeCanSplit(const BarnesHutNode& node, const BarnesHutConfig& confi
     return node.depth < config.maximumDepth && side * 0.5 >= config.minimumNodeSize;
 }
 
+// [snippet:insertBodyAtNode]
 inline void insertBodyAtNode(
     BarnesHutTree& tree,
     std::span<const Body> bodies,
@@ -140,7 +144,7 @@ inline void insertBodyAtNode(
     if (
         tree.nodes[nodeIndex].bodyIndices.size() < tree.config.leafCapacity ||
         !nodeCanSplit(tree.nodes[nodeIndex], tree.config) ||
-        tree.nodes.size() + 8U > 1'000'000U
+        tree.nodes.size() + 8U > 262'145U
     ) {
         tree.nodes[nodeIndex].bodyIndices.push_back(bodyIndex);
         return;
@@ -167,6 +171,9 @@ inline void insertBodyAtNode(
     }
 }
 
+// [/snippet:insertBodyAtNode]
+
+// [snippet:accumulateNodeMass]
 inline void accumulateNodeMass(
     BarnesHutTree& tree,
     std::span<const Body> bodies,
@@ -195,10 +202,23 @@ inline void accumulateNodeMass(
     }
 }
 
+// [/snippet:accumulateNodeMass]
+
+// [snippet:buildMassOctree]
 inline BarnesHutTree buildMassOctree(
     std::span<const Body> bodies,
     const BarnesHutConfig& config = {}
 ) {
+    if (bodies.size() > 8192 || config.leafCapacity < 1 || config.maximumDepth < 1 ||
+        config.maximumDepth > 20 || !std::isfinite(config.minimumNodeSize) || config.minimumNodeSize <= 0) {
+        throw std::invalid_argument("Invalid tree budget/configuration");
+    }
+    for (const Body& body : bodies) {
+        if (!finiteVector(body.position) || !finiteVector(body.velocity) ||
+            !std::isfinite(body.mass) || body.mass <= 0) {
+            throw std::invalid_argument("Body state must be finite, mass positive");
+        }
+    }
     const auto started = std::chrono::steady_clock::now();
     BarnesHutTree tree{};
     tree.config = config;
@@ -223,10 +243,21 @@ inline BarnesHutTree buildMassOctree(
         std::chrono::duration<double, std::micro>(finished - started).count();
     return tree;
 }
+
+// [/snippet:buildMassOctree]
 #endif
 
 // Checkpoint 6: dùng opening criterion s/d < theta cho node không chứa target.
 #if LAB_CHECKPOINT >= 6
+// [snippet:ForceTrace]
+struct ForceTrace {
+    std::vector<std::size_t> opened{};
+    std::vector<std::size_t> accepted{};
+};
+
+// [/snippet:ForceTrace]
+
+// [snippet:accumulateBarnesHutNode]
 inline void accumulateBarnesHutNode(
     const BarnesHutTree& tree,
     std::span<const Body> bodies,
@@ -235,7 +266,8 @@ inline void accumulateBarnesHutNode(
     double theta,
     double gravitationalConstant,
     double softening,
-    AccelerationResult& result
+    AccelerationResult& result,
+    ForceTrace* trace = nullptr
 ) {
     const BarnesHutNode& node = tree.nodes[nodeIndex];
     ++result.metrics.visitedNodes;
@@ -276,9 +308,15 @@ inline void accumulateBarnesHutNode(
             softening
         );
         ++result.metrics.approximatedNodes;
+        if (trace) {
+            trace->accepted.push_back(nodeIndex);
+        }
         return;
     }
 
+    if (trace) {
+        trace->opened.push_back(nodeIndex);
+    }
     for (const std::size_t childIndex : node.children) {
         accumulateBarnesHutNode(
             tree,
@@ -288,18 +326,23 @@ inline void accumulateBarnesHutNode(
             theta,
             gravitationalConstant,
             softening,
-            result
+            result,
+            trace
         );
     }
 }
 
+// [/snippet:accumulateBarnesHutNode]
+
+// [snippet:barnesHutAcceleration]
 inline AccelerationResult barnesHutAcceleration(
     const BarnesHutTree& tree,
     std::span<const Body> bodies,
     std::size_t targetIndex,
     double theta,
     double gravitationalConstant,
-    double softening
+    double softening,
+    ForceTrace* trace = nullptr
 ) {
     AccelerationResult result{};
     if (targetIndex < bodies.size() && !tree.nodes.empty()) {
@@ -311,11 +354,14 @@ inline AccelerationResult barnesHutAcceleration(
             theta,
             gravitationalConstant,
             softening,
-            result
+            result,
+            trace
         );
     }
     return result;
 }
+
+// [/snippet:barnesHutAcceleration]
 
 inline std::vector<Vec3> barnesHutAccelerations(
     const BarnesHutTree& tree,
@@ -350,6 +396,7 @@ inline std::vector<Vec3> barnesHutAccelerations(
 
 // Checkpoint 7: inspector độc lập kiểm storage, child bounds và aggregate mass.
 #if LAB_CHECKPOINT >= 7
+// [snippet:BarnesHutTopologyReport]
 struct BarnesHutTopologyReport {
     bool everyBodyStoredOnce{true};
     bool internalNodesEmpty{true};
@@ -359,6 +406,8 @@ struct BarnesHutTopologyReport {
     bool centerOfMassValid{true};
     bool statisticsMatch{true};
 };
+
+// [/snippet:BarnesHutTopologyReport]
 
 inline bool nearlyEqual(double a, double b, double tolerance = 1.0e-9) {
     return std::abs(a - b) <= tolerance;
@@ -373,24 +422,35 @@ inline bool sameBounds(const Bounds3D& a, const Bounds3D& b) {
         nearlyEqual(a.maximum.z, b.maximum.z);
 }
 
+// [snippet:inspectMassOctree]
 inline BarnesHutTopologyReport inspectMassOctree(
     const BarnesHutTree& tree,
     std::span<const Body> bodies
 ) {
     BarnesHutTopologyReport report{};
     std::vector<int> insertionCounts(bodies.size(), 0);
+    std::vector<int> parentCounts(tree.nodes.size(), 0);
     std::size_t leaves = 0;
     std::size_t internalNodes = 0;
     for (std::size_t nodeIndex = 0; nodeIndex < tree.nodes.size(); ++nodeIndex) {
         const BarnesHutNode& node = tree.nodes[nodeIndex];
         if (node.isLeaf()) {
             ++leaves;
+            double leafMass = 0;
+            Vec3 weightedPosition{};
             for (const std::size_t bodyIndex : node.bodyIndices) {
                 if (bodyIndex >= bodies.size()) {
                     report.childIndicesValid = false;
                 } else {
                     ++insertionCounts[bodyIndex];
+                    leafMass += bodies[bodyIndex].mass;
+                    weightedPosition += bodies[bodyIndex].position * bodies[bodyIndex].mass;
+                    report.childBoundsValid = report.childBoundsValid && pointInsideBounds(bodies[bodyIndex].position, node.bounds);
                 }
+            }
+            report.aggregateMassValid = report.aggregateMassValid && nearlyEqual(leafMass, node.totalMass);
+            if (leafMass > 0) {
+                report.centerOfMassValid = report.centerOfMassValid && length(weightedPosition / leafMass - node.centerOfMass) <= 1e-9;
             }
             continue;
         }
@@ -406,6 +466,8 @@ inline BarnesHutTopologyReport inspectMassOctree(
                 continue;
             }
             const BarnesHutNode& child = tree.nodes[childIndex];
+            ++parentCounts[childIndex];
+            report.childIndicesValid = report.childIndicesValid && childIndex > nodeIndex && child.depth == node.depth + 1;
             report.childBoundsValid = report.childBoundsValid &&
                 sameBounds(child.bounds, barnesHutChildBounds(node.bounds, octant));
             childMass += child.totalMass;
@@ -425,11 +487,20 @@ inline BarnesHutTopologyReport inspectMassOctree(
             return count == 1;
         }
     );
+    for (std::size_t index = 0; index < parentCounts.size(); ++index) {
+        int expected = 1;
+        if (index == 0) {
+            expected = 0;
+        }
+        report.childIndicesValid = report.childIndicesValid && parentCounts[index] == expected;
+    }
     report.statisticsMatch = leaves == tree.leafCount &&
         internalNodes == tree.internalNodeCount &&
         leaves + internalNodes == tree.nodes.size();
     return report;
 }
+
+// [/snippet:inspectMassOctree]
 #endif
 
 } // namespace lab

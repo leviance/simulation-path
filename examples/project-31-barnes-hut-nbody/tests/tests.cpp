@@ -1,4 +1,4 @@
-#include "lab.hpp"
+#include "analysis.hpp"
 
 #include <array>
 #include <cmath>
@@ -103,6 +103,7 @@ void testFixedStepPlan() {
     );
 }
 
+// [snippet:testMassOctreeTopology]
 void testMassOctreeTopology() {
     const std::vector<lab::Body> bodies = lab::makeGalaxyBodies(512, 0x31c0ffeeU);
     const lab::BarnesHutTree tree = lab::buildMassOctree(bodies);
@@ -119,6 +120,8 @@ void testMassOctreeTopology() {
         "root aggregate mass equals total system mass"
     );
 }
+
+// [/snippet:testMassOctreeTopology]
 
 void testSelfForceAndOpeningCriterion() {
     const std::vector<lab::Body> oneBody = lab::makeGalaxyBodies(1, 0x31c0ffeeU);
@@ -229,7 +232,10 @@ void testScalingWorkCounts() {
 
 } // namespace
 
+#include "extended.hpp"
+
 int main() {
+    testProductContract();
     testDeterministicGalaxy();
     testSoftenedPairForce();
     testDirectOracle();
