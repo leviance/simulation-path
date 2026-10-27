@@ -1,142 +1,235 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Benchmark và scaling trong Release
+# Đo Release và giữ cả kết quả không nhanh hơn
 
 ## Vấn đề cần giải quyết
 
-Baseline AoS mới đo một khoảng tổng. Để so layout công bằng hơn, mỗi phía cần warm-up riêng, nhận cùng source, chạy cùng workload và được đo thành nhiều sample. Ta sẽ lấy median rồi tăng N từ 10.000 lên 1.000.000.
+Ta đã có hai kernel cùng mô hình và một phép đếm địa chỉ để đặt giả thuyết. Bây giờ mới đo AoS/SoA trên cùng input ở 10.000, 100.000 và 1.000.000 hạt, cho cả gravity-only lẫn full lifecycle.
 
-Timing không phải validation. Test chỉ yêu cầu giá trị hữu hạn, checksum bằng nhau và maximum difference bằng 0. Layout nào nhanh hơn phụ thuộc compiler, CPU, build mode và workload; code không được `assert(soaTime < aosTime)`.
+Checkpoint 03 đã lo phần baseline, warm-up và checksum. Checkpoint 07 mở rộng **cùng BenchmarkJob**, không thêm một bộ đo riêng cho SoA với cách reset hoặc số lượt khác. Bài này không có kết quả định sẵn rằng SoA phải thắng.
 
-## Hiểu ý tưởng trước khi viết code
+## Đi qua thuật toán bằng một ví dụ nhỏ
 
-Một sample có lifecycle:
+### Cùng input không có nghĩa cùng container
 
-1. Copy AoS source trước timer.
-2. Start timer, chạy đúng một AoS workload, stop timer.
-3. Convert/copy SoA source trước timer.
-4. Start timer, chạy đúng một SoA workload, stop timer.
-5. So output ngoài timer.
+initial vẫn là snapshot chuẩn do warmParticle tạo từ config/seed đã chụp lúc bắt đầu. Mỗi trial đọc lại initial: AoS copy sang workAoS, SoA ghi sang mười một mảng workSoA. Cả hai nhận đủ field, cùng precision float32 và cùng dt.
 
-Lặp lifecycle này `R` lần tạo hai dãy timing. Median là phần tử giữa sau khi sort; nếu số sample chẵn, lấy trung bình hai phần tử giữa.
+Trong prepareCase, resize workSoA cùng N với workAoS. Trong start, checkpoint 07 bật paired = true; metadata của row cũng ghi paired. Những thay đổi này và vòng chọn sáu ca có trong file đầy đủ ở cuối bài.
+
+Không tái dùng output AoS làm input SoA. Làm vậy sẽ khiến SoA bắt đầu ở tuổi hạt khác và gặp số lần respawn khác, dù hai bảng vẫn ghi cùng N.
 
 <InteractiveLab demo="memory-layout-race" mode="layout-benchmark" />
 
-Canvas chạy benchmark trong một `Web Worker`, không chạy vòng lặp một triệu phần tử trên UI thread. Vì vậy bạn vẫn cuộn trang và bấm “Dừng phép đo” được. Worker tự sinh source từ cùng `seed`, chỉ trả các số median/checksum/difference về component; typed arrays dung lượng lớn không bị gửi qua lại sau mỗi sample.
+## Bắt tay xây dựng
 
-## Viết code từng bước
+### Bước 1 — Đổi thứ tự thay vì luôn đo AoS trước
 
-### Bước 1 — Viết median dễ kiểm tra
+Thay chooseMethod trong BenchmarkJob bằng bản chọn cả hai phương pháp:
 
-```cpp title="include/benchmark.hpp — medianMilliseconds"
-inline double medianMilliseconds(std::vector<double> samples) {
-    if (samples.empty()) {
-        return 0.0;
+```cpp title="include/benchmark.hpp — luân phiên AB/BA giữa các mẫu"
+void chooseMethod() {
+    // Method 0 is AoS, method 1 is SoA. Odd samples reverse the pair.
+    method = 0;
+    if (paired) {
+        const bool soaFirst = sample >= 0 && sample % 2 == 1;
+        if (soaFirst)
+            method = 1 - trial;
+        else
+            method = trial;
     }
-    std::sort(samples.begin(), samples.end());
-    const std::size_t middle = samples.size() / 2U;
-    if (samples.size() % 2U == 1U) {
-        return samples[middle];
+    target = 0;
+    step = 0;
+    trialUpdated = 0;
+    kernelMs = 0;
+    phase = BenchmarkPhase::reset;
+}
+```
+
+Method 0 là AoS, method 1 là SoA. Mẫu chẵn đo AoS trước, mẫu lẻ đo SoA trước. Biến soaFirst cho biết cặp nào cần đảo thứ tự; trial 0/1 chọn bên thứ nhất/thứ hai của cặp. Warm-up không đi vào bảng. Bạn có thể lập bảng trial × sample để kiểm thứ tự trước khi chạy.
+
+AB/BA giúp giảm một nguồn thiên lệch thứ tự, nhưng không làm CPU hết nhiễu, không cố định xung nhịp và không biến cache hai layout thành giống hệt nhau.
+
+### Bước 2 — Reset và conversion không thuộc timer kernel
+
+Thay resetUnit để có đủ hai nhánh:
+
+```cpp title="include/benchmark.hpp — chuẩn bị trial bằng cùng snapshot"
+void resetUnit() {
+    const std::size_t end = std::min(row.count, target + 4096);
+    const auto started = Clock::now();
+    if (method == 0) {
+        std::copy(initial.begin() + target, initial.begin() + end, workAoS.begin() + target);
     }
-    return 0.5 * (samples[middle - 1U] + samples[middle]);
+    else {
+        for (std::size_t index = target; index < end; ++index)
+            writeParticle(workSoA, index, initial[index]);
+    }
+    if (sample == 0) {
+        if (method == 0)
+            row.copyMs += milliseconds(started);
+        else
+            row.conversionMs += milliseconds(started);
+    }
+    target = end;
+    if (target == row.count) {
+        target = 0;
+        phase = BenchmarkPhase::kernel;
+    }
 }
 ```
 
-Hàm nhận vector theo value vì nó cần sort. Timing samples nhỏ; clarity quan trọng hơn tránh copy vài số `double`.
+AoS dùng copy record; SoA ghi mỗi field sang mảng tương ứng. Chúng là hai thao tác có chi phí khác nhau, nên copyMs và conversionMs được báo riêng. Source ghi một lần reset ở mẫu đầu, không cộng nó vào median của kernel.
 
-### Bước 2 — Đo kernel, không đo conversion
+Việc chuẩn bị này vẫn ảnh hưởng trạng thái cache trước kernel. Phép đo không flush cache và không tuyên bố là cold-cache benchmark. Đừng giấu giới hạn ấy khi giải thích kết quả; nếu nghiên cứu cache sâu hơn, cần một thí nghiệm riêng với quy trình rõ.
 
-```cpp title="include/benchmark.hpp — một sample AoS và SoA"
-std::vector<ParticleAoS> aos(source.begin(), source.end());
-ParticlesSoA soa = makeParticlesSoA(source);
+### Bước 3 — Cùng số lượt làm việc cho cả hai phía
 
-const auto measureAoS = [&]() {
-    const auto started = std::chrono::steady_clock::now();
-    result.aosChecksum += runAoSWorkload(aos, workload);
-    const auto finished = std::chrono::steady_clock::now();
-    aosSamples.push_back(
-        std::chrono::duration<double, std::milli>(finished - started).count()
-    );
-};
-const auto measureSoA = [&]() {
-    const auto started = std::chrono::steady_clock::now();
-    result.soaChecksum += runSoAWorkload(soa, workload);
-    const auto finished = std::chrono::steady_clock::now();
-    soaSamples.push_back(
-        std::chrono::duration<double, std::milli>(finished - started).count()
-    );
-};
-```
+kernelUnit giờ thêm lời gọi updateSoARange:
 
-`makeParticlesSoA` nằm trước `soaStarted`. Nếu sản phẩm thực tế của bạn phải convert mỗi frame, đó là một workload khác cần benchmark riêng; không trộn vào câu hỏi hiện tại.
-
-### Bước 3 — Luân phiên bên chạy trước
-
-Nếu sample nào cũng chạy AoS trước rồi SoA sau, bên chạy sau luôn nhận cùng một vị trí trong chu kỳ cache và scheduler. Ta đổi thứ tự theo parity của repetition:
-
-```cpp title="include/benchmark.hpp — đổi thứ tự đo"
-if (repetition % 2 == 0) {
-    measureAoS();
-    measureSoA();
-} else {
-    measureSoA();
-    measureAoS();
+```cpp title="include/benchmark.hpp — đo một trong hai kernel bằng cùng đồng hồ và bộ đếm"
+void kernelUnit() {
+    const std::size_t end = std::min(row.count, target + 4096);
+    const auto started = Clock::now();
+    if (method == 0) {
+        updateAoSRange(workAoS, target, end, config, fixedDt, row.workload, row.count);
+    }
+    else {
+        updateSoARange(workSoA, target, end, config, fixedDt, row.workload, row.count);
+    }
+    kernelMs += milliseconds(started);
+    trialUpdated += end - target;
+    target = end;
+    if (target != row.count)
+        return;
+    target = 0;
+    if (++step < 3)
+        return;
+    if (trialUpdated != row.count * 3)
+        throw std::runtime_error("Incomplete benchmark pass");
+    row.updated = trialUpdated;
+    if (sample >= 0) {
+        if (method == 0)
+            aosTimes.push_back(kernelMs);
+        else
+            soaTimes.push_back(kernelMs);
+    }
+    ++trial;
+    if (trial < (paired ? 2 : 1))
+        chooseMethod();
+    else {
+        row.checksumAoS = row.checksumSoA = 0;
+        phase = BenchmarkPhase::verify;
+    }
 }
 ```
 
-Hai lambda `measureAoS` và `measureSoA` chỉ bao timer quanh kernel tương ứng; việc clone/convert vẫn xảy ra trước đó. Luân phiên không xóa hết nhiễu, nhưng tránh để một layout luôn nhận cùng lợi thế do thứ tự.
+Mỗi trial vẫn là ba pass đầy đủ và cùng batch 4.096 target. trialUpdated đếm đoạn đã chạy, không lấy N đã cấp phát thay số cập nhật. Với N = 1.000.000, mỗi mẫu phải có 3.000.000 lượt cập nhật ở **mỗi** layout.
 
-### Bước 4 — Tạo từng scaling row từ cùng contract
+Chỉ cộng thời gian quanh kernel. Khoảng chờ UI, copy, conversion, checksum và renderer nằm ngoài timer này; thời gian full frame được báo ở chỗ khác. Chưa cộng các chi phí đó thì không được đổi tên kernel speedup thành FPS speedup.
 
-```cpp title="include/benchmark.hpp — makeLayoutScalingStudy"
-for (const std::size_t count : counts) {
-    const std::vector<ParticleAoS> source = makeParticlesAoS(count, seed);
-    rows.push_back({
-        count,
-        benchmarkLayoutRace(source, workload, repetitions),
-        estimateMemoryTraffic(MemoryLayout::aos, workload, count),
-        estimateMemoryTraffic(MemoryLayout::soa, workload, count),
-    });
+### Bước 4 — Kiểm cả output trước khi nhận kết quả
+
+verifyUnit đọc mọi record của cả hai layout:
+
+```cpp title="include/benchmark.hpp — checksum và sai khác theo field trước khi công bố row"
+void verifyUnit() {
+    const std::size_t end = std::min(row.count, target + 4096);
+    for (std::size_t index = target; index < end; ++index) {
+        const auto& first = workAoS[index];
+        if (first.id != index || !finiteParticle(first))
+            throw std::runtime_error("AoS state validation failed");
+        row.checksumAoS += particleChecksum(first);
+        const ParticleAoS second = readParticle(workSoA, index);
+        row.checksumSoA += particleChecksum(second);
+        row.maximumDifference = std::max(row.maximumDifference, particleDifference(first, second));
+        row.maximumErrorRatio = std::max(row.maximumErrorRatio, particleErrorRatio(first, second));
+    }
+    target = end;
+    if (target < row.count)
+        return;
+    if (paired && row.maximumErrorRatio > 1)
+        throw std::runtime_error("AoS/SoA state mismatch");
+    target = 0;
+    trial = 0;
+    ++sample;
+    if (sample < 5) {
+        chooseMethod();
+        return;
+    }
+    row.aos = summarizeTimes(aosTimes);
+    row.soa = summarizeTimes(soaTimes);
+    rows.push_back(row);
+    if (++caseIndex < sizes.size() * workloads.size())
+        prepareCase();
+    else {
+        active = false;
+        notice = "Complete: 1 warm-up + 5 samples, 3 full-N passes each; checksum verified";
+    }
 }
 ```
 
-Mỗi row chứa timing và traffic của cùng `count`. Terminal còn in checksum/difference để kết quả không bị tách khỏi correctness.
+ID/generation phải khớp chính xác; NaN/Inf bị từ chối. particleErrorRatio dùng ngưỡng theo đơn vị từ bài 05, nên tối đa phải không quá 1. Checksum được giữ và in; nó giúp output có mục đích sử dụng nhưng không thay kiểm từng field.
 
-## Ghép các phần lại
+Nếu kiểm thất bại, job dừng bằng lỗi, không giữ một row “nhanh nhưng sai”. Nếu timeout/cancel giữa chừng, chỉ các row trước đó đã hoàn tất được giữ; không đủ sáu row thì cả lượt scaling chưa hoàn tất.
 
-`B` chạy race ở N hiện tại; `S` chạy ba row 10k/100k/1M. Cả hai đều tạm dừng animation. Scaling chỉ chạy khi người dùng yêu cầu, không chạy trong startup hoặc CTest. Trên web, nút dừng sẽ `terminate()` worker hiện tại; ở app C++, mỗi lệnh vẫn hữu hạn nhờ danh sách count và repetitions cố định.
+Khi đủ năm mẫu, report median và min–max cho từng layout. Tỉ số đọc như sau:
 
-Hãy build Release trước khi dùng timing để thảo luận:
+$$
+R=\frac{\operatorname{median}(T_{\text{AoS}})}
+        {\operatorname{median}(T_{\text{SoA}})}.
+$$
 
-```bash title="Build và test Release"
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure --timeout 20
+R lớn hơn 1 nghĩa SoA nhanh hơn trong **kernel, input và lần đo này**; R nhỏ hơn 1 nghĩa SoA chậm hơn. Nếu timer cho 0 ở N quá nhỏ, không tính tỉ số. Min–max giao nhau cũng là lý do cần thận trọng với một chênh lệch median nhỏ.
+
+## Chạy checkpoint và đọc kết quả
+
+```powershell title="Terminal — build và đo bằng cùng configuration"
+cmake --build build --config Release --target project_32_checkpoint_7 --parallel 2
+./build/Release/project_32_checkpoint_7.exe --benchmark
 ```
 
-Debug vẫn hữu ích để bắt lỗi, nhưng optimizer có thể thay đổi đáng kể cách compiler xử lý loop và bounds.
+CLI chạy 10.000 / 100.000 / 1.000.000 × hai workload. Chạy không có --benchmark để mở cửa sổ: B đo N/workload đang chọn; C chạy sáu ca. Vật lý pause trong khi đo; camera vẫn dùng được. Space pause/tiếp tục job, X hủy, deadline 30 giây tính cả thời gian pause.
 
-## Thử làm sai để hiểu đúng
+Canvas chỉ chạy 256 / 2.000 / 20.000 trong JavaScript worker. Nó giúp kiểm quy trình, số pass và kết quả, **không phải** phép đo một triệu hạt native hay bằng chứng cache của record C++ 44 byte.
 
-1. Đo AoS ở Release và SoA ở Debug. Cùng source chưa đủ nếu build mode khác nhau.
-2. Chạy AoS năm lần nhưng SoA một lần rồi so tổng elapsed.
-3. Tạo SoA từ working AoS đã chạy một bước. Hai phía không còn cùng input.
-4. Xóa maximum difference vì “CTest đã chạy”. Benchmark harness vẫn có thể mắc lỗi lifecycle mà unit test kernel nhỏ chưa bao phủ.
-5. Tự động chạy scaling mỗi frame. Một triệu phần tử nhân nhiều repetitions sẽ khiến UI đóng băng liên tục.
+### Một kết quả thật, không chọn riêng ca có lợi
+
+Một lần chạy tham chiếu ngày 26/10/2026: AMD Ryzen 5 5600H, Windows x64 10.0.26300, MSVC 1933, Visual Studio 2022, Release. Một luồng CPU, seed 0x32c0ffee, dt = 1/120, 1 warm-up, 5 mẫu × 3 pass. CMAKE_CXX_FLAGS là /DWIN32 /D_WINDOWS /EHsc; Release là /O2 /Ob2 /DNDEBUG. Target dùng C++20, /W4 và /permissive-; không thêm manual SIMD hoặc ép hai loop có vectorization giống nhau.
+
+| N / workload | AoS median [min–max] ms | SoA median [min–max] ms |
+| --- | --- | --- |
+| 10.000 / gravity-only | 0,0175 [0,0173–0,0182] | 0,0021 [0,0021–0,0022] |
+| 10.000 / full lifecycle | 0,0497 [0,0494–0,1087] | 0,1273 [0,1264–0,1579] |
+| 1.000.000 / gravity-only | 36,8278 [32,26–61,6543] | 0,7267 [0,6611–0,7968] |
+| 1.000.000 / full lifecycle | 33,2620 [26,7041–43,8873] | 33,2263 [32,7159–44,0234] |
+
+Mọi row của lượt chạy có error ratio = 0 và checksum khớp. Ở N = 10.000, full lifecycle **chậm hơn** với SoA; ở một triệu, hai median full lifecycle gần nhau và khoảng min–max chồng lấn. Không có cơ sở để hứa một speedup đáng kể cho vòng đời đầy đủ từ lượt này.
+
+Mô hình line ở bài 06 phù hợp để đặt giả thuyết cho gravity-only, không dự đoán chính xác các thời gian trên. Compiler có thể tự vectorize hai loop khác nhau; muốn khẳng định lý do cụ thể, cần thêm optimization report/profiler, không suy ra chỉ từ bảng này.
+
+Đây là ví dụ để học cách đọc báo cáo, không phải chuẩn FPS hoặc ngưỡng mà máy bạn phải đạt. Khi tự chạy, lưu đủ sáu row cùng CPU/OS/compiler, flags thực tế trong CMakeCache.txt và tải nền đáng chú ý.
+
+## Cố tình làm sai
+
+Chọn trước một ca bạn nghĩ SoA không có lợi và giải thích vì sao. Sau khi đo, giữ cả row trái dự đoán.
+
+1. Tạm để SoA chạy một pass còn AoS chạy ba. Counter phải phát hiện khác số lượt; tên cột và cùng N không đủ. Khôi phục ba pass cho cả hai trước khi so.
+2. Tạm bỏ conversion time khỏi báo cáo rồi giả định ứng dụng đổi layout mỗi frame. Tổng chi phí bị giấu có thể đảo kết luận sử dụng thực tế. Khôi phục phần chi phí riêng và tính lại conversion + update.
+
+Không loại các row SoA chậm hơn và không dùng vài chữ số cuối của median để kết luận khi độ dao động còn lớn.
 
 ## Tự kiểm tra kết quả
 
-- [ ] AoS và SoA có warm-up riêng ngoài samples.
-- [ ] Mỗi sample loại copy/conversion khỏi timer.
-- [ ] Hai phía dùng cùng workload và repetitions.
-- [ ] Median được tính từ nhiều sample hữu hạn.
-- [ ] Mọi row báo checksum bằng nhau và maximum difference bằng 0.
-- [ ] Có đủ ba mốc 10k, 100k và 1M.
-- [ ] Target `project_32_checkpoint_7` build ở Debug và Release.
+- Có đủ sáu row của ba N × hai workload khi job báo hoàn tất.
+- Mỗi mẫu mỗi layout chạy đúng ba pass đủ N, cùng input/config/seed/dt.
+- Có warm-up, năm mẫu, AB/BA, median và min–max.
+- Checksum được dùng; mọi field qua kiểm theo đơn vị, ID/generation khớp, không NaN/Inf.
+- Copy/conversion, kernel, render và full frame có phạm vi riêng.
+- Pause/Cancel/deadline phản hồi; row chưa hoàn tất không được coi là kết quả.
+- Báo CPU/OS/compiler/configuration/flags và không hứa SoA luôn thắng.
 
 ## Bài tập mở rộng
 
-1. In toàn bộ samples cạnh median để phát hiện outlier.
-2. In thứ tự chạy cạnh từng sample để kiểm tra harness thật sự luân phiên AoS-first và SoA-first.
-3. Thêm một benchmark conversion riêng và đặt tên rõ `conversionMilliseconds`.
+Giả sử chỉ đổi layout một lần rồi chạy 1.000 bước. Dựa trên số đo máy bạn, ước tính tổng chi phí conversion + update cho từng lựa chọn. Sau đó đổi giả định thành chuyển layout mỗi bước: lựa chọn có còn giống trước không? Nếu chênh lệch nhỏ hơn độ dao động phép đo, hãy ghi “chưa đủ bằng chứng” thay vì chọn một bên theo vài chữ số cuối.
 
-Bài cuối sẽ ghép experiment thành ứng dụng hoàn chỉnh và chạy validation không phụ thuộc layout nào thắng.
+Bài tiếp theo: [Hoàn thiện đài phun một triệu hạt](/projects/memory-layout-race/08-hoan-thien-memory-layout-race).

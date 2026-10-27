@@ -1,12 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  defaultConfig, emptyParticle, spawnParticle, randomUnit, integrateParticle,
-  advanceParticle, planEmission, fixedDt, makeParticlesAoS, makeParticlesSoA,
-  maximumLayoutDifference, validSoA, updateAoSRange, updateSoARange,
-  particleChecksum, readParticle, finiteParticle, modelTraffic, validateConfig,
+  defaultConfig,
+  emptyParticle,
+  spawnParticle,
+  randomUnit,
+  integrateParticle,
+  advanceParticle,
+  planEmission,
+  fixedDt,
+  makeParticlesAoS,
+  makeParticlesSoA,
+  maximumLayoutDifference,
+  validSoA,
+  updateAoSRange,
+  updateSoARange,
+  particleChecksum,
+  particleErrorRatio,
+  readParticle,
+  finiteParticle,
+  modelTraffic,
+  validateConfig,
 } from "../lib/labs/fountain/state.ts";
-import { createFountain, beginPhysics, beginConversion, tickPending, cancelPending } from "../lib/labs/fountain/scene.ts";
+import {
+  createFountain,
+  beginPhysics,
+  beginConversion,
+  tickPending,
+  cancelPending,
+} from "../lib/labs/fountain/scene.ts";
+import { panFountainCamera, projectFountainPoint } from "../lib/labs/fountain/camera.ts";
 
 test("P32 independent emission, gravity and respawn fixtures", () => {
   const config = defaultConfig();
@@ -17,7 +40,10 @@ test("P32 independent emission, gravity and respawn fixtures", () => {
   const particle = emptyParticle(7);
   Object.assign(particle, { velocityX: 1, velocityY: 2, velocityZ: 3, age: 0.25 });
   integrateParticle(particle, 1 / 32, -8);
-  assert.deepEqual([particle.velocityY, particle.positionX, particle.positionY, particle.positionZ, particle.age], [1.75, 0.03125, 0.0546875, 0.09375, 0.28125]);
+  assert.deepEqual(
+    [particle.velocityY, particle.positionX, particle.positionY, particle.positionZ, particle.age],
+    [1.75, 0.03125, 0.0546875, 0.09375, 0.28125],
+  );
   Object.assign(particle, spawnParticle(7, 4, config));
   particle.age = particle.lifetime - 1 / 64;
   assert.equal(advanceParticle(particle, config, 1 / 32), true);
@@ -27,18 +53,25 @@ test("P32 independent emission, gravity and respawn fixtures", () => {
 });
 
 test("P32 all eleven fields round-trip; both float32 kernels agree through repeated respawns", () => {
-  const config = defaultConfig(), initial = makeParticlesAoS(257, config);
+  const config = defaultConfig(),
+    initial = makeParticlesAoS(257, config);
   const copy = makeParticlesAoS(257, config);
   assert.deepEqual(copy, initial);
   for (const workload of ["gravity-only", "full-lifecycle"]) {
-    const aos = structuredClone(initial), soa = makeParticlesSoA(initial);
+    const aos = structuredClone(initial),
+      soa = makeParticlesSoA(initial);
     assert.equal(maximumLayoutDifference(aos, soa), 0);
     for (let step = 0; step < 400; step++) {
       updateAoSRange(aos, 0, aos.length, config, workload, aos.length);
       updateSoARange(soa, 0, soa.id.length, config, workload, soa.id.length);
     }
     assert.equal(maximumLayoutDifference(aos, soa), 0);
-    assert.equal(aos.reduce((sum,p)=>sum+particleChecksum(p),0), Array.from({length:soa.id.length},(_,i)=>particleChecksum(readParticle(soa,i))).reduce((a,b)=>a+b,0));
+    assert.equal(
+      aos.reduce((sum, p) => sum + particleChecksum(p), 0),
+      Array.from({ length: soa.id.length }, (_, i) =>
+        particleChecksum(readParticle(soa, i)),
+      ).reduce((a, b) => a + b, 0),
+    );
     if (workload === "full-lifecycle") assert.ok(aos[0].generation > 0);
     else {
       assert.equal(aos[0].age, initial[0].age);
@@ -53,11 +86,12 @@ test("P32 all eleven fields round-trip; both float32 kernels agree through repea
 });
 
 test("P32 Canvas commits a full 20000-target step atomically and cancels incomplete work", () => {
-  const scene = createFountain(8, 2), original = structuredClone(scene.aos);
+  const scene = createFountain(8, 2),
+    original = structuredClone(scene.aos);
   let time = 0;
   scene.singleStep = true;
   beginPhysics(scene, time);
-  tickPending(scene, ()=>++time, 0);
+  tickPending(scene, () => ++time, 0);
   assert.equal(scene.pending.cursor, 512);
   assert.equal(scene.steps, 0);
   assert.deepEqual(scene.aos, original);
@@ -67,65 +101,110 @@ test("P32 Canvas commits a full 20000-target step atomically and cancels incompl
   beginPhysics(scene, time);
   let ticks = 0;
   while (scene.pending) {
-    tickPending(scene, ()=>++time, 0);
+    tickPending(scene, () => ++time, 0);
     assert.ok(++ticks < 1000);
   }
   assert.equal(scene.committedUpdated, 20000);
   assert.equal(scene.time, fixedDt);
-  for (let i=0;i<scene.count;i++) {
-    const old=original[i], next=scene.aos[i], remaining=Math.fround(old.lifetime-old.age);
-    assert.equal(next.id,i);
-    assert.equal(next.generation,old.generation+Number(fixedDt>=remaining));
-    assert.equal(next.age,fixedDt>=remaining?Math.fround(fixedDt-remaining):Math.fround(old.age+fixedDt));
+  for (let i = 0; i < scene.count; i++) {
+    const old = original[i],
+      next = scene.aos[i],
+      remaining = Math.fround(old.lifetime - old.age);
+    assert.equal(next.id, i);
+    assert.equal(next.generation, old.generation + Number(fixedDt >= remaining));
+    assert.equal(
+      next.age,
+      fixedDt >= remaining ? Math.fround(fixedDt - remaining) : Math.fround(old.age + fixedDt),
+    );
     assert.ok(finiteParticle(next));
   }
   beginConversion(scene, time);
-  tickPending(scene, ()=>++time, 0);
-  assert.equal(scene.layout,"aos");
+  tickPending(scene, () => ++time, 0);
+  assert.equal(scene.layout, "aos");
   cancelPending(scene);
-  assert.equal(scene.layout,"aos");
-  beginConversion(scene,time);
-  while(scene.pending) tickPending(scene,()=>++time,0);
-  assert.equal(scene.layout,"soa");
-  assert.equal(maximumLayoutDifference(scene.aos,scene.soa),0);
+  assert.equal(scene.layout, "aos");
+  beginConversion(scene, time);
+  while (scene.pending) tickPending(scene, () => ++time, 0);
+  assert.equal(scene.layout, "soa");
+  assert.equal(maximumLayoutDifference(scene.aos, scene.soa), 0);
 });
 
 test("P32 cold pool preserves emission carry across conversion and reuses stable slots", () => {
-  const scene=createFountain(8,0);
-  let now=0, births=0;
-  for(let step=0;step<300;step++) {
-    scene.singleStep=true;
-    beginPhysics(scene,now);
-    while(scene.pending) tickPending(scene,()=>++now,0);
-    births+=scene.born;
-    if(step===0) {
-      const carry=scene.emissionRemainder, before=structuredClone(scene.aos);
-      beginConversion(scene,now);
-      while(scene.pending) tickPending(scene,()=>++now,0);
-      assert.equal(scene.emissionRemainder,carry);
-      assert.equal(maximumLayoutDifference(before,scene.soa),0);
+  const scene = createFountain(8, 0);
+  let now = 0,
+    births = 0;
+  for (let step = 0; step < 300; step++) {
+    scene.singleStep = true;
+    beginPhysics(scene, now);
+    while (scene.pending) tickPending(scene, () => ++now, 0);
+    births += scene.born;
+    if (step === 0) {
+      const carry = scene.emissionRemainder,
+        before = structuredClone(scene.aos);
+      beginConversion(scene, now);
+      while (scene.pending) tickPending(scene, () => ++now, 0);
+      assert.equal(scene.emissionRemainder, carry);
+      assert.equal(maximumLayoutDifference(before, scene.soa), 0);
     }
   }
-  assert.equal(scene.active,256);
-  assert.equal(births,256);
-  for(let i=0;i<scene.active;i++) assert.equal(readParticle(scene.soa,i).id,i);
-  const before=scene.time;
-  scene.singleStep=true;
-  beginPhysics(scene,0);
-  tickPending(scene,()=>20000,0);
-  assert.equal(scene.pending,null);
-  assert.equal(scene.time,before);
-  assert.match(scene.notice,/15 giây/);
+  assert.equal(scene.active, 256);
+  assert.equal(births, 256);
+  for (let i = 0; i < scene.active; i++) assert.equal(readParticle(scene.soa, i).id, i);
+  const before = scene.time;
+  scene.singleStep = true;
+  beginPhysics(scene, 0);
+  tickPending(scene, () => 20000, 0);
+  assert.equal(scene.pending, null);
+  assert.equal(scene.time, before);
+  assert.match(scene.notice, /15 giây/);
 });
 
 test("P32 bounds, precision and declared cache-line assumptions", () => {
-  assert.throws(()=>makeParticlesAoS(1_000_000),/Canvas particle budget/);
-  assert.throws(()=>validateConfig({...defaultConfig(),gravity:NaN}),/Non-finite/);
-  assert.throws(()=>validateConfig(defaultConfig(),1),/budget/);
-  validateConfig(defaultConfig(),Math.fround(1/30));
-  assert.deepEqual(modelTraffic(64,"aos","gravity-only"),{usefulBytes:256,uniqueLines:44,loadedBytes:2816,upperBound:false});
-  assert.equal(modelTraffic(64,"soa","gravity-only").uniqueLines,4);
-  assert.equal(modelTraffic(64,"soa","full-lifecycle").upperBound,true);
-  const soa=makeParticlesSoA(makeParticlesAoS(17));
-  assert.equal(Object.values(soa).reduce((sum,array)=>sum+array.byteLength,0),17*44);
+  assert.throws(() => makeParticlesAoS(1_000_000), /Canvas particle budget/);
+  assert.throws(() => validateConfig({ ...defaultConfig(), gravity: NaN }), /Non-finite/);
+  assert.throws(() => validateConfig(defaultConfig(), 1), /budget/);
+  validateConfig(defaultConfig(), Math.fround(1 / 30));
+  assert.deepEqual(modelTraffic(64, "aos", "gravity-only"), {
+    usefulBytes: 256,
+    uniqueLines: 44,
+    loadedBytes: 2816,
+    upperBound: false,
+  });
+  assert.equal(modelTraffic(64, "soa", "gravity-only").uniqueLines, 4);
+  assert.equal(modelTraffic(64, "soa", "full-lifecycle").upperBound, true);
+  const soa = makeParticlesSoA(makeParticlesAoS(17));
+  assert.equal(
+    Object.values(soa).reduce((sum, array) => sum + array.byteLength, 0),
+    17 * 44,
+  );
+});
+
+test("P32 agreement compares units separately and rejects identity/nonfinite mismatches", () => {
+  const origin = emptyParticle(0);
+  assert.ok(particleErrorRatio(origin, { ...origin, positionX: 5e-6 }) <= 1);
+  assert.ok(particleErrorRatio(origin, { ...origin, age: 5e-6 }) > 1);
+  assert.ok(particleErrorRatio(origin, { ...origin, hue: 5e-6 }) > 1);
+  assert.equal(particleErrorRatio(origin, { ...origin, generation: 1 }), Infinity);
+  assert.equal(particleErrorRatio(origin, { ...origin, velocityX: NaN }), Infinity);
+});
+
+test("P32 pan follows the view plane at every yaw without editing physical state", () => {
+  const scene = createFountain(8, 3),
+    before = structuredClone(scene.aos);
+  for (const yaw of [0, Math.PI / 2, 0.45, -1.2]) {
+    const camera = { ...scene.camera, yaw, pitch: 0.3 };
+    const target = { x: camera.x, y: camera.y, z: camera.z };
+    const moved = panFountainCamera(camera, 20, -15, 340);
+    const point = projectFountainPoint(target.x, target.y, target.z, moved, 760, 340);
+    assert.ok(point);
+    assert.ok(Math.abs(point.x - 400) < 1e-10);
+    assert.ok(Math.abs(point.y - 155) < 1e-10);
+    assert.deepEqual(
+      { x: camera.x, y: camera.y, z: camera.z },
+      target,
+      "pan must not mutate the source camera",
+    );
+  }
+  assert.deepEqual(scene.aos, before);
+  assert.throws(() => panFountainCamera(scene.camera, 1, 1, 0), /Invalid/);
 });

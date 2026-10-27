@@ -49,7 +49,7 @@ void testEmissionAndGravity() {
     const auto repeat = lab::spawnParticle(17, 5, config);
     auto expected = repeat;
     lab::integrateParticle(expected, 1.0F / 64, config.gravity);
-    check(lab::particleDifference(particle, expected) < 1e-5F, "respawn consumes the correct fractional interval");
+    check(lab::particleErrorRatio(particle, expected) <= 1, "respawn consumes the correct fractional interval within field-specific units");
 }
 
 void testLayoutsAndKernels() {
@@ -57,6 +57,15 @@ void testLayoutsAndKernels() {
     const auto initial = lab::makeParticlesAoS(257, config);
     const auto repeated = lab::makeParticlesAoS(257, config);
     check(sizeof(lab::ParticleAoS) == 44, "payload is two uint32 and nine float32 fields");
+    lab::ParticleAoS origin{}, changed{};
+    changed.positionX = 5e-6F;
+    check(lab::particleErrorRatio(origin, changed) <= 1, "position tolerance is in metres");
+    changed = origin;
+    changed.age = 5e-6F;
+    check(lab::particleErrorRatio(origin, changed) > 1, "age has a separate seconds tolerance");
+    changed = origin;
+    changed.hue = 5e-6F;
+    check(lab::particleErrorRatio(origin, changed) > 1, "display attribute tolerance is dimensionless");
     auto soa = lab::makeParticlesSoA(initial);
     check(soa.valid() && lab::maximumLayoutDifference(initial, soa) == 0, "all eleven fields convert without loss");
     for (std::size_t index = 0; index < initial.size(); ++index) {
@@ -74,7 +83,8 @@ void testLayoutsAndKernels() {
             lab::updateAoSRange(aos, 0, aos.size(), config, lab::fixedDt, workload, aos.size());
             lab::updateSoARange(soa, 0, soa.size(), config, lab::fixedDt, workload, soa.size());
         }
-        check(lab::maximumLayoutDifference(aos, soa) <= 1e-5F, "AoS/SoA agree after repeated kernel passes");
+        for (std::size_t index = 0; index < aos.size(); ++index)
+            check(lab::particleErrorRatio(aos[index], lab::readParticle(soa, index)) <= 1, "AoS/SoA agree under field-specific tolerances after repeated kernel passes");
         check(std::abs(lab::checksum(aos, aos.size()) - lab::checksum(soa, soa.size())) < 1e-6, "both observable checksums agree");
         if (workload == lab::MemoryWorkload::fullLifecycle)
             check(aos[0].generation > 0, "agreement includes recycled particles, not only motion");
@@ -134,6 +144,19 @@ void testAtomicStateAndConversion() {
 
 void testBenchmarkAndBounds() {
     lab::BenchmarkJob job{};
+    job.start({}, {17}, {lab::MemoryWorkload::fullLifecycle});
+    const std::array<std::array<int, 2>, 6> expectedOrder{{{0, 1}, {0, 1}, {1, 0}, {0, 1}, {1, 0}, {0, 1}}};
+    for (int sampleIndex = 0; sampleIndex < 6; ++sampleIndex) {
+        job.sample = sampleIndex - 1;
+        for (int trialIndex = 0; trialIndex < 2; ++trialIndex) {
+            job.trial = trialIndex;
+            job.chooseMethod();
+            check(job.method == expectedOrder[std::size_t(sampleIndex)][std::size_t(trialIndex)], "benchmark alternates the explicit AB/BA schedule");
+        }
+    }
+    job.paired = false;
+    job.chooseMethod();
+    check(job.method == 0, "AoS-only baseline never chooses an unmeasured SoA trial");
     job.start({}, {257}, {lab::MemoryWorkload::gravityOnly, lab::MemoryWorkload::fullLifecycle});
     job.paused = true;
     job.tick();
@@ -147,13 +170,22 @@ void testBenchmarkAndBounds() {
     check(job.rows.size() == 2 && !job.timedOut, "both workloads measured");
     for (const auto& row : job.rows) {
         check(row.updated == 257 * 3 && row.paired, "benchmark records every target/pass");
-        check(row.maximumDifference <= 1e-5F && std::isfinite(row.checksumAoS), "timing accompanies state verification");
+        check(row.maximumErrorRatio <= 1 && std::isfinite(row.checksumAoS), "timing accompanies field-specific state verification");
         check(row.aos.minimum <= row.aos.median && row.aos.median <= row.aos.maximum && row.soa.minimum <= row.soa.median && row.soa.median <= row.soa.maximum, "median and spread, never assert a speed winner");
     }
     job.start({}, {257}, {lab::MemoryWorkload::fullLifecycle});
     job.deadline = lab::Clock::now() - std::chrono::seconds(1);
+    job.paused = true;
     job.tick();
-    check(job.timedOut && !job.active, "deadline reports incomplete instead of hanging");
+    check(job.timedOut && !job.active, "wall deadline remains active while paused");
+    check(rejects([] {
+              lab::summarizeTimes({1, 2});
+          }),
+          "timing summary requires all five samples");
+    check(rejects([] {
+              lab::summarizeTimes({1, 2, 3, 4, std::numeric_limits<double>::infinity()});
+          }),
+          "timing summary rejects nonfinite samples");
     job.start({}, {257}, {lab::MemoryWorkload::fullLifecycle});
     job.cancel();
     check(!job.active, "cancel stops a running benchmark");
@@ -185,11 +217,59 @@ void testPresentation() {
     const auto square = lab::projectPoint({1, 0, 0}, camera, 400, 400);
     const auto wide = lab::projectPoint({1, 0, 0}, camera, 800, 400);
     check(square.x - 200 == wide.x - 400 && square.y == 200, "aspect applied once in 3D camera");
+    for (double yaw : {0.0, 1.5707963267948966, 0.45, -1.2}) {
+        auto moved = camera;
+        moved.yaw = yaw;
+        moved.pitch = 0.3;
+        const auto originalTarget = moved.target;
+        lab::panCamera(moved, 20, -15, 400);
+        const auto point = lab::projectPoint(originalTarget, moved, 400, 400);
+        check(point.visible && std::abs(point.x - 220) <= 1 && std::abs(point.y - 185) <= 1, "pan stays in the view plane after orbit, within raster rounding");
+    }
+    check(rejects([&] {
+              lab::panCamera(camera, 1, 1, 0);
+          }),
+          "invalid pan viewport rejected");
     lab::Simulation simulation{};
     simulation.reset(257);
     lab::Framebuffer image{};
     const auto stats = lab::drawFountain(image, simulation, camera, 17);
     check(stats.sampled == 17 && stats.rendered <= 17 && simulation.active == 257, "render sampling does not reduce simulated N");
+
+    lab::Camera framedCamera{};
+    image.width = 320;
+    image.height = 180;
+    image.pixels.resize(320 * 180);
+    const auto particles = simulation.aos;
+    const auto first = lab::drawFountain(image, simulation, framedCamera, 128);
+    const auto pixels = image.pixels;
+    check(first.sampled == 128 && first.rendered > 0 && first.rendered <= 128, "framed fountain has visible water with finite display sampling");
+    lab::drawFountain(image, simulation, framedCamera, 128);
+    check(image.pixels == pixels, "cached geometry never accumulates water light across frames");
+    check(simulation.time == 0 && simulation.steps == 0 && lab::checksum(particles, particles.size()) == lab::checksum(simulation.aos, simulation.active), "drawing does not advance or change the simulation");
+    simulation.beginConversion();
+    while (simulation.pending != lab::PendingWork::none)
+        simulation.tickConversion(0);
+    lab::drawFountain(image, simulation, framedCamera, 128);
+    check(image.pixels == pixels, "AoS and SoA render the same committed particle state");
+    lab::drawFountain(image, simulation, framedCamera, 128, true);
+    check(image.pixels != pixels, "debug grid invalidates the static surface cache");
+    image.pixels.assign(image.pixels.size(), lab::rgbColor(0, 0, 0));
+    image.surfaceDepth.assign(image.pixels.size(), 1);
+    check(!image.addLight(3, 3, 2, lab::rgbColor(255, 0, 0), 1), "opaque surfaces hide water behind them");
+    check(image.addLight(3, 3, .5, lab::rgbColor(255, 0, 0), 1) && image.pixels[963] == 0xff0000ffU, "water in front has explicit native RGBA packing");
+    check(!image.addLight(-1, 3, .5, lab::rgbColor(255, 0, 0), 1), "light outside the framebuffer is rejected");
+
+    lab::Framebuffer plane{};
+    plane.width = plane.height = 8;
+    lab::Camera level{};
+    level.yaw = level.pitch = 0;
+    level.distance = 10;
+    level.target = {0, 1, 0};
+    lab::prepareFountainSurface(plane, level, false);
+    const double expectedDepth = 8 * lab::fountainFocalScale / 2.5;
+    check(std::abs(plane.surfaceDepth[6 * 8 + 4] - expectedDepth) < 1e-6, "grid plane depth agrees with an independent ray-plane oracle");
+    check(std::isinf(plane.surfaceDepth[4]) && lab::fountainFloorY == 0, "reference plane lies at emitter height, with no floating base");
 }
 } // namespace
 

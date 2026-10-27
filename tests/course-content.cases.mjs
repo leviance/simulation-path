@@ -490,7 +490,7 @@ test("every project teaches its visible starting point before new abstractions",
     [
       "memory-layout-race",
       "01-khoa-workload-mot-trieu-particles.mdx",
-      ["ParticleAoS", "makeParticlesAoS", "SDL_UpdateTexture"],
+      ["ParticleAoS", "makeParticlesAoS", "drawFountain"],
     ],
     [
       "cpu-gpu-triangle",

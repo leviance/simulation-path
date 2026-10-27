@@ -10,8 +10,8 @@ export default defineConfig({
   server: {
     watch: {
       // These trees contain C++ checkpoints, compiler output and local package
-      // caches. Watched generated source modules use content-versioned ?raw
-      // imports, so changing a checkpoint does not require watching these trees.
+      // caches. Watched generated source modules import content-hashed JSON,
+      // so changing a checkpoint does not require watching these trees.
       // Watching tens of thousands of files can starve RSC transport on Windows.
       ignored: [
         "**/.next/**",

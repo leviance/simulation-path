@@ -10,8 +10,10 @@ struct TimingStats {
 
 // [snippet:summarizeTimes]
 inline TimingStats summarizeTimes(std::vector<double> samples) {
-    if (samples.empty())
-        throw std::invalid_argument("No timing samples");
+    if (samples.size() != 5 || std::any_of(samples.begin(), samples.end(), [](double value) {
+            return !std::isfinite(value) || value < 0;
+        }))
+        throw std::invalid_argument("Expected five finite nonnegative timing samples");
     std::sort(samples.begin(), samples.end());
     return {samples[samples.size() / 2], samples.front(), samples.back()};
 }
@@ -22,7 +24,7 @@ struct BenchmarkRow {
     MemoryWorkload workload{MemoryWorkload::fullLifecycle};
     TimingStats aos{}, soa{};
     double copyMs{}, conversionMs{}, checksumAoS{}, checksumSoA{};
-    float maximumDifference{};
+    float maximumDifference{}, maximumErrorRatio{};
     bool paired{};
 };
 enum class BenchmarkPhase { prepare,
@@ -43,7 +45,7 @@ struct BenchmarkJob {
     std::vector<double> aosTimes{}, soaTimes{};
     BenchmarkRow row{};
     BenchmarkPhase phase{BenchmarkPhase::prepare};
-    std::size_t caseIndex{}, target{};
+    std::size_t caseIndex{}, target{}, trialUpdated{};
     int sample{-1}, trial{}, method{}, step{};
     double kernelMs{};
     Clock::time_point deadline{};
@@ -77,7 +79,6 @@ struct BenchmarkJob {
         row = {};
         row.count = sizes[caseIndex / workloads.size()];
         row.workload = workloads[caseIndex % workloads.size()];
-        row.updated = row.count * 3;
         row.paired = paired;
         initial.resize(row.count);
         workAoS.resize(row.count);
@@ -95,10 +96,18 @@ struct BenchmarkJob {
     }
 
     void chooseMethod() {
-        // Alternate AB/BA between samples rather than always timing AoS first.
-        method = paired ? (trial + std::max(0, sample) % 2) % 2 : 0;
+        // Method 0 is AoS, method 1 is SoA. Odd samples reverse the pair.
+        method = 0;
+        if (paired) {
+            const bool soaFirst = sample >= 0 && sample % 2 == 1;
+            if (soaFirst)
+                method = 1 - trial;
+            else
+                method = trial;
+        }
         target = 0;
         step = 0;
+        trialUpdated = 0;
         kernelMs = 0;
         phase = BenchmarkPhase::reset;
     }
@@ -141,12 +150,16 @@ struct BenchmarkJob {
         }
 #endif
         kernelMs += milliseconds(started);
+        trialUpdated += end - target;
         target = end;
         if (target != row.count)
             return;
         target = 0;
         if (++step < 3)
             return;
+        if (trialUpdated != row.count * 3)
+            throw std::runtime_error("Incomplete benchmark pass");
+        row.updated = trialUpdated;
         if (sample >= 0) {
             if (method == 0)
                 aosTimes.push_back(kernelMs);
@@ -174,12 +187,13 @@ struct BenchmarkJob {
             const ParticleAoS second = readParticle(workSoA, index);
             row.checksumSoA += particleChecksum(second);
             row.maximumDifference = std::max(row.maximumDifference, particleDifference(first, second));
+            row.maximumErrorRatio = std::max(row.maximumErrorRatio, particleErrorRatio(first, second));
 #endif
         }
         target = end;
         if (target < row.count)
             return;
-        if (paired && row.maximumDifference > 1e-5F)
+        if (paired && row.maximumErrorRatio > 1)
             throw std::runtime_error("AoS/SoA state mismatch");
         target = 0;
         trial = 0;
@@ -202,7 +216,15 @@ struct BenchmarkJob {
     }
 
     void tick(double budgetMs = 6) {
-        if (!active || paused)
+        if (!active)
+            return;
+        if (Clock::now() >= deadline) {
+            active = false;
+            timedOut = true;
+            notice = "INCOMPLETE: 30-second wall deadline (including pauses)";
+            return;
+        }
+        if (paused)
             return;
         const auto until = Clock::now() + std::chrono::duration<double, std::milli>(budgetMs);
         do {

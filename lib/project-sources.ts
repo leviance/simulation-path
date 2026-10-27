@@ -16,10 +16,12 @@ export interface ProjectSourceBundle {
   checkpoint: "starter" | number | "final";
   changedPaths: ProjectSourcePath[];
   files: ProjectSourceFile[];
+  sourceVersion: string;
 }
 
 interface SourceModule {
   files: readonly ProjectSourceFile[];
+  version: string;
 }
 
 interface GeneratedProjectSource {
@@ -62,6 +64,7 @@ export async function getProjectSourceBundle(
     checkpoint,
     changedPaths: [...(project.changedPaths[String(checkpoint)] ?? [])],
     files,
+    sourceVersion: common.version + ":" + snapshot.version,
   } satisfies ProjectSourceBundle;
 }
 

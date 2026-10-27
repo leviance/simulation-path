@@ -1,117 +1,207 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Chuyển cùng state sang SoA
+# Đổi layout mà không làm đổi trạng thái
 
 ## Vấn đề cần giải quyết
 
-Trong AoS, muốn đọc `positionX` của particle kế tiếp, CPU phải đi qua toàn bộ phần còn lại của struct. SoA đổi cách sắp xếp: mọi `positionX` nằm trong một vector, mọi `positionY` nằm trong vector khác, và tương tự cho sáu field.
+Đài phun AoS đã chạy và có baseline. Ta muốn thử SoA nhưng không muốn mỗi lần đổi layout lại tạo một đài phun khác. Nếu chuyển đổi làm mất age, reset generation hoặc đổi vận tốc, phép so sánh sau đó sẽ không còn cùng bài toán.
 
-Điểm dễ sai là nghĩ SoA tạo ra sáu nhóm particle độc lập. Không phải vậy. Particle index `i` vẫn tồn tại; state của nó được ghép từ `positionX[i]`, `positionY[i]`… `velocityZ[i]`. Nếu một vector thiếu phần tử hoặc conversion lệch index, kernel có thể đọc field của hai particle khác nhau.
+Bài này **chỉ đổi nơi lưu dữ liệu**. Checkpoint 04 đọc/vẽ được SoA và đổi qua lại mà giữ nguyên state, nhưng chưa có kernel SoA; muốn chạy vật lý hãy trở về AoS. Bài 05 mới nối phần cập nhật SoA. Trình tự này giúp phát hiện lỗi conversion trước khi nghi ngờ solver.
 
-## Hiểu ý tưởng trước khi viết code
+## Theo chân một particle
 
-SoA có dạng:
+### Một hạt, hay một field, nằm cạnh nhau?
 
-```text title="SoA: mỗi hàng là một field"
-positionX: [px0 px1 px2 px3 ...]
-positionY: [py0 py1 py2 py3 ...]
-positionZ: [pz0 pz1 pz2 pz3 ...]
-velocityX: [vx0 vx1 vx2 vx3 ...]
-velocityY: [vy0 vy1 vy2 vy3 ...]
-velocityZ: [vz0 vz1 vz2 vz3 ...]
+Trong AoS, toàn bộ record của hạt 0 nằm trước record của hạt 1. Trong SoA, mọi positionX nằm trong một mảng, mọi positionY trong mảng khác, và tương tự với các field còn lại.
+
+```text title="Cùng state, hai cách bố trí"
+AoS: [id0 gen0 x0 y0 z0 vx0 vy0 vz0 age0 life0 hue0] [id1 ...]
+SoA: id = [id0 id1 ...]   generation = [gen0 gen1 ...]
+     positionX = [x0 x1 ...]   positionY = [y0 y1 ...]   ...
 ```
 
-Hai `positionX` kế tiếp giờ cách nhau 4 byte thay vì 24 byte. Đó là thay đổi layout. Số particle, giá trị, precision và thứ tự index không được đổi.
+SoA không cho phép bỏ age, lifetime hoặc hue chỉ vì phép đo hiện tại không chạm tới chúng. Mỗi layout vẫn chứa hai uint32 và chín float cho một slot: payload logic 44 × N byte. Mười một vector có metadata và capacity riêng; tổng RAM thực tế còn phụ thuộc buffer đang giữ.
 
 <InteractiveLab demo="memory-layout-race" mode="soa-layout" />
 
-## Viết code từng bước
+## Bắt tay xây dựng
 
-### Bước 1 — Khai báo sáu vector có tên đầy đủ
+### Bước 1 — Tạo container chứa đủ mười một mảng
 
-```cpp title="include/particles.hpp — ParticlesSoA"
+Thêm ParticlesSoA trong include/storage.hpp, bên trong namespace lab. File này đã include particles.hpp, nơi định nghĩa ParticleAoS và giới hạn N:
+
+```cpp title="include/storage.hpp — container SoA và kiểm độ dài"
 struct ParticlesSoA {
+    std::vector<std::uint32_t> id{};
+    std::vector<std::uint32_t> generation{};
     std::vector<float> positionX{};
     std::vector<float> positionY{};
     std::vector<float> positionZ{};
     std::vector<float> velocityX{};
     std::vector<float> velocityY{};
     std::vector<float> velocityZ{};
+    std::vector<float> age{};
+    std::vector<float> lifetime{};
+    std::vector<float> hue{};
 
-    [[nodiscard]] std::size_t size() const {
-        return positionX.size();
+    std::size_t size() const {
+        return id.size();
+    }
+
+    void resize(std::size_t count) {
+        if (count > maximumParticles)
+            throw std::invalid_argument("SoA allocation budget");
+        id.resize(count);
+        generation.resize(count);
+        positionX.resize(count);
+        positionY.resize(count);
+        positionZ.resize(count);
+        velocityX.resize(count);
+        velocityY.resize(count);
+        velocityZ.resize(count);
+        age.resize(count);
+        lifetime.resize(count);
+        hue.resize(count);
+    }
+
+    bool valid() const {
+        const std::size_t count = size();
+        return generation.size() == count && positionX.size() == count && positionY.size() == count && positionZ.size() == count && velocityX.size() == count && velocityY.size() == count && velocityZ.size() == count && age.size() == count && lifetime.size() == count && hue.size() == count;
     }
 };
 ```
 
-Ta chưa gói ba trục thành `std::vector<Vec3>` vì như vậy chỉ chuyển từ một struct sáu float sang hai struct ba float; đó chưa phải SoA đầy đủ cho thí nghiệm field-specific.
+`size()` lấy độ dài mảng ID làm chuẩn, còn `valid()` kiểm mọi mảng có cùng size. Phải resize **tất cả**, không chỉ các mảng position/velocity. Nếu một mảng ngắn hơn, đọc cùng index không còn hợp lệ dù hình đài phun đôi khi vẫn trông bình thường.
 
-### Bước 2 — Convert từ đúng AoS source
+Hai mảng đầu là uint32 để ID/generation giữ giá trị nguyên chính xác. Không đổi chúng sang float để gom kiểu: float32 không biểu diễn mọi uint32 chính xác.
 
-```cpp title="include/particles.hpp — makeParticlesSoA"
-inline ParticlesSoA makeParticlesSoA(std::span<const ParticleAoS> particles) {
-    ParticlesSoA result{};
-    result.positionX.reserve(particles.size());
-    result.positionY.reserve(particles.size());
-    result.positionZ.reserve(particles.size());
-    result.velocityX.reserve(particles.size());
-    result.velocityY.reserve(particles.size());
-    result.velocityZ.reserve(particles.size());
-    for (const ParticleAoS& particle : particles) {
-        result.positionX.push_back(particle.positionX);
-        result.positionY.push_back(particle.positionY);
-        result.positionZ.push_back(particle.positionZ);
-        result.velocityX.push_back(particle.velocityX);
-        result.velocityY.push_back(particle.velocityY);
-        result.velocityZ.push_back(particle.velocityZ);
-    }
-    return result;
+### Bước 2 — Ghi và đọc một record
+
+Thêm writeParticle ngay sau kiểu container:
+
+```cpp title="include/storage.hpp — ghi đủ field vào cùng slot"
+inline void writeParticle(ParticlesSoA& destination, std::size_t index, const ParticleAoS& particle) {
+    destination.id[index] = particle.id;
+    destination.generation[index] = particle.generation;
+    destination.positionX[index] = particle.positionX;
+    destination.positionY[index] = particle.positionY;
+    destination.positionZ[index] = particle.positionZ;
+    destination.velocityX[index] = particle.velocityX;
+    destination.velocityY[index] = particle.velocityY;
+    destination.velocityZ[index] = particle.velocityZ;
+    destination.age[index] = particle.age;
+    destination.lifetime[index] = particle.lifetime;
+    destination.hue[index] = particle.hue;
 }
 ```
 
-Conversion cố ý dễ đọc. Nó chạy ngoài vùng benchmark, nên ta không cần biến nó thành một mẹo tối ưu khó kiểm tra.
+Mọi mảng dùng cùng index. Lỗi copy-paste như ghi velocityZ vào velocityY sẽ tạo một trạng thái khác, không phải một layout khác.
 
-### Bước 3 — Biến “cùng size” thành invariant
+readParticle thực hiện chiều ngược lại:
 
-```cpp title="include/particles.hpp — validSoA"
-inline bool validSoA(const ParticlesSoA& particles) {
-    const std::size_t count = particles.positionX.size();
-    return particles.positionY.size() == count &&
-        particles.positionZ.size() == count &&
-        particles.velocityX.size() == count &&
-        particles.velocityY.size() == count &&
-        particles.velocityZ.size() == count;
+```cpp title="include/storage.hpp — đọc một record SoA để kiểm hoặc vẽ"
+inline ParticleAoS readParticle(const ParticlesSoA& source, std::size_t index) {
+    return {source.id[index], source.generation[index], source.positionX[index], source.positionY[index], source.positionZ[index], source.velocityX[index], source.velocityY[index], source.velocityZ[index], source.age[index], source.lifetime[index], source.hue[index]};
 }
 ```
 
-`size()` lấy theo `positionX`, vì vậy mọi kernel SoA phải gọi `validSoA` hoặc chỉ nhận state đã được kiểm. Không thể chỉ nhìn một vector rồi giả định năm vector còn lại đúng.
+Thứ tự các giá trị trong return phải khớp thứ tự field của ParticleAoS. Đây là một bản ghi tạm để renderer và validator dùng chung cách đọc; không có vector mới nào được cấp phát mỗi lần gọi. Kernel SoA bình thường ở bài sau sẽ truy cập trực tiếp các mảng, không chuyển cả container qua AoS rồi mới tính.
 
-## Ghép các phần lại
+### Bước 3 — Giữ layout cũ cho tới khi copy đủ
 
-Checkpoint 4 tạo `particlesSoA` từ chính `source`, thêm phím `L` để đổi hình giữa hai layout và vẽ particle qua các vector SoA. SoA chưa có integrate kernel; hình SoA đứng ở state ban đầu trong khi AoS có thể được reset/pause để đối chiếu.
+Trong Simulation, thêm `ParticlesSoA soa{}, nextSoA{};` bên cạnh các buffer AoS. soa là container của layout hiện tại hoặc đích chuyển đổi; nextSoA dành cho bước vật lý ở bài 05. Phần source đầy đủ ở cuối trang cho thấy chính xác khai báo và vị trí các phương thức.
 
-Conversion và sáu allocation xảy ra lúc setup hoặc reset, không xảy ra trong benchmark. Sau này ta đo kernel throughput, không đo chi phí chuyển một kiến trúc chương trình đang chạy từ AoS sang SoA.
+Thêm beginConversion để chuẩn bị đích:
 
-## Thử làm sai để hiểu đúng
+```cpp title="include/simulation.hpp — bắt đầu một tác vụ conversion"
+void beginConversion() {
+    cancel();
+    if (layout == Layout::aos)
+        soa.resize(count);
+    else
+        aos.resize(count);
+    cursor = 0;
+    conversionMs = 0;
+    pending = PendingWork::conversion;
+}
+```
 
-1. Quên `velocityZ.push_back`. `validSoA` phải trả false dù năm vector còn lại đúng.
-2. Đẩy `positionY` trước `positionX` của particle kế tiếp. Mọi vector vẫn cùng size nhưng index mapping đã sai; bài 5 cần phép so field-by-field để bắt lỗi này.
-3. Dùng `double` cho một vector SoA. Hai phía không còn cùng precision và traffic model 4 byte/field bị phá vỡ.
-4. Convert AoS→SoA bên trong vùng timer. Kết quả lúc đó trả lời “convert rồi chạy mất bao lâu?”, không còn là kernel race.
+`cancel()` hủy công việc dở và pause mô phỏng; nó không xóa snapshot hoàn tất. Nếu đang dùng AoS, ta chuẩn bị soa; nếu đang dùng SoA, ta chuẩn bị aos. Chưa đổi biến layout tại đây.
+
+Tiếp theo, thêm tickConversion:
+
+```cpp title="include/simulation.hpp — đổi layout chỉ sau khi copy hết N slot"
+bool tickConversion(double budgetMs = 6) {
+    if (pending != PendingWork::conversion)
+        return false;
+    const auto deadline = Clock::now() + std::chrono::duration<double, std::milli>(budgetMs);
+    do {
+        const std::size_t end = std::min(count, cursor + 4096);
+        const auto started = Clock::now();
+        for (std::size_t index = cursor; index < end; ++index) {
+            if (layout == Layout::aos)
+                writeParticle(soa, index, aos[index]);
+            else
+                aos[index] = readParticle(soa, index);
+        }
+        conversionMs += milliseconds(started);
+        cursor = end;
+    } while (cursor < count && Clock::now() < deadline);
+    if (cursor < count)
+        return false;
+    layout = layout == Layout::aos ? Layout::soa : Layout::aos;
+    pending = PendingWork::none;
+    notice = "Layout changed; ID/generation/fields/time and emission remainder preserved";
+    return true;
+}
+```
+
+Mỗi lần gọi xử lý từng batch tối đa 4.096 slot và nhường lại vòng SDL sau ngân sách khoảng 6 ms. Trong lúc đó, particle() vẫn đọc container được chỉ bởi layout cũ. Chỉ sau khi cursor đi hết count mới đổi layout.
+
+Nếu hủy giữa chừng, một phần destination có thể đã được ghi nhưng **không trở thành state đang dùng**. Vì vậy không cần hoàn tác từng phần tử. Lần chuyển sau sẽ ghi lại toàn bộ destination trước khi công bố nó.
+
+Không sửa time, steps, active hoặc emissionRemainder trong conversion. Đặc biệt, pool cold chưa đầy cũng phải giữ phần lẻ emission; nếu bỏ nó, tốc độ phát có thể đổi sau mỗi lần bấm L dù công thức vật lý không thay.
+
+## Chạy checkpoint và đọc kết quả
+
+Trong include/application.hpp, phím L gọi simulation.beginConversion sau khi hủy tác vụ cũ. Vòng SDL gọi tickConversion khi pending là conversion và jobsPaused chưa bật. Space tạm dừng/tiếp tục tác vụ, X hủy; sau conversion, mô phỏng vẫn pause cho tới khi người dùng cho chạy.
+
+Phương thức particle(index) trong Simulation cũng cần chọn nguồn theo layout: AoS trả aos[index], SoA gọi readParticle(soa, index). drawFountain không phải biết mười một mảng được sắp thế nào. Hai phần ghép này có sẵn trong source checkpoint 04 để bạn đối chiếu khi tự viết, không chép riêng các helper vào main rồi bỏ quên chỗ gọi.
+
+Chỉ đổi layout sau khi copy hết cũng quan trọng với thao tác nhanh: nhấn L rồi X không được làm viewport đọc một nửa dữ liệu mới. Dung lượng buffer cũ có thể vẫn được giữ để dùng lại; logical payload không đồng nghĩa mọi allocation cũ đã biến mất.
+
+### Thử round-trip trước khi chạy kernel mới
+
+Dừng tại một state đã có age/generation khác 0. Ghi lại slot đang xem, đổi AoS → SoA → AoS rồi so ID, generation, mọi field, thời gian và bộ đếm. Mỗi lần chuyển có conversion time riêng; đó là chi phí thật, không được giấu vào một phía của benchmark sau này.
+
+Ở bài này, chọn SoA rồi nhấn chạy sẽ nhắc bạn trở về AoS vì kernel SoA chưa được thêm. Đây là ranh giới checkpoint, không phải lý do reset dữ liệu. Canvas có cùng ranh giới bài học nhưng tối đa 20.000 hạt; bản C++ mới cung cấp preset một triệu.
+
+```bash title="Terminal — checkpoint 04"
+cmake --build build --config Debug --target project_32_checkpoint_4
+./build/Debug/project_32_checkpoint_4.exe
+```
+
+## Cố tình làm sai
+
+Trước khi đổi layout, dự đoán age/generation có đổi không. Conversion không làm thời gian mô phỏng tiến thêm.
+
+1. Tạm bỏ dòng ghi hue hoặc generation trong writeParticle. Màu có thể chỉ khác nhẹ, nhưng so từng field sau round-trip phải phát hiện. Khôi phục dòng copy trước khi học tiếp.
+2. Tạm đổi layout ngay trong beginConversion, trước khi copy hết destination. Ở N lớn, viewport có thể đọc các slot chưa được ghi; đây là lý do chỉ flip layout sau cursor = count. Khôi phục điểm commit rồi thử X để kiểm Cancel giữ snapshot cũ.
+
+Không dùng “không crash” làm tiêu chí duy nhất. So cả state và thời gian trước/sau tác vụ.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Sáu vector SoA đều có đúng 1.000.000 phần tử.
-- [ ] `validSoA` trả true cho state vừa convert.
-- [ ] Particle `i` giữ đúng sáu giá trị từ AoS source index `i`.
-- [ ] Phím `L` đổi được sơ đồ memory và particle sample.
-- [ ] Conversion không nằm trong timer và không chạy mỗi frame.
-- [ ] Target `project_32_checkpoint_4` build và chạy được.
+- SoA có mười một mảng cùng độ dài; ID/generation không bị chuyển sang float.
+- AoS → SoA → AoS giữ chính xác các giá trị được sao chép, không cần tolerance để hợp thức hóa việc mất field.
+- Active, time, steps và emission carry không đổi do conversion.
+- Layout chỉ đổi sau khi copy đủ N; Cancel không làm lộ destination dở.
+- Renderer đọc qua particle(index), cho cùng hình khi camera không đổi.
+- Conversion time và payload/capacity được tách khỏi update/render.
+- SoA tại checkpoint 04 chỉ đọc/vẽ; kernel sẽ được thêm ở bài sau.
 
 ## Bài tập mở rộng
 
-1. Viết test cố ý xóa một phần tử khỏi `velocityZ` rồi kiểm `validSoA == false`.
-2. Tính tổng capacity byte của sáu vector và so với `source.size() * sizeof(ParticleAoS)`.
-3. Viết hàm đọc particle index `i` từ SoA thành một `ParticleAoS` tạm để debug.
+Viết một fixture chỉ có ba hạt nhưng mỗi field mang một giá trị dễ phân biệt. Cho một slot đã ở generation 4 và một slot có hue khác hẳn hai slot còn lại. Chuyển hai chiều và so từng field; cách này bắt lỗi đảo mảng tốt hơn việc chỉ nhìn một đài phun nhiều nghìn hạt.
 
-Bài tiếp theo sẽ viết kernel SoA và so toàn bộ state. Chỉ sau khi hai output khớp, timing giữa chúng mới đáng xem.
+Bài tiếp theo: [Chạy cùng vòng đời bằng SoA](/projects/memory-layout-race/05-doi-chieu-hai-kernel).

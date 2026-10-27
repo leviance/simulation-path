@@ -116,6 +116,32 @@ inline float particleDifference(const ParticleAoS& first, const ParticleAoS& sec
     return maximum;
 }
 
+// [snippet:particleErrorRatio]
+inline float fieldErrorRatio(float first, float second, float absoluteTolerance, float relativeTolerance) {
+    const float allowed = absoluteTolerance + relativeTolerance * std::max(std::abs(first), std::abs(second));
+    return std::abs(first - second) / allowed;
+}
+
+inline float particleErrorRatio(const ParticleAoS& first, const ParticleAoS& second) {
+    if (first.id != second.id || first.generation != second.generation || !finiteParticle(first) || !finiteParticle(second))
+        return std::numeric_limits<float>::infinity();
+    // Position: 1e-5 m; velocity: 1e-5 m/s; age/lifetime: 1e-6 s; hue: 1e-7.
+    // Each group also gets a relative tolerance of 1e-6. A ratio <= 1 passes.
+    return std::max({
+        fieldErrorRatio(first.positionX, second.positionX, 1e-5F, 1e-6F),
+        fieldErrorRatio(first.positionY, second.positionY, 1e-5F, 1e-6F),
+        fieldErrorRatio(first.positionZ, second.positionZ, 1e-5F, 1e-6F),
+        fieldErrorRatio(first.velocityX, second.velocityX, 1e-5F, 1e-6F),
+        fieldErrorRatio(first.velocityY, second.velocityY, 1e-5F, 1e-6F),
+        fieldErrorRatio(first.velocityZ, second.velocityZ, 1e-5F, 1e-6F),
+        fieldErrorRatio(first.age, second.age, 1e-6F, 1e-6F),
+        fieldErrorRatio(first.lifetime, second.lifetime, 1e-6F, 1e-6F),
+        fieldErrorRatio(first.hue, second.hue, 1e-7F, 1e-6F),
+    });
+}
+
+// [/snippet:particleErrorRatio]
+
 inline double particleChecksum(const ParticleAoS& particle) {
     return double(particle.positionX) + 2.0 * particle.positionY + 3.0 * particle.positionZ + 5.0 * particle.velocityX + 7.0 * particle.velocityY + 11.0 * particle.velocityZ + 13.0 * particle.age + 17.0 * particle.lifetime + 19.0 * particle.hue;
 }

@@ -1,102 +1,302 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Cập nhật particles trong AoS
+# Phát hạt, cho rơi và tái sử dụng slot
 
 ## Vấn đề cần giải quyết
 
-Ta đã có một triệu struct nằm liên tục trong vector, nhưng chúng vẫn đứng yên. Muốn nghiên cứu memory layout, trước hết cần một kernel đủ thật để lặp nhiều lần và đủ đơn giản để biết chính xác nó chạm field nào.
+Checkpoint 01 đã có một đài phun đứng yên. Giờ hãy cho chương trình tự tạo chuyển động: gravity đổi vận tốc, vận tốc đổi vị trí, age tăng và hạt hết tuổi thọ được sinh lại. Ta cũng cần nhìn thấy hạt **được phát dần**, thay vì chỉ có preset warm đã chứa đầy hạt.
 
-Kernel đầu tiên sẽ cập nhật ba position từ ba velocity. Particle đi ra khỏi cạnh `1` sẽ quay lại phía `-1`, tương tự ở chiều ngược lại. Không có lực, collision hay random trong vòng lặp. Những phần đó chỉ làm câu hỏi về memory khó đọc hơn.
+Phần SDL, camera và renderer giữ nguyên. Các thay đổi nằm ở include/particles.hpp, phương thức cập nhật trong Simulation và chỗ gọi chúng trong vòng lặp ứng dụng. Đừng thêm một vòng while riêng bên cạnh vòng SDL: input và render vẫn phải được phục vụ trong khi tính.
 
-## Hiểu ý tưởng trước khi viết code
+## Theo chân một particle
 
-Với một bước thời gian `dt`, từng trục dùng cùng công thức:
+Ta dùng trục Y hướng lên và gravity âm. Với dt = 1/120 giây, symplectic Euler cập nhật vận tốc **trước**, rồi dùng vận tốc mới để cập nhật vị trí:
 
-$$p_{new} = p_{old} + v \Delta t$$
-
-Sau đó ta wrap về đoạn `[-1,1]`. Vì velocity tối đa khoảng `0.35` và `dt = 1/120`, một bước chỉ đi khoảng `0.00292`, nên giá trị không thể nhảy qua cả hai cạnh trong cùng một bước.
-
-Một particle cần đọc sáu float: ba position cũ và ba velocity. Nó ghi lại ba position. Trong AoS, sáu giá trị này nằm ngay cạnh nhau. Đây là workload dùng gần như toàn bộ struct, vì vậy chưa có lý do để đoán SoA sẽ thắng.
+$$
+v_{y,n+1}=v_{y,n}+g\,dt,\qquad
+\mathbf p_{n+1}=\mathbf p_n+\mathbf v_{n+1}\,dt.
+$$
 
 <InteractiveLab demo="memory-layout-race" mode="aos-layout" />
 
-## Viết code từng bước
+## Bắt tay xây dựng
 
-### Bước 1 — Viết wrap thành hàm riêng
+### Bước 1 — Tiến vị trí, vận tốc và tuổi
 
-```cpp title="include/particles.hpp — wrapCoordinate"
-inline float wrapCoordinate(float value) {
-    float wrapped = value;
-    if (wrapped > kWorldMaximum) {
-        wrapped -= kWorldMaximum - kWorldMinimum;
-    }
-    if (wrapped < kWorldMinimum) {
-        wrapped += kWorldMaximum - kWorldMinimum;
-    }
-    return wrapped;
+Hàm integrateParticle đã có trong bộ khung nhưng chưa được vòng chạy sử dụng. Đọc nó trước khi thêm vòng đời:
+
+```cpp title="include/particles.hpp — tiến vị trí, vận tốc và tuổi"
+inline void integrateParticle(ParticleAoS& particle, float dt, float gravity) {
+    particle.velocityY += gravity * dt;
+    particle.positionX += particle.velocityX * dt;
+    particle.positionY += particle.velocityY * dt;
+    particle.positionZ += particle.velocityZ * dt;
+    particle.age += dt;
 }
 ```
 
-Hai nhánh được viết đầy đủ để người đọc thấy chính xác cạnh nào đang xử lý. Hàm không clamp vào biên: particle đi quá `1.0` một đoạn sẽ xuất hiện ở `-1.0` cộng đúng đoạn dư đó.
+Chỉ velocityY thay đổi do gravity; vận tốc X/Z giữ nguyên khi không có lực ngang. Age dùng cùng dt với chuyển động. Renderer tự đổi tọa độ thế giới sang màn hình, nên không đổi dấu gravity chỉ vì tọa độ pixel tăng xuống dưới.
 
-### Bước 2 — Duyệt AoS theo thứ tự lưu trữ
+Đây là bước thời gian **mô phỏng**, không phải số mili giây dùng để tính. Một bước nặng có thể kéo dài nhiều frame thật nhưng chỉ làm thời gian mô phỏng tăng đúng dt khi hoàn tất. Bản này không hứa chạy kịp thời gian thực và không có vòng bù lag vô hạn.
 
-```cpp title="include/particles.hpp — integrateAoS"
-inline void integrateAoS(std::span<ParticleAoS> particles, float deltaSeconds) {
-    for (ParticleAoS& particle : particles) {
-        particle.positionX = wrapCoordinate(
-            particle.positionX + particle.velocityX * deltaSeconds
-        );
-        particle.positionY = wrapCoordinate(
-            particle.positionY + particle.velocityY * deltaSeconds
-        );
-        particle.positionZ = wrapCoordinate(
-            particle.positionZ + particle.velocityZ * deltaSeconds
-        );
+### Bước 2 — Tái sử dụng slot khi hết lifetime
+
+Ta không erase khỏi vector. Slot cũ giữ ID, tăng generation rồi nhận vận tốc, lifetime và hue của lần sinh mới. Thêm advanceParticle ngay sau integrateParticle:
+
+```cpp title="include/particles.hpp — sinh lại trong cùng slot"
+inline bool advanceParticle(ParticleAoS& particle, const FountainConfig& config, float dt, bool newlyEmitted = false) {
+    if (newlyEmitted) {
+        particle = spawnParticle(particle.id, 0, config);
+    }
+    const float remaining = particle.lifetime - particle.age;
+    if (dt < remaining) {
+        integrateParticle(particle, dt, config.gravity);
+        return false;
+    }
+    if (particle.generation == std::numeric_limits<std::uint32_t>::max()) {
+        throw std::overflow_error("Particle generation overflow");
+    }
+    particle = spawnParticle(particle.id, particle.generation + 1, config);
+    // Consume the remainder after death, not an additional whole timestep.
+    integrateParticle(particle, dt - remaining, config.gravity);
+    return true;
+}
+```
+
+`newlyEmitted` dành cho slot lần đầu được emitter kích hoạt; nó sinh ở generation 0. Với hạt đang sống, `remaining` là khoảng thời gian còn lại trước khi chết.
+
+Ví dụ hạt chỉ còn 0,002 giây mà dt là 0,008 giây: hạt mới phải tiến khoảng 0,006 giây sau lần sinh lại, không tiến thêm trọn 0,008 giây. Vì thế nhánh cuối dùng `dt - remaining`. Với dt tối đa 1/30 và lifetime thực tế tối thiểu 0,375 giây, một bước không thể chứa hai lần hết tuổi thọ. Giới hạn trong validateConfig là một phần của giả định này.
+
+spawnParticle không lấy ngẫu nhiên từ một bộ đếm dùng chung. Nó nhận seed, ID, generation và channel; duyệt các mảng theo layout khác về sau vẫn sinh cùng state. Generation tràn bị báo lỗi, không âm thầm quay về lần sinh đầu.
+
+### Bước 3 — Phát hạt mà không đánh mất phần lẻ
+
+Giả sử emitter phát 128 hạt/giây. Một bước 1/120 giây tạo trung bình khoảng 1,067 hạt. Nếu mỗi bước chỉ lấy phần nguyên rồi bỏ phần lẻ, tốc độ phát sẽ sai.
+
+Thêm kiểu EmissionPlan và hàm planEmission:
+
+```cpp title="include/particles.hpp — giữ phần lẻ của emission"
+struct EmissionPlan {
+    std::size_t active{};
+    double remainder{};
+};
+
+inline EmissionPlan planEmission(std::size_t active, std::size_t capacity, double remainder, const FountainConfig& config, float dt) {
+    validateConfig(config, dt);
+    if (active > capacity || !std::isfinite(remainder) || remainder < 0 || remainder >= 1) {
+        throw std::invalid_argument("Invalid emission state");
+    }
+    const double available = remainder + double(config.emissionRate) * double(dt);
+    const std::size_t births = std::min(capacity - active, std::size_t(std::floor(available)));
+    if (active + births == capacity) {
+        return {capacity, 0};
+    }
+    return {active + births, available - std::floor(available)};
+}
+```
+
+`remainder` giữ phần hạt chưa đủ để sinh. Mỗi bước cộng emissionRate × dt, lấy phần nguyên làm số slot mới, rồi mang phần lẻ sang bước tiếp theo. Khi pool đầy, phần lẻ được đưa về 0; từ đó các slot đã sống tự respawn, không tăng vector nữa.
+
+Quy ước của project: slot mới được sinh ở **đầu bước**, rồi tiến trọn dt của bước ấy. Đây là xấp xỉ phát theo fixed step, không phải mô phỏng chính xác thời điểm từng giọt rời vòi. Ở preset cold, các slot sống luôn là đoạn [0, active), nhờ vậy không cần xóa phần tử hay danh sách free phức tạp.
+
+Thử tính tay trước: active = 1, capacity = 20, remainder = 0,5, emissionRate = 64 và dt = 1/32. Số hạt mới phải là 2, active thành 3 và remainder vẫn 0,5.
+
+### Bước 4 — Cập nhật một đoạn AoS
+
+Trước updateAoSRange, khai báo hai workload:
+
+```cpp title="include/particles.hpp — hai công việc dùng cho phép đo"
+enum class MemoryWorkload { gravityOnly,
+                            fullLifecycle };
+```
+
+Đài phun luôn dùng fullLifecycle. GravityOnly chỉ là một phép đo cố ý chạm ít field để học về truy cập bộ nhớ; nó không phải chế độ vật lý thay thế của đài phun.
+
+```cpp title="include/particles.hpp — kernel cho đoạn [begin, end)"
+inline std::size_t updateAoSRange(std::span<ParticleAoS> particles, std::size_t begin, std::size_t end, const FountainConfig& config, float dt, MemoryWorkload workload, std::size_t oldActive) {
+    std::size_t respawned = 0;
+    if (workload == MemoryWorkload::gravityOnly) {
+        for (std::size_t index = begin; index < end; ++index) {
+            particles[index].velocityY += config.gravity * dt;
+        }
+    } else {
+        for (std::size_t index = begin; index < end; ++index) {
+            if (advanceParticle(particles[index], config, dt, index >= oldActive)) {
+                ++respawned;
+            }
+        }
+    }
+    return respawned;
+}
+```
+
+`oldActive` đánh dấu ranh giới trước bước: index từ oldActive trở đi là các slot vừa được phát. Hàm trả số lần **tái sinh do hết lifetime**, không trộn với số slot được phát lần đầu. Vì vậy births và respawns là hai bộ đếm khác nhau.
+
+Không cấp phát, render hay log bên trong kernel C++ này. Vector đích phải được chuẩn bị trước. Đến bài 03, ta mới đặt đồng hồ quanh lời gọi updateAoSRange để có phạm vi đo rõ ràng.
+
+### Bước 5 — Đưa kernel vào Simulation, không treo vòng SDL
+
+Trong Simulation đã có count, active, các buffer, con trỏ cursor và PendingWork từ starter. Thêm beginStep để chuẩn bị đích cho một fixed step:
+
+```cpp title="include/simulation.hpp — chuẩn bị bước nhưng chưa công bố state"
+void beginStep() {
+    validateConfig(config);
+    if (layout == Layout::soa) {
+        notice = "SoA update arrives in checkpoint 05; use AoS to simulate";
+        paused = true;
+        singleStep = false;
+        return;
+    }
+    const EmissionPlan plan = planEmission(active, count, emissionRemainder, config, fixedDt);
+    targetActive = plan.active;
+    targetRemainder = plan.remainder;
+    if (layout == Layout::aos)
+        nextAoS.resize(count);
+    cursor = updated = respawned = 0;
+    born = targetActive - active;
+    copyMs = updateMs = 0;
+    stepStarted = Clock::now();
+    pending = PendingWork::physics;
+}
+```
+
+Ta chưa đổi active hay thời gian ngay. Kế hoạch emission và state đích được giữ riêng; viewport tiếp tục đọc snapshot hoàn tất gần nhất. `nextAoS.resize(count)` nằm ngoài kernel và capacity có thể được dùng lại ở các bước sau.
+
+Phần còn lại của bước nằm trong tickStep:
+
+```cpp title="include/simulation.hpp — tính theo batch rồi commit cả bước"
+bool tickStep(double budgetMs = 6) {
+    if (pending != PendingWork::physics || (paused && !singleStep))
+        return false;
+    const auto deadline = Clock::now() + std::chrono::duration<double, std::milli>(budgetMs);
+    do {
+        const std::size_t end = std::min(count, cursor + 4096);
+        auto started = Clock::now();
+        if (layout == Layout::aos) {
+            std::copy(aos.begin() + cursor, aos.begin() + end, nextAoS.begin() + cursor);
+        }
+        copyMs += milliseconds(started);
+        const std::size_t updateEnd = std::min(end, targetActive);
+        if (cursor < updateEnd) {
+            started = Clock::now();
+            if (layout == Layout::aos) {
+                respawned += updateAoSRange(nextAoS, cursor, updateEnd, config, fixedDt, MemoryWorkload::fullLifecycle, active);
+            }
+            updateMs += milliseconds(started);
+            updated += updateEnd - cursor;
+        }
+        cursor = end;
+    } while (cursor < count && Clock::now() < deadline);
+    if (cursor < count)
+        return false;
+    if (layout == Layout::aos)
+        aos.swap(nextAoS);
+    active = targetActive;
+    committedUpdated = updated;
+    emissionRemainder = targetRemainder;
+    time += double(fixedDt);
+    ++steps;
+    wholeStepMs = milliseconds(stepStarted);
+    singleStep = false;
+    pending = PendingWork::none;
+    notice = "Complete step committed; updated=" + std::to_string(updated);
+    return true;
+}
+```
+
+Đọc hàm này theo ba đoạn:
+
+1. Mỗi batch sao chép tối đa 4.096 slot sang buffer đích, rồi chỉ cập nhật đoạn thực sự sống. Copy và update có đồng hồ riêng.
+2. Nếu chưa đi hết count, trả về vòng SDL sau ngân sách khoảng 6 ms. Con số 6 ms là ngân sách làm việc mỗi lần gọi, **không phải dt**.
+3. Chỉ khi đủ mọi slot mới swap buffer, gán active, tăng time và steps. `committedUpdated` lấy từ số target thật đã chạy qua kernel; đó không phải count được chép vào để làm đẹp báo cáo.
+
+Khi hủy, source không bị sửa nửa chừng. Đổi tham số cũng hủy phần việc dở trước khi tính bước khác. Phải có quy tắc này vì một triệu hạt không nhất thiết tính xong trong một frame.
+
+Cuối phần xử lý event ở include/application.hpp, trước drawFountain, nối lời gọi:
+
+```cpp title="include/application.hpp — chỗ cập nhật trong vòng SDL"
+bool measuring = false;
+            if (measuring || simulation.pending == lab::PendingWork::conversion)
+                jobsPaused = !jobsPaused;
+            else
+                simulation.paused = !simulation.paused;
+        } else if (key == SDLK_N) {
+            cancel();
+            simulation.singleStep = true;
+            simulation.beginStep();
+        } else if (key == SDLK_A || key == SDLK_D || key == SDLK_W || key == SDLK_S || key == SDLK_G || key == SDLK_H || key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET || key == SDLK_MINUS || key == SDLK_EQUALS) {
+            cancel();
+            if (key == SDLK_A)
+                simulation.config.emitterX = std::max(-5.0F, simulation.config.emitterX - 0.25F);
+            if (key == SDLK_D)
+                simulation.config.emitterX = std::min(5.0F, simulation.config.emitterX + 0.25F);
+            if (key == SDLK_W)
+                simulation.config.launchSpeed = std::min(20.0F, simulation.config.launchSpeed + 0.5F);
+            if (key == SDLK_S)
+                simulation.config.launchSpeed = std::max(1.0F, simulation.config.launchSpeed - 0.5F);
+            if (key == SDLK_G)
+                simulation.config.gravity = std::max(-20.0F, simulation.config.gravity - 0.5F);
+            if (key == SDLK_H)
+                simulation.config.gravity = std::min(0.0F, simulation.config.gravity + 0.5F);
+            if (key == SDLK_LEFTBRACKET)
+                simulation.config.lifetime = std::max(0.5F, simulation.config.lifetime - 0.25F);
+            if (key == SDLK_RIGHTBRACKET)
+                simulation.config.lifetime = std::min(8.0F, simulation.config.lifetime + 0.25F);
+            if (key == SDLK_MINUS)
+                simulation.config.emissionRate = std::max(1.0F, simulation.config.emissionRate * 0.5F);
+            if (key == SDLK_EQUALS)
+                simulation.config.emissionRate = std::min(2'000'000.0F, simulation.config.emissionRate * 2.0F);
+            simulation.notice = "Gravity applies next step; emitter/lifetime affect future births. R recreates all slots.";
+        }
     }
 }
-```
-
-`std::span` cho hàm nhìn thấy một dải particle nhưng không sở hữu hoặc cấp phát lại vector. Bên trong hot loop không có `push_back`, `new`, logging hay SDL API.
-
-### Bước 3 — Chỉ update khi được yêu cầu
-
-Checkpoint khởi động ở trạng thái pause. `Space` chạy liên tục; `N` tiến đúng một bước:
-
-```cpp title="src/main.cpp — AoS update"
-if (!paused || singleStep) {
-    lab::integrateAoS(particlesAoS, kFixedDeltaSeconds);
+bool measuring = false;
+if (workflow && simulation.steps == 0 && simulation.pending == lab::PendingWork::none) {
+    simulation.singleStep = true;
+    simulation.beginStep();
+}
+if (!measuring && (!simulation.paused || simulation.singleStep)) {
+    if (simulation.pending == lab::PendingWork::none)
+        simulation.beginStep();
+    simulation.tickStep();
 }
 ```
 
-Pause mặc định rất quan trọng với project hiệu năng. Mở trang hoặc chạy executable không được tự động chiếm CPU vô hạn khi người học còn đang đọc readout.
+Ở checkpoint 02, measuring luôn false; biến này dành chỗ cho benchmark ở bài sau. Nhánh workflow dùng cho phép kiểm hữu hạn bằng dòng lệnh. Khi dùng bình thường, Space đổi paused, N yêu cầu một bước; chỉ gọi beginStep khi chưa có pending, còn tickStep tiếp tục phần đang tính.
 
-## Ghép các phần lại
+## Chạy checkpoint và đọc kết quả
 
-Event loop quyết định **khi nào** update. `integrateAoS` quyết định **update như thế nào**. Renderer đọc working state sau update nhưng không nằm trong kernel. Nhờ đó bài 3 có thể gọi chính hàm này trong một benchmark không mở window.
+Chọn preset 256 slot trống. Trước khi chạy: allocated = 256 nhưng alive = 0. Tiến từng bước rồi đọc births, active, age và generation của slot 0. Khi pool đầy, active giữ nguyên; sau đủ lifetime, generation tăng và age trở về gần 0. Đài phun không có va chạm sàn: state của hạt có thể xuống dưới mặt lưới trước khi hết tuổi thọ. Renderer che phần này; đọc positionY và generation trong bảng chi tiết để theo dõi tiếp vòng đời.
 
-Khi nhấn `R`, `particlesAoS = source` trả toàn bộ một triệu phần tử về seed ban đầu. Không gọi PRNG lần nữa, nên reset và benchmark dùng cùng byte input.
+Canvas tối đa 20.000 hạt và batch nhỏ hơn để giữ trang phản hồi; bản C++ dùng tối đa một triệu. Các field và quy tắc vật lý giống nhau, nhưng đừng dùng FPS hoặc heap của JavaScript để kết luận về C++.
 
-## Thử làm sai để hiểu đúng
+```bash title="Terminal — chạy checkpoint 02"
+cmake --build build --config Debug --target project_32_checkpoint_2
+./build/Debug/project_32_checkpoint_2.exe
+```
 
-1. Đưa `SDL_RenderPresent` vào trong vòng `for (ParticleAoS&)`. Chương trình gần như dừng lại vì bạn present một triệu lần; đây không còn là memory-layout benchmark.
-2. Dùng `positionX = std::clamp(positionX, -1, 1)`. Particle chạm cạnh sẽ đứng yên ở đó thay vì quay lại phía đối diện.
-3. Sinh random velocity mới trong mỗi bước. Hai layout sau này sẽ không thể nhận cùng input trừ khi bạn quản lý PRNG cực kỳ cẩn thận.
-4. Chỉ update các particle được renderer lấy mẫu. Hình vẫn chuyển động nhưng workload đã giảm từ một triệu xuống tối đa 40.000.
+Trong cửa sổ C++, phím 1 chọn cold 256, Space chạy/dừng, N tiến một bước. A/D đổi emitter X, W/S đổi tốc độ phóng, G/H đổi gravity, [ và ] đổi lifetime cho lần sinh sau. R tạo lại cùng preset/cấu hình; camera vẫn dùng được khi pause.
+
+## Cố tình làm sai
+
+Trước khi đổi gravity thành 0, dự đoán hạt đang rơi sẽ bay lên lại hay giữ vận tốc rơi. Bỏ gia tốc không đưa vận tốc về 0.
+
+1. Tạm bỏ remainder trong kế hoạch emission. Với rate thấp, ghi active qua nhiều bước và so với phép tính tay; phần lẻ bị mất làm tốc độ phát sai. Khôi phục remainder.
+2. Trong nhánh respawn, tạm dùng dt thay cho dt − remaining. Age và position của hạt mới sẽ tiến nhiều hơn khoảng thời gian thật còn lại. Kiểm một fixture gần hết lifetime rồi khôi phục công thức.
+
+Không dùng ảnh đài phun làm bằng chứng duy nhất. Ghi state nhỏ trước/sau và dự đoán kết quả trước khi chạy.
 
 ## Tự kiểm tra kết quả
 
-- [ ] `N` làm particle sample dịch chuyển đúng một bước.
-- [ ] `Space` chạy/dừng mà không tái tạo vector.
-- [ ] `R` đưa state về đúng source ban đầu.
-- [ ] Sau hàng trăm bước, mọi position vẫn nằm trong `[-1,1]`.
-- [ ] Particle count và velocity không đổi sau integrate.
-- [ ] Target `project_32_checkpoint_2` build và chạy được.
+- Preset cold phát dần từ 0, active không vượt capacity; khi đầy, không thêm slot mới.
+- Gravity sửa velocityY trước positionY; age tiến cùng dt và luôn nhỏ hơn lifetime sau một bước hợp lệ.
+- ID của slot không đổi; generation chỉ tăng khi hết tuổi thọ, không tăng mỗi frame.
+- Một bước chỉ tăng time và steps sau khi tính đủ; Hủy không công bố state dở.
+- Pause dừng thời gian nhưng camera/input vẫn dùng được; N tiến đúng một bước hoàn tất.
+- Updated là số hạt sống thực sự cập nhật, không phải số hạt được lấy mẫu để vẽ.
 
 ## Bài tập mở rộng
 
-1. Viết test cho particle bắt đầu ở `0.999F`, velocity dương và kiểm phần dư sau wrap.
-2. Đếm số float load/store về mặt thuật toán trong một bước đầy đủ.
-3. Thử `dt = 10` và giải thích vì sao hàm wrap hiện tại không còn đủ tổng quát.
+Chọn emissionRate rất thấp, đủ để nhiều bước liên tiếp không sinh hạt nào. Tự ghi lại active và remainder qua mười bước rồi đối chiếu chương trình. Sau đó viết một fixture có hạt gần hết tuổi thọ và kiểm cả ID, generation, age lẫn vị trí sau respawn.
 
-Bài sau sẽ đo AoS một cách có tên và có checksum. Ta vẫn chưa thêm SoA, vì thay layout và benchmark cùng lúc sẽ khiến lỗi khó truy ra.
+Bài tiếp theo: [Đo một kernel AoS có thể kiểm chứng](/projects/memory-layout-race/03-do-baseline-aos).

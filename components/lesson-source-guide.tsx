@@ -291,7 +291,7 @@ export async function LessonSourceGuide({
             files.length === 1 || (lesson.order === 1 && file.path === "src/main.cpp");
           return (
             <SourceFile
-              key={file.path}
+              key={`${bundle.projectId}:${bundle.checkpoint}:${bundle.sourceVersion}:${file.path}`}
               file={{ path: file.path, language: file.language }}
               projectId={bundle.projectId}
               checkpoint={bundle.checkpoint}

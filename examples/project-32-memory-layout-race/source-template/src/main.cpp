@@ -27,11 +27,15 @@ int runBenchmark() {
     for (const auto& row : job.rows) {
         std::cout << "N=" << row.count << " alive=" << row.count << " actualUpdated=" << row.updated
                   << " workload=" << (row.workload == lab::MemoryWorkload::gravityOnly ? "gravity-only" : "full-lifecycle")
-                  << " AoS_ms=" << row.aos.median << " range=" << row.aos.minimum << ':' << row.aos.maximum
-                  << " SoA_ms=" << row.soa.median << " range=" << row.soa.minimum << ':' << row.soa.maximum
-                  << " copy_ms=" << row.copyMs << " conversion_ms=" << row.conversionMs
-                  << " maxDifference=" << row.maximumDifference << " checksum=" << row.checksumAoS << '/' << row.checksumSoA
-                  << " logicalBytesEach=" << row.count * sizeof(lab::ParticleAoS) << '\n';
+                  << " AoS_ms=" << row.aos.median << " range=" << row.aos.minimum << ':' << row.aos.maximum;
+        if (row.paired) {
+            std::cout << " SoA_ms=" << row.soa.median << " range=" << row.soa.minimum << ':' << row.soa.maximum
+                      << " conversion_ms=" << row.conversionMs << " maxDifference=" << row.maximumDifference << " errorRatio=" << row.maximumErrorRatio
+                      << " checksum=" << row.checksumAoS << '/' << row.checksumSoA;
+        } else {
+            std::cout << " SoA=not-measured checksumAoS=" << row.checksumAoS;
+        }
+        std::cout << " copy_ms=" << row.copyMs << " logicalBytesEach=" << row.count * sizeof(lab::ParticleAoS) << '\n';
     }
     return EXIT_SUCCESS;
 }

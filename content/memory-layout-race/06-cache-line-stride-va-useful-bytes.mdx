@@ -1,119 +1,140 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Cache line, stride và useful bytes
+# Giải thích dữ liệu mà vòng lặp chạm tới
 
 ## Vấn đề cần giải quyết
 
-Khi code đọc một `float`, CPU không nhất thiết chỉ chuyển đúng 4 byte từ memory. Dữ liệu thường đi qua cache theo những khối liên tiếp gọi là cache line. Project dùng mô hình line 64 byte: không nhằm mô phỏng chính xác mọi CPU, mà để đếm xem một workload có tận dụng những byte được nạp hay không.
+Hai layout đã cho cùng kết quả. Vậy vì sao một vòng lặp chỉ sửa velocityY có thể hưởng lợi từ SoA, trong khi toàn vòng đời chưa chắc như vậy?
 
-Nếu chỉ đọc `positionX`, AoS mang theo năm field còn lại của mỗi particle dù kernel không dùng chúng. Trong SoA, một line chứa nhiều `positionX` liên tiếp. Nhưng khi integrate cần đủ sáu field, những byte “đi kèm” trong AoS không còn lãng phí. Đây là lý do không có layout thắng mọi workload.
+Ta sẽ vẽ đường đi qua **địa chỉ dữ liệu** trước khi giải thích timing. Bài này thêm một mô hình đếm cache line, không thêm solver và cũng không đọc bộ đếm phần cứng. Nó giúp đặt giả thuyết; benchmark Release ở bài 07 mới cho bằng chứng trên máy thật.
 
-## Hiểu ý tưởng trước khi viết code
+## Đi qua thuật toán bằng một ví dụ nhỏ
 
-Ta dùng ba đại lượng:
+### Giả định trước khi đếm
 
-$$usefulBytes = N \times fieldCount \times 4$$
+Mô hình chọn line 64 byte và giả sử base của từng mảng nằm đúng biên 64 byte. Đây là **giả định của phép tính**, không phải lời khẳng định mọi CPU có line như vậy hoặc std::vector luôn được cấp phát thẳng hàng 64 byte.
 
-$$loadedBytes = cacheLines \times 64$$
+Với struct đã kiểm sizeof = 44, velocityY nằm ở offset 24. Địa chỉ tương đối của field này trong hạt i là:
 
-$$efficiency = \frac{usefulBytes}{loadedBytes}$$
+$$
+A_{\text{AoS}}(i)=24+44i,\qquad A_{\text{SoA}}(i)=4i.
+$$
 
-Với một triệu particle và workload `positionX`, useful bytes luôn là 4 MB ở cả hai layout. Điểm khác nhau là địa chỉ của hai giá trị liên tiếp:
+Chia địa chỉ cho 64 rồi lấy phần nguyên sẽ cho số hiệu line trong mô hình. AoS có stride 44 byte giữa hai velocityY; SoA có stride 4 byte. Tất cả field vẫn tồn tại, chỉ các byte được kernel chạm tới khác nhau.
 
-- AoS stride: 24 byte.
-- SoA stride: 4 byte.
+Thử tính bằng tay trước khi bấm chạy:
 
-Một line 64 byte chứa 16 float liên tiếp. SoA có thể dùng gần hết line cho `positionX`; AoS chỉ gặp vài `positionX` trước khi sang line mới.
+| i | AoS: byte offset / line | SoA: byte offset / line |
+| --- | --- | --- |
+| 0 | 24 / 0 | 0 / 0 |
+| 1 | 68 / 1 | 4 / 0 |
+| 2 | 112 / 1 | 8 / 0 |
+| 3 | 156 / 2 | 12 / 0 |
+
+Bốn phần tử đầu chưa đủ để kết luận speedup. Nhưng chúng cho thấy khác biệt về độ liền nhau khi chỉ cần một field.
 
 <InteractiveLab demo="memory-layout-race" mode="cache-lines" />
 
-## Viết code từng bước
+## Bắt tay xây dựng
 
-### Bước 1 — Ánh xạ workload sang field offsets
+### Bước 1 — Khai báo kết quả của mô hình
 
-```cpp title="include/benchmark.hpp — fieldsForWorkload"
-inline FieldSelection fieldsForWorkload(MemoryWorkload workload) {
-    FieldSelection selection{};
-    if (workload == MemoryWorkload::positionX) {
-        selection.offsets[0] = 0U;
-        selection.count = 1U;
-        return selection;
+Trong include/benchmark.hpp, thêm TrafficModel sau BenchmarkJob:
+
+```cpp title="include/benchmark.hpp — số byte và line theo giả định"
+struct TrafficModel {
+    std::size_t usefulBytes{}, uniqueLines{}, loadedBytes{};
+    bool upperBound{};
+};
+```
+
+`usefulBytes` đếm byte của các field khác nhau mà mô hình quan tâm; **không cộng riêng lần đọc và lần ghi**. `uniqueLines` đếm line khác nhau bao phủ chúng; `loadedBytes` bằng uniqueLines × 64.
+
+Tên loadedBytes không có nghĩa đó là số byte thật lấy từ RAM. Cache có nhiều tầng, line có thể đã ở cache, và ghi còn có write-allocate/writeback. Ta chưa đo các chi phí ấy. `upperBound` nhắc rằng ở workload đầy đủ, phép đếm mọi field chỉ là một cận trên.
+
+### Bước 2 — Tính một field, rồi nhìn toàn vòng đời
+
+Thêm modelTraffic:
+
+```cpp title="include/benchmark.hpp — đếm địa chỉ, không giả làm cache profiler"
+inline TrafficModel modelTraffic(std::size_t count, Layout layout, MemoryWorkload workload) {
+    if (count > maximumParticles)
+        throw std::invalid_argument("Traffic model budget");
+    if (count == 0)
+        return {};
+    TrafficModel result{};
+    if (workload == MemoryWorkload::gravityOnly) {
+        result.usefulBytes = count * sizeof(float);
+        if (layout == Layout::aos) {
+            const std::size_t offset = offsetof(ParticleAoS, velocityY);
+            result.uniqueLines = (offset + (count - 1) * sizeof(ParticleAoS)) / 64 + 1;
+        } else
+            result.uniqueLines = (count * sizeof(float) + 63) / 64;
+    } else {
+        // Upper bound assuming all eleven fields are touched. Real respawn
+        // touches ID/generation/hue selectively; this is not a cache-miss count.
+        result.upperBound = true;
+        result.usefulBytes = count * sizeof(ParticleAoS);
+        result.uniqueLines = layout == Layout::aos ? (result.usefulBytes + 63) / 64 : 11 * ((count * sizeof(float) + 63) / 64);
     }
-    if (workload == MemoryWorkload::velocityOnly) {
-        selection.offsets[0] = 3U;
-        selection.offsets[1] = 4U;
-        selection.offsets[2] = 5U;
-        selection.count = 3U;
-        return selection;
-    }
-    for (std::size_t field = 0; field < kParticleFieldCount; ++field) {
-        selection.offsets[field] = field;
-    }
-    selection.count = kParticleFieldCount;
-    return selection;
+    result.loadedBytes = result.uniqueLines * 64;
+    return result;
 }
 ```
 
-Offset được tính theo số float trong struct: `positionX` ở 0, velocity xyz ở 3–5. Danh sách luôn tăng dần để địa chỉ ta duyệt cũng tăng dần.
+Nhánh gravityOnly có usefulBytes = 4 × N. Trong AoS, stride 44 nhỏ hơn line 64 nên dãy địa chỉ đi qua các line liên tiếp từ line đầu tới line cuối; công thức dùng offsetof thay vì ghi cứng offset trong code. Trong SoA, một mảng float liên tục cần làm tròn lên N × 4 / 64 line.
 
-### Bước 2 — Đếm line cho SoA
+Ví dụ N = 64: AoS trải 44 line, SoA trải 4 line cho velocityY; usefulBytes của cả hai là 256 byte. **44/4 không phải speedup 11 lần.** Phép đếm không biết compiler vectorize thế nào, data đang ở đâu trong cache, chi phí nhánh hay đồng hồ.
 
-Mỗi selected field là một allocation riêng, được giả định bắt đầu ở ranh giới line:
+Nhánh fullLifecycle giả sử chạm đủ mười một field. AoS trải vùng 44 × N byte; SoA có mười một mảng, mỗi mảng làm tròn line riêng. Với N nhỏ, phần line chưa đầy ở cuối từng mảng có thể làm SoA đếm nhiều line hơn.
 
-```cpp title="include/benchmark.hpp — SoA cache-line count"
-if (layout == MemoryLayout::soa) {
-    const std::size_t bytesPerArray = particleCount * sizeof(float);
-    const std::size_t linesPerArray = (bytesPerArray + lineSize - 1U) / lineSize;
-    cacheLines = linesPerArray * fields.count;
+Quan trọng hơn, kernel thật không đọc/ghi ID, generation và hue ở mọi hạt trong mọi bước. Chúng chủ yếu liên quan nhánh sinh lại. Vì vậy nhánh này đặt upperBound = true: không được đem nó làm một phép đếm chính xác cache miss của cả vòng đời.
+
+### Bước 3 — Nối mô hình vào báo cáo
+
+Trong vòng render ở include/application.hpp, sau phần số liệu benchmark, thêm:
+
+```cpp title="include/application.hpp — hiện giả định cùng số liệu"
+if (showReports) {
+    const auto traffic = lab::modelTraffic(simulation.count, simulation.layout, workload);
+    SDL_RenderDebugTextFormat(renderer, 12, 155, "64B aligned-base model: useful=%zu B uniqueLines=%zu loaded=%zu B %s; NOT measured cache misses", traffic.usefulBytes, traffic.uniqueLines, traffic.loadedBytes, traffic.upperBound ? "ALL-FIELD UPPER BOUND" : "gravity-only");
 }
 ```
 
-Phép chia làm tròn lên giữ cả line cuối chưa đầy. Nếu chọn ba velocity arrays, số line bằng ba lần số line của một array.
+Phím T đổi workload dành cho phép đo; F hiện/ẩn reports. Chọn layout chỉ đổi cách modelTraffic tính địa chỉ. Phần này không sửa state, không đổi số hạt được mô phỏng và không khởi chạy benchmark ngầm.
 
-### Bước 3 — Đếm line cho AoS từ byte address
+Đài phun vẫn là viewport chính. Bảng địa chỉ và số line là phần giải thích bổ trợ, không thay ứng dụng bằng một dải ô bộ nhớ.
 
-```cpp title="include/benchmark.hpp — AoS cache-line count"
-for (std::size_t index = 0; index < particleCount; ++index) {
-    for (std::size_t field = 0; field < fields.count; ++field) {
-        const std::size_t byteAddress =
-            (index * kParticleFieldCount + fields.offsets[field]) * sizeof(float);
-        const std::size_t line = byteAddress / lineSize;
-        if (line != previousLine) {
-            ++cacheLines;
-            previousLine = line;
-        }
-    }
-}
+Trong Canvas, xem bảng field của slot đang chọn rồi đổi AoS/SoA. Cột địa chỉ tương đối cho biết field nằm trong record hay mảng riêng. Chọn gravity-only và tính tay lại số line ở N đang dùng. Đây là mô hình **C++**; object JavaScript không được tuyên bố có record 44 byte.
+
+## Chạy checkpoint và đọc kết quả
+
+```bash title="Terminal — checkpoint 06"
+cmake --build build --config Debug --target project_32_checkpoint_6
+./build/Debug/project_32_checkpoint_6.exe
 ```
 
-Vì index và field offset tăng dần, line number không đi lùi. Chỉ cần nhớ line vừa thấy, không cần tạo một `std::set` hàng trăm nghìn phần tử.
+## Cố tình làm sai
 
-## Ghép các phần lại
+Trước khi đổi sang full lifecycle, dự đoán lợi thế ít byte thừa có còn rõ như chỉ sửa một field không. Chưa gán tỉ số tốc độ.
 
-Phím `W` giờ không chỉ đổi kernel. Nó còn đổi màu field trên memory diagram và tính lại hai `MemoryTrafficEstimate`. Title bar báo cache lines cùng efficiency của AoS/SoA cho đúng N hiện tại.
+1. Tạm bỏ nhãn upper bound và diễn giải loadedBytes là số byte thật lấy từ RAM. Đối chiếu các field mà nhánh respawn chạm tới; bạn không có hardware counter để chứng minh câu đó. Khôi phục nhãn và phạm vi mô hình.
+2. Tạm coi tỉ số 44/4 line của ví dụ N = 64 là speedup 11 lần. Kiểm bằng timing ở bài sau; kết quả không bị buộc phải bằng 11 vì mô hình chưa chứa compiler, cache state và chi phí lệnh. Bỏ kết luận tốc độ khỏi phép đếm địa chỉ.
 
-Traffic model đứng ngoài benchmark timer. Nó là phép đếm dựa trên địa chỉ lý tưởng, không phải thao tác memory thật cần được cộng vào kernel.
-
-## Thử làm sai để hiểu đúng
-
-1. Đặt `usefulBytes = sizeof(ParticleAoS) * N` cho mọi workload. Position-x sẽ bị báo dùng 24 MB hữu ích dù thuật toán chỉ cần 4 MB.
-2. Dùng `particleCount * 4 / 64` mà không làm tròn lên. Array nhỏ hoặc line cuối lẻ sẽ bị bỏ sót.
-3. Kết luận SoA nhanh gấp đúng tỉ lệ loaded bytes. Cache hierarchy, prefetcher, compiler và store traffic còn ảnh hưởng timing thật.
-4. Cho mỗi SoA array nối ngay sau array trước mà không nói rõ alignment assumption. Mô hình hiện tại cố ý coi mỗi allocation bắt đầu ở line riêng.
+Nếu thử alignment lệch, hãy xây mô hình có offset base riêng; không giữ công thức aligned rồi coi nó chính xác.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Một triệu `positionX` có đúng 4.000.000 useful bytes.
-- [ ] SoA position-x dùng ít cache line hơn AoS.
-- [ ] SoA position-x có efficiency cao hơn AoS.
-- [ ] Với N phù hợp và integrate đủ sáu field, hai layout có cache-line count tương đương.
-- [ ] Traffic model không chạy bên trong timer.
-- [ ] Target `project_32_checkpoint_6` build và chạy được.
+- N = 64 và gravity-only cho usefulBytes = 256, AoS 44 line, SoA 4 line theo giả định.
+- Source dùng sizeof/offsetof, không rút ParticleAoS về sáu float để ra con số cũ.
+- Báo cáo ghi line 64 B và aligned base, không gọi đó là cache miss đã đo.
+- Full lifecycle được đánh dấu cận trên; bạn giải thích được nhánh respawn khác truy cập thông thường.
+- LoadedBytes không bị hiểu thành lưu lượng RAM thực tế hoặc tổng đọc + ghi.
+- Thao tác model/report không làm time, state hoặc updated thay đổi.
+- Không suy speedup trực tiếp từ tỉ số line.
 
 ## Bài tập mở rộng
 
-1. Đổi line size thành 32 và 128 byte, rồi ghi lại xu hướng thay vì timing dự đoán.
-2. Thêm workload chỉ đọc `positionX` và `positionY`; tính useful bytes trước khi chạy code.
-3. Vẽ các line boundary lên sơ đồ Canvas cho sáu particle đầu tiên.
+Tính số line cho SoA ở N = 1 và N = 16 khi mô hình chạm đủ mọi field. So với AoS và giải thích phần làm tròn cuối từng mảng. Sau đó dự đoán một ca full lifecycle có thể không nhanh hơn ở SoA, để kiểm bằng bài tiếp theo.
 
-Bài 7 sẽ đặt mô hình cạnh phép đo Release thật. Nếu timing không đi đúng traffic ratio, ta sẽ ghi nhận thay vì sửa kết luận cho khớp kỳ vọng.
+Bài tiếp theo: [Đo Release và giữ cả kết quả không nhanh hơn](/projects/memory-layout-race/07-benchmark-va-scaling-release).

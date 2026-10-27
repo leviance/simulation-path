@@ -25,6 +25,8 @@ const outputs = [
   "examples/project-78-floating-point/CMakeLists.txt",
   "public/downloads/project-78-floating-point.zip",
   "public/downloads/manifest.json",
+  "public/project-sources/78/manifest.json",
+  "public/project-sources/78/final.0123456789abcdef.json",
 ];
 const authored = [
   "course/projects.json",

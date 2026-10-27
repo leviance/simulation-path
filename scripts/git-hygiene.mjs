@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 // Keep this policy aligned with .gitignore. It covers future projects without an ID list.
 export function isGeneratedCoursePath(file) {
   return (
-    /^(?:course\/generated\/|content\/generated\/|lib\/generated-checkpoint-sources\/|public\/downloads\/)/.test(
+    /^(?:course\/generated\/|content\/generated\/|lib\/generated-checkpoint-sources\/|public\/(?:downloads|project-sources)\/)/.test(
       file,
     ) ||
     /^(?:content\/registry\.ts|lib\/generated-checkpoint-sources\.ts)$/.test(file) ||

@@ -87,6 +87,16 @@ test("Vite dev ignores heavyweight non-web trees and keeps server deps on demand
   assert.match(source, /optimizeDeps\.include = \[\]/);
 });
 
+test("clean-checkout staging is supervised and disposable Windows cleanup is bounded", () => {
+  const source = readFileSync(path.join(workspace, "scripts/verify-clean-checkout.mjs"), "utf8");
+  assert.match(source, /await prepareTemporaryGit\(\["add", "--all"\]\)/);
+  assert.match(source, /label: `temporary checkout git/);
+  assert.match(source, /core\.fsmonitor=false/);
+  assert.doesNotMatch(source, /git\(cleanRoot, \["add"/);
+  assert.match(source, /maxRetries: 4/);
+  assert.match(source, /retryDelay: 250/);
+});
+
 test("Canvas labs keep CSS layout separate from the high-DPI bitmap", () => {
   const hookSource = readFileSync(
     path.join(workspace, "components", "labs", "lab-shared.tsx"),

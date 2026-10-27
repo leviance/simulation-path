@@ -31,6 +31,7 @@ struct Simulation {
     Clock::time_point stepStarted{};
     std::string notice{"Ready; pre-warm is only the initial state"};
 
+    // [snippet:reset]
     void reset(std::size_t requested, bool coldStart = false) {
         validateConfig(config);
         aos = makeParticlesAoS(requested, config, !coldStart);
@@ -54,8 +55,14 @@ struct Simulation {
         time = emissionRemainder = 0;
         updated = committedUpdated = born = respawned = cursor = 0;
         copyMs = updateMs = conversionMs = wholeStepMs = 0;
+#if LAB_CHECKPOINT >= 1
         notice = cold ? "Cold start: emission adds stable slots" : "Warm start: every allocated slot is alive";
+#else
+        notice = "Scaffold: eight fixed particles; physics is not enabled";
+#endif
     }
+
+    // [/snippet:reset]
 
     ParticleAoS particle(std::size_t index) const {
 #if LAB_CHECKPOINT >= 4

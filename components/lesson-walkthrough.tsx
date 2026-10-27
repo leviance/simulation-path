@@ -88,7 +88,7 @@ export async function LessonWalkthrough({
           </header>
           {startingFiles.map((file) => (
             <SourceFile
-              key={file.path}
+              key={`${startingBundle!.projectId}:${startingBundle!.checkpoint}:${startingBundle!.sourceVersion}:${file.path}`}
               file={{ path: file.path, language: file.language }}
               projectId={startingBundle!.projectId}
               checkpoint={startingBundle!.checkpoint}

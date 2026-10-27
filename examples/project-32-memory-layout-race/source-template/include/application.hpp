@@ -1,6 +1,7 @@
 #pragma once
 #include "benchmark.hpp"
 #include "render.hpp"
+#include "render_panel.hpp"
 #include <SDL3/SDL.h>
 #include <iostream>
 
@@ -20,7 +21,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
         simulation.reset(simulation.count, false);
     lab::Framebuffer image{};
     lab::Camera camera{}, beforeDrag{};
-    bool running = true, dragging = false, jobsPaused = false, showReports = true;
+    bool running = true, dragging = false, jobsPaused = false, showReports = false;
     SDL_MouseID mouse{};
     Uint8 button{};
     float previousX{}, previousY{};
@@ -48,8 +49,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             camera.yaw += dx * 0.006;
             camera.pitch = std::clamp(camera.pitch + dy * 0.006, -1.1, 1.1);
         } else {
-            camera.target.x -= dx * camera.distance / 570;
-            camera.target.y += dy * camera.distance / 570;
+            lab::panCamera(camera, dx, dy, 570);
         }
         previousX = x;
         previousY = y;
@@ -113,7 +113,12 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     bool cold = simulation.cold;
                     if (key == SDLK_1) {
                         count = 256;
+#if LAB_CHECKPOINT >= 2
                         cold = true;
+#else
+                        // A static checkpoint cannot emit into an empty pool yet.
+                        cold = false;
+#endif
                     }
                     if (key == SDLK_2) {
                         count = 10'000;
@@ -123,7 +128,8 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                         count = 1'000'000;
                         cold = false;
                     }
-                    simulation.config.emissionRate = float(count) * 0.5F;
+                    if (key != SDLK_R)
+                        simulation.config.emissionRate = float(count) * 0.5F;
                     simulation.reset(count, cold);
                 }
 #if LAB_CHECKPOINT >= 2
@@ -180,17 +186,21 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                 } else if (key == SDLK_B) {
                     cancel();
                     benchmark.start(simulation.config, {simulation.count}, {workload});
+                    showReports = true;
                 }
 #endif
 #if LAB_CHECKPOINT >= 7
                 else if (key == SDLK_C) {
                     cancel();
                     benchmark.start(simulation.config, {10'000, 100'000, 1'000'000}, {lab::MemoryWorkload::gravityOnly, lab::MemoryWorkload::fullLifecycle});
+                    showReports = true;
                 }
 #endif
             }
         }
+#if LAB_CHECKPOINT >= 2
         bool measuring = false;
+#endif
 #if LAB_CHECKPOINT >= 3
         benchmark.paused = jobsPaused;
         benchmark.tick();
@@ -212,7 +222,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
         }
 #endif
         const auto renderStarted = lab::Clock::now();
-        const lab::RenderStats drawn = lab::drawFountain(image, simulation, camera);
+        const lab::RenderStats drawn = lab::drawFountain(image, simulation, camera, 40'000, showReports);
         if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), image.width * int(sizeof(std::uint32_t))))
             throw std::runtime_error(SDL_GetError());
         SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255);
@@ -220,24 +230,22 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
         const SDL_FRect viewport{0, 0, 1120, 570};
         SDL_RenderTexture(renderer, texture, nullptr, &viewport);
         renderMs = lab::milliseconds(renderStarted);
-        SDL_SetRenderDrawColor(renderer, 205, 224, 239, 255);
-        SDL_RenderDebugTextFormat(renderer, 12, 586, "CPU fountain %s | allocated=%zu alive=%zu updated(committed)=%zu sampled=%zu rendered=%zu", simulation.layout == lab::Layout::aos ? "AoS" : "SoA", simulation.count, simulation.active, simulation.committedUpdated, drawn.sampled, drawn.rendered);
-        SDL_RenderDebugTextFormat(renderer, 12, 606, "t=%.5f step=%llu | kernel %.3fms copy %.3fms render %.3fms prev-frame %.3fms conversion %.3fms", simulation.time, static_cast<unsigned long long>(simulation.steps), simulation.updateMs, simulation.copyMs, renderMs, frameMs, simulation.conversionMs);
-        SDL_RenderDebugTextFormat(renderer, 12, 626, "Resident payload buffers: AoS=%zu B SoA=%zu B | logical state=%zu B (44 B/slot)", simulation.aosBytes(), simulation.soaBytes(), simulation.count * sizeof(lab::ParticleAoS));
-        SDL_RenderDebugTextFormat(renderer, 12, 646, "Emitter x=%.2f speed=%.1f gravity=%.2f birth lifetime=%.2f cold rate=%.0f/s | cyan->orange: age/lifetime", simulation.config.emitterX, simulation.config.launchSpeed, simulation.config.gravity, simulation.config.lifetime, simulation.config.emissionRate);
-        SDL_RenderDebugTextFormat(renderer, 12, 666, "%s | pending=%d cursor=%zu/%zu born=%zu recycled=%zu", simulation.paused ? "PAUSED" : "RUNNING", int(simulation.pending), simulation.cursor, simulation.count, simulation.born, simulation.respawned);
-        SDL_RenderDebugText(renderer, 12, 690, "Space pause | N step | R reset | 1 cold 256, 2 warm 10k, 3 warm 1M | L convert AoS/SoA | X cancel");
-        SDL_RenderDebugText(renderer, 12, 710, "A/D emitter x | W/S launch speed | G/H gravity | [ ] birth lifetime | - + cold emission rate");
-        SDL_RenderDebugText(renderer, 12, 730, "Drag left orbit / right pan, wheel zoom | arrows orbit | Home camera | F reports | Esc cancel/exit");
-        SDL_RenderDebugText(renderer, 12, 750, "T measurement workload only | B benchmark selected N | C scaling both workloads | 1 warm-up + 5 samples");
-        SDL_RenderDebugText(renderer, 12, 790, simulation.notice.c_str());
+        drawFountainPanel(renderer, simulation, drawn, renderMs, frameMs);
 #if LAB_CHECKPOINT >= 3
         SDL_RenderDebugTextFormat(renderer, 12, 770, "Benchmark: %s | %s | case %zu target %zu; state/seed captured, physics frozen", workload == lab::MemoryWorkload::gravityOnly ? "gravity-only" : "full lifecycle", benchmark.notice.c_str(), benchmark.caseIndex, benchmark.target);
         if (showReports) {
+            SDL_SetRenderDrawColor(renderer, 9, 18, 30, 245);
+            const SDL_FRect reportPanel{6, 6, 1108, 173};
+            SDL_RenderFillRect(renderer, &reportPanel);
+            SDL_SetRenderDrawColor(renderer, 184, 222, 238, 255);
             SDL_RenderDebugTextFormat(renderer, 12, 135, "Measurement input: seed=%u gravity=%.2f launch=%.1f lifetime=%.2f; clock excludes reset/copy/render/RAF", benchmark.config.seed, benchmark.config.gravity, benchmark.config.launchSpeed, benchmark.config.lifetime);
             for (std::size_t index = 0; index < benchmark.rows.size(); ++index) {
                 const auto& row = benchmark.rows[index];
-                SDL_RenderDebugTextFormat(renderer, 12, 12 + float(index * 19), "N=%zu %s AoS %.3f [%.3f,%.3f]ms SoA %.3f [%.3f,%.3f]ms diff=%.2e sum=%.4e", row.count, row.workload == lab::MemoryWorkload::gravityOnly ? "gravity" : "lifecycle", row.aos.median, row.aos.minimum, row.aos.maximum, row.soa.median, row.soa.minimum, row.soa.maximum, row.maximumDifference, row.checksumAoS);
+                if (row.paired) {
+                    SDL_RenderDebugTextFormat(renderer, 12, 12 + float(index * 19), "N=%zu %s AoS %.3f [%.3f,%.3f]ms SoA %.3f [%.3f,%.3f]ms errorRatio=%.2e sum=%.4e", row.count, row.workload == lab::MemoryWorkload::gravityOnly ? "gravity" : "lifecycle", row.aos.median, row.aos.minimum, row.aos.maximum, row.soa.median, row.soa.minimum, row.soa.maximum, row.maximumErrorRatio, row.checksumAoS);
+                } else {
+                    SDL_RenderDebugTextFormat(renderer, 12, 12 + float(index * 19), "N=%zu %s AoS %.3f [%.3f,%.3f]ms | SoA NOT MEASURED | checksum=%.4e", row.count, row.workload == lab::MemoryWorkload::gravityOnly ? "gravity" : "lifecycle", row.aos.median, row.aos.minimum, row.aos.maximum, row.checksumAoS);
+                }
             }
         }
 #endif

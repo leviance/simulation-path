@@ -1,41 +1,9 @@
 "use client";
 
-import { useState, type SyntheticEvent } from "react";
+import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { HighlightedCode } from "@/components/highlighted-code";
-import { generatedCheckpointSourceLoaders } from "@/lib/generated-checkpoint-sources";
+import { fetchProjectSource } from "@/lib/source-download";
 import type { HighlightLanguage } from "@/lib/syntax-highlighter";
-
-type ProjectId = keyof typeof generatedCheckpointSourceLoaders;
-
-interface LazySourceModule {
-  files: ReadonlyArray<{ path: string; source: string }>;
-}
-
-interface LazySourceRegistry {
-  generatedProjectSource: {
-    loadCommon(): Promise<LazySourceModule>;
-    snapshots: Record<string, () => Promise<LazySourceModule>>;
-  };
-}
-
-async function loadSource(
-  projectId: string,
-  checkpoint: "starter" | number | "final",
-  path: string,
-) {
-  const loadRegistry = generatedCheckpointSourceLoaders[projectId as ProjectId];
-  if (!loadRegistry) throw new Error(`Không tìm thấy source registry của Project ${projectId}.`);
-
-  const registry = (await loadRegistry()) as unknown as LazySourceRegistry;
-  const project = registry.generatedProjectSource;
-  const loadSnapshot = project.snapshots[String(checkpoint)];
-  if (!loadSnapshot) throw new Error(`Không tìm thấy checkpoint ${String(checkpoint)}.`);
-
-  const [common, snapshot] = await Promise.all([project.loadCommon(), loadSnapshot()]);
-  const file = [...common.files, ...snapshot.files].find((candidate) => candidate.path === path);
-  if (!file) throw new Error(`Không tìm thấy tệp ${path}.`);
-  return file.source;
-}
 
 export function SourceFile({
   file,
@@ -56,6 +24,14 @@ export function SourceFile({
   const [source, setSource] = useState(initialSource);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const request = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      request.current?.abort();
+      request.current = null;
+    },
+    [],
+  );
 
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
     const nextOpen = event.currentTarget.open;
@@ -64,12 +40,22 @@ export function SourceFile({
 
     setLoading(true);
     setError("");
-    void loadSource(projectId, checkpoint, file.path)
-      .then(setSource)
-      .catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "Không thể tải mã nguồn.");
+    const controller = new AbortController();
+    request.current = controller;
+    void fetchProjectSource(projectId, checkpoint, file.path, { signal: controller.signal })
+      .then((value) => {
+        if (request.current === controller) setSource(value);
       })
-      .finally(() => setLoading(false));
+      .catch((reason: unknown) => {
+        if (request.current === controller)
+          setError(reason instanceof Error ? reason.message : "Không thể tải mã nguồn.");
+      })
+      .finally(() => {
+        if (request.current === controller) {
+          request.current = null;
+          setLoading(false);
+        }
+      });
   };
 
   return (

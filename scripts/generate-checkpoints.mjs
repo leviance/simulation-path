@@ -13,6 +13,7 @@ import {
 const projects = loadProjectCatalog();
 const checkOnly = process.argv.includes("--check");
 const generatedSourceDirectory = path.join(workspace, "lib", "generated-checkpoint-sources");
+const publicSourceDirectory = path.join(workspace, "public", "project-sources");
 function toPosix(value) {
   return value.split(path.sep).join("/");
 }
@@ -183,26 +184,16 @@ function snapshotFiles(project) {
   return { expected, templateFiles, changedPaths };
 }
 
-// examples/ stays outside the dev watcher. A content-versioned import gives Vite
-// a fresh raw module when regeneration changes C++, without watching build trees.
-function rawSourceImport(project, relativePath, source) {
-  const version = createHash("sha256").update(source).digest("hex").slice(0, 16);
-  return `@/examples/${project.sourceDirectory}/${toPosix(relativePath)}?source=${version}&raw`;
-}
-
 function sourceModule(project, sourceDirectory, relativeFiles, expected) {
   const projectDirectory = path.join(workspace, "examples", project.sourceDirectory);
-  const displayFiles = relativeFiles.filter(isDisplayableCourseFile);
-  const imports = displayFiles.map((relativePath, index) => {
-    const relative = path.join(sourceDirectory, relativePath);
-    const source = expected.get(path.join(projectDirectory, relative));
-    return `import source${index} from "${rawSourceImport(project, relative, source)}";`;
-  });
-  const importIndex = new Map(displayFiles.map((relativePath, index) => [relativePath, index]));
-  const entries = relativeFiles.map((relativePath) => {
-    const index = importIndex.get(relativePath);
-    if (index !== undefined) {
-      return `    { path: ${JSON.stringify(toPosix(relativePath))}, language: ${JSON.stringify(languageFor(relativePath))}, source: source${index} },`;
+  return relativeFiles.map((relativePath) => {
+    if (isDisplayableCourseFile(relativePath)) {
+      const source = expected.get(path.join(projectDirectory, sourceDirectory, relativePath));
+      return {
+        path: toPosix(relativePath),
+        language: languageFor(relativePath),
+        source: source.toString("utf8"),
+      };
     }
     const templatePath = path.join(
       workspace,
@@ -213,9 +204,8 @@ function sourceModule(project, sourceDirectory, relativeFiles, expected) {
     );
     const bytes = statSync(templatePath).size;
     const note = `[Asset không hiển thị trong code block — ${bytes} byte. Tệp đầy đủ có trong gói ZIP.]\n`;
-    return `    { path: ${JSON.stringify(toPosix(relativePath))}, language: "text", source: ${JSON.stringify(note)} },`;
+    return { path: toPosix(relativePath), language: "text", source: note };
   });
-  return `${imports.join("\n")}\n\nexport const files = [\n${entries.join("\n")}\n] as const;\n`;
 }
 
 function commonModule(project, expected) {
@@ -224,16 +214,35 @@ function commonModule(project, expected) {
     "CMakeLists.txt",
     ...walkFiles(path.join(projectDirectory, "tests")).map((file) => path.join("tests", file)),
   ].filter((file) => isCourseTextFile(file));
-  const imports = commonFiles.map((relativePath, index) => {
+  return commonFiles.map((relativePath) => {
     const absolute = path.join(projectDirectory, relativePath);
     const source = expected.get(absolute) ?? readFileSync(absolute);
-    return `import source${index} from "${rawSourceImport(project, relativePath, source)}";`;
+    return {
+      path: toPosix(relativePath),
+      language: languageFor(relativePath),
+      source: source.toString("utf8"),
+    };
   });
-  const entries = commonFiles.map(
-    (relativePath, index) =>
-      `    { path: ${JSON.stringify(toPosix(relativePath))}, language: ${JSON.stringify(languageFor(relativePath))}, source: source${index} },`,
+}
+
+// Server imports one JSON payload per snapshot. Browsers fetch its byte-identical
+// public copy, without importing the all-course source registry into the client graph.
+function emitSourcePayload(project, key, files, expected) {
+  const payload = Buffer.from(JSON.stringify({ schemaVersion: 1, files }) + "\n");
+  if (payload.length > 5 * 1024 * 1024)
+    throw new Error(`Project ${project.id} ${key} source payload exceeds 5 MiB; split its source.`);
+  const hash = createHash("sha256").update(payload).digest("hex").slice(0, 16);
+  const name = `${key}.${hash}.json`;
+  const directory = path.join(generatedSourceDirectory, `p${project.id}`);
+  expected.set(path.join(directory, "data", name), payload);
+  expected.set(path.join(publicSourceDirectory, project.id, name), payload);
+  expected.set(
+    path.join(directory, `${key}.ts`),
+    Buffer.from(
+      `import payload from "./data/${name}" with { type: "json" };\nexport const files = payload.files;\nexport const version = "${hash}";\n`,
+    ),
   );
-  return `${imports.join("\n")}\n\nexport const files = [\n${entries.join("\n")}\n] as const;\n`;
+  return `/project-sources/${project.id}/${name}`;
 }
 
 function projectRegistry(project, changedPaths) {
@@ -275,20 +284,31 @@ for (const project of projects) {
     ),
   );
   const generatedProjectDirectory = path.join(generatedSourceDirectory, `p${project.id}`);
-  expectedFiles.set(
-    path.join(generatedProjectDirectory, "common.ts"),
-    Buffer.from(commonModule(project, expectedFiles)),
+  const common = emitSourcePayload(
+    project,
+    "common",
+    commonModule(project, expectedFiles),
+    expectedFiles,
   );
+  const snapshots = {};
   expectedFiles.set(
     path.join(generatedProjectDirectory, "registry.ts"),
     Buffer.from(projectRegistry(project, changedPaths)),
   );
   for (const snapshot of snapshotDefinitions(project)) {
-    expectedFiles.set(
-      path.join(generatedProjectDirectory, `${snapshot.key}.ts`),
-      Buffer.from(sourceModule(project, snapshot.directory, templateFiles, expected)),
+    snapshots[snapshot.key] = emitSourcePayload(
+      project,
+      snapshot.key,
+      sourceModule(project, snapshot.directory, templateFiles, expected),
+      expectedFiles,
     );
   }
+  expectedFiles.set(
+    path.join(publicSourceDirectory, project.id, "manifest.json"),
+    Buffer.from(
+      JSON.stringify({ schemaVersion: 1, projectId: project.id, common, snapshots }) + "\n",
+    ),
+  );
   generatedSnapshotRoots.push(
     path.join(projectDirectory, "starter"),
     path.join(projectDirectory, "checkpoints"),
@@ -302,7 +322,7 @@ expectedFiles.set(
 
 const result = reconcileGeneratedFiles({
   expectedFiles,
-  managedRoots: [generatedSourceDirectory, ...generatedSnapshotRoots],
+  managedRoots: [generatedSourceDirectory, publicSourceDirectory, ...generatedSnapshotRoots],
   checkOnly,
   workspace,
 });

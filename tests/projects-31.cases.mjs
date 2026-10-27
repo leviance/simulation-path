@@ -10,7 +10,7 @@ import { workspace, render } from "./site-support.mjs";
 const content = path.join(workspace, "content/barnes-hut-nbody");
 const root = path.join(workspace, "examples/project-31-barnes-hut-nbody");
 
-test("Project 31 raw imports follow source content even when examples is not watched", async () => {
+test("Project 31 JSON imports follow source content even when examples is not watched", async () => {
   for (const name of [
     "starter",
     ...Array.from({ length: 10 }, (_, i) => String(i + 1)),
@@ -21,15 +21,29 @@ test("Project 31 raw imports follow source content even when examples is not wat
       path.join(workspace, "lib/generated-checkpoint-sources/p31", name + ".ts"),
       "utf8",
     );
-    const imports = [...generatedModule.matchAll(/from "@\/([^"?]+)\?source=([a-f0-9]{16})&raw"/g)];
-    assert.ok(imports.length > 0, name);
-    for (const [, relative, version] of imports) {
-      const bytes = await readFile(path.join(workspace, relative));
-      assert.equal(
-        version,
-        createHash("sha256").update(bytes).digest("hex").slice(0, 16),
-        relative,
-      );
+    const payloadName = generatedModule.match(/from "\.\/data\/([^"/]+\.json)"/)?.[1];
+    assert.ok(payloadName, name);
+    assert.doesNotMatch(generatedModule, /&raw/);
+    const bytes = await readFile(
+      path.join(workspace, "lib/generated-checkpoint-sources/p31/data", payloadName),
+    );
+    assert.equal(
+      payloadName.split(".")[1],
+      createHash("sha256").update(bytes).digest("hex").slice(0, 16),
+    );
+    assert.ok(
+      bytes.equals(await readFile(path.join(workspace, "public/project-sources/31", payloadName))),
+    );
+    const payload = JSON.parse(bytes);
+    assert.equal(payload.schemaVersion, 1);
+    for (const file of payload.files) {
+      const directory =
+        name === "common"
+          ? ""
+          : name === "starter" || name === "final"
+            ? name
+            : "checkpoints/" + name.padStart(2, "0");
+      assert.equal(file.source, await readFile(path.join(root, directory, file.path), "utf8"));
     }
   }
 });

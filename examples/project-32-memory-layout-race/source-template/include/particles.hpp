@@ -89,6 +89,7 @@ inline ParticleAoS spawnParticle(std::uint32_t id, std::uint32_t generation, con
 
 // [/snippet:spawnParticle]
 
+// [snippet:warmParticle]
 inline ParticleAoS warmParticle(std::uint32_t id, const FountainConfig& config) {
     ParticleAoS particle = spawnParticle(id, 0, config);
     particle.age = randomUnit(config.seed, particle.id, 0, 6) * particle.lifetime;
@@ -100,7 +101,13 @@ inline ParticleAoS warmParticle(std::uint32_t id, const FountainConfig& config) 
     return particle;
 }
 
+// [/snippet:warmParticle]
+
+// [snippet:makeParticlesAoS]
 inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, const FountainConfig& config, bool warm = true) {
+#if LAB_CHECKPOINT < 1
+    static_cast<void>(warm);
+#endif
     validateConfig(config);
     if (count < 1 || count > maximumParticles) {
         throw std::invalid_argument("Particle count: 1..1000000");
@@ -122,6 +129,8 @@ inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, const Founta
     }
     return particles;
 }
+
+// [/snippet:makeParticlesAoS]
 
 // [snippet:integrateParticle]
 inline void integrateParticle(ParticleAoS& particle, float dt, float gravity) {

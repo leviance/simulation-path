@@ -1,6 +1,27 @@
-import { defaultConfig, fixedDt, makeParticlesAoS, makeEmptySoA, readParticle, writeParticle, planEmission, updateAoSRange, updateSoARange, type FountainConfig, type Layout, type ParticleAoS, type ParticlesSoA } from "./state.ts";
+import {
+  defaultConfig,
+  fixedDt,
+  makeParticlesAoS,
+  makeEmptySoA,
+  readParticle,
+  writeParticle,
+  planEmission,
+  updateAoSRange,
+  updateSoARange,
+  type FountainConfig,
+  type Layout,
+  type ParticleAoS,
+  type ParticlesSoA,
+} from "./state.ts";
 
-export interface Camera { yaw: number; pitch: number; distance: number; x: number; y: number; }
+export interface Camera {
+  yaw: number;
+  pitch: number;
+  distance: number;
+  x: number;
+  y: number;
+  z: number;
+}
 interface Pending {
   kind: "physics" | "conversion";
   cursor: number;
@@ -43,21 +64,54 @@ export interface FountainScene {
   selected: number;
   notice: string;
 }
-export const modes = ["layout-scene", "aos-layout", "aos-baseline", "soa-layout", "layout-agreement", "cache-lines", "layout-benchmark", "layout-validation"] as const;
-export function createFountain(stage = 8, preset = stage >= 8 ? 2 : stage >= 3 ? 1 : stage === 2 ? 0 : 3): FountainScene {
+export const modes = [
+  "layout-scene",
+  "aos-layout",
+  "aos-baseline",
+  "soa-layout",
+  "layout-agreement",
+  "cache-lines",
+  "layout-benchmark",
+  "layout-validation",
+] as const;
+export function createFountain(
+  stage = 8,
+  preset = stage >= 8 ? 2 : stage >= 3 ? 1 : stage === 2 ? 0 : 3,
+  settings: Partial<FountainConfig> = {},
+): FountainScene {
   const count = [256, 2000, 20000, 256][preset];
   if (count === undefined) throw new Error("Unknown fountain preset");
   const cold = preset === 0;
-  const config = defaultConfig();
-  config.emissionRate = count * 0.5;
+  const config = { ...defaultConfig(), emissionRate: count * 0.5, ...settings };
   return {
-    stage, preset, count, config, active: cold ? 0 : count, layout: "aos",
-    aos: makeParticlesAoS(count, config, !cold), soa: makeEmptySoA(0),
-    time: 0, steps: 0, revision: 0, emissionRemainder: 0, committedUpdated: 0, born: 0, respawned: 0,
-    copyMs: 0, kernelMs: 0, conversionMs: 0, stepWallMs: 0,
-    paused: true, singleStep: false, jobPaused: false, pending: null,
-    camera: { yaw: 0.45, pitch: -0.18, distance: 13, x: 0, y: 2.5 }, selected: 0,
-    notice: cold ? "Phát hạt từ pool trống; slot đã sinh sẽ được tái sử dụng." : "Khởi tạo warm: mọi slot đều sống. Chưa tiến thời gian.",
+    stage,
+    preset,
+    count,
+    config,
+    active: cold ? 0 : count,
+    layout: "aos",
+    aos: makeParticlesAoS(count, config, !cold),
+    soa: makeEmptySoA(0),
+    time: 0,
+    steps: 0,
+    revision: 0,
+    emissionRemainder: 0,
+    committedUpdated: 0,
+    born: 0,
+    respawned: 0,
+    copyMs: 0,
+    kernelMs: 0,
+    conversionMs: 0,
+    stepWallMs: 0,
+    paused: true,
+    singleStep: false,
+    jobPaused: false,
+    pending: null,
+    camera: { yaw: 0.45, pitch: -0.38, distance: 14, x: 0, y: 1.9, z: 0 },
+    selected: 0,
+    notice: cold
+      ? "Phát hạt từ pool trống; slot đã sinh sẽ được tái sử dụng."
+      : "Khởi tạo warm: mọi slot đều sống. Chưa tiến thời gian.",
   };
 }
 export function particleAt(scene: FountainScene, index: number) {
@@ -71,7 +125,7 @@ export function cancelPending(scene: FountainScene) {
   scene.notice = "Đã hủy phần việc dở dang; giữ nguyên snapshot đã hoàn tất.";
 }
 export function beginPhysics(scene: FountainScene, now = performance.now()) {
-  if (scene.stage < 2) return false;
+  if (scene.stage < 2 || scene.pending) return false;
   if (scene.stage < 5 && scene.layout === "soa") {
     scene.paused = true;
     scene.singleStep = false;
@@ -80,10 +134,18 @@ export function beginPhysics(scene: FountainScene, now = performance.now()) {
   }
   const plan = planEmission(scene.active, scene.count, scene.emissionRemainder, scene.config);
   scene.pending = {
-    kind: "physics", cursor: 0, active: plan.active, remainder: plan.remainder,
+    kind: "physics",
+    cursor: 0,
+    active: plan.active,
+    remainder: plan.remainder,
     aos: scene.layout === "aos" ? new Array<ParticleAoS>(scene.count) : [],
     soa: makeEmptySoA(scene.layout === "soa" ? scene.count : 0),
-    updated: 0, respawned: 0, copyMs: 0, kernelMs: 0, started: now, deadline: now + 15000,
+    updated: 0,
+    respawned: 0,
+    copyMs: 0,
+    kernelMs: 0,
+    started: now,
+    deadline: now + 15000,
   };
   return true;
 }
@@ -91,16 +153,31 @@ export function beginConversion(scene: FountainScene, now = performance.now()) {
   if (scene.stage < 4) return false;
   cancelPending(scene);
   scene.pending = {
-    kind: "conversion", cursor: 0, active: scene.active, remainder: scene.emissionRemainder,
+    kind: "conversion",
+    cursor: 0,
+    active: scene.active,
+    remainder: scene.emissionRemainder,
     aos: scene.layout === "soa" ? new Array<ParticleAoS>(scene.count) : [],
     soa: makeEmptySoA(scene.layout === "aos" ? scene.count : 0),
-    updated: 0, respawned: 0, copyMs: 0, kernelMs: 0, started: now, deadline: now + 15000,
+    updated: 0,
+    respawned: 0,
+    copyMs: 0,
+    kernelMs: 0,
+    started: now,
+    deadline: now + 15000,
   };
   return true;
 }
 export function tickPending(scene: FountainScene, clock = () => performance.now(), budget = 5) {
   const pending = scene.pending;
-  if (!pending || scene.jobPaused || (pending.kind === "physics" && scene.paused && !scene.singleStep)) return false;
+  if (!pending) return false;
+  if (clock() > pending.deadline) {
+    cancelPending(scene);
+    scene.notice = "Đã dừng ở giới hạn 15 giây; không commit bước đang dở.";
+    return false;
+  }
+  if (scene.jobPaused || (pending.kind === "physics" && scene.paused && !scene.singleStep))
+    return false;
   const until = clock() + budget;
   do {
     if (clock() > pending.deadline) {
@@ -112,7 +189,11 @@ export function tickPending(scene: FountainScene, clock = () => performance.now(
     const beforeCopy = clock();
     for (let index = pending.cursor; index < end; index++) {
       const particle = particleAt(scene, index);
-      if ((pending.kind === "physics" && scene.layout === "aos") || (pending.kind === "conversion" && scene.layout === "soa")) pending.aos[index] = { ...particle };
+      if (
+        (pending.kind === "physics" && scene.layout === "aos") ||
+        (pending.kind === "conversion" && scene.layout === "soa")
+      )
+        pending.aos[index] = { ...particle };
       else writeParticle(pending.soa, index, particle);
     }
     pending.copyMs += clock() - beforeCopy;
@@ -120,8 +201,24 @@ export function tickPending(scene: FountainScene, clock = () => performance.now(
       const updateEnd = Math.min(end, pending.active);
       if (pending.cursor < updateEnd) {
         const beforeUpdate = clock();
-        if (scene.layout === "aos") pending.respawned += updateAoSRange(pending.aos, pending.cursor, updateEnd, scene.config, "full-lifecycle", scene.active);
-        else pending.respawned += updateSoARange(pending.soa, pending.cursor, updateEnd, scene.config, "full-lifecycle", scene.active);
+        if (scene.layout === "aos")
+          pending.respawned += updateAoSRange(
+            pending.aos,
+            pending.cursor,
+            updateEnd,
+            scene.config,
+            "full-lifecycle",
+            scene.active,
+          );
+        else
+          pending.respawned += updateSoARange(
+            pending.soa,
+            pending.cursor,
+            updateEnd,
+            scene.config,
+            "full-lifecycle",
+            scene.active,
+          );
         pending.kernelMs += clock() - beforeUpdate;
         pending.updated += updateEnd - pending.cursor;
       }

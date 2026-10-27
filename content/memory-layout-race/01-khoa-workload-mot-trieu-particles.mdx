@@ -1,126 +1,164 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Khóa workload một triệu particle
+# Nhìn thấy đài phun trước khi tối ưu
 
 ## Vấn đề cần giải quyết
 
-“AoS hay SoA nhanh hơn?” nghe như một câu hỏi có thể trả lời bằng một lần bấm benchmark. Thực ra câu hỏi đó còn thiếu phần quan trọng nhất: **nhanh hơn khi làm việc gì?** Nếu chưa chốt dữ liệu, số phần tử và phép tính, ta rất dễ vô tình cho hai phía chạy hai công việc khác nhau rồi gán chênh lệch cho memory layout.
+Trước khi hỏi AoS hay SoA nhanh hơn, hãy làm ra một đài phun có thể quan sát được. Hạt sinh ở vòi phun, bay lên, rơi xuống rồi được dùng lại. Khi sản phẩm ấy chạy đúng, ta mới đổi cách lưu dữ liệu và đo xem thay đổi đó có ích ở đâu.
 
-Project này dùng một state cố định: mỗi particle có position `(x, y, z)` và velocity `(x, y, z)`, tất cả đều là `float`. Ta sẽ bắt đầu bằng Array of Structures (AoS), giữ đúng một triệu phần tử và một seed. Đến khi đổi sang SoA, giá trị ở particle index `i` vẫn phải giống hệt; chỉ địa chỉ trong bộ nhớ thay đổi.
+Project này độc lập với N-body ở Project 31: không có lực hút giữa các hạt và cũng không cần cây không gian. Ta dùng gravity không đổi, cách tích phân đã gặp ở Project 23 và renderer CPU quen thuộc. Mục tiêu cuối là **một triệu hạt sống được cập nhật thật**, không phải một triệu chấm được cấp phát rồi để yên.
 
-Starter đã mở cửa sổ SDL3, có một dải ô màu tượng trưng cho memory và một vùng để vẽ particle sample. Checkpoint đầu tiên thay dữ liệu tượng trưng bằng vector thật. Chưa có animation, chưa có benchmark và cũng chưa có SoA.
+Bài đầu chỉ dựng trạng thái ban đầu. Khi kết thúc, bạn sẽ thấy một đài phun đứng yên gồm 256 hạt ở các độ tuổi khác nhau, xoay được camera và đọc đúng số lượng hạt. Chuyển động, emission và respawn được nối vào ở bài 02.
 
-## Hiểu ý tưởng trước khi viết code
+## Theo chân một particle
 
-Một particle gồm sáu số:
+Một hạt giữ vị trí, vận tốc và tuổi. Ở bài đầu ta chỉ tạo điều kiện ban đầu, chưa cho thời gian tiến; hình warm giúp thấy đài phun ngay khi mở. Thử xoay camera trong Canvas rồi dự đoán field nào được phép đổi.
 
-$$P_i = (p_x,p_y,p_z,v_x,v_y,v_z)$$
+### Chạy bộ khung trước
 
-Mỗi `float` chiếm 4 byte. Nếu struct không có padding, một particle cần:
+Tải ZIP của project và mở terminal tại thư mục có CMakeLists.txt. Gói này đã chứa starter, từng checkpoint, final và tests; không cần ghép source từ các project trước.
 
-$$6 \times 4 = 24\ \text{byte}$$
+Bộ khung cung cấp sẵn window/renderer SDL3, framebuffer, phép chiếu 3D, camera và hàm sinh một hạt. Starter vẽ tám hạt cố định để bạn kiểm tra môi trường. **Đừng tạo lại các struct hay hàm đã có trong starter.** Ta sẽ đọc phần nền cần dùng rồi thay đúng hai chỗ: hàm tạo mảng hạt và Simulation::reset.
 
-Một triệu particle vì thế cần khoảng 24.000.000 byte, tức 24 MB khi dùng cách ghi thập phân. Đây chỉ là state thuần; `std::vector` còn giữ một ít metadata nhưng không tạo thêm object riêng cho từng particle.
-
-Trong AoS, bộ nhớ có dạng:
-
-```text title="AoS: mỗi cặp ngoặc là một particle"
-[px0 py0 pz0 vx0 vy0 vz0] [px1 py1 pz1 vx1 vy1 vz1] ...
+```bash title="Terminal — build starter rồi checkpoint 01"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug --target project_32_starter
+./build/Debug/project_32_starter.exe
+cmake --build build --config Debug --target project_32_checkpoint_1
+./build/Debug/project_32_checkpoint_1.exe
 ```
 
-Điều đáng chú ý chưa phải nó tốt hay xấu. Ta chỉ cần ghi nhận: hai `positionX` liên tiếp cách nhau 24 byte, vì giữa chúng còn năm field khác.
+Các đường chạy trên dành cho Visual Studio ở Windows. Với Ninja/macOS/Linux, executable thường ở trực tiếp trong build, không có thư mục Debug; xem [Getting Started](/getting-started) nếu cần chọn compiler hoặc generator. Bạn có thể đối chiếu toàn bộ source checkpoint ở cuối trang, thay vì chép các đoạn dưới vào một file main mới.
 
 <InteractiveLab demo="memory-layout-race" mode="layout-scene" />
 
-Mô phỏng web khởi động ở 16.384 particles để trang mở nhanh trên máy có ít RAM. Bạn có thể chọn 1.000.000 trong control để quan sát đúng quy mô cuối; benchmark nặng chỉ chạy khi bấm nút ở các bài sau. Source C++ của checkpoint vẫn dùng `kParticleCount = 1'000'000` ngay từ bài này, nên việc giảm mặc định của Canvas không làm thay đổi workload cần build.
+## Bắt tay xây dựng
 
-## Viết code từng bước
+### Bước 1 — Đọc state của một hạt
 
-### Bước 1 — Định nghĩa AoS thật rõ ràng
+AoS là viết tắt của Array of Structures: mỗi phần tử của vector chứa toàn bộ thông tin của một hạt. Đây là struct **đã có sẵn** trong include/particles.hpp:
 
-Tạo `include/particles.hpp` và đặt sáu field theo đúng thứ tự đã chốt:
-
-```cpp title="include/particles.hpp — ParticleAoS"
+```cpp title="include/particles.hpp — state của một hạt"
 struct ParticleAoS {
+    std::uint32_t id{};
+    std::uint32_t generation{};
     float positionX{};
     float positionY{};
     float positionZ{};
     float velocityX{};
     float velocityY{};
     float velocityZ{};
+    float age{};
+    float lifetime{2.5F};
+    float hue{};
 };
-
-static_assert(sizeof(ParticleAoS) == sizeof(float) * kParticleFieldCount);
 ```
 
-`static_assert` không làm chương trình nhanh hơn. Nó khóa giả định 24 byte ngay lúc compile. Nếu sau này ai đó thêm field, đổi kiểu hoặc compiler tạo layout khác, chương trình dừng ở lỗi có tên thay vì tiếp tục benchmark bằng một stride mà bài học không còn mô tả đúng.
+`positionX/Y/Z` là vị trí theo mét, `velocityX/Y/Z` là vận tốc theo m/s. `age` là thời gian đã sống, còn `lifetime` là tuổi thọ tối đa của **lần sinh hiện tại**, đều tính bằng giây. `hue` tạo một chút khác biệt màu; màu chính chuyển từ trắng sang xanh lam theo tỉ lệ age/lifetime.
 
-### Bước 2 — Sinh dữ liệu có thể tạo lại
+`id` gắn với slot và không đổi trong suốt chương trình. Khi một hạt hết tuổi thọ, `generation` tăng thêm một: ta tái sử dụng chỗ cũ cho một lần sinh mới, không xóa phần tử khỏi vector. Hai con số này giúp kiểm tra state và tạo lại cùng dữ liệu ngẫu nhiên về sau.
 
-Ta dùng `XorShift32` có seed. Mỗi particle lấy đúng sáu số theo cùng thứ tự:
+Source kiểm bằng static_assert rằng struct này chiếm 44 byte: hai uint32 và chín float, mỗi field 4 byte. Một triệu record có payload 44.000.000 byte, tức 44 MB thập phân. Đó **chưa phải tổng RAM ứng dụng**: buffer dự phòng, container khác, framebuffer và SDL còn dùng bộ nhớ riêng. Ta cũng không được lấy 44 byte này làm kích thước một object JavaScript trong Canvas.
 
-```cpp title="include/particles.hpp — makeParticlesAoS"
-inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, std::uint32_t seed) {
-    std::vector<ParticleAoS> particles{};
-    particles.reserve(count);
-    XorShift32 random{seed};
+### Bước 2 — Tạo điều kiện đầu có thể nhìn rõ
+
+FountainConfig trong bộ khung giữ seed, vị trí emitter, launchSpeed, spread, gravity, lifetime cơ sở và emissionRate. Mặc định vòi phun ở gốc, vận tốc phóng khoảng 9 m/s và gravity là −9,81 m/s². Hàm spawnParticle dùng seed/ID/generation để tạo vận tốc và lifetime cho từng lần sinh.
+
+Nếu khởi tạo mọi hạt ở tuổi 0, tất cả sẽ dồn ở vòi phun trong khung hình đầu. Để nhìn thấy ngay hình dạng đài phun, ta dùng warmParticle, cũng đã có trong starter:
+
+```cpp title="include/particles.hpp — khởi tạo warm, không phải vòng cập nhật"
+inline ParticleAoS warmParticle(std::uint32_t id, const FountainConfig& config) {
+    ParticleAoS particle = spawnParticle(id, 0, config);
+    particle.age = randomUnit(config.seed, particle.id, 0, 6) * particle.lifetime;
+    // Pre-warm initializes a ballistic state, never a scripted trajectory.
+    particle.positionX += particle.velocityX * particle.age;
+    particle.positionY = particle.velocityY * particle.age + 0.5F * config.gravity * particle.age * particle.age;
+    particle.positionZ += particle.velocityZ * particle.age;
+    particle.velocityY += config.gravity * particle.age;
+    return particle;
+}
+```
+
+Hàm lấy một tuổi ban đầu trong khoảng từ 0 tới lifetime, rồi dùng công thức ném xiên để đặt vị trí và vận tốc tương ứng:
+
+$$
+y = v_{y,0}a + \frac{1}{2}ga^2,\qquad v_y = v_{y,0} + ga.
+$$
+
+Ở đây `a` là tuổi hạt lúc khởi tạo, **không phải gia tốc**. Công thức chỉ tạo điều kiện đầu một lần. Từ bài sau, mỗi bước mô phỏng sẽ cập nhật state bằng solver; không gọi lại warmParticle theo thời gian để giả làm chuyển động.
+
+Giờ thay phần thân makeParticlesAoS trong starter bằng phiên bản sau:
+
+```cpp title="include/particles.hpp — tạo các record AoS thật"
+inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, const FountainConfig& config, bool warm = true) {
+    validateConfig(config);
+    if (count < 1 || count > maximumParticles) {
+        throw std::invalid_argument("Particle count: 1..1000000");
+    }
+    std::vector<ParticleAoS> particles(count);
     for (std::size_t index = 0; index < count; ++index) {
-        ParticleAoS particle{};
-        particle.positionX = random.nextSigned();
-        particle.positionY = random.nextSigned();
-        particle.positionZ = random.nextSigned();
-        particle.velocityX = random.nextSigned() * 0.35F;
-        particle.velocityY = random.nextSigned() * 0.35F;
-        particle.velocityZ = random.nextSigned() * 0.35F;
-        particles.push_back(particle);
+        particles[index].id = std::uint32_t(index);
+        if (warm) {
+            particles[index] = warmParticle(std::uint32_t(index), config);
+        }
     }
     return particles;
 }
 ```
 
-`reserve(count)` đảm bảo vùng lưu trữ được chuẩn bị trước. Việc sinh dữ liệu xảy ra một lần trước event loop và sau này luôn đứng ngoài vùng đo thời gian.
+`count` là số slot cấp phát. Vòng lặp gán ID bằng index; nhánh warm tạo một trạng thái nhìn được ngay, còn nhánh không warm để slot chờ emitter. Giới hạn một triệu được kiểm **trước** cấp phát. Tùy chọn warm không làm thay đổi số slot và cũng không quyết định bao nhiêu slot đang sống; việc đó thuộc Simulation.
 
-### Bước 3 — Giữ update workload khác draw workload
+### Bước 3 — Nối mảng vào chương trình
 
-Trong `main.cpp`, source có đủ một triệu phần tử:
+Thay phương thức reset trong struct Simulation ở include/simulation.hpp:
 
-```cpp title="src/main.cpp — source state"
-const std::vector<lab::ParticleAoS> source = lab::makeParticlesAoS(kParticleCount, kSeed);
-std::vector<lab::ParticleAoS> particlesAoS = source;
+```cpp title="include/simulation.hpp — đặt lại dữ liệu và các bộ đếm"
+void reset(std::size_t requested, bool coldStart = false) {
+    validateConfig(config);
+    aos = makeParticlesAoS(requested, config, !coldStart);
+    count = requested;
+    cold = coldStart;
+    active = cold ? 0 : count;
+    layout = Layout::aos;
+    nextAoS.clear();
+    pending = PendingWork::none;
+    paused = true;
+    singleStep = false;
+    steps = 0;
+    time = emissionRemainder = 0;
+    updated = committedUpdated = born = respawned = cursor = 0;
+    copyMs = updateMs = conversionMs = wholeStepMs = 0;
+    notice = cold ? "Cold start: emission adds stable slots" : "Warm start: every allocated slot is alive";
+}
 ```
 
-Renderer không cần chấm đủ một triệu pixel lên một framebuffer rộng khoảng một nghìn pixel. Nó tính `stride` để lấy mẫu tối đa 40.000 điểm rồi vẫn gọi `SDL_UpdateTexture` đúng một lần cho framebuffer hoàn chỉnh. Đây chỉ là quyết định hiển thị; `source.size()` và các kernel về sau vẫn là một triệu.
+`count` là số slot đã cấp phát; `active` là số slot sống ở đầu vector. Khởi đầu warm có active bằng count, còn coldStart có active bằng 0 để emitter phát dần từ bài sau. Reset đưa thời gian và các bộ đếm về 0, hủy tác vụ dở và luôn tạm dừng, để bạn có thể kiểm tra trước khi chạy.
 
-## Ghép các phần lại
+## Chạy checkpoint và đọc kết quả
 
-Luồng checkpoint 1 rất ngắn:
+runApplication trong include/application.hpp đã gọi `simulation.reset(256)` rồi truyền simulation cho drawFountain mỗi frame. drawFountain chỉ **đọc** các hạt để chiếu/vẽ; kéo camera không sửa vị trí thế giới. Trong checkpoint này chưa gọi solver, nên camera đổi góc nhưng state phải đứng yên.
 
-`khởi tạo SDL → sinh AoS source → tạo working copy → vẽ memory diagram và particle sample → present`
+Canvas dùng cùng tên field và công thức float32 để giải thích mô hình. Các preset web tối đa 20.000 hạt; **không có preset web một triệu hạt giả**. Với preset lớn của bản C++, renderer chọn tối đa 40.000 hạt theo cách tái lập để vẽ, còn solver ở các bài sau vẫn cập nhật đủ mọi hạt sống.
 
-Source không đổi trong suốt chương trình. Working copy là state được phép cập nhật. Cách tách này sẽ giúp mọi lượt benchmark bắt đầu từ cùng dữ liệu mà không phải gọi PRNG trong vùng đo.
+## Cố tình làm sai
 
-## Thử làm sai để hiểu đúng
+Trước khi chạy, dự đoán allocated/alive/updated. Checkpoint 01 cần 256/256/0: mọi slot sống nhưng chưa có bước vật lý hoàn tất.
 
-Thử từng thay đổi, quan sát rồi hoàn tác:
+1. Tạm bỏ nhánh gọi warmParticle, chỉ giữ gán ID rồi build lại. Mảng vẫn đủ record nhưng các hạt dồn về vị trí mặc định; lỗi nằm ở điều kiện đầu, không phải camera. Khôi phục nhánh warm trước khi tiếp tục.
+2. Tạm gán active = 0 trong reset cho preset warm. Allocated vẫn là 256 nhưng viewport không còn hạt sống để vẽ. Khôi phục active theo cold/count và kiểm lại ba bộ đếm.
 
-1. Bỏ `reserve(count)` và đo riêng thời gian generation. Bạn sẽ thấy allocation ảnh hưởng generation, nhưng điều đó chưa nói gì về update kernel.
-2. Đổi một field velocity sang `double`. `static_assert` phải chặn compile vì struct không còn 24 byte.
-3. Chỉ sinh 40.000 particle vì renderer chỉ vẽ từng đó. Title bar sẽ báo sai workload; bạn đã biến draw sample thành dữ liệu thật.
-4. Gọi `makeParticlesAoS` trong event loop. Cửa sổ có thể chậm, nhưng nguyên nhân là generation/allocation mỗi frame chứ chưa phải AoS.
+Sau đó xoay/pan/zoom. Age, generation và position thế giới không được đổi chỉ vì camera đổi. Việc hình trên màn hình di chuyển chưa chứng minh solver hoạt động.
 
 ## Tự kiểm tra kết quả
 
-- [ ] `source.size()` bằng đúng 1.000.000.
-- [ ] `sizeof(ParticleAoS)` bằng 24 byte.
-- [ ] Cùng seed tạo lại đúng sáu field ở mọi index được test.
-- [ ] Mọi position nằm trong `[-1,1]`; velocity nằm gần `[-0.35,0.35]`.
-- [ ] Readout phân biệt số particle được vẽ với số particle trong state.
-- [ ] Target `project_32_checkpoint_1` build và mở được cửa sổ.
+- Starter mở cửa sổ và cho thao tác camera; checkpoint 01 hiện đài phun đứng yên với allocated = alive = 256.
+- Cùng preset và seed cho cùng ID, position, velocity, age/lifetime và hue sau mỗi lần reset.
+- Updated bằng 0, thời gian mô phỏng bằng 0; không diễn giải hình warm thành các bước đã chạy.
+- Mọi field hữu hạn, age không âm và nhỏ hơn lifetime; quay camera không thay chúng.
+- Bạn phân biệt được slot cấp phát, hạt sống, hạt được cập nhật và hạt thực sự vẽ sau culling.
 
 ## Bài tập mở rộng
 
-1. In địa chỉ `&source[0]` và `&source[1]`, rồi tính hiệu theo byte. Kết quả có khớp `sizeof(ParticleAoS)` không?
-2. Tính dung lượng cho 5 triệu particle nếu vẫn dùng sáu float.
-3. Thêm test xác nhận seed khác làm ít nhất một field thay đổi, nhưng mọi giá trị vẫn hữu hạn.
+Đổi seed nhưng giữ cấu hình còn lại. So hai lần khởi tạo của cùng seed và hai seed khác nhau: điều gì phải lặp lại, điều gì có thể khác? Thử thay launchSpeed rồi reset; đừng sửa renderer để “kéo cao” đài phun.
 
-Bài tiếp theo sẽ cho vector AoS chuyển động. Khi đó ta mới có một hot loop cụ thể để bàn về dữ liệu CPU phải đọc.
+Bài tiếp theo: [Phát hạt, cho rơi và tái sử dụng slot](/projects/memory-layout-race/02-cap-nhat-particles-trong-aos).

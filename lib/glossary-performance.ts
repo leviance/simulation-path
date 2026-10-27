@@ -189,7 +189,7 @@ export const performanceGlossaryTerms = [
     id: "cache-line",
     term: "Cache line",
     definition:
-      "Khối byte liên tiếp được chuyển giữa các tầng cache và memory như một đơn vị. Project 32 dùng mô hình line 64 byte để phân biệt 4 byte field hữu ích với toàn bộ byte phải nạp cùng nó.",
+      "Khối byte liên tiếp được chuyển giữa các tầng cache và memory như một đơn vị. Project 32 chọn mô hình line 64 byte với base thẳng hàng để so địa chỉ của một field và vùng line bao phủ nó; đây không phải số cache miss hay lưu lượng RAM đã đo.",
   },
   {
     id: "memory-stride",

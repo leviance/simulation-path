@@ -156,7 +156,7 @@ export const roadmapSeed = [
   },
   {
     id: 32,
-    title: "Cuộc đua bộ nhớ: 1 triệu particle với AoS và SoA",
+    title: "Đài phun hạt CPU: một triệu particle với AoS và SoA",
     part: "CẤU TRÚC KHÔNG GIAN VÀ TƯ DUY HIỆU NĂNG",
   },
   {

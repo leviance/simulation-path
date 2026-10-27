@@ -1,126 +1,181 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Hoàn thiện Memory Layout Race
+# Hoàn thiện đài phun một triệu hạt
 
 ## Vấn đề cần giải quyết
 
-Ta đã có đủ mảnh ghép: deterministic source, AoS/SoA kernels, output comparison, cache-line model và benchmark. Bản final cần ghép chúng mà không biến ứng dụng thành một vòng benchmark vô hạn hoặc để renderer chen vào timing.
+Các bài trước đã có đài phun, hai layout tương đương và phép đo có kiểm output. Bài cuối nối chúng thành một ứng dụng có thể dùng trọn vẹn: mở lên thấy sản phẩm, điều chỉnh được, hủy tác vụ được và tự chứng minh đủ một triệu hạt sống đã được cập nhật.
 
-Ứng dụng khởi động ở trạng thái pause. Animation chỉ giúp quan sát state; `B` và `S` mới là hai hành động đo. Reset phải tạo lại working state từ source, layout đang hiển thị không được quyết định layout nào được update, và validation phải báo từng contract riêng.
+Đừng thay số một triệu bằng một nhãn trên UI hoặc chỉ tăng vector.size(). Cũng đừng bắt renderer vẽ mọi hạt rồi dùng FPS để suy tốc độ kernel. Ta giữ cả mô phỏng đúng quy mô lẫn số liệu hiển thị trung thực.
 
-## Hiểu ý tưởng trước khi viết code
+## Theo chân một particle
 
-Lifecycle final:
-
-`setup → sinh source → tạo AoS + SoA working state → pause → event → optional step/benchmark → draw sample → present`
-
-Ba nhóm công việc không trộn nhau:
-
-- **Correctness:** deterministic, conversion, kernel agreement.
-- **Model:** useful bytes, cache lines, efficiency.
-- **Measurement:** warm-up, samples, median, checksum.
-
-Timing có thể đổi giữa hai lần chạy mà validation vẫn pass. Ngược lại, một timing rất đẹp với difference khác 0 phải bị loại.
+Allocated là số slot được cấp phát, alive là số đang sống, updated là số đã tiến trong bước hoàn tất; sampled/rendered thuộc renderer. Trước khi chạy, đoán điều gì xảy ra với các số ấy khi đưa camera ra khỏi đài phun: culling không được làm giảm N của solver.
 
 <InteractiveLab demo="memory-layout-race" mode="layout-validation" />
 
-## Viết code từng bước
+## Bắt tay xây dựng
 
-### Bước 1 — Validation trả về các cờ có tên
+### Bước 1 — Mở đúng preset nghiệm thu
 
-```cpp title="include/benchmark.hpp — MemoryLayoutValidationReport"
-struct MemoryLayoutValidationReport {
-    bool deterministic{};
-    bool conversionExact{};
-    bool kernelsAgree{};
-    bool singleFieldReducesTraffic{};
-    bool fullWorkloadUsesAllBytes{};
-    bool benchmarkObservable{};
-};
+Bản final và checkpoint 08 khởi tạo như sau trong runApplication:
+
+```cpp title="include/application.hpp — một triệu hạt warm, khởi động ở trạng thái pause"
+lab::Simulation simulation{};
+simulation.reset(1'000'000);
 ```
 
-Không nén sáu câu hỏi thành một `bool passed` ngay trong thư viện. Khi failure xảy ra, test và title bar cần chỉ ra contract nào hỏng.
+Ở lần mở đầu, allocated = alive = 1.000.000 nhưng updated = 0, vì chưa có bước hoàn tất. Warm chỉ tạo điều kiện đầu. Space cho chạy, N tiến một bước; chỉ khi commit đủ bước, updated mới trở thành một triệu.
 
-### Bước 2 — Benchmark chỉ chạy từ event rõ ràng
+Hai layout không cần được cập nhật đồng thời trong ứng dụng. **Layout đang hoạt động** được cập nhật đầy đủ; khi đổi, state hiện tại được chuyển sang container kia. Benchmark mới là nơi chạy cả hai trial từ cùng snapshot để kiểm/so. Camera chỉ thay view, còn L thật sự chuyển nơi lưu state, không chỉ đổi một cờ vẽ.
 
-```cpp title="src/main.cpp — phím benchmark và scaling"
-}
-else if (event.key.key == SDLK_B) {
-    paused = true;
-    aosBaseline = lab::benchmarkAoSBaseline(source, workload, 5);
-    layoutBenchmark = lab::benchmarkLayoutRace(source, workload, 5);
-}
-else if (event.key.key == SDLK_S) {
-    paused = true;
-    const std::array<std::size_t, 3> counts{10'000U, 100'000U, 1'000'000U};
-    scalingRows = lab::makeLayoutScalingStudy(counts, kSeed, workload, 3);
-```
+### Bước 2 — Vẽ một tập con, không cắt giảm mô phỏng
 
-Hai đường đều hữu hạn. `S` có workload lớn hơn nên chỉ chạy khi người dùng chủ động bấm phím; CTest không gọi scaling một triệu.
+drawFountain trong include/render.hpp dùng CPU framebuffer và phép chiếu 3D:
 
-### Bước 3 — Update cả hai, chỉ đổi phần đang vẽ
-
-```cpp title="src/main.cpp — final update"
-if (!paused || singleStep) {
-    lab::integrateAoS(particlesAoS, kFixedDeltaSeconds);
-    lab::integrateSoA(particlesSoA, kFixedDeltaSeconds);
+```cpp title="include/render.hpp — sampling hiển thị tái lập và đếm sau culling"
+inline RenderStats drawFountain(Framebuffer& image, const Simulation& simulation, const Camera& camera, std::size_t drawBudget = 40'000, bool debug = false) {
+    prepareFountainSurface(image, camera, debug);
+    // Camera trigonometry is shared by every sampled particle in this frame.
+    const ViewBasis basis = viewBasis(camera);
+    RenderStats stats{};
+    stats.sampled = std::min(simulation.active, drawBudget);
+    const double opacity = std::clamp(30.0 / std::sqrt(double(std::max<std::size_t>(1, stats.sampled))), 0.2, 0.8);
+    for (std::size_t sample = 0; sample < stats.sampled; ++sample) {
+        // Deterministic display sampling, never a reduction of simulation N.
+        const std::size_t index = sample * simulation.active / stats.sampled;
+        const ParticleAoS particle = simulation.particle(index);
+        if (drawWaterParticle(image, camera, basis, particle, opacity))
+            ++stats.rendered;
+    }
+    return stats;
 }
 ```
 
-`showSoA` chỉ được đọc trong renderer. Nếu phím `L` làm đổi layout được update, hai state sẽ lệch chỉ vì người dùng đổi góc nhìn.
+Nếu active lớn hơn drawBudget, index được chọn bằng floor(sample × active / sampled). Cách chọn không đổi ngẫu nhiên mỗi frame nên tránh nhấp nháy chỉ do đổi sample. Nó **không đổi active, dt hoặc số lượt chạy kernel**.
 
-## Ghép các phần lại
+`sampled` là số hạt được chọn để thử vẽ, tối đa 40.000. `rendered` chỉ đếm hạt nằm trong khung hình, không bị hình học che khuất và thực sự ghi được pixel. Hạt mới có lõi trắng, ngả xanh lam khi già đi. Mỗi hạt là một đốm sáng mềm có kích thước theo khoảng cách tới camera; một nét ngắn theo vận tốc giúp phân biệt dòng đi lên với phần đang rơi. Nét này được tính từ vị trí và vận tốc hiện tại, không phải quỹ đạo đã lưu hay một bước mô phỏng phụ.
 
-Điều khiển final:
+`prepareFountainSurface` dựng mặt phẳng lưới XZ tại y = 0 bằng CPU, rồi lưu cả ảnh nền lẫn depth buffer. Mỗi ô rộng 1 m, đường sau mỗi 5 m được vẽ rõ hơn để dễ ước lượng kích thước. Lưới mờ dần ở xa để hạn chế nhấp nháy; nó luôn hiện, không phụ thuộc vị trí emitter. Nền được dùng lại khi camera và kích thước không đổi. `drawWaterParticle` kiểm depth trước khi cộng ánh sáng, nên hạt nằm dưới mặt phẳng không xuyên lên ảnh. Mỗi frame bắt đầu từ nền sạch để ánh sáng không tích lũy vô hạn.
 
-- `Space`: chạy/dừng animation.
-- `N`: tiến một bước.
-- `L`: đổi AoS/SoA đang vẽ.
-- `W`: đổi workload dùng cho model và benchmark.
-- `B`: benchmark N hiện tại.
-- `S`: scaling 10k/100k/1M.
-- `R`: reset working states từ source.
-- `Esc`: thoát.
+Mặt lưới chỉ là mốc không gian: **chưa có va chạm với sàn hay mô phỏng nước đọng**. Solver vẫn cập nhật cả những hạt đang bị che, cho tới khi chúng hết lifetime rồi sinh lại. F bật báo cáo và tăng độ rõ của lưới để khảo sát; khi ẩn báo cáo, mặt lưới vẫn còn để đọc chiều sâu.
 
-Chạy cả hai cấu hình và test:
+Renderer đọc qua simulation.particle(index), nên không cần một bản solver riêng cho từng layout. Hai hạt có thể đè lên cùng pixel; rendered là số hạt qua culling, không phải số pixel khác nhau trên ảnh.
 
-```bash title="Nghiệm thu Debug"
-cmake --build build --config Debug
+### Bước 3 — Giữ ứng dụng phản hồi
+
+Các bước lớn dùng buffer nguồn/đích và batch hữu hạn. Viewport tiếp tục đọc state đã hoàn tất trong khi tính. X hủy tác vụ mà không đưa buffer dở lên màn hình; Space pause vẫn cho thao tác camera. Khi đổi cấu hình, phần việc dở bị hủy trước khi dùng cấu hình mới.
+
+Reset tạo lại đúng preset/seed bằng config hiện tại và đưa time về 0. Emitter, vận tốc phóng và lifetime ảnh hưởng lần sinh sau; gravity có hiệu lực ở bước kế tiếp. Nếu muốn mọi hạt mang cấu hình mới ngay, bấm R thay vì sửa trực tiếp lifetime của các hạt đang sống.
+
+Các controls chính trong cửa sổ C++:
+
+| Phím/thao tác | Tác dụng |
+| --- | --- |
+| Space / N / R | Pause/tiếp tục, một bước, reset cùng preset/config |
+| 1 / 2 / 3 | Cold 256, warm 10.000, warm 1.000.000 |
+| L / X | Đổi AoS ↔ SoA, hủy tác vụ |
+| A/D, W/S, G/H | Emitter X, tốc độ phóng, gravity |
+| [ / ], − / = | Lifetime cho lần sinh sau, emission rate |
+| T / B / C | Workload **chỉ cho phép đo**, đo ca hiện tại, đo sáu ca |
+| Kéo trái/phải, wheel | Orbit/pan/zoom camera |
+| Mũi tên / Home / F | Orbit bằng keyboard, đặt lại camera, hiện/ẩn reports |
+| Escape | Hủy thao tác kéo hoặc tác vụ; thoát nếu không có tác vụ |
+
+Mouse capture phải được nhả khi kết thúc kéo, mất focus hoặc hủy. Escape trong lúc kéo trả camera về đầu thao tác. Mất focus sẽ pause, không tự chạy lại khi quay về cửa sổ.
+
+Canvas minh họa tối đa 20.000 hạt, chọn tối đa 8.000 để vẽ và chạy benchmark trong worker có deadline/watchdog riêng. Nó có mouse/keyboard, DPR, reduced motion và văn bản giải thích. **Không dùng Canvas để xác nhận mốc một triệu native.** Khi reduced motion bật, dùng N để xem từng bước thay vì tự chạy liên tục.
+
+### Bước 4 — Đọc telemetry theo đúng phạm vi
+
+- Allocated/alive/updated phân biệt slot đã cấp phát, hạt sống và target đã cập nhật trong bước commit gần nhất.
+- Births là slot lần đầu được phát; respawns là lần tái sử dụng do hết lifetime.
+- Logical payload là N × 44 byte cho mỗi layout. Resident payload cộng capacity các buffer đang giữ, không phải RAM toàn tiến trình.
+- Kernel time chỉ tính vòng cập nhật. Copy và conversion được báo riêng.
+- Render CPU ở bản native gồm vẽ framebuffer và gửi/lệnh vẽ texture, chưa phải phép đo GPU. Frame CPU gồm xử lý event/update/render/present trước SDL_Delay; không tự gọi nó là khoảng giữa hai lần refresh màn hình.
+- Whole-step wall time tính từ beginStep tới commit, gồm copy và chờ giữa các batch; pause cũng làm nó tăng. Nó không phải dt mô phỏng.
+
+Sau một bước workflow ở preset nghiệm thu, allocated = alive = updated = 1.000.000 và sampled = 40.000. Payload hai buffer AoS là 88.000.000 byte do có source và destination. Số rendered còn phụ thuộc camera, thời điểm và các bề mặt che khuất; không dùng một số rendered cố định làm tiêu chí cho solver.
+
+### Bước 5 — Kiểm từng slot, không chỉ kiểm bộ đếm
+
+Chế độ --smoke-workflow không tương tác mở final, tiến một bước warm rồi thoát hữu hạn. Sau khi swap buffer, nextAoS giữ state trước bước và aos giữ state sau bước. Đoạn kiểm trong application.hpp là:
+
+```cpp title="include/application.hpp — oracle cho từng ID, generation và age sau bước đủ N"
+if (workflow) {
+    if (simulation.active != simulation.count || simulation.committedUpdated != simulation.count)
+        throw std::runtime_error("Workflow did not update every live slot");
+    for (std::size_t index = 0; index < simulation.count; ++index) {
+        const auto& old = simulation.nextAoS[index];
+        const auto& next = simulation.aos[index];
+        const float remaining = old.lifetime - old.age;
+        const bool expired = lab::fixedDt >= remaining;
+        const float expectedAge = expired ? lab::fixedDt - remaining : old.age + lab::fixedDt;
+        if (next.id != index || next.generation != old.generation + std::uint32_t(expired) || std::abs(next.age - expectedAge) > 1e-6F || !lab::finiteParticle(next))
+            throw std::runtime_error("Untouched/invalid slot in full-N workflow");
+    }
+}
+```
+
+Với mỗi slot, kiểm nó có giữ ID, tăng generation đúng khi expired và có age sau bước theo phần dt còn lại. State phải hữu hạn. Chỉ kiểm active/updated hoặc vector.size() sẽ không bắt được kernel bỏ qua một đoạn rồi vẫn tăng counter.
+
+Đây là kiểm **một bước native AoS ở đúng quy mô**, không thay toàn bộ correctness hoặc thử input UI. Benchmark Release chạy đủ một triệu trên cả AoS/SoA và so từng field; CTest có fixture nhỏ độc lập cho gravity/emission/respawn và nhiều bước qua các lần sinh lại.
+
+## Chạy checkpoint và đọc kết quả
+
+```powershell title="Terminal — mọi target, Debug rồi Release"
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-```
-
-```bash title="Nghiệm thu Release"
-cmake --build build --config Release
+cmake --build build --config Release --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 20
+./build/Release/project_32_final.exe --smoke
+./build/Release/project_32_final.exe --smoke-workflow
+./build/Release/project_32_final.exe --benchmark
 ```
 
-CTest dùng vài nghìn particle và repetitions nhỏ để luôn kết thúc nhanh. Scaling một triệu là experiment tương tác, không phải điều kiện để test runner chiếm máy lâu.
+Dùng --parallel 2 để không chiếm toàn bộ máy khi build nhiều checkpoint. Với Ninja/Linux/macOS, dùng build directory và đường executable tương ứng; không gán hướng dẫn đa nền tảng thành lời hứa đã thử mọi OS.
 
-## Thử làm sai để hiểu đúng
+Smoke có giới hạn nội bộ 10 giây, benchmark 30 giây; CTest có timeout 20 giây. Khi chạy từ repository website, dùng process supervisor theo ARCHITECTURE.md để có hard timeout ngoài tiến trình và dọn cả process tree. Không chạy lại toàn bộ site chỉ vì sửa một câu văn.
 
-1. Gọi `makeLayoutScalingStudy` trước event loop. Startup bị chặn dù người dùng chưa muốn đo.
-2. Chỉ update layout đang vẽ. Nhấn `L` vài lần sẽ làm maximum difference tăng.
-3. Dùng `soaMilliseconds < aosMilliseconds` làm Definition of Done. Test sẽ phụ thuộc CPU và workload thay vì correctness.
-4. Vẽ đủ một triệu particle rồi dùng FPS để giải thích kernel. Texture upload và overdraw sẽ che mất memory-layout experiment.
-5. Bỏ timeout khỏi lệnh CTest. Một regression tạo vòng lặp không có guard có thể giữ test runner vô hạn.
+Tách bằng chứng khi ghi kết quả:
+
+1. Starter, tám checkpoint và final build ở Debug/Release.
+2. CTest kiểm mô hình và các invariant, không mở window.
+3. Smoke/workflow/benchmark hữu hạn kiểm vòng chạy và mốc quy mô.
+4. Kiểm trực tiếp desktop cho camera, controls, pause/cancel/reset, theme, điều hướng và Canvas.
+5. ZIP được giải nén, so từng byte với source và có thể build độc lập.
+
+Chưa có một loại bằng chứng thì ghi chưa kiểm chứng, không lấy loại khác để thay. Đặc biệt, CTest xanh không tự chứng minh người dùng kéo camera hoặc tải ZIP được.
+
+### Mã hoàn chỉnh và cách tự học tiếp
+
+Toàn bộ mã nguồn của dự án, CMakeLists.txt và tests được hiển thị ở phần source cuối trang, kèm ZIP độc lập. Nếu muốn chạy bản hoàn chỉnh trước, build project_32_final; nếu muốn tự viết, chọn starter rồi đối chiếu từng checkpoint. Không cần Node.js cho gói C++.
+
+README trong ZIP ghi các target, cấu trúc file, controls, giới hạn, phạm vi timer và cách lưu kết quả đo. Sau khi copy/sửa từ bài, hãy build đúng target tương ứng, không vô tình sửa starter nhưng chạy final cũ.
+
+## Cố tình làm sai
+
+Đưa camera ra khỏi đài phun và dự đoán rendered/updated. Rendered có thể về 0; updated vẫn phải đủ mọi hạt sống sau mỗi bước.
+
+1. Tạm chỉ cập nhật các index được lấy mẫu để vẽ. Ảnh vẫn có thể chuyển động nhưng workflow từng slot phải phát hiện hạt không tiến age. Khôi phục kernel cập nhật đủ N.
+2. Tạm swap buffer sau batch đầu thay vì sau toàn bước. Viewport sẽ trộn state ở các thời điểm; Cancel cũng không giữ snapshot cũ như yêu cầu. Khôi phục điểm commit khi cursor = count, rồi kiểm hủy giữa batch không sửa source.
+
+Đừng giữ các thay đổi cố ý sai trong final hoặc đem timing của chúng so với bản đúng.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Startup pause và không tự chạy benchmark/scaling.
-- [ ] `R` đưa hai layout về source giống nhau.
-- [ ] `L` chỉ đổi hình vẽ; maximum difference vẫn bằng 0.
-- [ ] `W` đổi đồng thời field highlight, traffic model và benchmark workload.
-- [ ] `B`/`S` kết thúc hữu hạn, timing đi cạnh checksum và difference.
-- [ ] Canvas chạy phép đo trong Web Worker, có trạng thái đang chạy và nút dừng thật sự hủy worker.
-- [ ] Canvas hỗ trợ pointer capture, keyboard, DPR và reduced motion.
-- [ ] Starter, checkpoint 01–08 và final build được.
-- [ ] CTest Debug/Release cùng Canvas math tests đều đạt.
+- Một triệu hạt thật sống và được cập nhật đủ mỗi bước nghiệm thu; sampling chỉ áp dụng renderer.
+- Emission/gravity/age/lifetime/respawn chạy thật; ID ổn định, không NaN/Inf hoặc rò slot.
+- Chuyển layout giữ đủ field, active/time/emission carry; cùng snapshot cho hai kernel tương đương theo ngưỡng từng đơn vị.
+- Pause/reset/single-step, chọn N/workload/config và chạy/hủy benchmark có nghĩa rõ; input vẫn phản hồi.
+- Hai workload có median/min–max/checksum, conversion/update/render/full-step được tách và mọi cấu hình đo được ghi.
+- Giữ kết quả không có speedup, không hứa một FPS cho mọi máy.
+- Source mỗi checkpoint khớp bài, code 4 spaces có comment, bài cuối có toàn bộ source và ZIP.
+- Phân biệt phần đã kiểm tự động, đã kiểm desktop và còn chưa kiểm; không tự coi trạng thái phát hành là chứng nhận nghiệm thu.
 
 ## Bài tập mở rộng
 
-1. Thêm workload tính kinetic energy từ ba velocity và dự đoán traffic trước khi đo.
-2. Thêm padding có chủ đích vào `ParticleAoS`, cập nhật `static_assert` rồi đo stride mới.
-3. Tách SoA thành các block 4 hoặc 8 particle để chuẩn bị cho SIMD, nhưng giữ bản hiện tại làm oracle.
-4. Ghi CPU, compiler và build flags cạnh bảng timing để người khác có thể tái lập phép đo.
+Thêm workload tính một thuộc tính từ ba velocity, chẳng hạn tổng vận tốc bình phương. Giữ cùng state cho hai layout, tiêu thụ output, dự đoán các field cần đọc rồi đo lại. Sau đó ước tính lợi ích đủ bù conversion hay không trong một ứng dụng chạy nhiều bước.
 
-Project 32 kết thúc phần cấu trúc không gian và tư duy hiệu năng. Project 33 sẽ chuyển sang OpenGL: vẽ lại tam giác cũ bằng GPU và đối chiếu từng bước với renderer CPU, thay vì nhảy thẳng vào shader mà không biết dữ liệu đã đi qua đâu.
+Project 32 kết thúc nhánh cấu trúc không gian và tư duy hiệu năng, nhưng không yêu cầu mọi tối ưu cùng thắng. Bước tiếp theo là [Project 33 — vẽ lại tam giác bằng GPU và đối chiếu renderer CPU](/projects/cpu-gpu-triangle): chuyển backend presentation có kiểm chứng, không dùng GPU để né phần CPU vừa học.

@@ -43,11 +43,11 @@ source-template/
 assets/         tùy chọn; dùng chung cho mọi checkpoint
 ```
 
-Generator duyệt đệ quy nên project có thể có nhiều `.cpp`, `.hpp` hoặc shader thay đổi theo bài. Chỉ các định dạng text nằm trong allowlist mới được xử lý `LAB_CHECKPOINT`; mọi định dạng chưa biết mặc định là binary và được sao chép nguyên byte. Asset bất biến và dataset lớn phải đặt trong `assets/` ở thư mục gốc project để không bị nhân bản vào starter, từng checkpoint và final. Chúng vẫn có trong ZIP nhưng không bị nhúng vào code block. Mỗi snapshot source được đưa lên web bằng một module riêng, vì vậy mở Bài 03 không tải source của cả project.
+Generator duyệt đệ quy nên project có thể có nhiều `.cpp`, `.hpp` hoặc shader thay đổi theo bài. Chỉ các định dạng text nằm trong allowlist mới được xử lý `LAB_CHECKPOINT`; mọi định dạng chưa biết mặc định là binary và được sao chép nguyên byte. Asset bất biến và dataset lớn phải đặt trong `assets/` ở thư mục gốc project để không bị nhân bản vào starter, từng checkpoint và final. Chúng vẫn có trong ZIP nhưng không bị nhúng vào code block. Mỗi snapshot có một payload JSON riêng, tối đa 5 MiB, vì vậy mở source của Bài 03 không tải source của cả project.
 
 Các thư mục `starter/`, `checkpoints` và `final/` là output được sinh, không được Git theo dõi. Không sửa trực tiếp trong đó. Generator so sánh byte trước khi ghi nên file không đổi giữ nguyên timestamp và cache Vite. `predev` đồng bộ source và ZIP để Downloads hoạt động ngay trên bản clone mới; ZIP không đổi không bị nén lại. `npm run build` dùng cùng bước chuẩn bị trước khi gọi Vinext.
 
-Thư mục `examples/` không được dev server theo dõi để tránh quét cả cây build. Mỗi import `?raw` trong source module có phiên bản lấy từ hash nội dung. Khi sinh lại checkpoint, module được theo dõi đổi URL của đúng tệp đã thay đổi; Vite tải source mới thay vì giữ bản C++ cũ trong cache. Hash được tính từ output dự kiến nên hoạt động cả trên bản clone chưa có snapshot.
+Thư mục `examples/` không được dev server theo dõi để tránh quét cả cây build. Server chỉ import một JSON cho mỗi snapshot từ `lib/generated-checkpoint-sources/pXX/data/`, không tạo một module `?raw` cho mỗi tệp C++. Trình duyệt đọc manifest nhỏ của đúng project tại `public/project-sources/XX/manifest.json`, rồi tải hai JSON cần thiết: phần dùng chung và checkpoint đang mở. Payload có hash nội dung trong tên và byte giống nhau ở server/public; manifest được đọc mới khi mở tệp, nên mã thay đổi không bị giữ nhầm trong cache. Bộ đọc phía client không import registry source toàn khóa học. Không cần backend hay endpoint API cho các tệp này.
 
 CMake dùng một target `project_N_runtime_files` để chuẩn bị DLL SDL và assets bất biến đúng một lần trong mỗi build/configuration; mọi app target phụ thuộc target này. Không để từng executable cùng POST_BUILD chép vào một thư mục runtime, vì build song song trên Windows có thể tranh chấp file. Generator single-config dùng ngay build directory; Visual Studio và generator multi-config dùng thư mục cấu hình con.
 
@@ -64,7 +64,7 @@ CMake dùng một target `project_N_runtime_files` để chuẩn bị DLL SDL v�
 - `CMakeLists.txt` độc lập cho từng project từ một template chung;
 - source module riêng cho từng snapshot.
 
-Toàn bộ output trên, cùng `public/downloads/` (ZIP và manifest), nằm trong `.gitignore`. `scripts/git-hygiene.mjs` xác định các đường dẫn được sinh để `npm run check:git` và CI chặn việc đưa chúng vào Git. Quy tắc áp dụng theo cấu trúc thư mục, không cần thêm ID mỗi khi phát hành project. Test đối chiếu quy tắc với `.gitignore`, bao gồm Project 78, và chứng minh source gốc không bị bỏ qua.
+Toàn bộ output trên, cùng `public/downloads/` (ZIP và manifest) và `public/project-sources/` (JSON source), nằm trong `.gitignore`. `scripts/git-hygiene.mjs` xác định các đường dẫn được sinh để `npm run check:git` và CI chặn việc đưa chúng vào Git. Quy tắc áp dụng theo cấu trúc thư mục, không cần thêm ID mỗi khi phát hành project. Test đối chiếu quy tắc với `.gitignore`, bao gồm Project 78, và chứng minh source gốc không bị bỏ qua.
 
 Catalog chỉ kiểm tra nguồn đầu vào: MDX, metadata, `source-template`, README và tests. Không yêu cầu CMake hoặc snapshot có sẵn trước khi sinh. `check:course` vẫn đối chiếu toàn bộ output, bao gồm CMake, với kết quả mong đợi từ generator.
 
@@ -76,7 +76,7 @@ Danh sách module thuật ngữ được khai báo một lần trong `scripts/gl
 
 ## Giới hạn chống phình file
 
-Code block C++ của Project 01–31 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này. Project 32–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
+Code block C++ của Project 01–32 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này. Project 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
 
 `npm run check:architecture` áp dụng các budget:
 

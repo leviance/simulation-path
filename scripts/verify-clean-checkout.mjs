@@ -8,11 +8,11 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
   symlinkSync,
   unlinkSync,
 } from "node:fs";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { workspace, loadProjectCatalog } from "./project-catalog.mjs";
 import { isGeneratedCoursePath } from "./git-hygiene.mjs";
@@ -49,6 +49,7 @@ function outputSignature() {
     "lib/generated-checkpoint-sources",
     "lib/generated-checkpoint-sources.ts",
     "public/downloads",
+    "public/project-sources",
     ...loadProjectCatalog({ checkDirectories: false }).flatMap((project) =>
       ["CMakeLists.txt", "starter", "checkpoints", "final"].map(
         (entry) => `examples/${project.sourceDirectory}/${entry}`,
@@ -86,6 +87,19 @@ async function runNpm(script, timeoutMs) {
   });
 }
 
+async function prepareTemporaryGit(args) {
+  const remaining = totalTimeoutMs - (Date.now() - startedAt);
+  assert.ok(remaining > 0, "Clean-checkout verification exceeded its 10-minute budget");
+  await supervisor.run({
+    label: `temporary checkout git ${args[0]}`,
+    command: "git",
+    args: ["-c", "core.fsmonitor=false", ...args],
+    cwd: cleanRoot,
+    env: process.env,
+    timeoutMs: Math.min(20_000, remaining),
+  });
+}
+
 try {
   const files = [
     ...new Set(
@@ -108,8 +122,8 @@ try {
     dependencyLink,
     process.platform === "win32" ? "junction" : "dir",
   );
-  git(cleanRoot, ["init", "--quiet"]);
-  git(cleanRoot, ["add", "--all"]);
+  await prepareTemporaryGit(["init", "--quiet"]);
+  await prepareTemporaryGit(["add", "--all"]);
   process.stdout.write(
     `Exported ${files.length} authored files; no generated course outputs copied.\n`,
   );
@@ -146,5 +160,10 @@ try {
   if (existsSync(dependencyLink)) unlinkSync(dependencyLink);
   const relative = path.relative(validationRoot, cleanRoot);
   assert.ok(/^source-only-[^/\\]+$/.test(relative), "Unsafe verification cleanup target");
-  rmSync(cleanRoot, { recursive: true, force: true });
+  try {
+    await rm(cleanRoot, { recursive: true, force: true, maxRetries: 4, retryDelay: 250 });
+  } catch (error) {
+    process.exitCode = 1;
+    process.stderr.write(`Disposable checkout retained at ${cleanRoot}: ${error.message}\n`);
+  }
 }

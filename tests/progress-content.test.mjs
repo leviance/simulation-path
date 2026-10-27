@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { migrateProgressContent } from "../lib/progress-content.ts";
 
 test("semantic project rebuild clears only its old completions and stale continue link", () => {
@@ -41,4 +42,26 @@ test("malformed revision metadata cannot suppress semantic migration", () => {
     );
     assert.deepEqual(result.completedLessonIds, ["p01-l01"]);
   }
+});
+
+test("Project 32 fountain revision clears old point-demo progress once without touching other projects", async () => {
+  const catalog = JSON.parse(
+    await readFile(new URL("../course/projects.json", import.meta.url), "utf8"),
+  );
+  const revision = catalog.find((project) => project.id === "32").contentRevision;
+  assert.equal(revision, 1);
+  const old = {
+    completedLessonIds: ["p31-l10", "p32-l01", "p32-l08"],
+    lastLessonId: "p32-l08",
+    lastLesson: {
+      id: "p32-l08",
+      title: "Old point demo",
+      href: "/projects/memory-layout-race/08-hoan-thien-memory-layout-race",
+    },
+  };
+  const migrated = migrateProgressContent(old, { p32: revision });
+  assert.deepEqual(migrated.completedLessonIds, ["p31-l10"]);
+  assert.equal(migrated.lastLesson, undefined);
+  const newlyCompleted = { ...migrated, completedLessonIds: ["p31-l10", "p32-l01"] };
+  assert.deepEqual(migrateProgressContent(newlyCompleted, { p32: revision }), newlyCompleted);
 });
