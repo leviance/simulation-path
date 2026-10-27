@@ -233,9 +233,11 @@ void testScalingWorkCounts() {
 } // namespace
 
 #include "extended.hpp"
+#include "visual.hpp"
 
 int main() {
     testProductContract();
+    testGalaxyAppearance();
     testDeterministicGalaxy();
     testSoftenedPairForce();
     testDirectOracle();

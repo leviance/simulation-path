@@ -17,6 +17,7 @@ Prerequisites: state/integrator/fixed timestep ở Project 23; baseline và work
 - Symplectic Euler: cập nhật velocity trước position. Chọn dt=1/60, 1/120 hoặc 1/240 time unit; default 1/240. Đây là integrator bậc một, không bảo toàn energy chính xác.
 - Cùng bulk velocity được trừ khỏi mọi body ở preset đĩa, không đá riêng central body để bù momentum. Velocity đầu chỉ là điều kiện đầu, không bị áp đặt lại khi chạy.
 - Dữ liệu/preset là mô hình học thuật, không phải nghiệm cân bằng thiên hà đã hiệu chỉnh hoặc mô phỏng dữ liệu quan trắc.
+- Preset đĩa gieo một lõi ellipsoid lớn (khoảng 1/3 số sao), halo thể tích thưa và hai nhánh xoắn có độ dày ngay trong điều kiện đầu. Không ép toàn bộ sao vào một mặt phẳng; các nhánh không bị cưỡng ép giữ hình khi chạy. Preset hai thiên hà có hai central mass 60, hai hệ sao mass xấp xỉ 60 và hai mặt phẳng nghiêng khác nhau.
 
 ## Build và chạy
 
@@ -41,7 +42,7 @@ Final là target mặc định. BUILD_CHECKPOINTS=ON mở starter và project_31
 - tree.hpp: Octree, aggregate, traversal và inspector; chỉ phụ thuộc lab.hpp.
 - analysis.hpp: phép đo offline/fixture; simulation.hpp: state và physics theo target.
 - experiments.hpp, benchmark.hpp: snapshot jobs, full energy, theta/runtime/dt studies.
-- render.hpp, presentation.hpp, application.hpp: CPU pixels, HUD và event loop.
+- star-render.hpp: tích lũy ánh sáng và tone mapping CPU từ các body thật; render.hpp: phép chiếu và debug primitives; presentation.hpp, application.hpp: scene, HUD và event loop.
 - src/main.cpp: SDL resource setup, run và cleanup.
 - starter/, checkpoints/01..10/, final/: snapshot độc lập được sinh từ nguồn chuẩn.
 - tests/tests.cpp và tests/extended.hpp: fixture không mở window.
@@ -50,7 +51,7 @@ Không sửa trực tiếp snapshots nếu đóng góp vào repository giáo tr�
 
 ## Điều khiển final
 
-- Kéo trái: orbit; click gần body: chọn target. Kéo phải: pan; wheel: zoom; Home: camera ban đầu.
+- Kéo trái: orbit; click gần body: chọn target. Kéo phải: pan. Wheel hoặc W/S (Z/Q cũng được): tiến/lùi camera, có thể đi xuyên qua tâm; Home: camera ban đầu.
 - Mũi tên: orbit. Dấu phẩy/chấm: target trước/sau. Camera không làm đổi physics snapshot.
 - Space: chạy/dừng physics; khi có phép đo thì pause/resume phép đo. N: đúng một fixed step.
 - R: reset preset đang chọn, cùng seed, giữ cấu hình theta/epsilon/dt. 1: đĩa 4.096; 2: hai cụm tiến gần; 3: hai vật quay tròn; 4: reference 256; 5: reference ba vật.
@@ -63,7 +64,9 @@ Các checkpoint sớm chưa mở mọi lệnh final. Bài 01 chỉ state/render;
 
 ## Đọc hình và số liệu
 
-Xanh→cam biểu thị speed từ 0 đến 1.5 length/time unit; hồng là central body; vàng là target. Body trong viewport được vẽ đầy đủ, không lấy mẫu để giả vờ nhanh. Trails chỉ theo dõi 24 body × 64 snapshots; đây là giảm lớp minh họa, không giảm N physics.
+Vàng gần lõi → xanh ở ngoài biểu thị khoảng cách tới central body gần nhất trong khoảng 0..0.75 length unit, không biểu thị tuổi/nhiệt độ sao. Kích thước đốm sáng phụ thuộc log(1+mass) và độ sâu camera; tốc độ chỉ điều chỉnh độ sáng có giới hạn. Mỗi body thật góp một điểm sáng nhỏ và một splat mờ hữu hạn; phần chồng sáng cho thấy mật độ của lõi/nhánh, được tone-map để giữ chi tiết. Đây không phải khí/bụi mô phỏng bằng solver khác. Không có ảnh thiên hà, lớp sao nền giả hoặc animation độc lập với gravity. Vòng vàng đánh dấu target, không đổi màu của ngôi sao.
+
+Body trong viewport được vẽ đầy đủ, không lấy mẫu để giả vờ nhanh. Trails chỉ theo dõi 24 ID trải đều toàn hệ × 64 snapshots; đây là giảm lớp minh họa, không giảm N physics. Camera, halo và tone mapping không thay đổi mass, lực, energy hay checksum. Khi Pause, toàn bộ hình giữ nguyên cho tới khi bạn đổi camera hoặc điều khiển.
 
 Debug xanh là node **opened**, vàng là node **accepted** trong chính traversal của target; chỉ vẽ tối đa 512 hộp mỗi loại. Node chứa target luôn phải mở. Leaf bỏ self theo index, không bỏ mọi source có cùng position.
 

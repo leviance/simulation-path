@@ -123,6 +123,10 @@ Event loop làm tiếp job rồi mới thêm sample vào history khi active chuy
 
 Quy trình cần làm trên bản final: mở preset 4.096, đo E tại t=0; chạy rồi pause, đo lại; chọn target, sweep theta; đổi góc nhìn để kiểm snapshot không đổi; Reset cùng preset/seed. C++ E lấy mẫu năng lượng, I chạy thí nghiệm dt; Canvas có các nút tương ứng.
 
+Đừng chỉ nhìn bảng số. Ở preset đĩa, bạn phải phân biệt được lõi dày và hai nhánh sao ở trạng thái đầu; khi xoay camera, đĩa phải có chiều dày thật. Chạy một lúc rồi dừng để xem các sao đã rời vị trí đầu như thế nào. Hai nhánh không bị giữ nguyên hình dạng: vận tốc quay khác nhau theo bán kính và tương tác hấp dẫn sẽ làm chúng biến đổi. Halo sáng là cách vẽ position hiện tại, không phải ảnh nền hay phần bổ sung vào energy.
+
+Preset hai thiên hà tạo hai hệ riêng, mỗi hệ có central mass 60 và đĩa tổng mass xấp xỉ 60. Đĩa thứ hai nghiêng so với đĩa thứ nhất; cả position lẫn velocity được quay cùng một phép biến đổi. Nhờ vậy ta có thể quan sát một cuộc gặp trong không gian 3D mà không dùng đường đi định sẵn. Đổi camera chỉ đổi hình chiếu; đổi preset mới thay điều kiện đầu.
+
 Bạn cũng có thể bấm N để tiến một bước rồi E để lấy mẫu tiếp theo. Các mẫu trước vẫn được giữ. HUD C++ hiển thị thay đổi năng lượng tương đối và độ dài vector thay đổi động lượng so với mẫu đầu trong lịch sử. Mẫu số năng lượng là max(|Eref|, 10⁻¹² energy unit), để trường hợp energy gần 0 không gây chia cho 0. Đọc `ref t` để biết mốc đối chiếu: lịch sử chỉ giữ 64 mẫu nên mốc này có thể dịch về sau, không phải lúc nào cũng là t=0. Reset hoặc đổi cấu hình sẽ bắt đầu một thí nghiệm mới.
 
 Chạy CTest Debug và Release, rồi thử cửa sổ thật. Build xanh không chứng minh pointer capture, scale HiDPI hoặc phản hồi khi Cancel. Ghi riêng native build/CTest, smoke hữu hạn, Canvas desktop và các phần chưa kiểm chứng. Source đầy đủ, README và ZIP ở cuối trang; không cần ghép mã từ project khác.
@@ -143,6 +147,7 @@ Cố ý đo energy chỉ trên một prefix rồi ghi N=4.096: số hữu hạn 
 ## Tự kiểm tra kết quả
 
 - Bản final cập nhật đủ 4.096 body thật; seed, preset, camera, target, theta, dt, pause/reset/step hoạt động.
+- Lõi/nhánh đọc được ở góc mặc định; xoay sang cạnh thấy chiều dày, halo đi theo đúng body; chế độ debug vẫn vẽ đúng accepted/opened nodes. Không có lớp sao giả để bù cho ít body thật.
 - Energy bao đủ N và mọi cặp $i<j$; sample ghi t, momentum và COM cùng phạm vi.
 - Thí nghiệm giảm dt tiến gần nghiệm hai vật tại cùng T, giữ theta và epsilon.
 - Force sweep/RMS, topology/self-force fixtures và benchmark hữu hạn đều có kết quả riêng.

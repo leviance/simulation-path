@@ -97,6 +97,7 @@ test("Project 31 serves overview and every rebuilt lesson with complete source",
   const html = await overview.text();
   assert.match(html, /4.096|4096/);
   assert.match(html, /class="lab-readout"/);
+  assert.match(html, /<fieldset[^>]*disabled[^>]*data-galaxy-controls-ready="false"/);
   assert.match(html, /THỬ SỨC TRƯỚC KHI XEM LỜI GIẢI/);
   const files = (await readdir(content)).filter((file) => file.endsWith(".mdx")).sort();
   for (const file of files) {

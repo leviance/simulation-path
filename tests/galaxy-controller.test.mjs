@@ -11,6 +11,8 @@ import {
 import { startGalaxyJob } from "../lib/labs/galaxy/jobs.ts";
 import * as measurementRuntime from "../lib/labs/galaxy/jobs.ts";
 import { pickGalaxy } from "../components/labs/galaxy-view.ts";
+import { dollyGalaxyCamera } from "../lib/labs/galaxy/projection.ts";
+import { performGalaxyAction, disposeGalaxy } from "../components/labs/galaxy-actions.ts";
 const file = "barnes-hut-nbody-lab.tsx";
 
 // Source-level regression, not a substitute for native desktop input testing.
@@ -88,6 +90,8 @@ test("P31 actual controller keeps target/camera edits separate from physics and 
     cancelPhysics,
     validateGalaxy,
     startGalaxyJob,
+    performGalaxyAction,
+    dollyGalaxyCamera,
     requestEpoch: { current: 0 },
     mounted: { current: true },
     jobsRuntime: { current: measurementRuntime },
@@ -104,6 +108,10 @@ test("P31 actual controller keeps target/camera edits separate from physics and 
   assert.equal(model.current.revision, revision);
   act("camera");
   assert.deepEqual(model.current.bodies, before);
+  for (let i = 0; i < 30; ++i) act("zoomIn");
+  assert.ok(model.current.camera.distance < 0);
+  assert.deepEqual(model.current.bodies, before);
+  act("zoomOut");
   act("validate");
   assert.match(model.current.notice, /zeroSelfForce: đạt/);
   act("sweep");
@@ -191,6 +199,7 @@ test("P31 actual keyboard preserves browser shortcuts, gates lessons and dispose
     stage: 1,
     release: () => {},
     act: (...args) => calls.push(args),
+    dollyGalaxyCamera,
     publish: () => {},
   });
   const event = (key, extra = {}) => ({
@@ -261,6 +270,7 @@ test("P31 actual keyboard preserves browser shortcuts, gates lessons and dispose
     jobRef,
     mounted: { current: true },
     requestEpoch: { current: 0 },
+    disposeGalaxy,
   });
   const dispose = lifecycle();
   listeners.get("visibilitychange")();
@@ -268,6 +278,52 @@ test("P31 actual keyboard preserves browser shortcuts, gates lessons and dispose
   dispose();
   assert.equal(jobRef.current.active, false);
   assert.deepEqual(removed.sort(), ["blur", "visibilitychange"]);
+});
+
+test("P31 actual wheel handler supports dolly, preserves browser zoom and removes its listener", async () => {
+  const model = { current: createGalaxy() };
+  const before = structuredClone(model.current.bodies);
+  const listeners = new Map();
+  let prevented = 0,
+    published = 0;
+  const canvas = {
+    focus() {},
+    addEventListener(name, fn, options) {
+      assert.equal(options.passive, false);
+      listeners.set(name, fn);
+    },
+    removeEventListener(name, fn) {
+      assert.equal(listeners.get(name), fn);
+      listeners.delete(name);
+    },
+  };
+  const effect = await componentEffect(file, 'canvas.addEventListener("wheel"', {
+    canvasRef: { current: canvas },
+    model,
+    size: { height: 570 },
+    release() {},
+    dollyGalaxyCamera,
+    publish: () => published++,
+  });
+  const cleanup = effect();
+  const wheel = listeners.get("wheel");
+  const event = {
+    deltaY: -100,
+    deltaMode: 0,
+    ctrlKey: false,
+    metaKey: false,
+    preventDefault: () => prevented++,
+  };
+  for (let i = 0; i < 30; i++) wheel(event);
+  assert.ok(model.current.camera.distance < 0);
+  const distance = model.current.camera.distance;
+  wheel({ ...event, ctrlKey: true });
+  assert.equal(model.current.camera.distance, distance);
+  assert.equal(prevented, 30);
+  assert.equal(published, 30);
+  assert.deepEqual(model.current.bodies, before);
+  cleanup();
+  assert.equal(listeners.size, 0);
 });
 
 test("P31 lazy measurements reject stale, canceled, disposed and failed loads", async () => {

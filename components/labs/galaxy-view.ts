@@ -1,21 +1,65 @@
-import type { GalaxyScene, Camera } from "@/lib/labs/galaxy/scene";
-import type { Vec3, Bounds3D } from "@/lib/labs/barnes-hut-nbody";
+import type { GalaxyScene } from "@/lib/labs/galaxy/scene";
+import type { Bounds3D } from "@/lib/labs/barnes-hut-nbody";
 import type { selectedForce } from "@/lib/labs/galaxy/scene";
-export function projectGalaxy(point: Vec3, camera: Camera, width: number, height: number) {
-  const x = point.x - camera.x,
-    y = point.y - camera.y,
-    z = point.z;
-  const yawX = Math.cos(camera.yaw) * x - Math.sin(camera.yaw) * z,
-    yawZ = Math.sin(camera.yaw) * x + Math.cos(camera.yaw) * z;
-  const cameraY = Math.cos(camera.pitch) * y - Math.sin(camera.pitch) * yawZ,
-    depth = Math.sin(camera.pitch) * y + Math.cos(camera.pitch) * yawZ + camera.distance;
-  const scale = (height * 0.5) / Math.tan(Math.PI / 6);
-  return {
-    x: width / 2 + (yawX * scale) / depth,
-    y: height * 0.47 - (cameraY * scale) / depth,
-    depth,
-    visible: depth > 0.1,
-  };
+import { projectGalaxy } from "../../lib/labs/galaxy/projection.ts";
+import { createGalaxyRaster, type GalaxyRaster } from "../../lib/labs/galaxy/appearance.ts";
+import { renderGalaxyRaster } from "../../lib/labs/galaxy/render.ts";
+export { projectGalaxy } from "../../lib/labs/galaxy/projection.ts";
+
+interface CanvasRaster {
+  frame: GalaxyRaster;
+  canvas: HTMLCanvasElement;
+  context: CanvasRenderingContext2D;
+  image: ImageData;
+  bodies: GalaxyScene["bodies"] | null;
+  cameraKey: string;
+  drawn: number;
+}
+const rasters = new WeakMap<CanvasRenderingContext2D, CanvasRaster>();
+
+function drawStars(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  scene: GalaxyScene,
+) {
+  const pixelWidth = Math.max(1, Math.round(width));
+  const pixelHeight = Math.max(1, Math.round(height));
+  let raster = rasters.get(context);
+  if (!raster || raster.frame.width !== pixelWidth || raster.frame.height !== pixelHeight) {
+    const canvas = document.createElement("canvas");
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+    const offscreen = canvas.getContext("2d");
+    if (!offscreen) throw Error("Canvas 2D is unavailable");
+    raster = {
+      frame: createGalaxyRaster(pixelWidth, pixelHeight),
+      canvas,
+      context: offscreen,
+      image: offscreen.createImageData(pixelWidth, pixelHeight),
+      bodies: null,
+      cameraKey: "",
+      drawn: 0,
+    };
+    rasters.set(context, raster);
+  }
+  const cameraKey = [
+    scene.camera.x,
+    scene.camera.y,
+    scene.camera.yaw,
+    scene.camera.pitch,
+    scene.camera.distance,
+  ].join(",");
+  if (raster.bodies !== scene.bodies || raster.cameraKey !== cameraKey) {
+    raster.drawn = renderGalaxyRaster(raster.frame, scene.bodies, scene.camera).drawn;
+    raster.image.data.set(raster.frame.pixels);
+    raster.context.putImageData(raster.image, 0, 0);
+    raster.bodies = scene.bodies;
+    raster.cameraKey = cameraKey;
+  }
+  // Respect the caller's DPR transform rather than placing unscaled ImageData.
+  context.drawImage(raster.canvas, 0, 0, width, height);
+  return raster.drawn;
 }
 function line(
   context: CanvasRenderingContext2D,
@@ -69,7 +113,7 @@ export function drawGalaxy(
   scene: GalaxyScene,
   force: ReturnType<typeof selectedForce>,
 ) {
-  let drawn = 0;
+  const drawn = drawStars(context, width, height, scene);
   for (let frame = 1; frame < scene.trails.length; frame++)
     for (let body = 0; body < scene.trails[frame].length; body++)
       line(
@@ -91,33 +135,16 @@ export function drawGalaxy(
       .slice(0, 512))
       box(context, node.bounds, scene, width, height, "#34536e");
   }
-  const points = scene.bodies
-    .map((body, index) => ({
-      body,
-      index,
-      p: projectGalaxy(body.position, scene.camera, width, height),
-    }))
-    .sort((a, b) => b.p.depth - a.p.depth || a.index - b.index);
-  for (const { body, index, p } of points) {
-    if (!p.visible || p.x < 0 || p.x >= width || p.y < 0 || p.y >= height) continue;
-    drawn++;
-    const speed = Math.min(1, Math.hypot(body.velocity.x, body.velocity.y, body.velocity.z) / 1.5);
-    context.fillStyle =
-      "rgb(" + Math.round(80 + speed * 160) + ",170," + Math.round(240 - speed * 130) + ")";
-    let radius = 1.1;
-    if (index === 0) {
-      radius = 4;
-      context.fillStyle = "#e06c75";
-    }
-    if (index === scene.selected) {
-      radius = 4;
-      context.fillStyle = "#e5c07b";
-    }
-    context.beginPath();
-    context.arc(p.x, p.y, radius, 0, Math.PI * 2);
-    context.fill();
-  }
   if (scene.stage >= 2) {
+    const p = projectGalaxy(scene.bodies[scene.selected].position, scene.camera, width, height);
+    if (p.visible) {
+      context.strokeStyle = "#e5c07b";
+      context.beginPath();
+      context.arc(p.x, p.y, 7, 0, Math.PI * 2);
+      context.stroke();
+    }
+  }
+  if (scene.stage >= 2 && (scene.debug || scene.stage < 6)) {
     const body = scene.bodies[scene.selected],
       a =
         scene.stage >= 6

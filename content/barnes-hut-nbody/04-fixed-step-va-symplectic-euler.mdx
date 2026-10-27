@@ -74,10 +74,11 @@ inline bool advancePhysics(Simulation& simulation, double budgetMilliseconds = 6
     simulation.time += simulation.dt;
     ++simulation.steps;
     simulation.rebuild();
-    // 24 tracked bodies × 64 snapshots; all N bodies still receive gravity.
+    // 24 IDs trải đều toàn bộ hệ × 64 snapshot; không chỉ lấy sao ở lõi.
     std::vector<Vec3> trail{};
     for (std::size_t i = 0; i < std::min<std::size_t>(24, simulation.bodies.size()); ++i) {
-        trail.push_back(simulation.bodies[i].position);
+        const std::size_t index = i * simulation.bodies.size() / std::min<std::size_t>(24, simulation.bodies.size());
+        trail.push_back(simulation.bodies[index].position);
     }
     simulation.trails.push_back(std::move(trail));
     if (simulation.trails.size() > 64) {

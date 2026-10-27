@@ -83,12 +83,12 @@ Vector acceleration mới có cùng thứ tự với bodies. Ta trả hết kế
 ### Thay vector trong scene bằng tổng lực
 
 ```cpp title="include/presentation.hpp — Thay vector trong scene bằng tổng lực"
-inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, const lab::Simulation& simulation) {
-    std::fill(pixels.begin(), pixels.end(), kBackground);
+inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, const lab::Simulation& simulation, std::vector<StarLight>& light) {
+    drawBodies(pixels, width, height, simulation.bodies, simulation.camera, light);
     drawTrails(pixels, width, height, simulation);
     const auto force = lab::directAcceleration(simulation.bodies, simulation.selected, lab::gravity, simulation.epsilon);
     drawForceArrow(pixels, width, height, simulation.bodies[simulation.selected], force.acceleration, simulation.camera);
-    drawBodies(pixels, width, height, simulation.bodies, simulation.camera, simulation.selected);
+    drawTargetMarker(pixels, width, height, simulation.bodies[simulation.selected], simulation.camera);
 }
 ```
 

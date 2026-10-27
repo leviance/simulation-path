@@ -14,6 +14,8 @@ export type GalaxyAction =
   | "selected"
   | "debug"
   | "camera"
+  | "zoomIn"
+  | "zoomOut"
   | "sweep"
   | "energy"
   | "runtime"
@@ -27,6 +29,7 @@ export interface GalaxyControlsProps {
   setTool: (tool: "orbit" | "pan") => void;
   act: (action: GalaxyAction, value?: number) => void;
 }
+
 export default function GalaxyControls({
   scene,
   job,
@@ -45,8 +48,8 @@ export default function GalaxyControls({
           value={scene.preset}
           onChange={(event) => act("preset", Number(event.target.value))}
         >
-          <option value={0}>Đĩa sao · {scene.stage >= 6 ? "4.096" : "256"} vật thể</option>
-          <option value={1}>Hai cụm tiến lại gần</option>
+          <option value={0}>Thiên hà xoắn · {scene.stage >= 6 ? "4.096" : "256"} vật thể</option>
+          <option value={1}>Hai thiên hà gặp nhau</option>
           <option value={2}>Hai vật quay tròn</option>
           <option value={3}>Reference · 256 vật thể</option>
           <option value={4}>Reference · 3 vật thể</option>
@@ -64,6 +67,8 @@ export default function GalaxyControls({
         </select>
       </label>
       <button onClick={() => act("camera")}>Đặt lại camera</button>
+      <button onClick={() => act("zoomIn")}>Tiến vào thiên hà</button>
+      <button onClick={() => act("zoomOut")}>Lùi ra xa</button>
       {scene.stage >= 2 && (
         <label>
           Body theo dõi

@@ -9,6 +9,9 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
     lab::Simulation simulation{};
     simulation.reset();
     std::vector<std::uint32_t> pixels(1120 * 570);
+    std::vector<StarLight> light(pixels.size());
+    std::array<double, 12> previousFrame{};
+    bool frameValid = false;
     bool running = true;
     bool singleStep = false;
     bool jobsPaused = false;
@@ -72,8 +75,9 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             simulation.camera.yaw += dx * 0.006;
             simulation.camera.pitch = std::clamp(simulation.camera.pitch + dy * 0.006, -1.4, 1.4);
         } else {
-            simulation.camera.target.x -= dx * simulation.camera.distance / 570.0;
-            simulation.camera.target.y += dy * simulation.camera.distance / 570.0;
+            const double panScale = std::max(0.3, std::abs(simulation.camera.distance));
+            simulation.camera.target.x -= dx * panScale / 570.0;
+            simulation.camera.target.y += dy * panScale / 570.0;
         }
         previousX = x;
         previousY = y;
@@ -128,7 +132,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                 }
                 release();
             } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-                simulation.camera.distance = std::clamp(simulation.camera.distance * std::exp(-double(event.wheel.y) * 0.08), 0.3, 30.0);
+                lab::dollyCamera(simulation.camera, double(event.wheel.y));
             } else if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                 const auto key = event.key.key;
                 if (key == SDLK_ESCAPE) {
@@ -148,6 +152,9 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     }
                 } else if (key == SDLK_HOME) {
                     simulation.camera = {};
+                } else if (key == SDLK_W || key == SDLK_S || key == SDLK_Q || key == SDLK_Z) {
+                    const double direction = key == SDLK_W || key == SDLK_Z ? 1.0 : -1.0;
+                    lab::dollyCamera(simulation.camera, direction);
                 } else if (key == SDLK_F) {
                     simulation.debug = !simulation.debug;
                 } else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
@@ -306,9 +313,17 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             }
         }
 #endif
-        drawScene(pixels, 1120, 570, simulation);
-        if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), 1120 * int(sizeof(std::uint32_t)))) {
-            throw std::runtime_error(SDL_GetError());
+        // Khi một job đang tính, snapshot và camera thường không đổi. Giữ pixel
+        // cũ thay vì dựng lại hàng nghìn halo mỗi batch 6 ms; HUD vẫn cập nhật.
+        const auto& camera = simulation.camera;
+        const std::array<double, 12> frameKey{double(simulation.steps), camera.target.x, camera.target.y, camera.target.z, camera.yaw, camera.pitch, camera.distance, double(simulation.preset), double(simulation.selected), double(simulation.debug), simulation.theta, simulation.epsilon};
+        if (!frameValid || frameKey != previousFrame) {
+            drawScene(pixels, 1120, 570, simulation, light);
+            if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), 1120 * int(sizeof(std::uint32_t)))) {
+                throw std::runtime_error(SDL_GetError());
+            }
+            previousFrame = frameKey;
+            frameValid = true;
         }
         SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255);
         SDL_RenderClear(renderer);

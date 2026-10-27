@@ -91,7 +91,7 @@ class XorShift32 {
 
 // [snippet:makeGalaxyBodies]
 inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed) {
-    if (count > 8192) {
+    if (count < 1 || count > 8192) {
         throw std::invalid_argument("Body budget: 1..8192");
     }
     const std::size_t safeCount = std::max<std::size_t>(1U, count);
@@ -100,22 +100,80 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
     bodies.reserve(safeCount);
     bodies.push_back({{}, {}, 120.0});
 
+    // Nghịch đảo CDF của đĩa có mật độ giảm theo exp(-r / scale).
+    // Số vòng chia đôi cố định: không có rejection loop có thể chạy vô hạn.
+    const auto diskRadius = [](double sample) {
+        constexpr double scale = 0.36;
+        constexpr double maximum = 1.4;
+        const double limit = 1.0 - (1.0 + maximum / scale) * std::exp(-maximum / scale);
+        double low = 0;
+        double high = maximum;
+        for (int iteration = 0; iteration < 16; ++iteration) {
+            const double middle = (low + high) * 0.5;
+            const double cumulative = 1.0 - (1.0 + middle / scale) * std::exp(-middle / scale);
+            if (cumulative < sample * limit) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        return 0.2 + (low + high) * 0.5;
+    };
+
     for (std::size_t index = 1; index < safeCount; ++index) {
-        const double radius = 0.08 + std::sqrt(random.unit()) * 0.9;
-        const double angle = random.unit() * 6.283185307179586;
-        const double thickness = (random.unit() - 0.5) * 0.08 * (1.1 - radius);
+        // Đây là điều kiện đầu, không phải quỹ đạo được áp đặt mỗi frame.
+        // Một phần ba số sao tạo lõi ellipsoid; halo và đĩa đều có thể tích XYZ.
+        // Các nhánh chỉ mô tả phân bố ban đầu, không ép sao quay theo đường có sẵn.
+        const bool bulge = index % 3 == 0;
+        const bool halo = !bulge && index % 11 == 0;
+        const double radialSample = random.unit();
+        double radius = diskRadius(radialSample);
+        if (bulge) {
+            radius = 0.06 + std::pow(radialSample, 1.1) * 0.55;
+        } else if (halo) {
+            radius = 0.5 + radialSample * 0.9;
+        }
+        const double angularSample = random.unit();
+        const double scatter = random.unit();
+        double angle = 0;
+        if (bulge || halo) {
+            angle = angularSample * 6.283185307179586;
+        } else if (angularSample < 0.22) {
+            // Đĩa nền giữa các nhánh, không để hai dải rời như cánh quạt.
+            angle = angularSample / 0.22 * 6.283185307179586;
+        } else {
+            const bool firstArm = angularSample < 0.64;
+            const double winding = firstArm ? 3.4 : 2.6;
+            const double phase = firstArm ? 0.0 : 3.7;
+            angle = phase + winding * std::log((radius + 0.12) / 0.32);
+            angle += 0.14 * std::sin(radius * 8.0 + phase);
+            angle += (scatter - 0.5) * (0.22 + 0.35 * radius);
+            if (angularSample > 0.90) {
+                angle += 0.3 + 0.3 * radius;
+            }
+        }
+        const double heightSample = random.unit() * 2.0 - 1.0;
+        double planarRadius = radius;
+        double thickness = 0.28 * heightSample * std::abs(heightSample) * (1.3 - 0.35 * radius);
+        if (bulge || halo) {
+            planarRadius = radius * std::sqrt(1.0 - heightSample * heightSample);
+            thickness = radius * heightSample;
+            if (bulge) {
+                thickness *= 0.85;
+            }
+        }
         // Reduced units: G=0.001, central mass=120, disk mass approximately 120.
         // Increasing N refines the disk instead of increasing its total mass.
         const double mass = (0.7 + random.unit() * 0.6) * 120.0 / double(safeCount - 1);
-        const double enclosedMass = 120.0 + 120.0 * radius * radius;
+        const double enclosedMass = 120.0 + 120.0 * std::min(1.0, radius * radius);
         const double orbitalSpeed = std::sqrt(0.001 * enclosedMass / radius);
         const double speedJitter = 0.92 + random.unit() * 0.16;
         bodies.push_back({
-            {std::cos(angle) * radius, std::sin(angle) * radius, thickness},
+            {std::cos(angle) * planarRadius, std::sin(angle) * planarRadius, thickness},
             {
                 -std::sin(angle) * orbitalSpeed * speedJitter,
                 std::cos(angle) * orbitalSpeed * speedJitter,
-                (random.unit() - 0.5) * 0.01,
+                (random.unit() - 0.5) * (bulge || halo ? 0.5 : 0.06),
             },
             mass,
         });
@@ -141,9 +199,9 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
 
 struct OrbitCamera {
     Vec3 target{};
-    double yaw{0.45};
-    double pitch{-0.52};
-    double distance{2.5};
+    double yaw{0.15};
+    double pitch{-0.85};
+    double distance{2.6};
     double fieldOfViewRadians{1.0471975512};
     double aspect{1.0};
     double nearPlane{0.1};
@@ -155,6 +213,14 @@ struct ProjectedPoint {
     double depth{};
     bool visible{};
 };
+
+inline void dollyCamera(OrbitCamera& camera, double amount) {
+    if (!std::isfinite(amount)) {
+        return;
+    }
+    const double step = std::max(0.12, std::abs(camera.distance) * 0.12);
+    camera.distance = std::clamp(camera.distance - std::clamp(amount, -3.0, 3.0) * step, -16.0, 30.0);
+}
 
 inline ProjectedPoint projectBodyPoint(const Vec3& point, const OrbitCamera& camera) {
     const Vec3 relative = point - camera.target;

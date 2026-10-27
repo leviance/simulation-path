@@ -1,6 +1,7 @@
 #pragma once
 
 #include "analysis.hpp"
+#include "star-render.hpp"
 
 #include <algorithm>
 #include <array>
@@ -129,50 +130,16 @@ inline ScreenPoint projectToScreen(
     };
 }
 
-inline void drawBodies(
+inline std::size_t drawBodies(
     std::span<std::uint32_t> pixels,
     int width,
     int height,
     std::span<const lab::Body> bodies,
     const lab::OrbitCamera& camera,
-    std::size_t selectedBody
+    std::vector<StarLight>& light
 ) {
-    std::vector<std::size_t> drawOrder(bodies.size());
-    std::iota(drawOrder.begin(), drawOrder.end(), 0U);
-    std::vector<ScreenPoint> projected(bodies.size());
-    for (std::size_t index = 0; index < bodies.size(); ++index) {
-        projected[index] = projectToScreen(bodies[index].position, camera, width, height);
-    }
-    std::sort(drawOrder.begin(), drawOrder.end(), [&](std::size_t left, std::size_t right) {
-        return projected[left].depth > projected[right].depth;
-    });
-    for (const std::size_t index : drawOrder) {
-        if (!projected[index].visible) {
-            continue;
-        }
-        const double speed = std::clamp(lab::length(bodies[index].velocity) / 1.5, 0.0, 1.0);
-        const auto red = std::uint32_t(80 + speed * 160);
-        const auto blue = std::uint32_t(240 - speed * 130);
-        std::uint32_t color = (red << 24U) | (170U << 16U) | (blue << 8U) | 255U;
-        int radius = 1;
-        if (index == 0U) {
-            color = kCentralBody;
-            radius = 5;
-        }
-        if (index == selectedBody) {
-            color = kSelectedBody;
-            radius = 4;
-        }
-        drawFilledCircle(
-            pixels,
-            width,
-            height,
-            projected[index].x,
-            projected[index].y,
-            radius,
-            color
-        );
-    }
+    // Event loop giữ buffer để tái sử dụng capacity, không cấp phát lại mỗi frame.
+    return renderStarField(pixels, width, height, bodies, camera, light);
 }
 
 inline void drawForceArrow(
@@ -195,6 +162,17 @@ inline void drawForceArrow(
     }
     drawLine(pixels, width, height, start.x, start.y, end.x, end.y, kForce);
     drawFilledCircle(pixels, width, height, end.x, end.y, 2, kForce);
+}
+
+inline void drawTargetMarker(std::span<std::uint32_t> pixels, int width, int height, const lab::Body& body, const lab::OrbitCamera& camera) {
+    const auto target = projectToScreen(body.position, camera, width, height);
+    if (!target.visible) {
+        return;
+    }
+    for (int step = 0; step < 40; ++step) {
+        const double angle = double(step) * 6.283185307179586 / 40.0;
+        putPixel(pixels, width, height, target.x + int(std::lround(std::cos(angle) * 7)), target.y + int(std::lround(std::sin(angle) * 7)), kSelectedBody);
+    }
 }
 
 #if LAB_CHECKPOINT >= 5

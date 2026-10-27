@@ -12,6 +12,8 @@ Starter đã có renderer CPU và event loop. Checkpoint 01 thêm phép đọc t
 
 G=0,001; central body có mass 120, tổng mass đĩa xấp xỉ 120. Tăng N làm đĩa được lấy mẫu dày hơn, không làm mass tăng tỉ lệ với N. Velocity ban đầu là điều kiện đầu gần quỹ đạo tròn, không phải đường đi sẽ bị áp đặt. Ta trừ cùng bulk velocity khỏi mọi body để bỏ chuyển động tịnh tiến toàn hệ.
 
+Để nhìn rõ cấu trúc, ta gieo khoảng một phần ba số sao vào lõi ellipsoid lớn, có thể tích thật. Một vùng halo thưa bao quanh lõi; phần còn lại nằm trong hai nhánh xoắn dày, không bị ép vào một mặt phẳng. Đây là **hình dạng được chọn ở thời điểm ban đầu**, chưa phải bằng chứng Barnes–Hut tự tạo ra thiên hà xoắn. Sau khi bấm chạy, solver chỉ đọc position, velocity và mass; không có đoạn code nào kéo sao trở lại nhánh cũ.
+
 $$
 \mathbf c=\frac{\sum_i m_i\mathbf p_i}{\sum_i m_i},\qquad\mathbf P=\sum_i m_i\mathbf v_i
 $$
@@ -106,7 +108,7 @@ Không thêm screenX/screenY vào Body. Acceleration được tính lại từ s
 
 ```cpp title="include/lab.hpp — Sinh lại cùng thí nghiệm"
 inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed) {
-    if (count > 8192) {
+    if (count < 1 || count > 8192) {
         throw std::invalid_argument("Body budget: 1..8192");
     }
     const std::size_t safeCount = std::max<std::size_t>(1U, count);
@@ -115,22 +117,80 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
     bodies.reserve(safeCount);
     bodies.push_back({{}, {}, 120.0});
 
+    // Nghịch đảo CDF của đĩa có mật độ giảm theo exp(-r / scale).
+    // Số vòng chia đôi cố định: không có rejection loop có thể chạy vô hạn.
+    const auto diskRadius = [](double sample) {
+        constexpr double scale = 0.36;
+        constexpr double maximum = 1.4;
+        const double limit = 1.0 - (1.0 + maximum / scale) * std::exp(-maximum / scale);
+        double low = 0;
+        double high = maximum;
+        for (int iteration = 0; iteration < 16; ++iteration) {
+            const double middle = (low + high) * 0.5;
+            const double cumulative = 1.0 - (1.0 + middle / scale) * std::exp(-middle / scale);
+            if (cumulative < sample * limit) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        return 0.2 + (low + high) * 0.5;
+    };
+
     for (std::size_t index = 1; index < safeCount; ++index) {
-        const double radius = 0.08 + std::sqrt(random.unit()) * 0.9;
-        const double angle = random.unit() * 6.283185307179586;
-        const double thickness = (random.unit() - 0.5) * 0.08 * (1.1 - radius);
+        // Đây là điều kiện đầu, không phải quỹ đạo được áp đặt mỗi frame.
+        // Một phần ba số sao tạo lõi ellipsoid; halo và đĩa đều có thể tích XYZ.
+        // Các nhánh chỉ mô tả phân bố ban đầu, không ép sao quay theo đường có sẵn.
+        const bool bulge = index % 3 == 0;
+        const bool halo = !bulge && index % 11 == 0;
+        const double radialSample = random.unit();
+        double radius = diskRadius(radialSample);
+        if (bulge) {
+            radius = 0.06 + std::pow(radialSample, 1.1) * 0.55;
+        } else if (halo) {
+            radius = 0.5 + radialSample * 0.9;
+        }
+        const double angularSample = random.unit();
+        const double scatter = random.unit();
+        double angle = 0;
+        if (bulge || halo) {
+            angle = angularSample * 6.283185307179586;
+        } else if (angularSample < 0.22) {
+            // Đĩa nền giữa các nhánh, không để hai dải rời như cánh quạt.
+            angle = angularSample / 0.22 * 6.283185307179586;
+        } else {
+            const bool firstArm = angularSample < 0.64;
+            const double winding = firstArm ? 3.4 : 2.6;
+            const double phase = firstArm ? 0.0 : 3.7;
+            angle = phase + winding * std::log((radius + 0.12) / 0.32);
+            angle += 0.14 * std::sin(radius * 8.0 + phase);
+            angle += (scatter - 0.5) * (0.22 + 0.35 * radius);
+            if (angularSample > 0.90) {
+                angle += 0.3 + 0.3 * radius;
+            }
+        }
+        const double heightSample = random.unit() * 2.0 - 1.0;
+        double planarRadius = radius;
+        double thickness = 0.28 * heightSample * std::abs(heightSample) * (1.3 - 0.35 * radius);
+        if (bulge || halo) {
+            planarRadius = radius * std::sqrt(1.0 - heightSample * heightSample);
+            thickness = radius * heightSample;
+            if (bulge) {
+                thickness *= 0.85;
+            }
+        }
         // Reduced units: G=0.001, central mass=120, disk mass approximately 120.
         // Increasing N refines the disk instead of increasing its total mass.
         const double mass = (0.7 + random.unit() * 0.6) * 120.0 / double(safeCount - 1);
-        const double enclosedMass = 120.0 + 120.0 * radius * radius;
+        const double enclosedMass = 120.0 + 120.0 * std::min(1.0, radius * radius);
         const double orbitalSpeed = std::sqrt(0.001 * enclosedMass / radius);
         const double speedJitter = 0.92 + random.unit() * 0.16;
         bodies.push_back({
-            {std::cos(angle) * radius, std::sin(angle) * radius, thickness},
+            {std::cos(angle) * planarRadius, std::sin(angle) * planarRadius, thickness},
             {
                 -std::sin(angle) * orbitalSpeed * speedJitter,
                 std::cos(angle) * orbitalSpeed * speedJitter,
-                (random.unit() - 0.5) * 0.01,
+                (random.unit() - 0.5) * (bulge || halo ? 0.5 : 0.06),
             },
             mass,
         });
@@ -154,6 +214,30 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
 ```
 
 Cùng count và seed phải cho cùng từng body. Chú ý mass của mỗi sao chia cho count−1. Cuối hàm, bulkVelocity được trừ khỏi toàn hệ; không đẩy riêng central body với velocity lớn để bù momentum.
+
+Không nên chia toàn bộ đĩa thành hai dải đều rồi quay dải thứ hai đúng nửa vòng: kết quả rất dễ giống cánh quạt. Ở đây khoảng 22% sao của đĩa nằm trong lớp nền giữa các nhánh. Hai nhánh chính có độ cuốn khác nhau, góc xuất phát không đối xứng và bề rộng tăng dần ra ngoài; một nhánh còn có các nhánh phụ thưa hơn. Đây vẫn chỉ là cách chọn điều kiện đầu, không phải quy tắc buộc sao đi theo khi mô phỏng chạy.
+
+`diskRadius` giúp mật độ sao giảm dần ra ngoài thay vì dừng đột ngột ở mép một hình tròn. Nó tìm bán kính tương ứng với một mẫu ngẫu nhiên bằng 16 lần chia đôi trên hàm phân phối tích lũy của đĩa exponential. Số vòng lặp cố định nên không có trường hợp đợi mãi để tìm được một mẫu phù hợp. Bạn chưa cần tự suy ra phân phối này để học gravity: hãy giữ sampler có sẵn, thay seed để thử tính tái lập, rồi tập trung vào position/velocity/mass và cách solver đọc chúng.
+
+Lõi và halo lấy hướng trong không gian bằng góc quanh Z và một giá trị `heightSample` trong [-1, 1]. Phần chiếu lên XY có bán kính `radius * sqrt(1 - heightSample²)`, còn Z là `radius * heightSample`; lõi được nén nhẹ theo Z với hệ số 0,85. Vì vậy nhìn từ cạnh vẫn thấy một khối sao, không phải một tấm tròn. Đĩa cũng có độ dày riêng; bạn có thể dùng W/S, cuộn chuột hoặc các nút tiến/lùi để đi vào giữa các sao.
+
+### Từ một body tới đốm sáng trên màn hình
+
+Vẽ mọi sao bằng cùng một chấm đặc sẽ làm lõi và các nhánh hòa thành một mảng nhiễu. Renderer có sẵn trong starter dùng `include/star-render.hpp`: chiếu đúng position qua camera, vẽ lõi sáng nhỏ và halo có bán kính hữu hạn, cộng ánh sáng của các sao chồng nhau rồi nén độ sáng bằng tone mapping. Không có sao nền giả hoặc ảnh thiên hà phủ lên mô phỏng.
+
+```cpp title="include/star-render.hpp — Nén độ sáng sau khi cộng các sao"
+inline std::uint32_t displayLight(float value, double background) {
+    // Tone mapping giới hạn độ sáng, giữ được chi tiết khi nhiều sao chồng nhau.
+    const double linear = background + double(value);
+    return std::uint32_t(std::lround(255.0 * std::sqrt(linear / (1.0 + linear))));
+}
+```
+
+`value` là tổng ánh sáng tuyến tính ở một kênh màu, không phải mass hay năng lượng vật lý của hệ. Phép chia `linear / (1 + linear)` giữ đầu ra dưới 1 dù lõi có nhiều sao chồng lên nhau. Căn bậc hai làm các vùng mờ dễ nhìn hơn trên màn hình. Màu vàng ở gần lõi chuyển dần sang xanh khi khoảng cách tới central body gần nhất tăng từ 0 đến 0,75 length unit. Đây là bảng màu khoảng cách để đọc cấu trúc, không phải phép tính tuổi hay nhiệt độ sao. Kích thước đốm sáng phụ thuộc `log(1 + mass)` và độ sâu; tốc độ chỉ điều chỉnh độ sáng trong một khoảng hữu hạn.
+
+Mỗi body góp một điểm nhỏ và một vùng sáng mờ hữu hạn. Khi các vùng mờ chồng lên nhau, phần dày của lõi và các nhánh trở thành một cấu trúc sáng liền mạch, thay vì hàng nghìn vòng tròn rời rạc. Đây là cách làm mượt hình ảnh từ chính vị trí sao đang mô phỏng, không phải thêm một lớp khí/bụi có solver riêng. Có thể đối chiếu hình dáng lõi, đĩa và nhánh trong [ảnh NGC 1300 của NASA/Hubble](https://science.nasa.gov/image-detail/ngc-1300/); bài này không tái hiện khí bụi hay stellar evolution của thiên hà thật.
+
+Event loop giữ hai buffer riêng: `pixels` chứa màu cuối cùng để gửi cho SDL; `light` chứa tổng ánh sáng trước tone mapping. Cả hai được tạo một lần rồi tái sử dụng. Chúng không nằm trong `Body`, nên việc xóa hoặc thay đổi buffer vẽ không thể làm đổi trạng thái mô phỏng.
 
 ### Dùng đúng trọng số
 

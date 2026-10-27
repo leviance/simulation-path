@@ -13,7 +13,7 @@ const project = {
     mission:
       "Tự xây dựng một mô phỏng hấp dẫn 3D. Mỗi vật thể có position, velocity và mass; lực thật làm hệ tiến triển, không gán quỹ đạo có sẵn. Bản cuối cập nhật ít nhất 4.096 vật thể bằng Barnes–Hut và giữ direct summation để kiểm kết quả.",
     outcome:
-      "Một đĩa sao có chiều dày, camera orbit/pan/zoom, trails và màu theo tốc độ. Chọn target để đọc gia tốc direct/Barnes–Hut, bật các hộp node đã mở hoặc chấp nhận, rồi đo theta, runtime và năng lượng mà vẫn có thể hủy.",
+      "Một thiên hà có lõi lớn, hai nhánh sao dày và halo trong không gian 3D; camera orbit/pan và tiến/lùi xuyên qua tâm. Màu phân biệt vùng lõi/ngoại vi, ánh sáng và trails xuất phát từ state đã tính. Chọn target để đọc gia tốc direct/Barnes–Hut, xem node đã mở hoặc chấp nhận rồi đo sai số và runtime. Nhánh xoắn chỉ được gieo ở điều kiện đầu, không bị áp đặt khi chạy.",
     requirements: [
       "Preset 3D ít nhất 4.096 vật thể; preset hai, ba và 256 vật thể để kiểm chứng. Cùng seed tạo cùng state đầu.",
       "Chạy/dừng, tiến đúng một fixed step, đặt lại preset và chọn dt. Camera vẫn dùng được khi physics hoặc phép đo đang dừng.",

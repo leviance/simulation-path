@@ -82,13 +82,47 @@ export function presetBodies(preset: number, count: number): Body3D[] {
       mass: 1,
     }));
   const bodies = makeGalaxyBodies(preset === 3 ? 256 : count, seed);
-  if (preset === 1)
-    for (let i = 0; i < bodies.length; i++) {
-      const side = i % 2 === 0 ? -1 : 1;
-      bodies[i].position.x = bodies[i].position.x * 0.4 + side * 0.55;
-      bodies[i].position.y *= 0.4;
-      bodies[i].velocity.x -= side * 0.12;
+  if (preset === 1) {
+    bodies.length = 0;
+    for (let galaxy = 0; galaxy < 2; galaxy++) {
+      const size = galaxy === 0 ? Math.floor(count / 2) : count - Math.floor(count / 2);
+      const disk = makeGalaxyBodies(size, seed ^ Math.imul(galaxy, 0x9e3779b9));
+      const side = galaxy === 0 ? -1 : 1;
+      const tilt = galaxy === 0 ? -0.15 : 0.65;
+      const rotate = (p: Vec3): Vec3 => ({
+        x: p.x,
+        y: p.y * Math.cos(tilt) - p.z * Math.sin(tilt),
+        z: p.y * Math.sin(tilt) + p.z * Math.cos(tilt),
+      });
+      for (const body of disk) {
+        const p = rotate(body.position);
+        const v = rotate(body.velocity);
+        const speedScale = Math.sqrt(0.5 / 0.45);
+        bodies.push({
+          position: { x: p.x * 0.45 + side * 0.6, y: p.y * 0.45 + side * 0.08, z: p.z * 0.45 },
+          velocity: {
+            x: v.x * speedScale - side * 0.1,
+            y: v.y * speedScale + side * 0.06,
+            z: v.z * speedScale,
+          },
+          mass: body.mass * 0.5,
+        });
+      }
     }
+    const momentum = { x: 0, y: 0, z: 0 };
+    let mass = 0;
+    for (const body of bodies) {
+      mass += body.mass;
+      momentum.x += body.mass * body.velocity.x;
+      momentum.y += body.mass * body.velocity.y;
+      momentum.z += body.mass * body.velocity.z;
+    }
+    for (const body of bodies) {
+      body.velocity.x -= momentum.x / mass;
+      body.velocity.y -= momentum.y / mass;
+      body.velocity.z -= momentum.z / mass;
+    }
+  }
   return bodies;
 }
 export function createGalaxy(stage = 10, preset = 0): GalaxyScene {
@@ -98,7 +132,7 @@ export function createGalaxy(stage = 10, preset = 0): GalaxyScene {
     preset,
     bodies,
     tree: buildMassOctree(bodies),
-    camera: { yaw: 0.45, pitch: -0.52, distance: 2.5, x: 0, y: 0 },
+    camera: { yaw: 0.15, pitch: -0.85, distance: 2.6, x: 0, y: 0 },
     theta: 0.5,
     epsilon: 0.02,
     dt: 1 / 240,
@@ -193,7 +227,12 @@ export function tickPhysics(scene: GalaxyScene, clock = () => performance.now(),
   scene.physics = null;
   scene.singleStep = false;
   scene.tree = buildMassOctree(next);
-  scene.trails.push(next.slice(0, 24).map((body) => ({ ...body.position })));
+  const tracked = Math.min(24, next.length);
+  scene.trails.push(
+    Array.from({ length: tracked }, (_, i) => ({
+      ...next[Math.floor((i * next.length) / tracked)].position,
+    })),
+  );
   if (scene.trails.length > 64) scene.trails.shift();
   return true;
 }

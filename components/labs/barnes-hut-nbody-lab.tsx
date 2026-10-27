@@ -14,22 +14,23 @@ import {
   createGalaxy,
   modes,
   tickPhysics,
-  invalidateExperiment,
   cancelPhysics,
   selectedForce,
   vectorLength,
-  validateGalaxy,
   type Camera,
 } from "@/lib/labs/galaxy/scene";
 import type { GalaxyJob } from "@/lib/labs/galaxy/jobs";
 import {
-  LabReadout,
   setupCanvas,
   useCanvasSize,
   useReducedMotion,
   usePauseOnReducedMotion,
 } from "./lab-shared";
 import { drawGalaxy, pickGalaxy } from "./galaxy-view";
+import GalaxyReadout from "./galaxy-readout";
+import GalaxyControlsReady from "./galaxy-controls-ready";
+import { performGalaxyAction, disposeGalaxy } from "./galaxy-actions";
+import { dollyGalaxyCamera } from "@/lib/labs/galaxy/projection";
 import type { GalaxyAction } from "./galaxy-controls";
 import type { InteractiveLabMode } from "./types";
 const GalaxyControls = lazy(() => import("./galaxy-controls"));
@@ -87,6 +88,21 @@ function Galaxy({ mode }: { mode?: string }) {
   }, [publish, publishJob, release]);
   const size = useCanvasSize(canvasRef, stop);
   usePauseOnReducedMotion(stop);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const wheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey || !Number.isFinite(event.deltaY)) return;
+      event.preventDefault();
+      release();
+      canvas.focus({ preventScroll: true });
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? size.height : 1;
+      dollyGalaxyCamera(model.current.camera, (-event.deltaY * unit) / 100);
+      publish();
+    };
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", wheel);
+  }, [publish, release, size.height]);
   const helpId = "galaxy-help-" + (mode ?? "overview");
   const startMeasurement = useCallback(
     async (kind: GalaxyJob["kind"]) => {
@@ -124,95 +140,19 @@ function Galaxy({ mode }: { mode?: string }) {
     [publish, publishJob],
   );
   const act = useCallback(
-    (action: GalaxyAction, value = 0) => {
-      const current = model.current;
-      if (action === "run") {
-        requestEpoch.current++;
-        setLoadingJob(false);
-        if (jobRef.current?.active) {
-          jobRef.current.paused = !jobRef.current.paused;
-          publishJob(jobRef.current);
-        } else if (!reduced) {
-          current.paused = !current.paused;
-          publish();
-        }
-        return;
-      }
-      if (action === "camera") {
-        current.camera = { yaw: 0.45, pitch: -0.52, distance: 2.5, x: 0, y: 0 };
-        publish();
-        return;
-      }
-      if (action === "debug") {
-        current.debug = !current.debug;
-        publish();
-        return;
-      }
-      if (action === "validate") {
-        current.notice = Object.entries(validateGalaxy(current))
-          .map(([name, valid]) => name + ": " + (valid ? "đạt" : "LỖI"))
-          .join(" · ");
-        publish();
-        return;
-      }
-      if (action === "selected" && Number.isFinite(value)) {
-        current.selected = Math.max(0, Math.min(current.bodies.length - 1, Math.floor(value)));
-        publish();
-        return;
-      }
-      if (action === "cancel") {
-        requestEpoch.current++;
-        setLoadingJob(false);
-        cancelPhysics(current);
-        current.notice = "Đã hủy tác vụ; trạng thái vật lý đã hoàn tất gần nhất được giữ nguyên.";
-        if (jobRef.current) {
-          jobRef.current.active = false;
-          jobRef.current.notice =
-            "Đã hủy; các dòng đã tính xong được giữ lại, thí nghiệm chưa hoàn tất.";
-          publishJob(jobRef.current);
-        }
-        publish();
-        return;
-      }
-      release();
-      if (["sweep", "runtime", "energy", "dtStudy"].includes(action)) {
-        const kind = action === "dtStudy" ? "dt" : action;
-        void startMeasurement(kind as GalaxyJob["kind"]);
-        return;
-      }
-      requestEpoch.current++;
-      setLoadingJob(false);
-      publishJob(null);
-      if (action === "preset" || action === "reset") {
-        const next = createGalaxy(stage, action === "preset" ? value : current.preset);
-        next.theta = current.theta;
-        next.epsilon = current.epsilon;
-        next.dt = current.dt;
-        next.revision = current.revision + 1;
-        model.current = next;
-        publish();
-        return;
-      }
-      if (action === "step") {
-        cancelPhysics(current);
-        current.singleStep = true;
-        publish();
-        return;
-      }
-      invalidateExperiment(current);
-      if (action === "theta" && Number.isFinite(value))
-        current.theta = Math.max(0.05, Math.min(1.2, value));
-      if (action === "epsilon" && Number.isFinite(value))
-        current.epsilon = Math.max(0.005, Math.min(0.08, value));
-      if (action === "dt" && [1 / 60, 1 / 120, 1 / 240].includes(value)) current.dt = value;
-      if (action === "direct") {
-        if (value === 1 && current.bodies.length > 256)
-          current.notice =
-            "Direct simulation chỉ chạy ở N≤256; reference lực hệ lớn vẫn đọc toàn bộ sources.";
-        else current.direct = value === 1;
-      }
-      publish();
-    },
+    (action: GalaxyAction, value = 0) =>
+      performGalaxyAction(action, value, {
+        model,
+        jobRef,
+        requestEpoch,
+        setLoadingJob,
+        publishJob,
+        publish,
+        release,
+        reduced,
+        stage,
+        startMeasurement,
+      }),
     [publish, publishJob, reduced, release, stage, startMeasurement],
   );
   const active =
@@ -258,8 +198,7 @@ function Galaxy({ mode }: { mode?: string }) {
       window.removeEventListener("blur", stop);
       document.removeEventListener("visibilitychange", hidden);
       release();
-      model.current.physics = null;
-      if (jobRef.current) jobRef.current.active = false;
+      disposeGalaxy(model, jobRef);
     };
   }, [stop, release]);
   const { bodies, selected, theta, epsilon, tree } = scene;
@@ -294,8 +233,9 @@ function Galaxy({ mode }: { mode?: string }) {
         camera.yaw += dx * 0.006;
         camera.pitch = Math.max(-1.4, Math.min(1.4, camera.pitch + dy * 0.006));
       } else {
-        camera.x -= (dx * camera.distance) / size.height;
-        camera.y += (dy * camera.distance) / size.height;
+        const panScale = Math.max(0.3, Math.abs(camera.distance));
+        camera.x -= (dx * panScale) / size.height;
+        camera.y += (dy * panScale) / size.height;
       }
       active.x = x;
       active.y = y;
@@ -358,11 +298,8 @@ function Galaxy({ mode }: { mode?: string }) {
         Math.min(1.4, current.camera.pitch + (k === "arrowup" ? -0.08 : 0.08)),
       );
       publish();
-    } else if (k === "q" || k === "z") {
-      current.camera.distance = Math.max(
-        0.3,
-        Math.min(30, current.camera.distance * (k === "q" ? 1.1 : 1 / 1.1)),
-      );
+    } else if (["q", "z", "w", "s"].includes(k)) {
+      dollyGalaxyCamera(current.camera, k === "w" || k === "z" ? 1 : -1);
       publish();
     } else if (stage >= 4 && k === " ") act("run");
     else if (stage >= 4 && k === "n") act("step");
@@ -376,19 +313,20 @@ function Galaxy({ mode }: { mode?: string }) {
     else return;
     event.preventDefault();
   };
-  const lastEnergy = scene.history.at(-1);
   return (
-    <div className="lab-body">
+    <div className="lab-body" data-galaxy-distance={scene.camera.distance.toFixed(4)}>
       <Suspense fallback={<p role="status">Đang tải điều khiển thiên hà…</p>}>
-        <GalaxyControls
-          scene={scene}
-          job={job}
-          loading={loadingJob}
-          reduced={reduced}
-          tool={tool}
-          setTool={setTool}
-          act={act}
-        />
+        <GalaxyControlsReady>
+          <GalaxyControls
+            scene={scene}
+            job={job}
+            loading={loadingJob}
+            reduced={reduced}
+            tool={tool}
+            setTool={setTool}
+            act={act}
+          />
+        </GalaxyControlsReady>
       </Suspense>
       <canvas
         ref={canvasRef}
@@ -422,126 +360,19 @@ function Galaxy({ mode }: { mode?: string }) {
       />
       <p id={helpId}>
         Kéo để đổi góc nhìn, chọn Pan để dịch camera; nhấp gần một body để theo dõi. Phím mũi tên
-        xoay, Q/Z zoom, Home đặt lại camera, R đặt lại preset.{" "}
-        {stage >= 4 && "Space chạy/dừng, N tiến đúng một bước."}{" "}
+        xoay; cuộn chuột, W/S hoặc Z/Q tiến/lùi xuyên qua thiên hà. Home đặt lại camera, R đặt lại
+        preset. {stage >= 4 && "Space chạy/dừng, N tiến đúng một bước."}{" "}
         {stage >= 8 && "T đo theta; Escape hủy tác vụ."} Tab rời Canvas. Camera không đổi state vật
         lý.
       </p>
       <p>
-        Màu xanh → cam: tốc độ 0 → 1,5 length/time unit; hồng: central body; vàng: target. Vẽ mọi
-        body trong viewport, không lấy mẫu mô phỏng. Trails chỉ theo dõi 24 body, giữ 64 snapshot.
+        Vàng gần lõi → xanh ở ngoài: khoảng cách tới khối lượng trung tâm gần nhất, từ 0 đến 0,75
+        length unit. Kích thước đốm sáng phụ thuộc mass và độ sâu, không phải bán kính sao thật. Mỗi
+        đốm sáng ứng với một body; không thêm sao nền giả. Trails theo dõi 24 ID trải đều toàn hệ,
+        giữ 64 snapshot. Lõi và hai nhánh xoắn là điều kiện đầu; khi chạy, gravity solver quyết định
+        chuyển động.
       </p>
-      <LabReadout
-        items={[
-          {
-            label: "N / step / thời gian mô phỏng",
-            value: scene.bodies.length + " / " + scene.steps + " / " + scene.time.toFixed(5),
-          },
-          {
-            label: "Preset / seed / không gian",
-            value: scene.preset + " / 0x31c0ffee / XYZ 3D · G=0,001",
-          },
-          {
-            label: "Trạng thái / physics progress",
-            value:
-              (scene.paused ? "Tạm dừng" : "Đang chạy") +
-              " · " +
-              (scene.physics
-                ? scene.physics.target + "/" + scene.bodies.length
-                : "không có bước dở dang"),
-          },
-          ...(stage === 2
-            ? [
-                {
-                  label: "Pair acceleration từ body 0",
-                  value:
-                    "(" +
-                    force.pair.x.toExponential(6) +
-                    ", " +
-                    force.pair.y.toExponential(6) +
-                    ", " +
-                    force.pair.z.toExponential(6) +
-                    ") · norm=" +
-                    vectorLength(force.pair).toExponential(6),
-                },
-              ]
-            : []),
-          ...(stage >= 3
-            ? [
-                {
-                  label: "Direct acceleration của target " + scene.selected,
-                  value:
-                    "(" +
-                    force.exact.acceleration.x.toExponential(3) +
-                    ", " +
-                    force.exact.acceleration.y.toExponential(3) +
-                    ", " +
-                    force.exact.acceleration.z.toExponential(3) +
-                    ") · " +
-                    force.exact.exactInteractions +
-                    " sources",
-                },
-              ]
-            : []),
-          ...(stage >= 5
-            ? [
-                {
-                  label: "Mass Octree / root mass",
-                  value:
-                    scene.tree.nodes.length +
-                    " nodes · M=" +
-                    scene.tree.nodes[0].totalMass.toFixed(5),
-                },
-              ]
-            : []),
-          ...(stage >= 6
-            ? [
-                {
-                  label: "BH / sai số lực tại body đang theo dõi",
-                  value:
-                    "(" +
-                    force.approximate.acceleration.x.toExponential(3) +
-                    ", " +
-                    force.approximate.acceleration.y.toExponential(3) +
-                    ", " +
-                    force.approximate.acceleration.z.toExponential(3) +
-                    ") · |aBH|=" +
-                    vectorLength(force.approximate.acceleration).toExponential(3) +
-                    " · absolute=" +
-                    force.absolute.toExponential(3) +
-                    " · relative=" +
-                    force.relative.toExponential(3),
-                },
-                {
-                  label: "Visited / accepted / exact sources",
-                  value:
-                    force.approximate.visitedNodes +
-                    " / " +
-                    force.approximate.approximatedNodes +
-                    " / " +
-                    force.approximate.exactInteractions,
-                },
-              ]
-            : []),
-          ...(stage >= 10
-            ? [
-                {
-                  label: "Năng lượng toàn hệ / momentum",
-                  value: lastEnergy
-                    ? "N=" +
-                      lastEnergy.count +
-                      " E=" +
-                      lastEnergy.energy.toExponential(5) +
-                      " |P|=" +
-                      vectorLength(lastEnergy.momentum).toExponential(3) +
-                      " tại t=" +
-                      lastEnergy.time.toFixed(5)
-                    : "Chưa đo. Bấm Đo năng lượng toàn hệ trước khi chạy để lấy mốc t=0.",
-                },
-              ]
-            : []),
-        ]}
-      />
+      <GalaxyReadout scene={scene} force={force} />
       <p>
         {scene.notice} Physics tiến theo fixed dt, có thể chậm hơn thời gian thực; không chạy vòng
         bù lag vô hạn.{" "}

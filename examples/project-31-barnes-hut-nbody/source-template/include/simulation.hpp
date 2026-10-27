@@ -14,15 +14,32 @@ inline std::vector<Body> presetBodies(int preset, std::size_t count) {
     }
     auto bodies = makeGalaxyBodies(count, galaxySeed);
     if (preset == 1) {
-        // Hai cụm đối xứng có vận tốc tiến lại gần; không có quỹ đạo định sẵn.
-        for (std::size_t i = 0; i < bodies.size(); ++i) {
-            double side = 1;
-            if (i % 2 == 0) {
-                side = -1;
+        // Hai hệ hoàn chỉnh, mỗi hệ có lõi riêng và nửa tổng khối lượng.
+        // Xoay cả position lẫn velocity để đĩa thứ hai nghiêng thật trong XYZ.
+        bodies.clear();
+        for (int galaxy = 0; galaxy < 2; ++galaxy) {
+            const std::size_t size = galaxy == 0 ? count / 2 : count - count / 2;
+            const auto disk = makeGalaxyBodies(size, galaxySeed ^ (std::uint32_t(galaxy) * 0x9e3779b9U));
+            const double side = galaxy == 0 ? -1.0 : 1.0;
+            const double tilt = galaxy == 0 ? -0.15 : 0.65;
+            for (Body body : disk) {
+                const auto rotate = [tilt](Vec3 p) -> Vec3 {
+                    return {p.x, p.y * std::cos(tilt) - p.z * std::sin(tilt), p.y * std::sin(tilt) + p.z * std::cos(tilt)};
+                };
+                body.position = rotate(body.position) * 0.45 + Vec3{side * 0.6, side * 0.08, 0};
+                body.velocity = rotate(body.velocity) * std::sqrt(0.5 / 0.45) + Vec3{-side * 0.10, side * 0.06, 0};
+                body.mass *= 0.5;
+                bodies.push_back(body);
             }
-            bodies[i].position.x = bodies[i].position.x * 0.4 + side * 0.55;
-            bodies[i].position.y *= 0.4;
-            bodies[i].velocity.x -= side * 0.12;
+        }
+        Vec3 momentum{};
+        double mass = 0;
+        for (const auto& body : bodies) {
+            momentum += body.velocity * body.mass;
+            mass += body.mass;
+        }
+        for (auto& body : bodies) {
+            body.velocity = body.velocity - momentum / mass;
         }
     }
     if (preset == 2) {
@@ -143,10 +160,11 @@ inline bool advancePhysics(Simulation& simulation, double budgetMilliseconds = 6
     simulation.time += simulation.dt;
     ++simulation.steps;
     simulation.rebuild();
-    // 24 tracked bodies × 64 snapshots; all N bodies still receive gravity.
+    // 24 IDs trải đều toàn bộ hệ × 64 snapshot; không chỉ lấy sao ở lõi.
     std::vector<Vec3> trail{};
     for (std::size_t i = 0; i < std::min<std::size_t>(24, simulation.bodies.size()); ++i) {
-        trail.push_back(simulation.bodies[i].position);
+        const std::size_t index = i * simulation.bodies.size() / std::min<std::size_t>(24, simulation.bodies.size());
+        trail.push_back(simulation.bodies[index].position);
     }
     simulation.trails.push_back(std::move(trail));
     if (simulation.trails.size() > 64) {
