@@ -1,276 +1,311 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/pipeline.hpp",
-  "include/gl_api.hpp",
-  "include/shader_renderer.hpp",
-  "shaders/lab.vert",
-  "shaders/lab.frag",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
-  guides: {
+  "guides": {
     "p35-l01": {
-      focus:
-        "Đưa GLSL ra khỏi string literal, đọc đúng shader directory của target và giữ cube cũ làm mốc trước hot reload.",
-      expected:
-        "Checkpoint 1 đọc `lab.vert`/`lab.frag`, báo rõ path lỗi và vẽ cùng cube như starter embedded shader.",
-      files,
-      steps: [
-        {
-          title: "Giữ một baseline nhìn thấy được",
-          explanation:
-            "Starter vẫn vẽ cube bằng embedded source. Nhờ vậy nếu checkpoint 1 mất hình, lỗi nằm ở đường đọc file hoặc nội dung file chứ không phải context/mesh.",
-        },
-        {
-          title: "Đặt shader cạnh snapshot",
-          explanation:
-            "Mỗi target nhận `COURSE_SHADER_DIRECTORY` trỏ tới chính starter/checkpoint/final của nó. File đang sửa vì thế là file chương trình thực sự đọc.",
-        },
-        {
-          title: "Đọc hai file như một cặp",
-          explanation:
-            "Vertex và fragment source cùng tạo `ShaderSources`; thiếu một file làm startup dừng với path đầy đủ thay vì link một cặp nửa cũ nửa mới.",
-        },
+      "focus": "Bỏ mesh/camera không cần thiết, dùng fullscreen triangle và nạp shader từ đúng thư mục của executable/checkpoint.",
+      "expected": "File rỗng/quá lớn/NUL/lỗi đọc có diagnostics; chưa build được candidate thì không thay program đang vẽ.",
+      "files": [
+        "include/shader_defaults.hpp",
+        "include/shader_files.hpp",
+        "shaders/lab.vert",
+        "src/main.cpp"
       ],
+      "steps": [
+        {
+          "title": "Bắt đầu bằng mặt phẳng toàn màn hình",
+          "explanation": "Context/loader đã biết; gl_VertexID tạo triangle lớn phủ viewport mà không mang cube/MVP sang bài không cần geometry."
+        },
+        {
+          "title": "Chỉ rõ file đang sửa",
+          "explanation": "Source directory của target là đường đầu tiên, fallback là thư mục shader riêng theo executable; terminal ghi đường thực."
+        },
+        {
+          "title": "Đọc cặp source trước khi biên dịch",
+          "explanation": "File rỗng/quá lớn/NUL/lỗi đọc có diagnostics; chưa build được candidate thì không thay program đang vẽ."
+        }
+      ]
     },
     "p35-l02": {
-      focus:
-        "Biến compile failure thành diagnostics có stage, status và driver info log trước khi xóa shader object lỗi.",
-      expected:
-        "Một token sai trong `lab.frag` báo `lab.frag compile failed` cùng log; vertex shader và program cũ không bị hiểu nhầm là nguyên nhân.",
-      files,
-      steps: [
-        {
-          title: "Compile từng stage độc lập",
-          explanation:
-            "Mỗi shader có type, source và label riêng. Return value chỉ là shader object hợp lệ hoặc 0; diagnostics đi qua tham số riêng.",
-        },
-        {
-          title: "Hỏi status trước log",
-          explanation:
-            "`GL_COMPILE_STATUS` quyết định thành công. Info log giúp sửa lỗi nhưng log rỗng không được coi là pass.",
-        },
-        {
-          title: "Giữ tên file trong báo lỗi",
-          explanation:
-            "Driver line number chỉ hữu ích khi người học biết nó thuộc `lab.vert` hay `lab.frag`.",
-        },
+      "focus": "Đọc compile status và log thật, ghi rõ file và vertex/fragment stage; không đoán cú pháp bằng tìm token.",
+      "expected": "Shader thất bại và các shader tạm còn lại phải được xóa; active program nằm ngoài giao dịch.",
+      "files": [
+        "include/shader_renderer.hpp",
+        "include/gl_api.hpp"
       ],
+      "steps": [
+        {
+          "title": "Compile từng stage riêng",
+          "explanation": "GL_COMPILE_STATUS quyết định thành công; không suy từ việc log có chữ error hay từ hình cũ vẫn còn."
+        },
+        {
+          "title": "Giữ tên file và log",
+          "explanation": "Vertex/fragment có label riêng, giữ driver log và giới hạn kích thước log để tránh cấp phát vô hạn."
+        },
+        {
+          "title": "Dọn object khi lỗi",
+          "explanation": "Shader thất bại và các shader tạm còn lại phải được xóa; active program nằm ngoài giao dịch."
+        }
+      ]
     },
     "p35-l03": {
-      focus:
-        "Link hai stage vào một candidate program và kiểm interface/uniform trước khi program có quyền tham gia render.",
-      expected:
-        "Compile pass nhưng varying mismatch vẫn bị chặn ở link; candidate thiếu `uMvp` bị xóa và trả diagnostics riêng.",
-      files,
-      steps: [
-        {
-          title: "Candidate là resource độc lập",
-          explanation:
-            "Compile/link không đụng active program. Candidate có program handle và toàn bộ uniform locations của đúng generation đó.",
-        },
-        {
-          title: "Đọc program info log",
-          explanation:
-            "Link failure khác compile failure: hai stage có thể đúng cú pháp nhưng không khớp varying type/name.",
-        },
-        {
-          title: "Khóa interface sau link",
-          explanation:
-            "`uMvp` phải có location hợp lệ. Từ bài 6, time/resolution/mouse cũng trở thành contract bắt buộc.",
-        },
+      "focus": "Phân biệt compile với link; kiểm active uniform, kiểu và array size sau link thay vì chỉ thấy tên trong source.",
+      "expected": "Candidate sai type/array size bị xóa ngay, không được đưa sang bước commit.",
+      "files": [
+        "include/shader_renderer.hpp",
+        "include/gl_api.hpp"
       ],
+      "steps": [
+        {
+          "title": "Link sau compile",
+          "explanation": "Hai stage đúng cú pháp vẫn có thể không ghép được varying; GL_LINK_STATUS và program log là bước riêng."
+        },
+        {
+          "title": "Đọc interface từ driver",
+          "explanation": "GetActiveUniform cho type/size; GetUniformLocation cho vị trí. Uniform trong comment hoặc bị tối ưu mất không đáp ứng contract."
+        },
+        {
+          "title": "Chỉ trả candidate hợp lệ",
+          "explanation": "Candidate sai type/array size bị xóa ngay, không được đưa sang bước commit."
+        }
+      ]
     },
     "p35-l04": {
-      focus:
-        "Thêm manual reload theo thứ tự build candidate → validate → swap → delete previous để source lỗi không làm mất hình.",
-      expected:
-        "F5 với source lỗi làm attempts tăng nhưng generation/fingerprint active giữ nguyên; source đúng làm generation tăng một.",
-      files,
-      steps: [
-        {
-          title: "Không tháo program đang chạy trước",
-          explanation:
-            "Active program vẫn tồn tại trong suốt compile/link candidate. Failure path chỉ xóa object tạm.",
-        },
-        {
-          title: "Commit bằng một điểm đổi state",
-          explanation:
-            "Sau khi candidate hợp lệ, renderer thay `activeProgram`, cập nhật generation rồi mới xóa previous handle.",
-        },
-        {
-          title: "Phân biệt candidate và active fingerprint",
-          explanation:
-            "Khi lỗi, hai fingerprint khác nhau giúp title/test chứng minh người dùng đã thử source mới nhưng hình vẫn đến từ last-good source.",
-        },
+      "focus": "Build candidate bên cạnh active program, cập nhật locations khi thành công và giữ hình/metadata cũ khi thất bại.",
+      "expected": "attempts đếm thử, generation đếm commit. Lỗi giữ active effect/fingerprint và ảnh ở cùng uniform snapshot.",
+      "files": [
+        "include/shader_renderer.hpp",
+        "include/pipeline.hpp"
       ],
+      "steps": [
+        {
+          "title": "Build bên cạnh bản đang chạy",
+          "explanation": "Tạo program khác, không ghi chồng active handle trước khi biết kết quả."
+        },
+        {
+          "title": "Commit cả handle và locations",
+          "explanation": "Bind bản mới trước khi xóa bản cũ đang bound; lấy locations từ chính candidate mới."
+        },
+        {
+          "title": "Ghi metadata có ý nghĩa",
+          "explanation": "attempts đếm thử, generation đếm commit. Lỗi giữ active effect/fingerprint và ảnh ở cùng uniform snapshot."
+        }
+      ]
     },
     "p35-l05": {
-      focus:
-        "Theo dõi timestamp không block frame loop và debounce nhiều lần ghi file thành đúng một reload request.",
-      expected:
-        "Watcher chỉ reload sau 140 ms không có timestamp mới, không retry source lỗi khi file đứng yên và F5 vẫn luôn dùng được.",
-      files,
-      steps: [
-        {
-          title: "Poll metadata, không đọc file mỗi frame",
-          explanation:
-            "`last_write_time` rẻ hơn open/read/compile. Chỉ khi watcher quyết định reload, chương trình mới đọc cả cặp source.",
-        },
-        {
-          title: "Restart debounce khi stamp tiếp tục đổi",
-          explanation:
-            "Editor có thể truncate rồi ghi nhiều chunk. Mỗi stamp mới dời `changedAt`, tránh compile một file mới viết được nửa chừng.",
-        },
-        {
-          title: "Consume pending đúng một lần",
-          explanation:
-            "Sau khi phát request, `pending` tắt. Source lỗi không bị compile lại mỗi frame; lần sửa sau tạo stamp mới.",
-        },
+      "focus": "Theo dõi timestamp, size và trạng thái file; debounce không block, coalesce thay đổi và không retry storm.",
+      "expected": "Baseline lấy trước đọc/compile; file đổi trong lúc đó còn được phát hiện ở lượt scan tiếp. F5 coalesce cùng thay đổi.",
+      "files": [
+        "include/shader_files.hpp",
+        "include/shader_application.hpp"
       ],
+      "steps": [
+        {
+          "title": "Theo dõi cả hai file",
+          "explanation": "Timestamp, size và trạng thái tồn tại/không đọc được tạo stamp; quan sát fragment đang được yêu cầu, không nhầm với last-good."
+        },
+        {
+          "title": "Đợi trạng thái ổn định",
+          "explanation": "Mỗi thay đổi đặt lại mốc debounce 140 ms; vòng frame vẫn xử lý input/draw, không sleep chờ file."
+        },
+        {
+          "title": "Không bỏ lỡ save khi compile",
+          "explanation": "Baseline lấy trước đọc/compile; file đổi trong lúc đó còn được phát hiện ở lượt scan tiếp. F5 coalesce cùng thay đổi."
+        }
+      ]
     },
     "p35-l06": {
-      focus:
-        "Upload time/resolution/mouse mỗi frame, đổi window coordinates sang framebuffer pixels và làm mới location sau link.",
-      expected:
-        "Resize, high-DPI và mouse movement đổi uniform output nhưng không tăng program generation hoặc reload attempts.",
-      files,
-      steps: [
-        {
-          title: "Location thuộc về program generation",
-          explanation:
-            "Sau mỗi link thành công, candidate truy vấn lại bốn locations. Không mang integer location của program cũ sang program mới.",
-        },
-        {
-          title: "Resolution dùng pixel thật",
-          explanation:
-            "`SDL_GetWindowSizeInPixels` cấp viewport/resolution. Mouse từ logical window được scale và đảo Y trước khi upload cho GLSL.",
-        },
-        {
-          title: "Uniform update không phải reload",
-          explanation:
-            "Time và mouse thay đổi hàng frame qua `glUniform`; compiler chỉ chạy khi shader source đổi hoặc F5 được nhấn.",
-        },
+      "focus": "Dùng một uniform snapshot; đổi logical input sang pixel OpenGL, pause/step và resize không compile lại.",
+      "expected": "GetUniformfv trên program hiện tại kiểm time/resolution/mouse/zoom ở các kích thước pixel khác nhau.",
+      "files": [
+        "include/pipeline.hpp",
+        "include/shader_input.hpp",
+        "include/shader_application.hpp"
       ],
+      "steps": [
+        {
+          "title": "Giữ tọa độ chuẩn trong state",
+          "explanation": "Mouse normalized top-left giúp resize không làm nhảy parameter. Uniform snapshot đổi sang physical bottom-left."
+        },
+        {
+          "title": "Tách thời gian khỏi reload",
+          "explanation": "Pause/step/reset là thao tác dữ liệu; shader code và program generation không cần đổi."
+        },
+        {
+          "title": "Kiểm dữ liệu thực đã upload",
+          "explanation": "GetUniformfv trên program hiện tại kiểm time/resolution/mouse/zoom ở các kích thước pixel khác nhau."
+        }
+      ]
     },
     "p35-l07": {
-      focus:
-        "Xây fragment effect từ local position, time, framebuffer coordinate và mouse bằng các bước màu có thể thử riêng.",
-      expected:
-        "Final shader tạo rings chuyển động, cold/hot palette và mouse glow; mỗi hằng số sửa được khi app đang chạy.",
-      files,
-      steps: [
-        {
-          title: "Bắt đầu từ một khoảng cách",
-          explanation:
-            "`length(p)` tạo các đường đồng tâm; cosine biến khoảng cách thành dải sáng tối và time dịch pha.",
-        },
-        {
-          title: "Tạo palette trước khi thêm tương tác",
-          explanation:
-            "`mix(cold, hot, rings)` biến scalar thành màu. Vertex color chỉ modulation nhẹ để vẫn đọc được sáu mặt cube.",
-        },
-        {
-          title: "Đưa mouse về cùng hệ UV",
-          explanation:
-            "Cả `gl_FragCoord` và `uMouse` chia cho safe resolution; distance vì thế có cùng đơn vị bất kể cửa sổ resize.",
-        },
+      "focus": "Từ UV đến palette chuyển động, signed distance của circle, anti-alias và ánh sáng viền có công thức rõ.",
+      "expected": "Mouse/zoom thay uniform, hằng SPEED đổi source rồi reload; người học phân biệt hai đường cập nhật.",
+      "files": [
+        "shaders/gradient.frag",
+        "shaders/circle.frag",
+        "include/shader_effects.hpp"
       ],
+      "steps": [
+        {
+          "title": "Tạo palette từ UV",
+          "explanation": "Mix/cos và time tạo gradient chuyển động; mỗi hằng số đều có tác dụng thấy được."
+        },
+        {
+          "title": "Định nghĩa circle bằng khoảng cách",
+          "explanation": "SDF length(p-center)-radius cho inside/edge; smoothstep theo pixel size tránh viền răng cưa rõ."
+        },
+        {
+          "title": "Tách dữ liệu và source",
+          "explanation": "Mouse/zoom thay uniform, hằng SPEED đổi source rồi reload; người học phân biệt hai đường cập nhật."
+        }
+      ]
     },
     "p35-l08": {
-      focus:
-        "Đóng named validation, failure experiments, Debug/Release build và resource cleanup cho source hoàn chỉnh.",
-      expected:
-        "Final báo contract valid, last-good hoạt động qua nhiều lỗi/sửa, watcher không storm và mọi GL object bị xóa trước context.",
-      files,
-      steps: [
-        {
-          title: "Test state machine không cần GPU",
-          explanation:
-            "Fingerprint, generation, commit/failure và debounce là logic CPU thuần. CTest khóa chúng mà không mở window.",
-        },
-        {
-          title: "Thử lỗi thật với driver",
-          explanation:
-            "Compile/link log phụ thuộc OpenGL context nên final checklist yêu cầu chèn token sai, varying mismatch rồi sửa lại khi app đang chạy.",
-        },
-        {
-          title: "Xóa candidate và active đúng lifetime",
-          explanation:
-            "Failure path xóa shader/program tạm. Cleanup cuối xóa active program, EBO/VBO/VAO rồi mới destroy context/window.",
-        },
+      "focus": "Biểu diễn số phức bằng vec2, lặp z²+c hữu hạn, kiểm escape và tô màu liên tục theo thời gian.",
+      "expected": "Smooth count và time đổi palette; pause giữ ảnh, mouse/zoom đổi vùng complex plane.",
+      "files": [
+        "shaders/mandelbrot.frag",
+        "include/shader_effects.hpp"
       ],
+      "steps": [
+        {
+          "title": "Viết phép nhân số phức tường minh",
+          "explanation": "vec2 giữ phần thực/ảo; lưu nextX trước khi cập nhật Y để không dùng trạng thái nửa cũ nửa mới."
+        },
+        {
+          "title": "Giới hạn escape loop",
+          "explanation": "128 bước, ngưỡng |z|>2; test các điểm rõ trong/ngoài trước khi nhìn biên fractal."
+        },
+        {
+          "title": "Tô màu không làm đổi tập",
+          "explanation": "Smooth count và time đổi palette; pause giữ ảnh, mouse/zoom đổi vùng complex plane."
+        }
+      ]
     },
+    "p35-l09": {
+      "focus": "Nội suy value noise, cộng năm octave fBm và domain warp; hash số nguyên lặp lại được.",
+      "expected": "Time tạo flow, noise tạo độ lệch tọa độ; mỗi tầng được quan sát riêng trước khi ghép.",
+      "files": [
+        "shaders/noise.frag",
+        "include/shader_effects.hpp"
+      ],
+      "steps": [
+        {
+          "title": "Hash theo ô, không theo frame",
+          "explanation": "Unsigned 32-bit wrap lặp lại được ở CPU/GLSL; không đưa time vào giá trị ngẫu nhiên của mỗi góc."
+        },
+        {
+          "title": "Nội suy rồi cộng octave",
+          "explanation": "Value noise liên tục qua biên ô; năm octave hữu hạn tạo nhiều thang chi tiết."
+        },
+        {
+          "title": "Dịch và warp tọa độ",
+          "explanation": "Time tạo flow, noise tạo độ lệch tọa độ; mỗi tầng được quan sát riêng trước khi ghép."
+        }
+      ]
+    },
+    "p35-l10": {
+      "focus": "Ghép gallery bốn hiệu ứng, error overlay/showcase, kiểm GPU và cleanup, source/ZIP độc lập.",
+      "expected": "Source checkpoint, GLSL, ZIP, CMake khóa SDL và README phải khớp; build/tests có timeout, không có output vào Git.",
+      "files": [
+        "include/shader_overlay.hpp",
+        "include/shader_validation.hpp",
+        "include/shader_application.hpp",
+        "tests/tests.cpp"
+      ],
+      "steps": [
+        {
+          "title": "Tách các lớp nghiệm thu",
+          "explanation": "CPU CTest, OpenGL thật, browser và desktop có phạm vi khác nhau; không dùng một test hẹp thay tất cả."
+        },
+        {
+          "title": "Giữ công cụ dùng được khi source hỏng",
+          "explanation": "Showcase sạch vẫn hiện lỗi mới; overlay/cache có lifecycle riêng và không che việc last-good đang chạy."
+        },
+        {
+          "title": "Bàn giao source tái lập",
+          "explanation": "Source checkpoint, GLSL, ZIP, CMake khóa SDL và README phải khớp; build/tests có timeout, không có output vào Git."
+        }
+      ]
+    }
   },
-  references: {
+  "references": {
     "p35-l01": [
       {
-        label: "SDL_GetBasePath",
-        href: "https://wiki.libsdl.org/SDL3/SDL_GetBasePath",
-        kind: "SDL API",
-      },
-      { label: "Shader hot reload", href: "/glossary#shader-hot-reload", kind: "Thuật ngữ" },
+        "label": "SDL CMake",
+        "href": "https://wiki.libsdl.org/SDL3/README-cmake",
+        "kind": "CMake"
+      }
     ],
     "p35-l02": [
       {
-        label: "glCompileShader",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glCompileShader.xhtml",
-        kind: "OpenGL API",
-      },
-      {
-        label: "glGetShaderInfoLog",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGetShaderInfoLog.xhtml",
-        kind: "OpenGL API",
-      },
+        "label": "Shader compile status",
+        "href": "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glCompileShader.xhtml",
+        "kind": "OpenGL API"
+      }
     ],
     "p35-l03": [
       {
-        label: "glLinkProgram",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glLinkProgram.xhtml",
-        kind: "OpenGL API",
-      },
-      { label: "Program candidate", href: "/glossary#program-candidate", kind: "Thuật ngữ" },
+        "label": "Active uniform reflection",
+        "href": "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGetActiveUniform.xhtml",
+        "kind": "OpenGL API"
+      }
     ],
     "p35-l04": [
-      { label: "Transactional reload", href: "/glossary#transactional-reload", kind: "Thuật ngữ" },
-      { label: "Shader program", href: "/glossary#shader-program", kind: "Thuật ngữ" },
+      {
+        "label": "Program lifetime",
+        "href": "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDeleteProgram.xhtml",
+        "kind": "OpenGL API"
+      }
     ],
     "p35-l05": [
-      { label: "Debounce", href: "/glossary#debounce", kind: "Thuật ngữ" },
-      { label: "Shader hot reload", href: "/glossary#shader-hot-reload", kind: "Thuật ngữ" },
+      {
+        "label": "Shader program",
+        "href": "/glossary#shader-program",
+        "kind": "Thuật ngữ"
+      }
     ],
     "p35-l06": [
       {
-        label: "glGetUniformLocation",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGetUniformLocation.xhtml",
-        kind: "OpenGL API",
-      },
-      {
-        label: "SDL_GetWindowSizeInPixels",
-        href: "https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels",
-        kind: "SDL API",
-      },
+        "label": "SDL_GetWindowSizeInPixels",
+        "href": "https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels",
+        "kind": "SDL API"
+      }
     ],
     "p35-l07": [
       {
-        label: "GLSL length",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/length.xhtml",
-        kind: "OpenGL API",
-      },
-      { label: "Fragment shader", href: "/glossary#fragment-shader", kind: "Thuật ngữ" },
+        "label": "gl_FragCoord",
+        "href": "https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_FragCoord.xhtml",
+        "kind": "OpenGL API"
+      }
     ],
     "p35-l08": [
       {
-        label: "glDeleteProgram",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDeleteProgram.xhtml",
-        kind: "OpenGL API",
-      },
-      { label: "Shader info log", href: "/glossary#shader-info-log", kind: "Thuật ngữ" },
+        "label": "Fragment shader",
+        "href": "/glossary#fragment-shader",
+        "kind": "Thuật ngữ"
+      }
     ],
-  },
+    "p35-l09": [
+      {
+        "label": "Fragment shader",
+        "href": "/glossary#fragment-shader",
+        "kind": "Thuật ngữ"
+      }
+    ],
+    "p35-l10": [
+      {
+        "label": "SDL_RenderDebugText",
+        "href": "https://wiki.libsdl.org/SDL3/SDL_RenderDebugText",
+        "kind": "SDL API"
+      },
+      {
+        "label": "SDL_CreateSoftwareRenderer",
+        "href": "https://wiki.libsdl.org/SDL3/SDL_CreateSoftwareRenderer",
+        "kind": "SDL API"
+      }
+    ]
+  }
 } satisfies ProjectLearningAssets;
 
 export default learning;

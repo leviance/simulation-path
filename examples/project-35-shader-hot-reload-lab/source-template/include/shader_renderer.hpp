@@ -1,288 +1,236 @@
 #pragma once
-
-#ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 8
-#endif
-
 #include "gl_api.hpp"
-#include "pipeline.hpp"
-
-#include <array>
-#include <cstddef>
-#include <string>
-#include <string_view>
+#include "shader_defaults.hpp"
 #include <vector>
 
 namespace lab {
+struct ProgramBuildAudit {
+    std::vector<GLuint> shaders{};
+    std::vector<GLuint> programs{};
+};
 
-// This renderer owns both the cube mesh and the last program that linked
-// successfully. A failed edit is compiled into a temporary candidate and must
-// never replace activeProgram, which keeps the window useful while debugging.
-inline constexpr std::string_view kEmbeddedVertexShader = R"GLSL(#version 330 core
-layout (location = 0) in vec3 aPosition;
-layout (location = 1) in vec3 aColor;
-uniform mat4 uMvp;
-out vec3 vColor;
-out vec3 vLocalPosition;
-void main() {
-    vColor = aColor;
-    vLocalPosition = aPosition;
-    gl_Position = uMvp * vec4(aPosition, 1.0);
-}
-)GLSL";
-
-inline constexpr std::string_view kEmbeddedFragmentShader = R"GLSL(#version 330 core
-in vec3 vColor;
-in vec3 vLocalPosition;
-out vec4 fragColor;
-void main() {
-    fragColor = vec4(vColor, 1.0);
-}
-)GLSL";
-
-#if LAB_CHECKPOINT >= 2
-inline std::string shaderInfoLog(GlApi& api, GLuint shader) {
+inline std::string shaderInfoLog(GlApi& gl, GLuint shader) {
     GLint length = 0;
-    api.GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
-    if (length <= 1) {
-        return "Driver returned no shader info log.";
-    }
-    std::vector<GLchar> characters(static_cast<std::size_t>(length), '\0');
-    api.GetShaderInfoLog(shader, length, nullptr, characters.data());
-    return std::string(characters.data());
+    gl.GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+    const auto limit = std::clamp(length, 1, 65536);
+    std::vector<GLchar> text(std::size_t(limit), '\0');
+    gl.GetShaderInfoLog(shader, limit, nullptr, text.data());
+    std::string result(text.data());
+    if (length > limit)
+        result += "\n[Driver log truncated at 64 KiB]";
+    if (result.empty())
+        result = "Driver supplied no shader info log.";
+    return result;
 }
-#endif
 
-#if LAB_CHECKPOINT >= 3
-inline std::string programInfoLog(GlApi& api, GLuint program) {
+inline std::string programInfoLog(GlApi& gl, GLuint program) {
     GLint length = 0;
-    api.GetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
-    if (length <= 1) {
-        return "Driver returned no program info log.";
-    }
-    std::vector<GLchar> characters(static_cast<std::size_t>(length), '\0');
-    api.GetProgramInfoLog(program, length, nullptr, characters.data());
-    return std::string(characters.data());
+    gl.GetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
+    const auto limit = std::clamp(length, 1, 65536);
+    std::vector<GLchar> text(std::size_t(limit), '\0');
+    gl.GetProgramInfoLog(program, limit, nullptr, text.data());
+    std::string result(text.data());
+    if (length > limit)
+        result += "\n[Driver log truncated at 64 KiB]";
+    if (result.empty())
+        result = "Driver supplied no program info log.";
+    return result;
 }
-#endif
 
-inline GLuint compileShader(GlApi& api, GLenum type, const std::string& source, std::string_view label, std::string& diagnostics) {
-    const GLuint shader = api.CreateShader(type);
-    if (shader == 0U) {
-        diagnostics = std::string(label) + ": glCreateShader returned 0.";
+inline GLuint compileShader(GlApi& gl, GLenum stage, const std::string& source, const std::string& file, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
+    const auto shader = gl.CreateShader(stage);
+    if (!shader) {
+        diagnostics = file + ": glCreateShader failed";
         return 0;
     }
-    const GLchar* sourcePointer = source.c_str();
-    api.ShaderSource(shader, 1, &sourcePointer, nullptr);
-    api.CompileShader(shader);
+    if (audit)
+        audit->shaders.push_back(shader);
+    const char* bytes = source.c_str();
+    const GLint length = static_cast<GLint>(source.size());
+    gl.ShaderSource(shader, 1, &bytes, &length);
+    gl.CompileShader(shader);
     GLint compiled = GL_FALSE;
-    api.GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
-    if (compiled == GL_TRUE) {
+    gl.GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (compiled == GL_TRUE)
         return shader;
-    }
-#if LAB_CHECKPOINT >= 2
-    diagnostics = std::string(label) + " compile failed:\n" + shaderInfoLog(api, shader);
-#else
-    diagnostics = std::string(label) + " compile failed.";
-#endif
-    api.DeleteShader(shader);
+    const std::string label = stage == GL_VERTEX_SHADER ? "vertex" : "fragment";
+    diagnostics = "[" + label + " compile] " + file + "\n" + shaderInfoLog(gl, shader);
+    gl.DeleteShader(shader);
     return 0;
+}
+
+// This helper does not assume a gallery interface, so the debug overlay can
+// use it too. All intermediate shader objects are detached/deleted after link.
+inline GLuint linkShaderProgram(GlApi& gl, const ShaderSources& sources, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
+    const auto vertex = compileShader(gl, GL_VERTEX_SHADER, sources.vertex, sources.vertexLabel, diagnostics, audit);
+    if (!vertex)
+        return 0;
+    const auto fragment = compileShader(gl, GL_FRAGMENT_SHADER, sources.fragment, sources.fragmentLabel, diagnostics, audit);
+    if (!fragment) {
+        gl.DeleteShader(vertex);
+        return 0;
+    }
+    const auto program = gl.CreateProgram();
+    if (audit && program)
+        audit->programs.push_back(program);
+    if (!program) {
+        gl.DeleteShader(vertex);
+        gl.DeleteShader(fragment);
+        diagnostics = "glCreateProgram failed";
+        return 0;
+    }
+    gl.AttachShader(program, vertex);
+    gl.AttachShader(program, fragment);
+    gl.LinkProgram(program);
+    GLint linked = GL_FALSE;
+    gl.GetProgramiv(program, GL_LINK_STATUS, &linked);
+    gl.DetachShader(program, vertex);
+    gl.DetachShader(program, fragment);
+    gl.DeleteShader(vertex);
+    gl.DeleteShader(fragment);
+    if (linked != GL_TRUE) {
+        diagnostics = "[link] " + sources.vertexLabel + " + " + sources.fragmentLabel + "\n" + programInfoLog(gl, program);
+        gl.DeleteProgram(program);
+        return 0;
+    }
+    diagnostics.clear();
+    return program;
+}
+
+struct UniformLocations {
+    GLint resolution{-1}, time{-1}, mouse{-1}, zoom{-1};
+    bool operator==(const UniformLocations&) const = default;
+};
+
+inline bool findUniform(GlApi& gl, GLuint program, const char* name, GLenum requiredType, bool required, GLint& location, std::string& diagnostics) {
+    location = gl.GetUniformLocation(program, name);
+    if (location < 0) {
+        if (!required)
+            return true;
+        diagnostics = std::string("[interface] Missing active uniform ") + name + " (it may be unused and optimized out).";
+        return false;
+    }
+    GLint count = 0;
+    gl.GetProgramiv(program, GL_ACTIVE_UNIFORMS, &count);
+    for (GLint index = 0; index < count; ++index) {
+        std::array<GLchar, 256> uniformName{};
+        GLsizei written = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        gl.GetActiveUniform(program, GLuint(index), GLsizei(uniformName.size()), &written, &size, &type, uniformName.data());
+        if (std::string_view(uniformName.data()) == name) {
+            if (type == requiredType && size == 1)
+                return true;
+            diagnostics = std::string("[interface] Wrong type/array size for ") + name;
+            return false;
+        }
+    }
+    diagnostics = std::string("[interface] Cannot find scalar/non-array uniform ") + name;
+    return false;
 }
 
 struct ProgramCandidate {
     GLuint program{};
-    GLint mvpLocation{-1};
-    GLint timeLocation{-1};
-    GLint resolutionLocation{-1};
-    GLint mouseLocation{-1};
+    UniformLocations locations{};
 };
 
-inline void destroyProgramCandidate(GlApi& api, ProgramCandidate& candidate) {
-    if (candidate.program != 0U) {
-        api.DeleteProgram(candidate.program);
-    }
+inline void destroyProgramCandidate(GlApi& gl, ProgramCandidate& candidate) {
+    if (candidate.program)
+        gl.DeleteProgram(candidate.program);
     candidate = {};
 }
 
-inline bool buildProgramCandidate(GlApi& api, const ShaderSources& sources, ProgramCandidate& candidate, std::string& diagnostics) {
-    diagnostics.clear();
-#if LAB_CHECKPOINT >= 3
+inline bool buildProgramCandidate(GlApi& gl, const ShaderSources& sources, ProgramCandidate& candidate, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
+    candidate = {};
+    candidate.program = linkShaderProgram(gl, sources, diagnostics, audit);
+    if (!candidate.program)
+        return false;
 #if LAB_CHECKPOINT >= 6
-    const bool requireLiveUniforms = true;
+    const bool requireLive = true;
 #else
-    const bool requireLiveUniforms = false;
+    const bool requireLive = false;
 #endif
-    diagnostics = validateShaderInterface(sources, requireLiveUniforms);
-    if (!diagnostics.empty()) {
+    const auto program = candidate.program;
+    auto& locations = candidate.locations;
+    const bool valid = findUniform(gl, program, "uResolution", GL_FLOAT_VEC2, true, locations.resolution, diagnostics) &&
+        findUniform(gl, program, "uTime", GL_FLOAT, requireLive, locations.time, diagnostics) &&
+        findUniform(gl, program, "uMouse", GL_FLOAT_VEC2, requireLive, locations.mouse, diagnostics) &&
+        findUniform(gl, program, "uZoom", GL_FLOAT, requireLive, locations.zoom, diagnostics);
+    if (!valid) {
+        diagnostics = sources.fragmentLabel + "\n" + diagnostics;
+        destroyProgramCandidate(gl, candidate);
         return false;
     }
-#endif
-
-    const GLuint vertexShader = compileShader(api, GL_VERTEX_SHADER, sources.vertex, "lab.vert", diagnostics);
-    if (vertexShader == 0U) {
-        return false;
-    }
-    const GLuint fragmentShader = compileShader(api, GL_FRAGMENT_SHADER, sources.fragment, "lab.frag", diagnostics);
-    if (fragmentShader == 0U) {
-        api.DeleteShader(vertexShader);
-        return false;
-    }
-
-    candidate.program = api.CreateProgram();
-    if (candidate.program == 0U) {
-        diagnostics = "glCreateProgram returned 0.";
-        api.DeleteShader(fragmentShader);
-        api.DeleteShader(vertexShader);
-        return false;
-    }
-    api.AttachShader(candidate.program, vertexShader);
-    api.AttachShader(candidate.program, fragmentShader);
-    api.LinkProgram(candidate.program);
-    api.DeleteShader(fragmentShader);
-    api.DeleteShader(vertexShader);
-
-    GLint linked = GL_FALSE;
-    api.GetProgramiv(candidate.program, GL_LINK_STATUS, &linked);
-    if (linked != GL_TRUE) {
-#if LAB_CHECKPOINT >= 3
-        diagnostics = "Program link failed:\n" + programInfoLog(api, candidate.program);
-#else
-        diagnostics = "Program link failed.";
-#endif
-        destroyProgramCandidate(api, candidate);
-        return false;
-    }
-
-    candidate.mvpLocation = api.GetUniformLocation(candidate.program, "uMvp");
-    candidate.timeLocation = api.GetUniformLocation(candidate.program, "uTime");
-    candidate.resolutionLocation = api.GetUniformLocation(candidate.program, "uResolution");
-    candidate.mouseLocation = api.GetUniformLocation(candidate.program, "uMouse");
-    if (candidate.mvpLocation < 0) {
-        diagnostics = "Linked program does not expose required uniform uMvp.";
-        destroyProgramCandidate(api, candidate);
-        return false;
-    }
-#if LAB_CHECKPOINT >= 6
-    if (candidate.timeLocation < 0 || candidate.resolutionLocation < 0 || candidate.mouseLocation < 0) {
-        diagnostics = "Linked program does not expose uTime, uResolution and uMouse.";
-        destroyProgramCandidate(api, candidate);
-        return false;
-    }
-#endif
     return true;
 }
 
+// Scene data does not live here. This class owns one VAO and the last-good
+// program; uniforms are uploaded again after every successful relink.
 struct ShaderLabRenderer {
-    GLuint vertexArray{};
-    GLuint vertexBuffer{};
-    GLuint elementBuffer{};
-    ProgramCandidate activeProgram{};
-#if LAB_CHECKPOINT >= 4
+    GLuint activeProgram{}, vertexArray{};
+    UniformLocations locations{};
     ReloadState reloadState{};
-#endif
 
-    bool initializeMesh(GlApi& api, std::string& diagnostics) {
-        api.GenVertexArrays(1, &vertexArray);
-        api.GenBuffers(1, &vertexBuffer);
-        api.GenBuffers(1, &elementBuffer);
-        if (vertexArray == 0U || vertexBuffer == 0U || elementBuffer == 0U) {
-            diagnostics = "Cannot create cube VAO, VBO or EBO.";
-            return false;
-        }
-        api.BindVertexArray(vertexArray);
-        api.BindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
-        api.BufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(kCubeVertices)), kCubeVertices.data(), GL_STATIC_DRAW);
-        api.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, elementBuffer);
-        api.BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(sizeof(kCubeIndices)), kCubeIndices.data(), GL_STATIC_DRAW);
-        api.EnableVertexAttribArray(0);
-        api.VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, GLsizei(sizeof(ShaderVertex)), reinterpret_cast<void*>(offsetof(ShaderVertex, positionX)));
-        api.EnableVertexAttribArray(1);
-        api.VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, GLsizei(sizeof(ShaderVertex)), reinterpret_cast<void*>(offsetof(ShaderVertex, red)));
-        api.BindVertexArray(0);
-        return true;
-    }
+    ShaderLabRenderer() = default;
+    ShaderLabRenderer(const ShaderLabRenderer&) = delete;
+    ShaderLabRenderer& operator=(const ShaderLabRenderer&) = delete;
 
-    bool initialize(GlApi& api, const ShaderSources& sources, std::string& diagnostics) {
-        if (!initializeMesh(api, diagnostics)) {
-            return false;
-        }
-        if (!buildProgramCandidate(api, sources, activeProgram, diagnostics)) {
-            return false;
-        }
-#if LAB_CHECKPOINT >= 4
-        reloadState.activeFingerprint = fingerprintShaderSources(sources);
-        reloadState.candidateFingerprint = reloadState.activeFingerprint;
-#endif
-        return true;
-    }
-
-    bool initializeEmbedded(GlApi& api, std::string& diagnostics) {
-        const ShaderSources sources{std::string(kEmbeddedVertexShader), std::string(kEmbeddedFragmentShader)};
-        return initialize(api, sources, diagnostics);
-    }
-
-#if LAB_CHECKPOINT >= 4
-    bool reload(GlApi& api, const ShaderSources& sources, std::string& diagnostics) {
-        // Treat reload as a transaction: prepare everything first, commit only
-        // after compile, link and interface validation have all succeeded.
+    bool initialize(GlApi& gl, std::string& diagnostics) {
         ProgramCandidate candidate{};
-        const std::uint64_t fingerprint = fingerprintShaderSources(sources);
-        if (!buildProgramCandidate(api, sources, candidate, diagnostics)) {
-            recordReloadAttempt(reloadState, fingerprint, false);
+        const auto sources = embeddedShaderSources();
+        if (!buildProgramCandidate(gl, sources, candidate, diagnostics))
+            return false;
+        activeProgram = std::exchange(candidate.program, 0);
+        locations = candidate.locations;
+        reloadState.activeFingerprint = fingerprintShaderSources(sources);
+        gl.GenVertexArrays(1, &vertexArray);
+        gl.BindVertexArray(vertexArray);
+        gl.BindVertexArray(0);
+        return vertexArray != 0 && gl.GetError() == GL_NO_ERROR;
+    }
+
+    bool reload(GlApi& gl, const ShaderSources& sources, std::size_t effect, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
+        ProgramCandidate candidate{};
+        const auto fingerprint = fingerprintShaderSources(sources);
+        if (!buildProgramCandidate(gl, sources, candidate, diagnostics, audit)) {
+            recordReloadAttempt(reloadState, fingerprint, effect, false, diagnostics);
             return false;
         }
-
-        const GLuint previousProgram = activeProgram.program;
-        activeProgram = candidate;
-        recordReloadAttempt(reloadState, fingerprint, true);
-        if (previousProgram != 0U) {
-            api.DeleteProgram(previousProgram);
-        }
-        diagnostics = "Reload succeeded; candidate became the active program.";
+        const GLuint previousProgram = activeProgram;
+        activeProgram = std::exchange(candidate.program, 0);
+        locations = candidate.locations;
+        // A currently bound old program is only flagged for deletion. Bind
+        // the replacement first so deleting previousProgram really releases it.
+        gl.UseProgram(activeProgram);
+        if (previousProgram)
+            gl.DeleteProgram(previousProgram);
+        diagnostics = "Reload OK: " + sources.fragmentLabel;
+        recordReloadAttempt(reloadState, fingerprint, effect, true, diagnostics);
         return true;
     }
-#endif
 
-    void draw(GlApi& api, const Mat4& mvp, const ShaderScene& scene, int framebufferWidth, int framebufferHeight) {
-        api.Enable(GL_DEPTH_TEST);
-        api.DepthFunc(GL_LESS);
-        api.Enable(GL_CULL_FACE);
-        api.CullFace(GL_BACK);
-        api.FrontFace(GL_CCW);
-        api.UseProgram(activeProgram.program);
-        api.UniformMatrix4fv(activeProgram.mvpLocation, 1, GL_FALSE, mvp.values.data());
-#if LAB_CHECKPOINT >= 6
-        api.Uniform1f(activeProgram.timeLocation, scene.elapsedSeconds);
-        api.Uniform2f(activeProgram.resolutionLocation, float(framebufferWidth), float(framebufferHeight));
-        api.Uniform2f(activeProgram.mouseLocation, scene.mouseX, scene.mouseY);
-#else
-        static_cast<void>(scene);
-        static_cast<void>(framebufferWidth);
-        static_cast<void>(framebufferHeight);
-#endif
-        api.BindVertexArray(vertexArray);
-        api.DrawElements(GL_TRIANGLES, GLsizei(kCubeIndices.size()), GL_UNSIGNED_INT, nullptr);
-        api.BindVertexArray(0);
+    void draw(GlApi& gl, const UniformSnapshot& uniform) const {
+        gl.Disable(GL_DEPTH_TEST);
+        gl.Disable(GL_CULL_FACE);
+        gl.Disable(GL_SCISSOR_TEST);
+        gl.Viewport(0, 0, int(uniform.width), int(uniform.height));
+        gl.UseProgram(activeProgram);
+        gl.Uniform2f(locations.resolution, uniform.width, uniform.height);
+        gl.Uniform1f(locations.time, uniform.time);
+        gl.Uniform2f(locations.mouse, uniform.mouseX, uniform.mouseY);
+        gl.Uniform1f(locations.zoom, uniform.zoom);
+        gl.BindVertexArray(vertexArray);
+        gl.DrawArrays(GL_TRIANGLES, 0, 3);
+        gl.BindVertexArray(0);
     }
 
-    void destroy(GlApi& api) {
-        if (activeProgram.program != 0U) {
-            api.DeleteProgram(activeProgram.program);
-        }
-        if (elementBuffer != 0U) {
-            api.DeleteBuffers(1, &elementBuffer);
-        }
-        if (vertexBuffer != 0U) {
-            api.DeleteBuffers(1, &vertexBuffer);
-        }
-        if (vertexArray != 0U) {
-            api.DeleteVertexArrays(1, &vertexArray);
-        }
-        activeProgram = {};
-        elementBuffer = 0;
-        vertexBuffer = 0;
-        vertexArray = 0;
+    void destroy(GlApi& gl) {
+        gl.UseProgram(0);
+        if (activeProgram)
+            gl.DeleteProgram(activeProgram);
+        if (vertexArray)
+            gl.DeleteVertexArrays(1, &vertexArray);
+        activeProgram = vertexArray = 0;
     }
 };
-
 } // namespace lab

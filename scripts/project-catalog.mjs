@@ -56,6 +56,9 @@ export function loadProjectCatalog({ checkDirectories = true } = {}) {
       );
     }
     previousNumericId = numericId;
+    if (project.shaderRuntimePerTarget !== undefined && typeof project.shaderRuntimePerTarget !== "boolean") {
+      fail(`project ${project.id} shaderRuntimePerTarget must be boolean`);
+    }
     if (
       project.contentRevision !== undefined &&
       (!Number.isInteger(project.contentRevision) || project.contentRevision < 1)

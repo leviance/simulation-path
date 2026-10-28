@@ -1,0 +1,54 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện gallery và kiểm hot reload
+
+## Vấn đề cần giải quyết
+
+Một lần reload thành công chưa chứng minh công cụ đã an toàn. Cần thử cả lỗi đọc file, compile, link và interface, rồi sửa để tiếp tục mà không restart. Ứng dụng cũng phải giữ time/mouse/zoom và không rò program khi lặp lại các thao tác ấy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách bằng chứng thành ba lớp: CTest không mở window kiểm state/watch/math; kiểm OpenGL thật xác nhận shader/compiler/program và màu pixel; desktop kiểm thao tác và overlay. Canvas chỉ hỗ trợ hiểu công thức và giao dịch reload, không thay compiler GLSL của driver.
+
+<InteractiveLab demo="shader-hot-reload" mode="shader-validation" />
+
+## Viết code từng bước
+
+Giữ active program trong suốt lúc đọc và build candidate. Khi candidate đã link và đủ active uniforms đúng type, cập nhật handle/locations, bind program mới rồi mới xóa program cũ. Lỗi chỉ cập nhật attempts/diagnostics; generation và last-good fingerprint giữ nguyên.
+
+Overlay lỗi có file và log driver; terminal giữ toàn bộ log. Chế độ showcase ẩn bảng debug nhưng lỗi mới vẫn hiện để người dùng biết vì sao bản sửa chưa được dùng. Không ghi "reload thành công" chỉ vì hình cũ còn vẽ.
+
+## Ghép các phần lại
+
+```bash title="Terminal — Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+```bash title="Terminal — Release"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Phần **Mã hoàn chỉnh** bên dưới và ZIP chứa toàn bộ source C++/GLSL, starter, checkpoint, final, README và tests. Bốn effect chạy trong cùng executable. Khi kiểm tự động, dùng chế độ hữu hạn cùng process supervisor bên ngoài, không đưa GUI vào CTest.
+
+## Thử làm sai để hiểu đúng
+
+Chèn một lỗi cú pháp vào fragment, reload rồi ghi generation/ảnh hiện tại. Sửa lại và reload tiếp: chương trình phải phục hồi. Làm lại với varying không khớp và uniform sai type; compile thành công không đồng nghĩa interface đã hợp lệ.
+
+## Tự kiểm tra kết quả
+
+- [ ] Cả gradient, circle, Mandelbrot và noise phủ viewport, có time/parameter rõ ràng.
+- [ ] Reload lỗi giữ program và ảnh tốt gần nhất; sửa rồi reload không cần restart.
+- [ ] Resize/high-DPI cập nhật resolution/mouse đúng; đổi uniform không compile lại.
+- [ ] Watcher debounce, không retry storm khi file lỗi đứng yên.
+- [ ] Shader/program/VAO/texture được xóa khi context còn current.
+- [ ] Kết quả CTest, OpenGL thật và desktop được ghi riêng.
+
+## Bài tập mở rộng
+
+1. Thêm effect thứ năm mà vẫn dùng cùng uniform interface và giao dịch reload.
+2. Thêm phép kiểm pixel có nghiệm đơn giản trước khi thêm công thức phức tạp.
+
+[Project 36](/projects/ray-marched-shape-room) sẽ dùng fullscreen fragment shader để dựng một căn phòng 3D bằng ray marching.

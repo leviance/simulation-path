@@ -1,15 +1,19 @@
 export function courseCmake(project, { hasSnapshotShaders = false } = {}) {
   const projectNumber = Number(project.id);
+  // Opt-in for rebuilt shader tools: concurrent targets must not overwrite
+  // each other's fallback files in a shared runtime/shaders directory.
+  const shaderRuntime = project.shaderRuntimePerTarget ? "shaders/\${name}" : "shaders";
   const shaderSetup = hasSnapshotShaders
     ? `
     # Shader thay đổi theo checkpoint được chạy trực tiếp từ source để hỗ trợ hot reload.
     target_compile_definitions(\${name} PRIVATE
         COURSE_SHADER_DIRECTORY="\${CMAKE_CURRENT_SOURCE_DIR}/\${source_directory}/shaders"
+        COURSE_SHADER_FALLBACK_SUBDIRECTORY="${shaderRuntime}"
     )
     add_custom_command(TARGET \${name} POST_BUILD
         COMMAND \${CMAKE_COMMAND} -E copy_directory
             "\${CMAKE_CURRENT_SOURCE_DIR}/\${source_directory}/shaders"
-            "$<TARGET_FILE_DIR:\${name}>/shaders"
+            "$<TARGET_FILE_DIR:\${name}>/${shaderRuntime}"
     )
 `
     : "";

@@ -246,9 +246,11 @@
   },
   {
     "id": "35",
+    "contentRevision": 2,
+    "shaderRuntimePerTarget": true,
     "slug": "shader-hot-reload-lab",
     "sourceDirectory": "project-35-shader-hot-reload-lab",
-    "checkpointCount": 8,
+    "checkpointCount": 10,
     "demoId": "shader-hot-reload"
   },
   {
