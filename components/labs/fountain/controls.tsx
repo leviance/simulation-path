@@ -147,7 +147,7 @@ export default function FountainControls({
             />
           </label>
           <label>
-            Emission (hạt/s): {scene.config.emissionRate.toFixed(0)}
+            Tốc độ kích hoạt slot mới (hạt/s): {scene.config.emissionRate.toFixed(0)}
             <input
               type="range"
               min={0}
@@ -157,6 +157,11 @@ export default function FountainControls({
               onChange={(event) => action("emissionRate", Number(event.target.value))}
             />
           </label>
+          <p>
+            Tham số này chỉ có tác dụng khi còn slot chưa được phát, như ở preset 256 slot trống.
+            Khi pool đã đầy, mỗi hạt hết tuổi thọ sẽ được sinh lại ngay trong slot cũ; đặt tốc độ về
+            0 không tắt các hạt đang sống. Chọn preset trống để thử phát lại từ đầu.
+          </p>
         </>
       )}
       <label>

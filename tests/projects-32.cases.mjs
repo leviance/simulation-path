@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { workspace } from "./site-support.mjs";
+import "./fountain-lessons.test.mjs";
 
 const projectRoot = path.join(workspace, "examples", "project-32-memory-layout-race");
 const contentRoot = path.join(workspace, "content", "memory-layout-race");

@@ -6,6 +6,25 @@
 #include <iostream>
 
 namespace project32 {
+#if LAB_CHECKPOINT >= 2
+// SDL calls this once per frame; unfinished work resumes on the next frame.
+inline void advanceSimulation(lab::Simulation& simulation, bool measuring, bool workflow) {
+    if (workflow && simulation.steps == 0 && simulation.pending == lab::PendingWork::none) {
+        simulation.singleStep = true;
+        simulation.beginStep();
+    }
+
+    if (measuring || (simulation.paused && !simulation.singleStep)) {
+        return;
+    }
+
+    if (simulation.pending == lab::PendingWork::none) {
+        simulation.beginStep();
+    }
+    simulation.tickStep();
+}
+#endif
+
 inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, bool smoke, bool workflow) {
     lab::Simulation simulation{};
 #if LAB_CHECKPOINT >= 8
@@ -211,15 +230,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             simulation.tickConversion();
 #endif
 #if LAB_CHECKPOINT >= 2
-        if (workflow && simulation.steps == 0 && simulation.pending == lab::PendingWork::none) {
-            simulation.singleStep = true;
-            simulation.beginStep();
-        }
-        if (!measuring && (!simulation.paused || simulation.singleStep)) {
-            if (simulation.pending == lab::PendingWork::none)
-                simulation.beginStep();
-            simulation.tickStep();
-        }
+        advanceSimulation(simulation, measuring, workflow);
 #endif
         const auto renderStarted = lab::Clock::now();
         const lab::RenderStats drawn = lab::drawFountain(image, simulation, camera, 40'000, showReports);

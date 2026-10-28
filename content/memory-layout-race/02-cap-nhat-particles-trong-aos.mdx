@@ -212,57 +212,37 @@ bool tickStep(double budgetMs = 6) {
 
 Khi hủy, source không bị sửa nửa chừng. Đổi tham số cũng hủy phần việc dở trước khi tính bước khác. Phải có quy tắc này vì một triệu hạt không nhất thiết tính xong trong một frame.
 
-Cuối phần xử lý event ở include/application.hpp, trước drawFountain, nối lời gọi:
+### Bước 6 — Gọi mô phỏng từ vòng SDL
+
+Thêm hàm sau vào namespace project32 trong include/application.hpp, trước runApplication. Hàm này chỉ quyết định khi nào bắt đầu hoặc tiếp tục một bước; việc cập nhật từng hạt vẫn nằm trong Simulation:
 
 ```cpp title="include/application.hpp — chỗ cập nhật trong vòng SDL"
-bool measuring = false;
-            if (measuring || simulation.pending == lab::PendingWork::conversion)
-                jobsPaused = !jobsPaused;
-            else
-                simulation.paused = !simulation.paused;
-        } else if (key == SDLK_N) {
-            cancel();
-            simulation.singleStep = true;
-            simulation.beginStep();
-        } else if (key == SDLK_A || key == SDLK_D || key == SDLK_W || key == SDLK_S || key == SDLK_G || key == SDLK_H || key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET || key == SDLK_MINUS || key == SDLK_EQUALS) {
-            cancel();
-            if (key == SDLK_A)
-                simulation.config.emitterX = std::max(-5.0F, simulation.config.emitterX - 0.25F);
-            if (key == SDLK_D)
-                simulation.config.emitterX = std::min(5.0F, simulation.config.emitterX + 0.25F);
-            if (key == SDLK_W)
-                simulation.config.launchSpeed = std::min(20.0F, simulation.config.launchSpeed + 0.5F);
-            if (key == SDLK_S)
-                simulation.config.launchSpeed = std::max(1.0F, simulation.config.launchSpeed - 0.5F);
-            if (key == SDLK_G)
-                simulation.config.gravity = std::max(-20.0F, simulation.config.gravity - 0.5F);
-            if (key == SDLK_H)
-                simulation.config.gravity = std::min(0.0F, simulation.config.gravity + 0.5F);
-            if (key == SDLK_LEFTBRACKET)
-                simulation.config.lifetime = std::max(0.5F, simulation.config.lifetime - 0.25F);
-            if (key == SDLK_RIGHTBRACKET)
-                simulation.config.lifetime = std::min(8.0F, simulation.config.lifetime + 0.25F);
-            if (key == SDLK_MINUS)
-                simulation.config.emissionRate = std::max(1.0F, simulation.config.emissionRate * 0.5F);
-            if (key == SDLK_EQUALS)
-                simulation.config.emissionRate = std::min(2'000'000.0F, simulation.config.emissionRate * 2.0F);
-            simulation.notice = "Gravity applies next step; emitter/lifetime affect future births. R recreates all slots.";
-        }
-    }
-}
-bool measuring = false;
-if (workflow && simulation.steps == 0 && simulation.pending == lab::PendingWork::none) {
-    simulation.singleStep = true;
-    simulation.beginStep();
-}
-if (!measuring && (!simulation.paused || simulation.singleStep)) {
-    if (simulation.pending == lab::PendingWork::none)
+inline void advanceSimulation(lab::Simulation& simulation, bool measuring, bool workflow) {
+    if (workflow && simulation.steps == 0 && simulation.pending == lab::PendingWork::none) {
+        simulation.singleStep = true;
         simulation.beginStep();
+    }
+
+    if (measuring || (simulation.paused && !simulation.singleStep)) {
+        return;
+    }
+
+    if (simulation.pending == lab::PendingWork::none) {
+        simulation.beginStep();
+    }
     simulation.tickStep();
 }
 ```
 
-Ở checkpoint 02, measuring luôn false; biến này dành chỗ cho benchmark ở bài sau. Nhánh workflow dùng cho phép kiểm hữu hạn bằng dòng lệnh. Khi dùng bình thường, Space đổi paused, N yêu cầu một bước; chỉ gọi beginStep khi chưa có pending, còn tickStep tiếp tục phần đang tính.
+Trong runApplication, đặt lời gọi dưới đây **sau vòng SDL_PollEvent và trước drawFountain**. Giữ nguyên phần xử lý bàn phím: Space đổi paused, còn N yêu cầu một bước bằng singleStep.
+
+```cpp title="include/application.hpp — một lời gọi mỗi frame"
+advanceSimulation(simulation, measuring, workflow);
+```
+
+Ở checkpoint 02, measuring được khai báo là false ngay trước lời gọi; bài sau mới dùng nó để tạm ngừng đài phun trong lúc benchmark. workflow là chế độ kiểm thử bằng dòng lệnh: chương trình tự yêu cầu một bước rồi thoát sau khi kiểm tra kết quả. Khi mở cửa sổ bình thường, workflow là false.
+
+Hãy theo dõi một lần nhấn N: xử lý bàn phím bật singleStep, advanceSimulation đi qua điều kiện pause, rồi tickStep tính một phần công việc. Nếu chưa xong, frame sau tiếp tục bước ấy. Chỉ khi tickStep hoàn tất mới tắt singleStep. Vì vậy một lần nhấn tương ứng với một bước mô phỏng hoàn chỉnh, không phải một batch hay một frame vẽ.
 
 ## Chạy checkpoint và đọc kết quả
 
