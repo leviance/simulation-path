@@ -4,7 +4,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Bức hình này còn thiếu gì?
 
-Ở Project 34, ta ghép nhiều triangle để tạo thành một khối lập phương. Project này làm điều gần như ngược lại: sphere, box, torus và cả căn phòng sẽ không có vertex riêng. Trước mắt, GPU chỉ cần vẽ một triangle phủ kín màn hình. Từ bài sau, mỗi fragment sẽ tự tính xem tia nhìn chạm vào vật gì.
+Ở Project 34, ta vẽ các mô hình OBJ từ nhiều tam giác. Project này làm điều gần như ngược lại: sphere, box, torus và cả căn phòng sẽ không có vertex riêng. Trước mắt, GPU chỉ cần vẽ một triangle phủ kín màn hình. Từ bài sau, mỗi fragment sẽ tự tính xem tia nhìn chạm vào vật gì.
 
 Checkpoint đầu tiên chưa vẽ vật thể. Ta cần chứng minh ba việc căn bản trước: fullscreen triangle thật sự phủ kín framebuffer, shader nhận đúng kích thước theo pixel vật lý, và mỗi fragment biết vị trí của nó qua `gl_FragCoord`.
 

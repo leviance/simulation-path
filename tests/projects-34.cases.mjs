@@ -1,107 +1,104 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
-import { workspace } from "./site-support.mjs";
+import { codeTokens, isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import "./projects-34-viewer.cases.mjs";
 
-test("Project 34 publishes a nine-checkpoint dual-renderer cube", async () => {
-  const catalog = JSON.parse(
-    await readFile(path.join(workspace, "course", "projects.json"), "utf8"),
-  );
-  const project = catalog.find((entry) => entry.id === "34");
-  assert.equal(project.slug, "dual-renderer-cube");
-  assert.equal(project.sourceDirectory, "project-34-dual-renderer-cube");
+const root = new URL("../", import.meta.url),
+  dir = "examples/project-34-dual-renderer-cube/";
+const read = (path) => readFile(new URL(path, root), "utf8");
+
+test("P34 publishes a real OBJ viewer with nine substantive source-aligned lessons", async () => {
+  const catalog = JSON.parse(await read("course/projects.json"));
+  const project = catalog.find((p) => p.id === "34");
   assert.equal(project.checkpointCount, 9);
-  assert.equal(project.demoId, "dual-renderer-cube");
-});
-
-test("Project 34 keeps the shared cube contract traceable across CPU and GPU", async () => {
-  const content = path.join(workspace, "content", "dual-renderer-cube");
-  const source = path.join(workspace, "examples", "project-34-dual-renderer-cube");
-  const lessons = await Promise.all(
-    [
-      "01-khoa-mot-cube-scene-dung-chung.mdx",
-      "02-xay-indexed-cube-mesh.mdx",
-      "03-ket-noi-cpu-renderer-voi-scene.mdx",
-      "04-ve-cube-gpu-bang-element-buffer.mdx",
-      "05-dong-bo-model-view-projection.mdx",
-      "06-doi-chieu-depth-buffer-va-depth-test.mdx",
-      "07-dong-bo-winding-va-face-culling.mdx",
-      "08-chuyen-renderer-bang-f1-f2.mdx",
-      "09-hoan-thien-dual-renderer-cube.mdx",
-    ].map((file) => readFile(path.join(content, file), "utf8")),
-  );
-
-  const lessonContracts = [
-    [/RendererKind/i, /CubeScene/i, /F1\/F2/i, /handle.*backend|backend.*handle/i],
-    [/24 vertices/i, /36 indices/i, /GpuCubeVertex/i, /CCW/i, /offsetof/i],
-    [/CPU renderer/i, /Framebuffer/i, /Z-buffer/i, /texture presenter/i],
-    [/VBO/i, /EBO/i, /VAO/i, /glDrawElements/i, /GL_UNSIGNED_INT/i],
-    [/column-major/i, /uMvp/i, /GL_FALSE/i, /clip/i, /NDC/i],
-    [/GL_DEPTH_TEST/i, /GL_LESS/i, /window depth/i, /triangle order/i],
-    [/GL_CULL_FACE/i, /GL_CCW/i, /GL_BACK/i, /winding/i],
-    [/F1/i, /F2/i, /cùng scene/i, /resize/i, /fixed step/i],
-    [/CTest/i, /Debug/i, /Release/i, /Project 35/i, /Mã hoàn chỉnh/i],
-  ];
-  for (const [index, patterns] of lessonContracts.entries()) {
-    for (const pattern of patterns) {
-      assert.match(lessons[index], pattern, `Project 34 lesson ${index + 1} is missing ${pattern}`);
+  assert.equal(project.contentRevision, 2);
+  const manifest = (await import("../course/projects/p34/manifest.ts")).default;
+  assert.equal(manifest.lessons.length, 9);
+  assert.match(manifest.prerequisites.join(" "), /Project 21/);
+  assert.match(manifest.challenge.requirements.join(" "), /2.976/);
+  assert.doesNotMatch(manifest.summary, /indexed cube|CubeScene/);
+  for (const lesson of manifest.lessons) {
+    const text = await read("content/dual-renderer-cube/" + lesson.slug + ".mdx");
+    assert.ok(text.includes("# " + lesson.title));
+    assert.match(text, /## Vấn đề cần giải quyết/);
+    assert.match(text, /## Tự kiểm tra kết quả/);
+    assert.doesNotMatch(text, /\{\{CPP|\{\{GLSL/, "No unresolved source markers");
+    const blocks = [...text.matchAll(/```cpp title="([^"]+)"\n([\s\S]*?)\n```/g)];
+    assert.ok(blocks.length >= 1, lesson.slug + " needs actual detailed code");
+    for (const [, title, snippet] of blocks) {
+      const file = title.split(" — ")[0];
+      const source = await read(
+        dir + "checkpoints/" + String(lesson.order).padStart(2, "0") + "/" + file,
+      );
+      assert.ok(
+        isContiguousCodeExcerpt(snippet, source),
+        lesson.slug + ": " + title + " is not contiguous checkpoint code",
+      );
+      const stack = [];
+      for (const token of codeTokens(snippet)) {
+        if (token === "{") stack.push(token);
+        if (token === "}") assert.ok(stack.pop(), title + " has unmatched }");
+      }
+      assert.equal(stack.length, 0, title + " contains an unfinished code block");
+    }
+    for (const [, snippet] of text.matchAll(/```glsl title="[^"]+"\n([\s\S]*?)\n```/g)) {
+      const gpu = await read(
+        dir + "checkpoints/" + String(lesson.order).padStart(2, "0") + "/include/viewer-gpu.hpp",
+      );
+      assert.ok(gpu.includes(snippet.trim()), "GLSL must be exact source");
     }
   }
+  assert.equal(
+    (await readdir(new URL("content/dual-renderer-cube/", root))).filter((p) => p.endsWith(".mdx"))
+      .length,
+    9,
+  );
+});
 
-  const pipeline = await readFile(
-    path.join(source, "source-template", "include", "pipeline.hpp"),
-    "utf8",
-  );
-  const glApi = await readFile(
-    path.join(source, "source-template", "include", "gl_api.hpp"),
-    "utf8",
-  );
-  const gpu = await readFile(
-    path.join(source, "source-template", "include", "gpu_renderer.hpp"),
-    "utf8",
-  );
-  const main = await readFile(path.join(source, "source-template", "src", "main.cpp"), "utf8");
-  const tests = await readFile(path.join(source, "tests", "tests.cpp"), "utf8");
-  const canvas = await readFile(
-    path.join(workspace, "components", "labs", "dual-renderer-cube-lab.tsx"),
-    "utf8",
-  );
-
-  for (const symbol of [
-    "RendererKind",
-    "CubeScene",
-    "GpuCubeVertex",
-    "kCubeIndices",
-    "rasterizeCpuCube",
-    "traceVertex",
-    "validateDualRendererCubeContract",
-  ]) {
-    assert.ok(pipeline.includes(symbol), `Project 34 pipeline source is missing ${symbol}`);
-  }
-  for (const symbol of [
-    "PFNGLDRAWELEMENTSPROC",
-    "PFNGLDEPTHFUNCPROC",
-    "PFNGLCULLFACEPROC",
-    "SDL_GL_GetProcAddress",
-  ]) {
-    assert.ok(glApi.includes(symbol), `Project 34 OpenGL loader is missing ${symbol}`);
-  }
-  for (const symbol of [
-    "GpuCubeRenderer",
-    "CpuTexturePresenter",
-    "GL_ELEMENT_ARRAY_BUFFER",
-    "DrawElements",
-  ]) {
-    assert.ok(gpu.includes(symbol), `Project 34 GPU source is missing ${symbol}`);
-  }
-  assert.match(main, /SDLK_F1/);
-  assert.match(main, /SDLK_F2/);
-  assert.match(main, /SDL_GetWindowSizeInPixels/);
-  assert.match(main, /SDL_GL_SwapWindow/);
-  assert.match(tests, /depth-enabled color output ignores triangle order/);
-  assert.match(tests, /renderer switch preserves transform state/);
-  assert.match(canvas, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(canvas, /useReducedMotion/);
-  assert.match(canvas, /Backend đang active/);
+test("P34 keeps complete CPU/GPU/resource/timing proof in the independent source", async () => {
+  const source = await read(dir + "source-template/include/viewer-validation.hpp");
+  for (const expected of [
+    "repeat < 24",
+    "repeat == 20",
+    "verifyViewerVertexTrace",
+    "readViewerComparison",
+    "requireViewerResources",
+    "viewerVisibilityFixture",
+    "viewerNearFixture",
+  ])
+    assert.ok(source.includes(expected), expected);
+  const cpu = await read(dir + "source-template/include/viewer-cpu.hpp");
+  assert.match(cpu, /plane < 6/);
+  assert.match(cpu, /clipViewerTriangle/);
+  const timing = await read(dir + "source-template/include/viewer-timing.hpp");
+  assert.ok(timing.indexOf("GL_QUERY_RESULT_AVAILABLE") < timing.lastIndexOf("GL_QUERY_RESULT,"));
+  const benchmark = await read(dir + "source-template/include/viewer-benchmark.hpp");
+  for (const expected of [
+    "SDL_GL_GetSwapInterval",
+    "gl.Finish()",
+    "samples = 12",
+    "warmup = 3",
+    "sync_wait_cpu",
+    "No speedup ratio",
+    "15000",
+  ])
+    assert.ok(benchmark.includes(expected), expected);
+  const app = await read(dir + "source-template/include/viewer-application.hpp");
+  assert.match(app, /SDLK_F1/);
+  assert.match(app, /SDLK_F2/);
+  assert.match(app, /SDL_GetWindowSizeInPixels/);
+  assert.match(app, /SDL_CaptureMouse/);
+  const pipeline = await read(dir + "source-template/include/pipeline.hpp");
+  assert.doesNotMatch(pipeline, /kCubeVertices|CubeScene|rasterizeCpuCube/);
+  const canvas = await read("components/labs/dual-renderer-cube-lab.tsx");
+  for (const expected of [
+    "viewerModels",
+    "setPointerCapture",
+    "onLostPointerCapture",
+    "useReducedMotion",
+    "--verify",
+    "không đo tốc độ GPU",
+  ])
+    assert.ok(canvas.includes(expected), expected);
 });

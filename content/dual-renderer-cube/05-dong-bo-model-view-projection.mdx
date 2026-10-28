@@ -1,94 +1,166 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đồng bộ Model–View–Projection
+# Một camera, cùng Model–View–Projection
 
 ## Vấn đề cần giải quyết
 
-Hai cube cùng hình ở một góc chưa chứng minh matrix contract đúng. Một transpose sai đôi khi vẫn cho hình “có vẻ 3D”, đặc biệt nếu matrix gần identity. Khi kéo góc khác hoặc resize aspect, CPU/GPU mới tách nhau.
+Hai backend có thể đọc cùng mesh nhưng cho ảnh lệch nếu mỗi bên tự tính một matrix, dùng FOV khác hoặc hiểu trục Z khác nhau. Ta cần một bộ phép biến đổi mà CPU và GLSL cùng dùng.
 
-Ta cần khóa ba điều: storage là column-major, multiplication là `P × V × M`, và GLSL nhận nguyên 16 floats với `transpose = GL_FALSE`.
+Ta cũng phải phân biệt xoay model với orbit camera. Nếu kéo chuột làm cả lưới tọa độ xoay theo model, có thể bạn đang sửa view trong khi người dùng chọn “Xoay mô hình”.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với column vector, vertex đi qua các phép biến đổi theo thứ tự phải sang trái:
+Quy ước trong project này:
 
-$$
-\text{clip} = P\,V\,M\,\text{local}
-$$
+| Đại lượng | Quy ước |
+| --- | --- |
+| Hệ tọa độ | Right-handed; camera mặc định ở +Z, nhìn về -Z |
+| Model | Xoay Y trước rồi X: $M=R_xR_y$ với vector cột |
+| Matrix | Column-major, `values[column*4+row]` |
+| Clip | $p_{clip}=PVMp$, $-w\le x,y,z\le w$ |
+| Screen CPU | Gốc trên trái; Y hướng xuống |
+| OpenGL viewport | Gốc dưới trái; readback cần đảo hàng |
+| Depth | NDC z [-1,1] → window depth [0,1] |
 
-Sau đó `ndc = clip.xyz / clip.w`. CPU mới đổi NDC sang top-left screen; GPU tự làm perspective divide và viewport transform. Điểm đối chiếu tốt nhất là clip/NDC, trước khi khác biệt trục Y xuất hiện.
+Viewer Project 21 từng dùng camera nhìn theo +Z. Ở đây ta chuyển rõ sang convention OpenGL thay vì âm thầm đổi dấu riêng trong shader. Dữ liệu model và cách xoay Y-rồi-X được giữ; cả hai backend dùng camera mới như nhau.
 
 <InteractiveLab demo="dual-renderer-cube" mode="mvp-contract" />
 
+Chọn “Xoay mô hình”, thử kéo; sau đó chọn “Đổi góc nhìn”. Quan sát lưới và số camera/model. Vertex inspector hiển thị clip, NDC, screen và depth từ cùng scene.
+
 ## Viết code từng bước
 
-### Bước 1 — Nhân hai Mat4 column-major
+### 1. Nhớ storage khác với thứ tự phép nhân
 
-```cpp title="include/pipeline.hpp — phần lõi của multiply"
-for (int inner = 0; inner < 4; ++inner) {
-    value += left.values[std::size_t(inner * 4 + row)] * right.values[std::size_t(column * 4 + inner)];
+```cpp title="include/pipeline.hpp — struct Mat4"
+struct Mat4 {
+    std::array<float, 16> values{};
+};
+```
+
+```cpp title="include/pipeline.hpp — Mat4 multiply"
+inline Mat4 multiply(const Mat4& left, const Mat4& right) {
+    Mat4 result{};
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            float value = 0.0F;
+            for (int inner = 0; inner < 4; ++inner) {
+                value += left.values[std::size_t(inner * 4 + row)] * right.values[std::size_t(column * 4 + inner)];
+            }
+            result.values[std::size_t(column * 4 + row)] = value;
+        }
+    }
+    return result;
 }
-result.values[std::size_t(column * 4 + row)] = value;
 ```
 
-Index `column * 4 + row` được dùng nhất quán cho storage. Ta không dựa vào comment “column-major” trong khi code lại index theo row-major.
+Column-major chỉ nói vị trí phần tử trong bộ nhớ. Thứ tự `P*V*M` lại nói model được áp dụng trước, view sau và projection cuối. Không đảo thứ tự nhân để “bù” cho storage.
 
-### Bước 2 — Tạo P × V × M bằng scene và aspect
+CPU gọi `transform(mvp, position)`; GPU nhận đúng array 16 float bằng `UniformMatrix4fv(..., GL_FALSE, ...)` rồi nhân `uMvp * vec4`. Không có bước transpose riêng ở một backend.
 
-```cpp title="include/pipeline.hpp — makeMvp"
-inline Mat4 makeMvp(const CubeScene& scene, float aspect) {
-    const Mat4 model = multiply(rotationYMatrix(scene.angleY), rotationXMatrix(scene.angleX));
-    const Mat4 view = translationMatrix(0.0F, 0.0F, -4.2F);
-    const Mat4 projection = perspectiveMatrix(std::numbers::pi_v<float> / 3.0F, aspect, 0.5F, 20.0F);
-    return multiply(projection, multiply(view, model));
+### 2. Tạo camera từ một target chung
+
+```cpp title="include/viewer-scene.hpp — ViewerMatrices viewerMatrices"
+inline ViewerMatrices viewerMatrices(const ViewerScene& scene, float aspect) {
+    const float lightSquared = scene.lightX * scene.lightX + scene.lightY * scene.lightY + scene.lightZ * scene.lightZ;
+    if (!std::isfinite(scene.view.angleX) || !std::isfinite(scene.view.angleY) ||
+        !std::isfinite(scene.view.cameraYaw) || !std::isfinite(scene.view.cameraPitch) ||
+        !std::isfinite(scene.targetX) || !std::isfinite(scene.targetY) || !std::isfinite(scene.targetZ) ||
+        !std::isfinite(scene.baseRed) || !std::isfinite(scene.baseGreen) || !std::isfinite(scene.baseBlue) ||
+        (scene.lit && (!std::isfinite(lightSquared) || lightSquared <= 1e-12F)) ||
+        !std::isfinite(aspect) || aspect <= 0 || !std::isfinite(scene.nearPlane) || !std::isfinite(scene.farPlane) ||
+        scene.nearPlane <= 0 || scene.farPlane <= scene.nearPlane || !std::isfinite(scene.view.distance) || scene.view.distance <= 0 ||
+        !std::isfinite(scene.verticalFov) || scene.verticalFov <= 0 || scene.verticalFov >= std::numbers::pi_v<float>) {
+        throw std::invalid_argument("Invalid viewer projection");
+    }
+    ViewerMatrices result{};
+    // Same Y-then-X model rotation as Project 21; column vectors multiply right-to-left.
+    result.model = multiply(rotationXMatrix(float(scene.view.angleX)), rotationYMatrix(float(scene.view.angleY)));
+    const float yaw = float(scene.view.cameraYaw), pitch = float(scene.view.cameraPitch), distance = float(scene.view.distance);
+    const Vec3 target{scene.targetX, scene.targetY, scene.targetZ};
+    result.eye = {target.x + distance * std::sin(yaw) * std::cos(pitch), target.y + distance * std::sin(pitch), target.z + distance * std::cos(yaw) * std::cos(pitch)};
+    const Vec3 forward = unitVector(subtractVector(target, result.eye));
+    result.right = unitVector(crossVector(forward, {0, 1, 0}));
+    result.up = crossVector(result.right, forward);
+    const auto right = result.right, up = result.up;
+    // Right-handed view: forward is -Z; OpenGL clip depth is [-w,+w].
+    result.view.values = {right.x, up.x, -forward.x, 0, right.y, up.y, -forward.y, 0, right.z, up.z, -forward.z, 0, -dotVector(right, result.eye), -dotVector(up, result.eye), dotVector(forward, result.eye), 1};
+    result.projection = perspectiveMatrix(scene.verticalFov, aspect, scene.nearPlane, scene.farPlane);
+    result.mvp = multiply(result.projection, multiply(result.view, result.model));
+    return result;
 }
 ```
 
-Aspect là `framebufferWidth / framebufferHeight`, không phải kích thước ban đầu hay logical window size.
+Camera orbit nằm trên cầu quanh `target` với yaw/pitch/distance. `forward` hướng từ eye đến target, `right` và `up` tạo cơ sở camera. View matrix đưa camera về gốc và hướng nhìn về -Z.
 
-### Bước 3 — Upload không transpose
+Đầu hàm kiểm projection và các giá trị hữu hạn. Near phải dương, far lớn hơn near, aspect dương. Không đưa matrix lỗi vào cả hai renderer rồi coi “cùng sai” là đúng.
 
-```cpp title="include/gpu_renderer.hpp — uMvp"
-api.UseProgram(program);
-api.UniformMatrix4fv(mvpLocation, 1, GL_FALSE, mvp.values.data());
-api.BindVertexArray(vertexArray);
+### 3. Pan theo mặt phẳng camera
+
+```cpp title="include/viewer-scene.hpp — void panViewer"
+inline void panViewer(ViewerScene& scene, float dx, float dy, int pixelHeight) {
+    if (pixelHeight <= 0 || !std::isfinite(dx) || !std::isfinite(dy))
+        return;
+    const auto matrices = viewerMatrices(scene, 1);
+    const float metresPerPixel = 2 * float(scene.view.distance) * std::tan(scene.verticalFov * 0.5F) / float(pixelHeight);
+    scene.targetX += (-dx * matrices.right.x + dy * matrices.up.x) * metresPerPixel;
+    scene.targetY += (-dx * matrices.right.y + dy * matrices.up.y) * metresPerPixel;
+    scene.targetZ += (-dx * matrices.right.z + dy * matrices.up.z) * metresPerPixel;
+    scene.view.paused = true;
+}
 ```
 
-GLSL dùng `gl_Position = uMvp * vec4(aPosition, 1.0)`. Không có phép transpose thứ hai trong shader.
+Độ dịch world ứng với một pixel tại target là:
+
+$$
+s=\frac{2d\tan(\mathrm{FOV}_y/2)}{H}.
+$$
+
+`H` là chiều cao **vùng model theo pixel**, không bao gồm bảng thống kê. Di chuyển target theo right/up giữ hướng quan sát và không sửa góc model. Input logical phải đổi sang framebuffer pixels trước khi gọi.
+
+### 4. Zoom hữu hạn bằng khoảng cách
+
+```cpp title="include/viewer-scene.hpp — void zoomViewer"
+inline void zoomViewer(ViewerState& state, double wheel) {
+    if (!std::isfinite(wheel))
+        return;
+    state.distance = std::clamp(state.distance * std::exp(-std::clamp(wheel, -50.0, 50.0) * 0.12), 0.35, 40.0);
+}
+```
+
+Mỗi nấc wheel nhân khoảng cách theo hàm mũ. Clamp giữ distance trong [0,35; 40]; near clipping vẫn làm việc khi camera tới gần hoặc đi vào model. Không ép mọi vertex có `w` âm trở thành dương để “cứu” ảnh.
 
 ## Ghép các phần lại
 
-Checkpoint 5 trace vertex 0 lên title bar: local → clip → depth. Khi debug, hãy so cùng 16 floats và cùng input vertex trước khi nhìn pixels.
-
-```cpp title="src/main.cpp — tạo trace đúng framebuffer aspect"
-const lab::Mat4 mvp = lab::makeMvp(scene, float(framebufferWidth) / float(framebufferHeight));
-const lab::VertexTrace trace = lab::traceVertex(lab::kCubeVertices[0], mvp, framebufferWidth, framebufferHeight);
+```bash title="Terminal — camera dùng chung"
+cmake --build build --config Debug --target project_34_checkpoint_5 --parallel 2
+.\build\Debug\project_34_checkpoint_5.exe
 ```
 
-Trace có `clip.w > 0`, NDC hữu hạn và window depth trong `[0,1]` cho cube hiện tại. Đó là invariant mạnh hơn “cube vẫn thấy được”.
+V đổi chế độ kéo trái. Kéo phải để pan, wheel zoom, Home đặt lại camera; R đặt lại pose/options nhưng giữ model đang chọn và backend. Thử cùng một góc nhìn ở F1 và F2.
+
+Aspect là width/modelHeight sau khi trừ 100 pixel của HUD. Dù HUD chưa có ở checkpoint này, vùng vẽ đã được dành riêng như bản final. Khi resize, matrix phải dùng kích thước vùng vẽ mới cùng lúc viewport đổi.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `GL_FALSE` thành `GL_TRUE`. Desktop OpenGL không phải nơi để dùng transpose như một nút sửa orientation; contract hoặc lỗi API sẽ lộ ra.
-2. Trả `M × V × P`. Cube rời clip volume hoặc biến dạng dù từng matrix riêng có vẻ đúng.
-3. Dùng aspect nghịch đảo `height / width`, sau đó resize cửa sổ ngang. Cube bị kéo giãn khác CPU.
+Đổi transpose từ GL_FALSE sang GL_TRUE trong bản thử. Nếu ảnh mất, đừng sửa tiếp thứ tự matrix ở C++ — hãy khôi phục và trace một vertex.
 
-Hoàn tác lỗi và kiểm lại vertex trace trước khi tiếp tục.
+Thử tính pan bằng window height gồm cả HUD, hoặc dùng logical height cho framebuffer high-DPI. So độ dịch ở hai kích thước cửa sổ. Khôi phục chiều cao vùng model và phép đổi logical → pixel.
 
 ## Tự kiểm tra kết quả
 
-- [ ] `Mat4::values` được index `column * 4 + row`.
-- [ ] MVP là projection × view × model.
-- [ ] CPU/GLSL cùng nhân matrix với column vector.
-- [ ] Uniform upload dùng `GL_FALSE` và đúng location.
-- [ ] Clip w, NDC và depth của nhiều preset đều hữu hạn.
+- [ ] Xoay model không xoay lưới; orbit camera thay góc nhìn của cả model và lưới.
+- [ ] Pan không sửa angleX/angleY; Home không đổi model đang chọn.
+- [ ] F1/F2 giữ yaw/pitch/distance/target/FOV và model pose.
+- [ ] Near/far map tới NDC z -1/+1, depth 0/1.
+- [ ] Resize không bóp hình; viewport và projection dùng cùng aspect.
+- [ ] Vertex trace hữu hạn trước khi so ảnh.
 
-Hãy dự đoán điều sẽ xảy ra nếu chỉ transpose matrix rotation nhưng không transpose translation, rồi dùng trace để chỉ ra stage sai.
+Bài cuối sẽ đọc `gl_Position` thực từ GPU bằng transform feedback. Canvas cho bạn xem công thức nhưng không thay phép kiểm ấy.
 
 ## Bài tập mở rộng
 
-1. Trace cả 24 vertices và tìm min/max NDC.
-2. Tách `model`, `view`, `projection` thành ba uniforms rồi so trade-off.
-3. Viết test matrix identity và translation không cần mở window.
+1. Tính vị trí world của camera ở yaw $\pi/2$, pitch 0; kiểm bằng log.
+2. Thêm preset front/back mà chỉ thay camera, giữ nguyên góc model.
 
-Bài tiếp theo nối depth array CPU với fixed-function depth stage của GPU.
+Tiếp theo: [clipping, depth và winding phải khớp](./06-doi-chieu-depth-buffer-va-depth-test).

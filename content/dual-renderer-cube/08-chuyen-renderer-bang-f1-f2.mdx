@@ -1,102 +1,135 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Chuyển renderer bằng F1 và F2
+# Đổi backend mà không mất trạng thái
 
 ## Vấn đề cần giải quyết
 
-Đến checkpoint 7, CPU và GPU đều chạy nhưng các checkpoint chọn backend cố định để tập trung debug. Bây giờ mới ghép F1/F2. Nếu ta xử lý input bên trong từng renderer hoặc init/destroy resource mỗi lần bấm phím, cube sẽ giật, mất state hoặc tạo lỗi lifetime.
+Hai renderer đã vẽ được cùng mesh. Phần còn lại là biến chúng thành một ứng dụng dùng được: đổi model, kéo camera, pause, resize và chuyển backend liên tục mà không mất thao tác hoặc tạo tài nguyên lặp lại.
 
-Checkpoint 8 đặt event → update → render theo đúng một chiều. F1/F2 sửa đúng một enum; cả hai backend và resource của chúng được tạo từ startup, dùng lại đến cleanup.
+Đừng đặt event loop vào từng renderer. Nếu mỗi backend tự bắt phím và cập nhật góc, việc nhấn F1/F2 sẽ kéo theo hai vòng đời state khác nhau.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Frame loop cần một snapshot duy nhất:
+Ứng dụng giữ một `ViewerScene` và một `RendererKind`. Mỗi frame chỉ cập nhật scene một lần, sau đó renderer được chọn đọc const snapshot ấy.
 
-```text
-Poll events
-  ├─ F1/F2 → RendererKind
-  ├─ drag/N/Space/R → CubeScene + paused
-  └─ resize → framebuffer pixel size
-Update angle một lần
-Render CPU hoặc GPU từ cùng scene + aspect
-Swap window
-```
-
-Không render CPU rồi update rồi mới render GPU. Dù chỉ một backend hiện trên màn hình, switching phải giữ continuity như đổi camera trong cùng chương trình.
+`ViewerBackends` sở hữu tài nguyên theo backend: ảnh/depth/clip cache CPU, texture presenter, program và ba GPU mesh đã upload. Tài nguyên này tồn tại qua các lần F1/F2. Đổi backend chỉ chọn nhánh; đổi model chỉ chọn phần tử trong cache.
 
 <InteractiveLab demo="dual-renderer-cube" mode="renderer-switch" />
 
+Chọn sphere, pan/zoom, bật Normals rồi đổi F1/F2 vài lần. Sau đó thử đổi backend giữa một lượt kéo. Các số model/camera phải liên tục, không nhảy về default.
+
 ## Viết code từng bước
 
-### Bước 1 — F1/F2 chỉ đổi enum
+### 1. F1/F2 chỉ sửa enum
 
-```cpp title="src/main.cpp — chọn renderer"
-}
-else if (event.key.key == SDLK_F1) {
-    renderer = lab::RendererKind::cpu;
-}
-else if (event.key.key == SDLK_F2) {
-    renderer = lab::RendererKind::gpu;
+```cpp title="include/viewer-application.hpp —                     if "
+if (key == SDLK_F1)
+    backend = RendererKind::cpu;
+else if (key == SDLK_F2)
+    backend = RendererKind::gpu;
 ```
 
-Không có `initialize`, `destroy`, reset angle hay upload mesh trong hai nhánh này.
+Không gọi initialize, không đọc lại OBJ, không reset camera trong hai nhánh này. Chúng vẫn hoạt động khi mouse đang capture. Những phím sửa pose khác bị bỏ qua trong lúc kéo để tránh một gesture có hai nguồn thay đổi state.
 
-### Bước 2 — Update trước khi chọn backend
+### 2. Phân biệt logical input với framebuffer pixels
 
-```cpp title="src/main.cpp — animation và fixed step"
-if (!paused) {
-    scene.angleY += deltaSeconds * 0.55F;
-}
-if (singleStep) {
-    scene.angleY += kFixedAngleStep;
+Window input báo tọa độ logical. OpenGL viewport và CPU framebuffer lại dùng pixel thật. Với pan, ta đổi độ dịch chuột theo tỉ lệ width/logicalWidth và height/logicalHeight trước khi đưa vào công thức camera.
+
+Kéo trái gọi `turnViewer` theo chế độ model/camera đã chọn. Kéo phải gọi `panViewer`. Wheel chỉ thay distance; không sửa matrix trực tiếp trong renderer.
+
+Capture ghi lại mouse ID và nút bắt đầu, vì một nút khác thả ra không nên kết thúc lượt kéo hiện tại. Trước khi kéo, giữ `beforeDrag` để Escape khôi phục. Mất focus hoặc resize nhả capture và pause, không giữ chuột trong ứng dụng.
+
+### 3. Pause và tiến một bước có nghĩa rõ ràng
+
+Space bật/tắt xoay tự động; N pause rồi tăng angle Y đúng $\pi/18$ (10°). Delta time được giới hạn 0,05 giây để trở lại sau một frame chậm không làm model quay một bước quá lớn.
+
+R đặt lại pose/options nhưng giữ model đang chọn và backend. Home chỉ đặt lại camera/pan target, không thay model transform. Đây là hai thao tác khác nhau, không nên cùng làm “reset mọi thứ”.
+
+### 4. Render từ scene chung, resize storage khi cần
+
+```cpp title="include/viewer-backends.hpp —     ViewerFrameStats render"
+ViewerFrameStats render(GlApi& gl, const std::array<ViewerMesh, 3>& models, const ViewerScene& scene, RendererKind backend, int width, int height, std::uint64_t number, int originY = 0) {
+    if (width <= 0 || height <= 0 || std::size_t(width) * std::size_t(height) > 16'000'000 || scene.meshIndex >= models.size()) {
+        throw std::invalid_argument("Invalid viewer render dimensions or model");
+    }
+    ViewerFrameStats stats{};
+    stats.frame = number;
+    auto started = ViewerClock::now();
+    const auto matrices = viewerMatrices(scene, float(width) / height);
+    stats.prepareMs = viewerMilliseconds(started);
+    if (frame.width != width || frame.height != height) {
+        frame.resize(width, height);
+        presenter.resize(gl, width, height);
+    }
+    gl.Disable(GL_SCISSOR_TEST);
+    gl.Viewport(0, originY, width, height);
+    gl.ClearColor(13.0F / 255, 21.0F / 255, 38.0F / 255, 1);
+    gl.ClearDepth(1);
+    gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    timer.poll(gl);
+    if (backend == RendererKind::cpu) {
+        stats.cpuPathExecuted = true;
+        started = ViewerClock::now();
+        cpu.render(frame, models[scene.meshIndex], scene, matrices);
+        stats.cpuRenderMs = viewerMilliseconds(started);
+        started = ViewerClock::now();
+        presenter.upload(gl, frame);
+        stats.uploadMs = viewerMilliseconds(started);
+        started = ViewerClock::now();
+        gl.PolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        presenter.draw(gl);
+        stats.submitMs = viewerMilliseconds(started);
+    }
+    else {
+        started = ViewerClock::now();
+        timer.begin(gl, number);
+        meshes[scene.meshIndex].draw(gl, program, scene, matrices);
+        if (scene.view.grid) {
+            program.bindLine(gl, multiply(matrices.projection, matrices.view), {37.0F / 255, 51.0F / 255, 74.0F / 255});
+            grid.draw(gl);
+        }
+        timer.end(gl);
+        stats.submitMs = viewerMilliseconds(started);
+    }
+    return stats;
 }
 ```
 
-`N` tiến đúng 10° rồi pause. Vì scene chỉ được cập nhật một lần, F1/F2 ở frame kế tiếp nhìn cùng angle.
+Matrix tính từ width/height của vùng model. Storage chỉ resize khi kích thước đổi. GPU resources đã được tạo ở initialize; nhánh render không gọi BufferData cho model.
 
-### Bước 3 — Nhánh render chỉ đọc snapshot
+CPU path gồm CPU geometry → upload → quad submission. GPU path gồm uniform/state → indexed draw. Chúng đều dùng `scene.meshIndex` và cùng matrices; không backend nào cập nhật camera bên trong.
 
-```cpp title="src/main.cpp — GPU branch"
-if (renderer == lab::RendererKind::gpu) {
-    const lab::Mat4 mvp = lab::makeMvp(scene, float(framebufferWidth) / float(framebufferHeight));
-    gpuRenderer.draw(gl, mvp, scene.depthEnabled, scene.cullingEnabled);
-} else {
-```
-
-CPU branch ngay sau `else` nhận cùng `scene` và pixel dimensions. Không backend nào sửa chúng.
+Vùng HUD chiếm 100 pixel dưới cùng. OpenGL viewport đặt origin Y=100; ảnh CPU được present vào chính viewport ấy. Input chỉ bắt đầu drag trong phần model, không bắt trên HUD.
 
 ## Ghép các phần lại
 
-Chạy checkpoint 8, pause rồi tiến N vài lần. Bấm F1/F2 liên tục: orientation phải không đổi. Tiếp tục animation, drag, toggle D/C và resize; mọi state phải đi theo scene.
-
-```bash title="Terminal — build checkpoint chuyển backend"
-cmake --build build --config Debug --target project_34_checkpoint_8
+```bash title="Terminal — viewer tương tác"
+cmake --build build --config Debug --target project_34_checkpoint_8 --parallel 2
+.\build\Debug\project_34_checkpoint_8.exe
 ```
 
-Đừng so CPU timer quanh `glDrawElements` với thời gian CPU raster rồi kết luận tốc độ. GPU command có thể chỉ mới được submit; Project này kiểm correctness và architecture, không phải benchmark CPU/GPU.
+Thực hiện một chuỗi đủ dài: chọn sphere → V đổi góc nhìn → kéo → pan → zoom → bật H → F1/F2 20 lần → resize → chọn rocket. Thử cả lúc pause và lúc Space đang chạy.
+
+Nếu đổi backend làm hình nhảy, in scene trước/sau rồi tìm biến bị reset. Nếu chỉ resize làm nhảy, kiểm aspect/viewport/presenter storage. Không vội tạo một camera khác cho backend bị lệch.
 
 ## Thử làm sai để hiểu đúng
 
-1. Trong F2, gán lại `scene = {}`. Cube nhảy về preset mỗi lần chuyển GPU.
-2. Tạo/destroy `GpuCubeRenderer` trong nhánh F2. Nhấn phím nhanh làm allocation/resource churn và mở đường cho use-after-destroy.
-3. Để tái hiện lỗi resize một cách có chủ đích, tạm chuyển khối chuẩn bị `cpuFramebuffer` và `cpuPresenter` vào riêng nhánh CPU. Sau đó resize khi đang ở GPU rồi bấm F1: texture cũ không khớp framebuffer mới. Đưa khối này trở lại trước nhánh chọn renderer ngay sau khi quan sát xong.
+Đặt `scene = {}` trong nhánh F2 của một bản thử. Làm lại chuỗi trên để thấy vì sao “cả hai bên đều vẽ được” chưa đủ. Khôi phục nhánh chỉ sửa enum.
 
-Hoàn tác lỗi, thực hiện lại chuỗi F1 → resize → F2 → drag → F1.
+Thử gọi `initialize` mỗi lần chọn model và log IDs của VBO/VAO. Bạn sẽ thấy tài nguyên bị tạo lại. Khôi phục cache một lần; bài cuối sẽ kiểm các IDs qua switch, resize và đổi mesh.
 
 ## Tự kiểm tra kết quả
 
-- [ ] F1/F2 không sửa `CubeScene`.
-- [ ] Pause, N và drag chạy trước nhánh renderer.
-- [ ] Resources được tạo một lần, không theo keypress.
-- [ ] Resize ở backend nào cũng chuẩn bị đúng dimensions cho backend kia.
-- [ ] F1/F2 không làm cube nhảy orientation.
-
-Hãy dự đoán điều sẽ xảy ra nếu mỗi backend giữ `previousTicks` riêng: khi quay lại backend lâu không active, delta có thể nhảy lớn.
+- [ ] F1/F2 không sửa bất kỳ camera/model/light/visibility value nào.
+- [ ] Không nạp lại OBJ hoặc upload mesh khi switch.
+- [ ] Kéo model và camera là hai chế độ riêng; pan/zoom vẫn dùng được ở hai backend.
+- [ ] Escape hủy kéo, thả đúng nút kết thúc kéo, focus loss nhả capture.
+- [ ] N tiến 10° khi pause; R giữ model/backend; Home chỉ reset camera.
+- [ ] Resize cập nhật viewport, aspect, CPU storage và texture allocation cùng kích thước pixel.
 
 ## Bài tập mở rộng
 
-1. Thêm phím Tab đổi backend qua enum helper mà không nhân đôi logic F1/F2.
-2. Ghi một scene fingerprint từ angle/depth/culling trước và sau switch.
-3. Thiết kế API `render(const FrameInput&)` nếu sau này thêm renderer thứ ba.
+1. Thêm preset camera front/back mà không sửa model pose.
+2. Ghi resource IDs sau startup và sau một chuỗi thao tác, dự đoán ID nào phải giữ nguyên và storage nào được resize.
 
-Bài cuối đóng validation, cleanup và toàn bộ source chạy được.
+Tiếp theo: [đối chiếu, đo thời gian và hoàn thiện viewer](./09-hoan-thien-dual-renderer-cube).

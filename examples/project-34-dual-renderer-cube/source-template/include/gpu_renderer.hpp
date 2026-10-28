@@ -53,7 +53,7 @@ inline GLuint compileShader(GlApi& api, GLenum type, const char* source, const c
     return 0U;
 }
 
-inline GLuint createProgram(GlApi& api, const char* vertexSource, const char* fragmentSource, std::string& diagnostics) {
+inline GLuint createProgram(GlApi& api, const char* vertexSource, const char* fragmentSource, std::string& diagnostics, const char* feedbackVarying = nullptr) {
     const GLuint vertexShader = compileShader(api, GL_VERTEX_SHADER, vertexSource, "vertex shader", diagnostics);
     if (vertexShader == 0U) {
         return 0U;
@@ -72,6 +72,9 @@ inline GLuint createProgram(GlApi& api, const char* vertexSource, const char* fr
     }
     api.AttachShader(program, vertexShader);
     api.AttachShader(program, fragmentShader);
+    if (feedbackVarying) {
+        api.TransformFeedbackVaryings(program, 1, &feedbackVarying, GL_INTERLEAVED_ATTRIBS);
+    }
     api.LinkProgram(program);
     api.DeleteShader(vertexShader);
     api.DeleteShader(fragmentShader);
@@ -118,111 +121,6 @@ void main() {
 }
 )glsl";
 
-#if LAB_CHECKPOINT >= 4
-inline constexpr const char* kCubeVertexShader = R"glsl(#version 330 core
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec3 aColor;
-
-uniform mat4 uMvp;
-out vec3 vColor;
-
-void main() {
-    gl_Position = uMvp * vec4(aPosition, 1.0);
-    vColor = aColor;
-}
-)glsl";
-
-inline constexpr const char* kCubeFragmentShader = R"glsl(#version 330 core
-in vec3 vColor;
-out vec4 fragmentColor;
-
-void main() {
-    fragmentColor = vec4(vColor, 1.0);
-}
-)glsl";
-
-struct GpuCubeRenderer {
-    GLuint program{};
-    GLuint vertexArray{};
-    GLuint vertexBuffer{};
-    GLuint elementBuffer{};
-    GLint mvpLocation{-1};
-
-    bool initialize(GlApi& api, std::string& diagnostics) {
-        program = createProgram(api, kCubeVertexShader, kCubeFragmentShader, diagnostics);
-        if (program == 0U) {
-            return false;
-        }
-        mvpLocation = api.GetUniformLocation(program, "uMvp");
-        if (mvpLocation < 0) {
-            diagnostics = "cube program is missing uMvp";
-            return false;
-        }
-
-        api.GenVertexArrays(1, &vertexArray);
-        api.GenBuffers(1, &vertexBuffer);
-        api.GenBuffers(1, &elementBuffer);
-        if (vertexArray == 0U || vertexBuffer == 0U || elementBuffer == 0U) {
-            diagnostics = "VBO, EBO or VAO creation returned 0";
-            return false;
-        }
-
-        api.BindVertexArray(vertexArray);
-        api.BindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
-        api.BufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(kCubeVertices)), kCubeVertices.data(), GL_STATIC_DRAW);
-        api.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, elementBuffer);
-        api.BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(sizeof(kCubeIndices)), kCubeIndices.data(), GL_STATIC_DRAW);
-        api.EnableVertexAttribArray(0U);
-        api.VertexAttribPointer(0U, 3, GL_FLOAT, GL_FALSE, GLsizei(sizeof(GpuCubeVertex)), reinterpret_cast<const void*>(offsetof(GpuCubeVertex, positionX)));
-        api.EnableVertexAttribArray(1U);
-        api.VertexAttribPointer(1U, 3, GL_FLOAT, GL_FALSE, GLsizei(sizeof(GpuCubeVertex)), reinterpret_cast<const void*>(offsetof(GpuCubeVertex, red)));
-        api.BindVertexArray(0U);
-        api.BindBuffer(GL_ARRAY_BUFFER, 0U);
-        return api.GetError() == GL_NO_ERROR;
-    }
-
-    void draw(GlApi& api, const Mat4& mvp, bool depthEnabled, bool cullingEnabled) const {
-        if (depthEnabled) {
-            api.Enable(GL_DEPTH_TEST);
-            api.DepthFunc(GL_LESS);
-        } else {
-            api.Disable(GL_DEPTH_TEST);
-        }
-        if (cullingEnabled) {
-            api.Enable(GL_CULL_FACE);
-            api.CullFace(GL_BACK);
-            api.FrontFace(GL_CCW);
-        } else {
-            api.Disable(GL_CULL_FACE);
-        }
-        api.UseProgram(program);
-        api.UniformMatrix4fv(mvpLocation, 1, GL_FALSE, mvp.values.data());
-        api.BindVertexArray(vertexArray);
-        api.DrawElements(GL_TRIANGLES, GLsizei(kCubeIndices.size()), GL_UNSIGNED_INT, nullptr);
-        api.BindVertexArray(0U);
-    }
-
-    void destroy(GlApi& api) {
-        if (elementBuffer != 0U) {
-            api.DeleteBuffers(1, &elementBuffer);
-            elementBuffer = 0U;
-        }
-        if (vertexBuffer != 0U) {
-            api.DeleteBuffers(1, &vertexBuffer);
-            vertexBuffer = 0U;
-        }
-        if (vertexArray != 0U) {
-            api.DeleteVertexArrays(1, &vertexArray);
-            vertexArray = 0U;
-        }
-        if (program != 0U) {
-            api.DeleteProgram(program);
-            program = 0U;
-        }
-    }
-};
-#endif
-
 #if LAB_CHECKPOINT >= 3
 // CPU presenter chỉ upload framebuffer đã rasterize; nó không sở hữu mesh hay depth test.
 struct CpuTexturePresenter {
@@ -240,6 +138,8 @@ struct CpuTexturePresenter {
         }
         textureLocation = api.GetUniformLocation(program, "uTexture");
         api.GenVertexArrays(1, &vertexArray);
+        api.BindVertexArray(vertexArray);
+        api.BindVertexArray(0U);
         api.GenTextures(1, &texture);
         api.BindTexture(GL_TEXTURE_2D, texture);
         api.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);

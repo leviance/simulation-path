@@ -1,97 +1,132 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Khóa một CubeScene dùng chung
+# Mở lại model viewer, tách scene khỏi renderer
 
 ## Vấn đề cần giải quyết
 
-Ta đã có CPU cube ở Project 17 và một OpenGL triangle ở Project 33. Cách ghép nhanh nhất là chép cả hai chương trình vào một file, giữ `cpuAngle` bên này và `gpuAngle` bên kia. Cách đó có thể cho ra hai hình giống nhau ở frame đầu, nhưng chỉ cần pause, drag hoặc resize là state bắt đầu trôi.
+Ở Project 21, ta đã có viewer đọc OBJ và tự vẽ từng tam giác bằng CPU. Project 33 cho ta bộ khung OpenGL. Bây giờ cần ghép hai phần ấy thành **một viewer**, không phải hai chương trình cùng vẽ cube.
 
-Project 34 chọn cấu trúc ngược lại: **scene tồn tại trước renderer**. CPU và GPU chỉ là hai backend cùng đọc một snapshot. Vì vậy bài đầu chưa vội upload cube; ta khóa ownership để những bài sau không phải chữa một thiết kế sai từ gốc.
+Bạn đang nhìn phía sau tên lửa, đã zoom gần và kéo camera sang phải. Nhấn F2 để xem GPU vẽ thế nào mà mô hình quay về tư thế ban đầu thì việc so sánh gần như mất ý nghĩa. Trước khi viết GPU renderer, ta cần biết dữ liệu nào phải giữ nguyên khi đổi backend.
+
+Sản phẩm cuối phải xem được rocket và sphere 2.976 tam giác từ Project 21. Cube chỉ là fixture tìm lỗi. Bạn có thể thử tự làm theo đề bài ở trang tổng quan trước khi đọc tiếp.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một frame được đọc theo thứ tự:
+Một frame làm bốn việc theo thứ tự: đọc input, cập nhật scene, vẽ scene, rồi present. Chỉ việc vẽ được chọn giữa CPU và GPU.
 
-```text
-input → update CubeScene → chọn RendererKind → render cùng snapshot → present
-```
-
-`CubeScene` giữ dữ liệu mô tả thế giới: góc xoay và hai visibility options. OpenGL handles, CPU framebuffer, shader program hay texture presenter thuộc backend, không thuộc scene. F1/F2 chỉ được phép đổi lựa chọn backend.
+`ViewerScene` mô tả đang xem gì và xem thế nào: model, camera, góc quay, ánh sáng và tùy chọn hiển thị. Texture, VBO/EBO/VAO và framebuffer lại là công cụ của renderer. Đặt chúng ngoài scene giúp ta đổi cách vẽ mà không thay cảnh.
 
 <InteractiveLab demo="dual-renderer-cube" mode="shared-scene" />
 
+Chọn sphere, đổi góc nhìn rồi nhấn F1/F2. Tư thế không đổi vì backend là lựa chọn riêng. Canvas chỉ minh họa cách tổ chức state; chưa chứng minh OpenGL thật đã vẽ đúng.
+
 ## Viết code từng bước
 
-### Bước 1 — Đặt tên rõ hai backend
+### 1. Chạy bộ khung SDL/OpenGL trước
 
-```cpp title="include/pipeline.hpp — RendererKind"
+Giải nén ZIP và mở terminal tại thư mục có `CMakeLists.txt`. Source không cần include hoặc link sang Project 21. Starter giữ context và function loader đã học ở Project 33:
+
+```cpp title="include/viewer-bootstrap.hpp —     SDL_GL_SetAttribute"
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+if (finite) {
+    flags |= SDL_WINDOW_HIDDEN;
+}
+SDL_Window* window = SDL_CreateWindow("P34 - Viewer foundation", 960, 640, flags);
+SDL_GLContext context = window ? SDL_GL_CreateContext(window) : nullptr;
+```
+
+Các thuộc tính phải được đặt trước khi tạo context. Window cần `SDL_WINDOW_OPENGL`; `SDL_WINDOW_HIGH_PIXEL_DENSITY` cho phép framebuffer có nhiều pixel hơn kích thước logical. Sau khi tạo context, make-current rồi mới load function pointers. Starter có sẵn đường báo lỗi và cleanup để bạn kiểm phần này trước.
+
+### 2. Đặt tên rõ hai lựa chọn
+
+```cpp title="include/pipeline.hpp — enum class RendererKind"
 enum class RendererKind {
     cpu,
     gpu,
 };
 ```
 
-Enum giúp call site đọc thành `RendererKind::cpu`, thay vì một bool tên `useGpu` mà `true/false` rất dễ bị hiểu ngược khi code lớn dần.
+`RendererKind` là biến lựa chọn của ứng dụng. Nó không cần sở hữu một camera hay bản sao góc quay.
 
-### Bước 2 — Scene không biết renderer là ai
+### 3. Mang state từ model viewer sang
 
-```cpp title="include/pipeline.hpp — CubeScene"
-struct CubeScene {
-    float angleX{-0.42F};
-    float angleY{0.68F};
-    bool depthEnabled{true};
-    bool cullingEnabled{true};
+```cpp title="include/viewer-scene.hpp — struct ViewerState"
+struct ViewerState {
+    double angleX{-0.35};
+    double angleY{0.65};
+    double cameraYaw{};
+    double cameraPitch{};
+    double distance{4.2};
+    bool cameraDrag{};
+    bool paused{true};
+    bool wireframe{};
+    bool normals{};
+    bool cullBackfaces{true};
+    bool reverseOrder{};
+    bool debug{true};
+    bool grid{true};
+
+    bool operator==(const ViewerState&) const = default;
 };
 ```
 
-Không có `GLuint`, `SDL_Texture*` hay `Framebuffer*` trong struct. Hai backend sẽ nhận `const CubeScene&`; renderer không được tự tăng angle trong lúc vẽ.
+`angleX/angleY` quay model; `cameraYaw/cameraPitch` thay vị trí quan sát. Hai thao tác nhìn có vẻ giống nhau khi chỉ có một vật, nhưng sửa hai phép biến đổi khác nhau. `paused` bắt đầu bằng true để người học quan sát ảnh đứng yên.
 
-### Bước 3 — Label cũng đi từ enum
+```cpp title="include/viewer-scene.hpp — struct ViewerScene"
+struct ViewerScene {
+    ViewerState view{};
+    std::size_t meshIndex{};
+    float targetX{}, targetY{}, targetZ{};
+    float verticalFov{std::numbers::pi_v<float> / 3};
+    float nearPlane{0.2F};
+    float farPlane{50};
+    bool depthEnabled{true};
+    bool lit{true};
+    float lightX{-0.45F}, lightY{0.75F}, lightZ{1};
+    float baseRed{0.28F}, baseGreen{0.64F}, baseBlue{0.91F};
 
-```cpp title="include/pipeline.hpp — rendererLabel"
-inline const char* rendererLabel(RendererKind renderer) {
-    if (renderer == RendererKind::cpu) {
-        return "F1 CPU rasterizer";
-    }
-    return "F2 OpenGL GPU";
-}
+    bool operator==(const ViewerScene&) const = default;
+};
 ```
 
-Đây là code cố ý viết tường minh. Dự án học tập không cần rút thành một ternary khó lướt chỉ để tiết kiệm hai dòng.
+FOV, near/far, pan target và hướng sáng cũng phải dùng chung. Chỉ giữ chung góc quay mà để mỗi backend dùng một FOV khác thì vẫn chưa có phép so đúng. `operator==` giúp test kiểm toàn bộ scene thay vì chỉ nhớ kiểm hai góc.
 
 ## Ghép các phần lại
 
-Starter đã chứa SDL/OpenGL context, loader và swap loop từ Project 33. Checkpoint 1 thêm `CubeScene`, nhận drag để đổi hai góc và hiển thị state trên title bar; chưa có mesh nên cửa sổ chỉ clear background.
+Starter kiểm lifecycle. Checkpoint 01 thêm scene và input; chưa có geometry nên nền trống là đúng ở bước này. Nhấn Right để đổi góc Y, F1/F2 để đổi nhãn backend và R để đặt lại. Quan sát title bar.
 
-```bash title="Terminal — chạy checkpoint 1"
+```bash title="Terminal — starter và checkpoint đầu"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_34_checkpoint_1
+cmake --build build --config Debug --target project_34_starter project_34_checkpoint_1 --parallel 2
+.\build\Debug\project_34_starter.exe --smoke
+.\build\Debug\project_34_checkpoint_1.exe
 ```
 
-Một checkpoint “trống hình” vẫn có mục đích rõ: ta kiểm được input chỉ sửa scene, reset trả scene về đúng preset và lifecycle OpenGL cũ vẫn chạy trước khi thêm geometry.
+Đây là lệnh Visual Studio/Windows. Với generator single-config, executable nằm ngay trong `build`; chọn `-DCMAKE_BUILD_TYPE=Debug` khi configure. Lần đầu cần mạng để tải SDL 3.4.8.
+
+Nếu không tạo được OpenGL 3.3 Core context, xử lý driver hoặc môi trường trước. Không bỏ qua lỗi rồi gọi các function pointer rỗng. Bộ khung chạy được cũng chưa phải sản phẩm cuối: bài 2 nạp mesh, bài 3 mới nối geometry vào cửa sổ.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thêm `float cpuAngle` và `float gpuAngle`, rồi chỉ cập nhật biến của renderer đang active. Đổi F1/F2 vài lần: cube tương lai sẽ nhảy về state cũ.
-2. Đặt `GLuint program` vào `CubeScene`. CTest thuần CPU lập tức phải include OpenGL dù chỉ muốn kiểm angle.
-3. Trong hàm render, tự tăng `scene.angleY`. Khi CPU/GPU được gọi để đối chiếu trong cùng frame, backend chạy sau nhận state khác.
+Trong một bản thử, giữ `cameraDistanceCpu` và `cameraDistanceGpu` riêng, rồi chỉ sửa biến của backend đang chọn. Dự đoán chuỗi F1 → đổi khoảng cách → F2 → F1 sẽ giữ được góc nhìn không.
 
-Sau mỗi thử nghiệm, hoàn tác thay đổi rồi build lại checkpoint.
+Bạn chưa cần vẽ model để thấy state đã tách làm hai. Xóa hai biến thử và đưa camera về một nơi. Đừng tạo lại `ViewerScene` trong nhánh xử lý F1/F2.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Starter và checkpoint 1 đều tạo/destroy context sạch.
-- [ ] Drag thay đổi `angleX/angleY`; R trả đúng preset.
-- [ ] `CubeScene` không chứa handle hoặc pointer của backend.
-- [ ] `RendererKind` là state riêng, chưa khiến scene bị nhân đôi.
-- [ ] Bạn giải thích được vì sao update phải diễn ra trước nhánh render.
-
-Trước khi đánh dấu hoàn thành, hãy dự đoán điều sẽ xảy ra nếu renderer được đổi giữa hai lần update trong cùng frame, rồi đối chiếu với pipeline text phía trên.
+- [ ] Starter chạy `--smoke` rồi tự thoát.
+- [ ] Right, F1/F2 và R của checkpoint 01 đổi đúng thông tin trên title bar.
+- [ ] `ViewerScene` không có GLuint, SDL pointer hay framebuffer.
+- [ ] Đổi backend không sửa camera, model hoặc ánh sáng.
+- [ ] Đóng window không gọi OpenGL sau khi context đã hủy.
 
 ## Bài tập mở rộng
 
-1. Thêm `wireframeEnabled` vào scene trên giấy và chỉ ra backend nào sẽ diễn giải option đó.
-2. Viết hàm so sánh hai `CubeScene` không phụ thuộc renderer.
-3. Giải thích vì sao framebuffer size là input của frame nhưng không nhất thiết là dữ liệu bền vững trong scene.
+1. Thêm màu nền vào scene, giải thích vì sao nó khác với handle của texture.
+2. In toàn bộ camera ra terminal rồi đổi backend, xác nhận các số giữ nguyên.
 
-Bài tiếp theo tạo một indexed cube duy nhất để cả CPU và GPU cùng đọc.
+Tiếp theo: [dùng lại OBJ và chuẩn bị mesh chung](./02-xay-indexed-cube-mesh).

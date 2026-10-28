@@ -1,117 +1,178 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Hoàn thiện Dual Renderer Cube
+# Đối chiếu, đo thời gian và hoàn thiện viewer
 
 ## Vấn đề cần giải quyết
 
-Một cube chuyển được F1/F2 chưa đủ để gọi là project hoàn chỉnh. Ta còn phải biết mesh có valid không, matrix trace hữu hạn không, depth có thật sự loại phụ thuộc order không, culling có giữ mặt trước không và cleanup có chạy khi context còn sống không.
+Đến đây ta có một model viewer với hai cách vẽ. Nhưng một ảnh nhìn gần giống nhau không chứng minh matrix, depth, clipping hoặc cleanup đều đúng. Số FPS cao hơn cũng chưa nói được phần nào nhanh hơn.
 
-Bài cuối không thêm hiệu ứng. Nó biến những giả định đó thành named validation, chạy CTest không cần GPU và cung cấp trọn source để bạn có thể tải về, build rồi sửa tiếp.
+Bài cuối hoàn thiện HUD, phép kiểm hữu hạn và benchmark có phạm vi rõ. Mã hoàn chỉnh cùng dataset nằm bên dưới bài và trong ZIP; không cần ghép lại các đoạn code của chín bài.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Validation được chia hai tầng:
+Ta tách bốn loại bằng chứng:
 
-- CTest CPU thuần khóa mesh, Mat4, raster/depth/culling và scene ownership.
-- Runtime dùng OpenGL thật để compile shader, tạo buffers, draw, resize và cleanup.
+| Lớp kiểm | Kiểm được gì | Không thay thế được gì |
+| --- | --- | --- |
+| CTest CPU | Parser, mesh, math, clipping, raster/depth | Driver, shader thật, thao tác desktop |
+| `--verify` OpenGL | Vertex shader, ảnh màu/depth, switch/resize/resource | Trải nghiệm kéo, focus và bàn phím thực |
+| Desktop | Camera, controls, HUD, resize, cleanup khi đóng | Phép đo hiệu năng tái lập |
+| `--benchmark` Release | Các phạm vi thời gian của cùng scene | Kết luận cho mọi máy hoặc một speedup chung |
 
-Hai tầng bổ sung nhau. CTest không thể chứng minh driver chấp nhận shader; nhìn cửa sổ không thể chứng minh triangle order independence ở mọi lần chạy.
+Canvas là trợ giảng TypeScript/Canvas 2D. Không dùng số trên Canvas để kết luận GPU hay để chứng nhận OpenGL đã qua kiểm.
 
 <InteractiveLab demo="dual-renderer-cube" mode="cube-validation" />
 
 ## Viết code từng bước
 
-### Bước 1 — Report giữ từng invariant có tên
+### 1. Kiểm toàn bộ scene và pipeline CPU
 
-```cpp title="include/pipeline.hpp — DualRendererValidationReport"
-struct DualRendererValidationReport {
-    bool vertexLayout{};
-    bool indexBounds{};
-    bool finiteClipCoordinates{};
-    bool depthOrderIndependent{};
-    bool cullingRemovesTriangles{};
-    bool deterministicCpuFrame{};
-    bool rendererSwitchPreservesScene{};
+`tests/tests.cpp` dùng runner tường minh, không dùng assert bị tắt bởi NDEBUG. Tests nạp ba asset thật, kiểm normalization/index/normal, camera orbit/pan/zoom, sáu mặt clip, near/eye crossing, culling và ảnh không phụ thuộc draw order khi depth bật.
+
+Có cả test làm hỏng màu/depth trong vùng nội thất để chắc bộ so không vô tình chấp nhận ảnh sai.
+
+### 2. Đọc kết quả vertex shader thực
+
+`verifyViewerVertexTrace` link một program từ **cùng vertex shader** với transform feedback cho `gl_Position`. Nó draw points từ cùng VAO, đọc clip coordinates về và kiểm ba vertex mẫu mỗi mesh.
+
+C++/GPU clip sai số tối đa $2\times10^{-5}$; screen tối đa 0,01 pixel, depth $10^{-5}$. NDC được tính từ clip/w. Vertex có w quá gần 0 không được chia để tạo số vô hạn. Đây là phép kiểm phần cứng, không phải chạy cùng một hàm C++ hai lần rồi gọi một bên là GPU.
+
+### 3. Công bố phép so ảnh trước khi chạy
+
+```cpp title="include/viewer-comparison.hpp — struct ViewerComparison"
+struct ViewerComparison {
+    std::size_t interiorFailures{}, edgeDifferences{}, interiorCovered{}, edgePixels{};
+    float maxInteriorDepthError{};
+    bool passed(std::size_t pixelCount) const {
+        return interiorFailures == 0 && edgeDifferences <= std::max(std::size_t(8), pixelCount / 200);
+    }
 };
 ```
 
-Nếu title báo INVALID, debugger có thể mở report và thấy đúng field thất bại; không cần đoán một bool tổng hợp che mất nguyên nhân.
+Ở ảnh solid, tắt grid/wireframe/normals. Bộ so dùng cùng viewport và đảo hàng readback OpenGL về top-left. Ngoài dải cách cạnh tam giác tối đa 1,5 pixel:
 
-### Bước 2 — Test switching mà không cần renderer thật
+- Coverage phải giống.
+- RGB lệch không quá 3 đơn vị trên 255.
+- Window depth lệch không quá $2\times10^{-5}$, không có NaN.
+- Pixel nền cũng phải đúng; không chỉ kiểm phần model.
 
-```cpp title="include/pipeline.hpp — renderer switch giữ scene"
-const CubeScene beforeSwitch = scene;
-RendererKind renderer = RendererKind::cpu;
-renderer = RendererKind::gpu;
-static_cast<void>(renderer);
-report.rendererSwitchPreservesScene = beforeSwitch.angleX == scene.angleX && beforeSwitch.angleY == scene.angleY && beforeSwitch.depthEnabled == scene.depthEnabled && beforeSwitch.cullingEnabled == scene.cullingEnabled;
+Trong dải cạnh, cho phép sai khác rasterization nhưng tổng pixel khác vẫn không vượt max(8; 0,5% số pixel ảnh). Báo riêng số interior failures, interior covered và edge differences. Dải được lập từ các cạnh tam giác sau clipping, không tìm vùng sai rồi tự nới mask.
+
+Fixture riêng kiểm CCW/CW và tam giác vượt near/eye. Các mesh thật còn được xem từ phía sau, tắt depth và đảo order để kiểm hai phía làm cùng thí nghiệm.
+
+### 4. Kiểm vòng đời qua chuỗi thao tác
+
+`--verify` đổi backend 24 lần, sau lần thứ 20 resize window rồi chọn lần lượt ba model đã cache. Nó dùng cùng `ViewerBackends::render` như app; kiểm scene không đổi và IDs buffer/VAO/program/texture vẫn giữ nguyên.
+
+Sau đó destroy resources khi context còn current và dùng glIsBuffer/glIsVertexArray/glIsProgram/glIsTexture kiểm chúng không còn sống. Không chỉ kiểm “handle đã gán 0” trong C++.
+
+### 5. Đo đúng phạm vi, không đặt tên GPU cho CPU timer
+
+```cpp title="include/viewer-timing.hpp — struct ViewerFrameStats"
+struct ViewerFrameStats {
+    double prepareMs{}, cpuRenderMs{}, uploadMs{}, submitMs{}, presentMs{}, frameMs{};
+    bool cpuPathExecuted{};
+    std::uint64_t frame{};
+};
 ```
 
-Test này khóa ownership: đổi backend selection không được có side effect lên scene.
+HUD hiển thị các stage CPU của frame trước, gồm prepare, CPU geometry, upload, submission, presentation và frame wall. Ở GPU mode, CPU geometry/upload ghi “--” vì không chạy, không phải bằng 0.
 
-### Bước 3 — Destroy resource theo thứ tự ngược lúc tạo
+GPU geometry dùng GL_TIME_ELAPSED. Kết quả có thể đến sau vài frame nên phải gắn frame ID:
 
-```cpp title="src/main.cpp — cleanup final"
-gpuRenderer.destroy(gl);
-cpuPresenter.destroy(gl);
-destroyWindowAndContext(window, context);
+```cpp title="include/viewer-timing.hpp —     void poll"
+void poll(GlApi& gl) {
+    if (!supported)
+        return;
+    for (std::size_t index = 0; index < queries.size(); ++index) {
+        if (!pending[index])
+            continue;
+        GLint ready = GL_FALSE;
+        gl.GetQueryObjectiv(queries[index], GL_QUERY_RESULT_AVAILABLE, &ready);
+        if (ready != GL_TRUE)
+            continue;
+        GLuint64 elapsed = 0;
+        gl.GetQueryObjectui64v(queries[index], GL_QUERY_RESULT, &elapsed);
+        if (!hasSample || frames[index] >= sampleFrame) {
+            milliseconds = double(elapsed) / 1'000'000;
+            sampleFrame = frames[index];
+            hasSample = true;
+        }
+        pending[index] = false;
+    }
+}
 ```
 
-EBO, VBO, VAO, shader program và texture cần context current. Sau khi context chết, không được gọi function pointer OpenGL thêm lần nào.
+Chỉ đọc GL_QUERY_RESULT sau khi GL_QUERY_RESULT_AVAILABLE báo sẵn. Chưa có mẫu hoặc không hỗ trợ thì hiển thị pending/unavailable. Không chờ query trong vòng tương tác để ép HUD có số ngay.
+
+Benchmark riêng cố định scene và viewport 640×480, xác nhận VSync=0, có 3 lượt warm-up và 12 mẫu. Nó glFinish trước swap một cách có chủ đích, ghi riêng CPU sync wait. Không chép glFinish vào vòng lặp tương tác.
+
+Cột CPU submission chỉ là thời gian CPU gửi lệnh; GPU geometry là thời gian GPU thực thi geometry trong query. CPU mode vẫn có texture upload/presenter. Hai cột ấy khác công việc, vì vậy report **không tính một tỉ số speedup**.
 
 ## Ghép các phần lại
 
-Build và test cả hai cấu hình:
+### Build và CTest
 
-```bash title="Terminal — nghiệm thu Debug"
+```bash title="Terminal — Debug"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug
+cmake --build build --config Debug --parallel 2
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
 ```
 
-```bash title="Terminal — nghiệm thu Release"
-cmake --build build --config Release
+```bash title="Terminal — Release"
+cmake --build build --config Release --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
-Chạy `project_34_final`, thử F1/F2 khi pause và khi animation đang chạy, drag, N, D, C, resize, reset rồi Esc.
+Với single-config, dùng hai build directory riêng có CMAKE_BUILD_TYPE tương ứng. CMake mặc định FetchContent SDL 3.4.8, link SDL3::SDL3; không cần cài SDL trước. Máy chạy vẫn cần driver OpenGL 3.3 Core. CTest không tạo window.
 
-## Source hoàn chỉnh gồm những gì?
+### OpenGL verification và đo hữu hạn
 
-- `include/pipeline.hpp`: scene, indexed mesh, column-major Mat4, CPU raster/depth/culling và validation.
-- `include/gl_api.hpp`: function pointers cần cho shader, buffers, textures, depth và culling.
-- `include/gpu_renderer.hpp`: shader compiler, VBO/EBO/VAO cube renderer và CPU texture presenter.
-- `src/main.cpp`: SDL/OpenGL lifecycle, shared input/update, F1/F2 render branch và cleanup.
-- `tests/tests.cpp`: CTest hữu hạn, không mở window.
+```bash title="Terminal — phần cứng thật"
+.\build\Release\project_34_final.exe --verify
+.\build\Release\project_34_final.exe --mesh 2 --benchmark
+.\build\Release\project_34_final.exe --mesh 2 --capture sphere.bmp
+```
 
-Phần “Mã hoàn chỉnh” bên dưới lấy trực tiếp từ final checkpoint và giống source trong ZIP.
+`--verify` và `--benchmark` có deadline nội bộ 15 giây; nên chạy qua process supervisor/watchdog bên ngoài với timeout 30 giây để chặn cả trường hợp driver bị treo. `--smoke`/`--capture` kết thúc sau bốn frame và có deadline 10 giây. Không chạy GUI bằng CTest.
+
+Ghi driver, GPU, build config, resolution, VSync/sync, số mẫu cùng kết quả. Nếu thiếu query, cột GPU ghi unavailable; không suy nó từ thời gian glDrawElements. Kết quả của một máy không chứng nhận mọi hệ điều hành/GPU.
+
+### Mã hoàn chỉnh và ZIP
+
+Phần **Mã hoàn chỉnh** bên dưới lấy source final chuẩn. Các nhóm file gồm:
+
+- `obj21/` và `viewer-mesh.hpp`: parser, chuẩn hóa, indexed mesh.
+- `pipeline.hpp` và `viewer-scene.hpp`: math/framebuffer, camera và state chung.
+- `viewer-cpu.hpp`, `viewer-gpu.hpp`, `gpu_renderer.hpp`: hai renderer và presenter.
+- `viewer-backends.hpp`, `viewer-application.hpp`, `viewer-bootstrap.hpp`: resource ownership, loop/input và các bước đầu.
+- `viewer-comparison.hpp`, `viewer-fixtures.hpp`, `viewer-validation.hpp`: phép đối chiếu có dung sai.
+- `viewer-timing.hpp`, `viewer-benchmark.hpp`, `viewer-hud.hpp`: thống kê có tên rõ.
+- `gl_api.hpp`, `src/main.cpp`, `tests/tests.cpp`, CMake và README.
+
+ZIP có assets và LICENSE, starter, chín checkpoint, final và tests. Không cần thư mục source của các project khác để chạy.
 
 ## Thử làm sai để hiểu đúng
 
-1. Destroy context trước `gpuRenderer.destroy`. Resource cleanup mất context hợp lệ.
-2. Bỏ test reversed triangle order. Một regression depth có thể lọt qua vì default order vô tình đẹp.
-3. Chỉ build Debug. Shader runtime path và warning/optimization của Release chưa được kiểm.
-4. Gộp mọi field validation thành `bool valid` ngay khi tính. Khi lỗi xuất hiện, bạn mất tên invariant.
+Đổi một hệ số projection chỉ ở GPU: vertex trace phải thất bại. Khôi phục rồi đổi depth compare: image/depth fixture phải bắt được. Tiếp đó thử tạo lại một VBO khi đổi model: resource check phải phát hiện. Khôi phục từng thay đổi trước khi thử lỗi tiếp theo.
 
-Hoàn tác thay đổi và chạy lại cả CTest lẫn final app.
+Không chỉnh tolerance để biến ảnh sai thành pass. Nếu chỉ khác ở cạnh, kiểm dải cạnh cố định; nếu có interior failure, tìm matrix, clipping, shading hoặc depth đã lệch.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Starter, chín checkpoints và final đều build độc lập.
-- [ ] Mesh/index/matrix/depth/culling tests đều có tên và đạt.
-- [ ] F1/F2 giữ scene state qua animation, drag và resize.
-- [ ] CPU/GPU cùng depth và culling options.
-- [ ] Shader errors luôn có diagnostics.
-- [ ] GPU resources được destroy trước context.
-- [ ] Source final có comment và khoảng trắng giữa các khối logic.
-- [ ] ZIP chứa README, starter, checkpoints, final và tests.
-
-Trước khi kết thúc, hãy dự đoán điều sẽ xảy ra nếu Project 35 reload shader nhưng vô tình tạo một scene mới; bài F1/F2 hiện tại cho bạn contract để ngăn lỗi đó.
+- [ ] Starter, chín checkpoint và final build Debug/Release, CTest đạt.
+- [ ] Rocket và sphere dùng được ở cả CPU/GPU, không giảm về cube.
+- [ ] Orbit/pan/zoom/lighting/culling/model giữ nguyên qua F1/F2.
+- [ ] --verify qua trace, ảnh/depth, fixture, 24 switch, resize/model và resource cleanup.
+- [ ] Desktop được kiểm riêng: drag, focus, keyboard, pause/step và resize.
+- [ ] Benchmark dùng frozen scene/resolution/sync; không gọi CPU submit là GPU execution.
+- [ ] HUD không che model, query có frame ID và unavailable khi không đo được.
+- [ ] ZIP và source hiển thị cùng nội dung, có dataset và giấy phép.
 
 ## Bài tập mở rộng
 
-1. Thêm screenshot-diff thủ công ở ba preset, nhưng loại edge pixels khỏi pass/fail.
-2. Thêm renderer interface mỏng mà không dùng inheritance nếu hai backend chỉ cần một hàm render.
-3. Ghi OpenGL vendor/version và framebuffer density vào report tái lập.
+1. Thêm một OBJ của bạn, giữ cùng chuẩn hóa và phép so; báo cả trường hợp model bị cắt gần.
+2. Thêm non-uniform scale rồi triển khai normal matrix ở cả CPU/GPU, viết test trước khi so ảnh.
+3. Ghi nhiều lượt benchmark Release và độ phân tán, không chỉ chọn lượt đẹp nhất.
 
-Project 35 sẽ giữ nguyên cube/scene contract và mở một shader lab: sửa GLSL, compile lại rồi quan sát kết quả mà không phá resource đang chạy.
+[Project 35: phòng thí nghiệm shader](/projects/shader-hot-reload-lab) sẽ mở rộng việc sửa và nạp lại GLSL. Hãy giữ thói quen tách scene khỏi resource: shader lỗi không được kéo theo việc reset model/camera.

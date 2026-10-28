@@ -2,56 +2,56 @@ import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
   base: {
-    label: "DUAL RENDERER CUBE LAB",
-    title: "F1 và F2 có thực sự vẽ cùng một scene không?",
+    label: "CPU / GPU MODEL VIEWER LAB",
+    title: "Cùng một mô hình, đổi renderer mà không đổi cảnh",
     description:
-      "Xoay một indexed cube, chuyển CPU/GPU và theo dõi cùng mesh, MVP, depth cùng culling contract qua hai pipeline.",
+      "Dùng lại rocket và sphere Project 21 để quan sát mesh, camera, clipping, depth và ánh sáng. Canvas 2D minh họa công thức; bản C++ thực hiện OpenGL và phép đối chiếu phần cứng.",
   },
   modes: {
     "shared-scene": {
-      title: "State nào thuộc scene, state nào thuộc renderer?",
+      title: "Mở lại model viewer, tách scene khỏi renderer",
       description:
-        "Đổi F1/F2 khi đang xoay và kiểm angle, depth cùng culling không bị reset hoặc nhân đôi.",
+        "Khởi động bộ khung SDL/OpenGL đã biết, đặt camera, mô hình và tùy chọn hiển thị vào một ViewerScene không chứa tài nguyên backend.",
     },
     "indexed-mesh": {
-      title: "Vì sao cube có 24 vertices nhưng chỉ tám vị trí hình học?",
+      title: "Dùng lại OBJ và chuẩn bị một mesh chung",
       description:
-        "Mỗi mặt giữ màu riêng và tái sử dụng bốn vertices qua sáu indices, tổng cộng 36 indices cho 12 triangles.",
+        "Dùng nguyên loader và dataset Project 21; chuẩn hóa mesh, tạo normal phẳng và tách vertex tại cạnh cứng để CPU/GPU đọc cùng dữ liệu.",
     },
     "cpu-path": {
-      title: "CPU renderer biến shared mesh thành RGBA8 thế nào?",
+      title: "Giữ nguyên pipeline CPU cho mesh thật",
       description:
-        "Theo local → clip → screen, triangle coverage, Z-buffer rồi texture upload mà không sửa scene.",
+        "Nối indexed mesh với transform, clipping sáu mặt, rasterizer và Z-buffer; texture presenter chỉ mang ảnh đã vẽ lên cửa sổ.",
     },
     "gpu-indexed-draw": {
-      title: "VBO, EBO và VAO chia nhau trách nhiệm gì?",
+      title: "Đưa mesh lên GPU bằng VBO và EBO",
       description:
-        "Vertex bytes ở VBO, index bytes ở EBO, attribute/EBO binding ở VAO và draw call chỉ còn topology/count/type.",
+        "Định nghĩa position/normal attributes, upload VBO/EBO một lần, giữ EBO trong VAO và vẽ đủ cả mesh 2.976 tam giác.",
     },
     "mvp-contract": {
-      title: "Cùng 16 floats có tạo cùng clip coordinate không?",
+      title: "Một camera, cùng Model–View–Projection",
       description:
-        "Đọc vertex 0 qua column-major MVP, perspective divide và top-left screen mapping trước khi nhìn cả cube.",
+        "Quy định hệ trục, thứ tự xoay, camera orbit/pan/zoom và projection; truyền đúng 16 float cho C++ lẫn GLSL.",
     },
     "depth-contract": {
-      title: "Z-buffer CPU và GL_DEPTH_TEST cùng quyết định visibility ra sao?",
+      title: "Clipping, depth và winding phải khớp",
       description:
-        "Bật/tắt depth, đảo triangle order và đọc pass/reject để phân biệt geometry order với nearest fragment.",
+        "Cắt trước perspective divide, ánh xạ depth về [0,1], thống nhất LESS và CCW; chủ động tắt depth/culling để tìm lỗi.",
     },
     "culling-contract": {
-      title: "CCW thay đổi dấu thế nào khi CPU screen đảo trục Y?",
+      title: "Chiếu sáng và các chế độ xem mô hình",
       description:
-        "Theo front-facing triangle trước khi normalize raster winding và so với GL_CCW + GL_BACK.",
+        "Dùng cùng normal và ánh sáng Lambert, thêm wireframe, normal vectors và lưới; phân biệt chế độ debug với ảnh dùng để đối chiếu.",
     },
     "renderer-switch": {
-      title: "F1/F2 nên đổi đúng biến nào?",
+      title: "Đổi backend mà không mất trạng thái",
       description:
-        "RendererKind đổi backend của frame hiện tại; mesh, transform, pause, resize và visibility options giữ nguyên.",
+        "Đặt input/update trước render, giữ nguyên scene khi F1/F2, xử lý capture/focus/resize và cache tài nguyên qua nhiều lần đổi backend.",
     },
     "cube-validation": {
-      title: "Hai renderer đã cùng contract và đúng lifecycle chưa?",
+      title: "Đối chiếu, đo thời gian và hoàn thiện viewer",
       description:
-        "Rà mesh bounds, MVP trace, order independence, culling, deterministic frame và cleanup trước Project 35.",
+        "Dùng CPU tests, transform feedback, so ảnh/depth và benchmark hữu hạn; đọc đúng các cột thời gian và tải toàn bộ source chạy độc lập.",
     },
   },
 } satisfies ProjectLabMeta;

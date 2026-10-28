@@ -1,254 +1,278 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/pipeline.hpp",
-  "include/gl_api.hpp",
-  "include/gpu_renderer.hpp",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
   guides: {
     "p34-l01": {
       focus:
-        "Tách scene state khỏi backend state trước khi thêm cube, đồng thời giữ starter SDL/OpenGL có thể build và chạy.",
+        "Khởi động bộ khung SDL/OpenGL đã biết, đặt camera, mô hình và tùy chọn hiển thị vào một ViewerScene không chứa tài nguyên backend.",
       expected:
-        "`CubeScene` chỉ chứa angle/depth/culling; `RendererKind` là lựa chọn độc lập và đổi renderer không sửa scene.",
-      files,
+        "RendererKind là biến riêng. Cả CPU lẫn GPU chỉ đọc const ViewerScene&, không tự cập nhật camera.",
+      files: [
+        "include/viewer-bootstrap.hpp",
+        "include/viewer-scene.hpp",
+        "include/pipeline.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Giữ foundation đã biết",
+          title: "Chạy bộ khung trước",
           explanation:
-            "Context, function loader, error path và swap thuộc starter vì Project 33 đã giải thích chúng. Bài vẫn chỉ rõ file nào được giữ lại thay vì giấu trong framework.",
+            "Starter giữ context/loader từ Project 33. Chạy --smoke để kiểm đường khởi tạo/thoát trước khi thêm geometry.",
         },
         {
-          title: "Đặt scene ở phía trên renderer",
+          title: "Một nơi giữ tư thế",
           explanation:
-            "CPU/GPU nhận `const CubeScene&`; không backend nào sở hữu angle hoặc tự cập nhật transform.",
+            "ViewerState giữ cách điều khiển đã quen ở Project 21; ViewerScene thêm projection, pan target, ánh sáng và model.",
         },
         {
-          title: "Cho lựa chọn backend một kiểu riêng",
+          title: "Tách backend khỏi scene",
           explanation:
-            "`RendererKind` không phải bool mơ hồ. Label F1/F2 và nhánh render đọc cùng enum.",
+            "RendererKind là biến riêng. Cả CPU lẫn GPU chỉ đọc const ViewerScene&, không tự cập nhật camera.",
         },
       ],
     },
     "p34-l02": {
       focus:
-        "Tạo một indexed cube có memory layout, index bounds và winding nhìn thấy được trước VBO/EBO.",
+        "Dùng nguyên loader và dataset Project 21; chuẩn hóa mesh, tạo normal phẳng và tách vertex tại cạnh cứng để CPU/GPU đọc cùng dữ liệu.",
       expected:
-        "Mesh có 24 vertices, 36 valid indices; mỗi mặt dùng bốn vertices cùng màu và hai CCW triangles.",
-      files,
+        "Khóa position+normal xác định vertex. Hai mặt có normal khác nhau không thể dùng chung một vertex dù cùng vị trí.",
+      files: [
+        "include/viewer-mesh.hpp",
+        "include/obj21/obj-parser.hpp",
+        "include/obj21/normalize.hpp",
+      ],
       steps: [
         {
-          title: "Chọn 24 vertices có lý do",
+          title: "Nạp dữ liệu đã biết",
           explanation:
-            "Tám vị trí hình học không đủ khi mỗi mặt cần màu riêng. Tách vertex tại face seam nhưng vẫn tái sử dụng bốn vertices trong hai triangles của mặt.",
+            "Bốn header obj21 và ba dataset được giữ nguyên ngữ nghĩa từ Project 21. Lỗi có chẩn đoán, không biến thành index không hợp lệ.",
         },
         {
-          title: "Khóa struct bằng compile-time checks",
+          title: "Chuẩn hóa và tạo normal",
           explanation:
-            "Sáu float và `offsetof(red)` là contract chung cho CPU array, VBO và VAO attributes.",
+            "Giữ đúng tỉ lệ, đưa tâm về gốc và cạnh dài nhất về 2. Mỗi triangle tạo normal bằng cross product.",
         },
         {
-          title: "Kiểm index trước OpenGL",
+          title: "Chia sẻ vertex đúng chỗ",
           explanation:
-            "CTest bắt out-of-range và count sai bằng CPU; không đợi driver đọc nhầm memory trong draw call.",
+            "Khóa position+normal xác định vertex. Hai mặt có normal khác nhau không thể dùng chung một vertex dù cùng vị trí.",
         },
       ],
     },
     "p34-l03": {
       focus:
-        "Nối shared mesh với CPU transform/raster/depth path và giữ OpenGL texture chỉ là presenter.",
+        "Nối indexed mesh với transform, clipping sáu mặt, rasterizer và Z-buffer; texture presenter chỉ mang ảnh đã vẽ lên cửa sổ.",
       expected:
-        "CPU framebuffer dùng cùng MVP/index order, tạo deterministic RGBA8 và được upload nguyên vẹn lên full-window quad.",
-      files,
+        "Texture upload nằm sau CPU render. Presenter không nhận mesh và không quyết định mặt nào che mặt nào.",
+      files: ["include/viewer-cpu.hpp", "include/pipeline.hpp", "include/gpu_renderer.hpp"],
       steps: [
         {
-          title: "Transform mỗi vertex một lần",
+          title: "Transform rồi clip",
           explanation:
-            "MVP tạo clip coordinate, perspective divide tạo NDC, rồi CPU screen mapping đảo Y có tên rõ ràng.",
+            "Tính clip coordinates một lần mỗi vertex; cắt tam giác theo sáu mặt trước khi chia w.",
         },
         {
-          title: "Raster theo indices",
+          title: "Ghi pixel và depth",
           explanation:
-            "Mỗi ba index chọn một triangle; coverage/depth không biết face được lưu liên tục hay lấy từ EBO.",
+            "Lấy mẫu ở tâm pixel, dùng top-left coverage và LESS; depth tắt cũng không ghi vào depth array.",
         },
         {
-          title: "Tách presenter khỏi renderer",
+          title: "Present ảnh hoàn chỉnh",
           explanation:
-            "CPU hoàn thành color/depth trước upload. Quad shader không biến CPU path thành GPU geometry renderer.",
+            "Texture upload nằm sau CPU render. Presenter không nhận mesh và không quyết định mặt nào che mặt nào.",
         },
       ],
     },
     "p34-l04": {
       focus:
-        "Upload cùng vertex/index arrays vào VBO/EBO, giữ binding đúng VAO và vẽ bằng glDrawElements.",
+        "Định nghĩa position/normal attributes, upload VBO/EBO một lần, giữ EBO trong VAO và vẽ đủ cả mesh 2.976 tam giác.",
       expected:
-        "VAO đọc position/color đúng stride; EBO giữ 36 uint32 indices; one draw call tạo 12 triangles.",
-      files,
+        "DrawElements nhận số index, không phải số triangle. Mesh lớn đi qua đúng nhánh của rocket và cube.",
+      files: ["include/viewer-gpu.hpp", "include/gl_api.hpp", "include/viewer-backends.hpp"],
       steps: [
         {
-          title: "Phân biệt vertex data và element data",
+          title: "Upload một lần",
           explanation:
-            "VBO trả lời vertex nào có bytes gì; EBO trả lời triangle tham chiếu vertex nào và theo thứ tự nào.",
+            "VBO chứa MeshVertex, EBO chứa uint32_t indices; init không được đặt trong vòng lặp frame.",
         },
         {
-          title: "Nhớ EBO thuộc VAO state",
+          title: "Giải thích layout",
           explanation:
-            "Bind EBO khi VAO active và không vô tình detach trước draw. Đây là lỗi phổ biến khiến glDrawElements không có indices.",
+            "Location 0 đọc position, location 1 đọc normal. sizeof và offsetof thay cho offset đoán bằng mắt.",
         },
         {
-          title: "Đọc đủ bốn đối số draw",
+          title: "Draw theo indices",
           explanation:
-            "Topology, count, index type và byte offset phải khớp buffer; `nullptr` nghĩa là offset zero trong EBO, không phải CPU pointer.",
+            "DrawElements nhận số index, không phải số triangle. Mesh lớn đi qua đúng nhánh của rocket và cube.",
         },
       ],
     },
     "p34-l05": {
       focus:
-        "Chứng minh C++ và GLSL cùng column-major MVP bằng trace thay vì sửa transpose theo cảm giác.",
+        "Quy định hệ trục, thứ tự xoay, camera orbit/pan/zoom và projection; truyền đúng 16 float cho C++ lẫn GLSL.",
       expected:
-        "Cùng vertex cho cùng clip/NDC; `glUniformMatrix4fv` nhận GL_FALSE và array 16 floats được truyền không đổi.",
-      files,
+        "Theo một vertex qua clip/NDC/screen/depth để phân biệt lỗi matrix, divide và viewport.",
+      files: ["include/viewer-scene.hpp", "include/pipeline.hpp", "include/viewer-gpu.hpp"],
       steps: [
         {
-          title: "Đặt rõ thứ tự P × V × M",
+          title: "Công bố hệ trục",
           explanation:
-            "Vector cột được transform bởi model trước, view sau và projection cuối dù biểu thức matrix được đọc từ trái sang phải.",
+            "Camera tay phải từ +Z nhìn về -Z; project này dùng OpenGL clip-depth chứ không giữ quy ước camera +Z của viewer cũ.",
         },
         {
-          title: "Upload đúng storage convention",
+          title: "Một bộ matrix",
           explanation:
-            "C++ lưu column-major nên không transpose khi upload. GLSL nhân `uMvp * vec4` đúng contract đó.",
+            "Model xoay Y rồi X, camera nhìn vào pan target; cả hai backend nhận cùng P×V×M.",
         },
         {
-          title: "Trace một vertex qua bốn space",
+          title: "Kiểm trước khi nhìn ảnh",
           explanation:
-            "Clip w, NDC và window depth cho biết lỗi nằm ở matrix, perspective divide hay viewport trước khi xét rasterization.",
+            "Theo một vertex qua clip/NDC/screen/depth để phân biệt lỗi matrix, divide và viewport.",
         },
       ],
     },
     "p34-l06": {
       focus:
-        "Đối chiếu CPU depth array với OpenGL depth buffer bằng cùng clear value, compare function và depth range.",
+        "Cắt trước perspective divide, ánh xạ depth về [0,1], thống nhất LESS và CCW; chủ động tắt depth/culling để tìm lỗi.",
       expected:
-        "Depth bật làm output độc lập triangle order; depth tắt lộ painter-order artifact ở cả hai backend.",
-      files,
+        "CCW ở NDC thành area âm khi CPU screen đảo Y. Fixture hai winding cho biết culling có đúng không.",
+      files: ["include/viewer-cpu.hpp", "include/viewer-fixtures.hpp", "include/viewer-gpu.hpp"],
       steps: [
         {
-          title: "Đổi NDC depth về window depth",
+          title: "Cắt trước chia w",
           explanation:
-            "OpenGL NDC z [-1,1] được map về [0,1]. CPU lưu đúng giá trị mà fixed-function depth stage so sánh.",
+            "Tam giác chạm near plane không được bị bỏ nguyên chiếc hoặc kéo dài ra vô hạn.",
         },
         {
-          title: "Clear và compare phải đi thành cặp",
+          title: "Cùng clear và compare",
           explanation:
-            "Clear 1.0 cùng `LESS` cho phép fragment gần hơn ghi đè. Đổi một phía sẽ làm visibility lệch dù MVP đúng.",
+            "Depth clear 1, LESS, window depth [0,1] ở hai phía. Đảo thứ tự triangle giúp kiểm depth thực sự hoạt động.",
         },
         {
-          title: "Tắt depth như một thí nghiệm",
+          title: "Phân biệt winding với depth",
           explanation:
-            "Đảo triangle order chỉ được kỳ vọng làm hình khác khi depth tắt; test dùng điều này để chứng minh Z-buffer đang có tác dụng.",
+            "CCW ở NDC thành area âm khi CPU screen đảo Y. Fixture hai winding cho biết culling có đúng không.",
         },
       ],
     },
     "p34-l07": {
-      focus: "Giữ một CCW index buffer và nối CPU front-face test với GL_CCW/GL_BACK.",
+      focus:
+        "Dùng cùng normal và ánh sáng Lambert, thêm wireframe, normal vectors và lưới; phân biệt chế độ debug với ảnh dùng để đối chiếu.",
       expected:
-        "CPU/GPU cùng loại back faces; CPU chỉ đảo b/c sau quyết định culling để rasterizer làm việc trong top-left screen space.",
-      files,
+        "Line rasterization có thể khác phần cứng; phép đối chiếu ảnh cơ sở tắt grid/wire/normals, không lờ đi sai khác trong ảnh solid.",
+      files: ["include/viewer-cpu.hpp", "include/viewer-gpu.hpp"],
       steps: [
         {
-          title: "Định nghĩa winding ở object space",
+          title: "Dùng cùng ánh sáng",
           explanation:
-            "Nhìn từng mặt từ bên ngoài, indices chạy CCW. Một nguồn indices tránh lỗi sửa riêng backend.",
+            "Normal phẳng và world-space light tạo Lambert với ambient 0,22/diffuse 0,78 ở C++ và GLSL.",
         },
         {
-          title: "Nhận ra screen Y làm đổi dấu area",
+          title: "Giữ debug như một chế độ xem",
           explanation:
-            "CPU top-left screen đảo trục Y so với NDC. Front-face test diễn ra trước bước normalize winding cho coverage.",
+            "Wireframe và normal vectors không phải vật trang trí: chúng giúp tìm index, mặt lộn và normal sai.",
         },
         {
-          title: "Cấu hình GPU bằng cùng quy ước",
+          title: "Biết giới hạn phép so",
           explanation:
-            "GL_CCW và GL_BACK diễn đạt đúng source winding; phím C chỉ enable/disable state, không đổi mesh.",
+            "Line rasterization có thể khác phần cứng; phép đối chiếu ảnh cơ sở tắt grid/wire/normals, không lờ đi sai khác trong ảnh solid.",
         },
       ],
     },
     "p34-l08": {
       focus:
-        "Đặt input/update trước nhánh render để F1/F2 dùng cùng snapshot scene và cùng framebuffer size.",
+        "Đặt input/update trước render, giữ nguyên scene khi F1/F2, xử lý capture/focus/resize và cache tài nguyên qua nhiều lần đổi backend.",
       expected:
-        "Pause, fixed step, drag và resize giữ liên tục khi đổi backend; F1/F2 không tạo lại mesh hoặc context.",
-      files,
+        "Input dùng logical size, framebuffer dùng physical pixels. Viewport model chừa vùng stats phía dưới và có aspect riêng.",
+      files: ["include/viewer-application.hpp", "include/viewer-backends.hpp"],
       steps: [
         {
-          title: "Input chỉ sửa scene hoặc renderer enum",
+          title: "Đọc input một lần",
           explanation:
-            "F1/F2 không gọi init/destroy. Drag và N cập nhật angle một lần trước khi render frame.",
+            "Sửa scene trước render; F1/F2 chỉ thay enum. Pause/step và đổi mesh không tạo application thứ hai.",
         },
         {
-          title: "Render từ một snapshot",
+          title: "Giữ thao tác an toàn",
           explanation:
-            "CPU/GPU nhận cùng scene values và aspect trong frame. Không có cpuAngle/gpuAngle riêng để trôi khác nhau.",
+            "Capture có mouse ID/nút bắt đầu; Escape hủy kéo, mất focus nhả capture và pause.",
         },
         {
-          title: "Resize mọi resource liên quan",
+          title: "Resize đúng chỗ",
           explanation:
-            "CPU framebuffer/texture, glViewport và projection aspect cùng dùng pixel size mới từ SDL.",
+            "Input dùng logical size, framebuffer dùng physical pixels. Viewport model chừa vùng stats phía dưới và có aspect riêng.",
         },
       ],
     },
     "p34-l09": {
       focus:
-        "Hoàn thiện controls, named validation, build matrix và cleanup để toàn source chạy độc lập.",
+        "Dùng CPU tests, transform feedback, so ảnh/depth và benchmark hữu hạn; đọc đúng các cột thời gian và tải toàn bộ source chạy độc lập.",
       expected:
-        "Final reset được, chuyển backend liên tục, báo contract valid và destroy GPU objects trước context/window.",
-      files,
+        "Warm-up, scene, resolution, VSync và glFinish được ghi công khai. Thiếu GPU timer thì ghi unavailable, không suy từ CPU submit.",
+      files: [
+        "include/viewer-validation.hpp",
+        "include/viewer-comparison.hpp",
+        "include/viewer-benchmark.hpp",
+        "include/viewer-timing.hpp",
+        "include/viewer-hud.hpp",
+        "tests/tests.cpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Giữ validation có tên",
+          title: "Tách các lớp bằng chứng",
           explanation:
-            "Mesh, MVP, depth, culling, deterministic frame và renderer switch được báo riêng để lỗi không bị gộp thành một bool khó đọc.",
+            "CTest chỉ CPU; --verify cần context/driver; thao tác desktop và benchmark phải ghi riêng.",
         },
         {
-          title: "Build cả Debug lẫn Release",
+          title: "So có giới hạn rõ",
           explanation:
-            "C++ compile và GLSL runtime diagnostics đều cần được giữ ở hai cấu hình; CTest không phụ thuộc GPU.",
+            "Transform feedback đọc gl_Position thực; so coverage/color/depth ngoài dải cạnh cố định và kiểm vòng đời các tài nguyên.",
         },
         {
-          title: "Destroy theo dependency",
+          title: "Đọc đúng số đo",
           explanation:
-            "EBO/VBO/VAO/program/texture cần context còn sống. Context, window và SDL được đóng sau cùng.",
+            "Warm-up, scene, resolution, VSync và glFinish được ghi công khai. Thiếu GPU timer thì ghi unavailable, không suy từ CPU submit.",
         },
       ],
     },
   },
   references: {
     "p34-l01": [
-      { label: "Renderer backend", href: "/glossary#renderer-backend", kind: "Thuật ngữ" },
-      { label: "OpenGL context", href: "/glossary#opengl-context", kind: "Thuật ngữ" },
+      {
+        label: "SDL CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
+      {
+        label: "Renderer backend",
+        href: "/glossary#renderer-backend",
+        kind: "Thuật ngữ",
+      },
     ],
     "p34-l02": [
-      { label: "Indexed draw", href: "/glossary#indexed-draw", kind: "Thuật ngữ" },
-      { label: "Vertex Buffer Object", href: "/glossary#vertex-buffer-object", kind: "Thuật ngữ" },
+      {
+        label: "Indexed draw",
+        href: "/glossary#indexed-draw",
+        kind: "Thuật ngữ",
+      },
     ],
     "p34-l03": [
-      { label: "Z-buffer", href: "/glossary#depth-buffer", kind: "Thuật ngữ" },
-      { label: "Texture upload", href: "/glossary#texture-upload", kind: "Thuật ngữ" },
+      {
+        label: "Z-buffer",
+        href: "/glossary#depth-buffer",
+        kind: "Thuật ngữ",
+      },
+      {
+        label: "Texture upload",
+        href: "/glossary#texture-upload",
+        kind: "Thuật ngữ",
+      },
     ],
     "p34-l04": [
       {
         label: "glDrawElements",
         href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDrawElements.xhtml",
         kind: "OpenGL API",
-      },
-      {
-        label: "Element Buffer Object",
-        href: "/glossary#element-buffer-object",
-        kind: "Thuật ngữ",
       },
     ],
     "p34-l05": [
@@ -257,7 +281,11 @@ const learning = {
         href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glUniform.xhtml",
         kind: "OpenGL API",
       },
-      { label: "NDC", href: "/glossary#ndc", kind: "Thuật ngữ" },
+      {
+        label: "NDC",
+        href: "/glossary#ndc",
+        kind: "Thuật ngữ",
+      },
     ],
     "p34-l06": [
       {
@@ -265,20 +293,18 @@ const learning = {
         href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDepthFunc.xhtml",
         kind: "OpenGL API",
       },
-      { label: "GPU depth test", href: "/glossary#gpu-depth-test", kind: "Thuật ngữ" },
-    ],
-    "p34-l07": [
       {
         label: "glFrontFace",
         href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glFrontFace.xhtml",
         kind: "OpenGL API",
       },
+    ],
+    "p34-l07": [
       {
-        label: "glCullFace",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glCullFace.xhtml",
-        kind: "OpenGL API",
+        label: "Face culling",
+        href: "/glossary#face-culling",
+        kind: "Thuật ngữ",
       },
-      { label: "Face culling", href: "/glossary#face-culling", kind: "Thuật ngữ" },
     ],
     "p34-l08": [
       {
@@ -286,15 +312,18 @@ const learning = {
         href: "https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels",
         kind: "SDL API",
       },
-      { label: "Renderer backend", href: "/glossary#renderer-backend", kind: "Thuật ngữ" },
     ],
     "p34-l09": [
       {
-        label: "SDL_GL_DestroyContext",
-        href: "https://wiki.libsdl.org/SDL3/SDL_GL_DestroyContext",
-        kind: "SDL API",
+        label: "glBeginQuery",
+        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBeginQuery.xhtml",
+        kind: "OpenGL API",
       },
-      { label: "OpenGL Core Profile", href: "/glossary#opengl-core-profile", kind: "Thuật ngữ" },
+      {
+        label: "glTransformFeedbackVaryings",
+        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glTransformFeedbackVaryings.xhtml",
+        kind: "OpenGL API",
+      },
     ],
   },
 } satisfies ProjectLearningAssets;

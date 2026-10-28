@@ -166,7 +166,7 @@ export const roadmapSeed = [
   },
   {
     id: 34,
-    title: "Hai renderer, một khối lập phương: F1 CPU, F2 GPU",
+    title: "Một model viewer, hai renderer CPU và GPU",
     part: "CHUYỂN TỪ RENDERER CPU SANG OPENGL/GLSL",
   },
   {

@@ -146,7 +146,7 @@ const project = {
       slug: "09-hoan-thien-cpu-gpu-triangle",
       title: "Hoàn thiện ứng dụng đối chiếu CPU và GPU",
       summary:
-        "Ghép input, resize, validation, diagnostics và cleanup thành final app; build/test cả Debug lẫn Release trước khi sang cube ở Project 34.",
+        "Ghép input, resize, validation, diagnostics và cleanup thành final app; build/test cả Debug lẫn Release trước khi nâng cấp model viewer ở Project 34.",
       order: 9,
       estimatedMinutes: 155,
       demoId: "cpu-gpu-triangle",

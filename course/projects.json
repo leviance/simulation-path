@@ -238,6 +238,7 @@
   },
   {
     "id": "34",
+    "contentRevision": 2,
     "slug": "dual-renderer-cube",
     "sourceDirectory": "project-34-dual-renderer-cube",
     "checkpointCount": 9,

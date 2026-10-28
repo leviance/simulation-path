@@ -1,98 +1,138 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đối chiếu Z-buffer và GPU depth test
+# Clipping, depth và winding phải khớp
 
 ## Vấn đề cần giải quyết
 
-MVP đúng chỉ đảm bảo triangles đến đúng vị trí. Nếu CPU clear depth bằng 1 nhưng GPU không clear depth buffer, hoặc một bên dùng `LESS` còn bên kia dùng `LEQUAL`, visibility có thể khác theo frame và triangle order.
+Một mesh có vẻ đúng từ mặt trước vẫn có thể mất mặt khi nhìn từ sau, rách ở near plane hoặc phụ thuộc triangle order. Đây là lỗi visibility, không phải vấn đề cần chữa bằng cách thêm đèn hay chọn màu đẹp hơn.
 
-Checkpoint 6 đưa depth về một contract có thể đọc: OpenGL NDC z được map sang window depth `[0,1]`, buffer clear về `1.0`, fragment mới thắng khi depth nhỏ hơn.
+CPU và OpenGL phải cùng hiểu vùng nhìn, mặt trước và fragment nào được quyền ghi lên ảnh.
 
 ## Hiểu ý tưởng trước khi viết code
 
-CPU lưu đúng giá trị tương ứng `gl_FragCoord.z`:
+Ba quyết định khác nhau:
 
-$$
-z_{window} = 0.5\,z_{ndc} + 0.5
-$$
+- **Clipping:** phần nào của tam giác nằm trong clip volume?
+- **Culling:** hướng winding của mặt có được phép vẽ không?
+- **Depth test:** ở pixel đã được phủ, fragment này có gần hơn fragment đã ghi không?
 
-Vì near objects có depth nhỏ hơn, `LESS` cùng clear value 1 cho phép fragment gần nhất tồn tại. Khi depth tắt, triangle vẽ sau thắng—đó là painter order, không phải visibility đúng.
+Culling không thay thế depth. Tắt culling vẫn cần Z-buffer để mặt sau không đè mặt trước. Ngược lại, tắt depth có thể lộ draw order dù culling đúng, nhất là khi nhìn vào mô hình.
+
+Depth lưu là $z_{window}=\tfrac12(z_{clip}/w_{clip})+\tfrac12$. Bản CPU và OpenGL cùng clear về 1 rồi dùng LESS, không so khoảng cách Euclid.
 
 <InteractiveLab demo="dual-renderer-cube" mode="depth-contract" />
 
+Tắt culling, tắt depth rồi đảo thứ tự tam giác. Sau đó bật depth và thử lại. Phần bị che phải ổn định khi depth hoạt động. Canvas vẫn là mô hình giảng dạy; bản --verify kiểm trên OpenGL thật.
+
 ## Viết code từng bước
 
-### Bước 1 — CPU đổi NDC z sang window depth
+### 1. Quyết định ghi pixel tại một nơi
 
-```cpp title="include/pipeline.hpp — depth trong projectVertex"
-return {
-    (ndcX * 0.5F + 0.5F) * float(width),
-    (1.0F - (ndcY * 0.5F + 0.5F)) * float(height),
-    ndcZ * 0.5F + 0.5F,
-    clip.w,
-};
-```
-
-Depth không đảo theo trục Y. Nó chỉ đổi range từ `[-1,1]` sang `[0,1]`.
-
-### Bước 2 — CPU dùng phép so LESS tường minh
-
-```cpp title="include/pipeline.hpp — compare và write"
-if (scene.depthEnabled && fragmentDepth >= framebuffer.depth[pixel]) {
-    ++stats.rejectedFragments;
-    continue;
-}
-framebuffer.depth[pixel] = fragmentDepth;
-```
-
-Điều kiện reject `>=` tương đương accept `<`. Bật/tắt depth chỉ đổi quyết định visibility; coverage và color source giữ nguyên.
-
-### Bước 3 — GPU phản chiếu cùng state
-
-```cpp title="include/gpu_renderer.hpp — GL_DEPTH_TEST"
-if (depthEnabled) {
-    api.Enable(GL_DEPTH_TEST);
-    api.DepthFunc(GL_LESS);
-} else {
-    api.Disable(GL_DEPTH_TEST);
+```cpp title="include/viewer-cpu.hpp — bool writeViewerPixel"
+inline bool writeViewerPixel(Framebuffer& frame, int x, int y, float depth, Rgb color, bool depthEnabled, float bias = 0) {
+    if (x < 0 || y < 0 || x >= frame.width || y >= frame.height || !std::isfinite(depth) || depth < 0 || depth > 1)
+        return false;
+    const auto pixel = std::size_t(y) * std::size_t(frame.width) + std::size_t(x);
+    if (depthEnabled && depth - bias >= frame.depth[pixel])
+        return false;
+    if (depthEnabled)
+        frame.depth[pixel] = depth;
+    const auto offset = pixel * 4;
+    frame.rgba[offset] = color.red;
+    frame.rgba[offset + 1] = color.green;
+    frame.rgba[offset + 2] = color.blue;
+    frame.rgba[offset + 3] = 255;
+    return true;
 }
 ```
 
-Mỗi frame main clear cả color lẫn depth sau khi viewport được cập nhật. Phím D sửa `scene.depthEnabled`, nên backend nào active cũng nhận cùng lựa chọn.
+Ba điều cần nhìn rõ: bounds trước khi truy cập mảng, depth hữu hạn trong [0,1], và fragment chỉ qua khi nhỏ hơn depth đang giữ. Nếu depth test tắt, source **không ghi depth**, giống OpenGL khi GL_DEPTH_TEST bị disable.
+
+Màu chỉ được ghi sau các kiểm này. Nếu ghi màu trước rồi mới so depth, fragment bị loại vẫn làm ảnh đổi.
+
+### 2. Culling trước khi đổi winding để rasterize
+
+Screen CPU đảo Y so với NDC. Do đó tam giác CCW ở NDC có signed area âm trong screen top-left. CPU loại area dương khi `cullBackfaces` bật.
+
+Rasterizer có thể đổi thứ tự b/c sau quyết định culling để làm edge tests bằng area dương. Đó là bước tính coverage, không phải thay source indices hoặc sửa winding riêng cho GPU.
+
+### 3. Đặt state OpenGL theo đúng scene
+
+```cpp title="include/viewer-gpu.hpp —         if "
+if (scene.depthEnabled) {
+    gl.Enable(GL_DEPTH_TEST);
+    gl.DepthFunc(GL_LESS);
+} else
+    gl.Disable(GL_DEPTH_TEST);
+if (scene.view.cullBackfaces) {
+    gl.Enable(GL_CULL_FACE);
+    gl.CullFace(GL_BACK);
+    gl.FrontFace(GL_CCW);
+} else
+    gl.Disable(GL_CULL_FACE);
+```
+
+GL_DEPTH_TEST + GL_LESS tương ứng Z-buffer CPU. GL_CULL_FACE + GL_CCW + GL_BACK tương ứng quy ước mặt trước. D/C chỉ bật/tắt hai quyết định này; không thay index order.
+
+Cả hai nhánh bắt đầu frame với clear depth 1. Việc presenter disable depth/culling khi vẽ quad không được ảnh hưởng draw model của frame kế tiếp; GPU renderer luôn đặt lại state cần dùng.
+
+### 4. Kiểm bằng fixture, không chỉ một góc cube đẹp
+
+```cpp title="include/viewer-fixtures.hpp — ViewerMesh viewerVisibilityFixture"
+inline ViewerMesh viewerVisibilityFixture() {
+    ViewerMesh mesh{};
+    mesh.name = "front-CCW-and-back-CW";
+    appendViewerFixtureTriangle(mesh, {-1, -0.7F, 0}, {-0.1F, -0.7F, 0}, {-0.55F, 0.7F, 0});
+    appendViewerFixtureTriangle(mesh, {0.1F, -0.7F, 0}, {0.55F, 0.7F, 0}, {1, -0.7F, 0});
+    return mesh;
+}
+```
+
+Fixture có một tam giác CCW bên trái và một tam giác CW bên phải. Với pose chính diện và culling bật, chỉ bên trái hiện. Tắt culling, cả hai phải hiện. Nếu cùng mất hoặc cùng còn, kiểm dấu area/front face trước.
+
+```cpp title="include/viewer-fixtures.hpp — ViewerMesh viewerNearFixture"
+inline ViewerMesh viewerNearFixture() {
+    ViewerMesh mesh{};
+    mesh.name = "triangle-crossing-near-and-eye";
+    appendViewerFixtureTriangle(mesh, {-1, -0.7F, 0}, {1, -0.7F, 0}, {0, 0.9F, 1.8F});
+    return mesh;
+}
+```
+
+Tam giác này vượt qua near plane và cả phía sau eye khi camera ở distance 1,2. Clipping phải giữ phần còn trong tầm nhìn; không bỏ nguyên tam giác và không divide đỉnh sau eye trước.
 
 ## Ghép các phần lại
 
-Chạy checkpoint 6, bấm D rồi xoay cube. Khi depth off, các mặt xa có thể đè lên mặt gần theo index order. Bật lại depth, hình phải ổn định.
-
-```cpp title="src/main.cpp — clear color và depth"
-gl.ClearColor(13.0F / 255.0F, 21.0F / 255.0F, 38.0F / 255.0F, 1.0F);
-gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+```bash title="Terminal — visibility experiments"
+cmake --build build --config Debug --target project_34_checkpoint_6 project_34_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+.\build\Debug\project_34_checkpoint_6.exe
 ```
 
-CTest còn rasterize triangle order xuôi/ngược bằng CPU. Với depth bật, hai color/depth arrays phải bằng nhau; với depth tắt và culling tắt, color output phải khác.
+D đổi depth, C đổi culling, O đảo thứ tự **các tam giác**. Thử rocket/sphere từ phía trước và phía sau, sau đó F1/F2. Zoom sát để kích hoạt near clipping.
+
+Các pixel sát cạnh có thể khác giữa software rasterizer và driver. Điều đó không cho phép bỏ qua cả một mặt mất hoặc hàng trăm pixel sâu trong tam giác. Bài 9 định nghĩa dải cạnh và dung sai số cụ thể trước khi chạy phép so.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ `GL_DEPTH_BUFFER_BIT` khỏi clear. Xoay cube nhiều frame: depth cũ khóa fragments mới một cách khó đoán.
-2. GPU dùng `GL_LEQUAL`, CPU vẫn dùng `<`. Coplanar diagonal có thể khác ownership.
-3. CPU lưu thẳng `ndcZ` nhưng clear 1. Một số depth âm “thắng” theo range khác GPU.
+Thay GL_LESS bằng GL_GREATER mà vẫn clear depth 1. Dự đoán fragment nào còn được ghi; kiểm rồi khôi phục cặp clear/compare đúng.
 
-Hoàn tác từng lỗi và chạy lại order-independence test.
+Đổi GL_CCW thành GL_CW nhưng giữ nguyên source indices. Các mặt sẽ đảo. Khôi phục GL_CCW, không đảo riêng EBO GPU.
+
+Cuối cùng bỏ mặt near khỏi clipping CPU. So cảnh zoom gần ở F1/F2, rồi trả lại đủ sáu mặt. Đừng cố dùng culling để che clipping sai.
 
 ## Tự kiểm tra kết quả
 
-- [ ] NDC depth được map về `[0,1]`.
-- [ ] Hai buffer clear mỗi frame.
-- [ ] CPU và GPU cùng dùng LESS.
-- [ ] D sửa một field trong shared scene.
-- [ ] Triangle order không đổi output khi depth bật.
-
-Hãy dự đoán điều sẽ xảy ra nếu clear depth là 0 với `LESS`: hầu như không fragment nào có thể thắng.
+- [ ] Depth CPU/GPU cùng clear 1, LESS, range [0,1].
+- [ ] Tắt depth không ghi depth buffer; đảo order chỉ là thí nghiệm, không phải test phải giống.
+- [ ] Culling dùng một source winding CCW; không có index buffer “sửa hướng cho GPU”.
+- [ ] Fixture trước/sau hiện đúng số mặt ở hai trạng thái culling.
+- [ ] Near/eye crossing còn phần hình hợp lệ, không NaN hoặc kéo vô hạn.
+- [ ] Khi depth bật, đổi triangle order không đổi ảnh solid ở các mesh kiểm.
 
 ## Bài tập mở rộng
 
-1. Thêm depth grayscale vào Canvas và đọc near/far bằng mắt.
-2. Thử `GREATER` đúng cách bằng cách đổi cả clear value và projection convention trên giấy.
-3. Đếm rejected fragments CPU ở ba góc xoay và giải thích sự thay đổi.
+1. Thêm test cho far plane và các cạnh trái/phải/trên/dưới, không chỉ near.
+2. So pixel giữa tam giác trước, sau đó mới xem pixel sát cạnh; giải thích hai loại sai khác.
 
-Bài tiếp theo loại các mặt quay lưng bằng cùng winding contract.
+Tiếp theo: [chiếu sáng và các chế độ xem](./07-dong-bo-winding-va-face-culling).

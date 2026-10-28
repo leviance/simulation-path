@@ -19,6 +19,9 @@ struct GlApi {
     PFNGLCLEARDEPTHPROC ClearDepth{};
     PFNGLCLEARPROC Clear{};
     PFNGLVIEWPORTPROC Viewport{};
+    PFNGLSCISSORPROC Scissor{};
+    PFNGLPOLYGONMODEPROC PolygonMode{};
+    PFNGLREADPIXELSPROC ReadPixels{};
     PFNGLENABLEPROC Enable{};
     PFNGLDISABLEPROC Disable{};
     PFNGLDEPTHFUNCPROC DepthFunc{};
@@ -42,6 +45,7 @@ struct GlApi {
     PFNGLUSEPROGRAMPROC UseProgram{};
     PFNGLGETUNIFORMLOCATIONPROC GetUniformLocation{};
     PFNGLUNIFORM1IPROC Uniform1i{};
+    PFNGLUNIFORM3FPROC Uniform3f{};
     PFNGLUNIFORMMATRIX4FVPROC UniformMatrix4fv{};
 
     PFNGLGENVERTEXARRAYSPROC GenVertexArrays{};
@@ -55,6 +59,25 @@ struct GlApi {
     PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer{};
     PFNGLDRAWELEMENTSPROC DrawElements{};
     PFNGLDRAWARRAYSPROC DrawArrays{};
+    PFNGLISBUFFERPROC IsBuffer{};
+    PFNGLISVERTEXARRAYPROC IsVertexArray{};
+    PFNGLISPROGRAMPROC IsProgram{};
+    PFNGLISTEXTUREPROC IsTexture{};
+    PFNGLFINISHPROC Finish{};
+    PFNGLTRANSFORMFEEDBACKVARYINGSPROC TransformFeedbackVaryings{};
+    PFNGLBINDBUFFERBASEPROC BindBufferBase{};
+    PFNGLBEGINTRANSFORMFEEDBACKPROC BeginTransformFeedback{};
+    PFNGLENDTRANSFORMFEEDBACKPROC EndTransformFeedback{};
+    PFNGLGETBUFFERSUBDATAPROC GetBufferSubData{};
+
+    // Timing is optional; missing query support must not prevent rendering.
+    PFNGLGENQUERIESPROC GenQueries{};
+    PFNGLDELETEQUERIESPROC DeleteQueries{};
+    PFNGLBEGINQUERYPROC BeginQuery{};
+    PFNGLENDQUERYPROC EndQuery{};
+    PFNGLGETQUERYIVPROC GetQueryiv{};
+    PFNGLGETQUERYOBJECTIVPROC GetQueryObjectiv{};
+    PFNGLGETQUERYOBJECTUI64VPROC GetQueryObjectui64v{};
 
     PFNGLGENTEXTURESPROC GenTextures{};
     PFNGLBINDTEXTUREPROC BindTexture{};
@@ -78,11 +101,28 @@ struct GlApi {
     }
 
     bool load() {
+        GenQueries = reinterpret_cast<PFNGLGENQUERIESPROC>(SDL_GL_GetProcAddress("glGenQueries"));
+        DeleteQueries = reinterpret_cast<PFNGLDELETEQUERIESPROC>(SDL_GL_GetProcAddress("glDeleteQueries"));
+        BeginQuery = reinterpret_cast<PFNGLBEGINQUERYPROC>(SDL_GL_GetProcAddress("glBeginQuery"));
+        EndQuery = reinterpret_cast<PFNGLENDQUERYPROC>(SDL_GL_GetProcAddress("glEndQuery"));
+        GetQueryiv = reinterpret_cast<PFNGLGETQUERYIVPROC>(SDL_GL_GetProcAddress("glGetQueryiv"));
+        GetQueryObjectiv = reinterpret_cast<PFNGLGETQUERYOBJECTIVPROC>(SDL_GL_GetProcAddress("glGetQueryObjectiv"));
+        GetQueryObjectui64v = reinterpret_cast<PFNGLGETQUERYOBJECTUI64VPROC>(SDL_GL_GetProcAddress("glGetQueryObjectui64v"));
         missingFunction.clear();
         return loadOne(ClearColor, "glClearColor") &&
+            loadOne(IsTexture, "glIsTexture") &&
+            loadOne(Finish, "glFinish") &&
+            loadOne(TransformFeedbackVaryings, "glTransformFeedbackVaryings") &&
+            loadOne(BindBufferBase, "glBindBufferBase") &&
+            loadOne(BeginTransformFeedback, "glBeginTransformFeedback") &&
+            loadOne(EndTransformFeedback, "glEndTransformFeedback") &&
+            loadOne(GetBufferSubData, "glGetBufferSubData") &&
             loadOne(ClearDepth, "glClearDepth") &&
             loadOne(Clear, "glClear") &&
             loadOne(Viewport, "glViewport") &&
+            loadOne(Scissor, "glScissor") &&
+            loadOne(PolygonMode, "glPolygonMode") &&
+            loadOne(ReadPixels, "glReadPixels") &&
             loadOne(Enable, "glEnable") &&
             loadOne(Disable, "glDisable") &&
             loadOne(DepthFunc, "glDepthFunc") &&
@@ -105,6 +145,7 @@ struct GlApi {
             loadOne(UseProgram, "glUseProgram") &&
             loadOne(GetUniformLocation, "glGetUniformLocation") &&
             loadOne(Uniform1i, "glUniform1i") &&
+            loadOne(Uniform3f, "glUniform3f") &&
             loadOne(UniformMatrix4fv, "glUniformMatrix4fv") &&
             loadOne(GenVertexArrays, "glGenVertexArrays") &&
             loadOne(BindVertexArray, "glBindVertexArray") &&
@@ -117,6 +158,9 @@ struct GlApi {
             loadOne(VertexAttribPointer, "glVertexAttribPointer") &&
             loadOne(DrawElements, "glDrawElements") &&
             loadOne(DrawArrays, "glDrawArrays") &&
+            loadOne(IsBuffer, "glIsBuffer") &&
+            loadOne(IsVertexArray, "glIsVertexArray") &&
+            loadOne(IsProgram, "glIsProgram") &&
             loadOne(GenTextures, "glGenTextures") &&
             loadOne(BindTexture, "glBindTexture") &&
             loadOne(TexParameteri, "glTexParameteri") &&

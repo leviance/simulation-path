@@ -1,99 +1,119 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
-import * as cube from "../lib/labs/dual-renderer-cube.ts";
+import * as viewer from "../lib/labs/dual-renderer-cube.ts";
+import { parseObjSource } from "../lib/labs/obj-parser.ts";
 
-test("indexed cube stores six independent faces and valid element indices", () => {
-  const mesh = cube.makeIndexedCube();
-  assert.equal(mesh.vertices.length, 24);
-  assert.equal(mesh.indices.length, 36);
-  assert.ok(mesh.indices.every((index) => index >= 0 && index < mesh.vertices.length));
-  for (let face = 0; face < 6; face += 1) {
-    const offset = face * 6;
-    assert.deepEqual(mesh.indices.slice(offset, offset + 6), [
-      face * 4,
-      face * 4 + 1,
-      face * 4 + 2,
-      face * 4,
-      face * 4 + 2,
-      face * 4 + 3,
-    ]);
-  }
-});
-
-test("column-major MVP keeps clip and screen values finite", () => {
-  const mesh = cube.makeIndexedCube();
-  const mvp = cube.makeMvp(cube.defaultCubeScene, 16 / 9);
-  const trace = cube.traceCubeVertex(mesh.vertices[0], mvp, 960, 540);
-  assert.ok(trace.clip.w > 0);
-  for (const value of [
-    trace.clip.x,
-    trace.clip.y,
-    trace.clip.z,
-    trace.clip.w,
-    trace.ndc.x,
-    trace.ndc.y,
-    trace.ndc.z,
-    trace.screen.x,
-    trace.screen.y,
-    trace.screen.z,
-  ]) {
-    assert.ok(Number.isFinite(value));
-  }
-  assert.ok(trace.screen.z >= 0 && trace.screen.z <= 1);
-});
-
-test("cube winding exposes front and back faces before culling", () => {
-  const triangles = cube.buildCubeTriangles(
-    cube.makeIndexedCube(),
-    cube.defaultCubeScene,
-    160,
-    120,
+test("viewer preserves canonical rocket, sphere and cube datasets", async () => {
+  const models = viewer.viewerModels();
+  assert.deepEqual(
+    models.map((m) => m.indices.length / 3),
+    [32, 2976, 12],
   );
-  assert.equal(triangles.length, 12);
-  assert.ok(triangles.some((triangle) => triangle.frontFacing));
-  assert.ok(triangles.some((triangle) => !triangle.frontFacing));
+  assert.equal(models[2].vertices.length, 24);
+  assert.ok(
+    models.every((m) =>
+      m.indices.every((i) => Number.isInteger(i) && i >= 0 && i < m.vertices.length),
+    ),
+  );
+  const source = await readFile(
+    new URL("../examples/project-21-obj-mesh-viewer/assets/faceted-sphere.obj", import.meta.url),
+    "utf8",
+  );
+  const actual = parseObjSource(viewer.viewerSphereSource()).mesh,
+    expected = parseObjSource(source).mesh;
+  assert.equal(actual.positions.length, 1490);
+  assert.deepEqual(
+    actual.triangles.map((t) => t.indices),
+    expected.triangles.map((t) => t.indices),
+  );
+  actual.positions.forEach((p, i) => {
+    for (const key of ["x", "y", "z"])
+      assert.ok(Math.abs(p[key] - expected.positions[i][key]) <= 1e-7);
+  });
 });
 
-test("depth test makes CPU output independent from triangle order", () => {
-  const first = cube.renderCubeContract(96, 72, cube.defaultCubeScene, false);
-  const reversed = cube.renderCubeContract(96, 72, cube.defaultCubeScene, true);
-  assert.deepEqual(cube.compareFrames(first, reversed), { colorPixels: 0, depthPixels: 0 });
-  assert.ok(first.passedFragments > 0);
-  assert.ok(first.culledTriangles > 0);
+test("viewer camera is RH, target centered, object/camera/pan/zoom independent", () => {
+  const scene = viewer.initialViewerScene();
+  scene.view.angleX = scene.view.angleY = 0;
+  const matrices = viewer.viewerMatrices(scene, 1.7);
+  const center = viewer.transformVector(matrices.mvp, { x: 0, y: 0, z: 0, w: 1 });
+  assert.ok(Math.abs(center.x) < 1e-10 && Math.abs(center.y) < 1e-10 && center.w > 0);
+  scene.view.cameraDrag = true;
+  const moved = viewer.turnViewer(scene, 0.2, -0.3);
+  assert.equal(moved.view.angleY, scene.view.angleY);
+  assert.notEqual(moved.view.cameraYaw, scene.view.cameraYaw);
+  const pan = viewer.panViewer(moved, 30, -20, 500);
+  assert.equal(pan.view.angleY, moved.view.angleY);
+  assert.notEqual(pan.targetX, moved.targetX);
+  assert.equal(viewer.zoomViewer(scene, 1000).view.distance, 0.35);
+  assert.equal(viewer.zoomViewer(scene, -1000).view.distance, 40);
+  const original = structuredClone(scene);
+  const trace = viewer.traceViewerVertex(
+    viewer.viewerModels()[0].vertices[0].position,
+    scene,
+    320,
+    240,
+  );
+  assert.ok(trace.screen && trace.screen.depth >= 0 && trace.screen.depth <= 1);
+  assert.deepEqual(scene, original);
 });
 
-test("disabling depth reveals order-dependent output", () => {
-  const state = { ...cube.defaultCubeScene, depthEnabled: false, cullingEnabled: false };
-  const first = cube.renderCubeContract(96, 72, state, false);
-  const reversed = cube.renderCubeContract(96, 72, state, true);
-  assert.ok(cube.compareFrames(first, reversed).colorPixels > 0);
-});
-
-test("independent CPU and OpenGL-coordinate rasterizers agree", () => {
-  const scenes = [
-    cube.defaultCubeScene,
-    { ...cube.defaultCubeScene, angleX: 0.2, angleY: 1.1 },
-    { ...cube.defaultCubeScene, cullingEnabled: false },
-    { ...cube.defaultCubeScene, depthEnabled: false, cullingEnabled: false },
-  ];
-
-  for (const scene of scenes) {
-    for (const reverseOrder of [false, true]) {
-      const cpu = cube.renderCubeContract(96, 72, scene, reverseOrder);
-      const gpuReference = cube.renderGpuReferenceContract(96, 72, scene, reverseOrder);
-      assert.deepEqual(cube.compareFrames(cpu, gpuReference), {
-        colorPixels: 0,
-        depthPixels: 0,
-      });
-      assert.equal(cpu.passedFragments, gpuReference.passedFragments);
-      assert.equal(cpu.culledTriangles, gpuReference.culledTriangles);
-    }
+test("homogeneous clipping handles all six planes before divide", () => {
+  for (let plane = 0; plane < 6; plane++) {
+    const outside = { x: 0, y: 0, z: 0, w: 1 };
+    outside[["x", "x", "y", "y", "z", "z"][plane]] = plane % 2 ? 2 : -2;
+    const polygon = viewer.clipTriangle(
+      outside,
+      { x: 0.3, y: 0, z: 0, w: 1 },
+      { x: 0, y: 0.3, z: 0, w: 1 },
+    );
+    assert.ok(polygon.length >= 3);
+    for (const p of polygon)
+      for (let j = 0; j < 6; j++) assert.ok(viewer.clipDistance(p, j) >= -1e-10);
   }
 });
 
-test("renderer selection changes the backend label but not scene state", () => {
-  const scene = { ...cube.defaultCubeScene };
-  assert.equal(cube.rendererLabel("cpu"), "F1 · CPU rasterizer");
-  assert.equal(cube.rendererLabel("gpu"), "F2 · OpenGL GPU");
-  assert.deepEqual(scene, cube.defaultCubeScene);
+test("real meshes are deterministic, read-only and depth order independent", () => {
+  for (const mesh of viewer.viewerModels()) {
+    const scene = viewer.initialViewerScene();
+    scene.view.grid = false;
+    scene.view.cullBackfaces = false;
+    const original = structuredClone(scene);
+    const frame = viewer.renderViewer(mesh, scene, 160, 120);
+    assert.ok(frame.passed > 0 && frame.submitted === mesh.indices.length / 3);
+    assert.ok(frame.depth.every((z) => Number.isFinite(z) && z >= 0 && z <= 1));
+    assert.deepEqual(scene, original);
+    assert.deepEqual(viewer.renderViewer(mesh, scene, 160, 120).rgba, frame.rgba);
+    scene.view.reverseOrder = true;
+    assert.deepEqual(viewer.renderViewer(mesh, scene, 160, 120).rgba, frame.rgba);
+  }
+});
+
+test("depth-off experiment exposes draw order, lighting/debug are shared scene options", () => {
+  const mesh = viewer.viewerModels()[2],
+    scene = viewer.initialViewerScene();
+  scene.view.grid = false;
+  scene.view.cullBackfaces = false;
+  scene.depthEnabled = false;
+  const first = viewer.renderViewer(mesh, scene, 120, 90);
+  scene.view.reverseOrder = true;
+  const reverse = viewer.renderViewer(mesh, scene, 120, 90);
+  assert.notDeepEqual(first.rgba, reverse.rgba);
+  assert.ok(first.depth.every((z) => z === 1));
+  scene.depthEnabled = true;
+  scene.lit = false;
+  assert.notDeepEqual(viewer.renderViewer(mesh, scene, 120, 90).rgba, first.rgba);
+  scene.view.normals = true;
+  scene.view.wireframe = true;
+  assert.ok(viewer.renderViewer(mesh, scene, 120, 90).passed > 0);
+});
+
+test("near/eye crossing and bounded viewport remain safe", () => {
+  const scene = viewer.initialViewerScene();
+  scene.view.distance = 0.35;
+  const frame = viewer.renderViewer(viewer.viewerModels()[1], scene, 96, 72);
+  assert.ok(frame.depth.every(Number.isFinite));
+  assert.throws(() => viewer.renderViewer(viewer.viewerModels()[0], scene, 10000, 10000));
+  assert.throws(() => viewer.viewerMatrices(scene, 0));
 });
