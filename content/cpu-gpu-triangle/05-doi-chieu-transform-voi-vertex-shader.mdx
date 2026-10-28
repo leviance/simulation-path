@@ -6,7 +6,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 Hai tam giác tĩnh giống nhau chưa chứng minh pipeline đồng nhất. Một lỗi dấu sin hoặc đổi thứ tự transform có thể chỉ lộ ra khi triangle xoay và rời khỏi gốc. Checkpoint 5 dùng cùng ba input: `angleRadians`, `scale`, `translation` cho cả C++ và GLSL.
 
-Contract được viết thành lời trước:
+Trước khi viết hai phiên bản, ta chốt cùng một thứ tự:
 
 ```text
 input position → rotate → scale → translate → NDC
@@ -50,7 +50,9 @@ vec2 ndc = rotated * uScale + uTranslation;
 gl_Position = vec4(ndc, 0.0, 1.0);
 ```
 
-GLSL không gọi helper C++, nhưng triển khai cùng contract và cùng precision `float`. Layout là nơi chạy khác nhau; công thức không được đổi.
+GLSL không gọi helper C++, nhưng thực hiện cùng công thức với kiểu float. Phép tính chạy trên bộ xử lý khác nhau, còn dữ liệu đầu vào và thứ tự biến đổi phải giữ nguyên. Đây là chuyển nơi thực hiện phép tính, không phải đổi cách bố trí bộ nhớ như AoS/SoA ở Project 32.
+
+Trong project này, scale là một số dùng cho cả X/Y. Với phép co giãn đồng đều ấy, đổi thứ tự scale và rotate vẫn cho cùng kết quả toán học; translation mới là bước thường không thể tùy tiện chuyển lên trước. Khi mở rộng sang scale X/Y khác nhau ở bài tập, thứ tự scale và rotate cũng trở nên quan trọng. Đừng dùng một fixture chỉ có uniform scale để kết luận mọi transform đều giao hoán.
 
 ### Bước 3 — Uniform thay đổi, VBO giữ nguyên
 

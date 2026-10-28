@@ -118,28 +118,45 @@ inline GLuint compileShader(
 ### Bước 4 — Link program và xử lý đủ mọi đường thoát
 
 ```cpp title="include/gpu_renderer.hpp — link program"
-const GLuint program = api.CreateProgram();
-if (program == 0U) {
-    diagnostics = "glCreateProgram returned 0";
+inline GLuint createProgram(
+    GlApi& api,
+    const char* vertexSource,
+    const char* fragmentSource,
+    std::string& diagnostics
+) {
+    const GLuint vertexShader = compileShader(api, GL_VERTEX_SHADER, vertexSource, "vertex shader", diagnostics);
+    if (vertexShader == 0U) {
+        return 0U;
+    }
+    const GLuint fragmentShader = compileShader(api, GL_FRAGMENT_SHADER, fragmentSource, "fragment shader", diagnostics);
+    if (fragmentShader == 0U) {
+        api.DeleteShader(vertexShader);
+        return 0U;
+    }
+
+    const GLuint program = api.CreateProgram();
+    if (program == 0U) {
+        diagnostics = "glCreateProgram returned 0";
+        api.DeleteShader(vertexShader);
+        api.DeleteShader(fragmentShader);
+        return 0U;
+    }
+    api.AttachShader(program, vertexShader);
+    api.AttachShader(program, fragmentShader);
+    api.LinkProgram(program);
     api.DeleteShader(vertexShader);
     api.DeleteShader(fragmentShader);
+
+    GLint linked = GL_FALSE;
+    api.GetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (linked == GL_TRUE) {
+        diagnostics.clear();
+        return program;
+    }
+    diagnostics = "program link failed:\n" + programInfoLog(api, program);
+    api.DeleteProgram(program);
     return 0U;
 }
-api.AttachShader(program, vertexShader);
-api.AttachShader(program, fragmentShader);
-api.LinkProgram(program);
-api.DeleteShader(vertexShader);
-api.DeleteShader(fragmentShader);
-
-GLint linked = GL_FALSE;
-api.GetProgramiv(program, GL_LINK_STATUS, &linked);
-if (linked == GL_TRUE) {
-    diagnostics.clear();
-    return program;
-}
-diagnostics = "program link failed:\n" + programInfoLog(api, program);
-api.DeleteProgram(program);
-return 0U;
 ```
 
 Sau khi `LinkProgram` kết thúc, hai shader object không còn cần thiết nên được xóa ở cả trường hợp link thành công lẫn thất bại. Program lỗi cũng phải bị xóa; nếu không, mỗi lần thử sửa shader lại rò thêm một object.
@@ -156,6 +173,24 @@ smoothColorLocation = api.GetUniformLocation(program, "uSmoothColor");
 Location `-1` nghĩa là uniform không tồn tại hoặc bị optimizer loại vì không dùng. Checkpoint coi thiếu bất kỳ location bắt buộc nào là lỗi contract.
 
 ## Ghép các phần lại
+
+Đặt hai chuỗi GLSL cùng các helper shaderInfoLog, compileShader và createProgram trong namespace lab của include/gpu_renderer.hpp. programInfoLog làm công việc tương tự shaderInfoLog nhưng gọi GetProgramiv/GetProgramInfoLog; bản đầy đủ có trong source checkpoint.
+
+GpuTriangleRenderer giữ program và bốn uniform location. Phương thức initializeProgram gọi createProgram, rồi lưu các location một lần. Trong main, sau khi loader thành công và trước vòng SDL, thêm:
+
+```cpp title="src/main.cpp — tạo program và dừng đúng lúc nếu có lỗi"
+lab::GpuTriangleRenderer gpuTriangle{};
+std::string diagnostics{};
+if (!gpuTriangle.initializeProgram(gl, diagnostics)) {
+    std::cerr << diagnostics << '\n';
+    gpuTriangle.destroy(gl);
+    destroyWindowAndContext(window, context);
+    return EXIT_FAILURE;
+}
+std::cout << "Triangle shader program linked successfully.\n";
+```
+
+Khi thoát bình thường, cũng gọi gpuTriangle.destroy(gl) trước destroyWindowAndContext. Đừng nhầm GLuint với một object C++ tự quản lý tài nguyên: rời scope của biến số nguyên không tự gọi glDeleteProgram.
 
 ```bash title="Terminal — build checkpoint 2"
 cmake --build build --config Debug --target project_33_checkpoint_2

@@ -13,7 +13,7 @@ const project = {
     mission:
       "Tự xây dựng một ứng dụng C++/SDL3 tạo OpenGL 3.3 Core context và vẽ cùng một tam giác ở hai nửa cửa sổ. Nửa trái là framebuffer CPU được upload thành texture; nửa phải là triangle do GPU rasterize. Người dùng phải đổi transform, solid/smooth color và đọc probe để kiểm tra hai pipeline thay vì chỉ thấy hai hình giống nhau.",
     outcome:
-      "Một cửa sổ high-DPI chia đôi rõ CPU/GPU. Title bar báo kích thước pixel thật, transform, chế độ interpolation, probe NDC, barycentric weights và maximum RGB difference; terminal giữ shader diagnostics cùng validation report có tên.",
+      "Một cửa sổ chia đôi CPU/GPU, có nhãn A/B/C, tọa độ NDC và controls ngay trong ảnh. Kéo đỉnh hoặc đổi màu để thấy cả hai pipeline nhận cùng input; đọc probe để so màu GPU thật với màu CPU kỳ vọng tại cùng tâm pixel.",
     requirements: [
       "Tạo SDL window với `SDL_WINDOW_OPENGL`, yêu cầu OpenGL 3.3 Core, tạo context rồi mới gọi `SDL_GL_GetProcAddress`.",
       "Lấy kích thước framebuffer bằng `SDL_GetWindowSizeInPixels`; không dùng logical window size cho `glViewport`.",
@@ -26,6 +26,7 @@ const project = {
       "Vertex shader và CPU phải cùng thực hiện rotate → scale → translate bằng cùng angle, scale và translation.",
       "Solid mode dùng một màu cố định; smooth mode nội suy ba vertex colors bằng barycentric weights/fragment shader.",
       "Đọc một số probe nằm xa triangle edges bằng `glReadPixels`, so với CPU expected color sau quantization và dùng tolerance theo channel.",
+      "Cho chọn/kéo vertex trên cả hai panel, chỉnh bằng bàn phím và đổi màu; nhãn và bảng tọa độ không được làm nhiễu pixel readback.",
       "Kèm starter, chín checkpoint độc lập, final có comment, README và CTest chỉ gọi code CPU thuần không tạo OpenGL context.",
     ],
     constraints: [
@@ -83,7 +84,7 @@ const project = {
     {
       id: "p33-l03",
       slug: "03-dua-triangle-vao-vbo-va-vao",
-      title: "Đưa triangle vào VBO và VAO",
+      title: "Đưa dữ liệu tam giác vào VBO và VAO",
       summary:
         "Khóa vertex memory contract, upload ba vertex, mô tả hai attributes và thực hiện draw call GPU đầu tiên ở nửa phải cửa sổ.",
       order: 3,
@@ -93,7 +94,7 @@ const project = {
     {
       id: "p33-l04",
       slug: "04-ve-cung-triangle-bang-cpu",
-      title: "Vẽ cùng triangle bằng CPU",
+      title: "Vẽ lại tam giác bằng CPU",
       summary:
         "Mang barycentric rasterizer trở lại, ghi framebuffer RGBA8 và upload nó thành texture ở nửa trái mà không trộn code CPU vào shader path.",
       order: 4,
@@ -143,7 +144,7 @@ const project = {
     {
       id: "p33-l09",
       slug: "09-hoan-thien-cpu-gpu-triangle",
-      title: "Hoàn thiện CPU/GPU Triangle",
+      title: "Hoàn thiện ứng dụng đối chiếu CPU và GPU",
       summary:
         "Ghép input, resize, validation, diagnostics và cleanup thành final app; build/test cả Debug lẫn Release trước khi sang cube ở Project 34.",
       order: 9,

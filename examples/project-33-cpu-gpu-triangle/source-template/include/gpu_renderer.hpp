@@ -249,6 +249,15 @@ struct GpuTriangleRenderer {
         api.DrawArrays(GL_TRIANGLES, 0, 3);
         api.BindVertexArray(0U);
     }
+
+#if LAB_CHECKPOINT >= 9
+    // Editing changes the shared input, not the transform or a second GPU-only copy.
+    void uploadVertices(GlApi& api, const std::array<GpuVertex, 3>& triangle) const {
+        api.BindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
+        api.BufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(triangle)), triangle.data(), GL_DYNAMIC_DRAW);
+        api.BindBuffer(GL_ARRAY_BUFFER, 0U);
+    }
+#endif
 #endif
 
     void destroy(GlApi& api) {
@@ -351,6 +360,7 @@ struct CpuTexturePresenter {
 // Checkpoint 8: probe readback so màu nội thất, không dùng edge coverage làm pass/fail.
 #if LAB_CHECKPOINT >= 8
 struct GpuProbeReadback {
+    bool valid{};
     bool inside{};
     int pixelX{};
     int pixelY{};
@@ -364,15 +374,21 @@ inline GpuProbeReadback readGpuProbe(
     const Viewport& viewport,
     const Transform2D& transform,
     Vec2 pointNdc,
-    bool smoothColor
+    bool smoothColor,
+    const std::array<GpuVertex, 3>& triangle = kSourceTriangle
 ) {
     GpuProbeReadback result{};
-    const BarycentricSample expectedSample = sampleTriangleAtNdc(kSourceTriangle, transform, pointNdc, smoothColor);
+    const ProbePixel pixelLocation = locateProbePixel(pointNdc, viewport);
+    if (!pixelLocation.valid) {
+        return result;
+    }
+    result.valid = true;
+    const BarycentricSample expectedSample = sampleTriangleAtNdc(triangle, transform, pixelLocation.centerNdc, smoothColor);
     result.inside = expectedSample.inside;
-    result.expected = quantizeRgba8(expectedSample.color);
-    const Vec2 windowPoint = ndcToGpuWindow(pointNdc, viewport);
-    result.pixelX = std::clamp(int(std::floor(windowPoint.x)), viewport.x, viewport.x + viewport.width - 1);
-    result.pixelY = std::clamp(int(std::floor(windowPoint.y)), viewport.y, viewport.y + viewport.height - 1);
+    const Color background{11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F};
+    result.expected = quantizeRgba8(expectedSample.inside ? expectedSample.color : background);
+    result.pixelX = pixelLocation.x;
+    result.pixelY = pixelLocation.y;
     std::array<std::uint8_t, 4> pixel{};
     api.ReadPixels(result.pixelX, result.pixelY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
     result.actual = {

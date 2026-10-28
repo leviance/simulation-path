@@ -56,7 +56,7 @@ inline Vec2 gpuWindowToNdc(Vec2 position, const Viewport& viewport) {
 }
 ```
 
-CTest không cần GPU để khóa công thức này. Nó đưa nhiều NDC probes qua forward rồi inverse và kiểm sai số nhỏ.
+CTest kiểm công thức này mà không cần GPU: đưa điểm NDC qua phép đổi viewport rồi đổi ngược, sau đó so với điểm ban đầu trong sai số nhỏ. Việc này kiểm công thức CPU; đến bài readback ta mới có bằng chứng từ ảnh GPU thật.
 
 ### Bước 4 — Resize mọi storage từ pixel size thật
 

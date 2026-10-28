@@ -30,6 +30,10 @@ SDL_Init
 
 ### Bước 1 — Yêu cầu OpenGL 3.3 Core trước khi tạo window
 
+Trước tiên, tải ZIP của project, giải nén và mở terminal tại thư mục có CMakeLists.txt. Build target project_33_starter rồi chạy nó: bạn phải mở, đóng và thay đổi kích thước cửa sổ được trước khi thêm OpenGL. Starter đã có SDL_Init, SDL_CreateWindow, SDL_PollEvent và cleanup; ta thay phần hiển thị, không viết thêm một vòng lặp thứ hai.
+
+Trong src/main.cpp, đặt hàm dưới đây vào namespace ẩn ở đầu file. Gọi nó sau SDL_Init và trước SDL_CreateWindow. Nếu trả về false, in SDL_GetError rồi SDL_Quit và kết thúc chương trình; đừng tiếp tục tạo window với cấu hình chưa thiết lập thành công.
+
 ```cpp title="src/main.cpp — requestOpenGl33Core"
 bool requestOpenGl33Core() {
     return SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3) &&
@@ -51,6 +55,25 @@ windowFlags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 
 Sau khi `SDL_CreateWindow` thành công, ta gọi `SDL_GL_CreateContext(window)` rồi `SDL_GL_MakeCurrent(window, context)`. Mỗi lời gọi đều được kiểm tra riêng; nếu context bằng null, không có lệnh OpenGL nào được phép chạy.
 
+Đây là phần cần thêm ngay sau nhánh kiểm tra window. Window là cửa sổ của hệ điều hành; context mới là nơi OpenGL giữ trạng thái vẽ và tài nguyên. Vì vậy tạo được window chưa chứng minh OpenGL đã sẵn sàng.
+
+```cpp title="src/main.cpp — tạo context và gắn với thread hiện tại"
+SDL_GLContext context = SDL_GL_CreateContext(window);
+if (!context) {
+    std::cerr << "SDL_GL_CreateContext failed: " << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+if (!SDL_GL_MakeCurrent(window, context)) {
+    std::cerr << "SDL_GL_MakeCurrent failed: " << SDL_GetError() << '\n';
+    destroyWindowAndContext(window, context);
+    return EXIT_FAILURE;
+}
+```
+
+Helper destroyWindowAndContext ở đầu file hủy context trước, rồi window và SDL. Nó dùng chung cho đường lỗi và lúc thoát bình thường; source đầy đủ của checkpoint nằm cuối trang để bạn kiểm lại cả khai báo lẫn thứ tự gọi.
+
 ### Bước 3 — Load function qua context hiện tại
 
 ```cpp title="include/gl_api.hpp — loadOne"
@@ -67,6 +90,17 @@ bool loadOne(Function& destination, const char* name) {
 
 Loader giữ tên function đầu tiên bị thiếu. Vì vậy lỗi startup sẽ nói rõ `glCreateShader` hay `glGenVertexArrays` không load được, thay vì crash ở một con trỏ null không có ngữ cảnh.
 
+loadOne là phương thức của GlApi trong include/gl_api.hpp, không phải một hàm cần chép vào main. Sau khi context current, tạo đối tượng và gọi loader như sau:
+
+```cpp title="src/main.cpp — kiểm loader trước lần vẽ đầu tiên"
+lab::GlApi gl{};
+if (!gl.load()) {
+    std::cerr << "SDL_GL_GetProcAddress failed for " << gl.missingFunction << '\n';
+    destroyWindowAndContext(window, context);
+    return EXIT_FAILURE;
+}
+```
+
 ### Bước 4 — Chia framebuffer theo pixel thật
 
 ```cpp title="src/main.cpp — framebuffer pixels và hai panel"
@@ -80,10 +114,30 @@ const int rightWidth = framebufferWidth - leftWidth;
 
 Checkpoint 1 dùng scissor test để clear hai nửa bằng hai màu tối, sau đó gọi `SDL_GL_SwapWindow`. Chưa có shader, VBO hay triangle. Đây là dấu mốc tốt: nếu màn hình không chia đôi, ta sửa context/viewport trước khi kéo thêm ba tầng lỗi mới vào.
 
+Trong vòng while đang có, giữ phần SDL_PollEvent ở đầu. Sau khi đọc framebufferWidth/Height và tính leftWidth/rightWidth, đặt đoạn vẽ sau; scissor giới hạn vùng bị clear. Nếu không bật scissor, lần clear thứ hai sẽ phủ cả cửa sổ, dù bạn đã tính đúng hai chiều rộng.
+
+```cpp title="src/main.cpp — hai vùng clear trong vòng render"
+gl.Enable(GL_SCISSOR_TEST);
+gl.Scissor(0, 0, leftWidth, framebufferHeight);
+gl.ClearColor(0.055F, 0.085F, 0.15F, 1.0F);
+gl.Clear(GL_COLOR_BUFFER_BIT);
+gl.Scissor(leftWidth, 0, rightWidth, framebufferHeight);
+gl.ClearColor(0.04F, 0.065F, 0.12F, 1.0F);
+gl.Clear(GL_COLOR_BUFFER_BIT);
+gl.Disable(GL_SCISSOR_TEST);
+```
+
+Cuối mỗi lượt vẽ, gọi SDL_GL_SwapWindow(window) và kiểm kết quả như source. Lệnh clear sửa back buffer; swap mới đưa kết quả ra cửa sổ. Không thêm SDL_RenderPresent: học phần này không tạo SDL_Renderer. Khi thoát vòng lặp, gọi destroyWindowAndContext đúng một lần.
+
 ```bash title="Terminal — build checkpoint 1"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_33_starter --parallel 2
+./build/Debug/project_33_starter.exe
 cmake --build build --config Debug --target project_33_checkpoint_1
+./build/Debug/project_33_checkpoint_1.exe
 ```
+
+Các đường chạy trên dành cho Visual Studio ở Windows. Với Ninja, executable nằm trực tiếp trong build; chọn Debug bằng CMAKE_BUILD_TYPE lúc configure. Cả hai bản đều phải đóng cửa sổ và thoát được, không chỉ build thành công.
 
 ## Thử làm sai để hiểu đúng
 

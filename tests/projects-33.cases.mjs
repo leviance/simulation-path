@@ -1,8 +1,60 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { workspace } from "./site-support.mjs";
+import { codeTokens, isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+
+test("P33 lessons use balanced excerpts from their actual checkpoint", async () => {
+  const files = (await readdir(path.join(workspace, "content/cpu-gpu-triangle"))).filter((file) =>
+    file.endsWith(".mdx"),
+  );
+  for (const name of files) {
+    const file = name.slice(0, -4);
+    const mdx = await readFile(
+      path.join(workspace, "content/cpu-gpu-triangle", file + ".mdx"),
+      "utf8",
+    );
+    const gpuSource = await readFile(
+      path.join(
+        workspace,
+        "examples/project-33-cpu-gpu-triangle/checkpoints",
+        file.slice(0, 2),
+        "include/gpu_renderer.hpp",
+      ),
+      "utf8",
+    );
+    const shaders = [...gpuSource.matchAll(/R"glsl\(([\s\S]*?)\)glsl"/g)].map((match) => match[1]);
+    for (const block of mdx.matchAll(/```glsl[^\n]*\n([\s\S]*?)```/g)) {
+      assert.ok(
+        shaders.some((shader) => isContiguousCodeExcerpt(block[1], shader)),
+        `${file}: GLSL differs from the actual shader`,
+      );
+    }
+    for (const block of mdx.matchAll(/```cpp title="([^" ]+)[^\n]*\n([\s\S]*?)```/g)) {
+      const source = await readFile(
+        path.join(
+          workspace,
+          "examples/project-33-cpu-gpu-triangle/checkpoints",
+          file.slice(0, 2),
+          block[1],
+        ),
+        "utf8",
+      );
+      assert.ok(
+        isContiguousCodeExcerpt(block[2], source),
+        `${file}: source mismatch in ${block[1]}`,
+      );
+      const stack = [];
+      const pairs = { ")": "(", "]": "[", "}": "{" };
+      for (const token of codeTokens(block[2])) {
+        if (["(", "[", "{"].includes(token)) stack.push(token);
+        if (Object.hasOwn(pairs, token)) assert.equal(stack.pop(), pairs[token], file);
+      }
+      assert.deepEqual(stack, [], `${file}: incomplete example`);
+    }
+  }
+});
 
 test("Project 33 publishes a nine-checkpoint CPU versus GPU triangle", async () => {
   const catalog = JSON.parse(
@@ -107,5 +159,7 @@ test("Project 33 keeps every CPU and OpenGL stage traceable", async () => {
   assert.match(tests, /RGBA8 error stays within half a color step/);
   assert.match(canvas, /setPointerCapture\(event\.pointerId\)/);
   assert.match(canvas, /useReducedMotion/);
-  assert.match(canvas, /CPU ↔ RGBA8 GPU/);
+  assert.match(canvas, /CPU ↔ RGBA8 mô phỏng/);
+  assert.match(canvas, /onLostPointerCapture/);
+  assert.match(canvas, /usePauseOnReducedMotion/);
 });

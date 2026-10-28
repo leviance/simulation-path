@@ -26,6 +26,9 @@ include/pipeline.hpp     vertex contract, CPU transform/raster, viewport math, v
 include/gl_api.hpp       OpenGL function pointers được load qua SDL context
 include/gpu_renderer.hpp shader program, VBO/VAO, CPU texture presenter, readback
 src/main.cpp             SDL/OpenGL lifecycle, input, render hai panel và cleanup
+include/editor.hpp       chọn/kéo vertex, high-DPI pointer mapping, inverse transform
+include/overlay.hpp      nhãn CPU/GPU, A/B/C và bảng NDC trong cửa sổ
+include/verification.hpp fixture OpenGL thật trong chế độ hữu hạn --verify
 ```
 
 ## Build final
@@ -55,8 +58,10 @@ Các target gồm `project_33_starter`, `project_33_checkpoint_1` … `project_3
 - `Q` / `E`: giảm/tăng scale.
 - `C`: đổi solid/smooth color.
 - `P`: đọc GPU color ở centroid và in comparison report hữu hạn.
-- `R`: reset transform và pause.
-- `Esc`: thoát.
+- Kéo A/B/C ở một trong hai panel: sửa position chung, pause trong lúc kéo.
+- `1/2/3`: chọn vertex; `I/J/K/L`: dịch vertex được chọn; `V`: đổi màu và bật smooth.
+- `R`: reset vertex, màu và transform rồi pause.
+- `Esc`: hoàn tác thao tác kéo; thoát nếu không kéo.
 
 App pause mặc định. `glReadPixels` chỉ chạy khi bấm `P`, không chạy mỗi frame.
 
@@ -85,6 +90,20 @@ CTest kiểm code CPU thuần:
 - tolerance sau RGBA8 quantization.
 
 Runtime probe so interior fragment tại centroid. Không dùng triangle edge làm pass/fail vì CPU/GPU có thể khác coverage rule quanh biên dù cả hai implementation đều hợp lệ.
+
+Phép so tính màu CPU tại tâm đúng pixel mà glReadPixels đọc, không tại điểm NDC liên tục trước khi làm tròn. Probe ngoài viewport bị từ chối; điểm ngoài tam giác nhưng còn trong viewport được so với màu nền chung. Nhãn được vẽ sau readback, không lẫn vào phép đo.
+
+Để kiểm driver thật mà không thao tác cửa sổ:
+
+```bash
+./build/Debug/project_33_final.exe --verify
+```
+
+Chế độ này mở cửa sổ ẩn, chạy sáu frame rồi thoát: solid/smooth, transform, winding ngược, sửa vertex/màu và resize width lẻ. Mỗi frame có ba interior probes và một background probe, tolerance 2/255; lỗi trả exit code khác 0. CTest vẫn thuần CPU. Chế độ này cần driver OpenGL 3.3 thật và không kiểm thay thao tác kéo, focus hoặc DPI bằng tay.
+
+Toàn panel GPU cũng được so với CPU reference cùng kích thước: sai khác lớn hơn 2/255 chỉ được nằm trong dải cách cạnh tam giác không quá 1,5 pixel. Mọi sai khác sâu trong nội thất hoặc ở nền xa cạnh làm fixture thất bại. Số pixel khác ở cạnh được in riêng; không coi hai ảnh giống bằng mắt là đủ.
+
+Bảng NDC phía GPU là đầu ra dự kiến theo contract CPU, không phải kết quả transform feedback. Dùng readback để kiểm output GPU thực. Cửa sổ nhỏ có thể cắt bớt chữ; khôi phục kích thước mặc định để đọc đủ controls.
 
 ## Tài liệu chuẩn
 

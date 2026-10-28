@@ -1,3 +1,4 @@
+#include "editor.hpp"
 #include "pipeline.hpp"
 
 #include <cmath>
@@ -71,6 +72,37 @@ void testCpuRasterAndQuantization() {
     check(lab::maximumColorDifference(source, quantized) <= 0.5F / 255.0F + 1.0e-6F, "RGBA8 error stays within half a color step");
 }
 
+void testProbePixelCenter() {
+    const lab::Viewport viewport{31, 7, 101, 73};
+    const lab::ProbePixel pixel = lab::locateProbePixel({0.0F, 0.0F}, viewport);
+    check(pixel.valid && pixel.x == 81 && pixel.y == 43, "odd viewport selects the containing pixel");
+    check(std::abs(pixel.centerNdc.x) < 1.0e-6F && std::abs(pixel.centerNdc.y) < 1.0e-6F, "odd viewport center maps back to NDC zero");
+
+    const lab::Viewport evenViewport{0, 0, 100, 100};
+    const lab::ProbePixel snapped = lab::locateProbePixel({0.0F, 0.0F}, evenViewport);
+    check(std::abs(snapped.centerNdc.x - 0.01F) < 1.0e-6F, "CPU expected color uses the selected sample center, not the original point");
+    check(!lab::locateProbePixel({1.0F, 0.0F}, viewport).valid, "right viewport boundary is excluded");
+    check(!lab::locateProbePixel({-1.01F, 0.0F}, viewport).valid, "off-screen probe is not clamped");
+    check(!lab::locateProbePixel({0.0F, 0.0F}, {0, 0, 0, 10}).valid, "empty viewport has no sample");
+    check(!lab::locateProbePixel({std::numeric_limits<float>::quiet_NaN(), 0.0F}, viewport).valid, "NaN probe is rejected");
+}
+
+void testSharedVertexEditing() {
+    const lab::Transform2D transform{0.73F, 0.62F, {0.13F, -0.21F}};
+    const lab::Vec2 local{-0.37F, 0.54F};
+    const auto recovered = lab::inverseTransformPosition(lab::transformPosition(local, transform), transform);
+    check(lab::length(lab::subtract(local, recovered)) < 1.0e-6F, "drag inverse undoes translation, scale and rotation");
+    const auto left = lab::pointerToPanel({125, 125}, 500, 250, 1000, 500);
+    const auto right = lab::pointerToPanel({375, 125}, 500, 250, 1000, 500);
+    check(left.valid && right.valid && left.panel == 0 && right.panel == 1, "DPR pointer selects both panels");
+    check(lab::length(lab::subtract(left.ndc, right.ndc)) < 1.0e-6F, "same relative position has same NDC in either panel");
+    check(!lab::pointerToPanel({500, 125}, 500, 250, 1000, 500).valid, "pointer outside window is rejected");
+    const auto vertex = lab::kSourceTriangle[1];
+    const auto ndc = lab::transformPosition({vertex.positionX, vertex.positionY}, transform);
+    check(lab::pickVertex(lab::kSourceTriangle, transform, ndc, 500, 500) == 1, "pick uses transformed positions");
+    check(lab::pickVertex(lab::kSourceTriangle, transform, {1, 1}, 500, 500) == -1, "empty space does not select a vertex");
+}
+
 void testNamedValidationReport() {
     const lab::PipelineValidationReport report = lab::validateCpuGpuTriangleContract();
     check(report.vertexLayout, "validation locks vertex layout");
@@ -90,6 +122,8 @@ int main() {
     testCoordinateRoundTrips();
     testBarycentricColor();
     testCpuRasterAndQuantization();
+    testProbePixelCenter();
+    testSharedVertexEditing();
     testNamedValidationReport();
 
     if (failures != 0) {

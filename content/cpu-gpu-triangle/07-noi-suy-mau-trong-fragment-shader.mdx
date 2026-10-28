@@ -21,7 +21,13 @@ Barycentric weights vừa mô tả vị trí của điểm trong triangle, vừa
 
 ### Bước 1 — Tính weights từ signed area
 
+Tiếp tục hàm barycentricAtPoint trong include/pipeline.hpp. Mảng triangle của hàm này chứa ScreenVertex sau phép đổi viewport, không phải các GpuVertex thô trong VBO. signedArea được tính bằng edge; nếu gần 0 thì ba đỉnh thẳng hàng hoặc trùng nhau, ta trả kết quả không có coverage trước khi chia:
+
 ```cpp title="include/pipeline.hpp — barycentric weights"
+const float signedArea = edge(triangle[0].position, triangle[1].position, triangle[2].position);
+if (std::abs(signedArea) <= 1.0e-8F) {
+    return {};
+}
 const float weight0 = edge(triangle[1].position, triangle[2].position, point) / signedArea;
 const float weight1 = edge(triangle[2].position, triangle[0].position, point) / signedArea;
 const float weight2 = edge(triangle[0].position, triangle[1].position, point) / signedArea;
@@ -34,11 +40,14 @@ Tại centroid, ba weights gần `1/3`; tại một vertex, weight tương ứng
 ### Bước 2 — CPU nội suy ba channels bằng cùng weights
 
 ```cpp title="include/pipeline.hpp — smooth color"
-color = {
-    triangle[0].color.red * weight0 + triangle[1].color.red * weight1 + triangle[2].color.red * weight2,
-    triangle[0].color.green* weight0 + triangle[1].color.green* weight1 + triangle[2].color.green* weight2,
-    triangle[0].color.blue* weight0 + triangle[1].color.blue* weight1 + triangle[2].color.blue* weight2,
-};
+Color color{0.38F, 0.68F, 0.94F};
+if (smoothColor) {
+    color = {
+        triangle[0].color.red * weight0 + triangle[1].color.red * weight1 + triangle[2].color.red * weight2,
+        triangle[0].color.green * weight0 + triangle[1].color.green * weight1 + triangle[2].color.green * weight2,
+        triangle[0].color.blue * weight0 + triangle[1].color.blue * weight1 + triangle[2].color.blue * weight2,
+    };
+}
 ```
 
 Coverage không đổi khi bật smooth mode. Chỉ nhánh chọn color thay đổi.
@@ -52,15 +61,23 @@ out vec4 fragmentColor;
 
 void main() {
     vec3 solidColor = vec3(0.38, 0.68, 0.94);
-    fragmentColor = vec4(uSmoothColor != 0 ? vColor : solidColor, 1.0);
+    vec3 selectedColor = solidColor;
+    if (uSmoothColor != 0) {
+        selectedColor = vColor;
+    }
+    fragmentColor = vec4(selectedColor, 1.0);
 }
 ```
 
 Fragment shader không tự tính barycentric weights trong project này. Rasterizer phần cứng nội suy `vColor` theo vị trí fragment.
 
+Tất cả vertex của bài này có clip w = 1, nên phép nội suy smooth tương ứng với công thức barycentric affine đang dùng trên CPU. Khi chuyển sang các vertex có w khác nhau, cần xét nội suy perspective-correct; đừng mặc định công thức 2D hiện tại đủ cho mọi mesh 3D.
+
 ### Bước 4 — So sau RGBA8 quantization
 
 CPU float color được `putPixel` làm tròn thành byte. GPU framebuffer cũng dùng channels hữu hạn. Sai khác hợp lý không phải bằng 0 tuyệt đối ở float; bound cơ bản của một lần làm tròn là nửa bước `1/255` mỗi channel.
+
+Giới hạn nửa bước ấy áp dụng cho **một lần** đổi float sang byte. Khi so hai kết quả CPU/GPU đã được lượng tử hóa riêng, còn có sai số phép tính và vị trí lấy mẫu. Vì vậy bài readback dùng quy trình so cùng tâm pixel và ngưỡng công bố riêng, thay vì áp nhầm giới hạn của một phép làm tròn cho cả hai pipeline.
 
 ## Ghép các phần lại
 
@@ -84,12 +101,12 @@ Nhấn `C` để đổi solid/smooth. Ở smooth mode, ba góc có ba màu riên
 - [ ] Solid/smooth không đổi coverage.
 - [ ] CPU dùng đúng color gắn với cùng vertex positions.
 - [ ] GPU varying nối `out vec3` với `in vec3`.
-- [ ] Quantization tolerance không lớn hơn nửa bước cộng epsilon nhỏ.
+- [ ] Phân biệt sai số của một phép lượng tử hóa với ngưỡng dùng để so hai pipeline.
 
 ## Bài tập mở rộng
 
 1. Thêm chế độ hiển thị riêng từng weight thành grayscale.
-2. Đặt ba vertex colors bằng nhau; solid và smooth phải trở nên giống nhau.
+2. Đặt cả ba vertex color bằng đúng màu solid `(0.38, 0.68, 0.94)`; solid và smooth phải cho cùng màu. Nếu chọn một màu chung khác màu solid, hai chế độ vẫn khác nhau dù smooth không còn gradient.
 3. Thử `flat` qualifier trong GLSL và giải thích provoking vertex quyết định màu nào.
 
 Bài sau sẽ đọc fragment thật từ GPU bằng `glReadPixels` và thiết kế probe tránh triangle edges.

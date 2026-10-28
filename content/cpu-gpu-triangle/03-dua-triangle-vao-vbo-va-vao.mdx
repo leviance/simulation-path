@@ -1,6 +1,6 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đưa triangle vào VBO và VAO
+# Đưa dữ liệu tam giác vào VBO và VAO
 
 ## Vấn đề cần giải quyết
 
@@ -36,7 +36,19 @@ static_assert(offsetof(GpuVertex, positionX) == 0U);
 static_assert(offsetof(GpuVertex, red) == sizeof(float) * 2U);
 ```
 
-Ba vertex dùng NDC trực tiếp ở checkpoint này. Mỗi vertex có hai float position và ba float color; không có padding bí mật giữa hai attributes.
+Ba vertex dùng tọa độ 2D quanh gốc; shader áp transform rồi ghi clip position với w = 1, nên x/y đầu ra cũng chính là NDC. Mỗi vertex có hai float position và ba float color; các static_assert giúp ta kiểm rõ kích thước và offset, không đoán cách struct được xếp trong bộ nhớ.
+
+Ngay sau các static_assert trong include/pipeline.hpp, khai báo dữ liệu tam giác. Mỗi dòng có x, y rồi red, green, blue; tọa độ Y dương hướng lên. Dùng cùng mảng này cho cả renderer CPU ở bài sau, không viết thêm một mảng vị trí gần giống ở main:
+
+```cpp title="include/pipeline.hpp — ba vertex đầu vào"
+inline constexpr std::array<GpuVertex, 3> kSourceTriangle{
+    GpuVertex{0.0F, 0.66F, 0.97F, 0.42F, 0.35F},
+    GpuVertex{-0.70F, -0.58F, 0.35F, 0.78F, 0.48F},
+    GpuVertex{0.70F, -0.58F, 0.38F, 0.68F, 0.94F},
+};
+```
+
+Transform2D và transformPosition nằm cùng file để bài sau nối CPU vào cùng hệ tọa độ. Ở lần vẽ đầu, angle bằng 0, translation bằng (0,0) và scale bằng 0,82. Vì thế shader đã có uniform nhưng chưa cần chuyển động để kiểm kết nối dữ liệu.
 
 ### Bước 2 — Upload đúng một lần vào VBO
 
@@ -69,17 +81,46 @@ api.VertexAttribPointer(
 
 Color dùng location 1, ba components và `offsetof(GpuVertex, red)`. `stride` luôn là `sizeof(GpuVertex)`, không phải số components của riêng attribute.
 
+Tiếp ngay sau phần position attribute trong initializeMesh, thêm:
+
+```cpp title="include/gpu_renderer.hpp — color attribute"
+api.EnableVertexAttribArray(1U);
+api.VertexAttribPointer(
+    1U,
+    3,
+    GL_FLOAT,
+    GL_FALSE,
+    GLsizei(sizeof(GpuVertex)),
+    reinterpret_cast<const void*>(offsetof(GpuVertex, red))
+);
+```
+
+Cuối initializeMesh, unbind buffer và VAO rồi kiểm GetError. Các lời gọi VertexAttribPointer đã ghi lại VBO liên quan trong VAO; unbind GL_ARRAY_BUFFER sau đó không làm mất liên kết này. Phương thức trả bool để main dừng nếu tạo mesh thất bại, thay vì tiếp tục vẽ với resource bằng 0.
+
 ### Bước 4 — Draw trong viewport phải
 
 ```cpp title="include/gpu_renderer.hpp — draw triangle"
-api.BindVertexArray(vertexArray);
-api.DrawArrays(GL_TRIANGLES, 0, 3);
-api.BindVertexArray(0U);
+void draw(GlApi& api, const Transform2D& transform, bool smoothColor) const {
+    api.UseProgram(program);
+    api.Uniform1f(angleLocation, transform.angleRadians);
+    api.Uniform1f(scaleLocation, transform.scale);
+    api.Uniform2f(translationLocation, transform.translation.x, transform.translation.y);
+    int smoothColorFlag = 0;
+    if (smoothColor) {
+        smoothColorFlag = 1;
+    }
+    api.Uniform1i(smoothColorLocation, smoothColorFlag);
+    api.BindVertexArray(vertexArray);
+    api.DrawArrays(GL_TRIANGLES, 0, 3);
+    api.BindVertexArray(0U);
+}
 ```
 
 Draw call không mang vertex pointer. Nó dùng program, uniforms, VAO và viewport đang active tại thời điểm gọi.
 
 ## Ghép các phần lại
+
+Trong main, gọi gpuTriangle.initializeMesh(gl) sau initializeProgram và kiểm bool trả về; đường lỗi phải destroy GPU objects trước context. Trong vòng render, sau khi clear hai panel, chọn viewport phải rồi gọi gpuTriangle.draw(gl, transform, smoothColor). Chỉ sau draw mới swap window. initializeMesh thuộc phần setup chạy một lần, còn draw thuộc vòng lặp; đổi chỗ hai việc này sẽ cấp phát VBO/VAO lặp lại mỗi frame.
 
 ```bash title="Terminal — build checkpoint 3"
 cmake --build build --config Debug --target project_33_checkpoint_3

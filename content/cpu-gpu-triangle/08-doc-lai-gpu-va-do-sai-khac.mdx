@@ -9,8 +9,8 @@ Nhìn hai panel giống nhau chỉ là kiểm tra bằng mắt. Để bắt lỗ
 Checkpoint 8 chọn triangle centroid—một probe nằm sâu trong interior—rồi thực hiện:
 
 ```text
-centroid NDC → GPU window pixel → glReadPixels → RGB8
-centroid NDC → CPU barycentric color → quantize RGB8
+centroid NDC → pixel chứa centroid → glReadPixels → RGB8
+tâm của chính pixel ấy → NDC → CPU barycentric color → quantize RGB8
 maximum channel difference
 ```
 
@@ -25,23 +25,40 @@ Readback là phép đo có chủ đích chứ không phải cách render chính.
 ### Bước 1 — Tạo probe từ geometry, không từ pixel đoán mò
 
 ```cpp title="include/pipeline.hpp — triangleCentroid"
-return {
-    (transformed[0].positionX + transformed[1].positionX + transformed[2].positionX) / 3.0F,
-    (transformed[0].positionY + transformed[1].positionY + transformed[2].positionY) / 3.0F,
-};
+inline Vec2 triangleCentroid(
+    const std::array<GpuVertex, 3>& triangle,
+    const Transform2D& transform
+) {
+    const std::array<GpuVertex, 3> transformed = transformedTriangle(triangle, transform);
+    return {
+        (transformed[0].positionX + transformed[1].positionX + transformed[2].positionX) / 3.0F,
+        (transformed[0].positionY + transformed[1].positionY + transformed[2].positionY) / 3.0F,
+    };
+}
 ```
 
 Probe xoay/dịch cùng triangle vì được tính sau transform. Nó không bị bỏ lại ở vị trí cũ khi animation chạy.
 
 ### Bước 2 — Đổi NDC sang GPU pixel bằng viewport phải
 
-```cpp title="include/gpu_renderer.hpp — clamp probe pixel"
-const Vec2 windowPoint = ndcToGpuWindow(pointNdc, viewport);
-result.pixelX = std::clamp(int(std::floor(windowPoint.x)), viewport.x, viewport.x + viewport.width - 1);
-result.pixelY = std::clamp(int(std::floor(windowPoint.y)), viewport.y, viewport.y + viewport.height - 1);
+```cpp title="include/pipeline.hpp — chọn pixel và tìm lại tâm mẫu"
+inline ProbePixel locateProbePixel(Vec2 point, const Viewport& viewport) {
+    if (viewport.width <= 0 || viewport.height <= 0 ||
+        !std::isfinite(point.x) || !std::isfinite(point.y) ||
+        point.x < -1.0F || point.x >= 1.0F || point.y < -1.0F || point.y >= 1.0F) {
+        return {};
+    }
+    const Vec2 windowPoint = ndcToGpuWindow(point, viewport);
+    const int x = int(std::floor(windowPoint.x));
+    const int y = int(std::floor(windowPoint.y));
+    const Vec2 center = gpuWindowToNdc({float(x) + 0.5F, float(y) + 0.5F}, viewport);
+    return {true, x, y, center};
+}
 ```
 
-Không đảo Y ở đây. `glReadPixels` dùng OpenGL window coordinates, cùng bottom-left convention với viewport.
+Đặt `ProbePixel` và helper này trong include/pipeline.hpp, bên cạnh các phép đổi viewport. `ProbePixel` giữ valid, x, y và centerNdc; xem khai báo đầy đủ trong source checkpoint. Trong readGpuProbe, gọi helper trước khi đọc GPU; nếu valid là false thì trả report chưa hợp lệ, không cố ép tọa độ vào mép cửa sổ.
+
+Không đảo Y ở đây. `glReadPixels` dùng tọa độ cửa sổ với gốc bottom-left. Điểm cần chú ý là tọa độ hình học ban đầu hiếm khi trùng tâm pixel. Ví dụ viewport 100 × 100: NDC (0,0) rơi vào pixel (50,50), nhưng tâm pixel đó là (50,5; 50,5), tức NDC (0,01; 0,01). Nếu tính màu CPU ở (0,0) rồi so với pixel GPU, chính phép kiểm đã tạo ra sai lệch. Vì vậy ta đổi **tâm pixel được đọc** về NDC để tính màu kỳ vọng.
 
 ### Bước 3 — Đọc đúng một pixel
 
@@ -60,6 +77,22 @@ Readback có thể buộc CPU chờ GPU. Vì vậy final chỉ chạy đoạn n�
 ### Bước 4 — So output cùng representation
 
 CPU expected color được `quantizeRgba8` trước khi so. Report in expected, actual và maximum difference; timing không liên quan đến pass/fail ở đây.
+
+Trong readGpuProbe, sau khi kiểm pixelLocation.valid, tính phần tham chiếu bằng chính centerNdc vừa tìm được:
+
+```cpp title="include/gpu_renderer.hpp — màu kỳ vọng tại đúng tâm pixel"
+result.valid = true;
+const BarycentricSample expectedSample = sampleTriangleAtNdc(triangle, transform, pixelLocation.centerNdc, smoothColor);
+result.inside = expectedSample.inside;
+const Color background{11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F};
+result.expected = quantizeRgba8(expectedSample.inside ? expectedSample.color : background);
+result.pixelX = pixelLocation.x;
+result.pixelY = pixelLocation.y;
+```
+
+Nếu tâm mẫu nằm ngoài tam giác nhưng vẫn trong viewport, màu kỳ vọng là màu nền chung của hai panel, không phải màu nội suy kéo dài ra ngoài tam giác. Nếu centroid đã ra ngoài viewport, báo không có probe thay vì đọc một pixel cạnh rồi gọi đó là kết quả tại centroid.
+
+Tham số triangle của readGpuProbe mặc định là kSourceTriangle ở checkpoint này. Khi thêm khả năng chỉnh vertex trong bài cuối, ta truyền mảng đang được chỉnh vào cùng hàm, để phần kiểm không âm thầm so với tam giác ban đầu.
 
 ## Ghép các phần lại
 

@@ -4,6 +4,9 @@ const files = [
   "include/pipeline.hpp",
   "include/gl_api.hpp",
   "include/gpu_renderer.hpp",
+  "include/editor.hpp",
+  "include/overlay.hpp",
+  "include/verification.hpp",
   "src/main.cpp",
   "tests/tests.cpp",
 ];
@@ -187,7 +190,7 @@ const learning = {
         {
           title: "Chọn probe trong NDC trước",
           explanation:
-            "Một point hình học được dùng ở cả CPU và GPU; từng phía tự đổi nó sang hệ tọa độ pixel của mình.",
+            "Chọn pixel chứa điểm hình học, rồi đổi tâm chính pixel đó về NDC để tính màu CPU. Nếu điểm ra ngoài viewport thì báo probe không hợp lệ, không ép tọa độ vào mép ảnh.",
         },
         {
           title: "Tránh edge làm pass/fail",

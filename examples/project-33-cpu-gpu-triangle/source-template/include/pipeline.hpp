@@ -277,6 +277,28 @@ inline BarycentricSample sampleTriangleAtNdc(
     return barycentricAtPoint(ndcTriangle, point, smoothColor);
 }
 
+struct ProbePixel {
+    bool valid{};
+    int x{};
+    int y{};
+    Vec2 centerNdc{};
+};
+
+// Compare at the center of the exact pixel read by OpenGL, not at the
+// original continuous point. Off-screen points are not clamped onto an edge.
+inline ProbePixel locateProbePixel(Vec2 point, const Viewport& viewport) {
+    if (viewport.width <= 0 || viewport.height <= 0 ||
+        !std::isfinite(point.x) || !std::isfinite(point.y) ||
+        point.x < -1.0F || point.x >= 1.0F || point.y < -1.0F || point.y >= 1.0F) {
+        return {};
+    }
+    const Vec2 windowPoint = ndcToGpuWindow(point, viewport);
+    const int x = int(std::floor(windowPoint.x));
+    const int y = int(std::floor(windowPoint.y));
+    const Vec2 center = gpuWindowToNdc({float(x) + 0.5F, float(y) + 0.5F}, viewport);
+    return {true, x, y, center};
+}
+
 inline Color quantizeRgba8(Color color) {
     return {
         float(std::lround(std::clamp(color.red, 0.0F, 1.0F) * 255.0F)) / 255.0F,

@@ -28,6 +28,7 @@ import {
   setupCanvas,
   useCanvasSize,
   useReducedMotion,
+  usePauseOnReducedMotion,
 } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 
@@ -219,7 +220,7 @@ function modeStage(mode?: InteractiveLabMode) {
 export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const activePointer = useRef<number | null>(null);
-  const size = useCanvasSize(canvasRef);
+  const probeBeforeDrag = useRef<Vec2>({ x: 0, y: -0.17 });
   const reducedMotion = useReducedMotion();
   const capabilities = modeCapabilities(mode);
   const [angleDegrees, setAngleDegrees] = useState(0);
@@ -231,6 +232,32 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
   const [paused, setPaused] = useState(true);
   const [capturing, setCapturing] = useState(false);
   const [probe, setProbe] = useState<Vec2>({ x: 0, y: -0.17 });
+
+  const releaseCapture = useCallback(() => {
+    const id = activePointer.current;
+    activePointer.current = null;
+    if (id !== null && canvasRef.current?.hasPointerCapture(id)) {
+      canvasRef.current.releasePointerCapture(id);
+    }
+    setCapturing(false);
+  }, []);
+  const stop = useCallback(() => {
+    setPaused(true);
+    releaseCapture();
+  }, [releaseCapture]);
+  const size = useCanvasSize(canvasRef, stop);
+  usePauseOnReducedMotion(stop);
+  useEffect(() => {
+    const hide = () => {
+      if (document.hidden) stop();
+    };
+    window.addEventListener("blur", stop);
+    document.addEventListener("visibilitychange", hide);
+    return () => {
+      window.removeEventListener("blur", stop);
+      document.removeEventListener("visibilitychange", hide);
+    };
+  }, [stop]);
 
   const transform = useMemo<TriangleTransform>(
     () => ({
@@ -255,6 +282,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
   }, [size]);
 
   const reset = useCallback(() => {
+    releaseCapture();
     setAngleDegrees(0);
     setScale(0.82);
     setTranslationX(0);
@@ -263,10 +291,10 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     setDisplayMode("color");
     setPaused(true);
     setProbe({ x: 0, y: -0.17 });
-  }, [mode]);
+  }, [mode, releaseCapture]);
 
   useEffect(() => {
-    if (paused || reducedMotion) return;
+    if (paused || reducedMotion || !capabilities.canTransform) return;
     let frame = 0;
     let previous = performance.now();
     const animate = (now: number) => {
@@ -277,7 +305,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     };
     frame = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frame);
-  }, [paused, reducedMotion]);
+  }, [paused, reducedMotion, capabilities.canTransform]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -327,7 +355,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     context.fillStyle = "#d7deec";
     context.font = "12px ui-monospace, SFMono-Regular, Consolas, monospace";
     context.fillText("CPU · top-left framebuffer", panels.cpu.x, 19);
-    context.fillText("GPU · bottom-left viewport", panels.gpu.x, 19);
+    context.fillText("GPU (mô hình) · bottom-left viewport", panels.gpu.x, 19);
     drawPipelineRail(context, size.width, size.height, capabilities.stage);
   }, [capabilities, displayMode, mode, panels, probe, size, smoothColor, transform]);
 
@@ -344,7 +372,9 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!capabilities.canProbe) return;
+    if (!capabilities.canProbe || event.button !== 0 || !event.isPrimary) return;
+    if (activePointer.current !== null) return;
+    probeBeforeDrag.current = { ...probe };
     event.currentTarget.setPointerCapture(event.pointerId);
     activePointer.current = event.pointerId;
     setCapturing(true);
@@ -360,9 +390,17 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     setCapturing(false);
   };
 
-  const step = () => setAngleDegrees((current) => (current + 10) % 360);
+  const step = () => {
+    if (!capabilities.canTransform) return;
+    setPaused(true);
+    setAngleDegrees((current) => (current + 10) % 360);
+  };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (event.key === " ") {
+    if (event.ctrlKey || event.altKey || event.metaKey || event.repeat) return;
+    if (event.key === "Escape" && activePointer.current !== null) {
+      setProbe(probeBeforeDrag.current);
+      releaseCapture();
+    } else if (event.key === " " && capabilities.canTransform && !reducedMotion) {
       event.preventDefault();
       setPaused((current) => !current);
     } else if (event.key.toLowerCase() === "n") {
@@ -412,6 +450,11 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
         }}
         onPointerUp={releasePointer}
         onPointerCancel={releasePointer}
+        onLostPointerCapture={() => {
+          activePointer.current = null;
+          setCapturing(false);
+        }}
+        onBlur={stop}
       />
       <div className="lab-controls">
         {capabilities.canTransform ? (
@@ -465,10 +508,14 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
             Nội suy màu
           </label>
         ) : null}
-        <button type="button" onClick={() => setPaused((current) => !current)}>
+        <button
+          type="button"
+          disabled={reducedMotion || !capabilities.canTransform}
+          onClick={() => setPaused((current) => !current)}
+        >
           {paused ? "Tiếp tục" : "Tạm dừng"}
         </button>
-        <button type="button" onClick={step}>
+        <button type="button" disabled={!capabilities.canTransform} onClick={step}>
           Tiến 10°
         </button>
         <button type="button" onClick={reset}>
@@ -491,7 +538,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
             value: sample.weights.map((weight) => weight.toFixed(3)).join(" / "),
           },
           {
-            label: "CPU ↔ RGBA8 GPU",
+            label: "CPU ↔ RGBA8 mô phỏng",
             value: sample.inside
               ? `max channel difference ${maximumColorDifference(sample.color, gpuColor).toFixed(5)}`
               : "probe không tạo fragment",
