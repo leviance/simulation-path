@@ -84,7 +84,10 @@ inline float viewerEdge(ScreenVertex a, ScreenVertex b, float x, float y) {
     if (reverse)
         std::swap(a, b);
     const float value = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
-    return reverse ? -value : value;
+    if (reverse) {
+        return -value;
+    }
+    return value;
 }
 
 inline bool topLeftEdge(ScreenVertex a, ScreenVertex b) {
@@ -187,7 +190,10 @@ struct CpuViewerRenderer {
         ViewerCpuStats stats{};
         stats.submitted = mesh.triangleCount();
         for (std::size_t order = 0; order < mesh.triangleCount(); ++order) {
-            const auto triangle = scene.view.reverseOrder ? mesh.triangleCount() - order - 1 : order;
+            std::size_t triangle = order;
+            if (scene.view.reverseOrder) {
+                triangle = mesh.triangleCount() - order - 1;
+            }
             const auto offset = triangle * 3;
             const auto ia = mesh.indices[offset], ib = mesh.indices[offset + 1], ic = mesh.indices[offset + 2];
             const auto polygon = clipViewerTriangle(clipVertices[ia], clipVertices[ib], clipVertices[ic]);

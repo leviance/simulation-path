@@ -1,123 +1,102 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Kiểm tra toàn bộ kết quả CPU–GPU
+# Hai kết quả giống nhau đến mức nào thì được chấp nhận?
 
 ## Bài toán của chúng ta
 
-Nhìn vài chục cột trên màn hình chỉ cho ta biết các mẫu đó có vẻ hợp lý. Một phần tử sai ở giữa mảng, component `w` bị bỏ quên hoặc một giá trị NaN vẫn có thể lọt qua. Vì vậy bài này sẽ so toàn bộ output của GPU với kết quả CPU, thay vì chỉ dựa vào hình ảnh.
+Inspector chỉ giúp đọc một phần tử, không kiểm thay toàn mảng. Một lỗi ở index cuối hay channel w rất dễ bị bỏ qua nếu chỉ nhìn vài cột. Ta cần validator duyệt đủ N phần tử, cả bốn thành phần và báo vị trí sai đầu tiên.
 
-Không nên so float bằng `expected == actual`: CPU và GPU có thể lệch nhau một chút do thứ tự làm tròn, đặc biệt với AXPY. Ta sẽ kết hợp sai số tuyệt đối và tương đối, nhưng luôn tìm NaN/Infinity trước.
+Không dùng `expected == actual` cho mọi phép tính float. Nhưng cũng không được tăng tolerance tùy ý tới khi bảng chuyển xanh. Ta phải công bố rõ ngưỡng và kiểm cả chính ngưỡng đó.
 
-## Theo dõi dữ liệu từ CPU sang GPU
+## Hiểu ý tưởng trước khi viết code
 
-Một component được chấp nhận khi:
+Một thành phần được chấp nhận khi:
 
-$$
-|e-a| \le \varepsilon_{abs} + \varepsilon_{rel}\max(|e|,|a|)
-$$
+$$|e-a| \le \epsilon_{abs} + \epsilon_{rel}\max(|e|,|a|).$$
 
-Phần tuyệt đối giữ ngưỡng hữu ích quanh zero. Phần tương đối scale theo độ lớn của giá trị. Tuy nhiên, `NaN` không thể “lọt qua tolerance”: nó phải làm `allFinite = false` trước khi xét công thức.
+Bản này chọn cả absTol và relTol bằng 2×10⁻⁶. Phần tuyệt đối hữu ích quanh zero; phần tương đối scale theo độ lớn. AXPY có thể được GPU thực hiện bằng fused multiply-add trong khi CPU làm tròn khác, nên phải dùng tolerance thay vì buộc mọi bit giống nhau.
+
+Trước công thức trên, expected, actual và tolerance phải hợp lệ. NaN khiến nhiều phép so sánh trả false; nếu code chỉ viết “error lớn hơn ngưỡng thì fail”, một NaN có thể lách qua nhánh báo lỗi.
 
 <InteractiveLab demo="million-vector-gpu" mode="gpu-validation" />
 
-Thử `Roundoff 1e-7`, `Sai 0,01` và `NaN`. Sau đó đổi tolerance. Tolerance có thể phân loại sai số hữu hạn, nhưng tăng tolerance không được phép hợp thức hóa NaN.
-
 ## Bắt tay vào code
 
-### Bước 1 — Báo cáo cần cho biết sai ở đâu
+### 1. Kiểm chính tham số tolerance
 
-```cpp title="include/vector_compute_math.hpp — OutputValidationReport"
-struct OutputValidationReport {
-    bool sameSize{};
-    bool allFinite{};
-    std::size_t mismatchCount{};
-    std::size_t firstMismatch{std::numeric_limits<std::size_t>::max()};
-    float maximumAbsoluteError{};
+`validateOutput` không được bắt đầu so dữ liệu khi tolerance đã sai:
 
-    bool allPassed() const {
-        return sameSize && allFinite && mismatchCount == 0;
-    }
-};
+```cpp title="include/vector_compute_math.hpp — từ chối tolerance không hợp lệ"
+OutputValidationReport report{};
+report.tolerancesValid = std::isfinite(absoluteTolerance) && absoluteTolerance >= 0.0F &&
+    std::isfinite(relativeTolerance) && relativeTolerance >= 0.0F;
+report.sameSize = expected.size() == actual.size();
+report.allFinite = true;
+if (!report.tolerancesValid) {
+    return report;
+}
 ```
 
-`maximumAbsoluteError` cho biết sai đến mức nào; `mismatchCount` cho biết lỗi cục bộ hay lan rộng; `firstMismatch` cho index để bắt đầu soi binding/dispatch.
+Report vẫn giữ `tolerancesValid=false`, nên `allPassed()` không thể chấp nhận nó dù chưa đếm được mismatch nào. Đây là lỗi cấu hình phép kiểm, không phải bằng chứng dữ liệu đúng.
 
-### Bước 2 — Tìm NaN/Inf trước khi so sai số
+### 2. Loại NaN/Inf trước phép tính sai số
 
-```cpp title="include/vector_compute_math.hpp — một component"
+Trong vòng component, đặt finite guard trước phép trừ:
+
+```cpp title="include/vector_compute_math.hpp — chặn giá trị không hữu hạn"
 if (!std::isfinite(expectedValue) || !std::isfinite(actualValue)) {
     report.allFinite = false;
+    if (report.firstNonFinite == std::numeric_limits<std::size_t>::max()) {
+        report.firstNonFinite = index;
+    }
+    if (elementMatches && report.firstMismatch == std::numeric_limits<std::size_t>::max()) {
+        report.firstMismatchComponent = component;
+    }
     elementMatches = false;
     continue;
 }
-
-const float error = std::abs(expectedValue - actualValue);
-report.maximumAbsoluteError = std::max(report.maximumAbsoluteError, error);
 ```
 
-Ta không cần gán `maximumAbsoluteError = infinity` cho NaN; field `allFinite` đã chỉ đúng loại lỗi. Nếu muốn diagnostics chi tiết hơn, có thể thêm `nonFiniteCount` như bài tập.
+`continue` bỏ phép tính sai số của channel không hữu hạn nhưng không bỏ lỗi: `elementMatches=false` sẽ làm phần tử này được tính mismatch ở cuối vòng.
 
-### Bước 3 — Kết hợp sai số tuyệt đối và tương đối
+### 3. So sai số và lưu vị trí có ích để debug
 
-```cpp title="include/vector_compute_math.hpp — ngưỡng mixed"
-const float scale = std::max(
-    std::abs(expectedValue),
-    std::abs(actualValue)
-);
+`validateOutput` kiểm tolerance hữu hạn/không âm và hai mảng cùng size trước khi kết luận. Trong mỗi phần tử, ta tạo hai mảng bốn component rồi xét lần lượt:
 
+```cpp title="include/vector_compute_math.hpp — sai số của một component"
+const float error = std::abs(expectedValue - actualValue);
+report.maximumAbsoluteError = std::max(report.maximumAbsoluteError, error);
+const float scale = std::max(std::abs(expectedValue), std::abs(actualValue));
 if (error > absoluteTolerance + relativeTolerance * scale) {
+    if (elementMatches && report.firstMismatch == std::numeric_limits<std::size_t>::max()) {
+        report.firstMismatchComponent = component;
+    }
     elementMatches = false;
 }
 ```
 
-Một `Vec4` chỉ match khi cả bốn component match. `mismatchCount` đếm số phần tử lỗi, không đếm component, để first/mismatch cùng dùng một đơn vị index.
+Đoạn này chạy sau finite guard. `mismatchCount` đếm phần tử sai, không phải tổng channel sai; `firstMismatchComponent` cho biết channel đầu tiên ở phần tử lỗi đầu tiên. `firstNonFinite` được lưu riêng để phân biệt NaN/Inf với sai số hữu hạn.
 
-### Bước 4 — Ghi lại vị trí sai đầu tiên
+Nếu hai size khác nhau, phần thiếu/thừa cũng được tính lỗi. So phần chung rồi thấy tất cả đúng không có nghĩa toàn workload đúng. Tương tự, `allPassed()` còn cần tolerance hợp lệ và tất cả giá trị hữu hạn, không chỉ `mismatchCount == 0`.
 
-```cpp title="include/vector_compute_math.hpp — lỗi đầu tiên"
-if (!elementMatches) {
-    if (report.firstMismatch == std::numeric_limits<std::size_t>::max()) {
-        report.firstMismatch = index;
-    }
-
-    ++report.mismatchCount;
-}
-```
-
-Validator vẫn duyệt tiếp sau lỗi đầu để tìm maximum error và tổng mismatch. Nó không return sớm chỉ để có PASS/FAIL nhanh.
+Worker chạy validator sau readback, ngoài vùng timing. Chỉ khi validation và canary cùng đạt mới công bố một lượt chạy thành công. Checksum giúp ghi nhận output đã được sử dụng, nhưng checksum không thay phép kiểm từng phần tử: hai mảng sai vẫn có thể cùng checksum.
 
 ## Chạy checkpoint
 
-Mỗi khi count, operation hoặc scalar đổi:
+Chạy `project_37_checkpoint_7` với cả ba operation. Đọc PASS, mismatch count và maximum error bên dưới inspector. Thử preset 1.000.003 để chắc rằng không chỉ 256 phần tử đầu được so.
 
-1. Bản CPU tính đủ N phần tử kết quả mong đợi.
-2. GPU dispatch, barrier và readback actual output đủ N.
-3. `validateOutput` so bốn component ở mọi index.
-4. Title báo mismatch count, maximum error và PASS/FAIL.
+## Thử làm sai để hiểu đúng
 
-Vẽ chỉ lấy 64 sample sau bước 3; validation không dựa vào sampling.
+1. Trong CPU fixture, thay riêng x, rồi y, z, w của một phần tử bằng giá trị lệch 0,1. Validator phải bắt từng trường hợp và chỉ đúng component.
+2. Thử NaN, Infinity, output thiếu, tolerance NaN và tolerance âm. Lỗi dữ liệu phải làm fail finite/size; lỗi tolerance phải làm `tolerancesValid=false`, không trở thành một lần kiểm thành công rỗng.
 
-## Thử phá chương trình
+## Tự kiểm tra kết quả
 
-1. Không kiểm NaN/Inf trước rồi so bằng công thức thông thường. Kết quả boolean rất dễ bị diễn giải sai tùy cách viết nhánh.
-2. Đặt tolerance thành 0. AXPY có thể fail vì sai số làm tròn không có ý nghĩa với bài toán.
-3. Đặt tolerance thành 1.0 để mọi output “pass”. Validator không còn khả năng bắt layout/arithmetic bug.
-4. Dừng ở mismatch đầu. Bạn mất maximum error và không biết lỗi chỉ ở tail hay toàn buffer.
-5. Chỉ so component `x` vì UI chỉ vẽ `x`.
+- So đủ N×4 component, dùng abs/rel tolerance công bố.
+- NaN/Inf không được xem là roundoff; size mismatch không bị bỏ qua.
+- Báo được first mismatch/component, first non-finite và maximum error.
+- Fixture có đáp án nhỏ độc lập, không lấy expected từ chính hàm đang kiểm.
 
-## Tự nghiệm thu
+## Bài tập mở rộng
 
-- [ ] Size mismatch làm report fail rõ ràng.
-- [ ] NaN/Inf luôn làm `allFinite=false`.
-- [ ] Roundoff nhỏ pass với tolerance mặc định.
-- [ ] Sai 0,01 fail và ghi đúng `firstMismatch`.
-- [ ] Validator so cả x/y/z/w của đủ N phần tử.
-- [ ] Maximum error và mismatch count được báo cạnh PASS/FAIL.
-
-## Bài tập tiếp theo
-
-1. Thêm `nonFiniteCount` và `firstNonFinite`.
-2. Lưu component đầu tiên bị sai (`x/y/z/w`) trong report.
-3. Tạo failure experiment chỉ làm sai 67 phần tử cuối để phân biệt floor division với lỗi toàn mảng.
-
-Output đã đúng. Bài tiếp theo mới được phép hỏi kernel mất bao lâu, đồng thời giữ upload/readback ở ngoài con số compute time.
+Thử so một giá trị gần zero và một giá trị lớn để thấy hai phần tolerance hoạt động khác nhau. Giữ ngưỡng của bản chuẩn nguyên vẹn. Sang [đo ba phạm vi thời gian](/projects/million-vector-gpu/08-do-thoi-gian-gpu-dung-cach).

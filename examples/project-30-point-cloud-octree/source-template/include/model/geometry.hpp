@@ -88,9 +88,11 @@ inline double planeTolerance(Plane plane) {
     return 1e-9 * (1.0 + std::abs(plane.distance) + std::abs(plane.normal.x) + std::abs(plane.normal.y) + std::abs(plane.normal.z));
 }
 
-enum class Shape { Box,
-                   Sphere,
-                   Frustum };
+enum class Shape {
+    Box,
+    Sphere,
+    Frustum
+};
 
 // [snippet:region]
 struct Region {

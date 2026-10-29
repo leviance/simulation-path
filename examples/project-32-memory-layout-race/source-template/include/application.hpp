@@ -105,14 +105,14 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             else if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI))) {
                 const auto key = event.key.key;
                 if (key == SDLK_ESCAPE) {
+                    bool hasPendingWork = simulation.pending != lab::PendingWork::none;
+#if LAB_CHECKPOINT >= 3
+                    hasPendingWork = hasPendingWork || benchmark.active;
+#endif
                     if (dragging) {
                         camera = beforeDrag;
                         release();
-                    } else if (simulation.pending != lab::PendingWork::none
-#if LAB_CHECKPOINT >= 3
-                               || benchmark.active
-#endif
-                    )
+                    } else if (hasPendingWork)
                         cancel();
                     else
                         running = false;
@@ -122,11 +122,19 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     camera = {};
                 else if (key == SDLK_F)
                     showReports = !showReports;
-                else if (key == SDLK_LEFT || key == SDLK_RIGHT)
-                    camera.yaw += key == SDLK_LEFT ? -0.08 : 0.08;
-                else if (key == SDLK_UP || key == SDLK_DOWN)
-                    camera.pitch = std::clamp(camera.pitch + (key == SDLK_UP ? -0.08 : 0.08), -1.1, 1.1);
-                else if (key == SDLK_R || key == SDLK_1 || key == SDLK_2 || key == SDLK_3) {
+                else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
+                    double yawChange = 0.08;
+                    if (key == SDLK_LEFT) {
+                        yawChange = -0.08;
+                    }
+                    camera.yaw += yawChange;
+                } else if (key == SDLK_UP || key == SDLK_DOWN) {
+                    double pitchChange = 0.08;
+                    if (key == SDLK_UP) {
+                        pitchChange = -0.08;
+                    }
+                    camera.pitch = std::clamp(camera.pitch + pitchChange, -1.1, 1.1);
+                } else if (key == SDLK_R || key == SDLK_1 || key == SDLK_2 || key == SDLK_3) {
                     cancel();
                     std::size_t count = simulation.count;
                     bool cold = simulation.cold;
@@ -199,7 +207,11 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
 #if LAB_CHECKPOINT >= 3
                 else if (key == SDLK_T) {
                     cancel();
-                    workload = workload == lab::MemoryWorkload::fullLifecycle ? lab::MemoryWorkload::gravityOnly : lab::MemoryWorkload::fullLifecycle;
+                    if (workload == lab::MemoryWorkload::fullLifecycle) {
+                        workload = lab::MemoryWorkload::gravityOnly;
+                    } else {
+                        workload = lab::MemoryWorkload::fullLifecycle;
+                    }
                     benchmark.rows.clear();
                     simulation.notice = "T selects benchmark only; the fountain always updates its complete lifecycle";
                 } else if (key == SDLK_B) {
@@ -243,7 +255,11 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
         renderMs = lab::milliseconds(renderStarted);
         drawFountainPanel(renderer, simulation, drawn, renderMs, frameMs);
 #if LAB_CHECKPOINT >= 3
-        SDL_RenderDebugTextFormat(renderer, 12, 770, "Benchmark: %s | %s | case %zu target %zu; state/seed captured, physics frozen", workload == lab::MemoryWorkload::gravityOnly ? "gravity-only" : "full lifecycle", benchmark.notice.c_str(), benchmark.caseIndex, benchmark.target);
+        const char* workloadName = "full lifecycle";
+        if (workload == lab::MemoryWorkload::gravityOnly) {
+            workloadName = "gravity-only";
+        }
+        SDL_RenderDebugTextFormat(renderer, 12, 770, "Benchmark: %s | %s | case %zu target %zu; state/seed captured, physics frozen", workloadName, benchmark.notice.c_str(), benchmark.caseIndex, benchmark.target);
         if (showReports) {
             SDL_SetRenderDrawColor(renderer, 9, 18, 30, 245);
             const SDL_FRect reportPanel{6, 6, 1108, 173};
@@ -252,10 +268,14 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             SDL_RenderDebugTextFormat(renderer, 12, 135, "Measurement input: seed=%u gravity=%.2f launch=%.1f lifetime=%.2f; clock excludes reset/copy/render/RAF", benchmark.config.seed, benchmark.config.gravity, benchmark.config.launchSpeed, benchmark.config.lifetime);
             for (std::size_t index = 0; index < benchmark.rows.size(); ++index) {
                 const auto& row = benchmark.rows[index];
+                const char* rowWorkload = "lifecycle";
+                if (row.workload == lab::MemoryWorkload::gravityOnly) {
+                    rowWorkload = "gravity";
+                }
                 if (row.paired) {
-                    SDL_RenderDebugTextFormat(renderer, 12, 12 + float(index * 19), "N=%zu %s AoS %.3f [%.3f,%.3f]ms SoA %.3f [%.3f,%.3f]ms errorRatio=%.2e sum=%.4e", row.count, row.workload == lab::MemoryWorkload::gravityOnly ? "gravity" : "lifecycle", row.aos.median, row.aos.minimum, row.aos.maximum, row.soa.median, row.soa.minimum, row.soa.maximum, row.maximumErrorRatio, row.checksumAoS);
+                    SDL_RenderDebugTextFormat(renderer, 12, 12 + float(index * 19), "N=%zu %s AoS %.3f [%.3f,%.3f]ms SoA %.3f [%.3f,%.3f]ms errorRatio=%.2e sum=%.4e", row.count, rowWorkload, row.aos.median, row.aos.minimum, row.aos.maximum, row.soa.median, row.soa.minimum, row.soa.maximum, row.maximumErrorRatio, row.checksumAoS);
                 } else {
-                    SDL_RenderDebugTextFormat(renderer, 12, 12 + float(index * 19), "N=%zu %s AoS %.3f [%.3f,%.3f]ms | SoA NOT MEASURED | checksum=%.4e", row.count, row.workload == lab::MemoryWorkload::gravityOnly ? "gravity" : "lifecycle", row.aos.median, row.aos.minimum, row.aos.maximum, row.checksumAoS);
+                    SDL_RenderDebugTextFormat(renderer, 12, 12 + float(index * 19), "N=%zu %s AoS %.3f [%.3f,%.3f]ms | SoA NOT MEASURED | checksum=%.4e", row.count, rowWorkload, row.aos.median, row.aos.minimum, row.aos.maximum, row.checksumAoS);
                 }
             }
         }
@@ -263,7 +283,11 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
 #if LAB_CHECKPOINT >= 6
         if (showReports) {
             const auto traffic = lab::modelTraffic(simulation.count, simulation.layout, workload);
-            SDL_RenderDebugTextFormat(renderer, 12, 155, "64B aligned-base model: useful=%zu B uniqueLines=%zu loaded=%zu B %s; NOT measured cache misses", traffic.usefulBytes, traffic.uniqueLines, traffic.loadedBytes, traffic.upperBound ? "ALL-FIELD UPPER BOUND" : "gravity-only");
+            const char* trafficScope = "gravity-only";
+            if (traffic.upperBound) {
+                trafficScope = "ALL-FIELD UPPER BOUND";
+            }
+            SDL_RenderDebugTextFormat(renderer, 12, 155, "64B aligned-base model: useful=%zu B uniqueLines=%zu loaded=%zu B %s; NOT measured cache misses", traffic.usefulBytes, traffic.uniqueLines, traffic.loadedBytes, trafficScope);
         }
 #endif
         SDL_RenderPresent(renderer);
@@ -280,7 +304,12 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     const auto& next = simulation.aos[index];
                     const float remaining = old.lifetime - old.age;
                     const bool expired = lab::fixedDt >= remaining;
-                    const float expectedAge = expired ? lab::fixedDt - remaining : old.age + lab::fixedDt;
+                    float expectedAge = 0;
+                    if (expired) {
+                        expectedAge = lab::fixedDt - remaining;
+                    } else {
+                        expectedAge = old.age + lab::fixedDt;
+                    }
                     if (next.id != index || next.generation != old.generation + std::uint32_t(expired) || std::abs(next.age - expectedAge) > 1e-6F || !lab::finiteParticle(next))
                         throw std::runtime_error("Untouched/invalid slot in full-N workflow");
                 }

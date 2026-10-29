@@ -1,190 +1,85 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Hoàn thiện máy tính vector GPU
+# So sánh CPU và GPU theo kích thước mảng
 
 ## Bài toán của chúng ta
 
-Từng phần đã chạy đúng riêng lẻ; bài cuối sẽ ghép chúng thành một ứng dụng hoàn chỉnh. Khi `count` thay đổi, ta tạo lại và upload bộ dữ liệu. Khi `operation` hoặc `scalar` thay đổi, ta chỉ tính lại kết quả CPU và chạy lại compute shader. Nếu người dùng không thay đổi gì, chương trình chỉ vẽ output hiện có thay vì xử lý lại hơn một triệu vector ở mọi frame.
+Một số đo ở N duy nhất chưa cho thấy lợi ích của việc đưa dữ liệu sang GPU. Với mảng nhỏ, chi phí truyền dữ liệu và đồng bộ có thể lớn hơn phép cộng. Với mảng lớn, kernel có thể nhanh nhưng end-to-end vẫn chưa chắc thắng CPU. Ta cần nhìn cả ba cột theo N, không chỉ chọn một con số đẹp.
 
-Bài này thêm ba operation vào shader, controls, benchmark nút B, output bars, named validation và cleanup đảo ngược lifetime. Cuối bài, phần mã nguồn bên dưới và ZIP là cùng một snapshot final có thể build.
+Bài này mở rộng nút B thành một job gồm 256, 65.537 và 1.000.003 phần tử. Cả ba hàng phải cùng operation/scalar/seed, còn warm-up và sample phải tách riêng theo từng N.
 
-## Theo dõi dữ liệu từ CPU sang GPU
+## Hiểu ý tưởng trước khi viết code
 
-Luồng final có hai nhánh:
+Một job nhận bản sao `WorkloadConfig`. Mỗi hàng benchmark cũng giữ cấu hình của chính nó. Nếu UI dùng tham chiếu tới một config có thể bị thay đổi giữa chừng, sample của Add và AXPY sẽ bị trộn vào cùng một median mà nhãn không cho biết điều đó.
 
-```text
-Count đổi ───────> generate A/B ─> upload SSBO ─┐
-Operation đổi ──────────────────────────────────┤
-Scalar đổi ─────────────────────────────────────┤
-                                                v
-Bản CPU → GPU dispatch → barrier → đọc kết quả → kiểm tra → vẽ một số mẫu
-```
+Ở đây worker giữ dữ liệu riêng, UI khóa các phím đổi cấu hình khi busy. Escape yêu cầu hủy; chỉ các hàng đã đủ sample mới được công bố. Một hàng thiếu mẫu không được điền số 0 để làm như đã hoàn tất.
 
-Một expose/resize frame không đi qua nhánh compute; nó chỉ gọi `drawOutputBars` bằng readback gần nhất.
-
-<InteractiveLab demo="million-vector-gpu" mode="vector-gpu-final" />
-
-Đổi local size trong Canvas để đọc dispatch math, nhưng nhớ source final cố định shader ở 256. Muốn đổi local size thật, phải compile một shader variant phù hợp; không thể chỉ đổi tham số C++ và giả rằng `layout(local_size_x=256)` cũng đổi theo.
+<InteractiveLab demo="million-vector-gpu" mode="vector-benchmark" />
 
 ## Bắt tay vào code
 
-### Bước 1 — Thêm uniform để chọn phép toán
+### 1. Giữ cấu hình riêng trong worker
 
-```glsl title="shaders/vector_ops.comp — final arithmetic"
-uniform int uElementCount;
-uniform int uOperation;
-uniform float uScalar;
+`start` bắt đầu thread bằng cách capture config theo giá trị:
 
-void main() {
-    uint index = gl_GlobalInvocationID.x;
+```cpp title="include/compute_worker.hpp — chụp cấu hình khi tạo job"
+thread_ = std::jthread([this, config, benchmark](std::stop_token stop) {
+    run(config, benchmark, stop);
+});
+```
 
-    if (index >= uint(uElementCount)) {
-        return;
-    }
+Ở đây không dùng `[&]` hoặc capture tham chiếu tới SELECTED của UI. Job chỉ đọc bản copy của nó; `stop_token` là kênh hủy riêng, không phải cách sửa operation giữa chừng.
 
-    if (uOperation == 1) {
-        outputData[index] = inputA[index] * uScalar + inputB[index];
-    } else if (uOperation == 2) {
-        outputData[index] = inputA[index] - inputB[index];
-    } else {
-        outputData[index] = inputA[index] + inputB[index];
-    }
+### 2. Tạo case riêng cho từng N
+
+Phần thay đổi so với checkpoint 8 rất nhỏ vì một hàng đã có vòng đời rõ ràng:
+
+```cpp title="include/compute_worker.hpp — chọn các N cho benchmark"
+std::vector<std::size_t> counts{config.elementCount};
+if (benchmark) {
+    counts.assign(benchmarkCounts.begin(), benchmarkCounts.end());
 }
 ```
 
-Enum phía CPU có giá trị Add=0, AXPY=1, Difference=2; shader phải dùng đúng ba giá trị này. Trước khi thay program đang chạy, ta còn kiểm tra `uOperation` và `uScalar` có thật sự tồn tại trong shader đã link hay không.
+Vòng `for (count : counts)` cập nhật N của bản config worker, preflight lại, tạo input và preallocate. Sau đó mỗi N chạy hai warm-up cùng chín sample. `BenchmarkRow row` được tạo bên trong vòng này, nên sample của hàng trước không chảy sang hàng sau.
 
-### Bước 2 — Tách việc tạo lại dữ liệu khỏi phép tính
+### 3. Chỉ công bố một hàng đã hoàn tất
 
-```cpp title="src/main.cpp — hai loại thay đổi"
-auto rebuildDataset = [&]() -> bool {
-    inputs = lab::makeVectorInputs(elementCount);
-    cpuOutput = lab::computeCpu(inputs, operation, scalar);
-    visibleOutput = cpuOutput;
+Sau vòng sample, thống kê và công bố diễn ra cùng một thứ tự cho mỗi N:
 
-    if (!engine.uploadInputs(gl, inputs, diagnostics)) {
-        std::cerr << diagnostics << '\n';
-        return false;
-    }
-
-    return true;
-};
-
-auto runCalculation = [&]() -> bool {
-    cpuOutput = lab::computeCpu(inputs, operation, scalar);
-    visibleOutput = cpuOutput;
-    const std::size_t dispatchCount = elementCount;
-
-    if (!engine.execute(
-            gl,
-            dispatchCount,
-            operation,
-            scalar,
-            gpuOutput,
-            gpuMilliseconds,
-            diagnostics
-        )) {
-        std::cerr << diagnostics << '\n';
-        return false;
-    }
-
-    visibleOutput = gpuOutput;
-    validation = lab::validateOutput(cpuOutput, gpuOutput);
-    return true;
-};
+```cpp title="include/compute_worker.hpp — công bố hàng benchmark"
+row.summarize();
+{
+    std::lock_guard lock(mutex_);
+    report_.data = std::move(data);
+    report_.rows.push_back(std::move(row));
+}
 ```
 
-Source thật còn diagnostics và checkpoint guards, nhưng ranh giới trách nhiệm vẫn như trên. `[`/`]` gọi cả hai; `1/2/3` và `-/=` chỉ gọi calculation.
+Nếu sample lỗi hoặc bị hủy, exception rời vòng trước đoạn này. Row dang dở bị hủy tại scope của nó, không được thêm vào report rồi gắn nhãn hoàn tất.
 
-### Bước 3 — Vẽ một phần kết quả nhưng kiểm tra toàn bộ buffer
+Chỉ khi hàng hoàn tất, `row.summarize()` tính thống kê rồi worker công bố row dưới mutex. Dashboard lấy snapshot nhẹ: ba hàng timing cùng một `shared_ptr<const CalculationData>`, không sao chép cả triệu phần tử ở mỗi frame. Đầu vào và output được đưa lên inspector theo cấu hình MEASURED, không bị gắn nhãn SELECTED mới.
 
-```cpp title="src/main.cpp — chọn index đều nhau"
-const std::size_t index = std::min(
-    output.size() - 1U,
-    (std::size_t(bar) * output.size()) / std::size_t(barCount)
-);
-
-const float value = output[index].x;
-```
-
-64 cột giúp đọc dấu/độ lớn của component `x`. `validateOutput` đã chạy trên đủ `gpuOutput`, cả bốn components, trước khi title báo PASS.
-
-### Bước 4 — Dọn tài nguyên OpenGL trước khi hủy context
-
-```cpp title="src/main.cpp — shutdown"
-engine.destroy(gl);
-destroyWindowAndContext(window, context);
-```
-
-`engine.destroy` xóa timer query, ba buffers rồi program. Mọi lệnh `glDelete*` chạy khi context còn current. Sau đó mới destroy context, window và SDL.
+Hai giới hạn an toàn có vai trò khác nhau: mỗi lần chờ GPU/query tối đa 3 giây, và toàn job có deadline 15 giây. Khi hủy/lỗi, worker dọn query, SSBO và program trong khi context còn current rồi mới trả quyền context. Không để main thread hủy context trước khi worker kết thúc.
 
 ## Chạy checkpoint
 
-Bản hoàn chỉnh khởi tạo theo một đường duy nhất: tạo context và đọc giới hạn, compile program, sinh rồi tải dữ liệu, chạy bản CPU cùng lần dispatch đầu tiên, sau đó mới vào event loop. Trong loop, event quyết định cần tạo lại dữ liệu hay chỉ tính lại kết quả; phần render luôn dùng `visibleOutput` mới nhất. Nhờ vậy code không giấu thêm một vòng compute thứ hai trong hàm vẽ.
+Chạy `project_37_checkpoint_9` ở Release, chọn operation/scalar rồi B. Bảng phải có ba N, mỗi hàng 2 warm-up/9 samples. Cột CPU, GPU kernel và end-to-end cùng đơn vị ms. Bars dùng chung thang trong từng hàng; để so giữa các N, đọc số, không so độ dài bar giữa các hàng đã normalize khác nhau.
 
-Khi một bước trả `false`, diagnostics được in và vòng lặp kết thúc có kiểm soát. Shutdown vẫn đi qua `engine.destroy(gl)` trước context; app không gọi `std::exit` giữa chừng sau khi GPU resources đã được tạo.
+Nếu N nhỏ có kernel rất ngắn nhưng E2E lớn hơn CPU, hãy giữ kết quả đó. Nó giải thích vì sao các project tiếp theo cố giữ dữ liệu ở GPU, thay vì đọc toàn bộ về sau mỗi phép cộng. Không hạ workload một triệu phần tử để bảng trông dễ thắng hơn.
 
-## Điều khiển bản final
+## Thử làm sai để hiểu đúng
 
-- `1`: Add, `2`: AXPY, `3`: Difference.
-- `[` / `]`: 256 → 65.537 → 1.000.003 phần tử.
-- `-` / `=`: đổi scalar theo bước 0,25 trong `[-4,4]`.
-- `B`: một warm-up và chín timing samples, lấy median.
-- `R`: về Add, scalar 1,25 và 1.000.003 phần tử.
-- `Escape`: thoát.
+1. Khi B đang chạy, thử chọn operation khác, đổi N hoặc nhấn B liên tiếp. Không được có job thứ hai chen vào hoặc đổi cấu hình đang đo.
+2. Hủy bằng Escape khi một hàng chưa đủ sample, đợi kết thúc rồi chạy cấu hình khác. Row dang dở không được công bố, còn row của lượt trước không được cộng dồn vào lượt mới.
 
-Title báo operation, N, groups, scalar, sample GPU time, median, maximum error và PASS/FAIL. Không có một con số “FPS” vô nghĩa với calculator event-driven.
+## Tự kiểm tra kết quả
 
-## Mã hoàn chỉnh và cách build
+- Đủ ba N, trong đó preset 1.000.003 thực sự chạy trên GPU và validate đủ output.
+- Mỗi N có input/seed và thống kê riêng; không trộn operation/scalar giữa sample.
+- UI vẫn nhận hủy; hàng chưa đủ mẫu không được báo hoàn thành.
+- Query/buffer/program được dọn trước context; lỗi không bị trả EXIT_SUCCESS trong chế độ kiểm tự động.
 
-Phần **Mã chạy được ở cuối bài 9** phía dưới được sinh trực tiếp từ final checkpoint, gồm:
+## Bài tập mở rộng
 
-- `vector_compute_math.hpp`: dữ liệu đầu vào, bản tính CPU, kế hoạch dispatch, sai số cho phép và median;
-- `gl_api.hpp`: OpenGL function pointers được nạp qua SDL;
-- `vector_compute_engine.hpp`: shader, SSBO, dispatch, barrier, readback và timer query;
-- `vector_ops.comp`: compute shader hoàn chỉnh;
-- `main.cpp`: lifecycle, controls, visualization và diagnostics;
-- `tests.cpp`: CTest thuần CPU, không mở window.
-
-```bash title="Terminal — Debug"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --target project_37_final project_37_tests
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-```
-
-```bash title="Terminal — Release"
-cmake --build build --config Release --target project_37_final project_37_tests
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Timeout giữ test automation hữu hạn. App có window được chạy thủ công và tự thoát bằng Escape; không đưa event loop vào CTest.
-
-## Thử phá chương trình
-
-1. Gọi `runCalculation` vô điều kiện ở mọi frame. GPU, readback và bản CPU đều chạy lại dù đầu vào không đổi.
-2. Khi operation đổi, sinh/upload A/B lại. Kết quả vẫn đúng nhưng bạn tạo transfer vô ích và làm khó hiểu benchmark.
-3. Đổi local size phía C++ thành 128 nhưng giữ shader ở 256. Số workgroup được tính theo một kích thước, còn GPU lại chạy theo kích thước khác.
-4. Vẽ cột từ `cpuOutput` để hình luôn đẹp khi GPU fail. UI che mất lỗi cần quan sát.
-5. Destroy context trước `engine.destroy`. GPU object cleanup mất context cần thiết.
-
-## Tự nghiệm thu
-
-- [ ] Add, AXPY và Difference đều PASS ở ba count presets.
-- [ ] N=1.000.003 tạo 3.907 groups và 189 tail lanes.
-- [ ] Operation/scalar đổi không upload lại input.
-- [ ] Khi count đổi, dữ liệu CPU và cả ba SSBO đều được tạo lại đúng kích thước.
-- [ ] Frame không có state change không dispatch/readback lại.
-- [ ] Bars lấy từ GPU output; validation so đủ N×4 components.
-- [ ] B luôn kết thúc sau một warm-up và chín samples.
-- [ ] Timer query, buffers và program bị xóa trước context.
-- [ ] Debug/Release CTest kết thúc trong timeout.
-- [ ] Source trên trang khớp source trong ZIP.
-
-## Bài tập tiếp theo
-
-1. Thêm Hadamard product vào enum phía CPU, nhánh uniform phía GLSL, test và giao diện trong cùng một bài mở rộng.
-2. Tách full readback validation thành chế độ V; bình thường chỉ giữ GPU result để một graphics shader vẽ trực tiếp.
-3. Dùng nhiều timer queries theo vòng để không block CPU ngay sau mỗi dispatch.
-4. Đo end-to-end time và lập bảng compute/transfer/validation riêng cho ba N presets.
-
-Project 38 sẽ dùng lại SSBO, workgroup, cách kiểm tra phần đuôi và timer query, nhưng output không còn được đọc về để vẽ cột: GPU sẽ tự cập nhật rồi vẽ trực tiếp năm triệu particle.
+Giải thích một trường hợp GPU kernel nhanh hơn nhưng toàn quy trình chậm hơn CPU. Tiếp theo, thêm [điều khiển inspector](/projects/million-vector-gpu/10-doc-du-lieu-va-dieu-khien-dashboard), rồi dùng bài cuối để build và kiểm **Mã hoàn chỉnh** trước Project 38.

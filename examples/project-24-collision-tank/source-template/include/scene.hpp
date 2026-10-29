@@ -145,7 +145,11 @@ inline bool stepScene(Scene& scene) {
 #if LAB_CHECKPOINT >= 10
     if (scene.spatial) {
         auto candidate = scene.spheres;
-        const auto stats = stepSpheres(candidate, {dt, scene.restitution, scene.iterations, scene.correction ? 0.8 : 0.0, 0.001});
+        double correctionFraction = 0.0;
+        if (scene.correction) {
+            correctionFraction = 0.8;
+        }
+        const auto stats = stepSpheres(candidate, {dt, scene.restitution, scene.iterations, correctionFraction, 0.001});
         const auto metrics = measureSpheres(candidate);
         if (!stats.valid || !metrics.finite) {
             scene.message = "Invalid 3D step rejected; state was not committed.";
@@ -161,7 +165,11 @@ inline bool stepScene(Scene& scene) {
     {
         auto candidate = scene.balls;
 #if LAB_CHECKPOINT >= 7
-        const auto stats = stepCollisionWorld(candidate, kTankBounds, {dt, scene.restitution, scene.iterations, scene.correction ? 0.8 : 0.0, 0.001});
+        double correctionFraction = 0.0;
+        if (scene.correction) {
+            correctionFraction = 0.8;
+        }
+        const auto stats = stepCollisionWorld(candidate, kTankBounds, {dt, scene.restitution, scene.iterations, correctionFraction, 0.001});
         if (!stats.valid) {
             scene.message = "Invalid 2D step rejected; state was not committed.";
             stopScene(scene);
@@ -271,7 +279,10 @@ inline double momentumResidual(const Scene& scene) {
 inline int spawnBodies(Scene& scene) {
     stopScene(scene);
     int added = 0;
-    const std::size_t size = scene.spatial ? scene.spheres.size() : scene.balls.size();
+    std::size_t size = scene.balls.size();
+    if (scene.spatial) {
+        size = scene.spheres.size();
+    }
     if (size >= 512) {
         scene.message = "Capacity 512 reached.";
         return 0;

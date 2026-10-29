@@ -6,6 +6,7 @@
 #include <string_view>
 
 int main(int argc, char** argv) {
+    // Khởi tạo SDL và các tài nguyên trình bày trước khi tạo state của chuỗi.
     const bool smoke = argc > 1 && std::string_view(argv[1]) == "--smoke";
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
@@ -86,11 +87,19 @@ int main(int argc, char** argv) {
                 }
 #if LAB_CHECKPOINT == 2
                 if (key == SDLK_LEFT || key == SDLK_RIGHT) {
-                    scene.pairDistance = std::clamp(scene.pairDistance + (key == SDLK_LEFT ? -0.05 : 0.05), 0.1, 1.8);
+                    double distanceChange = 0.05;
+                    if (key == SDLK_LEFT) {
+                        distanceChange = -0.05;
+                    }
+                    scene.pairDistance = std::clamp(scene.pairDistance + distanceChange, 0.1, 1.8);
                     lab::rebuildScene(scene);
                 }
                 if (key == SDLK_UP || key == SDLK_DOWN) {
-                    scene.pairAngle += key == SDLK_UP ? 0.1 : -0.1;
+                    double angleChange = -0.1;
+                    if (key == SDLK_UP) {
+                        angleChange = 0.1;
+                    }
+                    scene.pairAngle += angleChange;
                     lab::rebuildScene(scene);
                 }
 #endif
@@ -157,15 +166,27 @@ int main(int argc, char** argv) {
                     lab::rebuildScene(scene);
                 }
                 if (key == SDLK_K) {
-                    scene.stiffness = scene.stiffness >= 1200.0 ? 60.0 : std::min(1200.0, scene.stiffness * 2.0);
+                    if (scene.stiffness >= 1200.0) {
+                        scene.stiffness = 60.0;
+                    } else {
+                        scene.stiffness = std::min(1200.0, scene.stiffness * 2.0);
+                    }
                     lab::rebuildScene(scene);
                 }
                 if (key == SDLK_M) {
-                    scene.mass = scene.mass >= 0.16 ? 0.02 : scene.mass * 2.0;
+                    if (scene.mass >= 0.16) {
+                        scene.mass = 0.02;
+                    } else {
+                        scene.mass *= 2.0;
+                    }
                     lab::rebuildScene(scene);
                 }
                 if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
-                    scene.dtIndex = std::clamp(scene.dtIndex + (key == SDLK_LEFTBRACKET ? -1 : 1), 0, 4);
+                    int change = 1;
+                    if (key == SDLK_LEFTBRACKET) {
+                        change = -1;
+                    }
+                    scene.dtIndex = std::clamp(scene.dtIndex + change, 0, 4);
                     lab::rebuildScene(scene);
                 }
                 if (key >= SDLK_1 && key <= SDLK_3) {
@@ -270,10 +291,15 @@ int main(int argc, char** argv) {
         }
         SDL_Delay(16);
     }
+
+    // Giải phóng capture trước khi hủy texture, renderer và window.
     cancelCapture();
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return failed ? EXIT_FAILURE : EXIT_SUCCESS;
+    if (failed) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
 }

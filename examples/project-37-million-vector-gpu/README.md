@@ -1,94 +1,66 @@
-# Project 37 — Million Vector GPU
+# Project 37 — Máy tính vector GPU
 
-Project này xây một máy tính vector element-wise bằng C++20, SDL3 và OpenGL 4.3 compute shader. Hai mảng input chứa hơn một triệu `Vec4`; GPU chạy Add, AXPY hoặc Difference rồi ghi vào output SSBO. CPU chạy cùng workload như một oracle độc lập để kết quả không chỉ được đánh giá bằng vài cột “trông có vẻ đúng”.
+Ứng dụng C++20/SDL3/OpenGL 4.3 so CPU và GPU với Add, AXPY (`s*A+B`) và Difference. Preset cuối có **1.000.003 Vec4 thật**; dashboard kiểm toàn bộ output rồi cho đọc từng phần tử, không đánh giá correctness bằng vài cột trông hợp lý.
 
-## Sản phẩm hoàn chỉnh
+## Bạn sẽ xây gì?
 
-- OpenGL 4.3 Core context và function loader tối thiểu qua `SDL_GL_GetProcAddress`;
-- capability report cho local size, invocation count, workgroup count và SSBO bytes;
-- `Vec4` C++ có size/alignment 16 byte, khớp `vec4[]` trong layout `std430`;
-- ba SSBO ở binding 0/1/2 cho A, B và output;
-- compute shader `local_size_x = 256` với `gl_GlobalInvocationID.x` và bounds guard;
-- workload mặc định 1.000.003 phần tử: 3.907 workgroups và 189 invocation dư;
-- `GL_BUFFER_UPDATE_BARRIER_BIT` trước `glGetBufferSubData`;
-- CPU–GPU validation có finite guard, mixed tolerance, maximum error và first mismatch;
-- `GL_TIME_ELAPSED` query chỉ bao quanh `glDispatchCompute`;
-- 64 cột mẫu lấy từ GPU readback và title diagnostics.
+Một compute workbench gồm bảng CPU/kernel/end-to-end theo N, min/median/max, số warm-up/sample, báo cáo sai số và inspector A/B/CPU/GPU đủ x/y/z/w. UI dùng SDL software surface; hidden OpenGL context chạy riêng trên worker, không dùng draw calls để thay compute. Worker nhận bản sao cấu hình, không bị UI sửa giữa chừng.
 
-## Cấu trúc source
-
-```text
-source-template/
-  include/vector_compute_math.hpp    workload, dispatch plan, oracle và validation thuần CPU
-  include/gl_api.hpp                 OpenGL 4.3 function loader tối thiểu
-  include/vector_compute_engine.hpp  shader, SSBO, dispatch, barrier, readback và timer query
-  shaders/vector_ops.comp            compute shader thay đổi theo checkpoint
-  src/main.cpp                       SDL/OpenGL lifecycle, controls, output bars và diagnostics
-tests/tests.cpp                      CTest thuần CPU, không mở window
-```
-
-`starter`, `checkpoints/01..09` và `final` được sinh từ `source-template`. Shader của mỗi snapshot được copy cạnh executable sau build.
+11 checkpoint đi từ CPU preview 256 phần tử → capability → SSBO → một workgroup → N lẻ lớn → synchronization/readback → validation → timing → benchmark theo N → inspector → kiểm GPU thật. Bản nhỏ chỉ là bước học, không phải sản phẩm cuối.
 
 ## Build và chạy
 
-```bash
+Cần CMake 3.24+, compiler C++20 và GPU/driver OpenGL 4.3. SDL 3.4.8 được FetchContent tải theo checksum và link qua `SDL3::SDL3`.
+
+```powershell
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --target project_37_final
-./build/Debug/project_37_final
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_37_final.exe --verify
+.\build\Release\project_37_final.exe
 ```
 
-Với Ninja hoặc generator một cấu hình, executable thường nằm trực tiếp trong `build/`. SDL được khóa ở 3.4.8 và luôn link qua `SDL3::SDL3`.
-
-OpenGL 4.3 là yêu cầu cứng vì compute shader trở thành core ở phiên bản này. Nếu context hoặc capability không đủ, ứng dụng dừng sớm và in giới hạn đã đọc thay vì tiếp tục tới một allocation/dispatch không hợp lệ.
+Với Ninja/single-config, configure bằng `-DCMAKE_BUILD_TYPE=Release`; executable nằm trực tiếp trong build. Final được build mặc định; `BUILD_CHECKPOINTS` bật starter và checkpoint 01–11. Shader fallback riêng từng target tránh các bản GLSL chép đè nhau. Source path của đúng snapshot được ưu tiên.
 
 ## Điều khiển
 
 | Phím | Tác dụng |
 |---|---|
-| `1` | Add: `out[i] = A[i] + B[i]` |
-| `2` | AXPY: `out[i] = scalar * A[i] + B[i]` |
-| `3` | Difference: `out[i] = A[i] - B[i]` |
-| `[` / `]` | Đổi 256 → 65.537 → 1.000.003 phần tử |
-| `-` / `=` | Giảm/tăng scalar 0,25 trong `[-4, 4]` |
-| `B` | Một warm-up và chín timing samples; title báo median |
-| `R` | Trở về Add, scalar 1,25 và 1.000.003 phần tử |
-| `Escape` | Thoát |
+| Space | Chạy một lần với cấu hình SELECTED |
+| B | Benchmark ba N: 256, 65.537, 1.000.003 |
+| 1/2/3 | Chọn Add/AXPY/Difference khi idle |
+| [ / ] | Đổi N khi idle |
+| - / = | Scalar tăng/giảm 0,25 trong [-4,4] |
+| Left/Right | Inspector đi một phần tử |
+| Page Up/Down | Inspector đi 1.024 phần tử |
+| Home/End | Phần tử đầu/cuối |
+| R | Reset cấu hình và chạy lại |
+| Escape | Hủy job đang chạy; nếu idle thì thoát |
 
-Calculator chỉ recompute khi state đổi hoặc khi nhấn `B`; nó không dispatch một triệu phần tử mỗi frame mà không có lý do.
+Thay SELECTED chưa làm thay đổi MEASURED; nhấn Space để chạy cấu hình mới. Khi busy, cấu hình bị khóa, inspector vẫn chỉ đọc kết quả đã công bố. `--smoke` tự đóng sau ít nhất 30 frame và chờ job hoàn tất; `--snapshot file.bmp` chạy benchmark rồi lưu dashboard và thoát (từ checkpoint 8, trước đó lưu lượt tính đơn). Các chế độ này có thể dùng trong kiểm tự động có process watchdog bên ngoài.
 
-## Chín checkpoint
+## Đọc số đo
 
-1. Khóa `Vec4`, dữ liệu deterministic, phép toán element-wise và CPU oracle.
-2. Yêu cầu OpenGL 4.3 rồi đọc/validate compute limits.
-3. Tạo ba SSBO `std430` có binding 0/1/2 và output sentinel.
-4. Compile compute shader, chạy đúng một workgroup 256 invocation.
-5. Mở rộng tới 1.000.003 phần tử bằng ceil division và bounds guard.
-6. Thêm memory barrier theo consumer rồi readback output.
-7. Đối chiếu toàn bộ output bằng mixed tolerance và finite guard.
-8. Đo compute kernel bằng `GL_TIME_ELAPSED`, warm-up và median.
-9. Ghép ba operation, controls, output bars, diagnostics và cleanup.
+- CPU: loop ghi output đã preallocate, không gồm generation/allocation/checksum/validation.
+- Kernel: `GL_TIME_ELAPSED` chỉ bao quanh `glDispatchCompute`, không lấy FPS hay thời gian gọi dispatch trên CPU.
+- End-to-end: wall clock từ upload A/B và reset output đến dispatch, fence wait và readback N+256 phần tử. Không gồm chuẩn bị host/allocation, CPU reference, kiểm kết quả, chờ query availability hoặc UI. Poll/scheduler granularity vẫn ảnh hưởng E2E và không được trừ giấu đi.
 
-## Nghiệm thu hữu hạn
+Mỗi N có hai warm-up và chín sample riêng. Bảng giữ min/median/max và raw samples trong `BenchmarkRow`; bars cùng thang trong từng hàng, không dùng độ dài bar để so các hàng N khác nhau. Dùng Release khi bàn về tốc độ. GPU không được hứa luôn nhanh hơn, nhất là khi phải truyền dữ liệu qua lại.
 
-```bash
-cmake --build build --config Debug --target project_37_final project_37_tests
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --target project_37_final project_37_tests
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
+## Correctness và an toàn
 
-CTest chỉ kiểm code CPU thuần: size/alignment, ba operation, deterministic input, dispatch tail, capability report, mixed tolerance, NaN guard và median. Compile/execute compute shader thật cần OpenGL context nên được kiểm bằng app tương tác, không đưa window loop vào CTest.
+`Vec4` có size/alignment/stride 16 byte. Local size 256; N=1.000.003 cần 3.907 workgroup và 189 lane dư. Guard chạy trước mọi lần đọc/ghi. Output hợp lệ bắt đầu bằng NaN sentinel, 256 phần tử canary sau N phát hiện tail writes. Canary không tự chứng minh không có read ngoài biên; guard/source inspection vẫn cần thiết.
 
-## Phân biệt ba con số thời gian
+Tolerance được công bố là `absTol=relTol=2e-6`. Validator kiểm cả bốn thành phần, finite values, size, first mismatch/component và maximum absolute error; tolerance NaN/âm không hợp lệ. CTest kiểm toán thuần trong Debug/Release. `--verify` chạy compute thật tại N=1/255/256/257/65.537/1.000.003 cho ba operation; có đáp án độc lập chứa 0/số âm, kiểm input preservation, cố ý phá guard để kiểm canary và thử interface sai để giữ last-good.
 
-- **Compute time**: chỉ vùng `glDispatchCompute`, đo bằng timer query trong project.
-- **Transfer time**: upload input hoặc readback output; không nằm trong timer query nói trên.
-- **End-to-end time**: toàn bộ chuẩn bị + transfer + compute + validation + UI. Nếu tự đo thêm, hãy giữ nhãn này thay vì gọi nó là GPU kernel time.
+`--verify` còn chạy worker benchmark thật với hai warm-up/chín sample cho từng N, kiểm cấu hình bất biến, spread, output đủ một triệu phần tử và hủy một generation mới trước khi công bố. Đây không phải phép kiểm bấm phím Windows; kiểm tương tác cửa sổ là một bước riêng.
 
-## Tài liệu API chính thức
+Preflight kiểm N trước allocation, local size, group count, số SSBO binding/block và dung lượng có padding. Budget ứng dụng là 2.000.003 phần tử, không phải giới hạn phổ quát của GPU. Job có deadline 15 giây; chờ fence/query tối đa 3 giây. Đây không phải khả năng cưỡng bức ngắt driver bị treo trong API; test tự động vẫn phải có watchdog process. Không chạy window loop trong CTest.
 
-- [SDL_GL_CreateContext](https://wiki.libsdl.org/SDL3/SDL_GL_CreateContext)
-- [glDispatchCompute](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDispatchCompute.xhtml)
-- [gl_GlobalInvocationID](https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_GlobalInvocationID.xhtml)
-- [glMemoryBarrier](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glMemoryBarrier.xhtml)
-- [glBeginQuery](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBeginQuery.xhtml)
+## Cấu trúc
+
+`vector_compute_math.hpp` giữ toán thuần; `compute_benchmark.hpp` giữ cấu hình/thống kê; `vector_compute_engine.hpp` sở hữu SSBO/query/fence; `compute_program.hpp` đọc/compile/reflect shader; `compute_worker.hpp` điều phối job; `compute_application.hpp` giữ SDL/input/lifetime; `compute_dashboard.hpp` và `dashboard_surface.hpp` trình bày số liệu; `compute_verify.hpp` kiểm GPU. `src/main.cpp` parse chế độ chạy và giữ scope cleanup.
+
+Nguồn authored là `source-template`, README và tests. `starter`, `checkpoints`, `final`, CMake và ZIP được sinh tự động, không commit. Source đầy đủ của từng checkpoint có trong gói tải về; không cần viết lại từ ảnh hoặc đoạn trích.

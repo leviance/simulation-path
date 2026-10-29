@@ -5,6 +5,7 @@
 #include <string_view>
 
 int main(int argc, char** argv) {
+    // Khởi tạo SDL và framebuffer trước khi dựng cặp con lắc cùng dữ liệu đầu.
     const bool smoke = argc > 1 && std::string_view(argv[1]) == "--smoke";
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
@@ -132,7 +133,10 @@ int main(int argc, char** argv) {
                     lab::singleStep(scene);
                 }
                 if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
-                    const int change = key == SDLK_LEFTBRACKET ? 1 : -1;
+                    int change = -1;
+                    if (key == SDLK_LEFTBRACKET) {
+                        change = 1;
+                    }
                     scene.dtIndex = std::clamp(scene.dtIndex + change, 0, 5);
                     lab::resetScene(scene);
                 }
@@ -146,7 +150,11 @@ int main(int argc, char** argv) {
                         scene.perturbation = std::min(1e-2, std::max(1e-8, scene.perturbation * 10.0));
                     }
                     if (key == SDLK_DOWN) {
-                        scene.perturbation = scene.perturbation <= 1e-8 ? 0.0 : scene.perturbation / 10.0;
+                        if (scene.perturbation <= 1e-8) {
+                            scene.perturbation = 0.0;
+                        } else {
+                            scene.perturbation /= 10.0;
+                        }
                     }
                     lab::resetScene(scene);
                 }
@@ -262,10 +270,15 @@ int main(int argc, char** argv) {
         }
         SDL_Delay(16);
     }
+
+    // Giải phóng capture rồi hủy các tài nguyên SDL theo thứ tự ngược lúc tạo.
     cancelCapture();
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return failed ? EXIT_FAILURE : EXIT_SUCCESS;
+    if (failed) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
 }

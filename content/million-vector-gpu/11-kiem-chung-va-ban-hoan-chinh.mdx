@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng trên GPU thật và hoàn thiện ứng dụng
+
+## Bài toán của chúng ta
+
+Đến đây ứng dụng đã tính và đo được. Trước khi dùng nó để học particle ở Project 38, ta còn phải chứng minh nó bắt được lỗi. Một bộ kiểm chỉ chạy trường hợp đúng có thể bỏ sót lỗi guard, buffer chưa ghi hoặc validator chấp nhận NaN.
+
+Bản hoàn chỉnh có hai tầng kiểm. CTest kiểm các hàm C++ thuần, không mở window. `--verify` tạo OpenGL context ẩn và chạy shader thật trên GPU. Hai tầng không thay thế nhau: test phép chia không chứng minh shader đã đặt guard trước khi đọc, và một ảnh đẹp cũng không chứng minh toàn bộ output đúng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta chừa thêm 256 `Vec4` sau N phần tử hợp lệ, gán chúng bằng canary có giá trị nhận biết được. Shader bình thường không được ghi vào vùng này. Còn N output hợp lệ ban đầu chứa NaN sentinel: nếu shader bỏ quên một phần tử, validator phải báo lỗi thay vì tình cờ chấp nhận số 0.
+
+Canary phát hiện được các lần ghi vào vùng kiểm; nó không tự chứng minh rằng mọi lần đọc đều đúng. Phần bảo vệ đọc vẫn là điều kiện `index >= uElementCount` đặt trước mọi truy cập input/output trong shader. Không tuyên bố một lần chạy thành công trên một driver là chứng minh cho mọi hành vi ngoài biên.
+
+<InteractiveLab demo="million-vector-gpu" mode="vector-gpu-final" />
+
+## Bắt tay vào code
+
+### 1. Chọn fixture có ranh giới đáng kiểm
+
+`verifyCompute` chạy cả Add, AXPY và Difference tại N = 1, 255, 256, 257, 65.537 và 1.000.003. Mỗi lượt so toàn bộ output theo abs/rel tolerance 2×10⁻⁶, kiểm input A/B không bị sửa và kiểm tail canary. Phần tử đầu chứa cả 0 và số âm; đáp án cho bốn thành phần được viết độc lập, không gọi lại chính hàm đang kiểm để tạo đáp án.
+
+```cpp title="include/compute_verify.hpp — các kích thước và phép toán cần kiểm"
+const std::array<std::size_t, 6> counts{1U, 255U, 256U, 257U, 65'537U, 1'000'003U};
+const std::array<VectorOperation, 3> operations{VectorOperation::add, VectorOperation::axpy, VectorOperation::difference};
+```
+
+255/256/257 nằm ngay hai phía của ranh giới workgroup. 1 kiểm workload ngắn, còn 1.000.003 buộc bản đầy đủ phải xử lý quy mô thật và phần đuôi lẻ. Preflight không đạt thì dừng trước allocation, không tiếp tục chỉ để in đủ số checks.
+
+### 2. Làm sai guard để kiểm khả năng phát hiện lỗi
+
+Sau các trường hợp đúng, test tạo một shader lỗi có chủ đích:
+
+```cpp title="include/compute_verify.hpp — phá guard để kiểm bộ phát hiện lỗi"
+wrongGuard.replace(guardPosition, guard.size(), "index > uint(uElementCount)");
+engine.loadProgram(api, wrongGuard);
+engine.prepareBuffers(api, makeVectorInputs(257U));
+const ComputeResult corrupt = engine.execute(api, VectorOperation::add, 1.0F, {});
+check(!corrupt.tailIntact, "off-by-one guard mutation is detected by real GPU canary readback");
+engine.loadProgram(api, source);
+```
+
+Với N=257, invocation index 257 lẽ ra phải dừng, nhưng guard sai cho nó đi tiếp và ghi đè canary đầu tiên. Test phải nhìn thấy lỗi đó. Sau thí nghiệm, ta nạp lại shader đúng; không để shader lỗi trở thành bản dùng bình thường.
+
+### 3. Kiểm trọn lượt benchmark và cleanup
+
+Sau phép kiểm kernel, `--verify` còn gọi `verifyBenchmarkJobs`. Hàm này bàn giao hidden context cho worker, chạy hai warm-up/chín mẫu cho mỗi N rồi kiểm ba hàng, raw timings, spread và output một triệu phần tử đã validate. Nó thay đổi biến SELECTED ở phía gọi sau khi job bắt đầu để chứng minh cấu hình worker không bị sửa theo.
+
+Lượt tiếp theo dùng N=2.000.003 để thử hủy sớm: dữ liệu/hàng cũ không được xuất hiện trong generation mới, và job dang dở không được công bố. Đây là kiểm orchestration qua API C++, không giả lập bấm phím hoặc thay cho kiểm tương tác cửa sổ.
+
+Một candidate có binding sai phải bị từ chối trước khi thay last-good. Khi toàn bộ fixture kết thúc, engine phải nhả current program rồi xóa resource trước context:
+
+```cpp title="include/compute_verify.hpp — kiểm thứ tự cleanup"
+engine.destroy(api);
+GLint currentProgram = -1;
+api.GetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
+check(currentProgram == 0, "compute program unbound before deletion/context teardown");
+check(api.GetError() == GL_NO_ERROR, "GPU resources deleted while context is current");
+```
+
+`destroy` gọi `UseProgram(0)` trước `DeleteProgram`: một program vẫn còn current có thể mới chỉ được đánh dấu xóa. Phép kiểm current program giúp bắt lỗi lifecycle này, không chỉ kiểm mã lỗi GL rồi suy ra mọi resource đã được nhả. Xem [quy tắc xóa program của Khronos](https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glDeleteProgram.xml).
+
+## Chạy checkpoint
+
+Build `project_37_checkpoint_11` hoặc final rồi chạy `--verify` trước khi mở chế độ tương tác. Phần này không dùng window loop vô hạn: hết danh sách fixture thì in số checks/failures và trả mã thoát. Nếu thiếu OpenGL 4.3, hãy đọc diagnostics; không đổi sang CPU để giả rằng GPU test đã chạy.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm thay một component của fixture CPU thành NaN rồi Infinity; cả hai phải thất bại. Tolerance NaN/âm cũng phải bị từ chối. Khôi phục fixture đúng, chạy lại cả Debug/Release để bảo đảm test không phụ thuộc `assert`.
+2. Với GPU, đổi binding Output từ 2 sang 3: dù shader link được, reflection phải từ chối và giữ last-good. Đừng dùng bỏ barrier làm test “chắc chắn thất bại”: dữ liệu có thể tình cờ đúng trên một driver, nhưng thiếu synchronization vẫn không hợp lệ.
+
+## Tự kiểm tra kết quả
+
+Từ thư mục project đã giải nén, dùng CMake 3.24 trở lên và compiler hỗ trợ C++20:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_37_final.exe --verify
+.\build\Release\project_37_final.exe
+```
+
+Trên generator single-config, chọn `-DCMAKE_BUILD_TYPE=Release` khi configure và executable nằm trực tiếp trong build. SDL 3.4.8 được FetchContent tải theo checksum của CMake; không cần tự chép thư viện vào repository.
+
+Trong cửa sổ, B chạy hai warm-up và chín sample cho từng N. So CPU loop, GPU kernel và end-to-end theo nhãn riêng; dùng Release để bàn về tốc độ. Nếu GPU end-to-end chậm hơn CPU ở N nhỏ, đó có thể là kết quả đúng, không phải lý do để xóa upload/readback khỏi phép đo rồi giữ nguyên nhãn.
+
+Phím Escape hủy job đang chạy; khi idle, Escape đóng ứng dụng. Worker có deadline 15 giây, mỗi lần chờ GPU/query có deadline 3 giây. Những deadline này không thể cưỡng bức ngắt một driver bị treo trong API; khi chạy kiểm tự động vẫn cần watchdog process bên ngoài.
+
+## Mã hoàn chỉnh
+
+Phần **Toàn bộ mã nguồn của dự án** bên dưới chứa đúng final, shader, tests, README và CMake; ZIP ở trang project dùng cùng source. `src/main.cpp` chỉ parse chế độ chạy và quản lý scope của application. Công thức nằm trong `vector_compute_math.hpp`, compute wrapper trong `vector_compute_engine.hpp`, worker trong `compute_worker.hpp`, còn dashboard không tự tạo output GPU giả.
+
+## Bài tập mở rộng
+
+Thêm một N lẻ khác vào benchmark, giữ nguyên seed và operation, rồi ghi lại min/median/max cùng cấu hình CPU/GPU. Giải thích phần chi phí nào giảm khi giữ dữ liệu lâu trên GPU. Đây là câu hỏi nối trực tiếp sang Project 38, nơi dữ liệu particle không cần readback toàn bộ ở mỗi frame.

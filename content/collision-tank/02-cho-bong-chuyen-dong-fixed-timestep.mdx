@@ -138,12 +138,22 @@ Main đã có luồng gọi advanceFrame và phím N từ Starter. Trong nhánh 
 
 Thêm nhánh chọn dt vào key-down của main.cpp:
 
+Ta làm hai việc riêng: tìm `index` của dt hiện tại, rồi dùng `change` để dịch sang lựa chọn bên cạnh. Phím `[` giảm chỉ số một đơn vị, phím `]` tăng một đơn vị; `clamp` giữ chỉ số trong mảng. Chỉ sau đó mới gán dt và dựng lại thí nghiệm, để phép so luôn bắt đầu từ cùng state.
+
 ```cpp title="src/main.cpp — chọn dt rồi dựng lại thí nghiệm"
 if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
     const double steps[]{1.0 / 60.0, 1.0 / 120.0, 1.0 / 240.0};
-    int index = scene.dt == steps[0] ? 0 : scene.dt == steps[1] ? 1
-                                                                : 2;
-    index = std::clamp(index + (key == SDLK_LEFTBRACKET ? -1 : 1), 0, 2);
+    int index = 2;
+    if (scene.dt == steps[0]) {
+        index = 0;
+    } else if (scene.dt == steps[1]) {
+        index = 1;
+    }
+    int change = 1;
+    if (key == SDLK_LEFTBRACKET) {
+        change = -1;
+    }
+    index = std::clamp(index + change, 0, 2);
     scene.dt = steps[index];
     lab::rebuildScene(scene);
 }

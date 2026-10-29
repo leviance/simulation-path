@@ -8,6 +8,7 @@
 namespace {
 int failures = 0;
 
+// Ghi lỗi bằng mã thoát, không dùng assert để Release vẫn chạy mọi fixture.
 void check(bool condition, std::string_view label) {
     if (!condition) {
         std::cerr << "FAIL: " << label << '\n';

@@ -140,20 +140,29 @@ Bình phương omega trong phương trình là có chủ đích: đóng góp hư
 Thay drawHud trong include/presentation.hpp bằng bản của bài này. Nó gọi cùng pendulumDerivative mà RK4 sẽ dùng, rồi ghi alpha và trạng thái valid trong cửa sổ SDL:
 
 ```cpp title="include/presentation.hpp — đọc hai gia tốc"
+// Số đo của hai con lắc được đọc sau bước vật lý, không tính lại quỹ đạo khi vẽ.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     const auto text = [&](float x, float y, const char* value) {
         ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
     };
     char line[220]{};
-    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, motion);
     text(30, 20, line);
     text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
     text(30, 64, "Static geometry: angles from downward vertical, rigid massless rods; no integration yet.");
     text(52, 110, "A: primary initial state");
     text(582, 110, "Second pendulum is added in lesson 4.");
     const auto derivative = pendulumDerivative(scene.initial, scene.parameters);
-    std::snprintf(line, sizeof(line), "alpha1=%.6f rad/s^2 | alpha2=%.6f rad/s^2 | valid=%s", derivative.omega1Rate, derivative.omega2Rate, derivative.valid ? "yes" : "NO");
+    const char* derivativeStatus = "NO";
+    if (derivative.valid) {
+        derivativeStatus = "yes";
+    }
+    std::snprintf(line, sizeof(line), "alpha1=%.6f rad/s^2 | alpha2=%.6f rad/s^2 | valid=%s", derivative.omega1Rate, derivative.omega2Rate, derivativeStatus);
     text(30, 560, line);
     text(30, 584, "Q/E: omega1, Z/C: omega2. Both accelerations are evaluated from the same input state.");
     if (!scene.message.empty()) {

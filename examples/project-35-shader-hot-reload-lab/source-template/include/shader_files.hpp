@@ -6,6 +6,7 @@
 #include <system_error>
 
 namespace lab {
+// Đọc đủ nội dung và kiểm giới hạn trước khi thay ShaderSources đang dùng.
 #if LAB_CHECKPOINT >= 1
 inline std::string shaderPathText(const std::filesystem::path& path) {
     const auto bytes = path.u8string();
@@ -56,9 +57,11 @@ inline bool readShaderFiles(const std::filesystem::path& directory, std::size_t 
 
 #if LAB_CHECKPOINT >= 5
 struct ShaderFileStamp {
-    enum class Status { ready,
-                        missing,
-                        inaccessible };
+    enum class Status {
+        ready,
+        missing,
+        inaccessible
+    };
     Status status{Status::missing};
     std::uintmax_t size{};
     std::filesystem::file_time_type modified{};
@@ -86,7 +89,11 @@ inline ShaderFileStamp shaderFileStamp(const std::filesystem::path& path) {
         return stamp;
     }
     stamp.modified = std::filesystem::last_write_time(path, error);
-    stamp.status = error ? ShaderFileStamp::Status::inaccessible : ShaderFileStamp::Status::ready;
+    if (error) {
+        stamp.status = ShaderFileStamp::Status::inaccessible;
+    } else {
+        stamp.status = ShaderFileStamp::Status::ready;
+    }
     return stamp;
 }
 

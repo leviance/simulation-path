@@ -13,6 +13,7 @@ inline std::string viewerUtf8Path(const std::filesystem::path& path) {
     return {bytes.begin(), bytes.end()};
 }
 
+// ReadPixels trả ảnh từ dưới lên; đảo hàng trước khi giao buffer cho SDL_SaveBMP.
 inline bool captureViewer(GlApi& gl, int width, int height, const char* path) {
     const std::size_t pitch = std::size_t(width) * 4;
     std::vector<std::uint8_t> pixels(pitch * height);
@@ -99,8 +100,8 @@ inline int runViewerApplication(int argc, char** argv) {
         const bool vsync = !finite && SDL_GL_SetSwapInterval(1);
         if (finite)
             SDL_GL_SetSwapInterval(0);
-        std::cout << gl.GetString(GL_VERSION) << '\n'
-                  << gl.GetString(GL_RENDERER) << '\n';
+        std::cout << gl.GetString(GL_VERSION) << '\n';
+        std::cout << gl.GetString(GL_RENDERER) << '\n';
         std::string diagnostics;
         const char* basePath = SDL_GetBasePath();
         if (!basePath)

@@ -206,6 +206,7 @@ Thay src/main.cpp bằng bản hoàn chỉnh dưới đây. Phần quan trọng 
 #include <string_view>
 
 int main(int argc, char** argv) {
+    // Khởi tạo SDL và framebuffer trước khi dựng cặp con lắc cùng dữ liệu đầu.
     const bool smoke = argc > 1 && std::string_view(argv[1]) == "--smoke";
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
@@ -303,7 +304,10 @@ int main(int argc, char** argv) {
                     lab::singleStep(scene);
                 }
                 if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
-                    const int change = key == SDLK_LEFTBRACKET ? 1 : -1;
+                    int change = -1;
+                    if (key == SDLK_LEFTBRACKET) {
+                        change = 1;
+                    }
                     scene.dtIndex = std::clamp(scene.dtIndex + change, 0, 5);
                     lab::resetScene(scene);
                 }
@@ -315,7 +319,11 @@ int main(int argc, char** argv) {
                         scene.perturbation = std::min(1e-2, std::max(1e-8, scene.perturbation * 10.0));
                     }
                     if (key == SDLK_DOWN) {
-                        scene.perturbation = scene.perturbation <= 1e-8 ? 0.0 : scene.perturbation / 10.0;
+                        if (scene.perturbation <= 1e-8) {
+                            scene.perturbation = 0.0;
+                        } else {
+                            scene.perturbation /= 10.0;
+                        }
                     }
                     lab::resetScene(scene);
                 }
@@ -410,12 +418,17 @@ int main(int argc, char** argv) {
         }
         SDL_Delay(16);
     }
+
+    // Giải phóng capture rồi hủy các tài nguyên SDL theo thứ tự ngược lúc tạo.
     cancelCapture();
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return failed ? EXIT_FAILURE : EXIT_SUCCESS;
+    if (failed) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
 }
 ```
 
@@ -428,13 +441,18 @@ SDL_ConvertEventToRenderCoordinates đưa tọa độ window về logical board 
 Thay drawHud bằng bản cuối. F có thể ẩn lớp debug/reference nhưng vẫn giữ hai cảnh, hai trails, nhãn A/B và hai graph định lượng.
 
 ```cpp title="include/presentation.hpp — thông tin bản hoàn chỉnh"
+// Số đo của hai con lắc được đọc sau bước vật lý, không tính lại quỹ đạo khi vẽ.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     const auto text = [&](float x, float y, const char* value) {
         ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
     };
     char line[220]{};
-    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, motion);
     text(30, 20, line);
     text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
     text(30, 64, "Space start/pause | N one step | [ smaller dt | ] larger dt");
@@ -476,7 +494,11 @@ inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
         text(580, 128, "Green in A pane: same initial state, dt/2 reference");
     }
     const auto metrics = measureChaos(scene.experiment, scene.parameters);
-    std::snprintf(line, sizeof(line), "h/h2: %.3e | finite=%s", metrics.numericalSeparation, metrics.finite ? "yes" : "NO");
+    const char* finiteStatus = "NO";
+    if (metrics.finite) {
+        finiteStatus = "yes";
+    }
+    std::snprintf(line, sizeof(line), "h/h2: %.3e | finite=%s", metrics.numericalSeparation, finiteStatus);
     text(650, 788, line);
     std::snprintf(line, sizeof(line), "Space pause | N step | [/] dt | Enter +30s | Backspace stop | remaining %d steps", scene.fastRemaining);
     text(30, 64, line);

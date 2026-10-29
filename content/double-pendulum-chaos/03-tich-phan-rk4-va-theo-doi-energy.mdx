@@ -349,13 +349,18 @@ inline void drawScene(Framebuffer& image, const Scene& scene) {
 Thay drawHud bằng bản này để đọc được đơn vị, khoảng thời gian và sai lệch lớn nhất ngay trong cửa sổ:
 
 ```cpp title="include/presentation.hpp — số liệu năng lượng"
+// Số đo của hai con lắc được đọc sau bước vật lý, không tính lại quỹ đạo khi vẽ.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     const auto text = [&](float x, float y, const char* value) {
         ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
     };
     char line[220]{};
-    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, motion);
     text(30, 20, line);
     text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
     text(30, 64, "Space start/pause | N one step | [ smaller dt | ] larger dt");
@@ -383,20 +388,25 @@ inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
 
 Trong KEY_DOWN của src/main.cpp, thêm ba nhánh sau, sau các phím chỉnh góc:
 
+Mảng `kStepOptions` xếp h từ lớn xuống nhỏ. Vì thế `[` cần **tăng** `dtIndex` để chọn bước nhỏ hơn, còn `]` giảm chỉ số. Biến `change` chỉ mang độ dịch chỉ số, không mang số giây. Sau khi chọn h, reset cả state và lịch sử để không ghép hai thí nghiệm dùng bước thời gian khác nhau vào cùng một đường đo.
+
 ```cpp title="src/main.cpp — pause, single-step và đổi h"
 if (key == SDLK_SPACE) {
-                    const bool wasPaused = scene.paused;
-                    lab::stopScene(scene);
-                    scene.paused = !wasPaused;
-                }
+    const bool wasPaused = scene.paused;
+    lab::stopScene(scene);
+    scene.paused = !wasPaused;
+}
 if (key == SDLK_N) {
-                    lab::singleStep(scene);
-                }
+    lab::singleStep(scene);
+}
 if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
-                    const int change = key == SDLK_LEFTBRACKET ? 1 : -1;
-                    scene.dtIndex = std::clamp(scene.dtIndex + change, 0, 5);
-                    lab::resetScene(scene);
-                }
+    int change = -1;
+    if (key == SDLK_LEFTBRACKET) {
+        change = 1;
+    }
+    scene.dtIndex = std::clamp(scene.dtIndex + change, 0, 5);
+    lab::resetScene(scene);
+}
 ```
 
 Ở phần cập nhật frame, Starter đang bỏ qua frameSeconds bằng `static_cast<void>(frameSeconds)`. Thay dòng đó bằng:

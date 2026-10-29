@@ -1,53 +1,42 @@
-# Rà soát lỗi website sau Project 35
+# Rà soát website và mã giảng dạy — mốc trước khi xây lại Project 37
 
-Ngày kiểm: 29/10/2026. Phạm vi: các lỗi hồi quy trong báo cáo Project 35, kiểm tra tiếp toàn site và giữ nguyên yêu cầu của đặc tả v4.
+Ngày kiểm: 2026-10-29. Phạm vi: hoàn tất hai nhóm biên tập C++ đã được người dùng duyệt, đồng bộ bài học/ZIP và xử lý hồi quy Project 36. Đặc tả v4 và các quy tắc kiểm tra được giữ nguyên.
 
-## Kết quả hiện tại
+## Kết quả
 
-Build production thành công với hard timeout 240 giây không đổi. Suite rendered HTML chạy hết **287 kiểm tra trong 228,8 giây: 285 đạt, 2 chưa đạt**, không bị timeout. Đây chưa phải kết quả 100%.
+Bản production đã qua **290/290 kiểm tra HTML, nội dung và source contract**, 0 failure, 0 skipped/cancelled. Lượt có bằng chứng lưu trên đĩa chạy toàn bộ `tests/rendered-html.test.mjs` trong khoảng 182,5 giây, dưới watchdog 300 giây. Kết quả bao gồm route của 67 project đã phát hành và 566 bài, internal links, glossary, One Dark, source, download và budget response/chunk.
 
-Hai case còn lại kiểm tra cách trình bày C++, không phải lỗi chạy trang:
+Production build vẫn dùng giới hạn 240 giây, prepare 120 giây. Một lượt `test:site` hoàn chỉnh trước đó đạt 289/290 và chỉ ra test runner Project 36 chưa theo hợp đồng entry point. Sau khi sửa runner, lượt build kế tiếp đã sinh artifact mới nhưng handle terminal không còn; đã xác nhận không còn process cũ rồi chạy lại riêng toàn bộ suite HTML trên artifact đó. Không báo kết quả mất handle là thành công, không build lại chỉ vì mất phần output.
 
-- `teaching source favors explicit control flow over compressed expressions`: quy tắc cấm biểu thức `?:`; quét theo regex của test tìm thấy 103 chỗ khớp trong 39 file, cần đọc từng chỗ trước khi biên tập. Case dừng tại `project-24-collision-tank/source-template/include/lab.hpp`.
-- `C++ lessons use four-space indentation and complete source is documented`: dừng tại file thiếu comment giải thích `project-23-integrator-race/source-template/include/presentation.hpp`. Quét bổ sung theo các điều kiện của case tìm thấy 19 file thiếu line comment, 15 file thiếu khoảng cách giữa các khối và 11 entry point không có comment lifecycle theo mẫu. Các nhóm có thể chồng nhau; với entry point ủy quyền cho `Application`, cần giải thích đúng nơi quản lý SDL/cleanup, không chèn comment sai chỉ để qua regex.
+## Biên tập C++ và bài học
 
-Chưa sửa hoặc bỏ qua hai quy tắc này để làm kết quả xanh. Việc mở rộng biên tập source C++ và các đoạn mã bài học liên quan đang chờ người dùng xác nhận phạm vi.
+- Đã thay **105 toán tử điều kiện trong 39 file** bằng control flow tường minh. Đây là số token `?`; 93 dòng khớp regex đơn dòng là một cách đếm khác, không phải số biểu thức đầy đủ.
+- Tổng cộng biên tập 57 file source-template và bốn file test C++: tên biến rõ, comment có ý nghĩa, lifecycle đúng nơi quản lý tài nguyên, thụt 4 spaces và khoảng cách giữa các khối.
+- Giữ nguyên công thức, thứ tự PRNG, seed, số vật thể, bước thời gian và ngưỡng correctness. Các nhánh đổi tham số, chọn renderer, chọn màu/nhãn và trả mã thoát không dùng phép viết nén chỉ để rút ngắn code.
+- Đồng bộ **48 code block trong 33 bài** với đúng source checkpoint; chuẩn hóa phần thụt dòng của đoạn trích và bỏ khoảng trắng đầu block. Bổ sung giải thích cho biến chọn tham số, correction fraction, dt index, shader uniform và phạm vi timing.
+- Project 36 đặt runner đếm/báo lỗi và mã thoát trong `tests/tests.cpp`; 55 phép kiểm vẫn ở `core_checks.hpp`, không phụ thuộc NDEBUG. Không thêm runner giả hoặc bỏ fixture để qua regex.
+- Không sửa `tests/source-contract.cases.mjs`, `tests/site-platform.cases.mjs`, `scripts/run-test-suite.mjs` hoặc `scripts/process-supervisor.mjs`. Đã so byte/SHA-256 với HEAD, không chỉ kiểm tên test.
 
-## Dung lượng trên bản build đã kiểm
+## Native verification
 
-| Thành phần                  | Trước sửa (byte) | Sau sửa (byte) | Budget không đổi |
-| --------------------------- | ---------------: | -------------: | ---------------: |
-| Response bài 03 Project 26  |          563.094 |        290.285 |        < 307.200 |
-| Chunk gốc Canvas Project 24 |           35.605 |         13.610 |         < 24.576 |
-| Chunk gốc Canvas Project 25 |           29.650 |         10.316 |         < 24.576 |
-| Chunk gốc Canvas Project 26 |           25.235 |         10.184 |         < 24.576 |
+**Project 23–28 và 30–35:** build starter, mọi checkpoint, final và tests ở cả Debug/Release; CTest đạt đủ 24 cấu hình. Project 29 không đổi. Project 36 chỉ đổi test harness, đã rebuild riêng target tests và chạy đủ 55 CPU checks ở cả hai cấu hình, 0 failures.
 
-Số liệu chunk là từng file gốc, không phải tổng JavaScript của một trang. Controls/readout được tách thành các chunk riêng, mỗi file đã đo đều dưới 24 KiB. Không giảm số vật thể, thay solver hoặc bỏ chức năng để đạt budget.
+**OpenGL thật ở Project 33–35:** `--verify` đạt ở Debug/Release. Project 33 so màu/pixel và diagnostics; Project 34 kiểm 24 lần switch, resize, ba mesh, transform feedback và cleanup; Project 35 kiểm bốn effect, 40 mẫu analytic, compile/link/interface failure, last-good recovery, key adapter và error overlay.
 
-## Các lỗi đã xử lý
+Máy kiểm: Windows x64, Visual Studio 2022/MSVC 19.33, SDL 3.4.8; GPU verification dùng NVIDIA GeForce RTX 3050 Laptop GPU, OpenGL 3.3.0 NVIDIA 546.30. Đây không phải chứng nhận mọi OS/GPU hoặc benchmark hiệu năng.
 
-- **Project 20:** clean mode có trạng thái văn bản ngay trong HTML, gồm pause, góc quay, khoảng cách camera và kiểu nội suy.
-- **Project 24–26:** tách controls/readout bằng lazy import và Suspense; có trạng thái tải bằng văn bản. Giữ nguyên code physics, input và lifecycle.
-- **Code và công thức:** giữ nguyên HTML One Dark/KaTeX, MathML, annotation và thụt dòng. Compiler gom thẻ lặp vào dictionary; client boundary dựng lại đúng HTML trong SSR lẫn hydration. Không tải Shiki/KaTeX runtime xuống trình duyệt. Đây không phải cơ chế chấp nhận HTML tùy ý từ người dùng.
-- **Diff cuối bài:** vẫn được tạo từ checkpoint thật, nhưng chỉ tô màu khi mở tên tệp; không gửi sẵn cây tô màu lớn cho mọi diff.
-- **Project 11:** bổ sung lập luận hai tam giác đồng dạng. Test depth guard kiểm ba nhánh và `return` trong checkpoint thực tế, thay vì đòi một dòng gọi hàm phải được lặp lại trong bài đang đọc.
-- **Project 31 và 34:** làm rõ thứ tự các bước, đánh số thí nghiệm và hướng dẫn hoàn tác. Project 31 có đủ lệnh build/CTest Debug và Release.
-- **Project 34:** entry contract dùng `ViewerScene`/`ViewerState`, đúng công cụ OBJ hiện tại.
-- **Project 15 và 18:** kiểm source JSON thực sự được phát hành, hash, danh sách tệp và byte nguồn; không còn đòi source nằm trong client JS.
-- **Validation lesson:** lấy bài cuối từ catalog của cả 67 project, không dùng bảng số bài cố định đã lỗi thời ở Project 16.
+Mỗi batch native có deadline tổng 240 giây, tối đa hai compiler. P24 Debug stress fixture chạm watchdog kiểm cục bộ 20 giây ở lượt đầu; chạy riêng với watchdog 60 giây hoàn tất trong 23,7 giây, Release 3,9 giây. Không đổi fixture/ngưỡng, CMake, CI hoặc timeout website để xử lý việc này. Các process lỗi/timeout được supervisor dọn trước khi chạy tiếp.
 
-## Độ tin cậy của kiểm thử
+## Canvas và download
 
-- Development pipeline đã compile **564/564 bài**, khoảng 26,7 giây ở lượt cuối thay đổi compiler. Test middleware tắt filesystem watcher vì chỉ transform URL cụ thể; cấu hình `npm run dev` không bị thay đổi.
-- **69 kiểm thử chuyên biệt** cho static markup, source reader, cache, texture, collision, spring và chaos đạt; hai kiểm tra cấu trúc bài học/lệnh validation cũng đạt.
-- Toàn bộ **881/881 test toán Canvas** đạt trong khoảng **50,2 giây** với hai worker, dưới timeout 60 giây không đổi. Lượt dùng mức song song mặc định trước đó chạm giới hạn và đã bị supervisor dọn; không tính lượt đó là đạt.
-- **98/98 test tooling** đạt trong khoảng **11,5 giây**, gồm hồi quy cache in-flight, giới hạn worker và an toàn dọn fixture Git. Lượt `fast` trong sandbox dừng vì hai fixture không được ghi Git HEAD tạm; đã xin quyền và chạy riêng toàn bộ tooling thành công, không bỏ hai test. Không tuyên bố toàn bộ lệnh `fast` trong sandbox đã chạy xong một mạch.
-- TypeScript, format, architecture budgets, generated-course check và kiểm tra Git index đạt. Toàn bộ **67 ZIP** khớp source qua kiểm tra riêng có timeout 120 giây. Hai file lệch Prettier (`course/projects/p28/learning.ts` và `tests/projects-35-tooling.cases.mjs`) chỉ được sửa cách xuống dòng/thụt dòng, không đổi dữ liệu hoặc logic.
-- **Sáu test Chrome authored** đạt trên output production: bốn test hồi quy website/Canvas/source và hai test Project 35. Không có browser error; source reader chỉ yêu cầu JSON của project đang kiểm. Test tương tác chờ Canvas vẽ frame đầu, không nhầm readout SSR với trạng thái đã hydrate. Browser dùng request routing tới assets/handler production, không khởi động HTTP server hay dùng profile cá nhân.
-- Cache route giữ tối đa 64 response trong RAM, có disk tier riêng cho từng lần chạy dưới `.validation`. Không tái sử dụng cache giữa các bản build. Unit tests kiểm eviction, byte response, chạy đồng thời, retry và cách ly từng lần chạy.
-- Kiểm tra HTML, liên kết, dung lượng và source contract vẫn đi qua handler production thật; response chỉ được dùng lại trong cùng tiến trình test. Không dùng fixture HTML thay website thật.
-- Website build giữ giới hạn 240 giây; rendered suite dùng giới hạn chuẩn sẵn có 300 giây. Các lượt chạm giới hạn trước đó đã bị supervisor dọn, không được tính là đạt.
+Chunk gốc Project 36 giảm **29.412 → 10.112 byte** bằng lazy import controls/readout, dưới budget **24.576 byte không đổi**. Đây là kích thước file gốc, không phải tổng JavaScript của trang. Không bỏ math, controls, nội dung hoặc chức năng mô phỏng.
 
-## Phạm vi bàn giao
+Ba test Chrome authored của Project 36 đạt trên artifact production: stepper, camera/pause/preset/reduced-motion, pointer ownership/cancel, DPR 1,5 và source reader. Không page error, console error hoặc HTTP error; source JSON chỉ lấy Project 36. Browser dùng production handler và assets qua request routing, không mở dev/HTTP server hoặc profile cá nhân.
 
-Không thêm sửa đổi source C++ trong đợt này; giữ nguyên các thay đổi Project 35 đã có trước lượt rà soát. Không tự mở/restart dev server, không publish, stage, commit hoặc push repository dự án. Git chỉ ghi vào repository fixture tạm khi kiểm guard; đường dẫn dọn fixture được kiểm tra để từ chối workspace thật. Generated output, ZIP, source JSON, build và cache kiểm thử vẫn nằm ngoài Git. Cần hoàn tất hai nhóm biên tập C++ nêu trên trước khi gọi toàn bộ suite đạt 100%.
+Đã kiểm riêng toàn bộ **67 ZIP khớp từng byte** với source đóng gói. TypeScript, architecture budgets và Git hygiene đạt. Source JSON/ZIP/build/cache/ảnh vẫn là output ngoài Git.
+
+## Giới hạn của bằng chứng
+
+Đây là mốc nghiệm thu đợt sửa hồi quy, trước các thay đổi xây lại Project 37. Chưa chạy lại toàn bộ `npm test`, mọi Canvas math/tooling suite hoặc desktop interactions của cả khóa học. Kết quả 290/290 không có nghĩa cả 78 project đã đạt đặc tả, và không thay cho kiểm thủ công native còn thiếu trong báo cáo Project 36.
+
+Không stage, commit, push, publish hoặc tự mở/restart dev server. Các log, summary, scope proof và native result trong `.validation/` không được thêm vào Git.

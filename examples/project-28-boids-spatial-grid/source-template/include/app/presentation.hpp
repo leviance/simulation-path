@@ -4,6 +4,7 @@
 #include <cstdio>
 
 namespace lab {
+// HUD phân biệt tiến độ công việc và số đo đã hoàn tất, không đo lại khi vẽ.
 inline bool drawLabels(SDL_Renderer* renderer, const GridScene& scene) {
     if (!SDL_SetRenderDrawColor(renderer, 210, 223, 242, 255)) {
         return false;
@@ -80,7 +81,11 @@ inline bool drawLabels(SDL_Renderer* renderer, const GridScene& scene) {
         return false;
     }
     if (scene.validation.active || scene.validation.checked > 0) {
-        std::snprintf(line, sizeof(line), "Validation %zu/%zu failures=%zu tolerance=1e-9 | %s", scene.validation.checked, scene.validation.snapshot.size(), scene.validation.failures, scene.validation.active ? "running" : "stopped/done");
+        const char* status = "stopped/done";
+        if (scene.validation.active) {
+            status = "running";
+        }
+        std::snprintf(line, sizeof(line), "Validation %zu/%zu failures=%zu tolerance=1e-9 | %s", scene.validation.checked, scene.validation.snapshot.size(), scene.validation.failures, status);
         return text(778, line);
     }
     return text(778, scene.notice.c_str());

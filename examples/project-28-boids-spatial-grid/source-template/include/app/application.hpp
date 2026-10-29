@@ -11,6 +11,7 @@ struct PointerState {
     SDL_MouseID owner{};
 };
 
+// Chỉ nhả capture của thao tác đang sở hữu chuột, rồi xóa toàn bộ state kéo.
 inline void releasePointer(PointerState& pointer) {
     if (pointer.dragging && !SDL_CaptureMouse(false)) {
         SDL_Log("Release capture: %s", SDL_GetError());

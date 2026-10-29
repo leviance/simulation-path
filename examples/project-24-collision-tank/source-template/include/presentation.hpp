@@ -4,6 +4,8 @@
 #include <cstdio>
 
 namespace lab {
+
+// Chọn nhãn từ scene hiện tại, không thay đổi state trong lúc vẽ HUD.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     if (!SDL_SetRenderDrawColor(renderer, 233, 241, 255, 255))
         return false;
@@ -13,7 +15,15 @@ inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     if (scene.spatial)
         count = scene.spheres.size();
 #endif
-    std::snprintf(value, sizeof(value), "COLLISION TANK | %s | %zu bodies | t %.3f s | dt %.5f | e scale %.2f | %s", scene.spatial ? "3D" : "2D", count, scene.elapsed, scene.dt, scene.restitution, scene.paused ? "PAUSED" : "RUNNING");
+    const char* dimension = "2D";
+    if (scene.spatial) {
+        dimension = "3D";
+    }
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(value, sizeof(value), "COLLISION TANK | %s | %zu bodies | t %.3f s | dt %.5f | e scale %.2f | %s", dimension, count, scene.elapsed, scene.dt, scene.restitution, motion);
     if (!SDL_RenderDebugText(renderer, 30, 22, value))
         return false;
     const char* controls = "Space pause | N step (from lesson 2) | R reset | F debug";
@@ -32,7 +42,11 @@ inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
 #endif
     if (!SDL_RenderDebugText(renderer, 30, 45, controls))
         return false;
-    if (!SDL_RenderDebugText(renderer, 30, 65, scene.spatial ? "Drag: orbit camera, not physics. Wheel: distance. Arrows: yaw/pitch. Box size: 16 x 10 x 12 m." : "2D world: 20 x 12 m. Size/color/material differ. Drag kick is available in final (lesson 11)."))
+    const char* interaction = "2D world: 20 x 12 m. Size/color/material differ. Drag kick is available in final (lesson 11).";
+    if (scene.spatial) {
+        interaction = "Drag: orbit camera, not physics. Wheel: distance. Arrows: yaw/pitch. Box size: 16 x 10 x 12 m.";
+    }
+    if (!SDL_RenderDebugText(renderer, 30, 65, interaction))
         return false;
 #if LAB_CHECKPOINT >= 7
     if (scene.debug) {

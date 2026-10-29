@@ -153,7 +153,10 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                 } else if (key == SDLK_HOME) {
                     simulation.camera = {};
                 } else if (key == SDLK_W || key == SDLK_S || key == SDLK_Q || key == SDLK_Z) {
-                    const double direction = key == SDLK_W || key == SDLK_Z ? 1.0 : -1.0;
+                    double direction = -1.0;
+                    if (key == SDLK_W || key == SDLK_Z) {
+                        direction = 1.0;
+                    }
                     lab::dollyCamera(simulation.camera, direction);
                 } else if (key == SDLK_F) {
                     simulation.debug = !simulation.debug;
@@ -344,8 +347,13 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             }
         }
         if (survey.active || survey.timedOut) {
-            SDL_RenderDebugTextFormat(renderer, 12, 83, "Sweep row %zu/4 target %zu/%zu | %s; Space pause/resume, Escape cancel", survey.row, survey.sample, survey.reference.size(), survey.timedOut ? "INCOMPLETE: deadline" : jobsPaused ? "PAUSED"
-                                                                                                                                                                                                                                            : "RUNNING");
+            const char* status = "RUNNING";
+            if (survey.timedOut) {
+                status = "INCOMPLETE: deadline";
+            } else if (jobsPaused) {
+                status = "PAUSED";
+            }
+            SDL_RenderDebugTextFormat(renderer, 12, 83, "Sweep row %zu/4 target %zu/%zu | %s; Space pause/resume, Escape cancel", survey.row, survey.sample, survey.reference.size(), status);
         }
 #endif
 #if LAB_CHECKPOINT >= 9

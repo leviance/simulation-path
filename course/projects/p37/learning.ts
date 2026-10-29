@@ -1,304 +1,318 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/vector_compute_math.hpp",
-  "include/gl_api.hpp",
-  "include/vector_compute_engine.hpp",
-  "shaders/vector_ops.comp",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
   guides: {
     "p37-l01": {
-      focus:
-        "Định nghĩa phép toán trên từng Vec4, tạo dữ liệu có thể tái lập và tính kết quả đối chiếu trên CPU trước khi cấp phát tài nguyên GPU.",
+      focus: "Tính kết quả đầu tiên trên CPU và đọc được A/B/output trước khi làm việc với GPU.",
       expected:
-        "Checkpoint 1 tạo hơn một triệu cặp Vec4, chạy Add trên CPU và vẽ các cột mẫu từ output baseline có thể lặp lại.",
-      files,
+        "Dashboard hiển thị 256 cặp Vec4 có seed cố định, phép Add và bốn thành phần kết quả CPU; chưa gọi đây là GPU output.",
+      files: [
+        "include/vector_compute_math.hpp",
+        "include/compute_worker.hpp",
+        "include/compute_application.hpp",
+      ],
       steps: [
         {
-          title: "Đóng một phần tử thành Vec4 rõ ràng",
+          title: "Bắt đầu từ cửa sổ chạy được",
           explanation:
-            "Gom bốn float thành một Vec4 giúp phép toán CPU và cách bố trí dữ liệu trên GPU cùng làm việc với một record 16 byte.",
+            "Starter có event loop, software dashboard và vòng đời worker; phần tính toán chỉ được nối vào ở checkpoint 1.",
         },
         {
-          title: "Tách phép toán khỏi vòng lặp",
+          title: "Viết phép tính đối chiếu",
           explanation:
-            "applyOperation mô tả Add, AXPY và Difference ở một nơi. computeCpu chỉ duyệt từng index, nhờ đó trở thành bản kết quả độc lập để so với GPU.",
+            "Mỗi index đọc A[i], B[i] và ghi đúng một Vec4; kiểm A/B cùng kích thước trước vòng lặp.",
         },
         {
-          title: "Sinh input có seed và checksum",
+          title: "Quan sát một kết quả cụ thể",
           explanation:
-            "Cùng số phần tử và seed phải tạo lại đúng A/B. Biểu đồ chỉ lấy vài mẫu để vẽ, còn phần đối chiếu CPU vẫn tính đủ N phần tử.",
+            "Đọc cả x/y/z/w trong inspector và tự tính một phép AXPY nhỏ; chưa có GPU thì dòng GPU được ghi rõ là chưa readback.",
         },
       ],
     },
     "p37-l02": {
-      focus:
-        "Yêu cầu OpenGL 4.3 Core, nạp các hàm cần dùng và kiểm tra giới hạn compute/SSBO trước khi cấp phát buffer.",
+      focus: "Tạo compute context riêng và đọc giới hạn thật thay vì tin vào phiên bản đã request.",
       expected:
-        "Checkpoint 2 in phiên bản cùng các giới hạn phần cứng; preset không phù hợp dừng lại với thông báo nêu đúng giới hạn bị thiếu.",
-      files,
+        "Worker nhận OpenGL 4.3 context; preflight kiểm local size, group count, SSBO bytes và ba storage bindings trước allocation.",
+      files: [
+        "include/vector_compute_math.hpp",
+        "include/vector_compute_engine.hpp",
+        "include/compute_worker.hpp",
+        "include/compute_application.hpp",
+      ],
       steps: [
         {
-          title: "Yêu cầu context trước khi tạo window",
+          title: "Tách UI khỏi phép đo",
           explanation:
-            "SDL_GL_SetAttribute phải chạy trước SDL_CreateWindow; sau khi tạo context vẫn đọc version thật thay vì coi request là bằng chứng.",
+            "Dashboard dùng SDL surface; hidden GL context chỉ current trên worker. UI không vẽ vào compute context.",
         },
         {
-          title: "Đọc giới hạn theo đúng chiều",
+          title: "Đọc từng loại giới hạn",
           explanation:
-            "Workgroup count/size là giá trị indexed theo X/Y/Z; maximum invocations và SSBO block size là giới hạn riêng.",
-        },
-        {
-          title: "Validate trước cấp phát",
-          explanation:
-            "Kiểm local size, số workgroup và dung lượng SSBO trước khi tạo buffer, nhờ đó lỗi phần cứng không biến thành một lần cấp phát hoặc dispatch thất bại khó hiểu.",
+            "Group size/count theo X/Y/Z khác maximum invocations; block capacity cũng khác số binding cho phép.",
         },
       ],
     },
     "p37-l03": {
-      focus: "Giữ Vec4 C++ khớp với vec4[] std430, rồi gắn ba SSBO vào binding 0, 1 và 2.",
+      focus: "Nối Vec4 16 byte với vec4[] std430 và cấp ba SSBO đúng binding.",
       expected:
-        "Checkpoint 3 upload A/B, cấp output sentinel, giữ stride 16 byte và không dispatch khi layout/binding chưa hợp lệ.",
-      files,
+        "A/B được upload; N output chứa NaN sentinel, 256 phần tử sau N chứa canary; checkpoint này chưa dispatch.",
+      files: [
+        "include/vector_compute_engine.hpp",
+        "include/compute_worker.hpp",
+        "shaders/vector_ops.comp",
+      ],
       steps: [
         {
-          title: "Khóa size và alignment ở compile time",
+          title: "Khóa layout",
           explanation:
-            "static_assert(sizeof/alignof(Vec4)==16) làm chương trình dừng ngay lúc build nếu layout bị lệch, thay vì để GPU đọc sai dữ liệu rồi mới tìm lỗi.",
+            "Size/alignment 16 byte và array stride 16 byte là hợp đồng CPU–GLSL; không suy ra stride của vec3 từ số thành phần.",
         },
         {
-          title: "Một block, một binding",
+          title: "Phân biệt tên buffer với binding",
           explanation:
-            "InputA/InputB/Output dùng binding 0/1/2 ở cả GLSL và glBindBufferBase; binding không phải GLuint buffer name.",
+            "Buffer name do driver cấp; số binding 0/1/2 là vị trí shader dùng để tìm A/B/output.",
         },
         {
-          title: "Cấp output bằng sentinel",
+          title: "Chuẩn bị vùng kiểm",
           explanation:
-            "NaN sentinel cho biết phần tử nào chưa được shader ghi sau readback; zero có thể tình cờ là kết quả hợp lệ.",
+            "Sentinel phát hiện output chưa ghi; canary phát hiện ghi vào phần padding. Chúng có mục đích khác nhau.",
         },
       ],
     },
     "p37-l04": {
-      focus:
-        "Compile compute shader đầu tiên, bind ba SSBO và dispatch đúng một workgroup 256 invocations.",
+      focus: "Compile compute shader, kiểm interface đã link và dispatch một workgroup 256 lane.",
       expected:
-        "Checkpoint 4 ghi A[i]+B[i] cho đúng 256 phần tử đầu; Canvas nối local/global ID với buffer index.",
-      files,
+        "GPU chạy đúng 256 phần tử; fence giúp biết công việc đã hoàn tất nhưng output vẫn chưa được đưa lên inspector trước bài 6.",
+      files: [
+        "include/compute_program.hpp",
+        "include/vector_compute_engine.hpp",
+        "include/compute_worker.hpp",
+        "include/compute_application.hpp",
+        "shaders/vector_ops.comp",
+      ],
       steps: [
         {
-          title: "Đặt local size trong shader",
-          explanation:
-            "layout(local_size_x=256) cố định số invocation mỗi group của executable; nó không phải số group truyền cho dispatch.",
+          title: "Viết kernel",
+          explanation: "gl_GlobalInvocationID.x chọn đúng index; ba nhánh operation khớp enum C++.",
         },
         {
-          title: "Lấy index từ global invocation",
+          title: "Kiểm program sau link",
           explanation:
-            "Trong bài 1D, gl_GlobalInvocationID.x chính là địa chỉ phần tử. Một group đầu tạo index 0..255.",
-        },
-        {
-          title: "Dispatch chỉ sau khi bind resource",
-          explanation:
-            "Phải dùng đúng program và gắn đủ ba buffer trước glDispatchCompute. Compute shader không cần draw call hay VAO.",
+            "Reflection kiểm local size, uniform type, SSBO binding và stride trước khi thay program last-good.",
         },
       ],
     },
     "p37-l05": {
-      focus:
-        "Mở rộng từ một group lên 1.000.003 phần tử bằng ceil division và bounds guard trước mọi buffer access.",
+      focus: "Tính số workgroup và kiểm index trước mọi lần đọc/ghi để chạy N lẻ an toàn.",
       expected:
-        "Checkpoint 5 dispatch 3.907 groups; 189 invocation dư thoát sớm và không đọc/ghi ngoài SSBO.",
-      files,
+        "N=1.000.003 tạo 3.907 workgroups; 189 lane dư không đọc input và không ghi output.",
+      files: [
+        "include/vector_compute_math.hpp",
+        "include/vector_compute_engine.hpp",
+        "include/compute_program.hpp",
+        "include/compute_worker.hpp",
+        "include/compute_application.hpp",
+        "shaders/vector_ops.comp",
+      ],
       steps: [
         {
-          title: "Tính group count bằng số nguyên",
+          title: "Làm tròn số group lên",
           explanation:
-            "ceilDiv(count,localSize) tránh float rounding và cho đúng một group khi count nhỏ hơn local size nhưng khác zero.",
+            "ceilDiv tránh mất phần đuôi, từ chối local size 0 và group count không biểu diễn được.",
         },
         {
-          title: "Gửi count thật sang shader",
+          title: "Guard trước truy cập",
           explanation:
-            "uElementCount mô tả miền hợp lệ; dispatch size chỉ mô tả số invocation được phát.",
+            "Đặt return ngay sau index, trước cả inputA[index]; không chỉ bảo vệ câu ghi cuối.",
         },
         {
-          title: "Guard trước lần đọc đầu tiên",
+          title: "Preflight theo N mới",
           explanation:
-            "Invocation dư phải return trước inputA[index], không chỉ trước outputData[index]; read ngoài bounds cũng là lỗi.",
+            "Mỗi N phải được kiểm lại trước allocation; việc preset trước chạy được không chứng minh preset sau hợp lệ.",
         },
       ],
     },
     "p37-l06": {
-      focus:
-        "Dùng glMemoryBarrier để dữ liệu shader vừa ghi sẵn sàng trước khi CPU đọc output buffer.",
+      focus: "Phân biệt visibility của buffer với completion và đọc output GPU thật về dashboard.",
       expected:
-        "Checkpoint 6 dùng GL_BUFFER_UPDATE_BARRIER_BIT trước glGetBufferSubData; output hợp lệ không còn NaN sentinel.",
-      files,
+        "Barrier đúng consumer, fence hữu hạn và readback N+256 phần tử cho output cùng tail canary.",
+      files: [
+        "include/vector_compute_engine.hpp",
+        "include/compute_worker.hpp",
+        "include/compute_dashboard.hpp",
+      ],
       steps: [
         {
-          title: "Gọi barrier sau dispatch",
+          title: "Chọn barrier cho readback",
           explanation:
-            "Barrier tạo visibility/order cho lệnh sau; đặt trước dispatch không bảo vệ write chưa xảy ra.",
+            "BUFFER_UPDATE phù hợp glGetBufferSubData; fence không thay vai trò visibility của barrier.",
         },
         {
-          title: "Chọn bit theo consumer",
+          title: "Chờ có thể hủy",
           explanation:
-            "Bước kế tiếp là glGetBufferSubData nên dùng BUFFER_UPDATE. Nếu một shader khác đọc SSBO, khi đó SHADER_STORAGE mới là bit phù hợp.",
+            "Poll fence với timeout 0, kiểm stop/deadline rồi nhường CPU ngắn; không khóa event loop UI.",
         },
         {
-          title: "Readback đúng buffer và byte count",
+          title: "Đọc đúng dữ liệu",
           explanation:
-            "Bind output vào GL_SHADER_STORAGE_BUFFER rồi đọc count*sizeof(Vec4); binding point 2 không tự chọn target của glGetBufferSubData.",
+            "Inspector dùng result.output; canary được kiểm ngoài N và không tham gia phép tính hợp lệ.",
         },
       ],
     },
     "p37-l07": {
-      focus:
-        "So output GPU với kết quả CPU, loại NaN/Infinity trước rồi dùng mixed tolerance gồm sai số tuyệt đối và tương đối.",
+      focus: "So mọi phần tử và cả bốn thành phần bằng tolerance có kiểm tra tính hợp lệ.",
       expected:
-        "Checkpoint 7 báo maximum error, mismatch count, first failure index và bắt được NaN lẫn một component bị sửa.",
-      files,
+        "NaN/Inf, output thiếu, tolerance NaN/âm và lỗi ở x/y/z/w đều được báo sai; report có index/component đầu tiên.",
+      files: [
+        "include/vector_compute_math.hpp",
+        "include/compute_worker.hpp",
+        "include/compute_dashboard.hpp",
+      ],
       steps: [
         {
-          title: "Loại NaN và Infinity trước khi so sai số",
+          title: "Loại giá trị không hữu hạn",
           explanation:
-            "NaN có thể khiến phép so sánh thông thường cho kết quả khó đọc. Báo cáo phải đánh dấu giá trị không hữu hạn thành một lỗi riêng.",
+            "Không để NaN đi vào phép so sai số rồi được chấp nhận do phép so sánh trả false.",
         },
         {
-          title: "Scale tolerance theo độ lớn",
+          title: "Dùng cả absTol và relTol",
           explanation:
-            "Ngưỡng absTol + relTol*max(|expected|,|actual|) đủ chặt quanh zero nhưng không phạt quá mức số lớn.",
-        },
-        {
-          title: "Giữ vị trí lỗi đầu tiên",
-          explanation:
-            "Maximum error cho mức độ, mismatch count cho phạm vi, first failure cho điểm bắt đầu debug buffer/index.",
+            "Ngưỡng nhỏ quanh zero, scale theo độ lớn ở xa zero; tolerance không phải nút làm cho mọi kết quả đều pass.",
         },
       ],
     },
     "p37-l08": {
-      focus:
-        "Đo riêng vùng GPU dispatch bằng GL_TIME_ELAPSED query và tổng hợp warm-up cùng median hữu hạn.",
+      focus: "Đo riêng CPU loop, GPU kernel và upload/dispatch/readback trên một N.",
       expected:
-        "Checkpoint 8 lấy chín mẫu thời gian, tính median của phần compute và vẫn xác nhận output đúng sau benchmark.",
-      files,
+        "B chạy hai warm-up và chín sample ở N đang chọn; query chỉ được dùng lại sau availability và consumption.",
+      files: [
+        "include/vector_compute_math.hpp",
+        "include/compute_benchmark.hpp",
+        "include/vector_compute_engine.hpp",
+        "include/compute_worker.hpp",
+        "include/compute_application.hpp",
+        "include/compute_dashboard.hpp",
+      ],
       steps: [
         {
-          title: "Đặt query sát dispatch",
+          title: "Chốt phạm vi từng đồng hồ",
           explanation:
-            "BeginQuery trước và EndQuery sau glDispatchCompute; upload, barrier/readback, UI không nằm trong nhãn compute time.",
+            "CPU preallocated loop; GPU TIME_ELAPSED quanh dispatch; E2E wall clock từ upload đến readback, gồm fence wait.",
         },
         {
-          title: "Warm-up rồi mới lấy mẫu",
+          title: "Giữ mẫu pending",
           explanation:
-            "Một lượt không ghi số đo giúp driver hoàn tất work khởi tạo; chín lượt sau có budget hữu hạn.",
+            "Query chưa available thì tiếp tục poll cùng query; không submit rồi ghi đè kết quả chưa đọc.",
         },
         {
-          title: "Báo median cạnh correctness",
+          title: "Báo độ phân tán",
           explanation:
-            "Median chống một outlier đơn lẻ nhưng không làm output đúng; benchmark chỉ được dùng khi validation vẫn pass.",
+            "Min/median/max cùng số sample giúp nhận ra độ nhiễu; một median không chứng minh tính đúng.",
         },
       ],
     },
     "p37-l09": {
-      focus:
-        "Ghép phần điều khiển, ba phép toán, biểu đồ output, báo cáo kiểm tra và cleanup thành một ứng dụng hoàn chỉnh.",
+      focus: "Mở rộng benchmark sang nhiều N mà không trộn cấu hình, warm-up hoặc sample.",
       expected:
-        "Final chỉ dispatch khi state đổi hoặc người dùng nhấn B, vẽ sample từ GPU readback và dọn query/buffer/program trước OpenGL context.",
-      files,
+        "Ba hàng 256, 65.537 và 1.000.003 cùng seed/operation/scalar; mỗi hàng có hai warm-up và chín sample riêng.",
+      files: ["include/compute_worker.hpp"],
       steps: [
         {
-          title: "Một input action, một recompute",
-          explanation:
-            "Calculator không có simulation time nên không chạy một triệu phần tử mỗi frame; operation/count/scalar mới đánh dấu needsRun.",
+          title: "Một job, một bản sao cấu hình",
+          explanation: "Worker nhận config by value; đổi UI không thể sửa một workload đang đo.",
         },
         {
-          title: "Vẽ output thật nhưng validation đủ N",
+          title: "Bắt đầu lại tại mỗi N",
           explanation:
-            "Cửa sổ lấy vài chục index đều nhau từ readback để vẽ; CPU/GPU validator vẫn duyệt toàn bộ output.",
+            "Tạo inputs/preallocate bên ngoài sample, warm-up lại, thu đủ mẫu rồi mới công bố một row hoàn chỉnh.",
+        },
+      ],
+    },
+    "p37-l10": {
+      focus: "Đọc kết quả thật trong dashboard và chọn index mà không tính lại GPU.",
+      expected:
+        "Left/Right, Page Up/Down, Home/End đổi index của inspector; SELECTED và MEASURED không bị đánh tráo.",
+      files: ["include/compute_application.hpp"],
+      steps: [
+        {
+          title: "Chọn đúng bộ kết quả",
+          explanation:
+            "Inspector lấy N từ report.data, không dùng N vừa chọn để truy cập output cũ.",
         },
         {
-          title: "Dọn resource khi context còn current",
+          title: "Giữ index trong mảng",
+          explanation: "Chặn index tại 0 và N-1, kể cả khi bộ kết quả mới nhỏ hơn bộ trước.",
+        },
+      ],
+    },
+    "p37-l11": {
+      focus: "Chứng minh độ đúng bằng fixture độc lập và phép kiểm OpenGL thật.",
+      expected:
+        "--verify kiểm toàn bộ output, input preservation, canary và đường phát hiện guard/interface sai trong thời gian hữu hạn.",
+      files: ["include/compute_application.hpp", "include/compute_verify.hpp"],
+      steps: [
+        {
+          title: "Tách hai tầng kiểm",
           explanation:
-            "Timer query, ba SSBO và program bị xóa trước SDL_GL_DestroyContext; lifetime đảo ngược đúng thứ tự tạo.",
+            "CTest không mở window; --verify chạy shader thật trong hidden context, không thay GPU bằng CPU.",
+        },
+        {
+          title: "Kiểm bộ phát hiện lỗi",
+          explanation:
+            "Guard lệch một phần tử phải làm canary fail; binding sai phải bị từ chối và program last-good còn dùng được.",
         },
       ],
     },
   },
   references: {
-    "p37-l01": [
-      {
-        label: "Element-wise operation",
-        href: "/glossary#element-wise-operation",
-        kind: "Thuật ngữ",
-      },
-      { label: "CPU oracle", href: "/glossary#cpu-oracle", kind: "Thuật ngữ" },
-    ],
+    "p37-l01": [{ label: "CPU oracle", href: "/glossary#cpu-oracle", kind: "Thuật ngữ" }],
     "p37-l02": [
       {
         label: "SDL_GL_CreateContext",
         href: "https://wiki.libsdl.org/SDL3/SDL_GL_CreateContext",
         kind: "SDL API",
       },
-      {
-        label: "glGetIntegeri_v",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGet.xhtml",
-        kind: "OpenGL API",
-      },
     ],
-    "p37-l03": [
-      {
-        label: "Shader Storage Buffer Object",
-        href: "/glossary#shader-storage-buffer-object",
-        kind: "Thuật ngữ",
-      },
-      { label: "std430", href: "/glossary#std430-layout", kind: "Thuật ngữ" },
-    ],
+    "p37-l03": [{ label: "std430", href: "/glossary#std430-layout", kind: "Thuật ngữ" }],
     "p37-l04": [
       {
         label: "glDispatchCompute",
         href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDispatchCompute.xhtml",
         kind: "OpenGL API",
       },
-      { label: "Workgroup", href: "/glossary#compute-workgroup", kind: "Thuật ngữ" },
     ],
     "p37-l05": [
-      {
-        label: "gl_GlobalInvocationID",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_GlobalInvocationID.xhtml",
-        kind: "OpenGL API",
-      },
       { label: "Bounds guard", href: "/glossary#compute-bounds-guard", kind: "Thuật ngữ" },
     ],
     "p37-l06": [
       {
         label: "glMemoryBarrier",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glMemoryBarrier.xhtml",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glMemoryBarrier.xml",
         kind: "OpenGL API",
       },
-      { label: "Memory barrier", href: "/glossary#gpu-memory-barrier", kind: "Thuật ngữ" },
     ],
-    "p37-l07": [
-      { label: "Mixed tolerance", href: "/glossary#mixed-tolerance", kind: "Thuật ngữ" },
-      { label: "CPU oracle", href: "/glossary#cpu-oracle", kind: "Thuật ngữ" },
-    ],
+    "p37-l07": [{ label: "Mixed tolerance", href: "/glossary#mixed-tolerance", kind: "Thuật ngữ" }],
     "p37-l08": [
       {
-        label: "glBeginQuery",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBeginQuery.xhtml",
+        label: "glGetQueryObject",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glGetQueryObject.xml",
         kind: "OpenGL API",
       },
-      { label: "GPU timer query", href: "/glossary#gpu-timer-query", kind: "Thuật ngữ" },
     ],
-    "p37-l09": [
+    "p37-l09": [{ label: "GPU timer query", href: "/glossary#gpu-timer-query", kind: "Thuật ngữ" }],
+    "p37-l10": [
       {
-        label: "glDeleteBuffers",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDeleteBuffers.xhtml",
+        label: "SDL_PollEvent",
+        href: "https://wiki.libsdl.org/SDL3/SDL_PollEvent",
+        kind: "SDL API",
+      },
+    ],
+    "p37-l11": [
+      {
+        label: "glClientWaitSync",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glClientWaitSync.xml",
         kind: "OpenGL API",
       },
-      { label: "Phép kiểm tra có tên", href: "/glossary#named-validation", kind: "Thuật ngữ" },
     ],
   },
 } satisfies ProjectLearningAssets;

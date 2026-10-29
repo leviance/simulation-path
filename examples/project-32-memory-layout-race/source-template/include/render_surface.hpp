@@ -44,7 +44,11 @@ inline void prepareFountainSurface(Framebuffer& image, const Camera& camera, boo
                     const double fade = std::clamp((0.6 - density) / 0.4, 0.0, 1.0);
                     const double minor = std::max(0.0, 1 - distance / width) * fade;
                     const double major = std::max(0.0, 1 - majorDistance / width) * std::clamp((3 - density) / 2, 0.0, 1.0);
-                    const double line = std::max(minor * 0.55, major) * fog * (debug ? 1.2 : 0.8);
+                    double gridBrightness = 0.8;
+                    if (debug) {
+                        gridBrightness = 1.2;
+                    }
+                    const double line = std::max(minor * 0.55, major) * fog * gridBrightness;
                     red += 32 * line;
                     green += 57 * line;
                     blue += 72 * line;

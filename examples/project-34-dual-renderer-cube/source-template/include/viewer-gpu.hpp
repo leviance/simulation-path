@@ -4,6 +4,7 @@
 #include "viewer-scene.hpp"
 
 namespace lab {
+// GPU nhận đúng ma trận và scene dùng cho nhánh CPU; không giữ camera riêng.
 #if LAB_CHECKPOINT >= 4
 inline constexpr const char* viewerVertexShader = R"glsl(#version 330 core
 layout(location = 0) in vec3 aPosition;
@@ -58,7 +59,11 @@ struct GpuViewerProgram {
         gl.UniformMatrix4fv(model, 1, GL_FALSE, matrices.model.values.data());
         gl.Uniform3f(light, scene.lightX, scene.lightY, scene.lightZ);
         gl.Uniform3f(baseColor, scene.baseRed, scene.baseGreen, scene.baseBlue);
-        gl.Uniform1i(lit, scene.lit ? 1 : 0);
+        int lightingEnabled = 0;
+        if (scene.lit) {
+            lightingEnabled = 1;
+        }
+        gl.Uniform1i(lit, lightingEnabled);
     }
 
     void bindLine(GlApi& gl, const Mat4& matrix, Vec3 color) const {
@@ -172,10 +177,18 @@ struct GpuViewerMesh {
             gl.FrontFace(GL_CCW);
         } else
             gl.Disable(GL_CULL_FACE);
-        gl.PolygonMode(GL_FRONT_AND_BACK, scene.view.wireframe ? GL_LINE : GL_FILL);
+        GLenum polygonMode = GL_FILL;
+        if (scene.view.wireframe) {
+            polygonMode = GL_LINE;
+        }
+        gl.PolygonMode(GL_FRONT_AND_BACK, polygonMode);
         program.bind(gl, matrices, scene);
         gl.BindVertexArray(vao);
-        gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, scene.view.reverseOrder ? reversedElements : elements);
+        GLuint indexBuffer = elements;
+        if (scene.view.reverseOrder) {
+            indexBuffer = reversedElements;
+        }
+        gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
         gl.DrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, nullptr);
         gl.BindVertexArray(0);
         gl.PolygonMode(GL_FRONT_AND_BACK, GL_FILL);

@@ -37,7 +37,10 @@ inline bool finite3(Vec3 v) {
 
 inline Vec3 unit3(Vec3 value, Vec3 fallback = {1.0, 0.0, 0.0}) {
     const double length = std::sqrt(dot3(value, value));
-    return std::isfinite(length) && length > kCollisionEpsilon ? mul3(value, 1.0 / length) : fallback;
+    if (std::isfinite(length) && length > kCollisionEpsilon) {
+        return mul3(value, 1.0 / length);
+    }
+    return fallback;
 }
 
 struct Sphere {

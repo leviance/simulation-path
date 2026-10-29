@@ -3,6 +3,7 @@
 #include <iostream>
 
 namespace lab {
+
 #if LAB_CHECKPOINT >= 9
 inline void benchmarkViewer(GlApi& gl, SDL_Window* window, const std::array<ViewerMesh, 3>& models, ViewerBackends& renderers, std::size_t selected) {
     int interval = -1;
@@ -16,10 +17,10 @@ inline void benchmarkViewer(GlApi& gl, SDL_Window* window, const std::array<View
     const auto started = SDL_GetTicks();
     constexpr int warmup = 3, samples = 12, width = 640, height = 480;
     std::uint64_t frame = 1;
-    std::cout << "BENCHMARK: frozen scene; viewport=640x480; VSync=0; warmup=3; samples=12; explicit glFinish before swap\n"
-              << "model=" << models[selected].name << " triangles=" << models[selected].triangleCount() << '\n'
-              << "All columns are mean milliseconds. CPU submit != GPU geometry. CPU mode includes texture upload/presenter. No speedup ratio.\n"
-              << "backend,prepare_cpu,cpu_geometry,upload_cpu,submit_cpu,gpu_geometry,sync_wait_cpu,present_cpu,frame_wall_cpu\n";
+    std::cout << "BENCHMARK: frozen scene; viewport=640x480; VSync=0; warmup=3; samples=12; explicit glFinish before swap\n";
+    std::cout << "model=" << models[selected].name << " triangles=" << models[selected].triangleCount() << '\n';
+    std::cout << "All columns are mean milliseconds. CPU submit != GPU geometry. CPU mode includes texture upload/presenter. No speedup ratio.\n";
+    std::cout << "backend,prepare_cpu,cpu_geometry,upload_cpu,submit_cpu,gpu_geometry,sync_wait_cpu,present_cpu,frame_wall_cpu\n";
     for (const auto backend : {RendererKind::cpu, RendererKind::gpu}) {
         std::array<double, 8> sums{};
         int gpuSamples = 0;
@@ -50,15 +51,24 @@ inline void benchmarkViewer(GlApi& gl, SDL_Window* window, const std::array<View
                 ++gpuSamples;
             }
         }
-        std::cout << (backend == RendererKind::cpu ? "CPU" : "GPU");
+        const char* backendName = "GPU";
+        if (backend == RendererKind::cpu) {
+            backendName = "CPU";
+        }
+        std::cout << backendName;
         for (std::size_t index = 0; index < sums.size(); ++index) {
             std::cout << ',';
             if ((backend == RendererKind::cpu && index == 4) || (backend == RendererKind::gpu && (index == 1 || index == 2)))
                 std::cout << "N/A";
             else if (index == 4 && gpuSamples == 0)
                 std::cout << "unavailable";
-            else
-                std::cout << sums[index] / (index == 4 ? gpuSamples : samples);
+            else {
+                int sampleCount = samples;
+                if (index == 4) {
+                    sampleCount = gpuSamples;
+                }
+                std::cout << sums[index] / sampleCount;
+            }
         }
         std::cout << '\n';
     }

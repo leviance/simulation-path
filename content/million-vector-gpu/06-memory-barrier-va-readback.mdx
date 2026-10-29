@@ -1,111 +1,83 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đồng bộ rồi đọc kết quả về CPU
+# Đọc output GPU về đúng lúc
 
 ## Bài toán của chúng ta
 
-`glDispatchCompute` chỉ đưa lệnh vào hàng đợi của GPU. Nó không đảm bảo output SSBO đã sẵn sàng để dòng C++ kế tiếp đọc về. Trước khi gọi `glGetBufferSubData`, ta phải nói rõ rằng bước đọc tiếp theo cần nhìn thấy những giá trị compute shader vừa ghi. Đó là nhiệm vụ của memory barrier.
+Dispatch đã được submit, nhưng CPU chưa có output. Ta phải làm dữ liệu shader vừa ghi sẵn sàng cho consumer kế tiếp, chờ công việc hoàn tất rồi đọc buffer về. Đây là ba việc có liên quan nhưng không đồng nghĩa.
 
-Bài 6 đặt `glMemoryBarrier` sau dispatch rồi dùng `glGetBufferSubData` đọc output về CPU. Từ đây, các cột trong cửa sổ sẽ lấy dữ liệu thật do GPU tính thay vì lấy từ bản đối chiếu CPU.
+Bài này là lần đầu inspector được phép hiển thị dòng GPU từ readback thật. Không dùng lại công thức CPU để tạo một dòng mang nhãn GPU.
 
-## Theo dõi dữ liệu từ CPU sang GPU
+## Hiểu ý tưởng trước khi viết code
 
-Barrier bit cho biết **bước tiếp theo sẽ đọc dữ liệu bằng cách nào**. Trong project này, bước đọc tiếp theo là lệnh `glGetBufferSubData`, nên ta dùng:
+Barrier giải quyết visibility/order của các lần truy cập. Fence cho biết các lệnh trước nó đã hoàn tất. Readback sao chép byte về vùng nhớ host. Có fence không có nghĩa ta được bỏ barrier cần thiết cho shader writes.
 
-```cpp
-GL_BUFFER_UPDATE_BARRIER_BIT
-```
-
-Nếu một compute shader khác sắp đọc output qua SSBO, bit cần dùng sẽ là `GL_SHADER_STORAGE_BARRIER_BIT`. Vì thế, hãy nhìn vào cách dữ liệu sắp được đọc thay vì chỉ nhìn lệnh vừa ghi nó.
+Consumer ở đây là `glGetBufferSubData`, nên dùng `GL_BUFFER_UPDATE_BARRIER_BIT`. Nếu consumer là một shader pass đọc SSBO, đó lại là hợp đồng khác; không chọn bit chỉ vì tên chứa chữ “shader”.
 
 <InteractiveLab demo="million-vector-gpu" mode="barrier-readback" />
 
-Hãy thử “bỏ barrier” và “chọn sai bit”. Canvas sẽ đánh dấu output là cũ/không xác định thay vì bịa ra một mẫu lỗi cụ thể; hành vi không xác định không hứa sẽ hỏng giống nhau ở mọi lần chạy.
+Canvas là sơ đồ giải thích, không phải thí nghiệm OpenGL của driver hiện tại. Bỏ barrier là sai hợp đồng nhưng không bảo đảm lần readback nào cũng hiện dữ liệu cũ; đừng biến một kết quả tình cờ đúng thành quy tắc.
 
 ## Bắt tay vào code
 
-### Bước 1 — Dispatch trước, barrier sau
+### 1. Đảm bảo visibility rồi chờ completion
 
-```cpp title="include/vector_compute_engine.hpp — thứ tự synchronization"
-api.DispatchCompute(workgroupCount, 1, 1);
+Sau dispatch, engine gọi barrier rồi tạo fence. `waitForCompletion` poll `ClientWaitSync` với timeout 0, kiểm stop/deadline và nhường CPU ngắn khi chưa xong. Worker có thể chờ mà event loop dashboard vẫn nhận Escape.
+
+```cpp title="include/vector_compute_engine.hpp — nối dispatch với readback"
 api.MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+requireNoGlError(api, "Compute dispatch/barrier");
+const auto deadline = ComputeClock::now() + std::chrono::seconds(3);
+waitForCompletion(api, stop, deadline);
 ```
 
-Barrier đặt trước dispatch không thể làm một lần ghi chưa xảy ra trở nên nhìn thấy. Nó phải nằm sau lệnh ghi và trước lệnh đọc.
+Barrier không phải lệnh copy, còn completion không thay thế visibility. Lệnh chờ có thể kết thúc do đã signaled, do người dùng hủy hoặc do deadline; chỉ nhánh hoàn tất đúng mới được đi tiếp tới readback.
 
-### Bước 2 — Cấp đúng vùng CPU nhận output
+### 2. Đọc đúng output buffer và đủ số byte
 
-```cpp title="include/vector_compute_engine.hpp — output vector"
-output.resize(requestedCount);
-```
+Khi fence đã báo hoàn tất, đọc chính output SSBO:
 
-`resize` tạo đủ object storage; `reserve` một mình chỉ tăng capacity và `output.data()` chưa đại diện cho `requestedCount` phần tử đã tồn tại. Đây là readback vào C++ object, không chỉ một mảng bytes vô danh.
-
-### Bước 3 — Bind output vào target dùng cho lệnh đọc
-
-```cpp title="include/vector_compute_engine.hpp — glGetBufferSubData"
+```cpp title="include/vector_compute_engine.hpp — readback output"
 api.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffers_[2]);
-api.GetBufferSubData(
-    GL_SHADER_STORAGE_BUFFER,
-    0,
-    static_cast<GLsizeiptr>(requestedCount * sizeof(Vec4)),
-    output.data()
-);
+api.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, byteCount(), readback_.data());
 api.BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+requireNoGlError(api, "Output readback");
+result.endToEndMilliseconds = elapsedMilliseconds(totalBegin, ComputeClock::now());
 ```
 
-Binding point 2 giúp shader tìm output, nhưng `glGetBufferSubData` đọc object đang bound vào target `GL_SHADER_STORAGE_BUFFER`. Vì vậy engine bind lại `buffers_[2]` vào target trước readback.
+`byteCount()` gồm N+256 Vec4. N phần tử đầu trở thành output; phần sau được so với canary. Không đưa canary vào phép toán hợp lệ hoặc vào validator so N kết quả CPU/GPU.
 
-### Bước 4 — Chuyển nguồn của biểu đồ
+### 3. Tách kết quả hợp lệ khỏi vùng kiểm tail
 
-```cpp title="src/main.cpp — chỉ từ checkpoint 6"
-if (!engine.execute(
-        gl,
-        dispatchCount,
-        operation,
-        scalar,
-        gpuOutput,
-        gpuMilliseconds,
-        diagnostics
-    )) {
-    return false;
+```cpp title="include/vector_compute_engine.hpp — tách output và kiểm padding"
+result.output.assign(readback_.begin(), readback_.begin() + elementCount_);
+result.tailIntact = true;
+const Vec4 guard = guardValue();
+for (std::size_t index = elementCount_; index < readback_.size(); ++index) {
+    if (std::memcmp(&readback_[index], &guard, sizeof(Vec4)) != 0) {
+        result.tailIntact = false;
+    }
 }
-
-visibleOutput = gpuOutput;
 ```
 
-Trước bài 6, `visibleOutput` lấy từ kết quả CPU. Từ bài 6, nó chứa bytes đọc về từ GPU. Bản CPU vẫn nằm trong bộ nhớ để kiểm tra, nhưng không được dùng để vẽ cột thay cho GPU.
+`memcmp` ở đây chỉ dùng cho canary Vec4 có layout tường minh và được sao nguyên byte, không dùng thay phép so sai số output float. Shader AXPY có thể làm tròn khác CPU; bài tiếp theo sẽ xử lý điều đó.
 
 ## Chạy checkpoint
 
-Chuỗi xử lý cuối bài là:
+Chạy `project_37_checkpoint_6`. Inspector hiện A/B/CPU/GPU tại cùng index. Nhấn Space để tính; resize chỉ vẽ lại dữ liệu đã nhận. Nếu canary đổi, worker báo lỗi và không công bố row thành công.
 
-`upload A/B → dispatch compute → BUFFER_UPDATE barrier → bind output target → readback N×16 bytes → vẽ 64 samples`
+## Thử làm sai để hiểu đúng
 
-Đọc lại toàn bộ hơn 16 MB có thể tốn thời gian và buộc CPU chờ GPU. Project này vẫn làm vì mục tiêu là kiểm tra toàn bộ kết quả. Đến Project 38, ta sẽ tránh tải hàng triệu particle về CPU ở mỗi frame.
+1. Đọc nhầm buffer A ở chỗ output. Nó vẫn cho số hữu hạn và có thể trông hợp lý; bài 7 phải bắt được sai khác với CPU reference.
+2. Xét trường hợp bỏ barrier. Hãy chỉ ra hợp đồng visibility đang thiếu, không viết test “chắc chắn cho NaN”. Muốn kiểm một lỗi ghi có kết quả quan sát rõ, bài cuối dùng guard lệch một phần tử và canary.
 
-## Thử phá chương trình
+## Tự kiểm tra kết quả
 
-1. Bỏ barrier. Output có thể tình cờ đúng trên máy này hôm nay, nhưng chương trình vẫn không đảm bảo đúng trên driver khác.
-2. Dùng `GL_SHADER_STORAGE_BARRIER_BIT` chỉ vì compute shader vừa ghi SSBO, trong khi bước tiếp theo lại là `glGetBufferSubData`.
-3. Bind `buffers_[0]` trước readback. Cột sẽ phản ánh input A, không phải output.
-4. Đọc `elementCount * sizeof(float)`. Bạn chỉ tải một phần tư output.
-5. Chỉ `reserve` vector rồi ghi qua `data()` như thể size đã tăng.
+- Có barrier đúng consumer sau dispatch và trước readback.
+- Chờ GPU/query có deadline, kiểm hủy; không dùng `glFinish` làm timer.
+- Dòng GPU lấy từ output SSBO thật, đọc đúng byte count.
+- Canary còn nguyên; chưa tuyên bố correctness đầy đủ chỉ vì hai dòng nhìn gần giống nhau.
 
-## Tự nghiệm thu
+## Bài tập mở rộng
 
-- [ ] Barrier nằm sau dispatch và trước readback.
-- [ ] Barrier bit được chọn theo lệnh đọc tiếp theo là `glGetBufferSubData`.
-- [ ] CPU output vector được `resize(requestedCount)`.
-- [ ] Buffer 2 được bind vào target trước lệnh đọc.
-- [ ] Byte count bằng `requestedCount * sizeof(Vec4)`.
-- [ ] Cột hiển thị lấy từ `gpuOutput`, không tính lại trên CPU.
-- [ ] Mọi phần tử hợp lệ không còn NaN sentinel.
-
-## Bài tập tiếp theo
-
-1. Thêm mode chỉ readback 64 probe bằng các đoạn nhỏ và ghi rõ trade-off nhiều API call.
-2. Thiết kế chuỗi có hai compute pass rồi xác định barrier bit cho pass sau đọc SSBO.
-3. Đo end-to-end time có/không readback, nhưng chưa gọi đó là compute time.
-
-Nhìn thấy output vẫn chưa đủ để kết luận chương trình đúng. Bài tiếp theo sẽ so toàn bộ GPU buffer với bản CPU và báo chính xác phần tử sai đầu tiên.
+Giải thích vì sao `glBindBufferBase(...,2,...)` không thay `glBindBuffer` cần cho lệnh readback theo target. Tiếp tục [kiểm toàn bộ output](/projects/million-vector-gpu/07-doi-chieu-cpu-gpu).

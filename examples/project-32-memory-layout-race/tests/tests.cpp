@@ -178,14 +178,14 @@ void testBenchmarkAndBounds() {
     job.paused = true;
     job.tick();
     check(job.timedOut && !job.active, "wall deadline remains active while paused");
-    check(rejects([] {
-              lab::summarizeTimes({1, 2});
-          }),
-          "timing summary requires all five samples");
-    check(rejects([] {
-              lab::summarizeTimes({1, 2, 3, 4, std::numeric_limits<double>::infinity()});
-          }),
-          "timing summary rejects nonfinite samples");
+    const auto summarizeTooFewSamples = [] {
+        lab::summarizeTimes({1, 2});
+    };
+    check(rejects(summarizeTooFewSamples), "timing summary requires all five samples");
+    const auto summarizeNonfiniteSamples = [] {
+        lab::summarizeTimes({1, 2, 3, 4, std::numeric_limits<double>::infinity()});
+    };
+    check(rejects(summarizeNonfiniteSamples), "timing summary rejects nonfinite samples");
     job.start({}, {257}, {lab::MemoryWorkload::fullLifecycle});
     job.cancel();
     check(!job.active, "cancel stops a running benchmark");
@@ -193,20 +193,20 @@ void testBenchmarkAndBounds() {
     const auto soa = lab::modelTraffic(64, lab::Layout::soa, lab::MemoryWorkload::gravityOnly);
     check(aos.usefulBytes == 256 && aos.uniqueLines == 44 && soa.uniqueLines == 4, "hand-counted 64B aligned-base model");
     check(lab::modelTraffic(64, lab::Layout::soa, lab::MemoryWorkload::fullLifecycle).upperBound, "all-field traffic is labeled upper bound");
-    check(rejects([] {
-              lab::makeParticlesAoS(1'000'001, {});
-          }),
-          "allocation budget enforced");
-    check(rejects([] {
-              auto config = lab::FountainConfig{};
-              config.gravity = std::numeric_limits<float>::quiet_NaN();
-              lab::validateConfig(config);
-          }),
-          "NaN rejected");
-    check(rejects([] {
-              lab::validateConfig({}, 1);
-          }),
-          "unsafe timestep rejected");
+    const auto allocateBeyondBudget = [] {
+        lab::makeParticlesAoS(1'000'001, {});
+    };
+    check(rejects(allocateBeyondBudget), "allocation budget enforced");
+    const auto validateNonfiniteGravity = [] {
+        auto config = lab::FountainConfig{};
+        config.gravity = std::numeric_limits<float>::quiet_NaN();
+        lab::validateConfig(config);
+    };
+    check(rejects(validateNonfiniteGravity), "NaN rejected");
+    const auto validateUnsafeTimestep = [] {
+        lab::validateConfig({}, 1);
+    };
+    check(rejects(validateUnsafeTimestep), "unsafe timestep rejected");
 }
 
 void testPresentation() {
@@ -226,10 +226,10 @@ void testPresentation() {
         const auto point = lab::projectPoint(originalTarget, moved, 400, 400);
         check(point.visible && std::abs(point.x - 220) <= 1 && std::abs(point.y - 185) <= 1, "pan stays in the view plane after orbit, within raster rounding");
     }
-    check(rejects([&] {
-              lab::panCamera(camera, 1, 1, 0);
-          }),
-          "invalid pan viewport rejected");
+    const auto panInvalidViewport = [&] {
+        lab::panCamera(camera, 1, 1, 0);
+    };
+    check(rejects(panInvalidViewport), "invalid pan viewport rejected");
     lab::Simulation simulation{};
     simulation.reset(257);
     lab::Framebuffer image{};

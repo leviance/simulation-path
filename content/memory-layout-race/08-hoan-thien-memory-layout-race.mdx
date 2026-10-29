@@ -110,7 +110,12 @@ if (workflow) {
         const auto& next = simulation.aos[index];
         const float remaining = old.lifetime - old.age;
         const bool expired = lab::fixedDt >= remaining;
-        const float expectedAge = expired ? lab::fixedDt - remaining : old.age + lab::fixedDt;
+        float expectedAge = 0;
+        if (expired) {
+            expectedAge = lab::fixedDt - remaining;
+        } else {
+            expectedAge = old.age + lab::fixedDt;
+        }
         if (next.id != index || next.generation != old.generation + std::uint32_t(expired) || std::abs(next.age - expectedAge) > 1e-6F || !lab::finiteParticle(next))
             throw std::runtime_error("Untouched/invalid slot in full-N workflow");
     }

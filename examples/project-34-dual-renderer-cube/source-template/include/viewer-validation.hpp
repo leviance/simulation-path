@@ -103,7 +103,10 @@ inline void verifyViewerFixture(GlApi& gl, const GpuViewerProgram& program, cons
         requireViewer(gpu.initialize(gl, mesh), "Fixture GPU upload failed");
         ViewerScene scene{};
         scene.view.angleX = scene.view.angleY = 0;
-        scene.view.distance = nearPlane ? 1.2 : 3.2;
+        scene.view.distance = 3.2;
+        if (nearPlane) {
+            scene.view.distance = 1.2;
+        }
         scene.view.grid = false;
         scene.lit = false;
         Framebuffer frame{};
@@ -151,9 +154,18 @@ inline void verifyViewer(GlApi& gl, SDL_Window* window, const std::array<ViewerM
             requireViewer(SDL_SetWindowSize(window, 760, 560), "Verification resize failed");
         if (repeat >= 20)
             scene.meshIndex = std::size_t(repeat - 20) % models.size();
-        const int width = repeat < 20 ? 320 : 401, height = repeat < 20 ? 240 : 301;
+        int width = 401;
+        int height = 301;
+        if (repeat < 20) {
+            width = 320;
+            height = 240;
+        }
         const auto frozen = scene;
-        backend = backend == RendererKind::cpu ? RendererKind::gpu : RendererKind::cpu;
+        if (backend == RendererKind::cpu) {
+            backend = RendererKind::gpu;
+        } else {
+            backend = RendererKind::cpu;
+        }
         ++switches;
         renderers.render(gl, models, scene, backend, width, height, frameNumber++, 32);
         requireViewer(scene == frozen, "Switch/render changed camera/object/shading/model state");

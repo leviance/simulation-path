@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -18,10 +20,15 @@ import {
 } from "@/lib/labs/raymarch-room/session";
 import { SPHERE_CENTER } from "@/lib/labs/raymarch-room/scene";
 import { useCanvasSize, useReducedMotion, usePauseOnReducedMotion } from "./lab-shared";
-import { RoomControls } from "./raymarch-room/controls";
-import { RoomReadout } from "./raymarch-room/readout";
 import { renderRoom } from "./raymarch-room/renderer";
 import type { InteractiveLabMode } from "./types";
+
+const RoomControls = lazy(() =>
+  import("./raymarch-room/controls").then((module) => ({ default: module.RoomControls })),
+);
+const RoomReadout = lazy(() =>
+  import("./raymarch-room/readout").then((module) => ({ default: module.RoomReadout })),
+);
 
 function RoomLab({ mode }: { mode?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -186,8 +193,12 @@ function RoomLab({ mode }: { mode?: string }) {
           if (pointer.current.id === event.pointerId) release();
         }}
       />
-      <RoomControls state={state} dispatch={apply} reducedMotion={reducedMotion} />
-      <RoomReadout state={state} size={size} capturing={capturing} />
+      <Suspense fallback={<p role="status">Đang tải điều khiển ray-march…</p>}>
+        <RoomControls state={state} dispatch={apply} reducedMotion={reducedMotion} />
+      </Suspense>
+      <Suspense fallback={<p role="status">Đang tải số liệu tia và sai số…</p>}>
+        <RoomReadout state={state} size={size} capturing={capturing} />
+      </Suspense>
       <p id={hintId} className="lab-hint">
         {state.stage === 1
           ? "Kéo hoặc dùng mũi tên để chọn fragment. Lưới có cạnh 32 pixel vật lý. "

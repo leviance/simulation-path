@@ -133,7 +133,11 @@ inline void drawChain(Framebuffer& image, const Scene& scene, const WorldView& v
         if (i == scene.selected) {
             drawNode(image, center, std::max(5.0, particle.radius * view.scale + 3.0), 0xffffffffU);
         }
-        drawNode(image, center, particle.radius * view.scale, i == 0 ? 0xc678ddffU : 0x53f0aeffU);
+        std::uint32_t color = 0x53f0aeffU;
+        if (i == 0) {
+            color = 0xc678ddffU;
+        }
+        drawNode(image, center, particle.radius * view.scale, color);
     }
 }
 ```

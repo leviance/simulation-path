@@ -58,7 +58,10 @@ inline GLuint compileShader(GlApi& gl, GLenum stage, const std::string& source, 
     if (compiled == GL_TRUE)
         return shader;
 #if LAB_CHECKPOINT >= 2
-    const std::string label = stage == GL_VERTEX_SHADER ? "vertex" : "fragment";
+    std::string label = "fragment";
+    if (stage == GL_VERTEX_SHADER) {
+        label = "vertex";
+    }
     diagnostics = "[" + label + " compile] " + file + "\n" + shaderInfoLog(gl, shader);
 #else
     diagnostics = "Shader compile failed: " + file;

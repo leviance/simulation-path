@@ -149,6 +149,7 @@ int main(int argc, char** argv) {
         std::cerr << "Unknown option for this checkpoint\n";
         return EXIT_FAILURE;
     }
+    // Khởi tạo SDL sau khi xử lý các lệnh CLI không cần cửa sổ.
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
@@ -294,6 +295,8 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         failed = true;
     }
+
+    // Giải phóng capture trước các tài nguyên renderer, kể cả khi vòng lặp báo lỗi.
     releasePointer(pointer);
     destroyResources(texture, renderer, window);
     if (failed) {

@@ -9,11 +9,16 @@ using Clock = std::chrono::steady_clock;
 inline double milliseconds(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
-enum class Layout { aos,
-                    soa };
-enum class PendingWork { none,
-                         physics,
-                         conversion };
+enum class Layout {
+    aos,
+    soa
+};
+
+enum class PendingWork {
+    none,
+    physics,
+    conversion
+};
 
 struct Simulation {
     FountainConfig config{};
@@ -38,7 +43,10 @@ struct Simulation {
         count = requested;
         cold = coldStart;
 #if LAB_CHECKPOINT >= 1
-        active = cold ? 0 : count;
+        active = count;
+        if (cold) {
+            active = 0;
+        }
 #else
         active = std::min<std::size_t>(8, count);
 #endif
@@ -56,7 +64,11 @@ struct Simulation {
         updated = committedUpdated = born = respawned = cursor = 0;
         copyMs = updateMs = conversionMs = wholeStepMs = 0;
 #if LAB_CHECKPOINT >= 1
-        notice = cold ? "Cold start: emission adds stable slots" : "Warm start: every allocated slot is alive";
+        if (cold) {
+            notice = "Cold start: emission adds stable slots";
+        } else {
+            notice = "Warm start: every allocated slot is alive";
+        }
 #else
         notice = "Scaffold: eight fixed particles; physics is not enabled";
 #endif
@@ -212,7 +224,11 @@ struct Simulation {
         } while (cursor < count && Clock::now() < deadline);
         if (cursor < count)
             return false;
-        layout = layout == Layout::aos ? Layout::soa : Layout::aos;
+        if (layout == Layout::aos) {
+            layout = Layout::soa;
+        } else {
+            layout = Layout::aos;
+        }
         pending = PendingWork::none;
         notice = "Layout changed; ID/generation/fields/time and emission remainder preserved";
         return true;

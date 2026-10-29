@@ -19,9 +19,14 @@ inline PanelPoint pointerToPanel(Vec2 point, int windowWidth, int windowHeight, 
     const float x = point.x * float(pixelWidth) / float(windowWidth);
     const float y = point.y * float(pixelHeight) / float(windowHeight);
     const int leftWidth = pixelWidth / 2;
-    const int panel = x < float(leftWidth) ? 0 : 1;
-    const int width = panel == 0 ? leftWidth : pixelWidth - leftWidth;
-    const int origin = panel == 0 ? 0 : leftWidth;
+    int panel = 1;
+    int width = pixelWidth - leftWidth;
+    int origin = leftWidth;
+    if (x < float(leftWidth)) {
+        panel = 0;
+        width = leftWidth;
+        origin = 0;
+    }
     return {true, panel, {(x - float(origin)) / float(width) * 2 - 1, 1 - y / float(pixelHeight) * 2}};
 }
 

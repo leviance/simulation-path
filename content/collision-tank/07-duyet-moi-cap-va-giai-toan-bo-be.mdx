@@ -145,6 +145,8 @@ inline void rebuildScene(Scene& scene) {
 ```
 
 
+`correctionFraction` là phần overlap cần sửa, không phải hệ số đàn hồi. Ta bắt đầu bằng 0 để tắt sửa vị trí; khi `scene.correction` bật, giá trị là 0,8. Đặt lựa chọn này trước lời gọi solver giúp nhìn rõ từng tham số và tránh nhầm rằng tắt correction cũng tắt impulse.
+
 ```cpp title="include/scene.hpp — stepScene"
 inline bool stepScene(Scene& scene) {
     const double dt = scene.dt;
@@ -155,7 +157,11 @@ inline bool stepScene(Scene& scene) {
     }
     {
         auto candidate = scene.balls;
-        const auto stats = stepCollisionWorld(candidate, kTankBounds, {dt, scene.restitution, scene.iterations, scene.correction ? 0.8 : 0.0, 0.001});
+        double correctionFraction = 0.0;
+        if (scene.correction) {
+            correctionFraction = 0.8;
+        }
+        const auto stats = stepCollisionWorld(candidate, kTankBounds, {dt, scene.restitution, scene.iterations, correctionFraction, 0.001});
         if (!stats.valid) {
             scene.message = "Invalid 2D step rejected; state was not committed.";
             stopScene(scene);
@@ -183,7 +189,11 @@ if (key == SDLK_I) {
 
 ```cpp title="src/main.cpp — SDLK_C"
 if (key == SDLK_C) {
-    scene.count = scene.count == 256 ? 64 : 256;
+    if (scene.count == 256) {
+        scene.count = 64;
+    } else {
+        scene.count = 256;
+    }
     lab::rebuildScene(scene);
 }
 ```

@@ -127,12 +127,20 @@ inline void drawPipelineOverlay(GlApi& gl, const std::array<GpuVertex, 3>& trian
     const auto transformed = transformedTriangle(triangle, transform);
     for (int index = 0; index < 3; ++index) {
         char line[100]{};
-        std::snprintf(line, sizeof(line), "%c %s NDC %.3f %.3f", 'A' + index, index == selected ? "SELECTED" : "        ", double(transformed[index].positionX), double(transformed[index].positionY));
+        const char* selection = "        ";
+        if (index == selected) {
+            selection = "SELECTED";
+        }
+        std::snprintf(line, sizeof(line), "%c %s NDC %.3f %.3f", 'A' + index, selection, double(transformed[index].positionX), double(transformed[index].positionY));
         overlayText(gl, 14, 30 + index * 16, line, height, ink);
         overlayText(gl, leftWidth + 14, 30 + index * 16, line, height, ink);
         for (int panel = 0; panel < 2; ++panel) {
-            const int panelWidth = panel == 0 ? leftWidth : width - leftWidth;
-            const int origin = panel == 0 ? 0 : leftWidth;
+            int panelWidth = width - leftWidth;
+            int origin = leftWidth;
+            if (panel == 0) {
+                panelWidth = leftWidth;
+                origin = 0;
+            }
             const Vec2 pixel = ndcToCpuScreen({transformed[index].positionX, transformed[index].positionY}, panelWidth, height);
             if (pixel.x < 0 || pixel.x >= panelWidth || pixel.y < 86 || pixel.y >= height - 56)
                 continue;
@@ -144,7 +152,11 @@ inline void drawPipelineOverlay(GlApi& gl, const std::array<GpuVertex, 3>& trian
         }
     }
     overlayText(gl, 14, height - 45, "DRAG VERTEX / 1 2 3 SELECT / I J K L MOVE / V COLOR / R RESET", height, ink);
-    overlayText(gl, 14, height - 29, smoothColor ? "C SMOOTH / SPACE RUN / N STEP / P PROBE" : "C SOLID / SPACE RUN / N STEP / P PROBE", height, ink);
+    const char* colorControls = "C SOLID / SPACE RUN / N STEP / P PROBE";
+    if (smoothColor) {
+        colorControls = "C SMOOTH / SPACE RUN / N STEP / P PROBE";
+    }
+    overlayText(gl, 14, height - 29, colorControls, height, ink);
     overlayText(gl, 14, height - 13, probeStatus, height, {0.4F, 0.85F, 0.78F});
     gl.Disable(GL_SCISSOR_TEST);
 }

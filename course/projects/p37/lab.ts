@@ -36,7 +36,7 @@ const lab = {
     "barrier-readback": {
       title: "Sau dispatch, bước nào sẽ đọc output?",
       description:
-        "Theo dõi upload → dispatch → barrier → readback, rồi thử bỏ hoặc chọn sai barrier để thấy output có thể vẫn là dữ liệu cũ.",
+        "Phân biệt visibility, fence completion và readback. Bỏ barrier là thiếu hợp đồng đúng, không có nghĩa driver chắc chắn trả dữ liệu cũ ở mọi lần chạy.",
     },
     "gpu-validation": {
       title: "Sai số bao nhiêu vẫn được xem là hợp lệ?",
@@ -46,7 +46,17 @@ const lab = {
     "gpu-timing": {
       title: "Compute time khác thời gian end-to-end thế nào?",
       description:
-        "Bật hoặc tắt upload và readback trên timeline, so chín mẫu và median để thấy FPS không thể thay thế thời gian của compute kernel.",
+        "Chọn CPU loop, GPU kernel hoặc end-to-end để thấy bước nào nằm trong vùng đo. Không sinh sample giả hoặc ghi timing mô hình thành số đo GPU thật.",
+    },
+    "vector-benchmark": {
+      title: "Đổi N không được làm đổi ý nghĩa của phép đo",
+      description:
+        "Đọc ba phạm vi đo ở từng preset N. Các ô chỉ mô tả ranh giới; bảng min/median/max thực tế nằm trong executable C++.",
+    },
+    "vector-inspector": {
+      title: "Đọc đủ bốn thành phần của một phần tử",
+      description:
+        "Chọn index bằng chuột hoặc bàn phím; phân biệt CPU reference JS với mẫu lỗi cố ý. Canvas không kiểm toàn bộ một triệu phần tử thay chương trình native.",
     },
     "vector-gpu-final": {
       title: "Máy tính vector đã cho kết quả đáng tin cậy chưa?",

@@ -80,12 +80,18 @@ CPU expected color được `quantizeRgba8` trước khi so. Report in expected,
 
 Trong readGpuProbe, sau khi kiểm pixelLocation.valid, tính phần tham chiếu bằng chính centerNdc vừa tìm được:
 
+Cho `expectedColor` nhận màu nền trước. Nếu tâm pixel nằm trong tam giác theo oracle CPU, thay nó bằng màu nội suy; cuối cùng mới lượng tử hóa sang RGBA8. Đọc theo thứ tự này sẽ thấy rõ rằng ngoài tam giác cũng có một màu kỳ vọng cần kiểm, không phải một mẫu được bỏ qua.
+
 ```cpp title="include/gpu_renderer.hpp — màu kỳ vọng tại đúng tâm pixel"
 result.valid = true;
 const BarycentricSample expectedSample = sampleTriangleAtNdc(triangle, transform, pixelLocation.centerNdc, smoothColor);
 result.inside = expectedSample.inside;
 const Color background{11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F};
-result.expected = quantizeRgba8(expectedSample.inside ? expectedSample.color : background);
+Color expectedColor = background;
+if (expectedSample.inside) {
+    expectedColor = expectedSample.color;
+}
+result.expected = quantizeRgba8(expectedColor);
 result.pixelX = pixelLocation.x;
 result.pixelY = pixelLocation.y;
 ```

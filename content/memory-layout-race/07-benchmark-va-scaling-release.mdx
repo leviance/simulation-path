@@ -86,6 +86,8 @@ Việc chuẩn bị này vẫn ảnh hưởng trạng thái cache trước kerne
 
 kernelUnit giờ thêm lời gọi updateSoARange:
 
+Sau một lượt kernel, `methodsPerSample` cho biết mẫu này cần chạy một hay hai cách lưu trữ. Baseline chỉ có AoS nên giá trị là 1; khi so cặp AoS/SoA, giá trị là 2. Chỉ khi đủ các lượt mới chuyển sang verify. Việc chọn số lượt nằm ngoài khoảng đo kernel, không được tính nhầm vào chi phí cập nhật hạt.
+
 ```cpp title="include/benchmark.hpp — đo một trong hai kernel bằng cùng đồng hồ và bộ đếm"
 void kernelUnit() {
     const std::size_t end = std::min(row.count, target + 4096);
@@ -114,7 +116,11 @@ void kernelUnit() {
             soaTimes.push_back(kernelMs);
     }
     ++trial;
-    if (trial < (paired ? 2 : 1))
+    int methodsPerSample = 1;
+    if (paired) {
+        methodsPerSample = 2;
+    }
+    if (trial < methodsPerSample)
         chooseMethod();
     else {
         row.checksumAoS = row.checksumSoA = 0;

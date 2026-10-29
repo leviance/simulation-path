@@ -45,7 +45,10 @@ inline void addStarLight(
     std::span<StarLight> light, int width, int height,
     double centerX, double centerY, const StarStyle& style
 ) {
-    const double haloRadius = style.haloRadius > 0 ? style.haloRadius : style.radius * 6.0;
+    double haloRadius = style.radius * 6.0;
+    if (style.haloRadius > 0) {
+        haloRadius = style.haloRadius;
+    }
     const int minimumX = std::max(0, int(std::floor(centerX - haloRadius)));
     const int maximumX = std::min(width - 1, int(std::ceil(centerX + haloRadius)));
     const int minimumY = std::max(0, int(std::floor(centerY - haloRadius)));

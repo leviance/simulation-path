@@ -386,7 +386,11 @@ inline GpuProbeReadback readGpuProbe(
     const BarycentricSample expectedSample = sampleTriangleAtNdc(triangle, transform, pixelLocation.centerNdc, smoothColor);
     result.inside = expectedSample.inside;
     const Color background{11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F};
-    result.expected = quantizeRgba8(expectedSample.inside ? expectedSample.color : background);
+    Color expectedColor = background;
+    if (expectedSample.inside) {
+        expectedColor = expectedSample.color;
+    }
+    result.expected = quantizeRgba8(expectedColor);
     result.pixelX = pixelLocation.x;
     result.pixelY = pixelLocation.y;
     std::array<std::uint8_t, 4> pixel{};

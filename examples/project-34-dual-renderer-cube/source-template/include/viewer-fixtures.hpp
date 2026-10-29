@@ -3,6 +3,7 @@
 #include "viewer-scene.hpp"
 
 namespace lab {
+// Mesh nhỏ với winding/near-plane biết trước giúp kiểm convention độc lập OBJ.
 #if LAB_CHECKPOINT >= 3
 inline void appendViewerFixtureTriangle(ViewerMesh& mesh, Vec3 a, Vec3 b, Vec3 c) {
     const auto normal = unitVector(crossVector(subtractVector(b, a), subtractVector(c, a)));

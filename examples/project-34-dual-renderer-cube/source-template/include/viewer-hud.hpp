@@ -129,9 +129,29 @@ inline void drawViewerHud(GlApi& gl, const ViewerScene& scene, RendererKind back
     overlayRect(gl, 0, height - 100, width, 100, height, {0.035F, 0.055F, 0.09F});
     const HudColor ink{0.78F, 0.87F, 0.94F};
     char line[256]{};
-    std::snprintf(line, sizeof(line), "%s / %s / %zu TRIANGLES", backend == RendererKind::cpu ? "F1 CPU GEOMETRY" : "F2 GPU GEOMETRY", name.c_str(), triangles);
+    const char* backendName = "F2 GPU GEOMETRY";
+    if (backend == RendererKind::cpu) {
+        backendName = "F1 CPU GEOMETRY";
+    }
+    std::snprintf(line, sizeof(line), "%s / %s / %zu TRIANGLES", backendName, name.c_str(), triangles);
     overlayText(gl, 14, height - 87, line, height, {0.4F, 0.86F, 0.78F});
-    std::snprintf(line, sizeof(line), "DRAG %s / DIST %.2f / DEPTH %s / CULL %s / LIGHT %s", scene.view.cameraDrag ? "CAMERA" : "MODEL", scene.view.distance, scene.depthEnabled ? "ON" : "OFF", scene.view.cullBackfaces ? "ON" : "OFF", scene.lit ? "ON" : "OFF");
+    const char* dragMode = "MODEL";
+    if (scene.view.cameraDrag) {
+        dragMode = "CAMERA";
+    }
+    const char* depthStatus = "OFF";
+    if (scene.depthEnabled) {
+        depthStatus = "ON";
+    }
+    const char* cullStatus = "OFF";
+    if (scene.view.cullBackfaces) {
+        cullStatus = "ON";
+    }
+    const char* lightStatus = "OFF";
+    if (scene.lit) {
+        lightStatus = "ON";
+    }
+    std::snprintf(line, sizeof(line), "DRAG %s / DIST %.2f / DEPTH %s / CULL %s / LIGHT %s", dragMode, scene.view.distance, depthStatus, cullStatus, lightStatus);
     overlayText(gl, 14, height - 69, line, height, ink);
     if (stats.frame == 0)
         std::snprintf(line, sizeof(line), "TIMING PENDING FIRST FRAME");
@@ -140,10 +160,18 @@ inline void drawViewerHud(GlApi& gl, const ViewerScene& scene, RendererKind back
     else
         std::snprintf(line, sizeof(line), "PREV F2 CPU MS: PREP %.3f PATH -- UPLOAD -- SUBMIT %.3f PRESENT %.3f", stats.prepareMs, stats.submitMs, stats.presentMs);
     overlayText(gl, 14, height - 51, line, height, ink);
+    const char* vsyncStatus = "OFF";
+    if (vsync) {
+        vsyncStatus = "ON";
+    }
     if (timer.hasSample) {
-        std::snprintf(line, sizeof(line), "GPU DRAW %.4f MS FROM FRAME %llu / FRAME CPU WALL %.3f MS / VSYNC %s", timer.milliseconds, static_cast<unsigned long long>(timer.sampleFrame), stats.frameMs, vsync ? "ON" : "OFF");
+        std::snprintf(line, sizeof(line), "GPU DRAW %.4f MS FROM FRAME %llu / FRAME CPU WALL %.3f MS / VSYNC %s", timer.milliseconds, static_cast<unsigned long long>(timer.sampleFrame), stats.frameMs, vsyncStatus);
     } else {
-        std::snprintf(line, sizeof(line), "GPU TIME %s / FRAME CPU WALL %.3f MS / VSYNC %s", timer.supported ? "PENDING GPU FRAME" : "UNAVAILABLE", stats.frameMs, vsync ? "ON" : "OFF");
+        const char* timerStatus = "UNAVAILABLE";
+        if (timer.supported) {
+            timerStatus = "PENDING GPU FRAME";
+        }
+        std::snprintf(line, sizeof(line), "GPU TIME %s / FRAME CPU WALL %.3f MS / VSYNC %s", timerStatus, stats.frameMs, vsyncStatus);
     }
     overlayText(gl, 14, height - 33, line, height, ink);
     overlayText(gl, 14, height - 15, "1 ROCKET 2 SPHERE 3 CUBE / V DRAG MODE / RIGHT PAN / W WIRE / H NORMAL / G GRID / N STEP / R RESET", height, ink);

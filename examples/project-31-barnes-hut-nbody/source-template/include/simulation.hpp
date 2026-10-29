@@ -18,10 +18,17 @@ inline std::vector<Body> presetBodies(int preset, std::size_t count) {
         // Xoay cả position lẫn velocity để đĩa thứ hai nghiêng thật trong XYZ.
         bodies.clear();
         for (int galaxy = 0; galaxy < 2; ++galaxy) {
-            const std::size_t size = galaxy == 0 ? count / 2 : count - count / 2;
+            std::size_t size = count - count / 2;
+            if (galaxy == 0) {
+                size = count / 2;
+            }
             const auto disk = makeGalaxyBodies(size, galaxySeed ^ (std::uint32_t(galaxy) * 0x9e3779b9U));
-            const double side = galaxy == 0 ? -1.0 : 1.0;
-            const double tilt = galaxy == 0 ? -0.15 : 0.65;
+            double side = 1.0;
+            double tilt = 0.65;
+            if (galaxy == 0) {
+                side = -1.0;
+                tilt = -0.15;
+            }
             for (Body body : disk) {
                 const auto rotate = [tilt](Vec3 p) -> Vec3 {
                     return {p.x, p.y * std::cos(tilt) - p.z * std::sin(tilt), p.y * std::sin(tilt) + p.z * std::cos(tilt)};

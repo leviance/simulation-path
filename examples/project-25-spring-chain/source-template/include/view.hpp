@@ -74,7 +74,12 @@ inline void drawCoil(Framebuffer& image, Vec2 a, Vec2 b, std::uint32_t color) {
         const double t = double(i) / 12.0;
         double offset = 0.0;
         if (i != 12) {
-            offset = (i % 2 == 0 ? -1.0 : 1.0) * std::min(4.0, distance * 0.12);
+            // Đổi bên sau mỗi đỉnh để vẽ lò xo; không dùng đường này tính lực.
+            double direction = 1.0;
+            if (i % 2 == 0) {
+                direction = -1.0;
+            }
+            offset = direction * std::min(4.0, distance * 0.12);
         }
         const Vec2 current = add(add(a, scale(delta, t)), scale(normal, offset));
         drawLine(image, previous.x, previous.y, current.x, current.y, color);
@@ -119,7 +124,11 @@ inline void drawChain(Framebuffer& image, const Scene& scene, const WorldView& v
         if (i == scene.selected) {
             drawNode(image, center, std::max(5.0, particle.radius * view.scale + 3.0), 0xffffffffU);
         }
-        drawNode(image, center, particle.radius * view.scale, i == 0 ? 0xc678ddffU : 0x53f0aeffU);
+        std::uint32_t color = 0x53f0aeffU;
+        if (i == 0) {
+            color = 0xc678ddffU;
+        }
+        drawNode(image, center, particle.radius * view.scale, color);
 #if LAB_CHECKPOINT >= 3
         if (scene.debug) {
             const Vec2 tip = worldToScreen(add(particle.position, scale(particle.force, 0.08)), view);

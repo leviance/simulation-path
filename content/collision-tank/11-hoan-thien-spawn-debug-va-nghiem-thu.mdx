@@ -36,7 +36,10 @@ Thêm spawnBodies vào scene.hpp:
 inline int spawnBodies(Scene& scene) {
     stopScene(scene);
     int added = 0;
-    const std::size_t size = scene.spatial ? scene.spheres.size() : scene.balls.size();
+    std::size_t size = scene.balls.size();
+    if (scene.spatial) {
+        size = scene.spheres.size();
+    }
     if (size >= 512) {
         scene.message = "Capacity 512 reached.";
         return 0;

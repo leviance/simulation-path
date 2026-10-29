@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 
 namespace lab {
+
+// Đổi tham số phải hủy công việc dựa trên snapshot cũ trước khi chạy bước mới.
 inline void applyKey(GridScene& scene, SDL_Keycode key) {
     if (key == SDLK_SPACE) {
         const bool wasPaused = scene.paused;

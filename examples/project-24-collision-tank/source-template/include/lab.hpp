@@ -149,7 +149,11 @@ inline std::vector<Ball> makeTankBalls(std::uint32_t seed, bool elastic = false)
     for (std::size_t index = 0; index < balls.size(); ++index) {
         balls[index].radius = 0.18 + 0.02 * static_cast<double>(index % 4);
         balls[index].inverseMass = 1.0 / (0.5 + 0.25 * static_cast<double>(index % 5));
-        balls[index].restitution = elastic ? 1.0 : 0.7 + 0.15 * static_cast<double>(index % 3);
+        if (elastic) {
+            balls[index].restitution = 1.0;
+        } else {
+            balls[index].restitution = 0.7 + 0.15 * static_cast<double>(index % 3);
+        }
     }
     return balls;
 }

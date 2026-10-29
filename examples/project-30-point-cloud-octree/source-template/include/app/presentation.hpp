@@ -1,9 +1,11 @@
 #pragma once
+
 // HUD ASCII; hướng dẫn tiếng Việt và đơn vị được trình bày đầy đủ trong README.
 #include "controls.hpp"
 #include "view/render.hpp"
 
 namespace survey {
+
 inline void hud(SDL_Renderer* renderer, const Scene& scene, const Job& job) {
     SDL_SetRenderDrawColor(renderer, 205, 219, 231, 255);
     SDL_RenderDebugTextFormat(renderer, 12, 590, "POINT CLOUD SURVEY | N=%zu selected=%zu visible=%zu drawn=%zu | nodes=%zu", scene.points.size(), scene.selected.indices.size(), scene.visible.indices.size(), scene.drawn, scene.tree.nodes.size());

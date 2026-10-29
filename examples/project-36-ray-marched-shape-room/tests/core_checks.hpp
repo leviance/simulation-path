@@ -2,22 +2,12 @@
 #include "camera.hpp"
 #include "raymarch_oracle.hpp"
 #include "tracing.hpp"
-#include <cstdlib>
-#include <iostream>
 #include <string_view>
 
 namespace lab_test {
 
-inline int failures = 0;
-inline int checks = 0;
-
-inline void check(bool condition, std::string_view label) {
-    ++checks;
-    if (!condition) {
-        ++failures;
-        std::cerr << "FAIL: " << label << '\n';
-    }
-}
+// Các nhóm fixture gọi runner trong tests.cpp; không phụ thuộc assert/NDEBUG.
+void check(bool condition, std::string_view label);
 
 inline bool near(double a, double b, double tolerance = 1e-9) {
     return std::isfinite(a) && std::isfinite(b) && std::abs(a - b) <= tolerance;
@@ -156,20 +146,6 @@ inline void normalAndShadowChecks() {
     check(!blocked.reachedLight && blocked.visibility == 0.0, "sphere occludes the light segment");
     const auto unresolved = lab::traceShadow({0, 0, 2}, {0, 0, 1}, 4.0, empty, 1);
     check(!unresolved.reachedLight && unresolved.visibility == 0.0, "exhausted shadow budget is not called fully lit");
-}
-
-inline int runCoreChecks() {
-    failures = 0;
-    checks = 0;
-    cameraChecks();
-    sdfChecks();
-    marchChecks();
-    normalAndShadowChecks();
-    std::cout << checks << " CPU checks, " << failures << " failures\n";
-    if (failures != 0) {
-        return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
 }
 
 } // namespace lab_test

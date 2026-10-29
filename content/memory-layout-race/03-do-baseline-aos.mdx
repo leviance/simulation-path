@@ -106,7 +106,11 @@ void kernelUnit() {
             soaTimes.push_back(kernelMs);
     }
     ++trial;
-    if (trial < (paired ? 2 : 1))
+    int methodsPerSample = 1;
+    if (paired) {
+        methodsPerSample = 2;
+    }
+    if (trial < methodsPerSample)
         chooseMethod();
     else {
         row.checksumAoS = row.checksumSoA = 0;

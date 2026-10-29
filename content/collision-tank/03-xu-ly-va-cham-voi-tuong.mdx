@@ -128,7 +128,11 @@ Thêm phím E trong key-down:
 
 ```cpp title="src/main.cpp — đổi restitution scale"
 if (key == SDLK_E) {
-    scene.restitution = scene.restitution <= 0.01 ? 1.0 : std::max(0.0, scene.restitution - 0.2);
+    if (scene.restitution <= 0.01) {
+        scene.restitution = 1.0;
+    } else {
+        scene.restitution = std::max(0.0, scene.restitution - 0.2);
+    }
     lab::rebuildScene(scene);
 }
 ```

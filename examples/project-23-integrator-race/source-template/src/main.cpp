@@ -4,7 +4,7 @@
 #include <string_view>
 
 int main(int argc, char** argv) {
-    // Khởi tạo tài nguyên SDL; mỗi nhánh lỗi giải phóng những gì đã tạo được.
+    // Khởi tạo SDL và tài nguyên; mỗi nhánh lỗi giải phóng những gì đã tạo được.
     const bool smoke = argc > 1 && std::string_view(argv[1]) == "--smoke";
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
         }
         SDL_Delay(16);
     }
-    // Nhả capture rồi giải phóng texture, renderer và window theo thứ tự ngược.
+    // Giải phóng capture, texture, renderer và window theo thứ tự ngược lúc tạo.
     cancelDrag();
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);

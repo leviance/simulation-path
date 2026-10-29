@@ -27,10 +27,12 @@ struct BenchmarkRow {
     float maximumDifference{}, maximumErrorRatio{};
     bool paired{};
 };
-enum class BenchmarkPhase { prepare,
-                            reset,
-                            kernel,
-                            verify };
+enum class BenchmarkPhase {
+    prepare,
+    reset,
+    kernel,
+    verify
+};
 
 struct BenchmarkJob {
     bool active{}, paused{}, timedOut{}, paired{};
@@ -167,7 +169,11 @@ struct BenchmarkJob {
                 soaTimes.push_back(kernelMs);
         }
         ++trial;
-        if (trial < (paired ? 2 : 1))
+        int methodsPerSample = 1;
+        if (paired) {
+            methodsPerSample = 2;
+        }
+        if (trial < methodsPerSample)
             chooseMethod();
         else {
             row.checksumAoS = row.checksumSoA = 0;
@@ -282,7 +288,11 @@ inline TrafficModel modelTraffic(std::size_t count, Layout layout, MemoryWorkloa
         // touches ID/generation/hue selectively; this is not a cache-miss count.
         result.upperBound = true;
         result.usefulBytes = count * sizeof(ParticleAoS);
-        result.uniqueLines = layout == Layout::aos ? (result.usefulBytes + 63) / 64 : 11 * ((count * sizeof(float) + 63) / 64);
+        if (layout == Layout::aos) {
+            result.uniqueLines = (result.usefulBytes + 63) / 64;
+        } else {
+            result.uniqueLines = 11 * ((count * sizeof(float) + 63) / 64);
+        }
     }
     result.loadedBytes = result.uniqueLines * 64;
     return result;

@@ -4,10 +4,16 @@
 #include <cstdio>
 
 namespace lab {
+
+// HUD dùng cùng state với hình vẽ; các nhãn năng lượng không tự chạy solver.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     char line[200]{};
-    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, motion);
     if (!SDL_RenderDebugText(renderer, 30, 20, line)) {
         return false;
     }

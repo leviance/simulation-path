@@ -166,7 +166,11 @@ inline void drawChain(Framebuffer& image, const Scene& scene, const WorldView& v
         if (i == scene.selected) {
             drawNode(image, center, std::max(5.0, particle.radius * view.scale + 3.0), 0xffffffffU);
         }
-        drawNode(image, center, particle.radius * view.scale, i == 0 ? 0xc678ddffU : 0x53f0aeffU);
+        std::uint32_t color = 0x53f0aeffU;
+        if (i == 0) {
+            color = 0xc678ddffU;
+        }
+        drawNode(image, center, particle.radius * view.scale, color);
         if (scene.debug) {
             const Vec2 tip = worldToScreen(add(particle.position, scale(particle.force, 0.08)), view);
             drawForceArrow(image, center, tip);
@@ -196,10 +200,15 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
 Thay drawHud để bỏ bảng cặp của bài 2 và hiện điều khiển gravity:
 
 ```cpp title="include/presentation.hpp — drawHud"
+// HUD dùng cùng state với hình vẽ; các nhãn năng lượng không tự chạy solver.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     char line[200]{};
-    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, motion);
     if (!SDL_RenderDebugText(renderer, 30, 20, line)) {
         return false;
     }

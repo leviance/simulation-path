@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace lab {
+// Camera và phép chiếu chỉ phục vụ ảnh; chúng không đổi state hay layout hạt.
 inline constexpr double fountainFocalScale = 1.20710678118; // Vertical FOV: 45 degrees.
 inline constexpr double fountainFloorY = 0;
 
@@ -108,7 +109,14 @@ inline void drawLine(Framebuffer& image, ScreenPoint first, ScreenPoint second, 
         return;
     int x = first.x, y = first.y;
     const int dx = std::abs(second.x - x), dy = -std::abs(second.y - y);
-    const int sx = x < second.x ? 1 : -1, sy = y < second.y ? 1 : -1;
+    int sx = -1;
+    if (x < second.x) {
+        sx = 1;
+    }
+    int sy = -1;
+    if (y < second.y) {
+        sy = 1;
+    }
     int error = dx + dy;
     for (;;) {
         image.putPixel(x, y, color);

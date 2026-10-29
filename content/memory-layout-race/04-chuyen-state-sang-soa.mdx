@@ -149,7 +149,11 @@ bool tickConversion(double budgetMs = 6) {
     } while (cursor < count && Clock::now() < deadline);
     if (cursor < count)
         return false;
-    layout = layout == Layout::aos ? Layout::soa : Layout::aos;
+    if (layout == Layout::aos) {
+        layout = Layout::soa;
+    } else {
+        layout = Layout::aos;
+    }
     pending = PendingWork::none;
     notice = "Layout changed; ID/generation/fields/time and emission remainder preserved";
     return true;

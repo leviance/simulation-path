@@ -92,7 +92,10 @@ inline double sphereDepth(double rx, double ry, Vec3 center, double radius) {
         return std::numeric_limits<double>::infinity();
     }
     const double depth = (-halfB - std::sqrt(discriminant)) / a;
-    return depth >= 0.2 && depth <= 80.0 ? depth : std::numeric_limits<double>::infinity();
+    if (depth >= 0.2 && depth <= 80.0) {
+        return depth;
+    }
+    return std::numeric_limits<double>::infinity();
 }
 ```
 
@@ -294,7 +297,11 @@ inline bool stepScene(Scene& scene) {
     }
     if (scene.spatial) {
         auto candidate = scene.spheres;
-        const auto stats = stepSpheres(candidate, {dt, scene.restitution, scene.iterations, scene.correction ? 0.8 : 0.0, 0.001});
+        double correctionFraction = 0.0;
+        if (scene.correction) {
+            correctionFraction = 0.8;
+        }
+        const auto stats = stepSpheres(candidate, {dt, scene.restitution, scene.iterations, correctionFraction, 0.001});
         const auto metrics = measureSpheres(candidate);
         if (!stats.valid || !metrics.finite) {
             scene.message = "Invalid 3D step rejected; state was not committed.";
@@ -308,7 +315,11 @@ inline bool stepScene(Scene& scene) {
     } else
     {
         auto candidate = scene.balls;
-        const auto stats = stepCollisionWorld(candidate, kTankBounds, {dt, scene.restitution, scene.iterations, scene.correction ? 0.8 : 0.0, 0.001});
+        double correctionFraction = 0.0;
+        if (scene.correction) {
+            correctionFraction = 0.8;
+        }
+        const auto stats = stepCollisionWorld(candidate, kTankBounds, {dt, scene.restitution, scene.iterations, correctionFraction, 0.001});
         if (!stats.valid) {
             scene.message = "Invalid 2D step rejected; state was not committed.";
             stopScene(scene);
@@ -376,10 +387,20 @@ if (key == SDLK_2 || key == SDLK_3) {
 Thêm hai nhánh mũi tên vào key-down nếu muốn orbit bằng bàn phím như trong bản cuối:
 
 ```cpp title="src/main.cpp — orbit bằng mũi tên"
-if (scene.spatial && (key == SDLK_LEFT || key == SDLK_RIGHT))
-    scene.camera.yaw += key == SDLK_LEFT ? -0.1 : 0.1;
-if (scene.spatial && (key == SDLK_UP || key == SDLK_DOWN))
-    scene.camera.pitch = std::clamp(scene.camera.pitch + (key == SDLK_UP ? 0.1 : -0.1), -1.2, 1.2);
+if (scene.spatial && (key == SDLK_LEFT || key == SDLK_RIGHT)) {
+    double yawChange = 0.1;
+    if (key == SDLK_LEFT) {
+        yawChange = -0.1;
+    }
+    scene.camera.yaw += yawChange;
+}
+if (scene.spatial && (key == SDLK_UP || key == SDLK_DOWN)) {
+    double pitchChange = -0.1;
+    if (key == SDLK_UP) {
+        pitchChange = 0.1;
+    }
+    scene.camera.pitch = std::clamp(scene.camera.pitch + pitchChange, -1.2, 1.2);
+}
 ```
 
 Các handler drag/wheel của khung main đã cập nhật CameraSettings khi scene.spatial=true. Đối chiếu toàn bộ main.cpp bài 10 để chắc lời gọi renderScene có thêm depth, không tạo một depth buffer mới cho mỗi sphere.

@@ -75,7 +75,11 @@ inline TrafficModel modelTraffic(std::size_t count, Layout layout, MemoryWorkloa
         // touches ID/generation/hue selectively; this is not a cache-miss count.
         result.upperBound = true;
         result.usefulBytes = count * sizeof(ParticleAoS);
-        result.uniqueLines = layout == Layout::aos ? (result.usefulBytes + 63) / 64 : 11 * ((count * sizeof(float) + 63) / 64);
+        if (layout == Layout::aos) {
+            result.uniqueLines = (result.usefulBytes + 63) / 64;
+        } else {
+            result.uniqueLines = 11 * ((count * sizeof(float) + 63) / 64);
+        }
     }
     result.loadedBytes = result.uniqueLines * 64;
     return result;
@@ -97,9 +101,15 @@ Trong vòng render ở include/application.hpp, sau phần số liệu benchmark
 ```cpp title="include/application.hpp — hiện giả định cùng số liệu"
 if (showReports) {
     const auto traffic = lab::modelTraffic(simulation.count, simulation.layout, workload);
-    SDL_RenderDebugTextFormat(renderer, 12, 155, "64B aligned-base model: useful=%zu B uniqueLines=%zu loaded=%zu B %s; NOT measured cache misses", traffic.usefulBytes, traffic.uniqueLines, traffic.loadedBytes, traffic.upperBound ? "ALL-FIELD UPPER BOUND" : "gravity-only");
+    const char* trafficScope = "gravity-only";
+    if (traffic.upperBound) {
+        trafficScope = "ALL-FIELD UPPER BOUND";
+    }
+    SDL_RenderDebugTextFormat(renderer, 12, 155, "64B aligned-base model: useful=%zu B uniqueLines=%zu loaded=%zu B %s; NOT measured cache misses", traffic.usefulBytes, traffic.uniqueLines, traffic.loadedBytes, trafficScope);
 }
 ```
+
+`trafficScope` chọn nhãn từ kết quả mô hình: chỉ khi `upperBound` bật mới hiện “ALL-FIELD UPPER BOUND”. Biến này không tham gia công thức đếm line; nó giúp luôn đưa giả định của phép đếm lên màn hình cùng số liệu.
 
 Phím T đổi workload dành cho phép đo; F hiện/ẩn reports. Chọn layout chỉ đổi cách modelTraffic tính địa chỉ. Phần này không sửa state, không đổi số hạt được mô phỏng và không khởi chạy benchmark ngầm.
 

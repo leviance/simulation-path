@@ -3,6 +3,7 @@
 #include "pipeline.hpp"
 
 namespace lab {
+// Handler chỉ đổi scene và trả ý định reload/thoát; GL chạy ở application loop.
 inline constexpr std::size_t visibleShaderEffects() {
 #if LAB_CHECKPOINT >= 9
     return 4;

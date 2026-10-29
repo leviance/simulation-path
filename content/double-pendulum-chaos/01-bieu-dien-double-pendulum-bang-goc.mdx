@@ -134,13 +134,18 @@ A/D giảm/tăng theta1; S/W giảm/tăng theta2. Clamp ở đây giới hạn t
 Nếu muốn hiện số tọa độ ngay trong cửa sổ như checkpoint, thay drawHud trong include/presentation.hpp bằng hàm sau. Nó chỉ đọc state, không can thiệp phép tính:
 
 ```cpp title="include/presentation.hpp — số liệu hình học trong cửa sổ"
+// Số đo của hai con lắc được đọc sau bước vật lý, không tính lại quỹ đạo khi vẽ.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     const auto text = [&](float x, float y, const char* value) {
         ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
     };
     char line[220]{};
-    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, motion);
     text(30, 20, line);
     text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
     text(30, 64, "Static geometry: angles from downward vertical, rigid massless rods; no integration yet.");

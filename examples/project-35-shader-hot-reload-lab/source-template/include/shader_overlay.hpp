@@ -15,8 +15,13 @@ inline std::vector<std::string> wrapShaderLog(std::string_view message, std::siz
             rows.push_back(line);
             line.clear();
         }
-        if (byte != '\n')
-            line.push_back(byte >= 32 && byte < 127 ? char(byte) : '?');
+        if (byte != '\n') {
+            char character = '?';
+            if (byte >= 32 && byte < 127) {
+                character = char(byte);
+            }
+            line.push_back(character);
+        }
     }
     if (!line.empty())
         rows.push_back(line);
@@ -93,12 +98,23 @@ void main() { fragColor = texture(uTexture, vec2(uv.x, 1.0 - uv.y)); }
         if (!scene.showDebug && !error)
             return;
         resize(gl, framebufferWidth, std::min(240, framebufferHeight));
-        const auto active = reload.activeEffect < kEffects.size() ? kEffects[reload.activeEffect].name : "Embedded recovery";
+        std::string_view active = "Embedded recovery";
+        if (reload.activeEffect < kEffects.size()) {
+            active = kEffects[reload.activeEffect].name;
+        }
+        const char* autoReload = "OFF";
+        if (scene.autoReload) {
+            autoReload = "ON";
+        }
+        const char* reloadStatus = " OK";
+        if (error) {
+            reloadStatus = " ERROR / LAST-GOOD KEPT";
+        }
         std::ostringstream text;
-        text << "ACTIVE " << active << " / REQ " << scene.requestedEffect + 1 << '\n'
-             << "GEN " << reload.generation << " TRY " << reload.attempts << " AUTO " << (scene.autoReload ? "ON" : "OFF") << (error ? " ERROR / LAST-GOOD KEPT" : " OK") << '\n'
-             << "1-4 gallery F5 reload Tab debug\n"
-             << "Drag/wheel Space N R A PgUp/PgDn\n";
+        text << "ACTIVE " << active << " / REQ " << scene.requestedEffect + 1 << '\n';
+        text << "GEN " << reload.generation << " TRY " << reload.attempts << " AUTO " << autoReload << reloadStatus << '\n';
+        text << "1-4 gallery F5 reload Tab debug\n";
+        text << "Drag/wheel Space N R A PgUp/PgDn\n";
         // Time/frame wall changes continuously. Refresh regular text at 4 Hz,
         // but a new error or generation is shown immediately.
         const std::string key = text.str() + reload.diagnostics + std::to_string(logOffset);

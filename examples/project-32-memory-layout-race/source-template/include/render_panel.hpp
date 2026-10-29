@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 namespace project32 {
+// Tách số hạt sống, đã cập nhật và đã vẽ để không nhầm sampling với mô phỏng.
 inline void drawFountainPanel(SDL_Renderer* renderer, const lab::Simulation& simulation, const lab::RenderStats& drawn, double renderMs, double frameMs) {
     SDL_SetRenderDrawColor(renderer, 12, 21, 35, 255);
     const SDL_FRect panel{0, 570, 1120, 250};
@@ -23,7 +24,15 @@ inline void drawFountainPanel(SDL_Renderer* renderer, const lab::Simulation& sim
     const SDL_FRect badge{913, 584, 188, 23};
     SDL_RenderFillRect(renderer, &badge);
     SDL_SetRenderDrawColor(renderer, 133, 222, 242, 255);
-    SDL_RenderDebugTextFormat(renderer, 925, 592, "%s / %s", simulation.layout == lab::Layout::aos ? "AoS" : "SoA", simulation.paused ? "PAUSED" : "RUNNING");
+    const char* layoutName = "SoA";
+    if (simulation.layout == lab::Layout::aos) {
+        layoutName = "AoS";
+    }
+    const char* motion = "RUNNING";
+    if (simulation.paused) {
+        motion = "PAUSED";
+    }
+    SDL_RenderDebugTextFormat(renderer, 925, 592, "%s / %s", layoutName, motion);
 
     SDL_SetRenderDrawColor(renderer, 201, 222, 236, 255);
     SDL_RenderDebugTextFormat(renderer, 18, 616, "ALIVE %zu  |  UPDATED %zu / step  |  DRAWN %zu of %zu samples  |  ALLOCATED %zu", simulation.active, simulation.committedUpdated, drawn.rendered, drawn.sampled, simulation.count);

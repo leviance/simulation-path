@@ -1,141 +1,95 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Compute shader đầu tiên với một workgroup
+# Compute shader đầu tiên: một workgroup
 
 ## Bài toán của chúng ta
 
-Ta đã có bản đối chiếu chạy trên CPU (CPU oracle), đã kiểm tra giới hạn phần cứng và đã tạo ba SSBO. Bây giờ mới đến lúc cho GPU thực hiện phép tính đầu tiên. Thay vì chạy ngay 1.000.003 phần tử, bài này chỉ dispatch một workgroup gồm 256 invocation để `local ID` và `global ID` còn dễ quan sát.
+Ba SSBO đã có dữ liệu. Bây giờ ta viết chương trình GPU đọc một cặp A[i]/B[i] rồi ghi C[i]. Chưa cần bắt đầu bằng một triệu phần tử: đúng 256 phần tử và một workgroup giúp ta nhìn rõ quan hệ giữa một invocation và một index.
 
-Mục tiêu của bài không phải benchmark. Ta cần hiểu riêng ba việc: compile/link một program chỉ có compute shader, gắn đúng ba SSBO rồi chạy một workgroup bằng `glDispatchCompute(1, 1, 1)`.
+Compute shader không có vertex position hay fragment color. Nó chạy vì C++ gọi dispatch, và sản phẩm của nó ở đây là dữ liệu trong output buffer, không phải pixel được vẽ lên cửa sổ.
 
-## Theo dõi dữ liệu từ CPU sang GPU
+## Hiểu ý tưởng trước khi viết code
 
-Shader khai báo:
-
-```glsl
-layout(local_size_x = 256) in;
-```
-
-Nó nói **mỗi workgroup có 256 invocation theo X**. Còn lời gọi:
-
-```cpp
-glDispatchCompute(1, 1, 1);
-```
-
-nói **phát một workgroup**. Với bài toán một chiều:
-
-$$\text{globalId} = \text{workgroupId} \times 256 + \text{localId}$$
-
-Ở group 0, công thức rút gọn thành `globalId = localId`.
+`layout(local_size_x = 256)` cố định 256 invocation trong một group. Với `glDispatchCompute(1, 1, 1)`, global ID theo X chạy từ 0 đến 255. Khi chỉ có một group, local ID và global ID trùng nhau; từ bài sau, điều này không còn đúng cho group thứ hai trở đi.
 
 <InteractiveLab demo="million-vector-gpu" mode="one-workgroup" />
 
-Kéo qua các lane hoặc dùng mũi tên. Đây là 256 lần chạy của cùng hàm `main`, không phải một vòng `for` tuần tự mà ta có thể dựa vào thứ tự lane.
+Ba operation đã được chọn từ CPU, nên uniform `uOperation` và `uScalar` cũng xuất hiện ở kernel đầu tiên. Không để CPU tính AXPY còn shader vẫn âm thầm cộng A+B.
 
 ## Bắt tay vào code
 
-### Bước 1 — Viết kernel cộng tối thiểu
+### 1. Viết kernel cho một invocation
 
-```glsl title="shaders/vector_ops.comp — checkpoint 4"
-#version 430 core
+Sau ba SSBO block của bài trước, khai báo uniform và viết `main`:
 
-layout(local_size_x = 256) in;
-
-layout(std430, binding = 0) readonly buffer InputA {
-    vec4 inputA[];
-};
-
-layout(std430, binding = 1) readonly buffer InputB {
-    vec4 inputB[];
-};
-
-layout(std430, binding = 2) writeonly buffer Output {
-    vec4 outputData[];
-};
+```glsl title="shaders/vector_ops.comp — tính một phần tử"
+uniform int uOperation;
+uniform float uScalar;
 
 void main() {
     uint index = gl_GlobalInvocationID.x;
-    outputData[index] = inputA[index] + inputB[index];
+    if (uOperation == 1) {
+        outputData[index] = inputA[index] * uScalar + inputB[index];
+    } else if (uOperation == 2) {
+        outputData[index] = inputA[index] - inputB[index];
+    } else {
+        outputData[index] = inputA[index] + inputB[index];
+    }
 }
 ```
 
-Bài này cố định dữ liệu ở 256 phần tử nên một workgroup vừa khít và chưa cần kiểm tra phần đuôi. Đây chỉ là bước trung gian để dễ quan sát; bài sau sẽ kiểm tra index trước khi tăng N.
+Enum C++ dùng Add=0, AXPY=1, Difference=2. Ở checkpoint này N đúng 256 nên mọi invocation đều hợp lệ; đừng đổi N lẻ trước khi thêm guard ở bài 5.
 
-### Bước 2 — Compile source dưới dạng compute shader
+### 2. Compile source trước khi link program
 
-```cpp title="include/vector_compute_engine.hpp — compile"
-const GLuint shader = api.CreateShader(GL_COMPUTE_SHADER);
-const GLchar* sourcePointer = source.c_str();
-const GLint sourceLength = static_cast<GLint>(source.size());
+`compute_program.hpp` đọc file có budget 256 KiB, tạo `GL_COMPUTE_SHADER` rồi chuyển source vào shader:
 
+```cpp title="include/compute_program.hpp — compile compute source"
+const GLchar* sourcePointer = shaderSource.c_str();
+const GLint sourceLength = static_cast<GLint>(shaderSource.size());
 api.ShaderSource(shader, 1, &sourcePointer, &sourceLength);
 api.CompileShader(shader);
-```
-
-Sau đó phải đọc `GL_COMPILE_STATUS`; info log chỉ chứa thông báo chi tiết. Program này chỉ gắn compute shader rồi link, không cần vertex shader, fragment shader, VAO hay framebuffer.
-
-### Bước 3 — Chỉ thay program đang chạy sau khi link thành công
-
-```cpp title="include/vector_compute_engine.hpp — link candidate"
-const GLuint candidate = api.CreateProgram();
-api.AttachShader(candidate, shader);
-api.LinkProgram(candidate);
-api.DeleteShader(shader);
-
-GLint linked = GL_FALSE;
-api.GetProgramiv(candidate, GL_LINK_STATUS, &linked);
-
-if (linked != GL_TRUE) {
-    diagnostics = "Compute program link failed:\n" + programInfoLog(api, candidate);
-    api.DeleteProgram(candidate);
-    return false;
+GLint compiled = GL_FALSE;
+api.GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+if (compiled != GL_TRUE) {
+    throw std::runtime_error("Compute compile failed: " + computeInfoLog(api, shader, true));
 }
 ```
 
-Shader object có thể xóa sau khi link vì program đã giữ mã thực thi. Nếu link thất bại, hãy xóa program mới và dừng với thông báo rõ ràng. Bản hoàn chỉnh không có hot reload, nhưng vẫn chỉ thay program đang dùng sau khi program mới đã sẵn sàng.
+Chỉ source đã compile mới được attach/link vào candidate program. Compile và link là hai bước riêng, mỗi bước có diagnostics và cleanup khi lỗi; đừng đọc link log để thay cho compile log của shader.
 
-### Bước 4 — Bind ba SSBO rồi dispatch
+### 3. Kiểm interface rồi mới dispatch
 
-```cpp title="include/vector_compute_engine.hpp — một workgroup"
-api.UseProgram(program_);
+Program link được chưa đủ: reflection còn kiểm local size `(256,1,1)`, type/size của uniform, binding, type, offset và array stride của các SSBO.
 
-for (GLuint binding = 0; binding < 3; ++binding) {
-    api.BindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, buffers_[binding]);
+```cpp title="include/compute_program.hpp — kiểm local size đã link"
+std::array<GLint, 3> localSize{};
+api.GetProgramiv(candidate, GL_COMPUTE_WORK_GROUP_SIZE, localSize.data());
+if (localSize != std::array<GLint, 3>{256, 1, 1}) {
+    throw std::runtime_error("Compute program must use local_size = (256, 1, 1).");
 }
-
-api.DispatchCompute(1, 1, 1);
 ```
 
-Không gọi `glDrawArrays`. Compute shader không rasterize primitive và không tạo fragment; side effect nhìn thấy được của bài này là output SSBO đã bị ghi. Readback có chủ đích xuất hiện ở bài 6, nên checkpoint 4 vẫn vẽ CPU bars.
+Chỉ sau khi toàn bộ interface hợp lệ, engine mới thay program hiện tại. Một shader link được nhưng dùng binding sai không được phép trở thành program last-good mới.
+
+`VectorComputeEngine::execute` upload input, bind program, gán uniform rồi dispatch một group. Fence cho worker biết command đã hoàn tất, có kiểm hủy/deadline. Bài này chưa readback; fence không tự mang output về CPU và cũng không thay barrier visibility sẽ học ở bài 6.
 
 ## Chạy checkpoint
 
-Luồng mới là:
+Chạy `project_37_checkpoint_4`. Nhấn Space để submit một phép tính 256 phần tử. Dashboard vẫn ghi GPU chưa readback — đó là giới hạn cố ý của checkpoint, không phải được phép tự dựng lại output GPU bằng CPU để lấp chỗ trống.
 
-`load shader file → compile compute stage → link program → upload/bind SSBO → use program → dispatch một group`
+## Thử làm sai để hiểu đúng
 
-Terminal báo compile/link và dispatch hoàn thành. Title ghi `one workgroup | 256 GPU vector additions`. Nó không tuyên bố output đã được CPU kiểm, vì ta chưa đặt barrier/readback.
+1. Đổi `local_size_x` thành 128 trong shader fixture. Compile/link có thể thành công nhưng reflection phải từ chối vì hợp đồng dispatch còn là 256.
+2. Đổi type `uScalar` thành int hoặc binding Output thành 3. Interface sai phải bị từ chối; program đúng trước đó không bị thay bằng candidate lỗi. Khôi phục shader đúng trước khi đi tiếp.
 
-## Thử phá chương trình
+## Tự kiểm tra kết quả
 
-1. Tạo shader bằng `GL_FRAGMENT_SHADER`. Source có `local_size_x` sẽ không thuộc stage cần dùng.
-2. Gọi `glDispatchCompute(256, 1, 1)` vì nghĩ tham số đầu là số invocation. Bạn vừa phát 256 groups, tức 65.536 invocations, vượt buffer.
-3. Bỏ `glUseProgram`. Dispatch không biết compute executable nào cần chạy.
-4. Đổi binding của Output trong GLSL thành 3 nhưng không đổi C++. Shader ghi vào một binding không có buffer đúng.
+- Shader là compute thật, không dùng fragment shader thay phép tính.
+- Chỉ dispatch một group với N=256; CPU/GPU chọn cùng operation và scalar.
+- Compile/link/interface lỗi có diagnostics và candidate bị dọn.
+- Chưa tuyên bố output đúng khi chưa readback/validate.
 
-## Tự nghiệm thu
+## Bài tập mở rộng
 
-- [ ] Shader stage là `GL_COMPUTE_SHADER` và source dùng `#version 430 core`.
-- [ ] Compile status và link status đều được kiểm; log được giữ khi fail.
-- [ ] Program chỉ có compute shader, không thêm chuỗi render chỉ để cho đủ hình thức.
-- [ ] Ba binding được nối trước dispatch.
-- [ ] `glDispatchCompute(1,1,1)` tạo đúng 256 invocation.
-- [ ] Checkpoint chưa gọi readback và chưa dùng GPU bars như bằng chứng correctness.
-
-## Bài tập tiếp theo
-
-1. Đổi local size thành 128 và dispatch hai groups cho cùng 256 phần tử; chưa thay source final.
-2. Cố ý gây syntax error và kiểm diagnostics có line number từ driver.
-3. In `GL_COMPUTE_WORK_GROUP_SIZE` của linked program như một bài tìm hiểu API bổ sung.
-
-Bài tiếp theo sẽ tách số phần tử hợp lệ khỏi số invocation được phát, rồi mở rộng tới workgroup cuối không đầy.
+Viết ra global ID đầu và cuối của group thứ hai nếu dispatch hai group. Sau đó xây [kế hoạch cho hơn một triệu phần tử](/projects/million-vector-gpu/05-dispatch-hon-mot-trieu-vector).

@@ -52,7 +52,15 @@ inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, co
 
 inline void drawHud(SDL_Renderer* renderer, const lab::Simulation& simulation) {
     SDL_SetRenderDrawColor(renderer, 210, 220, 235, 255);
-    SDL_RenderDebugTextFormat(renderer, 12, 586, "N=%zu step=%zu t=%.6f dt=%.6f theta=%.2f eps=%.3f | %s | solver=%s", simulation.bodies.size(), simulation.steps, simulation.time, simulation.dt, simulation.theta, simulation.epsilon, simulation.paused ? "PAUSED" : "RUNNING", simulation.direct ? "Direct" : "Barnes-Hut");
+    const char* motion = "RUNNING";
+    if (simulation.paused) {
+        motion = "PAUSED";
+    }
+    const char* solver = "Barnes-Hut";
+    if (simulation.direct) {
+        solver = "Direct";
+    }
+    SDL_RenderDebugTextFormat(renderer, 12, 586, "N=%zu step=%zu t=%.6f dt=%.6f theta=%.2f eps=%.3f | %s | solver=%s", simulation.bodies.size(), simulation.steps, simulation.time, simulation.dt, simulation.theta, simulation.epsilon, motion, solver);
     SDL_RenderDebugText(renderer, 12, 606, "XYZ / G=0.001 | gold core -> blue: radius 0..0.75 | size: log mass / depth | yellow ring: target");
     SDL_RenderDebugTextFormat(renderer, 12, 626, "Camera dolly %.3f (can cross 0) | trails: 24 IDs / 64 samples | debug: opened blue, accepted gold", simulation.camera.distance);
 #if LAB_CHECKPOINT >= 3

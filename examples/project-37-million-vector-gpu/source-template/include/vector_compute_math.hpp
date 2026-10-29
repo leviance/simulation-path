@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 9
+#define LAB_CHECKPOINT 11
 #endif
 
 #include <algorithm>
@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,16 @@ struct alignas(16) Vec4 {
 static_assert(sizeof(Vec4) == 16);
 static_assert(alignof(Vec4) == 16);
 
+// Giới hạn của ứng dụng, không phải lời khẳng định về dung lượng mọi GPU.
+constexpr std::size_t maximumElementCount = 2'000'003U;
+constexpr std::uint32_t computeLocalSize = 256U;
+
+inline void requireElementCount(std::size_t elementCount) {
+    if (elementCount > maximumElementCount) {
+        throw std::length_error("Workload exceeds the application's 2,000,003 element budget.");
+    }
+}
+
 inline const char* operationName(VectorOperation operation) {
     switch (operation) {
     case VectorOperation::add:
@@ -50,6 +61,9 @@ inline Vec4 applyOperation(
     VectorOperation operation,
     float scalar
 ) {
+    if (!std::isfinite(scalar)) {
+        throw std::invalid_argument("Scalar must be finite.");
+    }
     if (operation == VectorOperation::axpy) {
         return {
             a.x * scalar + b.x,
@@ -61,7 +75,10 @@ inline Vec4 applyOperation(
     if (operation == VectorOperation::difference) {
         return {a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w};
     }
-    return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w};
+    if (operation == VectorOperation::add) {
+        return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w};
+    }
+    throw std::invalid_argument("Unknown vector operation.");
 }
 
 struct VectorInputs {
@@ -97,6 +114,7 @@ inline VectorInputs makeVectorInputs(
     std::size_t elementCount,
     std::uint32_t seed = 0x37c0ffeeU
 ) {
+    requireElementCount(elementCount);
     VectorInputs inputs{};
     inputs.a.resize(elementCount);
     inputs.b.resize(elementCount);
@@ -122,7 +140,13 @@ inline std::vector<Vec4> computeCpu(
     VectorOperation operation,
     float scalar
 ) {
-    const std::size_t count = std::min(inputs.a.size(), inputs.b.size());
+    // Kiểm hợp đồng ngay cả khi N=0, không chờ đến lần lặp đầu tiên.
+    (void)applyOperation({}, {}, operation, scalar);
+    if (inputs.a.size() != inputs.b.size()) {
+        throw std::invalid_argument("Input A and B must have the same size.");
+    }
+    requireElementCount(inputs.a.size());
+    const std::size_t count = inputs.a.size();
     std::vector<Vec4> output(count);
     for (std::size_t index = 0; index < count; ++index) {
         output[index] = applyOperation(inputs.a[index], inputs.b[index], operation, scalar);
@@ -150,6 +174,8 @@ struct ComputeLimits {
     std::array<int, 3> maximumWorkgroupSize{};
     int maximumInvocations{};
     std::int64_t maximumShaderStorageBlockBytes{};
+    int maximumStorageBindings{};
+    int maximumComputeStorageBlocks{};
 };
 
 struct CapabilityReport {
@@ -157,12 +183,14 @@ struct CapabilityReport {
     bool localSizeSupported{};
     bool groupCountSupported{};
     bool storageBlockLargeEnough{};
+    bool bindingsSupported{};
+    bool applicationBudgetSupported{};
 
     bool allPassed() const {
         return version43OrNewer &&
             localSizeSupported &&
             groupCountSupported &&
-            storageBlockLargeEnough;
+            storageBlockLargeEnough && bindingsSupported && applicationBudgetSupported;
     }
 };
 
@@ -179,16 +207,24 @@ struct DispatchPlan {
 };
 
 inline std::uint32_t ceilDiv(std::size_t value, std::uint32_t divisor) {
-    if (value == 0 || divisor == 0) {
+    if (divisor == 0) {
+        throw std::invalid_argument("Local size must be greater than zero.");
+    }
+    if (value == 0) {
         return 0;
     }
-    return static_cast<std::uint32_t>(1U + (value - 1U) / divisor);
+    const std::size_t result = 1U + (value - 1U) / divisor;
+    if (result > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::overflow_error("Workgroup count does not fit GLuint.");
+    }
+    return static_cast<std::uint32_t>(result);
 }
 
 inline DispatchPlan makeDispatchPlan(
     std::size_t elementCount,
     std::uint32_t localSize
 ) {
+    requireElementCount(elementCount);
     const std::uint32_t workgroups = ceilDiv(elementCount, localSize);
     const std::size_t launched = std::size_t(workgroups) * localSize;
     return {
@@ -208,15 +244,21 @@ inline CapabilityReport validateCapabilities(
     const bool versionSupported =
         limits.majorVersion > 4 ||
         (limits.majorVersion == 4 && limits.minorVersion >= 3);
-    const std::int64_t requiredBytes =
-        static_cast<std::int64_t>(plan.elementCount * sizeof(Vec4));
+    // Có thêm một workgroup canary ở cuối mỗi buffer để kiểm tail writes.
+    const bool withinBudget = plan.elementCount <= maximumElementCount;
+    std::int64_t requiredBytes = std::numeric_limits<std::int64_t>::max();
+    if (withinBudget) {
+        requiredBytes = static_cast<std::int64_t>((plan.elementCount + computeLocalSize) * sizeof(Vec4));
+    }
     return {
         versionSupported,
         plan.localSize > 0 &&
-            int(plan.localSize) <= limits.maximumWorkgroupSize[0] &&
-            int(plan.localSize) <= limits.maximumInvocations,
-        int(plan.workgroupCount) <= limits.maximumWorkgroupCount[0],
+            std::int64_t(plan.localSize) <= limits.maximumWorkgroupSize[0] &&
+            std::int64_t(plan.localSize) <= limits.maximumInvocations,
+        std::int64_t(plan.workgroupCount) <= limits.maximumWorkgroupCount[0],
         requiredBytes <= limits.maximumShaderStorageBlockBytes,
+        limits.maximumStorageBindings >= 3 && limits.maximumComputeStorageBlocks >= 3,
+        withinBudget,
     };
 }
 #endif
@@ -226,14 +268,17 @@ inline CapabilityReport validateCapabilities(
 #if LAB_CHECKPOINT >= 7
 
 struct OutputValidationReport {
+    bool tolerancesValid{};
     bool sameSize{};
     bool allFinite{};
     std::size_t mismatchCount{};
     std::size_t firstMismatch{std::numeric_limits<std::size_t>::max()};
+    std::size_t firstNonFinite{std::numeric_limits<std::size_t>::max()};
+    std::size_t firstMismatchComponent{};
     float maximumAbsoluteError{};
 
     bool allPassed() const {
-        return sameSize && allFinite && mismatchCount == 0;
+        return tolerancesValid && sameSize && allFinite && mismatchCount == 0;
     }
 };
 
@@ -251,8 +296,13 @@ inline OutputValidationReport validateOutput(
     float relativeTolerance = 2.0e-6F
 ) {
     OutputValidationReport report{};
+    report.tolerancesValid = std::isfinite(absoluteTolerance) && absoluteTolerance >= 0.0F &&
+        std::isfinite(relativeTolerance) && relativeTolerance >= 0.0F;
     report.sameSize = expected.size() == actual.size();
     report.allFinite = true;
+    if (!report.tolerancesValid) {
+        return report;
+    }
     const std::size_t count = std::min(expected.size(), actual.size());
     for (std::size_t index = 0; index < count; ++index) {
         const std::array<float, 4> expectedComponents{
@@ -273,6 +323,12 @@ inline OutputValidationReport validateOutput(
             const float actualValue = actualComponents[component];
             if (!std::isfinite(expectedValue) || !std::isfinite(actualValue)) {
                 report.allFinite = false;
+                if (report.firstNonFinite == std::numeric_limits<std::size_t>::max()) {
+                    report.firstNonFinite = index;
+                }
+                if (elementMatches && report.firstMismatch == std::numeric_limits<std::size_t>::max()) {
+                    report.firstMismatchComponent = component;
+                }
                 elementMatches = false;
                 continue;
             }
@@ -280,6 +336,9 @@ inline OutputValidationReport validateOutput(
             report.maximumAbsoluteError = std::max(report.maximumAbsoluteError, error);
             const float scale = std::max(std::abs(expectedValue), std::abs(actualValue));
             if (error > absoluteTolerance + relativeTolerance * scale) {
+                if (elementMatches && report.firstMismatch == std::numeric_limits<std::size_t>::max()) {
+                    report.firstMismatchComponent = component;
+                }
                 elementMatches = false;
             }
         }
@@ -311,12 +370,17 @@ inline double medianMilliseconds(std::vector<double> samples) {
     if (samples.empty()) {
         return 0.0;
     }
+    for (double value : samples) {
+        if (!std::isfinite(value) || value < 0.0) {
+            throw std::invalid_argument("Timing samples must be finite and non-negative.");
+        }
+    }
     std::sort(samples.begin(), samples.end());
     const std::size_t middle = samples.size() / 2U;
     if ((samples.size() % 2U) == 1U) {
         return samples[middle];
     }
-    return (samples[middle - 1U] + samples[middle]) * 0.5;
+    return samples[middle - 1U] + (samples[middle] - samples[middle - 1U]) * 0.5;
 }
 
 #endif

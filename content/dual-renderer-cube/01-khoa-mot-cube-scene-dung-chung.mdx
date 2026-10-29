@@ -36,7 +36,10 @@ if (finite) {
     flags |= SDL_WINDOW_HIDDEN;
 }
 SDL_Window* window = SDL_CreateWindow("P34 - Viewer foundation", 960, 640, flags);
-SDL_GLContext context = window ? SDL_GL_CreateContext(window) : nullptr;
+SDL_GLContext context = nullptr;
+if (window) {
+    context = SDL_GL_CreateContext(window);
+}
 ```
 
 Các thuộc tính phải được đặt trước khi tạo context. Window cần `SDL_WINDOW_OPENGL`; `SDL_WINDOW_HIGH_PIXEL_DENSITY` cho phép framebuffer có nhiều pixel hơn kích thước logical. Sau khi tạo context, make-current rồi mới load function pointers. Starter có sẵn đường báo lỗi và cleanup để bạn kiểm phần này trước.

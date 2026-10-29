@@ -52,7 +52,7 @@ Canvas dùng cùng camera, primitive, slab hữu hạn, abs-distance marcher, st
 
 Mười một chế độ bám theo bài: pixel/ray, camera, lát cắt SDF, từng bước march, normal, primitives, materials, bóng/đèn, free camera, oracle và validation. Canvas là CPU preview, **không thay ứng dụng OpenGL**. Preview giới hạn 6.144 ray, chia batch tối đa 96 ray/khoảng 6ms và nhường event loop giữa các batch; job cũ bị hủy khi đổi tham số hoặc unmount.
 
-Phần toán, session/input, image job và scheduler được tách khỏi diagrams, renderer, controls và readout. Không module mới nào quá 11,2 KiB; root component khoảng 8,6 KiB. Chunk production riêng của lab là 29.412 byte, chỉ tải khi mở lab.
+Phần toán, session/input, image job và scheduler được tách khỏi diagrams, renderer, controls và readout. Controls/readout còn được lazy import riêng. Chunk production gốc của lab là **10.112 byte**, dưới budget 24 KiB; đây không phải tổng JavaScript của trang. Không bỏ tính toán hoặc chức năng để giảm kích thước.
 
 Các hành vi đã kiểm: pause/step/reset theo preset, camera vẫn điều khiển được khi pause, stage-gated controls, pointer capture có chủ sở hữu, từ chối pointer phụ, cancel/Escape, keyboard có modifier/repeat/IME guard, DPR 1,5, reduced-motion và dispose job. Kéo chuột trái trong Canvas và bước di chuyển bằng phím được giải thích riêng, không trình bày như thao tác RMB/held-key của ứng dụng native. Clock của preview chỉ tăng tối đa 0,05 giây sau khi render xong một ảnh CPU, không được gọi là FPS của OpenGL.
 
@@ -72,6 +72,8 @@ Các hành vi đã kiểm: pause/step/reset theo preset, camera vẫn điều kh
 | Git hygiene | Không generated course output, thư viện hoặc compiled artifact trong index; `git diff --check` đạt |
 
 Browser regression phục vụ production artifact qua interception trong Playwright, không tự mở HTTP/dev server. Localhost:3000 không khả dụng khi probe. Không start/restart server, deploy, stage, commit hoặc push trong lượt này.
+
+Đợt kiểm toàn site tiếp theo đạt 290/290, gồm các budget không đổi. Test runner CPU đã được chuyển về `tests/tests.cpp` để quản lý đếm lỗi và mã thoát; 55 fixture giữ ở `core_checks.hpp`. Đã rebuild riêng tests ở Debug/Release và chạy CTest, mỗi cấu hình 55 checks, 0 failures. Ba test Chrome cũng đã chạy lại sau khi tách chunk và vẫn đạt; không chạy lại GPU verification chỉ vì thay test harness/web imports.
 
 Đây là kết quả kiểm Project 36 cùng các hợp đồng dùng chung nêu rõ ở bảng, **không phải tuyên bố toàn bộ test của 78 project đạt 100%**. Không dùng kết quả toàn site từ lần trước làm bằng chứng mới.
 

@@ -134,8 +134,8 @@ inline void verifyShaderGallery(GlApi& gl, SDL_Window* window, ShaderLabRenderer
         verifyDeletedShaders(gl, audit, 0);
         renderer.draw(gl, uniform);
         requireShader(readShaderImage(gl, width, height) == lastGoodImage, "Failed reload changed last-good image");
-        std::cout << "EXPECTED REJECTION " << expected << '\n'
-                  << diagnostics << '\n';
+        std::cout << "EXPECTED REJECTION " << expected << '\n';
+        std::cout << diagnostics << '\n';
     };
     auto bad = good;
     bad.fragment += "\nTHIS_IS_NOT_VALID_GLSL\n";

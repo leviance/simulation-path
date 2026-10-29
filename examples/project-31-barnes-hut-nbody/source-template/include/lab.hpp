@@ -143,8 +143,12 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
             angle = angularSample / 0.22 * 6.283185307179586;
         } else {
             const bool firstArm = angularSample < 0.64;
-            const double winding = firstArm ? 3.4 : 2.6;
-            const double phase = firstArm ? 0.0 : 3.7;
+            double winding = 2.6;
+            double phase = 3.7;
+            if (firstArm) {
+                winding = 3.4;
+                phase = 0.0;
+            }
             angle = phase + winding * std::log((radius + 0.12) / 0.32);
             angle += 0.14 * std::sin(radius * 8.0 + phase);
             angle += (scatter - 0.5) * (0.22 + 0.35 * radius);
@@ -168,12 +172,16 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
         const double enclosedMass = 120.0 + 120.0 * std::min(1.0, radius * radius);
         const double orbitalSpeed = std::sqrt(0.001 * enclosedMass / radius);
         const double speedJitter = 0.92 + random.unit() * 0.16;
+        double verticalSpeedScale = 0.06;
+        if (bulge || halo) {
+            verticalSpeedScale = 0.5;
+        }
         bodies.push_back({
             {std::cos(angle) * planarRadius, std::sin(angle) * planarRadius, thickness},
             {
                 -std::sin(angle) * orbitalSpeed * speedJitter,
                 std::cos(angle) * orbitalSpeed * speedJitter,
-                (random.unit() - 0.5) * (bulge || halo ? 0.5 : 0.06),
+                (random.unit() - 0.5) * verticalSpeedScale,
             },
             mass,
         });

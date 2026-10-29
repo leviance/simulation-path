@@ -1,8 +1,10 @@
 #pragma once
+
 // Giá trị cố định trong snapshot; người học không cần định nghĩa macro khi build.
 #ifndef LAB_CHECKPOINT
 #define LAB_CHECKPOINT 11
 #endif
+
 namespace survey {
 #if LAB_CHECKPOINT >= 11
 inline constexpr int stage = 11;

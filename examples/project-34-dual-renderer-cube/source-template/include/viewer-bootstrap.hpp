@@ -1,4 +1,5 @@
 #pragma once
+
 #include "gl_api.hpp"
 #include "viewer-mesh.hpp"
 #include "viewer-scene.hpp"
@@ -21,7 +22,10 @@ inline int runViewerBootstrap(bool finite) {
         flags |= SDL_WINDOW_HIDDEN;
     }
     SDL_Window* window = SDL_CreateWindow("P34 - Viewer foundation", 960, 640, flags);
-    SDL_GLContext context = window ? SDL_GL_CreateContext(window) : nullptr;
+    SDL_GLContext context = nullptr;
+    if (window) {
+        context = SDL_GL_CreateContext(window);
+    }
     GlApi gl{};
     int result = EXIT_SUCCESS;
     if (!context || !SDL_GL_MakeCurrent(window, context) || !gl.load()) {

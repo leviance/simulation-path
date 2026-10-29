@@ -6,9 +6,11 @@
 namespace lab {
 inline constexpr std::array<double, 7> kStepSizes{0.25, 0.1, 1.0 / 15.0, 1.0 / 30.0, 1.0 / 60.0, 1.0 / 120.0, 1.0 / 240.0};
 inline constexpr std::size_t kHistoryLimit = 1201;
-enum class Graph { position,
-                   error,
-                   energy };
+enum class Graph {
+    position,
+    error,
+    energy
+};
 
 #if LAB_CHECKPOINT >= 6
 struct HistorySample {

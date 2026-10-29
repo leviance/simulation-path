@@ -4,13 +4,19 @@
 #include <cstdio>
 
 namespace lab {
+
+// Số đo của hai con lắc được đọc sau bước vật lý, không tính lại quỹ đạo khi vẽ.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     const auto text = [&](float x, float y, const char* value) {
         ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
     };
     char line[220]{};
-    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, motion);
     text(30, 20, line);
     text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
 #if LAB_CHECKPOINT >= 3
@@ -34,7 +40,11 @@ inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
 #endif
 #if LAB_CHECKPOINT == 2
     const auto derivative = pendulumDerivative(scene.initial, scene.parameters);
-    std::snprintf(line, sizeof(line), "alpha1=%.6f rad/s^2 | alpha2=%.6f rad/s^2 | valid=%s", derivative.omega1Rate, derivative.omega2Rate, derivative.valid ? "yes" : "NO");
+    const char* derivativeStatus = "NO";
+    if (derivative.valid) {
+        derivativeStatus = "yes";
+    }
+    std::snprintf(line, sizeof(line), "alpha1=%.6f rad/s^2 | alpha2=%.6f rad/s^2 | valid=%s", derivative.omega1Rate, derivative.omega2Rate, derivativeStatus);
     text(30, 560, line);
     text(30, 584, "Q/E: omega1, Z/C: omega2. Both accelerations are evaluated from the same input state.");
 #endif
@@ -88,7 +98,11 @@ inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
         text(580, 128, "Green in A pane: same initial state, dt/2 reference");
     }
     const auto metrics = measureChaos(scene.experiment, scene.parameters);
-    std::snprintf(line, sizeof(line), "h/h2: %.3e | finite=%s", metrics.numericalSeparation, metrics.finite ? "yes" : "NO");
+    const char* finiteStatus = "NO";
+    if (metrics.finite) {
+        finiteStatus = "yes";
+    }
+    std::snprintf(line, sizeof(line), "h/h2: %.3e | finite=%s", metrics.numericalSeparation, finiteStatus);
     text(650, 788, line);
 #endif
 #if LAB_CHECKPOINT >= 7

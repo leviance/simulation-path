@@ -12,6 +12,7 @@ namespace lab {
 // SDL tạo context; bảng này chỉ nạp các entry point mà Project 37 thực sự dùng.
 struct GlApi {
     PFNGLGETSTRINGPROC GetString{};
+    PFNGLGETERRORPROC GetError{};
     PFNGLGETINTEGERVPROC GetIntegerv{};
     PFNGLGETINTEGERI_VPROC GetIntegeri_v{};
     PFNGLGETINTEGER64VPROC GetInteger64v{};
@@ -35,11 +36,17 @@ struct GlApi {
     PFNGLDELETEPROGRAMPROC DeleteProgram{};
     PFNGLUSEPROGRAMPROC UseProgram{};
     PFNGLGETUNIFORMLOCATIONPROC GetUniformLocation{};
+    PFNGLGETUNIFORMINDICESPROC GetUniformIndices{};
+    PFNGLGETACTIVEUNIFORMSIVPROC GetActiveUniformsiv{};
+    PFNGLGETPROGRAMRESOURCEINDEXPROC GetProgramResourceIndex{};
+    PFNGLGETPROGRAMRESOURCEIVPROC GetProgramResourceiv{};
     PFNGLUNIFORM1IPROC Uniform1i{};
     PFNGLUNIFORM1FPROC Uniform1f{};
     PFNGLGENBUFFERSPROC GenBuffers{};
     PFNGLBINDBUFFERPROC BindBuffer{};
     PFNGLBUFFERDATAPROC BufferData{};
+    PFNGLBUFFERSUBDATAPROC BufferSubData{};
+    PFNGLGETBUFFERPARAMETERI64VPROC GetBufferParameteri64v{};
     PFNGLBINDBUFFERBASEPROC BindBufferBase{};
     PFNGLGETBUFFERSUBDATAPROC GetBufferSubData{};
     PFNGLDELETEBUFFERSPROC DeleteBuffers{};
@@ -51,6 +58,10 @@ struct GlApi {
     PFNGLENDQUERYPROC EndQuery{};
     PFNGLGETQUERYOBJECTUI64VPROC GetQueryObjectui64v{};
     PFNGLGETQUERYOBJECTIVPROC GetQueryObjectiv{};
+    PFNGLFENCESYNCPROC FenceSync{};
+    PFNGLCLIENTWAITSYNCPROC ClientWaitSync{};
+    PFNGLDELETESYNCPROC DeleteSync{};
+    PFNGLFLUSHPROC Flush{};
 
     std::string missingFunction{};
 
@@ -71,6 +82,7 @@ struct GlApi {
         return false;                     \
     }
         LOAD_GL_FUNCTION(GetString)
+        LOAD_GL_FUNCTION(GetError)
         LOAD_GL_FUNCTION(GetIntegerv)
         LOAD_GL_FUNCTION(GetIntegeri_v)
         LOAD_GL_FUNCTION(GetInteger64v)
@@ -94,11 +106,17 @@ struct GlApi {
         LOAD_GL_FUNCTION(DeleteProgram)
         LOAD_GL_FUNCTION(UseProgram)
         LOAD_GL_FUNCTION(GetUniformLocation)
+        LOAD_GL_FUNCTION(GetUniformIndices)
+        LOAD_GL_FUNCTION(GetActiveUniformsiv)
+        LOAD_GL_FUNCTION(GetProgramResourceIndex)
+        LOAD_GL_FUNCTION(GetProgramResourceiv)
         LOAD_GL_FUNCTION(Uniform1i)
         LOAD_GL_FUNCTION(Uniform1f)
         LOAD_GL_FUNCTION(GenBuffers)
         LOAD_GL_FUNCTION(BindBuffer)
         LOAD_GL_FUNCTION(BufferData)
+        LOAD_GL_FUNCTION(BufferSubData)
+        LOAD_GL_FUNCTION(GetBufferParameteri64v)
         LOAD_GL_FUNCTION(BindBufferBase)
         LOAD_GL_FUNCTION(GetBufferSubData)
         LOAD_GL_FUNCTION(DeleteBuffers)
@@ -110,6 +128,10 @@ struct GlApi {
         LOAD_GL_FUNCTION(EndQuery)
         LOAD_GL_FUNCTION(GetQueryObjectui64v)
         LOAD_GL_FUNCTION(GetQueryObjectiv)
+        LOAD_GL_FUNCTION(FenceSync)
+        LOAD_GL_FUNCTION(ClientWaitSync)
+        LOAD_GL_FUNCTION(DeleteSync)
+        LOAD_GL_FUNCTION(Flush)
 #undef LOAD_GL_FUNCTION
         return true;
     }

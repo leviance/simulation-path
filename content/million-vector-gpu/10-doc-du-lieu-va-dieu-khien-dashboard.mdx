@@ -1,0 +1,87 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc dữ liệu và điều khiển dashboard
+
+## Bài toán của chúng ta
+
+Một triệu kết quả không thể cùng xuất hiện trong một bảng. Nhưng chỉ vẽ vài cột rồi kết luận “GPU chạy đúng” cũng chưa đủ. Ta cần hai việc riêng: validator kiểm toàn bộ N phần tử, còn inspector giúp người dùng đọc một phần tử cụ thể để hiểu phép tính.
+
+Bài trước đã lưu kết quả theo từng job. Bài này thêm cách chọn index mà không upload hay dispatch lại. `CalculationData` giữ cấu hình đã chạy cùng A, B, kết quả CPU và kết quả GPU. Vì thế nếu bạn đổi N ở dòng SELECTED nhưng chưa nhấn Space, dòng MEASURED vẫn chỉ đúng bộ dữ liệu đang được hiển thị.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một lần đổi index chỉ thay đổi cách nhìn vào dữ liệu, không thay đổi dữ liệu. Chỉ số hợp lệ nằm từ 0 đến N−1. Với `std::size_t`, đừng trừ 1 tại 0 rồi mới chặn: phép trừ không dấu đã cuộn về số rất lớn trước khi phép chặn chạy.
+
+<InteractiveLab demo="million-vector-gpu" mode="vector-inspector" />
+
+Canvas giúp đọc phép toán; nó không cung cấp số đo OpenGL của máy bạn. Hãy dùng bảng trong executable để xem output thật.
+
+## Bắt tay vào code
+
+### 1. Lấy phạm vi từ dữ liệu đã chạy
+
+Trong vòng xử lý keyboard của `ComputeApplication::run`, chỉ lấy giới hạn index từ `report.data`, không lấy từ `selected.elementCount`. Hai cấu hình có thể khác nhau khi bạn vừa chọn một N mới.
+
+```cpp title="include/compute_application.hpp — chặn index trước khi xử lý phím"
+const std::size_t last = report.data->config.elementCount - 1U;
+inspectorIndex = std::min(inspectorIndex, last);
+```
+
+Đoạn này ở bên trong `if (report.data)`. Các lượt tính được công bố có N dương; không lấy N−1 khi chưa có một bộ dữ liệu. Main loop cũng chặn index khi nhận bộ kết quả mới, kể cả lúc bạn không nhấn thêm phím.
+
+### 2. Thêm các cách đi tới một phần tử
+
+```cpp title="include/compute_application.hpp — duyệt từng phần tử"
+if (key == SDLK_LEFT && inspectorIndex > 0) {
+    --inspectorIndex;
+} else if (key == SDLK_RIGHT) {
+    inspectorIndex = std::min(last, inspectorIndex + 1U);
+} else if (key == SDLK_PAGEUP) {
+    inspectorIndex = std::min(last, inspectorIndex + 1024U);
+} else if (key == SDLK_PAGEDOWN) {
+    if (inspectorIndex >= 1024U) {
+        inspectorIndex -= 1024U;
+    } else {
+        inspectorIndex = 0;
+    }
+} else if (key == SDLK_HOME) {
+    inspectorIndex = 0;
+} else if (key == SDLK_END) {
+    inspectorIndex = last;
+}
+```
+
+Left/Right di chuyển từng phần tử. Page Up/Down nhảy 1.024 phần tử để không phải bấm hàng triệu lần. Home/End đi thẳng đến hai đầu mảng. Cả nhánh này không gọi `worker.start`, nên không tạo thêm sample hay làm thay đổi báo cáo benchmark.
+
+### 3. Trình bày CPU và GPU tại cùng index
+
+Trong `drawComputeDashboard`, sau khi đã lấy `CalculationData` và chặn index, hai dòng kết quả đọc từ hai vector khác nhau:
+
+```cpp title="include/compute_dashboard.hpp — hiển thị hai nguồn kết quả"
+draw.text(230, 626, "CPU: " + vectorText(data.cpu[index]), cyan);
+draw.text(230, 652, "GPU: " + vectorText(data.gpu[index]), green);
+```
+
+`vectorText` trình bày x/y/z/w của Vec4. Dòng GPU không gọi lại `applyOperation` và không sao chép dòng CPU để tạo cảm giác đúng; nó đọc dữ liệu đã nhận từ SSBO.
+
+Dashboard đọc bốn dòng A/B/CPU/GPU tại cùng một index. Với AXPY, bạn có thể tự lấy từng thành phần của A nhân scalar rồi cộng B và so với hai dòng kết quả. Đừng chỉ kiểm x: lỗi stride hoặc binding có thể xuất hiện ở y, z hoặc w.
+
+## Chạy checkpoint
+
+Build `project_37_checkpoint_10`, chạy rồi nhấn End để đọc phần tử cuối. Dùng Left/Right đi từng phần tử và Page Up/Down đi xa hơn. So đủ x/y/z/w; việc đổi index không làm số sample tăng hoặc trigger một phép tính mới.
+
+## Thử làm sai để hiểu đúng
+
+1. Chạy với 1.000.003 phần tử rồi nhấn End. Đổi SELECTED về 256 nhưng chưa nhấn Space: inspector vẫn phải đọc kết quả cũ. Chạy phép tính mới: index phải được chặn theo output mới, không truy cập vùng nhớ của mảng đã thay thế.
+2. Khi benchmark đang chạy, thử đổi operation hoặc N. Các phím này không sửa job đang chạy. Nhấn Escape để hủy, đợi trạng thái kết thúc rồi mới chạy cấu hình khác; không trộn output cũ và nhãn mới.
+
+## Tự kiểm tra kết quả
+
+- Index không vượt 0…N−1, kể cả sau khi đổi từ mảng lớn sang mảng nhỏ.
+- Bốn dòng cùng thuộc một cấu hình đã chạy; không gắn nhãn cấu hình mới cho output cũ.
+- Đổi index không tăng số sample, không dispatch và không đổi checksum.
+- Resize/high-DPI vẫn giữ dashboard trong cửa sổ; chữ và bảng không bị cắt bởi viewport cũ.
+
+## Bài tập mở rộng
+
+Thêm phím nhảy tới `firstMismatch` nếu validator báo lỗi. Chỉ cho nhảy khi index này hợp lệ; trường hợp PASS không có “phần tử lỗi đầu tiên”. Sau đó sang [bài kiểm chứng và bản hoàn chỉnh](/projects/million-vector-gpu/11-kiem-chung-va-ban-hoan-chinh).

@@ -36,7 +36,10 @@ inline std::vector<bool> viewerEdgeMask(const ViewerMesh& mesh, const ViewerMatr
             const float lengthSquared = dx * dx + dy * dy;
             for (int y = top; y <= bottom; ++y) {
                 for (int x = left; x <= right; ++x) {
-                    const float along = lengthSquared > 0 ? std::clamp(((x + 0.5F - a.x) * dx + (y + 0.5F - a.y) * dy) / lengthSquared, 0.0F, 1.0F) : 0;
+                    float along = 0;
+                    if (lengthSquared > 0) {
+                        along = std::clamp(((x + 0.5F - a.x) * dx + (y + 0.5F - a.y) * dy) / lengthSquared, 0.0F, 1.0F);
+                    }
                     const float ex = x + 0.5F - a.x - along * dx, ey = y + 0.5F - a.y - along * dy;
                     if (ex * ex + ey * ey <= 2.25F)
                         mask[std::size_t(y) * width + x] = true;

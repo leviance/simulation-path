@@ -1,183 +1,91 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Chốt phép tính và viết bản đối chiếu CPU
+# Tính kết quả đầu tiên trên CPU
 
 ## Bài toán của chúng ta
 
-Mục tiêu của Project 37 là xử lý hơn một triệu vector trên GPU, nhưng ta chưa vội gọi `glDispatchCompute`. Trước tiên, hãy viết cùng phép tính trên CPU để có một kết quả đáng tin cậy làm mốc đối chiếu. Nếu bắt đầu ngay từ shader, khi kết quả sai ta sẽ không biết nên kiểm tra công thức, dữ liệu đầu vào, byte layout, binding, số workgroup hay bước đồng bộ.
+Trước khi giao một triệu phép tính cho GPU, ta cần biết một phép tính đúng trông như thế nào. Project này không mô phỏng chuyển động: mỗi phần tử là một `Vec4`, và output tại index i chỉ phụ thuộc A[i], B[i] cùng scalar. Không có lực, timestep hay camera cần giấu phía sau các cột dữ liệu.
 
-Bài đầu chỉ dùng CPU. Ta định nghĩa một phần tử là `Vec4`, sinh hai mảng A/B có thể tạo lại từ seed, viết ba phép toán element-wise và tạo bản đối chiếu chạy trên CPU (**CPU oracle**). Starter đã mở một cửa sổ OpenGL 4.3 nền tối; trong bài này, ta sẽ dựng vùng biểu đồ và đưa dữ liệu thật vào đó trước khi để GPU tính toán.
+Mở starter trước. Nó đã có cửa sổ SDL3, event loop, chữ bitmap và dashboard rỗng. Hãy build `project_37_starter` rồi chạy: cửa sổ phải mở, resize được và Escape đóng cửa sổ. Hai file `dashboard_surface.hpp` và `compute_dashboard.hpp` là khung trình bày được cung cấp; bài này không bắt bạn tự làm font để học compute.
 
-## Theo dõi dữ liệu từ CPU sang GPU
+Phần cần xây là đường tạo input → tính CPU → công bố kết quả → đọc trong inspector. Ta bắt đầu với 256 phần tử, chưa phải sản phẩm một triệu phần tử cuối cùng.
 
-Element-wise nghĩa là output tại index $i$ chỉ cần input ở cùng index:
+## Hiểu ý tưởng trước khi viết code
 
-$$
-\begin{aligned}
-\operatorname{Add}_i &= A_i + B_i \\
-\operatorname{AXPY}_i &= \alpha A_i + B_i \\
-\operatorname{Difference}_i &= A_i - B_i
-\end{aligned}
-$$
+Ba operation đều thực hiện riêng trên từng thành phần:
 
-Mỗi phép tính áp dụng độc lập lên bốn thành phần `x/y/z/w`. Không có tổng toàn mảng và không phần tử nào cần đọc phần tử bên cạnh. Vì thế, đây là bài toán phù hợp để làm quen với compute shader; đến Project 39 ta mới xử lý reduction, nơi nhiều phần tử phải phối hợp với nhau.
+- Add: C = A + B.
+- AXPY: C = sA + B.
+- Difference: C = A − B.
+
+Ví dụ A=(0,−2,3,−4), B=(0,1.5,−2,4). Với s=2, AXPY phải cho (0,−2.5,4,−4). Ở đây ta dùng dấu chấm cho phần thập phân để phân biệt với dấu phẩy ngăn các thành phần. Một đáp án nhỏ tính bằng tay sẽ giúp phát hiện lỗi cả CPU lẫn GPU cùng dùng sai công thức.
+
+`Vec4` gom bốn float, có size/alignment 16 byte để sau này nối được với `vec4[]` trong SSBO. Input deterministic nghĩa là cùng seed và N sẽ tạo lại cùng dữ liệu; đây không phải yêu cầu sinh số ngẫu nhiên bảo mật.
 
 <InteractiveLab demo="million-vector-gpu" mode="vector-workload" />
 
-Đổi operation và kéo scalar. Hãy chọn vài index bằng cách kéo trên Canvas rồi tự tính một thành phần trước khi nhìn `out[i]`. Canvas chỉ lấy một probe để giải thích; source C++ tính đủ số phần tử.
-
 ## Bắt tay vào code
 
-### Bước 1 — Dùng một kiểu dữ liệu không mập mờ
+### 1. Viết phép tính đối chiếu cho toàn mảng
 
-```cpp title="include/vector_compute_math.hpp — Vec4"
-struct alignas(16) Vec4 {
-    float x{};
-    float y{};
-    float z{};
-    float w{};
-};
+Trong `vector_compute_math.hpp`, `applyOperation` chỉ tính một cặp Vec4. `computeCpu` chịu trách nhiệm kiểm hợp đồng và duyệt mảng:
 
-static_assert(sizeof(Vec4) == 16);
-static_assert(alignof(Vec4) == 16);
-```
-
-`alignas(16)` chưa đủ để chứng minh layout C++ khớp GLSL. Nó mới đảm bảo phía C++ có record đúng 16 byte và bắt đầu ở địa chỉ chia hết cho 16. Bài 3 sẽ nối kiểu này với `vec4[]` trong layout `std430`.
-
-### Bước 2 — Viết phép toán dễ đọc trước khi viết vòng lặp
-
-```cpp title="include/vector_compute_math.hpp — applyOperation"
-inline Vec4 applyOperation(
-    const Vec4& a,
-    const Vec4& b,
-    VectorOperation operation,
-    float scalar
-) {
-    if (operation == VectorOperation::axpy) {
-        return {
-            a.x * scalar + b.x,
-            a.y * scalar + b.y,
-            a.z * scalar + b.z,
-            a.w * scalar + b.w,
-        };
-    }
-
-    if (operation == VectorOperation::difference) {
-        return {a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w};
-    }
-
-    return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w};
+```cpp title="include/vector_compute_math.hpp — vòng lặp CPU"
+if (inputs.a.size() != inputs.b.size()) {
+    throw std::invalid_argument("Input A and B must have the same size.");
 }
-```
-
-Ta không nén ba nhánh vào biểu thức ternary dài. Đây là project học tập: mỗi operation nên có hình dạng giống công thức để người đọc kiểm từng thành phần bằng mắt.
-
-### Bước 3 — Sinh A/B một lần, có seed cố định
-
-`makeVectorInputs` dùng một hàm băm số nguyên để giá trị tại index bất kỳ có thể tạo lại. Cùng `(index, channel, seed)` luôn cho cùng số trong `[-1,1]`:
-
-```cpp title="include/vector_compute_math.hpp — deterministicComponent"
-inline float deterministicComponent(
-    std::size_t index,
-    std::uint32_t channel,
-    std::uint32_t seed
-) {
-    const std::uint32_t lowIndex = static_cast<std::uint32_t>(index);
-    const std::uint32_t bits = mixBits(lowIndex ^ (channel * 0x9e3779b9U) ^ seed);
-    const float unit = static_cast<float>(bits & 0x00ffffffU) / 16777215.0F;
-    return unit * 2.0F - 1.0F;
+requireElementCount(inputs.a.size());
+const std::size_t count = inputs.a.size();
+std::vector<Vec4> output(count);
+for (std::size_t index = 0; index < count; ++index) {
+    output[index] = applyOperation(inputs.a[index], inputs.b[index], operation, scalar);
 }
+return output;
 ```
 
-Việc sinh dữ liệu nằm ngoài event loop và sau này cũng không được tính vào timer query. Nếu mỗi lần benchmark lại tạo dữ liệu mới, checksum sẽ thay đổi và hai lần đo không còn xử lý cùng một bộ dữ liệu.
+Không dùng `min(A.size(), B.size())`: nó làm chương trình có vẻ chạy được bằng cách lặng lẽ bỏ một phần input. `requireElementCount` từ chối N vượt budget trước allocation, còn kiểm operation/scalar chạy ngay cả khi N=0.
 
-### Bước 4 — Viết bản đối chiếu CPU theo cách dễ đọc nhất
+### 2. Gắn input với cấu hình của một lượt tính
 
-```cpp title="include/vector_compute_math.hpp — computeCpu"
-inline std::vector<Vec4> computeCpu(
-    const VectorInputs& inputs,
-    VectorOperation operation,
-    float scalar
-) {
-    const std::size_t count = std::min(inputs.a.size(), inputs.b.size());
-    std::vector<Vec4> output(count);
+Trong `ComputeWorker::run`, tạo một bộ dữ liệu thuộc riêng lượt chạy hiện tại:
 
-    for (std::size_t index = 0; index < count; ++index) {
-        output[index] = applyOperation(inputs.a[index], inputs.b[index], operation, scalar);
-    }
-
-    return output;
-}
+```cpp title="include/compute_worker.hpp — chuẩn bị dữ liệu của job"
+auto data = std::make_shared<CalculationData>();
+data->config = config;
+data->inputs = makeVectorInputs(count, config.seed);
 ```
 
-Bản CPU cố ý không tối ưu thủ công; nhiệm vụ của nó là dễ đọc và đáng tin. Chương trình hoàn chỉnh chỉ chạy lại phần này khi dữ liệu hoặc phép toán thay đổi, không chạy lại ở mọi frame.
+`makeVectorInputs` cấp đúng N phần tử ở cả A/B và tạo đủ x/y/z/w theo index, channel và seed. Hàm trộn bit được cung cấp như một tiện ích tạo fixture; phần cần hiểu là nó không phụ thuộc frame hay thời gian thực. Đổi operation không được làm đổi A/B một cách ngẫu nhiên.
 
-### Bước 5 — Vẽ output mẫu thành sản phẩm nhìn thấy được
+`ComputeWorker::run` dùng cùng phép tính nhưng ghi vào output đã preallocate để bài timing sau không phải đo allocation. Worker nhận config by value và công bố `CalculationData` chỉ sau khi tính xong. Dashboard chỉ đọc bản đã công bố; không đọc một vector đang được worker resize.
 
-Ta dùng scissor rectangle để vẽ cột mà chưa cần graphics shader. Mỗi cột chọn một index đều nhau trong toàn mảng:
+### 3. Khởi chạy từ application
 
-```cpp title="src/main.cpp — lõi của drawOutputBars"
-constexpr int barCount = 64;
-gl.Enable(GL_SCISSOR_TEST);
+Trong `ComputeApplication::run`, sau khi có dashboard và worker, nối lần tính đầu tiên vào chương trình:
 
-for (int bar = 0; bar < barCount; ++bar) {
-    const std::size_t index = std::min(
-        output.size() - 1U,
-        (std::size_t(bar) * output.size()) / std::size_t(barCount)
-    );
-
-    const float value = output[index].x;
-    const float normalized = std::tanh(std::abs(value) * 0.8F);
-    const int barHeight = std::max(2, int(normalized * float(chartHeight / 2 - 6)));
-    const int x = margin + bar * barWidth;
-    int y = baseline - barHeight;
-
-    if (value >= 0.0F) {
-        y = baseline;
-    }
-
-    gl.Scissor(x + 1, y, std::max(1, barWidth - 2), barHeight);
-    gl.Clear(GL_COLOR_BUFFER_BIT);
-}
-
-gl.Disable(GL_SCISSOR_TEST);
+```cpp title="include/compute_application.hpp — chạy cấu hình đầu tiên"
+WorkloadConfig selected{};
+worker.start(selected, false);
 ```
 
-Source hoàn chỉnh tính `barX/barY`, chọn màu theo dấu và dùng framebuffer size thật. Điểm quan trọng ở đây là data source: checkpoint 1 truyền `cpuOutput`; từ bài 6 cùng hàm vẽ sẽ nhận `gpuOutput` đã readback.
+`false` ở đây có nghĩa tính một lần, chưa chạy benchmark nhiều mẫu. Nhánh phím Space gọi lại cùng `worker.start(selected, false)` sau khi bạn đổi operation/scalar. Vòng vẽ chỉ lấy `worker.snapshot()` rồi trình bày kết quả đã công bố; nó không tự tính lại mỗi frame.
 
 ## Chạy checkpoint
 
-Checkpoint 1 đi theo luồng:
+Build `project_37_checkpoint_1` rồi chạy. Dòng SELECTED mô tả cấu hình bạn chọn; dòng MEASURED mô tả dữ liệu đang xem. Nhấn 2 để chọn AXPY, chọn scalar rồi Space để tính. Đọc A/B/CPU tại index 0 và tự tính cả bốn thành phần. Dòng GPU phải ghi chưa readback; chưa có phép tính GPU nào ở bài này.
 
-`tạo window → sinh A/B deterministic (có thể tái lập) → computeCpu → lấy 64 mẫu đều nhau → vẽ cột → present`
+## Thử làm sai để hiểu đúng
 
-Biểu đồ chỉ dùng thành phần `x` để không biến UI thành một màn hình quá dày. Điều đó không thu nhỏ validation: các bài sau vẫn so cả bốn thành phần của đủ N phần tử.
+1. Trong fixture test, cho A có một phần tử còn B rỗng. Chương trình phải báo kích thước không khớp, không trả output rỗng rồi gọi là thành công.
+2. Dùng cùng seed hai lần: input/output phải lặp lại. Đổi seed rồi tính lại: ít nhất một component phải đổi; resize window không được tự làm đổi dữ liệu.
 
-```bash title="Terminal — checkpoint 1"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_37_checkpoint_1
-```
+## Tự kiểm tra kết quả
 
-## Thử phá chương trình
+- Starter và checkpoint 1 đều chạy độc lập; Escape đóng cửa sổ.
+- CPU tính đủ N phần tử, đủ x/y/z/w; phép AXPY nhỏ khớp đáp án viết tay.
+- A/B lệch size và scalar không hữu hạn bị từ chối.
+- Resize hoặc vẽ lại dashboard không tự tạo thêm một lượt tính.
 
-1. Cho A và B dùng cùng `channelOffset`. Add vẫn tạo cột đẹp, nhưng hai input không còn độc lập; test seed/probe phải giúp bạn nhận ra.
-2. Chỉ tính 64 phần tử vì cửa sổ chỉ vẽ 64 cột. Khi đó chương trình không còn kiểm tra bộ dữ liệu thật gồm hơn một triệu phần tử.
-3. Sinh input trong event loop. Resize hoặc expose window sẽ làm allocation/generation lặp lại dù state không đổi.
-4. Cho AXPY nhân scalar vào cả A và B. Dùng probe có scalar khác 1 để lỗi không bị che.
+## Bài tập mở rộng
 
-## Tự nghiệm thu
-
-- [ ] `sizeof(Vec4)` và `alignof(Vec4)` đều bằng 16.
-- [ ] Cùng seed tạo lại đúng A/B tại ít nhất ba index xa nhau.
-- [ ] Add, AXPY và Difference cho đúng cả bốn thành phần trên một ví dụ tính tay.
-- [ ] Bản CPU trả đúng số phần tử theo mảng đầu vào ngắn hơn.
-- [ ] Checksum hữu hạn và giữ nguyên khi chạy lại cùng preset.
-- [ ] Cửa sổ vẽ output sample nhưng code vẫn giữ toàn bộ output.
-
-## Bài tập tiếp theo
-
-1. Thêm operation `Hadamard` là nhân từng thành phần, chưa thêm vào shader.
-2. In A/B/output ở index 0, 777 và cuối mảng rồi đối chiếu bằng máy tính.
-3. Đo riêng bản CPU bằng `steady_clock`, đồng thời ghi rõ đây là thời gian CPU chứ chưa phải phép so sánh hiệu năng CPU–GPU.
-
-Bài tiếp theo vẫn chưa tạo buffer. Trước hết, ta sẽ hỏi driver xem context hiện tại có đủ khả năng xử lý số phần tử đã chọn hay không.
+Thêm fixture với toàn số 0 và một fixture có số âm ở mỗi channel. Giữ đáp án dưới dạng literal, không gọi lại `applyOperation` để tạo expected. Sau đó sang [kiểm tra OpenGL và compute limits](/projects/million-vector-gpu/02-yeu-cau-opengl-43-va-doc-compute-limits).

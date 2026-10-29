@@ -118,7 +118,10 @@ void reset(std::size_t requested, bool coldStart = false) {
     aos = makeParticlesAoS(requested, config, !coldStart);
     count = requested;
     cold = coldStart;
-    active = cold ? 0 : count;
+    active = count;
+    if (cold) {
+        active = 0;
+    }
     layout = Layout::aos;
     nextAoS.clear();
     pending = PendingWork::none;
@@ -128,7 +131,11 @@ void reset(std::size_t requested, bool coldStart = false) {
     time = emissionRemainder = 0;
     updated = committedUpdated = born = respawned = cursor = 0;
     copyMs = updateMs = conversionMs = wholeStepMs = 0;
-    notice = cold ? "Cold start: emission adds stable slots" : "Warm start: every allocated slot is alive";
+    if (cold) {
+        notice = "Cold start: emission adds stable slots";
+    } else {
+        notice = "Warm start: every allocated slot is alive";
+    }
 }
 ```
 

@@ -44,7 +44,10 @@ inline double sphereDepth(double rx, double ry, Vec3 center, double radius) {
         return std::numeric_limits<double>::infinity();
     }
     const double depth = (-halfB - std::sqrt(discriminant)) / a;
-    return depth >= 0.2 && depth <= 80.0 ? depth : std::numeric_limits<double>::infinity();
+    if (depth >= 0.2 && depth <= 80.0) {
+        return depth;
+    }
+    return std::numeric_limits<double>::infinity();
 }
 
 struct DepthBuffer {

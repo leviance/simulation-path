@@ -133,8 +133,8 @@ inline int runShaderApplication(int argc, char** argv) {
         const bool vsync = !finite && SDL_GL_SetSwapInterval(1);
         if (finite)
             SDL_GL_SetSwapInterval(0);
-        std::cout << gl.GetString(GL_VERSION) << '\n'
-                  << gl.GetString(GL_RENDERER) << '\n';
+        std::cout << gl.GetString(GL_VERSION) << '\n';
+        std::cout << gl.GetString(GL_RENDERER) << '\n';
         std::string diagnostics;
         if (!renderer.initialize(gl, diagnostics))
             throw std::runtime_error(diagnostics);
@@ -299,8 +299,20 @@ inline int runShaderApplication(int argc, char** argv) {
                 throw std::runtime_error("Cannot save shader capture");
             if (gl.GetError() != GL_NO_ERROR)
                 throw std::runtime_error("OpenGL error while drawing shader gallery");
-            const auto active = renderer.reloadState.activeEffect < kEffects.size() ? kEffects[renderer.reloadState.activeEffect].name : "Embedded recovery";
-            const auto title = std::string("P35 | ") + std::string(active) + " | generation " + std::to_string(renderer.reloadState.generation) + (renderer.reloadState.lastReloadSucceeded ? " | OK" : " | ERROR: last-good kept") + " | F5 reload, 1-4 gallery";
+            std::string_view active = "Embedded recovery";
+            if (renderer.reloadState.activeEffect < kEffects.size()) {
+                active = kEffects[renderer.reloadState.activeEffect].name;
+            }
+            const char* reloadStatus = " | ERROR: last-good kept";
+            if (renderer.reloadState.lastReloadSucceeded) {
+                reloadStatus = " | OK";
+            }
+            std::string title = "P35 | ";
+            title += active;
+            title += " | generation ";
+            title += std::to_string(renderer.reloadState.generation);
+            title += reloadStatus;
+            title += " | F5 reload, 1-4 gallery";
             SDL_SetWindowTitle(window, title.c_str());
             if (!SDL_GL_SwapWindow(window))
                 throw std::runtime_error(SDL_GetError());

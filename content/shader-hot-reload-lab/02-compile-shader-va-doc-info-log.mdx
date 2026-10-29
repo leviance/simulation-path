@@ -61,7 +61,10 @@ inline GLuint compileShader(GlApi& gl, GLenum stage, const std::string& source, 
     gl.GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
     if (compiled == GL_TRUE)
         return shader;
-    const std::string label = stage == GL_VERTEX_SHADER ? "vertex" : "fragment";
+    std::string label = "fragment";
+    if (stage == GL_VERTEX_SHADER) {
+        label = "vertex";
+    }
     diagnostics = "[" + label + " compile] " + file + "\n" + shaderInfoLog(gl, shader);
     gl.DeleteShader(shader);
     return 0;
@@ -75,6 +78,8 @@ Nếu thành công, người gọi sở hữu shader ID và phải hủy nó sau
 audit mặc định là nullptr. Nó chỉ ghi ID để bản final kiểm tài nguyên; bạn có thể theo dõi luồng chính mà chưa cần đọc phần audit.
 
 ### Bước 3 — Giữ nguyên thông tin mà driver trả về
+
+Biến `label` chọn tên stage trước khi ghép thông báo. Hàm này chỉ được gọi với vertex hoặc fragment shader: mặc định là “fragment”, còn `GL_VERTEX_SHADER` chọn “vertex”. Nhãn giúp xác định phần source đang lỗi; trạng thái compile vẫn phải lấy từ OpenGL, không suy ra từ nhãn hay nội dung log.
 
 Thông báo bắt đầu bằng stage và đường dẫn, sau đó nối nguyên log. Mỗi hãng GPU có cách ghi số dòng khác nhau. Ví dụ “0:18” thường chỉ source số 0, dòng 18; không được coi đây là định dạng chung hay tự tạo số dòng bằng cách tìm một từ khóa.
 

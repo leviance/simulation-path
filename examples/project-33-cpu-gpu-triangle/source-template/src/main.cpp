@@ -49,7 +49,10 @@ void destroyWindowAndContext(SDL_Window* window, SDL_GLContext context) {
 } // namespace
 
 int main(int argc, char** argv) {
-    const char* capturePath = argc == 3 && std::string(argv[1]) == "--capture" ? argv[2] : nullptr;
+    const char* capturePath = nullptr;
+    if (argc == 3 && std::string(argv[1]) == "--capture") {
+        capturePath = argv[2];
+    }
     const bool verify = (argc == 2 && std::string(argv[1]) == "--verify") || capturePath != nullptr;
     bool verificationFailed = false;
     int verificationFrame = 0;
@@ -106,7 +109,11 @@ int main(int argc, char** argv) {
         destroyWindowAndContext(window, context);
         return EXIT_FAILURE;
     }
-    if (!SDL_GL_SetSwapInterval(verify ? 0 : 1)) {
+    int swapInterval = 1;
+    if (verify) {
+        swapInterval = 0;
+    }
+    if (!SDL_GL_SetSwapInterval(swapInterval)) {
         std::cerr << "VSync unavailable: " << SDL_GetError() << '\n';
     }
     const GLubyte* version = gl.GetString(GL_VERSION);
@@ -236,7 +243,10 @@ int main(int argc, char** argv) {
                     mousePoint = {event.button.x, event.button.y};
                 const lab::PanelPoint point = lab::pointerToPanel(mousePoint, logicalWidth, logicalHeight, pixelWidth, pixelHeight);
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && point.valid) {
-                    const int panelWidth = point.panel == 0 ? pixelWidth / 2 : pixelWidth - pixelWidth / 2;
+                    int panelWidth = pixelWidth - pixelWidth / 2;
+                    if (point.panel == 0) {
+                        panelWidth = pixelWidth / 2;
+                    }
                     const int picked = lab::pickVertex(triangle, transform, point.ndc, panelWidth, pixelHeight);
                     if (picked >= 0) {
                         selectedVertex = picked;
@@ -551,5 +561,8 @@ int main(int argc, char** argv) {
     SDL_DestroyWindow(window);
     SDL_Quit();
 #endif
-    return verificationFailed ? EXIT_FAILURE : EXIT_SUCCESS;
+    if (verificationFailed) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
 }

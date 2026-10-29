@@ -24,6 +24,8 @@ Mốc Ug ở anchor làm Ug âm khi khối nằm phía dưới. Điều đó kh�
 
 Khi đổi N mà giữ m, k và restLength, ta đang đổi chiều dài và tổng khối lượng của hệ, **không phải chia mịn cùng một sợi dây vật lý**. Để so dt công bằng, giữ N, tham số và initial state cố định.
 
+Các phím đổi tham số bên dưới đều có giới hạn rõ: K tăng độ cứng tới 1.200 N/m rồi quay về 60 N/m; M tăng khối lượng tới 0,16 kg rồi quay về 0,02 kg. Mỗi nhánh chọn giá trị xong mới gọi `rebuildScene`. Đừng đổi k hoặc m giữa một lượt đo rồi so năng lượng với mốc của hệ trước đó.
+
 <InteractiveLab demo="spring-chain" mode="spring-stability" />
 
 ## Viết code từng bước
@@ -158,23 +160,35 @@ if (key == SDLK_C) {
 
 ```cpp title="src/main.cpp — stiffness"
 if (key == SDLK_K) {
-                    scene.stiffness = scene.stiffness >= 1200.0 ? 60.0 : std::min(1200.0, scene.stiffness * 2.0);
-                    lab::rebuildScene(scene);
-                }
+    if (scene.stiffness >= 1200.0) {
+        scene.stiffness = 60.0;
+    } else {
+        scene.stiffness = std::min(1200.0, scene.stiffness * 2.0);
+    }
+    lab::rebuildScene(scene);
+}
 ```
 
 ```cpp title="src/main.cpp — mass"
 if (key == SDLK_M) {
-                    scene.mass = scene.mass >= 0.16 ? 0.02 : scene.mass * 2.0;
-                    lab::rebuildScene(scene);
-                }
+    if (scene.mass >= 0.16) {
+        scene.mass = 0.02;
+    } else {
+        scene.mass *= 2.0;
+    }
+    lab::rebuildScene(scene);
+}
 ```
 
 ```cpp title="src/main.cpp — fixed dt"
 if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
-                    scene.dtIndex = std::clamp(scene.dtIndex + (key == SDLK_LEFTBRACKET ? -1 : 1), 0, 4);
-                    lab::rebuildScene(scene);
-                }
+    int change = 1;
+    if (key == SDLK_LEFTBRACKET) {
+        change = -1;
+    }
+    scene.dtIndex = std::clamp(scene.dtIndex + change, 0, 4);
+    lab::rebuildScene(scene);
+}
 ```
 
 ```cpp title="src/main.cpp — preset"
@@ -190,10 +204,15 @@ if (key >= SDLK_1 && key <= SDLK_3) {
 Thay drawHud trong presentation.hpp:
 
 ```cpp title="include/presentation.hpp — drawHud"
+// HUD dùng cùng state với hình vẽ; các nhãn năng lượng không tự chạy solver.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     char line[200]{};
-    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, motion);
     if (!SDL_RenderDebugText(renderer, 30, 20, line)) {
         return false;
     }

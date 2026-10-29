@@ -273,13 +273,18 @@ inline void drawScene(Framebuffer& image, const Scene& scene) {
 Thay drawHud để hiện E_B cùng nhãn A/B. Nếu cùng một tư thế mà hai hình nhìn cách nhau một khoảng lớn, đó là vì hai khung đặt cạnh nhau, không phải một độ tách vật lý:
 
 ```cpp title="include/presentation.hpp — nhãn và cơ năng A/B"
+// Số đo của hai con lắc được đọc sau bước vật lý, không tính lại quỹ đạo khi vẽ.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     bool ok = SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     const auto text = [&](float x, float y, const char* value) {
         ok = SDL_RenderDebugText(renderer, x, y, value) && ok;
     };
     char line[220]{};
-    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "DOUBLE PENDULUM | A: blue, B: red | t=%.3f s | %s", primaryState(scene).elapsed, motion);
     text(30, 20, line);
     text(30, 42, "R reset current experiment | F clean/debug | Esc quit | A/D theta1, W/S theta2 initial angles");
     text(30, 64, "Space start/pause | N one step | [ smaller dt | ] larger dt");
@@ -315,17 +320,21 @@ Thêm nhánh này vào KEY_DOWN trong main. Up/Down thay epsilon, phím 0 tạo 
 
 ```cpp title="src/main.cpp — đổi epsilon có reset"
 if (key == SDLK_UP || key == SDLK_DOWN || key == SDLK_0) {
-                    if (key == SDLK_0) {
-                        scene.perturbation = 0.0;
-                    }
-                    if (key == SDLK_UP) {
-                        scene.perturbation = std::min(1e-2, std::max(1e-8, scene.perturbation * 10.0));
-                    }
-                    if (key == SDLK_DOWN) {
-                        scene.perturbation = scene.perturbation <= 1e-8 ? 0.0 : scene.perturbation / 10.0;
-                    }
-                    lab::resetScene(scene);
-                }
+    if (key == SDLK_0) {
+        scene.perturbation = 0.0;
+    }
+    if (key == SDLK_UP) {
+        scene.perturbation = std::min(1e-2, std::max(1e-8, scene.perturbation * 10.0));
+    }
+    if (key == SDLK_DOWN) {
+        if (scene.perturbation <= 1e-8) {
+            scene.perturbation = 0.0;
+        } else {
+            scene.perturbation /= 10.0;
+        }
+    }
+    lab::resetScene(scene);
+}
 ```
 
 ## Ghép các phần lại

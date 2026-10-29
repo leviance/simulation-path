@@ -43,6 +43,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 #endif
+    // Khởi tạo SDL sau các lệnh benchmark không cần cửa sổ.
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
@@ -77,7 +78,7 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         result = EXIT_FAILURE;
     }
-    // Reverse ownership order on every exit, including bounded-job failures.
+    // Giải phóng capture và tài nguyên theo thứ tự ngược, cả khi công việc lỗi.
     SDL_CaptureMouse(false);
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);

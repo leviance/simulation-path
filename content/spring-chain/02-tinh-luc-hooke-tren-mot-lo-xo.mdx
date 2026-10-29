@@ -101,20 +101,30 @@ inline void rebuildScene(Scene& scene) {
 
 Trong nhánh key-down của main, thêm xử lý khoảng cách sau:
 
+Tách lượng thay đổi khỏi giá trị cần đổi: `distanceChange` là −0,05 hoặc +0,05 m, còn `angleChange` là +0,1 hoặc −0,1 rad. Các nhánh phím chỉ chọn lượng thay đổi; phần tính lực vẫn đọc khoảng cách và góc đã lưu trong scene. Như vậy có thể kiểm từng thao tác mà chưa cần cho hai khối chuyển động.
+
 ```cpp title="src/main.cpp — đổi distance"
 if (key == SDLK_LEFT || key == SDLK_RIGHT) {
-                    scene.pairDistance = std::clamp(scene.pairDistance + (key == SDLK_LEFT ? -0.05 : 0.05), 0.1, 1.8);
-                    lab::rebuildScene(scene);
-                }
+    double distanceChange = 0.05;
+    if (key == SDLK_LEFT) {
+        distanceChange = -0.05;
+    }
+    scene.pairDistance = std::clamp(scene.pairDistance + distanceChange, 0.1, 1.8);
+    lab::rebuildScene(scene);
+}
 ```
 
 Thêm nhánh góc ngay sau nó:
 
 ```cpp title="src/main.cpp — đổi góc"
 if (key == SDLK_UP || key == SDLK_DOWN) {
-                    scene.pairAngle += key == SDLK_UP ? 0.1 : -0.1;
-                    lab::rebuildScene(scene);
-                }
+    double angleChange = -0.1;
+    if (key == SDLK_UP) {
+        angleChange = 0.1;
+    }
+    scene.pairAngle += angleChange;
+    lab::rebuildScene(scene);
+}
 ```
 
 Mỗi lần đổi dựng lại fixture, không tích phân. Hai mũi tên lực được renderer lấy từ cùng sample; độ dài hiển thị được giới hạn cho dễ nhìn, còn số N trong readout là giá trị thật.
@@ -152,7 +162,11 @@ inline void drawChain(Framebuffer& image, const Scene& scene, const WorldView& v
         if (i == scene.selected) {
             drawNode(image, center, std::max(5.0, particle.radius * view.scale + 3.0), 0xffffffffU);
         }
-        drawNode(image, center, particle.radius * view.scale, i == 0 ? 0xc678ddffU : 0x53f0aeffU);
+        std::uint32_t color = 0x53f0aeffU;
+        if (i == 0) {
+            color = 0xc678ddffU;
+        }
+        drawNode(image, center, particle.radius * view.scale, color);
     }
 }
 ```
@@ -183,10 +197,15 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
 Trong presentation.hpp, thay drawHud để hiện khoảng cách, độ giãn và số N. Các helper vẽ node/coil/arrow đã nằm trong Starter; không cần cài lại SDL resources:
 
 ```cpp title="include/presentation.hpp — drawHud"
+// HUD dùng cùng state với hình vẽ; các nhãn năng lượng không tự chạy solver.
 inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
     SDL_SetRenderDrawColor(renderer, 205, 215, 235, 255);
     char line[200]{};
-    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, scene.paused ? "PAUSED" : "RUNNING");
+    const char* motion = "RUNNING";
+    if (scene.paused) {
+        motion = "PAUSED";
+    }
+    std::snprintf(line, sizeof(line), "SPRING CHAIN | %zu masses / %zu springs | t=%.3f s | %s", scene.chain.particles.size(), scene.chain.springs.size(), scene.elapsed, motion);
     if (!SDL_RenderDebugText(renderer, 30, 20, line)) {
         return false;
     }

@@ -4,6 +4,7 @@
 #include <cstdio>
 
 namespace lab {
+// Lớp chữ chỉ đọc state và số đo; việc trình bày không tiến thêm bước vật lý.
 inline bool text(SDL_Renderer* renderer, float x, float y, const char* value) {
     return SDL_RenderDebugText(renderer, x, y, value);
 }

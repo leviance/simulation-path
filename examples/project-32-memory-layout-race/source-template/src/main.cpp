@@ -25,13 +25,13 @@ int runBenchmark() {
 #endif
     std::cout << " C++20 single-thread float32 no-manual-SIMD seed=" << job.config.seed << " dt=" << lab::fixedDt << " warmup=1 samples=5 passes=3\n";
     for (const auto& row : job.rows) {
-        std::cout << "N=" << row.count << " alive=" << row.count << " actualUpdated=" << row.updated
-                  << " workload=" << (row.workload == lab::MemoryWorkload::gravityOnly ? "gravity-only" : "full-lifecycle")
-                  << " AoS_ms=" << row.aos.median << " range=" << row.aos.minimum << ':' << row.aos.maximum;
+        const char* workload = "full-lifecycle";
+        if (row.workload == lab::MemoryWorkload::gravityOnly) {
+            workload = "gravity-only";
+        }
+        std::cout << "N=" << row.count << " alive=" << row.count << " actualUpdated=" << row.updated << " workload=" << workload << " AoS_ms=" << row.aos.median << " range=" << row.aos.minimum << ':' << row.aos.maximum;
         if (row.paired) {
-            std::cout << " SoA_ms=" << row.soa.median << " range=" << row.soa.minimum << ':' << row.soa.maximum
-                      << " conversion_ms=" << row.conversionMs << " maxDifference=" << row.maximumDifference << " errorRatio=" << row.maximumErrorRatio
-                      << " checksum=" << row.checksumAoS << '/' << row.checksumSoA;
+            std::cout << " SoA_ms=" << row.soa.median << " range=" << row.soa.minimum << ':' << row.soa.maximum << " conversion_ms=" << row.conversionMs << " maxDifference=" << row.maximumDifference << " errorRatio=" << row.maximumErrorRatio << " checksum=" << row.checksumAoS << '/' << row.checksumSoA;
         } else {
             std::cout << " SoA=not-measured checksumAoS=" << row.checksumAoS;
         }
@@ -73,6 +73,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 #endif
+    // Khởi tạo SDL sau khi xử lý CLI; benchmark console không cần tài nguyên vẽ.
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
@@ -110,6 +111,8 @@ int main(int argc, char** argv) {
             result = EXIT_FAILURE;
         }
     }
+
+    // Giải phóng texture trước renderer và window, cả khi bước mô phỏng báo lỗi.
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

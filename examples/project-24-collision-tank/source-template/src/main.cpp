@@ -5,6 +5,7 @@
 #include <string_view>
 
 int main(int argc, char** argv) {
+    // Khởi tạo SDL trước window; texture chỉ được tạo sau khi đã có renderer.
     const bool smoke = argc > 1 && std::string_view(argv[1]) == "--smoke";
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
@@ -90,16 +91,28 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 2
                 if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET) {
                     const double steps[]{1.0 / 60.0, 1.0 / 120.0, 1.0 / 240.0};
-                    int index = scene.dt == steps[0] ? 0 : scene.dt == steps[1] ? 1
-                                                                                : 2;
-                    index = std::clamp(index + (key == SDLK_LEFTBRACKET ? -1 : 1), 0, 2);
+                    int index = 2;
+                    if (scene.dt == steps[0]) {
+                        index = 0;
+                    } else if (scene.dt == steps[1]) {
+                        index = 1;
+                    }
+                    int change = 1;
+                    if (key == SDLK_LEFTBRACKET) {
+                        change = -1;
+                    }
+                    index = std::clamp(index + change, 0, 2);
                     scene.dt = steps[index];
                     lab::rebuildScene(scene);
                 }
 #endif
 #if LAB_CHECKPOINT >= 3
                 if (key == SDLK_E) {
-                    scene.restitution = scene.restitution <= 0.01 ? 1.0 : std::max(0.0, scene.restitution - 0.2);
+                    if (scene.restitution <= 0.01) {
+                        scene.restitution = 1.0;
+                    } else {
+                        scene.restitution = std::max(0.0, scene.restitution - 0.2);
+                    }
                     lab::rebuildScene(scene);
                 }
 #endif
@@ -115,7 +128,11 @@ int main(int argc, char** argv) {
                     lab::rebuildScene(scene);
                 }
                 if (key == SDLK_C) {
-                    scene.count = scene.count == 256 ? 64 : 256;
+                    if (scene.count == 256) {
+                        scene.count = 64;
+                    } else {
+                        scene.count = 256;
+                    }
                     lab::rebuildScene(scene);
                 }
 #endif
@@ -133,10 +150,20 @@ int main(int argc, char** argv) {
                     scene.spatial = key == SDLK_3;
                     lab::rebuildScene(scene);
                 }
-                if (scene.spatial && (key == SDLK_LEFT || key == SDLK_RIGHT))
-                    scene.camera.yaw += key == SDLK_LEFT ? -0.1 : 0.1;
-                if (scene.spatial && (key == SDLK_UP || key == SDLK_DOWN))
-                    scene.camera.pitch = std::clamp(scene.camera.pitch + (key == SDLK_UP ? 0.1 : -0.1), -1.2, 1.2);
+                if (scene.spatial && (key == SDLK_LEFT || key == SDLK_RIGHT)) {
+                    double yawChange = 0.1;
+                    if (key == SDLK_LEFT) {
+                        yawChange = -0.1;
+                    }
+                    scene.camera.yaw += yawChange;
+                }
+                if (scene.spatial && (key == SDLK_UP || key == SDLK_DOWN)) {
+                    double pitchChange = -0.1;
+                    if (key == SDLK_UP) {
+                        pitchChange = 0.1;
+                    }
+                    scene.camera.pitch = std::clamp(scene.camera.pitch + pitchChange, -1.2, 1.2);
+                }
 #endif
 #if LAB_CHECKPOINT >= 11
                 if (key == SDLK_B)
@@ -256,10 +283,15 @@ int main(int argc, char** argv) {
         }
         SDL_Delay(16);
     }
+
+    // Giải phóng capture trước texture; renderer và window được hủy sau cùng.
     cancelDrag();
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return failed ? EXIT_FAILURE : EXIT_SUCCESS;
+    if (failed) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
 }
