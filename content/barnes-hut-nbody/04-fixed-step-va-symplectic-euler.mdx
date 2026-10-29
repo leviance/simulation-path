@@ -105,7 +105,8 @@ Trên Windows chạy ./build/Debug/project_31_checkpoint_4.exe; với Ninja/macO
 
 ## Thử làm sai để hiểu đúng
 
-Integrate mỗi body ngay sau khi có acceleration của nó để thấy lỗi phụ thuộc thứ tự ở bài 03 quay lại. Sau khi khôi phục, thử dt lớn ở preset hai vật: quỹ đạo xấu dù direct force vẫn đúng. Đây là integration error, chưa liên quan Octree.
+1. Integrate mỗi body ngay sau khi có acceleration của nó. Lỗi phụ thuộc thứ tự ở bài 03 sẽ quay lại. Khôi phục cách tính acceleration của toàn snapshot trước khi cập nhật state.
+2. Tăng dt ở preset hai vật, giữ force model và solver không đổi. Quỹ đạo có thể xấu dù direct force vẫn đúng: đây là integration error, chưa liên quan Octree. Giảm dt và so tại cùng thời gian.
 
 ## Tự kiểm tra kết quả
 

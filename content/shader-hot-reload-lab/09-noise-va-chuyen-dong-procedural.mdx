@@ -4,40 +4,138 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Gradient và circle được tạo từ những công thức dễ nhận ra. Muốn có một trường màu cuộn chảy nhưng không lặp đều như sóng sin, ta cần noise liên tục. Không thể chọn màu ngẫu nhiên độc lập cho từng pixel: ảnh sẽ nhấp nháy và không có hình dạng để theo dõi.
+Nếu gán một số ngẫu nhiên độc lập cho mỗi pixel, hình giống nhiễu TV: các điểm cạnh nhau không có quan hệ, và chạy lại có thể cho ảnh khác. Ta cần sự thay đổi có cấu trúc để tạo mảng màu mềm, đồng thời có thể kiểm lại cùng một snapshot.
+
+Effect thứ tư, Noise Flow, dùng value noise lặp lại được, cộng nhiều lớp chi tiết rồi làm lệch tọa độ lấy mẫu. Mọi thứ vẫn nằm trong fragment shader, không cần texture noise hay thư viện ngoài.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Value noise đặt một giá trị cố định ở mỗi góc ô lưới rồi nội suy trong ô. Hash phụ thuộc tọa độ ô, không phụ thuộc frame. Hàm $s(t)=t^2(3-2t)$ làm độ dốc về 0 ở hai đầu để biên ô không thành đường gãy.
+Ta chia mặt phẳng thành ô lưới. Mỗi góc ô có một giá trị hash cố định từ tọa độ nguyên. Bên trong ô, nội suy bốn góc để các pixel lân cận thay đổi mượt.
 
-Cộng năm octave với biên độ giảm một nửa tạo fBm. Ta dịch tọa độ theo time để trường noise chuyển động, rồi dùng một lượt noise làm độ lệch tọa độ cho lượt tiếp theo (domain warp).
+Nội suy dùng s(t) = t²(3 - 2t), có độ dốc bằng 0 ở hai đầu. Nó làm chuyển tiếp qua cạnh ô mượt hơn nội suy tuyến tính thuần.
+
+fBm trong bài này cộng năm lớp noise. Mỗi lớp có tần số cao hơn và biên độ bằng nửa lớp trước. Tổng biên độ là 0.5 + 0.25 + 0.125 + 0.0625 + 0.03125 = 0.96875. Đây là tên quen dùng cho phép ghép noise nhiều octave, không phải mô phỏng dòng chất lỏng hay một quá trình ngẫu nhiên vật lý.
 
 <InteractiveLab demo="shader-hot-reload" mode="noise-shader" />
 
 ## Viết code từng bước
 
-Trong `shaders/noise.frag`, đọc lần lượt `hashCell`, `valueNoise`, `fbm`, rồi `main`. Hash dùng số nguyên unsigned 32-bit; phép tràn theo modulo giữ dữ liệu lặp lại được ở C++, TypeScript và GLSL. Không dùng một lần gọi random mới cho mỗi frame.
+### Bước 1 — Hash tọa độ nguyên, không gọi random mỗi frame
 
-`uTime` tạo flow vector; `uMouse` dịch vùng đang xem; `uZoom` đổi tần số không gian. Đây đều là uniforms, nên việc thay đổi chúng không tạo program generation mới.
+```cpp title="include/shader_effects.hpp — hash đối chiếu trên CPU"
+inline double hashCell(std::int32_t x, std::int32_t y) {
+    std::uint32_t h = std::uint32_t(x) * 374761393U + std::uint32_t(y) * 668265263U;
+    h = (h ^ (h >> 13U)) * 1274126177U;
+    h ^= h >> 16U;
+    return double(h & 65535U) / 65535;
+}
+```
+
+Các phép toán uint32 giữ tràn số theo modulo 2³². Kết quả lấy 16 bit cuối rồi chia 65535 để về 0–1. Cùng tọa độ phải cho cùng giá trị cả khi x/y âm; không dùng kiểu signed rồi dựa vào overflow không được bảo đảm trong C++.
+
+Bản TypeScript dùng Math.imul và phép dịch unsigned cho cùng mục đích. Một phép nhân Number thông thường có thể mất các bit thấp trước khi bạn ép về 32 bit.
+
+### Bước 2 — Nội suy, ghép octave rồi làm lệch miền
+
+```glsl title="shaders/noise.frag — Noise Flow hoàn chỉnh"
+#version 330 core
+uniform float uTime;
+uniform vec2 uResolution;
+uniform vec2 uMouse;
+uniform float uZoom;
+out vec4 fragColor;
+
+const float SPEED = 0.18;
+
+float hashCell(ivec2 cell) {
+    uvec2 p = uvec2(cell);
+    uint h = p.x * 374761393u + p.y * 668265263u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    return float(h & 65535u) / 65535.0;
+}
+
+float valueNoise(vec2 p) {
+    ivec2 cell = ivec2(floor(p));
+    vec2 f = fract(p);
+    vec2 smoothF = f * f * (3.0 - 2.0 * f);
+    float bottom = mix(hashCell(cell), hashCell(cell + ivec2(1, 0)), smoothF.x);
+    float top = mix(hashCell(cell + ivec2(0, 1)), hashCell(cell + ivec2(1, 1)), smoothF.x);
+    return mix(bottom, top, smoothF.y);
+}
+
+float fbm(vec2 p) {
+    float result = 0.0;
+    float amplitude = 0.5;
+    for (int octave = 0; octave < 5; ++octave) {
+        result += amplitude * valueNoise(p);
+        p = p * 2.03 + vec2(1.7, -2.1);
+        amplitude *= 0.5;
+    }
+    return result;
+}
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / max(uResolution, vec2(1.0));
+    vec2 p = (2.0 * gl_FragCoord.xy - uResolution) / min(uResolution.x, uResolution.y);
+    p = p * (2.2 * uZoom) + (uMouse / uResolution - 0.5) * 2.0;
+    vec2 flow = vec2(uTime * SPEED, -uTime * SPEED * 0.7);
+    float warp = fbm(p + flow);
+    float n = fbm(p + vec2(warp * 2.5, -warp * 1.8) - flow);
+    vec3 color = mix(vec3(0.025, 0.045, 0.13), vec3(0.09, 0.69, 0.72), smoothstep(0.15, 0.78, n));
+    color += vec3(0.82, 0.37, 0.12) * pow(max(0.0, n), 5.0);
+    fragColor = vec4(color, 1.0);
+}
+```
+
+hashCell nhận ivec2 và đổi sang uvec2 trước khi nhân. valueNoise dùng floor để tìm ô; fract cho vị trí trong ô, kể cả tọa độ âm. mix nối hai góc hàng dưới, hai góc hàng trên rồi trộn hai hàng theo y.
+
+fbm dịch và nhân tọa độ sau mỗi octave, giảm amplitude một nửa. Năm vòng là giới hạn cố định; tăng tùy ý sẽ làm mỗi pixel tốn thêm công việc.
+
+Ở main, flow dịch tọa độ theo time. warp là một lần lấy fBm; kết quả đó lại làm lệch tọa độ lần lấy tiếp theo. Cách dùng kết quả noise để bẻ miền lấy mẫu gọi là domain warp. Nó tạo các mảng uốn lượn mà không phải giải phương trình chất lỏng.
+
+smoothstep chọn vùng chuyển màu tối/cyan, còn lũy thừa bậc năm nhấn các vùng giá trị cao bằng màu ấm. Trong effect này uZoom tăng mật độ chi tiết; nó không phải camera dùng chung cho cả gallery. Circle dùng nó cho radius, Mandelbrot dùng nó để thu hẹp miền phức.
+
+### Bước 3 — Mở đủ bốn hiệu ứng trong cùng công cụ
+
+```cpp title="include/shader_input.hpp — gallery hoàn chỉnh từ checkpoint 9"
+inline constexpr std::size_t visibleShaderEffects() {
+    return 4;
+}
+```
+
+Đây là thay đổi phía C++ để phím 4 chọn được noise.frag. Không cần một renderer hay cửa sổ thứ hai: shader mới dùng cùng uTime/uResolution/uMouse/uZoom, nên đi qua đúng đường đọc file, compile/link, kiểm interface và commit đã có. Thử làm noise.frag lỗi trước khi bấm 4 để kiểm rằng effect đang xem vẫn được giữ lại.
 
 ## Ghép các phần lại
 
-Build `project_35_checkpoint_9`, nhấn 4 chọn Noise Flow. Tạm dừng rồi dịch mouse/zoom để phân biệt thay đổi tọa độ với thay đổi time. Bật lại chuyển động và quan sát các vùng màu đi liên tục thay vì nhấp nháy.
+```bash title="Terminal — checkpoint 9"
+cmake --build build --config Debug --target project_35_checkpoint_9 --parallel 2
+./build/Debug/project_35_checkpoint_9.exe --effect 4
+```
+
+Phím 1–4 đã mở đủ gallery. Pause, reset rồi tiến từng bước để so cùng snapshot. Đổi SPEED từ 0.18 lên 0.36, lưu và F5: chuyển động nhanh hơn nhưng cấu trúc noise vẫn xác định được từ cùng input.
+
+Canvas tính noise bằng CPU ở raster giảm độ phân giải. Đừng lấy tốc độ Canvas để kết luận GPU nhanh/chậm; mục đích của nó là xem công thức và các tham số.
 
 ## Thử làm sai để hiểu đúng
 
-Trong một bản thử, cho time vào hash của từng góc lưới. Dự đoán trường sẽ trôi hay đổi giá trị tại chỗ. Quan sát rồi khôi phục hash chỉ theo tọa độ; time chỉ đi vào tọa độ lấy mẫu.
+1. Bỏ nội suy, trả thẳng hash của ô: bạn sẽ thấy các khối vuông thay vì trường mượt.
+2. Dùng ép int thay cho floor khi tìm ô: phía tọa độ âm sẽ sai cách chia ô.
+3. Lấy random mới mỗi frame: pause/replay cùng time không tái lập được ảnh.
+4. Giữ time và mouse cố định rồi reload nguyên source: ảnh phải giữ nguyên.
+
+Khôi phục code chuẩn trước khi chạy reference tests. Hash này dành cho hình ảnh lặp lại được, không phải ngẫu nhiên bảo mật hay phép đo thống kê đạt chất lượng riêng.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Cùng tọa độ ô luôn cho cùng hash; noise hữu hạn trong khoảng đã định.
-- [ ] Không có đường gãy rõ ở biên ô.
-- [ ] Pause giữ ảnh; mouse/zoom vẫn thay vùng quan sát mà không reload.
-- [ ] Năm octave có số vòng lặp hữu hạn, không chạy tới khi người dùng ngắt.
+- [ ] Bốn effect chạy trong một executable.
+- [ ] Giá trị tại góc ô khớp hash của góc đó.
+- [ ] Qua cạnh ô, noise không nhảy bậc.
+- [ ] Cùng snapshot tạo cùng ảnh; time/mouse/zoom đều có tác dụng.
+- [ ] Bạn giải thích được từng lớp: hash → value noise → fBm → domain warp.
 
 ## Bài tập mở rộng
 
-1. Giảm còn một octave rồi so với năm octave, giữ nguyên palette.
-2. Tắt domain warp để nhìn thấy riêng tác dụng của việc lệch tọa độ.
+Bỏ domain warp để so noise gốc với noise bị bẻ miền. Thử 3 và 5 octave, giữ cùng kích thước viewport và tách thời gian shader khỏi chi phí VSync nếu đo hiệu năng. Nếu đổi công thức, cập nhật reference thay vì coi sai lệch với công thức chuẩn là lỗi driver.
 
-Tiếp theo: [hoàn thiện gallery và kiểm hot reload](./10-hoan-thien-shader-gallery).
+[Bài tiếp theo: gallery hoàn chỉnh và nghiệm thu](/projects/shader-hot-reload-lab/10-hoan-thien-shader-gallery).

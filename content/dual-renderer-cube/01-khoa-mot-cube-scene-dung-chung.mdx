@@ -112,9 +112,8 @@ Nếu không tạo được OpenGL 3.3 Core context, xử lý driver hoặc môi
 
 ## Thử làm sai để hiểu đúng
 
-Trong một bản thử, giữ `cameraDistanceCpu` và `cameraDistanceGpu` riêng, rồi chỉ sửa biến của backend đang chọn. Dự đoán chuỗi F1 → đổi khoảng cách → F2 → F1 sẽ giữ được góc nhìn không.
-
-Bạn chưa cần vẽ model để thấy state đã tách làm hai. Xóa hai biến thử và đưa camera về một nơi. Đừng tạo lại `ViewerScene` trong nhánh xử lý F1/F2.
+1. Trong bản thử, giữ cameraDistanceCpu và cameraDistanceGpu riêng rồi chỉ sửa biến của backend đang chọn. Dự đoán chuỗi F1 → đổi khoảng cách → F2 → F1 có giữ được góc nhìn không. Đối chiếu các giá trị state; xóa hai biến thử và đưa camera về một nơi.
+2. Giữ state chung nhưng cố ý tạo lại ViewerScene trong nhánh F2. Đổi góc camera trước khi chuyển backend: dữ liệu sẽ quay về mặc định dù hai backend dùng cùng kiểu struct. Khôi phục nhánh chỉ thay RendererKind.
 
 ## Tự kiểm tra kết quả
 

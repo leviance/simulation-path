@@ -37,8 +37,9 @@ for (const project of projects) {
 expectedFiles.set(
   target,
   `// Generated project-level lesson router. Do not edit by hand.\n` +
-    `import { createElement, type ComponentType, type ReactElement } from "react";\n\n` +
-    `type LessonModule = { default: ComponentType };\n` +
+    `import { createElement, type ComponentType, type ReactElement } from "react";\n` +
+    `import { CourseStaticMarkup } from "@/components/static-markup";\n\n` +
+    `type LessonModule = { default: ComponentType<{ components?: { CourseStaticMarkup: typeof CourseStaticMarkup } }> };\n` +
     `type LessonLoader = () => Promise<LessonModule>;\n` +
     `type ProjectRegistryModule = { lessonLoaders: Record<string, LessonLoader> };\n\n` +
     `const projectRegistryLoaders: Record<string, () => Promise<ProjectRegistryModule>> = {\n` +
@@ -51,7 +52,7 @@ expectedFiles.set(
     `  const loadLesson = lessonLoaders[lessonSlug];\n` +
     `  if (!loadLesson) return null;\n` +
     `  const { default: Component } = await loadLesson();\n` +
-    `  return createElement(Component);\n` +
+    `  return createElement(Component, { components: { CourseStaticMarkup } });\n` +
     `}\n`,
 );
 

@@ -348,8 +348,9 @@ test("all published project and lesson routes render", async () => {
       `Missing generated checkpoint diff: ${lesson.file}`,
     );
     assert.ok(
-      /data-language="diff"/i.test(html) || /không thuộc riêng một checkpoint/i.test(html),
-      `Checkpoint change is neither highlighted nor explained: ${lesson.file}`,
+      /<details\b[^>]*class="source-diff"[^>]*>\s*<summary>\s*<code>[^<]+<\/code>/i.test(html) ||
+        /không thuộc riêng một checkpoint/i.test(html),
+      `Checkpoint change has no expandable diff or explanation: ${lesson.file}`,
     );
     const project = projectCatalog.find((item) => item.slug === lesson.project);
     const order = Number.parseInt(lesson.file, 10);

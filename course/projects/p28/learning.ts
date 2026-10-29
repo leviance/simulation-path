@@ -6,7 +6,11 @@ const learning = {
       focus: "Ánh xạ position vào grid, xử lý tọa độ âm và cell cuối không đủ rộng.",
       expected:
         "Đàn Boids vẫn chạy bằng brute force; chọn hoặc kéo một cá thể thấy địa chỉ cell đổi đúng. Fixture (959,599), S=100 cho index=59; (960,600) wrap về index=0.",
-      files: ["include/grid/coordinates.hpp", "include/app/scene.hpp", "include/app/presentation.hpp"],
+      files: [
+        "include/grid/coordinates.hpp",
+        "include/app/scene.hpp",
+        "include/app/presentation.hpp",
+      ],
       steps: [
         {
           title: "Giữ nguyên đàn của Project 27",
@@ -171,7 +175,12 @@ const learning = {
       focus: "Chia việc giữa các frame, không cắt hàng xóm và không công bố nửa bước.",
       expected:
         "Preset 10.000 cập nhật và vẽ đủ đàn, progress đi qua các lô nhưng steps/time chỉ đổi sau commit. Pause/Escape hủy được phần đang tính; clock không chạy nhanh ở 120 Hz.",
-      files: ["include/grid/step.hpp", "include/app/scene.hpp", "include/app/controls.hpp", "include/app/application.hpp"],
+      files: [
+        "include/grid/step.hpp",
+        "include/app/scene.hpp",
+        "include/app/controls.hpp",
+        "include/app/application.hpp",
+      ],
       steps: [
         {
           title: "Chia CPU giữa hai cá thể",

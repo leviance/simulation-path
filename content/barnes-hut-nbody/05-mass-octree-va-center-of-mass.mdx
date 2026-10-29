@@ -196,7 +196,8 @@ Trên Windows chạy ./build/Debug/project_31_checkpoint_5.exe; với Ninja/macO
 
 ## Thử làm sai để hiểu đúng
 
-Đổi weightedPosition thành tổng position của child: hộp vẫn vẽ đúng và storage vẫn đủ, nhưng tâm khối sai. Sau đó đặt 256 body trùng position. Nếu bỏ giới hạn depth, cây có thể tiếp tục tách mà không phân biệt được chúng.
+1. Đổi weightedPosition thành tổng position của child. Hộp vẫn vẽ đúng và storage vẫn đủ, nhưng tâm khối sai. Dùng fixture mass không bằng nhau để lộ lỗi rồi khôi phục trọng số.
+2. Đặt 256 body trùng position và dự đoán cây sẽ dừng ở đâu. Giữ giới hạn depth để kiểm hữu hạn; không chạy bản bỏ mọi điều kiện dừng trên UI. Kiểm leaf cuối vẫn giữ đủ indices.
 
 ## Tự kiểm tra kết quả
 

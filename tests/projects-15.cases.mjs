@@ -6,6 +6,7 @@ import { compile } from "@mdx-js/mdx";
 import { courseMdxOptions } from "../lib/mdx-options.mjs";
 import { codeTokens, isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
 import { workspace, render } from "./site-support.mjs";
+import { assertPublishedProjectSources } from "./published-source-support.mjs";
 
 const root = path.join(workspace, "examples/project-15-3d-pipeline-inspector");
 const lessons = [
@@ -232,19 +233,7 @@ test("Project 15 rebuild renders overview and seven lessons with all coordinates
   ])
     assert.ok(html.includes(file), file);
   assert.match(html, /Toàn bộ mã nguồn của dự án/);
-  // Closed source panels load on demand; inspect the shipped lazy payload, not initial HTML.
-  const chunkDirectory = path.join(workspace, "dist/client/_next/static/chunks");
-  const chunks = (await readdir(chunkDirectory)).filter((file) => /^final-.*\.js$/.test(file));
-  let hasCurrentFinal = false;
-  for (const file of chunks) {
-    const payload = await readFile(path.join(chunkDirectory, file), "utf8");
-    if (
-      payload.includes("Project 15 - 3D Pipeline Inspector") &&
-      payload.includes("Khởi tạo SDL, window, renderer và texture")
-    )
-      hasCurrentFinal = true;
-  }
-  assert.ok(hasCurrentFinal, "Current final source must ship in the lazy client payload");
+  await assertPublishedProjectSources("15", root);
   assert.match(html, /project-15-3d-pipeline-inspector\.zip/);
   assert.match(html, /projects\/triangle-rasterizer/);
 });

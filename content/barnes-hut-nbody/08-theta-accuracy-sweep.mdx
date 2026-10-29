@@ -196,7 +196,8 @@ Trên Windows chạy ./build/Debug/project_31_checkpoint_8.exe; với Ninja/macO
 
 ## Thử làm sai để hiểu đúng
 
-Để simulation chạy tiếp trong lúc các theta lần lượt được đo. Các hàng bây giờ đến từ position khác nhau, nên không còn là sweep công bằng. Thử đổi epsilon chỉ cho Barnes–Hut: bạn đang đổi force model, không còn chỉ đo tree approximation.
+1. Để simulation chạy tiếp trong lúc lần lượt đo các theta. Các hàng đến từ position khác nhau, nên không còn là sweep công bằng. Khôi phục frozen snapshot rồi đo lại.
+2. Đổi epsilon chỉ cho Barnes–Hut và so với direct. Bạn đang đổi force model, không còn chỉ đo tree approximation. Đặt epsilon hai nhánh bằng nhau trước khi diễn giải sai số.
 
 ## Tự kiểm tra kết quả
 

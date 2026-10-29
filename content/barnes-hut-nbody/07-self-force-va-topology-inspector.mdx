@@ -153,7 +153,8 @@ Trên Windows chạy ./build/Debug/project_31_checkpoint_7.exe; với Ninja/macO
 
 ## Thử làm sai để hiểu đúng
 
-Trong một bản tree dùng riêng cho test, tăng totalMass ở leaf thêm 100. Nếu chỉ so parent với children, có thể bỏ sót khi lỗi được lan lên. Đổi child index trỏ về parent để kiểm inspector báo lỗi và kết thúc. Đừng gọi force traversal trên cây cố ý có chu trình.
+1. Trong bản tree dùng riêng cho test, tăng totalMass ở leaf thêm 100. Kiểm inspector có đối chiếu leaf với bodies gốc, thay vì chỉ so parent với children rồi bỏ sót lỗi lan lên. Khôi phục dữ liệu đúng sau test.
+2. Cho một child index trỏ về parent rồi chỉ chạy inspector có giới hạn duyệt. Nó phải báo cycle và kết thúc. Không gọi force traversal trên cây cố ý hỏng; khôi phục index trước khi trở lại mô phỏng.
 
 ## Tự kiểm tra kết quả
 

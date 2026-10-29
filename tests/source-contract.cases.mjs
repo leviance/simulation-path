@@ -95,43 +95,27 @@ test("C++ validation remains active in both Debug and Release", async () => {
     );
   }
 
-  const validationLessons = [
-    ["hello-pixels", "06-validation.mdx"],
-    ["wasd-fps-cap", "06-validation.mdx"],
-    ["mini-paint", "06-validation.mdx"],
-    ["tiny-2d-rasterizer", "06-benchmark-validation.mdx"],
-    ["coordinate-map", "07-round-trip-test.mdx"],
-    ["vector-playground", "08-lerp-va-validation.mdx"],
-    ["unit-circle", "07-hoan-thien-va-kiem-chung.mdx"],
-    ["mouse-turret", "07-hoan-thien-va-kiem-chung.mdx"],
-    ["square-transformer", "08-hoan-thien-va-kiem-chung.mdx"],
-    ["3d-compass", "07-suy-bien-va-kiem-chung.mdx"],
-    ["perspective-point", "08-hoan-thien-va-kiem-chung.mdx"],
-    ["rotating-triangle", "08-hoan-thien-va-kiem-chung.mdx"],
-    ["wireframe-cube", "07-hoan-thien-va-kiem-chung.mdx"],
-    ["fps-camera-room", "09-hoan-thien-va-kiem-chung.mdx"],
-    ["3d-pipeline-inspector", "07-ghep-mvp-va-validation.mdx"],
-    ["triangle-rasterizer", "07-barycentric-va-validation.mdx"],
-    ["solid-cube-z-buffer", "07-kiem-chung-doc-lap-draw-order.mdx"],
-    ["obj-mesh-viewer", "08-load-file-controls-va-validation.mdx"],
-    ["projectile-cannon", "07-do-sai-so-va-nghiem-thu.mdx"],
-    ["integrator-race", "07-stress-test-convergence-va-nghiem-thu.mdx"],
-    ["collision-tank", "08-stress-test-bao-toan-va-nghiem-thu.mdx"],
-    ["spring-chain", "08-do-energy-stress-test-va-nghiem-thu.mdx"],
-    ["double-pendulum-chaos", "07-preset-tuong-tac-va-nghiem-thu.mdx"],
-    ["boids-2d", "09-kiem-chung-va-du-an-hoan-chinh.mdx"],
-    ["boids-spatial-grid", "10-hoan-thien-dan-boids-lon.mdx"],
-    ["quadtree-map-editor", "11-du-an-hoan-chinh-va-nghiem-thu.mdx"],
-    ["point-cloud-octree", "11-cong-cu-khao-sat-hoan-chinh.mdx"],
-    ["memory-layout-race", "08-hoan-thien-memory-layout-race.mdx"],
-    ["cpu-gpu-triangle", "09-hoan-thien-cpu-gpu-triangle.mdx"],
-    ["dual-renderer-cube", "09-hoan-thien-dual-renderer-cube.mdx"],
-    ["shader-hot-reload-lab", "08-hoan-thien-shader-hot-reload-lab.mdx"],
-  ];
-  for (const [project, file] of validationLessons) {
-    const source = await readFile(path.join(workspace, "content", project, file), "utf8");
-    assert.match(source, /ctest[^\r\n]+-C Debug/, `${file} does not teach Debug validation`);
-    assert.match(source, /ctest[^\r\n]+-C Release/, `${file} does not teach Release validation`);
+  for (const project of projectCatalog) {
+    const directory = path.join(workspace, "content", project.slug);
+    const files = (await readdir(directory)).filter((file) => file.endsWith(".mdx")).sort();
+    const file = files.at(-1);
+    assert.ok(file, project.slug + " has no final lesson");
+    assert.equal(
+      Number.parseInt(file, 10),
+      project.checkpointCount,
+      project.slug + " final lesson order",
+    );
+    const source = await readFile(path.join(directory, file), "utf8");
+    assert.match(
+      source,
+      /ctest[^\r\n]+-C Debug/,
+      project.slug + "/" + file + " does not teach Debug validation",
+    );
+    assert.match(
+      source,
+      /ctest[^\r\n]+-C Release/,
+      project.slug + "/" + file + " does not teach Release validation",
+    );
   }
 });
 

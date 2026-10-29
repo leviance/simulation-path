@@ -4,127 +4,119 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Một lần Save thành công chưa chứng minh shader lab bền. Final phải chịu được file tạm biến mất, compile error, link mismatch, uniform thiếu, nhiều lần Save liên tiếp, resize high-DPI và chuỗi fail–pass lặp lại. Đồng thời mọi candidate lỗi phải được dọn mà active program vẫn sống.
+Gradient và circle cho thấy mỗi pixel có thể tự tính màu. Bài này dùng cùng cách làm cho một hình có cấu trúc phức tạp hơn: Mandelbrot. Không cần gửi hàng nghìn đỉnh; mỗi fragment lặp một công thức để quyết định màu của mình.
 
-Ta tách phần có thể tự động hóa khỏi phần cần driver thật. CTest khóa fingerprint, generation, transactional state và debounce bằng CPU thuần; checklist trong app khóa compile/link log, hình ảnh cùng resource lifetime.
+Ta thêm effect thứ ba mà không đổi renderer, watcher hay cơ chế last-good. Đó là lợi ích của việc giữ interface uniform ổn định giữa các shader.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Validation cuối đi theo dependency:
+Mỗi pixel được ánh xạ thành một số phức c. Bắt đầu z bằng 0, rồi lặp z mới = z² + c. Với z = x + iy, bình phương cho phần thực x² - y² và phần ảo 2xy; vec2 đủ để lưu chúng.
 
-```text
-mesh/layout → shader interface → failed commit invariant
-            → successful commit invariant → watcher debounce
-            → runtime driver experiments → cleanup
-```
+Nếu độ lớn z vượt 2, điểm đã thoát. Ta kiểm bình phương độ lớn vượt 4 để không phải lấy căn trong mỗi vòng. Nếu chưa thoát sau 128 lượt, shader tô tối. Đây là giới hạn tính toán của bản demo, không phải chứng minh điểm chắc chắn thuộc tập Mandelbrot.
 
-Nếu state machine CPU sai, chưa cần mở window. Nếu CPU checks pass nhưng shader thật không reload, ta tập trung vào file path, driver log và GL object lifecycle.
+Time chỉ đổi palette, không đổi phép lặp. Vì thế khi chạy time, hình biên giữ nguyên còn màu bên ngoài chuyển động. Mouse dịch miền c và zoom thu hẹp miền khảo sát quanh tâm đã chọn.
 
-<InteractiveLab demo="shader-hot-reload" mode="shader-validation" />
+<InteractiveLab demo="shader-hot-reload" mode="mandelbrot-shader" />
 
 ## Viết code từng bước
 
-### Bước 1 — Báo từng invariant bằng tên
+### Bước 1 — Ánh xạ pixel và viết vòng lặp hữu hạn
 
-```cpp title="include/pipeline.hpp — ShaderLabValidationReport"
-struct ShaderLabValidationReport {
-    bool meshLayout{};
-    bool shaderInterface{};
-    bool failedReloadKeepsGeneration{};
-    bool successfulReloadAdvancesGeneration{};
-    bool watcherDebounces{};
+```glsl title="shaders/mandelbrot.frag — Mandelbrot hoàn chỉnh"
+#version 330 core
+uniform float uTime;
+uniform vec2 uResolution;
+uniform vec2 uMouse;
+uniform float uZoom;
+out vec4 fragColor;
 
-    bool allPassed() const {
-        return meshLayout && shaderInterface && failedReloadKeepsGeneration && successfulReloadAdvancesGeneration && watcherDebounces;
+const float SPEED = 0.12;
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / max(uResolution, vec2(1.0));
+    vec2 p = (2.0 * gl_FragCoord.xy - uResolution) / min(uResolution.x, uResolution.y);
+    vec2 mouse = uMouse / uResolution - 0.5;
+    vec2 c = vec2(-0.60, 0.0) + p * (1.35 / uZoom) + mouse * vec2(0.70, 0.50);
+    vec2 z = vec2(0.0);
+    int escaped = 0;
+    for (int iteration = 0; iteration < 128; ++iteration) {
+        z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+        if (dot(z, z) > 4.0) { escaped = iteration + 1; break; }
     }
-};
+    vec3 color = vec3(0.012, 0.018, 0.045);
+    if (escaped > 0) {
+        float smoothCount = float(escaped) + 1.0 - log2(max(0.001, log2(length(z))));
+        float phase = 0.035 * smoothCount + uTime * SPEED;
+        color = 0.5 + 0.5 * cos(6.2831853 * (phase + vec3(0.0, 0.18, 0.39)));
+        color *= 0.45 + 0.55 * (1.0 - exp(-float(escaped) * 0.08));
+    }
+    fragColor = vec4(color, 1.0);
+}
 ```
 
-`allPassed` tiện cho title bar, còn từng field vẫn có mặt trong CTest để biết contract nào hỏng.
+p đã sửa aspect ratio giống circle. Tâm (-0.60,0) đặt hình ở vị trí dễ xem; 1.35/uZoom quyết định phạm vi miền phức. Mouse chuẩn hóa được trừ 0.5 để vị trí giữa cửa sổ không dịch hình.
 
-### Bước 2 — Test fail và pass trên cùng state
+Biểu thức vec2 ở vế phải dùng x/y cũ cùng lúc. Nếu tách hai phép gán và cập nhật z.x trước, rồi dùng z.x mới để tính z.y, bạn đã đổi công thức. Đây là lỗi rất dễ gặp khi chuyển giữa GLSL và C++.
 
-```cpp title="tests/tests.cpp — transactional sequence"
-lab::ReloadState state{};
-state.activeFingerprint = 100;
-lab::recordReloadAttempt(state, 200, false);
-check(state.generation == 1, "failed reload keeps program generation");
-check(state.activeFingerprint == 100, "failed reload preserves last-good fingerprint");
+escaped lưu số lượt lặp tại lúc thoát. Giới hạn 128 giúp mọi fragment kết thúc; không viết vòng while không có chặn trên chỉ để “vẽ chính xác hơn”.
 
-lab::recordReloadAttempt(state, 300, true);
-check(state.generation == 2, "successful reload advances generation");
-check(state.activeFingerprint == 300, "successful reload commits candidate fingerprint");
+### Bước 2 — Tô màu mà không thành từng bậc quá rõ
+
+Chỉ dùng escaped nguyên để tô màu sẽ tạo các dải rời. smoothCount dùng độ lớn z sau khi thoát để nội suy một giá trị liên tục hơn, rồi đưa nó vào cosine palette. Hai lớp log2 chỉ chạy trong nhánh đã thoát; max giữ đối số lớp ngoài có cận dưới.
+
+SPEED điều khiển tốc độ palette. Tăng SPEED không tăng số lần lặp và không làm zoom sâu hơn. Với dữ liệu float/OpenGL 3.3 và giới hạn zoom của project, đây là công cụ học công thức, không phải trình khám phá fractal chính xác tùy ý.
+
+### Bước 3 — Viết reference CPU để kiểm ý tưởng
+
+```cpp title="include/shader_effects.hpp — phép lặp đối chiếu trên CPU"
+inline MandelbrotOrbit mandelbrotOrbit(double cx, double cy) {
+    MandelbrotOrbit orbit{};
+    for (int iteration = 0; iteration < 128; ++iteration) {
+        const double nextX = orbit.x * orbit.x - orbit.y * orbit.y + cx;
+        orbit.y = 2 * orbit.x * orbit.y + cy;
+        orbit.x = nextX;
+        if (orbit.x * orbit.x + orbit.y * orbit.y > 4) {
+            orbit.escaped = iteration + 1;
+            break;
+        }
+    }
+    return orbit;
+}
 ```
 
-Hai bước dùng chung state để bắt lỗi failure vô tình làm hỏng lần commit sau.
+nextX giữ phần thực mới trong khi y vẫn được tính bằng x/y cũ. Cấu trúc MandelbrotOrbit trả cả số lượt thoát và z cuối để reference tính màu giống shader.
 
-### Bước 3 — Cleanup theo dependency của OpenGL
-
-```cpp title="src/main.cpp — cleanup final"
-// Cleanup: xóa program và mesh khi OpenGL context vẫn còn current.
-renderer.destroy(gl);
-destroyWindowAndContext(window, context);
-return EXIT_SUCCESS;
-```
-
-Trong `destroy`, active program bị xóa trước EBO/VBO/VAO. Sau đó context mới được destroy; không GL function nào chạy trên context đã chết.
+Các điểm dễ kiểm bằng tay: c = 0 luôn cho z = 0; c = -1 luân phiên 0 và -1; c = 2 đi 0 → 2 → 6 nên thoát ở lượt 2; c = 3 thoát ngay lượt 1. Đây là mốc độc lập trước khi tin vào một bức ảnh fractal trông có vẻ đúng.
 
 ## Ghép các phần lại
 
-Build và chạy nghiệm thu ở cả hai cấu hình. Mọi lệnh đều có timeout hữu hạn cho CTest:
-
-```bash title="Terminal — nghiệm thu Debug"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```bash title="Terminal — checkpoint 8"
+cmake --build build --config Debug --target project_35_checkpoint_8 --parallel 2
+./build/Debug/project_35_checkpoint_8.exe --effect 3
 ```
 
-```bash title="Terminal — nghiệm thu Release"
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
+Phím 1–3 chọn ba hiệu ứng đã học. Pause tại một snapshot, đổi mouse/zoom rồi quan sát miền phức. Bật time để thấy palette chuyển động nhưng biên không tự xoay hay biến hình.
 
-Sau CTest, chạy final và thực hiện chuỗi: Save đúng → chèn compile error → Save → sửa → Save → tạo varying mismatch → Save → sửa → resize → kéo mouse. Cube chỉ được đổi generation ở hai lần candidate hoàn toàn hợp lệ.
-
-## Source hoàn chỉnh gồm những gì?
-
-- `pipeline.hpp`: cube/Mat4, file reader, fingerprint, interface, reload/watch state và validation.
-- `gl_api.hpp`: function pointers cần cho OpenGL 3.3 Core.
-- `shader_renderer.hpp`: compile/link candidate, transactional commit, uniform upload và mesh draw.
-- `lab.vert`, `lab.frag`: source GLSL đang được watcher đọc trực tiếp.
-- `main.cpp`: SDL lifecycle, F5, auto watcher, time/mouse/resize và cleanup.
-- `tests.cpp`: CTest thuần CPU cho state contract.
-
-Phần **Mã hoàn chỉnh** bên dưới được lấy trực tiếp từ final checkpoint, bao gồm cả hai file shader, và trùng với source trong ZIP.
+Trong Canvas, Mandelbrot được tính trên raster CPU nhỏ hơn backing canvas rồi phóng lên. Mất một số chi tiết nhỏ là giới hạn preview, không phải bằng chứng shader GPU bị lỗi.
 
 ## Thử làm sai để hiểu đúng
 
-1. Xóa active program trước candidate compile. Compile error phải làm cube biến mất; đây là lỗi transactional nghiêm trọng.
-2. Không tắt watcher `pending` sau reload. Attempts tăng liên tục dù file đứng yên.
-3. Giữ location cũ sau program swap. Reload có thể pass nhưng uniforms không còn cập nhật đúng.
-4. Destroy context trước `renderer.destroy`. OpenGL cleanup chạy khi không còn context current.
+1. Cập nhật x trước rồi dùng x mới trong công thức y ở bản CPU thử: các điểm kiểm bằng tay sẽ lộ sự khác biệt.
+2. Thay điều kiện lớn hơn 4 bằng lớn hơn 2: bạn đã đổi ngưỡng bình phương, không chỉ đổi cách viết tương đương.
+3. Giảm giới hạn lặp xuống 16 trong GLSL: vùng chưa thoát bị tô tối nhiều hơn; đừng coi toàn bộ vùng tối là tập Mandelbrot đã được xác định chính xác.
 
-Hoàn tác từng lỗi và chạy lại cả CTest lẫn runtime sequence.
+Khôi phục shader và reference chuẩn trước khi chạy verifier của bản final: verifier đối chiếu đúng công thức và giới hạn 128, không tự hiểu mọi biến thể bạn viết.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Starter, tám checkpoint và final đều build độc lập.
-- [ ] Shader directory in ra trùng snapshot đang chạy.
-- [ ] Compile/link/interface errors có diagnostics phân biệt được.
-- [ ] Fail không đổi generation hoặc active fingerprint.
-- [ ] Pass tăng generation đúng một và dọn previous program.
-- [ ] Watcher debounce một chuỗi Save thành một attempt.
-- [ ] Uniform changes không kích hoạt compiler.
-- [ ] High-DPI resolution/mouse dùng framebuffer pixels.
-- [ ] Debug và Release CTest đều đạt.
-- [ ] GPU resources bị xóa trước context/window.
-
-Trước khi kết thúc, hãy giải thích bằng lời của bạn vì sao “shader reload thành công” phải bao gồm cả uniform/interface validation, không chỉ `GL_LINK_STATUS`.
+- [ ] Effect thứ ba xuất hiện trong cùng gallery.
+- [ ] Phép bình phương dùng hai thành phần cũ của z.
+- [ ] Vòng lặp có giới hạn và các điểm kiểm bằng tay đúng.
+- [ ] Time đổi màu, mouse/zoom đổi miền khảo sát.
+- [ ] Bạn phân biệt ảnh GPU với preview CPU và sai số gần biên fractal.
 
 ## Bài tập mở rộng
 
-1. Thêm include preprocessor nhỏ cho GLSL và thiết kế dependency stamps.
-2. Lưu diagnostics gần nhất ra file trong thư mục user data, không ghi vào shader source.
-3. Thêm full-screen triangle mode nhưng giữ transactional program contract.
+Giữ cùng compiler/reference, thử giới hạn 64 và 128 tại một vài pixel gần biên, ghi số lượt thoát. Nếu đổi giới hạn trong GLSL để tạo bản riêng, đổi cả reference/test tương ứng; không bỏ test để nhận một kết quả xanh giả.
 
-Project 36 sẽ dùng chính workflow shader này để ray-march sphere, box và torus mà không cần mesh cho từng vật thể.
+[Bài tiếp theo: noise và chuyển động procedural](/projects/shader-hot-reload-lab/09-noise-va-chuyen-dong-procedural).

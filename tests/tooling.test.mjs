@@ -28,6 +28,8 @@ import { courseCmake } from "../scripts/course-cmake.mjs";
 import { normalizeSearchText } from "../lib/search-normalization.mjs";
 import { reconcileGeneratedFiles } from "../scripts/generated-files.mjs";
 import rehypeCompactCode from "../lib/rehype-compact-code.mjs";
+import "./mdx-static-code.test.mjs";
+import "./rendered-route-cache.test.mjs";
 
 test("compact One Dark code preserves text, meaningful colors and highlighted tokens", () => {
   const text = (value) => ({ type: "text", value });
@@ -85,6 +87,21 @@ test("Vite dev ignores heavyweight non-web trees and keeps server deps on demand
 
   assert.match(source, /name: "simulation-path:server-deps-on-demand"/);
   assert.match(source, /optimizeDeps\.include = \[\]/);
+});
+
+test("MDX transform tests disable watching instead of scanning the whole repository", () => {
+  const source = readFileSync(path.join(workspace, "tests/mdx-development.test.mjs"), "utf8");
+  assert.match(source, /middlewareMode: true, hmr: false, watch: null/);
+});
+
+test("large Node suites explicitly bound worker concurrency", () => {
+  const scripts = JSON.parse(readFileSync(path.join(workspace, "package.json"), "utf8")).scripts;
+  for (const name of ["test:labs", "test:tooling"])
+    assert.match(
+      scripts[name],
+      /--test-concurrency=2(?:\s|$)/,
+      `${name} must not spawn a worker per CPU`,
+    );
 });
 
 test("clean-checkout staging is supervised and disposable Windows cleanup is bounded", () => {

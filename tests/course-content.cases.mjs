@@ -34,8 +34,9 @@ test("every lesson follows the content contract without escaped formatting artif
       /```cpp title="[^"]+"\r?\n/,
       `${lesson.file} has no titled C++ checkpoint`,
     );
+    const implementation = source.slice(byRole.code.end, byRole.experiments.start);
     assert.ok(
-      (source.match(/^### Bước /gm) ?? []).length >= 3,
+      (implementation.match(/^### \S.+$/gm) ?? []).length >= 3,
       `${lesson.file} needs at least three explained code steps`,
     );
     const codeFences = source.match(/^```(?:cpp|glsl|cmake|bash) title="[^"]+"$/gm) ?? [];
@@ -342,7 +343,9 @@ test("interactive labs expose only the controls needed by each lesson", async ()
     ["shader-hot-reload-lab/05-theo-doi-file-va-debounce.mdx", "file-watcher"],
     ["shader-hot-reload-lab/06-truyen-time-resolution-va-mouse.mdx", "live-uniforms"],
     ["shader-hot-reload-lab/07-viet-fragment-shader-procedural.mdx", "procedural-shader"],
-    ["shader-hot-reload-lab/08-hoan-thien-shader-hot-reload-lab.mdx", "shader-validation"],
+    ["shader-hot-reload-lab/08-mandelbrot-trong-fragment-shader.mdx", "mandelbrot-shader"],
+    ["shader-hot-reload-lab/09-noise-va-chuyen-dong-procedural.mdx", "noise-shader"],
+    ["shader-hot-reload-lab/10-hoan-thien-shader-gallery.mdx", "shader-validation"],
   ]);
 
   for (const [lessonPath, mode] of expectedModes) {
@@ -500,12 +503,12 @@ test("every project teaches its visible starting point before new abstractions",
     [
       "dual-renderer-cube",
       "01-khoa-mot-cube-scene-dung-chung.mdx",
-      ["RendererKind", "CubeScene", "rendererLabel"],
+      ["RendererKind", "ViewerScene", "ViewerState"],
     ],
     [
       "shader-hot-reload-lab",
       "01-dua-glsl-ra-file-rieng.mdx",
-      ["ShaderSources", "readTextFile", "shader directory"],
+      ["ShaderSources", "readTextFile", "SHADER DIRECTORY"],
     ],
   ];
 

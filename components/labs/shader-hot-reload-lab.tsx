@@ -3,460 +3,455 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent,
+  type PointerEvent,
 } from "react";
 import {
-  createShaderProgramState,
-  defaultFragmentShader,
+  advanceGalleryView,
+  createGalleryProgram,
   defaultVertexShader,
-  evaluateShaderPreset,
-  inferShaderPreset,
-  shaderPreviewParameters,
-  shaderFingerprint,
-  transactionalShaderReload,
-  type ShaderPreset,
+  effectNames,
+  fragmentTemplates,
+  initialGalleryView,
+  makeGalleryUniforms,
+  tryGalleryCandidate,
+  zoomGalleryView,
+  type DemoFault,
+  type SavedCandidate,
+  type ShaderEffect,
 } from "@/lib/labs/shader-hot-reload";
-import {
-  LabReadout,
-  canvasPoint,
-  setupCanvas,
-  useCanvasSize,
-  useReducedMotion,
-} from "./lab-shared";
+import { drawShaderGallery } from "@/lib/labs/shader-gallery/draw";
+import { LabReadout, useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 
-const commonFragmentHeader = `#version 330 core
-in vec3 vColor;
-in vec3 vLocalPosition;
+const effects: ShaderEffect[] = ["gradient", "circle", "mandelbrot", "noise"];
 
-uniform float uTime;
-uniform vec2 uResolution;
-uniform vec2 uMouse;
-
-out vec4 fragColor;
-
-`;
-
-const basicFragmentShader = `#version 330 core
-in vec3 vColor;
-in vec3 vLocalPosition;
-
-out vec4 fragColor;
-
-void main() {
-    fragColor = vec4(vColor, 1.0);
+function visibleEffects(mode?: InteractiveLabMode) {
+  if (mode === "procedural-shader") return effects.slice(0, 2);
+  if (mode === "mandelbrot-shader") return effects.slice(0, 3);
+  if (!mode || mode === "noise-shader" || mode === "shader-validation") return effects;
+  return effects.slice(0, 1);
 }
-`;
 
-function modeCapabilities(mode?: InteractiveLabMode) {
-  const liveUniforms = ["live-uniforms", "procedural-shader", "shader-validation"].includes(
-    mode ?? "shader-validation",
-  );
+function templateCandidate(effect: ShaderEffect, version: number): SavedCandidate {
   return {
-    canCompile: mode !== "shader-files",
-    autoReload: [
-      "file-watcher",
-      "live-uniforms",
-      "procedural-shader",
-      "shader-validation",
-    ].includes(mode ?? "shader-validation"),
-    liveUniforms,
-    presets: mode === "procedural-shader" || mode === "shader-validation" || !mode,
+    effect,
+    version,
+    sources: { vertex: defaultVertexShader, fragment: fragmentTemplates[effect] },
   };
-}
-
-function initialFragment(mode?: InteractiveLabMode) {
-  return modeCapabilities(mode).liveUniforms ? defaultFragmentShader : basicFragmentShader;
-}
-
-function fragmentForPreset(preset: ShaderPreset): string {
-  if (preset === "solid") {
-    return `${commonFragmentHeader}void main() {
-    vec2 safeResolution = max(uResolution, vec2(1.0));
-    vec2 mouseUv = uMouse / safeResolution;
-    float modulation = 0.98 + 0.02 * sin(uTime + mouseUv.x + mouseUv.y);
-    fragColor = vec4(vec3(0.28, 0.62, 0.95) * modulation, 1.0);
-}
-`;
-  }
-  if (preset === "coordinates") {
-    return `${commonFragmentHeader}void main() {
-    vec2 uv = vLocalPosition.xy * 0.5 + 0.5;
-    vec2 safeResolution = max(uResolution, vec2(1.0));
-    vec2 mouseUv = uMouse / safeResolution;
-    float modulation = 0.96 + 0.04 * sin(uTime + mouseUv.x);
-    fragColor = vec4(uv * modulation, 0.35 + mouseUv.y * 0.05, 1.0);
-}
-`;
-  }
-  if (preset === "pulse") {
-    return `${commonFragmentHeader}void main() {
-    vec2 safeResolution = max(uResolution, vec2(1.0));
-    vec2 mouseUv = uMouse / safeResolution;
-    float pulse = 0.62 + 0.38 * sin(uTime * 3.0);
-    fragColor = vec4(vec3(0.95, 0.36, 0.55) * pulse + vec3(mouseUv, 0.0) * 0.03, 1.0);
-}
-`;
-  }
-  return defaultFragmentShader;
-}
-
-function modeStage(mode?: InteractiveLabMode): string {
-  if (mode === "shader-files") return "GLSL rời executable";
-  if (mode === "compile-diagnostics") return "Compile status và info log";
-  if (mode === "program-interface") return "Candidate program và interface";
-  if (mode === "transactional-reload") return "Giữ last-good program";
-  if (mode === "file-watcher") return "Timestamp và debounce";
-  if (mode === "live-uniforms") return "uTime · uResolution · uMouse";
-  if (mode === "procedural-shader") return "Màu procedural theo pixel";
-  return "Validation và cleanup";
-}
-
-function drawPipeline(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  success: boolean,
-) {
-  const stages = ["read files", "compile", "link candidate", "validate", "swap program"];
-  const left = 18;
-  const top = height - 36;
-  const slotWidth = (width - left * 2) / stages.length;
-  context.font = "11px ui-monospace, SFMono-Regular, Consolas, monospace";
-  stages.forEach((stage, index) => {
-    const x = left + index * slotWidth;
-    const isSwap = index === stages.length - 1;
-    context.fillStyle = isSwap && !success ? "#4b2630" : index < 2 ? "#26334b" : "#203a32";
-    context.fillRect(x, top, slotWidth - 3, 22);
-    context.fillStyle = "#d7deec";
-    context.fillText(stage, x + 6, top + 15);
-  });
 }
 
 export default function ShaderHotReloadLab({ mode }: { mode?: InteractiveLabMode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const activePointer = useRef<number | null>(null);
+  const previewRef = useRef<HTMLCanvasElement | null>(null);
+  const pointer = useRef<{ id: number; x: number; y: number } | null>(null);
+  const version = useRef(0);
+  const lastAttemptedVersion = useRef(0);
   const size = useCanvasSize(canvasRef);
   const reducedMotion = useReducedMotion();
-  const capabilities = modeCapabilities(mode);
-  const startingFragment = initialFragment(mode);
-  const [candidateFragment, setCandidateFragment] = useState(startingFragment);
-  const [program, setProgram] = useState(() =>
-    createShaderProgramState({ vertex: defaultVertexShader, fragment: startingFragment }),
-  );
-  const [autoReload, setAutoReload] = useState(capabilities.autoReload);
-  const [watchPending, setWatchPending] = useState(false);
-  const [paused, setPaused] = useState(true);
-  const [timeSeconds, setTimeSeconds] = useState(0.75);
-  const [mouse, setMouse] = useState({ x: 320, y: 170 });
+  const [program, setProgram] = useState(() => createGalleryProgram());
+  const [saved, setSaved] = useState(() => templateCandidate("gradient", 0));
+  const [draft, setDraft] = useState<string>(fragmentTemplates.gradient);
+  const [view, setView] = useState(initialGalleryView);
+  const [autoReload, setAutoReload] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const choices = visibleEffects(mode);
+  const canReload = mode !== "shader-files";
+  const canWatch =
+    !mode ||
+    [
+      "file-watcher",
+      "live-uniforms",
+      "procedural-shader",
+      "mandelbrot-shader",
+      "noise-shader",
+      "shader-validation",
+    ].includes(mode);
+  const liveUniforms =
+    !mode ||
+    [
+      "live-uniforms",
+      "procedural-shader",
+      "mandelbrot-shader",
+      "noise-shader",
+      "shader-validation",
+    ].includes(mode);
 
-  const candidateSources = useMemo(
-    () => ({ vertex: defaultVertexShader, fragment: candidateFragment }),
-    [candidateFragment],
-  );
-  const candidateChanged = shaderFingerprint(candidateSources) !== program.activeFingerprint;
-  const shouldWatchCandidate = capabilities.autoReload && autoReload && candidateChanged;
-  const visibleWatchPending = shouldWatchCandidate && watchPending;
+  const attempt = useCallback((candidate: SavedCandidate) => {
+    lastAttemptedVersion.current = candidate.version;
+    setProgram((current) => tryGalleryCandidate(current, candidate));
+  }, []);
 
-  const compileCandidate = useCallback(() => {
-    const requiredUniforms = capabilities.liveUniforms
-      ? ["uMvp", "uTime", "uResolution", "uMouse"]
-      : ["uMvp"];
-    setProgram((current) => transactionalShaderReload(current, candidateSources, requiredUniforms));
-    setWatchPending(false);
-  }, [candidateSources, capabilities.liveUniforms]);
+  const saveDraft = useCallback(() => {
+    version.current += 1;
+    setSaved({
+      effect: saved.effect,
+      version: version.current,
+      sources: { vertex: defaultVertexShader, fragment: draft },
+    });
+  }, [draft, saved.effect]);
 
   useEffect(() => {
-    if (!shouldWatchCandidate) return;
-    const pendingTimer = window.setTimeout(() => setWatchPending(true), 0);
-    const timer = window.setTimeout(compileCandidate, 280);
-    return () => {
-      window.clearTimeout(pendingTimer);
-      window.clearTimeout(timer);
+    if (!canWatch || !autoReload || lastAttemptedVersion.current === saved.version) return;
+    // Only saved versions are watched. Typing never changes the active image.
+    const timer = window.setTimeout(() => {
+      if (lastAttemptedVersion.current !== saved.version) attempt(saved);
+    }, 140);
+    return () => window.clearTimeout(timer);
+  }, [attempt, autoReload, canWatch, saved]);
+
+  const pause = useCallback(() => setView((current) => ({ ...current, paused: true })), []);
+  usePauseOnReducedMotion(pause);
+
+  const releaseCapture = useCallback(() => {
+    const canvas = canvasRef.current;
+    const active = pointer.current;
+    pointer.current = null;
+    if (canvas && active && canvas.hasPointerCapture(active.id))
+      canvas.releasePointerCapture(active.id);
+    setCapturing(false);
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const stop = () => {
+      pause();
+      releaseCapture();
     };
-  }, [compileCandidate, shouldWatchCandidate]);
+    const hidden = () => {
+      if (document.hidden) stop();
+    };
+    window.addEventListener("blur", stop);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", stop);
+      document.removeEventListener("visibilitychange", hidden);
+      const active = pointer.current;
+      pointer.current = null;
+      if (canvas && active && canvas.hasPointerCapture(active.id))
+        canvas.releasePointerCapture(active.id);
+    };
+  }, [pause, releaseCapture]);
 
   useEffect(() => {
-    if (paused || reducedMotion) return;
+    if (view.paused || reducedMotion || !liveUniforms) return;
     let frame = 0;
     let previous = performance.now();
     const animate = (now: number) => {
-      const deltaSeconds = Math.min(0.05, (now - previous) / 1000);
-      previous = now;
-      setTimeSeconds((current) => current + deltaSeconds);
+      if (now - previous >= 1000 / 30) {
+        const dt = (now - previous) / 1000;
+        previous = now;
+        setView((current) => advanceGalleryView(current, dt));
+      }
       frame = requestAnimationFrame(animate);
     };
     frame = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frame);
-  }, [paused, reducedMotion]);
-
-  const activePreset = inferShaderPreset(program.activeSources.fragment);
-  const previewParameters = useMemo(
-    () => shaderPreviewParameters(program.activeSources.fragment),
-    [program.activeSources.fragment],
-  );
-  const viewport = useMemo(
-    () => ({
-      x: 24,
-      y: 38,
-      width: Math.max(1, size.width - 48),
-      height: Math.max(1, size.height - 96),
-    }),
-    [size],
-  );
+  }, [view.paused, reducedMotion, liveUniforms]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    setupCanvas(context, size);
-    context.fillStyle = "#080d19";
-    context.fillRect(0, 0, size.width, size.height);
+    if (!canvas) return;
+    previewRef.current ??= document.createElement("canvas");
+    drawShaderGallery(canvas, previewRef.current, program, view);
+  }, [program, size, view]);
 
-    const sampleWidth = 180;
-    const sampleHeight = 100;
-    const image = context.createImageData(sampleWidth, sampleHeight);
-    const uniforms = {
-      timeSeconds,
-      resolution: { x: viewport.width * size.dpr, y: viewport.height * size.dpr },
-      mouse: {
-        x: (mouse.x - viewport.x) * size.dpr,
-        y: (viewport.height - (mouse.y - viewport.y)) * size.dpr,
-      },
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !liveUniforms) return;
+    const zoom = (event: WheelEvent) => {
+      if (document.activeElement !== canvas) return;
+      event.preventDefault();
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1;
+      setView((current) => zoomGalleryView(current, (-event.deltaY * scale) / 100));
     };
-    for (let y = 0; y < sampleHeight; y += 1) {
-      for (let x = 0; x < sampleWidth; x += 1) {
-        const color = evaluateShaderPreset(
-          activePreset,
-          x / Math.max(1, sampleWidth - 1),
-          1 - y / Math.max(1, sampleHeight - 1),
-          uniforms,
-          program.activeSources.fragment,
-        );
-        const offset = (y * sampleWidth + x) * 4;
-        image.data[offset] = Math.round(color.red * 255);
-        image.data[offset + 1] = Math.round(color.green * 255);
-        image.data[offset + 2] = Math.round(color.blue * 255);
-        image.data[offset + 3] = 255;
-      }
-    }
-    const preview = document.createElement("canvas");
-    preview.width = sampleWidth;
-    preview.height = sampleHeight;
-    preview.getContext("2d")?.putImageData(image, 0, 0);
-    context.imageSmoothingEnabled = true;
-    context.drawImage(preview, viewport.x, viewport.y, viewport.width, viewport.height);
+    canvas.addEventListener("wheel", zoom, { passive: false });
+    return () => canvas.removeEventListener("wheel", zoom);
+  }, [liveUniforms]);
 
-    context.strokeStyle = program.lastReloadSucceeded ? "#53f0ae" : "#e06c75";
-    context.lineWidth = 2;
-    context.strokeRect(viewport.x, viewport.y, viewport.width, viewport.height);
-    context.fillStyle = "#d7deec";
-    context.font = "12px ui-monospace, SFMono-Regular, Consolas, monospace";
-    context.fillText(`program generation ${program.generation} · ${activePreset}`, viewport.x, 22);
-    context.fillStyle = visibleWatchPending ? "#e5c07b" : "#8794aa";
-    context.fillText(
-      visibleWatchPending ? "đang chờ file ổn định…" : "last-good program đang vẽ",
-      viewport.x + 245,
-      22,
-    );
-    if (capabilities.liveUniforms) {
-      context.strokeStyle = "rgba(255, 255, 255, 0.8)";
-      context.beginPath();
-      context.arc(mouse.x, mouse.y, 6, 0, Math.PI * 2);
-      context.stroke();
-    }
-    drawPipeline(context, size.width, size.height, program.lastReloadSucceeded);
-  }, [
-    activePreset,
-    mouse,
-    program.generation,
-    program.lastReloadSucceeded,
-    program.activeSources.fragment,
-    capabilities.liveUniforms,
-    size,
-    timeSeconds,
-    viewport,
-    visibleWatchPending,
-  ]);
+  const chooseEffect = (effect: ShaderEffect) => {
+    releaseCapture();
+    version.current += 1;
+    const next = templateCandidate(effect, version.current);
+    setDraft(next.sources.fragment);
+    setSaved(next);
+    attempt(next);
+  };
 
-  const reset = useCallback(() => {
-    const fragment = initialFragment(mode);
-    setCandidateFragment(fragment);
-    setProgram(createShaderProgramState({ vertex: defaultVertexShader, fragment }));
-    setAutoReload(modeCapabilities(mode).autoReload);
-    setWatchPending(false);
-    setPaused(true);
-    setTimeSeconds(0.75);
-    setMouse({ x: 320, y: 170 });
-  }, [mode]);
+  const injectFault = (fault: DemoFault) => {
+    version.current += 1;
+    const fragment =
+      fault === "compile"
+        ? fragmentTemplates[saved.effect] + "\nTHIS_IS_A_SIMULATED_ERROR\n"
+        : fragmentTemplates[saved.effect].replace("uniform vec2 uMouse;", "uniform vec3 uMouse;");
+    const next: SavedCandidate = {
+      effect: saved.effect,
+      version: version.current,
+      fault,
+      sources: { vertex: defaultVertexShader, fragment },
+    };
+    setDraft(fragment);
+    setSaved(next);
+    attempt(next);
+  };
 
-  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!capabilities.liveUniforms) return;
+  const reset = () => {
+    releaseCapture();
+    // Reset the experiment, not the candidate or selected effect.
+    setView(initialGalleryView());
+  };
+
+  const updateMouse = (event: PointerEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setView((current) => ({
+      ...current,
+      mouseX: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+      mouseY: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+    }));
+  };
+  const pointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!liveUniforms || event.button !== 0 || pointer.current) return;
+    event.currentTarget.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
-    activePointer.current = event.pointerId;
-    setMouse(canvasPoint(event, event.currentTarget));
+    pointer.current = { id: event.pointerId, x: view.mouseX, y: view.mouseY };
     setCapturing(true);
+    updateMouse(event);
   };
-  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!capabilities.liveUniforms) return;
-    if (activePointer.current !== event.pointerId) return;
-    setMouse(canvasPoint(event, event.currentTarget));
+  const pointerUp = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (pointer.current?.id === event.pointerId) releaseCapture();
   };
-  const releasePointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (activePointer.current !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    activePointer.current = null;
-    setCapturing(false);
-  };
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (event.key === "F5" && capabilities.canCompile) {
+  const keyDown = (event: KeyboardEvent<HTMLCanvasElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "f5" && canReload) {
       event.preventDefault();
-      compileCandidate();
-    } else if (event.key === " " && capabilities.liveUniforms) {
+      attempt(saved);
+    } else if (key === "escape" && pointer.current) {
+      const previous = pointer.current;
+      setView((current) => ({ ...current, mouseX: previous.x, mouseY: previous.y }));
+      releaseCapture();
       event.preventDefault();
-      setPaused((current) => !current);
-    } else if (event.key.toLowerCase() === "n" && capabilities.liveUniforms) {
-      setTimeSeconds((current) => current + 0.1);
-      setPaused(true);
-    } else if (event.key.toLowerCase() === "r") {
+    } else if (liveUniforms && key === " " && !event.repeat && !reducedMotion) {
+      event.preventDefault();
+      setView((current) => ({ ...current, paused: !current.paused }));
+    } else if (liveUniforms && key === "n") {
+      event.preventDefault();
+      setView((current) => ({ ...current, time: current.time + 1 / 30, paused: true }));
+    } else if (key === "r") {
+      event.preventDefault();
       reset();
+    } else if (liveUniforms && ["+", "=", "-"].includes(key)) {
+      event.preventDefault();
+      setView((current) => zoomGalleryView(current, key === "-" ? -1 : 1));
+    } else if (liveUniforms && key.startsWith("arrow")) {
+      event.preventDefault();
+      setView((current) => ({
+        ...current,
+        mouseX: Math.max(
+          0,
+          Math.min(
+            1,
+            current.mouseX + (key === "arrowright" ? 0.025 : key === "arrowleft" ? -0.025 : 0),
+          ),
+        ),
+        mouseY: Math.max(
+          0,
+          Math.min(
+            1,
+            current.mouseY + (key === "arrowdown" ? 0.025 : key === "arrowup" ? -0.025 : 0),
+          ),
+        ),
+      }));
     }
   };
+  const uniforms = makeGalleryUniforms(
+    view,
+    Math.round(size.width * size.dpr),
+    Math.round(size.height * size.dpr),
+  );
 
-  const firstDiagnostic = program.diagnostics[0];
   return (
     <>
+      <p className="lab-hint">
+        Canvas 2D tính lại công thức bằng TypeScript, không chạy GLSL hay đo tốc độ GPU. Editor chỉ
+        hỗ trợ đổi hằng số SPEED từ 0.05 đến 4 trong mẫu có sẵn; hãy dùng ứng dụng C++ để thử mã
+        GLSL tùy ý và đọc log driver thật.
+      </p>
       <div className="lab-controls">
-        {capabilities.presets ? (
-          <label>
-            Preset
-            <select
-              value={inferShaderPreset(candidateFragment)}
-              onChange={(event) =>
-                setCandidateFragment(fragmentForPreset(event.target.value as ShaderPreset))
-              }
-            >
-              <option value="solid">Solid</option>
-              <option value="coordinates">Local coordinates</option>
-              <option value="pulse">Time pulse</option>
-              <option value="rings">Procedural rings</option>
-            </select>
-          </label>
-        ) : null}
-        {capabilities.autoReload ? (
+        <label>
+          Hiệu ứng
+          <select
+            aria-label="Hiệu ứng shader"
+            value={saved.effect}
+            onChange={(event) => chooseEffect(event.target.value as ShaderEffect)}
+          >
+            {choices.map((effect) => (
+              <option key={effect} value={effect}>
+                {effectNames[effect]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {canReload && (
+          <>
+            <button type="button" onClick={saveDraft}>
+              Lưu bản sửa
+            </button>
+            <button type="button" onClick={() => attempt(saved)}>
+              Thử bản đã lưu (F5)
+            </button>
+            <button type="button" onClick={() => injectFault("compile")}>
+              Thử lỗi compile (mô phỏng)
+            </button>
+            <button type="button" onClick={() => injectFault("interface")}>
+              Thử lỗi interface (mô phỏng)
+            </button>
+          </>
+        )}
+        <button type="button" onClick={() => setDraft(fragmentTemplates[saved.effect])}>
+          Khôi phục mẫu trong editor
+        </button>
+        {canWatch && (
           <label className="check">
             <input
               type="checkbox"
               checked={autoReload}
               onChange={(event) => setAutoReload(event.target.checked)}
             />
-            Auto reload + debounce
+            Tự thử sau khi lưu (140 ms)
           </label>
-        ) : null}
-        {capabilities.canCompile ? (
+        )}
+        {liveUniforms && (
           <>
-            <button type="button" onClick={compileCandidate}>
-              Compile candidate (F5)
+            <button
+              type="button"
+              disabled={reducedMotion}
+              onClick={() => setView((current) => ({ ...current, paused: !current.paused }))}
+            >
+              {view.paused || reducedMotion ? "Chạy time" : "Tạm dừng"}
             </button>
             <button
               type="button"
               onClick={() =>
-                setCandidateFragment((source) =>
-                  source.replace("fragColor =", "BROKEN_TOKEN fragColor ="),
-                )
+                setView((current) => ({ ...current, time: current.time + 1 / 30, paused: true }))
               }
             >
-              Chèn lỗi compile
+              Tiến 1/30 giây
+            </button>
+            <button type="button" onClick={() => setView((current) => zoomGalleryView(current, 1))}>
+              Phóng to
+            </button>
+            <button
+              type="button"
+              onClick={() => setView((current) => zoomGalleryView(current, -1))}
+            >
+              Thu nhỏ
             </button>
           </>
-        ) : null}
-        {capabilities.liveUniforms ? (
-          <button type="button" onClick={() => setPaused((current) => !current)}>
-            {paused ? "Chạy time" : "Tạm dừng"}
-          </button>
-        ) : null}
+        )}
         <button type="button" onClick={reset}>
-          Đặt lại
+          Đặt lại thời gian và con trỏ
         </button>
       </div>
-
-      <label className="lab-source-editor">
-        Candidate fragment shader — program đang chạy chỉ đổi khi candidate hợp lệ
-        <textarea
-          aria-label="Candidate fragment shader"
-          value={candidateFragment}
-          spellCheck={false}
-          onChange={(event) => setCandidateFragment(event.target.value)}
-        />
-      </label>
-
       <canvas
         ref={canvasRef}
         className="lab-canvas"
         tabIndex={0}
         role="img"
-        aria-label="Shader Lab mô phỏng compile, transactional hot reload và procedural fragment output"
-        onKeyDown={onKeyDown}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={releasePointer}
-        onPointerCancel={releasePointer}
+        aria-label="Gallery shader: minh họa công thức bằng Canvas 2D"
+        onKeyDown={keyDown}
+        onPointerDown={pointerDown}
+        onPointerMove={(event) => {
+          if (pointer.current?.id === event.pointerId) updateMouse(event);
+        }}
+        onPointerUp={pointerUp}
+        onPointerCancel={pointerUp}
+        onLostPointerCapture={releaseCapture}
+        onBlur={() => {
+          pause();
+          releaseCapture();
+        }}
       />
-
+      <p className="lab-hint">
+        Ảnh đang chạy: {effectNames[program.activeEffect]}.{" "}
+        {liveUniforms
+          ? "Kéo chuột để đổi uMouse; khi Canvas có focus, dùng phím mũi tên, +/−, Space, N hoặc R. Escape hủy lần kéo hiện tại. Cuộn chuột chỉ zoom khi Canvas có focus."
+          : "Các điều khiển time, mouse và zoom sẽ được mở từ bài 06."}{" "}
+        {reducedMotion
+          ? "Reduced motion đang bật: chỉ tiến từng bước, không tự chạy."
+          : "Mô phỏng khởi đầu ở trạng thái tạm dừng."}
+      </p>
+      <label className="lab-source-editor">
+        Fragment shader — bản đang sửa chưa thay đổi ảnh
+        <textarea
+          aria-label="Candidate fragment shader"
+          value={draft}
+          spellCheck={false}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+              event.preventDefault();
+              if (canReload) saveDraft();
+            }
+          }}
+        />
+      </label>
       <LabReadout
         items={[
-          { label: "Bước đang học", value: modeStage(mode) },
           {
-            label: "Candidate",
-            value: candidateChanged ? "đã sửa, chưa active" : "trùng last-good",
+            label: "Editor",
+            value: draft === saved.sources.fragment ? "trùng bản đã lưu" : "có thay đổi chưa lưu",
           },
+          { label: "Bản đã lưu", value: "v" + saved.version + " · " + effectNames[saved.effect] },
           { label: "Program generation", value: String(program.generation) },
           { label: "Reload attempts", value: String(program.attempts) },
           {
+            label: "Ảnh đang chạy",
+            value: effectNames[program.activeEffect] + " · SPEED " + program.activeSpeed,
+          },
+          {
             label: "Kết quả gần nhất",
             value: program.lastReloadSucceeded
-              ? "compile + link thành công"
-              : "thất bại — vẫn giữ last-good",
+              ? "mẫu Canvas đã được áp dụng"
+              : "chưa áp dụng — vẫn giữ last-good",
           },
-          {
-            label: "Info log",
-            value: firstDiagnostic
-              ? `${firstDiagnostic.stage}${firstDiagnostic.line ? `:${firstDiagnostic.line}` : ""} — ${firstDiagnostic.message}`
-              : "không có lỗi",
-          },
+          { label: "Thông báo mô hình", value: program.diagnostic },
           {
             label: "Uniform snapshot",
-            value: capabilities.liveUniforms
-              ? `time ${timeSeconds.toFixed(2)}s · framebuffer ${Math.round(viewport.width * size.dpr)}×${Math.round(viewport.height * size.dpr)} px · mouse ${Math.round((mouse.x - viewport.x) * size.dpr)},${Math.round((viewport.height - (mouse.y - viewport.y)) * size.dpr)}`
-              : "chưa xuất hiện ở checkpoint này",
-          },
-          {
-            label: "Preview parameters",
             value:
-              activePreset === "rings"
-                ? `frequency ${previewParameters.ringFrequency} · speed ${previewParameters.ringSpeed} · mouse falloff ${previewParameters.mouseFalloff}`
-                : `preset ${activePreset} đọc trực tiếp từ source hợp lệ`,
+              "time " +
+              uniforms.time.toFixed(2) +
+              "s · framebuffer " +
+              uniforms.width +
+              "×" +
+              uniforms.height +
+              " px · mouse " +
+              uniforms.mouseX.toFixed(0) +
+              "," +
+              uniforms.mouseY.toFixed(0) +
+              " · zoom " +
+              uniforms.zoom.toFixed(2),
           },
           {
             label: "Mô tả thay thế",
-            value: `Canvas đang hiển thị preset ${activePreset}. Pointer ${capturing ? "đang được capture" : "đã được nhả"}; reduced-motion ${reducedMotion ? "đang bật" : "đang tắt"}.`,
+            value:
+              effectNames[program.activeEffect] +
+              ": " +
+              (program.activeEffect === "gradient"
+                ? "dải màu uốn theo thời gian, vùng sáng đi theo con trỏ"
+                : program.activeEffect === "circle"
+                  ? "đĩa tròn có sóng và viền sáng, giữ tỉ lệ khi resize"
+                  : program.activeEffect === "mandelbrot"
+                    ? "miền lặp z²+c, vùng chưa thoát màu tối và bên ngoài đổi palette"
+                    : "các lớp value noise được nội suy và làm biến dạng theo thời gian") +
+              ". Pointer " +
+              (capturing ? "đang capture" : "đã nhả") +
+              ". Preview CPU có độ phân giải giảm, không phải ảnh GPU đọc ngược.",
           },
         ]}
       />
-      <p className="lab-hint">
-        {capabilities.canCompile
-          ? "Sửa source rồi compile; các hằng số trong preset đang active được đọc lại để tạo preview mới. "
-          : "Checkpoint này chỉ minh họa việc source nằm ngoài executable; compile/reload sẽ xuất hiện từ bài sau. "}
-        Canvas dùng bộ kiểm tra GLSL giới hạn, không thay thế compiler của driver. Source tải về mới
-        gọi OpenGL compiler thật.
-      </p>
     </>
   );
 }

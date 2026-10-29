@@ -156,7 +156,8 @@ Trên Windows chạy ./build/Debug/project_31_checkpoint_6.exe; với Ninja/macO
 
 ## Thử làm sai để hiểu đúng
 
-Bỏ containsTarget khỏi điều kiện nhận node và thử theta lớn. So vector với direct ở body gần tâm khối: self-force có thể xuất hiện. Sau khi khôi phục, đặt theta rất nhỏ để thấy kết quả gần direct nhưng lượng việc tăng.
+1. Bỏ containsTarget khỏi điều kiện nhận node và thử theta lớn trên fixture nhỏ. So vector với direct ở body gần tâm khối: self-force có thể xuất hiện. Khôi phục kiểm target trước khi đo tiếp.
+2. Đặt theta rất nhỏ, giữ nguyên snapshot. Kết quả thường gần direct hơn nhưng lượng việc tăng; đọc cả sai số và số node mở, không chỉ nhìn quỹ đạo. Trả theta về preset đã chọn.
 
 ## Tự kiểm tra kết quả
 

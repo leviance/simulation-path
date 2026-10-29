@@ -19,7 +19,7 @@ struct ShaderKeyResult {
     bool reload{}, resetWatch{}, close{}, cancelDrag{};
 };
 
-inline ShaderKeyResult handleShaderKey(ShaderScene& scene, SDL_Keycode key, bool dragging, int& logOffset) {
+inline ShaderKeyResult handleShaderKey([[maybe_unused]] ShaderScene& scene, SDL_Keycode key, bool dragging, [[maybe_unused]] int& logOffset) {
     ShaderKeyResult result{};
     if (key == SDLK_ESCAPE) {
         result.cancelDrag = dragging;

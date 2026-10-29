@@ -1,115 +1,148 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Link candidate program và khóa interface
+# Link program, kiểm interface bằng driver
 
 ## Vấn đề cần giải quyết
 
-Hai shader có thể compile riêng nhưng vẫn không tạo được pipeline. Ví dụ vertex shader xuất `vec3 vColor`, fragment shader lại nhận `vec2 vColor`; cú pháp của từng file đều đúng, nhưng interface giữa hai stage không khớp. Đây là lỗi link, không phải lỗi compile.
+Hai shader đã compile được, nhưng chưa có program để vẽ: GPU còn phải ghép các stage. Ứng dụng cũng cần biết địa chỉ các uniform.
 
-Ngay cả khi link pass, program thiếu `uMvp` cũng không vẽ đúng cube. Project 35 vì thế không coi một `GLuint` khác 0 là đủ; candidate phải đi kèm các location đã được kiểm.
+Ngoài yêu cầu của OpenGL, gallery có quy ước riêng: gradient cần uResolution kiểu vec2; từ bài 06 còn cần uTime, uMouse và uZoom. Shader có thể link hợp lệ nhưng không đáp ứng quy ước này. Bài này tách rõ hai loại kiểm tra.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Candidate là một gói tạm thời:
+Compile kiểm từng bộ phận; link lắp chúng lại; kiểm interface xem sản phẩm đã lắp có đúng đầu nối ứng dụng cần hay không.
 
-```text
-compiled vertex + compiled fragment
-                 ↓
-          link candidate program
-                 ↓
-       link status + program info log
-                 ↓
-        required uniform locations
-```
+Không tìm tên uniform trong văn bản để kết luận nó tồn tại. Tên đó có thể nằm trong comment hoặc biến không dùng và đã bị compiler loại bỏ. Ta hỏi program đã link bằng GetUniformLocation/GetActiveUniform để lấy uniform đang hoạt động, kiểu và số phần tử.
 
-Program đang active chưa xuất hiện trong sơ đồ. Ta đang xây một ứng viên độc lập; bài sau mới quyết định lúc nào nó được thay program cũ.
+Checkpoint 3 chỉ bắt buộc uResolution. Các uniform thời gian/chuột/zoom được phép chưa có, vì bài này chưa sử dụng chúng.
 
 <InteractiveLab demo="shader-hot-reload" mode="program-interface" />
 
 ## Viết code từng bước
 
-### Bước 1 — Candidate giữ handle và location cùng generation
+### Bước 1 — Link hai stage, hủy object trung gian
 
-```cpp title="include/shader_renderer.hpp — ProgramCandidate"
+```cpp title="include/shader_renderer.hpp — tạo program từ hai stage"
+inline GLuint linkShaderProgram(GlApi& gl, const ShaderSources& sources, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
+    const auto vertex = compileShader(gl, GL_VERTEX_SHADER, sources.vertex, sources.vertexLabel, diagnostics, audit);
+    if (!vertex)
+        return 0;
+    const auto fragment = compileShader(gl, GL_FRAGMENT_SHADER, sources.fragment, sources.fragmentLabel, diagnostics, audit);
+    if (!fragment) {
+        gl.DeleteShader(vertex);
+        return 0;
+    }
+    const auto program = gl.CreateProgram();
+    if (audit && program)
+        audit->programs.push_back(program);
+    if (!program) {
+        gl.DeleteShader(vertex);
+        gl.DeleteShader(fragment);
+        diagnostics = "glCreateProgram failed";
+        return 0;
+    }
+    gl.AttachShader(program, vertex);
+    gl.AttachShader(program, fragment);
+    gl.LinkProgram(program);
+    GLint linked = GL_FALSE;
+    gl.GetProgramiv(program, GL_LINK_STATUS, &linked);
+    gl.DetachShader(program, vertex);
+    gl.DetachShader(program, fragment);
+    gl.DeleteShader(vertex);
+    gl.DeleteShader(fragment);
+    if (linked != GL_TRUE) {
+        diagnostics = "[link] " + sources.vertexLabel + " + " + sources.fragmentLabel + "\n" + programInfoLog(gl, program);
+        gl.DeleteProgram(program);
+        return 0;
+    }
+    diagnostics.clear();
+    return program;
+}
+```
+
+Nếu fragment compile thất bại, vertex object đã tạo trước đó vẫn phải được hủy. Khi link xong, cả hai shader được detach rồi delete: program giữ kết quả executable, không cần giữ object trung gian nữa.
+
+GL_LINK_STATUS quyết định program có dùng được không. Log program khác log shader; lỗi nối stage được đọc bằng GetProgramInfoLog. Program link thất bại cũng bị hủy trước khi trả 0.
+
+### Bước 2 — Hỏi interface đang hoạt động
+
+```cpp title="include/shader_renderer.hpp — kiểm uniform bằng reflection"
+inline bool findUniform(GlApi& gl, GLuint program, const char* name, GLenum requiredType, bool required, GLint& location, std::string& diagnostics) {
+    location = gl.GetUniformLocation(program, name);
+    if (location < 0) {
+        if (!required)
+            return true;
+        diagnostics = std::string("[interface] Missing active uniform ") + name + " (it may be unused and optimized out).";
+        return false;
+    }
+    GLint count = 0;
+    gl.GetProgramiv(program, GL_ACTIVE_UNIFORMS, &count);
+    for (GLint index = 0; index < count; ++index) {
+        std::array<GLchar, 256> uniformName{};
+        GLsizei written = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        gl.GetActiveUniform(program, GLuint(index), GLsizei(uniformName.size()), &written, &size, &type, uniformName.data());
+        if (std::string_view(uniformName.data()) == name) {
+            if (type == requiredType && size == 1)
+                return true;
+            diagnostics = std::string("[interface] Wrong type/array size for ") + name;
+            return false;
+        }
+    }
+    diagnostics = std::string("[interface] Cannot find scalar/non-array uniform ") + name;
+    return false;
+}
+```
+
+location bằng -1 có thể nghĩa là uniform không tồn tại hoặc đã bị tối ưu bỏ. Uniform tùy chọn được phép vắng mặt; uniform bắt buộc phải có. Không gọi Uniform2f vào vec3 chỉ vì tên giống nhau.
+
+Vòng lặp reflection kiểm cả type và size bằng 1. Mảng uniform có cách đặt tên/size riêng; gallery không dùng chúng nên không cố chấp nhận một interface rộng hơn yêu cầu.
+
+### Bước 3 — Gom program và locations vào candidate
+
+```cpp title="include/shader_renderer.hpp — bản mới chưa đưa lên màn hình"
 struct ProgramCandidate {
     GLuint program{};
-    GLint mvpLocation{-1};
-    GLint timeLocation{-1};
-    GLint resolutionLocation{-1};
-    GLint mouseLocation{-1};
+    UniformLocations locations{};
 };
 ```
 
-Uniform location không phải property cố định của tên `uMvp`. Nó thuộc một program link cụ thể, nên luôn nằm cạnh program handle.
+Candidate là bản mới đang được thử, chưa thay program đang vẽ. locations thuộc về chính program trong candidate: sau mỗi lần link phải lấy lại, không dùng location của program trước.
 
-### Bước 2 — Link rồi hỏi status của program
-
-```cpp title="include/shader_renderer.hpp — link candidate"
-api.AttachShader(candidate.program, vertexShader);
-api.AttachShader(candidate.program, fragmentShader);
-api.LinkProgram(candidate.program);
-api.DeleteShader(fragmentShader);
-api.DeleteShader(vertexShader);
-
-GLint linked = GL_FALSE;
-api.GetProgramiv(candidate.program, GL_LINK_STATUS, &linked);
-if (linked != GL_TRUE) {
-    diagnostics = "Program link failed:\n" + programInfoLog(api, candidate.program);
-    destroyProgramCandidate(api, candidate);
-    return false;
-}
-```
-
-Sau link, shader objects đã có thể xóa; program giữ executable đã link. Nếu link fail, candidate program cũng phải xóa.
-
-### Bước 3 — Chặn program thiếu contract bắt buộc
-
-```cpp title="include/shader_renderer.hpp — kiểm uMvp"
-candidate.mvpLocation = api.GetUniformLocation(candidate.program, "uMvp");
-candidate.timeLocation = api.GetUniformLocation(candidate.program, "uTime");
-candidate.resolutionLocation = api.GetUniformLocation(candidate.program, "uResolution");
-candidate.mouseLocation = api.GetUniformLocation(candidate.program, "uMouse");
-if (candidate.mvpLocation < 0) {
-    diagnostics = "Linked program does not expose required uniform uMvp.";
-    destroyProgramCandidate(api, candidate);
-    return false;
-}
-```
-
-Ở checkpoint 3 chỉ `uMvp` là bắt buộc. Ba live uniforms được truy vấn sẵn nhưng có thể là `-1` cho tới bài 6.
+buildProgramCandidate kiểm uResolution là GL_FLOAT_VEC2. Từ checkpoint 6, requireLive bật thêm ba uniform còn lại. Yêu cầu tăng theo chức năng đã học, không buộc bạn khai báo biến chưa dùng.
 
 ## Ghép các phần lại
 
-Build checkpoint 3 rồi đổi fragment input `vColor` thành `vColour` nhưng không sửa vertex output:
-
-```bash title="Terminal — build candidate checkpoint"
-cmake --build build --config Debug --target project_35_checkpoint_3
+```bash title="Terminal — checkpoint 3"
+cmake --build build --config Debug --target project_35_checkpoint_3 --parallel 2
+./build/Debug/project_35_checkpoint_3.exe
 ```
 
-Hai file compile được, nhưng program link thất bại. Khôi phục tên varying, sau đó xóa việc dùng `uMvp` trong vertex shader: compiler có thể optimize uniform khỏi program và contract check phải chặn candidate.
+Hình gradient có thể giống bài 02; thay đổi nằm ở việc kiểm program trước khi dùng.
+
+Để thử link error, thêm output vec3 tên bridge vào vertex shader và input vec2 cùng tên vào fragment shader; dùng nó trong biểu thức màu để compiler không loại bỏ. Hai stage có thể compile riêng nhưng program không ghép được. Log cụ thể phụ thuộc driver.
+
+Khôi phục source, rồi đổi gradient để không dùng uResolution nữa. Shader có thể link, nhưng nếu uniform bị tối ưu bỏ, ứng dụng phải từ chối program đó.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chỉ kiểm `candidate.program != 0`. `glCreateProgram` thành công không nói gì về link status.
-2. Mang `mvpLocation` của program trước sang candidate. Integer tình cờ giống nhau không biến nó thành contract hợp lệ.
-3. Không xóa candidate khi thiếu `uMvp`. Mỗi lần thử source thiếu uniform lại rò một program.
+1. Chỉ đổi tên uniform trong comment: interface thật không thay đổi.
+2. Thay chỗ dùng uResolution bằng hằng số: kiểm xem uniform còn active hay không.
+3. Đổi uResolution thành vec3 và sửa phép tính để GLSL vẫn hợp lệ: kiểm type phải bắt lỗi mà GetUniformLocation một mình không phát hiện được.
 
-Khôi phục source và xác nhận cube xuất hiện trước bài 4.
+Những thí nghiệm này cần compiler OpenGL thật. Canvas chỉ mô phỏng việc từ chối candidate, không kết luận source GLSL tùy ý đúng hay sai.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Compile error và link error có diagnostics khác nhau.
-- [ ] Candidate chỉ sống tiếp khi `GL_LINK_STATUS` pass.
-- [ ] Shader objects được xóa sau link attempt.
-- [ ] `uMvp` được truy vấn từ đúng candidate program.
-- [ ] Candidate thiếu contract bị xóa hoàn toàn.
-
-Hãy giải thích vì sao một uniform được khai báo nhưng không dùng có thể trả location `-1` sau link.
+- [ ] Bạn phân biệt lỗi compile, link và interface ứng dụng.
+- [ ] Shader/program trung gian được hủy ở nhánh thất bại.
+- [ ] Uniform được kiểm bằng dữ liệu driver trả về.
+- [ ] Mỗi candidate giữ locations của chính nó.
+- [ ] Khôi phục shader chuẩn làm kiểm tra thành công trở lại.
 
 ## Bài tập mở rộng
 
-1. Đổi type của `vLocalPosition` ở một stage để tạo link error khác.
-2. Thêm attribute contract check cho location 0/1.
-3. Lưu cả warning log của program link mà không biến warning thành failure.
+In danh sách active uniform: tên, type và size. Thử khai báo một uniform không sử dụng rồi quan sát nó còn xuất hiện không. Khi so sánh kết quả, ghi cả GPU/driver thay vì coi log trên một máy là quy tắc chung.
 
-Bài tiếp theo mới cho F5 đổi program trong lúc cube đang chạy.
+[Bài tiếp theo: giữ bản tốt khi reload lỗi](/projects/shader-hot-reload-lab/04-reload-theo-giao-dich-giu-last-good).

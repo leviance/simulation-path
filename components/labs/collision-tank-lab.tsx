@@ -1,5 +1,7 @@
 "use client";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -30,11 +32,15 @@ import {
   drawTankCanvas,
 } from "./collision-tank-view";
 import { createTankRaster, type TankRaster } from "./collision-raster";
-import { CollisionControls } from "./collision-controls";
-import { CollisionReadout } from "./collision-readout";
-import { useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
+import { LabReadout, useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 type Point = { x: number; y: number };
+const CollisionControls = lazy(() =>
+  import("./collision-controls").then((module) => ({ default: module.CollisionControls })),
+);
+const CollisionReadout = lazy(() =>
+  import("./collision-readout").then((module) => ({ default: module.CollisionReadout })),
+);
 type Gesture = {
   id: number;
   kind: "kick" | "orbit";
@@ -264,19 +270,21 @@ function Tank({ mode }: { mode?: InteractiveLabMode }) {
   }, [scene, size, gesture]);
   return (
     <div className="lab-body">
-      <CollisionControls
-        scene={scene}
-        reducedMotion={reducedMotion}
-        edit={edit}
-        reset={reset}
-        step={step}
-        togglePause={togglePause}
-        fast={fast}
-        spawn={spawn}
-        stop={stop}
-        toggleDebug={toggleDebug}
-        orbit={orbit}
-      />
+      <Suspense fallback={<p role="status">Đang tải điều khiển bể bóng…</p>}>
+        <CollisionControls
+          scene={scene}
+          reducedMotion={reducedMotion}
+          edit={edit}
+          reset={reset}
+          step={step}
+          togglePause={togglePause}
+          fast={fast}
+          spawn={spawn}
+          stop={stop}
+          toggleDebug={toggleDebug}
+          orbit={orbit}
+        />
+      </Suspense>
       <canvas
         ref={canvasRef}
         tabIndex={0}
@@ -307,7 +315,24 @@ function Tank({ mode }: { mode?: InteractiveLabMode }) {
         </p>
       )}
       {scene.message && <p role="status">{scene.message}</p>}
-      {scene.debug && <CollisionReadout scene={scene} capturing={gesture !== null} />}
+      {scene.debug ? (
+        <Suspense
+          fallback={
+            <LabReadout items={[{ label: "Trạng thái", value: "Đang tải số liệu va chạm…" }]} />
+          }
+        >
+          <CollisionReadout scene={scene} capturing={gesture !== null} />
+        </Suspense>
+      ) : (
+        <LabReadout
+          items={[
+            {
+              label: "Trạng thái",
+              value: `${scene.spatial ? "3D" : "2D"} · ${scene.paused ? "tạm dừng" : "đang chạy"} · t=${scene.elapsed.toFixed(3)} s`,
+            },
+          ]}
+        />
+      )}
       {stage >= 8 && (
         <p>
           Động lượng của cả đàn không cố định khi va tường. Residual đối chiếu P−P₀ với tổng xung

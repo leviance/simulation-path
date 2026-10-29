@@ -56,7 +56,10 @@ export function loadProjectCatalog({ checkDirectories = true } = {}) {
       );
     }
     previousNumericId = numericId;
-    if (project.shaderRuntimePerTarget !== undefined && typeof project.shaderRuntimePerTarget !== "boolean") {
+    if (
+      project.shaderRuntimePerTarget !== undefined &&
+      typeof project.shaderRuntimePerTarget !== "boolean"
+    ) {
       fail(`project ${project.id} shaderRuntimePerTarget must be boolean`);
     }
     if (

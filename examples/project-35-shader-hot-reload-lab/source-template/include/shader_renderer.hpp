@@ -9,6 +9,7 @@ struct ProgramBuildAudit {
     std::vector<GLuint> programs{};
 };
 
+#if LAB_CHECKPOINT >= 2
 inline std::string shaderInfoLog(GlApi& gl, GLuint shader) {
     GLint length = 0;
     gl.GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
@@ -22,7 +23,9 @@ inline std::string shaderInfoLog(GlApi& gl, GLuint shader) {
         result = "Driver supplied no shader info log.";
     return result;
 }
+#endif
 
+#if LAB_CHECKPOINT >= 3
 inline std::string programInfoLog(GlApi& gl, GLuint program) {
     GLint length = 0;
     gl.GetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
@@ -36,6 +39,7 @@ inline std::string programInfoLog(GlApi& gl, GLuint program) {
         result = "Driver supplied no program info log.";
     return result;
 }
+#endif
 
 inline GLuint compileShader(GlApi& gl, GLenum stage, const std::string& source, const std::string& file, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
     const auto shader = gl.CreateShader(stage);
@@ -53,8 +57,12 @@ inline GLuint compileShader(GlApi& gl, GLenum stage, const std::string& source, 
     gl.GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
     if (compiled == GL_TRUE)
         return shader;
+#if LAB_CHECKPOINT >= 2
     const std::string label = stage == GL_VERTEX_SHADER ? "vertex" : "fragment";
     diagnostics = "[" + label + " compile] " + file + "\n" + shaderInfoLog(gl, shader);
+#else
+    diagnostics = "Shader compile failed: " + file;
+#endif
     gl.DeleteShader(shader);
     return 0;
 }
@@ -89,7 +97,11 @@ inline GLuint linkShaderProgram(GlApi& gl, const ShaderSources& sources, std::st
     gl.DeleteShader(vertex);
     gl.DeleteShader(fragment);
     if (linked != GL_TRUE) {
+#if LAB_CHECKPOINT >= 3
         diagnostics = "[link] " + sources.vertexLabel + " + " + sources.fragmentLabel + "\n" + programInfoLog(gl, program);
+#else
+        diagnostics = "Program link failed: " + sources.vertexLabel + " + " + sources.fragmentLabel;
+#endif
         gl.DeleteProgram(program);
         return 0;
     }
@@ -102,6 +114,7 @@ struct UniformLocations {
     bool operator==(const UniformLocations&) const = default;
 };
 
+#if LAB_CHECKPOINT >= 3
 inline bool findUniform(GlApi& gl, GLuint program, const char* name, GLenum requiredType, bool required, GLint& location, std::string& diagnostics) {
     location = gl.GetUniformLocation(program, name);
     if (location < 0) {
@@ -128,6 +141,7 @@ inline bool findUniform(GlApi& gl, GLuint program, const char* name, GLenum requ
     diagnostics = std::string("[interface] Cannot find scalar/non-array uniform ") + name;
     return false;
 }
+#endif
 
 struct ProgramCandidate {
     GLuint program{};
@@ -145,6 +159,7 @@ inline bool buildProgramCandidate(GlApi& gl, const ShaderSources& sources, Progr
     candidate.program = linkShaderProgram(gl, sources, diagnostics, audit);
     if (!candidate.program)
         return false;
+#if LAB_CHECKPOINT >= 3
 #if LAB_CHECKPOINT >= 6
     const bool requireLive = true;
 #else
@@ -161,6 +176,19 @@ inline bool buildProgramCandidate(GlApi& gl, const ShaderSources& sources, Progr
         destroyProgramCandidate(gl, candidate);
         return false;
     }
+#else
+    // First learn location lookup. Type/array reflection is added in lesson 3.
+    auto& locations = candidate.locations;
+    locations.resolution = gl.GetUniformLocation(candidate.program, "uResolution");
+    locations.time = gl.GetUniformLocation(candidate.program, "uTime");
+    locations.mouse = gl.GetUniformLocation(candidate.program, "uMouse");
+    locations.zoom = gl.GetUniformLocation(candidate.program, "uZoom");
+    if (locations.resolution < 0) {
+        diagnostics = sources.fragmentLabel + ": uResolution is not active";
+        destroyProgramCandidate(gl, candidate);
+        return false;
+    }
+#endif
     return true;
 }
 

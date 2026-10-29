@@ -143,9 +143,8 @@ Aspect là width/modelHeight sau khi trừ 100 pixel của HUD. Dù HUD chưa c�
 
 ## Thử làm sai để hiểu đúng
 
-Đổi transpose từ GL_FALSE sang GL_TRUE trong bản thử. Nếu ảnh mất, đừng sửa tiếp thứ tự matrix ở C++ — hãy khôi phục và trace một vertex.
-
-Thử tính pan bằng window height gồm cả HUD, hoặc dùng logical height cho framebuffer high-DPI. So độ dịch ở hai kích thước cửa sổ. Khôi phục chiều cao vùng model và phép đổi logical → pixel.
+1. Đổi transpose từ GL_FALSE sang GL_TRUE trong bản thử. Nếu ảnh mất, đừng sửa tiếp thứ tự matrix ở C++ — hãy khôi phục và trace một vertex.
+2. Thử tính pan bằng window height gồm cả HUD, hoặc dùng logical height cho framebuffer high-DPI. So độ dịch ở hai kích thước cửa sổ. Khôi phục chiều cao vùng model và phép đổi logical → pixel.
 
 ## Tự kiểm tra kết quả
 

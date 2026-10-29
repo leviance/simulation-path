@@ -1,6 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { after } from "node:test";
+import { createRenderedRouteCache } from "./rendered-route-cache.mjs";
 
 const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const projectCatalog = JSON.parse(
@@ -29,34 +31,25 @@ const lessonSectionIds = [
 // Source-only checks must not eagerly import a missing or interrupted production build.
 // Route tests still load the real server on their first render call.
 let serverPromise;
-const maxRenderedRouteCacheEntries = 64;
-const renderedRoutes = new Map();
+const renderedRoutes = createRenderedRouteCache(path.join(workspace, ".validation"));
+after(() => renderedRoutes.dispose());
 let authoredLessonsPromise;
 
 async function render(route = "/") {
-  let rendered = renderedRoutes.get(route);
-  if (!rendered) {
-    rendered = (async () => {
-      const server = await (serverPromise ??= import(
-        new URL("../dist/server/index.js", import.meta.url)
-      ).then((module) => module.default));
-      const response = await server(
-        new Request(`http://localhost${route}`, { headers: { accept: "text/html" } }),
-      );
-      return {
-        body: Buffer.from(await response.arrayBuffer()),
-        headers: [...response.headers.entries()],
-        status: response.status,
-        statusText: response.statusText,
-      };
-    })();
-    renderedRoutes.set(route, rendered);
-    if (renderedRoutes.size > maxRenderedRouteCacheEntries) {
-      const oldestRoute = renderedRoutes.keys().next().value;
-      if (oldestRoute !== undefined && oldestRoute !== route) renderedRoutes.delete(oldestRoute);
-    }
-  }
-  const response = await rendered;
+  const response = await renderedRoutes.get(route, async () => {
+    const server = await (serverPromise ??= import(
+      new URL("../dist/server/index.js", import.meta.url)
+    ).then((module) => module.default));
+    const response = await server(
+      new Request(`http://localhost${route}`, { headers: { accept: "text/html" } }),
+    );
+    return {
+      body: Buffer.from(await response.arrayBuffer()),
+      headers: [...response.headers.entries()],
+      status: response.status,
+      statusText: response.statusText,
+    };
+  });
   return new Response(Buffer.from(response.body), {
     headers: response.headers,
     status: response.status,

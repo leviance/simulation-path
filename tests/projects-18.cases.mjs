@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { compile } from "@mdx-js/mdx";
 import { courseMdxOptions } from "../lib/mdx-options.mjs";
 import { codeTokens, isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
 import { workspace, render } from "./site-support.mjs";
+import { assertPublishedProjectSources } from "./published-source-support.mjs";
 
 const root = path.join(workspace, "examples/project-18-near-plane-clipper");
 const lessons = [
@@ -266,39 +266,5 @@ test("Project 18 renders overview, eight lessons and complete runnable source", 
     "projects/lambert-tetrahedron",
   ])
     assert.ok(html.includes(label), label);
-  // Snapshot and common files are separate lazy chunks by design. Follow this
-  // project's shipped registry, then compare every delivered source file.
-  const chunkRoot = path.join(workspace, "dist/client/_next/static/chunks");
-  let registry;
-  for (const name of (await readdir(chunkRoot)).filter((name) => /^registry-.*\.js$/.test(name))) {
-    const payload = await readFile(path.join(chunkRoot, name), "utf8");
-    if (payload.includes("directory:`project-18-near-plane-clipper`")) registry = payload;
-  }
-  assert.ok(registry, "P18 source registry must ship");
-  const common = registry.match(/loadCommon:[\s\S]*?import\([`"']\.\/([^`"']+)[`"']\)/)?.[1];
-  const final = registry
-    .slice(registry.indexOf("snapshots:"))
-    .match(/final:[\s\S]*?import\([`"']\.\/([^`"']+)[`"']\)/)?.[1];
-  assert.ok(common && final, "registry must link both common and final payloads");
-  const files = [];
-  for (const name of [common, final]) {
-    const payload = await import(pathToFileURL(path.join(chunkRoot, name)).href);
-    files.push(...payload.files);
-  }
-  assert.equal(files.length, 12);
-  for (const file of files) {
-    const actual = await readFile(
-      path.join(
-        root,
-        file.path.startsWith("include/") || file.path.startsWith("src/") ? "final" : "",
-        file.path,
-      ),
-      "utf8",
-    );
-    assert.equal(
-      file.source.replaceAll("\r\n", "\n"),
-      actual.replaceAll("\r\n", "\n"),
-      file.path + " lazy source drift",
-    );
-  }
+  await assertPublishedProjectSources("18", root);
 });

@@ -160,9 +160,8 @@ Nếu chỉ GPU mất hình: kiểm shader log, VAO/EBO binding, index count/typ
 
 ## Thử làm sai để hiểu đúng
 
-Trong bản thử, thay `indexCount` ở draw bằng 36. Cube có vẻ đúng nhưng sphere chỉ còn một phần rất nhỏ. Khôi phục count theo mesh.
-
-Tiếp đó, detach EBO khi VAO của model còn active. Kỳ vọng draw lỗi hoặc mất geometry. Khôi phục binding và chạy lại; không thêm một mảng index CPU vào draw call để lách lỗi EBO.
+1. Trong bản thử, thay `indexCount` ở draw bằng 36. Cube có vẻ đúng nhưng sphere chỉ còn một phần rất nhỏ. Khôi phục count theo mesh.
+2. Tiếp đó, detach EBO khi VAO của model còn active. Kỳ vọng draw lỗi hoặc mất geometry. Khôi phục binding và chạy lại; không thêm một mảng index CPU vào draw call để lách lỗi EBO.
 
 ## Tự kiểm tra kết quả
 

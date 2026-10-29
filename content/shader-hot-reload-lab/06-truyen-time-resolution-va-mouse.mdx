@@ -1,97 +1,119 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Truyền time, resolution và mouse
+# Time, pixel và mouse: dữ liệu đổi từng frame
 
 ## Vấn đề cần giải quyết
 
-Hot reload thay **chương trình** khi source đổi. Animation lại cần thay **dữ liệu** mỗi frame. Nếu nối `elapsedSeconds` vào string GLSL rồi compile lại liên tục, ta vừa dùng sai công cụ vừa biến driver compiler thành một phần của frame loop.
+Shader đã sửa được khi ứng dụng đang chạy, nhưng hình vẫn tĩnh. Ta muốn màu thay đổi theo thời gian và phản ứng với chuột mà không compile lại mỗi frame.
 
-Uniforms là đường truyền phù hợp: program giữ nguyên, còn `uTime`, `uResolution` và `uMouse` nhận snapshot mới trước draw. Khó nhất nằm ở hai contract thường bị bỏ qua: location thuộc program generation, và mouse/resolution phải dùng cùng hệ pixel khi high-DPI.
+Uniform là dữ liệu C++ truyền vào program đã link. Bài này thêm time, resolution, mouse và zoom, đồng thời giải quyết một lỗi phổ biến: tọa độ chuột SDL và tọa độ pixel OpenGL không cùng hệ.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mỗi frame tách thành hai luồng:
+SDL mouse input dùng kích thước logical của cửa sổ, gốc trên trái. OpenGL dùng framebuffer pixels, gốc dưới trái. Trên màn hình high-DPI, cửa sổ logical 640×480 có thể chứa framebuffer 1280×960.
 
-```text
-source file đổi → compile/link/commit → program generation mới → query locations mới
-time/mouse/resize → glUniform... trên active generation → draw, không compile
-```
+Ta giữ chuột dạng chuẩn hóa x/W, y/H trong ShaderScene. Khi tạo uniform snapshot, nhân với kích thước framebuffer và đảo trục y. Ví dụ chuột ở 1/4 chiều ngang, 1/4 chiều dọc cửa sổ sẽ thành (320,720) trong framebuffer 1280×960.
 
-`SDL_GetWindowSize` trả kích thước logical dùng cho mouse event. `SDL_GetWindowSizeInPixels` trả framebuffer dùng cho viewport và shader resolution. Ta scale X/Y rồi đảo Y vì `gl_FragCoord` có gốc dưới-trái.
+uTime tính bằng giây; uResolution và uMouse dùng pixel vật lý; uZoom không có đơn vị. Cả frame dùng một snapshot thống nhất, tránh renderer và phần debug hiển thị hai bộ số khác nhau.
 
 <InteractiveLab demo="shader-hot-reload" mode="live-uniforms" />
 
 ## Viết code từng bước
 
-### Bước 1 — Khóa ba uniform mới sau link
+### Bước 1 — Chuẩn hóa input một lần
 
-```cpp title="include/shader_renderer.hpp — location thuộc candidate"
-candidate.timeLocation = api.GetUniformLocation(candidate.program, "uTime");
-candidate.resolutionLocation = api.GetUniformLocation(candidate.program, "uResolution");
-candidate.mouseLocation = api.GetUniformLocation(candidate.program, "uMouse");
-if (candidate.timeLocation < 0 || candidate.resolutionLocation < 0 || candidate.mouseLocation < 0) {
-    diagnostics = "Linked program does not expose uTime, uResolution and uMouse.";
-    destroyProgramCandidate(api, candidate);
-    return false;
+```cpp title="include/pipeline.hpp — từ input logical sang tọa độ chuẩn hóa"
+inline void setShaderMouse(ShaderScene& scene, double x, double y, int logicalWidth, int logicalHeight) {
+    if (logicalWidth <= 0 || logicalHeight <= 0 || !std::isfinite(x) || !std::isfinite(y))
+        return;
+    scene.mouseX = std::clamp(x / logicalWidth, 0.0, 1.0);
+    scene.mouseY = std::clamp(y / logicalHeight, 0.0, 1.0);
 }
 ```
 
-Nếu shader khai báo nhưng không dùng một uniform, compiler có quyền optimize nó đi và location thành `-1`. Final shader dùng cả ba để contract quan sát được.
+logicalWidth/logicalHeight lấy từ SDL_GetWindowSize. Clamp giữ con trỏ trong khoảng 0–1 kể cả khi drag ra ngoài cửa sổ nhờ mouse capture. Không nhân DPR tại đây rồi lại nhân thêm ở renderer.
 
-### Bước 2 — Đưa mouse về framebuffer pixels, gốc dưới-trái
+### Bước 2 — Tạo snapshot theo framebuffer thực
 
-```cpp title="src/main.cpp — logical mouse sang OpenGL pixel"
-scene.mouseX = mouseWindowX * float(framebufferWidth) / float(windowWidth);
-scene.mouseY = float(framebufferHeight) - mouseWindowY * float(framebufferHeight) / float(windowHeight);
+```cpp title="include/pipeline.hpp — đổi sang pixel OpenGL"
+inline UniformSnapshot makeUniformSnapshot(const ShaderScene& scene, int width, int height) {
+    if (width <= 0 || height <= 0 || !std::isfinite(scene.timeSeconds) ||
+        !std::isfinite(scene.mouseX) || !std::isfinite(scene.mouseY) ||
+        !std::isfinite(scene.zoom) || scene.zoom <= 0) {
+        throw std::invalid_argument("Invalid shader uniform snapshot");
+    }
+    return {float(scene.timeSeconds), float(width), float(height), float(std::clamp(scene.mouseX, 0.0, 1.0) * width), float((1 - std::clamp(scene.mouseY, 0.0, 1.0)) * height), scene.zoom};
+}
 ```
 
-Không dùng một scale duy nhất cho cả hai trục. Window và framebuffer được đọc ở cùng frame để resize không làm lệch snapshot.
+width/height đến từ SDL_GetWindowSizeInPixels, không phải kích thước logical. Dấu 1 - mouseY đảo chiều y đúng một lần. Không cộng offset của overlay: shader vẫn phủ toàn cửa sổ, overlay chỉ vẽ đè lên phía dưới.
 
-### Bước 3 — Upload uniforms ngay trước draw
+Nếu cửa sổ minimize làm kích thước không hợp lệ, event loop tiếp tục xử lý event nhưng chưa tạo snapshot/draw. Không gửi resolution bằng 0 rồi hy vọng GLSL tự chữa mọi phép chia.
 
-```cpp title="include/shader_renderer.hpp — live uniform update"
-api.UseProgram(activeProgram.program);
-api.UniformMatrix4fv(activeProgram.mvpLocation, 1, GL_FALSE, mvp.values.data());
-api.Uniform1f(activeProgram.timeLocation, scene.elapsedSeconds);
-api.Uniform2f(activeProgram.resolutionLocation, float(framebufferWidth), float(framebufferHeight));
-api.Uniform2f(activeProgram.mouseLocation, scene.mouseX, scene.mouseY);
+### Bước 3 — Cập nhật time nhưng không relink
+
+```cpp title="include/pipeline.hpp — clock của mô phỏng"
+inline void advanceShaderTime(ShaderScene& scene, double seconds) {
+    if (!scene.paused && std::isfinite(seconds) && seconds > 0)
+        scene.timeSeconds += std::min(seconds, 0.05);
+}
 ```
 
-Các location đi từ `activeProgram`, không phải candidate gần nhất bị lỗi.
+delta time lấy từ steady_clock. Mỗi frame cộng tối đa 0.05 giây để tránh nhảy quá xa sau một lần dừng dài; đây là clock trình diễn, không phải phép đo thời gian thực chính xác. Pause giữ time; N tiến đúng 1/30 giây; mất focus sẽ pause.
+
+### Bước 4 — Upload rồi vẽ
+
+```cpp title="include/shader_renderer.hpp — dữ liệu mới, program cũ"
+    void draw(GlApi& gl, const UniformSnapshot& uniform) const {
+        gl.Disable(GL_DEPTH_TEST);
+        gl.Disable(GL_CULL_FACE);
+        gl.Disable(GL_SCISSOR_TEST);
+        gl.Viewport(0, 0, int(uniform.width), int(uniform.height));
+        gl.UseProgram(activeProgram);
+        gl.Uniform2f(locations.resolution, uniform.width, uniform.height);
+        gl.Uniform1f(locations.time, uniform.time);
+        gl.Uniform2f(locations.mouse, uniform.mouseX, uniform.mouseY);
+        gl.Uniform1f(locations.zoom, uniform.zoom);
+        gl.BindVertexArray(vertexArray);
+        gl.DrawArrays(GL_TRIANGLES, 0, 3);
+        gl.BindVertexArray(0);
+    }
+```
+
+UseProgram chọn program trước khi upload. Uniform2f dùng cho vec2, Uniform1f dùng cho float. Uniform không active ở checkpoint trước có location -1; OpenGL bỏ qua upload vào -1. Từ checkpoint 6, buildProgramCandidate yêu cầu đủ bốn uniform có kiểu đúng.
+
+Viewport dùng kích thước framebuffer, còn DrawArrays vẫn chỉ có ba đỉnh. Time/mouse/zoom/resize không gọi compileShader hay LinkProgram; chúng chỉ thay giá trị uniform.
 
 ## Ghép các phần lại
 
-Checkpoint 6 dùng fragment shader pulse nhẹ và một vùng sáng gần chuột. Build, chạy, rồi resize cửa sổ:
-
-```bash title="Terminal — build checkpoint live uniforms"
-cmake --build build --config Debug --target project_35_checkpoint_6
+```bash title="Terminal — checkpoint 6"
+cmake --build build --config Debug --target project_35_checkpoint_6 --parallel 2
+./build/Debug/project_35_checkpoint_6.exe
 ```
 
-Space dừng/chạy time, N tiến 0,1 giây, mouse đổi glow. Quan sát generation và attempts: cả ba thao tác không được làm hai counter tăng.
+Kéo chuột trái để đổi vùng sáng, cuộn để zoom. Space pause/chạy, N tiến một bước, R đưa time/chuột/zoom về mốc đầu và pause. R không đổi hiệu ứng, auto reload hay chế độ debug.
+
+Mouse capture giúp kéo ra ngoài cửa sổ vẫn nhận chuyển động. Escape trong lúc kéo khôi phục tọa độ trước khi kéo và nhả capture; nếu không có gesture, Escape đóng app. Các phím mũi tên và +/− là cách điều khiển không cần chuột.
 
 ## Thử làm sai để hiểu đúng
 
-1. Giữ uniform locations của program trước sau một reload thành công. Một số driver có thể tình cờ cho cùng số; contract vẫn sai.
-2. Gửi logical window size vào `uResolution` nhưng dùng `gl_FragCoord`. Trên high-DPI, UV và mouse lệch theo scale.
-3. Không đảo mouse Y. Glow phản chiếu theo chiều dọc so với con trỏ.
+1. Dùng SDL_GetWindowSize thay cho kích thước pixel khi upload: thử trên màn hình DPR khác 1 và quan sát shader chỉ dùng sai một phần hệ tọa độ.
+2. Bỏ phép đảo y: điểm sáng chạy ngược chiều dọc con trỏ.
+3. Giữ time cố định rồi di chuyển/resize: generation không được tăng vì không có reload.
+4. Pause, đổi SPEED trong GLSL rồi F5: thời gian không reset, chỉ program thay đổi.
 
-Khôi phục conversion rồi thử kéo cửa sổ qua màn hình có scale khác nếu máy hỗ trợ.
+Khôi phục code chuẩn sau khi thử. Với Canvas, giảm độ phân giải preview chỉ để tính CPU nhẹ hơn; uniform readout vẫn dùng kích thước backing canvas có DPR.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Candidate generation nào có locations của generation đó.
-- [ ] `uResolution` nhận framebuffer width/height.
-- [ ] Mouse được scale từ logical units sang pixels.
-- [ ] Mouse Y được đổi sang gốc dưới-trái.
-- [ ] Uniform update không tăng reload counter.
-- [ ] Resize cập nhật viewport, aspect và resolution trong cùng frame.
-
-Hãy giải thích tại sao reset scene bằng R không cần reload shader program.
+- [ ] uResolution khớp framebuffer sau resize.
+- [ ] Góc trên trái SDL tương ứng góc trên trái hình, không bị đảo lần hai.
+- [ ] Pause/step/reset hoạt động và không compile lại.
+- [ ] Reload không reset time, mouse, zoom hoặc pause.
+- [ ] Drag nhả capture khi kết thúc, mất focus và hủy bằng Escape.
 
 ## Bài tập mở rộng
 
-1. Thêm `uDeltaTime` nhưng clamp giá trị trước upload.
-2. Hiển thị normalized mouse UV trong title bar.
-3. Thêm phím đóng băng `uTime` trong khi cube vẫn xoay để chứng minh hai state độc lập.
+Viết test cho input logical (160,120) trong cửa sổ 640×480, framebuffer 1280×960; kết quả phải là (320,720). Thêm trường hợp kéo ra ngoài hai cạnh, rồi giải thích vì sao clamp ở đây là lựa chọn giao diện chứ không phải quy tắc bắt buộc của OpenGL.
 
-Bài tiếp theo dùng các uniform này để viết một hiệu ứng fragment procedural hoàn chỉnh.
+[Bài tiếp theo: gradient và vòng tròn từ công thức](/projects/shader-hot-reload-lab/07-viet-fragment-shader-procedural).

@@ -109,7 +109,8 @@ Trên Windows chạy ./build/Debug/project_31_checkpoint_3.exe; với Ninja/macO
 
 ## Thử làm sai để hiểu đúng
 
-Thử cập nhật position ngay sau khi tính xong target đầu. Target tiếp theo sẽ nhìn một phần state mới và phần còn lại state cũ. Đảo thứ tự target rồi so kết quả: sự phụ thuộc thứ tự này không đến từ physics.
+1. Thử cập nhật position ngay sau khi tính xong target đầu. Target tiếp theo sẽ nhìn một phần state mới và phần còn lại state cũ; so với bản tính mọi acceleration từ cùng snapshot.
+2. Giữ bản thử đó rồi đảo thứ tự target. Dự đoán kết quả có đổi không: sự phụ thuộc thứ tự không đến từ physics. Khôi phục hai bước tính lực và commit riêng, rồi lặp lại phép so.
 
 ## Tự kiểm tra kết quả
 

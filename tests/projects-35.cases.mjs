@@ -1,115 +1,184 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
-import { workspace } from "./site-support.mjs";
+import { compile } from "@mdx-js/mdx";
+import { courseMdxOptions } from "../lib/mdx-options.mjs";
+import { codeTokens, isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import "./projects-35-tooling.cases.mjs";
 
-test("Project 35 publishes an eight-checkpoint shader hot-reload lab", async () => {
-  const catalog = JSON.parse(
-    await readFile(path.join(workspace, "course", "projects.json"), "utf8"),
+const root = new URL("../", import.meta.url);
+const dir = "examples/project-35-shader-hot-reload-lab/";
+const read = (file) => readFile(new URL(file, root), "utf8");
+const modes = [
+  "shader-files",
+  "compile-diagnostics",
+  "program-interface",
+  "transactional-reload",
+  "file-watcher",
+  "live-uniforms",
+  "procedural-shader",
+  "mandelbrot-shader",
+  "noise-shader",
+  "shader-validation",
+];
+
+test("P35 all ten current lessons compile through the actual math and One Dark MDX pipeline", async () => {
+  const files = (await readdir(new URL("content/shader-hot-reload-lab/", root))).filter((file) =>
+    file.endsWith(".mdx"),
   );
-  const project = catalog.find((entry) => entry.id === "35");
-  assert.equal(project.slug, "shader-hot-reload-lab");
-  assert.equal(project.sourceDirectory, "project-35-shader-hot-reload-lab");
-  assert.equal(project.checkpointCount, 8);
-  assert.equal(project.demoId, "shader-hot-reload");
+  for (const file of files) {
+    const source = await read("content/shader-hot-reload-lab/" + file);
+    const output = String(await compile(source, courseMdxOptions));
+    assert.match(output, /one-dark-pro/, file);
+    assert.match(output, /InteractiveLab/, file);
+  }
+  const entry = await read("content/shader-hot-reload-lab/01-dua-glsl-ra-file-rieng.mdx");
+  assert.match(entry, /6–8 giờ đọc/);
+  assert.match(entry, /17–23 giờ tự viết/);
+  assert.match(entry, /5–7 giờ kiểm chứng/);
+  assert.match(entry, /chờ build không tính/);
 });
 
-test("Project 35 teaches a safe file-to-program reload transaction", async () => {
-  const content = path.join(workspace, "content", "shader-hot-reload-lab");
-  const source = path.join(workspace, "examples", "project-35-shader-hot-reload-lab");
-  const lessons = await Promise.all(
-    [
-      "01-dua-glsl-ra-file-rieng.mdx",
-      "02-compile-shader-va-doc-info-log.mdx",
-      "03-link-candidate-va-khoa-interface.mdx",
-      "04-reload-theo-giao-dich-giu-last-good.mdx",
-      "05-theo-doi-file-va-debounce.mdx",
-      "06-truyen-time-resolution-va-mouse.mdx",
-      "07-viet-fragment-shader-procedural.mdx",
-      "08-hoan-thien-shader-hot-reload-lab.mdx",
-    ].map((file) => readFile(path.join(content, file), "utf8")),
+test("P35 publishes ten substantial lessons leading to the canonical four-effect tool", async () => {
+  const catalog = JSON.parse(await read("course/projects.json"));
+  const project = catalog.find((entry) => entry.id === "35");
+  assert.equal(project.checkpointCount, 10);
+  assert.equal(project.shaderRuntimePerTarget, true);
+  assert.equal(project.contentRevision, 2);
+  const manifest = (await import("../course/projects/p35/manifest.ts")).default;
+  assert.equal(manifest.lessons.length, 10);
+  assert.match(manifest.challenge.mission, /gradient, circle, Mandelbrot và noise/);
+  const files = (await readdir(new URL("content/shader-hot-reload-lab/", root)))
+    .filter((file) => file.endsWith(".mdx"))
+    .sort();
+  assert.deepEqual(
+    files,
+    manifest.lessons.map((lesson) => lesson.slug + ".mdx"),
   );
-
-  const lessonContracts = [
-    [/embedded shader/i, /ShaderSources/i, /COURSE_SHADER_DIRECTORY/i, /readTextFile/i],
-    [/GL_COMPILE_STATUS/i, /glGetShaderInfoLog/i, /stage/i, /line number/i],
-    [/candidate program/i, /GL_LINK_STATUS/i, /program info log/i, /uMvp/i],
-    [/last-good/i, /generation/i, /attempts/i, /commit/i],
-    [/last_write_time/i, /debounce/i, /140 ms/i, /retry storm/i],
-    [/uTime/i, /uResolution/i, /uMouse/i, /framebuffer pixels/i, /high-DPI/i],
-    [/length\(p\)/i, /rings/i, /mouseGlow/i, /mix\(cold, hot/i],
-    [/CTest/i, /Debug/i, /Release/i, /Project 36/i, /Mã hoàn chỉnh/i],
+  const sectionNames = [
+    "Vấn đề cần giải quyết",
+    "Hiểu ý tưởng trước khi viết code",
+    "Viết code từng bước",
+    "Ghép các phần lại",
+    "Thử làm sai để hiểu đúng",
+    "Tự kiểm tra kết quả",
+    "Bài tập mở rộng",
   ];
-  for (const [index, patterns] of lessonContracts.entries()) {
-    for (const pattern of patterns) {
-      assert.match(lessons[index], pattern, `Project 35 lesson ${index + 1} is missing ${pattern}`);
+  for (const [index, lesson] of manifest.lessons.entries()) {
+    const text = await read("content/shader-hot-reload-lab/" + lesson.slug + ".mdx");
+    assert.ok(text.includes("# " + lesson.title));
+    assert.ok(text.includes('mode="' + modes[index] + '"'));
+    for (const name of sectionNames)
+      assert.ok(text.includes("## " + name), lesson.slug + ": " + name);
+    assert.ok(
+      (text.match(/^### Bước /gm) ?? []).length >= 3,
+      lesson.slug + " needs explained steps",
+    );
+    assert.ok(
+      (text.match(/^```(?:cpp|glsl|cmake|bash) title="[^\"]+"$/gm) ?? []).length >= 3,
+      lesson.slug + " needs detailed code blocks",
+    );
+    const experiments = text
+      .split("## Thử làm sai để hiểu đúng")[1]
+      .split("## Tự kiểm tra kết quả")[0];
+    assert.ok(
+      (experiments.match(/^\d+\. /gm) ?? []).length >= 2,
+      lesson.slug + " needs observable experiments",
+    );
+    assert.doesNotMatch(text, /\{\{CPP|\{\{GLSL|uMvp|vLocalPosition|kCubeVertices/);
+    const blocks = [
+      ...text.matchAll(/\x60\x60\x60(cpp|glsl) title="([^"]+)"\n([\s\S]*?)\n\x60\x60\x60/g),
+    ];
+    assert.ok(blocks.length >= 1, lesson.slug + " needs actual source code");
+    for (const [, language, title, snippet] of blocks) {
+      const file = title.split(" — ")[0];
+      const source = await read(
+        dir + "checkpoints/" + String(lesson.order).padStart(2, "0") + "/" + file,
+      );
+      assert.ok(
+        isContiguousCodeExcerpt(snippet, source),
+        lesson.slug + ": " + title + " must be contiguous checkpoint code",
+      );
+      if (language === "glsl")
+        assert.ok(source.includes(snippet.trim()), "GLSL must be exact snapshot source");
+      const stack = [];
+      for (const token of codeTokens(snippet)) {
+        if (token === "{") stack.push(token);
+        if (token === "}") assert.ok(stack.pop(), title + " unmatched }");
+      }
+      assert.equal(stack.length, 0, title + " unfinished block");
     }
   }
+});
 
-  const pipeline = await readFile(
-    path.join(source, "source-template", "include", "pipeline.hpp"),
-    "utf8",
+test("P35 native verifier covers real compiler/linker/reflection and fixed-snapshot last-good", async () => {
+  const renderer = await read(dir + "source-template/include/shader_renderer.hpp");
+  assert.match(renderer, /GL_COMPILE_STATUS/);
+  assert.match(renderer, /GL_LINK_STATUS/);
+  assert.match(renderer, /GetActiveUniform/);
+  assert.match(renderer, /type == requiredType && size == 1/);
+  assert.ok(
+    renderer.indexOf("gl.UseProgram(activeProgram);", renderer.indexOf("bool reload(")) <
+      renderer.indexOf("gl.DeleteProgram(previousProgram)"),
   );
-  const glApi = await readFile(
-    path.join(source, "source-template", "include", "gl_api.hpp"),
-    "utf8",
-  );
-  const renderer = await readFile(
-    path.join(source, "source-template", "include", "shader_renderer.hpp"),
-    "utf8",
-  );
-  const main = await readFile(path.join(source, "source-template", "src", "main.cpp"), "utf8");
-  const fragment = await readFile(
-    path.join(source, "source-template", "shaders", "lab.frag"),
-    "utf8",
-  );
-  const tests = await readFile(path.join(source, "tests", "tests.cpp"), "utf8");
-  const cmake = await readFile(path.join(source, "CMakeLists.txt"), "utf8");
-  const canvas = await readFile(
-    path.join(workspace, "components", "labs", "shader-hot-reload-lab.tsx"),
-    "utf8",
-  );
+  const verify = await read(dir + "source-template/include/shader_validation.hpp");
+  for (const invariant of [
+    "effect < kEffects.size()",
+    "verifyShaderPixels",
+    "verifyShaderUniforms",
+    "sampledPixels += 5",
+    "fragment compile",
+    "vertex compile",
+    '"[link]"',
+    "Wrong type/array size for uMouse",
+    "== lastGoodImage",
+    "renderer.locations == locations",
+    "verifyDeletedShaders",
+    "gl.IsTexture(texture)",
+    "textPixels > 100",
+    "15000",
+  ]) {
+    assert.ok(verify.includes(invariant), invariant);
+  }
+  const app = await read(dir + "source-template/include/shader_application.hpp");
+  assert.match(app, /SDL_GetWindowSizeInPixels/);
+  assert.match(app, /SDL_CaptureMouse/);
+  assert.match(app, /beforeRead/);
+  assert.match(app, /--shader-dir/);
+  assert.match(app, /SDL_EVENT_WINDOW_FOCUS_LOST/);
+  assert.ok(app.indexOf("overlay.destroy(gl)") < app.indexOf("SDL_GL_DestroyContext(context)"));
+});
 
-  for (const symbol of [
-    "ShaderSources",
-    "readShaderFiles",
-    "ReloadState",
-    "recordReloadAttempt",
-    "ShaderWatchState",
-    "updateShaderWatch",
-    "validateShaderLabContract",
+test("P35 early checkpoints introduce logging and reflection in the lesson that teaches them", async () => {
+  const first = await read(dir + "checkpoints/01/include/shader_renderer.hpp");
+  const second = await read(dir + "checkpoints/02/include/shader_renderer.hpp");
+  const third = await read(dir + "checkpoints/03/include/shader_renderer.hpp");
+  assert.doesNotMatch(first, /inline std::string shaderInfoLog/);
+  assert.match(second, /inline std::string shaderInfoLog/);
+  assert.doesNotMatch(second, /inline bool findUniform/);
+  assert.match(third, /inline bool findUniform/);
+  assert.match(third, /GetActiveUniform/);
+});
+
+test("P35 Canvas does not claim a JavaScript token scanner is a real GLSL compiler", async () => {
+  const facade = await read("lib/labs/shader-hot-reload.ts");
+  assert.doesNotMatch(facade, /validateShaderStage|validateProgramInterface/);
+  const canvas = await read("components/labs/shader-hot-reload-lab.tsx");
+  for (const contract of [
+    "không chạy GLSL",
+    "Lưu bản sửa",
+    "Thử bản đã lưu",
+    "140",
+    "lastAttemptedVersion",
+    "setPointerCapture",
+    "onLostPointerCapture",
+    "usePauseOnReducedMotion",
+    "visibilitychange",
+    "SPEED",
+    "mô phỏng",
+    "framebuffer",
   ]) {
-    assert.ok(pipeline.includes(symbol), `Project 35 pipeline is missing ${symbol}`);
+    assert.ok(canvas.includes(contract), contract);
   }
-  for (const symbol of [
-    "PFNGLGETSHADERINFOLOGPROC",
-    "PFNGLGETPROGRAMINFOLOGPROC",
-    "PFNGLUNIFORM1FPROC",
-    "PFNGLUNIFORM2FPROC",
-  ]) {
-    assert.ok(glApi.includes(symbol), `Project 35 OpenGL loader is missing ${symbol}`);
-  }
-  for (const symbol of [
-    "ProgramCandidate",
-    "buildProgramCandidate",
-    "ShaderLabRenderer",
-    "previousProgram",
-    "reloadState",
-  ]) {
-    assert.ok(renderer.includes(symbol), `Project 35 renderer is missing ${symbol}`);
-  }
-  assert.match(main, /SDLK_F5/);
-  assert.match(main, /SDL_GetWindowSizeInPixels/);
-  assert.match(main, /reloadFromDisk/);
-  assert.match(fragment, /length\(p\)/);
-  assert.match(fragment, /uTime/);
-  assert.match(fragment, /uMouse/);
-  assert.match(tests, /failed reload preserves last-good fingerprint/);
-  assert.match(tests, /stable files trigger one reload/);
-  assert.match(cmake, /COURSE_SHADER_DIRECTORY/);
-  assert.match(cmake, /source_directory}\/shaders/);
-  assert.match(canvas, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(canvas, /useReducedMotion/);
-  assert.match(canvas, /Candidate fragment shader/);
+  assert.doesNotMatch(canvas, /getContext\(["']webgl/);
 });

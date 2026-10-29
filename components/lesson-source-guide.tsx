@@ -3,6 +3,7 @@ import type { LessonCodeGuide } from "@/course/learning/types";
 import { getProjectSourceBundle, type ProjectSourceFile } from "@/lib/project-sources";
 import { HighlightedCode } from "@/components/highlighted-code";
 import { SourceFile } from "@/components/source-file";
+import { SourceDiff } from "@/components/source-diff";
 
 type DiffLine = {
   kind: "same" | "add" | "remove";
@@ -239,12 +240,7 @@ export async function LessonSourceGuide({
             </p>
           </header>
           {lessonDiffs.map(({ path, diff }) => (
-            <details key={path} open>
-              <summary>
-                <code>{path}</code>
-              </summary>
-              <HighlightedCode code={diff} language="diff" />
-            </details>
+            <SourceDiff key={`${bundle.sourceVersion}:${path}`} path={path} diff={diff} />
           ))}
         </section>
       )}

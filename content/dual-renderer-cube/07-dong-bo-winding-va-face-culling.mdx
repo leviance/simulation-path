@@ -86,9 +86,8 @@ Xem sạch bằng solid, tắt normals và grid. Xem debug bằng wireframe/norm
 
 ## Thử làm sai để hiểu đúng
 
-Trong bản thử CPU, dot normal local với đèn world mà bỏ model rotation. Xoay model: vùng sáng như dính vào từng mặt thay vì phản ứng với hướng mặt trong world. F1/F2 sẽ lệch. Khôi phục transform normal.
-
-Thử dùng `w=1` cho normal rồi thêm translation vào model thử nghiệm. Hướng normal bị kéo lệch vì nhận cả translation. Khôi phục `w=0`; vị trí và hướng không dùng cùng giá trị w.
+1. Trong bản thử CPU, dot normal local với đèn world mà bỏ model rotation. Xoay model: vùng sáng như dính vào từng mặt thay vì phản ứng với hướng mặt trong world. F1/F2 sẽ lệch. Khôi phục transform normal.
+2. Thử dùng `w=1` cho normal rồi thêm translation vào model thử nghiệm. Hướng normal bị kéo lệch vì nhận cả translation. Khôi phục `w=0`; vị trí và hướng không dùng cùng giá trị w.
 
 ## Tự kiểm tra kết quả
 

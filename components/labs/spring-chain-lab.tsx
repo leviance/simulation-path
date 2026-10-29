@@ -1,5 +1,7 @@
 "use client";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -33,10 +35,15 @@ import {
   springBoundedPointer,
   drawSpringCanvas,
 } from "./spring-view";
-import { useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
-import { SpringControls } from "./spring-controls";
-import { SpringReadout } from "./spring-readout";
+import { LabReadout, useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
+
+const SpringControls = lazy(() =>
+  import("./spring-controls").then((module) => ({ default: module.SpringControls })),
+);
+const SpringReadout = lazy(() =>
+  import("./spring-readout").then((module) => ({ default: module.SpringReadout })),
+);
 
 export default function SpringChainLab({ mode }: { mode?: InteractiveLabMode }) {
   return <SpringTank key={mode ?? "spring-validation"} mode={mode} />;
@@ -245,18 +252,20 @@ function SpringTank({ mode }: { mode?: InteractiveLabMode }) {
   );
   return (
     <div ref={containerRef}>
-      <SpringControls
-        scene={scene}
-        reducedMotion={reducedMotion}
-        edit={edit}
-        reset={reset}
-        preset={preset}
-        togglePause={togglePause}
-        step={step}
-        fast={fast}
-        stop={stop}
-        toggleDebug={toggleDebug}
-      />
+      <Suspense fallback={<p role="status">Đang tải điều khiển chuỗi lò xo…</p>}>
+        <SpringControls
+          scene={scene}
+          reducedMotion={reducedMotion}
+          edit={edit}
+          reset={reset}
+          preset={preset}
+          togglePause={togglePause}
+          step={step}
+          fast={fast}
+          stop={stop}
+          toggleDebug={toggleDebug}
+        />
+      </Suspense>
       <canvas
         ref={canvasRef}
         className="lab-canvas"
@@ -278,7 +287,24 @@ function SpringTank({ mode }: { mode?: InteractiveLabMode }) {
           "Đang giảm chuyển động: chạy liên tục bị khóa; vẫn dùng được bước đơn và job hữu hạn."}{" "}
         {scene.message}
       </p>
-      {scene.debug && <SpringReadout scene={scene} />}
+      {scene.debug ? (
+        <Suspense
+          fallback={
+            <LabReadout items={[{ label: "Trạng thái", value: "Đang tải số liệu chuỗi lò xo…" }]} />
+          }
+        >
+          <SpringReadout scene={scene} />
+        </Suspense>
+      ) : (
+        <LabReadout
+          items={[
+            {
+              label: "Trạng thái",
+              value: `${scene.paused ? "tạm dừng" : "đang chạy"} · t=${scene.elapsed.toFixed(3)} s`,
+            },
+          ]}
+        />
+      )}
     </div>
   );
 }

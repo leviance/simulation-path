@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -52,6 +52,17 @@ function git(directory, args, options = {}) {
   });
 }
 
+function removeTemporaryRepository(root, prefix) {
+  const target = realpathSync(root);
+  assert.equal(path.dirname(target), realpathSync(os.tmpdir()));
+  assert.ok(path.basename(target).startsWith(prefix));
+  rmSync(target, { recursive: true, force: true });
+}
+
+test("temporary Git cleanup refuses the real workspace", () => {
+  assert.throws(() => removeTemporaryRepository(workspace, "simulation-path-git-policy-"));
+});
+
 test("generated-output policy covers future projects without excluding authored sources", () => {
   for (const file of outputs) assert.equal(isGeneratedCoursePath(file), true, file);
   for (const file of authored) assert.equal(isGeneratedCoursePath(file), false, file);
@@ -82,7 +93,7 @@ test("Git ignores generated outputs and the guard catches force-added files", ()
     git(root, ["add", "--force", "--", outputs[0], outputs[5]]);
     assert.deepEqual(trackedGeneratedFiles(root), [outputs[0], outputs[5]]);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemporaryRepository(root, "simulation-path-git-policy-");
   }
 });
 
@@ -124,6 +135,6 @@ test("compiled-file guard inspects staged bytes, even if the working file is rep
     git(root, ["rm", "--cached", "--force", "--", "tests.obj"]);
     assert.deepEqual(trackedCompiledFiles(root), []);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemporaryRepository(root, "simulation-path-compiled-policy-");
   }
 });

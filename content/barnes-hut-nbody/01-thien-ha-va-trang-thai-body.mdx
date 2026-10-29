@@ -22,7 +22,7 @@ $$
 
 ## Viết code từng bước
 
-### Giữ một chương trình chạy được
+### Bước 1 — Giữ một chương trình chạy được
 
 ```cpp title="src/main.cpp — Giữ một chương trình chạy được"
 int main(int argc, char** argv) {
@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
 
 Đọc main theo thứ tự tạo window → renderer → texture, kiểm lỗi rồi gọi runApplication. Khi thất bại, chỉ hủy tài nguyên đã tạo. Starter cung cấp phần trình bày để bạn không phải viết lại SDL từ đầu.
 
-### Tách state khỏi pixel
+### Bước 2 — Tách state khỏi pixel
 
 ```cpp title="include/lab.hpp — Tách state khỏi pixel"
 struct Body {
@@ -104,7 +104,7 @@ struct Body {
 
 Không thêm screenX/screenY vào Body. Acceleration được tính lại từ snapshot đầu bước; renderer chỉ đọc position qua include/render.hpp.
 
-### Sinh lại cùng thí nghiệm
+### Bước 3 — Sinh lại cùng thí nghiệm
 
 ```cpp title="include/lab.hpp — Sinh lại cùng thí nghiệm"
 inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed) {
@@ -221,7 +221,7 @@ Không nên chia toàn bộ đĩa thành hai dải đều rồi quay dải thứ
 
 Lõi và halo lấy hướng trong không gian bằng góc quanh Z và một giá trị `heightSample` trong [-1, 1]. Phần chiếu lên XY có bán kính `radius * sqrt(1 - heightSample²)`, còn Z là `radius * heightSample`; lõi được nén nhẹ theo Z với hệ số 0,85. Vì vậy nhìn từ cạnh vẫn thấy một khối sao, không phải một tấm tròn. Đĩa cũng có độ dày riêng; bạn có thể dùng W/S, cuộn chuột hoặc các nút tiến/lùi để đi vào giữa các sao.
 
-### Từ một body tới đốm sáng trên màn hình
+### Bước 4 — Từ một body tới đốm sáng trên màn hình
 
 Vẽ mọi sao bằng cùng một chấm đặc sẽ làm lõi và các nhánh hòa thành một mảng nhiễu. Renderer có sẵn trong starter dùng `include/star-render.hpp`: chiếu đúng position qua camera, vẽ lõi sáng nhỏ và halo có bán kính hữu hạn, cộng ánh sáng của các sao chồng nhau rồi nén độ sáng bằng tone mapping. Không có sao nền giả hoặc ảnh thiên hà phủ lên mô phỏng.
 
@@ -239,7 +239,7 @@ Mỗi body góp một điểm nhỏ và một vùng sáng mờ hữu hạn. Khi 
 
 Event loop giữ hai buffer riêng: `pixels` chứa màu cuối cùng để gửi cho SDL; `light` chứa tổng ánh sáng trước tone mapping. Cả hai được tạo một lần rồi tái sử dụng. Chúng không nằm trong `Body`, nên việc xóa hoặc thay đổi buffer vẽ không thể làm đổi trạng thái mô phỏng.
 
-### Dùng đúng trọng số
+### Bước 5 — Dùng đúng trọng số
 
 ```cpp title="include/lab.hpp — Dùng đúng trọng số"
 inline Vec3 centerOfMass(std::span<const Body> bodies) {
@@ -273,7 +273,8 @@ Trên Windows chạy ./build/Debug/project_31_checkpoint_1.exe; với Ninja/macO
 
 ## Thử làm sai để hiểu đúng
 
-Thay tâm khối bằng trung bình cộng các position rồi so hai kết quả. Central body nặng hơn từng sao nên hai đáp án thường khác nhau. Bỏ phép trừ bulkVelocity sẽ làm momentum đầu khác 0; đây là lỗi điều kiện đầu, chưa liên quan Barnes–Hut.
+1. Dự đoán xem tâm khối có trùng trung bình cộng các position không. Thay phép tính rồi so hai kết quả: central body nặng hơn từng sao nên hai đáp án thường khác nhau. Khôi phục cách tính có trọng số trước khi thử tiếp.
+2. Bỏ phép trừ bulkVelocity rồi kiểm momentum ban đầu. Nó sẽ không còn gần 0; đây là thay đổi điều kiện đầu, chưa liên quan đến Barnes–Hut. Khôi phục phép trừ, giữ cùng seed và chạy lại để kiểm mốc đo.
 
 ## Tự kiểm tra kết quả
 

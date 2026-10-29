@@ -472,7 +472,19 @@ function Workbench({ mode }: { mode?: InteractiveLabMode }) {
             },
           ]}
         />
-      ) : null}
+      ) : (
+        <LabReadout
+          items={[
+            { label: "Trạng thái", value: scene.paused ? "Đang tạm dừng" : "Đang xoay mặt phẳng" },
+            {
+              label: "Góc yaw / pitch",
+              value: `${scene.yaw.toFixed(3)} / ${scene.pitch.toFixed(3)} rad`,
+            },
+            { label: "Khoảng cách camera", value: scene.distance.toFixed(2) },
+            { label: "Nội suy", value: stage >= 6 ? scene.view : "Chưa bật ở bài này" },
+          ]}
+        />
+      )}
       <p className="sr-only">
         Mặt phẳng có yaw {scene.yaw.toFixed(3)}, pitch {scene.pitch.toFixed(3)}, cách camera{" "}
         {scene.distance.toFixed(2)}. Bàn cờ sáng/tối cố định, không đổi theo theme. Canvas dùng CPU

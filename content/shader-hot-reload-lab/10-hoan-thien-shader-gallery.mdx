@@ -4,51 +4,108 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Một lần reload thành công chưa chứng minh công cụ đã an toàn. Cần thử cả lỗi đọc file, compile, link và interface, rồi sửa để tiếp tục mà không restart. Ứng dụng cũng phải giữ time/mouse/zoom và không rò program khi lặp lại các thao tác ấy.
+Bốn shader đẹp chưa đủ thành một công cụ dùng được. Người thử còn phải biết file nào đang chạy, candidate lỗi ở đâu, vì sao hình chưa đổi và làm thế nào phục hồi mà không khởi động lại.
+
+Bài cuối ghép debug overlay, showcase và bộ kiểm chứng. Kết quả phải là ứng dụng C++/SDL3 hoàn chỉnh: cùng một cửa sổ đổi được bốn effect, sửa GLSL đang chạy, giữ last-good khi lỗi, resize/input đúng và dọn hết tài nguyên.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Tách bằng chứng thành ba lớp: CTest không mở window kiểm state/watch/math; kiểm OpenGL thật xác nhận shader/compiler/program và màu pixel; desktop kiểm thao tác và overlay. Canvas chỉ hỗ trợ hiểu công thức và giao dịch reload, không thay compiler GLSL của driver.
+Có ba lớp kiểm tra khác nhau, không thay thế nhau:
+
+1. CTest thuần CPU kiểm toán học, file reader, watcher, snapshot và metadata transaction; không cần cửa sổ.
+2. --verify tạo OpenGL context thật, compile/link thật và đọc pixel để so reference; có thể chạy cửa sổ ẩn, không chứng minh thao tác desktop đã đúng.
+3. Kiểm trực tiếp chuột/bàn phím/editor xác nhận trải nghiệm Save, focus, capture, resize và showcase.
+
+Khi một candidate lỗi, “giữ nguyên” được kiểm tại cùng time/resolution/mouse/zoom. Nếu time vẫn chạy, ảnh last-good vẫn có thể chuyển động: không phải chương trình đã lén chấp nhận shader hỏng.
 
 <InteractiveLab demo="shader-hot-reload" mode="shader-validation" />
 
 ## Viết code từng bước
 
-Giữ active program trong suốt lúc đọc và build candidate. Khi candidate đã link và đủ active uniforms đúng type, cập nhật handle/locations, bind program mới rồi mới xóa program cũ. Lỗi chỉ cập nhật attempts/diagnostics; generation và last-good fingerprint giữ nguyên.
+### Bước 1 — Hiện lỗi ngay trong cửa sổ
 
-Overlay lỗi có file và log driver; terminal giữ toàn bộ log. Chế độ showcase ẩn bảng debug nhưng lỗi mới vẫn hiện để người dùng biết vì sao bản sửa chưa được dùng. Không ghi "reload thành công" chỉ vì hình cũ còn vẽ.
+shader_overlay.hpp tạo SDL_Surface và SDL_CreateSoftwareRenderer để vẽ chữ ASCII 8×8, rồi upload surface thành GL texture. Đây là renderer phần mềm trên surface riêng, không phải SDL_Renderer dùng chung với cửa sổ OpenGL.
+
+Overlay có program/VAO/texture riêng. Nó chỉ dùng để trình bày, không tham gia quyết định candidate hợp lệ hay không. Đường dẫn và log UTF-8 đầy đủ luôn được in ra terminal; overlay ASCII có thể thay ký tự ngoài ASCII bằng dấu hỏi.
+
+Tab chuyển debug/showcase. Showcase ẩn HUD thường để xem hình sạch, nhưng nếu reload lỗi, panel lỗi vẫn hiện. PgUp/PgDn cuộn log dài; không cắt log âm thầm rồi giả vờ đã hiển thị hết.
+
+### Bước 2 — Dọn GL resource trước khi hủy context
+
+```cpp title="include/shader_renderer.hpp — giải phóng renderer"
+    void destroy(GlApi& gl) {
+        gl.UseProgram(0);
+        if (activeProgram)
+            gl.DeleteProgram(activeProgram);
+        if (vertexArray)
+            gl.DeleteVertexArrays(1, &vertexArray);
+        activeProgram = vertexArray = 0;
+    }
+```
+
+UseProgram(0) bỏ binding trước khi DeleteProgram. Reset ID về 0 giúp gọi cleanup lần nữa không xóa nhầm object khác. Hàm không hủy context/window vì các tài nguyên khác, đặc biệt overlay, vẫn cần context sống để tự dọn.
+
+```cpp title="include/shader_application.hpp — thứ tự cleanup cuối ứng dụng"
+    if (glLoaded) {
+        overlay.destroy(gl);
+        renderer.destroy(gl);
+    }
+```
+
+Sau khối này mới SDL_GL_DestroyContext, SDL_DestroyWindow rồi SDL_Quit. Nếu exception xảy ra giữa lúc khởi tạo, các ID bằng 0 và glLoaded giúp cleanup chỉ làm những gì đã được tạo hợp lệ.
+
+### Bước 3 — Khóa bằng bằng chứng có thể lặp lại
+
+--verify chạy cả bốn shader ở hai kích thước cửa sổ, lấy năm pixel đã chọn cho mỗi trường hợp: tổng cộng 40 mẫu. Nó so RGB với reference CPU, tolerance 6/255 để chấp nhận khác biệt float/driver ở các điểm mẫu ổn định. Đây không phải phép so mọi pixel, đặc biệt không chứng minh toàn bộ biên fractal giống bit.
+
+Bộ kiểm còn thay time/mouse/zoom, đọc uniform thật và xác nhận generation/attempts không tăng chỉ vì resize hay input. Các fixture lỗi gồm vertex compile, fragment compile, link, thiếu uniform và sai type. Candidate lỗi phải giữ ID/locations/metadata và ảnh ở snapshot cố định; sửa lại phải phục hồi được.
+
+Cuối cùng kiểm intermediate shader đã hủy, program cũ được giải phóng và các object renderer/overlay đều được dọn. CTest không dùng assert bị tắt bởi NDEBUG: kết quả sai vẫn làm Release trả EXIT_FAILURE.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — Debug"
+```bash title="Terminal — build và test CPU ở hai cấu hình"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --parallel 2
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-```
-
-```bash title="Terminal — Release"
 cmake --build build --config Release --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
-Phần **Mã hoàn chỉnh** bên dưới và ZIP chứa toàn bộ source C++/GLSL, starter, checkpoint, final, README và tests. Bốn effect chạy trong cùng executable. Khi kiểm tự động, dùng chế độ hữu hạn cùng process supervisor bên ngoài, không đưa GUI vào CTest.
+Trên Visual Studio, chạy hai lệnh sau để kiểm driver. Chúng cần máy có OpenGL 3.3 Core; máy không có context phù hợp không được ghi nhận là “đã qua kiểm GPU”.
+
+```bash title="Terminal — kiểm OpenGL thật"
+./build/Debug/project_35_final.exe --verify
+./build/Release/project_35_final.exe --verify
+```
+
+Chế độ --smoke chỉ chạy hữu hạn vài frame; --capture image.bmp xuất snapshot; --effect 1..4 chọn effect; --showcase mở hình sạch; --shader-dir chỉ rõ thư mục thử. Khi chạy test tự động trong repository, dùng process supervisor với hard timeout để dọn process tree nếu driver bị treo; thời hạn nội bộ không thể ngắt một lời gọi driver đang kẹt.
+
+Mã hoàn chỉnh của toàn bộ dự án nằm trong phần source cuối bài và ZIP ở trang tổng quan. Trong ZIP, final có tất cả header, src và shaders; README hướng dẫn build; starter và checkpoints/01–10 chạy độc lập. CMake mặc định build final; bật BUILD_CHECKPOINTS để build các bước học. Không cần repository website hay backend để chạy C++.
 
 ## Thử làm sai để hiểu đúng
 
-Chèn một lỗi cú pháp vào fragment, reload rồi ghi generation/ảnh hiện tại. Sửa lại và reload tiếp: chương trình phải phục hồi. Làm lại với varying không khớp và uniform sai type; compile thành công không đồng nghĩa interface đã hợp lệ.
+1. Mở final, chọn circle, pause tại một time. Bỏ dấu chấm phẩy trong circle.frag rồi Save. Phải có log lỗi ngay trong cửa sổ/terminal, hình cũ còn nguyên. Sửa lại rồi F5: ảnh mới áp dụng mà time và mouse không reset.
+
+2. Tiếp tục thử shader bị sai uniform type, file bị xóa/tạo lại và Save liên tiếp. Chuyển effect 1–4 nhiều lần, resize giữa các lần chuyển, kéo chuột ra ngoài cửa sổ rồi nhả. Trong lúc kéo, Escape hủy gesture; ngoài gesture, Escape thoát.
+
+3. Bật Tab để xem showcase sạch. Cố ý tạo một lỗi trong showcase: panel lỗi vẫn phải hiện. Khôi phục tất cả shader chuẩn trước khi chạy --verify vì reference dùng công thức mặc định, không tự thích nghi với bản GLSL bạn vừa sáng tác.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Cả gradient, circle, Mandelbrot và noise phủ viewport, có time/parameter rõ ràng.
-- [ ] Reload lỗi giữ program và ảnh tốt gần nhất; sửa rồi reload không cần restart.
-- [ ] Resize/high-DPI cập nhật resolution/mouse đúng; đổi uniform không compile lại.
-- [ ] Watcher debounce, không retry storm khi file lỗi đứng yên.
-- [ ] Shader/program/VAO/texture được xóa khi context còn current.
-- [ ] Kết quả CTest, OpenGL thật và desktop được ghi riêng.
+- [ ] Debug/Release build starter, từng checkpoint và final; CTest đều đạt.
+- [ ] --verify qua các effect, uniform, lỗi/repair và cleanup trên driver thực.
+- [ ] 1–4 chọn đủ gradient/circle/Mandelbrot/noise, mỗi effect có tham số/chuyển động rõ.
+- [ ] F5/auto reload giữ last-good khi file/compile/link/interface lỗi.
+- [ ] Time, mouse, zoom, pause không reset khi reload.
+- [ ] Resize/high-DPI, capture, focus và phím thay thế chuột đã kiểm trực tiếp.
+- [ ] Showcase sạch nhưng không che lỗi; log còn tên file/stage.
+- [ ] ZIP giải nén build độc lập, không thiếu shader hoặc header.
+
+Ghi riêng kết quả build/tests, GPU verify và kiểm desktop. Không đánh dấu mục chưa thử chỉ vì một lớp kiểm tra khác đã xanh.
 
 ## Bài tập mở rộng
 
-1. Thêm effect thứ năm mà vẫn dùng cùng uniform interface và giao dịch reload.
-2. Thêm phép kiểm pixel có nghiệm đơn giản trước khi thêm công thức phức tạp.
+Thêm effect thứ năm dùng cùng uniform contract và có reference đơn giản. Hãy bắt đầu bằng đề bài cùng một phép kiểm có thể giải thích, không chỉ thêm màu ngẫu nhiên cho đẹp.
 
-[Project 36](/projects/ray-marched-shape-room) sẽ dùng fullscreen fragment shader để dựng một căn phòng 3D bằng ray marching.
+[Project 36: căn phòng hình khối bằng ray marching](/projects/ray-marched-shape-room) sẽ dùng chính cách tính màu theo pixel này để dựng cảnh 3D không cần mesh.

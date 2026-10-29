@@ -115,11 +115,9 @@ Các pixel sát cạnh có thể khác giữa software rasterizer và driver. Đ
 
 ## Thử làm sai để hiểu đúng
 
-Thay GL_LESS bằng GL_GREATER mà vẫn clear depth 1. Dự đoán fragment nào còn được ghi; kiểm rồi khôi phục cặp clear/compare đúng.
-
-Đổi GL_CCW thành GL_CW nhưng giữ nguyên source indices. Các mặt sẽ đảo. Khôi phục GL_CCW, không đảo riêng EBO GPU.
-
-Cuối cùng bỏ mặt near khỏi clipping CPU. So cảnh zoom gần ở F1/F2, rồi trả lại đủ sáu mặt. Đừng cố dùng culling để che clipping sai.
+1. Thay GL_LESS bằng GL_GREATER mà vẫn clear depth 1. Dự đoán fragment nào còn được ghi; kiểm rồi khôi phục cặp clear/compare đúng.
+2. Đổi GL_CCW thành GL_CW nhưng giữ nguyên source indices. Các mặt sẽ đảo. Khôi phục GL_CCW, không đảo riêng EBO GPU.
+3. Cuối cùng bỏ mặt near khỏi clipping CPU. So cảnh zoom gần ở F1/F2, rồi trả lại đủ sáu mặt. Đừng cố dùng culling để che clipping sai.
 
 ## Tự kiểm tra kết quả
 

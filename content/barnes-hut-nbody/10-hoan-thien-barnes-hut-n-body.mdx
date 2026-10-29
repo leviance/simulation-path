@@ -138,11 +138,22 @@ cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_31_checkpoint_10
 ```
 
+Build test executable ở đúng cấu hình trước khi gọi CTest. Hai lượt dưới đây kiểm cùng fixture; Release không được bỏ kiểm chỉ vì NDEBUG:
+
+```bash title="Terminal — kiểm Debug và Release"
+cmake --build build --config Debug --target project_31_tests --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --target project_31_tests --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
 Trên Windows chạy ./build/Debug/project_31_checkpoint_10.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-Cố ý đo energy chỉ trên một prefix rồi ghi N=4.096: số hữu hạn nhưng nhãn sai phạm vi. Khôi phục full snapshot. Thay epsilon giữa hai mẫu nhưng vẫn diễn giải ΔE như một định luật bảo toàn: bạn đã đổi potential. Cuối cùng, giảm dt mà đồng thời đổi theta để thấy thí nghiệm không còn tách được nguồn sai số.
+1. Cố ý đo energy trên một prefix nhưng ghi N=4.096. Kết quả hữu hạn vẫn có nhãn sai phạm vi. Khôi phục phép đo trên full snapshot.
+2. Thay epsilon giữa hai mẫu rồi diễn giải ΔE như một phép kiểm bảo toàn. Bạn đã đổi potential; giữ model cố định và đo lại trước khi quy lỗi cho integrator.
+3. Giảm dt đồng thời giảm theta rồi thử tách nguyên nhân sai số. Hai biến đã thay cùng lúc nên phép so không còn trả lời riêng câu hỏi integration hay tree approximation. Khôi phục một biến mỗi lần.
 
 ## Tự kiểm tra kết quả
 

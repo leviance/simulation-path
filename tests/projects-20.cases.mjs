@@ -74,6 +74,11 @@ test("Project 20 overview and all eight routes expose full runnable final source
     // checked in the browser, not inferred from server-only HTML.
     assert.ok(/code-copy-enhancer/.test(html), file + " loads the copy enhancer");
     assert.match(html, /one-dark-pro/);
+    assert.match(
+      html,
+      /class="lab-readout"/,
+      file + " must retain textual Canvas state before hydration",
+    );
     if (file === files.at(-1)) {
       for (const file of await readdir(path.join(root, "source-template/include")))
         assert.ok(html.includes("include/" + file), file);

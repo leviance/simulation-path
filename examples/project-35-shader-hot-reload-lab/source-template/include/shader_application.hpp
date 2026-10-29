@@ -178,7 +178,9 @@ inline int runShaderApplication(int argc, char** argv) {
         if (verify)
             running = false;
 #endif
+#if LAB_CHECKPOINT >= 6
         SDL_MouseID capturedMouse = 0;
+#endif
         double mouseBeforeX = 0.5, mouseBeforeY = 0.5;
         int logOffset = 0;
         std::uint64_t frames = 0;

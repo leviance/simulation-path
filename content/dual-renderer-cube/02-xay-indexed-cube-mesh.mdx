@@ -148,9 +148,8 @@ Checkpoint 02 báo sphere và 2.976 tam giác ra terminal. Cửa sổ vẫn ch�
 
 ## Thử làm sai để hiểu đúng
 
-Tạo OBJ thử với index 0 hoặc `f 1 2 999999`. Kỳ vọng parser báo lỗi, không đọc ngoài mảng.
-
-Trong một bản thử khác, bỏ normal khỏi khóa vertex. Khi xem cube ở final, các mặt không còn normal riêng nên ánh sáng không phản ánh đúng mặt đang vẽ. Khôi phục khóa position+normal; đừng sửa shader để bù cho dữ liệu đã mất.
+1. Tạo OBJ thử với index 0 hoặc `f 1 2 999999`. Kỳ vọng parser báo lỗi, không đọc ngoài mảng.
+2. Trong một bản thử khác, bỏ normal khỏi khóa vertex. Khi xem cube ở final, các mặt không còn normal riêng nên ánh sáng không phản ánh đúng mặt đang vẽ. Khôi phục khóa position+normal; đừng sửa shader để bù cho dữ liệu đã mất.
 
 ## Tự kiểm tra kết quả
 

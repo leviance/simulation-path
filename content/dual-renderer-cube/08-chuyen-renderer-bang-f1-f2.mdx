@@ -114,9 +114,8 @@ Nếu đổi backend làm hình nhảy, in scene trước/sau rồi tìm biến 
 
 ## Thử làm sai để hiểu đúng
 
-Đặt `scene = {}` trong nhánh F2 của một bản thử. Làm lại chuỗi trên để thấy vì sao “cả hai bên đều vẽ được” chưa đủ. Khôi phục nhánh chỉ sửa enum.
-
-Thử gọi `initialize` mỗi lần chọn model và log IDs của VBO/VAO. Bạn sẽ thấy tài nguyên bị tạo lại. Khôi phục cache một lần; bài cuối sẽ kiểm các IDs qua switch, resize và đổi mesh.
+1. Đặt `scene = {}` trong nhánh F2 của một bản thử. Làm lại chuỗi trên để thấy vì sao “cả hai bên đều vẽ được” chưa đủ. Khôi phục nhánh chỉ sửa enum.
+2. Thử gọi `initialize` mỗi lần chọn model và log IDs của VBO/VAO. Bạn sẽ thấy tài nguyên bị tạo lại. Khôi phục cache một lần; bài cuối sẽ kiểm các IDs qua switch, resize và đổi mesh.
 
 ## Tự kiểm tra kết quả
 

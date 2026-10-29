@@ -415,11 +415,40 @@ test("Project 11 derives perspective from a visible point before adding visibili
     path.join(directory, "05-near-plane-va-view-frustum.mdx"),
     "utf8",
   );
-  assert.ok(
-    visibility.indexOf("cameraPoint.z <= 0.0") <
-      visibility.lastIndexOf("const Vec2 ndc = cameraToNdc"),
-    "Project 11 must reject unsafe depth before perspective division",
+  assert.match(visibility, /trước[^\n]*cameraToNdc/i);
+  const projectionSource = await readFile(
+    path.join(
+      workspace,
+      "examples",
+      "project-11-perspective-point",
+      "checkpoints",
+      "05",
+      "include",
+      "lab.hpp",
+    ),
+    "utf8",
   );
+  const functionStart = projectionSource.indexOf("inline ProjectionResult projectPerspective(");
+  const divideAt = projectionSource.indexOf("const Vec2 ndc = cameraToNdc", functionStart);
+  assert.ok(
+    functionStart >= 0 && divideAt > functionStart,
+    "Project 11 must perform its real perspective divide",
+  );
+  for (const guard of [
+    "cameraPoint.z <= 0.0",
+    "cameraPoint.z < lens.nearPlane",
+    "cameraPoint.z > lens.farPlane",
+  ]) {
+    const guardAt = projectionSource.indexOf(guard, functionStart);
+    assert.ok(
+      guardAt > functionStart && guardAt < divideAt,
+      "Project 11 must reject unsafe depth before perspective division: " + guard,
+    );
+    assert.match(
+      projectionSource.slice(guardAt, projectionSource.indexOf("}", guardAt)),
+      /return result;/,
+    );
+  }
   assert.match(visibility, /ProjectionStatus/);
   assert.match(visibility, /isInsideNdc/);
 

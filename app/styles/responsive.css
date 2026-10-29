@@ -364,7 +364,8 @@
     monospace;
   letter-spacing: 0.01em;
 }
-.prose [data-rehype-pretty-code-title] + pre {
+.prose [data-rehype-pretty-code-title] + pre,
+.prose [data-rehype-pretty-code-title] + [data-code-html] pre {
   margin-top: 0;
   border-top-left-radius: 0;
   border-top-right-radius: 0;

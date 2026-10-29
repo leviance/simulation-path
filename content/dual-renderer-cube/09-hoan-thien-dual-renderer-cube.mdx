@@ -154,9 +154,9 @@ ZIP có assets và LICENSE, starter, chín checkpoint, final và tests. Không c
 
 ## Thử làm sai để hiểu đúng
 
-Đổi một hệ số projection chỉ ở GPU: vertex trace phải thất bại. Khôi phục rồi đổi depth compare: image/depth fixture phải bắt được. Tiếp đó thử tạo lại một VBO khi đổi model: resource check phải phát hiện. Khôi phục từng thay đổi trước khi thử lỗi tiếp theo.
-
-Không chỉnh tolerance để biến ảnh sai thành pass. Nếu chỉ khác ở cạnh, kiểm dải cạnh cố định; nếu có interior failure, tìm matrix, clipping, shading hoặc depth đã lệch.
+1. Đổi một hệ số projection chỉ ở GPU: vertex trace phải thất bại. Khôi phục projection trước khi thử tiếp.
+2. Đổi depth compare: image/depth fixture phải bắt được. Không chỉnh tolerance để biến ảnh sai thành pass; nếu chỉ khác ở cạnh, kiểm dải cạnh cố định, còn interior failure cần tìm nguyên nhân thật.
+3. Tạo lại một VBO khi đổi model: resource check phải phát hiện. Khôi phục cache; chạy lại verifier để chắc chắn các sửa đổi thử nghiệm đã được hoàn tác.
 
 ## Tự kiểm tra kết quả
 

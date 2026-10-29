@@ -1,102 +1,110 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Reload theo giao dịch, giữ last-good
+# Thử bản mới, giữ bản tốt gần nhất
 
 ## Vấn đề cần giải quyết
 
-Cách reload nguy hiểm nhất là xóa program hiện tại rồi mới compile source mới. Chỉ cần thiếu một dấu `;`, renderer không còn program để vẽ và cửa sổ biến thành màu clear. Người học phải sửa lỗi trong khi mất luôn kết quả trước đó.
+Từ bài này, bạn không cần đóng cửa sổ mỗi lần đổi shader. Bấm F5 để đọc lại file và thử bản mới ngay trong ứng dụng.
 
-Ta sẽ xử lý reload như một giao dịch nhỏ: xây candidate bên cạnh active program, kiểm xong toàn bộ rồi mới commit. Nếu bất kỳ bước nào thất bại, failure path chỉ xóa resource tạm; last-good program vẫn vẽ frame kế tiếp.
+Nhưng có một yêu cầu quan trọng hơn tốc độ reload: gõ sai GLSL không được làm mất program đang vẽ. Nếu xóa program cũ trước rồi mới compile bản mới, một dấu chấm phẩy bị thiếu cũng đủ biến cửa sổ thành màn hình đen.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hai đường đi phải tách rõ:
+Ta giữ hai đối tượng riêng: active program đang dùng và candidate đang thử. Chỉ khi compile, link và kiểm interface đều thành công, candidate mới trở thành active. Nếu bất kỳ bước nào thất bại, chỉ hủy candidate.
 
-```text
-candidate fail → delete candidate resources → active program không đổi
-candidate pass → swap active handle/locations → tăng generation → delete previous
-```
+Đây là một transaction nhỏ: chuẩn bị → kiểm tra → commit. “Last-good” nghĩa là program tốt gần nhất, không phải ảnh chụp màn hình. Về sau khi time tiếp tục chạy, hình cũ vẫn chuyển động dù candidate bị lỗi.
 
-`generation` đếm số program đã từng trở thành active, không đếm số lần bấm F5. `attempts` mới tăng ở cả pass lẫn fail.
+Trong Canvas, hãy thử lỗi rồi nhìn Program generation và Reload attempts. attempts tăng mỗi lần thử; generation chỉ tăng khi mẫu mới được áp dụng. Các lỗi ở đây được mô phỏng rõ ràng, không thay thế log driver của bản C++.
 
 <InteractiveLab demo="shader-hot-reload" mode="transactional-reload" />
 
 ## Viết code từng bước
 
-### Bước 1 — Giữ active và candidate fingerprint riêng
+### Bước 1 — Đổi program sau khi candidate đã qua mọi kiểm tra
 
-```cpp title="include/pipeline.hpp — ReloadState"
-struct ReloadState {
-    std::uint64_t generation{1};
-    std::uint64_t attempts{1};
-    std::uint64_t activeFingerprint{};
-    std::uint64_t candidateFingerprint{};
-    bool lastReloadSucceeded{true};
-};
+```cpp title="include/shader_renderer.hpp — transaction reload"
+    bool reload(GlApi& gl, const ShaderSources& sources, std::size_t effect, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
+        ProgramCandidate candidate{};
+        const auto fingerprint = fingerprintShaderSources(sources);
+        if (!buildProgramCandidate(gl, sources, candidate, diagnostics, audit)) {
+            recordReloadAttempt(reloadState, fingerprint, effect, false, diagnostics);
+            return false;
+        }
+        const GLuint previousProgram = activeProgram;
+        activeProgram = std::exchange(candidate.program, 0);
+        locations = candidate.locations;
+        // A currently bound old program is only flagged for deletion. Bind
+        // the replacement first so deleting previousProgram really releases it.
+        gl.UseProgram(activeProgram);
+        if (previousProgram)
+            gl.DeleteProgram(previousProgram);
+        diagnostics = "Reload OK: " + sources.fragmentLabel;
+        recordReloadAttempt(reloadState, fingerprint, effect, true, diagnostics);
+        return true;
+    }
 ```
 
-Khi source lỗi, `candidateFingerprint` chứng minh file đã khác, còn `activeFingerprint` cho biết hình hiện tại vẫn đến từ bản cũ.
+buildProgramCandidate dùng lại các hàm đã học. Nhánh thất bại không sửa activeProgram hay locations. Nhánh thành công mới lấy ID bằng std::exchange: candidate.program trở thành 0, còn renderer nhận quyền sở hữu ID đó.
 
-### Bước 2 — Failure không được chạm active state
+previousProgram giữ ID cũ để hủy sau khi đổi sang bản mới. Ta gọi UseProgram(activeProgram) trước DeleteProgram(previousProgram): OpenGL chỉ đánh dấu xóa một program còn đang bind, nên bind bản mới trước giúp giải phóng bản cũ ngay.
 
-```cpp title="include/shader_renderer.hpp — build candidate trước"
-ProgramCandidate candidate{};
-const std::uint64_t fingerprint = fingerprintShaderSources(sources);
-if (!buildProgramCandidate(api, sources, candidate, diagnostics)) {
-    recordReloadAttempt(reloadState, fingerprint, false);
-    return false;
+locations cũng được thay cùng program. Chỉ thay ID mà giữ locations cũ là lỗi khó thấy: vị trí uniform có thể khác sau mỗi lần link.
+
+### Bước 2 — Tách số lần thử khỏi số bản thành công
+
+```cpp title="include/pipeline.hpp — ghi kết quả reload"
+inline void recordReloadAttempt(ReloadState& state, std::uint64_t fingerprint, std::size_t effect, bool succeeded, std::string diagnostics) {
+    ++state.attempts;
+    state.candidateFingerprint = fingerprint;
+    state.lastReloadSucceeded = succeeded;
+    state.diagnostics = std::move(diagnostics);
+    if (succeeded) {
+        ++state.generation;
+        state.activeFingerprint = fingerprint;
+        state.activeEffect = effect;
+    }
 }
 ```
 
-`activeProgram` chưa bị đọc hoặc ghi. Candidate helper tự dọn mọi shader/program object tạm trên các nhánh lỗi.
+attempts luôn tăng, kể cả đọc file/compile/link thất bại. generation, activeFingerprint và activeEffect chỉ đổi trong nhánh succeeded. Fingerprint nhận diện nội dung hai shader, không phải bằng chứng rằng shader đã compile đúng và cũng không phải hash bảo mật.
 
-### Bước 3 — Commit rồi mới xóa previous program
+Tham số effect chỉ được ghi nhận khi commit. Nếu bạn đang xem gradient rồi thử chuyển sang một shader hỏng, ảnh vẫn là gradient; giao diện phải phân biệt hiệu ứng đang yêu cầu với hiệu ứng thực sự đang chạy.
 
-```cpp title="include/shader_renderer.hpp — transactional commit"
-const GLuint previousProgram = activeProgram.program;
-activeProgram = candidate;
-recordReloadAttempt(reloadState, fingerprint, true);
-if (previousProgram != 0U) {
-    api.DeleteProgram(previousProgram);
-}
-diagnostics = "Reload succeeded; candidate became the active program.";
-return true;
-```
+### Bước 3 — Nối phím F5 vào cùng một đường reload
 
-Sau phép gán, toàn bộ handle và uniform locations chuyển cùng nhau. Chỉ lúc đó previous program mới hết nhiệm vụ.
+shader_input.hpp chuyển F5 thành cờ reload. shader_application.hpp xử lý cờ sau khi đọc event, gọi reloadFromDisk; hàm này đọc cả hai file rồi chuyển ShaderSources cho renderer.reload. Không đặt logic compile riêng trong từng nhánh bàn phím.
+
+F5 không khởi tạo lại ShaderScene: time, mouse, zoom và trạng thái pause nằm ngoài renderer nên không bị reset khi program thay đổi.
 
 ## Ghép các phần lại
 
-Checkpoint 4 thêm F5. Chạy app, sửa màu hợp lệ rồi F5: generation tăng. Sau đó chèn token sai và F5 lần nữa: attempts tăng, generation đứng yên, cube vẫn mang màu trước đó.
-
-```bash title="Terminal — build checkpoint transactional reload"
-cmake --build build --config Debug --target project_35_checkpoint_4
+```bash title="Terminal — checkpoint 4"
+cmake --build build --config Debug --target project_35_checkpoint_4 --parallel 2
+./build/Debug/project_35_checkpoint_4.exe
 ```
 
-Terminal in driver log và dòng `Last-good program remains active.`. Sửa lỗi, F5; candidate mới được commit mà không restart app.
+Sửa gradient.frag tại SHADER DIRECTORY, lưu rồi đưa focus về cửa sổ C++ và bấm F5. Đổi một kênh màu trước để nhận ra kết quả rõ ràng.
+
+Tiếp theo bỏ dấu chấm phẩy, lưu, F5. Terminal phải in lỗi còn dải màu cũ vẫn hiện. Sửa lại và F5 lần nữa: chương trình phải áp dụng được bản tốt mà không restart.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chuyển `api.DeleteProgram(activeProgram.program)` lên đầu `reload`. Một compile error lập tức làm mất hình.
-2. Chỉ thay program handle nhưng giữ locations cũ. Cube có thể đứng yên hoặc nhận uniform sai sau reload.
-3. Tăng generation trước khi build candidate. Counter nói dối mỗi lần source lỗi.
+1. Cố ý đặt DeleteProgram trước buildProgramCandidate trong bản thử riêng: bạn sẽ thấy vì sao thứ tự transaction quan trọng. Sau đó khôi phục source chuẩn.
+2. Thử nhiều candidate lỗi liên tiếp. attempts tăng; active fingerprint và generation không đổi.
+3. Xóa file rồi F5: lỗi I/O cũng phải giữ last-good, không chỉ lỗi compile.
 
-Hoàn tác rồi chạy chuỗi pass → fail → fail → pass và ghi lại generation/attempts.
+Khi so hình trước/sau một lần lỗi ở các bài có animation, hãy pause tại cùng time trước. So hai frame ở hai thời điểm khác nhau không kiểm chứng được việc giữ nguyên program.
 
 ## Tự kiểm tra kết quả
 
-- [ ] F5 source đúng làm generation tăng đúng một.
-- [ ] F5 source sai chỉ làm attempts tăng.
-- [ ] Cube tiếp tục vẽ bằng last-good program sau lỗi.
-- [ ] Handle và locations được commit cùng một lần.
-- [ ] Previous program chỉ bị xóa sau commit thành công.
-
-Hãy dự đoán điều xảy ra nếu candidate link pass nhưng thiếu `uMvp`: transactional rule vẫn phải coi đó là failure.
+- [ ] F5 đọc lại file đã lưu, không build lại executable.
+- [ ] Candidate lỗi không thay active ID, locations hoặc metadata đã commit.
+- [ ] Candidate tốt cập nhật cả program lẫn locations.
+- [ ] Shader/program tạm được hủy ở cả nhánh thành công và thất bại.
+- [ ] Sửa lỗi rồi F5 tiếp được mà không đóng cửa sổ.
 
 ## Bài tập mở rộng
 
-1. Hiển thị active/candidate fingerprint dạng hexadecimal trên terminal.
-2. Giữ ba diagnostics gần nhất trong ring buffer CPU.
-3. Thêm phím quay lại generation trước và liệt kê resource nào cần giữ thêm.
+In activeFingerprint và candidateFingerprint mỗi lần thử. Giải thích vì sao chúng có thể khác nhau sau một lần thất bại. Sau đó đổi màu qua ba bản tốt và xen một bản hỏng; ghi lại generation/attempts để tự kiểm logic.
 
-Bài tiếp theo tự phát hiện Save nhưng vẫn dùng đúng giao dịch vừa xây.
+[Bài tiếp theo: tự reload khi file đã ổn định](/projects/shader-hot-reload-lab/05-theo-doi-file-va-debounce).

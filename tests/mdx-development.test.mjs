@@ -41,6 +41,8 @@ test(
   "development pipeline compiles representative MDX lessons before Oxc",
   { timeout: fullMdxDevCheck ? 9 * 60_000 : 3 * 60_000 },
   async () => {
+    if (fullMdxDevCheck)
+      console.info("MDX development: initialize middleware with filesystem watching disabled");
     const mdxPlugin = mdx(courseMdxOptions);
     const server = await createServer({
       configFile: false,
@@ -48,10 +50,13 @@ test(
       plugins: [{ ...mdxPlugin, enforce: "pre" }],
       resolve: { alias: { "@": workspace } },
       optimizeDeps: { noDiscovery: true },
-      server: { middlewareMode: true, hmr: false },
+      // This test transforms explicit URLs; it never tests file watching.
+      // Do not scan examples/, SDL caches and build trees on Windows.
+      server: { middlewareMode: true, hmr: false, watch: null },
       logLevel: "silent",
     });
     try {
+      if (fullMdxDevCheck) console.info("MDX development: middleware ready; no HTTP listener");
       const lessons = await authoredLessons();
       const candidates = fullMdxDevCheck
         ? lessons
@@ -80,6 +85,14 @@ test(
             }
           }),
         );
+        if (
+          fullMdxDevCheck &&
+          ((index + batch.length) % 64 === 0 || index + batch.length === candidates.length)
+        ) {
+          console.info(
+            `MDX development: ${index + batch.length}/${candidates.length} lessons compiled`,
+          );
+        }
       }
     } finally {
       await server.close();

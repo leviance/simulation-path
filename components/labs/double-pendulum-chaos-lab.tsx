@@ -1,5 +1,7 @@
 "use client";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -32,10 +34,15 @@ import {
   chaosInPrimaryPane,
   drawChaosCanvas,
 } from "./chaos-view";
-import { useCanvasSize, useReducedMotion, usePauseOnReducedMotion } from "./lab-shared";
-import { ChaosControls } from "./chaos-controls";
-import { ChaosReadout } from "./chaos-readout";
+import { LabReadout, useCanvasSize, useReducedMotion, usePauseOnReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
+
+const ChaosControls = lazy(() =>
+  import("./chaos-controls").then((module) => ({ default: module.ChaosControls })),
+);
+const ChaosReadout = lazy(() =>
+  import("./chaos-readout").then((module) => ({ default: module.ChaosReadout })),
+);
 
 export default function DoublePendulumChaosLab({ mode }: { mode?: InteractiveLabMode }) {
   return <ChaosTank key={mode ?? "chaos-validation"} mode={mode} />;
@@ -290,21 +297,29 @@ function ChaosTank({ mode }: { mode?: InteractiveLabMode }) {
         onKeyDown={onKeyDown}
         onBlur={onBlur}
       />
-      <ChaosControls
-        scene={scene}
-        reducedMotion={reducedMotion}
-        edit={edit}
-        preset={preset}
-        reset={reset}
-        defaults={defaults}
-        togglePause={togglePause}
-        step={step}
-        fast={fast}
-        shortRun={shortRun}
-        stop={stop}
-        toggleDebug={toggleDebug}
-      />
-      <ChaosReadout scene={scene} />
+      <Suspense fallback={<p role="status">Đang tải điều khiển con lắc…</p>}>
+        <ChaosControls
+          scene={scene}
+          reducedMotion={reducedMotion}
+          edit={edit}
+          preset={preset}
+          reset={reset}
+          defaults={defaults}
+          togglePause={togglePause}
+          step={step}
+          fast={fast}
+          shortRun={shortRun}
+          stop={stop}
+          toggleDebug={toggleDebug}
+        />
+      </Suspense>
+      <Suspense
+        fallback={
+          <LabReadout items={[{ label: "Trạng thái", value: "Đang tải số liệu con lắc…" }]} />
+        }
+      >
+        <ChaosReadout scene={scene} />
+      </Suspense>
       <p className="lab-hint">
         A/D: góc theta1; W/S: góc theta2. Space: chạy/dừng; N: một bước; R: đặt lại cùng cấu hình;
         F: debug. Từ bài 7: kéo quả cuối của A, Enter chạy nhanh, Esc dừng. Tab rời Canvas. Reduced

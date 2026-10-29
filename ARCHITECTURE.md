@@ -49,7 +49,11 @@ Các thư mục `starter/`, `checkpoints` và `final/` là output được sinh,
 
 Thư mục `examples/` không được dev server theo dõi để tránh quét cả cây build. Server chỉ import một JSON cho mỗi snapshot từ `lib/generated-checkpoint-sources/pXX/data/`, không tạo một module `?raw` cho mỗi tệp C++. Trình duyệt đọc manifest nhỏ của đúng project tại `public/project-sources/XX/manifest.json`, rồi tải hai JSON cần thiết: phần dùng chung và checkpoint đang mở. Payload có hash nội dung trong tên và byte giống nhau ở server/public; manifest được đọc mới khi mở tệp, nên mã thay đổi không bị giữ nhầm trong cache. Bộ đọc phía client không import registry source toàn khóa học. Không cần backend hay endpoint API cho các tệp này.
 
+MDX giữ code One Dark và công thức KaTeX trong HTML ban đầu, bao gồm MathML và annotation công thức. `lib/rehype-static-code.mjs` chạy sau Shiki và KaTeX, gom các thẻ HTML lặp lại vào một dictionary thay vì gửi một cây React element cho từng token. Client boundary `CourseStaticMarkup` dựng lại cùng HTML đã escape trong cả SSR lẫn hydration; không cần tải Shiki hoặc KaTeX xuống trình duyệt. Bộ mã hóa trong `lib/static-markup.mjs` chỉ nhận output tin cậy của compiler, không phải bộ lọc HTML cho input của người dùng. Tests kiểm round-trip, màu, thụt dòng và giới hạn trust của công thức. Phần diff cuối bài chỉ tô màu khi người học mở tên tệp; mã diff vẫn được tạo từ hai checkpoint thực tế.
+
 CMake dùng một target `project_N_runtime_files` để chuẩn bị DLL SDL và assets bất biến đúng một lần trong mỗi build/configuration; mọi app target phụ thuộc target này. Không để từng executable cùng POST_BUILD chép vào một thư mục runtime, vì build song song trên Windows có thể tranh chấp file. Generator single-config dùng ngay build directory; Visual Studio và generator multi-config dùng thư mục cấu hình con.
+
+Project có shader thay đổi theo checkpoint có thể bật `shaderRuntimePerTarget` trong catalog. Khi bật, mỗi target có bản fallback tại `shaders/<target-name>/` cạnh executable và nhận đường này qua `COURSE_SHADER_FALLBACK_SUBDIRECTORY`; các target không chép đè GLSL của nhau. Source directory của đúng snapshot vẫn được ưu tiên để hỗ trợ hot reload. Các project chưa bật option giữ cách tìm runtime shader hiện tại.
 
 ## File được sinh tự động
 
@@ -118,3 +122,7 @@ Khi agent kiểm tra ZIP, dùng tiến trình local qua process supervisor để
 Không tự động truyền file qua browser file chooser khi công cụ không bảo đảm hủy độc lập. Kiểm parser bằng asset trên đĩa và thử editor bằng các fixture ngắn; việc mở file bằng UI có thể kiểm thủ công. Cả download tracking lẫn file chooser đã có trường hợp chờ vượt timeout được khai báo, nên không coi timeout của API là bảo đảm an toàn.
 
 Khi project mới cần kiểm thử nội dung riêng, tạo suite theo đợt phát hành, ví dụ `tests/projects-09-13.cases.mjs`, rồi import nó từ `tests/rendered-html.test.mjs`. Không nối toàn bộ regression vào một file duy nhất.
+
+Các lượt quét route, liên kết và dung lượng dùng chung response production trong một lần chạy test. `tests/rendered-route-cache.mjs` giữ tối đa 64 response trong RAM và lưu phần còn lại vào thư mục riêng `.validation/rendered-routes-*`. Cache không dùng lại giữa các tiến trình hoặc các bản build; test hook xóa thư mục riêng khi suite kết thúc bình thường. Nhờ đó kiểm tra toàn khóa học không phải render lại từng trang sau mỗi lần cache RAM bị đẩy ra, nhưng cũng không giữ toàn bộ HTML trong bộ nhớ.
+
+`test:labs` và `test:tooling` giới hạn hai Node test worker bằng `--test-concurrency=2`, thay vì tự lấy số CPU làm mức song song. Giới hạn này không giảm số test hoặc thay đổi timeout của stage; nó tránh khởi chạy nhiều worker TypeScript cùng lúc khi khóa học đã có hàng chục project.

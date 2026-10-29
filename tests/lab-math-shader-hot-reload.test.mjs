@@ -1,168 +1,168 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import * as shader from "../lib/labs/shader-hot-reload.ts";
 
-const validSources = {
-  vertex: shader.defaultVertexShader,
-  fragment: shader.defaultFragmentShader,
-};
+const candidate = (effect = "gradient", version = 1) => ({
+  effect,
+  version,
+  sources: { vertex: shader.defaultVertexShader, fragment: shader.fragmentTemplates[effect] },
+});
 
-test("valid GLSL stages expose a compatible interface", () => {
-  assert.deepEqual(shader.validateShaderStage("vertex", validSources.vertex), []);
-  assert.deepEqual(shader.validateShaderStage("fragment", validSources.fragment), []);
-  assert.deepEqual(
-    shader.validateProgramInterface(validSources, ["uMvp", "uTime", "uResolution", "uMouse"]),
-    [],
+test("Canvas templates are the exact final GLSL, not independent approximations of source", async () => {
+  const root = new URL(
+    "../examples/project-35-shader-hot-reload-lab/final/shaders/",
+    import.meta.url,
   );
-});
-
-test("stage diagnostics retain the source line", () => {
-  const broken = validSources.fragment.replace("fragColor =", "BROKEN_TOKEN fragColor =");
-  const diagnostics = shader.validateShaderStage("fragment", broken);
-  assert.equal(diagnostics.length, 1);
-  assert.equal(diagnostics[0].stage, "fragment");
-  assert.equal(
-    diagnostics[0].line,
-    broken.slice(0, broken.indexOf("BROKEN_TOKEN")).split("\n").length,
-  );
-});
-
-test("stage diagnostics catch a missing semicolon and unmatched parenthesis", () => {
-  const missingSemicolon = validSources.fragment.replace(
-    "fragColor = vec4(color, 1.0);",
-    "fragColor = vec4(color, 1.0)",
-  );
-  assert.match(shader.validateShaderStage("fragment", missingSemicolon)[0].message, /thiếu dấu ;/);
-
-  const missingParenthesis = validSources.fragment.replace("length(p)", "length(p");
-  assert.match(
-    shader.validateShaderStage("fragment", missingParenthesis)[0].message,
-    /chưa đóng đủ dấu \)/,
-  );
-});
-
-test("link validation catches a mismatched varying", () => {
-  const candidate = {
-    ...validSources,
-    fragment: validSources.fragment.replaceAll("vColor", "vMissingColor"),
-  };
-  assert.match(shader.validateProgramInterface(candidate)[0].message, /vMissingColor/);
-});
-
-test("link validation catches the same varying name with a different type", () => {
-  const candidate = {
-    ...validSources,
-    fragment: validSources.fragment.replace("in vec3 vColor;", "in vec2 vColor;"),
-  };
-  assert.match(shader.validateProgramInterface(candidate)[0].message, /khác kiểu/);
-});
-
-test("program contract rejects a required uniform that the driver could optimize away", () => {
-  const candidate = {
-    ...validSources,
-    fragment: validSources.fragment.replace("uMouse / safeResolution", "vec2(0.5)"),
-  };
-  assert.match(
-    shader.validateProgramInterface(candidate, ["uMvp", "uTime", "uResolution", "uMouse"])[0]
-      .message,
-    /uMouse.*chưa được dùng/,
-  );
-});
-
-test("failed reload preserves the last-good program", () => {
-  const initial = shader.createShaderProgramState(validSources);
-  const broken = {
-    ...validSources,
-    fragment: validSources.fragment.replace("}", "BROKEN_TOKEN\n}"),
-  };
-  const next = shader.transactionalShaderReload(initial, broken);
-  assert.equal(next.lastReloadSucceeded, false);
-  assert.equal(next.generation, initial.generation);
-  assert.equal(next.activeFingerprint, initial.activeFingerprint);
-  assert.deepEqual(next.activeSources, initial.activeSources);
-  assert.notEqual(next.candidateFingerprint, initial.activeFingerprint);
-});
-
-test("successful reload advances generation and active fingerprint", () => {
-  const initial = shader.createShaderProgramState(validSources);
-  const candidate = {
-    ...validSources,
-    fragment: validSources.fragment.replace("18.0", "24.0"),
-  };
-  const next = shader.transactionalShaderReload(initial, candidate);
-  assert.equal(next.lastReloadSucceeded, true);
-  assert.equal(next.generation, initial.generation + 1);
-  assert.equal(next.activeFingerprint, shader.shaderFingerprint(candidate));
-});
-
-test("file watcher waits for a stable debounce window", () => {
-  let watch = shader.createShaderWatchState();
-  let result = shader.observeShaderFiles(watch, { vertex: 10, fragment: 20 }, 0, 120);
-  assert.equal(result.shouldReload, false);
-  watch = result.state;
-
-  result = shader.observeShaderFiles(watch, { vertex: 10, fragment: 21 }, 40, 120);
-  assert.equal(result.shouldReload, false);
-  assert.equal(result.state.pending, true);
-  watch = result.state;
-
-  result = shader.observeShaderFiles(watch, { vertex: 10, fragment: 21 }, 159, 120);
-  assert.equal(result.shouldReload, false);
-  result = shader.observeShaderFiles(result.state, { vertex: 10, fragment: 21 }, 160, 120);
-  assert.equal(result.shouldReload, true);
-  assert.equal(result.state.pending, false);
-});
-
-test("procedural presets stay finite and within RGB range", () => {
-  const uniforms = {
-    timeSeconds: 1.25,
-    resolution: { x: 960, y: 640 },
-    mouse: { x: 480, y: 320 },
-  };
-  for (const preset of ["solid", "coordinates", "pulse", "rings"]) {
-    const color = shader.evaluateShaderPreset(preset, 0.37, 0.62, uniforms);
-    for (const channel of [color.red, color.green, color.blue]) {
-      assert.ok(Number.isFinite(channel));
-      assert.ok(channel >= 0 && channel <= 1);
-    }
+  assert.equal(shader.defaultVertexShader, await readFile(new URL("lab.vert", root), "utf8"));
+  for (const effect of Object.keys(shader.effectNames)) {
+    assert.equal(
+      shader.fragmentTemplates[effect],
+      await readFile(new URL(effect + ".frag", root), "utf8"),
+    );
   }
 });
 
-test("editing numeric GLSL constants changes the preview result", () => {
-  const uniforms = {
-    timeSeconds: 0.4,
-    resolution: { x: 960, y: 640 },
-    mouse: { x: 480, y: 320 },
-  };
-  const original = shader.evaluateShaderPreset(
-    "rings",
-    0.32,
-    0.71,
-    uniforms,
-    validSources.fragment,
+test("Canvas explicitly accepts only supported SPEED edits, never arbitrary GLSL", () => {
+  const original = shader.fragmentTemplates.gradient;
+  assert.equal(shader.inspectCanvasTemplate(original, "gradient").supported, true);
+  const changed = original.replace("SPEED = 0.65", "SPEED = 1.3");
+  assert.equal(shader.inspectCanvasTemplate(changed, "gradient").speed, 1.3);
+  assert.equal(
+    shader.inspectCanvasTemplate(original.replace("0.18 * sin", "0.19 * sin"), "gradient")
+      .supported,
+    false,
   );
-  const editedSource = validSources.fragment
-    .replace("18.0", "31.0")
-    .replace("vec3 hot = vec3(1.0, 0.42, 0.18);", "vec3 hot = vec3(0.20, 0.90, 0.35);");
-  const edited = shader.evaluateShaderPreset("rings", 0.32, 0.71, uniforms, editedSource);
-  assert.notDeepEqual(edited, original);
+  assert.match(
+    shader.inspectCanvasTemplate(original + "\n// valid GLSL comment", "gradient").diagnostic,
+    /Không thể kết luận GLSL đúng\/sai/,
+  );
+  for (const speed of ["0", "4.1", "-1", "NaN", "1e309"]) {
+    assert.equal(
+      shader.inspectCanvasTemplate(original.replace("SPEED = 0.65", "SPEED = " + speed), "gradient")
+        .supported,
+      false,
+    );
+  }
 });
 
-test("mouse glow uses both framebuffer coordinates", () => {
-  const source = shader.defaultFragmentShader.replace("* 5.0", "* 12.0");
-  const near = shader.evaluateShaderPreset(
-    "rings",
-    0.5,
-    0.25,
-    { timeSeconds: 0, resolution: { x: 800, y: 600 }, mouse: { x: 400, y: 150 } },
-    source,
-  );
-  const far = shader.evaluateShaderPreset(
-    "rings",
-    0.5,
-    0.25,
-    { timeSeconds: 0, resolution: { x: 800, y: 600 }, mouse: { x: 400, y: 540 } },
-    source,
-  );
-  assert.ok(near.red > far.red || near.green > far.green || near.blue > far.blue);
+test("a failed candidate never replaces last-good image state or mutates its input", () => {
+  const initial = shader.createGalleryProgram();
+  for (const fault of ["compile", "interface"]) {
+    const next = shader.tryGalleryCandidate(initial, { ...candidate("noise"), fault });
+    assert.equal(next.generation, initial.generation);
+    assert.equal(next.attempts, initial.attempts + 1);
+    assert.equal(next.activeSources, initial.activeSources);
+    assert.equal(next.activeFingerprint, initial.activeFingerprint);
+    assert.equal(next.activeEffect, "gradient");
+    assert.equal(next.lastReloadSucceeded, false);
+    assert.match(next.diagnostic, /mô phỏng/);
+  }
+  assert.equal(initial.attempts, 0);
+});
+
+test("unsupported edits remain last-good, and repairing them commits without reset", () => {
+  const initial = shader.createGalleryProgram("circle");
+  const broken = candidate("noise");
+  broken.sources.fragment += "\nnot within the supported template";
+  const rejected = shader.tryGalleryCandidate(initial, broken);
+  const repaired = shader.tryGalleryCandidate(rejected, candidate("noise", 2));
+  assert.equal(rejected.generation, 1);
+  assert.equal(repaired.generation, 2);
+  assert.equal(repaired.attempts, 2);
+  assert.equal(repaired.activeEffect, "noise");
+  assert.notEqual(repaired.activeFingerprint, initial.activeFingerprint);
+  assert.equal(repaired.lastReloadSucceeded, true);
+});
+
+test("manual retry increments attempts and SPEED updates the active preview parameter", () => {
+  const next = candidate();
+  next.sources.fragment = next.sources.fragment.replace("SPEED = 0.65", "SPEED = 1.3");
+  const result = shader.tryGalleryCandidate(shader.createGalleryProgram(), next);
+  assert.equal(result.activeSpeed, 1.3);
+  assert.equal(result.generation, 2);
+  assert.equal(result.attempts, 1);
+  assert.equal(shader.tryGalleryCandidate(result, next).attempts, 2);
+});
+
+test("fingerprint has a stage separator, stable UTF-8 bytes and 64-bit width", () => {
+  const a = shader.shaderFingerprint({ vertex: "ab", fragment: "c" });
+  assert.notEqual(a, shader.shaderFingerprint({ vertex: "a", fragment: "bc" }));
+  assert.equal(a, shader.shaderFingerprint({ vertex: "ab", fragment: "c" }));
+  assert.match(shader.shaderFingerprint({ vertex: "tọa độ", fragment: "màu" }), /^[a-f0-9]{16}$/);
+});
+
+test("uniform coordinates use physical pixels and bottom-left origin after DPR scaling", () => {
+  const view = { ...shader.initialGalleryView(), mouseX: 0.25, mouseY: 0.25 };
+  assert.deepEqual(shader.makeGalleryUniforms(view, 1280, 960), {
+    time: 0,
+    width: 1280,
+    height: 960,
+    mouseX: 320,
+    mouseY: 720,
+    zoom: 1,
+  });
+  assert.equal(shader.makeGalleryUniforms({ ...view, mouseX: -1, mouseY: 4 }, 800, 600).mouseY, 0);
+  for (const invalid of [0, -2, NaN, Infinity])
+    assert.throws(() => shader.makeGalleryUniforms(view, invalid, 600));
+});
+
+test("pause, bounded delta time and zoom never reset unrelated state", () => {
+  const initial = shader.initialGalleryView();
+  assert.equal(shader.advanceGalleryView(initial, 1), initial);
+  const playing = { ...initial, time: 2, paused: false };
+  assert.equal(shader.advanceGalleryView(playing, 1).time, 2.05);
+  assert.equal(shader.advanceGalleryView(playing, NaN), playing);
+  const zoomed = shader.zoomGalleryView(playing, 1e300);
+  assert.equal(zoomed.zoom, 8);
+  assert.equal(zoomed.time, playing.time);
+  assert.equal(shader.zoomGalleryView(playing, -1e300).zoom, 0.25);
+});
+
+test("Mandelbrot uses known interior and escape points with bounded iterations", () => {
+  assert.equal(shader.mandelbrotOrbit(0, 0).escaped, 0);
+  assert.equal(shader.mandelbrotOrbit(-1, 0).escaped, 0);
+  assert.equal(shader.mandelbrotOrbit(2, 0).escaped, 2);
+  assert.equal(shader.mandelbrotOrbit(3, 0).escaped, 1);
+});
+
+test("value noise agrees at cell corners and is continuous across negative cell boundaries", () => {
+  assert.equal(shader.hashCell(0, 0), 0);
+  for (const [x, y] of [
+    [1, 2],
+    [-4, 7],
+    [8, -3],
+  ]) {
+    assert.equal(shader.valueNoise(x, y), shader.hashCell(x, y));
+    assert.ok(
+      Math.abs(shader.valueNoise(x - 1e-7, y + 0.3) - shader.valueNoise(x + 1e-7, y + 0.3)) < 1e-5,
+    );
+    assert.ok(shader.fbm(x + 0.3, y + 0.4) <= 0.96875);
+  }
+});
+
+test("all four reference effects are finite, bounded and respond to time, mouse and zoom", () => {
+  const base = { time: 1.25, width: 800, height: 520, mouseX: 400, mouseY: 260, zoom: 1 };
+  for (const effect of Object.keys(shader.effectNames)) {
+    const samples = (uniforms) =>
+      Array.from({ length: 48 }, (_, i) =>
+        shader.referenceShaderColor(
+          effect,
+          ((i % 8) + 0.37) * 100,
+          (Math.floor(i / 8) + 0.21) * 80,
+          uniforms,
+        ),
+      );
+    const original = samples(base);
+    for (const rgb of original)
+      for (const channel of rgb)
+        assert.ok(Number.isFinite(channel) && channel >= 0 && channel <= 1);
+    for (const change of [{ time: 2.75 }, { mouseX: 230, mouseY: 170 }, { zoom: 1.7 }]) {
+      assert.notDeepEqual(
+        samples({ ...base, ...change }),
+        original,
+        effect + " must react to " + JSON.stringify(change),
+      );
+    }
+  }
 });

@@ -179,7 +179,8 @@ Trên Windows chạy ./build/Debug/project_31_checkpoint_9.exe; với Ninja/macO
 
 ## Thử làm sai để hiểu đúng
 
-Đặt timer quanh cả thao tác click, các frame chờ và render. Thay kích thước cửa sổ rồi thấy runtime thay đổi dù kernel không đổi: bạn đã đo lẫn chi phí. Tiếp theo chỉ đo một pass lạnh và so với median có warm-up để thấy vì sao một mẫu thiếu tin cậy.
+1. Đặt timer quanh cả thao tác click, các frame chờ và render. Thay kích thước cửa sổ: runtime có thể đổi dù kernel không đổi, vì phép đo đã lẫn chi phí. Khôi phục timer cho đúng phạm vi.
+2. Chỉ lấy một pass lạnh rồi so với median có warm-up. Một mẫu thiếu ổn định không đủ xếp hạng thuật toán. Trở lại cùng dữ liệu, warm-up và số lần lặp trước khi kết luận.
 
 ## Tự kiểm tra kết quả
 

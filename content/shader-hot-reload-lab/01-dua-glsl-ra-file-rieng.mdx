@@ -1,144 +1,155 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đưa GLSL ra file riêng
+# Đưa GLSL ra file và phủ kín cửa sổ
 
 ## Vấn đề cần giải quyết
 
-Cube của Project 34 đã chạy bằng GPU, nhưng vertex shader và fragment shader vẫn là hai chuỗi nằm trong C++. Muốn đổi một màu, ta phải sửa header, build lại executable rồi khởi động lại chương trình. Cách đó ổn khi học draw call đầu tiên, nhưng quá chậm cho một phòng thí nghiệm cần thử hàng chục biến thể.
+Ở Project 34, ta dùng shader để vẽ một mô hình 3D. Lần này, mục tiêu khác hẳn: biến cả cửa sổ thành vùng thử nghiệm. Bạn sửa GLSL trong editor, lưu lại và nhìn thấy màu sắc, hình dạng thay đổi mà không phải build lại C++.
 
-Bài này chưa làm hot reload. Ta chỉ đổi **nơi shader source sống**: từ string literal sang `shaders/lab.vert` và `shaders/lab.frag`. Starter embedded shader vẫn là mốc đối chiếu; checkpoint 1 phải vẽ đúng cube cũ bằng source đọc từ file.
+Trước khi đọc hướng dẫn, hãy thử tự dựng một cửa sổ OpenGL có dải màu phủ kín, rồi đưa vertex shader và fragment shader ra hai file riêng. Bản cuối sẽ có bốn hiệu ứng trong cùng một ứng dụng: gradient, vòng tròn, Mandelbrot và noise. Bài đầu chỉ cần hoàn thành nền móng: đọc được file và vẽ đúng dải màu tĩnh.
+
+Bạn cần kiến thức tạo SDL window, OpenGL context và nạp hàm OpenGL từ Project 33–34. Starter đã có các phần đó trong shader_application.hpp và gl_api.hpp. Hãy mở chúng trước khi chạy; không cần chép lại mesh loader hay camera vì ta không vẽ mô hình 3D ở đây.
+
+Toàn project dự kiến 28–38 giờ: khoảng 6–8 giờ đọc và thử công thức, 17–23 giờ tự viết, 5–7 giờ kiểm chứng và làm bài tập. Thời gian cài công cụ, tải SDL và chờ build không tính vào các mốc này. Đây là gợi ý để chia buổi học, không phải thang chấm tốc độ học của bạn.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Đường đi mới có thêm một bước trước compile:
+Fragment shader cần chạy trên mọi pixel. Ta vẫn gửi một tam giác cho GPU, nhưng ba đỉnh của nó nằm ở NDC (-1,-1), (3,-1), (-1,3). Tam giác lớn hơn cửa sổ; sau clipping, nó phủ trọn hình vuông NDC từ -1 đến 1. Không cần vertex buffer vì vertex shader lấy vị trí theo gl_VertexID.
 
-```text
-shader directory → read lab.vert + lab.frag → ShaderSources → compile/link → cube
-```
+Đường đi của một frame là: đọc hai file GLSL → compile/link → bind program → vẽ tam giác → fragment shader tính màu từng pixel. Bài này đọc file một lần lúc khởi động, chưa đọc lại khi bạn bấm Save.
 
-Vấn đề quan trọng không phải `ifstream` khó dùng, mà là executable phải biết **file nào** đang được đọc. Mỗi target checkpoint có thư mục shader riêng. CMake truyền đường dẫn snapshot đó qua `COURSE_SHADER_DIRECTORY`; khi mang executable đi nơi khác, bản shader được chép cạnh executable là fallback.
+Canvas dùng công thức của hiệu ứng hoàn chỉnh để bạn xem trước. Nó tính màu bằng TypeScript/Canvas 2D, không thực thi GLSL trong editor. Bản C++ tải về mới gọi compiler thật của driver.
 
 <InteractiveLab demo="shader-hot-reload" mode="shader-files" />
 
 ## Viết code từng bước
 
-### Bước 1 — Gom hai source thành một dữ liệu có tên
+### Bước 1 — Bắt đầu từ ứng dụng đã chạy được
 
-```cpp title="include/pipeline.hpp — ShaderSources"
+```cpp title="src/main.cpp — điểm vào chương trình"
+#include "shader_application.hpp"
+
+int main(int argc, char** argv) {
+    return lab::runShaderApplication(argc, argv);
+}
+```
+
+main ngắn vì công việc cụ thể nằm trong các file có tên rõ ràng: shader_application.hpp quản lý cửa sổ và event loop; shader_renderer.hpp quản lý program/VAO; shader_files.hpp đọc file. Khi học một thay đổi, ta mở đúng file đó thay vì tìm giữa một main.cpp khổng lồ.
+
+Chạy starter trước. Bạn sẽ thấy gradient nhúng sẵn trong shader_defaults.hpp. Đây là bản dự phòng: nếu file ngoài hỏng, chương trình vẫn có hình để hiển thị cùng thông báo lỗi.
+
+### Bước 2 — Tạo tam giác phủ toàn cửa sổ
+
+```glsl title="shaders/lab.vert — ba đỉnh không cần vertex buffer"
+#version 330 core
+
+void main() {
+    vec2 positions[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
+}
+```
+
+gl_VertexID lần lượt nhận 0, 1, 2 từ draw call. Mỗi lượt lấy một phần tử trong positions. w bằng 1 nên phép chia perspective không đổi x/y. Core profile vẫn yêu cầu bind VAO, dù VAO này không có attribute nào.
+
+### Bước 3 — Giữ source và tên file đi cùng nhau
+
+```cpp title="include/pipeline.hpp — source của hai shader"
 struct ShaderSources {
-    std::string vertex{};
-    std::string fragment{};
+    std::string vertex;
+    std::string fragment;
+    std::string vertexLabel{"embedded.vert"};
+    std::string fragmentLabel{"embedded.frag"};
 };
 ```
 
-Hai stage luôn đi thành một candidate. Ta không giữ một biến global vertex source và một biến fragment source ở nơi khác, vì như vậy rất dễ compile nửa mới nửa cũ.
+vertex/fragment chứa văn bản; vertexLabel/fragmentLabel chứa tên file để báo lỗi. Tên file không phải source code: nó giúp ta biết lỗi đến từ đâu khi driver chỉ trả về số dòng hoặc mã nguồn số 0.
 
-### Bước 2 — Đọc trọn một file và giữ path trong lỗi
+### Bước 4 — Đọc file có giới hạn, không cập nhật nửa chừng
 
-```cpp title="include/pipeline.hpp — readTextFile"
-inline bool readTextFile(const std::filesystem::path& path, std::string& contents, std::string& diagnostics) {
-    std::ifstream input(path, std::ios::binary);
+```cpp title="include/shader_files.hpp — đọc văn bản shader"
+inline bool readTextFile(const std::filesystem::path& path, std::string& result, std::string& diagnostics, std::size_t maximumBytes = 1024 * 1024) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input) {
-        diagnostics = "Cannot open shader file: " + path.string();
+        diagnostics = "Cannot open shader file: " + shaderPathText(path);
         return false;
     }
-    std::ostringstream buffer{};
-    buffer << input.rdbuf();
-    if (!input.good() && !input.eof()) {
-        diagnostics = "Cannot read complete shader file: " + path.string();
+    const auto length = input.tellg();
+    if (length <= 0 || std::uintmax_t(length) > maximumBytes) {
+        diagnostics = "Empty, unreadable or oversized shader file: " + shaderPathText(path);
         return false;
     }
-    contents = buffer.str();
+    std::string temporary(std::size_t(length), '\0');
+    input.seekg(0);
+    input.read(temporary.data(), std::streamsize(temporary.size()));
+    if (!input || std::size_t(input.gcount()) != temporary.size() || temporary.find('\0') != std::string::npos) {
+        diagnostics = "Incomplete read or embedded NUL in shader: " + shaderPathText(path);
+        return false;
+    }
+    if (temporary.starts_with("\xEF\xBB\xBF"))
+        temporary.erase(0, 3);
+    result = std::move(temporary);
+    diagnostics.clear();
     return true;
 }
 ```
 
-Binary mode ở đây không có nghĩa shader là dữ liệu nhị phân. Nó ngăn thư viện tự đổi line ending, nhờ đó byte source, line number trong log và fingerprint về sau ổn định hơn.
+ios::ate đặt con trỏ ở cuối để lấy kích thước trước khi cấp bộ nhớ; seekg(0) đưa nó về đầu để đọc. Mức 1 MiB là giới hạn của ứng dụng, không phải giới hạn GLSL. temporary giữ kết quả tạm: chỉ khi đọc đủ byte và không có NUL, ta mới chuyển nó sang result.
 
-### Bước 3 — Chọn source directory trước, fallback sau
+Shader là văn bản UTF-8. Nếu editor thêm BOM, ta bỏ ba byte BOM trước khi đưa source cho driver. Binary mode giúp giữ nguyên line ending.
 
-Trong lúc học, thư mục của checkpoint phải được ưu tiên vì đó là nơi bạn đang Save file. Chỉ khi cặp file này không còn tồn tại—chẳng hạn executable đã được chép sang máy khác—chương trình mới tìm thư mục `shaders` cạnh executable:
+### Bước 5 — Tính màu từ vị trí pixel
 
-```cpp title="src/main.cpp — chọn shader directory có kiểm tra"
-bool containsShaderPair(const std::filesystem::path& directory) {
-    for (const char* filename : {"lab.vert", "lab.frag"}) {
-        std::error_code error{};
-        if (!std::filesystem::is_regular_file(directory / filename, error) || error) {
-            return false;
-        }
-    }
-    return true;
-}
+```glsl title="shaders/gradient.frag — gradient đầu tiên"
+#version 330 core
+uniform float uTime;
+uniform vec2 uResolution;
+uniform vec2 uMouse;
+uniform float uZoom;
+out vec4 fragColor;
 
-std::filesystem::path executableShaderDirectory() {
-    const char* basePath = SDL_GetBasePath();
-    if (basePath) {
-        return std::filesystem::path(basePath) / "shaders";
-    }
-    return std::filesystem::path("shaders");
-}
+const float SPEED = 0.65;
 
-std::filesystem::path shaderDirectory() {
-#ifdef COURSE_SHADER_DIRECTORY
-    const std::filesystem::path sourceDirectory(COURSE_SHADER_DIRECTORY);
-    if (containsShaderPair(sourceDirectory)) {
-        return sourceDirectory;
-    }
-#endif
-    return executableShaderDirectory();
+void main() {
+    vec2 uv = gl_FragCoord.xy / max(uResolution, vec2(1.0));
+    fragColor = vec4(uv.x, uv.y, 0.3, 1.0);
 }
 ```
 
-Việc chỉ viết `#ifdef ... return source; #else return fallback;` là chưa đủ: CMake luôn định nghĩa `COURSE_SHADER_DIRECTORY`, nên nhánh fallback sẽ không bao giờ chạy. Kiểm tra cặp file ở runtime mới biến nó thành fallback thật.
-
-### Bước 4 — Đọc đúng hai tên file trước khi tạo renderer
-
-```cpp title="src/main.cpp — startup bằng external GLSL"
-lab::ShaderSources initialSources{};
-if (!lab::readShaderFiles(shaderPath, initialSources, diagnostics)) {
-    std::cerr << diagnostics << '\n';
-    renderer.destroy(gl);
-    destroyWindowAndContext(window, context);
-    return EXIT_FAILURE;
-}
-if (!renderer.initialize(gl, initialSources, diagnostics)) {
-```
-
-Startup chưa có last-good program để quay về. Vì thế thiếu file hoặc shader đầu tiên sai phải dừng có thông báo, thay vì mở một cửa sổ không vẽ gì.
+gl_FragCoord.xy là vị trí tâm pixel trong framebuffer, gốc dưới trái. Chia cho uResolution đưa vị trí về khoảng xấp xỉ 0–1. Chỉ nhìn dải màu theo hai trục, ta đã kiểm được shader có phủ đủ cửa sổ và có đúng chiều hay không.
 
 ## Ghép các phần lại
 
-CMake tạo target rồi truyền thư mục `checkpoints/01/shaders` vào chính target đó. Build và chạy checkpoint 1:
+Trong thư mục project giải nén, dùng CMake 3.24 trở lên và compiler hỗ trợ C++20:
 
-```bash title="Terminal — build checkpoint 1"
+```bash title="Terminal — starter và checkpoint 1"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_35_checkpoint_1
+cmake --build build --config Debug --target project_35_starter project_35_checkpoint_1 --parallel 2
 ```
 
-Terminal in dòng `Watching shader directory: ...`. Hãy mở đúng đường dẫn này, đổi một màu rồi chạy lại executable. Bài này chưa tự đọc lại khi Save; mục tiêu là xác nhận source ngoài chương trình đã thay thế embedded source.
+Trên Windows, chạy build/Debug/project_35_checkpoint_1.exe. Với generator một cấu hình, executable nằm trực tiếp trong build. CMake tự lấy SDL 3.4.8 khi chưa có bản SDL được chỉ định.
+
+Terminal in SHADER DIRECTORY: kèm đường dẫn thực sự đang dùng. Trong lúc học, đó là checkpoints/01/shaders. Mỗi executable còn có thư mục shader dự phòng riêng cạnh nó; các target không chép đè shader của nhau khi build song song. Có thể chỉ rõ thư mục bằng --shader-dir.
+
+Đổi màu trong gradient.frag rồi khởi động lại executable. Chỉ sửa file shader, không build lại C++. Muốn xem bản hoàn chỉnh ngay, build project_35_final; các bài tiếp theo sẽ giải thích lần lượt những gì bản đó làm thêm.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi tên `lab.frag` thành `color.frag` nhưng không sửa code. Chương trình phải nêu đầy đủ file không mở được.
-2. Chạy executable từ một current working directory khác. Đường source do CMake truyền vẫn phải hoạt động; đây là lý do ta không dùng `./shaders` một cách mơ hồ.
-3. Xóa nửa cuối `lab.vert`. File vẫn đọc được, nhưng bước compile thất bại. Đọc file thành công không có nghĩa GLSL hợp lệ.
+1. Đổi tên gradient.frag rồi chạy lại. Terminal phải báo đúng file không mở được; gradient dự phòng vẫn xuất hiện. Khôi phục tên trước khi thử tiếp.
+2. Chạy executable từ working directory khác. Đường source CMake truyền vào không phụ thuộc nơi terminal đang đứng.
+3. Bỏ dấu chấm phẩy trong gradient.frag. File vẫn đọc được nhưng compile thất bại: lỗi I/O và lỗi GLSL là hai việc khác nhau.
 
-Khôi phục hai file rồi chạy lại trước khi sang bài tiếp theo.
+Nếu đổi file mà hình không đổi, kiểm tra SHADER DIRECTORY trước. Có thể bạn đang sửa final/shaders nhưng chạy checkpoint 1.
 
 ## Tự kiểm tra kết quả
 
-- [ ] Starter vẫn vẽ cube bằng embedded shader.
-- [ ] Checkpoint 1 vẽ cùng cube từ hai file ngoài executable.
-- [ ] Terminal cho biết chính xác shader directory đang dùng.
-- [ ] Thiếu một file làm startup dừng với path rõ ràng.
-- [ ] Bạn phân biệt được lỗi đọc file và lỗi compile source.
-
-Hãy tự giải thích vì sao `SDL_GetBasePath` chỉ là fallback, còn target source directory mới phù hợp với workflow sửa shader trong project.
+- [ ] Starter chạy bằng shader nhúng; checkpoint 1 đọc GLSL ngoài executable.
+- [ ] Gradient phủ cả cửa sổ và có đúng chiều khi resize.
+- [ ] Bạn xác định được file nào đang được đọc.
+- [ ] File thiếu/hỏng có thông báo, ứng dụng vẫn vẽ bản dự phòng.
+- [ ] Bạn giải thích được vì sao không cần VBO nhưng vẫn cần VAO.
 
 ## Bài tập mở rộng
 
-1. In số byte của từng stage sau khi đọc.
-2. Từ chối một shader file rỗng bằng diagnostics riêng.
-3. Thêm `README` cạnh shader giải thích input/output contract mà không sửa C++.
+In số byte đã đọc của từng shader. Thêm thông báo riêng cho file rỗng rồi khôi phục code chuẩn để đối chiếu checkpoint. Không thêm hot reload vội: hãy chắc chắn việc đọc file đã đúng trước.
 
-Bài tiếp theo giữ lại toàn bộ log mà OpenGL compiler trả về khi source sai.
+[Bài tiếp theo: compile từng shader và đọc log lỗi](/projects/shader-hot-reload-lab/02-compile-shader-va-doc-info-log).
