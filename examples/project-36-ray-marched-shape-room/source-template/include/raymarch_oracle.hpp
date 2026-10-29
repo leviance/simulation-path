@@ -3,6 +3,7 @@
 
 namespace lab {
 
+#if LAB_CHECKPOINT >= 10
 // Oracle giải phương trình bậc hai, không gọi lại SDF hay vòng march.
 struct SphereIntersection {
     bool valid{};
@@ -48,6 +49,8 @@ inline SphereIntersection intersectSphere(const Ray& ray, Vec3 center, double ra
     }
     return result;
 }
+
 // [/snippet:analytic-sphere]
+#endif
 
 } // namespace lab

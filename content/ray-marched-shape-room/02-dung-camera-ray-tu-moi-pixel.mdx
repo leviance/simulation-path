@@ -1,145 +1,94 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Từ pixel dựng một tia nhìn
+# Từ mỗi pixel dựng một tia nhìn
 
-## Bức hình này còn thiếu gì?
+## Ta cần giải quyết điều gì?
 
-Hiện tại mỗi fragment chỉ biết nó nằm ở đâu trên màn hình. Để tìm vật thể trong không gian 3D, ta cần biến pixel đó thành một tia nhìn. Tia này có điểm bắt đầu `origin` và hướng đi `direction`, đều được biểu diễn trong world space.
+### Lưới màu chưa biết căn phòng ở đâu
 
-Đây là chỗ rất dễ viết một công thức ngắn nhưng không hiểu được. Ta sẽ tách bài toán thành bốn bước có thể kiểm riêng: tìm camera basis, đưa pixel về mặt phẳng ảnh, bù aspect ratio, rồi normalize hướng tia.
+Checkpoint 1 biết vị trí fragment trên ảnh, nhưng chưa có khái niệm camera hay world. Bây giờ ta biến mỗi vị trí ấy thành một hướng nhìn. Chưa cần SDF: cứ tô màu theo hướng tia, ta đã có thể kiểm trái/phải, trên/dưới và aspect.
 
-## Hình dung đường đi của một pixel
+Phần camera bay tự do đã được học ở Project 14. `camera.hpp` cung cấp lại position/yaw/pitch và các phép tính basis để ZIP chạy độc lập. Ta đọc và dùng lại chúng, không lén thêm một orbit camera chỉ vì nó dễ giới hạn góc nhìn hơn.
 
-Với camera nhìn từ `position` về `target`:
+Tham khảo: đọc 25 phút, tự viết 60 phút, kiểm tra 35 phút.
 
-$$
-\begin{aligned}
-\mathbf{forward} &= \operatorname{normalize}(\mathbf{target}-\mathbf{position}) \\
-\mathbf{right} &= \operatorname{normalize}(\mathbf{forward}\times\mathbf{worldUp}) \\
-\mathbf{up} &= \operatorname{normalize}(\mathbf{right}\times\mathbf{forward})
-\end{aligned}
-$$
+## Hiểu ý tưởng trước khi viết code
 
-Một pixel tạo ra hướng:
+### Từ mặt ảnh sang world space
 
-$$
-\mathbf{direction}=\operatorname{normalize}(\mathbf{forward}+x\,\mathbf{right}+y\,\mathbf{up})
-$$
+Gọi ba vector đơn vị của camera là `forward`, `right`, `up`. Với vertical FOV là $\theta$, nửa chiều cao mặt ảnh ở khoảng cách một đơn vị là $\tan(\theta/2)$. Mặt ảnh càng rộng thì offset ngang càng lớn; chiều dọc vẫn lấy cùng FOV.
 
-Trong đó $x$ phải được nhân aspect ratio; nếu bỏ bước này, một sphere sẽ thành ellipse khi cửa sổ không vuông.
+Một tia có dạng $p(t)=o+td$, trong đó `o` là camera position và `d` phải có độ dài một. Khi đó `t=2` mới thực sự có nghĩa là đi hai đơn vị world, ở đây quy ước là mét. Nếu quên normalize, cùng một `t` sẽ ứng với những quãng đường khác nhau ở tâm và góc ảnh.
 
 <InteractiveLab demo="ray-marched-shape-room" mode="raymarch-camera" />
 
-Hãy kéo camera trong Canvas. Các tia cùng xuất phát ở camera nhưng tỏa qua những điểm khác nhau trên mặt phẳng ảnh. Tia chính giữa phải hướng gần như chính xác về `target`.
+Chọn một pixel ở tâm rồi một pixel ở góc. Dự đoán thành phần nào đổi dấu trước khi đọc số. Ở ảnh có kích thước chẵn, tâm hình học nằm giữa bốn tâm pixel; phép kiểm CPU dùng tọa độ nửa nguyên để hỏi đúng tia giữa ảnh.
 
-## Cùng sửa checkpoint
+## Bắt tay vào code
 
-### Bước 1 — Viết bản CPU trước để có mốc đối chiếu
+### Đọc basis và bản tính C++
 
-Shader khó `printf`. Vì vậy source giữ một hàm C++ nhỏ dùng cùng tên biến và cùng công thức:
+Trong `include/camera.hpp`, hàm đối chiếu CPU dùng chỉ số pixel với gốc trái trên:
 
-```cpp title="include/raymarch_math.hpp — makeCameraRay"
-inline Ray makeCameraRay(
-    const OrbitCamera& camera,
-    double pixelX,
-    double pixelY,
-    int framebufferWidth,
-    int framebufferHeight
-) {
-    const double width = double(std::max(1, framebufferWidth));
-    const double height = double(std::max(1, framebufferHeight));
-    const Vec3 origin = cameraPosition(camera);
-    const Vec3 forward = normalize(camera.target - origin);
-    const Vec3 right = normalize(cross(forward, {0.0, 1.0, 0.0}));
-    const Vec3 up = normalize(cross(right, forward));
-
-    const double ndcX = 2.0 * ((pixelX + 0.5) / width) - 1.0;
-    const double ndcY = 1.0 - 2.0 * ((pixelY + 0.5) / height);
-    const double aspect = width / height;
-    const double tangent = std::tan(camera.verticalFieldOfViewRadians * 0.5);
-
-    const Vec3 direction = normalize(
-        forward + right * (ndcX * aspect * tangent) + up * (ndcY * tangent)
-    );
-    return {origin, direction};
-}
+```cpp title="include/camera.hpp — offset trên mặt ảnh"
+const double width = static_cast<double>(framebufferWidth);
+const double height = static_cast<double>(framebufferHeight);
+const double ndcX = 2.0 * (pixelX + 0.5) / width - 1.0;
+const double ndcY = 1.0 - 2.0 * (pixelY + 0.5) / height;
+const double tangent = std::tan(camera.verticalFieldOfViewRadians * 0.5);
+const Vec3 offsetX = cameraRight(camera) * (ndcX * width / height * tangent);
+const Vec3 offsetY = cameraUp(camera) * (ndcY * tangent);
+return {camera.position, normalize(cameraForward(camera) + offsetX + offsetY)};
 ```
 
-`+ 0.5` lấy tâm pixel thay vì góc pixel. Phép đổi `ndcY` có dấu ngược vì hàm CPU nhận tọa độ theo kiểu màn hình—Y đi xuống—trong khi basis `up` đi lên.
+`+0.5` đưa chỉ số nguyên tới tâm pixel. Dấu trừ trong `ndcY` đổi trục Y hướng xuống của ảnh CPU thành hướng lên. `cameraRight` dùng `cross(forward, worldUp)`; `cameraUp` tính lại từ right và forward để basis trực giao.
 
-### Bước 2 — Chuyển đúng công thức sang GLSL
+Đây là bản tính để kiểm chứng, không phải renderer được dùng thay GPU. Mỗi frame, `uploadUniforms` gửi basis, position và `tan(FOV/2)` từ state C++ sang program đang chạy.
 
-Trong fragment shader, `gl_FragCoord` đã có gốc trái dưới. Ta có thể gom phép đổi tọa độ và aspect vào một biểu thức dùng `resolution.y`:
+### Tạo hướng tia trong GLSL
 
-```glsl title="shaders/raymarch.frag — makeCameraRay"
+```glsl title="shaders/raymarch.frag — gpu-camera-ray"
 vec3 makeCameraRay(vec2 fragmentCoordinate) {
-    vec2 safeResolution = max(uResolution, vec2(1.0));
-    vec2 centered =
-        (2.0 * fragmentCoordinate - safeResolution) / safeResolution.y;
-
-    vec3 forward = normalize(uCameraTarget - uCameraPosition);
-    vec3 right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
-    vec3 up = normalize(cross(right, forward));
-    float focalLength = 1.0 / tan(radians(60.0) * 0.5);
-
-    return normalize(
-        right * centered.x +
-        up * centered.y +
-        forward * focalLength
-    );
+    vec2 centered = (2.0 * fragmentCoordinate - uResolution) / uResolution.y;
+    return normalize(uCameraForward + uCameraRight * centered.x * uTanHalfFov + uCameraUp * centered.y * uTanHalfFov);
 }
 ```
 
-Vì chia cả hai trục cho `resolution.y`, `centered.x` tự mang aspect ratio còn `centered.y` nằm trong khoảng gần $[-1,1]$. `focalLength` điều khiển field of view: focal length càng nhỏ thì góc nhìn càng rộng.
+Chia **cả hai thành phần** cho chiều cao là cách viết gọn của NDC nhân aspect theo X. Khác C++, `gl_FragCoord` đã nằm ở tâm pixel và có gốc dưới, nên không cộng thêm `0.5` hay lật Y lần nữa.
 
-### Bước 3 — Hiển thị hướng tia như một phép đo
+### Nối hướng tia với màu của pixel
 
-Checkpoint 2 chưa ray-march. Ta encode vector chuẩn hóa $[-1,1]$ thành màu $[0,1]$:
+Trong `main` của checkpoint 2, dùng hướng tia làm màu:
 
-```glsl title="shaders/raymarch.frag — checkpoint 2"
-vec3 rayDirection = makeCameraRay(gl_FragCoord.xy);
-fragColor = vec4(rayDirection * 0.5 + 0.5, 1.0);
+```glsl title="shaders/raymarch.frag — nối vào main"
+vec3 direction = makeCameraRay(gl_FragCoord.xy);
+fragColor = vec4(direction * 0.5 + 0.5, 1.0);
 ```
 
-Đây không phải “màu đẹp”; nó là debug view. Nếu xoay camera mà hình không đổi, uniform camera chưa đi vào shader. Nếu resize làm dải màu co giãn sai, aspect đang sai.
+Thành phần hướng trong `[-1,1]` được đưa về `[0,1]` để hiển thị. Đây là một ảnh kiểm tra hướng, không phải bức hình của scene. Đổi FOV làm màu ở rìa thay đổi mạnh hơn vì các tia mở rộng ra.
 
-## Chạy thử và quan sát
+## Chạy checkpoint
 
 ```bash title="Terminal — checkpoint 2"
-cmake --build build --config Debug --target project_36_checkpoint_2
+cmake --build build --config Debug --target project_36_checkpoint_2 --parallel 2
+./build/Debug/project_36_checkpoint_2.exe
 ```
 
-Ở phía CPU, kiểm ít nhất hai bất biến:
+Resize cửa sổ thành rất rộng rồi rất cao. Không cần tạo lại program; width/height được gửi lại mỗi frame. Nếu ảnh không đổi, kiểm target và shader directory trước khi nghi công thức.
 
-```cpp title="tests/tests.cpp — camera contract"
-const lab::OrbitCamera camera{};
-const lab::Ray center = lab::makeCameraRay(camera, 479.5, 319.5, 960, 640);
-const lab::Vec3 expected = lab::normalize(camera.target - lab::cameraPosition(camera));
-check(lab::finite(center.origin), "camera origin is finite");
-check(lab::finite(center.direction), "camera direction is finite");
-check(near(lab::length(center.direction), 1.0), "camera ray is normalized");
-check(lab::dot(center.direction, expected) > 0.999999, "center ray points at target");
-```
+## Thử tạo lỗi
 
-## Cố tình làm sai
+1. Bỏ `normalize` ở cuối `makeCameraRay`, dự đoán độ dài hướng ở tâm/góc ảnh rồi kiểm bằng số. Ảnh màu có thể vẫn hợp lý nhưng |direction| ở góc lớn hơn một; khôi phục normalize trước khi sang marcher.
 
-1. Bỏ `aspect` ở bản CPU hoặc chia GLSL cho `safeResolution` theo từng thành phần. Resize thành cửa sổ rất rộng và quan sát góc tia ngang bị sai.
-2. Đổi `cross(forward, worldUp)` thành `cross(worldUp, forward)`. Vector `right` đảo chiều và hình bị soi gương.
-3. Bỏ `normalize` cuối. Độ dài direction thay đổi theo pixel; sau này `traveled` sẽ không còn mang đơn vị world.
-4. Đặt camera thẳng hàng hoàn toàn với `worldUp`. Cross product tiến gần vector zero; đây là lý do orbit camera phải clamp pitch.
+2. Bỏ hệ số aspect trong bản C++ hoặc chia riêng X cho width trong GLSL. Resize cửa sổ rộng/hẹp rồi quan sát các tia rìa không còn cùng mô hình mặt ảnh; khôi phục phép chia chung theo chiều cao. Giữ nguyên FOV khi so để không đổi hai biến cùng lúc.
 
-## Dấu hiệu cho thấy bài đã hoàn thành
+## Checklist hoàn thành
 
-- [ ] Center ray hướng về camera target.
-- [ ] Mọi corner ray hữu hạn và có độ dài gần 1.
-- [ ] Right, up và forward gần vuông góc từng đôi một.
-- [ ] Resize không làm thay đổi field of view dọc hoặc kéo méo hình.
-- [ ] CPU và GLSL dùng cùng camera convention.
+- [ ] Bạn chỉ được origin và direction của một ray trong world space.
+- [ ] Tia giữa ảnh trùng `cameraForward`; tia trái có dot với `cameraRight` âm.
+- [ ] Mọi hướng hợp lệ có độ dài gần một, kể cả tia góc.
+- [ ] C++ và GLSL chỉ khác quy ước pixel/Y, không khác mô hình camera.
 
-## Thử đi thêm một bước
+## Hướng mở rộng
 
-1. Thêm debug màu cho `right`, `up` và `forward` riêng biệt.
-2. Cho phép đổi vertical FOV từ 35° đến 90° và theo dõi corner ray.
-3. Viết test bốn góc đối xứng qua center ray khi camera không xoay.
-
-Bài sau chưa tìm giao điểm. Trước hết, ta cần một hàm nói được một điểm đang cách bề mặt sphere bao xa.
+Bài tập: tính trước hướng tia khi yaw/pitch bằng 0 và pixel ở giữa ảnh; sau đó kiểm bằng số. [Bài 3](/projects/ray-marched-shape-room/03-signed-distance-cua-sphere) bắt đầu cho tia một thứ để đo: khoảng cách tới mặt cầu.

@@ -23,6 +23,7 @@ struct RoomControls {
             return true;
         }
 #if LAB_CHECKPOINT >= 9
+        // [snippet:camera-input]
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {
             looking = SDL_SetWindowRelativeMouseMode(window, true);
         }
@@ -35,6 +36,7 @@ struct RoomControls {
         if (event.type == SDL_EVENT_MOUSE_WHEEL) {
             frame.camera.verticalFieldOfViewRadians = std::clamp(frame.camera.verticalFieldOfViewRadians - event.wheel.y * 0.04, 0.45, 1.65);
         }
+        // [/snippet:camera-input]
 #endif
         if (event.type != SDL_EVENT_KEY_DOWN || event.key.repeat) {
             return true;
@@ -83,7 +85,34 @@ struct RoomControls {
             frame.settings.hitEpsilon = std::min(0.02, frame.settings.hitEpsilon * 2.0);
         }
 #endif
+#if LAB_CHECKPOINT >= 10
+        if (key == SDLK_COMMA) {
+            frame.settings.normalEpsilon = std::max(1e-5, frame.settings.normalEpsilon * 0.5);
+        }
+        if (key == SDLK_PERIOD) {
+            frame.settings.normalEpsilon = std::min(0.02, frame.settings.normalEpsilon * 2.0);
+        }
+        if (key == SDLK_Z) {
+            frame.settings.maximumDistance = std::max(0.1, frame.settings.maximumDistance - 2.0);
+        }
+        if (key == SDLK_X) {
+            frame.settings.maximumDistance = std::min(80.0, frame.settings.maximumDistance + 2.0);
+        }
+#endif
 #if LAB_CHECKPOINT >= 9
+        // Các bước nhìn rời rạc là lựa chọn dùng bàn phím thay cho RMB.
+        if (key == SDLK_LEFT) {
+            lookCamera(frame.camera, -20.0, 0.0);
+        }
+        if (key == SDLK_RIGHT) {
+            lookCamera(frame.camera, 20.0, 0.0);
+        }
+        if (key == SDLK_UP) {
+            lookCamera(frame.camera, 0.0, -20.0);
+        }
+        if (key == SDLK_DOWN) {
+            lookCamera(frame.camera, 0.0, 20.0);
+        }
         if (key == SDLK_J) {
             frame.scene.sphereRadius = std::max(0.4, frame.scene.sphereRadius - 0.05);
         }
@@ -106,11 +135,17 @@ struct RoomControls {
     }
 
     void advance(SDL_Window* window, RayMarchFrame& frame, double frameSeconds) {
+#if LAB_CHECKPOINT < 9
+        (void)window;
+#endif
+#if LAB_CHECKPOINT < 8
+        (void)frame;
+#endif
         if (!std::isfinite(frameSeconds) || frameSeconds < 0.0) {
             return;
         }
-        const double dt = std::min(frameSeconds, 0.05);
 #if LAB_CHECKPOINT >= 8
+        const double dt = std::min(frameSeconds, 0.05);
         if (!frame.paused) {
             frame.elapsedSeconds += dt;
         }
@@ -121,12 +156,24 @@ struct RoomControls {
         }
         const bool* keys = SDL_GetKeyboardState(nullptr);
         Vec3 local{};
-        if (keys[SDL_SCANCODE_W]) { local.z += 1.0; }
-        if (keys[SDL_SCANCODE_S]) { local.z -= 1.0; }
-        if (keys[SDL_SCANCODE_A]) { local.x -= 1.0; }
-        if (keys[SDL_SCANCODE_D]) { local.x += 1.0; }
-        if (keys[SDL_SCANCODE_E]) { local.y += 1.0; }
-        if (keys[SDL_SCANCODE_Q]) { local.y -= 1.0; }
+        if (keys[SDL_SCANCODE_W]) {
+            local.z += 1.0;
+        }
+        if (keys[SDL_SCANCODE_S]) {
+            local.z -= 1.0;
+        }
+        if (keys[SDL_SCANCODE_A]) {
+            local.x -= 1.0;
+        }
+        if (keys[SDL_SCANCODE_D]) {
+            local.x += 1.0;
+        }
+        if (keys[SDL_SCANCODE_E]) {
+            local.y += 1.0;
+        }
+        if (keys[SDL_SCANCODE_Q]) {
+            local.y -= 1.0;
+        }
         if (length(local) > 0.0) {
             moveCamera(frame.camera, normalize(local) * (frame.moveSpeed * dt));
         }

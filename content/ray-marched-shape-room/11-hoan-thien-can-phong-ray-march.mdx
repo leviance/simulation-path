@@ -1,0 +1,136 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện ứng dụng và bộ kiểm chứng
+
+## Ta cần giải quyết điều gì?
+
+### Từ scene chạy được tới một project có thể bàn giao
+
+Checkpoint 10 đã đủ để khám phá scene và đọc sai số trên CPU. Bài cuối giữ nguyên sản phẩm ấy, thêm phép kiểm **OpenGL thật**: chạy các hàm shader của scene, đọc số đo, thử lỗi reload và xác nhận resource được nhả. Không viết lại một shader “đơn giản tương đương” rồi dùng nó chứng minh shader đang phát hành đúng.
+
+Tham khảo: đọc 35 phút, tự viết 90 phút, nghiệm thu 55 phút. Build/test có timeout riêng; thời gian chờ compiler không dùng để đánh giá tốc độ học.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Tìm bề mặt khác tích lũy mật độ
+
+Ray tracing là họ cách tạo ảnh bằng tia; không đồng nghĩa chỉ giải giao triangle hoặc luôn có reflection nhiều bounce. Project này dùng sphere tracing để tìm bề mặt của scene SDF, rồi thêm shading và một shadow query. Nó chưa là general-purpose path tracer, không hỗ trợ mọi mesh/vật liệu tùy ý.
+
+Project 54 làm việc khác: đi qua volume, lấy nhiều mẫu mật độ và tích lũy chúng dọc tia. Ở đây gặp mặt thì dừng; không cộng mật độ trong sphere để tạo sương. Đổi tên hàm thành `rayMarch` không làm hai mô hình ấy thành một.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-validation" />
+
+Canvas là công cụ giảng dạy bằng TypeScript/Canvas 2D, có ngân sách ray giới hạn. Nó không compile GLSL, không chứng minh OpenGL driver đúng và không thay bước chạy `--verify`/kiểm controls trong executable.
+
+## Bắt tay vào code
+
+### Ghép application và source đầy đủ
+
+Phần source cuối bài có **toàn bộ file của final**, không chỉ các đoạn đã trích. [ZIP Project 36](/downloads/project-36-ray-marched-shape-room.zip) kèm starter, `checkpoints/01..11`, final, README và tests. Người tải ZIP không cần Node.js hoặc source project trước.
+
+Các phần nối với nhau như sau:
+
+```text title="Đường đi của một frame"
+main.cpp → runApplication → Application::run
+    event → RoomControls → RayMarchFrame
+    draw  → uploadUniforms → raymarch.frag
+        camera ray → marchRay → normal/material/shadow → fragColor
+    overlay → present
+```
+
+`vector.hpp`, `camera.hpp`, `sdf.hpp`, `tracing.hpp`, `raymarch_oracle.hpp` là toán CPU. `room_frame.hpp` giữ dữ liệu, `room_controls.hpp` sửa dữ liệu qua input. `gl_api.hpp` và `shader_program.hpp` cung cấp nền OpenGL; `room_uniforms.hpp` khóa interface; `raymarch_renderer.hpp` quản lý program/VAO. `room_overlay.hpp` chỉ là UI, `room_verify.hpp` kiểm GPU, `room_application.hpp` sở hữu vòng đời ứng dụng.
+
+`src/main.cpp` vẫn đơn giản vì mọi đường thoát đều đi qua destructor của Application:
+
+```cpp title="src/main.cpp — bản hoàn chỉnh"
+#include "room_application.hpp"
+
+// Setup SDL, context và shader nằm trong Application::initialize.
+// Giải phóng tài nguyên do destructor xử lý sau mọi đường thoát, kể cả lỗi.
+int main(int argc, char** argv) {
+    return lab::runApplication(argc, argv);
+}
+```
+
+Đọc implementation ở cuối bài để lần cả đường thành công và thất bại: context phải current khi xóa GL object; sau đó mới hủy context, window và SDL. Không chỉ xóa ở cuối vòng lặp bình thường.
+
+### Đọc số đo từ chính GLSL của sản phẩm
+
+`--verify` tạo window/context ẩn, không vào vòng tương tác. Một FBO `RGBA32F` nhỏ `192×128` nhận output float. Diagnostic entry point thay **main** nhưng giữ nguyên các hàm SDF/march/normal từ shader thật; nó ghi traveled, status, materialId và số mẫu để `glReadPixels` đọc lại.
+
+Vì đo `t` bằng float, ta không bị lượng tử hóa RGB8 làm mất sai khác nhỏ. `glReadPixels` là readback có đồng bộ; thời gian lệnh này **không được gọi là GPU kernel time**. Bộ kiểm hiện tại kiểm correctness, không chứng nhận FPS trên mọi máy.
+
+Các nhóm gồm ray chính diện/inside/miss đối chiếu quadratic, tiếp tuyến và near-surface epsilon band, normal epsilon sweep, distance/step limit, invalid settings và scene rỗng. Các probe pixel kiểm quy ước Y giữa CPU top-left với GPU bottom-left. Mỗi primitive và room phải thực sự xuất hiện ở góc nhìn mặc định, không chỉ tồn tại trong source.
+
+### Thử candidate trước khi thay bản tốt
+
+Giao dịch reload của renderer:
+
+```cpp title="include/raymarch_renderer.hpp — reload-transaction"
+bool reload(GlApi& api, const ShaderSources& sources, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
+    ProgramCandidate candidate{};
+    if (!buildProgramCandidate(api, sources, candidate, diagnostics, audit)) {
+        return false;
+    }
+    const GLuint previousProgram = activeProgram.program;
+    activeProgram = candidate;
+    ++generation;
+    api.UseProgram(activeProgram.program);
+    api.DeleteProgram(previousProgram);
+    diagnostics = "Reload committed: active program replaced; camera/time unchanged.";
+    return true;
+}
+```
+
+Candidate chỉ qua cửa khi compile, link và active uniform reflection đều hợp lệ. Sai type, array size hoặc thiếu uniform bắt buộc đều bị từ chối. Location có thể khác sau link, nên không dùng cache location từ program trước.
+
+Verifier gây lỗi compile, link và interface bằng fixture nhỏ hữu hạn; kiểm program/locations/generation giữ nguyên, ảnh tốt không đổi và shader/program tạm đã bị xóa. Sau đó reload nguồn đúng, generation tăng đúng một. Cuối cùng kiểm program/VAO bị xóa trước khi hủy context. UI error vẫn phải hiện khi đang ở Showcase; full log còn trong terminal.
+
+## Chạy checkpoint
+
+```bash title="Terminal — toàn bộ gói, Visual Studio"
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+./build/Debug/project_36_final.exe --verify
+```
+
+```bash title="Terminal — Release"
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+./build/Release/project_36_final.exe --verify
+./build/Release/project_36_final.exe
+```
+
+`--smoke` mở context ẩn và kết thúc sau ba frame, có deadline nội bộ 5 giây. `--capture path.bmp` ghi ảnh frame thứ ba rồi thoát. Automation phải có watchdog bên ngoài theo ARCHITECTURE.md; timeout của một API chờ không tự dọn process tree. CTest chỉ chạy CPU, không mở app tương tác và không đưa GUI vào test suite có thể treo chờ.
+
+Mỗi target có fallback shader riêng tại `shaders/<target-name>` cạnh executable. Nguồn của snapshot được ưu tiên để hỗ trợ F5; fallback cho phép kiểm một bản runtime tách khỏi source. Không để checkpoint sớm ghi đè fragment của final khi build song song.
+
+### Nghiệm thu bằng thao tác
+
+1. Mở final, kiểm sphere/box/torus và lỗ torus, ánh sáng, bóng trên floor/tường. Nhấn Tab để tìm controls rồi trở lại Showcase.
+2. Bay bằng WASD/QE, nhìn bằng chuột phải hoặc mũi tên; thử mất focus trong lúc nhìn. Con trỏ phải được nhả.
+3. Pause đèn nhưng tiếp tục đi camera. Đổi radius/FOV rồi R: mặc định phải tái lập.
+4. Resize rộng/hẹp và đổi display scale nếu có thiết bị phù hợp. Aspect không méo; ghi riêng trường hợp high-DPI chưa kiểm được.
+5. Đổi bốn view, giảm budget/distance, khảo sát hai epsilon. Hiểu stop reason trước khi gọi vùng tối là lỗi shading.
+6. Thêm lỗi cú pháp **hữu hạn** vào shader đúng target, F5 rồi sửa lại. Không thử loop vô hạn trên GPU.
+7. Build starter, từng checkpoint, final và chạy CTest Debug/Release; kiểm lại ZIP/source hiển thị thay vì chỉ bản build đã có sẵn.
+
+## Thử tạo lỗi
+
+1. Chèn một lỗi cú pháp hữu hạn vào fragment đúng target rồi F5. Dự đoán generation có tăng không; log phải báo compile error trong khi last-good còn chạy. Sửa lại, F5 và kiểm generation chỉ tăng một lần.
+
+2. Chạy `--verify` để thử các fixture link/interface sai kiểu hoặc thiếu uniform. Candidate có thể compile được nhưng không được commit khi link/reflection thất bại; kiểm ảnh, locations và program vẫn là bản cũ trước khi fixture hợp lệ phục hồi. Không dùng loop vô hạn làm fixture GPU.
+
+## Checklist hoàn thành
+
+- [ ] Source đầy đủ và ZIP chạy độc lập, đúng SDL 3.4.8/C++20/CMake >=3.24.
+- [ ] Ba primitive được ray-march thật per pixel; normal, lighting, shadow và camera hoạt động trong scene lớn.
+- [ ] Oracle CPU, GPU readback, reload failure/recovery và cleanup có bằng chứng riêng.
+- [ ] Giới hạn, đơn vị, epsilon band/inside/tangent policies được công bố và có test.
+- [ ] Showcase sạch, Debug hữu ích; Pause/Reset và input không kẹt.
+- [ ] Canvas, code trong bài, source checkpoint và ZIP khớp nhau; chưa kiểm mục nào thì ghi rõ mục đó.
+
+## Hướng mở rộng
+
+Bài tập mở rộng: thêm ambient occlusion bằng số mẫu hữu hạn và một view riêng, rồi đo chi phí thay vì đoán. Trước khi thêm smooth union hoặc non-uniform scale, kiểm lại điều kiện bước tiến bảo thủ. [Project 37](/projects/million-vector-gpu) chuyển sang compute shader; OpenGL 3.3 graphics chạy được ở đây không mặc nhiên chứng minh phần cứng hỗ trợ compute.

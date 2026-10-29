@@ -255,9 +255,11 @@
   },
   {
     "id": "36",
+    "contentRevision": 2,
+    "shaderRuntimePerTarget": true,
     "slug": "ray-marched-shape-room",
     "sourceDirectory": "project-36-ray-marched-shape-room",
-    "checkpointCount": 9,
+    "checkpointCount": 11,
     "demoId": "ray-marched-shape-room"
   },
   {

@@ -15,17 +15,32 @@ inline bool validSettings(const RayMarchSettings& settings) {
     return settings.maximumSteps >= 1 && settings.maximumSteps <= 256 && std::isfinite(settings.hitEpsilon) && settings.hitEpsilon >= 1e-5 && settings.hitEpsilon <= 0.02 && std::isfinite(settings.maximumDistance) && settings.maximumDistance >= 0.1 && settings.maximumDistance <= 80.0 && std::isfinite(settings.normalEpsilon) && settings.normalEpsilon >= 1e-5 && settings.normalEpsilon <= 0.02;
 }
 
-enum class MarchStatus { hit, distanceLimit, stepLimit, invalidInput, invalidSample, stalled, emptyScene };
+enum class MarchStatus {
+    hit,
+    distanceLimit,
+    stepLimit,
+    invalidInput,
+    invalidSample,
+    stalled,
+    emptyScene
+};
 
 inline const char* marchStatusName(MarchStatus status) {
     switch (status) {
-    case MarchStatus::hit: return "HIT";
-    case MarchStatus::distanceLimit: return "DISTANCE LIMIT";
-    case MarchStatus::stepLimit: return "STEP LIMIT";
-    case MarchStatus::invalidInput: return "INVALID INPUT";
-    case MarchStatus::invalidSample: return "INVALID SAMPLE";
-    case MarchStatus::stalled: return "STALLED";
-    case MarchStatus::emptyScene: return "EMPTY SCENE";
+    case MarchStatus::hit:
+        return "HIT";
+    case MarchStatus::distanceLimit:
+        return "DISTANCE LIMIT";
+    case MarchStatus::stepLimit:
+        return "STEP LIMIT";
+    case MarchStatus::invalidInput:
+        return "INVALID INPUT";
+    case MarchStatus::invalidSample:
+        return "INVALID SAMPLE";
+    case MarchStatus::stalled:
+        return "STALLED";
+    case MarchStatus::emptyScene:
+        return "EMPTY SCENE";
     }
     return "UNKNOWN";
 }
@@ -82,6 +97,7 @@ inline RayMarchResult marchRay(const Ray& ray, const RayMarchSettings& settings 
     result.status = MarchStatus::stepLimit;
     return result;
 }
+
 // [/snippet:march-ray]
 #endif
 
@@ -101,6 +117,7 @@ inline Vec3 estimateNormal(Vec3 point, const SceneOptions& scene = {}, double ep
     };
     return normalize(gradient);
 }
+
 // [/snippet:normal]
 #endif
 
@@ -136,6 +153,7 @@ inline ShadowResult traceShadow(Vec3 origin, Vec3 direction, double lightDistanc
     // Hết budget là chưa giải quyết được tia: không gọi nó là ánh sáng thấy rõ.
     return result;
 }
+
 // [/snippet:shadow]
 
 inline double softShadow(Vec3 origin, Vec3 direction, double maximumDistance, const SceneOptions& scene = {}, int maximumSteps = 64) {

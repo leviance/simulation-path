@@ -1,128 +1,95 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
-import { workspace } from "./site-support.mjs";
+import { compile } from "@mdx-js/mdx";
+import { courseMdxOptions } from "../lib/mdx-options.mjs";
+import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+const root = new URL("../", import.meta.url);
+const read = (file) => readFile(new URL(file, root), "utf8");
+const dir = "examples/project-36-ray-marched-shape-room/";
 
-test("Project 36 publishes a nine-checkpoint ray-marched room", async () => {
-  const catalog = JSON.parse(
-    await readFile(path.join(workspace, "course", "projects.json"), "utf8"),
-  );
-  const project = catalog.find((entry) => entry.id === "36");
-  assert.equal(project.slug, "ray-marched-shape-room");
-  assert.equal(project.sourceDirectory, "project-36-ray-marched-shape-room");
-  assert.equal(project.checkpointCount, 9);
-  assert.equal(project.demoId, "ray-marched-shape-room");
-});
-
-test("Project 36 teaches one traceable pixel-to-room pipeline", async () => {
-  const content = path.join(workspace, "content", "ray-marched-shape-room");
-  const source = path.join(workspace, "examples", "project-36-ray-marched-shape-room");
-  const lessons = await Promise.all(
-    [
-      "01-fullscreen-triangle-va-fragment-coordinates.mdx",
-      "02-dung-camera-ray-tu-moi-pixel.mdx",
-      "03-signed-distance-cua-sphere.mdx",
-      "04-sphere-tracing-co-guard.mdx",
-      "05-uoc-luong-normal-va-lambert.mdx",
-      "06-sdf-box-va-torus.mdx",
-      "07-ghep-scene-va-material-id.mdx",
-      "08-soft-shadow-va-orbit-camera.mdx",
-      "09-hoan-thien-can-phong-ray-march.mdx",
-    ].map((file) => readFile(path.join(content, file), "utf8")),
-  );
-
-  const lessonContracts = [
-    [/gl_VertexID/i, /glDrawArrays/i, /gl_FragCoord/i, /framebuffer pixel/i],
-    [/forward/i, /right/i, /up/i, /aspect/i, /normalize/i],
-    [/sdSphere/i, /âm/i, /zero/i, /dương/i, /SceneSample/i],
-    [/sphere tracing/i, /maximumSteps/i, /maximumDistance/i, /hitEpsilon/i],
-    [/central differences/i, /estimateNormal/i, /Lambert/i, /sampleScene/i],
-    [/sdBox/i, /sdTorus/i, /halfSize/i, /majorRadius/i, /minorRadius/i],
-    [/nearer/i, /materialId/i, /floor/i, /ceiling/i, /back wall/i],
-    [/softShadow/i, /normal bias/i, /SDL_CaptureMouse/i, /reduced-motion/i],
-    [/Beauty/i, /Steps/i, /Hit/i, /Normal/i, /CTest/i, /Mã hoàn chỉnh/i, /Project 37/i],
-  ];
-  for (const [index, patterns] of lessonContracts.entries()) {
-    for (const pattern of patterns) {
-      assert.match(lessons[index], pattern, `Project 36 lesson ${index + 1} is missing ${pattern}`);
+test('P36: complete teaching C++ uses four-space indentation, comments and logical blocks', async()=>{
+  for(const folder of ['include','src']){
+    for(const file of await readdir(new URL(dir+'final/'+folder+'/',root))){
+      if(!/\.(cpp|hpp)$/.test(file))continue;
+      const label=folder+'/'+file,source=await read(dir+'final/'+label);
+      assert.doesNotMatch(source,/\t|LAB_CHECKPOINT/,label);
+      source.split(/\r?\n/).forEach((line,index)=>assert.equal((line.match(/^ +(?=\S)/)?.[0].length??0)%4,0,label+':'+(index+1)));
+      assert.match(source,/^\s*\/\/ /m,label);
+      assert.ok((source.match(/\r?\n\s*\r?\n/g)??[]).length>=2,label+' needs logical blocks');
     }
   }
-
-  const math = await readFile(
-    path.join(source, "source-template", "include", "raymarch_math.hpp"),
-    "utf8",
+});
+test("P36: eleven lessons match manifest and catalog", async () => {
+  const manifest = (await import("../course/projects/p36/manifest.ts")).default;
+  const catalog = JSON.parse(await read("course/projects.json")).find((p) => p.id === "36");
+  assert.equal(catalog.checkpointCount, 11);
+  assert.equal(catalog.shaderRuntimePerTarget, true);
+  assert.equal(catalog.contentRevision, 2);
+  assert.equal(manifest.lessons.length, 11);
+  const files = (await readdir(new URL("content/ray-marched-shape-room/", root)))
+    .filter((f) => f.endsWith(".mdx"))
+    .sort();
+  assert.deepEqual(
+    files,
+    manifest.lessons.map((l) => l.slug + ".mdx"),
   );
-  const glApi = await readFile(
-    path.join(source, "source-template", "include", "gl_api.hpp"),
-    "utf8",
-  );
-  const renderer = await readFile(
-    path.join(source, "source-template", "include", "raymarch_renderer.hpp"),
-    "utf8",
-  );
-  const main = await readFile(path.join(source, "source-template", "src", "main.cpp"), "utf8");
-  const vertex = await readFile(
-    path.join(source, "source-template", "shaders", "raymarch.vert"),
-    "utf8",
-  );
-  const fragment = await readFile(
-    path.join(source, "source-template", "shaders", "raymarch.frag"),
-    "utf8",
-  );
-  assert.match(fragment, /isnan\(value\) \|\| isinf\(value\)/);
-  assert.match(fragment, /invalidPosition\(result\.position\)/);
-  const tests = await readFile(path.join(source, "tests", "tests.cpp"), "utf8");
-  const cmake = await readFile(path.join(source, "CMakeLists.txt"), "utf8");
-  const canvas = await readFile(
-    path.join(workspace, "components", "labs", "ray-marched-shape-room-lab.tsx"),
-    "utf8",
-  );
-
-  for (const symbol of [
-    "makeCameraRay",
-    "sdSphere",
-    "sdBox",
-    "sdTorus",
-    "marchRay",
-    "estimateNormal",
-    "softShadow",
-    "validateRayMarchRoom",
-  ]) {
-    assert.ok(math.includes(symbol), `Project 36 math source is missing ${symbol}`);
+});
+test("P36: all actual MDX lessons compile with KaTeX and One Dark", async () => {
+  const manifest = (await import("../course/projects/p36/manifest.ts")).default;
+  for (const lesson of manifest.lessons) {
+    const source = await read("content/ray-marched-shape-room/" + lesson.slug + ".mdx");
+    const output = String(await compile(source, courseMdxOptions));
+    assert.match(output, /one-dark-pro/, lesson.slug);
+    assert.match(output, /InteractiveLab/, lesson.slug);
   }
-  for (const symbol of [
-    "PFNGLDRAWARRAYSPROC",
-    "PFNGLUNIFORM1IPROC",
-    "PFNGLUNIFORM3FPROC",
-    "SDL_GL_GetProcAddress",
-  ]) {
-    assert.ok(glApi.includes(symbol), `Project 36 OpenGL loader is missing ${symbol}`);
+});
+test("P36: every C++ and GLSL block matches the exact checkpoint contiguously", async () => {
+  const manifest = (await import("../course/projects/p36/manifest.ts")).default;
+  let checked = 0;
+  for (const lesson of manifest.lessons) {
+    const text = await read("content/ray-marched-shape-room/" + lesson.slug + ".mdx");
+    const blocks = [
+      ...text.matchAll(/\x60\x60\x60(cpp|glsl) title="([^"]+)"\r?\n([\s\S]*?)\r?\n\x60\x60\x60/g),
+    ];
+    assert.ok(blocks.length, lesson.slug);
+    for (const [, , title, snippet] of blocks) {
+      const file = title.split(" — ")[0];
+      const source = await read(
+        dir + `checkpoints/${String(lesson.order).padStart(2, "0")}/` + file,
+      );
+      assert.ok(isContiguousCodeExcerpt(snippet, source), lesson.slug + ": " + file);
+      checked++;
+    }
   }
-  for (const symbol of [
-    "ProgramCandidate",
-    "buildProgramCandidate",
-    "RayMarchRenderer",
-    "previousProgram",
-    "DrawArrays",
+  console.log("Matched literal excerpts:", checked);
+  assert.ok(checked >= 20);
+});
+test("P36: snapshots add each new feature only at its teaching checkpoint", async () => {
+  for (const [stage, file, symbol] of [
+    [3, "include/sdf.hpp", /inline double sdSphere/],
+    [4, "include/tracing.hpp", /inline RayMarchResult marchRay/],
+    [5, "include/tracing.hpp", /inline Vec3 estimateNormal/],
+    [6, "include/sdf.hpp", /inline double sdTorus/],
+    [8, "include/tracing.hpp", /inline ShadowResult traceShadow/],
+    [9, "include/room_controls.hpp", /event\.motion\.xrel/],
+    [10, "include/raymarch_oracle.hpp", /inline SphereIntersection intersectSphere/],
+    [11, "include/room_verify.hpp", /uProbeOrigin/],
   ]) {
-    assert.ok(renderer.includes(symbol), `Project 36 renderer is missing ${symbol}`);
+    assert.doesNotMatch(
+      await read(dir + `checkpoints/${String(stage - 1).padStart(2, "0")}/` + file),
+      symbol,
+    );
+    assert.match(await read(dir + `checkpoints/${String(stage).padStart(2, "0")}/` + file), symbol);
   }
-  assert.match(vertex, /gl_VertexID/);
-  assert.match(fragment, /SceneSample/);
-  assert.match(fragment, /uMaximumSteps/);
-  assert.match(fragment, /softShadow/);
-  assert.match(fragment, /uDebugView/);
-  assert.match(main, /SDLK_F5/);
-  assert.match(main, /SDL_CaptureMouse/);
-  assert.match(main, /SDL_EVENT_WINDOW_FOCUS_LOST/);
-  assert.match(main, /SDL_GetWindowSizeInPixels/);
-  assert.match(tests, /miss path is bounded/);
-  assert.match(tests, /named final validation passes/);
-  assert.match(cmake, /COURSE_SHADER_DIRECTORY/);
-  assert.match(canvas, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(canvas, /useReducedMotion/);
-  assert.match(canvas, /Kết quả kiểm tra/);
-  assert.match(canvas, /Sphere SDF/);
-  assert.match(canvas, /setIncludeSphere/);
+  for (let stage = 0; stage <= 11; stage++) {
+    const snapshot = stage === 0 ? "starter" : `checkpoints/${String(stage).padStart(2, "0")}`;
+    const files = await readdir(new URL(dir + snapshot + "/include/", root));
+    for (const file of files)
+      assert.doesNotMatch(
+        await read(dir + snapshot + "/include/" + file),
+        /\bLAB_CHECKPOINT\b/,
+        snapshot + "/" + file,
+      );
+  }
 });

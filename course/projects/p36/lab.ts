@@ -46,7 +46,17 @@ const lab = {
     "raymarch-shadow-camera": {
       title: "Camera ray và shadow ray làm hai việc gì khác nhau?",
       description:
-        "Orbit camera, di chuyển đèn và quan sát normal bias cùng độ che sáng của shadow ray có giới hạn.",
+        "Di chuyển đèn và quan sát normal bias, đoạn tới nguồn sáng cùng độ che sáng của shadow ray có giới hạn.",
+    },
+    "raymarch-free-camera": {
+      title: "Nhìn quanh khác với đổi vị trí camera thế nào?",
+      description:
+        "Bay theo basis camera, đổi FOV và bán kính vật thể; Pause chỉ dừng đèn, không khóa input.",
+    },
+    "raymarch-oracle": {
+      title: "Epsilon tới bề mặt có bằng sai số dọc tia không?",
+      description:
+        "Chọn ray chính diện, tiếp tuyến, trượt hoặc origin trong sphere; so traveled với nghiệm bậc hai và khảo sát normal epsilon riêng.",
     },
     "raymarch-validation": {
       title: "Một bức hình đẹp có thể che giấu lỗi ray marching không?",

@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm bóng để nhìn rõ chiều sâu
+
+## Ta cần giải quyết điều gì?
+
+### Mặt sáng chưa có nghĩa là thấy được đèn
+
+Ở checkpoint 7, Lambert chỉ hỏi normal quay về phía đèn bao nhiêu. Nó chưa hỏi có một box đứng chắn giữa điểm hit và đèn hay không. Bài này thêm một tia thứ hai, từ gần điểm hit tới đèn, để ước lượng độ che sáng.
+
+Đây là shadow ray, không phải primary camera ray. Tham khảo: đọc 30 phút, tự viết 80 phút, kiểm tra 40 phút.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Từ điểm chạm hỏi đường tới đèn
+
+Marcher đã chấp nhận điểm hit trong một dải epsilon, nên điểm ấy có thể nằm hơi trong hoặc hơi ngoài mặt thật. Nếu shadow ray bắt đầu đúng tại đó, nó dễ thấy chính vật thể mà nó vừa rời và tạo đốm đen tự che sáng.
+
+Trong `main`, ta dịch origin theo normal dùng shading:
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-shadow-camera" />
+
+Canvas minh họa đoạn nối điểm hit tới đèn và bias. Nó không đo GPU time; Steps của primary ray cũng không đếm sáu normal samples hay các shadow samples.
+
+## Bắt tay vào code
+
+### Dịch origin khỏi bề mặt
+
+```glsl title="shaders/raymarch.frag — gọi shadow sau khi đã có hit và normal"
+visibility = softShadow(result.position + normal * (uHitEpsilon * 3.0), lightDirection, lightDistance);
+```
+
+Bias bằng ba lần hit epsilon là lựa chọn thực dụng cho scene này, không phải hằng số vật lý. Quá nhỏ gây acne; quá lớn làm bóng như rời khỏi chân vật thể. Với normal lật để xem mặt trong, ta đang chọn cách trình bày mặt trong chứ không mô phỏng vật liệu hai mặt đầy đủ.
+
+### Giới hạn shadow query và đọc kết quả
+
+```glsl title="shaders/raymarch.frag — gpu-shadow"
+float softShadow(vec3 origin, vec3 direction, float lightDistance) {
+    float visibility = 1.0;
+    float traveled = 0.004;
+    for (int step = 0; step < 64; ++step) {
+        if (traveled >= lightDistance) {
+            return clamp(visibility, 0.0, 1.0);
+        }
+        float distance = sampleScene(origin + direction * traveled).distance;
+        if (invalidNumber(distance) || distance <= 0.001) {
+            return 0.0;
+        }
+        visibility = min(visibility, 14.0 * distance / traveled);
+        traveled += clamp(distance, 0.004, 0.4);
+    }
+    return 0.0;
+}
+```
+
+Tia chỉ cần xét đoạn tới đèn và tối đa 64 mẫu. `distance<=0.001` coi đường đi đã gặp vật cản. Biểu thức `14*distance/traveled` làm bóng mềm hơn khi ray lướt gần vật thể: đây là heuristic penumbra, **không phải** phép tích phân ánh sáng từ area light.
+
+Bước shadow bị giới hạn tối đa `0.4m`; mức sàn `0.004m` cùng ngưỡng occlusion là xấp xỉ trình bày cho scene mẫu, không dùng thay primary sphere tracing hoặc hứa bắt mọi vật cản mỏng tùy ý. Bản CPU trả thêm `reachedLight` và số mẫu để ta biết có đi hết đoạn hay không.
+
+Nếu hết budget trước khi tới đèn, hàm trả zero: chọn tối bảo thủ, không tuyên bố đường tới đèn đã thông. Một dải tối do thiếu budget không nhất thiết là bóng đúng. Hãy đọc cùng stop/budget thay vì chỉ đánh giá bằng mắt.
+
+Ở CPU, số mẫu đã hỏi được lưu riêng với kết quả thấy đèn:
+
+```cpp title="include/tracing.hpp — shadow query ở CPU"
+const SceneSample sample = sampleScene(origin + direction * traveled, scene);
+result.steps = step + 1;
+if (!std::isfinite(sample.distance) || sample.distance <= 0.001) {
+    return result;
+}
+```
+
+### Chỉ cập nhật clock của đèn
+
+Đèn chuyển động theo `elapsedSeconds` bằng sin/cos, ở phía trên scene. `Space` dừng/tăng clock, `N` tiến đúng `0.1s` và để đèn ở trạng thái pause. `R` đưa scene, camera và clock về mặc định. Camera không bị khóa bởi Pause; ta sẽ nối input ở bài 9.
+
+```glsl title="shaders/raymarch.frag — vị trí đèn theo thời gian"
+light = vec3(-1.2 + 1.8 * sin(uTime * 0.35), 1.7, 1.5 + 0.4 * cos(uTime * 0.35));
+```
+
+Trước khi bật chuyển động, dự đoán bóng box sẽ đi về phía nào khi đèn dịch sang phải. Phải phân biệt chuyển động của nguồn sáng với chuyển động của vật thể.
+
+## Chạy checkpoint
+
+```bash title="Terminal — checkpoint 8"
+cmake --build build --config Debug --target project_36_checkpoint_8 --parallel 2
+./build/Debug/project_36_checkpoint_8.exe
+```
+
+## Thử tạo lỗi
+
+1. Giảm shadow budget xuống một, F5 rồi quan sát vùng tối tăng. Đây có thể là tia chưa giải quyết xong, không phải bóng vật lý mới; khôi phục 64 mẫu và so lại.
+
+2. Đặt normal bias bằng zero để thấy self-shadow, rồi tăng bias quá lớn để thấy bóng như rời chân vật thể. Đưa về ba lần hit epsilon; giữ nguyên vị trí đèn khi so để chỉ thay một tham số.
+
+## Checklist hoàn thành
+
+- [ ] Vật thể chắn sáng thật sự tạo bóng trên scene, không phải hình bóng hard-code.
+- [ ] Shadow có giới hạn đoạn và 64 mẫu; visibility hữu hạn trong `[0,1]`.
+- [ ] Bạn phân biệt được blocked với hết budget chưa biết kết quả.
+- [ ] Space/N thay clock, không đổi camera hay program generation.
+
+## Hướng mở rộng
+
+Bài tập: dùng đèn cố định và một sphere duy nhất để so bóng hard/soft mà không đổi primary hit. Tiếp theo, [bài 9](/projects/ray-marched-shape-room/09-bay-camera-va-thay-doi-scene) cho phép tự bay vào căn phòng.

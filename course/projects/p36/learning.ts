@@ -1,230 +1,280 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/raymarch_math.hpp",
-  "include/gl_api.hpp",
-  "include/raymarch_renderer.hpp",
-  "shaders/raymarch.vert",
-  "shaders/raymarch.frag",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
   guides: {
     "p36-l01": {
-      focus:
-        "Tạo một draw path chỉ phát fragments: fullscreen triangle từ gl_VertexID, framebuffer resolution và coordinate visualization.",
+      focus: "Chạy application shell đã có trước khi sửa ảnh từ fragment shader.",
       expected:
-        "Checkpoint 1 phủ kín viewport bằng một triangle không VBO/EBO; grid/UV không méo khi resize hoặc high-DPI.",
-      files,
+        "Lưới 32 framebuffer pixel phủ viewport; source stage 1 và executable đang chạy là cùng một checkpoint.",
+      files: [
+        "shaders/raymarch.frag",
+        "shaders/raymarch.vert",
+        "include/room_application.hpp",
+        "include/raymarch_renderer.hpp",
+      ],
       steps: [
         {
-          title: "Sinh ba clip-space vertices",
+          title: "Chạy starter",
           explanation:
-            "Vertex shader tra ba vị trí bằng gl_VertexID. Triangle lớn vượt viewport để không tạo đường chéo precision seam giữa hai triangles.",
+            "SDL/context/loader/reload là phần cung cấp từ Project 35. Xác nhận nền xanh và đường dẫn shader trong terminal trước khi thêm công thức.",
         },
         {
-          title: "Chỉ giữ một VAO rỗng",
+          title: "Giữ draw path đơn giản",
           explanation:
-            "OpenGL Core cần VAO bound, nhưng project không upload object vertex. glDrawArrays phát đúng ba vertex.",
+            "Một VAO rỗng và DrawArrays ba vertex tạo fragment; không thêm VBO cho sphere, box hay torus.",
         },
         {
-          title: "Kiểm coordinate trước ray",
+          title: "Đổi màu bằng tọa độ",
           explanation:
-            "Fragment shader dùng gl_FragCoord/uResolution để vẽ lưới. Nếu bước này sai, mọi camera ray sau đều sai theo.",
+            "Fragment dùng gl_FragCoord và uResolution cùng đơn vị pixel vật lý; lưới có cạnh vuông dù cửa sổ đổi aspect.",
         },
       ],
     },
     "p36-l02": {
-      focus:
-        "Đổi pixel thành ray chuẩn hóa bằng camera forward/right/up, aspect ratio và vertical field of view.",
+      focus: "Đưa basis camera đã học vào fragment shader để tạo tia trong world space.",
       expected:
-        "Center ray đi qua target; corner rays hữu hạn, khác hướng và giữ length gần một ở mọi framebuffer size.",
-      files,
+        "Tia tâm trùng forward, tia góc có độ dài một; CPU top-left và GLSL bottom-left chuyển đổi đúng.",
+      files: ["shaders/raymarch.frag", "include/camera.hpp", "include/room_uniforms.hpp"],
       steps: [
         {
-          title: "Đưa pixel về plane có đơn vị theo chiều cao",
+          title: "Đọc basis CPU",
           explanation:
-            "Công thức `(2*fragCoord-resolution)/resolution.y` giữ aspect trong trục X thay vì kéo giãn scene theo cửa sổ.",
+            "Camera được mô tả bằng position/yaw/pitch, không còn target hay orbit distance. Right và up được tính từ cross product.",
         },
         {
-          title: "Dựng basis có handedness rõ",
+          title: "Upload một snapshot",
           explanation:
-            "Forward nhìn target; right là cross(forward, worldUp); up được tính lại từ right và forward để basis trực giao.",
+            "uploadUniforms gửi position, forward/right/up và tan(FOV/2) trước draw call; đổi camera không compile shader.",
         },
         {
-          title: "Normalize sau khi cộng offset",
+          title: "Normalize hướng tia",
           explanation:
-            "Ray direction phải là vector đơn vị vì sphere tracing cộng distance theo world units.",
+            "Cộng offset trên mặt ảnh rồi normalize để t có đơn vị mét, không đổi theo góc pixel.",
         },
       ],
     },
     "p36-l03": {
-      focus:
-        "Hiểu Signed Distance Function qua sdSphere và kiểm dấu/độ lớn bằng lát cắt trước khi viết vòng march.",
+      focus: "Viết hàm khoảng cách tới mặt cầu và kiểm nó bằng các điểm biết trước.",
       expected:
-        "Center âm radius, surface gần zero, outside dương và Canvas cho phép kéo sample point đọc đúng ba vùng.",
-      files,
+        "Tâm trả -radius, mặt trả 0, điểm ngoài trả dương; hình đang xem là lát cắt phẳng chứ chưa phải sphere 3D.",
+      files: ["include/sdf.hpp", "shaders/raymarch.frag"],
       steps: [
         {
-          title: "Bắt đầu từ khoảng cách tới tâm",
+          title: "Từ tâm tới bề mặt",
           explanation:
-            "`length(point-center)` là bán kính của sample; trừ radius dịch zero-set về đúng bề mặt sphere.",
+            "Trừ radius khỏi length(point-center), không đổi kết quả thành bool vì bước sau cần độ lớn khoảng cách.",
         },
         {
-          title: "Giữ giá trị thay vì đổi thành bool",
+          title: "Giữ lát cắt thật sự phẳng",
           explanation:
-            "Dấu dùng cho inside/outside, còn độ lớn là bước an toàn mà sphere tracing cần ở bài sau.",
+            "Các điểm mẫu có cùng z; không sample một điểm theo ray perspective rồi gọi đó là lát cắt.",
         },
         {
-          title: "Khóa ba probe có tên",
+          title: "Đọc dấu và đơn vị",
           explanation:
-            "CTest kiểm ba điểm ở tâm, trên bề mặt và bên ngoài. Hình gradient giúp quan sát nhanh, nhưng kết quả số từ các điểm kiểm tra mới là căn cứ xác nhận hàm SDF đúng.",
+            "Âm/trong, zero/mặt và dương/ngoài là ba ca độc lập; độ lớn tính bằng đơn vị world.",
         },
       ],
     },
     "p36-l04": {
-      focus:
-        "Xây sphere-tracing loop có result rõ và ba guard: hit epsilon, maximum distance, maximum steps.",
+      focus: "Viết marcher hữu hạn, trả cả kết quả và lý do dừng.",
       expected:
-        "Ray chính diện hit sphere, ray đi qua room opening miss hữu hạn và title/debug báo đúng step budget.",
-      files,
+        "Sphere hiện bằng hit mask; ray trong vật thể tìm mặt thoát, ray ngoài hướng ra xa kết thúc bằng distance limit.",
+      files: ["include/tracing.hpp", "shaders/raymarch.frag"],
       steps: [
         {
-          title: "Tích lũy traveled",
+          title: "Đếm mẫu chứ không đoán hit",
           explanation:
-            "Mỗi vòng sample tại origin + direction*traveled rồi cộng scene distance; không dùng fixed step tùy ý.",
+            "Sample tại origin+direction*traveled rồi kiểm abs(distance). Vừa tiến tới endpoint nhưng chưa sample lại thì chưa được gọi là hit.",
         },
         {
-          title: "Trả một result đủ dữ liệu",
+          title: "Phân biệt các kiểu dừng",
           explanation:
-            "Hit, traveled, steps, materialId và position đi cùng nhau để shading/debug không chạy lại một loop khác.",
+            "Hết steps, vượt distance, empty scene, NaN hay stalled có status riêng; miss không phải exception.",
         },
         {
-          title: "Để miss là kết quả hợp lệ",
+          title: "Thử origin bên trong",
           explanation:
-            "Vượt distance hoặc step budget trả hit=false. Miss không phải exception và không được đổi thành hit nền giả.",
+            "Dùng abs(distance) để tiến tới mặt thoát. Quy tắc distance<=epsilon cũ sẽ báo hit giả tại mọi điểm trong vật thể.",
         },
       ],
     },
     "p36-l05": {
-      focus:
-        "Ước lượng gradient của scene SDF bằng central differences rồi dùng normal đó trong Lambert lighting.",
+      focus: "Lấy normal từ gradient SDF và nối vào shading của cùng hit result.",
       expected:
-        "Sphere normal hướng ra ngoài, dài gần một; beauty view có ambient/diffuse nhưng không đổi hit result.",
-      files,
+        "Sphere có chiều sâu; normal hình học hướng ra ngoài, normal dùng shading có thể lật về phía camera khi nhìn từ trong.",
+      files: ["include/tracing.hpp", "shaders/raymarch.frag"],
       steps: [
         {
-          title: "Lấy hai sample cho mỗi trục",
+          title: "Sáu mẫu quanh điểm chạm",
           explanation:
-            "Hiệu `d(p+e)-d(p-e)` xấp xỉ đạo hàm và giảm bias so với chỉ sample một phía.",
+            "Hai mẫu theo mỗi trục x/y/z tạo central differences; normalize sau khi kiểm gradient hữu hạn và khác zero.",
         },
         {
-          title: "Normalize gradient",
+          title: "Bật diffuse và ambient",
           explanation:
-            "Độ lớn gradient số phụ thuộc epsilon; Lambert chỉ cần hướng nên normal phải được normalize.",
+            "Lambert dùng max(dot(normal,lightDirection),0); ambient giữ mặt khuất đèn đọc được. Không làm tối màu theo số bước march.",
         },
         {
-          title: "Giữ ambient tách diffuse",
+          title: "Tách hai epsilon",
           explanation:
-            "Ambient nhỏ giúp đọc mặt quay khỏi đèn; diffuse dùng max(dot(normal,lightDirection),0).",
+            "hitEpsilon quyết định gần mặt tới đâu; normalEpsilon quyết định khoảng lấy mẫu gradient. Chúng không cùng một phép kiểm.",
         },
       ],
     },
     "p36-l06": {
-      focus:
-        "Thêm sdBox và sdTorus bằng phép giảm bài toán, không thêm geometry resource hoặc draw call.",
+      focus: "Thêm hai hàm SDF vào cùng scene query.",
       expected:
-        "Box face và torus outer ring có distance gần zero; scene hiển thị đủ ba primitive từ cùng fullscreen pass.",
-      files,
+        "Box có cạnh/góc đúng khoảng cách Euclidean; torus nghiêng nhưng khoảng cách local/world giữ nguyên.",
+      files: ["include/sdf.hpp", "shaders/raymarch.frag", "include/room_uniforms.hpp"],
       steps: [
         {
-          title: "Tách phần ngoài và trong box",
+          title: "Tách ngoài và trong box",
           explanation:
-            "`q=abs(local)-halfSize`; length(max(q,0)) đo góc ngoài, min(maxComponent(q),0) giữ dấu âm bên trong.",
+            "length(max(q,0)) đo phần ngoài; min(maxComponent(q),0) giữ dấu âm trong box.",
         },
         {
-          title: "Thu torus về một vòng tròn 2D",
+          title: "Thu torus về hai chiều",
           explanation:
-            "Khoảng cách trong mặt XZ tới major radius trở thành một trục; Y là trục còn lại, rồi trừ minor radius.",
+            "Khoảng cách XZ tới major radius cùng local Y tạo một vector 2D; trừ minor radius để có SDF của ống.",
         },
         {
-          title: "Đo đúng zero-set",
+          title: "Quay điểm, không quay ray marcher",
           explanation:
-            "CTest dùng điểm trên box face và torus outer ring, không chỉ kiểm một ảnh có hình giống box/torus.",
+            "Đổi world point bằng inverse rotation trước khi hỏi torus. Phép quay cứng giữ độ dài; scale tùy ý thì không.",
         },
       ],
     },
     "p36-l07": {
-      focus:
-        "Ghép primitive bằng nearest sample giữ distance/materialId cùng nhau và thêm room planes có ID riêng.",
+      focus: "Ghép vật thể với phòng hữu hạn và truyền đúng material ID.",
       expected:
-        "Sphere/box/torus/room giữ ID 1–4; checker chỉ áp dụng room và không ảnh hưởng distance winner.",
-      files,
+        "Ra ngoài tường không bị hit giả; floor/checker và vật thể có màu riêng nhưng không đổi vị trí hit.",
+      files: ["include/sdf.hpp", "shaders/raymarch.frag"],
       steps: [
         {
-          title: "Đóng cặp distance và material",
+          title: "Chọn cả SceneSample",
           explanation:
-            "SceneSample tránh hai lần min tách biệt. Candidate thắng về distance mang materialId của chính nó.",
+            "nearer thay đồng thời distance và materialId; không hỏi lại primitive bằng màu ở bước shading.",
         },
         {
-          title: "Thêm room bằng năm plane",
+          title: "Dùng slab có bề dày",
           explanation:
-            "Sàn, trần, tường sau, tường trái và tường phải tạo thành căn phòng mở về phía camera. Mọi khoảng cách vẫn dùng cùng đơn vị trong world space.",
+            "Năm box mỏng tạo floor, ceiling và tường. Không dùng signed half-space âm vô hạn ở phía ngoài phòng.",
         },
         {
-          title: "Tô màu sau hit",
+          title: "Checker chỉ là vật liệu",
           explanation:
-            "Material mapping chỉ đọc ID đã chốt. Nó không gọi lại primitive tests hoặc dùng màu để đoán object.",
+            "Tọa độ world chọn màu ô trên floor; thay checker không được làm thay đổi hàm sampleScene.",
         },
       ],
     },
     "p36-l08": {
-      focus:
-        "Bắn shadow ray từ điểm vừa tìm được, tránh self-shadow bằng normal bias, rồi điều khiển hướng ray bằng orbit camera.",
+      focus: "Thêm một phép hỏi có giới hạn từ điểm chạm tới đèn.",
       expected:
-        "Visibility luôn trong [0,1], camera drag/zoom không self-shadow hoặc rời preset an toàn, reduced motion dừng đèn.",
-      files,
+        "Bóng di chuyển theo đèn; Pause dừng clock của đèn, không khóa các thao tác kiểm tra scene.",
+      files: [
+        "include/tracing.hpp",
+        "include/room_frame.hpp",
+        "include/room_controls.hpp",
+        "shaders/raymarch.frag",
+      ],
       steps: [
         {
-          title: "Bắt đầu ngoài bề mặt",
+          title: "Rời bề mặt bằng bias",
           explanation:
-            "Origin dịch theo normal vài epsilon để shadow ray không lập tức hit chính bề mặt vừa tìm được.",
+            "Dịch origin theo normal trước khi march shadow để tránh coi chính điểm chạm là vật cản.",
         },
         {
-          title: "Giữ shadow loop hữu hạn",
+          title: "Công bố shadow budget",
           explanation:
-            "Shadow có maximum steps và light distance riêng; clamp step nhỏ/lớn giữ tiến triển ổn định gần bề mặt.",
+            "Tối đa 64 mẫu trong GLSL. Hết budget là chưa giải quyết xong tia; bản này chọn tối bảo thủ, không tuyên bố thấy đèn.",
         },
         {
-          title: "Camera chỉ đổi ray origin/basis",
+          title: "Tách thời gian khỏi camera",
           explanation:
-            "Yaw, pitch, distance cập nhật uniforms; primitive centers và SDF không bị biến đổi theo camera.",
+            "elapsedSeconds chỉ điều khiển lightPosition. Space/N không reset camera, settings hoặc program generation.",
         },
       ],
     },
     "p36-l09": {
-      focus:
-        "Hoàn thiện các chế độ xem chẩn đoán, kiểm tra từng điều kiện có tên, hot reload an toàn và thứ tự giải phóng tài nguyên.",
+      focus: "Nối SDL input vào camera và tham số scene đang render.",
       expected:
-        "Bản final báo rõ từng phép kiểm tra đạt hay không, mọi chế độ debug dùng chung MarchResult, còn shader lỗi không thay thế program đang chạy tốt.",
-      files,
+        "Di chuyển và nhìn thật sự trong world; reset/focus loss nhả relative mouse, diagonal speed không tăng.",
+      files: ["include/room_controls.hpp", "include/camera.hpp", "include/room_uniforms.hpp"],
       steps: [
         {
-          title: "Debug cùng một result",
+          title: "Nhìn bằng relative mouse",
           explanation:
-            "Steps/Hit/Normal đọc MarchResult của beauty path; không viết loop phụ chỉ để tạo ảnh chẩn đoán đẹp.",
+            "Chỉ nhận xrel/yrel khi chuột phải đang giữ và SDL chấp nhận relative mode. Không xoay hệ tọa độ hay primitive thay camera.",
         },
         {
-          title: "Dùng bản CPU nhỏ để đối chiếu",
+          title: "Đi theo basis camera",
           explanation:
-            "CTest kiểm camera ray, SDF, các điều kiện dừng, normal, material và miền shadow mà không cần mở OpenGL context.",
+            "Normalize input local trước khi nhân speed*dt; camera vẫn nhận input khi đèn đang pause.",
         },
         {
-          title: "Dọn GL trước context",
+          title: "Thay dữ liệu qua uniform",
           explanation:
-            "Active/candidate program và fullscreen VAO bị xóa khi context còn current; pointer capture cũng được nhả khi reset/thoát.",
+            "J/K và U/I đổi radius có clamp. Không compile lại shader chỉ vì một con số thay đổi.",
+        },
+      ],
+    },
+    "p36-l10": {
+      focus: "So với nghiệm ray–sphere độc lập và đọc sai số có đơn vị.",
+      expected:
+        "Giải thích được vì sao near-miss có thể thuộc epsilon band và vì sao tiếp tuyến không dùng tolerance t=hitEpsilon.",
+      files: [
+        "include/raymarch_oracle.hpp",
+        "include/room_controls.hpp",
+        "include/room_overlay.hpp",
+        "shaders/raymarch.frag",
+        "tests/core_checks.hpp",
+      ],
+      steps: [
+        {
+          title: "Giải quadratic",
+          explanation:
+            "Tính hai nghiệm, lấy nghiệm không âm gần nhất; origin trong sphere dùng nghiệm thoát. Oracle không gọi SDF hoặc marchRay.",
+        },
+        {
+          title: "Khảo sát hai sai số riêng",
+          explanation:
+            "Tiếp tuyến dùng sqrt(2*r*epsilon+epsilon²) cho sai số dọc tia. Normal dùng angular error so với hướng giải tích của sphere.",
+        },
+        {
+          title: "Dùng debug đúng chỗ",
+          explanation:
+            "Steps cho chi phí, Hit cho kết quả và Normal cho hướng hình học. Tắt debug không đổi marcher hay làm ảnh Beauty tối theo budget.",
+        },
+      ],
+    },
+    "p36-l11": {
+      focus: "Ghép ứng dụng, phép kiểm GPU thật và bản source hoàn chỉnh.",
+      expected:
+        "CPU/GPU checks và compile/link/interface recovery có bằng chứng riêng; ZIP chạy được, không cần Node hoặc ghép nguồn từ project khác.",
+      files: [
+        "include/room_application.hpp",
+        "include/room_verify.hpp",
+        "include/raymarch_renderer.hpp",
+        "include/shader_program.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Đọc số đo GPU bằng float",
+          explanation:
+            "Diagnostic entry point dùng lại chính các hàm SDF/march/normal của sản phẩm rồi readback RGBA32F, không đo t bằng RGB8.",
+        },
+        {
+          title: "Thử lỗi rồi phục hồi",
+          explanation:
+            "Tạo lỗi compile, link và type/missing uniform có giới hạn; last-good giữ nguyên, candidate bị xóa, bản đúng mới tăng generation.",
+        },
+        {
+          title: "Nghiệm thu đúng bản tải về",
+          explanation:
+            "Build starter/checkpoints/final, CTest Debug/Release và kiểm runtime fallback riêng từng target. Nhả resource trước khi hủy context.",
         },
       ],
     },
@@ -236,46 +286,18 @@ const learning = {
         href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_VertexID.xhtml",
         kind: "OpenGL API",
       },
-      {
-        label: "glDrawArrays",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDrawArrays.xhtml",
-        kind: "OpenGL API",
-      },
     ],
-    "p36-l02": [
-      {
-        label: "GLSL cross",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/cross.xhtml",
-        kind: "OpenGL API",
-      },
-      { label: "Camera ray", href: "/glossary#camera-ray", kind: "Thuật ngữ" },
-    ],
+    "p36-l02": [{ label: "Camera ray", href: "/glossary#camera-ray", kind: "Thuật ngữ" }],
     "p36-l03": [
-      {
-        label: "GLSL length",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/length.xhtml",
-        kind: "OpenGL API",
-      },
       {
         label: "Signed Distance Function",
         href: "/glossary#signed-distance-function",
         kind: "Thuật ngữ",
       },
     ],
-    "p36-l04": [
-      { label: "Sphere tracing", href: "/glossary#sphere-tracing", kind: "Thuật ngữ" },
-      { label: "Ray marching", href: "/glossary#ray-marching", kind: "Thuật ngữ" },
-    ],
-    "p36-l05": [
-      { label: "SDF normal", href: "/glossary#sdf-normal", kind: "Thuật ngữ" },
-      { label: "Lambert diffuse", href: "/glossary#lambert-diffuse", kind: "Thuật ngữ" },
-    ],
+    "p36-l04": [{ label: "Sphere tracing", href: "/glossary#sphere-tracing", kind: "Thuật ngữ" }],
+    "p36-l05": [{ label: "SDF normal", href: "/glossary#sdf-normal", kind: "Thuật ngữ" }],
     "p36-l06": [
-      {
-        label: "GLSL abs",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/abs.xhtml",
-        kind: "OpenGL API",
-      },
       {
         label: "Signed Distance Function",
         href: "/glossary#signed-distance-function",
@@ -284,21 +306,22 @@ const learning = {
     ],
     "p36-l07": [
       { label: "Material ID", href: "/glossary#ray-march-material-id", kind: "Thuật ngữ" },
-      { label: "Ray marching", href: "/glossary#ray-marching", kind: "Thuật ngữ" },
     ],
-    "p36-l08": [
-      { label: "Shadow ray", href: "/glossary#shadow-ray", kind: "Thuật ngữ" },
+    "p36-l08": [{ label: "Shadow ray", href: "/glossary#shadow-ray", kind: "Thuật ngữ" }],
+    "p36-l09": [
       {
-        label: "SDL_CaptureMouse",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
+        label: "SDL_SetWindowRelativeMouseMode",
+        href: "https://wiki.libsdl.org/SDL3/SDL_SetWindowRelativeMouseMode",
         kind: "SDL API",
       },
     ],
-    "p36-l09": [
+    "p36-l10": [
       { label: "GPU debug view", href: "/glossary#ray-march-debug-view", kind: "Thuật ngữ" },
+    ],
+    "p36-l11": [
       {
-        label: "glDeleteProgram",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDeleteProgram.xhtml",
+        label: "glReadPixels",
+        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glReadPixels.xhtml",
         kind: "OpenGL API",
       },
     ],

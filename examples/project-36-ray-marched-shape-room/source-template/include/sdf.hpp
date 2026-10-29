@@ -21,6 +21,7 @@ inline bool validScene(const SceneOptions& scene) {
 inline double sdSphere(Vec3 point, Vec3 center, double radius) {
     return length(point - center) - radius;
 }
+
 // [/snippet:sphere-sdf]
 
 struct SceneSample {
@@ -44,6 +45,7 @@ inline double sdBox(Vec3 point, Vec3 center, Vec3 halfSize) {
     const double inside = std::min(std::max({q.x, q.y, q.z}), 0.0);
     return length(outside) + inside;
 }
+
 // [/snippet:box-sdf]
 
 // Torus quanh trục Y trong local space. Phép quay giữ nguyên khoảng cách.
@@ -90,6 +92,7 @@ inline SceneSample sampleScene(Vec3 point, const SceneOptions& scene = {}) {
 #endif
     return sample;
 }
+
 // [/snippet:sample-scene]
 #endif
 

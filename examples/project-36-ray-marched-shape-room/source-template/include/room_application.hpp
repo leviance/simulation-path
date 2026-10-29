@@ -49,14 +49,17 @@ struct Application {
     }
 
     std::filesystem::path findShaderPath() const {
-        if (!shaderPath.empty()) return shaderPath;
+        if (!shaderPath.empty())
+            return shaderPath;
 #ifdef COURSE_SHADER_DIRECTORY
         const std::filesystem::path source(COURSE_SHADER_DIRECTORY);
-        if (std::filesystem::is_regular_file(source / "raymarch.frag")) return source;
+        if (std::filesystem::is_regular_file(source / "raymarch.frag"))
+            return source;
 #endif
         std::filesystem::path base(".");
         const char* path = SDL_GetBasePath();
-        if (path) base = path;
+        if (path)
+            base = path;
 #ifdef COURSE_SHADER_FALLBACK_SUBDIRECTORY
         return base / COURSE_SHADER_FALLBACK_SUBDIRECTORY;
 #else
@@ -74,7 +77,8 @@ struct Application {
             return false;
         }
         SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-        if (verification || finiteFrames > 0) flags |= SDL_WINDOW_HIDDEN;
+        if (verification || finiteFrames > 0)
+            flags |= SDL_WINDOW_HIDDEN;
         window = SDL_CreateWindow("P36 | Ray-marched room", 1280, 800, flags);
         if (!window) {
             diagnostics = SDL_GetError();
@@ -121,7 +125,8 @@ struct Application {
     }
 
     bool capture(int width, int height) {
-        if (width < 1 || height < 1 || width > 4096 || height > 4096) return false;
+        if (width < 1 || height < 1 || width > 4096 || height > 4096)
+            return false;
         const std::size_t stride = static_cast<std::size_t>(width) * 4;
         std::vector<unsigned char> pixels(stride * static_cast<std::size_t>(height));
         api.ReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -131,7 +136,8 @@ struct Application {
             std::swap_ranges(top, top + stride, bottom);
         }
         SDL_Surface* image = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32, pixels.data(), static_cast<int>(stride));
-        if (!image) return false;
+        if (!image)
+            return false;
         const bool saved = SDL_SaveBMP(image, capturePath.string().c_str());
         SDL_DestroySurface(image);
         return saved;
@@ -139,7 +145,8 @@ struct Application {
 
     int run() {
         if (verification) {
-            if (verifyRoom(api, renderer, sources)) return EXIT_SUCCESS;
+            if (verifyRoom(api, renderer, sources))
+                return EXIT_SUCCESS;
             return EXIT_FAILURE;
         }
         auto previous = SDL_GetTicksNS();
@@ -147,14 +154,21 @@ struct Application {
         int frames = 0;
         bool running = true;
         while (running) {
+            // Deadline phải được kiểm cả khi minimized hoặc framebuffer rỗng.
+            if (finiteFrames > 0 && SDL_GetTicks() - start > 5000) {
+                std::cerr << "Finite capture/smoke did not finish within five seconds\n";
+                return EXIT_FAILURE;
+            }
             const auto now = SDL_GetTicksNS();
             const double seconds = static_cast<double>(now - previous) / 1e9;
             previous = now;
             SDL_Event event{};
             while (SDL_PollEvent(&event)) {
-                if (!controls.event(window, event, frame)) running = false;
+                if (!controls.event(window, event, frame))
+                    running = false;
             }
-            if (!running) break;
+            if (!running)
+                break;
             controls.advance(window, frame, seconds);
             if (controls.reloadRequested) {
                 controls.reloadRequested = false;
@@ -169,7 +183,10 @@ struct Application {
             }
             int width = 0;
             int height = 0;
-            if (!SDL_GetWindowSizeInPixels(window, &width, &height)) return EXIT_FAILURE;
+            if (!SDL_GetWindowSizeInPixels(window, &width, &height)) {
+                std::cerr << "SDL_GetWindowSizeInPixels: " << SDL_GetError() << '\n';
+                return EXIT_FAILURE;
+            }
             if (width < 1 || height < 1 || (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0) {
                 SDL_Delay(10);
                 continue;
@@ -184,25 +201,39 @@ struct Application {
                 return EXIT_FAILURE;
             }
             char title[240]{};
-            std::snprintf(title, sizeof(title), "P36 | checkpoint %d | Tab controls | RMB+WASD camera | view %d | steps %d | eps %.5f | gen %llu", LAB_CHECKPOINT, frame.debugView, frame.settings.maximumSteps, frame.settings.hitEpsilon, static_cast<unsigned long long>(renderer.generation));
+            std::snprintf(title, sizeof(title), "P36 | checkpoint %d | Tab controls | view %d | steps %d | eps %.5f | gen %llu", checkpointNumber, frame.debugView, frame.settings.maximumSteps, frame.settings.hitEpsilon, static_cast<unsigned long long>(renderer.generation));
             SDL_SetWindowTitle(window, title);
             ++frames;
-            if (!capturePath.empty() && frames == finiteFrames && !capture(width, height)) return EXIT_FAILURE;
-            if (!SDL_GL_SwapWindow(window) || api.GetError() != GL_NO_ERROR) return EXIT_FAILURE;
-            if (finiteFrames > 0 && (frames >= finiteFrames || SDL_GetTicks() - start > 5000)) break;
+            if (!capturePath.empty() && frames == finiteFrames && !capture(width, height))
+                return EXIT_FAILURE;
+            if (!SDL_GL_SwapWindow(window)) {
+                std::cerr << "SDL_GL_SwapWindow: " << SDL_GetError() << '\n';
+                return EXIT_FAILURE;
+            }
+            const GLenum error = api.GetError();
+            if (error != GL_NO_ERROR) {
+                std::cerr << "OpenGL frame error: " << error << '\n';
+                return EXIT_FAILURE;
+            }
+            if (finiteFrames > 0 && frames >= finiteFrames) {
+                break;
+            }
         }
         return EXIT_SUCCESS;
     }
 
     ~Application() {
         // Cleanup: GL phải được nhả trong khi context vẫn còn current.
-        if (window) controls.release(window);
+        if (window)
+            controls.release(window);
         if (loaded) {
             overlay.destroy(api);
             renderer.destroy(api);
         }
-        if (context) SDL_GL_DestroyContext(context);
-        if (window) SDL_DestroyWindow(window);
+        if (context)
+            SDL_GL_DestroyContext(context);
+        if (window)
+            SDL_DestroyWindow(window);
         SDL_Quit();
     }
 };

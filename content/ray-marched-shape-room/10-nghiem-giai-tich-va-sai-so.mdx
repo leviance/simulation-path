@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm khoảng cách bằng nghiệm giải tích
+
+## Ta cần giải quyết điều gì?
+
+### Một bức hình đúng chưa đủ để kết luận
+
+Sau checkpoint 9, bạn đã có thể bay quanh phòng. Nhưng một ray trúng sphere sớm hơn vài centimet vẫn có thể tạo ảnh khó phân biệt bằng mắt. Bài này thêm oracle độc lập, debug views và controls cho hai epsilon, để các kết luận có số đo thay vì chỉ cảm giác.
+
+Tham khảo: đọc 40 phút, tự viết 95 phút, kiểm tra 55 phút.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Nghiệm giao độc lập và dải epsilon
+
+Thay $p=o+td$ vào phương trình sphere $\lVert p-c\rVert^2=r^2$. Đặt $v=o-c$, $a=d\cdot d$, $b=v\cdot d$, $c_0=v\cdot v-r^2$, ta được:
+
+$$at^2+2bt+c_0=0,\qquad \Delta=b^2-ac_0.$$
+
+Lưu ý hệ số giữa là **2b**, nên discriminant ở đây không phải `b*b-4*a*c`. Delta âm là miss. Với hai nghiệm thực, lấy nghiệm không âm gần nhất; nếu origin trong sphere, nghiệm vào ở phía sau ray và ta lấy nghiệm thoát.
+
+Marcher nhận hit khi khoảng cách tới mặt không quá epsilon. Tại tiếp tuyến, bề mặt gần song song với ray: đi khá xa dọc tia nhưng khoảng cách tới mặt chỉ đổi rất ít. Với sphere radius $r$, sai số dọc tia trong dải ngoài được chặn bởi:
+
+$$|\Delta t|\le\sqrt{(r+\epsilon)^2-r^2}=\sqrt{2r\epsilon+\epsilon^2}.$$
+
+Với `r=0.82m`, epsilon `0.0015m`, giới hạn này khoảng `0.0496m`, không phải `0.0015m`. Test dùng bound này cùng phần dư số thực nhỏ; không nới mọi test tới 5cm để cho qua lỗi ở ray chính diện.
+
+Một ray origin ở ngay ngoài mặt, cách `epsilon/2`, hướng ra ngoài sẽ **miss theo nghiệm giải tích**, nhưng marcher chấp nhận tại `t=0` vì đã ở trong epsilon band. Đó là xấp xỉ được công bố. Muốn picking hình học chính xác, không được diễn giải mọi epsilon-band hit thành giao điểm toán học chính xác.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-oracle" />
+
+Hãy thử tiếp tuyến với ba epsilon rồi ghi `t_exact`, `t_march`, số mẫu và bound tương ứng. Nếu hết budget, ghi là step limit — không gọi một kết quả chưa hội tụ là sai số khoảng cách đã đo được.
+
+## Bắt tay vào code
+
+### Giải quadratic và chọn nghiệm không âm
+
+```cpp title="include/raymarch_oracle.hpp — analytic-sphere"
+inline SphereIntersection intersectSphere(const Ray& ray, Vec3 center, double radius) {
+    SphereIntersection result{};
+    if (!validRay(ray) || !finite(center) || !std::isfinite(radius) || radius <= 0.0) {
+        return result;
+    }
+    const Vec3 offset = ray.origin - center;
+    const double a = dot(ray.direction, ray.direction);
+    const double b = dot(offset, ray.direction);
+    const double c = dot(offset, offset) - radius * radius;
+    const double discriminant = b * b - a * c;
+    if (!std::isfinite(discriminant)) {
+        return result;
+    }
+    result.valid = true;
+    if (discriminant < 0.0) {
+        return result;
+    }
+    const double root = std::sqrt(discriminant);
+    const double q = -b - std::copysign(root, b);
+    double first = -b / a;
+    double second = first;
+    if (std::abs(q) > 1e-15) {
+        first = q / a;
+        second = c / q;
+    }
+    if (first > second) {
+        std::swap(first, second);
+    }
+    if (first < 0.0) {
+        first = second;
+    }
+    if (first >= 0.0 && std::isfinite(first)) {
+        result.hit = true;
+        result.distance = first;
+    }
+    return result;
+}
+```
+
+`q` chọn phép cộng cùng dấu để giảm cancellation; nghiệm còn lại dùng tích hai nghiệm `c/a`. Khi `q` gần zero, nghiệm kép `-b/a` được giữ. `valid=false` khác `valid=true,hit=false`: một ray đầu vào không hợp lệ không phải một ray đã được chứng minh là trượt.
+
+Đối chiếu với **scene chỉ có sphere**. Nếu để tường/box trong scene, marcher có thể chạm một vật khác trước sphere mà không hề sai. Một fixture dễ tự tính là origin `(-1,-0.18,4)`, direction `(0,0,-1)`, sphere center `(-1,-0.18,0.15)`, radius `0.82`: khoảng cách trúng chính diện bằng `4-0.15-0.82=3.03m`.
+
+### Khảo sát normal epsilon riêng
+
+Normal sphere giải tích là `normalize(point-center)`. Ta chọn một điểm có cả X/Y/Z khác zero, lấy normal số rồi đo $\arccos(\operatorname{clamp}(n_{num}\cdot n_{exact},-1,1))$ theo radian. Kiểm thêm độ dài gần một và NaN/Inf.
+
+Sweep normal epsilon `1e-5`, `1e-4`, `1e-3`, `1e-2`, `0.02m`. CPU double và GPU float32 có thể cho đường sai số khác nhau. H quá lớn gây sai số xấp xỉ; quá nhỏ làm hiệu hai giá trị gần nhau nhạy với số thực. Không yêu cầu sai số giảm đơn điệu ở từng mức.
+
+Các fixture của bản chuẩn đặt ngưỡng góc CPU `<0.001rad`, GPU `<0.02rad`; chúng áp dụng cho các điểm sphere được kiểm, không phải lời hứa normal ở mọi góc box. Hit epsilon và normal epsilon có controls riêng, `-`/`=` và `,`/`.`.
+
+Khoảng lấy mẫu không hợp lệ được từ chối trước khi tính gradient:
+
+```cpp title="include/tracing.hpp — từ chối khoảng lấy mẫu không hợp lệ"
+if (!finite(point) || !std::isfinite(epsilon) || epsilon < 1e-5 || epsilon > 0.02) {
+    return {};
+}
+```
+
+### Dùng debug để đặt câu hỏi đúng
+
+`V` chuyển Beauty → Steps → Hit → Normal. Steps là `result.steps/maximumSteps` của primary ray, Hit là mask cùng result, Normal mã hóa hướng hình học thành RGB. `Z/X` đổi maximum distance; `[ ]` đổi budget. Tắt debug không thay marcher.
+
+## Chạy checkpoint
+
+```bash title="Terminal — checkpoint 10"
+cmake --build build --config Debug --target project_36_checkpoint_10 project_36_tests --parallel 2
+./build/Debug/project_36_checkpoint_10.exe
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+CTest dùng core của bản final để chạy toàn bộ fixture CPU; checkpoint 10 là nơi oracle và debug xuất hiện trong tiến trình học. Bài 11 mới thêm phép readback gọi chính GLSL của sản phẩm, không dùng kết quả CTest để tuyên bố compiler GPU đã chạy đúng.
+
+## Thử tạo lỗi
+
+1. Dùng hit epsilon trực tiếp làm tolerance cho sai số t của ray tiếp tuyến. Phép kiểm có thể fail dù ray đã vào đúng dải gần mặt; khôi phục sqrt bound và giữ tolerance chặt riêng cho ray chính diện.
+
+2. Dùng chung một uniform cho hit epsilon và normal epsilon rồi thay một control. Vị trí hit và gradient đổi cùng lúc nên khó xác định nguyên nhân; khôi phục hai tham số, sweep từng cái trong khi giữ cái còn lại cố định.
+
+## Checklist hoàn thành
+
+- [ ] Oracle không gọi `sampleScene`/`marchRay`, có nghiệm vào/thoát và phân biệt invalid/miss.
+- [ ] Ray chính diện, miss, tiếp tuyến, near-surface và origin trong sphere có expected result riêng.
+- [ ] Tolerance t có đơn vị mét; tolerance normal có đơn vị radian; NaN/Inf không thể pass.
+- [ ] Steps/Hit/Normal đọc cùng hit result với Beauty, không chạy một bản marcher khác.
+
+## Hướng mở rộng
+
+Bài tập: lập bảng sai số cho năm ray lệch tâm và giải thích tại sao near-tangent cần nhiều mẫu hơn. Sang [bài 11](/projects/ray-marched-shape-room/11-hoan-thien-can-phong-ray-march) để chạy GPU verification và nghiệm thu toàn bộ ứng dụng.

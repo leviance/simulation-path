@@ -1,6 +1,6 @@
 #pragma once
-#include "shader_program.hpp"
 #include "room_frame.hpp"
+#include "shader_program.hpp"
 
 namespace lab {
 
@@ -44,29 +44,31 @@ inline UniformLocations locateUniforms(GlApi& api, GLuint program) {
 }
 
 inline bool validateUniforms(GlApi& api, GLuint program, UniformLocations& locations, std::string& diagnostics) {
-    const bool cameraActive = LAB_CHECKPOINT == 2 || LAB_CHECKPOINT >= 4;
+    const bool cameraActive = checkpointNumber == 2 || checkpointNumber >= 4;
+
     struct Requirement {
         const char* name;
         GLenum type;
         bool required;
         GLint* location;
     };
+
     const Requirement requirements[]{
-        {"uResolution", GL_FLOAT_VEC2, LAB_CHECKPOINT >= 1, &locations.resolution},
-        {"uCameraPosition", GL_FLOAT_VEC3, LAB_CHECKPOINT >= 4, &locations.cameraPosition},
+        {"uResolution", GL_FLOAT_VEC2, checkpointNumber >= 1, &locations.resolution},
+        {"uCameraPosition", GL_FLOAT_VEC3, checkpointNumber >= 4, &locations.cameraPosition},
         {"uCameraForward", GL_FLOAT_VEC3, cameraActive, &locations.forward},
         {"uCameraRight", GL_FLOAT_VEC3, cameraActive, &locations.right},
         {"uCameraUp", GL_FLOAT_VEC3, cameraActive, &locations.up},
         {"uTanHalfFov", GL_FLOAT, cameraActive, &locations.tangent},
-        {"uMaximumSteps", GL_INT, LAB_CHECKPOINT >= 4, &locations.maximumSteps},
-        {"uHitEpsilon", GL_FLOAT, LAB_CHECKPOINT >= 4, &locations.hitEpsilon},
-        {"uMaximumDistance", GL_FLOAT, LAB_CHECKPOINT >= 4, &locations.maximumDistance},
-        {"uNormalEpsilon", GL_FLOAT, LAB_CHECKPOINT >= 5, &locations.normalEpsilon},
-        {"uSphereRadius", GL_FLOAT, LAB_CHECKPOINT >= 3, &locations.sphereRadius},
-        {"uTorusMinorRadius", GL_FLOAT, LAB_CHECKPOINT >= 6, &locations.torusRadius},
-        {"uPrimitiveMask", GL_INT, LAB_CHECKPOINT >= 6, &locations.mask},
-        {"uTime", GL_FLOAT, LAB_CHECKPOINT >= 8, &locations.time},
-        {"uDebugView", GL_INT, LAB_CHECKPOINT >= 10, &locations.debugView},
+        {"uMaximumSteps", GL_INT, checkpointNumber >= 4, &locations.maximumSteps},
+        {"uHitEpsilon", GL_FLOAT, checkpointNumber >= 4, &locations.hitEpsilon},
+        {"uMaximumDistance", GL_FLOAT, checkpointNumber >= 4, &locations.maximumDistance},
+        {"uNormalEpsilon", GL_FLOAT, checkpointNumber >= 5, &locations.normalEpsilon},
+        {"uSphereRadius", GL_FLOAT, checkpointNumber >= 3, &locations.sphereRadius},
+        {"uTorusMinorRadius", GL_FLOAT, checkpointNumber >= 6, &locations.torusRadius},
+        {"uPrimitiveMask", GL_INT, checkpointNumber >= 6, &locations.mask},
+        {"uTime", GL_FLOAT, checkpointNumber >= 8, &locations.time},
+        {"uDebugView", GL_INT, checkpointNumber >= 10, &locations.debugView},
     };
     for (const auto& item : requirements) {
         if (!findUniform(api, program, item.name, item.type, item.required, *item.location, diagnostics)) {

@@ -1,7 +1,7 @@
 #pragma once
 #include "camera.hpp"
-#include "tracing.hpp"
 #include "raymarch_oracle.hpp"
+#include "tracing.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
@@ -116,6 +116,21 @@ inline void marchChecks() {
         const auto measured = lab::marchRay(ray, settings, scene);
         check(exact.hit && measured.hit && std::abs(exact.distance - measured.traveled) < 0.005, "oblique fixture agrees with the analytic intersection");
     }
+    for (double epsilon : {0.0001, 0.0015, 0.01}) {
+        settings.hitEpsilon = epsilon;
+        const auto measured = lab::marchRay(tangent, settings, scene);
+        const double bound = std::sqrt(2.0 * scene.sphereRadius * epsilon + epsilon * epsilon);
+        check(measured.hit && std::abs(measured.traveled - exactTangent.distance) <= bound + 1e-8, "CPU tangent obeys the epsilon-dependent geometric t bound");
+        const lab::Ray nearMiss{{center.x + scene.sphereRadius + epsilon * 0.5, center.y, center.z}, {1, 0, 0}};
+        const auto accepted = lab::marchRay(nearMiss, settings, scene);
+        check(!lab::intersectSphere(nearMiss, center, scene.sphereRadius).hit && accepted.hit && accepted.traveled == 0.0, "near-surface acceptance is explicitly an epsilon band, not an exact hit");
+    }
+    const lab::Ray onSurface{{center.x + scene.sphereRadius, center.y, center.z}, {1, 0, 0}};
+    check(lab::marchRay(onSurface, {}, scene).hit && lab::marchRay(onSurface, {}, scene).traveled == 0.0, "an origin already on the surface is a t=0 hit");
+    auto clipped = settings;
+    clipped.maximumDistance = 2.0;
+    const auto tooFar = lab::marchRay(axis, clipped, scene);
+    check(!tooFar.hit && tooFar.status == lab::MarchStatus::distanceLimit && tooFar.traveled == 2.0, "distance limit can reject a real sphere farther than the allowed range");
 }
 
 inline void normalAndShadowChecks() {
@@ -126,6 +141,11 @@ inline void normalAndShadowChecks() {
     const auto normal = lab::estimateNormal(surface, scene);
     check(near(lab::length(normal), 1.0), "numerical normal is normalized");
     check(lab::dot(normal, expected) > 1.0 - 1e-8, "numerical normal agrees with analytic sphere normal");
+    for (double epsilon : {0.00001, 0.0001, 0.001, 0.01, 0.02}) {
+        const auto measured = lab::estimateNormal(surface, scene, epsilon);
+        const double angle = std::acos(std::clamp(lab::dot(measured, expected), -1.0, 1.0));
+        check(lab::finite(measured) && near(lab::length(measured), 1.0) && angle < 0.001, "CPU normal angular error is <0.001 rad across the normal-epsilon sweep");
+    }
     check(lab::length(lab::estimateNormal(surface, scene, 0.0)) == 0.0, "invalid normal epsilon is rejected");
 
     auto empty = scene;

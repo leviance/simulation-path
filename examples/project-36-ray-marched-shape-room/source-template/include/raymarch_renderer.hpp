@@ -62,6 +62,7 @@ struct RayMarchRenderer {
         diagnostics = "Reload committed: active program replaced; camera/time unchanged.";
         return true;
     }
+
     // [/snippet:reload-transaction]
 
     void draw(GlApi& api, const RayMarchFrame& frame, int width, int height) {

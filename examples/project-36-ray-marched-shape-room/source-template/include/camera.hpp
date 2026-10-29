@@ -5,8 +5,8 @@ namespace lab {
 
 // Camera bay tự do. Pause không khóa việc nhìn hoặc di chuyển trong world.
 struct Camera {
-    Vec3 position{2.7, 1.1, 6.1};
-    double yaw{-0.37};
+    Vec3 position{0.0, 1.1, 6.1};
+    double yaw{};
     double pitch{-0.14};
     double verticalFieldOfViewRadians{1.0471975511965976};
 };
@@ -42,6 +42,7 @@ inline Ray makeCameraRay(const Camera& camera, double pixelX, double pixelY, int
     const Vec3 offsetY = cameraUp(camera) * (ndcY * tangent);
     return {camera.position, normalize(cameraForward(camera) + offsetX + offsetY)};
 }
+
 // [/snippet:camera-ray]
 
 inline void lookCamera(Camera& camera, double dx, double dy) {

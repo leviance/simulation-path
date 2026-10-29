@@ -4,7 +4,7 @@ out vec4 fragColor;
 #if LAB_CHECKPOINT >= 1
 uniform vec2 uResolution;
 #endif
-#if LAB_CHECKPOINT == 2 || LAB_CHECKPOINT >= 4
+#if LAB_CHECKPOINT >= 2
 uniform vec3 uCameraForward;
 uniform vec3 uCameraRight;
 uniform vec3 uCameraUp;
@@ -41,7 +41,7 @@ bool invalidPosition(vec3 value) {
     return any(isnan(value)) || any(isinf(value));
 }
 
-#if LAB_CHECKPOINT == 2 || LAB_CHECKPOINT >= 4
+#if LAB_CHECKPOINT >= 2
 // [snippet:gpu-camera-ray]
 vec3 makeCameraRay(vec2 fragmentCoordinate) {
     vec2 centered = (2.0 * fragmentCoordinate - uResolution) / uResolution.y;

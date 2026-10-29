@@ -1,128 +1,104 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Vẽ toàn màn hình chỉ với một triangle
+# Bắt đầu từ một cửa sổ phủ kín bằng shader
 
-## Bức hình này còn thiếu gì?
+## Ta cần giải quyết điều gì?
 
-Ở Project 34, ta vẽ các mô hình OBJ từ nhiều tam giác. Project này làm điều gần như ngược lại: sphere, box, torus và cả căn phòng sẽ không có vertex riêng. Trước mắt, GPU chỉ cần vẽ một triangle phủ kín màn hình. Từ bài sau, mỗi fragment sẽ tự tính xem tia nhìn chạm vào vật gì.
+### Ta đang có gì, và sẽ thay đổi điều gì?
 
-Checkpoint đầu tiên chưa vẽ vật thể. Ta cần chứng minh ba việc căn bản trước: fullscreen triangle thật sự phủ kín framebuffer, shader nhận đúng kích thước theo pixel vật lý, và mỗi fragment biết vị trí của nó qua `gl_FragCoord`.
+Ở Project 35, bạn đã có một ứng dụng đọc GLSL từ file, báo lỗi compiler và giữ shader tốt gần nhất. Ta giữ phần nền đó. Điểm mới của Project 36 không phải tạo thêm một viewer cho mesh: **sphere, box và torus sẽ được mô tả bằng hàm khoảng cách**, rồi fragment shader tự tìm bề mặt nhìn thấy từ từng pixel.
 
-## Hình dung đường đi của một pixel
+Đừng bắt đầu ngay bằng vòng ray marching. Nếu tọa độ fragment hoặc kích thước framebuffer sai, một thuật toán đúng vẫn có thể cho hình méo. Bài này chỉ thay nền màu của starter bằng một lưới có cạnh 32 pixel vật lý.
 
-Ta có thể phủ màn hình bằng hai triangle, nhưng như vậy cần sáu vertices và có một đường chéo chung. Một triangle với ba đỉnh nằm ngoài clip-space cũng phủ kín hình vuông NDC $[-1, 1]^2$:
+Thời gian tham khảo: đọc 20 phút, tự viết 50 phút, kiểm tra 30 phút. Thời gian cài compiler, tải SDL và build lần đầu không nằm trong phần này.
 
-```text
-(-1,  3)
-    |\
-    | \
-    |__\
-(-1,-1)  (3,-1)
-```
+## Hiểu ý tưởng trước khi viết code
 
-Ba vị trí này được sinh từ `gl_VertexID`, vì vậy checkpoint không cần VBO hay EBO. Rasterizer vẫn chạy như bình thường; khác biệt duy nhất là triangle này không đại diện cho một vật thể trong world.
+### Vì sao chỉ cần một triangle?
+
+GPU cần một primitive để rasterizer tạo fragment. Ba đỉnh clip-space `(-1,-1)`, `(3,-1)`, `(-1,3)` tạo một triangle lớn bao trùm viewport. Đây là một lựa chọn tiện dụng, không phải quy tắc cấm dùng quad.
+
+Trong `raymarch.vert`, `gl_VertexID` chọn một trong ba vị trí. Renderer vẽ như sau:
 
 <InteractiveLab demo="ray-marched-shape-room" mode="raymarch-screen" />
 
-Trong Canvas, kéo con trỏ qua từng vùng và để ý ba cách biểu diễn cùng một vị trí: pixel, UV trong $[0,1]$, và NDC trong $[-1,1]$. Đây là dữ liệu ta sẽ dùng để dựng camera ray ở bài sau.
+Canvas giúp đọc pixel/UV/NDC ở vị trí con trỏ; bản C++ mới là nơi kiểm tra `gl_FragCoord` và high-DPI thật. Trước khi resize, hãy dự đoán: số ô ngang có thay đổi không, còn tỉ lệ cạnh ô thì sao?
 
-## Cùng sửa checkpoint
+## Bắt tay vào code
 
-### Bước 1 — Sinh ba clip-space vertices trong vertex shader
+### Chạy và lần theo bộ khung
 
-```glsl title="shaders/raymarch.vert"
-#version 330 core
+Tải ZIP của Project 36 ở đầu học phần, giải nén và mở terminal tại thư mục chứa `CMakeLists.txt`. Gói này tự chứa SDL application shell; bạn không phải ghép source của Project 35 vào nó.
 
-out vec2 vNdc;
+```bash title="Terminal — Visual Studio 2022, x64"
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_36_starter --parallel 2
+./build/Debug/project_36_starter.exe
+```
 
-void main() {
-    const vec2 positions[3] = vec2[3](
-        vec2(-1.0, -1.0),
-        vec2( 3.0, -1.0),
-        vec2(-1.0,  3.0)
-    );
+Starter phải mở nền xanh sẫm và in `Shader directory:` ra terminal. Nhấn `Tab` để xem controls, `Escape` để thoát. Nếu context OpenGL 3.3 Core không tạo được, giải quyết lỗi đó trước; Canvas không thay được bước chạy ứng dụng thật này. Hướng dẫn cho Ninja/Linux/macOS nằm trong README của ZIP.
 
-    vNdc = positions[gl_VertexID];
-    gl_Position = vec4(vNdc, 0.0, 1.0);
+Mở `starter/src/main.cpp`:
+
+```cpp title="src/main.cpp — điểm bắt đầu của ứng dụng"
+int main(int argc, char** argv) {
+    return lab::runApplication(argc, argv);
 }
 ```
 
-`gl_VertexID` lần lượt là 0, 1 và 2 trong lệnh `glDrawArrays`. Mảng `positions` chỉ tồn tại trong shader; phía C++ không upload dữ liệu hình học nào.
+Hàm ngắn vì phần khởi tạo được giữ riêng, không phải vì chương trình thiếu code. `runApplication` tạo `Application`, gọi `arguments`, `initialize`, rồi `run`. Trong `initialize`, SDL tạo window/context; loader lấy các hàm OpenGL; renderer đọc hai shader và tạo VAO. Trong `run`, thứ tự là nhận event → cập nhật state → gửi uniforms → vẽ → present. Destructor nhả tài nguyên khi context còn tồn tại.
 
-### Bước 2 — Tạo một VAO rỗng và vẽ đúng ba vertices
+Các file nền được cung cấp là `gl_api.hpp`, `shader_program.hpp`, `raymarch_renderer.hpp`, `room_application.hpp` và `room_overlay.hpp`. Phần bạn sẽ tự xây qua các bài là camera ray, SDF, marcher, normal, scene và shadow. Toàn bộ source của mỗi mốc có ở cuối bài.
 
-OpenGL 3.3 Core vẫn yêu cầu một VAO được bind, ngay cả khi vertex shader không đọc vertex attribute:
+### Giữ draw path chỉ có một triangle
 
-```cpp title="include/raymarch_renderer.hpp — khởi tạo draw path"
-api.GenVertexArrays(1, &vertexArray);
-
-// Mỗi frame: một draw call, không VBO và không EBO.
+```cpp title="include/raymarch_renderer.hpp — scene pass"
 api.BindVertexArray(vertexArray);
 api.DrawArrays(GL_TRIANGLES, 0, 3);
 api.BindVertexArray(0);
 ```
 
-Đừng thêm buffer “cho đủ bộ”. Sự vắng mặt của object mesh là một phần của thử thách, không phải đoạn code còn thiếu.
+OpenGL Core vẫn cần VAO được bind, nhưng VAO này không chứa object VBO/EBO. Triangle chỉ tạo fragment; nó không phải mesh của căn phòng. Khi sphere xuất hiện ở bài 4, draw call này vẫn giữ nguyên.
 
-### Bước 3 — Gửi kích thước framebuffer, không phải kích thước window logic
+### Đổi nền bằng fragment coordinates
 
-```cpp title="src/main.cpp — kích thước dùng để render"
-int framebufferWidth = 1;
-int framebufferHeight = 1;
-SDL_GetWindowSizeInPixels(window, &framebufferWidth, &framebufferHeight);
+Sang `checkpoints/01`. Trong shader của target này, phần thân `main` là:
 
-framebufferWidth = std::max(1, framebufferWidth);
-framebufferHeight = std::max(1, framebufferHeight);
-renderer.draw(gl, frame, framebufferWidth, framebufferHeight);
+```glsl title="shaders/raymarch.frag — phần thân main ở checkpoint 1"
+vec2 uv = gl_FragCoord.xy / uResolution;
+vec2 grid = abs(fract(gl_FragCoord.xy / 32.0) - 0.5);
+float line = smoothstep(0.44, 0.49, max(grid.x, grid.y));
+fragColor = vec4(mix(vec3(uv, 0.22), vec3(0.82), line * 0.4), 1.0);
 ```
 
-Trên màn hình high-DPI, `SDL_GetWindowSize` và `SDL_GetWindowSizeInPixels` có thể khác nhau. `gl_FragCoord` được đo bằng framebuffer pixel, nên `uResolution` cũng phải dùng cùng đơn vị.
+`gl_FragCoord.xy` đo vị trí tâm fragment từ góc trái dưới. Pixel đầu tiên có tâm gần `(0.5,0.5)`, không phải `(0,0)`. Chia cho `uResolution` tạo UV để tô gradient. Riêng lưới chia tọa độ pixel cho `32.0`, vì ta muốn ô vuông 32 pixel, không phải một số ô cố định theo mỗi chiều cửa sổ.
 
-### Bước 4 — Hiển thị UV và lưới mười ô
+`fract` lấy phần lẻ trong từng ô. Trừ `0.5`, lấy `abs`, rồi chọn thành phần lớn nhất giúp nhận ra vùng sát cạnh ô. `smoothstep` làm viền bớt gắt; nó không tham gia vào thuật toán tìm bề mặt sau này.
 
-```glsl title="shaders/raymarch.frag — checkpoint 1"
-uniform vec2 uResolution;
+Phía C++, `Application::run` lấy kích thước bằng `SDL_GetWindowSizeInPixels`. `renderer.draw` gọi `uploadUniforms` với đúng width/height ấy trước khi vẽ. Không thay bằng `SDL_GetWindowSize`: trên màn hình high-DPI, kích thước logic của window có thể khác kích thước framebuffer.
 
-void main() {
-    vec2 safeResolution = max(uResolution, vec2(1.0));
-    vec2 uv = gl_FragCoord.xy / safeResolution;
-    vec2 grid = abs(fract(uv * 10.0) - 0.5);
-    float line = 1.0 - smoothstep(0.45, 0.49, max(grid.x, grid.y));
-
-    vec3 background = vec3(uv, 0.25);
-    fragColor = vec4(mix(background, vec3(0.85), line * 0.22), 1.0);
-}
-```
-
-Màu đỏ tăng từ trái sang phải, màu lục tăng từ dưới lên trên vì gốc của `gl_FragCoord` nằm ở góc trái dưới. Việc trục Y khác Canvas không phải lỗi; quan trọng là ta chọn quy ước rồi chuyển đổi có chủ đích.
-
-## Chạy thử và quan sát
+## Chạy checkpoint
 
 ```bash title="Terminal — checkpoint 1"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_36_checkpoint_1
+cmake --build build --config Debug --target project_36_checkpoint_1 --parallel 2
+./build/Debug/project_36_checkpoint_1.exe
 ```
 
-Resize cửa sổ theo cả chiều ngang lẫn chiều dọc. Lưới phải luôn phủ đủ viewport, không xuất hiện tam giác đen, đường chéo hoặc vùng chưa được clear.
+Terminal phải chỉ tới `checkpoints/01/shaders`. Sửa file tại đó rồi nhấn `F5`; sửa `final/shaders` trong khi chạy checkpoint 1 sẽ không đổi ảnh. Với repository website, snapshot được sinh từ `source-template`; còn người học dùng ZIP sửa trực tiếp snapshot mình đang học.
 
-## Cố tình làm sai
+## Thử tạo lỗi
 
-1. Đổi đỉnh thứ hai từ `(3, -1)` thành `(1, -1)`. Một góc màn hình không còn được phủ; đó là bằng chứng triangle chỉ là bề mặt tạo fragments.
-2. Gọi `glDrawArrays(..., 0, 6)` trong khi shader chỉ có mảng ba phần tử. Truy cập ngoài mảng là undefined behavior, không phải cách tạo hai triangle.
-3. Truyền logical window size vào `uResolution`, rồi chạy trên scale 125% hoặc 150%. Lưới và tọa độ sẽ không còn khớp framebuffer pixels.
+1. Đổi lưới từ pixel sang `uv * 10.0`, dự đoán ô còn vuông không rồi resize cửa sổ thật rộng. Số ô giữ gần mười nhưng tỉ lệ cạnh đổi; khôi phục công thức chia cho `32.0` để trở lại ô vuông theo pixel vật lý.
 
-## Dấu hiệu cho thấy bài đã hoàn thành
+2. Đổi đỉnh `(3,-1)` thành `(1,-1)` trong vertex shader rồi F5. Một phần viewport không được phủ vì triangle nhỏ lại; khôi phục đỉnh cũ. Không tăng vertex count vượt ba: đọc ngoài mảng là undefined behavior, không phải một thí nghiệm an toàn.
 
-- [ ] Checkpoint chỉ có một VAO rỗng, không có object VBO/EBO.
-- [ ] `glDrawArrays(GL_TRIANGLES, 0, 3)` phủ toàn bộ framebuffer.
-- [ ] `uResolution` lấy từ `SDL_GetWindowSizeInPixels` và không bao giờ có thành phần bằng 0.
-- [ ] Resize không tạo vùng đen hoặc kéo méo lưới.
-- [ ] Bạn giải thích được fullscreen triangle không phải mesh của căn phòng.
+## Checklist hoàn thành
 
-## Thử đi thêm một bước
+- [ ] Starter và checkpoint 1 đều chạy; bạn xác định được đúng shader directory.
+- [ ] Một scene draw call phủ viewport, không có object VBO/EBO.
+- [ ] Lưới vẫn có cạnh vuông khi resize rộng/hẹp; số ô thay đổi theo kích thước framebuffer.
+- [ ] Bạn lần được đường gọi `main → runApplication → renderer.draw → uploadUniforms`.
 
-1. Tô đỏ fragment nằm trong 8 pixel tính từ viền framebuffer.
-2. Vẽ đường chữ thập đi qua tâm bằng `gl_FragCoord`.
-3. In logical size và framebuffer size khi resize để quan sát high-DPI scale.
+## Hướng mở rộng
 
-Bài tiếp theo giữ nguyên draw path này và biến mỗi fragment thành một tia xuất phát từ camera.
+Thử thêm một viền rộng 8 pixel bằng tọa độ fragment và kiểm nó trên hai kích thước window. Sau đó sang [bài 2: từ pixel dựng tia nhìn](/projects/ray-marched-shape-room/02-dung-camera-ray-tu-moi-pixel).

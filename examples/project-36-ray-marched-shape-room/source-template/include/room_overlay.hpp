@@ -15,6 +15,7 @@ struct RoomOverlay {
     GLint sampler{-1};
     int width{};
     int height{};
+    float textScale{};
     std::uint64_t nextRefresh{};
     std::string cachedText{};
     std::string cachedError{};
@@ -38,8 +39,7 @@ out vec4 fragColor;
 void main() {
     fragColor = texture(uTexture, vec2(uv.x,1.0-uv.y));
 }
-)glsl"
-        };
+)glsl"};
         program = linkShaderProgram(api, sources, diagnostics);
         if (!program) {
             return false;
@@ -56,11 +56,13 @@ void main() {
     }
 
     bool resize(GlApi& api, int newWidth, int newHeight, float scale) {
-        if (newWidth == width && newHeight == height) {
+        if (newWidth == width && newHeight == height && scale == textScale) {
             return true;
         }
-        if (textRenderer) SDL_DestroyRenderer(textRenderer);
-        if (surface) SDL_DestroySurface(surface);
+        if (textRenderer)
+            SDL_DestroyRenderer(textRenderer);
+        if (surface)
+            SDL_DestroySurface(surface);
         textRenderer = nullptr;
         surface = nullptr;
         width = 0;
@@ -78,6 +80,7 @@ void main() {
         }
         width = newWidth;
         height = newHeight;
+        textScale = scale;
         api.BindTexture(GL_TEXTURE_2D, texture);
         api.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         cachedText.clear();
@@ -90,7 +93,7 @@ void main() {
         }
         dpi = std::clamp(dpi, 1.0F, 3.0F);
         const float scale = dpi * 2.0F;
-        const int panelHeight = std::min(framebufferHeight, static_cast<int>(180.0F * dpi));
+        const int panelHeight = std::min(framebufferHeight, static_cast<int>(230.0F * dpi));
         if (!resize(api, std::min(framebufferWidth, 4096), panelHeight, scale)) {
             return false;
         }
@@ -99,12 +102,21 @@ void main() {
         if (!error.empty()) {
             text << "ERROR / LAST-GOOD KEPT: " << error.substr(0, 240) << '\n';
         }
-        text << "RMB look  WASD fly  Q/E up  Wheel FOV  Tab help  R reset  Esc release/quit\n";
-        text << "Space pause light  N step  [ ] steps  -/+ epsilon  J/K sphere  U/I torus  V view  F5 reload\n";
+        text << "Tab controls  R reset  Esc release/quit  F5 reload\n";
+#if LAB_CHECKPOINT >= 9
+        text << "RMB/arrows look  WASD fly  Q/E local up/down  Wheel FOV  J/K sphere  U/I torus\n";
+#endif
+#if LAB_CHECKPOINT >= 8
+        text << "Space pause light  N light +0.1s (camera remains usable)\n";
+#endif
+#if LAB_CHECKPOINT >= 4
+        text << "[ ] step budget  -/= hit epsilon\n";
         text << "steps " << frame.settings.maximumSteps << "  hit eps " << frame.settings.hitEpsilon << "m  normal eps " << frame.settings.normalEpsilon << "m  max t " << frame.settings.maximumDistance << "m\n";
+#endif
         text << std::fixed << std::setprecision(2) << "camera " << frame.camera.position.x << "," << frame.camera.position.y << "," << frame.camera.position.z << "  time " << frame.elapsedSeconds << "s  CPUframe " << frameMs << "ms\n";
-        text << "view " << frame.debugView << " (0 Beauty,1 Steps,2 Hit,3 Normal)  paused " << frame.paused << "\n";
 #if LAB_CHECKPOINT >= 10
+        text << "V view  ,/. normal epsilon  Z/X maximum distance\n";
+        text << "view " << frame.debugView << " (0 Beauty,1 Steps,2 Hit,3 Normal)  paused " << frame.paused << "\n";
         const auto ray = makeCameraRay(frame.camera, framebufferWidth * 0.5 - 0.5, framebufferHeight * 0.5 - 0.5, framebufferWidth, framebufferHeight);
         const auto sample = marchRay(ray, frame.settings, frame.scene);
         text << "CPU center: " << marchStatusName(sample.status) << "  t " << sample.traveled << "m  samples " << sample.steps << "\n";
@@ -123,19 +135,24 @@ void main() {
             std::string line;
             int y = 2;
             for (unsigned char character : lines) {
-                if (character == '\r') continue;
+                if (character == '\r')
+                    continue;
                 if (character == '\n' || line.size() >= columns) {
-                    if (y + 8 > height / scale) break;
-                    if (!SDL_RenderDebugText(textRenderer, 3, static_cast<float>(y), line.c_str())) return false;
+                    if (y + 8 > height / scale)
+                        break;
+                    if (!SDL_RenderDebugText(textRenderer, 3, static_cast<float>(y), line.c_str()))
+                        return false;
                     y += 10;
                     line.clear();
                 }
-                if (character >= 32 && character < 127) line.push_back(static_cast<char>(character));
+                if (character >= 32 && character < 127)
+                    line.push_back(static_cast<char>(character));
             }
             if (!line.empty() && y + 8 <= height / scale && !SDL_RenderDebugText(textRenderer, 3, static_cast<float>(y), line.c_str())) {
                 return false;
             }
-            if (!SDL_RenderPresent(textRenderer)) return false;
+            if (!SDL_RenderPresent(textRenderer))
+                return false;
             api.ActiveTexture(GL_TEXTURE0);
             api.BindTexture(GL_TEXTURE_2D, texture);
             api.PixelStorei(GL_UNPACK_ROW_LENGTH, surface->pitch / 4);
@@ -155,14 +172,19 @@ void main() {
 
     void destroy(GlApi& api) {
         // SDL surface/renderer và GPU texture có vòng đời riêng, đều phải được nhả.
-        if (textRenderer) SDL_DestroyRenderer(textRenderer);
-        if (surface) SDL_DestroySurface(surface);
+        if (textRenderer)
+            SDL_DestroyRenderer(textRenderer);
+        if (surface)
+            SDL_DestroySurface(surface);
         textRenderer = nullptr;
         surface = nullptr;
         api.UseProgram(0);
-        if (program) api.DeleteProgram(program);
-        if (texture) api.DeleteTextures(1, &texture);
-        if (vertexArray) api.DeleteVertexArrays(1, &vertexArray);
+        if (program)
+            api.DeleteProgram(program);
+        if (texture)
+            api.DeleteTextures(1, &texture);
+        if (vertexArray)
+            api.DeleteVertexArrays(1, &vertexArray);
         program = texture = vertexArray = 0;
     }
 };

@@ -10,6 +10,33 @@
 
 namespace lab {
 
+// Generator giữ một literal trong từng snapshot; mã tải về không cần macro build.
+#if LAB_CHECKPOINT >= 11
+inline constexpr int checkpointNumber = 11;
+#elif LAB_CHECKPOINT >= 10
+inline constexpr int checkpointNumber = 10;
+#elif LAB_CHECKPOINT >= 9
+inline constexpr int checkpointNumber = 9;
+#elif LAB_CHECKPOINT >= 8
+inline constexpr int checkpointNumber = 8;
+#elif LAB_CHECKPOINT >= 7
+inline constexpr int checkpointNumber = 7;
+#elif LAB_CHECKPOINT >= 6
+inline constexpr int checkpointNumber = 6;
+#elif LAB_CHECKPOINT >= 5
+inline constexpr int checkpointNumber = 5;
+#elif LAB_CHECKPOINT >= 4
+inline constexpr int checkpointNumber = 4;
+#elif LAB_CHECKPOINT >= 3
+inline constexpr int checkpointNumber = 3;
+#elif LAB_CHECKPOINT >= 2
+inline constexpr int checkpointNumber = 2;
+#elif LAB_CHECKPOINT >= 1
+inline constexpr int checkpointNumber = 1;
+#else
+inline constexpr int checkpointNumber = 0;
+#endif
+
 // Phần vector tự chứa: các phép tính này không cần SDL hay OpenGL.
 struct Vec3 {
     double x{};

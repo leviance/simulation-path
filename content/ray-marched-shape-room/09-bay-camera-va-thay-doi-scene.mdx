@@ -1,0 +1,85 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Bay vào phòng và thay đổi vật thể
+
+## Ta cần giải quyết điều gì?
+
+### Tách hai điều thường bị trộn lẫn
+
+Checkpoint 8 có scene và đèn chuyển động, nhưng camera vẫn ở vị trí đầu. Bây giờ ta nối SDL input với camera: nhìn quanh thay yaw/pitch, đi lại thay position. Không xoay hệ tọa độ hoặc primitive để giả camera đang di chuyển.
+
+Đây là chỗ dùng lại cơ chế từ Project 14, trong một renderer hoàn toàn khác. Tham khảo: đọc 25 phút, tự viết 80 phút, kiểm tra 40 phút.
+
+## Hiểu ý tưởng trước khi viết code
+
+Camera có position và ba hướng local. Nhìn quanh thay yaw/pitch; di chuyển đổi position theo right/forward/up. Input local phải normalize trước khi nhân speed × dt để đường chéo không nhanh hơn đường thẳng. FOV chỉ đổi góc mở của tia, không đưa camera lại gần vật thể.
+
+<InteractiveLab demo="ray-marched-shape-room" mode="raymarch-free-camera" />
+
+Dùng minh họa để lần origin/basis/ray khi camera đổi hướng. Canvas không bật SDL relative mouse; hãy kiểm chính sách nhả chuột và focus trong ứng dụng C++ thật.
+
+## Bắt tay vào code
+
+### Nhận relative mouse và nhả đúng lúc
+
+Trong `RoomControls::event`, input chuột chỉ được xử lý từ checkpoint 9:
+
+```cpp title="include/room_controls.hpp — bắt đầu và kết thúc nhìn bằng chuột"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {
+    looking = SDL_SetWindowRelativeMouseMode(window, true);
+}
+if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT) {
+    release(window);
+}
+if (event.type == SDL_EVENT_MOUSE_MOTION && looking) {
+    lookCamera(frame.camera, event.motion.xrel, event.motion.yrel);
+}
+```
+
+Chỉ đặt `looking=true` nếu SDL chấp nhận relative mode. `xrel/yrel` là độ dịch, không phải vị trí trên window. `lookCamera` cộng yaw, trừ pitch theo độ dịch; yaw được wrap, pitch clamp trong `[-1.45,1.45]` rad để tránh basis suy biến gần hai cực.
+
+`release` đặt `looking=false` và tắt relative mode. Nó được gọi khi nhả chuột phải, mất focus, reset, thoát hoặc Escape trong lúc đang nhìn. Escape lần đầu nhả chuột; nếu đã nhả thì Escape thoát. Phím mũi tên là cách nhìn từng bước bằng bàn phím, không cần giữ chuột.
+
+### Đưa input local thành chuyển động world
+
+`advance` chạy mỗi frame, nhận `frameSeconds`. Input WASD tạo vector local X/Z; Q/E tạo local Y. Normalize vector input trước khi nhân `moveSpeed*dt`, nếu không đi chéo sẽ nhanh hơn đi thẳng.
+
+```cpp title="include/room_controls.hpp — áp chuyển động đã gom từ phím"
+if (length(local) > 0.0) {
+    moveCamera(frame.camera, normalize(local) * (frame.moveSpeed * dt));
+}
+```
+
+`moveCamera` biến local displacement thành world displacement bằng right/forward/up, rồi cộng position. Q/E ở đây là **up/down của camera**, không phải luôn trùng world Y khi đang ngẩng/cúi. Tốc độ mặc định `2.5m/s`, dt tối đa `0.05s` cho mỗi cập nhật tương tác; app không có collision camera. Clamp position `[-40,40]` theo từng trục là giới hạn tài nguyên/thăm dò, không phải tường vật lý của phòng.
+
+Clock đèn được cập nhật riêng trước nhánh camera. Pause chỉ ngừng clock ấy. Tạm dừng đèn rồi dùng WASD/mũi tên: view vẫn phải thay đổi. Khi window không có input focus, keyboard state không được dùng để di chuyển camera.
+
+### Đổi tham số qua uniform
+
+Con lăn đổi vertical FOV trong `[0.45,1.65]` rad. Đây là thay góc nhìn, không đưa camera tới gần vật thể; muốn đi vào trong sphere, dùng WASD.
+
+`J/K` đổi sphere radius trong `[0.4,1.1]m`, `U/I` đổi torus minor radius trong `[0.12,0.32]m`. C++ lưu chúng trong `frame.scene`; `uploadUniforms` gửi lại mỗi frame. Program generation không tăng khi chỉ đổi các số này. F5 chỉ dùng khi bạn sửa GLSL trên đĩa.
+
+## Chạy checkpoint
+
+```bash title="Terminal — checkpoint 9"
+cmake --build build --config Debug --target project_36_checkpoint_9 --parallel 2
+./build/Debug/project_36_checkpoint_9.exe
+```
+
+## Thử tạo lỗi
+
+1. Bỏ normalize input local rồi so một giây W với một giây W+D. Camera đi chéo nhanh hơn; khôi phục normalize, giữ cùng speed/dt rồi so lại.
+
+2. Thử mất focus khi đang giữ chuột phải. Nếu bỏ release ở focus loss, con trỏ có thể kẹt trong relative mode; khôi phục đường nhả và kiểm lại reset/Escape. Không giữ phiên bản lỗi làm bản final.
+
+## Checklist hoàn thành
+
+- [ ] Viewpoint thật sự đổi position/yaw/pitch; dữ liệu primitive không xoay theo con trỏ.
+- [ ] Camera vẫn dùng được khi đèn pause; đi chéo không tăng tốc độ.
+- [ ] Nhả/mất focus/reset/Escape đều kết thúc relative mouse đúng nghĩa.
+- [ ] Đổi FOV và radius không compile lại program; R tái lập mặc định.
+
+## Hướng mở rộng
+
+Bài tập: đi vào sphere rồi nhìn ra ngoài. Nếu hình xuất hiện ngay tại origin hoặc t luôn bằng zero, quay lại chính sách inside ở bài 4. [Bài 10](/projects/ray-marched-shape-room/10-nghiem-giai-tich-va-sai-so) sẽ dùng nghiệm giải tích để kiểm trường hợp này bằng số.
