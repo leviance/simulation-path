@@ -225,7 +225,7 @@ export const gpuGlossaryTerms = [
     id: "particle-lifecycle",
     term: "Particle lifecycle",
     definition:
-      "Chuỗi trạng thái từ spawn, update position/velocity/age, hết lifetime hoặc rơi khỏi miền rồi respawn. Project 38 đặt toàn bộ lifecycle trong một compute invocation để mỗi particle tự cập nhật record của chính nó.",
+      "Chuỗi trạng thái từ spawn, update position/velocity/age, hết lifetime hoặc rơi khỏi miền rồi respawn. Trong bản cũ của Project 38 (đài phun hạt), toàn bộ lifecycle nằm trong một compute invocation để mỗi particle tự cập nhật record của chính nó.",
   },
   {
     id: "deterministic-particle-initialization",
@@ -243,13 +243,13 @@ export const gpuGlossaryTerms = [
     id: "point-sprite",
     term: "Point sprite",
     definition:
-      "Primitive GL_POINTS có vùng fragment riêng và tọa độ gl_PointCoord trong hình vuông điểm. Project 38 discard bốn góc, làm mềm biên rồi pha màu/alpha theo velocity và lifetime để tạo hạt tròn không cần texture.",
+      "Primitive GL_POINTS có vùng fragment riêng và tọa độ gl_PointCoord trong hình vuông điểm. Bản cũ của Project 38 (đài phun hạt) discard bốn góc, làm mềm biên rồi pha màu/alpha theo velocity và lifetime để tạo hạt tròn không cần texture.",
   },
   {
     id: "gpu-resident-state",
     term: "GPU-resident state",
     definition:
-      "Trạng thái được giữ và biến đổi trên GPU qua nhiều frame thay vì đọc về CPU rồi upload lại. Main particle SSBO của Project 38 đi từ compute write qua barrier tới vertex read mà không full-buffer readback.",
+      "Trạng thái được giữ và biến đổi trên GPU qua nhiều frame thay vì đọc về CPU rồi upload lại. Trong bản cũ của Project 38 (đài phun hạt), main particle SSBO đi từ compute write qua barrier tới vertex read mà không full-buffer readback.",
   },
   {
     id: "delta-time-clamp",
@@ -267,13 +267,13 @@ export const gpuGlossaryTerms = [
     id: "gpu-validation-probe",
     term: "GPU validation probe",
     definition:
-      "Workload nhỏ, deterministic chạy bằng cùng GPU program với workload chính rồi được readback để so CPU oracle. Project 38 dùng 64 particle nhằm kiểm shader/layout/integration mà không tải main SSBO 160 MB về CPU.",
+      "Workload nhỏ, deterministic chạy bằng cùng GPU program với workload chính rồi được readback để so CPU oracle. Bản cũ của Project 38 (đài phun hạt) dùng 64 particle nhằm kiểm shader/layout/integration mà không tải main SSBO 160 MB về CPU.",
   },
   {
     id: "parallel-reduction",
     term: "Parallel reduction",
     definition:
-      "Cách thu nhiều giá trị về một kết quả bằng cây phép toán thay vì một vòng lặp tuần tự. Project 39 cộng 512 giá trị trong mỗi workgroup, ghi partial sum rồi lặp lại trên các partial sums cho tới một scalar.",
+      "Cách thu nhiều giá trị về một kết quả bằng cây phép toán thay vì một vòng lặp tuần tự. Bản cũ của Project 39 (Reduction và Prefix Sum) cộng 512 giá trị trong mỗi workgroup, ghi partial sum rồi lặp lại trên các partial sums cho tới một scalar.",
   },
   {
     id: "exclusive-prefix-sum",
@@ -297,13 +297,13 @@ export const gpuGlossaryTerms = [
     id: "workgroup-barrier",
     term: "Workgroup barrier",
     definition:
-      "Điểm đồng bộ mà mọi invocation trong cùng compute workgroup phải đi qua trước khi tiếp tục. Project 39 đặt barrier sau khi nạp shared memory và sau mỗi stride; lane ở phần đuôi nạp zero nhưng không được return trước barrier.",
+      "Điểm đồng bộ mà mọi invocation trong cùng compute workgroup phải đi qua trước khi tiếp tục. Bản cũ của Project 39 (Reduction và Prefix Sum) đặt barrier sau khi nạp shared memory và sau mỗi stride; lane ở phần đuôi nạp zero nhưng không được return trước barrier.",
   },
   {
     id: "hierarchical-reduction",
     term: "Hierarchical reduction",
     definition:
-      "Reduction nhiều tầng trong đó mỗi dispatch tạo một mảng partial sums nhỏ hơn, rồi mảng ấy trở thành input của dispatch kế tiếp. Với 1.000.003 số và block span 512, Project 39 đi qua 1.954, 4 rồi 1 partial sum.",
+      "Reduction nhiều tầng trong đó mỗi dispatch tạo một mảng partial sums nhỏ hơn, rồi mảng ấy trở thành input của dispatch kế tiếp. Với 1.000.003 số và block span 512, bản cũ của Project 39 (Reduction và Prefix Sum) đi qua 1.954, 4 rồi 1 partial sum.",
   },
   {
     id: "blelloch-scan",
@@ -357,7 +357,7 @@ export const gpuGlossaryTerms = [
     id: "deterministic-tie-break",
     term: "Deterministic tie-break",
     definition:
-      "Quy tắc phụ dùng khi hai candidate có khóa chính bằng nhau. Project 40 chọn particle index nhỏ hơn khi distance hòa, nhờ vậy nearest neighbor không phụ thuộc thứ tự atomic scatter.",
+      "Quy tắc phụ dùng khi hai candidate có khóa chính bằng nhau. Bản cũ của Project 40 (GPU Spatial Grid) chọn particle index nhỏ hơn khi distance hòa, nhờ vậy nearest neighbor không phụ thuộc thứ tự atomic scatter.",
   },
   {
     id: "structural-invariant",

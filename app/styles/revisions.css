@@ -1,0 +1,146 @@
+.legend {
+  flex-wrap: wrap;
+}
+.legend .revision-dot {
+  background: var(--orange);
+}
+.roadmap-item.is-revised {
+  border-left: 3px solid var(--orange);
+  background: var(--surface);
+}
+.roadmap-item.is-revised:hover {
+  background: var(--surface-2);
+}
+.roadmap-item.is-revised > b {
+  color: var(--ink);
+  line-height: 1.6;
+}
+.roadmap-item.is-revised small {
+  display: block;
+  color: var(--ink);
+  margin-top: 8px;
+  font-size: 11px;
+}
+.revision-badge {
+  display: inline-block;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--orange);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.6;
+}
+.revision-notice,
+.previous-edition {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--orange);
+  background: var(--surface);
+  padding: 24px;
+  margin-block: 24px 36px;
+}
+.revision-notice h2,
+.previous-edition h2 {
+  margin: 12px 0;
+  font-size: 21px;
+}
+.revision-notice p,
+.previous-edition p {
+  color: var(--muted);
+  line-height: 1.75;
+}
+.revision-notice b {
+  color: var(--ink);
+}
+.sidebar-project > a {
+  display: block;
+  margin-top: 12px;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.planned-project {
+  max-width: 980px;
+}
+.planned-project .page-hero {
+  margin-block: 30px;
+}
+.planned-outcome {
+  padding-block: 28px;
+  max-width: 780px;
+}
+.planned-outcome h2 {
+  font-size: clamp(26px, 4vw, 38px);
+  line-height: 1.3;
+}
+.planned-project li,
+.planned-project p,
+.previous-downloads > p {
+  line-height: 1.75;
+  color: var(--muted);
+}
+.planned-project li {
+  margin-block: 10px;
+}
+.planned-details {
+  border-top: 1px solid var(--line);
+}
+.planned-details > section {
+  padding-block: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.planned-details h2 {
+  font-size: 22px;
+}
+.planned-section {
+  padding-block: 30px 70px;
+}
+.planned-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.planned-cards > a {
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.planned-cards > a:hover {
+  background: var(--surface-2);
+}
+.planned-cards h3 {
+  font-size: 20px;
+  line-height: 1.4;
+}
+.planned-cards p {
+  color: var(--muted);
+  line-height: 1.7;
+  font-size: 14px;
+}
+.planned-cards b {
+  display: block;
+  margin-top: 22px;
+  font-size: 12px;
+}
+.previous-downloads {
+  padding-top: 64px;
+  scroll-margin-top: 100px;
+}
+.previous-downloads > p {
+  max-width: 780px;
+}
+.previous-download-note a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@media (max-width: 700px) {
+  .planned-cards {
+    grid-template-columns: 1fr;
+  }
+  .revision-notice,
+  .previous-edition {
+    padding: 18px;
+  }
+}

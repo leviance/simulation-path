@@ -30,6 +30,7 @@ import { reconcileGeneratedFiles } from "../scripts/generated-files.mjs";
 import rehypeCompactCode from "../lib/rehype-compact-code.mjs";
 import "./mdx-static-code.test.mjs";
 import "./rendered-route-cache.test.mjs";
+import "./roadmap-revisions.test.mjs";
 
 test("compact One Dark code preserves text, meaningful colors and highlighted tokens", () => {
   const text = (value) => ({ type: "text", value });

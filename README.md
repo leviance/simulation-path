@@ -2,7 +2,7 @@
 
 Simulation Path là lộ trình học C++20, SDL3, đồ họa máy tính và mô phỏng số thông qua 78 mini project có thể chạy được. Thay vì học công thức hoặc API riêng lẻ, người học dùng chúng để lần lượt tạo framebuffer, renderer 3D trên CPU, mô phỏng vật lý, hệ hạt, chất lỏng, volume renderer, thế giới voxel và bộ UI của riêng mình.
 
-Project 01–65 hiện đã có 512 bài tiếng Việt, 65 Canvas lab tương tác và 65 gói source độc lập. Project 66–78 đã có vị trí cùng dependency trong roadmap nhưng vẫn mang trạng thái **Sắp ra mắt**; chúng chưa được trình bày như tutorial hoàn chỉnh.
+Website phân biệt ba trạng thái: **đã có hướng dẫn**, **chờ xây dựng lại** khi đề bài thay đổi và **chưa phát hành**. Project 38–45 hiện chờ xây dựng lại theo đặc tả mới; bài học và gói source trước đó vẫn được giữ với nhãn **Bản cũ**. Xem số liệu và trạng thái từng project tại `/roadmap`, được tính từ catalog và metadata thay vì một thống kê cố định trong README.
 
 ## Vì sao có lộ trình này?
 
@@ -33,27 +33,27 @@ Khi hoàn thành các phần tương ứng, người học có thể:
 - Tự viết các phần cốt lõi của pipeline 3D: transform, projection, clipping, rasterization, Z-buffer, lighting và texture mapping.
 - Chọn và đánh giá timestep, integrator, collision response cùng các metric bảo toàn trong mô phỏng.
 - Nhận ra khi nào thuật toán brute force không còn phù hợp, rồi chuyển sang spatial grid, tree, cách bố trí dữ liệu hoặc GPU compute.
-- Đọc một bài toán lớn như molecular dynamics, fluid, volume rendering hay voxel world theo các lớp nhỏ có thể xây và kiểm chứng độc lập.
+- Tách công cụ tạo hình 3D, particle morphing, fractal, chất lỏng, volume rendering hay voxel world thành các phần có thể xây và kiểm chứng độc lập.
 
 ## Bản đồ 78 project
 
 Các project được xếp theo dependency. Mỗi phần dùng trực tiếp công cụ và trực giác đã xây ở phần trước, thay vì bắt đầu lại bằng một bộ khung không được giải thích.
 
-| Phần                                    | Project | Trọng tâm                                                                    |
-| --------------------------------------- | ------: | ---------------------------------------------------------------------------- |
-| SDL3, pixel và tương tác cơ bản         |   01–05 | Window, input, framebuffer, raster 2D và đổi hệ tọa độ                       |
-| Học toán bằng chương trình tương tác    |   06–10 | Vector, lượng giác, dot product, transform và normal 3D                      |
-| Tự dựng đồ họa 3D trên CPU              |   11–21 | Camera, projection, clipping, rasterizer, Z-buffer, lighting, texture và OBJ |
-| Vật lý và numerical methods             |   22–26 | Projectile, integrator, collision, spring và chaos                           |
-| Cấu trúc không gian và hiệu năng        |   27–32 | Brute force, spatial grid, quadtree, octree, Barnes–Hut, AoS/SoA             |
-| Chuyển từ renderer CPU sang OpenGL/GLSL |   33–36 | Đối chiếu CPU/GPU, shader và ray marching                                    |
-| GPU compute và hàng triệu phần tử       |   37–40 | Vector compute, particle, reduction, prefix sum và grid song song            |
-| Mô phỏng phân tử                        |   41–45 | Lennard–Jones, molecular dynamics, periodic bounds và neighbor list          |
-| Từ ô lưới đến chất lỏng                 |   46–51 | Cellular automata, heat, vector field, Stable Fluids và SPH                  |
-| Ray, volume và giả lập X-ray            |   52–57 | Intersection, volume ray marching, detector, CT và Monte Carlo               |
-| Voxel world kiểu Minecraft              |   58–64 | Chunk, hidden faces, ray picking, greedy meshing, streaming và terrain       |
-| Tự xây UI cho simulator                 |   65–72 | Widget tree, layout, markup, style, event binding và scripting nhỏ           |
-| Các project cầu nối tùy chọn            |   73–78 | Quaternion, BVH, thread pool, Fourier, Monte Carlo và floating point         |
+| Phần                                     | Project | Trọng tâm                                                                    |
+| ---------------------------------------- | ------: | ---------------------------------------------------------------------------- |
+| SDL3, pixel và tương tác cơ bản          |   01–05 | Window, input, framebuffer, raster 2D và đổi hệ tọa độ                       |
+| Học toán bằng chương trình tương tác     |   06–10 | Vector, lượng giác, dot product, transform và normal 3D                      |
+| Tự dựng đồ họa 3D trên CPU               |   11–21 | Camera, projection, clipping, rasterizer, Z-buffer, lighting, texture và OBJ |
+| Vật lý và numerical methods              |   22–26 | Projectile, integrator, collision, spring và chaos                           |
+| Cấu trúc không gian và hiệu năng         |   27–32 | Brute force, spatial grid, quadtree, octree, Barnes–Hut, AoS/SoA             |
+| Chuyển từ renderer CPU sang OpenGL/GLSL  |   33–36 | Đối chiếu CPU/GPU, shader và ray marching                                    |
+| GPU compute và hàng triệu phần tử        |   37–40 | Compute, buồng hạt tích điện, thành phố triệu vật thể và xưởng vải 3D        |
+| Toán cho đồ họa 3D, giả lập và hiệu năng |   41–45 | Tạo mesh, biến hình hạt, fractal, điêu khắc thể tích và Atomic Playground    |
+| Từ ô lưới đến chất lỏng                  |   46–51 | Cellular automata, heat, vector field, Stable Fluids và SPH                  |
+| Ray, volume và giả lập X-ray             |   52–57 | Intersection, volume ray marching, detector, CT và Monte Carlo               |
+| Voxel world kiểu Minecraft               |   58–64 | Chunk, hidden faces, ray picking, greedy meshing, streaming và terrain       |
+| Tự xây UI cho simulator                  |   65–72 | Widget tree, layout, markup, style, event binding và scripting nhỏ           |
+| Các project cầu nối tùy chọn             |   73–78 | Quaternion, BVH, thread pool, Fourier, Monte Carlo và floating point         |
 
 [Product Specification v4 — 78 project](./docs/specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md) là tài liệu tham chiếu chuẩn cho roadmap: sản phẩm cuối, phạm vi, quy mô, tương tác và tiêu chí nghiệm thu của từng project. Project 01–72 thuộc lộ trình chính; Project 73–78 là các nhánh cầu nối tùy chọn.
 

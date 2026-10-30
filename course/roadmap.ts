@@ -26,7 +26,7 @@ export const roadmapSeed = [
   },
   {
     id: 6,
-    title: "Mô phỏng vector 2D: kéo, cộng, trừ và đo độ dài",
+    title: "Bảng Vector kéo-thả: cộng, trừ và đo hai mũi tên",
     part: "HỌC TOÁN BẰNG CÁC CHƯƠNG TRÌNH TƯƠNG TÁC",
   },
   {
@@ -186,43 +186,43 @@ export const roadmapSeed = [
   },
   {
     id: 38,
-    title: "Đài phun 5 triệu hạt: GPU cập nhật và render particle",
+    title: "Buồng hạt tích điện 3D: quỹ đạo trong điện trường và từ trường",
     part: "GPU COMPUTE VÀ HÀNG TRIỆU PHẦN TỬ",
   },
   {
     id: 39,
-    title: "Cộng một triệu số theo cây: Reduction và Prefix Sum trên GPU",
+    title: "Khám phá thành phố 3D với một triệu vật thể",
     part: "GPU COMPUTE VÀ HÀNG TRIỆU PHẦN TỬ",
   },
   {
     id: 40,
-    title: "“Thành phố hạt” trên GPU: xây grid và tìm hàng xóm song song",
+    title: "Xưởng vải 3D: kéo, ghim và thả vải phủ lên vật thể",
     part: "GPU COMPUTE VÀ HÀNG TRIỆU PHẦN TỬ",
   },
   {
     id: 41,
-    title: "Hai “nguyên tử” hút và đẩy nhau: trực quan hóa Lennard–Jones",
-    part: "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT",
+    title: "Xưởng hình học 3D: tạo vỏ ốc, dải Möbius và nút thắt",
+    part: "TOÁN CHO ĐỒ HỌA 3D, GIẢ LẬP VÀ HIỆU NĂNG",
   },
   {
     id: 42,
-    title: "Hộp khí 1.000 hạt: Molecular Dynamics CPU đầu tiên",
-    part: "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT",
+    title: "Biến hình một triệu hạt: từ mô hình này sang mô hình khác",
+    part: "TOÁN CHO ĐỒ HỌA 3D, GIẢ LẬP VÀ HIỆU NĂNG",
   },
   {
     id: 43,
-    title: "Hộp phân tử tuần hoàn: hạt đi ra một phía và quay lại phía đối diện",
-    part: "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT",
+    title: "Khám phá fractal Mandelbulb: phóng gần vào hình học 3D sinh từ phép lặp",
+    part: "TOÁN CHO ĐỒ HỌA 3D, GIẢ LẬP VÀ HIỆU NĂNG",
   },
   {
     id: 44,
-    title: "Danh sách hàng xóm có vùng đệm: không tìm lại mọi cặp ở mỗi bước",
-    part: "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT",
+    title: "Xưởng điêu khắc thể tích: nặn, khoét và ghép vật thể 3D",
+    part: "TOÁN CHO ĐỒ HỌA 3D, GIẢ LẬP VÀ HIỆU NĂNG",
   },
   {
     id: 45,
-    title: "Molecular Lab GPU: tăng từ 100.000 tới mục tiêu 5 triệu hạt",
-    part: "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT",
+    title: "Atomic Playground: dựng đám mây orbital 3D bằng một triệu điểm",
+    part: "TOÁN CHO ĐỒ HỌA 3D, GIẢ LẬP VÀ HIỆU NĂNG",
   },
   {
     id: 46,
@@ -321,7 +321,7 @@ export const roadmapSeed = [
   },
   {
     id: 65,
-    title: "Bảng điều khiển C++: Pause, Reset và slider chỉnh trọng lực",
+    title: "Bảng điều khiển cho Simulation: Pause, Reset, Checkbox và Slider tự vẽ bằng C++",
     part: "TỰ XÂY UI CHO CÁC SIMULATOR",
   },
   {

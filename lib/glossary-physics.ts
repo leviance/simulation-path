@@ -267,7 +267,7 @@ export const physicsGlossaryTerms = [
     id: "reduced-units",
     term: "Reduced units",
     definition:
-      "Cách chọn các đại lượng chuẩn làm đơn vị để công thức gọn hơn. Project 41 mặc định lấy σ=1 cho chiều dài, ε=1 cho năng lượng và m=1 cho khối lượng; kết quả vì vậy mô tả hành vi của mô hình trước khi gắn với một chất cụ thể.",
+      "Cách chọn các đại lượng chuẩn làm đơn vị để công thức gọn hơn. Bản cũ của Project 41 (Lennard–Jones) mặc định lấy σ=1 cho chiều dài, ε=1 cho năng lượng và m=1 cho khối lượng; kết quả vì vậy mô tả hành vi của mô hình trước khi gắn với một chất cụ thể.",
   },
   {
     id: "pair-potential",
@@ -285,13 +285,13 @@ export const physicsGlossaryTerms = [
     id: "number-density",
     term: "Number density",
     definition:
-      "Số hạt trên một đơn vị diện tích trong mô phỏng 2D hoặc một đơn vị thể tích trong 3D. Project 42 dùng density=N/(width·height), nhờ vậy tăng số hạt cũng làm hộp lớn lên thay vì vô tình ép các hạt chồng lên nhau.",
+      "Số hạt trên một đơn vị diện tích trong mô phỏng 2D hoặc một đơn vị thể tích trong 3D. Bản cũ của Project 42 (Molecular Dynamics CPU) dùng density=N/(width·height), nhờ vậy tăng số hạt cũng làm hộp lớn lên thay vì vô tình ép các hạt chồng lên nhau.",
   },
   {
     id: "kinetic-temperature",
     term: "Kinetic temperature",
     definition:
-      "Nhiệt độ suy từ chuyển động tương đối với tâm khối lượng. Project 42 dùng K_thermal=Σm|v−vCOM|²/2 và T=2K_thermal/(2N−2), đo lại vCOM ở mỗi trạng thái. Động năng toàn phần K trong E=K+U không bị trừ phần chuyển động khối. Đây là đại lượng trong reduced units của mô hình 2D, không phải kelvin.",
+      "Nhiệt độ suy từ chuyển động tương đối với tâm khối lượng. Bản cũ của Project 42 (Molecular Dynamics CPU) dùng K_thermal=Σm|v−vCOM|²/2 và T=2K_thermal/(2N−2), đo lại vCOM ở mỗi trạng thái. Động năng toàn phần K trong E=K+U không bị trừ phần chuyển động khối. Đây là đại lượng trong reduced units của mô hình 2D, không phải kelvin.",
   },
   {
     id: "force-shifted-cutoff",
@@ -333,7 +333,7 @@ export const physicsGlossaryTerms = [
     id: "minimum-image",
     term: "Minimum image convention",
     definition:
-      "Quy ước tính tương tác giữa hai hạt bằng vector tới ảnh tuần hoàn gần nhất. Với hộp chữ nhật, mỗi thành phần delta được đưa về [-L/2,L/2). Project 43 dùng cutoff nhỏ hơn nửa cạnh ngắn nhất để cặp có lực không nằm ở trường hợp hai ảnh gần ngang nhau.",
+      "Quy ước tính tương tác giữa hai hạt bằng vector tới ảnh tuần hoàn gần nhất. Với hộp chữ nhật, mỗi thành phần delta được đưa về [-L/2,L/2). Bản cũ của Project 43 (hộp phân tử tuần hoàn) dùng cutoff nhỏ hơn nửa cạnh ngắn nhất để cặp có lực không nằm ở trường hợp hai ảnh gần ngang nhau.",
   },
   {
     id: "periodic-image",

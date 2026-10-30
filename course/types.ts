@@ -41,7 +41,26 @@ export interface ComingSoonProjectSummary extends ProjectSummaryBase {
   status: "coming-soon";
 }
 
-export type ProjectSummary = PublishedProjectSummary | ComingSoonProjectSummary;
+export interface ProjectRevision {
+  previousTitle: string;
+  previousPart?: string;
+  summary: string;
+  outcome: string;
+  question: string;
+  interactions: string[];
+  concepts: string[];
+  prerequisites: string;
+  workload: string;
+}
+
+export interface RevisedProjectSummary extends ProjectSummaryBase {
+  status: "awaiting-rebuild";
+  revision: ProjectRevision;
+  previous: PublishedProjectSummary;
+}
+
+export type ProjectSummary =
+  PublishedProjectSummary | ComingSoonProjectSummary | RevisedProjectSummary;
 
 export interface PublishedProjectMeta extends PublishedProjectSummary {
   prerequisites: string[];

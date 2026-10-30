@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import Link from "@/components/app-link";
-import { progressContentVersions } from "@/course/generated/progress/versions";
+import {
+  previousEditionProjectIds,
+  progressContentVersions,
+} from "@/course/generated/progress/versions";
 import { migrateProgressContent } from "@/lib/progress-content";
 
 const KEY = "simulation-path-progress-v2";
@@ -173,6 +176,7 @@ export function ProjectProgress({ lessonIds }: { lessonIds: string[] }) {
 export function ContinueLearning() {
   const state = useProgressState();
   const lesson = state.lastLesson;
+  const previousEdition = lesson && previousEditionProjectIds.includes(lesson.id.split("-")[0]);
 
   useEffect(() => {
     if (lesson || !state.lastLessonId) return;
@@ -192,7 +196,8 @@ export function ContinueLearning() {
 
   return lesson ? (
     <Link className="continue-learning" href={lesson.href}>
-      Tiếp tục: <b>{lesson.title}</b> <span aria-hidden="true">→</span>
+      {previousEdition ? "Tiếp tục bản cũ: " : "Tiếp tục: "}
+      <b>{lesson.title}</b> <span aria-hidden="true">→</span>
     </Link>
   ) : null;
 }

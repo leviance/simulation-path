@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { roadmapRevisions } from "../course/roadmap-revisions.ts";
 import { isCourseTextFile } from "../scripts/course-file-types.mjs";
 import {
   workspace,
@@ -21,7 +22,13 @@ test("server-renders the finished home page", async () => {
   const html = await response.text();
   assert.match(html, /Simulation Path/i);
   assert.match(html, /Tự viết từng pixel/i);
-  assert.match(html, new RegExp(`${projectCatalog.length} dự án đầu tiên`, "i"));
+  assert.match(
+    html,
+    new RegExp(
+      `${projectCatalog.length - Object.keys(roadmapRevisions).length} dự án có hướng dẫn hiện tại`,
+      "i",
+    ),
+  );
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
   const themeScript = html.indexOf('id="theme-init"');
   const body = html.indexOf("<body");
@@ -246,7 +253,7 @@ test("glossary explains course terms with stable anchors", async () => {
 test("shared learning pages explain how to start instead of only listing resources", async () => {
   const home = await (await render("/")).text();
   assert.match(home, /Đọc đề bài và thử tìm một hướng giải/i);
-  assert.match(home, /Mỗi dự án có một thử thách để bạn tự làm trước/i);
+  assert.match(home, /Đọc đề bài và thử tìm một hướng giải trước khi xem code mẫu/i);
 
   const gettingStarted = await (await render("/getting-started")).text();
   assert.match(gettingStarted, /starter\/.*nơi bạn bắt đầu và tiếp tục viết code/i);
@@ -259,9 +266,21 @@ test("shared learning pages explain how to start instead of only listing resourc
   assert.match(downloads, /Kiểm tra bằng final và tests/i);
 
   const roadmap = await (await render("/roadmap")).text();
-  assert.match(roadmap, new RegExp(`${projectCatalog.length} project đã có đủ bài học`, "i"));
-  const firstUnpublishedProject = Number(projectCatalog.at(-1)?.id ?? 0) + 1;
-  assert.match(roadmap, new RegExp(`bắt đầu từ Project ${firstUnpublishedProject}`, "i"));
+  assert.match(
+    roadmap,
+    new RegExp(
+      `${projectCatalog.length - Object.keys(roadmapRevisions).length} project có hướng dẫn hiện tại`,
+      "i",
+    ),
+  );
+  assert.match(
+    roadmap,
+    new RegExp(
+      `${Object.keys(roadmapRevisions).length} project đã đổi đề bài và chờ xây dựng lại`,
+      "i",
+    ),
+  );
+  assert.match(roadmap, new RegExp(`${78 - projectCatalog.length} project chưa phát hành`, "i"));
   assert.match(roadmap, /Dựng vòng lặp ứng dụng/i);
   assert.match(roadmap, /Chưa có bài học, Canvas hoặc gói mã nguồn hoàn chỉnh/i);
 });

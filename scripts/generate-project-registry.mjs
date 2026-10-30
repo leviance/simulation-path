@@ -198,6 +198,7 @@ function validateLab(project, lab) {
 }
 
 const roadmapModule = await evaluateTypeScript(path.join("course", "roadmap.ts"));
+const { roadmapRevisions } = await evaluateTypeScript(path.join("course", "roadmap-revisions.ts"));
 assertGlossaryModules(
   readdirSync(path.join(workspace, "lib"))
     .filter((file) => /^glossary(?:-[a-z-]+)?\.ts$/.test(file))
@@ -206,6 +207,24 @@ assertGlossaryModules(
 const glossaryTerms = await loadGlossaryCatalog(evaluateTypeScript);
 const roadmap = roadmapModule.roadmapSeed;
 const roadmapById = new Map(roadmap.map((item) => [String(item.id).padStart(2, "0"), item]));
+for (const [id, revision] of Object.entries(roadmapRevisions)) {
+  if (!roadmapById.has(id) || !projects.some((project) => project.id === id)) {
+    throw new Error(`Roadmap revision ${id} must identify an existing published project`);
+  }
+  for (const field of [
+    "previousTitle",
+    "summary",
+    "outcome",
+    "question",
+    "prerequisites",
+    "workload",
+  ]) {
+    assertString(revision[field], `Roadmap revision ${id}.${field}`);
+  }
+  for (const field of ["interactions", "concepts"]) {
+    assertStringArray(revision[field], `Roadmap revision ${id}.${field}`);
+  }
+}
 const lessonIds = new Set();
 const authoredProjects = [];
 
@@ -237,8 +256,8 @@ const catalogSource =
 const summaries = authoredProjects.map(({ project, editorial, roadmapItem }) => ({
   id: project.id,
   slug: project.slug,
-  part: roadmapItem.part,
-  title: roadmapItem.title,
+  part: roadmapRevisions[project.id]?.previousPart ?? roadmapItem.part,
+  title: roadmapRevisions[project.id]?.previousTitle ?? roadmapItem.title,
   summary: editorial.summary,
   status: "published",
   duration: editorial.duration,
@@ -292,15 +311,32 @@ const publishedById = new Map(authoredProjects.map((entry) => [entry.project.id,
 const projectSearchItems = roadmap.map((item) => {
   const id = String(item.id).padStart(2, "0");
   const published = publishedById.get(id);
+  const revision = roadmapRevisions[id];
   return searchItem(
     `Dự án ${id} — ${item.title}`,
-    published ? `/projects/${published.project.slug}` : `/roadmap#project-${id}`,
-    published ? "Dự án" : "Sắp ra mắt",
-    published
-      ? `${item.part} ${published.editorial.summary} ${published.editorial.objectives.join(" ")}`
-      : item.part,
+    revision
+      ? `/roadmap/${id}`
+      : published
+        ? `/projects/${published.project.slug}`
+        : `/roadmap#project-${id}`,
+    revision ? "Chờ xây dựng lại" : published ? "Dự án" : "Sắp ra mắt",
+    revision
+      ? `${item.part} ${revision.summary} ${revision.outcome} ${revision.concepts.join(" ")}`
+      : published
+        ? `${item.part} ${published.editorial.summary} ${published.editorial.objectives.join(" ")}`
+        : item.part,
   );
 });
+const previousProjectSearchItems = authoredProjects
+  .filter(({ project }) => roadmapRevisions[project.id])
+  .map(({ project, editorial }) =>
+    searchItem(
+      `Dự án ${project.id} — ${roadmapRevisions[project.id].previousTitle}`,
+      `/projects/${project.slug}`,
+      "Bản cũ",
+      editorial.summary,
+    ),
+  );
 const pageSearchItems = [
   searchItem(
     "Bắt đầu — Cài compiler, CMake và build project đầu tiên",
@@ -312,10 +348,10 @@ const pageSearchItems = [
     "Lộ trình 78 dự án",
     "/roadmap",
     "Trang",
-    "roadmap đồ họa 3D physics GPU molecular fluid ray voxel UI",
+    "roadmap đồ họa 3D GPU fractal mesh morph orbital fluid ray voxel UI",
   ),
   searchItem(
-    `Tải mã nguồn ${projects.length} project đã phát hành`,
+    "Tải mã nguồn — hướng dẫn hiện tại và bản cũ được phân biệt rõ",
     "/downloads",
     "Trang",
     "ZIP starter checkpoint final tests README source code",
@@ -352,7 +388,8 @@ const progressContentVersions = Object.fromEntries(
 );
 expectedFiles.set(
   path.join(progressDirectory, "versions.ts"),
-  `// Generated content revisions. Do not edit by hand.\nexport const progressContentVersions: Readonly<Record<string, number>> = ${JSON.stringify(progressContentVersions, null, 2)};\n`,
+  `// Generated content revisions. Do not edit by hand.\nexport const progressContentVersions: Readonly<Record<string, number>> = ${JSON.stringify(progressContentVersions, null, 2)};\n` +
+    `export const previousEditionProjectIds: readonly string[] = ${JSON.stringify(Object.keys(roadmapRevisions).map((id) => `p${id}`))};\n`,
 );
 for (const { project, editorial } of authoredProjects) {
   const moduleName = `p${project.id}`;
@@ -431,7 +468,7 @@ addSizedSearchShards(
 );
 addSizedSearchShards(
   "projects",
-  projectSearchItems.map((item) => [item]),
+  [...projectSearchItems, ...previousProjectSearchItems].map((item) => [item]),
   "project-search shard",
   overviewSearchShardImports,
 );
@@ -442,7 +479,7 @@ addSizedSearchShards(
       searchItem(
         lesson.title,
         `/projects/${project.slug}/${lesson.slug}`,
-        `Dự án ${project.id}`,
+        roadmapRevisions[project.id] ? `Bản cũ · Dự án ${project.id}` : `Dự án ${project.id}`,
         lesson.summary,
       ),
     ),

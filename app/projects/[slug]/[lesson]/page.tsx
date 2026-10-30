@@ -7,8 +7,9 @@ import { LessonTableOfContents } from "@/components/lesson-toc";
 import { LessonSourceGuide } from "@/components/lesson-source-guide";
 import { LessonWalkthrough } from "@/components/lesson-walkthrough";
 import { LessonReferences } from "@/components/lesson-references";
+import { ProjectRevisionNotice } from "@/components/project-revision-notice";
 import { renderLesson } from "@/content/registry";
-import { getAllPublishedProjects, getPublishedProject } from "@/lib/course";
+import { getAllPublishedProjects, getProjectRevision, getPublishedProject } from "@/lib/course";
 import { getProjectLearning } from "@/lib/project-learning";
 
 export async function generateStaticParams() {
@@ -29,7 +30,12 @@ export async function generateMetadata({
   const { slug, lesson: lessonSlug } = await params;
   const project = await getPublishedProject(slug);
   const lesson = project?.lessons.find((item) => item.slug === lessonSlug);
-  return lesson ? { title: lesson.title, description: lesson.summary } : {};
+  return lesson && project
+    ? {
+        title: `${lesson.title}${getProjectRevision(project.id) ? " (bản cũ)" : ""}`,
+        description: lesson.summary,
+      }
+    : {};
 }
 
 export default async function LessonPage({
@@ -64,6 +70,8 @@ export default async function LessonPage({
           <span>/</span>
           <b>Bài {lesson.order}</b>
         </nav>
+
+        <ProjectRevisionNotice projectId={project.id} />
 
         <header className="lesson-hero">
           <div>

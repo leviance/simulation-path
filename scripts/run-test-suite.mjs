@@ -46,7 +46,7 @@ const fastStages = [
 const renderedHtmlStage = {
   label: "Kiểm tra HTML, nội dung và source contract",
   command: process.execPath,
-  args: ["--test", "tests/rendered-html.test.mjs"],
+  args: ["--experimental-strip-types", "--test", "tests/rendered-html.test.mjs"],
   timeoutMs: 5 * 60_000,
 };
 const mdxDevelopmentStage = {

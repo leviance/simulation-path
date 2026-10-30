@@ -10,13 +10,13 @@ Vì vậy, phần này không còn là Molecular Dynamics hoặc một chuỗi n
 
 ## Năm sản phẩm mới
 
-| Project | Kết quả người dùng tạo/khám phá | Phần toán và lập trình tự xây |
-| --- | --- | --- |
-| 41 | Vỏ ốc/ống xoắn, dải Möbius, torus/knot có thể chỉnh và xuất mesh | Curve/surface sampling, topology/seam, frame, tangent/normal và regeneration |
-| 42 | Một triệu hạt biến đổi giữa các mô hình, có timeline và A/B | Area sampling, CDF/barycentric, correspondence, interpolation/easing và GPU update |
-| 43 | Fractal Mandelbulb 3D có camera/zoom và heatmap | Spherical recurrence, escape/DE, precision, march/quality budget và refinement |
-| 44 | Khối có thể nặn/khoét/ghép, xem slice và xuất mesh | Scalar grid/brush, gradient, interpolation, topology và GPU count/scan/emit |
-| 45 | Đám mây orbital triệu điểm, cắt lớp, so sánh và đo phân bố | Generic weighted sampling, GPU lifecycle/rendering, probes, error và performance |
+| Project | Kết quả người dùng tạo/khám phá                                  | Phần toán và lập trình tự xây                                                      |
+| ------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 41      | Vỏ ốc/ống xoắn, dải Möbius, torus/knot có thể chỉnh và xuất mesh | Curve/surface sampling, topology/seam, frame, tangent/normal và regeneration       |
+| 42      | Một triệu hạt biến đổi giữa các mô hình, có timeline và A/B      | Area sampling, CDF/barycentric, correspondence, interpolation/easing và GPU update |
+| 43      | Fractal Mandelbulb 3D có camera/zoom và heatmap                  | Spherical recurrence, escape/DE, precision, march/quality budget và refinement     |
+| 44      | Khối có thể nặn/khoét/ghép, xem slice và xuất mesh               | Scalar grid/brush, gradient, interpolation, topology và GPU count/scan/emit        |
+| 45      | Đám mây orbital triệu điểm, cắt lớp, so sánh và đo phân bố       | Generic weighted sampling, GPU lifecycle/rendering, probes, error và performance   |
 
 Các sản phẩm chia sẻ scaffold/primitive khi phù hợp nhưng có mục đích sử dụng riêng và source tự chứa. Không đổi thứ tự 78 project hoặc yêu cầu người học ghép nhiều ZIP để chạy.
 
@@ -43,10 +43,10 @@ Không hứa FPS/speedup chung. Đo generate/upload/update/extract/draw và toà
 
 ## Source hiện có chưa được thay
 
-Các ID 41–45 trong roadmap/manifest/lesson/Canvas/C++ hiện vẫn thuộc nhánh LJ/MD cũ. Chúng chưa triển khai các sản phẩm mới ở bảng trên; không dùng kết quả test MD để chứng nhận mesh/morph/fractal/sculpt/orbital sampling.
+Roadmap và giao diện đã chuyển sang tên/sản phẩm mới với trạng thái **Chờ xây dựng lại**. Manifest/lesson/Canvas/C++ của 41–45 vẫn thuộc nhánh LJ/MD cũ, được giữ với nhãn **Bản cũ**. Chúng chưa triển khai các sản phẩm mới ở bảng trên; không dùng kết quả test MD để chứng nhận mesh/morph/fractal/sculpt/orbital sampling.
 
 Có thể đối chiếu trực tiếp từ [manifest 41](../../course/projects/p41/manifest.ts), [manifest 42](../../course/projects/p42/manifest.ts), [README 43](../../examples/project-43-periodic-molecular-box/README.md), [README 44](../../examples/project-44-neighbor-list-skin/README.md) và [README 45](../../examples/project-45-molecular-lab-gpu/README.md). Không đổi nhãn route/download để làm như source đã được xây lại.
 
-Đợt này chỉ biên tập đặc tả và báo cáo; các bản viết trước về MD/chuỗi orbital đã được thay bằng hướng mới này. Khi triển khai từng project cần thống nhất phạm vi thay nguồn cũ/dự phòng rồi đồng bộ metadata, lesson, source, Canvas, tests và ZIP.
+Đợt biên tập đặc tả và cập nhật giao diện chưa thay nội dung giảng dạy hoặc source mô phỏng. Các bản viết trước về MD/chuỗi orbital đã được thay bằng hướng mới này. Khi triển khai từng project cần thống nhất phạm vi thay nguồn cũ/dự phòng rồi đồng bộ metadata, lesson, source, Canvas, tests và ZIP.
 
-Không xóa source cũ, không stage/commit/push/deploy, không bật dev server/native app và không chạy lại build/test toàn site cho một đợt chỉnh tài liệu.
+Không xóa source cũ, không stage/commit/push/deploy và không bật dev server/native app. Đợt cập nhật giao diện chỉ kiểm dữ liệu roadmap/search, TypeScript, giới hạn kiến trúc, build website và các route liên quan; không biên dịch hoặc chạy lại bộ test mô phỏng C++.

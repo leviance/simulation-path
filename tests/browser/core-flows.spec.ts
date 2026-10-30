@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import projectCatalog from "../../course/projects.json";
+import { roadmapRevisions } from "../../course/roadmap-revisions";
 
 function captureBrowserErrors(page: Page) {
   const errors: string[] = [];
@@ -39,11 +41,16 @@ test("homepage keeps a bounded set of illustrated projects", async ({ page }) =>
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "30 dự án đã phát hành", exact: true }),
+    page.getByRole("heading", {
+      name: `${projectCatalog.length - Object.keys(roadmapRevisions).length} dự án có hướng dẫn hiện tại`,
+      exact: true,
+    }),
   ).toBeVisible();
   const cards = page.locator(".project-showcase .project-card");
   await expect(cards).toHaveCount(8);
-  await expect(page.getByRole("link", { name: /Xem đầy đủ 30 dự án đã phát hành/ })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: /Xem hướng dẫn và trạng thái từng dự án/ }),
+  ).toBeVisible();
 
   const glyphsHaveArtwork = await page.locator(".project-glyph").evaluateAll((elements) =>
     elements.every((element) => {

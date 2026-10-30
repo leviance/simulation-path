@@ -1,4 +1,5 @@
 import type { LessonMeta, ProjectMeta } from "@/lib/course";
+import { getProjectRevision } from "@/lib/course";
 import type { LessonCodeGuide } from "@/course/learning/types";
 import { getProjectSourceBundle, type ProjectSourceFile } from "@/lib/project-sources";
 import { HighlightedCode } from "@/components/highlighted-code";
@@ -139,6 +140,7 @@ export async function LessonSourceGuide({
   guide: LessonCodeGuide;
 }) {
   const isFinalLesson = lesson.order === project.lessons.length;
+  const previousEdition = Boolean(getProjectRevision(project.id));
   const [bundle, previousBundle] = await Promise.all([
     getProjectSourceBundle(project.id, isFinalLesson ? "final" : lesson.order),
     getProjectSourceBundle(project.id, lesson.order === 1 ? "starter" : lesson.order - 1),
@@ -302,7 +304,10 @@ export async function LessonSourceGuide({
       {isFinalLesson && (
         <section className="complete-project-source" aria-labelledby="ma-hoan-chinh-cua-project">
           <header>
-            <span className="section-index">HOÀN THÀNH DỰ ÁN {project.id}</span>
+            <span className="section-index">
+              HOÀN THÀNH DỰ ÁN {project.id}
+              {previousEdition ? " · BẢN CŨ" : ""}
+            </span>
             <h2 id="ma-hoan-chinh-cua-project">Toàn bộ mã nguồn của dự án</h2>
             <p>
               Các tệp bên trên là đủ để build dự án: CMake, chương trình SDL, phần thuật toán và
@@ -322,7 +327,8 @@ export async function LessonSourceGuide({
             <HighlightedCode code={finalCommands} language="bash" />
           </div>
           <a className="button button-primary" href={project.download} download>
-            Tải ZIP Dự án {project.id} <b>↓</b>
+            Tải ZIP Dự án {project.id}
+            {previousEdition ? " (bản cũ)" : ""} <b>↓</b>
           </a>
         </section>
       )}

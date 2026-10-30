@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "@/components/app-link";
-import { courseParts, publishedProjects } from "@/lib/course";
+import { courseParts, currentProjects, projects, revisedProjects } from "@/lib/course";
 
 export const metadata: Metadata = {
   title: "Lộ trình 78 dự án",
-  description: "Toàn bộ lộ trình từ pixel đến mô phỏng khoa học.",
+  description:
+    "Từ pixel đến công cụ đồ họa 3D và mô phỏng; phân biệt hướng dẫn hiện có, đề bài đổi mới và project chưa phát hành.",
 };
 
 const partDescriptions: Record<string, string> = {
@@ -21,9 +22,9 @@ const partDescriptions: Record<string, string> = {
   "CHUYỂN TỪ RENDERER CPU SANG OPENGL/GLSL":
     "Đưa những bước từng tự viết trên CPU sang pipeline GPU để hiểu vertex shader, fragment shader và ray marching bằng cách đối chiếu trực tiếp.",
   "GPU COMPUTE VÀ HÀNG TRIỆU PHẦN TỬ":
-    "Học cách chia dữ liệu thành công việc song song, từ phép toán vector đến particle, reduction, prefix sum và tìm hàng xóm.",
-  "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT":
-    "Bắt đầu từ lực giữa hai hạt, rồi thêm điều kiện biên tuần hoàn, neighbor list và phiên bản chạy song song trên GPU.",
+    "Từ vòng đời compute đến buồng hạt tích điện, thành phố triệu vật thể và xưởng vải 3D. Các phép tính song song phục vụ một cảnh có thể khám phá, điều khiển và kiểm chứng.",
+  "TOÁN CHO ĐỒ HỌA 3D, GIẢ LẬP VÀ HIỆU NĂNG":
+    "Tạo vỏ ốc và nút thắt, biến hình triệu hạt, khám phá fractal, nặn vật thể và quan sát đám mây orbital. Toán xuất hiện từ những thay đổi nhìn thấy được trong công cụ bạn đang xây.",
   "TỪ Ô LƯỚI ĐẾN CHẤT LỎNG":
     "Đi từ cellular automata và phương trình nhiệt đến vector field, Stable Fluids và SPH trên cả CPU lẫn GPU.",
   "RAY, VOLUME VÀ GIẢ LẬP X-RAY":
@@ -37,11 +38,8 @@ const partDescriptions: Record<string, string> = {
 };
 
 export default function RoadmapPage() {
-  const publishedIds = new Set(publishedProjects.map((project) => project.id));
-  const unpublishedIds = Array.from({ length: 78 }, (_, index) =>
-    String(index + 1).padStart(2, "0"),
-  ).filter((id) => !publishedIds.has(id));
-  const releaseSummary = `${publishedProjects.length} project đã có đủ bài học, Canvas và mã nguồn. Các project chưa phát hành (bắt đầu từ Project ${unpublishedIds[0] ?? "—"}) mới chỉ là mốc lộ trình; mỗi project sẽ giữ trạng thái riêng, kể cả khi thứ tự phát hành không liên tiếp.`;
+  const unpublishedCount = projects.filter((project) => project.status === "coming-soon").length;
+  const releaseSummary = `${currentProjects.length} project có hướng dẫn hiện tại, ${revisedProjects.length} project đã đổi đề bài và chờ xây dựng lại, ${unpublishedCount} project chưa phát hành. Tên và sản phẩm trên lộ trình theo đặc tả mới; bài học và source cũ không được tính là lời giải cho đề bài mới.`;
   return (
     <main className="shell page-wrap">
       <header className="page-hero">
@@ -56,6 +54,9 @@ export default function RoadmapPage() {
         <p>{releaseSummary}</p>
         <div className="legend">
           <span>
+            <i className="revision-dot" /> Chờ xây dựng lại
+          </span>
+          <span>
             <i className="live-dot" /> Đã có hướng dẫn
           </span>
           <span>
@@ -65,7 +66,7 @@ export default function RoadmapPage() {
       </header>
       <div className="roadmap-layout">
         <aside className="roadmap-jump">
-          <b>13 CHẶNG</b>
+          <b>{courseParts.length} CHẶNG</b>
           {courseParts.map((part, index) => (
             <a key={part.title} href={`#part-${index + 1}`}>
               <span>{String(index + 1).padStart(2, "0")}</span>
@@ -98,6 +99,23 @@ export default function RoadmapPage() {
                       </div>
                       <b>
                         {project.lessonCount} bài <i>→</i>
+                      </b>
+                    </Link>
+                  ) : project.status === "awaiting-rebuild" ? (
+                    <Link
+                      className="roadmap-item is-revised"
+                      id={`project-${project.id}`}
+                      key={project.id}
+                      href={`/roadmap/${project.id}`}
+                    >
+                      <span>P{project.id}</span>
+                      <div>
+                        <h3>{project.title}</h3>
+                        <p>{project.summary}</p>
+                        <small>Chờ xây dựng lại · bài học, Canvas và ZIP mới chưa phát hành</small>
+                      </div>
+                      <b>
+                        CHỜ XÂY DỰNG LẠI <i>→</i>
                       </b>
                     </Link>
                   ) : (

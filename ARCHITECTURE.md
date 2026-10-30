@@ -72,6 +72,14 @@ Toàn bộ output trên, cùng `public/downloads/` (ZIP và manifest) và `publi
 
 Catalog chỉ kiểm tra nguồn đầu vào: MDX, metadata, `source-template`, README và tests. Không yêu cầu CMake hoặc snapshot có sẵn trước khi sinh. `check:course` vẫn đối chiếu toàn bộ output, bao gồm CMake, với kết quả mong đợi từ generator.
 
+### Đề bài đã đổi nhưng bản triển khai chưa được xây lại
+
+`course/roadmap.ts` giữ tên và học phần theo đặc tả hiện tại. `course/roadmap-revisions.ts` đánh dấu các project chờ xây dựng lại, tóm tắt sản phẩm mới và lưu tên/học phần của bản cũ. `lib/roadmap-state.ts` ghép hai nguồn với catalog thành ba trạng thái: đã có hướng dẫn, chờ xây dựng lại và chưa phát hành. Đây là trạng thái biên tập, không phải chứng nhận đáp ứng spec.
+
+Trang `/roadmap/<id>` giới thiệu phạm vi mới nhưng không gắn bài học, demo hay ZIP cũ cho sản phẩm mới. Các route `/projects/<slug-cũ>` và tiến độ vẫn được giữ; overview, lesson, sidebar, tìm kiếm, nút tiếp tục và Downloads ghi rõ bản cũ. Generator giữ tên thật của source cũ trong summary và search thay vì đổi nhãn bài học theo tên mới. `currentProjects` dùng cho thống kê/hướng dẫn hiện tại; `publishedProjects` giữ mọi route đã phát hành để source và liên kết không bị mất.
+
+Chỉ bỏ entry trong `roadmap-revisions.ts` khi đã thay và nghiệm thu đồng bộ lesson, C++, Canvas, metadata và ZIP cho sản phẩm mới. Không dùng việc đổi tên hoặc build thành công làm căn cứ bỏ nhãn. Metadata chi tiết này chỉ dùng khi render server/sinh registry; client tiến độ chỉ nhận danh sách ID bản cũ nhỏ gọn.
+
 `npm run check:course` chỉ kiểm tra, không ghi file. Validator kiểm tra ID, slug, lesson order, lesson ID, MDX filename, code guide bị thiếu hoặc mồ côi, Canvas mode bằng MDX AST, checkpoint count và output cũ. Các file `manifest.ts`, `learning.ts`, `lab.ts` được phép dùng `import type`, nhưng phải tự chứa toàn bộ runtime value để generator có thể đánh giá ổn định.
 
 Search chỉ tải page/project shard khi mở hộp thoại. Glossary và lesson shard được tải khi người dùng bắt đầu nhập, vì vậy số request khởi tạo không tăng theo toàn bộ số lesson.

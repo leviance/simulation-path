@@ -1,5 +1,6 @@
 // Keep one Node test entry point while the suites remain small and independently maintainable.
 import "./site-platform.cases.mjs";
+import "./roadmap-revisions.cases.mjs";
 import "./course-content.cases.mjs";
 import "./projects-01-08.cases.mjs";
 import "./projects-01-rebuild.cases.mjs";

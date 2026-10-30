@@ -1,5 +1,6 @@
 import Link from "@/components/app-link";
 import type { ProjectMeta } from "@/lib/course";
+import { getProjectRevision } from "@/lib/course";
 
 export function CourseSidebar({
   project,
@@ -8,11 +9,16 @@ export function CourseSidebar({
   project: ProjectMeta;
   activeLesson?: string;
 }) {
+  const revision = getProjectRevision(project.id);
   return (
     <aside className="course-sidebar">
       <div className="sidebar-project">
-        <span>DỰ ÁN {project.id}</span>
+        <span>
+          DỰ ÁN {project.id}
+          {revision ? " · BẢN CŨ" : ""}
+        </span>
         <b>{project.title}</b>
+        {revision && <Link href={`/roadmap/${project.id}`}>Xem đề bài mới →</Link>}
       </div>
       <nav aria-label={`Các bài của Dự án ${project.id}`}>
         {project.lessons.map((lesson) => (

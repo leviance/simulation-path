@@ -12,11 +12,11 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
   title: { default: "Simulation Path", template: "%s · Simulation Path" },
   description:
-    "Học C++, SDL3, đồ họa và mô phỏng khoa học qua 78 dự án có thể chạy, quan sát và kiểm chứng.",
+    "Học C++, SDL3 và toán qua 78 dự án đồ họa 3D, công cụ tương tác và mô phỏng có thể chạy, quan sát và kiểm chứng.",
   icons: { icon: "/icon.svg" },
   openGraph: {
     title: "Simulation Path",
-    description: "Từ pixel đầu tiên đến mô phỏng khoa học.",
+    description: "Từ pixel đầu tiên đến công cụ đồ họa 3D và mô phỏng tương tác.",
     type: "website",
     images: ["/og.png"],
   },

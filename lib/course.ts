@@ -1,13 +1,15 @@
 import { projectManifestLoaders } from "@/course/generated/project-loaders";
 import { publishedProjectSummaries } from "@/course/generated/project-summaries";
 import { coursePartTitles, roadmapSeed } from "@/course/roadmap";
+import { roadmapRevisions } from "@/course/roadmap-revisions";
 import { projectCatalogById } from "@/lib/project-catalog";
+import { buildRoadmap } from "@/lib/roadmap-state";
 import type {
-  ComingSoonProjectSummary,
   CoursePart,
   PublishedProjectMeta,
   PublishedProjectSummary,
   ProjectSummary,
+  RevisedProjectSummary,
 } from "@/course/types";
 
 export type {
@@ -20,40 +22,39 @@ export type {
   ProjectSummary,
   PublishedProjectMeta,
   PublishedProjectSummary,
+  RevisedProjectSummary,
 } from "@/course/types";
 
-const publishedSummaryById = new Map<string, PublishedProjectSummary>(
-  publishedProjectSummaries.map((project) => [project.id, project]),
+export const projects: ProjectSummary[] = buildRoadmap(
+  roadmapSeed,
+  publishedProjectSummaries,
+  roadmapRevisions,
 );
-
-export const projects: ProjectSummary[] = roadmapSeed.map((item) => {
-  const id = String(item.id).padStart(2, "0");
-  const published = publishedSummaryById.get(id);
-  if (published) return published;
-  const comingSoon: ComingSoonProjectSummary = {
-    id,
-    slug: `project-${id}`,
-    part: item.part,
-    title: item.title,
-    summary: "Nội dung chi tiết sẽ được biên soạn ở một release tiếp theo.",
-    status: "coming-soon",
-  };
-  return comingSoon;
-});
 
 export const courseParts: CoursePart[] = coursePartTitles.map((title) => ({
   title,
   projects: projects.filter((project) => project.part === title),
 }));
 
-export const publishedProjects: PublishedProjectSummary[] = projects.filter(
+// Existing routes remain available, including clearly labelled previous editions.
+export const publishedProjects: readonly PublishedProjectSummary[] = publishedProjectSummaries;
+
+export const currentProjects = projects.filter(
   (project): project is PublishedProjectSummary => project.status === "published",
 );
+
+export const revisedProjects = projects.filter(
+  (project): project is RevisedProjectSummary => project.status === "awaiting-rebuild",
+);
+
+export function getProjectRevision(id: string) {
+  return revisedProjects.find((project) => project.id === id);
+}
 
 const projectPromiseCache = new Map<string, Promise<PublishedProjectMeta | undefined>>();
 
 export function getProjectSummary(slug: string) {
-  return projects.find((project) => project.slug === slug);
+  return publishedProjects.find((project) => project.slug === slug);
 }
 
 export function getPublishedProject(slug: string): Promise<PublishedProjectMeta | undefined> {

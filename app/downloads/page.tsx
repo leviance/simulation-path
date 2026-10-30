@@ -1,11 +1,50 @@
 import type { Metadata } from "next";
 import Link from "@/components/app-link";
-import { publishedProjects } from "@/lib/course";
+import { currentProjects, revisedProjects } from "@/lib/course";
+import type { PublishedProjectSummary } from "@/lib/course";
 
 export const metadata: Metadata = {
   title: "Tải mã nguồn",
-  description: "Starter, checkpoint, bản hoàn chỉnh và tests của các project đã phát hành.",
+  description:
+    "Starter, checkpoint, bản hoàn chỉnh và tests; các gói bản cũ được tách riêng khi project đã đổi đề bài.",
 };
+
+function DownloadCard({
+  project,
+  previous = false,
+}: {
+  project: PublishedProjectSummary;
+  previous?: boolean;
+}) {
+  return (
+    <article>
+      <span>P{project.id}</span>
+      <div>
+        {previous && <span className="revision-badge">BẢN CŨ</span>}
+        <h2>{project.title}</h2>
+        <p>{project.summary}</p>
+        {previous && (
+          <p className="previous-download-note">
+            Gói này chưa triển khai đề bài mới.{" "}
+            <Link href={`/roadmap/${project.id}`}>Xem phạm vi mới →</Link>
+          </p>
+        )}
+        <ul>
+          <li>starter để tự viết</li>
+          <li>{project.lessonCount} checkpoint độc lập</li>
+          <li>final + CTest + README</li>
+        </ul>
+      </div>
+      <a
+        className={`button ${previous ? "button-secondary" : "button-primary"}`}
+        href={project.download}
+        download
+      >
+        {previous ? "Tải ZIP bản cũ" : "Tải ZIP"} <b>↓</b>
+      </a>
+    </article>
+  );
+}
 
 export default function DownloadsPage() {
   return (
@@ -53,25 +92,35 @@ export default function DownloadsPage() {
         </p>
       </section>
 
-      <div className="download-grid">
-        {publishedProjects.map((project) => (
-          <article key={project.id}>
-            <span>P{project.id}</span>
-            <div>
-              <h2>{project.title}</h2>
-              <p>{project.summary}</p>
-              <ul>
-                <li>starter để tự viết</li>
-                <li>{project.lessonCount} checkpoint độc lập</li>
-                <li>final + CTest + README</li>
-              </ul>
-            </div>
-            <a className="button button-primary" href={project.download} download>
-              Tải ZIP <b>↓</b>
-            </a>
-          </article>
-        ))}
-      </div>
+      <section aria-labelledby="current-downloads-title">
+        <h2 id="current-downloads-title">
+          Gói mã nguồn cho hướng dẫn hiện tại ({currentProjects.length})
+        </h2>
+        <div className="download-grid">
+          {currentProjects.map((project) => (
+            <DownloadCard key={project.id} project={project} />
+          ))}
+        </div>
+      </section>
+
+      {revisedProjects.length > 0 && (
+        <section
+          className="previous-downloads"
+          id="previous-editions"
+          aria-labelledby="previous-downloads-title"
+        >
+          <h2 id="previous-downloads-title">Gói tham khảo bản cũ ({revisedProjects.length})</h2>
+          <p>
+            Các project này đã đổi đề bài. ZIP dưới đây vẫn chứa sản phẩm cũ, không phải source cho
+            sản phẩm mới trên roadmap. ZIP mới chỉ xuất hiện khi project được xây dựng lại.
+          </p>
+          <div className="download-grid">
+            {revisedProjects.map(({ previous }) => (
+              <DownloadCard key={previous.id} project={previous} previous />
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }

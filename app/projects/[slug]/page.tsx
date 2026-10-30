@@ -5,7 +5,13 @@ import { CourseSidebar } from "@/components/course-sidebar";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 import { ProjectChallenge } from "@/components/project-challenge";
 import { ProjectProgress } from "@/components/progress";
-import { getProjectSummary, getPublishedProject, publishedProjects } from "@/lib/course";
+import { ProjectRevisionNotice } from "@/components/project-revision-notice";
+import {
+  getProjectRevision,
+  getProjectSummary,
+  getPublishedProject,
+  publishedProjects,
+} from "@/lib/course";
 
 export function generateStaticParams() {
   return publishedProjects.map((project) => ({ slug: project.slug }));
@@ -20,7 +26,7 @@ export async function generateMetadata({
   const project = getProjectSummary(slug);
   return project?.status === "published"
     ? {
-        title: `Dự án ${project.id} — ${project.title}`,
+        title: `Dự án ${project.id}${getProjectRevision(project.id) ? " (bản cũ)" : ""} — ${project.title}`,
         description: project.summary,
       }
     : {};
@@ -30,6 +36,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
   const { slug } = await params;
   const project = await getPublishedProject(slug);
   if (!project) notFound();
+  const revision = getProjectRevision(project.id);
 
   return (
     <main className="course-layout shell">
@@ -40,6 +47,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
           <span>/</span>
           <b>Dự án {project.id}</b>
         </nav>
+
+        <ProjectRevisionNotice projectId={project.id} />
 
         <header className="project-hero">
           <span className="project-kicker">
@@ -57,7 +66,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
               {project.lessons.length} bài
             </span>
             <span>
-              <small>TRẠNG THÁI</small>Đã mở
+              <small>TRẠNG THÁI</small>
+              {revision ? "Bản cũ · đã đổi đề bài" : "Đã mở"}
             </span>
           </div>
         </header>
@@ -133,7 +143,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
 
         <section className="source-strip">
           <div>
-            <span>GÓI MÃ NGUỒN</span>
+            <span>{revision ? "GÓI MÃ NGUỒN BẢN CŨ" : "GÓI MÃ NGUỒN"}</span>
             <h2>Một gói ZIP, đủ mọi mốc để học và đối chiếu</h2>
             <p>
               Viết bài trong starter, mở checkpoint khi cần so sánh và dùng bản final để kiểm tra
@@ -141,7 +151,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
             </p>
           </div>
           <a className="button button-primary" href={project.download} download>
-            Tải Dự án {project.id} <b>↓</b>
+            Tải Dự án {project.id}
+            {revision ? " (bản cũ)" : ""} <b>↓</b>
           </a>
         </section>
       </section>
