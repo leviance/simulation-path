@@ -207,9 +207,9 @@ AI Agent tự thiết kế curriculum để đưa người học từ kiến th�
 35. **Phòng thí nghiệm shader: sửa GLSL và thấy kết quả ngay** — Compile/reload nhanh; lỗi shader hiện rõ; có gradient/circle/Mandelbrot/noise toy.
 36. **Căn phòng hình khối không mesh: ray-march sphere, box và torus** — Scene 3D procedural với camera, normal, lighting và step-count heatmap.
 37. **Máy tính vector 1 triệu phần tử trên GPU** — Dashboard kiểm chứng vòng đời compute; tách kernel time và chi phí upload/readback.
-38. **Đài phun 5 triệu hạt: GPU cập nhật và render particle** — Particle fountain/gravity field có profiler và scale ladder tới 5M nếu hardware cho phép.
-39. **Cộng một triệu số theo cây: Reduction và Prefix Sum trên GPU** — Kiểm reduction/scan với CPU và dùng prefix sums để tạo offsets/compaction.
-40. **Đàn Boids trên GPU: grid, hàng xóm và steering song song** — Cập nhật đàn ít nhất 100.000 cá thể trên GPU, có preset một triệu và kiểm chứng với CPU ở hệ nhỏ.
+38. **Buồng hạt tích điện 3D: quỹ đạo trong điện trường và từ trường** — GPU giữ/cập nhật state và render trực tiếp ít nhất một triệu hạt; quan sát quỹ đạo, đối chiếu nghiệm tham chiếu và thử mốc năm triệu theo phần cứng.
+39. **Khám phá thành phố 3D với một triệu vật thể** — GPU lọc object theo camera, compact visible IDs và dựng lệnh vẽ; reduction/scan phục vụ cảnh có thể khám phá, không chỉ xuất bảng số.
+40. **Xưởng vải 3D: kéo, ghim và thả vải phủ lên vật thể** — GPU giải constraints và tiếp xúc cho ít nhất 100.000 đỉnh động; quan sát nếp gấp, strain và va chạm, có mốc một triệu đỉnh mở rộng theo phần cứng.
 41. **Hai “nguyên tử” hút và đẩy nhau: trực quan hóa Lennard–Jones** — Graph V(r), force arrow và equilibrium region cập nhật realtime.
 42. **Hộp khí 1.000 hạt: Molecular Dynamics CPU đầu tiên** — Box có particles, energy graphs và timestep controls.
 43. **Hộp phân tử tuần hoàn: hạt đi ra một phía và quay lại phía đối diện** — Particles wrap liền mạch; pair distance qua biên đúng.
@@ -265,7 +265,7 @@ Project 01–72 vẫn thuộc lộ trình chính; Project 73–78 vẫn tùy ch�
 | Vật lý — 22–26 | Cần input, vector và timing; không buộc học toàn bộ renderer. Nếu chọn cảnh 3D, chuẩn bị camera/presentation cần thiết. Mỗi hệ có mô hình và phép kiểm chứng riêng. |
 | Không gian và hiệu năng — 27–32 | 27–28 dùng vector, timestep và tọa độ 2D; 29 dùng camera 2D/AABB; 30 cần camera 3D, AABB và frustum; 31 thêm integration và tổng hợp lực bằng cây. 32 không bắt buộc học N-body ở 31. |
 | Graphics GPU — 33–36 | 33 đối chiếu triangle CPU/GPU; 34 chuyển viewer 21 sang hai backend; 35 xây công cụ shader; 36 thêm SDF và ray marching. Không bắt buộc học xong 22–32. |
-| GPU compute — 37–40 | Cần OpenGL/GLSL và kiểm tra phần cứng. 37 cung cấp vòng đời compute, 38 áp dụng cho hệ hạt, 39 cung cấp reduction/scan, 40 kết hợp chúng với Boids 28. |
+| GPU compute — 37–40 | Cần OpenGL/GLSL và kiểm tra phần cứng. 37 dạy vòng đời compute; 38 dựng buồng hạt tích điện; 39 dùng reduction/scan, compaction và indirect draw để khám phá thành phố 3D; 40 dùng solver/grid/contact để dựng xưởng vải 3D. 38 cần vector/cross, camera và timestep; lực/Boris được giải thích tại chỗ. 39 có thể đi thẳng từ 37 và nền graphics 34 bằng scaffold nhiều pass. 40 cần kiến thức constraint và grid được chuẩn bị tại chỗ hoặc từ 25/28; không bắt học luật Boids hay điện từ trước. |
 | Molecular Dynamics — 41–45 | Cần vector, lực và integration; bổ sung đạo hàm của potential ngay lúc dùng. 41–44 là các mốc của Molecular Lab CPU; 45 cần compute, scan và grid GPU. |
 | Trường và chất lưu — 46–51 | 46 là cellular automata độc lập. 47–49 đi theo dữ liệu trên lưới; 50–51 đi theo hạt. SPH cần integration và tìm hàng xóm; không bắt học MD. Trước 51 phải mở rộng grid, kernel và đơn vị sang 3D. |
 | Ray và tạo ảnh — 52–57 | 52 cần vector/camera; 53 cần mảng 3D và nội suy; 54 thêm graphics GPU. 55–56 nối tích phân theo tia với detector/reconstruction; 57 thêm xác suất. Không bắt học chất lưu trước. |
@@ -283,7 +283,7 @@ Các yêu cầu dưới đây xác định bối cảnh sử dụng và phần �
 - **22–26:** 22 gắn quỹ đạo với việc nhắm mục tiêu; 23 so integrator trên cùng hệ và giải thích lực lò xo đơn trước chain ở 25; 24 dùng ca va chạm có kiểm chứng trước bể nhiều bóng; 25 phân biệt damping vật lý với sai số số học; 26 phân biệt chaos với integration error.
 - **27–32:** 27–28 là cùng ứng dụng Boids trước/sau tối ưu; 29 là bản đồ có đối tượng mang diện tích; 30 là công cụ khảo sát dữ liệu 3D; 31 giải bài toán tương tác xa bằng xấp xỉ; 32 khảo sát chi phí bộ nhớ bằng đài phun hạt CPU. Không thay sản phẩm bằng việc rê chuột tô màu các điểm hoặc chỉ vẽ các hộp của cây.
 - **33–36:** 33 là bài chuyển tiếp nền tảng, không bị ép thành showcase nâng cao. 34 kế thừa viewer 21; 35 là công cụ làm việc với shader có reload/báo lỗi; 36 tạo cảnh SDF. SDF tìm bề mặt ở 36 khác tích lũy mật độ thể tích ở 54.
-- **37–40:** 37 và 39 là bài thí nghiệm compute có dashboard và dữ liệu kiểm chứng. 39 phải cho thấy scan tạo offsets/compaction dùng được thế nào; 40 phải dùng grid vào steering của đàn Boids động. 38 và 40 là ứng dụng, không phải phép tính lớn được trang trí bằng particle.
+- **37–40:** 37 là bài thí nghiệm phép tính độc lập và chi phí truyền dữ liệu. 38 giữ state qua nhiều bước để dựng buồng hạt tích điện 3D, không lặp đài phun CPU 32. 39 dùng reduction/scan/compaction để chọn object và dựng lệnh vẽ cho một thành phố 3D có thể khám phá. 40 nối constraint solver, grid 3D và tiếp xúc vào bề mặt vải có thể kéo/ghim/thả; chuỗi lò xo 25 chỉ là kiến thức cầu nối, không thay sản phẩm mesh. 38–40 có viewport 3D làm đầu ra chính, dashboard/debug hỗ trợ hiện tượng và kiểm chứng; không giới thiệu primitive hoặc số phần tử lớn như sản phẩm duy nhất.
 - **41–45:** cùng một Molecular Lab. 41 giải thích mô hình hai hạt, 42 tích hợp nhiều hạt, 43 đổi hình học tương tác qua biên, 44 đổi cách tìm hàng xóm, 45 đổi nơi thực thi sang GPU. Giữ nhất quán đơn vị hoặc reduced units, potential, cutoff, timestep và cách đo năng lượng; nếu đổi mô hình phải có bước đối chiếu riêng.
 - **46–51:** cát/nước cellular ở 46 không phải solver chất lưu. 47 đặt câu hỏi nguồn nhiệt/điều kiện biên; 48 dùng tracer để thấy tác dụng của trường; 49 là công cụ khói Eulerian; 50 mở cách biểu diễn Lagrangian bằng SPH; 51 mở rộng SPH sang 3D/GPU. Không gọi mô hình sau là bản chính xác hơn của mô hình trước chỉ vì trông đẹp hơn.
 - **52–57:** 52 là công cụ hình học dùng lại cho picking; 53–56 dùng chung phantom và các phép quan sát khi hợp lý. Slice của volume, volume compositing, attenuation X-ray và reconstruction CT là bốn công việc khác nhau. 57 là nhánh lấy mẫu ngẫu nhiên, có uncertainty; không gọi kết quả là công cụ chẩn đoán hoặc mô phỏng lâm sàng đã được kiểm định.
@@ -297,13 +297,16 @@ Các yêu cầu dưới đây xác định bối cảnh sử dụng và phần �
 | --- | --- |
 | Camera/phép quay 12–14 và về sau | Giới thiệu orientation; có thể học 73 khi cần quaternion/SLERP, không buộc học toàn bộ quaternion để đi tiếp. |
 | Picking 3D ở 30, 60 hoặc mesh viewer | Dạy phần ray/AABB/intersection cần dùng từ 52 trước thao tác đó, hoặc công bố rõ phương pháp chọn khác. Mesh lớn có thể học thêm BVH 74. |
-| Integrator 23, 25, 26, 42 | State, đạo hàm, phương trình vi phân và ý nghĩa một bước thời gian được giải thích trên hệ nhỏ trước khi gọi solver. |
+| Integrator 23, 25, 26, 38, 42 | State, đạo hàm, phương trình vi phân và ý nghĩa một bước thời gian được giải thích trên hệ nhỏ trước khi gọi solver. |
+| Điện trường/từ trường ở 38 | Giải thích lực Lorentz, dấu q, khối lượng dương, đơn vị và trường ngoài. Dạy Boris pusher cùng mốc cả bước/nửa bước; kiểm một hạt trước khi mở rộng số lượng. Không yêu cầu học Maxwell/Poisson hoặc mô phỏng plasma ở phần khác. |
+| GPU visibility/indirect draw ở 39 | Chuẩn bị camera/frustum, bounding volume và mesh instancing từ nền graphics; giải thích mask, prefix, ID và draw command trên fixture nhỏ trước khi đưa vào scene triệu object. Phân biệt frustum culling với occlusion, không giấu occlusion/streaming trong scaffold. |
+| Vải/constraint/contact ở 40 | Dạy inverse mass, rest shape, gradient của constraint, compliance và multiplier trên một/hai ràng buộc; giải thích coloring/gather và residual trước khi tăng mesh. Grid từ 28 phải được mở rộng indexing/stencil/predicate sang 3D, không mặc định chỉ đổi hằng số. |
 | Potential/force 41–42 | Giải thích đạo hàm, hướng lực và đơn vị; kiểm lực bằng đạo hàm số độc lập ở điểm hợp lệ. |
 | Heat/field/fluid 47–51 | Dạy stencil, gradient/divergence/curl và điều kiện biên tại nơi sử dụng; SPH có kernel/support radius và kiểm tra đơn vị riêng cho 2D/3D. |
 | Reconstruction 56 | Giải thích forward model và backprojection trước. Nếu thêm filtered backprojection, cung cấp cầu nối lọc/Fourier; 76 là nhánh thực hành thêm, không bắt buộc hoàn thành project audio trước CT. |
 | Photon 57 | Giải thích phân phối lấy mẫu, seed, ước lượng và uncertainty; có thể dùng 77 làm bài chuẩn bị nếu thiếu nền thống kê. |
 | Hiệu năng CPU và background jobs | 75 phù hợp sau 32. Dùng ownership, job lifecycle và cancellation đã giải thích; không đưa đa luồng vào chỉ để có thêm kỹ thuật. |
-| So sánh số thực ở 16, 23, 39, 41 và các solver | Giới thiệu tolerance/cancellation/NaN tại chỗ; 78 là project đào sâu, không trì hoãn cảnh báo sai số tới cuối khóa. |
+| So sánh số thực ở 16, 23, 38, 39, 41 và các solver | Giới thiệu tolerance/cancellation/NaN tại chỗ; 78 là project đào sâu, không trì hoãn cảnh báo sai số tới cuối khóa. |
 
 ## 3.4. Hợp đồng của bài hướng dẫn, source và Canvas
 
@@ -2753,275 +2756,340 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 # PHẦN VII — GPU COMPUTE VÀ HÀNG TRIỆU PHẦN TỬ
 
+Sau phần OpenGL, người học đã biết GPU tạo ra hình ảnh như thế nào. Ở phần này, GPU còn giữ và cập nhật dữ liệu của ứng dụng. Ta bắt đầu bằng phép tính có đáp án dễ kiểm, dùng compute để dựng buồng hạt, lọc dữ liệu cho một thành phố lớn và giải biến dạng/tiếp xúc của tấm vải.
+
+Bốn project trả lời bốn câu hỏi khác nhau. Quy mô lớn dùng để kiểm khả năng mở rộng; tăng số phần tử không tự tạo ra một mục tiêu học tập mới.
+
+| Project | Câu hỏi chính | Sản phẩm và khả năng mới |
+| --- | --- | --- |
+| 37 — Máy tính vector trên GPU | Làm sao biết GPU tính đúng và việc truyền dữ liệu tốn bao nhiêu? | Workbench đối chiếu CPU/GPU, vòng đời compute và phạm vi từng phép đo |
+| 38 — Buồng hạt tích điện 3D | Làm sao giữ trạng thái qua nhiều bước rồi vẽ trực tiếp kết quả GPU đang cập nhật? | Quỹ đạo trong điện trường/từ trường, camera 3D và phép kiểm chuyển động |
+| 39 — Khám phá thành phố 3D | Làm sao chọn vật thể và dựng lệnh vẽ cho một scene triệu object ngay trên GPU? | Frustum culling, reduction/scan và compaction nối trực tiếp vào cảnh có thể đi xuyên qua |
+| 40 — Xưởng vải 3D | Làm sao một bề mặt nhiều đỉnh phản ứng với kéo, ghim và va chạm mà không có race? | Constraint solver, grid/contact, mesh normals và rendering từ state biến dạng |
+
+Tuyến chính là 37 → 38 → 39 → 40. Khi học riêng, 39 có thể bắt đầu từ 37 và nền graphics 34 với khung nhiều pass được cung cấp; kiến thức điện từ của 38 không phải prerequisite ngầm. Project 38 cần vector/cross, camera 3D và timestep; mô hình lực/Boris được giải thích tại chỗ. Project 40 tái sử dụng scan ở 39, chuẩn bị constraint/contact từ nền 25 và grid từ 28 hoặc fixture cầu nối; luật Boids không phải điều kiện để học mô phỏng vải. Mỗi gói source vẫn chạy độc lập.
+
 ## Project 37 — Máy tính vector 1 triệu phần tử trên GPU
 
-**Vai trò:** Bài thí nghiệm vòng đời compute và phép đo
+**Vai trò:** Bài thí nghiệm vòng đời compute, đối chiếu kết quả và đo chi phí
 
-**Mức tham vọng trực quan:** Dashboard kiểm chứng có dữ liệu đầu vào/đầu ra
+**Mức tham vọng trực quan:** Dashboard đọc được input/output, cấu hình và ba phạm vi đo
 
 ### Đề bài / mục tiêu sản phẩm
 
-Dùng compute shader cộng/scale mảng lớn để hiểu upload → dispatch → synchronization → kiểm kết quả. Đây là nền cho hệ hạt 38 và các pass 39–40, không phải một scene particle giả để minh họa phép cộng.
+Tự xây dựng một máy tính vector chạy trên CPU và GPU với Add, AXPY (`s*A+B`) và Difference. Người dùng chọn phép toán, kích thước mảng và scalar, kiểm kết quả rồi so thời gian trên cùng dữ liệu.
+
+Câu hỏi chính không phải GPU có thể vẽ bao nhiêu điểm, mà là làm sao giao việc cho GPU, biết công việc đã hoàn tất và chứng minh kết quả đúng. Đây là nền để giữ state trên GPU ở 38 và nối nhiều pass ở 39–40; không cần dựng thêm một particle scene không liên quan.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Benchmark CPU vs GPU cho vector operations.
+Một workbench có bảng CPU/kernel/end-to-end theo N và inspector đọc đủ các thành phần của A, B, CPU output, GPU output. Người dùng phân biệt được cấu hình đang chọn với cấu hình đã đo; đổi lựa chọn chưa được làm số đo cũ mang nhãn cấu hình mới.
 
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Ứng dụng báo tiến độ và kết quả validation, không chỉ in milliseconds lên console. Phép đo chỉ được công bố khi đủ mẫu và thuộc đúng cấu hình của lượt chạy.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- GPU compute trên arrays lớn.
-- CPU reference comparison.
-- Timing per N.
+- Compute shader thực hiện các phép toán trên mảng; CPU reference dùng cùng input, scalar và precision đã công bố.
+- Tự tổ chức upload → dispatch → đồng bộ → readback → validation. Kiểm toàn bộ output của lượt chạy, không chỉ vài phần tử được vẽ.
+- Benchmark nhiều N, có warm-up, nhiều mẫu và min/median/max hoặc một cách biểu diễn độ phân tán tương đương.
+- Tách CPU loop time, GPU kernel time và end-to-end upload/dispatch/readback; giải thích phần nào nằm trong từng khoảng đo.
+- Mỗi job giữ cấu hình/seed riêng, có deadline và hủy. Không trộn mẫu của hai phép toán hoặc hai N trong một hàng kết quả.
+- Inspector đọc từ kết quả đã công bố; validation thất bại, timeout hoặc hủy không được trở thành kết quả hoàn tất.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- 1M elements target.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Có ít nhất một preset từ một triệu phần tử được GPU tính và kiểm thật, cùng preset nhỏ và N không chia hết workgroup.
+- Công bố layout/stride, dung lượng các buffer, giới hạn phần cứng và ngân sách ứng dụng trước cấp phát.
+- Preset nhỏ là bước học và debug, không thay mốc nghiệm thu. Không hứa một speedup hoặc FPS chung cho mọi máy.
 
 ### Tương tác bắt buộc
 
-- Trigger/run benchmark; change N.
+- Chọn operation, N, scalar và seed; chạy một lượt hoặc benchmark hữu hạn, xem tiến độ và hủy.
+- Duyệt inspector theo index, tới đầu/cuối và đọc đủ các thành phần.
+- Phân biệt rõ cấu hình SELECTED với MEASURED; khi busy phải khóa hoặc hủy cấu hình cũ theo quy tắc đã giải thích.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Khi project có dữ liệu GPU lớn, phải có visualization trực tiếp của kết quả tính toán hoặc một dashboard benchmark trực quan nếu bản chất project thuần compute.
-- Các project particle/grid phải dùng viewport 3D hoặc 2D dày đặc phù hợp với dữ liệu; màu theo tốc độ/mật độ/cell/neighbor để thấy cấu trúc.
-- Scale lớn không được đánh đổi thành hình ảnh khó đọc; cần culling/opacity/point size/impostor hoặc camera control phù hợp.
+- Bảng kết quả có N, đơn vị, số warm-up/mẫu và độ phân tán. Màu và biểu đồ không được thay cho số liệu có nhãn.
+- Input/output, sai số, first mismatch và trạng thái phần cứng tìm được trong cửa sổ.
+- Cửa sổ phản hồi trong khi đo; không ép bài thí nghiệm thành một showcase particle để che thiếu dữ liệu kiểm chứng.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Compute wrapper nhỏ
-- CPU reference
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết compute wrapper, shader, CPU reference, validation và benchmark/job lifecycle.
+- Kiểm giới hạn dispatch/storage, layout và tail trước khi coi workload là hợp lệ.
+- Giữ pending timer query tới lúc có kết quả hoặc hủy; không đo thời gian enqueue trên CPU rồi gắn nhãn GPU kernel time.
+- Không dùng fragment shader, thư viện vector compute hoặc kết quả đã tính sẵn thay phần compute.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ dùng fragment shader giả compute.
-- Không validate output.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ dispatch rồi vẽ vài cột, không kiểm toàn bộ output hoặc không có CPU reference.
+- Số đo không tách upload/readback khỏi kernel, không có warm-up/mẫu lặp hoặc trộn cấu hình.
+- Chỉ cấp phát một triệu phần tử nhưng không tính/kiểm đủ; chỉ có console, ảnh chụp hoặc Canvas thay executable.
+- Tuyên bố GPU luôn nhanh hơn và bỏ những trường hợp GPU không có lợi.
 
 ### Acceptance Criteria
 
-- GPU output khớp CPU theo absolute/relative tolerance công bố; fixture có 0, số âm, dữ liệu biết trước và N không chia hết workgroup.
-- Có ít nhất một preset từ một triệu phần tử; kiểm tail không đọc/ghi ngoài buffer và không để phần tử chưa xử lý bị coi là đúng.
-- Dashboard tách GPU kernel time đã đồng bộ với end-to-end upload/dispatch/readback, có warm-up và nhiều lần lặp; không hứa GPU luôn nhanh hơn.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Fixture độc lập chứa số 0, số âm, các thành phần khác nhau và scalar biết trước; cả ba phép toán khớp CPU theo absolute/relative tolerance công bố.
+- Có N nhỏ, N không chia hết workgroup và preset ít nhất một triệu. Kiểm phần đuôi, phần tử chưa được ghi, NaN/Inf và input không bị ghi đè.
+- Validation nêu index/component sai đầu tiên và sai số lớn nhất; không dùng inspector vài phần tử thay phép kiểm toàn output.
+- Đổi SELECTED không sửa dữ liệu MEASURED; chạy lại công bố kết quả đúng generation. Hủy/timeout không giữ một hàng thiếu mẫu dưới nhãn hoàn tất.
+- Bảng có CPU, GPU kernel và end-to-end với cùng workload, warm-up và độ phân tán; ghi cấu hình máy/build và giữ cả kết quả không có speedup.
+- Trigger, hủy và inspector hoạt động trong ứng dụng C++/SDL3. Bản nhỏ, Canvas và ảnh dashboard không thay cho executable đúng quy mô.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3. Đi từ CPU reference có đáp án biết trước tới một lượt compute rồi mới benchmark; không thu nhỏ sản phẩm để vừa một khuôn bài học. Source C++/SDL3 chạy độc lập; Canvas hỗ trợ quan sát đường dữ liệu, không tạo số đo GPU giả.
 
 ---
 
-## Project 38 — Đài phun 5 triệu hạt: GPU cập nhật và render particle
+## Project 38 — Buồng hạt tích điện 3D: quỹ đạo trong điện trường và từ trường
 
-**Mức tham vọng trực quan:** Advanced GPU / real-time showcase
+**Vai trò:** Ứng dụng compute có trạng thái lâu dài và rendering trực tiếp từ GPU
+
+**Mức tham vọng trực quan:** Buồng quan sát 3D với hàng triệu hạt, quỹ đạo đọc được và inspector có kiểm chứng
 
 ### Đề bài / mục tiêu sản phẩm
 
-Tăng từ 10k lên hàng triệu particle; compute shader update position/velocity, graphics render points.
+Tự xây dựng một mô phỏng 3D trong đó các hạt chuyển động dưới tác dụng của điện trường và từ trường cho trước. Đổi dấu điện tích, hướng trường hoặc vận tốc ban đầu phải làm quỹ đạo thay đổi theo mô hình, không chỉ đổi màu hay góc nhìn.
+
+Compute shader cập nhật vị trí và vận tốc qua nhiều bước; renderer đọc trực tiếp state đang nằm trên GPU. Người học dùng thí nghiệm một hạt để hiểu chuyển động, kiểm bằng nghiệm tham chiếu, rồi mở rộng cùng kernel tới hàng triệu hạt.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Particle fountain/gravity field có profiler và scale ladder tới 5M nếu hardware cho phép.
+Một buồng quan sát có trục/mốc không gian, hướng E/B, camera orbit/pan/zoom và các hạt mang hai dấu điện tích. Các preset cho thấy chuyển động thẳng khi không có trường, quỹ đạo tròn hoặc xoắn khi chỉ có từ trường đều, và chuyển động gia tốc khi chỉ có điện trường đều.
 
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Có thể chọn một số ít hạt để xem state, sai số và vệt quỹ đạo. Góc nhìn thể hiện chiều sâu thật; một nhóm hạt nhiều màu trên mặt phẳng không đáp ứng sản phẩm 3D.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Particle system cập nhật position/velocity trên GPU.
-- GPU rendering trực tiếp từ GPU state.
-- Scale ladder tới 5M nếu hardware cho phép.
+- Mô hình phi tương đối tính: `dx/dt = v`, `dv/dt = (q/m) * (E + v × B)`, với khối lượng dương và trường ngoài cho trước. Công bố đơn vị hoặc hệ chuẩn hóa cùng miền tham số.
+- Hạt có ID/slot ổn định, position, velocity và q/m hoặc dữ liệu tương đương. Khởi tạo từ snapshot/seed tái lập được; hai dấu điện tích cùng quan sát được.
+- Tự viết Boris pusher phi tương đối tính trên CPU và GLSL. Giải thích lực phụ thuộc vận tốc, cách chia bước và mốc thời gian của state trước khi dùng integrator.
+- Bốn preset chuẩn: E=B=0; E=0 và v vuông góc B đều; E=0 và v có cả thành phần song song/vuông góc B đều; B=0 và E đều khác 0.
+- State tồn tại trên GPU qua nhiều dispatch. Graphics đọc trực tiếp buffer GPU; không tính lại toàn bộ trên CPU hoặc readback toàn bộ state mỗi frame.
+- Có bounds guard, kiểm layout, barrier theo consumer và validation readback hữu hạn. Tách thời gian update, draw và toàn frame.
+- Preset kiểm quỹ đạo không có biên phản xạ hoặc respawn làm đổi nghiệm. Hạt ra khỏi vùng camera vẫn tồn tại và được cập nhật; Reset khôi phục snapshot/seed.
+- Chỉ lưu vệt quỹ đạo cho subset có giới hạn. Trường đều là phạm vi bắt buộc; emitter, va chạm, trường biến thiên và tương tác giữa các hạt không phải yêu cầu hoàn thành.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Bắt buộc đạt 1M; 5M là target theo VRAM/hardware.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Bắt buộc có ít nhất một triệu hạt thật được cập nhật trên GPU ở mỗi bước nghiệm thu; năm triệu là mốc mở rộng riêng theo RAM/VRAM và giới hạn driver.
+- Có preset nhỏ để xem quỹ đạo/đối chiếu CPU và preset lớn để kiểm khả năng mở rộng. Không dùng preset nhỏ thay mốc một triệu.
+- Công bố allocated/updated/drawn, dung lượng state, buffers phụ và lịch sử quỹ đạo; mọi sampling hiển thị phải được ghi rõ, không giảm số được cập nhật.
+- Kiểm capability, phép nhân kích thước, buffer/workgroup limits và ngân sách trước cấp phát. Máy không đủ tài nguyên phải báo rõ mốc chưa kiểm chứng, không âm thầm giảm N rồi ghi đã đạt.
 
 ### Tương tác bắt buộc
 
-- Camera; pause/reset; particle-count presets.
+- Chọn preset, N/seed, vận tốc ban đầu, hướng/độ lớn E/B và dấu hoặc tỉ số q/m trong miền hợp lệ.
+- Chọn hạt, bật/tắt vệt quỹ đạo của subset và đọc position/velocity cùng sai số với reference khi có.
+- Pause/Reset/single-step; camera orbit/pan/zoom vẫn hoạt động khi Pause.
+- Chạy/hủy validation hoặc benchmark theo batch hữu hạn. Đổi trường khi chạy có mốc áp dụng rõ; không trộn các cấu hình trong một phép đo.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Khi project có dữ liệu GPU lớn, phải có visualization trực tiếp của kết quả tính toán hoặc một dashboard benchmark trực quan nếu bản chất project thuần compute.
-- Các project particle/grid phải dùng viewport 3D hoặc 2D dày đặc phù hợp với dữ liệu; màu theo tốc độ/mật độ/cell/neighbor để thấy cấu trúc.
-- Scale lớn không được đánh đổi thành hình ảnh khó đọc; cần culling/opacity/point size/impostor hoặc camera control phù hợp.
-- Preset lớn phải tạo một trường particle 3D dày đặc có chuyển động rõ, camera tự do/orbit và color mapping theo speed/age/energy.
-- Không chấp nhận 5 triệu point cùng màu trên nền phẳng mà không có depth/size/opacity strategy.
+- Không gian X/Y/Z và perspective thật, có mốc giúp phân biệt quay camera với quỹ đạo đổi hướng.
+- Màu theo dấu điện tích hoặc tốc độ có chú giải; point size/depth/opacity phải giúp đọc hình ở mật độ cao, không biến cảnh thành một mảng sáng bệt.
+- Vệt của một số hạt được chọn đủ để nhận ra đường thẳng, đường tròn và đường xoắn. Không cấp phát lịch sử dài cho cả triệu hạt chỉ để có trails.
+- Chế độ quan sát sạch ưu tiên quỹ đạo; chế độ debug cho xem E/B, state, sai số và profiler. Controls và giới hạn tài nguyên vẫn tìm được khi tắt overlay.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Particle SSBO layout
-- Compute update
-- Particle renderer
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết force/update, CPU reference, Boris pusher, particle layout, compute kernel, renderer và validator. Không dùng particle/physics engine thay phần cốt lõi.
+- Nêu rõ position/velocity được lưu ở cả bước hay nửa bước và chuyển về cùng mốc khi so reference. [Tài liệu BorisIntegrator của PlasmaPy](https://docs.plasmapy.org/en/stable/api/plasmapy.simulation.particle_integrators.BorisIntegrator.html) là tài liệu tham khảo về hợp đồng thời gian, không phải dependency của source tải về.
+- Công bố fixed timestep, cách giới hạn catch-up và miền tham số an toàn; không lấy việc quỹ đạo còn nằm trên màn hình làm bằng chứng bước thời gian đúng.
+- Đây là các hạt độc lập trong trường ngoài: không giải Maxwell/Poisson, không tính Coulomb giữa hạt và không gọi sản phẩm là plasma tự nhất quán hoặc máy gia tốc thực.
+- Không thay bằng tracer chỉ đi theo một trường vận tốc có sẵn như ở Project 48. Ở đây velocity là state được lực cập nhật.
 
 ### Không được coi là hoàn thành nếu
 
-- 5M điểm tĩnh chỉ render.
-- CPU update + GPU draw nhưng gọi là GPU simulation.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ đổi màu, shader hoặc camera của một đài phun rồi gọi đó là buồng hạt tích điện.
+- Dùng đường tròn/đường xoắn hard-code theo thời gian thay bước cập nhật từ mô hình lực.
+- CPU cập nhật rồi upload mỗi frame, hoặc hàng triệu điểm chỉ được vẽ mà không cập nhật đủ state.
+- Chỉ có mô phỏng 2D, Canvas, ảnh/video hoặc preset nhỏ hơn một triệu hạt ở sản phẩm cuối.
+- Có chỉ số năng lượng/tốc độ nhưng không kiểm quỹ đạo, sai số pha, timestep và mốc thời gian của reference.
 
 ### Acceptance Criteria
 
-- Kiểm kernel ở N nhỏ, N không chia hết workgroup và lifetime/respawn; so một bước position/velocity với CPU oracle.
-- Preset một triệu hạt là bắt buộc; năm triệu là mốc phần cứng riêng. Công bố active/updated/rendered, bộ nhớ và thời gian từng pass.
-- Simulation update thật trên GPU.
-- Không copy toàn bộ về CPU mỗi frame.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- E=B=0 khớp nghiệm chuyển động thẳng; B=0, E đều khớp chuyển động gia tốc đều sau khi căn cùng mốc position/velocity với reference.
+- Với E=0, B đều khác 0, kiểm chiều quay khi đổi dấu q, thành phần vận tốc song song B và độ lớn vận tốc. Đối chiếu quỹ đạo tròn/xoắn với nghiệm tham chiếu trong sai số đã công bố.
+- Thí nghiệm giảm dt ở cùng thời điểm quan sát cho thấy sai số quỹ đạo/pha được kiểm soát; tốc độ gần như không đổi một mình chưa đủ chứng minh quỹ đạo đúng.
+- CPU/GPU cùng snapshot và lịch bước khớp position/velocity trong tolerance. Phép đối chiếu CPU mirror không thay các nghiệm độc lập ở trên.
+- Fixture có N nhỏ, N không chia hết workgroup, v=0, B=0 và input không hữu hạn hoặc khối lượng không hợp lệ; xử lý rõ ràng, không truy cập ngoài buffer hoặc coi NaN/Inf là kết quả đúng.
+- Tại mốc ít nhất một triệu, cập nhật state thật trên GPU rồi render từ state ấy, không full-buffer readback mỗi frame. Ghi riêng kết quả thử năm triệu, bộ nhớ, timings và cấu hình máy.
+- Đổi camera không sửa state; chọn hạt đọc đúng ID; Pause/single-step/reset và giới hạn lịch sử quỹ đạo hoạt động. Đổi N/cấu hình lỗi không phá kết quả đang hợp lệ.
+- Có executable C++/SDL3 hoàn chỉnh, source checkpoint, tests và hướng dẫn kiểm hữu hạn. Không dùng benchmark/build hoặc Canvas thay kiểm tương tác và quy mô native.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài và checkpoint. Giải thích mô hình lực, cross product đang dùng và mốc thời gian trên một hạt trước khi chuyển lên GPU; không giấu kiến thức điện từ hoặc Boris trong scaffold chưa giải thích. Có thể dùng kiến thức timestep ở 23 hoặc cung cấp cầu nối tại chỗ. Source C++/SDL3 chạy độc lập; Canvas giúp dự đoán quỹ đạo, không thay bản GPU đúng quy mô.
 
 ---
 
-## Project 39 — Cộng một triệu số theo cây: Reduction và Prefix Sum trên GPU
+## Project 39 — Khám phá thành phố 3D với một triệu vật thể
 
-**Vai trò:** Bài thí nghiệm primitive song song và ứng dụng tạo offsets/compaction
+**Vai trò:** Ứng dụng graphics có bước lọc dữ liệu và dựng lệnh vẽ trên GPU
 
-**Mức tham vọng trực quan:** Dashboard có bước trung gian và kết quả kiểm chứng
+**Mức tham vọng trực quan:** Thành phố 3D có thể đi xuyên qua, cảnh dày và chế độ quan sát vùng nhìn
 
 ### Đề bài / mục tiêu sản phẩm
 
-Tự viết parallel reduction và exclusive scan làm primitive cho GPU grids.
+Tự xây dựng một trình khám phá thành phố 3D gồm ít nhất một triệu vật thể/instance được tạo từ seed. Khi camera di chuyển, GPU xác định những vật thể có bounding volume giao vùng nhìn, tạo danh sách ID cần vẽ và điền lệnh vẽ từ kết quả ấy.
+
+Reduction và prefix sum là công cụ bên trong ứng dụng: gom thống kê, tính offsets rồi compact danh sách ID. Người học thấy lợi ích và chi phí của chúng ngay trong cùng cảnh, không chỉ xuất một tổng hay một mảng prefix.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-GPU sum/min/max/exclusive scan khớp CPU. Mảng nhỏ có thể xem từng bước; mảng lớn có số đo. Có fixture dùng scan để tạo cell offsets và compact danh sách ID đang sống, liên hệ trực tiếp với Project 40.
+Một thành phố có đường, khối nhà với độ cao/hình dáng khác nhau, vật liệu và mốc định hướng. Người dùng đi ở tầm đường phố hoặc bay lên để quan sát các khu; camera không bị khóa quanh một mô hình đơn lẻ.
 
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Bật/tắt GPU culling trên cùng snapshot để so số instance gửi đi vẽ và thời gian từng pass. Chế độ debug giữ một camera quan sát phụ hoặc ảnh frustum để thấy vật thể được nhận/loại khi camera chính quay. Vật thể không biến mất chỉ vì thay đổi thứ tự compaction.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Parallel reduction + prefix sum kernels.
-- CPU verification.
-- Large-array benchmark.
+- Sinh cảnh tái lập từ seed, có vị trí, kích thước, mesh/material ID, bounding volume và object ID ổn định. Có thể tạo scene một lần trên CPU; bước lọc và danh sách/lệnh vẽ mỗi frame phải do GPU tạo.
+- Graphics dùng instancing với nhóm mesh được cung cấp hoặc tự dựng. Một triệu vật thể là một triệu instance có dữ liệu riêng, không phải số tam giác hoặc số pixel trên ảnh.
+- Pipeline GPU có bounds/frustum test → visibility mask/counts → reduction/scan → compact visible IDs → indirect draw commands → draw.
+- Tự viết sum/min/max reduction và hierarchical exclusive scan qua nhiều workgroup. Dùng số nguyên cho counts/offsets/ID; dữ liệu float và tolerance được kiểm riêng khi tính thống kê khoảng cách/bounds.
+- Renderer đọc visible IDs và object data trên GPU. Không đọc mask về CPU để lọc hoặc tính instanceCount mỗi frame; không tạo một draw call từ CPU cho mỗi vật thể.
+- Có thống kê count và min/max khoảng cách của tập được nhận, với quy tắc rõ khi tập rỗng; debug cho xem mask, prefix, ID và command của một fixture nhỏ.
+- So culling on/off trên cùng scene/camera/build, có warm-up và mẫu lặp hữu hạn. Tách cull, scan/compaction, command generation, draw và toàn frame; giữ cả ca overhead compute không có lợi.
+- Bounding-volume frustum culling là phạm vi bắt buộc, không đồng nghĩa occlusion culling. Vật thể trong frustum vẫn có thể bị vật thể khác che; occlusion/LOD/streaming là mở rộng, không phải prerequisite giấu trong source.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- At least 1M elements.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Ít nhất một triệu object records thật nằm trong scene và được bước culling xử lý ở mỗi frame nghiệm thu. Cảnh có vùng thưa/dày và camera khiến tập nhận thay đổi rõ.
+- Preset nhỏ kiểm từng ID và preset N không chia hết workgroup. Không cấp phát một triệu record rồi chỉ xét vài nghìn.
+- Công bố resident/tested/accepted/submitted, dung lượng object/visibility/scan/command buffers và số draw command. Accepted theo bounding volume không phải số vật thể có pixel cuối cùng trên màn hình.
+- Scene generation phải có ngân sách và tiến độ hữu hạn. Kiểm RAM/VRAM, kích thước scratch và limits trước cấp phát; không hứa FPS chung.
 
 ### Tương tác bắt buộc
 
-- Run different sizes; show result/time.
+- Camera di chuyển tự do ở tầm phố và góc nhìn trên cao; đổi FOV, culling on/off, preset N/seed.
+- Bật chế độ xem frustum/accepted/rejected, chọn object để đọc ID, bounds và lý do được nhận/loại.
+- Chạy/hủy validation và benchmark trên camera path tái lập được; Reset trở về cùng scene/camera.
+- Đổi seed/N có thể thất bại an toàn, không phá scene đang hợp lệ hoặc khóa cửa sổ trong một batch vô hạn.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Khi project có dữ liệu GPU lớn, phải có visualization trực tiếp của kết quả tính toán hoặc một dashboard benchmark trực quan nếu bản chất project thuần compute.
-- Các project particle/grid phải dùng viewport 3D hoặc 2D dày đặc phù hợp với dữ liệu; màu theo tốc độ/mật độ/cell/neighbor để thấy cấu trúc.
-- Scale lớn không được đánh đổi thành hình ảnh khó đọc; cần culling/opacity/point size/impostor hoặc camera control phù hợp.
+- Thành phố 3D có perspective/depth, ánh sáng cơ bản, đường/quảng trường và hình khối đủ đa dạng để định hướng; không thay bằng mảng điểm, minimap hoặc một triệu cube cùng màu xếp kín nền.
+- Chế độ quan sát sạch ưu tiên khám phá cảnh; chế độ debug thể hiện trực tiếp quan hệ giữa frustum và danh sách được vẽ.
+- Có chú giải cho tested/accepted/submitted và timings; số liệu bổ trợ cho cảnh đang tương tác, không thay viewport bằng dashboard.
+- Với cùng camera, culling bật/tắt phải giữ nội dung hình học đáng lẽ xuất hiện. Hiệu ứng hậu kỳ/ánh sáng không được che lỗi mất vật thể.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Reduction kernels
-- Scan kernels
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết frustum/bounds test, reduction, scan, compaction, command generation và renderer instancing; không dùng scene/visibility engine thay phần cốt lõi.
+- Dùng lệnh indirect phù hợp OpenGL 4.3; có thể giữ số command cố định theo nhóm mesh và cho GPU ghi instanceCount. Không mặc định API đọc draw-count của OpenGL 4.6 đã có.
+- Công bố consumer của từng buffer. Khi compute ghi cả indirect command và dữ liệu shader sẽ đọc, phải xử lý cả visibility của command lẫn dữ liệu, không chỉ đặt một workgroup barrier. Tham khảo [glDrawElementsIndirect](https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glDrawElementsIndirect.xml) và [glMemoryBarrier](https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glMemoryBarrier.xml).
+- Scan không đi qua CPU giữa các mức. Integer offsets phải exact và không overflow; atomic/scatter nếu dùng không được làm mất/trùng object ID.
+- Giải thích hoặc công bố scaffold camera, mesh và picking. Không yêu cầu ngầm học occlusion, voxel streaming hoặc một engine scene graph trước khi bắt đầu.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ gọi thư viện scan/reduction.
-- Không xử lý multi-workgroup case.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ có dashboard reduction/scan hoặc một ảnh thành phố, không có scene 3D khám phá được.
+- CPU lọc danh sách, tính số instance hoặc phát một draw call cho từng object rồi gọi đó là GPU-driven rendering.
+- Không thực sự xét đủ một triệu object, không xử lý nhiều workgroup, hoặc scan/compaction chỉ nằm trong bài tập tùy chọn.
+- Lọc sai object nhưng giấu bằng fog/LOD, không có reference hoặc nhầm frustum culling với loại mọi vật thể bị che.
+- Chỉ đổi tên workbench cũ mà không xây renderer, camera và đường dữ liệu từ visible IDs tới draw command.
 
 ### Acceptance Criteria
 
-- Integer exact trên miền đầu vào không overflow đã công bố; fixture gồm N=0/1, không phải power-of-two, qua nhiều workgroup và ít nhất một triệu phần tử.
-- Với float, ghi rõ non-associativity, tolerance và reference chính xác hơn khi cần; không dùng thứ tự cộng CPU làm chân lý bit-exact.
-- Exclusive scan có output[0]=0 khi N>0 và hiệu hai prefix kề nhau đúng input tương ứng; bước carry giữa workgroup có test riêng.
-- Từ counts biết trước tạo đúng cell ranges; fixture compaction giữ đúng tập ID sống và thứ tự được công bố, không trùng/mất ID.
-- Tách thời gian các pass và readback; không dùng synchronization trong một workgroup thay đồng bộ các dispatch.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Fixture độc lập kiểm các bounds ở trong/ngoài/cắt từng plane của frustum; có empty set, all-visible, ID rời rạc và N không chia hết workgroup. GPU mask khớp CPU trên toàn preset nhỏ và sample tái lập của preset lớn.
+- Reduction/scan có fixture N=0/1, N lẻ và nhiều mức. Sum/min/max số nguyên khớp exact trên miền không overflow; float có reference/tolerance riêng, không yêu cầu giống bit với thứ tự cộng CPU.
+- Mask→prefix→visible IDs cho đúng tập, không mất/trùng/ghi ngoài buffer và giữ quy tắc thứ tự đã công bố. Counts→offsets có fixture riêng để primitive dùng tiếp ở 40.
+- Mỗi command có count/index range/instanceCount/baseInstance hoặc offset tương đương đúng nhóm mesh. Zero-visible tạo draw rỗng, không dùng lại count của frame trước.
+- Bản một triệu object xét đủ N trên GPU và renderer dùng danh sách/command GPU; không full-buffer readback hoặc CPU compaction mỗi frame.
+- Camera đi xuyên cảnh, culling toggle/debug/picking/reset và hủy batch hoạt động. So culling on/off ở các camera snapshot cho hình hợp lệ và báo rõ phạm vi culling.
+- Báo bộ nhớ, thời gian từng pass/toàn frame, số object đã xét và đã gửi đi vẽ; có ca nhỏ hoặc all-visible không có speedup.
+- Có executable C++/SDL3 độc lập và source checkpoint. Tests, biểu đồ hay Canvas không thay scene thật đúng quy mô.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài và checkpoint. Bắt đầu từ một khu phố chạy được, thêm object IDs/bounds, nối từng pass vào chính scene ấy rồi mới tăng quy mô. Mảng nhỏ và cây scan là thí nghiệm hỗ trợ, không phải sản phẩm cuối. Tự giải thích camera/culling, integer offsets và indirect draw tại nơi dùng, không cố nhét vào một số bài cố định.
 
 ---
 
-## Project 40 — Đàn Boids trên GPU: grid, hàng xóm và steering song song
+## Project 40 — Xưởng vải 3D: kéo, ghim và thả vải phủ lên vật thể
 
-**Vai trò:** Nâng cấp Boids 28 bằng compute và primitive 37–39
+**Vai trò:** Mô phỏng bề mặt biến dạng bằng nhiều pass GPU và truy vấn tiếp xúc không gian
 
-**Mức tham vọng trực quan:** Đàn lớn chuyển động thật, debug pipeline và dữ liệu hàng xóm được kiểm chứng
+**Mức tham vọng trực quan:** Tấm vải có nếp gấp và ánh sáng, phản ứng trực tiếp với kéo/thả, trọng lực và vật cản
 
 ### Đề bài / mục tiêu sản phẩm
 
-Chuyển việc dựng grid, tìm hàng xóm, tính steering và cập nhật đàn Boids từ CPU sang GPU. Giữ mô hình separation/alignment/cohesion của 27–28; contiguous cell ranges là cấu trúc phục vụ mô phỏng, không phải sản phẩm cuối.
+Tự xây dựng một xưởng vải tương tác: người dùng ghim một mép, kéo một điểm, thả vải xuống bàn/quả cầu hoặc thay lực gió để quan sát bề mặt biến dạng. Đầu ra là mesh đang được mô phỏng, không phải một lớp điểm tô theo cell hoặc một animation uốn mặt phẳng bằng sin.
+
+Compute thực hiện dự đoán vị trí, giải ràng buộc, xử lý tiếp xúc và cập nhật velocity/normals. Reduction/scan từ 39 cùng grid 3D phục vụ thống kê và tìm ứng viên tiếp xúc; không để CPU giải hộ phần vật lý mỗi frame.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Đàn ít nhất 100.000 cá thể tự di chuyển theo quy tắc cục bộ, được cập nhật và render từ GPU state. Chọn một cá thể để thấy cell/candidates/actual neighbors và steering; dashboard giải thích chi phí từng pass.
+Có các preset vải treo, vải phủ qua quả cầu và vải rơi lên bàn/vật cản. Người dùng thêm/bỏ ghim, kéo/thả bằng chuột và quan sát nếp gấp, độ giãn cùng vùng tiếp xúc.
+
+Camera orbit/pan/zoom cho xem cả hai mặt. Chế độ debug có wireframe, ghim, lực kéo, strain/constraint residual, collision thickness và cell/contact candidates; khi tắt debug vẫn là một bề mặt vải có ánh sáng đọc được.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- GPU pipeline có cell indexing, counts, exclusive scan thành offsets, scatter/sắp xếp ID vào cell ranges và neighbor traversal.
-- Dùng scan tự viết ở 39 hoặc pipeline tương đương được giải thích và kiểm chứng đầy đủ; không đọc toàn bộ counts về CPU để dựng ranges mỗi frame.
-- Toàn bộ separation/alignment/cohesion, giới hạn vector và integration chạy trên GPU với read-state/write-state tách biệt.
-- Công bố barriers giữa các pass; không nhầm workgroup barrier với đồng bộ toàn dispatch.
-- CPU brute force/grid làm reference ở preset nhỏ; debug readback hữu hạn cho selected IDs, không copy toàn bộ state mỗi frame.
-- Hỗ trợ cell size/radius, distribution và quy tắc biên như 28. Có ca cell đông; không cắt hàng xóm khi buffer đầy.
-- Cấu trúc GPU grid tách khỏi luật steering để dùng tiếp ở MD/SPH. Khi chuyển từ 2D sang 3D phải dạy thêm indexing, stencil và tests 3D, không mặc định chỉ đổi một hằng số.
+- Mesh tam giác có rest positions, topology, masses/inverse masses, velocity và các ràng buộc stretch/shear/bend hoặc mô hình tương đương được giải thích. Pin có inverse mass bằng 0; normals phải theo mesh sau biến dạng.
+- Tự viết solver XPBD trên GPU, giải thích compliance, timestep, lambda và cách reset/giữ multiplier ở từng phạm vi. Có baseline CPU nhỏ và fixture ràng buộc với đáp án độc lập; không dùng tên XPBD cho một phép kéo vertex về vị trí tùy ý.
+- Pipeline có external forces/prediction → các vòng constraint/contact solve → velocity update → normals → draw. Giới hạn substeps/iterations và báo residual còn lại, không dùng số vòng vô hạn để ép hội tụ.
+- Giải ràng buộc không có race: dùng coloring hoặc constraint contributions/gather/ping-pong có ownership rõ. Barrier trong workgroup không thay đồng bộ giữa các pass.
+- Va chạm với mặt phẳng, sphere và capsule hoặc obstacle analytic tương đương; có thickness, friction/damping được định nghĩa và miền chuyển động an toàn.
+- Có self-contact xấp xỉ theo đỉnh với thickness công bố: grid 3D/CSR dựng từ state hiện tại, counts → scan → scatter → candidate traversal → distance/contact predicate. Loại các đỉnh kề nhau theo topology và kiểm mỗi ID được phân đúng cell.
+- Nêu rõ self-contact theo đỉnh không bảo đảm loại mọi giao cắt edge/triangle. Triangle/edge contact và continuous collision detection là mở rộng; không quảng bá bản chuẩn là solver may mặc chính xác hoặc chống xuyên cho mọi tốc độ.
+- Pin/drag là ràng buộc input trên cùng state GPU, có giới hạn lực/độ dời theo mô hình. Khi mất capture/focus hoặc hủy, giải phóng thao tác kéo an toàn.
+- Renderer đọc mesh biến dạng trực tiếp trên GPU; chỉ readback probe/diagnostics hữu hạn khi cần. Không copy toàn mesh hoặc giải solver CPU mỗi frame.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Bản cuối cập nhật ít nhất 100.000 Boids thật; có preset một triệu để nghiệm thu mở rộng theo RAM/VRAM và mật độ.
-- Preset nhỏ cho CPU oracle; preset lớn có ngân sách bộ nhớ, occupancy/candidate counters và giới hạn chạy hữu hạn.
-- Không hứa FPS chung; nếu máy không chạy được mốc một triệu, ghi rõ chưa kiểm chứng mốc mở rộng, không ghi đã đạt.
+- Bản cuối có ít nhất 100.000 đỉnh vải động, cùng topology và toàn bộ constraints tương ứng được xử lý trên GPU ở mỗi bước nghiệm thu; số đỉnh ghim báo riêng, không dùng một lưới lớn nhưng chỉ cập nhật vài hàng.
+- Có preset nhỏ để kiểm CPU và preset một triệu đỉnh làm mốc mở rộng theo RAM/VRAM, số constraints, iterations và mật độ tiếp xúc; không hứa FPS chung.
+- Công bố dynamic/pinned/updated/drawn vertices, số triangles/constraints, iterations/substeps, contacts/candidates, bộ nhớ và thời gian từng pass/toàn bước.
+- Grid, scratch, contact/history và mesh buffers có ngân sách trước cấp phát. Cấu hình tạo quá nhiều candidates phải bị từ chối/báo rõ; không âm thầm cắt contacts để giữ FPS.
 
 ### Tương tác bắt buộc
 
-- N/seed, radius, cell size và ba trọng số; Pause/Reset/single-step, camera 2D và chọn cá thể.
-- Bật cell ranges/neighbor/steering debug ở subset, chạy/hủy validation hoặc benchmark theo batch.
+- Ghim/bỏ ghim, chọn và kéo/thả vùng vải; đổi preset, độ phân giải, compliance, damping, gió và gravity trong miền hợp lệ.
+- Điều chỉnh/vị trí vật cản trong giới hạn vận tốc đã công bố; bật strain, wireframe, cell/contact debug cho subset.
+- Camera orbit/pan/zoom, Pause/Reset/single-step; camera và inspector vẫn dùng được khi Pause. Nêu rõ chỉnh pin/drag khi Pause có sửa state hay chỉ chuẩn bị bước tiếp theo.
+- Chạy/hủy validation hoặc benchmark hữu hạn; đổi topology/resolution/reset phải hủy drag/job cũ trước khi công bố state mới.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Cá thể có hướng và color/depth/opacity phù hợp để đọc đàn dày; chọn cá thể không làm đổi mô hình.
-- Có chế độ quan sát sạch và chế độ debug; đồ thị timings/build occupancy bổ trợ cho đàn đang chuyển động.
+- Bề mặt có normals, ánh sáng hai mặt hoặc quy tắc culling rõ, pattern/checker để đọc độ giãn và nếp gấp. Không chỉ vẽ lưới dây hoặc điểm.
+- Vải phản ứng với trọng lực, ghim, thao tác kéo và vật cản trên cùng scene; preset chuẩn không được xuyên vật cản rõ rệt hoặc nổ hình rồi vẫn báo PASS.
+- Main viewport ưu tiên bề mặt đang biến dạng. Grid, contacts và biểu đồ là công cụ giải thích, không thay sản phẩm bằng heatmap.
+- Không buộc asset vải thương mại hoặc photorealistic; độ thuyết phục đến từ biến dạng, tiếp xúc, normal và cách quan sát.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Tự viết compute kernels, GPU grid, scan/scatter, steering và CPU/GPU validator; không dùng thư viện flocking/spatial index thay phần cốt lõi.
-- GPU rendering dùng state GPU trực tiếp. Đổi cell size không thay neighbor predicate; bounds/overflow có kiểm tra.
+- Tự viết constraint solver, contact/grid, CPU oracle, compute kernels và mesh presentation. Không dùng cloth/physics engine thay phần cốt lõi.
+- [Bài báo XPBD gốc](https://mmacklin.com/xpbd.pdf) là nguồn tham khảo về compliance/multiplier; giáo trình phải giải thích scheme được triển khai, không hứa số vòng hữu hạn cho kết quả hoàn toàn không phụ thuộc timestep/iteration.
+- Reuse scan ở 39, nhưng phải dạy cell indexing/stencil/ranges 3D và predicate tiếp xúc riêng. Kiến thức spatial grid CPU có thể lấy từ 28 hoặc fixture cầu nối; luật Boids không phải prerequisite.
+- Phân biệt compliance, damping, friction, thickness và sai số solver; công bố đơn vị, timestep và giới hạn. Không đổi nhiều đại lượng rồi gọi đó là đổi một loại vải.
+- Picking/ray/mesh helpers nếu được cung cấp phải nói rõ và có chỗ nối vào app; không bắt người học tự ghép một engine chọn điểm chưa được dạy.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ tô màu particle theo cell hoặc query một điểm mà không cập nhật toàn đàn.
-- CPU tính steering/integration rồi gọi đó là GPU simulation.
-- Bỏ neighbor để giữ FPS, bỏ grid rebuild khỏi benchmark hoặc đọc toàn bộ state về CPU mỗi frame.
-- Chỉ chạy preset nhỏ hơn 100.000 cá thể ở bản cuối.
+- Chỉ dùng vertex shader uốn mặt phẳng theo thời gian hoặc chỉ có một chuỗi lò xo/mesh vài chục đỉnh.
+- CPU cập nhật vật lý rồi upload, race bị che bằng một barrier chung, hoặc bỏ constraints/contacts ở preset lớn.
+- Chỉ có grid/neighbor query, strain chart hoặc Canvas mà không có tấm vải tương tác được.
+- Vải không phản ứng với pin/drag/vật cản, không công bố sai số/giới hạn self-contact, hoặc gắn nhãn chống xuyên tuyệt đối cho mô hình theo đỉnh.
+- Chỉ đổi tên GPU Grid Workbench cũ mà chưa có topology, solver, normals và renderer bề mặt.
 
 ### Acceptance Criteria
 
-- Counts/offsets/ranges tạo một phân hoạch hợp lệ: offset tăng không giảm, tổng count=N, mỗi ID xuất hiện đúng một lần và nằm đúng cell.
-- Neighbor IDs khớp CPU ở snapshot nhỏ cho các ca qua biên, cell size nhỏ/lớn hơn radius, empty cell, cell rất đông và vị trí trùng.
-- Ba steering vector và state sau một bước khớp CPU trong tolerance; công bố ảnh hưởng thứ tự cộng số thực, không đòi quỹ đạo dài giống bit.
-- Kích thước dispatch không chia hết workgroup vẫn đúng; mọi stage bounds-check và dùng barrier đúng phạm vi.
-- Preset ít nhất 100.000 cá thể có hành vi Boids, không bỏ cập nhật; selected debug, pause/reset và hủy batch hoạt động.
-- Báo build grid/scan/scatter/neighbors/update/render, bộ nhớ và toàn bước; đánh giá cả phân bố bất lợi và ghi mốc một triệu riêng.
+- Fixture một/hai ràng buộc kiểm correction theo khối lượng/compliance, giữ pin cố định và xử lý khoảng cách 0/input không hợp lệ. CPU/GPU so cùng snapshot, timestep, topology và thứ tự/scheme được công bố.
+- Grid 3D tạo phân hoạch hợp lệ, tổng count=N và không mất/trùng ID. Candidate/contact IDs khớp brute force trên fixture nhỏ có cell rỗng/đông, vị trí trùng, đỉnh kề topology và sát thickness.
+- Tiếp xúc analytic có test độc lập về normal, khoảng cách và penetration. Self-contact kiểm đúng mô hình theo đỉnh; không dùng test này để tuyên bố đã xử lý mọi giao cắt tam giác.
+- Theo dõi max stretch/constraint residual và penetration qua số vòng hữu hạn; có thử timestep/iteration để tách sai số solver khỏi tham số vật liệu. Không đòi bảo toàn năng lượng khi có damping, friction hoặc thao tác người dùng.
+- Preset ít nhất 100.000 đỉnh động cập nhật đầy đủ constraints, contacts, velocity và normals trên GPU; scene vải treo/phủ sphere/rơi lên bàn chạy thật, không dùng mesh đã bake.
+- Pin/drag/cancel/blur, đổi preset/topology, Pause/Reset/single-step và camera hoạt động; không giữ reference vào vertex/buffer cũ sau reset.
+- Báo số phần tử/candidates, bộ nhớ, substeps/iterations, thời gian solver/grid/contact/normals/draw/toàn bước và kết quả mốc mở rộng một triệu riêng.
+- Có executable C++/SDL3 độc lập, source từng checkpoint và quy trình kiểm hữu hạn. Bằng chứng thuật toán, hình ảnh native và tương tác phải được kiểm riêng; build hoặc Canvas không thay sản phẩm.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; bản cuối phải đạt đầy đủ hợp đồng sản phẩm này. Source C++/SDL3 chạy độc lập; Canvas chỉ hỗ trợ học và kiểm chứng.
+Agent tự chọn số bài và checkpoint theo độ khó. Giải thích một ràng buộc trước, đưa nó vào một mảnh vải đang chạy rồi mới thêm tiếp xúc/grid và tăng resolution. Có thể nhắc lại chuỗi lò xo 25 hoặc cung cấp cầu nối tại chỗ, nhưng sản phẩm cuối là bề mặt vải 3D có topology và tương tác hoàn chỉnh. Không thu nhỏ đích đến để khớp một số bài cố định.
 
 ---
 
