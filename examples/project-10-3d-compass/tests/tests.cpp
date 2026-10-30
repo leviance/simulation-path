@@ -6,6 +6,7 @@
 
 namespace {
 int failures = 0;
+int checks = 0;
 
 bool near(double left, double right, double epsilon = 1e-8) {
     return std::isfinite(left) && std::isfinite(right) && std::abs(left - right) <= epsilon;
@@ -16,6 +17,7 @@ bool near(lab::Vec3 left, lab::Vec3 right) {
 }
 
 void check(bool condition, std::string_view label) {
+    ++checks;
     if (!condition) {
         ++failures;
         std::cerr << "FAILED: " << label << '\n';
@@ -63,6 +65,11 @@ int main() {
     check(lab::triangleArea(scene.triangle) > 0.0, "near-collinear measured area not forced zero");
     const lab::Triangle small{{}, {1e-4, 0.0, 0.0}, {0.0, 1e-4, 0.0}};
     check(lab::normalHasDirection(small), "small perpendicular edges can still define a normal");
+    check(near(lab::normalize({1e-320, 0, 0}), {1, 0, 0}), "tiny finite vector normalizes without overflowing its reciprocal");
+    check(near(lab::normalize({}), {}), "zero normalize has finite fallback");
+    const lab::Triangle invalid{{}, {1, 0, 0}, {0, std::numeric_limits<double>::quiet_NaN(), 0}};
+    check(!lab::normalHasDirection(invalid), "nonfinite vertex never has trusted normal");
+    check(near(lab::triangleUnitNormal(invalid), {}), "invalid geometry does not manufacture a normal");
 
     // Perspective oracle độc lập: ở yaw=pitch=0, eye=(0,0,radius).
     const lab::Camera camera{0.0, 0.0, 9.0};
@@ -85,6 +92,11 @@ int main() {
     check(!lab::clipDepth(start, end), "both behind reject");
     start = {std::numeric_limits<double>::quiet_NaN(), 0.0, 1.0};
     check(!lab::clipDepth(start, end), "nonfinite segment rejected");
+    lab::Vec2 screenStart{-1000, 410};
+    lab::Vec2 screenEnd{550, 410};
+    check(lab::clipScreen(screenStart, screenEnd) && near(screenStart.x, 20) && near(screenEnd.x, 550), "screen clip has independently known left intersection");
+    screenStart = {std::numeric_limits<double>::infinity(), 410};
+    check(!lab::clipScreen(screenStart, screenEnd), "nonfinite screen segment rejected before rasterization");
 
     lab::applyPreset(scene, 1);
     scene.camera = camera;
@@ -101,11 +113,22 @@ int main() {
     const double yaw = scene.camera.yaw;
     lab::advanceScene(scene, -1.0);
     check(scene.camera.yaw == yaw, "negative dt ignored");
+    lab::Scene oneStep{};
+    lab::Scene twoSteps{};
+    lab::advanceScene(oneStep, 0.1);
+    lab::advanceScene(twoSteps, 0.05);
+    lab::advanceScene(twoSteps, 0.05);
+    check(near(oneStep.camera.yaw, twoSteps.camera.yaw), "equal accepted simulation time produces equal orbit");
+    check(near(oneStep.triangle.p2, lab::Triangle{}.p2), "animation changes camera only");
 
     // Kiểm raster thật: floor, axes, A/B, raw và unit đều có pixel trong final.
     lab::applyPreset(scene, 0);
     lab::Framebuffer image;
     lab::renderScene(image, scene);
+    // Final has only the editable triangle; the lesson-1 reference point is gone.
+    const auto reference = lab::projectPerspective(lab::worldToCamera({1, 1, 1}, scene.camera));
+    const std::size_t referenceOffset = std::size_t(std::lround(reference.screen.y)) * lab::Framebuffer::width + std::size_t(std::lround(reference.screen.x));
+    check(reference.visible && image.pixels[referenceOffset] != lab::kWhite, "no unexplained lesson-1 marker in final");
     for (const auto color : {lab::kAxisX, lab::kAxisY, lab::kShape, 0xFFB454FFu, 0x53DFEFFFu, lab::kMarker, 0xE6A0FFFFu}) {
         bool found = false;
         for (const auto pixel : image.pixels) {
@@ -127,6 +150,6 @@ int main() {
     if (failures != 0) {
         return EXIT_FAILURE;
     }
-    std::cout << "Project 10 math/camera/raster checks passed\n";
+    std::cout << "Project 10 CPU: " << checks << " checks, " << failures << " failures\n";
     return EXIT_SUCCESS;
 }

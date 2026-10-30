@@ -4,13 +4,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ta đã làm việc với vector 2D. Bây giờ thêm thành phần Z, nhưng chỉ in ba con số lên màn hình thì chưa giúp hình dung không gian. Ta cần một cảnh có ba trục, sàn lưới và một điểm, nhìn qua camera perspective.
+Ở Project 09, ta đã xoay và biến đổi hình trong mặt phẳng. Bây giờ mỗi điểm có thêm tọa độ Z. Ta cần nhìn thấy chiều thứ ba ấy: một sàn lưới, ba trục và một điểm đổi vị trí trên ảnh khi camera đổi góc nhìn.
 
-Bài này chưa có cross product. Bạn sẽ chạy bộ khung SDL3, vẽ ba trục bằng mũi tên 3D và thử đổi camera để thấy các trục thực sự nằm trong không gian.
+Project này sẽ đi tới một tam giác có hai vector cạnh và pháp tuyến. Bài đầu chỉ dựng la bàn X/Y/Z. Bộ chiếu perspective đã được cung cấp để bạn quan sát; phần bạn cần tự nắm là dữ liệu Vec3 và cách đưa các đoạn thẳng 3D vào khung chương trình đang chạy.
 
 ## Hiểu ý tưởng trước khi viết code
 
 World có X/Y/Z; Y hướng lên. Camera orbit nhìn về world origin từ một eye có khoảng cách radius. worldToCamera tách tọa độ theo right/up và tính độ sâu **dương vào cảnh**.
+
+Ta tính cross trong hệ world theo quy tắc bàn tay phải X×Y=Z. Camera-space Z của helper chỉ biểu diễn độ sâu về phía cảnh; đừng lấy chiều Z trên ảnh hoặc dấu Y của màn hình để đổi công thức cross trong world.
 
 Sau đó ta dùng phép chia:
 
@@ -29,7 +31,7 @@ Bài 11 sẽ đào sâu phép chiếu một điểm. Ở đây camera nhỏ đư
 
 ### Bước 1 — Chạy bộ khung đã có framebuffer
 
-Bộ khung có SDL3 window/event loop, texture, ảnh CPU, drawLine từ Project 04 và camera helper. Starter chỉ vẽ sàn lưới, chưa có ba trục.
+Bộ khung đã có SDL3 window/event loop, framebuffer CPU, drawLine từ Project 04, texture và camera helper. Để bộ chiếu ấy chạy được, starter cũng mang sẵn kiểu Vec3 cùng vài phép toán cơ bản trong lab.hpp. Mở file này để tự viết lại và đối chiếu từng phép toán; không thêm một struct Vec3 trùng tên. Phần thay đổi nhìn thấy ở checkpoint 01 là gọi drawAxes: starter chỉ vẽ sàn lưới, chưa có ba trục.
 
 ```bash title="Terminal — chạy starter"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
@@ -37,7 +39,7 @@ cmake --build build --config Debug --target project_10_starter --parallel 2
 .\build\Debug\project_10_starter.exe
 ```
 
-### Bước 2 — Thêm thành phần thứ ba
+### Bước 2 — Đọc và tự viết lại kiểu Vec3 trong bộ khung
 
 ```cpp title="include/lab.hpp — ba thành phần world"
 struct Vec3 {
@@ -49,7 +51,29 @@ struct Vec3 {
 
 add/subtract/scale hoạt động theo từng thành phần như Vec2. dot cộng thêm tích Z; dữ liệu này không chứa pixel hay góc camera.
 
-### Bước 3 — Đọc đường đi của một điểm
+Cụ thể, mở namespace lab trong include/lab.hpp và đối chiếu các phép toán sau. Phép cộng/trừ tạo Vec3 mới, không sửa hai đầu vào; dot tạo một double. Đây là phần mở rộng từ vector 2D bạn đã viết, không phải một API hình học có sẵn của SDL:
+
+```cpp title="include/lab.hpp — các phép toán từ Vec2 sang Vec3"
+inline Vec3 add(Vec3 left, Vec3 right) {
+    return {left.x + right.x, left.y + right.y, left.z + right.z};
+}
+
+inline Vec3 subtract(Vec3 left, Vec3 right) {
+    return {left.x - right.x, left.y - right.y, left.z - right.z};
+}
+
+inline Vec3 scale(Vec3 vector, double scalar) {
+    return {vector.x * scalar, vector.y * scalar, vector.z * scalar};
+}
+
+inline double dot(Vec3 left, Vec3 right) {
+    return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+```
+
+Đừng đổi thành phần Z sang pixel hay trộn nó với góc yaw. Cả ba thành phần ở đây đều là tọa độ/độ dời trong cùng hệ world; camera chỉ đọc kết quả của chúng.
+
+### Bước 3 — Dùng bộ chiếu được cung cấp
 
 ```cpp title="include/camera.hpp — chiếu lên basis của camera rồi lấy depth"
 inline Vec3 worldToCamera(Vec3 point, const Camera& camera) {
@@ -64,7 +88,7 @@ inline Vec3 worldToCamera(Vec3 point, const Camera& camera) {
 }
 ```
 
-right/up/back là ba vector đơn vị suy từ yaw/pitch. Dot đưa point vào hệ trục camera; radius−dot(point,back) là khoảng cách theo trục sâu. Không đảo Y ở hàm này.
+Đây là helper có sẵn trong camera.hpp, không phải phần camera engine bạn phải tự suy ở bài này. Bạn chỉ cần biết đầu vào là điểm world, đầu ra là tọa độ camera. right/up/back là ba vector đơn vị suy từ yaw/pitch. Dot đưa point vào hệ trục camera; radius−dot(point,back) là khoảng cách theo trục sâu. Không đảo Y ở hàm này.
 
 ```cpp title="include/camera.hpp — chỉ chia khi depth hợp lệ"
 inline ProjectedPoint projectPerspective(Vec3 cameraPoint) {
@@ -93,9 +117,16 @@ Trong renderScene, gọi drawAxes(image, scene.camera) và marker3D cho point(1,
 
 ## Ghép các phần lại
 
-Build target project_10_checkpoint_1. Trục X đỏ, Y xanh lá, Z xanh lam và có nhãn. A/D đổi yaw, W/S đổi pitch, +/- đổi radius trong [7,12]. Đổi camera không sửa tọa độ điểm.
+Trong include/view.hpp, renderScene đã clear ảnh và vẽ sàn lưới XZ ở Y = −2. Gọi drawAxes(image, scene.camera), rồi marker3D cho điểm (1,1,1) trong nhánh checkpoint 01. Vòng lặp SDL trong src/main.cpp tiếp tục gọi renderScene → SDL_UpdateTexture → presentFramebuffer; không tạo thêm một vòng lặp khác trong drawAxes.
 
-Sàn lưới XZ ở Y=−2 tạo mốc không gian. Đây là wireframe debug view, chưa loại phần bị che; các nét có thể đi xuyên qua nhau.
+Chạy lên phải có X đỏ, Y xanh lá, Z xanh lam và nhãn đi theo các đầu trục. A/D đổi yaw, W/S đổi pitch, +/- đổi khoảng cách trong [7,12]. Điểm world không đổi tọa độ chỉ vì bạn đổi camera. Các nét có thể xuyên nhau vì đây là wireframe, chưa xử lý che khuất.
+
+```bash title="Terminal — chạy checkpoint 01"
+cmake --build build --config Debug --target project_10_checkpoint_1 --parallel 2
+./build/Debug/project_10_checkpoint_1.exe
+```
+
+Với Visual Studio trên Windows, executable nằm trong Debug hoặc Release. Với Ninja/Make, chọn CMAKE_BUILD_TYPE lúc configure và chạy ngay trong build; dùng build tree riêng nếu muốn giữ cả hai cấu hình.
 
 ## Thử làm sai để hiểu đúng
 

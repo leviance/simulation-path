@@ -14,6 +14,8 @@ Một ứng dụng C++20/SDL3 nhìn qua camera **perspective thật**, không d�
 
 Trước khi đọc lời giải, thử tự dựng một cảnh có các lớp trên, cho phép đổi camera và hình học. Kiến thức trước đó: framebuffer/line (P04), vector/normalize (P06), dot (P08), local/world (P09). Camera helper được giải thích ngay bài đầu; P11 sẽ đào sâu perspective của một điểm.
 
+Dự kiến 7–9 giờ: đọc 1,5–2 giờ, tự viết 4–5 giờ, thử nghiệm 1,5–2 giờ; chưa tính cài đặt/build lần đầu. Starter đã mang Vec3 và một số phép toán để bộ chiếu hoạt động: tự viết lại/đối chiếu trong lab.hpp, không thêm kiểu hoặc helper trùng tên. Camera/projection là phần được cung cấp trước; Vec3, cross và cách dựng thân/đầu mũi tên 3D là phần phải hiểu và tự viết được.
+
 ## Build
 
 Cần CMake >=3.24 và compiler C++20. Windows dùng Visual Studio 2022 với Desktop development with C++. FetchContent lấy đúng **SDL 3.4.8**, link SDL3::SDL3. Lần configure đầu cần mạng.
@@ -35,9 +37,12 @@ Windows chạy build/Debug/project_10_final.exe. Ninja/Make: thêm -DCMAKE_BUILD
 - F đảo P1/P2 từ checkpoint 05.
 - Từ checkpoint 06: kéo trái trong viewport để orbit; một owner, giữ mẫu trước, nhận mẫu thả cuối.
 - Space chạy/pause orbit 0.35 rad/s, N tiến 0.1 s khi pause.
-- R/F1 reset; F2 tam giác 3–4; F3 thẳng hàng; F4 trùng đỉnh; F5 gần thẳng hàng; Esc thoát.
+- R/F1 reset; F2 tam giác 3–4; F3 thẳng hàng; F4 trùng đỉnh; F5 gần thẳng hàng. Esc đang kéo thì kết thúc kéo, giữ góc nhìn hiện tại; khi không kéo thì Esc thoát.
 - Blur/hidden/resize/reset/preset/winding/pause hủy capture. Resize giữ state rồi pause.
 - --smoke: hidden window, 12 frame, đổi preset/camera/resize và thoát. Cần timeout ngoài; không thay QA desktop.
+- --snapshot image.bmp: xuất một ảnh từ renderer của chính ứng dụng sau khi vẽ chữ và trước Present, rồi thoát; không chụp desktop. Không dùng readback này trong mỗi frame.
+
+Shortcut bỏ qua tổ hợp Ctrl/Alt/GUI, không giành phím của hệ điều hành. Chỉnh camera bằng tay dừng auto orbit. Trên web, chuyển focus từ Canvas tới nút Pause trong lab không được pause trước rồi toggle thành chạy trở lại; rời cả lab thì pause. Resize và DPI chỉ đổi cách trình bày bảng logic, không sửa hình học.
 
 Canvas có slider chọn đỉnh và camera, từ bài 6 hỗ trợ pointer orbit; Tab tới slider để dùng keyboard mặc định. Reduced motion không tự chạy, vẫn cho manual step.
 
@@ -54,6 +59,8 @@ Normal không tin cậy nếu |N|≤1e−10 world² hoặc |N|/(|A||B|)≤1e−6
 lab.hpp math; camera.hpp camera/projection/clipping; scene.hpp state; framebuffer.hpp/view.hpp CPU arrows/lines; presentation.hpp SDL texture/chữ ASCII; main.cpp lifecycle/input.
 
 Tests dùng check/EXIT_FAILURE cả Debug/Release: basis và numeric cross, 61 tam giác đối chiếu Heron, orthogonality, winding, suy biến, perspective numeric oracle, near/far intersection, input bounds, pixel thực và không có unit arrow giả. CTest không mở window.
+
+Normalize chia từng thành phần cho độ dài, tránh nghịch đảo bị tràn ở vector cực nhỏ. NaN/Inf không được coi là một hướng normal hợp lệ; line clipping chặn tọa độ không hữu hạn trước rasterizer. Phép kiểm có bộ đếm thực thi và mã thoát lỗi ở cả hai build mode.
 
 Nghiệm thu desktop riêng: sửa mọi đỉnh, PageUp/Down, orbit keyboard/mouse, winding, các preset, thả ngoài, blur, resize, DPI, pause/reset. Các test thuần và hidden smoke không chứng minh tương tác thật trên hệ điều hành.
 

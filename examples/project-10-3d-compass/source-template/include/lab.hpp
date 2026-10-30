@@ -47,7 +47,8 @@ inline Vec3 normalize(Vec3 vector) {
     if (!std::isfinite(length) || length == 0.0) {
         return {};
     }
-    return scale(vector, 1.0 / length);
+    // Divide each component directly: 1/length may overflow for a tiny vector.
+    return {vector.x / length, vector.y / length, vector.z / length};
 }
 
 #if LAB_CHECKPOINT >= 2
@@ -73,7 +74,10 @@ inline Vec3 triangleCentroid(const Triangle& triangle) {
 
 #if LAB_CHECKPOINT >= 3
 inline Vec3 cross(Vec3 left, Vec3 right) {
-    return {left.y * right.z - left.z * right.y, left.z * right.x - left.x * right.z, left.x * right.y - left.y * right.x};
+    const double x = left.y * right.z - left.z * right.y;
+    const double y = left.z * right.x - left.x * right.z;
+    const double z = left.x * right.y - left.y * right.x;
+    return {x, y, z};
 }
 
 inline Vec3 triangleRawNormal(const Triangle& triangle) {
@@ -83,11 +87,14 @@ inline Vec3 triangleRawNormal(const Triangle& triangle) {
 
 // Miền editor: mỗi tọa độ trong [-2,2]. Tách ngưỡng diện tích và ngưỡng góc.
 inline bool normalHasDirection(const Triangle& triangle) {
+    if (!finite(triangle.p0) || !finite(triangle.p1) || !finite(triangle.p2)) {
+        return false;
+    }
     const Edges edges = triangleEdges(triangle);
     const double lengthA = magnitude(edges.a);
     const double lengthB = magnitude(edges.b);
     const double crossLength = magnitude(triangleRawNormal(triangle));
-    if (lengthA == 0.0 || lengthB == 0.0 || crossLength <= 1e-10) {
+    if (!std::isfinite(lengthA) || !std::isfinite(lengthB) || !std::isfinite(crossLength) || lengthA == 0.0 || lengthB == 0.0 || crossLength <= 1e-10) {
         return false;
     }
     return crossLength / (lengthA * lengthB) > 1e-6;

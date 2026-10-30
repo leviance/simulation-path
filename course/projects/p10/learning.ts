@@ -4,7 +4,7 @@ const learning = {
     "p10-l01": {
       focus: "Tạo Vec3, chiếu điểm theo độ sâu và vẽ la bàn X/Y/Z.",
       expected:
-        "Dựng ba trục trong một cảnh perspective; đối chiếu số biết trước và hình trong bài.",
+        "Cửa sổ có sàn lưới, ba trục X/Y/Z và điểm (1,1,1). A/D, W/S đổi góc nhìn mà không sửa tọa độ điểm; xác định được helper chiếu cung cấp sẵn và chỗ drawAxes được gọi.",
       files: [
         "include/lab.hpp",
         "include/camera.hpp",
@@ -31,7 +31,8 @@ const learning = {
     },
     "p10-l02": {
       focus: "Tạo P0/P1/P2, suy vector A và B rồi chỉnh từng tọa độ.",
-      expected: "Vẽ tam giác và hai vector cạnh; đối chiếu số biết trước và hình trong bài.",
+      expected:
+        "Chọn P0 rồi sửa một tọa độ làm cả hai vector cạnh đổi; chỉ sửa P2 thì A giữ nguyên. F2 tạo đúng A=(3,0,0), B=(0,4,0).",
       files: [
         "include/lab.hpp",
         "include/camera.hpp",
@@ -57,7 +58,8 @@ const learning = {
     },
     "p10-l03": {
       focus: "Dự đoán hướng bằng tay phải, viết ba thành phần và vẽ mũi tên 3D.",
-      expected: "Tự tính và vẽ cross product; đối chiếu số biết trước và hình trong bài.",
+      expected:
+        "Với preset 3–4, raw cross là (0,0,12). Mũi tên vàng có hướng +Z và hai dot với cạnh gần 0 ở mọi góc nhìn.",
       files: [
         "include/lab.hpp",
         "include/camera.hpp",
@@ -76,13 +78,15 @@ const learning = {
         },
         {
           title: "Vẽ có scale rõ ràng",
-          explanation: "Raw arrow bị phóng đại/cap chỉ khi vẽ; UI giữ giá trị cross thật.",
+          explanation:
+            "Mũi tên vàng dùng tỉ lệ 0,2 và giới hạn độ dài 2,2 world; bảng số vẫn giữ raw cross thật, không nhầm chiều dài trên ảnh với độ lớn vector.",
         },
       ],
     },
     "p10-l04": {
       focus: "So raw cross với unit normal và kiểm bằng tam giác 3–4.",
-      expected: "Tách hướng normal khỏi diện tích; đối chiếu số biết trước và hình trong bài.",
+      expected:
+        "Preset 3–4 cho raw length 12, unit length 1 và area 6. Xoay camera hay thay đổi tỉ lệ vẽ không thay đổi ba số đo đó.",
       files: [
         "include/lab.hpp",
         "include/camera.hpp",
@@ -108,7 +112,8 @@ const learning = {
     },
     "p10-l05": {
       focus: "Đổi P1/P2, giữ diện tích và phân biệt front/back/edge-on.",
-      expected: "Đảo winding và đọc mặt theo camera; đối chiếu số biết trước và hình trong bài.",
+      expected:
+        "F đổi dấu normal nhưng giữ diện tích. Camera đi sang mặt đối diện làm facing đổi dấu, không làm cross đổi. Nhìn edge-on không bị gọi nhầm là tam giác suy biến.",
       files: [
         "include/lab.hpp",
         "include/camera.hpp",
@@ -134,7 +139,8 @@ const learning = {
     },
     "p10-l06": {
       focus: "Orbit giữ điểm nắm, letterbox/HiDPI, near/far clipping và pause.",
-      expected: "Xoay camera và xử lý input an toàn; đối chiếu số biết trước và hình trong bài.",
+      expected:
+        "Nhấn không làm góc nhìn nhảy; kéo nhận đúng delta và mẫu thả cuối. Pause dừng auto orbit nhưng vẫn cho chỉnh tay; một lần click Pause chỉ dừng đúng một lần.",
       files: [
         "include/lab.hpp",
         "include/camera.hpp",
@@ -160,7 +166,8 @@ const learning = {
     },
     "p10-l07": {
       focus: "Phân biệt zero/gần thẳng hàng, kiểm hình học độc lập và chạy bản đầy đủ.",
-      expected: "Hoàn thiện la bàn và kiểm chứng; đối chiếu số biết trước và hình trong bài.",
+      expected:
+        "F3/F4/F5 không vẽ pháp tuyến giả. F5 giữ diện tích nhỏ khác 0; source đầy đủ build độc lập ở Debug/Release với phép kiểm số biết trước và Heron.",
       files: [
         "include/lab.hpp",
         "include/camera.hpp",

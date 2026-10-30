@@ -4,7 +4,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Bản final phải xử lý được cả tam giác rõ ràng lẫn ba đỉnh thẳng hàng hoặc gần thẳng hàng. Bài cuối kiểm chính sách “có hướng normal” và đóng gói executable, không chỉ dừng ở hình minh họa nhìn có vẻ đúng.
+Hãy thử lần lượt F3, F4, F5 trước khi đọc tiếp: ba điểm thẳng hàng, hai điểm trùng và một tam giác gần thẳng hàng. Bạn cần phân biệt “cross bằng zero” với “cross nhỏ nhưng vẫn khác zero, còn hướng thì quá nhạy để dùng trong editor”.
+
+Bài cuối hoàn thiện cách báo trạng thái và kiểm kết quả bằng những ca có đáp án độc lập. Mục tiêu không chỉ là tránh crash: người xem không được nhận một mũi tên hoặc nhãn front/back trông hợp lệ khi chương trình chưa có hướng pháp tuyến đáng tin cậy.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -28,11 +30,14 @@ Near-collinear có thể vẫn có area dương rất nhỏ. Ta giữ số đo �
 
 ```cpp title="include/lab.hpp — tách diện tích rất nhỏ khỏi góc rất nhỏ"
 inline bool normalHasDirection(const Triangle& triangle) {
+    if (!finite(triangle.p0) || !finite(triangle.p1) || !finite(triangle.p2)) {
+        return false;
+    }
     const Edges edges = triangleEdges(triangle);
     const double lengthA = magnitude(edges.a);
     const double lengthB = magnitude(edges.b);
     const double crossLength = magnitude(triangleRawNormal(triangle));
-    if (lengthA == 0.0 || lengthB == 0.0 || crossLength <= 1e-10) {
+    if (!std::isfinite(lengthA) || !std::isfinite(lengthB) || !std::isfinite(crossLength) || lengthA == 0.0 || lengthB == 0.0 || crossLength <= 1e-10) {
         return false;
     }
     return crossLength / (lengthA * lengthB) > 1e-6;
@@ -85,11 +90,24 @@ Không chỉ build --target project_10_final rồi chạy CTest: test executable
 
 ## Ghép các phần lại
 
-Bản final có đầy đủ X/Y/Z, A/B, tam giác, raw cross từ P0, unit normal từ centroid và camera perspective orbit. Không có hidden-surface removal nên đây vẫn là wireframe debug view, không phải một renderer mặt kín.
+Source hoàn chỉnh phía dưới và ZIP đều gồm CMakeLists.txt, README, starter, bảy checkpoint, final và tests. Bạn không cần ghép các đoạn từ nhiều trang mới có chương trình chạy. Trong repository giáo trình, chỉ sửa source-template và chạy generator; bản tải ZIP là một project C++ độc lập, không cần Node.js.
 
-ZIP gồm README, CMakeLists.txt, starter, bảy checkpoint, final và tests. Phần **Toàn bộ mã nguồn của dự án** phía dưới hiển thị đủ mọi file. lab.hpp giữ math, camera.hpp giữ basis/projection/clipping, scene.hpp giữ state, framebuffer.hpp/view.hpp vẽ CPU, presentation.hpp hiển thị ảnh/chữ, main.cpp quản lý SDL/input.
+lab.hpp giữ phép toán; camera.hpp là bộ chiếu cung cấp trước; scene.hpp giữ hình học/camera; view.hpp vẽ các đoạn 3D; presentation.hpp chỉ trình bày texture và chữ ASCII; main.cpp nối input với update/render. Font debug được phóng từ 8 lên 10 pixel logic để đọc dễ hơn, không thay đổi tọa độ cảnh.
 
-Mỗi checkpoint chạy độc lập. Trong repository giáo trình chỉ sửa source-template, không sửa output được sinh rồi chép ngược về nguồn.
+Sau CTest, chạy ứng dụng thật: đổi mọi đỉnh, đảo winding, thử F3/F4/F5, kéo ra ngoài rồi thả, chuyển focus và resize. Hidden --smoke chỉ kiểm init/present/thoát có giới hạn. --snapshot image.bmp xuất một ảnh từ renderer của chính ứng dụng rồi thoát, không chụp desktop và không thay cho kiểm thao tác.
+
+Khi đã phân biệt được hình học world với hình chiếu, tiếp tục [Project 11 — Chiếu một điểm 3D](/projects/perspective-point) để tự tìm hiểu kỹ bộ chiếu đang được cung cấp ở đây.
+
+```bash title="Terminal — build và chạy bản hoàn chỉnh"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+./build/Release/project_10_final.exe
+```
+
+Với Visual Studio trên Windows, executable nằm trong Debug hoặc Release. Với Ninja/Make, chọn CMAKE_BUILD_TYPE lúc configure và chạy ngay trong build; dùng build tree riêng nếu muốn giữ cả hai cấu hình.
 
 ## Thử làm sai để hiểu đúng
 

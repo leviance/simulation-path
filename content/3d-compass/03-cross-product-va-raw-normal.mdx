@@ -4,7 +4,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Hai vector A/B đã nằm trong cảnh và chỉnh được. Bây giờ ta cần một vector vuông góc với cả hai. Đây là lúc dùng cross product; nó trả về một vector 3D, khác với dot product trả scalar.
+Tam giác đã chỉnh được bằng bàn phím. Ta muốn thêm một mũi tên vuông góc với cả hai vector cạnh, để nhìn ra mặt phẳng mà tam giác đang nằm trên đó. Dot product ở Project 08 trả về một số; phép toán cần dùng ở đây là cross product, trả về một vector.
+
+Trước khi chép công thức, hãy chọn tam giác 3–4 bằng F2. Hai cạnh nằm theo +X và +Y; dùng bàn tay phải để dự đoán mũi tên mới sẽ hướng về +Z hay −Z. Ta sẽ kiểm dự đoán ấy bằng cả hình vẽ lẫn số liệu.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -26,7 +28,10 @@ Ta gọi N=A×B là raw normal. Nó vuông góc với A/B trong 3D. **Perspectiv
 
 ```cpp title="include/lab.hpp — giữ đúng dấu của thành phần Y"
 inline Vec3 cross(Vec3 left, Vec3 right) {
-    return {left.y * right.z - left.z * right.y, left.z * right.x - left.x * right.z, left.x * right.y - left.y * right.x};
+    const double x = left.y * right.z - left.z * right.y;
+    const double y = left.z * right.x - left.x * right.z;
+    const double z = left.x * right.y - left.y * right.x;
+    return {x, y, z};
 }
 ```
 
@@ -47,11 +52,14 @@ N được suy từ A=P1−P0 và B=P2−P0. Đổi bất kỳ đỉnh nào ph�
 
 ```cpp title="include/lab.hpp — ngưỡng diện tích và ngưỡng góc là hai việc khác nhau"
 inline bool normalHasDirection(const Triangle& triangle) {
+    if (!finite(triangle.p0) || !finite(triangle.p1) || !finite(triangle.p2)) {
+        return false;
+    }
     const Edges edges = triangleEdges(triangle);
     const double lengthA = magnitude(edges.a);
     const double lengthB = magnitude(edges.b);
     const double crossLength = magnitude(triangleRawNormal(triangle));
-    if (lengthA == 0.0 || lengthB == 0.0 || crossLength <= 1e-10) {
+    if (!std::isfinite(lengthA) || !std::isfinite(lengthB) || !std::isfinite(crossLength) || lengthA == 0.0 || lengthB == 0.0 || crossLength <= 1e-10) {
         return false;
     }
     return crossLength / (lengthA * lengthB) > 1e-6;
@@ -62,7 +70,7 @@ Cross zero không có hướng. Gần thẳng hàng cũng có thể làm hướn
 
 ### Bước 4 — Vẽ raw cross, không làm mất số đo
 
-arrow3D nhận điểm đầu P0 và điểm cuối P0+displayed. displayed có hướng normalize(N), độ dài min(0.2×|N|,2.2) world. Cross có thể dài lớn khi hai cạnh dài; cap giúp nó không nuốt cả viewport. HUD vẫn ghi N và hai dot thật, không ghi displayed thay N.
+arrow3D nhận điểm đầu P0 và điểm cuối P0+displayed. displayed có hướng normalize(N), độ dài min(0.2×|N|,2.2) world. Cross có thể dài lớn khi hai cạnh dài; cap giúp nó không nuốt cả viewport. Bảng số vẫn ghi N và hai dot thật, không ghi displayed thay N. Nhân 0,2 làm ngắn theo tỉ lệ số học, còn chặn 2,2 giới hạn phần ảnh chiếm chỗ; không gọi cả hai thao tác là phóng đại.
 
 Đây là tỉ lệ minh họa được công bố, không phải phép sửa cross product.
 
@@ -97,9 +105,16 @@ back lùi từ đầu mũi tên; hai cánh đi tới back±side×head/2. Ba đo�
 
 ## Ghép các phần lại
 
-Build project_10_checkpoint_3. F2 cho A=(3,0,0), B=(0,4,0); N phải là (0,0,12). Mũi tên vàng đi theo +Z từ P0, nhưng độ dài hiển thị bị cap ở 2.2 world.
+Sau khi vẽ hai vector cạnh trong renderScene, tính raw = triangleRawNormal(triangle). Chỉ khi normalHasDirection trả true mới dựng mũi tên vàng từ P0. Nhánh trình bày số liệu trong presentation.hpp đọc cùng triangle, không giữ một bản N riêng.
 
-Đổi camera bằng A/D/W/S để nhìn từ hai phía. Cross trong world giữ nguyên; chỉ hình chiếu thay đổi. dot(N,A) và dot(N,B) phải gần 0 ở cả hai góc nhìn.
+Chạy preset 3–4: phải thấy raw N=(0,0,12), dot(N,A) và dot(N,B) gần 0. Mũi tên vàng có hướng +Z nhưng chiều dài được chặn ở 2,2 world. Orbit bằng A/D/W/S để kiểm rằng hình chiếu đổi còn ba thành phần N giữ nguyên.
+
+```bash title="Terminal — chạy checkpoint 03"
+cmake --build build --config Debug --target project_10_checkpoint_3 --parallel 2
+./build/Debug/project_10_checkpoint_3.exe
+```
+
+Với Visual Studio trên Windows, executable nằm trong Debug hoặc Release. Với Ninja/Make, chọn CMAKE_BUILD_TYPE lúc configure và chạy ngay trong build; dùng build tree riêng nếu muốn giữ cả hai cấu hình.
 
 ## Thử làm sai để hiểu đúng
 

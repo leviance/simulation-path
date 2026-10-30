@@ -5,6 +5,9 @@
 namespace lab {
 // Clip 2D trước khi đổi sang int, giữ công việc rasterizer trong viewport hữu hạn.
 inline bool clipScreen(Vec2& start, Vec2& end) {
+    if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(end.x) || !std::isfinite(end.y)) {
+        return false;
+    }
     const Vec2 delta{end.x - start.x, end.y - start.y};
     double first = 0.0;
     double last = 1.0;
@@ -87,7 +90,10 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
     }
 #if LAB_CHECKPOINT >= 1
     drawAxes(image, scene.camera);
+#if LAB_CHECKPOINT == 1
+    // This reference point belongs to the first lesson, not the editable triangle.
     marker3D(image, {1.0, 1.0, 1.0}, scene.camera, kWhite);
+#endif
 #endif
 #if LAB_CHECKPOINT >= 2
     const Triangle& triangle = scene.triangle;

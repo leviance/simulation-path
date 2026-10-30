@@ -60,3 +60,40 @@ test("P10 actual orbit is relative, preserves geometry and keyboard Z/Tab stay u
   await canvas.press("Tab");
   await expect(canvas).not.toBeFocused();
 });
+
+test("P10 Pause survives internal focus transfer, complete source and progress reload", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto(route);
+  const canvas = page.locator('canvas[aria-label^="La bàn ba trục perspective"]');
+  await expect(page.getByLabel("Tam giác mẫu", { exact: true })).toBeEnabled();
+  await canvas.focus();
+  await canvas.press("Space");
+  const pause = page.getByRole("button", { name: "Tạm dừng", exact: true });
+  await expect(pause).toBeVisible();
+  await pause.click();
+  await expect(page.getByRole("button", { name: "Chạy orbit", exact: true })).toBeVisible();
+  const eye = await read(page, "camera eye").innerText();
+  await expect
+    .poll(async () => {
+      await page.waitForTimeout(200);
+      return read(page, "camera eye").innerText();
+    })
+    .toBe(eye);
+  const source = page
+    .locator(".checkpoint-source details.source-file")
+    .filter({ has: page.locator("summary code").filter({ hasText: "include/lab.hpp" }) })
+    .first();
+  await source.locator("summary").click();
+  await expect(source.locator(".highlighted-code")).toContainText("triangleUnitNormal");
+  await expect(
+    page.locator("a[href='/downloads/project-10-3d-compass.zip']").first(),
+  ).toBeAttached();
+  await page.getByRole("button", { name: "Đánh dấu hoàn thành", exact: true }).click();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Đã hoàn thành", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});

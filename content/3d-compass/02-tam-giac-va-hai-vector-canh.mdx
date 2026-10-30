@@ -4,7 +4,11 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ta đã nhìn thấy ba trục. Giờ thêm một tam giác và hai vector xuất phát từ cùng điểm để chuẩn bị cho cross product. Chưa vẽ normal ở bài này; cần kiểm hai đầu vào trước.
+Ba trục đã giúp ta định hướng trong không gian. Hãy thêm ba điểm P0, P1, P2, nối chúng thành tam giác rồi vẽ hai vector cùng xuất phát từ P0. Đây là đầu vào của cross product ở bài sau; ta chưa vẽ pháp tuyến khi chưa kiểm được hai cạnh.
+
+Điểm tham chiếu (1,1,1) của bài 1 không còn được vẽ ở mốc này. Trong vùng hình học, các nhãn P0/P1/P2 giờ chỉ ba đỉnh bạn đang chỉnh, không lẫn thêm một điểm trắng không có vai trò.
+
+Thử chọn P0 rồi dịch nó sang phải. Nếu hai mũi tên vẫn giữ nguyên như cũ, chương trình đang dùng cạnh đã tính từ lần trước. Bài này giúp bạn giữ một nguồn dữ liệu duy nhất: ba điểm hiện tại.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -68,17 +72,64 @@ inline void moveVertex(Scene& scene, Vec3 delta) {
 
 Nhấn 1/2/3 chọn P0/P1/P2. Phím mũi tên đổi X/Y mỗi lần 0.1, PageUp/Down đổi Z. Dấu Y vẫn là world Y-up; không đảo input chỉ vì screen Y hướng xuống.
 
+Nối hai helper vào nhánh SDL_EVENT_KEY_DOWN trong vòng SDL_PollEvent của main như sau. scene là Scene đã khởi tạo trước vòng lặp; dirty được bật ở đầu nhánh key-down để ảnh được vẽ lại sau khi dữ liệu đổi. Không sửa trực tiếp vị trí một marker trên ảnh:
+
+```cpp title="src/main.cpp — phím sửa dữ liệu world của đỉnh đang chọn"
+if (event.key.key >= SDLK_1 && event.key.key <= SDLK_3) {
+    scene.selected = static_cast<int>(event.key.key - SDLK_1);
+}
+lab::Vec3 delta{};
+if (event.key.key == SDLK_LEFT) {
+    delta.x = -0.1;
+}
+if (event.key.key == SDLK_RIGHT) {
+    delta.x = 0.1;
+}
+if (event.key.key == SDLK_UP) {
+    delta.y = 0.1;
+}
+if (event.key.key == SDLK_DOWN) {
+    delta.y = -0.1;
+}
+if (event.key.key == SDLK_PAGEUP) {
+    delta.z = 0.1;
+}
+if (event.key.key == SDLK_PAGEDOWN) {
+    delta.z = -0.1;
+}
+lab::moveVertex(scene, delta);
+```
+
 ### Bước 3 — Nối cạnh và vẽ hai vector
 
 Trong renderScene của checkpoint 02, line3D nối P0→P1→P2→P0. Hai arrow3D đi từ P0 đến P0+A và P0+B. A màu cam, B cyan; đỉnh đang chọn màu vàng. Source checkpoint có đầy đủ đoạn gọi này, cùng marker và nhãn P0/P1/P2.
 
-Cùng một hàm line3D vẽ cả tam giác lẫn vector, nên tất cả dùng đúng camera perspective của bài trước.
+Thêm đoạn sau vào renderScene trong include/view.hpp, sau phần trục. Scene được truyền từ main nên các đỉnh và hai cạnh luôn là dữ liệu hiện tại:
+
+```cpp title="include/view.hpp — vẽ từ cùng ba điểm hiện tại"
+const Triangle& triangle = scene.triangle;
+const Edges edges = triangleEdges(triangle);
+line3D(image, triangle.p0, triangle.p1, scene.camera, kWhite);
+line3D(image, triangle.p1, triangle.p2, scene.camera, kWhite);
+line3D(image, triangle.p2, triangle.p0, scene.camera, kWhite);
+arrow3D(image, triangle.p0, add(triangle.p0, edges.a), scene.camera, 0xFFB454FFu);
+arrow3D(image, triangle.p0, add(triangle.p0, edges.b), scene.camera, 0x53DFEFFFu);
+```
+
+line3D vẽ cạnh; arrow3D vẽ mũi tên bằng cùng camera. Gọi renderScene trong nhánh dirty của vòng lặp đang có, không dựng thêm một tam giác chỉ để minh họa hai vector.
 
 ## Ghép các phần lại
 
-Build project_10_checkpoint_2. Chọn P0 rồi di chuyển: cả hai cạnh đổi. Sau đó chỉ đổi P2.Z bằng PageUp: vector B và tam giác đổi, vector A giữ nguyên.
+Khai báo triangle và selected trong Scene, sau đó để nhánh key-down chọn P0/P1/P2 hoặc tạo delta cho moveVertex. Trong renderScene, lấy triangle từ scene, tính edges mới, nối ba cạnh rồi gọi hai arrow3D. Như vậy sửa dữ liệu ở input sẽ xuất hiện đồng thời trên tam giác, mũi tên và bảng số ở frame được vẽ tiếp theo.
 
-Dùng F2 cho tam giác 3–4. Từ P0=(−1.5,−2,0), hai cạnh là A=(3,0,0), B=(0,4,0). Tọa độ điểm đều nằm trong miền editor dù độ dài cạnh có thể lớn hơn 2.
+Chọn P0 và di chuyển: cả A lẫn B phải đổi. Sau đó chỉ đổi P2.Z bằng PageUp: B đổi nhưng A giữ nguyên. F2 tạo P0=(−1,5; −2; 0), P1=(1,5; −2; 0), P2=(−1,5; 2; 0), nên A=(3,0,0), B=(0,4,0). Tọa độ đỉnh nằm trong miền editor nhưng độ dài cạnh không bị giới hạn bằng 2.
+
+```bash title="Terminal — chạy checkpoint 02"
+cmake --build build --config Debug --target project_10_checkpoint_2 --parallel 2
+./build/Debug/project_10_checkpoint_2.exe
+```
+
+Với Visual Studio trên Windows, executable nằm trong Debug hoặc Release. Với Ninja/Make, chọn CMAKE_BUILD_TYPE lúc configure và chạy ngay trong build; dùng build tree riêng nếu muốn giữ cả hai cấu hình.
 
 ## Thử làm sai để hiểu đúng
 

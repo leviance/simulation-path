@@ -120,7 +120,7 @@ export function drawCompassLab(
   }
   if (stage >= 3 && r.valid) {
     arrow(scene.triangle.a, r.rawTip, "#ffe26c");
-    label(r.rawTip, "cross (phóng đại 0.2, cap 2.2)", "#ffe26c");
+    label(r.rawTip, "cross: 0.2 × |N|, tối đa 2.2", "#ffe26c");
   }
   if (stage >= 4 && r.valid) {
     arrow(r.centroid, r.unitTip, "#e6a0ff");
@@ -128,7 +128,11 @@ export function drawCompassLab(
   }
   ctx.restore();
   ctx.fillStyle = "#e1e8fa";
-  ctx.fillText("Cam chuyển động không sửa tọa độ đỉnh. Không có hidden-surface removal.", 20, 728);
+  ctx.fillText(
+    "Xoay camera không sửa tọa độ đỉnh. Đây là wireframe, chưa xử lý che khuất.",
+    20,
+    728,
+  );
   if (stage >= 3 && !r.valid)
     ctx.fillText("Suy biến/gần thẳng hàng: không có hướng normal/facing tin cậy.", 20, 760);
   ctx.restore();

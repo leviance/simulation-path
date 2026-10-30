@@ -7,8 +7,8 @@ const project = {
     "Project 09 — local space và phép biến đổi",
   ],
   summary:
-    "Dựng một cảnh perspective với X/Y/Z, hai vector A/B, tam giác và normal. Tự viết Vec3, cross và mũi tên 3D; đổi camera, winding và tọa độ để kiểm hình học.",
-  duration: "7–8 giờ",
+    "Bước từ vector 2D sang không gian: dựng ba trục, sửa ba đỉnh của tam giác và quan sát pháp tuyến đổi hướng. Bộ chiếu perspective được cung cấp sẵn; bạn tự viết phép toán Vec3, cross product và lần theo cách dựng mũi tên 3D.",
+  duration: "7–9 giờ: đọc 1,5–2 giờ, tự viết 4–5 giờ, thử nghiệm 1,5–2 giờ; chưa tính setup",
   objectives: [
     "Nhìn thấy dữ liệu Vec3 qua camera perspective, không dùng sơ đồ axonometric thay thế",
     "Tự suy hai cạnh, cross product và mũi tên 3D",
@@ -19,16 +19,17 @@ const project = {
   challenge: {
     timebox: "180–240 phút tự thử trước khi xem lời giải",
     mission:
-      "Tự xây dựng một ứng dụng SDL3 có camera perspective hiển thị ba trục X/Y/Z, hai vector A=P1−P0 và B=P2−P0 cùng tam giác P0/P1/P2. Tự tính và vẽ cross vector, normal; đổi winding hoặc camera để kiểm hướng.",
+      "Tự xây dựng một mô phỏng hình học 3D bằng C++/SDL3: có ba trục X/Y/Z, một tam giác và hai vector A, B cùng gốc P0. Khi người dùng sửa một đỉnh, hình phải cập nhật pháp tuyến; khi chỉ xoay camera, dữ liệu hình học phải giữ nguyên. Cho phép đảo thứ tự hai đỉnh để kiểm hướng pháp tuyến.",
     outcome:
       "Viewport có grid 3D, trục có nhãn, tam giác, vector A cam, B cyan, raw cross vàng từ P0 và unit normal tím từ centroid. Có điều khiển đỉnh/camera, preset, pause/reset và số đo không thay thế hình.",
     requirements: [
+      "Dùng bộ chiếu trong camera.hpp để quan sát. Phần perspective được cung cấp trước và sẽ học kỹ ở Project 11; không cần tự xây camera engine trước khi học cross product.",
       "Tự viết Vec3, cộng/trừ/scale/dot/magnitude/normalize, cross và debug arrows 3D.",
       "Perspective thật: world→camera rồi x/z,y/z; near/far clip đoạn trước khi chia, không dùng projectIsometric.",
       "Ba đỉnh trong [-2,2] world; chọn P0/P1/P2, sửa X/Y/Z lúc chạy. Không sửa dữ liệu đỉnh khi orbit.",
       "Vector A/B và tam giác cùng lấy từ state hiện tại; normal luôn tính lại, không lưu bản cũ.",
       "Đảo P1/P2 làm cross đổi dấu, unit normal đổi hướng nhưng giữ diện tích.",
-      "Raw cross hiển thị dài min(0.2×|N|,2.2) world; unit normal vẽ 1.4 world. Đây là scale vẽ, không phải giá trị toán.",
+      "Phân biệt số đo với hình minh họa: mũi tên raw cross dài min(0.2×|N|,2.2) world, còn unit normal vẽ dài 1.4 world. Nhân 0.2 là tỉ lệ vẽ, không gọi là phóng đại và không thay đổi N hoặc diện tích.",
       "Normal không tin cậy nếu |cross|≤1e−10 world² hoặc sin(góc A,B)≤1e−6; UI báo undefined, không giả front/back.",
       "Facing dùng normalize(eye−centroid), dấu dương gọi front theo quy ước này; edge-on nếu |facing|≤1e−6.",
       "Camera orbit yaw/pitch/radius; chuột một owner, mẫu thả cuối, capture hủy khi blur/hidden/resize/reset/preset/winding/pause.",

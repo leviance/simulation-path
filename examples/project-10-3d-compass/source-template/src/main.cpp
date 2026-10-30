@@ -7,14 +7,22 @@
 #include <string_view>
 
 int main(int argc, char** argv) {
-    const bool smoke = argc > 1 && std::string_view(argv[1]) == "--smoke";
+    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const char* snapshotPath = nullptr;
+    if (argc == 3 && std::string_view(argv[1]) == "--snapshot") {
+        snapshotPath = argv[2];
+    }
+    if (argc > 1 && !smoke && !snapshotPath) {
+        std::cerr << "Usage: project_10_final [--smoke | --snapshot image.bmp]\n";
+        return EXIT_FAILURE;
+    }
     // Khởi tạo SDL và bảng logic cố định; resize/HiDPI chỉ đổi presentation.
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
     }
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (smoke) {
+    if (smoke || snapshotPath) {
         flags |= SDL_WINDOW_HIDDEN;
     }
     SDL_Window* window = SDL_CreateWindow("Project 10 - 3D Compass", 1100, 800, flags);
@@ -81,10 +89,24 @@ int main(int argc, char** argv) {
 #endif
             }
             if (event.type == SDL_EVENT_KEY_DOWN) {
+                if ((event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) {
+                    continue;
+                }
                 dirty = true;
                 if (event.key.key == SDLK_ESCAPE) {
+#if LAB_CHECKPOINT >= 6
+                    if (dragging) {
+                        cancelDrag();
+                        scene.paused = true;
+                        continue;
+                    }
+#endif
                     running = false;
                 }
+#if LAB_CHECKPOINT >= 6
+                // A keyboard edit ends an active mouse gesture before changing state.
+                cancelDrag();
+#endif
                 if (!event.key.repeat && (event.key.key == SDLK_R || (event.key.key >= SDLK_F1 && event.key.key <= SDLK_F5))) {
 #if LAB_CHECKPOINT >= 6
                     cancelDrag();
@@ -96,21 +118,27 @@ int main(int argc, char** argv) {
                     lab::applyPreset(scene, preset);
                 }
                 if (event.key.key == SDLK_A) {
+                    scene.paused = true;
                     lab::orbit(scene.camera, -6.0, 0.0);
                 }
                 if (event.key.key == SDLK_D) {
+                    scene.paused = true;
                     lab::orbit(scene.camera, 6.0, 0.0);
                 }
                 if (event.key.key == SDLK_W) {
+                    scene.paused = true;
                     lab::orbit(scene.camera, 0.0, 6.0);
                 }
                 if (event.key.key == SDLK_S) {
+                    scene.paused = true;
                     lab::orbit(scene.camera, 0.0, -6.0);
                 }
-                if (event.key.key == SDLK_EQUALS) {
+                if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS || event.key.key == SDLK_KP_PLUS) {
+                    scene.paused = true;
                     scene.camera.radius = std::max(7.0, scene.camera.radius - 0.5);
                 }
-                if (event.key.key == SDLK_MINUS) {
+                if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
+                    scene.paused = true;
                     scene.camera.radius = std::min(12.0, scene.camera.radius + 0.5);
                 }
 #if LAB_CHECKPOINT >= 2
@@ -159,6 +187,7 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 6
             const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
             if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+                std::cerr << "SDL_ConvertEventToRenderCoordinates failed: " << SDL_GetError() << '\n';
                 failed = true;
                 running = false;
                 break;
@@ -169,6 +198,7 @@ int main(int argc, char** argv) {
                     previousMouse = {event.button.x, event.button.y};
                     dragging = true;
                     scene.paused = true;
+                    dirty = true;
                     if (!SDL_CaptureMouse(true)) {
                         cancelDrag();
                     }
@@ -217,12 +247,15 @@ int main(int argc, char** argv) {
         }
         if (dirty) {
             lab::renderScene(image, scene);
-            if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), lab::Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))) || !lab::presentFramebuffer(renderer, texture, scene)) {
+            if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), lab::Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))) || !lab::presentFramebuffer(renderer, texture, scene, snapshotPath)) {
                 std::cerr << SDL_GetError() << '\n';
                 failed = true;
                 break;
             }
             dirty = false;
+            if (snapshotPath) {
+                running = false;
+            }
         }
         SDL_Delay(16);
     }

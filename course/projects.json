@@ -64,6 +64,7 @@
   },
   {
     "id": "10",
+    "contentRevision": 2,
     "slug": "3d-compass",
     "sourceDirectory": "project-10-3d-compass",
     "checkpointCount": 7,

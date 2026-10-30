@@ -19,6 +19,29 @@ test("P10 cross has basis and independent all-component numeric oracles", () => 
     z: -10,
   });
 });
+
+test("P10 normalization avoids reciprocal overflow and rejects invalid thresholds", () => {
+  assert.deepEqual(math.normalize3({ x: 1e-320, y: 0, z: 0 }), { x: 1, y: 0, z: 0 });
+  assert.deepEqual(math.normalize3({ x: 0, y: 0, z: 0 }), { x: 0, y: 0, z: 0 });
+  for (const epsilon of [-1, NaN, Infinity]) {
+    assert.throws(() => math.normalize3({ x: 1, y: 0, z: 0 }, epsilon), RangeError);
+    assert.throws(
+      () => math.isDegenerateTriangle(model.initialCompassScene().triangle, epsilon),
+      RangeError,
+    );
+  }
+  const invalid = { a: { x: 0, y: 0, z: 0 }, b: { x: 1, y: 0, z: 0 }, c: { x: 0, y: NaN, z: 0 } };
+  assert.equal(math.isDegenerateTriangle(invalid), true);
+});
+
+test("P10 display lengths are visualization choices, not the raw normal magnitude", () => {
+  const scene = model.compassPreset(1);
+  const result = model.compassResults(scene);
+  near(result.rawLength, 12);
+  near(math.magnitude3(math.subtract3(result.rawTip, scene.triangle.a)), 2.2);
+  near(math.magnitude3(math.subtract3(result.unitTip, result.centroid)), 1.4);
+  near(result.area, 6);
+});
 test("P10 cross is orthogonal, winding anti-symmetric and area matches independent Heron", () => {
   for (let sample = 0; sample < 61; sample++) {
     const t = {
@@ -273,6 +296,21 @@ test("P10 actual keyboard leaves Tab/modifiers free, selects/moves Z and ignores
   assert.equal(h.sceneRef.current.paused, true);
   h.onKeyDown(event("r"));
   assert.deepEqual(h.sceneRef.current, model.initialCompassScene());
+});
+
+test("P10 focus inside the lab cancels capture but does not pre-toggle Pause", async () => {
+  const h = await harness();
+  h.sceneRef.current.paused = false;
+  const internal = {};
+  const blur = await componentCallback("normal-lab.tsx", "onCanvasBlur", h);
+  const target = { closest: () => ({ contains: (node) => node === internal }) };
+  blur({ currentTarget: target, relatedTarget: internal });
+  assert.equal(h.sceneRef.current.paused, false);
+  h.togglePause();
+  assert.equal(h.sceneRef.current.paused, true, "one Pause click must not resume orbit");
+  h.sceneRef.current.paused = false;
+  blur({ currentTarget: target, relatedTarget: null });
+  assert.equal(h.sceneRef.current.paused, true, "focus outside the lab pauses");
 });
 test("P10 actual lifecycle pauses/cancels on hidden/resize, clears listeners and resets mode separately", async () => {
   const h = await harness(),

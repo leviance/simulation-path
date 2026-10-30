@@ -4,7 +4,7 @@ const lab = {
     label: "3D COMPASS",
     title: "Hai vector quyết định normal trong không gian thế nào?",
     description:
-      "Perspective thật, camera orbit, hai vector cạnh, cross và unit normal cùng với số đo.",
+      "Sửa từng đỉnh để thấy hai vector cạnh và pháp tuyến đổi theo. Xoay camera chỉ đổi góc nhìn; kiểm dot và diện tích để phân biệt hình chiếu với quan hệ hình học trong không gian.",
   },
   modes: {
     "normal-axes": {

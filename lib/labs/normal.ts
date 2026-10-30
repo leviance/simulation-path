@@ -41,9 +41,11 @@ export function magnitude3(vector: Vec3): number {
 }
 
 export function normalize3(vector: Vec3, epsilon = 0): Vec3 {
+  if (!Number.isFinite(epsilon) || epsilon < 0)
+    throw new RangeError("Normalization epsilon must be finite and non-negative");
   const length = magnitude3(vector);
   if (!Number.isFinite(length) || length <= epsilon) return { x: 0, y: 0, z: 0 };
-  return scale3(vector, 1 / length);
+  return { x: vector.x / length, y: vector.y / length, z: vector.z / length };
 }
 
 export function triangleEdges(triangle: Triangle3): { ab: Vec3; ac: Vec3 } {
@@ -77,6 +79,14 @@ export function reverseWinding(triangle: Triangle3): Triangle3 {
 }
 
 export function isDegenerateTriangle(triangle: Triangle3, epsilon = NORMAL_EPSILON): boolean {
+  if (!Number.isFinite(epsilon) || epsilon < 0)
+    throw new RangeError("Normal area threshold must be finite and non-negative");
+  if (
+    ![triangle.a, triangle.b, triangle.c].every((point) =>
+      [point.x, point.y, point.z].every(Number.isFinite),
+    )
+  )
+    return true;
   const { ab, ac } = triangleEdges(triangle),
     a = magnitude3(ab),
     b = magnitude3(ac),

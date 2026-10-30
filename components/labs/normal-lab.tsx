@@ -4,6 +4,8 @@ import {
   useCallback,
   useRef,
   useState,
+  useSyncExternalStore,
+  type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -27,7 +29,13 @@ import { LabReadout, useCanvasSize, useReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 
 const format = (p: Vec3) => `(${p.x.toFixed(4)}, ${p.y.toFixed(4)}, ${p.z.toFixed(4)})`;
+const subscribeToHydration = () => () => {};
 export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
+  const ready = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
   const canvasRef = useRef<HTMLCanvasElement>(null),
     size = useCanvasSize(canvasRef),
     reducedMotion = useReducedMotion(),
@@ -118,6 +126,12 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
   const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.key === "Tab") return;
     const key = event.key.toLowerCase();
+    if (key === "escape") {
+      event.preventDefault();
+      cancelDrag();
+      commit({ ...sceneRef.current, paused: true });
+      return;
+    }
     if (key === "r" && !event.repeat) {
       event.preventDefault();
       reset();
@@ -141,6 +155,7 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
     }
     if (stage >= 6 && key === "n" && !event.repeat && sceneRef.current.paused) {
       event.preventDefault();
+      cancelDrag();
       commit(advanceCompass(sceneRef.current, 0.1));
       return;
     }
@@ -174,6 +189,13 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
       commit(moveCompassVertex(sceneRef.current, deltas[event.key]));
     }
   };
+  const onCanvasBlur = (event: ReactFocusEvent<HTMLCanvasElement>) => {
+    cancelDrag();
+    const lab = event.currentTarget.closest(".lab-body");
+    // Clicking the internal Pause button must toggle once, not pause then resume.
+    if (event.relatedTarget && lab?.contains(event.relatedTarget as Node)) return;
+    commit({ ...sceneRef.current, paused: true });
+  };
   useEffect(() => {
     const pause = () => {
       cancelDrag();
@@ -200,8 +222,11 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
     commit({ ...sceneRef.current, paused: true });
   }, [size.width, size.height, size.dpr, cancelDrag, commit]);
   useEffect(() => {
-    if (reducedMotion) commit({ ...sceneRef.current, paused: true });
-  }, [reducedMotion, commit]);
+    if (reducedMotion) {
+      cancelDrag();
+      commit({ ...sceneRef.current, paused: true });
+    }
+  }, [reducedMotion, cancelDrag, commit]);
   useEffect(() => {
     if (stage < 6 || scene.paused || reducedMotion) return;
     let frame = 0,
@@ -223,7 +248,11 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
   const r = compassResults(scene);
   return (
     <div className="lab-body">
-      <div className="lab-controls">
+      <fieldset
+        className="lab-controls"
+        disabled={!ready}
+        style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+      >
         <label>
           Preset
           <select
@@ -246,6 +275,7 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
             <label>
               Đỉnh đang chọn
               <select
+                aria-label="Đỉnh đang chọn"
                 value={scene.selected}
                 onChange={(event) => {
                   cancelDrag();
@@ -307,7 +337,7 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
           </>
         )}
         <button onClick={() => reset()}>Đặt lại</button>
-      </div>
+      </fieldset>
       <canvas
         ref={canvasRef}
         style={{ height: "clamp(380px,58vw,560px)", touchAction: "none" }}
@@ -317,10 +347,7 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
         onPointerCancel={pointerCancel}
         onLostPointerCapture={pointerCancel}
         onKeyDown={onKeyDown}
-        onBlur={() => {
-          cancelDrag();
-          commit({ ...sceneRef.current, paused: true });
-        }}
+        onBlur={onCanvasBlur}
         tabIndex={0}
         aria-label="La bàn ba trục perspective, vector A B và normal; A/D W/S xoay camera, mũi tên sửa đỉnh"
       />
@@ -329,7 +356,7 @@ export default function NormalLab({ mode }: { mode?: InteractiveLabMode }) {
         dài 1.4 world. Độ phóng đại chỉ dành cho hình, không đổi số đo. Từ bài 6, kéo trong viewport
         để orbit; nhấn không làm camera nhảy. Tab tới slider rồi dùng bàn phím mặc định; khi focus ở
         Canvas, 1–3 chọn đỉnh, mũi tên XY, PageUp/Down Z, F đảo winding, Space pause, N tiến từng
-        bước.{" "}
+        bước. Esc kết thúc thao tác kéo và giữ góc nhìn hiện tại, không sửa các đỉnh.{" "}
         {reducedMotion ? "Reduced motion: tự động orbit bị tắt, chỉnh tay vẫn dùng được." : ""}
       </p>
       <LabReadout

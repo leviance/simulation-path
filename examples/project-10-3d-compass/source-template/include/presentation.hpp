@@ -18,7 +18,14 @@ inline SDL_Texture* createFramebufferTexture(SDL_Renderer* renderer) {
 }
 
 inline bool text(SDL_Renderer* renderer, float x, float y, const char* value) {
-    return SDL_RenderDebugText(renderer, x, y, value);
+    // Increase the provided ASCII font without changing logical scene coordinates.
+    constexpr float scale = 1.25f;
+    if (!SDL_SetRenderScale(renderer, scale, scale)) {
+        return false;
+    }
+    const bool drawn = SDL_RenderDebugText(renderer, x / scale, y / scale, value);
+    const bool restored = SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+    return drawn && restored;
 }
 
 inline bool label3D(SDL_Renderer* renderer, Vec3 point, const Camera& camera, const char* label) {
@@ -29,11 +36,11 @@ inline bool label3D(SDL_Renderer* renderer, Vec3 point, const Camera& camera, co
     return text(renderer, static_cast<float>(projected.screen.x + 8.0), static_cast<float>(projected.screen.y - 8.0), label);
 }
 
-inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene) {
-    if (!SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
+inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene, const char* snapshotPath = nullptr) {
+    if (!SDL_SetRenderDrawColor(renderer, 17, 24, 43, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
         return false;
     }
-    if (!text(renderer, 16, 14, "3D COMPASS | Perspective | A/D yaw, W/S pitch, +/- distance | R reset | Esc quit") || !text(renderer, 16, 34, "1/2/3 select vertex | arrows XY | PageUp/Down Z | F1-F5 presets | mouse drag: orbit (lesson 6+)")) {
+    if (!text(renderer, 16, 14, "3D COMPASS | A/D yaw, W/S pitch, +/- distance | R reset | Esc quit") || !text(renderer, 16, 34, "1-3 vertex | arrows XY, PgUp/PgDn Z | F1-F5 presets | drag: orbit (6+)")) {
         return false;
     }
     char value[220]{};
@@ -43,6 +50,11 @@ inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, con
     }
 #if LAB_CHECKPOINT >= 1
     if (!label3D(renderer, {3.0, 0.0, 0.0}, scene.camera, "X") || !label3D(renderer, {0.0, 3.0, 0.0}, scene.camera, "Y") || !label3D(renderer, {0.0, 0.0, 3.0}, scene.camera, "Z")) {
+        return false;
+    }
+#endif
+#if LAB_CHECKPOINT == 1
+    if (!label3D(renderer, {1.0, 1.0, 1.0}, scene.camera, "(1,1,1)")) {
         return false;
     }
 #endif
@@ -60,7 +72,7 @@ inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, con
 #if LAB_CHECKPOINT >= 3
     const Vec3 raw = triangleRawNormal(triangle);
     std::snprintf(value, sizeof(value), "cross A x B (%.4g, %.4g, %.4g) | dot(N,A) %.2e dot(N,B) %.2e", raw.x, raw.y, raw.z, dot(raw, edges.a), dot(raw, edges.b));
-    if (!text(renderer, 16, 102, value) || !text(renderer, 16, 702, "YELLOW raw cross: display length min(0.2*|N|,2.2) | ORANGE A | CYAN B")) {
+    if (!text(renderer, 16, 102, value) || !text(renderer, 16, 702, "YELLOW raw: 0.2*|N|, cap 2.2 world | ORANGE A | CYAN B")) {
         return false;
     }
     if (!normalHasDirection(triangle) && !text(renderer, 16, 124, "DEGENERATE / NEAR-COLLINEAR: normal direction and facing undefined (not front/back)")) {
@@ -110,6 +122,18 @@ inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, con
         return false;
     }
 #endif
+    if (snapshotPath) {
+        // Read only our renderer, once and before Present; never capture the desktop.
+        SDL_Surface* snapshot = SDL_RenderReadPixels(renderer, nullptr);
+        if (!snapshot) {
+            return false;
+        }
+        const bool saved = SDL_SaveBMP(snapshot, snapshotPath);
+        SDL_DestroySurface(snapshot);
+        if (!saved) {
+            return false;
+        }
+    }
     return SDL_RenderPresent(renderer);
 }
 } // namespace lab
