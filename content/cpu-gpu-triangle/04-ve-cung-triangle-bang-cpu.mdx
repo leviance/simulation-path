@@ -4,19 +4,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Nếu chỉ vẽ GPU triangle, ta đang học API mới nhưng không có mốc tham chiếu. Project này cần hai đường độc lập dùng chung input:
+Nửa phải đã vẽ được tam giác bằng GPU. Bây giờ ta đưa renderer CPU trở lại nửa trái để có một kết quả tham chiếu có thể kiểm tra từng pixel. Không cần ghép ZIP Project 16 bằng tay: phần nền của bài đó đã có trong gói này, và ta sẽ lần theo cách nối nó vào cửa sổ OpenGL.
 
-```text
-GpuVertex[3]
-  ├─ CPU transform → barycentric rasterizer → RGBA8 → texture → panel trái
-  └─ vertex shader → GPU rasterizer → fragment shader → panel phải
-```
-
-CPU texture presenter chỉ đưa pixels đã hoàn thành lên màn hình. Nó không được chứa coverage test hay công thức nội suy, nếu không ranh giới CPU/GPU bị xóa nhòa.
+Đầu vào vẫn là `kSourceTriangle` và `Transform2D`. CPU tự tính coverage và màu trong một mảng RGBA8; OpenGL chỉ giúp trình bày mảng pixel đã tính xong dưới dạng texture. Như vậy có hai đường rasterization độc lập, không phải cùng một tam giác GPU được vẽ hai lần.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hai panel phải nhận cùng ba vertex và cùng transform, nhưng đi qua hai rasterizer độc lập. Panel CPU vì thế đóng vai trò oracle dễ soi từng phép tính; texture upload chỉ là bước trình bày kết quả lên cửa sổ OpenGL.
+CPU rasterizer lấy mẫu ở tâm pixel `(x + 0.5, y + 0.5)`, tính barycentric weights rồi ghi RGBA8. Texture presenter chỉ upload bằng `glTexSubImage2D` và vẽ một quad; nó không được quyết định pixel nào nằm trong tam giác.
+
+Row 0 của framebuffer CPU là hàng trên cùng. Texture shader lật tọa độ V đúng một lần để trình bày ảnh ấy; không sửa tọa độ các đỉnh chỉ để bù cho ảnh bị lật.
 
 <InteractiveLab demo="cpu-gpu-triangle" mode="cpu-reference" />
 
@@ -25,14 +21,27 @@ Hai panel phải nhận cùng ba vertex và cùng transform, nhưng đi qua hai 
 ### Bước 1 — Framebuffer top-left có storage rõ ràng
 
 ```cpp title="include/pipeline.hpp — resize CPU framebuffer"
-void resize(int nextWidth, int nextHeight) {
-    width = std::max(1, nextWidth);
-    height = std::max(1, nextHeight);
-    rgba.resize(std::size_t(width) * std::size_t(height) * 4U);
+bool resize(int nextWidth, int nextHeight) {
+    // Check dimensions before multiplying. Failed resize preserves the old image.
+    constexpr std::size_t maximumPixels = 4U * 1024U * 1024U;
+    if (nextWidth <= 0 || nextHeight <= 0 || nextWidth > 4096 || nextHeight > 4096) {
+        return false;
+    }
+    if (std::size_t(nextWidth) > maximumPixels / std::size_t(nextHeight)) {
+        return false;
+    }
+    try {
+        rgba.resize(std::size_t(nextWidth) * std::size_t(nextHeight) * 4U);
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
+    width = nextWidth;
+    height = nextHeight;
+    return true;
 }
 ```
 
-Mỗi pixel có bốn byte RGBA. Row 0 là hàng trên cùng, giống renderer CPU trước đây và ngược với OpenGL window coordinates.
+Mỗi pixel có bốn byte RGBA. Row 0 là hàng trên cùng. resize trả false trước khi nhân kích thước không hợp lệ hoặc vượt 4M pixel; nếu cấp phát thất bại, ảnh cũ còn nguyên. Chỉ cập nhật width/height khi vector đã resize thành công.
 
 `clear` và `putPixel` là hai thao tác duy nhất rasterizer cần biết về vùng nhớ. Cả hai đều đổi màu float `[0, 1]` sang byte `[0, 255]`; `putPixel` còn chặn tọa độ ngoài biên trước khi tính offset:
 
@@ -63,13 +72,18 @@ void putPixel(int x, int y, Color color) {
 
 ### Bước 2 — Rasterize tại pixel center
 
-Trước vòng lặp pixel, ta transform ba vertex, đổi từ NDC sang tọa độ panel và chỉ quét bounding box của triangle:
+Trước vòng lặp pixel, ta transform ba vertex, đổi từ NDC sang tọa độ panel và chỉ quét bounding box của tam giác:
 
 ```cpp title="include/pipeline.hpp — chuẩn bị screen triangle và bounding box"
 framebuffer.clear({11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F});
 const std::array<GpuVertex, 3> transformed = transformedTriangle(triangle, transform);
 std::array<ScreenVertex, 3> screen{};
 for (std::size_t index = 0; index < screen.size(); ++index) {
+    // Invalid geometry must not reach a float-to-integer bounding-box cast.
+    if (!std::isfinite(transformed[index].positionX) || !std::isfinite(transformed[index].positionY) ||
+        std::abs(transformed[index].positionX) > 10000 || std::abs(transformed[index].positionY) > 10000) {
+        return;
+    }
     screen[index] = {
         ndcToCpuScreen({transformed[index].positionX, transformed[index].positionY}, framebuffer.width, framebuffer.height),
         {transformed[index].red, transformed[index].green, transformed[index].blue},
@@ -86,7 +100,7 @@ const int top = std::clamp(int(std::floor(minimumY)), 0, framebuffer.height - 1)
 const int bottom = std::clamp(int(std::ceil(maximumY)), 0, framebuffer.height - 1);
 ```
 
-Không quét toàn bộ framebuffer rồi mới hỏi pixel có nằm trong triangle không. Bounding box giữ thuật toán dễ hiểu mà đã tránh phần lớn phép tính thừa.
+Không quét toàn bộ framebuffer rồi mới hỏi pixel có nằm trong tam giác không. Bounding box giữ thuật toán dễ hiểu mà đã tránh phần lớn phép tính thừa.
 
 ```cpp title="include/pipeline.hpp — hot loop CPU rasterizer"
 for (int y = top; y <= bottom; ++y) {
@@ -103,7 +117,7 @@ for (int y = top; y <= bottom; ++y) {
 
 ### Bước 3 — Cấp texture storage khi panel đổi size
 
-Presenter tạo program dành riêng cho texture, một VAO rỗng cho Core Profile và texture dùng nearest filtering. Nó không nhận mesh triangle:
+Presenter tạo program dành riêng cho texture, một VAO rỗng cho Core Profile và texture dùng nearest filtering. Nó không nhận mesh tam giác:
 
 ```cpp title="include/gpu_renderer.hpp — initialize CPU texture presenter"
 program = createProgram(api, kTextureVertexShader, kTextureFragmentShader, diagnostics);
@@ -123,10 +137,23 @@ return textureLocation >= 0 && vertexArray != 0U && texture != 0U;
 ```
 
 ```cpp title="include/gpu_renderer.hpp — allocate CPU texture"
-api.BindTexture(GL_TEXTURE_2D, texture);
-api.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
-api.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-api.BindTexture(GL_TEXTURE_2D, 0U);
+bool resize(GlApi& api, int nextWidth, int nextHeight) {
+    GLint maximumTextureSize = 0;
+    api.GetIntegerv(GL_MAX_TEXTURE_SIZE, &maximumTextureSize);
+    if (nextWidth <= 0 || nextHeight <= 0 || nextWidth > maximumTextureSize || nextHeight > maximumTextureSize) {
+        return false;
+    }
+    api.BindTexture(GL_TEXTURE_2D, texture);
+    api.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    api.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, nextWidth, nextHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    api.BindTexture(GL_TEXTURE_2D, 0U);
+    if (api.GetError() != GL_NO_ERROR) {
+        return false;
+    }
+    width = nextWidth;
+    height = nextHeight;
+    return true;
+}
 ```
 
 `glTexImage2D` cấp storage. Mỗi frame bình thường chỉ gọi `glTexSubImage2D` để thay pixels, tránh cấp allocation mới liên tục.
@@ -168,34 +195,23 @@ void draw(GlApi& api) const {
 
 ## Ghép các phần lại
 
-Trong frame loop, resize storage chỉ khi kích thước panel trái đổi. Thứ tự còn lại luôn là rasterize → upload → đặt viewport trái → draw presenter; sau đó mới chuyển sang viewport phải cho GPU triangle:
+Trong phần setup, tạo CpuTexturePresenter và Framebuffer sau khi program/VBO đã sẵn sàng. Trong vòng lặp, chỉ resize ảnh và texture khi kích thước panel đổi; kiểm cả hai kết quả trước khi upload.
 
-```cpp title="src/main.cpp — render hai panel từ cùng transform"
-if (cpuFramebuffer.width != leftWidth || cpuFramebuffer.height != framebufferHeight) {
-    cpuFramebuffer.resize(leftWidth, framebufferHeight);
-    cpuPresenter.resize(gl, leftWidth, framebufferHeight);
-}
-rasterizeCpuTriangle(cpuFramebuffer, lab::kSourceTriangle, transform, smoothColor);
-cpuPresenter.upload(gl, cpuFramebuffer);
-gl.Viewport(0, 0, leftWidth, framebufferHeight);
-cpuPresenter.draw(gl);
+Sau đó rasterizeCpuTriangle → cpuPresenter.upload → viewport trái → cpuPresenter.draw. tam giác GPU vẫn vẽ ở viewport phải. Bản chuẩn giới hạn mỗi panel ở 4M pixel, mỗi chiều ảnh CPU không quá 4096; khi vượt giới hạn, cửa sổ báo cần thu nhỏ thay vì cố cấp phát vô hạn.
 
-gl.Viewport(leftWidth, 0, rightWidth, framebufferHeight);
-gpuTriangle.draw(gl, transform, smoothColor);
+```bash title="Terminal — build và chạy checkpoint 04"
+cmake --build build --config Debug --target project_33_checkpoint_4 --parallel 2
+./build/Debug/project_33_checkpoint_4.exe
 ```
 
-```bash title="Terminal — build checkpoint 4"
-cmake --build build --config Debug --target project_33_checkpoint_4
-```
-
-Hai panel bây giờ cùng có triangle xanh. Nửa trái đi qua CPU framebuffer + texture; nửa phải vẫn là GPU rasterization trực tiếp.
+Đường chạy trên dành cho Visual Studio trên Windows. Với Ninja, chọn CMAKE_BUILD_TYPE khi configure và chạy executable ngay trong build, không có thư mục Debug/Release trung gian. Mọi checkpoint và final đều nằm trong cùng ZIP; bạn không cần Node.js để build C++.
 
 ## Thử làm sai để hiểu đúng
 
-1. Xóa `+0.5` khỏi pixel sample. Biên coverage dịch nửa pixel và probe sau này khó giải thích.
-2. Gọi `glTexImage2D` mỗi frame. Kết quả vẫn đúng nhưng resource churn che mất pipeline đơn giản.
-3. Bỏ flip V trong texture shader. CPU triangle bị lật dọc trong panel trái dù framebuffer math vẫn đúng.
-4. Dùng linear filter. Pixels CPU bị pha thêm ở lúc trình bày, làm comparison khó đọc.
+Chỉ thay một chi tiết mỗi lần trên bản thử nghiệm. Ghi dự đoán trước, chạy để quan sát rồi phục hồi mã đúng trước khi đi tiếp.
+
+1. Bỏ phép lật V trong texture shader. Panel CPU lật dọc còn GPU giữ nguyên; trả lại flip sau khi xác nhận lỗi thuộc bước trình bày ảnh.
+2. Bỏ +0.5 ở tâm mẫu CPU. So đường biên trước/sau; đừng đổi vertex shader để che sai khác do vị trí lấy mẫu.
 
 ## Tự kiểm tra kết quả
 
@@ -204,12 +220,12 @@ Hai panel bây giờ cùng có triangle xanh. Nửa trái đi qua CPU framebuffe
 - [ ] Pixel center dùng `(x+0.5, y+0.5)`.
 - [ ] Texture storage chỉ realloc khi panel đổi size.
 - [ ] Presenter dùng nearest sampling và flip V có chủ đích.
-- [ ] Hai panel có cùng solid triangle.
+- [ ] Hai panel có cùng solid tam giác.
 
 ## Bài tập mở rộng
 
-1. Tắt GPU draw để xác nhận panel trái không vô tình phụ thuộc GPU triangle program.
+1. Tắt GPU draw để xác nhận panel trái không vô tình phụ thuộc tam giác GPU program.
 2. In checksum CPU framebuffer ở hai frame đứng yên; giá trị phải lặp lại.
-3. Đổi background CPU thành màu dễ nhận biết nhưng giữ triangle color giống GPU.
+3. Đổi background CPU thành màu dễ nhận biết nhưng giữ tam giác color giống GPU.
 
-Bài sau sẽ cho triangle xoay, scale và dịch chuyển bằng cùng transform ở C++ và vertex shader.
+Bài sau sẽ cho tam giác xoay, scale và dịch chuyển bằng cùng transform ở C++ và vertex shader.

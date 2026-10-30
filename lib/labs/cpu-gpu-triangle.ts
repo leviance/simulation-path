@@ -48,6 +48,9 @@ export interface ProbeAgreement {
   expectedColor: Rgb;
   quantizedColor: Rgb;
   quantizationError: number;
+  pixelCenterNdc: Vec2;
+  pixelX: number;
+  pixelY: number;
 }
 
 export const defaultTriangle: readonly TriangleVertex[] = [
@@ -132,7 +135,12 @@ export function barycentricAtPoint(
   }
   const [a, b, c] = triangle;
   const signedArea = edge(a.position, b.position, c.position);
-  if (Math.abs(signedArea) <= 1e-12) {
+  if (
+    !Number.isFinite(signedArea) ||
+    !Number.isFinite(point.x) ||
+    !Number.isFinite(point.y) ||
+    Math.abs(signedArea) <= 1e-12
+  ) {
     return {
       inside: false,
       weights: [0, 0, 0],
@@ -174,6 +182,7 @@ export function quantizeColor8(color: Rgb): Rgb {
 }
 
 export function maximumColorDifference(a: Rgb, b: Rgb) {
+  if (![a.r, a.g, a.b, b.r, b.g, b.b].every(Number.isFinite)) return Infinity;
   return Math.max(Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b));
 }
 
@@ -202,12 +211,31 @@ export function compareProbe(
   cpuWidth: number,
   cpuHeight: number,
   gpuViewport: Viewport,
+  smoothColor = true,
 ): ProbeAgreement {
+  if (
+    ![cpuWidth, cpuHeight, gpuViewport.width, gpuViewport.height].every(
+      (value) => Number.isFinite(value) && value > 0,
+    ) ||
+    ![pointNdc.x, pointNdc.y, gpuViewport.x, gpuViewport.y].every(Number.isFinite) ||
+    pointNdc.x < -1 ||
+    pointNdc.x >= 1 ||
+    pointNdc.y < -1 ||
+    pointNdc.y >= 1
+  ) {
+    throw new RangeError(
+      "Probe must be finite, inside a non-empty viewport and below the upper NDC boundary",
+    );
+  }
   const cpuScreen = ndcToCpuScreen(pointNdc, cpuWidth, cpuHeight);
   const gpuWindow = ndcToGpuWindow(pointNdc, gpuViewport);
   const cpuRecovered = cpuScreenToNdc(cpuScreen, cpuWidth, cpuHeight);
   const gpuRecovered = gpuWindowToNdc(gpuWindow, gpuViewport);
-  const expectedColor = sampleTriangle(triangle, transform, pointNdc, true).color;
+  const pixelX = Math.floor(gpuWindow.x);
+  const pixelY = Math.floor(gpuWindow.y);
+  const pixelCenterNdc = gpuWindowToNdc({ x: pixelX + 0.5, y: pixelY + 0.5 }, gpuViewport);
+  const sample = sampleTriangle(triangle, transform, pixelCenterNdc, smoothColor);
+  const expectedColor = sample.inside ? sample.color : { r: 11 / 255, g: 16 / 255, b: 32 / 255 };
   const quantizedColor = quantizeColor8(expectedColor);
   return {
     ndc: { ...pointNdc },
@@ -217,7 +245,15 @@ export function compareProbe(
     expectedColor,
     quantizedColor,
     quantizationError: maximumColorDifference(expectedColor, quantizedColor),
+    pixelCenterNdc,
+    pixelX,
+    pixelY,
   };
+}
+
+export function wrapDegrees(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return ((((value + 180) % 360) + 360) % 360) - 180;
 }
 
 export function triangleCentroid(

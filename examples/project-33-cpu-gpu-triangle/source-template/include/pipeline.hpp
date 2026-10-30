@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <new>
 #include <numbers>
 #include <type_traits>
 #include <vector>
@@ -94,10 +95,23 @@ struct Framebuffer {
     int height{};
     std::vector<std::uint8_t> rgba{};
 
-    void resize(int nextWidth, int nextHeight) {
-        width = std::max(1, nextWidth);
-        height = std::max(1, nextHeight);
-        rgba.resize(std::size_t(width) * std::size_t(height) * 4U);
+    bool resize(int nextWidth, int nextHeight) {
+        // Check dimensions before multiplying. Failed resize preserves the old image.
+        constexpr std::size_t maximumPixels = 4U * 1024U * 1024U;
+        if (nextWidth <= 0 || nextHeight <= 0 || nextWidth > 4096 || nextHeight > 4096) {
+            return false;
+        }
+        if (std::size_t(nextWidth) > maximumPixels / std::size_t(nextHeight)) {
+            return false;
+        }
+        try {
+            rgba.resize(std::size_t(nextWidth) * std::size_t(nextHeight) * 4U);
+        } catch (const std::bad_alloc&) {
+            return false;
+        }
+        width = nextWidth;
+        height = nextHeight;
+        return true;
     }
 
     void clear(Color color) {
@@ -159,7 +173,7 @@ inline BarycentricSample barycentricAtPoint(
     bool smoothColor
 ) {
     const float signedArea = edge(triangle[0].position, triangle[1].position, triangle[2].position);
-    if (std::abs(signedArea) <= 1.0e-8F) {
+    if (!std::isfinite(signedArea) || !std::isfinite(point.x) || !std::isfinite(point.y) || std::abs(signedArea) <= 1.0e-8F) {
         return {};
     }
     const float weight0 = edge(triangle[1].position, triangle[2].position, point) / signedArea;
@@ -188,6 +202,11 @@ inline void rasterizeCpuTriangle(
     const std::array<GpuVertex, 3> transformed = transformedTriangle(triangle, transform);
     std::array<ScreenVertex, 3> screen{};
     for (std::size_t index = 0; index < screen.size(); ++index) {
+        // Invalid geometry must not reach a float-to-integer bounding-box cast.
+        if (!std::isfinite(transformed[index].positionX) || !std::isfinite(transformed[index].positionY) ||
+            std::abs(transformed[index].positionX) > 10000 || std::abs(transformed[index].positionY) > 10000) {
+            return;
+        }
         screen[index] = {
             ndcToCpuScreen({transformed[index].positionX, transformed[index].positionY}, framebuffer.width, framebuffer.height),
             {transformed[index].red, transformed[index].green, transformed[index].blue},
@@ -284,6 +303,29 @@ struct ProbePixel {
     Vec2 centerNdc{};
 };
 
+// Distance is in framebuffer pixels, not NDC; use it to qualify an interior probe.
+inline float probeEdgeDistance(const std::array<GpuVertex, 3>& triangle, const Transform2D& transform, Vec2 point, int width, int height) {
+    const auto transformed = transformedTriangle(triangle, transform);
+    const Vec2 pixel = ndcToCpuScreen(point, width, height);
+    float nearest = std::numeric_limits<float>::infinity();
+    for (std::size_t index = 0; index < 3; ++index) {
+        const auto& first = transformed[index];
+        const auto& second = transformed[(index + 1) % 3];
+        const Vec2 start = ndcToCpuScreen({first.positionX, first.positionY}, width, height);
+        const Vec2 end = ndcToCpuScreen({second.positionX, second.positionY}, width, height);
+        const Vec2 segment = subtract(end, start);
+        const Vec2 relative = subtract(pixel, start);
+        const float squaredLength = segment.x * segment.x + segment.y * segment.y;
+        float along = 0;
+        if (squaredLength > 0) {
+            along = std::clamp((relative.x * segment.x + relative.y * segment.y) / squaredLength, 0.0F, 1.0F);
+        }
+        const Vec2 closest{start.x + along * segment.x, start.y + along * segment.y};
+        nearest = std::min(nearest, length(subtract(pixel, closest)));
+    }
+    return nearest;
+}
+
 // Compare at the center of the exact pixel read by OpenGL, not at the
 // original continuous point. Off-screen points are not clamped onto an edge.
 inline ProbePixel locateProbePixel(Vec2 point, const Viewport& viewport) {
@@ -308,6 +350,10 @@ inline Color quantizeRgba8(Color color) {
 }
 
 inline float maximumColorDifference(Color left, Color right) {
+    if (!std::isfinite(left.red) || !std::isfinite(left.green) || !std::isfinite(left.blue) ||
+        !std::isfinite(right.red) || !std::isfinite(right.green) || !std::isfinite(right.blue)) {
+        return std::numeric_limits<float>::infinity();
+    }
     return std::max({
         std::abs(left.red - right.red),
         std::abs(left.green - right.green),
@@ -351,13 +397,15 @@ inline PipelineValidationReport validateCpuGpuTriangleContract() {
         report.centroidWeights = report.centroidWeights && std::abs(weight - 1.0F / 3.0F) <= 1.0e-5F;
     }
 
-    Framebuffer first{};
-    first.resize(160, 120);
-    rasterizeCpuTriangle(first, kSourceTriangle, identity, true);
-    Framebuffer second{};
-    second.resize(160, 120);
-    rasterizeCpuTriangle(second, kSourceTriangle, identity, true);
-    report.deterministicRaster = framebufferChecksum(first) == framebufferChecksum(second);
+    // Known-answer fixture: at pixel (0,0), weights are 1/2, 1/4, 1/4.
+    const std::array<GpuVertex, 3> fixture{{{-1, 1, 1, 0, 0}, {1, 1, 0, 1, 0}, {-1, -1, 0, 0, 1}}};
+    Framebuffer image{};
+    if (!image.resize(2, 2)) {
+        return report;
+    }
+    rasterizeCpuTriangle(image, fixture, identity, true);
+    report.deterministicRaster = image.rgba[0] == 128 && image.rgba[1] == 64 && image.rgba[2] == 64 &&
+        image.rgba[12] == 11 && image.rgba[13] == 16 && image.rgba[14] == 32;
 
     const Color quantized = quantizeRgba8(centroid.color);
     report.rgba8Tolerance = maximumColorDifference(centroid.color, quantized) <= 0.5F / 255.0F + 1.0e-6F;

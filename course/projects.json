@@ -231,6 +231,7 @@
   },
   {
     "id": "33",
+      "contentRevision": 2,
     "slug": "cpu-gpu-triangle",
     "sourceDirectory": "project-33-cpu-gpu-triangle",
     "checkpointCount": 9,

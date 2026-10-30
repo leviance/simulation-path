@@ -4,16 +4,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Compiler C++ không đọc GLSL nằm trong string. Một chương trình có thể build hoàn toàn sạch nhưng thất bại lúc chạy vì thiếu dấu chấm phẩy trong vertex shader, interface giữa hai stage không khớp hoặc driver không chấp nhận version đã yêu cầu.
+Bài trước đã mở được cửa sổ OpenGL và tô hai nửa màn hình. Hôm nay ta chuẩn bị chương trình nhỏ sẽ chạy trên GPU, gọi là shader. Sau bài này cửa sổ vẫn chưa có tam giác: ta cần biết shader compile và link thành công trước khi đưa dữ liệu đỉnh vào.
 
-Vì vậy checkpoint 2 chỉ làm một việc: biến hai source strings thành shader program có diagnostics đáng tin cậy. Title bar nói “program linked”; chưa có draw call và đó là chủ ý.
+Compiler C++ chỉ thấy GLSL là một chuỗi ký tự, nên C++ build thành công không có nghĩa shader đúng. Vì thế phần báo lỗi không phải việc phụ để làm cuối project: chính nó giúp bạn sửa dấu chấm phẩy, tên biến và kiểu dữ liệu ngay từ lần chạy đầu.
 
 ## Hiểu ý tưởng trước khi viết code
 
-- **Compile** áp dụng cho từng shader object. Nó kiểm source của vertex hoặc fragment stage.
-- **Link** áp dụng cho program. Nó kiểm các stage có ghép được với nhau hay không.
+Vertex shader chạy cho từng đỉnh; fragment shader tính màu đầu ra của fragment. Hai bước tạo program là **compile** từng shader và **link** chúng lại. `GL_COMPILE_STATUS` không thay cho `GL_LINK_STATUS`: hai stage có thể hợp lệ riêng nhưng không khớp interface.
 
-Nếu vertex shader ghi `out vec3 vColor` còn fragment shader đòi `in vec2 vColor`, cả hai có thể compile riêng nhưng program link thất bại.
+Ở bài này ta cung cấp trước phép rotate/scale/translate trong shader để dùng lại về sau. Chưa cần sửa công thức ấy; hãy tập trung vào source → shader object → program và info log của từng bước.
 
 <InteractiveLab demo="cpu-gpu-triangle" mode="shader-program" />
 
@@ -68,12 +67,13 @@ void main() {
 
 ### Bước 2 — Đọc info log đầy đủ
 
-Driver cho biết độ dài log trước. Ta cấp đúng số ký tự, gọi `GetShaderInfoLog`, rồi biến buffer kết thúc bằng null thành `std::string`:
+Driver báo độ dài info log. Ta chặn ở 64 KiB trước khi cấp phát, gọi `GetShaderInfoLog`, rồi tạo `std::string` từ buffer:
 
 ```cpp title="include/gpu_renderer.hpp — shaderInfoLog"
 inline std::string shaderInfoLog(GlApi& api, GLuint shader) {
     GLint length = 0;
     api.GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+    length = std::min(length, 65536);
     if (length <= 1) {
         return {};
     }
@@ -174,36 +174,23 @@ Location `-1` nghĩa là uniform không tồn tại hoặc bị optimizer loại
 
 ## Ghép các phần lại
 
-Đặt hai chuỗi GLSL cùng các helper shaderInfoLog, compileShader và createProgram trong namespace lab của include/gpu_renderer.hpp. programInfoLog làm công việc tương tự shaderInfoLog nhưng gọi GetProgramiv/GetProgramInfoLog; bản đầy đủ có trong source checkpoint.
+Hai chuỗi GLSL và các helper nằm trong include/gpu_renderer.hpp. Sau gl.load thành công, main tạo GpuTriangleRenderer, gọi initializeProgram và kiểm kết quả. Lúc thoát, destroy program trước context; GLuint chỉ là số định danh, không tự giải phóng khi biến ra khỏi scope.
 
-GpuTriangleRenderer giữ program và bốn uniform location. Phương thức initializeProgram gọi createProgram, rồi lưu các location một lần. Trong main, sau khi loader thành công và trước vòng SDL, thêm:
+Log được cấp theo độ dài driver báo nhưng có ngân sách tối đa 64 KiB để tránh cấp phát không giới hạn. Hãy giữ cả thông báo tên stage lẫn info log; nếu log bị cắt ở giới hạn này thì không gọi đó là toàn bộ log.
 
-```cpp title="src/main.cpp — tạo program và dừng đúng lúc nếu có lỗi"
-lab::GpuTriangleRenderer gpuTriangle{};
-std::string diagnostics{};
-if (!gpuTriangle.initializeProgram(gl, diagnostics)) {
-    std::cerr << diagnostics << '\n';
-    gpuTriangle.destroy(gl);
-    destroyWindowAndContext(window, context);
-    return EXIT_FAILURE;
-}
-std::cout << "Triangle shader program linked successfully.\n";
+```bash title="Terminal — build và chạy checkpoint 02"
+cmake --build build --config Debug --target project_33_checkpoint_2 --parallel 2
+./build/Debug/project_33_checkpoint_2.exe
 ```
 
-Khi thoát bình thường, cũng gọi gpuTriangle.destroy(gl) trước destroyWindowAndContext. Đừng nhầm GLuint với một object C++ tự quản lý tài nguyên: rời scope của biến số nguyên không tự gọi glDeleteProgram.
-
-```bash title="Terminal — build checkpoint 2"
-cmake --build build --config Debug --target project_33_checkpoint_2
-```
-
-Chạy executable. Cửa sổ vẫn chỉ có hai vùng clear, nhưng terminal phải in `Triangle shader program linked successfully.`. Ta đã xác nhận shader source trước khi VBO/VAO xuất hiện.
+Đường chạy trên dành cho Visual Studio trên Windows. Với Ninja, chọn CMAKE_BUILD_TYPE khi configure và chạy executable ngay trong build, không có thư mục Debug/Release trung gian. Mọi checkpoint và final đều nằm trong cùng ZIP; bạn không cần Node.js để build C++.
 
 ## Thử làm sai để hiểu đúng
 
-1. Xóa dấu `;` sau `out vec3 vColor`. Log phải ghi rõ vertex shader compile failed.
-2. Đổi fragment input thành `vec2`. Hai stage compile nhưng link log phải báo interface mismatch.
-3. Bỏ kiểm `GL_LINK_STATUS` rồi gọi `glUseProgram` với program lỗi. Màn hình trống nhưng nguyên nhân bị giấu.
-4. Chỉ in log ở Debug. GLSL compile ở runtime nên Release cũng cần diagnostics.
+Chỉ thay một chi tiết mỗi lần trên bản thử nghiệm. Ghi dự đoán trước, chạy để quan sát rồi phục hồi mã đúng trước khi đi tiếp.
+
+1. Xóa dấu chấm phẩy trong vertex shader. Chạy executable để thấy compile failure và info log; sửa lại rồi xác nhận program link được.
+2. Đổi kiểu vColor ở fragment shader thành vec2 và sửa phép dựng màu tương ứng. Hai stage có thể compile, nhưng link phải báo không khớp interface. Khôi phục cả hai source sau thí nghiệm.
 
 ## Tự kiểm tra kết quả
 

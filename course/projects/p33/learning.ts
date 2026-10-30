@@ -119,7 +119,7 @@ const learning = {
         {
           title: "Đặt tên thứ tự transform",
           explanation:
-            "Scale trước rotate không luôn cho cùng kết quả khi transform mở rộng. Cả hai phía dùng đúng intermediate rotatedX/rotatedY.",
+            "Với scale đồng đều, scale và rotate đổi chỗ được; translation nói chung không đổi chỗ được với rotation. Kiểm ca tính tay 90° trước khi xét transform mở rộng.",
         },
         {
           title: "Uniform là input của draw",
@@ -195,7 +195,7 @@ const learning = {
         {
           title: "Tránh edge làm pass/fail",
           explanation:
-            "Coverage rule và sample convention có thể khác đúng một pixel quanh biên. Centroid tạo probe ổn định hơn.",
+            "Centroid thường ở trong tam giác nhưng tâm pixel lân cận có thể chạm cạnh khi hình quá nhỏ. Fixture có kích thước xác định và kiểm riêng sai khác trong dải cạnh tối đa 1,5 pixel.",
         },
         {
           title: "Tách readback khỏi render loop thường xuyên",
@@ -219,7 +219,7 @@ const learning = {
         {
           title: "Không gọi readback mỗi frame",
           explanation:
-            "Phím P chạy report chủ động. Title giữ trace CPU thuần nên window vẫn phản hồi bình thường.",
+            "Phím P đọc pixel sau draw và trước overlay. Bảng NDC là dự kiến tính trên CPU, không giả làm kết quả đọc từ vertex shader; report cũ bị đánh dấu khi đầu vào đổi.",
         },
         {
           title: "Destroy theo dependency",

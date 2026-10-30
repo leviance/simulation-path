@@ -119,12 +119,19 @@ inline void drawPipelineOverlay(GlApi& gl, const std::array<GpuVertex, 3>& trian
     gl.Enable(GL_SCISSOR_TEST);
     const Color ink{0.77F, 0.86F, 0.94F};
     const Color background{0.035F, 0.055F, 0.09F};
-    overlayRect(gl, 0, 0, width, 86, height, background);
+    overlayRect(gl, 0, 0, width, 110, height, background);
     overlayRect(gl, 0, std::max(86, height - 56), width, 56, height, background);
     const int leftWidth = width / 2;
     overlayText(gl, 14, 12, "CPU - SOFTWARE RASTERIZER", height, ink);
     overlayText(gl, leftWidth + 14, 12, "GPU - GLSL / NDC EXPECTED", height, ink);
     const auto transformed = transformedTriangle(triangle, transform);
+    const auto& input = triangle[selected];
+    char trace[120]{};
+    std::snprintf(trace, sizeof(trace), "%c LOCAL %.2f %.2f / CLIP W 1", 'A' + selected, double(input.positionX), double(input.positionY));
+    overlayText(gl, 14, 84, trace, height, ink);
+    const Vec2 selectedPixel = ndcToCpuScreen({transformed[selected].positionX, transformed[selected].positionY}, width - leftWidth, height);
+    std::snprintf(trace, sizeof(trace), "SCREEN %.1f %.1f / TOP-LEFT", double(selectedPixel.x), double(selectedPixel.y));
+    overlayText(gl, leftWidth + 14, 84, trace, height, ink);
     for (int index = 0; index < 3; ++index) {
         char line[100]{};
         const char* selection = "        ";
@@ -142,7 +149,7 @@ inline void drawPipelineOverlay(GlApi& gl, const std::array<GpuVertex, 3>& trian
                 origin = 0;
             }
             const Vec2 pixel = ndcToCpuScreen({transformed[index].positionX, transformed[index].positionY}, panelWidth, height);
-            if (pixel.x < 0 || pixel.x >= panelWidth || pixel.y < 86 || pixel.y >= height - 56)
+            if (pixel.x < 0 || pixel.x >= panelWidth || pixel.y < 110 || pixel.y >= height - 56)
                 continue;
             const auto& vertex = triangle[index];
             const Color color{vertex.red, vertex.green, vertex.blue};

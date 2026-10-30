@@ -4,25 +4,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Project 16 đã tự tạo từng pixel của tam giác trên CPU. Bây giờ ta muốn GPU làm công việc rasterization, nhưng không thể gọi `glClear` hay tạo shader ngay sau `SDL_CreateWindow`. Mọi lệnh OpenGL đều cần một **context** đang gắn với đúng window và đang current trên thread gọi lệnh.
+Ở Project 16, bạn đã tự quyết định pixel nào nằm trong tam giác và tính màu cho pixel ấy. Sang đây, ta giao phần việc đó cho GPU, nhưng vẫn giữ renderer CPU để đối chiếu. Đích đến là một cửa sổ có hai tam giác nhận cùng dữ liệu; khi sửa một đỉnh, cả hai phía phải thay đổi cùng lúc.
 
-Checkpoint đầu chưa vẽ tam giác. Nó chỉ tạo một cửa sổ có hai vùng clear khác màu. Kết quả này nghe đơn giản, nhưng xác nhận được bốn thứ quan trọng: window có OpenGL flag, context 3.3 Core được tạo, function pointers được load sau context và framebuffer pixel size được đọc đúng.
+Bài đầu chưa vội vẽ tam giác. Hãy mở ZIP và chạy `project_33_starter` trước: cửa sổ phải mở, resize và đóng bình thường. Ta giữ vòng lặp SDL ấy, thay phần hiển thị bằng OpenGL 3.3 Core. Cuối bài, bạn sẽ thấy hai vùng nền khác màu — đủ để kiểm tra đường đi từ window tới framebuffer trước khi thêm shader.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Lifecycle tối thiểu là:
+Window là cửa sổ của hệ điều hành; context giữ trạng thái và tài nguyên OpenGL. Context phải được tạo, gắn với thread hiện tại bằng `SDL_GL_MakeCurrent`, rồi mới load function pointers qua `SDL_GL_GetProcAddress`. Sau khi vẽ, `SDL_GL_SwapWindow` đưa back buffer ra màn hình.
 
-```text
-SDL_Init
-  → SDL_GL_SetAttribute
-  → SDL_CreateWindow(SDL_WINDOW_OPENGL)
-  → SDL_GL_CreateContext
-  → SDL_GL_MakeCurrent
-  → SDL_GL_GetProcAddress
-  → render / SDL_GL_SwapWindow
-```
-
-Đổi thứ tự hai bước cuối là lỗi nguy hiểm. Đặc biệt trên Windows, function pointer được xem là thuộc context hiện tại; đừng load chúng trước rồi hy vọng context tạo sau sẽ dùng được.
+Ta lấy kích thước bằng `SDL_GetWindowSizeInPixels`, vì viewport và scissor nhận pixel thật. Tọa độ chuột SDL vẫn là logical coordinates; bài cuối mới nối hai hệ đó khi kéo đỉnh.
 
 <InteractiveLab demo="cpu-gpu-triangle" mode="gl-context" />
 
@@ -112,39 +102,24 @@ const int rightWidth = framebufferWidth - leftWidth;
 
 ## Ghép các phần lại
 
-Checkpoint 1 dùng scissor test để clear hai nửa bằng hai màu tối, sau đó gọi `SDL_GL_SwapWindow`. Chưa có shader, VBO hay triangle. Đây là dấu mốc tốt: nếu màn hình không chia đôi, ta sửa context/viewport trước khi kéo thêm ba tầng lỗi mới vào.
+Giữ SDL_PollEvent ở đầu vòng lặp. Đọc framebuffer size, tính leftWidth/rightWidth, clear bằng scissor, rồi swap. Không tạo SDL_Renderer và không gọi SDL_RenderPresent trong nhánh OpenGL.
 
-Trong vòng while đang có, giữ phần SDL_PollEvent ở đầu. Sau khi đọc framebufferWidth/Height và tính leftWidth/rightWidth, đặt đoạn vẽ sau; scissor giới hạn vùng bị clear. Nếu không bật scissor, lần clear thứ hai sẽ phủ cả cửa sổ, dù bạn đã tính đúng hai chiều rộng.
+Nếu cửa sổ thu nhỏ tới mức không có vùng vẽ, bỏ qua frame đó. Ứng dụng vẫn phải xử lý event, không cấp một framebuffer giả rồi tiếp tục như thể kích thước hợp lệ. Hãy chạy checkpoint 01 trước khi chuyển sang compile shader.
 
-```cpp title="src/main.cpp — hai vùng clear trong vòng render"
-gl.Enable(GL_SCISSOR_TEST);
-gl.Scissor(0, 0, leftWidth, framebufferHeight);
-gl.ClearColor(0.055F, 0.085F, 0.15F, 1.0F);
-gl.Clear(GL_COLOR_BUFFER_BIT);
-gl.Scissor(leftWidth, 0, rightWidth, framebufferHeight);
-gl.ClearColor(0.04F, 0.065F, 0.12F, 1.0F);
-gl.Clear(GL_COLOR_BUFFER_BIT);
-gl.Disable(GL_SCISSOR_TEST);
-```
-
-Cuối mỗi lượt vẽ, gọi SDL_GL_SwapWindow(window) và kiểm kết quả như source. Lệnh clear sửa back buffer; swap mới đưa kết quả ra cửa sổ. Không thêm SDL_RenderPresent: học phần này không tạo SDL_Renderer. Khi thoát vòng lặp, gọi destroyWindowAndContext đúng một lần.
-
-```bash title="Terminal — build checkpoint 1"
+```bash title="Terminal — build và chạy checkpoint 01"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_33_starter --parallel 2
-./build/Debug/project_33_starter.exe
-cmake --build build --config Debug --target project_33_checkpoint_1
+cmake --build build --config Debug --target project_33_checkpoint_1 --parallel 2
 ./build/Debug/project_33_checkpoint_1.exe
 ```
 
-Các đường chạy trên dành cho Visual Studio ở Windows. Với Ninja, executable nằm trực tiếp trong build; chọn Debug bằng CMAKE_BUILD_TYPE lúc configure. Cả hai bản đều phải đóng cửa sổ và thoát được, không chỉ build thành công.
+Đường chạy trên dành cho Visual Studio trên Windows. Với Ninja, chọn CMAKE_BUILD_TYPE khi configure và chạy executable ngay trong build, không có thư mục Debug/Release trung gian. Mọi checkpoint và final đều nằm trong cùng ZIP; bạn không cần Node.js để build C++.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ `SDL_WINDOW_OPENGL` nhưng vẫn tạo context. SDL phải trả lỗi rõ ràng.
-2. Gọi `gl.load()` trước `SDL_GL_CreateContext`. Function pointers không có lifecycle hợp lệ.
-3. Dùng logical width cho scissor rồi chuyển window sang màn hình high-DPI. Hai vùng không còn phủ đúng framebuffer pixels.
-4. Yêu cầu Compatibility Profile để code “dễ chạy hơn”. Điều đó làm project mất mục tiêu học pipeline hiện đại.
+Chỉ thay một chi tiết mỗi lần trên bản thử nghiệm. Ghi dự đoán trước, chạy để quan sát rồi phục hồi mã đúng trước khi đi tiếp.
+
+1. Đổi màu clear bên trái rồi chạy lại. Dự đoán trước vùng nào đổi; sau đó kiểm vùng phải vẫn giữ màu cũ.
+2. Tạm bỏ bật scissor, vẫn giữ hai lần clear. Quan sát lần clear cuối phủ toàn cửa sổ, rồi khôi phục trước khi sang shader.
 
 ## Tự kiểm tra kết quả
 
@@ -161,4 +136,4 @@ Các đường chạy trên dành cho Visual Studio ở Windows. Với Ninja, ex
 2. Tạm yêu cầu OpenGL 9.9 để quan sát đường lỗi context creation, sau đó phục hồi 3.3.
 3. Đổi màu hai scissor regions nhưng giữ alpha bằng 1 để xác nhận clear state độc lập với shader.
 
-Bài tiếp theo sẽ compile vertex shader và fragment shader đầu tiên, nhưng vẫn chưa draw triangle. Ta sẽ giữ shader diagnostics sạch trước khi thêm vertex data.
+Bài tiếp theo sẽ compile vertex shader và fragment shader đầu tiên, nhưng vẫn chưa draw tam giác. Ta sẽ giữ shader diagnostics sạch trước khi thêm vertex data.

@@ -6,11 +6,13 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   compareProbe,
+  barycentricAtPoint,
   defaultTriangle,
   makePipelineTrace,
   maximumColorDifference,
@@ -18,6 +20,7 @@ import {
   sampleTriangle,
   transformTriangle,
   triangleCentroid,
+  wrapDegrees,
   type TriangleTransform,
   type TriangleVertex,
   type Vec2,
@@ -42,6 +45,7 @@ interface Panel {
 }
 
 const BACKGROUND = { r: 11 / 255, g: 16 / 255, b: 32 / 255 };
+const subscribeToHydration = () => () => {};
 
 function modeCapabilities(mode?: InteractiveLabMode) {
   const stages: InteractiveLabMode[] = [
@@ -98,13 +102,15 @@ function drawRasterPanel(
   const width = Math.max(1, Math.floor(panel.width * samplingScale));
   const height = Math.max(1, Math.floor(panel.height * samplingScale));
   const image = context.createImageData(width, height);
+  // Transform the three vertices once, not once for every candidate pixel.
+  const transformed = transformTriangle(triangle, transform);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const ndc = {
         x: ((x + 0.5) / width) * 2 - 1,
         y: 1 - ((y + 0.5) / height) * 2,
       };
-      const sample = sampleTriangle(triangle, transform, ndc, smoothColor);
+      const sample = barycentricAtPoint(transformed, ndc);
       let color = BACKGROUND;
       if (sample.inside) {
         const expected = smoothColor ? sample.color : { r: 0.38, g: 0.68, b: 0.94 };
@@ -154,6 +160,11 @@ function drawTriangleOutline(
   triangle: readonly TriangleVertex[],
   transform: TriangleTransform,
 ) {
+  // Geometry may leave NDC; its diagnostic outline must stay in its own panel.
+  context.save();
+  context.beginPath();
+  context.rect(panel.x, panel.y, panel.width, panel.height);
+  context.clip();
   const vertices = transformTriangle(triangle, transform).map((vertex) =>
     ndcToPanel(vertex.position, panel),
   );
@@ -171,6 +182,7 @@ function drawTriangleOutline(
     context.fillStyle = ["#f76b59", "#59c77a", "#61afef"][index];
     context.fill();
   });
+  context.restore();
 }
 
 function drawProbe(context: CanvasRenderingContext2D, panel: Panel, probe: Vec2) {
@@ -218,6 +230,11 @@ function modeStage(mode?: InteractiveLabMode) {
 }
 
 export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode }) {
+  const ready = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const activePointer = useRef<number | null>(null);
   const probeBeforeDrag = useRef<Vec2>({ x: 0, y: -0.17 });
@@ -231,6 +248,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
   const [displayMode, setDisplayMode] = useState<DisplayMode>("color");
   const [paused, setPaused] = useState(true);
   const [capturing, setCapturing] = useState(false);
+  const [preset, setPreset] = useState("default");
   const [probe, setProbe] = useState<Vec2>({ x: 0, y: -0.17 });
 
   const releaseCapture = useCallback(() => {
@@ -282,6 +300,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
   }, [size]);
 
   const reset = useCallback(() => {
+    setPreset("default");
     releaseCapture();
     setAngleDegrees(0);
     setScale(0.82);
@@ -300,7 +319,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     const animate = (now: number) => {
       const deltaSeconds = Math.min(0.05, (now - previous) / 1000);
       previous = now;
-      setAngleDegrees((current) => (current + deltaSeconds * 28) % 360);
+      setAngleDegrees((current) => wrapDegrees(current + deltaSeconds * 28));
       frame = requestAnimationFrame(animate);
     };
     frame = requestAnimationFrame(animate);
@@ -366,14 +385,24 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     const panel = point.x < panels.gpu.x ? panels.cpu : panels.gpu;
     const ndc = panelPointToNdc(point, panel);
     setProbe({
-      x: Math.min(1, Math.max(-1, ndc.x)),
-      y: Math.min(1, Math.max(-1, ndc.y)),
+      x: Math.min(1 - 1e-9, Math.max(-1, ndc.x)),
+      y: Math.min(1 - 1e-9, Math.max(-1, ndc.y)),
     });
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!capabilities.canProbe || event.button !== 0 || !event.isPrimary) return;
     if (activePointer.current !== null) return;
+    const point = canvasPoint(event, event.currentTarget);
+    const inPanel = [panels.cpu, panels.gpu].some(
+      (panel) =>
+        point.x >= panel.x &&
+        point.x < panel.x + panel.width &&
+        point.y >= panel.y &&
+        point.y < panel.y + panel.height,
+    );
+    if (!inPanel) return;
+    setPaused(true);
     probeBeforeDrag.current = { ...probe };
     event.currentTarget.setPointerCapture(event.pointerId);
     activePointer.current = event.pointerId;
@@ -393,7 +422,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
   const step = () => {
     if (!capabilities.canTransform) return;
     setPaused(true);
-    setAngleDegrees((current) => (current + 10) % 360);
+    setAngleDegrees((current) => wrapDegrees(current + 10));
   };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
     if (event.ctrlKey || event.altKey || event.metaKey || event.repeat) return;
@@ -413,6 +442,29 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
         if (current === "coverage") return "difference";
         return "color";
       });
+    } else if (event.key.startsWith("Arrow") && capabilities.canProbe) {
+      event.preventDefault();
+      setPaused(true);
+      setProbe((current) => ({
+        x: Math.max(
+          -1,
+          Math.min(
+            1 - 1e-9,
+            current.x +
+              Number(event.key === "ArrowRight") * 0.025 -
+              Number(event.key === "ArrowLeft") * 0.025,
+          ),
+        ),
+        y: Math.max(
+          -1,
+          Math.min(
+            1 - 1e-9,
+            current.y +
+              Number(event.key === "ArrowUp") * 0.025 -
+              Number(event.key === "ArrowDown") * 0.025,
+          ),
+        ),
+      }));
     } else if (event.key.toLowerCase() === "r") {
       reset();
     }
@@ -427,6 +479,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     panels.cpu.width,
     panels.cpu.height,
     { x: panels.gpu.x, y: 0, width: panels.gpu.width, height: panels.gpu.height },
+    smoothColor,
   );
   const trace = makePipelineTrace(defaultTriangle, transform, panels.cpu.width, panels.cpu.height, {
     x: panels.gpu.x,
@@ -446,19 +499,59 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
         onKeyDown={onKeyDown}
         onPointerDown={onPointerDown}
         onPointerMove={(event) => {
-          if (capturing) setProbeFromPointer(event);
+          if (activePointer.current === event.pointerId) setProbeFromPointer(event);
         }}
         onPointerUp={releasePointer}
-        onPointerCancel={releasePointer}
+        onPointerCancel={(event) => {
+          if (activePointer.current !== event.pointerId) return;
+          setProbe(probeBeforeDrag.current);
+          releasePointer(event);
+        }}
         onLostPointerCapture={() => {
           activePointer.current = null;
           setCapturing(false);
         }}
         onBlur={stop}
       />
-      <div className="lab-controls">
+      <fieldset
+        className="lab-controls"
+        disabled={!ready}
+        style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+      >
         {capabilities.canTransform ? (
           <>
+            <label>
+              Mẫu thử
+              <select
+                aria-label="Mẫu thử"
+                value={preset}
+                onChange={(event) => {
+                  releaseCapture();
+                  setPaused(true);
+                  setPreset(event.target.value);
+                  if (event.target.value === "rotated") {
+                    setAngleDegrees(45);
+                    setScale(0.6);
+                    setTranslationX(0.12);
+                    setTranslationY(-0.08);
+                  } else if (event.target.value === "outside") {
+                    setAngleDegrees(0);
+                    setScale(0.82);
+                    setTranslationX(1.5);
+                    setTranslationY(0);
+                  } else {
+                    reset();
+                  }
+                }}
+              >
+                <option value="default">Tam giác ban đầu</option>
+                <option value="rotated">Xoay 45° rồi dịch chuyển</option>
+                <option value="outside">Tam giác đi ra ngoài viewport</option>
+                <option value="custom" disabled>
+                  Đã chỉnh tham số
+                </option>
+              </select>
+            </label>
             <label>
               Góc xoay
               <input
@@ -467,7 +560,11 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
                 max="180"
                 step="1"
                 value={angleDegrees}
-                onChange={(event) => setAngleDegrees(Number(event.target.value))}
+                onChange={(event) => {
+                  setPreset("custom");
+                  setPaused(true);
+                  setAngleDegrees(Number(event.target.value));
+                }}
               />
               <output>{angleDegrees.toFixed(0)}°</output>
             </label>
@@ -479,7 +576,11 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
                 max="1"
                 step="0.01"
                 value={scale}
-                onChange={(event) => setScale(Number(event.target.value))}
+                onChange={(event) => {
+                  setPreset("custom");
+                  setPaused(true);
+                  setScale(Number(event.target.value));
+                }}
               />
               <output>{scale.toFixed(2)}</output>
             </label>
@@ -489,12 +590,13 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
           <label>
             Hiển thị
             <select
+              aria-label="Hiển thị"
               value={displayMode}
               onChange={(event) => setDisplayMode(event.target.value as DisplayMode)}
             >
               <option value="color">Màu kết quả</option>
               <option value="coverage">Coverage</option>
-              <option value="difference">Khuếch đại sai khác</option>
+              <option value="difference">Sai số làm tròn màu ×8 (mô hình)</option>
             </select>
           </label>
         ) : null}
@@ -521,7 +623,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
         <button type="button" onClick={reset}>
           Đặt lại
         </button>
-      </div>
+      </fieldset>
       <LabReadout
         items={[
           { label: "Bước đang học", value: modeStage(mode) },
@@ -548,8 +650,12 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
             value: `CPU ${probeAgreement.cpuRoundTripError.toExponential(1)} · GPU ${probeAgreement.gpuRoundTripError.toExponential(1)}`,
           },
           {
+            label: "Tâm pixel được chọn (mô hình)",
+            value: `(${probeAgreement.pixelX}, ${probeAgreement.pixelY}) → NDC (${probeAgreement.pixelCenterNdc.x.toFixed(4)}, ${probeAgreement.pixelCenterNdc.y.toFixed(4)})`,
+          },
+          {
             label: "Triangle centroid",
-            value: `(${center.x.toFixed(3)}, ${center.y.toFixed(3)}) — probe an toàn, cách xa edge`,
+            value: `(${center.x.toFixed(3)}, ${center.y.toFixed(3)}) — kiểm tra lại khoảng cách tới edge sau khi thu nhỏ`,
           },
           {
             label: "Mô tả thay thế",
@@ -559,9 +665,10 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
       />
       <p className="lab-hint">
         Các điều khiển chỉ xuất hiện khi bài học đã giới thiệu khái niệm tương ứng. Từ bài viewport,
-        kéo crosshair để đổi probe; Space chạy/dừng, N tiến 10° và R reset. Canvas dùng mô hình CPU
-        có độ phân giải giới hạn để phản hồi nhanh; chương trình C++ mới thực thi OpenGL và dùng
-        glReadPixels để đọc kết quả GPU.
+        kéo crosshair hoặc dùng phím mũi tên để đổi probe; Space chạy/dừng, N tiến 10° và R reset.
+        Canvas dùng mô hình CPU có độ phân giải giới hạn để phản hồi nhanh. Hai panel đều được vẽ
+        bằng JavaScript; chế độ sai số chỉ minh họa một lần làm tròn sang byte, không đo sai khác
+        CPU/GPU thật. Chương trình C++ mới thực thi OpenGL và dùng glReadPixels để đọc kết quả GPU.
       </p>
     </>
   );

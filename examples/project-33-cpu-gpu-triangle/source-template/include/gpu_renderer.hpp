@@ -91,6 +91,7 @@ void main() {
 inline std::string shaderInfoLog(GlApi& api, GLuint shader) {
     GLint length = 0;
     api.GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+    length = std::min(length, 65536);
     if (length <= 1) {
         return {};
     }
@@ -102,6 +103,7 @@ inline std::string shaderInfoLog(GlApi& api, GLuint shader) {
 inline std::string programInfoLog(GlApi& api, GLuint program) {
     GLint length = 0;
     api.GetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
+    length = std::min(length, 65536);
     if (length <= 1) {
         return {};
     }
@@ -270,6 +272,7 @@ struct GpuTriangleRenderer {
             vertexArray = 0U;
         }
         if (program != 0U) {
+            api.UseProgram(0U);
             api.DeleteProgram(program);
             program = 0U;
         }
@@ -304,13 +307,22 @@ struct CpuTexturePresenter {
         return textureLocation >= 0 && vertexArray != 0U && texture != 0U;
     }
 
-    void resize(GlApi& api, int nextWidth, int nextHeight) {
-        width = std::max(1, nextWidth);
-        height = std::max(1, nextHeight);
+    bool resize(GlApi& api, int nextWidth, int nextHeight) {
+        GLint maximumTextureSize = 0;
+        api.GetIntegerv(GL_MAX_TEXTURE_SIZE, &maximumTextureSize);
+        if (nextWidth <= 0 || nextHeight <= 0 || nextWidth > maximumTextureSize || nextHeight > maximumTextureSize) {
+            return false;
+        }
         api.BindTexture(GL_TEXTURE_2D, texture);
         api.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        api.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        api.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, nextWidth, nextHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         api.BindTexture(GL_TEXTURE_2D, 0U);
+        if (api.GetError() != GL_NO_ERROR) {
+            return false;
+        }
+        width = nextWidth;
+        height = nextHeight;
+        return true;
     }
 
     void upload(GlApi& api, const Framebuffer& framebuffer) const {
@@ -350,6 +362,7 @@ struct CpuTexturePresenter {
             vertexArray = 0U;
         }
         if (program != 0U) {
+            api.UseProgram(0U);
             api.DeleteProgram(program);
             program = 0U;
         }
@@ -362,6 +375,7 @@ struct CpuTexturePresenter {
 struct GpuProbeReadback {
     bool valid{};
     bool inside{};
+    bool nearEdge{};
     int pixelX{};
     int pixelY{};
     Color expected{};
@@ -395,12 +409,17 @@ inline GpuProbeReadback readGpuProbe(
     result.pixelY = pixelLocation.y;
     std::array<std::uint8_t, 4> pixel{};
     api.ReadPixels(result.pixelX, result.pixelY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    if (api.GetError() != GL_NO_ERROR) {
+        result.valid = false;
+        return result;
+    }
     result.actual = {
         float(pixel[0]) / 255.0F,
         float(pixel[1]) / 255.0F,
         float(pixel[2]) / 255.0F,
     };
     result.maximumDifference = maximumColorDifference(result.expected, result.actual);
+    result.nearEdge = probeEdgeDistance(triangle, transform, pixelLocation.centerNdc, viewport.width, viewport.height) <= 1.5F;
     return result;
 }
 #endif

@@ -24,8 +24,6 @@ bool readFramebufferSize(SDL_Window* window, int& width, int& height) {
     if (!SDL_GetWindowSizeInPixels(window, &width, &height)) {
         return false;
     }
-    width = std::max(1, width);
-    height = std::max(1, height);
     return true;
 }
 
@@ -54,6 +52,11 @@ int main(int argc, char** argv) {
         capturePath = argv[2];
     }
     const bool verify = (argc == 2 && std::string(argv[1]) == "--verify") || capturePath != nullptr;
+    const bool smoke = argc == 2 && std::string(argv[1]) == "--smoke";
+    if (argc > 1 && !verify && !smoke) {
+        std::cerr << "Usage: project_33_final [--verify | --smoke | --capture image.bmp]\n";
+        return EXIT_FAILURE;
+    }
     bool verificationFailed = false;
     int verificationFrame = 0;
     // Setup: giữ SDL lifecycle quen thuộc, rồi thêm OpenGL theo từng checkpoint.
@@ -75,7 +78,7 @@ int main(int argc, char** argv) {
     windowFlags |= SDL_WINDOW_OPENGL;
     windowFlags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #endif
-    if (verify)
+    if (verify || smoke)
         windowFlags |= SDL_WINDOW_HIDDEN;
     SDL_Window* window = SDL_CreateWindow(
         "Project 33 | CPU/GPU Triangle",
@@ -110,7 +113,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     int swapInterval = 1;
-    if (verify) {
+    if (verify || smoke) {
         swapInterval = 0;
     }
     if (!SDL_GL_SetSwapInterval(swapInterval)) {
@@ -128,6 +131,15 @@ int main(int argc, char** argv) {
     }
     std::cout << "OpenGL " << versionText << '\n';
     std::cout << "Renderer " << rendererText << '\n';
+    GLint contextMajor = 0;
+    GLint contextMinor = 0;
+    gl.GetIntegerv(GL_MAJOR_VERSION, &contextMajor);
+    gl.GetIntegerv(GL_MINOR_VERSION, &contextMinor);
+    if (contextMajor < 3 || (contextMajor == 3 && contextMinor < 3)) {
+        std::cerr << "OpenGL 3.3 Core or newer is required.\n";
+        destroyWindowAndContext(window, context);
+        return EXIT_FAILURE;
+    }
 #endif
 
 #if LAB_CHECKPOINT >= 2
@@ -267,6 +279,10 @@ int main(int argc, char** argv) {
                 }
 #endif
             } else if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+                // App shortcuts must not react to OS/editor chords such as Alt+Space.
+                if ((event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) {
+                    continue;
+                }
 #if LAB_CHECKPOINT >= 9
                 if (dragging && event.key.key != SDLK_ESCAPE)
                     continue;
@@ -291,10 +307,19 @@ int main(int argc, char** argv) {
                 } else if (event.key.key == SDLK_R) {
 #if LAB_CHECKPOINT >= 9
                     triangle = lab::kSourceTriangle;
+                    selectedVertex = 0;
+                    colorPreset = 0;
                     verticesDirty = true;
                     dragging = false;
                     SDL_CaptureMouse(false);
                     probeStatus = "RESET - PRESS P TO MEASURE";
+#endif
+#if LAB_CHECKPOINT >= 7
+                    smoothColor = false;
+#endif
+#if LAB_CHECKPOINT >= 8
+                    lastProbe = {};
+                    probeRequested = false;
 #endif
 #if LAB_CHECKPOINT >= 3
                     transform = {};
@@ -378,7 +403,23 @@ int main(int argc, char** argv) {
         int framebufferHeight = 1;
         if (!readFramebufferSize(window, framebufferWidth, framebufferHeight)) {
             std::cerr << "SDL_GetWindowSizeInPixels failed: " << SDL_GetError() << '\n';
+            verificationFailed = true;
             running = false;
+            continue;
+        }
+        // A minimized window may have no drawable pixels. Do not allocate a fake 1x1 image.
+        if (framebufferWidth < 2 || framebufferHeight < 1) {
+            SDL_Delay(16U);
+            continue;
+        }
+        const std::size_t panelPixels = std::size_t(framebufferWidth - framebufferWidth / 2) * std::size_t(framebufferHeight);
+        if (framebufferWidth > 8192 || framebufferHeight > 4096 || panelPixels > 4U * 1024U * 1024U) {
+            SDL_SetWindowTitle(window, "Project 33 - panel exceeds 4M pixels; resize the window smaller");
+            if (verify || smoke) {
+                verificationFailed = true;
+                break;
+            }
+            SDL_Delay(16U);
             continue;
         }
 #if LAB_CHECKPOINT >= 1
@@ -405,8 +446,11 @@ int main(int argc, char** argv) {
 
 #if LAB_CHECKPOINT >= 4
         if (cpuFramebuffer.width != leftWidth || cpuFramebuffer.height != framebufferHeight) {
-            cpuFramebuffer.resize(leftWidth, framebufferHeight);
-            cpuPresenter.resize(gl, leftWidth, framebufferHeight);
+            if (!cpuFramebuffer.resize(leftWidth, framebufferHeight) || !cpuPresenter.resize(gl, leftWidth, framebufferHeight)) {
+                std::cerr << "CPU image or OpenGL texture allocation failed.\n";
+                verificationFailed = true;
+                break;
+            }
         }
 #if LAB_CHECKPOINT >= 9
         if (verticesDirty) {
@@ -441,7 +485,16 @@ int main(int argc, char** argv) {
                 probeStatus = "PROBE OUTSIDE VIEWPORT - MOVE TRIANGLE BACK";
             else {
                 char report[100]{};
-                std::snprintf(report, sizeof(report), "PIXEL %d %d / RGB ERROR %.5f / LIMIT %.5f", lastProbe.pixelX, lastProbe.pixelY, double(lastProbe.maximumDifference), 2.0 / 255.0);
+                const char* resultLabel = "FAIL";
+                if (lastProbe.maximumDifference <= 2.0F / 255.0F) {
+                    resultLabel = "PASS";
+                }
+                if (lastProbe.nearEdge) {
+                    resultLabel = "EDGE - NO VERDICT";
+                } else if (!lastProbe.inside) {
+                    resultLabel = "BACKGROUND";
+                }
+                std::snprintf(report, sizeof(report), "%s PIXEL %d %d / RGB ERROR %.5f / LIMIT %.5f", resultLabel, lastProbe.pixelX, lastProbe.pixelY, double(lastProbe.maximumDifference), 2.0 / 255.0);
                 probeStatus = report;
             }
 #else
@@ -497,15 +550,19 @@ int main(int argc, char** argv) {
         if (cpuContractValid) {
             contractLabel = "valid";
         }
+        char probeLabel[32] = "not measured";
+        if (lastProbe.valid) {
+            std::snprintf(probeLabel, sizeof(probeLabel), "%.5f", double(lastProbe.maximumDifference));
+        }
         std::snprintf(
             title,
             sizeof(title),
-            "Project 33 | CPU/GPU Triangle | %dx%d px | angle %.1f deg | %s | probe diff %.5f | CPU contract %s | P probe",
+            "Project 33 | CPU/GPU Triangle | %dx%d px | angle %.1f deg | %s | probe %s | CPU contract %s | P probe",
             framebufferWidth,
             framebufferHeight,
             double(transform.angleRadians * 180.0F / std::numbers::pi_v<float>),
             colorModeLabel,
-            double(lastProbe.maximumDifference),
+            probeLabel,
             contractLabel
         );
 #elif LAB_CHECKPOINT >= 8
@@ -532,12 +589,13 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 1
         if (!SDL_GL_SwapWindow(window)) {
             std::cerr << "SDL_GL_SwapWindow failed: " << SDL_GetError() << '\n';
+            verificationFailed = true;
             running = false;
         }
 #else
         SDL_Delay(16U);
 #endif
-        if (verify) {
+        if (verify || smoke) {
             ++verificationFrame;
             if (verificationFrame >= 6)
                 running = false;

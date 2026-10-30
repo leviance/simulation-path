@@ -4,16 +4,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-CPU và GPU có thể thống nhất hoàn toàn ở NDC nhưng vẫn cho hình lật hoặc probe đọc sai hàng pixel vì chúng dùng hai quy ước màn hình:
+Hai tam giác cùng xoay đúng chưa có nghĩa ta có thể dùng chung một hàm đổi tọa độ pixel. Mảng ảnh CPU bắt đầu từ góc trên-trái; OpenGL window coordinates bắt đầu từ góc dưới-trái. Nhầm hai quy ước này thường làm ảnh lật dọc hoặc đọc nhầm pixel dù hình tam giác vẫn có vẻ đúng.
 
-- CPU framebuffer của khóa học: `(0,0)` ở trên-trái, Y tăng xuống;
-- OpenGL window coordinates: viewport origin ở dưới-trái, Y tăng lên.
-
-Checkpoint 6 viết hai cặp forward/inverse transform riêng. Không có một hàm `toScreen` mơ hồ dùng cho cả hai.
+Bài này nối NDC với tọa độ thật trong từng panel và xử lý resize/high-DPI. Ta cũng chốt một giới hạn quan trọng: đây là thí nghiệm tam giác 2D trong NDC, không phải camera perspective. Đổi tỉ lệ cửa sổ có thể làm tam giác trông rộng hoặc cao hơn; hai phía phải biến đổi giống nhau, không được sửa một phía bằng hệ số aspect giấu trong shader.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Trục Y không “sai” ở một bên; hai pipeline chỉ chọn hai gốc tọa độ khác nhau. Ta giữ hai tên hàm rõ ràng và kiểm round-trip cho từng cặp để phép đổi hệ không bị sửa bằng những dấu trừ rải rác trong render loop.
+NDC x/y chạy từ −1 tới +1. CPU top-left mapping đảo Y; GPU bottom-left mapping cộng origin viewport nhưng không đảo Y. Hai cặp forward/inverse phải round-trip trong sai số đã công bố.
+
+Nếu framebuffer rộng 803 pixel, nửa trái rộng 401 và nửa phải 402. Cùng một NDC có thể rơi ở tâm mẫu khác nhau giữa hai panel. Phép kiểm ảnh GPU vì thế tạo CPU reference đúng bằng kích thước panel phải, không so mù hai mảng trái/phải theo cùng index.
 
 <InteractiveLab demo="cpu-gpu-triangle" mode="viewport-conventions" />
 
@@ -64,18 +63,23 @@ Khi `leftWidth` hoặc height đổi, CPU framebuffer resize và texture gọi l
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 6"
-cmake --build build --config Debug --target project_33_checkpoint_6
+Đọc size mỗi frame bằng SDL_GetWindowSizeInPixels. Khi size đổi, resize framebuffer CPU và texture trước upload; glViewport nhận kích thước mới ở cả hai phía. Input chuột sẽ dùng SDL_GetWindowSize để quy đổi logical → pixel, không thay thế pixel size của viewport.
+
+Kích thước bằng 0 được bỏ qua; kích thước vượt budget được báo rõ và vẫn giữ event loop. Như vậy resize không vô tình trở thành một phép cấp phát hàng trăm megabyte hay phép chia cho 0.
+
+```bash title="Terminal — build và chạy checkpoint 06"
+cmake --build build --config Debug --target project_33_checkpoint_6 --parallel 2
+./build/Debug/project_33_checkpoint_6.exe
 ```
 
-Resize cửa sổ theo cả hai chiều. Title bar phải báo framebuffer pixels mới; hai triangle vẫn giữ cùng NDC shape và hai panel phủ kín width.
+Đường chạy trên dành cho Visual Studio trên Windows. Với Ninja, chọn CMAKE_BUILD_TYPE khi configure và chạy executable ngay trong build, không có thư mục Debug/Release trung gian. Mọi checkpoint và final đều nằm trong cùng ZIP; bạn không cần Node.js để build C++.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng công thức CPU cho `glReadPixels`. Probe NDC Y dương sẽ đọc nửa dưới.
-2. Chia width đều bằng integer nhưng dùng `rightWidth = leftWidth`. Với width lẻ, mất một cột pixel.
-3. Resize CPU vector nhưng quên cấp lại texture storage. Upload size mới vượt storage cũ.
-4. Dùng `SDL_GetWindowSize` trên high-DPI display. Viewport chỉ phủ một phần framebuffer.
+Chỉ thay một chi tiết mỗi lần trên bản thử nghiệm. Ghi dự đoán trước, chạy để quan sát rồi phục hồi mã đúng trước khi đi tiếp.
+
+1. Resize sang chiều rộng lẻ. Ghi hai chiều rộng và kiểm tổng bằng framebuffer width; quan sát panel phải nhận pixel dư.
+2. Đổi công thức readback sang Y top-left trên bản thử nghiệm ở bài 08. Dự đoán pixel sẽ bị phản chiếu theo chiều dọc; quay lại đây để chỉ đúng chỗ cần đổi hệ, không rải dấu trừ trong nhiều hàm.
 
 ## Tự kiểm tra kết quả
 

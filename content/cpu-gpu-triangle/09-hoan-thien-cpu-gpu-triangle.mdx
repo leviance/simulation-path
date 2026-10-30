@@ -4,11 +4,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Mỗi stage riêng đã chạy, nhưng một project hoàn chỉnh còn phải giữ đúng lifecycle khi reset, resize, shader lỗi hoặc người dùng thoát. Bài cuối không thêm thuật toán đồ họa mới; nó biến các checkpoint thành một ứng dụng có thể kiểm chứng và một bộ source có thể build độc lập.
+Các bước trước đã tạo được hai renderer dùng chung dữ liệu. Bài cuối biến chúng thành công cụ đối chiếu: chọn và kéo A/B/C ở một trong hai panel, chỉnh đỉnh bằng bàn phím, đổi màu, đọc probe và khôi phục trạng thái ban đầu.
+
+Ta không thêm camera hay ánh sáng vào bài chuyển tiếp này. Sản phẩm cần làm rõ GPU thay phần nào trong renderer CPU: transform chuyển sang vertex shader, coverage và nội suy sang rasterizer phần cứng, còn màu đầu ra được ghi bởi fragment shader. Vòng lặp SDL, dữ liệu đầu vào và việc kiểm kết quả vẫn do ứng dụng C++ quản lý.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Bản final không ghép code bằng cách dồn mọi thứ vào `main`. Nó giữ state mô phỏng, tài nguyên GPU, framebuffer CPU và validation ở đúng vai trò để từng phần vẫn có thể kiểm tra riêng.
+Giữ một mảng `triangle` và một `transform` làm nguồn đầu vào chung. Kéo chuột đổi tọa độ local sau khi đảo transform; cờ `verticesDirty` yêu cầu upload lại VBO. Đổi góc không làm VBO thay đổi.
+
+Bảng NDC trong cửa sổ là kết quả **dự kiến tính trên CPU**, không phải dữ liệu đọc ra từ vertex shader. `--verify` mới kiểm ảnh GPU thật bằng probe và readback toàn panel. Hai loại bằng chứng cần được gọi đúng tên.
 
 <InteractiveLab demo="cpu-gpu-triangle" mode="pipeline-validation" />
 
@@ -16,7 +20,7 @@ Bản final không ghép code bằng cách dồn mọi thứ vào `main`. Nó gi
 
 ### Bước 1 — Ghép update và render mà không trộn state
 
-Input sửa Transform2D hoặc mảng triangle dùng chung; không có một bản tam giác riêng cho GPU. Update tiến angle. Render dùng cùng snapshot transform cho CPU framebuffer và GPU uniforms trong một frame.
+Input sửa Transform2D hoặc mảng tam giác dùng chung; không có một bản tam giác riêng cho GPU. Update tiến angle. Render dùng cùng snapshot transform cho CPU framebuffer và GPU uniforms trong một frame.
 
 ```cpp title="src/main.cpp — fixed angle step"
 if (!paused) {
@@ -29,6 +33,8 @@ if (singleStep) {
 ```
 
 Không có CPU angle và GPU angle riêng. Nếu tách hai biến, pause/step có thể làm chúng lệch dù công thức transform đúng.
+
+Nhánh phím chỉ nhận lần nhấn đầu và bỏ qua tổ hợp có Ctrl/Alt/GUI. Như vậy Alt+Space không vô tình chạy animation, và việc giữ phím không lặp toggle pause liên tục.
 
 ### Bước 2 — Sửa input chung, không sửa riêng ảnh bên trái
 
@@ -48,7 +54,7 @@ Ta trừ translation, chia scale rồi xoay góc ngược lại. Thứ tự đ�
 
 pointerToPanel đổi tọa độ SDL theo logical size sang pixel size thật, rồi xác định panel và NDC. pickVertex chọn đỉnh gần con trỏ trong bán kính 20 framebuffer pixel. Khi bắt đầu kéo, lưu vertex cũ, pause chuyển động và capture mouse. Kéo ra panel khác không được nhảy sang một hệ tọa độ mới; thả chuột kết thúc, Escape hoàn tác vertex, mất focus nhả capture và giữ pause. Các nhánh event đầy đủ có trong src/main.cpp của checkpoint.
 
-Sau khi cập nhật position hoặc color của triangle, đặt verticesDirty. Chỉ khi cờ này bật mới gửi lại ba vertex; không tạo VAO/VBO mới mỗi frame:
+Sau khi cập nhật position hoặc color của tam giác, đặt verticesDirty. Chỉ khi cờ này bật mới gửi lại ba vertex; không tạo VAO/VBO mới mỗi frame:
 
 ```cpp title="include/gpu_renderer.hpp — cập nhật đúng VBO đang dùng"
 void uploadVertices(GlApi& api, const std::array<GpuVertex, 3>& triangle) const {
@@ -58,7 +64,7 @@ void uploadVertices(GlApi& api, const std::array<GpuVertex, 3>& triangle) const 
 }
 ```
 
-CPU rasterizer nhận chính triangle ấy; GPU nhận cùng byte qua VBO. readGpuProbe cũng nhận triangle hiện tại, không dùng tam giác mặc định sau khi người học đã kéo đỉnh. Phím 1/2/3 chọn A/B/C, I/J/K/L sửa position bằng bàn phím và V đổi màu vertex được chọn. V đồng thời bật smooth để màu sửa được nhìn thấy.
+CPU rasterizer nhận chính tam giác ấy; GPU nhận cùng byte qua VBO. readGpuProbe cũng nhận tam giác hiện tại, không dùng tam giác mặc định sau khi người học đã kéo đỉnh. Phím 1/2/3 chọn A/B/C, I/J/K/L sửa position bằng bàn phím và V đổi màu vertex được chọn. V đồng thời bật smooth để màu sửa được nhìn thấy.
 
 ### Bước 3 — Đọc probe trước, vẽ nhãn sau
 
@@ -98,51 +104,39 @@ Texture, VAO, VBO và program phải được xóa khi context còn sống. `des
 
 ## Ghép các phần lại
 
-Khi ba khối trên đứng đúng chỗ, `main` chỉ còn điều phối lifecycle: nhận input, cập nhật state, render CPU/GPU từ cùng snapshot, đo khi được yêu cầu rồi cleanup theo thứ tự ngược lúc tạo.
+Mã hoàn chỉnh ở cuối trang và ZIP chứa đúng source của final, không phải một đoạn minh họa thiếu event loop. include/editor.hpp quản lý mapping/picking; overlay.hpp là font scaffold để đọc nhãn, không thay renderer tam giác. pipeline.hpp vẫn thuần CPU để CTest không cần window.
 
-### Build và chạy bản hoàn chỉnh
+Bản final pause mặc định. Bấm P sau mỗi thay đổi để đọc report mới; đổi state làm báo cáo cũ hết hiệu lực. Test thuần kiểm công thức và fixture có đáp án biết trước. --verify chạy sáu frame trên driver thật: solid/smooth, transform, winding đảo, vertex/màu đã sửa và resize width lẻ.
 
-```bash title="Terminal — nghiệm thu Debug"
+Readback toàn panel dùng CPU reference cùng kích thước panel GPU. Sai khác lớn hơn 2/255 chỉ được nằm trong dải tối đa 1,5 pixel quanh cạnh; lỗi sâu trong nội thất hoặc ở nền xa cạnh làm verification thất bại. Đây không phải cam kết hai rasterizer có fill rule giống tuyệt đối.
+
+Sau CTest, tự thử drag/Esc, đổi focus, resize và high-DPI. Build/test tự động không thay phần kiểm thao tác này. Khi sẵn sàng, chuyển sang [Project 34: một model viewer, hai renderer](/projects/dual-renderer-cube) để dùng lại cách quản lý context, shader, mesh và readback.
+
+```bash title="Terminal — build và chạy bản hoàn chỉnh"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug
+cmake --build build --config Debug --parallel 2
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
 ./build/Debug/project_33_final.exe --verify
-```
-
-```bash title="Terminal — nghiệm thu Release"
-cmake --build build --config Release
+cmake --build build --config Release --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 20
+./build/Release/project_33_final.exe --verify
 ```
 
-Chạy project_33_final rồi thử kéo A/B/C ở cả hai panel, chọn đỉnh bằng 1/2/3, sửa bằng I/J/K/L và đổi màu bằng V. Sau đó thử Space, N, arrows, Q/E, C, P, R, resize và Esc. App pause mặc định; triangle vẫn có thể ra ngoài viewport do dịch chuyển, khi đó probe phải báo chưa hợp lệ thay vì âm thầm đọc mép ảnh.
-
-## Source hoàn chỉnh gồm những gì?
-
-- `include/pipeline.hpp`: contract CPU có thể test—vertex layout, transform, viewport mapping, barycentric raster và validation.
-- `include/gl_api.hpp`: tập OpenGL function pointers tối thiểu, load sau context.
-- `include/gpu_renderer.hpp`: shader diagnostics, VBO/VAO, texture presenter và readback.
-- `include/editor.hpp`: mapping con trỏ high-DPI, chọn vertex và inverse transform.
-- `include/overlay.hpp`: nhãn, tọa độ và controls trực tiếp trong cửa sổ.
-- `include/verification.hpp`: fixture đọc màu từ OpenGL thật trong chế độ --verify.
-- `src/main.cpp`: lifecycle SDL/OpenGL cùng render hai panel.
-- `tests/tests.cpp`: test code thuần, không phụ thuộc GPU hoặc window.
-
-Phần “Mã hoàn chỉnh” bên dưới bài lấy trực tiếp từ final checkpoint. Đây chính là source trong ZIP, không phải bản rút gọn viết lại cho tài liệu.
+Đường chạy trên dành cho Visual Studio trên Windows. Với Ninja, chọn CMAKE_BUILD_TYPE khi configure và chạy executable ngay trong build, không có thư mục Debug/Release trung gian. Mọi checkpoint và final đều nằm trong cùng ZIP; bạn không cần Node.js để build C++.
 
 ## Thử làm sai để hiểu đúng
 
-1. Destroy context trước `gpuTriangle.destroy`. Function pointers/resources không còn context hợp lệ.
-2. Giữ `probeRequested=true` sau readback. App vô tình đồng bộ CPU/GPU mỗi frame.
-3. Resize viewport nhưng không resize CPU texture. Panel trái méo hoặc upload lỗi.
-4. Chỉ chạy Release vì “GPU code không cần Debug”. Shader/runtime lifecycle vẫn cần cả hai cấu hình.
-5. Assert GPU pixel đúng trên edge. Test trở nên phụ thuộc coverage convention thay vì contract cần học.
+Chỉ thay một chi tiết mỗi lần trên bản thử nghiệm. Ghi dự đoán trước, chạy để quan sát rồi phục hồi mã đúng trước khi đi tiếp.
+
+1. Chọn B, kéo hoặc dùng I/J/K/L, đổi màu bằng V và chạy một góc xoay. Bấm R: đỉnh, màu, selected vertex, transform và trạng thái pause phải trở về ban đầu.
+2. Bắt đầu kéo rồi bấm Escape để hoàn tác; thử lại và chuyển focus khỏi cửa sổ. Mouse capture phải được nhả. Sau đó đổi kích thước và đọc probe mới, không dùng số đo cũ như kết quả hiện tại.
 
 ## Tự kiểm tra kết quả
 
 - [ ] OpenGL 3.3 Core context được tạo và loader chạy sau MakeCurrent.
 - [ ] Shader compile/link errors giữ stage name và info log.
 - [ ] `GpuVertex`, VBO, VAO và GLSL locations khớp nhau.
-- [ ] CPU texture trái và GPU triangle phải dùng cùng source/transform.
+- [ ] CPU texture trái và tam giác GPU phải dùng cùng source/transform.
 - [ ] Solid/smooth mode đổi đồng thời ở hai pipeline.
 - [ ] Coordinate round-trip và barycentric centroid tests đạt.
 - [ ] `P` đọc interior probe sau draw với RGBA8 tolerance.
@@ -157,7 +151,7 @@ Phần “Mã hoàn chỉnh” bên dưới bài lấy trực tiếp từ final 
 ## Bài tập mở rộng
 
 1. Thêm toggle wireframe bằng `glPolygonMode`, rồi vẽ CPU edges riêng mà không đổi fill oracle.
-2. Thêm second triangle dùng cùng VBO và kiểm draw range bằng `first/count`.
+2. Thêm second tam giác dùng cùng VBO và kiểm draw range bằng `first/count`.
 3. Ghi OpenGL vendor/version, SDL video driver và framebuffer pixel density vào report tái lập.
 4. Thử một shader compile failure có chủ đích, chụp log rồi phục hồi source trước khi commit.
 

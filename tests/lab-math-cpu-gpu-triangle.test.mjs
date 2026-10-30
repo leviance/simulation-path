@@ -15,6 +15,7 @@ import {
   sampleTriangle,
   transformPosition,
   triangleCentroid,
+  wrapDegrees,
 } from "../lib/labs/cpu-gpu-triangle.ts";
 
 const viewport = { x: 640, y: 0, width: 640, height: 720 };
@@ -95,4 +96,81 @@ test("interior probe agreement separates coordinate error from color quantizatio
   assert.ok(agreement.gpuRoundTripError < 1e-12);
   assert.ok(agreement.coordinateDifference < 1e-12);
   assert.ok(agreement.quantizationError <= 0.5 / 255 + 1e-12);
+});
+
+test("readback model snaps a geometric point to the containing pixel center", () => {
+  const result = compareProbe(
+    defaultTriangle,
+    identityTriangleTransform,
+    { x: 0, y: 0 },
+    100,
+    100,
+    { x: 0, y: 0, width: 100, height: 100 },
+    false,
+  );
+  assert.equal(result.pixelX, 50);
+  assert.equal(result.pixelY, 50);
+  assert.ok(Math.abs(result.pixelCenterNdc.x - 0.01) < 1e-12);
+  assert.ok(Math.abs(result.pixelCenterNdc.y - 0.01) < 1e-12);
+  assert.deepEqual(result.expectedColor, { r: 0.38, g: 0.68, b: 0.94 });
+});
+
+test("outside probes compare background, not extrapolated vertex colors", () => {
+  const result = compareProbe(
+    defaultTriangle,
+    identityTriangleTransform,
+    { x: -0.95, y: 0.95 },
+    100,
+    100,
+    { x: 0, y: 0, width: 100, height: 100 },
+  );
+  assert.deepEqual(result.expectedColor, { r: 11 / 255, g: 16 / 255, b: 32 / 255 });
+  assert.equal(result.quantizationError, 0);
+  assert.equal(barycentricAtPoint(defaultTriangle, { x: NaN, y: 0 }).inside, false);
+  assert.equal(maximumColorDifference({ r: 0, g: 0, b: 0 }, { r: NaN, g: 0, b: 0 }), Infinity);
+});
+
+test("readback model rejects empty viewport and offscreen or nonfinite probe", () => {
+  for (const point of [
+    { x: 1, y: 0 },
+    { x: -1.1, y: 0 },
+    { x: 0, y: Infinity },
+    { x: NaN, y: 0 },
+  ]) {
+    assert.throws(
+      () => compareProbe(defaultTriangle, identityTriangleTransform, point, 100, 100, viewport),
+      RangeError,
+    );
+  }
+  assert.throws(
+    () =>
+      compareProbe(defaultTriangle, identityTriangleTransform, { x: 0, y: 0 }, 0, 100, viewport),
+    RangeError,
+  );
+});
+
+test("winding preserves known barycentric answers and degenerate triangles cover nothing", () => {
+  const fixture = [
+    { position: { x: 0, y: 0 }, color: { r: 1, g: 0, b: 0 } },
+    { position: { x: 2, y: 0 }, color: { r: 0, g: 1, b: 0 } },
+    { position: { x: 0, y: 2 }, color: { r: 0, g: 0, b: 1 } },
+  ];
+  const sample = barycentricAtPoint(fixture, { x: 0.5, y: 0.5 });
+  assert.deepEqual(sample.weights, [0.5, 0.25, 0.25]);
+  assert.deepEqual(sample.color, { r: 0.5, g: 0.25, b: 0.25 });
+  assert.deepEqual(
+    barycentricAtPoint([fixture[0], fixture[2], fixture[1]], { x: 0.5, y: 0.5 }).color,
+    sample.color,
+  );
+  assert.equal(
+    barycentricAtPoint([fixture[0], fixture[0], fixture[1]], { x: 0.5, y: 0 }).inside,
+    false,
+  );
+});
+
+test("animation angles stay inside slider range across either wrap direction", () => {
+  assert.equal(wrapDegrees(190), -170);
+  assert.equal(wrapDegrees(-190), 170);
+  assert.equal(wrapDegrees(720), 0);
+  assert.equal(wrapDegrees(NaN), 0);
 });

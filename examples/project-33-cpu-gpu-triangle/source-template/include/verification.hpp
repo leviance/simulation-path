@@ -46,7 +46,9 @@ inline bool captureFramebuffer(GlApi& gl, int width, int height, const char* pat
 
 inline bool verifyCoverageBand(GlApi& gl, const Viewport& viewport, const std::array<GpuVertex, 3>& triangle, const Transform2D& transform, bool smoothColor) {
     Framebuffer expected{};
-    expected.resize(viewport.width, viewport.height);
+    if (!expected.resize(viewport.width, viewport.height)) {
+        return false;
+    }
     rasterizeCpuTriangle(expected, triangle, transform, smoothColor);
     std::vector<std::uint8_t> actual(expected.rgba.size());
     gl.ReadPixels(viewport.x, viewport.y, viewport.width, viewport.height, GL_RGBA, GL_UNSIGNED_BYTE, actual.data());
@@ -103,7 +105,7 @@ inline bool verifyGpuImage(GlApi& gl, const Viewport& viewport, const std::array
         }
         const auto result = readGpuProbe(gl, viewport, transform, point, smoothColor, triangle);
         std::cout << "interior pixel=" << result.pixelX << ',' << result.pixelY << " error=" << result.maximumDifference << '\n';
-        if (!result.valid || !result.inside || result.maximumDifference > 2.0F / 255.0F)
+        if (!result.valid || !result.inside || result.nearEdge || result.maximumDifference > 2.0F / 255.0F)
             return false;
     }
     const auto outside = readGpuProbe(gl, viewport, transform, {-0.98F, 0.98F}, smoothColor, triangle);

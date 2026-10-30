@@ -11,8 +11,10 @@ namespace {
 
 // CTest chỉ khóa pipeline contract CPU; nó không tạo SDL window hoặc OpenGL context.
 int failures = 0;
+int checks = 0;
 
 void check(bool condition, std::string_view label) {
+    ++checks;
     if (!condition) {
         std::cerr << "FAIL: " << label << '\n';
         ++failures;
@@ -70,9 +72,36 @@ void testCpuRasterAndQuantization() {
     const lab::Color source{0.123F, 0.456F, 0.789F};
     const lab::Color quantized = lab::quantizeRgba8(source);
     check(lab::maximumColorDifference(source, quantized) <= 0.5F / 255.0F + 1.0e-6F, "RGBA8 error stays within half a color step");
+
+    // Independent 2x2 answer, not a second call to the rasterizer as an oracle.
+    const std::array<lab::GpuVertex, 3> fixture{{{-1, 1, 1, 0, 0}, {1, 1, 0, 1, 0}, {-1, -1, 0, 0, 1}}};
+    lab::Framebuffer image{};
+    check(image.resize(2, 2), "small known-answer image allocates");
+    lab::rasterizeCpuTriangle(image, fixture, {}, true);
+    check(image.rgba[0] == 128 && image.rgba[1] == 64 && image.rgba[2] == 64 && image.rgba[3] == 255, "known interior pixel is RGB 128 64 64");
+    check(image.rgba[12] == 11 && image.rgba[13] == 16 && image.rgba[14] == 32, "known exterior pixel stays background");
+    auto reversed = fixture;
+    std::swap(reversed[1], reversed[2]);
+    lab::Framebuffer reverseImage{};
+    reverseImage.resize(2, 2);
+    lab::rasterizeCpuTriangle(reverseImage, reversed, {}, true);
+    check(image.rgba == reverseImage.rgba, "winding changes neither color nor coverage with culling disabled");
+
+    check(!image.resize(0, 10), "zero image width rejected");
+    check(!image.resize(-1, 10), "negative image width rejected");
+    check(!image.resize(std::numeric_limits<int>::max(), 2), "oversized dimensions rejected before multiplication");
+    check(!image.resize(4096, 4096), "application pixel budget enforced");
+    check(image.width == 2 && image.height == 2 && image.rgba.size() == 16, "failed resize preserves the previous framebuffer");
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    check(std::isinf(lab::maximumColorDifference({nan, 0, 0}, {0, 0, 0})), "NaN color is never considered agreement");
+    check(std::isinf(lab::maximumColorDifference({0, 0, 0}, {0, 0, std::numeric_limits<float>::infinity()})), "infinite color is never considered agreement");
+    check(!lab::sampleTriangleAtNdc(fixture, {}, {nan, 0}, true).inside, "NaN probe cannot be covered");
 }
 
 void testProbePixelCenter() {
+    check(lab::probeEdgeDistance(lab::kSourceTriangle, {}, {0, 0}, 100, 100) > 1.5F, "interior probe is away from coverage boundary");
+    check(lab::probeEdgeDistance(lab::kSourceTriangle, {}, {0, 0.66F}, 100, 100) < 1.0e-5F, "vertex probe is classified as boundary, not a verdict");
     const lab::Viewport viewport{31, 7, 101, 73};
     const lab::ProbePixel pixel = lab::locateProbePixel({0.0F, 0.0F}, viewport);
     check(pixel.valid && pixel.x == 81 && pixel.y == 43, "odd viewport selects the containing pixel");
@@ -130,6 +159,6 @@ int main() {
         std::cerr << failures << " Project 33 validation checks failed.\n";
         return EXIT_FAILURE;
     }
-    std::cout << "Project 33 CPU/GPU triangle contract is valid.\n";
+    std::cout << "Project 33 CPU: " << checks << " checks, " << failures << " failures.\n";
     return EXIT_SUCCESS;
 }

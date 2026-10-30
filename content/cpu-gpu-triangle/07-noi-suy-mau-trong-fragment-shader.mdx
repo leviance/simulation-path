@@ -4,16 +4,15 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Đến checkpoint 6, coverage đã giống nhau nhưng mọi fragment dùng một màu xanh cố định. Bây giờ mỗi vertex có một màu riêng. CPU phải trộn màu bằng barycentric weights; GPU rasterizer tự nội suy `vColor` giữa vertex shader và fragment shader.
+Tam giác đang có một màu cố định. Dữ liệu VBO thực ra đã chứa ba màu khác nhau ở A, B, C; bài này cho phép chúng xuất hiện trên bề mặt. Nhấn C sẽ đổi cả hai phía giữa solid và smooth.
 
-Điểm quan trọng là tách hai câu hỏi:
-
-1. Pixel có được coverage không?
-2. Nếu có, color tại pixel là gì?
+Bạn cần tách hai việc: quyết định pixel có nằm trong tam giác không, rồi mới tính màu của pixel đó. Trên CPU ta tính barycentric weights. Trên GPU, rasterizer nội suy dữ liệu giữa các đỉnh trước khi fragment shader nhận nó.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Barycentric weights vừa mô tả vị trí của điểm trong triangle, vừa là hệ số trộn ba màu vertex. CPU tính ba weights bằng signed area; GPU tạo cùng ý nghĩa qua varying được nội suy trước khi fragment shader chạy.
+Với một điểm bên trong, ba barycentric weights cộng lại gần 1. Tại một đỉnh, weight của đỉnh đó gần 1; tại centroid, cả ba gần 1/3. Màu RGB được trộn theo ba hệ số ấy.
+
+Vertex shader đặt clip w = 1 cho cả ba đỉnh, nên phép nội suy smooth ở đây tương ứng với nội suy affine của CPU. Khi học mesh perspective có w khác nhau, cần perspective-correct interpolation; đừng mang nguyên giả định 2D này sang mọi bài 3D.
 
 <InteractiveLab demo="cpu-gpu-triangle" mode="fragment-interpolation" />
 
@@ -21,11 +20,11 @@ Barycentric weights vừa mô tả vị trí của điểm trong triangle, vừa
 
 ### Bước 1 — Tính weights từ signed area
 
-Tiếp tục hàm barycentricAtPoint trong include/pipeline.hpp. Mảng triangle của hàm này chứa ScreenVertex sau phép đổi viewport, không phải các GpuVertex thô trong VBO. signedArea được tính bằng edge; nếu gần 0 thì ba đỉnh thẳng hàng hoặc trùng nhau, ta trả kết quả không có coverage trước khi chia:
+Tiếp tục hàm barycentricAtPoint trong include/pipeline.hpp. Mảng tam giác của hàm này chứa ScreenVertex sau phép đổi viewport, không phải các GpuVertex thô trong VBO. signedArea được tính bằng edge; nếu gần 0 thì ba đỉnh thẳng hàng hoặc trùng nhau, ta trả kết quả không có coverage trước khi chia:
 
 ```cpp title="include/pipeline.hpp — barycentric weights"
 const float signedArea = edge(triangle[0].position, triangle[1].position, triangle[2].position);
-if (std::abs(signedArea) <= 1.0e-8F) {
+if (!std::isfinite(signedArea) || !std::isfinite(point.x) || !std::isfinite(point.y) || std::abs(signedArea) <= 1.0e-8F) {
     return {};
 }
 const float weight0 = edge(triangle[1].position, triangle[2].position, point) / signedArea;
@@ -81,18 +80,23 @@ Giới hạn nửa bước ấy áp dụng cho **một lần** đổi float sang
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 7"
-cmake --build build --config Debug --target project_33_checkpoint_7
+Cùng bool smoothColor được truyền vào rasterizeCpuTriangle và gpuTriangle.draw. Phím C đổi bool này; các hàm coverage không được thay đổi theo mode màu. C++ tự tính màu, còn GLSL nhận vColor đã nội suy.
+
+Hãy chạy solid trước, bật smooth sau. Nếu hình dạng đổi theo C, lỗi không nằm ở một phép pha màu thông thường: kiểm nhánh truyền state, dữ liệu đầu vào hoặc giá trị không hữu hạn.
+
+```bash title="Terminal — build và chạy checkpoint 07"
+cmake --build build --config Debug --target project_33_checkpoint_7 --parallel 2
+./build/Debug/project_33_checkpoint_7.exe
 ```
 
-Nhấn `C` để đổi solid/smooth. Ở smooth mode, ba góc có ba màu riêng và vùng giữa được trộn; hai panel phải thay đổi đồng thời.
+Đường chạy trên dành cho Visual Studio trên Windows. Với Ninja, chọn CMAKE_BUILD_TYPE khi configure và chạy executable ngay trong build, không có thư mục Debug/Release trung gian. Mọi checkpoint và final đều nằm trong cùng ZIP; bạn không cần Node.js để build C++.
 
 ## Thử làm sai để hiểu đúng
 
-1. Chỉ bật smooth ở GPU. Hình dạng giống nhưng màu panel trái/phải khác rõ.
-2. Đổi thứ tự color vertices ở CPU mà giữ position. Centroid có thể gần giống nhưng vùng gần góc sai.
-3. Nội suy color trước khi xác nhận inside. Code vẫn tính số cho outside points nhưng không được ghi fragment.
-4. Đòi float color bit-identical sau khi đã ghi RGBA8. Validation đang so sai representation.
+Chỉ thay một chi tiết mỗi lần trên bản thử nghiệm. Ghi dự đoán trước, chạy để quan sát rồi phục hồi mã đúng trước khi đi tiếp.
+
+1. Cho ba vertex cùng đúng màu solid (0.38, 0.68, 0.94). Bật/tắt C: gradient biến mất và hai mode phải cho cùng màu.
+2. Giữ position, đổi màu của riêng A. Quan sát vùng gần A đổi nhiều nhất; centroid không đủ để phát hiện mọi lỗi hoán đổi màu giữa các đỉnh.
 
 ## Tự kiểm tra kết quả
 
@@ -109,4 +113,4 @@ Nhấn `C` để đổi solid/smooth. Ở smooth mode, ba góc có ba màu riên
 2. Đặt cả ba vertex color bằng đúng màu solid `(0.38, 0.68, 0.94)`; solid và smooth phải cho cùng màu. Nếu chọn một màu chung khác màu solid, hai chế độ vẫn khác nhau dù smooth không còn gradient.
 3. Thử `flat` qualifier trong GLSL và giải thích provoking vertex quyết định màu nào.
 
-Bài sau sẽ đọc fragment thật từ GPU bằng `glReadPixels` và thiết kế probe tránh triangle edges.
+Bài sau sẽ đọc fragment thật từ GPU bằng `glReadPixels` và thiết kế probe tránh tam giác edges.

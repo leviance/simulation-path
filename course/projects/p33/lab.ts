@@ -5,7 +5,7 @@ const lab = {
     label: "CPU ↔ GPU TRIANGLE LAB",
     title: "Một triangle đi qua hai pipeline khác nhau ở đâu?",
     description:
-      "Theo dõi cùng vertex data qua CPU rasterizer và OpenGL contract, kéo probe để đọc NDC, barycentric weights, viewport mapping cùng sai khác sau RGBA8 quantization.",
+      "Lần theo ba đỉnh qua transform, viewport và nội suy màu. Kéo điểm lấy mẫu để xem NDC và tâm pixel; Canvas minh họa bằng JavaScript, còn ứng dụng C++ mới chạy OpenGL thật.",
   },
   modes: {
     "gl-context": {
@@ -44,9 +44,9 @@ const lab = {
         "Bật solid/smooth, đọc ba weights tại probe và xem vertex colors được nội suy theo đúng tổng bằng một.",
     },
     "gpu-readback": {
-      title: "Một phép so CPU/GPU công bằng cần probe nào?",
+      title: "Ta đang tính màu tại điểm hình học hay tại tâm pixel?",
       description:
-        "Đặt crosshair cách xa edge, tách coordinate round-trip khỏi RGBA8 quantization và khuếch đại phần sai khác nhỏ.",
+        "Chọn pixel chứa điểm lấy mẫu rồi đổi tâm pixel về NDC. Phần màu khuếch đại chỉ là sai số làm tròn sang byte, không phải số đo từ GPU.",
     },
     "pipeline-validation": {
       title: "Pipeline đã đúng contract và đúng lifecycle chưa?",

@@ -7,11 +7,11 @@ const project = {
     "Project 16 — coverage, barycentric weights và nội suy màu trên CPU",
   ],
   summary:
-    "Vẽ cùng một tam giác bằng hai con đường: CPU rasterizer đã tự xây và OpenGL 3.3 Core. Mỗi vertex dùng chung position, color và transform; hai panel được đối chiếu từ input, vertex shader, NDC, viewport cho tới màu fragment đọc lại từ GPU.",
+    "Giữ lại tam giác đã tô bằng CPU rồi vẽ nó lần nữa bằng OpenGL 3.3 Core. Kéo một đỉnh, đổi màu hoặc xoay hình để lần theo cùng dữ liệu qua hai renderer, sau đó đọc pixel GPU thật để kiểm tra kết quả.",
   challenge: {
-    timebox: "750–950 phút",
+    timebox: "Thử tự làm trong 12–16 giờ; không tính thời gian cài compiler/SDL",
     mission:
-      "Tự xây dựng một ứng dụng C++/SDL3 tạo OpenGL 3.3 Core context và vẽ cùng một tam giác ở hai nửa cửa sổ. Nửa trái là framebuffer CPU được upload thành texture; nửa phải là triangle do GPU rasterize. Người dùng phải đổi transform, solid/smooth color và đọc probe để kiểm tra hai pipeline thay vì chỉ thấy hai hình giống nhau.",
+      "Tự xây dựng một ứng dụng C++/SDL3 có hai vùng vẽ cạnh nhau: bên trái tự tô tam giác bằng CPU, bên phải vẽ cùng tam giác bằng GPU. Hai phía nhận chung vị trí đỉnh, màu và phép biến đổi. Hãy cho người dùng sửa đầu vào rồi kiểm tra hình và màu bằng số liệu, không chỉ nhìn bằng mắt.",
     outcome:
       "Một cửa sổ chia đôi CPU/GPU, có nhãn A/B/C, tọa độ NDC và controls ngay trong ảnh. Kéo đỉnh hoặc đổi màu để thấy cả hai pipeline nhận cùng input; đọc probe để so màu GPU thật với màu CPU kỳ vọng tại cùng tâm pixel.",
     requirements: [
@@ -28,6 +28,7 @@ const project = {
       "Đọc một số probe nằm xa triangle edges bằng `glReadPixels`, so với CPU expected color sau quantization và dùng tolerance theo channel.",
       "Cho chọn/kéo vertex trên cả hai panel, chỉnh bằng bàn phím và đổi màu; nhãn và bảng tọa độ không được làm nhiễu pixel readback.",
       "Kèm starter, chín checkpoint độc lập, final có comment, README và CTest chỉ gọi code CPU thuần không tạo OpenGL context.",
+      "Reset khôi phục cả vị trí, màu, đỉnh được chọn, transform và trạng thái pause; resize vượt ngân sách phải báo rõ, không tiếp tục cấp phát không giới hạn.",
     ],
     constraints: [
       "Không dùng immediate mode (`glBegin/glEnd`), fixed-function matrix, compatibility profile, GLU, GLUT hoặc SDL_Renderer trong project này.",
@@ -54,7 +55,7 @@ const project = {
       "Starter, chín checkpoint và final build ở Debug/Release; CTest và Canvas math tests đều đạt.",
     ],
   },
-  duration: "21–28 giờ",
+  duration: "21–28 giờ: đọc 4–5 giờ, tự viết 13–17 giờ, thử nghiệm 4–6 giờ; chưa tính setup",
   objectives: [
     "Nối từng stage OpenGL/GLSL với stage tương ứng trong renderer CPU đã tự xây",
     "Quản lý rõ context, function loader, shader program, VBO, VAO, texture và resource lifetime",

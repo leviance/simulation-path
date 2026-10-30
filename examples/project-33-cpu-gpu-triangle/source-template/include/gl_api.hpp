@@ -27,6 +27,7 @@ struct GlApi {
     PFNGLDISABLEPROC Disable{};
     PFNGLGETSTRINGPROC GetString{};
     PFNGLGETERRORPROC GetError{};
+    PFNGLGETINTEGERVPROC GetIntegerv{};
 
     PFNGLCREATESHADERPROC CreateShader{};
     PFNGLSHADERSOURCEPROC ShaderSource{};
@@ -89,6 +90,7 @@ struct GlApi {
             loadOne(Disable, "glDisable") &&
             loadOne(GetString, "glGetString") &&
             loadOne(GetError, "glGetError") &&
+            loadOne(GetIntegerv, "glGetIntegerv") &&
             loadOne(CreateShader, "glCreateShader") &&
             loadOne(ShaderSource, "glShaderSource") &&
             loadOne(CompileShader, "glCompileShader") &&

@@ -4,19 +4,17 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Nhìn hai panel giống nhau chỉ là kiểm tra bằng mắt. Để bắt lỗi attribute offset, transform hoặc color interpolation, ta cần đọc một fragment GPU và so với CPU expected color. Tuy nhiên một phép so ngây thơ ở triangle edge thường không ổn định: CPU/GPU có thể dùng coverage convention khác nhau đúng một pixel quanh biên.
+Ta đã có hai hình chuyển động và nội suy màu giống nhau bằng mắt. Bài này thêm phép kiểm có số liệu: nhấn P để đọc một pixel GPU thật bằng `glReadPixels`, rồi so với màu CPU dự đoán tại đúng vị trí ấy.
 
-Checkpoint 8 chọn triangle centroid—một probe nằm sâu trong interior—rồi thực hiện:
-
-```text
-centroid NDC → pixel chứa centroid → glReadPixels → RGB8
-tâm của chính pixel ấy → NDC → CPU barycentric color → quantize RGB8
-maximum channel difference
-```
+Cẩn thận: centroid là một điểm hình học liên tục, không nhất thiết là tâm pixel. Nếu CPU tính màu tại centroid nhưng GPU trả màu ở tâm pixel lân cận, chính phép kiểm đã tạo sai số. Vì thế ta chọn pixel chứa centroid, tìm lại tâm của pixel đó, rồi mới tính màu tham chiếu.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Readback là phép đo có chủ đích chứ không phải cách render chính. Ta chỉ đọc một pixel sâu bên trong triangle khi người học bấm `P`, rồi so theo đơn vị màu 8-bit để tách sai số lượng tử khỏi lỗi tọa độ hoặc attribute.
+Readback dùng bottom-left pixel coordinates và phải chạy sau draw, trước swap hoặc overlay. CPU expected color được làm tròn sang RGBA8 trước khi so. Ngưỡng sai số (tolerance) công bố là 2/255 trên channel có sai khác lớn nhất, không phải epsilon chung cho tọa độ và màu.
+
+Centroid thường nằm trong nội thất, nhưng với tam giác rất nhỏ hoặc gần suy biến, tâm pixel được chọn vẫn có thể chạm cạnh. Đừng gắn nhãn PASS/FAIL hình học ở một probe chưa đủ khoảng cách tới edge. Fixture nghiệm thu dùng tam giác có kích thước xác định và kiểm dải cạnh riêng.
+
+Bản hoàn chỉnh đo khoảng cách từ tâm pixel tới ba đoạn cạnh theo đơn vị pixel. Trong dải 1,5 pixel, cửa sổ báo `EDGE - NO VERDICT` thay vì tự kết luận PASS/FAIL; mẫu nền xa cạnh được ghi rõ `BACKGROUND`. Chưa bấm P thì trạng thái là `not measured`, không phải một sai số bằng 0.
 
 <InteractiveLab demo="cpu-gpu-triangle" mode="gpu-readback" />
 
@@ -37,7 +35,7 @@ inline Vec2 triangleCentroid(
 }
 ```
 
-Probe xoay/dịch cùng triangle vì được tính sau transform. Nó không bị bỏ lại ở vị trí cũ khi animation chạy.
+Probe xoay/dịch cùng tam giác vì được tính sau transform. Nó không bị bỏ lại ở vị trí cũ khi animation chạy.
 
 ### Bước 2 — Đổi NDC sang GPU pixel bằng viewport phải
 
@@ -65,6 +63,10 @@ Không đảo Y ở đây. `glReadPixels` dùng tọa độ cửa sổ với g�
 ```cpp title="include/gpu_renderer.hpp — glReadPixels probe"
 std::array<std::uint8_t, 4> pixel{};
 api.ReadPixels(result.pixelX, result.pixelY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+if (api.GetError() != GL_NO_ERROR) {
+    result.valid = false;
+    return result;
+}
 result.actual = {
     float(pixel[0]) / 255.0F,
     float(pixel[1]) / 255.0F,
@@ -98,23 +100,27 @@ result.pixelY = pixelLocation.y;
 
 Nếu tâm mẫu nằm ngoài tam giác nhưng vẫn trong viewport, màu kỳ vọng là màu nền chung của hai panel, không phải màu nội suy kéo dài ra ngoài tam giác. Nếu centroid đã ra ngoài viewport, báo không có probe thay vì đọc một pixel cạnh rồi gọi đó là kết quả tại centroid.
 
-Tham số triangle của readGpuProbe mặc định là kSourceTriangle ở checkpoint này. Khi thêm khả năng chỉnh vertex trong bài cuối, ta truyền mảng đang được chỉnh vào cùng hàm, để phần kiểm không âm thầm so với tam giác ban đầu.
+Tham số `triangle` của readGpuProbe mặc định là kSourceTriangle ở checkpoint này. Khi thêm khả năng chỉnh vertex trong bài cuối, ta truyền mảng đang được chỉnh vào cùng hàm, để phần kiểm không âm thầm so với tam giác ban đầu.
 
 ## Ghép các phần lại
 
-```bash title="Terminal — build checkpoint 8"
-cmake --build build --config Debug --target project_33_checkpoint_8
+Phím P chỉ đặt probeRequested. Sau khi vẽ tam giác GPU, main gọi readGpuProbe đúng một lần rồi hạ cờ; đọc xong mới vẽ chữ và swap. Không gọi glReadPixels mỗi frame vì readback có thể buộc CPU chờ GPU.
+
+Report phải có pixel được đọc, expected, actual, maximum difference và trạng thái hợp lệ. Điểm ra ngoài viewport không được ép vào mép ảnh. Điểm trong viewport nhưng ngoài tam giác được so với màu nền, không với màu nội suy kéo dài ra ngoài.
+
+```bash title="Terminal — build và chạy checkpoint 08"
+cmake --build build --config Debug --target project_33_checkpoint_8 --parallel 2
+./build/Debug/project_33_checkpoint_8.exe
 ```
 
-Chạy app, bật smooth bằng `C`, đổi transform rồi bấm `P`. Terminal phải in pixel coordinate, expected RGB, actual RGB và `maxDiff` nhỏ.
+Đường chạy trên dành cho Visual Studio trên Windows. Với Ninja, chọn CMAKE_BUILD_TYPE khi configure và chạy executable ngay trong build, không có thư mục Debug/Release trung gian. Mọi checkpoint và final đều nằm trong cùng ZIP; bạn không cần Node.js để build C++.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dùng CPU top-left Y cho readback. Probe đọc pixel đối xứng qua trục ngang.
-2. Đọc đúng trên một vertex/edge. Một pixel coverage khác có thể làm report nhảy giữa background và triangle.
-3. So CPU float trực tiếp với byte GPU nhưng tolerance bằng 0. Quantization hợp lệ bị báo lỗi.
-4. Gọi `glReadPixels` mỗi frame. App có thể chậm vì pipeline bị đồng bộ liên tục.
-5. Đọc trước draw call. Kết quả là clear color hoặc frame cũ.
+Chỉ thay một chi tiết mỗi lần trên bản thử nghiệm. Ghi dự đoán trước, chạy để quan sát rồi phục hồi mã đúng trước khi đi tiếp.
+
+1. Trong viewport 100×100, tính pixel chứa NDC (0,0), rồi tính NDC của tâm pixel ấy. So (0,0) với (0.01,0.01) để thấy vì sao phải snap trước khi tính màu.
+2. Trong bản thử nghiệm, đọc trước draw thay vì sau draw. Report có thể nhận nền hoặc frame trước; đưa readback về đúng vị trí rồi chạy lại. Không biến một kết quả tình cờ đúng thành bằng chứng.
 
 ## Tự kiểm tra kết quả
 
@@ -130,6 +136,6 @@ Chạy app, bật smooth bằng `C`, đổi transform rồi bấm `P`. Terminal 
 
 1. Thêm ba interior probes có barycentric weights đặt trước như `(0.6,0.2,0.2)`.
 2. Thêm outside probe và kiểm nó bằng đúng background color.
-3. Đếm thời gian một readback đơn lẻ, nhưng ghi rõ đây là synchronization cost chứ không phải triangle render time.
+3. Đếm thời gian một readback đơn lẻ, nhưng ghi rõ đây là synchronization cost chứ không phải thời gian GPU vẽ tam giác.
 
 Bài cuối sẽ ghép controls, validation, diagnostics và cleanup thành source hoàn chỉnh để tải về và chạy độc lập.
