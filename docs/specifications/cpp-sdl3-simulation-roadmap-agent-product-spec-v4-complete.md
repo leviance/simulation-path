@@ -49,7 +49,7 @@ Ví dụ:
 - Project voxel cuối nhánh phải là một **world 3D có thể đi lại**, không phải 30 cube trong cửa sổ.
 - Project 5 triệu particle phải có **hàng triệu particle thật ở preset lớn**, không phải 5.000 particle rồi ghi chú “có thể scale”.
 - Project fluid 3D phải cho thấy **một khối/dòng chất lỏng 3D động**, không phải đồ thị hoặc 2D trick.
-- Project molecular dynamics phải có **force/neighbor/integration thật**, không phải particle effect đẹp mắt.
+- Project orbital nguyên tử phải có **mẫu vị trí đúng phân bố |ψ|² và phép kiểm xác suất**, không phải các điểm quay theo quỹ đạo vẽ sẵn hoặc random cloud đẹp mắt.
 - Project X-ray phải cho thấy **volume/ray/detector output**, không phải chỉ ảnh grayscale giả.
 
 ## 0.4. Hợp đồng về chất lượng trực quan
@@ -210,11 +210,11 @@ AI Agent tự thiết kế curriculum để đưa người học từ kiến th�
 38. **Buồng hạt tích điện 3D: quỹ đạo trong điện trường và từ trường** — GPU giữ/cập nhật state và render trực tiếp ít nhất một triệu hạt; quan sát quỹ đạo, đối chiếu nghiệm tham chiếu và thử mốc năm triệu theo phần cứng.
 39. **Khám phá thành phố 3D với một triệu vật thể** — GPU lọc object theo camera, compact visible IDs và dựng lệnh vẽ; reduction/scan phục vụ cảnh có thể khám phá, không chỉ xuất bảng số.
 40. **Xưởng vải 3D: kéo, ghim và thả vải phủ lên vật thể** — GPU giải constraints và tiếp xúc cho ít nhất 100.000 đỉnh động; quan sát nếp gấp, strain và va chạm, có mốc một triệu đỉnh mở rộng theo phần cứng.
-41. **Hai “nguyên tử” hút và đẩy nhau: trực quan hóa Lennard–Jones** — Graph V(r), force arrow và equilibrium region cập nhật realtime.
-42. **Hộp khí 1.000 hạt: Molecular Dynamics CPU đầu tiên** — Box có particles, energy graphs và timestep controls.
-43. **Hộp phân tử tuần hoàn: hạt đi ra một phía và quay lại phía đối diện** — Particles wrap liền mạch; pair distance qua biên đúng.
-44. **Danh sách hàng xóm có vùng đệm: không tìm lại mọi cặp ở mỗi bước** — MD CPU tối thiểu 10.000 hạt; mở rộng 100.000 theo máy, đo build-list và force.
-45. **Molecular Lab GPU: tăng từ 100.000 tới mục tiêu 5 triệu hạt** — MD GPU tối thiểu 100.000 hạt, có profiler và các mốc nâng cao theo phần cứng.
+41. **Xưởng hình học 3D: tạo vỏ ốc, dải Möbius và nút thắt** — Kéo tham số để sinh mesh có ánh sáng, xem seam/normal/UV và xuất mô hình; học curve/surface/frame qua hình đang thay đổi.
+42. **Biến hình một triệu hạt: từ mô hình này sang mô hình khác** — Sample mesh theo diện tích, ghép điểm và nội suy trên GPU; scrub timeline để so phân bố và cách biến hình.
+43. **Khám phá fractal Mandelbulb: phóng gần vào hình học 3D sinh từ phép lặp** — Điều khiển camera/power/iteration, xem chi tiết và heatmap chi phí của renderer GPU có budget/refinement.
+44. **Xưởng điêu khắc thể tích: nặn, khoét và ghép vật thể 3D** — Cọ sửa scalar field tối thiểu 128³ samples; GPU trích mesh để xem/sửa/xuất, có slice, undo và kiểm topology.
+45. **Atomic Playground: dựng đám mây orbital 3D bằng một triệu điểm** — Dùng density functions được cung cấp để tự xây sampling, GPU rendering, clipping/probe/comparison; trọng tâm toán đồ họa và hiệu năng, không phải giáo trình lượng tử.
 46. **Hộp cát số: cát rơi, nước giả và cellular automata** — Paint sand/wall/water toy và xem material rơi/chảy.
 47. **Tấm kim loại nóng: nhiệt lan từ nơi bạn click ra toàn mặt phẳng** — Heat map có mouse injection và slider dt/D; có thể cố tình làm solver mất ổn định.
 48. **Bản đồ gió: nhìn thấy gradient, divergence và curl** — Tracer đi theo vector field, kèm arrows và các bản đồ toán tử để giải thích chuyển động.
@@ -266,10 +266,10 @@ Project 01–72 vẫn thuộc lộ trình chính; Project 73–78 vẫn tùy ch�
 | Không gian và hiệu năng — 27–32 | 27–28 dùng vector, timestep và tọa độ 2D; 29 dùng camera 2D/AABB; 30 cần camera 3D, AABB và frustum; 31 thêm integration và tổng hợp lực bằng cây. 32 không bắt buộc học N-body ở 31. |
 | Graphics GPU — 33–36 | 33 đối chiếu triangle CPU/GPU; 34 chuyển viewer 21 sang hai backend; 35 xây công cụ shader; 36 thêm SDF và ray marching. Không bắt buộc học xong 22–32. |
 | GPU compute — 37–40 | Cần OpenGL/GLSL và kiểm tra phần cứng. 37 dạy vòng đời compute; 38 dựng buồng hạt tích điện; 39 dùng reduction/scan, compaction và indirect draw để khám phá thành phố 3D; 40 dùng solver/grid/contact để dựng xưởng vải 3D. 38 cần vector/cross, camera và timestep; lực/Boris được giải thích tại chỗ. 39 có thể đi thẳng từ 37 và nền graphics 34 bằng scaffold nhiều pass. 40 cần kiến thức constraint và grid được chuẩn bị tại chỗ hoặc từ 25/28; không bắt học luật Boids hay điện từ trước. |
-| Molecular Dynamics — 41–45 | Cần vector, lực và integration; bổ sung đạo hàm của potential ngay lúc dùng. 41–44 là các mốc của Molecular Lab CPU; 45 cần compute, scan và grid GPU. |
-| Trường và chất lưu — 46–51 | 46 là cellular automata độc lập. 47–49 đi theo dữ liệu trên lưới; 50–51 đi theo hạt. SPH cần integration và tìm hàng xóm; không bắt học MD. Trước 51 phải mở rộng grid, kernel và đơn vị sang 3D. |
+| Toán cho đồ họa 3D và giả lập — 41–45 | Cần vector/camera/graphics, dùng lại compute/scan từ 37–39 khi cần; không bắt học vật lý nguyên tử, MD hoặc vải 40. 41 tạo mesh từ công thức; 42 morph particle qua sampling/ánh xạ/nội suy; 43 khám phá fractal; 44 nặn scalar field và trích mesh; 45 dùng field orbital được cung cấp để dựng Atomic Playground. Toán mới được giải thích tại thay đổi nhìn thấy trong app, mỗi gói chạy độc lập. |
+| Trường và chất lưu — 46–51 | 46 là cellular automata độc lập. 47–49 đi theo dữ liệu trên lưới; 50–51 đi theo hạt. SPH cần integration và tìm hàng xóm; không bắt hoàn thành các công cụ 41–45. Trước 51 phải mở rộng grid, kernel và đơn vị sang 3D. |
 | Ray và tạo ảnh — 52–57 | 52 cần vector/camera; 53 cần mảng 3D và nội suy; 54 thêm graphics GPU. 55–56 nối tích phân theo tia với detector/reconstruction; 57 thêm xác suất. Không bắt học chất lưu trước. |
-| Voxel — 58–64 | Cần mesh, graphics GPU và camera; học phần ray cần thiết trước 60. Không yêu cầu MD, SPH hoặc CT. Dùng một voxel application xuyên suốt bảy mốc. |
+| Voxel — 58–64 | Cần mesh, graphics GPU và camera; học phần ray cần thiết trước 60. Không yêu cầu SPH, Atomic Playground hoặc CT. Dùng một voxel application xuyên suốt bảy mốc. |
 | UI/runtime — 65–72 | Cần input, cách vẽ và một simulation chạy được, có thể chọn 02 hoặc 22. Phát triển cùng control panel qua tree, layout, markup, style, binding và script. |
 | Cầu nối — 73–78 | Học xen kẽ theo Mục 3.3. Không biến project tùy chọn thành prerequisite bắt buộc mà không cung cấp đường học thay thế. |
 
@@ -284,7 +284,7 @@ Các yêu cầu dưới đây xác định bối cảnh sử dụng và phần �
 - **27–32:** 27–28 là cùng ứng dụng Boids trước/sau tối ưu; 29 là bản đồ có đối tượng mang diện tích; 30 là công cụ khảo sát dữ liệu 3D; 31 giải bài toán tương tác xa bằng xấp xỉ; 32 khảo sát chi phí bộ nhớ bằng đài phun hạt CPU. Không thay sản phẩm bằng việc rê chuột tô màu các điểm hoặc chỉ vẽ các hộp của cây.
 - **33–36:** 33 là bài chuyển tiếp nền tảng, không bị ép thành showcase nâng cao. 34 kế thừa viewer 21; 35 là công cụ làm việc với shader có reload/báo lỗi; 36 tạo cảnh SDF. SDF tìm bề mặt ở 36 khác tích lũy mật độ thể tích ở 54.
 - **37–40:** 37 là bài thí nghiệm phép tính độc lập và chi phí truyền dữ liệu. 38 giữ state qua nhiều bước để dựng buồng hạt tích điện 3D, không lặp đài phun CPU 32. 39 dùng reduction/scan/compaction để chọn object và dựng lệnh vẽ cho một thành phố 3D có thể khám phá. 40 nối constraint solver, grid 3D và tiếp xúc vào bề mặt vải có thể kéo/ghim/thả; chuỗi lò xo 25 chỉ là kiến thức cầu nối, không thay sản phẩm mesh. 38–40 có viewport 3D làm đầu ra chính, dashboard/debug hỗ trợ hiện tượng và kiểm chứng; không giới thiệu primitive hoặc số phần tử lớn như sản phẩm duy nhất.
-- **41–45:** cùng một Molecular Lab. 41 giải thích mô hình hai hạt, 42 tích hợp nhiều hạt, 43 đổi hình học tương tác qua biên, 44 đổi cách tìm hàng xóm, 45 đổi nơi thực thi sang GPU. Giữ nhất quán đơn vị hoặc reduced units, potential, cutoff, timestep và cách đo năng lượng; nếu đổi mô hình phải có bước đối chiếu riêng.
+- **41–45:** mỗi project là một công cụ đồ họa tương tác có câu hỏi gợi tò mò. 41 biến công thức thành mesh có thể chỉnh/xuất; 42 lấy mẫu mesh và biến hình triệu hạt; 43 dùng phép lặp/DE để khám phá fractal 3D; 44 chỉnh trường số bằng cọ rồi trích bề mặt; 45 dùng density orbital được cung cấp để dựng cloud triệu điểm và công cụ đo/quan sát. Chia sẻ scaffold/primitive có giải thích, không chia một bài vật lý thành năm project. Bắt đầu từ kết quả nhìn/thao tác được, dùng lỗi hình và chi phí để dẫn vào toán/code, không kết thúc ở bảng công thức hoặc benchmark trống.
 - **46–51:** cát/nước cellular ở 46 không phải solver chất lưu. 47 đặt câu hỏi nguồn nhiệt/điều kiện biên; 48 dùng tracer để thấy tác dụng của trường; 49 là công cụ khói Eulerian; 50 mở cách biểu diễn Lagrangian bằng SPH; 51 mở rộng SPH sang 3D/GPU. Không gọi mô hình sau là bản chính xác hơn của mô hình trước chỉ vì trông đẹp hơn.
 - **52–57:** 52 là công cụ hình học dùng lại cho picking; 53–56 dùng chung phantom và các phép quan sát khi hợp lý. Slice của volume, volume compositing, attenuation X-ray và reconstruction CT là bốn công việc khác nhau. 57 là nhánh lấy mẫu ngẫu nhiên, có uncertainty; không gọi kết quả là công cụ chẩn đoán hoặc mô phỏng lâm sàng đã được kiểm định.
 - **58–64:** phát triển một voxel world: chunk → visible faces → edit → greedy mesh → streaming → terrain → sandbox. Cung cấp dataset nhiều chunk đủ rõ trước khi dạy procedural terrain; không giấu terrain generator chưa học trong streaming. 62 có thể dùng job queue có ngân sách mỗi frame; thread pool 75 là mở rộng, không phải prerequisite ngầm.
@@ -297,11 +297,14 @@ Các yêu cầu dưới đây xác định bối cảnh sử dụng và phần �
 | --- | --- |
 | Camera/phép quay 12–14 và về sau | Giới thiệu orientation; có thể học 73 khi cần quaternion/SLERP, không buộc học toàn bộ quaternion để đi tiếp. |
 | Picking 3D ở 30, 60 hoặc mesh viewer | Dạy phần ray/AABB/intersection cần dùng từ 52 trước thao tác đó, hoặc công bố rõ phương pháp chọn khác. Mesh lớn có thể học thêm BVH 74. |
-| Integrator 23, 25, 26, 38, 42 | State, đạo hàm, phương trình vi phân và ý nghĩa một bước thời gian được giải thích trên hệ nhỏ trước khi gọi solver. |
+| Integrator 23, 25, 26, 38 | State, đạo hàm, phương trình vi phân và ý nghĩa một bước thời gian được giải thích trên hệ nhỏ trước khi gọi solver. |
 | Điện trường/từ trường ở 38 | Giải thích lực Lorentz, dấu q, khối lượng dương, đơn vị và trường ngoài. Dạy Boris pusher cùng mốc cả bước/nửa bước; kiểm một hạt trước khi mở rộng số lượng. Không yêu cầu học Maxwell/Poisson hoặc mô phỏng plasma ở phần khác. |
 | GPU visibility/indirect draw ở 39 | Chuẩn bị camera/frustum, bounding volume và mesh instancing từ nền graphics; giải thích mask, prefix, ID và draw command trên fixture nhỏ trước khi đưa vào scene triệu object. Phân biệt frustum culling với occlusion, không giấu occlusion/streaming trong scaffold. |
 | Vải/constraint/contact ở 40 | Dạy inverse mass, rest shape, gradient của constraint, compliance và multiplier trên một/hai ràng buộc; giải thích coloring/gather và residual trước khi tăng mesh. Grid từ 28 phải được mở rộng indexing/stencil/predicate sang 3D, không mặc định chỉ đổi hằng số. |
-| Potential/force 41–42 | Giải thích đạo hàm, hướng lực và đơn vị; kiểm lực bằng đạo hàm số độc lập ở điểm hợp lệ. |
+| Curve/surface/frame ở 41 | Dạy tham số u/v, tangent/normal, seam/winding và frame dọc curve bằng patch/mô hình đang vẽ. Không giấu quaternion hoặc giải tích vi phân chưa học trong helper. |
+| Sampling/morph ở 42 và 45 | Chuẩn bị area/volume measure, weighted CDF, barycentric samples, seed/uncertainty và nội suy thời gian; liên hệ trực tiếp với chỗ hạt bị dồn hoặc chuyển động bị giật. Field khoa học ở 45 được cung cấp, không yêu cầu suy vật lý lượng tử. |
+| Fractal/precision ở 43 | Giải thích spherical-power recurrence, bailout, DE, epsilon và work budget qua hình/heatmap. Phân biệt distance estimate với SDF chính xác, không hứa zoom/chi tiết vô hạn. |
+| Scalar field/mesh ở 44 | Dạy world-grid mapping, gradient, edge interpolation, shared-face topology và count/scan/emit ở một cell trước khi nặn cả khối. 48/52 không phải prerequisite ngầm của gradient/picking. |
 | Heat/field/fluid 47–51 | Dạy stencil, gradient/divergence/curl và điều kiện biên tại nơi sử dụng; SPH có kernel/support radius và kiểm tra đơn vị riêng cho 2D/3D. |
 | Reconstruction 56 | Giải thích forward model và backprojection trước. Nếu thêm filtered backprojection, cung cấp cầu nối lọc/Fourier; 76 là nhánh thực hành thêm, không bắt buộc hoàn thành project audio trước CT. |
 | Photon 57 | Giải thích phân phối lấy mẫu, seed, ước lượng và uncertainty; có thể dùng 77 làm bài chuẩn bị nếu thiếu nền thống kê. |
@@ -3094,343 +3097,364 @@ Agent tự chọn số bài và checkpoint theo độ khó. Giải thích một 
 ---
 
 
-# PHẦN VIII — MOLECULAR DYNAMICS
+# PHẦN VIII — TOÁN CHO ĐỒ HỌA 3D, GIẢ LẬP VÀ HIỆU NĂNG
 
-## Project 41 — Hai “nguyên tử” hút và đẩy nhau: trực quan hóa Lennard–Jones
+Phần này bắt đầu từ những thứ người học muốn tạo và khám phá: một vỏ ốc sinh từ công thức, một mô hình tan thành triệu hạt rồi biến thành hình khác, một fractal đầy chi tiết, một khối được nặn/khoét bằng chuột và một đám mây orbital nguyên tử.
 
-**Vai trò:** Bài thí nghiệm mô hình lực; nền cho Molecular Lab 42–45
+Toán xuất hiện khi sản phẩm đặt ra câu hỏi: nối hai mép mesh ra sao, vì sao hạt bị dồn vào một vùng, nội suy thế nào để không giật, làm sao tìm bề mặt từ một trường số, vì sao tăng độ chi tiết làm GPU chậm. Không lấy bài giảng vật lý, công thức lượng tử dài hoặc benchmark không có hình làm nội dung chính.
 
-**Mức tham vọng trực quan:** Scientific foundation / hai hạt, đồ thị và kiểm chứng rõ
+| Project | Sản phẩm người học tự làm | Câu hỏi gợi tò mò |
+| --- | --- | --- |
+| 41 — Xưởng hình học 3D | Kéo tham số để tạo vỏ ốc, dải Möbius và nút thắt | Một công thức biến thành bề mặt có ánh sáng như thế nào? |
+| 42 — Biến hình một triệu hạt | Cho một mô hình rã thành hạt rồi tụ thành mô hình khác | Vì sao rải hạt ngẫu nhiên lại không đều, và ghép hai đám điểm thế nào? |
+| 43 — Khám phá fractal Mandelbulb | Điều khiển camera, phóng gần vào các nếp/fractal 3D | Vì sao một phép lặp ngắn tạo được hình phức tạp đến vậy? |
+| 44 — Xưởng điêu khắc thể tích | Dùng cọ 3D để nặn, khoét, ghép khối rồi xuất mesh | Làm sao một mảng số biến thành vật thể có lỗ và bề mặt cong? |
+| 45 — Atomic Playground | Khám phá đám mây orbital bằng triệu mẫu điểm, cắt lớp và đo phân bố | Những chấm dày/thưa tạo ra hình dạng nguyên tử trong video như thế nào? |
+
+41–45 là năm sản phẩm riêng có thể chia sẻ camera, controls, renderer, buffers và công cụ đo. 41 cung cấp mesh cho 42; 43 mở cách mô tả hình bằng hàm; 44 cho chỉnh một trường dữ liệu rồi trích bề mặt; 45 dùng trường mật độ và sampling để dựng đám mây. Mỗi gói vẫn chạy độc lập, không bắt người học copy file giữa nhiều ZIP.
+
+## Chuẩn giảng dạy và kết quả trực quan của phần
+
+- Mỗi project mở bằng thử thách và một kết quả có thể thao tác: kéo tham số, đổi hình, cắt/nặn hoặc đi vào cảnh. Đầu quá trình đã có một scene chạy được; không đợi hết lý thuyết mới cho thấy sản phẩm.
+- Mỗi khái niệm toán phải nối với một thay đổi nhìn thấy trong app và một thí nghiệm dự đoán → thao tác → giải thích. Có phép kiểm độc lập, nhưng test không thay sản phẩm trực quan.
+- Tách phần nền được cung cấp với phần người học tự viết. Có thể dùng camera/mesh loader ở 21/34, compute ở 37–38 và scan ở 39; giải thích điểm gọi, không giấu engine chưa được dạy.
+- Không bắt học vật lý nguyên tử, cơ học lượng tử, chất lưu hoặc MD để hoàn thành. Khi cần một field có ý nghĩa khoa học ở 45, công thức/reference được cung cấp; trọng tâm là biểu diễn dữ liệu, sampling, graphics và lập trình.
+- Một object/frame đẹp không chứng minh đúng thuật toán. Có wireframe, sample/field inspector, histogram, error/heatmap hoặc timings phù hợp; bật/tắt được để giữ chế độ khám phá sạch.
+- Đo đúng công việc: generate/upload/update/extract/draw và toàn frame. Camera không đổi dữ liệu thì không rebuild mesh/cloud vô ích. Không hứa FPS hoặc GPU luôn thắng.
+- Khối lượng tối thiểu đo theo đúng bài toán: vertices, particles, pixels/ray steps hoặc grid samples. Không ép mọi project thành “một triệu hạt” cho giống nhau.
+- Tài nguyên có budget, job hữu hạn/cancel và last-good output. Chọn preset nặng phải có preflight và thông báo, không treo UI hoặc giảm chất lượng/ngưỡng nghiệm thu ngầm.
+- Không cố định số lesson/checkpoint. Source đầy đủ, code từng bước, Canvas giảng giải và tests tuân theo Mục 3; bản C++ tương tác là sản phẩm chính.
+
+## Project 41 — Xưởng hình học 3D: tạo vỏ ốc, dải Möbius và nút thắt
+
+**Vai trò:** Biến đường cong/bề mặt tham số thành một công cụ tạo mô hình
+
+**Mức tham vọng trực quan:** Mesh 3D có ánh sáng, wireframe và tham số thay đổi trực tiếp
 
 ### Đề bài / mục tiêu sản phẩm
 
-Kéo hai particle gần/xa và xem potential/force đổi dấu.
+Tự viết một xưởng hình học: kéo thanh điều khiển để một ống tròn thành nút thắt, một dải cong thành Möbius hoặc một đường xoắn thành bề mặt kiểu vỏ ốc. Người dùng lưu lại hình mình tạo, không chỉ xem vài ảnh dựng sẵn.
+
+Câu hỏi mở đầu: tại sao cùng một tấm lưới, thay cách ánh xạ hai tọa độ u/v lại tạo ra các hình khác nhau, và vì sao nối mép sai khiến ánh sáng bị gãy?
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Graph V(r), force arrow và equilibrium region cập nhật realtime.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Có preset torus đối chiếu, vỏ ốc/ống xoắn, dải Möbius và một torus knot. Người dùng orbit/pan/zoom, đổi thông số, bật wireframe/UV/normal, nhìn hình cập nhật và xuất mesh do mình tạo.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Two interactive particles + V(r) graph.
-- Attraction/repulsion force arrows.
-- Analytic vs numerical derivative check.
+- Tự viết evaluator curve/surface, lấy mẫu u/v, tạo vertices/indices, tangents/normals và seam policy; không tải model hoàn chỉnh thay công thức.
+- Torus và dải Möbius có tham số/range rõ; swept tube/shell/knot có frame dọc đường cong không nhảy tùy ý.
+- Dạy đạo hàm/tangent/cross qua một patch nhỏ để thấy normal đổi ánh sáng. Có thể dùng sai phân hữu hạn với bước được công bố và đối chiếu analytic khi có.
+- Giải thích seam của bề mặt tuần hoàn và seam đảo v của Möbius. Möbius không có global normal liên tục một phía; renderer phải dùng quy tắc hai mặt phù hợp, không coi mặt biến mất là “tính chất toán”.
+- Dirty flags/batch regeneration, preview và last-good khi tham số sai. Export OBJ hoặc format mesh text đơn giản có validation.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Sweep across repulsive, minimum, attractive ranges.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Một preset ít nhất 65.536 vertices thực, resolution tăng/giảm được với triangle/memory counters; preset nhỏ phục vụ hiểu topology.
+- Công bố khoảng tham số tránh suy biến và giới hạn subdivision, không tạo chỉ số vượt buffer hoặc rebuild vô hạn khi kéo slider.
 
 ### Tương tác bắt buộc
 
-- Drag distance; change epsilon/sigma.
+- Đổi preset, độ xoắn/bán kính/bước tăng/độ dày/resolution, reset, camera, wireframe/normal/UV và export mesh.
+- Camera/overlay vẫn dùng được trong khi tạo candidate; hủy/đổi nhanh không công bố mesh cũ dưới nhãn mới.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Molecular simulation phải có viewer động, thể hiện rõ các hạt đang tương tác chứ không phải point cloud tĩnh.
-- Ở project 3D/GPU, phải có depth cue, camera tự do/orbit, atom/particle shading hoặc impostor đủ rõ và color mapping theo đại lượng phù hợp như loại hạt, tốc độ hoặc năng lượng.
-- Energy/temperature/profiler overlays phải bổ trợ cho scene, không thay thế scene.
+- Mesh có chiều sâu, ánh sáng và pattern để đọc độ cong/xoắn. Thay tham số phải đổi hình thực chứ không chỉ đổi góc camera.
+- Debug giúp tìm seam/normal lỗi; chế độ sạch cho thấy hình hoàn chỉnh, không chỉ có lưới dây.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- LJ potential/force
-- Plot
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết evaluator/tessellation/topology/frame/normals. Khung OpenGL/camera được cung cấp phải có giải thích.
+- Quaternion 73 không là prerequisite ngầm của sweep frame; dạy phép quay/frame cần dùng tại chỗ.
+- Công bố mặt tự giao, đầu mở/đóng và winding; không gọi mọi mesh sinh ra là manifold kín.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ plot công thức không particle interaction.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ xoay/scale model có sẵn, hoặc có công thức mà không có mesh tương tác.
+- Model bị mất mặt/nổ normal ở seam, index ngoài range hoặc chỉ hỗ trợ một hình không có controls.
+- Chỉ xuất ảnh/Canvas thay executable và source tạo mesh.
 
 ### Acceptance Criteria
 
-- Kiểm lực từ âm đạo hàm potential ở vùng hút/đẩy và quanh cực tiểu; sweep bước đạo hàm số để tránh một tolerance che mọi lỗi.
-- r quá nhỏ, đơn vị/reduced units, tham số và giới hạn đồ thị có chính sách rõ. Hai hạt là thí nghiệm mô hình LJ, không đại diện mọi tương tác nguyên tử.
-- Numerical derivative gần analytic.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Kéo tham số tạo được đủ các nhóm hình, wireframe/normal/UV giải thích được thay đổi và seam; export/import lại giữ vertices/triangles hợp lệ.
+- Torus có fixture điểm/bounds/normal độc lập; Möbius kiểm p(u+2π,v)=p(u,−v); tube/frame không lật bất ngờ trên các ca chuẩn.
+- Mesh có ít nhất 65.536 vertices, counters đúng và không rebuild chỉ vì camera đổi.
+- Reset/cancel/invalid configuration giữ last-good; app 3D và source chạy độc lập.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài/checkpoint. Bắt đầu bằng patch có thể kéo tham số và thấy ánh sáng, sau đó mở seam/frame/topology; không bắt người học đọc hết giải tích vi phân trước khi dựng hình.
 
 ---
 
-## Project 42 — Hộp khí 1.000 hạt: Molecular Dynamics CPU đầu tiên
+## Project 42 — Biến hình một triệu hạt: từ mô hình này sang mô hình khác
 
-**Mức tham vọng trực quan:** Advanced Scientific Simulation / trực quan hóa giàu thông tin
+**Vai trò:** Dùng sampling, correspondence và nội suy để tạo một hiệu ứng 3D điều khiển được
+
+**Mức tham vọng trực quan:** Mô hình tan thành hạt rồi tụ thành hình khác, có A/B cách lấy mẫu và cách ghép điểm
 
 ### Đề bài / mục tiêu sản phẩm
 
-Mô phỏng nhiều particle với Lennard–Jones + velocity Verlet.
+Tự viết một particle morphing studio. Chọn hình nguồn và hình đích, kéo timeline rồi thấy một triệu hạt chuyển giữa hai hình; đổi phương pháp lấy mẫu/ghép điểm để thấy sự khác nhau ở khoảng giữa.
+
+Đây là chuyển động đồ họa theo ánh xạ/nội suy, không phải lực vật lý hoặc mô phỏng triệu nguyên tử.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Box có particles, energy graphs và timestep controls.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Sphere/torus/knot hoặc mesh từ 41 có thể biến đổi qua lại, màu/ánh sáng giúp đọc hình nguồn/đích. Có so sánh random correspondence với spatially ordered correspondence và chế độ xem vùng bị lấy mẫu quá dày.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Actual MD box with many particles moving from forces.
-- Velocity Verlet.
-- Kinetic/potential/total energy plots.
+- Tự lấy mẫu theo diện tích triangle, chọn triangle theo trọng số rồi sample barycentric đúng; không lấy uniform vertex index và gọi là uniform surface.
+- Nguồn/đích có cùng N sample IDs, seed/config rõ; cặp điểm có thể dựng bằng spatial sort hoặc phương pháp hữu hạn được giải thích, không hứa đó là optimal transport.
+- GPU cập nhật vị trí mỗi hạt từ source/target/path theo model time, đọc cùng buffers để vẽ. CPU có thể chuẩn bị mesh/CDF/correspondence khi cấu hình đổi, phải tách chi phí.
+- Có linear và ít nhất một easing/curve path, scrub/reverse/loop, endpoints chính xác. Frame rate thay đổi không làm thời lượng morph đổi.
+- Histogram/phân vùng diện tích và đường đi subset giúp giải thích sampling/correspondence; không dùng opacity che lỗi thiếu/nhân bản sample.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Start 100 then 1k; optionally 10k.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Ít nhất một triệu hạt thực được GPU cập nhật/draw theo đường morph; có preset nhỏ/N lẻ để kiểm.
+- Công bố source/target/current/path memory và sampling/matching/update/draw cost. Năm triệu là mở rộng theo hardware, không hứa FPS chung.
 
 ### Tương tác bắt buộc
 
-- Pause/reset; timestep; initial temperature/velocity scale.
+- Chọn source/target, N/seed, sampling/matching mode, easing/path; Play/Pause/Reset, scrub/reverse và camera.
+- Hủy tạo cặp mẫu, giữ last-good và hiển thị cấu hình nào đang được dùng; đổi source/target không trộn generation.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Molecular simulation phải có viewer động, thể hiện rõ các hạt đang tương tác chứ không phải point cloud tĩnh.
-- Ở project 3D/GPU, phải có depth cue, camera tự do/orbit, atom/particle shading hoặc impostor đủ rõ và color mapping theo đại lượng phù hợp như loại hạt, tốc độ hoặc năng lượng.
-- Energy/temperature/profiler overlays phải bổ trợ cho scene, không thay thế scene.
-- Box MD phải thể hiện 1.000 particle thật ở preset chính hoặc mức tương đương hợp lý, với motion liên tục và màu theo speed/energy.
-- Energy graphs nên cập nhật theo thời gian trong overlay nhỏ hoặc panel bên cạnh.
+- Nhận ra hình ở hai đầu và chuyển động giữa chúng; point size/depth/opacity giữ cấu trúc đọc được ở N lớn.
+- A/B thể hiện rõ chênh lệch phân bố/đường đi, không chỉ đổi tên chế độ trong một bảng số.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- CPU MD loop
-- Pair force
-- Observables
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết area distribution, sampler, correspondence, interpolation và GPU update/render. Có thể tham khảo [triangle sampling trong PBRT](https://pbr-book.org/4ed/Shapes/Triangle_Meshes), không dùng particle engine.
+- Đây không phải mô phỏng collision/dynamics. Easing/path phải được giải thích như hàm thời gian, không giả là lực.
 
 ### Không được coi là hoàn thành nếu
 
-- Random particle animation.
-- Collision-only gas without Lennard–Jones.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ dissolve hai ảnh hoặc di chuyển vài nghìn hạt rồi ghi “có thể scale”.
+- CPU tính toàn bộ positions mỗi frame rồi gọi là GPU update, hay nhân bản điểm cho đủ N.
+- Mẫu dồn theo tessellation nhưng UI vẫn gọi là đều theo diện tích, hoặc chỉ có video render sẵn.
 
 ### Acceptance Criteria
 
-- Fixture hai/ba hạt kiểm pair force đối nhau và một bước Velocity Verlet; lực/đơn vị nối rõ với 41.
-- Đo energy drift trên cùng state đầu và thời gian hữu hạn ở nhiều dt; giữ preset 1.000 hạt thật, không che force blow-up bằng clamp không được công bố.
-- Energy drift được định lượng.
-- Không che force blow-up.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Triangle sampling có fixture centroid/barycentric và hai triangle diện tích khác nhau; tần suất chọn khớp area ratio trong uncertainty qua nhiều seed.
+- t=0/1 đúng source/target, Pause giữ model time; nhiều chuỗi dt cùng thời gian cho vị trí tương đương.
+- Random/spatial correspondence cho hai chuyển động A/B quan sát được, N IDs không mất/trùng ngoài contract đã công bố.
+- Một triệu hạt được update/draw thật, scrubbing/camera/cancel/last-good làm việc và timings không giấu bước chuẩn bị.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent tự chọn số bài/checkpoint. Cho một nhóm hạt đổi giữa hai hình trước, dùng hình sai phân bố để đặt câu hỏi rồi mới xây sampler/matching; không mở bằng một chương xác suất không gắn với sản phẩm.
 
 ---
 
-## Project 43 — Hộp phân tử tuần hoàn: hạt đi ra một phía và quay lại phía đối diện
+## Project 43 — Khám phá fractal Mandelbulb: phóng gần vào hình học 3D sinh từ phép lặp
 
-**Mức tham vọng trực quan:** Advanced Scientific Simulation / trực quan hóa giàu thông tin
+**Vai trò:** Dùng phép lặp và ước lượng khoảng cách để tạo chi tiết hình học trên GPU
+
+**Mức tham vọng trực quan:** Fractal 3D có ánh sáng, chiều sâu và camera khám phá chi tiết
 
 ### Đề bài / mục tiêu sản phẩm
 
-Thêm periodic boundary và minimum-image convention.
+Tự viết một fractal explorer. Người dùng đổi power/iteration, xoay và tiến camera để thấy cùng một phép lặp tạo ra hình dạng/chi tiết khác nhau; bật heatmap để hiểu vùng nào làm renderer tốn công.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Particles wrap liền mạch; pair distance qua biên đúng.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Mandelbulb 3D có preset power 8 và các cấu hình khác để so sánh, camera thật, clipping/bounds rõ và chế độ ảnh sạch. Phóng gần làm lộ thêm chi tiết trong giới hạn precision/iteration được công bố, không dùng texture ảnh zoom sẵn.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Periodic box visualization.
-- Positions wrap; forces use minimum image.
-- Boundary test cases.
+- Tự viết spherical-power mapping, escape iteration/bailout và distance estimator, nối vào renderer GPU; xử lý r=0, acos domain, overflow và NaN.
+- Tận dụng nền ray marching 36, nhưng giải thích vì sao fractal DE khác SDF chính xác của sphere/box. Có safety/epsilon/budget và ca đối chiếu.
+- Normals/lighting từ field có bước sai phân rõ; orbit trap/iteration colors là thuộc tính đồ họa, không phải nhiệt độ/năng lượng vật lý.
+- Tách quality khi thao tác với progressive refinement khi dừng; tile/batch có giới hạn và hủy được khi camera/model đổi.
+- Có heatmap ray steps/fractal iterations, miss/inside/invalid state và timings; không gọi GPU enqueue hoặc FPS là thời gian kernel.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- At least 2D/3D box with cross-boundary interaction.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Có ảnh hoàn chỉnh ít nhất 960×540 thật tính từ fractal; preview thấp hơn có nhãn và được tinh chỉnh khi người dùng dừng thao tác.
+- Công bố max ray steps, max fractal iterations, far bound, epsilon và tổng work/batch; không hứa chi tiết vô hạn hoặc ray tracer realtime trên mọi máy.
 
 ### Tương tác bắt buộc
 
-- Toggle periodic/debug ghost copies.
+- Orbit/pan/dolly hoặc camera tự do có giới hạn rõ, đổi power/bailout/iteration/quality/palette, reset và chọn camera presets.
+- Bật step/iteration heatmap, tạm dừng refinement và hủy/restart ảnh khi tham số đổi; không giữ tile cũ dưới cấu hình mới.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Molecular simulation phải có viewer động, thể hiện rõ các hạt đang tương tác chứ không phải point cloud tĩnh.
-- Ở project 3D/GPU, phải có depth cue, camera tự do/orbit, atom/particle shading hoặc impostor đủ rõ và color mapping theo đại lượng phù hợp như loại hạt, tốc độ hoặc năng lượng.
-- Energy/temperature/profiler overlays phải bổ trợ cho scene, không thay thế scene.
+- Nhận ra thể tích, nếp/nhánh fractal và chiều sâu; ánh sáng ổn định khi camera đổi. Không phải Mandelbrot 2D gắn lên một mặt phẳng.
+- Heatmap liên hệ được vùng chi tiết với chi phí; tắt overlay vẫn có cảnh đẹp, không cần asset art.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Periodic wrapping
-- Minimum-image displacement
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết recurrence/DE, march loop, normals và quality controller; không dùng fractal engine hoặc pre-rendered mesh.
+- Tham khảo [Shape Modeling with Fractals — Purdue](https://web.ics.purdue.edu/~tmcgraw/papers/mcgraw_fractal_2014) để xác định mapping/DE; không coi ảnh giống nhau là bằng chứng DE không overshoot.
+- Khai báo độ chính xác/giới hạn zoom và quy tắc bên trong fractal. Không chữa lỗi bằng một glFinish hoặc shader loop vô hạn.
 
 ### Không được coi là hoàn thành nếu
 
-- Chỉ teleport display position nhưng force vẫn non-periodic.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ xem ảnh/mesh fractal có sẵn, chỉ đổi màu hoặc zoom một texture.
+- Không có guard/budget, camera thao tác bị khóa bởi một lượt render dài không hủy được.
+- Tăng iteration/độ phân giải nhưng giấu chất lượng thực hoặc trộn tiles của hai trạng thái.
 
 ### Acceptance Criteria
 
-- Wrap position và minimum-image displacement được kiểm riêng tại hai biên, negative coordinates và nhiều lần qua box; nếu có unwrapped state phải giữ nhất quán.
-- Hai hạt qua biên cho lực tương đương ca cùng displacement trong box; công bố cutoff/box constraints để tránh tính ảnh tuần hoàn sai.
-- Hai hạt sát hai biên tương tác như gần nhau.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Orbit classification và các điểm đặc biệt được so với evaluator CPU độc lập; power/bailout/r=0/near-axis có fixture hữu hạn.
+- Một số ray/silhouette chuẩn đối chiếu với phương pháp tham chiếu chậm hơn để phát hiện overshoot/false hit; công bố sai số và giới hạn DE.
+- Ảnh 960×540 được tính hoàn chỉnh, power/zoom/iteration tạo thay đổi quan sát được; heatmap/counters đúng công việc.
+- Preview/refinement/cancel giữ UI phản hồi và không công bố ảnh lẫn generation; source độc lập, không gọi ảnh đẹp là toàn bộ validation.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent chọn số bài/checkpoint. Bắt đầu bằng một fractal nhỏ có thể nhìn/đổi tham số, rồi dùng lỗi hình và heatmap để giải thích phép lặp, tọa độ cầu, DE và precision; không mở bằng lịch sử số phức hoặc cả chương fractal trước khi có app.
 
 ---
 
-## Project 44 — Danh sách hàng xóm có vùng đệm: không tìm lại mọi cặp ở mỗi bước
+## Project 44 — Xưởng điêu khắc thể tích: nặn, khoét và ghép vật thể 3D
 
-**Mức tham vọng trực quan:** Advanced Scientific Simulation / trực quan hóa giàu thông tin
+**Vai trò:** Biến một trường số 3D có thể chỉnh sửa thành mesh dùng được
+
+**Mức tham vọng trực quan:** Cọ 3D tạo lỗ, cầu nối, khối cong và mesh có ánh sáng ngay trong viewport
 
 ### Đề bài / mục tiêu sản phẩm
 
-Kết hợp cell list + Verlet neighbor list với cutoff/skin.
+Tự viết một công cụ nặn khối: thêm vật liệu, khoét lỗ xuyên qua, ghép hai khối rồi xem bề mặt cập nhật. Người học thấy dữ liệu trong grid liên hệ với bề mặt như thế nào, thay vì chỉ nhìn các ô voxel hoặc công thức isosurface.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-MD CPU 10k–100k hạt có profiler build-list vs force.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Một khối khởi đầu và cọ 3D có bán kính/độ mạnh, preview trước stroke, undo/redo và chế độ xem lát cắt. Có thể tạo một khối có lỗ/cầu nối, nhìn wireframe/normal rồi xuất mesh thực.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Cell-list + Verlet neighbor list integrated into MD.
-- Cutoff + skin + rebuild logic.
-- Profiler components.
+- Scalar grid 3D với world↔grid transform, spacing và dấu inside/outside được công bố; brush sửa field thật, không chỉ sửa ảnh viewport.
+- Brush add/subtract và falloff mượt, lấy mẫu stroke đủ để không đứt; dirty region/chunk có generation để không phải rebuild toàn volume khi camera đổi.
+- Tự trích isosurface bằng marching tetrahedra hoặc marching cubes có xử lý ambiguity/edge consistency được giải thích; nội suy edge, tạo triangles/normals và draw mesh.
+- GPU xử lý field edit/count/scan/emit cho preset lớn, CPU có fixture nhỏ để kiểm. Nếu cần đọc một summary để cấp phát, tách rõ; không full-field readback để CPU làm hộ extraction mỗi stroke.
+- Normal theo gradient với quy ước dấu đúng; gần gradient 0 có policy. Field tổng quát không được giả định là SDF để bước ray bằng giá trị field tùy ý.
+- Undo/redo theo stroke/snapshot có giới hạn, save/load field hoặc cấu hình hợp lệ và export mesh; không cần backend.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- Bắt buộc đạt ít nhất 10.000 hạt CPU; 100.000 là mục tiêu mở rộng theo phần cứng, với cùng mô hình và kiểm chứng.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Grid tối thiểu 128×128×128 scalar samples thật; công bố số cells khác số samples, active cells, vertices/triangles và memory.
+- Có preset nhỏ để kiểm và resolution cao hơn mở rộng theo budget. Count trước emit/allocate, không cắt triangle âm thầm khi mesh buffer đầy.
+- Đo brush/count/scan/emit/normals/draw; input/job có budget và last-good mesh khi cấu hình quá nặng.
 
 ### Tương tác bắt buộc
 
-- Change cutoff/skin; show rebuild count.
+- Orbit/pan/zoom, chọn add/subtract, chỉnh radius/strength, kéo stroke, undo/redo, reset.
+- Bật slice/field probe/wireframe/normal, đổi isovalue/resolution hợp lệ, hủy remesh và export mesh.
+- Kéo cọ có một pointer owner/capture; blur/cancel/reset không tiếp tục stroke hoặc ghi vào grid cũ.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Molecular simulation phải có viewer động, thể hiện rõ các hạt đang tương tác chứ không phải point cloud tĩnh.
-- Ở project 3D/GPU, phải có depth cue, camera tự do/orbit, atom/particle shading hoặc impostor đủ rõ và color mapping theo đại lượng phù hợp như loại hạt, tốc độ hoặc năng lượng.
-- Energy/temperature/profiler overlays phải bổ trợ cho scene, không thay thế scene.
+- Bề mặt cong có ánh sáng và dấu chỉ cọ, tạo được lỗ/cầu nối quan sát trực tiếp. Không thay bằng xếp cube kiểu voxel world.
+- Slice/mesh cùng phản ánh field hiện tại, có trạng thái khi mesh còn đang cập nhật; không che cracks/index lỗi bằng smooth shading.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- Neighbor list
-- Rebuild tracker
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết field/brush, edge interpolation, extraction topology, GPU prefix/emit và undo/job lifecycle; không dùng sculpt/meshing engine.
+- Có thể tham khảo [GPU Gems — density field và polygon extraction](https://developer.nvidia.com/gpugems/gpugems3/part-i-geometry/chapter-1-generating-complex-procedural-terrains-using-gpu), không sao chép API DirectX thành dependency của bản OpenGL 4.3.
+- Dạy gradient/picking tại nơi dùng hoặc công bố helper đã cung cấp. 48/52 không phải prerequisite ngầm.
+- Đây là chỉnh trường hình học, không giải cơ học vật liệu, chất lưu hoặc phản ứng hóa học.
 
 ### Không được coi là hoàn thành nếu
 
-- Rebuild full O(N²) list every step.
-- Không compare force correctness.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Chỉ ghép SDF sphere/box bằng slider như 36 nhưng không có stored field/brush/remesh.
+- CPU xử lý toàn workload nặng nhưng gắn nhãn GPU, hoặc mesh bị mất triangle khi buffer đầy mà không báo.
+- Chỉ xem volume/point cloud, không tạo/sửa/xuất được bề mặt 3D.
 
 ### Acceptance Criteria
 
-- Ít nhất 10.000 hạt MD thật ở preset nghiệm thu; 100.000 là mở rộng CPU theo máy, không thay bằng mức 1.000 hạt rồi gọi hoàn thành.
-- Neighbor list không bỏ cặp tiến vào cutoff trước lần rebuild tiếp theo; fixture có hạt qua biên tuần hoàn và chuyển động sát ngưỡng skin.
-- Đo build/rebuild/force/toàn bước; so force cùng snapshot với all-pairs và kiểm cả skin quá nhỏ/quá lớn.
-- Forces trong cutoff khớp reference.
-- Không bỏ neighbor.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Field plane/sphere có reference độc lập về vị trí isosurface, bounds và normal; resolution refinement có đo sai số thay vì chỉ nhìn ảnh.
+- Fixture cells/edges/shared faces kiểm count/index/interpolation/topology, không có crack không chủ đích hoặc triangle ngoài buffer.
+- Add/subtract/stroke/undo/redo làm đổi field và mesh nhất quán; xuất rồi đọc lại mesh cho dữ liệu hợp lệ.
+- Grid 128³ được xử lý thật trên GPU, counters phân biệt samples/cells/triangles; cancel/overflow/allocation failure giữ last-good có nhãn.
+- Camera không remesh vô ích, reset/blur hủy stroke, controls/slice/mesh/export hoạt động trong native app độc lập.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent chọn số bài/checkpoint. Cho một cell tạo triangle trước, nối thành khối có cọ rồi mới tăng grid/GPU; dùng chính lỗ/crack/normal lỗi để dẫn tới nội suy và topology, không dạy cả chương meshing tách khỏi app.
 
 ---
 
-## Project 45 — Molecular Lab GPU: tăng từ 100.000 tới mục tiêu 5 triệu hạt
+## Project 45 — Atomic Playground: dựng đám mây orbital 3D bằng một triệu điểm
 
-**Mức tham vọng trực quan:** Advanced Scientific Simulation / trực quan hóa giàu thông tin
+**Vai trò:** Ứng dụng tổng hợp field, sampling và rendering dữ liệu lớn với chủ đề nguyên tử
+
+**Mức tham vọng trực quan:** Orbital dày có thùy/vùng nút, cắt lớp, so sánh và công cụ đo phân bố
 
 ### Đề bài / mục tiêu sản phẩm
 
-Port grid, neighbor lookup, force compute và integration sang compute shader.
+Tự xây một Atomic Playground theo trải nghiệm [Simulating Atoms in C++](https://www.youtube.com/watch?v=OSAOh4L41Wg): đổi preset để đám mây thành các hình khác nhau, đi vào bên trong, cắt lớp và kiểm tra nơi các điểm tập trung.
+
+**Đây là project toán/đồ họa/lập trình, không phải khóa cơ học lượng tử.** Cung cấp sẵn các hàm mật độ orbital có nguồn và fixture; người học tập trung đánh giá field, chuẩn hóa trọng số, lấy mẫu đúng, quản lý triệu điểm, dựng hình và giữ tương tác.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-GPU MD prototype có profiler và scale ladder.
+Catalog ít nhất có 1s, 2s, các hướng real 2p và đại diện 3d/4f; mỗi preset có nhãn/công thức tham chiếu được cung cấp. Người dùng đổi hình, orbit/pan/zoom, di chuyển mặt cắt, tô sáng vùng đo và so hai đám mây ở cùng thang.
 
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Có các vùng nút/thùy và mật độ đọc được, không phải một khối sáng bệt. Bộ đếm và công cụ đo trả lời vì sao sampling sai hoặc transfer function quá mạnh làm hình không đúng.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Full GPU MD pipeline: binning, neighbor force, integration, render.
-- Profiler per pass.
-- CPU reference small N.
+- Bộ density functions/catalog C++/GLSL được cung cấp và giải thích đầu vào/đầu ra, miền/đơn vị; không yêu cầu người học tự suy Schrödinger, spherical harmonics, energy levels hoặc spin.
+- Một điểm là một mẫu vị trí theo density, không phải một electron riêng; một triệu điểm không đồng nghĩa triệu electron hoặc nhiều nguyên tử tương tác. Mô hình chuẩn là hydrogen một electron, không dùng cùng catalog như nghiệm chính xác của mọi nguyên tố.
+- Tự viết generic weighted sampler: normalize, PDF/CDF hoặc phương pháp tương đương, RNG/seed, conversion về XYZ và thống kê; nếu sample từ grid phải tính cell volume và công bố approximation.
+- GPU đánh giá/sinh dữ liệu lớn và renderer đọc trực tiếp; không tạo toàn bộ triệu positions trên CPU rồi gọi là GPU sampling. CPU reference nhỏ và bảng nhỏ khi cấu hình đổi được phép, tách phạm vi đo.
+- Cắt lớp, region probe, histogram/reference và comparison để phân biệt lỗi sampling với lỗi hiển thị. Có preset sai uniform-radius/uniform-angle trong sandbox hữu hạn để người học tìm lỗi.
+- Catalog cho chọn preset/basis hoặc n/l/m trong miền hàm được cung cấp. Đổi nhãn không làm cùng một cloud trở thành orbital khác; pha/sign là mở rộng nếu có dữ liệu và legend đúng.
+- Generation có batch/progress/cancel, candidate/last-good tách biệt, finite rejection budget và xử lý thiếu mẫu/NaN. Không điền điểm trùng tại gốc để giả đủ count.
+- Cloud trạng thái riêng có thể tĩnh; không cần giả quỹ đạo. Nếu dùng morph/fade từ 42 để chuyển preset, phải ghi đó là hiệu ứng chuyển hình đồ họa, không phải electron đang chuyển mức.
+- Save/load cấu hình/seed nhỏ và reset tái lập. Không yêu cầu chồng chập, photon, probability current hoặc giải TDSE cho bản hoàn thành.
 
 ### Quy mô / độ phức tạp tối thiểu
 
-- 100k required milestone; 1M strong milestone; 5M stretch target.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+- Ít nhất một triệu mẫu hợp lệ thật cho cloud chính; năm triệu là mở rộng theo GPU/VRAM/chất lượng. Comparison ghi N/budget mỗi pane.
+- Công bố requested/generated/accepted/drawn, R_max/tail bị bỏ, table/grid resolution, memory và thời gian evaluate/sample/draw/probe.
+- Có fixture nhỏ/N lẻ và budget trước cấp phát. Thay đổi camera/clip không sinh lại toàn cloud vô ích.
 
 ### Tương tác bắt buộc
 
-- Camera + pause/reset + N presets + debug selected atom.
+- Chọn orbital/preset, N/seed, density palette/opacity/size, orbit/pan/zoom, clipping và region probe.
+- So hai preset cùng thang hoặc auto-fit có nhãn; reset/save/load, hủy generation và xem last-good/current configuration.
+- Có mode khám phá sạch và mode debug/performance; không bắt nhập công thức vật lý để sử dụng công cụ cơ bản.
 
 ### Mức đồ họa / trình bày tối thiểu
 
-- Molecular simulation phải có viewer động, thể hiện rõ các hạt đang tương tác chứ không phải point cloud tĩnh.
-- Ở project 3D/GPU, phải có depth cue, camera tự do/orbit, atom/particle shading hoặc impostor đủ rõ và color mapping theo đại lượng phù hợp như loại hạt, tốc độ hoặc năng lượng.
-- Energy/temperature/profiler overlays phải bổ trợ cho scene, không thay thế scene.
-- Ở 100k+ atoms, scene phải là viewer 3D thực sự với free/orbit camera, depth shading/impostors và color mapping theo atom type/speed/energy.
-- Có chế độ chọn một atom để highlight local neighbor cells/neighbors mà không làm mất showcase mode.
-- Profiler và scale controls phải tồn tại, nhưng demo chính phải nhìn như một molecular simulation quy mô lớn chứ không phải benchmark điểm.
+- Depth/point-splat/opacity giúp thấy các thùy, lớp và node; clipping cho nhìn cấu trúc bên trong như tham chiếu, không chỉ vẽ random cloud.
+- Density/brightness legend rõ. Mật độ điểm đã mã hóa field; nhân brightness thêm phải công bố transfer function, không coi screenshot là phép đo xác suất tuyến tính.
+- UI/camera vẫn phản hồi khi job chạy; không đổi model label trước khi cloud tương ứng được nhận.
 
 ### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
 
-- GPU MD kernels
-- Profiler counters
-- GPU render
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+- Tự viết sampler, field-to-data pipeline, GPU lifecycle, renderer, measurement và UI integration. Phần công thức khoa học là input được cung cấp, không là nội dung vật lý bắt buộc phải suy.
+- Nguồn tham chiếu gồm [README/bản của tác giả video](https://github.com/kavan010/Atoms) và [ý nghĩa mật độ orbital](https://openstax.org/books/university-physics-volume-3/pages/8-1-the-hydrogen-atom). Kiểm license trước mọi reuse code/asset; không chép bin/libs vào repo.
+- Công bố vùng/tail, discrete approximation và uncertainty. Clipping không được normalize lại phần nhìn thấy rồi gọi đó là xác suất toàn hệ.
+- Không dùng LJ/Newton/Coulomb giữa các mẫu, không gọi cloud là mô phỏng hóa học hoặc quantum many-body. Lấy mẫu đúng field là điều kiện kỹ thuật, không được hạ thành trang trí tùy ý.
 
 ### Không được coi là hoàn thành nếu
 
-- 5M static particles.
-- Only gravity particles.
-- No neighbor-based force.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+- Có bài giảng lượng tử dài nhưng không có playground 3D thao tác được, hoặc giao hộp hạt va chạm thay orbital.
+- Chỉ rải random/nhân bản điểm, chọn màu khác cho cùng hình, hoặc GPU chỉ vẽ dataset CPU mà không thực hiện phần sampling lớn.
+- Một triệu điểm được cấp phát nhưng chưa sinh đúng phân bố, không có cắt lớp/đo/comparison hoặc chỉ có Canvas/video.
+- Claim triệu electron, quỹ đạo cổ điển, phản ứng/chuyển mức vật lý từ hiệu ứng morph đồ họa.
 
 ### Acceptance Criteria
 
-- Đối chiếu small-N force, integration và diagnostics theo từng pass, không chỉ so ảnh; tail workgroup và overflow cell list có kiểm tra.
-- 100.000 hạt là tối thiểu, một triệu là mốc nâng cao và năm triệu là stretch theo phần cứng. Mọi mốc chỉ ghi đạt khi force/neighbor/integration thật đều được thực thi.
-- Giữ nhất quán mô hình ở 41–44; nếu đổi cutoff/precision/integrator phải có phép đo riêng, không quy mọi speedup cho GPU.
-- Small-N GPU step khớp CPU tolerance.
-- 5M chỉ thành công nếu update thật, không chỉ render.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+- Các density functions được cung cấp có closed-form/fixture độc lập, gồm 1s/2s/2p và node/đối xứng cơ bản; không dùng ảnh giống video làm oracle.
+- Sampler generic được kiểm bằng uniform volume và trường có tích phân biết trước; histogram/region estimates ở nhiều seed khớp reference trong uncertainty/table/tail tolerance riêng.
+- Một triệu mẫu hợp lệ được sinh/render thật trên GPU. Accepted count, memory, timings và N không chia hết workgroup được kiểm; năm triệu có bằng chứng riêng hoặc ghi chưa kiểm chứng.
+- Đổi preset làm đổi đúng cloud; camera/clipping/brightness không sửa density model, và chuyển hình nếu có được gắn nhãn đồ họa.
+- Selector/comparison/probe, save/load, cancel/reset/last-good, keyboard/pointer và reduced-motion được kiểm trực tiếp; scene native có node/thùy/depth rõ.
+- Source/checkpoint/final và quy trình kiểm hữu hạn đầy đủ. Không bắt thêm vật lý lượng tử để hợp thức hóa một sản phẩm chưa có đồ họa/tương tác.
 
 ### Quyền tự quyết của AI Agent khi xây giáo trình
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+Agent chọn số bài/checkpoint. Cho thấy ngay một orbital từ field được cung cấp, rồi dùng lỗi phân bố/cắt lớp/hiệu năng để dạy sampling và GPU. Toán xuất hiện để giúp tạo hình và kiểm hình, không biến phần này thành giáo trình vật lý nguyên tử.
 
 ---
 
@@ -5740,7 +5764,7 @@ Hai output trên có thể là **bước thử nghiệm sớm**, nhưng không p
 
 Ví dụ:
 
-### Molecular Dynamics nâng cao
+### Công cụ đồ họa 3D sinh từ toán — 41–45
 
 Không chỉ:
 
@@ -5751,14 +5775,14 @@ Không chỉ:
 Mà nên có:
 
 ```text
-3D atom cloud
+editable 3D output: mesh / particle morph / fractal / sculpted field / orbital cloud
 + perspective/depth
-+ sphere impostors / readable point rendering
-+ color by species/speed/energy
-+ free/orbit camera
-+ selected atom + neighbor debug
-+ energy/temperature overlay
-+ profiler toggle
++ controls that visibly change shape, distribution or detail
++ wireframe / normals / slices / histogram / work heatmap as appropriate
++ readable lighting or point/splat rendering, not a flat scatter plot
++ A/B experiment linked to a mathematical or programming decision
++ real workload counters, memory and timings
++ responsive exploration + bounded generation/validation + last-good output
 ```
 
 ### Fluid 3D
