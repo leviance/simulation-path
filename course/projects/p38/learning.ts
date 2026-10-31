@@ -1,335 +1,358 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/particle_math.hpp",
-  "include/gl_api.hpp",
-  "include/particle_gpu_engine.hpp",
-  "shaders/particle_update.comp",
-  "shaders/particle.vert",
-  "shaders/particle.frag",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
   guides: {
     "p38-l01": {
-      focus:
-        "Xác định dữ liệu của một Particle, viết bước semi-implicit Euler trên CPU và xử lý vòng đời trước khi chuyển sang compute shader.",
-      expected:
-        "Checkpoint 1 chạy một preview nhỏ trên CPU: mỗi particle tăng tuổi, chịu trọng lực và được tái sinh khi hết vòng đời hoặc rơi khỏi sàn.",
-      files,
+      focus: "Dựng buồng quan sát 3D trước khi thêm mô phỏng.",
+      expected: "Window/context, grid, orbit/pan/zoom; chưa có particle.",
+      files: [
+        "include/chamber_application.hpp",
+        "include/chamber_camera.hpp",
+        "include/chamber_renderer.hpp",
+      ],
       steps: [
         {
-          title: "Gom trạng thái thành hai Vec4",
-          explanation:
-            "positionAge và velocityLife giữ tám float liên quan trong record 32 byte; tên trường nói rõ component w mang nghĩa gì.",
+          title: "Chạy starter",
+          explanation: "Event loop, GL loader và overlay là phần nền; chưa có lực hoặc integrator.",
         },
         {
-          title: "Cập nhật velocity trước position",
-          explanation:
-            "Semi-implicit Euler dùng vận tốc vừa chịu gravity để dịch chuyển position, ổn định hơn explicit Euler mà vẫn đủ đơn giản để viết lại trong GLSL.",
+          title: "Đưa grid qua camera",
+          explanation: "View/projection dùng aspect vùng cảnh và kích thước framebuffer thật.",
         },
         {
-          title: "Đặt vòng đời vào cùng step",
-          explanation:
-            "Age và floor guard quyết định respawn ngay tại nơi state được cập nhật, tránh một pass CPU thứ hai phải quét toàn mảng.",
+          title: "Kiểm góc nhìn",
+          explanation: "Camera chỉ đổi ma trận; chuột/bàn phím đều điều khiển được.",
         },
       ],
     },
     "p38-l02": {
-      focus:
-        "Sinh particle có thể tái lập từ index và seed, rồi trải tuổi ban đầu để đài phun có hình ngay từ frame đầu.",
-      expected:
-        "Checkpoint 2 tạo lại đúng cùng particle với cùng seed, trong khi seed khác đổi hướng phun và lifetime có kiểm soát.",
-      files,
+      focus: "Đọc một record và tạo lại đúng snapshot từ seed.",
+      expected: "CPU preview đứng yên, ID ổn định và cặp 0/1 trái dấu q.",
+      files: ["include/chamber_math.hpp", "include/chamber_application.hpp"],
       steps: [
         {
-          title: "Hash index thay vì giữ RNG state",
-          explanation:
-            "Mỗi invocation có thể tự dựng random-like values từ index và epoch; không cần chia sẻ một random generator có thứ tự toàn cục.",
+          title: "Khóa layout",
+          explanation: "Hai vec4, 32 byte/alignment 16; q/mass ở w đã công bố.",
         },
         {
-          title: "Sinh trạng thái lúc vừa rời emitter",
-          explanation:
-            "Spawn state gồm vị trí miệng phun, velocity hướng lên, age zero và lifetime dương rõ ràng.",
+          title: "Sinh theo ID",
+          explanation: "Hash nhận ID/channel/seed, không đọc clock hoặc camera.",
         },
         {
-          title: "Đẩy mỗi particle tới một age ban đầu",
-          explanation:
-            "Khởi tạo steady-state dùng nghiệm chuyển động để phân bố particle dọc quỹ đạo; không cần chạy hàng trăm warm-up frame trước khi thấy fountain.",
+          title: "Nối preview",
+          explanation: "Reset tạo mảng nhỏ và clock, không nhận là GPU scale.",
         },
       ],
     },
     "p38-l03": {
-      focus:
-        "Kiểm tra layout std430 của Particle, tính trước ngân sách 160 MB và chỉ chọn preset mà GPU thật sự hỗ trợ.",
-      expected:
-        "Checkpoint 3 upload một SSBO ở binding 0; preset 5 triệu chỉ được chọn khi block size và dispatch limits đều đạt.",
-      files,
+      focus: "Tự tính lực Lorentz và nhận ra lỗi Euler.",
+      expected: "Hai dấu q cong trái chiều; Euler làm speed tăng khi chỉ B.",
+      files: ["include/chamber_math.hpp", "include/chamber_application.hpp"],
       steps: [
         {
-          title: "Khóa size, alignment và offset",
-          explanation:
-            "Ba static_assert buộc C++ record khớp hai vec4 liên tiếp mà compute/vertex shader cùng đọc.",
+          title: "Kiểm thứ tự cross",
+          explanation: "v theo X, B theo Y cho v×B theo Z; đảo tham số làm sai chiều.",
         },
         {
-          title: "Tính byte budget bằng số nguyên",
-          explanation:
-            "Count nhân sizeof(Particle) được kiểm overflow và so với GL_MAX_SHADER_STORAGE_BLOCK_SIZE trước khi vector/buffer lớn được tạo.",
+          title: "Tính gia tốc",
+          explanation: "q scale nhân q cơ sở rồi chia mass dương; đơn vị chuẩn hóa.",
         },
         {
-          title: "Fallback có tên",
-          explanation:
-            "Ứng dụng thử preset từ lớn xuống nhỏ và in lý do; nó không âm thầm gọi 1 triệu là 5 triệu.",
+          title: "Thử Euler",
+          explanation: "Cập nhật cùng state cũ và quan sát lỗi năng lượng, chưa dùng cho final.",
         },
       ],
     },
     "p38-l04": {
-      focus:
-        "Viết lại bước cập nhật CPU trong compute shader: mỗi invocation xử lý một particle, kiểm tra index trước khi đọc và tái sinh theo cùng seed/epoch.",
-      expected:
-        "Checkpoint 4 dispatch đủ ceilDiv(count,256) groups và không chạm 192 lane dư ở preset 5 triệu.",
-      files,
+      focus: "Viết Boris với x/v cùng mốc full-time.",
+      expected: "Hai nửa xung E, phép quay B và drift đối xứng.",
+      files: ["include/chamber_math.hpp", "include/chamber_application.hpp"],
       steps: [
         {
-          title: "Lấy index rồi guard ngay",
-          explanation:
-            "gl_GlobalInvocationID.x được so với uParticleCount trước khi đọc particles[index]; guard muộn vẫn cho phép read ngoài buffer.",
+          title: "Giữ state cũ",
+          explanation: "Giữ oldVelocity cho drift, không ghi v giữa chừng.",
         },
         {
-          title: "Giữ thứ tự phép tính như CPU",
-          explanation:
-            "Velocity, position rồi age được cập nhật theo đúng thứ tự của bản CPU, nhờ đó phép đối chiếu ở bài 9 chỉ đo sai số số học chứ không phải hai thuật toán khác nhau.",
+          title: "Quay vận tốc",
+          explanation: "vMinus/t/s/vPrime/vPlus giữ cùng tên khi đối chiếu GLSL.",
         },
         {
-          title: "Respawn tại đúng index",
-          explanation:
-            "Hash nhận index và spawn epoch nên mỗi invocation tự tạo state mới mà không tranh chấp counter hay RNG chung.",
+          title: "Commit cùng thời điểm",
+          explanation: "xNext dùng trung bình v cũ/mới; chỉ ghi nếu cả hai hợp lệ.",
         },
       ],
     },
     "p38-l05": {
-      focus:
-        "Đọc cùng particle SSBO trong vertex shader bằng gl_VertexID rồi vẽ GL_POINTS qua VAO rỗng.",
-      expected:
-        "Checkpoint 5 vẽ static fountain từ GPU-resident buffer; không có vertex upload thứ hai và không dựng position trên CPU mỗi frame.",
-      files,
+      focus: "Kiểm phase/position bằng nghiệm double độc lập.",
+      expected: "Nghiệm thẳng/E/B đều và dt convergence ở cùng T.",
+      files: ["include/chamber_reference.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Dùng draw index làm particle index",
-          explanation:
-            "glDrawArrays phát vertex ID 0..N-1; vertex shader dùng ID đó để lấy record ở binding 0.",
+          title: "Tách trường hợp zero",
+          explanation: "B=0 hoặc q=0 không chia omega, dùng gia tốc đều.",
         },
         {
-          title: "Đổi world position sang clip space",
-          explanation:
-            "uHalfExtent mô tả nửa chiều rộng/cao camera 2D; phép chia theo từng trục giữ aspect khi resize.",
+          title: "Tách theo B",
+          explanation: "Trục B, omega có dấu và drift tạo nghiệm trường đều tổng quát.",
         },
         {
-          title: "Biến point thành sprite tròn",
-          explanation:
-            "Fragment shader dùng gl_PointCoord để discard góc vuông và pha màu theo normalized age mà không cần texture.",
+          title: "So cùng T",
+          explanation: "dt/2 cần số bước gấp đôi; đo vector position/velocity, không chỉ speed.",
         },
       ],
     },
     "p38-l06": {
-      focus:
-        "Đặt memory barrier giữa compute và draw để vertex shader đọc được trạng thái mới trong cùng SSBO.",
-      expected:
-        "Checkpoint 6 chạy update → GL_SHADER_STORAGE_BARRIER_BIT → draw mỗi frame, không full readback.",
-      files,
+      focus: "Cấp SSBO theo kế hoạch, giữ last-good khi yêu cầu lỗi.",
+      expected: "GPU init snapshot đứng yên; candidate transactional, chưa force update.",
+      files: [
+        "include/chamber_math.hpp",
+        "include/chamber_gpu.hpp",
+        "include/chamber_reference.hpp",
+        "shaders/particle_init.comp",
+      ],
       steps: [
         {
-          title: "Đặt barrier sau bước ghi",
-          explanation:
-            "Compute phải hoàn tất ghi trước khi barrier mô tả visibility cho lệnh draw tới sau.",
+          title: "Đọc limits thật",
+          explanation: "Kiểm block/local/invocations/groups/bindings và overflow trước allocation.",
         },
         {
-          title: "Chọn bit theo bước đọc tiếp theo",
-          explanation:
-            "Bước tiếp theo là vertex shader đọc SSBO nên dùng SHADER_STORAGE. BUFFER_UPDATE của Project 37 dành cho trường hợp CPU đọc buffer bằng glGetBufferSubData.",
+          title: "Tạo candidate",
+          explanation: "Lỗi chỉ hủy candidate; fence ready mới publish.",
         },
         {
-          title: "Không đọc toàn bộ buffer trong mỗi frame",
-          explanation:
-            "CPU chỉ phát commands và cập nhật uniforms; 160 MB particle state không đi qua PCIe mỗi frame.",
+          title: "Công bố trải pha",
+          explanation: "Chuẩn bị x0/v0 bằng nghiệm chỉ B; ID 0/1 pha zero.",
         },
       ],
     },
     "p38-l07": {
-      focus:
-        "Quản lý raw frame dt, clamp, pause, single-step và reset mà không tạo bước nhảy simulation.",
-      expected:
-        "Checkpoint 7 clamp dt ở 1/30 giây, pause gửi zero update, N chạy đúng 1/120 giây và R tái tạo seed ban đầu.",
-      files,
+      focus: "Compute tiến state, graphics đọc cùng SSBO.",
+      expected: "Boris cho từng ID, barrier đúng consumer, không full readback theo frame.",
+      files: [
+        "shaders/particle_update.comp",
+        "shaders/particle.vert",
+        "include/chamber_gpu.hpp",
+        "include/chamber_renderer.hpp",
+      ],
       steps: [
         {
-          title: "Đọc clock một lần mỗi frame",
-          explanation:
-            "Raw dt được tính từ SDL_GetTicksNS rồi clamp trước khi thành uniform; render và title không tự tạo clock phụ.",
+          title: "Guard trước truy cập",
+          explanation: "N lẻ có lane dư; kiểm ID trước cả lần đọc Particle.",
         },
         {
-          title: "Pause vẫn cập nhật mốc clock",
-          explanation:
-            "Khi resume, app không cộng cả khoảng người dùng đã dừng vào một dispatch duy nhất.",
+          title: "Chuyển Boris",
+          explanation: "Giữ tên biến, q/m và drift đúng hợp đồng CPU.",
         },
         {
-          title: "Single-step dùng hằng số",
-          explanation:
-            "N luôn gửi 1/120 giây, nhờ đó cùng reset và số lần nhấn tạo cùng state dù tốc độ thao tác khác nhau.",
+          title: "Nối update/draw",
+          explanation: "SHADER_STORAGE cho shader consumer; core vẽ đủ N bằng VertexID.",
         },
       ],
     },
     "p38-l08": {
-      focus:
-        "Đo riêng compute và draw bằng các vòng timer query không chặn CPU, đồng thời đổi số particle theo giới hạn GPU.",
-      expected:
-        "Checkpoint 8 giữ bốn slot cho mỗi phase, chỉ đọc available result và báo median cạnh count/bytes thật.",
-      files,
+      focus: "Giữ simulation time và mốc apply/reset rõ ràng.",
+      expected: "Pause không nợ thời gian; N một bước; discarded time được báo.",
+      files: [
+        "include/chamber_math.hpp",
+        "include/chamber_controls.hpp",
+        "include/chamber_panel.hpp",
+        "include/chamber_application.hpp",
+      ],
       steps: [
         {
-          title: "Tách compute và draw thành hai query set",
+          title: "Chặn catch-up",
           explanation:
-            "Hai nhãn trả lời hai câu hỏi khác nhau; barrier và swap không bị nhập nhằng vào kernel time.",
+            "Đi qua clock đã có, nối appliedSteps/discardedSeconds ra panel/showcase; tối đa 0,1 s wall và 8 bước/frame, t=tick×dt.",
         },
         {
-          title: "Không tái dùng slot còn pending",
-          explanation:
-            "Nếu cả bốn slot chưa available, frame đó bỏ qua timing thay vì block để ép một con số.",
+          title: "Tách STAGED/ACTIVE",
+          explanation: "Enter reset snapshot mới, R lặp ACTIVE, sửa panel chưa áp dụng.",
         },
         {
-          title: "So median theo cùng điều kiện",
-          explanation:
-            "Count, point size, viewport và validation state được đặt cạnh timing để một con số không mất ngữ cảnh.",
+          title: "Giữ main khi có job",
+          explanation: "held chặn cả single-step trong khi kiểm/đo state riêng.",
         },
       ],
     },
     "p38-l09": {
-      focus:
-        "Chạy compute shader trên một buffer thử nhỏ với dt cố định, rồi so kết quả với bản CPU mà không tải toàn bộ trạng thái particle.",
-      expected:
-        "Checkpoint 9 chạy 64 particles, BUFFER_UPDATE barrier cho probe readback và report finite/max error/first mismatch.",
-      files,
+      focus: "Đọc đúng ID/snapshot và giữ vệt có trần.",
+      expected: "33-record probe, ID bất kỳ bằng phím, click 32 ID và 17×256 trail points.",
+      files: [
+        "include/chamber_probe.hpp",
+        "shaders/particle_probe.comp",
+        "include/chamber_application.hpp",
+      ],
       steps: [
         {
-          title: "Tạo buffer thử độc lập",
-          explanation:
-            "Probe dùng cùng Particle layout, shader program và binding 0 nhưng có count nhỏ, seed và dt cố định.",
+          title: "Gather ít record",
+          explanation: "Capture ID/generation/tick/time trước gửi, không full state mỗi frame.",
         },
         {
-          title: "Đổi barrier vì bước đọc đã thay đổi",
-          explanation:
-            "Main path dùng SHADER_STORAGE cho draw; probe path dùng BUFFER_UPDATE vì lệnh kế tiếp là glGetBufferSubData.",
+          title: "Chờ hữu hạn",
+          explanation: "BUFFER_UPDATE visibility và fence completion; timeout không publish.",
         },
         {
-          title: "Khôi phục main binding",
-          explanation:
-            "Sau khi xóa buffer thử, engine gắn lại SSBO chính để thao tác kiểm tra không làm hỏng frame tiếp theo.",
+          title: "Lấy trail theo time",
+          explanation: "Ring có trần, không thêm khi Pause hoặc nối qua generation.",
         },
       ],
     },
     "p38-l10": {
-      focus:
-        "Ghép lựa chọn preset an toàn, update/draw trên GPU, điều khiển, timer query, kiểm tra kết quả và cleanup thành ứng dụng hoàn chỉnh.",
-      expected:
-        "Final chỉ readback probe khi V được yêu cầu, hỗ trợ bốn count preset và xóa queries/VAO/buffer/program khi context còn current.",
-      files,
+      focus: "Kiểm đủ N mà không biến event loop thành vòng chờ.",
+      expected: "Job riêng kiểm mirror/analytic theo batch; NaN fail, cancel incomplete.",
+      files: [
+        "include/chamber_validation.hpp",
+        "include/chamber_reference.hpp",
+        "include/chamber_verify.hpp",
+      ],
       steps: [
         {
-          title: "Một rebuild path cho reset và count",
-          explanation:
-            "Dữ liệu CPU chỉ tồn tại trong lúc tạo/upload; sau đó simulation state tiếp tục sống ở SSBO.",
+          title: "Khóa snapshot",
+          explanation: "State riêng/settings by value; không dùng ACTIVE làm scratch.",
         },
         {
-          title: "Title phản ánh state thật",
-          explanation:
-            "Count sau fallback, MiB, pause, compute/draw median và probe PASS/FAIL đều lấy từ engine state, không phải nhãn cố định.",
+          title: "Đọc từng batch",
+          explanation: "8.192 record mỗi poll sau fence, trả event loop để hủy.",
         },
         {
-          title: "Dọn resource theo thứ tự ngược",
+          title: "Kiểm hai tầng",
+          explanation: "CPU mirror không thay analytic trajectory và dt convergence.",
+        },
+      ],
+    },
+    "p38-l11": {
+      focus: "Đo đúng scope trên workload cố định.",
+      expected: "4 warm-up/20 paired samples, min/median/max và báo riêng 1M/5M.",
+      files: [
+        "include/chamber_timing.hpp",
+        "include/chamber_benchmark.hpp",
+        "include/chamber_application.hpp",
+      ],
+      steps: [
+        {
+          title: "Poll query",
+          explanation: "Chỉ consume available, không overwrite pending hoặc glFinish theo frame.",
+        },
+        {
+          title: "Chốt phạm vi",
+          explanation: "Update/draw GPU khác frame CPU+present; draw chỉ core/halo.",
+        },
+        {
+          title: "Giữ cấu hình",
+          explanation: "MEASURED giữ snapshot; camera/viewport đổi làm job incomplete.",
+        },
+      ],
+    },
+    "p38-l12": {
+      focus: "Làm rõ chiều sâu mà không thay phương trình chuyển động.",
+      expected: "Core depth/shading, halo sampling rõ, HDR có ngân sách và final độc lập.",
+      files: [
+        "shaders/particle.frag",
+        "include/chamber_renderer.hpp",
+        "include/chamber_post.hpp",
+        "include/chamber_application.hpp",
+      ],
+      steps: [
+        {
+          title: "Sphere impostor",
           explanation:
-            "Query rings, VAO, buffer và programs bị xóa trước SDL_GL_DestroyContext để mọi glDelete call còn context hợp lệ.",
+            "Normal/fragment depth cho lớp trước che lớp sau, không chỉ additive points.",
+        },
+        {
+          title: "Chặn hậu kỳ",
+          explanation: "Target tối đa 2048×1152, candidate transactional và HUD sau bloom.",
+        },
+        {
+          title: "Nghiệm thu từng cổng",
+          explanation: "Build, CTest, GPU scale, interaction, Canvas và ZIP là bằng chứng riêng.",
         },
       ],
     },
   },
   references: {
     "p38-l01": [
-      { label: "Semi-implicit Euler", href: "/glossary#semi-implicit-euler", kind: "Thuật ngữ" },
-      { label: "Particle lifecycle", href: "/glossary#particle-lifecycle", kind: "Thuật ngữ" },
+      {
+        label: "SDL_GetWindowSizeInPixels",
+        href: "https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels",
+        kind: "SDL API",
+      },
     ],
     "p38-l02": [
       {
-        label: "Deterministic initialization",
-        href: "/glossary#deterministic-particle-initialization",
+        label: "std430 layout",
+        href: "/glossary#std430-layout",
         kind: "Thuật ngữ",
       },
-      { label: "GPU hash RNG", href: "/glossary#gpu-hash-rng", kind: "Thuật ngữ" },
     ],
     "p38-l03": [
       {
-        label: "glGetInteger64v",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGet.xhtml",
-        kind: "OpenGL API",
+        label: "Cross product",
+        href: "/glossary#cross-product",
+        kind: "Thuật ngữ",
       },
-      { label: "SSBO", href: "/glossary#shader-storage-buffer-object", kind: "Thuật ngữ" },
     ],
     "p38-l04": [
       {
-        label: "glDispatchCompute",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDispatchCompute.xhtml",
-        kind: "OpenGL API",
+        label: "Boris và mốc thời gian",
+        href: "/glossary#boris-pusher",
+        kind: "Thuật ngữ",
       },
-      { label: "Bounds guard", href: "/glossary#compute-bounds-guard", kind: "Thuật ngữ" },
     ],
     "p38-l05": [
       {
-        label: "gl_VertexID",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_VertexID.xhtml",
-        kind: "OpenGL API",
+        label: "Nghiệm độc lập",
+        href: "/glossary#cpu-oracle",
+        kind: "Thuật ngữ",
       },
-      { label: "Point sprite", href: "/glossary#point-sprite", kind: "Thuật ngữ" },
     ],
     "p38-l06": [
       {
-        label: "glMemoryBarrier",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glMemoryBarrier.xhtml",
+        label: "glBufferData",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glBufferData.xml",
         kind: "OpenGL API",
       },
-      { label: "GPU-resident state", href: "/glossary#gpu-resident-state", kind: "Thuật ngữ" },
     ],
     "p38-l07": [
-      { label: "Delta-time clamp", href: "/glossary#delta-time-clamp", kind: "Thuật ngữ" },
       {
-        label: "SDL_GetTicksNS",
-        href: "https://wiki.libsdl.org/SDL3/SDL_GetTicksNS",
-        kind: "SDL API",
+        label: "glMemoryBarrier",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glMemoryBarrier.xml",
+        kind: "OpenGL API",
       },
     ],
     "p38-l08": [
       {
-        label: "glGetQueryObject",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGetQueryObject.xhtml",
-        kind: "OpenGL API",
-      },
-      {
-        label: "Asynchronous query ring",
-        href: "/glossary#asynchronous-query-ring",
+        label: "Fixed timestep",
+        href: "/glossary#fixed-timestep",
         kind: "Thuật ngữ",
       },
     ],
     "p38-l09": [
-      { label: "Validation probe", href: "/glossary#gpu-validation-probe", kind: "Thuật ngữ" },
-      { label: "Mixed tolerance", href: "/glossary#mixed-tolerance", kind: "Thuật ngữ" },
+      {
+        label: "glFenceSync",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glFenceSync.xml",
+        kind: "OpenGL API",
+      },
     ],
     "p38-l10": [
       {
-        label: "glDeleteVertexArrays",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDeleteVertexArrays.xhtml",
-        kind: "OpenGL API",
+        label: "Mixed tolerance",
+        href: "/glossary#mixed-tolerance",
+        kind: "Thuật ngữ",
       },
-      { label: "Phép kiểm tra có tên", href: "/glossary#named-validation", kind: "Thuật ngữ" },
+    ],
+    "p38-l11": [
+      {
+        label: "GPU timer query",
+        href: "/glossary#gpu-timer-query",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p38-l12": [
+      {
+        label: "SDL3 CMake",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "CMake",
+      },
     ],
   },
 } satisfies ProjectLearningAssets;

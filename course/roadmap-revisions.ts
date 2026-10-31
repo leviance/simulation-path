@@ -5,27 +5,6 @@ import type { ProjectRevision } from "./types";
 const previousMolecularPart = "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT";
 
 export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
-  "38": {
-    previousTitle: "Đài phun 5 triệu hạt: GPU cập nhật và render particle",
-    summary:
-      "Đổi điện trường, từ trường và dấu điện tích để quan sát những quỹ đạo thẳng, tròn và xoắn trong buồng hạt 3D.",
-    outcome:
-      "Một buồng quan sát có chiều sâu, mốc không gian và vệt quỹ đạo của các hạt được chọn. State được GPU cập nhật liên tục và dùng trực tiếp để vẽ.",
-    question: "Vì sao đổi dấu điện tích làm hạt quay theo hướng ngược lại?",
-    interactions: [
-      "Đổi hướng và độ lớn E/B, vận tốc ban đầu và q/m.",
-      "Chọn hạt để xem vệt quỹ đạo và so với nghiệm tham chiếu.",
-      "Pause, Reset, single-step; orbit, pan và zoom camera.",
-    ],
-    concepts: [
-      "Lực Lorentz và Boris pusher được giải thích trên một hạt trước.",
-      "State trên GPU, buffer layout, barrier và kiểm chứng CPU/GPU.",
-    ],
-    prerequisites:
-      "Vector/cross product, camera 3D, timestep và compute ở Project 37; phần lực và Boris được dạy tại chỗ.",
-    workload:
-      "Mục tiêu: ít nhất 1 triệu hạt thực được GPU cập nhật; 5 triệu là mở rộng theo phần cứng.",
-  },
   "39": {
     previousTitle: "Cộng một triệu số theo cây: Reduction và Prefix Sum trên GPU",
     summary:

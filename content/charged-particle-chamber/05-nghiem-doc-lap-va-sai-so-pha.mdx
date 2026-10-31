@@ -1,0 +1,91 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tốc độ đúng chưa có nghĩa quỹ đạo đúng
+
+## Ta cần giải quyết điều gì?
+
+Nếu dùng lại Boris trên CPU để kiểm Boris trên GPU, hai bên có thể cùng sai một công thức. Ta cần một đáp án không gọi integrator. Bài này xây nghiệm trường đều bằng double, so cả vị trí/vận tốc và kiểm xem giảm dt có đưa hạt tới gần đúng vị trí sau cùng một khoảng thời gian hay không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Khi B=0, gia tốc a=(q/m)E không đổi:
+
+$$v(T)=v_0+aT,\qquad x(T)=x_0+v_0T+\tfrac12 aT^2.$$
+
+Khi chỉ có B đều, đặt b=B/|B|, ω=(q/m)|B| và tách `v0 = vParallel + vPerpendicular`. Thành phần song song giữ nguyên; phần vuông góc quay:
+
+$$v(T)=v_{\parallel}+v_{\perp}\cos(\omega T)+(v_{\perp}\times b)\sin(\omega T).$$
+
+Tích phân từng hạng cho vị trí: thành phần song song đi thẳng; hai hạng quay cho `sin(ωT)/ω` và `(1−cos(ωT))/ω`. v vuông góc B tạo đường tròn; thêm v song song tạo đường xoắn. Nghiệm tổng quát E/B đều trong source còn tách gia tốc song song và drift vuông góc. Phần đó không cần thiết để hiểu bốn preset, nhưng giúp validator không chỉ đúng cho B dọc Y.
+
+<InteractiveLab demo="charged-particle-chamber" mode="chamber-reference" />
+
+## Bắt tay xây dựng
+
+### 1. Tách nhánh không có tần số quay
+
+`chamber_reference.hpp` có vector double riêng để tránh gọi nhầm toán tích phân float. Với B gần 0 hoặc q/m gần 0:
+
+```cpp title="include/chamber_reference.hpp — nghiệm gia tốc đều"
+if (fieldLength < 1.0e-12 || std::abs(chargeOverMass) < 1.0e-12) {
+    return {x0 + v0 * time + acceleration * (0.5 * time * time), v0 + acceleration * time};
+}
+```
+
+Đây không phải mẹo làm test pass: nó tránh chia cho ω=0 và chính là nghiệm đúng của giới hạn ấy. q=0 kéo theo acceleration=0 dù E khác 0.
+
+### 2. Xác định trục và tần số có dấu
+
+```cpp title="include/chamber_reference.hpp — tách song song và phần quay"
+const exact::Vector axis = magnetic * (1.0 / fieldLength);
+const double omega = chargeOverMass * fieldLength;
+const exact::Vector parallelVelocity = axis * exact::dot(v0, axis);
+const exact::Vector parallelAcceleration = axis * exact::dot(acceleration, axis);
+const exact::Vector drift = exact::cross(acceleration, axis) * (1.0 / omega);
+const exact::Vector perpendicular = v0 - parallelVelocity - drift;
+const exact::Vector turn = exact::cross(perpendicular, axis);
+```
+
+ω giữ dấu q để hai nhóm quay ngược nhau. Với E=0, drift và parallelAcceleration đều 0. Hàm dùng `2*sin²(angle/2)` thay `1-cos(angle)` gần zero để bớt mất chữ số. Phần return trong source là tổng nghiệm từng thành phần vừa phân tích, không gọi `stepBoris`.
+
+Vì sao xuất hiện `drift` khi cả E và B đều khác 0? Gọi a=(q/m)E và chọn `drift=(a×b)/ω`. Khi đó `ω(drift×b)=−aPerpendicular`: lực từ do vận tốc drift vừa triệt tiêu phần gia tốc điện vuông góc B. Sau khi trừ drift và phần vận tốc song song, vector còn lại chỉ quay như trường hợp chỉ B. Phần song song vẫn nhận gia tốc `aParallel`.
+
+Từ đó vị trí là tổng của: x0; quãng đi thẳng `(vParallel+drift)T`; gia tốc song song `aParallel*T²/2`; và tích phân hai thành phần quay. Đó chính là các hạng ở return trong source. Ta không thêm một “quỹ đạo riêng” cho trường nghiêng; chỉ đổi hệ phân tích theo hướng B.
+
+### 3. Đo sai số tại cùng T
+
+```cpp title="include/chamber_reference.hpp — khoảng cách tới nghiệm"
+inline double positionError(const Particle& actual, const ReferenceState& expected) {
+    return exact::norm(exact::from(position(actual)) - expected.position);
+}
+
+inline double velocityError(const Particle& actual, const ReferenceState& expected) {
+    return exact::norm(exact::from(velocity(actual)) - expected.velocity);
+}
+```
+
+Trong tests, chạy dt=0,08 với 100 bước và dt=0,04 với 200 bước: cả hai đều quan sát tại T=8. Sai số pha của Boris bậc hai giảm xấp xỉ bốn lần khi chia đôi dt trong fixture này. Không bắt tỷ lệ đúng 4 ở mọi cấu hình: quanh sai số làm tròn hoặc nghiệm thẳng chính xác, tỷ số có thể không còn ý nghĩa.
+
+Hai dt trên là fixture gọi integrator toán thuần trực tiếp để phóng rõ sai số, không phải cấu hình mà UI native cho phép nhập. UI giữ dt tối đa 1/30 s; trong Canvas bạn có thể so 1/30 với 1/60 ở cùng T bằng nút đối chiếu.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_5` và chạy CTest. Trong Canvas, chọn chỉ B, ID 0 rồi “Đối chiếu dt và dt/2”. Hai lượt đều bắt đầu từ cùng snapshot, dừng ở cùng T; đọc riêng |Δx| và |Δv|. Đây là phép tính CPU một hạt, không phải kiểm GPU hay toàn bộ một triệu hạt.
+
+Nhánh chuẩn bị snapshot trải pha đã được định nghĩa trong source reference nhưng chưa bật ở checkpoint này. Bài sau mới dùng nghiệm chỉ B để chuẩn bị x0/v0, rồi để compute tiến state từ thời điểm đó.
+
+## Thử tạo lỗi
+
+1. Giữ cùng số bước khi giảm dt một nửa. Bạn đang so hai thời điểm khác nhau, không phải kiểm hội tụ. Ghi T của cả hai trước khi đọc sai số.
+2. Chỉ kiểm `|v|` trong trường B rồi cố ý đảo dấu góc trong reference. Test tốc độ vẫn có thể pass; test position/velocity vector phải phát hiện chiều/pha sai.
+
+## Checklist hoàn thành
+
+- Có đáp án thẳng, gia tốc đều, tròn/xoắn độc lập với integrator.
+- Test B nghiêng và E/B cùng có mặt để tránh viết công thức chỉ đúng một trục.
+- Giảm dt ở cùng T giảm sai số pha/quỹ đạo trong fixture công bố.
+- NaN/Inf, q=0 và B=0 được xử lý rõ; không dùng tốc độ đúng thay quỹ đạo đúng.
+
+## Hướng mở rộng
+
+Đo bán kính `|vPerpendicular|/|ω|` và chu kỳ `2π/|ω|` từ quỹ đạo rồi so công thức. Tiếp theo, [đưa snapshot lên GPU với ngân sách rõ ràng](/projects/charged-particle-chamber/06-capability-ssbo-va-snapshot).

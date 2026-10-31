@@ -1,0 +1,53 @@
+#version 430 core
+
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+#if LAB_CHECKPOINT >= 6
+layout(local_size_x = 256) in;
+struct Particle { vec4 positionCharge; vec4 velocityMass; };
+layout(std430, binding = 0) buffer State { Particle particles[]; };
+uniform uint uCount;
+uniform uint uSeed;
+uniform vec3 uInitialVelocity;
+uniform vec3 uMagnetic;
+uniform float uChargeScale;
+uniform float uPhaseSpan;
+
+uint mixBits(uint value) {
+    value = (value ^ (value >> 16u)) * 0x7feb352du;
+    value = (value ^ (value >> 15u)) * 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+float random01(uint id, uint channel) {
+    return float(mixBits(id ^ (channel * 0x9e3779b9u) ^ uSeed) & 0xffffu) / 65535.0;
+}
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= uCount) return;
+    float charge = 1.0;
+    if ((id & 1u) != 0u) charge = -1.0;
+    vec3 x = (vec3(random01(id, 0u), random01(id, 1u), random01(id, 2u)) - 0.5) * vec3(0.18, 0.16, 0.18);
+    vec3 v = uInitialVelocity * (0.97 + 0.06 * random01(id, 3u));
+    float mass = 0.98 + 0.04 * random01(id, 4u);
+    if (id < 2u) { x = vec3(0); v = uInitialVelocity; mass = 1.0; }
+    else if (uPhaseSpan > 0.0) {
+        // Initial snapshot only: distribute independent particles across gyrophases.
+        // uPhaseSpan is zero for E!=0, B==0 or neutral data. Update never uses this initializer.
+        vec3 axis = normalize(uMagnetic);
+        float omega = charge * uChargeScale * length(uMagnetic) / mass;
+        float phase = uPhaseSpan * random01(id, 5u);
+        float angle = omega * phase;
+        vec3 parallel = axis * dot(v, axis);
+        vec3 perpendicular = v - parallel;
+        vec3 turn = cross(perpendicular, axis);
+        float sine = sin(angle);
+        float cosine = cos(angle);
+        float oneMinusCosine = 2.0 * sin(0.5 * angle) * sin(0.5 * angle);
+        x += parallel * phase + perpendicular * (sine / omega) + turn * (oneMinusCosine / omega);
+        v = parallel + perpendicular * cosine + turn * sine;
+    }
+    particles[id].positionCharge = vec4(x, charge);
+    particles[id].velocityMass = vec4(v, mass);
+}
+#endif

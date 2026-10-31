@@ -1,0 +1,88 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mô phỏng không được chạy nhanh hơn vì màn hình vẽ nhanh hơn
+
+## Ta cần giải quyết điều gì?
+
+Kernel nhận dt cố định, nhưng một frame có thể mất 5 ms hoặc 50 ms. Ta cần quyết định mỗi frame gửi bao nhiêu bước, không đưa thẳng wall delta tùy ý vào công thức. Cũng phải phân biệt sửa cấu hình với áp dụng cấu hình: đổi E trong panel không được lén làm thay state đang dùng cho một phép kiểm.
+
+Clock và controls cơ bản đã có từ các checkpoint CPU. Bài này đi qua chúng để hiểu và hoàn thiện đường ACTIVE/STAGED/reset trên GPU, thay vì coi timestep là một scaffold không cần đọc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Accumulator giữ wall time chưa đổi thành bước. Mỗi bước consume dt; thời gian mô phỏng luôn là `tick * dt`. Ta nhận tối đa 0,1 s wall/frame và chạy tối đa 8 bước. Khi không theo kịp, phần dư được **công bố là bỏ qua**, không giả rằng mô phỏng đã đi đủ thời gian thực.
+
+Pause xóa accumulator, N chạy đúng một bước khi Pause. Reset khôi phục ACTIVE cùng seed. Enter kiểm STAGED, tạo candidate ở t=0 rồi publish khi ready. Một cấu hình mới không có nghĩa tiếp tục x/v cũ dưới trường mới: giao diện này chọn reset rõ ràng để reference luôn biết điều kiện đầu.
+
+<InteractiveLab demo="charged-particle-chamber" mode="chamber-clock" />
+
+## Bắt tay xây dựng
+
+### 1. Pause không tích lũy nợ thời gian
+
+```cpp title="include/chamber_math.hpp — nhánh pause của FixedClock"
+if (paused) {
+    accumulator = 0.0;
+    if (singleStep)
+        return 1;
+    return 0;
+}
+```
+
+Nếu vẫn cộng wall time lúc Pause, Resume sẽ gửi cả đống bước catch-up. Nhấn N khi đang chạy cũng không được thành một bước cộng thêm tùy frame; `singleStep` chỉ có ý nghĩa trong nhánh pause.
+
+### 2. Giới hạn catch-up và ghi phần bỏ qua
+
+```cpp title="include/chamber_math.hpp — số bước hữu hạn trong một frame"
+const double accepted = std::clamp(wallSeconds, 0.0, 0.1);
+discardedSeconds += std::max(0.0, wallSeconds - accepted);
+accumulator += accepted;
+const int available = static_cast<int>(std::floor(accumulator / dt));
+const int steps = std::min(available, 8);
+accumulator -= static_cast<double>(steps) * dt;
+```
+
+Nhánh sau đó loại các bước dư ngoài 8 và cộng thời gian ấy vào `discardedSeconds`. `commit` chỉ nhận số bước đã gửi thành công. Không gán time bằng `SDL_GetTicks()` rồi dùng time đó so nghiệm của state mới đi được ít bước hơn.
+
+### 3. Nối input vào đúng thời điểm của frame
+
+```cpp title="include/chamber_application.hpp — clock đọc trạng thái đã xử lý event"
+const int steps = clock.advance(wall, active.dt, controls.paused || held, controls.singleStep && !held);
+controls.singleStep = false;
+info.updated = 0;
+```
+
+`held` là trạng thái main simulation được giữ yên khi job kiểm/đo riêng đang chạy. N không được vô tình cập nhật main trong lúc đó. Trong nhánh GPU, chỉ khi current buffer tồn tại và steps>0 mới dispatch rồi `clock.commit`. Counter `updated/frame` bằng N×steps, không phải lúc nào cũng N; Pause có thể bằng 0.
+
+### 4. Hiện phần thời gian không được mô phỏng
+
+Checkpoint 8 nối thêm số liệu của clock ra cả panel lẫn showcase. Đồng hồ an toàn đã được cung cấp để các preview trước chạy hữu hạn; phần mới ở đây là quan sát được nó có theo kịp wall time hay không:
+
+```cpp title="include/chamber_application.hpp — công bố số bước đã chạy và thời gian bỏ qua"
+info.appliedSteps = static_cast<int>(info.updated / active.count);
+info.discarded = clock.discardedSeconds;
+```
+
+`active.count` đã qua kiểm tra và luôn dương. Chia số lượt update cho N cho số bước thực đã gửi, không dùng số bước vừa yêu cầu khi buffer mới còn đang init. `drawPanel` và `drawShowcase` thêm dòng `STEPS/FRAME ... / DROPPED WALL ... S`. Nếu frame bị chậm, người học thấy vì sao t mô phỏng không bằng thời gian đã chờ, thay vì chỉ thấy một cảnh chạy chậm khó giải thích.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_8`. Pause vài giây, Resume: không có cú nhảy bù thời gian dừng. Pause rồi N ba lần: tick tăng đúng ba. Thay E trong STAGED: ACTIVE chưa đổi; Enter áp dụng, tick về 0 và generation đổi khi candidate được publish. Thử cấu hình ngoài miền: cảnh hợp lệ trước đó vẫn còn.
+
+Trong Canvas, Reset cũng giữ ACTIVE, không âm thầm áp dụng những trường vừa sửa. Bản minh họa tự dừng sau 12 giây simulation để thí nghiệm hữu hạn; native không respawn hoặc xóa hạt vì giới hạn Canvas này.
+
+## Thử tạo lỗi
+
+1. Cộng wall time khi Pause rồi Resume. Quan sát tick nhảy; viết test yêu cầu accumulator=0 trong Pause để chặn lỗi này.
+2. Dùng time thực sau một frame bị stall 10 s để so state chỉ catch-up 8 bước. Sai số sẽ lớn vì so lệch mốc, không chứng minh Boris hỏng.
+
+## Checklist hoàn thành
+
+- Pause không tích lũy catch-up; N đúng một bước, camera vẫn thao tác được.
+- Có giới hạn wall/frame và bước/frame; discarded time hiển thị trung thực.
+- STAGED/ACTIVE tách biệt; Enter tạo snapshot mới, Reset lặp seed/state cũ.
+- Reference lấy thời gian từ tick×dt và đúng generation, không từ wall clock.
+
+## Hướng mở rộng
+
+Tạo chuỗi frame 1/60 và một chuỗi xen kẽ 1/120–1/40 có cùng tổng thời gian, rồi so tick trong trường hợp chưa chạm catch-up cap. Tiếp theo, [đọc một hạt và vệt quỹ đạo mà không readback cả triệu record](/projects/charged-particle-chamber/09-id-probe-va-vet-quy-dao).

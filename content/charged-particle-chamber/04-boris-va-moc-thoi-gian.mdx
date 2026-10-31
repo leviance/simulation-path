@@ -1,0 +1,81 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Boris: đổi hướng vận tốc mà không tự làm hạt nhanh lên
+
+## Ta cần giải quyết điều gì?
+
+Euler ở bài trước cho thấy một đường cong trông hợp lý vẫn có thể sai. Ta cần xử lý riêng hai việc: E làm đổi độ lớn/hướng vận tốc, còn B quay vận tốc quanh trục trường. Boris chia phép cập nhật theo đúng ý tưởng ấy; code vẫn đủ ngắn để tự viết và kiểm từng biến trung gian.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta lưu **x và v cùng ở thời điểm t**, rồi tạo xNext/vNext cùng ở t+dt. Đây là hợp đồng của project. Một số tài liệu Boris lưu v ở nửa bước; không được lấy hai layout ấy so trực tiếp mà bỏ qua lệch thời gian. [Tài liệu PlasmaPy](https://docs.plasmapy.org/en/stable/api/plasmapy.simulation.particle_integrators.BorisIntegrator.html) mô tả kiểu full-step position / half-step velocity; ta dùng phần quay vận tốc của Boris và ghép drift đối xứng cho record full-time.
+
+Đặt h=(q/m)dt/2. Các bước là:
+
+$$v^-=v+Eh,\quad t=Bh,\quad s=\frac{2t}{1+t\cdot t},$$
+$$v'=v^-+v^-\times t,\quad v^+=v^-+v'\times s,\quad v_{next}=v^++Eh.$$
+
+Từ trường dùng phép quay Cayley: góc quay xấp xỉ nghiệm thật, không phải chính xác ở mọi dt. Khi chỉ có B, phép quay giữ độ dài v tốt nhưng **sai số pha vẫn tồn tại**. Ta cập nhật vị trí bằng hai nửa drift tương đương `xNext=x+(vOld+vNext)dt/2`.
+
+Để thấy nguồn sai số, lấy B đều và xét mặt phẳng vuông góc với B. Góc quay có dấu của một bước Boris, theo quy ước `v × B` đang dùng, có độ lớn từ `2 atan(ω dt/2)` thay vì `ω dt`. Khi dt nhỏ, hai góc rất gần nhau; qua nhiều bước, độ lệch vẫn tích lũy. Vì vậy một đường tròn không nở ra vẫn có thể chứa hạt quay chậm hoặc nhanh hơn nghiệm thật.
+
+<InteractiveLab demo="charged-particle-chamber" mode="boris-step" />
+
+## Bắt tay xây dựng
+
+### 1. Giữ vận tốc cũ và nhận nửa xung điện
+
+Trong `stepBoris`, kiểm finite/mass/dt như Euler rồi viết:
+
+```cpp title="include/chamber_math.hpp — nửa xung đầu"
+const Vec3 oldVelocity = velocity(p);
+const float halfImpulse = 0.5F * dt * p.positionCharge.w * fields.chargeScale / p.velocityMass.w;
+const Vec3 vMinus = oldVelocity + fields.electric * halfImpulse;
+```
+
+`halfImpulse` đã có dấu q và hệ số mass. Đừng nhân q/m thêm lần nữa ở cross product. Giữ `oldVelocity` để drift sau không vô tình chỉ dùng v mới.
+
+### 2. Xoay bởi B rồi nhận nửa xung còn lại
+
+```cpp title="include/chamber_math.hpp — phép quay Boris"
+const Vec3 t = fields.magnetic * halfImpulse;
+const Vec3 s = t * (2.0F / (1.0F + dot(t, t)));
+const Vec3 vPrime = vMinus + cross(vMinus, t);
+const Vec3 vPlus = vMinus + cross(vPrime, s);
+const Vec3 nextVelocity = vPlus + fields.electric * halfImpulse;
+```
+
+Không ghi `p.velocityMass` giữa chừng. Các tên trung gian giúp đối chiếu từng dòng CPU với GLSL ở Bài 7. B=0 làm t=s=0: hai nửa xung điện gộp thành gia tốc đều. q=0 làm toàn bộ push giữ nguyên v, không cần chia cho tần số quay.
+
+### 3. Đưa vị trí về cùng mốc thời gian
+
+```cpp title="include/chamber_math.hpp — drift đối xứng và commit"
+const Vec3 nextPosition = position(p) + (oldVelocity + nextVelocity) * (0.5F * dt);
+if (!finite(nextPosition) || !finite(nextVelocity))
+    return false;
+setPosition(p, nextPosition);
+setVelocity(p, nextVelocity);
+return true;
+```
+
+Chỉ commit sau khi cả xNext/vNext hợp lệ. Nhờ vậy lỗi input không để lại nửa record mới, nửa record cũ. Application ở checkpoint 4 đổi lời gọi `stepEuler` thành `stepBoris` trong CPU preview; không cần sửa camera hoặc renderer.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_4`. Chọn chỉ B và dt=1/30, so tốc độ với Euler của bài trước. Boris không còn làm quỹ đạo nở dần chỉ vì độ dài v tăng. Tuy nhiên hãy giữ nghi ngờ về góc quay: nhìn đường tròn đẹp chưa chứng minh nó tới đúng chỗ sau 8 giây. Bài sau sẽ có nghiệm độc lập để đo điều đó.
+
+## Thử tạo lỗi
+
+1. Thay `vPrime` bằng `vMinus` ở phép cross cuối. Theo dõi độ dài v; phép biến đổi không còn là phép quay đúng.
+2. Dùng `x + nextVelocity * dt` nhưng vẫn so với reference full-time của project. Sai số vị trí đổi bậc dù vận tốc có vẻ ổn. Khôi phục drift đối xứng.
+
+## Checklist hoàn thành
+
+- Trình bày được hai nửa xung E và phép quay B bằng các biến trong source.
+- x/v cùng ở t trước bước và t+dt sau bước; không trộn half-step record.
+- Chỉ B giữ tốc độ và thành phần v song song B; q đảo dấu làm đổi chiều quay.
+- B=0, q=0, v=0 và input lỗi có hành vi rõ; state lỗi không được commit.
+
+## Hướng mở rộng
+
+Tự tính một bước với v=(1,0,0), B=(0,1,0), E=0, q=m=1, dt=0,1 rồi so từng biến. Tiếp theo, [đo sai số quỹ đạo bằng nghiệm độc lập](/projects/charged-particle-chamber/05-nghiem-doc-lap-va-sai-so-pha).

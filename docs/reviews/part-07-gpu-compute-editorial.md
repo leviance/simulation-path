@@ -30,11 +30,11 @@ Các hợp đồng chi tiết, interactions và Acceptance Criteria nằm trong 
 | Project | Bằng chứng hiện có | Phần còn phải xây |
 | --- | --- | --- |
 | 37 | Workbench trong source/lessons hiện có được giữ | Đối chiếu riêng các cổng nghiệm thu; đợt biên tập không chứng nhận lại toàn project |
-| 38 | [README source hiện có](../../examples/project-38-five-million-particle-fountain/README.md) và manifest mô tả đài phun 2D với gravity/lifetime/respawn | Scene/camera 3D, lực Lorentz, Boris, quỹ đạo/inspector và bộ kiểm mới |
+| 38 | [Source buồng hạt tích điện](../../examples/project-38-charged-particle-chamber/README.md), 12 bài và Canvas mới đã được xây | Theo dõi các cổng còn lại trong [hồ sơ nghiệm thu](project-38-rebuild-acceptance.md); chưa dùng build/GPU verification thay kiểm tương tác native |
 | 39 | [Source hiện có](../../examples/project-39-gpu-reduction-prefix-sum/source-template/include/reduction_math.hpp) có reduction/scan trên float; ba shader reduce/scan/uniform-add phục vụ workbench | City scene/renderer, object bounds/IDs, culling/compaction/indirect commands, integer offsets và validation theo hợp đồng mới |
 | 40 | [README source hiện có](../../examples/project-40-gpu-spatial-grid-neighbors/README.md) là công cụ grid/tìm hàng xóm 2D | Topology/constraint solver, mesh presentation, input pin/drag, grid/contact 3D, normals và bộ kiểm vải |
 
-Roadmap website, manifest, lesson, Canvas, source và ZIP chưa được đổi tên hoặc gắn nhãn sản phẩm mới. Người học mở các route hiện tại vẫn đang xem bản cũ. Không gọi các project ấy là đã hoàn thành theo đặc tả vừa biên tập.
+Project 38 đang được nghiệm thu theo sản phẩm mới; bản đài phun trước đó đã chuyển sang dự phòng ngoài Git. Project 39–40 vẫn giữ bản cũ. Xem hồ sơ riêng để phân biệt phần đã kiểm tự động, hình ảnh được duyệt và tương tác native chưa kiểm; bảng này không chứng nhận hoàn thành toàn bộ Phần VII.
 
 ## Thứ tự triển khai tiếp theo
 
@@ -44,4 +44,4 @@ Roadmap website, manifest, lesson, Canvas, source và ZIP chưa được đổi 
 4. Trong từng đợt, đồng bộ tên/description/dependency, lesson, source, tests và source ZIP cùng nhau. Thống nhất phạm vi thay nguồn và giữ dự phòng trước khi loại nội dung cũ; đợt biên tập này không xóa chúng.
 5. Kiểm riêng correctness, build/checkpoints, GPU thật, desktop interactions và scale. Ghi rõ cổng chưa kiểm chứng, không dùng build hoặc ảnh đẹp thay phép kiểm còn thiếu.
 
-Đợt này chỉ sửa đặc tả và báo cáo biên tập. Không đổi source/lesson/website, không chạy lại toàn bộ build/test, không mở cửa sổ C++ hoặc dev server, không stage/commit/push/deploy.
+Đợt biên tập đặc tả ban đầu chỉ đổi roadmap và báo cáo. Việc xây lại Project 38 là đợt triển khai riêng, có kết quả và cổng còn chờ tại hồ sơ nghiệm thu được liên kết ở trên. Chưa stage/commit/push/deploy.

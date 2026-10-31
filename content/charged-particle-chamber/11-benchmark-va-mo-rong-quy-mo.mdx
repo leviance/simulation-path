@@ -1,0 +1,80 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# GPU bận ở bước cập nhật hay ở bước vẽ?
+
+## Ta cần giải quyết điều gì?
+
+Tăng N khiến frame chậm hơn, nhưng chưa biết do Boris, số fragment, bloom hay presentation. Ta đo riêng update, particle draw và toàn frame. Mỗi số cần phạm vi rõ; không lấy thời gian CPU gọi dispatch rồi đặt tên “GPU update”.
+
+## Hiểu ý tưởng trước khi viết code
+
+GPU chạy bất đồng bộ. `GL_TIME_ELAPSED` đo vùng lệnh GPU; query result chỉ được đọc khi available. Ring bốn slot tránh ghi đè một query còn pending. Nếu chưa có slot trống, bỏ phép đo live hoặc báo job incomplete, không block event loop để đợi.
+
+Benchmark giữ snapshot riêng, 4 warm-up rồi 20 cặp update/draw. Mỗi cặp dùng một bước dt; cấu hình N/seed/trường và camera/viewport được chốt. Đổi camera giữa lượt đo làm draw workload thay đổi nên job bị hủy, không trộn số vào cùng bảng.
+
+<InteractiveLab demo="charged-particle-chamber" mode="chamber-measurement" />
+
+## Bắt tay xây dựng
+
+### 1. Không đọc query chưa ready
+
+```cpp title="include/chamber_timing.hpp — poll không chờ GPU vô hạn"
+GLint available = GL_FALSE;
+gl.GetQueryObjectiv(queries_[slot], GL_QUERY_RESULT_AVAILABLE, &available);
+if (available != GL_TRUE)
+    continue;
+GLuint64 elapsed = 0;
+gl.GetQueryObjectui64v(queries_[slot], GL_QUERY_RESULT, &elapsed);
+samples.push_back(static_cast<double>(elapsed) / 1'000'000.0);
+```
+
+Elapsed là nanosecond, chia một triệu thành millisecond. Sau consumption mới đánh dấu slot hết pending. Không dùng `glFinish` trước/sau mỗi frame: nó làm đổi pipeline mà bạn đang cố đo.
+
+### 2. Đặt query đúng quanh phần việc
+
+```cpp title="include/chamber_benchmark.hpp — chỉ update nằm trong update query"
+if (!update_.begin(gl))
+    return false;
+pipeline.step(gl, state_, 1);
+update_.end(gl);
+```
+
+Draw query bọc `renderer.particles`, gồm core và halo, không gồm toàn bộ grid/HDR/HUD. Frame time dùng CPU wall clock tới sau SwapWindow. Nó có thể chịu vsync/scheduler; không bắt `frame = update + draw` và không gọi frame CPU+present là tổng GPU frame time.
+
+### 3. Công bố số mẫu và độ phân tán
+
+```cpp title="include/chamber_benchmark.hpp — chỉ hoàn tất khi đủ cặp mẫu"
+if (pairs_ == kSamples) {
+    updateMs = summarize(update_.samples);
+    drawMs = summarize(draw_.samples);
+    frameMs = summarize(frameSamples_);
+    release(gl);
+    complete = true;
+    status = "MEASURED: 4 warm-ups, 20 paired GPU samples";
+    return false;
+}
+```
+
+`summarize` giữ min/median/max, kể cả median của số mẫu chẵn. MEASURED gắn với bản sao cấu hình, không với hàng STAGED vừa được sửa. Main simulation được giữ trong lúc job dùng state riêng; sau khi job xong, không cộng thời gian chờ thành một đợt catch-up khổng lồ.
+
+## Chạy thử và quan sát
+
+Build Release `project_38_checkpoint_11`. Chạy N nhỏ, một triệu, rồi năm triệu **nếu preflight/allocation cho phép**. Ghi GPU/driver, build, N, bytes, dt, warm-up/sample và ba phạm vi đo. Dừng bằng Escape nếu cần; deadline 30 s không hoàn tất thì không có bảng measured hợp lệ.
+
+Một lần kiểm trên RTX 3050 Laptop, OpenGL 4.3 driver 546.30, đã cập nhật/kiểm/vẽ đủ 5.000.000 state. Median update khoảng 1,81 ms, draw khoảng 6,87 ms trong harness kiểm hữu hạn. Đây là bằng chứng của cấu hình đã chạy, **không phải lời hứa FPS**, cũng không đại diện chi phí toàn bộ final HDR/HUD. Hãy tự đo trên máy mình và giữ scope tương đương.
+
+## Thử tạo lỗi
+
+1. Đọc `GL_QUERY_RESULT` ngay sau EndQuery mà không kiểm available. So độ phản hồi UI và CPU frame time; trả lại nonblocking poll.
+2. Đổi camera hoặc viewport giữa benchmark. Job phải hủy/incomplete; nếu vẫn công bố một median chung, bạn đã trộn workload khác nhau.
+
+## Checklist hoàn thành
+
+- Update/draw dùng GPU query, frame dùng CPU+present; phạm vi không bị đánh tráo.
+- Job khóa snapshot, 4 warm-up/20 cặp mẫu và deadline/hủy hữu hạn.
+- Một triệu state thật được update/render; năm triệu có báo cáo riêng, không fallback âm thầm.
+- Capability, correctness và timing là ba loại bằng chứng khác nhau; số nhanh không thay test đúng.
+
+## Hướng mở rộng
+
+Giữ N và camera cố định, so cost core/halo ở một nhánh thử riêng rồi ghi rõ scope. Tiếp theo, [hoàn thiện hình ảnh và kiểm toàn ứng dụng](/projects/charged-particle-chamber/12-hoan-thien-buong-hat-tich-dien).

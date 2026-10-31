@@ -2,7 +2,7 @@
 
 Simulation Path là lộ trình học C++20, SDL3, đồ họa máy tính và mô phỏng số thông qua 78 mini project có thể chạy được. Thay vì học công thức hoặc API riêng lẻ, người học dùng chúng để lần lượt tạo framebuffer, renderer 3D trên CPU, mô phỏng vật lý, hệ hạt, chất lỏng, volume renderer, thế giới voxel và bộ UI của riêng mình.
 
-Website phân biệt ba trạng thái: **đã có hướng dẫn**, **chờ xây dựng lại** khi đề bài thay đổi và **chưa phát hành**. Project 38–45 hiện chờ xây dựng lại theo đặc tả mới; bài học và gói source trước đó vẫn được giữ với nhãn **Bản cũ**. Xem số liệu và trạng thái từng project tại `/roadmap`, được tính từ catalog và metadata thay vì một thống kê cố định trong README.
+Website phân biệt ba trạng thái: **đã có hướng dẫn**, **chờ xây dựng lại** khi đề bài thay đổi và **chưa phát hành**. Project 39–45 chờ xây dựng lại theo đặc tả mới và vẫn giữ tài liệu trước đó với nhãn **Bản cũ**. Project 38 đã có học phần buồng hạt tích điện; kết quả kiểm tự động và checklist native còn do người dùng tự kiểm nằm trong [hồ sơ nghiệm thu](docs/reviews/project-38-rebuild-acceptance.md). Xem trạng thái từng project tại `/roadmap`, được tính từ catalog và metadata.
 
 ## Vì sao có lộ trình này?
 

@@ -1,0 +1,24 @@
+#version 430 core
+
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+#if LAB_CHECKPOINT >= 9
+layout(local_size_x = 64) in;
+struct Particle { vec4 positionCharge; vec4 velocityMass; };
+layout(std430, binding = 0) readonly buffer State { Particle particles[]; };
+layout(std430, binding = 1) writeonly buffer Probes { Particle probes[]; };
+uniform uint uCount;
+uniform uint uSelected;
+void main() {
+    uint slot = gl_GlobalInvocationID.x;
+    if (slot >= 33u) return;
+    uint id = slot;
+    if (slot == 32u) id = uSelected;
+    if (id < uCount) probes[slot] = particles[id];
+    else {
+        probes[slot].positionCharge = vec4(0);
+        probes[slot].velocityMass = vec4(0);
+    }
+}
+#endif

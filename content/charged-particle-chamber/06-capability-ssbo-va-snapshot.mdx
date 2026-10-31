@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Một triệu hạt có vừa trong kế hoạch cấp phát không?
+
+## Ta cần giải quyết điều gì?
+
+CPU preview đã cho ta một bước toán có thể kiểm. Bây giờ mới chuyển state sang GPU. Checkpoint 6 tạo SSBO và vẽ snapshot đứng yên; compute init chỉ chuẩn bị dữ liệu, chưa cập nhật chuyển động qua nhiều tick. Tách hai việc giúp phát hiện lỗi layout/allocation trước khi thêm lực vào kernel.
+
+Một triệu Particle cần 32.000.000 byte; năm triệu cần 160.000.000 byte. Nhưng không chỉ có một buffer: Reset cần candidate, validation cần state riêng, còn probe/trails và render targets cũng chiếm chỗ. “GPU của tôi chạy được” chưa phải cách xử lý một yêu cầu không hợp lệ trên máy người học.
+
+## Hiểu ý tưởng trước khi viết code
+
+Preflight có ba lớp: input hợp lệ → giới hạn API đáp ứng → ngân sách ứng dụng cho phép. Cả ba qua vẫn chưa bảo đảm allocation thành công; ta còn phải kiểm kết quả driver và giữ ACTIVE cũ khi candidate lỗi.
+
+Với local size 256, số group là `1+(N−1)/256` khi N>0. N=1.000.003 tạo 3.907 group, 189 lane dư. N=5.000.000 tạo 19.532 group, 192 lane dư. Không lấy một N “trông có vẻ tròn” để bỏ guard.
+
+<InteractiveLab demo="charged-particle-chamber" mode="chamber-budget" />
+
+## Bắt tay xây dựng
+
+### 1. Đọc giới hạn của context thật
+
+```cpp title="include/chamber_gpu.hpp — đọc compute limits"
+gl.GetInteger64v(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &limits.maximumBlockBytes);
+gl.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &limits.maximumGroupsX);
+gl.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &limits.maximumLocalX);
+gl.GetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &limits.maximumInvocations);
+gl.GetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &limits.storageBindings);
+gl.GetIntegerv(GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, &limits.computeStorageBlocks);
+```
+
+Lưu ý tên enum trong source đầy đủ: số block của compute được truy vấn bằng `GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS`. Không suy từ số binding toàn context ra số block mà một compute stage dùng được. Local X và tổng invocations cũng là hai giới hạn khác nhau.
+
+### 2. Chỉ cấp phát vào candidate
+
+Sau `makeBudget`, `createState` giữ settings/generation riêng rồi tạo buffer mới:
+
+```cpp title="include/chamber_gpu.hpp — allocation chưa thay ACTIVE"
+gl.GenBuffers(1, &candidate.buffer);
+gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, candidate.buffer);
+gl.BufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(budget.stateBytes), nullptr, GL_DYNAMIC_COPY);
+GLint64 allocated = 0;
+gl.GetBufferParameteri64v(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, &allocated);
+```
+
+Hàm kiểm name, GL error và byte count. Nếu lỗi, hủy candidate, không xóa SSBO đang chạy. Khi init đã gửi, `PendingReset` dùng fence/deadline; chỉ publish sau khi hoàn tất. Init không được đổi toàn bộ app sang N nhỏ hơn rồi báo mốc lớn đã đạt.
+
+### 3. Chuẩn bị snapshot có thể đọc hình ngay từ đầu
+
+Chỉ B có thể cho các hạt ở những pha khác nhau trên quỹ đạo ngay tại t=0. CPU reference chuẩn bị cùng x0/v0 để sau này kiểm GPU init:
+
+```cpp title="include/chamber_reference.hpp — chuẩn bị điều kiện đầu, không phải render animation"
+const float phase = span * random01(id, 5U, settings.seed);
+const ReferenceState prepared = analyticState(p, settings.fields, phase);
+setPosition(p, {static_cast<float>(prepared.position.x), static_cast<float>(prepared.position.y), static_cast<float>(prepared.position.z)});
+setVelocity(p, {static_cast<float>(prepared.velocity.x), static_cast<float>(prepared.velocity.y), static_cast<float>(prepared.velocity.z)});
+return p;
+```
+
+GPU init dùng cùng hash/công thức. `span` về 0 khi có E, B quá nhỏ hoặc q scale gần 0; ID 0/1 luôn giữ pha 0. Đây là điều kiện ban đầu đã công bố, không phải renderer tính đường xoắn theo clock. Phím P cho phép so snapshot cùng pha và trải pha. Sau init, kernel ở bài sau mới là nơi tiến state.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_6`. Bạn thấy snapshot đứng yên, dù nhấn Space: chưa có update kernel ở checkpoint này. Đổi N trong panel, Enter áp dụng; đọc allocated/drawn và dung lượng thực. Trong Canvas, nhập giới hạn SSBO giả định 16 MiB: yêu cầu một triệu phải bị từ chối trong kế hoạch, không hiện 500 nghìn rồi vẫn ghi một triệu.
+
+Ngân sách native mặc định 640 MiB dự phòng ba state cùng các buffer nhỏ. Bản final cộng render reserve 64 MiB; checkpoint 6 chưa tạo HDR targets. Truy vấn block size không phải truy vấn VRAM trống, vì vậy kiểm allocation vẫn bắt buộc.
+
+## Thử tạo lỗi
+
+1. Trong fixture, đặt maximumBlockBytes thấp hơn stateBytes. `makeBudget` phải trả false và giữ kế hoạch cũ, không allocation để “thử vận may”.
+2. Reset khi seed khác nhưng N giữ nguyên. State phải đổi; orbit camera không được làm seed hoặc snapshot đổi. Sau đó quay về seed cũ và kiểm tính tái lập.
+
+## Checklist hoàn thành
+
+- Capability, overflow và ngân sách được kiểm trước allocation; allocation lỗi giữ last-good.
+- std430 khớp hai vec4; SSBO được renderer đọc trực tiếp, không có bản sao VBO theo frame.
+- N lẻ có group/tail đúng; mốc 1M và 5M không bị đánh tráo bằng preview nhỏ.
+- Trải pha được giải thích là snapshot ban đầu; checkpoint này chưa nhận là mô phỏng GPU đang chạy.
+
+## Hướng mở rộng
+
+Tạo fixture maximumGroupsX quá nhỏ dù block size đủ. Tiếp theo, [viết kernel Boris và nối compute với graphics](/projects/charged-particle-chamber/07-compute-boris-va-render-ssbo).

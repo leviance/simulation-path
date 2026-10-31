@@ -1,0 +1,79 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm đúng không chỉ bằng vài hạt trông hợp lý
+
+## Ta cần giải quyết điều gì?
+
+Probe giúp đọc một hạt nhưng không chứng minh tất cả ID đều đúng. Ta cần một phép kiểm toàn bộ state ở N đã yêu cầu, chạy kernel thật, đối chiếu CPU và nghiệm độc lập, có tiến độ/deadline/hủy. Phép kiểm này được phép readback toàn N vì nó là job riêng; render loop bình thường vẫn không làm vậy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Job có state riêng, snapshot settings riêng và generation riêng. Main simulation được giữ yên khi job chạy; kiểm không được phá cảnh người dùng đang xem. Bốn tầng kết quả là: đã kiểm bao nhiêu record; có NaN/Inf không; CPU mirror có mismatch không; analytic trajectory có vượt ngưỡng không.
+
+CPU mirror tolerance dùng `absTol + relTol*|expected|`, cả hai bằng 3e-4. Analytic gate riêng dùng `0,005(1+|reference|)` cho position và velocity. Ngưỡng analytic rộng để chặn quỹ đạo sai rõ rệt, không thay test hội tụ pha chặt hơn ở Bài 5. dt lớn có thể làm analytic gate fail dù CPU/GPU khớp nhau; đó là thông tin cần báo, không phải lý do nới tolerance vô hạn.
+
+<InteractiveLab demo="charged-particle-chamber" mode="chamber-validation" />
+
+## Bắt tay xây dựng
+
+### 1. Chốt cấu hình và chạy số bước có giới hạn
+
+Trong `ValidationJob::start`, từ chối step count ngoài 1–512, reset report rồi:
+
+```cpp title="include/chamber_validation.hpp — state riêng của phép kiểm"
+measured = settings;
+if (!pipeline.createState(gl, settings, generation, state_, error)) {
+    status = error;
+    return false;
+}
+pipeline.step(gl, state_, steps_);
+gl.MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+fence_ = gl.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+```
+
+Không validate trực tiếp ACTIVE rồi Reset bù sau đó: người dùng có thể đã đổi cấu hình trong lúc chờ. `measured` là bản sao, không phải reference tới panel.
+
+### 2. Mỗi poll chỉ đọc một batch
+
+```cpp title="include/chamber_validation.hpp — readback được chia nhỏ"
+const std::size_t count = std::min(scratch_.size(), measured.count - offset_);
+gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, state_.buffer);
+gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(offset_ * sizeof(Particle)), static_cast<GLsizeiptr>(count * sizeof(Particle)), scratch_.data());
+```
+
+Scratch có 8.192 record. Sau khi fence ready, mỗi frame đọc/kiểm một batch rồi trả event loop; không tạo một vòng while đọc hết N ngay trong callback phím V. Deadline 30 s được kiểm trước mỗi poll; lỗi readback hoặc Escape làm kết quả incomplete, không PASS.
+
+### 3. So cùng snapshot bằng hai đáp án
+
+```cpp title="include/chamber_validation.hpp — mirror và analytic tách biệt"
+const Particle initial = snapshotParticle(static_cast<std::uint32_t>(id), measured);
+Particle expected = initial;
+for (int stepIndex = 0; stepIndex < steps_; ++stepIndex)
+    stepBoris(expected, measured.fields, measured.dt);
+const ReferenceState reference = analyticState(initial, measured.fields, time);
+inspectParticle(report, id, scratch_[local], expected, reference);
+```
+
+Sau `inspectParticle`, analytic gate kiểm riêng finite, |Δx|, |Δv| và lưu first analytic mismatch. `passed()` chỉ true khi `complete`, report không mismatch và analyticFailures=0. Một job mới kiểm được 8.192/1.000.003 record không được hiển thị như đã kiểm toàn bộ.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_10`, nhấn V rồi Escape trước khi đủ N: trạng thái phải là incomplete. Chạy lại đủ một job, đọc checked count và lỗi đầu tiên nếu có. `--verify` chạy thêm fixture N nhỏ, N lẻ, v=0, q=0, dt convergence và canary trên GPU thật; CTest không mở cửa sổ.
+
+Canvas cung cấp job CPU một hạt với dt/dt/2 ở cùng T, mỗi frame tối đa 128 bước và deadline 8 s. Nó dạy cách khóa snapshot/hủy/đọc sai số, không phải thay phép kiểm toàn N trên native.
+
+## Thử tạo lỗi
+
+1. Trong fixture test, đặt một component output thành NaN. Validator phải FAIL; phép so `abs(NaN)>tol` đơn thuần không đủ vì so sánh với NaN trả false.
+2. Sửa STAGED khi validation đang chạy, hoặc Reset để hủy job. Kết quả cũ không được gắn nhãn là cấu hình mới; cancellation không được giữ cờ complete=true.
+
+## Checklist hoàn thành
+
+- GPU chạy thật; readback toàn N chỉ trong job yêu cầu rõ ràng, chia batch hữu hạn.
+- Snapshot/time/ID/seed thống nhất giữa GPU, CPU mirror và nghiệm độc lập.
+- NaN/Inf, mass lỗi, mismatch đầu tiên và maximum error được xử lý rõ.
+- Cancel/timeout/driver error không PASS; event loop vẫn phục vụ hủy và đóng cửa sổ.
+
+## Hướng mở rộng
+
+Thêm fixture cố ý sai một dấu cross ở kernel và dự đoán test nào bắt được trước. Tiếp theo, [đo hiệu năng của pipeline đã kiểm đúng](/projects/charged-particle-chamber/11-benchmark-va-mo-rong-quy-mo).

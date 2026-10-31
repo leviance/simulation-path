@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Một buffer, hai công việc: cập nhật rồi vẽ
+
+## Ta cần giải quyết điều gì?
+
+Checkpoint trước vẽ được snapshot GPU nhưng hạt chưa tiến theo thời gian. Bây giờ ta đưa Boris lên compute shader. CPU chỉ gửi trường, dt và số bước; mỗi invocation đọc/ghi đúng hạt cùng ID. Graphics đọc lại chính buffer đó, không chép một triệu vị trí về CPU rồi upload sang VBO.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đường đi một bước là `SSBO(t) → compute Boris → memory barrier → SSBO(t+dt) → vertex shader`. State sống qua nhiều dispatch. Không có tương tác giữa hạt nên mỗi invocation sở hữu một record, không đọc hàng xóm đang bị ghi và không cần barrier giữa các invocation trong cùng workgroup.
+
+Memory barrier được chọn theo **consumer kế tiếp**. Compute sau hoặc vertex shader đọc SSBO cần `GL_SHADER_STORAGE_BARRIER_BIT`. CPU readback ở bài probe lại là consumer khác; fence về completion không thay visibility. [Khronos glMemoryBarrier](https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glMemoryBarrier.xml) mô tả từng nhóm truy cập này.
+
+<InteractiveLab demo="charged-particle-chamber" mode="chamber-compute" />
+
+## Bắt tay xây dựng
+
+### 1. Kiểm ID trước mọi truy cập buffer
+
+Trong `particle_update.comp`, local size và layout khớp kế hoạch CPU. Đầu `main` là:
+
+```glsl title="shaders/particle_update.comp — guard trước cả lần đọc"
+uint id = gl_GlobalInvocationID.x;
+if (id >= uCount) return;
+Particle p = particles[id];
+```
+
+Guard phải nằm trước `particles[id]`, không chỉ trước câu ghi cuối. Hạt mass không hợp lệ hoặc chứa NaN/Inf cũng bị từ chối; validator phải báo lỗi thay vì để hạt hỏng được bỏ qua rồi nhận là PASS.
+
+### 2. Giữ tên biến đúng như Boris CPU
+
+```glsl title="shaders/particle_update.comp — phép cập nhật giống hợp đồng CPU"
+vec3 oldVelocity = p.velocityMass.xyz;
+float halfImpulse = 0.5 * uDt * p.positionCharge.w * uChargeScale / p.velocityMass.w;
+vec3 vMinus = oldVelocity + uElectric * halfImpulse;
+vec3 t = uMagnetic * halfImpulse;
+vec3 s = 2.0 * t / (1.0 + dot(t, t));
+vec3 vPrime = vMinus + cross(vMinus, t);
+vec3 vPlus = vMinus + cross(vPrime, s);
+vec3 nextVelocity = vPlus + uElectric * halfImpulse;
+vec3 nextPosition = p.positionCharge.xyz + (oldVelocity + nextVelocity) * (0.5 * uDt);
+particles[id].positionCharge.xyz = nextPosition;
+particles[id].velocityMass.xyz = nextVelocity;
+```
+
+Chỉ xyz đổi; q và m giữ nguyên. Không có lifetime, tường hoặc respawn. Khi hạt ra khỏi frustum, renderer có thể không cho fragment nào nhưng compute vẫn cập nhật ID ấy.
+
+### 3. Nối dispatch với consumer
+
+`ComputePipeline::step` bind ACTIVE ở binding 0, truyền uniforms rồi chạy số bước đã chốt:
+
+```cpp title="include/chamber_gpu.hpp — barrier giữa các bước và trước graphics"
+for (int stepIndex = 0; stepIndex < steps; ++stepIndex) {
+    gl.DispatchCompute(state.budget.groups, 1, 1);
+    // The next consumer is another compute step or a vertex shader reading an SSBO.
+    gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    ++state.tick;
+}
+```
+
+Ở renderer, core pass dùng VAO rỗng hợp lệ cho Core profile và đọc state bằng `gl_VertexID`:
+
+```cpp title="include/chamber_renderer.hpp — mọi core được vẽ từ SSBO"
+gl.Uniform1i(gl.GetUniformLocation(particleProgram_, "uRenderPass"), 0);
+gl.Uniform1ui(gl.GetUniformLocation(particleProgram_, "uDrawStride"), 1);
+gl.DrawArrays(GL_POINTS, 0, static_cast<GLsizei>(state.settings.count));
+```
+
+Vertex shader lấy record từ binding 0 rồi nhân position với view-projection. Camera không cung cấp phương trình chuyển động. Halo là pass phụ có sampling công bố riêng; không dùng số halo để thay số state thực đã update/draw core.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_7`. Chọn N nhỏ để đọc quỹ đạo rồi thử một triệu nếu preflight cho phép. Chỉ B: hai dấu q quay ngược; chỉ E: vận tốc thay đổi đều. Pause rồi orbit: hình đổi góc nhưng state đứng yên. Từ bước này, CPU preview không còn là nguồn dữ liệu mà renderer dùng để vẽ hạt.
+
+## Thử tạo lỗi
+
+1. Trong một bản thử riêng, bỏ guard với N=257. Tail canary ở phép kiểm GPU phải bắt ghi ngoài vùng hợp lệ; khôi phục guard trước khi dùng N lớn.
+2. Bỏ memory barrier. Đây là vi phạm hợp đồng visibility kể cả nếu driver hiện tại vẫn cho hình đúng. Không bịa rằng mọi lần chạy đều phải nháy/đen; kiểm source và khôi phục bit theo consumer.
+
+## Checklist hoàn thành
+
+- State tồn tại trên GPU qua nhiều bước; graphics đọc cùng SSBO, không CPU update/upload mỗi frame.
+- N lẻ có guard trước đọc/ghi; q/m không bị ghi đè.
+- Barrier đúng cho shader consumer; không dùng fence hoặc `GL_ALL_BARRIER_BITS` để né việc hiểu đường dữ liệu.
+- Hạt ngoài camera không respawn; đường cong do force integrator, không do sin/cos trong renderer.
+
+## Hướng mở rộng
+
+Theo dõi một ID ở 10 dispatch liên tiếp rồi vẽ sơ đồ các lần đọc/ghi buffer. Tiếp theo, [kiểm soát đồng hồ và thao tác Pause](/projects/charged-particle-chamber/08-fixed-timestep-va-dieu-khien).

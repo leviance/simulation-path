@@ -1,0 +1,87 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện buồng hạt: đẹp hơn nhưng không đổi mô hình
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có state GPU, quỹ đạo có kiểm chứng, inspector và phép đo. Bước cuối là làm cảnh đông hạt vẫn đọc được chiều sâu: chùm gần che chùm xa, độ lớn thay theo phối cảnh, ánh sáng cho thấy bề mặt, vệt không biến thành một mảng trắng. Không thêm công thức chuyển động vào shader vẽ để tạo dáng đẹp rồi gọi là mô phỏng.
+
+Renderer core/halo và point shader đã được cung cấp khi nối SSBO. Bài này mở các lớp trình bày ấy ra để hiểu, rồi thêm HDR/bloom có ngân sách riêng ở checkpoint 12. Bạn không cần tự viết một hậu kỳ lớn trước khi hiểu Boris; cũng không cần chấp nhận hiệu ứng như một hộp đen.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một point sprite vuông không có hình cầu. Ta cắt theo bán kính màn hình, dựng normal của nửa cầu và ghi fragment depth của bề mặt trước. Nhờ depth test, chùm phía trước thực sự che chùm phía sau; chỉ additive blend toàn cảnh sẽ làm các lớp chồng thành mảng sáng phẳng.
+
+Core pass vẽ **đủ N** và ghi depth. Halo pass nhẹ hơn, lấy subset hai dấu điện tích cân bằng, depth-test nhưng không depth-write. HDR/bloom chỉ làm tán sáng từ ảnh đã render. Các phép này không có quyền sửa particle buffer, tick hoặc reference.
+
+<InteractiveLab demo="charged-particle-chamber" mode="charged-chamber" />
+
+## Bắt tay xây dựng
+
+### 1. Tạo bề mặt từ point sprite
+
+```glsl title="shaders/particle.frag — hình tròn và độ sâu bề mặt"
+vec2 radius = 2.0 * gl_PointCoord - 1.0;
+float squared = dot(radius, radius);
+if (squared > 1.0) discard;
+float normalZ = sqrt(max(0.0, 1.0 - squared));
+float surfaceDepth = viewDepth - glyphRadius * normalZ;
+```
+
+Phần tiếp trong shader đổi view depth về depth-buffer range bằng cùng near/far của camera. Normal `(radius.x, -radius.y, normalZ)` dùng cho diffuse/highlight. Đây là sphere impostor, không phải mesh cầu riêng cho mỗi hạt. Phép xấp xỉ đủ để tăng cảm nhận chiều sâu; kiểm toán mô phỏng vẫn dựa state, không dựa pixel trông giống hình cầu.
+
+### 2. Chặn kích thước render target trước allocation
+
+```cpp title="include/chamber_post.hpp — giới hạn chi phí hậu kỳ"
+float scale = std::min(1.0F, std::min(2048.0F / requestedWidth, 1152.0F / requestedHeight));
+const int width = std::max(1, static_cast<int>(requestedWidth * scale));
+const int height = std::max(1, static_cast<int>(requestedHeight * scale));
+if (targets_.width == width && targets_.height == height)
+    return true;
+```
+
+`PostProcessor::resize` kiểm hardware texture limit, trần 32 MiB cho bộ target mới và framebuffer completeness. Nó xây candidate rồi mới thay bộ cũ. Scene RGBA16F/depth24, hai blur target ở 1/4 mỗi chiều, bốn lượt blur và tone mapping đều nằm ở lớp trình bày. Budget tổng dự phòng 64 MiB cho target cũ+mới khi resize; không cấp vô hạn theo màn hình 8K.
+
+### 3. Hậu kỳ xong mới vẽ HUD
+
+```cpp title="include/chamber_application.hpp — HUD không bị blur cùng cảnh"
+if (postActive) post_.end(gl_, sceneWidth, height);
+```
+
+Sau đoạn này application tạo Overlay và gọi `drawShowcase` hoặc `drawPanel`. H bật/tắt panel; các dòng điều khiển, quy mô core/halo, độ phân giải render và trạng thái vẫn tìm được ở showcase. Màu theo q hoặc speed phải có chú giải tương ứng. Đây là điểm quan trọng khi hạt nhiều: người học cần biết màu biểu diễn điều gì, không chỉ thấy một cảnh rực rỡ.
+
+## Chạy thử và quan sát
+
+Build `project_38_final`. Dùng cả góc trước và góc bên, orbit/pan/zoom khi Pause để kiểm chiều sâu mà state không đổi. Chọn ID 0/1, tắt trải pha nếu muốn quan sát từng hạt từ cùng gốc; bật lại để thấy nhiều vị trí của snapshot dọc quỹ đạo. Bốn preset phải thay chuyển động theo E/B/q, không chỉ đổi màu hoặc camera.
+
+Gói ZIP có starter, checkpoint 01–12, final, shader và tests. Phần source cuối bài cho đọc **toàn bộ file hoàn chỉnh**, không chỉ đoạn đang giải thích. Theo README để configure/build/run; bản final không phụ thuộc website hoặc backend. Chạy CTest trước, `--verify` trên GPU thật sau, rồi mới kiểm tương tác bằng tay. Không coi Canvas hoặc một ảnh chụp đẹp là thay executable đúng quy mô.
+
+```powershell title="Build, CTest Debug/Release và chạy bản hoàn chỉnh"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_38_final.exe --verify
+.\build\Release\project_38_final.exe
+```
+
+## Thử tạo lỗi
+
+1. Tắt depth-write cho core và chỉ giữ additive blend. Xoay qua chỗ hai chùm giao nhau: các lớp không còn che nhau rõ. Khôi phục core depth trước khi điều chỉnh bloom.
+2. Dùng số halo sampled để ghi “drawn particles”. So lại số core N và số halo riêng; mọi sampling phải được công bố đúng, không làm giảm số được update mà giấu người xem.
+
+## Checklist hoàn thành
+
+- Bốn preset, hai dấu q, trường nghiêng 3D, grid/camera và chọn hạt hoạt động trong native.
+- Ít nhất một triệu state thực được GPU update và render trực tiếp; báo riêng kiểm năm triệu, tài nguyên và timings.
+- Full-time Boris có CPU mirror, nghiệm độc lập, dt convergence, finite/mass/tail fixtures.
+- Pause/step/reset/candidate lỗi/cancel/timeout đều giữ hợp đồng; trails/probe/render targets có trần.
+- Hình có chiều sâu từ perspective/depth/shading; màu và sampling có chú giải; hậu kỳ không sửa physics.
+- Có source hoàn chỉnh độc lập, checkpoint và tests; tách build, GPU verification, Canvas và kiểm tương tác thật khi ghi kết quả.
+
+## Hướng mở rộng
+
+Tạo một báo cáo ngắn: chọn một preset, dự đoán chiều quay, đo sai số khi giảm dt và tìm bước chiếm nhiều thời gian nhất. Một hướng nâng cao là trường biến thiên, nhưng lúc ấy nghiệm uniform-field không còn dùng trực tiếp và cần bộ kiểm mới. Chưa thêm Coulomb giữa hạt rồi gọi đây là plasma hoàn chỉnh.
+
+Bạn đã nối toán trên một hạt với state sống trên GPU ở quy mô lớn. Xem [roadmap Project 39](/roadmap/39) để biết sản phẩm kế tiếp; không dùng tài liệu cũ của Project 39 như thể đã triển khai đề bài mới.

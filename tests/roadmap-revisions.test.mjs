@@ -157,11 +157,12 @@ test("generated summaries retain actual previous titles and progress is not inva
   );
 });
 
-test("glossary examples identify superseded project products explicitly", async () => {
+test("glossary examples distinguish the rebuilt chamber from superseded project products", async () => {
   const gpu = await readFile(new URL("../lib/glossary-gpu.ts", import.meta.url), "utf8");
   const physics = await readFile(new URL("../lib/glossary-physics.ts", import.meta.url), "utf8");
+  assert.match(gpu, /Project 38 cho Boris compute/);
   for (const [source, ids] of [
-    [gpu, ["38", "39", "40"]],
+    [gpu, ["39", "40"]],
     [physics, ["41", "42", "43"]],
   ]) {
     for (const id of ids) {

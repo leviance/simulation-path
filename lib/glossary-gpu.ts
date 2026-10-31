@@ -225,7 +225,7 @@ export const gpuGlossaryTerms = [
     id: "particle-lifecycle",
     term: "Particle lifecycle",
     definition:
-      "Chuỗi trạng thái từ spawn, update position/velocity/age, hết lifetime hoặc rơi khỏi miền rồi respawn. Trong bản cũ của Project 38 (đài phun hạt), toàn bộ lifecycle nằm trong một compute invocation để mỗi particle tự cập nhật record của chính nó.",
+      "Chuỗi trạng thái từ sinh hạt, cập nhật, hết lifetime rồi tái sinh trong một emitter. Không phải mô phỏng hạt nào cũng có lifecycle ấy: Project 38 giữ ID/state lâu dài và không respawn để tránh làm đổi nghiệm quỹ đạo.",
   },
   {
     id: "deterministic-particle-initialization",
@@ -243,13 +243,13 @@ export const gpuGlossaryTerms = [
     id: "point-sprite",
     term: "Point sprite",
     definition:
-      "Primitive GL_POINTS có vùng fragment riêng và tọa độ gl_PointCoord trong hình vuông điểm. Bản cũ của Project 38 (đài phun hạt) discard bốn góc, làm mềm biên rồi pha màu/alpha theo velocity và lifetime để tạo hạt tròn không cần texture.",
+      "Primitive GL_POINTS có vùng fragment riêng và gl_PointCoord trong hình vuông điểm. Project 38 cắt góc, dựng normal và fragment depth để tạo sphere impostor; core depth và halo là hai pass khác nhau, không chỉ additive blend toàn cảnh.",
   },
   {
     id: "gpu-resident-state",
     term: "GPU-resident state",
     definition:
-      "Trạng thái được giữ và biến đổi trên GPU qua nhiều frame thay vì đọc về CPU rồi upload lại. Trong bản cũ của Project 38 (đài phun hạt), main particle SSBO đi từ compute write qua barrier tới vertex read mà không full-buffer readback.",
+      "Trạng thái được giữ và biến đổi trên GPU qua nhiều frame thay vì đọc về CPU rồi upload lại. Project 38 cho Boris compute ghi position/velocity trong SSBO, đặt barrier rồi để vertex shader đọc cùng buffer; frame thường chỉ readback probe nhỏ.",
   },
   {
     id: "delta-time-clamp",
@@ -267,7 +267,7 @@ export const gpuGlossaryTerms = [
     id: "gpu-validation-probe",
     term: "GPU validation probe",
     definition:
-      "Workload nhỏ, deterministic chạy bằng cùng GPU program với workload chính rồi được readback để so CPU oracle. Bản cũ của Project 38 (đài phun hạt) dùng 64 particle nhằm kiểm shader/layout/integration mà không tải main SSBO 160 MB về CPU.",
+      "Workload nhỏ, deterministic chạy bằng cùng GPU program rồi được readback để so CPU oracle. Nó giúp kiểm kernel trước khi tăng N nhưng không thay validation toàn N. Trong Project 38, probe 33 record phục vụ inspector; job riêng mới kiểm đủ state GPU.",
   },
   {
     id: "parallel-reduction",

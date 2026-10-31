@@ -2,61 +2,63 @@ import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
   base: {
-    label: "FIVE MILLION PARTICLE LAB",
-    title: "Năm triệu particle đi từ compute sang draw như thế nào?",
+    label: "CHARGED PARTICLE CHAMBER",
+    title: "Dự đoán quỹ đạo rồi kiểm bằng state thực",
     description:
-      "Theo dõi một particle từ lúc được tạo trên CPU, đưa vào SSBO, cập nhật bằng compute shader cho đến khi vertex shader vẽ nó. Canvas giải thích chuỗi xử lý, barrier, query ring và buffer probe; đây không phải phép đo GPU thật.",
+      "Canvas 2D chiếu tối đa 256 hạt CPU ra không gian phối cảnh. Cùng biến/công thức với C++ nhưng không phải GPU benchmark hay bằng chứng một triệu hạt; native là sản phẩm cuối.",
   },
   modes: {
-    "particle-contract": {
-      title: "Một particle cần giữ những đại lượng nào?",
-      description:
-        "Thay đổi dt và gravity để quan sát thứ tự cập nhật velocity, position, age và thời điểm particle được respawn.",
+    "chamber-view": {
+      title: "Đổi camera, không đổi state",
+      description: "Pause rồi orbit/pan/zoom, nhìn grid và đọc position không đổi.",
     },
-    "particle-initialization": {
-      title: "Vì sao không nên cho năm triệu hạt cùng age bằng 0?",
-      description:
-        "Đổi seed và bật hoặc tắt việc trải age ban đầu để so một đợt phun đồng loạt với dòng hạt đã được phân bố theo vòng đời.",
+    "particle-state": {
+      title: "Đọc layout và ID của một hạt",
+      description: "Chọn ID, đọc x/v/q/m và offset dự kiến trong record C++/GLSL 32 byte.",
     },
-    "particle-budget": {
-      title: "GPU hiện tại chứa được bao nhiêu particle?",
-      description:
-        "Đổi số particle và giới hạn phần cứng, đọc ngân sách byte cùng số workgroup rồi xem chương trình chọn preset nhỏ hơn trước khi cấp phát thế nào.",
+    "lorentz-force": {
+      title: "Lực nào làm vận tốc quay?",
+      description: "Tách gia tốc do E và v×B; dùng Euler có chủ đích để quan sát speed tăng sai.",
     },
-    "particle-compute": {
-      title: "Mỗi invocation cập nhật particle của mình ra sao?",
-      description:
-        "Theo dõi local ID, global ID, dt và gravity; đồng thời quan sát các lane thừa dừng trước khi truy cập buffer.",
+    "boris-step": {
+      title: "Đi qua các biến trung gian của Boris",
+      description: "Pause/Một bước rồi đọc vMinus, t, s, vPrime và mốc full-time.",
     },
-    "particle-render": {
-      title: "gl_VertexID tìm particle trong SSBO như thế nào?",
+    "chamber-reference": {
+      title: "So dt và dt/2 tại cùng T",
       description:
-        "Chọn một draw vertex rồi nối `gl_VertexID` với particle record, point size, tuổi chuẩn hóa và màu của point sprite.",
+        "Đối chiếu một hạt CPU với nghiệm độc lập bằng job hữu hạn, không phải GPU validation.",
     },
-    "compute-draw-barrier": {
-      title: "Vertex shader cần barrier bit nào để thấy dữ liệu mới?",
+    "chamber-budget": {
+      title: "N có vượt giới hạn đã nhập không?",
       description:
-        "Thử `SHADER_STORAGE`, bỏ barrier hoặc cố tình chọn bit dành cho readback để thấy compute → vertex khác với compute → CPU ở Project 37.",
+        "Đổi N/SSBO limit giả định để đọc bytes/groups/tail; không giả đọc GPU trình duyệt.",
     },
-    "particle-time-control": {
-      title: "Một frame bị khựng có nên làm mô phỏng nhảy xa không?",
+    "chamber-compute": {
+      title: "Consumer nào đọc state sau dispatch?",
       description:
-        "Thay đổi raw dt, pause và single-step rồi quan sát cách giới hạn dt ngăn particle đi qua cả vòng đời chỉ trong một frame.",
+        "So hợp đồng shader SSBO, CPU readback và fence, không giả lỗi cache ngẫu nhiên.",
     },
-    "particle-timing": {
-      title: "Query ring tránh chờ GPU như thế nào?",
-      description:
-        "Theo dõi bốn slot đang chờ hoặc đã sẵn sàng, cùng các mẫu compute/draw và median khi tăng tới năm triệu particle.",
+    "chamber-clock": {
+      title: "Tick khác wall time thế nào?",
+      description: "Pause, step, reset và đọc discarded time; camera vẫn dùng được khi dừng.",
     },
-    "particle-probe": {
-      title: "Kiểm tra shader mà không đọc 160 MB về CPU thế nào?",
-      description:
-        "Chạy 64 particle trong một buffer riêng, chèn lỗi NaN, gravity hoặc respawn rồi đọc báo cáo sai số cụ thể.",
+    "chamber-probe": {
+      title: "Theo dõi ID và vệt bị chặn",
+      description: "Chọn một ID mẫu và xem state/sai số; native chỉ click 32 ID được probe.",
     },
-    "particle-fountain-final": {
-      title: "Chuỗi particle chạy hoàn toàn trên GPU đã hoàn chỉnh chưa?",
+    "chamber-validation": {
+      title: "Một phép kiểm phải có điểm dừng",
+      description: "Khóa snapshot, xem tiến độ đối chiếu CPU và hủy; incomplete không PASS.",
+    },
+    "chamber-measurement": {
+      title: "Ba đồng hồ đo ba phạm vi",
       description:
-        "Đổi số particle, pause, step và reset; sau đó theo dõi update → barrier → draw và xác nhận vòng lặp thường không đọc toàn bộ buffer về CPU.",
+        "Đọc scope update GPU, particle draw GPU và frame CPU+present; không sinh timing giả.",
+    },
+    "charged-chamber": {
+      title: "Buồng hạt tích điện: bản minh họa",
+      description: "Đổi E/B/q/v0/preset, so nghiệm và kiểm phân biệt STAGED/ACTIVE.",
     },
   },
 } satisfies ProjectLabMeta;

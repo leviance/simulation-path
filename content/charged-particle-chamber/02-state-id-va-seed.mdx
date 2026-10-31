@@ -1,0 +1,96 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Một hạt cần nhớ những gì?
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có buồng quan sát, nhưng chưa có gì để thả vào đó. Bài này thêm một nhóm hạt đứng yên. Mục tiêu chưa phải làm chúng chuyển động, mà là trả lời được ba câu hỏi: ID này nằm ở đâu trong buffer, nó mang điện tích nào, và Reset có tạo lại đúng state ấy không?
+
+Checkpoint 2 dùng CPU preview nhỏ để đọc dữ liệu dễ dàng. Những hạt này chưa được GPU compute cập nhật; không dùng số lượng preview để nhận đã đạt mốc một triệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trạng thái tối thiểu là vị trí x, vận tốc v, điện tích q và khối lượng m. Ta chọn hai vec4, tổng tám float:
+
+| Record | x / y / z | w |
+| --- | --- | --- |
+| positionCharge | vị trí | điện tích cơ sở ±1 |
+| velocityMass | vận tốc | khối lượng dương |
+
+Slot trong mảng chính là ID ổn định. Địa chỉ record i là `i * 32` byte. Không sắp xếp lại mảng chỉ để chọn hạt; renderer có thể thay thứ tự hiển thị mà không đổi identity.
+
+Seed cố định không có nghĩa mọi hạt giống nhau. Hash nhận ID, channel và seed để tạo các giá trị khác nhau nhưng lặp lại được. Ta dành riêng ID 0/1 có cùng vị trí, vận tốc và mass; chỉ dấu q khác. Nhờ vậy, bài lực sẽ so hai hạt mà không lẫn ảnh hưởng từ điều kiện đầu.
+
+<InteractiveLab demo="charged-particle-chamber" mode="particle-state" />
+
+## Bắt tay xây dựng
+
+### 1. Khóa layout trước khi upload
+
+Trong `chamber_math.hpp`, thêm record có alignment rõ ràng:
+
+```cpp title="include/chamber_math.hpp — hai vec4 trong một Particle"
+struct alignas(16) Vec4 {
+    float x{}, y{}, z{}, w{};
+};
+
+struct alignas(16) Particle {
+    Vec4 positionCharge{};
+    Vec4 velocityMass{};
+};
+
+static_assert(sizeof(Particle) == 32);
+static_assert(alignof(Particle) == 16);
+static_assert(offsetof(Particle, velocityMass) == 16);
+```
+
+Các assertion kiểm hợp đồng CPU. Khi viết GLSL, ta vẫn phải khai báo đúng thứ tự và `std430`; chỉ có assertion C++ chưa kiểm được shader. Chọn hai vec4 giúp đọc layout dễ hơn việc suy đoán padding của vec3.
+
+### 2. Tạo số theo ID, không theo frame
+
+`mixBits` là tiện ích trộn uint32 đã có trong source. Hàm dưới dùng 16 bit thấp để có số trong [0,1]:
+
+```cpp title="include/chamber_math.hpp — random có thể tái lập"
+inline float random01(std::uint32_t id, std::uint32_t channel, std::uint32_t seed) {
+    const std::uint32_t bits = mixBits(id ^ (channel * 0x9e3779b9U) ^ seed);
+    return static_cast<float>(bits & 0xffffU) / 65535.0F;
+}
+```
+
+Mỗi channel dùng cho một thành phần: vị trí, độ lệch tốc độ, mass. Hàm không đọc clock, FPS hoặc camera. N tăng không làm đổi prefix của những ID cũ. Đây là fixture tái lập, không phải bộ sinh ngẫu nhiên cho mật mã.
+
+### 3. Giữ một cặp hạt dễ đối chiếu
+
+`initialParticle` trước hết phân q theo chẵn/lẻ, thêm jitter nhỏ quanh nguồn, rồi thay riêng cặp đầu:
+
+```cpp title="include/chamber_math.hpp — cặp chỉ khác dấu điện tích"
+if (id < 2U) {
+    p.positionCharge = {0.0F, 0.0F, 0.0F, charge};
+    p.velocityMass = {settings.initialVelocity.x, settings.initialVelocity.y, settings.initialVelocity.z, 1.0F};
+}
+return p;
+```
+
+Trong application, `resetPreview` duyệt ID, gọi `initialParticle`, xóa clock rồi vẽ các điểm bằng renderer CPU preview. Ở bài này position chưa được cập nhật nên Space không làm hạt bay. Preview có giới hạn riêng để dễ học; không lén gọi CPU loop đó cho sản phẩm một triệu hạt.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_2`. Reset hai lần với cùng seed, chụp lại một ID và so đủ tám giá trị. Đổi seed rồi Apply: đa số hạt đổi nhưng ID 0/1 vẫn giữ fixture đặc biệt. Mở Canvas, đọc offset byte của ID 7: record bắt đầu ở byte 224, velocityMass ở byte 240.
+
+Ở checkpoint này phase span bằng 0. Tính năng trải pha chỉ được thêm sau khi đã có nghiệm từ trường ở Bài 5; ta không dùng công thức chưa giải thích để làm cảnh đẹp ngay từ đầu.
+
+## Thử tạo lỗi
+
+1. Bỏ `alignas` hoặc đổi thứ tự hai record ở một phía. Assertion/validation phải phát hiện; không sửa cách đọc inspector để che lỗi layout.
+2. Thay seed bằng clock mỗi Reset. Dữ liệu không còn tái lập; khôi phục seed cố định trước khi so integrator.
+
+## Checklist hoàn thành
+
+- Record 32 byte, alignment 16, offset 16; ID trỏ đúng slot.
+- Cùng seed/ID tạo lại cùng tám giá trị; tăng N giữ prefix cũ.
+- ID 0/1 cùng x/v/m, trái dấu q; mass của mọi hạt dương.
+- Hạt chỉ đứng yên ở bước này; CPU preview không được ghi nhãn GPU simulation.
+
+## Hướng mở rộng
+
+Viết một test tăng N nhưng so nguyên prefix 100 ID. Tiếp theo, [thử lực Lorentz và xem Euler sai như thế nào](/projects/charged-particle-chamber/03-luc-lorentz-va-euler).

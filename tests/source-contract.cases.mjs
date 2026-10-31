@@ -563,93 +563,31 @@ test("Project 39 introduces each taught algorithm in its own checkpoint", async 
   }
 });
 
-test("Project 38 introduces each taught particle-system layer in its own checkpoint", async () => {
-  const projectDirectory = path.join(
-    workspace,
-    "examples",
-    "project-38-five-million-particle-fountain",
-  );
-  const introductions = [
-    {
-      checkpoint: 1,
-      file: "include/particle_math.hpp",
-      symbols: [/struct alignas\(16\) Particle/, /stepParticleCpu\(/],
-    },
-    {
-      checkpoint: 2,
-      file: "include/particle_math.hpp",
-      symbols: [/random01\(/, /ageFraction/, /epochSeed/],
-    },
-    {
-      checkpoint: 3,
-      file: "include/particle_math.hpp",
-      symbols: [/struct DispatchPlan/, /validateCapabilities\(/, /chooseLargestSupportedCount\(/],
-    },
-    {
-      checkpoint: 4,
-      file: "shaders/particle_update.comp",
-      symbols: [/uniform float uDt/, /particle\.velocityLife\.y \+= uGravity \* uDt/],
-    },
-    {
-      checkpoint: 5,
-      file: "shaders/particle.vert",
-      symbols: [/gl_VertexID/, /particles\[index\]/],
-    },
-    {
-      checkpoint: 6,
-      file: "include/particle_gpu_engine.hpp",
-      symbols: [/GL_SHADER_STORAGE_BARRIER_BIT/, /Consumer kế tiếp là vertex shader/],
-    },
-    {
-      checkpoint: 7,
-      file: "include/particle_math.hpp",
-      symbols: [/selectSimulationDt\(/, /singleStepRequested/],
-    },
-    {
-      checkpoint: 8,
-      file: "include/particle_gpu_engine.hpp",
-      symbols: [/class TimerQueryRing/, /GL_QUERY_RESULT_AVAILABLE/],
-    },
-    {
-      checkpoint: 9,
-      file: "include/particle_gpu_engine.hpp",
-      symbols: [/runProbeValidation\(/, /probeCount = 64U/],
-    },
-    {
-      checkpoint: 10,
-      file: "src/main.cpp",
-      symbols: [/SDL_EVENT_WINDOW_FOCUS_LOST/, /Controls \| 1-4: particle preset/],
-    },
+test("Project 38 introduces chamber layers at the documented checkpoints", async () => {
+  const projectDirectory = path.join(workspace, "examples", "project-38-charged-particle-chamber");
+  const layers = [
+    [1, "include/chamber_application.hpp", /renderer_\.grid\(/],
+    [2, "include/chamber_math.hpp", /struct alignas\(16\) Particle/],
+    [3, "include/chamber_math.hpp", /inline Vec3 lorentzAcceleration/],
+    [4, "include/chamber_math.hpp", /inline bool stepBoris/],
+    [5, "include/chamber_reference.hpp", /struct ReferenceState/],
+    [6, "include/chamber_gpu.hpp", /struct GpuState/],
+    [7, "shaders/particle_update.comp", /vec3 vMinus/],
+    [8, "include/chamber_panel.hpp", /STEPS\/FRAME.*DROPPED WALL/],
+    [9, "include/chamber_probe.hpp", /class ProbeReader/],
+    [10, "include/chamber_validation.hpp", /class ValidationJob/],
+    [11, "include/chamber_timing.hpp", /class TimerRing/],
+    [12, "include/chamber_post.hpp", /class PostProcessor/],
   ];
-
-  for (const introduction of introductions) {
-    const checkpoint = String(introduction.checkpoint).padStart(2, "0");
-    const previousDirectory =
-      introduction.checkpoint === 1
-        ? "starter"
-        : `checkpoints/${String(introduction.checkpoint - 1).padStart(2, "0")}`;
-    const currentDirectory = `checkpoints/${checkpoint}`;
-    const previous = await readFile(
-      path.join(projectDirectory, previousDirectory, introduction.file),
-      "utf8",
+  for (const [checkpoint, file, symbol] of layers) {
+    const previous =
+      checkpoint === 1 ? "starter" : "checkpoints/" + String(checkpoint - 1).padStart(2, "0");
+    const current = "checkpoints/" + String(checkpoint).padStart(2, "0");
+    assert.doesNotMatch(
+      await readFile(path.join(projectDirectory, previous, file), "utf8"),
+      symbol,
     );
-    const current = await readFile(
-      path.join(projectDirectory, currentDirectory, introduction.file),
-      "utf8",
-    );
-
-    for (const symbol of introduction.symbols) {
-      assert.doesNotMatch(
-        previous,
-        symbol,
-        `${introduction.file} teaches ${symbol} before checkpoint ${checkpoint}`,
-      );
-      assert.match(
-        current,
-        symbol,
-        `${introduction.file} does not add ${symbol} at checkpoint ${checkpoint}`,
-      );
-    }
+    assert.match(await readFile(path.join(projectDirectory, current, file), "utf8"), symbol);
   }
 });
 

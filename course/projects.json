@@ -232,7 +232,7 @@
   },
   {
     "id": "33",
-      "contentRevision": 2,
+    "contentRevision": 2,
     "slug": "cpu-gpu-triangle",
     "sourceDirectory": "project-33-cpu-gpu-triangle",
     "checkpointCount": 9,
@@ -275,10 +275,12 @@
   },
   {
     "id": "38",
-    "slug": "five-million-particle-fountain",
-    "sourceDirectory": "project-38-five-million-particle-fountain",
-    "checkpointCount": 10,
-    "demoId": "five-million-particle-fountain"
+    "slug": "charged-particle-chamber",
+    "sourceDirectory": "project-38-charged-particle-chamber",
+    "checkpointCount": 12,
+    "demoId": "charged-particle-chamber",
+    "contentRevision": 2,
+    "shaderRuntimePerTarget": true
   },
   {
     "id": "39",

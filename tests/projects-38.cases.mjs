@@ -1,123 +1,151 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { workspace } from "./site-support.mjs";
+import { compile } from "@mdx-js/mdx";
+import remarkMath from "remark-math";
+import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import { findLessonSection } from "../lib/lesson-sections.mjs";
+import { migrateProgressContent } from "../lib/progress-content.ts";
 
-test("Project 38 publishes a ten-checkpoint five-million particle fountain", async () => {
-  const catalog = JSON.parse(
-    await readFile(path.join(workspace, "course", "projects.json"), "utf8"),
-  );
-  const project = catalog.find((entry) => entry.id === "38");
-  assert.equal(project.slug, "five-million-particle-fountain");
-  assert.equal(project.sourceDirectory, "project-38-five-million-particle-fountain");
-  assert.equal(project.checkpointCount, 10);
-  assert.equal(project.demoId, "five-million-particle-fountain");
+const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = path.join(workspace, "examples/project-38-charged-particle-chamber");
+const read = (relative) => readFile(path.join(workspace, relative), "utf8");
+
+test("Project 38 catalog owns twelve charged-chamber checkpoints and invalidates retired progress", async () => {
+  const catalog = JSON.parse(await read("course/projects.json"));
+  const entry = catalog.find((p) => p.id === "38");
+  assert.equal(entry.slug, "charged-particle-chamber");
+  assert.equal(entry.checkpointCount, 12);
+  assert.equal(entry.sourceDirectory, "project-38-charged-particle-chamber");
+  assert.equal(entry.demoId, "charged-particle-chamber");
+  assert.equal(entry.shaderRuntimePerTarget, true);
+  assert.equal(entry.contentRevision, 2);
+  const old = {
+    completedLessonIds: ["p37-l11", "p38-l01", "p38-l10", "p39-l01"],
+    lastLessonId: "p38-l10",
+    lastLesson: {
+      id: "p38-l10",
+      title: "retired fountain",
+      href: "/projects/five-million-particle-fountain/old",
+    },
+  };
+  const next = migrateProgressContent(old, { p38: entry.contentRevision });
+  assert.deepEqual(next.completedLessonIds, ["p37-l11", "p39-l01"]);
+  assert.equal(next.lastLesson, undefined);
+  const completed = { ...next, completedLessonIds: [...next.completedLessonIds, "p38-l01"] };
+  assert.deepEqual(migrateProgressContent(completed, { p38: 2 }), completed);
 });
 
-test("Project 38 teaches one traceable GPU-resident particle pipeline", async () => {
-  const content = path.join(workspace, "content", "five-million-particle-fountain");
-  const source = path.join(workspace, "examples", "project-38-five-million-particle-fountain");
-  const lessonFiles = [
-    "01-khoa-hop-dong-mo-phong-particle.mdx",
-    "02-khoi-tao-deterministic-va-trai-tuoi-hat.mdx",
-    "03-capability-budget-va-ssbo-160-mb.mdx",
-    "04-compute-update-trong-luc-va-respawn.mdx",
-    "05-render-ssbo-bang-gl-vertexid.mdx",
-    "06-barrier-tu-compute-sang-vertex-shader.mdx",
-    "07-dieu-khien-thoi-gian-pause-va-single-step.mdx",
-    "08-timer-query-ring-va-thang-do-5-trieu.mdx",
-    "09-validation-probe-khong-readback-toan-bo.mdx",
-    "10-hoan-thien-dai-phun-5-trieu-hat.mdx",
-  ];
-  const lessons = await Promise.all(
-    lessonFiles.map((file) => readFile(path.join(content, file), "utf8")),
-  );
-  const lessonContracts = [
-    [/Particle/i, /semi-implicit Euler/i, /stepParticleCpu/i, /preview nhỏ trên CPU/i],
-    [/deterministic/i, /random01/i, /spawnEpoch/i, /age ban đầu/i],
-    [/160\.000\.000/i, /GL_MAX_SHADER_STORAGE_BLOCK_SIZE/i, /fallback/i, /binding 0/i],
-    [/local_size_x = 256/i, /gl_GlobalInvocationID/i, /19\.532/i, /192/i],
-    [/gl_VertexID/i, /GL_POINTS/i, /VAO rỗng/i, /point sprite/i],
-    [/GL_SHADER_STORAGE_BARRIER_BIT/i, /GL_BUFFER_UPDATE_BARRIER_BIT/i, /full readback/i],
-    [/1\/30/i, /1\/120/i, /pause/i, /single-step/i],
-    [/GL_QUERY_RESULT_AVAILABLE/i, /query ring/i, /median/i, /5m/i],
-    [/64 particle/i, /2\.048 byte/i, /mixed tolerance/i, /first mismatch/i],
-    [/Mã hoàn chỉnh/i, /không full readback/i, /Project 39/i, /cleanup/i],
-  ];
-  for (const [index, patterns] of lessonContracts.entries()) {
-    for (const pattern of patterns) {
-      assert.match(lessons[index], pattern, `Project 38 lesson ${index + 1} is missing ${pattern}`);
+test("all twelve lessons compile and every instructional C++/GLSL block is contiguous in its checkpoint", async () => {
+  const directory = path.join(workspace, "content/charged-particle-chamber");
+  const files = (await readdir(directory)).filter((f) => f.endsWith(".mdx")).sort();
+  assert.equal(files.length, 12);
+  for (const [index, file] of files.entries()) {
+    const source = await readFile(path.join(directory, file), "utf8");
+    await compile(source, { remarkPlugins: [remarkMath] });
+    const roles = [...source.matchAll(/^## (.+)$/gm)]
+      .map((m) => findLessonSection(m[1])?.key)
+      .filter(Boolean);
+    assert.deepEqual(
+      roles,
+      ["problem", "model", "code", "assembly", "experiments", "validation", "extensions"],
+      file,
+    );
+    assert.ok(
+      [...source.matchAll(/^### \d+\./gm)].length >= 3,
+      file + " must explain at least three construction steps",
+    );
+    const blocks = [...source.matchAll(/```(cpp|glsl) title="([^"]+)"\r?\n([\s\S]*?)\r?\n```/g)];
+    assert.ok(blocks.length >= 3, file + " must have at least three traceable code blocks");
+    for (const [, language, title, fragment] of blocks) {
+      const relative = title.split(" — ")[0];
+      assert.match(
+        relative,
+        language === "cpp"
+          ? /^(include|src|tests)\/.+\.(hpp|cpp)$/
+          : /^shaders\/.+\.(comp|vert|frag)$/,
+      );
+      const base = relative.startsWith("tests/")
+        ? root
+        : path.join(root, "checkpoints", String(index + 1).padStart(2, "0"));
+      const canonical = await readFile(path.join(base, relative), "utf8");
+      assert.ok(isContiguousCodeExcerpt(fragment, canonical), file + " drifts from " + relative);
     }
   }
+});
 
-  const math = await readFile(
-    path.join(source, "source-template", "include", "particle_math.hpp"),
-    "utf8",
-  );
-  const glApi = await readFile(
-    path.join(source, "source-template", "include", "gl_api.hpp"),
-    "utf8",
-  );
-  const engine = await readFile(
-    path.join(source, "source-template", "include", "particle_gpu_engine.hpp"),
-    "utf8",
-  );
-  const computeShader = await readFile(
-    path.join(source, "source-template", "shaders", "particle_update.comp"),
-    "utf8",
-  );
-  const vertexShader = await readFile(
-    path.join(source, "source-template", "shaders", "particle.vert"),
-    "utf8",
-  );
-  const main = await readFile(path.join(source, "source-template", "src", "main.cpp"), "utf8");
-  const tests = await readFile(path.join(source, "tests", "tests.cpp"), "utf8");
-  const canvas = await readFile(
-    path.join(workspace, "components", "labs", "five-million-particle-fountain-lab.tsx"),
-    "utf8",
-  );
+test("native model remains force-based, full-time, reproducible and distinct from retired fountain", async () => {
+  const prefix = "examples/project-38-charged-particle-chamber/source-template/";
+  const math = await read(prefix + "include/chamber_math.hpp");
+  const reference = await read(prefix + "include/chamber_reference.hpp");
+  const kernel = await read(prefix + "shaders/particle_update.comp");
+  const vertex = await read(prefix + "shaders/particle.vert");
+  for (const symbol of [
+    "sizeof(Particle) == 32",
+    "alignof(Particle) == 16",
+    "stepBoris",
+    "oldVelocity + nextVelocity",
+    "sameSettings",
+    "discardedSeconds",
+  ])
+    assert.ok(math.includes(symbol), symbol);
+  assert.match(kernel, /if \(id >= uCount\) return;[\s\S]*Particle p = particles\[id\]/);
+  assert.match(kernel, /cross\(vMinus, t\)/);
+  assert.match(kernel, /particles\[id\]\.velocityMass\.xyz = nextVelocity/);
+  assert.doesNotMatch(kernel, /\b(respawn|lifetime|gravity)\s*\(/);
+  assert.match(vertex, /uint\(gl_VertexID\)/);
+  assert.doesNotMatch(vertex, /uniform\s+float\s+(uTime|uDt)/);
+  assert.match(reference, /Independent double-precision closed form/);
+  assert.match(reference, /snapshotParticle/);
+  assert.match(reference, /span \* random01\(id, 5U, settings.seed\)/);
+});
 
+test("jobs distinguish full validation from bounded inspector and never pass incomplete work", async () => {
+  const prefix = "examples/project-38-charged-particle-chamber/source-template/include/";
+  const probe = await read(prefix + "chamber_probe.hpp");
+  const validation = await read(prefix + "chamber_validation.hpp");
+  const benchmark = await read(prefix + "chamber_benchmark.hpp");
+  const timing = await read(prefix + "chamber_timing.hpp");
+  const app = await read(prefix + "chamber_application.hpp");
+  assert.match(probe, /capture_\.generation = state.generation/);
+  assert.match(probe, /GL_BUFFER_UPDATE_BARRIER_BIT/);
+  assert.match(probe, /lastSampleTime/);
+  assert.match(validation, /scratch_\.resize\(8192U\)/);
+  assert.match(validation, /complete && report.passed\(\) && analyticFailures == 0U/);
+  assert.match(validation, /30000/);
+  assert.match(validation, /Cancelled: incomplete, not PASS/);
+  assert.match(benchmark, /kSamples = 20U/);
+  assert.match(benchmark, /kWarmups = 4/);
+  assert.match(timing, /GL_QUERY_RESULT_AVAILABLE/);
+  assert.match(app, /Camera\/viewport changed: incomplete/);
+  assert.ok(
+    app.indexOf("SDL_PollEvent") < app.indexOf("logicalWidth <= 0"),
+    "Quit must work before zero-size skip",
+  );
+  assert.match(app, /controls.singleStep && !held/);
+});
+
+test("Canvas discloses sample count, uses pointer capture/DPR/reduced-motion, and does not fake GPU timings", async () => {
+  const component = await read("components/labs/charged-particle-chamber-lab.tsx");
+  const controls = await read("components/labs/charged-particle-chamber/controls.tsx");
+  const readout = await read("components/labs/charged-particle-chamber/readout.tsx");
+  const controller = await read("lib/labs/charged-particle-chamber/controller.ts");
   for (const symbol of [
-    "alignas(16)",
-    "makeInitialParticle",
-    "stepParticleCpu",
-    "makeDispatchPlan",
-    "particleStorageBytes",
-    "chooseLargestSupportedCount",
-    "selectSimulationDt",
-    "validateParticles",
-  ]) {
-    assert.ok(math.includes(symbol), `Project 38 math source is missing ${symbol}`);
-  }
-  for (const symbol of [
-    "PFNGLDISPATCHCOMPUTEPROC",
-    "PFNGLDRAWARRAYSPROC",
-    "PFNGLGETQUERYOBJECTIVPROC",
-    "SDL_GL_GetProcAddress",
-  ]) {
-    assert.ok(glApi.includes(symbol), `Project 38 GL loader is missing ${symbol}`);
-  }
-  for (const symbol of [
-    "GL_SHADER_STORAGE_BARRIER_BIT",
-    "GL_BUFFER_UPDATE_BARRIER_BIT",
-    "GL_QUERY_RESULT_AVAILABLE",
-    "runProbeValidation",
-    "TimerQueryRing",
-  ]) {
-    assert.ok(engine.includes(symbol), `Project 38 engine is missing ${symbol}`);
-  }
-  assert.match(computeShader, /layout\(local_size_x = 256\)/);
-  assert.match(computeShader, /index >= uint\(uParticleCount\)/);
-  assert.match(vertexShader, /particles\[index\]/);
-  assert.match(vertexShader, /gl_VertexID/);
-  assert.match(main, /5'000'000U/);
-  assert.match(main, /SDLK_V/);
-  assert.match(main, /engine\.destroy\(gl\)/);
-  assert.match(tests, /bounds guard rejects 192 tail invocations/);
-  assert.match(canvas, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(canvas, /useReducedMotion/);
-  assert.match(canvas, /Canvas 2D không phải phép đo GPU/);
-  assert.match(canvas, /Gravity:/);
-  assert.match(canvas, /Bỏ qua respawn/);
+    "setPointerCapture",
+    "releasePointerCapture",
+    "useCanvasSize",
+    "useReducedMotion",
+    "IntersectionObserver",
+    "cancelAnimationFrame",
+  ])
+    assert.ok(component.includes(symbol), symbol);
+  assert.match(controls, /reducedMotion/);
+  assert.match(readout, /hạt CPU/);
+  assert.match(readout, /không đọc GPU của bạn/);
+  assert.match(controller, /Math.min\(DEMO_COUNT, this.state.active.count\)/);
+  assert.match(controller, /deadline: now \+ 8000/);
+  assert.match(controller, /work.done \+ 128/);
+  assert.doesNotMatch(controller, /Math.random\(|setInterval\(/);
 });

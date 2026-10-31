@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng buồng quan sát trước khi thả hạt
+
+## Ta cần giải quyết điều gì?
+
+Đích đến của học phần là hai chùm hạt tích điện uốn theo hai phía trong một không gian có chiều sâu. Nhưng trước khi bàn về lực, ta cần một chỗ đứng để quan sát: mặt lưới, trục tọa độ, camera và những thao tác không làm đổi dữ liệu mô phỏng. Nếu vừa quay camera vừa đổi vị trí hạt mà không phân biệt được hai việc, mọi kiểm tra quỹ đạo phía sau đều khó tin cậy.
+
+Mở starter trong gói source. Nó có cửa sổ SDL3/OpenGL 4.3, event loop, loader, shader/program cleanup và chữ bitmap. Đây là phần nền đã học ở Project 34 và 37, không phải một engine giấu sẵn chuyển động. Starter chưa có hạt, lực hay Boris. Checkpoint 1 thêm không gian quan sát và nối camera vào việc vẽ lưới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một điểm có vị trí world cố định. Camera chỉ đổi ma trận đưa điểm ấy tới màn hình:
+
+$$p_{clip}=P V p_{world}.$$
+
+`Camera::target` là điểm nhìn, `distance` là khoảng cách tới target, `yaw/pitch` đặt hướng mắt. Orbit thay hướng nhìn quanh target; pan dời target; zoom đổi khoảng cách. Không thao tác nào cần sửa `Particle`.
+
+Canvas dưới đây cho xem trước sản phẩm thu nhỏ. Hãy để Pause, kéo camera và nhìn lưới thay đổi phối cảnh. Con số position của hạt đang chọn phải giữ nguyên. Bài này chỉ tập trung vào camera; công thức cập nhật hạt sẽ được xây từ Bài 3.
+
+<InteractiveLab demo="charged-particle-chamber" mode="chamber-view" />
+
+## Bắt tay xây dựng
+
+### 1. Tạo cửa sổ đúng loại
+
+Trong `Application::run`, SDL được khởi tạo trước, tiếp theo request OpenGL Core 4.3 rồi mới tạo window/context. Không tạo `SDL_Renderer`: project dùng OpenGL trực tiếp. Đoạn tạo cửa sổ là:
+
+```cpp title="include/chamber_application.hpp — window dành cho OpenGL"
+SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+if (options.hidden || options.verify)
+    flags |= SDL_WINDOW_HIDDEN;
+window_ = SDL_CreateWindow("Project 38 - Charged Particle Chamber", 1440, 900, flags);
+```
+
+`HIGH_PIXEL_DENSITY` khiến kích thước logic và số pixel framebuffer có thể khác nhau. Vòng lặp lấy cả hai: vị trí chuột dùng đơn vị logic, còn viewport dùng pixel thật. Đừng dùng một hệ cho cả hai rồi sửa picking bằng hệ số đoán.
+
+### 2. Đặt thao tác orbit trong Camera
+
+Giữ toán camera ở `chamber_camera.hpp`, không trộn vào shader cập nhật hạt:
+
+```cpp title="include/chamber_camera.hpp — orbit quanh target"
+void orbit(float dx, float dy) {
+    yaw -= dx * 0.007F;
+    pitch = std::clamp(pitch + dy * 0.007F, -1.45F, 1.45F);
+}
+```
+
+Clamp giữ góc pitch cách hai cực, nơi tích có hướng với trục Y không còn cho một vector right ổn định. Hệ số 0,007 chuyển độ dời con trỏ sang radian; nó là độ nhạy điều khiển, không phải thông số vật lý.
+
+### 3. Nối camera với render loop
+
+Sau khi xử lý toàn bộ event, lấy aspect của **vùng cảnh**, không lấy chiều rộng cả window khi panel đang mở:
+
+```cpp title="include/chamber_application.hpp — ma trận của frame"
+const Mat4 matrix = controls.camera.viewProjection(static_cast<float>(sceneWidth) / height);
+renderer_.grid(gl_, matrix);
+```
+
+`SceneRenderer::grid` tạo các đoạn thẳng world-space rồi dùng shader scene đưa qua ma trận này. Lưới là mốc quan sát, không phải một sàn va chạm. Chưa có lực nào tác dụng lên hạt. `SDL_PollEvent` vẫn phải chạy khi cửa sổ thu nhỏ; nếu bỏ qua event trước nhánh zero-size, người dùng có thể không đóng được ứng dụng.
+
+## Chạy thử và quan sát
+
+Configure theo README với `BUILD_CHECKPOINTS=ON`, build `project_38_checkpoint_1` rồi chạy. Bạn phải thấy lưới có phối cảnh, không chỉ một hình vuông 2D. Kéo trái để orbit, kéo phải để pan, wheel để zoom; IJKL và Shift-IJKL làm được các việc tương ứng bằng phím. Backspace trả camera về ban đầu; Q đóng cửa sổ.
+
+Trong checkpoint 1 chưa có particle. Đừng sửa bằng cách vẽ tạm đường xoắn theo thời gian: ta cần state thật được lực cập nhật ở các bài sau. Source đầy đủ và diff cuối bài cho thấy chính xác đoạn nào thuộc scaffold, đoạn nào vừa thêm.
+
+## Thử tạo lỗi
+
+1. Cố tình dùng chiều rộng logic cho viewport trên màn hình có scale 150%. Quan sát cảnh bị sai độ phủ; trả lại kích thước từ `SDL_GetWindowSizeInPixels`.
+2. Bỏ clamp pitch rồi kéo qua cực. Right/up có thể mất ổn định; đây là lỗi camera, không phải quỹ đạo hạt đổi hướng.
+
+## Checklist hoàn thành
+
+- Starter và checkpoint 1 mở/đóng được; resize và thu nhỏ không làm event loop mất phản hồi.
+- Orbit, pan, zoom dùng được bằng chuột và bàn phím; camera không sở hữu state mô phỏng.
+- Panel mở không làm aspect cảnh sai; tọa độ chuột và pixel framebuffer được phân biệt.
+- Cảnh chỉ có mốc quan sát, chưa nhận là mô phỏng tích điện hoàn chỉnh.
+
+## Hướng mở rộng
+
+Thêm phím nhìn dọc X, Y, Z rồi giải thích vì sao một quỹ đạo 3D có thể trông phẳng từ một góc nhìn. Tiếp theo, [định nghĩa một hạt và snapshot ban đầu](/projects/charged-particle-chamber/02-state-id-va-seed).

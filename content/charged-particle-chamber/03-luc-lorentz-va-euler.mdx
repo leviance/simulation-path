@@ -1,0 +1,80 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vì sao hạt tích điện không chỉ bay thẳng?
+
+## Ta cần giải quyết điều gì?
+
+Đến đây ta có vị trí và vận tốc nhưng hạt chưa chuyển động. Ta sẽ thêm lực trên CPU trước, quan sát cặp ID 0/1 rồi cố ý dùng một integrator chưa phù hợp để thấy vấn đề. Chưa cần SSBO, workgroup hay benchmark: khi một hạt còn sai, một triệu hạt chỉ làm lỗi khó đọc hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Điện trường E đẩy hạt theo một hướng cố định nếu q dương, ngược lại nếu q âm. Từ trường B tác động qua vận tốc hiện tại:
+
+$$\frac{dx}{dt}=v,\qquad a=\frac{q}{m}(E+v\times B).$$
+
+Tích có hướng phải là **v × B**, không phải B × v. Ví dụ v=(1,0,0), B=(0,1,0) cho v×B=(0,0,1). Với q dương, hạt ban đầu cong về +Z; q âm cong về −Z. Thành phần lực từ vuông góc v nên trường chỉ B không làm tăng tốc độ trong nghiệm liên tục.
+
+Project dùng hệ đơn vị chuẩn hóa, không nhập tesla/volt-mét ngoài đời. q hiệu dụng bằng `positionCharge.w * chargeScale`, m lấy từ `velocityMass.w`. Hạt độc lập trong trường ngoài, không hút/đẩy lẫn nhau và không phải plasma tự nhất quán.
+
+<InteractiveLab demo="charged-particle-chamber" mode="lorentz-force" />
+
+## Bắt tay xây dựng
+
+### 1. Viết cross product đủ ba thành phần
+
+```cpp title="include/chamber_math.hpp — thứ tự tích có hướng"
+inline Vec3 cross(Vec3 a, Vec3 b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+```
+
+Lấy ví dụ ba trục ở trên để kiểm bằng tay. Đổi hai tham số làm đổi dấu cả vector; không thể sửa bằng việc đảo màu hạt.
+
+### 2. Tính gia tốc từ state đang có
+
+```cpp title="include/chamber_math.hpp — lực Lorentz trên một hạt"
+inline Vec3 lorentzAcceleration(const Particle& p, const Fields& fields) {
+    const float chargeOverMass = p.positionCharge.w * fields.chargeScale / p.velocityMass.w;
+    return (fields.electric + cross(velocity(p), fields.magnetic)) * chargeOverMass;
+}
+```
+
+`validParticle` từ chối mass ≤ 0 và giá trị không hữu hạn trước khi vào integrator. Không dùng mass 0 rồi trông chờ một phép clamp trong renderer cứu kết quả.
+
+### 3. Thử explicit Euler như một đường cơ sở
+
+Trong `stepEuler`, tính cả hai giá trị kế tiếp từ state cũ trước khi ghi lại:
+
+```cpp title="include/chamber_math.hpp — Euler đọc cùng state cũ"
+const Vec3 nextPosition = position(p) + velocity(p) * dt;
+const Vec3 nextVelocity = velocity(p) + lorentzAcceleration(p, fields) * dt;
+if (!finite(nextPosition) || !finite(nextVelocity))
+    return false;
+setPosition(p, nextPosition);
+setVelocity(p, nextVelocity);
+return true;
+```
+
+Application duyệt CPU preview ở mỗi fixed step rồi gọi hàm này. Clock được cung cấp từ kiến thức timestep trước đó; Bài 8 sẽ xem kỹ cách giới hạn catch-up. Lúc này chỉ cần giữ dt cố định và dùng Pause/N để đi từng bước.
+
+Euler dễ viết nhưng thêm một vector vuông góc vào v làm độ dài v tăng: nếu v·a=0 thì `|v+a dt|²=|v|²+|a|²dt²`. Vì thế trong trường chỉ B, sai số năng lượng tích lũy, quỹ đạo nở ra. Đó là lỗi tích phân, không phải hạt được từ trường “bơm thêm năng lượng”.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_3`, chọn preset tròn. Pause, N vài lần rồi cho chạy; so ID 0/1 và tốc độ sau một khoảng thời gian. Đổi sang preset điện trường: v phải thay đổi theo E, còn đổi dấu q đảo hướng gia tốc. Canvas mặc định Euler ở bài này để bạn nhìn thấy lỗi; chọn Boris chỉ để xem trước bài kế.
+
+## Thử tạo lỗi
+
+1. Đổi `cross(velocity(p), fields.magnetic)` thành thứ tự ngược. Dùng fixture v theo X, B theo Y để chỉ ra chiều cong sai, không chỉ nhận xét bằng mắt.
+2. Giữ chỉ B, tăng dt từ 1/240 lên 1/30. Quan sát tốc độ Euler tăng rõ hơn; giảm dt cải thiện nhưng không sửa bản chất phương pháp.
+
+## Checklist hoàn thành
+
+- E=B=0 cho đường thẳng; q scale=0 không còn lực; v=0 và E=0 giữ hạt đứng yên.
+- Hai dấu q cong về hai phía; cross product khớp ví dụ ba trục.
+- Mass/input lỗi bị từ chối trước chia; không coi NaN là state hợp lệ.
+- Giải thích được vì sao Euler làm tốc độ tăng trong trường chỉ B.
+
+## Hướng mở rộng
+
+Viết test đo `|v|` sau 200 bước Euler, không đặt expected bằng chính hàm Euler. Sau đó [thay Euler bằng Boris](/projects/charged-particle-chamber/04-boris-va-moc-thoi-gian).

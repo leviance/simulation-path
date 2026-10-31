@@ -1,0 +1,78 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn một hạt giữa một triệu hạt
+
+## Ta cần giải quyết điều gì?
+
+Một cảnh đông hạt chỉ hữu ích nếu ta đọc được state cụ thể. Ta sẽ chọn một ID bất kỳ bằng phím, lấy position/velocity từ GPU và so nghiệm tại đúng tick được chụp. Không kéo nguyên một triệu record về mỗi frame chỉ để hiện sáu con số.
+
+## Hiểu ý tưởng trước khi viết code
+
+Probe buffer có 33 record: 32 ID đầu để quan sát/picking và một slot cho ID đang chọn. Tổng readback là `33×32=1.056` byte. Request giữ selected ID, generation, tick và simulation time; khi kết quả về trễ, inspector phải gắn nó với snapshot đó, không với tick hiện tại.
+
+Trails giữ 17 đường × 256 điểm: 16 ID đầu và ID đang chọn. Mỗi mẫu cách ít nhất 1/30 **giây mô phỏng**. Bộ nhớ vì vậy có trần rõ ràng; hạt còn lại vẫn được cập nhật/vẽ core dù không có lịch sử riêng.
+
+<InteractiveLab demo="charged-particle-chamber" mode="chamber-probe" />
+
+## Bắt tay xây dựng
+
+### 1. Chụp metadata trước khi gửi gather
+
+```cpp title="include/chamber_probe.hpp — metadata thuộc request này"
+capture_.count = state.settings.count;
+capture_.selected = std::min(selected, static_cast<std::uint32_t>(state.settings.count - 1U));
+capture_.generation = state.generation;
+capture_.tick = state.tick;
+capture_.time = state.time();
+```
+
+Shader gather đọc binding 0, ghi 33 record vào binding 1. Nó chọn ID `slot` cho 32 slot đầu và `uSelected` cho slot cuối, có guard khi N nhỏ. ID không đổi vì camera hoặc shader point size đổi.
+
+### 2. Đồng bộ cho readback, không cho graphics
+
+```cpp title="include/chamber_probe.hpp — visibility và completion là hai việc"
+gl.DispatchCompute(1, 1, 1);
+// This consumer is a later CPU buffer read, not a shader load.
+gl.MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+fence_ = gl.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+deadline_ = SDL_GetTicks() + 2000;
+gl.Flush();
+```
+
+Frame sau poll fence với timeout 0. Ready mới dùng `glGetBufferSubData`; quá hạn hoặc lỗi thì không publish snapshot. Không đặt một vòng chờ vô hạn trong event loop. Khi Reset, hủy request cũ; kiểm generation vẫn cần để không đọc nhầm state cũ.
+
+### 3. Giới hạn lịch sử theo simulation time
+
+```cpp title="include/chamber_probe.hpp — không thêm vệt theo tốc độ vẽ"
+if (lastTick == snapshot.tick)
+    return;
+// History covers about 8.5 simulation seconds, not an arbitrary number of fast GPU frames.
+if (snapshot.time - lastSampleTime < 1.0 / 30.0 - 1.0e-9)
+    return;
+lastTick = snapshot.tick;
+lastSampleTime = snapshot.time;
+```
+
+Sau đó ghi vào `points[track][head]`, quay head modulo 256 và chặn size ở 256. Generation/selected đổi thì reset history; không nối hai quỹ đạo khác nhau bằng một đoạn thẳng giả. Pause vẫn đọc được probe nhưng tick không đổi nên không kéo dài trail.
+
+## Chạy thử và quan sát
+
+Build `project_38_checkpoint_9`. Dùng [ / ] chọn ID ngoài 32 hạt đầu, đợi probe rồi F để camera nhìn hạt đó. Inspector phải cho đúng ID và thời điểm chụp. Click chỉ chọn trong **32 hạt đang được probe**, không quảng cáo là picking toàn bộ một triệu.
+
+Canvas có tối đa 256 hạt CPU nên có thể chọn các ID mẫu ấy trực tiếp. Đây là khác biệt có chủ đích với native; Canvas không đọc một triệu hạt GPU trong trình duyệt. Chọn ID 0/1, cho chạy rồi Pause để đọc hai vệt trái chiều.
+
+## Thử tạo lỗi
+
+1. Đổi selected sau khi gửi request nhưng trước khi fence ready. Nếu UI gắn dữ liệu cũ với ID mới, metadata đã bị dùng sai. Chỉ công bố khi selected/generation phù hợp.
+2. Bỏ kiểm tick/time rồi để Pause ở màn hình 144 Hz. Trail sẽ chứa nhiều bản sao cùng một điểm; khôi phục lấy mẫu theo simulation time.
+
+## Checklist hoàn thành
+
+- Probe thường chỉ readback 1.056 byte; không đọc toàn SSBO mỗi frame.
+- ID bất kỳ chọn bằng phím; click giới hạn 32 ID được ghi rõ.
+- Position/velocity/error có cùng generation, ID và thời gian tham chiếu.
+- Trails bị chặn dung lượng, không dài thêm khi Pause hoặc nối qua Reset/đổi ID.
+
+## Hướng mở rộng
+
+Thêm tuổi của probe tính theo số tick để người đọc biết dữ liệu trễ bao nhiêu, nhưng không thay time của snapshot. Tiếp theo, [kiểm đủ state bằng một job riêng hữu hạn](/projects/charged-particle-chamber/10-validation-huu-han).
