@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Phân biệt substep, lambda và damping
+
+## Ta cần giải quyết điều gì?
+
+Tăng iteration làm vải ít giãn hơn; giảm timestep cũng thay đổi chuyển động. Nếu gọi mọi thay đổi đó là “đổi vật liệu”, ta không biết đang chỉnh compliance hay đang giảm sai số giải. Bài này khóa ba phạm vi: thời gian vật lý, vòng lặp solver và multiplier của từng constraint.
+
+Một lỗi thường gặp là reset lambda ở mỗi iteration. Lỗi ngược lại là giữ lambda vô hạn qua frame dù implementation chưa có warm-start. Cả hai có thể cho hình vẫn giống vải nhưng không còn đúng scheme đã dạy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một frame step Δt được chia S substeps, h=Δt/S. Mỗi substep có prediction một lần, I vòng constraints/contacts rồi velocity update. Iteration không cộng thêm h. Bản mặc định dùng Δt=1/60 s, S=2, I=4; đó là cấu hình khởi đầu, không phải cam kết hội tụ ở mọi trạng thái.
+
+Lambda bắt đầu từ zero đầu substep và tích lũy qua cả I iteration, mỗi cạnh giữ ô riêng. Substep tiếp theo bắt đầu prediction khác nên reset lại. Đừng đổi lịch đó mà vẫn lấy fixture cũ để chứng nhận scheme mới.
+
+Sau solve, velocity bằng (x mới−x đầu substep)/h. Damping ở bản chuẩn là rate γ có đơn vị 1/s:
+
+$$v\leftarrow v\,e^{-\gamma h}.$$
+
+Đây là giảm vận tốc world sau solve, không phải toàn bộ mô hình Rayleigh damping trong bài báo XPBD. Compliance α vẫn tính bằng m/N; thickness tính bằng m. Friction của project là tỷ lệ tiếp tuyến không đơn vị mỗi substep có contact, sẽ học ở bài sau. Các tham số này không được cộng vào cùng một “độ mềm”.
+
+<InteractiveLab demo="cloth-workshop" mode="timestep" />
+
+## Bắt tay xây dựng
+
+### 1. Giữ previous và lambda ở ngoài vòng iteration
+
+```cpp title="include/cloth_cpu.hpp — reset một lần cho mỗi substep"
+for (std::uint32_t substep = 0U; substep < settings.substeps; ++substep) {
+    const auto previous = state.positions;
+    std::fill(lambdas.begin(), lambdas.end(), 0.0F);
+```
+
+Previous là mốc để suy velocity thực sau tất cả correction. Lambda array giữ số phần tử bằng constraint count và được fill một lần trong substep, không trong vòng màu. Khi đổi topology, array/buffer phải được tạo theo constraint count mới; không giữ multiplier của một cạnh đã đổi ID.
+
+### 2. Cho GPU một pass reset multiplier riêng
+
+```glsl title="shaders/cloth_solver.comp — mỗi edge có một lambda"
+if (uPhase == 0u) {
+    if (id < uEdgeCount) {
+        lambdas[id] = 0.0;
+    }
+    return;
+}
+```
+
+Host đặt pass này sau prediction và trước toàn bộ iterations. Count dispatch ở đây là số edges, không phải N vertices. Một lưới có gần 6N constraints; dùng N làm count reset sẽ để một phần lambda từ substep trước sống sót, gây lỗi chỉ ở các màu/range về cuối.
+
+### 3. Suy lại velocity từ vị trí đã solve
+
+```glsl title="shaders/cloth_solver.comp — velocity không lấy từ prediction cũ"
+vec3 point = positions[id].xyz;
+vec3 velocity = (point - previous[id].xyz) / uH;
+vec3 normal = vec3(0.0);
+```
+
+Normal tạm bắt đầu zero để các contact analytic điền vào ở Bài 7. Sau khi bỏ vận tốc đi vào vật cản và giảm trượt, shader áp damping:
+
+```glsl title="shaders/cloth_solver.comp — damping theo thời gian"
+velocities[id] = vec4(limitVector(velocity * exp(-uDamping * uH), 20.0), 0.0);
+```
+
+Giới hạn tốc độ và damping làm hệ mất năng lượng; không đòi bảo toàn năng lượng để làm gate. Điều cần kiểm là finite state, h/γ hợp lệ và một đường cập nhật được công bố. Pin vẫn có velocity zero ở nhánh riêng.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_6. Giữ topology/preset/compliance/gió/gravity như nhau, thử I=1/4/8 với cùng h; ghi max residual theo mét. Sau đó giữ I và giảm h, nhưng so cùng tổng thời gian mô phỏng, không so cùng số frame. Một bảng nhỏ có h, I, residual và max stretch dễ đọc hơn ba ảnh không cùng thời điểm.
+
+Hữu hạn iteration nghĩa là còn sai số solve. Compliance không bị bỏ qua, nhưng không có lời hứa rằng chỉ cần dùng công thức XPBD là kết quả hoàn toàn độc lập h/I. Nếu residual giảm mà hình đổi, hãy tách sai số solve, tích phân và mô hình thay vì tự gọi mọi sai khác là bug.
+
+## Thử tạo lỗi
+
+1. Chuyển reset lambda vào đầu mỗi iteration. Với α khác zero, ghi residual qua các vòng và so với bản đúng; vòng đầu giống nhau nên không chỉ kiểm một vòng.
+2. Thay exp(−γh) bằng một hệ số 0,99 mỗi frame. So cùng tổng thời gian ở hai tốc độ frame: damping giờ phụ thuộc lịch gọi, dù con số nhìn có vẻ nhỏ và ổn định.
+
+## Checklist hoàn thành
+
+- Vẽ lại được thứ tự substep → prediction/reset → iterations → velocity.
+- Lambda reset theo edge count đầu substep và được giữ qua các vòng; previous không bị ghi lại trong solve.
+- Damping rate 1/s khác compliance m/N và friction fraction không đơn vị.
+- Thử h/I hữu hạn có số đo residual; không gọi số vòng nhiều là đổi vật liệu hoặc bằng chứng bất biến tuyệt đối.
+
+## Hướng mở rộng
+
+Tắt damping và input trên một fixture nhỏ rồi theo năng lượng gần đúng trong vài bước; sau đó bật damping và dự đoán chiều thay đổi. Không biến thí nghiệm này thành yêu cầu bảo toàn trong cảnh có friction/drag. Tiếp theo, [cho vải chạm vật cản analytic](/projects/cloth-workshop/07-va-cham-analytic).

@@ -1,0 +1,79 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng CSR bằng count, scan và scatter
+
+## Ta cần giải quyết điều gì?
+
+Biết mỗi cell có bao nhiêu đỉnh chưa đủ để đọc ID của chúng. Ta cần mỗi cell sở hữu một đoạn liên tục trong một mảng chung, không cấp một vector CPU rồi upload từng bucket. GPU phải tự tạo counts, offsets và danh sách ID, kể cả cell rỗng hoặc rất đông.
+
+Project 39 đã giải bài cấp địa chỉ bằng exclusive scan. Ta tái dùng hợp đồng scan nhiều tầng ở đây, nhưng dữ liệu đầu vào giờ là occupancy của grid 3D. Count của cell không chỉ là zero/one; một cell có thể có hàng trăm đỉnh.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ví dụ counts=[2,0,3,1] cho offsets=[0,2,2,5]. Cell 0 sở hữu slots [0,2), cell 1 rỗng tại [2,2), cell 2 giữ [2,5), cell 3 giữ [5,6). Tổng counts phải bằng N; offset cuối+count cuối cũng bằng N.
+
+Pass scatter không được tăng chính offsets vì neighbor traversal còn cần đầu đoạn gốc. Ta copy offsets sang cursors, atomicAdd cursor của cell để lấy một slot riêng rồi ghi ID. Arrival order của invocation không ổn định; thứ tự ID trong cell không phải một phần kết quả. Membership và mỗi-ID-đúng-một-lần mới là bất biến.
+
+Scan block trong source này dùng inclusive Hillis–Steele trên 256 uint rồi trừ value để xuất exclusive. Hierarchy scan block sums và uniform-add giữ nguyên ý tưởng nhiều tầng từ Project 39; đừng áp nhầm span 512 hay đoạn downsweep của kernel Blelloch trước sang kernel đang dùng.
+
+<InteractiveLab demo="cloth-workshop" mode="csr" />
+
+## Bắt tay xây dựng
+
+### 1. Đếm đúng một cell cho mỗi vertex
+
+```glsl title="shaders/cloth_grid.comp — count và giữ membership"
+if (id < uCount) {
+    uint cell = cellIndex(cellCoordinate(positions[id].xyz));
+    vertexCells[id] = cell;
+    atomicAdd(counts[cell], 1u);
+}
+```
+
+Clear counts/cursors cho mọi cell trước count, kể cả cell hiện đang rỗng. Mỗi vertex ghi vertexCells[id] riêng nên không cần atomic ở mảng đó; counts[cell] có nhiều writer nên cần atomic. Đừng dùng một atomic counter toàn cục rồi mất thông tin cell.
+
+### 2. Xuất prefix exclusive từ scan block
+
+```glsl title="shaders/cloth_scan.comp — từ inclusive sang exclusive"
+if (id < uCount) {
+    outputValues[id] = scratch[lane] - value;
+}
+if (lane == 255u) {
+    blockSums[gl_WorkGroupID.x] = scratch[lane];
+}
+```
+
+Lane ngoài N nạp zero nhưng vẫn đi qua barrier của block; không return sớm trước shared scan. Block sums được scan trên GPU tới khi chỉ còn một group. Host chỉ biết số phần tử ở từng tầng, không đọc giá trị sums để tính prefix hộ. Khi đi xuống, uniform-add phải dùng parent prefix đã global; nếu chỉ làm một block, cell đầu block sau sẽ bắt đầu từ zero sai.
+
+### 3. Dùng cursor để lấy slot, giữ offsets bất biến
+
+```glsl title="shaders/cloth_grid.comp — scatter mỗi ID đúng một lần"
+if (id < uCount) {
+    uint destination = atomicAdd(cursors[vertexCells[id]], 1u);
+    sortedIds[destination] = id;
+}
+```
+
+Trước scatter, phase prepare đặt cursors[cell]=offsets[cell]. Sau scatter, cursor cuối phải bằng offsets+counts. Destination phải nằm trong range của cell và toàn mảng N. Không yêu cầu sortedIds tăng dần; tên sorted ở đây có nghĩa gom theo cell, không phải sort theo vertex ID.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_9. Trên fixture nhỏ, readback riêng job validation sau GPU hoàn tất, kiểm tổng count=N, offsets không giảm, range không chồng và mỗi ID xuất hiện đúng một lần trong đúng cell. Không chỉ so vector ID GPU với thứ tự CPU: atomic order khác vẫn hợp lệ.
+
+Thử counts tùy ý [2,0,3,1], tất cả rỗng ở primitive scan, N=1 và số cell qua biên 255/256/257. Với pipeline scene, N theo topology không bằng cell count; guard dispatch phải dùng đúng count của pass. Mỗi cạnh compute→compute có SHADER_STORAGE barrier; readback thuộc đường kiểm riêng, không chen giữa count/scan/scatter trong frame.
+
+## Thử tạo lỗi
+
+1. Scatter trực tiếp bằng atomicAdd(offsets[cell]). Candidate traversal sau đó bắt đầu từ cuối cell thay vì đầu; kiểm offsets fixture sẽ chỉ ra lỗi trước ảnh.
+2. Bỏ clear counts ở frame mới. Chạy hai frame cùng positions, tổng count thành 2N; scan vẫn có thể trông “không giảm” nên phải kiểm đủ bất biến.
+
+## Checklist hoàn thành
+
+- Counts tùy ý cho offset exclusive đúng; hierarchy nhiều tầng không qua CPU.
+- Mọi ID đúng cell và đúng một lần; cursor cuối đúng offsets+counts, không yêu cầu thứ tự atomic.
+- Lane tail không truy cập ngoài vùng và vẫn tham gia shared barriers.
+- Phân biệt vertex count, cell count và scan-level count; kiểm cấu trúc trước kiểm contact.
+
+## Hướng mở rộng
+
+Xáo trộn thứ tự positions trong fixture nhưng giữ danh sách ID/coordinate mong đợi. CSR membership phải vẫn đúng dù thứ tự scatter đổi. Tiếp theo, [giải self-contact giữa các lớp vải](/projects/cloth-workshop/10-tu-tiep-xuc-cua-vai).

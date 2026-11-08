@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho vải chạm mặt bàn, sphere và capsule
+
+## Ta cần giải quyết điều gì?
+
+Nếu không có tiếp xúc, tấm vải sẽ xuyên qua quả cầu và mặt bàn. Nhưng “nếu thấp quá thì tăng y” chỉ giải được một mặt phẳng và không nói normal ở đâu. Ta cần một phép kiểm hình học có đáp án độc lập để biết đỉnh đã vào vật cản bao nhiêu, phải đẩy theo hướng nào và phần chuyển động nào nên giảm.
+
+Analytic contact là mốc dễ kiểm trước self-contact. Ta sẽ dùng plane, sphere và capsule trong cùng scene, giữ thickness rõ và không hứa chống xuyên khi teleport vật cản hoặc timestep quá lớn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thickness t tính bằng mét. Đỉnh vải được coi là tâm một quả cầu tiếp xúc bán kính t; với sphere obstacle bán kính R, đỉnh cần cách tâm ít nhất R+t. Penetration là max(0,R+t−distance). Self-contact ở Bài 10 dùng khoảng cách giữa hai đỉnh 2t; đừng lẫn một thickness với hai thickness.
+
+Plane có normal +Y và giới hạn y≥floor+t. Sphere có normal từ tâm tới điểm. Capsule là đoạn AB được quét bởi sphere: tìm điểm gần nhất trên AB rồi dùng cùng phép kiểm sphere. Tâm sphere hoặc điểm trên trục capsule làm normal không duy nhất, nên implementation dùng fallback +Y hữu hạn.
+
+Friction ở đây không phải hệ số Coulomb theo lực normal. Nó là **tỷ lệ không đơn vị** f∈[0,1] làm giảm velocity tiếp tuyến trong mỗi substep có analytic contact. Vì có phạm vi theo substep, đổi substep có thể đổi tổng hiệu ứng; phải ghi cấu hình khi so. Damping world rate 1/s vẫn là tham số khác.
+
+<InteractiveLab demo="cloth-workshop" mode="obstacles" />
+
+## Bắt tay xây dựng
+
+### 1. Tìm điểm trên đoạn gần vị trí vải nhất
+
+```cpp title="include/cloth_math.hpp — điểm gần nhất trên đoạn capsule"
+const Vec3 segment = b - a;
+const float denominator = dot(segment, segment);
+if (denominator < 1.0e-12F) {
+    return a;
+}
+const float fraction = std::clamp(dot(point - a, segment) / denominator, 0.0F, 1.0F);
+return a + segment * fraction;
+```
+
+Fraction chưa clamp là tọa độ dọc đường thẳng vô hạn. Clamp đưa nó về đoạn đóng [A,B], để hai đầu capsule đúng là hai nửa cầu. Khi A=B, đoạn suy biến thành một sphere; trả A tránh chia zero. Fixture phải kiểm giữa đoạn, ngoài hai đầu và đoạn zero length bằng đáp án hình học riêng.
+
+### 2. Đẩy ra khỏi surface với cùng quy ước thickness
+
+```glsl title="shaders/cloth_solver.comp — projection analytic tuần tự"
+point.y = max(point.y, uFloor + uThickness);
+vec3 delta = point - uSphere;
+float penetration = max(0.0, uSphereRadius + uThickness - length(delta));
+point += safeNormal(delta) * penetration;
+delta = point - capsuleCenter(point);
+penetration = max(0.0, uCapsuleRadius + uThickness - length(delta));
+point += safeNormal(delta) * penetration;
+```
+
+Projection có thứ tự plane→sphere→capsule và lặp cùng solver; finite iterations vẫn có thể để lại penetration ở chỗ nhiều ràng buộc cạnh tranh. Scene chuẩn phải tránh vật cản chồng nhau vô lý và báo residual/penetration thật, không xóa số đo. Clamp world ở cuối hàm là miền an toàn của mô phỏng, không phải một vật liệu mới.
+
+### 3. Tách phần đi vào normal khỏi phần trượt
+
+```glsl title="shaders/cloth_solver.comp — phản hồi velocity khi có normal"
+if (length(normal) > 0.0) {
+    velocity -= normal * min(0.0, dot(velocity, normal));
+    vec3 tangent = velocity - normal * dot(velocity, normal);
+    velocity -= tangent * uFriction;
+}
+```
+
+Dot âm là vận tốc đi vào vật cản; bỏ phần đó để projection không liên tục tạo một vận tốc xuyên vào. Tangent còn lại bị nhân (1−f). Đây là giảm trượt, không có hệ số bật nảy và không chứng minh bảo toàn động lượng/năng lượng với obstacle tĩnh. Pin không nhận projection; nếu người dùng ghim nó bên trong obstacle, app phải công bố xung đột thay vì hứa thỏa mọi constraint.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_7. Dùng preset phủ sphere, nhìn từ phía bên để kiểm khoảng hở t chứ không chỉ ảnh mặt trước. Thử điểm trên trục X tại distance R+t, nhỏ hơn ngưỡng một lượng đã biết và đúng tâm. Plane kiểm y trước/sau; capsule kiểm normal ở giữa thân và ngoài đầu.
+
+Điều chỉnh obstacle trong miền UI cho phép, không teleport qua cả tấm vải rồi dùng ảnh đó chứng minh CCD. Bản chuẩn là discrete analytic contact; độ dời vật cản và tốc độ vải bị giới hạn. Ghi h/iterations cùng max penetration; một ảnh nhìn ổn không thay test normal/khoảng cách độc lập.
+
+## Thử tạo lỗi
+
+1. Trừ thickness khỏi radius thay vì cộng. Quan sát mặt bên: đỉnh được cho đi vào trong sphere. Tính trước sai lệch vị trí tối thiểu 2t trên fixture một chiều.
+2. Giảm toàn velocity bằng friction thay vì chỉ tangent. Một đỉnh đang rời vật cản cũng bị chậm theo normal; giải thích vì sao đó không còn cùng mô hình giảm trượt.
+
+## Checklist hoàn thành
+
+- Plane/sphere/capsule có normal/khoảng cách/penetration kiểm được bằng hình học riêng.
+- Thickness được cộng đúng một lần cho analytic, pin không bị đẩy và zero-length/trùng tâm hữu hạn.
+- Friction fraction không đơn vị khác damping rate; biết policy normal khi nhiều obstacle cùng gần.
+- Có giới hạn discrete motion và penetration báo thật; không gọi bản này là CCD hoặc chống xuyên mọi tốc độ.
+
+## Hướng mở rộng
+
+Giữ f=0 rồi tăng riêng damping; sau đó giữ damping và tăng riêng f. So một đỉnh đang bay với một đỉnh đang trượt để thấy hai tham số không tương đương. Tiếp theo, [đặt grid tiếp xúc ba chiều](/projects/cloth-workshop/08-grid-tiep-xuc-3d).

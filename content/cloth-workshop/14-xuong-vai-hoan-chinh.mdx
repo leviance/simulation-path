@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nghiệm thu xưởng vải và mốc 100.000 đỉnh động
+
+## Ta cần giải quyết điều gì?
+
+Bây giờ phải ghép các mốc thành một ứng dụng có quy trình sử dụng hoàn chỉnh: chọn cảnh, nhìn quanh, ghim/kéo/thả, sửa tham số trong miền hợp lệ, Pause/single-step/Reset và chạy/hủy kiểm chứng. Có source solver không đủ nếu không điều khiển được vải; có Canvas không thay executable native.
+
+Mốc bắt buộc là **ít nhất 100.000 đỉnh động**, cùng toàn topology/constraints, contacts, velocity và normals tương ứng được xử lý trên GPU. Mesh cấp phát lớn nhưng chỉ cập nhật vài hàng, hoặc bản đẹp chỉ vài trăm đỉnh, không đạt cổng này.
+
+## Hiểu ý tưởng trước khi viết code
+
+Side=321 tạo 103.041 vertices tổng. Với cảnh treo ghim hàng đầu, 321 pins để lại 102.720 đỉnh động. Có 204.800 triangles và 615.038 distance constraints theo công thức đã học. Preset không ghim có nhiều đỉnh động hơn, nhưng vẫn cần báo pinned riêng. Updated và drawn có phạm vi khác; debug chỉ vẽ marker subset không cho phép bỏ update.
+
+Preset side=1001 tạo 1.002.001 vertices tổng và 1.001.000 động nếu ghim hàng đầu. Đây là mở rộng một triệu, không phải yêu cầu thay mốc 100k bằng mọi giá trên mọi máy. Grid dense/scratch cùng constraints có thể vượt ngân sách mặc định; app phải từ chối rõ hoặc chạy với ngân sách phần cứng đã công bố. Chưa chạy được thì ghi “chưa kiểm chứng/không đủ ngân sách”, không bịa FPS.
+
+Bản chuẩn dùng bend-distance xấp xỉ và self-contact theo đỉnh, không phải mô hình may mặc chính xác hoặc edge/triangle CCD. Compliance, damping, friction fraction, thickness và sai số solver vẫn giữ ý nghĩa/đơn vị riêng ở bản cuối; không bỏ giới hạn mô hình chỉ để gọi sản phẩm “hoàn chỉnh”.
+
+<InteractiveLab demo="cloth-workshop" mode="showcase" />
+
+## Bắt tay xây dựng
+
+### 1. Giữ mốc lớn là topology thật
+
+```cpp title="include/cloth_topology.hpp — cấu hình chuẩn không dùng số tam giác thay đỉnh"
+std::uint32_t side{321U};
+Preset preset{Preset::Hanging};
+float extent{8.0F};
+float thickness{0.0125F};
+```
+
+Side đi vào makeTopology, constraints, indices, grid và toàn bộ dispatch counts. Không có một “large mesh” chỉ vẽ còn solver vẫn dùng topology nhỏ. Telemetry phải ghi số tổng, ghim, động, cập nhật và vẽ; constraint count thiết kế khác số correction không suy biến thực sự áp dụng trong một bước, cần nhãn rõ.
+
+### 2. Từ chối cấu hình không đủ tài nguyên trước publish
+
+```cpp title="include/cloth_gpu.hpp — kiểm ngân sách và giới hạn SSBO"
+if (bytes + hostBytes + previousBytes > settings.memoryBudget || bindings < 8 || maxConstraintBytes > static_cast<std::uint64_t>(blockLimit)
+    || groupCount(gridPlan.cells) > static_cast<GLuint>(groups)) {
+    error = "Preset unsupported by the declared RAM/VRAM, SSBO or dispatch budget; last-good scene retained."
+        " Peak planned bytes=" + std::to_string(bytes + hostBytes + previousBytes)
+        + ", budget=" + std::to_string(settings.memoryBudget) + ".";
+    return false;
+}
+```
+
+Memory preflight tính mesh, constraints/lambda, indices, membership/grid, recursive scan scratch, rollback state, host staging và đỉnh bộ nhớ khi scene cũ lẫn candidate mới cùng tồn tại. Cấp phát candidate trước, thành công mới swap/publish. Mật độ tiếp xúc hiện tại còn có cổng candidate-work riêng: vừa VRAM không có nghĩa vài trăm triệu phép kiểm contact là an toàn. Refused step rollback chứ không cắt contacts để giữ FPS rồi báo PASS.
+
+### 3. Để renderer đọc đúng state GPU
+
+```cpp title="include/cloth_gpu.hpp — giao diện buffer cho renderer"
+GLuint positionBuffer() const { return state_->position; }
+GLuint normalBuffer() const { return state_->normal; }
+GLuint indexBuffer() const { return state_->indices; }
+```
+
+Renderer lấy positions/normals biến dạng và index topology trực tiếp, không nhận một vector positions CPU mỗi frame. Camera/overlay/input là phần host; solver/grid/contact/velocity/normals của nhánh GPU ở lại trên GPU. Snapshot nhỏ và probe được giới hạn phục vụ kiểm/chọn, không thay thế đường chạy này.
+
+## Chạy thử và quan sát
+
+Tải [ZIP source xưởng vải](/downloads/project-40-cloth-workshop.zip), giải nén vào thư mục sạch và mở terminal tại CMakeLists.txt. ZIP được tải một lần cho project; không cần nối source từ các ZIP khác. Full code ở cuối trang là final của checkpoint hiện tại, còn lựa chọn checkpoint trong gói giúp so từng mốc.
+
+Với generator Visual Studio multi-config, chạy rõ cả hai cấu hình:
+
+```bash
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
+
+Generator single-config cần thư mục riêng theo build type:
+
+```bash
+cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DBUILD_CHECKPOINTS=ON
+cmake --build build-debug
+ctest --test-dir build-debug --output-on-failure --timeout 30
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_CHECKPOINTS=ON
+cmake --build build-release
+ctest --test-dir build-release --output-on-failure --timeout 30
+```
+
+Trên Visual Studio, chạy final tại build/Release/project_40_final.exe; single-config dùng build-release/project_40_final. Các lệnh PowerShell dưới đây tách fixture nhỏ, scale và benchmark; mỗi job vẫn cần deadline/Cancel của app và watchdog phù hợp môi trường chạy:
+
+```powershell
+.\build\Release\project_40_final.exe --verify --side 17
+.\build\Release\project_40_final.exe --verify --side 321
+.\build\Release\project_40_final.exe --benchmark --side 321
+.\build\Release\project_40_final.exe --verify --side 1001
+```
+
+Lệnh một triệu có thể bị từ chối bởi ngân sách mặc định 512 MiB/giới hạn SSBO; ghi nguyên lý do cùng phần cứng và báo riêng, không thay bằng side nhỏ dưới cùng nhãn. Để xem cảnh có điểm dừng, dùng thêm --preset hanging, --preset sphere hoặc --preset table cùng --steps 120 hoặc --seconds 20. Không chạy benchmark Release bằng executable Debug còn mở từ trước. CTest CPU không mở cửa sổ và không thay validation GPU thật.
+
+Ghi ba cảnh native: treo mép, phủ sphere, rơi lên bàn/capsule; quay cả hai mặt, thao tác pin/drag/release/cancel/blur và đổi topology khi đang kéo/chạy job. Bật/tắt debug trên cùng snapshot. Ghi build/hardware/configuration, counts/bytes/candidates, residual/penetration và pass/draw/whole-step timing thật. Camera vẫn dùng khi Pause; Reset tái tạo preset đang chọn. Dùng bảng bằng chứng nghiệm thu trong repository để ghi cái đã kiểm, cái chưa kiểm; không tự điền PASS từ việc source build được.
+
+## Thử tạo lỗi
+
+1. Giảm dispatch count của prediction xuống một hàng nhưng giữ mesh lớn. Ảnh có thể vẫn kín, song updated count/probe nhiều vùng phải phát hiện workload giả; không chấp nhận “trông vẫn là 100k”.
+2. Yêu cầu một triệu với ngân sách thấp hơn preflight. Ứng dụng phải báo từ chối và giữ scene trước, hủy drag/job cũ an toàn; không âm thầm dùng topology nhỏ hơn dưới cùng nhãn một triệu.
+
+## Checklist hoàn thành
+
+- Có executable C++20/SDL3 độc lập, source từng checkpoint và final; Debug/Release CTest có kết quả riêng.
+- Ít nhất 100.000 đỉnh động cùng toàn constraints/contact/velocity/normals thật chạy GPU; counts được phân biệt, không physics CPU mỗi frame.
+- Bề mặt sáng hai mặt, pattern/nếp gấp đọc được; ba cảnh thật không nổ hoặc xuyên rõ rồi vẫn báo PASS.
+- Pin/drag/cancel/blur, camera, preset/topology, Pause/Reset/single-step và jobs hữu hạn dùng được.
+- Workload/bộ nhớ/candidates/timing/residual có hồ sơ; một triệu báo riêng và không hứa FPS chung.
+- Thuật toán, hình/input native, Canvas, source/ZIP và scale là các cổng riêng; điều chưa kiểm được ghi đúng là chưa kiểm.
+
+## Hướng mở rộng
+
+Chọn một hướng có hợp đồng mới rõ: bend góc nhị diện, contact cạnh–tam giác, CCD, vật liệu theo hướng sợi hoặc aerodynamics. Mỗi hướng cần fixture và ngân sách riêng; không chỉ thêm nút rồi đổi lời giới hạn của bản chuẩn. Bạn có thể trở lại [mặt vải đầu tiên](/projects/cloth-workshop/01-mat-vai-dau-tien) để đối chiếu từng mốc với sản phẩm vừa xây.

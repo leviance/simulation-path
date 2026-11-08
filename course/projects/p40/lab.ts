@@ -2,56 +2,74 @@ import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
   base: {
-    label: "GPU SPATIAL GRID LAB",
-    title: "Một triệu particles tìm hàng xóm mà không quét cả thành phố",
+    label: "XƯỞNG VẢI 3D",
+    title: "Kéo, ghim và quan sát một bề mặt đang biến dạng",
     description:
-      "Theo dõi particle đi qua bốn bước: đếm theo cell, exclusive scan, đưa index vào CSR và tìm hàng xóm. Canvas 2D giúp bạn nhìn thấy dữ liệu đổi ra sao sau mỗi pass; thời gian hiển thị không phải benchmark GPU thật.",
+      "Canvas chiếu phối cảnh một mảnh vải CPU nhỏ. Các lớp giải thích dùng chung state XPBD, topology và vật cản; đây không phải compute shader, không đo GPU và không thay executable C++ có ít nhất 100.000 đỉnh động.",
   },
   modes: {
-    "grid-contract": {
-      title: "Một world position trở thành cell ID nào?",
-      description:
-        "Kéo particle trong vùng mô phỏng, đọc cột, hàng và row-major ID; đồng thời quan sát cách chỉ số được chặn lại ở mép phải và mép dưới.",
+    surface: {
+      title: "Mặt vải đầu tiên",
+      description: "Orbit, pan và zoom để nhìn hai mặt của mesh tam giác đang treo.",
     },
-    "atomic-count": {
-      title: "Nhiều invocation cùng tăng một cell ra sao?",
+    prediction: {
+      title: "Dự đoán vị trí",
       description:
-        "Cho từng particle đi vào cell, rồi bật hoặc tắt atomic để thấy lost update khiến tổng số phần tử trong grid nhỏ hơn số particle ban đầu.",
+        "Theo vị trí cũ, velocity, trọng lực và vị trí dự đoán trước khi giải ràng buộc.",
     },
-    "count-scan": {
-      title: "Exclusive scan biến counts thành ranges thế nào?",
-      description:
-        "Sửa số particle trong tám cell rồi đọc offset cùng đoạn [begin, end). Sau đó kiểm tra offset cuối cộng count cuối có đúng bằng N hay không.",
+    xpbd: {
+      title: "Một ràng buộc XPBD",
+      description: "Đọc sai số khoảng cách, inverse mass, compliance và multiplier của một cạnh.",
     },
-    "csr-scatter": {
-      title: "Atomic cursor đặt particle vào slot nào?",
-      description:
-        "Đổi thứ tự particle đi vào grid để thấy thứ tự bên trong mỗi đoạn CSR có thể khác, nhưng tập particle thuộc cell đó vẫn phải giữ nguyên.",
+    topology: {
+      title: "Từ cạnh đến tấm vải",
+      description: "Phân biệt tam giác vẽ với stretch, shear và bend-distance trong topology.",
     },
-    "candidate-cells": {
-      title: "Một query radius cần mở những cell nào?",
+    coloring: {
+      title: "Ai được ghi vertex này?",
       description:
-        "Kéo particle, đổi bán kính tìm kiếm và kích thước cell để xem vùng cell được tính từ AABB và chặn theo biên, thay vì luôn cố định ở 3 × 3.",
+        "Xem các nhóm constraints có ownership không chồng lấp; Canvas giải CPU, không mô phỏng lịch GPU.",
     },
-    "exact-neighbors": {
-      title: "Candidate nào thực sự là neighbor?",
-      description:
-        "So sánh khoảng cách bình phương, loại chính particle đang xét và dùng index để phân xử khi hai hàng xóm cách đều nhau.",
+    timestep: {
+      title: "Substep không phải iteration",
+      description: "Đổi số vòng, theo residual và tách damping rate khỏi compliance.",
     },
-    "grid-pass-graph": {
-      title: "Pass sau cần đọc buffer nào?",
-      description:
-        "Đi qua clear, count, scan, prepare, scatter và query; ở mỗi chặng, chọn barrier phù hợp trước khi compute shader hoặc CPU đọc buffer.",
+    obstacles: {
+      title: "Đỡ vải bằng vật cản",
+      description: "Quan sát sphere, mặt bàn, thickness và chuyển động tiếp tuyến tại tiếp xúc.",
     },
-    "grid-validation": {
-      title: "Grid hỏng ở count, offset hay scatter?",
+    grid: {
+      title: "Cell trong không gian 3D",
       description:
-        "Tạo lỗi lost update, offset sai hoặc index bị lặp; đọc từng điều kiện kiểm tra để tìm đúng pass gây lỗi trước khi so kết quả hàng xóm với bản CPU.",
+        "Đọc vị trí cell và phạm vi ứng viên quanh một đỉnh; hình chỉ vẽ subset cho dễ nhìn.",
     },
-    "gpu-grid-final": {
-      title: "Toàn bộ GPU grid đã hoạt động đúng chưa?",
+    csr: {
+      title: "Count → scan → scatter",
+      description: "Theo count, offset và ID để biết mỗi vertex thuộc đúng một cell.",
+    },
+    "self-contact": {
+      title: "Hai lớp vải chạm nhau",
       description:
-        "Đổi số particle, kích thước cell, bán kính và seed; theo dõi mức lấp đầy, số ứng viên phải xét, số pass và mô hình thời gian.",
+        "Loại đỉnh kề topology, kiểm khoảng cách và thấy giới hạn của contact theo đỉnh.",
+    },
+    normals: {
+      title: "Đọc nếp gấp và độ giãn",
+      description:
+        "Normal, wireframe và strain cùng giải thích một bề mặt, không thay bề mặt bằng heatmap.",
+    },
+    interaction: {
+      title: "Ghim, kéo và hủy an toàn",
+      description:
+        "Tách camera/drag/pin, thử Pause và đổi preset mà không giữ reference vertex cũ.",
+    },
+    validation: {
+      title: "Kiểm chứng có điểm dừng",
+      description:
+        "Chạy hoặc hủy fixture CPU hữu hạn; không sinh số đo GPU hay chứng nhận scale giả.",
+    },
+    showcase: {
+      title: "Xưởng vải hoàn chỉnh",
+      description: "Đổi cảnh treo, phủ sphere hoặc rơi lên bàn; so hình sạch với các lớp debug.",
     },
   },
 } satisfies ProjectLabMeta;

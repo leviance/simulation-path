@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tô màu constraints để GPU không ghi đè nhau
+
+## Ta cần giải quyết điều gì?
+
+CPU ở bài trước lần lượt sửa các cạnh nên không có hai lệnh cùng ghi position. Nếu chuyển mỗi cạnh thành một invocation GPU rồi dispatch tất cả, hai cạnh chung vertex có thể đọc cùng vị trí cũ và ghi đè correction của nhau. Lỗi này có thể lúc thấy lúc không và không biến mất chỉ vì thêm một barrier cuối shader.
+
+Ta muốn chuyển đúng mạng vải lên GPU, giữ state ở đó và có lịch writer rõ ràng. Tô màu constraints là cách của bản chuẩn: trong một màu, hai cạnh không dùng chung endpoint. Giữa các màu, dispatch sau nhìn thấy kết quả màu trước.
+
+## Hiểu ý tưởng trước khi viết code
+
+“Màu” ở đây là nhãn lịch thực thi, không phải màu vật liệu. Mạng lưới có cấu trúc cho phép dùng 12 nhóm: hai ngang, hai dọc, hai cho mỗi hướng shear, hai cho bend ngang và hai cho bend dọc. Endpoint ID được kiểm bằng fixture CPU; không chỉ nhìn hình màu rồi cho rằng race đã hết.
+
+Mỗi màu có một range liên tục trong constraint SSBO. Một invocation chỉ đọc/ghi hai positions của cạnh mình và một lambda riêng. Vì endpoint không trùng trong màu, không cần float atomic cho position. Đây là colored Gauss–Seidel: các màu có thứ tự, trong màu các cạnh độc lập.
+
+Barrier trong GLSL chỉ đồng bộ các invocation cùng workgroup. Hai cạnh ở workgroup khác không được “gặp nhau” ở barrier ấy. Host kết thúc một dispatch, phát memory barrier theo consumer rồi dispatch màu sau. Renderer sau cùng đọc cùng position buffer; không readback toàn mesh để CPU upload lại.
+
+<InteractiveLab demo="cloth-workshop" mode="coloring" />
+
+## Bắt tay xây dựng
+
+### 1. Tách stretch thành nhóm không chung đầu mút
+
+```cpp title="include/cloth_topology.hpp — tô màu cạnh ngang và dọc"
+if (column + 1U < settings.side) {
+    add(column % 2U, a, a + 1U, 0.0F);
+}
+if (row + 1U < settings.side) {
+    add(2U + row % 2U, a, a + settings.side, 0.0F);
+}
+```
+
+Cạnh ngang bắt đầu ở cột chẵn không chung endpoint với cạnh ngang chẵn kế tiếp: [0,1] rồi [2,3]. Màu lẻ xử lý [1,2] rồi [3,4]. Cạnh dọc dùng parity hàng và một miền màu khác. Không gom hai hướng vào cùng màu chỉ vì cùng parity: một vertex có thể tham gia cả ngang lẫn dọc.
+
+### 2. Dispatch theo range của từng màu
+
+```cpp title="include/cloth_gpu.hpp — một dispatch cho một màu"
+for (std::uint32_t color = 0U; color < 12U; ++color) {
+    solverBindings();
+    const auto first = state_->topology.colorOffsets[color];
+    const auto count = state_->topology.colorOffsets[color + 1U] - first;
+    uintUniform(solver_, "uOffset", first);
+    uintUniform(solver_, "uRange", count);
+    dispatchSolver(2U, count);
+}
+```
+
+Offset/range chọn đúng phần constraint buffer; id của invocation không phải vertex ID. Dispatch dùng ceil division và shader guard id>=range trước đọc edge. Hàm dispatchSolver nối mỗi pass bằng GL_SHADER_STORAGE_BARRIER_BIT. CPU chỉ lập lịch theo topology tĩnh, không giải positions trong frame.
+
+### 3. Giữ correction XPBD và lambda đúng ownership
+
+```glsl title="shaders/cloth_solver.comp — mỗi cạnh ghi hai endpoint riêng"
+float increment = (-(distance - edge.rest) - alpha * lambdas[edgeId]) / denominator;
+lambdas[edgeId] += increment;
+vec3 direction = delta / distance;
+positions[edge.a].xyz = a.xyz + a.w * increment * direction;
+positions[edge.b].xyz = b.xyz - b.w * increment * direction;
+```
+
+Công thức không đổi so CPU; phần mới là ownership của bộ nhớ. Lambda có một writer theo edgeId, positions có writer duy nhất trong màu. Diagnostic counter được tăng khi cạnh vào range solve, trước khi bỏ gradient zero hoặc hai đầu ghim; nó đếm constraint visits, không phải số correction khác zero và không làm position an toàn thay coloring. Constraint count topology là số cạnh duy nhất, còn visits còn nhân số substeps và iterations.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_5. Dùng cùng snapshot nhỏ, h, compliance, số vòng và thứ tự 12 màu như CPU baseline. So một bước trước khi so nhiều giây: quỹ đạo dài có thể phân kỳ do số thực và ordering, không nên lấy hình cuối làm oracle duy nhất.
+
+Trước khi dispatch, đọc OpenGL context và giới hạn compute/SSBO/workgroup; hỗ trợ đồ họa không tự có nghĩa hỗ trợ compute. Shader dùng local size 256 và các buffer std430 đã công bố. Constraint là 16 byte; lambda ở buffer float riêng. Cấp phát thất bại phải báo lỗi/giữ last-good state, không ngầm quay về physics CPU rồi vẫn gắn nhãn GPU.
+
+## Thử tạo lỗi
+
+1. Gộp cả parity chẵn/lẻ của cạnh ngang vào một dispatch. Lặp cùng snapshot nhiều lần và so endpoint quanh chỗ nối; đây là race dù một số lần ảnh trông bình thường.
+2. Bỏ memory barrier giữa hai màu nhưng giữ barrier trong shader. Giải thích vì sao workgroup barrier không công bố writes cho dispatch consumer kế tiếp; phục hồi trước đối chiếu.
+
+## Checklist hoàn thành
+
+- Fixture chứng minh không có endpoint trùng trong mỗi màu; mọi constraint nằm đúng một range.
+- Guard phần đuôi trước đọc edge và vị trí; layout CPU/GLSL thống nhất.
+- Toàn bộ màu dùng cùng state GPU; mỗi cạnh giữ lambda riêng, không full-mesh readback mỗi frame.
+- Phân biệt writer ownership, memory visibility và counter telemetry; không coi một atomic count là giải pháp race.
+
+## Hướng mở rộng
+
+Đổi thứ tự màu rồi so residual sau 1, 2 và 4 vòng. Kết quả hữu hạn có thể khác mà không có race; hãy ghi schedule vào phép kiểm. Tiếp theo, [khóa substep, lambda và damping](/projects/cloth-workshop/06-substep-lambda-va-damping).

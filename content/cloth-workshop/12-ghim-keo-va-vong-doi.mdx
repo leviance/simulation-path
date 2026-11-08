@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghim, kéo và kết thúc thao tác an toàn
+
+## Ta cần giải quyết điều gì?
+
+Một demo chạy tự động chưa thành xưởng vải. Người dùng cần chọn vùng, ghim, kéo và buông ra, rồi tiếp tục quan sát từ góc khác. Nhưng một vertex ID chỉ có nghĩa trong topology hiện tại; giữ ID qua Reset hoặc đổi resolution có thể kéo nhầm đỉnh của mesh mới.
+
+Input cần mô hình và vòng đời rõ như solver. Không teleport một điểm tới chuột ở mọi frame rồi gọi đó là force. Cũng không giữ trạng thái dragging khi cửa sổ mất focus, người dùng hủy hoặc pointer capture đã mất.
+
+## Hiểu ý tưởng trước khi viết code
+
+Camera/ray/projectPoint là scaffold cung cấp trong gói. Camera đổi tọa độ màn hình thành hướng ray world; app nối helper đó với phép chọn vùng/vertex, plane kéo và Input gửi GPU. Picking không được readback toàn mesh mỗi frame. Một probe/chọn mẫu hữu hạn là công cụ input có giới hạn, không phải physics CPU giải hộ.
+
+Bản chuẩn kéo vùng hình vuông quanh node chọn trong tọa độ hàng/cột, bán kính node có giới hạn. Target world tạo displacement chung cho vùng, chặn độ dời tối đa 6h mét mỗi substep. Như vậy tốc độ kéo bị chặn khoảng 6 m/s; đây là **kinematic displacement constraint**, không phải một lực Newton hay mô hình tay người có stiffness đầy đủ.
+
+Pause dừng tiến thời gian, không khóa camera/inspector. Trong native, cả pin edit lẫn drag target đều **được xếp chờ bước mô phỏng kế tiếp**; nhấn N single-step mới áp chúng. Canvas cho pin edit có hiệu lực ngay nhưng drag vẫn đợi bước; đây là policy giao diện khác nhau được công bố, không lấy một bản để suy trạng thái bản kia.
+
+<InteractiveLab demo="cloth-workshop" mode="interaction" />
+
+## Bắt tay xây dựng
+
+### 1. Nối tọa độ nhìn với ray world
+
+```cpp title="include/cloth_camera.hpp — điểm nối camera ray"
+Vec3 ray(float x, float y, float aspect) const {
+    const float tangent = std::tan(0.48F);
+    return normalized(forward() + right() * (x * aspect * tangent) + up() * (y * tangent));
+}
+```
+
+X/Y ở đây là tọa độ chuẩn hóa của viewport, không phải pixel toàn cửa sổ. Y màn hình thường tăng xuống trong khi ray world tăng lên; app phải đổi dấu một lần đúng chỗ. Aspect lấy vùng cảnh thực. Ray helper không tự chọn vertex và không thay mặt phẳng kéo. GpuPicker trong cloth_pick.hpp reduction chọn ID trên GPU rồi readback một PickResult 32 byte sau fence; app trong cloth_application.hpp dùng vị trí ấy và camera đã lưu để dựng plane kéo. Không copy toàn positions về CPU mỗi frame để tìm điểm. Source đầy đủ cuối bài cho toàn đường gọi.
+
+### 2. Xác định vùng kéo theo topology hiện tại
+
+```glsl title="shaders/cloth_solver.comp — vùng kéo có giới hạn ID"
+bool inDragRegion(uint id) {
+    if (uDragId >= uCount) {
+        return false;
+    }
+    ivec2 node = ivec2(int(id % uSide), int(id / uSide));
+    ivec2 center = ivec2(int(uDragId % uSide), int(uDragId / uSide));
+    return all(lessThanEqual(abs(node - center), ivec2(int(uDragRadius))));
+}
+```
+
+Vùng này theo lưới rest topology, không phải mọi đỉnh tình cờ đang gần chuột trong world. Hai lớp vải chồng lên nhau không vì vậy cùng bị kéo. Pin vẫn có weight zero và không nhận drag. Trước khi publish topology mới, app hủy drag/candidate selection/job cũ; guard range không đủ thay generation/lifecycle vì một ID cũ vẫn có thể nằm trong range mới.
+
+### 3. Chặn displacement trước khi áp cho vùng
+
+```glsl title="shaders/cloth_solver.comp — target không teleport vải"
+vec3 displacement = vec3(0.0);
+if (uDragId < uCount) {
+    displacement = limitVector(uDragTarget - positions[uDragId].xyz, 6.0 * uH);
+}
+diagnostic[24] = floatBitsToUint(displacement.x);
+diagnostic[25] = floatBitsToUint(displacement.y);
+diagnostic[26] = floatBitsToUint(displacement.z);
+```
+
+Pass một invocation ghi displacement dùng chung; các pass sau đọc nó và áp trên previous của từng vertex trong vùng. Cùng displacement giữ tương đối vùng kéo thay vì ép mọi vertex vào một target duy nhất. Sau đó constraints/contact có thể cạnh tranh với input; residual cần báo thật, không giả rằng mọi yêu cầu luôn thỏa tuyệt đối.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_12. Tab đổi Camera/Drag/Pin; chuột phải orbit, chuột giữa pan, wheel zoom; các phím mũi tên và Q/E cũng điều khiển camera. Trong Pin tool, click thêm/bỏ ghim; P đổi pin của vertex đang chọn. Space Pause, N single-step, R Reset. Thử chuỗi: chọn vùng → kéo nhẹ → release → kéo lại → X cancel → mất focus → trở lại; vải không được tiếp tục chạy theo con trỏ sau khi thao tác đã kết thúc. Escape đóng cửa sổ, không phải nút Cancel giữ app mở.
+
+Khi Pause, orbit/pan/zoom và đọc inspector vẫn được; pin/drag target native đợi N hoặc Resume, không âm thầm tiến thời gian. Phím 1–3 chọn treo/phủ sphere/rơi bàn; 4/5/6/7 chọn side 17/65/321/1001. Đổi preset/resolution trong lúc kéo/chạy job: thao tác cũ phải kết thúc trước publish. Reset tái tạo đúng preset/configuration đang chọn, không giữ velocity/ID/input của mesh cũ. Allocation mới lỗi phải giữ active scene trước hợp lệ.
+
+## Thử tạo lỗi
+
+1. Bỏ giới hạn 6h và đưa target sang phía đối diện scene trong một frame. Quan sát residual/penetration, rồi giải thích vì sao số vòng solve hữu hạn không thể làm teleport trở thành chuyển động an toàn.
+2. Cố giữ dragId sau đổi resolution. Nếu ID còn trong range, guard shader vẫn cho qua nhưng nó trỏ vertex khác; ghi lý do cần hủy thao tác ở tầng application trước reset.
+
+## Checklist hoàn thành
+
+- Camera/ray/picking scaffold có điểm nối rõ; native không full-mesh readback mỗi frame để kéo.
+- Drag là vùng topology có giới hạn displacement, không giả là lực; pin/drag cùng state GPU.
+- Release/cancel/blur/mất capture/đổi topology đều dọn input/job cũ; không giữ reference buffer cũ.
+- Pause không khóa camera/inspector, single-step đúng một bước và policy chỉnh pin/drag được quan sát, ghi rõ.
+
+## Hướng mở rộng
+
+Thử kéo cùng target bằng hai h khác nhau nhưng cùng tốc độ con trỏ, so displacement tối đa mỗi bước và mỗi giây. Tiếp theo, [kiểm chứng và đo hiệu năng hữu hạn](/projects/cloth-workshop/13-kiem-chung-va-do-hieu-nang).

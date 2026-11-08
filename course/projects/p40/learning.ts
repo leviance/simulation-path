@@ -1,309 +1,344 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/grid_math.hpp",
-  "include/gl_api.hpp",
-  "include/compute_program.hpp",
-  "include/gpu_scan.hpp",
-  "include/gpu_grid_engine.hpp",
-  "shaders/clear_counts.comp",
-  "shaders/count_cells.comp",
-  "shaders/scan_uint.comp",
-  "shaders/uniform_add_uint.comp",
-  "shaders/prepare_cursors.comp",
-  "shaders/scatter_indices.comp",
-  "shaders/find_neighbors.comp",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
   guides: {
     "p40-l01": {
-      focus:
-        "Xác định layout của particle, GridSpec, cách tính cell ID theo hàng và bản tìm láng giềng trên CPU trước khi dựng grid trên GPU.",
+      focus: "Có mặt vải chạy độc lập trước khi thêm solver.",
       expected:
-        "Checkpoint 1 sinh cùng positions khi seed giống nhau, ánh xạ bốn mép đúng và brute-force summary loại chính particle đang hỏi.",
-      files,
+        "Perspective/depth, hai mặt, pattern và camera; chưa gọi đây là cloth GPU nghiệm thu.",
+      files: [
+        "include/cloth_topology.hpp",
+        "include/cloth_camera.hpp",
+        "include/cloth_renderer.hpp",
+      ],
       steps: [
         {
-          title: "Giữ cấu trúc dữ liệu nhỏ và rõ",
-          explanation:
-            "Position chỉ có x/y float và NeighborSummary đúng 16 byte; static_assert giữ C++ tương thích std430 thay vì đoán alignment.",
+          title: "Chạy scaffold",
+          explanation: "Window/loader/camera/ray helpers có trong gói, không cần project khác.",
         },
         {
-          title: "Tách GridSpec khỏi storage",
+          title: "Theo một vertex",
           explanation:
-            "GridSpec chỉ trả columns, rows, cellCount và cell ID; counts/offsets/sorted indices sẽ được GPU engine sở hữu ở bài sau.",
+            "Rest position và tam giác tạo bề mặt; renderer không sinh chuyển động thay solver.",
         },
         {
-          title: "Viết bản CPU có quy tắc phân xử",
+          title: "Nhìn hai phía",
           explanation:
-            "CPU quét toàn bộ positions, bỏ self, kiểm radius squared rồi chọn distance nhỏ hơn hoặc index nhỏ hơn khi hòa.",
+            "Orbit/pan/zoom thay camera, không sửa mesh; depth và normal quyết định hình thấy được.",
         },
       ],
     },
     "p40-l02": {
-      focus:
-        "Clear cellCounts rồi dùng atomicAdd một lần cho mỗi particle để tạo occupancy histogram đúng khi nhiều invocation tranh cùng cell.",
-      expected:
-        "Checkpoint 2 báo tổng counts bằng particle count; phiên bản cố ý bỏ atomic trong Canvas tạo lost update có thể quan sát.",
-      files,
+      focus: "Prediction đi từ lực và h, không từ hàm sin.",
+      expected: "Previous giữ vị trí đầu substep, pin không rơi, velocity có đơn vị m/s.",
+      files: ["include/cloth_cpu.hpp", "include/cloth_math.hpp", "shaders/cloth_solver.comp"],
       steps: [
         {
-          title: "Clear bằng compute pass có bounds guard",
-          explanation:
-            "cellCount và particleCount là hai domain khác nhau nên có group count và uniform riêng; tail invocation không được ghi buffer.",
+          title: "Khóa đơn vị",
+          explanation: "Position tính bằng m, h bằng s, gravity/wind acceleration bằng m/s².",
         },
         {
-          title: "Tính cell ID giống CPU",
+          title: "Dự đoán",
           explanation:
-            "Shader clamp column/row sau floor và dùng row*columns+column; cùng input phải cho cùng address ở hai phía.",
+            "Cộng gia tốc vào velocity rồi tiến vị trí; giữ previous cho bước velocity sau solve.",
         },
         {
-          title: "Atomic ở đúng contention point",
-          explanation:
-            "Mỗi particle chỉ tăng cell của nó; atomicAdd bảo toàn mọi increment mà không ép toàn grid qua một counter chung.",
+          title: "Giữ pin",
+          explanation: "Inverse mass zero không nhận gravity hoặc correction vị trí.",
         },
       ],
     },
     "p40-l03": {
-      focus:
-        "Tái sử dụng uint Blelloch scan để biến occupancy histogram thành CSR offsets mà không có CPU round-trip.",
-      expected:
-        "Checkpoint 3 cho counts [2,0,3,1] tạo offsets [0,2,2,5], total bằng offsets cuối cộng count cuối.",
-      files,
+      focus: "Tính một constraint có đáp án độc lập.",
+      expected: "Correction có hướng/khối lượng đúng; alpha/h² và lambda không bị bỏ qua.",
+      files: ["include/cloth_cpu.hpp", "include/cloth_topology.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Đọc counts như một mảng cần scan",
-          explanation:
-            "Cell c sở hữu đoạn bắt đầu tại offsets[c] dài counts[c]; exclusive scan chính là phép đóng gói các đoạn không chồng nhau.",
+          title: "Đo sai số",
+          explanation: "C=length(xb-xa)-restLength; gradient hai đầu ngược dấu.",
         },
         {
-          title: "Giữ block sums trên GPU",
-          explanation:
-            "Mỗi scan level ghi local prefixes và block sums; level nhỏ được scan tiếp rồi uniform-add trở xuống như Project 39.",
+          title: "Tính delta lambda",
+          explanation: "Mẫu số gồm inverse masses và compliance chia h²; lambda thuộc constraint.",
         },
         {
-          title: "Kiểm sentinel bằng công thức",
+          title: "Sửa hai đầu",
           explanation:
-            "Không cần offsets có C+1 phần tử: end của cell cuối là offsets[C-1]+counts[C-1], bắt buộc bằng N.",
+            "Đầu nhẹ dịch nhiều hơn, pin weight zero; zero length có hướng fallback hữu hạn.",
         },
       ],
     },
     "p40-l04": {
-      focus:
-        "Copy offsets sang cursors rồi atomic scatter để tạo sortedParticleIndices theo các đoạn CSR không chồng nhau.",
-      expected:
-        "Checkpoint 4 đặt mọi particle đúng đoạn cell, cursors kết thúc tại offset+count và không đòi thứ tự index trong đoạn.",
-      files,
+      focus: "Topology vật lý không trùng danh sách tam giác.",
+      expected: "CPU baseline nhỏ có stretch/shear/bend-distance, pin và residual.",
+      files: ["include/cloth_topology.hpp", "include/cloth_cpu.hpp"],
       steps: [
         {
-          title: "Bảo vệ offsets bất biến",
-          explanation:
-            "Scatter cần counter tăng dần nên dùng cellCursors riêng; nếu atomicAdd trực tiếp lên offsets thì query mất địa chỉ bắt đầu.",
+          title: "Tạo mặt lưới",
+          explanation: "ID hàng/cột ổn định, winding thống nhất, rest positions tách khỏi state.",
         },
         {
-          title: "Dùng slot trả về từ atomicAdd",
+          title: "Nối constraints",
           explanation:
-            "Giá trị cũ của cursor là slot độc quyền của invocation; sau increment không invocation nào nhận cùng slot.",
+            "Ngang/dọc stretch, chéo shear, hai cạnh xấp xỉ bend; không gọi là dihedral.",
         },
         {
-          title: "Validate membership, không validate order",
-          explanation:
-            "OpenGL không đảm bảo thứ tự giữa các atomic operation. Vì vậy ta chỉ kiểm mỗi index xuất hiện đúng một lần và thuộc đúng đoạn cell; không ép output phải có một thứ tự tùy ý.",
+          title: "Giải CPU nhỏ",
+          explanation: "Giữ cùng schedule và snapshot để baseline so được GPU sau này.",
         },
       ],
     },
     "p40-l05": {
-      focus:
-        "Tính candidate cell range từ position±radius và duyệt các đoạn CSR thay vì hard-code chín cell.",
-      expected:
-        "Checkpoint 5 thăm 1, 4, 6, 9 hoặc nhiều cell tùy vị trí/radius, không sinh row/column ngoài grid.",
-      files,
+      focus: "Mỗi vertex có một writer trong một màu.",
+      expected: "CPU kiểm coloring; dispatch theo màu, công bố SSBO writes trước màu sau.",
+      files: ["include/cloth_topology.hpp", "include/cloth_gpu.hpp", "shaders/cloth_solver.comp"],
       steps: [
         {
-          title: "Lấy AABB của circle",
-          explanation:
-            "min/max position đổi sang min/max cell bằng cùng cellSize rồi clamp; vòng lặp row/column thăm mỗi cell đúng một lần.",
+          title: "Tìm xung đột",
+          explanation: "Hai cạnh cùng đầu mút không cập nhật position đồng thời.",
         },
         {
-          title: "Đọc begin và count",
-          explanation:
-            "Mỗi candidate cell cung cấp begin=offsets[cell], end=begin+counts[cell]; sortedIndices dẫn về positions gốc.",
+          title: "Đóng gói theo màu",
+          explanation: "Color offsets cấp range; mỗi invocation giải một constraint trong range.",
         },
         {
-          title: "Đếm candidate work riêng",
-          explanation:
-            "NeighborSummary giữ visitedCandidates để phân biệt thuật toán đúng nhưng grid quá thô với thuật toán sai.",
+          title: "Nối dispatch",
+          explanation: "SHADER_STORAGE barrier theo consumer, không dựa barrier workgroup.",
         },
       ],
     },
     "p40-l06": {
-      focus:
-        "Lọc exact radius, loại self và chọn nearest bằng cặp khóa distance/index để không lệ thuộc scatter order.",
-      expected:
-        "Checkpoint 6 nhận particle đúng trên radius, loại điểm chỉ nằm trong AABB và chọn index nhỏ hơn khi hai distance bằng nhau.",
-      files,
+      focus: "Vòng đời lambda và thời gian rõ trước tăng scale.",
+      expected: "Reset lambda đầu substep, giữ qua iteration; damping rate không phải stiffness.",
+      files: ["include/cloth_gpu.hpp", "shaders/cloth_solver.comp"],
       steps: [
         {
-          title: "Loại self trước phép đo",
-          explanation:
-            "Particle hiện tại luôn nằm trong grid và có distance zero; không bỏ nó thì nearest luôn là chính nó.",
+          title: "Chia thời gian",
+          explanation: "h=frameStep/substeps; iteration lặp solve, không tiến thêm thời gian.",
         },
         {
-          title: "So distanceSquared",
+          title: "Đặt phạm vi multiplier",
           explanation:
-            "Bỏ sqrt trong inner loop nhưng vẫn giữ boundary bằng <= radiusSquared; sqrt chỉ cần khi hiển thị nearest distance.",
+            "Không reset mỗi màu/vòng, không warm-start qua substep khi chưa có mô hình.",
         },
         {
-          title: "Tie-break bằng index",
-          explanation:
-            "Nếu hai distance bằng nhau trong epsilon, index nhỏ hơn thắng; cùng membership luôn tạo cùng summary dù scatter đảo thứ tự.",
+          title: "Cập nhật velocity",
+          explanation: "Displacement sau solve chia h; damping rate 1/s dùng theo h.",
         },
       ],
     },
     "p40-l07": {
-      focus:
-        "Nối sáu loại compute pass thành một chuỗi rõ ràng: pass nào ghi buffer, pass nào đọc tiếp và barrier nào nằm giữa chúng.",
+      focus: "Tiếp xúc analytic có khoảng cách/normal kiểm được.",
       expected:
-        "Checkpoint 7 in clear→count→scan→prepare→scatter→neighbors; mọi compute edge dùng SHADER_STORAGE và readback edge dùng BUFFER_UPDATE.",
-      files,
+        "Plane/sphere/capsule, thickness m và friction fraction không đơn vị; pin không bị đẩy.",
+      files: ["include/cloth_cpu.hpp", "shaders/cloth_solver.comp"],
       steps: [
         {
-          title: "Gọi tên buffer trên từng cạnh",
-          explanation:
-            "Nhật ký ghi buffer được tạo, miền số phần tử và bước đọc tiếp theo; nhờ đó dữ liệu cũ có thể được truy ngược về đúng cạnh bị thiếu barrier.",
+          title: "Tính khoảng cách",
+          explanation: "Trừ radius/thickness đúng một lần; normal cùng quy ước CPU/GPU.",
         },
         {
-          title: "Đặt barrier sau bước ghi",
-          explanation:
-            "Sau dispatch ghi SSBO, glMemoryBarrier phải phù hợp với lệnh đọc kế tiếp: SHADER_STORAGE trước compute pass khác và BUFFER_UPDATE trước glGetBufferSubData.",
+          title: "Sửa penetration",
+          explanation: "Đẩy theo normal hữu hạn; tâm sphere/trục capsule có fallback rõ.",
         },
         {
-          title: "Không dùng ALL_BARRIER_BITS",
+          title: "Giảm trượt",
           explanation:
-            "Bit cụ thể cho biết bước kế tiếp là shader hay CPU readback, đồng thời giúp việc đọc và review code dễ kiểm chứng hơn.",
+            "Giảm tiếp tuyến theo tỷ lệ mỗi substep có contact; không phải compliance hoặc Coulomb friction.",
         },
       ],
     },
     "p40-l08": {
-      focus:
-        "Validate topology của CSR trước neighbor values, sau đó benchmark đúng chín samples bằng query ring không block.",
+      focus: "Grid là broad phase ba chiều.",
       expected:
-        "Checkpoint 8 bắt lost count, offset overlap, duplicate index và wrong nearest; benchmark kết thúc hữu hạn và bỏ query slot còn pending.",
-      files,
+        "Cell X/Y/Z, linear ID và stencil theo radius; không mất Z hoặc chép 3×3 hai chiều.",
+      files: ["include/cloth_grid.hpp", "shaders/cloth_grid.comp"],
       steps: [
         {
-          title: "Kiểm grid trước query",
-          explanation:
-            "sum counts, monotonic offsets, cursor end và particle permutation khoanh vùng lỗi build; chỉ khi chúng đạt mới so neighbor summary.",
+          title: "Đặt world bounds",
+          explanation: "Kiểm finite/miền cell trước chuyển uint; out-of-bounds có chính sách rõ.",
         },
+        { title: "Mã hóa 3D", explanation: "x + nx*(y+ny*z), kiểm phép nhân trước cấp phát." },
         {
-          title: "Đối chiếu toàn bộ hoặc lấy mẫu tùy quy mô",
-          explanation:
-            "Preset nhỏ được so toàn bộ; preset lớn dùng một tập index cố định, có thể tái lập, để phần kiểm tra CPU không làm ứng dụng đứng quá lâu.",
-        },
-        {
-          title: "Giới hạn benchmark",
-          explanation:
-            "Warm-up nằm ngoài query; vòng B submit đúng chín lần và timer ring chỉ lấy GL_QUERY_RESULT khi slot available.",
+          title: "Tìm range ứng viên",
+          explanation: "Radius/cell size quyết định stencil; candidate chưa phải contact.",
         },
       ],
     },
     "p40-l09": {
-      focus:
-        "Ghép việc thay workload an toàn, phần điều khiển, heatmap, kiểm tra kết quả, đo thời gian và cleanup thành GPU Grid Workbench hoàn chỉnh.",
-      expected:
-        "Bản final xử lý 1.000.003 particle; nếu preset mới tạo thất bại, workload đang chạy vẫn được giữ nguyên, và mọi program/query/buffer được xóa trước OpenGL context.",
-      files,
+      focus: "Dựng phân hoạch ID trên GPU.",
+      expected: "Counts→scan→cursors→scatter, tổng=N, mỗi ID đúng cell không mất/trùng.",
+      files: ["include/cloth_gpu.hpp", "include/cloth_scan.hpp", "shaders/cloth_grid.comp"],
       steps: [
         {
-          title: "Tạo workload mới xong rồi mới thay workload cũ",
-          explanation:
-            "Positions, GridSpec và toàn bộ buffer mới phải được tạo thành công trước khi engine xóa workload đang hiển thị.",
+          title: "Count từng cell",
+          explanation: "Atomic ở counters; clear mọi cell trước frame mới.",
         },
         {
-          title: "Đặt correctness cạnh timing",
-          explanation:
-            "Title/console báo validation, total scatter, max occupancy, pass count và GPU median cạnh nhau để con số nhanh không che output sai.",
+          title: "Scan nhiều tầng",
+          explanation: "Exclusive offset là đầu cell; block sums không về CPU.",
         },
         {
-          title: "Dọn resource theo thứ tự ngược",
+          title: "Scatter ID",
+          explanation: "Cursor riêng cấp slot; thứ tự atomic không ảnh hưởng predicate.",
+        },
+      ],
+    },
+    "p40-l10": {
+      focus: "Broad phase tìm gần, topology/predicate chọn contact.",
+      expected: "Loại self/kề, thickness theo vertex, ownership rõ và không hứa CCD.",
+      files: ["shaders/cloth_grid.comp", "include/cloth_grid.hpp", "include/cloth_cpu.hpp"],
+      steps: [
+        {
+          title: "Loại quan hệ topology",
+          explanation: "Không đẩy hai đầu cùng cạnh vải như hai lớp riêng biệt.",
+        },
+        {
+          title: "Kiểm khoảng cách",
+          explanation: "Predicate dùng thickness công bố; zero-distance có normal ổn định.",
+        },
+        {
+          title: "Gather correction",
+          explanation: "Đọc snapshot, ghi đầu ra riêng để nhiều cặp không tranh writer.",
+        },
+      ],
+    },
+    "p40-l11": {
+      focus: "Hình sạch/debug cùng đọc mesh đã solve.",
+      expected: "Normal theo tam giác hiện tại; strain khác residual; subset debug được công bố.",
+      files: [
+        "shaders/cloth_solver.comp",
+        "shaders/cloth.vert",
+        "shaders/cloth.frag",
+        "include/cloth_renderer.hpp",
+      ],
+      steps: [
+        {
+          title: "Tạo normal",
+          explanation: "Cross cạnh hiện tại, không dùng rest normal khi vải gập.",
+        },
+        {
+          title: "Tô độ giãn",
+          explanation: "Strain tương đối không đơn vị, residual khoảng cách có đơn vị m.",
+        },
+        {
+          title: "Giữ viewport dễ đọc",
+          explanation: "Pattern/ánh sáng hai mặt là chính, debug là lớp phụ.",
+        },
+      ],
+    },
+    "p40-l12": {
+      focus: "Input cũng có ownership và vòng đời.",
+      expected: "Pin/drag cùng GPU state, độ dời giới hạn; blur/reset/topology bỏ reference cũ.",
+      files: [
+        "include/cloth_camera.hpp",
+        "include/cloth_application.hpp",
+        "shaders/cloth_solver.comp",
+      ],
+      steps: [
+        {
+          title: "Nối ray helper",
+          explanation: "Camera scaffold cấp ray; app chọn vertex/vùng và giữ generation phù hợp.",
+        },
+        {
+          title: "Áp input có giới hạn",
+          explanation: "Pin weight zero, drag target không teleport ngoài miền mô hình.",
+        },
+        {
+          title: "Kết thúc mọi đường",
           explanation:
-            "Query, scan hierarchy, grid buffers và programs bị xóa khi context còn current; SDL context/window bị hủy sau cùng.",
+            "Release/cancel/blur/mất capture/đổi scene giải phóng thao tác trước buffer mới.",
+        },
+      ],
+    },
+    "p40-l13": {
+      focus: "Bằng chứng thuật toán khác GPU timing.",
+      expected:
+        "Oracle độc lập, finite/tolerance theo đơn vị, job có Cancel, median/độ phân tán Release.",
+      files: ["include/cloth_verify.hpp", "include/cloth_gpu.hpp", "tests/tests.cpp"],
+      steps: [
+        {
+          title: "Kiểm primitive",
+          explanation:
+            "Constraint/pin/analytic/CSR có oracle độc lập, không so một hàm với chính nó.",
+        },
+        {
+          title: "So cùng scheme",
+          explanation: "Snapshot/h/topology/color schedule giống nhau; NaN/Inf luôn fail.",
+        },
+        {
+          title: "Đo có điểm dừng",
+          explanation:
+            "Query ready trước đọc, warm-up/số mẫu hữu hạn; deadline/cancel là incomplete.",
+        },
+      ],
+    },
+    "p40-l14": {
+      focus: "Nghiệm thu sản phẩm chứ không chỉ source build được.",
+      expected: "≥100.000 đỉnh động GPU đủ pipeline; một triệu riêng, hình/input/native/ZIP riêng.",
+      files: ["src/main.cpp", "include/cloth_application.hpp", "include/cloth_gpu.hpp"],
+      steps: [
+        {
+          title: "Build sạch",
+          explanation: "C++20/SDL3 3.4.8/CMake 3.24; Debug/Release CTest riêng.",
+        },
+        {
+          title: "Đọc workload thật",
+          explanation: "Dynamic khác pinned/allocated/drawn; đủ constraints/contacts ở preset lớn.",
+        },
+        {
+          title: "Ghi hồ sơ",
+          explanation:
+            "Hardware/build/N/bytes/iterations/candidates/timing, hình/input; chưa đo không tự điền PASS.",
         },
       ],
     },
   },
   references: {
-    "p40-l01": [
-      { label: "Spatial Grid", href: "/glossary#spatial-grid", kind: "Thuật ngữ" },
-      { label: "std430", href: "/glossary#std430", kind: "Thuật ngữ" },
-    ],
+    "p40-l01": [{ label: "Camera và ray", href: "/glossary#camera-ray", kind: "Thuật ngữ" }],
     "p40-l02": [
-      {
-        label: "atomicAdd",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/atomicAdd.xhtml",
-        kind: "OpenGL API",
-      },
-      { label: "Atomic contention", href: "/glossary#atomic-contention", kind: "Thuật ngữ" },
+      { label: "XPBD và đơn vị", href: "/glossary#cloth-xpbd-compliance", kind: "Thuật ngữ" },
     ],
     "p40-l03": [
-      { label: "Exclusive prefix sum", href: "/glossary#exclusive-prefix-sum", kind: "Thuật ngữ" },
-      {
-        label: "Compressed sparse row",
-        href: "/glossary#compressed-sparse-row",
-        kind: "Thuật ngữ",
-      },
+      { label: "XPBD: bài báo gốc", href: "https://mmacklin.com/xpbd.pdf", kind: "Thuật ngữ" },
     ],
     "p40-l04": [
-      { label: "Atomic scatter", href: "/glossary#atomic-scatter", kind: "Thuật ngữ" },
-      {
-        label: "Shader Storage Buffer Object",
-        href: "/glossary#shader-storage-buffer-object",
-        kind: "Thuật ngữ",
-      },
+      { label: "Mô hình và sai số", href: "/glossary#cloth-material-and-error", kind: "Thuật ngữ" },
     ],
     "p40-l05": [
-      { label: "Candidate set", href: "/glossary#candidate-set", kind: "Thuật ngữ" },
-      { label: "Uniform Grid", href: "/glossary#spatial-grid", kind: "Thuật ngữ" },
+      {
+        label: "Constraint coloring",
+        href: "/glossary#cloth-constraint-coloring",
+        kind: "Thuật ngữ",
+      },
     ],
     "p40-l06": [
-      { label: "Squared distance", href: "/glossary#squared-distance", kind: "Thuật ngữ" },
-      {
-        label: "Deterministic tie-break",
-        href: "/glossary#deterministic-tie-break",
-        kind: "Thuật ngữ",
-      },
+      { label: "Compliance và lambda", href: "/glossary#cloth-xpbd-compliance", kind: "Thuật ngữ" },
     ],
     "p40-l07": [
-      {
-        label: "glMemoryBarrier",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glMemoryBarrier.xhtml",
-        kind: "OpenGL API",
-      },
-      { label: "GPU memory barrier", href: "/glossary#gpu-memory-barrier", kind: "Thuật ngữ" },
+      { label: "Tham số tiếp xúc", href: "/glossary#cloth-material-and-error", kind: "Thuật ngữ" },
     ],
-    "p40-l08": [
-      { label: "Structural invariant", href: "/glossary#structural-invariant", kind: "Thuật ngữ" },
+    "p40-l08": [{ label: "Grid 3D/CSR", href: "/glossary#cloth-csr-grid", kind: "Thuật ngữ" }],
+    "p40-l09": [{ label: "Grid 3D/CSR", href: "/glossary#cloth-csr-grid", kind: "Thuật ngữ" }],
+    "p40-l10": [
       {
-        label: "Asynchronous query ring",
-        href: "/glossary#asynchronous-query-ring",
+        label: "Self-contact theo đỉnh",
+        href: "/glossary#cloth-vertex-self-contact",
         kind: "Thuật ngữ",
       },
     ],
-    "p40-l09": [
+    "p40-l11": [
+      { label: "Mô hình và sai số", href: "/glossary#cloth-material-and-error", kind: "Thuật ngữ" },
+    ],
+    "p40-l12": [{ label: "Camera và ray", href: "/glossary#camera-ray", kind: "Thuật ngữ" }],
+    "p40-l13": [{ label: "GPU timer query", href: "/glossary#gpu-timer-query", kind: "Thuật ngữ" }],
+    "p40-l14": [
       {
-        label: "Transactional resource update",
-        href: "/glossary#transactional-resource-update",
+        label: "Đỉnh động và workload",
+        href: "/glossary#cloth-dynamic-vertices",
         kind: "Thuật ngữ",
       },
-      {
-        label: "glDeleteBuffers",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDeleteBuffers.xhtml",
-        kind: "OpenGL API",
-      },
+      { label: "SDL3 CMake", href: "https://wiki.libsdl.org/SDL3/README-cmake", kind: "CMake" },
     ],
   },
 } satisfies ProjectLearningAssets;

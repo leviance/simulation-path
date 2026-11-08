@@ -1,0 +1,308 @@
+#version 430 core
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 14
+#endif
+
+layout(local_size_x = 256) in;
+struct Constraint { uint a; uint b; float rest; float kind; };
+layout(std430, binding = 0) buffer PositionBlock { vec4 positions[]; };
+layout(std430, binding = 1) buffer PreviousBlock { vec4 previous[]; };
+layout(std430, binding = 2) buffer VelocityBlock { vec4 velocities[]; };
+layout(std430, binding = 3) buffer NormalBlock { vec4 normals[]; };
+layout(std430, binding = 4) readonly buffer ConstraintBlock { Constraint edges[]; };
+layout(std430, binding = 5) readonly buffer CorrectionBlock { vec4 corrections[]; };
+layout(std430, binding = 6) buffer DiagnosticsBlock { uint diagnostic[]; };
+layout(std430, binding = 7) buffer LambdaBlock { float lambdas[]; };
+
+uniform uint uPhase;
+uniform uint uCount;
+uniform uint uSide;
+uniform uint uEdgeCount;
+uniform uint uOffset;
+uniform uint uRange;
+uniform float uH;
+uniform vec2 uRestSpacing;
+uniform float uCompliance;
+uniform float uBendCompliance;
+uniform float uThickness;
+uniform float uDamping;
+uniform float uFriction;
+uniform float uGravity;
+uniform float uWind;
+uniform float uFloor;
+uniform vec3 uSphere;
+uniform float uSphereRadius;
+uniform vec3 uCapsuleA;
+uniform vec3 uCapsuleB;
+uniform float uCapsuleRadius;
+uniform uint uDragId;
+uniform uint uDragRadius;
+uniform vec3 uDragTarget;
+uniform uint uPinId;
+uniform int uPinAction;
+
+bool invalidVector(vec3 value) {
+    return any(isnan(value)) || any(isinf(value));
+}
+
+vec3 safeNormal(vec3 value) {
+    float magnitude = length(value);
+    if (magnitude < 1e-8) {
+        return vec3(0.0, 1.0, 0.0);
+    }
+    return value / magnitude;
+}
+
+vec3 limitVector(vec3 value, float maximum) {
+    float magnitude = length(value);
+    if (magnitude > maximum) {
+        return value * (maximum / magnitude);
+    }
+    return value;
+}
+
+vec3 capsuleCenter(vec3 point) {
+    vec3 segment = uCapsuleB - uCapsuleA;
+    float denominator = dot(segment, segment);
+    if (denominator < 1e-12) {
+        return uCapsuleA;
+    }
+    float fraction = clamp(dot(point - uCapsuleA, segment) / denominator, 0.0, 1.0);
+    return uCapsuleA + segment * fraction;
+}
+
+vec3 analyticProjection(vec3 point) {
+    point.y = max(point.y, uFloor + uThickness);
+    vec3 delta = point - uSphere;
+    float penetration = max(0.0, uSphereRadius + uThickness - length(delta));
+    point += safeNormal(delta) * penetration;
+    delta = point - capsuleCenter(point);
+    penetration = max(0.0, uCapsuleRadius + uThickness - length(delta));
+    point += safeNormal(delta) * penetration;
+    return clamp(point, vec3(-4.95, uFloor + uThickness, -4.95), vec3(4.95, 7.95, 4.95));
+}
+
+bool inDragRegion(uint id) {
+    if (uDragId >= uCount) {
+        return false;
+    }
+    ivec2 node = ivec2(int(id % uSide), int(id / uSide));
+    ivec2 center = ivec2(int(uDragId % uSide), int(uDragId / uSide));
+    return all(lessThanEqual(abs(node - center), ivec2(int(uDragRadius))));
+}
+
+vec3 enforceInput(uint id, vec3 point) {
+#if LAB_CHECKPOINT >= 12
+    if (inDragRegion(id) && positions[id].w > 0.0) {
+        vec3 displacement = vec3(uintBitsToFloat(diagnostic[24]), uintBitsToFloat(diagnostic[25]),
+            uintBitsToFloat(diagnostic[26]));
+        point = previous[id].xyz + displacement;
+    }
+#endif
+    return point;
+}
+
+void addTriangle(inout vec3 normal, uint id, uint a, uint b, uint c) {
+    if (id == a || id == b || id == c) {
+        normal += cross(positions[b].xyz - positions[a].xyz, positions[c].xyz - positions[a].xyz);
+    }
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (uPhase == 0u) {
+        if (id < uEdgeCount) {
+            lambdas[id] = 0.0;
+        }
+        return;
+    }
+    if (uPhase == 10u) {
+        if (id == 0u) {
+            vec3 displacement = vec3(0.0);
+            if (uDragId < uCount) {
+                displacement = limitVector(uDragTarget - positions[uDragId].xyz, 6.0 * uH);
+            }
+            diagnostic[24] = floatBitsToUint(displacement.x);
+            diagnostic[25] = floatBitsToUint(displacement.y);
+            diagnostic[26] = floatBitsToUint(displacement.z);
+        }
+        return;
+    }
+    if (uPhase == 2u) {
+#if LAB_CHECKPOINT >= 3
+        if (id >= uRange) {
+            return;
+        }
+        uint edgeId = uOffset + id;
+        atomicAdd(diagnostic[13], 1u);
+        Constraint edge = edges[edgeId];
+        vec4 a = positions[edge.a];
+        vec4 b = positions[edge.b];
+        vec3 delta = a.xyz - b.xyz;
+        float distance = length(delta);
+        if (distance < 1e-8) {
+            return;
+        }
+        float compliance = uCompliance;
+        if (edge.kind == 2.0) {
+            compliance = uBendCompliance;
+        }
+        float alpha = compliance / (uH * uH);
+        float denominator = a.w + b.w + alpha;
+        if (denominator <= 0.0) {
+            return;
+        }
+        float increment = (-(distance - edge.rest) - alpha * lambdas[edgeId]) / denominator;
+        lambdas[edgeId] += increment;
+        vec3 direction = delta / distance;
+        positions[edge.a].xyz = a.xyz + a.w * increment * direction;
+        positions[edge.b].xyz = b.xyz - b.w * increment * direction;
+#endif
+        return;
+    }
+    if (uPhase == 7u) {
+        if (id < uEdgeCount) {
+            Constraint edge = edges[id];
+            float distance = length(positions[edge.a].xyz - positions[edge.b].xyz);
+            float residual = abs(distance - edge.rest);
+            atomicMax(diagnostic[7], floatBitsToUint(residual));
+            atomicMax(diagnostic[6], floatBitsToUint(residual / max(edge.rest, 1e-8)));
+            if (edge.kind < 2.0) {
+                float stretch = max(0.0, distance / max(edge.rest, 1e-8) - 1.0);
+                atomicMax(diagnostic[22], floatBitsToUint(stretch));
+            }
+        }
+        return;
+    }
+    if (id >= uCount) {
+        return;
+    }
+    if (uPhase == 1u) {
+        vec4 position = positions[id];
+#if LAB_CHECKPOINT >= 12
+        if (id == uPinId && uPinAction >= 0) {
+            position.w = 1.0;
+            if (uPinAction == 1) {
+                position.w = 0.0;
+            }
+        }
+#endif
+        previous[id] = position;
+        positions[id] = position;
+        if (position.w == 0.0) {
+            velocities[id] = vec4(0.0);
+            return;
+        }
+#if LAB_CHECKPOINT >= 2
+        vec3 velocity = limitVector(velocities[id].xyz + vec3(uWind, -uGravity, 0.0) * uH, 20.0);
+        velocities[id] = vec4(velocity, 0.0);
+        positions[id].xyz = enforceInput(id, position.xyz + velocity * uH);
+#endif
+        return;
+    }
+    if (uPhase == 3u || uPhase == 4u) {
+        if (positions[id].w == 0.0) {
+            return;
+        }
+        vec3 point = positions[id].xyz;
+#if LAB_CHECKPOINT >= 10
+        if (uPhase == 4u && diagnostic[18] == 0u) {
+            point += corrections[id].xyz;
+        }
+#endif
+        point = enforceInput(id, point);
+#if LAB_CHECKPOINT >= 7
+        vec3 projected = analyticProjection(point);
+        if (length(projected - point) > 1e-7) {
+            atomicAdd(diagnostic[21], 1u);
+        }
+        point = projected;
+#endif
+        positions[id].xyz = point;
+        return;
+    }
+    if (uPhase == 5u) {
+        if (positions[id].w == 0.0) {
+            velocities[id] = vec4(0.0);
+            return;
+        }
+#if LAB_CHECKPOINT >= 6
+        vec3 point = positions[id].xyz;
+        vec3 velocity = (point - previous[id].xyz) / uH;
+        vec3 normal = vec3(0.0);
+#if LAB_CHECKPOINT >= 7
+        if (point.y < uFloor + uThickness + 1e-4) {
+            normal = vec3(0.0, 1.0, 0.0);
+        }
+        if (length(point - uSphere) < uSphereRadius + uThickness + 1e-4) {
+            normal = safeNormal(point - uSphere);
+        }
+        vec3 center = capsuleCenter(point);
+        if (length(point - center) < uCapsuleRadius + uThickness + 1e-4) {
+            normal = safeNormal(point - center);
+        }
+#endif
+        if (length(normal) > 0.0) {
+            velocity -= normal * min(0.0, dot(velocity, normal));
+            vec3 tangent = velocity - normal * dot(velocity, normal);
+            velocity -= tangent * uFriction;
+        }
+        velocities[id] = vec4(limitVector(velocity * exp(-uDamping * uH), 20.0), 0.0);
+#endif
+        return;
+    }
+    if (uPhase == 6u) {
+        vec3 normal = vec3(0.0);
+        ivec2 node = ivec2(int(id % uSide), int(id / uSide));
+        for (int dy = -1; dy <= 0; ++dy) {
+            for (int dx = -1; dx <= 0; ++dx) {
+                ivec2 cell = node + ivec2(dx, dy);
+                if (any(lessThan(cell, ivec2(0))) || any(greaterThanEqual(cell, ivec2(int(uSide) - 1)))) {
+                    continue;
+                }
+                uint a = uint(cell.y) * uSide + uint(cell.x);
+                addTriangle(normal, id, a, a + uSide, a + 1u);
+                addTriangle(normal, id, a + 1u, a + uSide, a + uSide + 1u);
+            }
+        }
+        float strain = 0.0;
+        if (id % uSide + 1u < uSide) {
+            float rest = uRestSpacing.x;
+            strain = abs(length(positions[id + 1u].xyz - positions[id].xyz) - rest) / max(rest, 1e-6);
+        }
+        if (id + uSide < uCount) {
+            float rest = uRestSpacing.y;
+            strain = max(strain, abs(length(positions[id + uSide].xyz - positions[id].xyz) - rest) / max(rest, 1e-6));
+        }
+        normals[id] = vec4(safeNormal(normal), strain);
+        return;
+    }
+    if (uPhase == 8u) {
+        atomicAdd(diagnostic[2], 1u);
+        if (id == 0u && diagnostic[3] + diagnostic[21] < diagnostic[3]) {
+            atomicOr(diagnostic[10], 4u);
+        }
+        vec3 point = positions[id].xyz;
+        if (invalidVector(point) || invalidVector(velocities[id].xyz) || invalidVector(normals[id].xyz)) {
+            atomicAdd(diagnostic[9], 1u);
+            atomicOr(diagnostic[10], 2u);
+        }
+        if (positions[id].w == 0.0) {
+            atomicAdd(diagnostic[1], 1u);
+        } else {
+            atomicAdd(diagnostic[0], 1u);
+        }
+        float penetration = max(0.0, uFloor + uThickness - point.y);
+        penetration = max(penetration, uSphereRadius + uThickness - length(point - uSphere));
+        penetration = max(penetration, uCapsuleRadius + uThickness - length(point - capsuleCenter(point)));
+        atomicMax(diagnostic[8], floatBitsToUint(max(penetration, 0.0)));
+        return;
+    }
+    if (uPhase == 9u) {
+        // Host binds rollback position/velocity snapshots to previous/corrections only for this pass.
+        if (diagnostic[10] != 0u) {
+            positions[id] = previous[id];
+            velocities[id] = corrections[id];
+        }
+    }
+}

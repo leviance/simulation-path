@@ -1,0 +1,78 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm vùng tiếp xúc trong grid ba chiều
+
+## Ta cần giải quyết điều gì?
+
+Hai lớp vải có thể tới gần nhau ở bất kỳ hướng nào trong không gian. Kiểm mọi cặp trên N đỉnh tốn bậc N²; với hơn một trăm nghìn đỉnh, đó không phải đường chạy chấp nhận được. Grid giúp thu hẹp vùng cần xét, nhưng không tự quyết định hai đỉnh đã chạm nhau.
+
+Ta không chuyển scene thành một grid 2D để dễ làm. Position có X/Y/Z thật; cell, stencil và bounds cũng phải có ba chiều. Bài này chốt phép ánh xạ, bài sau mới dựng các đoạn ID dạng CSR trên GPU.
+
+## Hiểu ý tưởng trước khi viết code
+
+Grid bao miền world hữu hạn. Với cell size s và minimum m, coordinate là floor((position−m)/s), rồi clamp theo chính sách biên. Cell ID row-major là:
+
+$$id=c_x+n_x(c_y+n_yc_z).$$
+
+Đây là index, không phải hash tùy ý; mỗi bộ coordinate hợp lệ có một ID riêng. Số cells nx·ny·nz cần tính bằng số nguyên đủ rộng trước cấp phát. Grid dense có thể tốn bộ nhớ lớn ngay cả khi phần lớn cell rỗng; N vertices nhỏ không tự bảo đảm grid nhỏ.
+
+Bản chuẩn chọn s=max(4·spacing,2t). Vì radius contact theo đỉnh là 2t≤s, duyệt 3×3×3 cells quanh vertex là đủ cho predicate đó. Nếu đổi cell size nhỏ hơn 2t, phải tính q=ceil(2t/s) và stencil (2q+1)³; không giữ 27 cells rồi âm thầm bỏ contact. Vải có thể gập thành nhiều lớp trong cùng cell; candidate budget sẽ bảo vệ chi phí ở Bài 10.
+
+<InteractiveLab demo="cloth-workshop" mode="grid" />
+
+## Bắt tay xây dựng
+
+### 1. Chọn cell size và tính số cell bằng miền vật lý
+
+```cpp title="include/cloth_grid.hpp — kế hoạch grid dense"
+const float spacing = settings.extent / static_cast<float>(settings.side - 1U);
+grid.cellSize = std::max(4.0F * spacing, 2.0F * settings.thickness);
+grid.nx = static_cast<std::uint32_t>(std::ceil(10.0F / grid.cellSize));
+grid.ny = static_cast<std::uint32_t>(std::ceil(8.0F / grid.cellSize));
+grid.nz = grid.nx;
+```
+
+Miền X/Z rộng 10 m và Y cao 8 m được công bố, không phải bounds tính từ vài vertex đầu. Analytic projection giữ state trong miền an toàn tương ứng; diagnostics bắt non-finite. Cell size này phục vụ broad phase, không phải thickness mới và không sửa rest length.
+
+### 2. Chuyển world position sang coordinate có clamp rõ
+
+```glsl title="shaders/cloth_grid.comp — coordinate ba chiều"
+ivec3 cellCoordinate(vec3 point) {
+    ivec3 coordinate = ivec3(floor((point - vec3(-5.0, 0.0, -5.0)) / uCellSize));
+    return clamp(coordinate, ivec3(0), ivec3(uDimensions) - ivec3(1));
+}
+```
+
+Floor khác truncate đối với tọa độ âm. Clamp là chính sách biên để point sát mép không tạo index ngoài range, không phải lý do cho phép input NaN/Inf. Việc kiểm finite và miền an toàn diễn ra trước khi publish state; một NaN không trở thành dữ liệu hợp lệ chỉ vì sau đó gọi clamp.
+
+### 3. Mã hóa coordinate thành cell ID
+
+```glsl title="shaders/cloth_grid.comp — ID row-major"
+uint cellIndex(ivec3 coordinate) {
+    return uint(coordinate.x) + uDimensions.x * (uint(coordinate.y) + uDimensions.y * uint(coordinate.z));
+}
+```
+
+Ví dụ dimensions (4,3,2), coordinate (1,2,1) cho ID=1+4·(2+3)=21. Cell cuối (3,2,1) có ID=23 trong tổng 24 cells. Thử một điểm có cùng X/Y nhưng Z khác: ID phải đổi một lớp nx·ny. Nếu chỉ nhân ny mà quên nx, hai vùng khác nhau có thể ghi chung counter dù mọi truy cập vẫn trong buffer.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_8, xem cell overlay cho subset và inspector của một vertex. Ở mốc này GPU đã clear/count theo vị trí đang solve; CSR và contact chưa hoàn chỉnh nên đừng lấy count heatmap làm bằng chứng self-contact. Các cells phải dựng lại từ position hiện tại, không từ rest position hoặc snapshot frame trước.
+
+Kiểm điểm minimum, maximum, sát biên âm/dương, cell rỗng và nhiều điểm trùng. Có đáp án coordinate/ID viết tay cho grid nhỏ 4×3×2. Tăng cell size để quan sát số cell giảm nhưng occupancy tăng; chưa kết luận nhanh hơn trước khi biết số candidates. Bộ nhớ vừa không có nghĩa chi phí traversal an toàn.
+
+## Thử tạo lỗi
+
+1. Bỏ Z trong cellIndex. Hai lớp vải cách xa theo chiều sâu đột nhiên chung bucket; dùng hai point cùng X/Y khác Z để phát hiện không cần nhìn animation.
+2. Giảm cell size xuống dưới 2t nhưng giữ stencil ±1. Đặt cặp cách nhau dưới 2t ở cells cách nhau hai bước và kiểm contact bị mất; phục hồi hoặc mở rộng range đúng.
+
+## Checklist hoàn thành
+
+- Position/cell/stencil đều ba chiều; fixture row-major và cell cuối có đáp án độc lập.
+- Công bố miền, clamp, finite policy và lý do stencil 27 cells đủ với cell size chuẩn.
+- Số cells/phép nhân/bộ nhớ được kiểm trước cấp phát; grid count không được gọi là contact.
+- Dựng grid từ state hiện tại và vẽ subset chỉ để đọc hình, không bỏ vertices khỏi workload.
+
+## Hướng mở rộng
+
+Giữ cùng positions, thử s và 2s rồi ghi số cells/occupancy/candidate estimate. Dự đoán cấu hình nào bị chi phí clear dense grid chi phối. Tiếp theo, [dựng CSR bằng count, scan và scatter](/projects/cloth-workshop/09-csr-count-scan-scatter).

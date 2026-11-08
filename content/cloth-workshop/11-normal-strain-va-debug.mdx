@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc nếp gấp bằng normals, strain và debug
+
+## Ta cần giải quyết điều gì?
+
+Solver có thể đã làm vải gập, nhưng nếu renderer giữ normal của mặt phẳng nghỉ, ánh sáng vẫn nói rằng bề mặt phẳng. Ngược lại, một shader màu đẹp không chứng minh solver đúng. Ta cần normal, pattern và các lớp debug cùng đọc chính mesh sau solve.
+
+Viewport chính vẫn là tấm vải đang biến dạng. Wireframe, strain, ghim, thickness và cell/contact subset chỉ giúp trả lời một câu hỏi cụ thể; không thay toàn cảnh bằng heatmap rồi mất nếp gấp cần quan sát.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với tam giác (a,b,c), cross(b−a,c−a) cho vector vuông góc có độ lớn gấp đôi diện tích. Cộng các vector này quanh một đỉnh rồi chuẩn hóa là normal trung bình có trọng số diện tích. Tính từ positions hiện tại, không từ rest state. Tam giác suy biến cần fallback hữu hạn, không normalize zero.
+
+Strain khoảng cách là |r−L|/L, không có đơn vị; residual |r−L| có đơn vị mét. Lớp màu trên bề mặt bản chuẩn dùng **max của cạnh ngang/dọc đi tới mỗi vertex** làm chỉ báo strain cục bộ; max strain/residual trong diagnostics được tính trên toàn danh sách constraints. Vì vậy một pixel màu lạnh không chứng minh mọi hướng shear/bend ở đó ít sai số.
+
+Hai mặt có quy tắc sáng rõ: renderer không cull mất mặt sau, shader lật normal theo gl_FrontFacing và đổi bảng màu để bạn nhận ra mặt đối diện. Pattern theo UV topology giúp thấy độ dãn; nó không dịch chuyển vertex và không đóng vai solver.
+
+<InteractiveLab demo="cloth-workshop" mode="normals" />
+
+## Bắt tay xây dựng
+
+### 1. Cộng normal của đúng tam giác chứa vertex
+
+```glsl title="shaders/cloth_solver.comp — normal theo hình học đang biến dạng"
+void addTriangle(inout vec3 normal, uint id, uint a, uint b, uint c) {
+    if (id == a || id == b || id == c) {
+        normal += cross(positions[b].xyz - positions[a].xyz, positions[c].xyz - positions[a].xyz);
+    }
+}
+```
+
+Mỗi invocation sở hữu normal của một vertex, đọc các ô kề quanh ID đó và cộng hai tam giác của mỗi ô nếu vertex thuộc tam giác. Không dùng float atomics từ mỗi triangle vào normal chung. Việc đọc neighbor positions chỉ an toàn sau pass solve/contact đã công bố writes; ownership đúng không tự làm dữ liệu mới nhìn thấy.
+
+### 2. Lưu normal và strain probe cùng một record
+
+```glsl title="shaders/cloth_solver.comp — chỉ báo strain ngang"
+float strain = 0.0;
+if (id % uSide + 1u < uSide) {
+    float rest = uRestSpacing.x;
+    strain = abs(length(positions[id + 1u].xyz - positions[id].xyz) - rest) / max(rest, 1e-6);
+}
+if (id + uSide < uCount) {
+    float rest = uRestSpacing.y;
+    strain = max(strain, abs(length(positions[id + uSide].xyz - positions[id].xyz) - rest) / max(rest, 1e-6));
+}
+normals[id] = vec4(safeNormal(normal), strain);
+```
+
+RestSpacing.x/y lấy từ topology lúc dựng, không phải khoảng cách sau solve. Ở cột/hàng cuối không có cạnh đi tới tương ứng, shader chỉ dùng hướng còn hợp lệ; góc cuối không có cả hai nên probe zero. Đó là phạm vi chỉ báo, không phải kết luận vùng biên hoàn toàn không có sai số. Thành phần w của normal buffer là strain; w của position buffer vẫn là inverse mass. Đừng dùng chung một ý nghĩa cho mọi Vec4.
+
+### 3. Cho mặt sau một normal nhìn được
+
+```glsl title="shaders/cloth.frag — quy tắc normal hai mặt"
+vec3 n = normalize(cross(dFdx(vWorld),dFdy(vWorld)));
+if (uUseNormals != 0) { n = normalize(vNormal); }
+if (!gl_FrontFacing) { n = -n; }
+```
+
+Normal từ đạo hàm màn hình là fallback để scaffold có hình ở những mốc đầu; bản hoàn thiện bật normal buffer cập nhật sau solve. Pattern/ánh sáng đọc UV và normal này. Wireframe không được làm thay mesh mặt; bật/tắt debug phải giữ cùng positions, camera và thời điểm để so được.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_11. Pause ở một nếp gấp, orbit sang mặt sau, bật/tắt normal/strain/wireframe theo bảng điều khiển. Phần vải gập phải đổi sáng theo góc chứ không sáng như mặt phẳng nghỉ. Camera vẫn dùng được khi Pause; đổi góc nhìn không được đổi residual của solver.
+
+Kiểm normal gần đơn vị bằng tolerance riêng và luôn finite. Với một tam giác đơn nằm trên mặt phẳng XZ có winding đã biết, tính cross bằng tay để xác nhận hướng; với mesh biến dạng nhỏ, so GPU gather với normal CPU theo cùng tam giác. Debug contact/cell chỉ vẽ subset công bố; đỉnh không vẽ marker vẫn phải được solver cập nhật đầy đủ.
+
+## Thử tạo lỗi
+
+1. Đổi positions trong addTriangle thành rest positions. Hình học vẫn gập nhưng ánh sáng không theo; nhìn cả hai phía để phân biệt lỗi normal với lỗi solver.
+2. Tô strain trực tiếp từ residual mét mà không chia L. Đổi resolution/extent và quan sát thang màu đánh lừa ra sao; ghi lại đơn vị trước khi đổi legend.
+
+## Checklist hoàn thành
+
+- Normal theo tam giác biến dạng, winding nhất quán, degenerate fallback finite và buffer có writer rõ.
+- Hai mặt đều xem được; pattern/ánh sáng không sửa positions thay solver.
+- Strain không đơn vị khác residual mét; biết lớp màu ngang/dọc chỉ là probe, diagnostics toàn constraints có phạm vi khác.
+- Debug subset có nhãn, không giảm workload hoặc thay viewport chính bằng heatmap.
+
+## Hướng mở rộng
+
+Thử dựng hai tam giác có diện tích khác nhau cùng chung một vertex, tính normal trọng số diện tích bằng tay rồi so normal trung bình đơn giản. Tiếp theo, [ghim, kéo và quản lý vòng đời input](/projects/cloth-workshop/12-ghim-keo-va-vong-doi).

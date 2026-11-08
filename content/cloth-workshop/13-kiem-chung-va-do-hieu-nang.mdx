@@ -1,0 +1,88 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm kết quả rồi đo từng pass hữu hạn
+
+## Ta cần giải quyết điều gì?
+
+Một tấm vải nhìn mềm mại vẫn có thể bỏ một nửa constraints, mất ID khi scatter hoặc đọc query chưa xong rồi báo “GPU nhanh”. Ta cần ba nhóm bằng chứng riêng: hành vi dùng được, mô hình/thuật toán đúng trong phạm vi đã công bố và workload/chi phí thật.
+
+Bài này không lấy build thành công làm PASS toàn project. CPU fixture, GPU fixture, native hình ảnh/input, Canvas và package là các cổng khác nhau. Một triệu đỉnh là mốc mở rộng cần báo cấu hình/giới hạn riêng, không phải lý do giảm mốc bắt buộc 100.000 đỉnh động.
+
+## Hiểu ý tưởng trước khi viết code
+
+Oracle độc lập trả lời câu hỏi nhỏ có đáp án biết trước. Constraint dùng số suy tay. Plane/sphere/capsule dùng hình học riêng. CSR kiểm tổng/range/permutation/membership rồi so tập candidate/contact với brute force. Đối chiếu CPU/GPU phải dùng cùng snapshot, h, topology, exclusion và thứ tự màu; không đòi khớp quỹ đạo dài sau nhiều giây hỗn loạn. Fixture 17×17 trong cloth_verify.hpp lấy max chuẩn Euclid trên mọi vertex: position ≤0,0002 m, velocity ≤0,025 m/s và normal ≤0,001 không đơn vị; tất cả thành phần phải finite, inverse mass phải khớp exact. Đây là ngưỡng riêng cho fixture một bước, không phải epsilon chung cho mọi bài toán.
+
+Sai số có nhiều nguồn: distance/bend/contact là sai số mô hình; resolution là sai số không gian; h là tích phân thời gian; iteration là sai số solve; float và ordering là sai số số học. Thay đồng thời tất cả rồi chọn ảnh đẹp nhất không tách được chúng.
+
+Benchmark chính chạy Release, cùng preset/camera/configuration, warm-up và số mẫu hữu hạn. Ghi phần cứng, driver, N động/ghim/cập nhật/vẽ, constraints, candidates/contacts, bytes, S/I và median/độ phân tán. GPU timer đo execution trên GPU; CPU enqueue không được đặt cạnh execution CPU rồi kết luận speedup. Upload/readback, draw và toàn frame phải có nhãn phạm vi riêng.
+
+<InteractiveLab demo="cloth-workshop" mode="validation" />
+
+Canvas chỉ chạy fixture CPU nhỏ hữu hạn và có Cancel. Nó không tạo số đo GPU hoặc chứng nhận mốc 100.000 đỉnh.
+
+## Bắt tay xây dựng
+
+### 1. Giữ đáp án constraint độc lập với hàm cần kiểm
+
+```cpp title="tests/tests.cpp — đáp án suy tay cho cạnh cứng bằng khối lượng"
+cloth::Vec4 a{0.0F, 0.0F, 0.0F, 1.0F};
+cloth::Vec4 b{2.0F, 0.0F, 0.0F, 1.0F};
+float lambda = 0.0F;
+check(cloth::solveDistance(a, b, 1.0F, 0.0F, 0.1F, lambda), "rigid constraint input accepted");
+check(near(a.x, 0.5F) && near(b.x, 1.5F) && near(lambda, -0.5F),
+    "closed-form equal-mass rigid correction is +/-0.5m");
+```
+
+Ở đây L=1 m, khoảng cách đầu 2 m, wa=wb=1 nên mỗi đầu dịch 0,5 m. Không dùng solveDistance tạo expected trước khi gọi chính nó lần nữa. Các fixture khác cần mass không đều/compliance/pin, zero distance, NaN/Inf và input ngoài miền. Near phải kiểm finite; tolerance vị trí mét khác tolerance normal không đơn vị hoặc integer exact.
+
+### 2. Chỉ đọc GPU sau khi công việc đã hoàn tất
+
+```cpp title="include/cloth_gpu.hpp — poll fence không chặn vòng sự kiện"
+const GLenum result = gl_.ClientWaitSync(fence_, 0U, 0ULL);
+if (result == GL_WAIT_FAILED) {
+    error = "GPU step fence failed.";
+    return false;
+}
+if (result != GL_ALREADY_SIGNALED && result != GL_CONDITION_SATISFIED) {
+    if (std::chrono::steady_clock::now() - submittedAt_ > std::chrono::seconds(5)) {
+        error = "GPU cloth step exceeded the five-second bounded-job deadline; stop submission and inspect the workload.";
+        return false;
+    }
+    return true;
+}
+```
+
+Poll timeout zero trả về để app tiếp tục nhận input; chưa ready không phải lỗi và cũng không phải PASS. Timer/result readback chỉ đọc sau fence bảo đảm các query/pass trước đã xong. Không cần glFinish mỗi frame. Validation/benchmark vẫn phải có deadline ở tầng job: fence pending vô hạn không được làm một job tự nhận hoàn thành.
+
+### 3. Giới hạn full snapshot vào fixture nhỏ
+
+```cpp title="include/cloth_gpu.hpp — readback có phạm vi kiểm chứng"
+if (busy() || !state_ || state_->topology.positions.size() > limit || state_->grid.cells > 100000U) {
+    error = "Full snapshots are restricted to a completed small verification fixture.";
+    return false;
+}
+```
+
+Default limit của snapshotSmall là 4.096 vertices; nó không phải đường readback mesh lớn mỗi frame. Fixture nhỏ kiểm toàn bộ arrays; preset lớn dùng counters/probes hữu hạn và chứng minh đủ phần tử scheduled/updated bằng telemetry, không chỉ xem một hàng. Readback phục vụ validation phải được ghi riêng khi đo chi phí, không giấu trong tên “GPU pipeline”.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_13. Chạy CTest Debug và Release như hướng dẫn bài cuối, rồi chạy job GPU riêng trong executable. Ghi từng fixture nào đã chạy, cấu hình nào chưa hỗ trợ; cancel/timeout/refused là incomplete. Trong lúc job chạy, cửa sổ phải nhận camera, Cancel và đóng; benchmark không được là một vòng while vô hạn không pump events.
+
+Lập ma trận nhỏ: cùng snapshot, h=1/120 và 1/240, I=1/4/8, compliance cố định; ghi max stretch, residual mét và penetration mét sau cùng thời gian. Với timing, tách prediction, constraints, grid/scan/scatter, contact, velocity, normals, draw và toàn bước/frame; nếu một pass chưa được đo, ghi chưa đo chứ không điền zero như số đo thật. Giữ cả trường hợp mesh nhỏ hoặc ít contacts mà GPU/CSR không có lợi.
+
+## Thử tạo lỗi
+
+1. Tắt scatter nhưng giữ buffer ID từ frame trước. Nếu chỉ nhìn count=N, kiểm sẽ giả xanh; membership/current snapshot fixture phải bắt được stale ID.
+2. Đo CPU quanh DispatchCompute và đặt tên “GPU milliseconds”. So với query có đồng bộ đúng, giải thích vì sao con số enqueue không đo phần việc shader thực thi.
+
+## Checklist hoàn thành
+
+- Oracle độc lập và cấu trúc CSR/contact được kiểm trước hiệu năng; cùng scheme khi so CPU/GPU.
+- Integer exact trong miền không overflow; float có đại lượng/đơn vị/ngưỡng riêng, NaN/Inf luôn fail.
+- Job hữu hạn có tiến độ/Cancel/deadline; fence poll không khóa input; incomplete không thành PASS.
+- Hồ sơ timing Release tách kernel/upload-readback/draw/frame, số mẫu/median/độ phân tán và phần cứng rõ; không hứa speedup chung.
+
+## Hướng mở rộng
+
+Chọn một thay đổi chỉ ảnh hưởng chi phí, ví dụ debug markers hoặc số mẫu timing, rồi kiểm nó không sửa snapshot solver. Tiếp theo, [nghiệm thu xưởng vải hoàn chỉnh](/projects/cloth-workshop/14-xuong-vai-hoan-chinh).

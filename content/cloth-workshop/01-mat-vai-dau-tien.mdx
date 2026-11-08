@@ -1,0 +1,91 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng mặt vải đầu tiên và nhìn quanh
+
+## Ta cần giải quyết điều gì?
+
+Đích đến của Project 40 là một xưởng vải 3D: ghim mép, kéo một vùng, thả xuống mặt bàn hoặc quả cầu rồi nhìn nếp gấp từ cả hai phía. Tấm vải phải biến dạng vì lực, constraints và tiếp xúc. Một mặt phẳng được vertex shader uốn theo thời gian, dù trông mềm mại, chưa giải quyết bài toán này.
+
+Ta chưa bật ngay một trăm nghìn đỉnh. Trước hết, hãy có một tấm vải nhìn được, một camera dùng được và source chạy độc lập. Sau đó mỗi bài thêm một khả năng vào chính ứng dụng này. Bài 3 tính một constraint bằng tay; Bài 4 dựng baseline CPU nhỏ; từ Bài 5 solver chuyển lên GPU. Grid và biểu đồ xuất hiện để phục vụ tiếp xúc, không thay bề mặt bằng một bảng màu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một tấm vải gồm ba mô tả liên quan nhưng không giống nhau. Positions nói các đỉnh đang ở đâu. Indices nối ba ID thành một tam giác để vẽ. Constraints nói cặp đỉnh nào phải giữ khoảng cách gần giá trị nghỉ. Renderer có thể vẽ một tam giác ngay cả khi chưa có constraint nào, nhưng tam giác ấy không tự biết nó là vải.
+
+Source cung cấp sẵn window/event/timing SDL3, GL loader, shader loader, chữ bitmap và camera orbit. Camera/ray helpers trong cloth_camera.hpp là scaffold được gọi từ app, không phải một physics engine. Bạn không phải tải thêm Project 34 hoặc 37. Ta sẽ mở điểm nối picking ở Bài 12; chưa cần tự viết một hệ chọn mesh ngoài giáo trình.
+
+Mọi chiều dài world trong project tính bằng mét. Inverse mass nằm ở thành phần w của Vec4 vị trí: w dương là đỉnh động, w=0 là ghim. Thành phần thứ tư ấy không phải tọa độ đồng nhất để đưa thẳng qua projection.
+
+<InteractiveLab demo="cloth-workshop" mode="surface" />
+
+Canvas là vải CPU thu nhỏ có phối cảnh, không phải OpenGL compute và không chứng nhận workload GPU. Hãy dùng nó để tập phân biệt orbit, pan và zoom.
+
+## Bắt tay xây dựng
+
+### 1. Chốt cấu hình trước khi tạo mesh
+
+Đầu Settings khai báo resolution, preset và chiều dài thật:
+
+```cpp title="include/cloth_topology.hpp — cấu hình mặt vải"
+std::uint32_t side{321U};
+Preset preset{Preset::Hanging};
+float extent{8.0F};
+float thickness{0.0125F};
+```
+
+Side là số đỉnh trên một cạnh, không phải số tam giác. Với side=17 có 289 đỉnh và 512 tam giác; ở bản cuối side=321 có 103.041 đỉnh tổng. Nếu ghim hàng đầu, 321 đỉnh là ghim và còn 102.720 đỉnh động. Chính số động mới được so với mốc 100.000; không lấy tam giác hoặc số cấp phát để thay nó. Bắt đầu bằng preset nhỏ khi đọc source.
+
+### 2. Đặt từng hàng vào không gian
+
+Hanging đặt vải thành bề mặt đứng và ghim hàng trên:
+
+```cpp title="include/cloth_topology.hpp — vị trí nghỉ và inverse mass"
+if (settings.preset == Preset::Hanging) {
+    point = {(u - 0.5F) * settings.extent, 7.0F - v * 5.0F, 1.8F};
+    if (row == 0U) {
+        inverseMass = 0.0F;
+        ++result.pinned;
+    }
+}
+```
+
+U/v đi từ 0 đến 1 theo hàng/cột; chúng là tọa độ tham số của mảnh vải. Z=1,8 m đặt cảnh treo tránh bắt đầu bên trong vật cản. Positions ban đầu được giữ trong topology như rest state. Khi solver sửa vị trí động, không được sửa luôn khoảng cách nghỉ để biến mọi sai số thành zero. Với preset phủ sphere/rơi bàn, cùng ID được đặt theo một mặt khác; topology được tạo lại có chủ đích.
+
+### 3. Nối hai tam giác cho mỗi ô
+
+```cpp title="include/cloth_topology.hpp — index của một ô"
+const std::uint32_t a = row * settings.side + column;
+const std::uint32_t b = a + 1U;
+const std::uint32_t c = a + settings.side;
+const std::uint32_t d = c + 1U;
+result.indices.insert(result.indices.end(), {a, c, b, b, c, d});
+```
+
+Hai tam giác dùng chung đỉnh, không nhân bản position ở đường chéo. Winding phải nhất quán để cross product cho normal cùng hướng trên một mặt phẳng. Khi xem mặt sau, renderer cần quy tắc hai mặt rõ ràng; tắt culling không tự sửa một normal bị đảo tùy tiện. Camera thay view/projection, không quay dữ liệu vải trên CPU.
+
+## Chạy thử và quan sát
+
+Tải ZIP source ở trang tổng quan, giải nén thành thư mục mới và mở terminal tại nơi có CMakeLists.txt. CMake tối thiểu 3.24, C++20 và SDL 3.4.8 được khóa trong gói. Bật checkpoint khi muốn build từng bài:
+
+```bash
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_40_checkpoint_1
+```
+
+Trên Visual Studio, executable nằm trong build/Debug; generator single-config đặt nó trực tiếp dưới build. Chạy target vừa build, orbit qua cả mặt trước/sau, pan khỏi tâm rồi zoom về. Xem bảng điều khiển trong cửa sổ để dùng đúng phím/chuột của native; Canvas có nhóm camera riêng. Bài đầu chỉ kiểm scaffold và mặt vải, chưa nghiệm thu solver hoặc scale. Phần mã đầy đủ cuối trang lấy từ checkpoint của bài.
+
+## Thử tạo lỗi
+
+1. Đổi bộ index tam giác thứ hai thành thứ tự winding ngược. Dự đoán mặt nào nhận sáng sai rồi bật normal debug khi đến Bài 11; phục hồi index trước khi so solver.
+2. Đặt inverse mass hàng trên thành 1 thay vì 0. Ảnh tĩnh có thể chưa khác, nhưng từ Bài 2 mép sẽ rơi. Ghi dự đoán này để thấy vì sao một frame đẹp không kiểm được pin.
+
+## Checklist hoàn thành
+
+- Source tự chứa chạy, resize/thu nhỏ/đóng cửa sổ được; không cần ghép ZIP khác.
+- Có perspective, depth và bề mặt tam giác; nhìn được hai mặt, orbit/pan/zoom không sửa positions.
+- Phân biệt rest positions, indices vẽ và constraints vật lý.
+- Tính đúng tổng/ghim/động ở side nhỏ và side=321; chưa gọi checkpoint này là solver GPU hoàn chỉnh.
+
+## Hướng mở rộng
+
+Vẽ bằng giấy một ô với bốn ID a/b/c/d rồi đánh dấu hai tam giác và mép ghim. Thử thay extent trong miền hợp lệ, dự đoán đại lượng nào đổi và đại lượng nào giữ nguyên. Tiếp theo, [để trọng lực dự đoán vị trí tiếp theo](/projects/cloth-workshop/02-du-doan-vi-tri).

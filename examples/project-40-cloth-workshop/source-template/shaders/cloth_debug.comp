@@ -1,0 +1,174 @@
+#version 430 core
+
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) readonly buffer PositionBlock { vec4 positions[]; };
+layout(std430, binding = 1) readonly buffer CountBlock { uint counts[]; };
+layout(std430, binding = 2) readonly buffer OffsetBlock { uint offsets[]; };
+layout(std430, binding = 3) readonly buffer IdBlock { uint sortedIds[]; };
+layout(std430, binding = 4) readonly buffer CellBlock { uint vertexCells[]; };
+
+struct DebugVertex {
+    vec4 position;
+    uvec4 key;
+};
+
+layout(std430, binding = 5) buffer DebugOutput {
+    vec4 selectedPosition;
+    uvec4 identity;
+    uvec4 candidateCounts;
+    uvec4 previewCounts;
+    ivec4 cells[27];
+    DebugVertex candidates[32];
+    DebugVertex contacts[32];
+};
+
+uniform uint uSelected;
+uniform uint uCount;
+uniform uint uSide;
+uniform uint uCells;
+uniform uvec3 uDimensions;
+uniform float uThickness;
+const uint SLOT_BUDGET = 8192u;
+const uint PREVIEW_CAPACITY = 32u;
+
+ivec3 decodeCell(uint cell) {
+    uint x = cell % uDimensions.x;
+    uint rest = cell / uDimensions.x;
+    return ivec3(int(x), int(rest % uDimensions.y), int(rest / uDimensions.y));
+}
+
+bool validCell(ivec3 coordinate) {
+    return all(greaterThanEqual(coordinate, ivec3(0))) && all(lessThan(coordinate, ivec3(uDimensions)));
+}
+
+uint cellIndex(ivec3 coordinate) {
+    return uint(coordinate.x) + uDimensions.x * (uint(coordinate.y) + uDimensions.y * uint(coordinate.z));
+}
+
+bool topologyNeighbor(uint a, uint b) {
+    ivec2 first = ivec2(int(a % uSide), int(a / uSide));
+    ivec2 second = ivec2(int(b % uSide), int(b / uSide));
+    return all(lessThanEqual(abs(first - second), ivec2(2)));
+}
+
+void main() {
+    identity = uvec4(uSelected, uSide, 0xffffffffu, 0u);
+    selectedPosition = vec4(0.0);
+    candidateCounts = uvec4(0u);
+    previewCounts = uvec4(0u, 0u, 0u, SLOT_BUDGET);
+    for (uint i = 0u; i < PREVIEW_CAPACITY; ++i) {
+        candidates[i].position = vec4(0.0);
+        candidates[i].key = uvec4(0xffffffffu);
+        contacts[i].position = vec4(0.0);
+        contacts[i].key = uvec4(0xffffffffu);
+    }
+    for (int i = 0; i < 27; ++i) {
+        cells[i] = ivec4(0, 0, 0, -1);
+    }
+    if (uSelected >= uCount || uSide == 0u || any(equal(uDimensions, uvec3(0u)))) {
+        return;
+    }
+    uint sourceCell = vertexCells[uSelected];
+    if (sourceCell >= uCells) {
+        return;
+    }
+    selectedPosition = positions[uSelected];
+    if (any(isnan(selectedPosition)) || any(isinf(selectedPosition))) {
+        return;
+    }
+    ivec3 source = decodeCell(sourceCell);
+    uint totalSlots = 0u;
+    uint flags = 1u;
+    int cellSlot = 0;
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec3 coordinate = source + ivec3(dx, dy, dz);
+                cells[cellSlot] = ivec4(coordinate, -1);
+                if (validCell(coordinate)) {
+                    uint cell = cellIndex(coordinate);
+                    uint population = counts[cell];
+                    uint begin = offsets[cell];
+                    if (population > uCount || begin > uCount || population > uCount - begin) {
+                        flags |= 4u;
+                    } else {
+                        totalSlots += population;
+                        cells[cellSlot].w = int(population);
+                    }
+                }
+                ++cellSlot;
+            }
+        }
+    }
+    // Counts minus <=25 topology IDs: exact population without traversing every bucket.
+    uint excluded = 0u;
+    ivec2 selectedTopology = ivec2(int(uSelected % uSide), int(uSelected / uSide));
+    for (int row = -2; row <= 2; ++row) {
+        for (int col = -2; col <= 2; ++col) {
+            ivec2 topology = selectedTopology + ivec2(col, row);
+            if (any(lessThan(topology, ivec2(0))) || any(greaterThanEqual(topology, ivec2(int(uSide))))) {
+                continue;
+            }
+            uint id = uint(topology.x) + uSide * uint(topology.y);
+            if (id >= uCount || vertexCells[id] >= uCells) {
+                flags |= 4u;
+                continue;
+            }
+            if (all(lessThanEqual(abs(decodeCell(vertexCells[id]) - source), ivec3(1)))) {
+                ++excluded;
+            }
+        }
+    }
+    uint visited = 0u;
+    uint checked = 0u;
+    uint candidatePreview = 0u;
+    uint checkedContacts = 0u;
+    uint contactPreview = 0u;
+    float diameterSquared = 4.0 * uThickness * uThickness;
+    for (int i = 0; i < 27; ++i) {
+        if (cells[i].w < 0) {
+            continue;
+        }
+        uint cell = cellIndex(cells[i].xyz);
+        for (uint slot = 0u; slot < uint(cells[i].w) && visited < SLOT_BUDGET; ++slot) {
+            ++visited;
+            uint id = sortedIds[offsets[cell] + slot];
+            if (id >= uCount) {
+                flags |= 4u;
+                continue;
+            }
+            if (topologyNeighbor(uSelected, id)) {
+                continue;
+            }
+            ++checked;
+            vec4 position = positions[id];
+            if (any(isnan(position)) || any(isinf(position))) {
+                flags |= 4u;
+                continue;
+            }
+            vec3 delta = position.xyz - selectedPosition.xyz;
+            bool contact = dot(delta, delta) < diameterSquared;
+            uint contactFlag = 0u;
+            if (contact) {
+                contactFlag = 1u;
+                ++checkedContacts;
+            }
+            if (candidatePreview < PREVIEW_CAPACITY) {
+                candidates[candidatePreview].position = position;
+                candidates[candidatePreview].key = uvec4(id, cell, contactFlag, 0u);
+                ++candidatePreview;
+            }
+            if (contact && contactPreview < PREVIEW_CAPACITY) {
+                contacts[contactPreview].position = position;
+                contacts[contactPreview].key = uvec4(id, cell, 1u, 0u);
+                ++contactPreview;
+            }
+        }
+    }
+    if (visited < totalSlots) {
+        flags |= 2u;
+    }
+    identity = uvec4(uSelected, uSide, sourceCell, flags);
+    candidateCounts = uvec4(totalSlots - min(totalSlots, excluded), checked, candidatePreview, checkedContacts);
+    previewCounts = uvec4(contactPreview, totalSlots, visited, SLOT_BUDGET);
+}

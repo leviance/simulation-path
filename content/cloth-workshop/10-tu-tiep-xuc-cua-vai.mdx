@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Để hai lớp vải đẩy nhau ra
+
+## Ta cần giải quyết điều gì?
+
+Vải đã được vật cản đỡ, nhưng hai phần của chính tấm vải vẫn có thể đi qua nhau. Grid/CSR chỉ cho danh sách có thể gần nhau; ta còn phải loại quan hệ topology, kiểm khoảng cách và chia correction mà không gây writer race.
+
+Đây là self-contact xấp xỉ theo **đỉnh**. Nó không xét đủ giao cắt cạnh–tam giác, không có continuous collision detection và không bảo đảm chống xuyên mọi tốc độ. Một cảnh đẹp không được làm lời giới hạn này biến mất.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi vertex động đọc một snapshot position chung, duyệt các cell ứng viên rồi tích lũy correction của chính nó vào corrections[id]. Một pass sau áp correction. Vì không ghi position trong lúc các invocation khác đang đọc nó, ta có kiểu gather/Jacobi rõ ownership thay vì nhiều cặp cùng đẩy chung endpoint.
+
+Bản chuẩn loại các ID có khoảng cách hàng và cột đều ≤2. Đây là vùng kề topology được công bố, gồm self và lân cận hai bước; không chỉ kiểm id!=other. Nó tránh cho mạng cạnh tự chống lại tiếp xúc, đồng thời cũng bỏ một số cặp gần trên bề mặt; đó là giới hạn mô hình cần giữ khi so brute force.
+
+Hai vertex contact khi distance nhỏ hơn 2t. Correction chia theo inverse mass, lấy trung bình các contacts rồi giới hạn độ lớn t mỗi vòng. Đây là relaxation xấp xỉ; nhiều lớp dày có thể còn penetration sau số vòng hữu hạn. Contact counter ở đường gather đếm theo hướng vertex→neighbor, thường tính một cặp hai lần; phải công bố phạm vi khi đọc số.
+
+<InteractiveLab demo="cloth-workshop" mode="self-contact" />
+
+## Bắt tay xây dựng
+
+### 1. Loại topology trước khi chuẩn hóa hướng
+
+```glsl title="shaders/cloth_grid.comp — loại self và vùng kề hai bước"
+bool topologyNeighbors(uint a, uint b) {
+    ivec2 first = ivec2(int(a % uSide), int(a / uSide));
+    ivec2 second = ivec2(int(b % uSide), int(b / uSide));
+    return all(lessThanEqual(abs(first - second), ivec2(2)));
+}
+```
+
+Trong traversal, other lấy từ sortedIds[offsets[cell]+offset]. Neighbor predicate này dựa hàng/cột topology, không dựa khoảng cách world; hai lớp gập sát nhau nhưng xa trên topology vẫn được xét. Fixture brute force phải dùng đúng exclusion đã công bố, đồng thời có cặp gần bị loại để bắt lỗi quên topology.
+
+### 2. Kiểm contact thật và chia correction theo mass
+
+```glsl title="shaders/cloth_grid.comp — predicate và correction một hướng"
+vec3 delta = positions[id].xyz - positions[other].xyz;
+float distance = length(delta);
+if (distance >= diameter) {
+    continue;
+}
+vec3 direction = coincidenceDirection(id, other);
+if (distance > 1e-8) {
+    direction = delta / distance;
+}
+float weight = positions[id].w / (positions[id].w + positions[other].w);
+sum += direction * ((diameter - distance) * weight);
+++contacts;
+```
+
+Đúng ngưỡng 2t không tạo correction, nên fixture phải có dưới/bằng/trên ngưỡng, không viết “≤” trong oracle rồi trách GPU sai. Khi positions trùng, coincidenceDirection dùng ID để chọn hai hướng đối nhau hữu hạn. Vertex động đi với pin có weight=1; cả hai pin không đi vào gather vì invocation pin đã return.
+
+### 3. Ghi correction riêng và không âm thầm cắt contacts
+
+```glsl title="shaders/cloth_grid.comp — giới hạn correction chứ không cắt danh sách"
+if (contacts != 0u) {
+    vec3 correction = sum / float(contacts);
+    float magnitude = length(correction);
+    if (magnitude > uThickness) {
+        correction *= uThickness / magnitude;
+    }
+    corrections[id] = vec4(correction, float(contacts));
+    atomicAdd(diagnostic[3], contacts);
+}
+```
+
+Giới hạn correction là một phần relaxation được công bố, không phải “chỉ lấy 32 contacts rồi bỏ phần còn lại”. Trước traversal, occupancy pass tính số lượt ứng viên thật bằng counter 64 bit ghép hai uint; nếu vượt budget, toàn bước bị từ chối và rollback. Không có vòng trong chạy hàng tỷ cặp rồi trông đợi nút Cancel ngắt một dispatch đang chạy. Budget bảo vệ chi phí, không chứng minh chất lượng contact.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_10. Fixture nhỏ cần cell rỗng/đông, duplicate positions, hai đỉnh kề, hai đỉnh xa topology nhưng sát world và các khoảng cách quanh 2t. So tập candidate/contact ID với brute force độc lập trước khi so correction. Một oracle chỉ gọi lại hàm grid không đủ phát hiện cellIndex bị sai.
+
+Trong scene, ghim một mép và để vải gập, dùng cell/contact subset để đọc một vùng. Ghi max self-penetration cùng iterations và candidates. Nếu budget từ chối, app phải nói incomplete/refused, giữ scene hợp lệ và không ghi PASS. Với chuyển động quá nhanh, một vertex có thể đi xuyên giữa hai lần lấy mẫu; đây chính là lý do CCD vẫn là mở rộng, không phải một checkbox đã hoàn thành.
+
+## Thử tạo lỗi
+
+1. Chỉ bỏ self mà không bỏ đỉnh kề topology. Tăng thickness để thấy solver cạnh và contact chống nhau; ghi residual tăng thay vì kết luận vải có “độ phồng”.
+2. Áp correction ngay trong shader traversal vào positions. Invocation sau có thể đọc hỗn hợp cũ/mới; so cùng snapshot nhiều lần và giải thích race, rồi trả về correction/gather hai pass.
+
+## Checklist hoàn thành
+
+- Membership/contact fixture khớp brute force theo đúng exclusion và strict threshold.
+- Snapshot-read/correction-write/apply có owner rõ; pin, coincidence và finite policy đúng.
+- Số ứng viên hiện tại được kiểm trước vòng traversal; quá budget từ chối toàn bước, không cắt contacts im lặng.
+- Ghi directed contact count và residual; nói rõ vertex approximation không phải edge/triangle contact hoặc CCD.
+
+## Hướng mở rộng
+
+Tạo một cặp tam giác có cạnh giao nhau nhưng mọi vertex cách nhau hơn 2t. Dự đoán vì sao bản chuẩn không phát hiện, rồi phân biệt “đúng mô hình đã công bố” với “không đủ cho mọi giao cắt”. Tiếp theo, [đọc nếp gấp, normals và strain](/projects/cloth-workshop/11-normal-strain-va-debug).

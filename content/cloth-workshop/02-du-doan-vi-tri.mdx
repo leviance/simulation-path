@@ -1,0 +1,78 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Để trọng lực dự đoán vị trí tiếp theo
+
+## Ta cần giải quyết điều gì?
+
+Ở bài trước, tấm vải chỉ có hình dạng. Bây giờ ta muốn một đỉnh không ghim bắt đầu rơi. Không có constraint, các đỉnh rơi riêng lẻ như những hạt; đó là một mốc trung gian hữu ích để kiểm lực và thời gian, chưa phải vải hoàn chỉnh.
+
+Điều cần tránh là viết “mỗi frame giảm y đi một chút”. Frame không có độ dài cố định và phép dịch ấy không cho biết velocity đang là bao nhiêu. Ta cần một bước tiến có đơn vị rõ, biết lưu vị trí cũ và giữ pin bất động.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi h là thời gian của một substep, tính bằng giây. Position x tính bằng mét; velocity v tính bằng m/s; gia tốc a tính bằng m/s². Bước prediction dùng velocity sau khi nhận lực:
+
+$$v^\ast=v^n+h\,a,\qquad \widetilde{x}=x^n+h\,v^\ast.$$
+
+Với v ban đầu bằng zero, gravity=9,81 và h=1/120 s, velocity Y sau bước đầu khoảng −0,08175 m/s, độ dời khoảng −0,00068125 m. Đây là phép kiểm prediction semi-implicit, không phải khẳng định quỹ đạo rơi liên tục đã chính xác tuyệt đối. Sai số tích phân sẽ được tách khỏi sai số solver ở Bài 13.
+
+Frame step mặc định 1/60 s được chia hai substep, nên h=1/120 s. Iteration là số lượt sửa constraint trong một substep, không phải thêm thời gian. Phần giữ previous phải diễn ra trước prediction; sau solve ta sẽ suy lại velocity từ displacement thực.
+
+<InteractiveLab demo="cloth-workshop" mode="prediction" />
+
+## Bắt tay xây dựng
+
+### 1. Lấy h từ cấu hình và giữ previous đúng phạm vi
+
+```cpp title="include/cloth_cpu.hpp — vòng đời đầu substep"
+const float h = settings.dt / static_cast<float>(settings.substeps);
+std::vector<float> lambdas(state.topology.constraints.size());
+for (std::uint32_t substep = 0U; substep < settings.substeps; ++substep) {
+    const auto previous = state.positions;
+    std::fill(lambdas.begin(), lambdas.end(), 0.0F);
+```
+
+Previous là vị trí đầu substep, không phải rest position. Không đưa nó vào vòng iteration: nếu ghi lại previous sau mỗi correction, velocity cuối bước sẽ bỏ mất chuyển động. Lambda đã xuất hiện trong scaffold; hãy tạm đọc nó như vùng nhớ cho constraint. Bài 3 mới tính giá trị và Bài 6 khóa vòng đời của nó.
+
+### 2. Cho pin một đường đi riêng
+
+```cpp title="include/cloth_cpu.hpp — đỉnh ghim không nhận prediction"
+if (state.positions[id].w == 0.0F) {
+    state.velocities[id] = {};
+    continue;
+}
+```
+
+Pin không phải một lò xo rất cứng. Inverse mass zero làm nó không nhận correction theo trọng lượng và không rơi vì gravity. Đặt velocity bằng zero cũng tránh giữ một vận tốc cũ rồi bắn đỉnh đi khi topology/input đổi. Khi bỏ ghim, chính sách tạo lại velocity cần rõ; không để trạng thái ẩn quyết định hành vi.
+
+### 3. Cộng gia tốc rồi tiến vị trí
+
+```cpp title="include/cloth_cpu.hpp — prediction có đơn vị"
+Vec3 velocity = xyz(state.velocities[id]) + Vec3{settings.wind, -settings.gravity, 0.0F} * h;
+velocity = limited(velocity, 20.0F);
+state.positions[id] = vector4(xyz(state.positions[id]) + velocity * h, state.positions[id].w);
+```
+
+Trong mô hình chuẩn, wind là gia tốc world theo X, không phải mô phỏng khí động học theo diện tích/góc mặt vải. Gravity là độ lớn dương nhưng hướng rơi là −Y. Giới hạn 20 m/s là miền chuyển động an toàn đã công bố, không phải một định luật tự nhiên. Khi constraint/contact sửa prediction, velocity thật cuối bước phải lấy lại từ displacement đã sửa; không tiếp tục dùng velocity tạm trong đoạn này.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_2 với cùng thư mục build đã configure. Dùng mesh nhỏ, Pause rồi single-step để so vị trí trước/sau. Đầu bài, tập trung prediction; source đầy đủ có helper để các checkpoint sau tái dùng, không có nghĩa mọi pass đã được bật trong runtime bài này.
+
+Với một đỉnh không ghim, zero velocity và không tiếp xúc, so displacement đầu tiên với con số −0,00068125 m ở trên. Pin phải không đổi position. Camera và inspector vẫn hoạt động khi Pause; single-step mới tiến thời gian. Nếu đang xem pipeline có constraints, chọn probe xa ghim và kiểm prediction trước solve, không lấy position sau solve so thẳng với free fall.
+
+## Thử tạo lỗi
+
+1. Dùng dt=1/60 thay h=dt/substeps trong cả hai substep. Tổng thời gian bị nhân đôi và độ dời rơi sai; ghi cả velocity lẫn position để tìm lỗi.
+2. Chuyển việc lưu previous vào sau prediction. Khi suy velocity bằng displacement ở Bài 6, phần gia tốc vừa tích phân biến mất. Dự đoán dấu hiệu trước khi thực hiện.
+
+## Checklist hoàn thành
+
+- Nói được đơn vị của x, v, a, dt và h; tính được bước đầu bằng tay.
+- Previous lưu đúng đầu substep; pin giữ position và velocity zero.
+- Lực đi qua prediction, không có chuyển động sin hoặc số dịch “mỗi frame”.
+- Phân biệt prediction tạm với position/velocity sau solver; biết giới hạn tốc độ là giới hạn mô hình.
+
+## Hướng mở rộng
+
+Giữ tổng thời gian bằng nhau, thử h và h/2 rồi so độ rơi trước contact. Sai khác này thuộc tích phân thời gian, không thể chữa bằng đổi compliance. Tiếp theo, [tính một ràng buộc XPBD bằng tay](/projects/cloth-workshop/03-mot-rang-buoc-xpbd).

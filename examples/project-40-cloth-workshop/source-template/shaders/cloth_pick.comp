@@ -1,0 +1,47 @@
+#version 430 core
+layout(local_size_x=256) in;
+struct Candidate { vec4 position; uvec4 key; };
+layout(std430,binding=0) readonly buffer Positions { vec4 positions[]; };
+layout(std430,binding=1) readonly buffer Inputs { Candidate inputs[]; };
+layout(std430,binding=2) writeonly buffer Outputs { Candidate outputs[]; };
+uniform uint uCount;
+uniform uint uPhase;
+uniform uint uProbe;
+uniform mat4 uViewProjection;
+uniform vec2 uClick;
+uniform vec2 uViewport;
+shared Candidate temporary[256];
+bool better(Candidate a,Candidate b) {
+    if (a.key.x == 0xffffffffu) { return false; }
+    if (b.key.x == 0xffffffffu) { return true; }
+    if (a.key.y != b.key.y) { return a.key.y < b.key.y; }
+    if (a.key.z != b.key.z) { return a.key.z < b.key.z; }
+    return a.key.x < b.key.x;
+}
+void main() {
+    uint index=gl_GlobalInvocationID.x;
+    uint lane=gl_LocalInvocationID.x;
+    Candidate value=Candidate(vec4(0.0),uvec4(0xffffffffu));
+    if (index<uCount) {
+        if (uPhase != 0u) { value=inputs[index]; }
+        else {
+            vec4 point=positions[index];
+            vec4 clip=uViewProjection*vec4(point.xyz,1.0);
+            if (clip.w>0.0) {
+                vec3 ndc=clip.xyz/clip.w;
+                vec2 pixels=(ndc.xy-uClick)*uViewport*0.5;
+                float distanceSquared=dot(pixels,pixels);
+                bool hit=distanceSquared<=196.0 && abs(ndc.z)<=1.0;
+                if (uProbe != 0xffffffffu) { hit=index==uProbe; }
+                if (hit) { value=Candidate(point,uvec4(index,floatBitsToUint(ndc.z*0.5+0.5),floatBitsToUint(distanceSquared),0u)); }
+            }
+        }
+    }
+    temporary[lane]=value;
+    memoryBarrierShared(); barrier();
+    for (uint stride=128u;stride>0u;stride>>=1u) {
+        if (lane<stride && better(temporary[lane+stride],temporary[lane])) { temporary[lane]=temporary[lane+stride]; }
+        memoryBarrierShared(); barrier();
+    }
+    if (lane==0u) { outputs[gl_WorkGroupID.x]=temporary[0]; }
+}

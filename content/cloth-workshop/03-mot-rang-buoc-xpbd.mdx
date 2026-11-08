@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giải một ràng buộc XPBD bằng tay
+
+## Ta cần giải quyết điều gì?
+
+Hai đỉnh đã biết rơi, nhưng khoảng cách giữa chúng chưa biết phải giữ gần bao nhiêu. Ta muốn một liên kết dài nghỉ L: khi hai đầu xa hơn L, nó kéo lại; khi gần hơn L, nó đẩy ra. Hai đầu có khối lượng khác nhau thì không nên dịch bằng nhau. Một đầu ghim phải đứng yên.
+
+Đừng bắt đầu bằng hàng trăm nghìn cạnh. Hãy dùng hai điểm trên trục X và tính một correction có đáp án độc lập. Nếu sai dấu hoặc bỏ compliance ở đây, tăng iteration trên tấm vải chỉ làm lỗi khó nhìn hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đặt d=xa−xb, r=|d|, n=d/r và C=r−L. Inverse masses wa/wb có đơn vị 1/kg. Với ràng buộc khoảng cách, compliance α tính bằng m/N; α lớn hơn nghĩa là mềm hơn. Solver dùng compliance đã scale theo h:
+
+$$\widetilde{\alpha}=\frac{\alpha}{h^2},\qquad
+\Delta\lambda=\frac{-C-\widetilde{\alpha}\lambda}{w_a+w_b+\widetilde{\alpha}}.$$
+
+Hai vị trí nhận correction trái dấu:
+
+$$\Delta x_a=w_a n\Delta\lambda,\qquad
+\Delta x_b=-w_b n\Delta\lambda,\qquad
+\lambda\leftarrow\lambda+\Delta\lambda.$$
+
+Ví dụ xa=0 m, xb=2 m, L=1 m, wa=wb=1/kg, h=0,1 s, α=0,01 m/N và lambda=0. Ta có C=1 m, alpha-tilde=1/kg, delta-lambda=−1/3 kg·m và n hướng −X. Vì vậy xa mới=1/3 m, xb mới=5/3 m; còn giãn 1/3 m là do compliance chứ không nhất thiết là bug. Nếu pin a bằng wa=0, chỉ b nhận correction: xb mới=1,5 m. Nếu đổi wa=2, wb=1 trong ví dụ không ghim, a dịch 0,5 m còn b dịch −0,25 m: đầu nhẹ hơn dịch nhiều hơn.
+
+Đây là scheme distance XPBD của project, tham khảo [bài báo XPBD gốc](https://mmacklin.com/xpbd.pdf). Ta reset lambda đầu substep và giữ nó qua iteration. Với nhiều constraints và số vòng hữu hạn, vẫn còn sai số giải; không hứa bất biến hoàn toàn khi đổi h hoặc số vòng.
+
+<InteractiveLab demo="cloth-workshop" mode="xpbd" />
+
+## Bắt tay xây dựng
+
+### 1. Tách sai số khoảng cách khỏi input không hợp lệ
+
+```cpp title="include/cloth_cpu.hpp — khoảng cách và trường hợp gradient không xác định"
+const Vec3 delta = xyz(a) - xyz(b);
+const float distance = length(delta);
+if (distance < 1.0e-8F) {
+    // An undefined distance gradient is skipped, never normalized into NaN.
+    return true;
+}
+```
+
+Hàm kiểm finite, rest dương, compliance không âm, h dương và inverse mass không âm trước đoạn này. Hai điểm trùng nhau không có hướng gradient duy nhất. Scheme ở đây bỏ correction distance ấy để không chuẩn hóa vector zero; nó không tự “đoán” một hướng vải. Contact theo đỉnh sẽ có chính sách coincidence riêng. Giá trị trả về true nói input hợp lệ đã được xử lý hữu hạn, không nói constraint đã đạt L.
+
+### 2. Tính multiplier có compliance và lịch sử trong substep
+
+```cpp title="include/cloth_cpu.hpp — delta lambda XPBD"
+const float alpha = compliance / (h * h);
+const float denominator = a.w + b.w + alpha;
+if (denominator <= 0.0F) {
+    return true;
+}
+const float increment = (-(distance - rest) - alpha * lambda) / denominator;
+lambda += increment;
+```
+
+Nếu cả hai đầu ghim và compliance zero, mẫu bằng zero: không có đỉnh nào để sửa. Không chia zero rồi hy vọng clamp dọn NaN. Lambda thuộc constraint, không thuộc vertex; nếu hai constraint chung đầu mút, chúng vẫn có multiplier riêng. Reset nó mỗi iteration sẽ làm phép lặp mất thành phần lịch sử mà công thức đang dùng.
+
+### 3. Chia correction theo inverse mass
+
+```cpp title="include/cloth_cpu.hpp — sửa hai đầu theo khối lượng"
+const Vec3 direction = delta / distance;
+a = vector4(xyz(a) + direction * (a.w * increment), a.w);
+b = vector4(xyz(b) - direction * (b.w * increment), b.w);
+return true;
+```
+
+Với cạnh đang giãn, increment âm. Direction từ b tới a nên a đi về b; b nhận dấu ngược và đi về a. Không thêm một dấu âm “để nhìn đẹp” ở đầu kia. Vector4 giữ inverse mass cũ; position correction không được vô tình ghi w thành zero hoặc một tọa độ phụ.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_3 và chạy CTest fixture constraint của gói. Trước khi xem kết quả, ghi đáp án xa/xb/lambda của ba trường hợp trong phần mô hình. Dùng ngưỡng position theo mét và multiplier theo kg·m; NaN/Inf luôn là fail, không được bỏ qua vì phép so “lớn hơn epsilon” trả false.
+
+Đoạn source cuối bài cho thấy toàn hàm và các điều kiện đầu vào. Một fixture đúng phải so với các con số suy ra độc lập, không gọi solveDistance hai lần rồi so hai kết quả. Ở Canvas, thay compliance hoặc pin và nhìn correction; đây là minh họa CPU nhỏ, chưa phải kiểm CPU/GPU.
+
+## Thử tạo lỗi
+
+1. Bỏ alpha*lambda ở tử số nhưng vẫn cộng lambda. Với cùng input, lặp nhiều vòng và quan sát khoảng cách thay vì chỉ xem một vòng đầu; vòng đầu chưa phơi lỗi này.
+2. Đổi dấu correction của b thành dấu cộng. Hai đầu có thể trôi cùng hướng thay vì kéo về nhau; kiểm cả tâm khối lượng và sai số khoảng cách để nhận ra.
+
+## Checklist hoàn thành
+
+- Tính đúng ví dụ 0/2 m, L=1 m và giải thích phần giãn còn lại.
+- Pin bất động; khối lượng không đều chia correction đúng; cả hai ghim không chia zero.
+- Input lỗi bị từ chối, khoảng cách zero không sinh NaN và chính sách bỏ gradient được công bố.
+- Compliance m/N, h s, inverse mass 1/kg và lambda kg·m có phạm vi rõ; không hứa số vòng hữu hạn cho nghiệm hoàn toàn bất biến.
+
+## Hướng mở rộng
+
+Dùng ba điểm thẳng hàng với hai constraints, giải trái→phải rồi phải→trái. Giải thích vì sao sau một vòng kết quả khác dù từng constraint đều đúng. Tiếp theo, [ghép topology và dựng mảnh vải CPU](/projects/cloth-workshop/04-topology-va-vai-cpu).

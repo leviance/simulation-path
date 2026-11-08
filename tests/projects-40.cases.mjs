@@ -1,125 +1,167 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { workspace } from "./site-support.mjs";
+import { compile } from "@mdx-js/mdx";
+import remarkMath from "remark-math";
+import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import { findLessonSection } from "../lib/lesson-sections.mjs";
+import { migrateProgressContent } from "../lib/progress-content.ts";
 
-test("Project 40 publishes a nine-checkpoint GPU spatial-grid workbench", async () => {
-  const catalog = JSON.parse(
-    await readFile(path.join(workspace, "course", "projects.json"), "utf8"),
-  );
-  const project = catalog.find((entry) => entry.id === "40");
-  assert.equal(project.slug, "gpu-spatial-grid-neighbors");
-  assert.equal(project.sourceDirectory, "project-40-gpu-spatial-grid-neighbors");
-  assert.equal(project.checkpointCount, 9);
-  assert.equal(project.demoId, "gpu-spatial-grid-neighbors");
+const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = path.join(workspace, "examples/project-40-cloth-workshop");
+const read = (relative) => readFile(path.join(workspace, relative), "utf8");
+const source = (relative) => readFile(path.join(root, "source-template", relative), "utf8");
+const modes =
+  "surface|prediction|xpbd|topology|coloring|timestep|obstacles|grid|csr|self-contact|normals|interaction|validation|showcase";
+
+test("Project 40 publishes cloth, preserves the roadmap target and revises only retired progress", async () => {
+  const catalog = JSON.parse(await read("course/projects.json"));
+  const entry = catalog.find((project) => project.id === "40");
+  assert.equal(entry.slug, "cloth-workshop");
+  assert.equal(entry.sourceDirectory, "project-40-cloth-workshop");
+  assert.equal(entry.checkpointCount, 14);
+  assert.equal(entry.demoId, "cloth-workshop");
+  assert.equal(entry.shaderRuntimePerTarget, true);
+  assert.equal(entry.contentRevision, 2);
+  const old = {
+    completedLessonIds: ["p39-l12", "p40-l01", "p40-l09", "p41-l01"],
+    lastLessonId: "p40-l09",
+    lastLesson: {
+      id: "p40-l09",
+      title: "Retired GPU Grid Workbench",
+      href: "/projects/gpu-spatial-grid-neighbors/09-hoan-thien-gpu-grid-workbench",
+    },
+  };
+  const migrated = migrateProgressContent(old, { p40: entry.contentRevision });
+  assert.deepEqual(migrated.completedLessonIds, ["p39-l12", "p41-l01"]);
+  assert.equal(migrated.lastLesson, undefined);
+  const current = { ...migrated, completedLessonIds: [...migrated.completedLessonIds, "p40-l01"] };
+  assert.deepEqual(migrateProgressContent(current, { p40: 2 }), current);
 });
 
-test("Project 40 teaches a GPU-built CSR grid instead of uploading CPU buckets", async () => {
-  const content = path.join(workspace, "content", "gpu-spatial-grid-neighbors");
-  const source = path.join(workspace, "examples", "project-40-gpu-spatial-grid-neighbors");
-  const lessonFiles = [
-    "01-khoa-hop-dong-grid-va-neighbor.mdx",
-    "02-dem-particles-bang-atomic.mdx",
-    "03-bien-counts-thanh-offsets.mdx",
-    "04-scatter-vao-grid-csr.mdx",
-    "05-duyet-candidate-cells-tren-gpu.mdx",
-    "06-loc-neighbor-va-chon-nearest.mdx",
-    "07-noi-pass-graph-bang-barrier.mdx",
-    "08-validation-va-benchmark-co-gioi-han.mdx",
-    "09-hoan-thien-gpu-grid-workbench.mdx",
-  ];
-  const lessons = await Promise.all(
-    lessonFiles.map((file) => readFile(path.join(content, file), "utf8")),
-  );
-  const contracts = [
-    [/row-major/i, /NeighborSummary/i, /tie-break/i, /CPU brute-force oracle/i],
-    [/atomicAdd/i, /3\.907/i, /189/i, /lost update/i],
-    [/exclusive scan/i, /9\.216/i, /18 block sums/i, /offset.*count/i],
-    [/cellCursors/i, /sortedIndices/i, /atomic scatter/i, /membership/i],
-    [/candidate cell range/i, /radius/i, /3×3/i, /visitedCandidates/i],
-    [/distance squared/i, /self/i, /nearest/i, /index nhỏ hơn/i],
-    [/GL_SHADER_STORAGE_BARRIER_BIT/i, /GL_BUFFER_UPDATE_BARRIER_BIT/i, /PassRecord/i, /consumer/i],
-    [/32 query/i, /GL_QUERY_RESULT_AVAILABLE/i, /chín/i, /candidate-work budget/i, /timeout 20/i],
-    [/Toàn bộ mã nguồn/i, /transaction/i, /Project 41/i, /cleanup/i],
-  ];
-  for (const [index, patterns] of contracts.entries()) {
-    for (const pattern of patterns) {
-      assert.match(lessons[index], pattern, `Project 40 lesson ${index + 1} is missing ${pattern}`);
+test("all fourteen cloth lessons compile, keep seven teaching roles and quote contiguous checkpoint source", async () => {
+  const directory = path.join(workspace, "content/cloth-workshop");
+  const files = (await readdir(directory)).filter((file) => file.endsWith(".mdx")).sort();
+  assert.equal(files.length, 14);
+  for (const [index, file] of files.entries()) {
+    const lesson = await readFile(path.join(directory, file), "utf8");
+    await compile(lesson, { remarkPlugins: [remarkMath] });
+    assert.ok(Buffer.byteLength(lesson) <= 32 * 1024, file + " exceeds lesson budget");
+    const roles = [...lesson.matchAll(/^## (.+)$/gm)]
+      .map((match) => findLessonSection(match[1])?.key)
+      .filter(Boolean);
+    assert.deepEqual(
+      roles,
+      ["problem", "model", "code", "assembly", "experiments", "validation", "extensions"],
+      file,
+    );
+    assert.ok(
+      [...lesson.matchAll(/^### \d+\./gm)].length >= 3,
+      file + " needs explained construction steps",
+    );
+    const blocks = [...lesson.matchAll(/```(cpp|glsl) title="([^"]+)"\r?\n([\s\S]*?)\r?\n```/g)];
+    assert.ok(blocks.length >= 3, file + " needs at least three source excerpts");
+    for (const [, language, title, fragment] of blocks) {
+      const relative = title.split(" — ")[0];
+      assert.match(
+        relative,
+        language === "cpp"
+          ? /^(include|src|tests)\/.+\.(hpp|cpp)$/
+          : /^shaders\/.+\.(comp|vert|frag)$/,
+      );
+      const base = relative.startsWith("tests/")
+        ? root
+        : path.join(root, "checkpoints", String(index + 1).padStart(2, "0"));
+      const canonical = await readFile(path.join(base, relative), "utf8");
+      assert.ok(isContiguousCodeExcerpt(fragment, canonical), file + " drifts from " + relative);
     }
+    assert.match(
+      lesson,
+      new RegExp('<InteractiveLab demo="cloth-workshop" mode="(?:' + modes + ')"\\s*\\/>'),
+    );
+    const experiments =
+      lesson.split("## Thử tạo lỗi")[1]?.split("## Checklist hoàn thành")[0] ?? "";
+    assert.ok(
+      [...experiments.matchAll(/^\d+\./gm)].length >= 2,
+      file + " needs two intentional experiments",
+    );
+    assert.doesNotMatch(lesson, /TODO|FIXME|Checkpoint đang xây|code sẽ thêm sau/i);
   }
+});
 
-  const math = await readFile(
-    path.join(source, "source-template", "include", "grid_math.hpp"),
-    "utf8",
-  );
-  const scan = await readFile(
-    path.join(source, "source-template", "include", "gpu_scan.hpp"),
-    "utf8",
-  );
-  const engine = await readFile(
-    path.join(source, "source-template", "include", "gpu_grid_engine.hpp"),
-    "utf8",
-  );
-  const countShader = await readFile(
-    path.join(source, "source-template", "shaders", "count_cells.comp"),
-    "utf8",
-  );
-  const scatterShader = await readFile(
-    path.join(source, "source-template", "shaders", "scatter_indices.comp"),
-    "utf8",
-  );
-  const neighborShader = await readFile(
-    path.join(source, "source-template", "shaders", "find_neighbors.comp"),
-    "utf8",
-  );
-  const main = await readFile(path.join(source, "source-template", "src", "main.cpp"), "utf8");
-  const tests = await readFile(path.join(source, "tests", "tests.cpp"), "utf8");
-  const canvas = await readFile(
-    path.join(workspace, "components", "labs", "gpu-spatial-grid-neighbors-lab.tsx"),
-    "utf8",
-  );
+test("cloth physics includes weighted XPBD, explicit multiplier scope and finite bounded settings", async () => {
+  const topology = await source("include/cloth_topology.hpp");
+  const cpu = await source("include/cloth_cpu.hpp");
+  const solver = await source("shaders/cloth_solver.comp");
+  const gpu = await source("include/cloth_gpu.hpp");
+  assert.match(topology, /side\{321U\}/);
+  assert.match(topology, /side > 1001U/);
+  assert.match(topology, /iterations > 12U/);
+  assert.match(topology, /sizeof\(Constraint\) == 16U/);
+  assert.match(topology, /inverseMass = 0\.0F/);
+  assert.match(topology, /dihedral-angle model/);
+  assert.match(cpu, /compliance \/ \(h \* h\)/);
+  assert.match(cpu, /a\.w \+ b\.w \+ alpha/);
+  assert.match(cpu, /lambda \+= increment/);
+  assert.match(cpu, /std::fill\(lambdas\.begin\(\), lambdas\.end\(\), 0\.0F\)/);
+  assert.match(solver, /lambdas\[id\] = 0\.0/);
+  assert.match(solver, /alpha \* lambdas\[edgeId\]/);
+  assert.match(solver, /exp\(-uDamping \* uH\)/);
+  assert.match(gpu, /color < 12U/);
+  assert.match(gpu, /GL_SHADER_STORAGE_BARRIER_BIT/);
+  assert.doesNotMatch(gpu, /glFinish\s*\(/);
+});
 
-  for (const symbol of [
-    "makeGridSpec",
-    "cellId",
-    "bruteForceNeighbor",
-    "exclusiveScanCpu",
-    "buildCsrCpu",
-    "candidateCellRange",
-    "queryCsrNeighbor",
-    "validateCsr",
-    "estimateNeighborWork",
-  ]) {
-    assert.ok(math.includes(symbol), `Project 40 math source is missing ${symbol}`);
+test("cloth contact graph uses three-dimensional CSR and a separate correction owner", async () => {
+  const grid = await source("shaders/cloth_grid.comp");
+  const scan = await source("shaders/cloth_scan.comp");
+  const hierarchy = await source("include/cloth_scan.hpp");
+  const gpu = await source("include/cloth_gpu.hpp");
+  assert.match(
+    grid,
+    /uDimensions\.x \* \(uint\(coordinate\.y\) \+ uDimensions\.y \* uint\(coordinate\.z\)\)/,
+  );
+  assert.match(grid, /atomicAdd\(counts\[cell\], 1u\)/);
+  assert.match(grid, /cursors\[id\] = offsets\[id\]/);
+  assert.match(grid, /atomicAdd\(cursors\[vertexCells\[id\]\], 1u\)/);
+  assert.match(grid, /sortedIds\[destination\] = id/);
+  assert.match(scan, /outputValues\[id\] = scratch\[lane\] - value/);
+  assert.match(hierarchy, /source = level\.sums/);
+  assert.match(hierarchy, /const auto& parent = levels_\[index - 1U\]/);
+  assert.match(grid, /for \(int dz = -1; dz <= 1; \+\+dz\)/);
+  assert.match(grid, /topologyNeighbors\(id, other\)/);
+  assert.match(grid, /float diameter = 2\.0 \* uThickness/);
+  assert.match(grid, /distance >= diameter/);
+  assert.match(grid, /corrections\[id\] = vec4\(correction, float\(contacts\)\)/);
+  assert.match(grid, /umulExtended/);
+  assert.match(grid, /diagnostic\[16\] > uCandidateBudget/);
+  assert.match(gpu, /No contacts were truncated/);
+  assert.match(gpu, /backupPosition/);
+});
+
+test("cloth curriculum separates material, approximation, native workload and pending evidence", async () => {
+  const first = await read("content/cloth-workshop/01-mat-vai-dau-tien.mdx");
+  const xpbd = await read("content/cloth-workshop/03-mot-rang-buoc-xpbd.mdx");
+  const contacts = await read("content/cloth-workshop/10-tu-tiep-xuc-cua-vai.mdx");
+  const last = await read("content/cloth-workshop/14-xuong-vai-hoan-chinh.mdx");
+  const glossary = await read("lib/glossary-cloth-workshop.ts");
+  assert.match(first, /scaffold/);
+  assert.match(first, /102.720/);
+  assert.match(xpbd, /m\/N/);
+  assert.match(xpbd, /1\/3/);
+  assert.match(xpbd, /số vòng hữu hạn/);
+  assert.match(contacts, /continuous collision detection/);
+  assert.match(contacts, /brute force/);
+  assert.match(last, /ctest --test-dir build -C Debug/);
+  assert.match(last, /ctest --test-dir build -C Release/);
+  assert.match(last, /100\.000 đỉnh động/);
+  assert.match(last, /một triệu/);
+  assert.match(last, /project-40-cloth-workshop\.zip/);
+  assert.match(glossary, /clothWorkshopGlossaryTerms/);
+  assert.match(glossary, /cloth-vertex-self-contact/);
+  for (const file of ["manifest.ts", "learning.ts", "lab.ts"]) {
+    assert.ok((await stat(path.join(workspace, "course/projects/p40", file))).size <= 20 * 1024);
   }
-  assert.match(scan, /runExclusiveScanGpu/);
-  assert.match(scan, /GL_SHADER_STORAGE_BARRIER_BIT/);
-  for (const symbol of [
-    "dispatchClear",
-    "dispatchCount",
-    "dispatchPrepareCursors",
-    "dispatchScatter",
-    "dispatchNeighbors",
-    "TimerQueryRing",
-    "GL_QUERY_RESULT_AVAILABLE",
-  ]) {
-    assert.ok(engine.includes(symbol), `Project 40 engine is missing ${symbol}`);
-  }
-  assert.match(countShader, /atomicAdd\(cellCounts\[cell\], 1u\)/);
-  assert.match(scatterShader, /atomicAdd\(cellCursors\[cell\], 1u\)/);
-  assert.match(neighborShader, /candidateDistanceSquared > radiusSquared/);
-  assert.match(neighborShader, /candidate == particle/);
-  assert.match(main, /1'000'003U/);
-  assert.match(main, /benchmarkSubmitted < kBenchmarkSampleCount/);
-  assert.match(main, /kBenchmarkTimeoutNanoseconds/);
-  assert.match(main, /engine\.destroy\(gl\)/);
-  assert.match(tests, /bounds guard rejects 189 tail invocations/);
-  assert.match(canvas, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(canvas, /useReducedMotion/);
-  assert.match(canvas, /Canvas 2D không phải phép đo GPU/);
-  assert.match(canvas, /moveDraggedPoint/);
-  assert.match(canvas, /Count \{index\}/);
-  assert.match(canvas, /Arrival order/);
-  assert.match(canvas, /LOST UPDATE/);
 });

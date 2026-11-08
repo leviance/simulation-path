@@ -1,0 +1,16 @@
+#version 430 core
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 14
+#endif
+
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer OutputBlock { uint outputValues[]; };
+layout(std430, binding = 1) readonly buffer ParentBlock { uint parentOffsets[]; };
+uniform uint uCount;
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id < uCount) {
+        outputValues[id] += parentOffsets[id / 256u];
+    }
+}

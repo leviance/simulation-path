@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép constraints thành một mảnh vải CPU
+
+## Ta cần giải quyết điều gì?
+
+Một liên kết đúng chưa tạo thành tấm vải. Nếu chỉ nối các cạnh ngang, mỗi hàng vẫn có thể rơi như một sợi riêng. Ta cần một mạng constraints giữ kéo giãn, chống trượt theo đường chéo và hạn chế gập quá tự do, cùng các tam giác phục vụ renderer.
+
+Bài này đưa solver nhỏ vào một bề mặt đang chạy. Baseline CPU phải đủ rõ để so snapshot với GPU sau này, nhưng không được trở thành đường vật lý ẩn giải hộ preset lớn. Ta dùng ít đỉnh để thấy từng cạnh, không gọi đây là sản phẩm cuối.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mesh vẽ mỗi ô thành hai tam giác. Topology vật lý thêm ba nhóm distance constraints: stretch ngang/dọc, shear hai đường chéo và bend-distance nối hai đỉnh cách nhau hai cạnh. Bend-distance hạn chế thay đổi khoảng cách ở thang dài hơn; nó **không phải** ràng buộc góc nhị diện và không mô tả đầy đủ một loại vải may mặc. Đừng dùng tên bend để ngầm hứa mô hình angular fabric.
+
+Khoảng cách nghỉ phải đo từ rest positions thật. Hanging rộng 8 m nhưng cao 5 m; cạnh ngang và dọc vì vậy không được mặc định có cùng L chỉ vì cùng bước hàng/cột. Cùng resolution/extent cũng không tự cho cùng vật liệu continuum khi đổi discretization; project công bố distance model đang dùng.
+
+CPU baseline duyệt màu theo cùng thứ tự mà GPU sẽ dùng. Trong một màu không có cạnh nào chung đầu mút; giữa màu có phụ thuộc và dùng position mới nhất. Nhờ vậy phép đối chiếu một bước có ý nghĩa hơn so solver GPU tô màu với một vòng CPU có thứ tự tùy tiện.
+
+<InteractiveLab demo="cloth-workshop" mode="topology" />
+
+## Bắt tay xây dựng
+
+### 1. Đo rest length khi thêm constraint
+
+```cpp title="include/cloth_topology.hpp — một constraint giữ hai ID và độ dài nghỉ"
+auto add = [&](std::uint32_t color, std::uint32_t a, std::uint32_t b, float kind) {
+    const float rest = length(xyz(result.positions[a]) - xyz(result.positions[b]));
+    colors[color].push_back({a, b, rest, kind});
+};
+```
+
+Kind phân biệt stretch/shear/bend để chọn compliance; nó không thay gradient. Constraint giữ ID, không sao chép state của hai vertex. Rest lấy ở lúc dựng topology, còn position runtime có thể đổi. Các range màu được đóng gói sau khi tạo hết cạnh.
+
+### 2. Bổ sung shear và xấp xỉ bend-distance
+
+```cpp title="include/cloth_topology.hpp — chéo và hai cạnh"
+if (row + 1U < settings.side && column + 1U < settings.side) {
+    add(4U + column % 2U, a, a + settings.side + 1U, 1.0F);
+    add(6U + column % 2U, a + 1U, a + settings.side, 1.0F);
+}
+// Two-edge distance is an explicit bending approximation, not a dihedral-angle model.
+if (column + 2U < settings.side) {
+    add(8U + (column / 2U) % 2U, a, a + 2U, 2.0F);
+}
+```
+
+Dấu kiểm biên ở đây là một phần thuật toán: thiếu column+1 hoặc row+1 có thể nối nhầm hai mép hàng. Cạnh bend dọc được tạo tương tự bằng bước 2*side. Với n đỉnh mỗi cạnh, có 2n(n−1) stretch, 2(n−1)² shear và 2n(n−2) bend-distance; tổng 6n²−10n+2. Đây là số constraints thật mà preset lớn vẫn phải xử lý.
+
+### 3. Giải một màu bằng chính hàm đã kiểm
+
+```cpp title="include/cloth_cpu.hpp — baseline dùng cùng thứ tự màu"
+const auto constraint = state.topology.constraints[edge];
+float compliance = settings.compliance;
+if (constraint.kind == 2.0F) {
+    compliance = settings.bendCompliance;
+}
+solveDistance(state.positions[constraint.a], state.positions[constraint.b], constraint.rest,
+    compliance, h, lambdas[edge]);
+```
+
+CPU lặp màu 0 đến 11 trong mỗi iteration, và lặp iteration trong mỗi substep. Stretch/shear dùng compliance chuẩn, bend-distance có tham số riêng lớn hơn ở cấu hình mặc định. Nếu đổi cả hai cùng lúc rồi gọi “chất vải mềm hơn”, ta không biết phần thay đổi nào gây ra nếp gấp; hãy thay một nhóm và đo residual tương ứng.
+
+## Chạy thử và quan sát
+
+Build project_40_checkpoint_4, chạy preset nhỏ và single-step. Tấm vải phải phản ứng theo mạng cạnh chứ không chỉ tất cả vertex cùng rơi. Ở bản CPU tải về, helper có thể chứa analytic/contact cho các mốc sau; hãy lần đúng nhánh được checkpoint bật. Không lấy timing CPU nhỏ để dự đoán FPS GPU.
+
+Kiểm số vertices/triangles/constraints bằng công thức trước. Với n=3: 9 vertices, 8 triangles và 26 constraints. Kiểm mọi endpoint nằm trong range, không có rest length zero và hàng ghim giữ nguyên. Một bước CPU này là snapshot baseline cho GPU, không phải oracle độc lập cho chính công thức distance; oracle số vẫn là fixture Bài 3.
+
+## Thử tạo lỗi
+
+1. Dùng spacing ngang cho mọi rest length, kể cả cạnh dọc và chéo. Ở preset treo hình chữ nhật, vải co/giãn ngay cả khi tắt gravity; đó là rest state sai, không phải “vải cứng”.
+2. Bỏ shear rồi kéo một góc theo phương chéo. Dự đoán sự trượt hình thoi trước khi chạy; so với bản đầy đủ trên cùng timestep và iterations.
+
+## Checklist hoàn thành
+
+- Phân biệt topology vẽ với stretch/shear/bend-distance và giải thích giới hạn mô hình.
+- Rest lengths xuất phát từ hình học thật, endpoint hợp lệ, counts khớp công thức.
+- CPU nhỏ chạy với pin và residual hữu hạn; lambda được lưu riêng từng constraint.
+- Ghi được snapshot/configuration/schedule để so GPU; không đưa baseline CPU vào đường vật lý preset lớn.
+
+## Hướng mở rộng
+
+Thử bỏ riêng bend-distance rồi so nếp gấp ở cùng gravity/compliance còn lại. Ghi cả hình và residual, đừng kết luận bằng cảm giác “mềm hơn” đơn độc. Tiếp theo, [tô màu constraints để GPU không tranh ghi](/projects/cloth-workshop/05-to-mau-rang-buoc-tren-gpu).

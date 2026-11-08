@@ -1,0 +1,208 @@
+#version 430 core
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 14
+#endif
+
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer PositionBlock { vec4 positions[]; };
+layout(std430, binding = 1) buffer CountBlock { uint counts[]; };
+layout(std430, binding = 2) readonly buffer OffsetBlock { uint offsets[]; };
+layout(std430, binding = 3) buffer CursorBlock { uint cursors[]; };
+layout(std430, binding = 4) buffer IdBlock { uint sortedIds[]; };
+layout(std430, binding = 5) buffer CellBlock { uint vertexCells[]; };
+layout(std430, binding = 6) buffer DiagnosticsBlock { uint diagnostic[]; };
+layout(std430, binding = 7) writeonly buffer CorrectionBlock { vec4 corrections[]; };
+
+uniform uint uPhase;
+uniform uint uCount;
+uniform uint uSide;
+uniform uint uCells;
+uniform uvec3 uDimensions;
+uniform float uCellSize;
+uniform float uThickness;
+uniform uint uCandidateBudget;
+// Verification-only ID masks are limited to <=32 vertices. Production leaves this zero.
+uniform uint uFixtureRecord;
+
+uint cellIndex(ivec3 coordinate) {
+    return uint(coordinate.x) + uDimensions.x * (uint(coordinate.y) + uDimensions.y * uint(coordinate.z));
+}
+
+ivec3 cellCoordinate(vec3 point) {
+    ivec3 coordinate = ivec3(floor((point - vec3(-5.0, 0.0, -5.0)) / uCellSize));
+    return clamp(coordinate, ivec3(0), ivec3(uDimensions) - ivec3(1));
+}
+
+ivec3 decodeCell(uint cell) {
+    uint x = cell % uDimensions.x;
+    uint rest = cell / uDimensions.x;
+    return ivec3(int(x), int(rest % uDimensions.y), int(rest / uDimensions.y));
+}
+
+bool validCell(ivec3 coordinate) {
+    return all(greaterThanEqual(coordinate, ivec3(0))) && all(lessThan(coordinate, ivec3(uDimensions)));
+}
+
+bool topologyNeighbors(uint a, uint b) {
+    ivec2 first = ivec2(int(a % uSide), int(a / uSide));
+    ivec2 second = ivec2(int(b % uSide), int(b / uSide));
+    return all(lessThanEqual(abs(first - second), ivec2(2)));
+}
+
+vec3 coincidenceDirection(uint a, uint b) {
+    vec3 direction = vec3(0.0);
+    float signValue = 1.0;
+    if (a < b) {
+        signValue = -1.0;
+    }
+    direction[(a + b) % 3u] = signValue;
+    return direction;
+}
+
+void addUint64(uint lowIndex, uint highIndex, uint low, uint high) {
+    uint old = atomicAdd(diagnostic[lowIndex], low);
+    uint carry = 0u;
+    if (old + low < old) {
+        carry = 1u;
+    }
+    atomicAdd(diagnostic[highIndex], high + carry);
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (uPhase == 0u) {
+        if (id < uCells) {
+            counts[id] = 0u;
+            cursors[id] = 0u;
+        }
+        if (id == 0u) {
+            diagnostic[16] = 0u;
+            diagnostic[17] = 0u;
+            diagnostic[18] = 0u;
+            diagnostic[11] = 0u;
+            diagnostic[12] = 0u;
+        }
+        return;
+    }
+    if (uPhase == 1u) {
+        if (id < uCount) {
+            uint cell = cellIndex(cellCoordinate(positions[id].xyz));
+            vertexCells[id] = cell;
+            atomicAdd(counts[cell], 1u);
+        }
+        return;
+    }
+    if (uPhase == 2u) {
+        if (id < uCells) {
+            cursors[id] = offsets[id];
+        }
+        return;
+    }
+    if (uPhase == 3u) {
+        if (id < uCount) {
+            uint destination = atomicAdd(cursors[vertexCells[id]], 1u);
+            sortedIds[destination] = id;
+        }
+        return;
+    }
+    if (uPhase == 4u) {
+        if (id >= uCells || counts[id] == 0u) {
+            return;
+        }
+        uint neighbors = 0u;
+        ivec3 coordinate = decodeCell(id);
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    ivec3 other = coordinate + ivec3(dx, dy, dz);
+                    if (validCell(other)) {
+                        neighbors += counts[cellIndex(other)];
+                    }
+                }
+            }
+        }
+        uint low = 0u;
+        uint high = 0u;
+        umulExtended(counts[id], neighbors - 1u, high, low);
+        addUint64(16u, 17u, low, high);
+        addUint64(4u, 5u, low, high);
+        atomicMax(diagnostic[19], counts[id]);
+        atomicAdd(diagnostic[11], 1u);
+        atomicAdd(diagnostic[12], counts[id]);
+        return;
+    }
+    if (uPhase != 5u || id >= uCount) {
+        return;
+    }
+    corrections[id] = vec4(0.0);
+    // The complete current occupancy count is known before this dispatch begins.
+    // An unsafe dense configuration is refused as a whole, never partially truncated.
+    if (diagnostic[17] != 0u || diagnostic[16] > uCandidateBudget) {
+        if (id == 0u) {
+            diagnostic[18] = 1u;
+            atomicOr(diagnostic[10], 1u);
+        }
+        return;
+    }
+#if LAB_CHECKPOINT >= 10
+    if (uFixtureRecord != 0u && uCount <= 32u) {
+        vertexCells[id] = 0u;
+    }
+    if (positions[id].w == 0.0) {
+        return;
+    }
+    ivec3 coordinate = cellCoordinate(positions[id].xyz);
+    vec3 sum = vec3(0.0);
+    uint contacts = 0u;
+    uint contactMask = 0u;
+    float diameter = 2.0 * uThickness;
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec3 otherCell = coordinate + ivec3(dx, dy, dz);
+                if (!validCell(otherCell)) {
+                    continue;
+                }
+                uint cell = cellIndex(otherCell);
+                for (uint offset = 0u; offset < counts[cell]; ++offset) {
+                    uint other = sortedIds[offsets[cell] + offset];
+                    if (topologyNeighbors(id, other)) {
+                        continue;
+                    }
+                    vec3 delta = positions[id].xyz - positions[other].xyz;
+                    float distance = length(delta);
+                    if (distance >= diameter) {
+                        continue;
+                    }
+                    vec3 direction = coincidenceDirection(id, other);
+                    if (distance > 1e-8) {
+                        direction = delta / distance;
+                    }
+                    float weight = positions[id].w / (positions[id].w + positions[other].w);
+                    sum += direction * ((diameter - distance) * weight);
+                    ++contacts;
+                    if (uFixtureRecord != 0u && uCount <= 32u) {
+                        contactMask |= 1u << other;
+                    }
+                    atomicMax(diagnostic[20], floatBitsToUint(diameter - distance));
+                }
+            }
+        }
+    }
+    if (contacts != 0u) {
+        vec3 correction = sum / float(contacts);
+        float magnitude = length(correction);
+        if (magnitude > uThickness) {
+            correction *= uThickness / magnitude;
+        }
+        corrections[id] = vec4(correction, float(contacts));
+        uint previousContacts = atomicAdd(diagnostic[3], contacts);
+        if (previousContacts + contacts < previousContacts) {
+            atomicOr(diagnostic[10], 4u);
+        }
+    }
+    if (uFixtureRecord != 0u && uCount <= 32u) {
+        vertexCells[id] = contactMask;
+    }
+#endif
+}
