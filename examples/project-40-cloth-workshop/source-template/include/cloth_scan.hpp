@@ -10,8 +10,7 @@ inline GLuint groupCount(std::uint64_t count) {
     return static_cast<GLuint>((count + 255ULL) / 256ULL);
 }
 
-inline bool storageBuffer(GlApi& gl, GLuint& name, std::uint64_t bytes, const void* data,
-    std::string& error) {
+inline bool storageBuffer(GlApi& gl, GLuint& name, std::uint64_t bytes, const void* data, std::string& error) {
     gl.GenBuffers(1, &name);
     if (name == 0U) {
         error = "Cannot create GPU storage buffer.";
@@ -39,11 +38,16 @@ class GpuScan {
     GlApi& gl_;
     std::vector<ScanLevel> levels_{};
 
-public:
-    explicit GpuScan(GlApi& gl) : gl_(gl) {}
+    public:
+    explicit GpuScan(GlApi& gl)
+        : gl_(gl) {}
+
     GpuScan(const GpuScan&) = delete;
     GpuScan& operator=(const GpuScan&) = delete;
-    ~GpuScan() { clear(); }
+
+    ~GpuScan() {
+        clear();
+    }
 
     void clear() {
         for (std::size_t index = 0U; index < levels_.size(); ++index) {

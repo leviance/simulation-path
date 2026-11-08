@@ -14,6 +14,8 @@ Thickness t tính bằng mét. Đỉnh vải được coi là tâm một quả c
 
 Plane có normal +Y và giới hạn y≥floor+t. Sphere có normal từ tâm tới điểm. Capsule là đoạn AB được quét bởi sphere: tìm điểm gần nhất trên AB rồi dùng cùng phép kiểm sphere. Tâm sphere hoặc điểm trên trục capsule làm normal không duy nhất, nên implementation dùng fallback +Y hữu hạn.
 
+Ba preset native không chỉ đổi vị trí bắt đầu của vải. Helper presetSettings trong cloth_topology.hpp giữ cấu hình grid/vật liệu/lực/thời gian, nhưng chọn cả layout vật cản. Hanging và SphereDrape dùng plane Y=0, sphere tâm (0; 1,75; 0) radius 1,35 m và capsule hai đầu (−1; 0,9; 0)/(1; 0,9; 0), radius 0,45 m. DropTable nâng plane lên Y=0,7 m, đặt sphere nhỏ ở Y=0,5 m, radius 0,1 m để nó nằm hoàn toàn dưới bàn, rồi đặt capsule ở Y=1,15 m, radius 0,45 m. Capsule chạm bàn ở đáy và nhô tới Y=1,6 m, nên vải rơi lên một mặt phẳng có thanh nổi thay vì tạo lại cùng vòm sphere. Fixture validation được cấu hình riêng, không bị helper tự động ghi đè.
+
 Friction ở đây không phải hệ số Coulomb theo lực normal. Nó là **tỷ lệ không đơn vị** f∈[0,1] làm giảm velocity tiếp tuyến trong mỗi substep có analytic contact. Vì có phạm vi theo substep, đổi substep có thể đổi tổng hiệu ứng; phải ghi cấu hình khi so. Damping world rate 1/s vẫn là tham số khác.
 
 <InteractiveLab demo="cloth-workshop" mode="obstacles" />
@@ -62,9 +64,9 @@ Dot âm là vận tốc đi vào vật cản; bỏ phần đó để projection 
 
 ## Chạy thử và quan sát
 
-Build project_40_checkpoint_7. Dùng preset phủ sphere, nhìn từ phía bên để kiểm khoảng hở t chứ không chỉ ảnh mặt trước. Thử điểm trên trục X tại distance R+t, nhỏ hơn ngưỡng một lượng đã biết và đúng tâm. Plane kiểm y trước/sau; capsule kiểm normal ở giữa thân và ngoài đầu.
+Build project_40_checkpoint_7. Dùng preset phủ sphere, nhìn từ phía bên để kiểm khoảng hở t chứ không chỉ ảnh mặt trước. Sau đó đổi DropTable: vùng vải ngoài thanh capsule phải được mặt bàn Y=0,7 m đỡ, không lại phủ lên cùng quả cầu lớn. Thử điểm trên trục X tại distance R+t, nhỏ hơn ngưỡng một lượng đã biết và đúng tâm. Plane kiểm y trước/sau; capsule kiểm normal ở giữa thân và ngoài đầu.
 
-Điều chỉnh obstacle trong miền UI cho phép, không teleport qua cả tấm vải rồi dùng ảnh đó chứng minh CCD. Bản chuẩn là discrete analytic contact; độ dời vật cản và tốc độ vải bị giới hạn. Ghi h/iterations cùng max penetration; một ảnh nhìn ổn không thay test normal/khoảng cách độc lập.
+Điều chỉnh obstacle trong miền UI cho phép, với tốc độ target bị chặn ở 0,5 m/s; không teleport qua cả tấm vải rồi dùng ảnh đó chứng minh CCD. Bản chuẩn là discrete analytic contact; độ dời vật cản và tốc độ vải bị giới hạn. Ghi h/iterations cùng max penetration; một ảnh nhìn ổn không thay test normal/khoảng cách độc lập.
 
 ## Thử tạo lỗi
 

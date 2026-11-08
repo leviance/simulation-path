@@ -275,8 +275,8 @@ const learning = {
     ],
     "p45-l05": [
       {
-        label: "Cell grid GPU",
-        href: "/projects/gpu-spatial-grid-neighbors",
+        label: "Grid 3D và CSR trên GPU",
+        href: "/projects/cloth-workshop/09-csr-count-scan-scatter",
         kind: "Thuật ngữ",
       },
     ],

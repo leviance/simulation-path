@@ -59,11 +59,15 @@ if (!gl_FrontFacing) { n = -n; }
 
 Normal từ đạo hàm màn hình là fallback để scaffold có hình ở những mốc đầu; bản hoàn thiện bật normal buffer cập nhật sau solve. Pattern/ánh sáng đọc UV và normal này. Wireframe không được làm thay mesh mặt; bật/tắt debug phải giữ cùng positions, camera và thời điểm để so được.
 
+Native còn có appendContactRadiusRings trong cloth_renderer.hpp: khi bật C/Cells, nó vẽ ba vòng hổ phách vuông góc ở CSR debug probe được chọn lần cuối. Bán kính world đúng 2t mét, tức ngưỡng khoảng cách giữa tâm hai vertex có thickness t; đừng đọc nó thành bán kính t hoặc độ dày hình học của một lớp vải. Vòng không được phóng đại theo số pixel để dễ thấy, nên hãy zoom camera. Preview cyan cho candidates và đỏ cho contacts giữ tối đa 32 ID mỗi nhóm; đó là subset debug, không phải tổng số contacts của solver.
+
 ## Chạy thử và quan sát
 
 Build project_40_checkpoint_11. Pause ở một nếp gấp, orbit sang mặt sau, bật/tắt normal/strain/wireframe theo bảng điều khiển. Phần vải gập phải đổi sáng theo góc chứ không sáng như mặt phẳng nghỉ. Camera vẫn dùng được khi Pause; đổi góc nhìn không được đổi residual của solver.
 
 Kiểm normal gần đơn vị bằng tolerance riêng và luôn finite. Với một tam giác đơn nằm trên mặt phẳng XZ có winding đã biết, tính cross bằng tay để xác nhận hướng; với mesh biến dạng nhỏ, so GPU gather với normal CPU theo cùng tam giác. Debug contact/cell chỉ vẽ subset công bố; đỉnh không vẽ marker vẫn phải được solver cập nhật đầy đủ.
+
+Chọn một đỉnh rồi bật C để đọc vòng 2t từ ba hướng. Khi zoom, kích thước pixel của vòng thay đổi nhưng bán kính world không đổi. HUD góc dưới trái ghi tuổi của selected GPU probe theo completed steps và nhãn STALE/PENDING; đừng lấy một snapshot cũ làm vị trí tức thời trong khi mô phỏng đang tiến. Ring/candidate preview cũng là ảnh chụp debug hữu hạn, không phải một lớp readback toàn mesh liên tục.
 
 ## Thử tạo lỗi
 

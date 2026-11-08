@@ -72,7 +72,13 @@ cmake -S . -B build -DBUILD_CHECKPOINTS=ON
 cmake --build build --config Debug --target project_40_checkpoint_1
 ```
 
-Trên Visual Studio, executable nằm trong build/Debug; generator single-config đặt nó trực tiếp dưới build. Chạy target vừa build, orbit qua cả mặt trước/sau, pan khỏi tâm rồi zoom về. Xem bảng điều khiển trong cửa sổ để dùng đúng phím/chuột của native; Canvas có nhóm camera riêng. Bài đầu chỉ kiểm scaffold và mặt vải, chưa nghiệm thu solver hoặc scale. Phần mã đầy đủ cuối trang lấy từ checkpoint của bài.
+Trên Visual Studio, chạy bản nhỏ và chọn rõ cảnh treo để đối chiếu đoạn tạo positions ở trên:
+
+```powershell
+.\build\Debug\project_40_checkpoint_1.exe --preset hanging --side 17
+```
+
+Generator single-config đặt executable trực tiếp dưới build. Settings chứa mặc định cho bản cuối, còn app ở các checkpoint đầu chọn mesh nhỏ để học; side trên CLI là lựa chọn rõ cho phiên này. Orbit qua cả mặt trước/sau, pan khỏi tâm rồi zoom về. Xem bảng điều khiển trong cửa sổ để dùng đúng phím/chuột của native; Canvas có nhóm camera riêng. Bài đầu chỉ kiểm scaffold và mặt vải, chưa nghiệm thu solver hoặc scale. Phần mã đầy đủ cuối trang lấy từ checkpoint của bài.
 
 ## Thử tạo lỗi
 

@@ -7,10 +7,7 @@ namespace cloth {
 
 // The independent tests use a hand-derived answer, not this function as its own oracle.
 inline bool solveDistance(Vec4& a, Vec4& b, float rest, float compliance, float h, float& lambda) {
-    if (!finite(xyz(a)) || !finite(xyz(b)) || !std::isfinite(rest) || rest <= 0.0F
-        || !std::isfinite(compliance) || compliance < 0.0F || !std::isfinite(h) || h <= 0.0F
-        || a.w < 0.0F || b.w < 0.0F || !std::isfinite(a.w) || !std::isfinite(b.w)
-        || !std::isfinite(lambda)) {
+    if (!finite(xyz(a)) || !finite(xyz(b)) || !std::isfinite(rest) || rest <= 0.0F || !std::isfinite(compliance) || compliance < 0.0F || !std::isfinite(h) || h <= 0.0F || a.w < 0.0F || b.w < 0.0F || !std::isfinite(a.w) || !std::isfinite(b.w) || !std::isfinite(lambda)) {
         return false;
     }
     const Vec3 delta = xyz(a) - xyz(b);
@@ -54,8 +51,7 @@ inline Vec3 analyticProjection(Vec3 point, const Settings& settings) {
     point.y = std::max(point.y, settings.floorHeight + settings.thickness);
     const auto sphere = sphereContact(point, settings.sphereCenter, settings.sphereRadius, settings.thickness);
     point = point + sphere.normal * sphere.penetration;
-    const auto capsule = capsuleContact(point, settings.capsuleA, settings.capsuleB,
-        settings.capsuleRadius, settings.thickness);
+    const auto capsule = capsuleContact(point, settings.capsuleA, settings.capsuleB, settings.capsuleRadius, settings.thickness);
     point = point + capsule.normal * capsule.penetration;
     point.x = std::clamp(point.x, -4.95F, 4.95F);
     point.y = std::clamp(point.y, settings.floorHeight + settings.thickness, 7.95F);
@@ -82,8 +78,7 @@ inline Vec3 coincidenceDirection(std::uint32_t a, std::uint32_t b) {
     return axis;
 }
 
-inline std::vector<Vec3> selfContactCorrections(const std::vector<Vec4>& positions,
-    const CpuGrid& grid, std::uint32_t side, float thickness) {
+inline std::vector<Vec3> selfContactCorrections(const std::vector<Vec4>& positions, const CpuGrid& grid, std::uint32_t side, float thickness) {
     std::vector<Vec3> corrections(positions.size());
     const float diameter = 2.0F * thickness;
     for (std::uint32_t id = 0U; id < positions.size(); ++id) {
@@ -99,8 +94,7 @@ inline std::vector<Vec3> selfContactCorrections(const std::vector<Vec4>& positio
                     const int x = coordinate[0] + dx;
                     const int y = coordinate[1] + dy;
                     const int z = coordinate[2] + dz;
-                    if (x < 0 || y < 0 || z < 0 || x >= static_cast<int>(grid.plan.nx)
-                        || y >= static_cast<int>(grid.plan.ny) || z >= static_cast<int>(grid.plan.nz)) {
+                    if (x < 0 || y < 0 || z < 0 || x >= static_cast<int>(grid.plan.nx) || y >= static_cast<int>(grid.plan.ny) || z >= static_cast<int>(grid.plan.nz)) {
                         continue;
                     }
                     const auto cell = cellIndex(x, y, z, grid.plan);
@@ -137,11 +131,9 @@ inline std::vector<Vec4> meshNormals(const std::vector<Vec4>& positions, std::ui
     for (std::uint32_t row = 0U; row + 1U < side; ++row) {
         for (std::uint32_t column = 0U; column + 1U < side; ++column) {
             const std::uint32_t a = row * side + column;
-            const std::array<std::array<std::uint32_t, 3>, 2> triangles{{{a, a + side, a + 1U},
-                {a + 1U, a + side, a + side + 1U}}};
+            const std::array<std::array<std::uint32_t, 3>, 2> triangles{{{a, a + side, a + 1U}, {a + 1U, a + side, a + side + 1U}}};
             for (const auto triangle : triangles) {
-                const Vec3 normal = cross(xyz(positions[triangle[1]]) - xyz(positions[triangle[0]]),
-                    xyz(positions[triangle[2]]) - xyz(positions[triangle[0]]));
+                const Vec3 normal = cross(xyz(positions[triangle[1]]) - xyz(positions[triangle[0]]), xyz(positions[triangle[2]]) - xyz(positions[triangle[0]]));
                 for (const auto id : triangle) {
                     sums[id] = sums[id] + normal;
                 }
@@ -195,8 +187,7 @@ inline void cpuStep(CpuState& state, const Settings& settings) {
                     if (constraint.kind == 2.0F) {
                         compliance = settings.bendCompliance;
                     }
-                    solveDistance(state.positions[constraint.a], state.positions[constraint.b], constraint.rest,
-                        compliance, h, lambdas[edge]);
+                    solveDistance(state.positions[constraint.a], state.positions[constraint.b], constraint.rest, compliance, h, lambdas[edge]);
                 }
             }
 #if LAB_CHECKPOINT >= 7
@@ -211,8 +202,7 @@ inline void cpuStep(CpuState& state, const Settings& settings) {
             const auto corrections = selfContactCorrections(state.positions, grid, state.topology.side, settings.thickness);
             for (std::size_t id = 0U; id < state.positions.size(); ++id) {
                 if (state.positions[id].w > 0.0F) {
-                    state.positions[id] = vector4(analyticProjection(xyz(state.positions[id]) + corrections[id], settings),
-                        state.positions[id].w);
+                    state.positions[id] = vector4(analyticProjection(xyz(state.positions[id]) + corrections[id], settings), state.positions[id].w);
                 }
             }
 #endif
@@ -234,8 +224,7 @@ inline void cpuStep(CpuState& state, const Settings& settings) {
             if (length(point - settings.sphereCenter) < settings.sphereRadius + settings.thickness + 0.0001F) {
                 normal = sphere.normal;
             }
-            if (length(point - closestOnSegment(point, settings.capsuleA, settings.capsuleB))
-                < settings.capsuleRadius + settings.thickness + 0.0001F) {
+            if (length(point - closestOnSegment(point, settings.capsuleA, settings.capsuleB)) < settings.capsuleRadius + settings.thickness + 0.0001F) {
                 normal = capsule.normal;
             }
             if (length(normal) > 0.0F) {

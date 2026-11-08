@@ -6,13 +6,22 @@ import test from "node:test";
 import { compile } from "@mdx-js/mdx";
 import remarkMath from "remark-math";
 import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
-import { findLessonSection } from "../lib/lesson-sections.mjs";
+import { interactiveLabUsages, lessonSectionUsages } from "../scripts/mdx-contracts.mjs";
 import { migrateProgressContent } from "../lib/progress-content.ts";
 
 const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = path.join(workspace, "examples/project-40-cloth-workshop");
 const read = (relative) => readFile(path.join(workspace, relative), "utf8");
 const source = (relative) => readFile(path.join(root, "source-template", relative), "utf8");
+async function authoredSourcePaths(directory, prefix = "") {
+  const files = [];
+  for (const entry of await readdir(path.join(directory, prefix), { withFileTypes: true })) {
+    const relative = path.join(prefix, entry.name);
+    if (entry.isDirectory()) files.push(...(await authoredSourcePaths(directory, relative)));
+    else files.push(relative);
+  }
+  return files;
+}
 const modes =
   "surface|prediction|xpbd|topology|coloring|timestep|obstacles|grid|csr|self-contact|normals|interaction|validation|showcase";
 
@@ -49,9 +58,7 @@ test("all fourteen cloth lessons compile, keep seven teaching roles and quote co
     const lesson = await readFile(path.join(directory, file), "utf8");
     await compile(lesson, { remarkPlugins: [remarkMath] });
     assert.ok(Buffer.byteLength(lesson) <= 32 * 1024, file + " exceeds lesson budget");
-    const roles = [...lesson.matchAll(/^## (.+)$/gm)]
-      .map((match) => findLessonSection(match[1])?.key)
-      .filter(Boolean);
+    const roles = lessonSectionUsages(lesson).map((section) => section.key);
     assert.deepEqual(
       roles,
       ["problem", "model", "code", "assembly", "experiments", "validation", "extensions"],
@@ -81,6 +88,10 @@ test("all fourteen cloth lessons compile, keep seven teaching roles and quote co
       lesson,
       new RegExp('<InteractiveLab demo="cloth-workshop" mode="(?:' + modes + ')"\\s*\\/>'),
     );
+    const usages = interactiveLabUsages(lesson, file);
+    assert.equal(usages.length, 1, file + " hides its Canvas inside malformed math or prose");
+    assert.equal(usages[0].demo, "cloth-workshop");
+    assert.match(usages[0].mode, new RegExp("^(?:" + modes + ")$"));
     const experiments =
       lesson.split("## Thử tạo lỗi")[1]?.split("## Checklist hoàn thành")[0] ?? "";
     assert.ok(
@@ -88,6 +99,87 @@ test("all fourteen cloth lessons compile, keep seven teaching roles and quote co
       file + " needs two intentional experiments",
     );
     assert.doesNotMatch(lesson, /TODO|FIXME|Checkpoint đang xây|code sẽ thêm sau/i);
+  }
+});
+
+test("Project 40 connects each cloth layer at its documented checkpoint without duplicate milestones", async () => {
+  const projectDirectory = root;
+  const layers = [
+    [
+      1,
+      "include/cloth_renderer.hpp",
+      /gl\.DrawElements\(GL_TRIANGLES, static_cast<GLsizei>\(gpu\.topology\(\)\.indices\.size\(\)\)/,
+    ],
+    [2, "shaders/cloth_solver.comp", /position\.xyz \+ velocity \* uH/],
+    [3, "shaders/cloth_solver.comp", /alpha \* lambdas\[edgeId\]/],
+    [4, "include/cloth_application.hpp", /cpuStep\(cpu_, ui_\.settings\)/],
+    [5, "include/cloth_gpu.hpp", /for \(std::uint32_t color = 0U; color < 12U; \+\+color\)/],
+    [6, "shaders/cloth_solver.comp", /\(point - previous\[id\]\.xyz\) \/ uH/],
+    [7, "shaders/cloth_solver.comp", /vec3 projected = analyticProjection\(point\)/],
+    [8, "include/cloth_gpu.hpp", /dispatchGrid\(1U, n\)/],
+    [9, "include/cloth_gpu.hpp", /state_->scan\.run\(state_->counts, scan_, scanAdd_\)/],
+    [10, "include/cloth_gpu.hpp", /dispatchGrid\(5U, n\)/],
+    [
+      11,
+      "include/cloth_renderer.hpp",
+      /gl\.Uniform1i\(gl\.GetUniformLocation\(clothProgram_, "uUseNormals"\), 1\)/,
+    ],
+    [12, "shaders/cloth_solver.comp", /point = previous\[id\]\.xyz \+ displacement/],
+    [13, "include/cloth_application.hpp", /validation_\.begin\(\)/],
+    [14, "include/cloth_application.hpp", /ui_\.settings\.side = 321U/],
+  ];
+  const files = await authoredSourcePaths(path.join(projectDirectory, "source-template"));
+  let previousBytes;
+  for (let checkpoint = 0; checkpoint <= 14; ++checkpoint) {
+    const snapshot =
+      checkpoint === 0 ? "starter" : "checkpoints/" + String(checkpoint).padStart(2, "0");
+    const parts = await Promise.all(
+      files.map((file) => readFile(path.join(projectDirectory, snapshot, file))),
+    );
+    const bytes = Buffer.concat(parts.flatMap((part) => [part, Buffer.from([0])]));
+    if (previousBytes) {
+      assert.notDeepEqual(
+        bytes,
+        previousBytes,
+        "Cloth checkpoint " + checkpoint + " adds no runnable layer",
+      );
+    }
+    previousBytes = bytes;
+  }
+  for (const [checkpoint, file, symbol] of layers) {
+    const previous =
+      checkpoint === 1 ? "starter" : "checkpoints/" + String(checkpoint - 1).padStart(2, "0");
+    const current = "checkpoints/" + String(checkpoint).padStart(2, "0");
+    assert.doesNotMatch(
+      await readFile(path.join(projectDirectory, previous, file), "utf8"),
+      symbol,
+      "Cloth layer appears before checkpoint " + checkpoint,
+    );
+    assert.match(
+      await readFile(path.join(projectDirectory, current, file), "utf8"),
+      symbol,
+      "Missing cloth layer at checkpoint " + checkpoint,
+    );
+  }
+  const teachingGpu = await readFile(
+    path.join(projectDirectory, "checkpoints/03/include/cloth_gpu.hpp"),
+    "utf8",
+  );
+  assert.match(
+    teachingGpu,
+    /position = vector4\(xyz\(position\) \+ direction \* 0\.4F, position\.w\)/,
+  );
+  assert.match(teachingGpu, /candidate->teachingConstraint = edgeId/);
+  for (const snapshot of ["checkpoints/02", "checkpoints/04", "final"]) {
+    const clean = await readFile(
+      path.join(projectDirectory, snapshot, "include/cloth_gpu.hpp"),
+      "utf8",
+    );
+    assert.doesNotMatch(
+      clean,
+      /teachingConstraint/,
+      snapshot + " keeps the one-edge teaching perturbation",
+    );
   }
 });
 

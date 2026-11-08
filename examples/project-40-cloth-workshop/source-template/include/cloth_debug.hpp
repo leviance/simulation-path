@@ -76,6 +76,26 @@ struct DebugSnapshot {
     bool partial() const {
         return (flags & debugPartial) != 0U;
     }
+
+    std::string status(std::uint64_t currentSteps) const {
+        if (!valid) {
+            return "No completed CSR debug snapshot; step once and request a selected-ID probe.";
+        }
+        std::string text = "Last solver CSR step " + std::to_string(solverSteps);
+        text += "; positions captured at probe, membership precedes final correction. Checked ";
+        text += std::to_string(checkedCandidates) + "/" + std::to_string(totalCandidates) + " candidates; ";
+        text += std::to_string(visitedBucketSlots) + "/" + std::to_string(totalBucketSlots) + " bucket slots (limit 8192). ";
+        text += "Cyan/red previews " + std::to_string(candidateCount) + "/" + std::to_string(contactCount) + ", cap 32 each; ";
+        text += std::to_string(checkedContacts) + " geometric contacts among checked IDs. ";
+        if (partial()) {
+            text += "PARTIAL DIAGNOSTIC, not a complete contact count. ";
+        }
+        if (currentSteps != solverSteps) {
+            text += "STALE versus current solver step " + std::to_string(currentSteps) + ". ";
+        }
+        text += "X-ray debug only; not an exact current-state CSR oracle or solver contact truncation.";
+        return text;
+    }
 };
 
 class GpuClothDebug {
@@ -100,7 +120,7 @@ class GpuClothDebug {
         gl.Uniform1ui(gl.GetUniformLocation(program_, name), value);
     }
 
-public:
+    public:
     GpuClothDebug() = default;
     GpuClothDebug(const GpuClothDebug&) = delete;
     GpuClothDebug& operator=(const GpuClothDebug&) = delete;
@@ -128,6 +148,13 @@ public:
 
     const DebugSnapshot& getSnapshot() const {
         return snapshot_;
+    }
+
+    std::string status(std::uint64_t currentSteps) const {
+        if (busy()) {
+            return "CSR debug query pending (five-second deadline). " + snapshot_.status(currentSteps);
+        }
+        return snapshot_.status(currentSteps);
     }
 
     void cancel(GlApi& gl) {
@@ -161,6 +188,11 @@ public:
             pendingError_ = "Choose a valid vertex and finish one solver step before requesting CSR debug.";
             return false;
         }
+        if (gpu.stats().overflow != 0U || gpu.stats().invalid != 0U) {
+            cancel(gl);
+            pendingError_ = "Last solver step was rejected; its CSR may precede rollback. Finish an accepted step before probing.";
+            return false;
+        }
         const GridPlan grid = gpu.gridPlan();
         if (grid.nx == 0U || grid.ny == 0U || grid.nz == 0U || grid.cells == 0U) {
             pendingError_ = "Cannot inspect an empty cloth grid.";
@@ -177,8 +209,7 @@ public:
         submitted_.thickness = gpu.thickness();
         pendingError_.clear();
         gl.UseProgram(program_);
-        const std::array<GLuint, 6> buffers{gpu.positionBuffer(), gpu.countsBuffer(),
-            gpu.offsetsBuffer(), gpu.idsBuffer(), gpu.vertexCellsBuffer(), output_};
+        const std::array<GLuint, 6> buffers{gpu.positionBuffer(), gpu.countsBuffer(), gpu.offsetsBuffer(), gpu.idsBuffer(), gpu.vertexCellsBuffer(), output_};
         for (GLuint binding = 0U; binding < buffers.size(); ++binding) {
             gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, buffers[binding]);
         }
@@ -236,13 +267,7 @@ public:
         gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, output_);
         gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(packet), &packet);
         releaseFence(gl);
-        if (gl.GetError() != GL_NO_ERROR || (packet.identity[3] & debugValid) == 0U
-            || (packet.identity[3] & debugInvalid) != 0U
-            || packet.identity[0] != submitted_.selected
-            || packet.identity[1] != submitted_.side
-            || packet.candidateCounts[2] > debugPreviewCapacity
-            || packet.previewCounts[0] > debugPreviewCapacity
-            || packet.previewCounts[2] > debugSlotBudget) {
+        if (gl.GetError() != GL_NO_ERROR || (packet.identity[3] & debugValid) == 0U || (packet.identity[3] & debugInvalid) != 0U || packet.identity[0] != submitted_.selected || packet.identity[1] != submitted_.side || packet.candidateCounts[2] > debugPreviewCapacity || packet.previewCounts[0] > debugPreviewCapacity || packet.previewCounts[2] > debugSlotBudget) {
             error = "Cloth debug rejected an invalid CSR/preview packet; last good snapshot was retained.";
             return false;
         }

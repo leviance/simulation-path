@@ -1,7 +1,10 @@
 #pragma once
 
+#include "cloth_debug.hpp"
 #include "cloth_pick.hpp"
+#include "cloth_timing.hpp"
 #include "cloth_ui.hpp"
+#include "cloth_validation.hpp"
 #include "cloth_verify.hpp"
 
 #include <chrono>
@@ -11,7 +14,7 @@
 namespace cloth {
 
 struct RunOptions {
-    bool hidden{}, verify{}, benchmark{};
+    bool hidden{}, verify{}, benchmark{}, exerciseControls{};
     std::uint32_t side{}, steps{}, frames{};
     double seconds{};
     Preset preset{Preset::SphereDrape};
@@ -26,12 +29,23 @@ class Application {
     std::unique_ptr<GpuCloth> gpu_{};
     SceneRenderer renderer_{};
     GpuPicker picker_{};
+    GpuClothDebug debug_{};
+    ValidationJob validation_{};
+    BenchmarkJob benchmark_{};
+    DrawTimer drawTimer_{};
     ControlPanel panel_{};
     UiState ui_{};
     Input input_{};
     PickResult probe_{};
+    enum class PickKind { None,
+                        Drag,
+                        Pin,
+                        Probe };
+    PickKind pickKind_{PickKind::None};
     Camera pickCamera_{};
-    bool leftHeld_{}, rightHeld_{}, middleHeld_{}, pickForPin_{}, resetAnnounced_{};
+    Camera benchmarkCamera_{};
+    bool leftHeld_{}, rightHeld_{}, middleHeld_{}, resetAnnounced_{}, probeDirty_{};
+    std::uint64_t probeStep_{}, requestedProbeStep_{}, debugStep_{noVertex};
     Vec3 dragPlanePoint_{}, dragPlaneNormal_{};
     int width_{1440}, height_{900}, sceneWidth_{1080};
     double cpuFrameMs_{};
@@ -48,6 +62,10 @@ class Application {
         // Cleanup: GPU owners must die before the OpenGL context, not afterwards.
         if (loaded_) {
             releaseInput();
+            debug_.destroy(gl_);
+            validation_.destroy();
+            benchmark_.destroy();
+            drawTimer_.destroy();
             picker_.destroy(gl_);
             gpu_.reset();
             renderer_.destroy(gl_);
@@ -68,6 +86,12 @@ class Application {
         if (options.verify) {
             return verify();
         }
+        if (options.exerciseControls) {
+            return exerciseControls();
+        }
+        if (options.benchmark) {
+            ui_.benchmarkRequested = true;
+        }
         const auto start = std::chrono::steady_clock::now();
         auto previous = start;
         std::uint32_t frames{};
@@ -79,7 +103,13 @@ class Application {
             if (options.seconds > 0.0 && std::chrono::duration<double>(frameStart - start).count() >= options.seconds) {
                 break;
             }
+            const int previousWidth = width_;
+            const int previousHeight = height_;
             SDL_GetWindowSizeInPixels(window_, &width_, &height_);
+            if ((previousWidth != width_ || previousHeight != height_) && benchmark_.active()) {
+                benchmark_.cancel();
+                ui_.message = "Benchmark canceled: viewport changed; no PASS";
+            }
             if (width_ <= 0 || height_ <= 0) {
                 SDL_Delay(10);
                 continue;
@@ -95,10 +125,14 @@ class Application {
             }
             pollPick();
             processRequests();
-            if (!ui_.paused) { accumulator_ = std::min(accumulator_ + elapsed, 0.1); }
+            pollJobs();
+            pollDebug();
+            if (!ui_.paused) {
+                accumulator_ = std::min(accumulator_ + elapsed, 0.1);
+            }
             const bool targetReached = options.steps > 0U && stepCount() >= options.steps;
             const bool stepDue = ui_.singleStep || (!ui_.paused && (fastRun_ || accumulator_ >= ui_.settings.dt));
-            if (!targetReached && stepDue && !gpu_->busy() && !ui_.resetRequested) {
+            if (!targetReached && stepDue && !gpu_->busy() && !ui_.resetRequested && !jobActive()) {
                 advance();
                 accumulator_ = std::max(0.0, accumulator_ - ui_.settings.dt);
                 ui_.singleStep = false;
@@ -109,8 +143,16 @@ class Application {
             if (options.steps > 0U) {
                 done = targetReached;
             }
+            if (options.benchmark && !benchmark_.active() && !ui_.benchmarkRequested) {
+                if (!benchmark_.passed()) {
+                    throw std::runtime_error(benchmark_.message());
+                }
+                done = true;
+            }
             if (done) {
-                printStats();
+                if (!options.benchmark) {
+                    printStats();
+                }
                 if (!options.capture.empty()) {
                     saveCapture(options.capture);
                 }
@@ -140,7 +182,7 @@ class Application {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
         SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-        if (options.hidden || options.verify || options.benchmark) {
+        if (options.hidden || options.verify || options.benchmark || options.exerciseControls) {
             flags |= SDL_WINDOW_HIDDEN;
         }
         window_ = SDL_CreateWindow("Project 40 - Cloth Workshop", width_, height_, flags);
@@ -172,21 +214,31 @@ class Application {
             directory_ = std::filesystem::path(SDL_GetBasePath()) / COURSE_SHADER_FALLBACK_SUBDIRECTORY;
         }
         std::string error{};
-        if (!renderer_.initialize(gl_, directory_, error) || !picker_.initialize(gl_, directory_, error)) {
+        if (!renderer_.initialize(gl_, directory_, error) || !picker_.initialize(gl_, directory_, error) || !drawTimer_.initialize(gl_, error)) {
             throw std::runtime_error(error);
         }
+#if LAB_CHECKPOINT >= 11
+        if (!debug_.initialize(gl_, directory_, error)) {
+            throw std::runtime_error(error);
+        }
+#endif
+#if LAB_CHECKPOINT >= 13
+        if (!validation_.initialize(gl_, directory_, error) || !benchmark_.initialize(gl_, directory_, error)) {
+            throw std::runtime_error(error);
+        }
+#endif
         gpu_ = std::make_unique<GpuCloth>(gl_);
         if (!gpu_->initialize(directory_, error)) {
             throw std::runtime_error(error);
         }
         ui_.settings.side = 17U;
-#if LAB_CHECKPOINT >= 13
+#if LAB_CHECKPOINT >= 14
         ui_.settings.side = 321U;
 #endif
         if (options.side != 0U) {
             ui_.settings.side = options.side;
         }
-        ui_.settings.preset = options.preset;
+        ui_.settings = presetSettings(ui_.settings, options.preset);
         framePreset();
         if (!gpu_->reset(ui_.settings, error)) {
             throw std::runtime_error(error);
@@ -220,7 +272,7 @@ class Application {
 
     void printStats() const {
         const Stats& stats = gpu_->stats();
-        std::cout << "STEP steps=" << stepCount() << " dynamic=" << stats.dynamic << " pinned=" << stats.pinned << " updated=" << stats.updated << " normals=" << stats.normals << " constraintVisits=" << stats.constraints << " candidates=" << stats.candidates << " contacts=" << stats.contacts << " maxStrain=" << stats.maxStrain << " maxResidualM=" << stats.maxResidual << " penetrationM=" << stats.maxPenetration << " invalid=" << stats.invalid << " overflow=" << stats.overflow << " gpuMs=" << stats.totalMs << '\n';
+        std::cout << "STEP steps=" << stepCount() << " dynamic=" << stats.dynamic << " pinned=" << stats.pinned << " updated=" << stats.updated << " normals=" << stats.normals << " constraintVisits=" << stats.constraints << " candidates=" << stats.candidates << " contacts=" << stats.contacts << " maxStrain=" << stats.maxStrain << " maxStretch=" << stats.maxStretch << " maxResidualM=" << stats.maxResidual << " penetrationM=" << stats.maxPenetration << " invalid=" << stats.invalid << " overflow=" << stats.overflow << " gpuMs=" << stats.totalMs << '\n';
     }
 
     void framePreset() {
@@ -240,26 +292,27 @@ class Application {
         }
     }
 
-    void releaseInput() {
-        leftHeld_ = rightHeld_ = middleHeld_ = false;
-        input_.dragging = false;
-        if (loaded_) {
-            picker_.cancel(gl_);
-        }
-        if (window_ != nullptr) {
-            SDL_CaptureMouse(false);
-        }
-    }
+    void releaseInput();
 
     void processRequests() {
         if (ui_.cancelRequested) {
             releaseInput();
+            validation_.cancel();
+            benchmark_.cancel();
+            debug_.cancel(gl_);
+            debugStep_ = noVertex;
             ui_.resetRequested = ui_.validateRequested = ui_.benchmarkRequested = false;
             ui_.cancelRequested = false;
             ui_.message = "Pending input/job cancelled; current cloth retained";
         }
         if (ui_.resetRequested) {
             releaseInput();
+            validation_.cancel();
+            benchmark_.cancel();
+            debug_.cancel(gl_);
+            // Refusal keeps the old scene, but its canceled diagnostic still needs a fresh query.
+            debugStep_ = noVertex;
+            drawTimer_.cancel();
             if (!resetAnnounced_) {
                 resetAnnounced_ = true;
                 return;
@@ -284,6 +337,8 @@ class Application {
                     ui_.selected = noVertex;
                     input_ = {};
                     probe_ = {};
+                    probeStep_ = 0U;
+                    debugStep_ = noVertex;
                     ui_.message = "New topology committed. Pin/drag while paused waits for Step.";
 #if LAB_CHECKPOINT == 4
                     cpu_ = makeCpuState(ui_.settings);
@@ -299,12 +354,77 @@ class Application {
         }
         if (ui_.validateRequested) {
             ui_.validateRequested = false;
-            ui_.message = "Use --verify for the bounded full GPU fixture suite";
+#if LAB_CHECKPOINT >= 13
+            releaseInput();
+            benchmark_.cancel();
+            validation_.begin();
+            ui_.paused = true;
+            ui_.message = validation_.message();
+#else
+            ui_.message = "Validation is introduced in checkpoint 13; --verify is for the final application";
+#endif
         }
         if (ui_.benchmarkRequested) {
             ui_.benchmarkRequested = false;
-            ui_.message = "Benchmark job is not started while a topology change is pending";
+#if LAB_CHECKPOINT >= 13
+            releaseInput();
+            validation_.cancel();
+            ui_.paused = true;
+            benchmarkCamera_ = ui_.camera;
+            std::string error{};
+            const std::uint64_t resident = gpu_->memoryBytes() + gpu_->hostMemoryBytes();
+            if (!benchmark_.begin(ui_.settings, resident, sceneWidth_, height_, error)) {
+                ui_.message = error;
+            } else {
+                ui_.message = benchmark_.message();
+            }
+#else
+            ui_.message = "Finite GPU benchmark is introduced in checkpoint 13";
+#endif
         }
+    }
+
+    bool jobActive() const {
+        return validation_.active() || benchmark_.active();
+    }
+
+    void pollJobs() {
+        const bool wasActive = jobActive();
+        if (validation_.active()) {
+            validation_.poll();
+            ui_.message = validation_.message();
+        }
+        if (benchmark_.active()) {
+            benchmark_.poll();
+            benchmark_.tick();
+            ui_.message = benchmark_.message();
+        }
+        if (wasActive && !jobActive()) {
+            ui_.singleStep = false;
+            accumulator_ = 0.0;
+            if (validation_.passed()) {
+                std::cout << validation_.message() << '\n';
+            }
+            if (benchmark_.passed()) {
+                std::cout << benchmark_.message() << '\n';
+            }
+        }
+    }
+
+    void pollDebug() {
+#if LAB_CHECKPOINT >= 11
+        std::string error{};
+        debug_.poll(gl_, error);
+        if (!error.empty()) {
+            ui_.message = error;
+        }
+        // The packet is a labeled subset from the most recent CSR window, not a contact replay.
+        if (ui_.cells && ui_.selected != noVertex && !jobActive() && !gpu_->busy() && !debug_.busy() && debugStep_ != gpu_->stats().steps) {
+            if (debug_.request(gl_, *gpu_, ui_.selected)) {
+                debugStep_ = gpu_->stats().steps;
+            }
+        }
+#endif
     }
 
     void advance() {
@@ -328,141 +448,92 @@ class Application {
             ui_.paused = true;
             ui_.message = error;
         }
+        if (input_.pinId != noVertex) {
+            // An older readback must never acknowledge an edit submitted after that probe.
+            picker_.cancel(gl_);
+            pickKind_ = PickKind::None;
+            probeDirty_ = true;
+        }
 #endif
         input_.pinId = noVertex;
         input_.pinAction = -1;
     }
 
-    void key(SDL_Scancode code, bool shift) {
-        const auto command = [&](Command positive, Command negative) {
-            if (shift) { applyCommand(ui_, negative); }
-            else { applyCommand(ui_, positive); }
-        };
-        if (code == SDL_SCANCODE_ESCAPE) { running_ = false; }
-        if (code == SDL_SCANCODE_SPACE) { applyCommand(ui_, Command::Pause); }
-        if (code == SDL_SCANCODE_N) { applyCommand(ui_, Command::Step); }
-        if (code == SDL_SCANCODE_R) { applyCommand(ui_, Command::Reset); }
-        if (code == SDL_SCANCODE_1) { applyCommand(ui_, Command::Hanging); }
-        if (code == SDL_SCANCODE_2) { applyCommand(ui_, Command::Drape); }
-        if (code == SDL_SCANCODE_3) { applyCommand(ui_, Command::Drop); }
-        if (code == SDL_SCANCODE_4) { applyCommand(ui_, Command::Small); }
-        if (code == SDL_SCANCODE_5) { applyCommand(ui_, Command::Medium); }
-        if (code == SDL_SCANCODE_6) { applyCommand(ui_, Command::Large); }
-        if (code == SDL_SCANCODE_7) { applyCommand(ui_, Command::Million); }
-        if (code == SDL_SCANCODE_TAB) { ui_.tool = static_cast<Tool>((static_cast<int>(ui_.tool) + 1) % 3); releaseInput(); }
-        if (code == SDL_SCANCODE_W) { applyCommand(ui_, Command::Wire); }
-        if (code == SDL_SCANCODE_S) { applyCommand(ui_, Command::Strain); }
-        if (code == SDL_SCANCODE_C) { applyCommand(ui_, Command::Cells); }
-        if (code == SDL_SCANCODE_G) { command(Command::GravityUp, Command::GravityDown); }
-        if (code == SDL_SCANCODE_F) { command(Command::WindUp, Command::WindDown); }
-        if (code == SDL_SCANCODE_K) { command(Command::ComplianceUp, Command::ComplianceDown); }
-        if (code == SDL_SCANCODE_D) { command(Command::DampingUp, Command::DampingDown); }
-        if (code == SDL_SCANCODE_J) { command(Command::FrictionUp, Command::FrictionDown); }
-        if (code == SDL_SCANCODE_T) { command(Command::ThicknessUp, Command::ThicknessDown); }
-        if (code == SDL_SCANCODE_LEFTBRACKET) { applyCommand(ui_, Command::SphereLeft); }
-        if (code == SDL_SCANCODE_RIGHTBRACKET) { applyCommand(ui_, Command::SphereRight); }
-        if (code == SDL_SCANCODE_PAGEUP) { applyCommand(ui_, Command::SphereUp); }
-        if (code == SDL_SCANCODE_PAGEDOWN) { applyCommand(ui_, Command::SphereDown); }
-        if (code == SDL_SCANCODE_HOME) { applyCommand(ui_, Command::SphereForward); }
-        if (code == SDL_SCANCODE_END) { applyCommand(ui_, Command::SphereBack); }
-        if (code == SDL_SCANCODE_COMMA) { applyCommand(ui_, Command::CapsuleLeft); }
-        if (code == SDL_SCANCODE_PERIOD) { applyCommand(ui_, Command::CapsuleRight); }
-        if (code == SDL_SCANCODE_V) { applyCommand(ui_, Command::Validate); }
-        if (code == SDL_SCANCODE_B) { applyCommand(ui_, Command::Benchmark); }
-        if (code == SDL_SCANCODE_X) { applyCommand(ui_, Command::Cancel); }
-        if (code == SDL_SCANCODE_P && probe_.valid()) {
-            input_.pinId = probe_.key[0];
-            input_.pinAction = 1;
-            if (probe_.position.w == 0.0F) { input_.pinAction = 0; }
-            ui_.message = "Pin edit staged for the next simulation step";
-        }
-        if (code == SDL_SCANCODE_LEFT) { ui_.camera.orbit(-10, 0); }
-        if (code == SDL_SCANCODE_RIGHT) { ui_.camera.orbit(10, 0); }
-        if (code == SDL_SCANCODE_UP) { ui_.camera.orbit(0, -10); }
-        if (code == SDL_SCANCODE_DOWN) { ui_.camera.orbit(0, 10); }
-        if (code == SDL_SCANCODE_Q) { ui_.camera.zoom(-1); }
-        if (code == SDL_SCANCODE_E) { ui_.camera.zoom(1); }
-    }
-
-    void events() {
-        SDL_Event event{};
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) { running_ = false; }
-            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) { releaseInput(); ui_.paused = true; }
-            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) { key(event.key.scancode, (event.key.mod & SDL_KMOD_SHIFT) != 0); }
-            if (event.type == SDL_EVENT_MOUSE_WHEEL) { ui_.camera.zoom(event.wheel.y); }
-            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-                float x{}, y{}; coordinates(event.button.x, event.button.y, x, y);
-                if (x >= sceneWidth_) { panel_.hit(x, y, ui_); continue; }
-                if (event.button.button == SDL_BUTTON_RIGHT) { rightHeld_ = true; }
-                if (event.button.button == SDL_BUTTON_MIDDLE) { middleHeld_ = true; }
-                if (event.button.button == SDL_BUTTON_LEFT) {
-                    leftHeld_ = true;
-                    if (ui_.tool != Tool::Camera) {
-                        pickCamera_ = ui_.camera;
-                        pickForPin_ = ui_.tool == Tool::Pin;
-                        picker_.request(gl_, gpu_->positionBuffer(), ui_.settings.side * ui_.settings.side, ui_.camera, sceneWidth_, height_, 2.0F * x / sceneWidth_ - 1.0F, 1.0F - 2.0F * y / height_);
-                    }
-                }
-                SDL_CaptureMouse(true);
-            }
-            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-                if (event.button.button == SDL_BUTTON_LEFT) { leftHeld_ = false; input_.dragging = false; }
-                if (event.button.button == SDL_BUTTON_RIGHT) { rightHeld_ = false; }
-                if (event.button.button == SDL_BUTTON_MIDDLE) { middleHeld_ = false; }
-                if (!leftHeld_ && !rightHeld_ && !middleHeld_) { SDL_CaptureMouse(false); }
-            }
-            if (event.type == SDL_EVENT_MOUSE_MOTION) {
-                if (rightHeld_ || (leftHeld_ && ui_.tool == Tool::Camera)) { ui_.camera.orbit(event.motion.xrel, event.motion.yrel); }
-                if (middleHeld_) { ui_.camera.pan(event.motion.xrel, event.motion.yrel); }
-                if (input_.dragging && leftHeld_) {
-                    float x{}, y{}; coordinates(event.motion.x, event.motion.y, x, y);
-                    const Vec3 ray = ui_.camera.ray(2.0F * x / sceneWidth_ - 1.0F, 1.0F - 2.0F * y / height_, static_cast<float>(sceneWidth_) / height_);
-                    const float denominator = dot(ray, dragPlaneNormal_);
-                    if (std::abs(denominator) > 0.001F) {
-                        const float t = dot(dragPlanePoint_ - ui_.camera.eye(), dragPlaneNormal_) / denominator;
-                        if (t > 0.0F) { input_.dragTarget = ui_.camera.eye() + ray * t; }
-                    }
-                }
-            }
-        }
-    }
-
-    void coordinates(float logicalX, float logicalY, float& x, float& y) const {
-        int logicalWidth{}, logicalHeight{};
-        SDL_GetWindowSize(window_, &logicalWidth, &logicalHeight);
-        x = logicalX * width_ / std::max(logicalWidth, 1);
-        y = logicalY * height_ / std::max(logicalHeight, 1);
-    }
-
-    void pollPick() {
-        std::string error{};
-        if (picker_.poll(gl_, probe_, error) && probe_.valid()) {
-            ui_.selected = probe_.key[0];
-            if (pickForPin_) {
-                input_.pinId = ui_.selected;
-                input_.pinAction = 1;
-                if (probe_.position.w == 0.0F) { input_.pinAction = 0; }
-                ui_.message = "Pin edit staged; Pause leaves positions unchanged until Step";
-            } else if (leftHeld_) {
-                input_.dragId = ui_.selected;
-                input_.dragTarget = xyz(probe_.position);
-                input_.dragging = true;
-                dragPlanePoint_ = input_.dragTarget;
-                dragPlaneNormal_ = pickCamera_.forward();
-                ui_.message = "Dragging a 5x5 vertex region; target displacement is bounded per substep";
-            }
-        }
-        if (!error.empty()) { ui_.message = error; }
-    }
+    void key(SDL_Scancode code, bool shift);
+    void events();
+    void coordinates(float logicalX, float logicalY, float& x, float& y) const;
+    void pollPick();
 
     void render() {
+        InteractionPreview interaction{};
+        interaction.selected = ui_.selected;
+        interaction.hasProbe = probe_.valid() && probe_.key[0] == ui_.selected;
+        interaction.lastProbe = probe_.position;
+        interaction.probeStep = probeStep_;
+        interaction.currentStep = gpu_->stats().steps;
+        interaction.refreshPending = probeDirty_ || picker_.busy() || gpu_->busy();
+        interaction.dragging = input_.dragging;
+        interaction.dragId = input_.dragId;
+        interaction.dragTarget = input_.dragTarget;
+        interaction.pinId = input_.pinId;
+        interaction.pinAction = input_.pinAction;
+        interaction.contactRings = ui_.cells && debug_.getSnapshot().valid
+            && debug_.getSnapshot().selected == ui_.selected
+            && debug_.getSnapshot().side == ui_.settings.side;
         gl_.Viewport(0, 0, width_, height_);
         gl_.ClearColor(0.055F, 0.10F, 0.15F, 1.0F);
         gl_.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         gl_.Viewport(0, 0, sceneWidth_, height_);
-        renderer_.draw(gl_, *gpu_, ui_.settings, ui_.camera, sceneWidth_, height_, ui_.wire, ui_.strain, ui_.cells, ui_.selected);
-        panel_.draw(gl_, renderer_, ui_, gpu_->stats(), gpu_->memoryBytes(), width_, height_, 0.0, cpuFrameMs_);
+        if (benchmark_.active()) {
+            bool measuredDraw = false;
+            if (benchmark_.readyForDraw()) {
+                measuredDraw = benchmark_.beginDraw();
+            }
+            renderer_.draw(gl_, benchmark_.cloth(), benchmark_.settings(), benchmarkCamera_, sceneWidth_, height_, false, false, false, noVertex);
+            if (measuredDraw) {
+                benchmark_.finishDraw();
+            }
+        } else {
+            drawTimer_.poll();
+            const bool timingDraw = drawTimer_.begin();
+            const DebugSnapshot* snapshot = nullptr;
+            if (ui_.cells) {
+                snapshot = &debug_.getSnapshot();
+            }
+            renderer_.draw(gl_, *gpu_, ui_.settings, ui_.camera, sceneWidth_, height_, ui_.wire,
+                ui_.strain, ui_.cells, ui_.selected, snapshot, true, true, &interaction);
+            if (timingDraw) {
+                drawTimer_.end();
+            }
+        }
+        const Stats* stats = &gpu_->stats();
+        if (benchmark_.active()) {
+            stats = &benchmark_.cloth().stats();
+        }
+        double drawMs = -1.0;
+        if (drawTimer_.valid()) {
+            drawMs = drawTimer_.milliseconds();
+        }
+        if (benchmark_.active()) {
+            drawMs = -1.0;
+            if (benchmark_.drawTimingValid()) {
+                drawMs = benchmark_.lastDrawMs();
+            }
+        }
+        std::string displayMessage = ui_.message;
+        if (ui_.cells && debug_.getSnapshot().valid && !jobActive()) {
+            displayMessage = debug_.getSnapshot().status(gpu_->stats().steps);
+        }
+        UiState display = ui_;
+        if (benchmark_.active()) {
+            display.settings = benchmark_.settings();
+        }
+        const InteractionPreview* inspector = &interaction;
+        if (benchmark_.active()) {
+            inspector = nullptr;
+        }
+        panel_.draw(gl_, renderer_, display, *stats, gpu_->memoryBytes(), width_, height_,
+            drawMs, cpuFrameMs_, jobActive(), displayMessage, inspector);
         const std::string title = "Project 40 - " + ui_.message;
         SDL_SetWindowTitle(window_, title.c_str());
     }
@@ -483,14 +554,12 @@ class Application {
         SDL_DestroySurface(surface);
     }
 
-    int verify() {
-        std::string report{}, error{};
-        if (!runGpuFixtures(gl_, directory_, report, error, 15000)) {
-            throw std::runtime_error(error);
-        }
-        std::cout << report << '\n';
-        return 0;
-    }
+    int verify();
+    int exerciseControls();
 };
 
 } // namespace cloth
+
+#include "cloth_acceptance.hpp"
+#include "cloth_control_checks.hpp"
+#include "cloth_input.hpp"

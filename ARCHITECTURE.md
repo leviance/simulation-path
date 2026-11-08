@@ -88,7 +88,7 @@ Danh sách module thuật ngữ được khai báo một lần trong `scripts/gl
 
 ## Giới hạn chống phình file
 
-Code block C++ của Project 01–32 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này. Project 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
+Code block C++ của Project 01–32, Project 40 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
 
 `npm run check:architecture` áp dụng các budget:
 

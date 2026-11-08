@@ -357,7 +357,7 @@ export const gpuGlossaryTerms = [
     id: "deterministic-tie-break",
     term: "Deterministic tie-break",
     definition:
-      "Quy tắc phụ dùng khi hai candidate có khóa chính bằng nhau. Bản cũ của Project 40 (GPU Spatial Grid) chọn particle index nhỏ hơn khi distance hòa, nhờ vậy nearest neighbor không phụ thuộc thứ tự atomic scatter.",
+      "Quy tắc phụ dùng khi hai candidate có khóa chính bằng nhau. Ví dụ, truy vấn nearest neighbor có thể chọn ID nhỏ hơn khi khoảng cách hòa, nhờ vậy kết quả không phụ thuộc thứ tự atomic scatter. Cần công bố khóa chính và khóa phụ thay vì dựa vào invocation đến trước.",
   },
   {
     id: "structural-invariant",

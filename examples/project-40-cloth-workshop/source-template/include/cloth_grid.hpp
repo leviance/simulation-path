@@ -33,8 +33,7 @@ inline std::array<int, 3> cellCoordinate(Vec3 point, const GridPlan& grid) {
     return {
         std::clamp(static_cast<int>(std::floor((point.x - grid.minimum.x) / grid.cellSize)), 0, static_cast<int>(grid.nx) - 1),
         std::clamp(static_cast<int>(std::floor((point.y - grid.minimum.y) / grid.cellSize)), 0, static_cast<int>(grid.ny) - 1),
-        std::clamp(static_cast<int>(std::floor((point.z - grid.minimum.z) / grid.cellSize)), 0, static_cast<int>(grid.nz) - 1)
-    };
+        std::clamp(static_cast<int>(std::floor((point.z - grid.minimum.z) / grid.cellSize)), 0, static_cast<int>(grid.nz) - 1)};
 }
 
 inline std::uint32_t cellIndex(int x, int y, int z, const GridPlan& grid) {
@@ -73,14 +72,11 @@ inline CpuGrid buildCpuGrid(const std::vector<Vec4>& positions, GridPlan plan) {
 inline std::uint64_t plannedMemoryBytes(const Settings& settings) {
     const GridPlan grid = makeGridPlan(settings);
     const std::uint64_t n = static_cast<std::uint64_t>(settings.side) * settings.side;
-    const std::uint64_t edges = 2ULL * settings.side * (settings.side - 1ULL)
-        + 2ULL * (settings.side - 1ULL) * (settings.side - 1ULL)
-        + 2ULL * settings.side * (settings.side - 2ULL);
+    const std::uint64_t edges = 2ULL * settings.side * (settings.side - 1ULL) + 2ULL * (settings.side - 1ULL) * (settings.side - 1ULL) + 2ULL * settings.side * (settings.side - 2ULL);
     const std::uint64_t indices = 6ULL * (settings.side - 1ULL) * (settings.side - 1ULL);
     // Seven vec4 streams: state, previous, velocity, normals, correction, two rollback snapshots.
     // Includes index, constraint/lambda, vertex membership, and all recursive scan scratch.
-    return 7ULL * 16ULL * n + 20ULL * edges + 4ULL * indices
-        + 8ULL * n + 12ULL * grid.cells + 8ULL * ((grid.cells + 255ULL) / 256ULL + 256ULL) + 4096ULL;
+    return 7ULL * 16ULL * n + 20ULL * edges + 4ULL * indices + 8ULL * n + 12ULL * grid.cells + 8ULL * ((grid.cells + 255ULL) / 256ULL + 256ULL) + 4096ULL;
 }
 
 inline std::uint64_t plannedHostMemoryBytes(const Settings& settings) {

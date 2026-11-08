@@ -8,7 +8,9 @@
 
 namespace cloth {
 
-enum class Preset : std::uint32_t { Hanging, SphereDrape, DropTable };
+enum class Preset : std::uint32_t { Hanging,
+                                    SphereDrape,
+                                    DropTable };
 
 struct Settings {
     std::uint32_t side{321U};
@@ -34,6 +36,30 @@ struct Settings {
     std::uint64_t memoryBudget{512ULL * 1024ULL * 1024ULL};
 };
 
+// Explicit UI/demo preset selection changes scene obstacles, not material or discretization.
+// makeTopology and controlled validation fixtures do not invoke this helper implicitly.
+inline Settings presetSettings(Settings settings, Preset preset) {
+    const Settings defaults{};
+    settings.preset = preset;
+    settings.floorHeight = defaults.floorHeight;
+    settings.sphereCenter = defaults.sphereCenter;
+    settings.sphereRadius = defaults.sphereRadius;
+    settings.capsuleA = defaults.capsuleA;
+    settings.capsuleB = defaults.capsuleB;
+    settings.capsuleRadius = defaults.capsuleRadius;
+    if (preset == Preset::DropTable) {
+        // The large sphere no longer dictates this preset's silhouette: it is below the table.
+        // A horizontal capsule touches the tabletop at its bottom and forms a raised draping bar.
+        settings.floorHeight = 0.7F;
+        settings.sphereCenter.y = 0.5F;
+        settings.sphereRadius = 0.1F;
+        settings.capsuleA.y = 1.15F;
+        settings.capsuleB.y = 1.15F;
+        settings.capsuleRadius = 0.45F;
+    }
+    return settings;
+}
+
 // std430: one distance constraint is exactly sixteen bytes. Lambda is a separate float SSBO.
 struct Constraint {
     std::uint32_t a{};
@@ -41,6 +67,7 @@ struct Constraint {
     float rest{};
     float kind{};
 };
+
 static_assert(sizeof(Constraint) == 16U);
 
 struct Topology {
@@ -54,39 +81,19 @@ struct Topology {
 };
 
 inline bool validSettings(const Settings& settings, std::string& error) {
-    if (settings.side < 3U || settings.side > 1001U || !std::isfinite(settings.extent)
-        || settings.extent < 1.0F || settings.extent > 8.0F) {
+    if (settings.side < 3U || settings.side > 1001U || !std::isfinite(settings.extent) || settings.extent < 1.0F || settings.extent > 8.0F) {
         error = "Resolution must be 3..1001 and extent must be 1..8 metres.";
         return false;
     }
-    if (!std::isfinite(settings.dt) || settings.dt < 1.0F / 1000.0F || settings.dt > 1.0F / 30.0F
-        || settings.substeps < 1U || settings.substeps > 8U
-        || settings.iterations < 1U || settings.iterations > 12U) {
+    if (!std::isfinite(settings.dt) || settings.dt < 1.0F / 1000.0F || settings.dt > 1.0F / 30.0F || settings.substeps < 1U || settings.substeps > 8U || settings.iterations < 1U || settings.iterations > 12U) {
         error = "Timestep must be 1..33.33 ms; substeps 1..8; iterations 1..12.";
         return false;
     }
-    if (!std::isfinite(settings.thickness) || settings.thickness < 0.002F || settings.thickness > 0.04F
-        || !std::isfinite(settings.compliance) || settings.compliance < 0.0F || settings.compliance > 0.01F
-        || !std::isfinite(settings.bendCompliance) || settings.bendCompliance < 0.0F
-        || settings.bendCompliance > 0.1F || !std::isfinite(settings.damping)
-        || settings.damping < 0.0F || settings.damping > 20.0F
-        || !std::isfinite(settings.friction) || settings.friction < 0.0F || settings.friction > 1.0F
-        || !std::isfinite(settings.gravity) || settings.gravity < 0.0F || settings.gravity > 20.0F
-        || !std::isfinite(settings.wind) || std::abs(settings.wind) > 10.0F) {
+    if (!std::isfinite(settings.thickness) || settings.thickness < 0.002F || settings.thickness > 0.04F || !std::isfinite(settings.compliance) || settings.compliance < 0.0F || settings.compliance > 0.01F || !std::isfinite(settings.bendCompliance) || settings.bendCompliance < 0.0F || settings.bendCompliance > 0.1F || !std::isfinite(settings.damping) || settings.damping < 0.0F || settings.damping > 20.0F || !std::isfinite(settings.friction) || settings.friction < 0.0F || settings.friction > 1.0F || !std::isfinite(settings.gravity) || settings.gravity < 0.0F || settings.gravity > 20.0F || !std::isfinite(settings.wind) || std::abs(settings.wind) > 10.0F) {
         error = "Material, force or thickness is outside the declared finite range.";
         return false;
     }
-    if (!finite(settings.sphereCenter) || !finite(settings.capsuleA) || !finite(settings.capsuleB)
-        || !std::isfinite(settings.sphereRadius) || !std::isfinite(settings.capsuleRadius)
-        || settings.sphereRadius < 0.1F || settings.sphereRadius > 2.0F
-        || settings.capsuleRadius < 0.1F || settings.capsuleRadius > 1.0F
-        || std::abs(settings.sphereCenter.x) > 2.0F || std::abs(settings.sphereCenter.z) > 2.0F
-        || settings.sphereCenter.y < 0.5F || settings.sphereCenter.y > 3.0F
-        || std::abs(settings.capsuleA.x) > 3.0F || std::abs(settings.capsuleA.z) > 3.0F
-        || std::abs(settings.capsuleB.x) > 3.0F || std::abs(settings.capsuleB.z) > 3.0F
-        || settings.capsuleA.y < 0.5F || settings.capsuleA.y > 3.0F
-        || settings.capsuleB.y < 0.5F || settings.capsuleB.y > 3.0F
-        || !std::isfinite(settings.floorHeight) || settings.floorHeight < 0.0F || settings.floorHeight > 1.0F) {
+    if (!finite(settings.sphereCenter) || !finite(settings.capsuleA) || !finite(settings.capsuleB) || !std::isfinite(settings.sphereRadius) || !std::isfinite(settings.capsuleRadius) || settings.sphereRadius < 0.1F || settings.sphereRadius > 2.0F || settings.capsuleRadius < 0.1F || settings.capsuleRadius > 1.0F || std::abs(settings.sphereCenter.x) > 2.0F || std::abs(settings.sphereCenter.z) > 2.0F || settings.sphereCenter.y < 0.5F || settings.sphereCenter.y > 3.0F || std::abs(settings.capsuleA.x) > 3.0F || std::abs(settings.capsuleA.z) > 3.0F || std::abs(settings.capsuleB.x) > 3.0F || std::abs(settings.capsuleB.z) > 3.0F || settings.capsuleA.y < 0.5F || settings.capsuleA.y > 3.0F || settings.capsuleB.y < 0.5F || settings.capsuleB.y > 3.0F || !std::isfinite(settings.floorHeight) || settings.floorHeight < 0.0F || settings.floorHeight > 1.0F) {
         error = "Obstacle is outside the declared safe domain.";
         return false;
     }

@@ -111,6 +111,9 @@ test("Project 40 capture has one owner, cloth drag differs from camera, blur/res
 test("Project 40 CSR exposes real counts and finite CPU oracle can complete or cancel", async ({
   page,
 }) => {
+  // Install before navigation so existing RAF handles are also owned by the test clock.
+  const clockStart = new Date("2026-11-08T00:00:00Z");
+  await page.clock.install({ time: clockStart });
   await page.goto("/projects/cloth-workshop/09-csr-count-scan-scatter");
   const canvas = page.getByLabel(canvasName, { exact: true });
   await expect(canvas).toHaveAttribute("data-render-state", "complete");
@@ -122,11 +125,37 @@ test("Project 40 CSR exposes real counts and finite CPU oracle can complete or c
       { exact: true },
     ),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Kiểm CPU 12 fixture", exact: true }).click();
-  await page.getByRole("button", { name: "Hủy kiểm CPU", exact: true }).click({ force: true });
-  await expect(
-    page.getByText("Đã hủy oracle CPU; không công bố PASS.", { exact: true }),
-  ).toBeVisible();
+  // First prove natural completion. Then freeze RAF before starting a separate cancel job;
+  // browser actionability/scroll latency must not race the twelve-frame product workload.
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 120_000));
+  try {
+    const run = page.getByRole("button", { name: "Kiểm CPU 12 fixture", exact: true });
+    const cancel = page.getByRole("button", { name: "Hủy kiểm CPU", exact: true });
+    await run.click();
+    await expect(cancel).toBeEnabled();
+    await expect(run).toBeDisabled();
+    await expect(
+      page.getByRole("progressbar", { name: "Tiến độ oracle CPU", exact: true }),
+    ).toHaveAttribute("value", "0");
+    await cancel.click();
+    const cancelled = page.getByText("Đã hủy oracle CPU; không công bố PASS.", { exact: true });
+    await expect(cancelled).toBeVisible();
+    await expect(cancel).toBeDisabled();
+    await expect(
+      page.getByRole("progressbar", { name: "Tiến độ oracle CPU", exact: true }),
+    ).toHaveCount(0);
+    // Resume queued animation callbacks under controlled time: cancellation must stay final.
+    await page.clock.runFor(1000);
+    await expect(cancelled).toBeVisible();
+    await expect(
+      page.getByText(
+        "Oracle CPU PASS 12/12: CSR, contact IDs và penetration mẫu hiện tại. Không đo/kiểm GPU.",
+        { exact: true },
+      ),
+    ).toHaveCount(0);
+  } finally {
+    await page.clock.resume();
+  }
   await expect(
     page.getByText("JS heap và GPU timings chưa đo trong Canvas.", { exact: false }),
   ).toBeVisible();

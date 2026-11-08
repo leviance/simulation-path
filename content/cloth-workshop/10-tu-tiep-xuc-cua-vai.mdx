@@ -61,7 +61,10 @@ if (contacts != 0u) {
         correction *= uThickness / magnitude;
     }
     corrections[id] = vec4(correction, float(contacts));
-    atomicAdd(diagnostic[3], contacts);
+    uint previousContacts = atomicAdd(diagnostic[3], contacts);
+    if (previousContacts + contacts < previousContacts) {
+        atomicOr(diagnostic[10], 4u);
+    }
 }
 ```
 

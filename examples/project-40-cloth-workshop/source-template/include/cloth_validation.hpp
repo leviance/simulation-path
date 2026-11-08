@@ -8,7 +8,10 @@ namespace cloth {
 // UI validation owns a separate 17x17 state, never pauses to read the user's full cloth.
 // poll() performs at most one small CPU batch, one GPU submission, or one completed readback.
 class ValidationJob {
-    enum class Phase { Prepare, Submit, Await, Compare };
+    enum class Phase { Prepare,
+                    Submit,
+                    Await,
+                    Compare };
     GlApi* gl_{};
     std::unique_ptr<GpuCloth> gpu_{};
     CpuState cpu_{};
@@ -88,8 +91,7 @@ class ValidationJob {
             }
             cpu_.normals = meshNormals(cpu_.positions, settings_.side);
             gl_->BindBuffer(GL_SHADER_STORAGE_BUFFER, gpu_->positionBuffer());
-            gl_->BufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-                static_cast<GLsizeiptr>(cpu_.positions.size() * sizeof(Vec4)), cpu_.positions.data());
+            gl_->BufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(cpu_.positions.size() * sizeof(Vec4)), cpu_.positions.data());
             gl_->MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
         }
         caseSteps_ = 0U;
@@ -109,8 +111,7 @@ class ValidationJob {
         float velocityError = 0.0F;
         float normalError = 0.0F;
         for (std::size_t id = 0U; id < snapshot.positions.size(); ++id) {
-            if (!finite(xyz(snapshot.positions[id])) || !finite(xyz(snapshot.velocities[id]))
-                || !finite(xyz(snapshot.normals[id])) || snapshot.positions[id].w != cpu_.positions[id].w) {
+            if (!finite(xyz(snapshot.positions[id])) || !finite(xyz(snapshot.velocities[id])) || !finite(xyz(snapshot.normals[id])) || snapshot.positions[id].w != cpu_.positions[id].w) {
                 fail("non-finite state or an inverse-mass mismatch");
                 return;
             }
@@ -133,11 +134,8 @@ class ValidationJob {
         caseContactEvents_ += stats.analyticContacts;
         const auto vertices = static_cast<std::uint32_t>(cpu_.positions.size());
         const auto pinned = cpu_.topology.pinned;
-        const auto visits = static_cast<std::uint32_t>(cpu_.topology.constraints.size())
-            * settings_.iterations * settings_.substeps;
-        if (stats.updated != vertices - pinned || stats.pinned != pinned || stats.normals != vertices
-            || stats.constraints != visits || stats.countedVertices != vertices || stats.overflow != 0U
-            || stats.invalid != 0U) {
+        const auto visits = static_cast<std::uint32_t>(cpu_.topology.constraints.size()) * settings_.iterations * settings_.substeps;
+        if (stats.updated != vertices - pinned || stats.pinned != pinned || stats.normals != vertices || stats.constraints != visits || stats.countedVertices != vertices || stats.overflow != 0U || stats.invalid != 0U) {
             fail("incomplete vertex/constraint/grid/normal coverage");
             return;
         }
@@ -157,8 +155,7 @@ class ValidationJob {
         ++caseSteps_;
         if (caseSteps_ < 4U) {
             phase_ = Phase::Submit;
-            message_ = "Validation case " + std::to_string(caseIndex_ + 1U) + "/6 step "
-                + std::to_string(caseSteps_) + "/4 passed";
+            message_ = "Validation case " + std::to_string(caseIndex_ + 1U) + "/6 step " + std::to_string(caseSteps_) + "/4 passed";
             return;
         }
         if (settings_.preset != Preset::Hanging && caseContactEvents_ == 0U) {
@@ -179,7 +176,7 @@ class ValidationJob {
         message_ = output.str();
     }
 
-public:
+    public:
     bool initialize(GlApi& gl, const std::filesystem::path& directory, std::string& error) {
         destroy();
         gl_ = &gl;
@@ -262,10 +259,21 @@ public:
         cpu_ = {};
     }
 
-    bool active() const { return active_; }
-    bool passed() const { return passed_; }
-    float progress() const { return static_cast<float>(completedSteps_) / 24.0F; }
-    const std::string& message() const { return message_; }
+    bool active() const {
+        return active_;
+    }
+
+    bool passed() const {
+        return passed_;
+    }
+
+    float progress() const {
+        return static_cast<float>(completedSteps_) / 24.0F;
+    }
+
+    const std::string& message() const {
+        return message_;
+    }
 };
 
 } // namespace cloth

@@ -12,7 +12,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 Gọi h là thời gian của một substep, tính bằng giây. Position x tính bằng mét; velocity v tính bằng m/s; gia tốc a tính bằng m/s². Bước prediction dùng velocity sau khi nhận lực:
 
-$$v^\ast=v^n+h\,a,\qquad \widetilde{x}=x^n+h\,v^\ast.$$
+$$
+v^\ast=v^n+h\,a,\qquad \widetilde{x}=x^n+h\,v^\ast.
+$$
 
 Với v ban đầu bằng zero, gravity=9,81 và h=1/120 s, velocity Y sau bước đầu khoảng −0,08175 m/s, độ dời khoảng −0,00068125 m. Đây là phép kiểm prediction semi-implicit, không phải khẳng định quỹ đạo rơi liên tục đã chính xác tuyệt đối. Sai số tích phân sẽ được tách khỏi sai số solver ở Bài 13.
 

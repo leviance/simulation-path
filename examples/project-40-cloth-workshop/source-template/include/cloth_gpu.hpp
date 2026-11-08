@@ -23,7 +23,7 @@ struct Stats {
     std::uint32_t occupiedCells{};
     std::uint32_t countedVertices{};
     std::uint32_t maxOccupancy{};
-    float maxStrain{}; // Absolute relative distance residual, all constraint kinds including bend approximation.
+    float maxStrain{};  // Absolute relative distance residual, all constraint kinds including bend approximation.
     float maxStretch{}; // Positive relative elongation of stretch/shear edges only, not compression.
     float maxResidual{};
     float maxPenetration{};
@@ -73,13 +73,16 @@ struct ClothBuffers {
     GLuint indices{};
     GpuScan scan;
     std::uint64_t bytes{};
+#if LAB_CHECKPOINT == 3
+    std::uint32_t teachingConstraint{};
+#endif
 
-    explicit ClothBuffers(GlApi& api) : gl(api), scan(api) {}
+    explicit ClothBuffers(GlApi& api)
+        : gl(api), scan(api) {}
+
     ~ClothBuffers() {
         scan.clear();
-        const std::array<GLuint, 16> names{position, previous, velocity, normal, constraint,
-            correction, lambda, diagnostic, backupPosition, backupVelocity, counts, offsets,
-            cursors, ids, vertexCells, indices};
+        const std::array<GLuint, 16> names{position, previous, velocity, normal, constraint, correction, lambda, diagnostic, backupPosition, backupVelocity, counts, offsets, cursors, ids, vertexCells, indices};
         gl.DeleteBuffers(static_cast<GLsizei>(names.size()), names.data());
     }
 };
@@ -124,8 +127,7 @@ class GpuCloth {
     }
 
     void solverBindings() {
-        const std::array<GLuint, 8> buffers{state_->position, state_->previous, state_->velocity,
-            state_->normal, state_->constraint, state_->correction, state_->diagnostic, state_->lambda};
+        const std::array<GLuint, 8> buffers{state_->position, state_->previous, state_->velocity, state_->normal, state_->constraint, state_->correction, state_->diagnostic, state_->lambda};
         for (GLuint binding = 0U; binding < buffers.size(); ++binding) {
             gl_.BindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, buffers[binding]);
         }
@@ -153,8 +155,7 @@ class GpuCloth {
         vectorUniform(solver_, "uCapsuleB", settings.capsuleB);
         floatUniform(solver_, "uCapsuleRadius", settings.capsuleRadius);
         const float horizontal = length(xyz(state_->topology.positions[1]) - xyz(state_->topology.positions[0]));
-        const float vertical = length(xyz(state_->topology.positions[state_->topology.side])
-            - xyz(state_->topology.positions[0]));
+        const float vertical = length(xyz(state_->topology.positions[state_->topology.side]) - xyz(state_->topology.positions[0]));
         gl_.Uniform2f(gl_.GetUniformLocation(solver_, "uRestSpacing"), horizontal, vertical);
         std::uint32_t dragId = noVertex;
         if (input.dragging && input.dragId < state_->topology.positions.size()) {
@@ -175,8 +176,7 @@ class GpuCloth {
     }
 
     void gridBindings() {
-        const std::array<GLuint, 8> buffers{state_->position, state_->counts, state_->offsets,
-            state_->cursors, state_->ids, state_->vertexCells, state_->diagnostic, state_->correction};
+        const std::array<GLuint, 8> buffers{state_->position, state_->counts, state_->offsets, state_->cursors, state_->ids, state_->vertexCells, state_->diagnostic, state_->correction};
         for (GLuint binding = 0U; binding < buffers.size(); ++binding) {
             gl_.BindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, buffers[binding]);
         }
@@ -210,10 +210,13 @@ class GpuCloth {
         gl_.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(count * sizeof(Value)), output.data());
     }
 
-public:
-    explicit GpuCloth(GlApi& gl) : gl_(gl) {}
+    public:
+    explicit GpuCloth(GlApi& gl)
+        : gl_(gl) {}
+
     GpuCloth(const GpuCloth&) = delete;
     GpuCloth& operator=(const GpuCloth&) = delete;
+
     ~GpuCloth() {
         if (fence_ != nullptr) {
             gl_.DeleteSync(fence_);
@@ -266,16 +269,38 @@ public:
             gl_.GetIntegerv(GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, &bindings);
             const std::uint64_t n = static_cast<std::uint64_t>(settings.side) * settings.side;
             const std::uint64_t maxConstraintBytes = 6ULL * n * sizeof(Constraint);
-            if (bytes + hostBytes + previousBytes > settings.memoryBudget || bindings < 8 || maxConstraintBytes > static_cast<std::uint64_t>(blockLimit)
-                || groupCount(gridPlan.cells) > static_cast<GLuint>(groups)) {
+            if (bytes + hostBytes + previousBytes > settings.memoryBudget || bindings < 8 || maxConstraintBytes > static_cast<std::uint64_t>(blockLimit) || groupCount(gridPlan.cells) > static_cast<GLuint>(groups)) {
                 error = "Preset unsupported by the declared RAM/VRAM, SSBO or dispatch budget; last-good scene retained."
-                    " Peak planned bytes=" + std::to_string(bytes + hostBytes + previousBytes)
-                    + ", budget=" + std::to_string(settings.memoryBudget) + ".";
+                        " Peak planned bytes=" +
+                    std::to_string(bytes + hostBytes + previousBytes) + ", budget=" + std::to_string(settings.memoryBudget) + ".";
                 return false;
             }
             auto candidate = std::make_unique<ClothBuffers>(gl_);
             candidate->settings = settings;
             candidate->topology = makeTopology(settings);
+#if LAB_CHECKPOINT == 3
+            // CP3 is an isolated one-edge experiment, not a solved cloth surface yet.
+            // Rest lengths already exist. Extend the first edge with a movable endpoint
+            // by 0.4m, retaining its original rest length so XPBD has nonzero work to do.
+            // Search past a pinned hanging row instead of perturbing an immovable pin.
+            for (std::uint32_t edgeId = 0U; edgeId < candidate->topology.constraints.size(); ++edgeId) {
+                const Constraint edge = candidate->topology.constraints[edgeId];
+                std::uint32_t moved = edge.b;
+                std::uint32_t anchor = edge.a;
+                if (candidate->topology.positions[moved].w == 0.0F) {
+                    moved = edge.a;
+                    anchor = edge.b;
+                }
+                if (candidate->topology.positions[moved].w == 0.0F) {
+                    continue;
+                }
+                const Vec3 direction = normalized(xyz(candidate->topology.positions[moved]) - xyz(candidate->topology.positions[anchor]));
+                Vec4& position = candidate->topology.positions[moved];
+                position = vector4(xyz(position) + direction * 0.4F, position.w);
+                candidate->teachingConstraint = edgeId;
+                break;
+            }
+#endif
             candidate->grid = gridPlan;
             candidate->bytes = bytes;
             const auto& topology = candidate->topology;
@@ -283,23 +308,7 @@ public:
             std::vector<Vec4> zeros(static_cast<std::size_t>(n));
             const auto normals = meshNormals(topology.positions, topology.side);
             std::array<std::uint32_t, 32> diagnostics{};
-            bool success = storageBuffer(gl_, candidate->position, vectorBytes, topology.positions.data(), error)
-                && storageBuffer(gl_, candidate->previous, vectorBytes, topology.positions.data(), error)
-                && storageBuffer(gl_, candidate->velocity, vectorBytes, zeros.data(), error)
-                && storageBuffer(gl_, candidate->normal, vectorBytes, normals.data(), error)
-                && storageBuffer(gl_, candidate->correction, vectorBytes, zeros.data(), error)
-                && storageBuffer(gl_, candidate->backupPosition, vectorBytes, topology.positions.data(), error)
-                && storageBuffer(gl_, candidate->backupVelocity, vectorBytes, zeros.data(), error)
-                && storageBuffer(gl_, candidate->constraint, topology.constraints.size() * sizeof(Constraint), topology.constraints.data(), error)
-                && storageBuffer(gl_, candidate->lambda, topology.constraints.size() * sizeof(float), nullptr, error)
-                && storageBuffer(gl_, candidate->diagnostic, sizeof(diagnostics), diagnostics.data(), error)
-                && storageBuffer(gl_, candidate->counts, 4ULL * gridPlan.cells, nullptr, error)
-                && storageBuffer(gl_, candidate->offsets, 4ULL * gridPlan.cells, nullptr, error)
-                && storageBuffer(gl_, candidate->cursors, 4ULL * gridPlan.cells, nullptr, error)
-                && storageBuffer(gl_, candidate->ids, 4ULL * n, nullptr, error)
-                && storageBuffer(gl_, candidate->vertexCells, 4ULL * n, nullptr, error)
-                && storageBuffer(gl_, candidate->indices, topology.indices.size() * sizeof(std::uint32_t), topology.indices.data(), error)
-                && candidate->scan.allocate(gridPlan.cells, candidate->offsets, error);
+            bool success = storageBuffer(gl_, candidate->position, vectorBytes, topology.positions.data(), error) && storageBuffer(gl_, candidate->previous, vectorBytes, topology.positions.data(), error) && storageBuffer(gl_, candidate->velocity, vectorBytes, zeros.data(), error) && storageBuffer(gl_, candidate->normal, vectorBytes, normals.data(), error) && storageBuffer(gl_, candidate->correction, vectorBytes, zeros.data(), error) && storageBuffer(gl_, candidate->backupPosition, vectorBytes, topology.positions.data(), error) && storageBuffer(gl_, candidate->backupVelocity, vectorBytes, zeros.data(), error) && storageBuffer(gl_, candidate->constraint, topology.constraints.size() * sizeof(Constraint), topology.constraints.data(), error) && storageBuffer(gl_, candidate->lambda, topology.constraints.size() * sizeof(float), nullptr, error) && storageBuffer(gl_, candidate->diagnostic, sizeof(diagnostics), diagnostics.data(), error) && storageBuffer(gl_, candidate->counts, 4ULL * gridPlan.cells, nullptr, error) && storageBuffer(gl_, candidate->offsets, 4ULL * gridPlan.cells, nullptr, error) && storageBuffer(gl_, candidate->cursors, 4ULL * gridPlan.cells, nullptr, error) && storageBuffer(gl_, candidate->ids, 4ULL * n, nullptr, error) && storageBuffer(gl_, candidate->vertexCells, 4ULL * n, nullptr, error) && storageBuffer(gl_, candidate->indices, topology.indices.size() * sizeof(std::uint32_t), topology.indices.data(), error) && candidate->scan.allocate(gridPlan.cells, candidate->offsets, error);
             if (!success) {
                 return false;
             }
@@ -410,13 +419,11 @@ public:
         if (fence_ != nullptr) {
             return true;
         }
-        if (settings.side != state_->settings.side || settings.extent != state_->settings.extent
-            || settings.preset != state_->settings.preset || settings.thickness != state_->settings.thickness) {
+        if (settings.side != state_->settings.side || settings.extent != state_->settings.extent || settings.preset != state_->settings.preset || settings.thickness != state_->settings.thickness) {
             error = "Topology, thickness or preset changed; call transactional reset before stepping.";
             return false;
         }
-        if (!finite(input.dragTarget) || input.pinAction < -1 || input.pinAction > 1
-            || settings.candidateBudget == 0ULL || settings.candidateBudget > 1000000000ULL) {
+        if (!finite(input.dragTarget) || input.pinAction < -1 || input.pinAction > 1 || settings.candidateBudget == 0ULL || settings.candidateBudget > 1000000000ULL) {
             error = "Input or candidate budget is invalid.";
             return false;
         }
@@ -452,7 +459,11 @@ public:
                 }
 #else
                 solverBindings();
+#if LAB_CHECKPOINT == 3
+                uintUniform(solver_, "uOffset", state_->teachingConstraint);
+#else
                 uintUniform(solver_, "uOffset", 0U);
+#endif
                 uintUniform(solver_, "uRange", 1U);
                 dispatchSolver(2U, 1U);
 #endif
@@ -498,8 +509,7 @@ public:
         beginStage(5U);
         dispatchSolver(6U, n);
         endStage();
-        gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT
-            | GL_ELEMENT_ARRAY_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+        gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_ELEMENT_ARRAY_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
         gl_.QueryCounter(timestampQueries_[1], GL_TIMESTAMP);
         fence_ = gl_.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0U);
         submittedAt_ = std::chrono::steady_clock::now();
@@ -511,20 +521,61 @@ public:
         return true;
     }
 
-    bool busy() const { return fence_ != nullptr; }
-    GLuint positionBuffer() const { return state_->position; }
-    GLuint normalBuffer() const { return state_->normal; }
-    GLuint indexBuffer() const { return state_->indices; }
-    GLuint countsBuffer() const { return state_->counts; }
-    GLuint offsetsBuffer() const { return state_->offsets; }
-    GLuint idsBuffer() const { return state_->ids; }
-    GLuint vertexCellsBuffer() const { return state_->vertexCells; }
-    float thickness() const { return state_->settings.thickness; }
-    const Topology& topology() const { return state_->topology; }
-    const GridPlan& gridPlan() const { return state_->grid; }
-    const Stats& stats() const { return stats_; }
-    std::uint64_t memoryBytes() const { return state_->bytes; }
-    std::uint64_t hostMemoryBytes() const { return plannedHostMemoryBytes(state_->settings); }
+    bool busy() const {
+        return fence_ != nullptr;
+    }
+
+    GLuint positionBuffer() const {
+        return state_->position;
+    }
+
+    GLuint normalBuffer() const {
+        return state_->normal;
+    }
+
+    GLuint indexBuffer() const {
+        return state_->indices;
+    }
+
+    GLuint countsBuffer() const {
+        return state_->counts;
+    }
+
+    GLuint offsetsBuffer() const {
+        return state_->offsets;
+    }
+
+    GLuint idsBuffer() const {
+        return state_->ids;
+    }
+
+    GLuint vertexCellsBuffer() const {
+        return state_->vertexCells;
+    }
+
+    float thickness() const {
+        return state_->settings.thickness;
+    }
+
+    const Topology& topology() const {
+        return state_->topology;
+    }
+
+    const GridPlan& gridPlan() const {
+        return state_->grid;
+    }
+
+    const Stats& stats() const {
+        return stats_;
+    }
+
+    std::uint64_t memoryBytes() const {
+        return state_->bytes;
+    }
+
+    std::uint64_t hostMemoryBytes() const {
+        return plannedHostMemoryBytes(state_->settings);
+    }
 
     bool snapshotSmall(SmallSnapshot& output, std::string& error, std::size_t limit = 4096U) {
         if (busy() || !state_ || state_->topology.positions.size() > limit || state_->grid.cells > 100000U) {

@@ -1,4 +1,5 @@
 #pragma once
+// XYZ arithmetic uses world-space vectors; inverse mass is stored separately in Vec4.w.
 
 #ifndef LAB_CHECKPOINT
 #define LAB_CHECKPOINT 14

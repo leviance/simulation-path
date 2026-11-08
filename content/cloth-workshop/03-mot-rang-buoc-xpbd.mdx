@@ -12,14 +12,18 @@ Hai đỉnh đã biết rơi, nhưng khoảng cách giữa chúng chưa biết p
 
 Đặt d=xa−xb, r=|d|, n=d/r và C=r−L. Inverse masses wa/wb có đơn vị 1/kg. Với ràng buộc khoảng cách, compliance α tính bằng m/N; α lớn hơn nghĩa là mềm hơn. Solver dùng compliance đã scale theo h:
 
-$$\widetilde{\alpha}=\frac{\alpha}{h^2},\qquad
-\Delta\lambda=\frac{-C-\widetilde{\alpha}\lambda}{w_a+w_b+\widetilde{\alpha}}.$$
+$$
+\widetilde{\alpha}=\frac{\alpha}{h^2},\qquad
+\Delta\lambda=\frac{-C-\widetilde{\alpha}\lambda}{w_a+w_b+\widetilde{\alpha}}.
+$$
 
 Hai vị trí nhận correction trái dấu:
 
-$$\Delta x_a=w_a n\Delta\lambda,\qquad
+$$
+\Delta x_a=w_a n\Delta\lambda,\qquad
 \Delta x_b=-w_b n\Delta\lambda,\qquad
-\lambda\leftarrow\lambda+\Delta\lambda.$$
+\lambda\leftarrow\lambda+\Delta\lambda.
+$$
 
 Ví dụ xa=0 m, xb=2 m, L=1 m, wa=wb=1/kg, h=0,1 s, α=0,01 m/N và lambda=0. Ta có C=1 m, alpha-tilde=1/kg, delta-lambda=−1/3 kg·m và n hướng −X. Vì vậy xa mới=1/3 m, xb mới=5/3 m; còn giãn 1/3 m là do compliance chứ không nhất thiết là bug. Nếu pin a bằng wa=0, chỉ b nhận correction: xb mới=1,5 m. Nếu đổi wa=2, wb=1 trong ví dụ không ghim, a dịch 0,5 m còn b dịch −0,25 m: đầu nhẹ hơn dịch nhiều hơn.
 
@@ -67,9 +71,25 @@ return true;
 
 Với cạnh đang giãn, increment âm. Direction từ b tới a nên a đi về b; b nhận dấu ngược và đi về a. Không thêm một dấu âm “để nhìn đẹp” ở đầu kia. Vector4 giữ inverse mass cũ; position correction không được vô tình ghi w thành zero hoặc một tọa độ phụ.
 
+### 4. Tạo một cạnh đang giãn để nhìn thấy correction
+
+Riêng checkpoint 3, GpuCloth::reset tìm constraint đầu tiên có endpoint động, đo hướng từ đầu còn lại rồi dịch endpoint đó ra xa thêm 0,4 m. Đoạn này nằm sau khi dựng rest lengths và trước upload:
+
+```cpp title="include/cloth_gpu.hpp — fixture cạnh giãn chỉ có ở checkpoint 3"
+const Vec3 direction = normalized(xyz(candidate->topology.positions[moved])
+    - xyz(candidate->topology.positions[anchor]));
+Vec4& position = candidate->topology.positions[moved];
+position = vector4(xyz(position) + direction * 0.4F, position.w);
+candidate->teachingConstraint = edgeId;
+```
+
+Rest của constraint không được tính lại sau khi dịch. Nếu cập nhật rest theo vị trí đã kéo, C lại thành zero và fixture mất tác dụng. Host chỉ dispatch constraint đã chọn ở mốc này; các cạnh còn lại chưa thành solver vải hoàn chỉnh. Toàn bộ perturbation/teachingConstraint không tồn tại ở checkpoint 4 trở đi, nên đây là input thí nghiệm rõ ràng, không phải lực hoặc chuyển động bí mật của bản cuối.
+
 ## Chạy thử và quan sát
 
 Build project_40_checkpoint_3 và chạy CTest fixture constraint của gói. Trước khi xem kết quả, ghi đáp án xa/xb/lambda của ba trường hợp trong phần mô hình. Dùng ngưỡng position theo mét và multiplier theo kg·m; NaN/Inf luôn là fail, không được bỏ qua vì phép so “lớn hơn epsilon” trả false.
+
+Chạy native với --preset sphere --side 17. Ứng dụng bắt đầu ở trạng thái chạy nên cạnh có thể đã relax trước khi bạn nhìn kỹ: nhấn Space để Pause, R để tạo lại fixture, đợi Reset hoàn tất rồi N single-step. Quan sát cạnh được giãn thêm 0,4 m kéo về gần rest; vertex ở gần nó nhưng không thuộc constraint được chọn không tự nhận correction của cả mạng. Cấu hình native dùng compliance/h mặc định và hai substeps, khác h=0,1 s, α=0,01 của ví dụ tính tay; không mong position sau N bằng các con số 1/3 và 5/3 m ở fixture độc lập.
 
 Đoạn source cuối bài cho thấy toàn hàm và các điều kiện đầu vào. Một fixture đúng phải so với các con số suy ra độc lập, không gọi solveDistance hai lần rồi so hai kết quả. Ở Canvas, thay compliance hoặc pin và nhìn correction; đây là minh họa CPU nhỏ, chưa phải kiểm CPU/GPU.
 

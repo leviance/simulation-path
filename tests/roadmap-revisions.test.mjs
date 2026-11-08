@@ -157,12 +157,21 @@ test("generated summaries retain actual previous titles and progress is not inva
   );
 });
 
-test("glossary examples distinguish the rebuilt chamber from superseded project products", async () => {
+test("glossary distinguishes rebuilt chamber/cloth products from superseded examples", async () => {
   const gpu = await readFile(new URL("../lib/glossary-gpu.ts", import.meta.url), "utf8");
   const physics = await readFile(new URL("../lib/glossary-physics.ts", import.meta.url), "utf8");
+  const cloth = await readFile(
+    new URL("../lib/glossary-cloth-workshop.ts", import.meta.url),
+    "utf8",
+  );
   assert.match(gpu, /Project 38 cho Boris compute/);
+  assert.doesNotMatch(gpu, /Bản cũ của Project 40 \(GPU Spatial Grid\)/i);
+  assert.match(cloth, /id: "cloth-csr-grid"/);
+  assert.match(cloth, /Grid 3D\/CSR/);
+  assert.match(cloth, /Project 40 đặt lambda về zero đầu mỗi substep/);
+  assert.match(cloth, /không kiểm đủ edge\/triangle và không có CCD/);
   for (const [source, ids] of [
-    [gpu, ["39", "40"]],
+    [gpu, ["39"]],
     [physics, ["41", "42", "43"]],
   ]) {
     for (const id of ids) {

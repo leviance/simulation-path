@@ -16,7 +16,9 @@ Lambda bắt đầu từ zero đầu substep và tích lũy qua cả I iteration
 
 Sau solve, velocity bằng (x mới−x đầu substep)/h. Damping ở bản chuẩn là rate γ có đơn vị 1/s:
 
-$$v\leftarrow v\,e^{-\gamma h}.$$
+$$
+v\leftarrow v\,e^{-\gamma h}.
+$$
 
 Đây là giảm vận tốc world sau solve, không phải toàn bộ mô hình Rayleigh damping trong bài báo XPBD. Compliance α vẫn tính bằng m/N; thickness tính bằng m. Friction của project là tỷ lệ tiếp tuyến không đơn vị mỗi substep có contact, sẽ học ở bài sau. Các tham số này không được cộng vào cùng một “độ mềm”.
 

@@ -51,7 +51,12 @@ const learning = {
     "p40-l03": {
       focus: "Tính một constraint có đáp án độc lập.",
       expected: "Correction có hướng/khối lượng đúng; alpha/h² và lambda không bị bỏ qua.",
-      files: ["include/cloth_cpu.hpp", "include/cloth_topology.hpp", "tests/tests.cpp"],
+      files: [
+        "include/cloth_cpu.hpp",
+        "include/cloth_topology.hpp",
+        "include/cloth_gpu.hpp",
+        "tests/tests.cpp",
+      ],
       steps: [
         {
           title: "Đo sai số",
@@ -233,6 +238,7 @@ const learning = {
       files: [
         "include/cloth_camera.hpp",
         "include/cloth_application.hpp",
+        "include/cloth_input.hpp",
         "shaders/cloth_solver.comp",
       ],
       steps: [
@@ -255,7 +261,13 @@ const learning = {
       focus: "Bằng chứng thuật toán khác GPU timing.",
       expected:
         "Oracle độc lập, finite/tolerance theo đơn vị, job có Cancel, median/độ phân tán Release.",
-      files: ["include/cloth_verify.hpp", "include/cloth_gpu.hpp", "tests/tests.cpp"],
+      files: [
+        "include/cloth_validation.hpp",
+        "include/cloth_timing.hpp",
+        "include/cloth_verify.hpp",
+        "include/cloth_gpu.hpp",
+        "tests/tests.cpp",
+      ],
       steps: [
         {
           title: "Kiểm primitive",
@@ -276,7 +288,13 @@ const learning = {
     "p40-l14": {
       focus: "Nghiệm thu sản phẩm chứ không chỉ source build được.",
       expected: "≥100.000 đỉnh động GPU đủ pipeline; một triệu riêng, hình/input/native/ZIP riêng.",
-      files: ["src/main.cpp", "include/cloth_application.hpp", "include/cloth_gpu.hpp"],
+      files: [
+        "src/main.cpp",
+        "include/cloth_application.hpp",
+        "include/cloth_acceptance.hpp",
+        "include/cloth_control_checks.hpp",
+        "include/cloth_gpu.hpp",
+      ],
       steps: [
         {
           title: "Build sạch",

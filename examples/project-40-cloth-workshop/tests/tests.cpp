@@ -25,22 +25,19 @@ void testDistanceOracle() {
     cloth::Vec4 b{2.0F, 0.0F, 0.0F, 1.0F};
     float lambda = 0.0F;
     check(cloth::solveDistance(a, b, 1.0F, 0.0F, 0.1F, lambda), "rigid constraint input accepted");
-    check(near(a.x, 0.5F) && near(b.x, 1.5F) && near(lambda, -0.5F),
-        "closed-form equal-mass rigid correction is +/-0.5m");
+    check(near(a.x, 0.5F) && near(b.x, 1.5F) && near(lambda, -0.5F), "closed-form equal-mass rigid correction is +/-0.5m");
     a = {0.0F, 0.0F, 0.0F, 0.0F};
     b = {2.0F, 0.0F, 0.0F, 2.0F};
     lambda = 0.0F;
     cloth::solveDistance(a, b, 1.0F, 0.01F, 0.1F, lambda);
-    check(near(a.x, 0.0F) && near(b.x, 4.0F / 3.0F) && near(lambda, -1.0F / 3.0F),
-        "independent alpha=1, denominator=3 answer preserves fixed pin");
+    check(near(a.x, 0.0F) && near(b.x, 4.0F / 3.0F) && near(lambda, -1.0F / 3.0F), "independent alpha=1, denominator=3 answer preserves fixed pin");
     const float retained = lambda;
     cloth::solveDistance(a, b, 1.0F, 0.01F, 0.1F, lambda);
     check(near(lambda, retained), "retained multiplier holds the compliant one-edge equilibrium");
     a = {0.0F, 0.0F, 0.0F, 1.0F};
     b = {0.0F, 0.0F, 0.0F, 1.0F};
     lambda = 0.0F;
-    check(cloth::solveDistance(a, b, 1.0F, 0.0F, 0.1F, lambda) && near(a.x, 0.0F),
-        "coincident distance constraint skips an undefined gradient without NaN");
+    check(cloth::solveDistance(a, b, 1.0F, 0.0F, 0.1F, lambda) && near(a.x, 0.0F), "coincident distance constraint skips an undefined gradient without NaN");
     check(!cloth::solveDistance(a, b, -1.0F, 0.0F, 0.1F, lambda), "negative rest length is rejected");
     check(!cloth::solveDistance(a, b, 1.0F, -0.01F, 0.1F, lambda), "negative compliance is rejected");
     check(!cloth::solveDistance(a, b, 1.0F, 0.0F, 0.0F, lambda), "zero timestep is rejected");
@@ -53,8 +50,7 @@ void testDistanceOracle() {
     float second = 0.0F;
     cloth::solveDistance(a, b, 1.0F, 0.0F, 0.1F, first);
     cloth::solveDistance(b, c, 1.0F, 0.0F, 0.1F, second);
-    check(near(a.x, 0.0F) && near(b.x, 2.0F) && near(c.x, 3.0F),
-        "two sequential rigid edges have the hand-derived ordered answer");
+    check(near(a.x, 0.0F) && near(b.x, 2.0F) && near(c.x, 3.0F), "two sequential rigid edges have the hand-derived ordered answer");
 }
 
 void testTopology() {
@@ -63,26 +59,21 @@ void testTopology() {
     const auto topology = cloth::makeTopology(settings);
     check(topology.positions.size() == 289U && topology.pinned == 17U, "small cloth distinguishes pinned and dynamic vertices");
     check(topology.indices.size() == 16U * 16U * 6U, "triangles cover every regular-grid quad exactly twice");
-    check(topology.constraints.size() == 2U * 17U * 16U + 2U * 16U * 16U + 2U * 17U * 15U,
-        "stretch, both shears and distance-bending edges are all present");
+    check(topology.constraints.size() == 2U * 17U * 16U + 2U * 16U * 16U + 2U * 17U * 15U, "stretch, both shears and distance-bending edges are all present");
     for (std::size_t color = 0U; color < 12U; ++color) {
         std::set<std::uint32_t> owned{};
         for (auto edge = topology.colorOffsets[color]; edge < topology.colorOffsets[color + 1U]; ++edge) {
             const auto constraint = topology.constraints[edge];
-            check(owned.insert(constraint.a).second && owned.insert(constraint.b).second,
-                "every color has disjoint endpoint ownership");
+            check(owned.insert(constraint.a).second && owned.insert(constraint.b).second, "every color has disjoint endpoint ownership");
             check(constraint.rest > 0.0F && std::isfinite(constraint.rest), "every edge has a finite nonzero rest length");
         }
     }
     settings.side = 321U;
-    check(settings.side * settings.side - settings.side == 102720U,
-        "acceptance preset exceeds 100000 dynamic vertices, excluding 321 pins");
+    check(settings.side * settings.side - settings.side == 102720U, "acceptance preset exceeds 100000 dynamic vertices, excluding 321 pins");
     check(cloth::plannedMemoryBytes(settings) < settings.memoryBudget, "100k preset fits explicit 512MiB preflight budget");
     settings.side = 1001U;
-    check(settings.side * settings.side - settings.side == 1001000U,
-        "optional million preset is a real distinct topology, not a relabeled 100k workload");
-    check(cloth::plannedMemoryBytes(settings) > settings.memoryBudget,
-        "million preset currently exceeds the default budget and must be reported unsupported separately");
+    check(settings.side * settings.side - settings.side == 1001000U, "optional million preset is a real distinct topology, not a relabeled 100k workload");
+    check(cloth::plannedMemoryBytes(settings) > settings.memoryBudget, "million preset currently exceeds the default budget and must be reported unsupported separately");
 }
 
 void testTimestepAndFiniteIterations() {
@@ -112,8 +103,7 @@ void testTimestepAndFiniteIterations() {
             cloth::solveDistance(b, c, 1.0F, 0.0F, 0.1F, lambdaB);
         }
         const float expectedResidual = std::pow(0.5F, static_cast<float>(iterations - 1));
-        check(near(b.x - 1.0F, expectedResidual) && near(c.x - b.x, 1.0F),
-            "bounded ordered chain iterations expose solver error separately from compliance");
+        check(near(b.x - 1.0F, expectedResidual) && near(c.x - b.x, 1.0F), "bounded ordered chain iterations expose solver error separately from compliance");
     }
 }
 
@@ -122,11 +112,9 @@ void testAnalyticContact() {
     check(near(sphere.normal.x, 1.0F) && near(sphere.penetration, 0.1F), "sphere outward normal and thickness are independent geometric answers");
     const auto center = cloth::sphereContact({}, {}, 1.0F, 0.1F);
     check(near(center.normal.y, 1.0F) && near(center.penetration, 1.1F), "sphere center uses declared finite up-normal fallback");
-    const auto capsule = cloth::capsuleContact({0.0F, 0.25F, 0.0F}, {-1.0F, 0.0F, 0.0F},
-        {1.0F, 0.0F, 0.0F}, 0.5F, 0.1F);
+    const auto capsule = cloth::capsuleContact({0.0F, 0.25F, 0.0F}, {-1.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, 0.5F, 0.1F);
     check(near(capsule.normal.y, 1.0F) && near(capsule.penetration, 0.35F), "capsule side projects onto the finite segment");
-    const auto cap = cloth::capsuleContact({2.0F, 0.0F, 0.0F}, {-1.0F, 0.0F, 0.0F},
-        {1.0F, 0.0F, 0.0F}, 1.0F, 0.1F);
+    const auto cap = cloth::capsuleContact({2.0F, 0.0F, 0.0F}, {-1.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, 1.0F, 0.1F);
     check(near(cap.normal.x, 1.0F) && near(cap.penetration, 0.1F), "capsule endpoint is spherical, not an infinite cylinder");
     cloth::Settings settings{};
     const auto projected = cloth::analyticProjection({4.0F, -1.0F, 4.0F}, settings);
@@ -159,21 +147,17 @@ void testCsrAndSelfContact() {
     }
     check(permutation, "every ID is scattered exactly once into its own 3D cell");
     const auto corrections = cloth::selfContactCorrections(positions, grid, settings.side, settings.thickness);
-    check(cloth::finite(corrections[0]) && cloth::length(corrections[0]) > 0.0F,
-        "coincident non-topological vertices get a finite deterministic contact correction");
-    check(cloth::topologyNeighbors(0U, 1U, 5U) && !cloth::topologyNeighbors(0U, 24U, 5U),
-        "two-ring topology exclusion is independent of spatial distance");
+    check(cloth::finite(corrections[0]) && cloth::length(corrections[0]) > 0.0F, "coincident non-topological vertices get a finite deterministic contact correction");
+    check(cloth::topologyNeighbors(0U, 1U, 5U) && !cloth::topologyNeighbors(0U, 24U, 5U), "two-ring topology exclusion is independent of spatial distance");
     std::set<std::pair<std::uint32_t, std::uint32_t>> brute{};
     std::set<std::pair<std::uint32_t, std::uint32_t>> candidate{};
     for (std::uint32_t a = 0U; a < positions.size(); ++a) {
         for (std::uint32_t b = a + 1U; b < positions.size(); ++b) {
-            if (!cloth::topologyNeighbors(a, b, settings.side)
-                && cloth::length(cloth::xyz(positions[a]) - cloth::xyz(positions[b])) < 2.0F * settings.thickness) {
+            if (!cloth::topologyNeighbors(a, b, settings.side) && cloth::length(cloth::xyz(positions[a]) - cloth::xyz(positions[b])) < 2.0F * settings.thickness) {
                 brute.emplace(a, b);
                 const auto first = cloth::cellCoordinate(cloth::xyz(positions[a]), grid.plan);
                 const auto second = cloth::cellCoordinate(cloth::xyz(positions[b]), grid.plan);
-                if (std::abs(first[0] - second[0]) <= 1 && std::abs(first[1] - second[1]) <= 1
-                    && std::abs(first[2] - second[2]) <= 1) {
+                if (std::abs(first[0] - second[0]) <= 1 && std::abs(first[1] - second[1]) <= 1 && std::abs(first[2] - second[2]) <= 1) {
                     candidate.emplace(a, b);
                 }
             }
@@ -190,8 +174,7 @@ void testFiniteEvolutionAndNormals() {
     for (std::uint32_t step = 0U; step < 8U; ++step) {
         cloth::cpuStep(state, settings);
     }
-    check(near(state.positions[0].x, pin.x) && near(state.positions[0].y, pin.y)
-        && near(state.positions[0].z, pin.z), "CPU full pipeline preserves pinned positions over finite steps");
+    check(near(state.positions[0].x, pin.x) && near(state.positions[0].y, pin.y) && near(state.positions[0].z, pin.z), "CPU full pipeline preserves pinned positions over finite steps");
     bool finite = true;
     bool normalsUnit = true;
     for (std::size_t id = 0U; id < state.positions.size(); ++id) {
@@ -206,6 +189,9 @@ void testFiniteEvolutionAndNormals() {
 
 } // namespace
 
+int runTimingSummaryTests();
+int runPresetTests();
+
 int main() {
     testDistanceOracle();
     testTopology();
@@ -213,6 +199,8 @@ int main() {
     testAnalyticContact();
     testCsrAndSelfContact();
     testFiniteEvolutionAndNormals();
+    failures += runTimingSummaryTests();
+    failures += runPresetTests();
     if (failures != 0) {
         return EXIT_FAILURE;
     }

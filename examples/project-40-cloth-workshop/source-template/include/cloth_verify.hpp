@@ -1,4 +1,5 @@
 #pragma once
+// Primitive fixtures use closed-form geometry and brute-force IDs before full CPU/GPU comparisons.
 #include "cloth_gpu.hpp"
 
 #include <functional>
@@ -8,8 +9,7 @@ namespace cloth {
 
 using CancelCheck = std::function<bool()>;
 
-inline bool verificationFence(GlApi& gl, std::chrono::steady_clock::time_point deadline,
-    const CancelCheck& canceled, std::string& error) {
+inline bool verificationFence(GlApi& gl, std::chrono::steady_clock::time_point deadline, const CancelCheck& canceled, std::string& error) {
     GLsync fence = gl.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0U);
     gl.Flush();
     bool done = false;
@@ -40,7 +40,10 @@ struct FixtureStorage {
     GlApi& gl;
     std::vector<GLuint> buffers{};
     std::vector<GLuint> programs{};
-    explicit FixtureStorage(GlApi& api) : gl(api) {}
+
+    explicit FixtureStorage(GlApi& api)
+        : gl(api) {}
+
     ~FixtureStorage() {
         if (!buffers.empty()) {
             gl.DeleteBuffers(static_cast<GLsizei>(buffers.size()), buffers.data());
@@ -49,6 +52,7 @@ struct FixtureStorage {
             gl.DeleteProgram(program);
         }
     }
+
     GLuint makeBuffer(std::uint64_t bytes, const void* data, std::string& error) {
         GLuint name = 0U;
         if (!storageBuffer(gl, name, bytes, data, error)) {
@@ -57,6 +61,7 @@ struct FixtureStorage {
         buffers.push_back(name);
         return name;
     }
+
     GLuint makeProgram(const std::filesystem::path& file, std::string& error) {
         GLuint name = buildProgram(gl, {{GL_COMPUTE_SHADER, file}}, error);
         if (name != 0U) {
@@ -70,8 +75,7 @@ inline bool closeFloat(float actual, float expected, float tolerance) {
     return std::isfinite(actual) && std::abs(actual - expected) <= tolerance;
 }
 
-inline bool verifyDistanceAndAnalyticGpu(GlApi& gl, const std::filesystem::path& directory,
-    std::chrono::steady_clock::time_point deadline, const CancelCheck& canceled, std::string& error) {
+inline bool verifyDistanceAndAnalyticGpu(GlApi& gl, const std::filesystem::path& directory, std::chrono::steady_clock::time_point deadline, const CancelCheck& canceled, std::string& error) {
     FixtureStorage storage(gl);
     const GLuint program = storage.makeProgram(directory / "cloth_solver.comp", error);
     if (program == 0U) {
@@ -137,8 +141,7 @@ inline bool verifyDistanceAndAnalyticGpu(GlApi& gl, const std::filesystem::path&
     }
     gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, names[0]);
     gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(positions), positions.data());
-    if (!finite(xyz(positions[0])) || !finite(xyz(positions[1]))
-        || length(xyz(positions[0]) - xyz(positions[1])) != 0.0F) {
+    if (!finite(xyz(positions[0])) || !finite(xyz(positions[1])) || length(xyz(positions[0]) - xyz(positions[1])) != 0.0F) {
         error = "GPU zero-distance gradient handling produced an invalid correction.";
         return false;
     }
@@ -180,8 +183,7 @@ inline bool verifyDistanceAndAnalyticGpu(GlApi& gl, const std::filesystem::path&
     return true;
 }
 
-inline bool verifyScanGpu(GlApi& gl, const std::filesystem::path& directory,
-    std::chrono::steady_clock::time_point deadline, const CancelCheck& canceled, std::string& error) {
+inline bool verifyScanGpu(GlApi& gl, const std::filesystem::path& directory, std::chrono::steady_clock::time_point deadline, const CancelCheck& canceled, std::string& error) {
     FixtureStorage storage(gl);
     const GLuint scanProgram = storage.makeProgram(directory / "cloth_scan.comp", error);
     const GLuint addProgram = storage.makeProgram(directory / "cloth_scan_add.comp", error);
@@ -218,8 +220,7 @@ inline bool verifyScanGpu(GlApi& gl, const std::filesystem::path& directory,
     return true;
 }
 
-inline bool verifyGridContactGpu(GlApi& gl, const std::filesystem::path& directory,
-    std::chrono::steady_clock::time_point deadline, const CancelCheck& canceled, std::string& error) {
+inline bool verifyGridContactGpu(GlApi& gl, const std::filesystem::path& directory, std::chrono::steady_clock::time_point deadline, const CancelCheck& canceled, std::string& error) {
     FixtureStorage storage(gl);
     const GLuint program = storage.makeProgram(directory / "cloth_grid.comp", error);
     const GLuint scanProgram = storage.makeProgram(directory / "cloth_scan.comp", error);
@@ -292,8 +293,7 @@ inline bool verifyGridContactGpu(GlApi& gl, const std::filesystem::path& directo
     std::vector<std::uint32_t> membership(25U);
     auto read = [&](GLuint buffer, auto& values) {
         gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
-        gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-            static_cast<GLsizeiptr>(values.size() * sizeof(values[0])), values.data());
+        gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(values.size() * sizeof(values[0])), values.data());
     };
     read(names[1], counts);
     read(names[2], offsets);
@@ -332,8 +332,7 @@ inline bool verifyGridContactGpu(GlApi& gl, const std::filesystem::path& directo
             }
             const auto first = cellCoordinate(xyz(positions[a]), plan);
             const auto second = cellCoordinate(xyz(positions[b]), plan);
-            if (std::abs(first[0] - second[0]) <= 1 && std::abs(first[1] - second[1]) <= 1
-                && std::abs(first[2] - second[2]) <= 1) {
+            if (std::abs(first[0] - second[0]) <= 1 && std::abs(first[1] - second[1]) <= 1 && std::abs(first[2] - second[2]) <= 1) {
                 ++candidateCount;
             }
             if (!topologyNeighbors(a, b, 5U) && length(xyz(positions[a]) - xyz(positions[b])) < 0.08F) {
@@ -373,13 +372,9 @@ inline bool verifyGridContactGpu(GlApi& gl, const std::filesystem::path& directo
     return true;
 }
 
-inline bool runGpuFixtures(GlApi& gl, const std::filesystem::path& directory,
-    std::string& report, std::string& error, std::uint32_t timeoutMs = 10000U,
-    const CancelCheck& canceled = {}) {
+inline bool runGpuFixtures(GlApi& gl, const std::filesystem::path& directory, std::string& report, std::string& error, std::uint32_t timeoutMs = 10000U, const CancelCheck& canceled = {}) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-    if (!verifyDistanceAndAnalyticGpu(gl, directory, deadline, canceled, error)
-        || !verifyScanGpu(gl, directory, deadline, canceled, error)
-        || !verifyGridContactGpu(gl, directory, deadline, canceled, error)) {
+    if (!verifyDistanceAndAnalyticGpu(gl, directory, deadline, canceled, error) || !verifyScanGpu(gl, directory, deadline, canceled, error) || !verifyGridContactGpu(gl, directory, deadline, canceled, error)) {
         return false;
     }
     Settings settings{};
@@ -416,20 +411,17 @@ inline bool runGpuFixtures(GlApi& gl, const std::filesystem::path& directory,
         positionError = std::max(positionError, length(xyz(snapshot.positions[id]) - xyz(cpu.positions[id])));
         velocityError = std::max(velocityError, length(xyz(snapshot.velocities[id]) - xyz(cpu.velocities[id])));
         normalError = std::max(normalError, length(xyz(snapshot.normals[id]) - xyz(cpu.normals[id])));
-        if (snapshot.positions[id].w != cpu.positions[id].w || !finite(xyz(snapshot.positions[id]))
-            || !finite(xyz(snapshot.velocities[id])) || !finite(xyz(snapshot.normals[id]))) {
+        if (snapshot.positions[id].w != cpu.positions[id].w || !finite(xyz(snapshot.positions[id])) || !finite(xyz(snapshot.velocities[id])) || !finite(xyz(snapshot.normals[id]))) {
             error = "GPU small-state fixture has an invalid mass, position, velocity or normal.";
             return false;
         }
     }
     if (positionError > 0.0002F || velocityError > 0.025F || normalError > 0.001F) {
-        error = "CPU/GPU small snapshot exceeds absolute tolerances: position=" + std::to_string(positionError)
-            + "m, velocity=" + std::to_string(velocityError) + "m/s, normal=" + std::to_string(normalError) + ".";
+        error = "CPU/GPU small snapshot exceeds absolute tolerances: position=" + std::to_string(positionError) + "m, velocity=" + std::to_string(velocityError) + "m/s, normal=" + std::to_string(normalError) + ".";
         return false;
     }
     const auto expectedEdges = cpu.topology.constraints.size() * settings.iterations * settings.substeps;
-    if (gpu.stats().updated != 272U || gpu.stats().pinned != 17U || gpu.stats().normals != 289U
-        || gpu.stats().constraints != expectedEdges || gpu.stats().countedVertices != 289U) {
+    if (gpu.stats().updated != 272U || gpu.stats().pinned != 17U || gpu.stats().normals != 289U || gpu.stats().constraints != expectedEdges || gpu.stats().countedVertices != 289U) {
         error = "GPU did not process every small-fixture dynamic vertex, constraint, grid member and normal.";
         return false;
     }
@@ -475,9 +467,7 @@ inline bool runGpuFixtures(GlApi& gl, const std::filesystem::path& directory,
     }
     for (std::size_t id = 0U; id < snapshot.positions.size(); ++id) {
         const auto original = gpu.topology().positions[id];
-        if (snapshot.positions[id].x != original.x || snapshot.positions[id].y != original.y
-            || snapshot.positions[id].z != original.z || snapshot.positions[id].w != original.w
-            || length(xyz(snapshot.velocities[id])) != 0.0F) {
+        if (snapshot.positions[id].x != original.x || snapshot.positions[id].y != original.y || snapshot.positions[id].z != original.z || snapshot.positions[id].w != original.w || length(xyz(snapshot.velocities[id])) != 0.0F) {
             error = "Candidate refusal failed to restore positions, inverse masses or velocities exactly.";
             return false;
         }

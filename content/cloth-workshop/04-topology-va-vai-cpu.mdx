@@ -62,7 +62,13 @@ CPU lặp màu 0 đến 11 trong mỗi iteration, và lặp iteration trong mỗ
 
 ## Chạy thử và quan sát
 
-Build project_40_checkpoint_4, chạy preset nhỏ và single-step. Tấm vải phải phản ứng theo mạng cạnh chứ không chỉ tất cả vertex cùng rơi. Ở bản CPU tải về, helper có thể chứa analytic/contact cho các mốc sau; hãy lần đúng nhánh được checkpoint bật. Không lấy timing CPU nhỏ để dự đoán FPS GPU.
+Build project_40_checkpoint_4, chạy bản nhỏ có mép ghim rồi Pause/single-step:
+
+```powershell
+.\build\Debug\project_40_checkpoint_4.exe --preset hanging --side 17
+```
+
+Tấm vải phải phản ứng theo mạng cạnh chứ không chỉ tất cả vertex cùng rơi. Ở bản CPU tải về, helper có thể chứa analytic/contact cho các mốc sau; hãy lần đúng nhánh được checkpoint bật. Checkpoint 4 chạy CPU prediction/XPBD/damping/normals và upload mặt nhỏ để có baseline đọc được; analytic/contact chưa bật ở mốc này. Từ checkpoint 5, đường vật lý trở lại GPU, không giữ CPU upload làm solver ẩn. Không lấy timing CPU nhỏ để dự đoán FPS GPU.
 
 Kiểm số vertices/triangles/constraints bằng công thức trước. Với n=3: 9 vertices, 8 triangles và 26 constraints. Kiểm mọi endpoint nằm trong range, không có rest length zero và hàng ghim giữ nguyên. Một bước CPU này là snapshot baseline cho GPU, không phải oracle độc lập cho chính công thức distance; oracle số vẫn là fixture Bài 3.
 

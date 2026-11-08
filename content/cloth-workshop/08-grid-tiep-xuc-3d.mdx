@@ -12,7 +12,9 @@ Ta không chuyển scene thành một grid 2D để dễ làm. Position có X/Y/
 
 Grid bao miền world hữu hạn. Với cell size s và minimum m, coordinate là floor((position−m)/s), rồi clamp theo chính sách biên. Cell ID row-major là:
 
-$$id=c_x+n_x(c_y+n_yc_z).$$
+$$
+id=c_x+n_x(c_y+n_yc_z).
+$$
 
 Đây là index, không phải hash tùy ý; mỗi bộ coordinate hợp lệ có một ID riêng. Số cells nx·ny·nz cần tính bằng số nguyên đủ rộng trước cấp phát. Grid dense có thể tốn bộ nhớ lớn ngay cả khi phần lớn cell rỗng; N vertices nhỏ không tự bảo đảm grid nhỏ.
 

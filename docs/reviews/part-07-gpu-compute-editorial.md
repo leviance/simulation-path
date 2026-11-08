@@ -4,12 +4,12 @@ Ngày biên tập: 2026-10-30. Nguồn chuẩn là [Product Specification v4 —
 
 ## Đích đến sau biên tập
 
-| Project | Sản phẩm cuối trong đặc tả | Kiến thức tính toán phục vụ sản phẩm |
-| --- | --- | --- |
-| 37 | Máy tính vector CPU/GPU có inspector và benchmark | Vòng đời compute, layout, validation và phạm vi đo |
-| 38 | Buồng hạt tích điện 3D trong điện trường/từ trường | State GPU lâu dài, Boris pusher, compute→graphics và kiểm quỹ đạo |
-| 39 | Khám phá thành phố 3D với một triệu vật thể | Frustum culling, reduction/scan, compaction và GPU-generated indirect draw |
-| 40 | Xưởng vải 3D: kéo, ghim và thả vải phủ lên vật thể | XPBD, giải constraint không race, grid/contact 3D và mesh biến dạng |
+| Project | Sản phẩm cuối trong đặc tả                         | Kiến thức tính toán phục vụ sản phẩm                                       |
+| ------- | -------------------------------------------------- | -------------------------------------------------------------------------- |
+| 37      | Máy tính vector CPU/GPU có inspector và benchmark  | Vòng đời compute, layout, validation và phạm vi đo                         |
+| 38      | Buồng hạt tích điện 3D trong điện trường/từ trường | State GPU lâu dài, Boris pusher, compute→graphics và kiểm quỹ đạo          |
+| 39      | Khám phá thành phố 3D với một triệu vật thể        | Frustum culling, reduction/scan, compaction và GPU-generated indirect draw |
+| 40      | Xưởng vải 3D: kéo, ghim và thả vải phủ lên vật thể | XPBD, giải constraint không race, grid/contact 3D và mesh biến dạng        |
 
 Người dùng đã chọn buồng hạt tích điện thay đài phun ở Project 38. Sau đó người dùng yêu cầu thay cả Project 39 và 40 vì tên/kết quả quá trừu tượng: sản phẩm phải kết hợp xử lý tính toán nặng với đồ họa trực quan. Hai project này được biên tập theo hướng ứng dụng thành phố/vải ở bảng trên, không dừng ở dashboard reduction/scan hoặc công cụ grid.
 
@@ -25,16 +25,16 @@ Project 32 vẫn là đài phun CPU với AoS/SoA. Boids ở 27–28 được gi
 
 Các hợp đồng chi tiết, interactions và Acceptance Criteria nằm trong tài liệu chuẩn; không chép lại toàn bộ vào báo cáo này.
 
-## Triển khai hiện tại chưa được đổi theo đặc tả
+## Triển khai và bằng chứng hiện tại
 
-| Project | Bằng chứng hiện có | Phần còn phải xây |
-| --- | --- | --- |
-| 37 | Workbench trong source/lessons hiện có được giữ | Đối chiếu riêng các cổng nghiệm thu; đợt biên tập không chứng nhận lại toàn project |
-| 38 | [Source buồng hạt tích điện](../../examples/project-38-charged-particle-chamber/README.md), 12 bài và Canvas mới đã được xây | Theo dõi các cổng còn lại trong [hồ sơ nghiệm thu](project-38-rebuild-acceptance.md); chưa dùng build/GPU verification thay kiểm tương tác native |
-| 39 | [Source thành phố 3D](../../examples/project-39-million-object-city/README.md), 12 bài và Canvas mới; culling/scan/compaction/indirect draw đã nối vào cùng renderer, GPU kiểm toàn bộ 1.000.003 records | Xem [hồ sơ nghiệm thu](project-39-rebuild-acceptance.md); kiểm tự động và kiểm thao tác native bằng mắt được ghi riêng |
-| 40 | [README source hiện có](../../examples/project-40-gpu-spatial-grid-neighbors/README.md) là công cụ grid/tìm hàng xóm 2D | Topology/constraint solver, mesh presentation, input pin/drag, grid/contact 3D, normals và bộ kiểm vải |
+| Project | Bằng chứng hiện có                                                                                                                                                                                       | Phần còn phải xây                                                                                                                                                                       |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 37      | Workbench trong source/lessons hiện có được giữ                                                                                                                                                          | Đối chiếu riêng các cổng nghiệm thu; đợt biên tập không chứng nhận lại toàn project                                                                                                     |
+| 38      | [Source buồng hạt tích điện](../../examples/project-38-charged-particle-chamber/README.md), 12 bài và Canvas mới đã được xây                                                                             | Theo dõi các cổng còn lại trong [hồ sơ nghiệm thu](project-38-rebuild-acceptance.md); chưa dùng build/GPU verification thay kiểm tương tác native                                       |
+| 39      | [Source thành phố 3D](../../examples/project-39-million-object-city/README.md), 12 bài và Canvas mới; culling/scan/compaction/indirect draw đã nối vào cùng renderer, GPU kiểm toàn bộ 1.000.003 records | Xem [hồ sơ nghiệm thu](project-39-rebuild-acceptance.md); kiểm tự động và kiểm thao tác native bằng mắt được ghi riêng                                                                  |
+| 40      | [Source xưởng vải 3D](../../examples/project-40-cloth-workshop/README.md), 14 bài, Canvas CPU nhỏ và source XPBD/CSR/contact/render GPU mới                                                              | Đồng bộ và chạy các cổng trong [hồ sơ nghiệm thu](project-40-rebuild-acceptance.md); chưa dùng source đã viết hoặc build thành công thay bằng chứng GPU scale, hình ảnh và input native |
 
-Project 38 và 39 đã thay nguồn theo sản phẩm mới; các bản đài phun/workbench trước đó được giữ dự phòng ngoài Git. Project 40 vẫn giữ bản cũ. Xem hồ sơ riêng để phân biệt phần đã kiểm tự động, hình ảnh được duyệt và tương tác native chưa kiểm; bảng này không chứng nhận hoàn thành toàn bộ Phần VII.
+Project 38–40 có source theo sản phẩm mới; các bản đài phun/workbench/grid trước đó được giữ dự phòng ngoài Git. Project 40 vẫn giữ trạng thái chờ nghiệm thu trên roadmap cho tới khi đủ bằng chứng. Xem hồ sơ riêng để phân biệt phần đã kiểm tự động, hình ảnh được duyệt và tương tác native chưa kiểm; bảng này không chứng nhận hoàn thành toàn bộ Phần VII.
 
 ## Thứ tự triển khai tiếp theo
 

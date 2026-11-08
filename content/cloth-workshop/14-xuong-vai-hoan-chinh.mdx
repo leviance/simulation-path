@@ -80,14 +80,17 @@ cmake --build build-release
 ctest --test-dir build-release --output-on-failure --timeout 30
 ```
 
-Trên Visual Studio, chạy final tại build/Release/project_40_final.exe; single-config dùng build-release/project_40_final. Các lệnh PowerShell dưới đây tách fixture nhỏ, scale và benchmark; mỗi job vẫn cần deadline/Cancel của app và watchdog phù hợp môi trường chạy:
+Trên Visual Studio, chạy final tại build/Release/project_40_final.exe; single-config dùng build-release/project_40_final. Các lệnh PowerShell dưới đây tách suite kiểm đầy đủ, benchmark nhỏ/lớn, lifecycle sự kiện và preset mở rộng; mỗi job vẫn cần deadline của app và watchdog phù hợp môi trường chạy:
 
 ```powershell
-.\build\Release\project_40_final.exe --verify --side 17
 .\build\Release\project_40_final.exe --verify --side 321
+.\build\Release\project_40_final.exe --benchmark --side 17
 .\build\Release\project_40_final.exe --benchmark --side 321
-.\build\Release\project_40_final.exe --verify --side 1001
+.\build\Release\project_40_final.exe --exercise-controls --side 17
+.\build\Release\project_40_final.exe --side 1001 --steps 1
 ```
+
+cloth_acceptance.hpp nối --verify với fixture độc lập, ValidationJob sáu ca CPU/GPU rồi ba preset side=321 × 120 bước và preflight một triệu. --side chỉ chọn scene lúc setup, không biến --verify thành suite nhỏ. cloth_control_checks.hpp nối --exercise-controls với đường sự kiện SDL thật; đó vẫn là kiểm tự động, không phải đánh giá thao tác bằng tay.
 
 Lệnh một triệu có thể bị từ chối bởi ngân sách mặc định 512 MiB/giới hạn SSBO; ghi nguyên lý do cùng phần cứng và báo riêng, không thay bằng side nhỏ dưới cùng nhãn. Để xem cảnh có điểm dừng, dùng thêm --preset hanging, --preset sphere hoặc --preset table cùng --steps 120 hoặc --seconds 20. Không chạy benchmark Release bằng executable Debug còn mở từ trước. CTest CPU không mở cửa sổ và không thay validation GPU thật.
 

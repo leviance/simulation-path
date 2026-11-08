@@ -67,7 +67,15 @@ Default limit của snapshotSmall là 4.096 vertices; nó không phải đườn
 
 ## Chạy thử và quan sát
 
-Build project_40_checkpoint_13. Chạy CTest Debug và Release như hướng dẫn bài cuối, rồi chạy job GPU riêng trong executable. Ghi từng fixture nào đã chạy, cấu hình nào chưa hỗ trợ; cancel/timeout/refused là incomplete. Trong lúc job chạy, cửa sổ phải nhận camera, Cancel và đóng; benchmark không được là một vòng while vô hạn không pump events.
+Build project_40_checkpoint_13. Mốc này mặc định mesh nhỏ; bản 100k mặc định chỉ bật ở checkpoint 14. Chạy CTest Debug và Release như hướng dẫn bài cuối, rồi V mở validation UI, B mở benchmark và X hủy. ValidationJob trong cloth_validation.hpp chạy sáu ca CPU/GPU × bốn bước: ba preset, mỗi preset hai hoặc bốn substeps; fixture sphere/table được đặt gần collider để thật sự có contact thay vì chỉ rơi tự do. Kiểm nhiều bước này dùng max Euclid position ≤0,0005 m, velocity ≤0,05 m/s và normal ≤0,005, khác ngưỡng fixture một bước ở trên.
+
+BenchmarkJob trong cloth_timing.hpp tạo shadow scene và giữ camera đo. Với mọi preset, đầu tiên nó tiến **60 bước settling không thuộc nhóm mẫu đại diện**; tiếp theo là hai cặp warm-up step/draw ở bước 61–62, rồi chín cặp đo ở bước 63–71. Tổng tiến độ là 71 bước, không phải chỉ 11 bước từ reset. Thời gian settling được báo riêng; median/MAD/min/max đại diện chỉ tính từ chín cặp cuối.
+
+Chín bước đầu trong settling được giữ riêng làm baseline GPU-only từ reset, có số analytic/self-contact events thật. Chỉ gắn nhãn contact-free khi cả hai loại events bằng zero, và chỉ gọi free fall khi không có đỉnh ghim. Baseline này không có draw ghép tương ứng, lại mô tả state khác chín mẫu sau settling; không lấy hai nhóm để tính tỷ số speedup.
+
+Deadline tổng 25 giây bao gồm cả settling, warm-up và đo. Tổng analytic contact events của chín mẫu đại diện SphereDrape/DropTable phải lớn hơn zero; một bản reset rồi đo ngay 11 bước rơi tự do không đại diện cho chi phí tiếp xúc. Hanging không buộc phải chạm vật cản. Thiếu contact bắt buộc, thiếu mẫu hoặc hết hạn phải báo incomplete/fail, không tự nhận benchmark thành công.
+
+Ghi từng fixture nào đã chạy, cấu hình nào chưa hỗ trợ; cancel/timeout/refused là incomplete. Trong lúc validation chạy, camera vẫn dùng được; benchmark khóa các chỉnh sửa làm thay workload/camera đo nhưng X/đóng cửa sổ phải luôn dùng được. Không dùng vòng while vô hạn không pump events.
 
 Lập ma trận nhỏ: cùng snapshot, h=1/120 và 1/240, I=1/4/8, compliance cố định; ghi max stretch, residual mét và penetration mét sau cùng thời gian. Với timing, tách prediction, constraints, grid/scan/scatter, contact, velocity, normals, draw và toàn bước/frame; nếu một pass chưa được đo, ghi chưa đo chứ không điền zero như số đo thật. Giữ cả trường hợp mesh nhỏ hoặc ít contacts mà GPU/CSR không có lợi.
 

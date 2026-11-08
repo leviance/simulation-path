@@ -293,10 +293,12 @@
   },
   {
     "id": "40",
-    "slug": "gpu-spatial-grid-neighbors",
-    "sourceDirectory": "project-40-gpu-spatial-grid-neighbors",
-    "checkpointCount": 9,
-    "demoId": "gpu-spatial-grid-neighbors"
+    "slug": "cloth-workshop",
+    "sourceDirectory": "project-40-cloth-workshop",
+    "checkpointCount": 14,
+    "demoId": "cloth-workshop",
+    "contentRevision": 2,
+    "shaderRuntimePerTarget": true
   },
   {
     "id": "41",

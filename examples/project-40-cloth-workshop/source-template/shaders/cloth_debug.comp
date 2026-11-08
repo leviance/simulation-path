@@ -29,7 +29,7 @@ uniform uint uCells;
 uniform uvec3 uDimensions;
 uniform float uThickness;
 const uint SLOT_BUDGET = 8192u;
-const uint PREVIEW_CAPACITY = 32u;
+const uint PREVIEW_CAP = 32u;
 
 ivec3 decodeCell(uint cell) {
     uint x = cell % uDimensions.x;
@@ -56,7 +56,7 @@ void main() {
     selectedPosition = vec4(0.0);
     candidateCounts = uvec4(0u);
     previewCounts = uvec4(0u, 0u, 0u, SLOT_BUDGET);
-    for (uint i = 0u; i < PREVIEW_CAPACITY; ++i) {
+    for (uint i = 0u; i < PREVIEW_CAP; ++i) {
         candidates[i].position = vec4(0.0);
         candidates[i].key = uvec4(0xffffffffu);
         contacts[i].position = vec4(0.0);
@@ -100,7 +100,6 @@ void main() {
             }
         }
     }
-    // Counts minus <=25 topology IDs: exact population without traversing every bucket.
     uint excluded = 0u;
     ivec2 selectedTopology = ivec2(int(uSelected % uSide), int(uSelected / uSide));
     for (int row = -2; row <= 2; ++row) {
@@ -124,7 +123,7 @@ void main() {
     uint candidatePreview = 0u;
     uint checkedContacts = 0u;
     uint contactPreview = 0u;
-    float diameterSquared = 4.0 * uThickness * uThickness;
+    float diameter2 = 4.0 * uThickness * uThickness;
     for (int i = 0; i < 27; ++i) {
         if (cells[i].w < 0) {
             continue;
@@ -147,18 +146,18 @@ void main() {
                 continue;
             }
             vec3 delta = position.xyz - selectedPosition.xyz;
-            bool contact = dot(delta, delta) < diameterSquared;
+            bool contact = dot(delta, delta) < diameter2;
             uint contactFlag = 0u;
             if (contact) {
                 contactFlag = 1u;
                 ++checkedContacts;
             }
-            if (candidatePreview < PREVIEW_CAPACITY) {
+            if (candidatePreview < PREVIEW_CAP) {
                 candidates[candidatePreview].position = position;
                 candidates[candidatePreview].key = uvec4(id, cell, contactFlag, 0u);
                 ++candidatePreview;
             }
-            if (contact && contactPreview < PREVIEW_CAPACITY) {
+            if (contact && contactPreview < PREVIEW_CAP) {
                 contacts[contactPreview].position = position;
                 contacts[contactPreview].key = uvec4(id, cell, 1u, 0u);
                 ++contactPreview;
