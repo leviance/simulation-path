@@ -1,0 +1,88 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm chỗ ghi cho mỗi object bằng exclusive scan
+
+## Ta cần giải quyết điều gì?
+
+Biết “có ba object được nhận” chưa đủ để tạo danh sách của chúng. Nếu nhiều invocation cùng ghi vào `visibleIDs[0]`, kết quả bị đè. Ta cần cấp cho mỗi object được nhận một vị trí riêng, không phụ thuộc invocation nào chạy trước. Exclusive scan giải quyết đúng việc đó.
+
+Hãy tạm nhìn một nhóm mesh với mask `[1,0,1,1]`. Prefix exclusive là `[0,1,1,2]`. Chỉ những phần tử có mask=1 mới ghi: record 0 vào chỗ 0, record 2 vào chỗ 1, record 3 vào chỗ 2. Hai prefix bằng nhau không gây tranh chấp vì phần tử mask=0 không ghi gì.
+
+## Hiểu ý tưởng trước khi viết code
+
+Exclusive nghĩa là tổng **trước** phần tử hiện tại:
+
+$$prefix[i]=\sum_{j=0}^{i-1}mask[j],\qquad prefix[0]=0.$$
+
+Inclusive scan cộng cả `mask[i]`; dùng nó làm địa chỉ sẽ bỏ trống chỗ 0 và có thể ghi quá cuối mảng. Trong project, một `uvec4` giữ bốn scan cùng lúc: ba nhóm mesh và tổng accepted. Mọi channel đều là uint; prefix không được chứa sai số xấp xỉ.
+
+Ta dùng Blelloch trên block 512 phần tử. 256 invocation nạp hai phần tử mỗi lane. Upsweep tạo tổng trên cây; lưu total của block; thay root bằng zero; downsweep đẩy tổng của phần nằm trước xuống từng lá. Bài này chỉ giải quyết prefix **trong block**. Hai block chưa biết tổng của nhau; đừng gọi kết quả đó là global prefix.
+
+<InteractiveLab demo="million-object-city" mode="scan" />
+
+## Bắt tay xây dựng
+
+### 1. Nạp hai phần tử và đệm phần đuôi
+
+```glsl title="shaders/scan.comp — load có guard"
+uint lane = gl_LocalInvocationID.x;
+uint first = gl_WorkGroupID.x * 512u + lane;
+uint second = first + 256u;
+temporary[lane] = uvec4(0u);
+temporary[lane + 256u] = uvec4(0u);
+if (first < uCount) {
+    temporary[lane] = inputValues[first];
+}
+if (second < uCount) {
+    temporary[lane + 256u] = inputValues[second];
+}
+```
+
+Zero padding không tạo thêm object. Nó chỉ hoàn thiện cây cố định 512 lá. Dữ liệu ngoài N không được đọc và prefix ngoài N không được ghi. Shared array `uvec4[512]` cần 8.192 byte; phải kiểm giới hạn shared memory thay vì giữ con số 2.048 byte của một scan float đơn kênh.
+
+### 2. Dựng tổng cây rồi đổi root thành zero
+
+```glsl title="shaders/scan.comp — upsweep"
+for (uint offset = 1u; offset < 512u; offset <<= 1u) {
+    uint right = (lane + 1u) * offset * 2u - 1u;
+    if (right < 512u) {
+        temporary[right] += temporary[right - offset];
+    }
+    memoryBarrierShared();
+    barrier();
+}
+```
+
+Offset tăng 1, 2, 4, …, 256, ghép cặp thành các đoạn lớn dần. Sau upsweep, `temporary[511]` là total. Lane 0 lưu nó vào `blockSums` rồi đặt `temporary[511]=uvec4(0u)`. Bỏ bước zero này thì downsweep mang theo total thay vì prefix trước block.
+
+### 3. Đẩy tổng đứng trước xuống hai nhánh
+
+```glsl title="shaders/scan.comp — đổi cặp trong downsweep"
+uvec4 left = temporary[right - offset];
+temporary[right - offset] = temporary[right];
+temporary[right] += left;
+```
+
+Nhánh trái nhận prefix của cha. Nhánh phải nhận prefix ấy cộng tổng cũ của nhánh trái. Vì ta ghi đè hai ô, phải giữ `left` trước; đọc lại ô đã sửa sẽ mất subtotal cần dùng. Vòng downsweep giảm offset 256 về 1, có barrier sau mỗi lượt. Cuối cùng, chỉ ghi `prefixes[first/second]` khi index còn trong N.
+
+## Chạy thử và quan sát
+
+Build `project_39_checkpoint_6`. Dùng mask `[1,0,1,1]` rồi kiểm prefix `[0,1,1,2]` cùng block total 3. Thử toàn 0, một số 1 ở cuối và N=1. Sau đó thử hơn 512 phần tử: prefix ở block thứ hai bắt đầu lại từ zero. Đây là giới hạn đã công bố của checkpoint, không phải lỗi cần chữa bằng một vòng cộng tuần tự trên CPU.
+
+Trong Canvas, đối chiếu mask/prefix theo từng channel. Khi một channel không có object nào, toàn prefix channel đó vẫn phải bằng zero; không được tái sử dụng offset của nhóm trước.
+
+## Thử tạo lỗi
+
+1. Không đặt root về zero. Tính lại fixture nhỏ và xem toàn prefix bị cộng thêm total ra sao.
+2. Thay phép đổi cặp bằng việc ghi nhánh trái rồi đọc lại nó để cộng nhánh phải. Subtotal cũ đã mất; prefix sai dù barrier vẫn đầy đủ.
+
+## Checklist hoàn thành
+
+- Exclusive prefix bắt đầu từ zero và không cộng phần tử hiện tại.
+- N=0/1, N lẻ và phần đuôi không đọc/ghi ngoài buffer; total đúng.
+- Upsweep/root-zero/downsweep có ý nghĩa rõ, mọi lane đi qua barrier.
+- Checkpoint chỉ hứa local prefix trong từng block; global offset được nối ở bài sau.
+
+## Hướng mở rộng
+
+Thử tự tính scan cho `[0,1,0,0,1]` và ghi địa chỉ của hai record sống trước khi chạy code. Tiếp theo, [nối các block thành prefix toàn cục](/projects/million-object-city/07-scan-nhieu-tang).

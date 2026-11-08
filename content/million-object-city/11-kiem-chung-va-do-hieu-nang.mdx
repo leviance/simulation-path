@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm đúng kết quả rồi mới so hiệu năng
+
+## Ta cần giải quyết điều gì?
+
+Thành phố đã chạy, submitted đã giảm. Trước khi nói “GPU culling nhanh hơn”, còn hai việc riêng: chứng minh nó giữ đúng tập object và đo nó trên cùng scene/camera với bản không lọc. Một thuật toán bỏ nhầm nửa số nhà thường rất nhanh; một phép đo chỉ tính thời gian gửi lệnh cũng thường rất đẹp. Cả hai đều không trả lời đúng câu hỏi.
+
+Ta giữ ba cổng: CPU tests không mở window; GPU fixtures chạy shader thật với đáp án độc lập; kiểm sản phẩm ở quy mô triệu object có renderer và input. Cổng này không thay cổng khác. Tests không cần cửa sổ không chứng minh driver compile GLSL được; một ảnh đẹp cũng không chứng minh prefix exact.
+
+## Hiểu ý tưởng trước khi viết code
+
+Fixture nhỏ kiểm toàn bộ mask, prefix, compacted record indices và mọi field command. Các ca bắt buộc gồm N=0/1, N lẻ, phần đuôi, nhiều tầng, ID rời rạc, all-visible rồi empty trong cùng allocation. Primitive counts→offsets được kiểm bằng dữ liệu uint không chỉ 0/1; integer sum/min/max được kiểm riêng để không dựa vào hình ảnh.
+
+Count/offset/ID so exact. Distance theo world units dùng ngưỡng `0.002 + 2e-5 * abs(reference)`; NaN/Inf phải được phân biệt với cặp infinity trung tính hợp lệ của tập rỗng. Không dùng epsilon để hợp thức hóa một count sai.
+
+Benchmark đi qua camera snapshots tái lập, chạy on/off cùng N/seed/build. Mỗi cấu hình bỏ hai lượt warm-up rồi lấy chín sample, báo median và độ phân tán. Các pass GPU chỉ được đọc khi query báo đã có kết quả. Ca nhỏ hoặc gần all-visible có thể không nhanh hơn vì scan/compaction vẫn tốn việc. Kết quả đó phải được giữ lại.
+
+Một frame có nhiều mốc thời gian, không nên gọi tất cả bằng nhãn “GPU time”:
+
+| Số đo | Phạm vi được đo |
+| --- | --- |
+| GPU pass time | Query trên GPU cho cull, reduction, scan, compaction, command và draw; báo riêng từng pass và tổng các query |
+| `medianCpuSubmitFrameMs` | Wall-clock phía CPU từ đầu frame đến khi gửi xong công việc được đo, trước present |
+| `medianWholeFrameMs` | Wall-clock phía CPU từ đầu frame đến sau `SDL_GL_SwapWindow`, gồm cả thời gian CPU ở present |
+| `medianFrameToGpuReadyMs` | Từ đầu frame đã gửi đến lúc poll xác nhận query GPU hoàn tất; gồm cả độ trễ chờ/poll |
+
+Whole-frame CPU có present **không chứng minh GPU đã vẽ xong**: present có thể chỉ đưa frame vào hàng đợi. Ngược lại, frame-to-GPU-ready có độ trễ do lịch poll nên không phải thời gian kernel thuần. Không cộng những số đo chồng lấp này thành một “tổng” mới, cũng không dùng CPU submit rất ngắn để kết luận toàn pipeline nhanh.
+
+<InteractiveLab demo="million-object-city" mode="indirect" />
+
+Canvas không đo GPU. Các bảng mask/command của nó giúp dự đoán đáp án fixture trước khi chạy native; không dùng thời gian JavaScript làm bằng chứng compute shader nhanh hơn.
+
+## Bắt tay xây dựng
+
+### 1. Dùng classifier độc lập cho GPU fixture
+
+Trong `snapshotMatches`, classifier dùng scalar double, không gọi lại helper sphere của đường chạy chính:
+
+```cpp title="include/city_gpu_validation.hpp — oracle khác implementation đang kiểm"
+const double signedDistance = static_cast<double>(plane.x) * object.centerRadius.x + static_cast<double>(plane.y) * object.centerRadius.y + static_cast<double>(plane.z) * object.centerRadius.z + plane.w;
+if (culling && signedDistance < -static_cast<double>(object.centerRadius.w)) {
+    accepted = false;
+}
+```
+
+Sau phân loại, bản CPU tạo mask/prefix tuần tự để so toàn mảng. Fixture hình học đặt sphere ở trong/ngoài/cắt mỗi plane với đáp án đã biết trước. Một reference chỉ gọi cùng hàm hai lần sẽ lặp lại cùng bug, không tạo bằng chứng độc lập.
+
+### 2. Tách tolerance float khỏi hợp đồng integer
+
+```cpp title="include/city_types.hpp — tolerance khoảng cách có đơn vị"
+inline bool distanceMatches(float actual, float expected) {
+    if (!std::isfinite(expected)) {
+        return actual == expected;
+    }
+    if (!std::isfinite(actual)) {
+        return false;
+    }
+    return std::abs(actual - expected) <= 0.002F + 2.0e-5F * std::abs(expected);
+}
+```
+
+Empty set cần đúng sentinel có dấu; expected finite mà actual NaN/Inf thì fail. Với counts/prefix, không gọi hàm này: so vector uint bằng equality. Guard records sau vùng cấp phát hợp lệ phát hiện scatter ghi quá mảng, kể cả khi những giá trị ta đọc bên trong vẫn có vẻ đúng.
+
+### 3. Đọc query khi đã available, không chặn frame
+
+```cpp title="include/city_timing.hpp — không đòi kết quả query đang chạy"
+GLint available = GL_FALSE;
+gl.GetQueryObjectiv(slot.queries.back(), GL_QUERY_RESULT_AVAILABLE, &available);
+if (available != GL_TRUE) {
+    return false;
+}
+```
+
+Sau khi query cuối đã available, các stage trước trong cùng slot có thể được đọc. Ring không ghi đè slot đang chờ. Thời gian nanosecond đổi thành millisecond, có nhãn riêng cull, reduction, scan, compaction, command và draw. Tổng các query này không tự động là thời gian cả frame có present; đừng đổi nhãn cho một số đo phạm vi khác. Slot còn giữ mốc bắt đầu frame và thời gian qua present, nhờ đó kết quả về trễ vẫn được gắn với đúng sample đã gửi.
+
+### 4. Giữ phép kiểm tương tác tách khỏi scene đang khám phá
+
+V chạy một fixture riêng gồm 257 record qua sáu camera, mỗi camera có culling off/on: tổng cộng 12 batch. `CityValidationJob::poll` chỉ gửi hoặc đọc một batch rồi trả về event loop; X hủy, camera vẫn dùng được. Job không lấy buffer của thành phố đang xem làm scratch nên không xóa scene hoặc làm selection trỏ sang dữ liệu kiểm thử.
+
+Kết quả V PASS có nghĩa **12 fixture camera/toggle nhỏ đã qua**, không có nghĩa scene một triệu record vừa được đối chiếu toàn bộ. Đường CLI `--verify` dành cho kiểm primitives và scene thực ở N đã yêu cầu. Với lần chạy đó, full readback là một bước kiểm hữu hạn có chủ đích, không được chép nguyên bước ấy vào render loop.
+
+## Chạy thử và quan sát
+
+Build Debug và Release, chạy CTest với timeout hữu hạn theo README. Trên final hoặc checkpoint 11+, chạy `--verify` để kiểm shader thật; đọc báo cáo primitive trước báo cáo scene. Kiểm N=262.145 cho scan nhiều mức, rồi N=1.000.003 cho sản phẩm thực. Mốc lớn không được thay bằng một sample Canvas.
+
+Trong ứng dụng, thử V rồi X trước khi đủ 12 batch: trạng thái phải cho biết phép kiểm chưa hoàn tất. Sau đó chạy lại đủ batch và đọc tên fixture trong thông báo PASS. Tương tự, B chạy camera path, X hủy benchmark. Một nhóm sample đã hoàn tất có thể có báo cáo riêng, nhưng job bị hủy/timeout không được tự nhận toàn bộ camera path đã đạt. Lưu GPU/driver, build, N/seed, camera, warm-up, số mẫu và phạm vi của từng đồng hồ; không mang số đo một máy thành cam kết FPS chung.
+
+## Thử tạo lỗi
+
+1. Chỉ so count mà không so IDs. Cố ý lặp một ID và bỏ một ID khác: độ dài không đổi nhưng tập sai; fixture phải phát hiện.
+2. Đọc `GL_QUERY_RESULT` ngay sau submit hoặc bọc `DispatchCompute` bằng CPU clock rồi gọi GPU time. Một cách có thể stall, cách kia chỉ đo enqueue; cả hai làm sai ý nghĩa phép đo.
+
+## Checklist hoàn thành
+
+- Có đáp án độc lập và fixture đủ N=0/1/lẻ/tail/nhiều tầng/empty/sparse IDs.
+- Integer exact, float có ngưỡng/finite/empty rule riêng; canary/ranges được kiểm.
+- GPU thật xét đủ N; readback toàn scene chỉ nằm trong validation job, không render loop.
+- Benchmark cùng workload, có warm-up/mẫu/dispersion và ca không có lợi; Cancel/timeout không thành PASS.
+
+## Hướng mở rộng
+
+Thử FOV rộng ở một scene nhỏ rồi dự đoán compute overhead có thể lớn hơn phần draw tiết kiệm được không. Đo để kiểm dự đoán ấy. Tiếp theo, [nghiệm thu và chạy toàn bộ thành phố từ source hoàn chỉnh](/projects/million-object-city/12-thanh-pho-hoan-chinh).

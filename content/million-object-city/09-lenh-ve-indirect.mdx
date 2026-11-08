@@ -1,0 +1,76 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biến kết quả compute thành lệnh vẽ
+
+## Ta cần giải quyết điều gì?
+
+GPU đã biết count và danh sách accepted. Nếu CPU đọc count về rồi mới gọi draw với số instance tương ứng, mỗi frame lại có một điểm hẹn buộc CPU chờ GPU. Indirect draw cho phép CPU chỉ nói “đọc command ở buffer này”; các field của command được compute shader vừa ghi.
+
+Từ checkpoint này, renderer dùng visible list và command của GPU thay danh sách identity cung cấp ở scaffold. Phần mesh, camera và shader vật liệu vẫn giữ nguyên. Ta không dựng một scene mới để chứng minh thuật toán: chính thành phố đã đi qua từ Bài 1 đang nhận danh sách mới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một indexed indirect command có năm field: `count` là số index của mesh, `instanceCount` là số instance, `firstIndex` chỉ vị trí đầu trong index buffer, `baseVertex` dịch index và `baseInstance` là base instance. Với OpenGL 4.3, ta giữ ba command cố định theo ba mesh; không cần API đọc draw-count của 4.6.
+
+Project không dựa vào `gl_BaseInstance` trong shader. Mỗi command dùng baseInstance=0; vertex shader nhận group ID bằng uniform rồi tính group offset từ GPU counts. `gl_InstanceID` bắt đầu từ zero trong từng command, vì vậy phải cộng group offset trước khi đọc visible list.
+
+<InteractiveLab demo="million-object-city" mode="indirect" />
+
+## Bắt tay xây dựng
+
+### 1. GPU ghi đủ các field mỗi frame
+
+```glsl title="shaders/commands.comp — command cho một nhóm mesh"
+commands[group].count = indexCounts[group];
+commands[group].instanceCount = counts[group];
+commands[group].firstIndex = firstIndices[group];
+commands[group].baseVertex = 0;
+commands[group].baseInstance = 0u;
+```
+
+Mesh atlas có count 36, 36, 18 và firstIndex 0, 36, 72. Không nhân `firstIndex` với sizeof(index) trong field: nó đếm index, không đếm byte. Ngược lại, tham số offset của `glDrawElementsIndirect` bên CPU là byte offset tới command. Hai đơn vị này rất dễ bị trộn.
+
+Kể cả không có accepted object, cả ba command vẫn được ghi với instanceCount=0. Không để command của frame trước tồn tại chỉ vì frame hiện tại rỗng.
+
+### 2. Công bố dữ liệu theo cả hai consumer
+
+```cpp title="include/city_compute.hpp — barrier trước graphics"
+gl.DispatchCompute(1U, 1U, 1U);
+// Two consumers: the indirect command parser AND vertex-shader SSBO reads.
+gl.MemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+```
+
+Command parser đọc indirect buffer, nên cần `GL_COMMAND_BARRIER_BIT`. Vertex shader đọc visible IDs/object stats qua SSBO, nên cần shader-storage visibility cho đường ghi compute tương ứng. `barrier()` trong workgroup không thay hai việc đó; fence hoàn tất cũng không phải lý do bỏ qua hợp đồng memory visibility. Xem [glMemoryBarrier của Khronos](https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glMemoryBarrier.xml).
+
+### 3. Vertex shader đọc đúng record của từng instance
+
+```glsl title="shaders/city.vert — tra visible list rồi đọc object"
+uint offset = 0u;
+for (uint group = 0u; group < uGroup; ++group) { offset += counts[group]; }
+uint objectID = visibleIDs[offset + uint(gl_InstanceID)];
+Object object = objects[objectID];
+```
+
+Tên `objectID` ở đây là record index lấy từ compacted list, không phải `Object.id`. Đọc object xong, shader đặt vertex local theo halfSize và center như bài đầu. CPU chỉ bind cùng buffers, đặt `uGroup` và phát ba lệnh indirect; nó không tính accepted count. Xem định dạng command trong [glDrawElementsIndirect của Khronos](https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glDrawElementsIndirect.xml).
+
+## Chạy thử và quan sát
+
+Build `project_39_checkpoint_9`. Cố định camera rồi bật/tắt culling. `submitted` phải giảm khi nhiều bounds nằm ngoài frustum, nhưng phần hình hợp lệ trong ảnh không được mất. Trong debug observer, xem accepted/rejected thay đổi khi camera chính quay, không lẫn camera quan sát phụ vào phép cull.
+
+Kiểm nhỏ trước: từng command phải dùng đúng mesh range và instanceCount, nhóm rỗng vẽ zero instance. Sau đó mới dùng preset một triệu record. Một ảnh đẹp không chứng minh GPU đã xét đủ N; vẫn cần tested và bằng chứng đường dữ liệu không readback/compact bằng CPU mỗi frame.
+
+## Thử tạo lỗi
+
+1. Bỏ group offset khi tra visible list. Cả ba command đọc từ đầu danh sách, khiến tòa nhà dùng sai mesh hoặc lặp vị trí dù count có vẻ đúng.
+2. Không ghi instanceCount khi count=0. Quay camera sang khoảng rỗng; command cũ có thể tiếp tục vẽ các ID stale.
+
+## Checklist hoàn thành
+
+- CPU không đọc count để quyết định draw; renderer đọc list và command GPU.
+- Ba command có index range, instanceCount và đơn vị offset đúng; empty frame không giữ count cũ.
+- Có cả command và shader-storage visibility theo consumer, không nhầm workgroup barrier với dispatch barrier.
+- Culling on/off giữ phần hình đáng lẽ xuất hiện, accepted không bị gọi là số object có pixel.
+
+## Hướng mở rộng
+
+Thử thêm một nhóm mesh thứ tư và liệt kê tất cả nơi phải đổi: mask channels, group counts, mesh ranges, command và shader offset. Tiếp theo, [dùng debug và picking để hỏi lý do của từng object](/projects/million-object-city/10-debug-va-chon-vat-the).

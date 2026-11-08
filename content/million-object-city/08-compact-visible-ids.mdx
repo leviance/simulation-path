@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Gom đúng ID vào ba nhóm mesh
+
+## Ta cần giải quyết điều gì?
+
+Đến đây, mỗi record đã có mask và prefix toàn cục. Renderer cần một danh sách liên tục thay vì phải bỏ qua hàng triệu lỗ trống. Hơn nữa, các instance dùng cùng mesh nên nằm cùng nhóm để chỉ cần một command cho mỗi mesh. Bài này dùng prefix để tạo danh sách ấy, không dùng CPU hoặc thứ tự đến của atomic counter.
+
+Tên `visibleIDs` dễ gây nhầm: trong source, nó chứa **record index** dùng để truy cập `objects[index]`. ID ổn định của sản phẩm nằm trong `Object.id`. Ở scene mặc định hai số bằng nhau, nhưng fixture có ID rời rạc để bảo đảm ta không vô tình dùng một stable ID làm địa chỉ buffer.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giả sử group counts là `[2,1,3]`. Đoạn ID của mesh 0 bắt đầu ở 0, mesh 1 ở 2, mesh 2 ở 3. Trong từng nhóm, prefix channel tương ứng cấp địa chỉ theo thứ tự record index tăng dần:
+
+$$destination=groupBase[mesh]+prefix[index][mesh].$$
+
+Chỉ record accepted mới ghi. Mỗi record được nhận có đúng một channel xyz bằng 1, nên nó chỉ ghi một lần vào đúng nhóm. Hai record cùng nhóm có prefix khác nhau; hai record khác nhóm nằm ở các vùng không chồng lấp. Đây là lý do compaction không cần atomic để tranh chỗ.
+
+Thứ tự được công bố là **mesh trước, record index tăng dần trong mesh**. Nó không hứa Object.id tăng dần nếu stable ID rời rạc. Thay thứ tự compact hợp lệ không được làm mất hình, nhưng giữ stable order giúp debug và so sánh dễ hơn.
+
+<InteractiveLab demo="million-object-city" mode="compaction" />
+
+## Bắt tay xây dựng
+
+### 1. Bỏ qua record không có chỗ trong tập accepted
+
+```glsl title="shaders/compact.comp — chỉ record hợp lệ mới ghi"
+uint index = gl_GlobalInvocationID.x;
+if (index >= uCount || masks[index].w == 0u) {
+    return;
+}
+```
+
+Guard nằm trước đọc prefix hoặc ghi output. Trong shader này không có shared-memory barrier nên lane không tham gia có thể return. Điều ấy khác với scan/reduction, nơi return sớm trước barrier có thể làm group sai.
+
+### 2. Chọn vùng của mesh
+
+```glsl title="shaders/compact.comp — group base từ counts"
+uint group = 0u;
+uint groupBase = 0u;
+if (masks[index].y != 0u) {
+    group = 1u;
+    groupBase = counts.x;
+}
+if (masks[index].z != 0u) {
+    group = 2u;
+    groupBase = counts.x + counts.y;
+}
+```
+
+`counts` là kết quả reduction GPU, không phải số CPU vừa đếm lại. Mesh 0 dùng base 0; mesh 1 bỏ qua count của mesh 0; mesh 2 bỏ qua hai nhóm trước. Với nhiều nhóm hơn, group bases cũng là một exclusive scan của counts. Ba nhóm cố định ở đây giữ phần renderer dễ theo dõi mà không bỏ bản chất phép toán.
+
+### 3. Ghi record index vào địa chỉ duy nhất
+
+```glsl title="shaders/compact.comp — stable scatter"
+uint destination = groupBase + prefixes[index][group];
+visibleIDs[destination] = index;
+```
+
+Không ghi `object.id` vào đây trừ khi renderer có một bảng ánh xạ stable ID→record riêng. Sau dispatch, host đặt shader-storage barrier cho consumer đọc visible list. Khi tập rỗng, shader không ghi record nào; command bài sau phải có instanceCount=0 để không đọc danh sách còn sót từ frame trước.
+
+## Chạy thử và quan sát
+
+Build `project_39_checkpoint_8`. Dùng fixture nhỏ có cả ba mesh, vài mask zero và stable ID như 10, 42, 900. Tính danh sách record index bằng tay rồi so toàn output, không chỉ count. Hai danh sách cùng độ dài vẫn có thể mất một ID và lặp một ID khác.
+
+Kiểm cả vị trí guard sau vùng buffer hợp lệ. Không ghi vượt N là một hợp đồng khác với “các ID đã đọc trông đúng”. Với preset lớn, sample tái lập kiểm mask/ID kết hợp kiểm count và guard; không gọi một sample nhỏ là đối chiếu toàn bộ triệu record.
+
+## Thử tạo lỗi
+
+1. Bỏ `groupBase` khỏi destination. Các nhóm sẽ ghi chồng lên nhau dù scan từng channel hoàn toàn đúng.
+2. Ghi stable `Object.id` thay record index. Scene mặc định có thể chưa lộ lỗi; fixture ID rời rạc sẽ đọc nhầm object hoặc vượt buffer.
+
+## Checklist hoàn thành
+
+- Danh sách group-major, record index tăng dần trong từng nhóm; quy tắc được ghi rõ.
+- Mỗi accepted record có đúng một lần, rejected không có mặt; không chỉ kiểm độ dài.
+- Counts/offsets/prefix dùng uint exact, group ranges không chồng lấp.
+- Tập rỗng và guard ngoài vùng hợp lệ được kiểm; chưa dùng dữ liệu cũ để nhận một frame mới là đúng.
+
+## Hướng mở rộng
+
+Đảo thứ tự record input nhưng giữ stable ID. Dự đoán danh sách nào đổi, thông tin object nào không đổi. Tiếp theo, [để GPU biến counts thành indirect draw command](/projects/million-object-city/09-lenh-ve-indirect).

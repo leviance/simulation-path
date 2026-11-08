@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ một khu phố đến một triệu object records
+
+## Ta cần giải quyết điều gì?
+
+Ở bài trước, ta đã có thứ đáng để tối ưu: một khu phố có thể đi vào. Bây giờ cần phân biệt mesh với object. Một mesh hộp có thể dùng cho hàng nghìn tòa nhà, nhưng mỗi tòa vẫn cần dữ liệu riêng. Đích đến của bài này là tạo đủ object records, biết chính xác chúng tốn bao nhiêu bộ nhớ và có thể tái tạo cùng cảnh từ seed.
+
+Chưa chạy culling ở bước này. Nếu cấp phát một triệu record nhưng renderer chỉ biết vài trăm record đầu, con số lớn không có ý nghĩa. Ta sẽ giữ đường dữ liệu rõ ràng: record nào được sinh, tải lên và xét trong frame phải được thống kê ở đúng phạm vi.
+
+## Hiểu ý tưởng trước khi viết code
+
+`Object` chứa ba hàng 16 byte. Hàng đầu giữ tâm và bán kính sphere; hàng hai giữ ba nửa kích thước cùng mesh ID; hàng ba giữ màu cùng object ID. Tổng cộng 48 byte. Sphere bao mesh để kiểm vùng nhìn, không phải một quả cầu được vẽ thay tòa nhà.
+
+`id` là định danh. Record index là vị trí trong buffer. Khi compact, ta có thể đổi thứ tự bản ghi được vẽ mà vẫn phải đọc đúng `Object.id`; hai khái niệm này sẽ tách hẳn ở Bài 8. Trong scene mặc định chúng trùng nhau cho dễ đọc, nhưng tests còn dùng ID rời rạc để tránh viết code dựa vào sự trùng hợp đó.
+
+Seed là đầu vào của hàm hash, không phải đồng hồ. Cùng `N`, seed và ID tạo cùng record. Đổi N có thể thay cách chia hàng/cột nên không hứa cùng ID luôn ở cùng world position khi N khác nhau.
+
+<InteractiveLab demo="million-object-city" mode="city" />
+
+## Bắt tay xây dựng
+
+### 1. Khóa layout CPU/GLSL trước khi tăng N
+
+```cpp title="include/city_types.hpp — layout một object"
+struct alignas(16) Object {
+    Vec4 centerRadius{};
+    float halfX{}, halfY{}, halfZ{};
+    std::uint32_t mesh{};
+    float red{}, green{}, blue{};
+    std::uint32_t id{};
+};
+
+static_assert(sizeof(Object) == 48);
+static_assert(offsetof(Object, halfX) == 16);
+static_assert(offsetof(Object, mesh) == 28);
+static_assert(offsetof(Object, id) == 44);
+```
+
+Các `static_assert` biến giả định layout thành lỗi compile nếu struct đổi ngoài dự kiến. Không đổi `mesh` hay `id` thành float cho “tiện”; chúng sẽ dùng làm index và phải exact. Một triệu object riêng đã cần 48.000.000 byte, chưa tính mask, prefix, visible IDs, scratch hoặc bản candidate khi đổi scene.
+
+### 2. Sinh kích thước rồi tính sphere bao toàn mesh
+
+Trong `makeObject`, kích thước không lấy từ `rand()` dùng chung toàn chương trình:
+
+```cpp title="include/city_scene.hpp — biến thể tòa nhà theo seed"
+object.halfX = 3.1F + randomUnit(id, seed, 2U) * 3.5F;
+object.halfZ = 3.1F + randomUnit(id, seed, 3U) * 3.5F;
+object.halfY = 3.0F + std::pow(randomUnit(id, seed, 4U), 1.8F) * 48.0F * density;
+object.mesh = hash(id ^ seed) % 3U;
+```
+
+Mỗi channel tạo một biến ngẫu nhiên tái lập, tránh đổi màu vô tình đổi chiều cao. Đường giữa các block và biến thiên theo district giúp ta nhận biết vị trí; đây không chỉ là một triệu hộp cùng màu xếp kín nền. Với mesh nằm trong hộp nửa kích thước `halfX/Y/Z`, sphere có bán kính `sqrt(halfX² + halfY² + halfZ²)` bao cả các góc. Nếu dùng riêng nửa chiều rộng, các tòa cao sẽ biến mất ở mép frustum.
+
+### 3. Tạo scene theo batch để cửa sổ vẫn phản hồi
+
+```cpp title="include/city_scene.hpp — một lượt tạo dữ liệu hữu hạn"
+bool advance() {
+    // Only one bounded chunk per UI tick. Cancel never waits for a million-record loop.
+    const std::size_t end = std::min(objects.size() + 8192U, static_cast<std::size_t>(requested));
+    while (objects.size() < end) {
+        objects.push_back(makeObject(static_cast<std::uint32_t>(objects.size()), seed, requested));
+    }
+    active = objects.size() != requested;
+    return !active;
+}
+```
+
+Mỗi tick chỉ thêm tối đa 8.192 record rồi trả quyền về event loop. `begin` kiểm count và ngân sách trước; scene đang dùng phải được giữ bên ngoài builder cho đến khi candidate hoàn tất. Đừng xóa active scene rồi mới thử cấp phát scene mới: nếu thiếu bộ nhớ, người dùng mất cả bản đang chạy.
+
+Ngân sách không chỉ là `48 * N`. Khi đổi scene, có lúc active và candidate cùng tồn tại ở CPU lẫn GPU. Mask, prefix, visible IDs và scratch cũng cần bộ nhớ riêng. Vì vậy, `estimatedBytes` dành chỗ cho giai đoạn cùng tồn tại ấy trước khi tạo candidate; con số kiểm tra GPU tiếp tục được tính từ từng buffer thực tế.
+
+## Chạy thử và quan sát
+
+Build `project_39_checkpoint_2`, nhưng **bắt đầu bằng 257 object**, chưa bật ngay preset lớn:
+
+```bash
+cmake --build build --config Debug --target project_39_checkpoint_2
+```
+
+```powershell
+.\build\Debug\project_39_checkpoint_2.exe --count 257
+```
+
+Thực hiện lần lượt:
+
+1. Giữ preset 1 (257 object), chọn một tòa và đối chiếu ID, center, halfSize, radius với record sinh từ `makeObject`. Nếu muốn đọc chỉ một record, chạy lại với `--count 1`; đừng mong một tòa đơn lẻ trông như thành phố hoàn chỉnh.
+2. Với N=257, bấm N để đổi seed, rồi R để reset. Reset phải lặp đúng seed đang chọn, không quay về một seed khác. Sau đó dùng preset 2 (65.537 object), theo dõi tiến độ và hủy giữa chừng bằng X để kiểm scene cũ vẫn còn.
+3. Chỉ sau hai bước trên mới chọn preset 3 (1.000.003 object). Đọc số record và buffer bytes sau khi tạo xong; không suy từ mật độ hình ảnh rằng đã có đủ N. Xong phép kiểm quy mô này, có thể về preset 1 để tiếp tục học các thuật toán trên dữ liệu dễ đọc.
+
+Checkpoint này còn dùng đường vẽ chưa lọc từ scaffold, nên preset lớn có thể tốn nhiều thời gian vẽ. Đó không phải lỗi cần chữa bằng cách âm thầm bỏ bớt object. Các bài tiếp theo sẽ giảm số instance gửi đi vẽ bằng culling thật.
+
+Chỉ khi thông báo hoàn tất, candidate mới thành scene đang dùng; Cancel giữa chừng không được nhận một scene thiếu record là thành công. Ngân sách do ứng dụng công bố cũng không bảo đảm máy luôn có đủ VRAM: allocation và giới hạn SSBO còn phải kiểm lại ở GPU.
+
+## Thử tạo lỗi
+
+1. Cho seed phụ thuộc `SDL_GetTicks()`. Reset không còn tạo cùng cảnh, nên mọi so sánh culling on/off dễ dùng nhầm dữ liệu.
+2. Cố tình giảm radius còn `halfX`. Đánh dấu một tòa cao; đến Bài 3, đặt nó sát mép trên để thấy bounds sai làm mất hình thế nào.
+
+## Checklist hoàn thành
+
+- Object 48 byte, offset CPU khớp khai báo GLSL; ID và mesh là số nguyên.
+- Cùng N/seed cho cùng scene; các district, đường và mốc định hướng đọc được.
+- Có ngân sách trước allocation và batch hữu hạn; Cancel không phá scene hợp lệ.
+- Phân biệt số record resident với số record được xét/vẽ; chưa dùng số tam giác để nhận đủ một triệu object.
+
+## Hướng mở rộng
+
+Thêm một material dựa trên district nhưng giữ ID và bounds không đổi. Tiếp theo, [dùng sáu plane để quyết định sphere nào có thể xuất hiện](/projects/million-object-city/03-sau-mat-phang-vung-nhin).

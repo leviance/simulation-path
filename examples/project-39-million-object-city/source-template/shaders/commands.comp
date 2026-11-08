@@ -1,0 +1,35 @@
+#version 430 core
+
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+
+layout(local_size_x = 3) in;
+
+#if LAB_CHECKPOINT >= 9
+struct Command {
+    uint count;
+    uint instanceCount;
+    uint firstIndex;
+    int baseVertex;
+    uint baseInstance;
+};
+
+layout(std430, binding = 0) readonly buffer Stats { uvec4 counts; };
+layout(std430, binding = 1) writeonly buffer Commands { Command commands[]; };
+
+void main() {
+    uint group = gl_LocalInvocationID.x;
+    const uint indexCounts[3] = uint[3](36u, 36u, 18u);
+    const uint firstIndices[3] = uint[3](0u, 36u, 72u);
+    // Write all fields on every frame, including zero-visible frames.
+    commands[group].count = indexCounts[group];
+    commands[group].instanceCount = counts[group];
+    commands[group].firstIndex = firstIndices[group];
+    commands[group].baseVertex = 0;
+    commands[group].baseInstance = 0u;
+}
+#else
+void main() {
+}
+#endif

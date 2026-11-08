@@ -1,0 +1,91 @@
+#version 430 core
+
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+
+layout(local_size_x = 256) in;
+
+#if LAB_CHECKPOINT >= 4
+struct Object {
+    vec4 centerRadius;
+    vec3 halfSize;
+    uint mesh;
+    vec3 color;
+    uint id;
+};
+
+struct Stats {
+    uvec4 counts;
+    float minimumDistance;
+    float maximumDistance;
+    uint tested;
+    uint padding;
+    uvec4 integerStats;
+};
+
+layout(std430, binding = 0) readonly buffer Objects { Object objects[]; };
+layout(std430, binding = 1) writeonly buffer Masks { uvec4 masks[]; };
+layout(std430, binding = 2) writeonly buffer Partials { Stats partials[]; };
+uniform uint uCount;
+uniform vec4 uPlanes[6];
+uniform vec3 uEye;
+uniform int uCulling;
+shared Stats groupStats[256];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint index = gl_GlobalInvocationID.x;
+    float infinity = uintBitsToFloat(0x7f800000u);
+    Stats item = Stats(uvec4(0u), infinity, -infinity, 0u, 0u, uvec4(0u, 0xffffffffu, 0u, 0u));
+    if (index < uCount) {
+        Object object = objects[index];
+        bool accepted = true;
+        for (uint plane = 0u; plane < 6u; ++plane) {
+            float distance = dot(uPlanes[plane].xyz, object.centerRadius.xyz) + uPlanes[plane].w;
+            if (uCulling != 0 && distance < -object.centerRadius.w) {
+                accepted = false;
+            }
+        }
+        uvec4 mask = uvec4(0u);
+        item.tested = 1u;
+        if (accepted) {
+            mask[object.mesh] = 1u;
+            mask.w = 1u;
+            float distance = length(object.centerRadius.xyz - uEye);
+            item.counts = mask;
+            item.minimumDistance = distance;
+            item.maximumDistance = distance;
+            item.integerStats = uvec4(1u, object.id, object.id, 1u);
+        }
+        masks[index] = mask;
+    }
+    groupStats[lane] = item;
+    memoryBarrierShared();
+    barrier();
+
+    // Every invocation reaches every barrier, including lanes in the padded tail.
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+            Stats other = groupStats[lane + stride];
+            groupStats[lane].counts += other.counts;
+            groupStats[lane].minimumDistance = min(groupStats[lane].minimumDistance, other.minimumDistance);
+            groupStats[lane].maximumDistance = max(groupStats[lane].maximumDistance, other.maximumDistance);
+            groupStats[lane].tested += other.tested;
+            groupStats[lane].integerStats.x += other.integerStats.x;
+            groupStats[lane].integerStats.y = min(groupStats[lane].integerStats.y, other.integerStats.y);
+            groupStats[lane].integerStats.z = max(groupStats[lane].integerStats.z, other.integerStats.z);
+            groupStats[lane].integerStats.w += other.integerStats.w;
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+    if (lane == 0u) {
+        partials[gl_WorkGroupID.x] = groupStats[0];
+    }
+}
+#else
+// The first three checkpoints render the supplied identity-list scaffold.
+void main() {
+}
+#endif

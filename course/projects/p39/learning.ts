@@ -1,330 +1,321 @@
 import type { ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/reduction_math.hpp",
-  "include/gl_api.hpp",
-  "include/compute_program.hpp",
-  "include/reduction_gpu_engine.hpp",
-  "shaders/reduce.comp",
-  "shaders/scan_blocks.comp",
-  "shaders/uniform_add.comp",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
 const learning = {
   guides: {
     "p39-l01": {
-      focus:
-        "Định nghĩa rõ reduction và exclusive scan, tạo input có thể tái lập rồi tính hai kết quả đối chiếu trên CPU trước khi viết shader.",
-      expected: "Checkpoint 1 in tổng và prefix của mảng nhỏ; [3,1,4,2] cho 10 và [0,3,4,8].",
-      files,
+      focus: "Có một khu phố chạy được trước khi tối ưu đường vẽ.",
+      expected:
+        "Camera đi xuyên scene, mesh dùng chung, perspective và depth rõ; chưa nhận là GPU culling.",
+      files: ["include/city_camera.hpp", "include/city_renderer.hpp", "shaders/city.vert"],
       steps: [
         {
-          title: "Đặt tên đúng cho hai output",
+          title: "Chạy scaffold độc lập",
           explanation:
-            "Reduction thu N giá trị về một scalar; exclusive scan vẫn trả N giá trị và không tính input hiện tại vào output cùng index.",
+            "Window, loader, camera, mesh và bitmap text được cung cấp; ZIP không phụ thuộc project khác.",
         },
         {
-          title: "Dùng double cho bản kết quả CPU",
+          title: "Đi trong world",
           explanation:
-            "GPU vẫn cộng float, còn bản CPU tích lũy bằng double để không lặp lại đúng thứ tự làm tròn của cây cộng trong shader.",
+            "Look đổi hướng, move đổi vị trí theo dt; camera không xoay dữ liệu thành phố.",
         },
         {
-          title: "Khóa input bằng seed",
+          title: "Theo một instance",
           explanation:
-            "Cùng số phần tử và seed phải sinh lại đúng dãy; đổi seed tạo dữ liệu mới nhưng một lỗi vẫn có thể được tái hiện chính xác.",
+            "Mesh local được scale/translate theo object rồi đưa qua view/projection và depth test.",
         },
       ],
     },
     "p39-l02": {
-      focus:
-        "Tính trước reduction/scan hierarchy, số block và zero padding cho mọi count, kể cả 1.000.003.",
+      focus: "Tạo đủ record thật từ N/seed có ngân sách.",
       expected:
-        "Checkpoint 2 báo ba tầng 1.954→4→1, 445 ô padding ở tầng đầu và năm dispatch cho global scan.",
-      files,
+        "Object 48 byte, ID ổn định trong snapshot, generation chia batch và giữ last-good scene.",
+      files: ["include/city_types.hpp", "include/city_scene.hpp"],
       steps: [
         {
-          title: "Gom 512 giá trị mỗi block",
+          title: "Khóa layout",
           explanation:
-            "256 invocation nạp hai phần tử mỗi lane; block span 512 là đơn vị chung của reduction và Blelloch scan.",
+            "Static assertions giữ offset CPU trùng std430; mesh/ID không đổi thành float.",
         },
         {
-          title: "Lặp ceil division tới một",
+          title: "Sinh theo ID/channel",
           explanation:
-            "Output count của tầng hiện tại trở thành input count của tầng tiếp theo, vì vậy plan được dựng mà không cần nhìn dữ liệu thật.",
+            "Cùng N/seed tạo lại cùng record; district, đường và landmark giúp định hướng.",
         },
         {
-          title: "Ghi rõ phần đuôi là zero",
+          title: "Tạo candidate hữu hạn",
           explanation:
-            "Zero là identity của phép cộng; lane ngoài count vẫn tham gia barrier nhưng nạp zero thay vì return sớm.",
+            "Builder kiểm budget và thêm tối đa 8.192 record mỗi tick; Cancel không xóa active scene.",
         },
       ],
     },
     "p39-l03": {
-      focus:
-        "Nạp 512 giá trị vào shared memory và reduction theo stride với barrier đúng sau từng bước.",
+      focus: "Chỉ loại sphere đã hoàn toàn ngoài một plane.",
       expected:
-        "Checkpoint 3 dispatch một workgroup, lane 0 ghi một partial sum và block ngắn được zero-pad an toàn.",
-      files,
+        "Plane chuẩn hóa từ đúng view/projection; tâm ở ngoài nhưng bounds cắt mép vẫn được giữ.",
+      files: ["include/city_camera.hpp", "include/city_types.hpp"],
       steps: [
         {
-          title: "Mỗi lane nạp hai vị trí",
-          explanation:
-            "Lane i đọc base+i và base+i+256 nếu hợp lệ; mọi lane vẫn đi tới barrier nên không được return vì tail.",
+          title: "Lấy sáu plane",
+          explanation: "Cùng camera/FOV/aspect với graphics, normalize cả normal và d.",
         },
         {
-          title: "Thu cây bằng stride giảm một nửa",
-          explanation:
-            "Sau mỗi phép cộng, barrier đảm bảo vòng stride kế tiếp nhìn thấy shared values vừa được ghi.",
+          title: "Tính signed distance",
+          explanation: "Normal hướng trong, world units, sphere ngoài khi s < -r.",
         },
         {
-          title: "Chỉ lane 0 xuất block sum",
+          title: "Giữ lý do loại",
           explanation:
-            "Mỗi group tạo đúng một output, giúp tầng sau nhỏ hơn khoảng 512 lần thay vì tranh chấp một atomic scalar.",
+            "Plane index phục vụ inspector; accepted không chứng minh có pixel hoặc không bị che.",
         },
       ],
     },
     "p39-l04": {
-      focus:
-        "Lặp reduction kernel qua partial sums bằng scratch ping-pong cho tới khi chỉ còn một scalar.",
+      focus: "GPU ghi mask cho đủ N record.",
       expected:
-        "Checkpoint 4 chạy ba dispatch cho N=1.000.003 và không có intermediate glGetBufferSubData.",
-      files,
+        "uvec4 one-hot mesh + accepted, tested chỉ đếm record thật; lane đệm vẫn tới barrier.",
+      files: ["shaders/cull.comp", "include/city_compute.hpp"],
       steps: [
+        { title: "Đọc đúng record", explanation: "Guard trước đọc Objects, layout CPU/GLSL khớp." },
         {
-          title: "Theo dõi count và buffer nguồn",
-          explanation:
-            "Sau mỗi pass, groupCount trở thành count mới; buffer vừa ghi trở thành nguồn của dispatch kế tiếp.",
+          title: "Áp cùng phép kiểm",
+          explanation: "Sáu plane và radius dùng cùng quy ước với CPU reference.",
         },
         {
-          title: "Ping-pong scratch A/B",
+          title: "Ghi cả mask zero",
           explanation:
-            "Hai buffer đủ cho mọi tầng vì partial sums giảm dần và shader không đọc/ghi cùng một record trong một pass.",
-        },
-        {
-          title: "Readback đúng một lần",
-          explanation:
-            "CPU chỉ cần scalar cuối; partial sums ở tầng 1.954 và 4 tiếp tục sống trên GPU.",
+            "Không để frame mới dùng mask cũ; partial group stats không thay global reduction.",
         },
       ],
     },
     "p39-l05": {
-      focus:
-        "Cài Blelloch upsweep/downsweep và giải thích thao tác đặt root về zero tạo exclusive output.",
-      expected:
-        "Checkpoint 5 scan đúng một block 512 giá trị, đồng thời ghi total trước khi root bị thay bằng zero.",
-      files,
+      focus: "Gom count, ID bounds và khoảng cách qua nhiều group.",
+      expected: "Counts exact, min/max có neutral values đúng và empty set được ghi rõ.",
+      files: ["shaders/reduce.comp", "include/city_types.hpp", "include/city_compute.hpp"],
       steps: [
         {
-          title: "Upsweep gom total lên root",
-          explanation:
-            "Offset tăng gấp đôi; mỗi lane phụ trách một node phải ở chỉ số cuối của đoạn cây tương ứng.",
+          title: "Chọn neutral values",
+          explanation: "Zero cho sum, infinity cho distance min/max, UINT_MAX cho ID min.",
         },
         {
-          title: "Lưu total rồi đặt root zero",
-          explanation:
-            "Block sum phải được ghi trước; zero tại root chính là prefix đứng trước toàn bộ block.",
+          title: "Thu cây shared",
+          explanation: "Mọi lane đi qua barrier sau mỗi stride; lane dư không làm đổi kết quả.",
         },
         {
-          title: "Downsweep đổi tổng thành prefix",
-          explanation:
-            "Mỗi node swap giá trị nhánh trái và cộng nó vào nhánh phải, rồi barrier trước mức cây tiếp theo.",
+          title: "Nối các tầng",
+          explanation: "Partial SSBO ở tầng này là input tầng sau, không readback trung gian.",
         },
       ],
     },
     "p39-l06": {
-      focus:
-        "Chạy block scan trên toàn mảng và tách local prefix output khỏi block sums cần xử lý tiếp.",
-      expected:
-        "Checkpoint 6 tạo 1.954 dãy local prefix và buffer 1.954 block sums cho N=1.000.003.",
-      files,
+      focus: "Cấp địa chỉ riêng trong một block bằng exclusive scan.",
+      expected: "Mask [1,0,1,1] cho prefix [0,1,1,2]; block sum được lưu trước root-zero.",
+      files: ["shaders/scan.comp"],
       steps: [
         {
-          title: "Giữ bounds ở load/store",
-          explanation:
-            "Tail lane nạp zero nhưng vẫn tham gia barrier; chỉ store output khi index còn trong count.",
+          title: "Load hai phần tử",
+          explanation: "256 invocation nạp span 512 uvec4, đệm zero không tạo thêm object.",
         },
         {
-          title: "Một output buffer, một sums buffer",
-          explanation:
-            "Local prefix và tổng của block sẽ được dùng ở hai bước khác nhau, vì vậy chúng cần hai buffer và hai binding riêng.",
+          title: "Upsweep và root-zero",
+          explanation: "Lưu total rồi thay root bằng zero để nhận exclusive, không phải inclusive.",
         },
         {
-          title: "Nhìn ra lỗi reset về zero",
-          explanation:
-            "Đầu mỗi block sau block 0 vẫn bằng zero; đó là kết quả local đúng nhưng chưa phải global scan.",
+          title: "Downsweep",
+          explanation: "Giữ subtotal trái trước khi ghi đè; checkpoint này chỉ tạo local prefix.",
         },
       ],
     },
     "p39-l07": {
-      focus: "Scan đệ quy block sums và uniform-add offsets theo thứ tự ngược của hierarchy.",
-      expected:
-        "Checkpoint 7 chạy ba scan passes rồi hai uniform-add passes, toàn bộ intermediate state ở SSBO.",
-      files,
+      focus: "Tạo prefix toàn cục mà mọi tầng ở lại GPU.",
+      expected: "N=1.000.003 có block counts 1.954→4→1, ba scan rồi hai uniform-add.",
+      files: ["include/city_compute.hpp", "shaders/uniform_add.comp"],
       steps: [
         {
-          title: "Scan block sums bằng cùng kernel",
+          title: "Scan block sums",
           explanation:
-            "Mảng 1.954 block sum lại trở thành input của cùng thuật toán scan, tiếp tục thu thành 4 rồi 1 block sum.",
+            "Mảng sums của tầng dưới thành input tầng trên, CPU chỉ lập lịch từ kích thước.",
         },
         {
-          title: "Đi xuống hierarchy theo thứ tự ngược",
-          explanation:
-            "Offsets của tầng nhỏ phải hoàn chỉnh trước khi được cộng vào scan của tầng lớn hơn.",
+          title: "Đi ngược xuống",
+          explanation: "Offsets tầng trên phải global trước khi cộng vào prefixes tầng dưới.",
         },
         {
-          title: "Uniform-add theo block index",
-          explanation:
-            "Mỗi output[index] cộng blockOffsets[index/512]; block 0 nhận offset zero nên giữ nguyên.",
+          title: "Kiểm biên",
+          explanation: "Span 512 khác local size 256; thử quanh 511/512 và dữ liệu nhiều tầng.",
         },
       ],
     },
     "p39-l08": {
-      focus:
-        "Ghi rõ compute pass nào tạo ra từng buffer, bước nào đọc tiếp theo và barrier nào cần đặt giữa hai bước.",
-      expected:
-        "Checkpoint 8 dùng SHADER_STORAGE giữa dispatches và BUFFER_UPDATE duy nhất trước scalar/full-output readback.",
-      files,
+      focus: "Compact theo mesh rồi record index, không atomic arrival order.",
+      expected: "Accepted record có đúng một vị trí; stable Object.id khác địa chỉ buffer.",
+      files: ["shaders/compact.comp", "include/city_types.hpp"],
       steps: [
         {
-          title: "Vẽ chuỗi pass bằng tên buffer",
-          explanation:
-            "Mỗi mũi tên ghi rõ program vừa tạo dữ liệu, buffer được ghi và program hoặc lệnh readback sẽ dùng dữ liệu đó.",
+          title: "Chỉ scatter accepted",
+          explanation: "Rejected không ghi, lane dư không chạm buffer.",
         },
         {
-          title: "Phân biệt barrier trong và ngoài workgroup",
-          explanation:
-            "GLSL barrier đồng bộ lanes trong một dispatch; glMemoryBarrier nối visibility giữa hai OpenGL commands.",
+          title: "Tính group base",
+          explanation: "Prefix của group counts tạo các vùng không chồng lấp.",
         },
         {
-          title: "Không dùng ALL_BARRIER_BITS",
+          title: "Ghi record index",
           explanation:
-            "Chọn đúng bit cho biết ta đã xác định được bước đọc tiếp theo, thay vì dùng một hàng rào quá rộng để che sự thiếu rõ ràng.",
+            "Base + prefix[index][mesh] cấp vị trí duy nhất, fixture ID rời rạc bắt nhầm lẫn.",
         },
       ],
     },
     "p39-l09": {
-      focus:
-        "Kiểm reduction và scan bằng kết quả CPU cùng các điều kiện bắt buộc, rồi đo toàn bộ chuỗi pass bằng query ring không chặn frame.",
-      expected:
-        "Checkpoint 9 bắt NaN, tail, wrong offset và first mismatch; timing chỉ cập nhật khi query slot available.",
-      files,
+      focus: "GPU ghi command và graphics đọc GPU list.",
+      expected: "Ba indexed indirect command cố định; CPU không đọc instanceCount mỗi frame.",
+      files: [
+        "shaders/commands.comp",
+        "shaders/city.vert",
+        "include/city_compute.hpp",
+        "include/city_renderer.hpp",
+      ],
       steps: [
         {
-          title: "Kiểm điều kiện bắt buộc trước sai số",
-          explanation:
-            "Kích thước, giá trị hữu hạn và output[0]=0 phát hiện lỗi cấu trúc trước; mixed tolerance chỉ được dùng sau đó để xử lý roundoff hợp lệ.",
+          title: "Ghi mọi field",
+          explanation: "Mesh range đúng, empty group instanceCount=0; không giữ count cũ.",
         },
         {
-          title: "So adjacent delta và total",
-          explanation:
-            "output[i+1]-output[i] phải gần input[i], còn output[N-1]+input[N-1] phải gần reduction total.",
+          title: "Công bố cho consumer",
+          explanation: "COMMAND cho parser, SHADER_STORAGE cho SSBO đọc trong graphics.",
         },
         {
-          title: "Đo cả chuỗi pass nhưng không chờ",
+          title: "Tra list trong shader",
           explanation:
-            "Query bao quanh các dispatch/barrier; CPU bỏ sample khi slot bận thay vì làm ứng dụng đứng để lấy số đẹp.",
+            "Group offset cộng gl_InstanceID; không dựa gl_BaseInstance ngoài khả năng 4.3.",
         },
       ],
     },
     "p39-l10": {
-      focus:
-        "Ghép hai phép toán, các preset, seed/reset, phần minh họa, kiểm tra kết quả, đo thời gian và cleanup thành ứng dụng hoàn chỉnh.",
+      focus: "Giải thích từng object và giữ scene hợp lệ khi thay cấu hình.",
       expected:
-        "Final chạy event-driven, hỗ trợ Tab/1–4/R/V/B, hiển thị pass count thật và dọn mọi query/program/buffer trước context.",
-      files,
+        "Observer frustum/accepted/rejected, picking theo bounds, candidate không phá active scene.",
+      files: ["include/city_camera.hpp", "include/city_scene.hpp", "include/city_application.hpp"],
       steps: [
         {
-          title: "Một thay đổi tạo một recompute",
-          explanation:
-            "Workbench không có simulation clock; nó chỉ dispatch khi operation/count/seed đổi hoặc người dùng yêu cầu benchmark.",
+          title: "Giữ camera cull",
+          explanation: "Camera observer khác camera chính; debug không tự đổi tập accepted.",
         },
         {
-          title: "Đặt correctness cạnh timing",
+          title: "Chọn object",
           explanation:
-            "Title và console luôn báo pass count, max error và PASS/FAIL cạnh GPU median để timing không mất ngữ cảnh.",
+            "Ray/bounds là scaffold được công bố, có batch hữu hạn; không hứa chọn đúng pixel mesh.",
         },
         {
-          title: "Dọn theo thứ tự ngược",
+          title: "Đổi scene an toàn",
+          explanation: "Chỉ publish candidate sau tạo/upload thành công; lỗi/cancel giữ active.",
+        },
+      ],
+    },
+    "p39-l11": {
+      focus: "Kiểm thuật toán độc lập và đo workload tái lập.",
+      expected:
+        "Fixture exact cho integer/scan/compaction/commands; query available, warm-up/mẫu hữu hạn và Cancel.",
+      files: [
+        "include/city_gpu_validation.hpp",
+        "include/city_validation_job.hpp",
+        "include/city_validation.hpp",
+        "include/city_timing.hpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Kiểm từng primitive",
           explanation:
-            "Query, hierarchy buffers và programs bị xóa khi OpenGL context vẫn current; SDL context/window bị hủy sau cùng.",
+            "N=0/1/lẻ/nhiều tầng, arbitrary counts→offsets và sum/min/max riêng, guard records.",
+        },
+        {
+          title: "Kiểm cả đường scene",
+          explanation:
+            "Independent classifier, all-visible→empty, sparse stable IDs và command ranges.",
+        },
+        {
+          title: "So cùng camera",
+          explanation:
+            "Tách query GPU, CPU submit, CPU frame có present và độ trễ tới GPU-ready; V kiểm 257 record × 12 batch, --verify kiểm scene N yêu cầu.",
+        },
+      ],
+    },
+    "p39-l12": {
+      focus: "Nghiệm thu thành phố hoàn chỉnh thay vì chỉ một bộ test xanh.",
+      expected:
+        "Native xét đủ một triệu record, source/ZIP độc lập; đồ họa, input, thuật toán và quy mô có cổng riêng.",
+      files: [
+        "src/main.cpp",
+        "include/city_application.hpp",
+        "include/city_compute.hpp",
+        "include/city_timing.hpp",
+      ],
+      steps: [
+        {
+          title: "Build source sạch",
+          explanation: "C++20/SDL3 3.4.8/CMake 3.24, final mặc định, checkpoint bằng option riêng.",
+        },
+        {
+          title: "Đọc telemetry đúng",
+          explanation:
+            "Resident/tested/accepted/submitted khác nhau; culling không loại object bị che.",
+        },
+        {
+          title: "Ghi bằng chứng",
+          explanation:
+            "Build, CTest, GPU scale, native interaction, Canvas và ZIP không thay thế lẫn nhau.",
         },
       ],
     },
   },
   references: {
-    "p39-l01": [
-      { label: "Reduction", href: "/glossary#parallel-reduction", kind: "Thuật ngữ" },
-      { label: "Exclusive prefix sum", href: "/glossary#exclusive-prefix-sum", kind: "Thuật ngữ" },
-    ],
-    "p39-l02": [
-      { label: "Ceil division", href: "/glossary#ceil-division", kind: "Thuật ngữ" },
-      {
-        label: "Floating-point reduction order",
-        href: "/glossary#floating-reduction-order",
-        kind: "Thuật ngữ",
-      },
-    ],
+    "p39-l01": [{ label: "Camera và ray", href: "/glossary#camera-ray", kind: "Thuật ngữ" }],
+    "p39-l02": [{ label: "std430 layout", href: "/glossary#std430-layout", kind: "Thuật ngữ" }],
     "p39-l03": [
       {
-        label: "Shared variable",
-        href: "https://www.khronos.org/opengl/wiki/Compute_Shader",
-        kind: "OpenGL API",
+        label: "Bounding-volume frustum culling",
+        href: "/glossary#city-frustum-culling",
+        kind: "Thuật ngữ",
       },
-      { label: "Workgroup barrier", href: "/glossary#workgroup-barrier", kind: "Thuật ngữ" },
     ],
     "p39-l04": [
       {
         label: "glDispatchCompute",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDispatchCompute.xhtml",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glDispatchCompute.xml",
         kind: "OpenGL API",
       },
-      {
-        label: "Hierarchical reduction",
-        href: "/glossary#hierarchical-reduction",
-        kind: "Thuật ngữ",
-      },
     ],
-    "p39-l05": [
-      { label: "Blelloch scan", href: "/glossary#blelloch-scan", kind: "Thuật ngữ" },
-      { label: "Prefix sum", href: "/glossary#exclusive-prefix-sum", kind: "Thuật ngữ" },
-    ],
+    "p39-l05": [{ label: "CPU oracle", href: "/glossary#cpu-oracle", kind: "Thuật ngữ" }],
     "p39-l06": [
-      {
-        label: "Shader Storage Buffer Object",
-        href: "/glossary#shader-storage-buffer-object",
-        kind: "Thuật ngữ",
-      },
-      { label: "Compute workgroup", href: "/glossary#compute-workgroup", kind: "Thuật ngữ" },
+      { label: "Stable compaction", href: "/glossary#city-stable-compaction", kind: "Thuật ngữ" },
     ],
     "p39-l07": [
-      { label: "Uniform add", href: "/glossary#scan-uniform-add", kind: "Thuật ngữ" },
-      { label: "Hierarchical scan", href: "/glossary#hierarchical-scan", kind: "Thuật ngữ" },
-    ],
-    "p39-l08": [
       {
         label: "glMemoryBarrier",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glMemoryBarrier.xhtml",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glMemoryBarrier.xml",
         kind: "OpenGL API",
       },
-      { label: "GPU memory barrier", href: "/glossary#gpu-memory-barrier", kind: "Thuật ngữ" },
+    ],
+    "p39-l08": [
+      { label: "Stable compaction", href: "/glossary#city-stable-compaction", kind: "Thuật ngữ" },
     ],
     "p39-l09": [
-      { label: "Mixed tolerance", href: "/glossary#mixed-tolerance", kind: "Thuật ngữ" },
       {
-        label: "Asynchronous query ring",
-        href: "/glossary#asynchronous-query-ring",
-        kind: "Thuật ngữ",
+        label: "glDrawElementsIndirect",
+        href: "https://github.com/KhronosGroup/OpenGL-Refpages/blob/main/gl4/glDrawElementsIndirect.xml",
+        kind: "OpenGL API",
       },
     ],
     "p39-l10": [
-      { label: "Phép kiểm tra có tên", href: "/glossary#named-validation", kind: "Thuật ngữ" },
       {
-        label: "glDeleteBuffers",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDeleteBuffers.xhtml",
-        kind: "OpenGL API",
+        label: "Resident/tested/accepted/submitted",
+        href: "/glossary#city-render-counts",
+        kind: "Thuật ngữ",
       },
+    ],
+    "p39-l11": [{ label: "GPU timer query", href: "/glossary#gpu-timer-query", kind: "Thuật ngữ" }],
+    "p39-l12": [
+      { label: "SDL3 CMake", href: "https://wiki.libsdl.org/SDL3/README-cmake", kind: "CMake" },
     ],
   },
 } satisfies ProjectLearningAssets;

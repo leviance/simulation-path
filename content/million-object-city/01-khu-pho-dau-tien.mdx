@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng khu phố đầu tiên và đi vào cảnh
+
+## Ta cần giải quyết điều gì?
+
+Hãy hình dung bạn đang đứng giữa một con phố, hai bên là những tòa nhà. Khi quay lưng, phần lớn thành phố vẫn còn trong dữ liệu nhưng không thể xuất hiện trên ảnh. Ta có nên gửi tất cả chúng đi vẽ không? Đó là câu hỏi của Project 39. Tuy nhiên, trước khi tối ưu bất cứ thứ gì, ta cần một thành phố thật để đi vào và một bản vẽ chưa lọc làm mốc đối chiếu.
+
+Tải source ở trang tổng quan và mở `starter`. Gói này tự chứa window SDL3, OpenGL loader, shader loader, mesh, chữ bitmap và camera; không cần ghép ZIP của Project 34 hoặc 37. Đây là scaffold được cung cấp, không phải engine chọn vật thể hộ ta. Trong bài đầu, hãy chạy nó, đọc đường đi của một instance và tập điều khiển camera. Chưa cần viết scan hoặc bật workload một triệu object.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một mesh mô tả hình dạng dùng chung. Mỗi object chỉ bổ sung vị trí, kích thước và màu. Renderer đặt nhiều bản của cùng mesh vào các vị trí khác nhau bằng instancing; không nhân bản vertex buffer theo số tòa nhà. Depth buffer quyết định mặt nào che mặt nào. Không có depth, những tòa nhà xa vẫn có thể đè lên tòa gần chỉ vì được vẽ sau.
+
+Camera không quay cả thành phố. Nó đứng tại `position`, nhìn theo `forward`, rồi đưa điểm world qua ma trận view và projection. Hai thao tác rất khác nhau: `look` đổi hướng nhìn, `move` đổi vị trí người xem. Khi đi xuyên cảnh, bạn có thể vượt qua một tòa nhà thay vì luôn quay quanh tâm mô hình.
+
+<InteractiveLab demo="million-object-city" mode="city" />
+
+Canvas là bản CPU thu nhỏ chiếu bằng Canvas 2D, không phải ứng dụng GPU một triệu object. Dùng nó để nhận ra phối cảnh và thao tác camera; phép đo quy mô sẽ thực hiện trên executable C++.
+
+## Bắt tay xây dựng
+
+### 1. Xác định vị trí và hướng nhìn ban đầu
+
+Trong `city_camera.hpp`, camera bắt đầu ở trên khu phố và hơi nhìn xuống:
+
+```cpp title="include/city_camera.hpp — trạng thái camera"
+Vec3 position{0.0F, 95.0F, 180.0F};
+float yaw{-1.57F};
+float pitch{-0.27F};
+float fov{65.0F};
+float farPlane{1800.0F};
+```
+
+`yaw/pitch` dùng radian, còn `fov` dùng độ. `farPlane` là khoảng xa của projection, không phải khoảng cách tự ý bỏ bớt object. Ta sẽ dùng đúng vùng nhìn này cho culling ở Bài 3. Những object ngoài nó vốn không thể tạo pixel hợp lệ trong bản chưa lọc.
+
+### 2. Đổi input thành độ dời trong world
+
+Đọc trọn hàm `move`, không chỉ chép công thức cuối:
+
+```cpp title="include/city_camera.hpp — di chuyển độc lập với FPS"
+void move(float front, float side, float vertical, float dt, bool fast) {
+    float speed = 70.0F;
+    if (fast) {
+        speed = 380.0F;
+    }
+    position = position + (forward() * front + right() * side + Vec3{0.0F, vertical, 0.0F}) * (speed * dt);
+    position.y = std::clamp(position.y, 1.8F, 8000.0F);
+}
+```
+
+Input chỉ cho biết muốn đi trước/sang bên/lên xuống. `forward()` và `right()` đổi mong muốn ấy sang hướng trong world; nhân `speed * dt` mới cho quãng đường của frame. Giới hạn Y giữ mắt trên mặt đường, không phải hệ va chạm với nhà. Scaffold hiện cho phép xuyên qua công trình; đừng nhầm nó với một game có collision detection.
+
+### 3. Đặt phối cảnh trước khi vẽ instance
+
+Trong `viewProjection`, phần projection là:
+
+```cpp title="include/city_camera.hpp — ma trận perspective"
+const float cotangent = 1.0F / std::tan(fov * 3.14159265F / 360.0F);
+const float nearPlane = 0.5F;
+Mat4 projection{};
+projection.values[0] = cotangent / std::max(aspect, 0.01F);
+projection.values[5] = cotangent;
+projection.values[10] = -(farPlane + nearPlane) / (farPlane - nearPlane);
+projection.values[11] = -1.0F;
+projection.values[14] = -2.0F * farPlane * nearPlane / (farPlane - nearPlane);
+return multiply(projection, view);
+```
+
+`aspect` phải lấy từ vùng cảnh theo kích thước framebuffer, không lấy chiều rộng cả cửa sổ khi panel chiếm một phần. Camera tạo ma trận; renderer gửi nó vào vertex shader. Hai bước còn lại là dựng mesh và đặt từng instance của mesh ấy vào world.
+
+### 4. Từ mesh dùng chung tới một tòa nhà trên màn hình
+
+Trong `SceneRenderer::initialize`, ta ghép ba hình vào một mesh atlas:
+
+```cpp title="include/city_renderer.hpp — hai hình hộp dùng chung vertex buffer"
+std::vector<DrawVertex> vertices{};
+appendBox(vertices, 1.0F);
+appendBox(vertices, 0.55F);
+```
+
+Các chỉ số đỉnh nằm trong `city_mesh.hpp`. Nhìn từ bên ngoài, ba đỉnh của mỗi tam giác đi ngược chiều kim đồng hồ; vì vậy `cross(b - a, c - a)` cho normal hướng ra ngoài. Nếu đảo winding, tòa nhà vẫn có thể hiện lên khi chưa bật back-face culling, nhưng mái và mặt nhà sẽ nhận ánh sáng sai phía. CPU test kiểm hướng normal cho cả ba mesh để phát hiện lỗi này từ đầu.
+
+`appendBox` tạo các góc trong khoảng -1 đến 1, lấy cross product của cạnh để có normal rồi thêm các tam giác. Hệ số 1 tạo hộp thẳng, 0,55 thu nhỏ mái thành tháp vát; mesh thứ ba là pyramid. Mỗi mesh được tải lên buffer một lần. Một object không chứa lại dãy vertex ấy.
+
+Trong vertex shader, chính record object đặt mesh vào scene:
+
+```glsl title="shaders/city.vert — biến một vertex local thành vertex world"
+Object object = objects[objectID];
+vec3 world = object.centerRadius.xyz + aPosition * object.halfSize;
+```
+
+Nhân theo từng trục cho phép cùng hộp local thành nhà thấp/rộng hoặc tháp cao; cộng center đặt nó vào ô phố. Cuối shader, `world` đi qua `uViewProjection`. Normal được đổi theo nửa kích thước rồi chuẩn hóa, nên ánh sáng vẫn hợp lý khi scale không đều. Depth buffer giữ mặt gần che mặt xa.
+
+Scaffold hiện cung cấp danh sách identity và command tạo **một lần khi tạo scene** để vẽ toàn bộ object. Điều đó giúp có cảnh chạy ngay, chưa phải GPU culling. Từ Bài 4 đến 9, ta thay lần lượt dữ liệu đầu vào của đường vẽ này bằng mask, prefix, danh sách và command do GPU tạo. Không có bước chuyển sang một renderer khác ở cuối khóa.
+
+## Chạy thử và quan sát
+
+Configure một lần theo README với `BUILD_CHECKPOINTS=ON`, sau đó build mục tiêu của bài:
+
+```bash
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_39_checkpoint_1
+```
+
+Trên Windows dùng Visual Studio, mở bản vừa build bằng PowerShell:
+
+```powershell
+.\build\Debug\project_39_checkpoint_1.exe --count 257
+```
+
+WASD di chuyển, Q/E xuống/lên, arrow keys hoặc kéo chuột phải đổi hướng nhìn. G hạ mắt xuống tầm phố, H trở lại góc trên cao; Escape đóng cửa sổ. Đi gần một tòa nhà rồi bay lên, quan sát mặt bên, mái và đường phố đổi kích thước theo khoảng cách. Một scene có thể đi xuyên qua phải cho phép bạn đổi vị trí, không chỉ xoay góc nhìn từ một điểm cố định.
+
+## Thử tạo lỗi
+
+1. Bỏ `dt` khỏi công thức di chuyển. So quãng đường khi chạy nhanh/chậm: lỗi thuộc camera input, chưa liên quan culling.
+2. Cố tình dùng aspect bằng 1 cho cửa sổ rộng. Tòa nhà bị kéo dãn dù object data không thay đổi; trả lại aspect thật trước khi kiểm bounds.
+
+## Checklist hoàn thành
+
+- Starter và checkpoint 1 chạy độc lập, resize/thu nhỏ/đóng cửa sổ được.
+- Có phối cảnh và che khuất đúng, không phải minimap hoặc các điểm thay nhà.
+- Đi trước/sau, sang bên, lên/xuống và đổi hướng nhìn được; camera không sửa vị trí object.
+- Hiểu phần scaffold được cung cấp và chưa gọi bài đầu là sản phẩm nghiệm thu một triệu object.
+
+## Hướng mở rộng
+
+Thử tìm hai vị trí nhìn cùng một mốc cao từ hai phía. Ghi lại camera để sau này so culling bật/tắt trên đúng ảnh. Tiếp theo, [định nghĩa object và tạo thành phố từ seed](/projects/million-object-city/02-mot-trieu-object-tu-seed).

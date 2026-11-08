@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện thành phố và nghiệm thu bản một triệu object
+
+## Ta cần giải quyết điều gì?
+
+Ta đã đi từ một khu phố vẽ bằng danh sách identity đến pipeline GPU tự tạo mask, prefix, visible list và command. Bài cuối không thêm một phép toán cho đủ số bài. Nó ghép sản phẩm thành ứng dụng độc lập, chỉ rõ cách build/run và đặt các cổng nghiệm thu để bạn biết mình đã hoàn thành điều gì.
+
+Kết quả cần là một thành phố 3D có thể khám phá với ít nhất một triệu object records thực. Cảnh có đường, khoảng mở, nhiều dáng nhà, ánh sáng và mốc định hướng. Debug/phần số giải thích cảnh; không thay viewport bằng một dashboard scan. Source C++ là sản phẩm chính, Canvas không phải bản chạy thay thế.
+
+## Hiểu ý tưởng trước khi viết code
+
+Theo một frame: camera tạo planes → cull đọc đủ object records và ghi mask/partial → reduction gom count/min/max → hierarchical scan tạo offsets → compaction ghi grouped record indices → compute ghi ba command → renderer đọc command/list/object buffers. CPU xử lý input, lập lịch pass và trình bày, không lọc từng object để tính instanceCount.
+
+Đọc telemetry theo bốn nghĩa: **resident** là số record đang giữ; **tested** là số record GPU đã xét; **accepted** là số bounds qua frustum; **submitted** là tổng instance gửi đi vẽ. Depth còn có thể che object nên hai số cuối không bằng số nhà có pixel trên ảnh. Culling off phải có tested=N và submitted=N, không tự giảm workload vì hình quá dày.
+
+<InteractiveLab demo="million-object-city" mode="city" />
+
+Canvas này chỉ giữ tập CPU thu nhỏ và không tạo số đo GPU giả. Nó vẫn hữu ích để giải thích địa chỉ/command; mốc một triệu và khả năng phần cứng được nghiệm thu trên native.
+
+## Bắt tay xây dựng
+
+### 1. Giữ main là nơi nhận tùy chọn, không giấu pipeline vào CLI
+
+```cpp title="src/main.cpp — tạo ứng dụng rồi chạy"
+city::Application application{};
+const int result = application.run(options);
+```
+
+`main.cpp` đọc `--count`, `--verify`, `--benchmark` và tùy chọn chụp/giới hạn lượt chạy cho kiểm thử. `Application` sở hữu event loop; các file `city_compute.hpp`, `city_camera.hpp`, `city_scene.hpp`, `city_renderer.hpp`, `city_timing.hpp` giữ trách nhiệm riêng. Đọc source đầy đủ/diff cuối bài để xem từng tệp, không phải ghép các đoạn rời ở mười hai bài bằng tay.
+
+### 2. Giữ giải phóng resource theo thứ tự hợp lệ
+
+```cpp title="include/city_application.hpp — dọn GL trước khi xóa context"
+stats_.destroy(gl_);
+benchmarkTimers_.destroy(gl_);
+timers_.destroy(gl_);
+gpu_.destroy(gl_);
+renderer_.destroy(gl_);
+```
+
+Các lệnh GL cần context còn current. Sau đó mới hủy context/window và gọi SDL_Quit. Candidate thất bại phải dọn phần của nó, không xóa buffer thuộc scene active. Chỉ có đường chạy đẹp không đủ: lỗi compile shader, allocation hoặc yêu cầu N vượt budget cũng cần thoát/giữ scene rõ ràng.
+
+### 3. Biến lỗi thành thông báo có tên
+
+```cpp title="src/main.cpp — báo lỗi thay vì im lặng"
+} catch (const std::exception& error) {
+    std::cerr << "Project 39: " << error.what() << '\n';
+    return EXIT_FAILURE;
+}
+```
+
+Không đủ OpenGL 4.3/limits/budget là “chưa chạy được mốc này trên máy này”, không tự hạ N rồi ghi đạt một triệu. Tương tự, timeout/hủy validation là incomplete, không phải thành công vì chưa nhìn thấy lỗi.
+
+## Chạy thử và quan sát
+
+Tải [toàn bộ source Project 39](/downloads/project-39-million-object-city.zip). ZIP có README, starter, mười hai checkpoint độc lập, final, tests và shaders. Không cần tài khoản hoặc backend. CMake tối thiểu 3.24, compiler C++20; SDL 3.4.8 được khóa bằng URL/hash và link qua `SDL3::SDL3`.
+
+Mở terminal trong thư mục vừa giải nén:
+
+```bash
+cmake -S . -B build
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Với Visual Studio multi-config trên Windows, chạy:
+
+```powershell
+.\build\Release\project_39_final.exe
+.\build\Release\project_39_final.exe --verify --count 1000003
+.\build\Release\project_39_final.exe --benchmark --count 1000003
+```
+
+Linux/single-config dùng `-DCMAKE_BUILD_TYPE=Release` ở bước configure và executable nằm ngay trong `build`; xem README. Muốn build các bước học, configure thêm `-DBUILD_CHECKPOINTS=ON`, rồi chọn `project_39_checkpoint_1` … `project_39_checkpoint_12`. Final là target mặc định; không phải build mọi checkpoint chỉ để chạy ứng dụng.
+
+Trong cửa sổ: WASD đi trước/sang bên, Q/E xuống/lên, Shift đi nhanh; chuột phải kéo hoặc arrow keys đổi hướng. G về tầm phố, H về góc trên cao; wheel hoặc [ / ] đổi FOV. C bật/tắt culling, Tab bật debug, click/Enter chọn bounds. 1/2/3 đổi N, N đổi seed, R reset cùng scene/camera; V kiểm, B đo, X hủy job và Escape thoát.
+
+P bật đường camera tham quan tự động, Space dừng/tiếp tục riêng đường tham quan ấy. Thành phố không có mô phỏng chuyển động cần đóng băng: object data vẫn đứng yên, camera thủ công vẫn dùng được và culling vẫn xét cảnh của frame hiện tại. Không hiểu nhãn Pause thành việc CPU/GPU ngừng xử lý input. Xem trạng thái trong cửa sổ trước khi diễn giải một kết quả đang chờ là kết quả của frame hiện tại.
+
+V kiểm fixture 257 record qua 12 tổ hợp camera/toggle trong buffer riêng. Muốn kiểm scene một triệu record đang yêu cầu, dùng lệnh CLI `--verify --count 1000003` ở trên; hai chữ PASS ấy có phạm vi khác nhau.
+
+Đọc báo cáo benchmark theo đúng nhãn: từng pass GPU/tổng query, CPU submit trước present, toàn frame CPU có present (`medianWholeFrameMs`) và độ trễ từ đầu frame đến lúc biết GPU đã xong (`medianFrameToGpuReadyMs`). Toàn frame CPU có present chưa chắc GPU hoàn tất; số GPU-ready lại bao gồm lịch chờ/poll. Chúng bổ sung cho nhau, không phải các cách gọi khác nhau của cùng một số và không được cộng chồng thành một tổng.
+
+Chạy với camera trên cao rồi xuống tầm phố. Với từng snapshot, bật/tắt culling và kiểm hình hợp lệ không đổi. Đổi N/seed rồi hủy candidate để kiểm last-good scene. Sau đó mới lưu báo cáo hiệu năng Release; build, GPU test, thao tác tay và đồ họa là các cổng riêng.
+
+## Thử tạo lỗi
+
+1. Yêu cầu N vượt trần đã công bố. Ứng dụng phải giải thích yêu cầu bị từ chối, không overflow kích thước hoặc khóa vào vòng tạo scene vô hạn.
+2. Trong fixture riêng, đặt accepted=0 ngay sau frame all-visible. Nếu command hoặc group offsets giữ dữ liệu cũ, bản kiểm phải fail; không thêm fog để giấu object stale.
+
+## Checklist hoàn thành
+
+- Final từ ZIP build/run độc lập; CTest Debug/Release và kiểm GPU thật có báo cáo riêng.
+- Scene thực có ít nhất 1.000.000 record, tested đủ N và graphics đọc danh sách/command GPU.
+- Bounds/scan/compaction/commands đúng, zero-visible rỗng; culling on/off không làm mất hình hợp lệ.
+- Camera/picking/debug/FOV/N/seed/reset/cancel hoạt động; yêu cầu lỗi giữ scene cũ.
+- Báo bộ nhớ, từng pass, frame, warm-up/samples/dispersion/máy/build; không hứa speedup chung.
+- Native, Canvas, nội dung/source và package được kiểm riêng; không tự ghi mọi cổng đã đạt vì một suite xanh.
+
+## Hướng mở rộng
+
+Hãy giữ lại ca culling chậm hơn bản không lọc và giải thích nó bằng số liệu. Nếu muốn thêm occlusion hoặc LOD, tạo nhánh thử nghiệm riêng để không lẫn lợi ích của chúng với frustum culling. Công cụ counts→offsets cùng thói quen giữ dữ liệu trên GPU sẽ theo bạn sang [Project 40](/roadmap/40), nhưng một thành phố đẹp không thay kiểm solver của sản phẩm kế tiếp.

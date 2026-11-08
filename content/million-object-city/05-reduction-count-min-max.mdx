@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Gom số lượng và khoảng cách bằng reduction
+
+## Ta cần giải quyết điều gì?
+
+Mask đã cho biết từng object có được nhận hay không. Nhưng panel cần vài câu trả lời cho cả tập: có bao nhiêu object trong mỗi nhóm mesh, ID nhỏ nhất/lớn nhất là gì, object được nhận gần/xa camera đến mức nào? Không cần đem cả mảng về CPU chỉ để trả lời vài con số ấy.
+
+Trong `cull.comp`, mỗi group đã gom 256 record thành một `Stats`. Bài này nối các partial qua nhiều dispatch cho đến khi còn một record thống kê. Reduction vì thế phục vụ chính scene đang xem, không phải một màn hình cộng số tách rời ứng dụng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Các phép gộp có phần tử trung tính khác nhau. Sum bắt đầu bằng 0; min bắt đầu bằng `+infinity` hoặc `UINT_MAX`; max khoảng cách bắt đầu bằng `-infinity`. Khi tập accepted rỗng, giữ count=0 và cặp min/max ấy, rồi UI ghi “empty”. Không biến khoảng cách rỗng thành 0 vì người đọc có thể hiểu có object nằm ngay camera.
+
+Counts và ID là số nguyên exact trong miền đã giới hạn. Khoảng cách là float theo world units; reference có tolerance riêng. Sum số đếm không có cùng vấn đề roundoff với cộng một triệu số float. Đừng vì có float trong struct mà kiểm count bằng epsilon.
+
+Một dispatch reduction thu tối đa 256 partial thành một partial mới. Lặp `ceil(count/256)` cho tới một phần tử. Host có thể tính **số tầng từ N**; việc đó khác hẳn đọc kết quả trung gian về CPU.
+
+<InteractiveLab demo="million-object-city" mode="reduction" />
+
+## Bắt tay xây dựng
+
+### 1. Đệm lane dư bằng đúng phần tử trung tính
+
+```glsl title="shaders/reduce.comp — nạp partial hoặc neutral value"
+float infinity = uintBitsToFloat(0x7f800000u);
+temporary[lane] = Stats(uvec4(0u), infinity, -infinity, 0u, 0u, uvec4(0u, 0xffffffffu, 0u, 0u));
+if (index < uCount) {
+    temporary[lane] = inputStats[index];
+}
+memoryBarrierShared();
+barrier();
+```
+
+`uCount` ở đây là số partial của tầng hiện tại, không luôn là số object gốc. Lane dư vẫn tham gia barrier nhưng không làm min khoảng cách giảm về 0. `memoryBarrierShared` công bố ghi shared; `barrier` giữ các invocation cùng group ở cùng bước. Chúng không đồng bộ hai workgroup khác nhau.
+
+### 2. Gộp từng cặp rồi thu khoảng cách còn một nửa
+
+```glsl title="shaders/reduce.comp — cây gộp trong một workgroup"
+Stats other = temporary[lane + stride];
+temporary[lane].counts += other.counts;
+temporary[lane].minimumDistance = min(temporary[lane].minimumDistance, other.minimumDistance);
+temporary[lane].maximumDistance = max(temporary[lane].maximumDistance, other.maximumDistance);
+temporary[lane].tested += other.tested;
+temporary[lane].integerStats.x += other.integerStats.x;
+temporary[lane].integerStats.y = min(temporary[lane].integerStats.y, other.integerStats.y);
+temporary[lane].integerStats.z = max(temporary[lane].integerStats.z, other.integerStats.z);
+temporary[lane].integerStats.w += other.integerStats.w;
+```
+
+Đoạn này nằm trong `if (lane < stride)` với stride 128, 64, …, 1. Sau mỗi lượt, mọi lane phải tới barrier trước lượt sau. `counts.xyz` là số accepted theo mesh, `counts.w` là tổng. `integerStats` kiểm sum các cờ nhận, min/max ID của tập nhận và count; ID có thể rời rạc, không được suy min/max từ record index.
+
+### 3. Chỉ lane 0 xuất một partial của group
+
+```glsl title="shaders/reduce.comp — kết quả cho tầng tiếp theo"
+if (lane == 0u) {
+    outputStats[gl_WorkGroupID.x] = temporary[0];
+}
+```
+
+Host bind output tầng này thành input tầng sau, đặt `GL_SHADER_STORAGE_BARRIER_BIT` trước dispatch đọc nó. Không có một `barrier()` trong shader nào thay được bước công bố giữa các dispatch. Output cuối chỉ dài một `GpuStats`; telemetry có thể đọc bản chụp nhỏ sau fence, không cần giữ cả frame chờ GPU.
+
+## Chạy thử và quan sát
+
+Build `project_39_checkpoint_5`. Trước tiên dùng fixture vài object với đáp án tính bằng tay: hai được nhận, một bị loại; kiểm count từng mesh và min/max ID. Sau đó thử camera không nhận object nào. Panel phải ghi tập rỗng thay vì giữ khoảng cách/count cũ.
+
+Cuối cùng, dùng N lẻ và preset nhiều group. Kiểm `tested` vẫn bằng số record gốc sau mọi tầng. GPU reduction không được làm số tested phình thành số lane launch. Với distance, source công bố ngưỡng tuyệt đối theo world units cùng phần tương đối; NaN không được đi qua bằng một phép so vốn luôn trả false.
+
+## Thử tạo lỗi
+
+1. Đặt minimumDistance của lane dư bằng 0. Count vẫn đúng nhưng min sai ở group cuối; đây là lý do phải kiểm từng đại lượng, không chỉ tổng.
+2. Bỏ barrier sau một stride. Kết quả có thể thay đổi giữa máy/driver hoặc thỉnh thoảng vẫn đúng. Không dùng một lần chạy “có vẻ ổn” làm bằng chứng lỗi đồng bộ vô hại.
+
+## Checklist hoàn thành
+
+- Sum/min/max đúng phần tử trung tính; empty set có quy tắc và nhãn rõ.
+- Mỗi tầng chỉ đọc partial đã được công bố; không readback giữa tầng.
+- Counts/ID exact, distance có reference/tolerance và finite checks riêng.
+- N lẻ/nhiều group không đổi nghĩa tested hoặc dùng nhầm N ở mọi tầng.
+
+## Hướng mở rộng
+
+Thêm thống kê chiều cao cao nhất của tập accepted. Hãy viết trước phần tử trung tính và đáp án fixture, rồi mới mở rộng `Stats`. Tiếp theo, [dùng exclusive scan để tìm vị trí ghi cho mỗi object](/projects/million-object-city/06-exclusive-scan-trong-block).

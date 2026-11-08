@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Sáu mặt phẳng quyết định vật thể có thể xuất hiện
+
+## Ta cần giải quyết điều gì?
+
+Đứng ở một đầu phố, bạn không thể nhìn các tòa nằm sau lưng. Ta muốn loại chúng trước khi vẽ, nhưng cũng không muốn mái nhà biến mất lúc tâm của nó vừa ra ngoài màn hình. Vì vậy, phép kiểm không hỏi “tâm có trong ảnh không?” mà hỏi “toàn bộ bounds đã nằm ngoài vùng nhìn chưa?”. Bài này xây bản đối chiếu CPU trước khi chuyển phép kiểm sang GPU.
+
+Frustum culling không giải quyết vật thể bị vật thể khác che. Một tòa trong vùng nhìn nhưng nằm sau tòa khác vẫn được nhận; depth buffer xử lý pixel phía sau. Gọi mọi object được nhận là “nhìn thấy” dễ khiến ta diễn giải sai số liệu về sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Frustum là vùng nằm giữa sáu plane: trái, phải, dưới, trên, gần và xa. Với normal hướng vào trong và có độ dài 1, khoảng cách có dấu từ tâm `c` tới plane `(n,d)` là:
+
+$$s=n\cdot c+d.$$
+
+Sphere bán kính `r` chỉ bị loại khi `s < -r`. Nếu `s=-r`, nó vừa chạm plane và vẫn được giữ. Nếu tâm ở ngoài nhưng một phần sphere còn cắt vùng trong, vẫn phải giữ. Sphere có thể rộng hơn mesh nên nhận thừa được; loại nhầm phần mesh đáng lẽ hiện ra thì không được.
+
+<InteractiveLab demo="million-object-city" mode="frustum" />
+
+Hãy chọn một tòa sát mép, đổi FOV rồi xem bounds và lý do nhận/loại. Góc nhìn debug không được thay camera dùng để cull, nếu không bạn chỉ thấy một kết quả tự khẳng định chính nó.
+
+## Bắt tay xây dựng
+
+### 1. Lấy các plane từ đúng ma trận vẽ
+
+`Camera::frustum` dùng cùng `viewProjection(aspect)` với graphics, không dựng một FOV thứ hai:
+
+```cpp title="include/city_camera.hpp — chuẩn hóa plane"
+Vec4 plane{m[3] + sign * m[row], m[7] + sign * m[4 + row], m[11] + sign * m[8 + row], m[15] + sign * m[12 + row]};
+const float magnitude = std::sqrt(plane.x * plane.x + plane.y * plane.y + plane.z * plane.z);
+plane.x /= magnitude;
+plane.y /= magnitude;
+plane.z /= magnitude;
+plane.w /= magnitude;
+result[i] = plane;
+```
+
+Ma trận được lưu column-major; các phần tử trên chọn hàng 4 cộng/trừ từng hàng 1/2/3. Vòng lặp đầy đủ nằm ngay trước đoạn này trong source. Chia cả `w`, không chỉ normal: ta cần `s` và radius có cùng world units. Đây là lý do phép so `s < -r` mới có nghĩa.
+
+### 2. Viết riêng hàm khoảng cách có dấu
+
+```cpp title="include/city_types.hpp — khoảng cách từ điểm tới plane"
+inline float planeDistance(Vec4 plane, Vec3 point) {
+    return plane.x * point.x + plane.y * point.y + plane.z * point.z + plane.w;
+}
+```
+
+Ví dụ plane `x + 10 = 0` có vùng trong `x >= -10`. Sphere tâm `x=-12`, radius 3 có `s=-2`: tâm ở ngoài nhưng bounds vẫn cắt plane, nên phải giữ. Sphere cùng tâm mà radius 1 mới nằm hoàn toàn ngoài. Ví dụ số đơn giản này là oracle độc lập; không cần renderer để biết đáp án.
+
+### 3. Chỉ cần một plane loại được sphere
+
+```cpp title="include/city_types.hpp — phép loại bằng bounds"
+inline int rejectingPlane(const Frustum& planes, const Object& object) {
+    for (std::size_t index = 0; index < planes.size(); ++index) {
+        if (planeDistance(planes[index], center(object)) < -object.centerRadius.w) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+```
+
+Giá trị `-1` nghĩa là chưa plane nào chứng minh object hoàn toàn ở ngoài. Kết quả không chứng minh mesh tạo pixel. Trả index của plane thay vì chỉ bool còn giúp inspector giải thích lý do loại. Đừng đổi toán tử thành `distance < radius`: nó làm cả những sphere đang nằm trong gần mép bị loại nhầm.
+
+## Chạy thử và quan sát
+
+Build `project_39_checkpoint_3`. Cố định camera chính, chuyển sang quan sát debug và theo dõi một object qua mép frustum. Tâm có thể vượt mép trước bounds; chỉ khi cả sphere ra ngoài mới bị loại. Đổi FOV phải đổi cả vùng vẽ và phép kiểm theo cùng ma trận.
+
+Đọc fixture CPU trong `tests/tests.cpp`: thử trong/ngoài/cắt từng plane, không chỉ một tòa ở giữa cảnh. Bước này chưa là GPU culling; bản CPU là mốc đối chiếu mà bài sau phải khớp.
+
+## Thử tạo lỗi
+
+1. Bỏ radius và kiểm `s < 0`. Đặt tòa cao sát mép trên; nó biến mất khi tâm ra ngoài dù mái còn đáng lẽ hiện.
+2. Bỏ chia `plane.w` khi normalize. Thử dời camera khỏi gốc; kết quả sai phụ thuộc vị trí, có thể không lộ trong fixture đối xứng ban đầu.
+
+## Checklist hoàn thành
+
+- Có đáp án độc lập cho sphere trong/ngoài/cắt cả sáu plane; chạm plane vẫn được nhận.
+- Plane dùng cùng camera/aspect/FOV với graphics và được normalize đầy đủ.
+- Inspector phân biệt “không bị frustum loại” với “có pixel cuối cùng”.
+- Bounds bao toàn mesh; không thay bài toán bằng occlusion hoặc kiểm tâm đơn lẻ.
+
+## Hướng mở rộng
+
+So sphere với AABB trên một tòa rất cao: cách nào nhận thừa nhiều hơn? Chưa cần thay thuật toán; hãy dùng kết quả ấy để hiểu trade-off. Tiếp theo, [cho GPU ghi mask của toàn thành phố](/projects/million-object-city/04-mask-tren-gpu).

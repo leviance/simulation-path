@@ -1,0 +1,68 @@
+#version 430 core
+
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+
+layout(local_size_x = 256) in;
+
+#if LAB_CHECKPOINT >= 6
+layout(std430, binding = 0) readonly buffer Input { uvec4 inputValues[]; };
+layout(std430, binding = 1) writeonly buffer Prefix { uvec4 prefixes[]; };
+layout(std430, binding = 2) writeonly buffer Sums { uvec4 blockSums[]; };
+uniform uint uCount;
+shared uvec4 temporary[512];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint first = gl_WorkGroupID.x * 512u + lane;
+    uint second = first + 256u;
+    temporary[lane] = uvec4(0u);
+    temporary[lane + 256u] = uvec4(0u);
+    if (first < uCount) {
+        temporary[lane] = inputValues[first];
+    }
+    if (second < uCount) {
+        temporary[lane + 256u] = inputValues[second];
+    }
+    memoryBarrierShared();
+    barrier();
+
+    // Upsweep forms sums. All four uint channels follow the same tree.
+    for (uint offset = 1u; offset < 512u; offset <<= 1u) {
+        uint right = (lane + 1u) * offset * 2u - 1u;
+        if (right < 512u) {
+            temporary[right] += temporary[right - offset];
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+    if (lane == 0u) {
+        blockSums[gl_WorkGroupID.x] = temporary[511];
+        temporary[511] = uvec4(0u);
+    }
+    memoryBarrierShared();
+    barrier();
+
+    // Downsweep replaces each subtotal by the sum strictly preceding it.
+    for (uint offset = 256u; offset > 0u; offset >>= 1u) {
+        uint right = (lane + 1u) * offset * 2u - 1u;
+        if (right < 512u) {
+            uvec4 left = temporary[right - offset];
+            temporary[right - offset] = temporary[right];
+            temporary[right] += left;
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+    if (first < uCount) {
+        prefixes[first] = temporary[lane];
+    }
+    if (second < uCount) {
+        prefixes[second] = temporary[lane + 256u];
+    }
+}
+#else
+void main() {
+}
+#endif

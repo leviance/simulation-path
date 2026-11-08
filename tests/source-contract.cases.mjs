@@ -477,89 +477,43 @@ test("generated C++ snapshots are clean and progressive", async () => {
   }
 });
 
-test("Project 39 introduces each taught algorithm in its own checkpoint", async () => {
-  const projectDirectory = path.join(workspace, "examples", "project-39-gpu-reduction-prefix-sum");
-  const introductions = [
-    {
-      checkpoint: 1,
-      file: "include/reduction_math.hpp",
-      symbols: [/enum class Operation/, /cpuReduction\(/, /cpuExclusiveScan\(/],
-    },
-    {
-      checkpoint: 2,
-      file: "include/reduction_math.hpp",
-      symbols: [/ceilDiv\(/, /makeHierarchy\(/, /scanDispatchCount\(/],
-    },
-    {
-      checkpoint: 3,
-      file: "shaders/reduce.comp",
-      symbols: [/shared float sharedValues\[512\]/, /sharedValues\[lane\] \+=/],
-    },
-    {
-      checkpoint: 4,
-      file: "include/reduction_gpu_engine.hpp",
-      symbols: [/runReduction\(/, /passTrace_\.push_back/],
-    },
-    {
-      checkpoint: 5,
-      file: "shaders/scan_blocks.comp",
-      symbols: [/shared float temporary\[512\]/, /temporary\[511\] = 0\.0/],
-    },
-    {
-      checkpoint: 6,
-      file: "include/reduction_gpu_engine.hpp",
-      symbols: [/runBlockScans\(/, /Every block produced local prefixes/],
-    },
-    {
-      checkpoint: 7,
-      file: "shaders/uniform_add.comp",
-      symbols: [/blockOffsets\[\]/, /scanOutput\[index\] \+= blockOffsets/],
-    },
-    {
-      checkpoint: 8,
-      file: "include/reduction_gpu_engine.hpp",
-      symbols: [/barrierName\(/, /BUFFER_UPDATE -> readback consumer/],
-    },
-    {
-      checkpoint: 9,
-      file: "include/reduction_gpu_engine.hpp",
-      symbols: [/class TimerQueryRing/, /medianGpuMilliseconds\(/],
-    },
-    {
-      checkpoint: 10,
-      file: "src/main.cpp",
-      symbols: [/drawWorkbench\(/, /benchmarkSubmitted/, /rebuildWorkload/],
-    },
+test("Project 39 connects each new layer to the city at its documented checkpoint", async () => {
+  const projectDirectory = path.join(workspace, "examples", "project-39-million-object-city");
+  const layers = [
+    [1, "include/city_application.hpp", /count = 257U/],
+    [2, "include/city_application.hpp", /count = 1'000'003U/],
+    [3, "include/city_application.hpp", /renderer_\.drawBounds\(/],
+    [4, "shaders/cull.comp", /groupStats\[lane\] = item/],
+    [5, "shaders/reduce.comp", /temporary\[lane\]\.counts \+=/],
+    [6, "shaders/scan.comp", /temporary\[511\] = uvec4\(0u\)/],
+    [7, "include/city_compute.hpp", /levelCount = buffers_\.scan\.size\(\)/],
+    [8, "shaders/compact.comp", /visibleIDs\[/],
+    [9, "include/city_compute.hpp", /GL_COMMAND_BARRIER_BIT/],
+    [10, "include/city_application.hpp", /code == SDL_SCANCODE_TAB/],
+    [11, "include/city_application.hpp", /validation_\.initialize\(/],
+    [12, "include/city_application.hpp", /tourTime_ \+= dt/],
   ];
-
-  for (const introduction of introductions) {
-    const checkpoint = String(introduction.checkpoint).padStart(2, "0");
-    const previousDirectory =
-      introduction.checkpoint === 1
-        ? "starter"
-        : `checkpoints/${String(introduction.checkpoint - 1).padStart(2, "0")}`;
-    const currentDirectory = `checkpoints/${checkpoint}`;
-    const previous = await readFile(
-      path.join(projectDirectory, previousDirectory, introduction.file),
-      "utf8",
+  for (const [checkpoint, file, symbol] of layers) {
+    const current = path.join(
+      projectDirectory,
+      "checkpoints",
+      String(checkpoint).padStart(2, "0"),
+      file,
     );
-    const current = await readFile(
-      path.join(projectDirectory, currentDirectory, introduction.file),
-      "utf8",
+    let previousDirectory = "starter";
+    if (checkpoint > 1)
+      previousDirectory = "checkpoints/" + String(checkpoint - 1).padStart(2, "0");
+    const previous = path.join(projectDirectory, previousDirectory, file);
+    assert.match(
+      await readFile(current, "utf8"),
+      symbol,
+      "Missing city layer at checkpoint " + checkpoint,
     );
-
-    for (const symbol of introduction.symbols) {
-      assert.doesNotMatch(
-        previous,
-        symbol,
-        `${introduction.file} teaches ${symbol} before checkpoint ${checkpoint}`,
-      );
-      assert.match(
-        current,
-        symbol,
-        `${introduction.file} does not add ${symbol} at checkpoint ${checkpoint}`,
-      );
-    }
+    assert.doesNotMatch(
+      await readFile(previous, "utf8"),
+      symbol,
+      "City layer appears before checkpoint " + checkpoint,
+    );
   }
 });
 

@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nối các block thành một prefix toàn cục
+
+## Ta cần giải quyết điều gì?
+
+Local scan của Bài 6 khiến mỗi block bắt đầu từ zero. Nếu đem prefix ấy đi compact ngay, block 0 và block 1 đều có thể ghi vào `visibleIDs[0]`. Ta cần cộng cho mỗi block tổng của **tất cả block đứng trước nó**, không chỉ tổng của block liền trước.
+
+Đầu ra `blockSums` của scan chính là một mảng nhỏ hơn có thể scan tiếp. Đây là chỗ prefix sum trở thành thuật toán phân cấp: dùng cùng kernel cho dữ liệu gốc, cho block sums rồi cho block sums của block sums. Không có tầng nào phải đưa kết quả về CPU để cộng hộ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với N=1.000.003 và span 512, số block lần lượt là 1.954, 4 và 1. Tầng đầu launch đủ 1.000.448 ô, có 445 ô đệm zero. Ba block-scan dispatch đi lên, rồi hai uniform-add dispatch đi xuống. Tổng cộng năm dispatch scan; cull, reduction, compaction và command là các pass khác, không được giấu vào con số này.
+
+Nếu block sums là `[3,2,4]`, scan của chúng là `[0,3,5]`. Local prefix của block 2 cộng 5, vì có năm phần tử được nhận trước block ấy. Công thức là:
+
+$$globalPrefix[i]=localPrefix[i]+blockOffsets[\lfloor i/512\rfloor].$$
+
+Mỗi channel của `uvec4` làm đúng phép cộng ấy. CPU chỉ biết kích thước các tầng để cấp buffer và dispatch; không đọc các số 3/2/4 để tính offset.
+
+<InteractiveLab demo="million-object-city" mode="scan" />
+
+## Bắt tay xây dựng
+
+### 1. Cho output block sums làm input của tầng tiếp theo
+
+Trong `CityGpu::dispatchScan`, mỗi tầng giữ `prefixes` và `sums` riêng:
+
+```cpp title="include/city_compute.hpp — scan đi lên các tầng"
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, input);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1U, level.prefixes);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 2U, level.sums);
+gl.Uniform1ui(gl.GetUniformLocation(program, "uCount"), static_cast<GLuint>(level.count));
+gl.DispatchCompute(static_cast<GLuint>(ceilDiv(level.count, kScanSpan)), 1U, 1U);
+gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+input = level.sums;
+```
+
+`input = level.sums` đổi tên buffer được đọc ở lượt sau; không copy về CPU. Barrier đặt sau dispatch vì compute kế tiếp sẽ đọc dữ liệu shader vừa ghi. Một `memoryBarrierShared` trong kernel chỉ có phạm vi shared của group, không công bố SSBO cho dispatch mới.
+
+### 2. Đi xuống từ tầng nhỏ nhất
+
+```cpp title="include/city_compute.hpp — ghép prefix giữa hai tầng"
+const ScanLevel& destination = buffers_.scan[index - 1];
+const ScanLevel& offsets = buffers_.scan[index];
+const GLuint program = programs_[3];
+gl.UseProgram(program);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0U, destination.prefixes);
+gl.BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1U, offsets.prefixes);
+gl.Uniform1ui(gl.GetUniformLocation(program, "uCount"), static_cast<GLuint>(destination.count));
+gl.DispatchCompute(static_cast<GLuint>(ceilDiv(destination.count, kWorkgroupSize)), 1U, 1U);
+gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+```
+
+Vòng lặp ngoài giảm `index` từ tầng cuối về 1. Thứ tự đi xuống quan trọng: prefix ở tầng offsets phải đã là global trước khi cộng nó cho tầng thấp hơn. Dùng sums thô thay offsets cũng sai; total của một block không phải tổng của các block đứng trước nó.
+
+### 3. Cộng offset theo đúng span đã scan
+
+```glsl title="shaders/uniform_add.comp — nối các block"
+uint index = gl_GlobalInvocationID.x;
+if (index >= uCount) {
+    return;
+}
+// Global order comes from scanned block totals, never from atomic arrival order.
+prefixes[index] += blockOffsets[index / 512u];
+```
+
+Kernel này không dùng shared memory hoặc barrier trong workgroup nên return ở lane dư là hợp lệ. Số 512 là span dữ liệu của block scan, không phải local size 256 của uniform-add. Đổi nhầm sang chia 256 sẽ cộng offset của block khác từ giữa mỗi block.
+
+## Chạy thử và quan sát
+
+Build `project_39_checkpoint_7`. Kiểm các vị trí 0, 511, 512, 513 và cuối mảng. Chênh lệch prefix liên tiếp phải bằng mask của phần tử trước; riêng bước qua 511→512 không được về zero. Sau đó thử N=1.000.003 để có ba tầng, thay vì chỉ dùng N=1.024 vốn chưa chứng minh đường nhiều mức.
+
+N=0 được xử lý bằng hợp đồng rỗng của host; không được suy `lastPrefix + lastMask` bằng index N-1. N=1 chỉ cần một tầng và không có uniform-add đi xuống. Số tầng là hữu hạn theo count đã giới hạn.
+
+## Thử tạo lỗi
+
+1. Trong `uniform_add.comp`, thay `index / 512u` bằng `index / 256u`. So các vị trí quanh 256 và 512 để tìm chỗ bắt đầu sai.
+2. Đi xuống từ tầng thấp lên tầng cao. Với dữ liệu hơn hai mức, tầng dưới sẽ dùng offsets chưa được cộng đầy đủ; fixture nhỏ một mức không phát hiện được lỗi này.
+
+## Checklist hoàn thành
+
+- Với N=1.000.003, có 1.954→4→1 block và ba lượt scan/hai lượt uniform-add.
+- Mọi tầng nằm trên GPU; không readback block sums để tính offset.
+- Prefix exact ở biên block, N=0/1, N lẻ và dữ liệu nhiều mức.
+- Đã phân biệt local size, scan span, sums và scanned offsets.
+
+## Hướng mở rộng
+
+Viết fixture counts `[2,0,3,1]` và thử scan nó như dữ liệu độc lập, không chỉ mask 0/1. Primitive này sẽ dùng lại cho bài sau của nhánh GPU. Tiếp theo, [dùng prefix để compact visible IDs theo mesh](/projects/million-object-city/08-compact-visible-ids).

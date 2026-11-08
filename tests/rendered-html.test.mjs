@@ -43,6 +43,7 @@ import "./projects-37.cases.mjs";
 import "./projects-38.cases.mjs";
 import "./projects-38-routes.cases.mjs";
 import "./projects-39.cases.mjs";
+import "./projects-39-routes.cases.mjs";
 import "./projects-40.cases.mjs";
 import "./projects-41.cases.mjs";
 import "./projects-42.cases.mjs";

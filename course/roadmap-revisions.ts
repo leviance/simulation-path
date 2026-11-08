@@ -5,27 +5,6 @@ import type { ProjectRevision } from "./types";
 const previousMolecularPart = "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT";
 
 export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
-  "39": {
-    previousTitle: "Cộng một triệu số theo cây: Reduction và Prefix Sum trên GPU",
-    summary:
-      "Đi qua một thành phố 3D có một triệu vật thể và quan sát GPU chọn những gì cần vẽ khi camera di chuyển.",
-    outcome:
-      "Một thành phố có thể khám phá, với chế độ đối chiếu bật/tắt culling, màu debug và số vật thể được chọn, loại bỏ, đưa vào lệnh vẽ.",
-    question: "Camera chỉ nhìn thấy một góc thành phố: có cần vẽ tất cả một triệu vật thể không?",
-    interactions: [
-      "Di chuyển camera; bật/tắt frustum culling để đối chiếu.",
-      "Quan sát bounding volumes, tập vật thể được chọn và lệnh vẽ.",
-      "Chạy/hủy phép đo trên cùng scene và cấu hình.",
-    ],
-    concepts: [
-      "Reduction, prefix sum, compaction và indirect draw trong một pipeline nhiều pass.",
-      "Đối chiếu CPU, bounds và lifecycle của dữ liệu GPU.",
-    ],
-    prerequisites:
-      "Camera/frustum và instancing từ nền graphics, compute ở Project 37; scaffold nhiều pass được giải thích.",
-    workload:
-      "Mục tiêu: scene có ít nhất 1 triệu vật thể được xử lý thật; phân biệt tổng object, visible object và draw calls.",
-  },
   "40": {
     previousTitle: "“Thành phố hạt” trên GPU: xây grid và tìm hàng xóm song song",
     summary:

@@ -1,0 +1,58 @@
+#version 430 core
+
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+
+layout(local_size_x = 256) in;
+
+#if LAB_CHECKPOINT >= 5
+struct Stats {
+    uvec4 counts;
+    float minimumDistance;
+    float maximumDistance;
+    uint tested;
+    uint padding;
+    uvec4 integerStats;
+};
+
+layout(std430, binding = 0) readonly buffer Input { Stats inputStats[]; };
+layout(std430, binding = 1) writeonly buffer Output { Stats outputStats[]; };
+uniform uint uCount;
+shared Stats temporary[256];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint index = gl_GlobalInvocationID.x;
+    float infinity = uintBitsToFloat(0x7f800000u);
+    temporary[lane] = Stats(uvec4(0u), infinity, -infinity, 0u, 0u, uvec4(0u, 0xffffffffu, 0u, 0u));
+    if (index < uCount) {
+        temporary[lane] = inputStats[index];
+    }
+    memoryBarrierShared();
+    barrier();
+
+    // This same kernel also combines partial reductions from previous dispatches.
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+            Stats other = temporary[lane + stride];
+            temporary[lane].counts += other.counts;
+            temporary[lane].minimumDistance = min(temporary[lane].minimumDistance, other.minimumDistance);
+            temporary[lane].maximumDistance = max(temporary[lane].maximumDistance, other.maximumDistance);
+            temporary[lane].tested += other.tested;
+            temporary[lane].integerStats.x += other.integerStats.x;
+            temporary[lane].integerStats.y = min(temporary[lane].integerStats.y, other.integerStats.y);
+            temporary[lane].integerStats.z = max(temporary[lane].integerStats.z, other.integerStats.z);
+            temporary[lane].integerStats.w += other.integerStats.w;
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+    if (lane == 0u) {
+        outputStats[gl_WorkGroupID.x] = temporary[0];
+    }
+}
+#else
+void main() {
+}
+#endif
