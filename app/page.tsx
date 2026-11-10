@@ -6,9 +6,16 @@ export default function HomePage() {
   const projectCount = currentProjects.length;
   const lessonCount = currentProjects.reduce((total, project) => total + project.lessonCount, 0);
   const labCount = currentProjects.filter((project) => project.demoId).length;
-  const featuredProjects = [...currentProjects.slice(0, 5), ...currentProjects.slice(-3)].filter(
-    (project, index, projects) => projects.findIndex(({ id }) => id === project.id) === index,
-  );
+  const availableReplacements = currentProjects.filter((project) => project.acceptanceNote);
+  const featuredProjects = [
+    ...currentProjects.slice(0, 5),
+    ...availableReplacements,
+    ...currentProjects.slice(-3),
+  ]
+    .filter(
+      (project, index, projects) => projects.findIndex(({ id }) => id === project.id) === index,
+    )
+    .slice(0, 8);
   const displayCount = (value: number) => String(value).padStart(2, "0");
   const releasedHeading = `${projectCount} dự án có hướng dẫn hiện tại`;
   const horizonHeading = "Từ một pixel đến những thế giới có thể khám phá.";
@@ -126,7 +133,10 @@ export default function HomePage() {
         <div className="project-showcase">
           {featuredProjects.map((project, index) => (
             <Link className="project-card" href={`/projects/${project.slug}`} key={project.id}>
-              <span className="project-number">P{project.id}</span>
+              <span className="project-number">
+                P{project.id}
+                {project.acceptanceNote ? " · CHỜ NGHIỆM THU" : ""}
+              </span>
               <div className={`project-glyph glyph-${index + 1}`} aria-hidden="true">
                 <span />
               </div>

@@ -1,240 +1,217 @@
-import type { ProjectLearningAssets } from "../../learning/types";
+import type { LessonReference, ProjectLearningAssets } from "../../learning/types";
 
-const files = [
-  "include/framebuffer.hpp",
-  "include/lennard_jones.hpp",
-  "include/lennard_jones_ui.hpp",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
+function term(id: string, label: string): LessonReference {
+  return { label, href: "/glossary#" + id, kind: "Thuật ngữ" };
+}
 
 const learning = {
   guides: {
     "p41-l01": {
-      focus:
-        "Dựng `PairState` cho hai nguyên tử, tách tọa độ thế giới khỏi framebuffer rồi tính vector nối, khoảng cách và tâm khối lượng.",
-      expected:
-        "Checkpoint 1 vẽ hai nguyên tử từ `position`; khi kéo trên Canvas, r thay đổi nhưng tâm khối lượng vẫn nằm giữa cặp.",
-      files,
+      focus: "Thêm đúng một mảnh mặt vào cửa sổ đã có camera.",
+      expected: "Mảnh 8×6 ô; đổi độ cao làm normal nghiêng. Bản starter chưa có mesh.",
+      files: [
+        "include/parametric_surfaces.hpp",
+        "include/parametric_mesh.hpp",
+        "include/workshop_parameters.hpp",
+      ],
       steps: [
         {
-          title: "Giữ Atom là dữ liệu vật lý",
-          explanation:
-            "`Atom` chỉ giữ `position`, `velocity` và `mass`. Màu sắc, bán kính và tọa độ pixel thuộc về phần vẽ, không chen vào mô hình vật lý.",
+          title: "Tính mẫu tại u/v",
+          explanation: "Trả cùng lúc vị trí, tangent theo u và tangent theo v.",
         },
         {
-          title: "Tính delta trước distance",
-          explanation:
-            "`delta = b.position - a.position` giữ cả hướng lẫn độ dài. Chỉ khi cần một con số vô hướng, ta mới tính `distance = hypot(delta.x, delta.y)`.",
-        },
-        {
-          title: "Dùng center of mass làm mốc",
-          explanation:
-            "Khi hai khối lượng bằng nhau, đặt hai nguyên tử đối xứng qua gốc sẽ đưa tâm khối lượng về 0. Đại lượng bất biến dễ quan sát này sẽ giúp phát hiện lỗi ở các bài sau.",
+          title: "Tạo hàng đỉnh",
+          explanation: "Lấy cross theo đúng chiều để normal và tam giác cùng hướng.",
         },
       ],
     },
     "p41-l02": {
-      focus:
-        "Cài thế năng Lennard–Jones bằng reduced units, đánh dấu σ và r0 rồi đọc hình dạng đường cong thay vì học thuộc công thức.",
+      focus: "Sửa phần nối ô trước khi tăng độ phân giải.",
       expected:
-        "Checkpoint 2 cho U(σ)=0, U(2^(1/6)σ)=-ε và từ chối phép tính khi hai nguyên tử gần như trùng nhau.",
-      files,
+        "16×16 ô có 289 đỉnh, 512 tam giác. Đảo một winding làm mất một nửa ô khi bật culling.",
+      files: [
+        "include/parametric_mesh.hpp",
+        "include/workshop_parameters.hpp",
+        "include/workshop_app.hpp",
+      ],
       steps: [
         {
-          title: "Tính ratio một lần",
-          explanation:
-            "Từ `ratio = σ/r`, lần lượt tính `ratio2`, `ratio6` và `ratio12`. Ta tránh gọi `pow` nhiều lần và giữ cùng thứ tự phép tính giữa C++ với Canvas.",
+          title: "Lần ID ở hai hàng",
+          explanation: "Chỉ thêm ô sau khi hàng dưới và hàng trên đều có đỉnh.",
         },
         {
-          title: "Phân biệt hai mốc trên trục r",
-          explanation:
-            "σ là nơi U đi qua 0; r0=2^(1/6)σ mới là đáy thế và là nơi lực bằng 0. Hai mốc nằm gần nhau nhưng mang ý nghĩa hoàn toàn khác.",
-        },
-        {
-          title: "Không che singularity",
-          explanation:
-            "Hàm báo không hợp lệ khi r quá nhỏ. Phần vẽ có thể cắt đường cong theo chiều cao cho dễ nhìn, nhưng giá trị đưa vào bộ tích phân không được ép về một con số giả tạo.",
+          title: "Nối và kiểm",
+          explanation: "Hai tam giác cùng chiều; đổi resolution vẫn không vượt index.",
         },
       ],
     },
     "p41-l03": {
-      focus:
-        "Tính potentialSlope=dU/dr, xác định dấu của độ dốc rồi đổi nó thành vector lực tác dụng lên nguyên tử A.",
-      expected:
-        "Checkpoint 3 vẽ lực đẩy ở 0,95σ, lực gần 0 tại r0 và lực hút ở 1,5σ; vector lực luôn nằm trên đường nối hai nguyên tử.",
-      files,
+      focus: "Dùng lại lưới, thay hàm đặt điểm và chính sách ở mép.",
+      expected: "Torus khép cả hai chiều. Vị trí và normal trùng ở mép, UV vẫn có giá trị 0 và 1.",
+      files: [
+        "include/parametric_surfaces.hpp",
+        "include/parametric_mesh.hpp",
+        "include/surface_settings.hpp",
+      ],
       steps: [
         {
-          title: "Chốt quy ước delta",
-          explanation:
-            "Code dùng delta từ A tới B. Với quy ước này, potentialSlope âm đẩy A ra xa B, còn potentialSlope dương hút A về B.",
+          title: "Tính hai góc",
+          explanation: "Một góc quanh trục, góc còn lại chạy quanh tiết diện tròn.",
         },
         {
-          title: "Từ độ dốc đến lực trên A",
-          explanation:
-            "Ta có direction=delta/r và potentialSlope=dU/dr. Vì đạo hàm của r theo vị trí A mang dấu âm, forceOnA=direction·potentialSlope; không thêm một dấu trừ thứ hai.",
-        },
-        {
-          title: "Kiểm dấu bằng điểm cụ thể",
-          explanation:
-            "Một `assert` ở 0,95σ và một `assert` ở 1,5σ bắt lỗi dấu tốt hơn việc chỉ kiểm tra |F(r0)| gần 0.",
+          title: "Lấy mẫu lại ở góc 0",
+          explanation: "Hàng/cột cuối dùng cùng vị trí với đầu nhưng không dùng lại ID.",
         },
       ],
     },
     "p41-l04": {
-      focus:
-        "Tính tương tác của cặp đúng một lần để tạo hai lực đối nhau, sau đó đo tổng lực, linear momentum và center of mass.",
-      expected:
-        "Checkpoint 4 luôn có `forceOnA + forceOnB` gần 0; cấu hình đối xứng bắt đầu với động lượng và vận tốc tâm khối lượng bằng 0.",
-      files,
+      focus: "Nối hàng cuối với hàng đầu theo thứ tự cột ngược.",
+      expected: "Dải không gãy ở seam và nhìn được cả hai phía; tangent ngang đổi dấu.",
+      files: [
+        "include/parametric_surfaces.hpp",
+        "include/parametric_mesh.hpp",
+        "include/geometry_renderer.hpp",
+        "shaders/surface.frag",
+      ],
       steps: [
         {
-          title: "Tính pair đúng một lần",
-          explanation:
-            "`forceOnB = -forceOnA` được lấy từ cùng một kết quả tính. Không gọi lại công thức với `delta` đảo chiều rồi trông chờ sai số làm tròn tự triệt tiêu.",
+          title: "Đảo cột và tangent",
+          explanation: "Dùng vSegments − j để lấy mẫu; không sửa UV gốc.",
         },
         {
-          title: "Đổi force thành acceleration theo từng mass",
-          explanation:
-            "Hai lực có độ lớn bằng nhau, nhưng nguyên tử nhẹ có gia tốc lớn hơn. Vì vậy định luật III Newton không có nghĩa hai gia tốc luôn bằng nhau và ngược chiều.",
-        },
-        {
-          title: "Đo invariant độc lập renderer",
-          explanation:
-            "Động lượng và tâm khối lượng được tính trực tiếp từ `PairState` theo đơn vị thế giới; đổi kích thước cửa sổ không được làm chúng thay đổi.",
+          title: "Tô sáng mặt nhìn thấy",
+          explanation: "Tắt culling và lật normal theo gl_FrontFacing trong shader.",
         },
       ],
     },
     "p41-l05": {
-      focus:
-        "Cho `PairState` tiến theo Velocity Verlet, rồi đặt bộ giải sau accumulator có giới hạn thời gian khung hình, giới hạn số bước con và chế độ tiến từng bước.",
+      focus: "Đặt một tiết diện elip tại mỗi mẫu của đường xoắn mở.",
       expected:
-        "Checkpoint 5 dùng lực ở cả đầu lẫn cuối bước; Space chạy/dừng, N tiến đúng một bước và hai cách chia thời gian khung hình cho cùng số bước vật lý.",
-      files,
+        "Growth thu đầu nhỏ mà không làm to miệng; frame đi theo đường cong, không đổi hướng giật cục.",
+      files: [
+        "include/sweep_frames.hpp",
+        "include/parametric_mesh.hpp",
+        "include/surface_settings.hpp",
+      ],
       steps: [
         {
-          title: "Tính acceleration đầu bước",
-          explanation:
-            "Một lần tính tương tác cho ta a0 của cả hai nguyên tử. Vị trí mới dùng vận tốc hiện tại cùng 0,5·a0·dt².",
+          title: "Tính tâm và tangent đường",
+          explanation: "Đạo hàm có cả phần bán kính tăng và phần góc quay.",
         },
         {
-          title: "Hỏi lại lực ở position mới",
-          explanation:
-            "a1 phải được tính từ khoảng cách mới. Dùng lại a0 sẽ biến phép cập nhật thành một công thức khác và làm sai số năng lượng tăng nhanh hơn.",
-        },
-        {
-          title: "Tách physics time khỏi render time",
-          explanation:
-            "Accumulator chỉ quyết định cần chạy bao nhiêu bước cố định. Giới hạn an toàn bỏ phần thời gian tồn đọng vượt ngân sách, tránh để ứng dụng mắc kẹt trong vòng lặp bù bước.",
+          title: "Mang frame từ vòng trước",
+          explanation: "Xoay vừa đủ, rồi đặt các điểm của elip theo hai trục tiết diện.",
         },
       ],
     },
     "p41-l06": {
-      focus:
-        "Cộng động năng với thế năng của cặp, lưu lịch sử có giới hạn và dùng độ lệch năng lượng để chọn `fixed dt` phù hợp.",
-      expected:
-        "Checkpoint 6 đo năng lượng và thêm hàm đánh giá sai số lớn nhất theo từng bước. Đến bài cuối, phím V gọi hàm này cho điều kiện đầu đang chọn, tách riêng khỏi bộ kiểm mô hình chuẩn.",
-      files,
+      focus: "Khép frame dọc đường tâm knot thay vì chỉ ghép vị trí.",
+      expected: "Torus knot ba/năm múi khép ống không vặn gấp ở hàng cuối. UV còn hai bản riêng.",
+      files: [
+        "include/sweep_frames.hpp",
+        "include/surface_settings.hpp",
+        "include/workshop_layout.hpp",
+      ],
       steps: [
         {
-          title: "Đo energy tại cùng state",
-          explanation:
-            "Thế năng lấy từ khoảng cách hiện tại, động năng lấy từ hai vận tốc hiện tại. Không ghép thế năng đầu bước với động năng cuối bước.",
+          title: "Đổi đường tâm",
+          explanation: "Hai góc với tỉ lệ 2:3 hoặc 2:5 đưa đường cong về đúng điểm đầu.",
         },
         {
-          title: "Giữ dấu của relative drift",
-          explanation:
-            "(E−E0)/max(|E0|,ε) cho biết bộ giải đang tự thêm hay làm mất năng lượng. Giao diện có thể hiển thị phần trăm, còn phép kiểm tra vẫn dùng giá trị chưa làm tròn.",
-        },
-        {
-          title: "Giới hạn cả history lẫn stress run",
-          explanation:
-            "Lịch sử chỉ giữ một số mẫu cố định. Phép kiểm chứng chạy trong khoảng thời gian và số bước đã định trước, không chờ đến khi đồ thị có vẻ ổn.",
+          title: "Bù góc trên cả vòng",
+          explanation: "Phân bổ theo độ dài cung, rồi chép frame đầu để bỏ sai số làm tròn.",
         },
       ],
     },
     "p41-l07": {
-      focus:
-        "Ghép các cấu hình khoảng cách, thao tác kéo nguyên tử, đồ thị, số đo chẩn đoán, phép kiểm chứng, đặt lại và dọn tài nguyên thành một chương trình hoàn chỉnh.",
-      expected:
-        "Bản hoàn chỉnh cho phép chuyển giữa vùng đẩy, cân bằng và hút; trạng thái hợp lệ cuối cùng được giữ lại nếu đầu vào nguy hiểm. Toàn bộ mã nguồn và CTest có trong gói ZIP.",
-      files,
+      focus: "Tách yêu cầu mới, preview và bản đầy đủ đã upload.",
+      expected: "Kéo thấy preview; buông làm mịn theo nhóm tối đa tám hàng. Hủy giữ last-good.",
+      files: ["include/mesh_session.hpp", "include/workshop_app.hpp", "include/workshop_panel.hpp"],
       steps: [
         {
-          title: "Mọi preset đi qua cùng hàm reset",
-          explanation:
-            "Kéo chuột, phím 1–3 và R đều tạo lại `PairState`, năng lượng ban đầu và lịch sử; không nhánh nhập liệu nào được giữ sót vận tốc cũ.",
+          title: "Giới hạn lưới khi kéo",
+          explanation: "Không hạ số hàng sweep dưới 64; chỉ giữ yêu cầu mới nhất.",
         },
         {
-          title: "Pause khi người dùng sửa state",
-          explanation:
-            "Khi kéo chuột, mô phỏng tự dừng, giữ tâm khối lượng và xóa vận tốc. Nhờ vậy, thí nghiệm mới luôn bắt đầu từ một điều kiện rõ ràng.",
+          title: "Chuyển mesh đúng lúc",
+          explanation: "Sau khi buông, chờ ứng viên đủ hàng và upload xong mới cập nhật last-good.",
+        },
+      ],
+    },
+    "p41-l08": {
+      focus: "Xuất đúng mesh đầy đủ và kiểm dữ liệu vừa ghi.",
+      expected: "OBJ đọc lại khớp position, UV, normal và index; file cũ không bị ghi đè.",
+      files: [
+        "include/obj_mesh.hpp",
+        "include/obj_file.hpp",
+        "include/workshop_app.hpp",
+        "tests/obj_tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Ghi ba mảng và mặt",
+          explanation: "Dùng index + 1 cho từng góc f, giữ thứ tự winding.",
         },
         {
-          title: "Dọn SDL theo thứ tự ngược",
+          title: "Đọc file tạm rồi so",
+          explanation: "Kiểm bộ thuộc tính và chỉ số; chỉ đổi tên khi khớp toàn bộ.",
+        },
+      ],
+    },
+    "p41-l09": {
+      focus: "Nghiệm thu theo số bản ghi, buffer và thao tác thật.",
+      expected:
+        "Knot 256×256 ô: 66.049 đỉnh, 131.072 tam giác, 4.479.020 byte payload trên build Windows.",
+      files: [
+        "include/surface_settings.hpp",
+        "include/workshop_checks.hpp",
+        "src/main.cpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Đo từ mesh và GL",
           explanation:
-            "Texture được hủy trước renderer, renderer trước window và `SDL_Quit` chạy sau cùng; nhánh lỗi cũng trả `EXIT_FAILURE` thay vì im lặng báo thành công.",
+            "Đếm phần tử thật; không lấy resolution của yêu cầu đang chờ để báo kết quả.",
+        },
+        {
+          title: "Chạy kiểm rồi thử bằng chuột",
+          explanation:
+            "Tách kết quả CTest/hidden GPU khỏi capture, mất focus và hình ảnh trực tiếp.",
         },
       ],
     },
   },
   references: {
     "p41-l01": [
-      { label: "Reduced units", href: "/glossary#reduced-units", kind: "Thuật ngữ" },
-      { label: "Pair potential", href: "/glossary#pair-potential", kind: "Thuật ngữ" },
+      term("parametric-surface", "Bề mặt tham số"),
+      term("surface-tangents", "Tangent theo u/v"),
     ],
     "p41-l02": [
-      {
-        label: "Lennard–Jones potential",
-        href: "/glossary#lennard-jones-potential",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Equilibrium separation",
-        href: "/glossary#equilibrium-separation",
-        kind: "Thuật ngữ",
-      },
+      term("face-normal", "Face normal"),
+      term("element-buffer-object", "Element Buffer Object"),
     ],
     "p41-l03": [
-      { label: "Pair potential", href: "/glossary#pair-potential", kind: "Thuật ngữ" },
-      { label: "Vector 2D", href: "/glossary#vector-2d", kind: "Thuật ngữ" },
+      term("surface-seam", "Đường nối của bề mặt"),
+      term("uv-coordinates", "UV coordinates"),
     ],
     "p41-l04": [
-      {
-        label: "Force accumulation",
-        href: "/glossary#force-accumulation",
-        kind: "Thuật ngữ",
-      },
-      { label: "Linear momentum", href: "/glossary#linear-momentum", kind: "Thuật ngữ" },
+      term("mobius-reversed-seam", "Mép đảo của Möbius"),
+      term("back-face-culling", "Back-face culling"),
     ],
     "p41-l05": [
-      { label: "Velocity Verlet", href: "/glossary#velocity-verlet", kind: "Thuật ngữ" },
-      {
-        label: "Physics accumulator",
-        href: "/glossary#physics-accumulator",
-        kind: "Thuật ngữ",
-      },
+      term("sweep-frame", "Sweep frame"),
+      term("parallel-transport-frame", "Mang frame dọc đường cong"),
     ],
-    "p41-l06": [
-      { label: "Energy drift", href: "/glossary#energy-drift", kind: "Thuật ngữ" },
-      {
-        label: "Mechanical energy",
-        href: "/glossary#mechanical-energy",
-        kind: "Thuật ngữ",
-      },
+    "p41-l06": [term("sweep-seam-correction", "Bù góc để khép frame")],
+    "p41-l07": [term("mesh-last-good", "Preview và last-good")],
+    "p41-l08": [
+      term("obj-face-token", "OBJ face token"),
+      term("obj-round-trip", "Đọc lại file OBJ"),
     ],
-    "p41-l07": [
-      {
-        label: "SDL_DestroyTexture",
-        href: "https://wiki.libsdl.org/SDL3/SDL_DestroyTexture",
-        kind: "SDL API",
-      },
-      {
-        label: "Numerical integration",
-        href: "/glossary#numerical-integration",
-        kind: "Thuật ngữ",
-      },
+    "p41-l09": [
+      term("vertex-buffer-object", "Vertex Buffer Object"),
+      term("obj-round-trip", "Đọc lại file OBJ"),
     ],
   },
 } satisfies ProjectLearningAssets;

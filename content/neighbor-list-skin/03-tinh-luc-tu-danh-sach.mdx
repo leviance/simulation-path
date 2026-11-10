@@ -74,7 +74,7 @@ result.forces[pair.j] = pbc::subtract(result.forces[pair.j], force);
 result.potential += sample.potential;
 ```
 
-`delta` hướng từ i tới ảnh gần nhất của j. Với quy ước này, lực trên i bằng `U'(r) * delta/r`, còn lực trên j có dấu ngược lại. Không thêm một dấu trừ theo trí nhớ về `F=-gradient(U)` mà quên biến đang lấy đạo hàm; Project 41–43 đã kiểm dấu này bằng đạo hàm theo position.
+`delta` hướng từ i tới ảnh gần nhất của j. Với quy ước này, lực trên i bằng `U'(r) * delta/r`, còn lực trên j có dấu ngược lại. Không thêm một dấu trừ theo trí nhớ về `F=-gradient(U)` mà quên biến đang lấy đạo hàm. Có thể kiểm dấu bằng cách dịch riêng vị trí i một lượng nhỏ và so chênh lệch thế năng.
 
 Sau vòng lặp, kiểm potential và mọi force đều hữu hạn rồi gán result.valid. Chú ý giới hạn: **valid chỉ là tính hợp lệ số học**, chưa xác nhận pairs còn đầy đủ. Một danh sách rỗng đã cũ vẫn có thể cho force=0 hữu hạn nhưng sai. Bài 4 bảo đảm tuổi thọ; bài 7 chủ động bắt lỗi ấy.
 

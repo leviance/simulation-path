@@ -14,19 +14,28 @@ export function buildRoadmap(
   revisions: Readonly<Record<string, ProjectRevision>>,
 ): ProjectSummary[] {
   const publishedById = new Map(published.map((project) => [project.id, project]));
-  for (const id of Object.keys(revisions)) {
-    if (
-      !publishedById.has(id) ||
-      !roadmap.some((entry) => String(entry.id).padStart(2, "0") === id)
-    ) {
+  for (const [id, revision] of Object.entries(revisions)) {
+    const publication = publishedById.get(id);
+    if (!publication || !roadmap.some((entry) => String(entry.id).padStart(2, "0") === id)) {
       throw new Error(`Roadmap revision ${id} must identify an existing published project`);
+    }
+    if (revision.replacement && revision.replacement.slug !== publication.slug) {
+      throw new Error(`Roadmap revision ${id} replacement must match the published slug`);
     }
   }
   return roadmap.map((entry) => {
     const id = String(entry.id).padStart(2, "0");
-    const previous = publishedById.get(id);
+    const publication = publishedById.get(id);
     const revision = revisions[id];
-    if (previous && revision) {
+    if (publication && revision?.replacement) {
+      return {
+        ...publication,
+        title: entry.title,
+        part: entry.part,
+        acceptanceNote: revision.replacement.acceptanceNote,
+      };
+    }
+    if (publication && revision) {
       return {
         id,
         slug: `project-${id}`,
@@ -35,10 +44,10 @@ export function buildRoadmap(
         summary: revision.summary,
         status: "awaiting-rebuild",
         revision,
-        previous,
+        previous: publication,
       };
     }
-    if (previous) return previous;
+    if (publication) return publication;
     return {
       id,
       slug: `project-${id}`,

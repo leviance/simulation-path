@@ -267,7 +267,7 @@ export const physicsGlossaryTerms = [
     id: "reduced-units",
     term: "Reduced units",
     definition:
-      "Cách chọn các đại lượng chuẩn làm đơn vị để công thức gọn hơn. Bản cũ của Project 41 (Lennard–Jones) mặc định lấy σ=1 cho chiều dài, ε=1 cho năng lượng và m=1 cho khối lượng; kết quả vì vậy mô tả hành vi của mô hình trước khi gắn với một chất cụ thể.",
+      "Chọn đại lượng chuẩn làm đơn vị để công thức gọn hơn. Các bài Molecular Dynamics dùng σ=1 cho chiều dài, ε=1 cho năng lượng và m=1 cho khối lượng. Kết quả mô tả hành vi của mô hình trước khi quy đổi sang đơn vị của một chất cụ thể.",
   },
   {
     id: "pair-potential",

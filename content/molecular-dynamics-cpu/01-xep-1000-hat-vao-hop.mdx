@@ -4,7 +4,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ở Project 41, ta đặt hai nguyên tử bằng tay. Bây giờ cần đặt 1.000 hạt mà không tạo một cặp gần như trùng nhau. Lực Lennard–Jones tăng rất nhanh khi khoảng cách nhỏ, nên điều kiện đầu cần được chuẩn bị trước khi cho hạt chuyển động.
+Đặt hai hạt bằng tay thì dễ; đặt 1.000 hạt mà không có cặp nào gần như trùng nhau thì cần một quy tắc. Lực Lennard–Jones tăng rất nhanh ở cự ly nhỏ, nên ta sẽ chuẩn bị vị trí ban đầu trước khi cho hạt chuyển động.
 
 Hãy chạy starter trước. Nó đã có cửa sổ SDL3, renderer, streaming texture và một hộp gồm các chấm tĩnh. Ta giữ phần vòng đời SDL, thay cách tạo các chấm bằng dữ liệu vật lý rồi vẽ lại từ dữ liệu đó. Sau bài này, cửa sổ phải hiện đúng 1.000 hạt; chưa có vận tốc hay lực.
 
@@ -62,7 +62,7 @@ struct MolecularSystem {
 };
 ```
 
-Tạo `include/molecular_dynamics.hpp`, đặt các kiểu trong namespace `md`. Phần đầu file cần `<vector>`, `<cmath>`, `<cstdint>`, `<cstddef>`, `<algorithm>` và `<limits>`. Các hàm `add`, `subtract`, `scale`, `lengthSquared` và `length` dùng lại phép toán vector của Project 41. `MolecularParameters` giữ tham số cho bài 3; `elapsed`, `stepCount`, `initialEnergy` và `wallCollisions` đều bằng 0 ở bài này.
+Tạo `include/molecular_dynamics.hpp`, đặt các kiểu trong namespace `md`. Phần đầu file cần `<vector>`, `<cmath>`, `<cstdint>`, `<cstddef>`, `<algorithm>` và `<limits>`. Dùng các phép toán vector quen thuộc: cộng, trừ, nhân với số và tính độ dài. `MolecularParameters` giữ tham số cho bài 3; `elapsed`, `stepCount`, `initialEnergy` và `wallCollisions` đều bằng 0 ở bài này.
 
 
 ### Bước 2 — Tính kích thước hộp

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { roadmapRevisions } from "../course/roadmap-revisions.ts";
+import { rebuildRevisions } from "../course/roadmap-revisions.ts";
 import { isCourseTextFile } from "../scripts/course-file-types.mjs";
 import {
   workspace,
@@ -25,7 +25,7 @@ test("server-renders the finished home page", async () => {
   assert.match(
     html,
     new RegExp(
-      `${projectCatalog.length - Object.keys(roadmapRevisions).length} dự án có hướng dẫn hiện tại`,
+      `${projectCatalog.length - Object.keys(rebuildRevisions).length} dự án có hướng dẫn hiện tại`,
       "i",
     ),
   );
@@ -269,14 +269,14 @@ test("shared learning pages explain how to start instead of only listing resourc
   assert.match(
     roadmap,
     new RegExp(
-      `${projectCatalog.length - Object.keys(roadmapRevisions).length} project có hướng dẫn hiện tại`,
+      `${projectCatalog.length - Object.keys(rebuildRevisions).length} project có hướng dẫn hiện tại`,
       "i",
     ),
   );
   assert.match(
     roadmap,
     new RegExp(
-      `${Object.keys(roadmapRevisions).length} project đã đổi đề bài và chờ xây dựng lại`,
+      `${Object.keys(rebuildRevisions).length} project đã đổi đề bài và chờ xây dựng lại`,
       "i",
     ),
   );

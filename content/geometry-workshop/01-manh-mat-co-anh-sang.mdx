@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng một mảnh mặt có ánh sáng
+
+## Ta cần giải quyết điều gì?
+
+Hãy tưởng tượng bạn kéo một tấm cao su ở mép trước. Tấm vẫn rộng như cũ, nhưng một phần nhô lên và phần đối diện trũng xuống. Đèn không đổi chỗ, vậy vì sao chỗ sáng lại chạy sang bên khác? Đó là điều ta sẽ làm rõ trước khi dựng vỏ ốc hay nút thắt.
+
+Mở bản starter trước. Bạn sẽ thấy cửa sổ, lưới sàn và camera, chưa có mesh. SDL3 lo cửa sổ và sự kiện; OpenGL lo vẽ tam giác. Khung tải shader, camera, bảng điều khiển và upload buffer đã có sẵn trong gói. Ở bài này ta sẽ đưa dữ liệu vào khung đó, không phải tự viết lại camera.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đặt hai thước đo lên tấm: `u` chạy từ mép trái sang phải, `v` chạy từ mép trước ra sau. Cả hai nằm trong khoảng 0 đến 1. Chúng cho biết **đang đứng ở đâu trên tấm**, chưa phải tọa độ 3D.
+
+Ta giữ `x` và `z` theo hai thước đo, rồi chọn độ cao theo công thức dưới đây. `height` là giá trị của thanh PATCH HEIGHT.
+
+$$
+P(u,v)=\bigl(3.1(u-0.5),\ h\sin(\pi u)\cos(\pi v),\ 2.5(v-0.5)\bigr).
+$$
+
+Giữ `v` và dịch một chút theo `u`: mũi tên theo hướng bạn vừa đi là `tangentU`. Làm tương tự cho `v` để có `tangentV`. Hai mũi tên nằm dọc mặt. Lấy tích có hướng của chúng, ta được hướng vuông góc để shader biết mặt đang quay về phía nào.
+
+<InteractiveLab demo="geometry-workshop" mode="patch" />
+
+Đưa độ cao về 0 trước. Sau đó nhìn riêng điểm giữa tấm khi kéo độ cao lên. Dự đoán xem tọa độ `y` hay hướng normal ở điểm ấy sẽ đổi. Canvas chỉ thu nhỏ phép dựng và cách quan sát; OpenGL thật nằm trong ứng dụng C++.
+
+## Bắt tay xây dựng
+
+### 1. Tính một mẫu trên tấm
+
+Mở `parametric_surfaces.hpp`. Ta tính vị trí và hai tangent từ **cùng một** cặp tham số. Hai dòng cuối của giá trị trả về là đạo hàm theo từng hướng: chẳng hạn, dịch `u` không làm đổi `z`, nên thành phần `z` của tangent thứ nhất bằng 0.
+
+```cpp title="include/parametric_surfaces.hpp — vị trí và hai hướng tiếp tuyến"
+inline SurfaceSample samplePatch(double u, double v, double height) {
+    constexpr double pi = std::numbers::pi_v<double>;
+    const double sinU = std::sin(pi * u);
+    const double cosU = std::cos(pi * u);
+    const double sinV = std::sin(pi * v);
+    const double cosV = std::cos(pi * v);
+    return {
+        {3.1 * (u - 0.5), height * sinU * cosV, 2.5 * (v - 0.5)},
+        {3.1, height * pi * cosU * cosV, 0.0},
+        {0.0, -height * pi * sinU * sinV, 2.5},
+    };
+}
+```
+
+Trước khi nhìn cả tấm, thế `u = 0.5, v = 0` vào công thức. Kết quả phải là `(0, height, -1.25)`. Nếu điểm này chạy dọc sàn thay vì nhô lên, hãy kiểm thứ tự `x, y, z` trước khi sửa ánh sáng.
+
+### 2. Đổi hai tangent thành một normal
+
+```cpp title="include/parametric_surfaces.hpp — chọn hướng normal"
+inline Vec3 surfaceNormal(const SurfaceSample& sample) {
+    return unit(cross(sample.tangentV, sample.tangentU));
+}
+```
+
+Ở tấm phẳng, tangent theo `u` hướng dương X và tangent theo `v` hướng dương Z. `Z × X` hướng dương Y, tức hướng lên khỏi sàn. Thứ tự này đi cùng chiều nối tam giác trong scaffold. Hàm `unit` chỉ giữ hướng, để một cạnh dài không tự làm mặt sáng hơn.
+
+### 3. Đưa mẫu vào hàng đỉnh
+
+`appendRow` đã được nối vào lượt dựng mesh. Mỗi lần gọi nó, ta lấy `u` từ số hàng, thay đổi `v` theo cột và lưu một bản ghi cho mỗi điểm:
+
+```cpp title="include/parametric_mesh.hpp — từ hàng tham số đến vertex buffer"
+const double u = static_cast<double>(row) / settings.uSegments;
+for (int column = 0; column <= settings.vSegments; ++column) {
+    const double v = static_cast<double>(column) / settings.vSegments;
+    const SurfaceSample sample = sampleVertex(row, column, u, v);
+    mesh_.vertices.push_back({
+        vertexVector(sample.position),
+        vertexVector(surfaceNormal(sample)),
+        vertexVector(unit(sample.tangentU)),
+        {static_cast<float>(u), static_cast<float>(v)},
+    });
+}
+```
+
+`sampleVertex` gọi `samplePatch` với `settings.patchHeight`. Kéo thanh đó tạo yêu cầu dựng mới; còn kéo nền viewport chỉ đổi camera. Hãy theo luồng gọi `request → advanceMesh → upload → draw` trong scaffold để thấy hàm vừa viết được dùng ở đâu. Chỉ số tam giác có sẵn cho mảnh lưới 8×6; bài sau ta sẽ tự đọc và thay phần nối này.
+
+## Chạy thử và quan sát
+
+Giải nén ZIP của Project 41 vào thư mục mới. Mở terminal tại chỗ có `CMakeLists.txt`, dùng CMake 3.24+, C++20 và driver OpenGL 3.3. Configure một lần, rồi build starter và Bài 1:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_41_starter project_41_checkpoint_1
+.\build\Debug\project_41_starter.exe --seconds 120
+.\build\Debug\project_41_checkpoint_1.exe --seconds 120
+```
+
+Với generator một cấu hình, bỏ thư mục `Debug` khỏi đường dẫn chạy. Trên bản Bài 1, bật N + T. Kéo PATCH HEIGHT từ 0 lên cao hơn và xem mũi tên xanh ngọc nghiêng đi. Dải màu trên mặt còn do UV và ánh sáng bóng; ta không cần đòi mọi pixel của mảnh phẳng có cùng màu. Kéo chuột trái trên nền để orbit, nút phải/giữa để pan, cuộn để zoom.
+
+## Thử tạo lỗi
+
+Trong bản thực hành của bạn, đổi thành `cross(sample.tangentU, sample.tangentV)` nhưng giữ nguyên indices. Dự đoán mũi tên xanh sẽ hướng lên hay xuống khi tấm phẳng. Chạy lại và nhìn vùng sáng; nếu kết quả lệch, đừng sửa đèn để che lỗi hướng. Phục hồi thứ tự cross trước khi sang bài sau.
+
+## Checklist hoàn thành
+
+- Starter chỉ có cửa sổ và lưới sàn; Bài 1 hiện một mặt gồm 63 đỉnh và 96 tam giác.
+- Kéo độ cao làm mesh đổi hình; orbit chỉ đổi góc nhìn.
+- Khi độ cao bằng 0, normal hướng lên. Ở `u = v = 0.5`, độ cao vẫn bằng 0 khi kéo nhưng normal có thể nghiêng.
+
+## Hướng mở rộng
+
+Thử thay `cos(πv)` bằng `sin(πv)`, rồi sửa cả đạo hàm theo `v`. Trước khi chạy, chỉ ra điểm cao nhất chuyển đến đâu. Tiếp theo: [tự nối hai tam giác trong một ô](/projects/geometry-workshop/02-noi-luoi-va-kiem-winding).

@@ -37,7 +37,11 @@ export const courseParts: CoursePart[] = coursePartTitles.map((title) => ({
 }));
 
 // Existing routes remain available, including clearly labelled previous editions.
-export const publishedProjects: readonly PublishedProjectSummary[] = publishedProjectSummaries;
+export const publishedProjects: readonly PublishedProjectSummary[] = projects.flatMap((project) => {
+  if (project.status === "published") return [project];
+  if (project.status === "awaiting-rebuild") return [project.previous];
+  return [];
+});
 
 export const currentProjects = projects.filter(
   (project): project is PublishedProjectSummary => project.status === "published",

@@ -4,10 +4,10 @@ const project = {
   prerequisites: [
     "Project 23 — Velocity Verlet, fixed timestep và energy drift",
     "Project 27 — vòng lặp vét cạn, workload hữu hạn và phép đo có thể tái lập",
-    "Project 41 — thế Lennard–Jones, lực trên một cặp và hệ đơn vị rút gọn",
+    "Thế Lennard–Jones và hệ đơn vị rút gọn được nhắc lại ở bài về cutoff.",
   ],
   summary:
-    "Mở rộng cặp nguyên tử của Project 41 thành một hộp Molecular Dynamics gồm 1.000 hạt chạy hoàn toàn trên CPU. Người học tự xếp hạt lên lattice không chồng lấn, gán vận tốc theo nhiệt độ, quét đúng mọi cặp i<j, cộng lực Lennard–Jones đã làm mượt tại cutoff, phản xạ hạt ở thành hộp và theo dõi năng lượng cùng nhiệt độ qua từng bước Velocity Verlet.",
+    "Dựng hộp Molecular Dynamics gồm 1.000 hạt chạy hoàn toàn trên CPU. Bắt đầu từ cách đặt hạt và gán vận tốc, rồi tính lực Lennard–Jones cho từng cặp i<j, phản xạ hạt ở thành hộp và theo dõi năng lượng cùng nhiệt độ qua từng bước Velocity Verlet.",
   challenge: {
     timebox: "900–1.200 phút",
     mission:
@@ -19,7 +19,7 @@ const project = {
       "Trạng thái mỗi hạt chỉ chứa position, velocity và mass theo world space; màu, bán kính và pixel không được chen vào dữ liệu vật lý.",
       "Tạo đúng N hạt từ seed trên lattice 2D có jitter nhỏ, mọi vị trí nằm trong hộp và không có hai hạt gần như trùng nhau.",
       "Gán vận tốc có thể tái lập, trừ vận tốc tâm khối lượng có trọng số mass rồi rescale để đạt nhiệt độ mục tiêu. Mỗi lần đo dùng T=2K_thermal/(2N-2), với K_thermal tính từ v-vCOM; K trong E=K+U vẫn là động năng toàn phần.",
-      "Dùng thế Lennard–Jones từ Project 41 nhưng chuyển sang force-shifted form để cả U(r) và dU/dr bằng zero tại cutoff; ngoài cutoff, cặp không đóng góp lực hoặc thế năng.",
+      "Từ thế Lennard–Jones gốc, chuyển sang dạng force-shifted để cả U(r) và dU/dr về 0 tại cutoff. Ngoài cutoff, cặp không đóng góp lực hoặc thế năng.",
       "Vòng lặp lực chỉ xét unordered pair bằng điều kiện i<j; mỗi cặp tạo một lực trên i và lực đối trên j từ cùng một kết quả tính.",
       "Với 1.000 hạt, evaluatedPairs phải đúng N(N-1)/2 = 499.500 dù chỉ một phần cặp nằm trong cutoff.",
       "Velocity Verlet dùng kick–drift–kick: nửa bước vận tốc, cập nhật vị trí, phản xạ ở tường, tính lại lực rồi hoàn tất nửa bước vận tốc còn lại.",

@@ -20,7 +20,7 @@ $$
 
 Ngoài cutoff, Ufs và độ dốc đều bằng 0. Hai số trừ tại rc đóng hai vai trò khác nhau: U(rc) đổi mốc năng lượng; hạng tuyến tính còn lại thay đổi lực trong toàn bộ miền bên trong.
 
-Vì lực đã thay đổi, đáy thế mới không còn chính xác tại r₀=2^(1/6)σ. Với ε=σ=1 và rc=2,5σ, độ dốc mới tại r₀ xấp xỉ −0,039: đó là lực đẩy nhỏ. Khoảng cân bằng mới thỏa U′(r)=U′(rc). Ta giữ quy ước dấu của Project 41, nhưng phải tìm lại mốc đổi dấu.
+Vì lực đã thay đổi, đáy thế mới không còn chính xác tại r₀=2^(1/6)σ. Với ε=σ=1 và rc=2,5σ, độ dốc mới tại r₀ xấp xỉ −0,039: đó là lực đẩy nhỏ. Khoảng cân bằng mới thỏa U′(r)=U′(rc). Dấu vẫn đọc theo hướng từ hạt thứ nhất đến hạt thứ hai, nhưng mốc đổi dấu đã dịch.
 
 <InteractiveLab demo="molecular-dynamics-cpu" mode="md-cutoff" />
 
@@ -59,7 +59,7 @@ inline PairSample rawLennardJones(double distance, const MolecularParameters& pa
 }
 ```
 
-Hàm nội bộ này dùng khoảng cách đã được kiểm tra ở hàm bao ngoài. `ratio6` và `ratio12` giống Project 41; `potentialSlope` vẫn là dU/dr. Thứ tự bốn trường trả về tương ứng với PairSample ngay phía trên.
+Hàm nội bộ này dùng khoảng cách đã được kiểm tra ở hàm bao ngoài. `ratio6` và `ratio12` là hai lũy thừa của σ/r trong [thế Lennard–Jones](/glossary#lennard-jones-potential); `potentialSlope` là dU/dr. Thứ tự bốn trường trả về tương ứng với PairSample ngay phía trên.
 
 
 ### Bước 3 — Kiểm đầu vào và tạo mẫu đã dịch

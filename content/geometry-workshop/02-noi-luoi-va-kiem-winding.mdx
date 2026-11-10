@@ -1,0 +1,98 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nối lưới và kiểm chiều tam giác
+
+## Ta cần giải quyết điều gì?
+
+Bài trước ta có tấm cong nhìn được, nhưng đoạn nối tam giác còn nằm trong scaffold. Bây giờ thử tăng độ phân giải. Nếu chỉ thêm vị trí mà không đổi cách đếm cột, vài tam giác sẽ nối xuyên tấm hoặc dùng ID không tồn tại. Ta sẽ làm phần nối trước, rồi mới mở thanh U / V SEGMENTS.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chia chiều `u` thành 8 đoạn thì cần 9 mẫu, kể cả hai đầu. Tương tự, 6 đoạn theo `v` cần 7 mẫu. Một hàng chứa 7 đỉnh; muốn xuống hàng tiếp theo, cộng 7, không phải 6. Các ID đi theo thứ tự:
+
+```text
+hàng trước: a --- b
+            |   / |
+hàng sau:   c --- d
+```
+
+Với `m` đoạn theo `u` và `n` đoạn theo `v`, có $(m+1)(n+1)$ đỉnh và $2mn$ tam giác. Mỗi tam giác chứa ba **chỉ số**, không phải ba bản sao của vị trí.
+
+<InteractiveLab demo="geometry-workshop" mode="topology" />
+
+Chọn một ô và lần theo hai bộ ba chỉ số. Trước khi tăng số cột, dự đoán ID của đỉnh ngay dưới `a` thay đổi thế nào.
+
+## Bắt tay xây dựng
+
+### 1. Tìm bốn ID sau khi cả hai hàng đã có
+
+Hàng đầu tiên chỉ thêm vertex. Từ hàng thứ hai, `appendRow` đã có hàng trên và hàng dưới để nối. Dùng độ rộng **tính theo đỉnh**:
+
+```cpp title="include/parametric_mesh.hpp — đọc bốn góc của một ô"
+const auto columns = static_cast<std::uint32_t>(settings.vSegments + 1);
+const auto previousRow = static_cast<std::uint32_t>(row - 1) * columns;
+for (std::uint32_t column = 0; column + 1 < columns; ++column) {
+    const std::uint32_t a = previousRow + column;
+    const std::uint32_t b = a + 1;
+    const std::uint32_t c = a + columns;
+    const std::uint32_t d = c + 1;
+    appendGridCell(mesh_.indices, a, b, c, d);
+}
+```
+
+Điều kiện `column + 1 < columns` để lại chỗ cho `b` và `d`. Nếu dùng đến cột cuối, bạn sẽ nối sang hàng khác thay vì tạo thêm một ô.
+
+### 2. Nối hai tam giác cùng chiều
+
+```cpp title="include/parametric_mesh.hpp — một ô, hai bộ ba"
+inline void appendGridCell(std::vector<std::uint32_t>& indices, std::uint32_t a, std::uint32_t b, std::uint32_t c, std::uint32_t d) {
+    // Go along v, then u. Both triangles agree with cross(tangentV, tangentU).
+    indices.push_back(a);
+    indices.push_back(b);
+    indices.push_back(c);
+
+    indices.push_back(b);
+    indices.push_back(d);
+    indices.push_back(c);
+}
+```
+
+Từ `a` đến `b` là hướng `v`; từ `a` đến `c` là hướng `u`. Vì vậy mặt tam giác đầu có hướng phù hợp với normal của Bài 1. Tam giác thứ hai nối qua cạnh `b–c` nhưng vẫn có cùng chiều mặt. Kéo độ cao không thay đổi quy tắc ID.
+
+### 3. Cho phép đổi số đoạn
+
+Ở `applyParameter`, thanh phân giải đặt cùng số đoạn cho cả hai trục. Cấu hình được kiểm trước khi cấp phát; bản Bài 2 vẫn giới hạn 64 đoạn trên mỗi trục để thử sai nhanh.
+
+```cpp title="include/workshop_parameters.hpp — giá trị thanh kéo là số đoạn"
+case ParameterId::resolution:
+settings.uSegments = static_cast<int>(value);
+settings.vSegments = settings.uSegments;
+break;
+```
+
+Sau khi tạo lại các hàng và indices, app gửi cả hai buffer sang OpenGL. W chỉ vẽ thêm đường cạnh từ buffer đang có; không tạo lưới mới.
+
+## Chạy thử và quan sát
+
+Nếu đã configure như Bài 1, build target mới. Dùng 16 đoạn mỗi chiều để có số dễ tính:
+
+```powershell
+cmake --build build --config Debug --target project_41_checkpoint_2
+.\build\Debug\project_41_checkpoint_2.exe --resolution 16 --wireframe --seconds 120
+```
+
+Đếm trên bảng: 289 đỉnh và 512 tam giác. Giảm phân giải rồi quan sát đường chéo của vài ô. Hình có thể trông thô hơn, nhưng đích hình học mà hàm `samplePatch` mô tả không đổi.
+
+## Thử tạo lỗi
+
+Trong `appendGridCell`, đổi ba chỉ số đầu thành `a, c, b`. Ở checkpoint này renderer bỏ mặt quay lưng, nên khi nhìn từ trên có thể thấy một nửa mỗi ô biến mất. Xoay xuống dưới và tìm những tam giác vừa mất. Sau đó khôi phục để thấy đây là lỗi chiều mặt, không phải thiếu điểm lấy mẫu.
+
+## Checklist hoàn thành
+
+- Tính đúng số đỉnh và tam giác cho 8×6, 16×16 và một mức khác.
+- Cạnh chéo chia đúng từng ô, không có đường nối bất thường sang hàng kế.
+- Đổi độ phân giải làm đổi số liệu; bật W hoặc xoay camera không đổi chúng.
+
+## Hướng mở rộng
+
+Viết ra bằng tay sáu ID cho ô đầu của lưới 2×2 đoạn. Nếu mép cuối cần gặp lại mép đầu, hãy thử đoán nên nối thêm một hàng hay dùng lại ID. Bài sau sẽ xử lý đúng câu hỏi đó với [torus](/projects/geometry-workshop/03-khep-hai-vong-torus).

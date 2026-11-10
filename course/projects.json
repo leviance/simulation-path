@@ -302,10 +302,12 @@
   },
   {
     "id": "41",
-    "slug": "lennard-jones-pair",
-    "sourceDirectory": "project-41-lennard-jones-pair",
-    "checkpointCount": 7,
-    "demoId": "lennard-jones-pair"
+    "slug": "geometry-workshop",
+    "sourceDirectory": "project-41-geometry-workshop",
+    "checkpointCount": 9,
+    "demoId": "geometry-workshop",
+    "contentRevision": 2,
+    "shaderRuntimePerTarget": true
   },
   {
     "id": "42",

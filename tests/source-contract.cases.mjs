@@ -30,7 +30,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
       "examples",
       projectDirectoryBySlug.get(lesson.project),
     );
-    // Project 01–32, Project 40 xây lại và Project 56+ dùng đoạn liên tiếp của checkpoint thật.
+    // Các project đã theo hợp đồng mới dùng đoạn liên tiếp từ đúng checkpoint.
     const projectNumber = Number(
       projectDirectoryBySlug.get(lesson.project).match(/^project-(\d+)-/)[1],
     );
@@ -58,7 +58,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
         : path.join(checkpointDirectory, relative);
       const source = await readFile(sourcePath, "utf8");
       assert.ok(
-        projectNumber <= 32 || projectNumber === 40 || projectNumber >= 56
+        projectNumber <= 32 || projectNumber === 40 || projectNumber === 41 || projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
         `${lesson.file} drifts from checkpoint ${lessonNumber}: ${title}`,
@@ -78,16 +78,31 @@ test("C++ validation remains active in both Debug and Release", async () => {
       /#include\s*<cassert>|\bassert\s*\(/,
       `${directory} disables validation under NDEBUG`,
     );
-    assert.match(
-      testsSource,
-      /void check\(bool condition, std::string_view [A-Za-z_]\w*\)/,
-      `${directory} has no explicit test runner`,
-    );
-    assert.match(
-      testsSource,
-      /if \(failures != 0\)[\s\S]*?return EXIT_FAILURE;/,
-      `${directory} does not report failure to CTest`,
-    );
+    if (directory === "project-41-geometry-workshop") {
+      const files = await walkFiles(path.join(workspace, "examples", directory, "tests"));
+      const testUnits = await Promise.all(files.map((file) => readFile(file, "utf8")));
+      const source = testUnits.join("\n");
+      assert.doesNotMatch(source, /#include\s*<cassert>|\bassert\s*\(/);
+      assert.match(
+        source,
+        /void require\(bool passed, const char\* message\)\s*\{\s*if \(!passed\)\s*throw std::runtime_error\(message\)/,
+      );
+      assert.match(
+        testsSource,
+        /catch \(const std::exception& error\) \{[\s\S]*?return EXIT_FAILURE;/,
+      );
+    } else {
+      assert.match(
+        testsSource,
+        /void check\(bool condition, std::string_view [A-Za-z_]\w*\)/,
+        `${directory} has no explicit test runner`,
+      );
+      assert.match(
+        testsSource,
+        /if \(failures != 0\)[\s\S]*?return EXIT_FAILURE;/,
+        `${directory} does not report failure to CTest`,
+      );
+    }
     assert.match(
       testsSource,
       /return EXIT_SUCCESS;/,
@@ -542,76 +557,6 @@ test("Project 38 introduces chamber layers at the documented checkpoints", async
       symbol,
     );
     assert.match(await readFile(path.join(projectDirectory, current, file), "utf8"), symbol);
-  }
-});
-
-test("Project 41 introduces potential, force and integration in separate checkpoints", async () => {
-  const projectDirectory = path.join(workspace, "examples", "project-41-lennard-jones-pair");
-  const introductions = [
-    {
-      checkpoint: 1,
-      file: "include/lennard_jones.hpp",
-      symbols: [/struct Atom/, /makeSymmetricPair\(/, /centerOfMass\(/],
-    },
-    {
-      checkpoint: 2,
-      file: "include/lennard_jones.hpp",
-      symbols: [/struct LennardJonesParameters/, /samplePotential\(/, /equilibriumDistance\(/],
-    },
-    {
-      checkpoint: 3,
-      file: "include/lennard_jones.hpp",
-      symbols: [/struct PairInteraction/, /evaluatePair\(/, /potentialSlope/],
-    },
-    {
-      checkpoint: 4,
-      file: "include/lennard_jones.hpp",
-      symbols: [/struct PairForces/, /linearMomentum\(/, /centerOfMassVelocity\(/],
-    },
-    {
-      checkpoint: 5,
-      file: "include/lennard_jones.hpp",
-      symbols: [/velocityVerletStep\(/, /planFixedSteps\(/, /struct FixedStepPlan/],
-    },
-    {
-      checkpoint: 6,
-      file: "include/lennard_jones.hpp",
-      symbols: [/struct SystemMetrics/, /measureSystem\(/, /runSimulation\(/],
-    },
-    {
-      checkpoint: 7,
-      file: "include/lennard_jones.hpp",
-      symbols: [/struct ValidationReport/, /validateModel\(/],
-    },
-  ];
-
-  for (const introduction of introductions) {
-    const checkpoint = String(introduction.checkpoint).padStart(2, "0");
-    const previousDirectory =
-      introduction.checkpoint === 1
-        ? "starter"
-        : `checkpoints/${String(introduction.checkpoint - 1).padStart(2, "0")}`;
-    const currentDirectory = `checkpoints/${checkpoint}`;
-    const previous = await readFile(
-      path.join(projectDirectory, previousDirectory, introduction.file),
-      "utf8",
-    );
-    const current = await readFile(
-      path.join(projectDirectory, currentDirectory, introduction.file),
-      "utf8",
-    );
-    for (const symbol of introduction.symbols) {
-      assert.doesNotMatch(
-        previous,
-        symbol,
-        `${introduction.file} teaches ${symbol} before checkpoint ${checkpoint}`,
-      );
-      assert.match(
-        current,
-        symbol,
-        `${introduction.file} does not add ${symbol} at checkpoint ${checkpoint}`,
-      );
-    }
   }
 });
 

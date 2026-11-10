@@ -2,12 +2,12 @@ import type { PublishedProjectEditorial } from "../../types";
 
 const project = {
   summary:
-    "Ghép phần OpenGL compute ở Project 37–40 với mô hình Molecular Dynamics ở Project 41–44. Bạn sẽ đi từ 64 hạt để kiểm chứng tới các preset 100.000–5 triệu hạt, giữ dữ liệu trên GPU, chia nhỏ công việc và từ chối chạy khi vượt giới hạn. Mục tiêu lớn không đồng nghĩa với cam kết realtime trên mọi máy.",
+    "Ghép phần OpenGL compute ở Project 37–40 với mô hình Molecular Dynamics ở Project 42–44. Bạn sẽ đi từ 64 hạt để kiểm chứng tới các preset 100.000–5 triệu hạt, giữ dữ liệu trên GPU, chia nhỏ công việc và từ chối chạy khi vượt giới hạn. Mục tiêu lớn không đồng nghĩa với cam kết realtime trên mọi máy.",
   duration: "22–27 giờ",
   prerequisites: [
     "Project 38 — OpenGL 4.3 compute, SSBO và vẽ hạt trực tiếp từ GPU",
     "Project 39–40 — reduction, cell grid và kiểm chứng CPU/GPU",
-    "Project 41–44 — force-shifted Lennard–Jones, hộp tuần hoàn, Velocity Verlet và skin",
+    "Project 42–44 — force-shifted Lennard–Jones, hộp tuần hoàn, Velocity Verlet và skin",
   ],
   objectives: [
     "Dựng sản phẩm có hình trước khi chuyển từng phần tính toán sang compute shader.",

@@ -21,6 +21,7 @@ function DownloadCard({
       <span>P{project.id}</span>
       <div>
         {previous && <span className="revision-badge">BẢN CŨ</span>}
+        {project.acceptanceNote && <span className="revision-badge">CHỜ NGHIỆM THU</span>}
         <h2>{project.title}</h2>
         <p>{project.summary}</p>
         {previous && (

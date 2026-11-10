@@ -69,12 +69,12 @@ const learning = {
         {
           title: "Tính mẫu Lennard–Jones gốc",
           explanation:
-            "Giữ cùng `ratio6`, `ratio12` và `potentialSlope` như Project 41 để công thức lực không đổi dấu khi chuyển sang nhiều hạt.",
+            "Tính `ratio6` và `ratio12` từ σ/r. `potentialSlope` là dU/dr; giữ đúng dấu trước khi cộng lực cho hai đầu của cặp.",
         },
         {
           title: "Trừ giá trị và tiếp tuyến tại cutoff",
           explanation:
-            "`Ufs(r)=U(r)-U(rc)-(r-rc)U'(rc)` và `Ufs'(r)=U'(r)-U'(rc)` cùng về 0 tại rc. Phép trừ độ dốc cũng dịch vị trí cân bằng, nên không dùng nguyên mốc r0 của Project 41 để kết luận hướng lực.",
+            "`Ufs(r)=U(r)-U(rc)-(r-rc)U'(rc)` và `Ufs'(r)=U'(r)-U'(rc)` cùng về 0 tại rc. Trừ độ dốc làm dịch vị trí cân bằng, nên không thể dùng mốc r₀ của thế gốc để kết luận hướng lực.",
         },
         {
           title: "Phân biệt cắt giá trị với cắt workload",

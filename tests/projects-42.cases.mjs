@@ -4,15 +4,13 @@ import path from "node:path";
 import test from "node:test";
 import { workspace, authoredLessons, render } from "./site-support.mjs";
 
-test("Project 41 and 42 lesson routes render independently within the response budget", async () => {
-  const projects = new Set(["lennard-jones-pair", "molecular-dynamics-cpu"]);
-  for (const project of projects) {
-    const response = await render(`/projects/${project}`);
-    assert.equal(response.status, 200);
-    assert.match(await response.text(), /THỬ SỨC TRƯỚC KHI XEM LỜI GIẢI/i);
-  }
-  const lessons = (await authoredLessons()).filter((lesson) => projects.has(lesson.project));
-  assert.equal(lessons.length, 15);
+test("Project 42 lesson routes render independently within the response budget", async () => {
+  const project = "molecular-dynamics-cpu";
+  const response = await render(`/projects/${project}`);
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /THỬ SỨC TRƯỚC KHI XEM LỜI GIẢI/i);
+  const lessons = (await authoredLessons()).filter((lesson) => lesson.project === project);
+  assert.equal(lessons.length, 8);
   for (const lesson of lessons) {
     const response = await render(lesson.route);
     assert.equal(response.status, 200, lesson.route);

@@ -1,0 +1,89 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khép hai vòng để tạo torus
+
+## Ta cần giải quyết điều gì?
+
+Mảnh mặt ở Bài 2 có bốn mép hở. Ta sẽ giữ cách nối lưới ấy nhưng thay vị trí của từng mẫu để tạo một chiếc vòng có tiết diện tròn. Hai hàng đầu và cuối phải gặp nhau; nếu positions trùng mà normal hoặc UV không khớp quy ước, bạn vẫn nhìn thấy đường gãy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy đặt một vòng nhỏ bán kính `tubeRadius` lên đường tròn lớn bán kính `majorRadius`. Góc `u` đi quanh vòng lớn; góc `v` đi quanh tiết diện. Điểm ngoài nhất có khoảng cách đến trục Y bằng `majorRadius + tubeRadius`; điểm trong nhất dùng dấu trừ. Chỉ riêng hai mốc đó đã giúp bắt lỗi đổi nhầm hai góc.
+
+$$
+r(u,v)=R+a\cos v,\qquad P(u,v)=(r\cos u,\ a\sin v,\ r\sin u).
+$$
+
+Ở đây `u, v` là góc, khác với hai số 0–1 trên lưới. Đừng đổi nghĩa của UV trong vertex buffer; chỉ đổi giá trị truyền vào evaluator.
+
+<InteractiveLab demo="geometry-workshop" mode="torus" />
+
+Chọn một điểm trên mép vòng ngoài rồi tăng bán kính ống. Dự đoán vị trí mốc ở phía trong đi xa hay gần trục hơn. Bật UV để thấy hai bản ghi có thể trùng vị trí mà vẫn giữ tọa độ texture khác nhau.
+
+## Bắt tay xây dựng
+
+### 1. Thay hàm đặt điểm, giữ nguyên cách nối ô
+
+```cpp title="include/parametric_surfaces.hpp — hai vòng tròn tạo một điểm"
+inline SurfaceSample sampleTorus(double u, double v, double majorRadius, double tubeRadius) {
+    const double cosU = std::cos(u);
+    const double sinU = std::sin(u);
+    const double cosV = std::cos(v);
+    const double sinV = std::sin(v);
+    const double ringRadius = majorRadius + tubeRadius * cosV;
+    const double radialDerivative = -tubeRadius * sinV;
+
+    return {
+        {ringRadius * cosU, tubeRadius * sinV, ringRadius * sinU},
+        {-ringRadius * sinU, 0.0, ringRadius * cosU},
+        {radialDerivative * cosU, tubeRadius * cosV, radialDerivative * sinU},
+    };
+}
+```
+
+Khi chỉ đổi `u`, khoảng cách tới trục Y giữ nguyên. Khi chỉ đổi `v`, cả độ cao lẫn khoảng cách tới trục đổi; `radialDerivative` là phần thay đổi thứ hai ấy. `surfaceNormal` ở Bài 1 vẫn dùng được vì hướng các tam giác không đổi.
+
+### 2. Khép đầu cuối mà vẫn giữ hai UV
+
+```cpp title="include/parametric_mesh.hpp — chọn góc tại đường nối torus"
+double angleV = fullTurn * v;
+if (column == settings.vSegments)
+    angleV = 0.0;
+const bool lastRow = row == settings.uSegments;
+double angleU = fullTurn * u;
+if (lastRow)
+    angleU = 0.0;
+
+if (settings.kind == SurfaceKind::torus) {
+    return sampleTorus(angleU, angleV, settings.radius, settings.thickness);
+}
+```
+
+Ở hàng cuối, evaluator dùng lại góc 0 để trùng khít vị trí và normal, thay vì dựa vào sai số của `sin(2π)`. Nhưng `appendRow` vẫn lưu UV bằng 1. Nếu vẽ một ảnh có sọc qua mép, texture có thể kết thúc ở 1 mà không kéo ngược toàn bộ sọc về 0 trong ô cuối.
+
+### 3. Đọc kết quả bằng hai chế độ xem
+
+Giữ màu bề mặt khi muốn kiểm ánh sáng. Bật UV để quan sát chỗ số 1 gặp số 0, rồi bật Seam để chỉ đúng hàng/cột nối. Đường màu xuất hiện trong UV debug có thể là thông tin đúng; một vết nứt hình học hoặc normal đổi đột ngột trong chế độ sạch mới là lỗi cần xử lý.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --target project_41_checkpoint_3
+.\build\Debug\project_41_checkpoint_3.exe --preset torus --seconds 120
+```
+
+Ở mặc định `R = 1.6`, `a = 0.42`, mốc ngoài và trong theo trục X là 2,02 và 1,18. Thử đổi Tube Radius; khoan đổi camera, để dễ thấy lỗ giữa rộng/hẹp ra sao. Sau đó xoay một vòng với UV tắt để tìm gãy sáng ở đường nối.
+
+## Thử tạo lỗi
+
+Trong bản thực hành, bỏ việc gán lại `angleU` ở hàng cuối rồi thử **cố ý** thay `fullTurn * u` bằng `(fullTurn - 0.15) * u`. Dự đoán mép nào hở và xem bằng Seam/Wire. Chỉ bỏ gán góc 0 mà vẫn dùng đúng `fullTurn` có thể tạo sai số quá nhỏ để nhìn thấy; đừng dùng ảnh để kết luận positions khớp từng số.
+
+## Checklist hoàn thành
+
+- Nhìn được lỗ giữa và bề mặt có ánh sáng, không phải một vòng dây.
+- Biết phân biệt hai góc của evaluator với UV 0–1 trong buffer.
+- Hai đầu của mỗi góc cho positions/normals trùng; bộ kiểm mốc số dùng điểm ngoài, điểm trong và điểm cao nhất.
+
+## Hướng mở rộng
+
+Thử làm hai vòng tròn có bán kính khác nhau theo Y và theo hướng xuyên tâm để tạo tiết diện elip. Bài sau sẽ giữ một mép hở và [nối mép còn lại theo chiều đảo](/projects/geometry-workshop/04-dao-mep-mobius).

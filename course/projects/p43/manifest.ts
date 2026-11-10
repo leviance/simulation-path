@@ -6,7 +6,6 @@ const project = {
   duration: "14–18 giờ",
   prerequisites: [
     "Project 42 — hệ nhiều hạt, force-shifted Lennard–Jones và Velocity Verlet trên CPU",
-    "Project 41 — dấu của lực suy ra từ thế năng và reduced units",
     "Project 05 — đổi qua lại giữa world space và screen space",
   ],
   objectives: [

@@ -35,6 +35,7 @@ export interface PublishedProjectSummary extends ProjectSummaryBase {
   lessonCount: number;
   download: string;
   demoId: DemoId;
+  acceptanceNote?: string;
 }
 
 export interface ComingSoonProjectSummary extends ProjectSummaryBase {
@@ -44,6 +45,10 @@ export interface ComingSoonProjectSummary extends ProjectSummaryBase {
 export interface ProjectRevision {
   previousTitle: string;
   previousPart?: string;
+  replacement?: {
+    slug: string;
+    acceptanceNote: string;
+  };
   summary: string;
   outcome: string;
   question: string;

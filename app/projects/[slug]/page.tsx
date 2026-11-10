@@ -37,6 +37,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
   const project = await getPublishedProject(slug);
   if (!project) notFound();
   const revision = getProjectRevision(project.id);
+  let status = "Đã mở";
+  if (revision) status = "Bản cũ · đã đổi đề bài";
+  else if (project.acceptanceNote) status = "Có bài học · chờ nghiệm thu";
 
   return (
     <main className="course-layout shell">
@@ -48,7 +51,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
           <b>Dự án {project.id}</b>
         </nav>
 
-        <ProjectRevisionNotice projectId={project.id} />
+        <ProjectRevisionNotice project={project} />
 
         <header className="project-hero">
           <span className="project-kicker">
@@ -67,7 +70,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
             </span>
             <span>
               <small>TRẠNG THÁI</small>
-              {revision ? "Bản cũ · đã đổi đề bài" : "Đã mở"}
+              {status}
             </span>
           </div>
         </header>

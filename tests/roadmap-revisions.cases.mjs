@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { roadmapSeed } from "../course/roadmap.ts";
-import { roadmapRevisions } from "../course/roadmap-revisions.ts";
+import { rebuildRevisions } from "../course/roadmap-revisions.ts";
 import { render, projectCatalog } from "./site-support.mjs";
 
 test("updated roadmap and homepage distinguish planned products from available material", async () => {
@@ -9,15 +9,15 @@ test("updated roadmap and homepage distinguish planned products from available m
   assert.equal((roadmap.match(/id="project-\d{2}"/g) ?? []).length, 78);
   assert.equal(
     (roadmap.match(/class="roadmap-item is-revised"/g) ?? []).length,
-    Object.keys(roadmapRevisions).length,
+    Object.keys(rebuildRevisions).length,
   );
   assert.equal(
     (roadmap.match(/class="roadmap-item is-live"/g) ?? []).length,
-    projectCatalog.length - Object.keys(roadmapRevisions).length,
+    projectCatalog.length - Object.keys(rebuildRevisions).length,
   );
   assert.ok(roadmap.includes("TOÁN CHO ĐỒ HỌA 3D, GIẢ LẬP VÀ HIỆU NĂNG"));
   assert.ok(!roadmap.includes("MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT"));
-  for (const id of Object.keys(roadmapRevisions)) {
+  for (const id of Object.keys(rebuildRevisions)) {
     assert.ok(roadmap.includes(`href="/roadmap/${id}"`));
     assert.ok(roadmap.includes(roadmapSeed[Number(id) - 1].title));
   }
@@ -29,7 +29,7 @@ test("updated roadmap and homepage distinguish planned products from available m
 });
 
 test("every revised product has an honest scope page and preserved old overview and lessons", async () => {
-  for (const id of Object.keys(roadmapRevisions)) {
+  for (const id of Object.keys(rebuildRevisions)) {
     const response = await render(`/roadmap/${id}`);
     assert.equal(response.status, 200);
     const html = await response.text();
@@ -46,7 +46,7 @@ test("every revised product has an honest scope page and preserved old overview 
     assert.match(previousHtml, /Nội dung thuộc bản cũ/);
     assert.match(previousHtml, /Tiến độ đã học vẫn được giữ/);
     assert.match(previousHtml, /GÓI MÃ NGUỒN BẢN CŨ/);
-    assert.ok(previousHtml.includes(roadmapRevisions[id].previousTitle));
+    assert.ok(previousHtml.includes(rebuildRevisions[id].previousTitle));
     const lessonLink = [...previousHtml.matchAll(/href="([^"]+)"/g)]
       .map(([, href]) => href)
       .find((href) => href.startsWith(`/projects/${source.slug}/`));
@@ -65,7 +65,7 @@ test("downloads separate previous ZIPs without deleting or relabelling them as n
   assert.ok(split > 0);
   const current = html.slice(0, split);
   const previous = html.slice(split);
-  for (const id of Object.keys(roadmapRevisions)) {
+  for (const id of Object.keys(rebuildRevisions)) {
     const source = projectCatalog.find((project) => project.id === id);
     const download = `/downloads/${source.sourceDirectory}.zip`;
     assert.ok(!current.includes(`href="${download}"`));

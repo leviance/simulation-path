@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import projectCatalog from "../../course/projects.json";
-import { roadmapRevisions } from "../../course/roadmap-revisions";
+import { rebuildRevisions } from "../../course/roadmap-revisions";
 
 function captureBrowserErrors(page: Page) {
   const errors: string[] = [];
@@ -42,7 +42,7 @@ test("homepage keeps a bounded set of illustrated projects", async ({ page }) =>
 
   await expect(
     page.getByRole("heading", {
-      name: `${projectCatalog.length - Object.keys(roadmapRevisions).length} dự án có hướng dẫn hiện tại`,
+      name: `${projectCatalog.length - Object.keys(rebuildRevisions).length} dự án có hướng dẫn hiện tại`,
       exact: true,
     }),
   ).toBeVisible();

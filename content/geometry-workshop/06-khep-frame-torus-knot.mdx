@@ -1,0 +1,109 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khép ống quanh một nút thắt
+
+## Ta cần giải quyết điều gì?
+
+Vỏ ốc mở ở hai đầu nên không cần hai tiết diện đầu và cuối nhìn cùng hướng. Với nút thắt, đặt hai tâm trùng nhau mới chỉ xong một nửa việc. Nếu tiết diện cuối còn xoay lệch một góc, ép nó trùng tiết diện đầu ngay ở hàng cuối sẽ làm lưới vặn gấp ở chỗ nối.
+
+Bài này giữ cách quét của vỏ ốc, đổi đường đi và chia góc lệch ra cả vòng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy lần theo một điểm trên chiếc torus tưởng tượng. Khi `t` đi từ 0 đến `2π`, điểm đi hai vòng quanh trục Y, đồng thời đi ba vòng quanh tiết diện của torus. Dùng góc `2t` và `3t` trong cùng công thức, ta thu được một đường cong khép kín. Có thể đổi ba thành năm. Hai và ba (hoặc hai và năm) không có ước chung lớn hơn 1, nên đường không quay lại điểm đầu sớm rồi đi lặp lại đúng cùng một đường.
+
+Đó mới là **đường tâm**. Bán kính nhỏ dùng để tính đường tâm không phải bán kính ống. Ta đặt tiết diện elip theo frame của Bài 5 trên đường tâm ấy. Khi đi hết vòng, tangent đã về hướng cũ nhưng normal của frame có thể còn lệch. Lấy góc có dấu cần quay từ normal cuối về normal đầu. Nếu đã đi được một phần tư chiều dài đường, bù một phần tư góc ấy.
+
+<InteractiveLab demo="geometry-workshop" mode="knot" />
+
+Bật lát cắt và xem hướng ở hai đầu. Tắt bù đường nối, thử xoay đến chỗ hai mép gặp nhau. Sau đó bật lại và so chỗ nối ở nút ba múi với nút năm múi.
+
+## Bắt tay xây dựng
+
+### 1. Thay đường tâm, không thay cách lấy mẫu tiết diện
+
+Thêm `sampleKnotCurve` cạnh `sampleShellCurve`. `minorAngle` làm điểm lên xuống và đổi khoảng cách tới trục Y; `majorAngle` đưa nó đi quanh trục đó.
+
+```cpp title="include/sweep_frames.hpp — đường tâm torus knot"
+inline CurveSample sampleKnotCurve(double s, const SurfaceSettings& settings) {
+    const double t = fullTurn * s;
+    const double majorAngle = 2.0 * t;
+    const double minorAngle = settings.knotLobes * t;
+    const double minorRadius = 0.37 * settings.radius;
+    const double radial = settings.radius + minorRadius * std::cos(minorAngle);
+    const double radialRate = -settings.knotLobes * minorRadius * std::sin(minorAngle);
+    const double cosine = std::cos(majorAngle);
+    const double sine = std::sin(majorAngle);
+    const Vec3 derivativeT = {
+        radialRate * cosine - 2.0 * radial * sine,
+        settings.knotLobes * minorRadius * std::cos(minorAngle),
+        radialRate * sine + 2.0 * radial * cosine,
+    };
+
+    return {
+        {radial * cosine, minorRadius * std::sin(minorAngle), radial * sine},
+        derivativeT * fullTurn,
+        settings.thickness,
+    };
+}
+```
+
+`derivativeT` lấy theo góc `t`, nên phải nhân `fullTurn` để lấy đạo hàm theo `s`. Bán kính tiết diện của ống ở đây là `settings.thickness`, không tăng dần như vỏ ốc. Tại `s = 0`, tâm ở `(1.37 * radius, 0, 0)`. Dùng mốc đó để kiểm trục trước khi nhìn cả lưới.
+
+### 2. Đo góc lệch rồi bù từ từ
+
+Hai normal của frame cuối và đầu nằm trong cùng một mặt phẳng. Dot cho cosine; cross chiếu lên tangent cho sine có dấu. Vì vậy `signedSectionAngle` dùng được cả khi cần xoay ngược lại:
+
+```cpp title="include/sweep_frames.hpp — đo góc quanh tangent"
+inline double signedSectionAngle(Vec3 from, Vec3 to, Vec3 tangent) {
+    return std::atan2(dot(tangent, cross(from, to)), dot(from, to));
+}
+```
+
+Trong `buildSweepFrames`, `lengthFromStart` là tổng khoảng cách giữa các tâm đã lấy mẫu. Dùng tỉ lệ độ dài này thay vì số thứ tự hàng: hai đoạn có cùng số hàng chưa chắc dài bằng nhau.
+
+```cpp title="include/sweep_frames.hpp — chia góc xoay ra toàn bộ chiều dài"
+double correction = 0.0;
+if (closed) {
+    correction = signedSectionAngle(frames.back().normal, frames.front().normal, frames.front().tangent);
+}
+for (SweepFrame& frame : frames) {
+    // Spread the residual seam rotation along the arc, rather than twisting just the last ring.
+    const double angle = (correction + fullTurn * settings.sectionTurns) * frame.lengthFromStart / totalLength;
+    frame.normal = projectOntoSection(rotateAboutAxis(frame.normal, frame.tangent, angle), frame.tangent);
+    frame.binormal = cross(frame.tangent, frame.normal);
+}
+if (closed) {
+    frames.back() = frames.front();
+    frames.back().lengthFromStart = totalLength;
+}
+```
+
+`sectionTurns` là độ xoắn bạn chủ động thêm. Với knot, nó phải là số nguyên để sau khi bù, hai đầu vẫn cùng hướng. Ta chép frame đầu vào frame cuối để không giữ sai số do lượng giác, nhưng chỉ **sau khi** đã bù dần. Chỉ chép mà không bù sẽ dồn phần lệch vào ô cuối.
+
+### 3. Tính tangent qua đường nối
+
+Ở đầu và cuối của knot, dùng cùng hai hàng lân cận: hàng ngay trước bản sao cuối và hàng 1. Với cùng `v`, hai bản ghi đường nối phải nhận cùng sai phân theo `s`. UV vẫn ghi `u = 0` và `u = 1` riêng; trùng vị trí không có nghĩa là trùng toàn bộ bản ghi.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --target project_41_checkpoint_6
+.\build\Debug\project_41_checkpoint_6.exe --preset knot --uv --seams --seconds 120
+```
+
+Dùng K hoặc nút đổi Lobes để chuyển ba ↔ năm. Xoay góc nhìn để nhận ra ống chạy qua trước/sau, không phải những đường cong chỉ nằm trên một mặt phẳng. Thử chỉnh Section Twist một vòng. Tắt UV để kiểm ánh sáng ở chỗ nối; chỗ chuyển màu UV có thể còn đó, nhưng không nên có một nếp gãy hình học chỉ vì đi hết một vòng.
+
+## Thử tạo lỗi
+
+Tạm bỏ phép gán vào `correction`, vẫn giữ bước chép frame đầu sang cuối. Với preset mà góc lệch khác 0, vùng cuối sẽ phải xoay bù trong đúng một hàng. Bật wireframe và nhìn các cạnh nối hai vòng cuối. So với bản đúng khi đổi resolution: thêm hàng không giải quyết được việc dồn góc xoay vào một chỗ.
+
+## Checklist hoàn thành
+
+- Preset ba và năm múi cho hai đường tâm khác nhau. Chỉnh Tube Radius đổi tiết diện chứ không dời đường tâm.
+- Vị trí và normal tại đường nối kín khớp theo cùng cột; UV hai phía vẫn khác.
+- Giải thích được vì sao phải bù góc trước khi chép frame cuối, và vì sao đường nối trông kín không chứng minh mesh đã hàn chỉ số hay không tự giao.
+
+## Hướng mở rộng
+
+Thử so bù theo chiều dài cung với bù theo số hàng. Chỗ nào xoắn dày hơn khi hai đoạn đường tâm dài khác nhau? Sau khi có đủ hình, ta sẽ [cho người dùng kéo tham số mà không phải chờ dựng lại toàn bộ lưới mỗi lần chuột nhúc nhích](/projects/geometry-workshop/07-preview-va-mesh-gan-nhat).

@@ -198,7 +198,9 @@ function validateLab(project, lab) {
 }
 
 const roadmapModule = await evaluateTypeScript(path.join("course", "roadmap.ts"));
-const { roadmapRevisions } = await evaluateTypeScript(path.join("course", "roadmap-revisions.ts"));
+const { roadmapRevisions, rebuildRevisions } = await evaluateTypeScript(
+  path.join("course", "roadmap-revisions.ts"),
+);
 assertGlossaryModules(
   readdirSync(path.join(workspace, "lib"))
     .filter((file) => /^glossary(?:-[a-z-]+)?\.ts$/.test(file))
@@ -208,8 +210,15 @@ const glossaryTerms = await loadGlossaryCatalog(evaluateTypeScript);
 const roadmap = roadmapModule.roadmapSeed;
 const roadmapById = new Map(roadmap.map((item) => [String(item.id).padStart(2, "0"), item]));
 for (const [id, revision] of Object.entries(roadmapRevisions)) {
-  if (!roadmapById.has(id) || !projects.some((project) => project.id === id)) {
+  const publication = projects.find((project) => project.id === id);
+  if (!roadmapById.has(id) || !publication) {
     throw new Error(`Roadmap revision ${id} must identify an existing published project`);
+  }
+  if (revision.replacement) {
+    if (revision.replacement.slug !== publication.slug) {
+      throw new Error(`Roadmap revision ${id} replacement must match the published slug`);
+    }
+    assertString(revision.replacement.acceptanceNote, `Roadmap revision ${id} acceptance note`);
   }
   for (const field of [
     "previousTitle",
@@ -256,8 +265,8 @@ const catalogSource =
 const summaries = authoredProjects.map(({ project, editorial, roadmapItem }) => ({
   id: project.id,
   slug: project.slug,
-  part: roadmapRevisions[project.id]?.previousPart ?? roadmapItem.part,
-  title: roadmapRevisions[project.id]?.previousTitle ?? roadmapItem.title,
+  part: rebuildRevisions[project.id]?.previousPart ?? roadmapItem.part,
+  title: rebuildRevisions[project.id]?.previousTitle ?? roadmapItem.title,
   summary: editorial.summary,
   status: "published",
   duration: editorial.duration,
@@ -311,7 +320,7 @@ const publishedById = new Map(authoredProjects.map((entry) => [entry.project.id,
 const projectSearchItems = roadmap.map((item) => {
   const id = String(item.id).padStart(2, "0");
   const published = publishedById.get(id);
-  const revision = roadmapRevisions[id];
+  const revision = rebuildRevisions[id];
   return searchItem(
     `Dự án ${id} — ${item.title}`,
     revision
@@ -328,10 +337,10 @@ const projectSearchItems = roadmap.map((item) => {
   );
 });
 const previousProjectSearchItems = authoredProjects
-  .filter(({ project }) => roadmapRevisions[project.id])
+  .filter(({ project }) => rebuildRevisions[project.id])
   .map(({ project, editorial }) =>
     searchItem(
-      `Dự án ${project.id} — ${roadmapRevisions[project.id].previousTitle}`,
+      `Dự án ${project.id} — ${rebuildRevisions[project.id].previousTitle}`,
       `/projects/${project.slug}`,
       "Bản cũ",
       editorial.summary,
@@ -389,7 +398,7 @@ const progressContentVersions = Object.fromEntries(
 expectedFiles.set(
   path.join(progressDirectory, "versions.ts"),
   `// Generated content revisions. Do not edit by hand.\nexport const progressContentVersions: Readonly<Record<string, number>> = ${JSON.stringify(progressContentVersions, null, 2)};\n` +
-    `export const previousEditionProjectIds: readonly string[] = ${JSON.stringify(Object.keys(roadmapRevisions).map((id) => `p${id}`))};\n`,
+    `export const previousEditionProjectIds: readonly string[] = ${JSON.stringify(Object.keys(rebuildRevisions).map((id) => `p${id}`))};\n`,
 );
 for (const { project, editorial } of authoredProjects) {
   const moduleName = `p${project.id}`;
@@ -479,7 +488,7 @@ addSizedSearchShards(
       searchItem(
         lesson.title,
         `/projects/${project.slug}/${lesson.slug}`,
-        roadmapRevisions[project.id] ? `Bản cũ · Dự án ${project.id}` : `Dự án ${project.id}`,
+        rebuildRevisions[project.id] ? `Bản cũ · Dự án ${project.id}` : `Dự án ${project.id}`,
         lesson.summary,
       ),
     ),

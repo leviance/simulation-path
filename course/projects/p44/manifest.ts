@@ -7,7 +7,7 @@ const project = {
   prerequisites: [
     "Project 43 — minimum image, force-shifted Lennard–Jones, unwrapped và Velocity Verlet trong hộp tuần hoàn",
     "Project 28 — chia không gian thành cell grid để tìm hạt gần",
-    "Project 41–42 — lực cặp, reduced units và kiểm chứng năng lượng/động lượng",
+    "Project 42 — lực cặp, reduced units và kiểm tra năng lượng/động lượng",
   ],
   objectives: [
     "Tách force cutoff khỏi bán kính tìm cặp cutoff+skin; lưu mỗi cặp i<j đúng một lần.",

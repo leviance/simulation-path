@@ -12,6 +12,7 @@ export const glossarySources = [
   { file: "lib/glossary-charged-particle.ts", name: "chargedParticleGlossaryTerms" },
   { file: "lib/glossary-million-object-city.ts", name: "millionObjectCityGlossaryTerms" },
   { file: "lib/glossary-cloth-workshop.ts", name: "clothWorkshopGlossaryTerms" },
+  { file: "lib/glossary-geometry-workshop.ts", name: "geometryWorkshopGlossaryTerms" },
   { file: "lib/glossary-cellular.ts", name: "cellularGlossaryTerms" },
   { file: "lib/glossary-heat.ts", name: "heatGlossaryTerms" },
   { file: "lib/glossary-fields.ts", name: "fieldGlossaryTerms" },

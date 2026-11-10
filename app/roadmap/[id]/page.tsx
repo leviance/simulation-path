@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "@/components/app-link";
-import { notFound } from "next/navigation";
-import { getProjectRevision, revisedProjects } from "@/lib/course";
+import { notFound, redirect } from "next/navigation";
+import { currentProjects, getProjectRevision, revisedProjects } from "@/lib/course";
+
+const replacements = currentProjects.filter((project) => project.acceptanceNote);
 
 export function generateStaticParams() {
-  return revisedProjects.map((project) => ({ id: project.id }));
+  return [...revisedProjects, ...replacements].map((project) => ({ id: project.id }));
 }
 
 export async function generateMetadata({
@@ -19,6 +21,8 @@ export async function generateMetadata({
 
 export default async function PlannedProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const replacement = replacements.find((project) => project.id === id);
+  if (replacement) redirect(`/projects/${replacement.slug}`);
   const project = getProjectRevision(id);
   if (!project) notFound();
   const { revision, previous } = project;

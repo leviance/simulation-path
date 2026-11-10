@@ -1,12 +1,17 @@
 import type { ProjectRevision } from "./types";
 
-// Remove a revision only when lessons, C++, Canvas and ZIP implement the new product.
-// The previous title identifies the actual retained source, never the planned product.
+// Keep the revision until the replacement has been built and accepted.
+// A matching replacement exposes its lessons while the remaining acceptance checks are pending.
 const previousMolecularPart = "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT";
 
 export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
   "40": {
     previousTitle: "“Thành phố hạt” trên GPU: xây grid và tìm hàng xóm song song",
+    replacement: {
+      slug: "cloth-workshop",
+      acceptanceNote:
+        "Bạn có thể học, thử Canvas và tải mã nguồn Xưởng vải 3D. Thao tác kéo và buông chuột trên cửa sổ C++ thật vẫn chờ kiểm trực tiếp.",
+    },
     summary:
       "Kéo một góc vải, ghim nó lại rồi thả tấm vải phủ lên vật thể; quan sát nếp gấp và tiếp xúc trong không gian 3D.",
     outcome:
@@ -29,6 +34,11 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
   "41": {
     previousTitle: "Hai “nguyên tử” hút và đẩy nhau: trực quan hóa Lennard–Jones",
     previousPart: previousMolecularPart,
+    replacement: {
+      slug: "geometry-workshop",
+      acceptanceNote:
+        "Bạn có thể học, thử Canvas và tải mã nguồn Xưởng hình học 3D. Thao tác kéo và buông chuột ngoài cửa sổ C++ vẫn chờ kiểm trực tiếp.",
+    },
     summary:
       "Kéo tham số để tạo vỏ ốc, dải Möbius và nút thắt; soi wireframe, normals rồi xuất mesh do chính bạn sinh ra.",
     outcome:
@@ -137,3 +147,7 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
       "Mục tiêu: ít nhất 1 triệu mẫu vị trí hợp lệ; đây không phải 1 triệu electron tương tác. 5 triệu mẫu là mở rộng.",
   },
 };
+
+export const rebuildRevisions = Object.fromEntries(
+  Object.entries(roadmapRevisions).filter(([, revision]) => !revision.replacement),
+);

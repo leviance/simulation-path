@@ -25,6 +25,7 @@ content/<slug>/*.mdx            nội dung từng lesson
 content/generated/pXX.ts        registry lesson riêng của từng project
 components/labs/<demo>-lab.tsx  một lazy client chunk cho mỗi Canvas lab
 examples/project-XX-<slug>/     project C++ build độc lập
+examples/drafts/<slug>/        source đang xây, chưa tham gia catalog hoặc ZIP
 ```
 
 `lib/course.ts` chỉ ghép roadmap với `project-summaries.ts`. Manifest đầy đủ chỉ được tải khi mở đúng project. Search, Canvas metadata, source checkpoint và lesson content đều dùng literal dynamic import để bundler tách chunk.
@@ -72,11 +73,13 @@ Toàn bộ output trên, cùng `public/downloads/` (ZIP và manifest) và `publi
 
 Catalog chỉ kiểm tra nguồn đầu vào: MDX, metadata, `source-template`, README và tests. Không yêu cầu CMake hoặc snapshot có sẵn trước khi sinh. `check:course` vẫn đối chiếu toàn bộ output, bao gồm CMake, với kết quả mong đợi từ generator.
 
-### Đề bài đã đổi nhưng bản triển khai chưa được xây lại
+### Bản cũ, bản mới và trạng thái nghiệm thu
 
 `course/roadmap.ts` giữ tên và học phần theo đặc tả hiện tại. `course/roadmap-revisions.ts` đánh dấu các project chờ xây dựng lại, tóm tắt sản phẩm mới và lưu tên/học phần của bản cũ. `lib/roadmap-state.ts` ghép hai nguồn với catalog thành ba trạng thái: đã có hướng dẫn, chờ xây dựng lại và chưa phát hành. Đây là trạng thái biên tập, không phải chứng nhận đáp ứng spec.
 
-Trang `/roadmap/<id>` giới thiệu phạm vi mới nhưng không gắn bài học, demo hay ZIP cũ cho sản phẩm mới. Các route `/projects/<slug-cũ>` và tiến độ vẫn được giữ; overview, lesson, sidebar, tìm kiếm, nút tiếp tục và Downloads ghi rõ bản cũ. Generator giữ tên thật của source cũ trong summary và search thay vì đổi nhãn bài học theo tên mới. `currentProjects` dùng cho thống kê/hướng dẫn hiện tại; `publishedProjects` giữ mọi route đã phát hành để source và liên kết không bị mất.
+Trang `/roadmap/<id>` giới thiệu phạm vi mới nhưng không gắn bài học, demo hay ZIP cũ cho sản phẩm mới. Trong lúc chờ xây dựng lại, các route `/projects/<slug-cũ>` và tiến độ vẫn được giữ; overview, lesson, sidebar, tìm kiếm, nút tiếp tục và Downloads ghi rõ bản cũ. Generator giữ tên thật của source cũ trong summary và search thay vì đổi nhãn bài học theo tên mới. `currentProjects` dùng cho thống kê/hướng dẫn hiện tại; `publishedProjects` giữ mọi route còn được phát hành.
+
+Khi bản mới đã thay bản cũ trong catalog nhưng còn chờ kiểm trực tiếp, khai báo `replacement` gồm slug khớp catalog và ghi chú nghiệm thu. Học phần xuất hiện cùng các hướng dẫn hiện có, có nhãn “Chờ nghiệm thu” và mở đúng bài học, Canvas, ZIP của bản mới. Route đề bài trước đó chuyển tới hướng dẫn mới; tìm kiếm và tiến độ không gọi bản mới là bản cũ. `rebuildRevisions` chỉ gồm project vẫn còn cung cấp tài liệu cũ.
 
 Chỉ bỏ entry trong `roadmap-revisions.ts` khi đã thay và nghiệm thu đồng bộ lesson, C++, Canvas, metadata và ZIP cho sản phẩm mới. Không dùng việc đổi tên hoặc build thành công làm căn cứ bỏ nhãn. Metadata chi tiết này chỉ dùng khi render server/sinh registry; client tiến độ chỉ nhận danh sách ID bản cũ nhỏ gọn.
 
@@ -88,7 +91,7 @@ Danh sách module thuật ngữ được khai báo một lần trong `scripts/gl
 
 ## Giới hạn chống phình file
 
-Code block C++ của Project 01–32, Project 40 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
+Code block C++ của Project 01–32, Project 40–41 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40–41 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
 
 `npm run check:architecture` áp dụng các budget:
 

@@ -2,6 +2,28 @@ import { expect, test } from "@playwright/test";
 const canvasName = "Canvas Project 40: xưởng vải 3D, mẫu CPU XPBD";
 const finalRoute = "/projects/cloth-workshop/14-xuong-vai-hoan-chinh";
 
+test("Project 40 opens the new lessons directly from the roadmap", async ({ page }) => {
+  await page.goto("/roadmap");
+  const entry = page.locator("#project-40");
+  await expect(entry).toHaveAttribute("href", "/projects/cloth-workshop");
+  await expect(entry).toContainText("14 bài");
+  await expect(entry).toContainText("CHỜ NGHIỆM THU");
+  await entry.click();
+
+  await expect(page).toHaveURL(/\/projects\/cloth-workshop$/);
+  await expect(page.getByRole("heading", { level: 1, name: /Xưởng vải 3D/ })).toBeVisible();
+  await expect(page.getByLabel("Chờ nghiệm thu", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Nội dung thuộc bản cũ", { exact: true })).toHaveCount(0);
+
+  const lessons = page.getByRole("navigation", { name: "Các bài của Dự án 40" });
+  await expect(lessons.getByRole("link")).toHaveCount(14);
+  await lessons.getByRole("link").first().click();
+  await expect(page).toHaveURL(/\/projects\/cloth-workshop\/01-mat-vai-dau-tien$/);
+  await expect(page.locator(".lesson-hero").getByRole("heading", { level: 1 })).toContainText(
+    "Dựng mặt vải đầu tiên",
+  );
+});
+
 test("Project 40 cloth has real CPU surface, keyboard pin/step, deterministic reset and DPR", async ({
   page,
 }) => {

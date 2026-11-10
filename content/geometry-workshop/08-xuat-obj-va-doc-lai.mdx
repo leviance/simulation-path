@@ -1,0 +1,91 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xuất mô hình thành OBJ rồi đọc lại để kiểm
+
+## Ta cần giải quyết điều gì?
+
+Bạn vừa tạo một nút thắt đẹp và muốn giữ nó. Ta không lưu ảnh, cũng không lưu cả camera hay thanh điều khiển. Ta lưu vị trí, UV, normal và các tam giác của mesh đã dựng đầy đủ. Ghi được file chưa đủ: đổi sai cách đếm chỉ số cũng có thể tạo một file trông hợp lệ nhưng nối nhầm đỉnh.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong OBJ, `v` là vị trí, `vt` là UV, `vn` là normal và `f` là mặt. Một góc của mặt có dạng `position/uv/normal`. Ba danh sách được đánh số riêng và bắt đầu từ **1**. Trong `Mesh`, một ID bắt đầu từ 0 đã chỉ cả bộ thuộc tính; ta viết cả ba danh sách theo cùng thứ tự, nên góc có thể dùng cùng một số cho cả ba.
+
+Nhớ hai bản ghi ở seam: chúng có thể trùng vị trí nhưng khác UV hoặc khác normal. Không gộp chúng khi xuất. Nếu gộp theo vị trí, tam giác ở một bên có thể bị kéo UV sang bên còn lại.
+
+<InteractiveLab demo="geometry-workshop" mode="export" />
+
+Chọn một tam giác nhỏ và đối chiếu ba ID trong lưới với dòng `f`. Thử đưa ID bắt đầu từ 0 vào bộ kiểm. Bản xem trước giúp đọc cấu trúc file; file OBJ của ứng dụng C++ được ghi bằng chương trình ở dưới.
+
+## Bắt tay xây dựng
+
+### 1. Ghi thuộc tính trước, mặt sau
+
+Trong `writeObj`, kiểm vị trí, UV, normal hữu hạn và mọi index hợp lệ trước khi ghi. Dùng `std::locale::classic()` để số thập phân luôn dùng dấu chấm. Ghi đủ chữ số có nghĩa cho `float` để khi đọc lại không mất giá trị đã lưu. Sau các dòng `v`, `vt` và `vn`, ghi từng nhóm ba ID:
+
+```cpp title="include/obj_mesh.hpp — đổi ID từ 0-based sang 1-based"
+for (std::size_t face = 0; face < mesh.indices.size(); face += 3) {
+    output << 'f';
+    for (std::size_t corner = 0; corner < 3; ++corner) {
+        const std::uint32_t index = mesh.indices[face + corner] + 1;
+        output << ' ' << index << '/' << index << '/' << index;
+    }
+    output << '\n';
+}
+```
+
+Giữ nguyên thứ tự ba góc để winding không đổi. OBJ ở đây không chứa tangent; app đã có tangent để vẽ debug, nhưng không tự chế thêm một loại dòng OBJ cho nó.
+
+### 2. Đọc theo một tập con nhỏ, kiểm đến từng góc
+
+Tách chuỗi ở hai dấu `/`. Hàm dưới đây chỉ nhận số nguyên dương và phải đọc hết chuỗi. Như vậy `0`, `-1` hay `2abc` không thể lẫn vào kết quả. Sau đó `readObjCorner` kiểm ba số giống nhau rồi trừ 1. Bộ đọc kiểm tiếp index trong phạm vi đỉnh và mặt có ba góc khác nhau.
+
+```cpp title="include/obj_mesh.hpp — nhận một chỉ số OBJ hợp lệ"
+inline std::uint32_t readObjIndex(std::string_view text) {
+    if (text.empty())
+        throw std::invalid_argument("OBJ index is missing");
+    std::uint32_t index{};
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), index);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || index == 0) {
+        throw std::invalid_argument("OBJ indices must be positive integers");
+    }
+    return index;
+}
+```
+
+Một file OBJ từ công cụ khác có thể dùng chỉ số âm, ba bộ chỉ số khác nhau hoặc mặt nhiều hơn ba góc. Bộ đọc của xưởng không hỗ trợ những dạng đó. Mục tiêu là kiểm chính xác file mình ghi, với giới hạn kích thước và số phần tử trước khi cấp phát quá nhiều.
+
+### 3. Giữ tên file hoàn chỉnh đến sau bước kiểm
+
+Ứng dụng chỉ xuất khi không còn yêu cầu dựng và đã có last-good. Tạo một thư mục mới, ghi `geometry.obj.part` và đóng stream. Đọc lại, so từng thuộc tính và index với mesh trong bộ nhớ, rồi mới đổi tên:
+
+```cpp title="include/obj_file.hpp — kiểm bản tạm trước khi đặt tên cuối"
+const ObjMesh imported = readWorkshopObjFile(temporary);
+verifyObjCopy(mesh, imported);
+std::filesystem::rename(temporary, destination);
+return destination;
+```
+
+Nếu đọc lại không khớp, app báo lỗi và không để lại `geometry.obj` giả như đã hoàn tất. Một file `.part` có thể còn để kiểm lỗi. Mỗi lần xuất dùng một thư mục mới nên không ghi đè kết quả trước.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --target project_41_checkpoint_8
+.\build\Debug\project_41_checkpoint_8.exe --hidden --frames 50 --preset knot --resolution 64 --export-dir knot-cp8-export
+```
+
+`knot-cp8-export` phải là thư mục chưa tồn tại. Đổi tên đích nếu chạy lần nữa. Dòng `OBJ FILE ROUND-TRIP PASS` cho biết bước đọc lại đã qua. Mở file bằng trình soạn thảo: có 4.225 dòng cho mỗi loại thuộc tính `v`, `vt`, `vn` và 8.192 dòng `f`. Ở cửa sổ tương tác, nút EXPORT OBJ hoặc E lưu vào một thư mục `export-N` mới dưới thư mục dữ liệu SDL; terminal in đường dẫn.
+
+## Thử tạo lỗi
+
+Trong mã checkpoint 8, tạm bỏ `+ 1` ở vòng ghi mặt và chạy lại với một thư mục đích khác. Mặt đầu có thể dùng ID 0; bộ đọc phải từ chối và không công bố file cuối. Khôi phục `+ 1` rồi thử xuất vào thư mục đã có: app phải từ chối ghi đè, kể cả khi nội dung hình mới giống hình cũ.
+
+## Checklist hoàn thành
+
+- Phân biệt thuộc tính `v`, `vt`, `vn` và ba số của mỗi góc `f`.
+- Đọc lại được đúng số bản ghi và thứ tự các tam giác, kể cả đỉnh nhân ở đường nối. Từ chối index 0 hoặc ngoài phạm vi.
+- Không xuất preview hay ứng viên đang dựng; không làm mất file của lần xuất trước.
+
+## Hướng mở rộng
+
+Dùng fixture một tam giác với các tọa độ bạn tự đặt để kiểm parser, thay vì chỉ đọc file do writer của mình sinh. Sau đó [chạy xưởng hoàn chỉnh và đối chiếu quy mô thật trên GPU](/projects/geometry-workshop/09-hoan-thien-xuong-hinh-hoc).

@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { roadmapSeed } from "../course/roadmap.ts";
-import { roadmapRevisions } from "../course/roadmap-revisions.ts";
+import { rebuildRevisions, roadmapRevisions } from "../course/roadmap-revisions.ts";
 import { buildRoadmap } from "../lib/roadmap-state.ts";
 
 const catalog = JSON.parse(
@@ -11,7 +11,7 @@ const catalog = JSON.parse(
 );
 const published = catalog.map((project) => {
   const target = roadmapSeed.find((entry) => entry.id === Number(project.id));
-  const revision = roadmapRevisions[project.id];
+  const revision = rebuildRevisions[project.id];
   return {
     id: project.id,
     slug: project.slug,
@@ -48,7 +48,7 @@ test("planned products never inherit the old lesson count, demo, duration or dow
   const revised = roadmap.filter((project) => project.status === "awaiting-rebuild");
   assert.deepEqual(
     revised.map(({ id }) => id),
-    Object.keys(roadmapRevisions),
+    Object.keys(rebuildRevisions),
   );
   for (const project of revised) {
     assert.equal(project.title, roadmapSeed[Number(project.id) - 1].title);
@@ -72,6 +72,31 @@ test("planned products never inherit the old lesson count, demo, duration or dow
   assert.deepEqual(
     roadmap.slice(65).map(({ id }) => id),
     Array.from({ length: 13 }, (_, i) => String(66 + i)),
+  );
+});
+
+test("an available replacement keeps its lessons visible while acceptance is pending", () => {
+  const replacement = buildRoadmap(roadmapSeed, published, roadmapRevisions).find(
+    ({ id }) => id === "40",
+  );
+  assert.equal(replacement.status, "published");
+  assert.equal(replacement.slug, "cloth-workshop");
+  assert.equal(replacement.title, roadmapSeed[39].title);
+  assert.equal(replacement.part, roadmapSeed[39].part);
+  assert.equal(replacement.lessonCount, 14);
+  assert.equal(replacement.download, "/downloads/project-40-cloth-workshop.zip");
+  assert.match(replacement.acceptanceNote, /chờ kiểm trực tiếp/);
+  assert.ok(!("previous" in replacement));
+  assert.throws(
+    () =>
+      buildRoadmap(
+        roadmapSeed,
+        published.map((project) =>
+          project.id === "40" ? { ...project, slug: "gpu-spatial-grid-neighbors" } : project,
+        ),
+        roadmapRevisions,
+      ),
+    /replacement must match the published slug/,
   );
 });
 
@@ -116,7 +141,7 @@ test("search indexes new products separately and labels every previous lesson", 
     "items",
   );
   assert.equal(new Set(items.map(({ href }) => href)).size, items.length);
-  for (const [id, revision] of Object.entries(roadmapRevisions)) {
+  for (const [id, revision] of Object.entries(rebuildRevisions)) {
     const target = items.find(({ href }) => href === `/roadmap/${id}`);
     assert.ok(target, `New product ${id} is searchable`);
     assert.equal(target.kind, "Chờ xây dựng lại");
@@ -128,6 +153,20 @@ test("search indexes new products separately and labels every previous lesson", 
     assert.ok(lessons.every(({ kind }) => kind === `Bản cũ · Dự án ${id}`));
     assert.ok(revision.interactions.length > 0 && revision.concepts.length > 0);
   }
+  for (const [id, slug, count] of [
+    [40, "cloth-workshop", 14],
+    [41, "geometry-workshop", 9],
+  ]) {
+    const overview = "/projects/" + slug;
+    const entry = items.find(({ href }) => href === overview);
+    assert.equal(entry?.kind, "Dự án");
+    assert.ok(entry.title.includes(roadmapSeed[id - 1].title));
+    assert.ok(!items.some(({ href }) => href === "/roadmap/" + id));
+    const lessons = items.filter(({ href }) => href.startsWith(overview + "/"));
+    assert.equal(lessons.length, count);
+    assert.ok(lessons.every(({ kind }) => kind === "Dự án " + id));
+  }
+  assert.ok(!items.some(({ href }) => href.startsWith("/projects/lennard-jones-pair")));
 });
 
 test("generated summaries retain actual previous titles and progress is not invalidated", async () => {
@@ -135,17 +174,18 @@ test("generated summaries retain actual previous titles and progress is not inva
     new URL("../course/generated/summaries/", import.meta.url),
     "summaries",
   );
-  for (const [id, revision] of Object.entries(roadmapRevisions)) {
+  for (const [id, revision] of Object.entries(rebuildRevisions)) {
     const previous = summaries.find((entry) => entry.id === id);
     assert.equal(previous.title, revision.previousTitle);
     assert.equal(previous.slug, published.find((entry) => entry.id === id).slug);
     assert.equal(previous.part, revision.previousPart ?? roadmapSeed[Number(id) - 1].part);
   }
+  assert.equal(summaries.find(({ id }) => id === "40").title, roadmapSeed[39].title);
   const { previousEditionProjectIds, progressContentVersions } =
     await import("../course/generated/progress/versions.ts");
   assert.deepEqual(
     previousEditionProjectIds,
-    Object.keys(roadmapRevisions).map((id) => `p${id}`),
+    Object.keys(rebuildRevisions).map((id) => `p${id}`),
   );
   assert.deepEqual(
     progressContentVersions,
@@ -172,7 +212,7 @@ test("glossary distinguishes rebuilt chamber/cloth products from superseded exam
   assert.match(cloth, /không kiểm đủ edge\/triangle và không có CCD/);
   for (const [source, ids] of [
     [gpu, ["39"]],
-    [physics, ["41", "42", "43"]],
+    [physics, ["42", "43"]],
   ]) {
     for (const id of ids) {
       assert.match(source, new RegExp(`bản cũ của Project ${id}`, "i"));

@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy xưởng hoàn chỉnh và kiểm lưới 66.049 đỉnh
+
+## Ta cần giải quyết điều gì?
+
+Bây giờ người dùng có thể tạo hình, đổi cách xem và lưu mô hình. Trước khi bàn giao, hãy thử câu khó hơn: khi chọn lưới mịn, ta có thực sự dựng, upload và vẽ đủ mesh hay chỉ đổi con số trên bảng? Sau một lần hủy hoặc đổi preset thật nhanh, xưởng có còn nói đúng nó đang vẽ gì không?
+
+Bài cuối nối các bước ấy thành một lần kiểm có số liệu, rồi dùng chuột thử những gì lệnh tự động không kiểm được.
+
+## Hiểu ý tưởng trước khi viết code
+
+Độ phân giải 256×256 là số **ô**, không phải số đỉnh. Hai mép của lưới vẫn cần bản ghi riêng, kể cả ở nơi trùng vị trí. Với `uSegments = vSegments = 256`:
+
+$$
+\begin{aligned}
+N_{\text{vertex}} &= 257^2 = 66\,049,\\
+N_{\text{triangle}} &= 2\cdot 256^2 = 131\,072,\\
+N_{\text{index}} &= 3N_{\text{triangle}} = 393\,216.
+\end{aligned}
+$$
+
+Đó là số bản ghi thật trong buffer, không phải số điểm hình học khác nhau. Preview và last-good là hai bộ dữ liệu; đọc số đỉnh của bộ đang vẽ, không lấy số đỉnh theo thanh resolution đang kéo.
+
+<InteractiveLab demo="geometry-workshop" mode="showcase" />
+
+Đổi kiểu hình, chỉnh tham số rồi so UV với hình có ánh sáng. Canvas dùng lưới nhỏ để dễ nhìn ô và mép; kiểm mốc 66.049 đỉnh, bộ nhớ GPU và file OBJ bằng ứng dụng C++.
+
+## Bắt tay xây dựng
+
+### 1. Nâng giới hạn rồi tính từ dữ liệu đã dựng
+
+Bản cuối đặt `maxSegments = 256`. Không chỉ sửa thanh kéo: giới hạn này cũng được dùng khi kiểm input, trước khi giữ chỗ cho vertices và indices. Giữ cơ chế batch của Bài 7. Sau khi dựng, tính số byte từ kích thước hai mảng:
+
+```cpp title="include/parametric_mesh.hpp — tính payload thật của mesh"
+std::size_t payloadBytes() const {
+    return vertices.size() * sizeof(Vertex) + indices.size() * sizeof(std::uint32_t);
+}
+```
+
+Mỗi `Vertex` chứa position, normal, tangent và UV. Trên bản build Windows của xưởng, `sizeof(Vertex)` là 44 byte; mỗi index là 4 byte. Thay các con số vào, kết quả phải là 4.479.020 byte. Đây là payload của một mesh; không tính buffer tạm, preview, allocator hay bộ nhớ driver.
+
+### 2. Hỏi lại kích thước buffer sau upload
+
+Trong `GpuMesh::allocate`, sau khi cấp phát và nạp dữ liệu, lấy kích thước của hai buffer đang bind. Chỉ thay mesh đang vẽ khi các thao tác OpenGL không báo lỗi và số byte khớp:
+
+```cpp title="include/geometry_renderer.hpp — kiểm buffer trước khi nhận ứng viên"
+GLint storedVertexBytes{};
+GLint storedIndexBytes{};
+gl_.GetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &storedVertexBytes);
+gl_.GetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &storedIndexBytes);
+gl_.BindVertexArray(0);
+if (gl_.GetError() != GL_NO_ERROR || storedVertexBytes != vertexBytes || storedIndexBytes != indexBytes) {
+    throw std::runtime_error("OpenGL could not store the full mesh payload");
+}
+indexCount_ = static_cast<GLsizei>(mesh.indices.size());
+```
+
+Kích thước khớp chưa chứng minh hình học đúng. CTest kiểm vị trí/normal của torus bằng các mốc biết trước, nối đảo của Möbius, frame của sweep và index của lưới. Trên GPU, `indexCount_` là số index mà lệnh vẽ dùng. Chế độ xem, bản ghi màn hình và kiểm OBJ có nhiệm vụ khác nhau; cần cả ba để nhận ra lỗi mà phép đếm không thấy.
+
+### 3. Kiểm camera và việc đổi yêu cầu riêng
+
+Trong `--exercise-view`, chương trình đợi một mesh đầy đủ, rồi đổi camera và lớp hiển thị. Số lần dựng không được tăng. Sau đó nó tạo yêu cầu khác, thử hủy và thử tham số không hợp lệ; last-good vẫn còn. Nếu mở panel, chuỗi sự kiện SDL mô phỏng còn kiểm đổi preset, kéo, buông và mất focus. Chuỗi này không mô phỏng con trỏ thật bị kéo ra khỏi cửa sổ.
+
+## Chạy thử và quan sát
+
+Tải [ZIP Project 41](/downloads/project-41-geometry-workshop.zip) và giải nén vào thư mục mới. Gói có starter, chín checkpoint, tests và toàn bộ mã trong `final/`. Nếu đã configure ở Bài 1, dùng lại thư mục build. Trên bản vừa giải nén, chạy:
+
+```powershell
+cmake -S . -B build -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2 --target project_41_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 15
+cmake --build build --config Release --parallel 2 --target project_41_final project_41_tests
+ctest --test-dir build -C Release --output-on-failure --timeout 15
+.\build\Release\project_41_final.exe --hidden --frames 50 --preset knot --resolution 256 --exercise-view
+.\build\Release\project_41_final.exe --hidden --frames 50 --preset knot --resolution 256 --export-dir knot-final-export
+```
+
+Chọn một tên mới cho `knot-final-export` mỗi lần chạy. Với generator một cấu hình, executable nằm ngay trong `build`; để bật tối ưu khi configure, thêm `-DCMAKE_BUILD_TYPE=Release`. Lượt đầu in `NATIVE VIEW CHECK PASS` và các số `vertices=66049 triangles=131072 payloadBytes=4479020`. Lượt xuất thêm `OBJ FILE ROUND-TRIP PASS`. Hãy đối chiếu hai lượt với nhau, không dùng hình ở Canvas để suy ra ứng dụng đã nạp đủ buffer.
+
+Sau đó mở cửa sổ thật để xem hình và thử điều khiển:
+
+```powershell
+.\build\Release\project_41_final.exe --preset knot --resolution 256 --seconds 120
+```
+
+1. Chọn từng preset và chỉnh một thông số có tác dụng rõ: bán kính ở torus, Growth ở vỏ ốc, Half Twists ở Möbius, Lobes ở knot. Dùng chuột trái để orbit, chuột phải/giữa để pan, cuộn để zoom.
+2. Bật W/U/N/S lần lượt để xem lưới, UV, tangent/normal và seam. Quay qua mặt kia của Möbius; cả hai mặt phải còn thấy.
+3. Kéo một thanh ra ngoài cửa sổ rồi buông. Thử lại bằng cách chuyển focus giữa chừng. Quay lại, rê chuột không được tiếp tục đổi tham số. Đổi preset trong lúc đang làm mịn hoặc nhấn X: nhãn đang vẽ phải đúng với mesh giữ lại.
+4. Nhấn R để về mặc định của preset hiện tại; chờ bản đầy đủ rồi nhấn E. Mở file đã xuất, đối chiếu số bản ghi và mặt với panel trước khi thử chỉnh tiếp.
+
+## Thử tạo lỗi
+
+Giữ `--resolution 256` nhưng giảm `--frames 50` còn `--frames 4` ở lượt ẩn. Bản đầy đủ cần 257 hàng, mỗi batch tối đa tám hàng. Ứng dụng phải báo chưa dựng xong thay vì cho preview đạt mốc 66.049. Tăng lại số frame và thử một cấu hình không hợp lệ, chẳng hạn `--resolution 257`: lỗi phải được báo ngay ở input.
+
+## Checklist hoàn thành
+
+- Có bốn preset được dựng từ công thức; UV và normal giúp tìm đúng chỗ nối, không chỉ tô màu cho đẹp.
+- Mốc 256×256 ô có đúng 66.049 đỉnh, 131.072 tam giác, số byte khớp và file OBJ đọc lại được.
+- Camera không dựng lại mesh; hủy, đổi nhanh hoặc lỗi input không ghi đè last-good. Đã kiểm buông chuột ngoài cửa sổ và mất focus bằng chuột thật.
+- Gói giải nén ở thư mục mới tự configure, build và chạy được bản `final`, không phụ thuộc source của project trước.
+
+## Hướng mở rộng
+
+Thử tạo một đường dẫn mở khác, chẳng hạn một đường chữ S, và giữ nguyên cách dựng frame. Thêm một mốc tọa độ bạn có thể tính bằng tay, một ca gần suy biến và một hình chụp đường nối trước khi tăng độ phân giải. Khi muốn làm nắp hoặc hàn chỉ số, quyết định trước phải giữ thuộc tính nào ở mỗi mép. Bạn có thể quay lại [đề bài và tải toàn bộ mã](/projects/geometry-workshop).

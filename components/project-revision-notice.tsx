@@ -1,7 +1,16 @@
 import Link from "@/components/app-link";
-import { getProjectRevision } from "@/lib/course";
+import { getProjectRevision, type PublishedProjectSummary } from "@/lib/course";
 
-export function ProjectRevisionNotice({ projectId }: { projectId: string }) {
+export function ProjectRevisionNotice({ project }: { project: PublishedProjectSummary }) {
+  const projectId = project.id;
+  if (project.acceptanceNote) {
+    return (
+      <aside className="revision-notice" aria-label="Chờ nghiệm thu">
+        <span className="revision-badge">CHỜ NGHIỆM THU · P{projectId}</span>
+        <p>{project.acceptanceNote}</p>
+      </aside>
+    );
+  }
   const planned = getProjectRevision(projectId);
   if (!planned) return null;
 

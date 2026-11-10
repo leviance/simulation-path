@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xoắn dải Möbius và nối mép đảo
+
+## Ta cần giải quyết điều gì?
+
+Với torus, cột đầu gặp đúng cột đầu và cột cuối gặp đúng cột cuối. Nếu xoay nửa vòng một đầu của dải giấy trước khi dán, đầu trái lại gặp đầu phải. Bài này dựng đúng kiểu nối đó, rồi sửa cách tô sáng để nhìn được dải từ mọi phía.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi `u` là góc quanh vòng và `v` là khoảng cách có dấu từ giữa dải. Sau một vòng quanh trục, tiết diện xoay một nửa vòng. Một điểm ở bên trái sẽ rơi vào vị trí tương ứng ở bên phải. Công thức cần thỏa:
+
+$$
+P(u+2\pi,v)=P(u,-v).
+$$
+
+Đạo hàm theo `u` ở hai bản sao có cùng hướng; đạo hàm theo `v` đổi dấu. Vì thế normal từ cross cũng đổi dấu. Đây là lý do không thể gán một hướng normal liên tục cho cả dải; nó không phải lý do để chấp nhận mất mặt khi xoay camera.
+
+<InteractiveLab demo="geometry-workshop" mode="mobius" />
+
+Hãy đánh dấu hai đầu của một đoạn ngang. Đi hết một vòng theo `u`, đoán xem đầu nào gặp đầu nào trước khi xem kết quả. Thử một, ba và năm nửa vòng.
+
+## Bắt tay xây dựng
+
+### 1. Quay bề rộng cùng lúc đi quanh vòng
+
+```cpp title="include/parametric_surfaces.hpp — góc quanh vòng và góc xoắn"
+const double twistRate = 0.5 * halfTwists;
+const double twistAngle = u * twistRate;
+const double cosU = std::cos(u);
+const double sinU = std::sin(u);
+const double cosTwist = std::cos(twistAngle);
+const double sinTwist = std::sin(twistAngle);
+const double ringRadius = radius + v * cosTwist;
+const double radialDerivative = -v * twistRate * sinTwist;
+```
+
+Từ giữa dải, thành phần ngang của khoảng lệch là `v * cosTwist`, thành phần cao là `v * sinTwist`. Khi `u` tăng, độ lệch ngang cũng đổi; vì thế tangent theo `u` không còn chỉ chạy quanh một vòng tròn có bán kính cố định. Số nửa vòng phải lẻ để phép nối đảo còn đúng.
+
+### 2. Dùng đúng cột ở hàng cuối
+
+```cpp title="include/parametric_mesh.hpp — nối cột j với cột vSegments - j"
+if (settings.kind == SurfaceKind::mobius) {
+    double stripV = v;
+    if (lastRow)
+        stripV = static_cast<double>(settings.vSegments - column) / settings.vSegments;
+    const double offset = settings.thickness * (2.0 * stripV - 1.0);
+    SurfaceSample sample = sampleMobius(angleU, offset, settings.radius, settings.halfTwists);
+    if (lastRow)
+        sample.tangentV = sample.tangentV * -1.0;
+    return sample;
+}
+```
+
+`angleU` của hàng cuối đã được đưa về 0 ở Bài 3. Lần này ta cần đổi cả cột khi lấy mẫu, rồi đổi dấu tangent theo chiều ngang. UV vẫn là cặp của hàng và cột ban đầu, để chế độ xem UV chỉ được chỗ hai mép gặp nhau.
+
+### 3. Tô sáng phía đang nhìn
+
+Renderer tắt bỏ mặt quay lưng. Sau đó fragment shader chọn lại hướng normal theo mặt đang vẽ:
+
+```glsl title="shaders/surface.frag — ánh sáng cho cả hai phía"
+vec3 n = normalize(surfaceNormal);
+// A Mobius strip cannot carry one continuous global normal. Illuminate the visible face.
+if (!gl_FrontFacing) n = -n;
+```
+
+`gl_FrontFacing` do chiều tam giác trên màn hình quyết định, không phải một nhãn “mặt trước” gán cho toàn bộ dải. Cách này không sửa topology; nó chỉ giúp ánh sáng nhất quán khi người xem đi qua phía bên kia.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --target project_41_checkpoint_4
+.\build\Debug\project_41_checkpoint_4.exe --preset mobius --uv --seams --seconds 120
+```
+
+Tìm chỗ màu UV đổi chiều ở mép nối. Tắt UV, xoay quanh dải và kiểm có nhìn thấy cả hai mặt không. Tăng Half Twists; dải phải đổi hình thật. Normal debug ở hai bản ghi trùng tại seam có thể ngược nhau: kiểm kết quả theo đúng quy ước dải, không ép chúng bằng nhau.
+
+## Thử tạo lỗi
+
+Giữ `stripV = v` ở hàng cuối, nhưng giữ nguyên mọi thứ khác. Dự đoán nửa trái của dải sẽ gặp cột nào. Bật wireframe và nhìn các tam giác gần seam; chúng có thể kéo chéo sang mép bên kia. Khôi phục cột đảo và thử riêng việc bật lại culling để phân biệt lỗi nối với lỗi trình bày.
+
+## Checklist hoàn thành
+
+- Biết vì sao một vòng quay trong `u` đổi dấu `v`.
+- Nhìn rõ dải không mất nửa mặt khi orbit; UV và Seam giải thích được đường nối.
+- So vị trí ở hàng cuối với hàng đầu theo cột đảo, không ép normal toàn cục liên tục.
+
+## Hướng mở rộng
+
+Vẽ một dải giấy và đánh dấu mũi tên dọc/ngang ở hai đầu. Thử dán khi xoay hai nửa vòng: quy tắc nối đã khác gì? Tiếp theo, ta không còn giữ tiết diện quanh một trục cố định mà [mang tiết diện đi dọc đường xoắn](/projects/geometry-workshop/05-quet-tiet-dien-vo-oc).

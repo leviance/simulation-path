@@ -2,46 +2,55 @@ import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
   base: {
-    label: "LENNARD–JONES PAIR LAB",
-    title: "Hai nguyên tử cho ta thấy lực hút–đẩy bắt đầu từ đâu",
+    label: "XƯỞNG HÌNH HỌC 3D",
+    title: "Đổi u/v, nhìn mô hình đổi hình",
     description:
-      "Kéo để đổi khoảng cách, đọc đường cong thế năng, quan sát hai lực đối nhau rồi cho cặp nguyên tử dao động bằng Velocity Verlet. Canvas dùng hệ đơn vị rút gọn và cùng công thức với mã C++.",
+      "Canvas dựng lưới nhỏ từ cùng công thức với C++. Dùng nó để nhìn tangent, từng ô, đường nối và frame; mốc 66.049 đỉnh, buffer OpenGL và OBJ thuộc bản chạy C++.",
   },
   modes: {
-    "pair-distance": {
-      title: "Khoảng cách vật lý khác tọa độ màn hình thế nào?",
+    patch: {
+      title: "Một điểm, hai tangent, một normal",
       description:
-        "Kéo nguyên tử B, đọc `delta` và khoảng cách theo đơn vị thế giới. Tâm khối lượng luôn nằm giữa vùng mô phỏng nên việc đổi kích thước Canvas không làm thay đổi trạng thái vật lý.",
+        "Kéo độ cao của tấm và đổi điểm đang đọc. Theo hai mũi tên tangent để đoán hướng normal.",
     },
-    "lj-potential": {
-      title: "σ, đáy thế và vùng hút nằm ở đâu?",
+    topology: {
+      title: "Bốn góc, hai tam giác",
       description:
-        "Di chuyển con trỏ theo trục r/σ để xem hai nhánh r^-12 và r^-6 ghép thành U(r), đồng thời phân biệt σ với r0=2^(1/6)σ.",
+        "Đổi ô đang chọn để đọc bốn ID. Đảo winding để thấy hướng mặt khác gì với vị trí.",
     },
-    "lj-force": {
-      title: "Độ dốc nào tạo lực hút, độ dốc nào tạo lực đẩy?",
-      description:
-        "Kéo cặp nguyên tử qua hai phía của r0; mũi tên lực đổi chiều theo dấu của `potentialSlope = dU/dr`, còn vector lực luôn nằm trên đường nối hai tâm.",
+    torus: {
+      title: "Cùng vị trí, khác UV",
+      description: "Đổi bán kính và nhìn hai mép tuần hoàn. Bật UV rồi so các bản ghi đầu/cuối.",
     },
-    "pair-invariants": {
-      title: "Hai lực có thực sự bằng nhau và ngược chiều?",
+    mobius: {
+      title: "Đi hết vòng, gặp cột đối diện",
       description:
-        "Đổi khối lượng và hướng của cặp, rồi đọc tổng lực, động lượng và tâm khối lượng để thấy định luật III Newton không đòi hỏi hai gia tốc phải bằng nhau.",
+        "Đổi số nửa vòng và cột đang đọc. Hai dấu ở seam trùng chỗ nhưng tangent ngang đổi hướng.",
     },
-    "lj-verlet": {
-      title: "Velocity Verlet hỏi lực ở hai thời điểm ra sao?",
+    shell: {
+      title: "Một lát cắt đi từ chóp tới miệng",
       description:
-        "Tiến từng bước cố định để theo dõi a0, vị trí mới, a1 và vận tốc mới; đổi dt để thấy bộ giải vẫn độc lập với nhịp dựng hình.",
+        "Chọn vị trí lát cắt. Đổi Growth, số vòng và độ xoắn để phân biệt đường tâm với tiết diện.",
     },
-    "lj-energy": {
-      title: "Potential và kinetic trao đổi nhưng total energy đi đâu?",
+    knot: {
+      title: "Góc còn dư ở chỗ khép ống",
       description:
-        "Chạy cùng một trạng thái ban đầu với nhiều giá trị `fixed dt`, đọc đồ thị thế năng, động năng, tổng năng lượng và độ lệch tương đối thay vì chỉ nhìn quỹ đạo bằng mắt.",
+        "Đổi nút ba/năm múi và bật tắt bù frame. Quan sát vòng cuối khi mép không còn cùng hướng.",
     },
-    "lj-final": {
-      title: "Lennard–Jones Pair Lab đã vượt qua các invariant chưa?",
+    preview: {
+      title: "Dựng xem trước, rồi làm mịn",
       description:
-        "Dùng ba cấu hình đẩy, cân bằng và hút; kéo nguyên tử, tạm dừng, tiến từng bước, đổi tham số rồi đối chiếu năng lượng, động lượng, tâm khối lượng cùng báo cáo kiểm chứng.",
+        "Thử đổi resolution khi đang kéo, tiến từng batch hoặc hủy. So yêu cầu với mesh đang hiển thị.",
+    },
+    export: {
+      title: "Một tam giác thành dòng f",
+      description:
+        "Chọn tam giác và thử đổi cách đếm chỉ số. Canvas không ghi file OBJ thay ứng dụng C++.",
+    },
+    showcase: {
+      title: "So bốn bề mặt trong cùng xưởng",
+      description:
+        "Đổi preset, tham số và góc nhìn. Bật/tắt các lớp kiểm rồi quan sát hình hoàn chỉnh.",
     },
   },
 } satisfies ProjectLabMeta;

@@ -1,0 +1,92 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo thanh điều khiển mà không dựng lưới lớn liên tục
+
+## Ta cần giải quyết điều gì?
+
+Giờ xưởng đã tạo được bốn kiểu hình. Hãy thử kéo bán kính của một lưới mịn từ đầu này sang đầu kia. Hệ điều hành có thể gửi nhiều sự kiện chuột trước lần vẽ tiếp theo. Nếu mỗi sự kiện dựng xong cả lưới, người dùng chờ những hình đã lỗi thời trong khi con trỏ vẫn đi tiếp.
+
+Ta muốn thấy hình đổi ngay khi kéo. Khi buông mới cần kết quả đầy đủ. Nếu lần dựng mới hỏng hoặc bị hủy, xưởng phải quay lại bản hoàn chỉnh gần nhất, không gắn nhầm tên hình mới lên mesh cũ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách rõ ba thứ: **tham số vừa yêu cầu**, **preview đang xem** và **last-good**. Preview có cùng bán kính, độ xoắn và kiểu hình với yêu cầu, chỉ ít ô hơn. Last-good là bản đầy đủ đã dựng xong và upload thành công. Trong lúc kéo, mỗi vòng lặp chỉ dùng yêu cầu mới nhất; không lập hàng đợi cho cả đường đi của chuột.
+
+Khi đã buông, dựng lưới đầy đủ từng nhóm hàng. Nếu đang chỉnh camera hoặc bật wireframe, ta chỉ đổi cách nhìn; không có tham số hình học mới nên không tạo yêu cầu dựng mesh.
+
+<InteractiveLab demo="geometry-workshop" mode="preview" />
+
+Giữ thanh độ phân giải rồi kéo tới lui. Đọc số đỉnh của preview và số hàng của yêu cầu đang chờ. Buông tay để thấy lưới được làm mịn; thử hủy trước khi xong để xem bản đầy đủ nào được giữ lại.
+
+## Bắt tay xây dựng
+
+### 1. Giảm số ô nhưng giữ nguyên hình
+
+Thêm `previewSettings` vào `include/mesh_session.hpp`. Truyền `settings` theo giá trị để giảm số đoạn trên bản sao, không sửa độ phân giải người dùng vừa chọn.
+
+```cpp title="include/mesh_session.hpp — tạo cấu hình preview"
+inline SurfaceSettings previewSettings(SurfaceSettings settings) {
+    int uLimit = 32;
+    if (usesSweep(settings.kind))
+        uLimit = minSweepSegments;
+    settings.uSegments = std::min(settings.uSegments, uLimit);
+    settings.vSegments = std::min(settings.vSegments, 16);
+    return settings;
+}
+```
+
+Vỏ ốc và knot giữ tối thiểu 64 đoạn dọc để các frame đủ gần nhau; preview lớn nhất có `(64 + 1) * (16 + 1) = 1.105` đỉnh. Không hạ tùy ý số đoạn của sweep. Khi `request` nhận tham số khác, nó bỏ ứng viên cũ và lưu yêu cầu mới. Nếu tham số giống yêu cầu đang chờ, nó chỉ cập nhật trạng thái đang kéo.
+
+### 2. Chờ buông trước khi làm mịn
+
+Sau khi preview được chấp nhận, `pass_` chuyển sang `MeshPass::final`, nhưng `advance` trả về sớm nếu chuột còn giữ thanh:
+
+```cpp title="include/mesh_session.hpp — điều kiện chờ người dùng buông tay"
+bool waitingForRelease() const {
+    return requested_ && interactive_ && pass_ == MeshPass::final;
+}
+```
+
+`finishInteraction` bỏ cờ `interactive_`. Vòng lặp vẫn xử lý SDL events và vẽ như cũ. Với bản đầy đủ, một lần `advance` chỉ tiến một batch, tối đa tám hàng. Các frame dọc đường sweep được chuẩn bị khi tạo ứng viên; phần upload xảy ra sau khi đủ hàng. Giới hạn này không hứa mọi frame tốn cùng thời gian.
+
+### 3. Chỉ thay bản đang xem khi dữ liệu mới đã sẵn sàng
+
+```cpp title="include/workshop_app.hpp — upload trước, nhận mesh sau"
+void advanceMesh() {
+    session_.advance();
+    const Mesh* ready = session_.readyMesh();
+    if (!ready)
+        return;
+    try {
+        renderer_.upload(*ready, session_.readyPass());
+        session_.acceptReady();
+    } catch (const std::exception& error) {
+        session_.reject(error.what());
+    }
+}
+```
+
+Preview và bản đầy đủ dùng hai bộ buffer. Renderer cấp phát vào buffer tạm trước khi thay bộ đang vẽ. Nếu upload lỗi, `reject` bỏ việc đang làm và giữ last-good. Nếu thành công, `acceptReady` lưu preview hoặc thay last-good tùy pass. Đọc nhãn **DISPLAYED** để biết hình thực sự đang vẽ, và **REQUESTED** để biết bản đang chờ.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --target project_41_checkpoint_7
+.\build\Debug\project_41_checkpoint_7.exe --preset shell --resolution 128 --seconds 120
+```
+
+Khi bản đầy đủ có 129×129 đỉnh, giữ thanh Growth và đổi giá trị. Mục đang vẽ phải ghi PREVIEW, với không quá 1.105 đỉnh; khi giữ yên, số hàng của lưới đầy đủ chưa chạy. Buông tay để trở lại 16.641 đỉnh, 32.768 tam giác. Thử kéo lần nữa rồi nhấn X; hình phải trở về bản đầy đủ trước khi kéo. Nếu bản mới chưa kịp xong, chọn preset khác để xem yêu cầu cũ bị bỏ.
+
+## Thử tạo lỗi
+
+Tạm bỏ `waitingForRelease()` khỏi điều kiện đầu của `advance`. Giữ tay ở một vị trí mới trên thanh độ phân giải. Quan sát số hàng: bản đầy đủ bắt đầu dựng ngay cả khi ta chưa buông. Rê thêm một chút, ứng viên ấy lại bị bỏ. Khôi phục điều kiện và so hai lần kéo ở cùng độ phân giải.
+
+## Checklist hoàn thành
+
+- Kéo thấy hình đổi ngay; preview ít đỉnh hơn nhưng đúng preset và tham số.
+- Trong lúc giữ thanh không dựng bản đầy đủ. Khi buông, mỗi lần cập nhật chỉ tiến tối đa tám hàng.
+- Orbit, pan, zoom và bật các chế độ xem không tăng số lần dựng mesh. Hủy hoặc từ chối tham số giữ đúng last-good.
+
+## Hướng mở rộng
+
+Đếm bao nhiêu lần preview được dựng khi rê nhanh qua thanh. Nếu nhận thêm sự kiện mà chưa kịp vẽ, vì sao chỉ giữ yêu cầu cuối vẫn đúng? Bài sau dùng chính ranh giới preview/last-good để [xuất hình bạn đã tạo thành OBJ](/projects/geometry-workshop/08-xuat-obj-va-doc-lai).

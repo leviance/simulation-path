@@ -71,7 +71,7 @@ export default async function LessonPage({
           <b>Bài {lesson.order}</b>
         </nav>
 
-        <ProjectRevisionNotice projectId={project.id} />
+        <ProjectRevisionNotice project={project} />
 
         <header className="lesson-hero">
           <div>

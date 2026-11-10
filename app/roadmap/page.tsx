@@ -96,6 +96,9 @@ export default function RoadmapPage() {
                       <div>
                         <h3>{project.title}</h3>
                         <p>{project.summary}</p>
+                        {project.acceptanceNote && (
+                          <small className="revision-badge">CHỜ NGHIỆM THU</small>
+                        )}
                       </div>
                       <b>
                         {project.lessonCount} bài <i>→</i>

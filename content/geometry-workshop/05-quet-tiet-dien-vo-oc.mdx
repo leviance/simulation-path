@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mang một tiết diện đi dọc đường xoắn
+
+## Ta cần giải quyết điều gì?
+
+Muốn dựng vỏ ốc, ta cần một ống nhỏ ở đầu và loe dần về miệng. Thử tưởng tượng luồn một sợi dây qua giữa nhiều vòng elip. Sợi dây cho biết tâm của từng vòng, nhưng chưa cho biết nên xoay vòng thế nào. Nếu mỗi vòng tự tìm một hướng mới, mặt ống có thể giật hoặc xoắn ở chỗ ta không định xoắn.
+
+Ta sẽ giữ phần nối lưới từ các bài trước. Phần mới là tính đường đi, đặt vòng đầu tiên rồi mang hướng của nó đi theo đường cong.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi `s` là vị trí dọc đường cong, từ 0 ở đầu nhỏ đến 1 ở miệng. Mỗi hàng lưới là một vòng elip. Khi đi hết đường, góc tăng thêm `shellTurns` vòng; bán kính đường xoắn và bán kính tiết diện cùng tăng theo `radialScale`:
+
+$$
+\theta(s)=2\pi\,\text{shellTurns}\,s,\qquad
+\text{radialScale}(s)=e^{\text{shellGrowth}(s-1)}.
+$$
+
+Ở miệng, `radialScale` luôn bằng 1. Tăng Growth sẽ làm phần đầu nhỏ lại mà không làm miệng to ra. Muốn đổi kích thước miệng ống, hãy chỉnh Tube Radius. Đây là bán kính tiết diện, không phải bề dày thành vỏ: ta mới dựng một bề mặt.
+
+Tại tâm mỗi vòng, `tangent` chỉ hướng đi tiếp. Hai vector `normal` và `binormal` của **frame** nằm ngang qua đường cong, làm hai trục của elip. Chúng không phải normal chiếu sáng của từng đỉnh trên ống.
+
+<InteractiveLab demo="geometry-workshop" mode="shell" />
+
+Đưa lát cắt về phía đầu nhỏ rồi tăng Growth. Đoán bán kính lát cắt sẽ đổi theo hướng nào. Dời lát cắt về miệng và thử lại.
+
+## Bắt tay xây dựng
+
+### 1. Cho đường xoắn rộng dần và hạ thấp
+
+Thêm `sampleShellCurve` trong `include/sweep_frames.hpp`. Ta cần cả vị trí và đạo hàm để biết hướng tại từng tâm. `radiusRate` là đạo hàm của bán kính theo `s`; khi lấy đạo hàm của `radius * cosine`, phải tính cả việc bán kính đổi lẫn việc góc quay.
+
+```cpp title="include/sweep_frames.hpp — đường đi từ chóp tới miệng"
+inline CurveSample sampleShellCurve(double s, const SurfaceSettings& settings) {
+    const double angleRate = fullTurn * settings.shellTurns;
+    const double angle = angleRate * s;
+    const double radialScale = std::exp(settings.shellGrowth * (s - 1.0));
+    const double radius = settings.radius * radialScale;
+    const double radiusRate = settings.shellGrowth * radius;
+    const double height = 0.72 * settings.radius;
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+
+    return {
+        {radius * cosine, height * (1.0 - s), radius * sine},
+        {radiusRate * cosine - radius * angleRate * sine, -height, radiusRate * sine + radius * angleRate * cosine},
+        settings.thickness * radialScale,
+    };
+}
+```
+
+Hai đầu có độ cao khác nhau. Không đưa hàng cuối về đầu như torus: ta cần giữ miệng và chóp mở. Chỉ khép vòng quanh tiết diện theo `v`.
+
+### 2. Xoay vừa đủ để bám theo đường
+
+Ở hàng đầu, chọn một vector tham chiếu không gần song song với tangent rồi chiếu nó vào mặt phẳng tiết diện. Từ hàng thứ hai, dùng `transportNormal` thay vì chọn lại vector tham chiếu.
+
+```cpp title="include/sweep_frames.hpp — giữ hướng từ vòng trước"
+inline Vec3 transportNormal(Vec3 previousNormal, Vec3 previousTangent, Vec3 tangent) {
+    const Vec3 axis = cross(previousTangent, tangent);
+    const double sine = length(axis);
+    const double cosine = std::clamp(dot(previousTangent, tangent), -1.0, 1.0);
+    if (cosine < -0.9999) {
+        throw std::domain_error("Successive sweep tangents are opposed; increase u subdivisions");
+    }
+    if (sine <= 1e-10)
+        return projectOntoSection(previousNormal, tangent);
+
+    // Rotate by only the angle needed to align the two tangents. Do not rebuild a frame from world up.
+    const Vec3 normal = rotateAboutAxis(previousNormal, axis * (1.0 / sine), std::atan2(sine, cosine));
+    return projectOntoSection(normal, tangent);
+}
+```
+
+Hình dung hai mũi tên tangent nằm trong một mặt phẳng. Cross cho trục vuông góc với mặt phẳng đó; dot và độ dài cross lần lượt cho cosine và sine của góc giữa hai tangent đơn vị. `atan2` lấy góc từ hai giá trị này. Ta quay normal cũ quanh trục ấy bằng `rotateAboutAxis`. Hàm dùng phép quay Rodrigues: tách phần theo trục (giữ nguyên) và phần vuông góc với trục (quay như trong mặt phẳng). Không cần quaternion.
+
+Nếu hai tangent gần trùng hướng, không chia cho `sine` gần 0. Nếu gần ngược hướng, không có một trục quay duy nhất đáng tin; checkpoint từ chối cấu hình ấy. Khi đã có normal mới, `cross(tangent, normal)` cho trục còn lại.
+
+### 3. Lấy mẫu trên từng vòng
+
+Trong `MeshBuild`, dựng danh sách frame một lần cho lưới đang tạo. `sectionPoint` dùng lại frame của hàng khi lấy mẫu theo góc `v`:
+
+```cpp title="include/sweep_frames.hpp — đặt điểm trên tiết diện elip"
+inline Vec3 sectionPoint(const SweepFrame& frame, double cosine, double sine, double aspect) {
+    const Vec3 offset = frame.normal * cosine + frame.binormal * (aspect * sine);
+    return frame.center + offset * frame.sectionRadius;
+}
+```
+
+Vỏ ốc dùng `aspect = 0.72`. Tiết diện hơi dẹt giúp ta nhìn được nó đang quay. Tại một cột, giữ nguyên `v` rồi trừ vị trí ở hai hàng kề để xấp xỉ tangent theo `s`. Bước giữa hai hàng là `1 / uSegments`: hàng giữa chia hiệu cho hai bước, hàng đầu/cuối chia cho một bước. Tangent theo `v` vẫn lấy được bằng đạo hàm của elip. Dùng hai tangent này để tính normal chiếu sáng như Bài 1.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --target project_41_checkpoint_5
+.\build\Debug\project_41_checkpoint_5.exe --preset shell --seams --seconds 120
+```
+
+Checkpoint dùng 64×40 ô ở preset Shell: 2.665 đỉnh và 5.120 tam giác. Thử nhìn thẳng vào miệng, rồi tăng Growth. Miệng không đổi bán kính khi chỉ chỉnh Growth; các vòng phía chóp thu vào. Đổi Shell Turns để xem đường dẫn đổi, sau đó đổi Section Twist để thấy tiết diện quay mà không dời tâm. Đường quanh miệng không có nắp.
+
+## Thử tạo lỗi
+
+Tạm dùng lại một hướng `up` cố định ở từng hàng thay cho `transportNormal`. Thêm quy tắc đổi `up` sang trục X khi tangent gần thẳng đứng, rồi thử một đường cong đi qua ngưỡng ấy hoặc dùng fixture tangent trong test. Hai hàng sát ngưỡng có thể chọn hai hướng rất khác nhau dù tâm di chuyển rất ít. Phân biệt chỗ đó với việc tự giao do tăng bán kính tiết diện quá mức. Khôi phục phép transport trước khi đi tiếp.
+
+## Checklist hoàn thành
+
+- Nhìn được đầu nhỏ, miệng mở và vòng tiết diện loe dần; không có tam giác nối tắt hai đầu.
+- Biết phân biệt ba vector của frame và normal chiếu sáng ở một đỉnh.
+- Chỉnh Growth, Turns và Twist cho ba thay đổi khác nhau; đổi góc nhìn không làm đổi lưới.
+
+## Hướng mở rộng
+
+Thử đổi tỉ lệ elip về 1. Vì sao xoay tiết diện khi ấy khó nhận ra nếu tắt UV? Bài tiếp theo khép đường dẫn thành vòng và xử lý một vấn đề mới: [tâm đã về chỗ cũ nhưng tiết diện chưa chắc đã quay về đúng hướng](/projects/geometry-workshop/06-khep-frame-torus-knot).
