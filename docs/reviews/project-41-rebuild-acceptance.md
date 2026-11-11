@@ -2,7 +2,7 @@
 
 Nguồn chuẩn: [Product Specification v4, Project 41](../specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md#project-41--xưởng-hình-học-3d-tạo-vỏ-ốc-dải-möbius-và-nút-thắt).
 
-**Trạng thái: đã mở hướng dẫn, chờ kiểm thao tác chuột native.** Giáo trình ở `content/geometry-workshop/`, metadata ở `course/projects/p41/` và C++ ở `examples/project-41-geometry-workshop/`. Phần VIII của Lộ trình mở thẳng chín bài, Canvas và ZIP của Xưởng hình học 3D.
+**Trạng thái: đã mở hướng dẫn; kiểm lại hình học, giáo trình và ZIP đạt, còn chờ kiểm kéo chuột native.** Giáo trình ở `content/geometry-workshop/`, metadata ở `course/projects/p41/` và C++ ở `examples/project-41-geometry-workshop/`. Phần VIII của Lộ trình mở thẳng chín bài, Canvas và ZIP của Xưởng hình học 3D.
 
 ## Bằng chứng theo yêu cầu
 
@@ -23,6 +23,15 @@ Bản production toàn khóa build được. Lượt quét render toàn site d�
 
 Gói phát hành trong `public/downloads/` khớp từng byte của 261 file. Visual Studio 2022 build starter, cả chín checkpoint và final từ ZIP đã giải nén ở `.validation/p41-catalog-zip-v8F2uT/`. CTest Debug/Release đạt 1/1 mỗi cấu hình; chạy final với OpenGL ẩn vẫn đạt mốc 66.049 đỉnh và đọc lại đúng OBJ. Build dùng SDL 3.4.8 có sẵn và quyền đọc cấu hình Windows SDK. ZIP, BMP/PNG, OBJ và executable nằm ngoài Git.
 
+## Lượt kiểm lại ngày 2026-11-11
+
+- Bộ kiểm toán, session và raster của Canvas đạt 12/12. CTest C++ đạt 1/1 ở Release và 1/1 ở Debug, dùng bản build từ ZIP đã giải nén.
+- Cả chín bài biên dịch MDX thành công. Đối chiếu lại 25 đoạn C++/GLSL với đúng checkpoint, danh sách tệp hướng dẫn, liên kết bài tiếp theo và chín chế độ Canvas.
+- Giải nén lại riêng ZIP Project 41, so byte của cả 261 tệp với source hiện tại và đầu vào của bản native đã build: khớp hoàn toàn. Digest trong manifest là `d88f29e2ffaaff831ece0a59a6c80388b35e6fb82d2269cfc39f5771319beb4e`.
+- Đã mở cửa sổ native thật và quan sát torus knot cùng vỏ ốc có ánh sáng, lưới sàn và bảng tham số. Knot báo 66.049 đỉnh, 131.072 tam giác và 4.479.020 byte payload; phiên chạy hữu hạn kết thúc với mã 0.
+- Công cụ hiện đã truy cập được cửa sổ, nhưng các lệnh bàn phím và kéo tham số bị dừng với thông báo `user input was detected in this window; call get_window_state before continuing`. Sau khi đọc lại trạng thái, cảnh báo vẫn lặp lại. Không tính các lệnh bị chặn là thao tác đã thực hiện, không coi ảnh chụp hoặc lần mở cửa sổ là bằng chứng kéo/buông hay mouse capture đạt.
+- Không chạy lại build hoặc bộ test toàn site. Các phiên native giới hạn 120 giây, có process supervisor và đường hủy; phiên bị ngắt để tránh tranh chuột/bàn phím không được tính là một ca PASS.
+
 ## Kiểm trực tiếp còn chờ
 
 Chạy bản đã build từ ZIP hoặc tự build theo README, rồi mở cửa sổ tối đa hai phút:
@@ -38,4 +47,4 @@ Chạy bản đã build từ ZIP hoặc tự build theo README, rồi mở cửa
 
 ## Bản Lennard–Jones trước đây
 
-Catalog dùng slug `geometry-workshop` và revision nội dung 2. Tiến độ Lennard–Jones không đánh dấu nhầm các bài mới; các project khác không bị xóa tiến độ. Tài liệu, source, test và ZIP cũ được giữ trong bản sao local `.validation/retired-project-41-lennard-jones/`; source tracked cũ vẫn còn trong lịch sử Git. Project 42–45 vẫn dạy mô phỏng phân tử, với phần nhắc lại thế Lennard–Jones ở Project 42 và Glossary thay cho yêu cầu học Project 41 cũ.
+Catalog dùng slug `geometry-workshop` và revision nội dung 2. Tiến độ Lennard–Jones không đánh dấu nhầm các bài mới; các project khác không bị xóa tiến độ. Tài liệu, source, test và ZIP cũ được giữ trong bản sao local `.validation/retired-project-41-lennard-jones/`; source tracked cũ vẫn còn trong lịch sử Git. Project 42 đã được thay bằng học phần biến hình hạt. Các phiên bản cũ của Project 43–45 vẫn là mô phỏng phân tử; chúng dùng phần giải thích và source riêng của Project 43 cùng Glossary, không còn yêu cầu học Project 41–42 cũ.

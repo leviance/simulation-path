@@ -1,0 +1,107 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa bộ mẫu lên GPU mà không mất bản đang xem
+
+Thời gian gợi ý: đọc 20 phút, viết 35 phút, kiểm 15 phút.
+
+## Ta cần giải quyết điều gì?
+
+Bản trước tính toàn bộ vị trí trên CPU rồi upload để vẽ. Bây giờ ta chuẩn bị layout mà compute shader có thể đọc, nhưng **checkpoint 6 vẫn cập nhật CURRENT trên CPU**. Chuyển dữ liệu sang SSBO chưa tự biến phép tính thành GPU update; cần phân biệt hai bước này.
+
+Một thay đổi nữa cũng quan trọng: không được xóa buffer đang vẽ rồi mới thử cấp buffer mới. Nếu allocation thất bại, người dùng phải còn một hình hợp lệ để quan sát và một thông báo có thể hiểu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng năm buffer, giữ ID bằng index:
+
+| Buffer | Record | Nội dung |
+| --- | --- | --- |
+| source | vec4, 16 byte | Vị trí nguồn; w mang nhóm tam giác |
+| target | vec4, 16 byte | Vị trí đích |
+| current | vec4, 16 byte | Vị trí đang vẽ; w ghi ID để kiểm |
+| path | vec4, 16 byte | Offset và tỷ số mật độ nguồn |
+| mapping | uvec2, 8 byte | Target ID random và spatial |
+
+CURRENT có thêm một canary 16 byte sau N record thật. Tổng payload là `72N+16` byte, chưa phải peak RAM/VRAM. Khi đổi cấu hình, ACTIVE và candidate còn cùng tồn tại. Phía CPU cũng giữ bộ mẫu và mảng phục vụ counting sort.
+
+<InteractiveLab demo="particle-morph-studio" mode="buffers" />
+
+Bảng của lab tính layout C++ tại N=1.000.003, trong khi phần Canvas chỉ vẽ số mẫu CPU đang ghi ở ACTIVE. Đừng dùng 16 byte của một vec4 C++ để đo object JavaScript.
+
+## Bắt tay xây dựng
+
+### 1. Viết record và khóa layout
+
+Trong `morph_math.hpp`:
+
+```cpp title="include/morph_math.hpp — record std430 của một vec4"
+struct alignas(16) Vec4 {
+    float x{};
+    float y{};
+    float z{};
+    float w{};
+    bool operator==(const Vec4 &) const = default;
+};
+static_assert(sizeof(Vec4) == 16 && alignof(Vec4) == 16);
+```
+
+`Mapping` gồm hai uint32, có static assert 8 byte. Không nhét thêm một field rồi giữ nguyên phép tính byte cũ. Shader và C++ phải thống nhất stride, binding và kiểu của từng record.
+
+### 2. Kiểm capability trước khi lấy mẫu lớn
+
+`readCapabilities` kiểm OpenGL 4.3, block size, số storage binding, số SSBO ở compute/vertex shader, local size và group count. Sau đó `preflight` so yêu cầu cụ thể:
+
+```cpp title="include/morph_gpu.hpp — từ N tới giới hạn của context"
+inline void preflight(const Capabilities &caps, std::uint32_t count, std::uint32_t active = 0) {
+    const auto plan = planMemory(count, active);
+    if (plan.currentBytes > static_cast<std::uint64_t>(caps.maxBlock) || (count + 255U) / 256U > static_cast<std::uint32_t>(caps.maxGroups))
+        throw std::invalid_argument("N exceeds the context SSBO or dispatch limit");
+}
+```
+
+`planMemory` đã kiểm miền N và hai ngân sách ứng dụng, mỗi phía 768 MiB. Dự phòng đó không phải truy vấn “VRAM còn trống”: hệ điều hành và ứng dụng khác vẫn có thể làm allocation thất bại.
+
+### 3. Tải vào candidate, rồi mới công bố
+
+`GpuParticles` tạo năm buffer mới. Sau mỗi allocation, nó đọc lại kích thước thực:
+
+```cpp title="include/morph_gpu.hpp — không chấp nhận buffer thiếu byte"
+GLint64 actual{};
+gl_.GetBufferParameteri64v(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, &actual);
+if (gl_.GetError() != GL_NO_ERROR || actual != static_cast<GLint64>(bytes_[slot]))
+    throw std::runtime_error("Candidate allocation failed; keep ACTIVE buffers");
+```
+
+Các vector nguồn/đích/path/mapping được tải qua `uploadNext` theo chunk tối đa 4 MiB. CURRENT chỉ khởi tạo canary trước; ở mốc này `updateOnCpu` tính vị trí rồi ghi phần N record. Khi mọi buffer candidate đã đủ, `App` mới đổi con trỏ GPU và accept đúng Prepared của nó.
+
+Vertex shader không đọc lại VBO cũ:
+
+```glsl title="shaders/particles.vert — đọc CURRENT của cùng generation"
+layout(std430, binding = 2) readonly buffer Current { vec4 current[]; };
+layout(std430, binding = 3) readonly buffer Paths { vec4 paths[]; };
+```
+
+Nó lấy `current[gl_VertexID]` và `paths[gl_VertexID].w`. Draw vẫn gọi đúng N điểm; không có một mesh nhân bản dùng để giả số lượng.
+
+## Chạy thử và quan sát
+
+Build `project_42_checkpoint_6`. Panel ghi rõ **CPU UPDATE / SSBO DRAW**. Ở mốc này N tối đa 65.536; đừng lấy nó làm bằng chứng một triệu hạt đã cập nhật trên GPU.
+
+So `planMemory` với kích thước buffer khi chạy. Với N=1.000.003 ở final, mỗi source/target/path là 16.000.048 byte, mapping 8.000.024 byte, CURRENT 16.000.064 byte. Chênh 16 byte cuối có mục đích, không phải một ID đang vẽ thêm.
+
+Thử sửa một yêu cầu STAGED, chưa Apply: ACTIVE và hình cũ không đổi. Với yêu cầu không hợp lệ, hình cũ vẫn còn; không tự hạ N để làm như yêu cầu đã được đáp ứng.
+
+## Thử tạo lỗi
+
+Trong bản thực hành nhỏ, đổi một stride hoặc binding của shader. Trước khi chạy, chỉ ra buffer nào sẽ bị đọc sai. Sau đó thử giảm kích thước allocation mà không sửa số byte expected; kiểm đọc lại kích thước phải từ chối candidate. Không thử bằng cách xin hàng chục GB để ép cả máy vào tình trạng thiếu bộ nhớ.
+
+## Checklist hoàn thành
+
+- Chỉ chạy nhánh GPU khi context đáp ứng các capability thực sự dùng.
+- Byte của từng buffer và peak có ACTIVE/candidate được tính riêng.
+- Candidate thiếu byte hoặc upload lỗi không phá last-good.
+- Checkpoint 6 được mô tả đúng là CPU update, không nhận nhầm là compute.
+
+## Hướng mở rộng
+
+Nếu mapping chỉ cần một phương pháp thay vì A/B tức thời, có thể giảm bao nhiêu byte? Đổi lại, thao tác A/B sẽ phải trả chi phí nào? Tiếp theo: [đưa phép cập nhật thật sang compute shader](/projects/particle-morph-studio/07-compute-cap-nhat-tung-id).

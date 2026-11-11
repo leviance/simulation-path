@@ -47,7 +47,7 @@ export interface ProjectRevision {
   previousPart?: string;
   replacement?: {
     slug: string;
-    acceptanceNote: string;
+    acceptanceNote?: string;
   };
   summary: string;
   outcome: string;

@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện studio một triệu hạt
+
+Thời gian gợi ý: đọc 20 phút, tự hoàn thiện 35 phút, kiểm 25 phút. Thời gian compiler và tải dependency không nằm trong các mốc này.
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có các phần riêng, nhưng sản phẩm cuối không được chỉ là một ảnh đẹp hoặc một dispatch nhỏ rồi ghi “có thể mở rộng”. Bài này ghép chúng thành một studio có thể điều khiển, rồi kiểm rằng một triệu record thực sự được cập nhật và vẽ.
+
+Bạn có thể tải `final/` và đọc toàn bộ mã trong trình đọc source của bài. `src/main.cpp` là điểm vào; các tệp include chia sampler, mapping, timeline, job, GPU và UI theo trách nhiệm. Không cần ghép lại các đoạn trích trong MDX để có một chương trình chạy được.
+
+## Hiểu ý tưởng trước khi viết code
+
+Các phần nối với nhau theo thứ tự:
+
+1. STAGED được kiểm cấu hình, capability và budget.
+2. CPU chuẩn bị một Prepared có source/target/path, hai mapping và generation riêng.
+3. GPU nhận đủ candidate buffers rồi mới thay ACTIVE.
+4. Model time quyết định CURRENT; vertex shader đọc chính CURRENT để vẽ N điểm.
+5. Job kiểm riêng đọc lại dữ liệu theo batch; vòng frame bình thường không readback toàn mảng.
+
+Final mặc định `N=1.000.003`, không phải một triệu bản sao của cùng vài điểm. N lẻ còn buộc dispatch có 189 lanes dư, giúp kiểm tail guard. Năm triệu nằm trong miền cấu hình mở rộng, nhưng capability, budget và allocation vẫn có quyền từ chối.
+
+<InteractiveLab demo="particle-morph-studio" mode="showcase" />
+
+Chọn một cặp hình, giữ seed rồi so A/B ở giữa. Về hai đầu để nhận ra mô hình. Canvas giới hạn 4.096 mẫu CPU; các con số GPU dưới đây phải lấy từ native, không suy từ lab này.
+
+## Bắt tay xây dựng
+
+### 1. Nối cấu hình đầu vào với app đầy đủ
+
+Sau khi tạo window/context và đọc capabilities, `main.cpp` khởi tạo phần còn lại:
+
+```cpp title="src/main.cpp — một nơi nối cấu hình vào ứng dụng"
+App app(window, gl, caps);
+app.view = options.view;
+app.timeline.scrub(options.phase);
+app.timeline.paused = !options.play;
+app.start(options.settings);
+```
+
+Vòng lặp poll event trước advance/draw. Một số tùy chọn CLI cho phép chạy kiểm có giới hạn; bỏ giới hạn chỉ dành cho lúc người dùng chủ động chạy ứng dụng bình thường. `--frames` đếm frame sau khi ACTIVE sẵn sàng, không chụp nhầm màn hình sàn khi preparation chưa xong.
+
+### 2. So toàn mảng, không chỉ vài probe
+
+`verifyGpu` chạy hai mapping × hai easing × ba path × bốn t, tổng 48 tổ hợp. Mỗi tổ hợp có fence, deadline và readback từng phần:
+
+```cpp title="include/morph_gpu.hpp — chỉ đọc một batch hợp lệ"
+std::vector<Vec4> readCurrent(std::uint32_t first, std::uint32_t count) const {
+    if (count == 0 || count > 16384 || static_cast<std::uint64_t>(first) + count > static_cast<std::uint64_t>(data_->settings.count) + 1)
+        throw std::invalid_argument("Readback batch is outside the declared buffer");
+    std::vector<Vec4> result(count);
+    gl_.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffers_[2]);
+    gl_.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, static_cast<GLintptr>(first * sizeof(Vec4)), static_cast<GLsizeiptr>(count * sizeof(Vec4)), result.data());
+    if (gl_.GetError() != GL_NO_ERROR)
+        throw std::runtime_error("Current buffer readback failed");
+    return result;
+}
+```
+
+Job đi từ `first=0` tới cuối mảng, mỗi lần đọc `min(16384,N-first)` record. Với từng ID, nó gọi `positionAt` làm đối chiếu CPU, kiểm vị trí hữu hạn, khoảng sai lệch và field ID. Tolerance `8e-5` dành cho vị trí trung gian khi CPU double và GPU float khác cách làm tròn. Endpoints còn được so từng thành phần để yêu cầu chép chính xác. Canary phải nguyên; một lần kiểm timeout/cancel hoặc chưa hết N record không được in PASS.
+
+So CPU/GPU chứng minh hai implementation khớp nhau trên dữ liệu ấy. Nó không thay fixture thống kê của sampler, kiểm permutation hay đánh giá hình ảnh. Ta cần các loại bằng chứng riêng.
+
+### 3. Giữ đường xuất bản và scale có thể tái lập
+
+```cpp title="include/morph_settings.hpp — mức mặc định và mở rộng của final"
+constexpr std::uint32_t maximumCount = 5000000;
+constexpr std::uint32_t defaultCount = 1000003;
+```
+
+Budget không được nâng chỉ để hợp thức hóa một allocation lỗi. Nếu máy không đủ, giữ ACTIVE và báo lý do. Nếu thử năm triệu, hãy ghi rõ đã update, đã draw hay đã kiểm toàn state; ba phát biểu không tự đồng nghĩa.
+
+## Chạy thử và quan sát
+
+Giải nén ZIP vào một thư mục mới. Không cần Node.js để build C++. Trên Visual Studio:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 15
+.\build\Release\project_42_final.exe --hidden --verify --count 1000003
+.\build\Release\project_42_final.exe --seconds 120
+```
+
+Với generator một cấu hình, đặt `CMAKE_BUILD_TYPE` khi configure và bỏ `Release` khỏi đường dẫn chạy. Test CPU không cần window; nhánh `--verify` vẫn cần context OpenGL 4.3 dù cửa sổ ẩn.
+
+Ở N=1.000.003, một lượt kiểm đầy đủ phải báo 48.000.144 record đã so, tail nguyên và drawn=1.000.003 khi renderer chạy. Bảng payload phải cộng thành 72.000.232 byte, gồm canary. Log nêu GPU/driver và chi phí preparation, không chỉ thời gian shader.
+
+Trong cửa sổ, thử Space/Pause, Home/End, reverse/loop; đổi M/E/C tại một t cố định; orbit/pan/zoom trong lúc candidate đang làm; Apply nhanh hai cấu hình rồi X; kiểm nhãn ACTIVE. Buông kéo ở ngoài cửa sổ và chuyển focus không được để camera hoặc timeline bị kẹt. Phép kiểm sự kiện tự động không được ghi thành “đã thử chuột thật”.
+
+## Thử tạo lỗi
+
+Ở preset nhỏ, chỉ công bố nhãn generation mới nhưng giữ một buffer cũ. Hình có thể vẫn nhận ra, nhưng kiểm ID/endpoint sẽ trượt. Sau đó thử bỏ một nhóm dispatch ở cuối: vài ID đầu vẫn đúng, vì vậy chỉ đọc probe đầu mảng là không đủ.
+
+Không cố tình tạo truy cập ngoài mảng ở scale lớn. Sửa bản thực hành nhỏ, có canary và watchdog; khôi phục trước khi chạy mốc một triệu.
+
+## Checklist hoàn thành
+
+- Có đủ sphere/torus/knot, source/target và A/B thật; sampling đúng cùng chế độ thiên lệch được phân biệt.
+- t=0/1 đúng, Pause giữ model time, cùng tổng dt cho cùng kết quả.
+- N=1.000.003 được compute cập nhật và DrawArrays vẽ thật; kiểm toàn record và tail đạt.
+- Candidate/cancel/invalid giữ last-good và đúng nhãn; capability/memory/deadline có hiệu lực.
+- Starter, 10 checkpoint, final, shader, README và tests có trong ZIP độc lập. Hồ sơ ghi riêng các loại kiểm và phần chưa kiểm.
+
+## Hướng mở rộng
+
+Thử một quy tắc correspondence khác nhưng giữ cùng input, seed và đại lượng đo. Hoặc lấy một mesh mới rồi chuẩn hóa tọa độ và cập nhật sampler/bounds một cách công khai. Không cần thêm lực để hiệu ứng thú vị hơn.
+
+Bạn đã có sản phẩm hoàn chỉnh để tự biến đổi mô hình, không chỉ một tập công thức. [Tải toàn bộ source Project 42](/downloads/project-42-particle-morph-studio.zip) hoặc trở về [tổng quan và thử thách](/projects/particle-morph-studio) để làm lại mà không nhìn lời giải.

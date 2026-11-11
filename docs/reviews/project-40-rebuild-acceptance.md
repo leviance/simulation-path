@@ -2,7 +2,9 @@
 
 Nguồn chuẩn: [Product Specification v4, Project 40](../specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md#project-40--xưởng-vải-3d-kéo-ghim-và-thả-vải-phủ-lên-vật-thể). Bảng này ghi bằng chứng theo từng cổng; không suy từ build xanh sang tính đúng vật lý, tương tác native hay quy mô GPU.
 
-**Trạng thái: PARTIAL — các gate tự động hiện tại đã có bằng chứng, chưa nghiệm thu toàn project.** Cập nhật ngày 2026-11-09 trên NVIDIA RTX 3050 Laptop GPU, driver 546.30, context OpenGL 4.3; các số đo ngày 2026-11-08 được giữ với phạm vi riêng bên dưới. Full matrix, shader smoke, native verify, website payload build, route/browser và ZIP hiện tại đã kiểm lại sau preset/debug/prose mới. Native OS capture và thao tác bằng tay vẫn chờ lựa chọn người dùng; roadmap revision 40 giữ nguyên. npm test đã dừng ở bước format. File test thuộc đợt sửa này đã được chuẩn hóa; bảy file còn lại nằm ngoài P40. Global lint vẫn còn lỗi ngoài P40.
+**Trạng thái phát hành: đã chốt học phần Xưởng vải 3D, không chạy thêm kiểm thử theo yêu cầu.** Thao tác kéo, buông chuột và mouse capture của hệ điều hành trên cửa sổ C++ chưa được kiểm trực tiếp. Lộ trình giữ liên kết đến bản mới và không còn nhãn “Chờ nghiệm thu”; việc bỏ nhãn không đồng nghĩa bước kiểm trực tiếp đã đạt.
+
+Bằng chứng bên dưới được ghi nhận ngày 2026-11-08 và 2026-11-09 trên NVIDIA RTX 3050 Laptop GPU, driver 546.30, context OpenGL 4.3. Trong đợt đó, full matrix, shader smoke, native verify, website payload build, route/browser và ZIP đã được kiểm lại sau khi cập nhật preset, debug và bài học. `npm test` dừng ở bước kiểm tra định dạng; bảy file còn lại nằm ngoài P40. Global lint cũng còn lỗi ngoài P40.
 
 | Cổng                           | Bằng chứng đã có                                                                                                                                                                                                                                                                                | Giới hạn / còn chờ                                                                                                           |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -15,7 +17,7 @@ Nguồn chuẩn: [Product Specification v4, Project 40](../specifications/cpp-sd
 | GPU tối thiểu                  | Ba preset side 321 × 120 bước đủ vertices/constraints/grid/normals; updated/pinned/drawn được tách rõ. Ảnh native cả ba cảnh đã được xem.                                                                                                                                                       | Không chứng minh mọi tốc độ hoặc mọi self-intersection đều được xử lý.                                                       |
 | GPU mở rộng                    | Một triệu bị từ chối: peak planned 878611976 byte, budget 536870912 byte.                                                                                                                                                                                                                       | Chưa có million-scale execution PASS; đường từ chối không hạ mốc tối thiểu.                                                  |
 | Hình ảnh native                | SphereDrape có nếp gấp/pattern/hai mặt; Hanging đứng và ghim đúng; TABLE/CAPSULE khác vòm sphere, vải phủ thanh ở bàn Y=0,7 m. Ảnh đã xem không có nổ hình/xuyên rõ.                                                                                                                            | Kiểm ảnh giới hạn, không phải chứng minh chống xuyên mọi tốc độ hoặc manual interaction.                                     |
-| Input native qua sự kiện       | Native event checks 23 assertions PASS, gồm probe pending, cancel debug khi Pause và refresh debug sau khi từ chối đổi resolution.                                                                                                                                                              | OS CAPTURE UNVERIFIED: hidden window từ chối capture đúng chính sách; thao tác chuột/capture OS bằng tay vẫn chờ người dùng. |
+| Input native qua sự kiện       | Native event checks 23 assertions PASS, gồm probe pending, cancel debug khi Pause và refresh debug sau khi từ chối đổi resolution.                                                                                                                                                              | OS CAPTURE UNVERIFIED: hidden window từ chối capture đúng chính sách; chưa kiểm bằng chuột trên cửa sổ thật.                 |
 | Input GPU trực tiếp            | Fixture GPU riêng PASS: pin/unpin thật, 24 movable patch nodes + một pin, ba driven frames với raw driver≤6h và hai released frames raw driver zero; reset 17→9 với fresh Input, rest error 0 m.                                                                                                | Fixture dùng Input trực tiếp, không chứng minh OS capture; inertia sau release có thể tiếp tục.                              |
 | Jobs và ngân sách              | Benchmark mới nhất COMPLETE 71 bước, 1181364 analytic events trong chín mẫu; median/MAD mới ở bảng riêng. Preflight/refusal và event lifecycle tự động đã kiểm.                                                                                                                                 | Completion không phải accuracy PASS; không dùng GPU-only baseline để tạo speedup ratio.                                      |
 | Website, Canvas và TypeScript  | Full site build suite mới nhất PASS trong 269,7 s, gồm generate/package; route tests 2/2 PASS gồm 14 lessons, overview và old-route 404. Browser mới nhất 4/4 PASS trong 31,5 s: 14 modes, pointer/keyboard/DPR/progress và oracle cancel với late RAF. Typecheck, target lint và math 12 PASS. | Chưa tuyên bố deployment hoặc manual native capture.                                                                         |
@@ -78,7 +80,7 @@ Fixture kiểm riêng trong vùng validation bị Git ignore gọi Input trực 
 - Hai released frames có raw driver bằng zero. Inertia của vải có thể tiếp tục sau release; không đòi position bất động để chứng minh input đã được buông.
 - Reset từ side 17 sang side 9 trong khi có thao tác pending, sau đó dùng fresh Input; rest error của state mới bằng 0 m.
 
-Bằng chứng này bổ sung cho 23 native event assertions, nhưng **không xác minh OS mouse capture hoặc cảm giác thao tác bằng tay**. Native capture vẫn chờ lựa chọn người dùng.
+Bằng chứng này bổ sung cho 23 native event assertions, nhưng **không xác minh OS mouse capture hoặc cảm giác thao tác bằng tay**.
 
 ## Benchmark có tiếp xúc
 
@@ -110,15 +112,15 @@ Sáu fixture 289 đỉnh tiến tới cùng thời điểm t=0,5 s. Stretch dư�
 
 Cả sáu ca finite, đủ coverage và penetration không quá 1,2e-7 m. Không khẳng định sai số giảm đơn điệu: tại h=1/240, residual của I=8 lớn hơn I=4 dù stretch dương nhỏ hơn. Đây là phép kiểm độ nhạy của solver hữu hạn, không phải bằng chứng XPBD hoàn toàn độc lập timestep/iteration.
 
-## Phạm vi mô hình và các cổng còn mở
+## Giới hạn của mô hình và bằng chứng
 
 - Bend-distance chỉ xấp xỉ chống gập, không phải mô hình góc nhị diện đầy đủ.
 - Self-contact theo vertex không phải edge/triangle CCD và không chống xuyên mọi tốc độ.
 - Compliance (m/N), damping rate (1/s), friction fraction theo substep contact và thickness (m) có ý nghĩa khác nhau.
-- Final matrix, website payload build, routes/browser và ZIP hiện tại đã PASS. npm test FAIL tại check:format (bảy file ngoài P40 chưa chuẩn hóa); global lint còn 176 errors/13 warnings ngoài P40. Visible OS capture và thao tác native bằng tay vẫn chờ lựa chọn người dùng.
-- Chưa đánh dấu project hoàn thành, chưa bỏ roadmap revision 40 và không hứa FPS chung.
+- Kết quả đợt trước: final matrix, website payload build, routes/browser và ZIP đạt; `npm test` dừng ở `check:format` (bảy file ngoài P40), global lint còn 176 lỗi và 13 cảnh báo ngoài P40.
+- Học phần đã chốt phát hành; roadmap revision 40 tiếp tục giữ liên kết sang bản mới. Không ghi thao tác OS chưa kiểm là đạt và không cam kết một mức FPS chung cho mọi máy.
 
-## Kiểm trực tiếp cửa sổ native còn chờ
+## Nếu muốn tự kiểm tra thao tác trên cửa sổ C++
 
 Trên workspace đã build ma trận, có thể mở bản final trong hai phút bằng PowerShell tại thư mục gốc repository:
 

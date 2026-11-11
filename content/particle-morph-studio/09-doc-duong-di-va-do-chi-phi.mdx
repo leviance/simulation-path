@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc đường đi và đo đúng công việc
+
+Thời gian gợi ý: đọc 20 phút, viết 30 phút, kiểm 15 phút.
+
+## Ta cần giải quyết điều gì?
+
+Studio đã phản hồi trong lúc đổi cấu hình. Bây giờ có hai câu hỏi khác nhau: “vì sao chuyển động này trông rối?” và “frame này tốn thời gian ở đâu?”. Một vài đường hướng dẫn giúp câu đầu; chúng không thay profiler của câu sau.
+
+Ta sẽ vẽ subset có công bố, đọc histogram và dùng query GPU không chặn frame. Không lấy chi phí của một frame đang Pause, không dispatch, để quảng cáo thời gian cập nhật một triệu hạt.
+
+## Hiểu ý tưởng trước khi viết code
+
+Renderer luôn vẽ N điểm của ACTIVE. Các đường đi chỉ lấy tối đa 32 ID rải dọc mảng, mỗi đường chia thành 16 đoạn. Đó là lớp hướng dẫn có thể tắt, không phải cách giả N lớn bằng một ít hạt.
+
+Ở phía thời gian, cần tách:
+
+| Số đo | Nó trả lời điều gì? |
+| --- | --- |
+| setupMs | Dựng mesh/CDF và chuẩn bị bộ nhớ CPU mất bao lâu? |
+| samplingMs | Các batch lấy source/target và đếm mẫu tốn bao nhiêu CPU time? |
+| matchMs | Tính tỷ số mật độ, shuffle và spatial order tốn bao nhiêu CPU time? |
+| preparationWallMs | Từ bắt đầu tới CPU ready qua nhiều frame mất bao lâu? |
+| uploadSubmitMs | Các lời gọi allocation/upload mất bao nhiêu thời gian phía CPU? |
+| GPU last update / draw | GPU thực thi hai vùng lệnh ấy mất bao lâu? |
+| frame wall | Vòng frame gồm xử lý và swap tốn bao lâu phía ứng dụng? |
+
+Upload submit không phải phép đo GPU transfer riêng. Các khoảng thời gian bất đồng bộ có thể chồng nhau; không cộng tùy tiện tất cả cột để suy ra FPS.
+
+<InteractiveLab demo="particle-morph-studio" mode="inspector" />
+
+Tắt đường đi để nhìn hình sạch rồi bật lại. Chọn random/spatial ở cùng t, đọc ID 0 và các cột mật độ. Canvas giúp lần thuật toán, không cung cấp timings GPU native.
+
+## Bắt tay xây dựng
+
+### 1. Chọn subset không vượt ID cuối
+
+Trong `Renderer::scene`:
+
+```cpp title="include/morph_renderer.hpp — một ID đại diện ở mỗi hạng"
+std::uint32_t id = 0;
+if (subset > 1)
+    id = static_cast<std::uint32_t>(static_cast<std::uint64_t>(item) * (data->settings.count - 1) / (subset - 1));
+```
+
+Đoạn trên nằm trong vòng lặp `item=0..subset-1`, với `subset=min(32,N)`. Khi N=1, không chia cho 0. Khi N lớn, công thức chạm cả ID đầu và cuối. Phần tiếp theo gọi chính `positionAt` ở các mốc đường đi, nên đường hướng dẫn không được dùng một easing khác với hạt.
+
+Độ dài trung bình trong Canvas là độ dài **đoạn nối nguồn–đích**, không phải độ dài đường cung và không phải khoảng cách tối ưu của mọi permutation. Cần ghi rõ đại lượng trước khi dùng nó để kết luận.
+
+### 2. Chỉ đọc query đã có kết quả
+
+`GpuTimings` giữ bốn cặp query. Một query đo update, một query đo draw. Đọc lại ở frame sau:
+
+```cpp title="include/morph_timing.hpp — kiểm availability trước khi đọc"
+GLint updateReady{};
+GLint drawReady{};
+gl_.GetQueryObjectiv(queries_[index * 2], GL_QUERY_RESULT_AVAILABLE, &updateReady);
+gl_.GetQueryObjectiv(queries_[index * 2 + 1], GL_QUERY_RESULT_AVAILABLE, &drawReady);
+if (updateReady && drawReady) {
+    GLuint64 update{};
+    GLuint64 draw{};
+    gl_.GetQueryObjectui64v(queries_[index * 2], GL_QUERY_RESULT, &update);
+    gl_.GetQueryObjectui64v(queries_[index * 2 + 1], GL_QUERY_RESULT, &draw);
+    if (hasWork_[index] && serial_[index] > lastUpdate_) {
+        updateMs_ = static_cast<double>(update) / 1e6;
+        lastUpdate_ = serial_[index];
+    }
+    if (serial_[index] > lastDraw_) {
+        drawMs_ = static_cast<double>(draw) / 1e6;
+        lastDraw_ = serial_[index];
+    }
+    available_ = true;
+    pending_[index] = false;
+}
+```
+
+Nếu query chưa ready, ta không chờ trong frame bình thường. UI ghi pending trước kết quả đầu tiên; không điền 0 ms cho đẹp. Khi ring quay vòng, serial giúp kết quả cũ không ghi đè số đo mới hơn chỉ vì index của nó lớn hơn.
+
+### 3. Giữ ý nghĩa của “last update”
+
+App chỉ đánh dấu có update khi CURRENT thực sự được tính lại. Query update ở frame đứng yên không thay số đo lần update gần nhất:
+
+```cpp title="include/morph_timing.hpp — không lấy frame idle làm tốc độ compute"
+if (hasWork_[index] && serial_[index] > lastUpdate_) {
+    updateMs_ = static_cast<double>(update) / 1e6;
+    lastUpdate_ = serial_[index];
+}
+```
+
+Panel vẫn báo UPDATE của frame hiện tại bằng 0 khi Pause, DRAW bằng N, cùng LAST UP của lần đã làm việc. Đừng so draw ở một góc camera ít overdraw với draw ở góc khác rồi quy hết khác biệt cho thuật toán morph.
+
+## Chạy thử và quan sát
+
+Build `project_42_checkpoint_9`. Khi Play, xem UPDATE/DRAW và số đo query. Pause rồi orbit: generation không đổi, UPDATE có thể bằng 0, DRAW vẫn bằng N. Thử bật/tắt 32 đường đi; thời gian draw có thể đổi, nhưng source/matching preparation không chạy lại.
+
+Đổi sampling hoặc seed và Apply. Setup/sampling/matching là chi phí của generation mới, không phải chi phí trả lại mỗi frame. Đối chiếu log ở terminal để đọc thêm preparation wall time; nó gồm thời gian job nhường quyền cho các frame khác.
+
+Thời gian của driver, cache và hệ thống có dao động. Muốn làm benchmark nghiêm túc, thêm warm-up, nhiều mẫu và công bố camera/viewport/N/mode. Một số đo đơn lẻ ở đây đủ để học cách đặt vùng đo, chưa phải một bảng xếp hạng GPU.
+
+## Thử tạo lỗi
+
+Đọc `GL_QUERY_RESULT` ngay sau EndQuery mà bỏ availability. Ảnh có thể vẫn đúng, nhưng CPU đang chờ GPU và số đo frame bị ảnh hưởng bởi chính profiler. Chỉ thử ở preset nhỏ; sau đó khôi phục đường đọc muộn. Một lỗi khác là luôn ghi đè LAST UP bằng query idle: vì sao cách đó tạo “kết quả rất nhanh” khi Pause?
+
+## Checklist hoàn thành
+
+- Đường đi là subset đã công bố; điểm core vẫn vẽ đúng N.
+- Histogram so cùng nhóm tam giác cho expected và observed.
+- Query chưa ready không chặn frame hoặc bị ghi thành 0.
+- Các chi phí preparation, upload submit, update, draw và frame có tên/đơn vị đúng; không hứa FPS chung.
+
+## Hướng mở rộng
+
+Đo cùng một cấu hình với ba góc camera rồi xem cột nào thay đổi. Sau đó thêm phép thống kê median/MAD cho một job hữu hạn, không đặt vòng benchmark vô tận trong event loop. Tiếp theo: [hoàn thiện và kiểm studio một triệu hạt](/projects/particle-morph-studio/10-studio-mot-trieu-hat).

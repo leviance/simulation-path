@@ -84,7 +84,7 @@ const learning = {
         {
           title: "Giữ thế năng force-shifted",
           explanation:
-            "Trừ U(rc) và tiếp tuyến tại rc như Project 42. Ngoài cutoff, lực và U đều bằng zero; bên trong không clamp lực.",
+            "Trừ U(rc) và tiếp tuyến tại rc theo phần giải thích force-shifted trong bài này. Ngoài cutoff, lực và U đều bằng zero; bên trong không clamp lực.",
         },
         {
           title: "Cộng hai lực từ một kết quả",

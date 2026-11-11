@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho những điểm đầu tiên chuyển giữa hai hình
+
+Thời gian gợi ý: đọc 15 phút, tự viết 25 phút, kiểm và thử biến thể 15 phút. Cài đặt, tải SDL và build lần đầu không tính vào phần này.
+
+## Ta cần giải quyết điều gì?
+
+Mở starter: bạn có cửa sổ, camera và lưới sàn, nhưng chưa có đám điểm. Ta sẽ thêm một hình cầu và một hình xuyến, rồi cho từng điểm đi từ hình này sang hình kia khi kéo thanh thời gian. Đừng bắt đầu bằng một triệu điểm. Trước tiên phải biết một điểm đang đi đâu và đoạn mã nào đưa nó lên màn hình.
+
+Gói đã có khung SDL3/OpenGL, loader, camera, bảng điều khiển và ba mesh mẫu. `morph_mesh.hpp` chỉ tạo vị trí và tam giác của các hình; nó không quyết định cách rải hạt, ghép điểm hay chuyển động. Phần bạn viết nằm ở các tệp có tiền tố `morph_` và `surface_sampler.hpp`. Không cần tải lại mã của Project 41.
+
+Đây là hiệu ứng đồ họa. Chưa có lực hút, vận tốc hay va chạm; mỗi vị trí được tính trực tiếp từ một tham số `t`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi ID có một vị trí nguồn `A` và một vị trí đích `B` trong cùng hệ tọa độ. Khi `t = 0`, ta lấy `A`; khi `t = 1`, ta lấy `B`. Ở giữa, một phép trộn tuyến tính là đủ:
+
+$$P(t)=(1-t)A+tB.$$
+
+Ví dụ, từ `A=(0,0,0)` tới `B=(2,0,0)`, `t=0.25` cho `P=(0.5,0,0)`. Không cần nhớ vị trí của frame trước. Kéo timeline lùi cũng không phải chạy ngược một integrator: ta tính lại đúng công thức ở `t` mới.
+
+Hai bộ điểm được tạo một lần và giữ nguyên trong lúc quan sát. Ở checkpoint này, bộ lấy mẫu còn chọn các tam giác với xác suất bằng nhau. Nó đủ để hiện hình và đặt câu hỏi, nhưng **chưa được gọi là đều theo diện tích**. Ta sẽ sửa đúng chỗ đó ở bài sau.
+
+<InteractiveLab demo="particle-morph-studio" mode="first" />
+
+Đưa timeline về 0 rồi tới 1 trước khi bấm Play. Dự đoán điểm ID 0 ở `t=0.5` phải nằm ở đâu trên đoạn nối nguồn–đích. Canvas dùng 127 mẫu CPU; ứng dụng C++ ở mốc này mặc định dùng 2.048 mẫu. Cả hai vẫn chỉ là bản nhỏ để hiểu phép dựng.
+
+## Bắt tay xây dựng
+
+### 1. Viết phép nội suy, giữ riêng hai đầu
+
+Mở `include/morph_timeline.hpp`. `morphPosition` nhận hai vị trí, không tự tìm chúng và không đọc bàn phím. Như vậy ta có thể kiểm hàm mà không mở cửa sổ.
+
+```cpp title="include/morph_timeline.hpp — vị trí ở checkpoint 1"
+inline Vec3 morphPosition(Vec3 source, Vec3 target, Vec3 offset, double t, Easing easing, Path path, std::uint32_t id = 0) {
+    if (t <= 0.0)
+        return source;
+    if (t >= 1.0)
+        return target;
+    const double s = eased(t, easing);
+    Vec3 point = source * (1.0 - s) + target * s;
+    (void)offset;
+    (void)path;
+    (void)id;
+    return point;
+}
+```
+
+Ở mốc 1, `eased` trả lại `t`. `offset` và `path` được giữ trong giao diện để các mốc sau thêm đường cong mà không đổi mọi lời gọi; chúng chưa tác động tới hình. Hai nhánh đầu trả đúng record nguồn/đích, thay vì trông chờ một phép tính gần đúng vô tình cho kết quả bằng nhau.
+
+### 2. Từ ID tìm đúng cặp điểm
+
+Trong `morph_preparation.hpp`, các vector `source` và `target` lưu hai bộ vị trí. `mapping[id].random` là ID đích đã được ghép cho ID nguồn đang xét:
+
+```cpp title="include/morph_preparation.hpp — đọc cặp của một ID"
+inline Vec3 positionAt(const Prepared &data, std::size_t id, double t, Matching matching, Easing easing, Path path) {
+    std::uint32_t target = data.mapping[id].random;
+    (void)matching;
+    return morphPosition(xyz(data.source[id]), xyz(data.target[target]), xyz(data.path[id]), t, easing, path, static_cast<std::uint32_t>(id));
+}
+```
+
+Ở ba checkpoint đầu, mapping này đơn giản là ID nguồn i đi tới ID đích i. Hai bộ mẫu được lấy độc lập nên các đoạn nối vẫn có tính ngẫu nhiên, chưa cần một thuật toán shuffle giấu bên trong. Bài 4 mới thêm Fisher–Yates và spatial order. Không lấy “điểm gần con trỏ” làm ID và không đổi target mỗi frame: nếu cặp của một ID đổi liên tục, bạn sẽ thấy nhiễu chuyển động dù công thức nội suy hoàn toàn đúng. Trước mắt hãy lần ID 0 qua ba lần truy cập trong hàm trên.
+
+### 3. Nối phép tính vào frame đang chạy
+
+Trong `App::draw`, nhánh của checkpoint 1 gọi `renderer_.uploadCpu(*data, time, view)`. Hàm đó chạy `positionAt` cho các ID, đưa vị trí vào VBO rồi `Renderer::scene` vẽ:
+
+```cpp title="include/morph_renderer.hpp — vẽ số điểm thật của ACTIVE"
+gl_.BindVertexArray(pointsVao_);
+gl_.DrawArrays(GL_POINTS, 0, static_cast<GLsizei>(data->settings.count));
+drawn_ = data->settings.count;
+```
+
+Luồng đầy đủ là `start → preparation → ACTIVE → draw → uploadCpu → scene`. `src/main.cpp` vẫn poll sự kiện trước khi gọi `app.advance(dt)` và `app.draw()`. Không thêm một vòng lặp riêng trong hàm nội suy; vòng lặp của SDL phải tiếp tục nhận sự kiện.
+
+## Chạy thử và quan sát
+
+Giải nén ZIP, mở terminal cạnh `CMakeLists.txt`. Gói khóa SDL 3.4.8; cần CMake 3.24+, C++20 và driver OpenGL 4.3. Configure một lần:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2 --target project_42_starter project_42_checkpoint_1
+.\build\Debug\project_42_starter.exe --seconds 120
+.\build\Debug\project_42_checkpoint_1.exe --source sphere --target torus --seconds 120
+```
+
+Với generator một cấu hình, executable nằm ngay trong `build`. Starter chỉ có sàn. Ở Bài 1, nhấn Home/End để nhìn hai hình, rồi Space để chạy. Kéo nền viewport để orbit, nút phải để pan, wheel để zoom. Chọn nguồn/đích ở panel chỉ sửa STAGED; Enter mới chuẩn bị yêu cầu. ACTIVE cho biết bộ nào đang được vẽ.
+
+## Thử tạo lỗi
+
+Trong bản thực hành, thay `source * (1.0 - s)` bằng `source * s` nhưng giữ nguyên vế target. Trước khi chạy, tính kết quả ở `s=0.5` và `s=0`. Vì sao nhìn ở giữa có thể chưa thấy lỗi, trong khi kéo tới gần đầu lại thấy hình co sai? Khôi phục công thức trước khi đi tiếp.
+
+## Checklist hoàn thành
+
+- Starter không có đám hạt; checkpoint 1 hiện được nguồn và đích bằng cùng một tập ID.
+- Home và End cho đúng hai hình; `t=0.5` đặt mỗi ID ở trung điểm cặp của nó.
+- Camera đổi góc nhìn, không đổi seed hoặc generation. Ở mốc này CURRENT vẫn được tính trên CPU.
+- Không mô tả bộ mẫu hiện tại là đều theo diện tích và không gọi chuyển động là lực hút.
+
+## Hướng mở rộng
+
+Đổi nguồn thành xuyến, đích thành cầu mà không sửa hàm nội suy. Nếu hai hình lệch tâm, nên sửa mesh hay thêm “lực kéo về giữa”? Giải thích bằng hệ tọa độ trước khi thử. Tiếp theo: [rải mẫu theo diện tích bề mặt](/projects/particle-morph-studio/02-lay-mau-theo-dien-tich).

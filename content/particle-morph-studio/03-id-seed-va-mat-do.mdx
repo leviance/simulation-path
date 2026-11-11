@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ ID và dùng mật độ để phát hiện mẫu lệch
+
+Thời gian gợi ý: đọc 15 phút, viết 25 phút, kiểm 15 phút.
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có sampler theo diện tích, nhưng một ảnh đám hạt chưa đủ cho biết nó có hoạt động đúng. Cần trả lời được: bộ điểm này lấy bằng seed nào, mỗi ID nằm ở đâu, và một vùng sáng đặc có thực sự nhận quá nhiều mẫu hay chỉ đang nhìn chồng lên nhau?
+
+Checkpoint này thêm cách đọc dữ liệu. Ta không thay nguồn/đích khi xoay camera, không gọi RNG trong draw và không lấy vị trí làm ID. Bảng số liệu phải đi cùng chính generation đang hiện, chứ không đi theo lựa chọn STAGED chưa áp dụng.
+
+## Hiểu ý tưởng trước khi viết code
+
+`source[id]` là vị trí của một mẫu, còn `id` là vị trí record trong mảng. Hai ID có thể tình cờ trùng vị trí do ngẫu nhiên hoặc làm tròn; điều đó khác với việc nhân bản cùng một record để “đủ một triệu”.
+
+Seed cho phép dựng lại chuỗi số của một cấu hình. Nó không bảo đảm các lần gọi tự động đứng đúng thứ tự. Nếu mỗi lần xoay camera lại tiêu thụ số ngẫu nhiên, reset cùng seed vẫn có thể đi tới một đoạn khác của chuỗi. Vì thế RNG chỉ thuộc bước preparation và có các luồng riêng cho nguồn, đích, permutation.
+
+Để đọc mật độ, ta gom các tam giác vào 16 nhóm theo độ cao **tâm mặt**. Với nhóm `b`:
+
+$$E_b=N\,A_b/A_{\text{total}},\qquad \rho_b=O_b/E_b.$$
+
+`O_b` là số mẫu thực, `E_b` là số kỳ vọng theo diện tích. `ρ` gần 1 nghĩa là phù hợp ở độ phân giải nhóm này; nó không chứng minh mọi vùng nhỏ bên trong đều hoàn hảo.
+
+<InteractiveLab demo="particle-morph-studio" mode="sampling" />
+
+Về `t=0`, so area và triangle-biased trên sphere, giữ cùng N và seed. Hãy đoán vùng gần cực sẽ đổi thế nào trước khi bấm Áp dụng. Màu dùng tỷ số observed/expected, không đổi alpha của điểm.
+
+## Bắt tay xây dựng
+
+### 1. Làm chuỗi ngẫu nhiên tái lập được
+
+`Random` giữ state uint32. Phép nhân và cộng tràn theo modulo `2^32`, là hành vi xác định của unsigned integer:
+
+```cpp title="include/morph_math.hpp — tiến RNG đúng một bước"
+std::uint32_t next() {
+    state_ = state_ * 1664525U + 1013904223U;
+    return state_;
+}
+double uniform() {
+    return static_cast<double>(next()) / 4294967296.0;
+}
+```
+
+Không dùng nó cho mật mã. Ở đây ta cần chuỗi đủ cho thí nghiệm đồ họa, có seed và có fixture rõ. Seed 42 cho ba giá trị uint32 đầu là `1083814273, 378494188, 2479403867`. Nếu bản TypeScript không khớp, kiểm phép nhân uint32 và thứ tự lấy số trước khi đổ lỗi cho hình học.
+
+### 2. Cấp record theo đúng ID
+
+Mở pass lấy mẫu trong `Preparation::advance`:
+
+```cpp title="include/morph_preparation.hpp — lưu hai bộ mẫu và đếm observed"
+const SurfacePoint a = sourceArea_.sample(sourceMesh_, sourceRandom_, output_->settings.sampling);
+const SurfacePoint b = targetArea_.sample(targetMesh_, targetRandom_, output_->settings.sampling);
+output_->source.push_back(pack(a.position, static_cast<float>(a.bin)));
+output_->target.push_back(pack(b.position));
+++output_->observed[a.bin];
+const auto id = static_cast<std::uint32_t>(cursor_);
+output_->path.push_back(pack(curveOffset(a.position)));
+output_->mapping.push_back({id, id});
+```
+
+`cursor_` tăng theo thứ tự từ 0 tới N−1. `source.w` tạm mang ID nhóm tam giác; phần xyz vẫn là vị trí. `path` đã có chỗ lưu thông tin cho đường đi ở Bài 5, nhưng lúc này chỉ cần hiểu record của nó đi cùng một ID. Đích ban đầu chưa bị di chuyển trong mảng khi ta lập mapping.
+
+### 3. Tính tỷ số sau khi đã lấy đủ mẫu
+
+Không tính mật độ bằng một histogram mới đếm nửa chừng. Pass sau đọc tổng observed đã hoàn tất:
+
+```cpp title="include/morph_preparation.hpp — mật độ của nhóm chứa một mẫu"
+const std::size_t bin = static_cast<std::size_t>(output_->source[cursor_].w);
+const double expected = output_->expected[bin] * static_cast<double>(count);
+double ratio = 0.0;
+if (expected > 0.0)
+    ratio = static_cast<double>(output_->observed[bin]) / expected;
+output_->path[cursor_].w = static_cast<float>(ratio);
+```
+
+`path.w` chứa tỷ số để renderer tô màu, không phải một tọa độ hoặc lực. Màu của mẫu cho biết **nhóm tam giác nguồn** của nó; khi morph tới đích, đừng đọc màu ấy như một phép đo mật độ liên tục mới ở target.
+
+## Chạy thử và quan sát
+
+Build `project_42_checkpoint_3`. Chọn nguồn sphere, cùng N/seed, lần lượt áp dụng hai sampling mode. Bật H để nhìn màu và so cột xanh diện tích với cột cam số mẫu. Hai bộ chưa chắc có các vị trí trùng nhau vì quy tắc chọn mặt đã đổi; phép so công bằng ở đây là cùng cấu hình mesh, seed và cùng số lần rút số.
+
+Xoay camera rồi đọc lại generation: nó không đổi. Reset thời gian bằng R cũng không rải hạt mới. Tăng seed trong STAGED nhưng chưa Enter: ACTIVE vẫn báo seed cũ. Sau Enter, một generation mới được công bố khi dữ liệu đã xong.
+
+Các nhóm chỉ phân loại **cả tam giác** theo độ cao tâm mặt. Chúng không phải phép cắt chính xác mặt cầu thành 16 lát. Dùng quy tắc ấy cho cả expected và observed giúp phép so nhất quán, nhưng không cho phép kết luận về mọi vùng tùy ý.
+
+## Thử tạo lỗi
+
+Đưa lại constructor RNG vào vòng lặp từng mẫu với cùng seed. Dự đoán N vị trí sẽ khác nhau hay trùng nhau. Sau đó thử gọi RNG trong draw: ảnh sẽ nhấp nháy hoặc reset không còn tái lập. Hai lỗi có cùng triệu chứng “ngẫu nhiên không ổn định” nhưng nguyên nhân khác nhau.
+
+## Checklist hoàn thành
+
+- Cùng seed/config cho cùng bộ source, target và thông tin path; camera không tiêu thụ RNG.
+- Tổng observed của 16 nhóm bằng N; expected cộng thành 1 trước khi nhân N.
+- Triangle-biased lộ sai lệch ở sphere mà không đổi renderer hoặc opacity.
+- ACTIVE báo đúng source/target/N/seed/generation đang vẽ, không mượn nhãn STAGED.
+
+## Hướng mở rộng
+
+Đổi cách gom nhóm sang vùng theo hướng normal hoặc theo ô không gian. Phải cộng expected từ đại lượng nào để so đúng? Giữ cách hiện tại làm đối chứng rồi thử ở mesh không đều. Tiếp theo: [ghép random và spatial trên cùng bộ mẫu](/projects/particle-morph-studio/04-ghep-diem-random-va-spatial).

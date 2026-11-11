@@ -75,18 +75,22 @@ test("planned products never inherit the old lesson count, demo, duration or dow
   );
 });
 
-test("an available replacement keeps its lessons visible while acceptance is pending", () => {
-  const replacement = buildRoadmap(roadmapSeed, published, roadmapRevisions).find(
-    ({ id }) => id === "40",
-  );
+test("published replacements keep their lessons visible with or without an acceptance note", () => {
+  const roadmap = buildRoadmap(roadmapSeed, published, roadmapRevisions);
+  const replacement = roadmap.find(({ id }) => id === "40");
   assert.equal(replacement.status, "published");
   assert.equal(replacement.slug, "cloth-workshop");
   assert.equal(replacement.title, roadmapSeed[39].title);
   assert.equal(replacement.part, roadmapSeed[39].part);
   assert.equal(replacement.lessonCount, 14);
   assert.equal(replacement.download, "/downloads/project-40-cloth-workshop.zip");
-  assert.match(replacement.acceptanceNote, /chờ kiểm trực tiếp/);
+  assert.equal(replacement.acceptanceNote, undefined);
   assert.ok(!("previous" in replacement));
+
+  const pending = roadmap.find(({ id }) => id === "41");
+  assert.equal(pending.status, "published");
+  assert.match(pending.acceptanceNote, /chờ kiểm trực tiếp/);
+
   assert.throws(
     () =>
       buildRoadmap(

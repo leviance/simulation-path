@@ -2,10 +2,10 @@ import type { PublishedProjectEditorial } from "../../types";
 
 const project = {
   summary:
-    "Bỏ các bức tường của hộp khí ở Project 42 để tạo một ô mô phỏng lặp lại theo hai trục. Bạn sẽ cho hạt đi qua biên mà không đổi vận tốc, tính lực bằng minimum image, vẽ các bản sao tuần hoàn và giữ lại tọa độ unwrapped để không nhầm bước nhảy trên màn hình với quãng đường thực.",
+    "Trong phiên bản Molecular Dynamics cũ này, bạn tạo một ô mô phỏng lặp lại theo hai trục: cho hạt đi qua biên mà không đổi vận tốc, tính lực bằng minimum image, vẽ các bản sao tuần hoàn và giữ tọa độ unwrapped để không nhầm bước nhảy trên màn hình với quãng đường thực. Nội dung này không nối tiếp bài biến hình hạt Project 42 mới.",
   duration: "14–18 giờ",
   prerequisites: [
-    "Project 42 — hệ nhiều hạt, force-shifted Lennard–Jones và Velocity Verlet trên CPU",
+    "Velocity Verlet từ Project 23; công thức Lennard–Jones và force-shifted cutoff được trình bày lại trong bài 4 của học phần này",
     "Project 05 — đổi qua lại giữa world space và screen space",
   ],
   objectives: [
@@ -26,7 +26,7 @@ const project = {
       "Mỗi hạt chỉ có một state vật lý. Position nằm trong [0,Lx) × [0,Ly); tọa độ âm và bước đi qua nhiều ô đều wrap đúng.",
       "Không đổi dấu velocity khi vượt biên. Vị trí đúng bằng L phải được biểu diễn ở 0.",
       "Với L=12, A.x=0.6 và B.x=11.4, phải đo được khoảng cách tuần hoàn 1.2 thay vì 10.8.",
-      "Mỗi cặp i<j dùng minimum image cho cả lực và U; áp dụng force-shifted cutoff từ Project 42 và từ chối rc >= min(Lx,Ly)/2.",
+      "Mỗi cặp i<j dùng minimum image cho cả lực và U; áp dụng force-shifted cutoff được giải thích tại chỗ và từ chối rc >= min(Lx,Ly)/2.",
       "Velocity Verlet chỉ commit sau khi cả bước hợp lệ. Hạt gần như trùng nhau, kể cả qua biên, phải làm bước thất bại rõ ràng.",
       "Bản sao ở các ô kề chỉ để hiển thị; bật bản sao không đổi N, số cặp, năng lượng hoặc chuyển động.",
       "Lưu unwrapped bằng cách cộng đúng displacement của bước drift. Không dựng lại đường đi từ chênh lệch hai position đã wrap.",

@@ -1,0 +1,91 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho compute shader cập nhật từng ID
+
+Thời gian gợi ý: đọc 20 phút, viết 30 phút, kiểm 15 phút.
+
+## Ta cần giải quyết điều gì?
+
+Source, target, path và hai mapping đã ở GPU, renderer cũng đọc CURRENT từ SSBO. Phần còn chạy trên CPU là vòng lặp tính vị trí. Ta sẽ thay vòng lặp ấy bằng compute dispatch, không thay công thức rồi chỉ so hình bằng mắt.
+
+Mỗi invocation phụ trách một ID. Dữ liệu đầu vào đều chỉ đọc; CURRENT của ID nào chỉ do invocation đó ghi. Vì các hạt không tương tác vật lý, không cần một hàng rào đồng bộ giữa từng cặp hạt.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với local size 256, số workgroup theo X là `ceil(N/256)`. N=257 cần hai group, tức 512 invocation. 255 invocation cuối không có record hợp lệ và phải thoát trước mọi truy cập.
+
+Sau dispatch, consumer là **vertex shader đọc storage buffer**. Vì thế barrier phải công bố các lần ghi SSBO cho lượt đọc ấy. “Cứ barrier tất cả cho chắc” có thể che việc chưa hiểu consumer; “cùng buffer nên chắc chắn thấy ngay” lại thiếu đồng bộ.
+
+<InteractiveLab demo="particle-morph-studio" mode="compute" />
+
+Đặt N Canvas thành 257 rồi Áp dụng để đọc sơ đồ lane. Đây là phép minh họa ID bằng CPU; nó không chạy compute trong trình duyệt và không thay phép kiểm GPU native.
+
+## Bắt tay xây dựng
+
+### 1. Khai báo giao diện giống C++
+
+Mở `shaders/morph_update.comp`:
+
+```glsl title="shaders/morph_update.comp — năm storage buffer"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Source { vec4 source[]; };
+layout(std430, binding = 1) readonly buffer Target { vec4 target[]; };
+layout(std430, binding = 2) writeonly buffer Current { vec4 current[]; };
+layout(std430, binding = 3) readonly buffer Paths { vec4 paths[]; };
+layout(std430, binding = 4) readonly buffer Correspondence { uvec2 mapping[]; };
+```
+
+`GpuParticles::bind` gắn đúng các buffer của ACTIVE vào binding 0–4. Không lấy một source của candidate đang tải dở để ghép với target của ACTIVE.
+
+### 2. Ghi guard trước khi chọn đích
+
+```glsl title="shaders/morph_update.comp — xác định ID và target ID"
+uint id = gl_GlobalInvocationID.x;
+if (id >= particleCount) return;
+uint targetId = mapping[id].x;
+if (matchingMode == 1) targetId = mapping[id].y;
+vec3 a = source[id].xyz;
+vec3 b = target[targetId].xyz;
+```
+
+Sau đó shader clamp t, chép trực tiếp a/b tại hai đầu; ở giữa nó tính smoothstep, lerp và offset giống C++. Với Flow, shader dùng cùng integer hash và flowPhase/flowOffset đã giải thích ở Bài 5, không nhận vị trí Flow tính sẵn từ CPU. `current[id].w` ghi `float(id)` để job kiểm biết từng slot đã được xử lý. Miền N tối đa 5.000.000 nhỏ hơn `2²⁴`, nên các ID này biểu diễn chính xác trong float32.
+
+### 3. Dispatch rồi công bố cho lượt vẽ
+
+Trong `GpuParticles::update`, các uniform count/time/mode đã được đặt trước:
+
+```cpp title="include/morph_gpu.hpp — compute tới vertex shader"
+gl_.DispatchCompute((data_->settings.count + 255U) / 256U, 1, 1);
+gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+```
+
+`App::draw` chọn nhánh compute từ checkpoint 7. Nó chỉ cập nhật khi time, mode hoặc ACTIVE đổi; camera không khiến CPU rải mẫu lại. Khi Pause và không đổi dữ liệu, số UPDATED THIS FRAME bằng 0, trong khi DRAW vẫn bằng N.
+
+Canary được đặt ngay sau CURRENT[N−1]. Các invocation dư không được sửa nó. Canary giúp bắt lần ghi vượt cuối gần nhất, nhưng không thay việc kiểm mapping hoặc mọi truy cập bộ nhớ có thể sai.
+
+## Chạy thử và quan sát
+
+Build `project_42_checkpoint_7` rồi chạy phép kiểm hữu hạn:
+
+```powershell
+.\build\Debug\project_42_checkpoint_7.exe --hidden --verify --count 65535
+```
+
+Mốc 7 còn giới hạn N ở 65.536. `--verify` kiểm 48 tổ hợp gồm hai mapping, hai easing, ba path và bốn t. Nó so **từng record** với CPU, kiểm ID, chép chính xác endpoints và canary. Readback chỉ thuộc job kiểm riêng, không đặt trong vòng draw thông thường.
+
+OpenGL chạy bất đồng bộ. Job kiểm dùng fence có deadline, rồi đọc theo batch tối đa 16.384 record. GPU timeout, NaN, ID sai hoặc canary đổi đều không được in PASS. Một ảnh đẹp chỉ kiểm được phần trình bày, không chứng minh toàn N record.
+
+## Thử tạo lỗi
+
+Trong bản nhỏ, bỏ `if (id >= particleCount) return` và chạy N lẻ có canary. Đừng thử lỗi này với N lớn trong phiên làm việc đang dùng. Sau đó khôi phục guard, cố ý lấy `mapping[id].x` ở cả hai mode: endpoints vẫn nhận được bộ target, nhưng kiểm theo từng ID của spatial sẽ trượt.
+
+## Checklist hoàn thành
+
+- CPU không tính rồi upload toàn bộ CURRENT mỗi frame trong nhánh checkpoint 7.
+- Mỗi invocation hợp lệ ghi đúng CURRENT[id]; phần dư không chạm canary.
+- Barrier đúng loại consumer; renderer đọc cùng SSBO vừa được cập nhật.
+- Kiểm đủ record cho N nhỏ/lẻ và cả hai mapping; không lấy vài probe thay toàn-state verification.
+
+## Hướng mở rộng
+
+Nếu chuyển renderer sang đọc CURRENT như vertex attributes thay vì SSBO, loại barrier cần đổi thế nào? Tra consumer cụ thể thay vì chỉ đổi tên hàm draw. Tiếp theo: [chia preparation thành batch và hủy an toàn](/projects/particle-morph-studio/08-chuan-bi-theo-batch-va-huy).

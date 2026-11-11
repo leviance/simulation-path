@@ -1,6 +1,6 @@
 # Project 43 — Hộp phân tử tuần hoàn
 
-Từ hộp có tường của Project 42, ta chuyển sang một ô mô phỏng được lặp lại trên mặt phẳng. Hạt đi ra một phía xuất hiện ở phía đối diện, giữ nguyên vận tốc; hai hạt ở hai mép vẫn tương tác qua khoảng cách gần nhất. Source dùng C++20 và SDL 3.4.8, không cần dữ liệu hay shader bên ngoài.
+Đây là phiên bản Molecular Dynamics cũ của Project 43, không phải phần tiếp nối của Project 42 biến hình hạt mới. Ta dựng một ô mô phỏng được lặp lại trên mặt phẳng: hạt đi ra một phía xuất hiện ở phía đối diện, giữ nguyên vận tốc; hai hạt ở hai mép vẫn tương tác qua khoảng cách gần nhất. Source dùng C++20 và SDL 3.4.8, chạy độc lập, không cần dữ liệu hay shader bên ngoài.
 
 ## Thử tự xây trước
 
@@ -69,7 +69,7 @@ Tiêu đề cửa sổ hiện N, t, số cặp, trạng thái hợp lệ, E, |P|
 
 ## Phạm vi và kiểm chứng
 
-Đây là mô hình 2D trong reduced units, không phải mô phỏng định lượng một chất cụ thể. Giữ force-shifted Lennard–Jones và Velocity Verlet của Project 42 nhưng thay reflective boundary bằng periodic boundary. Renderer dùng trực tiếp SDL, không cần framebuffer trung gian vì bài này tập trung điều kiện biên.
+Đây là mô hình 2D trong reduced units, không phải mô phỏng định lượng một chất cụ thể. Force-shifted Lennard–Jones và Velocity Verlet có trong bộ source này; điều kiện biên là periodic, không phản xạ ở tường. Renderer dùng trực tiếp SDL, không cần framebuffer trung gian vì bài này tập trung điều kiện biên.
 
 Solver vẫn quét i<j, không có neighbor list. Một evaluate với 1.000 hạt xét 499.500 cặp; mỗi bước Verlet tính lực hai lần và phần số đo còn evaluate thêm lúc vẽ. Không nhầm số cặp trong một evaluate với tổng công việc của frame. Playback nhận 0.1 đơn vị mô phỏng/giây thực, tối đa 8 bước/frame hoặc 1 bước ở 1.000 hạt. Thời gian không theo kịp được đếm, không bù bằng cách tăng dt.
 

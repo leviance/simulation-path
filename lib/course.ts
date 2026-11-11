@@ -47,6 +47,10 @@ export const currentProjects = projects.filter(
   (project): project is PublishedProjectSummary => project.status === "published",
 );
 
+export const publishedReplacements = currentProjects.filter(
+  (project) => roadmapRevisions[project.id]?.replacement,
+);
+
 export const revisedProjects = projects.filter(
   (project): project is RevisedProjectSummary => project.status === "awaiting-rebuild",
 );

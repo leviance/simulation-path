@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi cấu hình mà không làm cửa sổ đứng lại
+
+Thời gian gợi ý: đọc 20 phút, viết 35 phút, kiểm 15 phút.
+
+## Ta cần giải quyết điều gì?
+
+Compute đã cập nhật được cả mảng. Nhưng khi đổi source, target hoặc seed, CPU còn phải dựng mesh/CDF, lấy mẫu và ghép điểm. Một shader nhanh không cứu được giao diện nếu preparation giữ main thread quá lâu.
+
+Ta không đưa toàn bộ công việc vào một lời gọi khổng lồ rồi hy vọng nút Cancel chen vào được. Cũng không đổi nhãn sang target mới trong khi vẫn vẽ buffer của yêu cầu trước. Từ checkpoint này, candidate tiến qua nhiều frame; ACTIVE cũ vẫn giữ nguyên cho đến khi có một bộ hoàn chỉnh.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy phân biệt ba thứ:
+
+- **STAGED:** các lựa chọn bạn đang sửa.
+- **Candidate:** bộ mẫu/buffer đang được chuẩn bị cho một generation cụ thể.
+- **ACTIVE:** dữ liệu đủ điều kiện để cập nhật và vẽ.
+
+Preparation có các pass lấy mẫu, tính mật độ, shuffle, xếp nguồn, xếp đích, ghi mapping. Mỗi lần advance xử lý tối đa 32.768 phần tử; upload nhận tối đa 4 MiB một lần. Chia batch không làm tổng công việc ít đi, nhưng trả quyền điều khiển về event loop giữa các phần.
+
+<InteractiveLab demo="particle-morph-studio" mode="generation" />
+
+Bật tạm dừng chuẩn bị, đổi seed rồi Áp dụng. Tiến một batch và nhìn cả nhãn candidate lẫn ACTIVE. Sau đó Hủy: hình và generation đang xem có được giữ nguyên không? Đừng dùng nút Pause timeline để suy ra preparation cũng phải ngừng; hai trạng thái phục vụ hai việc khác nhau.
+
+## Bắt tay xây dựng
+
+### 1. Một yêu cầu mới thay candidate cũ, không thay ACTIVE
+
+Trong `PreparationSession::request`, validate và memory preflight đi trước allocation. Sau đó:
+
+```cpp title="include/morph_preparation.hpp — thay đúng phần chưa công bố"
+candidate_.reset();
+ready_.reset();
+candidate_ = std::make_unique<Preparation>(settings, ++generation_);
+error_.clear();
+return true;
+```
+
+Hủy candidate trước khi tạo bộ mới cũng giúp peak memory không vô tình chứa ACTIVE cộng hai candidate. `settings` được chép vào Prepared; về sau sửa STAGED không được sửa ngược cấu hình của job đang chạy.
+
+Nếu input không hợp lệ, session hủy phần đang chuẩn bị và ghi lý do; `active_` không bị xóa. “Giữ last-good” không có nghĩa giả vờ Apply thành công.
+
+### 2. Cho event loop gọi một batch
+
+```cpp title="include/morph_preparation.hpp — advance từ checkpoint 8"
+void advance() {
+    if (!candidate_ || ready_)
+        return;
+    try {
+        if (candidate_->advance())
+            ready_ = candidate_->take();
+    } catch (const std::exception &error) {
+        cancel();
+        error_ = error.what();
+    }
+}
+```
+
+Ở các mốc nhỏ trước đó, session chạy tới xong trong setup. Mốc 8 bỏ vòng while ấy: main poll sự kiện, gọi `app.advance(dt)`, vẽ một frame, rồi mới quay lại. Counting sort cũng dùng cursor riêng cho từng pass; không giấu một sort O(N log N) lớn trong “batch cuối”.
+
+Job kiểm deadline 30 giây giữa các lượt. Bảng prefix có đúng 32³ ô và cũng có giới hạn. Nếu một driver giữ CPU bên trong một lệnh GL, các kiểm tra này không thể tự cắt lệnh ấy; lượt chạy tự động vẫn cần process watchdog ngoài app.
+
+### 3. Chốt cả CPU và GPU cùng generation
+
+CPU ready chưa có nghĩa GPU đã ready. `GpuParticles::uploadNext` tải lần lượt các mảng vào một bộ buffer riêng. Chỉ khi nó báo xong:
+
+```cpp title="include/morph_app.hpp — công bố sau chunk upload cuối"
+if (uploading_ && uploading_->uploadNext()) {
+    if (session_.active())
+        timeline.reset();
+    status_.uploadMs = uploading_->uploadSubmitMs();
+    activeGpu_ = std::move(uploading_);
+    session_.accept();
+    dirty_ = true;
+    message_ = "ACTIVE READY / SAME IDS FOR A AND B";
+}
+```
+
+`session_.accept` chuyển đúng Prepared đã dùng để tạo bộ GPU này. Source/target/N/seed và nhãn ACTIVE chỉ đổi ở đây. Với yêu cầu thay thế, timeline về đầu và Pause; trước lúc ấy, bạn vẫn đang xem và điều khiển generation cũ.
+
+## Chạy thử và quan sát
+
+Build `project_42_checkpoint_8`, chọn N lớn hơn rồi Enter. Trong lúc PREPARING, orbit và zoom. Sau đó đổi target và Enter lần nữa; job cũ không được xuất hiện dưới tên job mới. Nhấn X ở các phase khác nhau, cả lúc upload.
+
+Thử input lỗi bằng cách đặt N ngoài miền trong bản thực hành hoặc dùng kiểm thuần `PreparationSession`. Không cần cố xin lượng RAM khổng lồ để tạo lỗi. Những test hiện có kiểm invalid request, cancel và giữ con trỏ ACTIVE, thay vì chỉ kiểm một thông báo trên panel.
+
+Phân biệt thời gian CPU thực làm việc với wall time của job qua nhiều frame. Vì còn chờ event loop và vẽ, preparation wall time có thể lớn hơn setup + sampling + matching. Không gọi khoảng chờ ấy là thuật toán lấy mẫu chậm.
+
+## Thử tạo lỗi
+
+Trong bản nhỏ, cập nhật nhãn ACTIVE ngay khi nhấn Enter nhưng hoãn swap buffer. Bạn sẽ có một thời điểm hình của sphere bị gọi là knot. Sau đó thử xóa `active_` ở đầu request: nút Cancel không còn bản nào để quay lại. Hai lỗi đều là lỗi công bố dữ liệu, không phải lỗi shader.
+
+## Checklist hoàn thành
+
+- Các pass theo N và các chunk upload đều có giới hạn; camera dùng được giữa các batch.
+- Yêu cầu mới thay candidate cũ; input lỗi và cancel giữ ACTIVE đúng nhãn.
+- Không accept CPU trước khi GPU chứa đủ dữ liệu.
+- Có deadline trong app và watchdog cho chạy tự động; không hứa Cancel ngắt được một API driver đang treo.
+
+## Hướng mở rộng
+
+Thêm thanh tiến độ theo từng phase thay vì một tỷ lệ giả gộp mọi việc. Nếu muốn một phần trăm tổng, cần biết chi phí các phase phụ thuộc N ra sao? Tiếp theo: [đọc đường đi và đo đúng công việc](/projects/particle-morph-studio/09-doc-duong-di-va-do-chi-phi).

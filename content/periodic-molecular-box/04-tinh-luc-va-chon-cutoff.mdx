@@ -19,7 +19,7 @@ $$
 
 Dấu cộng trước `U'` không mâu thuẫn với lực bằng âm gradient theo vị trí. Khi i dịch về phía j, r giảm, nên đạo hàm r theo vị trí i có dấu âm. Ở khoảng cách 1.2 của preset đầu, độ dốc thế năng dương; delta hướng qua mép trái nên lực trên A cũng hướng sang trái.
 
-Ta giữ **force-shifted cutoff** từ Project 42:
+Ta dùng **force-shifted cutoff** để lực và thế năng cùng về 0 tại bán kính cắt:
 
 $$
 U_{fs}(r)=U(r)-U(r_c)-(r-r_c)U'(r_c),\qquad

@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Rải đều trên bề mặt, không phải đều theo tam giác
+
+Thời gian gợi ý: đọc 20 phút, viết 35 phút, kiểm 15 phút.
+
+## Ta cần giải quyết điều gì?
+
+Bản trước đã chuyển giữa hai hình. Nhưng mesh có nơi được chia thành nhiều tam giác nhỏ, nơi chỉ có vài tam giác lớn. Nếu mỗi mặt nhận số hạt như nhau, vùng có lưới dày sẽ sáng đặc hơn dù diện tích không lớn hơn. Lỗi nằm ở cách lấy mẫu, không phải ở đèn hoặc renderer.
+
+Trong bài này ta giữ nguyên cửa sổ, mapping và phép morph. Chỉ sửa cách chọn tam giác và cách đặt điểm trong tam giác ấy. Khi thay mesh có cùng hình nhưng khác tessellation, bộ lấy mẫu đúng không được coi vùng có nhiều vertex là vùng có nhiều diện tích.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chia việc thành hai lần chọn:
+
+1. Chọn một tam giác với xác suất bằng diện tích của nó chia tổng diện tích.
+2. Chọn một vị trí đều bên trong tam giác đã chọn.
+
+Diện tích mặt có ba đỉnh `A,B,C` là `0.5| (B-A) × (C-A) |`. Nếu hai mặt có diện tích 1 và 4, xác suất là 0,2 và 0,8. Ta không đặt đúng 20% mẫu vào mặt thứ nhất bằng cách đếm trước; số lượng sẽ dao động quanh mức đó.
+
+Trong một tam giác, hai biến ngẫu nhiên đều `u,v` không thể được dùng tùy tiện làm hai tọa độ. Đặt `r=√u` rồi dùng:
+
+$$w_A=1-r,\qquad w_B=r(1-v),\qquad w_C=rv,$$
+$$P=w_AA+w_BB+w_CC.$$
+
+Ba trọng số không âm và cộng thành 1. Căn bậc hai bù lại sự thay đổi diện tích khi đi từ đỉnh xuống cạnh đối diện; chỉ bỏ căn đi sẽ dồn mẫu về một phía.
+
+<InteractiveLab demo="particle-morph-studio" mode="area" />
+
+Hai tam giác trong lab có diện tích tỷ lệ 1:4. Đổi `u,v` của điểm trắng và kiểm tổng ba trọng số. Với `u=4/9, v=0.5`, cả ba trọng số bằng 1/3: điểm trắng nằm ở centroid của mỗi tam giác.
+
+## Bắt tay xây dựng
+
+### 1. Tính diện tích và bỏ mặt suy biến
+
+Mở `surface_sampler.hpp`:
+
+```cpp title="include/surface_sampler.hpp — diện tích từ hai cạnh"
+inline double triangleArea(Vec3 a, Vec3 b, Vec3 c) {
+    return 0.5 * length(cross(b - a, c - a));
+}
+```
+
+Constructor của `AreaDistribution` kiểm index và vị trí hữu hạn trước khi dùng công thức. Mặt có diện tích không quá `1e-12` bị bỏ qua; nếu không còn mặt dương, cả yêu cầu bị từ chối. Không sửa lỗi bằng cách cho mặt rỗng một xác suất nhỏ.
+
+Các diện tích được cộng vào `cumulative_` bằng `double`. `triangles_` giữ ID mặt thật tương ứng. Hai vector cần đi cùng nhau: sau khi bỏ một mặt suy biến, vị trí trong CDF có thể không còn bằng index tam giác của mesh.
+
+### 2. Chọn đoạn trong CDF
+
+Với ví dụ 1:4, CDF chưa chuẩn hóa là `[1,5]`. Lấy `u` đều trên `[0,1)` rồi nhân 5. Một phần năm khoảng đó thuộc mặt đầu, bốn phần năm thuộc mặt sau:
+
+```cpp title="include/surface_sampler.hpp — chọn tam giác theo diện tích"
+if (mode == Sampling::area) {
+    const double threshold = u * total_;
+    const auto found = std::upper_bound(cumulative_.begin(), cumulative_.end(), threshold);
+    const std::size_t index = static_cast<std::size_t>(found - cumulative_.begin());
+    return triangles_[std::min(index, triangles_.size() - 1)];
+}
+```
+
+`upper_bound` tìm tổng cộng dồn đầu tiên lớn hơn threshold. Hàm chọn kiểm `u<1` ngay từ đầu; `min` cuối chỉ bảo vệ sai số làm tròn ở ranh giới. Nhánh so sánh `triangleBiased` vẫn được giữ để thí nghiệm, không được đổi nhãn thành uniform surface.
+
+### 3. Viết barycentric sampler
+
+```cpp title="include/surface_sampler.hpp — ba trọng số trong một mặt"
+inline std::array<double, 3> barycentric(double u, double v) {
+    if (!std::isfinite(u) || !std::isfinite(v) || u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+        throw std::invalid_argument("Barycentric random inputs must lie in [0,1]");
+    const double root = std::sqrt(u);
+    return {1.0 - root, root * (1.0 - v), root * v};
+}
+```
+
+`AreaDistribution::sample` gọi `choose`, lấy thêm hai số cho barycentric rồi cộng ba vị trí đã nhân trọng số. Ba số phục vụ ba việc khác nhau; không tái dùng số chọn tam giác làm một tọa độ trong mặt.
+
+Thứ tự lấy số được viết thành các biến riêng `u` rồi `v`. Không truyền hai lời gọi làm thay đổi RNG trong cùng danh sách đối số và trông chờ compiler luôn đánh giá từ trái sang phải.
+
+## Chạy thử và quan sát
+
+Build `project_42_checkpoint_2` rồi chạy với nguồn sphere. Mặc định nhánh area đã hoạt động. Đổi STAGED sampling sang triangle-biased, Enter để chuẩn bị lại, rồi về Home. Cả hai hình vẫn là cầu; khác biệt nằm ở nơi các mẫu tập trung.
+
+Để kiểm toán riêng, build và chạy `project_42_tests`. Fixture dùng hai tam giác viết bằng tay, diện tích 1 và 4, cộng một mặt suy biến. Với 40.000 mẫu và `p=0.2`, số mẫu kỳ vọng ở mặt đầu là 8.000, độ lệch chuẩn là `√(40000×0.2×0.8)=80`. Test chấp nhận sai lệch tối đa `6σ+1=481` qua tám seed đã công bố.
+
+Đó là phép kiểm có uncertainty, không phải yêu cầu ngẫu nhiên phải cho đúng 8.000. Test centroid là kiểm khác: với tam giác `(0,0), (2,0), (0,1)`, trung bình vị trí phải gần `(2/3,1/3)`. Đúng tỷ lệ mặt nhưng sai barycentric vẫn có thể trượt kiểm này.
+
+## Thử tạo lỗi
+
+Chỉ đổi `root = sqrt(u)` thành `root = u` trong bản thực hành. Tỷ lệ chọn hai tam giác vẫn gần 1:4, vậy vì sao phân bố bên trong từng mặt lại sai? So centroid và nhìn vị trí hạt, không chỉ đếm tổng số mẫu.
+
+## Checklist hoàn thành
+
+- Hai mặt 1:4 được chọn theo tỷ lệ diện tích trong uncertainty đã nêu; mặt suy biến không nhận mẫu.
+- Ba trọng số không âm, tổng bằng 1; fixture centroid độc lập đạt.
+- Index ngoài phạm vi, vị trí NaN hoặc mesh không có diện tích dương bị từ chối.
+- Bản area và bản cố ý sai dùng chung renderer; không giảm opacity để che chỗ dồn mẫu.
+
+## Hướng mở rộng
+
+Chia tam giác diện tích 4 thành bốn mặt nhỏ rồi chạy lại. Phân bố trên toàn vùng đó nên đổi hay giữ? Có thể đọc thêm cách suy ra phép lấy mẫu ở [PBRT — Sampling a Triangle](https://pbr-book.org/3ed-2018/Monte_Carlo_Integration/2D_Sampling_with_Multidimensional_Transformations#UniformSampleTriangle). Tiếp theo: [giữ ID, seed và đo mật độ](/projects/particle-morph-studio/03-id-seed-va-mat-do).

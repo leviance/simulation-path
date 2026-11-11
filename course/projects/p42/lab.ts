@@ -1,54 +1,59 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
-    label: "CPU MOLECULAR DYNAMICS LAB",
-    title: "Từ một cặp nguyên tử đến một hộp khí 1.000 hạt",
+    label: "PARTICLE MORPH STUDIO",
+    title: "Cùng một bộ điểm, hai cách chuyển động",
     description:
-      "Thay đổi số hạt, mật độ và nhiệt độ; chọn một hạt để đọc trạng thái rồi chạy hệ bằng Velocity Verlet. Canvas giữ cùng công thức với C++ nhưng giới hạn số bước mỗi frame ở preset lớn.",
+      "Canvas CPU tối đa 4.096 mẫu dùng cùng công thức với C++. Mốc một triệu hạt, SSBO và timings GPU được kiểm riêng trên ứng dụng native.",
   },
   modes: {
-    "md-box": {
-      title: "Làm sao đặt 1.000 hạt mà không tạo lực vô hạn?",
+    first: {
+      title: "Từ cầu sang xuyến",
       description:
-        "Quan sát lattice, jitter và kích thước hộp được suy ra từ mật độ. Đổi seed để thấy vị trí thay đổi có kiểm soát mà không tạo hai hạt gần như trùng nhau.",
+        "Kéo t trước khi Play. Theo dõi một ID để thấy đây là nội suy, không phải lực hút.",
     },
-    "md-temperature": {
-      title: "Nhiệt độ ban đầu đi vào vận tốc như thế nào?",
-      description:
-        "Đọc vector vận tốc sau khi đã trừ chuyển động của cả khối và rescale động năng. Tổng động lượng gần zero trong khi nhiệt độ khớp giá trị mục tiêu.",
+    area: {
+      title: "Hai tam giác 1:4",
+      description: "Đổi u/v của điểm trắng; so số mẫu nhận được khi diện tích tăng bốn lần.",
     },
-    "md-cutoff": {
-      title: "Điều gì xảy ra khi một cặp đi qua cutoff?",
-      description:
-        "So đường gốc với đường force-shifted, phóng to quanh cutoff và đọc vị trí cân bằng mới. Phép dịch làm cả U và độ dốc về 0 tại cutoff nhưng cũng thay đổi lực bên trong.",
+    sampling: {
+      title: "Nhìn mẫu dồn ở đâu",
+      description: "Đổi area sang mỗi tam giác như nhau, áp dụng rồi so histogram và màu mật độ.",
     },
-    "md-pairs": {
-      title: "Vòng lặp i < j đã xét mỗi cặp đúng một lần chưa?",
+    matching: {
+      title: "A/B trên cùng bộ nguồn/đích",
       description:
-        "Chọn một hạt để nhìn các cặp đi từ index nhỏ tới index lớn, rồi đối chiếu evaluatedPairs với N(N-1)/2 và activePairs trong cutoff.",
+        "Giữ t ở giữa, đổi random/spatial mà không rải lại. So các đường nối và độ dài trung bình.",
     },
-    "md-verlet": {
-      title: "Một bước Velocity Verlet thay đổi cả hệ ra sao?",
+    timeline: {
+      title: "Nhịp thời gian không phải lực",
       description:
-        "Tạm dừng và tiến từng bước để theo dõi kick–drift–reflect–kick. Khi hạt vượt thành hộp, phần overshoot được mirror và vận tốc pháp tuyến đổi dấu.",
+        "So Thẳng/Vòng cung với Flow: từng hạt có nhịp riêng, không di chuyển như mảng rời. Thử reverse và hai endpoints.",
     },
-    "md-energy": {
-      title: "Nhiệt độ dao động còn tổng năng lượng có giữ được không?",
-      description:
-        "So K, U và E trên cùng trục thời gian; đổi fixed dt rồi chạy lại đúng initial state để tách sai số tích phân khỏi khác biệt điều kiện đầu.",
+    buffers: {
+      title: "N mẫu chiếm bao nhiêu byte?",
+      description: "Tách N Canvas đang vẽ với phép tính layout C++ ở N=1.000.003.",
     },
-    "md-scaling": {
-      title: "Tại sao 1.000 hạt đã tạo gần nửa triệu cặp?",
+    compute: {
+      title: "Những lane nằm ngoài N",
       description:
-        "So các preset bằng N(N-1)/2 cặp mỗi lần tính lực và hai lần tính lực mỗi bước Verlet. Cutoff giảm số cặp có lực nhưng chưa giảm số cặp phải xét; thời gian đo gồm tích phân và cập nhật số liệu.",
+        "Đặt N lẻ để đọc workgroup và tail guard. Canvas minh họa ID, không dispatch GPU.",
     },
-    "md-final": {
-      title: "Hộp khí đã vượt qua toàn bộ invariant chưa?",
+    generation: {
+      title: "Candidate chưa được đổi nhãn ACTIVE",
       description:
-        "Chạy preset, chọn hạt, tiến từng bước và kiểm tra khởi tạo, pair count, tổng lực, cutoff, phản xạ, trạng thái hữu hạn cùng energy drift trong một báo cáo hữu hạn.",
+        "Tạm dừng chuẩn bị, tiến từng batch, đổi yêu cầu hoặc hủy rồi đọc generation đang hiện.",
+    },
+    inspector: {
+      title: "Đọc một ID và vài đường đi",
+      description:
+        "Dùng subset đường đi cùng histogram để kiểm điều mà hình ảnh gợi ý, không coi mọi mẫu là một phép đo hiệu năng.",
+    },
+    showcase: {
+      title: "Tự điều khiển một lượt biến hình",
+      description:
+        "Chọn hình, seed, sampling và cách ghép. Giữ camera tự do trong khi timeline hoặc candidate đang chạy.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

@@ -4,7 +4,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ở Project 42, thành hộp là một bức tường: hạt chạm vào thì bật lại. Lần này, ta muốn bỏ bức tường ấy. Hãy tưởng tượng các ô giống hệt nhau được ghép kín mặt phẳng. Hạt ra khỏi một ô sẽ đi vào ô kế bên, còn chương trình chỉ cần lưu trạng thái trong một ô đại diện.
+Trong hộp có tường, hạt chạm thành sẽ bật lại. Bài này chọn một mô hình khác: hãy tưởng tượng các ô giống hệt nhau được ghép kín mặt phẳng. Hạt ra khỏi một ô sẽ đi vào ô kế bên, còn chương trình chỉ cần lưu trạng thái trong một ô đại diện. Đây là giáo trình Molecular Dynamics phiên bản cũ, không phải phần tiếp nối của Project 42 biến hình hạt.
 
 Khoan viết công thức wrap. Trước hết cần một hình đủ rõ để nhìn thấy vấn đề: ô rộng 12 đơn vị, hạt A ở `x=0.6`, hạt B ở `x=11.4`, cùng `y=6`. Nếu nối thẳng hai marker, chúng cách nhau 10.8 đơn vị. Nhưng nếu hai mép hộp nối với nhau, khoảng cách còn bao nhiêu?
 
@@ -39,7 +39,7 @@ Marker là một hình vuông nhỏ để dễ nhìn, không phải “nguyên t
 
 ### Bước 1 — Lưu dữ liệu của một hạt
 
-Mở `include/periodic.hpp` trong starter để đọc ba kiểu dữ liệu có sẵn dưới đây. Chúng là bộ khung để lưu hạt, chưa tạo ra hạt nào. `mass` mặc định bằng 1 theo [hệ đơn vị rút gọn](/glossary#reduced-units) dùng ở Project 42.
+Mở `include/periodic.hpp` trong starter để đọc ba kiểu dữ liệu có sẵn dưới đây. Chúng là bộ khung để lưu hạt, chưa tạo ra hạt nào. `mass` mặc định bằng 1 theo [hệ đơn vị rút gọn](/glossary#reduced-units).
 
 ```cpp title="include/periodic.hpp — dữ liệu chưa phụ thuộc SDL"
 struct Vec2 {
@@ -83,7 +83,7 @@ Velocity đã có giá trị để dùng ở bài sau, nhưng lưu một giá tr
 
 ### Bước 3 — Vẽ một marker từ world space
 
-Ta dùng trực tiếp SDL renderer cho lớp hiển thị nhỏ này, thay cho streaming framebuffer của Project 42. Phần model vẫn hoàn toàn ở CPU; thay cách vẽ không thay lực hoặc cách tích phân.
+Ta dùng trực tiếp SDL renderer cho lớp hiển thị nhỏ này. Phần model vẫn hoàn toàn ở CPU; thay cách vẽ không thay lực hoặc cách tích phân.
 
 ```cpp title="include/view.hpp — từ tọa độ thế giới đến hình vuông trên cửa sổ"
 inline SDL_FPoint toScreen(pbc::Vec2 point, pbc::Box box, Viewport viewport) {

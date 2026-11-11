@@ -1,0 +1,64 @@
+#version 430 core
+
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Source { vec4 source[]; };
+layout(std430, binding = 1) readonly buffer Target { vec4 target[]; };
+layout(std430, binding = 2) writeonly buffer Current { vec4 current[]; };
+layout(std430, binding = 3) readonly buffer Paths { vec4 paths[]; };
+layout(std430, binding = 4) readonly buffer Correspondence { uvec2 mapping[]; };
+uniform uint particleCount;
+uniform float modelTime;
+uniform int matchingMode;
+uniform int easingMode;
+uniform int pathMode;
+
+uint hashId(uint value) {
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+float flowRandom(uint id, uint salt) {
+    return float(hashId(id ^ salt) >> 8u) / 16777216.0;
+}
+float flowPhase(float t, uint id) {
+    float skew = 2.0 * flowRandom(id, 0x68bc21ebu) - 1.0;
+    return t + 0.48 * skew * sin(3.141592653589793 * t) / 3.141592653589793;
+}
+vec3 flowJitter(uint id) {
+    float z = 2.0 * flowRandom(id, 0x9e3779b9u) - 1.0;
+    float phi = 6.283185307179586 * flowRandom(id, 0x243f6a88u);
+    float radial = sqrt(max(0.0, 1.0 - z * z));
+    float radius = pow(flowRandom(id, 0xb7e15162u), 1.0 / 3.0);
+    return vec3(radial * cos(phi), z, radial * sin(phi)) * radius;
+}
+vec3 flowOffset(vec3 offset, float s, uint id) {
+    vec3 drift = offset * 0.7 + flowJitter(id) * 0.65;
+    float angle = 6.283185307179586 * s;
+    vec3 swirl = vec3(drift.x * cos(angle) - drift.z * sin(angle), drift.y, drift.x * sin(angle) + drift.z * cos(angle));
+    float envelope = sin(3.141592653589793 * s);
+    return swirl * (envelope * envelope);
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= particleCount) return;
+    uint targetId = mapping[id].x;
+    if (matchingMode == 1) targetId = mapping[id].y;
+    vec3 a = source[id].xyz;
+    vec3 b = target[targetId].xyz;
+    float t = clamp(modelTime, 0.0, 1.0);
+    vec3 point;
+    if (t <= 0.0) point = a;
+    else if (t >= 1.0) point = b;
+    else {
+        if (pathMode == 2) t = flowPhase(t, id);
+        float s = t;
+        if (easingMode == 1) s = t * t * (3.0 - 2.0 * t);
+        point = mix(a, b, s);
+        if (pathMode == 1) point += paths[id].xyz * sin(3.141592653589793 * s);
+        if (pathMode == 2) point += flowOffset(paths[id].xyz, s, id);
+    }
+    current[id] = vec4(point, float(id));
+}

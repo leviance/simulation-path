@@ -1,7 +1,7 @@
 import type { ProjectRevision } from "./types";
 
 // Keep the revision until the replacement has been built and accepted.
-// A matching replacement exposes its lessons while the remaining acceptance checks are pending.
+// The replacement keeps existing links working; only its optional note marks acceptance as pending.
 const previousMolecularPart = "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT";
 
 export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
@@ -9,8 +9,6 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     previousTitle: "“Thành phố hạt” trên GPU: xây grid và tìm hàng xóm song song",
     replacement: {
       slug: "cloth-workshop",
-      acceptanceNote:
-        "Bạn có thể học, thử Canvas và tải mã nguồn Xưởng vải 3D. Thao tác kéo và buông chuột trên cửa sổ C++ thật vẫn chờ kiểm trực tiếp.",
     },
     summary:
       "Kéo một góc vải, ghim nó lại rồi thả tấm vải phủ lên vật thể; quan sát nếp gấp và tiếp xúc trong không gian 3D.",
@@ -61,6 +59,9 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
   "42": {
     previousTitle: "Hộp khí 1.000 hạt: Molecular Dynamics CPU đầu tiên",
     previousPart: previousMolecularPart,
+    replacement: {
+      slug: "particle-morph-studio",
+    },
     summary:
       "Cho một mô hình tan thành một triệu hạt rồi tụ lại thành mô hình khác; kéo timeline để xem và đảo ngược từng giai đoạn.",
     outcome:

@@ -1,274 +1,196 @@
-import type { ProjectLearningAssets } from "../../learning/types";
-
-const files = [
-  "include/framebuffer.hpp",
-  "include/molecular_dynamics.hpp",
-  "include/molecular_dynamics_ui.hpp",
-  "include/molecular_dynamics_diagnostics.hpp",
-  "src/main.cpp",
-  "tests/tests.cpp",
-];
-
+import type { LessonReference, ProjectLearningAssets } from "../../learning/types";
+function term(id: string, label: string): LessonReference {
+  return { label, href: "/glossary#" + id, kind: "Thuật ngữ" };
+}
 const learning = {
   guides: {
     "p42-l01": {
-      focus:
-        "Tạo `SimulationBox`, `Particle` và `MolecularSystem`, sau đó xếp đúng N hạt lên lattice có jitter nhỏ và tái lập được từ seed.",
-      expected:
-        "Checkpoint 1 vẽ đủ 1.000 hạt trong hộp; cùng seed cho cùng vị trí và không có khoảng cách gần zero.",
-      files,
+      focus: "Nối hai bộ điểm vào cửa sổ đã có.",
+      expected: "127/2.048 điểm có thể đi tới nguồn và đích; đây còn là sampling thiên lệch.",
+      files: [
+        "include/morph_timeline.hpp",
+        "include/morph_preparation.hpp",
+        "include/morph_app.hpp",
+        "include/morph_renderer.hpp",
+      ],
       steps: [
         {
-          title: "Suy ra diện tích hộp từ mật độ",
-          explanation:
-            "Với density=N/area, ta tìm area=N/density rồi dùng aspect ratio để chia thành width và height. Thay đổi N vì thế không vô tình nén hạt vào cùng một diện tích.",
+          title: "Đọc hai vị trí cùng ID",
+          explanation: "Giữ nguồn/đích riêng, tính CURRENT theo t.",
         },
         {
-          title: "Đặt hạt ở tâm từng ô lattice",
-          explanation:
-            "Lattice cho ta khoảng cách ban đầu rõ ràng hơn việc thả ngẫu nhiên. Jitter chỉ chiếm một phần nhỏ kích thước ô nên phá được đối xứng mà vẫn tránh chồng lấn.",
-        },
-        {
-          title: "Giữ dữ liệu vật lý độc lập phần vẽ",
-          explanation:
-            "`Particle` không chứa màu hoặc pixel radius. Hàm world-to-screen đọc box và viewport khi render, vì vậy resize không làm trạng thái vật lý thay đổi.",
+          title: "Nối vào frame",
+          explanation: "advance xử lý dữ liệu, draw upload bản CPU và gọi DrawArrays.",
         },
       ],
     },
     "p42-l02": {
-      focus:
-        "Gán vận tốc từ seed, loại vận tốc tâm khối lượng và rescale để động năng tương ứng với nhiệt độ mục tiêu.",
-      expected:
-        "Checkpoint 2 cho |P| gần zero và T khớp target; đổi seed thay hướng vận tốc nhưng không phá hai điều kiện này.",
-      files,
+      focus: "Thay quy tắc chọn tam giác, không đổi renderer.",
+      expected: "Tam giác diện tích 4 nhận xấp xỉ bốn lần mẫu so với diện tích 1.",
+      files: ["include/surface_sampler.hpp", "tests/tests.cpp"],
       steps: [
+        { title: "Lập phân bố diện tích", explanation: "Bỏ mặt suy biến, cộng CDF bằng double." },
         {
-          title: "Tạo vận tốc thô trước",
-          explanation:
-            "Mỗi thành phần vận tốc lấy từ cùng PRNG deterministic. Mục tiêu ở đây là một trạng thái có thể kiểm chứng, chưa phải bộ lấy mẫu Maxwell–Boltzmann hoàn chỉnh.",
-        },
-        {
-          title: "Trừ vận tốc trung bình",
-          explanation:
-            "Tính vCOM=P/Σm, không dùng trung bình cộng nếu khối lượng khác nhau. Trừ vCOM khi khởi tạo giúp tổng động lượng gần 0. Về sau chỉ trừ trong phép đo nhiệt độ, không sửa vận tốc thật của hệ.",
-        },
-        {
-          title: "Rescale theo động năng mục tiêu",
-          explanation:
-            "Trong reduced units, K_target=0.5·(2N-2)·T. Một hệ số sqrt(K_target/K_current) áp dụng cho mọi velocity giữ hướng tương đối nhưng đưa nhiệt độ về target.",
+          title: "Đặt điểm bên trong mặt",
+          explanation: "Dùng sqrt(u) rồi nhân ba vị trí với ba trọng số.",
         },
       ],
     },
     "p42-l03": {
-      focus:
-        "Dùng force-shifted Lennard–Jones để thế năng và độ dốc cùng tiến về zero khi khoảng cách chạm cutoff.",
-      expected:
-        "Checkpoint 3 vẽ U và dU/dr liên tục tại rc=2.5σ; cặp ở ngoài rc trả lực và thế năng bằng zero.",
-      files,
+      focus: "Tách ID, RNG và số liệu mật độ khỏi hình đang vẽ.",
+      expected: "Cùng seed/config tái lập; area và triangle-biased khác histogram.",
+      files: ["include/morph_math.hpp", "include/morph_preparation.hpp", "include/morph_panel.hpp"],
       steps: [
         {
-          title: "Tính mẫu Lennard–Jones gốc",
-          explanation:
-            "Tính `ratio6` và `ratio12` từ σ/r. `potentialSlope` là dU/dr; giữ đúng dấu trước khi cộng lực cho hai đầu của cặp.",
+          title: "Cố định thứ tự lấy số",
+          explanation: "Tách RNG nguồn/đích, không rải lại mỗi frame.",
         },
         {
-          title: "Trừ giá trị và tiếp tuyến tại cutoff",
-          explanation:
-            "`Ufs(r)=U(r)-U(rc)-(r-rc)U'(rc)` và `Ufs'(r)=U'(r)-U'(rc)` cùng về 0 tại rc. Trừ độ dốc làm dịch vị trí cân bằng, nên không thể dùng mốc r₀ của thế gốc để kết luận hướng lực.",
-        },
-        {
-          title: "Phân biệt cắt giá trị với cắt workload",
-          explanation:
-            "Cặp ngoài cutoff không đóng góp lực, nhưng vòng lặp Project 42 vẫn phải đo khoảng cách của cặp đó. Neighbor list ở Project 44 mới giảm số cặp cần xét.",
+          title: "So đúng mẫu với đúng diện tích",
+          explanation: "Gom tam giác theo tâm mặt; tính observed/expected của nhóm.",
         },
       ],
     },
     "p42-l04": {
-      focus:
-        "Quét miền tam giác i<j, cộng forceOnI và forceOnJ từ cùng một mẫu rồi tách evaluatedPairs khỏi activePairs.",
-      expected: "Checkpoint 4 đếm đúng 499.500 cặp ở N=1.000 và tổng mọi lực nội bộ gần (0,0).",
-      files,
+      focus: "Dựng hai permutation, không thay bộ mẫu.",
+      expected: "Mỗi target ID dùng một lần; A/B thay đường đi ở giữa.",
+      files: ["include/spatial_order.hpp", "include/morph_preparation.hpp"],
       steps: [
         {
-          title: "Bắt đầu j từ i+1",
-          explanation:
-            "Cách này bỏ self-pair và không lặp lại cặp theo chiều ngược. Số lượt chạy trở thành N(N-1)/2, là con số ta có thể kiểm trước khi nhìn output.",
+          title: "Xáo random không lặp ID",
+          explanation: "Fisher–Yates chỉ đổi chỗ các target ID.",
         },
         {
-          title: "Cập nhật hai force slots cùng lúc",
+          title: "Xếp nguồn và đích theo ô Morton",
           explanation:
-            "Từ delta i→j và một `potentialSlope`, cộng lực vào i rồi trừ đúng vector đó khỏi j. Tổng lực nội bộ vì thế chỉ còn sai số làm tròn.",
-        },
-        {
-          title: "Dừng khi gặp singular state",
-          explanation:
-            "Nếu distance quá nhỏ hoặc lực không hữu hạn, hàm trả `valid=false`. Không tiếp tục với một phần mảng force vì trạng thái đó không còn mô tả cùng một bước vật lý.",
+            "Đếm/prefix/scatter ổn định, rồi ghép cùng hạng; đây không phải optimal transport.",
         },
       ],
     },
     "p42-l05": {
-      focus:
-        "Đưa force array vào Velocity Verlet dạng kick–drift–kick và phản xạ phần overshoot ở từng trục của hộp.",
-      expected:
-        "Checkpoint 5 chạy được nhiều hạt bằng fixed dt; hạt vượt tường quay lại trong box và chỉ thành phần vận tốc pháp tuyến đổi dấu.",
-      files,
+      focus: "Dùng thời gian tích lũy và nhánh endpoints rõ ràng.",
+      expected: "Pause giữ t; reverse/loop không phụ thuộc số frame.",
+      files: ["include/morph_timeline.hpp", "include/morph_app.hpp"],
       steps: [
         {
-          title: "Kick nửa bước bằng lực cũ",
-          explanation:
-            "Mỗi hạt nhận `vHalf = v + 0.5·F/m·dt`. Sau đó vị trí mới dùng chính `vHalf`, không dùng velocity đầu bước.",
+          title: "Tách time khỏi normalized t",
+          explanation: "t bằng time/duration, không tăng một lượng cố định mỗi frame.",
         },
         {
-          title: "Mirror overshoot thay vì clamp",
+          title: "Thêm nhịp và vòng cung",
           explanation:
-            "Nếu x=-0.25, vị trí phản xạ là 0.25. Clamp về 0 làm mất quãng đường đã đi và nếu quên đảo vx, hạt sẽ tiếp tục xuyên tường ở bước sau.",
+            "Smoothstep đổi nhịp; offset liên tục đổi đường, sin(pi s) triệt tiêu ở hai đầu.",
         },
         {
-          title: "Tính lực mới rồi kick nửa bước còn lại",
+          title: "Flow cho từng ID, không kéo cả mảng",
           explanation:
-            "Force array thứ hai phải lấy từ toàn bộ position đã drift và reflect. Chỉ sau khi mọi giá trị hữu hạn, candidate state mới thay state hiện tại.",
+            "Hash cố định tạo nhịp/độ lệch riêng; sin²(pi s) triệt tiêu độ lệch và đạo hàm ở endpoints. Không lấy random theo frame.",
         },
       ],
     },
     "p42-l06": {
-      focus:
-        "Đo kinetic, potential, total energy, temperature và momentum tại cùng state; lưu lịch sử hữu hạn để đọc energy drift.",
+      focus: "Cấp candidate SSBO có preflight, chưa dùng compute để cập nhật.",
       expected:
-        "Checkpoint 6 vẽ K/U/E, nhiệt độ và relative drift; reset xóa history cũ và đo lại initialEnergy.",
-      files,
+        "Checkpoint 6 vẫn tính CURRENT trên CPU và công bố điều đó; vertex shader đọc SSBO.",
+      files: ["include/morph_gpu.hpp", "shaders/particles.vert", "include/morph_settings.hpp"],
       steps: [
         {
-          title: "Cộng potential ngay trong force pass",
-          explanation:
-            "Mỗi active pair đã có force-shifted potential nên không cần chạy một vòng O(N²) khác chỉ để tính U. Renderer đọc lại metrics ở nhịp lấy mẫu, không phải mỗi pixel.",
+          title: "Tính peak khi hai thế hệ cùng tồn tại",
+          explanation: "Kể source/target/current/path/mapping và canary, không chỉ một buffer.",
         },
         {
-          title: "Tính nhiệt độ từ 2N-2 bậc tự do",
-          explanation:
-            "Mỗi lần đo, tính K_thermal từ v-vCOM rồi dùng T=2K_thermal/(2N-2). Tường có thể làm vCOM thay đổi; không được lấy động năng toàn phần chia cho 2N-2. E vẫn dùng toàn bộ K để theo dõi bảo toàn năng lượng.",
-        },
-        {
-          title: "Giới hạn history",
-          explanation:
-            "Đồ thị chỉ giữ số mẫu mới nhất. Thời gian mô phỏng có thể tăng lâu, nhưng mảng history và chi phí vẽ không được tăng theo vô hạn.",
+          title: "Upload theo phần rồi đổi ACTIVE",
+          explanation: "Kiểm byte lưu thực tế, không phá buffers cũ khi cấp phát thất bại.",
         },
       ],
     },
     "p42-l07": {
-      focus:
-        "Đo số cặp và thời gian bước theo N, đồng thời đặt hard guard cho accumulator và benchmark.",
+      focus: "Chuyển phép cập nhật, không chỉ chuyển chỗ lưu.",
       expected:
-        "Checkpoint 7 cho thấy tăng N từ 256 lên 1.000 làm pair count tăng gần 15,3 lần; workload tự dừng trong ngân sách đã định.",
-      files,
+        "Compute ghi từng CURRENT[id], renderer dùng lại đúng SSBO; N lẻ không chạm canary.",
+      files: ["shaders/morph_update.comp", "include/morph_gpu.hpp", "shaders/particles.vert"],
       steps: [
+        { title: "Một invocation cho một ID", explanation: "Ceil nhóm 256 và return ở id>=N." },
         {
-          title: "Luôn báo pair count trước timing",
-          explanation:
-            "N(N-1)/2 đếm cặp trong một lần tính lực. Mỗi bước Verlet hiện gọi hai lần, nên N=1.000 tương ứng 999.000 lượt xét. Timing gồm bước tích phân và cập nhật số đo, không gồm vẽ hoặc lưu lịch sử.",
-        },
-        {
-          title: "Tách evaluatedPairs khỏi activePairs",
-          explanation:
-            "Cutoff làm activePairs nhỏ hơn, nhưng brute-force scan vẫn evaluate mọi cặp. Đây là bằng chứng định lượng cho bước chuyển sang neighbor list.",
-        },
-        {
-          title: "Không bù thời gian vô hạn",
-          explanation:
-            "Khi một physics step đã đắt, cố chạy mọi bước còn thiếu sẽ khiến ứng dụng không bao giờ quay lại event loop. Guard giữ UI phản hồi và ghi lại dropped time.",
+          title: "Nói rõ consumer của barrier",
+          explanation: "Vertex shader đọc storage buffer nên dùng SHADER_STORAGE_BARRIER_BIT.",
         },
       ],
     },
     "p42-l08": {
-      focus:
-        "Ghép preset 64–1.000 hạt, inspector, fixed dt, đồ thị, validation, reset và cleanup thành ứng dụng hoàn chỉnh.",
-      expected:
-        "Final chạy độc lập, preset 1.000 báo 499.500 evaluated pairs, V cho báo cáo validation hữu hạn và ZIP chứa đủ source cùng CTest.",
-      files,
+      focus: "Giữ cửa sổ phản hồi trong cả preparation và upload.",
+      expected: "Đổi/cancel/invalid giữ last-good và đúng nhãn source/target/generation.",
+      files: ["include/morph_preparation.hpp", "include/morph_gpu.hpp", "include/morph_app.hpp"],
       steps: [
         {
-          title: "Mọi thay đổi cấu hình đi qua rebuild",
-          explanation:
-            "Count, density, temperature và seed cùng tạo lại system, initialEnergy, history và accumulator. Không preset nào giữ sót force hoặc velocity từ thí nghiệm trước.",
+          title: "Chia pass biến thiên theo N",
+          explanation: "Mỗi batch có giới hạn, job có deadline; yêu cầu mới thay yêu cầu cũ.",
         },
         {
-          title: "Giữ trạng thái hợp lệ trước bước lỗi",
-          explanation:
-            "Một physics step được dựng ở candidate state. Nếu lực mới không hữu hạn hoặc phản xạ vượt guard, chương trình báo lỗi và không commit nửa state.",
+          title: "Chốt CPU và GPU cùng thế hệ",
+          explanation: "Chỉ accept sau khi tất cả buffers đã tải xong.",
+        },
+      ],
+    },
+    "p42-l09": {
+      focus: "Dùng inspector và timings để trả lời câu hỏi cụ thể.",
+      expected:
+        "32 đường đi native tối đa, histogram có expected/observed; query chưa có kết quả không bị gọi là 0 ms.",
+      files: ["include/morph_renderer.hpp", "include/morph_timing.hpp", "include/morph_panel.hpp"],
+      steps: [
+        {
+          title: "Vẽ subset có công bố",
+          explanation: "Đường hướng dẫn không đại diện cho số hạt thật đang vẽ.",
         },
         {
-          title: "Dọn tài nguyên và kết thúc kiểm thử",
+          title: "Đọc query muộn",
+          explanation: "Tách sampling/matching CPU, submit upload, last update GPU, draw và frame.",
+        },
+      ],
+    },
+    "p42-l10": {
+      focus: "Chạy trọn sản phẩm, đối chiếu scale và gói source.",
+      expected: "N=1.000.003 được update/draw thật; 32 tổ hợp khớp CPU, tail còn nguyên.",
+      files: [
+        "src/main.cpp",
+        "include/morph_verify.hpp",
+        "include/morph_gpu.hpp",
+        "include/morph_settings.hpp",
+        "tests/tests.cpp",
+      ],
+      steps: [
+        {
+          title: "Kiểm toàn state trong job riêng",
+          explanation: "Readback chia batch, có fence/deadline; không đọc cả buffer mỗi frame.",
+        },
+        {
+          title: "Bàn giao và ghi đúng phạm vi",
           explanation:
-            "Texture, renderer và window được hủy theo thứ tự ngược lúc tạo. CTest chỉ gọi code CPU với số bước hữu hạn và trả exit code rõ ràng.",
+            "Build starter/checkpoints/final; công bố giới hạn GPU và những thao tác đã/chưa kiểm.",
         },
       ],
     },
   },
   references: {
-    "p42-l01": [
-      { label: "Reduced units", href: "/glossary#reduced-units", kind: "Thuật ngữ" },
-      { label: "Number density", href: "/glossary#number-density", kind: "Thuật ngữ" },
-    ],
+    "p42-l01": [term("morph-model-time", "Model time và nội suy")],
     "p42-l02": [
-      {
-        label: "Kinetic temperature",
-        href: "/glossary#kinetic-temperature",
-        kind: "Thuật ngữ",
-      },
-      { label: "Linear momentum", href: "/glossary#linear-momentum", kind: "Thuật ngữ" },
+      term("morph-area-cdf", "Area-weighted CDF"),
+      term("morph-barycentric", "Barycentric sampling"),
     ],
-    "p42-l03": [
-      {
-        label: "Force-shifted cutoff",
-        href: "/glossary#force-shifted-cutoff",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Lennard–Jones potential",
-        href: "/glossary#lennard-jones-potential",
-        kind: "Thuật ngữ",
-      },
-    ],
+    "p42-l03": [term("morph-density", "Mật độ theo nhóm tam giác")],
     "p42-l04": [
-      { label: "Unordered pair", href: "/glossary#unordered-pair", kind: "Thuật ngữ" },
-      {
-        label: "Force accumulation",
-        href: "/glossary#force-accumulation",
-        kind: "Thuật ngữ",
-      },
+      term("morph-correspondence", "Correspondence song ánh"),
+      term("morph-spatial-order", "Spatial order"),
     ],
-    "p42-l05": [
-      { label: "Velocity Verlet", href: "/glossary#velocity-verlet", kind: "Thuật ngữ" },
-      {
-        label: "Reflective boundary",
-        href: "/glossary#reflective-boundary",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p42-l06": [
-      { label: "Mechanical energy", href: "/glossary#mechanical-energy", kind: "Thuật ngữ" },
-      { label: "Energy drift", href: "/glossary#energy-drift", kind: "Thuật ngữ" },
-    ],
-    "p42-l07": [
-      { label: "Quadratic work", href: "/glossary#quadratic-work", kind: "Thuật ngữ" },
-      {
-        label: "Physics accumulator",
-        href: "/glossary#physics-accumulator",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p42-l08": [
-      {
-        label: "Molecular dynamics",
-        href: "/glossary#molecular-dynamics",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "SDL_DestroyTexture",
-        href: "https://wiki.libsdl.org/SDL3/SDL_DestroyTexture",
-        kind: "SDL API",
-      },
+    "p42-l05": [term("morph-model-time", "Model time và easing")],
+    "p42-l06": [term("morph-buffer-plan", "Payload và peak memory")],
+    "p42-l07": [term("morph-tail-guard", "Tail guard và canary")],
+    "p42-l08": [term("morph-generation", "Candidate và last-good")],
+    "p42-l09": [term("morph-timings", "Timings theo công việc")],
+    "p42-l10": [
+      term("morph-tail-guard", "Kiểm GPU toàn bộ"),
+      term("morph-buffer-plan", "Giới hạn tài nguyên"),
     ],
   },
 } satisfies ProjectLearningAssets;
-
 export default learning;

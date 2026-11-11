@@ -7,12 +7,12 @@ test("Project 40 opens the new lessons directly from the roadmap", async ({ page
   const entry = page.locator("#project-40");
   await expect(entry).toHaveAttribute("href", "/projects/cloth-workshop");
   await expect(entry).toContainText("14 bài");
-  await expect(entry).toContainText("CHỜ NGHIỆM THU");
+  await expect(entry).not.toContainText("CHỜ NGHIỆM THU");
   await entry.click();
 
   await expect(page).toHaveURL(/\/projects\/cloth-workshop$/);
   await expect(page.getByRole("heading", { level: 1, name: /Xưởng vải 3D/ })).toBeVisible();
-  await expect(page.getByLabel("Chờ nghiệm thu", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Chờ nghiệm thu", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Nội dung thuộc bản cũ", { exact: true })).toHaveCount(0);
 
   const lessons = page.getByRole("navigation", { name: "Các bài của Dự án 40" });

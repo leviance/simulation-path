@@ -58,7 +58,11 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
         : path.join(checkpointDirectory, relative);
       const source = await readFile(sourcePath, "utf8");
       assert.ok(
-        projectNumber <= 32 || projectNumber === 40 || projectNumber === 41 || projectNumber >= 56
+        projectNumber <= 32 ||
+          projectNumber === 40 ||
+          projectNumber === 41 ||
+          projectNumber === 42 ||
+          projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
         `${lesson.file} drifts from checkpoint ${lessonNumber}: ${title}`,
@@ -90,6 +94,15 @@ test("C++ validation remains active in both Debug and Release", async () => {
       assert.match(
         testsSource,
         /catch \(const std::exception& error\) \{[\s\S]*?return EXIT_FAILURE;/,
+      );
+    } else if (directory === "project-42-particle-morph-studio") {
+      assert.match(
+        testsSource,
+        /void require\(bool condition, const char\s*\*\s*message\)\s*\{\s*if \(!condition\)\s*throw std::runtime_error\(message\)/,
+      );
+      assert.match(
+        testsSource,
+        /catch \(const std::exception\s*&\s*error\) \{[\s\S]*?return EXIT_FAILURE;/,
       );
     } else {
       assert.match(
@@ -557,81 +570,6 @@ test("Project 38 introduces chamber layers at the documented checkpoints", async
       symbol,
     );
     assert.match(await readFile(path.join(projectDirectory, current, file), "utf8"), symbol);
-  }
-});
-
-test("Project 42 introduces every Molecular Dynamics layer in its own checkpoint", async () => {
-  const projectDirectory = path.join(workspace, "examples", "project-42-molecular-dynamics-cpu");
-  const introductions = [
-    {
-      checkpoint: 1,
-      file: "include/molecular_dynamics.hpp",
-      symbols: [/struct Particle/, /makeBoxForDensity\(/, /createLatticeParticles\(/],
-    },
-    {
-      checkpoint: 2,
-      file: "include/molecular_dynamics.hpp",
-      symbols: [/kineticTemperature\(/, /assignThermalVelocities\(/, /makeMolecularSystem\(/],
-    },
-    {
-      checkpoint: 3,
-      file: "include/molecular_dynamics.hpp",
-      symbols: [/struct PairSample/, /rawLennardJones\(/, /sampleForceShiftedPair\(/],
-    },
-    {
-      checkpoint: 4,
-      file: "include/molecular_dynamics.hpp",
-      symbols: [/struct ForceEvaluation/, /unorderedPairCount\(/, /accumulatePairForces\(/],
-    },
-    {
-      checkpoint: 5,
-      file: "include/molecular_dynamics.hpp",
-      symbols: [/reflectCoordinate\(/, /velocityVerletStep\(/, /planFixedSteps\(/],
-    },
-    {
-      checkpoint: 6,
-      file: "include/molecular_dynamics.hpp",
-      symbols: [/struct SystemMetrics/, /measureSystem\(/, /relativeEnergyDrift\(/],
-    },
-    {
-      checkpoint: 7,
-      file: "include/molecular_dynamics.hpp",
-      symbols: [/struct WorkEstimate/, /estimateAllPairsWork\(/, /runBoundedSimulation\(/],
-    },
-    {
-      checkpoint: 8,
-      file: "include/molecular_dynamics.hpp",
-      symbols: [/struct ValidationReport/, /sameParticles\(/, /validateMolecularDynamics\(/],
-    },
-  ];
-
-  for (const introduction of introductions) {
-    const checkpoint = String(introduction.checkpoint).padStart(2, "0");
-    const previousDirectory =
-      introduction.checkpoint === 1
-        ? "starter"
-        : `checkpoints/${String(introduction.checkpoint - 1).padStart(2, "0")}`;
-    const currentDirectory = `checkpoints/${checkpoint}`;
-    const previous = await readFile(
-      path.join(projectDirectory, previousDirectory, introduction.file),
-      "utf8",
-    );
-    const current = await readFile(
-      path.join(projectDirectory, currentDirectory, introduction.file),
-      "utf8",
-    );
-    for (const symbol of introduction.symbols) {
-      assert.doesNotMatch(
-        previous,
-        symbol,
-        `${introduction.file} teaches ${symbol} before checkpoint ${checkpoint}`,
-      );
-      assert.match(
-        current,
-        symbol,
-        `${introduction.file} does not add ${symbol} at checkpoint ${checkpoint}`,
-      );
-    }
   }
 });
 

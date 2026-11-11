@@ -4,7 +4,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Checkpoint 4 tính được force nhưng vẫn để hạt đi thẳng. Ta sẽ thay bước ballistic bằng Velocity Verlet và mở rộng từ một cặp sang nhiều hạt. So với Project 42, thay đổi quan trọng nằm giữa hai nửa bước vận tốc: sau drift, **wrap position thay vì phản xạ ở tường**.
+Checkpoint 4 tính được force nhưng vẫn để hạt đi thẳng. Ta sẽ thay bước ballistic bằng Velocity Verlet và mở rộng từ một cặp sang nhiều hạt. Điều cần nhớ nằm giữa hai nửa bước vận tốc: sau drift, **wrap position thay vì phản xạ ở tường**.
 
 Nếu chỉ thay phần vẽ để hạt xuất hiện ở mép đối diện mà vẫn đảo velocity trong solver, bạn đang nhìn một hộp có tường được trang trí như hộp tuần hoàn. Bài này phải kiểm cả state, không chỉ hình.
 
@@ -40,7 +40,7 @@ const double side = std::max(12.0, 1.6 * columns);
 system.box = {side, side};
 ```
 
-Vị trí được lấy ở tâm ô con. PRNG số nguyên tạo hai thành phần velocity từ seed 43; sau khi tạo hết hạt, ta trừ mean velocity **một lần**. Vì mọi mass bằng 1 trong các preset, trung bình cộng này cũng là vận tốc tâm khối lượng. Nếu mở rộng sang mass khác nhau, phải dùng tổng momentum chia tổng mass như Project 42.
+Vị trí được lấy ở tâm ô con. PRNG số nguyên tạo hai thành phần velocity từ seed 43; sau khi tạo hết hạt, ta trừ mean velocity **một lần**. Vì mọi mass bằng 1 trong các preset, trung bình cộng này cũng là vận tốc tâm khối lượng. Nếu mở rộng sang mass khác nhau, phải dùng tổng momentum chia tổng mass.
 
 Không rescale vận tốc sau mỗi bước: làm vậy sẽ che lỗi lực và thay hệ đang mô phỏng. Bài này cũng không thêm thermostat.
 
@@ -123,7 +123,7 @@ Tiêu đề cửa sổ hiển thị E, độ lớn tổng momentum, dt và dropp
 
 ## Thử làm sai để hiểu đúng
 
-1. Giữ lại phép đảo vx của hộp tường ở Project 42. Với preset một hạt, theo dõi velocity khi qua mép: đổi dấu là bằng chứng solver vẫn phản xạ. Xóa phép đảo đó và kiểm lại.
+1. Cố ý đảo vx khi hạt qua biên. Với preset một hạt, theo dõi velocity khi qua mép: đổi dấu là bằng chứng solver đang phản xạ thay vì wrap. Xóa phép đảo đó và kiểm lại.
 2. Bỏ lần `evaluate(candidate)` rồi dùng force cũ cho nửa kick cuối. Hình vẫn chạy nhưng sai số năng lượng thường lớn hơn. So cùng trạng thái đầu, cùng dt, cùng số bước rồi khôi phục lực mới.
 3. Sửa system trực tiếp trước khi kiểm lực mới. Tạo hai hạt ngoài cutoff đang lao về nhau đủ nhanh để trùng sau drift. Hàm báo lỗi nhưng position đã thay đổi; khôi phục candidate rồi xác nhận toàn bộ state được giữ nguyên khi bước bị từ chối.
 

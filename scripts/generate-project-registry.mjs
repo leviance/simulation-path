@@ -218,7 +218,9 @@ for (const [id, revision] of Object.entries(roadmapRevisions)) {
     if (revision.replacement.slug !== publication.slug) {
       throw new Error(`Roadmap revision ${id} replacement must match the published slug`);
     }
-    assertString(revision.replacement.acceptanceNote, `Roadmap revision ${id} acceptance note`);
+    if (revision.replacement.acceptanceNote !== undefined) {
+      assertString(revision.replacement.acceptanceNote, `Roadmap revision ${id} acceptance note`);
+    }
   }
   for (const field of [
     "previousTitle",

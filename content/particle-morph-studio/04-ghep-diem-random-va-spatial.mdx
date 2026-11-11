@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép điểm thế nào để chuyển động bớt rối?
+
+Thời gian gợi ý: đọc 20 phút, viết 40 phút, kiểm 15 phút.
+
+## Ta cần giải quyết điều gì?
+
+Nguồn và đích đã được lấy mẫu đúng. Nhưng ở giữa lượt morph, hình vẫn có thể co thành một cục đặc rồi mới mở ra. Không phải sampler tự nhiên hỏng ở `t=0.5`: hai đầu vẫn đúng, còn đường đi phụ thuộc vào **điểm nguồn nào được ghép với điểm đích nào**.
+
+Ta sẽ chuẩn bị hai mapping cho cùng một bộ mẫu. A/B chỉ đổi mapping đang đọc; không thay N, seed hay vị trí nguồn/đích. Nhờ vậy khác biệt nhìn thấy thực sự đến từ correspondence.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một mapping hợp lệ là permutation của `0..N-1`. Mỗi nguồn chọn một đích và mỗi đích được dùng đúng một lần. Đừng chọn riêng một số ngẫu nhiên cho từng nguồn: cách đó có thể bỏ sót vài đích và dùng lặp vài đích khác.
+
+Random dùng Fisher–Yates để xáo các ID. Spatial làm việc khác: xếp nguồn và đích theo vị trí, rồi ghép các phần tử cùng hạng. Ta dùng hộp `[-3.5,3.5]` trên mỗi trục, chia thành 32 ô và xen kẽ 5 bit tọa độ để có Morton key.
+
+Morton order thường giữ được tính gần nhau ở mức ô, nhưng vẫn có bước nhảy. Hình có thể xuất hiện các mảng đứt trong lúc biến đổi. Ta không đang giải bài toán ghép có tổng quãng đường nhỏ nhất, cũng không bảo đảm mesh trung gian giữ topology.
+
+<InteractiveLab demo="particle-morph-studio" mode="matching" />
+
+Giữ `t` ở khoảng 0,5–0,7 và đổi random/spatial. Kiểm generation không thay đổi. So cả hình, các đường nối mẫu và độ dài đoạn nối trung bình; một con số nhỏ hơn không tự chứng minh chuyển động đẹp hơn ở mọi thời điểm.
+
+## Bắt tay xây dựng
+
+### 1. Xáo ID thay vì rút đích có hoàn lại
+
+`mapping[id].random` ban đầu bằng `id`. Pass shuffle đổi chỗ hai giá trị trong mảng:
+
+```cpp title="include/morph_preparation.hpp — một phần của Fisher–Yates"
+const std::uint32_t other = shuffleRandom_.index(static_cast<std::uint32_t>(cursor_ + 1));
+std::swap(output_->mapping[cursor_].random, output_->mapping[other].random);
+--cursor_;
+```
+
+`cursor_` đi từ N−1 về 1. `Random::index` trả một số trong `[0,cursor_]`; nó dùng rejection cho phần dư thay vì mặc định mọi phép modulo đều cho xác suất đều. Đổi chỗ không thể tạo thêm hoặc làm mất ID.
+
+### 2. Biến vị trí thành key có giới hạn
+
+Mở `spatial_order.hpp`. Phần lượng tử hóa được tách thành một hàm bình thường để có thể tự thế số:
+
+```cpp title="include/spatial_order.hpp — một trục thành ô 0 tới 31"
+inline std::uint32_t quantizeAxis(double value) {
+    const double normalized = std::clamp((value + 3.5) / 7.0, 0.0, 1.0);
+    return static_cast<std::uint32_t>(std::min(31.0, std::floor(normalized * 32.0)));
+}
+```
+
+Ở mép trên, `normalized=1` phải về ô 31, không tạo ô 32 ngoài bảng. Các mesh cấp sẵn nằm trong hộp này. Nếu thay bằng một mesh lớn hơn, hãy công bố việc chuẩn hóa hoặc đổi hộp; clamp không phải cách tự động bảo toàn mọi khoảng cách ngoài miền.
+
+`spread5` đặt các bit vào vị trí cách nhau ba bước:
+
+```cpp title="include/spatial_order.hpp — xen kẽ bit cho Morton key"
+inline std::uint32_t spread5(std::uint32_t value) {
+    std::uint32_t result = 0;
+    for (std::uint32_t bit = 0; bit < 5; ++bit)
+        result |= ((value >> bit) & 1U) << (3U * bit);
+    return result;
+}
+```
+
+`spatialKey` ghép X ở các bit 0,3,6…, Y dịch thêm 1 bit, Z dịch thêm 2 bit. Có `32³=32768` key khả dĩ, vì vậy ta dùng counting sort hữu hạn thay cho một lời gọi sort khó chia nhỏ.
+
+### 3. Ghép cùng hạng, ghi về đúng nguồn
+
+`SpatialOrder` đi qua ba bước: đếm số ID trong mỗi ô, prefix sum để biết ô bắt đầu ở đâu, rồi scatter. Các ID được đi theo thứ tự tăng nên việc phá hòa trong cùng ô ổn định.
+
+```cpp title="include/morph_preparation.hpp — đưa kết quả xếp hạng về mapping"
+const auto id = sourceOrder_.order()[cursor_];
+output_->mapping[id].spatial = targetOrder_.order()[cursor_];
+```
+
+Đây là chỗ dễ đảo nhầm ý nghĩa: `cursor_` là **hạng sau khi xếp**, còn `id` là **ID nguồn ban đầu**. Mảng source không bị reorder. Khi vẽ một nguồn, `positionAt` dùng ID ấy đọc `mapping.spatial` và đi tới đúng target.
+
+## Chạy thử và quan sát
+
+Build `project_42_checkpoint_4`. Home/End phải cho đúng hai bộ điểm ở cả A lẫn B; chỉ ở giữa đường mới thấy phép ghép tác động tới hình. Nhấn M nhiều lần khi Pause: generation, N và seed giữ nguyên.
+
+Chạy tests. Ngoài kiểm mỗi mapping có đủ `N` ID, fixture spatial còn dùng một bộ điểm có quan hệ đã biết rồi đảo thứ tự ở đích. Nó kiểm key tăng, ID không mất và kết quả tốt hơn random trên **fixture ấy**. Không lấy test này làm lời hứa spatial luôn thắng cho mọi cặp hình.
+
+Ở mức hiện tại N còn nhỏ, preparation có thể hoàn tất trong một lượt setup. Các pass đã có cursor/batch; Bài 8 sẽ nối chúng thành công việc chạy qua nhiều frame.
+
+## Thử tạo lỗi
+
+Trong bản thực hành, ghi kết quả vào `mapping[cursor_]` thay vì `mapping[id]`. Hai đầu vẫn có thể trông đúng vì target còn được dùng đủ một lần, nhưng phép ghép không còn tương ứng với thứ tự nguồn đã xếp. Kiểm độ dài đoạn nối và một ID cụ thể sẽ phát hiện điều mà chỉ nhìn endpoints dễ bỏ qua.
+
+## Checklist hoàn thành
+
+- Random và spatial đều dùng mỗi target ID đúng một lần.
+- A/B không sinh lại sample; source ID và generation giữ nguyên.
+- Key nằm trong `0..32767`; ID trong cùng ô giữ thứ tự ổn định.
+- Nêu được giới hạn ô thô và bước nhảy Morton; không gọi thuật toán là optimal transport.
+
+## Hướng mở rộng
+
+Thử ghép hai bộ lấy mẫu từ cùng hình sphere để có đối chứng dễ hiểu. Sau đó đổi sang knot và tìm một vùng trung gian bị đứt. Có phải giảm tổng khoảng cách là đủ để loại hiện tượng này? Tiếp theo: [thêm model time, easing và đường cong](/projects/particle-morph-studio/05-model-time-easing-va-duong-cong).

@@ -1,0 +1,143 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Điều khiển nhịp và đường đi bằng model time
+
+Thời gian gợi ý: đọc 15 phút, viết 30 phút, kiểm 15 phút.
+
+## Ta cần giải quyết điều gì?
+
+Mapping đã quyết định cặp nguồn–đích. Bây giờ ta muốn kiểm soát lượt chuyển: dừng ở giữa, kéo lùi, chạy ngược hoặc đổi nhịp mà không làm dữ liệu rối. Đồng thời phải tránh lỗi quen thuộc: ở 120 FPS, morph không được nhanh gấp đôi ở 60 FPS.
+
+Ta tách ba quyết định: **thời gian đã tiến tới đâu**, **nhịp tăng của tham số**, và **đường hình học nối hai điểm**. Không quyết định nào trong ba điều này cần được diễn giải như lực vật lý.
+
+## Hiểu ý tưởng trước khi viết code
+
+`time` có đơn vị giây; `t=time/duration` không có đơn vị. Với duration 5 giây, sau 2 giây model time ta có `t=0.4`. Chỉ khi đang Play mới cộng `dt`; Pause không đổi `time` nhưng vẫn cho dùng camera và UI.
+
+Đường thẳng dùng `s=t`. Smoothstep thay bằng `s=t²(3−2t)`: nó vẫn đạt 0 và 1, nhưng đi chậm ở hai đầu. Một đường cung có thể dùng:
+
+$$P(s)=(1-s)A+sB+\sin(\pi s)\,O(A).$$
+
+`O(A)` là độ lệch được chuẩn bị từ vị trí nguồn. Nó thay đổi liên tục theo A nên các điểm gần nhau không bị đá ngẫu nhiên ra các hướng khác nhau. Công thức mô tả một đường đi, không tính gia tốc.
+
+<InteractiveLab demo="particle-morph-studio" mode="timeline" />
+
+Đặt Pause ở giữa rồi đổi linear/smoothstep. Tại cùng `t`, vị trí có thể đổi vì `s` đã khác. Sau đó so ba đường **Thẳng / Vòng cung / Flow**. Hai đường đầu giúp đọc công thức, nhưng với spatial matching, các vùng điểm có thể đi thành từng mảng. Flow là đường mặc định của sản phẩm hoàn chỉnh: từng hạt tản ra và tụ lại theo nhịp riêng, không kéo nguyên một mảng từ chỗ này sang chỗ khác. Đây vẫn là đường hình học, không phải lực hay nhiễu ngẫu nhiên ở mỗi frame.
+
+## Bắt tay xây dựng
+
+### 1. Tiến theo dt, không theo số frame
+
+Trong `Timeline::advance`, sau kiểm input và nhánh Pause:
+
+```cpp title="include/morph_timeline.hpp — thời gian tiến hoặc lùi"
+double direction = 1.0;
+if (reverse)
+    direction = -1.0;
+const double next = time + direction * dt;
+```
+
+Nếu loop tắt, clamp tới hai đầu rồi Pause. Nếu loop bật và next vượt miền, ta trừ đi số vòng nguyên bằng `floor(next/duration)`. Cách này xử lý được cả bước lùi qua 0; dùng remainder theo cách trả số âm mà không sửa lại sẽ khiến timeline đi ra ngoài miền.
+
+Không cần cắt `dt` thành hàng trăm bước nhỏ: đây không phải integrator vật lý. Chương trình nhận dt hữu hạn từ 0 tới 60 giây và duration từ 0,25 tới 60 giây. Thời gian tường của một lần mất focus không được lén tính như đang Play: handler sẽ Pause.
+
+### 2. Đổi nhịp bằng một hàm riêng
+
+```cpp title="include/morph_timeline.hpp — smoothstep giữ đúng hai đầu"
+inline double eased(double t, Easing mode) {
+    t = std::clamp(t, 0.0, 1.0);
+    if (mode == Easing::smooth)
+        return t * t * (3.0 - 2.0 * t);
+    return t;
+}
+```
+
+Đừng áp smoothstep vào `time` sau mỗi frame rồi lưu lại. Hàm này chỉ được dùng để tính `s` từ t hiện tại; nếu lặp lên kết quả cũ, chuyển động sẽ phụ thuộc số lần gọi.
+
+### 3. Thêm độ lệch có cấu trúc
+
+```cpp title="include/morph_timeline.hpp — đường cung không dùng lực ngẫu nhiên"
+inline Vec3 curveOffset(Vec3 source) {
+    return {-0.28 * source.z, 0.35 + 0.08 * std::sin(1.5 * source.x), 0.28 * source.x};
+}
+```
+
+Hai thành phần X/Z tạo một độ lệch ngang quanh trục Y; thành phần Y nhấc đường đi lên một chút. Bạn có thể thay công thức, miễn ghi rõ đó là hàm hình học. Sau phép lerp trong `morphPosition`:
+
+```cpp title="include/morph_timeline.hpp — thêm độ lệch ở giữa đường"
+if (path == Path::arc)
+    point = point + offset * std::sin(std::numbers::pi_v<double> * s);
+```
+
+Hai nhánh `t<=0` và `t>=1` vẫn được giữ ở đầu hàm để chép đúng record. Trong floating-point, `sin(π)` không bằng 0 tuyệt đối; một sai khác rất nhỏ là đủ để test “chép đúng endpoint” trượt.
+
+### 4. Để từng hạt đi riêng, thay vì cả mảng cùng đi
+
+Morton order chỉ là một cách ghép hữu hạn. Nó không giữ được topology của bề mặt, nên dù thêm vòng cung, các vùng vẫn có thể trông như những mảnh rời. Chỉ tăng số ô hoặc đổi easing chung không giải quyết được cảm giác đó.
+
+Ta giữ `t` chung để mọi hạt vẫn hoàn tất trong 5 giây, nhưng bẻ nhẹ nhịp của mỗi ID:
+
+$$t_i=t+0.48\,q_i\frac{\sin(\pi t)}{\pi},\qquad q_i\in[-1,1].$$
+
+Đạo hàm của hàm này nằm trong `[0.52,1.48]`, nên từng hạt tiến về trước, không chạy lùi hoặc chờ đứng yên rồi bật đi. `q_i` lấy từ hash của ID, **không** lấy random mới mỗi frame. Vì vậy kéo timeline đến cùng một thời điểm luôn cho cùng vị trí.
+
+`hashId` đã được cấp trong `morph_math.hpp`: nó trộn các bit của ID để cho ra một số có thể tái lập. Bạn không cần tự thiết kế hash trong bài này. Ta dùng kết quả ấy như một lựa chọn cố định cho từng hạt, thay vì một RNG tiếp tục đổi trạng thái khi vẽ.
+
+```cpp title="include/morph_timeline.hpp — nhịp riêng nhưng cùng thời lượng"
+inline double flowRandom(std::uint32_t id, std::uint32_t salt) {
+    // The high 24 bits are exactly representable in GLSL float. No per-frame randomness.
+    return static_cast<double>(hashId(id ^ salt) >> 8U) / 16777216.0;
+}
+
+inline double flowPhase(double t, std::uint32_t id) {
+    const double skew = 2.0 * flowRandom(id, 0x68bc21ebU) - 1.0;
+    // Derivative is in [0.52, 1.48]: every particle keeps moving forward, at its own pace.
+    return t + 0.48 * skew * std::sin(std::numbers::pi_v<double> * t) / std::numbers::pi_v<double>;
+}
+
+inline Vec3 flowJitter(std::uint32_t id) {
+    // Use a ball, not a cube: the dispersing cloud must not acquire flat box-shaped sides.
+    const double z = 2.0 * flowRandom(id, 0x9e3779b9U) - 1.0;
+    const double phi = 2.0 * std::numbers::pi_v<double> * flowRandom(id, 0x243f6a88U);
+    const double radial = std::sqrt(std::max(0.0, 1.0 - z * z));
+    const double radius = std::cbrt(flowRandom(id, 0xb7e15162U));
+    return Vec3{radial * std::cos(phi), z, radial * std::sin(phi)} * radius;
+}
+
+inline Vec3 flowOffset(Vec3 offset, double s, std::uint32_t id) {
+    const Vec3 drift = offset * 0.7 + flowJitter(id) * 0.65;
+    const double angle = 2.0 * std::numbers::pi_v<double> * s;
+    const Vec3 swirl{drift.x * std::cos(angle) - drift.z * std::sin(angle), drift.y, drift.x * std::sin(angle) + drift.z * std::cos(angle)};
+    const double envelope = std::sin(std::numbers::pi_v<double> * s);
+    // Squaring the envelope brings this displacement AND its velocity to zero at both ends.
+    return swirl * (envelope * envelope);
+}
+```
+
+`flowRandom` dùng 24 bit cao của một integer hash để C++, TypeScript và GLSL có cùng đầu vào. Sau khi tính `s` từ `t_i`, `flowOffset` thêm độ tản riêng theo ID, xoay nó quanh trục Y và nhân với `sin²(πs)`. Cả độ lệch và đạo hàm của nó đều về 0 ở hai đầu. Hạt không bị giật khi tản ra hoặc tụ lại; nhánh chép endpoint vẫn giữ nguyên. Hãy mở hai hàm này trong bộ mã dưới bài để đọc đầy đủ, thay vì tự gọi RNG trong vòng vẽ.
+
+Flow không sửa hay che giấu nhược điểm của correspondence: mapping, seed, histogram và số ID vẫn giữ nguyên. Chọn lại đường Thẳng để quan sát riêng lỗi ghép thành mảng, rồi quay về Flow để thấy tác dụng của đường đi và nhịp riêng.
+
+## Chạy thử và quan sát
+
+Build `project_42_checkpoint_5`. Space chạy/dừng, B đảo chiều, O bật/tắt lặp, Home/End tới hai đầu, R về nguồn và Pause. Đổi M/E/C khi Pause phải đổi phép đọc mapping/nhịp/đường nhưng không tạo generation mới.
+
+Trong tests, một timeline nhận 120 bước `1/60` giây; timeline khác nhận mười nhóm `0.011+0.037+0.152` giây. Cả hai có tổng 2 giây. So time rồi so vị trí tại normalized t, không so ảnh chụp ở hai wall-clock khác nhau.
+
+Scrub sẽ Pause trước khi đặt time. Nhờ đó bạn có thể giữ một hình trung gian để soi, thay vì slider bị vòng Play đẩy đi ngay sau khi buông.
+
+## Thử tạo lỗi
+
+Đổi `next=time+direction*dt` thành `time+0.01`. Hãy tính trước thời lượng khi chạy 30 FPS và 120 FPS, rồi trả lại dt. Tiếp theo thử lấy random mới mỗi frame thay cho hash cố định của Flow: dù Pause, các hạt vẫn rung vì đường đi bị đổi. Cuối cùng tăng độ tản lên gấp mười: chuyển động có thể đúng về thời gian nhưng hình thành một đám bụi quá rộng. Đó là hai lỗi khác nhau; không thể chữa cả hai chỉ bằng đổi easing.
+
+## Checklist hoàn thành
+
+- Nhiều chuỗi dt có cùng tổng thời gian cho cùng vị trí trong sai số đã chọn.
+- Pause giữ time; camera, scrub và đổi cách xem vẫn dùng được.
+- Linear/smoothstep và cả ba đường Thẳng/Vòng cung/Flow đều đạt đúng nguồn/đích.
+- Các ID có nhịp/độ lệch riêng trong Flow, nhưng chạy lại cùng t không đổi kết quả; không có random theo frame.
+- Reverse qua 0 không tạo t âm; Reset và mất focus có nghĩa rõ ràng.
+
+## Hướng mở rộng
+
+Thêm một easing khác rồi vẽ đồ thị của nó trước khi xem morph. Nó có đơn điệu không, có vượt ngoài `[0,1]` không? Đừng dùng tên “spring” để làm người đọc tưởng ta đang giải phương trình vật lý. Tiếp theo: [lập kế hoạch bộ nhớ và đưa mẫu lên GPU](/projects/particle-morph-studio/06-bo-nho-va-buffer-gpu).

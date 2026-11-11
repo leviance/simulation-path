@@ -1,15 +1,14 @@
 import Link from "@/components/app-link";
-import { currentProjects, revisedProjects } from "@/lib/course";
+import { currentProjects, publishedReplacements, revisedProjects } from "@/lib/course";
 import { ContinueLearning } from "@/components/progress";
 
 export default function HomePage() {
   const projectCount = currentProjects.length;
   const lessonCount = currentProjects.reduce((total, project) => total + project.lessonCount, 0);
   const labCount = currentProjects.filter((project) => project.demoId).length;
-  const availableReplacements = currentProjects.filter((project) => project.acceptanceNote);
   const featuredProjects = [
     ...currentProjects.slice(0, 5),
-    ...availableReplacements,
+    ...publishedReplacements,
     ...currentProjects.slice(-3),
   ]
     .filter(
