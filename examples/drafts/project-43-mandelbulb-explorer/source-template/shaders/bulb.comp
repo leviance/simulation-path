@@ -1,0 +1,245 @@
+#version 430 core
+layout(local_size_x=8,local_size_y=8) in;
+struct Pixel { vec4 color;uvec4 work;vec4 surface; };
+layout(std430,binding=0) buffer Output { Pixel pixels[]; };
+layout(std430,binding=2) buffer Statistics { uint samples;uint hits;uint misses;uint exhausted;uint inside;uint invalid;uint raySteps;uint orbitIterations;uint fallbacks; } stats;
+uniform ivec2 imageSize;
+uniform ivec2 tileOrigin;
+uniform ivec2 tileExtent;
+uniform uint generation;
+uniform int sampleIndex;
+uniform int power;
+uniform int iterationLimit;
+uniform int rayLimit;
+uniform float bailout;
+uniform float hitEpsilon;
+uniform float normalStep;
+uniform float safety;
+uniform float farBound;
+uniform int palette;
+uniform int detailed;
+uniform int sliceMode;
+uniform float sliceY;
+uniform vec3 eye;
+uniform vec3 forward;
+uniform vec3 right;
+uniform vec3 up;
+uniform float tanHalfFov;
+const float aspect=960.0/540.0;
+uint orbitWork=0u;
+uint primaryWork=0u;
+bool normalFallback=false;
+bool bad(float value) { return isnan(value)||isinf(value); }
+bool bad(vec3 value) { return any(isnan(value))||any(isinf(value)); }
+
+#if LAB_CHECKPOINT >= 1
+struct Field { float distance;float trap;int state; };
+Field evaluate(vec3 point) {
+    vec3 z=vec3(0.0);
+    float dr=1.0;
+    float trap=2.0;
+    for(int iteration=0;iteration<24;++iteration) {
+        if(iteration>=iterationLimit) break;
+        ++orbitWork;
+        float r=length(z);
+        if(bad(r)||bad(dr)||dr<=0.0) return Field(0.0,trap,2);
+        if(r>bailout) {
+            float distance=0.0;
+#if LAB_CHECKPOINT >= 3
+            distance=0.5*log(r)*r/dr;
+            if(bad(distance)||distance<=0.0) return Field(0.0,trap,2);
+#endif
+            return Field(distance,trap,0);
+        }
+#if LAB_CHECKPOINT >= 3
+        dr=float(power)*pow(r,float(power-1))*dr+1.0;
+#endif
+        if(r<1e-15) z=point;
+        else {
+            float theta=acos(clamp(z.z/r,-1.0,1.0));
+            float phi=0.0;
+            if(length(z.xy)>1e-15) phi=atan(z.y,z.x);
+            float rp=pow(r,float(power));
+            z=rp*vec3(sin(float(power)*theta)*cos(float(power)*phi),sin(float(power)*theta)*sin(float(power)*phi),cos(float(power)*theta))+point;
+        }
+        trap=min(trap,length(z));
+    }
+    return Field(0.0,trap,1);
+}
+#endif
+
+struct RayHit { float t;float trap;uint state; };
+#if LAB_CHECKPOINT >= 2
+RayHit trace(vec3 origin,vec3 direction) {
+    float b=dot(origin,direction);
+    float discriminant=b*b-dot(origin,origin)+4.0;
+    if(discriminant<0.0) return RayHit(0.0,0.0,2u);
+    float root=sqrt(discriminant);
+    float farT=min(farBound,-b+root);
+    float t=max(0.001,-b-root);
+    if(farT<t) return RayHit(0.0,0.0,2u);
+    if(length(origin)<2.0) {
+        Field cameraField=evaluate(origin);
+        if(cameraField.state==2) return RayHit(0.0,0.0,16u);
+        if(cameraField.state==1) return RayHit(0.0,0.0,8u);
+    }
+    float previous=t;
+    for(int step=0;step<256;++step) {
+        if(step>=rayLimit) break;
+        ++primaryWork;
+        Field field=evaluate(origin+direction*t);
+        if(field.state==2) return RayHit(t,field.trap,16u);
+        if(field.state==1) {
+#if LAB_CHECKPOINT >= 3
+            float low=previous,high=t;
+            for(int refinement=0;refinement<8;++refinement) {
+                float middle=(low+high)*0.5;
+                Field candidate=evaluate(origin+direction*middle);
+                if(candidate.state==2) return RayHit(t,field.trap,16u);
+                if(candidate.state==0) low=middle;
+                else high=middle;
+            }
+            t=high;
+#endif
+            return RayHit(t,field.trap,1u);
+        }
+#if LAB_CHECKPOINT >= 3
+        if(field.distance<hitEpsilon) {
+            // The low-resolution interaction preview is explicitly approximate.
+            if(detailed==0) return RayHit(t,field.trap,1u);
+            float low=t;
+            for(int probe=1;probe<=32;++probe) {
+                float high=t+float(probe)*hitEpsilon;
+                if(high>farT) return RayHit(t,field.trap,2u);
+                Field candidate=evaluate(origin+direction*high);
+                if(candidate.state==2) return RayHit(t,field.trap,16u);
+                if(candidate.state==1) {
+                    for(int refinement=0;refinement<8;++refinement) {
+                        float middle=(low+high)*0.5;
+                        Field middleField=evaluate(origin+direction*middle);
+                        if(middleField.state==2) return RayHit(t,field.trap,16u);
+                        if(middleField.state==0) low=middle;
+                        else high=middle;
+                    }
+                    return RayHit(high,field.trap,1u);
+                }
+                low=high;
+            }
+            return RayHit(t,field.trap,4u);
+        }
+        float advance=clamp(safety*field.distance,hitEpsilon*0.1,0.12);
+#else
+        float advance=(farT-max(0.001,-b-root))/float(rayLimit);
+#endif
+        previous=t;
+        t+=advance;
+        if(t>farT) return RayHit(t,field.trap,2u);
+    }
+    return RayHit(t,0.0,4u);
+}
+#endif
+
+#if LAB_CHECKPOINT >= 4
+vec3 normalAt(vec3 point,vec3 fallback) {
+    vec3 gradient=vec3(
+        evaluate(point+vec3(normalStep,0,0)).distance-evaluate(point-vec3(normalStep,0,0)).distance,
+        evaluate(point+vec3(0,normalStep,0)).distance-evaluate(point-vec3(0,normalStep,0)).distance,
+        evaluate(point+vec3(0,0,normalStep)).distance-evaluate(point-vec3(0,0,normalStep)).distance);
+    if(bad(gradient)||length(gradient)<1e-12) { normalFallback=true;return fallback; }
+    return normalize(gradient);
+}
+vec3 material(float trap,vec3 normal) {
+    float band=clamp(0.5+0.2*log(max(trap,1e-5)),0.0,1.0);
+    vec3 low=vec3(0.06,0.18,0.26),high=vec3(0.94,0.69,0.32);
+    if(palette==1) { low=vec3(0.10,0.04,0.18);high=vec3(0.35,0.78,0.95); }
+    if(palette==2) { low=vec3(0.22,0.11,0.07);high=vec3(0.94,0.84,0.69); }
+    return mix(low,high,clamp(band+normal.z*0.1,0.0,1.0));
+}
+#endif
+
+void main() {
+    ivec2 local=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 pixel=tileOrigin+local;
+    if(any(greaterThanEqual(local,tileExtent))||any(greaterThanEqual(pixel,imageSize))) return;
+    uint id=uint(pixel.y*imageSize.x+pixel.x);
+    Pixel record=pixels[id];
+    if(record.work.w!=generation) { record.color=vec4(0.0);record.work=uvec4(0u);record.surface=vec4(0.0); }
+    vec2 jitter=vec2(0.5);
+#if LAB_CHECKPOINT >= 8
+    if(detailed==1&&sampleIndex>=0) jitter=vec2(0.25+0.5*float(sampleIndex&1),0.25+0.5*float((sampleIndex>>1)&1));
+#endif
+    vec2 uv=(vec2(pixel)+jitter)/vec2(imageSize);
+    vec3 color=vec3(0.02,0.03,0.05);
+    vec3 normal=vec3(0.0);
+    RayHit hit=RayHit(0.0,0.0,2u);
+#if LAB_CHECKPOINT >= 1
+    if(sliceMode==1) {
+        Field field=evaluate(vec3((uv.x-0.5)*4.0,(sliceY),(0.5-uv.y)*3.0));
+        hit.state=1u;
+        color=mix(vec3(0.03,0.05,0.09),vec3(0.12,0.8,0.9),float(orbitWork)/float(iterationLimit));
+        if(field.state==1) color=vec3(0.015,0.025,0.04);
+        if(field.state==2) hit.state=16u;
+    } else {
+#if LAB_CHECKPOINT >= 2
+        vec3 direction=normalize(forward+right*((2.0*uv.x-1.0)*aspect*tanHalfFov)+up*((1.0-2.0*uv.y)*tanHalfFov));
+        hit=trace(eye,direction);
+        color=mix(vec3(0.012,0.022,0.041),vec3(0.065,0.11,0.16),clamp(uv.y,0.0,1.0));
+        if(hit.state==1u) {
+            color=vec3(0.25,0.68,0.78);
+#if LAB_CHECKPOINT >= 4
+            vec3 position=eye+direction*hit.t;
+            normal=normalAt(position,-direction);
+            vec3 light=normalize(vec3(-0.6,0.9,0.5));
+            float diffuse=max(dot(normal,light),0.0);
+            float ao=1.0,shadow=1.0;
+#if LAB_CHECKPOINT >= 8
+            if(detailed==1) {
+                float occlusion=0.0;
+                for(int i=1;i<=4;++i) {
+                    float h=float(i)*0.025;
+                    Field f=evaluate(position+normal*h);
+                    occlusion+=max(0.0,h-f.distance)/h;
+                }
+                ao=clamp(1.0-occlusion*0.20,0.15,1.0);
+                float travel=normalStep*4.0+hitEpsilon*3.0;
+                vec3 shadowOrigin=position+normal*(normalStep*3.0+hitEpsilon*2.0);
+                for(int i=0;i<16;++i) {
+                    Field f=evaluate(shadowOrigin+light*travel);
+                    if(f.state!=0||f.distance<hitEpsilon) { shadow=0.15;break; }
+                    shadow=min(shadow,12.0*f.distance/max(travel,0.01));
+                    travel+=clamp(f.distance*0.55,0.003,0.15);
+                    if(travel>2.5) break;
+                }
+                shadow=clamp(shadow,0.15,1.0);
+            }
+#endif
+            vec3 base=material(hit.trap,normal);
+            float sky=0.5+0.5*normal.y;
+            float rim=pow(1.0-max(dot(normal,-direction),0.0),3.0);
+            float specular=pow(max(dot(normal,normalize(light-direction)),0.0),40.0);
+            color=base*(vec3(0.13,0.17,0.22)*ao+diffuse*shadow*vec3(1.1,0.94,0.72)+sky*0.15)+rim*vec3(0.12,0.26,0.36)*ao+specular*shadow*0.3;
+            color=mix(color,vec3(0.04,0.07,0.11),1.0-exp(-hit.t*0.018));
+#endif
+        }
+#endif
+    }
+#endif
+    if(hit.state==4u) color=vec3(0.12,0.05,0.16);
+    if(hit.state==8u) color=vec3(0.12,0.08,0.025);
+    if(hit.state==16u||bad(color)) { color=vec3(0.8,0.04,0.35);hit.state=16u; }
+    record.color+=vec4(color,1.0);
+    record.work+=uvec4(primaryWork,orbitWork,0u,0u);
+    record.work.z|=hit.state;
+    record.work.w=generation;
+    record.surface=vec4(hit.t,normal);
+    pixels[id]=record;
+    atomicAdd(stats.samples,1u);
+    if(hit.state==1u) atomicAdd(stats.hits,1u);
+    if(hit.state==2u) atomicAdd(stats.misses,1u);
+    if(hit.state==4u) atomicAdd(stats.exhausted,1u);
+    if(hit.state==8u) atomicAdd(stats.inside,1u);
+    if(hit.state==16u) atomicAdd(stats.invalid,1u);
+    if(normalFallback) atomicAdd(stats.fallbacks,1u);
+    atomicAdd(stats.raySteps,primaryWork);
+    atomicAdd(stats.orbitIterations,orbitWork);
+}
