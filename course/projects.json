@@ -320,10 +320,12 @@
   },
   {
     "id": "43",
-    "slug": "periodic-molecular-box",
-    "sourceDirectory": "project-43-periodic-molecular-box",
-    "checkpointCount": 8,
-    "demoId": "periodic-molecular-box"
+    "slug": "mandelbulb-explorer",
+    "sourceDirectory": "project-43-mandelbulb-explorer",
+    "checkpointCount": 9,
+    "demoId": "mandelbulb-explorer",
+    "contentRevision": 2,
+    "shaderRuntimePerTarget": true
   },
   {
     "id": "44",

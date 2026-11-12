@@ -10,7 +10,7 @@ const learning = {
         {
           title: "Dùng lại mô hình đã học",
           explanation:
-            "periodic.hpp và dynamics.hpp giữ nguyên phần hình học, lực và Velocity Verlet từ Project 43. Bài này chỉ gọi makeGas để tạo state và chưa chạy solver.",
+            "periodic.hpp và dynamics.hpp giữ nguyên phần hình học, lực và Velocity Verlet từ Project 43 (bản Molecular Dynamics cũ). Bài này chỉ gọi makeGas để tạo state và chưa chạy solver.",
         },
         {
           title: "Vẽ từng hạt",

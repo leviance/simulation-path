@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 25 phút, tự viết 40 phút, kiểm và thử biến thể 25 phút; không tính setup/build lần đầu.
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có hình 3D để khám phá. Nhưng một ảnh đẹp chưa nói được DE có bước quá mặt hay không, và vùng chậm là do nhiều bước ray hay nhiều vòng fractal. Bài này thêm hai đường kiểm: counters cho công việc thực sự đã chạy, và evaluator độc lập để tìm lỗi số học/định nghĩa.
+
+Không thay renderer bằng oracle CPU. Renderer vẫn chạy compute; oracle chỉ xử lý một tập fixture hữu hạn. Việc tính đủ ảnh và kiểm ray trên ảnh final sẽ nối tiếp ở Bài 9.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một ray đi 30 bước không có nghĩa chỉ chạy 30 vòng fractal. Mỗi lần hỏi DE lại cần một orbit, rồi normal cần sáu lần hỏi nữa. Vì thế ta lưu hai đại lượng: `primaryWork` tăng ở vòng march, `orbitWork` tăng ở thân mọi evaluator call. Heatmap chỉ giúp tìm chỗ đáng xem; số cụ thể mới cho biết đã đếm việc gì.
+
+Oracle cũng cần độc lập về cách tính. `referenceOrbit` không gọi lại `sphericalPower`: nó biểu diễn `(cosθ,sinθ)` và `(cosφ,sinφ)` thành hai số phức đơn vị. Nhân p lần sẽ nhân góc p lần, tránh dùng lại acos/atan của renderer. Nó dùng kiểu `long double`; trên MSVC kiểu này có cùng 53 bit mantissa với double, nên tính độc lập đến từ cách dựng mapping, không phải một lời hứa precision vô hạn.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="work" />
+
+So Ray steps và Fractal work. Chọn một ray giữa khoảng trống và một ray tới nếp nhỏ; giải thích vì sao work khác nhau. Counters Canvas gồm công việc CPU đã chạy, không phải phép đo tốc độ GPU native.
+
+## Bắt tay xây dựng
+
+### 1. Ghi công việc ngay nơi nó xảy ra
+
+`orbitWork` đã tăng trong evaluator từ Bài 1; `primaryWork` tăng mỗi bước ray từ Bài 2. Cuối shader, cộng cả hai vào record pixel và các atomics của batch:
+
+```glsl title="shaders/bulb.comp — work đi cùng pixel và generation"
+record.color += vec4(color, 1.0);
+record.work += uvec4(primaryWork, orbitWork, 0u, 0u);
+record.work.z |= hit.state;
+record.work.w = generation;
+record.surface = vec4(hit.t, normal);
+pixels[id] = record;
+```
+
+```glsl title="shaders/bulb.comp — tổng work của dispatch"
+if (normalFallback)
+    atomicAdd(stats.fallbacks, 1u);
+atomicAdd(stats.raySteps, primaryWork);
+atomicAdd(stats.orbitIterations, orbitWork);
+```
+
+Mỗi invocation sở hữu một pixel nên không cần atomic cho record của nó; stats chung của batch thì cần. H bật năm cách xem. Một ray bị loại ngoài bounding sphere có thể có work bằng 0; đó là kết quả early rejection, không phải counter bị quên tăng. Preview dùng tối đa 8 orbit iterations/40 ray steps; đọc đúng nhãn trước khi so.
+
+### 2. Dựng một evaluator khác đường tính
+
+Trong `bulb_reference.hpp`, đoạn nhân nguyên p lần thay cho trig mapping là:
+
+```cpp title="include/bulb_reference.hpp — oracle nhân góc không gọi mapping của renderer"
+std::complex<long double> anglePower{1, 0};
+std::complex<long double> azimuthPower{1, 0};
+long double radiusPower = 1;
+long double previousPower = 1;
+for (int factor = 0; factor < s.power; ++factor) {
+    previousPower = radiusPower;
+    radiusPower *= radius;
+    anglePower *= theta;
+    azimuthPower *= phi;
+}
+derivative = s.power * previousPower * derivative + 1;
+x = radiusPower * anglePower.imag() * azimuthPower.real() + c.x;
+y = radiusPower * anglePower.imag() * azimuthPower.imag() + c.y;
+z = radiusPower * anglePower.real() + c.z;
+```
+
+`theta` ở đây là tên biến số phức đơn vị đã dựng từ `(z/r,rho/r)`, không còn là số góc radian của shader. `previousPower` giữ r^(p−1) cho derivative. Oracle có guard riêng, kiểm cùng bailout/iteration cap và không gọi `evaluate` của đường chính. Tests vẫn cần fixture giải tích nhỏ như r=0 và power-2 của (1,0,0), vì hai cách triển khai cũng có thể cùng hiểu sai đề.
+
+### 3. Chạy đúng evaluator GLSL, không chỉ kiểm bản C++
+
+`GpuFieldProbe` gửi 19 điểm vào một workgroup 8×8 của cùng `bulb.comp`. Nhánh validation chỉ đổi cách nhận/ghi dữ liệu; nó gọi đúng hàm `evaluate` đang render ảnh. Guard chặn các lane thừa, canary sau output phát hiện ghi quá biên. Probe có fence, deadline ba giây và poll Quit/Esc; không chèn `glFinish`.
+
+Bộ fixture so năm power 2/6/8/10/12 và bailout 2/8/16, gồm gốc, gần trục và các điểm ổn định trong/ngoài, NaN/Inf. Orbit đúng trên unit-axis có thể nằm đúng biên và rất nhạy precision: các điểm đó kiểm one-step mapping riêng, không buộc quỹ đạo float dài bằng long double. DE có tolerance số học abs 3e−5 + rel 2e−4; đây không phải ngưỡng sai số t của ray.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --parallel 2 --target project_43_checkpoint_6 project_43_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 15
+.\build\Debug\project_43_checkpoint_6.exe --hidden --verify-field
+.\build\Debug\project_43_checkpoint_6.exe --seconds 120
+```
+
+`--verify-field` phải báo `GPU FIELD PASS`, không chỉ mở cửa sổ rồi thoát. H lần lượt xem Beauty/Steps/Orbit work/States/Normals. Màu state riêng cho hit, budget, inside và invalid giúp phân biệt thiếu bước với một lỗ thật.
+
+Trong `GpuRenderer`, `GL_TIME_ELAPSED` bao quanh dispatch và barrier. `poll` chỉ đọc query sau khi cả fence lẫn query-ready đã sẵn sàng; chưa xong thì trả về vòng SDL. `LAST KERNEL` là elapsed GPU của batch này; `SUBMIT CPU` là thời gian CPU gửi lệnh. So hai số đó để hiểu chúng khác nhau, **không** lấy chúng tính một “GPU speedup”. Chưa có benchmark cùng bài toán, warm-up và median qua nhiều lượt.
+
+## Thử tạo lỗi
+
+Tạm để `orbitWork` chỉ tăng trong march thay vì trong evaluator. Ảnh có thể không đổi, nhưng khi bật normals thì counter nào không còn phản ánh công việc? Khôi phục. Sau đó đổi riêng trục cực trong một bản mapping: fixture gần trục có phát hiện sai dù fractal mới vẫn trông “có vẻ hợp lý” không?
+
+## Checklist hoàn thành
+
+- Nêu rõ một ray step khác một orbit body và chỉ được nơi tăng cả hai counter.
+- Field fixtures có cách tính độc lập; không gọi một hàm hai lần rồi so để nhận đúng.
+- Probe shader có tail guard, canary và thời hạn hữu hạn; NaN/Inf có state riêng.
+- Phân biệt tolerance DE số học, tolerance khoảng cách ray và epsilon render.
+- GPU query được đọc khi sẵn sàng; không gắn nhãn enqueue CPU hoặc FPS thành kernel time.
+
+## Hướng mở rộng
+
+Chọn hai pixel có cùng ray steps nhưng orbit work khác nhau, giải thích bằng quỹ đạo thoát và các probe phụ. Tiếp theo, [tính đủ ảnh mà vẫn giữ camera phản hồi](/projects/mandelbulb-explorer/07-preview-va-anh-tinh-dan).

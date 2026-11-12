@@ -62,6 +62,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
           projectNumber === 40 ||
           projectNumber === 41 ||
           projectNumber === 42 ||
+          projectNumber === 43 ||
           projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
@@ -573,8 +574,8 @@ test("Project 38 introduces chamber layers at the documented checkpoints", async
   }
 });
 
-test("Project 36-42 source guides list only files changed by the current checkpoint", async () => {
-  for (const project of projectCatalog.filter(({ id }) => Number(id) >= 36 && Number(id) <= 42)) {
+test("Project 36-43 source guides list only files changed by the current checkpoint", async () => {
+  for (const project of projectCatalog.filter(({ id }) => Number(id) >= 36 && Number(id) <= 43)) {
     const projectDirectory = path.join(workspace, "examples", project.sourceDirectory);
     const templateRoot = path.join(projectDirectory, "source-template");
     const relativeFiles = (await walkFiles(templateRoot)).map((file) =>

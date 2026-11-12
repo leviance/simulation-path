@@ -1,3 +1,5 @@
+// Legacy periodic Molecular Dynamics math, retained for the old Project 44/45 labs.
+// Current Project 43 uses lib/labs/mandelbulb-explorer instead.
 export interface Vec2 {
   x: number;
   y: number;

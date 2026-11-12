@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 25 phút, tự viết 40 phút, kiểm và thử biến thể 20 phút; không tính setup/build lần đầu.
+
+## Ta cần giải quyết điều gì?
+
+Bước đều của checkpoint 2 dành nhiều lần hỏi field cho khoảng trống, nhưng vẫn có thể nhảy qua một nhánh mỏng. Ta cần bước dài khi còn xa và ngắn khi tới gần. Giữ renderer, camera và recurrence đang chạy; chỉ bổ sung dữ liệu cho Field và sửa quy tắc tiến ray.
+
+Project 36 đã dùng sphere tracing với SDF của các hình đơn giản. Không được bê nguyên lời bảo đảm “bước bằng distance không vượt mặt” sang Mandelbulb: giá trị ta sắp tính là **distance estimator**, không phải khoảng cách Euclid chính xác tới bề mặt.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong lúc lặp z, ta theo dõi thêm một đạo hàm vô hướng `dr`. Nó mô tả độ nhạy theo công thức estimator, không phải vector vận tốc của z:
+
+$$dr_{n+1}=p\,r_n^{p-1}dr_n+1,\qquad dr_0=1.$$
+
+Khi orbit thoát bailout, dùng r và dr ở vòng đó:
+
+$$DE(c)=\frac{1}{2}\frac{r\log(r)}{dr}.$$
+
+Mapping và DE tham khảo [Shape Modeling with Fractals — McGraw & Herring](https://web.ics.purdue.edu/~tmcgraw/papers/mcgraw_fractal_2014). Ta dùng công thức để dựng một renderer hữu hạn, không triển khai RBF warping trong bài báo và không suy ra DE là SDF chỉ vì ảnh nhìn giống fractal.
+
+Renderer dừng hit khi DE nhỏ hơn `hitEpsilon`, hoặc khi gặp vùng chưa thoát trong iteration cap. Vì thế ảnh là một **mặt ở độ phân giải epsilon đã chọn**, không phải biên chính xác của tập lặp vô hạn. Bài 6 sẽ đối chiếu cùng định nghĩa mặt này bằng một cách dò chậm hơn.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="distance" />
+
+Giữ một ray gần rìa và quan sát các vạch bước tụ lại. Tăng epsilon rồi Áp dụng: chi tiết nào biến mất trước? Giảm ray budget: vùng tím có phải lỗ thật của fractal không? Các số Canvas được ghi riêng; không lấy số này làm benchmark GPU.
+
+## Bắt tay xây dựng
+
+### 1. Cập nhật dr cùng lần lặp z
+
+Trong `evaluate` ở `shaders/bulb.comp`, trước khi cập nhật z, thêm phép cập nhật dr. Đoạn cuối thân vòng của checkpoint 3 là:
+
+```glsl title="shaders/bulb.comp — cập nhật derivative và orbit trong cùng vòng"
+dr = float(power) * pow(r, float(power - 1)) * dr + 1.0;
+z = sphericalPower(z) + point;
+if (bad(z) || bad(dr) || dr <= 0.0)
+    return invalidResult(trap);
+trap = min(trap, length(z));
+```
+
+Phải dùng r của z **trước cập nhật** cho cả dr và spherical power. Nếu cập nhật z trước rồi lấy radius mới để sửa dr, bạn đã trộn hai thời điểm. Giữ guard `bad(r)`, `bad(dr)` và `dr<=0` trước khi chia; dr vẫn được khởi tạo 1 như các checkpoint trước.
+
+### 2. Chỉ tính DE khi orbit đã thoát
+
+Thay nhánh bailout của evaluator bằng đoạn sau. `log` nhận r đang lớn hơn bailout, không lấy log của z₀=0:
+
+```glsl title="shaders/bulb.comp — DE trong nhánh escaped"
+if (r > bailout) {
+    float distance = 0.0;
+    distance = 0.5 * log(r) * r / dr;
+    if (bad(distance) || distance <= 0.0)
+        return invalidResult(trap);
+    return Field(distance, trap, 0);
+}
+```
+
+Field bounded vẫn trả distance 0, nhưng state của nó cho biết khác escaped có DE rất nhỏ. Invalid là lỗi số học phải hiện bằng màu chẩn đoán; không sửa nó thành distance 0 rồi giả vờ có vật thể. Bản CPU trong `bulb_field.hpp` dùng cùng thứ tự để tests kiểm không cần OpenGL.
+
+### 3. Sửa bước tiến ở đúng vòng ray
+
+Trong `trace`, xử lý invalid/bounded trước. Sau đó thay bước đều của bài trước bằng điều kiện hit và bước DE:
+
+```glsl title="shaders/bulb.comp — epsilon shell và bước DE có giới hạn"
+if (field.distance < hitEpsilon) {
+    // This is an epsilon shell of a capped estimator, not exact membership.
+    return RayHit(t, field.trap, 1u);
+}
+float advance = clamp(safety * field.distance, hitEpsilon * 0.1, 0.12);
+previous = t;
+t += advance;
+if (t > farT)
+    return RayHit(t, field.trap, 2u);
+```
+
+`safety=0.55` giảm độ mạnh của bước nhảy, không tạo một chứng minh không overshoot. Cận dưới tránh đứng yên vì bước bằng 0; cận trên 0,12 tránh một lần đi quá dài. Giữ cả trần ray steps và far bound, không đổi vòng `for` thành `while(true)` rồi chờ hình tự đẹp.
+
+Nếu một bước vào vùng bounded, checkpoint này còn chia đôi khoảng `previous…t` tám lần. Giữ đầu **phía ngoài** làm điểm shading cho bài sau; phần bên trong trả DE=0 nên gradient có thể phẳng. Chia đôi hữu hạn giúp thu hẹp đoạn vừa bước qua, không bảo đảm tìm được nhánh mỏng hơn đã bị bỏ sót từ trước.
+
+Thay nhánh bounded của `trace` bằng đoạn dưới, không đặt thêm một vòng chia đôi ở CPU sau khi ảnh đã tính xong:
+
+```glsl title="shaders/bulb.comp — thu hẹp bước vừa đi vào vùng bounded"
+if (field.state == 1) {
+    float low = previous, high = t;
+    for (int refinement = 0; refinement < 8; ++refinement) {
+        float middle = (low + high) * 0.5;
+        Field candidate = evaluate(origin + direction * middle);
+        if (candidate.state == 2)
+            return RayHit(t, field.trap, 16u);
+        if (candidate.state == 0)
+            low = middle;
+        else
+            high = middle;
+    }
+    t = low;
+    return RayHit(t, field.trap, 1u);
+}
+```
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --parallel 2 --target project_43_checkpoint_2 project_43_checkpoint_3
+.\build\Debug\project_43_checkpoint_2.exe --power 8 --seconds 30
+.\build\Debug\project_43_checkpoint_3.exe --power 8 --seconds 120
+```
+
+Hai bản vẫn là preview nhỏ và chưa có ánh sáng. So trên cùng camera/power; đừng vừa đổi FOV, power, iteration rồi kết luận DE nhanh hơn từ hai ảnh khác bài toán. Trong panel sửa HIT EPS và SAFETY để thấy hình/stop state đổi. Preview áp epsilon tối thiểu 0,003, nên các yêu cầu nhỏ hơn chưa cho thêm chi tiết ở mốc này; Bài 7 mới render final với epsilon đầy đủ.
+
+`App::tick` vẫn gửi một batch qua `GpuRenderer::submit`; uniforms `hitEpsilon/safety/rayLimit` được đặt trước dispatch. Không có một vòng ray chạy trên CPU thay cho shader vừa sửa. Source C++ `march` chỉ là bản đối chiếu và test.
+
+## Thử tạo lỗi
+
+Thử riêng hai lỗi, mỗi lần dự đoán rồi khôi phục: bỏ `+1` trong cập nhật dr; sau đó giữ đúng dr nhưng đặt safety=1. So đường bao và vùng budget. Ảnh khác không tự nói được bên nào đúng: ghi c, ray, power và sai khác để Bài 6 dùng oracle kiểm, thay vì chọn bản “đẹp hơn” làm chân lý.
+
+## Checklist hoàn thành
+
+- Dr và z dùng cùng radius trước cập nhật; không tính log tại r=0.
+- Invalid, bounded và escaped gần mặt không bị gộp làm một trạng thái.
+- DE chỉ điều khiển bước ray; renderer vẫn có epsilon, safety, far và step budget.
+- Giải thích được hit nghĩa là gì ở độ phân giải hữu hạn, khác với exact membership thế nào.
+- Bước vào bounded giữ điểm phía ngoài sau chia đôi; không ép normal về một vùng DE phẳng.
+
+## Hướng mở rộng
+
+Giữ nguyên scene, ghi số bước của một ray khi thay safety 0,3/0,55/0,8. Ít bước hơn đã đủ để kết luận ảnh chính xác hơn chưa? Tiếp theo, [lấy normal từ field để nhìn thấy chiều sâu](/projects/mandelbulb-explorer/04-normal-va-anh-sang).

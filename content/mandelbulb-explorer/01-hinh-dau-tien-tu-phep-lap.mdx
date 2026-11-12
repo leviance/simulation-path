@@ -1,0 +1,148 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 20 phút, tự viết 40 phút, kiểm và thử biến thể 20 phút. Cài compiler, tải SDL và build lần đầu không tính vào phần này.
+
+## Ta cần giải quyết điều gì?
+
+Starter mở được cửa sổ SDL3/OpenGL nhưng chưa có fractal. Ta sẽ đặt một phép lặp vào đó, cho mỗi pixel hỏi “điểm 3D này có thoát ra xa không?” và tô màu câu trả lời. Bạn sẽ thấy ngay một hình thay đổi khi đổi power, trước khi phải viết ray marching hay ánh sáng.
+
+Khung đã cấp gồm `bulb_window.hpp` tạo context, `bulb_gl.hpp` nạp API/compile shader, `bulb_display.hpp` vẽ panel và `bulb_gpu.hpp` chuyển buffer lên màn hình. Các phần này không chứa mesh hay ảnh fractal. Phần mới bạn viết là `sphericalPower`, `evaluate` trong `shaders/bulb.comp`, rồi gọi chúng từ nhánh mặt cắt. Bản C++ tương ứng ở `bulb_field.hpp` để kiểm công thức không cần cửa sổ.
+
+Đích cuối là một khối Mandelbulb **3D** có camera. Ảnh hôm nay chỉ là lát cắt của field đó tại `Y=sliceY`; đừng coi nó là sản phẩm đã hoàn thành.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ cố định một vị trí `c`. Bắt đầu ở `z₀=(0,0,0)`, biến đổi `z`, cộng lại `c` rồi lặp tiếp:
+
+$$z_{n+1}=\operatorname{sphericalPower}(z_n,p)+c.$$
+
+Nếu độ dài `z` vượt `bailout`, ta dừng với trạng thái `escaped`. Nếu dùng hết số vòng mà chưa vượt, trạng thái là `bounded`: **chưa thoát trong lượt kiểm này**, không phải đã chứng minh thuộc tập fractal vô hạn. `c` không đổi giữa các vòng; đổi nó mỗi lần sẽ tạo một bài toán khác.
+
+Spherical power đổi vector sang tọa độ cầu, nâng bán kính lên p và nhân hai góc với p. Ở đây trục cực là Z: `theta` đo từ +Z, `phi` là góc trong mặt phẳng XY. Với r khác 0, `theta=acos(z.z/r)`, `phi=atan2(z.y,z.x)`. Sau khi đổi góc, trở về XYZ bằng sin/cos. Đây là định nghĩa mapping của Mandelbulb, không phải phép nhân vector thông thường.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="power" />
+
+Chọn Power 8, rồi chọn một điểm ở vùng tối và một điểm ngoài rìa. Đọc bảng `z₀,z₁,…`: điểm nào cần nhiều vòng hơn? Dự đoán trước khi đổi sang power 6. Canvas dùng ít vòng và độ phân giải nhỏ để bạn đọc phép tính; nó không thay renderer GPU trong gói C++.
+
+## Bắt tay xây dựng
+
+### 1. Viết mapping, xử lý gốc tọa độ trước
+
+Mở `shaders/bulb.comp`, thêm hàm dưới đây trước `evaluate`. GPU dùng `atan(rho,z)` để lấy góc cực tương đương với công thức acos; nó tránh việc một sai số ở tỷ số gần ±1 bị khuếch đại. Trong GLSL, hàm hai đối số là `atan(y,x)`, không phải `atan2` như C++.
+
+```glsl title="shaders/bulb.comp — spherical power thực sự chạy trên GPU"
+vec3 sphericalPower(vec3 z) {
+    float r = length(z);
+    if (r < 1e-15)
+        return vec3(0.0);
+    // atan(rho,z) is equivalent to acos(z/r), without endpoint/domain amplification.
+    float theta = atan(length(z.xy), z.z);
+    float phi = 0.0;
+    if (length(z.xy) > 1e-15)
+        phi = atan(z.y, z.x);
+    float rp = pow(r, float(power));
+    return rp * vec3(sin(float(power) * theta) * cos(float(power) * phi), sin(float(power) * theta) * sin(float(power) * phi), cos(float(power) * theta));
+}
+```
+
+Nhánh đầu quan trọng ngay ở vòng đầu: `z₀=0` nên không có góc để tính. Trên trục Z, phương vị có thể chọn 0; không gọi `atan(0,0)`. Bản C++ dùng `acos(clamp(...,-1,1))` để minh họa trực tiếp công thức và bảo vệ miền acos. Hai bản dùng cùng trục cực và cùng cách nhân góc; Bài 6 sẽ kiểm chúng với một evaluator khác cách tính.
+
+### 2. Lặp tại một điểm c, không thay c bằng z
+
+Trước hết khai báo kết quả mà evaluator trả về, đặt trước các hàm fractal. Các helper `bad` và cờ `invalidField` đã có trong scaffold; `invalidResult` nối kết quả lỗi mới vào cờ đó:
+
+```glsl title="shaders/bulb.comp — kiểu kết quả và đường trả lỗi của field"
+struct Field {
+    float distance;
+    float trap;
+    int state;
+};
+
+Field invalidResult(float trap) {
+    invalidField = true;
+    return Field(0.0, trap, 2);
+}
+```
+
+GLSL tự có constructor `Field(distance,trap,state)` từ thứ tự các trường. Sau khai báo và mapping, thêm toàn bộ evaluator dưới đây. `distance` và `dr` còn là chỗ dành cho Bài 3; hôm nay chỉ đọc `state`, `trap` và số vòng.
+
+```glsl title="shaders/bulb.comp — evaluator ở checkpoint 1"
+Field evaluate(vec3 point) {
+    if (bad(point))
+        return invalidResult(0.0);
+    vec3 z = vec3(0.0);
+    float dr = 1.0;
+    float trap = 2.0;
+    for (int iteration = 0; iteration < 24; ++iteration) {
+        if (iteration >= iterationLimit)
+            break;
+        ++orbitWork;
+        float r = length(z);
+        if (bad(r) || bad(dr) || dr <= 0.0)
+            return invalidResult(trap);
+        if (r > bailout) {
+            float distance = 0.0;
+            return Field(distance, trap, 0);
+        }
+        z = sphericalPower(z) + point;
+        if (bad(z) || bad(dr) || dr <= 0.0)
+            return invalidResult(trap);
+        trap = min(trap, length(z));
+    }
+    return Field(0.0, trap, 1);
+}
+```
+
+`point` chính là c và không bị gán lại. `orbitWork` tăng mỗi lần thực sự chạy thân vòng lặp, kể cả vòng phát hiện đã thoát. `trap` lấy minimum radius **sau** cập nhật; nếu lấy luôn r của `z₀`, mọi điểm đều có trap bằng 0. Trong kiểu `Field`, state 0/1/2 lần lượt là escaped/bounded/invalid; đây không phải bit mask hit/miss của ray ở các bài sau.
+
+Guard sau phép cập nhật cũng cần thiết: nếu vòng cuối mới tạo giá trị không hữu hạn, không được đi hết for rồi báo bounded. Kiểm lỗi ở đầu vòng kế tiếp là quá muộn trong trường hợp ấy.
+
+### 3. Từ pixel chọn một điểm trên lát cắt
+
+`main` của compute shader đã có `uv` ở tâm pixel, `color` và record trình bày. Thêm nhánh sau **trước** đoạn ghi `Pixel`: tọa độ ngang trở thành X, tọa độ dọc trở thành Z, còn Y giữ nguyên. Đây là lời gọi thực sự làm helper phía trên xuất hiện trên màn hình:
+
+```glsl title="shaders/bulb.comp — đọc câu trả lời của field để tô lát cắt"
+if (sliceMode == 1) {
+    Field field = evaluate(vec3((uv.x - 0.5) * 4.0, (sliceY), (0.5 - uv.y) * 3.0));
+    hit.state = 1u;
+    color = mix(vec3(0.03, 0.05, 0.09), vec3(0.12, 0.8, 0.9), float(orbitWork) / float(iterationLimit));
+    if (field.state == 1)
+        color = vec3(0.015, 0.025, 0.04);
+    if (field.state == 2)
+        hit.state = 16u;
+}
+```
+
+Dấu trừ ở Z để phía trên ảnh là +Z. Màu sáng tối ở bước này biểu diễn số vòng đã chạy, không phải ánh sáng chiếu lên khối 3D. `hit.state` ở nhánh lát cắt chỉ đánh dấu pixel hợp lệ/invalid để dùng chung đường ghi buffer; **chưa có phép dò ray**. Bài 2 mới thêm nhánh `else` 3D và ý nghĩa hit/miss của ray. `distance` chưa tham gia quyết định màu.
+
+## Chạy thử và quan sát
+
+Giải nén gói source, mở terminal cạnh `CMakeLists.txt`. Configure một lần, sau đó build đúng mốc đang học:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2 --target project_43_starter project_43_checkpoint_1
+.\build\Debug\project_43_starter.exe --seconds 20
+.\build\Debug\project_43_checkpoint_1.exe --power 8 --seconds 120
+```
+
+Với generator một cấu hình, executable nằm ngay trong `build`. Cần driver OpenGL 4.3, không chỉ SDL tạo được cửa sổ. Nếu context không hỗ trợ, đọc thông báo lỗi trước khi sửa công thức.
+
+Luồng chạy là `main → App::start → request → tick → GpuRenderer::submit → bulb.comp → display`. `main` vẫn poll SDL events trước `tick` và `draw`; đừng đặt vòng recurrence vào vòng sự kiện của CPU. Ở mốc 1, `start` chủ động bật mặt cắt và kết quả chỉ là preview 120×68, tối đa 8 orbit iterations. Hàng ORBIT LIMIT là yêu cầu; dòng PREVIEW ở cuối panel ghi giới hạn thực của preview. Dùng Tab/Left/Right đổi power hoặc chọn preset 2 để xem power 6.
+
+## Thử tạo lỗi
+
+Trong bản thực hành, thay `+ point` thành `+ z`. Dự đoán ảnh trước khi chạy: với z bắt đầu bằng 0, điều gì giúp nó rời 0? Sau đó khôi phục. Thử riêng một lần bỏ nhánh r=0 và dùng lại công thức acos trực tiếp; xem NaN/invalid xuất hiện thế nào, rồi trả guard về đúng chỗ. Không giữ lỗi cố ý trong checkpoint dùng tiếp.
+
+## Checklist hoàn thành
+
+- Starter chưa tính fractal; checkpoint 1 hiện mặt cắt thay đổi khi đổi power.
+- Theo dõi được c cố định và z thay đổi, giải thích được escaped khác bounded.
+- Gốc tọa độ và gần trục Z không làm phép tính phát sinh NaN.
+- Hiểu vì sao ảnh lát cắt chưa có chiều sâu và preview chưa phải ảnh 960×540.
+- Tìm được chỗ `evaluate` được gọi từ pixel, không chỉ viết một helper chưa nối vào shader.
+
+## Hướng mở rộng
+
+Đổi `sliceY` trong source hoặc Canvas, dự đoán lát cắt có còn đối xứng như trước không. Giữ cùng power và thử nhiều mặt cắt: liệu một ảnh 2D có đủ mô tả cả hình? Tiếp theo, [cho mỗi pixel đi một ray vào không gian 3D](/projects/mandelbulb-explorer/02-tu-mat-cat-den-ray-3d).

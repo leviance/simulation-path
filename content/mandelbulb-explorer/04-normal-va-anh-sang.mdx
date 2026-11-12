@@ -1,0 +1,99 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 20 phút, tự viết 30 phút, kiểm và thử biến thể 20 phút; không tính setup/build lần đầu.
+
+## Ta cần giải quyết điều gì?
+
+Checkpoint 3 đã tìm được mặt ở độ phân giải epsilon, nhưng mọi hit đều có một màu. Nhìn ảnh, ta khó biết một vùng là hõm hay nhánh nhô ra. Ta sẽ giữ nguyên phép tìm giao điểm, lấy hướng normal tại đó rồi cho ánh sáng thay đổi theo hướng bề mặt.
+
+Không thêm mesh hoặc texture normal. Hình học vẫn do recurrence tạo ra; normal phải được suy từ chính field đang render.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ở một mặt đẳng trị đủ trơn, gradient chỉ hướng field tăng nhanh nhất. Với DE có nhiều chi tiết và sai số số học, ta ước lượng gradient bằng sáu lần hỏi quanh p:
+
+$$
+\begin{aligned}
+g_x&=DE(p+h\hat x)-DE(p-h\hat x),\\
+g_y&=DE(p+h\hat y)-DE(p-h\hat y),\\
+g_z&=DE(p+h\hat z)-DE(p-h\hat z).
+\end{aligned}
+$$
+
+Sau đó chuẩn hóa g thành normal. Ba thành phần đều có cùng thừa số 1/(2h), nên có thể bỏ thừa số ấy trước normalize. `h` là bước sai phân theo world units, không phải số pixel hay `hitEpsilon`. H quá nhỏ làm phép trừ nhạy với precision; h quá lớn làm phẳng các nếp nhỏ.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="normals" />
+
+So Beauty và Normals, rồi tăng normal step. Dự đoán phần nào trơn đi trước khi Áp dụng. Bật/tắt ánh sáng trên cùng camera: đường bao có đổi không? Nếu đổi, bạn có thể đã vô tình dùng normal để sửa quy tắc hit.
+
+## Bắt tay xây dựng
+
+### 1. Lấy normal từ sáu probe có bước công bố
+
+Thêm hàm vào `shaders/bulb.comp`. Mỗi lần gọi evaluator ở đây cũng phải tăng orbit work như trong vòng ray chính:
+
+```glsl title="shaders/bulb.comp — normal bằng central differences"
+vec3 normalAt(vec3 point, vec3 fallback) {
+    vec3 gradient = vec3(
+        evaluate(point + vec3(normalStep, 0, 0)).distance - evaluate(point - vec3(normalStep, 0, 0)).distance,
+        evaluate(point + vec3(0, normalStep, 0)).distance - evaluate(point - vec3(0, normalStep, 0)).distance,
+        evaluate(point + vec3(0, 0, normalStep)).distance - evaluate(point - vec3(0, 0, normalStep)).distance
+    );
+    if (bad(gradient) || length(gradient) < 1e-12) {
+        normalFallback = true;
+        return fallback;
+    }
+    return normalize(gradient);
+}
+```
+
+Không normalize vector 0. Fallback dùng hướng ngược ray để ảnh không phát sinh NaN; `normalFallback` còn được đếm để debug, không phải bằng chứng normal đó chính xác. Nếu một evaluator probe invalid, cờ `invalidField` cuối shader sẽ đổi sample thành invalid, thay vì âm thầm dùng kết quả lỗi.
+
+### 2. Gọi normal sau trace, không gọi cho mọi điểm trên ray
+
+Trong nhánh `hit.state==1u` của shader main, p phải được tính bằng đúng t vừa tìm. Light ở world space nên không đi theo camera:
+
+```glsl title="shaders/bulb.comp — nối giao điểm với normal và hướng sáng"
+vec3 position = eye + direction * hit.t;
+normal = normalAt(position, -direction);
+vec3 light = normalize(vec3(-0.6, 0.9, 0.5));
+float diffuse = max(dot(normal, light), 0.0);
+float ao = 1.0, shadow = 1.0;
+```
+
+`dot(normal,light)` đo hai hướng cùng chiều tới đâu; clamp về 0 để phía quay lưng không có diffuse âm. Tại mốc 4, AO và shadow vẫn bằng 1. Chúng được đặt tên sẵn để bài sau bổ sung mà không giấu thêm chi phí ở đây.
+
+Phía dưới, `material(hit.trap,normal)` chọn màu; shader kết hợp ambient, diffuse, một phần sky/rim và specular. Presentation tone-map rồi gamma encode để xem trên màn hình. Các thành phần phụ giúp đọc hình, không chứng nhận một mô hình truyền ánh sáng vật lý. Orbit trap là thuộc tính của phép lặp để chọn palette, không phải nhiệt độ hay năng lượng.
+
+### 3. Giữ chỗ lấy mẫu phía ngoài
+
+Ở bài trước, đoạn chia đôi giữ t ở đầu còn escaped. Nếu đẩy hẳn điểm shading vào vùng bounded có DE=0 quanh cả sáu probe, gradient sẽ bằng 0. Tăng specular không chữa được việc đang lấy normal từ một field phẳng. Khi gặp ảnh chấm nhiễu, kiểm t, h, epsilon và normal fallback trước khi thêm hiệu ứng.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --parallel 2 --target project_43_checkpoint_3 project_43_checkpoint_4
+.\build\Debug\project_43_checkpoint_3.exe --seconds 30
+.\build\Debug\project_43_checkpoint_4.exe --normal-step 0.003 --seconds 120
+```
+
+Mốc này vẫn là preview; h thực tế của preview ít nhất 0,004, nên sửa h thấp hơn mức ấy chưa làm preview chi tiết hơn. Hãy dùng Canvas để quan sát thay đổi ở phạm vi nó công bố, và chờ checkpoint 7 để so ảnh final với h nhỏ hơn.
+
+Luồng mới là `trace → position → normalAt → material/lighting → Pixel → display`. Không gửi normal ngược về march để làm thay đổi bước ray. Khi bản có ánh sáng khác bản phẳng màu, t và stop state của cùng ray phải vẫn tuân theo cùng quy tắc tìm mặt.
+
+## Thử tạo lỗi
+
+Đảo thứ tự hai vế trừ của cả ba thành phần gradient. Dự đoán phía nào sẽ sáng trước khi chạy. Tiếp đó khôi phục và thử đặt h rất nhỏ trong giới hạn cho phép: nếu thấy nhiễu, hãy phân biệt mất precision của sai phân với ray budget, không tăng iteration tùy tiện để “chữa mọi lỗi”.
+
+## Checklist hoàn thành
+
+- H là tham số world-space riêng, không đồng nhất với hit epsilon.
+- Normal có độ dài gần 1 hoặc dùng fallback được đếm rõ; invalid không bị che bằng một màu bình thường.
+- Chỉ tính sáu probe khi ray hit; orbit-work counters vẫn tính cả sáu lần hỏi field.
+- Biết hướng light nằm ở world space và đọc được khối nhô/lõm qua ánh sáng.
+- Không gọi màu orbit trap là một đại lượng vật lý.
+
+## Hướng mở rộng
+
+Thử một h gấp đôi và một h bằng nửa, giữ nguyên epsilon/camera. Viết một nhận xét về độ ổn định và phần chi tiết bị mất. Tiếp theo, [nối chuột và bàn phím vào camera khám phá](/projects/mandelbulb-explorer/05-camera-kham-pha).

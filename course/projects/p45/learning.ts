@@ -83,7 +83,7 @@ const learning = {
         {
           title: "Giữ nguyên lực và cutoff",
           explanation:
-            "minimum image và force-shifted LJ giống Project 43; cặp ngoài cutoff trả zero.",
+            "minimum image và force-shifted LJ giống Project 43 (bản Molecular Dynamics cũ); cặp ngoài cutoff trả zero.",
         },
         {
           title: "Đối chiếu giá trị thay vì nhìn hình",

@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 15 phút, tự viết 35 phút, kiểm và thử biến thể 20 phút; không tính setup/build lần đầu.
+
+## Ta cần giải quyết điều gì?
+
+Ảnh checkpoint 4 đã có chiều sâu nhưng góc nhìn còn cố định. Ta sẽ nối dữ liệu chuột/phím vào camera đang tạo ray, rồi yêu cầu tính lại ảnh. Field Mandelbulb không quay theo camera: ta chỉ đổi gốc/hướng những ray đi vào nó.
+
+Camera đã được cấp để các bài trước tạo ray, nhưng helper có sẵn không có nghĩa input đã được nối. Điểm thay đổi chính của bài này nằm ở `App::event` và các nhánh phím trong `bulb_app.hpp`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Orbit giữ target, đổi yaw/pitch để eye đi quanh nó. Pan dời target theo right/up của camera. Dolly đổi khoảng cách eye–target theo tỷ lệ, khác với thay FOV để phóng ảnh. Ba thao tác khác nhau phải cho kết quả khác nhau.
+
+Camera lấy +Y làm up để điều khiển quen tay; spherical mapping lấy +Z làm trục cực. Không có mâu thuẫn: một bên dựng góc nhìn, một bên định nghĩa field world-space. Không xoay input c theo camera chỉ để hai trục ấy trông giống nhau.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="camera" />
+
+Giữ một nhánh làm mốc: orbit, pan rồi dolly. Nhánh nào vẫn ở giữa ảnh, nhánh nào rời giữa? Tiến sát rồi đọc eye/target bên dưới. Nếu camera đi vào vùng chưa thoát trong iteration cap, trạng thái inside phải được nói rõ; không tô cả màn hình như thể camera vừa gặp một mặt ở t=0.
+
+## Bắt tay xây dựng
+
+### 1. Dùng ba phép thay đổi camera riêng
+
+Các hàm trong `bulb_camera.hpp` hoạt động trên camera, không đụng vào power hoặc orbit state của fractal. Đây là orbit và dolly:
+
+```cpp title="include/bulb_camera.hpp — orbit có chặn pitch"
+void orbit(double dx, double dy) {
+    yaw = std::remainder(yaw - dx * 0.006, 2 * pi);
+    pitch = std::clamp(pitch + dy * 0.006, -1.48, 1.48);
+}
+```
+
+```cpp title="include/bulb_camera.hpp — dolly theo tỷ lệ"
+void dolly(double wheel) {
+    distance = std::clamp(distance * std::exp(-wheel * 0.12), 0.04, 18.0);
+}
+```
+
+Pitch tránh hai cực nơi phép cross với world up có thể gần vector 0. Exponential dolly làm một nấc wheel thay đổi cùng tỷ lệ dù đang gần hay xa. Đây là giới hạn của viewer, không phải lời hứa precision đủ để tiến mãi.
+
+Pan dùng `right()*(-dx*distance*0.0012)+up()*(dy*distance*0.0012)` và chặn từng thành phần target trong ±2,5. Khi đã chạm giới hạn, camera không tiếp tục dời một target vô hạn rồi khiến phép lặp và phép chiếu mất precision.
+
+### 2. Gọi helper từ mouse motion, rồi tạo yêu cầu ảnh
+
+Khi mouse-down ở viewport, App lưu vị trí con trỏ, chọn orbit/pan và thử capture chuột. Khi đang kéo, đoạn này mới thực sự thay đổi camera:
+
+```cpp title="include/bulb_app.hpp — nối delta chuột vào camera và request"
+const double dx = e.motion.x - lastX_, dy = e.motion.y - lastY_;
+lastX_ = e.motion.x;
+lastY_ = e.motion.y;
+if (pan_)
+    camera_.pan(dx, dy);
+else
+    camera_.orbit(dx, dy);
+request();
+```
+
+`request()` chụp camera cùng Settings thành một snapshot mới; renderer không đọc một nửa góc cũ và một nửa góc mới trong cùng batch. Native dùng I/J/K/L và Page Up/Down cho các helper tương ứng; vì thế vẫn khám phá được khi capture không khả dụng. Mouse-up, focus loss, minimize và thoát ứng dụng đều phải nhả trạng thái kéo.
+
+### 3. Định nghĩa chuyện gì xảy ra khi camera ở trong
+
+Trong `trace`, sau khi có đoạn giao sphere, kiểm orbit tại origin nếu eye ở trong sphere. State bounded ở đây trả inside:
+
+```glsl title="shaders/bulb.comp — không giả hit t=0 khi camera inside"
+if (length(origin) < 2.0) {
+    Field cameraField = evaluate(origin);
+    if (cameraField.state == 2)
+        return RayHit(0.0, 0.0, 16u);
+    if (cameraField.state == 1)
+        return RayHit(0.0, 0.0, 8u);
+}
+```
+
+Đây là chính sách của viewer hiện tại: báo inside và cho lùi camera, chưa dựng mặt sau từ bên trong. Bounded vẫn chỉ có nghĩa hữu hạn ở iteration cap. Preset không được giấu trạng thái này bằng cách đổi renderer sang một ảnh dựng sẵn.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --parallel 2 --target project_43_checkpoint_5
+.\build\Debug\project_43_checkpoint_5.exe --seconds 120
+```
+
+Kéo trái để orbit, phải/giữa để pan, wheel dolly. Thử cùng thao tác bằng IJKL/Page Up/Down. 1 là overview power 8; 2 đổi sang power 6; 3 dùng góc nhìn gần và yêu cầu chất lượng cao hơn. R reset đúng preset đang chọn, Home chỉ đặt camera về mặc định. Các mốc này vẫn chỉ có preview, nên yêu cầu epsilon rất nhỏ của preset 3 chưa hiện đầy đủ cho đến bài 7.
+
+Thử kéo ra ngoài viewport rồi nhả; quay lại không được tiếp tục kéo “kẹt”. Mất focus phải Pause refinement và nhả capture. Space điều khiển refinement, không có model time đang tự chạy: fractal là một field tĩnh theo cấu hình, không phải khối vật lý đang tiến hóa theo thời gian.
+
+## Thử tạo lỗi
+
+Tạm bỏ `request()` sau orbit. Nếu các số camera đã đổi mà ảnh giữ nguyên, lỗi nằm ở chỗ nào trong luồng input–snapshot–GPU? Khôi phục rồi thử để pan dùng world X/Y thay vì camera right/up; đổi góc nhìn và quan sát tại sao thao tác kéo trở nên khó đoán.
+
+## Checklist hoàn thành
+
+- Orbit/pan/dolly dùng được bằng chuột và có cách thay thế bằng bàn phím.
+- Đổi camera tạo snapshot mới nhưng không đổi định nghĩa field theo camera.
+- Pitch, target và distance có giới hạn hữu hạn; góc/pan không tạo hướng NaN.
+- Mouse-up/focus loss nhả capture; Pause không khóa camera.
+- Hiểu inside là một kết quả có chính sách rõ, không phải hit ngoại cảnh t=0.
+
+## Hướng mở rộng
+
+Ghi lại camera nhìn thấy một nếp nhỏ, rồi đổi riêng iteration cap. Nhận xét nào do camera, nhận xét nào do chất lượng field? Tiếp theo, [đọc công việc và đối chiếu bằng một phép tính độc lập](/projects/mandelbulb-explorer/06-doc-chi-phi-va-doi-chieu).

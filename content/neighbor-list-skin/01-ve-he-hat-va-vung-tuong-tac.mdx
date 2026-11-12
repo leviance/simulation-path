@@ -4,7 +4,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Hộp khí ở Project 43 đã tính đúng lực qua biên. Nhưng với 1.000 hạt, một lần tính lực vẫn phải xem xét 499.500 cặp. Đa số các cặp ở quá xa nhau: ta mất công đo khoảng cách chỉ để kết luận lực bằng zero. Velocity Verlet lại cần hai lần tính lực trong mỗi bước của bản hiện tại.
+Hộp khí ở Project 43 (bản Molecular Dynamics cũ) đã tính đúng lực qua biên. Nhưng với 1.000 hạt, một lần tính lực vẫn phải xem xét 499.500 cặp. Đa số các cặp ở quá xa nhau: ta mất công đo khoảng cách chỉ để kết luận lực bằng zero. Velocity Verlet lại cần hai lần tính lực trong mỗi bước của bản hiện tại.
 
 Ta sẽ giảm phần công việc đó, nhưng trước hết hãy dựng một hình đủ rõ để biết mình đang bỏ qua những cặp nào. Bài này kết thúc với 64 hạt **đứng yên**, một hạt A màu vàng và vòng cutoff màu xanh quanh A. Chưa có neighbor list, cũng chưa chạy tích phân.
 
@@ -16,7 +16,7 @@ cmake --build build --config Debug --target project_44_starter --parallel 2
 .\build\Debug\project_44_starter.exe
 ```
 
-Starter đã có window, renderer, event loop và đường viền hộp. Hai file `periodic.hpp` và `dynamics.hpp` giữ phần đã học ở Project 43: kiểu hạt, minimum image, force-shifted LJ, tạo hệ và solver mọi cặp. Chúng được đưa nguyên vào ZIP để bạn không phải ghép dependency bằng tay. **Có sẵn hàm không có nghĩa là hàm đang được gọi**: starter chưa tạo hạt hoặc cập nhật vật lý. File mới `neighbor_view.hpp` dành cho hình vẽ của project này.
+Starter đã có window, renderer, event loop và đường viền hộp. Hai file `periodic.hpp` và `dynamics.hpp` giữ phần đã học ở Project 43 (bản Molecular Dynamics cũ): kiểu hạt, minimum image, force-shifted LJ, tạo hệ và solver mọi cặp. Chúng được đưa nguyên vào ZIP để bạn không phải ghép dependency bằng tay. **Có sẵn hàm không có nghĩa là hàm đang được gọi**: starter chưa tạo hạt hoặc cập nhật vật lý. File mới `neighbor_view.hpp` dành cho hình vẽ của project này.
 
 ## Hiểu ý tưởng trước khi viết code
 

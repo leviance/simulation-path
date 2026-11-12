@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 25 phút, tự viết 45 phút, kiểm và thử biến thể 25 phút; không tính setup/build lần đầu.
+
+## Ta cần giải quyết điều gì?
+
+Các mốc trước cố ý chỉ tính preview 120×68. Phóng ảnh đó lên cửa sổ lớn không làm nó thành ảnh nhiều chi tiết. Bài này thêm buffer final **960×540 thật**, nhưng không gửi cả ảnh trong một dispatch dài khiến camera phải chờ.
+
+Khó nhất không phải chia hình chữ nhật: khi người dùng đổi camera giữa chừng, ta phải biết tile nào còn thuộc ảnh đang xem. Nếu chỉ đổi nhãn power rồi tiếp tục dùng tile cũ, hình có thể nhìn đẹp mà dữ liệu đã sai.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi yêu cầu giữ một snapshot bất biến gồm Settings, Camera và generation. Ta tính một preview đầy đủ vào buffer dự phòng; khi preview xong và vẫn là yêu cầu mới nhất, mới đổi ACTIVE. Sau đó final của cùng generation được lấp bằng các tile 32×16. Pixel final chưa có dữ liệu lấy màu từ preview **cùng generation**.
+
+Pause ngăn tile final tiếp theo, không ngăn camera hay preview. Cancel không có phép màu ngắt kernel đang chạy: nó ngăn phát thêm batch và không công bố preview đã lỗi thời. Chỉ có một batch đang chờ fence, nên luôn có điểm quay về SDL để nhận input.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="refine" />
+
+Tạm dừng refinement, đổi camera rồi thử Tiến 1 batch. Quan sát REQUEST/ACTIVE và tiến độ. Đổi nhanh power 6 rồi 8 trước khi preview xong: generation trung gian có được công bố không? Canvas chỉ dùng 32×18→96×54 và batch tối đa 48 pixel; native dùng các kích thước riêng nêu trong bài.
+
+## Bắt tay xây dựng
+
+### 1. Chụp cấu hình thành snapshot trước khi tính
+
+Trong `bulb_jobs.hpp`, request phải validate trước khi thay cấu hình hợp lệ đang giữ:
+
+```cpp title="include/bulb_jobs.hpp — một generation chứa trọn camera và cấu hình"
+void request(Settings settings, Camera camera) {
+    validate(settings);
+    validateCamera(camera);
+    batchBound(previewSettings(settings), previewWidth * previewHeight, false);
+    batchBound(settings, tileWidth * tileHeight, true);
+    if (generation_ == UINT32_MAX)
+        throw std::runtime_error("Generation ID exhausted; restart viewer");
+    requested_ = {settings, camera, ++generation_};
+    needsPreview_ = true;
+    cancelled_ = false;
+}
+```
+
+Đừng giữ con trỏ tới camera mà UI đang sửa. Mỗi batch phải dùng snapshot từ đầu đến cuối. Nếu generation đã hết miền uint32 thì báo cần mở lại viewer, không wrap về một ID từng được dùng.
+
+### 2. Xin một tile hữu hạn, không render hết ảnh trong tick
+
+`next()` trả preview trước. Chỉ khi ACTIVE đã có, không Pause/Cancel và chưa đủ mẫu, nó mới trả một tile final. Đoạn xác định tile là:
+
+```cpp title="include/bulb_jobs.hpp — tile cuối dùng đúng phần ảnh còn lại"
+const int columns = (imageWidth + tileWidth - 1) / tileWidth;
+const int rows = (imageHeight + tileHeight - 1) / tileHeight;
+const int local = tile_ % (columns * rows);
+const int x = (local % columns) * tileWidth, y = (local / columns) * tileHeight;
+return Tile{x, y, std::min(tileWidth, imageWidth - x), std::min(tileHeight, imageHeight - y), tile_ / (columns * rows), false};
+```
+
+960/32 chia hết, nhưng 540/16 không chia hết: hàng cuối chỉ cao 12 pixel. Host kiểm tile nằm trong buffer; shader chặn cả invocation thừa ở mép workgroup. Không làm tròn chiều cao ảnh thành 544 rồi ghi sang record canary.
+
+Trong `App::tick`, poll batch đã gửi; nếu hoàn tất thì accept. Khi GPU rảnh, lấy tối đa một `next()` rồi submit; final chỉ bắt đầu sau 160 ms không có thay đổi input. Fence/query chưa sẵn sàng thì trả về vòng SDL, không bận chờ bằng `while` trong tick.
+
+### 3. Kiểm generation ngay lúc hiển thị
+
+`display.frag` bắt đầu bằng preview ACTIVE. Chỉ dùng pixel final khi nó đúng generation và đã có sample:
+
+```glsl title="shaders/display.frag — không ghép tile của hai ảnh"
+Pixel candidate = fullPixels[f.y * 960 + f.x];
+if (candidate.work.w == generation && candidate.color.w > 0.0)
+    record = candidate;
+```
+
+Mỗi pixel mới trong compute còn reset tổng màu/work nếu generation khác. Hai lớp kiểm bổ sung nhau: compute không cộng màu cũ vào mẫu mới, display không lấy tile cũ lấp chỗ chưa tính. Với bốn sample ở bài sau, pixel có một sample vẫn được xem là đang refinement, chưa phải ảnh COMPLETE.
+
+`accept` chỉ đổi ACTIVE khi preview thuộc yêu cầu mới nhất và batch ghi đủ số sample. Một tile cũ đã gửi vẫn có thể hoàn thành; nếu nó còn thuộc ACTIVE đang xem thì đếm đúng work của ảnh cũ, không gán sang REQUEST mới. Preview mới được công bố sẽ reset bộ đếm final cho generation của nó.
+
+Trong `RenderPlan::accept`, nhánh chốt preview nằm trước nhánh cộng work final. Giữ phép kiểm này ở **lúc nhận kết quả**, không chỉ lúc gửi:
+
+```cpp title="include/bulb_jobs.hpp — preview hết hạn không được đổi ACTIVE"
+if (tile.preview) {
+    if (snapshot.generation != requested_.generation || !needsPreview_)
+        return false;
+    active_ = snapshot;
+    previewCounters_ = counters;
+    finalCounters_ = {};
+    tile_ = 0;
+    needsPreview_ = false;
+    return true;
+}
+```
+
+`App::tick` chỉ gọi `publishPreview(result->destination)` khi accept trả true. Đổi ID trong controller mà quên đổi buffer hiển thị cũng sai như đổi buffer mà quên nhãn. Checkbox “Giữ job Canvas” trong minh họa chỉ để đọc từng batch; khác với Pause native, nó giữ cả preview và cần bạn chủ động tiến batch hoặc bỏ giữ.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Release --parallel 2 --target project_43_checkpoint_7
+.\build\Release\project_43_checkpoint_7.exe --seconds 120
+```
+
+Đổi camera liên tục rồi dừng tay. Bạn phải thấy preview đáp ứng trước và ảnh dần rõ hơn sau đó. Space dừng final; đổi camera khi Pause vẫn phải có preview mới. X hủy, Enter tính lại. F ẩn panel vẫn giữ dòng hướng dẫn và nhãn chất lượng, không biến ảnh partial thành một ảnh “đã xong”.
+
+Giới hạn native: final 32×16 pixel/batch, max 256 bước ray và 24 orbit iterations; mỗi dispatch dưới bốn triệu orbit bodies theo cận bảo thủ của source. GPU fence có deadline ba giây; đây không phải lời bảo đảm mọi API driver sẽ trả về đúng hạn. Khi kiểm tự động vẫn dùng watchdog ngoài tiến trình. Không thêm `glFinish` để làm số liệu có vẻ “ổn định”.
+
+## Thử tạo lỗi
+
+Tạm bỏ điều kiện `candidate.work.w == generation` ở display. Đổi nhanh power hoặc camera khi mới tính một phần ảnh. Những mảng hình cũ còn lại không phải progressive detail: đó là hai bài toán bị ghép chung. Khôi phục cả guard hiển thị và reset record trước khi thử tiếp.
+
+## Checklist hoàn thành
+
+- Final tính đủ 960×540, không chỉ kéo giãn preview.
+- Pause dừng refinement nhưng không khóa camera/preview; Cancel giữ last-good và không phát thêm tile.
+- Preview mới chỉ được công bố khi đủ và còn là yêu cầu mới nhất.
+- Pixel final chỉ được dùng cùng generation; tile mép cao 12 không ghi quá buffer.
+- SDL còn nhận input giữa các batch và mỗi batch có cận công việc hữu hạn.
+
+## Hướng mở rộng
+
+Tính có bao nhiêu tile cho 960×540 và bao nhiêu sample khi chọn 4 mẫu/pixel. Vì sao buffer stats uint32 theo batch vẫn đủ, còn tổng cả ảnh nên cộng bằng uint64? Tiếp theo, [thêm màu, độ sâu và giảm răng cưa mà không giấu chi phí](/projects/mandelbulb-explorer/08-mau-sac-bong-va-khu-rang-cua).

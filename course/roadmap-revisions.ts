@@ -84,6 +84,10 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
   "43": {
     previousTitle: "Hộp phân tử tuần hoàn: hạt đi ra một phía và quay lại phía đối diện",
     previousPart: previousMolecularPart,
+    replacement: {
+      slug: "mandelbulb-explorer",
+      acceptanceNote: "Bản Mandelbulb mới đang được nghiệm thu phần web và gói tải; kiểm native không thay thế các bước này.",
+    },
     summary:
       "Xoay và phóng gần vào fractal Mandelbulb; thay một phép lặp ngắn để khám phá những hình dạng 3D phức tạp.",
     outcome:

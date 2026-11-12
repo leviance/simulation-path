@@ -1,0 +1,40 @@
+.status {
+  border-left: 3px solid #35c9bf;
+  padding: 0.5rem 0.8rem;
+  margin: 0.75rem 0;
+  line-height: 1.6;
+}
+.readout {
+  font-size: 0.9rem;
+  line-height: 1.75;
+  font-variant-numeric: tabular-nums;
+}
+.readout dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 1rem 0;
+}
+.readout dt {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+.readout dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.readout progress {
+  display: block;
+  width: 100%;
+  height: 0.65rem;
+  accent-color: #29bdb5;
+}
+.readout table {
+  width: 100%;
+  font-size: 0.82rem;
+}
+.readout th,
+.readout td {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+}

@@ -2,10 +2,10 @@ import type { PublishedProjectEditorial } from "../../types";
 
 const project = {
   summary:
-    "Giữ nguyên mô hình Molecular Dynamics tuần hoàn của Project 43 nhưng không tìm lại mọi cặp ở mỗi bước. Bạn sẽ xây neighbor list có vùng đệm, biết khi nào danh sách còn dùng được, dùng cell grid để dựng nhanh hơn và đối chiếu với vòng lặp mọi cặp để chắc rằng tối ưu không làm đổi lực.",
+    "Giữ nguyên mô hình Molecular Dynamics tuần hoàn của Project 43 (bản Molecular Dynamics cũ) nhưng không tìm lại mọi cặp ở mỗi bước. Bạn sẽ xây neighbor list có vùng đệm, biết khi nào danh sách còn dùng được, dùng cell grid để dựng nhanh hơn và đối chiếu với vòng lặp mọi cặp để chắc rằng tối ưu không làm đổi lực.",
   duration: "17–21 giờ",
   prerequisites: [
-    "Project 43 — minimum image, force-shifted Lennard–Jones, unwrapped và Velocity Verlet trong hộp tuần hoàn",
+    "Project 43 (bản Molecular Dynamics cũ) — minimum image, force-shifted Lennard–Jones, unwrapped và Velocity Verlet trong hộp tuần hoàn",
     "Project 28 — chia không gian thành cell grid để tìm hạt gần",
     "Bản Molecular Dynamics cũ của Project 43 — lực cặp, reduced units và kiểm tra năng lượng/động lượng; không yêu cầu Project 42 biến hình hạt",
   ],
@@ -23,7 +23,7 @@ const project = {
     outcome:
       "Một Neighbor List Lab với preset 64, 144, 1.000 hạt và một ca hai hạt để tìm lỗi. Có bộ đếm dựng danh sách, số cặp, độ dời lớn nhất, đối chiếu lực và bảng so sánh skin. Bản C++/SDL3 chạy độc lập; Canvas dùng cùng công thức để học và thử nghiệm.",
     requirements: [
-      "Bắt đầu bằng hệ hạt đứng yên cùng vòng cutoff trong cửa sổ SDL3; giải thích phần được giữ lại từ Project 43 trước khi thêm cache.",
+      "Bắt đầu bằng hệ hạt đứng yên cùng vòng cutoff trong cửa sổ SDL3; giải thích phần được giữ lại từ Project 43 (bản Molecular Dynamics cũ) trước khi thêm cache.",
       "Dùng minimum image cho mọi phép đo khoảng cách. Chỉ lưu i<j trong bán kính listRadius=cutoff+skin.",
       "Mỗi lần tính lực phải đo lại khoảng cách và lọc cutoff; các cặp trong lớp skin không được tạo lực.",
       "Lưu mốc unwrapped khi dựng. Nếu hạt bất kỳ dời ít nhất skin/2, phải dựng lại trước lần tính lực kế tiếp.",
@@ -36,7 +36,7 @@ const project = {
     ],
     constraints: [
       "Chỉ xét hộp chữ nhật cố định, tối đa 1.000 hạt; chưa có GPU, MPI, Verlet list nhiều tầng hay hộp biến dạng.",
-      "Giữ force-shifted LJ từ Project 43. Lab yêu cầu skin>0 và cutoff+skin nhỏ hơn nửa cạnh ngắn nhất để đơn giản hóa hình học; đây không phải giới hạn chung cho mọi neighbor-list implementation.",
+      "Giữ force-shifted LJ từ Project 43 (bản Molecular Dynamics cũ). Lab yêu cầu skin>0 và cutoff+skin nhỏ hơn nửa cạnh ngắn nhất để đơn giản hóa hình học; đây không phải giới hạn chung cho mọi neighbor-list implementation.",
       "Không chỉ rebuild theo một số frame cố định; không dùng position đã wrap để đo độ dời từ mốc.",
       "Không gọi audit mọi cặp trong từng frame để rồi gọi đó là tối ưu. Audit chạy theo yêu cầu hoặc trong test hữu hạn.",
       "Bản học dùng sao chép candidate và sắp xếp cặp để dễ kiểm chứng. Chưa tuyên bố tối ưu thời gian hay bộ nhớ như thư viện MD chuyên dụng.",
@@ -58,7 +58,7 @@ const project = {
       slug: "01-ve-he-hat-va-vung-tuong-tac",
       title: "Vẽ hệ hạt và nhìn rõ phạm vi tương tác",
       summary:
-        "Dựng lại hệ khí đứng yên từ Project 43, vẽ cutoff quanh A và đếm công việc của vòng lặp mọi cặp.",
+        "Dựng lại hệ khí đứng yên từ Project 43 (bản Molecular Dynamics cũ), vẽ cutoff quanh A và đếm công việc của vòng lặp mọi cặp.",
       order: 1,
       estimatedMinutes: 85,
       demoId: "neighbor-list-skin",

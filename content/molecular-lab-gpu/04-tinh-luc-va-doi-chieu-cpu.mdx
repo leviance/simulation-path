@@ -10,7 +10,7 @@ Checkpoint 04 tính force một lần sau initialize rồi dừng. Việc hệ c
 
 ## Hiểu ý tưởng trước khi viết code
 
-CPU ở Project 43 duyệt `i<j` và cộng hai lực đối nhau. Nếu nhiều invocation cùng cập nhật `F[j]`, GPU sẽ có tranh chấp ghi. Bản này đổi cách chia việc: invocation i tự duyệt j và chỉ ghi `F[i]`. Không cần atomicAdd float.
+CPU ở Project 43 (bản Molecular Dynamics cũ) duyệt `i<j` và cộng hai lực đối nhau. Nếu nhiều invocation cùng cập nhật `F[j]`, GPU sẽ có tranh chấp ghi. Bản này đổi cách chia việc: invocation i tự duyệt j và chỉ ghi `F[i]`. Không cần atomicAdd float.
 
 $$\mathbf F_i=\sum_{j\ne i} U'_{FS}(r_{ij})\frac{\mathbf r_{ij}}{r_{ij}},\qquad U_i=\frac12\sum_{j\ne i}U_{FS}(r_{ij}).$$
 

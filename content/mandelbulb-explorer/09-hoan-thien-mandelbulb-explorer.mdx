@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 20 phút, tự viết 35 phút, kiểm sản phẩm và thử biến thể 35 phút; không tính setup/build lần đầu.
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có một fractal explorer có camera, ánh sáng và refinement. Bước cuối không phải thêm một hiệu ứng nữa: ta phải biết ảnh được tính đủ, pixel không thuộc nhầm generation, counters đúng và một số ray khớp phương pháp tham chiếu. Đồng thời người nhận ZIP phải build/chạy được toàn bộ dự án, không cần chắp mã từ chín bài.
+
+Giữ riêng ba loại bằng chứng: hành vi sử dụng; kết quả toán/thuật toán; độ phân giải và chi phí. Ảnh đẹp chứng minh được hình thức trực quan, không thay được một trong hai nhóm còn lại.
+
+## Hiểu ý tưởng trước khi viết code
+
+“Complete” của controller là tổng số sample đã nhận. Verification phải đi xa hơn: đọc mọi record, kiểm generation, sample count, giá trị hữu hạn, normal và canary; cộng steps/iterations của pixel rồi so với GPU stats. Nếu mới xem vài pixel giữa ảnh, chưa đủ để kết luận toàn buffer đã được ghi.
+
+Ray oracle dùng mapping độc lập và bước đều 0,0005, không gọi lại `march` hoặc đi theo DE-sized steps của shader. Nó dò cùng mặt epsilon và clipping sphere R=2, sau đó chia đôi. Sai số t cho các fixture là 0,006 world units. Feature mỏng hơn bước oracle và độ nhạy sát biên vẫn là giới hạn phải công bố, không biến kết quả PASS thành chứng minh toàn cục.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="explorer" />
+
+Tự thực hiện một lượt nghiệm thu: đổi preset, Pause, đổi camera, hủy, tính lại, bật heatmap rồi trở về Beauty. Input sai phải giữ ACTIVE cũ đúng nhãn. Canvas giúp tập quy trình với ảnh CPU nhỏ; quy mô 960×540 và GPU timings phải kiểm ở ứng dụng C++.
+
+## Bắt tay xây dựng
+
+### 1. Kiểm toàn ảnh theo chunk hữu hạn
+
+`verifyCompleteImage` trong `bulb_verify.hpp` chỉ chạy khi ảnh 3D đã đủ. Sau vòng readback tối đa 4.096 record mỗi chunk, nó so tổng đọc lại với atomics:
+
+```cpp title="include/bulb_verify.hpp — đối chiếu công việc từ toàn bộ pixel"
+const auto counters = plan.finalCounters();
+requireVerification(sampleSum == expectedSamples && sampleSum == counters.samples && stepSum == counters.steps && orbitSum == counters.iterations, "Per-pixel work differs from dispatch counters");
+requireVerification(counters.samples == counters.hits + counters.misses + counters.budget + counters.inside + counters.invalid, "Stop counters do not partition actual sample work");
+```
+
+Mỗi chunk có deadline và poll Quit; không readback toàn ảnh mỗi frame. Với samples=1 còn so state của từng pixel với tổng hit/miss/budget/inside. Với samples=4, OR mask không cho biết số hit từng sample; vẫn kiểm toàn mẫu/work nhưng không dùng OR như một phép đếm sai.
+
+### 2. Chạy oracle cho đúng ray của ảnh
+
+Chọn tọa độ pixel đã khai báo trong fixture, lấy ray qua tâm và đi bằng scanner độc lập:
+
+```cpp title="include/bulb_verify.hpp — cùng camera, cùng pixel, khác phương pháp dò"
+const auto ray = snapshot.camera.ray(x + 0.5, y + 0.5, imageWidth, imageHeight);
+const auto reference = referenceRay(snapshot.camera.eye(), ray, snapshot.settings, 0.0005);
+```
+
+Kiểm silhouette hit/miss trước, rồi kiểm khoảng cách t với ngưỡng công bố. Samples=4 có subpixel khác tâm nên suite báo ray-center oracle **SKIPPED** ở lượt đó; chạy riêng samples=1, không nói “mọi ray đã qua” vì bộ đếm toàn ảnh đúng. Camera inside được so bằng orbit độc lập và kiểm toàn ảnh mang state inside, không coi đó là ảnh ngoại cảnh có geometry đã render.
+
+### 3. Xuất đúng dữ liệu, không chỉ chụp cửa sổ
+
+`exportImage` đọc SSBO final; trước khi encode từng record phải kiểm generation và sample count:
+
+```cpp title="include/bulb_export.hpp — từ chối xuất record cũ hoặc chưa đủ mẫu"
+const auto& pixel = pixels[index];
+if (pixel.work.w != generation || pixel.color.w != static_cast<float>(samples))
+    throw std::runtime_error("Cannot export incomplete or mixed-generation image");
+```
+
+Hàm tạo BMP 960×540 từ tổng màu tuyến tính, chia sample count rồi tone-map/gamma encode. Nó từ chối slice debug và đường dẫn đã tồn tại; không ghi đè ảnh người học vừa lưu. `--capture` là tùy chọn khác để chụp cả window/panel, không dùng screenshot bị kéo giãn làm bằng chứng ảnh fractal đúng độ phân giải.
+
+## Chạy thử và quan sát
+
+Build và CTest cả Debug lẫn Release. Có thể build từng target khi học, nhưng trước bàn giao hãy build toàn bộ starter, checkpoint 1–9 và final:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 2
+ctest --test-dir build -C Debug --output-on-failure --timeout 15
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 15
+.\build\Release\project_43_final.exe --hidden --verify --samples 1
+.\build\Release\project_43_final.exe --hidden --verify --power 6 --samples 1
+.\build\Release\project_43_final.exe --hidden --verify --detail --samples 1
+.\build\Release\project_43_final.exe --hidden --verify --distance 0.1 --samples 1
+.\build\Release\project_43_final.exe --hidden --verify --samples 4 --export mandelbulb-aa.bmp
+```
+
+Lượt bình thường phải có `GPU FIELD PASS`, `GPU IMAGE PASS` và `GPU RAY PASS`; lượt inside báo kiểm camera riêng; lượt 4 sample ghi rõ ray oracle bị bỏ qua. Ghi GPU/driver, build, camera/power/iteration/epsilon và các counter/timing của từng lượt, không chỉ chép chữ PASS.
+
+Mặc định: power 8, 18 orbit iterations, 192 ray steps, epsilon 0,00035, normal H 0,0008, safety 0,55, sphere R=2, far=32. Payload renderer 25.666.752 byte, chưa gồm driver/UI/probe. Hidden run có trần 120 giây; từng GPU batch hữu hạn, fence deadline ba giây, verification/export có deadline riêng. Tự động hóa dùng thêm watchdog ngoài tiến trình và tối đa hai worker, không chạy cả site build lẫn ma trận native cùng lúc trên máy ít RAM.
+
+## Thử tạo lỗi
+
+Trong bản thực hành, chỉ đổi generation của một record readback trong test, hoặc cố xuất khi mới có preview. Hệ thống phải từ chối, không tự lấp bằng màu cũ rồi lưu file. Sau đó tạo lỗi lệch trục ở riêng shader power: hình có thể còn giống fractal, nhưng field probe phải phát hiện. Khôi phục trước lần kiểm cuối.
+
+## Checklist hoàn thành
+
+- Ảnh thật đủ 960×540; đổi power, iteration và zoom tạo thay đổi thấy được, có nhãn chất lượng đúng.
+- Đã thử camera chuột/phím, preset/reset, Pause/Cancel/Restart, focus loss và Showcase; không kẹt capture hoặc khóa UI trong một render cả ảnh.
+- Field so với evaluator độc lập; các ray/silhouette hữu hạn được kiểm với tolerance và giới hạn rõ.
+- Toàn pixel, sample count, work sum và canary đã kiểm; không gọi kiểm vài pixel là kiểm toàn ảnh.
+- Starter, 9 checkpoint, final và tests có trong gói độc lập; build/CTest hoạt động ở Debug/Release.
+- Không hứa chi tiết vô hạn hoặc FPS chung cho mọi máy, không gọi DE là exact SDF.
+
+## Hướng mở rộng
+
+Toàn bộ mã nguồn hoàn chỉnh nằm ở thẻ **Mã nguồn checkpoint** cuối bài; có thể mở từng tệp của `final`, không phải ghép các code block trên trang. [Tải ZIP độc lập](/downloads/project-43-mandelbulb-explorer.zip) có README, CMake, starter, chín checkpoint, final, tests và shader tương ứng. Không cần npm để build ứng dụng C++.
+
+Bài tập: chọn một camera nhìn rõ nhánh mỏng, lập bảng thay riêng epsilon/h/iteration rồi so ảnh, work và kết quả oracle. Phân biệt thay đổi do độ phân giải mặt, sai phân normal và precision số học. Nếu muốn đi tiếp, xem [đề bài Project 44 — Xưởng điêu khắc thể tích](/roadmap/44); bản Molecular Dynamics cũ không phải phần tiếp theo của fractal này.

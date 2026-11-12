@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 20 phút, tự viết 40 phút, kiểm và thử biến thể 25 phút; không tính setup/build lần đầu.
+
+## Ta cần giải quyết điều gì?
+
+Ảnh checkpoint 7 đã đủ pixel nhưng những nhánh nhỏ có thể nhấp nháy hoặc răng cưa. Các hõm cũng khó đọc nếu chỉ có một nguồn sáng đơn giản. Ta sẽ thêm AO/shadow có giới hạn và lựa chọn bốn sample cho mỗi pixel; không đổi câu trả lời hit/miss chỉ để ảnh “mịn” hơn.
+
+Đây là bước hoàn thiện cách trình bày. Nếu đang trộn generation hoặc DE sai, làm ảnh bóng đẹp hơn không khắc phục các lỗi đó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Orbit trap là minimum radius đi qua sau mỗi lần cập nhật z. Nó chọn một dải màu ổn định theo field, không đo nhiệt hoặc năng lượng. AO hỏi vài điểm dọc normal để giảm sáng ở vùng gần hình học khác. Shadow dò hữu hạn về phía light để giảm sáng khi bị che. Cả hai đều là xấp xỉ đồ họa từ DE, không phải nghiệm truyền ánh sáng chính xác.
+
+Bốn sample đặt ở bốn vị trí `(¼,¼),(¾,¼),(¼,¾),(¾,¾)` trong pixel. Tính bốn ray thật, cộng màu tuyến tính rồi chia bốn; chỉ tone-map/gamma encode sau khi lấy trung bình. Nhân độ sáng của một ray lên bốn không phải anti-aliasing.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="quality" />
+
+Chọn 1 rồi 4 mẫu trên cùng camera; đợi cả hai hoàn tất trước khi so mép. Canvas minh họa AO bốn probe, không chạy shadow GPU của native. Theo dõi tổng sample/work khi đổi chất lượng: phần hình ảnh được cải thiện phải trả chi phí tính thật.
+
+## Bắt tay xây dựng
+
+### 1. Chọn màu từ orbit trap
+
+Hàm `material` trong `bulb.comp` tạo một band, chọn hai đầu màu rồi trộn theo trap và hướng mặt:
+
+```glsl title="shaders/bulb.comp — orbit trap chỉ chọn thuộc tính đồ họa"
+float band = clamp(0.5 + 0.2 * log(max(trap, 1e-5)), 0.0, 1.0);
+vec3 low = vec3(0.06, 0.18, 0.26), high = vec3(0.94, 0.69, 0.32);
+```
+
+`max` bảo vệ log, còn clamp giới hạn band dùng để chọn màu. Đổi palette không đổi recurrence hoặc số power; nếu đường bao đổi chỉ vì chọn palette, bạn đang sửa nhầm field hoặc kết hợp hai snapshot.
+
+### 2. Thêm AO trong nhánh final, có cận số probe
+
+Sau khi đã có position/normal, bốn lần hỏi dọc normal tạo occlusion. Preview giữ AO/shadow đơn giản để phản hồi nhanh:
+
+```glsl title="shaders/bulb.comp — bốn AO probe được đếm vào orbit work"
+float occlusion = 0.0;
+for (int i = 1; i <= 4; ++i) {
+    float h = float(i) * 0.025;
+    Field f = evaluate(position + normal * h);
+    occlusion += max(0.0, h - f.distance) / h;
+}
+ao = clamp(1.0 - occlusion * 0.20, 0.15, 1.0);
+```
+
+Nếu DE gần h, điểm đó ít gợi che khuất; nếu DE nhỏ hơn nhiều, tăng occlusion. Đây là heuristic, không biến DE thành khoảng cách chính xác. Shader shadow phía sau bắt đầu lệch khỏi mặt theo normal, đi tối đa 16 bước hoặc tới travel>2,5, rồi clamp hệ số 0,15–1. Offset và budget tránh tự che mạnh hoặc kéo dài vô hạn; invalid ở probe phụ vẫn phải báo invalid sample.
+
+Biến h của vòng AO vừa rồi là khoảng cách probe `i×0,025`, không phải `normalStep`. Ngay sau AO, thêm đoạn shadow cùng scope để dùng position/normal/light đã có:
+
+```glsl title="shaders/bulb.comp — shadow có offset và tối đa 16 lần hỏi field"
+float travel = normalStep * 4.0 + hitEpsilon * 3.0;
+vec3 shadowOrigin = position + normal * (normalStep * 3.0 + hitEpsilon * 2.0);
+for (int i = 0; i < 16; ++i) {
+    Field f = evaluate(shadowOrigin + light * travel);
+    if (f.state != 0 || f.distance < hitEpsilon) {
+        shadow = 0.15;
+        break;
+    }
+    shadow = min(shadow, 12.0 * f.distance / max(travel, 0.01));
+    travel += clamp(f.distance * 0.55, 0.003, 0.15);
+    if (travel > 2.5)
+        break;
+}
+shadow = clamp(shadow, 0.15, 1.0);
+```
+
+`shadowOrigin` tránh hỏi lại đúng điểm mặt vừa hit. Tỷ số DE/travel giảm sáng khi một vùng field gần hướng light; hệ số 12 điều khiển độ mềm cảm nhận, không phải một hằng số vật lý. Đoạn kết hợp màu ở cuối nhánh hit nhân diffuse/specular với shadow và ambient với AO. Cả đoạn AO/shadow chỉ chạy khi `detailed==1`; đừng kéo nó ra ngoài rồi ngạc nhiên vì preview chậm đi.
+
+### 3. Thực hiện bốn ray và tích lũy màu đúng miền
+
+Host gửi sampleIndex 0–3 khi Settings.samples=4; trường hợp một sample gửi −1 để giữ tâm pixel. Trong shader:
+
+```glsl title="shaders/bulb.comp — vị trí subpixel dùng cho từng lượt tính"
+vec2 jitter = vec2(0.5);
+if (detailed == 1 && sampleIndex >= 0)
+    jitter = vec2(0.25 + 0.5 * float(sampleIndex & 1), 0.25 + 0.5 * float((sampleIndex >> 1) & 1));
+vec2 uv = (vec2(pixel) + jitter) / vec2(imageSize);
+```
+
+RenderPlan đi hết tiles cho sample 0, rồi tới sample 1–3. `record.color += vec4(color,1)` vừa cộng RGB vừa tăng sample count; display lấy RGB chia count. Work được cộng dồn, còn stop state là OR của các sample. Một pixel có cả hit và miss không có nghĩa một ray trả hai kết quả; nó có các subpixel rơi ở hai phía đường bao. Vì vậy không suy tổng hit/miss của ảnh từ OR mask.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Release --parallel 2 --target project_43_checkpoint_8
+.\build\Release\project_43_checkpoint_8.exe --samples 1 --seconds 120
+.\build\Release\project_43_checkpoint_8.exe --samples 4 --palette 1 --seconds 120
+```
+
+Để so riêng AA, giữ cùng palette ở hai lượt; lệnh thứ hai chỉ gợi một cấu hình khác để khám phá. Khi thao tác, preview vẫn 120×68 một sample. Chỉ final tích lũy bốn sample; COMPLETE cần đúng 2.073.600 sample cho 518.400 pixel. Ẩn panel bằng F vẫn còn nhãn đang tính hay đã hoàn chỉnh.
+
+Ở cấu hình max, mỗi tile có cận `512×(256+1+8+6+4+16)×24 = 3.575.808` orbit bodies. Bốn sample không làm một dispatch lớn gấp bốn: nó tăng số lượt tile. Cận khác với số work thực tế và khác elapsed GPU query. Giữ cả ba thông tin để hiểu ảnh đẹp hơn đã tốn thêm gì.
+
+## Thử tạo lỗi
+
+Tạm tone-map từng sample rồi mới cộng; so vùng highlight và vùng rìa với bản cộng tuyến tính. Sau đó khôi phục. Thử riêng lỗi không reset record khi generation đổi: sample count và màu cũ sẽ pha sang ảnh mới ra sao? Không dùng một phép blend đẹp mắt để che lỗi generation.
+
+## Checklist hoàn thành
+
+- Palette không đổi field, và trap được giải thích như một thuộc tính đồ họa.
+- AO/shadow có số probe/bước hữu hạn, cũng được tính vào orbit-work counter.
+- Một sample ở tâm; bốn sample là bốn ray subpixel, không nhân bản cùng một màu.
+- Chỉ encode màu sau lấy trung bình; sample count của ảnh hoàn chỉnh đúng với cấu hình.
+- Overlay tắt vẫn tìm được controls/chất lượng và không che các ray budget/invalid.
+
+## Hướng mở rộng
+
+Với một camera cố định, so 1 và 4 mẫu ở Release: ghi sample count, orbit work và tổng GPU batch time, không chỉ thời gian bạn đợi bằng mắt. Tiếp theo, [kiểm toàn ảnh và bàn giao source hoàn chỉnh](/projects/mandelbulb-explorer/09-hoan-thien-mandelbulb-explorer).

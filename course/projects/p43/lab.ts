@@ -1,54 +1,56 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
-    label: "PERIODIC MOLECULAR BOX",
-    title: "Đi hết hộp không có nghĩa là gặp một bức tường",
+    label: "MANDELBULB EXPLORER",
+    title: "Một phép lặp, nhiều cách nhìn hình học",
     description:
-      "Cho hạt đi qua biên, so khoảng cách thường với minimum image và quan sát bản sao tuần hoàn. Solver chỉ giữ hạt trong ô gốc; đồ thị unwrapped cho biết hạt thực sự đã đi tới đâu.",
+      "Canvas 2D dùng CPU để hỏi field/ray ở 32×18→96×54. Ảnh native 960×540, SSBO và GPU timings được kiểm riêng trong ứng dụng C++/SDL3/OpenGL.",
   },
   modes: {
-    "pbc-box": {
-      title: "Hai hạt đang ở hai mép của cùng một ô",
+    power: {
+      title: "Lát cắt của một field 3D",
       description:
-        "Nhìn ô gốc và tọa độ của hạt trước khi thêm chuyển động. Các marker chỉ đánh dấu vị trí, không quyết định kích thước nguyên tử.",
+        "Chọn c, đổi power rồi đọc z qua từng vòng; bounded chỉ nghĩa chưa thoát trong iteration cap.",
     },
-    "pbc-wrap": {
-      title: "Đi qua mép trái, xuất hiện ở mép phải",
+    rays: {
+      title: "Một pixel nhìn qua những điểm nào?",
       description:
-        "Chạy một hạt tự do để kiểm tra wrap ở cả hai trục. Vận tốc không đổi khi hạt vượt biên; đây không phải phản xạ ở tường.",
+        "Bước đều làm lộ vùng ray bỏ sót; các vạch biểu diễn t chứ không phải tốc độ chuyển động.",
     },
-    "pbc-distance": {
-      title: "Hai hạt cách nhau 10.8 hay 1.2?",
+    distance: {
+      title: "DE đổi bước, không tạo lời bảo đảm SDF",
       description:
-        "Kéo hạt A hoặc dùng các phím mũi tên. Đường xám là vector tọa độ thông thường; đường vàng đi qua ảnh gần nhất của hạt B.",
+        "So độ dài bước gần mặt, đổi epsilon/safety và đọc budget thay vì đoán từ màu ảnh.",
     },
-    "pbc-forces": {
-      title: "Lực cũng phải đi theo đường ngắn qua biên",
+    normals: {
+      title: "Sáu câu hỏi quanh điểm hit",
       description:
-        "Đọc vector lực và số cặp trong cutoff. Đây vẫn là bước thử công thức lực, chưa dùng lực để thay đổi vận tốc.",
+        "Đổi normal H và so ánh sáng với normals; bước quá nhỏ có thể làm sai phân nhạy precision.",
     },
-    "pbc-verlet": {
-      title: "Thay phản xạ bằng wrap trong bước drift",
-      description:
-        "Chạy hệ nhiều hạt bằng kick–drift–wrap–kick. Tiến từng bước để theo dõi năng lượng và tổng động lượng.",
+    camera: {
+      title: "Đổi ray, không xoay phép lặp theo camera",
+      description: "Orbit, pan, dolly và thử inside; preview vẫn dùng được khi refinement Pause.",
     },
-    "pbc-images": {
-      title: "Chín vị trí vẽ, chỉ một state vật lý",
+    work: {
+      title: "Ray steps khác tổng fractal work",
       description:
-        "Bật/tắt các bản sao xám và theo dõi N cùng số cặp. Hiệu ứng hiển thị không được thay đổi lực hoặc chuyển động.",
+        "Đổi hai heatmap và chọn một ray; work tính mọi evaluator call, không phải timing GPU.",
     },
-    "pbc-unwrapped": {
-      title: "Đường đi liên tục phía sau bước nhảy trên màn hình",
+    refine: {
+      title: "Giữ đúng ảnh của từng generation",
       description:
-        "Preset một hạt giữ vận tốc cố định. So wrapped x với unwrapped x để thấy vì sao hiệu hai vị trí trong hộp không cho quãng đường thực.",
+        "Đổi nhanh cấu hình, Pause, tiến một batch hoặc Cancel; ACTIVE cũ giữ đúng nhãn tới lúc preview mới đủ.",
     },
-    "pbc-final": {
-      title: "Một hộp tuần hoàn đã được kiểm chứng",
+    quality: {
+      title: "Bốn sample có thực sự khác nhau?",
       description:
-        "Chọn preset, sửa vị trí A, bật ảnh và chạy phép kiểm năng lượng/động lượng hữu hạn. CTest kiểm tra thêm các ca hình học và lỗi đầu vào.",
+        "So một/bốn ray subpixel và AO bốn probe trên cùng camera; đợi ảnh đủ mẫu rồi so mép.",
+    },
+    explorer: {
+      title: "Một lượt khám phá và tự nghiệm thu",
+      description:
+        "Chọn preset, tiến camera, đọc state/work và thử hủy. Canvas không nhận là phép nghiệm thu quy mô GPU.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

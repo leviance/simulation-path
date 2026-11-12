@@ -45,7 +45,7 @@ Không hứa FPS/speedup chung. Đo generate/upload/update/extract/draw và toà
 
 Roadmap và giao diện đã chuyển sang tên/sản phẩm mới với trạng thái **Chờ xây dựng lại**. Manifest/lesson/Canvas/C++ của 41–45 vẫn thuộc nhánh LJ/MD cũ, được giữ với nhãn **Bản cũ**. Chúng chưa triển khai các sản phẩm mới ở bảng trên; không dùng kết quả test MD để chứng nhận mesh/morph/fractal/sculpt/orbital sampling.
 
-Có thể đối chiếu trực tiếp từ [manifest 41](../../course/projects/p41/manifest.ts), [manifest 42](../../course/projects/p42/manifest.ts), [README 43](../../examples/project-43-periodic-molecular-box/README.md), [README 44](../../examples/project-44-neighbor-list-skin/README.md) và [README 45](../../examples/project-45-molecular-lab-gpu/README.md). Không đổi nhãn route/download để làm như source đã được xây lại.
+Có thể đối chiếu trực tiếp từ [manifest 41](../../course/projects/p41/manifest.ts), [manifest 42](../../course/projects/p42/manifest.ts), [README 43 bản Molecular Dynamics tại thời điểm rà soát](https://github.com/leviance/simulation-path/blob/b82d8f9a4deb10c2725de35aaa358434618025e4/examples/project-43-periodic-molecular-box/README.md), [README 44](../../examples/project-44-neighbor-list-skin/README.md) và [README 45](../../examples/project-45-molecular-lab-gpu/README.md). Không đổi nhãn route/download để làm như source đã được xây lại. Project 43 hiện đã có source Mandelbulb mới; liên kết lịch sử ở đây giữ nguyên đối tượng của lần rà soát cũ.
 
 Đợt biên tập đặc tả và cập nhật giao diện chưa thay nội dung giảng dạy hoặc source mô phỏng. Các bản viết trước về MD/chuỗi orbital đã được thay bằng hướng mới này. Khi triển khai từng project cần thống nhất phạm vi thay nguồn cũ/dự phòng rồi đồng bộ metadata, lesson, source, Canvas, tests và ZIP.
 

@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+
+Thời gian gợi ý: đọc 20 phút, tự viết 35 phút, kiểm và thử biến thể 20 phút; không tính setup/build lần đầu.
+
+## Ta cần giải quyết điều gì?
+
+Checkpoint 1 chỉ hỏi field tại một mặt phẳng. Để thấy vật thể có trước/sau, mỗi pixel phải nhìn từ camera vào một hướng và tìm điểm gặp đầu tiên. Ta giữ nguyên phép lặp, thay cách chọn các điểm cần hỏi.
+
+Chưa cần đoán một “khoảng cách an toàn” để nhảy. Bản đầu cứ đi bước đều trong vùng khảo sát. Nó sẽ tốn công và bỏ sót một số chi tiết; chính những lỗi nhìn được đó là lý do cần DE ở bài sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một ray có gốc o ở camera, hướng đơn vị d và tham số t tính bằng world units:
+
+$$p(t)=o+t\,d.$$
+
+Hướng d được ghép từ ba trục camera `forward/right/up`. Pixel ở tâm nhìn theo forward; pixel lệch phải cần thêm một phần right. Aspect 16:9 giữ hình không méo, còn `tanHalfFov` điều khiển góc mở. Không lấy thẳng tọa độ màn hình làm điểm world như ở lát cắt nữa.
+
+Ta chỉ dò đoạn ray đi qua sphere bán kính 2 và trước `farBound`. Giao ray–sphere cho t vào/ra; ray không gặp sphere trả miss mà không cần tính fractal. Đây là clipping được công bố, không phải một lần thử “đi vô hạn tới khi gặp gì đó”.
+
+<InteractiveLab demo="mandelbulb-explorer" mode="rays" />
+
+Giữ nguyên camera, chọn một ray giữa khối và một ray sát rìa. Các vạch bên dưới đánh dấu vị trí từng bước đều. Dự đoán: giảm số bước thì ray sẽ bỏ qua chi tiết hay làm khối chính xác hơn? Canvas có thể orbit ngay để so các ray; native đến checkpoint 5 mới nối thao tác camera vào event loop.
+
+## Bắt tay xây dựng
+
+### 1. Dựng hướng nhìn cho pixel
+
+`Camera::ray` trong `bulb_camera.hpp` là bản C++ để kiểm công thức. x/y đã bao gồm offset tâm pixel. Chú ý đảo chiều y của màn hình trước khi cộng trục up:
+
+```cpp title="include/bulb_camera.hpp — ray của một pixel"
+Vec3 ray(double x, double y, int width, int height) const {
+    const double aspect = 960.0 / 540.0;
+    const double u = (2 * x / width - 1) * aspect * tanHalfFov;
+    const double v = (1 - 2 * y / height) * tanHalfFov;
+    return unit(forward() + right() * u + up() * v);
+}
+```
+
+Không đổi aspect thành tỷ lệ của panel hoặc cửa sổ đã resize: buffer ảnh vẫn dùng khung 16:9, presentation sẽ letterbox nó. `unit` là bắt buộc để t còn có nghĩa khoảng cách dọc ray.
+
+### 2. Chặn đoạn dò trước khi gọi field
+
+Thêm hàm `trace` trước shader main. `RayHit` đã có trong scaffold với t/trap/state; direction truyền vào phải có độ dài 1. Đây là cả hàm ở checkpoint 2, gồm chặn đoạn, hỏi field, tiến bước và trả lý do dừng:
+
+```glsl title="shaders/bulb.comp — giao ray với vùng khảo sát R=2"
+RayHit trace(vec3 origin, vec3 direction) {
+    float b = dot(origin, direction);
+    float discriminant = b * b - dot(origin, origin) + 4.0;
+    if (discriminant < 0.0)
+        return RayHit(0.0, 0.0, 2u);
+    float root = sqrt(discriminant);
+    float farT = min(farBound, -b + root);
+    float t = max(0.001, -b - root);
+    if (farT < t)
+        return RayHit(0.0, 0.0, 2u);
+    if (length(origin) < 2.0) {
+        Field cameraField = evaluate(origin);
+        if (cameraField.state == 2)
+            return RayHit(0.0, 0.0, 16u);
+        if (cameraField.state == 1)
+            return RayHit(0.0, 0.0, 8u);
+    }
+    float previous = t;
+    for (int step = 0; step < 256; ++step) {
+        if (step >= rayLimit)
+            break;
+        ++primaryWork;
+        Field field = evaluate(origin + direction * t);
+        if (field.state == 2)
+            return RayHit(t, field.trap, 16u);
+        if (field.state == 1) {
+            return RayHit(t, field.trap, 1u);
+        }
+        float advance = (farT - max(0.001, -b - root)) / float(rayLimit);
+        previous = t;
+        t += advance;
+        if (t > farT)
+            return RayHit(t, field.trap, 2u);
+    }
+    return RayHit(t, 0.0, 4u);
+}
+```
+
+4 là R², không phải số vòng hay epsilon của fractal. `max` tránh bắt đầu ở sau camera; `farT<t` cũng loại đoạn giao chỉ nằm phía sau. `RayHit.state` dùng các bit khác `Field.state`: 1 hit, 2 miss, 4 budget, 8 inside, 16 invalid. Đừng dùng nhầm số 1 bounded của Field như một lời khẳng định mọi ray đã hit.
+
+### 3. Đi bước đều và nối vào màu ảnh
+
+Trong vòng ray vừa viết, sau `evaluate(origin+direction*t)`, nếu Field báo bounded thì trả hit; invalid phải trả riêng, không coi nó là một điểm thuộc vật thể. Nhánh kiểm origin bảo vệ trường hợp camera ở trong; hiện camera cố định ngoài sphere, đến Bài 5 mới có input để chủ động thử nhánh ấy.
+
+Trở lại main, thêm nhánh `else` sau `sliceMode` của bài trước. Từ uv tính direction rồi gọi đúng hàm mới:
+
+```glsl title="shaders/bulb.comp — nối ray camera vào shader main"
+vec3 direction = normalize(forward + right * ((2.0 * uv.x - 1.0) * aspect * tanHalfFov) + up * ((1.0 - 2.0 * uv.y) * tanHalfFov));
+hit = trace(eye, direction);
+color = mix(vec3(0.012, 0.022, 0.041), vec3(0.065, 0.11, 0.16), clamp(uv.y, 0.0, 1.0));
+if (hit.state == 1u) {
+    color = vec3(0.25, 0.68, 0.78);
+}
+```
+
+`previous` được giữ để bài sau chia đôi khi một bước đi vào vùng bounded. Vòng ngoài có trần 256 và còn dừng sớm ở `rayLimit`; khi dùng hết mà chưa kết luận, trả budget chứ không đổi thành miss. Một ray chưa kiểm đủ khác với ray đã đi hết vùng khảo sát.
+
+Trở lại nhánh 3D của `main` trong shader: tính direction từ `uv`, gọi `trace(eye,direction)`, dùng màu cyan khi `hit.state==1u`. Đây là chỗ nối hàm mới vào ảnh. `GpuRenderer::submit` chuyển eye/forward/right/up cùng `tanHalfFov` vào uniforms trước dispatch; không có một camera khác chỉ tồn tại trong đoạn minh họa.
+
+## Chạy thử và quan sát
+
+```powershell
+cmake --build build --config Debug --parallel 2 --target project_43_checkpoint_2
+.\build\Debug\project_43_checkpoint_2.exe --power 8 --seconds 120
+```
+
+Mốc này mặc định tắt slice; S bật lại để so hai cách xem. Kết quả mới còn phẳng màu vì chưa có normals/lighting, nhưng đường bao là kết quả dò các điểm trong không gian 3D. Dùng `--detail` để chạy lại với camera gần hơn; thao tác chuột native chưa được dạy ở mốc này. Đổi power vẫn đổi field, không chỉ palette.
+
+Native checkpoint 2 vẫn là preview 120×68, 40 bước và tối đa 8 orbit iterations. Tăng hàng RAY LIMIT chưa làm preview vượt giới hạn đó. Đừng hiểu việc hình còn thiếu hoặc nhiều ray budget là “GPU đã hỏng”; ghi lại hiện tượng để so với checkpoint 3 trên cùng camera/power.
+
+## Thử tạo lỗi
+
+Bỏ phép normalize khi dựng direction, giữ nguyên phương trình giao sphere và bước t. Hãy dự đoán vì sao pixel ngoài tâm hỏng trước pixel giữa ảnh. Sau khi khôi phục, đổi dấu `(1-2*uv.y)` thành `(2*uv.y-1)`: bạn đang lật camera theo chiều nào, chứ không phải đổi hình học Mandelbulb?
+
+## Checklist hoàn thành
+
+- Từ tâm pixel dựng được ray world với hướng đơn vị; tâm ảnh trùng forward.
+- Ray không cắt sphere được loại trước vòng recurrence.
+- Phân biệt được miss, budget và invalid; không dùng hết bước rồi nhận bừa là miss.
+- Tìm được cả lời gọi `trace` trong shader lẫn uniforms camera được gửi từ C++.
+- Giải thích được vì sao một phép lặp cũ nay tạo ra đường bao 3D mà chưa cần mesh.
+
+## Hướng mở rộng
+
+Vẽ lại vị trí những bước dò trên một ray sát nhánh nhỏ. Với cùng 40 bước, bạn muốn dành nhiều điểm gần bề mặt hay chia đều cả đoạn không gian? Tiếp theo, [ước lượng khoảng cách để chọn bước thích hợp](/projects/mandelbulb-explorer/03-uoc-luong-khoang-cach).

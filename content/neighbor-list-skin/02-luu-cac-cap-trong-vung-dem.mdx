@@ -56,7 +56,7 @@ for (std::size_t i = 0; i < system.particles.size(); ++i) {
 }
 ```
 
-`j=i+1` đồng thời bỏ tự tương tác và bỏ cặp đảo chiều. Phải dùng minimum image như Project 43; hai hạt sát hai mép có thể là hàng xóm. `buildChecks` tăng trước phép lọc, vì cả cặp bị loại cũng đã tốn một lần đo khoảng cách.
+`j=i+1` đồng thời bỏ tự tương tác và bỏ cặp đảo chiều. Phải dùng minimum image như Project 43 (bản Molecular Dynamics cũ); hai hạt sát hai mép có thể là hàng xóm. `buildChecks` tăng trước phép lọc, vì cả cặp bị loại cũng đã tốn một lần đo khoảng cách.
 
 Lab yêu cầu `skin>0` và `cutoff+skin < min(Lx,Ly)/2`. Đây là giới hạn đơn giản hóa của bản học; điều kiện vật lý cho force cutoff vẫn là điều kiện riêng đã học, không được coi giới hạn của listRadius là luật chung cho mọi thư viện MD.
 
@@ -99,4 +99,4 @@ Build `project_44_checkpoint_2`. Đây vẫn là hệ đứng yên. Danh sách d
 
 ## Bài tập mở rộng
 
-Thêm dòng in từng cặp của preset hai hạt và giải thích vì sao danh sách không nên lưu pointer tới phần tử vector. Tiếp theo, [tính lực từ danh sách](/projects/neighbor-list-skin/03-tinh-luc-tu-danh-sach) mà vẫn giữ nguyên mô hình của Project 43.
+Thêm dòng in từng cặp của preset hai hạt và giải thích vì sao danh sách không nên lưu pointer tới phần tử vector. Tiếp theo, [tính lực từ danh sách](/projects/neighbor-list-skin/03-tinh-luc-tu-danh-sach) mà vẫn giữ nguyên mô hình của Project 43 (bản Molecular Dynamics cũ).
