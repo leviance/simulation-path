@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+
 #include "sculpt_grid.hpp"
 #include <compare>
 #include <utility>
@@ -37,6 +41,7 @@ struct CellTriangles {
 };
 
 // snippet:sculpt-edge-interpolation
+#if LAB_CHECKPOINT >= 1
 inline EdgePoint edgePoint(Corner a, Corner b, float isovalue) {
     if (b.id < a.id)
         std::swap(a, b);
@@ -44,11 +49,21 @@ inline EdgePoint edgePoint(Corner a, Corner b, float isovalue) {
         throw std::invalid_argument("Edge interpolation needs distinct finite endpoints");
     if ((a.value < isovalue) == (b.value < isovalue))
         throw std::invalid_argument("This edge does not cross the requested isovalue");
-    const float t = std::clamp((isovalue - a.value) / (b.value - a.value), 0.0F, 1.0F);
+    const float difference = b.value - a.value;
+    if (!std::isfinite(difference) || difference == 0)
+        throw std::invalid_argument("The scalar difference is outside the finite float working range");
+    const float t = std::clamp((isovalue - a.value) / difference, 0.0F, 1.0F);
     if (!std::isfinite(t))
         throw std::runtime_error("Edge interpolation is not finite");
-    return {a.point + (b.point - a.point) * t, {a.id, b.id}};
+    const Vec3 point = a.point + (b.point - a.point) * t;
+    if (!finite(point))
+        throw std::runtime_error("The edge position exceeds the finite float working range");
+    return {point, {a.id, b.id}};
 }
+#else
+// Lesson 01 supplies this definition. The starter draws only the input samples and tetra edges.
+EdgePoint edgePoint(Corner a, Corner b, float isovalue);
+#endif
 
 // end-snippet:sculpt-edge-interpolation
 
@@ -63,9 +78,14 @@ inline void appendTriangle(CellTriangles& output, EdgePoint a, EdgePoint b, Edge
         std::swap(b, c);
     if (output.count >= output.triangles.size())
         throw std::overflow_error("A cube cannot emit more than twelve tetra triangles");
-    output.triangles[output.count++] = {{{a, b, c}}};
+    SurfaceTriangle triangle;
+    triangle.vertices = {a, b, c};
+    output.triangles[output.count] = triangle;
+    ++output.count;
 }
 
+#if LAB_CHECKPOINT >= 1
+// snippet:sculpt-tetra-topology
 inline void polygonizeTetra(const std::array<Corner, 4>& tetra, float isovalue, float spacing, CellTriangles& output) {
     if (!std::isfinite(isovalue) || !std::isfinite(spacing) || spacing <= 0)
         throw std::invalid_argument("Tetra extraction needs a finite isovalue and positive spacing");
@@ -91,10 +111,16 @@ inline void polygonizeTetra(const std::array<Corner, 4>& tetra, float isovalue, 
     const Vec3 towardOutside = outsideSum / static_cast<float>(outsideCount) - insideSum / static_cast<float>(insideCount);
     if (insideCount == 1) {
         const Corner center = tetra[inside[0]];
-        appendTriangle(output, edgePoint(center, tetra[outside[0]], isovalue), edgePoint(center, tetra[outside[1]], isovalue), edgePoint(center, tetra[outside[2]], isovalue), towardOutside, spacing);
+        const auto first = edgePoint(center, tetra[outside[0]], isovalue);
+        const auto second = edgePoint(center, tetra[outside[1]], isovalue);
+        const auto third = edgePoint(center, tetra[outside[2]], isovalue);
+        appendTriangle(output, first, second, third, towardOutside, spacing);
     } else if (insideCount == 3) {
         const Corner center = tetra[outside[0]];
-        appendTriangle(output, edgePoint(center, tetra[inside[0]], isovalue), edgePoint(center, tetra[inside[1]], isovalue), edgePoint(center, tetra[inside[2]], isovalue), towardOutside, spacing);
+        const auto first = edgePoint(center, tetra[inside[0]], isovalue);
+        const auto second = edgePoint(center, tetra[inside[1]], isovalue);
+        const auto third = edgePoint(center, tetra[inside[2]], isovalue);
+        appendTriangle(output, first, second, third, towardOutside, spacing);
     } else {
         const auto ac = edgePoint(tetra[inside[0]], tetra[outside[0]], isovalue);
         const auto ad = edgePoint(tetra[inside[0]], tetra[outside[1]], isovalue);
@@ -105,6 +131,13 @@ inline void polygonizeTetra(const std::array<Corner, 4>& tetra, float isovalue, 
     }
 }
 
+// end-snippet:sculpt-tetra-topology
+#else
+void polygonizeTetra(const std::array<Corner, 4>& tetra, float isovalue, float spacing, CellTriangles& output);
+#endif
+
+// snippet:sculpt-cell-topology
+#if LAB_CHECKPOINT >= 2
 inline CellTriangles polygonizeCell(const ScalarGrid& grid, int x, int y, int z, float isovalue) {
     if (!std::isfinite(isovalue) || std::abs(isovalue) > 1)
         throw std::invalid_argument("Isovalue is outside the finite fixture range");
@@ -122,5 +155,10 @@ inline CellTriangles polygonizeCell(const ScalarGrid& grid, int x, int y, int z,
     }
     return result;
 }
+#else
+CellTriangles polygonizeCell(const ScalarGrid& grid, int x, int y, int z, float isovalue);
+#endif
+
+// end-snippet:sculpt-cell-topology
 
 } // namespace sculpt

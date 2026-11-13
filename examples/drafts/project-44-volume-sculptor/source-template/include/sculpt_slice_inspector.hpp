@@ -118,7 +118,7 @@ class SliceInspector {
             return false;
         if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
             const auto key = event.key.key;
-            if (key == SDLK_V) {
+            if (key == SDLK_V || key == SDLK_F9) {
                 cancel();
                 state_.enabled = !state_.enabled;
                 return true;

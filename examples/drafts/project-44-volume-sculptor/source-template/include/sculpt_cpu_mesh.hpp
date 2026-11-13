@@ -11,9 +11,26 @@ struct CpuMesh {
     std::uint64_t normalFallbacks{};
 };
 
-inline CpuMesh extractCpu(const ScalarGrid& grid, float isovalue, std::size_t capacity = 4194304) {
+enum class CpuNormalMode { face,
+                           gradient };
+
+#if LAB_CHECKPOINT >= 3
+inline constexpr CpuNormalMode defaultCpuNormalMode = CpuNormalMode::gradient;
+#else
+inline constexpr CpuNormalMode defaultCpuNormalMode = CpuNormalMode::face;
+#endif
+
+// snippet:sculpt-cpu-extraction
+#if LAB_CHECKPOINT >= 2
+inline CpuMesh extractCpu(const ScalarGrid& grid, float isovalue, std::size_t capacity = 4194304, CpuNormalMode normalMode = defaultCpuNormalMode) {
     if (grid.spec().samples > 64)
         throw std::invalid_argument("CPU extraction is only the <=64^3 teaching/reference path");
+    if (normalMode != CpuNormalMode::face && normalMode != CpuNormalMode::gradient)
+        throw std::invalid_argument("Unknown CPU normal mode");
+#if LAB_CHECKPOINT <= 2
+    if (normalMode != CpuNormalMode::face)
+        throw std::invalid_argument("Gradient normals are introduced in checkpoint 03");
+#endif
     const int cells = grid.spec().samples - 1;
     std::vector<std::uint32_t> counts(grid.spec().cellCount());
     std::size_t required = 0, cell = 0;
@@ -42,12 +59,19 @@ inline CpuMesh extractCpu(const ScalarGrid& grid, float isovalue, std::size_t ca
                     const auto& vertices = triangles.triangles[triangle].vertices;
                     const Vec3 faceNormal = normalized(cross(vertices[1].point - vertices[0].point, vertices[2].point - vertices[0].point));
                     for (const auto& vertex : vertices) {
-                        Vec3 normal = grid.gradient(vertex.point);
-                        if (length(normal) <= 1e-10F) {
-                            normal = faceNormal;
-                            ++result.normalFallbacks;
-                        } else
-                            normal = normalized(normal);
+                        // snippet:sculpt-cpu-normal-selection
+                        Vec3 normal = faceNormal;
+#if LAB_CHECKPOINT >= 3
+                        if (normalMode == CpuNormalMode::gradient) {
+                            normal = grid.gradient(vertex.point);
+                            if (length(normal) <= 1e-10F) {
+                                normal = faceNormal;
+                                ++result.normalFallbacks;
+                            } else
+                                normal = normalized(normal);
+                        }
+#endif
+                        // end-snippet:sculpt-cpu-normal-selection
                         result.vertices.push_back({{vertex.point.x, vertex.point.y, vertex.point.z, 1}, {normal.x, normal.y, normal.z, 0}});
                     }
                 }
@@ -56,5 +80,10 @@ inline CpuMesh extractCpu(const ScalarGrid& grid, float isovalue, std::size_t ca
         throw std::runtime_error("Mesh emit did not fill the exact counted vertex range");
     return result;
 }
+#else
+CpuMesh extractCpu(const ScalarGrid& grid, float isovalue, std::size_t capacity = 4194304, CpuNormalMode normalMode = defaultCpuNormalMode);
+#endif
+
+// end-snippet:sculpt-cpu-extraction
 
 } // namespace sculpt

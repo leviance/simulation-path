@@ -41,6 +41,31 @@ class CpuDocument {
         dirty_ = {};
     }
 
+    // One-click operation for lesson 04, before a stroke/history transaction is introduced.
+    // snippet:sculpt-single-stamp
+#if LAB_CHECKPOINT >= 4
+    bool applyStamp(Brush brush) {
+        if (owner_)
+            throw std::logic_error("A single stamp cannot interrupt an owned stroke");
+        brush.validate();
+        ensureGeneration();
+        const auto changed = applyBrush(grid_, brush);
+        if (changed.empty)
+            return false;
+        dirty_.include(changed);
+        undo_.clear();
+        redo_.clear();
+        ++generation_;
+        return true;
+    }
+#else
+    bool applyStamp(Brush brush);
+#endif
+
+    // end-snippet:sculpt-single-stamp
+
+    // snippet:sculpt-cpu-stroke-begin
+#if LAB_CHECKPOINT >= 5
     void beginStroke(std::uint32_t owner, Brush brush) {
         if (owner_)
             throw std::logic_error("A stroke already has a pointer owner");
@@ -54,7 +79,14 @@ class CpuDocument {
         strokeChanged_ = false;
         stamp(brush.center);
     }
+#else
+    void beginStroke(std::uint32_t owner, Brush brush);
+#endif
 
+    // end-snippet:sculpt-cpu-stroke-begin
+
+    // snippet:sculpt-cpu-stroke-move
+#if LAB_CHECKPOINT >= 5
     bool moveStroke(std::uint32_t owner, Vec3 target) {
         if (owner_ != owner)
             return false;
@@ -70,7 +102,14 @@ class CpuDocument {
         sampler_ = nextSampler;
         return true;
     }
+#else
+    bool moveStroke(std::uint32_t owner, Vec3 target);
+#endif
 
+    // end-snippet:sculpt-cpu-stroke-move
+
+    // snippet:sculpt-cpu-stroke-end
+#if LAB_CHECKPOINT >= 5
     bool endStroke(std::uint32_t owner) {
         if (owner_ != owner)
             return false;
@@ -82,7 +121,13 @@ class CpuDocument {
         releaseOwner();
         return true;
     }
+#else
+    bool endStroke(std::uint32_t owner);
+#endif
 
+    // end-snippet:sculpt-cpu-stroke-end
+
+    // snippet:sculpt-cpu-stroke-abort
     bool abortStroke(std::uint32_t owner) {
         if (owner_ != owner)
             return false;
@@ -98,6 +143,10 @@ class CpuDocument {
         return true;
     }
 
+    // end-snippet:sculpt-cpu-stroke-abort
+
+    // snippet:sculpt-cpu-undo-redo
+#if LAB_CHECKPOINT >= 5
     bool undo() {
         abortOwner();
         if (undo_.empty())
@@ -125,6 +174,12 @@ class CpuDocument {
         markAllDirty();
         return true;
     }
+#else
+    bool undo();
+    bool redo();
+#endif
+
+    // end-snippet:sculpt-cpu-undo-redo
 
     void reset(GridSpec spec, Shape shape) {
         ensureGeneration();

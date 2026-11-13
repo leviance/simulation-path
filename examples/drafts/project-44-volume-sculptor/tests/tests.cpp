@@ -1,16 +1,20 @@
+#include "sculpt_active_deadline.hpp"
+#include "sculpt_camera.hpp"
 #include "sculpt_cpu_mesh.hpp"
 #include "sculpt_document.hpp"
 #include "sculpt_field_file.hpp"
 #include "sculpt_mesh_file.hpp"
+#include "sculpt_mesh_topology.hpp"
 #include "sculpt_slice.hpp"
-#include "sculpt_active_deadline.hpp"
-#include "sculpt_camera.hpp"
 #include <bit>
 #include <cstring>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
+
+void testTetraPreview();
+void testCpuTeachingStages();
 
 namespace {
 using namespace sculpt;
@@ -472,6 +476,61 @@ void sliceFixtures() {
     std::cout << "SLICE COORDINATES PASS axes=3 layers=3 probeCoordinates=5 affineChecks=45 rejected=4\n";
 }
 
+void topologyOracleFixtures() {
+    ScalarGrid grid({16});
+    grid.fill(Shape::sphere);
+    auto sphere = extractCpu(grid, 0).vertices;
+    const auto closed = inspectMeshTopology(sphere);
+    check(closed.closedOriented() && closed.components == 1 && closed.eulerCharacteristic() == 2, "Independent topology oracle did not recognize a closed sphere");
+    auto reversed = sphere;
+    std::swap(reversed[0], reversed[1]);
+    check(inspectMeshTopology(reversed).inconsistentEdges == 3, "Topology oracle missed one reversed triangle");
+    sphere.resize(sphere.size() - 3);
+    check(inspectMeshTopology(sphere).boundaryEdges == 3, "Topology oracle missed a missing triangle");
+    grid.fill(Shape::torus);
+    const auto torus = inspectMeshTopology(extractCpu(grid, 0).vertices);
+    check(torus.closedOriented() && torus.components == 1 && torus.eulerCharacteristic() == 0, "Topology oracle did not distinguish a tunnel from a sphere");
+    grid.fill(Shape::separatedSpheres);
+    const auto two = inspectMeshTopology(extractCpu(grid, 0).vertices);
+    check(two.closedOriented() && two.components == 2 && two.eulerCharacteristic() == 4, "Topology oracle missed two disconnected components");
+    rejects([&] {
+        inspectMeshTopology(std::span<const SurfaceVertex>(sphere.data(), 2));
+    },
+            "Incomplete topology triangle was accepted");
+    auto repeated = sphere;
+    repeated[1] = repeated[0];
+    rejects([&] {
+        inspectMeshTopology(repeated);
+    },
+            "Topology triangle with repeated positions was accepted");
+    std::cout << "TOPOLOGY ORACLE PASS sphereEuler=2 torusEuler=0 separateComponents=2 missingFace=1 reversedFace=1 invalidTriangles=2\n";
+}
+
+void brushParameterFixtures() {
+    Brush brush;
+    float depth = 0;
+    adjustBrushParameter(brush, depth, BrushParameter::radius, true, false);
+    near(brush.radius, 0.305, 0.000001, "Small brush radius step");
+    for (const auto parameter : {BrushParameter::radius, BrushParameter::strength, BrushParameter::depth})
+        for (int step = 0; step < 32; ++step)
+            adjustBrushParameter(brush, depth, parameter, true, true);
+    check(brush.radius == 0.6F && brush.strength == 0.8F && depth == 1, "Positive brush controls exceeded their bounds");
+    for (const auto parameter : {BrushParameter::radius, BrushParameter::strength, BrushParameter::depth})
+        for (int step = 0; step < 32; ++step)
+            adjustBrushParameter(brush, depth, parameter, false, true);
+    check(brush.radius == 0.03F && brush.strength == 0.01F && depth == -1, "Negative brush controls exceeded their bounds");
+    rejects([&] {
+        adjustBrushParameter(brush, depth, static_cast<BrushParameter>(3), true, false);
+    },
+            "Unknown brush control was accepted");
+    depth = std::numeric_limits<float>::quiet_NaN();
+    rejects([&] {
+        adjustBrushParameter(brush, depth, BrushParameter::depth, true, false);
+    },
+            "NaN brush input was accepted");
+    std::cout << "BRUSH PARAMETERS PASS smallStep=1 coarseSteps=192 bounds=6 invalid=2\n";
+}
+
 void jobAndCameraFixtures() {
     using Clock = ActiveDeadline::Clock;
     const Clock::time_point start{};
@@ -482,20 +541,29 @@ void jobAndCameraFixtures() {
     budget.pause(false, start + std::chrono::seconds(900));
     check(!budget.expired(start + std::chrono::seconds(956)), "Paused budget resumed with the wrong active duration");
     check(budget.expired(start + std::chrono::seconds(957)), "Active work exceeded its exact deadline without expiring");
-    rejects([&] { budget.expired(start); }, "A backward clock was accepted");
-    rejects([&] { ActiveDeadline invalid(Clock::duration::zero(),start); }, "A zero deadline was accepted");
+    rejects([&] {
+        budget.expired(start);
+    },
+            "A backward clock was accepted");
+    rejects([&] {
+        ActiveDeadline invalid(Clock::duration::zero(), start);
+    },
+            "A zero deadline was accepted");
     Camera camera;
-    camera.centerOn({6,6,6});
+    camera.centerOn({6, 6, 6});
     const auto before = camera.target;
-    camera.pan(1,1);
-    check(length(camera.target-before)<0.1F, "Panning a translated document jumped the camera toward the world origin");
-    camera.pan(1000000,1000000);
-    check(std::abs(camera.target.x-6)<=2.5F && std::abs(camera.target.y-6)<=2.5F && std::abs(camera.target.z-6)<=2.5F, "Camera pan exceeded its document-relative bound");
+    camera.pan(1, 1);
+    check(length(camera.target - before) < 0.1F, "Panning a translated document jumped the camera toward the world origin");
+    camera.pan(1000000, 1000000);
+    check(std::abs(camera.target.x - 6) <= 2.5F && std::abs(camera.target.y - 6) <= 2.5F && std::abs(camera.target.z - 6) <= 2.5F, "Camera pan exceeded its document-relative bound");
     ModelSettings settings;
-    settings.grid.origin={3,3,3};
+    settings.grid.origin = {3, 3, 3};
     settings.validate();
-    settings.grid.origin={6,6,6};
-    rejects([&] { settings.validate(); }, "An imported editing domain outside the brush working range was accepted");
+    settings.grid.origin = {6, 6, 6};
+    rejects([&] {
+        settings.validate();
+    },
+            "An imported editing domain outside the brush working range was accepted");
     std::cout << "JOB AND CAMERA PASS simulatedPauseSeconds=897 noSleep=1 activeDeadline=60 translatedPan=1 importDomainGuard=1\n";
 }
 
@@ -511,7 +579,11 @@ int main() {
         meshFileFixtures();
         sliceFixtures();
         jobAndCameraFixtures();
-        std::cout << "P44 CPU CORE PASS; GPU 128^3 and full app are not yet verified\n";
+        topologyOracleFixtures();
+        brushParameterFixtures();
+        testTetraPreview();
+        testCpuTeachingStages();
+        std::cout << "P44 CPU CORE PASS; this CTest result does not verify GPU scale or native controls\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "P44 fixture failure: " << error.what() << '\n';

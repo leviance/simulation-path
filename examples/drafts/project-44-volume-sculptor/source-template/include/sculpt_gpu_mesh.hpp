@@ -1,18 +1,12 @@
 #pragma once
 
 #include "sculpt_gpu_document.hpp"
+#include "sculpt_mesh_chunk.hpp"
 #include <memory>
 #include <numeric>
 #include <optional>
 
 namespace sculpt {
-
-struct MeshChunk {
-    std::shared_ptr<GpuBuffer> buffer;
-    ChunkStats stats;
-    // Reused chunks keep their actual build generation; dependencies prove validity for a newer mesh.
-    std::uint32_t validForGeneration{};
-};
 
 enum class MeshJobState { initializing,
                           editing,

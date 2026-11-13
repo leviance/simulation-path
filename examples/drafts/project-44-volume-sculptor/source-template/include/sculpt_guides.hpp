@@ -6,6 +6,7 @@
 #include "sculpt_slice.hpp"
 #include "sculpt_ui_geometry.hpp"
 #include <optional>
+#include <span>
 
 namespace sculpt {
 
@@ -33,8 +34,12 @@ class GuideRenderer {
         gl_.DeleteVertexArrays(1, &vao_);
     }
 
-    void draw(const Camera& camera, int width, int height, std::optional<Brush> preview, const GridSpec& grid, const SliceState& slice) {
+    void draw(const Camera& camera, int width, int height, std::optional<Brush> preview, const GridSpec& grid, const SliceState& slice, std::span<const LineVertex> extra = {}, bool xrayExtra = false) {
+        if (extra.size() > 1024)
+            throw std::invalid_argument("Teaching guides exceed their fixed line budget");
         vertices_.clear();
+        if (!xrayExtra)
+            vertices_.insert(vertices_.end(), extra.begin(), extra.end());
         const Vec3 gridColor{0.13F, 0.20F, 0.25F};
         for (int index = -10; index <= 10; ++index) {
             const float coordinate = index * 0.15F;
@@ -74,6 +79,13 @@ class GuideRenderer {
         gl_.BindBuffer(GL_ARRAY_BUFFER, buffer_);
         gl_.BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices_.size() * sizeof(LineVertex)), vertices_.data(), GL_DYNAMIC_DRAW);
         gl_.DrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices_.size()));
+        if (xrayExtra && !extra.empty()) {
+            // Teaching-only guides: expose all four scalar samples, not extra surface geometry.
+            gl_.Disable(GL_DEPTH_TEST);
+            gl_.BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(extra.size_bytes()), extra.data(), GL_DYNAMIC_DRAW);
+            gl_.DrawArrays(GL_LINES, 0, static_cast<GLsizei>(extra.size()));
+            gl_.Enable(GL_DEPTH_TEST);
+        }
     }
 
     private:

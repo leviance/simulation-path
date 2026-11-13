@@ -22,6 +22,11 @@ struct PanelData {
     std::string_view notice;
 };
 
+struct PanelBrushAdjustment {
+    BrushParameter parameter;
+    bool increase{}, coarse{};
+};
+
 inline std::string panelNumber(double value, int precision = 2) {
     std::ostringstream text;
     text << std::fixed << std::setprecision(precision) << value;
@@ -43,6 +48,13 @@ class NativePanel {
 
     void cancel() {
         release();
+        adjustment_.reset();
+    }
+
+    std::optional<PanelBrushAdjustment> takeAdjustment() {
+        const auto result = adjustment_;
+        adjustment_.reset();
+        return result;
     }
 
     bool pointerInside() const {
@@ -84,11 +96,13 @@ class NativePanel {
         }
         if (captured_) {
             if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-                if (event.button.which == owner_ && event.button.button == SDL_BUTTON_LEFT) {
+                if (event.button.which == owner_ && event.button.button == button_) {
                     const int selected = targetAt(pointerX_, pointerY_);
                     if (selected == pressed_) {
                         if (selected == -2)
                             compact_ = !compact_;
+                        else if (selected >= 10)
+                            adjustment_ = PanelBrushAdjustment{static_cast<BrushParameter>((selected - 10) / 2), (selected - 10) % 2 != 0, coarse_};
                         else
                             page_ = selected;
                     }
@@ -97,7 +111,7 @@ class NativePanel {
                 return true;
             }
             if (event.type == SDL_EVENT_MOUSE_MOTION) {
-                if (event.motion.which == owner_ && (event.motion.state & SDL_BUTTON_LMASK) == 0)
+                if (event.motion.which == owner_ && (event.motion.state & SDL_BUTTON_MASK(button_)) == 0)
                     release();
                 return true;
             }
@@ -105,10 +119,13 @@ class NativePanel {
         }
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && pointerInside()) {
             const int target = targetAt(pointerX_, pointerY_);
-            if (event.button.button == SDL_BUTTON_LEFT && target != -1 && SDL_CaptureMouse(true)) {
+            const bool parameterClick = target >= 10 && event.button.button == SDL_BUTTON_RIGHT;
+            if ((event.button.button == SDL_BUTTON_LEFT || parameterClick) && target != -1 && SDL_CaptureMouse(true)) {
                 pressed_ = target;
                 owner_ = event.button.which;
                 captured_ = true;
+                button_ = event.button.button;
+                coarse_ = parameterClick;
             }
             return true;
         }
@@ -123,6 +140,13 @@ class NativePanel {
         if (compact_) {
             overlay.text(left + 8, 20, "F10", {0.45F, 0.95F, 0.8F}, 1.6F, 38);
             overlay.text(left + 7, 43, "MENU", {0.65F, 0.8F, 0.86F}, 1.4F, 38);
+            std::string mode = "CAM";
+            if (data.controls.sculptMode()) {
+                mode = "ADD";
+                if (data.controls.brush().mode == BrushMode::subtract)
+                    mode = "SUB";
+            }
+            overlay.text(left + 6, 80, mode, {0.6F, 0.95F, 0.8F}, 2, 38);
             overlay.text(left + 16, bottom - 32, "Q", {0.65F, 0.8F, 0.86F}, 2, 32);
             toast(overlay, data, width - this->width());
             return;
@@ -192,7 +216,16 @@ class NativePanel {
         for (int page = 0; page < 3; ++page)
             if (tab(page).contains(x, y))
                 return page;
+        if (page_ == 0)
+            for (int parameter = 0; parameter < 3; ++parameter)
+                for (int direction = 0; direction < 2; ++direction)
+                    if (parameterButton(parameter, direction).contains(x, y))
+                        return 10 + parameter * 2 + direction;
         return -1;
+    }
+
+    UiRect parameterButton(int parameter, int direction) const {
+        return {rectangle_.x + 268 + direction * 34.0F, 230 + parameter * 22.0F, 28, 21};
     }
 
     void release() {
@@ -200,6 +233,7 @@ class NativePanel {
             SDL_CaptureMouse(false);
         captured_ = false;
         pressed_ = -1;
+        button_ = 0;
     }
 
     void row(Overlay& overlay, const std::string& text, Vec3 color = {0.75F, 0.84F, 0.88F}) {
@@ -208,13 +242,30 @@ class NativePanel {
     }
 
     void tools(Overlay& overlay, const PanelData& data) {
+        std::string pointerMode = "CAMERA";
+        if (data.controls.sculptMode())
+            pointerMode = "SCULPT";
+        row(overlay, "TAB LMB MODE: " + pointerMode, {0.65F, 0.95F, 0.85F});
         std::string mode = "ADD";
         if (data.controls.brush().mode == BrushMode::subtract)
             mode = "SUBTRACT";
         row(overlay, "A / D BRUSH: " + mode, {0.5F, 0.95F, 0.8F});
-        row(overlay, "[ ] RADIUS    " + panelNumber(data.controls.brush().radius, 3));
-        row(overlay, "- + STRENGTH  " + panelNumber(data.controls.brush().strength, 3));
-        row(overlay, "PGUP/DN DEPTH " + panelNumber(data.controls.depth(), 2));
+        row(overlay, "RADIUS    " + panelNumber(data.controls.brush().radius, 3));
+        row(overlay, "STRENGTH  " + panelNumber(data.controls.brush().strength, 3));
+        row(overlay, "DEPTH     " + panelNumber(data.controls.depth(), 2));
+        for (int parameter = 0; parameter < 3; ++parameter)
+            for (int direction = 0; direction < 2; ++direction) {
+                const auto button = parameterButton(parameter, direction);
+                overlay.rect(button, {0.075F, 0.17F, 0.19F});
+                std::string label = "-";
+                if (direction != 0)
+                    label = "+";
+                overlay.text(button.x + 8, button.y + 4, label, {0.7F, 0.96F, 0.88F}, 2, 16);
+            }
+        overlay.text(rectangle_.x + 16, y_, "F2/F3/F4 +; SHIFT -; CTRL LARGE", {0.55F, 0.75F, 0.82F}, 1.3F, 318);
+        y_ += 16;
+        overlay.text(rectangle_.x + 16, y_, "BUTTONS: LMB SMALL / RMB LARGE", {0.55F, 0.75F, 0.82F}, 1.3F, 318);
+        y_ += 16;
         row(overlay, "Z UNDO " + std::to_string(data.model.document().undoCount()) + " / Y REDO " + std::to_string(data.model.document().redoCount()));
         y_ += 8;
         row(overlay, "R RESET CHOSEN PRESET");
@@ -222,9 +273,9 @@ class NativePanel {
         row(overlay, "3 TORUS / STORED FIELD");
         row(overlay, "F5 32 / F6 64 SAMPLES");
         row(overlay, "F7 128 / F8 192 SAMPLES");
-        row(overlay, "V SLICE / X AXIS");
+        row(overlay, "F9 SLICE / X AXIS");
         row(overlay, "UP/DOWN LAYER HJKL PROBE");
-        row(overlay, "W WIREFRAME / N NORMALS");
+        row(overlay, "F11 WIRE / F12 NORMALS");
         row(overlay, "LEFT/RIGHT ISOVALUE");
         row(overlay, "SPACE PAUSE/RESUME JOBS");
         row(overlay, "C CANCEL / ENTER REMESH");
@@ -323,8 +374,10 @@ class NativePanel {
     UiRect rectangle_;
     int page_{}, pressed_{-1};
     std::uint32_t owner_{};
+    std::uint8_t button_{};
     float pointerX_{-1}, pointerY_{-1}, y_{};
-    bool compact_{}, captured_{};
+    std::optional<PanelBrushAdjustment> adjustment_;
+    bool compact_{}, captured_{}, coarse_{};
 };
 
 } // namespace sculpt

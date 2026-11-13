@@ -1,7 +1,7 @@
 #pragma once
 
 #include "sculpt_camera.hpp"
-#include "sculpt_gpu_mesh.hpp"
+#include "sculpt_mesh_chunk.hpp"
 #include "sculpt_overlay.hpp"
 
 namespace sculpt {

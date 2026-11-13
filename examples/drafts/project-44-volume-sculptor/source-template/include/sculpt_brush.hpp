@@ -49,6 +49,35 @@ struct Brush {
     }
 };
 
+enum class BrushParameter { radius,
+                            strength,
+                            depth };
+
+inline void adjustBrushParameter(Brush& brush, float& depth, BrushParameter parameter, bool increase, bool coarse) {
+    brush.validate();
+    if (!std::isfinite(depth) || std::abs(depth) > 1)
+        throw std::invalid_argument("Brush depth must stay inside [-1, 1]");
+    float step = 0.025F;
+    if (coarse)
+        step = 0.1F;
+    if (parameter == BrushParameter::depth) {
+        step = 0.05F;
+        if (coarse)
+            step = 0.25F;
+    }
+    if (!increase)
+        step = -step;
+    if (parameter == BrushParameter::radius)
+        brush.radius = std::clamp(brush.radius + step, 0.03F, 0.6F);
+    else if (parameter == BrushParameter::strength)
+        brush.strength = std::clamp(brush.strength + step, 0.01F, 0.8F);
+    else if (parameter == BrushParameter::depth)
+        depth = std::clamp(depth + step, -1.0F, 1.0F);
+    else
+        throw std::invalid_argument("Unknown brush parameter");
+}
+
+// snippet:sculpt-brush-falloff
 inline float brushFalloff(float normalizedDistance) {
     if (!std::isfinite(normalizedDistance) || normalizedDistance < 0)
         throw std::invalid_argument("Falloff needs a finite nonnegative radius ratio");
@@ -56,7 +85,10 @@ inline float brushFalloff(float normalizedDistance) {
     return remaining * remaining;
 }
 
+// end-snippet:sculpt-brush-falloff
+
 // snippet:sculpt-brush-edit
+#if LAB_CHECKPOINT >= 4
 inline SampleBox applyBrush(ScalarGrid& grid, Brush brush) {
     brush.validate();
     if (grid.spec().samples < 3 || grid.spec().samples > 64)
@@ -89,6 +121,9 @@ inline SampleBox applyBrush(ScalarGrid& grid, Brush brush) {
             }
     return changed;
 }
+#else
+SampleBox applyBrush(ScalarGrid& grid, Brush brush);
+#endif
 
 // end-snippet:sculpt-brush-edit
 
@@ -111,8 +146,10 @@ inline std::vector<std::uint32_t> dirtyChunks(const GridSpec& spec, const Sample
     return result;
 }
 
+// snippet:sculpt-stroke-sampler
 class StrokeSampler {
     public:
+#if LAB_CHECKPOINT >= 5
     StrokeSampler(Vec3 start, float radius)
         : previous_(start), spacing_(radius * 0.25F) {
         if (!finite(start) || !std::isfinite(radius) || radius < 0.03F || radius > 0.6F)
@@ -138,11 +175,17 @@ class StrokeSampler {
         previous_ = target;
         return stamps;
     }
+#else
+    StrokeSampler(Vec3 start, float radius);
+    std::vector<Vec3> advance(Vec3 target);
+#endif
 
     private:
     Vec3 previous_;
     float spacing_{};
     float carry_{};
 };
+
+// end-snippet:sculpt-stroke-sampler
 
 } // namespace sculpt

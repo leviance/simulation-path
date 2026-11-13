@@ -89,6 +89,8 @@ class FrameTimer {
             first_ = (first_ + 1) % queries_.size();
             --pending_;
         }
+        // A late driver result may recover. Do not disable every future sample permanently.
+        error_.clear();
     }
 
     GlApi& gl_;

@@ -8,8 +8,12 @@ namespace sculpt {
 // One owner controls either the camera or one frozen brush stroke. No second button can steal it.
 class SculptControls {
     public:
-    SculptControls(GlApi& gl, GpuBudget& budget)
-        : picker_(gl, budget) {}
+    SculptControls(GlApi& gl, GpuBudget& budget, Brush brush = {}, float depth = 0)
+        : picker_(gl, budget), brush_(brush), depth_(depth) {
+        brush_.validate();
+        if (!std::isfinite(depth_) || std::abs(depth_) > 1)
+            throw std::invalid_argument("Initial brush depth must stay inside [-1, 1]");
+    }
 
     const Brush& brush() const {
         return brush_;
@@ -37,6 +41,14 @@ class SculptControls {
 
     bool pointerCaptured() const {
         return capture_ != Capture::none || tapPending_;
+    }
+
+    bool adjust(BrushParameter parameter, bool increase, bool coarse) {
+        if (pointerCaptured())
+            return false;
+        adjustBrushParameter(brush_, depth_, parameter, increase, coarse);
+        needsPick_ = true;
+        return true;
     }
 
     void suspendHover(bool value) {
@@ -84,8 +96,19 @@ class SculptControls {
             camera.zoom(event.wheel.y);
             invalidateView();
         }
-        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat)
-            key(event.key.key, model);
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+            auto command = event.key.key;
+            // Shift changes punctuation on some layouts. A parameter key keeps its physical role.
+            if (event.key.scancode == SDL_SCANCODE_LEFTBRACKET)
+                command = SDLK_LEFTBRACKET;
+            if (event.key.scancode == SDL_SCANCODE_RIGHTBRACKET)
+                command = SDLK_RIGHTBRACKET;
+            if (event.key.scancode == SDL_SCANCODE_MINUS)
+                command = SDLK_MINUS;
+            if (event.key.scancode == SDL_SCANCODE_EQUALS)
+                command = SDLK_EQUALS;
+            key(command, event.key.mod, model);
+        }
     }
 
     void tick(GpuMeshBuilder& model, const Camera& camera, int width, int height) {
@@ -246,7 +269,7 @@ class SculptControls {
             moveStroke(model, camera, width, height);
     }
 
-    void key(SDL_Keycode key, GpuMeshBuilder& model) {
+    void key(SDL_Keycode key, SDL_Keymod modifiers, GpuMeshBuilder& model) {
         if (key == SDLK_ESCAPE) {
             cancel(model);
             return;
@@ -259,18 +282,29 @@ class SculptControls {
             brush_.mode = BrushMode::add;
         if (key == SDLK_D)
             brush_.mode = BrushMode::subtract;
+
+        // Function-key alternatives remain usable when an IME consumes punctuation keys.
+        if (key == SDLK_F2 || key == SDLK_F3 || key == SDLK_F4) {
+            BrushParameter parameter = BrushParameter::radius;
+            if (key == SDLK_F3)
+                parameter = BrushParameter::strength;
+            if (key == SDLK_F4)
+                parameter = BrushParameter::depth;
+            adjust(parameter, (modifiers & SDL_KMOD_SHIFT) == 0, (modifiers & SDL_KMOD_CTRL) != 0);
+        }
+        const bool coarse = (modifiers & SDL_KMOD_SHIFT) != 0;
         if (key == SDLK_LEFTBRACKET)
-            brush_.radius = std::max(0.03F, brush_.radius - 0.025F);
+            adjust(BrushParameter::radius, false, coarse);
         if (key == SDLK_RIGHTBRACKET)
-            brush_.radius = std::min(0.6F, brush_.radius + 0.025F);
+            adjust(BrushParameter::radius, true, coarse);
         if (key == SDLK_MINUS)
-            brush_.strength = std::max(0.01F, brush_.strength - 0.025F);
+            adjust(BrushParameter::strength, false, coarse);
         if (key == SDLK_EQUALS)
-            brush_.strength = std::min(0.8F, brush_.strength + 0.025F);
+            adjust(BrushParameter::strength, true, coarse);
         if (key == SDLK_PAGEUP)
-            depth_ = std::min(1.0F, depth_ + 0.05F);
+            adjust(BrushParameter::depth, true, coarse);
         if (key == SDLK_PAGEDOWN)
-            depth_ = std::max(-1.0F, depth_ - 0.05F);
+            adjust(BrushParameter::depth, false, coarse);
         if (key == SDLK_Z && !model.undo())
             notice_ = "UNDO NEEDS AN IDLE CURRENT MESH AND A SAVED STROKE";
         if (key == SDLK_Y && !model.redo())

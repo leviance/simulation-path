@@ -107,6 +107,7 @@ inline void verifyGpuSceneChanges(GpuMeshBuilder& source, GlApi& gl, GpuBudget& 
     changed->tick();
     scenes.tick(*changed);
     gpuCheck(scenes.reset(*changed, Shape::separatedSpheres) && scenes.resolution(*changed, 64, 0), "Newest scene request was not queued");
+    gpuCheck(scenes.selectedShape(*changed) == Shape::separatedSpheres && scenes.reset(*changed, scenes.selectedShape(*changed)), "Reset reverted a pending preset to the old active shape");
     auto latest = waitForScene(scenes, *changed, deadline);
     gpuCheck(latest && latest->settings().grid.samples == 64 && latest->settings().shape == Shape::separatedSpheres, "An obsolete resolution/preset request became active");
     verifyResetPreset(*latest);

@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+
 #include "sculpt_math.hpp"
 #include <vector>
 
@@ -42,6 +46,7 @@ struct GridSpec {
 
     // end-snippet:sculpt-grid-index
 
+    // snippet:sculpt-grid-transform
     Vec3 worldFromGrid(Vec3 coordinate) const {
         return origin + coordinate * spacing();
     }
@@ -49,6 +54,8 @@ struct GridSpec {
     Vec3 gridFromWorld(Vec3 world) const {
         return (world - origin) / spacing();
     }
+
+    // end-snippet:sculpt-grid-transform
 };
 
 enum class Shape { sphere,
@@ -103,6 +110,8 @@ class ScalarGrid {
         values_ = values;
     }
 
+    // snippet:sculpt-fill-grid
+#if LAB_CHECKPOINT >= 2
     void fill(Shape shape) {
         for (int z = 0; z < spec_.samples; ++z)
             for (int y = 0; y < spec_.samples; ++y)
@@ -111,6 +120,11 @@ class ScalarGrid {
                     set(x, y, z, initialField(point, shape));
                 }
     }
+#else
+    void fill(Shape shape);
+#endif
+
+    // end-snippet:sculpt-fill-grid
 
     void fillPlane(Vec3 normal, float offset) {
         normal = normalized(normal);
@@ -124,6 +138,8 @@ class ScalarGrid {
                 }
     }
 
+    // snippet:sculpt-trilinear-sample
+#if LAB_CHECKPOINT >= 3
     float sample(Vec3 point) const {
         if (!finite(point))
             throw std::invalid_argument("Field probe needs a finite world position");
@@ -142,7 +158,14 @@ class ScalarGrid {
         const float highNextY = interpolate(at(x, y + 1, z + 1), at(x + 1, y + 1, z + 1), tx);
         return interpolate(interpolate(lowY, highY, ty), interpolate(lowNextY, highNextY, ty), tz);
     }
+#else
+    float sample(Vec3 point) const;
+#endif
 
+    // end-snippet:sculpt-trilinear-sample
+
+    // snippet:sculpt-grid-gradient
+#if LAB_CHECKPOINT >= 3
     Vec3 gradient(Vec3 point) const {
         const float h = spec_.spacing() * 0.5F;
         // At a domain boundary use the actual one-sided separation, not a fictitious 2h.
@@ -160,6 +183,11 @@ class ScalarGrid {
             (sample({point.x, y1, point.z}) - sample({point.x, y0, point.z})) / (y1 - y0),
             (sample({point.x, point.y, z1}) - sample({point.x, point.y, z0})) / (z1 - z0)};
     }
+#else
+    Vec3 gradient(Vec3 point) const;
+#endif
+
+    // end-snippet:sculpt-grid-gradient
 
     private:
     GridSpec spec_;

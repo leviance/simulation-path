@@ -1,7 +1,7 @@
 #pragma once
 
-#include "sculpt_gpu_mesh.hpp"
 #include "sculpt_active_deadline.hpp"
+#include "sculpt_gpu_mesh.hpp"
 #include <iostream>
 
 namespace sculpt {
@@ -205,6 +205,12 @@ class NativeSceneTasks {
         if (latest_)
             return latest_->target.grid.samples;
         return 0;
+    }
+
+    Shape selectedShape(const GpuMeshBuilder& current) const {
+        if (job_ && latest_)
+            return latest_->target.shape;
+        return current.settings().shape;
     }
 
     bool reset(GpuMeshBuilder& current, Shape shape) {

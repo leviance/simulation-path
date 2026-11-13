@@ -1,0 +1,246 @@
+> Bản biên tập cho checkpoint 04, chưa phát hành hoặc ghép Canvas.
+
+Thời gian gợi ý: đọc 25 phút, tự viết 55 phút, thử và kiểm 25 phút. Setup/build tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có một khối từ scalar grid và normal đọc được bề mặt cong. Bây giờ hãy cho người dùng bấm lên khối để thêm hoặc bớt vật liệu. Dấu cọ phải đổi các scalar đang lưu, sau đó mesh mới thay hình; vẽ một vòng tròn lên screenshot chưa phải chỉnh khối.
+
+Bài này chỉ làm **một stamp cho mỗi lần nhấn chuột**. Giữ hoặc kéo chuột chưa tạo nét dài, cũng chưa có undo. Cách chia bước ấy giúp ta kiểm vị trí cọ và công thức trước khi thêm resampling/lịch sử ở Bài 05.
+
+Nếu làm tiếp từ Bài 03, lấy hai file scaffold `sculpt_cpu_preview.hpp` và `sculpt_cpu_controls.hpp` của checkpoint 04 để có chế độ cọ, tham số và router input. Bạn viết các phần field/picking dưới đây, không phải tự dựng lại panel hay camera.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Thêm vật liệu nghĩa là làm vùng bên trong rộng ra
+
+Ta vẫn dùng quy ước scalar thấp hơn isovalue là inside. Muốn thêm vật liệu quanh tâm c, ta giảm field ở đó; muốn khoét, ta tăng field. Với bán kính r, đặt:
+
+$$u=\frac{\lVert p-c\rVert}{r},\qquad w(u)=\left[\max(0,1-u^2)\right]^2.$$
+
+Add dùng `f -= strength * w`, subtract dùng `f += strength * w`. Ở tâm cọ, w bằng 1; tại rìa và ngoài bán kính, w bằng 0. Falloff làm tác động giảm dần thay vì tạo một bậc gãy tại rìa.
+
+Strength là lượng đổi scalar **mỗi stamp**, không phải lực, tốc độ hay lượng đổi mỗi giây. Giữ chuột lâu hơn không tự làm stamp mạnh hơn. Sau vài lần sửa, field không còn là signed distance của sphere, dù lúc khởi tạo ta dùng công thức SDF.
+
+### Từ con trỏ 2D tới vị trí cọ 3D
+
+Helper camera cấp sẵn tạo một ray từ vị trí chuột trong viewport. Ray đi qua không gian theo `origin + t * direction`. Ta cần điểm field đổi dấu trên ray, rồi đặt cọ tại đó.
+
+Không được dùng scalar như độ dài bước ray sau khi field đã sửa. Ở đây ta lấy bước đều bằng spacing/4, giới hạn ray trong hộp domain, rồi chia đôi một đoạn đổi dấu. Cách này hữu hạn và dễ kiểm, nhưng có thể bỏ sót tiếp tuyến hoặc chi tiết mỏng hơn bước dò.
+
+## Bắt tay xây dựng
+
+### 1. Tính falloff và sửa các mẫu trong bán kính
+
+Đối chiếu `brushFalloff` trong `sculpt_brush.hpp`:
+
+```cpp title="include/sculpt_brush.hpp — tác động giảm từ tâm tới rìa cọ"
+inline float brushFalloff(float normalizedDistance) {
+    if (!std::isfinite(normalizedDistance) || normalizedDistance < 0)
+        throw std::invalid_argument("Falloff needs a finite nonnegative radius ratio");
+    const float remaining = std::max(0.0F, 1.0F - normalizedDistance * normalizedDistance);
+    return remaining * remaining;
+}
+```
+
+Thay khai báo `applyBrush` bằng định nghĩa:
+
+```cpp title="include/sculpt_brush.hpp — ghi vào stored field, không thay công thức preset"
+inline SampleBox applyBrush(ScalarGrid& grid, Brush brush) {
+    brush.validate();
+    if (grid.spec().samples < 3 || grid.spec().samples > 64)
+        throw std::invalid_argument("CPU brush is only the 3..64-sample teaching/reference path");
+    const auto& spec = grid.spec();
+    const Vec3 low = spec.gridFromWorld(brush.center - Vec3{brush.radius, brush.radius, brush.radius});
+    const Vec3 high = spec.gridFromWorld(brush.center + Vec3{brush.radius, brush.radius, brush.radius});
+    const int x0 = std::clamp(static_cast<int>(std::floor(low.x)), 1, spec.samples - 2);
+    const int y0 = std::clamp(static_cast<int>(std::floor(low.y)), 1, spec.samples - 2);
+    const int z0 = std::clamp(static_cast<int>(std::floor(low.z)), 1, spec.samples - 2);
+    const int x1 = std::clamp(static_cast<int>(std::ceil(high.x)), 1, spec.samples - 2);
+    const int y1 = std::clamp(static_cast<int>(std::ceil(high.y)), 1, spec.samples - 2);
+    const int z1 = std::clamp(static_cast<int>(std::ceil(high.z)), 1, spec.samples - 2);
+    SampleBox changed;
+    for (int z = z0; z <= z1; ++z)
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x) {
+                const Vec3 point = spec.worldFromGrid({static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)});
+                float delta = brush.strength * brushFalloff(length(point - brush.center) / brush.radius);
+                if (delta == 0)
+                    continue;
+                if (brush.mode == BrushMode::add)
+                    delta = -delta;
+                const float before = grid.at(x, y, z);
+                const float after = std::clamp(before + delta, -4.0F, 4.0F);
+                if (after != before) {
+                    grid.set(x, y, z, after);
+                    changed.include(x, y, z);
+                }
+            }
+    return changed;
+}
+```
+
+Ta đổi hộp bao cọ sang grid để không phải duyệt mọi sample. Khoảng duyệt bị chặn vào `[1, N−2]`: lớp mẫu biên được bảo vệ để tác phẩm không bị mở ở mép domain. Trong hộp đó, mỗi mẫu vẫn phải đo khoảng cách thật tới tâm; hộp bao không có nghĩa cả khối hộp đều nhận cùng một tác động.
+
+Chỉ khi `after != before` mới ghi và mở rộng vùng `changed`. `SampleBox` là hộp mẫu thực sự đổi, không phải một mesh hay mảng triangle. Scalar được clamp vào [-4;4]; nếu stamp không đổi mẫu nào, kết quả empty cho phép bỏ qua remesh và thao tác history không cần thiết.
+
+### 2. Đánh dấu một phiên bản field mới
+
+Trong `CpuDocument`, thêm định nghĩa `applyStamp`:
+
+```cpp title="include/sculpt_document.hpp — một click đã commit, chưa có stroke history"
+bool applyStamp(Brush brush) {
+    if (owner_)
+        throw std::logic_error("A single stamp cannot interrupt an owned stroke");
+    brush.validate();
+    ensureGeneration();
+    const auto changed = applyBrush(grid_, brush);
+    if (changed.empty)
+        return false;
+    dirty_.include(changed);
+    undo_.clear();
+    redo_.clear();
+    ++generation_;
+    return true;
+}
+```
+
+`generation` tăng khi có scalar đổi. `dirty_` giữ thông tin để bước tối ưu sau dùng; bản CPU hiện vẫn trích toàn grid nhỏ khi nhận phiên bản mới, chưa phải dirty-chunk GPU.
+
+Các mảng undo/redo đang trống ở mốc này. `applyStamp` không thêm snapshot, và xóa history cũ nếu được dùng trên một document đã có lịch sử. Bài sau sẽ thay lời gọi này bằng begin/move/end của cả stroke, không chỉ ghi mỗi stamp thành một bước undo.
+
+### 3. Dò stored field dưới con trỏ
+
+`gridRayInterval` được cấp trong `sculpt_cpu_pick.hpp`: nó lấy giao của ba khoảng ray nằm trong các cặp mặt phẳng của hộp. Kết quả là đoạn dương `entry..exit`, chặn xa ở 32 world units. Nếu ray song song với một trục nhưng nằm ngoài cặp mặt phẳng tương ứng thì trả miss ngay.
+
+Thêm `pickCpuField` sau các kiểu/helper ấy:
+
+```cpp title="include/sculpt_cpu_pick.hpp — bước đều trên field tổng quát rồi chia đôi đoạn đổi dấu"
+inline CpuPick pickCpuField(const ScalarGrid& field, Vec3 origin, Vec3 direction, float isovalue) {
+    if (!finite(origin) || !std::isfinite(isovalue) || std::abs(isovalue) > 1)
+        throw std::invalid_argument("Field picking needs a finite ray and bounded isovalue");
+    direction = normalized(direction);
+    const auto interval = gridRayInterval(field.spec(), origin, direction);
+    if (!interval)
+        return {};
+    float previousT = interval->entry;
+    float previous = field.sample(origin + direction * previousT) - isovalue;
+    for (std::uint32_t step = 0; step < 2048; ++step) {
+        if (std::abs(previous) < 1e-6F) {
+            const Vec3 point = origin + direction * previousT;
+            return {point, previousT, field.sample(point), step + 1, true, false};
+        }
+        // Edited values are not distances. Advance by a known fraction of the grid spacing.
+        const float nextT = std::min(previousT + field.spec().spacing() * 0.25F, interval->exit);
+        const float next = field.sample(origin + direction * nextT) - isovalue;
+        if ((previous < 0) != (next < 0)) {
+            float low = previousT, high = nextT;
+            for (int iteration = 0; iteration < 12; ++iteration) {
+                const float middle = (low + high) * 0.5F;
+                const float value = field.sample(origin + direction * middle) - isovalue;
+                if ((value < 0) == (previous < 0))
+                    low = middle;
+                else
+                    high = middle;
+            }
+            const float distance = (low + high) * 0.5F;
+            const Vec3 point = origin + direction * distance;
+            return {point, distance, field.sample(point), step + 1, true, false};
+        }
+        if (nextT >= interval->exit)
+            return {{}, 0, 0, step + 1, false, false};
+        previousT = nextT;
+        previous = next;
+    }
+    return {{}, 0, 0, 2048, false, true};
+}
+```
+
+Hướng ray được normalize để t mang đơn vị khoảng cách world. Mỗi lượt chỉ tiến spacing/4. Khi hai scalar nằm ở hai phía isovalue, chia đôi 12 lần để tìm gần giao điểm. Trả cả số bước và cờ hết budget; không có vòng lặp chờ vô hạn.
+
+Picker này hỏi field trilinear, không giao ray chính xác với từng triangle của marching tetrahedra. Ở grid thưa, điểm đặt cọ có thể lệch nhẹ với mesh. Đây là giới hạn phải nêu rõ, không phải lý do dùng lại sphere analytic để “sửa” điểm chạm sau khi đã nặn.
+
+### 4. Nối press vào đúng document
+
+Phần nhận button/capture/camera là scaffold. Nhánh mới cho left click trong chế độ cọ được nối vào như sau:
+
+```cpp title="include/sculpt_cpu_controls.hpp — tìm điểm rồi gọi đúng thao tác field của mốc 04"
+void press(const SDL_MouseButtonEvent& event, CpuDocument& document, const Camera& camera, float isovalue, int width, int height) {
+    if (width <= 0 || height <= 0 || !finite(camera.eye()) || !std::isfinite(isovalue) || document.strokeActive())
+        return;
+    if (event.button != SDL_BUTTON_LEFT && event.button != SDL_BUTTON_RIGHT && event.button != SDL_BUTTON_MIDDLE)
+        return;
+    if (event.button == SDL_BUTTON_LEFT && sculptMode_ && paused_) {
+        notice_ = "RESUME BEFORE EDITING THE FIELD";
+        return;
+    }
+    if (!SDL_CaptureMouse(true)) {
+        notice_ = std::string("POINTER CAPTURE FAILED: ") + SDL_GetError();
+        return;
+    }
+    owner_ = event.which;
+    button_ = event.button;
+    pointerX_ = previousX_ = event.x;
+    pointerY_ = previousY_ = event.y;
+    capture_ = Capture::orbit;
+    if (button_ == SDL_BUTTON_MIDDLE)
+        capture_ = Capture::pan;
+    if (button_ == SDL_BUTTON_LEFT && sculptMode_) {
+        const Vec3 direction = camera.ray(event.x, event.y, static_cast<float>(width), static_cast<float>(height));
+        const auto hit = pickCpuField(document.field(), camera.eye(), direction, isovalue);
+        if (!hit.hit) {
+            notice_ = "NO SURFACE / START ON THE MESH";
+            release();
+            return;
+        }
+        frozenBrush_ = brush_;
+        frozenBrush_.center = hit.point + camera.forward() * depth_;
+        strokeAnchor_ = frozenBrush_.center;
+        strokeNormal_ = camera.forward();
+        document.applyStamp(frozenBrush_);
+        capture_ = Capture::singleStamp;
+        notice_.clear();
+    }
+}
+```
+
+Đọc nhánh cuối: `camera.ray` nhận tọa độ trong viewport, `pickCpuField` đọc field hiện có, rồi `frozenBrush_` sao chép radius/strength/mode. Tâm là hit point cộng `camera.forward() * depth`; depth dương đưa cọ sâu hơn theo hướng nhìn.
+
+`Capture::singleStamp` giữ một owner tới lúc thả chuột nhưng không áp lại stamp khi mouse motion tới. Các lần draw cũng không gọi `applyBrush`. Chính điều này tách lượng nặn khỏi FPS.
+
+Sau input, vòng chạy nhận generation mới và gọi lại nhánh `extractCpu` của Bài 02. Đừng sửa mesh vertices trực tiếp trong handler chuột; nếu làm vậy, field, normal, slice và lần remesh kế tiếp sẽ mâu thuẫn nhau.
+
+## Chạy checkpoint và đọc kết quả
+
+```powershell title="Chạy editor với một stamp mỗi click"
+cmake --build build --config Debug --parallel 1 --target project_44_checkpoint_4
+.\build\Debug\project_44_checkpoint_4.exe --grid 24
+```
+
+Trước khi bấm, nhìn cọ wire sphere và dự đoán vùng thay đổi. `A` chọn add, `D` chọn subtract. F2/F3/F4 tăng radius/strength/depth; giữ Shift để giảm, Ctrl để dùng bước lớn. Tab tách left-drag cọ với left-drag camera; right drag luôn orbit, middle drag pan.
+
+Bấm một lần, thả chuột rồi orbit để thấy thể tích đổi. Thử giữ chuột tại chỗ một giây: vẫn chỉ có một stamp. Kéo khi đang giữ cũng chưa có nét dài. Đó là hành vi cố ý của mốc 04, không phải mouse input bị mất.
+
+Space tạm dừng remesh và không nhận stamp mới; camera vẫn dùng được. R/reset hoặc đổi N khởi tạo lại preset và bỏ chỉnh sửa ở nhánh CPU. Bản giữ field khi đổi resolution sẽ được ghép vào nhánh GPU sau.
+
+## Thử tạo lỗi
+
+Trong bản thử, đổi dấu của delta để add lại tăng scalar. Dự đoán trước: cọ add sẽ làm bề mặt phồng ra hay lõm vào? Sau đó khôi phục. Không chữa bằng cách đổi nhãn nút A/D để hợp thức hóa công thức sai.
+
+Thử thay việc đọc `field.sample` trong picker bằng `initialField`. Nặn một vùng rồi bấm lại đúng đó: cọ sẽ dò theo bề mặt cũ. Đây là lỗi dùng lại preset thay cho dữ liệu đã lưu; một ảnh sphere chưa chỉnh sửa sẽ không bắt được nó.
+
+## Kiểm tra trước khi sang bài mới
+
+- Add giảm scalar, subtract tăng scalar; ngoài bán kính không đổi và lớp biên giữ nguyên.
+- Một click tạo một stamp, giữ chuột hoặc tăng FPS không tự nhân tác động.
+- Field generation, positions và gradient normals đổi cùng dữ liệu; orbit không ghi field.
+- Picker dùng field đang lưu, không coi mọi scalar là SDF. Plane có giao ray analytic và field nhân scalar lên ba lần vẫn phải cho cùng vị trí giao.
+- Sai pointer/button không kết thúc owner hiện có; blur/reset không ghi thêm vào grid cũ.
+
+Fixture CPU reference kiểm falloff, bounds, single stamp/no-op và picking trên plane/sphere/field đã sửa. Nó không chứng nhận thao tác chuột của mọi hệ điều hành; tests mặc định vẫn include bản `final`, nên kiểm riêng định nghĩa của bản thực hành nếu bạn đã đổi nó.
+
+## Thử đi thêm một bước
+
+Giữ cùng strength, lần lượt đổi radius. So số mẫu đổi, độ rộng dấu cọ và hình ở góc nghiêng; đừng chỉ nhìn một pixel giữa ảnh. Sau đó thử cùng radius nhưng đổi depth để hiểu tâm cọ khác điểm chạm như thế nào.
+
+Khi kéo chuột ở mốc này, bạn có thể thấy rõ nhu cầu tiếp theo: đặt nhiều stamp dọc một đường, nhưng vẫn undo cả đường chỉ bằng một thao tác.
