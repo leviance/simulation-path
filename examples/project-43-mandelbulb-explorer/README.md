@@ -1,7 +1,5 @@
 # Project 43 — Khám phá fractal Mandelbulb
 
-> Bản Mandelbulb mới đang nghiệm thu phần web và gói tải. Source native đã có đủ starter/checkpoint/final; không dùng kết quả kiểm native để thay cho kiểm bài học, tương tác trình duyệt hoặc ZIP.
-
 Một phép lặp tạo ra cả khối hình học: đổi power để thấy các nếp phân nhánh thay hình, tiến camera để nhìn vào các hõm, rồi bật heatmap để tìm vùng khiến renderer phải tính nhiều hơn. Ứng dụng dùng OpenGL compute để tính ảnh thật từ field 3D; không có mesh fractal, texture zoom hay fractal engine được giấu bên dưới.
 
 Đầu vào là vị trí camera, power, số vòng lặp, bailout và các giới hạn chất lượng. Đầu ra là ảnh Mandelbulb có ánh sáng, ảnh debug và các bộ đếm công việc. Đây là đồ họa từ phép lặp, không phải mô phỏng nhiệt độ, lực hoặc năng lượng.
@@ -117,3 +115,14 @@ Export chỉ nhận ảnh ACTIVE đã hoàn chỉnh, 3D, đúng generation và �
 Hidden run có giới hạn nội bộ 120 giây, probe GPU ba giây, image verification mười giây và export năm giây. Shader loop/batch đều hữu hạn. Một API driver vẫn có thể bị lỗi phần cứng; khi kiểm tự động phải có process supervisor/watchdog bên ngoài, không coi deadline trong vòng poll là khả năng cưỡng bức ngắt kernel. Repository giới hạn hai build/test worker; không chạy đồng thời build, site build và GPU validation trên máy ít RAM.
 
 Canvas chỉ là công cụ học JavaScript/Canvas 2D 32×18 → 96×54, tối đa 12 orbit iterations và 96 ray steps, có pause/reset/cancel và chữ giải thích. Nó không chứng minh quy mô hoặc tốc độ GPU của ứng dụng native.
+
+## Phạm vi đã kiểm tra
+
+Ngày 13/11/2026, trên Windows/Visual Studio 2022, SDL 3.4.8 và NVIDIA GeForce RTX 3050 Laptop GPU, driver 546.30, context OpenGL 4.3:
+
+- Starter, chín checkpoint, final và tests build ở Debug/Release. CTest kiểm orbit, ray, camera và controller; pan có fixture tọa độ biết trước, không chỉ gọi cùng một công thức hai lần để so.
+- Field probe kiểm nhiều power/bailout, gốc và gần trục. Các ảnh mặc định, power 6, camera gần và iteration cap 4 được đọc lại toàn bộ, rồi so các ray đã chọn với oracle độc lập.
+- Ảnh bốn mẫu/pixel có đủ 2.073.600 mẫu thật. Camera inside được kiểm riêng; không tính ảnh inside là một ảnh bề mặt fractal thành công.
+- Đã thử trực tiếp chuột orbit/wheel, Pause, preset, Cancel/Restart, heatmap, Showcase và Reset trong cửa sổ C++. Kiểm trình duyệt, source trong bài và gói ZIP được thực hiện riêng.
+
+Đây là kết quả correctness và smoke hữu hạn trên một cấu hình, không phải benchmark FPS, cam kết tương thích mọi driver hay chứng minh DE không overshoot ở mọi vùng. Chưa kiểm chạy trên Linux; macOS OpenGL 4.1 không đáp ứng yêu cầu compute của bản này.

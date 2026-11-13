@@ -11,6 +11,10 @@ Khung đã cấp gồm `bulb_window.hpp` tạo context, `bulb_gl.hpp` nạp API/
 
 Đích cuối là một khối Mandelbulb **3D** có camera. Ảnh hôm nay chỉ là lát cắt của field đó tại `Y=sliceY`; đừng coi nó là sản phẩm đã hoàn thành.
 
+![Ảnh Mandelbulb 960×540 tính bằng ứng dụng C++/OpenGL](/illustrations/project-43-mandelbulb.png)
+
+*Đây là ảnh xuất từ bản native hoàn chỉnh: power 8, bốn mẫu mỗi pixel, palette 1 và ánh sáng từ field 3D. Bạn sẽ xây tới kết quả này qua các bài tiếp theo. Canvas bên dưới cố ý dùng ảnh CPU nhỏ để dễ đọc từng phép tính; nó không phải ảnh chất lượng cuối hoặc phép đo GPU.*
+
 ## Hiểu ý tưởng trước khi viết code
 
 Giữ cố định một vị trí `c`. Bắt đầu ở `z₀=(0,0,0)`, biến đổi `z`, cộng lại `c` rồi lặp tiếp:

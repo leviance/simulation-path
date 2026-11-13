@@ -10,7 +10,15 @@ export interface ProbeInfo {
   orbit: Vec3[];
   ray: RaySample | null;
 }
-export function BulbReadout({ session, info, error }: { session: BulbSession; info: ProbeInfo | null; error: string }) {
+export function BulbReadout({
+  session,
+  info,
+  error,
+}: {
+  session: BulbSession;
+  info: ProbeInfo | null;
+  error: string;
+}) {
   const active = session.active,
     c = session.counters;
   const state = () => {
@@ -50,7 +58,17 @@ export function BulbReadout({ session, info, error }: { session: BulbSession; in
             {active ? (96 * 54 * active.settings.samples).toLocaleString() : "—"}
           </dd>
         </div>
-        {active && <div><dt>Giới hạn preview thực tế</dt><dd>32×18 · orbit {previewSettings(active.settings).iterations} · steps {previewSettings(active.settings).raySteps} · ε {previewSettings(active.settings).epsilon} · H {previewSettings(active.settings).normalStep}</dd></div>}
+        {active && (
+          <div>
+            <dt>Giới hạn preview thực tế</dt>
+            <dd>
+              32×18 · orbit {previewSettings(active.settings).iterations} · steps{" "}
+              {previewSettings(active.settings).raySteps} · ε{" "}
+              {previewSettings(active.settings).epsilon} · H{" "}
+              {previewSettings(active.settings).normalStep}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Ray steps / orbit bodies thực tế</dt>
           <dd>

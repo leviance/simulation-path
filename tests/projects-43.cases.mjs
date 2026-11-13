@@ -99,6 +99,12 @@ test("all nine Mandelbulb lessons teach contiguous real C++/GLSL from the exact 
     if (next) assert.ok(text.includes("](" + overview + "/" + next.slug + ")"));
   }
   assert.ok(blocks >= 27, "Detailed lessons must not collapse into loose helper sketches");
+  const illustration = await readFile(
+    path.join(workspace, "public/illustrations/project-43-mandelbulb.png"),
+  );
+  assert.deepEqual([...illustration.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(illustration.readUInt32BE(16), 960);
+  assert.equal(illustration.readUInt32BE(20), 540);
   const shader = await snapshot(1, "shaders/bulb.comp");
   assert.match(shader, /snippet:bulb-gpu-power/);
   assert.match(shader, /end-snippet:bulb-gpu-power/);
@@ -172,6 +178,7 @@ test("Mandelbulb overview and roadmap link the rebuilt nine-lesson product", asy
   assert.equal(response.status, 200);
   const html = (await response.text()).replaceAll("<!-- -->", "");
   assert.match(html, /id="challenge-43"/);
+  assert.doesNotMatch(html, /aria-label="Chờ nghiệm thu"/);
   assert.ok(html.includes('href="' + zip + '"'));
   for (const lesson of project.lessons)
     assert.ok(html.includes('href="' + overview + "/" + lesson.slug + '"'));
@@ -184,6 +191,8 @@ test("all nine Mandelbulb routes render the intended Canvas, source, One Dark an
     const response = await render(overview + "/" + lesson.slug);
     assert.equal(response.status, 200);
     const html = (await response.text()).replaceAll("<!-- -->", "");
+    assert.equal((html.match(/<h1\b/g) ?? []).length, 1, lesson.slug);
+    assert.doesNotMatch(html, /aria-label="Chờ nghiệm thu"/);
     assert.ok(html.includes('data-mandelbulb-mode="' + modes[index] + '"'), lesson.slug);
     assert.match(html, /Canvas Project 43: Mandelbulb/);
     assert.match(html, /checkpoint-source/);

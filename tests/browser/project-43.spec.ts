@@ -42,6 +42,51 @@ async function completed(page: Page, canvas: Locator) {
     page.getByRole("progressbar", { name: "Tiến độ refinement Canvas" }),
   ).toHaveAttribute("value", "1", { timeout: 12000 });
 }
+test("Project 43 navigation keeps dark theme, searchable lessons and real code copy", async ({
+  page,
+  context,
+}, testInfo) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.addInitScript(() => {
+    localStorage.setItem("simulation-path-theme", "dark");
+  });
+  await page.goto(overview + "/" + lessons[0]);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const nativeExample = page.getByRole("img", {
+    name: "Ảnh Mandelbulb 960×540 tính bằng ứng dụng C++/OpenGL",
+    exact: true,
+  });
+  await nativeExample.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() => nativeExample.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+    .toBe(960);
+  await expect
+    .poll(() => nativeExample.evaluate((element) => (element as HTMLImageElement).naturalHeight))
+    .toBe(540);
+  await page.screenshot({ path: testInfo.outputPath("native-reference-on-web.png") });
+  const pre = page.locator("figure[data-rehype-pretty-code-figure] [data-code-html] pre").first();
+  const code = await pre.locator("code").textContent();
+  expect(code).toContain("sphericalPower");
+  await pre.getByRole("button", { name: "Sao chép đoạn code", exact: true }).click();
+  // The Windows clipboard converts LF to CRLF; preserve every other byte of the code.
+  await expect
+    .poll(() =>
+      page.evaluate(async () => (await navigator.clipboard.readText()).replaceAll("\r\n", "\n")),
+    )
+    .toBe(code?.replaceAll("\r\n", "\n"));
+  await expect(pre).toHaveCSS("overflow-x", "auto");
+  await expect(pre).toHaveCSS("background-color", "rgb(40, 44, 52)");
+  await page.getByRole("link", { name: /BÀI TIẾP/ }).click();
+  await expect(page).toHaveURL(overview + "/" + lessons[1]);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Tìm kiếm", exact: true }).click();
+  const search = page.getByRole("dialog", { name: "Tìm kiếm bài học" });
+  await search.getByRole("textbox", { name: "Từ khóa tìm kiếm" }).fill("Mandelbulb");
+  await expect(
+    search.getByRole("link", { name: /Khám phá fractal Mandelbulb/ }).first(),
+  ).toBeVisible();
+});
+
 test("Project 43 challenge, nine lessons, ZIP and isolated progress survive reload", async ({
   page,
 }) => {
@@ -172,7 +217,7 @@ test("complete images expose changing heatmaps and true four-sample refinement",
 });
 test("all nine modes render without page errors, blank graphics or layout overflow", async ({
   page,
-}) => {
+}, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   for (let index = 0; index < lessons.length; index++) {
@@ -196,6 +241,11 @@ test("all nine modes render without page errors, blank graphics or layout overfl
     );
   }
   expect(errors).toEqual([]);
+  const canvas = page.getByLabel("Canvas Project 43: Mandelbulb và chi phí ray marching", {
+    exact: true,
+  });
+  await completed(page, canvas);
+  await canvas.screenshot({ path: testInfo.outputPath("mandelbulb-canvas-desktop.png") });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -1,4 +1,5 @@
 #define LAB_CHECKPOINT 9
+#include "bulb_camera.hpp"
 #include "bulb_jobs.hpp"
 #include "bulb_reference.hpp"
 #include "bulb_trace.hpp"
@@ -73,6 +74,40 @@ void rayFixtures() {
     std::cout << "REFERENCE resolved=" << resolved << " shellStep=0.00025 absoluteT=0.006 epsilon=" << s.epsilon << " finiteIterations=" << s.iterations << '\n';
 }
 
+void cameraFixtures() {
+    Camera camera;
+    camera.yaw = 0;
+    camera.pitch = 0;
+    camera.distance = 2;
+
+    // Looking along -X gives right=-Z and up=+Y, so this pan has a known answer.
+    camera.pan(10, 20);
+    near(camera.target.x, 0, 1e-12);
+    near(camera.target.y, 0.048, 1e-12);
+    near(camera.target.z, 0.024, 1e-12);
+    near(length(camera.eye() - Vec3{2, 0.048, 0.024}), 0, 1e-12);
+    near(length(camera.ray(480, 270, 960, 540) - Vec3{-1, 0, 0}), 0, 1e-12);
+
+    camera.dolly(1);
+    near(camera.distance, 1.773840873434315, 1e-12);
+    camera.orbit(10, -20);
+    near(camera.yaw, -0.06, 1e-12);
+    near(camera.pitch, -0.12, 1e-12);
+
+    // Extreme finite input must stop at the published bounds instead of breaking the basis.
+    camera.pan(1e9, -1e9);
+    camera.orbit(1e9, -1e9);
+    camera.dolly(1e6);
+    near(camera.distance, 0.04, 0);
+    validateCamera(camera);
+    camera.dolly(-1e6);
+    near(camera.distance, 18, 0);
+    validateCamera(camera);
+    near(length(camera.ray(0, 0, 960, 540)), 1, 1e-12);
+    near(dot(camera.right(), camera.forward()), 0, 1e-12);
+    std::cout << "CAMERA PASS analyticPan=1 centerRay=1 orbitDollyBounds=1\n";
+}
+
 void jobFixtures() {
     Settings s;
     Camera c;
@@ -104,6 +139,7 @@ int main() {
     try {
         orbitFixtures();
         rayFixtures();
+        cameraFixtures();
         jobFixtures();
         std::cout << "P43 CORE PASS\n";
     } catch (const std::exception& error) {
