@@ -28,6 +28,9 @@ struct ModelSettings {
 
     void validate() const {
         grid.validate();
+        const auto maximum = grid.origin + Vec3{grid.extent, grid.extent, grid.extent};
+        if (maximum.x > 8 || maximum.y > 8 || maximum.z > 8)
+            throw std::invalid_argument("The GPU editing domain must stay inside [-8, 8] on every axis");
         if (grid.samples != 32 && grid.samples != 64 && grid.samples != 128 && grid.samples != 192)
             throw std::invalid_argument("GPU presets support 32/64/128/192 samples, with 128 required for acceptance");
         if (!std::isfinite(isovalue) || std::abs(isovalue) > 0.25F)
@@ -41,10 +44,11 @@ struct ChunkStats {
     std::uint32_t vertices{}, activeCells{}, degenerate{}, invalid{};
     std::uint32_t emitted{}, normalFallbacks{}, generation{}, mismatch{};
 };
+
 static_assert(sizeof(ChunkStats) == 32);
 
 struct PassTimes {
-    double field{}, brush{}, count{}, scan{}, emit{}, normals{}, draw{};
+    double field{}, upload{}, brush{}, history{}, count{}, scan{}, emit{}, normals{}, draw{};
 };
 
 } // namespace sculpt

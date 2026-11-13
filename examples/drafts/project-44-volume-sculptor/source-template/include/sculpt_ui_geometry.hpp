@@ -4,6 +4,8 @@
 #include <vector>
 
 namespace sculpt {
+inline constexpr int nativePanelWidth = 350;
+
 struct UiRect {
     float x{};
     float y{};

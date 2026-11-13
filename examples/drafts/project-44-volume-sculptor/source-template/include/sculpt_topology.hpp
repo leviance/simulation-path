@@ -7,12 +7,8 @@
 namespace sculpt {
 
 // One globally consistent Freudenthal split. Neighboring cubes use the same face diagonals.
-inline constexpr std::array<std::array<int, 3>, 8> cubeCorners{{
-    {0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
-    {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}}};
-inline constexpr std::array<std::array<int, 4>, 6> cubeTetrahedra{{
-    {0, 1, 2, 6}, {0, 2, 3, 6}, {0, 3, 7, 6},
-    {0, 7, 4, 6}, {0, 4, 5, 6}, {0, 5, 1, 6}}};
+inline constexpr std::array<std::array<int, 3>, 8> cubeCorners{{{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}}};
+inline constexpr std::array<std::array<int, 4>, 6> cubeTetrahedra{{{0, 1, 2, 6}, {0, 2, 3, 6}, {0, 3, 7, 6}, {0, 7, 4, 6}, {0, 4, 5, 6}, {0, 5, 1, 6}}};
 
 struct Corner {
     std::uint64_t id{};
@@ -53,6 +49,7 @@ inline EdgePoint edgePoint(Corner a, Corner b, float isovalue) {
         throw std::runtime_error("Edge interpolation is not finite");
     return {a.point + (b.point - a.point) * t, {a.id, b.id}};
 }
+
 // end-snippet:sculpt-edge-interpolation
 
 inline void appendTriangle(CellTriangles& output, EdgePoint a, EdgePoint b, EdgePoint c, Vec3 towardOutside, float spacing) {

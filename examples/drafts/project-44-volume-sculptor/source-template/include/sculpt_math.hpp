@@ -68,6 +68,7 @@ struct SurfaceVertex {
     std::array<float, 4> position;
     std::array<float, 4> normal;
 };
+
 static_assert(sizeof(SurfaceVertex) == 32);
 
 inline Vec3 positionOf(const SurfaceVertex& vertex) {

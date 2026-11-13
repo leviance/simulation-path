@@ -30,7 +30,8 @@ struct SampleBox {
     }
 };
 
-enum class BrushMode { add, subtract };
+enum class BrushMode { add,
+                       subtract };
 
 struct Brush {
     Vec3 center;
@@ -39,6 +40,8 @@ struct Brush {
     BrushMode mode{BrushMode::add};
 
     void validate() const {
+        if (mode != BrushMode::add && mode != BrushMode::subtract)
+            throw std::invalid_argument("Unknown brush mode");
         if (!finite(center) || std::abs(center.x) > 8 || std::abs(center.y) > 8 || std::abs(center.z) > 8)
             throw std::invalid_argument("Brush center is outside the finite working domain");
         if (!std::isfinite(radius) || radius < 0.03F || radius > 0.6F || !std::isfinite(strength) || strength < 0.01F || strength > 0.8F)
@@ -86,6 +89,7 @@ inline SampleBox applyBrush(ScalarGrid& grid, Brush brush) {
             }
     return changed;
 }
+
 // end-snippet:sculpt-brush-edit
 
 inline std::vector<std::uint32_t> dirtyChunks(const GridSpec& spec, const SampleBox& changed) {

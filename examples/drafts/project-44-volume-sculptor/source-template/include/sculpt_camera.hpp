@@ -6,7 +6,7 @@ namespace sculpt {
 
 // Supplied camera scaffold; it changes the view, never the scalar field or mesh job.
 struct Camera {
-    Vec3 target;
+    Vec3 target, panAnchor;
     float yaw{0.85F}, pitch{0.32F}, distance{4.3F};
     float tanHalfFov{std::tan(0.42F)};
 
@@ -27,6 +27,13 @@ struct Camera {
         return cross(right(), forward());
     }
 
+    void centerOn(Vec3 center) {
+        if (!finite(center))
+            throw std::invalid_argument("Camera center must be finite");
+        target = center;
+        panAnchor = center;
+    }
+
     void orbit(float dx, float dy) {
         yaw = std::remainder(yaw - dx * 0.006F, 6.28318530718F);
         pitch = std::clamp(pitch + dy * 0.006F, -1.48F, 1.48F);
@@ -34,9 +41,9 @@ struct Camera {
 
     void pan(float dx, float dy) {
         target = target + right() * (-dx * distance * 0.0012F) + up() * (dy * distance * 0.0012F);
-        target.x = std::clamp(target.x, -2.5F, 2.5F);
-        target.y = std::clamp(target.y, -2.5F, 2.5F);
-        target.z = std::clamp(target.z, -2.5F, 2.5F);
+        target.x = std::clamp(target.x, panAnchor.x - 2.5F, panAnchor.x + 2.5F);
+        target.y = std::clamp(target.y, panAnchor.y - 2.5F, panAnchor.y + 2.5F);
+        target.z = std::clamp(target.z, panAnchor.z - 2.5F, panAnchor.z + 2.5F);
     }
 
     void zoom(float wheel) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sculpt_gl.hpp"
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <vector>
@@ -13,9 +14,12 @@ class GpuTicket {
     explicit GpuTicket(GlApi& gl)
         : gl_(gl) {
         gl_.GenQueries(static_cast<GLsizei>(queries_.size()), queries_.data());
-        for (GLuint query : queries_)
-            if (!query)
+        for (GLuint query : queries_) {
+            if (!query) {
+                gl_.DeleteQueries(static_cast<GLsizei>(queries_.size()), queries_.data());
                 throw std::runtime_error("Could not allocate elapsed GPU queries");
+            }
+        }
     }
 
     ~GpuTicket() {

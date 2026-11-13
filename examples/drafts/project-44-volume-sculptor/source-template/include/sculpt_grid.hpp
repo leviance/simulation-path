@@ -39,6 +39,7 @@ struct GridSpec {
             throw std::out_of_range("Sample index is outside the scalar grid");
         return (static_cast<std::size_t>(z) * samples + y) * samples + x;
     }
+
     // end-snippet:sculpt-grid-index
 
     Vec3 worldFromGrid(Vec3 coordinate) const {
@@ -50,7 +51,9 @@ struct GridSpec {
     }
 };
 
-enum class Shape { sphere, separatedSpheres, torus };
+enum class Shape { sphere,
+                   separatedSpheres,
+                   torus };
 
 inline float initialField(Vec3 point, Shape shape) {
     if (shape == Shape::sphere)

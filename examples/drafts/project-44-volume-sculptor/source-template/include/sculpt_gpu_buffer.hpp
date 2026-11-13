@@ -2,16 +2,18 @@
 
 #include "sculpt_gl.hpp"
 #include "sculpt_limits.hpp"
+#include <memory>
 #include <span>
 
 namespace sculpt {
 
 struct GpuBudget {
     std::size_t used{};
+    std::size_t limit{gpuByteBudget};
 
     void reserve(std::size_t bytes) {
-        if (bytes == 0 || bytes > gpuByteBudget || used > gpuByteBudget - bytes)
-            throw std::runtime_error("GPU allocation exceeds the explicit 512 MiB budget; keep last-good");
+        if (limit > gpuByteBudget || bytes == 0 || bytes > limit || used > limit - bytes)
+            throw std::runtime_error("GPU allocation exceeds the configured byte budget; keep last-good");
         used += bytes;
     }
 
@@ -86,7 +88,9 @@ class GpuBuffer {
     bool guardIntact(std::size_t payloadBytes) const {
         std::array<std::uint32_t, guardBytes / 4> guard{};
         read(payloadBytes, std::as_writable_bytes(std::span(guard)));
-        return std::all_of(guard.begin(), guard.end(), [](auto word) { return word == canaryWord; });
+        return std::all_of(guard.begin(), guard.end(), [](auto word) {
+            return word == canaryWord;
+        });
     }
 
     private:
@@ -96,22 +100,28 @@ class GpuBuffer {
     std::size_t bytes_{};
 };
 
+struct GpuFieldSeed {
+    std::shared_ptr<const GpuBuffer> buffer;
+    GridSpec grid;
+};
+
 inline void preflightSculpt(GlApi& gl, const ModelSettings& settings) {
     settings.validate();
-    GLint major{}, minor{}, bindings{}, blocks{}, localSize{}, invocations{}, groupCount{};
+    GLint major{}, minor{}, bindings{}, blocks{}, fragmentBlocks{}, localSize{}, invocations{}, groupCount{};
     GLint64 maximumBlock{}, sharedBytes{};
     gl.GetIntegerv(GL_MAJOR_VERSION, &major);
     gl.GetIntegerv(GL_MINOR_VERSION, &minor);
     gl.GetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &bindings);
     gl.GetIntegerv(GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, &blocks);
+    gl.GetIntegerv(GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, &fragmentBlocks);
     gl.GetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &invocations);
     gl.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &localSize);
     gl.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &groupCount);
     gl.GetInteger64v(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &maximumBlock);
     gl.GetInteger64v(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, &sharedBytes);
     const auto countBytes = chunkCount(settings.grid) * cellsPerChunk * sizeof(std::uint32_t) + guardBytes;
-    if (major < 4 || (major == 4 && minor < 3) || bindings < 7 || blocks < 6 || localSize < 256 || invocations < 256 || groupCount < 576 || maximumBlock < static_cast<GLint64>(countBytes) || sharedBytes < 2048)
-        throw std::runtime_error("Sculpt requires OpenGL 4.3, seven SSBO bindings, 256-thread groups and bounded scan storage");
+    if (major < 4 || (major == 4 && minor < 3) || bindings < 8 || blocks < 6 || fragmentBlocks < 1 || localSize < 256 || invocations < 256 || groupCount < 576 || maximumBlock < static_cast<GLint64>(countBytes) || sharedBytes < 2048)
+        throw std::runtime_error("Sculpt requires OpenGL 4.3, eight SSBO bindings, 256-thread groups and bounded scan storage");
 }
 
 } // namespace sculpt

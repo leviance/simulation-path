@@ -1,9 +1,23 @@
+#ifndef LAB_CHECKPOINT
+#define LAB_CHECKPOINT 12
+#endif
+
+#include "sculpt_controls.hpp"
+#include "sculpt_file_tasks.hpp"
+#include "sculpt_frame_timer.hpp"
+#include "sculpt_gpu_edit_verify.hpp"
+#include "sculpt_gpu_file_verify.hpp"
+#include "sculpt_gpu_layout_verify.hpp"
+#include "sculpt_gpu_scene_verify.hpp"
+#include "sculpt_gpu_slice_verify.hpp"
 #include "sculpt_gpu_verify.hpp"
+#include "sculpt_guides.hpp"
+#include "sculpt_panel.hpp"
 #include "sculpt_renderer.hpp"
+#include "sculpt_scene_tasks.hpp"
+#include "sculpt_slice_inspector.hpp"
 #include "sculpt_window.hpp"
 #include <charconv>
-#include <iomanip>
-#include <sstream>
 
 namespace {
 using namespace sculpt;
@@ -11,8 +25,8 @@ using namespace sculpt;
 struct Options {
     int samples{128};
     int seconds{};
-    bool hidden{}, verify{}, plane{};
-    std::filesystem::path capture;
+    bool hidden{}, verify{}, verifyEdits{}, verifyFiles{}, verifySlice{}, verifyScene{}, plane{}, showSlice{};
+    std::filesystem::path capture, load;
 };
 
 int integer(std::string_view text, int minimum, int maximum) {
@@ -40,72 +54,39 @@ Options parse(int argc, char** argv) {
             result.hidden = true;
         else if (option == "--verify")
             result.verify = true;
+        else if (option == "--verify-edits")
+            result.verifyEdits = true;
+        else if (option == "--verify-files")
+            result.verifyFiles = true;
+        else if (option == "--verify-slice") {
+            result.verifySlice = true;
+            result.showSlice = true;
+        } else if (option == "--verify-scene")
+            result.verifyScene = true;
         else if (option == "--plane")
             result.plane = true;
+        else if (option == "--show-slice")
+            result.showSlice = true;
         else if (option == "--capture")
             result.capture = pathFromUtf8(next());
+        else if (option == "--load")
+            result.load = pathFromUtf8(next());
         else
             throw std::invalid_argument("Unknown sculpt option");
     }
-    if (result.hidden && !result.verify && result.capture.empty() && result.seconds == 0)
+    if (result.verifyEdits && result.plane)
+        throw std::invalid_argument("Editing fixtures require the sphere field preset");
+    if (result.verifyFiles && (result.plane || result.verifyEdits))
+        throw std::invalid_argument("File fixtures require their own unedited sphere preset");
+    if ((result.verifyEdits || result.verifyFiles) && (result.verify || result.verifySlice))
+        throw std::invalid_argument("Editing/file fixtures run separately from analytic/slice fixtures");
+    if (result.verifyScene && (result.samples != 128 || result.plane || result.verify || result.verifySlice || result.verifyEdits || result.verifyFiles))
+        throw std::invalid_argument("Scene lifecycle fixture starts at 128 samples and runs separately");
+    if (!result.load.empty() && (result.plane || result.verify || result.verifyEdits || result.verifyFiles || result.verifySlice || result.verifyScene))
+        throw std::invalid_argument("Analytic field fixtures cannot validate an arbitrary loaded field");
+    if (result.hidden && !result.verify && !result.verifyEdits && !result.verifyFiles && !result.verifySlice && !result.verifyScene && result.capture.empty() && result.seconds == 0)
         throw std::invalid_argument("Hidden run needs a finite verify/capture/seconds condition");
     return result;
-}
-
-std::string number(double value, int precision = 2) {
-    std::ostringstream text;
-    text << std::fixed << std::setprecision(precision) << value;
-    return text.str();
-}
-
-void drawPanel(Overlay& overlay, const GpuMeshBuilder& model, const GpuBudget& budget, int width, int height, float requestedIso) {
-    const float left = static_cast<float>(width - 310);
-    overlay.rect({left, 0, 310, static_cast<float>(height)}, {0.035F, 0.055F, 0.08F});
-    float y = 18;
-    const auto line = [&](std::string text, Vec3 color = Vec3{0.79F, 0.87F, 0.91F}) mutable {
-        overlay.text(left + 14, y, text, color, 1.35F, 282);
-        y += 23;
-    };
-    auto write = line;
-    write("PROJECT 44 / SCALAR MESH", {0.3F, 0.9F, 0.8F});
-    write("DRAFT / EDIT TOOLS PENDING");
-    write("GPU SAMPLES " + std::to_string(model.settings().grid.sampleCount()));
-    write("REAL CELLS " + std::to_string(model.settings().grid.cellCount()));
-    write("ACTIVE " + std::to_string(model.activeGeneration()) + " REQUEST " + std::to_string(model.requestedGeneration()));
-    write("REQUEST ISO " + number(requestedIso, 3));
-    if (model.ready())
-        write("COMPLETE GPU MESH", {0.3F, 0.9F, 0.8F});
-    else if (model.state() == MeshJobState::cancelled)
-        write("CANCELLED / KEEP ACTIVE");
-    else if (model.state() == MeshJobState::initializing)
-        write("GPU FIELD INITIALIZING");
-    else
-        write("MESH JOB CHUNK " + std::to_string(model.completedChunks()) + "/" + std::to_string(chunkCount(model.settings().grid)));
-    std::uint64_t vertices = 0, active = 0;
-    for (const auto& chunk : model.active()) {
-        vertices += chunk.stats.vertices;
-        active += chunk.stats.activeCells;
-    }
-    write("ACTIVE CELLS " + std::to_string(active));
-    write("VERTICES " + std::to_string(vertices));
-    write("TRIANGLES " + std::to_string(vertices / 3));
-    write("ALLOCATED " + number(budget.used / 1048576.0) + " MIB");
-    write("CAPACITY 4194304 VERTICES");
-    y += 12;
-    const auto& times = model.times();
-    write("GPU FIELD " + number(times.field) + " MS");
-    write("COUNT " + number(times.count) + " MS");
-    write("SCAN " + number(times.scan) + " MS");
-    write("EMIT " + number(times.emit) + " MS");
-    write("NORMALS " + number(times.normals) + " MS");
-    y += 12;
-    write("L DRAG ORBIT / R DRAG PAN");
-    write("WHEEL ZOOM / HOME CAMERA");
-    write("W WIREFRAME / N NORMALS");
-    write("LEFT RIGHT ISOVALUE");
-    write("C CANCEL / ENTER RESTART");
-    write("SPACE JOB PAUSE / Q QUIT");
-    write("STORED FIELD / NOT RAY SDF");
 }
 
 int run(const Options& options) {
@@ -118,115 +99,264 @@ int run(const Options& options) {
     preflightSculpt(gl, settings);
     SDL_GL_SetSwapInterval(0);
     GpuBudget budget;
-    GpuMeshBuilder model(gl, budget, settings, options.plane);
+    auto current = std::make_unique<GpuMeshBuilder>(gl, budget, settings, options.plane);
     MeshRenderer renderer(gl);
     OverlayRenderer ui(gl);
     Camera camera;
-    bool running = true, dragging = false, panning = false, wireframe = false, normals = false;
-    float previousX = 0, previousY = 0, requestedIso = 0;
-    bool verified = false, captured = false;
+    if (options.verifyEdits) {
+        verifyGpuEditing(*current, budget, gl);
+        return 0;
+    }
+    if (options.verifyFiles) {
+        verifyGpuFiles(*current, gl, budget);
+        return 0;
+    }
+    if (options.verifyScene) {
+        verifyGpuSceneChanges(*current, gl, budget);
+        return 0;
+    }
+    SculptControls controls(gl, budget);
+    GuideRenderer guides(gl);
+    NativeFileTasks files(gl, budget);
+    NativeSceneTasks scenes(gl, budget);
+    NativePanel panel;
+    SliceInspector slice;
+    slice.enabled(options.showSlice);
+    SliceRenderer sliceRenderer(gl);
+    FrameTimer timer(gl);
+    std::uint64_t sceneEpoch = 1;
+    std::string actionNotice;
+    if (!options.load.empty()) {
+        if (!files.load(options.load))
+            throw std::runtime_error(files.status());
+        current->cancel();
+    }
+    bool running = true, wireframe = false, normals = false, reportedFailure = false;
+    float requestedIso = 0;
+    bool verified = false, verifiedSlice = false, captured = false, initialLoadComplete = options.load.empty();
     const auto begin = std::chrono::steady_clock::now();
     auto nextFrame = begin;
-    std::cout << "P44 DRAFT GPU mesh pipeline; sculpt/history/IO tools are not integrated yet\nGPU=" << reinterpret_cast<const char*>(gl.GetString(GL_RENDERER)) << " GL=" << reinterpret_cast<const char*>(gl.GetString(GL_VERSION)) << '\n';
-    const auto releasePointer = [&]() {
-        dragging = false;
-        SDL_CaptureMouse(false);
-    };
+    std::cout << "P44 DRAFT native tool; course/checkpoints, Canvas and final acceptance remain pending\nGPU=" << reinterpret_cast<const char*>(gl.GetString(GL_RENDERER)) << " GL=" << reinterpret_cast<const char*>(gl.GetString(GL_VERSION)) << '\n';
     const auto draw = [&]() {
         int width{}, height{}, logicalWidth{}, logicalHeight{};
         SDL_GetWindowSizeInPixels(window.get(), &width, &height);
         SDL_GetWindowSize(window.get(), &logicalWidth, &logicalHeight);
-        if (width <= 0 || height <= 0 || logicalWidth <= 310 || logicalHeight <= 0)
+        if (width <= 0 || height <= 0 || logicalWidth <= panel.width() || logicalHeight <= 0)
             return;
+        timer.begin();
         gl.Viewport(0, 0, width, height);
         gl.ClearColor(0.045F, 0.065F, 0.09F, 1);
         gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        const int sceneWidth = static_cast<int>(static_cast<double>(width) * (logicalWidth - 310) / logicalWidth);
-        renderer.draw(model.active(), camera, 0, 0, sceneWidth, height, wireframe, normals);
+        const int sceneWidth = static_cast<int>(static_cast<double>(width) * (logicalWidth - panel.width()) / logicalWidth);
+        renderer.draw(current->active(), camera, 0, 0, sceneWidth, height, wireframe, normals);
+        guides.draw(camera, sceneWidth, height, controls.previewBrush(camera), current->settings().grid, slice.state());
+        sliceRenderer.draw(*current, slice, width, height, logicalWidth, logicalHeight);
         Overlay overlay;
         overlay.reset(logicalWidth, logicalHeight);
-        drawPanel(overlay, model, budget, logicalWidth, logicalHeight, requestedIso);
+        const PanelData data{*current, budget, controls, files, scenes, timer, sceneEpoch, requestedIso, actionNotice};
+        panel.draw(overlay, data, logicalWidth, logicalHeight);
+        slice.overlay(overlay, *current);
         ui.draw(overlay, width, height);
+        timer.end(sceneEpoch, current->activeGeneration());
     };
     while (running) {
+        if (auto loaded = files.takeLoaded()) {
+            panel.cancel();
+            controls.cancel(*current);
+            current = std::move(loaded);
+            initialLoadComplete = true;
+            requestedIso = current->settings().isovalue;
+            camera.centerOn(current->settings().grid.origin + Vec3{1, 1, 1} * (current->settings().grid.extent * 0.5F));
+            controls.cameraChanged();
+            slice.modelChanged();
+            ++sceneEpoch;
+        }
+        if (auto replacement = scenes.takeModel()) {
+            panel.cancel();
+            controls.cancel(*current);
+            slice.modelChanged();
+            current = std::move(replacement);
+            requestedIso = current->settings().isovalue;
+            if (scenes.resetsCamera()) {
+                camera = {};
+                camera.centerOn(current->settings().grid.origin + Vec3{1, 1, 1} * (current->settings().grid.extent * 0.5F));
+                if (current->settings().shape == Shape::separatedSpheres)
+                    camera.yaw = 1.57079632679F;
+            }
+            controls.cameraChanged();
+            ++sceneEpoch;
+        }
+        auto& model = *current;
         const auto now = std::chrono::steady_clock::now();
         const auto elapsed = std::chrono::duration<double>(now - begin).count();
         if ((options.seconds > 0 && elapsed >= options.seconds) || (options.hidden && elapsed > 90))
             break;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            int logicalWidth{}, logicalHeight{};
+            SDL_GetWindowSize(window.get(), &logicalWidth, &logicalHeight);
+            panel.layout(logicalWidth, logicalHeight);
+            slice.layout(model.settings().grid, logicalWidth - panel.width(), logicalHeight);
+            if (!options.hidden) {
+                const bool panelEvent = panel.event(event, controls.pointerCaptured() || slice.captured());
+                if (!panelEvent) {
+                    const bool sliceEvent = slice.event(event, controls.pointerCaptured());
+                    if (!sliceEvent)
+                        controls.event(event, model, camera, logicalWidth - panel.width(), logicalHeight);
+                }
+            }
             if (event.type == SDL_EVENT_QUIT)
                 running = false;
-            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
-                releasePointer();
-                if (!options.hidden)
-                    model.pause(true);
-            }
-            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-                int width{}, height{};
-                SDL_GetWindowSize(window.get(), &width, &height);
-                if (event.button.x < width - 310) {
-                    dragging = true;
-                    panning = event.button.button != SDL_BUTTON_LEFT;
-                    previousX = event.button.x;
-                    previousY = event.button.y;
-                    SDL_CaptureMouse(true);
-                }
-            }
-            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP)
-                releasePointer();
-            if (event.type == SDL_EVENT_MOUSE_MOTION && dragging) {
-                if (event.motion.state == 0)
-                    releasePointer();
-                else {
-                    const float dx = event.motion.x - previousX, dy = event.motion.y - previousY;
-                    previousX = event.motion.x;
-                    previousY = event.motion.y;
-                    if (panning)
-                        camera.pan(dx, dy);
-                    else
-                        camera.orbit(dx, dy);
-                }
-            }
-            if (event.type == SDL_EVENT_MOUSE_WHEEL)
-                camera.zoom(event.wheel.y);
             if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                 const auto key = event.key.key;
-                if (key == SDLK_ESCAPE || key == SDLK_Q)
+                if (key == SDLK_Q)
                     running = false;
                 if (key == SDLK_W)
                     wireframe = !wireframe;
                 if (key == SDLK_N)
                     normals = !normals;
-                if (key == SDLK_HOME)
+                if (key == SDLK_HOME) {
+                    panel.cancel();
+                    controls.cancel(model);
+                    slice.cancel();
                     camera = {};
-                if (key == SDLK_SPACE)
-                    model.pause(!model.paused());
-                if (key == SDLK_C)
+                    camera.centerOn(model.settings().grid.origin + Vec3{1, 1, 1} * (model.settings().grid.extent * 0.5F));
+                    controls.cameraChanged();
+                }
+                if (key == SDLK_SPACE) {
+                    panel.cancel();
+                    controls.cancel(model);
+                    if (scenes.busy())
+                        scenes.pause(!scenes.paused());
+                    else
+                        model.pause(!model.paused());
+                }
+                if (key == SDLK_C) {
+                    panel.cancel();
+                    controls.cancel(model);
+                    slice.cancel();
+                    if (scenes.busy())
+                        scenes.cancel();
+                    else if (files.busy())
+                        files.cancel();
+                    else
+                        model.cancel();
+                }
+                if ((key == SDLK_S || key == SDLK_E || key == SDLK_O) && scenes.busy()) {
+                    actionNotice = "WAIT OR CANCEL GRID CHANGE FIRST";
+                    continue;
+                }
+                if (key == SDLK_S)
+                    files.save(model);
+                if (key == SDLK_E)
+                    files.exportMesh(model);
+                if (key == SDLK_O && files.load(files.lastSaved())) {
+                    panel.cancel();
+                    controls.cancel(model);
+                    slice.cancel();
                     model.cancel();
+                }
+                if (key == SDLK_R || key == SDLK_1 || key == SDLK_2 || key == SDLK_3 || key == SDLK_F5 || key == SDLK_F6 || key == SDLK_F7 || key == SDLK_F8) {
+                    if (files.busy()) {
+                        actionNotice = "FINISH OR CANCEL THE FILE JOB FIRST";
+                        continue;
+                    }
+                    bool accepted = false;
+                    if (key == SDLK_R || key == SDLK_1 || key == SDLK_2 || key == SDLK_3) {
+                        Shape shape = model.settings().shape;
+                        if (key == SDLK_1)
+                            shape = Shape::sphere;
+                        if (key == SDLK_2)
+                            shape = Shape::separatedSpheres;
+                        if (key == SDLK_3)
+                            shape = Shape::torus;
+                        accepted = scenes.reset(model, shape);
+                        if (accepted)
+                            requestedIso = 0;
+                    } else {
+                        int samples = 32;
+                        if (key == SDLK_F6)
+                            samples = 64;
+                        if (key == SDLK_F7)
+                            samples = 128;
+                        if (key == SDLK_F8)
+                            samples = 192;
+                        accepted = scenes.resolution(model, samples, requestedIso);
+                    }
+                    if (accepted) {
+                        panel.cancel();
+                        controls.cancel(model);
+                        slice.modelChanged();
+                        actionNotice.clear();
+                    }
+                }
                 if (key == SDLK_LEFT || key == SDLK_RIGHT) {
+                    if (scenes.busy()) {
+                        actionNotice = "WAIT OR CANCEL GRID CHANGE FIRST";
+                        continue;
+                    }
+                    controls.cancel(model);
                     float change = 0.025F;
                     if (key == SDLK_LEFT)
                         change = -change;
                     requestedIso = std::clamp(requestedIso + change, -0.25F, 0.25F);
                     model.requestIsovalue(requestedIso);
                 }
-                if (key == SDLK_RETURN)
+                if (key == SDLK_RETURN) {
+                    if (scenes.busy()) {
+                        actionNotice = "GRID CHANGE ALREADY RUNNING";
+                        continue;
+                    }
+                    controls.cancel(model);
                     model.requestIsovalue(requestedIso);
+                }
             }
         }
         if (!running)
             break;
         model.tick();
+        scenes.tick(model);
+        if (scenes.takeRetained())
+            model.resumeLastGood();
+        files.tick();
+        if (files.takeRetainedLoad()) {
+            if (!initialLoadComplete && options.hidden)
+                throw std::runtime_error(files.status());
+            model.resumeLastGood();
+        }
+        if (model.state() == MeshJobState::failed && !reportedFailure) {
+            controls.cancel(model);
+            reportedFailure = true;
+        } else if (model.state() != MeshJobState::failed)
+            reportedFailure = false;
+        if (model.state() == MeshJobState::failed && (options.verify || options.verifySlice || !options.capture.empty()))
+            throw std::runtime_error(model.error());
+        int logicalWidth{}, logicalHeight{};
+        SDL_GetWindowSize(window.get(), &logicalWidth, &logicalHeight);
+        panel.layout(logicalWidth, logicalHeight);
+        slice.layout(model.settings().grid, logicalWidth - panel.width(), logicalHeight);
+        slice.update(model);
+        controls.suspendHover(slice.pointerInside() || slice.captured() || panel.pointerInside() || panel.captured());
+        controls.tick(model, camera, logicalWidth - panel.width(), logicalHeight);
         if (now >= nextFrame) {
             draw();
             SDL_GL_SwapWindow(window.get());
             nextFrame = now + std::chrono::milliseconds(16);
         }
-        if (model.ready() && (options.verify || !options.capture.empty())) {
+        if (initialLoadComplete && model.ready() && (options.verify || options.verifySlice || !options.capture.empty())) {
             if (options.verify) {
                 verifyGpuShape(model, options.plane);
+                if (!options.plane && model.settings().grid.samples <= 64)
+                    verifyGpuLayout(model);
                 verified = true;
+            }
+            if (options.verifySlice) {
+                verifySliceProbes(model, options.plane);
+                int width{}, height{};
+                SDL_GetWindowSizeInPixels(window.get(), &width, &height);
+                SDL_GetWindowSize(window.get(), &logicalWidth, &logicalHeight);
+                verifySlicePixels(model, slice, sliceRenderer, gl, width, height, logicalWidth, logicalHeight);
+                verifiedSlice = true;
             }
             if (!options.capture.empty()) {
                 draw();
@@ -239,8 +369,10 @@ int run(const Options& options) {
         }
         SDL_Delay(1);
     }
-    releasePointer();
-    if ((options.verify && !verified) || (!options.capture.empty() && !captured))
+    controls.cancel(*current);
+    panel.cancel();
+    slice.cancel();
+    if ((options.verify && !verified) || (options.verifySlice && !verifiedSlice) || (!options.capture.empty() && !captured) || (options.hidden && !initialLoadComplete))
         throw std::runtime_error("Finite run stopped before the requested verification/capture completed");
     return 0;
 }

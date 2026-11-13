@@ -1,8 +1,10 @@
 #version 430 core
 layout(local_size_x = 256) in;
 layout(std430, binding = 0) buffer ScalarField { float field[]; };
+layout(std430, binding = 1) readonly buffer SourceField { float sourceField[]; };
 struct Stamp { vec4 centerRadius; vec4 strengthMode; };
 layout(std430, binding = 6) readonly buffer Stamps { Stamp stamps[]; };
+layout(std430, binding = 7) buffer EditSummary { uvec4 editSummary; };
 uniform int gridN;
 uniform vec3 gridOrigin;
 uniform float gridSpacing;
@@ -13,6 +15,24 @@ uniform uint sampleBatch;
 uniform vec3 regionLow;
 uniform vec3 regionSize;
 uniform int stampCount;
+uniform int sourceN;
+uniform vec3 sourceOrigin;
+uniform float sourceSpacing;
+
+float sourceAt(ivec3 c) {
+    return sourceField[(c.z * sourceN + c.y) * sourceN + c.x];
+}
+
+float resampledValue(vec3 point) {
+    vec3 coordinate = clamp((point-sourceOrigin)/sourceSpacing,vec3(0),vec3(sourceN-1));
+    ivec3 c = min(ivec3(floor(coordinate)),ivec3(sourceN-2));
+    vec3 t = coordinate-vec3(c);
+    float y0 = mix(sourceAt(c),sourceAt(c+ivec3(1,0,0)),t.x);
+    float y1 = mix(sourceAt(c+ivec3(0,1,0)),sourceAt(c+ivec3(1,1,0)),t.x);
+    float z0 = mix(sourceAt(c+ivec3(0,0,1)),sourceAt(c+ivec3(1,0,1)),t.x);
+    float z1 = mix(sourceAt(c+ivec3(0,1,1)),sourceAt(c+ivec3(1,1,1)),t.x);
+    return mix(mix(y0,y1,t.y),mix(z0,z1,t.y),t.z);
+}
 
 float initialValue(vec3 p) {
     if (shape == 0)
@@ -30,23 +50,30 @@ void main() {
     if (lane >= sampleBatch)
         return;
     uint n = uint(gridN);
-    if (operation == 0) {
+    if (operation == 0 || operation == 2) {
         uint id = firstSample + lane;
         if (id >= n * n * n)
             return;
         uvec3 coordinate = uvec3(id % n, (id / n) % n, id / (n * n));
-        field[id] = initialValue(gridOrigin + vec3(coordinate) * gridSpacing);
+        vec3 point = gridOrigin + vec3(coordinate) * gridSpacing;
+        if (operation == 2)
+            field[id] = resampledValue(point);
+        else
+            field[id] = initialValue(point);
         return;
     }
     uvec3 extent = uvec3(regionSize);
-    if (lane >= extent.x * extent.y * extent.z)
+    uint voxel = firstSample + lane;
+    if (voxel >= extent.x * extent.y * extent.z)
         return;
-    ivec3 coordinate = ivec3(regionLow) + ivec3(lane % extent.x, (lane / extent.x) % extent.y, lane / (extent.x * extent.y));
+    ivec3 coordinate = ivec3(regionLow) + ivec3(voxel % extent.x, (voxel / extent.x) % extent.y, voxel / (extent.x * extent.y));
     if (any(lessThanEqual(coordinate, ivec3(0))) || any(greaterThanEqual(coordinate, ivec3(gridN - 1))))
         return;
     uint id = uint((coordinate.z * gridN + coordinate.y) * gridN + coordinate.x);
     vec3 point = gridOrigin + vec3(coordinate) * gridSpacing;
-    float value = field[id];
+    atomicAdd(editSummary.z, 1u);
+    float before = field[id];
+    float value = before;
     for (int stamp = 0; stamp < 8; ++stamp) {
         if (stamp >= stampCount)
             break;
@@ -59,5 +86,13 @@ void main() {
             delta = -delta;
         value = clamp(value + delta, -4.0, 4.0);
     }
-    field[id] = value;
+    if (isnan(value) || isinf(value)) {
+        atomicAdd(editSummary.y, 1u);
+        return;
+    }
+    // Merely visiting a bounding box is not an edit: preserve bits/history for no-op stamps.
+    if (value != before) {
+        field[id] = value;
+        atomicAdd(editSummary.x, 1u);
+    }
 }
