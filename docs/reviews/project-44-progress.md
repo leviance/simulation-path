@@ -17,6 +17,9 @@ Ghi chú đặc tả: ví dụ ở Mục 3.6 còn nhắc Project 44 bằng số 
 - Reset/preset/resolution dùng model candidate; GPU resampling giữ field đã sửa/domain và chỉ handoff khi mesh xong. Pause không tiêu ngân sách active work, nhưng fence GPU vẫn có wall deadline; yêu cầu mới thay yêu cầu cũ, failure/cancel giữ model đang mở.
 - File field little-endian, header 64 bytes, metadata được validate, checksum gồm metadata và payload. Load dùng một model riêng, upload theo batch; chỉ handoff sau checksum/EOF và meshing hoàn chỉnh.
 - Save đóng băng field GPU; export giữ các buffer mesh immutable. File được ghi, flush, đọc lại rồi mới đổi tên thành kết quả hoàn chỉnh. OBJ dùng các triangle `position//normal` đã trải phẳng; parser nghiêm ngặt cho đúng format này, không phải importer OBJ tổng quát.
+- Starter và checkpoint 01–07 đã tách hành vi: một tetra → ghép cell → gradient normal → stamp CPU → stroke/history CPU → field GPU qua lát cắt → count/scan và prefix inspector. Bước 06 không count/scan/emit; 07 chưa cấp mesh output. 08–12 vẫn chưa có giáo trình riêng.
+- Phần vẽ/probe lát cắt được tách vào `sculpt_field_slice.hpp`, dùng chung cho viewer 06 và editor cuối. Resampling shader chỉ xuất hiện từ checkpoint 10; không buộc Bài 06 học đổi resolution trước khi biết init/edit.
+- `GpuChunkLayout` là pass count/scan chung cho editor cuối và viewer 07; `dispatchScan` dùng cho cả runtime và fixture mảng biết trước. Viewer 07 không cấp mesh output, chặn mutation khi có count ticket và giữ summary cũ có nhãn khi xử lý snapshot mới.
 
 ## Đã kiểm bằng lệnh
 
@@ -24,7 +27,7 @@ Máy: NVIDIA GeForce RTX 3050 Laptop GPU, OpenGL context 4.3, driver 546.30. C++
 
 | Phạm vi | Bằng chứng hiện có |
 | --- | --- |
-| Build native | Executable editor draft, tests, starter và checkpoint 01 đã build Debug/Release. Chưa phải ma trận đầy đủ mọi checkpoint của giáo trình. |
+| Build native | Editor draft, tests, starter và checkpoint 01–07 đã build Debug/Release. Chưa phải ma trận đầy đủ mọi checkpoint của giáo trình. |
 | CPU CTest Debug/Release | Row-major/bounds/overflow; 16 mask tetra, tie/winding; 48 mask mặt chung ở ba trục; mặt cầu kín 4.680 edges; plane/gradient; refinement; brush/stroke/history; parser field và OBJ. |
 | Refinement CPU | RMS bán kính sphere ở N=12/24/48: 0,00705054 → 0,00215023 → 0,00048578 world unit. |
 | GPU sphere 128³ | 22.778 active cells, 408.024 vertices, 136.008 triangles; RMS bán kính 0,0000703696, max 0,000249134 world unit; max scalar error 4,23268e-7; canary nguyên. |
@@ -44,7 +47,17 @@ Máy: NVIDIA GeForce RTX 3050 Laptop GPU, OpenGL context 4.3, driver 546.30. C++
 | Oracle connectivity | Không gọi lại extraction: kiểm số owner và hướng của edge, connected components, V−E+F. CTest phân biệt sphere/torus/hai sphere và phát hiện missing/reversed triangle. Fixture readback tối đa một triệu vertices, không nằm trong đường meshing runtime. |
 | Pause/camera/domain CPU | Fake clock mô phỏng 897 giây Pause, không sleep; deadline đúng 60 giây active. Pan model có origin dịch không nhảy về world origin; domain import phải nằm trong miền thao tác cọ. |
 | Tetra nhập môn | 16 mask × 3 isovalue, edge reference double và affine gradient độc lập; từ chối hai ca overflow hữu hạn. Starter chỉ vẽ input, checkpoint 01 tạo triangle. Smoke/capture hữu hạn Debug/Release xác nhận mặc định 0/1 triangle tương ứng. |
-| Bài đầu dạng draft | Năm code block C++ khớp token liên tiếp ở checkpoint 01; compile qua pipeline MDX thật với One Dark/KaTeX. Chưa kiểm route hoặc Canvas vì chưa đăng ký catalog. |
+| Normal CPU 02/03 | Positions/topology bit-exact khi đổi face→gradient. Sai số RMS hướng normal với sphere radial analytic: 0,0855207 → 0,00169478; checker field còn kiểm 384 lần fallback gradient 0. Không phải sai số vị trí hoặc góc tính theo độ. |
+| Picking/stamp CPU | Plane tolerance 2e-5 world unit, field nhân 3 không còn SDF, ray từ bên trong, pick sau khi nặn và giao mặt phẳng drag. Stamp riêng không tạo history; no-op giữ redo, đổi thật mới xóa history cũ. |
+| Presentation CPU 02–05 | Tám lượt Debug/Release ở N=24 đều có 13.176 vertices/4.392 triangles, field và mesh field cùng revision. Ảnh 02/03 thể hiện shading khác nhau với cùng geometry. Đây chỉ là initial presentation smoke, chưa phải kiểm mouse/keyboard của từng viewer. |
+| Field GPU checkpoint 06 | Debug/Release ở 128³: tám lượt scalar reference, năm quan hệ bit-exact history/no-op, 27 probe; sphere max 4,23268e-7, plane Release max 5,89759e-7. 8.388.608 field bytes, 64 guard bytes; không count/scan/emit hoặc CPU extraction. |
+| Field 06 mở rộng/CLI | Release 192³ chạy 7.077.888 samples/6.967.871 cells, max 4,87464e-7. Chỉ chứng minh field, không phải meshing 192³. Bảy input CLI sai bị từ chối exit 1 trước window; timeout trước khi verifier xong không được báo PASS. |
+| Bài 01–07 dạng draft | 49 code block C++ và chín GLSL khớp token liên tiếp ở đúng checkpoint. Bảy bài compile qua MDX thật, đủ bảy teaching roles, One Dark 10 màu và KaTeX accessible. Bài 07 giải thích padding, edge/tetra count, scan cây/ba pha, input gate và publication; chưa kiểm route/Canvas vì chưa đăng ký catalog. |
+| Scan GPU mảng biết trước | Bốn mảng 4.096 phần tử: zero, max 36, impulse tại ranh block và seeded mixed. So đủ 16.384 offsets/tổng bằng uint64 prefix tuần tự độc lập, emitted 0, guard nguyên. Cùng shader/dispatch với native mesher, không có thuật toán scan thứ hai. |
+| Count-only 07 ở 128³ | Debug/Release: bốn snapshot init/add/undo/redo, mỗi snapshot so 2.097.152 padded offsets và đúng 2.048.383 real cells. Counted vertices 408.024 → 410.472 → 408.024 → 410.472; emitted 0. Không CPU extraction/count toàn field 128³; oracle tetra CPU chạy ở 32³. |
+| Lifecycle 07 | Input gate Enter/Z/Y, Pause sau batch, cancel giữ summary, idle cancel no-op, retry mới generation, selection không recount/không đổi cell qua edit/history. Reset khi còn ticket đợi drain rồi thay field, xóa history và invalidation summary/timing/inspection; preset gốc 128³ trở lại 408.024 counted vertices, field/count revision 1, generation 8. Debug/Release qua; Release plane 32³ cũng qua CPU oracle/reset. |
+| Hồi quy slice/grid cuối | Sau khi tách renderer dùng chung: 45 numeric probe (max 3,94783e-8) và 12 sign-color pixels/DPR qua; resample 128→64→128, reset, cancel, pause, allocation refusal/last-good đều qua lại. Không suy ra các controls desktop đã được kiểm thêm. |
+| Hồi quy pass count/scan chung | Sphere 128³ vẫn đủ 408.024 vertices/136.008 triangles; oracle 32³ so 29.791 cells, prefixes và 11.772 closed edges. Dirty edit 27/512 chunks vẫn byte-exact với full mesh; history/no-op, partial rollback, cancel/capacity/budget/storage refusal giữ last-good và canary. Đây là các kết quả editor cuối, tách với viewer count-only 07. |
 
 Các phép kiểm GPU 128³, edit và file chạy bằng Release; topology/scan 32³ đã chạy cả Debug và Release, sản phẩm khoét/ghép chạy thêm Debug 32³. Không đồng nhất CTest Debug với toàn bộ GPU fixtures ở Debug. Có query rendering riêng, không chặn và gắn scene epoch/mesh generation; đã quan sát giá trị trong Stats của native app. Chưa có benchmark warm-up/median/dispersion, không dùng một snapshot timing để kết luận hiệu năng.
 
@@ -62,11 +75,19 @@ Log input có lượt không nhận đủ keydown của phím dấu; chưa kết
 
 Các lượt UI có app deadline 120 giây và supervisor 130 giây; khi hết hạn, tiến trình đã được xác nhận exit 0. Có một lượt helper báo người dùng đang thao tác; đã quan sát lại trạng thái, không tiếp tục gửi phím từ ảnh cũ. Không tự bật dev server hoặc commit phần xây tiếp.
 
+Viewer 06 mới chỉ được mở ẩn để chạy verifier và capture; chưa thao tác desktop trực tiếp. Ảnh đã xem cho thấy lát cắt/contour, circle cọ, counters và hướng dẫn bàn phím không đè nhau ở 1280×820. Lượt smoke đầu bắt lỗi chưa gọi `gl.loadAll()`; đã sửa đúng thứ tự context → load → preflight → allocation và chạy lại Debug/Release. Không lấy các fixture GPU thay bằng chứng pointer capture/blur của viewer này.
+
+Viewer 07: F8 đổi cell từ count 18/offset 0/end 18 sang count 24/offset 18/end 42 mà field revision/count generation vẫn 1. Một left drag tạo bulge trên lát cắt; lúc count đang chạy, summary còn count revision 1 và inspector chờ snapshot mới. Hoàn tất có 417.696 counted vertices ở revision 2. Z khôi phục sphere và 408.024 vertices ở revision 3. Đây là stroke UI khác stamp tự động của verifier, không gán 410.472 của fixture cho thao tác chuột này.
+
+Cửa sổ 07 tự thoát theo app deadline 120 giây, supervisor xác nhận exit 0 và inventory không còn cửa sổ. Lần gửi Y sau đó nhận `foreground window did not report a process id`; đã dừng input, không dùng lại screenshot/handle cũ và reset session. Redo desktop và các controls/focus/resize còn phải kiểm tiếp. Đã sửa việc selection tự nhảy về cell đầu khi field đổi; fixture mới xác nhận selection được giữ, chưa kiểm lại riêng thay đổi đó bằng chuột.
+
+Verifier 07 Debug 128³ ban đầu tự dừng thất bại ở 20 giây. Sau khi batch tối đa bốn chunk CPU/tick, kiểm bằng pointer chỉ sau khi xác nhận đúng kích thước và vẽ UI verifier 10 Hz, cả Debug/Release qua trong cùng giới hạn. Giữ đủ bốn snapshot/all prefix checks, không tăng timeout hoặc giảm N. Timings phaseWallMs/readbackAndCpuCheckMs là host time của fixture, không phải GPU kernel benchmark.
+
 ## Còn phải làm trước khi thay học phần cũ
 
 1. Hoàn thiện ma trận native UI còn thiếu ở trên và benchmark Release có warm-up/lặp/median/độ phân tán; kiểm các trạng thái lỗi/query recovery không làm nhãn stale. Rà thêm vị trí floor/guide khi load domain có origin/extent khác mặc định: camera đã center/pan theo model nhưng floor hiện vẫn đặt quanh world origin.
-2. Viết tiếp checkpoint 02 trở đi: ghép cell, normal, brush CPU, stroke/history rồi GPU theo nhịp kế hoạch. Hiện chỉ starter và checkpoint 01 có hành vi nhập môn riêng; 02–12 còn là compile fixture, không phải các mốc giảng dạy đã hoàn thành.
-3. Biên tập các lesson còn lại; thử thách và bài đầu đang ở `course-draft/`, chưa đăng ký. Phân biệt scaffold với phần tự viết, giữ snippet markers/contract và wiring từ code chạy được.
+2. Xây checkpoint 08: cấp mesh buffer từ tổng đã kiểm, emit đúng từng range, normals và draw mesh GPU; sau đó dirty chunks/generation và ghép editor. 08–12 hiện còn là compile fixture; không trình bày chúng như các mốc học đã hoàn thành.
+3. Biên tập các lesson còn lại; thử thách và bảy bài đầu đang ở `course-draft/`, chưa đăng ký. Hoàn tất kiểm trực tiếp các viewer CPU/GPU nhập môn, đặc biệt capture/focus/reset/queue. Phân biệt scaffold với phần tự viết, giữ snippet markers/contract và wiring từ code chạy được.
 4. Canvas 2D phục vụ câu hỏi học tập, controls/accessibility/DPR/reduced-motion; metadata, glossary, search/progress revision, roadmap/route thay thế cũ.
 5. ZIP độc lập, build/CTest từng checkpoint và final, kiểm gói/website, browser QA nếu localhost có sẵn. Không tự bật dev server.
 6. Audit từng yêu cầu trong spec với bằng chứng hiện tại rồi mới chuyển trạng thái nghiệm thu. Không tăng budget hoặc hạ spec để hợp thức hóa bản nháp.

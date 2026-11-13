@@ -27,6 +27,20 @@ int main(int argc, char** argv) {
 }
 
 // end-snippet:sculpt-cpu-entry
+#elif LAB_CHECKPOINT <= 7
+#include "sculpt_gpu_field_preview.hpp"
+
+// snippet:sculpt-gpu-field-entry
+int main(int argc, char** argv) {
+    try {
+        return sculpt::runGpuFieldPreview(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << "GPU field preview: " << error.what() << '\n';
+        return 1;
+    }
+}
+
+// end-snippet:sculpt-gpu-field-entry
 #else
 #include "sculpt_controls.hpp"
 #include "sculpt_file_tasks.hpp"

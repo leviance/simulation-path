@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sculpt_gpu_document.hpp"
+#include "sculpt_gpu_layout.hpp"
 #include "sculpt_mesh_chunk.hpp"
 #include <memory>
 #include <numeric>
@@ -19,13 +20,8 @@ enum class MeshJobState { initializing,
 class GpuMeshBuilder {
     public:
     GpuMeshBuilder(GlApi& gl, GpuBudget& budget, ModelSettings settings, bool validationPlane = false, FieldInitialization initialization = FieldInitialization::preset, std::optional<GpuFieldSeed> seed = {})
-        : gl_(gl), budget_(budget), settings_(settings), document_(gl, budget, settings, validationPlane, initialization, std::move(seed)), extractProgram_(gl, "sculpt_extract.comp"), scanProgram_(gl, "sculpt_scan.comp"), normalProgram_(gl, "sculpt_normals.comp"), ticket_(gl) {
-        preflightSculpt(gl, settings);
+        : gl_(gl), budget_(budget), settings_(settings), document_(gl, budget, settings, validationPlane, initialization, std::move(seed)), layout_(gl, budget, settings), normalProgram_(gl, "sculpt_normals.comp"), ticket_(gl) {
         const auto chunks = chunkCount(settings.grid);
-        counts_ = buffer(chunks * cellsPerChunk * sizeof(std::uint32_t));
-        offsets_ = buffer(chunks * cellsPerChunk * sizeof(std::uint32_t));
-        blocks_ = buffer(16 * sizeof(std::uint32_t));
-        stats_ = buffer(chunks * sizeof(ChunkStats));
         counted_.resize(chunks);
         candidate_.resize(chunks);
     }
@@ -259,23 +255,14 @@ class GpuMeshBuilder {
     std::array<std::vector<std::uint32_t>, 2> readChunkLayout(std::size_t chunk) const {
         if (!ready() || chunk >= active_.size())
             throw std::invalid_argument("Layout inspection requires a complete current mesh");
-        std::array<std::vector<std::uint32_t>, 2> result;
-        for (auto& data : result)
-            data.resize(cellsPerChunk);
-        const auto byteOffset = chunk * cellsPerChunk * sizeof(std::uint32_t);
-        counts_->read(byteOffset, std::as_writable_bytes(std::span(result[0])));
-        offsets_->read(byteOffset, std::as_writable_bytes(std::span(result[1])));
-        return result;
+        return layout_.readLayout(chunk);
     }
 
     bool guardsIntact() const {
         if (ticket_.busy() || document_.busy())
             throw std::logic_error("Guard readback must not block an in-flight batch");
-        if (!document_.guardsIntact())
+        if (!document_.guardsIntact() || !layout_.guardsIntact())
             return false;
-        for (const auto* source : {counts_.get(), offsets_.get(), blocks_.get(), stats_.get()})
-            if (!source->guardIntact(source->bytes() - guardBytes))
-                return false;
         for (const auto& chunk : active_)
             if (chunk.buffer && !chunk.buffer->guardIntact(chunk.stats.vertices * sizeof(SurfaceVertex)))
                 return false;
@@ -283,33 +270,8 @@ class GpuMeshBuilder {
     }
 
     private:
-    std::unique_ptr<GpuBuffer> buffer(std::size_t payload) {
-        auto result = std::make_unique<GpuBuffer>(gl_, budget_, payload + guardBytes);
-        result->setGuard(payload);
-        return result;
-    }
-
-    void gridUniforms(const Program& program) {
-        const auto& grid = settings_.grid;
-        gl_.Uniform1i(program.uniform("gridN"), grid.samples);
-        gl_.Uniform3f(program.uniform("gridOrigin"), grid.origin.x, grid.origin.y, grid.origin.z);
-        gl_.Uniform1f(program.uniform("gridSpacing"), grid.spacing());
-    }
-
-    void bindStorage() {
-        document_.field().bind(0);
-        counts_->bind(1);
-        offsets_->bind(2);
-        blocks_->bind(3);
-        stats_->bind(4);
-        // Count does not write Mesh, but still binds a valid dummy range for that active block.
-        blocks_->bind(5);
-    }
-
     ChunkStats readStats(std::size_t chunk) const {
-        ChunkStats result;
-        stats_->read(chunk * sizeof(result), std::as_writable_bytes(std::span(&result, 1)));
-        return result;
+        return layout_.readStats(chunk);
     }
 
     void restart(bool full) {
@@ -390,42 +352,13 @@ class GpuMeshBuilder {
     }
 
     void extractUniforms(int phase) {
-        extractProgram_.use();
-        gridUniforms(extractProgram_);
-        gl_.Uniform1i(extractProgram_.uniform("phase"), phase);
-        gl_.Uniform1f(extractProgram_.uniform("isovalue"), settings_.isovalue);
         const auto chunk = work_[cursor_];
-        gl_.Uniform1ui(extractProgram_.uniform("chunk"), chunk);
-        gl_.Uniform1ui(extractProgram_.uniform("generation"), jobGeneration_);
-        gl_.Uniform1ui(extractProgram_.uniform("vertexCapacity"), counted_[chunk].vertices);
+        layout_.extractUniforms(phase, settings_.isovalue, chunk, jobGeneration_, counted_[chunk].vertices);
     }
 
     void submitCount() {
-        bindStorage();
-        ChunkStats zero;
-        zero.generation = jobGeneration_;
         const auto chunk = work_[cursor_];
-        stats_->write(chunk * sizeof(zero), std::as_bytes(std::span(&zero, 1)));
-        extractUniforms(0);
-        ticket_.begin(0);
-        gl_.DispatchCompute(16, 1, 1);
-        gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-        ticket_.end();
-        ticket_.begin(1);
-        scanProgram_.use();
-        gl_.Uniform1ui(scanProgram_.uniform("chunk"), chunk);
-        for (int phase = 0; phase < 3; ++phase) {
-            gl_.Uniform1i(scanProgram_.uniform("phase"), phase);
-            GLuint groups = 1;
-            if (phase == 0)
-                groups = 8;
-            if (phase == 2)
-                groups = 16;
-            gl_.DispatchCompute(groups, 1, 1);
-            gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
-        }
-        ticket_.end();
-        ticket_.submit();
+        layout_.submitCount(ticket_, document_.field(), settings_.isovalue, chunk, jobGeneration_);
     }
 
     void submitEmit() {
@@ -439,7 +372,7 @@ class GpuMeshBuilder {
             publish();
             return;
         }
-        bindStorage();
+        layout_.bindStorage(document_.field());
         const auto chunk = work_[cursor_];
         const auto count = counted_[chunk].vertices;
         auto output = std::make_shared<GpuBuffer>(gl_, budget_, count * sizeof(SurfaceVertex) + guardBytes);
@@ -452,7 +385,7 @@ class GpuMeshBuilder {
         gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         ticket_.end();
         normalProgram_.use();
-        gridUniforms(normalProgram_);
+        layout_.gridUniforms(normalProgram_);
         gl_.Uniform1ui(normalProgram_.uniform("chunk"), chunk);
         gl_.Uniform1ui(normalProgram_.uniform("vertexCount"), count);
         ticket_.begin(1);
@@ -466,9 +399,9 @@ class GpuMeshBuilder {
     GpuBudget& budget_;
     ModelSettings settings_;
     GpuFieldDocument document_;
-    Program extractProgram_, scanProgram_, normalProgram_;
+    GpuChunkLayout layout_;
+    Program normalProgram_;
     GpuTicket ticket_;
-    std::unique_ptr<GpuBuffer> counts_, offsets_, blocks_, stats_;
     std::vector<ChunkStats> counted_;
     std::vector<MeshChunk> candidate_, active_;
     std::vector<std::uint32_t> work_;

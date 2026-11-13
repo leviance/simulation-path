@@ -3,6 +3,7 @@
 #include "sculpt_brush.hpp"
 #include "sculpt_gpu_buffer.hpp"
 #include "sculpt_gpu_ticket.hpp"
+#include <cstddef>
 #include <deque>
 #include <optional>
 
@@ -19,12 +20,16 @@ enum class FieldInitialization { preset,
                                  archive,
                                  resample };
 
+// snippet:sculpt-gpu-stamp-layout
 struct GpuStamp {
     std::array<float, 4> centerRadius{};
     std::array<float, 4> strengthMode{};
 };
 
 static_assert(sizeof(GpuStamp) == 32);
+static_assert(offsetof(GpuStamp, strengthMode) == 16);
+
+// end-snippet:sculpt-gpu-stamp-layout
 
 inline SampleBox brushBounds(const GridSpec& grid, const Brush& brush) {
     brush.validate();
@@ -45,11 +50,16 @@ inline SampleBox brushBounds(const GridSpec& grid, const Brush& brush) {
 }
 
 // Owns the real GPU field. History is device-to-device, never a full-field CPU edit.
+#if LAB_CHECKPOINT >= 6
 class GpuFieldDocument {
     public:
     GpuFieldDocument(GlApi& gl, GpuBudget& budget, ModelSettings settings, bool plane = false, FieldInitialization initialization = FieldInitialization::preset, std::optional<GpuFieldSeed> seed = {})
         : gl_(gl), budget_(budget), settings_(settings), program_(gl, "sculpt_field.comp"), ticket_(gl), seed_(std::move(seed)), plane_(plane) {
         settings_.validate();
+#if LAB_CHECKPOINT < 10
+        if (initialization == FieldInitialization::resample)
+            throw std::invalid_argument("GPU resolution resampling starts at checkpoint 10");
+#endif
         if (initialization == FieldInitialization::resample) {
             if (plane_ || !seed_ || !seed_->buffer)
                 throw std::invalid_argument("GPU resampling requires one immutable field snapshot");
@@ -60,9 +70,11 @@ class GpuFieldDocument {
                 throw std::invalid_argument("Resolution resampling must preserve the world domain and exact source allocation");
         } else if (seed_)
             throw std::invalid_argument("A field seed is only valid for the resampling path");
+        // snippet:sculpt-gpu-field-allocation
         field_ = allocate(settings_.grid.sampleCount() * sizeof(float));
         stamps_ = allocate(8 * sizeof(GpuStamp));
         editSummary_ = allocate(4 * sizeof(std::uint32_t));
+        // end-snippet:sculpt-gpu-field-allocation
         if (initialization == FieldInitialization::archive) {
             if (plane_)
                 throw std::invalid_argument("An archive cannot also initialize an analytic plane fixture");
@@ -302,6 +314,7 @@ class GpuFieldDocument {
         field_->bind(0);
         stamps_->bind(6);
         editSummary_->bind(7);
+#if LAB_CHECKPOINT >= 10
         field_->bind(1);
         if (seed_)
             seed_->buffer->bind(1);
@@ -311,13 +324,17 @@ class GpuFieldDocument {
         gl_.Uniform1i(program_.uniform("sourceN"), source.samples);
         gl_.Uniform3f(program_.uniform("sourceOrigin"), source.origin.x, source.origin.y, source.origin.z);
         gl_.Uniform1f(program_.uniform("sourceSpacing"), source.spacing());
+#endif
     }
 
+    // snippet:sculpt-gpu-field-initialize
     void submitInitialize() {
         uniforms();
         int operation = 0;
+#if LAB_CHECKPOINT >= 10
         if (seed_)
             operation = 2;
+#endif
         gl_.Uniform1i(program_.uniform("operation"), operation);
         int shape = static_cast<int>(settings_.shape);
         if (plane_)
@@ -328,6 +345,9 @@ class GpuFieldDocument {
         dispatch(Batch::initialize);
     }
 
+    // end-snippet:sculpt-gpu-field-initialize
+
+    // snippet:sculpt-gpu-field-dispatch
     void dispatch(Batch kind) {
         gl_.Uniform1ui(program_.uniform("sampleBatch"), static_cast<GLuint>(submittedSamples_));
         kind_ = kind;
@@ -337,6 +357,8 @@ class GpuFieldDocument {
         ticket_.end();
         ticket_.submit();
     }
+
+    // end-snippet:sculpt-gpu-field-dispatch
 
     void copy(const GpuBuffer& source, const GpuBuffer& destination, Batch kind) {
         kind_ = kind;
@@ -448,6 +470,7 @@ class GpuFieldDocument {
         editCursor_ = 0;
     }
 
+    // snippet:sculpt-gpu-brush-dispatch
     void submitBrush() {
         uniforms();
         const std::array<std::uint32_t, 4> zero{};
@@ -462,6 +485,8 @@ class GpuFieldDocument {
         submittedSamples_ = std::min<std::size_t>(65536, editSamples_ - editCursor_);
         dispatch(Batch::brush);
     }
+
+    // end-snippet:sculpt-gpu-brush-dispatch
 
     GlApi& gl_;
     GpuBudget& budget_;
@@ -485,5 +510,8 @@ class GpuFieldDocument {
     SampleBox dirty_, editBounds_;
     bool beforeReady_{}, strokeChanged_{}, aborting_{}, plane_{};
 };
+#else
+class GpuFieldDocument;
+#endif
 
 } // namespace sculpt

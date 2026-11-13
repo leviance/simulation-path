@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sculpt_field_slice.hpp"
 #include "sculpt_gpu_mesh.hpp"
 #include "sculpt_overlay.hpp"
 #include "sculpt_slice.hpp"
@@ -19,20 +20,8 @@ inline FieldProbe probeSliceField(const GpuMeshBuilder& model, const SliceState&
         throw std::logic_error("Numeric probe readback requires a stable current field/mesh pair");
     const auto& grid = model.settings().grid;
     const auto coordinate = sliceGridCoordinate(grid, slice);
-    const int x = std::min(static_cast<int>(std::floor(coordinate.x)), grid.samples - 2);
-    const int y = std::min(static_cast<int>(std::floor(coordinate.y)), grid.samples - 2);
-    const int z = std::min(static_cast<int>(std::floor(coordinate.z)), grid.samples - 2);
-    const Vec3 t = coordinate - Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
-    std::array<float, 4> rows{};
     // Exactly eight scalars (32 bytes), not a full volume readback or CPU extraction.
-    for (int dz = 0; dz < 2; ++dz)
-        for (int dy = 0; dy < 2; ++dy) {
-            const auto values = model.readField(grid.sampleIndex(x, y + dy, z + dz), 2);
-            rows[dz * 2 + dy] = interpolate(values[0], values[1], t.x);
-        }
-    const float value = interpolate(interpolate(rows[0], rows[1], t.y), interpolate(rows[2], rows[3], t.y), t.z);
-    if (!std::isfinite(value))
-        throw std::runtime_error("Numeric field probe is not finite");
+    const float value = readSliceValue(model.document().field(), grid, slice);
     return {coordinate, grid.worldFromGrid(coordinate), value, model.document().revision(), model.activeGeneration()};
 }
 
@@ -257,39 +246,16 @@ class SliceInspector {
 class SliceRenderer {
     public:
     explicit SliceRenderer(GlApi& gl)
-        : gl_(gl), program_(gl, "sculpt_slice.vert", "sculpt_slice.frag") {
-        gl_.GenVertexArrays(1, &vao_);
-        if (!vao_)
-            throw std::runtime_error("Could not allocate slice VAO");
-    }
-
-    ~SliceRenderer() {
-        gl_.DeleteVertexArrays(1, &vao_);
-    }
+        : renderer_(gl) {}
 
     void draw(const GpuMeshBuilder& model, const SliceInspector& inspector, int width, int height, int logicalWidth, int logicalHeight) {
         if (!inspector.state().enabled || !model.document().hasCompleteField())
             return;
-        const auto& slice = inspector.state();
-        const auto& r = inspector.rectangle();
-        const float sx = static_cast<float>(width) / logicalWidth, sy = static_cast<float>(height) / logicalHeight;
-        gl_.Viewport(static_cast<int>(r.x * sx), static_cast<int>((logicalHeight - r.y - r.height) * sy), static_cast<int>(r.width * sx), static_cast<int>(r.height * sy));
-        gl_.Disable(GL_DEPTH_TEST);
-        program_.use();
-        gl_.Uniform1i(program_.uniform("gridN"), model.settings().grid.samples);
-        gl_.Uniform1i(program_.uniform("sliceAxis"), slice.axis);
-        gl_.Uniform1i(program_.uniform("sliceLayer"), slice.layer);
-        gl_.Uniform1f(program_.uniform("isovalue"), model.settings().isovalue);
-        gl_.Uniform2f(program_.uniform("probeUV"), slice.u, slice.v);
-        model.document().field().bind(0);
-        gl_.BindVertexArray(vao_);
-        gl_.DrawArrays(GL_TRIANGLES, 0, 6);
+        renderer_.draw(model.document().field(), model.settings().grid, model.settings().isovalue, inspector.state(), inspector.rectangle(), width, height, logicalWidth, logicalHeight);
     }
 
     private:
-    GlApi& gl_;
-    Program program_;
-    GLuint vao_{};
+    FieldSliceRenderer renderer_;
 };
 
 } // namespace sculpt

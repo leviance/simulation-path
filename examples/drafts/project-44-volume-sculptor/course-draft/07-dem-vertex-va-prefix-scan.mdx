@@ -1,0 +1,516 @@
+> Bản biên tập cho checkpoint 07, chưa phát hành hoặc ghép Canvas.
+
+Thời gian gợi ý: đọc 40 phút, tự viết 100 phút, kiểm scan và các trạng thái job 30 phút. Setup/build tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Ở Bài 06, cọ đã sửa stored field GPU 128³ và ta đã nhìn được dữ liệu qua lát cắt. Bây giờ cần biến field ấy thành mesh, nhưng chưa thể cấp một vertex buffer tùy ý rồi hy vọng nó đủ chỗ.
+
+Mỗi tetra có thể không tạo triangle nào, tạo một triangle hoặc hai triangle. Mỗi cell lại có sáu tetra. Nếu cấp theo trường hợp xấu nhất cho tất cả 512 chunk, riêng vertex records 32 bytes có thể cần tới 2,25 GiB, vượt xa budget 512 MiB của editor. Cấp thiếu rồi cắt bớt triangle cũng không phải một giải pháp hợp lệ.
+
+Ta sẽ đếm trước, rồi tính **vị trí bắt đầu phần output của từng cell**. Viewer vẫn dùng lát cắt của Bài 06, nhưng có thêm biểu đồ counts/offsets thật từ GPU. Chưa cấp mesh vertex buffer và chưa emit; bề mặt có ánh sáng sẽ trở lại ở Bài 08.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Count trả lời bao nhiêu, scan trả lời bắt đầu ở đâu
+
+Giả sử bốn cell tạo lần lượt 3, 0, 6 và 3 vertices. Ta muốn mỗi cell biết khoảng riêng của nó, không tranh nhau ghi vào cùng địa chỉ:
+
+| Cell | count | offset | Khoảng output của cell |
+| --- | --- | --- | --- |
+| 0 | 3 | 0 | [0; 3) |
+| 1 | 0 | 3 | [3; 3), rỗng |
+| 2 | 6 | 3 | [3; 9) |
+| 3 | 3 | 9 | [9; 12) |
+
+Đây là exclusive prefix scan: $o_i=\sum_{j=0}^{i-1}c_j$. Offset không cộng count của chính cell ấy. Với cell rỗng, hai offset liên tiếp bằng nhau là đúng; không có vertex nào được ghi vào khoảng rỗng.
+
+Tổng vertices là offset cuối + count cuối. Khi đã biết tổng và từng khoảng không chồng nhau, Bài 08 mới cấp đúng output rồi cho các cell ghi song song. Bài này chỉ kiểm các địa chỉ ấy.
+
+### Đừng nhầm samples, real cells và padded slots
+
+Mỗi chunk có 16³ = 4.096 slot cell. Grid 128³ samples chỉ có 127³ = 2.048.383 real cells, nhưng cần 8 chunk mỗi trục. Vì vậy storage cho count/offset có 512 × 4.096 = 2.097.152 slots. Những slot vượt hàng cell cuối phải có count bằng 0.
+
+Padded slots tình cờ bằng số samples trong preset này; chúng không phải cùng một tập dữ liệu. Field dùng chỉ số sample, còn counts/offsets dùng chỉ số cell theo chunk. Hai mảng uint 32-bit có tổng payload 16 MiB ở N=128, chưa gồm field, stats, guard hoặc UI.
+
+### Từ bốn số đến một chunk 4.096 số
+
+Ta dùng cây cộng dồn: cộng từ lá lên root, giữ tổng, đổi root thành 0 rồi truyền tổng đứng trước xuống hai nhánh. Với ví dụ nhỏ:
+
+```text
+3 0 6 3    input
+3 3 6 9    cộng từng cặp
+3 3 6 12   cộng lên root; tổng là 12
+3 3 6 0    đặt root thành 0
+3 0 6 3    truyền prefix xuống hai nửa
+0 3 3 9    truyền xuống từng phần tử
+```
+
+Trong shader, một workgroup có 256 invocations, mỗi invocation nạp hai phần tử để xử lý 512 số trong shared memory. Một chunk cần tám đoạn như vậy. Ta scan từng đoạn, scan tám tổng đoạn, rồi cộng prefix của đoạn vào các offset cục bộ. Đây là cách tổ chức của chính implementation này; xem thêm thuật toán cây trong [GPU Gems 3 — Parallel Prefix Sum](https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-39-parallel-prefix-sum-scan-cuda). Ta không dùng CUDA hoặc thư viện scan làm thay.
+
+## Bắt tay xây dựng
+
+### 1. Chuẩn bị storage, chưa chuẩn bị vertex buffer
+
+Từ Bài 06, dùng scaffold checkpoint 07. Tiêu đề code dưới đây là đường dẫn tương đối bên trong `checkpoints/07/`; shader của bài nằm trong `checkpoints/07/shaders/`, không phải shader của final hoặc checkpoint khác.
+
+`GpuChunkLayout` giữ các buffer và chương trình count/scan. `GpuCountLessonJob` quản lý lần đếm hiện tại; phần font, lát cắt, selection và SDL routing được cấp sẵn. Editor cuối dùng cùng `GpuChunkLayout`, không có một phiên bản thuật toán khác để bài học trông đúng.
+
+```cpp title="include/sculpt_gpu_layout.hpp — constructor và bốn storage buffer"
+GpuChunkLayout(GlApi& gl, GpuBudget& budget, const ModelSettings& settings)
+    : gl_(gl), budget_(budget), grid_(settings.grid), extract_(gl, "sculpt_extract.comp"), scan_(gl, "sculpt_scan.comp") {
+    preflightSculpt(gl, settings);
+    const auto chunks = chunkCount(grid_);
+    counts_ = allocate(chunks * cellsPerChunk * sizeof(std::uint32_t));
+    offsets_ = allocate(chunks * cellsPerChunk * sizeof(std::uint32_t));
+    blocks_ = allocate(16 * sizeof(std::uint32_t));
+    stats_ = allocate(chunks * sizeof(ChunkStats));
+}
+```
+
+`allocate()` đã học ở Bài 06 thêm guard và kiểm byte budget. counts/offsets có một uint cho mỗi slot; blocks có tám tổng và tám prefix của các đoạn; mỗi `ChunkStats` dài 32 bytes. Không có allocation cho positions/normals ở đây.
+
+### 2. Giữ nguyên quy tắc edge và tetra khi chuyển sang GLSL
+
+Nhánh count vẫn phải biết triangle có hợp lệ hay suy biến. Vì thế nó dùng cùng nội suy và topology sẽ dùng khi emit, không chỉ nhân một lookup mask với 3.
+
+`loadCorner()` cấp sẵn đọc scalar từ SSBO và gắn sample ID/world point. Cặp edge luôn sắp theo ID trước khi nội suy:
+
+```glsl title="shaders/sculpt_extract.comp — edge có cùng thứ tự endpoint ở mọi owner"
+vec3 edgePoint(Corner a, Corner b) {
+    if (b.id < a.id) {
+        Corner temporary = a;
+        a = b;
+        b = temporary;
+    }
+    precise float t = clamp((isovalue - a.value) / (b.value - a.value), 0.0, 1.0);
+    precise vec3 point = a.point + (b.point - a.point) * t;
+    return point;
+}
+```
+
+`precise` giữ các phép tính liên quan khỏi bị compiler sắp xếp lại theo cách được phép với biểu thức thông thường; nó không đổi float thành double hoặc hứa mọi GPU đều có cùng bit cho mọi phép toán. Việc sắp endpoint vẫn cần thiết để hai owner tính cùng một edge theo cùng chiều.
+
+Đây là bản GLSL của bốn trường hợp đã viết ở Bài 01. Giá trị đúng isovalue vẫn thuộc outside:
+
+```glsl title="shaders/sculpt_extract.comp — phân loại và chia tetra"
+void tetra(Corner v[4]) {
+    int inside[4], outside[4];
+    int ni = 0, no = 0;
+    vec3 inSum = vec3(0), outSum = vec3(0);
+    for (int index = 0; index < 4; ++index) {
+        if (isnan(v[index].value) || isinf(v[index].value)) {
+            atomicAdd(stats[chunk].geometry.w, 1u);
+            return;
+        }
+        if (v[index].value < isovalue) {
+            inside[ni++] = index;
+            inSum += v[index].point;
+        } else {
+            outside[no++] = index;
+            outSum += v[index].point;
+        }
+    }
+    if (ni == 0 || ni == 4)
+        return;
+    vec3 direction = outSum / float(no) - inSum / float(ni);
+    if (ni == 1)
+        triangle(edgePoint(v[inside[0]], v[outside[0]]), edgePoint(v[inside[0]], v[outside[1]]), edgePoint(v[inside[0]], v[outside[2]]), direction);
+    else if (ni == 3)
+        triangle(edgePoint(v[outside[0]], v[inside[0]]), edgePoint(v[outside[0]], v[inside[1]]), edgePoint(v[outside[0]], v[inside[2]]), direction);
+    else {
+        vec3 ac = edgePoint(v[inside[0]], v[outside[0]]);
+        vec3 ad = edgePoint(v[inside[0]], v[outside[1]]);
+        vec3 bc = edgePoint(v[inside[1]], v[outside[0]]);
+        vec3 bd = edgePoint(v[inside[1]], v[outside[1]]);
+        triangle(ac, ad, bd, direction);
+        triangle(ac, bd, bc, direction);
+    }
+}
+```
+
+Mỗi lời gọi triangle kiểm finite/diện tích trước. Ở checkpoint 07, nó chỉ tăng biến đếm của cell:
+
+```glsl title="shaders/sculpt_extract.comp — đếm ba vertices cho một triangle hợp lệ"
+void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
+    vec3 area = cross(b - a, c - a);
+    float h2 = gridSpacing * gridSpacing;
+    float minimumAreaSquared = max(1e-24, h2 * h2 * 1e-16);
+    if (bad(a) || bad(b) || bad(c) || bad(area)) {
+        atomicAdd(stats[chunk].geometry.w, 1u);
+        return;
+    }
+    if (dot(area, area) <= minimumAreaSquared) {
+        if (phase == 0)
+            atomicAdd(stats[chunk].geometry.z, 1u);
+        return;
+    }
+    if (dot(area, towardOutside) < 0.0) {
+        vec3 temporary = b;
+        b = c;
+        c = temporary;
+        area = -area;
+    }
+    cellVertices += 3u;
+}
+```
+
+`cellVertices` là số đếm cục bộ của invocation, chưa phải số vertices đã emit. Triangle suy biến tăng counter riêng rồi bỏ qua. Nếu dữ liệu không hợp lệ, tăng invalid; host phải từ chối kết quả đó, không coi một mesh thiếu mặt là thành công.
+
+### 3. Cho một invocation đếm một cell
+
+Giữ hai bảng corners/tetrahedra từ Bài 02 trong scaffold shader; sáu tetra vẫn cùng diagonal 0–6. Viết main của count:
+
+```glsl title="shaders/sculpt_extract.comp — đi từ chunk/local slot đến cell thật"
+void main() {
+    uint local = gl_GlobalInvocationID.x;
+    if (local >= 4096u)
+        return;
+    uint side = uint((gridN - 2) / 16 + 1);
+    uvec3 chunkCoordinate = uvec3(chunk % side, (chunk / side) % side, chunk / (side * side));
+    ivec3 coordinate = ivec3(chunkCoordinate * 16u + uvec3(local % 16u, (local / 16u) % 16u, local / 256u));
+    uint cell = chunk * 4096u + local;
+    if (any(greaterThanEqual(coordinate, ivec3(gridN - 1)))) {
+        if (phase == 0)
+            counts[cell] = 0u;
+        return;
+    }
+    if (stats[chunk].outputState.z != generation) {
+        atomicAdd(stats[chunk].outputState.w, 1u);
+        return;
+    }
+    Corner cube[8];
+    for (int index = 0; index < 8; ++index)
+        cube[index] = loadCorner(coordinate + corners[index]);
+    cellVertices = 0u;
+    for (int index = 0; index < 6; ++index) {
+        ivec4 ids = tetrahedra[index];
+        Corner v[4] = Corner[4](cube[ids.x], cube[ids.y], cube[ids.z], cube[ids.w]);
+        tetra(v);
+    }
+    if (phase == 0) {
+        counts[cell] = cellVertices;
+        if (cellVertices > 0u)
+            atomicAdd(stats[chunk].geometry.y, 1u);
+    } else if (cellVertices != counts[cell])
+        atomicAdd(stats[chunk].outputState.w, 1u);
+}
+```
+
+Đọc ba chỉ số riêng biệt: chunk là vị trí trong lưới chunk; local là slot 0–4.095 trong chunk; cell là địa chỉ phẳng của counts/offsets. Tọa độ sample để đọc tám corners lấy từ tọa độ cell thật, không lấy trực tiếp từ chỉ số phẳng cell này.
+
+Slot ngoài N−1 cells mỗi trục phải ghi count 0 rồi return. Với slot thật, gọi đủ sáu tetra, ghi count và tăng activeCells nếu count khác 0. Mỗi invocation sở hữu một slot counts nên không cần atomic cho mảng ấy; các counter dùng chung mới cần atomic.
+
+### 4. Viết exclusive scan trong shared memory
+
+Trong `sculpt_scan.comp`, giữ `#version 430 core` ở đầu, rồi khai báo storage:
+
+```glsl title="shaders/sculpt_scan.comp — shared array và các SSBO"
+layout(local_size_x = 256) in;
+layout(std430, binding = 1) readonly buffer Counts { uint counts[]; };
+layout(std430, binding = 2) buffer Offsets { uint offsets[]; };
+layout(std430, binding = 3) buffer BlockScan { uint blocks[]; };
+struct ChunkStat { uvec4 geometry; uvec4 outputState; };
+layout(std430, binding = 4) buffer Stats { ChunkStat stats[]; };
+uniform uint chunk;
+uniform int phase;
+shared uint values[512];
+```
+
+Toàn bộ main dưới đây xử lý cả ba pha. Đọc nhánh phase 0 trước: nạp hai nửa vào shared array, cộng lên root, lưu tổng, đặt root 0 rồi truyền prefix xuống.
+
+```glsl title="shaders/sculpt_scan.comp — scan các đoạn, scan tổng đoạn và ghép offset"
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint block = gl_WorkGroupID.x;
+    uint local = block * 512u + lane;
+    uint base = chunk * 4096u;
+    if (phase == 2) {
+        uint id = gl_GlobalInvocationID.x;
+        if (id < 4096u)
+            offsets[base + id] += blocks[8u + id / 512u];
+        return;
+    }
+    if (phase == 0) {
+        values[lane] = counts[base + local];
+        values[lane + 256u] = counts[base + local + 256u];
+    } else {
+        values[lane] = 0u;
+        values[lane + 256u] = 0u;
+        if (lane < 8u)
+            values[lane] = blocks[lane];
+    }
+    barrier();
+    // Blelloch upsweep, then make the reduction root exclusive before downsweep.
+    for (uint stride = 1u; stride < 512u; stride <<= 1u) {
+        uint index = (lane + 1u) * stride * 2u - 1u;
+        if (index < 512u)
+            values[index] += values[index - stride];
+        barrier();
+    }
+    if (lane == 0u) {
+        if (phase == 0)
+            blocks[block] = values[511];
+        else
+            stats[chunk].geometry.x = values[511];
+        values[511] = 0u;
+    }
+    barrier();
+    for (uint stride = 256u; stride > 0u; stride >>= 1u) {
+        uint index = (lane + 1u) * stride * 2u - 1u;
+        if (index < 512u) {
+            uint left = values[index - stride];
+            values[index - stride] = values[index];
+            values[index] += left;
+        }
+        barrier();
+    }
+    if (phase == 0) {
+        offsets[base + local] = values[lane];
+        offsets[base + local + 256u] = values[lane + 256u];
+    } else if (lane < 8u)
+        blocks[8u + lane] = values[lane];
+}
+```
+
+Ở mỗi mức stride, một lane phụ trách vị trí cuối của một đoạn 2×stride phần tử. Khi đi xuống, biến left giữ tổng nhánh trái: prefix của nhánh trái nhận prefix của cha, prefix của nhánh phải nhận prefix cha + tổng trái. Chỉ thay root bằng 0 sau khi đã lưu tổng.
+
+`barrier()` trong các vòng này đồng bộ những invocations của **cùng workgroup**. Mọi lane phải đi qua cùng các lần barrier; stride và phase đều giống nhau trong workgroup. Không cho vài lane return giữa các vòng rồi mong các lane còn lại tiếp tục được. Quy tắc uniform control flow được nêu trong [GLSL 4.30, phần Synchronization Functions](https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.30.pdf).
+
+Phase 1 nạp tám tổng vào đầu shared array, phần còn lại là 0; kết quả nằm ở blocks[8..15]. Phase 2 cộng prefix đoạn vào offsets. Offset vẫn tính **trong một chunk**, không phải trên toàn volume: editor dùng mesh buffer riêng cho từng chunk và cộng tổng để kiểm budget toàn job.
+
+### 5. Tách rõ hai loại phase và hai mức đồng bộ
+
+Shader extract và shader scan đều có uniform tên phase, nhưng chúng thuộc hai program khác nhau:
+
+| Program | phase | Việc làm |
+| --- | --- | --- |
+| extract | 0 | Đếm vertices hợp lệ của cell. |
+| extract | 1 | Emit, chỉ bắt đầu từ Bài 08. |
+| scan | 0 | Tám workgroups scan tám đoạn 512 số. |
+| scan | 1 | Một workgroup scan tám tổng đoạn. |
+| scan | 2 | Cộng prefix đoạn vào 4.096 offsets. |
+
+Host gửi ba dispatch scan riêng, có memory barrier giữa các dispatch:
+
+```cpp title="include/sculpt_gpu_layout.hpp — gửi ba pha scan"
+void dispatchScan(std::size_t chunk) {
+    requireChunk(chunk);
+    counts_->bind(1);
+    offsets_->bind(2);
+    blocks_->bind(3);
+    stats_->bind(4);
+    scan_.use();
+    gl_.Uniform1ui(scan_.uniform("chunk"), static_cast<GLuint>(chunk));
+    for (int phase = 0; phase < 3; ++phase) {
+        gl_.Uniform1i(scan_.uniform("phase"), phase);
+        GLuint groups = 1;
+        if (phase == 0)
+            groups = 8;
+        if (phase == 2)
+            groups = 16;
+        gl_.DispatchCompute(groups, 1, 1);
+        gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+    }
+}
+```
+
+`barrier()` trong shader không đồng bộ tám workgroups của pha đầu với nhau. Chia thành dispatch tiếp theo và dùng `glMemoryBarrier` mới tạo ranh giới phù hợp giữa các pha ở đây. Query/fence vẫn do `GpuTicket` của Bài 06 quản lý.
+
+Trước scan là một dispatch count. Dùng query 0 cho count, query 1 cho toàn bộ scan:
+
+```cpp title="include/sculpt_gpu_layout.hpp — count rồi scan một chunk hữu hạn"
+void submitCount(GpuTicket& ticket, const GpuBuffer& field, float isovalue, std::size_t chunk, std::uint32_t generation) {
+    if (ticket.busy())
+        throw std::logic_error("Count/scan cannot replace an in-flight batch");
+    requireChunk(chunk);
+    bindStorage(field);
+    extractUniforms(0, isovalue, chunk, generation, 0);
+    ChunkStats zero;
+    zero.generation = generation;
+    stats_->write(chunk * sizeof(zero), std::as_bytes(std::span(&zero, 1)));
+    ticket.begin(0);
+    gl_.DispatchCompute(16, 1, 1);
+    gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    ticket.end();
+    ticket.begin(1);
+    dispatchScan(chunk);
+    ticket.end();
+    ticket.submit();
+}
+```
+
+16 groups × 256 invocations vừa đủ 4.096 slot. Stats được xóa và gắn generation trước count. `extractUniforms()` chọn phase 0, level và grid; nó không cấp output. `ticket.submit()` chỉ gửi fence, không ngồi chờ ngay tại đây.
+
+## Ghép các phần lại
+
+### Giữ field ổn định suốt một lần count
+
+Không cần copy thêm cả field chỉ để đếm. Trong app, ta khóa thao tác sửa field khi count/scan đang dùng nó; job còn kiểm revision, trạng thái và ID buffer:
+
+```cpp title="include/sculpt_gpu_count_job.hpp — kiểm snapshot đọc vẫn là field đã nhận"
+void requireSnapshot(const GpuFieldDocument& document) const {
+    if (!document.stable() || document.revision() != workingRevision_ || document.field().id() != fieldId_)
+        throw std::logic_error("The field changed while count/scan still referenced its snapshot");
+}
+```
+
+Đây là hợp đồng của ứng dụng, không phải lời hứa rằng một buffer C++ const không bao giờ bị code khác sửa. Nếu bạn tự bỏ qua document và ghi thẳng vào SSBO, bạn đã phá giao thức.
+
+Tick poll batch cũ trước, chỉ gửi batch mới khi chưa Pause và field ổn định:
+
+```cpp title="include/sculpt_gpu_count_job.hpp — một tick không đợi toàn volume"
+void tick(const GpuFieldDocument& document, bool paused) {
+    try {
+        if (active_) {
+            deadline_->pause(paused);
+            if (deadline_->expired())
+                throw std::runtime_error("Count/scan exceeded sixty seconds of active work");
+        }
+        if (ticket_.busy()) {
+            requireSnapshot(document);
+            const auto elapsed = ticket_.poll();
+            if (!elapsed)
+                return;
+            if (!cancelled_ && !restart_ && !failed())
+                accept(*elapsed);
+        }
+        if (cancelled_) {
+            active_ = false;
+            return;
+        }
+        if (paused || !document.stable() || (failed() && !restart_))
+            return;
+        if (restart_ || workingRevision_ != document.revision())
+            begin(document);
+        if (active_) {
+            requireSnapshot(document);
+            layout_.submitCount(ticket_, document.field(), settings_.isovalue, cursor_, workingGeneration_);
+        }
+    } catch (const std::exception& error) {
+        error_ = error.what();
+        active_ = false;
+    }
+}
+```
+
+Trong mốc này, mỗi lần field đổi sẽ count lại tất cả chunk. Dirty-region reuse được học sau khi đã emit/draw, không gắn nhãn tối ưu đó cho một job full count.
+
+Sau fence, host chỉ đọc một `ChunkStats` 32 bytes để nhận kết quả. Chỉ công bố summary sau khi mọi chunk hợp lệ:
+
+```cpp title="include/sculpt_gpu_count_job.hpp — nhận batch và công bố cả summary"
+void accept(const std::array<double, 2>& elapsed) {
+    const auto stats = layout_.readStats(cursor_);
+    if (stats.invalid || stats.mismatch || stats.generation != workingGeneration_ || stats.vertices > maximumChunkVertices || stats.vertices % 3 != 0 || stats.activeCells > cellsPerChunk || stats.emitted != 0 || stats.normalFallbacks != 0)
+        throw std::runtime_error("Count/scan returned invalid topology, generation or unexpected emitted vertices");
+    candidate_[cursor_] = stats;
+    candidateVertices_ += stats.vertices;
+    candidateActiveCells_ += stats.activeCells;
+    candidateEmitted_ += stats.emitted;
+    candidateTimes_.count += elapsed[0];
+    candidateTimes_.scan += elapsed[1];
+    ++cursor_;
+    if (cursor_ == totalChunks()) {
+        published_ = candidate_;
+        publishedVertices_ = candidateVertices_;
+        publishedActiveCells_ = candidateActiveCells_;
+        publishedEmitted_ = candidateEmitted_;
+        publishedTimes_ = candidateTimes_;
+        publishedRevision_ = workingRevision_;
+        publishedGeneration_ = workingGeneration_;
+        active_ = false;
+        if (!manualChunk_) {
+            selectedChunk_ = 0;
+            for (std::size_t chunk = 0; chunk < published_.size(); ++chunk) {
+                if (published_[chunk].vertices != 0) {
+                    selectedChunk_ = chunk;
+                    break;
+                }
+            }
+            autoCell_ = true;
+        }
+    }
+}
+```
+
+Lưu ý checks `emitted == 0` và `normalFallbacks == 0`: bước này chưa được viết mesh. Khi một job mới chạy, summary đã hoàn thành trước đó vẫn giữ nhãn COUNT REV cũ; không gán nó cho field đang sửa. Generation là số lần chạy count, còn field revision là phiên bản dữ liệu; nhấn F1 đếm lại cùng field có thể tăng generation mà không đổi revision.
+
+### Nối job vào app của Bài 06
+
+Entry point vẫn gọi `runGpuFieldPreview`; scaffold chọn nhánh 07, đổi title và thêm ba lời gọi sau. Không cần dựng một window/event loop thứ hai.
+
+```cpp title="include/sculpt_gpu_field_preview.hpp — tạo job sau GL context và document"
+GpuCountLessonJob countJob(gl, budget, settings);
+```
+
+```cpp title="include/sculpt_gpu_field_preview.hpp — gate trước khi nhận thao tác nặn hoặc history"
+controls.event(event, *document, settings.grid, settings.shape, !countJob.blocksEdits());
+```
+
+```cpp title="include/sculpt_gpu_field_preview.hpp — tick sau document, trước vẽ UI"
+countJob.tick(*document, controls.paused());
+```
+
+R/reset trước hết hủy stroke và count, poll ticket cũ cho xong rồi mới thay document. Bỏ focus Pause job; fence đang chạy vẫn được poll. C hủy count đang chạy, F1 yêu cầu count lại; hủy không biến summary cũ thành một kết quả mới.
+
+Build đúng checkpoint từ thư mục có CMakeLists của gói dự án:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_44_checkpoint_7 --parallel 1
+./build/Debug/project_44_checkpoint_7.exe --grid 128
+```
+
+Với generator single-config, bỏ đoạn Debug trong đường dẫn và cấu hình `-DCMAKE_BUILD_TYPE=Debug` khi configure. Bản biên tập này chưa có ZIP phát hành; không chạy lệnh từ thư mục source-template.
+
+Chờ COUNT/SCAN READY / NO MESH. Bạn sẽ thấy real cells khác padded slots, counted vertices có giá trị nhưng emitted vertices vẫn là 0. Kéo cọ hoặc Enter đặt một stamp; sau khi xử lý xong, field revision và count revision phải khớp trở lại.
+
+F5/F6 chọn chunk, F7/F8 chọn cell, Ctrl tăng bước lên 16. Cột vàng là cell đang chọn; count 36 ứng với chiều cao tối đa. Dòng GRID cho biết tọa độ cell thật, không phải tọa độ sample đang probe. Di chuyển selection chỉ đọc cache/inspection, không tạo field revision hoặc yêu cầu count lại.
+
+Viewer chỉ tải counts/offsets của chunk đang xem, tổng 32 KiB, rồi giữ cache đến khi chọn chunk hoặc generation đổi. Đó là dữ liệu chẩn đoán, không phải CPU đang tính prefix thay GPU.
+
+## Thử làm sai để hiểu đúng
+
+1. Trong **shader checkpoint 07 count-only**, tạm không đặt root về 0. Build/chạy verifier hữu hạn rồi khôi phục code. Count totals có thể vẫn đúng, nhưng offset đầu đã sai; fixture phải bắt được. Không mang shader sai ấy sang bước emit hoặc chạy ghi ngoài buffer.
+2. Chọn một padded slot: count phải là 0, còn offset có thể khác 0 vì trước nó có cell tạo vertices. Đừng buộc offset của slot rỗng về 0.
+3. Đổi X/layer/probe và F5/F6/F7/F8, quan sát field revision/count generation. Xem dữ liệu không được làm job chạy lại. Sau đó đặt stamp, chờ revision mới và so phân bố counts, không chỉ nhìn tổng.
+4. Khi COUNTING / EDITS LOCKED, nhấn Enter/Z/Y. Field không được đổi dưới một job đang đọc nó. Space tạm dừng sau batch đang bay; C hủy job và giữ summary trước, F1 mới chạy lại.
+5. Chọn cell có count khác 0 rồi xem các lát cắt đi qua hai lớp sample của cell đó. Một cell có isosurface 3D không có nghĩa mọi lát cắt của nó đều có đường mức 0.
+
+Không thử làm lệch nhánh quanh barrier bằng cách cho một vài lane return rồi chạy shader: có thể gây deadlock GPU. Hãy phân tích luồng điều khiển và dùng các fixture có giới hạn; lỗi đồng bộ không phải một hiệu ứng hình ảnh an toàn để quan sát tùy ý.
+
+## Tự kiểm tra kết quả
+
+Chạy cả fixture nhỏ và quy mô bắt buộc:
+
+```powershell
+./build/Debug/project_44_checkpoint_7.exe --hidden --grid 32 --verify --seconds 20
+./build/Debug/project_44_checkpoint_7.exe --hidden --grid 128 --verify --seconds 20
+cmake --build build --config Release --target project_44_checkpoint_7 --parallel 1
+./build/Release/project_44_checkpoint_7.exe --hidden --grid 128 --verify --seconds 20
+```
+
+`--verify` thực hiện ba nhóm kiểm khác nhau:
+
+- Scan GPU với bốn mảng biết trước: toàn 0, toàn 36, impulse ở các ranh 255/256/511/512/1023/1024 và cuối mảng, cùng dữ liệu trộn có seed. So đủ 16.384 offsets với prefix uint64 tuần tự độc lập; không lấy output GPU làm expected.
+- Với init, add, undo và redo, đọc đủ counts/offsets của mọi chunk, so từng exclusive range và slot padding. Ở N=32 còn chạy tetra oracle CPU trên field thật; N=128 không chạy CPU extraction/count toàn field. Undo/redo phải khôi phục counts/offsets bit-exact.
+- Kiểm input gate Enter/Z/Y, Pause giữa chunk, cancel giữ summary, cancel lúc idle không làm gì và retry generation mới. Cuối cùng, reset khi ticket còn đang bay phải bỏ summary/timing cũ, tạo field mới và đếm đúng preset gốc. Các event kiểm này được đưa vào router trong app; đây chưa phải kiểm chuột/bàn phím desktop.
+
+N=128 kiểm 2.097.152 padded offsets mỗi snapshot, nhưng phải báo đúng 2.048.383 real cells. Khi kết thúc, `P44 GPU COUNT CHECKPOINT FINISHED` phải có field revision khớp count revision và emittedVertices=0. Nếu hết thời gian khi chưa xong, app phải báo lỗi, không in PASS giả.
+
+Verifier kiểm tối đa bốn chunk mỗi tick; UI tiến độ chỉ vẽ 10 Hz để không tốn phần lớn thời gian Debug vào bitmap font. Không giảm số phần tử kiểm hoặc thay workload nhỏ hơn. Các số phaseWallMs/readbackAndCpuCheckMs là thời gian host của phép kiểm, không phải GPU kernel time hay benchmark.
+
+- [ ] Có GPU count cho mọi real cell, count 0 cho padding, số samples/cells/slots tách riêng.
+- [ ] Exclusive prefix bắt đầu ở 0 và tổng cuối bằng counted vertices; không có khoảng chồng nhau.
+- [ ] Mảng biết trước và tetra oracle nhỏ đều qua; invalid/mismatch/generation sai bị từ chối.
+- [ ] Chưa có mesh output; không gọi counted triangles là triangles đã render.
+- [ ] Edit/history không chen vào snapshot đang count; thay field chỉ sau ticket cũ.
+- [ ] Đã tự kiểm pointer capture/blur/reset, selection và các controls desktop; không lấy fixture API thay bằng chứng ấy.
+
+CTest vẫn dùng reference từ final/include. Nếu chỉ sửa shader checkpoint 07, phải build/chạy executable checkpoint 07 với verifier; một lượt CTest xanh không chứng minh shader đó đúng.
+
+## Bài tập mở rộng
+
+Thử mảng counts 4.096 phần tử chỉ có phần tử cuối bằng 36 trong scan fixture. Offset cuối phải là bao nhiêu, tổng phải là bao nhiêu? Sau đó đặt impulse ở cả cuối đoạn 512 số lẫn đầu đoạn kế tiếp. Tính prefix bằng tay quanh ranh trước khi chạy, giữ fixture độc lập với shader.
+
+Sang Bài 08 ta mới cấp vertex buffer từ tổng đã kiểm, rồi cho mỗi cell ghi vào khoảng [offset; offset + count) của nó. Khi ấy counted và emitted phải khớp, chứ không còn dừng ở một bảng địa chỉ đúng.

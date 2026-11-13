@@ -1,6 +1,6 @@
 # Project 44 — Xưởng điêu khắc thể tích
 
-**Đang xây dựng, chưa nghiệm thu.** Bản nháp đã có cửa sổ C++/SDL3 và lõi GPU chạy ở 128³. Có starter, checkpoint 01 về một tetra và bản biên tập thử thách/bài đầu trong `course-draft/`; chưa có cả giáo trình, Canvas hoặc ZIP phát hành. Catalog cũ chưa thay. Không coi các kiểm tra dưới đây là bằng chứng hoàn thành toàn bộ đặc tả.
+**Đang xây dựng, chưa nghiệm thu.** Bản nháp đã có editor C++/SDL3/GPU ở 128³, starter và checkpoint 01–07 có tiến triển riêng. Thử thách và bảy bài đang ở `course-draft/`; giáo trình đầy đủ, Canvas và ZIP phát hành chưa hoàn thành. Catalog cũ chưa thay. Không coi các kiểm tra dưới đây là bằng chứng hoàn thành toàn bộ đặc tả.
 
 Đích của học phần là một công cụ nặn khối 3D: dùng cọ thêm/bớt vật liệu, tạo lỗ hoặc nối hai khối, undo/redo, xem lát cắt và xuất mesh. Field lưu bằng scalar samples thật; sau mỗi chỉnh sửa phải trích lại bề mặt phù hợp với dữ liệu đó. Không dùng ray-marched primitive ghép sẵn thay cho field có thể sửa.
 
@@ -18,12 +18,17 @@
 - `sculpt_grid.hpp`, `sculpt_topology.hpp`, `sculpt_cpu_mesh.hpp`, `sculpt_brush.hpp`, `sculpt_document.hpp`: toán, extraction và document CPU nhỏ để học/đối chiếu. Không làm thay workload GPU 128³.
 - `sculpt_gpu_document.hpp`: field thật trên GPU, cọ add/subtract, hàng đợi tối đa 512 stamp, snapshot device-to-device và tối đa bốn snapshot undo/redo tổng cộng. Blur/cancel khôi phục cả khi một vùng cọ mới được xử lý một phần.
 - `sculpt_gpu_mesh.hpp` cùng shader field/extract/scan/normals: count trước allocation, scan riêng, emit triangle và gradient normal. Chunk 16³ cells; giữ chunk không bị ảnh hưởng và publish toàn giao dịch. Lỗi/cancel giữ mesh hợp lệ trước đó, không trộn output hai generation.
+- `sculpt_gpu_layout.hpp`: storage và dispatch count/scan dùng chung cho mesher cuối và viewer Bài 07. Pass không cấp mesh vertex buffer; shader chỉ có một thuật toán scan, không có bản khác dành riêng cho bài học.
 - `sculpt_gpu_pick.hpp`, `sculpt_controls.hpp`, `sculpt_guides.hpp`: picking field, một pointer owner, cọ dạng wire sphere, orbit/pan/zoom và hai chế độ thao tác riêng. Một stroke kéo trên mặt phẳng đi qua điểm bắt đầu, vuông góc hướng nhìn; không tự bám lại bề mặt sau mỗi stamp.
 - `sculpt_field_file.hpp`, `sculpt_mesh_file.hpp`, `sculpt_export_jobs.hpp`, `sculpt_file_tasks.hpp`: Save/Load field có metadata/checksum, export OBJ với normal và đọc lại trước khi công bố file. Công việc được chia batch, cho hủy; không đưa readback lưu file vào đường meshing runtime.
 - `sculpt_slice_inspector.hpp`: lát cắt đọc stored field trên GPU; probe số đọc đúng tám scalar (32 bytes), có nhãn field/mesh. Khung lát cắt và điểm probe cũng hiện trong không gian 3D.
 - `sculpt_scene_tasks.hpp`: reset/preset và đổi resolution theo candidate riêng; đổi resolution resample field đã sửa trên GPU, giữ domain, không reset mất tác phẩm. Candidate bị hủy hoặc lỗi không thay model hiện có; history được xóa khi đổi grid thành công.
 - `sculpt_mesh_topology.hpp`, `sculpt_gpu_product_verify.hpp`: oracle connectivity độc lập kiểm mesh kín, hướng cạnh, số thành phần và Euler characteristic. Fixture GPU khoét bằng subtract stroke rồi nối hai sphere bằng add stroke; không dùng torus preset thay lỗ cần tạo.
 - `sculpt_tetra.hpp`, `sculpt_tetra_preview.hpp`: nhánh nhập môn CPU cho starter/checkpoint 01. Renderer chỉ phụ thuộc record mesh/buffer, không kéo GPU meshing vào đường gọi của bài đầu.
+- `sculpt_cpu_preview.hpp`, `sculpt_cpu_controls.hpp`, `sculpt_cpu_pick.hpp`: các bước 02–05 dùng grid nhỏ, normal face/gradient, picking stored field, một stamp rồi stroke/history. Cọ vẫn sửa CPU field ở các bước này; GPU chỉ vẽ mesh đã upload.
+- `sculpt_gpu_field_preview.hpp`, `sculpt_gpu_field_controls.hpp`, `sculpt_gpu_field_verify.hpp`: bước 06 sửa field GPU qua một lát cắt, chưa count/scan/emit. `--verify` đối chiếu field/history/probe riêng, không gọi CPU extraction. `sculpt_field_slice.hpp` dùng chung phần vẽ/probe với editor cuối, không sao chép một renderer khác.
+- `sculpt_gpu_count_job.hpp`, `sculpt_gpu_count_overlay.hpp`: bước 07 đếm toàn bộ chunk và hiển thị count/offset của cell được chọn. Khóa edit khi đọc snapshot, công bố summary theo generation/revision; chưa emit hoặc cấp mesh output. Counted và emitted được ghi riêng.
+- `sculpt_gpu_scan_verify.hpp`, `sculpt_gpu_count_verify.hpp`: bốn mảng scan biết trước, kiểm mọi prefix/padding, tetra oracle CPU chỉ ở 32³, layout bit-exact khi undo/redo, input gate/pause/cancel/retry và reset khi còn count ticket. Không nằm trong đường runtime count của editor.
 
 Picking đi từng bước bằng spacing/4 rồi chia đôi bracket 12 lần, tối đa 2.048 bước; không sphere-trace field đã sửa. Đây là picking xấp xỉ trên trilinear field: ca chạm tiếp tuyến hoặc chi tiết mỏng dưới bước lấy mẫu có thể bị bỏ sót. Giao điểm cũng không phải giao chính xác với từng triangle của marching tetrahedra.
 
@@ -31,7 +36,7 @@ Ngân sách 512 MiB áp dụng cho buffer điêu khắc được theo dõi: fiel
 
 Kernel trả summary 16 bytes về số lần thực sự đổi sample. Stroke no-op không tạo history, xóa redo hoặc remesh. `BRUSH WRITES` đếm lượt ghi thay đổi qua các batch, không phải số sample duy nhất trong cả stroke.
 
-## Điều khiển đang có
+## Điều khiển của editor GPU cuối
 
 - Left drag: nặn khối; `Tab`: chuyển riêng sang camera. Right drag luôn orbit, middle drag pan; wheel zoom, `Home` đưa camera về ban đầu.
 - `A` thêm, `D` bớt; F2/F3/F4 lần lượt tăng radius/strength/depth, giữ Shift để giảm, Ctrl để dùng bước lớn. Các nút −/+ trên panel nhận left click bước nhỏ, right click bước lớn. Phím cũ `[`/`]`, `-`/`=`, Page Up/Down vẫn có; Shift dùng bước lớn cho nhóm phím cũ này.
@@ -46,11 +51,34 @@ Sau khi build bằng fixture phát triển, bản native hỗ trợ `--grid 32|6
 
 `--radius`, `--strength`, `--depth`, `--subtract` chỉ khởi tạo cọ UI, chưa sửa field cho tới khi có stroke. `--trace-input` ghi key/scancode/modifier/repeat để chẩn đoán input trong chính app. F2/F3/F4 và nút panel là đường thay thế khi một bộ gõ không chuyển đủ phím dấu tới cửa sổ; chưa chứng nhận mọi bộ gõ/layout.
 
-Starter và checkpoint 01 có CLI nhỏ riêng: `--hidden`, `--seconds 1..120`, `--capture FILE.bmp`. Bốn phím 1–4 đổi dấu mẫu, Left/Right đổi isovalue, drag orbit, wheel zoom, F11 wireframe, R reset. Các đường hướng dẫn tetra được vẽ xuyên qua mặt và có nhãn; triangle thật vẫn lấy từ CPU extraction. Đây chưa phải quy trình ZIP phát hành.
+## Các checkpoint nhập môn đã có
+
+| Mốc | Kết quả chạy được |
+| --- | --- |
+| Starter | Bốn scalar samples và khung tetra; chưa tạo triangle. |
+| 01 | Một tetra tạo triangle qua edge interpolation. |
+| 02 | Ghép sáu tetra/cell và nhiều cell thành một khối nhỏ, normal theo face. |
+| 03 | Giữ nguyên positions/topology, chuyển sang gradient normal từ trilinear field. |
+| 04 | Picking field thật và đặt một stamp add/subtract mỗi click. |
+| 05 | Kéo stroke theo world distance; commit/rollback và undo/redo theo nét. |
+| 06 | Init/edit stored field GPU 128³; xem lát cắt và probe, chưa tạo mesh GPU. |
+| 07 | Count/prefix scan GPU, xem phân bố counts/offsets và địa chỉ output; emitted vertices vẫn bằng 0. |
+
+Starter/01 có CLI nhỏ riêng: `--hidden`, `--seconds 1..120`, `--capture FILE.bmp`. Phím 1–4 đổi dấu mẫu, Left/Right đổi isovalue, drag orbit, wheel zoom, F11 wireframe, R reset. Tetra guides được vẽ xuyên mặt; triangle thật lấy từ CPU extraction.
+
+Checkpoint 02–05 dùng `--grid 12|24|32` (mặc định 24), `--hidden`, `--verify`, `--seconds`, `--capture`. `--verify` ở đây chỉ kiểm presentation khởi đầu; không phải toàn bộ kiểm input. Bài 03 thêm F8 đổi face/gradient, F12 normal view; Bài 04 đặt stamp, chưa có history; Bài 05 mới có stroke và Z/Y. F10 thu gọn panel, F11 wireframe, Tab đổi cọ/camera, right drag orbit và middle drag pan.
+
+Checkpoint 06 dùng `--grid 32|64|128|192` (mặc định 128), `--hidden`, `--seconds`, `--capture`, `--verify`; `--plane` chỉ đi cùng verifier. Viewer là lát cắt SSBO, không phải mesh: X đổi trục, Up/Down hoặc wheel đổi layer, HJKL chọn điểm, Enter đặt stamp, left drag kéo stroke, A/D đổi mode, F2/F3 đổi radius/strength (Shift giảm, Ctrl bước lớn). Z/Y, Escape, Space, R và preset 1–3 vẫn có. Tham số/slice bị khóa trong capture; blur/resize/reset bỏ owner cũ và rollback stroke.
+
+Verifier 06 so tám lượt toàn field với double reference, kiểm năm quan hệ bit-exact về history/no-op và 27 probe. Nó có readback hữu hạn chỉ để kiểm; đường tương tác không tải toàn field về CPU. Các timings trên panel là GPU query, chưa phải benchmark lặp. Quy trình CMake/ZIP cho bản phát hành vẫn còn phải nghiệm thu riêng.
+
+Checkpoint 07 dùng cùng CLI với 06 nhưng `--verify` kiểm pipeline count/scan. F5/F6 chọn chunk, F7/F8 chọn cell, Ctrl dùng bước 16; selection được giữ qua edit/history và không làm job chạy lại. C hủy count đang chạy, F1 đếm lại, Space Pause sau batch đang bay. Enter/Z/Y/cọ không được sửa field lúc count/scan đang đọc nó. Lát cắt và phần đọc probe dùng chung với Bài 06; prefix inspector chỉ đọc/cache một chunk 32 KiB, không tính scan bằng CPU.
+
+Verifier 07 kiểm đủ 4.096 offsets trên bốn mảng biết trước, rồi toàn counts/offsets của init/add/undo/redo; ở 128³ là 8.388.608 prefix checks qua bốn snapshot. Sau đó kiểm pause/cancel/retry/reset. Một lượt Debug ban đầu đã dừng đúng 20 giây; đã tối ưu kiểm CPU theo batch hữu hạn và chỉ vẽ UI verifier 10 Hz, giữ nguyên workload/checks/timeout. Debug/Release 128³ hiện qua, không phải benchmark. Kiểm desktop 07 mới xác nhận F8, một stroke và undo; còn các controls/focus/resize cần lượt kiểm tiếp.
 
 ## Những phần chưa xong
 
-Checkpoint 02 trở đi chưa có tiến triển học tập riêng: các snapshot ấy vẫn là fixture compile của bản editor, không được gọi là giáo trình hoàn chỉnh. Còn phải viết các bài tiếp theo và Canvas, hoàn tất benchmark có warm-up/lặp, kiểm thêm native controls/focus/resize, xây metadata/route thay thế và ZIP độc lập. Bài đầu đã có code thật và wiring; chưa gắn vào route hoặc Canvas nên vẫn là bản biên tập.
+Checkpoint 08–12 vẫn là compile fixture của bản editor, chưa phải tiến trình giảng dạy đã biên tập. Còn phải dạy emit/normals/draw, dirty chunks và các phần ghép editor, viết Canvas, hoàn tất benchmark có warm-up/lặp, kiểm thêm native controls/focus/resize, xây metadata/route thay thế và ZIP độc lập. Bảy bài đầu đã có mã thật/wiring và kiểm source, nhưng chưa gắn vào route hoặc Canvas. Các verifier GPU không thay cho kiểm chuột/bàn phím desktop.
 
 Kết quả theo từng phạm vi được ghi trong `docs/reviews/project-44-progress.md`; học phần Neighbor List cũ trên website chưa bị thay thế.
 

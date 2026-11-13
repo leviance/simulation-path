@@ -1,12 +1,15 @@
 #version 430 core
+#if LAB_CHECKPOINT >= 7
 layout(local_size_x = 256) in;
 layout(std430, binding = 0) readonly buffer ScalarField { float field[]; };
 layout(std430, binding = 1) buffer Counts { uint counts[]; };
 layout(std430, binding = 2) readonly buffer Offsets { uint offsets[]; };
 struct ChunkStat { uvec4 geometry; uvec4 outputState; };
 layout(std430, binding = 4) buffer Stats { ChunkStat stats[]; };
+#if LAB_CHECKPOINT >= 8
 struct Vertex { vec4 position; vec4 normal; };
 layout(std430, binding = 5) buffer Mesh { Vertex vertices[]; };
+#endif
 uniform int gridN;
 uniform vec3 gridOrigin;
 uniform float gridSpacing;
@@ -14,7 +17,9 @@ uniform float isovalue;
 uniform uint chunk;
 uniform uint generation;
 uniform int phase;
+#if LAB_CHECKPOINT >= 8
 uniform uint vertexCapacity;
+#endif
 
 const ivec3 corners[8] = ivec3[8](
     ivec3(0,0,0), ivec3(1,0,0), ivec3(1,1,0), ivec3(0,1,0),
@@ -24,8 +29,10 @@ const ivec4 tetrahedra[6] = ivec4[6](
     ivec4(0,7,4,6), ivec4(0,4,5,6), ivec4(0,5,1,6));
 
 struct Corner { uint id; vec3 point; float value; };
-uint emitted;
+uint cellVertices;
+#if LAB_CHECKPOINT >= 8
 uint writeBase;
+#endif
 
 bool bad(vec3 v) {
     return any(isnan(v)) || any(isinf(v));
@@ -37,6 +44,7 @@ Corner loadCorner(ivec3 coordinate) {
     return Corner(id, point, field[id]);
 }
 
+// snippet:sculpt-gpu-edge-interpolation
 vec3 edgePoint(Corner a, Corner b) {
     if (b.id < a.id) {
         Corner temporary = a;
@@ -47,7 +55,9 @@ vec3 edgePoint(Corner a, Corner b) {
     precise vec3 point = a.point + (b.point - a.point) * t;
     return point;
 }
+// end-snippet:sculpt-gpu-edge-interpolation
 
+// snippet:sculpt-gpu-count-triangle
 void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
     vec3 area = cross(b - a, c - a);
     float h2 = gridSpacing * gridSpacing;
@@ -67,11 +77,12 @@ void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
         c = temporary;
         area = -area;
     }
+#if LAB_CHECKPOINT >= 8
     if (phase == 1) {
-        uint begin = writeBase + emitted;
+        uint begin = writeBase + cellVertices;
         if (begin > vertexCapacity || vertexCapacity - begin < 3u) {
             atomicAdd(stats[chunk].outputState.w, 1u);
-            emitted += 3u;
+            cellVertices += 3u;
             return;
         }
         vec3 normal = normalize(area);
@@ -80,9 +91,12 @@ void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
         vertices[begin + 2u] = Vertex(vec4(c,1), vec4(normal,0));
         atomicAdd(stats[chunk].outputState.x, 3u);
     }
-    emitted += 3u;
+#endif
+    cellVertices += 3u;
 }
+// end-snippet:sculpt-gpu-count-triangle
 
+// snippet:sculpt-gpu-tetra-cases
 void tetra(Corner v[4]) {
     int inside[4], outside[4];
     int ni = 0, no = 0;
@@ -116,7 +130,9 @@ void tetra(Corner v[4]) {
         triangle(ac, bd, bc, direction);
     }
 }
+// end-snippet:sculpt-gpu-tetra-cases
 
+// snippet:sculpt-gpu-count-kernel
 void main() {
     uint local = gl_GlobalInvocationID.x;
     if (local >= 4096u)
@@ -137,19 +153,26 @@ void main() {
     Corner cube[8];
     for (int index = 0; index < 8; ++index)
         cube[index] = loadCorner(coordinate + corners[index]);
-    emitted = 0u;
+    cellVertices = 0u;
+#if LAB_CHECKPOINT >= 8
     writeBase = 0u;
     if (phase == 1)
         writeBase = offsets[cell];
+#endif
     for (int index = 0; index < 6; ++index) {
         ivec4 ids = tetrahedra[index];
         Corner v[4] = Corner[4](cube[ids.x], cube[ids.y], cube[ids.z], cube[ids.w]);
         tetra(v);
     }
     if (phase == 0) {
-        counts[cell] = emitted;
-        if (emitted > 0u)
+        counts[cell] = cellVertices;
+        if (cellVertices > 0u)
             atomicAdd(stats[chunk].geometry.y, 1u);
-    } else if (emitted != counts[cell])
+    } else if (cellVertices != counts[cell])
         atomicAdd(stats[chunk].outputState.w, 1u);
 }
+// end-snippet:sculpt-gpu-count-kernel
+#else
+layout(local_size_x = 256) in;
+void main() {}
+#endif
