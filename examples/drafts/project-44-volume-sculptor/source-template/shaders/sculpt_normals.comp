@@ -1,0 +1,51 @@
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer ScalarField { float field[]; };
+struct ChunkStat { uvec4 geometry; uvec4 outputState; };
+layout(std430, binding = 4) buffer Stats { ChunkStat stats[]; };
+struct Vertex { vec4 position; vec4 normal; };
+layout(std430, binding = 5) buffer Mesh { Vertex vertices[]; };
+uniform int gridN;
+uniform vec3 gridOrigin;
+uniform float gridSpacing;
+uniform uint vertexCount;
+uniform uint chunk;
+
+float at(ivec3 c) {
+    return field[(c.z * gridN + c.y) * gridN + c.x];
+}
+
+float sampleField(vec3 point) {
+    vec3 coordinate = clamp((point - gridOrigin) / gridSpacing, vec3(0), vec3(gridN - 1));
+    ivec3 c = min(ivec3(floor(coordinate)), ivec3(gridN - 2));
+    vec3 t = coordinate - vec3(c);
+    float y0 = mix(at(c), at(c + ivec3(1,0,0)), t.x);
+    float y1 = mix(at(c + ivec3(0,1,0)), at(c + ivec3(1,1,0)), t.x);
+    float nextY0 = mix(at(c + ivec3(0,0,1)), at(c + ivec3(1,0,1)), t.x);
+    float nextY1 = mix(at(c + ivec3(0,1,1)), at(c + ivec3(1,1,1)), t.x);
+    return mix(mix(y0,y1,t.y), mix(nextY0,nextY1,t.y), t.z);
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= vertexCount)
+        return;
+    vec3 point = vertices[id].position.xyz;
+    float h = 0.5 * gridSpacing;
+    vec3 maximum = gridOrigin + vec3(gridSpacing * float(gridN - 1));
+    vec3 low = clamp(point - vec3(h), gridOrigin, maximum);
+    vec3 high = clamp(point + vec3(h), gridOrigin, maximum);
+    vec3 gradient = vec3(
+        (sampleField(vec3(high.x,point.y,point.z)) - sampleField(vec3(low.x,point.y,point.z))) / (high.x - low.x),
+        (sampleField(vec3(point.x,high.y,point.z)) - sampleField(vec3(point.x,low.y,point.z))) / (high.y - low.y),
+        (sampleField(vec3(point.x,point.y,high.z)) - sampleField(vec3(point.x,point.y,low.z))) / (high.z - low.z));
+    if (any(isnan(gradient)) || any(isinf(gradient))) {
+        atomicAdd(stats[chunk].geometry.w, 1u);
+        return;
+    }
+    if (length(gradient) <= 1e-10) {
+        atomicAdd(stats[chunk].outputState.y, 1u);
+        return;
+    }
+    vertices[id].normal = vec4(normalize(gradient),0);
+}

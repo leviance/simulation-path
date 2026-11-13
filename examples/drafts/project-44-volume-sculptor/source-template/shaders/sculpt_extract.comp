@@ -1,0 +1,155 @@
+#version 430 core
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer ScalarField { float field[]; };
+layout(std430, binding = 1) buffer Counts { uint counts[]; };
+layout(std430, binding = 2) readonly buffer Offsets { uint offsets[]; };
+struct ChunkStat { uvec4 geometry; uvec4 outputState; };
+layout(std430, binding = 4) buffer Stats { ChunkStat stats[]; };
+struct Vertex { vec4 position; vec4 normal; };
+layout(std430, binding = 5) buffer Mesh { Vertex vertices[]; };
+uniform int gridN;
+uniform vec3 gridOrigin;
+uniform float gridSpacing;
+uniform float isovalue;
+uniform uint chunk;
+uniform uint generation;
+uniform int phase;
+uniform uint vertexCapacity;
+
+const ivec3 corners[8] = ivec3[8](
+    ivec3(0,0,0), ivec3(1,0,0), ivec3(1,1,0), ivec3(0,1,0),
+    ivec3(0,0,1), ivec3(1,0,1), ivec3(1,1,1), ivec3(0,1,1));
+const ivec4 tetrahedra[6] = ivec4[6](
+    ivec4(0,1,2,6), ivec4(0,2,3,6), ivec4(0,3,7,6),
+    ivec4(0,7,4,6), ivec4(0,4,5,6), ivec4(0,5,1,6));
+
+struct Corner { uint id; vec3 point; float value; };
+uint emitted;
+uint writeBase;
+
+bool bad(vec3 v) {
+    return any(isnan(v)) || any(isinf(v));
+}
+
+Corner loadCorner(ivec3 coordinate) {
+    uint id = uint((coordinate.z * gridN + coordinate.y) * gridN + coordinate.x);
+    precise vec3 point = gridOrigin + vec3(coordinate) * gridSpacing;
+    return Corner(id, point, field[id]);
+}
+
+vec3 edgePoint(Corner a, Corner b) {
+    if (b.id < a.id) {
+        Corner temporary = a;
+        a = b;
+        b = temporary;
+    }
+    precise float t = clamp((isovalue - a.value) / (b.value - a.value), 0.0, 1.0);
+    precise vec3 point = a.point + (b.point - a.point) * t;
+    return point;
+}
+
+void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
+    vec3 area = cross(b - a, c - a);
+    float h2 = gridSpacing * gridSpacing;
+    float minimumAreaSquared = max(1e-24, h2 * h2 * 1e-16);
+    if (bad(a) || bad(b) || bad(c) || bad(area)) {
+        atomicAdd(stats[chunk].geometry.w, 1u);
+        return;
+    }
+    if (dot(area, area) <= minimumAreaSquared) {
+        if (phase == 0)
+            atomicAdd(stats[chunk].geometry.z, 1u);
+        return;
+    }
+    if (dot(area, towardOutside) < 0.0) {
+        vec3 temporary = b;
+        b = c;
+        c = temporary;
+        area = -area;
+    }
+    if (phase == 1) {
+        uint begin = writeBase + emitted;
+        if (begin > vertexCapacity || vertexCapacity - begin < 3u) {
+            atomicAdd(stats[chunk].outputState.w, 1u);
+            emitted += 3u;
+            return;
+        }
+        vec3 normal = normalize(area);
+        vertices[begin] = Vertex(vec4(a,1), vec4(normal,0));
+        vertices[begin + 1u] = Vertex(vec4(b,1), vec4(normal,0));
+        vertices[begin + 2u] = Vertex(vec4(c,1), vec4(normal,0));
+        atomicAdd(stats[chunk].outputState.x, 3u);
+    }
+    emitted += 3u;
+}
+
+void tetra(Corner v[4]) {
+    int inside[4], outside[4];
+    int ni = 0, no = 0;
+    vec3 inSum = vec3(0), outSum = vec3(0);
+    for (int index = 0; index < 4; ++index) {
+        if (isnan(v[index].value) || isinf(v[index].value)) {
+            atomicAdd(stats[chunk].geometry.w, 1u);
+            return;
+        }
+        if (v[index].value < isovalue) {
+            inside[ni++] = index;
+            inSum += v[index].point;
+        } else {
+            outside[no++] = index;
+            outSum += v[index].point;
+        }
+    }
+    if (ni == 0 || ni == 4)
+        return;
+    vec3 direction = outSum / float(no) - inSum / float(ni);
+    if (ni == 1)
+        triangle(edgePoint(v[inside[0]], v[outside[0]]), edgePoint(v[inside[0]], v[outside[1]]), edgePoint(v[inside[0]], v[outside[2]]), direction);
+    else if (ni == 3)
+        triangle(edgePoint(v[outside[0]], v[inside[0]]), edgePoint(v[outside[0]], v[inside[1]]), edgePoint(v[outside[0]], v[inside[2]]), direction);
+    else {
+        vec3 ac = edgePoint(v[inside[0]], v[outside[0]]);
+        vec3 ad = edgePoint(v[inside[0]], v[outside[1]]);
+        vec3 bc = edgePoint(v[inside[1]], v[outside[0]]);
+        vec3 bd = edgePoint(v[inside[1]], v[outside[1]]);
+        triangle(ac, ad, bd, direction);
+        triangle(ac, bd, bc, direction);
+    }
+}
+
+void main() {
+    uint local = gl_GlobalInvocationID.x;
+    if (local >= 4096u)
+        return;
+    uint side = uint((gridN - 2) / 16 + 1);
+    uvec3 chunkCoordinate = uvec3(chunk % side, (chunk / side) % side, chunk / (side * side));
+    ivec3 coordinate = ivec3(chunkCoordinate * 16u + uvec3(local % 16u, (local / 16u) % 16u, local / 256u));
+    uint cell = chunk * 4096u + local;
+    if (any(greaterThanEqual(coordinate, ivec3(gridN - 1)))) {
+        if (phase == 0)
+            counts[cell] = 0u;
+        return;
+    }
+    if (stats[chunk].outputState.z != generation) {
+        atomicAdd(stats[chunk].outputState.w, 1u);
+        return;
+    }
+    Corner cube[8];
+    for (int index = 0; index < 8; ++index)
+        cube[index] = loadCorner(coordinate + corners[index]);
+    emitted = 0u;
+    writeBase = 0u;
+    if (phase == 1)
+        writeBase = offsets[cell];
+    for (int index = 0; index < 6; ++index) {
+        ivec4 ids = tetrahedra[index];
+        Corner v[4] = Corner[4](cube[ids.x], cube[ids.y], cube[ids.z], cube[ids.w]);
+        tetra(v);
+    }
+    if (phase == 0) {
+        counts[cell] = emitted;
+        if (emitted > 0u)
+            atomicAdd(stats[chunk].geometry.y, 1u);
+    } else if (emitted != counts[cell])
+        atomicAdd(stats[chunk].outputState.w, 1u);
+}
