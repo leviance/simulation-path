@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/app-link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { CourseSidebar } from "@/components/course-sidebar";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 import { ProjectChallenge } from "@/components/project-challenge";
@@ -10,6 +10,7 @@ import {
   getProjectRevision,
   getProjectSummary,
   getPublishedProject,
+  getRetiredProjectReplacement,
   publishedProjects,
 } from "@/lib/course";
 
@@ -34,6 +35,8 @@ export async function generateMetadata({
 
 export default async function ProjectPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  const replacement = getRetiredProjectReplacement(slug);
+  if (replacement) redirect(`/projects/${replacement}`);
   const project = await getPublishedProject(slug);
   if (!project) notFound();
   const revision = getProjectRevision(project.id);

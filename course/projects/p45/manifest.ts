@@ -38,7 +38,7 @@ const project = {
     constraints: [
       "OpenGL 4.3 core; macOS OpenGL 4.1 không chạy được bản compute này. Canvas không thay thế driver GPU.",
       "Đây là bản MD 2D một loại hạt, hộp cố định, chưa có thermostat, MPI, nhiều loại nguyên tử hoặc chuẩn hóa mô hình vật liệu thật.",
-      "Grid dùng bucket có sức chứa cố định để giới hạn vòng lặp. Đây không phải danh sách cặp i<j của Project 44 hoặc CSR ở Project 40.",
+      "Grid dùng bucket có sức chứa cố định để giới hạn vòng lặp. Đây không phải danh sách cặp i<j của bản Neighbor List cũ hoặc CSR ở Project 40 cũ; không yêu cầu học Project 44 điêu khắc thể tích.",
       "Chỉ vẽ tối đa 100.000 marker lấy mẫu theo stride; N mô phỏng và N hiển thị phải được phân biệt.",
       "Mục tiêu 5 triệu có thể bị từ chối hoặc chạy chậm. Giới hạn dung lượng GL không cho biết lượng VRAM còn trống.",
       "Timeout ngăn việc gửi thêm lệnh; không thể ngắt một kernel đã chạy trong driver. Không tự kiểm thử các preset lớn.",

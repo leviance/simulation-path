@@ -3,7 +3,7 @@ import { publishedProjectSummaries } from "@/course/generated/project-summaries"
 import { coursePartTitles, roadmapSeed } from "@/course/roadmap";
 import { roadmapRevisions } from "@/course/roadmap-revisions";
 import { projectCatalogById } from "@/lib/project-catalog";
-import { buildRoadmap } from "@/lib/roadmap-state";
+import { buildRoadmap, replacementForRetiredSlug } from "@/lib/roadmap-state";
 import type {
   CoursePart,
   PublishedProjectMeta,
@@ -63,6 +63,10 @@ const projectPromiseCache = new Map<string, Promise<PublishedProjectMeta | undef
 
 export function getProjectSummary(slug: string) {
   return publishedProjects.find((project) => project.slug === slug);
+}
+
+export function getRetiredProjectReplacement(slug: string) {
+  return replacementForRetiredSlug(slug, roadmapRevisions);
 }
 
 export function getPublishedProject(slug: string): Promise<PublishedProjectMeta | undefined> {

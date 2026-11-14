@@ -141,7 +141,7 @@ void commit() {
     }
 ```
 
-Nếu Build bị overflow, target bị bỏ. Cache đã dựng từ target cũng mất hiệu lực; bank vật lý cũ vẫn còn. Khác Project 44, bản GPU không giữ thêm một bản sao đầy đủ của grid để rollback cache: nó vô hiệu hóa dữ liệu phụ và dựng lại khi cần.
+Nếu Build bị overflow, target bị bỏ. Cache đã dựng từ target cũng mất hiệu lực; bank vật lý cũ vẫn còn. Khác bản Neighbor List cũ của Project 44, bản GPU này không giữ thêm một bản sao đầy đủ của grid để rollback cache: nó vô hiệu hóa dữ liệu phụ và dựng lại khi cần.
 
 ## Ghép các phần lại
 

@@ -89,9 +89,11 @@ Search chỉ tải page/project shard khi mở hộp thoại. Glossary và lesso
 
 Danh sách module thuật ngữ được khai báo một lần trong `scripts/glossary-catalog.mjs`. Khi thêm `lib/glossary-*.ts`, đăng ký module tại đây rồi chạy `npm run generate:course`. Trang thuật ngữ dùng `course/generated/glossary.ts`, chỉ chứa import, không chép lại định nghĩa. Search lấy dữ liệu từ cùng danh sách. Generator báo lỗi nếu thiếu module, ID trùng hoặc định nghĩa rỗng; test đối chiếu toàn bộ anchor hiển thị với kết quả tìm kiếm.
 
+Generator checkpoint xử lý và đối chiếu từng project rồi giải phóng buffer, không giữ source của cả khóa học trong RAM. Khi chỉ sửa một project, dùng `node scripts/generate-checkpoints.mjs --project=44` (ID hai chữ số); thêm `--check` để kiểm mà không ghi. Lượt có scope chỉ dọn output của project đó, vẫn giữ registry gốc cho toàn catalog và không prune payload của project khác. Đây không thay bước sinh metadata/lesson registry hoặc kiểm toàn khóa học khi phát hành. Test fixture hai project kiểm scope, bytes/timestamps, chế độ read-only và dọn output lỗi thời ở lượt đầy đủ.
+
 ## Giới hạn chống phình file
 
-Code block C++ của Project 01–32, Project 40–43 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40–43 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
+Code block C++ của Project 01–32, Project 40–44 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40–44 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
 
 `npm run check:architecture` áp dụng các budget:
 

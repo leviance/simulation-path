@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/app-link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { CourseSidebar } from "@/components/course-sidebar";
 import { LessonProgress } from "@/components/progress";
 import { LessonTableOfContents } from "@/components/lesson-toc";
@@ -9,7 +9,12 @@ import { LessonWalkthrough } from "@/components/lesson-walkthrough";
 import { LessonReferences } from "@/components/lesson-references";
 import { ProjectRevisionNotice } from "@/components/project-revision-notice";
 import { renderLesson } from "@/content/registry";
-import { getAllPublishedProjects, getProjectRevision, getPublishedProject } from "@/lib/course";
+import {
+  getAllPublishedProjects,
+  getProjectRevision,
+  getPublishedProject,
+  getRetiredProjectReplacement,
+} from "@/lib/course";
 import { getProjectLearning } from "@/lib/project-learning";
 
 export async function generateStaticParams() {
@@ -44,6 +49,8 @@ export default async function LessonPage({
   params: Promise<{ slug: string; lesson: string }>;
 }) {
   const { slug, lesson: lessonSlug } = await params;
+  const replacement = getRetiredProjectReplacement(slug);
+  if (replacement) redirect(`/projects/${replacement}`);
   const [project, content] = await Promise.all([
     getPublishedProject(slug),
     renderLesson(slug, lessonSlug),

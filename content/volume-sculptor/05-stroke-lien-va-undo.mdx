@@ -1,0 +1,347 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+Thời gian gợi ý: đọc 25 phút, tự viết 60 phút, kiểm lifecycle và biến thể 25 phút. Setup/build tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Bài trước nặn được một dấu cọ mỗi click. Nếu cứ đặt thêm một dấu ở mỗi mouse motion, nét vẽ sẽ thưa khi con trỏ nhanh hoặc event ít, dày khi event nhiều. Nếu lưu undo cho từng dấu, một nét cũng có thể cần hàng chục lần undo.
+
+Ta sẽ coi một lần nhấn–kéo–thả là **một giao dịch stroke**: đóng băng các tham số, lấy mẫu theo quãng đường world, giữ bản field trước nét rồi commit hoặc rollback. Mesh cũ vẫn được vẽ trong lúc kéo; thả chuột mới remesh kết quả của cả nét.
+
+Lấy scaffold `sculpt_cpu_preview.hpp` và `sculpt_cpu_controls.hpp` của checkpoint 05 để có nhánh drag và Z/Y. Các phần tự viết lần này nằm trong `StrokeSampler`, các method giao dịch của `CpuDocument`, giao ray–mặt phẳng và các lời gọi được chỉ rõ dưới đây.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Khoảng cách giữa hai stamp không phụ thuộc số event
+
+Chọn khoảng cách đặt dấu:
+
+$$s=\frac{\mathrm{radius}}{4}.$$
+
+Giữa hai vị trí world liên tiếp, đi dọc đoạn thẳng và đặt stamp mỗi khi đủ s. Phần quãng đường còn thừa phải chuyển sang event tiếp theo. Nếu bỏ phần thừa mỗi lần, chia cùng một đường đi thành nhiều event nhỏ sẽ cho kết quả khác.
+
+Stamp đầu đặt ở mouse-down. Trong lúc kéo, ta không dò lại bề mặt sau từng stamp: cọ đi trên mặt phẳng qua tâm bắt đầu, vuông góc hướng nhìn lúc bắt đầu. Cách này giúp nét không nhảy bậc theo mặt vừa bị nặn; nó không phải chế độ tự bám bề mặt.
+
+### Trạng thái nào thuộc một stroke?
+
+Giữ owner, brush cố định, sampler, snapshot trước nét và cờ có sample thật sự đổi. Release đúng owner sẽ thêm **một** snapshot vào undo. Escape/blur/reset phải đóng owner; nếu đang kéo thì khôi phục field trước nét. Pointer cũ không được tiếp tục ghi sau reset.
+
+## Bắt tay xây dựng
+
+### 1. Giữ quãng đường thừa trong StrokeSampler
+
+Thay các khai báo constructor/`advance` của `StrokeSampler` bằng phần định nghĩa trong class sau. Các private fields đã được dành sẵn từ trước:
+
+```cpp title="include/sculpt_brush.hpp — đặt stamp theo world distance, giữ carry giữa event"
+class StrokeSampler {
+    public:
+    StrokeSampler(Vec3 start, float radius)
+        : previous_(start), spacing_(radius * 0.25F) {
+        if (!finite(start) || !std::isfinite(radius) || radius < 0.03F || radius > 0.6F)
+            throw std::invalid_argument("Stroke needs a finite start and a valid brush radius");
+    }
+
+    std::vector<Vec3> advance(Vec3 target) {
+        if (!finite(target))
+            throw std::invalid_argument("Stroke target must be finite");
+        const Vec3 segment = target - previous_;
+        const float distance = length(segment);
+        if (!std::isfinite(distance) || (distance + carry_) / spacing_ > 256)
+            throw std::overflow_error("Stroke segment exceeds its finite stamp budget");
+        std::vector<Vec3> stamps;
+        if (distance <= 1e-8F) {
+            previous_ = target;
+            return stamps;
+        }
+        float along = spacing_ - carry_;
+        for (; along <= distance; along += spacing_)
+            stamps.push_back(previous_ + segment * (along / distance));
+        carry_ = std::clamp(distance - (along - spacing_), 0.0F, spacing_);
+        previous_ = target;
+        return stamps;
+    }
+
+    private:
+    Vec3 previous_;
+    float spacing_{};
+    float carry_{};
+};
+```
+
+`along` là khoảng cách cần đi trên segment hiện tại tới stamp kế tiếp. Sau vòng lặp, `carry_` giữ đoạn còn lại từ stamp cuối tới target. Đoạn quá dài bị từ chối trước khi trả các stamp; không âm thầm cắt một nửa đường rồi để lại nét đứt.
+
+Giới hạn 256 áp dụng cho một segment input, không phải cả tác phẩm. Ở ứng dụng lớn hơn sẽ có thêm budget hàng đợi/batch GPU; mốc CPU này chỉ dùng grid nhỏ.
+
+### 2. Bắt đầu bằng snapshot và stamp đầu
+
+Thêm định nghĩa `beginStroke` trong `CpuDocument`:
+
+```cpp title="include/sculpt_document.hpp — snapshot trước khi nét sửa field"
+void beginStroke(std::uint32_t owner, Brush brush) {
+    if (owner_)
+        throw std::logic_error("A stroke already has a pointer owner");
+    brush.validate();
+    ensureGeneration();
+    before_ = grid_.values();
+    beforeDirty_ = dirty_;
+    brush_ = brush;
+    sampler_.emplace(brush.center, brush.radius);
+    owner_ = owner;
+    strokeChanged_ = false;
+    stamp(brush.center);
+}
+```
+
+Copy field trước khi đặt owner và sửa sample. `brush_` là bản cố định của nét, không đọc lại radius/strength đang chọn giữa chừng. Stamp đầu được đặt ngay để một click ngắn không bị mất chỉ vì chưa có motion event.
+
+Trong `press` của controller, thay lời gọi `applyStamp` của Bài 04 bằng:
+
+```cpp title="include/sculpt_cpu_controls.hpp — đi vào giao dịch thay vì commit từng stamp"
+document.beginStroke(owner_, frozenBrush_);
+capture_ = Capture::stroke;
+```
+
+### 3. Đổi ray chuột thành điểm trên mặt phẳng cố định
+
+Cho ray O + tD và mặt phẳng qua anchor với normal n. Ta giải:
+
+$$t=\frac{(\mathrm{anchor}-O)\cdot n}{D\cdot n}.$$
+
+Nếu mẫu số gần 0, ray gần song song và một thay đổi rất nhỏ của chuột có thể đẩy giao điểm đi xa. Không cố chia tiếp trong ca đó. Thêm helper:
+
+```cpp title="include/sculpt_cpu_pick.hpp — từ ray tới mặt phẳng của chính stroke đang kéo"
+inline std::optional<Vec3> brushPlanePoint(Vec3 rayOrigin, Vec3 rayDirection, Vec3 anchor, Vec3 planeNormal) {
+    if (!finite(rayOrigin) || !finite(rayDirection) || !finite(anchor) || !finite(planeNormal))
+        throw std::invalid_argument("Brush plane needs finite vectors");
+    const float denominator = dot(rayDirection, planeNormal);
+    if (std::abs(denominator) < 1e-5F)
+        return {};
+    const float distance = dot(anchor - rayOrigin, planeNormal) / denominator;
+    if (!std::isfinite(distance) || distance <= 0 || distance > 32)
+        return {};
+    return rayOrigin + rayDirection * distance;
+}
+```
+
+Camera scaffold trả hướng ray unit; `strokeNormal_` là camera forward đã giữ ở mouse-down. Khoảng t phải dương và không quá far bound 32 world units. Mặt phẳng này không đổi theo các scalar vừa sửa.
+
+Motion handler nối camera và stroke theo owner:
+
+```cpp title="include/sculpt_cpu_controls.hpp — mouse motion không được chuyển chủ hay tự đổi chế độ"
+void motion(const SDL_MouseMotionEvent& event, CpuDocument& document, Camera& camera, int width, int height) {
+    if (width <= 0 || height <= 0) {
+        cancel(document);
+        return;
+    }
+    if (captured() && event.which != owner_)
+        return;
+    pointerX_ = event.x;
+    pointerY_ = event.y;
+    needsPick_ = true;
+    pick_.reset();
+    if (!captured())
+        return;
+    if ((event.state & SDL_BUTTON_MASK(button_)) == 0) {
+        cancel(document);
+        return;
+    }
+    if (capture_ == Capture::orbit) {
+        camera.orbit(event.x - previousX_, event.y - previousY_);
+        cameraChanged();
+    } else if (capture_ == Capture::pan) {
+        camera.pan(event.x - previousX_, event.y - previousY_);
+        cameraChanged();
+    }
+    else if (capture_ == Capture::stroke) {
+        const Vec3 direction = camera.ray(event.x, event.y, static_cast<float>(width), static_cast<float>(height));
+        const auto point = brushPlanePoint(camera.eye(), direction, strokeAnchor_, strokeNormal_);
+        if (point && document.moveStroke(owner_, *point))
+            frozenBrush_.center = *point;
+    }
+    previousX_ = event.x;
+    previousY_ = event.y;
+}
+```
+
+Không có lệnh vẽ triangle trực tiếp ở đây. Handler tìm world point rồi đưa cho document; camera dùng nhánh riêng. Nút thứ hai không được cướp một stroke đang giữ capture.
+
+### 4. Validate/resample trước, rồi mới ghi field
+
+Định nghĩa `moveStroke`:
+
+```cpp title="include/sculpt_document.hpp — segment lỗi không áp một phần các stamp"
+bool moveStroke(std::uint32_t owner, Vec3 target) {
+    if (owner_ != owner)
+        return false;
+    Brush candidate = brush_;
+    candidate.center = target;
+    candidate.validate();
+    ensureGeneration();
+    // Validate/resample before editing: an excessive segment cannot apply a partial stroke.
+    auto nextSampler = *sampler_;
+    const auto stamps = nextSampler.advance(target);
+    for (const auto point : stamps)
+        stamp(point);
+    sampler_ = nextSampler;
+    return true;
+}
+```
+
+Sampler được sao chép vào candidate trước. Nếu target không hợp lệ hoặc segment vượt budget, sampler thật và field chưa bị áp một nửa danh sách stamp. Chỉ khi đã có danh sách hợp lệ mới gọi `stamp` và chấp nhận trạng thái sampler mới.
+
+Helper `stamp` đã có: dùng lại falloff của Bài 04, đánh dấu dirty khi có thay đổi và tăng field generation. Ở đường CPU, nhiều stamp có thể tăng generation nhiều lần; đó không phải số stroke hay số lần undo.
+
+### 5. Commit một lần hoặc trả về trước stroke
+
+Thêm `endStroke`:
+
+```cpp title="include/sculpt_document.hpp — release đúng owner chỉ tạo một bước undo"
+bool endStroke(std::uint32_t owner) {
+    if (owner_ != owner)
+        return false;
+    if (strokeChanged_) {
+        undo_.push_back(std::move(before_));
+        trim(undo_);
+        redo_.clear();
+    }
+    releaseOwner();
+    return true;
+}
+```
+
+Nếu cả nét không đổi sample nào, không tạo history entry và không xóa redo. Một nét có thay đổi chuyển snapshot `before_` vào undo, trim giới hạn rồi mới xóa redo.
+
+Đối chiếu helper rollback đã cấp trong document:
+
+```cpp title="include/sculpt_document.hpp — bỏ nét đang kéo, không giả vờ dữ liệu chưa có phiên bản mới"
+bool abortStroke(std::uint32_t owner) {
+    if (owner_ != owner)
+        return false;
+    if (strokeChanged_) {
+        ensureGeneration();
+        grid_.replaceValues(before_);
+        ++generation_;
+        // Restoring a stroke is a new field version; pending jobs from it must not publish.
+        markAllDirty();
+        dirty_.include(beforeDirty_);
+    }
+    releaseOwner();
+    return true;
+}
+```
+
+Khôi phục snapshot cũng tạo một generation mới để mesh/job cũ không được gắn nhãn current sai. Vùng phục hồi được đánh dấu dirty. Trong lúc đợi remesh, ứng dụng vẫn vẽ last-good cùng trạng thái field/mesh rõ ràng.
+
+Router SDL của scaffold gọi các phần đó theo vòng đời thực:
+
+```cpp title="include/sculpt_cpu_controls.hpp — release, focus loss và lỗi đi vào cùng chính sách đóng stroke"
+void event(const SDL_Event& event, CpuDocument& document, Camera& camera, float isovalue, int width, int height) {
+    try {
+        if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
+            cancel(document);
+        if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED || event.type == SDL_EVENT_WINDOW_HIDDEN) {
+            cancel(document);
+            paused_ = true;
+        }
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && !captured() && event.button.x >= 0 && event.button.y >= 0 && event.button.x < width && event.button.y < height)
+            press(event.button, document, camera, isovalue, width, height);
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.which == owner_ && event.button.button == button_) {
+            if (capture_ == Capture::stroke)
+                document.endStroke(owner_);
+            release();
+        }
+        if (event.type == SDL_EVENT_MOUSE_MOTION)
+            motion(event.motion, document, camera, width, height);
+        if (event.type == SDL_EVENT_MOUSE_WHEEL && !captured() && event.wheel.mouse_x < width) {
+            camera.zoom(event.wheel.y);
+            cameraChanged();
+        }
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat)
+            key(event.key, document);
+    } catch (const std::exception& error) {
+        notice_ = error.what();
+        cancel(document);
+    }
+}
+```
+
+Chỉ button/owner khớp mới commit ở mouse-up. Mất focus hủy nét và pause remesh, không giả lập một mouse-up thành công. Lỗi input cũng đi qua cancel để nhả capture và bỏ giao dịch đang mở.
+
+### 6. Undo/redo chuyển snapshot giữa hai stack
+
+Thay hai khai báo method bằng định nghĩa:
+
+```cpp title="include/sculpt_document.hpp — đổi field, history và generation cùng nhau"
+bool undo() {
+    abortOwner();
+    if (undo_.empty())
+        return false;
+    ensureGeneration();
+    redo_.push_back(grid_.values());
+    grid_.replaceValues(undo_.back());
+    undo_.pop_back();
+    trim(redo_);
+    ++generation_;
+    markAllDirty();
+    return true;
+}
+
+bool redo() {
+    abortOwner();
+    if (redo_.empty())
+        return false;
+    ensureGeneration();
+    undo_.push_back(grid_.values());
+    grid_.replaceValues(redo_.back());
+    redo_.pop_back();
+    trim(undo_);
+    ++generation_;
+    markAllDirty();
+    return true;
+}
+```
+
+Undo đưa field hiện tại sang redo rồi lấy snapshot từ undo; redo làm chiều ngược lại. Hai lệnh không gọi lại random/preset để “tạo gần giống” kết quả. History giữ tối đa bốn snapshot; đó là giới hạn bộ nhớ của bản học, không phải lời hứa undo vô hạn.
+
+Với N=24, payload một snapshot là 24³ × 4 = 55.296 bytes; chưa tính metadata/capacity của vector. Nhánh GPU sau này sẽ đổi cách lưu nhưng vẫn giữ quy tắc giao dịch này.
+
+## Chạy checkpoint và đọc kết quả
+
+```powershell title="Kiểm một nét liền và một bước undo"
+cmake --build build --config Debug --parallel 1 --target project_44_checkpoint_5
+.\build\Debug\project_44_checkpoint_5.exe --grid 24
+```
+
+Chọn preset 2 để thấy hai sphere rời. Đặt cọ ở mặt trong một sphere rồi kéo qua khoảng hở sang sphere kia. Khi đang kéo, dòng `STROKE / RELEASE TO REMESH` cho biết scalar đã thay đổi nhưng mesh cũ còn được giữ. Thả chuột mới xem cầu nối hoàn chỉnh.
+
+Dự đoán undo count trước khi bấm Z: cả nét chỉ thêm một entry. Z phải bỏ cả cầu nối, Y khôi phục nó. Nếu không có entry, UI báo rõ. Các phím này dùng sau khi đã thả nét, không trộn vào một drag đang sở hữu capture.
+
+Bắt đầu nét khác rồi bấm Escape, hoặc chuyển focus ra ngoài. Field phải trở lại trước nét, capture được nhả; nếu job đang Pause thì Space cho remesh tiếp, camera vẫn dùng được. Reset hoặc đổi N bỏ giao dịch và history, không cho motion cũ ghi vào grid mới. Nhánh CPU vẫn reset preset khi đổi N, chưa resample tác phẩm.
+
+## Thử tạo lỗi
+
+Kéo một nét trong slice rồi Undo đúng một lần. Thử kéo ra ngoài Canvas mới thả; mất capture hoặc Pause sẽ hủy nét chưa kết thúc, không nối input cũ sang nét sau.
+
+<InteractiveLab demo="volume-sculptor" mode="stroke" />
+
+Trong bản thử, đặt `carry_` về 0 ở cuối mỗi event. Đi cùng một đoạn world một lần bằng ít segment, một lần bằng nhiều segment nhỏ. So các tâm stamp và field, không chỉ độ mượt của một screenshot. Khôi phục carry sau khi quan sát.
+
+Thử bỏ điều kiện owner khi nhận mouse-up trong fixture. Gửi một release từ owner khác: nó không được commit hoặc nhả giao dịch. Chạy fixture riêng, không cố tạo nhiều con trỏ bằng một chuỗi input khó hủy trên desktop.
+
+## Kiểm tra trước khi sang bài mới
+
+- Mật độ stamp theo radius/quãng đường, không theo FPS hay số motion event; stamp đầu luôn tồn tại.
+- Radius, strength, mode và mặt phẳng của nét được đóng băng; camera không xen vào một capture đang nặn.
+- Một nét có thay đổi tạo một bước undo, no-op giữ redo, history đúng giới hạn.
+- Escape/blur/reset bỏ owner cũ; rollback/undo/redo khôi phục scalar chính xác và tạo phiên bản phù hợp.
+- Mesh không bị sửa riêng trong handler. Lúc field và mesh lệch phiên bản, last-good có nhãn thay vì gọi cả hai là current.
+
+Fixtures reference kiểm resampling cùng đường với các segment khác nhau, owner sai, snapshot byte-exact và reset. Chúng không thay kiểm pointer capture của ứng dụng thật. CTest mặc định dùng `final/include`; nếu sửa bản thực hành, chạy fixture với đúng mã bạn đang thử.
+
+## Thử đi thêm một bước
+
+Thử s = radius/2 rồi radius/8, giữ cùng đường và strength mỗi stamp. Nét có thể sâu hơn khi đặt nhiều dấu hơn, dù nhìn liền hơn. Đây là hệ quả của strength tính mỗi stamp, không phải theo thời gian hoặc mỗi đơn vị chiều dài. Hãy đề xuất một quy ước strength theo quãng đường nếu muốn tác động ít phụ thuộc spacing, rồi kiểm lại cùng đầu vào.
+
+Bạn đã có một editor CPU nhỏ với dữ liệu thật và vòng đời input rõ. Bước tiếp theo chuyển field/edit lên GPU 128³; không đổi tên bản CPU 24³ này thành bản GPU để né workload lớn.
+
+[Sang Bài 06](/projects/volume-sculptor/06-field-va-co-tren-gpu).

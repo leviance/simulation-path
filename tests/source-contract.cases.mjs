@@ -63,6 +63,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
           projectNumber === 41 ||
           projectNumber === 42 ||
           projectNumber === 43 ||
+          projectNumber === 44 ||
           projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),

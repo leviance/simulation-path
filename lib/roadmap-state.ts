@@ -6,6 +6,20 @@ interface RoadmapEntry {
   part: string;
 }
 
+// Retired lessons do not map one-to-one to a different product. Forward their
+// old slug to the new overview, never silently to a lesson with the same ID.
+export function replacementForRetiredSlug(
+  slug: string,
+  revisions: Readonly<Record<string, ProjectRevision>>,
+) {
+  for (const revision of Object.values(revisions)) {
+    if (revision.previousSlug !== slug) continue;
+    const replacement = revision.replacement?.slug;
+    if (replacement && replacement !== slug) return replacement;
+  }
+  return undefined;
+}
+
 // Roadmap describes the intended product; published metadata describes available material.
 // Keeping them separate prevents a renamed title from relabelling unrelated lessons or ZIPs.
 export function buildRoadmap(

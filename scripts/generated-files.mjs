@@ -43,10 +43,14 @@ function removeEmptyDirectories(directory, keepRoot = true) {
 export function reconcileGeneratedFiles({
   expectedFiles,
   managedRoots = [],
+  retainedFiles = [],
   checkOnly = false,
   workspace,
 }) {
   const expectedTargets = new Set([...expectedFiles.keys()].map((target) => path.resolve(target)));
+  // Streaming generators already reconciled these files in smaller project
+  // batches. Retain only their paths, not their source buffers, during root pruning.
+  const retainedTargets = new Set([...retainedFiles].map((target) => path.resolve(target)));
   let changedCount = 0;
   let removedCount = 0;
   let mismatchCount = 0;
@@ -65,7 +69,8 @@ export function reconcileGeneratedFiles({
 
   for (const root of managedRoots) {
     for (const target of filesBelow(root)) {
-      if (expectedTargets.has(path.resolve(target))) continue;
+      if (expectedTargets.has(path.resolve(target)) || retainedTargets.has(path.resolve(target)))
+        continue;
       if (checkOnly) {
         mismatchCount += 1;
         process.stderr.write(`Unexpected generated file: ${path.relative(workspace, target)}\n`);

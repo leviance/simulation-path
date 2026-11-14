@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
 import { courseCmake } from "./course-cmake.mjs";
 import { reconcileGeneratedFiles } from "./generated-files.mjs";
+import { checkpointSelection } from "./checkpoint-selection.mjs";
 import {
   isCourseTextFile,
   isDisplayableCourseFile,
@@ -11,7 +12,8 @@ import {
 } from "./course-file-types.mjs";
 
 const projects = loadProjectCatalog();
-const checkOnly = process.argv.includes("--check");
+const selection = checkpointSelection(projects, process.argv.slice(2));
+const { checkOnly } = selection;
 const generatedSourceDirectory = path.join(workspace, "lib", "generated-checkpoint-sources");
 const publicSourceDirectory = path.join(workspace, "public", "project-sources");
 function toPosix(value) {
@@ -150,18 +152,44 @@ function snapshotFiles(project) {
   const expected = new Map();
   const definitions = snapshotDefinitions(project);
   const renderedSnapshots = new Map();
+  // Every checkpoint in this project must see the same authored input bytes.
+  // Reading each template once also avoids hundreds of repeated Windows I/O
+  // calls for unchanged headers when materializing starter + lessons + final.
+  const templateSources = new Map(
+    templateFiles.map((relativePath) => {
+      const sourcePath = path.join(templateDirectory, relativePath);
+      const source = readFileSync(sourcePath);
+      return [
+        relativePath,
+        {
+          sourcePath,
+          source,
+          variesByCheckpoint: isCourseTextFile(relativePath) && source.includes("LAB_CHECKPOINT"),
+          rendered: new Map(),
+        },
+      ];
+    }),
+  );
   for (const snapshot of definitions) {
     const renderedFiles = new Map();
     for (const relativePath of templateFiles) {
-      const sourcePath = path.join(templateDirectory, relativePath);
+      const template = templateSources.get(relativePath);
+      const { sourcePath, source } = template;
       const target = path.join(projectDirectory, snapshot.directory, relativePath);
-      const source = readFileSync(sourcePath);
-      const value = materializeSnapshotFile({
-        source,
-        relativePath,
-        renderText: (text) =>
-          renderTemplate(text, snapshot.checkpoint, toPosix(path.relative(workspace, sourcePath))),
-      });
+      // Unversioned text/binary has the same immutable result in every snapshot.
+      // Versioned files still validate LAB directives; final reuses checkpoint N.
+      // The cache lives only inside this project/input snapshot, never on disk.
+      const renderKey = template.variesByCheckpoint ? snapshot.checkpoint : 0;
+      let value = template.rendered.get(renderKey);
+      if (!value) {
+        value = materializeSnapshotFile({
+          source,
+          relativePath,
+          renderText: (text) =>
+            renderTemplate(text, renderKey, toPosix(path.relative(workspace, sourcePath))),
+        });
+        template.rendered.set(renderKey, value);
+      }
       expected.set(target, value);
       renderedFiles.set(relativePath, value);
     }
@@ -269,9 +297,18 @@ function generatedManifestRegistry() {
   return `export const generatedCheckpointSourceLoaders = {\n${loaders.join("\n")}\n} as const;\n`;
 }
 
-const expectedFiles = new Map();
-const generatedSnapshotRoots = [];
-for (const project of projects) {
+const retainedFiles = new Set();
+const result = { changedCount: 0, removedCount: 0, mismatchCount: 0 };
+let outputCount = 0;
+function accumulate(batch) {
+  result.changedCount += batch.changedCount;
+  result.removedCount += batch.removedCount;
+  result.mismatchCount += batch.mismatchCount;
+}
+for (const project of selection.projects) {
+  // Materialize and reconcile one project at a time. The full course must not
+  // retain every starter/checkpoint/final/source payload in RAM until the end.
+  const expectedFiles = new Map();
   const { expected, templateFiles, changedPaths } = snapshotFiles(project);
   for (const [target, value] of expected) expectedFiles.set(target, value);
   const projectDirectory = path.join(workspace, "examples", project.sourceDirectory);
@@ -309,23 +346,44 @@ for (const project of projects) {
       JSON.stringify({ schemaVersion: 1, projectId: project.id, common, snapshots }) + "\n",
     ),
   );
-  generatedSnapshotRoots.push(
+  const generatedSnapshotRoots = [
     path.join(projectDirectory, "starter"),
     path.join(projectDirectory, "checkpoints"),
     path.join(projectDirectory, "final"),
+  ];
+  accumulate(
+    reconcileGeneratedFiles({
+      expectedFiles,
+      managedRoots: [
+        generatedProjectDirectory,
+        path.join(publicSourceDirectory, project.id),
+        ...generatedSnapshotRoots,
+      ],
+      checkOnly,
+      workspace,
+    }),
   );
+  outputCount += expectedFiles.size;
+  for (const target of expectedFiles.keys()) retainedFiles.add(target);
 }
+const expectedFiles = new Map();
 expectedFiles.set(
   path.join(workspace, "lib", "generated-checkpoint-sources.ts"),
   Buffer.from(generatedManifestRegistry()),
 );
 
-const result = reconcileGeneratedFiles({
-  expectedFiles,
-  managedRoots: [generatedSourceDirectory, publicSourceDirectory, ...generatedSnapshotRoots],
-  checkOnly,
-  workspace,
-});
+accumulate(
+  reconcileGeneratedFiles({
+    expectedFiles,
+    // Scoped runs may prune only the selected project's roots above. A full run
+    // also removes orphan project payloads, retaining the batches already checked.
+    managedRoots: selection.scoped ? [] : [generatedSourceDirectory, publicSourceDirectory],
+    retainedFiles,
+    checkOnly,
+    workspace,
+  }),
+);
+outputCount += expectedFiles.size;
 
 if (result.mismatchCount > 0) {
   process.stderr.write(
@@ -336,7 +394,7 @@ if (result.mismatchCount > 0) {
 
 if (!checkOnly) {
   process.stdout.write(
-    `Synchronized ${expectedFiles.size} checkpoint outputs ` +
+    `Synchronized ${outputCount} checkpoint outputs for ${selection.projects.length} projects ` +
       `(${result.changedCount} updated, ${result.removedCount} removed).\n`,
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { HighlightedCode } from "@/components/highlighted-code";
 import { fetchProjectSource } from "@/lib/source-download";
 import type { HighlightLanguage } from "@/lib/syntax-highlighter";
+import { useClientReady } from "./use-client-ready";
 
 export function SourceFile({
   file,
@@ -20,6 +21,7 @@ export function SourceFile({
   initialSource?: string;
   open: boolean;
 }) {
+  const ready = useClientReady();
   const [open, setOpen] = useState(initiallyOpen);
   const [source, setSource] = useState(initialSource);
   const [loading, setLoading] = useState(false);
@@ -59,11 +61,16 @@ export function SourceFile({
   };
 
   return (
-    <details className="source-file" open={open} onToggle={onToggle}>
-      <summary>
+    <details className="source-file" data-ready={ready} open={open} onToggle={onToggle}>
+      <summary
+        aria-disabled={!ready}
+        tabIndex={ready ? 0 : -1}
+        style={ready ? undefined : { pointerEvents: "none", opacity: 0.65 }}
+      >
         <code>{file.path}</code>
         <span>
           {lineCount} dòng · {file.language}
+          {!ready && " · đang khởi tạo bộ đọc mã"}
         </span>
       </summary>
       {open && source !== undefined && <HighlightedCode code={source} language={file.language} />}

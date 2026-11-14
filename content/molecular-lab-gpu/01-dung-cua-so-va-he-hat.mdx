@@ -4,7 +4,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Project 44 đã tránh tìm lại mọi cặp sau mỗi bước. Tuy vậy, CPU vẫn phải tính lực cho rất nhiều hạt. Project này chuyển phần đó sang GPU, nhưng ta chưa bắt đầu bằng hàng triệu hạt hay một kernel dài. Sản phẩm đầu tiên chỉ là **64 hạt đứng yên trong cửa sổ có thể resize**.
+Bản Neighbor List cũ của Project 44 đã tránh tìm lại mọi cặp sau mỗi bước; đó không phải học phần điêu khắc thể tích hiện tại. Bản Molecular Dynamics này có đủ mô hình và helper trong gói, không yêu cầu học Project 44 mới. Ta chuyển phần tính lực sang GPU nhưng chưa bắt đầu bằng hàng triệu hạt hay một kernel dài: sản phẩm đầu tiên là **64 hạt đứng yên trong cửa sổ có thể resize**.
 
 [Tải source Project 45](/downloads/project-45-molecular-lab-gpu.zip), giải nén và mở terminal tại thư mục chứa `CMakeLists.txt`. Starter có SDL, OpenGL context và event loop, nhưng chưa gọi hàm vẽ hạt. Không cần tải thêm source từ project khác: các file nền được đưa vào cùng ZIP.
 

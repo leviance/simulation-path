@@ -1,0 +1,433 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+Thời gian gợi ý: đọc 40 phút, tự viết 100 phút, đối chiếu lát cắt và thử đổi grid 35 phút. Setup/build tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Hãy nặn một chỗ lồi trên mặt cầu, rồi xoay vật thể để nhìn từ phía sau. Chỉ nhìn bề mặt, ta khó biết bên trong đã thay đổi thế nào. Nếu đổi grid từ 128 xuống 64 samples mỗi chiều, chỗ lồi ấy có còn không? Và vì sao tăng isovalue cũng làm vật thể nở ra dù không dùng cọ?
+
+Bài này bổ sung công cụ để tự trả lời những câu hỏi đó. Một cửa sổ nhỏ hiện lát cắt của **chính field đang dùng để dựng mesh**. Bạn có thể di chuyển điểm đo, xem giá trị scalar, đổi isovalue và lấy mẫu lại khối đã nặn ở resolution khác. Mesh cũ vẫn ở trong viewport cho đến khi grid mới được xử lý xong.
+
+Ta tiếp tục từ mesh GPU của Bài 09, không viết lại brush/scan/extraction. Phần mới nằm ở `sculpt_slice_inspector.hpp`, `sculpt_scene_tasks.hpp` và vòng lặp editor. Camera, bộ vẽ chữ và các lớp OpenGL vẫn được cấp sẵn; ta sẽ giải thích nơi gọi chúng. Save/export để sang Bài 11.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Ba thao tác nhìn gần giống nhau nhưng không cùng nghĩa
+
+| Thao tác | Dữ liệu scalar có thay đổi không? | Kết quả ta muốn giữ |
+| --- | --- | --- |
+| Đổi isovalue | Không ghi lại samples; trích bề mặt tại mức khác | Field đã nặn và history |
+| Đổi resolution | Tạo mảng samples mới bằng cách nội suy field cũ | Domain world và hình dạng trong giới hạn lấy mẫu |
+| Reset/preset | Tạo lại field từ công thức ban đầu | Preset được chọn, không giữ các nét nặn cũ |
+
+Với quy ước inside là $F(p)<\text{isovalue}$, bề mặt nằm ở nơi $F(p)=\text{isovalue}$. Mặt cầu ban đầu dùng $F(p)=\lVert p\rVert-0{,}82$. Vì vậy, chọn isovalue 0,1 tương ứng bán kính khoảng 0,92. Đây là chọn một mặt mức khác trong cùng dữ liệu, không phải brush thêm vật liệu.
+
+Sau khi dùng cọ, field không còn nhất thiết là signed distance. Giá trị âm vẫn chỉ phía trong theo quy ước, nhưng độ lớn của nó không còn là khoảng cách đến bề mặt. Màu trên lát cắt cũng không phải thước đo độ sâu theo world unit.
+
+### Lát cắt là một mặt phẳng trong grid
+
+Chọn trục Z và layer 64 nghĩa là giữ `z = 64`, còn x/y thay đổi trên ảnh. Với trục X ta xem mặt YZ; với Y ta xem ZX. Các trục đi theo thứ tự vòng `X → Y → Z → X`, nên có thể chọn hai chiều còn lại bằng phép `% 3`.
+
+Tọa độ con trỏ trong ô lát cắt được chuẩn hóa thành `u`, `v` trong đoạn [0; 1]. `u` tăng sang phải, `v` tăng xuống dưới. Tọa độ grid theo chiều đứng lại tăng lên trên, nên phía C++ dùng `1 - v`.
+
+Ở grid 128, spacing bằng $h=3/(128-1)$. Layer 64 có tọa độ world $-1{,}5+64h\approx0{,}01181$, **không phải đúng 0**. Grid có số samples chẵn thì tâm domain nằm giữa hai lớp 63 và 64. Điều này bình thường, không phải lỗi lệch tâm camera.
+
+### Đo ở giữa các samples
+
+Một điểm trên lát cắt thường không trùng sample nguyên. Ta lấy tám giá trị ở các góc cell và nội suy trilinear: bốn lần theo x, hai lần theo y, một lần theo z. Ký hiệu phép nội suy một chiều là:
+
+$$
+L(a,b,t)=a+(b-a)t.
+$$
+
+Cả shader tô lát cắt, điểm đo bằng số và pass đổi resolution phải tuân theo cùng quy ước tọa độ. Nếu một phía quên đảo chiều v, con trỏ sẽ chỉ vào một nơi nhưng số đo lại lấy ở nơi đối xứng qua ảnh.
+
+## Bắt tay xây dựng
+
+### 1. Mở editor 10 và đặt công cụ lát cắt vào vòng lặp
+
+Build target `project_44_checkpoint_10` bằng cấu hình đã dùng ở các bài trước:
+
+```powershell title="Build và mở checkpoint 10"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 1 --target project_44_checkpoint_10
+./build/Release/project_44_checkpoint_10.exe --grid 128 --show-slice
+```
+
+Với generator single-config, executable nằm ngay trong `build/`. Không thêm `--seconds` khi tự học; cờ này dành cho lượt smoke hữu hạn. Nếu chưa có build directory, làm phần configure/compiler trong README trước.
+
+Editor 10 có panel Tools/Stats. Sau khi tạo `gl`, `current`, `controls`, `panel` và `scenes`, thêm ba dòng sau. `SliceInspector` giữ trạng thái tương tác; `SliceRenderer` vẽ từ buffer GPU, không giữ volume CPU.
+
+```cpp title="src/main.cpp — Khởi tạo công cụ lát cắt"
+SliceInspector slice;
+slice.enabled(options.showSlice);
+SliceRenderer sliceRenderer(gl);
+```
+
+F9 hoặc V bật/tắt lát cắt. X đổi trục; Up/Down đổi lớp; H/J/K/L di chuyển điểm đo trái/xuống/lên/phải. Bạn cũng có thể kéo chuột trái bên trong ô lát cắt. Kéo ở ô này phải chọn điểm đo, không được đồng thời nặn khối ở phía sau; ta sẽ nối quyền nhận input ở cuối bài.
+
+### 2. Đổi vị trí trên ảnh thành vị trí trong grid
+
+Thêm hàm sau vào `sculpt_slice.hpp`. `slice.validate()` kiểm trục, layer và tọa độ hữu hạn trước khi dùng chúng để truy cập mảng. `grid.samples - 1` là chỉ số sample cuối, không phải số cells cộng thêm một lần nữa.
+
+```cpp title="include/sculpt_slice.hpp — Tọa độ của điểm trên lát cắt"
+inline Vec3 sliceGridCoordinate(const GridSpec& grid, const SliceState& slice) {
+    slice.validate(grid);
+    std::array<float, 3> coordinate{};
+    coordinate[slice.axis] = static_cast<float>(slice.layer);
+    coordinate[(slice.axis + 1) % 3] = slice.u * (grid.samples - 1);
+    coordinate[(slice.axis + 2) % 3] = (1 - slice.v) * (grid.samples - 1);
+    return {coordinate[0], coordinate[1], coordinate[2]};
+}
+```
+
+Ví dụ trục Z, `u = 0`, `v = 0` chọn góc x nhỏ nhất/y lớn nhất của lớp Z đang xem. Dùng `grid.worldFromGrid()` để hiện vị trí world; đừng coi các số 0…127 là world unit.
+
+`SliceInspector::layout()` đổi layer theo tỷ lệ khi N đổi: lớp gần giữa grid 128 chuyển sang lớp gần giữa grid 64. Đây là chọn lớp hiển thị, chưa phải nội suy dữ liệu.
+
+### 3. Tô ảnh từ chính buffer field của GPU
+
+`sculpt_slice.frag` đã có `sampleGrid()` đọc tám góc từ SSBO binding 0, giống cách nội suy vừa mô tả. Hoàn thiện `main()` như sau. UV của quad OpenGL tăng từ dưới lên, nên ở đây dùng `uv.y` trực tiếp; chỉ tọa độ điểm chọn từ C++ cần đổi thành `1 - probeUV.y`.
+
+```glsl title="shaders/sculpt_slice.frag — Dấu của field và đường bề mặt"
+void main() {
+    vec3 coordinate = vec3(0);
+    coordinate[sliceAxis] = float(sliceLayer);
+    coordinate[(sliceAxis + 1) % 3] = uv.x * float(gridN - 1);
+    coordinate[(sliceAxis + 2) % 3] = uv.y * float(gridN - 1);
+    float value = sampleGrid(coordinate) - isovalue;
+    // Color encodes scalar sign/magnitude, not geometric distance after editing.
+    vec3 color = vec3(0.07, 0.20, 0.38);
+    if (value >= 0.0)
+        color = vec3(0.35, 0.18, 0.075);
+    color *= 0.55 + 0.45 * (1.0 - exp(-abs(value) * 3.0));
+    float contour = 1.0 - smoothstep(0.0, max(fwidth(value) * 1.5, 1e-5), abs(value));
+    color = mix(color, vec3(0.65, 1.0, 0.87), contour);
+    vec2 selected = vec2(probeUV.x, 1.0 - probeUV.y);
+    vec2 distance = abs(uv - selected);
+    if (distance.x < fwidth(uv.x) * 0.75 || distance.y < fwidth(uv.y) * 0.75)
+        color = mix(color, vec3(0.9, 0.8, 0.42), 0.8);
+    pixel = vec4(color, 1);
+}
+```
+
+Màu xanh đậm chỉ vùng `F - isovalue < 0`, màu nâu cam chỉ vùng còn lại; đường sáng nằm gần mức 0. Hàm mũ chỉ điều chỉnh độ sáng cho dễ nhìn. `fwidth` ước lượng mức biến thiên theo hai chiều **ảnh raster**, giúp đường contour không mảnh hoặc dày bất thường khi viewport đổi. Nó không phải gradient 3D dùng để tính normal. Xem định nghĩa trong [GLSL 4.30, mục 8.13.1](https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.30.pdf).
+
+Đường contour này là ảnh của nội suy trilinear. Mesh marching tetrahedra lại nội suy tuyến tính trong từng tetra. Hai cách dùng cùng samples và isovalue nhưng **không phải cùng một hàm nội suy bên trong cell**. Vì vậy, không dùng việc đường ảnh và đường cắt mesh gần nhau bằng mắt để khẳng định sai số bằng 0. Chúng sẽ gần nhau hơn khi field đủ mượt và resolution tăng; các fixture hình học vẫn phải kiểm riêng.
+
+`FieldSliceRenderer::draw()` đặt viewport nhỏ, truyền uniforms rồi bind field thật. `width/height` là kích thước drawable theo pixel; `logicalWidth/logicalHeight` và `rectangle` theo tọa độ SDL. Hai tỷ lệ sx/sy tránh lỗi điểm đo đúng chỗ nhưng ảnh bị lệch khi Windows dùng display scaling.
+
+```cpp title="include/sculpt_field_slice.hpp — Vẽ vào đúng vùng pixel"
+void draw(const GpuBuffer& field, const GridSpec& grid, float isovalue, const SliceState& slice, const UiRect& rectangle, int width, int height, int logicalWidth, int logicalHeight) {
+    if (!slice.enabled || width <= 0 || height <= 0 || logicalWidth <= 0 || logicalHeight <= 0 || rectangle.width <= 0 || rectangle.height <= 0)
+        return;
+    slice.validate(grid);
+    const float sx = static_cast<float>(width) / logicalWidth;
+    const float sy = static_cast<float>(height) / logicalHeight;
+    gl_.Viewport(static_cast<int>(rectangle.x * sx), static_cast<int>((logicalHeight - rectangle.y - rectangle.height) * sy), static_cast<int>(rectangle.width * sx), static_cast<int>(rectangle.height * sy));
+    gl_.Disable(GL_DEPTH_TEST);
+    program_.use();
+    gl_.Uniform1i(program_.uniform("gridN"), grid.samples);
+    gl_.Uniform1i(program_.uniform("sliceAxis"), slice.axis);
+    gl_.Uniform1i(program_.uniform("sliceLayer"), slice.layer);
+    gl_.Uniform1f(program_.uniform("isovalue"), isovalue);
+    gl_.Uniform2f(program_.uniform("probeUV"), slice.u, slice.v);
+    field.bind(0);
+    gl_.BindVertexArray(vao_);
+    gl_.DrawArrays(GL_TRIANGLES, 0, 6);
+}
+```
+
+Trong `present` của `src/main.cpp`, vẽ mesh → guides/mặt phẳng cắt → `sliceRenderer.draw()` → panel/chữ. Bộ vẽ mesh và UI tự đặt lại viewport/trạng thái; viewport nhỏ không được chi phối frame sau.
+
+### 4. Đọc một giá trị số, không đọc cả volume mỗi frame
+
+Shader đã tô đúng dữ liệu, nhưng người học còn cần một con số để đối chiếu. `readSliceValue()` chỉ đọc tám floats: bốn cặp kề nhau theo x, tổng 32 bytes. Mỗi cặp được nội suy theo x, sau đó bốn kết quả được ghép theo y và z.
+
+```cpp title="include/sculpt_field_slice.hpp — Đọc tám góc quanh điểm đo"
+inline float readSliceValue(const GpuBuffer& field, const GridSpec& grid, const SliceState& slice) {
+    if (field.bytes() != grid.sampleCount() * sizeof(float) + guardBytes)
+        throw std::invalid_argument("Slice probe needs the exact scalar allocation");
+    const auto coordinate = sliceGridCoordinate(grid, slice);
+    const int x = std::min(static_cast<int>(std::floor(coordinate.x)), grid.samples - 2);
+    const int y = std::min(static_cast<int>(std::floor(coordinate.y)), grid.samples - 2);
+    const int z = std::min(static_cast<int>(std::floor(coordinate.z)), grid.samples - 2);
+    const Vec3 t = coordinate - Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+    std::array<float, 4> rows{};
+    for (int dz = 0; dz < 2; ++dz) {
+        for (int dy = 0; dy < 2; ++dy) {
+            std::array<float, 2> values{};
+            field.read(grid.sampleIndex(x, y + dy, z + dz) * sizeof(float), std::as_writable_bytes(std::span(values)));
+            rows[dz * 2 + dy] = interpolate(values[0], values[1], t.x);
+        }
+    }
+    const float value = interpolate(interpolate(rows[0], rows[1], t.y), interpolate(rows[2], rows[3], t.y), t.z);
+    if (!std::isfinite(value))
+        throw std::runtime_error("Numeric field probe is not finite");
+    return value;
+}
+```
+
+Ở biên cuối, điểm có thể có tọa độ `N - 1`. Ta chọn cell bắt đầu ở `N - 2`, khi đó hệ số nội suy bằng 1, vẫn đọc đúng sample biên mà không vượt buffer.
+
+Readback nhỏ vẫn có thể đồng bộ CPU/GPU, nên không gọi vô điều kiện mỗi frame. `probeSliceField()` chỉ cho đo khi `model.ready()`: field đã ổn định, mesh hiện tại khớp field và isovalue. `SliceInspector::update()` được gọi sau `model.tick()` trong vòng lặp chính và giữ kết quả khi chưa có thay đổi.
+
+```cpp title="include/sculpt_slice_inspector.hpp — Cache phải theo cả field lẫn mesh"
+void update(const GpuMeshBuilder& model) {
+    if (!state_.enabled || !model.ready())
+        return;
+    if (!dirtyProbe_ && probe_ && probe_->fieldRevision == model.document().revision() && probe_->meshGeneration == model.activeGeneration())
+        return;
+    try {
+        probe_ = probeSliceField(model, state_);
+        dirtyProbe_ = false;
+        notice_.clear();
+    } catch (const std::exception& error) {
+        notice_ = error.what();
+    }
+}
+```
+
+Vì sao còn so `meshGeneration` dù đang đo field? F5 hoặc đổi isovalue có thể dựng mesh mới **mà field revision không đổi**. Giá trị `F(P)` vẫn đúng, nhưng nhãn M của điểm đo phải theo mesh vừa hoàn thành. Khi remesh chưa xong, ta giữ nhãn cũ và hiện `PROBE HELD / MESH NOT CURRENT`, không tự gắn số generation mới cho dữ liệu cũ.
+
+Trong lúc brush đang sửa field, ảnh lát cắt có thể cập nhật trước bề mặt 3D. Lúc đó dòng trạng thái ghi `FIELD EDITING / MESH IS LAST-GOOD`; điểm đo chưa được làm mới. Đây là khoảng chuyển tiếp đã công bố, không phải hai kết quả được tuyên bố là đồng bộ. Khi model trở lại `ready`, số đo và mesh mới cùng được đối chiếu theo revision/generation.
+
+### 5. Đổi isovalue mà không ghi lại field
+
+Trong nhánh key-down của `src/main.cpp`, Left/Right điều chỉnh `requestedIso` mỗi lần 0,025, giới hạn trong đoạn [−0,25; 0,25]. Chặn thao tác này khi đang thay grid để không trộn hai yêu cầu có domain/trạng thái khác nhau.
+
+```cpp title="src/main.cpp — Chọn mặt mức mới"
+if (key == SDLK_LEFT || key == SDLK_RIGHT) {
+    if (scenes.busy()) {
+        actionNotice = "WAIT OR CANCEL GRID CHANGE FIRST";
+        continue;
+    }
+    controls.cancel(model);
+    float change = 0.025F;
+    if (key == SDLK_LEFT)
+        change = -change;
+    requestedIso = std::clamp(requestedIso + change, -0.25F, 0.25F);
+    model.requestIsovalue(requestedIso);
+}
+```
+
+`requestIsovalue()` yêu cầu full remesh qua cơ chế Bài 09, không gọi shader brush. Mặt mức mới có thể xuất hiện ở bất kỳ chunk nào nên không được chỉ remesh hộp dirty của nét cọ gần nhất. Active mesh giữ isovalue cũ cho đến khi candidate hoàn chỉnh được publish; ảnh lát cắt dùng isovalue đang active, không dùng thanh yêu cầu chưa xong.
+
+Thử tăng bốn lần Right trên sphere: `F(P)` và field revision giữ nguyên tại cùng điểm đo, trong khi contour, bề mặt và mesh generation thay đổi.
+
+### 6. Đổi resolution nhưng giữ các nét đã nặn
+
+Nếu đổi từ 128 xuống 64 chỉ bằng cách gọi công thức tạo sphere ban đầu, bạn sẽ mất tác phẩm. Ta cần một field đích mới được lấy mẫu từ **field đã sửa**, không phải từ preset.
+
+`NativeSceneTasks::resolution()` sao chép settings hiện tại rồi chỉ đổi số samples và isovalue được yêu cầu. Origin và extent vẫn giữ nguyên. Chọn lại đúng cấu hình đang dùng là no-op: không cấp phát, không xóa history.
+
+```cpp title="include/sculpt_scene_tasks.hpp — Yêu cầu lấy mẫu lại"
+bool resolution(GpuMeshBuilder& current, int samples, float isovalue) {
+    if (!job_ && samples == current.settings().grid.samples && isovalue == current.settings().isovalue) {
+        status_ = "GRID ALREADY SELECTED / DATA AND HISTORY KEPT";
+        return false;
+    }
+    ModelSettings target = current.settings();
+    bool resample = true;
+    if (job_ && latest_) {
+        target = latest_->target;
+        resample = latest_->resample;
+    }
+    target.grid.samples = samples;
+    target.isovalue = isovalue;
+    return request(current, {target, resample});
+}
+```
+
+Nếu đang reset preset rồi chọn thêm resolution, `job_ && latest_` giữ preset đang yêu cầu ấy; không biến reset thành resample.
+
+Lúc bắt đầu job, `FrozenGpuField` đợi field cũ ổn định rồi sao chép dữ liệu sang buffer GPU riêng. Đây là copy GPU→GPU bằng `CopyBufferSubData`, không phải kéo cả volume về CPU. `GpuTicket` theo dõi lệnh copy; chỉ khi ticket xong và canary nguyên mới được dùng nguồn này để nội suy.
+
+```cpp title="include/sculpt_scene_tasks.hpp — Giữ nguồn không đổi trong suốt tác vụ"
+seed_.grid = model.settings().grid;
+const auto payload = seed_.grid.sampleCount() * sizeof(float);
+auto storage = std::make_shared<GpuBuffer>(gl, budget, payload + guardBytes);
+storage->setGuard(payload);
+gl.BindBuffer(GL_COPY_READ_BUFFER, model.document().field().id());
+gl.BindBuffer(GL_COPY_WRITE_BUFFER, storage->id());
+ticket_.begin(0);
+gl.CopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, static_cast<GLsizeiptr>(payload));
+gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+ticket_.end();
+ticket_.submit();
+seed_.buffer = std::move(storage);
+```
+
+Với mỗi sample của grid đích, shader đã có world point `gridOrigin + coordinate * gridSpacing`. Hàm mới đổi world point này về tọa độ grid nguồn rồi nội suy tám giá trị:
+
+```glsl title="shaders/sculpt_field.comp — Nội suy field nguồn theo vị trí world"
+float resampledValue(vec3 point) {
+    vec3 coordinate = clamp((point - sourceOrigin) / sourceSpacing, vec3(0), vec3(sourceN - 1));
+    ivec3 c = min(ivec3(floor(coordinate)), ivec3(sourceN - 2));
+    vec3 t = coordinate - vec3(c);
+    float y0 = mix(sourceAt(c), sourceAt(c + ivec3(1,0,0)), t.x);
+    float y1 = mix(sourceAt(c + ivec3(0,1,0)), sourceAt(c + ivec3(1,1,0)), t.x);
+    float nextY0 = mix(sourceAt(c + ivec3(0,0,1)), sourceAt(c + ivec3(1,0,1)), t.x);
+    float nextY1 = mix(sourceAt(c + ivec3(0,1,1)), sourceAt(c + ivec3(1,1,1)), t.x);
+    return mix(mix(y0, y1, t.y), mix(nextY0, nextY1, t.y), t.z);
+}
+```
+
+`sourceField` là SSBO chỉ đọc ở binding 1, `field` đích ở binding 0. Pass init nhận `operation == 2` để gọi hàm này thay `initialValue()`. Hai buffer phải tách biệt: ghi đè vào nguồn trong lúc các invocation khác còn đọc sẽ làm kết quả phụ thuộc thứ tự chạy GPU.
+
+Sau đó vẫn phải count/scan/emit/normals cho toàn grid mới. Giảm resolution không đồng nghĩa có thể dùng lại buffer mesh cũ với nhãn N mới. `SceneChangeJob::tick()` tạo candidate theo nhánh dưới đây:
+
+```cpp title="include/sculpt_scene_tasks.hpp — Tạo candidate từ nguồn đã đóng băng"
+if (request_.resample && previous.document().hasCompleteField()) {
+    if (!previous.document().stable())
+        throw std::runtime_error("Previous field is not stable enough to resample");
+    if (!frozen_) {
+        frozen_ = std::make_unique<FrozenGpuField>(gl_, budget_, previous);
+        return;
+    }
+    if (!frozen_->ready())
+        return;
+    candidate_ = std::make_unique<GpuMeshBuilder>(gl_, budget_, request_.target, false, FieldInitialization::resample, frozen_->seed());
+} else {
+    // Before the initial field is complete there are no committed edits to preserve.
+    candidate_ = std::make_unique<GpuMeshBuilder>(gl_, budget_, request_.target);
+}
+```
+
+Nhánh `else` dùng cho reset hoặc trường hợp field ban đầu còn chưa hoàn thành, khi chưa có chỉnh sửa đã commit để giữ. Các lệnh GPU vẫn theo batch hữu hạn của Bài 06–09; mỗi lần `tick()` chỉ đẩy tiếp phần công việc được phép.
+
+**Lưu ý về chất lượng:** 128 → 64 → 128 không khôi phục hoàn toàn chi tiết ban đầu. Khi giảm số samples, một nét nhỏ có thể mất hoặc mờ đi. Tăng lại chỉ nội suy mảng 64 đang có, không tìm lại samples đã bỏ. Trong bài này, “giữ hình dạng” là lấy mẫu lại field đúng vị trí world, không phải cam kết bảo toàn mọi chi tiết hoặc topology ở mọi resolution.
+
+### 7. Chỉ thay model khi mọi phần đã xong
+
+Candidate không được thay `current` ngay sau init. Field có dữ liệu nhưng mesh còn dở vẫn chưa phải model có thể công bố. `SceneChangeJob` chỉ cho lấy model khi `complete_` và `candidate_->ready()` cùng đúng:
+
+```cpp title="include/sculpt_scene_tasks.hpp — Không trao một grid còn dở"
+std::unique_ptr<GpuMeshBuilder> takeModel() {
+    if (!complete_ || !candidate_ || !candidate_->ready())
+        throw std::logic_error("A partial grid cannot replace the current model");
+    return std::move(candidate_);
+}
+```
+
+`NativeSceneTasks::tick()` nhận model này vào `replacement_`. Đầu vòng lặp editor tiếp theo mới chuyển quyền sở hữu cho `current`, rồi xóa các trạng thái đang gắn với model cũ:
+
+```cpp title="src/main.cpp — Công bố grid mới và bỏ tương tác cũ"
+if (auto replacement = scenes.takeModel()) {
+    panel.cancel();
+    controls.cancel(*current);
+    slice.modelChanged();
+    inspection = {};
+    current = std::move(replacement);
+    requestedIso = current->settings().isovalue;
+    if (scenes.resetsCamera()) {
+        camera = {};
+        camera.centerOn(current->settings().grid.origin + Vec3{1, 1, 1} * (current->settings().grid.extent * 0.5F));
+        if (current->settings().shape == Shape::separatedSpheres)
+            camera.yaw = 1.57079632679F;
+    }
+    controls.cameraChanged();
+    ++sceneEpoch;
+}
+```
+
+Resample giữ góc nhìn hiện tại; reset đưa camera về góc phù hợp preset. `controls.cancel()` đóng pointer owner, `slice.modelChanged()` nhả capture và bỏ số đo cũ, `inspection = {}` bỏ lựa chọn chunk của grid cũ.
+
+`sceneEpoch` khác field revision và mesh generation của Bài 09. Một model mới có thể bắt đầu lại với revision 1/generation 1; hai số ấy trùng model cũ không có nghĩa dữ liệu giống nhau. Epoch nhận diện lần thay model, còn probe được invalidate rõ ràng. Tương tự, số đo draw time chỉ được gắn nhãn current nếu cả epoch và active generation còn khớp.
+
+History cũ không áp dụng trực tiếp cho layout mới, nên một lần đổi resolution thành công bắt đầu history rỗng. Nếu cancel hoặc allocation thất bại, giữ nguyên model cũ và giải phóng candidate; không công bố một nửa grid hay âm thầm giảm xuống resolution thấp hơn. Các phím chọn resolution liên tiếp chỉ giữ yêu cầu mới nhất sau khi job cũ được hủy an toàn.
+
+## Ghép các phần lại
+
+### Input đi vào công cụ nào?
+
+Trong mỗi sự kiện, gọi `panel.layout()` rồi `slice.layout()` bằng kích thước logical mới nhất. Panel được xét trước. Nếu panel không nhận sự kiện, lát cắt được xét trước brush/camera:
+
+```cpp title="src/main.cpp — Ô lát cắt không để input xuyên xuống brush"
+const bool sliceEvent = slice.event(event, controls.pointerCaptured());
+if (!sliceEvent)
+    controls.event(event, model, camera, logicalWidth - panel.width(), logicalHeight);
+```
+
+`otherOwner` ngăn lát cắt chiếm chuột giữa một stroke đã bắt đầu ở viewport. Ngược lại, khi bắt đầu kéo trong lát cắt, nó giữ pointer owner đến khi thả; đi ra khỏi ô vẫn cập nhật điểm đã clamp chứ không biến thành nét cọ. Focus loss, minimize, resize hoặc cancel nhả capture. Khi mất focus, editor còn pause scene job; Space tiếp tục tác vụ nếu cần.
+
+Helper `editorDigitAction()` tách Ctrl+1/2/3/4 (grid 32/64/128/192) khỏi 1/2/3 (reset sphere/hai sphere/torus). Plain 4 là no-op. F5/F6 giữ vai trò remesh/chunk inspector của Bài 09.
+
+```cpp title="src/main.cpp — Phân biệt đổi grid với reset preset"
+int digit = 0;
+if (key >= SDLK_1 && key <= SDLK_4)
+    digit = static_cast<int>(key - SDLK_0);
+const auto selection = editorDigitAction(digit, (event.key.mod & SDL_KMOD_CTRL) != 0);
+if (key == SDLK_R || selection.preset || selection.samples) {
+    bool accepted = false;
+    if (!selection.samples) {
+        Shape shape = scenes.selectedShape(model);
+        if (selection.preset)
+            shape = *selection.preset;
+        accepted = scenes.reset(model, shape);
+        if (accepted)
+            requestedIso = 0;
+    } else {
+        accepted = scenes.resolution(model, *selection.samples, requestedIso);
+    }
+    if (accepted) {
+        panel.cancel();
+        controls.cancel(model);
+        slice.modelChanged();
+        actionNotice.clear();
+    }
+}
+```
+
+Lời gọi `resolution()` nhận yêu cầu trước; nhánh `accepted` hủy stroke đang kéo ngay trong cùng lượt xử lý sự kiện. GPU rollback/ticket được giải quyết qua các lượt tick kế tiếp trước khi đóng băng nguồn. Khi thay model, ta hủy input thêm một lần nữa để không còn tọa độ/capture nào thuộc grid cũ.
+
+Sau vòng sự kiện, thứ tự xử lý là `model.tick()` → `scenes.tick(model)` → `slice.update(model)` rồi vẽ. Nếu scene task bị hủy, `scenes.takeRetained()` cho editor gọi `model.resumeLastGood()`. Space pause giữa các batch; nó không thu hồi lệnh đã gửi GPU. Poll fence vẫn tiếp tục để hoàn tất/giải phóng an toàn. Deadline active của scene job không tính thời gian pause, nhưng fence đã gửi vẫn có wall deadline riêng.
+
+Tab Files và phím S/E/O chỉ xuất hiện từ Bài 11, khi ta xây định dạng lưu và quy trình xác minh file.
+
+## Thử làm sai để hiểu đúng
+
+Giữ probe cố định khi đổi iso, rồi hạ/tăng N. Slice Canvas dùng cam cho phía trong, xanh cho phía ngoài; xem dấu F−iso, không suy dấu chỉ từ palette của native.
+
+<InteractiveLab demo="volume-sculptor" mode="slice" />
+
+1. Trong bản thử riêng, bỏ `1 - slice.v` phía C++ nhưng giữ shader nguyên. Dùng plane nghiêng và chọn một điểm không nằm giữa ảnh: ảnh vẫn có vẻ đẹp, nhưng giá trị đọc không thuộc vị trí đang chỉ. Khôi phục phép đổi chiều rồi đối chiếu lại cả ba trục.
+2. Chỉ so field revision trong cache, bỏ điều kiện mesh generation. Nhấn F5 hoặc đổi isovalue: `F(P)` không đổi nhưng nhãn M bị giữ ở mesh cũ. Đây là lỗi trạng thái, không phải lỗi phép nội suy. Khôi phục điều kiện và chạy fixture cache.
+3. Thay nhánh resample bằng khởi tạo preset. Nặn một chỗ lồi rồi Ctrl+2: chỗ lồi biến mất. Điều này cho thấy app đã reset chứ không đổi resolution của tác phẩm. Khôi phục nguồn field và `operation == 2`.
+4. Nặn một chi tiết đủ nhỏ, quan sát ở 128, xuống 32 rồi lên 128. Chi tiết có thể mất dù implementation đúng. Đừng “sửa” fixture thành yêu cầu hai field bit-exact; hãy so mỗi lần resample với nội suy của chính nguồn ngay trước nó.
+
+Không thử out-of-bounds hoặc bỏ synchronization ở grid lớn; dùng fixture có canary, deadline và process supervisor.
+
+## Tự kiểm tra kết quả
+
+Chạy hai nhóm GPU riêng nhau. `--verify-slice` dùng sphere hoặc plane chưa chỉnh sửa; `--verify-scene` tự chuẩn bị field đã nặn và bắt đầu ở 128. Không ghép hai cờ vào một lượt để rồi mất reference của nhóm thứ hai.
+
+```powershell title="Kiểm lát cắt và lấy mẫu lại — từng lượt hữu hạn"
+./build/Release/project_44_checkpoint_10.exe --hidden --seconds 20 --grid 128 --verify-slice
+./build/Release/project_44_checkpoint_10.exe --hidden --seconds 20 --grid 128 --plane --verify-slice
+./build/Release/project_44_checkpoint_10.exe --hidden --seconds 35 --grid 128 --verify-scene
+cmake --build build --config Release --parallel 1 --target project_44_tests
+ctest --test-dir build -C Release --timeout 15 --output-on-failure
+```
+
+`--seconds` giới hạn vòng lặp app; các fixture còn có deadline riêng. Khi chạy tự động, vẫn dùng process supervisor bên ngoài để dọn process tree nếu app không trả quyền điều khiển. Chạy lần lượt, build `--parallel 1`, không mở nhiều fixture GPU cùng lúc. Kiểm Debug bằng target/cấu hình Debug tương ứng.
+
+Bạn cần thu được bằng chứng sau, không chỉ một ảnh đẹp:
+
+- Slice probe: ba trục × ba lớp × năm điểm = 45 phép đo, mỗi điểm đọc 32 bytes. Plane so với công thức world độc lập; sphere so tổng có trọng số của tám giá trị góc analytic. Sai số phải nhỏ hơn 0,000003 theo fixture, không đòi giá trị nội suy bằng đúng SDF analytic tại mọi điểm.
+- Slice pixel: 12 pixel ở ba trục có màu đúng dấu `F - isovalue`, tọa độ pixel lấy theo tỷ lệ drawable/logical thực tế. Fixture tránh contour/crosshair; không lấy màu đường sáng làm bằng chứng dấu.
+- Cache: giữ nhãn cũ trong khi remesh; cùng field nhưng mesh mới phải cập nhật nhãn; đổi trục/thay model phải bỏ số đo cũ.
+- Resample: field đã nặn được đổi 128 → 64 → 128 trên GPU. So toàn bộ samples đích với nội suy CPU độc lập của nguồn tương ứng; domain world giữ nguyên. Đây là reference phục vụ kiểm chứng, không phải CPU thực hiện extraction runtime.
+- Lifecycle: chọn lại cấu hình đang dùng không đổi dữ liệu/history; yêu cầu mới nhất thắng; reset hủy owner; pause không gửi thêm batch; cancel/allocation refusal giữ mesh cũ và trả lại budget; N không hợp lệ bị từ chối.
+
+Sau kiểm tự động, tự thử trên cửa sổ thật: nặn một chỗ lồi, bật slice, di chuyển điểm đo bằng chuột và HJKL; đổi ba trục/lớp; kéo trong ô không tạo thêm stroke. Ctrl+2 phải giữ chỗ lồi ở cùng vị trí world; Ctrl+3 lấy mẫu lại từ field 64, không tự phục hồi chi tiết đã mất. Phím 2 không Ctrl phải reset hai sphere. I/F6 vẫn điều khiển chunk inspector, F5 remesh chứ không đổi grid. Xoay camera không tăng field revision hoặc yêu cầu remesh.
+
+Thử thêm resize/display scaling và mất focus giữa thao tác. Điểm đo không lệch ô, capture được nhả, khối không tiếp tục bị nặn sau khi quay lại. Kết quả fixture input helper không thay thế kiểm chuột/bàn phím này.
+
+## Bài tập mở rộng
+
+- Hiện đồng thời `F(P)`, isovalue đang active và `F(P) - isovalue`. Chọn một điểm cố định rồi thay isovalue để tự thấy đại lượng nào thực sự đổi.
+- Cho người dùng nhập world coordinate của mặt cắt. Tính layer gần nhất và hiện world coordinate thực tế sau làm tròn; đừng ghi “Z = 0” nếu lớp được chọn không đúng 0.
+- Thêm fixture domain tịnh tiến hoặc đổi extent để bắt lỗi giả định nguồn luôn nằm trong [-1,5; 1,5]³. So world position và scalar, không chỉ so chỉ số mảng.
+
+[Bài 11 — Lưu field và xuất mesh](/projects/volume-sculptor/11-luu-field-va-xuat-mesh).

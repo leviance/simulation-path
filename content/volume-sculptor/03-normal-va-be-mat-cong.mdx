@@ -1,0 +1,157 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+Thời gian gợi ý: đọc 20 phút, tự viết 45 phút, thử và kiểm 20 phút. Setup/build tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Khối cầu của Bài 02 đã đúng hình, nhưng nhìn như ghép từ nhiều mặt phẳng nhỏ. Mỗi triangle đang có một face normal riêng. Hôm nay ta lấy hướng tăng của field tại từng vertex để tạo normal phù hợp với bề mặt cong.
+
+Ta không di chuyển vertex, không thêm triangle và không đổi cách chia tetra. Vì thế, nếu có crack hoặc sai topology thì nó vẫn còn. Normal đẹp hơn không phải bằng chứng mesh đã đúng.
+
+Nếu làm tiếp từ bản tự viết ở Bài 02, lấy scaffold `sculpt_cpu_preview.hpp` của checkpoint 03 để có F8/F12 và bảng đếm mới. Các hàm field/mesh dưới đây là phần bạn tự thay trong code của mình; không phải viết lại window, camera hay vertex upload.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Field chỉ có số ở các mẫu, vertex lại thường nằm giữa chúng
+
+Ta cần hỏi giá trị field tại một vị trí world bất kỳ gần vertex. `ScalarGrid::at` chỉ đọc một mẫu nguyên; làm tròn tọa độ để dùng nó sẽ khiến normal nhảy bậc.
+
+Trilinear interpolation lấy tám góc của cell quanh điểm, nội suy theo X ở bốn cạnh, theo Y ở hai mặt, rồi theo Z. Đây là cách hỏi **field đã lưu**, không phải gọi lại `initialField`. Sau khi cọ sửa scalar, normal cũng phải thay theo dữ liệu đó.
+
+Gradient cho hướng scalar tăng nhanh nhất:
+
+$$\nabla f=\left(\frac{\partial f}{\partial x},\frac{\partial f}{\partial y},\frac{\partial f}{\partial z}\right),\qquad n=\frac{\nabla f}{\lVert\nabla f\rVert}.$$
+
+Với quy ước âm ở trong, dương ở ngoài, gradient hướng ra ngoài. Ta ước lượng từng đạo hàm bằng hai probe quanh p. Ở bên trong domain, chẳng hạn:
+
+$$\frac{\partial f}{\partial x}\approx\frac{f(p+h\,e_x)-f(p-h\,e_x)}{2h}.$$
+
+h ở phép lấy normal bằng nửa spacing. Nó là khoảng thăm dò theo world units, không phải epsilon dùng cho mọi phép kiểm số thực.
+
+## Bắt tay xây dựng
+
+### 1. Đọc field giữa tám mẫu
+
+Trong `ScalarGrid`, thay khai báo `sample` bằng định nghĩa:
+
+```cpp title="include/sculpt_grid.hpp — nội suy field đã lưu tại một điểm world"
+float sample(Vec3 point) const {
+    if (!finite(point))
+        throw std::invalid_argument("Field probe needs a finite world position");
+    Vec3 coordinate = spec_.gridFromWorld(point);
+    const float last = static_cast<float>(spec_.samples - 1);
+    coordinate.x = std::clamp(coordinate.x, 0.0F, last);
+    coordinate.y = std::clamp(coordinate.y, 0.0F, last);
+    coordinate.z = std::clamp(coordinate.z, 0.0F, last);
+    const int x = std::min(static_cast<int>(std::floor(coordinate.x)), spec_.samples - 2);
+    const int y = std::min(static_cast<int>(std::floor(coordinate.y)), spec_.samples - 2);
+    const int z = std::min(static_cast<int>(std::floor(coordinate.z)), spec_.samples - 2);
+    const float tx = coordinate.x - x, ty = coordinate.y - y, tz = coordinate.z - z;
+    const float lowY = interpolate(at(x, y, z), at(x + 1, y, z), tx);
+    const float highY = interpolate(at(x, y + 1, z), at(x + 1, y + 1, z), tx);
+    const float lowNextY = interpolate(at(x, y, z + 1), at(x + 1, y, z + 1), tx);
+    const float highNextY = interpolate(at(x, y + 1, z + 1), at(x + 1, y + 1, z + 1), tx);
+    return interpolate(interpolate(lowY, highY, ty), interpolate(lowNextY, highNextY, ty), tz);
+}
+```
+
+`coordinate` đổi p sang grid. `x/y/z` chọn góc thấp của cell; `tx/ty/tz` cho biết điểm nằm bao xa trong cell ấy. Chặn cell thấp ở N−2 để các truy cập `+1` luôn tồn tại, kể cả probe chạm mẫu cuối.
+
+Policy của helper này là clamp probe về biên domain. Nó hữu ích khi lấy normal, nhưng không có nghĩa mọi ray được phép đi ra ngoài rồi vẫn coi scalar biên là dữ liệu vô hạn. Picking ở bài sau sẽ giới hạn đoạn ray vào chính domain trước.
+
+### 2. Lấy sáu probe rồi tính gradient
+
+Thêm định nghĩa `gradient`:
+
+```cpp title="include/sculpt_grid.hpp — sai phân theo khoảng cách world thực sự giữa hai probe"
+Vec3 gradient(Vec3 point) const {
+    const float h = spec_.spacing() * 0.5F;
+    // At a domain boundary use the actual one-sided separation, not a fictitious 2h.
+    const Vec3 maximum = spec_.origin + Vec3{spec_.extent, spec_.extent, spec_.extent};
+    const float x0 = std::clamp(point.x - h, spec_.origin.x, maximum.x);
+    const float x1 = std::clamp(point.x + h, spec_.origin.x, maximum.x);
+    const float y0 = std::clamp(point.y - h, spec_.origin.y, maximum.y);
+    const float y1 = std::clamp(point.y + h, spec_.origin.y, maximum.y);
+    const float z0 = std::clamp(point.z - h, spec_.origin.z, maximum.z);
+    const float z1 = std::clamp(point.z + h, spec_.origin.z, maximum.z);
+    if (!finite(point) || x1 <= x0 || y1 <= y0 || z1 <= z0)
+        throw std::invalid_argument("Gradient probe must lie in the finite grid domain");
+    return {
+        (sample({x1, point.y, point.z}) - sample({x0, point.y, point.z})) / (x1 - x0),
+        (sample({point.x, y1, point.z}) - sample({point.x, y0, point.z})) / (y1 - y0),
+        (sample({point.x, point.y, z1}) - sample({point.x, point.y, z0})) / (z1 - z0)};
+}
+```
+
+Ở giữa domain, mỗi cặp cách nhau 2h. Ở sát biên, một probe bị clamp nên khoảng cách không còn là 2h. Code chia cho `x1-x0`, `y1-y0`, `z1-z0` thực tế; giữ mẫu số 2h trong ca đó sẽ làm gradient sai độ lớn và có thể lệch hướng.
+
+Các phép trừ này đọc scalar qua `sample`. Không lấy chênh lệch index như khoảng cách world, không đổi dấu gradient chỉ vì mặt đang tối.
+
+### 3. Thay normal, giữ nguyên position
+
+Tìm vòng lặp từng vertex ở cuối `extractCpu`. Thay phần luôn lấy face normal bằng nhánh sau:
+
+```cpp title="include/sculpt_cpu_mesh.hpp — chọn normal của field, có fallback được đếm"
+Vec3 normal = faceNormal;
+if (normalMode == CpuNormalMode::gradient) {
+    normal = grid.gradient(vertex.point);
+    if (length(normal) <= 1e-10F) {
+        normal = faceNormal;
+        ++result.normalFallbacks;
+    } else
+        normal = normalized(normal);
+}
+```
+
+Khởi đầu với face normal hợp lệ. Nếu chọn gradient mode, lấy gradient tại chính vị trí vertex rồi normalize. Khi độ dài quá nhỏ, giữ face normal và tăng `normalFallbacks`; không chia một vector gần 0 cho chính độ dài của nó.
+
+Đây là fallback trình bày cho một điểm tới hạn, không phải lời khẳng định field ở đó có một hướng normal duy nhất. Bảng đếm giúp ta thấy policy ấy đã được dùng bao nhiêu lần.
+
+Đổi giá trị mặc định trong `sculpt_cpu_mesh.hpp` để mốc mới khởi đầu bằng gradient mode:
+
+```cpp title="include/sculpt_cpu_mesh.hpp — chọn mặc định cho Bài 03"
+inline constexpr CpuNormalMode defaultCpuNormalMode = CpuNormalMode::gradient;
+```
+
+Trong scaffold CPU, F8 đổi `CpuNormalMode` và nhánh remesh đã có từ Bài 02 nhận tham số đó. Đổi normal mode dựng lại record normal; field generation không tăng. F12 chỉ cho shader tô `n * 0.5 + 0.5`, nên không cần trích lại geometry.
+
+## Chạy checkpoint và đọc kết quả
+
+```powershell title="Quan sát face normal và gradient normal"
+cmake --build build --config Debug --parallel 1 --target project_44_checkpoint_3
+.\build\Debug\project_44_checkpoint_3.exe --grid 24
+```
+
+Trước khi bấm F8, dự đoán phần nào đổi: các vertices có đi chỗ khác không, triangle count có tăng không? Sau đó bật F11 để nhìn wireframe. Geometry phải giữ nguyên, chỉ cách ánh sáng đổi giữa các mặt phẳng và bề mặt trông liên tục hơn.
+
+Bấm F12 để xem RGB normal. Các màu thay đổi liên tục trên sphere, nhưng phụ thuộc hướng world normal chứ không phải khoảng cách tới camera. Orbit để kiểm hướng không bị gắn nhầm với camera.
+
+`MESH REVISION` tăng khi đổi normal mode là hợp lý vì record normal đã khác. Chỉ orbit/pan/zoom hoặc đổi chế độ RGB/wireframe thì không tăng. Field generation vẫn mô tả scalar, không phải mọi thao tác hiển thị.
+
+## Thử tạo lỗi
+
+Tắt rồi bật “Gradient normal” và vẽ các đoạn normal. Hình học không đổi; khác biệt ánh sáng đến từ hướng normal, không phải thêm vertices để giấu các mặt phẳng.
+
+<InteractiveLab demo="volume-sculptor" mode="normals" />
+
+Trong bản thử, đổi `normal` thành hướng ngược trước khi ghi vertex. Dự đoán ảnh sáng và RGB trước khi chạy. Với sphere, phép kiểm `dot(n,p)` sẽ âm ở nhiều nơi; đây là dấu sai hướng, không phải lý do tăng độ sáng ambient.
+
+Thử riêng việc normalize gradient mà bỏ kiểm độ dài. Một sphere trơn có thể không làm lỗi lộ ngay. Fixture checkerboard ở reference cố ý tạo các giao điểm có gradient 0; hãy xem fallback counter và kiểm finite/unit thay vì chỉ dùng một ảnh sphere làm bằng chứng.
+
+## Kiểm tra trước khi sang bài mới
+
+- `sample` đọc đúng tám scalar quanh điểm và giữ bounds ở mẫu cuối.
+- Gradient dùng world spacing; tại biên dùng khoảng cách thực tế giữa hai probe.
+- Face/gradient mode có positions và triangle count giống nhau từng phần tử.
+- Normal hữu hạn, gần unit và hướng ra ngoài theo quy ước dấu. Với sphere, so với `p / length(p)`; với plane, so với normal đã biết.
+- Gần gradient 0 có fallback rõ và được đếm. Không tuyên bố “hết crack” chỉ vì shading mượt hơn.
+
+Tests reference trong `final/include` đối chiếu positions của hai mode, đo RMS với normal sphere analytic và dùng checkerboard để bắt lỗi chia cho 0. Nếu đang sửa `checkpoints/03`, hãy kiểm cả bản bạn viết, không nhầm kết quả CTest mặc định với bài nộp của riêng mình.
+
+## Thử đi thêm một bước
+
+Giữ cùng grid và thử bước probe bằng một phần tư, một nửa rồi một spacing. So RMS hướng normal với sphere analytic, đồng thời nhìn các vùng nhỏ. H nhỏ hơn không tự động tốt hơn trên field rời rạc: phải cân nhắc cách nội suy và sai số float.
+
+Tiếp theo ta sẽ sửa chính các scalar bằng cọ. Khi ấy bạn sẽ thấy vì sao normal phải đọc stored field thay vì công thức sphere ban đầu.
+
+[Sang Bài 04](/projects/volume-sculptor/04-dat-co-va-sua-field).

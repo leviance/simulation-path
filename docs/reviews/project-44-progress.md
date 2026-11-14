@@ -2,7 +2,7 @@
 
 Ngày ghi nhận: 14/11/2026. Đây **không phải** biên bản nghiệm thu toàn học phần. Nguồn chuẩn vẫn là mục Project 44 trong [Product Specification v4 complete](../specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md).
 
-Nguồn mới ở `examples/drafts/project-44-volume-sculptor`. Catalog, bài học, Canvas và ZIP Neighbor List cũ chưa được thay hoặc đổi nhãn thành sản phẩm mới.
+**Mốc hiện tại:** nguồn đã chuyển sang `examples/project-44-volume-sculptor`; 12 bài, Canvas và ZIP mới đã vào catalog với nhãn chờ nghiệm thu. Xem [hồ sơ tích hợp web](project-44-web-integration.md). Các bảng bên dưới ghi các mốc native trước khi chuyển, không tự chứng nhận toàn học phần.
 
 Ghi chú đặc tả: ví dụ ở Mục 3.6 còn nhắc Project 44 bằng số hạt, không cùng sản phẩm với mục Project 44 hiện là xưởng điêu khắc. Đợt này không sửa đặc tả; phạm vi và quy mô triển khai bám mục Project 44 cụ thể, tối thiểu 128³ scalar samples.
 
@@ -135,6 +135,6 @@ Mốc cuối lượt: Bài 12 có 30.690 bytes/10 CPP excerpts; đủ 12 bài/11
 1. Hoàn thiện ma trận native UI còn thiếu ở trên; kiểm các trạng thái lỗi/query recovery không làm nhãn stale. Floor/guide đã sửa theo domain và qua CPU fixture; còn kiểm trực tiếp sau load domain dịch.
 2. Chạy ma trận starter/checkpoint/final sau thay đổi cuối theo batch có giới hạn; kiểm gói từ thư mục giải nén mới, không lấy cache build làm bằng chứng ZIP độc lập.
 3. Thử thách và mười hai bài đang ở `course-draft/`, chưa đăng ký. Hoàn tất kiểm trực tiếp các viewer/editor, đặc biệt capture/focus/reset/queue và I/O S/O/E. Phân biệt scaffold với phần tự viết, giữ snippet markers/contract và wiring từ code chạy được.
-4. Canvas 2D phục vụ câu hỏi học tập, controls/accessibility/DPR/reduced-motion; metadata, glossary, search/progress revision, roadmap/route thay thế cũ.
+4. Ghép Canvas vào lesson cùng metadata, glossary, search/progress revision và roadmap/route thay thế cũ. Component Canvas và hồ sơ kiểm riêng: [project-44-canvas-progress.md](project-44-canvas-progress.md); chưa phải nghiệm thu routes hoặc cả website.
 5. ZIP độc lập, build/CTest từng checkpoint và final, kiểm gói/website, browser QA nếu localhost có sẵn. Không tự bật dev server.
 6. Audit từng yêu cầu trong spec với bằng chứng hiện tại rồi mới chuyển trạng thái nghiệm thu. Không tăng budget hoặc hạ spec để hợp thức hóa bản nháp.

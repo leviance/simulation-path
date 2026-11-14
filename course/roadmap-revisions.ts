@@ -108,7 +108,13 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
   },
   "44": {
     previousTitle: "Danh sách hàng xóm có vùng đệm: không tìm lại mọi cặp ở mỗi bước",
+    previousSlug: "neighbor-list-skin",
     previousPart: previousMolecularPart,
+    replacement: {
+      slug: "volume-sculptor",
+      acceptanceNote:
+        "Đã có 12 bài và Canvas cho công cụ điêu khắc thể tích. Native GPU 128³ và benchmark có kiểm riêng; còn nghiệm thu đầy đủ UI, gói tải về và website production.",
+    },
     summary:
       "Dùng cọ 3D để nặn, khoét lỗ và ghép khối; xem lát cắt bên trong rồi xuất bề mặt thành mesh.",
     outcome:

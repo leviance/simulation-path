@@ -4,11 +4,27 @@ import test from "node:test";
 import ts from "typescript";
 import { roadmapSeed } from "../course/roadmap.ts";
 import { rebuildRevisions, roadmapRevisions } from "../course/roadmap-revisions.ts";
-import { buildRoadmap } from "../lib/roadmap-state.ts";
+import { buildRoadmap, replacementForRetiredSlug } from "../lib/roadmap-state.ts";
 
 const catalog = JSON.parse(
   await readFile(new URL("../course/projects.json", import.meta.url), "utf8"),
 );
+
+test("retired project URLs forward only to an explicit different replacement overview", () => {
+  assert.equal(
+    replacementForRetiredSlug("neighbor-list-skin", roadmapRevisions),
+    "volume-sculptor",
+  );
+  assert.equal(replacementForRetiredSlug("volume-sculptor", roadmapRevisions), undefined);
+  assert.equal(replacementForRetiredSlug("unknown", roadmapRevisions), undefined);
+  assert.equal(
+    replacementForRetiredSlug("same", {
+      x: { previousSlug: "same", replacement: { slug: "same" } },
+    }),
+    undefined,
+  );
+  assert.equal(replacementForRetiredSlug("pending", { x: { previousSlug: "pending" } }), undefined);
+});
 const published = catalog.map((project) => {
   const target = roadmapSeed.find((entry) => entry.id === Number(project.id));
   const revision = rebuildRevisions[project.id];

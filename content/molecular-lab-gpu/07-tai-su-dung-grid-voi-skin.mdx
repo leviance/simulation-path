@@ -6,7 +6,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 Grid đã chạy đúng nhưng ta đang Clear và Build sau mọi Drift. Nếu mỗi hạt chỉ đi rất ít, các bucket cũ vẫn đủ để tìm mọi cặp trong cutoff. Ta sẽ giữ grid nhiều bước, nhưng cần một điều kiện có thể kiểm chứng, không đơn giản 'dựng lại sau 10 frame'.
 
-Đây là **cached cell grid**, không phải mảng các cặp `i<j` của Project 44. Mốc dùng để tìm stencil cũng phải được giữ cùng grid.
+Đây là **cached cell grid**, không phải mảng các cặp `i<j` của bản Neighbor List cũ. Project 44 hiện tại là công cụ điêu khắc thể tích, không phải prerequisite của bài này. Mốc dùng để tìm stencil cũng phải được giữ cùng grid.
 
 ## Hiểu ý tưởng trước khi viết code
 

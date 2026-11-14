@@ -209,6 +209,7 @@ assertGlossaryModules(
 const glossaryTerms = await loadGlossaryCatalog(evaluateTypeScript);
 const roadmap = roadmapModule.roadmapSeed;
 const roadmapById = new Map(roadmap.map((item) => [String(item.id).padStart(2, "0"), item]));
+const retiredSlugs = new Set();
 for (const [id, revision] of Object.entries(roadmapRevisions)) {
   const publication = projects.find((project) => project.id === id);
   if (!roadmapById.has(id) || !publication) {
@@ -221,6 +222,17 @@ for (const [id, revision] of Object.entries(roadmapRevisions)) {
     if (revision.replacement.acceptanceNote !== undefined) {
       assertString(revision.replacement.acceptanceNote, `Roadmap revision ${id} acceptance note`);
     }
+  }
+  if (revision.previousSlug !== undefined) {
+    if (
+      !revision.replacement ||
+      !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(revision.previousSlug) ||
+      projects.some((project) => project.slug === revision.previousSlug) ||
+      retiredSlugs.has(revision.previousSlug)
+    ) {
+      throw new Error(`Roadmap revision ${id} has an invalid or conflicting retired slug`);
+    }
+    retiredSlugs.add(revision.previousSlug);
   }
   for (const field of [
     "previousTitle",

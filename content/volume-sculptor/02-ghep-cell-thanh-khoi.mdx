@@ -1,0 +1,237 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+Thời gian gợi ý: đọc 25 phút, tự viết 50 phút, kiểm và thử biến thể 20 phút. Setup/build lần đầu tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Bài trước tạo được một mảnh mặt bên trong một tetra. Muốn nặn cả khối, ta cần nhiều mẫu scalar đặt trong một thể tích, rồi tìm phần mặt cắt qua từng cell. Ta chưa thêm cọ: hãy dựng được một khối cầu từ dữ liệu lưu thật trước.
+
+Đầu ra hôm nay là mesh tam giác có thể xoay và zoom. Mặt cầu còn lộ các mặt phẳng nhỏ vì ta đang dùng face normal; bài sau mới cải thiện cách lấy normal. Không sửa ánh sáng để giấu những mặt đó.
+
+Khung cửa sổ/camera/vertex upload vẫn là phần cấp sẵn. Scaffold của bài này chuyển sang `sculpt_cpu_preview.hpp` và `sculpt_cpu_controls.hpp` để có một viewport cùng bảng đếm. Khi tự phát triển từ Bài 01, lấy hai file trình bày này từ checkpoint 02; phần bạn viết và cần hiểu là dữ liệu grid, `fill`, `polygonizeCell`, `extractCpu` và chỗ gọi remesh.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Samples nằm ở đỉnh, cells nằm giữa các mẫu
+
+Mỗi trục có N mẫu, đánh số 0 đến N−1. Một cell cần hai mẫu kề nhau trên mỗi trục nên chỉ có N−1 cell mỗi chiều. Với N=24, ta lưu 13.824 scalar nhưng duyệt 12.167 cells; hai con số này không thể dùng thay nhau.
+
+Miền mặc định từ −1,5 tới 1,5 trên mỗi trục, dài 3 world units. Khoảng cách giữa hai mẫu là:
+
+$$h=\frac{\mathrm{extent}}{N-1},\qquad p=\mathrm{origin}+h\,q.$$
+
+`q` là tọa độ grid, `p` là tọa độ world. Mẫu cuối phải chạm đúng cuối miền. Nếu chia cho N thay vì N−1, cả grid sẽ bị co lại mà bảng số mẫu vẫn có vẻ đúng.
+
+Để lưu trong một vector liên tục, ta dùng `index = (z * N + y) * N + x`. Helper `sampleIndex` kiểm bounds đã có sẵn. Hai cell dùng chung một mẫu sẽ cùng đọc một index, không tự tạo hai bản sao rồi sửa lệch nhau.
+
+## Bắt tay xây dựng
+
+### 1. Đi từ tọa độ grid tới giá trị field
+
+Đối chiếu hai helper trong `GridSpec`. Chúng đã phục vụ các đường hướng dẫn của scaffold; hôm nay ta dùng lại chúng cho dữ liệu hình học:
+
+```cpp title="include/sculpt_grid.hpp — world và grid dùng cùng spacing"
+Vec3 worldFromGrid(Vec3 coordinate) const {
+    return origin + coordinate * spacing();
+}
+
+Vec3 gridFromWorld(Vec3 world) const {
+    return (world - origin) / spacing();
+}
+```
+
+Trong `ScalarGrid`, thay khai báo `fill` bằng phần định nghĩa sau:
+
+```cpp title="include/sculpt_grid.hpp — ghi scalar vào từng vị trí đã lưu"
+void fill(Shape shape) {
+    for (int z = 0; z < spec_.samples; ++z)
+        for (int y = 0; y < spec_.samples; ++y)
+            for (int x = 0; x < spec_.samples; ++x) {
+                const Vec3 point = spec_.worldFromGrid({static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)});
+                set(x, y, z, initialField(point, shape));
+            }
+}
+```
+
+`initialField` được cấp với ba preset. Với sphere, nó trả `length(point) - 0.82F`. Vì vậy scalar âm ở trong sphere, bằng 0 trên mặt và dương ở ngoài. Hàm chỉ dùng lúc khởi tạo; sau này cọ sửa các số trong `values_`, không thay sphere bằng một công thức khác mỗi lần vẽ.
+
+### 2. Chia mỗi cube theo cùng một cách
+
+Dùng thứ tự đỉnh dưới đây. Các tọa độ trong bảng là offset 0/1 so với góc cell, chưa phải tọa độ world:
+
+| Đỉnh | X | Y | Z |
+| --- | --- | --- | --- |
+| 0 | 0 | 0 | 0 |
+| 1 | 1 | 0 | 0 |
+| 2 | 1 | 1 | 0 |
+| 3 | 0 | 1 | 0 |
+| 4 | 0 | 0 | 1 |
+| 5 | 1 | 0 | 1 |
+| 6 | 1 | 1 | 1 |
+| 7 | 0 | 1 | 1 |
+
+Đặt hai mảng ở đầu `sculpt_topology.hpp` như trong checkpoint. Sáu tetra cùng đi quanh đường chéo 0–6:
+
+```cpp title="include/sculpt_topology.hpp — offset đỉnh và sáu tetra của một cube"
+inline constexpr std::array<std::array<int, 3>, 8> cubeCorners{{{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}}};
+inline constexpr std::array<std::array<int, 4>, 6> cubeTetrahedra{{{0, 1, 2, 6}, {0, 2, 3, 6}, {0, 3, 7, 6}, {0, 7, 4, 6}, {0, 4, 5, 6}, {0, 5, 1, 6}}};
+```
+
+Bây giờ thay khai báo `polygonizeCell` bằng định nghĩa:
+
+```cpp title="include/sculpt_topology.hpp — lấy tám mẫu rồi dùng lại phép trích tetra"
+inline CellTriangles polygonizeCell(const ScalarGrid& grid, int x, int y, int z, float isovalue) {
+    if (!std::isfinite(isovalue) || std::abs(isovalue) > 1)
+        throw std::invalid_argument("Isovalue is outside the finite fixture range");
+    if (x < 0 || y < 0 || z < 0 || x >= grid.spec().samples - 1 || y >= grid.spec().samples - 1 || z >= grid.spec().samples - 1)
+        throw std::out_of_range("Cell is outside the scalar grid");
+    std::array<Corner, 8> corners;
+    for (std::size_t index = 0; index < cubeCorners.size(); ++index) {
+        const int sx = x + cubeCorners[index][0], sy = y + cubeCorners[index][1], sz = z + cubeCorners[index][2];
+        corners[index] = {grid.spec().sampleIndex(sx, sy, sz), grid.spec().worldFromGrid({static_cast<float>(sx), static_cast<float>(sy), static_cast<float>(sz)}), grid.at(sx, sy, sz)};
+    }
+    CellTriangles result;
+    for (const auto& indices : cubeTetrahedra) {
+        const std::array<Corner, 4> tetra{corners[indices[0]], corners[indices[1]], corners[indices[2]], corners[indices[3]]};
+        polygonizeTetra(tetra, isovalue, grid.spec().spacing(), result);
+    }
+    return result;
+}
+```
+
+Với mỗi corner, `sx/sy/sz` là tọa độ mẫu toàn grid, không chỉ offset trong cube. `sampleIndex` tạo ID toàn cục, `worldFromGrid` cho vị trí, `at` đọc scalar. Sau đó ta gọi đúng hàm của Bài 01 sáu lần và gom output vào cùng `CellTriangles`.
+
+Điểm quan trọng không phải “sáu lần” mà là **mọi cell dùng cùng hướng chia**. Hai cell kề nhau phải chia mặt chung theo cùng một đường chéo và tính giao điểm từ cùng hai mẫu. Đổi cách chia tùy cell có thể tạo khe hở dù mỗi tetra riêng vẫn đúng.
+
+### 3. Duyệt cells, đếm trước rồi mới tạo vertices
+
+Thêm định nghĩa `extractCpu` trong `sculpt_cpu_mesh.hpp`:
+
+```cpp title="include/sculpt_cpu_mesh.hpp — trích mesh nhỏ trên CPU, không âm thầm cắt output"
+inline CpuMesh extractCpu(const ScalarGrid& grid, float isovalue, std::size_t capacity = 4194304, CpuNormalMode normalMode = defaultCpuNormalMode) {
+    if (grid.spec().samples > 64)
+        throw std::invalid_argument("CPU extraction is only the <=64^3 teaching/reference path");
+    if (normalMode != CpuNormalMode::face && normalMode != CpuNormalMode::gradient)
+        throw std::invalid_argument("Unknown CPU normal mode");
+    if (normalMode != CpuNormalMode::face)
+        throw std::invalid_argument("Gradient normals are introduced in checkpoint 03");
+    const int cells = grid.spec().samples - 1;
+    std::vector<std::uint32_t> counts(grid.spec().cellCount());
+    std::size_t required = 0, cell = 0;
+    CpuMesh result;
+    for (int z = 0; z < cells; ++z)
+        for (int y = 0; y < cells; ++y)
+            for (int x = 0; x < cells; ++x) {
+                const auto triangles = polygonizeCell(grid, x, y, z, isovalue);
+                counts[cell++] = triangles.count * 3;
+                required += triangles.count * 3;
+                result.degenerateTriangles += triangles.degenerate;
+                if (triangles.count > 0)
+                    ++result.activeCells;
+            }
+    if (required > capacity)
+        throw std::overflow_error("Mesh exceeds capacity; keep the previous mesh instead of truncating");
+    result.vertices.reserve(required);
+    cell = 0;
+    for (int z = 0; z < cells; ++z)
+        for (int y = 0; y < cells; ++y)
+            for (int x = 0; x < cells; ++x) {
+                const auto triangles = polygonizeCell(grid, x, y, z, isovalue);
+                if (triangles.count * 3 != counts[cell++])
+                    throw std::runtime_error("Count and emit do not describe the same field snapshot");
+                for (std::uint32_t triangle = 0; triangle < triangles.count; ++triangle) {
+                    const auto& vertices = triangles.triangles[triangle].vertices;
+                    const Vec3 faceNormal = normalized(cross(vertices[1].point - vertices[0].point, vertices[2].point - vertices[0].point));
+                    for (const auto& vertex : vertices) {
+                        // snippet:sculpt-cpu-normal-selection
+                        Vec3 normal = faceNormal;
+                        // end-snippet:sculpt-cpu-normal-selection
+                        result.vertices.push_back({{vertex.point.x, vertex.point.y, vertex.point.z, 1}, {normal.x, normal.y, normal.z, 0}});
+                    }
+                }
+            }
+    if (result.vertices.size() != required)
+        throw std::runtime_error("Mesh emit did not fill the exact counted vertex range");
+    return result;
+}
+```
+
+Lượt đầu đếm số vertices và lưu count của từng cell. Nếu tổng vượt capacity, hàm báo lỗi trước khi emit, thay vì dựng một nửa vật thể rồi gọi đó là kết quả. Lượt sau dùng lại cùng field, đối chiếu count và ghi position/face normal.
+
+Ở checkpoint 02 chỉ có face normal: ba vertices của một triangle nhận cùng một vector từ cross product. `defaultCpuNormalMode` đang là `face`; nhánh gradient chưa được đưa vào mốc này. Buffer upload vẫn là phần trình bày OpenGL cấp sẵn.
+
+### 4. Gọi extraction khi dữ liệu thay đổi
+
+`runCpuPreview` giữ `CpuDocument` nhỏ, isovalue và mesh đang hiển thị. Trong nhánh cần cập nhật, các phần được nối như sau:
+
+```cpp title="include/sculpt_cpu_preview.hpp — tạo candidate rồi mới công bố mesh mới"
+CpuMesh candidate = extractCpu(document.field(), isovalue, 300000, mode);
+auto buffers = uploadCpuPreview(gl, budget, candidate);
+cpuMesh = std::move(candidate);
+published = std::move(buffers);
+meshField = document.generation();
+publishedIso = isovalue;
+publishedMode = mode;
+++meshRevision;
+```
+
+`uploadCpuPreview` trả buffer mới; chỉ sau khi bước đó thành công ta mới thay `published`. Nếu extraction/upload lỗi, giữ mesh cũ và hiển thị lý do. `meshField` gắn mesh với phiên bản scalar; `publishedIso` còn ghi level đã dùng vì đổi isovalue không làm các scalar thay đổi.
+
+Entry mới trong `src/main.cpp` gọi khung CPU này, thay cho cửa sổ một tetra:
+
+```cpp title="src/main.cpp — đi vào đúng ứng dụng của Bài 02"
+int main(int argc, char** argv) {
+    try {
+        return sculpt::runCpuPreview(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << "CPU preview: " << error.what() << '\n';
+        return 1;
+    }
+}
+```
+
+Luồng chạy là `main → runCpuPreview → CpuDocument/ScalarGrid → extractCpu → polygonizeCell → polygonizeTetra`, sau đó upload và draw. Camera chỉ thay phép chiếu. Không gọi extraction vô điều kiện trong từng frame.
+
+## Chạy checkpoint và đọc kết quả
+
+```powershell title="Build và chạy mốc 02"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 1 --target project_44_checkpoint_2
+.\build\Debug\project_44_checkpoint_2.exe --grid 24
+```
+
+Với generator một cấu hình, executable nằm ngay trong `build`. Nếu đang sửa lời giải riêng trong `checkpoints/02/`, nhớ build target 2, không chạy lại target 1 hoặc `final`. Tests mặc định của gói include `final/include`; chúng kiểm reference hoàn chỉnh, không tự kiểm mọi thay đổi bạn vừa gõ ở một checkpoint khác.
+
+Trước khi chọn F5/F6/F7, dự đoán con số samples/cells. Ba phím tương ứng N=12/24/32. Ở các mốc CPU này, đổi N **khởi tạo lại preset**, chưa giữ phần đã nặn. Bản GPU ở bài sau sẽ xử lý việc giữ field khi đổi resolution.
+
+Kéo chuột để orbit, middle drag để pan, cuộn để zoom. `MESH REVISION` phải giữ nguyên. Left/Right đổi isovalue thì mesh mới được dựng; field generation có thể giữ nguyên vì các scalar không đổi. F11 chỉ đổi cách vẽ wireframe, không trích lại mesh.
+
+Một lần extraction CPU chạy hết grid nhỏ trên main thread; Pause có hiệu lực giữa các lượt, không cắt ngang hàm đang chạy. Vì vậy ứng dụng nhập môn chỉ nhận N=12/24/32. Nhánh GPU sau sẽ chia công việc thành batch có thể hủy, thay vì tăng grid CPU rồi để cửa sổ đứng lâu.
+
+Các preset CPU nhỏ là bước học và reference, không đáp ứng thay cho preset GPU 128³ của sản phẩm cuối. Dòng `CPU MESH / GPU DRAW ONLY` cố ý ghi rõ ai đang tính geometry.
+
+## Thử tạo lỗi
+
+Grid CPU nhỏ bên dưới lưu scalar thật. Bật wireframe, đổi N rồi so số samples với cells; đừng nhầm việc xoay camera với dựng lại mesh.
+
+<InteractiveLab demo="volume-sculptor" mode="cells" />
+
+Đổi mẫu số spacing từ N−1 thành N trong bản thực hành, giữ nguyên extent và N. Kiểm vị trí world của mẫu cuối trước khi nhìn ảnh: nó có còn bằng origin + extent không? Khôi phục sau khi quan sát.
+
+Thử riêng một lần đổi thứ tự corner của một tetra mà không đồng bộ các cell/mặt chung. Bật wireframe và chạy fixture shared-face của reference để hiểu invariant cần giữ; không lấy shading mịn làm cách chữa. Nếu chỉ sửa bản checkpoint, hãy đưa chính định nghĩa đang thử vào fixture tương ứng, vì CTest mặc định vẫn đọc `final/include`.
+
+## Kiểm tra trước khi sang bài mới
+
+- Phân biệt được N³ samples với (N−1)³ cells và tự tính h từ extent.
+- Cùng một mẫu ở mặt chung có cùng ID và scalar cho cả hai cell.
+- Mesh hiển thị từ vertices do CPU tự trích; không dùng sphere mesh dựng sẵn của thư viện.
+- Capacity refusal giữ kết quả trước đó; không có nhánh chỉ bỏ bớt triangle để vừa buffer.
+- Camera, wireframe không tăng mesh revision; đổi field/isovalue mới yêu cầu trích lại.
+
+## Thử đi thêm một bước
+
+Giữ radius 0,82 và extent 3, đo sai số bán kính của các vertices ở N=12/24/32 bằng `abs(length(p) - 0.82)`. Ghi RMS và max theo world units. Đừng đo bằng số pixel của screenshot vì camera và viewport sẽ làm kết quả khác đi.
+
+Sang bài tiếp theo ta giữ nguyên positions và topology, chỉ đổi cách lấy normal để đọc bề mặt cong rõ hơn.
+
+[Sang Bài 03](/projects/volume-sculptor/03-normal-va-be-mat-cong).

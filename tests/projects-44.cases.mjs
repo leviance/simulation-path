@@ -1,120 +1,268 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import katex from "katex";
-import { workspace, authoredLessons, render } from "./site-support.mjs";
+import { compile } from "@mdx-js/mdx";
+import project from "../course/projects/p44/manifest.ts";
+import lab from "../course/projects/p44/lab.ts";
+import learning from "../course/projects/p44/learning.ts";
+import { roadmapRevisions } from "../course/roadmap-revisions.ts";
+import { volumeSculptorGlossaryTerms } from "../lib/glossary-volume-sculptor.ts";
+import { lessonSections } from "../lib/lesson-sections.mjs";
+import { courseMdxOptions } from "../lib/mdx-options.mjs";
+import { migrateProgressContent } from "../lib/progress-content.ts";
+import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import { interactiveLabUsages, lessonSectionUsages } from "../scripts/mdx-contracts.mjs";
+import { projectCatalog, render, workspace, walkFiles } from "./site-support.mjs";
 
-const slug = "neighbor-list-skin";
-const source = path.join(workspace, "examples", `project-44-${slug}`);
+const slug = "volume-sculptor",
+  directory = "project-44-volume-sculptor";
+const source = path.join(workspace, "examples", directory),
+  content = path.join(workspace, "content", slug);
+const modes = [
+  "tetra",
+  "cells",
+  "normals",
+  "brush",
+  "stroke",
+  "field",
+  "prefix",
+  "mesh",
+  "dirty",
+  "slice",
+  "archive",
+  "validation",
+];
+const cppCounts = [5, 7, 4, 5, 10, 9, 9, 10, 14, 13, 16, 10];
+const glslCounts = [0, 0, 0, 0, 0, 3, 6, 5, 0, 2, 0, 0];
+const checkpoint = (order, file) =>
+  readFile(
+    path.join(
+      source,
+      order === 0 ? "starter" : `checkpoints/${String(order).padStart(2, "0")}`,
+      file,
+    ),
+    "utf8",
+  );
+const lessonText = (lesson) => readFile(path.join(content, lesson.slug + ".mdx"), "utf8");
 
-test("Project 44 publishes nine complete neighbor-list lessons", async () => {
-  const overview = await render(`/projects/${slug}`);
-  assert.equal(overview.status, 200);
-  assert.match(await overview.text(), /THỬ SỨC TRƯỚC KHI XEM LỜI GIẢI/i);
-  const lessons = (await authoredLessons()).filter((lesson) => lesson.project === slug);
-  assert.equal(lessons.length, 9);
-  for (const lesson of lessons) {
-    const response = await render(lesson.route);
-    assert.equal(response.status, 200, lesson.route);
+test("Project 44 catalog replaces the neighbor-list edition without reusing its learning progress", () => {
+  assert.deepEqual(
+    projectCatalog.find((entry) => entry.id === "44"),
+    {
+      id: "44",
+      slug,
+      sourceDirectory: directory,
+      checkpointCount: 12,
+      demoId: slug,
+      contentRevision: 2,
+      shaderRuntimePerTarget: true,
+    },
+  );
+  assert.equal(roadmapRevisions["44"].replacement.slug, slug);
+  assert.equal(roadmapRevisions["44"].previousSlug, "neighbor-list-skin");
+  assert.equal(project.lessons.length, 12);
+  const result = migrateProgressContent(
+    {
+      completedLessonIds: ["p43-l09", "p44-l01", "p44-l09", "p45-l02"],
+      lastLessonId: "p44-l09",
+      lastLesson: { id: "p44-l09", title: "old", href: "/projects/neighbor-list-skin/old" },
+      projectContentVersions: { p43: 2 },
+    },
+    { p44: 2 },
+  );
+  assert.deepEqual(result.completedLessonIds, ["p43-l09", "p45-l02"]);
+  assert.equal(result.lastLesson, undefined);
+  assert.equal(result.lastLessonId, undefined);
+  assert.equal(result.projectContentVersions.p44, 2);
+  assert.equal(result.projectContentVersions.p43, 2);
+  const current = migrateProgressContent(
+    { completedLessonIds: ["p44-l01"], projectContentVersions: { p44: 2 } },
+    { p44: 2 },
+  );
+  assert.deepEqual(current.completedLessonIds, ["p44-l01"]);
+  for (const key of ["mission", "outcome"]) assert.ok(project.challenge[key].length > 80);
+  assert.match(project.challenge.outcome, /128³/);
+  assert.match(project.challenge.outcome, /127³/);
+  assert.match(project.challenge.requirements.join(" "), /Khoét.*lỗ/);
+  assert.match(project.challenge.constraints.join(" "), /Count.*allocate\/emit/);
+  assert.match(project.challenge.definitionOfDone.join(" "), /chuột|Chuột/);
+});
+
+test("Project 44 lessons connect all twelve Canvas questions, teaching roles and exact source checkpoints", async () => {
+  const files = (await readdir(content)).filter((file) => file.endsWith(".mdx")).sort();
+  assert.deepEqual(
+    files,
+    project.lessons.map((lesson) => lesson.slug + ".mdx"),
+  );
+  assert.deepEqual(Object.keys(lab.modes), modes);
+  let cpp = 0,
+    glsl = 0;
+  for (const [index, lesson] of project.lessons.entries()) {
+    assert.equal(lesson.id, `p44-l${String(index + 1).padStart(2, "0")}`);
+    assert.equal(lesson.order, index + 1);
+    const text = await lessonText(lesson);
+    assert.ok(Buffer.byteLength(text) <= 32768, lesson.slug);
+    assert.doesNotMatch(text, /Bản biên tập|chưa (?:phát hành|ghép Canvas|đăng ký)/);
+    const roles = lessonSectionUsages(text).map((section) => section.key);
+    assert.deepEqual(
+      [...new Set(roles)],
+      lessonSections.map((section) => section.key),
+    );
+    assert.equal(roles.length, 7);
+    const usages = interactiveLabUsages(text, lesson.slug);
+    assert.equal(usages.length, 1);
+    assert.equal(usages[0].demo, slug);
+    assert.equal(usages[0].mode, modes[index]);
+    const time = text
+      .match(/^Thời gian gợi ý:.+$/m)?.[0]
+      .match(/\d+/g)
+      .map(Number);
+    assert.equal(
+      time?.reduce((sum, value) => sum + value, 0),
+      lesson.estimatedMinutes,
+      lesson.slug + " study time",
+    );
+    const blocks = [...text.matchAll(/```(cpp|glsl) title="([^"\n]+)"\r?\n([\s\S]*?)```/g)];
+    assert.equal(blocks.filter((block) => block[1] === "cpp").length, cppCounts[index]);
+    assert.equal(blocks.filter((block) => block[1] === "glsl").length, glslCounts[index]);
+    for (const [, language, title, excerpt] of blocks) {
+      const file = title.split(" — ")[0];
+      assert.ok(
+        isContiguousCodeExcerpt(excerpt, await checkpoint(index + 1, file)),
+        lesson.slug + ": " + title,
+      );
+      if (language === "cpp") ++cpp;
+      else ++glsl;
+    }
+  }
+  assert.equal(cpp, 112);
+  assert.equal(glsl, 16);
+});
+
+test("Project 44 source snapshots have real teaching boundaries and final matches checkpoint twelve", async () => {
+  assert.match(await checkpoint(0, "src/main.cpp"), /runTetraPreview/);
+  assert.doesNotMatch(
+    await checkpoint(0, "include/sculpt_topology.hpp"),
+    /inline EdgePoint edgePoint\(/,
+  );
+  assert.match(await checkpoint(1, "include/sculpt_topology.hpp"), /inline EdgePoint edgePoint\(/);
+  for (const order of [2, 3, 4, 5])
+    assert.match(await checkpoint(order, "src/main.cpp"), /runCpuPreview/);
+  assert.doesNotMatch(
+    await checkpoint(3, "include/sculpt_brush.hpp"),
+    /inline SampleBox applyBrush\(/,
+  );
+  assert.match(await checkpoint(4, "include/sculpt_brush.hpp"), /inline SampleBox applyBrush\(/);
+  for (const order of [6, 7])
+    assert.match(await checkpoint(order, "src/main.cpp"), /runGpuFieldPreview/);
+  for (const order of [8, 9])
+    assert.match(await checkpoint(order, "src/main.cpp"), /runGpuSurfacePreview/);
+  assert.doesNotMatch(await checkpoint(10, "src/main.cpp"), /sculpt_file_tasks\.hpp|files\.tick\(/);
+  assert.match(await checkpoint(11, "src/main.cpp"), /files\.tick\(/);
+  assert.doesNotMatch(await checkpoint(11, "src/main.cpp"), /runSculptBenchmark/);
+  assert.match(await checkpoint(12, "src/main.cpp"), /runSculptBenchmark/);
+  for (const order of Array.from({ length: 13 }, (_, index) => index))
+    assert.doesNotMatch(await checkpoint(order, "src/main.cpp"), /^\s*#.*LAB_CHECKPOINT/m);
+  const finalFiles = await walkFiles(path.join(source, "final"));
+  for (const file of finalFiles) {
+    const relative = path.relative(path.join(source, "final"), file);
+    const actual = await readFile(file),
+      expected = await readFile(path.join(source, "checkpoints/12", relative));
+    assert.deepEqual(actual, expected, "final mismatch: " + relative);
+  }
+  assert.ok(finalFiles.length > 60, "native product is multi-file, not just a snippet");
+  const cmake = await readFile(path.join(source, "CMakeLists.txt"), "utf8");
+  assert.match(cmake, /set\(PROJECT_CHECKPOINT_COUNT 12\)/);
+  assert.match(cmake, /SDL3::SDL3/);
+  assert.match(cmake, /SDL3 3\.4\.8 EXACT/);
+  assert.match(cmake, /shaders\/\$\{name\}/);
+});
+
+test("Project 44 references, glossary and code guides belong to the volume product", async () => {
+  const ids = new Set(volumeSculptorGlossaryTerms.map((term) => term.id));
+  assert.equal(ids.size, 12);
+  assert.deepEqual(
+    Object.keys(learning.guides),
+    project.lessons.map((lesson) => lesson.id),
+  );
+  assert.deepEqual(
+    Object.keys(learning.references),
+    project.lessons.map((lesson) => lesson.id),
+  );
+  for (const lesson of project.lessons) {
+    const guide = learning.guides[lesson.id];
+    assert.ok(guide.steps.length >= 3);
+    assert.ok(guide.expected.length > 30);
+    for (const file of guide.files) {
+      const target = file.startsWith("tests/")
+        ? path.join(source, file)
+        : path.join(source, "source-template", file);
+      assert.ok((await stat(target)).isFile(), lesson.id + " " + file);
+    }
+    for (const reference of learning.references[lesson.id])
+      if (reference.kind === "Thuật ngữ") assert.ok(ids.has(reference.href.split("#")[1]));
+  }
+  const final = await lessonText(project.lessons[11]);
+  assert.match(final, /\/downloads\/project-44-volume-sculptor\.zip/);
+  assert.match(final, /Mã chạy được sau bài/);
+  assert.match(final, /warm-up/);
+  assert.match(final, /median/);
+  assert.match(final, /MAD/);
+  assert.match(final, /\/roadmap\/45/);
+});
+
+test("Project 44 real MDX compiler retains One Dark, formulas and the lazy Canvas import", async () => {
+  for (const lesson of project.lessons) {
+    const compiled = String(
+      await compile(
+        { value: await lessonText(lesson), path: path.join(content, lesson.slug + ".mdx") },
+        courseMdxOptions,
+      ),
+    );
+    assert.match(compiled, /CourseStaticMarkup/);
+    assert.match(compiled, /one-dark-pro/);
+    assert.ok(new Set(compiled.match(/#[0-9a-f]{6}/gi)).size >= 5, lesson.slug);
+    assert.match(compiled, /katex-mathml/);
+    assert.match(compiled, /application\/x-tex/);
+    assert.match(compiled, /InteractiveLab/);
+    assert.doesNotMatch(compiled, /katex-error/);
+  }
+});
+
+test("Project 44 rendered overview exposes challenge, twelve lessons and the correct ZIP", async () => {
+  const response = await render(`/projects/${slug}`);
+  assert.equal(response.status, 200);
+  const html = (await response.text()).replaceAll("<!-- -->", "");
+  assert.match(html, /id="challenge-44"/);
+  assert.match(html, /VOLUME SCULPTOR/);
+  assert.ok(html.includes('href="/downloads/' + directory + '.zip"'));
+  for (const lesson of project.lessons)
+    assert.ok(html.includes(`/projects/${slug}/${lesson.slug}`));
+  assert.doesNotMatch(html, /NEIGHBOR LIST LAB|Danh sách hàng xóm có vùng đệm/);
+});
+
+test("Project 44 rendered lesson routes retain readable code and complete source access", async () => {
+  for (const lesson of project.lessons) {
+    const route = `/projects/${slug}/${lesson.slug}`,
+      response = await render(route);
+    assert.equal(response.status, 200, route);
     const html = await response.text();
-    assert.ok(Buffer.byteLength(html) < 350 * 1024, lesson.route);
+    assert.ok(Buffer.byteLength(html) < 350 * 1024, route);
     assert.match(html, /one-dark-pro/);
     assert.match(html, /ma-chay-duoc-sau-bai/);
     assert.doesNotMatch(html, /katex-error/);
   }
 });
 
-test("Project 44 progressively adds new concepts while retaining the P43 reference solver", async () => {
-  const files = [
-    "include/neighbor_list.hpp",
-    "include/neighbor_dynamics.hpp",
-    "include/neighbor_view.hpp",
-    "src/main.cpp",
-  ];
-  const symbols = [
-    "drawRadius",
-    "rebuildNaive",
-    "evaluateListed",
-    "maximumDisplacement",
-    "rebuildGrid",
-    "cachedVerletStep",
-    "auditForces",
-    "measureWork",
-    "validateNeighborList",
-  ];
-  for (let step = 0; step <= 9; step += 1) {
-    const directory = step === 0 ? "starter" : `checkpoints/${String(step).padStart(2, "0")}`;
-    const code = (
-      await Promise.all(files.map((file) => readFile(path.join(source, directory, file), "utf8")))
-    ).join("\n");
-    if (step > 0) assert.ok(code.includes(symbols[step - 1]), `checkpoint ${step} missing concept`);
-    for (const later of symbols.slice(step))
-      assert.ok(!code.includes(later), `checkpoint ${step} leaks ${later}`);
-    assert.ok(!code.includes("LAB_CHECKPOINT"));
-    const reference = await readFile(path.join(source, directory, "include/dynamics.hpp"), "utf8");
-    assert.match(reference, /inline Evaluation evaluate/);
-    assert.match(reference, /inline bool verletStep/);
+test("Project 44 rendered retired URLs redirect to the new overview, not a mismatched lesson", async () => {
+  for (const route of [
+    "/roadmap/44",
+    "/projects/neighbor-list-skin",
+    "/projects/neighbor-list-skin/01-ve-he-hat-va-vung-tuong-tac",
+  ]) {
+    const response = await render(route);
+    assert.ok(response.status >= 300 && response.status < 400, route);
+    assert.ok(response.headers.get("location")?.endsWith(`/projects/${slug}`), route);
   }
-});
-
-test("Project 44 documents half-skin, stale cache, two force checks and honest work counts", async () => {
-  const lessons = (await authoredLessons()).filter((lesson) => lesson.project === slug);
-  const modes = [
-    "nl-cutoff",
-    "nl-build",
-    "nl-forces",
-    "nl-rebuild",
-    "nl-grid",
-    "nl-verlet",
-    "nl-audit",
-    "nl-work",
-    "nl-final",
-  ];
-  const contracts = [
-    [/SDL_RenderFillRect/, /đứng yên/],
-    [/listRadius/, /i<j/],
-    [/sample.slope/, /cutoff/],
-    [/unwrapped/, /generation/, /skin\/2/],
-    [/visited/, /hai ô/, /sort/],
-    [/candidateList/, /sau drift/, /8 bước/],
-    [/3.2/, /2.4/, /missingPairs/, /khóa/],
-    [/buildChecks/, /forceChecks/, /806.400/, /mili giây/],
-    [/Mã nguồn hoàn chỉnh/, /timeout 20/, /Debug/, /Release/],
-  ];
-  for (const [index, lesson] of lessons.entries()) {
-    const text = await readFile(path.join(workspace, "content", slug, lesson.file), "utf8");
-    assert.ok(text.includes(`mode="${modes[index]}"`));
-    for (const formula of text.matchAll(/\$\$([\s\S]*?)\$\$/g)) {
-      assert.doesNotThrow(
-        () =>
-          katex.renderToString(formula[1], {
-            displayMode: true,
-            strict: "error",
-            throwOnError: true,
-          }),
-        `lesson ${index + 1} has unsupported math glyphs`,
-      );
-    }
-    for (const pattern of contracts[index]) assert.match(text, pattern, `lesson ${index + 1}`);
-    const experiments = text
-      .split("## Thử làm sai để hiểu đúng")[1]
-      .split("## Tự kiểm tra kết quả")[0];
-    assert.ok((experiments.match(/^\d+\. /gm) ?? []).length >= 2);
-  }
-  const main = await readFile(path.join(source, "final/src/main.cpp"), "utf8");
-  assert.match(main, /maximumSteps = 8/);
-  assert.match(main, /maximumSteps = 1/);
-  assert.match(main, /SDLK_SPACE && !frozen/);
-  assert.match(main, /SDLK_N && !frozen/);
-  const solver = await readFile(path.join(source, "final/include/neighbor_dynamics.hpp"), "utf8");
-  assert.equal(
-    (
-      solver
-        .split("inline bool cachedVerletStep")[1]
-        .split("struct Audit")[0]
-        .match(/ensureList\(/g) ?? []
-    ).length,
-    2,
-  );
 });

@@ -1,53 +1,72 @@
 import type { ProjectLabMeta } from "../../labs/types";
-
 const lab = {
   base: {
-    label: "NEIGHBOR LIST LAB",
-    title: "Không cần tìm lại mọi cặp sau mỗi bước",
+    label: "VOLUME SCULPTOR",
+    title: "Từ scalar field tới khối có thể khoét và ghép",
     description:
-      "Nhìn vùng cutoff và skin, kéo hạt để làm danh sách hết hiệu lực, rồi đối chiếu với mọi cặp. Mô phỏng luôn bắt đầu ở trạng thái tạm dừng.",
+      "Canvas 2D trích mesh CPU từ grid lưu thật, tối đa 32³ samples. Cọ nằm trên slice; bản C++ có surface picking, GPU 128³ và file I/O được kiểm riêng.",
   },
   modes: {
-    "nl-cutoff": {
-      title: "Vẽ hệ hạt và nhìn rõ phạm vi tương tác",
-      description: "Có 64 hạt đứng yên, vòng cutoff xanh quanh A và 2.016 cặp mỗi lần tính lực.",
-    },
-    "nl-build": {
-      title: "Lưu những cặp có thể sắp tương tác",
-      description: "Vòng vàng rộng hơn vòng xanh; danh sách gồm mỗi cặp đúng một lần.",
-    },
-    "nl-forces": {
-      title: "Tính lực từ danh sách mà không đổi mô hình",
-      description: "Cặp trong lớp skin có trong danh sách nhưng lực và U vẫn bằng zero.",
-    },
-    "nl-rebuild": {
-      title: "Khi nào danh sách bắt đầu không còn đáng tin?",
-      description: "Các lần dịch nhỏ không tăng rebuilds; chạm skin/2 thì mốc được chụp lại.",
-    },
-    "nl-grid": {
-      title: "Dùng cell grid để dựng danh sách",
-      description: "Grid và naive tạo cùng dãy cặp i<j, kể cả hộp chỉ có hai ô trên một trục.",
-    },
-    "nl-verlet": {
-      title: "Ghép neighbor list vào Velocity Verlet",
+    tetra: {
+      title: "Bốn scalar tạo mặt cắt ra sao?",
       description:
-        "Hạt chạy trong hộp tuần hoàn; danh sách chỉ dựng lại khi cần, còn force được tính lại mỗi bước.",
+        "Đổi từng dấu, isovalue và nhìn giao điểm cạnh. Giá trị đúng isovalue thuộc outside; triangle suy biến được bỏ và đếm.",
     },
-    "nl-audit": {
-      title: "Cố ý dùng danh sách cũ để tìm lỗi",
-      description: "Ca hai hạt cho đúng một cặp thiếu; dựng lại danh sách làm sai số về gần zero.",
-    },
-    "nl-work": {
-      title: "So sánh chi phí và chọn skin có căn cứ",
+    cells: {
+      title: "Nối cell mà không đổi đường chéo ở mặt chung",
       description:
-        "Có bảng bốn giá trị skin, số lần dựng, build checks, force checks và tổng công việc.",
+        "Grid nhỏ 12³, sáu tetra mỗi cube và wireframe. Phân biệt số samples với cells trước khi tăng quy mô.",
     },
-    "nl-final": {
-      title: "Kiểm chứng và chạy dự án hoàn chỉnh",
+    normals: {
+      title: "Đổi normal, giữ nguyên bề mặt",
       description:
-        "Tests thuần C++ chạy Debug và Release; final có đủ điều khiển, kiểm chứng và source ZIP.",
+        "So face normal với gradient normal trên cùng field; bật các đoạn normal để đọc hướng ra ngoài.",
+    },
+    brush: {
+      title: "Cọ sửa dữ liệu nào bên trong khối?",
+      description:
+        "Đặt cọ bằng lát cắt 3D, đổi radius/strength và đọc F(probe). Camera không sửa field; đây không phải native surface picking.",
+    },
+    stroke: {
+      title: "Nhiều stamp, một giao dịch Undo",
+      description:
+        "Kéo trên slice, thử Undo/Redo và bỏ capture giữa nét. Khoảng cách stamp theo radius, không theo FPS.",
+    },
+    field: {
+      title: "Field mới và mesh last-good không phải cùng trạng thái",
+      description:
+        "Pause job rồi đặt cọ sau khi tiếp tục: đọc field revision/mesh revision và nhãn đang giữ. Lab tính CPU, không đo GPU.",
+    },
+    prefix: {
+      title: "Mỗi cell cần một khoảng vertices riêng",
+      description:
+        "Pause, chạy một batch và chọn chunk có mặt để đọc count/offset. Đây là prefix CPU; bài C++ tự viết scan GPU.",
+    },
+    mesh: {
+      title: "Đủ capacity rồi mới emit",
+      description:
+        "Bật inspector, chọn capacity chỉ 12 vertices và xem job bị từ chối mà mesh cũ vẫn còn nguyên.",
+    },
+    dirty: {
+      title: "Một nét cọ lan tới những chunk nào?",
+      description:
+        "Xem hộp chunk kiểu x-ray, processed/reuse và generation. Orbit/pan/zoom không khởi động extraction.",
+    },
+    slice: {
+      title: "Isovalue và resolution làm đổi hình theo hai cách khác nhau",
+      description:
+        "Đổi iso không ghi field; giảm rồi tăng N nội suy lại dữ liệu và không khôi phục chi tiết đã mất.",
+    },
+    archive: {
+      title: "Bản lưu có bị sửa theo field đang nặn không?",
+      description:
+        "Giữ snapshot trong RAM, nặn tiếp rồi khôi phục. File .scl và OBJ thật thuộc ứng dụng C++, không được giả lập bằng nút này.",
+    },
+    validation: {
+      title: "Khoét lỗ và nối hai khối bằng cọ thật",
+      description:
+        "Hai nét cọ mẫu thay scalar rồi trích lại mesh. Đối chiếu slice, Undo/Redo và topology; Canvas không thay nghiệm thu GPU 128³.",
     },
   },
 } satisfies ProjectLabMeta;
-
 export default lab;

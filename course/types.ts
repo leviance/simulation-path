@@ -44,6 +44,7 @@ export interface ComingSoonProjectSummary extends ProjectSummaryBase {
 
 export interface ProjectRevision {
   previousTitle: string;
+  previousSlug?: string;
   previousPart?: string;
   replacement?: {
     slug: string;
