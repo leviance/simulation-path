@@ -104,7 +104,8 @@ test("Project 44 lessons connect all twelve Canvas questions, teaching roles and
     const text = await lessonText(lesson);
     assert.ok(Buffer.byteLength(text) <= 32768, lesson.slug);
     assert.doesNotMatch(text, /Bản biên tập|chưa (?:phát hành|ghép Canvas|đăng ký)/);
-    const roles = lessonSectionUsages(text).map((section) => section.key);
+    const sections = lessonSectionUsages(text);
+    const roles = sections.map((section) => section.key);
     assert.deepEqual(
       [...new Set(roles)],
       lessonSections.map((section) => section.key),
@@ -114,6 +115,11 @@ test("Project 44 lessons connect all twelve Canvas questions, teaching roles and
     assert.equal(usages.length, 1);
     assert.equal(usages[0].demo, slug);
     assert.equal(usages[0].mode, modes[index]);
+    const byRole = Object.fromEntries(sections.map((section) => [section.key, section]));
+    const labOffset = text.indexOf("<InteractiveLab ");
+    assert.ok(byRole.model.end < labOffset && labOffset < byRole.code.start, lesson.slug);
+    const experiments = text.slice(byRole.experiments.end, byRole.validation.start);
+    assert.ok((experiments.match(/^\d+\. /gm) ?? []).length >= 2, lesson.slug);
     const time = text
       .match(/^Thời gian gợi ý:.+$/m)?.[0]
       .match(/\d+/g)

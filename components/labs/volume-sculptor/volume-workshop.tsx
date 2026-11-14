@@ -109,7 +109,7 @@ export default function VolumeWorkshop({ mode }: { mode: VolumeMode }) {
     const blur = () => {
       releaseViewport(true);
       session.cancelStroke();
-      session.paused = true;
+      session.setPaused(true);
       refresh();
     };
     const visibility = () => {
@@ -144,7 +144,7 @@ export default function VolumeWorkshop({ mode }: { mode: VolumeMode }) {
     try {
       action();
     } catch (error) {
-      session.notice = error instanceof Error ? error.message : "Thao tác không hợp lệ.";
+      session.reportError(error);
     }
     refresh();
   }
@@ -301,7 +301,7 @@ export default function VolumeWorkshop({ mode }: { mode: VolumeMode }) {
     else if (key === " ") {
       if (!event.repeat)
         act(() => {
-          session.paused = !session.paused;
+          session.setPaused(!session.paused);
         });
     } else if (key === "enter") {
       if (!event.repeat) act(() => session.requestRemesh(true));

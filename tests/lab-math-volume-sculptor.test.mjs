@@ -366,7 +366,7 @@ test("session owner, pause, cancel and reset cannot mutate a replaced grid", () 
   assert.equal(session.beginStroke(8, brush), false);
   assert.equal(session.continueStroke(8, { x: 1, y: 0, z: 0 }), false);
   assert.equal(session.finishStroke(8), false);
-  session.paused = true;
+  session.setPaused(true);
   assert.equal(session.advance(), false);
   assert.deepEqual(session.grid.values, before);
   session.advance(true);
@@ -374,7 +374,7 @@ test("session owner, pause, cancel and reset cannot mutate a replaced grid", () 
   assert.equal(session.cancelStroke(8), false);
   assert.ok(session.cancelStroke(7));
   assert.deepEqual(session.grid.values, before);
-  session.paused = false;
+  session.setPaused(false);
   settle(session);
   assert.ok(session.beginStroke(9, brush));
   session.advance();
@@ -384,6 +384,30 @@ test("session owner, pause, cancel and reset cannot mutate a replaced grid", () 
   settle(session);
   assert.deepEqual(session.grid.values, resetValues);
   assert.equal(session.undoCount, 0);
+});
+
+test("session status commands keep field/history intact and expose errors without UI assignment", () => {
+  const session = new SculptSession(12);
+  settle(session);
+  const before = session.grid.values.slice();
+  const generation = session.requestedGeneration;
+  const mesh = session.lastGood;
+  session.setPaused(true);
+  assert.equal(session.paused, true);
+  assert.equal(session.advance(), false);
+  session.reportError(new RangeError("Capacity không hợp lệ."));
+  assert.equal(session.notice, "Capacity không hợp lệ.");
+  session.reportError(null);
+  assert.equal(session.notice, "Thao tác không hợp lệ.");
+  assert.deepEqual(session.grid.values, before);
+  assert.equal(session.lastGood, mesh);
+  assert.equal(session.requestedGeneration, generation);
+  assert.equal(session.undoCount, 0);
+  session.setPaused(false);
+  assert.equal(session.paused, false);
+  session.requestRemesh();
+  assert.equal(session.notice, "");
+  settle(session);
 });
 
 test("stroke commit/undo/redo are byte-exact, bounded to four snapshots and no-op safe", () => {

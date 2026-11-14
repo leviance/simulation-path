@@ -32,6 +32,10 @@ Nếu cọ sửa field sau count nhưng trước emit, một tetra có thể đ�
 
 Scaffold job, fence và last-good được cấp sẵn để bài này chạy an toàn. Bạn vẫn viết phần cấp output, emit, normal và draw dưới đây. Bài 09 mới đi sâu vào generation, cancellation và tái sử dụng chunk; không cần tự đoán toàn bộ state machine trước khi thấy mesh.
 
+Bật inspector rồi chọn capacity chỉ 12 vertices. Job phải bị từ chối và giữ mesh trước đó; tăng lại capacity để thử tiếp, không chấp nhận một mesh bị cắt cụt.
+
+<InteractiveLab demo="volume-sculptor" mode="mesh" />
+
 ## Bắt tay xây dựng
 
 ### 1. Mở đúng bộ khung của Bài 08
@@ -292,10 +296,6 @@ renderer.draw(model.active(), camera, 0, 0, sceneWidth, height, wireframe, norma
 Viewer 08 không hiện slice, đổi resolution hoặc save/load/export: đó là các bước sau. Nó vẫn có R để reset sphere, Space để pause, C để cancel và Enter để retry/resume last-good, vì một job GPU đang chạy cần điều khiển tối thiểu an toàn. Focus loss hủy stroke và pause; Space chủ động tiếp tục.
 
 ## Thử làm sai để hiểu đúng
-
-Bật inspector rồi chọn capacity chỉ 12 vertices. Job phải bị từ chối và giữ mesh trước đó; tăng lại capacity để thử tiếp, không chấp nhận một mesh bị cắt cụt.
-
-<InteractiveLab demo="volume-sculptor" mode="mesh" />
 
 1. Chạy N=32, bật F11 rồi xoay bằng right drag. Tắt wireframe, bật F12 xem normal RGB. Chỉ đổi camera hoặc chế độ xem: field revision, mesh generation và ID của các mesh buffers không được đổi.
 2. Dùng left drag nặn một vùng trên sphere. Chờ `CURRENT MESH`, xoay để thấy độ phồng từ bên cạnh. Nhấn D, khoét một vùng rồi Z/Y. Một vùng sáng đổi màu chưa đủ: silhouette và field/mesh revision phải thay đổi phù hợp.

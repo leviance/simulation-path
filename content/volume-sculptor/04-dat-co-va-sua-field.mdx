@@ -28,6 +28,10 @@ Helper camera cấp sẵn tạo một ray từ vị trí chuột trong viewport.
 
 Không được dùng scalar như độ dài bước ray sau khi field đã sửa. Ở đây ta lấy bước đều bằng spacing/4, giới hạn ray trong hộp domain, rồi chia đôi một đoạn đổi dấu. Cách này hữu hạn và dễ kiểm, nhưng có thể bỏ sót tiếp tuyến hoặc chi tiết mỏng hơn bước dò.
 
+Trong Canvas, kéo cọ trên mặt phẳng slice để thấy scalar và mesh cùng đổi. Đây là cách đặt cọ minh họa, khác surface picking theo camera của bản C++ vừa giải thích.
+
+<InteractiveLab demo="volume-sculptor" mode="brush" />
+
 ## Bắt tay xây dựng
 
 ### 1. Tính falloff và sửa các mẫu trong bán kính
@@ -225,13 +229,9 @@ Space tạm dừng remesh và không nhận stamp mới; camera vẫn dùng đư
 
 ## Thử tạo lỗi
 
-Trong Canvas, kéo cọ trên mặt phẳng slice để thấy scalar và mesh cùng đổi. Đây là cách đặt cọ minh họa, khác surface picking theo camera của bản C++ vừa giải thích.
+1. Trong bản thử, đổi dấu của delta để add lại tăng scalar. Dự đoán trước: cọ add sẽ làm bề mặt phồng ra hay lõm vào? Sau đó khôi phục. Không chữa bằng cách đổi nhãn nút A/D để hợp thức hóa công thức sai.
 
-<InteractiveLab demo="volume-sculptor" mode="brush" />
-
-Trong bản thử, đổi dấu của delta để add lại tăng scalar. Dự đoán trước: cọ add sẽ làm bề mặt phồng ra hay lõm vào? Sau đó khôi phục. Không chữa bằng cách đổi nhãn nút A/D để hợp thức hóa công thức sai.
-
-Thử thay việc đọc `field.sample` trong picker bằng `initialField`. Nặn một vùng rồi bấm lại đúng đó: cọ sẽ dò theo bề mặt cũ. Đây là lỗi dùng lại preset thay cho dữ liệu đã lưu; một ảnh sphere chưa chỉnh sửa sẽ không bắt được nó.
+2. Thử thay việc đọc `field.sample` trong picker bằng `initialField`. Nặn một vùng rồi bấm lại đúng đó: cọ sẽ dò theo bề mặt cũ. Đây là lỗi dùng lại preset thay cho dữ liệu đã lưu; một ảnh sphere chưa chỉnh sửa sẽ không bắt được nó.
 
 ## Kiểm tra trước khi sang bài mới
 

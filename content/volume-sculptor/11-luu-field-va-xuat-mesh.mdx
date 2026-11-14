@@ -47,6 +47,10 @@ Ta dùng FNV-1a 64-bit để phát hiện dữ liệu hỏng do ghi/đọc hoặ
 
 File đang ghi mang đuôi `.partial`. Ghi xong, flush/đóng, đọc lại kiểm tra, rồi mới rename thành `.scl` hoặc `.obj`. Việc này tránh gắn tên kết quả hoàn chỉnh cho file dở; nó **không** cam kết dữ liệu đã được đồng bộ bền vững xuống ổ đĩa khi mất điện. `ostream::flush()` không phải cơ chế bảo đảm crash durability của hệ điều hành.
 
+Giữ snapshot RAM, nặn tiếp rồi khôi phục để thấy bản lưu không đổi theo field đang sửa. Nút này không ghi .scl hoặc OBJ; các file thật phải thử bằng chương trình C++.
+
+<InteractiveLab demo="volume-sculptor" mode="archive" />
+
 ## Bắt tay xây dựng
 
 ### 1. Thêm đường chạy I/O từ checkpoint 11
@@ -426,10 +430,6 @@ if (auto loaded = files.takeLoaded()) {
 Các file được lưu dưới working directory của executable, trong `.runtime/volume-sculptor`. Terminal và Files panel cho biết đường dẫn; `.partial` bị giữ khi hủy không phải kết quả cần phát hành. Không đưa chúng, executable hoặc snapshots sinh tự động vào Git. Source chuẩn của checkpoint vẫn ở `source-template/`; thư mục `checkpoints/11` là bản mã đầy đủ để build, không chỉ các trích đoạn trong bài.
 
 ## Thử làm sai để hiểu đúng
-
-Giữ snapshot RAM, nặn tiếp rồi khôi phục để thấy bản lưu không đổi theo field đang sửa. Nút này không ghi .scl hoặc OBJ; các file thật phải thử bằng chương trình C++.
-
-<InteractiveLab demo="volume-sculptor" mode="archive" />
 
 1. Dùng bản sao file `.scl`, bỏ byte cuối hoặc thêm một byte ở cuối. Hai trường hợp đều phải bị từ chối, dù header vẫn đủ và N còn hợp lệ. Đừng thử bằng file duy nhất chứa tác phẩm của bạn.
 2. Sửa một byte isovalue nhưng không cập nhật checksum. Nếu parser chỉ checksum payload, lỗi metadata này sẽ lọt qua. Với format hiện tại, nó phải bị phát hiện trước handoff.

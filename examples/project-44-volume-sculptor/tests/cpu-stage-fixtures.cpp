@@ -1,6 +1,7 @@
 #include "sculpt_cpu_mesh.hpp"
 #include "sculpt_cpu_pick.hpp"
 #include "sculpt_document.hpp"
+#include "sculpt_mesh_topology.hpp"
 #include <iostream>
 
 namespace {
@@ -37,6 +38,28 @@ double radialNormalError(const std::vector<SurfaceVertex>& vertices) {
         squared += dx * dx + dy * dy + dz * dz;
     }
     return std::sqrt(squared / static_cast<double>(vertices.size()));
+}
+
+void tinyTriangleFixtures() {
+    // An interior sample belongs to 24 Freudenthal tetra. Moving its value
+    // close to iso shrinks their faces; it does not make those faces zero-area.
+    for (const float insideValue : {-0.00001F, -0.0000001F}) {
+        ScalarGrid grid({3, {-1, -1, -1}, 2});
+        for (int z = 0; z < 3; ++z)
+            for (int y = 0; y < 3; ++y)
+                for (int x = 0; x < 3; ++x)
+                    grid.set(x, y, z, 1);
+        grid.set(1, 1, 1, insideValue);
+
+        const auto mesh = extractCpu(grid, 0, 1024, CpuNormalMode::face);
+        std::cout << "CPU TINY TRIANGLE CHECK inside=" << insideValue << " vertices=" << mesh.vertices.size() << " expected=72 discarded=" << mesh.degenerateTriangles << '\n';
+        requireStage(mesh.vertices.size() == 72 && mesh.degenerateTriangles == 0, "A resolved near-isovalue surface was erased by the area cutoff");
+        const auto topology = inspectMeshTopology(mesh.vertices);
+        requireStage(topology.closedOriented() && topology.components == 1 && topology.eulerCharacteristic() == 2, "Near-isovalue triangles do not form a closed surface");
+        for (const auto& vertex : mesh.vertices)
+            requireStage(finite(normalOf(vertex)) && std::abs(length(normalOf(vertex)) - 1) < 0.000003F, "A tiny face needs a finite unit normal without magnitude underflow");
+    }
+    std::cout << "CPU TINY TRIANGLE PASS cases=2 expectedFaces=24 closedOriented=1 noEpsilonWelding=1 unitNormals=1\n";
 }
 
 void normalModeFixtures() {
@@ -129,6 +152,7 @@ void singleStampFixtures() {
 } // namespace
 
 void testCpuTeachingStages() {
+    tinyTriangleFixtures();
     normalModeFixtures();
     fieldPickFixtures();
     singleStampFixtures();

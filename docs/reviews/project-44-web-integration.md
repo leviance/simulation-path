@@ -2,6 +2,12 @@
 
 Mốc 14/11/2026. Học phần mới dùng slug `volume-sculptor`, còn nhãn chờ nghiệm thu. Đây không phải biên bản chứng nhận toàn bộ Project 44 đã đạt đặc tả. Nguồn chuẩn vẫn là Product Specification v4 complete; [hồ sơ native](project-44-progress.md) và [hồ sơ Canvas](project-44-canvas-progress.md) có phạm vi riêng.
 
+## Cập nhật trước khi lưu tiến độ vào Git
+
+Phát hiện mới chưa được sửa: mesh OBJ xuất sau khi khoét bằng chuột có 12 cạnh biên, một component và Euler −2. Phép kiểm độc lập không hàn đỉnh theo epsilon; báo cáo local ở `.validation/p44-ui-obj-audit-1794649315185.json`. Nguyên nhân đang được khoanh vùng ở ngưỡng loại triangle có diện tích nhỏ nhưng vẫn khác 0; chưa có bản sửa thuật toán được nghiệm thu.
+
+Đã thêm fixture `tinyTriangleFixtures()` vào `tests/cpu-stage-fixtures.cpp` để giữ lại ca tái hiện. Build Release target tests thành công, nhưng CTest mới thất bại: sample bên trong có giá trị −0,00001 bị loại cả 24 triangle, còn 0 thay vì 72 vertices. Log `.validation/p44-tiny-before-fix-1794649954998.log`. Không bỏ fixture hoặc đổi kỳ vọng để làm xanh test. Các kết quả CTest đạt bên dưới thuộc gói baseline trước khi thêm regression này; ZIP digest `18b2f86f…` chưa chứa test mới và không còn khớp toàn bộ nguồn hiện tại. Commit lưu tiến độ không đồng nghĩa chốt phát hành hoặc đạt toàn bộ tests.
+
 ## Nguồn chuẩn sau khi chuyển thư mục
 
 - C++: `examples/project-44-volume-sculptor/source-template/`, README và tests. Không còn giữ thêm một bản authored trong `examples/drafts/`.
@@ -47,9 +53,15 @@ Ma trận đầu lượt dùng gói digest `e5af48e8…`, configure trực tiế
 
 Đã đọc đủ 15 compiler dependency logs mỗi cấu hình: 495 workspace input paths/cấu hình đều nằm trong gói hoặc đúng hai include directory do SDL package khai báo. SDL package dùng lại header cache dưới `project-26-cmake/_deps/sdl3-src/include`, nhưng package version và `SDL_version.h` đều là 3.4.8; không cho phép cả thư mục project cũ hay toàn `_deps`. Không có include từ source authored ngoài gói.
 
-Gói hiện tại `18b2f86f…` đã configure mới tại `OmNP8Y/build-release-proof`, build **Release final/tests** và CTest 1/1 trong 0,29 giây. Hai compiler logs mới có 122 workspace inputs, không có dependency authored ngoài gói; SDL header/package vẫn khớp 3.4.8. Phạm vi này chưa bao gồm Debug hoặc starter/12 checkpoint của digest mới.
+Gói hiện tại `18b2f86f…` đã configure mới tại `OmNP8Y/build-release-proof`. Ma trận mới đã build đủ **starter, checkpoint 01–12, final và tests ở cả Debug/Release**, theo nhóm tối đa bốn target, `--parallel 1`, hard timeout 70 giây/nhóm. CTest Debug đạt 1/1 trong 2,29 giây; Release đạt 1/1 trong 0,26 giây. Audit đủ 15 compiler dependency logs mỗi cấu hình: 495 workspace inputs/cấu hình, không có dependency authored ngoài gói; SDL header/package vẫn khớp 3.4.8. Log chốt: `.validation/p44-package-tests-1794643447874.log`. Kết quả này thay phạm vi final/tests Release ban đầu, không thay kiểm runtime hoặc thao tác native.
 
 Runtime trên gói đầu lượt qua analytic GPU 128³: 2.097.152 samples, 2.048.383 cells, 22.778 active cells, 408.024 vertices/136.008 triangles, canaries nguyên. I/O checkpoint 11 kiểm field 8.388.672 bytes, snapshot bất biến khi tiếp tục nặn, restore field/mesh bit-exact; OBJ 39.704.266 bytes được parse và so đủ 408.024 vertices. Cancel save/export/load, checksum failure và trả candidate budget đều qua. Một lượt riêng tạm chuyển `final/shaders` trong bản giải nén sang backup, chạy từ executable với runtime shader fallback, kiểm sphere/layout oracle 32³ rồi khôi phục source; không sửa source authored. Đây vẫn không phải kiểm chuột/phím trong cửa sổ native.
+
+Runtime trên **gói hiện tại `18b2f86f…`** đã qua lại analytic GPU 128³ trong `.validation/p44-zip-runtime-analytic-1794644682440.log`: cùng samples/cells/active/vertex counts, field max error 4,23268×10⁻⁷, surface RMS 7,03696×10⁻⁵ world unit, canaries nguyên. `.validation/p44-zip-runtime-products-1794644685495.log` kiểm stored brush thật: sphere kín Euler 2 → tunnel kín Euler 0 với 257 outside probes; hai sphere, hai components/Euler 4 → bridge một component/Euler 2 với 129 inside probes. Undo/redo đều qua. Đây là verifier topology/numeric độc lập, không thay việc tự tạo tunnel/bridge bằng input UI.
+
+Hai lượt cùng digest này cũng qua: slice/probe ở checkpoint 10 (`.validation/p44-zip-runtime-slice-1794646087748.log`) kiểm 45 probe, max scalar error 3,94783×10⁻⁸, 12 sign-color pixels và cache lifecycle; job ở checkpoint 09 (`.validation/p44-zip-runtime-jobs-1794646094793.log`) kiểm Pause thu hồi fence nhưng không gửi batch mới, bỏ stale count, giấu partial emit, trả candidate bytes khi Cancel và Retry mesh byte-exact. Cả hai xử lý grid 128³ thật.
+
+Benchmark Release final từ chính ZIP hiện tại hoàn tất protocol 2 warm-up + 5 measured trials, không full-field/mesh readback trong workload. `.validation/p44-zip-runtime-benchmark-1794646237101.log` giữ raw samples và `.validation/p44-zip-benchmark-audit-1794646344360.log` xác nhận tính lại độc lập đủ 17 nhóm median/min/max/MAD. Sphere 408.024 → edited 410.616 vertices; dirty 27/512 chunks, reuse 62 nonempty buffers; peak tracked reservation 59.861.328 bytes, cuối trial về baseline 0. Trên máy/driver đã ghi, median local count 4,847616 ms, full count 84,853760 ms, draw mesh-only 0,546816 ms, host total 4.170,4993 ms. Host total gồm orchestration/chờ các job của cả trial, không phải một frame hoặc kernel time; không dùng các số này làm cam kết FPS. App deadline 45 giây, supervisor 50 giây; không đổi deadline của các verifier khác.
 
 ## Kiểu dữ liệu source và kiểm toàn repository
 
@@ -85,9 +97,35 @@ Cold typecheck toàn repo sau tách mode đã qua lại: 2.771 inputs, 736.290 K
 
 Lượt `--check` cuối cho metadata, content registry và source của đủ 67 project qua trong tổng deadline 60 giây giữ nguyên. Architecture và Git hygiene qua; không stage, commit hoặc push các chỉnh sửa của lượt nghiệm thu này. Toàn site chưa được chứng nhận xanh: lỗi trước mắt có thể che các lỗi sau trong cùng vòng lặp test, nên cần audit lại đầy đủ thay vì suy số pass mới từ các ca đã sửa.
 
+## Native UI từ ZIP hiện tại — 14/11/2026
+
+Hai lượt chạy `project_44_final.exe` Release từ `OmNP8Y`, grid 128³, mỗi lượt có app deadline 120 giây và supervisor 135 giây. Computer Use chọn đúng một window theo process path và chụp trạng thái mới sau từng input. Không dùng verifier gọi API thay thao tác chuột/phím. Driver/context báo RTX 3050 Laptop, OpenGL 4.3.0 NVIDIA 546.30.
+
+- `.validation/p44-native-ui-final-1794644057971.log`: F2 đổi radius 0,280 → 0,305; left drag tạo khối lồi, undo trả sphere, redo khôi phục nét. Mesh field revision lần lượt 2 → 3 → 4; F9 mở slice/probe, Tab chuyển riêng sang camera, left drag orbit và wheel zoom giữ generation 4. Stats hiển thị 2.097.152 samples, 2.048.383 cells, 413.556 emitted vertices/137.852 triangles sau nét và history. Q có trong input trace, process kết thúc exit 0.
+- `.validation/p44-native-ui-final-1794644173505.log`: click tab Files, S lưu field; D + left drag khoét rãnh; O tải lại snapshot, sphere trở về và history được xóa. E xuất OBJ, panel báo read-back verified. File thật được công bố trong `.runtime/volume-sculptor` của bản giải nén: field 8.388.672 bytes, OBJ 39.704.266 bytes. Log có `FIELD SAVED`, `FIELD LOADED AND REMESHED`, `MESH EXPORTED AND PARSED`. Đây là thao tác S/O/E, không phải mở OBJ trong phần mềm ngoài.
+- Trong lượt thứ hai, Space Pause giữ viewport; F5 yêu cầu remesh, C hủy; sau Space panel báo cancelled, Enter retry rồi về ready mà sphere không mất. Lượt này tự kết thúc exit 0 ở deadline. Yêu cầu Q cuối đến sau khi window đã đóng nên helper không còn PID foreground; đã quan sát lại danh sách window rỗng, không gửi lại input vào handle cũ.
+- `.validation/p44-native-ui-final-translated-1794645417456.log`: nạp fixture có origin (2; −2; 3), extent 4,5, cùng nguyên payload scalar của file native đã lưu. Header/checksum được tạo độc lập; payload SHA-256 `02b054fa64bfcbf7ee1b2178fb5b52979a46c36cfffbc7b903d48110302abc09`. Camera bám khối đã dịch, floor/guide nằm cùng domain; F9/X hiện và đổi slice/probe theo tọa độ mới. F12 normal và F11 wireframe hiển thị mesh thật; Ctrl+2 hoàn tất resample 128→64, giữ khối và domain, log `resampled=1`. Fixture ban đầu có max Z=9,5 bị từ chối đúng giới hạn [−8; 8]; không nới giới hạn để cho fixture sai qua. Lượt hợp lệ tự kết thúc exit 0. Input keysym `Right` lại tới SDL dưới dạng keypad 6, nên không tính thao tác ấy là đã kiểm isovalue; thao tác resize cuối cũng đến sau deadline, chưa được thực hiện trong lượt này.
+- `.validation/p44-native-ui-final-1794645717130.log`: double-click caption maximize rồi xem lại bố cục/viewport; không đổi field/mesh. Đổi focus sang cửa sổ checkpoint 01 do cùng runner sở hữu, quan sát editor báo `JOBS PAUSED / CAMERA LIVE`; lấy lại focus vẫn Pause, Space mới đưa về ready. F10 thu gọn panel, viewport mở rộng, Q thoát exit 0. Viewer 01 chỉ xác nhận bề mặt nhập môn ban đầu (một triangle/revision 1), không tính là đã kiểm hết phím của viewer. Cả hai process hữu hạn đều kết thúc và danh sách window kiểm đã rỗng.
+
+Còn thiếu kiểm trực tiếp: pan bằng middle drag, capture/focus loss/resize giữa stroke, đổi isovalue bằng đúng arrow key, chỉnh layer/probe và các viewer/checkpoint chưa đủ ma trận. Resize và focus loss khi idle, grid 128→64, normal/wireframe và load domain dịch đã có bằng chứng riêng ở trên; không gộp chúng thành kiểm giữa stroke. Việc đã xem slice hoặc sửa một rãnh chưa chứng minh tạo tunnel/bridge bằng UI; các fixture topology vẫn là phạm vi riêng.
+
+## Lint — chẩn đoán có kết quả, chưa xanh toàn repo
+
+Lượt toàn repo `.validation/p44-lint-1794644327607.log` hoàn tất với exit 1: **178 errors, 13 warnings**. Không phải process bị treo. Log focused 30 giây trước dừng trong lúc tải config/rules, chưa đủ căn cứ kết luận hàm Canvas là nguyên nhân chậm. Không tăng timeout stage lint toàn repo hoặc tắt rule.
+
+Hai lỗi trong phạm vi tích hợp đã sửa: đổi tên biến `module` trong fixture generator; đóng gói Pause/notice của `SculptSession` thành getter chỉ đọc và command, thay việc UI ghi trực tiếp vào instance do React giữ. Giữ nguyên ý nghĩa Pause/step/cancel và thêm fixture kiểm field/history/generation không đổi khi phát lệnh trạng thái. Lint focused 20 file đạt 0 errors/0 warnings, report `.validation/p44-focused-lint-current.json`; toán/lifecycle và generator đạt 21/21. Không lấy hai sửa đổi này làm bằng chứng đã sửa các lỗi lint cũ của những project khác.
+
+Kiểm nhịp bài còn phát hiện Canvas nằm sau code thay vì cạnh mô hình trực giác, năm bài đầu chưa đánh số hai thí nghiệm lỗi. Đã đưa nguyên câu hỏi/Canvas của đủ 12 bài lên cuối phần giải thích trước code, giữ thí nghiệm C++ sau bước chạy; đánh số hai thí nghiệm ở Bài 01–05. Không đổi code excerpts, modes hoặc giảm yêu cầu; test riêng kiểm vị trí/đủ thí nghiệm để ca lỗi ở project khác không che regression P44. Render/browser sau thay đổi được nghiệm thu lại riêng.
+
+Sau thay đổi này: cold typecheck toàn repo đạt (734.892 KiB; 23,47 giây); production build hoàn tất trong deadline 240 giây, log `.validation/p44-production-1794645023883.log`. Render P44 đạt 10/10 trong 7,56 giây, `.validation/p44-p44-render-1794645219779.log`; browser P44 ban đầu đạt 5/5 trong 42,7 giây, `.validation/p44-p44-browser-1794645227776.log`.
+
+Bộ browser mở rộng cuối đạt **6/6 trong 45,5 giây**, `.validation/p44-p44-browser-1794646039685.log`: thêm Pause/step/cancel/retry giữ last-good, camera trong Pause không đổi generation, keyboard stamp tạo history, đổi grid rồi Reset đưa về 24³/history rỗng. Ca mới ban đầu dừng do selector `getByLabel` không khớp control; đổi sang role combobox/name đúng cây accessibility, giữ mọi assertion và deadline 30 giây/ca. Không tăng timeout, retry hoặc coi lượt 5/6 là đạt.
+
+Chốt nguồn sau ca browser mới: `.validation/p44-final-source-checks-1794646428382.log` qua đủ metadata/search, lesson registry và snapshot/payload của toàn catalog, với deadline 60 giây chung cho ba bước course. Architecture, Git hygiene và format của các web input thay đổi đều qua. Lint focused cuối vẫn 20 files/0 errors/0 warnings (`.validation/p44-focused-lint-final.json`). Cold TypeScript toàn repo qua lại: 2.771 inputs, 735.562 KiB, 34,58 giây, heap cap 1.024 MiB/timeout 120 giây. Không có process kiểm/browser server/native window còn chạy sau khi các handle báo terminal; không stage hoặc commit các sửa đổi tiếp tục này.
+
 ## Gate còn lại
 
-1. Chốt lại bộ browser route đầy đủ sau thay đổi cuối, các check registry/source/architecture/type và Git hygiene. Kiểm production build/render/route riêng; không dùng dev HTTP 200 thay production.
-2. Kiểm build/runtime từ ZIP digest mới sau sửa C++; giữ riêng bằng chứng của gói trước. Không dùng ma trận build hoặc verifier GPU thay kiểm window.
-3. Hoàn tất native UI matrix: các viewer/editor, capture/focus/resize/reset, camera/slice/probe, grid/iso, Pause/cancel, S/O/E và load domain dịch. Giữ phân biệt test API/GPU với thao tác cửa sổ thật.
+1. Kiểm lại và xử lý các ca production toàn site còn báo lỗi, cùng lint ngoài phạm vi P44; không dùng bộ P44 đạt để tuyên bố CI toàn repo xanh.
+2. Bổ sung runtime từ ZIP hiện tại cho starter, các nhánh CPU/field/count/emit, I/O cancellation/checksum và shader fallback còn chỉ có bằng chứng gói trước. Ma trận build/CTest độc lập và các lượt GPU mới đã qua nhưng không thay các phạm vi này.
+3. Hoàn tất phần native UI còn thiếu đã liệt kê ở trên, gồm các viewer/checkpoint chưa đủ ma trận. Giữ riêng resize/focus khi idle với giữa stroke, verifier tạo sản phẩm với thao tác tự khoét/nối và API với cửa sổ thật.
 4. Audit từng yêu cầu của P44 trong spec với bằng chứng đúng phạm vi rồi mới chốt trạng thái nghiệm thu. Benchmark/GPU 128³ trước đây vẫn có hồ sơ, nhưng không thay các gate trên.

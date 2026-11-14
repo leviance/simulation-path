@@ -28,6 +28,10 @@ $$\frac{\partial f}{\partial x}\approx\frac{f(p+h\,e_x)-f(p-h\,e_x)}{2h}.$$
 
 h ở phép lấy normal bằng nửa spacing. Nó là khoảng thăm dò theo world units, không phải epsilon dùng cho mọi phép kiểm số thực.
 
+Tắt rồi bật “Gradient normal” và vẽ các đoạn normal. Hình học không đổi; khác biệt ánh sáng đến từ hướng normal, không phải thêm vertices để giấu các mặt phẳng.
+
+<InteractiveLab demo="volume-sculptor" mode="normals" />
+
 ## Bắt tay xây dựng
 
 ### 1. Đọc field giữa tám mẫu
@@ -130,13 +134,9 @@ Bấm F12 để xem RGB normal. Các màu thay đổi liên tục trên sphere, 
 
 ## Thử tạo lỗi
 
-Tắt rồi bật “Gradient normal” và vẽ các đoạn normal. Hình học không đổi; khác biệt ánh sáng đến từ hướng normal, không phải thêm vertices để giấu các mặt phẳng.
+1. Trong bản thử, đổi `normal` thành hướng ngược trước khi ghi vertex. Dự đoán ảnh sáng và RGB trước khi chạy. Với sphere, phép kiểm `dot(n,p)` sẽ âm ở nhiều nơi; đây là dấu sai hướng, không phải lý do tăng độ sáng ambient.
 
-<InteractiveLab demo="volume-sculptor" mode="normals" />
-
-Trong bản thử, đổi `normal` thành hướng ngược trước khi ghi vertex. Dự đoán ảnh sáng và RGB trước khi chạy. Với sphere, phép kiểm `dot(n,p)` sẽ âm ở nhiều nơi; đây là dấu sai hướng, không phải lý do tăng độ sáng ambient.
-
-Thử riêng việc normalize gradient mà bỏ kiểm độ dài. Một sphere trơn có thể không làm lỗi lộ ngay. Fixture checkerboard ở reference cố ý tạo các giao điểm có gradient 0; hãy xem fallback counter và kiểm finite/unit thay vì chỉ dùng một ảnh sphere làm bằng chứng.
+2. Thử riêng việc normalize gradient mà bỏ kiểm độ dài. Một sphere trơn có thể không làm lỗi lộ ngay. Fixture checkerboard ở reference cố ý tạo các giao điểm có gradient 0; hãy xem fallback counter và kiểm finite/unit thay vì chỉ dùng một ảnh sphere làm bằng chứng.
 
 ## Kiểm tra trước khi sang bài mới
 

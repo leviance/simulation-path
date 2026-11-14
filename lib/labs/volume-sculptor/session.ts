@@ -31,8 +31,8 @@ export class SculptSession {
   requestedGeneration = 0;
   lastGood: VolumeMesh | null = null;
   job: MeshJob | null = null;
-  paused = false;
-  notice = "";
+  private pausedState = false;
+  private noticeText = "";
   capacity = meshVertexCapacity;
   changedWrites = 0;
   private changedSinceMesh: SampleBox = emptyBox();
@@ -47,6 +47,21 @@ export class SculptSession {
     this.shape = shape;
     this.grid.fill(shape);
     this.requestRemesh(true);
+  }
+
+  // The mutable engine owns its lifecycle. UI consumers read status and issue
+  // commands instead of assigning into the object retained by React.
+  get paused() {
+    return this.pausedState;
+  }
+  get notice() {
+    return this.noticeText;
+  }
+  setPaused(paused: boolean) {
+    this.pausedState = paused;
+  }
+  reportError(error: unknown) {
+    this.noticeText = error instanceof Error ? error.message : "Thao tác không hợp lệ.";
   }
 
   get strokeOwner() {
@@ -94,7 +109,7 @@ export class SculptSession {
       this.forceFull ? null : dirtyChunks(this.grid.spec, this.changedSinceMesh),
       this.capacity,
     );
-    this.notice = "";
+    this.noticeText = "";
   }
 
   setIsovalue(value: number) {
@@ -147,7 +162,7 @@ export class SculptSession {
       stroke.queue.push(...stamps);
     } catch (error) {
       this.cancelStroke(owner);
-      this.notice = error instanceof Error ? error.message : "Đã hủy stroke.";
+      this.noticeText = error instanceof Error ? error.message : "Đã hủy stroke.";
     }
     return true;
   }
@@ -215,14 +230,14 @@ export class SculptSession {
       this.changedSinceMesh = emptyBox();
       this.forceFull = false;
     }
-    if (job.phase === "failed") this.notice = job.error;
+    if (job.phase === "failed") this.noticeText = job.error;
     return true;
   }
 
   cancelRemesh() {
     this.cancelStroke();
     this.job?.cancel();
-    this.notice = "Đã hủy cập nhật; mesh last-good vẫn được giữ. Enter để dựng lại.";
+    this.noticeText = "Đã hủy cập nhật; mesh last-good vẫn được giữ. Enter để dựng lại.";
   }
 
   undo() {
@@ -277,7 +292,7 @@ export class SculptSession {
   saveSnapshot() {
     if (this.stroke) return false;
     this.archive = { grid: this.grid.clone(), isovalue: this.isovalue };
-    this.notice =
+    this.noticeText =
       "Đã giữ snapshot field trong RAM của lab, không phải file .scl. C++ có save/load và export OBJ thật.";
     return true;
   }
@@ -292,13 +307,13 @@ export class SculptSession {
     this.redoSnapshots = [];
     this.changedSinceMesh = emptyBox();
     this.requestRemesh(true);
-    this.notice = "Khôi phục bản lưu RAM; mesh chỉ được thay khi generation mới xong.";
+    this.noticeText = "Khôi phục bản lưu RAM; mesh chỉ được thay khi generation mới xong.";
     return true;
   }
 
   demonstrateProduct(kind: "drill" | "bridge") {
     this.reset(kind === "drill" ? "sphere" : "separatedSpheres");
-    this.paused = false;
+    this.setPaused(false);
     const brush: Brush = {
       center: { x: 0, y: 0, z: -1.05 },
       radius: 0.4,

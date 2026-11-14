@@ -32,6 +32,10 @@ Mỗi invocation sở hữu một sample trong vùng cọ. Nếu batch có nhi�
 
 Ta vẫn giữ dấu âm bên trong, dương bên ngoài. Add làm scalar giảm, Subtract làm scalar tăng. Sau nhiều lần nặn, đây là field tổng quát, không còn bảo đảm là SDF.
 
+Lab này vẫn tính trên CPU. Dùng Pause, đổi isovalue rồi chạy từng batch để đọc field/mesh revision và nhãn last-good; kết quả GPU 128³ phải kiểm trong executable.
+
+<InteractiveLab demo="volume-sculptor" mode="field" />
+
 ## Bắt tay xây dựng
 
 ### 1. Nhận scaffold GPU và công bố rõ phần tự viết
@@ -282,10 +286,6 @@ Trên generator single-config, executable nằm thẳng trong build directory; c
 Bạn phải thấy N=128, SAMPLES=2097152 và CELLS=2048383. Mặc định lát cắt Z ở layer 64 hiện vùng inside màu xanh, outside màu cam và đường mức 0 màu mint. Kéo cọ gần đường mức, nhấn X đổi trục hoặc Up/Down đổi layer để thấy dấu cọ có phạm vi trong cả chiều thứ ba. Enter đặt một stamp tại probe; HJKL dịch probe, A/D đổi mode, F2/F3 tăng radius/strength, Shift giảm và Ctrl chọn bước lớn.
 
 ## Thử làm sai để hiểu đúng
-
-Lab này vẫn tính trên CPU. Dùng Pause, đổi isovalue rồi chạy từng batch để đọc field/mesh revision và nhãn last-good; kết quả GPU 128³ phải kiểm trong executable.
-
-<InteractiveLab demo="volume-sculptor" mode="field" />
 
 1. Chạy `--grid 127`, `--radius nan` hoặc một option lạ. Parser phải từ chối trước khi tạo cửa sổ. Quy mô lạ không được làm chương trình cấp một buffer rồi truy cập theo quy mô khác.
 2. Trên giấy, thử sampleBatch=1000. Có 4 groups, tức 1024 invocations; 24 lane cuối phải return. Không bỏ guard rồi chạy ghi ngoài buffer trên GPU để thử vận may.

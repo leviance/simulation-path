@@ -42,6 +42,10 @@ $$
 
 Cả shader tô lát cắt, điểm đo bằng số và pass đổi resolution phải tuân theo cùng quy ước tọa độ. Nếu một phía quên đảo chiều v, con trỏ sẽ chỉ vào một nơi nhưng số đo lại lấy ở nơi đối xứng qua ảnh.
 
+Giữ probe cố định khi đổi iso, rồi hạ/tăng N. Slice Canvas dùng cam cho phía trong, xanh cho phía ngoài; xem dấu F−iso, không suy dấu chỉ từ palette của native.
+
+<InteractiveLab demo="volume-sculptor" mode="slice" />
+
 ## Bắt tay xây dựng
 
 ### 1. Mở editor 10 và đặt công cụ lát cắt vào vòng lặp
@@ -386,10 +390,6 @@ Sau vòng sự kiện, thứ tự xử lý là `model.tick()` → `scenes.tick(m
 Tab Files và phím S/E/O chỉ xuất hiện từ Bài 11, khi ta xây định dạng lưu và quy trình xác minh file.
 
 ## Thử làm sai để hiểu đúng
-
-Giữ probe cố định khi đổi iso, rồi hạ/tăng N. Slice Canvas dùng cam cho phía trong, xanh cho phía ngoài; xem dấu F−iso, không suy dấu chỉ từ palette của native.
-
-<InteractiveLab demo="volume-sculptor" mode="slice" />
 
 1. Trong bản thử riêng, bỏ `1 - slice.v` phía C++ nhưng giữ shader nguyên. Dùng plane nghiêng và chọn một điểm không nằm giữa ảnh: ảnh vẫn có vẻ đẹp, nhưng giá trị đọc không thuộc vị trí đang chỉ. Khôi phục phép đổi chiều rồi đối chiếu lại cả ba trục.
 2. Chỉ so field revision trong cache, bỏ điều kiện mesh generation. Nhấn F5 hoặc đổi isovalue: `F(P)` không đổi nhưng nhãn M bị giữ ở mesh cũ. Đây là lỗi trạng thái, không phải lỗi phép nội suy. Khôi phục điều kiện và chạy fixture cache.

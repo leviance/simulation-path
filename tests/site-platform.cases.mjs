@@ -16,6 +16,30 @@ import {
   walkFiles,
 } from "./site-support.mjs";
 
+function hasCanvasReadoutClass(html) {
+  return [...html.matchAll(/(?:^|\s)class=(["'])(.*?)\1/gi)].some((match) =>
+    match[2].split(/\s+/).includes("lab-readout"),
+  );
+}
+
+test("Canvas readout detection matches complete class tokens with optional layout classes", () => {
+  for (const classes of [
+    "lab-readout",
+    "lab-readout morph-readout",
+    "compact lab-readout",
+    "compact  lab-readout wide",
+  ])
+    assert.ok(hasCanvasReadoutClass(`<dl class="${classes}"><dt>State</dt><dd>ready</dd></dl>`));
+  assert.ok(hasCanvasReadoutClass("<div class='compact lab-readout'>State</div>"));
+  for (const html of [
+    '<dl class="lab-readout-extra">',
+    '<dl class="not-lab-readout">',
+    '<dl data-class="lab-readout">',
+    '<dl aria-label="State">',
+  ])
+    assert.equal(hasCanvasReadoutClass(html), false, html);
+});
+
 test("server-renders the finished home page", async () => {
   const response = await render();
   assert.equal(response.status, 200);
@@ -341,7 +365,7 @@ test("all published project and lesson routes render", async () => {
     assert.match(html, /KIẾN THỨC SẼ DÙNG/i, `Missing project objectives: ${project}`);
     assert.match(html, /MÔ HÌNH TƯƠNG TÁC/i, `Missing project-level interactive model: ${project}`);
     assert.match(html, /class="interactive-lab"/i, `Missing project Canvas lab: ${project}`);
-    assert.match(html, /class="lab-readout"/i, `Missing textual Canvas state: ${project}`);
+    assert.ok(hasCanvasReadoutClass(html), `Missing textual Canvas state: ${project}`);
     assert.match(html, /href="#lessons"/i, `Missing reveal-tutorial link: ${project}`);
     assert.ok(
       html.indexOf("project-challenge") < html.indexOf("project-progress"),

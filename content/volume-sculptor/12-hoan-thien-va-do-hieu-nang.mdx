@@ -43,6 +43,10 @@ $$
 
 Min/max cũng được giữ để thấy khoảng dao động. Năm mẫu chỉ là một phép đo nhỏ có thể lặp lại, không phải khoảng tin cậy hay cam kết tốc độ trên mọi GPU. Warm-up được bỏ theo quy tắc đã định, không phải vì có kết quả làm biểu đồ xấu đi.
 
+Chạy hai nét cọ mẫu để khoét và nối, rồi tự thử Undo/Redo và slice. Chúng sửa field thật; Canvas không thay kiểm GPU 128³ hoặc số đo benchmark của executable.
+
+<InteractiveLab demo="volume-sculptor" mode="validation" />
+
 ## Bắt tay xây dựng
 
 ### 1. Chạy bản editor đầy đủ trước khi đo
@@ -328,10 +332,6 @@ Muốn so tổng chi phí GPU remesh local/full, cộng count+scan+emit+normals 
 `BENCH_MEMORY` của lượt đó có peak reservation 59.861.328 bytes (khoảng 57,1 MiB), cuối mỗi trial về baseline 0, trong limit 512 MiB. Bộ đếm gồm buffers được `GpuBudget` theo dõi và canary; không phải tổng VRAM của driver, shader programs, window hay residency vật lý. `reserve()` cập nhật high-water mark khi dành chỗ; không gọi nó là phép đo VRAM toàn máy.
 
 ## Thử làm sai để hiểu đúng
-
-Chạy hai nét cọ mẫu để khoét và nối, rồi tự thử Undo/Redo và slice. Chúng sửa field thật; Canvas không thay kiểm GPU 128³ hoặc số đo benchmark của executable.
-
-<InteractiveLab demo="volume-sculptor" mode="validation" />
 
 1. Đo `chrono` chỉ quanh `requestIsovalue()`. Kết quả có thể rất nhỏ nhưng công việc còn nằm trong hàng đợi. Đối chiếu với lúc model thực sự current và GPU query; đừng đổi nhãn một lời gọi enqueue thành kernel time.
 2. Trong bản thử riêng, dùng lại một model và nặn thêm ở mỗi trial. Quan sát vertices/brush writes thay đổi, rồi khôi phục fresh model. Benchmark hiện tại phải bắt được workload không còn giống nhau.

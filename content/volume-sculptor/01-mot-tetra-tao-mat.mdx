@@ -33,6 +33,10 @@ Ta chọn isovalue bằng 0: giá trị nhỏ hơn thuộc phía trong, bằng h
 
 Hãy dự đoán trước khi chạy checkpoint 01: nếu đổi thêm một mẫu sang âm, có bao nhiêu cạnh nối hai phía? Trước hết tìm các cạnh bị cắt, rồi mới đếm triangle.
 
+Chọn “Hai đỉnh trong”, đoán số triangle trước khi đọc bảng. Sau đó đổi một scalar về đúng isovalue để theo dõi giao điểm co lại hoặc triangle suy biến.
+
+<InteractiveLab demo="volume-sculptor" mode="tetra" />
+
 ## Bắt tay xây dựng
 
 ### 1. Tìm giao điểm trên một cạnh
@@ -203,13 +207,9 @@ Rỗng là kết quả đúng khi mọi mẫu cùng phía. Ta vẫn vẽ khung v
 
 ## Thử tạo lỗi
 
-Chọn “Hai đỉnh trong”, đoán số triangle trước khi đọc bảng. Sau đó đổi một scalar về đúng isovalue để theo dõi giao điểm co lại hoặc triangle suy biến.
+1. Tạm thay công thức t bằng `0.5F`. Ở isovalue 0 và các mẫu ±1, ảnh có thể vẫn đúng. Tăng isovalue lên khoảng 0,4: giao điểm đáng lẽ phải dịch nhưng giờ kẹt ở midpoint. Đây là lý do một ảnh mặc định không đủ kiểm nội suy. Khôi phục công thức trước khi tiếp tục.
 
-<InteractiveLab demo="volume-sculptor" mode="tetra" />
-
-Tạm thay công thức t bằng `0.5F`. Ở isovalue 0 và các mẫu ±1, ảnh có thể vẫn đúng. Tăng isovalue lên khoảng 0,4: giao điểm đáng lẽ phải dịch nhưng giờ kẹt ở midpoint. Đây là lý do một ảnh mặc định không đủ kiểm nội suy. Khôi phục công thức trước khi tiếp tục.
-
-Thử riêng việc bỏ nhánh `insideCount == 0 || insideCount == 4`. Đọc đường đi tới phép chia cho số mẫu của nhóm rỗng và tìm lý do guard phải đứng trước phép lấy trung bình. Không cần chạy dữ liệu lỗi để biết phép chia ấy không hợp lệ.
+2. Thử riêng việc bỏ nhánh `insideCount == 0 || insideCount == 4`. Đọc đường đi tới phép chia cho số mẫu của nhóm rỗng và tìm lý do guard phải đứng trước phép lấy trung bình. Không cần chạy dữ liệu lỗi để biết phép chia ấy không hợp lệ.
 
 ## Kiểm tra trước khi sang bài mới
 

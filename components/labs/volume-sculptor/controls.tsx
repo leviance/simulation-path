@@ -197,7 +197,7 @@ export function VolumeControls({ mode, session, view, onView, onAction, onReset,
           aria-pressed={session.paused}
           onClick={() =>
             onAction(() => {
-              session.paused = !session.paused;
+              session.setPaused(!session.paused);
             })
           }
         >
@@ -208,7 +208,7 @@ export function VolumeControls({ mode, session, view, onView, onAction, onReset,
           disabled={!session.needsWork}
           onClick={() =>
             onAction(() => {
-              session.paused = true;
+              session.setPaused(true);
               session.advance(true);
             })
           }

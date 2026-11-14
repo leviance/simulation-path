@@ -48,6 +48,10 @@ Một chunk không phụ thuộc vùng chỉnh sửa có thể giữ nguyên buf
 
 Ví dụ chunk A được build ở generation 1 và không bị nét cọ của generation 2 ảnh hưởng: build generation vẫn là 1, dependency-valid generation là 2. Nếu sửa cả hai thành 2, bạn mất thông tin cần dùng để kiểm reuse. Nếu buộc mọi chunk phải có build generation 2, bạn lại không thể tái sử dụng chunk nào.
 
+Chọn một chunk có bề mặt, đặt stamp gần đó rồi đọc processed/reuse. Sau khi xong, chỉ xoay camera: field revision và requested generation không được tăng.
+
+<InteractiveLab demo="volume-sculptor" mode="dirty" />
+
 ## Bắt tay xây dựng
 
 ### 1. Giữ các shader của Bài 08, bắt đầu từ bộ khung 09
@@ -324,10 +328,6 @@ Khi work list thay đổi, selection được tính lại trong danh sách mới
 Renderer vẫn chỉ nhận `model.active()` như Bài 08. Đừng đưa `candidate_` ra để vẽ từng chunk vừa xong. Panel tách `COUNTED REQUEST` với `EMITTED ACTIVE`, và `JOB CHUNKS` với `LAST CHUNKS`: một số thuộc công việc đang chạy, số kia thuộc lần publish gần nhất.
 
 ## Thử làm sai để hiểu đúng
-
-Chọn một chunk có bề mặt, đặt stamp gần đó rồi đọc processed/reuse. Sau khi xong, chỉ xoay camera: field revision và requested generation không được tăng.
-
-<InteractiveLab demo="volume-sculptor" mode="dirty" />
 
 1. Nặn một nét nhỏ trên sphere ở N=128, chờ current. `LAST CHUNKS` nên nhỏ hơn 512 và `REUSED NONEMPTY` lớn hơn 0; số cụ thể tùy nét cọ. I/F6 xem các chunk của job. Quay camera hoặc đổi selection: generation không đổi.
 2. Chờ current rồi F5. Lần này `LAST CHUNKS` phải là 512/512, reused nonempty về 0, còn field revision giữ nguyên. So wireframe/normal trước và sau. Fixture ở phần kiểm mới là phép so từng byte; mắt thường không chứng minh được equivalence.

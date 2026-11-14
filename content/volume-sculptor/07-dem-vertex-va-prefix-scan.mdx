@@ -48,6 +48,10 @@ Ta dùng cây cộng dồn: cộng từ lá lên root, giữ tổng, đổi root
 
 Trong shader, một workgroup có 256 invocations, mỗi invocation nạp hai phần tử để xử lý 512 số trong shared memory. Một chunk cần tám đoạn như vậy. Ta scan từng đoạn, scan tám tổng đoạn, rồi cộng prefix của đoạn vào các offset cục bộ. Đây là cách tổ chức của chính implementation này; xem thêm thuật toán cây trong [GPU Gems 3 — Parallel Prefix Sum](https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-39-parallel-prefix-sum-scan-cuda). Ta không dùng CUDA hoặc thư viện scan làm thay.
 
+Chờ lượt đầu xong, chọn chunk có bề mặt rồi Pause và dựng lại. Tiến từng batch, đọc counts và offsets; prefix CPU của lab không được coi là phép đo hoặc implementation scan GPU.
+
+<InteractiveLab demo="volume-sculptor" mode="prefix" />
+
 ## Bắt tay xây dựng
 
 ### 1. Chuẩn bị storage, chưa chuẩn bị vertex buffer
@@ -470,10 +474,6 @@ F5/F6 chọn chunk, F7/F8 chọn cell, Ctrl tăng bước lên 16. Cột vàng l
 Viewer chỉ tải counts/offsets của chunk đang xem, tổng 32 KiB, rồi giữ cache đến khi chọn chunk hoặc generation đổi. Đó là dữ liệu chẩn đoán, không phải CPU đang tính prefix thay GPU.
 
 ## Thử làm sai để hiểu đúng
-
-Chờ lượt đầu xong, chọn chunk có bề mặt rồi Pause và dựng lại. Tiến từng batch, đọc counts và offsets; prefix CPU của lab không được coi là phép đo hoặc implementation scan GPU.
-
-<InteractiveLab demo="volume-sculptor" mode="prefix" />
 
 1. Trong **shader checkpoint 07 count-only**, tạm không đặt root về 0. Build/chạy verifier hữu hạn rồi khôi phục code. Count totals có thể vẫn đúng, nhưng offset đầu đã sai; fixture phải bắt được. Không mang shader sai ấy sang bước emit hoặc chạy ghi ngoài buffer.
 2. Chọn một padded slot: count phải là 0, còn offset có thể khác 0 vì trước nó có cell tạo vertices. Đừng buộc offset của slot rỗng về 0.

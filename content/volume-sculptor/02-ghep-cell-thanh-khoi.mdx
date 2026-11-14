@@ -24,6 +24,10 @@ $$h=\frac{\mathrm{extent}}{N-1},\qquad p=\mathrm{origin}+h\,q.$$
 
 Để lưu trong một vector liên tục, ta dùng `index = (z * N + y) * N + x`. Helper `sampleIndex` kiểm bounds đã có sẵn. Hai cell dùng chung một mẫu sẽ cùng đọc một index, không tự tạo hai bản sao rồi sửa lệch nhau.
 
+Grid CPU nhỏ bên dưới lưu scalar thật. Bật wireframe, đổi N rồi so số samples với cells; đừng nhầm việc xoay camera với dựng lại mesh.
+
+<InteractiveLab demo="volume-sculptor" mode="cells" />
+
 ## Bắt tay xây dựng
 
 ### 1. Đi từ tọa độ grid tới giá trị field
@@ -212,13 +216,9 @@ Các preset CPU nhỏ là bước học và reference, không đáp ứng thay c
 
 ## Thử tạo lỗi
 
-Grid CPU nhỏ bên dưới lưu scalar thật. Bật wireframe, đổi N rồi so số samples với cells; đừng nhầm việc xoay camera với dựng lại mesh.
+1. Đổi mẫu số spacing từ N−1 thành N trong bản thực hành, giữ nguyên extent và N. Kiểm vị trí world của mẫu cuối trước khi nhìn ảnh: nó có còn bằng origin + extent không? Khôi phục sau khi quan sát.
 
-<InteractiveLab demo="volume-sculptor" mode="cells" />
-
-Đổi mẫu số spacing từ N−1 thành N trong bản thực hành, giữ nguyên extent và N. Kiểm vị trí world của mẫu cuối trước khi nhìn ảnh: nó có còn bằng origin + extent không? Khôi phục sau khi quan sát.
-
-Thử riêng một lần đổi thứ tự corner của một tetra mà không đồng bộ các cell/mặt chung. Bật wireframe và chạy fixture shared-face của reference để hiểu invariant cần giữ; không lấy shading mịn làm cách chữa. Nếu chỉ sửa bản checkpoint, hãy đưa chính định nghĩa đang thử vào fixture tương ứng, vì CTest mặc định vẫn đọc `final/include`.
+2. Thử riêng một lần đổi thứ tự corner của một tetra mà không đồng bộ các cell/mặt chung. Bật wireframe và chạy fixture shared-face của reference để hiểu invariant cần giữ; không lấy shading mịn làm cách chữa. Nếu chỉ sửa bản checkpoint, hãy đưa chính định nghĩa đang thử vào fixture tương ứng, vì CTest mặc định vẫn đọc `final/include`.
 
 ## Kiểm tra trước khi sang bài mới
 

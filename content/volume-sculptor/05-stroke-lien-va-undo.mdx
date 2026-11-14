@@ -26,6 +26,10 @@ Stamp đầu đặt ở mouse-down. Trong lúc kéo, ta không dò lại bề m�
 
 Giữ owner, brush cố định, sampler, snapshot trước nét và cờ có sample thật sự đổi. Release đúng owner sẽ thêm **một** snapshot vào undo. Escape/blur/reset phải đóng owner; nếu đang kéo thì khôi phục field trước nét. Pointer cũ không được tiếp tục ghi sau reset.
 
+Kéo một nét trong slice rồi Undo đúng một lần. Thử kéo ra ngoài Canvas mới thả; mất capture hoặc Pause sẽ hủy nét chưa kết thúc, không nối input cũ sang nét sau.
+
+<InteractiveLab demo="volume-sculptor" mode="stroke" />
+
 ## Bắt tay xây dựng
 
 ### 1. Giữ quãng đường thừa trong StrokeSampler
@@ -320,13 +324,9 @@ Bắt đầu nét khác rồi bấm Escape, hoặc chuyển focus ra ngoài. Fie
 
 ## Thử tạo lỗi
 
-Kéo một nét trong slice rồi Undo đúng một lần. Thử kéo ra ngoài Canvas mới thả; mất capture hoặc Pause sẽ hủy nét chưa kết thúc, không nối input cũ sang nét sau.
+1. Trong bản thử, đặt `carry_` về 0 ở cuối mỗi event. Đi cùng một đoạn world một lần bằng ít segment, một lần bằng nhiều segment nhỏ. So các tâm stamp và field, không chỉ độ mượt của một screenshot. Khôi phục carry sau khi quan sát.
 
-<InteractiveLab demo="volume-sculptor" mode="stroke" />
-
-Trong bản thử, đặt `carry_` về 0 ở cuối mỗi event. Đi cùng một đoạn world một lần bằng ít segment, một lần bằng nhiều segment nhỏ. So các tâm stamp và field, không chỉ độ mượt của một screenshot. Khôi phục carry sau khi quan sát.
-
-Thử bỏ điều kiện owner khi nhận mouse-up trong fixture. Gửi một release từ owner khác: nó không được commit hoặc nhả giao dịch. Chạy fixture riêng, không cố tạo nhiều con trỏ bằng một chuỗi input khó hủy trên desktop.
+2. Thử bỏ điều kiện owner khi nhận mouse-up trong fixture. Gửi một release từ owner khác: nó không được commit hoặc nhả giao dịch. Chạy fixture riêng, không cố tạo nhiều con trỏ bằng một chuỗi input khó hủy trên desktop.
 
 ## Kiểm tra trước khi sang bài mới
 

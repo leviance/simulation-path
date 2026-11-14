@@ -170,3 +170,50 @@ test("Project 44 final exposes complete source, bounded source fetches, code cop
   await expect(row(page, "Trạng thái")).toContainText("current");
   expect(errors).toEqual([]);
 });
+
+test("Project 44 status commands preserve last-good across Pause, step, cancel, retry and Reset", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(overview + "/" + project.lessons[8].slug);
+  const lab = page.locator('[data-volume-mode="dirty"]');
+  const canvas = lab.locator("canvas");
+  await expect(lab).toHaveAttribute("data-ready", "true");
+  await expect(row(page, "Trạng thái")).toContainText("current");
+  const vertices = await row(page, "Vertices / triangles đang vẽ").innerText();
+  await lab.getByRole("button", { name: "Pause cập nhật", exact: true }).click();
+  const resume = lab.getByRole("button", { name: "Tiếp tục cập nhật", exact: true });
+  await expect(resume).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    lab.getByRole("button", { name: "Đặt một stamp tại probe · B", exact: true }),
+  ).toBeDisabled();
+  await lab.getByRole("button", { name: "Dựng lại toàn grid · Enter", exact: true }).click();
+  await expect(row(page, "Trạng thái")).toContainText("PAUSE · count");
+  const generation = await row(page, "Generation muốn / đang vẽ").innerText();
+  const counted = await row(page, "Count / emit cells").innerText();
+  await canvas.focus();
+  await canvas.press("ArrowRight");
+  await expect(row(page, "Generation muốn / đang vẽ")).toHaveText(generation);
+  await lab.getByRole("button", { name: "Chạy một batch", exact: true }).click();
+  await expect(row(page, "Count / emit cells")).not.toHaveText(counted);
+  await expect(row(page, "Vertices / triangles đang vẽ")).toHaveText(vertices);
+  await lab.getByRole("button", { name: "Hủy cập nhật · C", exact: true }).click();
+  await expect(row(page, "Trạng thái")).toContainText("cancelled");
+  await expect(row(page, "Vertices / triangles đang vẽ")).toHaveText(vertices);
+  await lab.getByRole("button", { name: "Dựng lại toàn grid · Enter", exact: true }).click();
+  await resume.click();
+  await expect(row(page, "Trạng thái")).toContainText("current");
+  await expect(row(page, "Trạng thái")).not.toContainText("PAUSE");
+  await canvas.focus();
+  await canvas.press("b");
+  await expect(row(page, "Trạng thái")).toContainText("current");
+  await expect(lab.getByRole("button", { name: "Undo · Z (1/4)", exact: true })).toBeEnabled();
+  await lab.getByRole("combobox", { name: "Grid CPU", exact: true }).selectOption("12");
+  await expect(row(page, "Trạng thái")).toContainText("current");
+  await lab.getByRole("button", { name: "Reset lab", exact: true }).click();
+  await expect(lab.getByRole("combobox", { name: "Grid CPU", exact: true })).toHaveValue("24");
+  await expect(row(page, "Trạng thái")).toContainText("current");
+  await expect(lab.getByRole("button", { name: "Undo · Z (0/4)", exact: true })).toBeDisabled();
+  expect(errors).toEqual([]);
+});

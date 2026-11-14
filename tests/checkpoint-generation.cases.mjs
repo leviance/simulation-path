@@ -131,16 +131,16 @@ test("scoped checkpoint generation preserves other projects, check is read-only,
         { cwd: root, encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "pipe"] },
       );
     run(["--project=01"]);
-    const module = readFileSync(
+    const moduleSource = readFileSync(
       path.join(root, "lib/generated-checkpoint-sources/p01/1.mjs"),
       "utf8",
     );
-    const runtimeNames = sourceRuntimePayloadNames(module, (name) =>
+    const runtimeNames = sourceRuntimePayloadNames(moduleSource, (name) =>
       readFileSync(path.join(root, "lib/generated-checkpoint-sources/p01", name), "utf8"),
     );
     assert.ok(runtimeNames.length > 1, "fixture must exercise bounded runtime sharding");
-    assert.match(module, /await Promise\.all\(/);
-    assert.doesNotMatch(module, /import \w+ from/);
+    assert.match(moduleSource, /await Promise\.all\(/);
+    assert.doesNotMatch(moduleSource, /import \w+ from/);
     const runtimeFiles = [];
     for (const name of runtimeNames) {
       const bytes = readFileSync(
