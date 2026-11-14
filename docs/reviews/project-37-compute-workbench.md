@@ -12,18 +12,18 @@ Giữ ba phép toán Add, AXPY và Difference trên `Vec4` 16 byte. Preset 1.000
 
 Bảng này ghi nhận source tại HEAD `1694a1eb554e0147a9d6a33afbbcb11cd456288e`, không mô tả nhầm các file mới đang biên tập trong worktree.
 
-| Yêu cầu | Bằng chứng từ bản tại HEAD nêu trên | Hướng sửa |
-| --- | --- | --- |
-| CPU vs GPU, timing theo N | `main.cpp` chỉ thu GPU milliseconds và median. Không có khoảng đo CPU kernel, bảng theo N hoặc phép đo end-to-end | Thêm CPU baseline, GPU kernel và end-to-end có nhãn/ranh giới riêng; giữ cả kết quả GPU không thắng |
-| Cùng workload trong một lượt đo | Các phím N/operation/scalar/reset không hủy hoặc khóa `benchmarkActive`; chín mẫu có thể đến từ nhiều cấu hình | Chụp cấu hình/seed ở đầu job, gắn generation với mẫu; đổi mô hình hủy job cũ |
-| Query có vòng đời rõ | `execute` kiểm availability một lần rồi trả; lần gọi sau dùng lại cùng query ID | Giữ pending query cho tới khi có kết quả hoặc hủy; không ghi đè mẫu chưa đọc |
-| Warm-up và độ phân tán | Warm-up dựa vào lượt tính trước benchmark; chỉ báo median của chín GPU mẫu | Warm-up riêng cho mỗi case, lưu raw samples cùng min/median/max; không trộn warm-up với mẫu đo |
-| Dashboard trực quan | Cửa sổ chỉ vẽ 64 cột thành phần X qua `tanh`; số đo và controls chủ yếu ở title | Dựng panel dữ liệu, trục/đơn vị, bảng kết quả và inspector A/B/CPU/GPU; đọc từ output thật |
-| Tính toán kích thước an toàn | `makeDispatchPlan(N, 0)` có thể trừ unsigned dưới 0; byte count nhân trước khi kiểm giới hạn | Chặn input/overflow trước phép nhân, cast hoặc cấp phát; báo rõ giới hạn phần cứng và ngân sách ứng dụng |
-| Reference và tolerance đáng tin | `computeCpu` dùng kích thước nhỏ hơn của A/B; tolerance không có finite/non-negative guard | Không âm thầm cắt input lệch size; kiểm tolerance, scalar và operation; dùng fixture độc lập có đáp án tính tay |
-| Giữ ứng dụng phản hồi | Đọc shader và cấp phát không có ngân sách rõ; readback xảy ra ngay trong lời gọi dispatch | Tách prepare/submit/poll/readback/validate thành công việc hữu hạn; không busy-wait và không gọi GPU từ CTest |
-| GPU correctness đủ mạnh | CPU tests chỉ kiểm mô hình CPU; chưa có chế độ native verification hữu hạn | Thêm `--verify` dùng driver thật: odd N, sentinel/canary, ba operation, input không bị ghi, sai số, lỗi shader và cleanup |
-| Canvas phục vụ câu hỏi học tập | Có mode/timeline mô hình; tests hiện chủ yếu gọi cùng helper và kiểm từ khóa | Tách model/controller/render/readout; kiểm state/pointer/lifecycle; nói rõ timeline mô hình không phải số đo GPU |
+| Yêu cầu                         | Bằng chứng từ bản tại HEAD nêu trên                                                                               | Hướng sửa                                                                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| CPU vs GPU, timing theo N       | `main.cpp` chỉ thu GPU milliseconds và median. Không có khoảng đo CPU kernel, bảng theo N hoặc phép đo end-to-end | Thêm CPU baseline, GPU kernel và end-to-end có nhãn/ranh giới riêng; giữ cả kết quả GPU không thắng                       |
+| Cùng workload trong một lượt đo | Các phím N/operation/scalar/reset không hủy hoặc khóa `benchmarkActive`; chín mẫu có thể đến từ nhiều cấu hình    | Chụp cấu hình/seed ở đầu job, gắn generation với mẫu; đổi mô hình hủy job cũ                                              |
+| Query có vòng đời rõ            | `execute` kiểm availability một lần rồi trả; lần gọi sau dùng lại cùng query ID                                   | Giữ pending query cho tới khi có kết quả hoặc hủy; không ghi đè mẫu chưa đọc                                              |
+| Warm-up và độ phân tán          | Warm-up dựa vào lượt tính trước benchmark; chỉ báo median của chín GPU mẫu                                        | Warm-up riêng cho mỗi case, lưu raw samples cùng min/median/max; không trộn warm-up với mẫu đo                            |
+| Dashboard trực quan             | Cửa sổ chỉ vẽ 64 cột thành phần X qua `tanh`; số đo và controls chủ yếu ở title                                   | Dựng panel dữ liệu, trục/đơn vị, bảng kết quả và inspector A/B/CPU/GPU; đọc từ output thật                                |
+| Tính toán kích thước an toàn    | `makeDispatchPlan(N, 0)` có thể trừ unsigned dưới 0; byte count nhân trước khi kiểm giới hạn                      | Chặn input/overflow trước phép nhân, cast hoặc cấp phát; báo rõ giới hạn phần cứng và ngân sách ứng dụng                  |
+| Reference và tolerance đáng tin | `computeCpu` dùng kích thước nhỏ hơn của A/B; tolerance không có finite/non-negative guard                        | Không âm thầm cắt input lệch size; kiểm tolerance, scalar và operation; dùng fixture độc lập có đáp án tính tay           |
+| Giữ ứng dụng phản hồi           | Đọc shader và cấp phát không có ngân sách rõ; readback xảy ra ngay trong lời gọi dispatch                         | Tách prepare/submit/poll/readback/validate thành công việc hữu hạn; không busy-wait và không gọi GPU từ CTest             |
+| GPU correctness đủ mạnh         | CPU tests chỉ kiểm mô hình CPU; chưa có chế độ native verification hữu hạn                                        | Thêm `--verify` dùng driver thật: odd N, sentinel/canary, ba operation, input không bị ghi, sai số, lỗi shader và cleanup |
+| Canvas phục vụ câu hỏi học tập  | Có mode/timeline mô hình; tests hiện chủ yếu gọi cùng helper và kiểm từ khóa                                      | Tách model/controller/render/readout; kiểm state/pointer/lifecycle; nói rõ timeline mô hình không phải số đo GPU          |
 
 Nguồn của các phát hiện: `source-template/src/main.cpp`, `include/vector_compute_engine.hpp`, `include/vector_compute_math.hpp`, `tests/tests.cpp`, các bài 08–09 và Canvas ở bản trước khi xây lại. Đây là các thiếu sót nhìn thấy trong source cũ; chưa dùng chúng để suy ra tốc độ hay mức tiêu thụ bộ nhớ trên máy người học.
 
@@ -70,18 +70,18 @@ Controller giới hạn một pointer owner, chọn đúng ô theo cả hai tọ
 
 ### Kết quả kiểm đã thực thi
 
-| Phần kiểm | Kết quả và phạm vi |
-| --- | --- |
-| Build native | Starter, 11 checkpoint, final và tests build thành công ở cả Debug/Release; C++20, SDL 3.4.8, Visual Studio 2022/MSVC 19.33 |
-| CPU tests | 53 phép kiểm đạt ở mỗi cấu hình; runner đếm lỗi và trả mã thoát thật, không phụ thuộc NDEBUG |
-| GPU thật | 120 phép kiểm đạt ở mỗi cấu hình trên RTX 3050 Laptop/OpenGL 4.3.0 NVIDIA 546.30; sáu N từ 1 đến 1.000.003, ba operation, toàn bộ output, fixture độc lập, guard/canary, input preservation, interface lỗi và last-good program |
-| Worker/benchmark thật | 55 phép kiểm đạt ở mỗi cấu hình; ba N với 33 lượt warm-up/đo, cấu hình bất biến, raw samples hữu hạn, spread có thứ tự, kết quả N lớn và cancel không công bố dữ liệu thiếu hoặc generation cũ |
-| Chạy từng mốc | 26 lượt `--smoke` đạt: starter, mọi checkpoint và final ở Debug/Release; mỗi chương trình tự đóng sau số frame hữu hạn |
-| Dashboard | Đã chạy benchmark và kiểm ảnh xuất từ chính SDL framebuffer bằng `--snapshot`; đủ ba hàng N và 33/33 lượt, số đo chính cao 14 px, inspector bốn thành phần và trạng thái PASS. Đây không phải kiểm thao tác bàn phím hoặc ảnh chụp cửa sổ qua hệ điều hành |
-| Production và nội dung | Build thành công; **293/293** kiểm HTML/source contract đạt, 0 failed/skipped/cancelled; lượt cuối khoảng 133,9 giây |
-| Canvas math | **903/903** kiểm toàn bộ Canvas đạt với hai worker, 0 skipped/cancelled; lượt cuối khoảng 44,9 giây, trong giới hạn 60 giây không đổi; gồm 16 kiểm riêng P37 |
-| Browser P37 | Ba test Chrome authored đạt: grid/pointer, timing/reduced motion, inspector/error probes/source/progress qua reload; DPR 1,5, không page/console/HTTP error; source JSON chỉ tải P37 |
-| Dung lượng và source | Chunk gốc Canvas P37 4.842 byte; toàn bộ 67 ZIP khớp từng byte; TypeScript, architecture budgets và Git hygiene đạt |
+| Phần kiểm              | Kết quả và phạm vi                                                                                                                                                                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build native           | Starter, 11 checkpoint, final và tests build thành công ở cả Debug/Release; C++20, SDL 3.4.8, Visual Studio 2022/MSVC 19.33                                                                                                                                |
+| CPU tests              | 53 phép kiểm đạt ở mỗi cấu hình; runner đếm lỗi và trả mã thoát thật, không phụ thuộc NDEBUG                                                                                                                                                               |
+| GPU thật               | 120 phép kiểm đạt ở mỗi cấu hình trên RTX 3050 Laptop/OpenGL 4.3.0 NVIDIA 546.30; sáu N từ 1 đến 1.000.003, ba operation, toàn bộ output, fixture độc lập, guard/canary, input preservation, interface lỗi và last-good program                            |
+| Worker/benchmark thật  | 55 phép kiểm đạt ở mỗi cấu hình; ba N với 33 lượt warm-up/đo, cấu hình bất biến, raw samples hữu hạn, spread có thứ tự, kết quả N lớn và cancel không công bố dữ liệu thiếu hoặc generation cũ                                                             |
+| Chạy từng mốc          | 26 lượt `--smoke` đạt: starter, mọi checkpoint và final ở Debug/Release; mỗi chương trình tự đóng sau số frame hữu hạn                                                                                                                                     |
+| Dashboard              | Đã chạy benchmark và kiểm ảnh xuất từ chính SDL framebuffer bằng `--snapshot`; đủ ba hàng N và 33/33 lượt, số đo chính cao 14 px, inspector bốn thành phần và trạng thái PASS. Đây không phải kiểm thao tác bàn phím hoặc ảnh chụp cửa sổ qua hệ điều hành |
+| Production và nội dung | Build thành công; **293/293** kiểm HTML/source contract đạt, 0 failed/skipped/cancelled; lượt cuối khoảng 133,9 giây                                                                                                                                       |
+| Canvas math            | **903/903** kiểm toàn bộ Canvas đạt với hai worker, 0 skipped/cancelled; lượt cuối khoảng 44,9 giây, trong giới hạn 60 giây không đổi; gồm 16 kiểm riêng P37                                                                                               |
+| Browser P37            | Ba test Chrome authored đạt: grid/pointer, timing/reduced motion, inspector/error probes/source/progress qua reload; DPR 1,5, không page/console/HTTP error; source JSON chỉ tải P37                                                                       |
+| Dung lượng và source   | Chunk gốc Canvas P37 4.842 byte; toàn bộ 67 ZIP khớp từng byte; TypeScript, architecture budgets và Git hygiene đạt                                                                                                                                        |
 
 Browser QA dùng artifact production và request routing trong context kiểm thử riêng, không mở dev/HTTP server hoặc profile cá nhân. Probe localhost không tìm thấy server đang bật. Kết quả browser không chứng nhận dev server hoặc mọi thiết bị/GPU.
 

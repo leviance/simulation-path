@@ -1,6 +1,8 @@
 #include "sculpt_benchmark_statistics.hpp"
 #include <iostream>
 
+// Known distributions check statistics without making hardware-speed assertions.
+// Zero/repeated/large finite samples must not be silently discarded or mutated.
 void testBenchmarkStatistics() {
     using namespace sculpt;
     const std::array<double, 5> odd{1, 9, 5, 2, 6};

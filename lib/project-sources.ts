@@ -48,7 +48,7 @@ export async function getProjectSourceBundle(
   if (!(projectId in generatedCheckpointSourceLoaders)) return undefined;
   const loadRegistry = generatedCheckpointSourceLoaders[projectId as ProjectId];
   const registryModule = await loadRegistry();
-  const project = registryModule.generatedProjectSource as unknown as GeneratedProjectSource;
+  const project: GeneratedProjectSource = registryModule.generatedProjectSource;
   const loadSnapshot = project.snapshots[String(checkpoint)];
   if (!loadSnapshot) {
     throw new Error(`Unknown checkpoint ${String(checkpoint)} for project ${project.id}`);
@@ -75,6 +75,6 @@ export async function getProjectChangedPaths(
   if (!(projectId in generatedCheckpointSourceLoaders)) return [];
   const loadRegistry = generatedCheckpointSourceLoaders[projectId as ProjectId];
   const registryModule = await loadRegistry();
-  const project = registryModule.generatedProjectSource as unknown as GeneratedProjectSource;
+  const project: GeneratedProjectSource = registryModule.generatedProjectSource;
   return [...(project.changedPaths[String(checkpoint)] ?? [])];
 }

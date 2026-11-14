@@ -158,11 +158,13 @@ class SculptControls {
     }
 
     private:
-    enum class Capture { none,
-                         orbit,
-                         pan,
-                         waiting,
-                         stroke };
+    enum class Capture {
+        none,
+        orbit,
+        pan,
+        waiting,
+        stroke
+    };
 
     void release() {
         capture_ = Capture::none;

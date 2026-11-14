@@ -253,8 +253,9 @@ function commonModule(project, expected) {
   });
 }
 
-// Server imports one JSON payload per snapshot. Browsers fetch its byte-identical
-// public copy, without importing the all-course source registry into the client graph.
+// Browsers fetch one versioned payload. Keep its byte-identical server mirror
+// for validation, but split large runtime imports so no source JS chunk grows
+// with the size of an entire multi-file C++ editor.
 function emitSourcePayload(project, key, files, expected) {
   const payload = Buffer.from(JSON.stringify({ schemaVersion: 1, files }) + "\n");
   if (payload.length > 5 * 1024 * 1024)
@@ -264,10 +265,67 @@ function emitSourcePayload(project, key, files, expected) {
   const directory = path.join(generatedSourceDirectory, `p${project.id}`);
   expected.set(path.join(directory, "data", name), payload);
   expected.set(path.join(publicSourceDirectory, project.id, name), payload);
+  const maximumRuntimePayloadBytes = 128 * 1024;
+  const runtimeNames = [];
+  if (payload.length <= maximumRuntimePayloadBytes) {
+    runtimeNames.push(name);
+  } else {
+    const prefix = '{"schemaVersion":1,"files":[',
+      suffix = "]}\n";
+    const overhead = Buffer.byteLength(prefix + suffix);
+    let records = [],
+      bytes = overhead;
+    const flush = () => {
+      if (records.length === 0) return;
+      const runtimeName = `${key}.part-${runtimeNames.length}.${hash}.json`;
+      expected.set(
+        path.join(directory, "data", runtimeName),
+        Buffer.from(prefix + records.join(",") + suffix),
+      );
+      runtimeNames.push(runtimeName);
+      records = [];
+      bytes = overhead;
+    };
+    for (const file of files) {
+      const record = JSON.stringify(file),
+        length = Buffer.byteLength(record);
+      if (overhead + length > maximumRuntimePayloadBytes)
+        throw new Error(
+          `Project ${project.id} ${file.path} exceeds the bounded server source shard.`,
+        );
+      if (bytes + length + (records.length ? 1 : 0) > maximumRuntimePayloadBytes) flush();
+      bytes += length + (records.length ? 1 : 0);
+      records.push(record);
+    }
+    flush();
+  }
+  if (runtimeNames.length > 1) {
+    for (const runtimeName of runtimeNames) {
+      expected.set(
+        path.join(directory, "parts", runtimeName.replace(/\.json$/, ".mjs")),
+        Buffer.from(
+          `import payload from "../data/${runtimeName}" with { type: "json" };\nexport const files = payload.files;\n`,
+        ),
+      );
+    }
+  }
+  const runtimeSource =
+    runtimeNames.length === 1
+      ? `import payload from "./data/${runtimeNames[0]}" with { type: "json" };\nexport const files = payload.files;\n`
+      : `const payloads = await Promise.all([\n${runtimeNames
+          .map((runtimeName) => `    import("./parts/${runtimeName.replace(/\.json$/, ".mjs")}"),`)
+          .join("\n")}\n]);\nexport const files = payloads.flatMap(payload => payload.files);\n`;
   expected.set(
-    path.join(directory, `${key}.ts`),
+    path.join(directory, `${key}.mjs`),
+    Buffer.from(`${runtimeSource}export const version = "${hash}";\n`),
+  );
+  // TypeScript consumes the declaration, not hundreds of large JSON syntax
+  // trees containing C++ source strings. Runtime still imports the exact JSON;
+  // source-payload tests validate its schema, hash, bytes and authored source.
+  expected.set(
+    path.join(directory, `${key}.d.mts`),
     Buffer.from(
-      `import payload from "./data/${name}" with { type: "json" };\nexport const files = payload.files;\nexport const version = "${hash}";\n`,
+      `import type { ProjectSourceFile } from "@/lib/project-sources";\nexport declare const files: readonly ProjectSourceFile[];\nexport declare const version: string;\n`,
     ),
   );
   return `/project-sources/${project.id}/${name}`;
@@ -275,14 +333,14 @@ function emitSourcePayload(project, key, files, expected) {
 
 function projectRegistry(project, changedPaths) {
   const snapshots = snapshotDefinitions(project).map(
-    (snapshot) => `        ${JSON.stringify(snapshot.key)}: () => import("./${snapshot.key}"),`,
+    (snapshot) => `        ${JSON.stringify(snapshot.key)}: () => import("./${snapshot.key}.mjs"),`,
   );
   return (
     `export const generatedProjectSource = {\n` +
     `    id: "${project.id}",\n` +
     `    directory: "${project.sourceDirectory}",\n` +
     `    targetPrefix: "project_${Number(project.id)}",\n` +
-    `    loadCommon: () => import("./common"),\n` +
+    `    loadCommon: () => import("./common.mjs"),\n` +
     `    changedPaths: ${JSON.stringify(changedPaths, null, 4).replaceAll("\n", "\n    ")},\n` +
     `    snapshots: {\n${snapshots.join("\n")}\n    },\n` +
     `} as const;\n`

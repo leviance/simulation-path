@@ -139,7 +139,7 @@ inline BenchmarkTimings runBenchmarkTrial(GlApi& gl, GpuBudget& budget, MeshRend
 inline void printBenchmarkStatistic(std::string_view name, std::span<const double> samples) {
     const auto summary = summarizeTimings(samples);
     std::cout << "BENCH_STAT name=" << name << " unit=ms samples=" << summary.samples
-              << " median=" << summary.median << " min=" << summary.minimum << " max=" << summary.maximum << " mad=" << summary.mad << '\n';
+            << " median=" << summary.median << " min=" << summary.minimum << " max=" << summary.maximum << " mad=" << summary.mad << '\n';
 }
 
 inline int runSculptBenchmark(GlApi& gl, GpuBudget& budget, SDL_Window* window, const ModelSettings& settings) {
@@ -159,20 +159,20 @@ inline int runSculptBenchmark(GlApi& gl, GpuBudget& budget, SDL_Window* window, 
     std::cout.imbue(std::locale::classic());
     std::cout << std::fixed << std::setprecision(6);
     std::cout << "BENCH protocol=volume-sculptor-v1 warmups=" << benchmarkWarmups << " measured=" << benchmarkRepeats
-              << " samples=" << settings.grid.sampleCount() << " cells=" << settings.grid.cellCount() << " grid=" << settings.grid.samples
-              << " width=" << width << " height=" << height << " timerBits=" << timerBits << " noSwap=1 meshOnlyDraw=1\n";
+            << " samples=" << settings.grid.sampleCount() << " cells=" << settings.grid.cellCount() << " grid=" << settings.grid.samples
+            << " width=" << width << " height=" << height << " timerBits=" << timerBits << " noSwap=1 meshOnlyDraw=1\n";
     std::cout << "BENCH_WINDOW hidden=1 userInputCapture=0\n";
     const auto vendor = gl.GetString(GL_VENDOR), device = gl.GetString(GL_RENDERER), version = gl.GetString(GL_VERSION);
     benchmarkCheck(vendor && device && version, "Benchmark device metadata is unavailable");
     std::cout << "BENCH_DEVICE vendor=" << reinterpret_cast<const char*>(vendor)
-              << " renderer=" << reinterpret_cast<const char*>(device) << " GL=" << reinterpret_cast<const char*>(version) << '\n';
+            << " renderer=" << reinterpret_cast<const char*>(device) << " GL=" << reinterpret_cast<const char*>(version) << '\n';
 #ifdef NDEBUG
     std::cout << "BENCH_BUILD ndebug=1\n";
 #else
     std::cout << "BENCH_BUILD ndebug=0 diagnosticOnly=1\n";
 #endif
     std::cout << "BENCH_WORKLOAD sphereRadius=0.82 stampCenter=0.7,0,0 stampRadius=0.32 stampStrength=0.28 stamps=1 mode=add freshModelEachTrial=1\n"
-              << std::flush;
+            << std::flush;
 
     // snippet:sculpt-benchmark-warmup-repeat
     for (int trial = 0; trial < benchmarkWarmups + benchmarkRepeats; ++trial) {
@@ -198,7 +198,7 @@ inline int runSculptBenchmark(GlApi& gl, GpuBudget& budget, SDL_Window* window, 
         for (std::size_t metric = 0; metric < values.size(); ++metric)
             std::cout << ' ' << benchmarkMetricNames[metric] << '=' << values[metric];
         std::cout << '\n'
-                  << std::flush;
+                << std::flush;
     }
     // end-snippet:sculpt-benchmark-warmup-repeat
 
@@ -216,17 +216,17 @@ inline int runSculptBenchmark(GlApi& gl, GpuBudget& budget, SDL_Window* window, 
     for (std::size_t metric = 0; metric < distributions.size(); ++metric) {
         const auto& summary = distributions[metric];
         std::cout << "BENCH_STAT name=" << benchmarkMetricNames[metric] << " unit=ms samples=" << summary.samples
-                  << " median=" << summary.median << " min=" << summary.minimum << " max=" << summary.maximum << " mad=" << summary.mad << '\n';
+                << " median=" << summary.median << " min=" << summary.minimum << " max=" << summary.maximum << " mad=" << summary.mad << '\n';
     }
     printBenchmarkStatistic("host.total", hostTimes);
     const auto& work = *expected;
     std::cout << "BENCH_COUNTERS initialVertices=" << work.initial.vertices << " initialActiveCells=" << work.initial.activeCells
-              << " editedVertices=" << work.edited.vertices << " triangles=" << work.edited.vertices / 3 << " activeCells=" << work.edited.activeCells
-              << " dirtyChunks=" << work.dirtyChunks << " allChunks=" << chunkCount(settings.grid) << " reusedNonempty=" << work.reusedNonempty << " brushWrites=" << work.brushWrites << '\n';
+            << " editedVertices=" << work.edited.vertices << " triangles=" << work.edited.vertices / 3 << " activeCells=" << work.edited.activeCells
+            << " dirtyChunks=" << work.dirtyChunks << " allChunks=" << chunkCount(settings.grid) << " reusedNonempty=" << work.reusedNonempty << " brushWrites=" << work.brushWrites << '\n';
     std::cout << "BENCH_MEMORY trackedReservedPeakBytes=" << budget.peakReserved << " trackedBaselineBytes=" << baselineBytes << " trackedFinalBytes=" << budget.used
-              << " trackedLimitBytes=" << budget.limit << " includesGuards=1 excludesDriverProgramsWindow=1\n";
+            << " trackedLimitBytes=" << budget.limit << " includesGuards=1 excludesDriverProgramsWindow=1\n";
     std::cout << "BENCHMARK COMPLETE warmupsDiscarded=" << benchmarkWarmups << " measuredTrials=" << measured.size()
-              << " stableWorkload=1 gpuElapsedQueries=1 fullFieldMeshReadback=0 correctnessAndUiAreSeparate=1\n";
+            << " stableWorkload=1 gpuElapsedQueries=1 fullFieldMeshReadback=0 correctnessAndUiAreSeparate=1\n";
     return 0;
 }
 

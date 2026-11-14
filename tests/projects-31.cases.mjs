@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -7,6 +8,7 @@ import { compile } from "@mdx-js/mdx";
 import { courseMdxOptions } from "../lib/mdx-options.mjs";
 import { isContiguousCodeExcerpt, codeTokens } from "../scripts/code-snippets.mjs";
 import { workspace, render } from "./site-support.mjs";
+import { sourceRuntimePayloadNames } from "./source-runtime-support.mjs";
 const content = path.join(workspace, "content/barnes-hut-nbody");
 const root = path.join(workspace, "examples/project-31-barnes-hut-nbody");
 
@@ -18,10 +20,15 @@ test("Project 31 JSON imports follow source content even when examples is not wa
     "common",
   ]) {
     const generatedModule = await readFile(
-      path.join(workspace, "lib/generated-checkpoint-sources/p31", name + ".ts"),
+      path.join(workspace, "lib/generated-checkpoint-sources/p31", name + ".mjs"),
       "utf8",
     );
-    const payloadName = generatedModule.match(/from "\.\/data\/([^"/]+\.json)"/)?.[1];
+    const manifest = JSON.parse(
+      await readFile(path.join(workspace, "public/project-sources/31/manifest.json"), "utf8"),
+    );
+    const payloadName = path.basename(
+      name === "common" ? manifest.common : manifest.snapshots[name],
+    );
     assert.ok(payloadName, name);
     assert.doesNotMatch(generatedModule, /&raw/);
     const bytes = await readFile(
@@ -36,6 +43,22 @@ test("Project 31 JSON imports follow source content even when examples is not wa
     );
     const payload = JSON.parse(bytes);
     assert.equal(payload.schemaVersion, 1);
+    const imports = sourceRuntimePayloadNames(generatedModule, (file) =>
+      readFileSync(path.join(workspace, "lib/generated-checkpoint-sources/p31", file), "utf8"),
+    );
+    assert.ok(imports.length > 0);
+    const runtimeFiles = [];
+    for (const imported of imports) {
+      const shard = JSON.parse(
+        await readFile(
+          path.join(workspace, "lib/generated-checkpoint-sources/p31/data", imported),
+          "utf8",
+        ),
+      );
+      runtimeFiles.push(...shard.files);
+    }
+    assert.deepEqual(runtimeFiles, payload.files);
+    assert.ok(generatedModule.includes(`export const version = "${payloadName.split(".")[1]}"`));
     for (const file of payload.files) {
       const directory =
         name === "common"

@@ -1,4 +1,6 @@
-# Project 44 — Canvas hỗ trợ học, chưa thay học phần cũ
+# Project 44 — mốc Canvas hỗ trợ học trước tích hợp
+
+Canvas hiện đã ghép vào học phần `volume-sculptor`. Các kết quả route/ZIP/production mới nằm ở [hồ sơ tích hợp web](project-44-web-integration.md); nội dung bên dưới giữ phạm vi của lượt kiểm component ban đầu.
 
 Ngày kiểm: 14/11/2026. Nguồn chuẩn vẫn là mục Project 44 trong Product Specification v4 complete. Hồ sơ native nằm ở [project-44-progress.md](project-44-progress.md). Mốc này bổ sung Canvas và kiểm component riêng; không phải nghiệm thu toàn Project 44.
 

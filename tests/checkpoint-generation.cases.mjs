@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { checkpointSelection } from "../scripts/checkpoint-selection.mjs";
+import { sourceRuntimePayloadNames } from "./source-runtime-support.mjs";
 
 test("checkpoint selection rejects typos and never widens an explicit project scope", () => {
   const projects = [{ id: "01" }, { id: "44" }];
@@ -112,6 +113,13 @@ test("scoped checkpoint generation preserves other projects, check is read-only,
         `#define LAB_CHECKPOINT 1\n#if LAB_CHECKPOINT >= 1\nint main() { return ${11 + index}; }\n#else\nint main() { return 0; }\n#endif\n`,
       );
     }
+    // A real multi-file payload must split without altering any public bytes.
+    for (let part = 0; part < 8; ++part)
+      put(
+        root,
+        `examples/project-01-first/source-template/include/large-${part}.hpp`,
+        "#pragma once\n// " + "x".repeat(28000) + "\n",
+      );
     const sentinel = "lib/generated-checkpoint-sources/p02/unselected.txt";
     put(root, sentinel, "do not touch\n");
     put(root, "public/project-sources/02/unselected.txt", "also retain\n");
@@ -123,6 +131,34 @@ test("scoped checkpoint generation preserves other projects, check is read-only,
         { cwd: root, encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "pipe"] },
       );
     run(["--project=01"]);
+    const module = readFileSync(
+      path.join(root, "lib/generated-checkpoint-sources/p01/1.mjs"),
+      "utf8",
+    );
+    const runtimeNames = sourceRuntimePayloadNames(module, (name) =>
+      readFileSync(path.join(root, "lib/generated-checkpoint-sources/p01", name), "utf8"),
+    );
+    assert.ok(runtimeNames.length > 1, "fixture must exercise bounded runtime sharding");
+    assert.match(module, /await Promise\.all\(/);
+    assert.doesNotMatch(module, /import \w+ from/);
+    const runtimeFiles = [];
+    for (const name of runtimeNames) {
+      const bytes = readFileSync(
+        path.join(root, "lib/generated-checkpoint-sources/p01/data", name),
+      );
+      assert.ok(bytes.length <= 128 * 1024);
+      runtimeFiles.push(...JSON.parse(bytes).files);
+    }
+    const firstManifest = JSON.parse(
+      readFileSync(path.join(root, "public/project-sources/01/manifest.json"), "utf8"),
+    );
+    const publicBytes = readFileSync(path.join(root, "public", firstManifest.snapshots["1"]));
+    assert.ok(publicBytes.length > 128 * 1024);
+    assert.deepEqual(
+      runtimeFiles,
+      JSON.parse(publicBytes).files,
+      "no file lost, duplicated, reordered or truncated",
+    );
     assert.equal(readFileSync(path.join(root, sentinel), "utf8"), "do not touch\n");
     assert.equal(
       existsSync(path.join(root, "examples/project-02-second/final/src/main.cpp")),

@@ -5,6 +5,8 @@
 
 namespace sculpt {
 
+// Checkpoint 07 reports count/scan addresses only; no mesh has been emitted yet.
+// Keep stale summaries visibly separate from the current stored field.
 inline void gpuCountPreviewOverlay(Overlay& overlay, const GpuFieldDocument& document, const ModelSettings& settings, const GpuBudget& budget, const GpuFieldLessonControls& controls, const GpuCountLessonJob& job, std::optional<float> value, std::uint32_t probeRevision, int width, int height) {
     const Vec3 text{0.7F, 0.84F, 0.9F}, mint{0.55F, 0.95F, 0.82F};
     const float left = static_cast<float>(width - 348);

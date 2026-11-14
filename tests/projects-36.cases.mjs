@@ -8,15 +8,27 @@ const root = new URL("../", import.meta.url);
 const read = (file) => readFile(new URL(file, root), "utf8");
 const dir = "examples/project-36-ray-marched-shape-room/";
 
-test('P36: complete teaching C++ uses four-space indentation, comments and logical blocks', async()=>{
-  for(const folder of ['include','src']){
-    for(const file of await readdir(new URL(dir+'final/'+folder+'/',root))){
-      if(!/\.(cpp|hpp)$/.test(file))continue;
-      const label=folder+'/'+file,source=await read(dir+'final/'+label);
-      assert.doesNotMatch(source,/\t|LAB_CHECKPOINT/,label);
-      source.split(/\r?\n/).forEach((line,index)=>assert.equal((line.match(/^ +(?=\S)/)?.[0].length??0)%4,0,label+':'+(index+1)));
-      assert.match(source,/^\s*\/\/ /m,label);
-      assert.ok((source.match(/\r?\n\s*\r?\n/g)??[]).length>=2,label+' needs logical blocks');
+test("P36: complete teaching C++ uses four-space indentation, comments and logical blocks", async () => {
+  for (const folder of ["include", "src"]) {
+    for (const file of await readdir(new URL(dir + "final/" + folder + "/", root))) {
+      if (!/\.(cpp|hpp)$/.test(file)) continue;
+      const label = folder + "/" + file,
+        source = await read(dir + "final/" + label);
+      assert.doesNotMatch(source, /\t|LAB_CHECKPOINT/, label);
+      source
+        .split(/\r?\n/)
+        .forEach((line, index) =>
+          assert.equal(
+            (line.match(/^ +(?=\S)/)?.[0].length ?? 0) % 4,
+            0,
+            label + ":" + (index + 1),
+          ),
+        );
+      assert.match(source, /^\s*\/\/ /m, label);
+      assert.ok(
+        (source.match(/\r?\n\s*\r?\n/g) ?? []).length >= 2,
+        label + " needs logical blocks",
+      );
     }
   }
 });

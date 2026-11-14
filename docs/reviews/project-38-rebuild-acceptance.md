@@ -23,27 +23,27 @@ Phần triển khai và kiểm tự động đã được đồng bộ theo sả
 
 ## Bằng chứng hiện có
 
-| Phần kiểm | Kết quả hiện có |
-| --- | --- |
-| Source/lessons | 12 bài, bảy vai trò giảng dạy, ít nhất ba code block/bài; mọi đoạn C++/GLSL khớp token liên tiếp trong đúng checkpoint; MDX compile 12/12 |
-| CPU C++ | CTest Debug và Release đều 1/1; nghiệm độc lập E/B, charge sign, speed/parallel, phase convergence, invalid input, seed, phase snapshot, budget/clock |
-| Ma trận executable | Starter + 12 checkpoint + final build Debug/Release; toàn bộ 14 bản Release chạy smoke hai frame và compile GLSL đúng snapshot |
-| GPU một triệu | Final đã sinh thật: N=1.000.003, kiểm đủ state, mirror=0/analytic=0, allocated/updated/drawn đủ N, 41.955 pixel thay đổi trong fixture render |
-| GPU năm triệu | Final đã sinh thật: N=5.000.000, kiểm đủ state, mirror=0/analytic=0, đủ N core, 44.598 pixel thay đổi; 160.000.000 byte/state |
-| Canvas toán/controller | 12/12 tests: nghiệm, dt convergence, invalid input, staged/active, pointer ownership, camera không sửa state, bounded trails và job timeout/cancel |
-| Nội dung/hợp đồng | 5/5 project tests; 5/5 source-contract checks cho validation, thụt dòng/comment, snapshot sạch/tăng dần, thứ tự layer và changedPaths |
-| Production routes | 12 lesson + overview trả 200; route fountain cũ trả 404, không alias sang mô hình mới |
-| Browser production | 4/4: mở đủ 12 mode không page error; staged/active, step/reset, invalid apply, camera/pointer, DPR, reduced motion, đối chiếu CPU, source/ZIP và tiến độ sau reload |
-| ZIP | 409 file byte-identical với source/checkpoints/final; manifest digest khớp; ZIP nằm ngoài Git |
-| Website | Production build cuối qua trong 153,9 s; TypeScript và ESLint targeted qua; architecture/Git hygiene qua; homepage/roadmap/downloads + routes đạt 5/5, glossary/progress/revisions đạt 14/14 |
-| Tương tác native | Người dùng chọn tự kiểm thủ công. Agent không mở lại cửa sổ; chưa ghi native mouse/keyboard đã qua |
+| Phần kiểm              | Kết quả hiện có                                                                                                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source/lessons         | 12 bài, bảy vai trò giảng dạy, ít nhất ba code block/bài; mọi đoạn C++/GLSL khớp token liên tiếp trong đúng checkpoint; MDX compile 12/12                                                    |
+| CPU C++                | CTest Debug và Release đều 1/1; nghiệm độc lập E/B, charge sign, speed/parallel, phase convergence, invalid input, seed, phase snapshot, budget/clock                                        |
+| Ma trận executable     | Starter + 12 checkpoint + final build Debug/Release; toàn bộ 14 bản Release chạy smoke hai frame và compile GLSL đúng snapshot                                                               |
+| GPU một triệu          | Final đã sinh thật: N=1.000.003, kiểm đủ state, mirror=0/analytic=0, allocated/updated/drawn đủ N, 41.955 pixel thay đổi trong fixture render                                                |
+| GPU năm triệu          | Final đã sinh thật: N=5.000.000, kiểm đủ state, mirror=0/analytic=0, đủ N core, 44.598 pixel thay đổi; 160.000.000 byte/state                                                                |
+| Canvas toán/controller | 12/12 tests: nghiệm, dt convergence, invalid input, staged/active, pointer ownership, camera không sửa state, bounded trails và job timeout/cancel                                           |
+| Nội dung/hợp đồng      | 5/5 project tests; 5/5 source-contract checks cho validation, thụt dòng/comment, snapshot sạch/tăng dần, thứ tự layer và changedPaths                                                        |
+| Production routes      | 12 lesson + overview trả 200; route fountain cũ trả 404, không alias sang mô hình mới                                                                                                        |
+| Browser production     | 4/4: mở đủ 12 mode không page error; staged/active, step/reset, invalid apply, camera/pointer, DPR, reduced motion, đối chiếu CPU, source/ZIP và tiến độ sau reload                          |
+| ZIP                    | 409 file byte-identical với source/checkpoints/final; manifest digest khớp; ZIP nằm ngoài Git                                                                                                |
+| Website                | Production build cuối qua trong 153,9 s; TypeScript và ESLint targeted qua; architecture/Git hygiene qua; homepage/roadmap/downloads + routes đạt 5/5, glossary/progress/revisions đạt 14/14 |
+| Tương tác native       | Người dùng chọn tự kiểm thủ công. Agent không mở lại cửa sổ; chưa ghi native mouse/keyboard đã qua                                                                                           |
 
 GPU thử trên NVIDIA GeForce RTX 3050 Laptop GPU, OpenGL 4.3.0 / NVIDIA 546.30; MSVC 19.33, Visual Studio 2022, Windows SDK 10.0.19041, SDL 3.4.8. Đây là số đo một máy, không phải bảo đảm FPS trên phần cứng khác.
 
-| N | Update GPU min/median/max (ms) | Particle draw GPU min/median/max (ms) | Frame CPU+present min/median/max (ms) |
-| --- | --- | --- | --- |
-| 1.000.003 | 0,359 / 0,369 / 0,414 | 1,321 / 1,690 / 2,213 | 1,810 / 2,463 / 3,579 |
-| 5.000.000 | 1,762 / 1,771 / 2,173 | 6,728 / 6,941 / 7,695 | 6,877 / 7,636 / 11,607 |
+| N         | Update GPU min/median/max (ms) | Particle draw GPU min/median/max (ms) | Frame CPU+present min/median/max (ms) |
+| --------- | ------------------------------ | ------------------------------------- | ------------------------------------- |
+| 1.000.003 | 0,359 / 0,369 / 0,414          | 1,321 / 1,690 / 2,213                 | 1,810 / 2,463 / 3,579                 |
+| 5.000.000 | 1,762 / 1,771 / 2,173          | 6,728 / 6,941 / 7,695                 | 6,877 / 7,636 / 11,607                |
 
 Các lượt trên có 4 warm-up/20 cặp sample trong harness hữu hạn. Draw chỉ particle core/halo, không toàn bộ hậu kỳ/HUD; frame có phạm vi khác. Sampling halo được công bố, core/state không bị giảm N. Readback toàn N chỉ ở validation job, không frame path.
 
@@ -59,15 +59,15 @@ Một lượt source-contract toàn site bị supervisor dừng ở hard timeout
 
 Chạy bản đã build tại `.validation/p38-matrix/Release/project_38_final.exe`, hoặc tự build từ ZIP theo README. Agent không mở lại cửa sổ theo lựa chọn của người dùng.
 
-| Thử bằng tay | Kết quả cần thấy |
-| --- | --- |
-| H mở panel, Space Pause; N ba lần | Tick tăng đúng ba, position/velocity đổi theo bước; Pause không tự thêm trail point |
-| Pause rồi kéo trái/phải, wheel, IJKL/Shift-IJKL và Page Up/Down | Camera orbit/pan/zoom; ID, tick và state đang đọc không tự đổi |
-| 1–4 và cặp ID 0/1 | Thẳng/tròn/xoắn/gia tốc; hai dấu điện tích cong trái chiều khi có B |
-| [ / ], F và click một trong 32 hạt theo dõi | Inspector báo đúng ID/probe time; F nhìn hạt; không giả click chọn toàn bộ một triệu |
-| Sửa STAGED rồi Enter; R với cùng seed | Sửa chưa đổi ACTIVE; Apply về t=0; Reset lặp snapshot. Yêu cầu lỗi không phá state đang hợp lệ |
-| T/M/D/H; góc trước và góc bên | Trails/legend speed-q/field arrows/panel đúng; có che khuất và chiều sâu, không đổi physics |
-| V/B, Escape; đổi camera/resize khi benchmark đang chạy | Job đủ số mẫu/record mới complete; hủy hoặc đổi workload báo incomplete, cửa sổ vẫn đóng được bằng Q |
+| Thử bằng tay                                                    | Kết quả cần thấy                                                                                     |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| H mở panel, Space Pause; N ba lần                               | Tick tăng đúng ba, position/velocity đổi theo bước; Pause không tự thêm trail point                  |
+| Pause rồi kéo trái/phải, wheel, IJKL/Shift-IJKL và Page Up/Down | Camera orbit/pan/zoom; ID, tick và state đang đọc không tự đổi                                       |
+| 1–4 và cặp ID 0/1                                               | Thẳng/tròn/xoắn/gia tốc; hai dấu điện tích cong trái chiều khi có B                                  |
+| [ / ], F và click một trong 32 hạt theo dõi                     | Inspector báo đúng ID/probe time; F nhìn hạt; không giả click chọn toàn bộ một triệu                 |
+| Sửa STAGED rồi Enter; R với cùng seed                           | Sửa chưa đổi ACTIVE; Apply về t=0; Reset lặp snapshot. Yêu cầu lỗi không phá state đang hợp lệ       |
+| T/M/D/H; góc trước và góc bên                                   | Trails/legend speed-q/field arrows/panel đúng; có che khuất và chiều sâu, không đổi physics          |
+| V/B, Escape; đổi camera/resize khi benchmark đang chạy          | Job đủ số mẫu/record mới complete; hủy hoặc đổi workload báo incomplete, cửa sổ vẫn đóng được bằng Q |
 
 Các output cũ được giữ tại `.validation/retired-project-38-fountain`, ngoài Git. Source tracked cũ vẫn có thể khôi phục từ lịch sử; chưa stage/commit/push. Trong đợt kiểm đã sửa nhánh zero-size trước event loop, chú giải speed ở showcase và nhánh checkpoint 6 tham chiếu nhầm CPU preview.
 

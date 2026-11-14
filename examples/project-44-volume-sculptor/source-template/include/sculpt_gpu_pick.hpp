@@ -4,6 +4,8 @@
 
 namespace sculpt {
 
+// Match the compute shader's 64-byte result layout; the request tag lets input
+// discard a late answer instead of starting a stroke on an obsolete field.
 struct PickData {
     std::array<float, 4> pointValue{}, normalHit{}, gridCoordinate{};
     std::array<std::uint32_t, 4> state{};

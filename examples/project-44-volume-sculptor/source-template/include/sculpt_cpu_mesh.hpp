@@ -11,8 +11,10 @@ struct CpuMesh {
     std::uint64_t normalFallbacks{};
 };
 
-enum class CpuNormalMode { face,
-                           gradient };
+enum class CpuNormalMode {
+    face,
+    gradient
+};
 
 #if LAB_CHECKPOINT >= 3
 inline constexpr CpuNormalMode defaultCpuNormalMode = CpuNormalMode::gradient;

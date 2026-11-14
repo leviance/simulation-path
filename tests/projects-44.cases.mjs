@@ -212,6 +212,38 @@ test("Project 44 references, glossary and code guides belong to the volume produ
   assert.match(final, /\/roadmap\/45/);
 });
 
+test("Project 44 teaching C++ keeps four-space indentation, explanatory comments and logical blocks", async () => {
+  const assertIndentation = (value, label) => {
+    assert.doesNotMatch(value, /\t/, label);
+    for (const [index, line] of value.split(/\r?\n/).entries()) {
+      const spaces = line.match(/^ +(?=\S)/)?.[0].length ?? 0;
+      assert.equal(spaces % 4, 0, `${label}:${index + 1} has ${spaces} spaces`);
+    }
+  };
+  const files = [
+    ...(await walkFiles(path.join(source, "source-template"))),
+    ...(await walkFiles(path.join(source, "tests"))),
+  ].filter((file) => /\.(?:cpp|hpp)$/.test(file));
+  assert.ok(files.length >= 70);
+  for (const file of files) {
+    const value = await readFile(file, "utf8");
+    assertIndentation(value, path.relative(source, file));
+    assert.match(value, /^\s*\/\/ /m, file);
+    assert.ok((value.match(/\r?\n\s*\r?\n/g) ?? []).length >= 2, file);
+  }
+  for (const lesson of project.lessons)
+    for (const [, code] of (await lessonText(lesson)).matchAll(
+      /```cpp[^\r\n]*\r?\n([\s\S]*?)\r?\n```/g,
+    ))
+      assertIndentation(code, lesson.slug);
+  const runner = await readFile(path.join(source, "tests/tests.cpp"), "utf8");
+  assert.doesNotMatch(runner, /#include\s*<cassert>|\bassert\s*\(/);
+  assert.match(runner, /void check\(bool condition, std::string_view message\)/);
+  assert.match(runner, /if \(!condition\)\s*throw std::runtime_error\(std::string\(message\)\)/);
+  assert.match(runner, /if \(failures != 0\)\s*return EXIT_FAILURE;/);
+  assert.match(runner, /return EXIT_SUCCESS;/);
+});
+
 test("Project 44 real MDX compiler retains One Dark, formulas and the lazy Canvas import", async () => {
   for (const lesson of project.lessons) {
     const compiled = String(
@@ -240,6 +272,23 @@ test("Project 44 rendered overview exposes challenge, twelve lessons and the cor
   for (const lesson of project.lessons)
     assert.ok(html.includes(`/projects/${slug}/${lesson.slug}`));
   assert.doesNotMatch(html, /NEIGHBOR LIST LAB|Danh sách hàng xóm có vùng đệm/);
+});
+
+test("Project 44 rendered client chunks separate the tetra from the editor within the existing budget", async () => {
+  const directory = path.join(workspace, "dist/client/_next/static/chunks");
+  const entries = await readdir(directory);
+  for (const prefix of ["volume-sculptor-lab-", "volume-workshop-", "tetra-lab-"]) {
+    const file = entries.find((name) => name.startsWith(prefix) && name.endsWith(".js"));
+    assert.ok(file, "Missing actual production split point: " + prefix);
+    const bytes = (await stat(path.join(directory, file))).size;
+    assert.ok(bytes < 24 * 1024, `${file} has ${bytes} bytes`);
+  }
+  const entry = await readFile(
+    path.join(workspace, "components/labs/volume-sculptor-lab.tsx"),
+    "utf8",
+  );
+  assert.match(entry, /lazy\(\(\)\s*=>\s*import\("\.\/volume-sculptor\/tetra-lab"\)/);
+  assert.match(entry, /lazy\(\(\)\s*=>\s*import\("\.\/volume-sculptor\/volume-workshop"\)/);
 });
 
 test("Project 44 rendered lesson routes retain readable code and complete source access", async () => {

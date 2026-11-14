@@ -5,6 +5,8 @@
 
 namespace sculpt {
 
+// Candidate scene/resampling fixtures keep polling the old model until handoff.
+// A failed or cancelled candidate must leave that model usable as last-good.
 inline std::unique_ptr<GpuMeshBuilder> waitForScene(NativeSceneTasks& scenes, GpuMeshBuilder& previous, std::chrono::steady_clock::time_point deadline) {
     while (scenes.busy()) {
         if (std::chrono::steady_clock::now() >= deadline)

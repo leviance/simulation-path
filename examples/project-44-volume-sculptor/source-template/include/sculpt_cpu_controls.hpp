@@ -127,11 +127,13 @@ class CpuLessonControls {
     }
 
     private:
-    enum class Capture { none,
-                         orbit,
-                         pan,
-                         singleStamp,
-                         stroke };
+    enum class Capture {
+        none,
+        orbit,
+        pan,
+        singleStamp,
+        stroke
+    };
 
     void release() {
         if (captured())

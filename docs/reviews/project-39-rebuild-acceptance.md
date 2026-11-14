@@ -8,23 +8,23 @@ Các artifact cuối đã được sinh, build, kiểm GPU và đóng gói đồ
 
 ## Đối chiếu các yêu cầu sản phẩm
 
-| Yêu cầu | Bằng chứng hiện có | Giới hạn / bước còn lại |
-| --- | --- | --- |
-| Thành phố 3D có đường, quảng trường, nhiều hình dáng/vật liệu, perspective/depth | Renderer native đã cho ảnh thành phố; camera có tầm phố/trên cao, observer inset và frustum/bounds | Chưa xác nhận trải nghiệm trực tiếp bằng chuột/phím trên cửa sổ native |
-| Scene tái lập, ID ổn định, ngân sách và đổi N/seed an toàn | CPU tests và SDL-queue integration trên final đã sinh kiểm initial R/N, last-good scene, hủy/đổi cấu hình; candidate giữ riêng | Input OS thực vẫn thuộc cổng manual |
-| Sáu plane, sphere trong/ngoài/cắt mép | CPU fixture và GPU fixture độc lập; scalar double classifier đối chiếu mask | Đáp án fixture không thay kiểm khả năng sử dụng camera/debug |
-| Reduction sum/min/max và hierarchical integer scan | GPU thật kiểm N=0/1/7/257/513/262.145; arbitrary integer data/counts→offsets, nhiều tầng, guard records | Integer so exact; khoảng cách float dùng tolerance riêng |
-| Compaction theo mesh rồi record index | Mask/prefix/visible list khớp toàn tập fixture; stable ID rời rạc, không mất/trùng/ghi quá buffer | Visible list chứa record index, không đánh tráo thành Object.id |
-| GPU ghi command, renderer đọc GPU list | Kiểm mọi field/range của ba command, all-visible→mixed→empty không giữ count cũ | Frame path không full readback hoặc CPU compaction |
-| Scene ít nhất một triệu object records thật | Final đã sinh chạy N=1.000.003: tested đủ N, full mask/prefix/IDs/commands khớp; resident/accepted/submitted được báo | Bằng chứng tại các snapshot/fixture công bố, không khẳng định mọi cấu hình bất kỳ đều đã được thử |
-| Culling on/off giữ hình hợp lệ | Sáu camera snapshot có framebuffer A/B giống nhau | Frustum culling không phải occlusion culling |
-| Camera/FOV/culling/debug/picking/reset/cancel | Integration qua SDL event queue kiểm các transition; browser controls đạt 9/9 kiểm trong suite web | Chưa xác nhận input OS/chuột/phím thực trên native |
-| Validation có deadline/cancel | Runtime job 12/12 camera/toggle fixture và nhánh Cancel đạt; source có giới hạn batch/fence/total | V kiểm 257 record trong buffer riêng, không tự chứng nhận scene một triệu |
-| Đo hiệu năng đúng phạm vi | Final Release đã sinh hoàn tất sáu camera × on/off, hai warm-up/chín sample mỗi cấu hình; đủ query GPU, CPU submit, whole frame và GPU-ready | Máy/build/background load và scope được ghi bên dưới; không hứa FPS hoặc speedup chung |
-| Starter/checkpoint/final/CTest | Sau sửa winding trong city_mesh.hpp, đủ 14 app build Debug/Release, CTest 1/1 mỗi cấu hình; cả 14 bản Release smoke/compile GLSL thật đạt; final đã sinh vượt toàn bộ --verify | CPU tests còn kiểm normal hướng ra ngoài cho mọi mặt của cube, tapered tower và pyramid |
-| Giáo trình và source theo từng bài | 12 MDX, bảy vai trò giảng dạy; 38 C++/GLSL excerpts khớp đúng checkpoint; content 5/5, source 5/5 | Đây là cổng nội dung/source, không phải tuyên bố toàn site 100% |
-| Canvas và trang web | Math 11/11; production rebuild sau mesh/bài đầu qua trong 177,5 s; trên đúng build này, routes 5/5 và production Playwright 4/4 đều qua | Không suy từ suite targeted thành toàn site 100% |
-| ZIP/catalog/publication | ZIP mới sau city_mesh.hpp: 409 file, 574.641 byte; giải nén so byte và digest đều khớp | Entry revision 39 được gỡ vì artifact đã thay đồng bộ và các cổng tự động qua, không vì manual đã đạt |
+| Yêu cầu                                                                          | Bằng chứng hiện có                                                                                                                                                             | Giới hạn / bước còn lại                                                                               |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Thành phố 3D có đường, quảng trường, nhiều hình dáng/vật liệu, perspective/depth | Renderer native đã cho ảnh thành phố; camera có tầm phố/trên cao, observer inset và frustum/bounds                                                                             | Chưa xác nhận trải nghiệm trực tiếp bằng chuột/phím trên cửa sổ native                                |
+| Scene tái lập, ID ổn định, ngân sách và đổi N/seed an toàn                       | CPU tests và SDL-queue integration trên final đã sinh kiểm initial R/N, last-good scene, hủy/đổi cấu hình; candidate giữ riêng                                                 | Input OS thực vẫn thuộc cổng manual                                                                   |
+| Sáu plane, sphere trong/ngoài/cắt mép                                            | CPU fixture và GPU fixture độc lập; scalar double classifier đối chiếu mask                                                                                                    | Đáp án fixture không thay kiểm khả năng sử dụng camera/debug                                          |
+| Reduction sum/min/max và hierarchical integer scan                               | GPU thật kiểm N=0/1/7/257/513/262.145; arbitrary integer data/counts→offsets, nhiều tầng, guard records                                                                        | Integer so exact; khoảng cách float dùng tolerance riêng                                              |
+| Compaction theo mesh rồi record index                                            | Mask/prefix/visible list khớp toàn tập fixture; stable ID rời rạc, không mất/trùng/ghi quá buffer                                                                              | Visible list chứa record index, không đánh tráo thành Object.id                                       |
+| GPU ghi command, renderer đọc GPU list                                           | Kiểm mọi field/range của ba command, all-visible→mixed→empty không giữ count cũ                                                                                                | Frame path không full readback hoặc CPU compaction                                                    |
+| Scene ít nhất một triệu object records thật                                      | Final đã sinh chạy N=1.000.003: tested đủ N, full mask/prefix/IDs/commands khớp; resident/accepted/submitted được báo                                                          | Bằng chứng tại các snapshot/fixture công bố, không khẳng định mọi cấu hình bất kỳ đều đã được thử     |
+| Culling on/off giữ hình hợp lệ                                                   | Sáu camera snapshot có framebuffer A/B giống nhau                                                                                                                              | Frustum culling không phải occlusion culling                                                          |
+| Camera/FOV/culling/debug/picking/reset/cancel                                    | Integration qua SDL event queue kiểm các transition; browser controls đạt 9/9 kiểm trong suite web                                                                             | Chưa xác nhận input OS/chuột/phím thực trên native                                                    |
+| Validation có deadline/cancel                                                    | Runtime job 12/12 camera/toggle fixture và nhánh Cancel đạt; source có giới hạn batch/fence/total                                                                              | V kiểm 257 record trong buffer riêng, không tự chứng nhận scene một triệu                             |
+| Đo hiệu năng đúng phạm vi                                                        | Final Release đã sinh hoàn tất sáu camera × on/off, hai warm-up/chín sample mỗi cấu hình; đủ query GPU, CPU submit, whole frame và GPU-ready                                   | Máy/build/background load và scope được ghi bên dưới; không hứa FPS hoặc speedup chung                |
+| Starter/checkpoint/final/CTest                                                   | Sau sửa winding trong city_mesh.hpp, đủ 14 app build Debug/Release, CTest 1/1 mỗi cấu hình; cả 14 bản Release smoke/compile GLSL thật đạt; final đã sinh vượt toàn bộ --verify | CPU tests còn kiểm normal hướng ra ngoài cho mọi mặt của cube, tapered tower và pyramid               |
+| Giáo trình và source theo từng bài                                               | 12 MDX, bảy vai trò giảng dạy; 38 C++/GLSL excerpts khớp đúng checkpoint; content 5/5, source 5/5                                                                              | Đây là cổng nội dung/source, không phải tuyên bố toàn site 100%                                       |
+| Canvas và trang web                                                              | Math 11/11; production rebuild sau mesh/bài đầu qua trong 177,5 s; trên đúng build này, routes 5/5 và production Playwright 4/4 đều qua                                        | Không suy từ suite targeted thành toàn site 100%                                                      |
+| ZIP/catalog/publication                                                          | ZIP mới sau city_mesh.hpp: 409 file, 574.641 byte; giải nén so byte và digest đều khớp                                                                                         | Entry revision 39 được gỡ vì artifact đã thay đồng bộ và các cổng tự động qua, không vì manual đã đạt |
 
 Entry chờ xây dựng lại của Project 39 đã được gỡ sau khi lesson, C++, Canvas, metadata và ZIP được thay đồng bộ và các cổng tự động hoàn tất. Trạng thái “đã có hướng dẫn” là trạng thái biên tập, không phải chứng nhận cổng manual đã qua.
 
@@ -45,17 +45,17 @@ Khoảng cách được so bằng ngưỡng tuyệt đối 0,002 world units c�
 
 Lần đo mới nhất chạy bằng **executable final Release đã sinh**, GPU/driver nêu trên, seed 39. Cả sáu camera × culling on/off hoàn tất hữu hạn; mỗi cấu hình bỏ hai warm-up rồi lấy chín sample. Camera 0 với N=1.000.003 cho kết quả sau, đơn vị millisecond:
 
-| Culling | GPU median | GPU MAD | CPU submit median | CPU whole-frame median | Frame-to-GPU-ready median |
-| --- | --- | --- | --- | --- | --- |
-| On | 1,30355 | 0,006144 | 1,2946 | 1,3365 | 3,119 |
-| Off | 7,57453 | 0,036864 | 9,0841 | 9,1389 | 17,4775 |
+| Culling | GPU median | GPU MAD  | CPU submit median | CPU whole-frame median | Frame-to-GPU-ready median |
+| ------- | ---------- | -------- | ----------------- | ---------------------- | ------------------------- |
+| On      | 1,30355    | 0,006144 | 1,2946            | 1,3365                 | 3,119                     |
+| Off     | 7,57453    | 0,036864 | 9,0841            | 9,1389                 | 17,4775                   |
 
 Ca nhỏ N=257, camera 0 không cho thấy lợi ích của culling:
 
 | Culling | GPU median (ms) | GPU MAD (ms) |
-| --- | --- | --- |
-| On | 0,147456 | 0,03072 |
-| Off | 0,11776 | 0,007168 |
+| ------- | --------------- | ------------ |
+| On      | 0,147456        | 0,03072      |
+| Off     | 0,11776         | 0,007168     |
 
 Các số trên được đo lại sau sửa winding. Median on của ca nhỏ cao hơn off, nhưng chín sample và độ phân tán quan sát được không đủ để suy một tỷ lệ chậm chung. Trong đợt đo, production web build cũng đang chạy trên CPU. Vì vậy, đây là bằng chứng phép đo và workload đã hoàn tất trên máy này, **không phải benchmark trong điều kiện máy rảnh được kiểm soát**, không bảo đảm FPS trên phần cứng khác và không chứng minh mọi góc nhìn đều có cùng speedup.
 

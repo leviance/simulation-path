@@ -9,16 +9,20 @@
 
 namespace sculpt {
 
-enum class FieldState { initializing,
-                        loading,
-                        idle,
-                        editing,
-                        restoring,
-                        failed };
+enum class FieldState {
+    initializing,
+    loading,
+    idle,
+    editing,
+    restoring,
+    failed
+};
 
-enum class FieldInitialization { preset,
-                                 archive,
-                                 resample };
+enum class FieldInitialization {
+    preset,
+    archive,
+    resample
+};
 
 // snippet:sculpt-gpu-stamp-layout
 struct GpuStamp {
@@ -269,11 +273,13 @@ class GpuFieldDocument {
     }
 
     private:
-    enum class Batch { initialize,
-                       upload,
-                       snapshot,
-                       brush,
-                       restore };
+    enum class Batch {
+        initialize,
+        upload,
+        snapshot,
+        brush,
+        restore
+    };
 
     std::unique_ptr<GpuBuffer> allocate(std::size_t payload) {
         auto result = std::make_unique<GpuBuffer>(gl_, budget_, payload + guardBytes);

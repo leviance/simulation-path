@@ -11,6 +11,8 @@ void samePoint(const LineVertex& actual, Vec3 expected) {
 }
 } // namespace
 
+// Compare world-space vertices after translation/scale, not only a screenshot.
+// The floor and axes must follow an imported document's domain.
 void testGridGuides() {
     const auto original = gridGuideLines(GridSpec{});
     samePoint(original[0], {-1.5F, -1.1F, -1.5F});

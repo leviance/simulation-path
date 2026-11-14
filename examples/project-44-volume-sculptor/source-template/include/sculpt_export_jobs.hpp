@@ -8,11 +8,13 @@
 
 namespace sculpt {
 
-enum class FileStage { copying,
-                       writing,
-                       checking,
-                       complete,
-                       cancelled };
+enum class FileStage {
+    copying,
+    writing,
+    checking,
+    complete,
+    cancelled
+};
 
 inline std::filesystem::path reserveOutputDirectory(std::string_view kind) {
     if (kind.empty() || kind.size() > 32 || !std::all_of(kind.begin(), kind.end(), [](char c) {

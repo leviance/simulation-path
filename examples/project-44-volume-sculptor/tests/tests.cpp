@@ -7,11 +7,13 @@
 #include "sculpt_mesh_topology.hpp"
 #include "sculpt_slice.hpp"
 #include <bit>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 void testTetraPreview();
 void testCpuTeachingStages();
@@ -25,9 +27,9 @@ void testBenchmarkStatistics();
 namespace {
 using namespace sculpt;
 
-void check(bool condition, const std::string& message) {
+void check(bool condition, std::string_view message) {
     if (!condition)
-        throw std::runtime_error(message);
+        throw std::runtime_error(std::string(message));
 }
 
 void near(double actual, double expected, double tolerance, const std::string& message) {
@@ -574,6 +576,8 @@ void jobAndCameraFixtures() {
 }
 
 int main() {
+    // Keep the exception-to-exit-code bridge active in Release as well as Debug.
+    int failures = 0;
     try {
         gridFixtures();
         tetraFixtures();
@@ -595,10 +599,14 @@ int main() {
         testEditorDigitKeys();
         testMeshReaderTriangles();
         testBenchmarkStatistics();
-        std::cout << "P44 CPU CORE PASS; this CTest result does not verify GPU scale or native controls\n";
-        return 0;
     } catch (const std::exception& error) {
         std::cerr << "P44 fixture failure: " << error.what() << '\n';
-        return 1;
+        ++failures;
     }
+
+    if (failures != 0)
+        return EXIT_FAILURE;
+
+    std::cout << "P44 CPU CORE PASS; this CTest result does not verify GPU scale or native controls\n";
+    return EXIT_SUCCESS;
 }

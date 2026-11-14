@@ -6,16 +6,16 @@ Ngày kiểm: 2026-10-29. Nguồn chuẩn: Product Specification v4, mục Proje
 
 ## Sản phẩm native
 
-| Yêu cầu | Triển khai | Bằng chứng đã chạy |
-| --- | --- | --- |
-| Ray-march per pixel, không thay bằng mesh | Một fullscreen triangle; SDF sphere/box/torus và năm slab hữu hạn trong fragment shader | Driver OpenGL thật; bốn material ID xuất hiện; đã xem ảnh capture 1280×800 và cửa sổ ứng dụng |
-| Camera move/look và parameters | Position/yaw/pitch, WASD/QE, RMB hoặc mũi tên, FOV/radius/settings | Kiểm toán CPU và build mọi snapshot đạt; con lăn đổi FOV đã kiểm trực tiếp; giữ phím và kéo RMB chưa kiểm đầy đủ |
-| Normal, lighting, shadow và clean/debug view | Central differences, Lambert/specular, shadow hữu hạn; Beauty/Steps/Hit/Normal và overlay riêng | GPU outputs hữu hạn; normal đối chiếu analytic sphere qua epsilon sweep; Tab và V đã đổi giao diện trực tiếp |
-| Oracle độc lập | Quadratic ray–sphere trong `raymarch_oracle.hpp`, không gọi SDF/march | 55 CPU checks, gồm fixture t=3.03m, inside exit=0.82m, miss, near-surface và tangent |
-| Giới hạn và chính sách rõ | Abs-distance; stop reason; max steps/distance, hit/normal epsilon riêng | CPU/GPU kiểm step/distance/invalid/empty; tangent dùng sqrt bound, normal dùng angular error |
-| Shader lifecycle an toàn | Compile/link/type/array/required-uniform validation trước khi thay program | Final có 250 GPU checks; lỗi giữ ảnh/program/locations/generation, bản đúng phục hồi; object tạm/cũ/final được nhả; F5 đã tăng generation trực tiếp |
-| Source độc lập từng mốc | Starter, checkpoint 01–11, final, CMake và tests | Build thực tế từ snapshot sinh bằng generator, không chỉ source-template; Debug và Release đều đạt |
-| Shader runtime riêng từng target | `shaderRuntimePerTarget: true` | Verification với shader directory riêng của starter và final đều đạt |
+| Yêu cầu                                      | Triển khai                                                                                      | Bằng chứng đã chạy                                                                                                                                  |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ray-march per pixel, không thay bằng mesh    | Một fullscreen triangle; SDF sphere/box/torus và năm slab hữu hạn trong fragment shader         | Driver OpenGL thật; bốn material ID xuất hiện; đã xem ảnh capture 1280×800 và cửa sổ ứng dụng                                                       |
+| Camera move/look và parameters               | Position/yaw/pitch, WASD/QE, RMB hoặc mũi tên, FOV/radius/settings                              | Kiểm toán CPU và build mọi snapshot đạt; con lăn đổi FOV đã kiểm trực tiếp; giữ phím và kéo RMB chưa kiểm đầy đủ                                    |
+| Normal, lighting, shadow và clean/debug view | Central differences, Lambert/specular, shadow hữu hạn; Beauty/Steps/Hit/Normal và overlay riêng | GPU outputs hữu hạn; normal đối chiếu analytic sphere qua epsilon sweep; Tab và V đã đổi giao diện trực tiếp                                        |
+| Oracle độc lập                               | Quadratic ray–sphere trong `raymarch_oracle.hpp`, không gọi SDF/march                           | 55 CPU checks, gồm fixture t=3.03m, inside exit=0.82m, miss, near-surface và tangent                                                                |
+| Giới hạn và chính sách rõ                    | Abs-distance; stop reason; max steps/distance, hit/normal epsilon riêng                         | CPU/GPU kiểm step/distance/invalid/empty; tangent dùng sqrt bound, normal dùng angular error                                                        |
+| Shader lifecycle an toàn                     | Compile/link/type/array/required-uniform validation trước khi thay program                      | Final có 250 GPU checks; lỗi giữ ảnh/program/locations/generation, bản đúng phục hồi; object tạm/cũ/final được nhả; F5 đã tăng generation trực tiếp |
+| Source độc lập từng mốc                      | Starter, checkpoint 01–11, final, CMake và tests                                                | Build thực tế từ snapshot sinh bằng generator, không chỉ source-template; Debug và Release đều đạt                                                  |
+| Shader runtime riêng từng target             | `shaderRuntimePerTarget: true`                                                                  | Verification với shader directory riêng của starter và final đều đạt                                                                                |
 
 Cấu hình kiểm: Windows x64, Visual Studio 2022/MSVC 19.33.31630, SDL 3.4.8 từ cache local, NVIDIA GeForce RTX 3050 Laptop GPU, OpenGL 3.3.0 NVIDIA 546.30. Đây không phải chứng nhận Linux/macOS hoặc mọi GPU.
 
@@ -58,18 +58,18 @@ Các hành vi đã kiểm: pause/step/reset theo preset, camera vẫn điều kh
 
 ## Regression và website
 
-| Phạm vi | Kết quả |
-| --- | --- |
-| `tests/lab-math-ray-marched-shape-room.test.mjs` | 22 nhóm đạt: toán, oracle, policies, state/input, rendering và scheduler |
-| `tests/projects-36.cases.mjs` | 5 kiểm đạt: style C++, 11 lesson/metadata, MDX thật, 31 source excerpts và stage progression |
-| Hợp đồng nội dung dùng chung | Toàn bộ 566 bài đạt bảy teaching roles; không hạ validator để bỏ qua bài mới |
-| TypeScript, registry và architecture budgets | Đạt |
-| Production build sau cập nhật cuối | Đạt, qua cả năm môi trường build của Vinext |
-| `tests/browser/project-36.spec.ts` trên Chrome với production artifact | 3 kiểm đạt: stepper, final lab, pointer/source/DPR; không page error, console error hoặc HTTP error |
-| Route, anchor, glossary | Overview và 11 lesson đều HTTP 200; mọi liên kết P36 được kiểm đều có đích; HTML mỗi trang dưới 300 KiB |
-| Source JSON và download trong production | Manifest/common/checkpoint JSON và ZIP trùng từng byte với output hiện tại |
-| Source-guide contract Project 36–42 | Đạt: chỉ liệt kê file thực sự thay đổi tại checkpoint |
-| Git hygiene | Không generated course output, thư viện hoặc compiled artifact trong index; `git diff --check` đạt |
+| Phạm vi                                                                | Kết quả                                                                                                 |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `tests/lab-math-ray-marched-shape-room.test.mjs`                       | 22 nhóm đạt: toán, oracle, policies, state/input, rendering và scheduler                                |
+| `tests/projects-36.cases.mjs`                                          | 5 kiểm đạt: style C++, 11 lesson/metadata, MDX thật, 31 source excerpts và stage progression            |
+| Hợp đồng nội dung dùng chung                                           | Toàn bộ 566 bài đạt bảy teaching roles; không hạ validator để bỏ qua bài mới                            |
+| TypeScript, registry và architecture budgets                           | Đạt                                                                                                     |
+| Production build sau cập nhật cuối                                     | Đạt, qua cả năm môi trường build của Vinext                                                             |
+| `tests/browser/project-36.spec.ts` trên Chrome với production artifact | 3 kiểm đạt: stepper, final lab, pointer/source/DPR; không page error, console error hoặc HTTP error     |
+| Route, anchor, glossary                                                | Overview và 11 lesson đều HTTP 200; mọi liên kết P36 được kiểm đều có đích; HTML mỗi trang dưới 300 KiB |
+| Source JSON và download trong production                               | Manifest/common/checkpoint JSON và ZIP trùng từng byte với output hiện tại                              |
+| Source-guide contract Project 36–42                                    | Đạt: chỉ liệt kê file thực sự thay đổi tại checkpoint                                                   |
+| Git hygiene                                                            | Không generated course output, thư viện hoặc compiled artifact trong index; `git diff --check` đạt      |
 
 Browser regression phục vụ production artifact qua interception trong Playwright, không tự mở HTTP/dev server. Localhost:3000 không khả dụng khi probe. Không start/restart server, deploy, stage, commit hoặc push trong lượt này.
 

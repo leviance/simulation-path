@@ -9,13 +9,15 @@
 
 namespace sculpt {
 
-enum class MeshJobState { initializing,
-                          editing,
-                          counting,
-                          emitting,
-                          ready,
-                          cancelled,
-                          failed };
+enum class MeshJobState {
+    initializing,
+    editing,
+    counting,
+    emitting,
+    ready,
+    cancelled,
+    failed
+};
 
 class GpuMeshBuilder {
     public:

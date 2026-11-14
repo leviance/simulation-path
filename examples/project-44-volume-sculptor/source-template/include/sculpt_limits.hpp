@@ -4,6 +4,8 @@
 
 namespace sculpt {
 
+// Six tetra per cell emit at most twelve triangles (36 vertices).
+// Counts must fit these explicit capacities before any output buffer is allocated.
 inline constexpr int chunkSide = 16;
 inline constexpr std::size_t cellsPerChunk = chunkSide * chunkSide * chunkSide;
 inline constexpr std::size_t maximumChunkVertices = cellsPerChunk * 36;

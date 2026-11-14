@@ -9,8 +9,19 @@ namespace sculpt {
 struct EditorOptions {
     int samples{128};
     int seconds{};
-    bool hidden{}, verify{}, verifyEdits{}, verifyFiles{}, verifySlice{}, verifyScene{}, verifyProducts{}, plane{}, showSlice{}, traceInput{}, benchmark{};
-    std::filesystem::path capture, load;
+    bool hidden{};
+    bool verify{};
+    bool verifyEdits{};
+    bool verifyFiles{};
+    bool verifySlice{};
+    bool verifyScene{};
+    bool verifyProducts{};
+    bool plane{};
+    bool showSlice{};
+    bool traceInput{};
+    bool benchmark{};
+    std::filesystem::path capture;
+    std::filesystem::path load;
     Brush startingBrush;
     float brushDepth{};
 };
@@ -31,6 +42,8 @@ inline float editorRealOption(std::string_view text, float minimum, float maximu
     return result;
 }
 
+// Reject incompatible verification paths before creating a window or GPU buffer.
+// A hidden invocation must have a finite verification, capture or time condition.
 inline EditorOptions parseEditorOptions(int argc, char** argv) {
     EditorOptions result;
 #if LAB_CHECKPOINT >= 12

@@ -7,6 +7,8 @@
 
 namespace sculpt {
 
+// Reservations cover buffers owned by this editor, not all memory held by the driver.
+// Candidate and active allocations share this budget until a transaction publishes.
 struct GpuBudget {
     std::size_t used{};
     std::size_t limit{gpuByteBudget};

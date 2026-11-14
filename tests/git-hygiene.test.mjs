@@ -19,6 +19,8 @@ const outputs = [
   "content/registry.ts",
   "lib/generated-checkpoint-sources.ts",
   "lib/generated-checkpoint-sources/p78/final.ts",
+  "lib/generated-checkpoint-sources/p78/final.mjs",
+  "lib/generated-checkpoint-sources/p78/final.d.mts",
   "examples/project-78-floating-point/starter/src/main.cpp",
   "examples/project-78-floating-point/checkpoints/12/include/math.hpp",
   "examples/project-78-floating-point/final/src/main.cpp",

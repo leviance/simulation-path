@@ -14,7 +14,8 @@ test("Project 38 production renders every new lesson and the complete source/dow
     const html = await response.text();
     assert.match(html, /Canvas Project 38/, file);
     assert.match(html, /checkpoint-source/, file);
-    if (file.startsWith("12-")) assert.match(html, /project-38-charged-particle-chamber\.zip/, file);
+    if (file.startsWith("12-"))
+      assert.match(html, /project-38-charged-particle-chamber\.zip/, file);
     assert.doesNotMatch(html, /Unhandled Script Error|Transform failed|Invalid Character/, file);
   }
   const overview = await render("/projects/charged-particle-chamber");
@@ -27,6 +28,8 @@ test("Project 38 production renders every new lesson and the complete source/dow
 });
 
 test("retired Project 38 route is not an alias for the new force model", async () => {
-  const response = await render("/projects/five-million-particle-fountain/10-hoan-thien-dai-phun-5-trieu-hat");
+  const response = await render(
+    "/projects/five-million-particle-fountain/10-hoan-thien-dai-phun-5-trieu-hat",
+  );
   assert.equal(response.status, 404);
 });

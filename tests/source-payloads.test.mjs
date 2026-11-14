@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { isDisplayableCourseFile } from "../scripts/course-file-types.mjs";
+import { sourceRuntimePayloadNames } from "./source-runtime-support.mjs";
 
 const catalog = JSON.parse(
   await readFile(new URL("../course/projects.json", import.meta.url), "utf8"),
@@ -49,16 +52,57 @@ test(
           `p${project.id}`,
         );
         assert.ok(bytes.equals(await readFile(path.join(generated, "data", name))));
-        const sourceModule = await readFile(path.join(generated, key + ".ts"), "utf8");
-        assert.ok(sourceModule.includes(`./data/${name}`));
+        const sourceModule = await readFile(path.join(generated, key + ".mjs"), "utf8");
         assert.doesNotMatch(sourceModule, /&raw/);
         assert.ok(sourceModule.includes(`export const version = "${name.split(".")[1]}"`));
         const payload = JSON.parse(bytes);
         assert.equal(payload.schemaVersion, 1);
         const files = payload.files;
+        assert.ok(Array.isArray(files));
+        const runtimeImports = sourceRuntimePayloadNames(sourceModule, (name) =>
+          readFileSync(path.join(generated, name), "utf8"),
+        );
+        assert.ok(
+          runtimeImports.length > 0,
+          "runtime must import its data, not just declare a type",
+        );
+        if (runtimeImports.length > 1) {
+          assert.match(sourceModule, /await Promise\.all\(/);
+          assert.doesNotMatch(
+            sourceModule,
+            /import \w+ from/,
+            "static imports would merge shards into one production chunk",
+          );
+          assert.doesNotMatch(
+            sourceModule,
+            /import\([^\n]+with:/,
+            "keep JSON attributes inside static shard adapters",
+          );
+        }
+        const runtimeFiles = [];
+        for (const runtimeName of runtimeImports) {
+          assert.ok(
+            runtimeName.startsWith(key + ".") && runtimeName.endsWith(name.split(".")[1] + ".json"),
+          );
+          const runtimeBytes = await readFile(path.join(generated, "data", runtimeName));
+          assert.ok(runtimeBytes.length <= 128 * 1024, project.id + "/" + runtimeName);
+          const shard = JSON.parse(runtimeBytes);
+          assert.equal(shard.schemaVersion, 1);
+          runtimeFiles.push(...shard.files);
+        }
+        assert.deepEqual(
+          runtimeFiles,
+          files,
+          "bounded runtime imports must retain every source file in order",
+        );
         assert.equal(new Set(files.map((file) => file.path)).size, files.length);
         await Promise.all(
           files.map(async (file) => {
+            assert.equal(typeof file.path, "string");
+            assert.equal(typeof file.source, "string");
+            assert.ok(
+              ["bash", "cmake", "cpp", "glsl", "diff", "markdown", "text"].includes(file.language),
+            );
             const snapshot =
               key === "common"
                 ? ""
@@ -92,5 +136,72 @@ test(
     for (let start = 0; start < catalog.length; start += 4)
       await Promise.all(catalog.slice(start, start + 4).map(checkProject));
     assert.ok(checked > 600);
+  },
+);
+
+test(
+  "source runtime declarations keep payload JSON out of typechecking without weakening the API",
+  { timeout: 15000 },
+  async () => {
+    const ts = await import("typescript");
+    const root = await mkdtemp(path.join(workspace, ".validation/source-payload-types-"));
+    try {
+      const entry = path.join(root, "consumer.ts");
+      await writeFile(
+        entry,
+        [
+          'import { files, version } from "@/lib/generated-checkpoint-sources/p44/final.mjs";',
+          "const paths: string[] = files.map(file => file.path);",
+          "const content: string = files[0].source;",
+          "const revision: string = version;",
+          "// @ts-expect-error files is readonly, not an untyped mutable array",
+          'files.push({ path: "bad", language: "cpp", source: "" });',
+          "// @ts-expect-error language retains its supported-language union",
+          'const invalid: typeof files[number] = { path: "bad", language: "unsupported", source: "" };',
+          "void [paths, content, revision, invalid];",
+        ].join("\n"),
+      );
+      const program = ts.createProgram([entry], {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        noEmit: true,
+        strict: true,
+        skipLibCheck: true,
+        resolveJsonModule: true,
+        types: [],
+        paths: { "@/*": [path.join(workspace, "*")] },
+      });
+      assert.deepEqual(
+        ts
+          .getPreEmitDiagnostics(program)
+          .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+        [],
+      );
+      const inputs = program.getSourceFiles();
+      assert.ok(inputs.some((file) => file.fileName.endsWith("/p44/final.d.mts")));
+      assert.equal(
+        inputs.filter(
+          (file) =>
+            file.fileName.includes("/generated-checkpoint-sources/") &&
+            file.fileName.endsWith(".json"),
+        ).length,
+        0,
+      );
+
+      const directory = path.join(workspace, "lib/generated-checkpoint-sources/p44");
+      const runtime = await import(pathToFileURL(path.join(directory, "final.mjs")).href);
+      const manifest = JSON.parse(
+        await readFile(path.join(workspace, "public/project-sources/44/manifest.json"), "utf8"),
+      );
+      const payloadName = path.basename(manifest.snapshots.final);
+      const payload = JSON.parse(await readFile(path.join(directory, "data", payloadName), "utf8"));
+      assert.deepEqual(runtime.files, payload.files);
+      assert.equal(runtime.version, payloadName.split(".")[1]);
+    } finally {
+      assert.equal(path.dirname(root), path.join(workspace, ".validation"));
+      assert.ok(path.basename(root).startsWith("source-payload-types-"));
+      await rm(root, { recursive: true, force: true });
+    }
   },
 );

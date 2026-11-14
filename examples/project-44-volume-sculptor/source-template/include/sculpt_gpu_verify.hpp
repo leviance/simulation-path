@@ -5,6 +5,8 @@
 
 namespace sculpt {
 
+// Independent analytic checks read samples/vertices only in verification mode.
+// A rendered sphere alone cannot prove interpolation, packing or outward normals.
 inline void verifyGpuShape(const GpuMeshBuilder& model, bool plane) {
     if (!model.ready() || !model.guardsIntact())
         throw std::runtime_error("Verification requires a complete mesh and intact canaries");

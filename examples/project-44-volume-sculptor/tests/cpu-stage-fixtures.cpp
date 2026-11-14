@@ -6,6 +6,8 @@
 namespace {
 using namespace sculpt;
 
+// Teaching-stage checks isolate CPU normal/picking behavior from GPU scale tests.
+// Exceptions keep failures observable even when Release defines NDEBUG.
 void requireStage(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -53,7 +55,7 @@ void normalModeFixtures() {
     stageRejects([&] {
         extractCpu(sphere, 0, 300000, static_cast<CpuNormalMode>(2));
     },
-                 "Unknown normal mode was accepted");
+                "Unknown normal mode was accepted");
 
     ScalarGrid critical({5});
     for (int z = 0; z < 5; ++z)
@@ -88,7 +90,7 @@ void fieldPickFixtures() {
     stageRejects([&] {
         pickCpuField(plane, {}, {}, 0);
     },
-                 "Zero ray direction was accepted");
+                "Zero ray direction was accepted");
 
     ScalarGrid sphere({32});
     sphere.fill(Shape::sphere);
@@ -115,7 +117,7 @@ void singleStampFixtures() {
     stageRejects([&] {
         document.applyStamp(brush);
     },
-                 "Single stamp stole an active stroke");
+                "Single stamp stole an active stroke");
     requireStage(document.field().values() == owned && document.strokeActive(), "Rejected stamp changed the owned field");
     document.endStroke(12);
     requireStage(document.undo() && document.redoCount() == 1, "Single-stamp fixture could not prepare a redo entry");

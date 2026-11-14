@@ -58,9 +58,11 @@ struct GridSpec {
     // end-snippet:sculpt-grid-transform
 };
 
-enum class Shape { sphere,
-                   separatedSpheres,
-                   torus };
+enum class Shape {
+    sphere,
+    separatedSpheres,
+    torus
+};
 
 inline float initialField(Vec3 point, Shape shape) {
     if (shape == Shape::sphere)

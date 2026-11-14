@@ -42,7 +42,7 @@ class GpuCountLessonVerifier {
             if (phase_ != 0 && (job.selectedChunk() != pinnedChunk_ || job.selectedCell() != pinnedCell_))
                 throw std::runtime_error("A field edit/history change unexpectedly moved the inspected cell");
             std::cout << "GPU COUNT SNAPSHOT PASS phase=" << phase_ << " samples=" << settings.grid.sampleCount() << " cells=" << validCells_ << " paddedSlots=" << job.totalChunks() * cellsPerChunk << " countedVertices=" << job.vertices() << " emittedVertices=" << job.emittedVertices() << " prefixChecks=" << job.totalChunks() * cellsPerChunk << " cpuCellOracle=" << static_cast<int>(reference_.has_value()) << " phaseWallMs=" << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phaseStarted_).count() << " readbackAndCpuCheckMs=" << checkCpuMs_ << '\n'
-                      << std::flush;
+                    << std::flush;
             if (phase_ == 0) {
                 initialStats_ = job.published();
                 const auto generation = job.generation();

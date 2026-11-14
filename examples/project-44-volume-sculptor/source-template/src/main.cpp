@@ -153,7 +153,7 @@ int run(const EditorOptions& options) {
     bool verified = false, verifiedSlice = false, captured = false, initialLoadComplete = options.load.empty();
     const auto begin = std::chrono::steady_clock::now();
     auto nextFrame = begin;
-    std::cout << "P44 DRAFT native tool; course/checkpoints, Canvas and final acceptance remain pending\nGPU=" << reinterpret_cast<const char*>(gl.GetString(GL_RENDERER)) << " GL=" << reinterpret_cast<const char*>(gl.GetString(GL_VERSION)) << '\n';
+    std::cout << "P44 VOLUME SCULPTOR; see README for verification scope\nGPU=" << reinterpret_cast<const char*>(gl.GetString(GL_RENDERER)) << " GL=" << reinterpret_cast<const char*>(gl.GetString(GL_VERSION)) << '\n';
     const auto draw = [&]() {
         int width{}, height{}, logicalWidth{}, logicalHeight{};
         SDL_GetWindowSizeInPixels(window.get(), &width, &height);

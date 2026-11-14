@@ -12,18 +12,18 @@ Mười bài đi từ một nhóm điểm chạy trên CPU tới area CDF, sqrt 
 
 ## Đối chiếu yêu cầu
 
-| Yêu cầu | Triển khai và bằng chứng |
-| --- | --- |
-| Lấy mẫu theo diện tích | Diện tích tam giác, CDF, loại mặt suy biến, sqrt barycentric. Fixture hai tam giác 1:4 qua tám seed, centroid và bounds; CTest và 10/10 kiểm toán Canvas đạt. |
-| Ghép ổn định, A/B thật | Hai permutation trên cùng hai bộ mẫu. Random shuffle và stable Morton counting order 32³ cell; so độ dài nối thẳng trung bình, subset đường đi. Không gọi spatial order là optimal transport. |
-| Mật độ đọc được | 16 nhóm tam giác theo Y của tâm mặt; expected là tổng diện tích nhóm, observed là số mẫu nhận. Có chế độ uniform triangle cố ý thiên lệch và heatmap. Không gọi nhóm là lát cắt liên tục chính xác. |
-| Timeline | Linear/smoothstep; Thẳng/Vòng cung để đối chiếu, Flow mặc định có nhịp và độ lệch riêng theo ID. Nhánh endpoint sao chép chính xác; Pause, scrub, reverse, loop. Nhiều chuỗi dt có cùng tổng thời gian được kiểm. |
-| Compute/draw thật | Compute ghi CURRENT, vertex shader đọc cùng SSBO, barrier đúng consumer và DrawArrays dùng N thật. Không upload vị trí tính CPU mỗi frame của final. |
-| N lẻ và giữ ID | `N=1.000.003`, local size 256, 189 lanes dư. Đọc toàn state theo chunk hữu hạn, kiểm xyz và float ID; canary ngoài N nguyên vẹn. |
-| Last-good | STAGED → CPU candidate → upload candidate → ACTIVE. Batch giới hạn, cancel/invalid giữ generation cũ; không đổi nhãn trước khi đủ dữ liệu. Camera không tạo lại mẫu. |
-| Giới hạn bộ nhớ | Source/target/path: 16N byte mỗi buffer; CURRENT: 16(N+1); mapping: 8N. Preflight capability, peak ACTIVE+candidate và budget CPU/GPU riêng; từ chối không hạ N ngầm. |
-| Chi phí | Báo setup, sampling, matching, preparation wall, CPU submit upload, delayed GPU last-update/draw và frame. Camera/Pause không được coi là workload update mới. Không cam kết FPS cho mọi máy. |
-| Gói học | Starter, 10 checkpoint, final, shader, tests và README. ZIP đã tạo và đối chiếu toàn bộ entry với nguồn sinh trong fixture. |
+| Yêu cầu                | Triển khai và bằng chứng                                                                                                                                                                                          |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lấy mẫu theo diện tích | Diện tích tam giác, CDF, loại mặt suy biến, sqrt barycentric. Fixture hai tam giác 1:4 qua tám seed, centroid và bounds; CTest và 10/10 kiểm toán Canvas đạt.                                                     |
+| Ghép ổn định, A/B thật | Hai permutation trên cùng hai bộ mẫu. Random shuffle và stable Morton counting order 32³ cell; so độ dài nối thẳng trung bình, subset đường đi. Không gọi spatial order là optimal transport.                     |
+| Mật độ đọc được        | 16 nhóm tam giác theo Y của tâm mặt; expected là tổng diện tích nhóm, observed là số mẫu nhận. Có chế độ uniform triangle cố ý thiên lệch và heatmap. Không gọi nhóm là lát cắt liên tục chính xác.               |
+| Timeline               | Linear/smoothstep; Thẳng/Vòng cung để đối chiếu, Flow mặc định có nhịp và độ lệch riêng theo ID. Nhánh endpoint sao chép chính xác; Pause, scrub, reverse, loop. Nhiều chuỗi dt có cùng tổng thời gian được kiểm. |
+| Compute/draw thật      | Compute ghi CURRENT, vertex shader đọc cùng SSBO, barrier đúng consumer và DrawArrays dùng N thật. Không upload vị trí tính CPU mỗi frame của final.                                                              |
+| N lẻ và giữ ID         | `N=1.000.003`, local size 256, 189 lanes dư. Đọc toàn state theo chunk hữu hạn, kiểm xyz và float ID; canary ngoài N nguyên vẹn.                                                                                  |
+| Last-good              | STAGED → CPU candidate → upload candidate → ACTIVE. Batch giới hạn, cancel/invalid giữ generation cũ; không đổi nhãn trước khi đủ dữ liệu. Camera không tạo lại mẫu.                                              |
+| Giới hạn bộ nhớ        | Source/target/path: 16N byte mỗi buffer; CURRENT: 16(N+1); mapping: 8N. Preflight capability, peak ACTIVE+candidate và budget CPU/GPU riêng; từ chối không hạ N ngầm.                                             |
+| Chi phí                | Báo setup, sampling, matching, preparation wall, CPU submit upload, delayed GPU last-update/draw và frame. Camera/Pause không được coi là workload update mới. Không cam kết FPS cho mọi máy.                     |
+| Gói học                | Starter, 10 checkpoint, final, shader, tests và README. ZIP đã tạo và đối chiếu toàn bộ entry với nguồn sinh trong fixture.                                                                                       |
 
 ## Kết quả native đã quan sát
 

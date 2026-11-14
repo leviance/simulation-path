@@ -5,6 +5,8 @@
 
 namespace sculpt {
 
+// Parse every exported triangle and compare numeric bytes with its frozen source.
+// Full readback here belongs to bounded verification, not interactive meshing.
 inline std::size_t verifyExportedMeshValues(const std::filesystem::path& path, const MeshSnapshot& expected, std::chrono::steady_clock::time_point deadline) {
     std::ifstream input(path);
     gpuCheck(static_cast<bool>(input), "Cannot open the published OBJ for direct numeric comparison");
@@ -61,13 +63,13 @@ inline void verifyGpuFiles(GpuMeshBuilder& model, GlApi& gl, GpuBudget& budget) 
     waitForFileFixture([&] {
         return save.stage() == FileStage::complete && model.ready();
     },
-                       [&] {
-                           save.tick();
-                           model.tick();
-                           if (model.state() == MeshJobState::failed)
-                               throw std::runtime_error(model.error());
-                       },
-                       deadline);
+                    [&] {
+                        save.tick();
+                        model.tick();
+                        if (model.state() == MeshJobState::failed)
+                            throw std::runtime_error(model.error());
+                    },
+                    deadline);
     gpuCheck(snapshotGpuField(model) != original, "The post-snapshot edit did not change the current field");
     const auto expectedBytes = fieldHeaderSize + original.size() * sizeof(float);
     gpuCheck(std::filesystem::file_size(save.path()) == expectedBytes && !std::filesystem::exists(save.partialPath()), "Saved field size or atomic publication is wrong");
@@ -76,10 +78,10 @@ inline void verifyGpuFiles(GpuMeshBuilder& model, GlApi& gl, GpuBudget& budget) 
     waitForFileFixture([&] {
         return load.complete();
     },
-                       [&] {
-                           load.tick();
-                       },
-                       deadline);
+                    [&] {
+                        load.tick();
+                    },
+                    deadline);
     auto restored = load.takeModel();
     const auto restoredField = snapshotGpuField(*restored);
     gpuCheck(restoredField.size() == original.size() && std::memcmp(restoredField.data(), original.data(), checkedProduct(original.size(), sizeof(float))) == 0 && sameGpuMesh(*restored, originalMesh), "Loading did not restore the frozen field and actual GPU mesh bit-exactly");
@@ -91,13 +93,13 @@ inline void verifyGpuFiles(GpuMeshBuilder& model, GlApi& gl, GpuBudget& budget) 
     waitForFileFixture([&] {
         return exportJob.stage() == FileStage::complete && restored->ready();
     },
-                       [&] {
-                           exportJob.tick();
-                           restored->tick();
-                           if (restored->state() == MeshJobState::failed)
-                               throw std::runtime_error(restored->error());
-                       },
-                       deadline);
+                    [&] {
+                        exportJob.tick();
+                        restored->tick();
+                        if (restored->state() == MeshJobState::failed)
+                            throw std::runtime_error(restored->error());
+                    },
+                    deadline);
     gpuCheck(exportJob.summary().vertices != 0 && exportJob.summary().triangles * 3 == exportJob.summary().vertices && !std::filesystem::exists(exportJob.partialPath()), "Export did not publish one complete, parsed mesh snapshot");
     const auto compared = verifyExportedMeshValues(exportJob.path(), originalMesh, deadline);
     std::cout << "GPU MESH IO PASS vertices=" << exportJob.summary().vertices << " triangles=" << exportJob.summary().triangles << " bytes=" << std::filesystem::file_size(exportJob.path()) << " immutableDuringRemesh=1 parsedVertexBytes=bitExact comparedVertices=" << compared << '\n';
@@ -107,10 +109,10 @@ inline void verifyGpuFiles(GpuMeshBuilder& model, GlApi& gl, GpuBudget& budget) 
     waitForFileFixture([&] {
         return cancelledSave.stage() == FileStage::cancelled;
     },
-                       [&] {
-                           cancelledSave.tick();
-                       },
-                       deadline);
+                    [&] {
+                        cancelledSave.tick();
+                    },
+                    deadline);
     gpuCheck(!std::filesystem::exists(cancelledSave.path()) && std::filesystem::exists(cancelledSave.partialPath()), "Cancelled save published a partial archive");
     ExportMeshJob cancelledExport(*restored);
     cancelledExport.tick();
@@ -139,10 +141,10 @@ inline void verifyGpuFiles(GpuMeshBuilder& model, GlApi& gl, GpuBudget& budget) 
         waitForFileFixture([&] {
             return invalid.complete();
         },
-                           [&] {
-                               invalid.tick();
-                           },
-                           deadline);
+                        [&] {
+                            invalid.tick();
+                        },
+                        deadline);
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -156,11 +158,11 @@ inline void verifyGpuFiles(GpuMeshBuilder& model, GlApi& gl, GpuBudget& budget) 
     waitForFileFixture([&] {
         return !tasks.busy();
     },
-                       [&] {
-                           restored->tick();
-                           tasks.tick();
-                       },
-                       deadline);
+                    [&] {
+                        restored->tick();
+                        tasks.tick();
+                    },
+                    deadline);
     gpuCheck(!tasks.takeLoaded() && tasks.takeRetainedLoad(), "Cancelled load handed off a partial model or omitted the retained-document signal");
     restored->resumeLastGood();
     waitForGpuModel(

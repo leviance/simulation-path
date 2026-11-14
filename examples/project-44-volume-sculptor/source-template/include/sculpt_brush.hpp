@@ -30,8 +30,10 @@ struct SampleBox {
     }
 };
 
-enum class BrushMode { add,
-                       subtract };
+enum class BrushMode {
+    add,
+    subtract
+};
 
 struct Brush {
     Vec3 center;
@@ -49,9 +51,11 @@ struct Brush {
     }
 };
 
-enum class BrushParameter { radius,
-                            strength,
-                            depth };
+enum class BrushParameter {
+    radius,
+    strength,
+    depth
+};
 
 inline void adjustBrushParameter(Brush& brush, float& depth, BrushParameter parameter, bool increase, bool coarse) {
     brush.validate();

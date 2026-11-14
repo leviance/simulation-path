@@ -4,6 +4,8 @@
 #include <vector>
 
 namespace sculpt {
+// Logical UI rectangles are separate from the high-DPI drawable and world grid.
+// Input routing uses the same panel width as the overlay, not a second hit box.
 inline constexpr int nativePanelWidth = 350;
 
 struct UiRect {

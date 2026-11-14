@@ -25,7 +25,7 @@ const row = (page: Page, label: string) =>
 test.use({
   viewport: { width: 1440, height: 1100 },
   deviceScaleFactor: 1.5,
-  reducedMotion: "reduce",
+  contextOptions: { reducedMotion: "reduce" },
 });
 
 test("Project 44 replaces old URLs, resets only its retired progress and keeps dark navigation", async ({
@@ -46,6 +46,9 @@ test("Project 44 replaces old URLs, resets only its retired progress and keeps d
       );
   }, progressKey);
   await page.goto("/projects/neighbor-list-skin/01-ve-he-hat-va-vung-tuong-tac");
+  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(
+    true,
+  );
   await expect(page).toHaveURL(new RegExp(overview + "$"));
   await expect(page.getByLabel("Chờ nghiệm thu", { exact: true })).toBeVisible();
   await expect(page.locator(".project-challenge")).toContainText("khoét");

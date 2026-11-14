@@ -7,6 +7,8 @@
 
 namespace sculpt {
 
+// SDL and the GL context must outlive all dependent GPU objects.
+// Constructor failures unwind acquired window/context resources before SDL_Quit.
 class NativeWindow {
     public:
     explicit NativeWindow(bool hidden) {
