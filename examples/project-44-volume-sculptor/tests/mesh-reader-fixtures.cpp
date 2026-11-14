@@ -3,8 +3,68 @@
 #include <iostream>
 #include <sstream>
 
+namespace {
+
+void tinyMeshFileTriangles() {
+    using namespace sculpt;
+    // These are valid float positions, including a face whose float area squared underflows.
+    for (const float side : {0.0000001F, 0.000000000001F, 1e-20F}) {
+        const std::array<SurfaceVertex, 3> expected{{
+            {{0, 0, 0, 1}, {0, 0, 1, 0}},
+            {{side, 0, 0, 1}, {0, 0, 1, 0}},
+            {{0, side, 0, 1}, {0, 0, 1, 0}},
+        }};
+        std::ostringstream output;
+        MeshWriter writer(output);
+        writer.append(expected);
+        std::istringstream input(output.str());
+        std::size_t compared = 0;
+        MeshReader reader(input, [&](std::span<const SurfaceVertex> actual) {
+            if (actual.size() != expected.size() || !sameSurfaceBytes(actual, expected))
+                throw std::runtime_error("Tiny OBJ face lost exact position/normal bytes");
+            compared += actual.size();
+        });
+        while (!reader.complete())
+            reader.readBatch(1);
+        if (compared != expected.size() || reader.summary().triangles != 1)
+            throw std::runtime_error("Tiny valid OBJ face was lost during streaming");
+
+        auto collinear = expected;
+        collinear[2].position = {2 * side, 0, 0, 1};
+        std::ostringstream invalidOutput;
+        MeshWriter invalidWriter(invalidOutput);
+        bool rejected = false;
+        try {
+            invalidWriter.append(collinear);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        if (!rejected || invalidWriter.summary().vertices != 0)
+            throw std::runtime_error("OBJ writer accepted a collinear triangle");
+    }
+
+    std::istringstream collinearInput("v 0 0 0\nvn 0 0 1\nv 1e-7 0 0\nvn 0 0 1\nv 2e-7 0 0\nvn 0 0 1\nf 1//1 2//2 3//3\n");
+    std::size_t visits = 0;
+    MeshReader invalidReader(collinearInput, [&](std::span<const SurfaceVertex>) {
+        ++visits;
+    });
+    bool rejected = false;
+    try {
+        while (!invalidReader.complete())
+            invalidReader.readBatch(1);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    if (!rejected || visits != 0)
+        throw std::runtime_error("A collinear OBJ face reached the visitor");
+    std::cout << "MESH TINY FACE PASS scales=3 minimumSide=1e-20 floatAreaUnderflow=1 exactBytes=1 zeroAreaRejected=1\n";
+}
+
+} // namespace
+
 void testMeshReaderTriangles() {
     using namespace sculpt;
+    tinyMeshFileTriangles();
     // Include signed zero and a nontrivial binary32 value, not only integer coordinates.
     const std::array<SurfaceVertex, 6> expected{{
         {{-0.0F, 0.123456789F, 0, 1}, {0, 0, 1, 0}},

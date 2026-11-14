@@ -28,6 +28,8 @@ $$\frac{\partial f}{\partial x}\approx\frac{f(p+h\,e_x)-f(p-h\,e_x)}{2h}.$$
 
 h ở phép lấy normal bằng nửa spacing. Nó là khoảng thăm dò theo world units, không phải epsilon dùng cho mọi phép kiểm số thực.
 
+Face normal vẫn là phương án dự phòng khi gradient quá nhỏ. Helper `triangleAreaDirection` của Bài 01 lấy cross product trong đơn vị cell rồi chia cho thành phần có độ lớn lớn nhất, trước khi normalize. Cách đổi thang này giữ nguyên hướng nhưng tránh bình phương một vector quá nhỏ thành 0. Triangle nhỏ chưa chắc đã suy biến: xóa nó chỉ vì diện tích dưới một ngưỡng sẽ làm mesh hở. Ta chỉ bỏ mặt khi cross product thực sự bằng 0 ở độ chính xác đang dùng.
+
 Tắt rồi bật “Gradient normal” và vẽ các đoạn normal. Hình học không đổi; khác biệt ánh sáng đến từ hướng normal, không phải thêm vertices để giấu các mặt phẳng.
 
 <InteractiveLab demo="volume-sculptor" mode="normals" />

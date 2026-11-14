@@ -25,6 +25,45 @@ inline MeshTopology inspectGpuProduct(const GpuMeshBuilder& model, std::size_t c
     return result;
 }
 
+// Validation-only upload/readback. The mesher still counts and emits on the GPU.
+inline void verifyTinyGpuSurface(GlApi& gl, GpuBudget& budget, std::chrono::steady_clock::time_point deadline) {
+    for (const float insideValue : {-0.00001F, -0.0000001F}) {
+        ModelSettings settings;
+        // Binary-exact spacing places the edited sample at world zero, not near a rounded endpoint.
+        settings.grid = {32, {-2, -2, -2}, 3.875F};
+        std::vector<float> values(settings.grid.sampleCount(), 1);
+        values[settings.grid.sampleIndex(16, 16, 16)] = insideValue;
+        GpuMeshBuilder model(gl, budget, settings, false, FieldInitialization::archive);
+        model.appendImport(values);
+        waitForGpuModel(
+            model, [&] {
+                return !model.gpuBusy() && model.document().initializedSamples() == values.size();
+            },
+            deadline
+        );
+        model.finishImport();
+        waitForGpuModel(
+            model, [&] {
+                return model.ready();
+            },
+            deadline
+        );
+        std::size_t emitted = 0, discarded = 0;
+        for (std::size_t chunk = 0; chunk < model.active().size(); ++chunk) {
+            discarded += model.active()[chunk].stats.degenerate;
+            for (const auto& vertex : model.readChunk(chunk)) {
+                gpuCheck(finite(normalOf(vertex)) && std::abs(length(normalOf(vertex)) - 1) < 0.000003F, "A tiny GPU face has an invalid normal");
+                ++emitted;
+            }
+        }
+        std::cout << "GPU TINY TRIANGLE CHECK inside=" << insideValue << " vertices=" << emitted << " expected=72 discarded=" << discarded << '\n';
+        gpuCheck(emitted == 72 && discarded == 0, "GPU count/emit erased a resolved near-isovalue surface");
+        const auto topology = inspectGpuProduct(model, 1, 2);
+        gpuCheck(topology.vertices == 14 && topology.edges == 36 && topology.faces == 24, "Tiny GPU surface has unexpected tetra connectivity");
+    }
+    std::cout << "GPU TINY TRIANGLE PASS cases=2 expectedFaces=24 closedOriented=1 noEpsilonWelding=1 unitNormals=1\n";
+}
+
 inline void verifyBrushShortcuts(GpuMeshBuilder& model, GlApi& gl, GpuBudget& budget) {
     SculptControls controls(gl, budget);
     Camera camera;
@@ -75,6 +114,7 @@ inline void verifyGpuProducts(GpuMeshBuilder& sphere, GlApi& gl, GpuBudget& budg
     );
     verifyBrushShortcuts(sphere, gl, budget);
     inspectGpuProduct(sphere, 1, 2);
+    verifyTinyGpuSurface(gl, budget, deadline);
 
     // A genuine subtract stroke drills through stored samples; this does not select the torus preset.
     // snippet:sculpt-product-drill-stroke

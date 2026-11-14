@@ -1,10 +1,14 @@
 # Project 44 — tích hợp học phần điêu khắc thể tích
 
-Mốc 14/11/2026. Học phần mới dùng slug `volume-sculptor`, còn nhãn chờ nghiệm thu. Đây không phải biên bản chứng nhận toàn bộ Project 44 đã đạt đặc tả. Nguồn chuẩn vẫn là Product Specification v4 complete; [hồ sơ native](project-44-progress.md) và [hồ sơ Canvas](project-44-canvas-progress.md) có phạm vi riêng.
+Mốc 14/11/2026. Học phần mới dùng slug `volume-sculptor`. Người dùng đã kiểm trực tiếp và xác nhận đạt yêu cầu; xem [biên bản nghiệm thu hiện tại](project-44-acceptance.md). Phần dưới giữ lịch sử tích hợp và các phạm vi kiểm riêng, không biến kết quả baseline thành kết quả của gói mới. Nguồn chuẩn vẫn là Product Specification v4 complete; [hồ sơ native](project-44-progress.md) và [hồ sơ Canvas](project-44-canvas-progress.md) có phạm vi riêng.
 
-## Cập nhật trước khi lưu tiến độ vào Git
+## Hồi quy mặt rất nhỏ — đã có bản sửa và ZIP mới
 
-Phát hiện mới chưa được sửa: mesh OBJ xuất sau khi khoét bằng chuột có 12 cạnh biên, một component và Euler −2. Phép kiểm độc lập không hàn đỉnh theo epsilon; báo cáo local ở `.validation/p44-ui-obj-audit-1794649315185.json`. Nguyên nhân đang được khoanh vùng ở ngưỡng loại triangle có diện tích nhỏ nhưng vẫn khác 0; chưa có bản sửa thuật toán được nghiệm thu.
+[Hồ sơ topology sau commit `0e6f0b8`](project-44-topology-regression.md) ghi ca lỗi, bản sửa CPU/GPU/Canvas/OBJ, bài học và bằng chứng độc lập. OBJ từ đúng field gây lỗi nay có 0 cạnh hở/Euler 0, khôi phục đúng 8 triangle mà không hàn đỉnh theo epsilon. ZIP mới có digest `28a46d97…`, đã qua ma trận build/CTest Debug/Release, compiler dependency audit và 16 runtime mode hữu hạn. Các kết quả baseline dưới đây là lịch sử, không thay kết quả của gói mới hoặc chứng nhận toàn site.
+
+## Mốc lỗi đã ghi trong commit `0e6f0b8`
+
+Tại mốc đó, mesh OBJ xuất sau khi khoét bằng chuột có 12 cạnh biên, một component và Euler −2. Phép kiểm độc lập không hàn đỉnh theo epsilon; báo cáo local ở `.validation/p44-ui-obj-audit-1794649315185.json`. Nguyên nhân được khoanh vùng ở ngưỡng loại triangle có diện tích nhỏ nhưng vẫn khác 0; lúc ấy chưa có bản sửa thuật toán được nghiệm thu.
 
 Đã thêm fixture `tinyTriangleFixtures()` vào `tests/cpu-stage-fixtures.cpp` để giữ lại ca tái hiện. Build Release target tests thành công, nhưng CTest mới thất bại: sample bên trong có giá trị −0,00001 bị loại cả 24 triangle, còn 0 thay vì 72 vertices. Log `.validation/p44-tiny-before-fix-1794649954998.log`. Không bỏ fixture hoặc đổi kỳ vọng để làm xanh test. Các kết quả CTest đạt bên dưới thuộc gói baseline trước khi thêm regression này; ZIP digest `18b2f86f…` chưa chứa test mới và không còn khớp toàn bộ nguồn hiện tại. Commit lưu tiến độ không đồng nghĩa chốt phát hành hoặc đạt toàn bộ tests.
 
@@ -123,9 +127,9 @@ Bộ browser mở rộng cuối đạt **6/6 trong 45,5 giây**, `.validation/p4
 
 Chốt nguồn sau ca browser mới: `.validation/p44-final-source-checks-1794646428382.log` qua đủ metadata/search, lesson registry và snapshot/payload của toàn catalog, với deadline 60 giây chung cho ba bước course. Architecture, Git hygiene và format của các web input thay đổi đều qua. Lint focused cuối vẫn 20 files/0 errors/0 warnings (`.validation/p44-focused-lint-final.json`). Cold TypeScript toàn repo qua lại: 2.771 inputs, 735.562 KiB, 34,58 giây, heap cap 1.024 MiB/timeout 120 giây. Không có process kiểm/browser server/native window còn chạy sau khi các handle báo terminal; không stage hoặc commit các sửa đổi tiếp tục này.
 
-## Gate còn lại
+## Chốt các gate của học phần
 
-1. Kiểm lại và xử lý các ca production toàn site còn báo lỗi, cùng lint ngoài phạm vi P44; không dùng bộ P44 đạt để tuyên bố CI toàn repo xanh.
-2. Bổ sung runtime từ ZIP hiện tại cho starter, các nhánh CPU/field/count/emit, I/O cancellation/checksum và shader fallback còn chỉ có bằng chứng gói trước. Ma trận build/CTest độc lập và các lượt GPU mới đã qua nhưng không thay các phạm vi này.
-3. Hoàn tất phần native UI còn thiếu đã liệt kê ở trên, gồm các viewer/checkpoint chưa đủ ma trận. Giữ riêng resize/focus khi idle với giữa stroke, verifier tạo sản phẩm với thao tác tự khoét/nối và API với cửa sổ thật.
-4. Audit từng yêu cầu của P44 trong spec với bằng chứng đúng phạm vi rồi mới chốt trạng thái nghiệm thu. Benchmark/GPU 128³ trước đây vẫn có hồ sơ, nhưng không thay các gate trên.
+1. Ma trận ZIP sửa topology và 16 mode runtime đã hoàn tất; các nhóm starter/CPU/field/count/emit/I/O/fallback không còn chỉ dùng bằng chứng của gói trước. Xem [hồ sơ topology](project-44-topology-regression.md).
+2. Người dùng xác nhận đã kiểm và sản phẩm đạt yêu cầu. Đây là xác nhận sử dụng tổng thể, không phải trace bổ sung do agent thực hiện. Harness controller bị dừng trước F8 không được tính pass.
+3. [Biên bản nghiệm thu](project-44-acceptance.md) đối chiếu từng nhóm yêu cầu của spec, source/giáo trình/Canvas/ZIP và bằng chứng. Các phép đo/GPU, test API và thao tác cửa sổ thật vẫn có phạm vi riêng.
+4. [Các lỗi toàn site ngoài P44](site-issues-outside-project-44.md) được tách riêng theo yêu cầu của người dùng. Chốt P44 không có nghĩa toàn repository lint/test đều xanh.

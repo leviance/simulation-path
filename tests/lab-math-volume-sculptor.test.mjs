@@ -23,6 +23,7 @@ import {
   polygonizeCell,
   polygonizeTetra,
   teachingTetra,
+  triangleAreaDirection,
 } from "../lib/labs/volume-sculptor/topology.ts";
 import {
   initialView,
@@ -61,8 +62,8 @@ function settle(session) {
   assert.ok(session.current, session.notice);
   return session.lastGood;
 }
-const pointKey = (point) =>
-  [point.x, point.y, point.z].map((value) => Math.round(value * 1e7)).join(",");
+// Canonical edge interpolation must agree exactly; do not hide cracks by rounding.
+const pointKey = (point) => [point.x, point.y, point.z].join(",");
 
 function topology(mesh) {
   const vertices = new Set(),
@@ -178,6 +179,39 @@ test("canonical edge ordering is exact, equality is outside, and degenerate tria
   assert.equal(collapsed.triangles.length, 0);
   assert.equal(collapsed.degenerate, 1);
   assert.throws(() => polygonizeTetra([tetra[0], tetra[0], tetra[2], tetra[3]], 0));
+});
+
+test("near-isovalue triangles stay closed without epsilon welding and keep finite unit normals", () => {
+  // Only the center sample is inside: its 24 incident tetra must emit 24 faces.
+  // Exact coordinate keys deliberately do not merge nearby but distinct vertices.
+  for (const insideValue of [-1e-5, -1e-7]) {
+    const grid = new ScalarGrid(new GridSpec(3, { x: -1, y: -1, z: -1 }, 2));
+    grid.values.fill(1);
+    grid.set(1, 1, 1, insideValue);
+    const mesh = finishJob(new MeshJob(grid, 0, false, 1, 1));
+    assert.equal(mesh.vertices.length, 72, `inside=${insideValue}: resolved faces were erased`);
+    assert.equal(mesh.degenerate, 0);
+    assert.deepEqual(topology(mesh), { euler: 2, components: 1 });
+    for (const vertex of mesh.vertices) near(magnitude3(vertex.normal), 1, 1e-12);
+  }
+});
+
+test("triangle area direction preserves winding across scales and rejects invalid data", () => {
+  const a = { x: 0, y: 0, z: 0 };
+  for (const side of [2, 1e-7, 1e-20]) {
+    const b = { x: side, y: 0, z: 0 },
+      c = { x: 0, y: side, z: 0 };
+    assert.deepEqual(triangleAreaDirection(a, b, c, 0.125), { x: 0, y: 0, z: 1 });
+    assert.equal(triangleAreaDirection(a, c, b, 0.125).z, -1);
+    assert.deepEqual(triangleAreaDirection(a, b, b, 0.125), a);
+  }
+  for (const spacing of [0, -1, NaN, Infinity])
+    assert.throws(() => triangleAreaDirection(a, a, a, spacing), RangeError);
+  assert.throws(() => triangleAreaDirection(a, { ...a, x: Infinity }, a, 1), RangeError);
+  assert.throws(
+    () => triangleAreaDirection(a, { ...a, x: 1e308 }, { ...a, y: 1e308 }, 1),
+    RangeError,
+  );
 });
 
 test("all shared-face sign masks agree on intersection segments in three axes", () => {

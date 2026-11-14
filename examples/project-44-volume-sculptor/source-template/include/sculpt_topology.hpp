@@ -67,10 +67,26 @@ EdgePoint edgePoint(Corner a, Corner b, float isovalue);
 
 // end-snippet:sculpt-edge-interpolation
 
+// snippet:sculpt-triangle-area-direction
+// This is a direction, not an area measurement. Local cell units and component
+// scaling keep a nonzero tiny face usable for winding and normal calculations.
+inline Vec3 triangleAreaDirection(Vec3 a, Vec3 b, Vec3 c, float spacing) {
+    if (!finite(a) || !finite(b) || !finite(c) || !std::isfinite(spacing) || spacing <= 0)
+        throw std::invalid_argument("Triangle direction needs finite points and positive spacing");
+    const Vec3 area = cross((b - a) / spacing, (c - a) / spacing);
+    if (!finite(area))
+        throw std::invalid_argument("Triangle direction exceeds the finite float working range");
+    const float scale = std::max({std::abs(area.x), std::abs(area.y), std::abs(area.z)});
+    if (scale == 0)
+        return {};
+    return area / scale;
+}
+// end-snippet:sculpt-triangle-area-direction
+
 inline void appendTriangle(CellTriangles& output, EdgePoint a, EdgePoint b, EdgePoint c, Vec3 towardOutside, float spacing) {
-    const Vec3 area = cross(b.point - a.point, c.point - a.point);
-    const float minimumSquaredArea = std::max(1e-24F, spacing * spacing * spacing * spacing * 1e-16F);
-    if (dot(area, area) <= minimumSquaredArea) {
+    const Vec3 area = triangleAreaDirection(a.point, b.point, c.point, spacing);
+    // A small face still closes its neighbors. Drop only a resolved zero-area face.
+    if (dot(area, area) == 0) {
         ++output.degenerate;
         return;
     }

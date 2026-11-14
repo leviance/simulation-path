@@ -19,7 +19,7 @@ inline std::vector<SurfaceVertex> tetraSurface(const std::array<Corner, 4>& corn
     std::vector<SurfaceVertex> vertices;
     for (std::uint32_t triangle = 0; triangle < surface.count; ++triangle) {
         const auto& edges = surface.triangles[triangle].vertices;
-        const Vec3 faceNormal = normalized(cross(edges[1].point - edges[0].point, edges[2].point - edges[0].point));
+        const Vec3 faceNormal = normalized(triangleAreaDirection(edges[0].point, edges[1].point, edges[2].point, 1));
         for (const auto& edge : edges) {
             const Vec3 point = edge.point;
             vertices.push_back({{point.x, point.y, point.z, 1}, {faceNormal.x, faceNormal.y, faceNormal.z, 0}});

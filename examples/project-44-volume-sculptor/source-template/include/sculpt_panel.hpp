@@ -166,7 +166,7 @@ class NativePanel {
 #if LAB_CHECKPOINT == 10
         overlay.text(left + 16, 43, "PROJECT 44 / CHECKPOINT 10", {0.55F, 0.68F, 0.76F}, 1.4F, 306);
 #else
-        overlay.text(left + 16, 43, "PROJECT 44 / NATIVE DRAFT", {0.55F, 0.68F, 0.76F}, 1.4F, 306);
+        overlay.text(left + 16, 43, "PROJECT 44 / SDL3 EDITOR", {0.55F, 0.68F, 0.76F}, 1.4F, 306);
 #endif
         overlay.text(left + 300, 23, "F10", {0.6F, 0.8F, 0.85F}, 1.1F, 36);
         std::string state = "READY TO SCULPT";

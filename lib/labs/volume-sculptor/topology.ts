@@ -88,6 +88,18 @@ export function edgePoint(first: Corner, second: Corner, isovalue: number): Edge
   return { point, key: [a.id, b.id], t };
 }
 
+// Match C++/GLSL: preserve every resolved nonzero face, including near isovalue.
+// The scaled vector is a direction, not a geometric area measurement.
+export function triangleAreaDirection(a: Vec3, b: Vec3, c: Vec3, spacing: number): Vec3 {
+  if (![a, b, c].every(finitePoint) || !Number.isFinite(spacing) || spacing <= 0)
+    throw new RangeError("Triangle cần ba điểm hữu hạn và spacing dương.");
+  const area = cross3(scale3(subtract3(b, a), 1 / spacing), scale3(subtract3(c, a), 1 / spacing));
+  if (!finitePoint(area)) throw new RangeError("Hướng triangle không hữu hạn.");
+  const scale = Math.max(Math.abs(area.x), Math.abs(area.y), Math.abs(area.z));
+  if (scale === 0) return { x: 0, y: 0, z: 0 };
+  return { x: area.x / scale, y: area.y / scale, z: area.z / scale };
+}
+
 function appendTriangle(
   output: CellTriangles,
   a: EdgePoint,
@@ -96,8 +108,8 @@ function appendTriangle(
   towardOutside: Vec3,
   spacing: number,
 ) {
-  const area = cross3(subtract3(b.point, a.point), subtract3(c.point, a.point));
-  if (dot3(area, area) <= Math.max(1e-24, spacing ** 4 * 1e-16)) {
+  const area = triangleAreaDirection(a.point, b.point, c.point, spacing);
+  if (dot3(area, area) === 0) {
     ++output.degenerate;
     return;
   }
@@ -218,9 +230,11 @@ export function surfaceVertices(
   let fallbacks = 0;
   for (const triangle of triangles) {
     const faceNormal = normalize3(
-      cross3(
-        subtract3(triangle[1].point, triangle[0].point),
-        subtract3(triangle[2].point, triangle[0].point),
+      triangleAreaDirection(
+        triangle[0].point,
+        triangle[1].point,
+        triangle[2].point,
+        grid?.spec.spacing() ?? 1,
       ),
     );
     for (const edge of triangle) {

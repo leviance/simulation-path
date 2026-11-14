@@ -43,6 +43,17 @@ inline void includeMeshPoint(MeshFileSummary& summary, Vec3 point) {
     hashMeshVector(summary, point);
 }
 
+// File validation is independent of the mesher's direction/normal helper. Bounds
+// are checked by the caller; double products avoid underflow for tiny float faces.
+inline bool meshTriangleHasArea(Vec3 a, Vec3 b, Vec3 c) {
+    const std::array<double, 3> ab{static_cast<double>(b.x) - a.x, static_cast<double>(b.y) - a.y, static_cast<double>(b.z) - a.z};
+    const std::array<double, 3> ac{static_cast<double>(c.x) - a.x, static_cast<double>(c.y) - a.y, static_cast<double>(c.z) - a.z};
+    const double x = ab[1] * ac[2] - ab[2] * ac[1];
+    const double y = ab[2] * ac[0] - ab[0] * ac[2];
+    const double z = ab[0] * ac[1] - ab[1] * ac[0];
+    return x != 0 || y != 0 || z != 0;
+}
+
 class MeshWriter {
     public:
     // snippet:sculpt-obj-numeric-precision
@@ -65,7 +76,7 @@ class MeshWriter {
         }
         for (std::size_t first = 0; first < vertices.size(); first += 3) {
             const auto a = positionOf(vertices[first]), b = positionOf(vertices[first + 1]), c = positionOf(vertices[first + 2]);
-            if (dot(cross(b - a, c - a), cross(b - a, c - a)) <= 1e-24F)
+            if (!meshTriangleHasArea(a, b, c))
                 throw std::invalid_argument("OBJ export cannot publish a degenerate triangle");
         }
         // snippet:sculpt-obj-write-triangle
@@ -218,8 +229,7 @@ class MeshReader {
             // end-snippet:sculpt-obj-read-face-indices
             if (!token(line).empty() || summary_.vertices != summary_.normals || summary_.vertices % 3 != 0 || summary_.triangles + 1 != summary_.vertices / 3 || ++summary_.triangles > maximumMeshVertices / 3)
                 throw std::invalid_argument("OBJ has a non-triangle, repeated index or excessive face count");
-            const auto area = cross(lastPoints_[1] - lastPoints_[0], lastPoints_[2] - lastPoints_[0]);
-            if (dot(area, area) <= 1e-24F)
+            if (!meshTriangleHasArea(lastPoints_[0], lastPoints_[1], lastPoints_[2]))
                 throw std::invalid_argument("OBJ contains a degenerate triangle");
             // Do not retain a complete OBJ in RAM merely to inspect its values.
             if (visitor_) {

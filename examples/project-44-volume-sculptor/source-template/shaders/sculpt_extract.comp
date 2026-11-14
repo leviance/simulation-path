@@ -61,18 +61,20 @@ vec3 edgePoint(Corner a, Corner b) {
 
 // snippet:sculpt-gpu-count-triangle
 void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
-    vec3 area = cross(b - a, c - a);
-    float h2 = gridSpacing * gridSpacing;
-    float minimumAreaSquared = max(1e-24, h2 * h2 * 1e-16);
+    // Work in cell units; a nonzero small triangle must not leave a hole.
+    vec3 area = cross((b - a) / gridSpacing, (c - a) / gridSpacing);
     if (bad(a) || bad(b) || bad(c) || bad(area)) {
         atomicAdd(stats[chunk].geometry.w, 1u);
         return;
     }
-    if (dot(area, area) <= minimumAreaSquared) {
+    float areaScale = max(max(abs(area.x), abs(area.y)), abs(area.z));
+    if (areaScale == 0.0) {
         if (phase == 0)
             atomicAdd(stats[chunk].geometry.z, 1u);
         return;
     }
+    // The largest component becomes one before dot/normalize can underflow.
+    area /= areaScale;
     if (dot(area, towardOutside) < 0.0) {
         vec3 temporary = b;
         b = c;

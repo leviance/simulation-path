@@ -1,17 +1,23 @@
 # Project 44 — Xưởng điêu khắc thể tích
 
-**Có bài học, còn chờ nghiệm thu đầy đủ.** Gói gồm editor C++/SDL3/GPU ở 128³, starter, 12 checkpoint, final và tests. Học phần web `volume-sculptor` đi từ một tetra tới sản phẩm cuối, kèm Canvas CPU hỗ trợ. Benchmark và các fixture đã có bằng chứng riêng; ma trận native UI và gói build độc lập còn được kiểm tiếp. Không coi một lượt build/test là chứng nhận hoàn thành toàn bộ đặc tả.
+**Đã nghiệm thu Project 44 ngày 14/11/2026.** Gói gồm editor C++/SDL3/GPU ở 128³, starter, 12 checkpoint, final và tests. Học phần web `volume-sculptor` đi từ một tetra tới sản phẩm cuối, kèm Canvas CPU hỗ trợ. Code, gói độc lập, GPU và website có bằng chứng kiểm riêng; người dùng đã kiểm trực tiếp và xác nhận sản phẩm đạt yêu cầu. Chi tiết phạm vi ở mục nghiệm thu cuối README, không gộp mọi loại kiểm thành một kết quả build.
 
 Đích của học phần là một công cụ nặn khối 3D: dùng cọ thêm/bớt vật liệu, tạo lỗ hoặc nối hai khối, undo/redo, xem lát cắt và xuất mesh. Field lưu bằng scalar samples thật; sau mỗi chỉnh sửa phải trích lại bề mặt phù hợp với dữ liệu đó. Không dùng ray-marched primitive ghép sẵn thay cho field có thể sửa.
 
-## Hợp đồng dữ liệu đang triển khai
+## Hợp đồng dữ liệu
 
 - Domain mặc định [-1,5; 1,5]³, âm là inside, dương là outside, isovalue 0. N samples mỗi trục cho (N−1)³ cells; `index=(z*N+y)*N+x`, spacing `3/(N−1)`.
-- Một cube dùng sáu tetra quanh đường chéo 0–6. Mặt chung dùng cùng diagonal; mỗi giao điểm edge sắp endpoint theo sample ID trước khi nội suy. Giá trị đúng isovalue thuộc outside. Triangle có diện tích suy biến được đếm riêng và không emit; count/emit dùng cùng quy tắc.
+- Một cube dùng sáu tetra quanh đường chéo 0–6. Mặt chung dùng cùng diagonal; mỗi giao điểm edge sắp endpoint theo sample ID trước khi nội suy. Giá trị đúng isovalue thuộc outside. Count/emit chỉ bỏ mặt có cross product bằng 0 ở độ chính xác đang dùng, không xóa mặt chỉ vì diện tích nhỏ. Cross product tính trong đơn vị cell rồi đổi thang trước khi kiểm winding hoặc normalize, để tránh underflow khi tính normal.
 - Normal lấy từ gradient của trilinear field. Gradient gần 0 dùng face normal và tăng fallback counter; không giấu winding/crack bằng cách chỉ làm shading mượt.
 - Cọ add giảm field, subtract tăng field, falloff `(max(0,1−(distance/radius)²))²`. Strength là độ đổi scalar mỗi stamp, không phải lực hoặc tốc độ vật lý. Brush giữ nguyên sample biên; không nhận field sau chỉnh sửa còn là SDF.
 - Stroke lấy mẫu mỗi radius/4, giữ phần quãng đường thừa giữa các input event. Một segment có tối đa 256 stamp; segment quá dài bị từ chối trước khi sửa dữ liệu. Chỉ pointer owner được đi tiếp/kết thúc; abort/reset không ghi tiếp vào grid khác.
 - CPU extraction và brush/document bị chặn trên 64³. Final bắt buộc dùng field edit/count/scan/emit GPU trên 128³, với count trước allocation và last-good khi không đủ capacity.
+
+### Vì sao cần kiểm cả những triangle rất nhỏ?
+
+Khi scalar của một sample tiến gần isovalue, các giao điểm quanh nó có thể tạo mặt rất nhỏ nhưng vẫn hợp lệ. Loại chúng bằng ngưỡng diện tích sẽ làm mesh hở. Fixture CPU/GPU đặt một sample bên trong ở −0,00001 rồi −0,0000001, các sample còn lại bằng 1: cả hai trường hợp phải giữ đủ 24 mặt, kín và có normal đơn vị. Oracle kiểm đỉnh/cạnh chính xác, không hàn các điểm gần nhau theo epsilon.
+
+OBJ writer/reader kiểm cross product bằng `double` trên các vị trí `float` hữu hạn đã được chặn bounds. Đây là phép kiểm dữ liệu file riêng, không gọi lại mesher để tự xác nhận kết quả. Fixture file giữ nguyên bytes của các mặt có cạnh 10⁻⁷, 10⁻¹² và 10⁻²⁰ world unit, đồng thời vẫn từ chối mặt thẳng hàng. Nhỏ không đồng nghĩa với suy biến; các guard bounds, normal, số đỉnh và số mặt vẫn giữ nguyên.
 
 ## Các phần của chương trình
 
@@ -76,15 +82,15 @@ Checkpoint 02–05 dùng `--grid 12|24|32` (mặc định 24), `--hidden`, `--ve
 
 Checkpoint 06 dùng `--grid 32|64|128|192` (mặc định 128), `--hidden`, `--seconds`, `--capture`, `--verify`; `--plane` chỉ đi cùng verifier. Viewer là lát cắt SSBO, không phải mesh: X đổi trục, Up/Down hoặc wheel đổi layer, HJKL chọn điểm, Enter đặt stamp, left drag kéo stroke, A/D đổi mode, F2/F3 đổi radius/strength (Shift giảm, Ctrl bước lớn). Z/Y, Escape, Space, R và preset 1–3 vẫn có. Tham số/slice bị khóa trong capture; blur/resize/reset bỏ owner cũ và rollback stroke.
 
-Verifier 06 so tám lượt toàn field với double reference, kiểm năm quan hệ bit-exact về history/no-op và 27 probe. Nó có readback hữu hạn chỉ để kiểm; đường tương tác không tải toàn field về CPU. Các timings trên panel là GPU query, chưa phải benchmark lặp. Quy trình CMake/ZIP cho bản phát hành vẫn còn phải nghiệm thu riêng.
+Verifier 06 so tám lượt toàn field với double reference, kiểm năm quan hệ bit-exact về history/no-op và 27 probe. Nó có readback hữu hạn chỉ để kiểm; đường tương tác không tải toàn field về CPU. Các timings trên panel là GPU query, chưa phải benchmark lặp. Ma trận CMake/ZIP được kiểm riêng với runtime, xem mục nghiệm thu cuối README.
 
 Checkpoint 07 dùng cùng CLI với 06 nhưng `--verify` kiểm pipeline count/scan. F5/F6 chọn chunk, F7/F8 chọn cell, Ctrl dùng bước 16; selection được giữ qua edit/history và không làm job chạy lại. C hủy count đang chạy, F1 đếm lại, Space Pause sau batch đang bay. Enter/Z/Y/cọ không được sửa field lúc count/scan đang đọc nó. Lát cắt và phần đọc probe dùng chung với Bài 06; prefix inspector chỉ đọc/cache một chunk 32 KiB, không tính scan bằng CPU.
 
-Verifier 07 kiểm đủ 4.096 offsets trên bốn mảng biết trước, rồi toàn counts/offsets của init/add/undo/redo; ở 128³ là 8.388.608 prefix checks qua bốn snapshot. Sau đó kiểm pause/cancel/retry/reset. Một lượt Debug ban đầu đã dừng đúng 20 giây; đã tối ưu kiểm CPU theo batch hữu hạn và chỉ vẽ UI verifier 10 Hz, giữ nguyên workload/checks/timeout. Debug/Release 128³ hiện qua, không phải benchmark. Kiểm desktop 07 mới xác nhận F8, một stroke và undo; còn các controls/focus/resize cần lượt kiểm tiếp.
+Verifier 07 kiểm đủ 4.096 offsets trên bốn mảng biết trước, rồi toàn counts/offsets của init/add/undo/redo; ở 128³ là 8.388.608 prefix checks qua bốn snapshot. Sau đó kiểm pause/cancel/retry/reset. Một lượt Debug ban đầu đã dừng đúng 20 giây; đã tối ưu kiểm CPU theo batch hữu hạn và chỉ vẽ UI verifier 10 Hz, giữ nguyên workload/checks/timeout. Debug/Release 128³ qua, không phải benchmark. Agent đã kiểm F8, một stroke và undo trong cửa sổ 07; phạm vi sử dụng trực tiếp và xác nhận của người dùng được ghi riêng ở mục nghiệm thu.
 
 Checkpoint 08 trả lại viewport 3D: left drag nặn, Tab đổi riêng sang camera, right drag orbit, middle drag pan, wheel zoom; F2/F3/F4 chỉnh radius/strength/depth, Shift giảm/Ctrl bước lớn. F11/F12 xem wireframe/normal, F10 thu gọn panel; Z/Y history, Home camera, R reset sphere, Space pause, C cancel, Enter resume/retry, Q thoát. Chưa có controls slice/resolution/file trong viewer này. Panel ghi riêng counted request và emitted active, báo last-good khi job chưa xong; một edit thật vẫn rebuild 512/512 chunk ở N=128.
 
-Verifier 08 có `--verify` cho plane/sphere và CPU layout oracle nhỏ; `--verify-edits` kiểm cọ, full rebuild, history field+mesh, camera và capacity/recovery; `--verify-normals` chạy riêng fixture grid 32³ có spacing nhị phân, kiểm 384 lượt fallback gradient 0 trong 3.330 vertices. Các fixture không trộn với nhau. Debug/Release 128³ đã qua edit; plane lớn Release và topology oracle ở 32³ cũng qua. Desktop đã kiểm stroke, Z/Y, orbit, zoom, F10/F11/F12 và nhãn camera sau sửa; focus/resize và các controls còn lại vẫn cần kiểm tiếp.
+Verifier 08 có `--verify` cho plane/sphere và CPU layout oracle nhỏ; `--verify-edits` kiểm cọ, full rebuild, history field+mesh, camera và capacity/recovery; `--verify-normals` chạy riêng fixture grid 32³ có spacing nhị phân, kiểm 384 lượt fallback gradient 0 trong 3.330 vertices. Các fixture không trộn với nhau. Debug/Release 128³ đã qua edit; plane lớn Release và topology oracle ở 32³ cũng qua. Agent đã kiểm stroke, Z/Y, orbit, zoom, F10/F11/F12 và nhãn camera trong cửa sổ; không coi các fixture này là trace chuột/phím cho mọi control.
 
 Checkpoint 09 giữ viewport/cọ của 08 và bật dirty reuse. I hiện hộp chunk được chọn, F6 chọn chunk tiếp trong work list; F5 yêu cầu full remesh cùng isovalue. Inspector không sửa field hoặc generation. `--verify-edits` kiểm dirty so với full cùng history/failure/recovery; `--verify-jobs` kiểm queued request, Pause, stale count, cancel giữa emit và retry, chạy riêng trong 20 giây. Undo/redo vẫn đánh dấu toàn grid dirty; chưa có tối ưu delta history.
 
@@ -92,7 +98,7 @@ Pause chặn cả API cọ/undo/redo ở model. Nhãn current dựa trên field/
 
 Checkpoint 10 chuyển sang editor Tools/Stats: slice/probe, isovalue và grid candidate. F9/V bật slice, X đổi trục, Up/Down đổi layer, HJKL/left drag trong ô chọn điểm. Probe chỉ đọc tám scalar khi field/mesh current; cache theo cả field revision và mesh generation, bị bỏ khi thay model. Ctrl+1/2/3/4 đổi resolution; 1/2/3 không Ctrl reset preset. F5/F6 không bị đổi nghĩa. File UI/CLI chưa xuất hiện ở bước này.
 
-Bài 10 giải thích riêng UV/đảo v, logical/drawable viewport, nội suy trilinear khác nội suy trong tetra, isovalue không ghi field và giảm/tăng N không khôi phục chi tiết đã mất. GPU fixture 128³ kiểm 45 probe, 12 sign-color pixels và cache lifecycle; resample 128→64→128 so toàn samples đích với reference độc lập, giữ domain/world edits và last-good khi lỗi/hủy. 17 CLI sai của editor 10 bị chặn trước window. Build và CTest Debug/Release qua; chưa có ma trận UI trực tiếp đầy đủ cho editor 10.
+Bài 10 giải thích riêng UV/đảo v, logical/drawable viewport, nội suy trilinear khác nội suy trong tetra, isovalue không ghi field và giảm/tăng N không khôi phục chi tiết đã mất. GPU fixture 128³ kiểm 45 probe, 12 sign-color pixels và cache lifecycle; resample 128→64→128 so toàn samples đích với reference độc lập, giữ domain/world edits và last-good khi lỗi/hủy. 17 CLI sai của editor 10 bị chặn trước window. Build và CTest Debug/Release qua; các phép kiểm số liệu này tách riêng với việc dùng editor trực tiếp.
 
 Checkpoint 11 thêm tab Files, S/O/E và `--load`/`--verify-files`. Bài 11 dạy layout little-endian/checksum, stream theo batch, candidate load, snapshot export và read-back trước rename. Checksum/digest không được trình bày như chữ ký hay bằng chứng byte-exact; `MeshReader` có visitor triangle phục vụ phép so trực tiếp, không giữ cả OBJ trong RAM.
 
@@ -115,9 +121,15 @@ Release 128³ trên RTX 3050 Laptop: sphere 408.024 → edited 410.616 vertices,
 
 Bài 12 nối phép đo với sản phẩm thực: fixture Release 128³ vẫn khoét tunnel bằng subtract, kiểm 257 outside probes/Euler 0, và nối hai sphere thành một với 129 inside probes/Euler 2; undo/redo giữ các trạng thái topology. Kiểm correctness, benchmark và UI là ba phạm vi riêng. Editor từ chối `--capture` đi với edit/file/scene/product verifier chạy riêng để không báo thành công trong khi đã bỏ qua yêu cầu tạo ảnh; analytic/slice capture ở đường vòng lặp chính vẫn có thể dùng.
 
-## Những phần chưa xong
+## Nghiệm thu và phạm vi kiểm chứng
 
-Trong repository website, 12 bài và Canvas được đăng ký theo slug `volume-sculptor`; hồ sơ kiểm riêng ở `docs/reviews/project-44-canvas-progress.md`. Còn kiểm native controls/focus/resize và load domain dịch, ma trận checkpoint sau thay đổi cuối, source/ZIP từ checkout hoặc thư mục giải nén mới và các route web. Các verifier GPU, benchmark và kiểm Canvas không thay kiểm chuột/bàn phím desktop hoặc build lại gói tải về. Người tải ZIP chỉ cần compiler/CMake và driver phù hợp, không cần Node.js hoặc web server để chạy C++.
+Người dùng đã kiểm tra trực tiếp và xác nhận “project đã đạt yêu cầu” ngày 14/11/2026. Đây là xác nhận sử dụng tổng thể của người dùng, không phải lời khẳng định agent đã ghi trace riêng cho từng tổ hợp chuột/phím. Một lượt kiểm controller bổ sung của agent bị dừng trước khi bắt đầu; không được tính lượt đó là test pass.
+
+Ma trận độc lập đã build starter, checkpoint 01–12, final và tests ở cả Debug/Release, bằng VS 2022 và SDL 3.4.8 EXACT. CTest, GPU 128³, products/topology, jobs/history/failure, slice, save/load/export và benchmark được kiểm theo nhóm riêng. Lỗi mất triangle rất nhỏ đã có regression CPU/GPU/Canvas/OBJ; mesh khoét bằng chuột xuất lại có 0 cạnh hở, Euler 0, không hàn đỉnh theo epsilon.
+
+Website có 12 bài/12 Canvas mode theo slug `volume-sculptor`, source đầy đủ từng checkpoint và ZIP. Bộ kiểm riêng đạt 10/10 render và 6/6 browser; kiểm tiến độ/theme/URL cũ, copy/source/download và lifecycle Canvas. Các giới hạn phần cứng và phép đo vẫn như đã công bố, không biến kết quả trên RTX 3050 Laptop thành cam kết FPS chung.
+
+Người tải ZIP chỉ cần compiler/CMake và driver phù hợp, không cần Node.js hoặc web server để chạy C++. Canvas CPU nhỏ hỗ trợ học; không thay bản native GPU 128³. Các lỗi CI cũ nằm ngoài P44 được báo cáo riêng, không được trình bày là lỗi đã sửa của học phần này.
 
 Trong repository website, kết quả theo từng phạm vi nằm ở `docs/reviews/project-44-progress.md` và hồ sơ tích hợp web đi kèm. Học phần này là công cụ điêu khắc thể tích, không phải Neighbor List của roadmap cũ.
 

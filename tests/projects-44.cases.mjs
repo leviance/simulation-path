@@ -33,7 +33,7 @@ const modes = [
   "archive",
   "validation",
 ];
-const cppCounts = [5, 7, 4, 5, 10, 9, 9, 10, 14, 13, 16, 10];
+const cppCounts = [6, 7, 4, 5, 10, 9, 9, 10, 14, 13, 16, 10];
 const glslCounts = [0, 0, 0, 0, 0, 3, 6, 5, 0, 2, 0, 0];
 const checkpoint = (order, file) =>
   readFile(
@@ -60,6 +60,7 @@ test("Project 44 catalog replaces the neighbor-list edition without reusing its 
     },
   );
   assert.equal(roadmapRevisions["44"].replacement.slug, slug);
+  assert.equal(roadmapRevisions["44"].replacement.acceptanceNote, undefined);
   assert.equal(roadmapRevisions["44"].previousSlug, "neighbor-list-skin");
   assert.equal(project.lessons.length, 12);
   const result = migrateProgressContent(
@@ -142,7 +143,7 @@ test("Project 44 lessons connect all twelve Canvas questions, teaching roles and
       else ++glsl;
     }
   }
-  assert.equal(cpp, 112);
+  assert.equal(cpp, 113);
   assert.equal(glsl, 16);
 });
 
@@ -183,6 +184,7 @@ test("Project 44 source snapshots have real teaching boundaries and final matche
   assert.match(cmake, /SDL3::SDL3/);
   assert.match(cmake, /SDL3 3\.4\.8 EXACT/);
   assert.match(cmake, /shaders\/\$\{name\}/);
+  assert.doesNotMatch(await checkpoint(12, "include/sculpt_panel.hpp"), /NATIVE DRAFT/);
 });
 
 test("Project 44 references, glossary and code guides belong to the volume product", async () => {
@@ -274,6 +276,8 @@ test("Project 44 rendered overview exposes challenge, twelve lessons and the cor
   const html = (await response.text()).replaceAll("<!-- -->", "");
   assert.match(html, /id="challenge-44"/);
   assert.match(html, /VOLUME SCULPTOR/);
+  assert.doesNotMatch(html, /Native GPU 128³ và benchmark có kiểm riêng; còn nghiệm thu/);
+  assert.doesNotMatch(html, /aria-label="(?:Chờ nghiệm thu|Nội dung thuộc bản cũ)"/);
   assert.ok(html.includes('href="/downloads/' + directory + '.zip"'));
   for (const lesson of project.lessons)
     assert.ok(html.includes(`/projects/${slug}/${lesson.slug}`));

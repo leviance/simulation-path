@@ -59,7 +59,7 @@ inline CpuMesh extractCpu(const ScalarGrid& grid, float isovalue, std::size_t ca
                     throw std::runtime_error("Count and emit do not describe the same field snapshot");
                 for (std::uint32_t triangle = 0; triangle < triangles.count; ++triangle) {
                     const auto& vertices = triangles.triangles[triangle].vertices;
-                    const Vec3 faceNormal = normalized(cross(vertices[1].point - vertices[0].point, vertices[2].point - vertices[0].point));
+                    const Vec3 faceNormal = normalized(triangleAreaDirection(vertices[0].point, vertices[1].point, vertices[2].point, grid.spec().spacing()));
                     for (const auto& vertex : vertices) {
                         // snippet:sculpt-cpu-normal-selection
                         Vec3 normal = faceNormal;

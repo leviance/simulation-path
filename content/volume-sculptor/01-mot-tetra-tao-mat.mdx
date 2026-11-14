@@ -85,7 +85,7 @@ Trong ứng dụng, scalar và world domain đều có giới hạn nhỏ. Guard
 
 ### 2. Nối giao điểm thành triangle
 
-Thay khai báo `polygonizeTetra` bằng hàm dưới đây. `CellTriangles` chứa output hữu hạn. Helper `appendTriangle` được cấp sẵn ngay phía trên: bỏ triangle suy biến, kiểm capacity và đổi thứ tự đỉnh nếu normal quay vào trong. Nó không tìm giao điểm thay bạn.
+Thay khai báo `polygonizeTetra` bằng hàm dưới đây. `CellTriangles` chứa output hữu hạn. Helper `appendTriangle` được cấp sẵn ngay phía trên: kiểm capacity, đổi thứ tự đỉnh nếu normal quay vào trong và chỉ bỏ mặt có cross product bằng 0, không xóa triangle chỉ vì nó nhỏ. Nó không tìm giao điểm thay bạn.
 
 ```cpp title="include/sculpt_topology.hpp — chọn topology từ bốn scalar"
 inline void polygonizeTetra(const std::array<Corner, 4>& tetra, float isovalue, float spacing, CellTriangles& output) {
@@ -147,7 +147,27 @@ Một tetra có tối đa hai triangle. Output dùng chung với bước ghép c
 
 ### 3. Đưa kết quả vào ứng dụng đang chạy
 
-Hai helper chưa tự làm ảnh thay đổi. `tetraSurface` trong `sculpt_tetra.hpp` là chỗ gọi extraction rồi đổi kết quả sang record của renderer:
+Hai helper chưa tự làm ảnh thay đổi. Trước khi đưa kết quả sang renderer, ta cần face normal để chiếu sáng. Hướng này đến từ cross product của hai cạnh. Nếu mặt rất nhỏ, bình phương các thành phần có thể trôi về 0 ở độ chính xác float, dù ba đỉnh vẫn khác nhau.
+
+Helper đã có trong scaffold xử lý việc đổi thang trước khi normalize:
+
+```cpp title="include/sculpt_topology.hpp — giữ hướng của cả những triangle rất nhỏ"
+inline Vec3 triangleAreaDirection(Vec3 a, Vec3 b, Vec3 c, float spacing) {
+    if (!finite(a) || !finite(b) || !finite(c) || !std::isfinite(spacing) || spacing <= 0)
+        throw std::invalid_argument("Triangle direction needs finite points and positive spacing");
+    const Vec3 area = cross((b - a) / spacing, (c - a) / spacing);
+    if (!finite(area))
+        throw std::invalid_argument("Triangle direction exceeds the finite float working range");
+    const float scale = std::max({std::abs(area.x), std::abs(area.y), std::abs(area.z)});
+    if (scale == 0)
+        return {};
+    return area / scale;
+}
+```
+
+Chia hai cạnh cho spacing đưa chúng về đơn vị cell. Chia cross product cho `scale` không đổi hướng, nhưng làm thành phần lớn nhất có độ lớn bằng 1. Kết quả dùng được cho winding và normalize; không còn dùng nó để đo diện tích. Chỉ khi cả ba thành phần bằng 0 mới trả vector 0; `appendTriangle` sẽ bỏ mặt ấy trước khi tạo normal.
+
+`tetraSurface` trong `sculpt_tetra.hpp` gọi extraction rồi đổi kết quả sang record của renderer:
 
 ```cpp title="include/sculpt_tetra.hpp — chuyển topology thành vertices cần vẽ"
 inline std::vector<SurfaceVertex> tetraSurface(const std::array<Corner, 4>& corners, float isovalue) {
@@ -156,7 +176,7 @@ inline std::vector<SurfaceVertex> tetraSurface(const std::array<Corner, 4>& corn
     std::vector<SurfaceVertex> vertices;
     for (std::uint32_t triangle = 0; triangle < surface.count; ++triangle) {
         const auto& edges = surface.triangles[triangle].vertices;
-        const Vec3 faceNormal = normalized(cross(edges[1].point - edges[0].point, edges[2].point - edges[0].point));
+        const Vec3 faceNormal = normalized(triangleAreaDirection(edges[0].point, edges[1].point, edges[2].point, 1));
         for (const auto& edge : edges) {
             const Vec3 point = edge.point;
             vertices.push_back({{point.x, point.y, point.z, 1}, {faceNormal.x, faceNormal.y, faceNormal.z, 0}});

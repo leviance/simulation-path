@@ -137,18 +137,20 @@ Mỗi lời gọi triangle kiểm finite/diện tích trước. Ở checkpoint 0
 
 ```glsl title="shaders/sculpt_extract.comp — đếm ba vertices cho một triangle hợp lệ"
 void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
-    vec3 area = cross(b - a, c - a);
-    float h2 = gridSpacing * gridSpacing;
-    float minimumAreaSquared = max(1e-24, h2 * h2 * 1e-16);
+    // Work in cell units; a nonzero small triangle must not leave a hole.
+    vec3 area = cross((b - a) / gridSpacing, (c - a) / gridSpacing);
     if (bad(a) || bad(b) || bad(c) || bad(area)) {
         atomicAdd(stats[chunk].geometry.w, 1u);
         return;
     }
-    if (dot(area, area) <= minimumAreaSquared) {
+    float areaScale = max(max(abs(area.x), abs(area.y)), abs(area.z));
+    if (areaScale == 0.0) {
         if (phase == 0)
             atomicAdd(stats[chunk].geometry.z, 1u);
         return;
     }
+    // The largest component becomes one before dot/normalize can underflow.
+    area /= areaScale;
     if (dot(area, towardOutside) < 0.0) {
         vec3 temporary = b;
         b = c;
@@ -159,7 +161,7 @@ void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
 }
 ```
 
-`cellVertices` là số đếm cục bộ của invocation, chưa phải số vertices đã emit. Triangle suy biến tăng counter riêng rồi bỏ qua. Nếu dữ liệu không hợp lệ, tăng invalid; host phải từ chối kết quả đó, không coi một mesh thiếu mặt là thành công.
+`cellVertices` là số đếm cục bộ của invocation, chưa phải số vertices đã emit. Ta chia hai cạnh cho spacing rồi đổi thang cross product theo thành phần lớn nhất. Vector này chỉ dùng để xác định hướng và normal, không còn là số đo diện tích. Chỉ khi mọi thành phần bằng 0 mới tăng counter suy biến và bỏ mặt; không dùng ngưỡng diện tích để xóa các triangle nhỏ nhưng vẫn nối kín các mặt bên cạnh. Nếu dữ liệu không hợp lệ, tăng invalid; host phải từ chối kết quả đó, không coi một mesh thiếu mặt là thành công.
 
 ### 3. Cho một invocation đếm một cell
 

@@ -50,7 +50,8 @@ test("Project 44 replaces old URLs, resets only its retired progress and keeps d
     true,
   );
   await expect(page).toHaveURL(new RegExp(overview + "$"));
-  await expect(page.getByLabel("Chờ nghiệm thu", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Chờ nghiệm thu", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Nội dung thuộc bản cũ", { exact: true })).toHaveCount(0);
   await expect(page.locator(".project-challenge")).toContainText("khoét");
   const lessons = page.locator(".lesson-list > a");
   await expect(lessons).toHaveCount(12);
