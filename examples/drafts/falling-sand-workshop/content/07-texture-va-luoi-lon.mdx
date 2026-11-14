@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nâng lên 512×320 bằng một texture của lưới
+
+## Vấn đề cần giải quyết
+
+Lưới nhỏ đã cho ta kiểm luật bằng từng ô. Bản cuối cần một khay rộng hơn để dựng phễu, bể nước và các bậc thềm. Lưới 512×320 có 163.840 ô, gấp khoảng 26,7 lần lưới ban đầu.
+
+Các luật không cần đổi để vẽ lớn hơn. Phần cần tổ chức lại là đường đưa vật liệu ra màn hình: thay vì gọi `SDL_RenderFillRect` cho mỗi ô có vật liệu, ta tạo một ảnh có đúng một pixel cho mỗi ô, cập nhật ảnh đó rồi vẽ cả lưới bằng `SDL_RenderTexture`.
+
+## Hiểu ý tưởng trước khi viết code
+
+`cells` vẫn là dữ liệu mô phỏng. Texture chỉ là cách nhìn dữ liệu ấy. Một pixel RGBA cần bốn byte, nên một hàng có ít nhất `4W` byte. Khoảng cách thực tế giữa hai hàng là **pitch SDL trả về**, có thể lớn hơn `4W`:
+
+$$row(y)=base+y\,pitch.$$
+
+Chọn `SDL_PIXELFORMAT_RGBA32` để ghi lần lượt byte R, G, B, A. Dùng texture streaming và lock để lấy vùng ghi. Vùng lock không bảo đảm giữ pixel của frame cũ; mỗi lần cập nhật ta ghi đủ lưới, không đọc nó như thể là buffer vật liệu. Xem hợp đồng của [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture).
+
+<InteractiveLab demo="falling-sand" mode="sand-7" />
+
+Canvas cũng encode một pixel/ô rồi phóng ảnh. Nó dùng đủ 163.840 ô, nhưng timing JavaScript không chứng minh chi phí của SDL. Mục tiêu ở đây là quan sát cách tách dữ liệu, ảnh và kích thước màn hình.
+
+## Viết code từng bước
+
+### 1. Tạo lưới lớn một lần trước vòng lặp
+
+Thay cảnh nhỏ trong main bằng `grid = sand::makeWorkshopScene(state.preset, state.seed);`. Factory trong `presets.hpp` tạo lưới 512×320 cùng các cảnh lớn để dùng từ mốc này. Để mặc định `preset=0`, `seed=46`; bài sau sẽ nối chúng với bảng điều khiển.
+
+Không dùng resize window để chọn lại số cột/hàng. Cửa sổ thay đổi kích thước là thay cách nhìn; trạng thái 512×320 phải giữ nguyên.
+
+### 2. Tạo texture sau khi có renderer và biết kích thước Grid
+
+Thêm vào `include/view.hpp`:
+
+```cpp title="include/view.hpp — một pixel cho mỗi ô"
+inline void createGridTexture(SdlResources& sdl, const Grid& grid) {
+    sdl.texture = SDL_CreateTexture(sdl.renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, grid.width, grid.height);
+    requireSdl(sdl.texture != nullptr, "create grid texture");
+    requireSdl(SDL_SetTextureScaleMode(sdl.texture, SDL_SCALEMODE_NEAREST), "nearest cell scaling");
+}
+```
+
+`SdlResources` đã có chỗ giữ texture và dọn nó trước renderer. Main gọi hàm này một lần trước vòng lặp, không tạo texture mới mỗi frame. Nearest giúp đọc hình ô lưới; bật lọc mượt không làm mô hình có thêm độ phân giải.
+
+### 3. Ghi đủ các hàng theo pitch
+
+Trong `pixels.hpp`, `writeRgbaRow` chuyển `Cell` thành bốn byte màu. Nó chỉ ghi đúng `width*4` byte của một hàng; phần đệm không phải dữ liệu của hàng tiếp theo. Nối helper ấy vào texture:
+
+```cpp title="include/view.hpp — lock, ghi rồi unlock"
+inline void uploadGrid(SDL_Texture* texture, const Grid& grid, bool plain) {
+    void* pixels = nullptr;
+    int pitch = 0;
+    requireSdl(SDL_LockTexture(texture, nullptr, &pixels, &pitch), "lock grid texture");
+    const std::size_t rowBytes = static_cast<std::size_t>(grid.width) * 4;
+    if (!pixels || pitch < 0 || static_cast<std::size_t>(pitch) < rowBytes) {
+        SDL_UnlockTexture(texture);
+        throw std::runtime_error("Texture pitch is smaller than a full RGBA row");
+    }
+    for (int y = 0; y < grid.height; ++y) {
+        auto* row = static_cast<std::uint8_t*>(pixels) + static_cast<std::size_t>(y) * static_cast<std::size_t>(pitch);
+        writeRgbaRow(grid, y, row, plain);
+    }
+    SDL_UnlockTexture(texture);
+}
+```
+
+Sau lock thành công, cả nhánh kiểm lỗi pitch cũng unlock trước khi thoát. Helper không sửa `grid`. Chế độ `plain` chỉ đổi cách tô màu; bản có shading nhấn mặt nước và cạnh tường, không tạo thêm vật liệu hoặc áp suất.
+
+### 4. Đặt ảnh vào scene và cập nhật tọa độ input
+
+Scene trong giao diện lớn nằm trong một rectangle riêng. `sceneRect` fit lưới vào vùng 832×520, giữ tỉ lệ. Bên ngoài vùng ấy là thanh công cụ và bảng số. Đoạn vẽ chính là:
+
+```cpp title="include/view.hpp — vẽ toàn lưới bằng một texture"
+const Rect view = sceneRect(grid, showcase);
+const SDL_FRect rectangle{view.x, view.y, view.width, view.height};
+requireSdl(SDL_RenderTexture(renderer, texture, nullptr, &rectangle), "draw grid texture");
+```
+
+Đó là một lời gọi để vẽ **lưới**, không phải cam kết toàn frame chỉ có một draw call: panel, chữ và cursor vẫn có phần việc riêng.
+
+`mouseCell` tiếp tục đổi window sang logical coordinates, rồi `logicalCell` trừ gốc scene và chia theo tỉ lệ:
+
+$$x=\left\lfloor\frac{u-view_x}{view_w}W\right\rfloor,\qquad y=\left\lfloor\frac{v-view_y}{view_h}H\right\rfloor.$$
+
+Phải loại điểm ngoài rectangle trước. Một click trên panel không được biến thành ô biên. F1 đổi sang cách nhìn sạch, lúc đó rectangle là toàn lưới; không được dùng phép đổi tọa độ cũ trong lúc đang giữ nét vẽ.
+
+## Ghép các phần lại
+
+Sau update và trước vẽ, main chỉ upload khi `state.dirty`:
+
+```cpp title="src/main.cpp — thay đổi vật liệu mới làm ảnh cũ đi"
+if (state.dirty) {
+    const std::uint64_t uploadStart = SDL_GetTicksNS();
+    sand::uploadGrid(sdl.texture, grid, state.plain);
+    state.uploadMs = elapsedMs(uploadStart);
+    state.dirty = false;
+}
+```
+
+Paint, tick và đổi cách tô màu đặt cờ dirty. Dời cursor hoặc resize không làm lại vật liệu. Thứ tự vẽ trở thành clear → `drawTexture` → panel/cursor nếu đang debug → present. Bỏ lời gọi `drawGrid` cũ ở nhánh lưới lớn để không vẽ lặp hai lần.
+
+Build `project_46_checkpoint_7`. Bạn phải thấy cát và nước trong cảnh lớn, đọc được 512×320 trên panel. Hiện mốc này vẫn điều khiển chính bằng các phím đã học; những nút preset/seed/order sẽ được nối ở Bài 8.
+
+## Thử làm sai để hiểu đúng
+
+1. Tính hàng mới bằng `base+y*width*4` thay vì pitch. Có backend tình cờ không có padding nên ảnh vẫn đúng; fixture dùng hàng có padding mới phát hiện chắc chắn lỗi này.
+2. Không ghi alpha cho mọi pixel. Byte không khởi tạo có thể làm màu sai hoặc dữ liệu cũ lọt vào hình. Khôi phục ghi đủ RGBA.
+3. Đổi sang màu phẳng và so checksum vật liệu. Nếu checksum đổi, renderer đã vô tình sửa mô hình.
+
+## Tự kiểm tra kết quả
+
+Final mục tiêu có 163.840 ô thật; mỗi tick xét đủ lưới. Mouse và bút vẫn trúng ô sau resize/F1. Lưới giữ nguyên khi đổi cách tô màu. Fixture RGBA kiểm thứ tự byte và canary phần padding. Các số update, encode/upload CPU và draw-submission CPU phải được phân biệt; **CPU submission không phải GPU time**.
+
+## Bài tập mở rộng
+
+So cách vẽ cũ và texture trên cùng input nhỏ, tách thời gian update khỏi vẽ. Không viết “texture nhanh hơn bao nhiêu lần trên mọi máy” từ một lượt đo. Sang [bài 8 — hoàn thiện hộp cát](/projects/falling-sand/08-bang-dieu-khien-va-canh-mau) để nối các thao tác thành một công cụ sử dụng được.

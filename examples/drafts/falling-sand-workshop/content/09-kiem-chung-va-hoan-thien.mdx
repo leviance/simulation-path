@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy hộp cát hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Hình ảnh đã chuyển động, input dùng được và lưới đủ lớn. Ta vẫn chưa biết chắc có lúc nào cát bị nhân đôi, nước bị xóa hoặc một lần đổi order không thực sự có hiệu lực. Bài cuối gom các phép kiểm nhỏ, một mốc lớn thật và source chạy độc lập thành một quy trình có thể lặp lại.
+
+Bản hoàn chỉnh phải dùng đủ lưới 512×320. Canvas, ảnh chụp và một con số trên panel không thay executable C++/SDL3 của bạn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta giữ ba nhóm bằng chứng riêng:
+
+1. **Hành vi:** paint/erase, phím/nút, pause/step/speed, reset/clear, resize, mất focus và thao tác với panel.
+2. **Luật:** fixture một bước có đáp án biết trước, từng bộ đếm và vị trí tường, thứ tự quét, kiểm chéo bằng một cách lưu state khác.
+3. **Quy mô/chi phí:** số ô được xét/vẽ thật, cấu hình đo, warm-up, số mẫu và thời gian của đúng phần việc.
+
+Checksum là một dấu vết gọn, không phải bằng chứng hai mảng chắc chắn giống nhau. Hai lần gọi cùng hàm cho cùng checksum chỉ kiểm tính lặp lại; chúng có thể lặp lại cùng một lỗi.
+
+<InteractiveLab demo="falling-sand" mode="sand-9" />
+
+Nút kiểm chạy một fixture chuẩn riêng. Nó không sửa hộp bạn đang vẽ, cũng không chứng nhận rằng mọi cảnh hoặc mọi máy đều đạt yêu cầu. Dùng bộ đếm và inspector để đặt câu hỏi, không dùng chữ PASS làm chỗ kết thúc việc quan sát.
+
+## Viết code từng bước
+
+### 1. Kiểm những bước có đáp án cụ thể
+
+Trong `tests/tests.cpp`, một ô cát ở `(2,1)` phải đi tới `(2,2)` sau một tick. Một ô cát ở đáy giữ nguyên. Nước trên sàn chỉ đi một ô ngang. Cát đổi chỗ với nước bị vây phải giữ đủ hai vật liệu.
+
+Thêm cả ca hai ô cát xếp cột: cả hai xuống một hàng nếu có chỗ. Ca này phân biệt “mỗi hạt đi một lần” với “mọi tọa độ đã có cờ đều bị giữ chỗ”. Để kiểm thứ tự, dùng hai hạt tranh một ô trống với kết quả trái/phải biết trước.
+
+`check` báo lỗi bằng bộ đếm, không dùng assert bị tắt trong Release:
+
+```cpp title="tests/tests.cpp — thất bại phải tới được CTest"
+void check(bool condition, std::string_view description) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << description << '\n';
+    }
+}
+```
+
+Kết thúc test, nếu `failures != 0` thì trả `EXIT_FAILURE`. Xem cả stderr và exit code; không chỉ in “FAIL” rồi vẫn trả 0.
+
+### 2. Dùng một oracle có cách lưu state khác
+
+Mô hình chính đánh dấu theo tọa độ. Oracle nhỏ trong tests gắn ID riêng đi cùng từng vật liệu và lưu tập ID đã di chuyển. Khi swap, ID đi cùng vật liệu. Oracle không gọi `tryMove` của bản chính.
+
+Sau mỗi tick, so từng Cell của hai mô hình trên fixture 8×8, đủ bốn order. Các fixture có đáp án cụ thể vẫn cần tồn tại: hai implementation giống nhau về ý tưởng vẫn có thể cùng hiểu sai một yêu cầu.
+
+Với lưới 512×320, test kiểm 120 tick, đủ 163.840 visits/tick, từng bộ đếm và vị trí tường. Không paint/erase/reset trong ca bảo toàn. Đừng thay bằng một lưới nhỏ rồi chỉ đổi chữ N trên panel.
+
+### 3. Build và chạy đúng bản tải về
+
+Giải nén ZIP vào thư mục mới. Chạy ở thư mục có `CMakeLists.txt`, không phải trong `source-template`:
+
+```powershell title="Terminal — kiểm đủ cấu hình và chạy final"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 1
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_46_final.exe
+```
+
+Mặc định CMake build final và tests; bật checkpoints thêm starter cùng các mốc 01–09. Đường chạy trên dành cho Visual Studio. Với generator một cấu hình, chọn Debug/Release bằng `CMAKE_BUILD_TYPE` và dùng hai build directory riêng để không nhầm kết quả.
+
+Tests mặc định include `final/include`, tức kiểm **đáp án được đóng gói**. Muốn kiểm bài làm đã hoàn thiện ở `starter`, thêm target riêng vào CMake ở gốc ZIP:
+
+```cmake title="CMakeLists.txt — chỉ thêm sau khi starter đã có đủ API của bản hoàn chỉnh"
+if(BUILD_TESTING)
+    add_executable(project_46_student_tests tests/tests.cpp)
+    target_include_directories(project_46_student_tests PRIVATE starter/include)
+    enable_course_warnings(project_46_student_tests)
+    add_test(NAME project_46_student_validation COMMAND project_46_student_tests)
+endif()
+```
+
+Build `project_46_student_tests` ở cả Debug/Release rồi chạy `ctest -R project_46_student_validation`. Đừng dùng một lượt tests final xanh để công nhận code bạn vừa sửa trong starter.
+
+### 4. Đo một phần việc có định nghĩa rõ
+
+Chạy benchmark CPU hữu hạn, không mở window:
+
+```powershell title="Terminal — update CPU, không gộp render"
+.\build\Release\project_46_final.exe --benchmark --preset 3 --seed 46 --order 0 --steps 120 --repeats 7
+```
+
+Lệnh này warm-up 32 tick, khôi phục cùng input ở mỗi repeat rồi đo từng lần `stepGrid`. Nó công bố máy/compiler/configuration, grid, seed/order, số visits/swaps, raw samples, median và p95. Không gộp allocation, copy/reset, kiểm đếm, encode, upload, draw hoặc present vào số update.
+
+`median` dùng trung bình hai phần tử giữa khi số mẫu chẵn. `p95` chọn phần tử thứ `floor(0.95*(N−1))` của dãy đã sắp. Không bỏ các mẫu chậm chỉ vì chúng làm kết quả xấu hơn. Repeat cùng một chuỗi trạng thái không phải một tập mẫu ngẫu nhiên độc lập.
+
+Để chạy/chụp viewer có giới hạn:
+
+```powershell title="Terminal — một lượt viewer tự kết thúc"
+.\build\Release\project_46_final.exe --hidden --run --seconds 5 --capture frame.bmp
+```
+
+Capture diễn ra một lần trước present và nằm ngoài draw-submission timing. Benchmark CPU không kết hợp với viewer/capture. `--help` liệt kê các giới hạn; không dùng vòng chạy nền không có thời lượng để nghiệm thu.
+
+## Ghép các phần lại
+
+`src/main.cpp` nối bốn phần: input → lập kế hoạch số tick → cập nhật → encode/vẽ/present. Các file `grid/rules/timing/presets/layout/pixels/commands` giữ logic có thể kiểm không cần window. `view/panel/input/sdl_resources` nối với SDL. Bản mã sau bài hiển thị toàn bộ snapshot; dùng danh sách file để đọc cả phần khung, không ghép thủ công các đoạn trích trong bài thành một file main mới.
+
+Giữ code One Dark và thụt bốn dấu cách khi tự sửa. Dòng gọi hàm dài có thể cuộn ngang; không cần bẻ một biểu thức đơn giản thành nhiều dòng chỉ để vừa màn hình.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi một kết quả mong đợi trong test rồi chạy lại CTest ở Release. Nó phải trả lỗi thật. Khôi phục sau thí nghiệm.
+2. Cố tình sửa luật **trong starter**, rồi chạy target student-tests. Nếu vẫn đọc đáp án final, phép kiểm đã nối nhầm source directory.
+3. Bật giữ chuột rót vật liệu trong lúc đếm bảo toàn. Bộ đếm thay đổi là input có chủ đích, không chứng minh luật swap sai.
+4. Gộp present/vsync vào update timer rồi so với bản chỉ đo luật. Hai số có phạm vi khác nhau, không thể dùng để kết luận một kernel nhanh hơn.
+
+## Tự kiểm tra kết quả
+
+Final có 512×320 ô thật, cập nhật/vẽ toàn lưới và có cát/tường/nước/tẩy. Mọi nút và phím cơ bản dùng được, pause vẫn cho input, reset tái lập và clear không làm mất preset reset. Resize/F1/mất focus không nối nét vẽ sai hoặc tích nợ.
+
+Fixtures một bước, oracle nhỏ, bảo toàn/tường và mốc lớn đều qua Debug/Release. Checkpoint chạy độc lập; ZIP chứa đủ README, REFERENCES, CMake, starter, checkpoint 01–09, final và tests, không kèm build tree hoặc SDL đã biên dịch. Các kết quả browser/native/ZIP được ghi đúng phạm vi; chưa kiểm bước nào thì nói rõ bước đó.
+
+## Bài tập mở rộng
+
+Thêm một loại vật liệu mới nhưng viết bảng luật swap trước khi chọn màu. Hoặc đo phần encode riêng để xem tối ưu đó có thực sự giúp frame hay không. Khi chuyển sang [Project 47 — tấm kim loại nóng](/projects/heat-plate), hãy giữ ranh giới: đó là một mô hình phương trình trên lưới, không phải chỉ đổi palette của hộp cát này.

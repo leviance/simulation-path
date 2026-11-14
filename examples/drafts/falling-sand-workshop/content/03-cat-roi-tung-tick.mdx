@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho cát rơi đúng một lần mỗi tick
+
+## Vấn đề cần giải quyết
+
+Ta đã vẽ được cát ở bất kỳ đâu, nhưng nó chưa rơi. Bây giờ hãy thêm một luật duy nhất: nếu ô ngay dưới trống, cát đổi chỗ với ô đó. Chưa trượt chéo, chưa có nước và chưa tự chạy theo thời gian. Mỗi lần bấm `N` sẽ cho ta một lần cập nhật để kiểm bằng mắt.
+
+Giữ `drawGrid` chỉ làm việc vẽ. Nếu đặt luật rơi trong vòng lặp vẽ, đổi renderer hoặc số frame sẽ vô tình đổi cả kết quả mô phỏng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một tick nhận mảng ô hiện tại và biến nó thành trạng thái kế tiếp bằng các lần swap. Tọa độ tăng xuống dưới nên đích đầu tiên của `(x,y)` là `(x,y+1)`.
+
+Ta chọn duyệt **từ hàng dưới lên**. Đây là cập nhật tại chỗ: ô sau có thể nhìn thấy thay đổi của ô trước, **khác CA đồng bộ** đọc toàn bộ buffer cũ rồi cùng ghi buffer mới. Thứ tự này là một phần của mô hình, không chỉ là cách làm code chạy nhanh.
+
+Mảng `moved` có một byte cho mỗi tọa độ. Sau swap, đánh dấu cả hai đầu. Tuy nhiên, cờ ở ô đang Empty không giữ chỗ cho khoảng trống. Một vacancy có thể truyền ngược lên cả cột trong tick, trong khi mỗi hạt cát chỉ đi xuống một hàng.
+
+<InteractiveLab demo="falling-sand" mode="sand-3" />
+
+Chọn lưới trống, bán kính 0, đặt hai ô cát sát nhau theo cột rồi tiến một tick. Cả hai được xuống một hàng. Bật “Xem cờ moved”: một tọa độ có cờ 1 vẫn có thể đang Empty. Cờ không phải một loại vật liệu thứ năm.
+
+## Viết code từng bước
+
+### 1. Thêm dữ liệu chỉ dùng trong một tick
+
+Trong `Grid`, thêm `moved` và `tick`; constructor tạo mask cùng số phần tử với `cells`:
+
+```cpp title="include/grid.hpp — dữ liệu theo dõi cập nhật"
+std::vector<std::uint8_t> moved;
+std::uint32_t tick = 0;
+```
+
+```cpp title="include/grid.hpp — trong constructor, sau cells.assign"
+moved.assign(size, 0);
+```
+
+`tick` đếm số lần gọi bước mô phỏng, không đếm frame. `moved` được xóa đầu mỗi tick; không phải mỗi lần thử một đích.
+
+### 2. Viết một phép đổi chỗ có kiểm tra
+
+Tạo `tryMove` trong `include/rules.hpp`. Bản của Bài 3 chỉ cho Sand đi vào Empty:
+
+```cpp title="include/rules.hpp — di chuyển một lần, không tạo hay xóa cát"
+inline bool tryMove(Grid& grid, int x, int y, int targetX, int targetY) {
+    if (!grid.contains(x, y) || !grid.contains(targetX, targetY)) {
+        return false;
+    }
+    const std::size_t source = grid.index(x, y);
+    const std::size_t destination = grid.index(targetX, targetY);
+    bool sourceCanMove = grid.cells[source] == Cell::Sand;
+    if (!sourceCanMove) {
+        return false;
+    }
+    if (grid.moved[source] != 0) {
+        return false;
+    }
+    if (grid.cells[destination] != Cell::Empty && grid.moved[destination] != 0) {
+        return false;
+    }
+    bool allowed = grid.cells[destination] == Cell::Empty;
+    if (!allowed) {
+        return false;
+    }
+    std::swap(grid.cells[source], grid.cells[destination]);
+    grid.moved[source] = 1;
+    grid.moved[destination] = 1;
+    return true;
+}
+```
+
+Swap đổi cả hai giá trị: Sand đi xuống, Empty đi lên. Không có lần ghi “thêm Sand” rồi quên xóa nguồn. Các biến `sourceCanMove` và `allowed` sẽ mở rộng ở Bài 5; lúc này chúng chỉ diễn đạt đúng hai điều kiện đang dùng.
+
+Điều kiện kiểm cờ tại đích chỉ có tác dụng khi đích không trống. Giữ nó ở đây để sau này không đẩy một hạt nước đã di chuyển thêm lần nữa. Ô trống vừa được nhường vẫn dùng lại được; đó là lý do không viết `moved[destination] != 0` như một lệnh cấm vô điều kiện.
+
+### 3. Đặt phép thử vào một bước cập nhật toàn lưới
+
+`StepStats` được cung cấp để đếm visits và swaps. Phần bạn thêm là vòng duyệt trong `stepGrid`:
+
+```cpp title="include/rules.hpp — duyệt các ô theo thứ tự đã chọn"
+for (int row = 0; row < grid.height; ++row) {
+    int y = grid.height - 1 - row;
+    for (int column = 0; column < grid.width; ++column) {
+        int x = column;
+        ++stats.visited;
+        const Cell material = grid.at(x, y);
+        bool movable = material == Cell::Sand;
+        if (!movable || grid.moved[grid.index(x, y)] != 0) {
+            continue;
+        }
+        ++stats.movable;
+        bool moved = tryMove(grid, x, y, x, y + 1);
+        if (moved) {
+            ++stats.swaps;
+        }
+    }
+}
+```
+
+Trước vòng lặp, tạo `StepStats stats;` và gọi `std::fill(grid.moved.begin(), grid.moved.end(), std::uint8_t{0});`. Sau vòng lặp, tăng `grid.tick` một lần rồi trả `stats`. Không tăng tick trong từng ô. Mốc này chưa có biến chọn hướng chéo hoặc hướng quét đặc biệt.
+
+## Ghép các phần lại
+
+Trong `commands.hpp`, action Step gọi `state.pause()` rồi đặt `state.singleStep=true`. Main nhận yêu cầu này, đặt số bước cần chạy bằng 1 và xóa yêu cầu để frame sau không lặp lại:
+
+```cpp title="src/main.cpp — tiêu thụ yêu cầu một tick"
+if (state.singleStep) {
+    steps = 1;
+    state.singleStep = false;
+}
+```
+
+Ở phần update, main gọi `sand::stepGrid(grid)` theo số `steps`, lưu kết quả vào `state.stats`. Render nằm sau update và chỉ đọc lưới. Chưa có lời gọi tự tăng số bước theo thời gian, nên chờ lâu không làm cát rơi thêm.
+
+Build `project_46_checkpoint_3`. Vẽ một ô ở hàng trên cùng, bấm N rồi quan sát nó xuống đúng một hàng. Giữ N không được tạo một vòng chạy không kiểm soát: key repeat không phát lệnh Step liên tiếp.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm duyệt `y=row` từ trên xuống. Một ô cát không được rơi xuyên cả cột nhờ moved mask, nhưng hai ô xếp chồng có thể cho kết quả khác vì ô trên gặp ô dưới trước khi nó đi. Đây là thí nghiệm về thứ tự, không phải một “tối ưu” tương đương.
+2. Cấm mọi đích có `moved==1`, kể cả Empty. Với hai ô cát xếp cột, ô trên bị giữ lại bởi cờ của khoảng trống vừa được tạo. Khôi phục điều kiện phân biệt Empty.
+3. Chỉ ghi Sand vào đích mà không swap/xóa nguồn. Số cát tăng; hình có thể vẫn giống đang rơi nên chỉ xem ảnh là chưa đủ.
+
+## Tự kiểm tra kết quả
+
+Một ô cát ở `(4,0)` đi tới `(4,1)` sau đúng một tick. Ô ở đáy không biến mất hoặc chui sang đầu hàng khác. Hai ô xếp cột cùng được xuống một hàng nếu đủ chỗ. Tổng Sand và Wall không đổi khi không vẽ/tẩy/reset. Năm frame render không có lệnh Step phải để nguyên `tick`.
+
+## Bài tập mở rộng
+
+Vẽ một bệ rộng rồi đặt cát lên trên. Cát sẽ chồng thành cột, chưa tạo ra một đống có sườn nghiêng. Đó là phần việc của [bài 4 — trượt chéo và thứ tự duyệt](/projects/falling-sand/04-cat-truot-va-thu-tu-duyet), không phải lỗi renderer.

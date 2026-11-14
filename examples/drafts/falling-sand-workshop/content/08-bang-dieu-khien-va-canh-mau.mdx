@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện hộp cát để tự đặt câu hỏi và thử lại
+
+## Vấn đề cần giải quyết
+
+Một chương trình có luật đúng chưa hẳn dễ dùng. Ta cần thay cảnh, xóa, đặt lại, đổi seed và biết ô đang chọn chứa gì. Khi đang thử nghiệm, “xóa hộp hiện tại” và “khôi phục cảnh ban đầu” phải có nghĩa khác nhau, không chỉ là hai nút cùng tên chung chung.
+
+Khung nút và font ASCII trong `panel.hpp` được cung cấp để không biến project này thành một bài viết UI toolkit. Bạn sẽ nối các nút vào cùng những lệnh mà bàn phím gọi, giữ dữ liệu và thông báo khớp nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có ba nhóm trạng thái cần phân biệt:
+
+- **Dữ liệu hiện tại:** mảng vật liệu và tick, có thể đã bị người dùng sửa.
+- **Cấu hình để reset:** preset, seed và order đang chọn.
+- **Cách nhìn:** màu phẳng/shaded, cursor, chế độ sạch; không đổi vật liệu.
+
+Clear tạo lưới Empty nhưng giữ cấu hình reset. Reset tái tạo đúng preset/seed/order, tick 0 và pause. Chỉ preset Hỗn hợp dùng seed để xếp vật liệu; các cảnh hình học còn lại cố định. Luật rơi vẫn dùng parity, không rút một số random mới mỗi tick.
+
+<InteractiveLab demo="falling-sand" mode="sand-8" />
+
+Chọn Hỗn hợp, áp dụng seed 46, tiến vài tick rồi Đặt lại. Cảnh phải trở về đúng input cũ. Sau đó đổi order, reset và chạy lại cùng số tick để so sánh công bằng.
+
+## Viết code từng bước
+
+### 1. Dùng chung action cho nút và phím
+
+`Action` và `applyAction` nằm trong `commands.hpp`, không phụ thuộc SDL. `keyInput` chuyển phím thành action; `hitPanel` chuyển vị trí click thành action. Cả hai gọi cùng `applyAction`, nên không có hai bản reset hoặc hai luật đổi tốc độ khác nhau.
+
+Trong `pollInput`, click chuột trái trên panel được đổi sang logical coordinates. Nếu `hitPanel` trả một action thật, áp dụng nó rồi `continue`: event ấy không được rơi tiếp vào nhánh paint scene.
+
+### 2. Tạo cảnh mới trước khi thay cảnh cũ
+
+`makeWorkshopScene` đã có các cảnh Bậc thềm, Đồng hồ cát, Phá đập, Hỗn hợp và Empty. Thêm `selectScene` trong `workshop.hpp`:
+
+```cpp title="include/workshop.hpp — đổi cảnh chỉ sau khi tạo candidate thành công"
+inline void selectScene(Grid& grid, Workshop& state, int preset, std::uint32_t seed) {
+    Grid candidate = makeWorkshopScene(preset, seed);
+    candidate.order = state.order;
+    grid = std::move(candidate);
+    state.preset = preset;
+    state.seed = seed;
+    state.pause();
+    state.singleStep = false;
+    state.dropped = 0;
+    state.stats = {};
+    state.dirty = true;
+    state.message = "NEW SCENE: paused, tick zero";
+}
+```
+
+Nếu việc cấp phát candidate ném lỗi, các dòng đổi `grid`, `preset` và `seed` chưa chạy. Khay cũ không bị mất hoặc mang nhãn của một cảnh chưa tạo được. Đây là một phiên bản nhỏ, đồng bộ của nguyên tắc giữ last-good; không cần thêm hệ job GPU cho lưới CPU này.
+
+### 3. Làm rõ Clear và Reset
+
+`resetScene` tạo candidate từ preset đang chọn. Khi `clear=true`, nó dùng preset Empty để tạo dữ liệu nhưng **không đổi `state.preset`**. Sau khi thay, nó gọi pause, xóa accumulator/dropped, đặt stats về 0, kết thúc nét vẽ và đánh dấu dirty.
+
+Phần chọn candidate ở bản lớn là:
+
+```cpp title="include/workshop.hpp — Clear không làm mất cấu hình để reset"
+int preset = state.preset;
+if (clear) {
+    preset = 4;
+}
+Grid candidate = makeWorkshopScene(preset, state.seed);
+```
+
+Nhờ vậy K xóa toàn bộ hộp, R khôi phục cảnh. Panel ghi “RESET PRESET”, không gọi mảng hiện tại sau khi đã vẽ/tẩy là bản preset nguyên vẹn.
+
+### 4. Nối preset, seed và order
+
+Trong `applyAction`, Preset gọi `selectScene` với chỉ số kế tiếp; Seed gọi nó với `state.seed+1U`. Cộng uint32 có wrap được định nghĩa, còn ô nhập trên web phải từ chối số ngoài miền, không âm thầm ép một số quá lớn thành seed khác.
+
+Order là một lựa chọn thuật toán. Khi đổi, ta dừng mô phỏng và thay field thực sự được `stepGrid` đọc:
+
+```cpp title="include/commands.hpp — đổi order không đổi dữ liệu hiện tại"
+state.pause();
+const int next = (static_cast<int>(state.order) + 1) % 4;
+state.order = static_cast<ScanOrder>(next);
+grid.order = state.order;
+state.message = "SCAN CHANGED: reset for a controlled comparison";
+```
+
+Ở `rules.hpp`, order điều khiển chiều ngang và hướng hàng. Top-down là thí nghiệm khác bottom-up, không gọi đó là tối ưu tương đương. Đổi order giữa một lượt chạy được phép, nhưng muốn so kết quả phải reset về cùng input.
+
+## Ghép các phần lại
+
+Build `project_46_checkpoint_8`. P đổi preset, B đổi seed, O đổi order; các nút gọi cùng action. R reset, K clear; F1 xem sạch, F2 đổi cách tô màu. Arrow/Shift+Arrow chọn ô, Enter tô tại cursor; chúng không cần chuột để dùng chức năng cơ bản.
+
+Từ mốc này, giữ chuột để rót: trước mỗi tick, nếu nét còn hợp lệ, main tô lại brush tại cursor. Việc rót gắn với tick, không phải cứ vẽ một frame lại thêm vật liệu:
+
+```cpp title="src/main.cpp — giữ chuột bổ sung vật liệu trước tick"
+if (state.drawing && state.previousValid) {
+    sand::stamp(grid, state, state.cursorX, state.cursorY, false);
+}
+```
+
+Phần tính thời gian update đặt sau stamp để không gộp chi phí input vào số đo luật. Khi người dùng đang rót, số vật liệu có thể tăng; không lấy lượt này để kiểm bảo toàn của một hệ kín.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi label preset trước rồi mới tạo grid. Giả lập lỗi trong factory để thấy label và dữ liệu lệch nhau. Khôi phục candidate-first.
+2. Cho Clear sửa luôn `state.preset=4`. R sẽ không khôi phục cảnh trước nữa. Đây là hai hành vi sản phẩm khác nhau, không chỉ khác tên nút.
+3. Đổi seed trên cảnh Bậc thềm và mong nó sinh hình khác. Cảnh ấy không dùng seed; chỉ Hỗn hợp có dữ liệu khởi tạo phụ thuộc seed. UI phải nói rõ phạm vi này.
+
+## Tự kiểm tra kết quả
+
+Reset cùng preset/seed/order cho lại cùng mảng, tick 0 và pause. Clear xóa cả tường/cát/nước, còn R khôi phục. Đổi cách nhìn giữ checksum. Đổi order cập nhật đúng `grid.order`; nhãn không thay cho thuật toán. Input sai hoặc lỗi tạo cảnh không làm hỏng lưới cũ. Click vào panel không vẽ vật liệu phía sau nó.
+
+## Bài tập mở rộng
+
+Tự tạo một preset có “cửa đập” để người khác chỉ cần tẩy một đoạn tường là thấy nước thoát ra. Ghi seed và order cần dùng. Sau đó sang [bài 9 — kiểm chứng bản hoàn chỉnh](/projects/falling-sand/09-kiem-chung-va-hoan-thien) để bàn giao source và đo những gì ứng dụng thực sự làm.

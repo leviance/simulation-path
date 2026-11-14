@@ -1,0 +1,88 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Để cát trượt sang bên và tạo thành đống
+
+## Vấn đề cần giải quyết
+
+Ở Bài 3, một ô cát dừng ngay khi phía dưới bị chặn. Đó là lý do nó xếp thành cột trên bệ. Ta sẽ cho nó thử hai ô chéo dưới, nhưng vẫn dừng ngay sau **lần di chuyển đầu tiên thành công**.
+
+Có một câu hỏi cần trả lời cùng lúc: nếu cả trái và phải đều trống, ta chọn bên nào trước? Chọn cố định một phía sẽ để lại dấu vết trong hình cuối.
+
+## Hiểu ý tưởng trước khi viết code
+
+Các đích được thử theo thứ tự: xuống thẳng, chéo ưu tiên, chéo còn lại. `direction` chỉ là `−1` hoặc `+1`. Hai đích chéo là:
+
+$$p_1=(x+direction,y+1),\qquad p_2=(x-direction,y+1).$$
+
+Ta luân phiên chiều quét ngang qua mỗi tick và chọn hướng chéo ưu tiên theo parity `x+y+tick`. Hai lựa chọn này làm hai việc khác nhau: chiều quét quyết định ô nào được xét trước; hướng ưu tiên quyết định một ô thử đích nào trước.
+
+<InteractiveLab demo="falling-sand" mode="sand-4" />
+
+Đặt cát phía trên mép bệ rồi tiến từng tick. Lưới có thể tạo ra sườn nghiêng từ các bước đơn giản, nhưng **không đảm bảo đối xứng hoàn toàn**. Đảo chiều không biến cập nhật tại chỗ thành một thuật toán độc lập thứ tự.
+
+## Viết code từng bước
+
+### 1. Đảo thứ tự cột mà không đổi row-major index
+
+Trước vòng duyệt, thêm:
+
+```cpp title="include/rules.hpp — chọn chiều quét cho tick hiện tại"
+bool reverseColumns = grid.tick % 2U != 0;
+```
+
+Trong vòng `column`, thay phần xác định `x` bằng:
+
+```cpp title="include/rules.hpp — ánh xạ lượt duyệt tới tọa độ"
+int x = column;
+if (reverseColumns) {
+    x = grid.width - 1 - column;
+}
+```
+
+`column` vẫn đi từ 0 tới `width−1`. Chỉ tọa độ được xét đổi chiều; mảng `cells` không bị lật và công thức index vẫn giữ nguyên. Tick chẵn bắt đầu bên trái, tick lẻ bắt đầu bên phải.
+
+### 2. Thử các đích theo thứ tự
+
+Trong phần xử lý hạt, giữ lời gọi rơi thẳng từ bài trước rồi thêm hai nhánh chéo:
+
+```cpp title="include/rules.hpp — xuống trước, chéo sau"
+bool moved = tryMove(grid, x, y, x, y + 1);
+int direction = -1;
+if ((static_cast<std::uint32_t>(x + y) + grid.tick) % 2U != 0) {
+    direction = 1;
+}
+if (!moved) {
+    moved = tryMove(grid, x, y, x + direction, y + 1);
+}
+if (!moved) {
+    moved = tryMove(grid, x, y, x - direction, y + 1);
+}
+```
+
+Nếu bước xuống đã thành công, hai nhánh còn lại không chạy. Ô nguồn lúc này có thể đã trống; tiếp tục dùng nó như thể vẫn còn hạt cát sẽ là sai logic. Cờ moved bảo vệ các lần xét sau, còn biến `moved` giữ thứ tự các lựa chọn trong lần xét hiện tại.
+
+### 3. Giữ nguyên kiểm biên và phép swap
+
+Không clamp `x+direction` vào biên. `tryMove` đã trả `false` cho tọa độ ngoài lưới; nó sẽ thử đích còn lại. Clamp có thể biến một đích không hợp lệ thành chính ô nguồn hoặc làm đống cát dính vào vách theo một luật khác.
+
+Ở đây ta chỉ kiểm **ô đích** chéo. Ta không kiểm đường đi của một hạt tròn qua khe giữa hai vật cản. Vì thế cách đặt tường một ô có thể cho những lối đi khác với mô phỏng va chạm hình học liên tục. Luật này cần được nói rõ, không sửa bằng một epsilon tùy ý.
+
+## Ghép các phần lại
+
+Không sửa cách render hoặc input ở bài này. `stepGrid` vẫn được main gọi đúng một lần khi bấm N. Phần cuối vòng lặp vẫn tăng `stats.swaps` nếu biến `moved` là true, rồi `grid.tick` tăng một lần khi toàn lưới đã được xét.
+
+Build `project_46_checkpoint_4`. Tạo một cột cát trên bệ: thay vì chỉ đứng ở chỗ chạm bệ, nó bắt đầu trượt theo hai cạnh. Đổi màu hoặc resize không được làm thay đổi lựa chọn đích.
+
+## Thử làm sai để hiểu đúng
+
+1. Đặt `direction=1` cố định. Reset về cùng cảnh rồi chạy lại số tick như trước để so sánh, không so hai cảnh đã tiến khác nhau.
+2. Giữ chiều quét trái sang phải ở mọi tick. Tạo hai ô cát cùng tranh một ô chéo trống; bên được xét trước có thể thắng. Cả hai kết quả vẫn có thể bảo toàn số cát.
+3. Bỏ điều kiện `if (!moved)` ở các nhánh chéo. Theo dõi biến `(x,y)` sau swap đầu để thấy vì sao một chuỗi lời gọi không có điều kiện không tương đương “thử lần lượt”.
+
+## Tự kiểm tra kết quả
+
+Ô cát thử xuống trước khi thử chéo. Nếu một đích chéo bị chặn, nó vẫn thử bên còn lại. Không có hạt nào được cập nhật lần hai trong tick; số cát/tường giữ nguyên. Hai lần chạy cùng mảng ban đầu và tick ban đầu cho cùng kết quả, nhưng không cần trùng khi cố ý đổi thứ tự quét.
+
+## Bài tập mở rộng
+
+Tạo hai bệ lệch nhau để dòng cát phải đổi đường. Ghi lại luật ưu tiên bạn đang dùng, rồi sang [bài 5 — nước và đổi chỗ](/projects/falling-sand/05-nuoc-va-doi-cho). Ta sẽ thêm một vật liệu có thể bị cát đẩy đi, chứ không chỉ đi vào chỗ trống.
