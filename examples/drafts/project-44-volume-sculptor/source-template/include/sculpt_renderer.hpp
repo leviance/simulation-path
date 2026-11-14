@@ -35,6 +35,7 @@ class MeshRenderer {
         gl_.Uniform1f(program_.uniform("aspect"), static_cast<float>(width) / height);
         gl_.Uniform1i(program_.uniform("normalView"), static_cast<int>(normalView));
         gl_.BindVertexArray(vao_);
+        // snippet:sculpt-gpu-draw-chunks
         for (const auto& chunk : chunks) {
             if (!chunk.buffer || chunk.stats.vertices == 0)
                 continue;
@@ -45,6 +46,7 @@ class MeshRenderer {
             gl_.EnableVertexAttribArray(1);
             gl_.DrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(chunk.stats.vertices));
         }
+        // end-snippet:sculpt-gpu-draw-chunks
         gl_.PolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 

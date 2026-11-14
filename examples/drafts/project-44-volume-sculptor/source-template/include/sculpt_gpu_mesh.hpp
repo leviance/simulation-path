@@ -34,9 +34,12 @@ class GpuMeshBuilder {
         return state_;
     }
 
+    // snippet:sculpt-mesh-ready
     bool ready() const {
         return state_ == MeshJobState::ready && document_.stable() && activeFieldRevision_ == document_.revision() && activeGeneration_ == requestedGeneration_;
     }
+
+    // end-snippet:sculpt-mesh-ready
 
     std::uint32_t requestedGeneration() const {
         return requestedGeneration_;
@@ -44,6 +47,10 @@ class GpuMeshBuilder {
 
     std::uint32_t activeGeneration() const {
         return activeGeneration_;
+    }
+
+    bool hasQueuedRequest() const {
+        return pendingIsovalue_.has_value() && !cancelled_ && state_ != MeshJobState::failed;
     }
 
     const std::vector<MeshChunk>& active() const {
@@ -95,6 +102,10 @@ class GpuMeshBuilder {
         return lastRebuiltChunks_;
     }
 
+    std::span<const std::uint32_t> workChunks() const {
+        return work_;
+    }
+
     // A lower explicit capacity is useful for the overflow experiment; it never permits truncation.
     void setMeshVertexLimit(std::size_t limit) {
         if (limit < 3 || limit > maximumMeshVertices)
@@ -103,7 +114,7 @@ class GpuMeshBuilder {
     }
 
     bool beginStroke(std::uint32_t owner, Brush brush) {
-        if (!ready() || !document_.beginStroke(owner, brush))
+        if (paused_ || !ready() || !document_.beginStroke(owner, brush))
             return false;
         state_ = MeshJobState::editing;
         return true;
@@ -122,13 +133,13 @@ class GpuMeshBuilder {
     }
 
     bool undo() {
-        if (!ready())
+        if (paused_ || !ready())
             return false;
         return document_.undo();
     }
 
     bool redo() {
-        if (!ready())
+        if (paused_ || !ready())
             return false;
         return document_.redo();
     }
@@ -141,6 +152,7 @@ class GpuMeshBuilder {
         return requestedVertices_;
     }
 
+    // snippet:sculpt-request-generation
     void requestIsovalue(float isovalue) {
         ModelSettings next = settings_;
         next.isovalue = isovalue;
@@ -155,6 +167,9 @@ class GpuMeshBuilder {
             state_ = MeshJobState::cancelled;
     }
 
+    // end-snippet:sculpt-request-generation
+
+    // snippet:sculpt-cancel-mesh
     void cancel() {
         cancelled_ = true;
         document_.abortStroke();
@@ -165,6 +180,8 @@ class GpuMeshBuilder {
         }
     }
 
+    // end-snippet:sculpt-cancel-mesh
+
     void pause(bool value) {
         paused_ = value;
     }
@@ -173,6 +190,7 @@ class GpuMeshBuilder {
         return paused_;
     }
 
+    // snippet:sculpt-retry-last-good
     void resumeLastGood() {
         if (!gpuBusy() && document_.stable() && activeGeneration_ == requestedGeneration_ && activeFieldRevision_ == document_.revision() && activeSettings_.isovalue == settings_.isovalue) {
             cancelled_ = false;
@@ -182,16 +200,20 @@ class GpuMeshBuilder {
             requestIsovalue(settings_.isovalue);
     }
 
+    // end-snippet:sculpt-retry-last-good
+
     void tick() {
         if (state_ == MeshJobState::failed)
             return;
         try {
+            // snippet:sculpt-drain-mesh-ticket
             if (ticket_.busy()) {
                 const auto completed = ticket_.poll();
                 if (!completed)
                     return;
                 acceptBatch(*completed);
             }
+            // end-snippet:sculpt-drain-mesh-ticket
             document_.tick(paused_ || cancelled_);
             if (cancelled_ && !document_.busy() && !document_.strokeOpen()) {
                 candidate_.clear();
@@ -209,6 +231,7 @@ class GpuMeshBuilder {
                 state_ = MeshJobState::cancelled;
                 return;
             }
+            // snippet:sculpt-schedule-mesh-revision
             if (paused_)
                 return;
             if (document_.revision() != observedRevision_) {
@@ -226,6 +249,7 @@ class GpuMeshBuilder {
                 submitEmit();
             else if (state_ == MeshJobState::editing)
                 state_ = MeshJobState::ready;
+            // end-snippet:sculpt-schedule-mesh-revision
         } catch (const std::exception& failure) {
             error_ = failure.what();
             if (!ticket_.busy())
@@ -280,12 +304,22 @@ class GpuMeshBuilder {
             full = true;
         }
         pendingIsovalue_.reset();
+        // snippet:sculpt-select-dirty-work
         const auto dirty = document_.takeDirty();
+#if LAB_CHECKPOINT >= 9
         work_ = dirtyChunks(settings_.grid, dirty);
+#else
+        // Checkpoint 08 deliberately rebuilds the whole volume after a real edit.
+        // Checkpoint 09 introduces dependency-safe dirty-chunk reuse.
+        (void)dirty;
+        full = true;
+#endif
         if (full || active_.empty()) {
             work_.resize(counted_.size());
             std::iota(work_.begin(), work_.end(), 0U);
         }
+        // end-snippet:sculpt-select-dirty-work
+        // snippet:sculpt-reuse-unaffected
         candidate_ = active_;
         candidate_.resize(counted_.size());
         for (const auto chunk : work_)
@@ -296,6 +330,7 @@ class GpuMeshBuilder {
             requestedVertices_ += chunk.stats.vertices;
             chunk.validForGeneration = requestedGeneration_;
         }
+        // end-snippet:sculpt-reuse-unaffected
         observedRevision_ = document_.revision();
         jobGeneration_ = requestedGeneration_;
         times_.count = 0;
@@ -308,8 +343,10 @@ class GpuMeshBuilder {
     }
 
     void acceptBatch(const std::array<double, 2>& elapsed) {
+        // snippet:sculpt-reject-stale-batch
         if (cancelled_ || jobGeneration_ != requestedGeneration_)
             return;
+        // end-snippet:sculpt-reject-stale-batch
         if (state_ == MeshJobState::counting) {
             times_.count += elapsed[0];
             times_.scan += elapsed[1];
@@ -321,26 +358,31 @@ class GpuMeshBuilder {
             requestedVertices_ += stats.vertices;
             ++cursor_;
             if (cursor_ == work_.size()) {
+                // snippet:sculpt-gpu-mesh-capacity
                 if (requestedVertices_ > meshVertexLimit_)
                     throw std::overflow_error("Counted mesh exceeds capacity; last-good is retained without truncation");
                 cursor_ = 0;
                 state_ = MeshJobState::emitting;
+                // end-snippet:sculpt-gpu-mesh-capacity
             }
         } else if (state_ == MeshJobState::emitting) {
             times_.emit += elapsed[0];
             times_.normals += elapsed[1];
             const auto chunk = work_[cursor_];
             const auto stats = readStats(chunk);
+            // snippet:sculpt-gpu-emit-accept
             if (stats.invalid || stats.mismatch || stats.generation != jobGeneration_ || stats.emitted != stats.vertices)
                 throw std::runtime_error("GPU emit did not fill its exact counted snapshot range");
             candidate_[chunk].stats = stats;
             candidate_[chunk].validForGeneration = jobGeneration_;
+            // end-snippet:sculpt-gpu-emit-accept
             ++cursor_;
             if (cursor_ == work_.size())
                 publish();
         }
     }
 
+    // snippet:sculpt-publish-mesh
     void publish() {
         active_ = std::move(candidate_);
         candidate_.resize(counted_.size());
@@ -350,6 +392,8 @@ class GpuMeshBuilder {
         lastRebuiltChunks_ = work_.size();
         state_ = MeshJobState::ready;
     }
+
+    // end-snippet:sculpt-publish-mesh
 
     void extractUniforms(int phase) {
         const auto chunk = work_[cursor_];
@@ -373,17 +417,22 @@ class GpuMeshBuilder {
             return;
         }
         layout_.bindStorage(document_.field());
+        // snippet:sculpt-gpu-mesh-allocation
         const auto chunk = work_[cursor_];
         const auto count = counted_[chunk].vertices;
         auto output = std::make_shared<GpuBuffer>(gl_, budget_, count * sizeof(SurfaceVertex) + guardBytes);
         output->setGuard(count * sizeof(SurfaceVertex));
         output->bind(5);
         candidate_[chunk].buffer = std::move(output);
+        // end-snippet:sculpt-gpu-mesh-allocation
+        // snippet:sculpt-gpu-emit-dispatch
         extractUniforms(1);
         ticket_.begin(0);
         gl_.DispatchCompute(16, 1, 1);
         gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         ticket_.end();
+        // end-snippet:sculpt-gpu-emit-dispatch
+        // snippet:sculpt-gpu-normal-dispatch
         normalProgram_.use();
         layout_.gridUniforms(normalProgram_);
         gl_.Uniform1ui(normalProgram_.uniform("chunk"), chunk);
@@ -393,6 +442,7 @@ class GpuMeshBuilder {
         gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
         ticket_.end();
         ticket_.submit();
+        // end-snippet:sculpt-gpu-normal-dispatch
     }
 
     GlApi& gl_;

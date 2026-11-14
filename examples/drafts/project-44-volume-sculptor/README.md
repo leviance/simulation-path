@@ -1,6 +1,6 @@
 # Project 44 — Xưởng điêu khắc thể tích
 
-**Đang xây dựng, chưa nghiệm thu.** Bản nháp đã có editor C++/SDL3/GPU ở 128³, starter và checkpoint 01–07 có tiến triển riêng. Thử thách và bảy bài đang ở `course-draft/`; giáo trình đầy đủ, Canvas và ZIP phát hành chưa hoàn thành. Catalog cũ chưa thay. Không coi các kiểm tra dưới đây là bằng chứng hoàn thành toàn bộ đặc tả.
+**Đang xây dựng, chưa nghiệm thu.** Bản nháp đã có editor C++/SDL3/GPU ở 128³, starter và checkpoint 01–09 có tiến triển riêng. Thử thách và chín bài đang ở `course-draft/`; giáo trình đầy đủ, Canvas và ZIP phát hành chưa hoàn thành. Catalog cũ chưa thay. Không coi các kiểm tra dưới đây là bằng chứng hoàn thành toàn bộ đặc tả.
 
 Đích của học phần là một công cụ nặn khối 3D: dùng cọ thêm/bớt vật liệu, tạo lỗ hoặc nối hai khối, undo/redo, xem lát cắt và xuất mesh. Field lưu bằng scalar samples thật; sau mỗi chỉnh sửa phải trích lại bề mặt phù hợp với dữ liệu đó. Không dùng ray-marched primitive ghép sẵn thay cho field có thể sửa.
 
@@ -29,6 +29,12 @@
 - `sculpt_gpu_field_preview.hpp`, `sculpt_gpu_field_controls.hpp`, `sculpt_gpu_field_verify.hpp`: bước 06 sửa field GPU qua một lát cắt, chưa count/scan/emit. `--verify` đối chiếu field/history/probe riêng, không gọi CPU extraction. `sculpt_field_slice.hpp` dùng chung phần vẽ/probe với editor cuối, không sao chép một renderer khác.
 - `sculpt_gpu_count_job.hpp`, `sculpt_gpu_count_overlay.hpp`: bước 07 đếm toàn bộ chunk và hiển thị count/offset của cell được chọn. Khóa edit khi đọc snapshot, công bố summary theo generation/revision; chưa emit hoặc cấp mesh output. Counted và emitted được ghi riêng.
 - `sculpt_gpu_scan_verify.hpp`, `sculpt_gpu_count_verify.hpp`: bốn mảng scan biết trước, kiểm mọi prefix/padding, tetra oracle CPU chỉ ở 32³, layout bit-exact khi undo/redo, input gate/pause/cancel/retry và reset khi còn count ticket. Không nằm trong đường runtime count của editor.
+- `sculpt_gpu_surface_preview.hpp`, `sculpt_gpu_surface_overlay.hpp`: bước 08 tạo và vẽ mesh GPU 3D; cố ý rebuild toàn volume sau một edit thật. Dirty reuse chỉ bật từ checkpoint 09. Viewer 08 chưa hiện slice/resolution/file controls của các bước sau.
+- `sculpt_gpu_emit_verify.hpp`: kiểm emit/normal, full rebuild, field+mesh history, camera không remesh và capacity refusal/recovery. Fixture riêng với spacing nhị phân kiểm gradient 0, giữ normal mặt; readback chỉ để kiểm, không nằm trong vòng nặn tương tác.
+- `sculpt_grid_guides.hpp`: mặt lưới và hướng X/Z theo origin/extent tài liệu, dùng chung cho các viewer; pure CPU fixture kiểm domain mặc định và domain đã dịch/thu phóng.
+- `sculpt_chunk_inspector.hpp`: hộp world-space của một chunk trong work list, kể cả tail chunk không đủ 16 cells. Bước 09 thêm I/F6 để xem mà không remesh, F5 full rebuild để đối chiếu dirty reuse; không tạo một thuật toán extraction khác.
+- `sculpt_gpu_job_verify.hpp`: Pause thu hồi fence/không gửi batch mới, queued request không bị gắn nhãn current, stale count bị bỏ, cancel sau khi candidate đã emit một phần vẫn giữ active, trả candidate bytes và retry byte-exact. Bước 09 dùng verifier edit chung với editor cuối, không giả lập workload GPU trên CPU.
+- `sculpt_mesh_snapshot.hpp`: payload CPU chỉ phục vụ fixture, so trực tiếp bytes của từng chunk; có test phân biệt signed zero, normal lệch một ULP, empty và số đỉnh khác nhau. Runtime không readback toàn mesh để làm phép so này.
 
 Picking đi từng bước bằng spacing/4 rồi chia đôi bracket 12 lần, tối đa 2.048 bước; không sphere-trace field đã sửa. Đây là picking xấp xỉ trên trilinear field: ca chạm tiếp tuyến hoặc chi tiết mỏng dưới bước lấy mẫu có thể bị bỏ sót. Giao điểm cũng không phải giao chính xác với từng triangle của marching tetrahedra.
 
@@ -76,9 +82,17 @@ Checkpoint 07 dùng cùng CLI với 06 nhưng `--verify` kiểm pipeline count/s
 
 Verifier 07 kiểm đủ 4.096 offsets trên bốn mảng biết trước, rồi toàn counts/offsets của init/add/undo/redo; ở 128³ là 8.388.608 prefix checks qua bốn snapshot. Sau đó kiểm pause/cancel/retry/reset. Một lượt Debug ban đầu đã dừng đúng 20 giây; đã tối ưu kiểm CPU theo batch hữu hạn và chỉ vẽ UI verifier 10 Hz, giữ nguyên workload/checks/timeout. Debug/Release 128³ hiện qua, không phải benchmark. Kiểm desktop 07 mới xác nhận F8, một stroke và undo; còn các controls/focus/resize cần lượt kiểm tiếp.
 
+Checkpoint 08 trả lại viewport 3D: left drag nặn, Tab đổi riêng sang camera, right drag orbit, middle drag pan, wheel zoom; F2/F3/F4 chỉnh radius/strength/depth, Shift giảm/Ctrl bước lớn. F11/F12 xem wireframe/normal, F10 thu gọn panel; Z/Y history, Home camera, R reset sphere, Space pause, C cancel, Enter resume/retry, Q thoát. Chưa có controls slice/resolution/file trong viewer này. Panel ghi riêng counted request và emitted active, báo last-good khi job chưa xong; một edit thật vẫn rebuild 512/512 chunk ở N=128.
+
+Verifier 08 có `--verify` cho plane/sphere và CPU layout oracle nhỏ; `--verify-edits` kiểm cọ, full rebuild, history field+mesh, camera và capacity/recovery; `--verify-normals` chạy riêng fixture grid 32³ có spacing nhị phân, kiểm 384 lượt fallback gradient 0 trong 3.330 vertices. Các fixture không trộn với nhau. Debug/Release 128³ đã qua edit; plane lớn Release và topology oracle ở 32³ cũng qua. Desktop đã kiểm stroke, Z/Y, orbit, zoom, F10/F11/F12 và nhãn camera sau sửa; focus/resize và các controls còn lại vẫn cần kiểm tiếp.
+
+Checkpoint 09 giữ viewport/cọ của 08 và bật dirty reuse. I hiện hộp chunk được chọn, F6 chọn chunk tiếp trong work list; F5 yêu cầu full remesh cùng isovalue. Inspector không sửa field hoặc generation. `--verify-edits` kiểm dirty so với full cùng history/failure/recovery; `--verify-jobs` kiểm queued request, Pause, stale count, cancel giữa emit và retry, chạy riêng trong 20 giây. Undo/redo vẫn đánh dấu toàn grid dirty; chưa có tối ưu delta history.
+
+Pause chặn cả API cọ/undo/redo ở model. Nhãn current dựa trên field/mesh/requested khớp nhau, không chỉ dựa vào enum ready; một yêu cầu đang chờ Pause được ghi `REMESH REQUEST QUEUED`, còn active mesh giữ nhãn last-good.
+
 ## Những phần chưa xong
 
-Checkpoint 08–12 vẫn là compile fixture của bản editor, chưa phải tiến trình giảng dạy đã biên tập. Còn phải dạy emit/normals/draw, dirty chunks và các phần ghép editor, viết Canvas, hoàn tất benchmark có warm-up/lặp, kiểm thêm native controls/focus/resize, xây metadata/route thay thế và ZIP độc lập. Bảy bài đầu đã có mã thật/wiring và kiểm source, nhưng chưa gắn vào route hoặc Canvas. Các verifier GPU không thay cho kiểm chuột/bàn phím desktop.
+Checkpoint 10–12 vẫn là compile fixture của bản editor, chưa phải tiến trình giảng dạy đã biên tập. Còn phải dạy các phần ghép editor, viết Canvas, hoàn tất benchmark có warm-up/lặp, kiểm thêm native controls/focus/resize, xây metadata/route thay thế và ZIP độc lập. Chín bài đầu đã có mã thật/wiring và kiểm source, nhưng chưa gắn vào route hoặc Canvas. Các verifier GPU không thay cho kiểm chuột/bàn phím desktop.
 
 Kết quả theo từng phạm vi được ghi trong `docs/reviews/project-44-progress.md`; học phần Neighbor List cũ trên website chưa bị thay thế.
 

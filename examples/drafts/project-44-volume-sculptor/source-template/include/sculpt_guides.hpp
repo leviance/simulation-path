@@ -3,6 +3,7 @@
 #include "sculpt_brush.hpp"
 #include "sculpt_camera.hpp"
 #include "sculpt_gl.hpp"
+#include "sculpt_grid_guides.hpp"
 #include "sculpt_slice.hpp"
 #include "sculpt_ui_geometry.hpp"
 #include <optional>
@@ -40,14 +41,8 @@ class GuideRenderer {
         vertices_.clear();
         if (!xrayExtra)
             vertices_.insert(vertices_.end(), extra.begin(), extra.end());
-        const Vec3 gridColor{0.13F, 0.20F, 0.25F};
-        for (int index = -10; index <= 10; ++index) {
-            const float coordinate = index * 0.15F;
-            line({coordinate, -1.1F, -1.5F}, {coordinate, -1.1F, 1.5F}, gridColor);
-            line({-1.5F, -1.1F, coordinate}, {1.5F, -1.1F, coordinate}, gridColor);
-        }
-        line({0, -1.1F, 0}, {1.6F, -1.1F, 0}, {0.65F, 0.25F, 0.22F});
-        line({0, -1.1F, 0}, {0, -1.1F, 1.6F}, {0.22F, 0.42F, 0.7F});
+        const auto floor = gridGuideLines(grid);
+        vertices_.insert(vertices_.end(), floor.begin(), floor.end());
         if (slice.enabled) {
             const std::array<std::array<float, 2>, 4> uv{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
             std::array<Vec3, 4> corners;

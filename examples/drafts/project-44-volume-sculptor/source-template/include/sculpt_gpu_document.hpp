@@ -393,10 +393,12 @@ class GpuFieldDocument {
             if (summary[1] != 0 || summary[2] != submittedSamples_ || summary[0] > submittedSamples_)
                 throw std::runtime_error("GPU brush returned an invalid sample-write summary");
             if (summary[0] != 0) {
+                // snippet:sculpt-mark-edited-region
                 // A changed partial batch must roll back too, not just a complete brush region.
                 dirty_.include(editBounds_);
                 strokeChanged_ = true;
                 changedSampleWrites_ += summary[0];
+                // end-snippet:sculpt-mark-edited-region
             }
             editCursor_ += submittedSamples_;
             if (editCursor_ == editSamples_) {

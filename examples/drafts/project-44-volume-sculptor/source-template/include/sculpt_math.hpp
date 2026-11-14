@@ -64,12 +64,16 @@ inline std::size_t checkedProduct(std::size_t a, std::size_t b) {
 }
 
 // Same 32-byte std430 record is used by CPU fixtures, GPU emit and mesh readback.
+// snippet:sculpt-surface-vertex
 struct SurfaceVertex {
     std::array<float, 4> position;
     std::array<float, 4> normal;
 };
 
 static_assert(sizeof(SurfaceVertex) == 32);
+static_assert(offsetof(SurfaceVertex, normal) == 16);
+
+// end-snippet:sculpt-surface-vertex
 
 inline Vec3 positionOf(const SurfaceVertex& vertex) {
     return {vertex.position[0], vertex.position[1], vertex.position[2]};

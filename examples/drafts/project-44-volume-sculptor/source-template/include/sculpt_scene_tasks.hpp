@@ -12,6 +12,7 @@ class FrozenGpuField {
         : ticket_(gl) {
         if (model.gpuBusy() || !model.document().stable())
             throw std::logic_error("Freezing a field requires an idle complete document");
+        // snippet:sculpt-freeze-source-field
         seed_.grid = model.settings().grid;
         const auto payload = seed_.grid.sampleCount() * sizeof(float);
         auto storage = std::make_shared<GpuBuffer>(gl, budget, payload + guardBytes);
@@ -24,6 +25,7 @@ class FrozenGpuField {
         ticket_.end();
         ticket_.submit();
         seed_.buffer = std::move(storage);
+        // end-snippet:sculpt-freeze-source-field
     }
 
     bool ready() {
@@ -127,6 +129,7 @@ class SceneChangeJob {
         if (!candidate_) {
             if (previous.gpuBusy() || previous.document().strokeOpen())
                 return;
+            // snippet:sculpt-start-grid-candidate
             if (request_.resample && previous.document().hasCompleteField()) {
                 if (!previous.document().stable())
                     throw std::runtime_error("Previous field is not stable enough to resample");
@@ -141,6 +144,7 @@ class SceneChangeJob {
                 // Before the initial field is complete there are no committed edits to preserve.
                 candidate_ = std::make_unique<GpuMeshBuilder>(gl_, budget_, request_.target);
             }
+            // end-snippet:sculpt-start-grid-candidate
         }
         candidate_->pause(false);
         candidate_->tick();
@@ -150,11 +154,14 @@ class SceneChangeJob {
             complete_ = true;
     }
 
+    // snippet:sculpt-take-complete-grid
     std::unique_ptr<GpuMeshBuilder> takeModel() {
         if (!complete_ || !candidate_ || !candidate_->ready())
             throw std::logic_error("A partial grid cannot replace the current model");
         return std::move(candidate_);
     }
+
+    // end-snippet:sculpt-take-complete-grid
 
     private:
     GlApi& gl_;
@@ -222,6 +229,7 @@ class NativeSceneTasks {
         return request(current, {target, false});
     }
 
+    // snippet:sculpt-request-resolution
     bool resolution(GpuMeshBuilder& current, int samples, float isovalue) {
         if (!job_ && samples == current.settings().grid.samples && isovalue == current.settings().isovalue) {
             status_ = "GRID ALREADY SELECTED / DATA AND HISTORY KEPT";
@@ -237,6 +245,8 @@ class NativeSceneTasks {
         target.isovalue = isovalue;
         return request(current, {target, resample});
     }
+
+    // end-snippet:sculpt-request-resolution
 
     void cancel() {
         queued_.reset();

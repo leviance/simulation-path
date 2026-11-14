@@ -41,12 +41,31 @@ int main(int argc, char** argv) {
 }
 
 // end-snippet:sculpt-gpu-field-entry
+#elif LAB_CHECKPOINT <= 9
+#include "sculpt_gpu_surface_preview.hpp"
+
+// snippet:sculpt-gpu-surface-entry
+int main(int argc, char** argv) {
+    try {
+        return sculpt::runGpuSurfacePreview(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << "GPU surface preview: " << error.what() << '\n';
+        return 1;
+    }
+}
+
+// end-snippet:sculpt-gpu-surface-entry
 #else
+#include "sculpt_chunk_inspector.hpp"
 #include "sculpt_controls.hpp"
+#include "sculpt_editor_keys.hpp"
+#include "sculpt_editor_options.hpp"
+#if LAB_CHECKPOINT >= 11
 #include "sculpt_file_tasks.hpp"
+#include "sculpt_gpu_file_verify.hpp"
+#endif
 #include "sculpt_frame_timer.hpp"
 #include "sculpt_gpu_edit_verify.hpp"
-#include "sculpt_gpu_file_verify.hpp"
 #include "sculpt_gpu_layout_verify.hpp"
 #include "sculpt_gpu_product_verify.hpp"
 #include "sculpt_gpu_scene_verify.hpp"
@@ -58,107 +77,18 @@ int main(int argc, char** argv) {
 #include "sculpt_scene_tasks.hpp"
 #include "sculpt_slice_inspector.hpp"
 #include "sculpt_window.hpp"
-#include <charconv>
 
 namespace {
 using namespace sculpt;
 
-struct Options {
-    int samples{128};
-    int seconds{};
-    bool hidden{}, verify{}, verifyEdits{}, verifyFiles{}, verifySlice{}, verifyScene{}, verifyProducts{}, plane{}, showSlice{}, traceInput{};
-    std::filesystem::path capture, load;
-    Brush startingBrush;
-    float brushDepth{};
-};
-
-int integer(std::string_view text, int minimum, int maximum) {
-    int result{};
-    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
-    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || result < minimum || result > maximum)
-        throw std::invalid_argument("Invalid integer option");
-    return result;
-}
-
-float realOption(std::string_view text, float minimum, float maximum) {
-    float result{};
-    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
-    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || !std::isfinite(result) || result < minimum || result > maximum)
-        throw std::invalid_argument("Invalid finite numeric option");
-    return result;
-}
-
-Options parse(int argc, char** argv) {
-    Options result;
-    for (int index = 1; index < argc; ++index) {
-        const std::string_view option = argv[index];
-        const auto next = [&]() -> std::string_view {
-            if (index + 1 >= argc)
-                throw std::invalid_argument("Missing option value");
-            return argv[++index];
-        };
-        if (option == "--grid")
-            result.samples = integer(next(), 32, 192);
-        else if (option == "--seconds")
-            result.seconds = integer(next(), 1, 120);
-        else if (option == "--hidden")
-            result.hidden = true;
-        else if (option == "--verify")
-            result.verify = true;
-        else if (option == "--verify-edits")
-            result.verifyEdits = true;
-        else if (option == "--verify-files")
-            result.verifyFiles = true;
-        else if (option == "--verify-slice") {
-            result.verifySlice = true;
-            result.showSlice = true;
-        } else if (option == "--verify-scene")
-            result.verifyScene = true;
-        else if (option == "--verify-products")
-            result.verifyProducts = true;
-        else if (option == "--trace-input")
-            result.traceInput = true;
-        else if (option == "--radius")
-            result.startingBrush.radius = realOption(next(), 0.03F, 0.6F);
-        else if (option == "--strength")
-            result.startingBrush.strength = realOption(next(), 0.01F, 0.8F);
-        else if (option == "--depth")
-            result.brushDepth = realOption(next(), -1, 1);
-        else if (option == "--subtract")
-            result.startingBrush.mode = BrushMode::subtract;
-        else if (option == "--plane")
-            result.plane = true;
-        else if (option == "--show-slice")
-            result.showSlice = true;
-        else if (option == "--capture")
-            result.capture = pathFromUtf8(next());
-        else if (option == "--load")
-            result.load = pathFromUtf8(next());
-        else
-            throw std::invalid_argument("Unknown sculpt option");
-    }
-    if (result.verifyEdits && result.plane)
-        throw std::invalid_argument("Editing fixtures require the sphere field preset");
-    if (result.verifyFiles && (result.plane || result.verifyEdits))
-        throw std::invalid_argument("File fixtures require their own unedited sphere preset");
-    if ((result.verifyEdits || result.verifyFiles) && (result.verify || result.verifySlice))
-        throw std::invalid_argument("Editing/file fixtures run separately from analytic/slice fixtures");
-    if (result.verifyScene && (result.samples != 128 || result.plane || result.verify || result.verifySlice || result.verifyEdits || result.verifyFiles))
-        throw std::invalid_argument("Scene lifecycle fixture starts at 128 samples and runs separately");
-    if (result.verifyProducts && (result.plane || result.verify || result.verifySlice || result.verifyEdits || result.verifyFiles || result.verifyScene))
-        throw std::invalid_argument("Brush product fixtures require their own sphere preset and run separately");
-    if (!result.load.empty() && (result.plane || result.verify || result.verifyEdits || result.verifyFiles || result.verifySlice || result.verifyScene || result.verifyProducts))
-        throw std::invalid_argument("Analytic field fixtures cannot validate an arbitrary loaded field");
-    if (result.hidden && !result.verify && !result.verifyEdits && !result.verifyFiles && !result.verifySlice && !result.verifyScene && !result.verifyProducts && result.capture.empty() && result.seconds == 0)
-        throw std::invalid_argument("Hidden run needs a finite verify/capture/seconds condition");
-    return result;
-}
-
-int run(const Options& options) {
+int run(const EditorOptions& options) {
     ModelSettings settings;
     settings.grid.samples = options.samples;
     settings.validate();
     NativeWindow window(options.hidden);
+#if LAB_CHECKPOINT == 10
+    SDL_SetWindowTitle(window.get(), "Project 44 - Volume Sculptor / Checkpoint 10");
+#endif
     GlApi gl;
     gl.loadAll();
     preflightSculpt(gl, settings);
@@ -172,10 +102,12 @@ int run(const Options& options) {
         verifyGpuEditing(*current, budget, gl);
         return 0;
     }
+#if LAB_CHECKPOINT >= 11
     if (options.verifyFiles) {
         verifyGpuFiles(*current, gl, budget);
         return 0;
     }
+#endif
     if (options.verifyScene) {
         verifyGpuSceneChanges(*current, gl, budget);
         return 0;
@@ -186,20 +118,27 @@ int run(const Options& options) {
     }
     SculptControls controls(gl, budget, options.startingBrush, options.brushDepth);
     GuideRenderer guides(gl);
+#if LAB_CHECKPOINT >= 11
     NativeFileTasks files(gl, budget);
+#endif
     NativeSceneTasks scenes(gl, budget);
     NativePanel panel;
+    // snippet:sculpt-editor-slice-setup
     SliceInspector slice;
     slice.enabled(options.showSlice);
     SliceRenderer sliceRenderer(gl);
+    // end-snippet:sculpt-editor-slice-setup
     FrameTimer timer(gl);
+    ChunkInspection inspection;
     std::uint64_t sceneEpoch = 1;
     std::string actionNotice;
+#if LAB_CHECKPOINT >= 11
     if (!options.load.empty()) {
         if (!files.load(options.load))
             throw std::runtime_error(files.status());
         current->cancel();
     }
+#endif
     bool running = true, wireframe = false, normals = false, reportedFailure = false;
     float requestedIso = 0;
     bool verified = false, verifiedSlice = false, captured = false, initialLoadComplete = options.load.empty();
@@ -218,17 +157,29 @@ int run(const Options& options) {
         gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         const int sceneWidth = static_cast<int>(static_cast<double>(width) * (logicalWidth - panel.width()) / logicalWidth);
         renderer.draw(current->active(), camera, 0, 0, sceneWidth, height, wireframe, normals);
-        guides.draw(camera, sceneWidth, height, controls.previewBrush(camera), current->settings().grid, slice.state());
+        const auto selectedChunk = inspection.chunk(current->workChunks());
+        std::array<LineVertex, 24> lines{};
+        std::span<const LineVertex> extra;
+        if (selectedChunk) {
+            lines = chunkBoxLines(current->settings().grid, *selectedChunk);
+            extra = lines;
+        }
+        guides.draw(camera, sceneWidth, height, controls.previewBrush(camera), current->settings().grid, slice.state(), extra);
         sliceRenderer.draw(*current, slice, width, height, logicalWidth, logicalHeight);
         Overlay overlay;
         overlay.reset(logicalWidth, logicalHeight);
+#if LAB_CHECKPOINT >= 11
         const PanelData data{*current, budget, controls, files, scenes, timer, sceneEpoch, requestedIso, actionNotice};
+#else
+        const PanelData data{*current, budget, controls, scenes, timer, sceneEpoch, requestedIso, actionNotice};
+#endif
         panel.draw(overlay, data, logicalWidth, logicalHeight);
         slice.overlay(overlay, *current);
         ui.draw(overlay, width, height);
         timer.end(sceneEpoch, current->activeGeneration());
     };
     while (running) {
+#if LAB_CHECKPOINT >= 11
         if (auto loaded = files.takeLoaded()) {
             panel.cancel();
             controls.cancel(*current);
@@ -238,12 +189,16 @@ int run(const Options& options) {
             camera.centerOn(current->settings().grid.origin + Vec3{1, 1, 1} * (current->settings().grid.extent * 0.5F));
             controls.cameraChanged();
             slice.modelChanged();
+            inspection = {};
             ++sceneEpoch;
         }
+#endif
+        // snippet:sculpt-editor-grid-handoff
         if (auto replacement = scenes.takeModel()) {
             panel.cancel();
             controls.cancel(*current);
             slice.modelChanged();
+            inspection = {};
             current = std::move(replacement);
             requestedIso = current->settings().isovalue;
             if (scenes.resetsCamera()) {
@@ -255,6 +210,7 @@ int run(const Options& options) {
             controls.cameraChanged();
             ++sceneEpoch;
         }
+        // end-snippet:sculpt-editor-grid-handoff
         auto& model = *current;
         const auto now = std::chrono::steady_clock::now();
         const auto elapsed = std::chrono::duration<double>(now - begin).count();
@@ -268,14 +224,18 @@ int run(const Options& options) {
             SDL_GetWindowSize(window.get(), &logicalWidth, &logicalHeight);
             panel.layout(logicalWidth, logicalHeight);
             slice.layout(model.settings().grid, logicalWidth - panel.width(), logicalHeight);
+            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_MINIMIZED)
+                scenes.pause(true);
             if (!options.hidden) {
                 const bool panelEvent = panel.event(event, controls.pointerCaptured() || slice.captured());
                 if (const auto adjustment = panel.takeAdjustment())
                     controls.adjust(adjustment->parameter, adjustment->increase, adjustment->coarse);
                 if (!panelEvent) {
+                    // snippet:sculpt-editor-slice-routing
                     const bool sliceEvent = slice.event(event, controls.pointerCaptured());
                     if (!sliceEvent)
                         controls.event(event, model, camera, logicalWidth - panel.width(), logicalHeight);
+                    // end-snippet:sculpt-editor-slice-routing
                 }
             }
             if (event.type == SDL_EVENT_QUIT)
@@ -288,6 +248,12 @@ int run(const Options& options) {
                     wireframe = !wireframe;
                 if (key == SDLK_N || key == SDLK_F12)
                     normals = !normals;
+                if (key == SDLK_I)
+                    inspection.enabled = !inspection.enabled;
+                if (key == SDLK_F6 && !model.workChunks().empty()) {
+                    inspection.enabled = true;
+                    inspection.selected = (inspection.selected + 1) % model.workChunks().size();
+                }
                 if (key == SDLK_HOME) {
                     panel.cancel();
                     controls.cancel(model);
@@ -310,11 +276,14 @@ int run(const Options& options) {
                     slice.cancel();
                     if (scenes.busy())
                         scenes.cancel();
+#if LAB_CHECKPOINT >= 11
                     else if (files.busy())
                         files.cancel();
+#endif
                     else
                         model.cancel();
                 }
+#if LAB_CHECKPOINT >= 11
                 if ((key == SDLK_S || key == SDLK_E || key == SDLK_O) && scenes.busy()) {
                     actionNotice = "WAIT OR CANCEL GRID CHANGE FIRST";
                     continue;
@@ -329,32 +298,28 @@ int run(const Options& options) {
                     slice.cancel();
                     model.cancel();
                 }
-                if (key == SDLK_R || key == SDLK_1 || key == SDLK_2 || key == SDLK_3 || key == SDLK_F5 || key == SDLK_F6 || key == SDLK_F7 || key == SDLK_F8) {
+#endif
+                int digit = 0;
+                if (key >= SDLK_1 && key <= SDLK_4)
+                    digit = static_cast<int>(key - SDLK_0);
+                const auto selection = editorDigitAction(digit, (event.key.mod & SDL_KMOD_CTRL) != 0);
+                if (key == SDLK_R || selection.preset || selection.samples) {
+#if LAB_CHECKPOINT >= 11
                     if (files.busy()) {
                         actionNotice = "FINISH OR CANCEL THE FILE JOB FIRST";
                         continue;
                     }
+#endif
                     bool accepted = false;
-                    if (key == SDLK_R || key == SDLK_1 || key == SDLK_2 || key == SDLK_3) {
+                    if (!selection.samples) {
                         Shape shape = scenes.selectedShape(model);
-                        if (key == SDLK_1)
-                            shape = Shape::sphere;
-                        if (key == SDLK_2)
-                            shape = Shape::separatedSpheres;
-                        if (key == SDLK_3)
-                            shape = Shape::torus;
+                        if (selection.preset)
+                            shape = *selection.preset;
                         accepted = scenes.reset(model, shape);
                         if (accepted)
                             requestedIso = 0;
                     } else {
-                        int samples = 32;
-                        if (key == SDLK_F6)
-                            samples = 64;
-                        if (key == SDLK_F7)
-                            samples = 128;
-                        if (key == SDLK_F8)
-                            samples = 192;
-                        accepted = scenes.resolution(model, samples, requestedIso);
+                        accepted = scenes.resolution(model, *selection.samples, requestedIso);
                     }
                     if (accepted) {
                         panel.cancel();
@@ -363,6 +328,7 @@ int run(const Options& options) {
                         actionNotice.clear();
                     }
                 }
+                // snippet:sculpt-editor-isovalue
                 if (key == SDLK_LEFT || key == SDLK_RIGHT) {
                     if (scenes.busy()) {
                         actionNotice = "WAIT OR CANCEL GRID CHANGE FIRST";
@@ -375,7 +341,8 @@ int run(const Options& options) {
                     requestedIso = std::clamp(requestedIso + change, -0.25F, 0.25F);
                     model.requestIsovalue(requestedIso);
                 }
-                if (key == SDLK_RETURN) {
+                // end-snippet:sculpt-editor-isovalue
+                if (key == SDLK_RETURN || key == SDLK_F5) {
                     if (scenes.busy()) {
                         actionNotice = "GRID CHANGE ALREADY RUNNING";
                         continue;
@@ -391,12 +358,14 @@ int run(const Options& options) {
         scenes.tick(model);
         if (scenes.takeRetained())
             model.resumeLastGood();
+#if LAB_CHECKPOINT >= 11
         files.tick();
         if (files.takeRetainedLoad()) {
             if (!initialLoadComplete && options.hidden)
                 throw std::runtime_error(files.status());
             model.resumeLastGood();
         }
+#endif
         if (model.state() == MeshJobState::failed && !reportedFailure) {
             controls.cancel(model);
             reportedFailure = true;
@@ -429,6 +398,7 @@ int run(const Options& options) {
                 SDL_GetWindowSizeInPixels(window.get(), &width, &height);
                 SDL_GetWindowSize(window.get(), &logicalWidth, &logicalHeight);
                 verifySlicePixels(model, slice, sliceRenderer, gl, width, height, logicalWidth, logicalHeight);
+                verifySliceCacheLifecycle(model, slice);
                 verifiedSlice = true;
             }
             if (!options.capture.empty()) {
@@ -454,7 +424,7 @@ int run(const Options& options) {
 
 int main(int argc, char** argv) {
     try {
-        return run(parse(argc, argv));
+        return run(parseEditorOptions(argc, argv));
     } catch (const std::exception& error) {
         std::cerr << "Volume Sculptor: " << error.what() << '\n';
         return 1;

@@ -20,6 +20,7 @@ class GpuChunkLayout {
         blocks_ = allocate(16 * sizeof(std::uint32_t));
         stats_ = allocate(chunks * sizeof(ChunkStats));
     }
+
     // end-snippet:sculpt-count-storage-allocation
 
     void gridUniforms(const Program& program) const {

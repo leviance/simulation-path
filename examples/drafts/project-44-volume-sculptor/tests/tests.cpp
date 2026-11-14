@@ -15,6 +15,10 @@
 
 void testTetraPreview();
 void testCpuTeachingStages();
+void testGridGuides();
+void testDirtyDependencies();
+void testMeshSnapshotBytes();
+void testEditorDigitKeys();
 
 namespace {
 using namespace sculpt;
@@ -583,6 +587,10 @@ int main() {
         brushParameterFixtures();
         testTetraPreview();
         testCpuTeachingStages();
+        testGridGuides();
+        testDirtyDependencies();
+        testMeshSnapshotBytes();
+        testEditorDigitKeys();
         std::cout << "P44 CPU CORE PASS; this CTest result does not verify GPU scale or native controls\n";
         return 0;
     } catch (const std::exception& error) {

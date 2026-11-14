@@ -1,7 +1,9 @@
 #pragma once
 
 #include "sculpt_controls.hpp"
+#if LAB_CHECKPOINT >= 11
 #include "sculpt_file_tasks.hpp"
+#endif
 #include "sculpt_frame_timer.hpp"
 #include "sculpt_overlay.hpp"
 #include "sculpt_scene_tasks.hpp"
@@ -10,11 +12,19 @@
 
 namespace sculpt {
 
+#if LAB_CHECKPOINT >= 11
+inline constexpr int editorPanelPages = 3;
+#else
+inline constexpr int editorPanelPages = 2;
+#endif
+
 struct PanelData {
     const GpuMeshBuilder& model;
     const GpuBudget& budget;
     const SculptControls& controls;
+#if LAB_CHECKPOINT >= 11
     const NativeFileTasks& files;
+#endif
     const NativeSceneTasks& scenes;
     const FrameTimer& timer;
     std::uint64_t epoch;
@@ -63,6 +73,7 @@ class NativePanel {
 
     void layout(int width, int height) {
         rectangle_ = {static_cast<float>(width - this->width()), 0, static_cast<float>(this->width()), static_cast<float>(height)};
+        rowHeight_ = std::clamp((height - 260.0F) / 24, 15.0F, 22.0F);
     }
 
     bool event(const SDL_Event& event, bool otherOwner) {
@@ -90,7 +101,7 @@ class NativePanel {
                 compact_ = !compact_;
             else {
                 compact_ = false;
-                page_ = (page_ + 1) % 3;
+                page_ = (page_ + 1) % editorPanelPages;
             }
             return true;
         }
@@ -152,7 +163,11 @@ class NativePanel {
             return;
         }
         overlay.text(left + 16, 18, "VOLUME SCULPTOR", {0.5F, 0.95F, 0.83F}, 2.2F, 280);
+#if LAB_CHECKPOINT == 10
+        overlay.text(left + 16, 43, "PROJECT 44 / CHECKPOINT 10", {0.55F, 0.68F, 0.76F}, 1.4F, 306);
+#else
         overlay.text(left + 16, 43, "PROJECT 44 / NATIVE DRAFT", {0.55F, 0.68F, 0.76F}, 1.4F, 306);
+#endif
         overlay.text(left + 300, 23, "F10", {0.6F, 0.8F, 0.85F}, 1.1F, 36);
         std::string state = "READY TO SCULPT";
         if (!data.model.ready())
@@ -167,8 +182,10 @@ class NativePanel {
             state = "JOB CANCELLED / ENTER RETRY";
         if (data.model.paused())
             state = "JOBS PAUSED / CAMERA LIVE";
+#if LAB_CHECKPOINT >= 11
         if (data.files.busy())
             state = "FILE JOB " + panelNumber(data.files.progress() * 100, 0) + "% / C CANCEL";
+#endif
         if (data.scenes.busy()) {
             state = "GRID " + std::to_string(data.scenes.requestedSamples()) + " / " + panelNumber(data.scenes.progress() * 100, 0) + "% / C CANCEL";
             if (data.scenes.paused())
@@ -178,8 +195,12 @@ class NativePanel {
         overlay.text(left + 20, 72, state, {0.65F, 0.95F, 0.85F}, 1.5F, 310);
         overlay.text(left + 16, 103, "SCENE " + std::to_string(data.epoch) + " / FIELD " + std::to_string(data.model.document().revision()) + " / MESH FIELD " + std::to_string(data.model.activeFieldRevision()), {0.6F, 0.76F, 0.82F}, 1.3F, 318);
         overlay.text(left + 16, 123, "ISO " + panelNumber(data.requestedIso, 3) + " / MESH ISO " + panelNumber(data.model.activeSettings().isovalue, 3), {0.6F, 0.76F, 0.82F}, 1.3F, 318);
+#if LAB_CHECKPOINT >= 11
         const std::array<std::string, 3> tabs{"TOOLS", "STATS", "FILES"};
-        for (int page = 0; page < 3; ++page) {
+#else
+        const std::array<std::string, 2> tabs{"TOOLS", "STATS"};
+#endif
+        for (int page = 0; page < editorPanelPages; ++page) {
             const auto rect = tab(page);
             Vec3 color{0.07F, 0.09F, 0.12F};
             if (page == page_)
@@ -192,8 +213,10 @@ class NativePanel {
             tools(overlay, data);
         else if (page_ == 1)
             stats(overlay, data);
+#if LAB_CHECKPOINT >= 11
         else
             files(overlay, data);
+#endif
         overlay.text(left + 16, bottom - 56, "RMB ORBIT / MMB PAN / WHEEL ZOOM", {0.5F, 0.66F, 0.75F}, 1.3F, 318);
         overlay.text(left + 16, bottom - 39, "TAB LMB MODE / ESC ABORT STROKE", {0.5F, 0.66F, 0.75F}, 1.3F, 318);
         overlay.text(left + 16, bottom - 22, "F1 TABS / F10 FOCUS VIEW / Q EXIT", {0.5F, 0.66F, 0.75F}, 1.3F, 318);
@@ -202,7 +225,8 @@ class NativePanel {
 
     private:
     UiRect tab(int index) const {
-        return {rectangle_.x + 12 + index * 109.0F, 148, 106, 29};
+        const float width = 326.0F / editorPanelPages;
+        return {rectangle_.x + 12 + index * width, 148, width - 3, 29};
     }
 
     int targetAt(float x, float y) const {
@@ -213,7 +237,7 @@ class NativePanel {
         }
         if (UiRect{rectangle_.x + 296, 12, 42, 38}.contains(x, y))
             return -2;
-        for (int page = 0; page < 3; ++page)
+        for (int page = 0; page < editorPanelPages; ++page)
             if (tab(page).contains(x, y))
                 return page;
         if (page_ == 0)
@@ -225,7 +249,7 @@ class NativePanel {
     }
 
     UiRect parameterButton(int parameter, int direction) const {
-        return {rectangle_.x + 268 + direction * 34.0F, 230 + parameter * 22.0F, 28, 21};
+        return {rectangle_.x + 268 + direction * 34.0F, 190 + (parameter + 2) * rowHeight_ - 4, 28, rowHeight_ - 1};
     }
 
     void release() {
@@ -237,8 +261,8 @@ class NativePanel {
     }
 
     void row(Overlay& overlay, const std::string& text, Vec3 color = {0.75F, 0.84F, 0.88F}) {
-        overlay.text(rectangle_.x + 16, y_, text, color, 2, 318);
-        y_ += 22;
+        overlay.text(rectangle_.x + 16, y_, text, color, rowHeight_ / 11, 318);
+        y_ += rowHeight_;
     }
 
     void tools(Overlay& overlay, const PanelData& data) {
@@ -260,7 +284,7 @@ class NativePanel {
                 std::string label = "-";
                 if (direction != 0)
                     label = "+";
-                overlay.text(button.x + 8, button.y + 4, label, {0.7F, 0.96F, 0.88F}, 2, 16);
+                overlay.text(button.x + 8, button.y + 2, label, {0.7F, 0.96F, 0.88F}, rowHeight_ / 11, 16);
             }
         overlay.text(rectangle_.x + 16, y_, "F2/F3/F4 +; SHIFT -; CTRL LARGE", {0.55F, 0.75F, 0.82F}, 1.3F, 318);
         y_ += 16;
@@ -271,8 +295,9 @@ class NativePanel {
         row(overlay, "R RESET CHOSEN PRESET");
         row(overlay, "1 SPHERE / 2 TWO SPHERES");
         row(overlay, "3 TORUS / STORED FIELD");
-        row(overlay, "F5 32 / F6 64 SAMPLES");
-        row(overlay, "F7 128 / F8 192 SAMPLES");
+        row(overlay, "CTRL 1/2: 32/64 SAMPLES");
+        row(overlay, "CTRL 3/4: 128/192");
+        row(overlay, "F5 FULL / I BOX / F6 NEXT");
         row(overlay, "F9 SLICE / X AXIS");
         row(overlay, "UP/DOWN LAYER HJKL PROBE");
         row(overlay, "F11 WIRE / F12 NORMALS");
@@ -285,19 +310,22 @@ class NativePanel {
         std::uint64_t active = 0, vertices = 0;
         for (const auto& chunk : data.model.active()) {
             active += chunk.stats.activeCells;
-            vertices += chunk.stats.vertices;
+            vertices += chunk.stats.emitted;
         }
         const auto times = data.model.times();
+        row(overlay, "GEN " + std::to_string(data.model.activeGeneration()) + " / REQUEST " + std::to_string(data.model.requestedGeneration()));
         row(overlay, "GRID " + std::to_string(data.model.settings().grid.samples) + " SAMPLES PER AXIS");
         if (data.scenes.busy())
             row(overlay, "REQUEST " + std::to_string(data.scenes.requestedSamples()) + " SAMPLES/AXIS");
         row(overlay, "SAMPLES " + std::to_string(data.model.settings().grid.sampleCount()));
         row(overlay, "CELLS " + std::to_string(data.model.settings().grid.cellCount()));
         row(overlay, "ACTIVE CELLS " + std::to_string(active));
-        row(overlay, "VERTICES " + std::to_string(vertices));
+        row(overlay, "COUNTED REQ " + std::to_string(data.model.requestedVertices()));
+        row(overlay, "EMITTED ACTIVE " + std::to_string(vertices));
         row(overlay, "TRIANGLES " + std::to_string(vertices / 3));
         row(overlay, "BUFFERS " + panelNumber(data.budget.used / 1048576.0) + " MIB");
         row(overlay, "REBUILT " + std::to_string(data.model.lastRebuiltChunks()) + " / " + std::to_string(chunkCount(data.model.settings().grid)) + " CHUNKS");
+        row(overlay, "JOB " + std::to_string(data.model.completedChunks()) + "/" + std::to_string(data.model.jobChunks()));
         row(overlay, "BRUSH WRITES " + std::to_string(data.model.document().changedSampleWrites()));
         y_ += 8;
         row(overlay, "GPU BRUSH   " + panelNumber(times.brush) + " MS");
@@ -305,13 +333,14 @@ class NativePanel {
         row(overlay, "GPU SCAN    " + panelNumber(times.scan) + " MS");
         row(overlay, "GPU EMIT    " + panelNumber(times.emit) + " MS");
         row(overlay, "GPU NORMALS " + panelNumber(times.normals) + " MS");
-        if (data.timer.samples() != 0 && data.timer.sceneEpoch() == data.epoch)
+        if (data.timer.samples() != 0 && data.timer.sceneEpoch() == data.epoch && data.timer.meshGeneration() == data.model.activeGeneration())
             row(overlay, "GPU DRAW    " + panelNumber(data.timer.milliseconds()) + " MS");
         else
             row(overlay, "GPU DRAW WAITING");
         row(overlay, "DRAW MESH GENERATION " + std::to_string(data.timer.meshGeneration()));
     }
 
+#if LAB_CHECKPOINT >= 11
     void files(Overlay& overlay, const PanelData& data) {
         row(overlay, "S SAVE FROZEN GPU FIELD");
         row(overlay, "O REOPEN SAVED FIELD");
@@ -331,6 +360,7 @@ class NativePanel {
         if (!data.scenes.status().empty())
             paragraph(overlay, data.scenes.status());
     }
+#endif
 
     void paragraph(Overlay& overlay, std::string_view text) {
         for (int line = 0; line < 3 && !text.empty(); ++line) {
@@ -353,8 +383,10 @@ class NativePanel {
             message = data.controls.notice();
         if (!message.empty())
             message = "LAST INPUT: " + message;
+#if LAB_CHECKPOINT >= 11
         if (!data.files.error().empty())
             message = "FILE: " + data.files.error();
+#endif
         if (!data.scenes.error().empty())
             message = "GRID: " + data.scenes.error();
         if (!data.model.error().empty())
@@ -375,7 +407,7 @@ class NativePanel {
     int page_{}, pressed_{-1};
     std::uint32_t owner_{};
     std::uint8_t button_{};
-    float pointerX_{-1}, pointerY_{-1}, y_{};
+    float pointerX_{-1}, pointerY_{-1}, y_{}, rowHeight_{22};
     std::optional<PanelBrushAdjustment> adjustment_;
     bool compact_{}, captured_{}, coarse_{};
 };

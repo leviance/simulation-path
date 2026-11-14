@@ -2,6 +2,7 @@
 
 #include "sculpt_gpu_pick.hpp"
 #include "sculpt_gpu_verify.hpp"
+#include "sculpt_mesh_snapshot.hpp"
 #include <bit>
 
 namespace sculpt {
@@ -75,12 +76,43 @@ inline std::uint64_t gpuMeshFingerprint(const GpuMeshBuilder& model) {
     for (std::size_t chunk = 0; chunk < model.active().size(); ++chunk) {
         const auto vertices = model.readChunk(chunk);
         gpuCheck(model.active()[chunk].validForGeneration == model.activeGeneration(), "A reused chunk is not valid for the published generation");
-        for (const auto byte : std::as_bytes(std::span(vertices))) {
-            hash ^= std::to_integer<std::uint8_t>(byte);
+        const auto bytes = std::as_bytes(std::span(vertices));
+        const auto* data = bytes.data();
+        // Same byte-for-byte FNV input/order, without a checked iterator increment per byte in Debug.
+        // readChunk sizes the vector from its validated, bounded ACTIVE vertex count.
+        for (std::size_t index = 0; index < bytes.size(); ++index) {
+            hash ^= std::to_integer<std::uint8_t>(data[index]);
             hash *= 1099511628211ULL;
         }
     }
     return hash;
+}
+
+inline MeshSnapshot snapshotGpuMesh(const GpuMeshBuilder& model) {
+    gpuCheck(model.ready(), "Mesh snapshot needs a complete current generation");
+    MeshSnapshot result;
+    result.reserve(model.active().size());
+    std::size_t vertices = 0;
+    for (std::size_t chunk = 0; chunk < model.active().size(); ++chunk) {
+        gpuCheck(model.active()[chunk].validForGeneration == model.activeGeneration(), "Snapshot chunk is not valid for ACTIVE");
+        auto data = model.readChunk(chunk);
+        vertices += data.size();
+        gpuCheck(vertices <= maximumMeshVertices, "Diagnostic snapshot exceeded the declared mesh capacity");
+        result.push_back(std::move(data));
+    }
+    return result;
+}
+
+inline bool sameGpuMesh(const GpuMeshBuilder& model, const MeshSnapshot& expected) {
+    gpuCheck(model.ready(), "Byte comparison needs a complete current generation");
+    if (expected.size() != model.active().size())
+        return false;
+    for (std::size_t chunk = 0; chunk < expected.size(); ++chunk) {
+        gpuCheck(model.active()[chunk].validForGeneration == model.activeGeneration(), "Compared chunk is not valid for ACTIVE");
+        if (!sameSurfaceBytes(model.readChunk(chunk), expected[chunk]))
+            return false;
+    }
+    return true;
 }
 
 inline double verifyBrushReference(const GridSpec& grid, const std::vector<float>& before, const std::vector<float>& after, std::span<const Brush> stamps) {
@@ -185,6 +217,17 @@ inline void verifyGpuNoop(GlApi& gl, GpuBudget& budget, std::chrono::steady_cloc
     std::cout << "GPU NOOP PASS samples=32768 changedWrites=0 undoPreserved=1 redoPreserved=1 noRemesh=1 summaryBytes=16\n";
 }
 
+inline void verifyPausedGpuInput(GpuMeshBuilder& model, const GpuBudget& budget) {
+    const auto revision = model.document().revision();
+    const auto bytes = budget.used;
+    model.pause(true);
+    gpuCheck(!model.beginStroke(90, Brush{{0.6F, 0, 0}, 0.28F, 0.2F, BrushMode::add}) && !model.undo() && !model.redo(), "Paused mesh accepted a brush/history mutation");
+    for (int tick = 0; tick < 3; ++tick)
+        model.tick();
+    gpuCheck(!model.gpuBusy() && model.document().revision() == revision && budget.used == bytes, "Paused input submitted GPU work or allocated history");
+    model.pause(false);
+}
+
 inline void verifyGpuEditing(GpuMeshBuilder& model, GpuBudget& budget, GlApi& gl) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     auto ready = [&] {
@@ -214,16 +257,18 @@ inline void verifyGpuEditing(GpuMeshBuilder& model, GpuBudget& budget, GlApi& gl
         if (editedIds[chunk] != 0 && editedIds[chunk] == originalIds[chunk])
             ++reused;
     gpuCheck(model.lastRebuiltChunks() > 0 && model.lastRebuiltChunks() < chunkCount(model.settings().grid) && reused > 0, "A local edit rebuilt everything instead of reusing proven-unaffected chunks");
-    const auto incremental = gpuMeshFingerprint(model);
+    const auto incremental = snapshotGpuMesh(model);
+    verifyPausedGpuInput(model, budget);
     const auto localChunks = model.lastRebuiltChunks();
     model.requestIsovalue(0);
     waitForGpuModel(model, ready, deadline);
-    gpuCheck(gpuMeshFingerprint(model) == incremental, "Dirty-chunk geometry/normals differ from a full extraction of the same field");
+    gpuCheck(sameGpuMesh(model, incremental), "Dirty-chunk geometry/normals differ from a full extraction of the same field");
     std::cout << "GPU DIRTY PASS rebuilt=" << localChunks << '/' << chunkCount(model.settings().grid) << " reusedNonempty=" << reused << " fullMeshByteMatch=1 addMax=" << addError << '\n';
 
     gpuCheck(model.undo(), "GPU undo was unavailable after a committed stroke");
     waitForGpuModel(model, ready, deadline);
     gpuCheck(snapshotGpuField(model) == original, "GPU undo did not restore the field byte-exactly");
+    verifyPausedGpuInput(model, budget);
     gpuCheck(model.redo(), "GPU redo was unavailable after undo");
     waitForGpuModel(model, ready, deadline);
     gpuCheck(snapshotGpuField(model) == edited, "GPU redo did not restore the edited field byte-exactly");
@@ -248,7 +293,7 @@ inline void verifyGpuEditing(GpuMeshBuilder& model, GpuBudget& budget, GlApi& gl
     model.abortStroke();
     waitForGpuModel(model, ready, deadline);
     gpuCheck(!model.moveStroke(11, {0.3F, 0, 0}) && snapshotGpuField(model) == edited, "Blur rollback left a partial dispatch or accepted a stale owner");
-    std::cout << "GPU HISTORY PASS pointerOwner=1 undoRedoByteExact=1 subtractMax=" << subtractError << " partialBatchRollback=1\n";
+    std::cout << "GPU HISTORY PASS pointerOwner=1 undoRedoByteExact=1 subtractMax=" << subtractError << " partialBatchRollback=1 pausedMutationGates=2\n";
 
     auto lastGood = activeBufferIds(model);
     const auto lastGeneration = model.activeGeneration();
@@ -309,7 +354,7 @@ inline void verifyGpuEditing(GpuMeshBuilder& model, GpuBudget& budget, GlApi& gl
     }
     model.requestIsovalue(0);
     waitForGpuModel(model, ready, deadline);
-    gpuCheck(model.guardsIntact() && gpuMeshFingerprint(model) == incremental, "Recovery damaged a canary or changed the valid edited mesh");
+    gpuCheck(model.guardsIntact() && sameGpuMesh(model, incremental), "Recovery damaged a canary or changed the valid edited mesh");
     std::cout << "GPU RECOVERY PASS cancel=1 capacityRefusal=1 allocationBudgetRefusal=1 injectedStorageFailure=1 lastGood=1 canaries=ok samples=" << model.settings().grid.sampleCount() << " cells=" << model.settings().grid.cellCount() << " brushMs=" << model.times().brush << " historyCopyMs=" << model.times().history << '\n';
     for (int stroke = 0; stroke < 6; ++stroke) {
         Brush inside{{0, 0, 0}, 0.08F, 0.03F, BrushMode::add};

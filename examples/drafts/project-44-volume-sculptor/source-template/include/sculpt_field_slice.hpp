@@ -7,6 +7,7 @@
 namespace sculpt {
 
 // Caller must first finish the field's GPU ticket. This is a numeric probe, not extraction.
+// snippet:sculpt-slice-numeric-probe
 inline float readSliceValue(const GpuBuffer& field, const GridSpec& grid, const SliceState& slice) {
     if (field.bytes() != grid.sampleCount() * sizeof(float) + guardBytes)
         throw std::invalid_argument("Slice probe needs the exact scalar allocation");
@@ -29,6 +30,8 @@ inline float readSliceValue(const GpuBuffer& field, const GridSpec& grid, const 
     return value;
 }
 
+// end-snippet:sculpt-slice-numeric-probe
+
 // Supplied presentation: the fragment shader samples the same SSBO used by compute.
 class FieldSliceRenderer {
     public:
@@ -50,9 +53,11 @@ class FieldSliceRenderer {
         if (!slice.enabled || width <= 0 || height <= 0 || logicalWidth <= 0 || logicalHeight <= 0 || rectangle.width <= 0 || rectangle.height <= 0)
             return;
         slice.validate(grid);
+        // snippet:sculpt-slice-dpr-viewport
         const float sx = static_cast<float>(width) / logicalWidth;
         const float sy = static_cast<float>(height) / logicalHeight;
         gl_.Viewport(static_cast<int>(rectangle.x * sx), static_cast<int>((logicalHeight - rectangle.y - rectangle.height) * sy), static_cast<int>(rectangle.width * sx), static_cast<int>(rectangle.height * sy));
+        // end-snippet:sculpt-slice-dpr-viewport
         gl_.Disable(GL_DEPTH_TEST);
         program_.use();
         gl_.Uniform1i(program_.uniform("gridN"), grid.samples);

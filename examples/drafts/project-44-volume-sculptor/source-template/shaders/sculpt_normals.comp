@@ -1,4 +1,5 @@
 #version 430 core
+#if LAB_CHECKPOINT >= 8
 layout(local_size_x = 256) in;
 layout(std430, binding = 0) readonly buffer ScalarField { float field[]; };
 struct ChunkStat { uvec4 geometry; uvec4 outputState; };
@@ -15,6 +16,7 @@ float at(ivec3 c) {
     return field[(c.z * gridN + c.y) * gridN + c.x];
 }
 
+// snippet:sculpt-gpu-trilinear-field
 float sampleField(vec3 point) {
     vec3 coordinate = clamp((point - gridOrigin) / gridSpacing, vec3(0), vec3(gridN - 1));
     ivec3 c = min(ivec3(floor(coordinate)), ivec3(gridN - 2));
@@ -25,7 +27,9 @@ float sampleField(vec3 point) {
     float nextY1 = mix(at(c + ivec3(0,1,1)), at(c + ivec3(1,1,1)), t.x);
     return mix(mix(y0,y1,t.y), mix(nextY0,nextY1,t.y), t.z);
 }
+// end-snippet:sculpt-gpu-trilinear-field
 
+// snippet:sculpt-gpu-normal-kernel
 void main() {
     uint id = gl_GlobalInvocationID.x;
     if (id >= vertexCount)
@@ -49,3 +53,8 @@ void main() {
     }
     vertices[id].normal = vec4(normalize(gradient),0);
 }
+// end-snippet:sculpt-gpu-normal-kernel
+#else
+layout(local_size_x = 256) in;
+void main() {}
+#endif

@@ -7,8 +7,10 @@ layout(std430, binding = 2) readonly buffer Offsets { uint offsets[]; };
 struct ChunkStat { uvec4 geometry; uvec4 outputState; };
 layout(std430, binding = 4) buffer Stats { ChunkStat stats[]; };
 #if LAB_CHECKPOINT >= 8
+// snippet:sculpt-gpu-mesh-storage
 struct Vertex { vec4 position; vec4 normal; };
 layout(std430, binding = 5) buffer Mesh { Vertex vertices[]; };
+// end-snippet:sculpt-gpu-mesh-storage
 #endif
 uniform int gridN;
 uniform vec3 gridOrigin;
@@ -78,6 +80,7 @@ void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
         area = -area;
     }
 #if LAB_CHECKPOINT >= 8
+    // snippet:sculpt-gpu-emit-triangle
     if (phase == 1) {
         uint begin = writeBase + cellVertices;
         if (begin > vertexCapacity || vertexCapacity - begin < 3u) {
@@ -91,6 +94,7 @@ void triangle(vec3 a, vec3 b, vec3 c, vec3 towardOutside) {
         vertices[begin + 2u] = Vertex(vec4(c,1), vec4(normal,0));
         atomicAdd(stats[chunk].outputState.x, 3u);
     }
+    // end-snippet:sculpt-gpu-emit-triangle
 #endif
     cellVertices += 3u;
 }
@@ -155,9 +159,11 @@ void main() {
         cube[index] = loadCorner(coordinate + corners[index]);
     cellVertices = 0u;
 #if LAB_CHECKPOINT >= 8
+    // snippet:sculpt-gpu-emit-offset
     writeBase = 0u;
     if (phase == 1)
         writeBase = offsets[cell];
+    // end-snippet:sculpt-gpu-emit-offset
 #endif
     for (int index = 0; index < 6; ++index) {
         ivec4 ids = tetrahedra[index];

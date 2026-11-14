@@ -18,6 +18,7 @@ struct SliceState {
 };
 
 // Cyclic axes: X -> YZ, Y -> ZX, Z -> XY. Screen v grows down, world vertical grows up.
+// snippet:sculpt-slice-grid-coordinate
 inline Vec3 sliceGridCoordinate(const GridSpec& grid, const SliceState& slice) {
     slice.validate(grid);
     std::array<float, 3> coordinate{};
@@ -26,6 +27,8 @@ inline Vec3 sliceGridCoordinate(const GridSpec& grid, const SliceState& slice) {
     coordinate[(slice.axis + 2) % 3] = (1 - slice.v) * (grid.samples - 1);
     return {coordinate[0], coordinate[1], coordinate[2]};
 }
+
+// end-snippet:sculpt-slice-grid-coordinate
 
 inline Vec3 sliceWorldPoint(const GridSpec& grid, const SliceState& slice) {
     return grid.worldFromGrid(sliceGridCoordinate(grid, slice));

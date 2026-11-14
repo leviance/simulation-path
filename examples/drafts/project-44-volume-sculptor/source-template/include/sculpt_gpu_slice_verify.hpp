@@ -5,6 +5,45 @@
 
 namespace sculpt {
 
+inline void verifySliceCacheLifecycle(GpuMeshBuilder& model, SliceInspector& inspector) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    const int originalAxis = inspector.state().axis;
+    inspector.enabled(true);
+    inspector.update(model);
+    gpuCheck(inspector.probe().has_value(), "Current slice did not produce a numeric probe");
+    const auto original = *inspector.probe();
+    const auto isovalue = model.settings().isovalue;
+    const float next = std::clamp(isovalue + 0.025F, -0.25F, 0.25F);
+    model.requestIsovalue(next);
+    model.tick();
+    inspector.update(model);
+    gpuCheck(inspector.probe() && inspector.probe()->meshGeneration == original.meshGeneration, "Probe relabelled an unfinished generation as current");
+    waitForGpuModel(
+        model, [&] {
+            return model.ready();
+        },
+        deadline
+    );
+    inspector.update(model);
+    gpuCheck(inspector.probe() && inspector.probe()->fieldRevision == original.fieldRevision && inspector.probe()->meshGeneration == model.activeGeneration() && inspector.probe()->value == original.value, "Probe cache did not refresh its mesh tag for the same field");
+    inspector.axis((inspector.state().axis + 1) % 3);
+    gpuCheck(!inspector.probe(), "Changing slice axis retained the old numeric point");
+    inspector.update(model);
+    gpuCheck(inspector.probe().has_value(), "New slice axis could not refresh its probe");
+    inspector.modelChanged();
+    gpuCheck(!inspector.probe(), "Model replacement kept an old probe with matching numeric revision");
+    model.requestIsovalue(isovalue);
+    waitForGpuModel(
+        model, [&] {
+            return model.ready();
+        },
+        deadline
+    );
+    inspector.axis(originalAxis);
+    inspector.update(model);
+    std::cout << "GPU SLICE CACHE PASS heldDuringRemesh=1 sameFieldNewMeshTag=1 axisInvalidates=1 modelChangedInvalidates=1 originalIsoRestored=1\n";
+}
+
 inline void verifySliceProbes(const GpuMeshBuilder& model, bool plane) {
     const auto& grid = model.settings().grid;
     const auto normal = normalized({1, 2, -1});

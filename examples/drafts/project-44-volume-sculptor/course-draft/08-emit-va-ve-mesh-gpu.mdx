@@ -1,0 +1,335 @@
+> Bản biên tập cho checkpoint 08, chưa phát hành hoặc ghép Canvas.
+
+Thời gian gợi ý: đọc 45 phút, tự viết 100 phút, kiểm hình và dữ liệu 30 phút. Setup/build tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Ở Bài 07, ta đã biết mỗi cell cần bao nhiêu đỉnh và được ghi từ vị trí nào trong buffer. Nhưng các con số ấy chưa tạo ra vật thể: viewport vẫn chỉ có lát cắt của field. Bài này đưa khối 3D có ánh sáng trở lại, lần này bằng mesh do GPU tạo ra.
+
+Kết quả cần thấy là một khối cầu mà bạn có thể xoay để nhìn từ nhiều phía, dùng cọ nặn hoặc khoét trên bề mặt, rồi xem wireframe và màu normal. Sau một nét cọ, cả field lẫn mesh phải đổi; Z/Y phải khôi phục được cả hai. Ta không đọc toàn bộ field về CPU để trích bề mặt.
+
+Chưa tối ưu dirty chunks ở đây. Mỗi chỉnh sửa thật sẽ chạy count/scan/emit trên toàn volume. Cách làm này cho ta một bản đúng, dễ đối chiếu trước khi học cách chỉ làm lại những vùng bị ảnh hưởng ở Bài 09. Camera không đổi field nên vẫn không được gây remesh.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Mỗi cell đã có một khoảng riêng
+
+Nhắc lại ví dụ counts là 3, 0, 6, 3: exclusive offsets tương ứng là 0, 3, 3, 9. Cell thứ ba có sáu đỉnh, được ghi vào các vị trí 3 đến 8. Cell thứ hai không tạo đỉnh nào nên không được ghi, dù offset của nó cũng bằng 3.
+
+Với cell $i$, đỉnh cục bộ $k$ được ghi tại $o_i+k$, trong đó $0\le k<c_i$. Hai cell không giành cùng địa chỉ nếu scan đúng và emit tạo đúng số đỉnh mà count đã báo. Đây mới là lý do có thể ghi song song mà không dùng một atomic counter để xin chỗ cho từng đỉnh.
+
+Ta vẫn dùng atomic để cộng vài **bộ đếm kiểm tra**. Atomic ấy không quyết định vị trí của triangle. Phân biệt hai việc này sẽ giúp bạn hiểu vì sao thứ tự các đỉnh vẫn lặp lại được dù các invocations không chạy theo thứ tự cell.
+
+### Địa chỉ đỉnh khác địa chỉ byte
+
+`offsets[cell]` tính bằng số đỉnh. Một đỉnh của ta gồm hai nhóm bốn float: position và normal, tổng cộng 32 bytes. Vì vậy đỉnh số 3 bắt đầu tại byte 96, không phải byte 3. Chỉ khi cấp phát hoặc mô tả vertex attributes ta mới chuyển sang đơn vị byte.
+
+Không cấp chung một buffer theo trường hợp xấu nhất. CPU chỉ đọc summary 32 bytes của mỗi chunk, cộng tổng và kiểm giới hạn toàn mesh. Sau đó từng chunk có bề mặt nhận một buffer đúng bằng số đỉnh đã đếm, cộng 64 guard bytes. Chunk rỗng không cần mesh buffer.
+
+### Hai pass phải nhìn cùng một field
+
+Nếu cọ sửa field sau count nhưng trước emit, một tetra có thể đổi từ một triangle thành hai. Offset cũ lúc đó không còn đúng. `GpuMeshBuilder` chỉ bắt đầu extraction sau khi stroke đóng và field ổn định; nó không nhận stroke mới trong lúc đang count/emit. Snapshot ở đây là **một phiên bản field được giữ ổn định**, không phải CPU copy toàn field.
+
+Scaffold job, fence và last-good được cấp sẵn để bài này chạy an toàn. Bạn vẫn viết phần cấp output, emit, normal và draw dưới đây. Bài 09 mới đi sâu vào generation, cancellation và tái sử dụng chunk; không cần tự đoán toàn bộ state machine trước khi thấy mesh.
+
+## Bắt tay xây dựng
+
+### 1. Mở đúng bộ khung của Bài 08
+
+Source nằm trong `checkpoints/08/`. `src/main.cpp` gọi `runGpuSurfacePreview` ở `include/sculpt_gpu_surface_preview.hpp`, không còn gọi viewer lát cắt của Bài 07. Giữ nguyên phần window, GL loader, camera, font và event routing được cấp sẵn.
+
+Luồng công việc trong bài là `GpuMeshBuilder::submitEmit` → shader extraction phase 1 → shader normal → `acceptBatch` → `MeshRenderer::draw`. Các hàm này nằm trong source thật; không tạo thêm một mesher chỉ để khớp đoạn minh họa.
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_44_checkpoint_8 --parallel 1
+./build/Debug/project_44_checkpoint_8.exe --grid 128
+```
+
+Trên Linux/macOS với generator single-config, chọn `-DCMAKE_BUILD_TYPE=Debug` lúc configure và chạy executable trực tiếp trong `build/`. Native app cần OpenGL 4.3 compute; đây không phải Canvas hoặc WebGL.
+
+### 2. Chốt layout trước khi ghi bất kỳ đỉnh nào
+
+Ta giữ record C++ sau trong `sculpt_math.hpp`:
+
+```cpp title="include/sculpt_math.hpp — record 32 bytes"
+struct SurfaceVertex {
+    std::array<float, 4> position;
+    std::array<float, 4> normal;
+};
+
+static_assert(sizeof(SurfaceVertex) == 32);
+static_assert(offsetof(SurfaceVertex, normal) == 16);
+```
+
+Phía shader phải diễn giải cùng vùng nhớ theo cùng cách:
+
+```glsl title="shaders/sculpt_extract.comp — output storage"
+struct Vertex { vec4 position; vec4 normal; };
+layout(std430, binding = 5) buffer Mesh { Vertex vertices[]; };
+```
+
+Ba thành phần đầu của position chứa tọa độ world; thành phần thứ tư bằng 1. Normal có ba thành phần hướng và thành phần thứ tư bằng 0. Ta dùng hai `vec4` rõ ràng, không dựa vào phỏng đoán về padding của hai `vec3`. Hai `static_assert` bắt lỗi layout C++ ngay lúc build.
+
+### 3. Kiểm toàn bộ count rồi mới cấp mesh buffer
+
+`acceptBatch` nhận summary của các chunk sau count/scan. Chỉ khi đủ tất cả chunk của job mới chuyển sang emit:
+
+```cpp title="include/sculpt_gpu_mesh.hpp — count gate trước emit"
+if (requestedVertices_ > meshVertexLimit_)
+    throw std::overflow_error("Counted mesh exceeds capacity; last-good is retained without truncation");
+cursor_ = 0;
+state_ = MeshJobState::emitting;
+```
+
+`requestedVertices_` là tổng cả mesh, còn `counted_[chunk].vertices` là tổng của một chunk. Giới hạn mặc định của mesh là 4.194.304 đỉnh. Không dùng `min(count, capacity)` để lờ phần thiếu đi: vật thể có thể thủng mà người dùng không biết vì sao.
+
+Trong `submitEmit`, vòng lặp đầu bỏ qua các chunk có count bằng 0. Với chunk còn lại, ta cấp output như sau, sau khi đã bind field/count/offset/stats:
+
+```cpp title="include/sculpt_gpu_mesh.hpp — cấp output của chunk"
+const auto chunk = work_[cursor_];
+const auto count = counted_[chunk].vertices;
+auto output = std::make_shared<GpuBuffer>(gl_, budget_, count * sizeof(SurfaceVertex) + guardBytes);
+output->setGuard(count * sizeof(SurfaceVertex));
+output->bind(5);
+candidate_[chunk].buffer = std::move(output);
+```
+
+Binding 5 khớp `Mesh` trong GLSL. Guard nằm **sau** phần đỉnh hợp lệ, không nằm trong draw count. `GpuBuffer` được cấp sẵn kiểm byte budget và kích thước allocation thực. Allocation thất bại sẽ bỏ candidate, còn mesh đang hiển thị vẫn được giữ; không thay last-good bằng một buffer chưa điền xong.
+
+### 4. Cho mỗi cell ghi vào range của mình
+
+Shader `sculpt_extract.comp` không có hai thuật toán polygonize khác nhau. Count và emit đi qua cùng `edgePoint`, `tetra` và `triangle`; chỉ nhánh phase 1 mới ghi đỉnh. Giữ nguyên phép phân loại `value < isovalue`, thứ tự endpoint và phép loại triangle suy biến đã học ở Bài 07.
+
+Trước khi đi qua sáu tetra của cell, lấy offset riêng của cell:
+
+```glsl title="shaders/sculpt_extract.comp — vị trí bắt đầu ghi"
+writeBase = 0u;
+if (phase == 1)
+    writeBase = offsets[cell];
+```
+
+`cellVertices` bắt đầu bằng 0 cho mỗi invocation. Sau khi đã kiểm diện tích và chỉnh winding của một triangle, nhánh emit ghi ba đỉnh:
+
+```glsl title="shaders/sculpt_extract.comp — ghi một triangle"
+if (phase == 1) {
+    uint begin = writeBase + cellVertices;
+    if (begin > vertexCapacity || vertexCapacity - begin < 3u) {
+        atomicAdd(stats[chunk].outputState.w, 1u);
+        cellVertices += 3u;
+        return;
+    }
+    vec3 normal = normalize(area);
+    vertices[begin] = Vertex(vec4(a,1), vec4(normal,0));
+    vertices[begin + 1u] = Vertex(vec4(b,1), vec4(normal,0));
+    vertices[begin + 2u] = Vertex(vec4(c,1), vec4(normal,0));
+    atomicAdd(stats[chunk].outputState.x, 3u);
+}
+```
+
+Với cell có offset 3 và hai triangles: triangle đầu ghi 3, 4, 5; `cellVertices` tăng lên 3; triangle sau ghi 6, 7, 8. Việc tăng `cellVertices` cho đường bình thường nằm ngay sau nhánh `if` này trong hàm `triangle`, nên count và emit vẫn dùng cùng bộ đếm cục bộ.
+
+Vì `vertexCapacity` là uint, không viết điều kiện kiểu `begin + 3 > capacity` rồi mặc kệ nguy cơ overflow. Code kiểm `begin` trước, mới lấy `capacity - begin`. Nhánh lỗi không ghi ngoài buffer; nó đánh dấu mismatch để CPU từ chối **cả candidate**, chứ không chấp nhận một mesh bị cắt bớt. `outputState.x` đếm số đỉnh đã thực sự ghi, không phải số định ghi.
+
+Normal tạm thời là normal mặt `normalize(area)`. Pass kế tiếp sẽ thay bằng gradient normal nếu gradient đủ lớn. Cách này cũng giữ một hướng hợp lệ khi gradient gần 0.
+
+### 5. Dispatch emit rồi nối sang normal pass
+
+Trở lại `submitEmit`:
+
+```cpp title="include/sculpt_gpu_mesh.hpp — dispatch emit"
+extractUniforms(1);
+ticket_.begin(0);
+gl_.DispatchCompute(16, 1, 1);
+gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+ticket_.end();
+```
+
+`extractUniforms(1)` chọn phase 1, chunk, generation, isovalue và `vertexCapacity`. Một chunk có 4.096 slots, local size là 256 nên cần 16 workgroups. Slots padding vẫn chạy nhưng return trước khi tạo triangle, như Bài 07.
+
+Normal pass đọc position vừa được emit. Barrier ở đây phục vụ lần **đọc SSBO tiếp theo**; nó không phải một lệnh đợi GPU xong trên CPU. Fence của ticket chịu trách nhiệm báo batch hoàn tất để CPU đọc summary.
+
+### 6. Tính normal từ chính field đang nặn
+
+Không lấy `normalize(position)` làm normal cho mọi vật thể. Nó chỉ gần đúng cho sphere quanh gốc, và sai ngay sau khi cọ làm bề mặt lõm hoặc phồng.
+
+Như Bài 03, ta cần lấy giá trị field tại điểm world bất kỳ. Shader dùng nội suy trilinear của tám samples lân cận:
+
+```glsl title="shaders/sculpt_normals.comp — đọc field trilinear"
+float sampleField(vec3 point) {
+    vec3 coordinate = clamp((point - gridOrigin) / gridSpacing, vec3(0), vec3(gridN - 1));
+    ivec3 c = min(ivec3(floor(coordinate)), ivec3(gridN - 2));
+    vec3 t = coordinate - vec3(c);
+    float y0 = mix(at(c), at(c + ivec3(1,0,0)), t.x);
+    float y1 = mix(at(c + ivec3(0,1,0)), at(c + ivec3(1,1,0)), t.x);
+    float nextY0 = mix(at(c + ivec3(0,0,1)), at(c + ivec3(1,0,1)), t.x);
+    float nextY1 = mix(at(c + ivec3(0,1,1)), at(c + ivec3(1,1,1)), t.x);
+    return mix(mix(y0,y1,t.y), mix(nextY0,nextY1,t.y), t.z);
+}
+```
+
+`at(c)` chỉ đọc sample theo row-major index; nó không nội suy. Bốn phép `mix` đầu lấy theo x, hai phép `mix` trong return lấy theo y, phép cuối lấy theo z. Ở mặt biên, `c` dừng ở `gridN - 2`, còn `t` vẫn có thể bằng 1: ta dùng cell cuối thay vì đọc vượt sample cuối.
+
+Để ước lượng thành phần x của gradient tại $p$, lấy hai điểm cách p nửa spacing theo x:
+
+$$
+g_x \approx \frac{f(x_+,p_y,p_z)-f(x_-,p_y,p_z)}{x_+-x_-},\qquad
+x_\pm=\operatorname{clamp}(p_x\pm h,x_{\min},x_{\max}),\quad h=\tfrac12\Delta x.
+$$
+
+Tại biên, khoảng mẫu có thể chỉ còn một phía. Vì thế phải chia cho khoảng thực `high.x - low.x`, không luôn chia cho `2*h`. Làm tương tự với y và z, rồi chuẩn hóa gradient. Với quy ước âm trong/dương ngoài, gradient hướng ra ngoài; không thêm dấu âm tùy ý để chữa một hình tối.
+
+```glsl title="shaders/sculpt_normals.comp — gradient normal và fallback"
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= vertexCount)
+        return;
+    vec3 point = vertices[id].position.xyz;
+    float h = 0.5 * gridSpacing;
+    vec3 maximum = gridOrigin + vec3(gridSpacing * float(gridN - 1));
+    vec3 low = clamp(point - vec3(h), gridOrigin, maximum);
+    vec3 high = clamp(point + vec3(h), gridOrigin, maximum);
+    vec3 gradient = vec3(
+        (sampleField(vec3(high.x,point.y,point.z)) - sampleField(vec3(low.x,point.y,point.z))) / (high.x - low.x),
+        (sampleField(vec3(point.x,high.y,point.z)) - sampleField(vec3(point.x,low.y,point.z))) / (high.y - low.y),
+        (sampleField(vec3(point.x,point.y,high.z)) - sampleField(vec3(point.x,point.y,low.z))) / (high.z - low.z));
+    if (any(isnan(gradient)) || any(isinf(gradient))) {
+        atomicAdd(stats[chunk].geometry.w, 1u);
+        return;
+    }
+    if (length(gradient) <= 1e-10) {
+        atomicAdd(stats[chunk].outputState.y, 1u);
+        return;
+    }
+    vertices[id].normal = vec4(normalize(gradient),0);
+}
+```
+
+Gradient không hữu hạn làm candidate bị từ chối. Gradient hữu hạn nhưng quá nhỏ thì tăng `normalFallbacks` và giữ normal mặt đã ghi, không normalize vector 0. Đây là policy rõ ràng chứ không phải bằng chứng field luôn trơn. Các đỉnh trùng tọa độ sẽ lấy cùng gradient; ta không cần gộp index để có shading liên tục.
+
+Từ C++, dispatch theo **số đỉnh thật** của chunk:
+
+```cpp title="include/sculpt_gpu_mesh.hpp — dispatch normal"
+normalProgram_.use();
+layout_.gridUniforms(normalProgram_);
+gl_.Uniform1ui(normalProgram_.uniform("chunk"), chunk);
+gl_.Uniform1ui(normalProgram_.uniform("vertexCount"), count);
+ticket_.begin(1);
+gl_.DispatchCompute((count + 255) / 256, 1, 1);
+gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+ticket_.end();
+ticket_.submit();
+```
+
+`(count + 255) / 256` làm tròn lên; shader bỏ các invocation dư bằng `id >= vertexCount`. Barrier cuối công bố shader writes cho các SSBO access, vertex fetch và buffer readback tiếp theo. Chọn bit theo bên sẽ dùng dữ liệu, không theo tên buffer; xem [Khronos — glMemoryBarrier](https://wikis.khronos.org/opengl/GLAPI/glMemoryBarrier). Normal pass và emit dùng hai timer query riêng; số trong một lần chạy chưa phải benchmark.
+
+### 7. Chỉ công bố mesh đã ghi đủ
+
+Sau khi fence của emit/normal xong, `acceptBatch` đọc summary và kiểm:
+
+```cpp title="include/sculpt_gpu_mesh.hpp — nhận output đã kiểm"
+if (stats.invalid || stats.mismatch || stats.generation != jobGeneration_ || stats.emitted != stats.vertices)
+    throw std::runtime_error("GPU emit did not fill its exact counted snapshot range");
+candidate_[chunk].stats = stats;
+candidate_[chunk].validForGeneration = jobGeneration_;
+```
+
+Một chunk xong chưa thay ngay chunk đang hiển thị. Khi mọi chunk trong job đã xong, `publish` mới chuyển toàn bộ candidate sang `active_`, đồng thời ghi field revision và mesh generation tương ứng. Trong lúc chờ, viewport vẫn vẽ mesh cũ và panel ghi `DISPLAYING LAST-GOOD MESH`.
+
+Đừng so `COUNTED REQUEST` với `EMITTED ACTIVE` giữa chừng rồi kết luận lỗi. Một số là tổng đang đếm của yêu cầu mới, số kia thuộc mesh đang hiển thị. Khi `CURRENT MESH`, các revision đã khớp thì hai tổng mới phải bằng nhau.
+
+### 8. Dùng chính output buffer làm vertex buffer
+
+Không kéo mesh về CPU rồi upload trở lại. `MeshRenderer::draw` bind buffer GPU vừa được publish làm `GL_ARRAY_BUFFER`:
+
+```cpp title="include/sculpt_renderer.hpp — draw output GPU"
+for (const auto& chunk : chunks) {
+    if (!chunk.buffer || chunk.stats.vertices == 0)
+        continue;
+    gl_.BindBuffer(GL_ARRAY_BUFFER, chunk.buffer->id());
+    gl_.VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex), nullptr);
+    gl_.VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex), reinterpret_cast<void*>(16));
+    gl_.EnableVertexAttribArray(0);
+    gl_.EnableVertexAttribArray(1);
+    gl_.DrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(chunk.stats.vertices));
+}
+```
+
+Attribute 0 đọc ba float từ byte 0, attribute 1 đọc ba float từ byte 16, stride là 32 bytes. `reinterpret_cast<void*>(16)` là **byte offset vào buffer đang bind**, không phải địa chỉ RAM để CPU truy cập. Cấu hình attributes được lưu trong VAO; xem [Khronos — Vertex Specification](https://wikis.khronos.org/opengl/Vertex_Specification).
+
+Phần camera uniforms, lighting và wireframe có sẵn trong renderer của các bài CPU. Điều thay đổi là nguồn geometry: trước đây CPU upload `mesh.vertices`, bây giờ compute shader điền buffer đó. Mỗi chunk vẽ độc lập bằng `GL_TRIANGLES`, không dùng index buffer hoặc `glDrawElements`.
+
+## Ghép các phần lại
+
+Trong `runGpuSurfacePreview`, sau khi tạo context và gọi `gl.loadAll()`/preflight, tạo các đối tượng sống suốt vòng lặp:
+
+```cpp title="include/sculpt_gpu_surface_preview.hpp — các đối tượng của app"
+auto current = std::make_unique<GpuMeshBuilder>(gl, budget, options.settings, options.plane);
+MeshRenderer renderer(gl);
+Camera camera;
+SculptControls controls(gl, budget);
+```
+
+`SculptControls` được cấp sẵn cho capture, camera và đặt cọ: GPU picker lấy mẫu chính stored field theo bước hữu hạn, rồi chia đôi khoảng đổi dấu. Nó không coi giá trị field sau brush là khoảng cách SDF. Một stroke kéo trên mặt phẳng qua điểm bắt đầu, vuông góc hướng nhìn, như cách đã giải thích ở các bước CPU; không tự nhảy sang một mặt khác ở từng mouse event.
+
+Sau khi xử lý SDL events, tiến job và cập nhật controls:
+
+```cpp title="include/sculpt_gpu_surface_preview.hpp — mỗi vòng lặp"
+model.tick();
+controls.tick(model, camera, logicalWidth - panelWidth, logicalHeight);
+```
+
+`model` là `*current`. `tick` chỉ submit/poll một batch hữu hạn, không chờ đồng bộ cả volume trong một mouse event. Controls chỉ mở stroke khi mesh hiện tại khớp field; pointer/camera vẫn có thể hoạt động lúc job chưa xong.
+
+Sau clear, trong nhánh vẽ frame:
+
+```cpp title="include/sculpt_gpu_surface_preview.hpp — vẽ mesh đã publish"
+renderer.draw(model.active(), camera, 0, 0, sceneWidth, height, wireframe, normalView);
+```
+
+`sceneWidth` tính theo pixel drawable và trừ panel theo cùng tỉ lệ DPR. Camera ray dùng kích thước logical của viewport, không dùng cả chiều rộng cửa sổ chứa panel. Guides, cọ preview và UI được vẽ tiếp theo rồi mới swap. Đọc cả `runGpuSurfacePreview` khi ráp bài; không chỉ chép một lệnh draw vào cuối `main`.
+
+Viewer 08 không hiện slice, đổi resolution hoặc save/load/export: đó là các bước sau. Nó vẫn có R để reset sphere, Space để pause, C để cancel và Enter để retry/resume last-good, vì một job GPU đang chạy cần điều khiển tối thiểu an toàn. Focus loss hủy stroke và pause; Space chủ động tiếp tục.
+
+## Thử làm sai để hiểu đúng
+
+1. Chạy N=32, bật F11 rồi xoay bằng right drag. Tắt wireframe, bật F12 xem normal RGB. Chỉ đổi camera hoặc chế độ xem: field revision, mesh generation và ID của các mesh buffers không được đổi.
+2. Dùng left drag nặn một vùng trên sphere. Chờ `CURRENT MESH`, xoay để thấy độ phồng từ bên cạnh. Nhấn D, khoét một vùng rồi Z/Y. Một vùng sáng đổi màu chưa đủ: silhouette và field/mesh revision phải thay đổi phù hợp.
+3. Tăng radius bằng F2, strength bằng F3, depth bằng F4; Shift giảm, Ctrl chọn bước lớn. Tab tách riêng chế độ camera. Màu cọ add/subtract khác nhau; preview không được sửa field trước khi bắt đầu stroke.
+4. Ở N=128, một nét cọ nhỏ vẫn báo `LAST CHUNKS 512/512`. Đây là chi phí có chủ ý của Bài 08. Ghi lại để so với Bài 09; không tự đổi nhãn thành “incremental” cho nhanh.
+5. Thử lỗi **an toàn** trong bản sao làm bài: đặt `setMeshVertexLimit(3)` rồi yêu cầu remesh. Count phải từ chối trước allocation output và giữ mesh cũ có nhãn lỗi. Sau đó khôi phục limit và retry. Không thử bỏ bounds check hay barrier rồi mong nhìn thấy một lỗi đẹp; truy cập ngoài buffer hoặc đồng bộ sai có thể làm driver treo.
+
+F10 thu gọn panel, Home đưa camera về đầu; Z/Y chỉ dùng được khi field/mesh đang ổn định và không Pause. Escape bỏ stroke đang mở, Q thoát. Nếu bàn phím IME nuốt dấu ngoặc hoặc dấu cộng/trừ, dùng F2/F3/F4 thay thế.
+
+## Tự kiểm tra kết quả
+
+Chạy từng lệnh riêng; không mở nhiều bản verifier đồng thời:
+
+```powershell
+./build/Debug/project_44_checkpoint_8.exe --hidden --grid 32 --verify --seconds 20
+./build/Debug/project_44_checkpoint_8.exe --hidden --grid 32 --verify-normals --seconds 20
+./build/Debug/project_44_checkpoint_8.exe --hidden --grid 128 --verify-edits --seconds 20
+cmake --build build --config Release --target project_44_checkpoint_8 --parallel 1
+./build/Release/project_44_checkpoint_8.exe --hidden --grid 128 --verify --plane --seconds 20
+./build/Release/project_44_checkpoint_8.exe --hidden --grid 128 --verify-edits --seconds 20
+```
+
+`--verify` đối chiếu plane/sphere analytic, hướng normal, winding, packing và guard. Ở sphere N≤64, nó còn so từng cell/range/đỉnh với CPU tetra oracle và kiểm mặt kín. N=128 vẫn chạy extraction thật trên GPU; không có CPU extraction toàn workload này.
+
+`--verify-edits` là fixture riêng: sửa bằng cọ có expected falloff double độc lập, kiểm emitted count và normal, xác nhận full rebuild không reuse buffer cũ, thử camera không remesh, undo/redo field+mesh bit-exact, từ chối capacity trước allocation và recovery. Full-field/mesh readback trong **fixture** không nằm trên đường tương tác của app. Plane và edit fixture không chạy chung.
+
+`--verify-normals` kiểm riêng trường hợp gradient bằng 0: grid cố định N=32, spacing 0,125 biểu diễn chính xác bằng nhị phân, một góc nhỏ có các samples đổi dấu xen kẽ. Fixture upload dữ liệu biết trước, còn GPU tự count/scan/emit/normal; có 384 lượt giữ normal mặt trong 3.330 đỉnh, và mọi normal phải hữu hạn, độ dài gần 1. Nếu chỉ kiểm sphere rồi thấy fallback bằng 0, ta chưa thử được nhánh này. Không ghép fixture này với verifier khác hoặc capture.
+
+Bạn đạt mốc này khi:
+
+- N=128 báo 2.097.152 samples và 2.048.383 real cells. Sphere mặc định có 408.024 đỉnh, 136.008 triangles; đây là số của preset/algorithm này, không phải hằng số bắt mọi field phải có.
+- Ở trạng thái current, counted bằng emitted, field revision khớp mesh field; không có mismatch, invalid hoặc guard hỏng. Chunk rỗng không cấp output.
+- Normal hữu hạn, độ dài gần 1, hướng ra ngoài ở plane/sphere; fallback có bộ đếm riêng. F11 cho xem geometry, không dùng shading để che crack.
+- Một nét cọ thật thay cả field và hình 3D. Undo/redo khôi phục field và mesh, còn camera không đổi generation.
+- Job bị hủy hoặc quá capacity không thay mesh hợp lệ bằng output dang dở. Các kiểm GPU không thay cho việc thử chuột, keyboard capture, focus loss và resize trực tiếp.
+
+## Bài tập mở rộng
+
+Tự chọn một cell có count 6 trong fixture nhỏ. Ghi offset, sáu địa chỉ đỉnh và byte offset position/normal của từng đỉnh trước khi đọc output. Sau đó so với `readChunkLayout`/`readChunk` trong fixture, không thêm readback vào mỗi frame.
+
+Bài 09 sẽ dùng cùng field, topology và normal vừa kiểm để chỉ rebuild các chunk phụ thuộc nét cọ. Thử dự đoán: tại sao vùng cần làm lại phải rộng hơn đúng các samples đã bị brush ghi? Hãy nghĩ cả đến cell dùng chung đỉnh và các điểm mà gradient normal cần lấy mẫu.

@@ -35,6 +35,10 @@ class SliceInspector {
         return rectangle_;
     }
 
+    const std::optional<FieldProbe>& probe() const {
+        return probe_;
+    }
+
     bool pointerInside() const {
         return state_.enabled && rectangle_.contains(pointerX_, pointerY_);
     }
@@ -60,11 +64,14 @@ class SliceInspector {
         probe_.reset();
     }
 
+    // snippet:sculpt-slice-model-changed
     void modelChanged() {
         cancel();
         probe_.reset();
         dirtyProbe_ = true;
     }
+
+    // end-snippet:sculpt-slice-model-changed
 
     void layout(const GridSpec& grid, int sceneWidth, int sceneHeight) {
         if (samples_ != grid.samples) {
@@ -179,10 +186,11 @@ class SliceInspector {
         return pointerInside() && event.type == SDL_EVENT_MOUSE_MOTION;
     }
 
+    // snippet:sculpt-slice-update-cache
     void update(const GpuMeshBuilder& model) {
         if (!state_.enabled || !model.ready())
             return;
-        if (!dirtyProbe_ && probe_ && probe_->fieldRevision == model.document().revision())
+        if (!dirtyProbe_ && probe_ && probe_->fieldRevision == model.document().revision() && probe_->meshGeneration == model.activeGeneration())
             return;
         try {
             probe_ = probeSliceField(model, state_);
@@ -192,6 +200,8 @@ class SliceInspector {
             notice_ = error.what();
         }
     }
+
+    // end-snippet:sculpt-slice-update-cache
 
     void overlay(Overlay& overlay, const GpuMeshBuilder& model) const {
         if (!state_.enabled)
@@ -212,12 +222,12 @@ class SliceInspector {
             text << std::fixed << std::setprecision(3) << "WORLD " << probe_->worldPoint.x << ' ' << probe_->worldPoint.y << ' ' << probe_->worldPoint.z;
             overlay.text(r.x + 4, r.y + r.height + 25, text.str(), {0.9F, 0.88F, 0.65F}, 1.2F, r.width - 8);
             text.str("");
-            text << std::setprecision(5) << "F(P) " << probe_->value << " / FIELD " << probe_->fieldRevision;
+            text << std::setprecision(5) << "F(P) " << probe_->value << " / F" << probe_->fieldRevision << " M" << probe_->meshGeneration;
             overlay.text(r.x + 4, r.y + r.height + 42, text.str(), {0.9F, 0.88F, 0.65F}, 1.2F, r.width - 8);
         }
         std::string status = "UP/DOWN LAYER / HJKL PROBE";
         if (!model.ready())
-            status = "PROBE HELD / FIELD JOB PENDING";
+            status = "PROBE HELD / MESH NOT CURRENT";
         if (model.document().strokeOpen())
             status = "FIELD EDITING / MESH IS LAST-GOOD";
         if (!notice_.empty())

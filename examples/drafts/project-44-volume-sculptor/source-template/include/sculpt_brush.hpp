@@ -127,9 +127,14 @@ SampleBox applyBrush(ScalarGrid& grid, Brush brush);
 
 // end-snippet:sculpt-brush-edit
 
+// snippet:sculpt-dirty-chunks
 inline std::vector<std::uint32_t> dirtyChunks(const GridSpec& spec, const SampleBox& changed) {
+    spec.validate();
     if (changed.empty)
         return {};
+    for (int axis = 0; axis < 3; ++axis)
+        if (changed.low[axis] < 0 || changed.high[axis] >= spec.samples || changed.low[axis] > changed.high[axis])
+            throw std::invalid_argument("Dirty sample bounds must be ordered and inside the grid");
     constexpr int chunkCells = 16;
     const int chunksPerAxis = (spec.samples - 2) / chunkCells + 1;
     std::array<int, 3> first{}, last{};
@@ -145,6 +150,8 @@ inline std::vector<std::uint32_t> dirtyChunks(const GridSpec& spec, const Sample
                 result.push_back(static_cast<std::uint32_t>((z * chunksPerAxis + y) * chunksPerAxis + x));
     return result;
 }
+
+// end-snippet:sculpt-dirty-chunks
 
 // snippet:sculpt-stroke-sampler
 class StrokeSampler {
