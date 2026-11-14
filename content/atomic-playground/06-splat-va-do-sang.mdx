@@ -1,0 +1,249 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vẽ nhiều điểm mà không làm mất các vùng nút
+
+Dự kiến 100 phút: đọc 20 phút, viết 55 phút, thử và kiểm tra 25 phút.
+
+## Ta cần giải quyết điều gì?
+
+Checkpoint 5 có đủ một triệu mẫu thật. Nhưng vẽ mỗi mẫu thành một pixel trắng thường cho một đốm cháy sáng ở giữa và gần như không thấy gì ở ngoài. Tăng opacity tùy ý có thể che mất vùng nút mà ta vừa dành nhiều công để tạo đúng.
+
+Window, GL loader và camera là khung được cung cấp. Renderer ở các bài trước chỉ cho preview trực tiếp; mốc này thay các body resize/begin/finish và fragment splat bằng pipeline HDR/Gaussian, rồi mở controls palette/opacity/point size trong events. Giữ tên class/file có sẵn, không tạo một CloudRenderer thứ hai. Build `project_45_starter` sau mỗi bước; source diff chỉ đầy đủ target framebuffer, fields và nơi gọi cần thay.
+
+Bài này giữ nguyên cloud và chỉ thay cách hiển thị: điểm có kích thước theo chiều sâu, splat mềm, cộng vào HDR rồi tone map ra màn hình. Ta còn cần chú giải để người xem biết màu và brightness đang nói điều gì — và không nói điều gì.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một mẫu biểu diễn một vị trí. Vùng có nhiều mẫu hơn vốn đã dày theo phân bố. Nếu còn nhân mỗi điểm với density, ta nhấn mạnh vùng dày thêm một lần nữa. Chế độ ấy có thể giúp nhìn cấu trúc, nhưng không còn là “mọi mẫu góp cùng trọng lượng”.
+
+Splat là một đĩa nhỏ trên màn hình, sáng mạnh ở tâm và giảm dần ra mép. Nhiều splat cộng lại tạo cảm giác đám mây. Ta cộng vào texture float để chưa cắt mọi channel về 1 quá sớm; sau đó tone mapping nén dải sáng. Đây là cách vẽ, không phải phép giải truyền sáng qua vật chất.
+
+Trong Lab, giữ seed và N rồi đổi opacity, point size và palette. Chúng có làm vị trí mẫu thay đổi không? Tiếp theo bật phần nhấn mật độ và quan sát tại sao hình trông “đặc” hơn dù bộ mẫu không đổi.
+
+<InteractiveLab demo="atomic-playground" mode="splats" />
+
+Canvas không có exposure slider. Trong native, exposure đã là tham số của tone shader, nhưng chưa có nút/phím riêng; từ bài 10 có thể lưu/nạp nó qua config. Ở bài này dùng opacity/point size/palette để thử tương tác, và đọc exposure trong code để hiểu công thức.
+
+Depth ở đây đến từ vị trí 3D, phối cảnh, kích thước splat và chuyển động camera. Cloud cộng sáng không phải khối đặc có bề mặt che khuất; đừng bật depth write cho các splat trong suốt rồi tưởng rằng bạn đã có một volume renderer đúng.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Tách dữ liệu cloud khỏi ViewStyle
+
+Mở `include/atom_render.hpp`. `ViewStyle` chứa point size, opacity, exposure, palette và clip. Nó không chứa seed hay bảng CDF. Khi thay một thông số hiển thị, gửi ViewStyle mới vào renderer; không gọi lại sampler.
+
+Đầu tiên thay body `CloudRenderer::resize` của preview bằng bước cấp target float dưới đây. RGBA16F dùng 8 byte/pixel; các điểm sẽ cộng vào texture này trước khi được tone map.
+
+```cpp title="include/atom_render.hpp — cấp HDR target và dọn candidate lỗi"
+void resize(int width, int height) {
+    if (width == width_ && height == height_)
+        return;
+    if (width <= 0 || height <= 0 || width > 4096 || height > 2160)
+        throw std::invalid_argument("Drawable dimensions outside the finite target budget");
+    const auto bytes = static_cast<std::size_t>(width) * height * 8;
+    budget_.acquire(bytes);
+    GLuint texture{}, fbo{};
+    try {
+        gl_.GenTextures(1, &texture);
+        gl_.BindTexture(GL_TEXTURE_2D, texture);
+        gl_.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, nullptr);
+        gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        gl_.GenFramebuffers(1, &fbo);
+        gl_.BindFramebuffer(GL_FRAMEBUFFER, fbo);
+        gl_.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        if (!texture || !fbo || gl_.GetError() != GL_NO_ERROR || gl_.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            throw std::runtime_error("HDR framebuffer allocation failed");
+    } catch (...) {
+        if (texture)
+            gl_.DeleteTextures(1, &texture);
+        if (fbo)
+            gl_.DeleteFramebuffers(1, &fbo);
+        budget_.release(bytes);
+        gl_.BindFramebuffer(GL_FRAMEBUFFER, 0);
+        throw;
+    }
+    if (texture_)
+        gl_.DeleteTextures(1, &texture_);
+    if (fbo_)
+        gl_.DeleteFramebuffers(1, &fbo_);
+    if (bytes_)
+        budget_.release(bytes_);
+    texture_ = texture;
+    fbo_ = fbo;
+    bytes_ = bytes;
+    width_ = width;
+    height_ = height;
+}
+```
+
+Target mới được tạo và kiểm đủ trước khi xóa target cũ. Ở cấp resource, failure trả reservation và giữ trạng thái cũ; việc báo lỗi rồi còn tiếp tục nhận input thuộc trách nhiệm của caller, không phải chỉ nhờ một catch trong allocator. Kích thước và byte budget được kiểm trước, không resize vô hạn.
+
+Đầu mỗi frame, `begin` bind target này, làm sạch rồi bật cộng sáng:
+
+```cpp title="include/atom_render.hpp — chuẩn bị pass cloud"
+void begin(int width, int height) {
+    resize(width, height);
+    gl_.BindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    gl_.Viewport(0, 0, width, height);
+    gl_.ClearColor(0, 0, 0, 0);
+    gl_.Clear(GL_COLOR_BUFFER_BIT);
+    gl_.Disable(GL_DEPTH_TEST);
+    gl_.Enable(GL_PROGRAM_POINT_SIZE);
+    gl_.Enable(GL_BLEND);
+    gl_.BlendFunc(GL_ONE, GL_ONE);
+    gl_.BindVertexArray(vao_);
+    if (drawPending_) {
+        GLint available{};
+        gl_.GetQueryObjectiv(drawQuery_, GL_QUERY_RESULT_AVAILABLE, &available);
+        if (available) {
+            GLuint64 elapsed{};
+            gl_.GetQueryObjectui64v(drawQuery_, GL_QUERY_RESULT, &elapsed);
+            drawMs_ = static_cast<double>(elapsed) / 1000000.0;
+            ++drawSerial_;
+            drawPending_ = false;
+        }
+    }
+    measuring_ = !drawPending_;
+    if (measuring_)
+        gl_.BeginQuery(GL_TIME_ELAPSED, drawQuery_);
+}
+```
+
+`GL_ONE, GL_ONE` cộng các đóng góp không phụ thuộc thứ tự vẽ. Đây là lý do đường này không cần sort một triệu điểm trước mỗi frame. Đổi lại, nó không mô tả đúng hấp thụ/che khuất của một đám vật chất dày.
+
+Nếu target mới bị từ chối, ứng dụng không cố bind rồi vẽ như thể cấp phát đã thành công. Guard trong draw nằm trước vòng vẽ cloud:
+
+```cpp title="include/atom_app.hpp — chuyển sang UI lỗi khi target chưa dùng được"
+if (!beginRenderTarget()) {
+    drawTargetFailure();
+    return;
+}
+```
+
+`beginRenderTarget` và `drawTargetFailure` là phần recovery scaffold được cung cấp trong app; không cần chép thêm toàn Application để học HDR. Controller nhớ kích thước lỗi và số byte đang giữ để không cấp phát lại cùng một target ở mọi frame. Resize, thay đổi budget đang dùng hoặc Home cho phép thử lại; Home đồng thời reset góc nhìn.
+
+Lúc lỗi, **dữ liệu last-good vẫn ở GPU nhưng không có cloud hay ảnh cũ được present**. Ứng dụng vẽ nền/panel thông báo qua framebuffer mặc định, giữ controls hoạt động và báo submitted=0. Đây không phải một fallback giả vờ tiếp tục vẽ từ target mới. Sau khi target dùng được trở lại, cloud cũ có thể được vẽ mà không cần sinh lại.
+
+Muốn thử recovery có kiểm soát, tạm hạ giới hạn drawable width trong resize để kích thước ban đầu còn hợp lệ rồi resize rộng hơn ngưỡng. Đọc đơn vị pixel framebuffer, nhất là trên HiDPI. Ứng dụng phải báo lỗi, vẫn nhận input và khôi phục khi thu cửa sổ lại/Home; sau thí nghiệm trả giới hạn chuẩn. Không cố làm máy hết VRAM thật.
+
+### Bước 2 — Mềm hóa một điểm, không dịch chuyển vị trí
+
+Mở `shaders/cloud.frag`. `gl_PointCoord` chạy từ 0 tới 1 trên hình vuông của một point primitive. Đổi về khoảng −1 tới 1, loại góc ngoài đĩa rồi dùng một kernel mềm:
+
+```glsl title="shaders/cloud.frag — đóng góp của một splat"
+#version 430 core
+in vec3 pointColor;
+in float energy;
+uniform float opacity;
+layout(location=0) out vec4 color;
+void main() {
+    vec2 q=gl_PointCoord*2.0-1.0;
+    float radiusSquared=dot(q,q);
+    if(radiusSquared>1.0) discard;
+    float weight=exp(-3.0*radiusSquared)*opacity*energy;
+    color=vec4(pointColor*weight,weight);
+}
+```
+
+`opacity` quyết định đóng góp cơ bản; `energy` từ vertex shader có yếu tố hiển thị theo chiều sâu và tùy chọn density boost. Vì vậy ảnh không phải bản đồ tuyến tính của $\rho$. Density boost phải có nhãn rõ; phép đo ở bài 8 luôn đọc record, không đọc framebuffer.
+
+Vertex shader đặt kích thước lớn hơn khi điểm gần camera, có giới hạn để tránh một splat che cả viewport. Điểm sau camera hoặc quá gần near plane không được đưa ra hình bằng cách chia cho depth không hợp lệ.
+
+### Bước 3 — Tone map sau khi cộng xong
+
+Cuối pass cloud, renderer bind lại framebuffer màn hình, tắt blending và vẽ fullscreen triangle:
+
+```cpp title="include/atom_render.hpp — chuyển từ HDR sang màn hình"
+void finish(const ViewStyle& style) {
+    gl_.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    gl_.Viewport(0, 0, width_, height_);
+    gl_.Disable(GL_BLEND);
+    gl_.Disable(GL_DEPTH_TEST);
+    tone_->use();
+    gl_.ActiveTexture(GL_TEXTURE0);
+    gl_.BindTexture(GL_TEXTURE_2D, texture_);
+    gl_.Uniform1i(tone_->uniform("accumulation"), 0);
+    gl_.Uniform1f(tone_->uniform("exposure"), style.exposure);
+    gl_.BindVertexArray(vao_);
+    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    if (measuring_) {
+        gl_.EndQuery(GL_TIME_ELAPSED);
+        drawPending_ = true;
+    }
+}
+```
+
+Shader tone map đọc tổng đóng góp của các splat:
+
+```glsl title="shaders/tone.frag — nén độ sáng để quan sát"
+#version 430 core
+in vec2 uv;
+uniform sampler2D accumulation;
+uniform float exposure;
+out vec4 color;
+void main() {
+    vec3 radiance=texture(accumulation,uv).rgb;
+    vec3 mapped=vec3(1)-exp(-max(radiance,vec3(0))*exposure);
+    color=vec4(pow(mapped,vec3(1.0/2.2))+vec3(0.015,0.02,0.035),1);
+}
+```
+
+Biểu thức $1-\exp(-L\,e)$ với exposure e tăng brightness nhưng giữ giá trị trong miền hiển thị trước gamma. Nó là một transfer function được chọn cho sản phẩm này, không phải xác suất. Đổi exposure không nên làm chương trình công bố “electron đã đi vào lõi”.
+
+### Bước 4 — Mở controls mà không chạm sampler
+
+Trong `Application::command`, đây là phần mới giúp các phím và panel thay style. Đoạn này nối vào chuỗi if/else sẵn có:
+
+```cpp title="include/atom_events.hpp — các action chỉ đổi cách vẽ"
+} else if (action == Action::palette) {
+    config_.palette = (config_.palette + 1) % 3;
+} else if (action == Action::opacityLess) {
+    config_.opacity = std::max(0.0001F, config_.opacity / 1.25F);
+} else if (action == Action::opacityMore) {
+    config_.opacity = std::min(1.0F, config_.opacity * 1.25F);
+} else if (action == Action::sizeLess) {
+    config_.pointSize = std::max(0.5F, config_.pointSize - 0.25F);
+} else if (action == Action::sizeMore) {
+    config_.pointSize = std::min(12.0F, config_.pointSize + 0.25F);
+} else if (action == Action::boost) {
+    config_.densityBoost = !config_.densityBoost;
+}
+```
+
+F4 đổi palette, −/= giảm/tăng opacity, PageDown/PageUp đổi point size, B bật/tắt density boost. Không nhánh nào gọi `refresh` hay `requestPane`. Vòng vẽ lấy config qua `style` mỗi frame, nên phản hồi ngay mà giữ nguyên vị trí mẫu. Exposure vẫn là tham số shader/config, chưa có phím riêng.
+
+### Bước 5 — Viết chú giải đúng với cách vẽ
+
+Giữ các nhãn tách nhau: màu theo sign của biên độ, màu theo bán kính hoặc màu theo density; brightness do splat/opacity/exposure và tone mapping. Nếu bật density boost, báo rõ đang nhấn density thêm một lần. Không gắn thanh “0–100% xác suất” cho một palette chưa được chuẩn hóa như vậy.
+
+## Chạy checkpoint và đọc kết quả
+
+Chạy checkpoint 6. Dùng 2pz và 2s để kiểm vùng nút, rồi thử một dạng d/f để đọc chiều sâu. Xoay chậm ở một góc xiên và zoom vào; thùy phải là cấu trúc 3D, không phải các hình 2D luôn quay mặt về camera.
+
+Chờ cloud ready, ghi seed/accepted và theo dõi console trước/sau khi đổi cách vẽ. Counts không đổi và không xuất hiện một dòng CLOUD công bố cloud mới chỉ vì đổi style. Generation ID có trong source/debugger, không phải nhãn GENERATED trên panel. Chụp hai ảnh khác opacity để thấy cùng một cloud có thể tạo cảm giác mật độ rất khác nhau. Phép đo vùng native được thêm ở bài 8; checkpoint 6 chưa có số đếm ấy để kiểm.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — Làm cháy vùng trung tâm
+
+Tăng opacity bằng phím = tới mức vùng trung tâm gần như trắng. So với ảnh opacity thấp: vùng nút có “biến mất” không? Kiểm seed/accepted và không có log CLOUD mới để thấy cloud chưa đổi. Giảm bằng phím − về mức đọc rõ cấu trúc; không sửa sampler để bù một lỗi hiển thị.
+
+### Thí nghiệm 2 — Tô density thêm lần nữa
+
+Giữ dữ liệu, bật/tắt density boost. Nếu hình trông dồn vào vùng đậm hơn, giải thích bằng đóng góp splat thay vì bảo rằng phân bố vừa thay đổi. Sau đó đổi palette theo bán kính: vùng nút vẫn ở đúng chỗ.
+
+## Kiểm tra trước khi sang bài mới
+
+- Đổi point size, opacity, palette không tạo job lấy mẫu mới. Exposure là tham số shader/config, không có phím điều chỉnh riêng ở checkpoint 6.
+- HDR target và resize nằm trong budget; lỗi tạo target giữ dữ liệu cloud tốt, hiện UI lỗi với submitted=0 và có đường retry, không nhận ảnh cũ là kết quả mới.
+- Hai thùy và vùng nút vẫn đọc được ở một góc xiên; không chỉ có ảnh đẹp ở một góc cố định.
+- UI giải thích màu/brightness, ghi rõ density boost là biến đổi hiển thị.
+- Không suy ra xác suất từ màu pixel hoặc độ sáng sau tone map.
+- Reduced-motion không tự xoay camera; người dùng vẫn có thể kiểm từng trạng thái.
+
+## Thử đi thêm một bước
+
+Giữ N cố định, chọn vài cặp point size/opacity và so hình ở cùng camera. Cặp nào lộ quá nhiều “hạt rời”, cặp nào che vùng nút? Ghi lựa chọn mặc định dựa trên khả năng đọc hình, không chỉ độ rực rỡ.
+
+Tiếp theo, [ta đi vào cloud và kéo mặt cắt](/projects/atomic-playground/07-camera-va-mat-cat) để nhìn bên trong mà không thay phân bố.

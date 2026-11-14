@@ -1,0 +1,157 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đi vào cloud và kéo mặt cắt
+
+Dự kiến 100 phút: đọc 20 phút, viết 55 phút, thử và kiểm tra 25 phút.
+
+## Ta cần giải quyết điều gì?
+
+Một hình orbital nhìn từ xa có thể rất đẹp nhưng khó đọc cấu trúc bên trong. Ta muốn tiến sát thùy, đi qua vùng dày và cắt bỏ một nửa hình để nhìn vùng nút. Những thao tác ấy không được làm phân bố “chạy theo” camera.
+
+Tiếp tục sửa các file camera/controls/events/render của bản starter; `include/...` dưới đây vẫn là đường dẫn bên trong starter. Chạy `project_45_starter` để thử code mình sửa, dùng checkpoint 7 làm mốc đối chiếu input và nơi đặt uniforms.
+
+Checkpoint 6 đã có cloud, renderer và camera dùng từ khung ban đầu. Bài này đọc lại camera để phân biệt hệ tọa độ, rồi tự nối controls mặt cắt qua config/style tới shader. Không thêm công thức density, không dựng lại bảng và không sinh lại vị trí khi kéo chuột.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có ba thứ độc lập:
+
+- World position: vị trí đã lấy mẫu trong đơn vị a₀.
+- Camera: biến vị trí ấy thành hình chiếu để xem.
+- Clip plane: quy tắc chỉ ẩn một phía của mặt phẳng trong world space.
+
+Nếu mặt cắt theo trục z giữ các điểm z≤c, khi bạn quay camera, mặt cắt vẫn ở cùng một phía của orbital. Nó không trở thành một đường cắt dính vào màn hình.
+
+Trong Lab, kéo mặt cắt rồi xoay camera. Tiếp theo kéo camera qua vùng trung tâm. Hãy đoán trước số mẫu accepted có đổi không; rồi kiểm số đếm. Điểm bị ẩn có còn thuộc mẫu số của phép đo toàn cloud không?
+
+<InteractiveLab demo="atomic-playground" mode="clip" />
+
+Không chuẩn hóa phần còn thấy thành tổng xác suất 1. Ta đang nhìn ít hơn từ cùng bộ dữ liệu, không tạo ra một electron “chỉ sống” ở nửa không gian còn lại.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Chỉ sửa trạng thái camera
+
+Khung `include/atom_camera.hpp` đã có orbit/pan/zoom. Đọc phần thay đổi trạng thái sau để biết input đang tác động vào đâu:
+
+```cpp title="include/atom_camera.hpp — di chuyển góc nhìn"
+void orbit(float dx, float dy) {
+    yaw = std::remainder(yaw - dx * 0.006F, 6.28318530718F);
+    pitch = std::clamp(pitch + dy * 0.006F, -1.48F, 1.48F);
+}
+
+void pan(float dx, float dy) {
+    target = target + right() * (-dx * distance * 0.0012F) + up() * (dy * distance * 0.0012F);
+    target.x = std::clamp(target.x, panAnchor.x - 200.0F, panAnchor.x + 200.0F);
+    target.y = std::clamp(target.y, panAnchor.y - 200.0F, panAnchor.y + 200.0F);
+    target.z = std::clamp(target.z, panAnchor.z - 200.0F, panAnchor.z + 200.0F);
+}
+
+void zoom(float wheel) {
+    distance = std::clamp(distance * std::exp(-wheel * 0.12F), 0.1F, 500.0F);
+}
+```
+
+Orbit sửa yaw/pitch; pan dịch target theo hai trục camera; zoom thay distance theo hàm mũ. Một nấc wheel vì vậy thay theo tỷ lệ thay vì luôn cộng một khoảng cố định: dễ dùng cả khi ở xa lẫn rất gần.
+
+Giới hạn khoảng cách nhỏ cho phép camera đi sâu vào cloud; near-plane check ở shader giữ điểm sau camera không bị chia sai. Khoảng cách không âm không có nghĩa cloud là một mặt cầu đặc mà camera bị chặn ngoài bề mặt.
+
+### Bước 2 — Một drag có một chủ sở hữu
+
+Mở `include/atom_controls.hpp`, xem `PointerDrag`. Khi bắt đầu kéo, giữ button và vị trí trước; motion chỉ tính delta khi button đang được giữ. Kết thúc kéo hoặc mất focus phải gọi `release` để bỏ capture.
+
+Camera không nên nhảy khi bạn Alt-Tab rồi trở lại. Click vào panel không nên đồng thời bắt đầu orbit ở viewport. Tính input bằng logical window coordinates; kích thước framebuffer HiDPI chỉ dành cho viewport/projection. Không nhân delta chuột thêm DPR một lần nữa.
+
+### Bước 3 — Cắt trước khi chiếu, không xóa dữ liệu
+
+Mở `shaders/cloud.vert`. Sau khi lấy world position, shader quyết định visibility rồi mới tạo tọa độ clip:
+
+```glsl title="shaders/cloud.vert — camera và mặt cắt không sửa point record"
+vec3 relative=p-cameraEye;
+float depth=dot(relative,cameraForward);
+bool clipped=clipAxis>=0 && p[clipAxis]>clipOffset;
+if (depth<=0.02 || clipped) {
+    gl_Position=vec4(3,3,3,1); gl_PointSize=1; pointColor=vec3(0);energy=0; return;
+}
+gl_Position=vec4(dot(relative,cameraRight)/(aspect*tanHalfFov),dot(relative,cameraUp)/tanHalfFov,depth-0.04,depth);
+gl_PointSize=clamp(pointSize*referenceDistance/depth,1.0,14.0);
+```
+
+`p[clipAxis]` là world coordinate. `clipAxis<0` nghĩa là tắt mặt cắt. Nhánh loại điểm gửi nó ra ngoài viewport và cho đóng góp sáng bằng 0; SSBO không bị ghi lại. Đổi clip offset chỉ đổi uniform.
+
+Depth dùng để chiếu và điều chỉnh kích thước điểm; nó không phải density. Đừng lấy depth làm bán kính tới hạt nhân: khi pan/orbit, hai đại lượng ấy thay đổi khác nhau.
+
+### Bước 4 — Nối trạng thái clip vào renderer
+
+Sửa config trong input chưa đủ. Hàm `style` ở bài trước chưa đưa clip sang pass vẽ; thay body bằng bản sau trong `Application`:
+
+```cpp title="include/atom_app.hpp — chuyển config clip thành ViewStyle"
+ViewStyle style() const {
+    ViewStyle result;
+    result.palette = config_.palette;
+    result.pointSize = config_.pointSize;
+    result.opacity = config_.opacity;
+    result.exposure = config_.exposure;
+    result.densityBoost = config_.densityBoost;
+    if (config_.clipEnabled)
+        result.clipAxis = config_.clipAxis;
+    result.clipOffset = config_.clipOffset;
+    return result;
+}
+```
+
+`draw` gọi `style` mỗi frame rồi gửi kết quả cho `CloudRenderer::draw`. Renderer đặt uniforms clip từ ViewStyle. Đây là đường nối đầy đủ: action → config → style → shader. Nếu bạn chỉ sửa nhánh action mà bỏ hàm này, phím vẫn được nhận nhưng hình không cắt.
+
+### Bước 5 — Phân loại action trước khi gọi sampler
+
+Trong chuỗi `Application::command` ở `include/atom_events.hpp`, nhánh clip chỉ sửa style và đánh dấu cần đo lại. Đoạn sau nối tiếp các nhánh action khác trong hàm:
+
+```cpp title="include/atom_events.hpp — nhánh clip không gọi requestPane"
+} else if (action == Action::clip) {
+    config_.clipEnabled = !config_.clipEnabled;
+    ++probeRevision_;
+} else if (action == Action::axis) {
+    config_.clipAxis = (config_.clipAxis + 1) % 3;
+    ++probeRevision_;
+} else if (action == Action::clipLess || action == Action::clipMore) {
+    float direction = -1;
+    if (action == Action::clipMore)
+        direction = 1;
+    config_.clipOffset = std::clamp(config_.clipOffset + direction * sampling.radius / 32, -128.0F, 128.0F);
+    ++probeRevision_;
+```
+
+`probeRevision_` làm phép đo visible/region được cập nhật; nó không phải generation của bộ mẫu. Phân biệt hai revision giúp mặt cắt không vô tình dựng lại cloud.
+
+Các action preset/seed/count thay cấu hình lấy mẫu. Các action camera/clip/palette chỉ đổi cách xem hoặc yêu cầu đo lại, không gọi `CloudPane::request`. Giữ sự phân loại này ở lớp ứng dụng giúp bạn kiểm bằng số lần generation tăng, thay vì chỉ đoán qua độ mượt.
+
+## Chạy checkpoint và đọc kết quả
+
+Chạy checkpoint 7. Kéo trái để orbit, kéo phải/giữa để pan, wheel để zoom; Home reset camera. Phím mũi tên orbit, Shift+mũi tên pan, F8/F9 zoom vào/ra. F5 bật/tắt clip, X đổi trục, hai phím ngoặc vuông dịch mặt cắt. Native dùng phím để dịch mặt cắt, không có tay nắm kéo mặt phẳng trong viewport; Lab có thanh điều khiển riêng.
+
+Chờ cloud ready rồi ghi seed/accepted trước khi thao tác. Xoay, zoom, pan, dịch clip nhiều lần: counts giữ nguyên và không có log CLOUD công bố cloud mới. Generation ID có thể đọc trong debugger, không đồng nghĩa GENERATED là số record. Từ checkpoint 8 ta mới thêm phép đếm visible sau clip; ở bài này kiểm bằng nhãn cloud, counters hiện có và hình quan sát.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — Tạo mặt cắt dính vào camera
+
+Trong bản thử, thay điều kiện world coordinate bằng depth camera. Khi orbit, phần bị cắt trượt theo góc nhìn thay vì giữ nguyên trong orbital. Ghi điểm khác biệt rồi khôi phục phép cắt world space.
+
+### Thí nghiệm 2 — Mất focus giữa lúc kéo
+
+Bắt đầu drag, di chuột khỏi cửa sổ, đổi focus rồi quay lại. Không được tiếp tục kéo khi không giữ button. Thử lại ở cửa sổ đã resize và trên màn HiDPI; click panel vẫn phải trúng đúng vùng, không có orbit ngoài ý muốn.
+
+## Kiểm tra trước khi sang bài mới
+
+- Orbit, pan, zoom vào trong cloud hoạt động; reset camera đưa về góc nhìn dễ quan sát.
+- Capture được giải phóng khi mouse-up/mất focus; không có camera jump do delta cũ.
+- Mặt cắt giữ nguyên trong world space khi orbit; có thể đổi trục và offset.
+- Chỉ đổi cách xem không dựng bảng/sinh vị trí mới; seed/accepted không đổi và không có log công bố cloud mới.
+- accepted vẫn là toàn cloud; bạn dự đoán được vì sao phép đếm visible ở bài 8 sẽ đổi mà mẫu số xác suất không đổi.
+- Controls dùng được bằng bàn phím; reduced-motion không tự thêm chuyển động.
+
+## Thử đi thêm một bước
+
+Chọn một điểm world space và đặt mặt cắt đi qua tọa độ của nó. Đổi camera nhiều lần rồi kiểm quy tắc giữ/ẩn điểm ấy. Bài kiểm nhỏ này bắt nhầm hệ tọa độ tốt hơn một ảnh đẹp.
+
+Tiếp theo, [ta đo vùng và vẽ histogram](/projects/atomic-playground/08-do-vung-va-histogram), để những câu hỏi “đậm hơn”, “rỗng hơn” có số liệu đi kèm.

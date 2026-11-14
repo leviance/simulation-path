@@ -134,7 +134,11 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
   },
   "45": {
     previousTitle: "Molecular Lab GPU: tăng từ 100.000 tới mục tiêu 5 triệu hạt",
+    previousSlug: "molecular-lab-gpu",
     previousPart: previousMolecularPart,
+    replacement: {
+      slug: "atomic-playground",
+    },
     summary:
       "Khám phá đám mây orbital bằng một triệu mẫu điểm: đổi orbital, cắt lớp và đo những vùng dày/thưa trong không gian 3D.",
     outcome:

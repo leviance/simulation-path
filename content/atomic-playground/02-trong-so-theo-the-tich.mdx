@@ -1,0 +1,156 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mỗi vùng không gian cần bao nhiêu trọng số?
+
+Dự kiến 100 phút: đọc 25 phút, viết 55 phút, thử và kiểm tra 20 phút.
+
+## Ta cần giải quyết điều gì?
+
+Checkpoint 1 hỏi field trên một lưới đều để ta có hình ngay. Bây giờ ta muốn bỏ lưới ấy: vùng có xác suất lớn cần nhận nhiều mẫu hơn, vùng nút nhận ít hoặc không nhận mẫu. Muốn vậy, trước tiên phải tính được **khối xác suất** của từng vùng, không chỉ đọc mật độ ở một điểm.
+
+Bạn tiếp tục sửa `starter/include/atom_sampler.hpp` và chỗ gọi trong `starter/include/atom_app.hpp`, rồi build lại `project_45_starter`. Checkpoint 2 là đáp án đối chiếu, không thay bản tự làm của bạn.
+
+Bài này chưa sinh cloud ngẫu nhiên. Ta thêm hai bảng nhỏ vào chương trình đang chạy: một bảng bán kính và một bảng hướng. Cuối bài, bạn có thể đọc tổng trọng số, đầu mút CDF, độ phân giải và phần đuôi bị bỏ ngoài Rmax. Checkpoint 2 vẫn giữ preview để bạn nhìn lại orbital đang chọn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy tưởng tượng hai lớp vỏ cùng dày 0,1: một lớp gần r=1, một lớp gần r=10. Lớp ngoài có diện tích lớn hơn nhiều. Dù mật độ tại hai lớp bằng nhau, chúng không chứa cùng xác suất. Đó là lý do không thể dùng riêng $R(r)^2$ làm trọng số bán kính.
+
+Với $\mu=\cos\theta$, ta viết:
+
+$$
+dV=r^2\,dr\,d\mu\,d\phi,\qquad
+\rho=R(r)^2Y(\mu,\phi)^2.
+$$
+
+Do field được cung cấp tách được thành phần bán kính và góc, ta xây hai bảng: $w_r=r^2R^2\,\Delta r$ và $w_a=Y^2\,\Delta\mu\,\Delta\phi$. Không cần một khối 3D khổng lồ. Theo hướng này, $\mu$ chạy đều từ −1 tới 1, còn $\phi$ chạy từ 0 tới $2\pi$; ta đã đưa phần tử diện tích mặt cầu vào biến $\mu$.
+
+Trong Lab, so các lớp vỏ bán kính bằng nhau. Dự đoán xem lỗi “chọn đều r” sẽ dồn mẫu về phía nào. Sau đó thử đổi độ phân giải bảng: đường ranh giữa lỗi lấy mẫu và lỗi xấp xỉ nằm ở đâu?
+
+<InteractiveLab demo="atomic-playground" mode="measure" />
+
+Lab dùng ít mẫu trên CPU và có chế độ sai cố ý. Nó không thay cho việc đọc mass/CDF trong ứng dụng. Ta chưa yêu cầu bạn tự suy ra các hàm orbital; chỉ dùng đúng field đã có.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Dựng trọng số tại tâm ô
+
+Mở `include/atom_sampler.hpp`. `SamplingConfig` giữ orbital, seed, count, số ô và radius. `SamplingTables` giữ cấu hình cùng hai CDF; giữ cấu hình ở đây giúp không gắn nhầm bảng của một orbital cho orbital khác.
+
+Đây là phần thêm chính của checkpoint 2:
+
+```cpp title="include/atom_sampler.hpp — dựng bảng bán kính và góc"
+inline SamplingTables buildTables(SamplingConfig config) {
+    config.validate();
+    SamplingTables tables;
+    tables.config = config;
+    const double dr = static_cast<double>(config.radius) / config.radialBins;
+    const double dmu = 2.0 / config.muBins, dphi = 2 * pi / config.phiBins;
+    std::vector<double> radial(config.radialBins), angular(checkedProduct(config.muBins, config.phiBins));
+    for (std::uint32_t bin = 0; bin < config.radialBins; ++bin) {
+        const double r = (bin + 0.5) * dr;
+        const double amplitude = radialAmplitude(config.orbital, r);
+        radial[bin] = r * r * amplitude * amplitude * dr;
+    }
+    for (std::uint32_t muBin = 0; muBin < config.muBins; ++muBin) {
+        const double mu = -1 + (muBin + 0.5) * dmu;
+        const double sine = std::sqrt(std::max(0.0, 1 - mu * mu));
+        for (std::uint32_t phiBin = 0; phiBin < config.phiBins; ++phiBin) {
+            const double phi = (phiBin + 0.5) * dphi;
+            const double amplitude = angularAmplitude(config.orbital, sine * std::cos(phi), sine * std::sin(phi), mu);
+            angular[muBin * config.phiBins + phiBin] = amplitude * amplitude * dmu * dphi;
+        }
+    }
+    tables.radialMass = normalizedCdf(radial, tables.radialCdf, tables.radialRoundingError);
+    tables.angularMass = normalizedCdf(angular, tables.angularCdf, tables.angularRoundingError);
+    if (config.orbital != Orbital::uniformVolume && config.orbital != Orbital::affineMu)
+        tables.tailMass = radialTailExact(config.orbital, config.radius);
+    return tables;
+}
+```
+
+Vòng lặp đầu hỏi phần bán kính ở tâm mỗi ô. Thừa số `r * r` là phần bạn không được bỏ. Vòng lặp thứ hai trải các hướng bằng $\mu,\phi$, đổi về direction cosine rồi hỏi hàm góc. Index `muBin * phiBins + phiBin` giữ bảng góc thành một mảng một chiều.
+
+Tâm ô là một phép xấp xỉ midpoint. Ta không nói trọng số này chính xác cho cả ô; ô nhỏ hơn thường giảm sai lệch, nhưng tốn thêm bộ nhớ và thời gian dựng bảng. Cấu hình mặc định 2048 ô bán kính và 64×128 ô góc là một lựa chọn hữu hạn để kiểm, không phải hằng số vật lý.
+
+### Bước 2 — Chuẩn hóa có kiểm tra
+
+`buildTables` gọi cùng một hàm cho hai tập trọng số. Starter mới chỉ có stub normalizedCdf ném lỗi, chưa có phép chuẩn hóa chạy được. Thay body stub bằng phần cài đặt dưới đây và giữ nguyên chữ ký; không thêm một định nghĩa cùng tên ở cuối file:
+
+```cpp title="include/atom_sampler.hpp — cộng khối lượng rồi chuẩn hóa"
+inline double normalizedCdf(std::span<const double> weights, std::vector<float>& cdf, double& roundingError) {
+    double total = 0;
+    for (const double weight : weights) {
+        if (!std::isfinite(weight) || weight < 0)
+            throw std::invalid_argument("CDF weights must be finite and nonnegative");
+        total += weight;
+    }
+    if (!std::isfinite(total) || total <= 0)
+        throw std::invalid_argument("CDF needs a positive finite mass");
+    cdf.assign(weights.size() + 1, 0);
+    double prefix = 0;
+    roundingError = 0;
+    for (std::size_t index = 0; index < weights.size(); ++index) {
+        prefix += weights[index];
+        const double probability = std::clamp(prefix / total, 0.0, 1.0);
+        cdf[index + 1] = static_cast<float>(probability);
+        roundingError = std::max(roundingError, std::abs(cdf[index + 1] - probability));
+    }
+    cdf.back() = 1;
+    return total;
+}
+```
+
+Ta cộng bằng `double` để giảm sai số tích lũy; CDF cuối cùng dùng `float` vì GPU sẽ đọc đúng định dạng đó. `roundingError` ghi chênh lệch khi đổi sang float, không phải sai số tổng của toàn sampler.
+
+CDF có thêm một phần tử đầu bằng 0. Mỗi ô nằm giữa hai phần tử CDF; phần tử cuối được đặt đúng 1. Đừng “sửa” trọng số âm hoặc NaN bằng cách tự gán 0: field hoặc cấu hình sai cần được báo lỗi. Tổng bằng 0 cũng không thể chuẩn hóa.
+
+### Bước 3 — Gọi dựng bảng khi cấu hình thay đổi
+
+Trong `Application::refresh`, nhánh checkpoint 2 gọi hàm vừa viết và giữ kết quả để hiển thị:
+
+```cpp title="include/atom_app.hpp — nhánh chuẩn bị bảng của refresh"
+const auto started = std::chrono::steady_clock::now();
+previewTables_ = buildTables(config_.primary);
+previewTableMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+```
+
+Đo CPU time quanh đúng việc dựng bảng. `previewTables_` thuộc trạng thái ứng dụng, không phải biến cục bộ biến mất sau hàm. Các action đổi preset/cấu hình gọi `refresh`; vòng vẽ chỉ đọc kết quả ấy.
+
+### Bước 4 — Tách phần đuôi khỏi lỗi bảng
+
+`radialMass` là tổng midpoint trên miền hữu hạn. `tailMass` lại được tính từ công thức CDF bán kính độc lập: $1-F(R_{\max})$. Hai số này trả lời hai câu hỏi khác nhau.
+
+Cloud ta sắp tạo được chuẩn hóa **trong** miền r≤Rmax. Đó là phân bố có điều kiện trên phần giữ lại; không được nói phần đuôi đã biến mất khỏi mô hình. Với 4f, Rmax cần lớn hơn 1s; ép mọi preset vào cùng một hộp nhỏ chỉ để vừa màn hình có thể cắt mất phần đáng kể của phân bố.
+
+Trong ứng dụng, chỉ dựng bảng khi cấu hình field/độ phân giải/miền thay đổi. Xoay camera hay đổi exposure không phải lý do để gọi `buildTables` trong mỗi frame.
+
+## Chạy checkpoint và đọc kết quả
+
+Chạy checkpoint 2 theo README. Với một preset, ghi radius, số ô, `radialMass`, `angularMass` và tail. Với orbital vật lý, mass góc phải gần 1; mass bán kính gần phần giữ lại của field, không buộc bằng 1 trước chuẩn hóa.
+
+Xem CDF đầu bằng 0, cuối bằng 1 và không giảm. Một đoạn phẳng có thể hợp lệ: đó là ô không có trọng số hoặc khối lượng nhỏ tới mức float không phân biệt được. Bài sau sẽ dùng `upper_bound` để không chọn một đoạn rỗng.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — Bỏ thừa số r² rồi so bằng số
+
+Trong một bản thử riêng, đổi trọng số bán kính thành `amplitude * amplitude * dr`. So bảng với CDF tham chiếu của cùng preset. Kỳ vọng: phân bố dồn về gần gốc hơn; chỉ nhìn thùy còn giống không đủ phát hiện. Khôi phục r² sau khi ghi kết quả.
+
+### Thí nghiệm 2 — Tách tăng Rmax khỏi tăng số ô
+
+Giữ 2048 ô rồi tăng Rmax: tail giảm nhưng mỗi ô rộng hơn. Sau đó tăng số ô tương ứng để giữ $\Delta r$ gần như cũ. Ghi cả tail và chênh lệch mass. Bài học là “miền lớn hơn” và “bảng mịn hơn” không phải cùng một thao tác.
+
+## Kiểm tra trước khi sang bài mới
+
+- Bảng chỉ được dựng lại khi đổi cấu hình lấy mẫu, không chạy lại vì camera.
+- Mọi trọng số hữu hạn, không âm; tổng 0/NaN bị từ chối có thông báo.
+- CDF dài số ô+1, đầu 0, cuối 1, không giảm; không coi đoạn phẳng là lỗi tự động.
+- Bạn giải thích được r² trong bảng bán kính và vì sao chọn đều $\theta$ khác chọn đều $\mu$.
+- Màn hình/debugger tách radius, độ phân giải, mass, tail và rounding; không gọi rounding là toàn bộ sai số.
+
+## Thử đi thêm một bước
+
+Với test field đều theo thể tích trong quả cầu, xác suất bên trong bán kính R/2 phải là 1/8. Dự đoán bằng thể tích trước rồi kiểm bảng. Không dùng orbital hay bảng CDF của chính sampler làm “đáp án” cho phép kiểm này.
+
+Đọc lại [trọng số theo thể tích](/glossary#atom-volume-measure) nếu còn lẫn mật độ với khối xác suất. Khi đã có bảng, [ta dùng seed và CDF để tạo từng vị trí](/projects/atomic-playground/03-cdf-va-seed).

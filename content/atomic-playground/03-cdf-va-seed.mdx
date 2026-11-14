@@ -1,0 +1,177 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ một số ngẫu nhiên tới một vị trí có trọng số
+
+Dự kiến 110 phút: đọc 25 phút, viết 60 phút, thử và kiểm tra 25 phút.
+
+## Ta cần giải quyết điều gì?
+
+Checkpoint 2 đã có bảng cho biết mỗi ô chiếm bao nhiêu khối xác suất. Ta chưa có một vị trí ngẫu nhiên nào. Trong bài này, bạn nối ba việc: lấy số ngẫu nhiên, chọn ô theo CDF và đặt một điểm bên trong ô.
+
+Tiếp tục trên bản starter: thêm các hàm trong `include/atom_sampler.hpp`, thay phần chuẩn bị trong `Application::refresh`, rồi build `project_45_starter`. Dùng checkpoint 3 và phần source/diff để kiểm đủ các khối thay đổi.
+
+Ta làm trước trên CPU với tối đa 16.384 mẫu để dễ dừng debugger và kiểm từng ID. Đây là bản tham chiếu nhỏ, **không** phải cách sinh một triệu vị trí của sản phẩm cuối. Khi đã hiểu đường đi của một mẫu, ta mới chuyển đúng phép tính ấy sang GPU.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tưởng tượng CDF như một thước dài 1 chia thành các đoạn: đoạn càng dài càng dễ bị một số u ngẫu nhiên rơi vào. Ta tìm đoạn chứa u, rồi dùng số ngẫu nhiên khác để đặt vị trí trong ô đã chọn.
+
+Một vị trí cần năm số: chọn ô bán kính, dịch trong ô bán kính, chọn ô góc, dịch theo μ và dịch theo φ. Không dùng lại một số cho tất cả các việc; như vậy bạn đang buộc các tọa độ phải liên hệ với nhau theo một cách không thuộc field.
+
+Trong Lab, giữ cùng seed rồi Reset. Các điểm có trở lại đúng chỗ không? Bây giờ đổi seed: hình tổng thể nên giống, nhưng từng vị trí phải khác. Sau đó tăng N và so độ dao động của histogram.
+
+<InteractiveLab demo="atomic-playground" mode="cdf" />
+
+Chọn một sample ID trong phần trace để lần theo các số RNG, bin CDF rồi r/μ/φ và x/y/z; đừng chỉ nhìn cloud. Jitter trong ô giúp tránh lưới tâm ô, nhưng bảng vẫn là xấp xỉ hữu hạn. Mỗi seed là một bộ mẫu khác nhau từ cùng mô hình, không phải một loại nguyên tử mới.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Để mỗi ID sở hữu các số ngẫu nhiên của nó
+
+Mở `include/atom_sampler.hpp`. Ở mốc trước, mix32, randomOpen và invertCdf mới là các stub ném lỗi. Bây giờ bạn tự cài đặt chúng: thay body từng stub, giữ chữ ký và không thêm định nghĩa trùng. Ta dùng phép trộn số nguyên cụ thể dưới đây rồi nối seed/ID/dimension vào nó; không yêu cầu bạn tự phát minh một thuật toán RNG mới:
+
+```cpp title="include/atom_sampler.hpp — số ngẫu nhiên tái lập theo ID"
+inline std::uint32_t mix32(std::uint32_t value) {
+    value ^= value >> 16;
+    value *= 0x7feb352dU;
+    value ^= value >> 15;
+    value *= 0x846ca68bU;
+    value ^= value >> 16;
+    return value;
+}
+
+inline float randomOpen(std::uint32_t index, std::uint32_t seed, std::uint32_t dimension) {
+    const auto input = seed ^ mix32(index + 0x9e3779b9U) ^ (dimension * 0x85ebca6bU);
+    return (static_cast<float>(mix32(input) >> 9) + 0.5F) / 8388608.0F;
+}
+```
+
+Ở đây không có một “con trỏ RNG hiện tại” phải tiến thêm sau mỗi frame. Vì vậy xử lý ID 0–999 trong một batch hay chia thành mười batch đều cho cùng vị trí. Tính chất ấy sẽ quan trọng khi Pause, Step và Cancel job GPU.
+
+Ta lấy 23 bit cao rồi cộng 0,5 trước khi chia. Kết quả float nằm trong khoảng mở (0,1), không có đúng 0 hoặc 1. Đây là lựa chọn hữu hạn để đồng bộ CPU/GPU; không phải một bộ RNG mật mã, cũng không phải lời hứa mọi loại kiểm thống kê đều đạt.
+
+### Bước 2 — Chọn đúng đoạn CDF, kể cả khi có đoạn phẳng
+
+Tiếp theo thay body stub invertCdf. Hàm tìm phần tử đầu tiên lớn hơn u; ô được chọn nằm ngay trước phần tử đó:
+
+```cpp title="include/atom_sampler.hpp — tìm ô có khối lượng"
+inline std::uint32_t invertCdf(std::span<const float> cdf, float probability) {
+    if (cdf.size() < 2 || cdf.front() != 0 || cdf.back() != 1 || !std::isfinite(probability) || probability <= 0 || probability >= 1)
+        throw std::invalid_argument("CDF inversion requires an open unit variate and endpoint masses");
+    const auto found = std::upper_bound(cdf.begin(), cdf.end(), probability);
+    const auto bin = static_cast<std::size_t>(found - cdf.begin() - 1);
+    if (bin + 1 >= cdf.size() || !(cdf[bin + 1] > cdf[bin]))
+        throw std::runtime_error("CDF inversion selected an empty or out-of-bounds bin");
+    return static_cast<std::uint32_t>(bin);
+}
+```
+
+Dùng `upper_bound` thay vì tự bỏ qua một vài bin đầu. Một vùng nút hoặc CDF float có thể tạo nhiều giá trị lặp. Khi u trùng một giá trị, ta cần đi qua cả đoạn phẳng để không chọn ô có khối lượng bằng 0. Điều kiện sau tìm kiếm là lớp kiểm cuối, không phải chỗ để bịa ra một bin thay thế.
+
+### Bước 3 — Đổi bin thành vị trí 3D
+
+Dùng bảng đã giữ cấu hình của bài trước. Dưới đây là toàn bộ đường đi của một mẫu CPU:
+
+```cpp title="include/atom_sampler.hpp — tạo một PointRecord trên CPU"
+inline PointRecord sampleCpu(const SamplingTables& tables, std::uint32_t index, SamplingMode mode = SamplingMode::weighted) {
+    const auto& config = tables.config;
+    if (index >= config.count || static_cast<std::uint32_t>(mode) > 2)
+        throw std::invalid_argument("Reference sample index or sandbox mode is invalid");
+    const auto radialBin = invertCdf(tables.radialCdf, randomOpen(index, config.seed, 0));
+    const auto angularBin = invertCdf(tables.angularCdf, randomOpen(index, config.seed, 2));
+    float r = (radialBin + randomOpen(index, config.seed, 1)) * (config.radius / config.radialBins);
+    float mu = -1 + 2 * (angularBin / config.phiBins + randomOpen(index, config.seed, 3)) / config.muBins;
+    float phi = static_cast<float>(2 * pi) * (angularBin % config.phiBins + randomOpen(index, config.seed, 4)) / config.phiBins;
+    if (mode == SamplingMode::uniformRadius)
+        r = config.radius * randomOpen(index, config.seed, 0);
+    if (mode == SamplingMode::uniformAngle) {
+        mu = std::cos(static_cast<float>(pi) * randomOpen(index, config.seed, 3));
+        phi = static_cast<float>(2 * pi) * randomOpen(index, config.seed, 4);
+    }
+    const float sine = std::sqrt(std::max(0.0F, 1 - mu * mu));
+    const Vec3 point{r * sine * std::cos(phi), r * sine * std::sin(phi), r * mu};
+    const auto field = evaluateDensity(config.orbital, point);
+    return {{point.x, point.y, point.z, static_cast<float>(field.density)}, {static_cast<float>(field.sign), 0, 0, 0}};
+}
+```
+
+`angularBin / phiBins` lấy hàng μ; phép chia nguyên là có chủ đích. `angularBin % phiBins` lấy cột φ. Hai số ngẫu nhiên riêng đặt điểm trong ô góc đã chọn. Cuối cùng, từ r, μ, φ ta tính x/y/z và đọc thêm density/sign để renderer dùng.
+
+Hai nhánh `uniformRadius` và `uniformAngle` **cố ý sai đối với orbital**. Chúng giúp bạn nhìn thấy lỗi chọn tọa độ đều. Không đổi nhãn thành một preset vật lý; sau thí nghiệm phải trở về `weighted`.
+
+### Bước 4 — Nối vào bước chuẩn bị, không vào mỗi frame
+
+Ngay sau nhánh dựng bảng trong `Application::refresh`, checkpoint 3 thêm đoạn sau:
+
+```cpp title="include/atom_app.hpp — dựng CPU reference nhỏ một lần"
+config_.primary.count = std::min<std::uint32_t>(config_.primary.count, 16384);
+std::vector<PointRecord> points;
+points.reserve(config_.primary.count);
+for (std::uint32_t index = 0; index < config_.primary.count; ++index)
+    points.push_back(sampleCpu(*previewTables_, index, config_.mode));
+cpuPoints_ = std::make_unique<Buffer>(gl_, budget_, points.size() * sizeof(PointRecord), points.data());
+cpuCount_ = static_cast<std::uint32_t>(points.size());
+```
+
+`points` là mảng tạm CPU; `cpuPoints_` giữ buffer để renderer đọc qua nhiều frame. `cpuCount_` là số record thật. Bản này dùng CPU upload có chủ đích để đối chiếu và giới hạn 16.384; từ checkpoint 4 ta thay đường sinh vị trí, không gọi vòng lặp này cho triệu mẫu.
+
+Checkpoint 3 dựng bảng một lần cho cấu hình hiện tại rồi gọi `sampleCpu` cho các ID từ 0 tới N−1. Mảng nhỏ ấy được đưa cho renderer như một CPU reference. Tải lại một cloud CPU nhỏ ở đây là công cụ học; không được kéo cách đó sang mốc triệu mẫu ở bài 5.
+
+Giữ riêng ba nơi: `buildTables` thay khi cấu hình thay; vòng lặp tạo mẫu thay khi seed/N/field thay; vòng vẽ chạy mỗi frame. Đổi camera không gọi lại hai nơi đầu. Khi đối chiếu với checkpoint, hãy tìm đúng nơi gọi thay vì chỉ chép thêm các định nghĩa hàm.
+
+### Bước 5 — Nối sandbox vào input
+
+Trong `Application::command` ở `include/atom_events.hpp`, phím M đi qua cùng chuỗi action với các nút khác. Thêm nhánh sau vào chuỗi if/else đã có, không tạo một hàm command thứ hai:
+
+```cpp title="include/atom_events.hpp — nhánh đổi sampler trong command"
+} else if (action == Action::mode) {
+    const auto next = (static_cast<std::uint32_t>(config_.mode) + 1) % 3;
+    config_.mode = static_cast<SamplingMode>(next);
+    if (config_.mode != SamplingMode::weighted) {
+        config_.primary.count = std::min<std::uint32_t>(config_.primary.count, 16384);
+        config_.secondary.count = std::min<std::uint32_t>(config_.secondary.count, 16384);
+    }
+    refresh();
+}
+```
+
+Thay `config_.mode` thôi chưa thay bộ mẫu đang thấy. `refresh` gọi lại đường CPU reference với mode mới; count của sandbox được giới hạn hữu hạn. Sau khi thử lỗi, trở về weighted trước khi đối chiếu phân bố đúng.
+
+## Chạy checkpoint và đọc kết quả
+
+Chạy checkpoint 3 theo README. Kiểm ID đầu, một ID ở giữa và ID cuối; mỗi vị trí hữu hạn và nằm trong Rmax. Reset với cùng cấu hình phải đưa cả ba trở về đúng chỗ.
+
+Histogram trong Canvas CDF là phép quan sát nhanh; native checkpoint 3 chưa có panel probe/histogram của bài 8. Đừng tìm một nút đo vùng chưa được thêm. Để kiểm chính C++ ở mốc này, làm một phép đếm CPU nhỏ: sau vòng tạo points trong refresh, duyệt các PointRecord, lấy pointOf(record), đếm k khi length của vị trí không vượt config_.primary.radius/2 rồi xem k/double(points.size()) trong debugger hoặc log tạm. Không đọc màu ảnh để đếm.
+
+Hai test field phục vụ kiểm chứng không nằm trong catalog vật lý trên panel. Chọn uniform-volume bằng CLI khi chạy bản starter đã điền xong bài 3:
+
+```powershell title="PowerShell — field kiểm thể tích cho CPU reference"
+.\build\Debug\project_45_starter.exe --orbital uniform-volume --count 16384 --seed 7
+```
+
+Tỷ lệ k/N cần gần 1/8, không gần 1/2; thử vài seed thay vì bắt một lần đúng tuyệt đối. Sau khi kiểm, bỏ log/biến đếm tạm nếu không dùng nữa. Với orbital, có thể xem histogram ở Canvas; phép đo trực tiếp toàn cloud native sẽ được xây ở bài 8. Không dùng CDF đang lấy mẫu để vừa sinh vừa tự cho điểm mình.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — Dùng chung một số cho mọi chiều
+
+Trong bản thử, thay các dimension bằng 0. Cloud có thể vẫn có dáng gần đúng từ xa, nhưng các tọa độ bị liên hệ; khi xoay có thể thấy đường hoặc dải. So cả histogram và hình nhìn xiên, rồi khôi phục năm dimension.
+
+### Thí nghiệm 2 — Giữ seed, đổi cách chia việc
+
+Tạo cùng N mẫu theo hai cách: một vòng liên tục và các đoạn ID nhỏ. So cùng ID ở hai kết quả. Vị trí phải không đổi. Sau đó đổi seed và kiểm lại: chỉ thay seed mới phải thay bộ mẫu, không phải thứ tự xử lý.
+
+## Kiểm tra trước khi sang bài mới
+
+- CPU reference không quá 16.384 mẫu; vòng lấy mẫu không nằm trong vòng vẽ mỗi frame.
+- RNG không trả 0/1; CDF lặp không làm chọn bin rỗng hay vượt mảng.
+- Seed, cấu hình và ID giống nhau cho kết quả giống nhau khi đổi cách chia batch.
+- Uniform-volume cho tỷ lệ R/2 gần 1/8 qua nhiều seed; không bắt một seed phải trúng đúng 1/8.
+- Sai lệch do bảng, phần đuôi và dao động do N được ghi thành những nguồn khác nhau.
+- Bạn nối được bảng → ID/RNG → bin/jitter → x/y/z → PointRecord → renderer.
+
+## Thử đi thêm một bước
+
+Giữ độ phân giải bảng và chạy vài seed ở N=1024, 4096, 16.384. Ghi khoảng dao động của tỷ lệ R/2. N tăng bốn lần thường làm dao động giảm khoảng hai lần, không bốn lần. Nếu sai lệch luôn lệch một phía dù N tăng, hãy nghi bảng hoặc công thức trước.
+
+Khi một mẫu đã có đường đi rõ ràng, [ta chuyển phép tính sang compute shader](/projects/atomic-playground/04-lay-mau-tren-gpu). Bản CPU nhỏ vẫn được giữ để đối chiếu, không bị xóa khi GPU có hình.

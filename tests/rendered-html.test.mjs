@@ -50,7 +50,7 @@ import "./projects-41.cases.mjs";
 import "./projects-42.cases.mjs";
 import "./projects-43.cases.mjs";
 import "./projects-44.cases.mjs";
-import "./projects-45.cases.mjs";
+import "./projects-45-atomic.cases.mjs";
 import "./projects-46.cases.mjs";
 import "./projects-47.cases.mjs";
 import "./projects-48.cases.mjs";

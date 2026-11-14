@@ -1,0 +1,61 @@
+#version 430 core
+#include "density.glsl"
+
+layout(local_size_x=256) in;
+struct PointRecord { vec4 positionDensity; vec4 signPadding; };
+layout(std430,binding=2) readonly buffer Points { PointRecord points[]; };
+layout(std430,binding=5) buffer EvaluationCounters { uint examined; uint invalid; };
+
+uniform int orbital;
+uniform uint pointCount;
+uniform uint startIndex;
+uniform uint batchCount;
+
+// This is a separate read + field + comparison + atomic-counter pass, not a
+// second sampling step or a claim to measure the field's ALU instructions alone.
+// The shared density code makes this a consistency pass, not an independent
+// mathematical oracle for the supplied hydrogen formulas.
+// snippet:atom-gpu-evaluate
+#if LAB_CHECKPOINT >= 11
+void main() {
+    uint local=gl_GlobalInvocationID.x;
+    if (local>=batchCount || startIndex>=pointCount || local>=pointCount-startIndex)
+        return;
+    uint index=startIndex+local;
+    atomicAdd(examined,1u);
+    if (orbital<0 || orbital>11 || pointCount>uint(points.length())) {
+        atomicAdd(invalid,1u);
+        return;
+    }
+
+    vec4 positionDensity=points[index].positionDensity;
+    vec4 signPadding=points[index].signPadding;
+    bool validSign=signPadding.x==-1.0 || signPadding.x==0.0 || signPadding.x==1.0;
+    if (any(isnan(positionDensity)) || any(isinf(positionDensity)) || positionDensity.w<0.0 || any(isnan(signPadding)) || any(isinf(signPadding)) || !validSign || any(notEqual(signPadding.yzw,vec3(0)))) {
+        atomicAdd(invalid,1u);
+        return;
+    }
+
+    vec2 reference=orbitalDensity(orbital,positionDensity.xyz);
+    if (any(isnan(reference)) || any(isinf(reference)) || reference.x<0.0) {
+        atomicAdd(invalid,1u);
+        return;
+    }
+    // Density units are a0^-3. The absolute floor handles nodal/underflow noise;
+    // the relative allowance handles float arithmetic across shader programs.
+    const float densityAbsoluteTolerance=1e-12;
+    const float densityRelativeTolerance=1e-4;
+    float tolerance=densityAbsoluteTolerance+densityRelativeTolerance*abs(reference.x);
+    bool matchingDensity=abs(positionDensity.w-reference.x)<=tolerance;
+
+    // The sign is ill-conditioned at a node where the amplitude is effectively
+    // zero. Away from that tiny-density region, the supplied real sign must match.
+    bool matchingSign=reference.x<=1e-18 || signPadding.x==reference.y;
+    if (!matchingDensity || !matchingSign)
+        atomicAdd(invalid,1u);
+}
+#else
+// Earlier checkpoints never dispatch a field-validation job.
+void main() {}
+#endif
+// end-snippet:atom-gpu-evaluate

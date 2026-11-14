@@ -1,0 +1,246 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đo phân bố thay vì đoán từ ảnh
+
+Dự kiến 130 phút: đọc 30 phút, viết 70 phút, thử và kiểm tra 30 phút.
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có hình đẹp và có thể đi vào cloud. Nhưng “phía này sáng hơn” không phải một phép đo: exposure, kích thước splat và góc nhìn đều làm ảnh đổi. Bài này thêm một quả cầu đo được xác định trong world space, histogram bán kính và số liệu từ **các record đang có thật trên GPU**.
+
+Thay stub probe bằng shader/class đo thật, giữ các helper statistics và nối request/readout vào app. Không thêm một GpuProbe cùng tên; source diff liệt kê cả fields và body cần thay. Sau mỗi bước, build `project_45_starter`; checkpoint 8 là đáp án để so nếu phép đo chưa hiện hoặc số đếm chưa đúng.
+
+Checkpoint 8 không tạo một bộ mẫu CPU khác để báo kết quả thay cloud đang xem. Compute shader đọc chính SSBO của active cloud, đếm theo batch và chỉ trả về vài counter nhỏ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nếu k trong N mẫu nằm trong vùng, ước lượng là $\hat p=k/N$. N là toàn bộ accepted của cloud, không phải số visible. Kéo mặt cắt có thể che quả cầu và các điểm bên trong, nhưng không làm xác suất của vùng trong cùng phân bố thay đổi.
+
+Cloud nằm trong r≤Rmax nên phép đo này ước lượng xác suất **có điều kiện trong miền giữ lại**. Tail ngoài miền được báo riêng. Khoảng tin cậy lấy mẫu không bao gồm sai lệch midpoint, CDF float hay phần đuôi.
+
+Trong Lab, đặt quả cầu tại gốc, đọc k/N rồi kéo clip qua giữa. Tỷ lệ đo toàn cloud có đổi không? Sau đó dời quả cầu khỏi gốc: còn dùng cùng công thức bán kính làm “đáp án chính xác” được không?
+
+<InteractiveLab demo="atomic-playground" mode="probe" />
+
+Hai bản cố ý khác quy mô và readout: Canvas dùng 12 bin và báo sai số chuẩn SE; native dùng 16 bin và khoảng Wilson. Với vùng dời tâm, Canvas còn có quadrature ở hai độ phân giải kèm chỉ báo chênh lệch, không phải đáp án chính xác. Native hiện chỉ có tham chiếu đóng dạng cho cầu tâm gốc. Phần Wilson và source dưới đây nói về native, không yêu cầu bạn tìm một ô Wilson chưa có trong Lab.
+
+Histogram có các bin bán kính, không phải “density theo r” trực tiếp. Mỗi cột đếm xác suất của một lớp vỏ có thể tích khác nhau; đó chính là chuyện r² của bài 2 quay lại dưới dạng số liệu.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Đếm từ record, tách visible và region
+
+Mở `shaders/probe.comp`. Measurement có 22 uint: examined/finite/visible/region, 16 bin bán kính, giao region-visible và invalid. Host xóa counters trước mỗi request.
+
+```glsl title="shaders/probe.comp — phép đo trên SSBO đang hiển thị"
+void main() {
+    uint local=gl_GlobalInvocationID.x;
+    if (local>=batchCount || startIndex>=pointCount || local>=pointCount-startIndex)
+        return;
+    // A short counter buffer cannot even hold the invalid counter. Return with
+    // missing examined records so the host rejects the incomplete measurement.
+    if (measurement.length()<22)
+        return;
+    uint index=startIndex+local;
+    atomicAdd(measurement[0],1u);
+    if (pointCount>uint(points.length()) || isnan(rMax) || isinf(rMax) || rMax<=0.0 || any(isnan(regionSphere)) || any(isinf(regionSphere)) || regionSphere.w<0.0 || any(isnan(clipPlane)) || any(isinf(clipPlane))) {
+        atomicAdd(measurement[21],1u);
+        return;
+    }
+    vec4 record=points[index].positionDensity;
+    vec4 signRecord=points[index].signPadding;
+    bool validSign=signRecord.x==-1.0 || signRecord.x==0.0 || signRecord.x==1.0;
+    if (any(isnan(record)) || any(isinf(record)) || record.w<0.0 || any(isnan(signRecord)) || any(isinf(signRecord)) || !validSign || any(notEqual(signRecord.yzw,vec3(0))) || length(record.xyz)>rMax*1.000002) {
+        atomicAdd(measurement[21],1u);
+        return;
+    }
+    atomicAdd(measurement[1],1u);
+    bool visible=clipEnabled==0 || dot(clipPlane.xyz,record.xyz)<=clipPlane.w;
+    bool region=distance(record.xyz,regionSphere.xyz)<=regionSphere.w;
+    if (visible) atomicAdd(measurement[2],1u);
+    if (region) atomicAdd(measurement[3],1u);
+    if (visible && region) atomicAdd(measurement[20],1u);
+    uint bin=min(15u,uint(floor(clamp(length(record.xyz)/rMax,0.0,1.0)*16.0)));
+    atomicAdd(measurement[4u+bin],1u);
+}
+```
+
+`region` chỉ hỏi khoảng cách world tới tâm cầu; `visible` hỏi mặt cắt. Cả hai có thể đúng hoặc sai độc lập. `measurement[3]` không được thay bằng `measurement[20]` khi bạn muốn đo xác suất của cả vùng.
+
+Bin cuối dùng `min(15, ...)` để điểm đúng r=Rmax không thành index 16. Những record NaN/ngoài miền làm phép đo báo invalid; không lặng lẽ bỏ chúng rồi vẫn dùng N như không có vấn đề.
+
+### Bước 2 — Giữ nguồn sống tới khi probe xong
+
+`GpuProbe::request` nhận active cloud đã ready và một bản ProbeSettings. `tick` chia công việc tương tự sampler, tối đa 32.768 record mỗi batch. Kết quả chỉ ready khi examined và finite-valid đúng accepted, invalid bằng 0.
+
+Trong lúc probe chạy, ứng dụng không được xóa/replace cloud mà probe đang trỏ tới. Đổi camera vẫn được; publish candidate mới phải đợi hoặc phối hợp với vòng đời probe. Đây là ràng buộc sở hữu dữ liệu, không phải một vấn đề có thể chữa bằng `glMemoryBarrier`.
+
+Sau khi ready, chỉ đọc 22 counter. Không tải một triệu vị trí về CPU để vẽ histogram.
+
+### Bước 3 — Nối vùng đo với đúng active cloud
+
+Trong `Application::update`, sau khi poll probe và kiểm việc publish, nhánh checkpoint 8 tạo request sau khi active sẵn sàng và phiên bản phép đo đã đổi:
+
+```cpp title="include/atom_app.hpp — update giữ đúng cloud và phiên bản phép đo"
+void update() {
+    for (int index = 0; index < 2; ++index) {
+        auto& measurement = probe(index);
+        measurement.tick();
+        auto* evaluation = evaluations_[index].get();
+        if (evaluation)
+            evaluation->tick();
+        // A probe holds its active SSBO until its finite job has drained.
+        const bool evaluationIdle = !evaluation || !evaluation->busy();
+        const bool published = pane(index).tick(!measurement.busy() && evaluationIdle);
+        if (published) {
+            const auto* cloud = pane(index).active();
+            std::cout << "CLOUD pane=" << index << " orbital=" << preset(cloud->config().orbital).name
+                << " requested=" << cloud->config().count << " generated=" << cloud->generated()
+                << " accepted=" << cloud->accepted() << " sample_gpu_ms=" << cloud->sampleMs() << '\n';
+        }
+        if (index == 1 && !config_.comparison)
+            continue;
+        if (pane(index).active() && !measurement.busy() &&
+            (probeJobRevision_[index] != probeRevision_ || probeJobGeneration_[index] != pane(index).generation())) {
+            ProbeSettings settings;
+            settings.center = config_.probeCenter;
+            settings.radius = config_.probeRadius;
+            if (config_.clipEnabled)
+                settings.clipAxis = config_.clipAxis;
+            settings.clipOffset = config_.clipOffset;
+            measurement.request(*pane(index).active(), settings);
+            probeJobRevision_[index] = probeRevision_;
+            probeJobGeneration_[index] = pane(index).generation();
+        }
+    }
+}
+```
+
+`measurement` là GpuProbe của pane đang xét. `probeJobRevision_` giữ phiên bản đã giao; không gửi lại cùng phép đo mỗi frame. Trước đó `pane(index).tick(!measurement.busy())` giữ active không bị thay trong lúc probe còn dùng SSBO.
+
+### Bước 4 — Hiện vùng đo và đặt tâm bằng chuột
+
+Thay `Application::style` để gửi cả vùng đo cho renderer; camera/clip cũ vẫn giữ:
+
+```cpp title="include/atom_app.hpp — ViewStyle cho vùng đo"
+ViewStyle style() const {
+    ViewStyle result;
+    result.palette = config_.palette;
+    result.pointSize = config_.pointSize;
+    result.opacity = config_.opacity;
+    result.exposure = config_.exposure;
+    result.densityBoost = config_.densityBoost;
+    if (config_.clipEnabled)
+        result.clipAxis = config_.clipAxis;
+    result.clipOffset = config_.clipOffset;
+    result.showProbe = config_.debug || placeProbe_;
+    result.probeCenter = config_.probeCenter;
+    result.probeRadius = config_.probeRadius;
+    return result;
+}
+```
+
+Trong `Application::pollEvents`, nhánh mouse-button-down đã kiểm panel trước. Thêm nhánh sau **trước** `pointer_.begin` để click đặt probe không đồng thời kéo camera:
+
+```cpp title="include/atom_events.hpp — đặt tâm probe trên một mặt phẳng thao tác"
+if (placeProbe_ && event.button.button == SDL_BUTTON_LEFT) {
+    int paneCount = 1;
+    if (config_.comparison)
+        paneCount = 2;
+    const float paneWidth = static_cast<float>(sceneWidth) / paneCount;
+    selected_ = std::min(paneCount - 1, static_cast<int>(event.button.x / paneWidth));
+    const auto camera = viewCamera(selected_);
+    const auto ray = camera.ray(event.button.x - selected_ * paneWidth, event.button.y, paneWidth, static_cast<float>(height_));
+    const auto normal = camera.forward();
+    const float depth = dot(config_.probeCenter - camera.eye(), normal);
+    if (depth > 0) {
+        config_.probeCenter = camera.eye() + ray * (depth / dot(ray, normal));
+        config_.probeCenter.x = std::clamp(config_.probeCenter.x, -128.0F, 128.0F);
+        config_.probeCenter.y = std::clamp(config_.probeCenter.y, -128.0F, 128.0F);
+        config_.probeCenter.z = std::clamp(config_.probeCenter.z, -128.0F, 128.0F);
+        ++probeRevision_;
+    }
+    continue;
+}
+```
+
+P bật/tắt chế độ đặt tâm; dấu phẩy/chấm giảm/tăng bán kính. Click không “nhặt electron” hoặc raycast một bề mặt orbital: cloud không có bề mặt như một mesh đặc. Tia camera cắt mặt phẳng vuông góc hướng nhìn đi qua tâm probe hiện tại; mặt phẳng này cho một độ sâu thao tác rõ ràng. Muốn dịch theo hướng khác, đổi góc nhìn rồi đặt tiếp.
+
+Sau khi đổi tâm/bán kính, `probeRevision_` tăng để yêu cầu một phép đo mới. Nơi vẽ outline của quả cầu nằm trong draw/source diff; outline chỉ để xác định vùng, không phải một phép đếm bằng màu pixel.
+
+### Bước 5 — Hiện khoảng dao động, không đòi k/N khớp tuyệt đối
+
+Mở `include/atom_statistics.hpp`. Hàm sau tính khoảng Wilson với mặc định z=1,96:
+
+```cpp title="include/atom_statistics.hpp — uncertainty do số mẫu hữu hạn"
+inline Interval binomialWilson(std::uint64_t successes, std::uint64_t total, double z = 1.96) {
+    if (total == 0 || successes > total || !std::isfinite(z) || z <= 0)
+        throw std::invalid_argument("A binomial interval needs valid counts and a positive z score");
+    const double n = static_cast<double>(total);
+    const double p = static_cast<double>(successes) / n;
+    const double denominator = 1 + z * z / n;
+    const double center = (p + z * z / (2 * n)) / denominator;
+    const double half = z * std::sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator;
+    return {p, std::max(0.0, center - half), std::min(1.0, center + half), std::sqrt(p * (1 - p) / n)};
+}
+```
+
+Sai số chuẩn $\sqrt{\hat p(1-\hat p)/N}$ hữu ích khi tỷ lệ không quá sát biên. Khi k=0, không có nghĩa xác suất thật chắc chắn bằng 0; khoảng Wilson vẫn có bề rộng. Đừng vẽ thanh sai số 0 rồi kết luận sampler chính xác tuyệt đối.
+
+Khoảng này chỉ nói về dao động lấy mẫu theo mô hình đã dùng. Tăng N giảm dao động nhưng không tự sửa bảng sai. Vì vậy panel cần tách uncertainty, tail, độ phân giải bảng và tolerance của phép đối chiếu.
+
+Allowance 0,0003 trong verifier là chênh lệch xác suất tuyệt đối cho bộ fixture hữu hạn, không phải error bound cho mọi field/cấu hình. Fixture CDF bán kính CPU độc lập khảo sát 12 preset tại 32.769 vị trí cố định mỗi preset; lần kiểm mặc định 2048 ô bán kính ghi sai lệch lớn nhất trong bộ probe là 2,63851×10⁻⁶. Đây là quan sát đã đo, không chứng minh chặn sai số giữa mọi vị trí hoặc ở bảng khác. Đổi field/Rmax/resolution cần kiểm lại, không chỉ tăng N rồi nới allowance cho test xanh.
+
+### Bước 6 — Chỉ gắn nhãn tham chiếu khi có tham chiếu đúng
+
+Với quả cầu tâm gốc, ta dùng CDF bán kính độc lập chia cho khối lượng giữ lại tới Rmax. Với tâm khác gốc, hàm hiện tại trả về không có đáp án đóng dạng đó:
+
+```cpp title="include/atom_statistics.hpp — tham chiếu chỉ đúng cho cầu tâm gốc"
+inline std::optional<double> expectedOriginSphere(const SamplingConfig& config, Vec3 center, float radius) {
+    if (!finite(center) || !std::isfinite(radius) || radius < 0)
+        throw std::invalid_argument("A region needs finite coordinates and a nonnegative radius");
+    if (center.x != 0 || center.y != 0 || center.z != 0)
+        return {};
+    return referenceRadialProbability(config, radius);
+}
+```
+
+Đừng thay `return {}` thành số cũ để panel luôn có một con số “expected”. Vùng dời tâm vẫn đo được k/N, nhưng UI phải nói tham chiếu này không có. Muốn thêm tham chiếu cho nó là một công việc tích phân khác, cần sai số riêng.
+
+## Chạy checkpoint và đọc kết quả
+
+Chạy checkpoint 8, đặt vùng đo ở gốc rồi thay bán kính. Tổng 16 cột histogram phải bằng accepted. Khi bật clip, visible đổi nhưng tổng histogram và region k/N không đổi nếu vùng không đổi.
+
+Chọn lại nhiều seed để so observed với reference trong các khoảng dao động hợp lý. Một seed không đủ kết luận; cũng không nên kéo tolerance rộng ra chỉ để mọi seed đều xanh. Nếu sai lệch có hệ thống, kiểm r², biến μ, miền và bảng trước.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — Chia cho visible
+
+Trong một bản thử, lấy region count chia visible sau clip. Khi cắt mạnh, tỷ lệ có thể tăng vô lý hoặc thậm chí vượt 1. Khôi phục mẫu số accepted. Sau đó đọc riêng giao region-visible nếu muốn trả lời câu hỏi khác: “bao nhiêu mẫu vừa ở trong vùng vừa còn thấy?”.
+
+### Thí nghiệm 2 — Tăng N nhưng giữ bảng quá thô
+
+Dùng bảng nhỏ, chạy nhiều seed rồi tăng N. Dao động giữa seed giảm, nhưng một sai lệch bảng có thể còn nguyên. Tiếp đó tăng độ phân giải bảng, giữ N để phân biệt tác dụng. Ghi rõ biến nào được thay trong mỗi lần thử.
+
+## Kiểm tra trước khi sang bài mới
+
+- Probe đọc đúng active SSBO, không sinh lại mẫu để đo; tổng histogram bằng accepted.
+- examined/finite đúng N, invalid=0; mọi kết quả gắn đúng generation và vùng đo.
+- Clipping chỉ đổi visible và giao visible-region; không đổi region count hoặc mẫu số N.
+- K=0/N vẫn có khoảng Wilson hợp lệ; không gọi uncertainty là toàn bộ sai số.
+- Cầu tâm gốc có tham chiếu độc lập; dời tâm thì nhãn reference đổi thành không có, không dùng đáp án cũ.
+- Candidate không được publish bằng cách xóa cloud còn được probe sử dụng.
+
+## Thử đi thêm một bước
+
+Uniform-volume và affine-mu là test field, không phải hai orbital bổ sung trong panel. Chạy bản starter đã hoàn thiện bài 8 bằng CLI, từng lệnh một:
+
+```powershell title="PowerShell — hai test field có tham chiếu đơn giản"
+.\build\Debug\project_45_starter.exe --orbital uniform-volume --count 65537 --seed 7
+.\build\Debug\project_45_starter.exe --orbital affine-mu --count 65537 --seed 7
+```
+
+Với uniform-volume, đo cầu tâm gốc bán kính R/2 ở vài seed; expected=1/8. Với affine-mu, giữ nửa z≤0 bằng clip axis Z, offset 0: tỷ lệ visible/N kỳ vọng là 0,35 từ tích phân (1+0,6μ)/2 trên μ từ −1 tới 0. Số vùng cầu và số visible là hai phép đo riêng. Hai field kiểm cả radial lẫn angular mà không phụ thuộc hình orbital trông có giống không.
+
+Tiếp theo, [ta đặt hai orbital cạnh nhau trên cùng thang](/projects/atomic-playground/09-so-sanh-hai-orbital), mang theo cả phép đo chứ không chỉ hai ảnh màu.

@@ -1,0 +1,180 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nhìn một orbital trước khi lấy mẫu
+
+Dự kiến 80 phút: đọc khung 35 phút, nối field vào vòng vẽ 15 phút, chạy/thử/kiểm tra 30 phút.
+
+## Ta cần giải quyết điều gì?
+
+Ta sẽ làm một phòng quan sát orbital 3D: xoay quanh các thùy, đi vào đám mây, kéo mặt cắt và đo xem một vùng chứa bao nhiêu mẫu. Đến cuối project, ứng dụng C++ sinh ít nhất một triệu vị trí trực tiếp trên GPU. Nhưng việc đầu tiên chưa phải là chạy một triệu luồng: hãy có một hình mà ta hiểu mình đang nhìn gì.
+
+Tải ZIP ở trang tổng quan và mở thư mục starter. Khung SDL3/OpenGL 4.3, event loop, camera, bộ nạp shader và các hàm field đã được cung cấp. Starter mở được cửa sổ nhưng chưa nối field vào pass vẽ; thay đổi đầu tiên của bạn là thêm chỗ gọi renderer để thấy orbital. Không cần viết lại công thức orbital; từ bài 2 bạn tự điền phần lấy mẫu rồi nối các tính năng mới vào bản starter.
+
+Trong suốt project, bạn sửa bản của mình ở `starter/src` và `starter/include` rồi build target `project_45_starter`. Tên file `include/...` trên mỗi code block là đường dẫn tương đối trong bản đang mở, tức `starter/include/...` khi tự làm; ZIP không có thư mục include chung ở gốc. Các thư mục `checkpoints/` là đáp án chạy độc lập, còn `final/` là sản phẩm hoàn chỉnh. Không sửa đồng thời cả ba bản và không tìm một macro để bật bài tiếp theo.
+
+Ở cuối mỗi bài, phần đối chiếu source cho bạn các file và khối thay đổi đầy đủ. Snippet trong nội dung chỉ là phần đang được giải thích; nếu thêm một tính năng cần cả hàm lẫn chỗ gọi, dùng diff đó để kiểm mình đã thay đủ, không chỉ chép một hàm rồi mong nó tự chạy.
+
+Đây là mô hình hydrogen **một electron**. Mỗi điểm về sau là một vị trí lấy mẫu trong cùng một phân bố, không phải một electron riêng. Không có hạt nào đang chạy trên đường tròn quanh hạt nhân. Các hàm orbital là dữ liệu toán học đầu vào; phần ta tự xây là cách lấy mẫu, vẽ và kiểm chứng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tại một vị trí, field trả hai thông tin. Mật độ $\rho=|\psi|^2$ luôn không âm; tích phân mật độ trên một vùng mới cho xác suất. Dấu của $\psi$ dùng để tô hai màu cho các thùy, **không** biểu diễn hai loại điện tích.
+
+Trong project này, $a_0=1$. Với 1s, field không phụ thuộc hướng. Với 2pz, hai phía của trục z có mật độ đối xứng nhưng dấu khác nhau; mặt phẳng z=0 là vùng nút. Với 2s, bán kính r=2 là mặt nút hình cầu. Bạn không cần tự suy ra các công thức này từ phương trình Schrödinger. Ta cung cấp chúng để dành thời gian cho lập trình và toán lấy mẫu.
+
+Trước khi viết code, chọn 2pz trong Lab, xoay góc nhìn rồi thử 2s. Tự hỏi: khoảng tối ở giữa có còn tồn tại khi đổi góc nhìn không? Một vùng tối do field bằng 0 khác gì một vùng tối chỉ vì camera nhìn qua ít điểm?
+
+<InteractiveLab demo="atomic-playground" mode="field" />
+
+Lab là bản minh họa CPU nhỏ. Checkpoint 1 của ứng dụng dùng **lattice preview**: hỏi field trên một lưới vị trí cố định rồi làm sáng các điểm theo field. Đây chưa phải cloud lấy mẫu đúng xác suất. Ta cố ý có một hình trước, nhưng chưa gắn cho nó ý nghĩa thống kê chưa được xây.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Đọc đúng dữ liệu được cung cấp
+
+Mở `include/atom_catalog.hpp`. `Orbital` chọn công thức; `Vec3` là world position. Catalog vật lý gồm 1s, 2s, ba hướng 2p, ba dạng 3d và hai dạng 4f. Hai field `uniform-volume` và `affine-mu` nằm cuối danh sách để kiểm thuật toán về sau, không phải hai orbital mới.
+
+`radialAmplitude` và `angularAmplitude` đã có sẵn. Hàm ta dùng để nối vào chương trình là `evaluateDensity`. Đọc từ trên xuống: kiểm vị trí hữu hạn, tìm bán kính, đổi vị trí thành hướng, nhân hai biên độ rồi bình phương.
+
+```cpp title="include/atom_catalog.hpp — đọc field tại một vị trí"
+inline DensityValue evaluateDensity(Orbital id, Vec3 point) {
+    if (!finite(point))
+        throw std::invalid_argument("Density position must be finite");
+    const auto& entry = preset(id);
+    const double r = std::hypot(static_cast<double>(point.x), static_cast<double>(point.y), static_cast<double>(point.z));
+    if (r == 0 && entry.l > 0)
+        return {};
+    double x = 0, y = 0, z = 1;
+    if (r > 0) {
+        x = point.x / r;
+        y = point.y / r;
+        z = point.z / r;
+    }
+    const double amplitude = radialAmplitude(id, r) * angularAmplitude(id, x, y, z);
+    double sign = 0;
+    if (amplitude > 0)
+        sign = 1;
+    if (amplitude < 0)
+        sign = -1;
+    return {amplitude * amplitude, sign};
+}
+```
+
+`point.x / r` không phải đổi đơn vị: nó tạo direction cosine cho hàm góc. Tại gốc tọa độ không có một hướng duy nhất. Với các orbital có l>0, phần bán kính đã bằng 0, nên trả mật độ 0 tránh phép chia cho 0. Với 1s/2s, hàm góc không phụ thuộc hướng; hướng mặc định không làm thay đổi kết quả.
+
+Hãy chú ý dòng trả về. Ta bình phương **biên độ đã nhân**, không cộng mật độ của phần bán kính với phần góc. `sign` được giữ riêng vì sau khi bình phương ta không thể khôi phục nó từ `density`.
+
+### Bước 2 — Nối field vào một chương trình đã chạy được
+
+Trong `src/main.cpp`, các include cho hạ tầng đã có sẵn:
+
+```cpp title="src/main.cpp — headers của khung khởi tạo"
+#include "atom_capabilities.hpp"
+#include "atom_events.hpp"
+#include <iostream>
+```
+
+Khung kiểm options rồi tạo window/context, nạp GL và kiểm khả năng thực tế của máy:
+
+```cpp title="src/main.cpp — phần khởi tạo dùng chung"
+const auto options = atom::parseOptions(argc, argv);
+// Setup: keep the window/context alive longer than its GPU objects.
+atom::NativeWindow window(options.hidden);
+atom::GlApi gl;
+gl.loadAll();
+atom::validateCapabilities(gl);
+```
+
+validateCapabilities là phần được cung cấp, không phải công thức orbital bạn cần tự viết. Nó hỏi phiên bản Core, giới hạn compute/SSBO/timer và SDL runtime thực tế trước khi app cấp dữ liệu lớn; thiếu điều kiện thì báo lỗi thay vì âm thầm hạ quy mô. Header atom_capabilities.hpp cũng ghi thông tin máy/compiler để kết quả kiểm sau này có ngữ cảnh.
+
+Sau phần khởi tạo, main tạo `atom::Application` và gọi `run`. Trong `starter/include/atom_app.hpp`, thay body của `Application::draw` bằng bản dưới. Phần thay đổi so với khung là vòng gọi renderer; các biến viewport/panel đã thuộc scaffold:
+
+```cpp title="include/atom_app.hpp — chỗ gọi renderer trong draw"
+void draw() {
+    submitted_.fill(0);
+    if (!SDL_GetWindowSize(window_.get(), &width_, &height_) ||
+        !SDL_GetWindowSizeInPixels(window_.get(), &drawableWidth_, &drawableHeight_))
+        throw std::runtime_error(SDL_GetError());
+    if (drawableWidth_ < 1 || drawableHeight_ < 1)
+        return;
+    const int sceneWidth = static_cast<int>(static_cast<double>(width_ - nativePanelWidth) * drawableWidth_ / width_);
+    int count = 1;
+    if (!beginRenderTarget()) {
+        drawTargetFailure();
+        return;
+    }
+    const auto display = style();
+    for (int index = 0; index < count; ++index) {
+        const int left = index * sceneWidth / count;
+        const int right = (index + 1) * sceneWidth / count;
+        renderer_.draw(pane(index).active(), requestedConfig(index), viewCamera(index), display, left, right - left, drawableHeight_, cpuPoints_.get(), cpuCount_);
+        submitted_[index] = 48 * 48 * 48;
+        if (pane(index).active())
+            submitted_[index] = pane(index).active()->accepted();
+        if (cpuPoints_)
+            submitted_[index] = cpuCount_;
+    }
+    renderer_.finish(display);
+    PanelState state = panelState();
+    panel_.build(overlay_, width_, height_, state);
+    overlayRenderer_.draw(overlay_, drawableWidth_, drawableHeight_);
+}
+```
+
+Ở checkpoint 1, pane chưa có active cloud và `cpuPoints_` chưa có mảng CPU. Vì thế `CloudRenderer::draw` chọn `latticeMode=1` và vẽ 48³ điểm lưới. Đây là nối dây cụ thể từ chương trình tới field, không phải chỉ thêm một hàm rồi chờ nó tự hiện lên.
+
+### Bước 3 — Hiểu nơi field đi vào ảnh
+
+Mở `shaders/cloud.vert`, nhánh `latticeMode`. `gl_VertexID` được tách thành tọa độ của lưới 48×48×48; tâm mỗi ô được đổi sang miền từ −Rmax đến Rmax. `orbitalDensity` trong `density.glsl` là phiên bản GLSL của cùng field C++. Renderer chưa đọc SSBO điểm ở nhánh này.
+
+Không thêm `sampleCpu` hoặc bộ số ngẫu nhiên vào bài này. Nếu làm vậy, ta sẽ trộn ba câu hỏi: công thức đúng chưa, lấy mẫu đúng chưa và vẽ đúng chưa. Giữ lưới cố định giúp tách câu hỏi đầu tiên ra.
+
+Nhánh còn lại của shader dành cho cloud thật ở bài sau. Đừng đổi cả hai nhánh khi chỉ muốn kiểm field. Các file window/GL/camera hiện là khung được tái sử dụng; phần học mới nằm ở hợp đồng đầu vào/đầu ra của field.
+
+### Bước 4 — Chạy mốc đối chiếu
+
+Từ thư mục chứa CMakeLists.txt của ZIP, dùng lệnh sau với Visual Studio 2022:
+
+```powershell title="PowerShell — build checkpoint đầu trên Visual Studio 2022"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 1 --target project_45_starter
+.\build\Debug\project_45_starter.exe
+```
+
+Lần configure đầu tải SDL 3.4.8 nếu chưa có. Với generator đơn cấu hình, executable nằm trực tiếp trong build thay vì thư mục Debug. Đóng cửa sổ để kết thúc lần chạy; các bài sau tiếp tục build target starter sau khi sửa code của mình.
+
+Để chạy đáp án, build target `project_45_checkpoint_1` rồi mở executable cùng tên trong build/Debug. Nếu đáp án chạy nhưng bản của bạn không chạy, so phần source/diff ở cuối bài thay vì sửa code trong checkpoints.
+
+Hãy bắt đầu từ preset 2pz, sau đó lần lượt thử 1s và 2s. Ghi lại một hình nhìn xiên để thấy thùy có chiều sâu, không chỉ chụp hình chiếu chính diện.
+
+Kết quả đạt yêu cầu ở bài này là một field preview có nhãn đúng. Nó chưa chứng minh sampler, chưa chứng minh số mẫu và chưa đáp ứng mốc một triệu GPU của sản phẩm cuối.
+
+## Chạy checkpoint và đọc kết quả
+
+Quan sát ba điều: hai thùy 2pz nằm dọc trục z; vùng z=0 không biến mất khi xoay; 2s có một lớp nút ở r=2. Nếu cả hình quay nhưng vùng tối luôn dính vào màn hình, hãy kiểm xem bạn đã tính field bằng world position hay bằng tọa độ sau camera.
+
+Lattice có thể lộ các hàng điểm và bỏ lỡ chi tiết nhỏ khi Rmax quá lớn. Đó là giới hạn của preview, không phải hình dạng vật lý của orbital. Chưa chỉnh công thức để che các hàng điểm ấy.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — Vùng nút có quay cùng orbital không?
+
+Trong Canvas Lab, giữ góc nhìn rồi đổi 2pz → 2px → 2py. Mặt phẳng nút đổi hướng theo orbital, không dính vào màn hình. Sau đó giữ một preset và orbit để nhìn từ phía khác: cấu trúc world vẫn giữ. Field Lab chưa có palette selector; native cũng chỉ thêm phím palette từ bài 6, không cần tìm một nút chưa có.
+
+### Thí nghiệm 2 — Kiểm hai điểm thay vì tin vào một ảnh đẹp
+
+Trong debugger, gọi field 2pz tại (0,0,1), (0,0,−1) và (1,0,0). Hai điểm đầu phải có mật độ bằng nhau, dấu đối nhau; điểm thứ ba có mật độ 0. Với 2s, kiểm r=2. Nếu ảnh vẫn trông giống một orbital nhưng các phép kiểm này sai, ảnh chưa đáng tin.
+
+## Kiểm tra trước khi sang bài mới
+
+- Starter hoặc checkpoint 1 mở được cửa sổ, đổi preset và xoay camera mà không lỗi.
+- Bạn chỉ ra được nơi C++ tính field và nơi GLSL gọi field trong lattice preview.
+- Bạn giải thích được vì sao màu hai thùy không phải điện tích và vì sao điểm preview chưa phải mẫu xác suất.
+- Các điểm đối xứng và hai vùng nút nói trên cho kết quả đúng; không có NaN ở gốc.
+- UI ghi đúng chế độ preview. Chưa báo “một triệu mẫu GPU” khi ta chưa tạo dữ liệu ấy.
+
+## Thử đi thêm một bước
+
+Lập bảng nhỏ cho các điểm trên trục x, y và z của 2px, 2py, 2pz. Dự đoán trước hàm nào bằng 0 rồi mới kiểm. Đây là cách nhanh để phát hiện một phép hoán đổi trục.
+
+[OpenStax — The Hydrogen Atom](https://openstax.org/books/university-physics-volume-3/pages/8-1-the-hydrogen-atom) giải thích ngữ cảnh của các hàm được cung cấp; [DLMF — Spherical Harmonics](https://dlmf.nist.gov/14.30) là tài liệu tham chiếu cho phần góc. Bài tiếp theo không giải lại chúng: [ta biến field thành trọng số theo thể tích](/projects/atomic-playground/02-trong-so-theo-the-tich).

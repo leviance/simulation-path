@@ -1,0 +1,430 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hoàn thiện playground và kiểm mốc một triệu
+
+Dự kiến 150 phút: đọc 30 phút, ghép và kiểm code 75 phút, thử sản phẩm 45 phút.
+
+## Ta cần giải quyết điều gì?
+
+Các bài trước đã thêm field, sampler, cloud GPU, cách vẽ, mặt cắt, phép đo, hai pane và config. Bài cuối không thêm một hiệu ứng mới cho vui. Ta kiểm xem chúng có thật sự hợp thành một công cụ: nhìn đẹp nhưng không che lỗi, dùng được khi job đang chạy, và báo đúng giới hạn của mô hình.
+
+Sản phẩm cần ít nhất 1.000.000 vị trí hợp lệ sinh trên GPU. Một ảnh nhiều chấm, một buffer đủ sức chứa hoặc một dòng count=1000000 đều chưa chứng minh mốc ấy. Ta cần đường sinh dữ liệu thật, counters, guard, tham chiếu độc lập và kiểm tương tác.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ bốn lớp bằng chứng riêng:
+
+- **Field:** công thức được cung cấp, đối xứng/nút/chuẩn hóa đúng.
+- **Sampler:** trọng số/CDF/RNG và phân bố phù hợp với tham chiếu độc lập.
+- **GPU:** đúng layout, đúng N, không ghi ngoài mảng, không giấu invalid.
+- **Sản phẩm:** controls, camera/clip/probe/comparison/config, budget và cách truyền đạt đúng.
+
+Build thành công chỉ mở cửa cho các phép kiểm sau, không thay chúng. CPU/GPU khớp nhau cũng chưa chứng minh cả hai không cùng mắc một lỗi. Vì thế bộ kiểm có uniform-volume, affine-mu và các công thức tích phân độc lập.
+
+Trong Lab, thử một vòng khám phá không đọc code: chọn 2s, cắt qua nút, đặt vùng đo, đổi seed, so với 1s cùng thang và reset. Bạn có thể giải thích mỗi con số mà không gọi mọi điểm là electron không?
+
+<InteractiveLab demo="atomic-playground" mode="validation" />
+
+Lab kiểm trải nghiệm nhỏ trên CPU. Mốc triệu mẫu, thời gian GPU, driver và thao tác native phải được kiểm trên ứng dụng C++; không lấy Canvas làm chứng cứ thay thế.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Ghép entry point hoàn chỉnh
+
+Mở `src/main.cpp`. Đây là toàn bộ entry point của bản final; không còn hàm main nào phải ghép từ các bài khác:
+
+```cpp title="src/main.cpp — entry point của sản phẩm hoàn chỉnh"
+#include "atom_capabilities.hpp"
+#include "atom_events.hpp"
+#include "atom_verify.hpp"
+#include <iostream>
+
+int main(int argc, char** argv) {
+    try {
+        // Keep finite-run diagnostics visible even if the graphics driver exits.
+        std::cout << std::unitbuf;
+        const auto options = atom::parseOptions(argc, argv);
+        // Setup: keep the window/context alive longer than its GPU objects.
+        atom::NativeWindow window(options.hidden);
+        atom::GlApi gl;
+        gl.loadAll();
+        atom::validateCapabilities(gl);
+        std::cout << "OpenGL " << gl.GetString(GL_VERSION) << '\n';
+        if (options.verify) {
+            atom::MemoryBudget budget;
+            atom::verifyGpu(gl, budget);
+        }
+        atom::Application app(gl, window, options);
+        // Cleanup: stack unwinding releases app resources before the GL context.
+        return app.run();
+    } catch (const std::exception& error) {
+        std::cerr << "Atomic Playground: " << error.what() << '\n';
+        return 1;
+    }
+}
+```
+
+Options được kiểm trước khi mở window/cấp tài nguyên. NativeWindow sở hữu window/context; GlApi nạp các entry point cần thiết. Chế độ verify có bộ kiểm hữu hạn riêng, sau đó ứng dụng dùng cùng pipeline tương tác. Lỗi không bị nuốt để cửa sổ “có vẻ vẫn chạy”: nó báo stderr và exit code khác 0.
+
+Đọc [toàn bộ mã nguồn ở cuối trang](#ma-hoan-chinh-cua-project) khi cần từng file. Phần này và ZIP chứa đủ headers/shaders/tests/CMake/assets cần thiết; các snippet trong bài là vị trí đang giải thích, không thay cho source hoàn chỉnh.
+
+### Bước 2 — Giữ một vòng lặp dễ theo dõi
+
+Trong `include/atom_app.hpp`, vòng lặp luôn xử lý input, tiến các job hữu hạn rồi vẽ:
+
+```cpp title="include/atom_app.hpp — vòng đời của ứng dụng"
+int run() {
+    const auto started = std::chrono::steady_clock::now();
+    std::uint64_t frames{};
+    while (running_) {
+        const auto frameStart = std::chrono::steady_clock::now();
+        pollEvents();
+        update();
+        draw();
+        collectDrawTiming();
+        ++frames;
+        const double elapsed = std::chrono::duration<double>(frameStart - started).count();
+        bool finished = options_.seconds > 0 && elapsed >= options_.seconds;
+        if (options_.verify && options_.seconds == 0 && frames >= 8 &&
+            !primary_.pending() && !secondary_.pending() && probesFinished() && evaluationsFinished())
+            finished = true;
+        if (options_.verify && options_.seconds == 0 && !finished && elapsed >= 30)
+            throw std::runtime_error("Interactive verification did not reach a current measured state within thirty seconds");
+        if (finished) {
+            if ((!options_.capture.empty() || options_.verify || options_.benchmark) && !renderTargetReady_)
+                throw std::runtime_error("Bounded validation ended without a usable render target");
+            if (!primary_.current() || (config_.comparison && !secondary_.current()))
+                throw std::runtime_error("Bounded run ended without the requested current GPU cloud");
+            if ((options_.verify || options_.benchmark) && !probesFinished())
+                throw std::runtime_error("Bounded validation ended before the current probe revision completed");
+            if ((options_.verify || options_.benchmark) && !evaluationsFinished())
+                throw std::runtime_error("Bounded validation ended before field evaluation completed");
+            if (!options_.capture.empty()) {
+                if (primary_.pending() || (config_.comparison && secondary_.pending()))
+                    throw std::runtime_error("Capture deadline reached before the requested cloud was ready");
+                captureFrame(gl_, drawableWidth_, drawableHeight_, options_.capture);
+            }
+            report(frames, elapsed);
+            running_ = false;
+        }
+        SDL_GL_SwapWindow(window_.get());
+        if (!window_.vsync()) {
+            const auto frameEnd = std::chrono::steady_clock::now();
+            const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart);
+            if (spent.count() < 16)
+                SDL_Delay(static_cast<Uint32>(16 - spent.count()));
+        }
+    }
+    pointer_.release();
+    return 0;
+}
+```
+
+Không có vòng “chờ sinh đủ N” chen giữa input và render. `update` poll sampler/probe; `draw` đọc cloud active. Khi một probe đang giữ active SSBO, publish candidate phải đợi an toàn. Khi đóng cửa sổ, tài nguyên được hủy theo thứ tự sở hữu, không để probe dùng cloud đã giải phóng.
+
+`--seconds` đặt thời gian hữu hạn cho lần chạy đo/chụp. Hidden run phải có `--seconds` hoặc `--verify`; benchmark phải có thời lượng. Đừng dùng một benchmark chạy mãi làm tác vụ nghiệm thu.
+
+### Bước 3 — Kiểm lại field trên chính cloud GPU
+
+Ta thêm một pass riêng ở checkpoint 11: đọc vị trí đang có trong SSBO, tính lại density/sign bằng field được cung cấp, so với dữ liệu lưu trong record rồi đếm examined/invalid. Nó không tạo vị trí mới, không đổi orbital và không mô phỏng một quá trình vật lý mới.
+
+Mở `shaders/evaluate.comp`. Binding 2 chỉ đọc records; binding 5 đếm kết quả. Mỗi invocation kiểm một record rồi tính lại field:
+
+```glsl title="shaders/evaluate.comp — đọc, tính field, so và đếm"
+void main() {
+    uint local=gl_GlobalInvocationID.x;
+    if (local>=batchCount || startIndex>=pointCount || local>=pointCount-startIndex)
+        return;
+    uint index=startIndex+local;
+    atomicAdd(examined,1u);
+    if (orbital<0 || orbital>11 || pointCount>uint(points.length())) {
+        atomicAdd(invalid,1u);
+        return;
+    }
+
+    vec4 positionDensity=points[index].positionDensity;
+    vec4 signPadding=points[index].signPadding;
+    bool validSign=signPadding.x==-1.0 || signPadding.x==0.0 || signPadding.x==1.0;
+    if (any(isnan(positionDensity)) || any(isinf(positionDensity)) || positionDensity.w<0.0 || any(isnan(signPadding)) || any(isinf(signPadding)) || !validSign || any(notEqual(signPadding.yzw,vec3(0)))) {
+        atomicAdd(invalid,1u);
+        return;
+    }
+
+    vec2 reference=orbitalDensity(orbital,positionDensity.xyz);
+    if (any(isnan(reference)) || any(isinf(reference)) || reference.x<0.0) {
+        atomicAdd(invalid,1u);
+        return;
+    }
+    // Density units are a0^-3. The absolute floor handles nodal/underflow noise;
+    // the relative allowance handles float arithmetic across shader programs.
+    const float densityAbsoluteTolerance=1e-12;
+    const float densityRelativeTolerance=1e-4;
+    float tolerance=densityAbsoluteTolerance+densityRelativeTolerance*abs(reference.x);
+    bool matchingDensity=abs(positionDensity.w-reference.x)<=tolerance;
+
+    // The sign is ill-conditioned at a node where the amplitude is effectively
+    // zero. Away from that tiny-density region, the supplied real sign must match.
+    bool matchingSign=reference.x<=1e-18 || signPadding.x==reference.y;
+    if (!matchingDensity || !matchingSign)
+        atomicAdd(invalid,1u);
+}
+```
+
+Density có đơn vị a₀⁻³. Hai ngưỡng 1e−12 tuyệt đối và 1e−4 tương đối được dùng riêng cho density; không đem chúng làm epsilon chung cho tọa độ. Gần vùng nút, khi mật độ quá nhỏ, sign kém ổn định nên điều kiện dấu được tách khỏi điều kiện mật độ.
+
+Pass này trả lời một câu hỏi kỹ thuật hẹp: **record GPU đang giữ có nhất quán với field mà chương trình dùng không?** Vì shader dùng lại density.glsl, nó không phải oracle độc lập cho công thức hydrogen. Các fixture closed-form, node, symmetry và integral ở CPU vẫn cần giữ để kiểm phần khoa học đầu vào.
+
+Tên scope của timer phải đọc đủ: **READ + FIELD + COMPARE + ATOMICS**. Số milliseconds gồm đọc buffer, đánh giá field, phép so và atomic counters; nó không đo riêng các lệnh ALU của field. Sample time vốn đã gồm density được tính lúc sinh record, nên không cộng hai số rồi gọi đó là chi phí sampling mới.
+
+GpuEvaluation có lifecycle giống probe: request chỉ với cloud ready, poll từng batch, giữ nguồn còn sống khi đang busy và báo lỗi khi examined thiếu hoặc invalid khác 0. Giới hạn mỗi batch và deadline của cả job ngăn một bước kiểm biến thành chờ vô hạn. Header `atom_evaluate.hpp` có đầy đủ phần job; file có thể đã nằm trong gói nhưng trước mốc này chưa được nối vào app.
+
+Đừng chỉ chép shader. Trong `Application`, thêm include cho header và hai member sau, ở phần sở hữu tài nguyên trước renderer:
+
+```cpp title="include/atom_app.hpp — trạng thái đánh giá riêng từng pane"
+std::array<std::unique_ptr<GpuEvaluation>, 2> evaluations_;
+std::array<std::uint64_t, 2> evaluationGeneration_{};
+```
+
+Trong constructor, sau khi validate cấu hình và trước refresh, tạo hai job wrapper:
+
+```cpp title="include/atom_app.hpp — khởi tạo evaluator trước khi request cloud"
+config_.validate();
+for (auto& evaluation : evaluations_)
+    evaluation = std::make_unique<GpuEvaluation>(gl_, budget_);
+refresh();
+```
+
+Thay body update bằng bản dưới. Điểm mới so với bài 8 là tiến evaluator, chỉ publish khi cả probe/evaluation đã trả nguồn, và request lại khi generation của cloud đổi:
+
+```cpp title="include/atom_app.hpp — update giữ SSBO tới khi các bước đọc xong"
+void update() {
+    for (int index = 0; index < 2; ++index) {
+        auto& measurement = probe(index);
+        measurement.tick();
+        auto* evaluation = evaluations_[index].get();
+        if (evaluation)
+            evaluation->tick();
+        // A probe holds its active SSBO until its finite job has drained.
+        const bool evaluationIdle = !evaluation || !evaluation->busy();
+        const bool published = pane(index).tick(!measurement.busy() && evaluationIdle);
+        if (published) {
+            const auto* cloud = pane(index).active();
+            std::cout << "CLOUD pane=" << index << " orbital=" << preset(cloud->config().orbital).name
+                << " requested=" << cloud->config().count << " generated=" << cloud->generated()
+                << " accepted=" << cloud->accepted() << " sample_gpu_ms=" << cloud->sampleMs() << '\n';
+        }
+        if (index == 1 && !config_.comparison)
+            continue;
+        if (pane(index).active() && !measurement.busy() &&
+            (probeJobRevision_[index] != probeRevision_ || probeJobGeneration_[index] != pane(index).generation())) {
+            ProbeSettings settings;
+            settings.center = config_.probeCenter;
+            settings.radius = config_.probeRadius;
+            if (config_.clipEnabled)
+                settings.clipAxis = config_.clipAxis;
+            settings.clipOffset = config_.clipOffset;
+            measurement.request(*pane(index).active(), settings);
+            probeJobRevision_[index] = probeRevision_;
+            probeJobGeneration_[index] = pane(index).generation();
+        }
+        if (pane(index).active() && !evaluation->busy() && evaluationGeneration_[index] != pane(index).generation()) {
+            evaluation->request(*pane(index).active());
+            evaluationGeneration_[index] = pane(index).generation();
+        }
+    }
+}
+```
+
+Vòng run ở trên gọi thêm điều kiện này trước khi công bố một lần chạy hữu hạn đã đủ kết quả:
+
+```cpp title="include/atom_app.hpp — kết quả phải thuộc generation đang dùng"
+bool evaluationsFinished() const {
+    if (!evaluations_[0] || !evaluations_[0]->ready() || evaluations_[0]->busy() ||
+        evaluationGeneration_[0] != primary_.generation())
+        return false;
+    if (config_.comparison && (!evaluations_[1] || !evaluations_[1]->ready() || evaluations_[1]->busy() || evaluationGeneration_[1] != secondary_.generation()))
+        return false;
+    return true;
+}
+```
+
+Các member phải được hủy trước cloud chúng đọc. Xem thứ tự khai báo trong source đầy đủ, không chuyển evaluator xuống sau một đối tượng có lifetime ngắn hơn chỉ để nhóm tên cho đẹp.
+
+Một phép kiểm phải thử cả trường hợp sai. Trong `verifyGpu`, fixture riêng có 257 record đã ready; đoạn sau chỉ làm hỏng density của record đầu:
+
+```cpp title="include/atom_verify.hpp — lỗi cố ý chỉ trong fixture dùng riêng"
+const auto first = cloud.referenceReadback(0, 1).front();
+const float incorrectDensity = first.positionDensity[3] + 1;
+gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, cloud.points().id());
+gl.BufferSubData(GL_SHADER_STORAGE_BUFFER, 3 * sizeof(float), sizeof(float), &incorrectDensity);
+gl.MemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+require(gl.GetError() == GL_NO_ERROR, "Could not prepare the corrupt-density GPU fixture");
+```
+
+Phần còn lại của fixture yêu cầu evaluator từ chối, examined=257 và invalid=1. Nếu nó chỉ đếm mà không so field, phép kiểm này sẽ không bắt được lỗi. Không đưa đoạn ghi hỏng dữ liệu này vào luồng UI hoặc cloud người dùng đang xem.
+
+### Bước 4 — Build một cấu hình rồi kiểm, không mở hàng loạt job
+
+Từ thư mục giải nén chứa CMakeLists.txt, với Visual Studio 2022:
+
+```powershell title="PowerShell — build và kiểm CPU Debug"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 1 --target project_45_final project_45_tests
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```
+
+Target project_45_tests mặc định dùng headers trong final/include: CTest ở lệnh trên kiểm đáp án đóng gói, không tự kiểm các thay đổi bạn viết trong starter. Nó hữu ích để biết môi trường và bộ source mẫu có ổn, nhưng test xanh chưa chứng minh bài làm của bạn đúng. Phần dưới chỉ cách tạo target test riêng cho bản tự viết.
+
+Lần configure đầu có thể tải SDL 3.4.8; đó là công việc mạng, không phải một vòng test. Không tăng timeout để che một job bị kẹt. Nếu tiến trình không còn tiến triển, dừng job đó và đọc log trước khi chạy lại.
+
+Với generator đa cấu hình, executable nằm dưới `build\Debug`. Với Ninja/Makefiles đơn cấu hình, dùng đường dẫn executable trực tiếp trong build và chọn build type khi configure. Muốn kiểm Release, build các target Release trước rồi chạy CTest với `-C Release`; không chạy CTest cho một cấu hình chưa được build.
+
+### Bước 5 — Kiểm bản tự viết, không chỉ đáp án
+
+Sau khi bạn đã điền đủ các hàm của bài 2–10 và nối app/shader, thêm target riêng sau vào cuối CMakeLists.txt **trong bản ZIP luyện tập**. Nó dùng cùng tests nhưng trỏ tới headers của starter:
+
+```cmake title="CMakeLists.txt — target kiểm CPU của bài làm"
+if(BUILD_TESTING)
+    add_executable(project_45_student_tests tests/tests.cpp)
+    target_compile_features(project_45_student_tests PRIVATE cxx_std_20)
+    target_include_directories(project_45_student_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/starter/include")
+    add_test(NAME project_45_student_tests COMMAND project_45_student_tests)
+    set_tests_properties(project_45_student_tests PROPERTIES TIMEOUT 20)
+endif()
+```
+
+Không thêm target này ở bài 1 rồi mong các hàm sampler chưa viết đã chạy được. Đây là bước kiểm của sản phẩm đã hoàn thành. Configure lại và chạy riêng tên test mới:
+
+```powershell title="PowerShell — kiểm đúng starter đã tự hoàn thiện"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 1 --target project_45_student_tests project_45_starter
+ctest --test-dir build -C Debug -R "^project_45_student_tests$" --output-on-failure --timeout 20
+.\build\Debug\project_45_starter.exe --hidden --verify --seconds 5
+```
+
+Lệnh native cuối kiểm đường GPU của bản starter bạn đã sửa. Trước khi dùng, đối chiếu cả atom_verify.hpp, atom_options.hpp và main: starter ban đầu chưa gọi verifier, còn các snapshot đầu chỉ mang scope nhỏ. Đừng giữ body kiểm nhỏ rồi gọi log “passed” của nó là đã kiểm triệu mẫu/evaluation. Cần có scope đầy đủ, maximumN đủ mốc, evaluate_examined và fixture lỗi của checkpoint 11.
+
+Còn các lệnh project_45_final ở bước kế là mốc đối chiếu của đáp án đóng gói. Cùng một bộ tests chưa đảm bảo mọi thuật toán đều đúng, nhưng ít nhất ta không lấy kết quả của file khác để công nhận bài làm của mình.
+
+### Bước 6 — Kiểm GPU thật và chạy đo hữu hạn
+
+Chạy từng lệnh một, đợi kết thúc rồi mới chạy lệnh tiếp:
+
+```powershell title="PowerShell — kiểm GPU và một lần chạy đo hữu hạn"
+.\build\Debug\project_45_final.exe --hidden --verify --seconds 5
+.\build\Debug\project_45_final.exe --orbital 2pz --count 1000003 --seed 12345 --benchmark --seconds 20
+```
+
+`--verify` của bản final có deadline tổng của bộ kiểm GPU: N sát ranh workgroup, catalog, một triệu cộng phần đuôi lẻ, nhiều seed/test field, guard, cancel và pass đánh giá field riêng với cả fixture hợp lệ/lỗi cố ý. Nó chỉ tải về những đoạn nhỏ để so record; histogram/region và field pass đọc toàn cloud bằng compute. Đây là scope đầy đủ ở checkpoint 11, không phải scope nhỏ của checkpoint 4.
+
+Verifier còn kiểm lifecycle của CloudPane thật: request đang Pause, hủy candidate đang bay mà giữ bytes của last-good, yêu cầu cũ bị thay bởi seed mới nhất, Reset tái lập record và từ chối budget nhân tạo mà không mất data cũ. Log lifecycleChecks tách khỏi số job sinh mẫu; không cộng hai số rồi gọi đó là số lần đã kiểm phân bố. Đây là các fixture hữu hạn, không yêu cầu cố làm driver hết VRAM.
+
+`--seconds 5` giới hạn phần chạy app sau verifier; verifier chạy trước và có deadline riêng. Nó không biến cả configure/build hoặc toàn bộ tiến trình kiểm thành một tác vụ dài đúng 5 giây. Khi agent/CI chạy tự động vẫn cần supervisor/process-tree timeout bên ngoài như quy ước repository.
+
+Lần verify/benchmark/capture hữu hạn còn phải kết thúc với render target dùng được. Nếu log đã có dòng kiểm GPU passed nhưng app sau đó báo target lỗi hoặc exit code khác 0, đừng coi cả lần chạy là đạt: dữ liệu GPU đúng và việc trình bày được frame là hai bằng chứng khác nhau. UI interactive có thể giữ data và cho retry, nhưng không ghi submitted=N khi đang chỉ vẽ panel lỗi.
+
+Lần chạy thứ hai thu benchmark hữu hạn 20 giây. Đổi cloud, camera, cách vẽ, clip, kích thước hoặc comparison sẽ xóa bộ mẫu cũ và warm-up lại; không trộn nhiều workload trong một median. Sau thay đổi cuối, bỏ 10 GPU query đã resolve rồi giữ tối đa 8192 kết quả khác nhau khi các pane current. drawSerial ngăn chép cùng giá trị UI thành nhiều phép đo:
+
+```cpp title="include/atom_app.hpp — thu kết quả query hữu hạn sau warm-up"
+void collectDrawTiming() {
+    if (!options_.benchmark)
+        return;
+    const auto workload = currentDrawWorkload();
+    if (workload != drawWorkload_) {
+        drawWorkload_ = workload;
+        drawSamples_.clear();
+        drawWarmup_ = 0;
+        lastDrawSerial_ = renderer_.drawSerial();
+        return;
+    }
+    if (!renderTargetReady_ || !primary_.current() ||
+        (config_.comparison && !secondary_.current()) || renderer_.drawSerial() == lastDrawSerial_)
+        return;
+    lastDrawSerial_ = renderer_.drawSerial();
+    // Camera, appearance, clipping, resize, comparison or cloud changes
+    // restart warmup. Never mix different workloads in one median/p95.
+    if (drawWarmup_++ < 10)
+        return;
+    if (drawSamples_.size() < 8192)
+        drawSamples_.push_back(renderer_.drawMs());
+}
+```
+
+Cuối lần chạy, report in số mẫu, median/p95 và raw theo thứ tự thu; dưới 5 query sau warm-up thì báo thiếu dữ liệu. Đây là phần workload/metrics theo pane trong report; phần RENDER và tính median/raw nằm ở hàm đầy đủ cuối trang. Reporting helper được cấp trong atom_report.hpp, không phải một thuật toán vật lý mới:
+
+```cpp title="include/atom_events.hpp — phần workload và metrics theo pane trong report"
+std::cout << currentDrawWorkload() << '\n';
+int paneCount = 1;
+if (config_.comparison)
+    paneCount = 2;
+for (int index = 0; index < paneCount; ++index) {
+    const auto* cloud = pane(index).active();
+    if (!cloud)
+        continue;
+    std::cout << "SAMPLE pane=" << index << " orbital=" << preset(cloud->config().orbital).name
+        << " mode=" << samplingModeName(cloud->mode())
+        << " seed=" << cloud->config().seed << " rMax=" << cloud->config().radius
+        << " table=" << cloud->config().radialBins << 'x' << cloud->config().muBins << 'x' << cloud->config().phiBins
+        << " requested=" << cloud->config().count << " generated=" << cloud->generated()
+        << " accepted=" << cloud->accepted() << " submitted=" << submitted_[index]
+        << " table_cpu_ms=" << cloud->tableMs() << " sample_gpu_ms=" << cloud->sampleMs()
+        << " allocate_upload_submit_cpu_ms=" << cloud->allocateUploadSubmitMs()
+        << " generation_wall_ms=" << cloud->generationWallMs()
+        << " tail=" << cloud->tables().tailMass;
+    writeProbeMetrics(std::cout, probe(index), probeCurrent(index));
+    if (evaluations_[index] && evaluations_[index]->ready() && evaluationGeneration_[index] == pane(index).generation())
+        std::cout << " evaluate_gpu_ms=" << evaluations_[index]->gpuMs()
+            << " evaluate_examined=" << evaluations_[index]->values()[0]
+            << " evaluate_invalid=" << evaluations_[index]->values()[1];
+    std::cout << '\n';
+}
+```
+
+`DRAW_BENCHMARK` là thời gian GPU của phần cloud và tone pass được bọc query; panel/overlay, xử lý input, SwapWindow và chờ CPU không nằm trong số đó. `draw_gpu_ms` riêng lẻ là query gần nhất, còn median/p95 được tính từ bộ raw đã thu. Table CPU, sample GPU và probe GPU được báo riêng cho từng pane. Không gọi nghịch đảo của median này là FPS toàn ứng dụng hoặc cộng mọi scope chồng nhau thành một tổng.
+
+allocate_upload_submit_cpu_ms là CPU elapsed quanh cấp/gửi dữ liệu tới driver, không phải kernel hay transfer GPU đã đồng bộ. generation_wall_ms còn gồm shader compile, table/upload, polling và Pause/UI; nó kết thúc ở ready, không được cộng với các scope nằm bên trong nó. Chi tiết ranh giới này ở bài 5.
+
+Probe chỉ có numeric ms khi ready và khớp cả revision vùng đo lẫn generation cloud; pending/not_current không lấy lại chi phí của lần cũ. Verify/benchmark hữu hạn phải đạt trạng thái đo current. Capture-only không tự thay bằng chứng này; dùng --verify khi cần ảnh nghiệm thu có phép đo.
+
+Muốn so hiệu năng, giữ nguyên config/camera/độ phân giải, đợi lệnh xong rồi mới chạy lại. Dùng Release; Debug ở trên chỉ để đối chiếu. p95 mô tả phần đuôi bộ mẫu này, không bảo đảm thời gian frame tối đa.
+
+Một lần chạy đo không đại diện mọi GPU. Giữ cả startup log MACHINE/CAPABILITIES/OpenGL (platform, compiler, assertions/NDEBUG, SDL, GPU/driver) và RENDER/SAMPLE (drawable, VSync, preset/N/seed/Rmax/table), không chỉ chép median. Các nhãn này mô tả lần chạy thật. Mốc 5 triệu là tùy chọn chỉ công bố khi kiểm riêng; menu có lựa chọn ấy chưa phải bằng chứng đã đạt.
+
+## Chạy checkpoint và đọc kết quả
+
+Checkpoint 11 và final cần chứa cùng các khả năng của sản phẩm. Dùng checklist này như một đường đi có thể lặp:
+
+1. Mở 2pz, đổi palette rồi orbit/pan/zoom vào cloud; F1 đổi clean/debug.
+2. Bật clip và dịch qua hai phía; accepted không đổi, visible đổi đúng hướng.
+3. Đo cầu tâm gốc, xem histogram/reference/uncertainty; dời tâm thì reference đóng dạng không còn bị gắn nhãn sai.
+4. So 1s/2s ở common scale; ghi N/seed/tail mỗi pane rồi chuyển auto-fit có nhãn.
+5. Yêu cầu cloud mới, Pause/Resume/Cancel, giữ last-good; thử lỗi budget hữu hạn trong bản kiểm.
+6. Save/Load/Reset, rồi resize/mất focus giữa drag; không kẹt input, không đổi nhãn cloud sai.
+
+Bộ source hoàn chỉnh được chia theo trách nhiệm: catalog/math, sampler/statistics/config, GPU/scene/probe, render/camera, controls/panel/events/app và verify. Mở file bạn đang học thay vì sửa một main hàng nghìn dòng. Các checkpoint giữ cùng cấu trúc để bạn so thay đổi mà không phải học lại đường dẫn mỗi lần.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — N lẻ và cloud đang đổi
+
+Chạy N=1.000.003, đổi preset rồi Cancel khi candidate đang sinh. Sau đó nhấn R để dựng lại cấu hình đang chọn. Không sửa N thành bội số 256; không được thấy nhãn mới gắn trên last-good cũ hoặc counters vượt requested. Kiểm lỗi này trước khi chụp ảnh thành phẩm.
+
+### Thí nghiệm 2 — Tách ảnh đẹp khỏi kiểm chứng
+
+Tăng opacity bằng phím = cho hình rực hơn rồi đo lại cùng vùng. Counts không đổi. Sau đó bật wrong-sampler sandbox hữu hạn: hình có thể vẫn đẹp nhưng histogram/reference phải cho thấy khác biệt. Trở về weighted và ghi rõ sandbox không đạt mốc triệu mẫu orbital.
+
+## Kiểm tra trước khi sang bài mới
+
+- C++20, CMake≥3.24, SDL 3.4.8 và OpenGL 4.3 đúng yêu cầu; starter/checkpoint/final có mã chạy được.
+- Ít nhất một triệu accepted thật do GPU sinh; N lẻ, guard, invalid, counters và budget được kiểm.
+- Field/nút/tail và phân bố có oracle độc lập; nhiều seed, bảng/float/tail không bị gộp thành một tolerance tùy tiện.
+- Camera/clip/transfer không sinh lại mẫu; phép đo dùng toàn accepted và báo uncertainty đúng nghĩa.
+- Comparison cùng thang, N/budget mỗi pane; Save/Load/Reset/Cancel/last-good giữ đúng dữ liệu và nhãn.
+- Kiểm CPU, GPU, thao tác native/web và ZIP/source được ghi riêng, không công bố phần chưa kiểm như đã đạt.
+- Có log hữu hạn và ảnh nhìn xiên đọc được thùy/nút; brightness legend nói đúng giới hạn của mô hình một electron.
+
+## Thử đi thêm một bước
+
+Làm một thẻ “điều tôi quan sát được” cho 1s, 2s và một dạng d/f: một ảnh common scale, một vùng đo có uncertainty, một câu hỏi và một config tái lập. Một sản phẩm tốt nên khiến người khác muốn thử điều tiếp theo, đồng thời biết dữ liệu cho phép kết luận tới đâu.
+
+Bạn đã hoàn thành đường xây Atomic Playground khi các kiểm ở trên đạt trên môi trường của mình, không chỉ khi đọc tới cuối bài. Trở về [tổng quan Project 45](/projects/atomic-playground) để lấy ZIP/checklist, hoặc mở [downloads](/downloads) để đối chiếu bộ source.

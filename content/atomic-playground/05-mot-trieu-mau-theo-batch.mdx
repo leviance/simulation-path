@@ -1,0 +1,256 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Sinh một triệu mẫu mà vẫn thao tác được
+
+Dự kiến 130 phút: đọc 25 phút, viết 75 phút, thử và kiểm tra 30 phút.
+
+## Ta cần giải quyết điều gì?
+
+Checkpoint 4 đã sinh vị trí trên GPU. Tăng một hằng số lên 1.000.000 chưa đủ để có một ứng dụng dùng được: người xem vẫn phải xoay camera, hủy job, đổi preset và biết mình đang nhìn dữ liệu cũ hay mới.
+
+Bạn tiếp tục sửa class job đã có trong `starter/include/atom_gpu.hpp`, thay cách giữ active/candidate ở `atom_scene.hpp` và mở count ở config/request. Không thêm một GpuCloud hay CloudPane thứ hai. Build lại `project_45_starter`; checkpoint 5 giúp đối chiếu cả method, member và nơi gọi, không chỉ một hằng số count.
+
+Ta thêm một quy tắc: cloud đang xem giữ nguyên trong khi cloud mới được dựng riêng. Cloud mới là **candidate**. Chỉ khi toàn bộ mẫu hợp lệ, kiểm guard xong và job ready, nó mới được thay vào màn hình. Nếu lỗi hay Cancel, giữ cloud cuối cùng đã kiểm — cả dữ liệu lẫn nhãn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một record 32 byte nghĩa là một triệu record tốn 32.000.000 byte, khoảng 30,5 MiB, chưa tính CDF, counters và framebuffer. Khi thay cloud, có lúc cả cloud cũ và candidate cùng tồn tại. Khi so hai pane, ta còn có dữ liệu của pane thứ hai. Budget đỉnh phải tính lúc ấy, không chỉ trạng thái cuối.
+
+Ta dùng batch tối đa 32.768 mẫu. `tick` không có nghĩa “làm xong toàn bộ”: một lần gọi có thể chỉ kiểm fence, nhận một batch hoặc gửi batch tiếp. SDL event loop vẫn có cơ hội xử lý input giữa các lần gọi.
+
+Trong Lab, bắt đầu một job rồi Pause, Step và Cancel. Quan sát riêng nhãn cloud đang xem và cấu hình đang yêu cầu. Nếu đổi preset giữa lúc sinh, bạn muốn nhãn đổi ngay hay chỉ đổi khi dữ liệu mới sẵn sàng?
+
+<InteractiveLab demo="atomic-playground" mode="batches" />
+
+Lab chạy job minh họa nhỏ trên CPU. Nó không thể chứng minh máy của bạn giữ được một triệu record trên GPU. Mốc đó được kiểm ở native cùng counters, guard và phép đo bộ nhớ.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Từ chối việc vượt budget trước khi mất cloud cũ
+
+Mở `include/atom_gpu.hpp`. Mọi Buffer dùng chung một đối tượng MemoryBudget:
+
+```cpp title="include/atom_gpu.hpp — ngân sách chung của các buffer"
+struct MemoryBudget {
+    std::size_t reserved{}, peak{};
+    static constexpr std::size_t limit = 512ULL * 1024 * 1024;
+
+    void acquire(std::size_t bytes) {
+        if (bytes > limit || reserved > limit - bytes)
+            throw std::runtime_error("GPU budget refused; keep the last-good cloud");
+        reserved += bytes;
+        peak = std::max(peak, reserved);
+    }
+
+    void release(std::size_t bytes) {
+        reserved -= bytes;
+    }
+};
+```
+
+`limit` là giới hạn phần mềm 512 MiB của ứng dụng, không phải số VRAM còn trống của máy. Driver vẫn có thể từ chối một cấp phát nằm trong giới hạn đó. Vì vậy lớp Buffer kiểm lỗi driver và hoàn trả reservation nếu tạo buffer thất bại.
+
+Điều kiện `reserved > limit - bytes` tránh cộng tràn trước khi kiểm. Mỗi lần dựng candidate, phải tính cả active, candidate, hai pane nếu có và framebuffer đang sống. Đừng đặt một budget mới độc lập cho mỗi cloud: như vậy từng cloud “đạt” trong khi tổng bộ nhớ vượt ngưỡng.
+
+### Bước 2 — Một lần tick chỉ làm một phần hữu hạn
+
+Đọc `GpuCloud::tick` từ trên xuống. Nửa đầu xử lý công việc đã gửi; nửa sau quyết định có gửi tiếp hay hoàn tất:
+
+```cpp title="include/atom_gpu.hpp — tiến một job theo từng batch"
+void tick() {
+    try {
+        if (fence_) {
+            const auto status = gl_.ClientWaitSync(fence_, 0, 0);
+            if (status == GL_WAIT_FAILED)
+                throw std::runtime_error("Sampling fence failed");
+            if (status == GL_TIMEOUT_EXPIRED) {
+                if (std::chrono::steady_clock::now() - submitted_ > std::chrono::seconds(3))
+                    throw std::runtime_error("Sampling fence exceeded three seconds");
+                return;
+            }
+            gl_.DeleteSync(fence_);
+            fence_ = nullptr;
+            GLuint64 elapsed{};
+            gl_.GetQueryObjectui64v(query_, GL_QUERY_RESULT, &elapsed);
+            sampleMs_ += static_cast<double>(elapsed) / 1000000.0;
+            counters_->read(0, sizeof(counts_), counts_.data());
+            if (counts_[2] || counts_[0] != next_ || counts_[1] != next_)
+                throw std::runtime_error("GPU generation was incomplete or produced invalid points");
+        }
+        if (cancelled_) {
+            phase_ = CloudPhase::cancelled;
+            return;
+        }
+        if (phase_ != CloudPhase::generating || paused_)
+            return;
+        if (next_ == config_.count) {
+            std::array<std::uint32_t, 16> actual{};
+            points_->read(static_cast<std::size_t>(config_.count) * sizeof(PointRecord), 64, actual.data());
+            if (actual != guard_)
+                throw std::runtime_error("Sampling wrote outside its point capacity");
+            generationWallMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started_).count();
+            phase_ = CloudPhase::ready;
+            return;
+        }
+        const auto batchCount = std::min<std::uint32_t>(32768, config_.count - next_);
+        radial_->bind(0);
+        angular_->bind(1);
+        points_->bind(2);
+        counters_->bind(3);
+        program_.use();
+        uintUniform("pointCount", config_.count);
+        uintUniform("startIndex", next_);
+        uintUniform("batchCount", batchCount);
+        uintUniform("seed", config_.seed);
+        uintUniform("radialBins", config_.radialBins);
+        uintUniform("muBins", config_.muBins);
+        uintUniform("phiBins", config_.phiBins);
+        gl_.Uniform1i(program_.uniform("orbital"), static_cast<int>(config_.orbital));
+        gl_.Uniform1i(program_.uniform("samplingMode"), static_cast<int>(mode_));
+        gl_.Uniform1f(program_.uniform("rMax"), config_.radius);
+        gl_.BeginQuery(GL_TIME_ELAPSED, query_);
+        gl_.DispatchCompute((batchCount + 255) / 256, 1, 1);
+        gl_.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+        gl_.EndQuery(GL_TIME_ELAPSED);
+        fence_ = gl_.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl_.Flush();
+        if (!fence_ || gl_.GetError() != GL_NO_ERROR)
+            throw std::runtime_error("Sampling dispatch failed");
+        next_ += batchCount;
+        submitted_ = std::chrono::steady_clock::now();
+    } catch (const std::exception& error) {
+        // Abandon the sync without a blocking wait. GL defers destruction of
+        // resources still in flight; a failed candidate must not stay busy.
+        if (fence_) {
+            gl_.DeleteSync(fence_);
+            fence_ = nullptr;
+        }
+        error_ = error.what();
+        phase_ = CloudPhase::failed;
+    }
+}
+```
+
+Đừng bắt đầu bằng cách chép cả hàm rồi bỏ qua trạng thái. Hãy theo ba thời điểm:
+
+- Có fence: poll không chờ. Nếu chưa xong thì trả về; quá deadline thì báo failed.
+- Batch đã xong: đọc counters nhỏ, cộng GPU time và kiểm generated/accepted đúng số ID đã giao.
+- Không còn mẫu: kiểm guard sau buffer rồi mới chuyển sang ready.
+
+`next_` là số ID đã giao, không tự nó chứng minh số điểm hợp lệ. Đó là việc của counters. Query đo thời gian GPU của các batch; `tableMs` là công việc bảng CPU riêng. Không gộp chúng thành một số “thời gian GPU” cho đẹp.
+
+Hai scope khác trong log cũng cần đọc đúng. allocate_upload_submit_cpu_ms đo elapsed CPU quanh việc cấp buffer, gửi bảng/guard và kiểm lời gọi driver; nó không phải transfer GPU đã đồng bộ hay kernel time. generation_wall_ms tính từ trước lúc tạo/biên dịch sample shader của job tới khi job ready: gồm dựng bảng, cấp/gửi dữ liệu, chạy GPU, polling và thời gian bạn Pause hoặc xử lý UI giữa các batch. Nó chưa phải thời gian tới lúc candidate được publish nếu còn phải đợi reader của cloud cũ. Vì vậy sample_gpu_ms nhỏ hơn wall time nhiều không tự chứng minh chương trình bị lỗi.
+
+### Bước 3 — Publish ở lớp ứng dụng, không tự đổi nhãn trước
+
+Mở `include/atom_scene.hpp`, `CloudPane::tick`. Đây là nơi nối trạng thái job với cloud đang hiển thị:
+
+```cpp title="include/atom_scene.hpp — chỉ thay active sau khi candidate đạt"
+bool tick(bool allowPublish = true) {
+    if (candidate_) {
+        candidate_->tick();
+        if (candidate_->ready() && allowPublish) {
+            if (candidateGeneration_ == requested_ && !queued_) {
+                active_ = std::move(candidate_);
+                generation_ = candidateGeneration_;
+                notice_.clear();
+                return true;
+            }
+            candidate_.reset();
+        } else if ((candidate_->phase() == CloudPhase::cancelled || candidate_->phase() == CloudPhase::failed) && !candidate_->busy()) {
+            if (candidate_->phase() == CloudPhase::failed)
+                notice_ = candidate_->error();
+            candidate_.reset();
+        }
+    }
+    if (!candidate_ && queued_ && !paused_) {
+        const auto request = *queued_;
+        queued_.reset();
+        try {
+            candidate_ = std::make_unique<GpuCloud>(gl_, budget_, request.config, request.mode);
+            candidateGeneration_ = request.generation;
+        } catch (const std::exception& error) {
+            notice_ = error.what();
+        }
+    }
+    return false;
+}
+```
+
+`requested_` và `candidateGeneration_` tránh publish một kết quả đã cũ khi người dùng vừa yêu cầu preset khác. `allowPublish` cho ứng dụng hoãn việc thay active trong lúc probe còn dùng buffer ấy. Khi ready đúng generation, `std::move` chuyển quyền sở hữu; khi failed/cancelled và không còn in-flight, candidate mới được giải phóng.
+
+`GpuCloud` không tự biết pane nào đang hiển thị nó. Lớp ứng dụng giữ active/candidate và chỉ chuyển quyền sở hữu khi candidate ready. Renderer đọc cấu hình **của active**, không đọc cấu hình đang chỉnh.
+
+Cancel không thu hồi một dispatch đã chạy trên driver giữa chừng. Ứng dụng ghi yêu cầu hủy, chờ fence đang có hoàn tất bằng polling rồi dừng gửi batch tiếp. Sự khác biệt này cần hiện trong trạng thái; không giả vờ đã xóa công việc đang bay.
+
+Khi đổi orbital liên tục, không xếp vô hạn candidate. Dừng/hủy job cũ có kiểm soát rồi mới tạo candidate thay thế trong budget. Một buffer còn bị probe sử dụng cũng chưa được giải phóng trước khi probe xong.
+
+### Bước 4 — Mở đúng quy mô trong config và nơi request
+
+Sau khi đã hiểu và thay phần job, còn hai chỗ phải cùng đổi. Trong `SamplingConfig`, count mặc định của mốc này là một triệu; các giới hạn vẫn giữ:
+
+```cpp title="include/atom_sampler.hpp — cấu hình cho mốc một triệu"
+struct SamplingConfig {
+    Orbital orbital{Orbital::pz};
+    std::uint32_t seed{12345};
+    std::uint32_t count{1000000};
+    std::uint32_t radialBins{2048}, muBins{64}, phiBins{128};
+    float radius{32};
+
+    void validate() const {
+        preset(orbital);
+        const bool invalidCount = count < 1 || count > 5000000;
+        const bool invalidRadialGrid = radialBins < 32 || radialBins > 8192;
+        const bool invalidAngularGrid = muBins < 8 || muBins > 256 || phiBins < 16 || phiBins > 512;
+        const bool invalidRadius = !std::isfinite(radius) || radius < 0.25F || radius > 128;
+        if (invalidCount || invalidRadialGrid || invalidAngularGrid || invalidRadius)
+            throw std::invalid_argument("Sampling configuration exceeds its finite domain or resource limits");
+    }
+};
+```
+
+Ở bài 4, `requestPane` có một dòng ép mọi request xuống 16.384. Thay body của hàm ấy bằng bản dưới để bỏ giới hạn cho weighted, nhưng **giữ** giới hạn của sandbox sai:
+
+```cpp title="include/atom_app.hpp — mở weighted nhưng vẫn chặn sandbox lớn"
+void requestPane(int index) {
+    auto request = requestedConfig(index);
+    if (config_.mode != SamplingMode::weighted)
+        request.count = std::min<std::uint32_t>(request.count, 16384);
+    pane(index).request(request, config_.mode);
+}
+```
+
+Nếu chỉ đổi con số trên panel mà còn dòng clamp cũ, bạn sẽ yêu cầu một triệu nhưng chỉ dựng 16.384. Ngược lại, nếu bỏ cả guard sandbox thì một thí nghiệm cố ý sai có thể chạy tới quy mô nghiệm thu. Hai điều kiện này cần được đọc cùng nhau trong log và source.
+
+## Chạy checkpoint và đọc kết quả
+
+Chạy checkpoint 5. Chọn N=1.000.000 bằng phím N hoặc panel; đổi N/preset/seed tự gửi request, không có nút Generate riêng. Trong lúc chờ, xoay camera; Space Pause/Resume, C hủy. Khi hoàn tất, requested, generated và accepted đều bằng 1.000.000, invalid bằng 0.
+
+`drawn` là số record gửi để vẽ; không phải số pixel sáng, và chưa trừ điểm ngoài camera hay bị clip. Nếu job mới đang chạy mà cloud cũ vẫn thấy, dòng counts phải thuộc đúng cloud, kèm trạng thái candidate riêng. Không lấy requested mới gắn cạnh accepted cũ mà không giải thích.
+
+BUF của từng pane báo các buffer cloud đang giữ (có cả CDF/counters/guard), còn budget tổng còn phải tính framebuffer và các job khác; đó không phải số VRAM vật lý driver thực dùng. Từ bài 6, nếu render target lỗi thì accepted có thể vẫn là một triệu nhưng submitted bằng 0: dữ liệu còn sống không đồng nghĩa frame này đã gửi dữ liệu ấy để vẽ.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — Cancel sau khi đã có một cloud tốt
+
+Sinh xong một cloud, ghi seed và N. Chọn preset khác rồi Cancel khi job chưa ready. Cloud, màu theo sign và nhãn cũ phải còn nguyên; không đổi thành tên preset mới. Nhấn R để yêu cầu dựng lại cùng cấu hình đang chọn, kiểm trạng thái Cancel không làm khóa ứng dụng.
+
+### Thí nghiệm 2 — Cấp phát thất bại phải là lỗi có thể phục hồi
+
+Trong bản thử, hạ MemoryBudget tới mức candidate không đủ chỗ khi active còn sống. Yêu cầu cloud mới. Chương trình phải báo từ chối, giữ cloud cũ và vẫn nhận input; reserved không được tăng mãi sau mỗi lần thử. Khôi phục budget sau thí nghiệm. Không cố làm máy hết VRAM thật để kiểm lỗi này.
+
+## Kiểm tra trước khi sang bài mới
+
+- Một triệu mẫu hợp lệ được sinh từ compute shader; không dùng mẫu gốc lặp để bù số thiếu.
+- requested/generated/accepted/drawn có ý nghĩa riêng; mọi số gắn với đúng active hoặc candidate.
+- Event loop tiếp tục nhận input giữa các batch; không có vòng chờ fence vô hạn.
+- Pause/Resume/Cancel rồi R để dựng lại không làm kẹt job; Cancel giữ last-good và nhãn.
+- Budget tính đồng thời mọi tài nguyên còn sống, báo reserved/peak; lỗi cấp phát trả reservation.
+- Guard không đổi, invalid=0; seed/N lẻ không bị sửa thành số thuận tiện cho workgroup.
+
+## Thử đi thêm một bước
+
+Đo thời gian sinh cùng N với vài kích thước batch hữu hạn trong một bản thử. Batch nhỏ có thể tăng overhead, batch lớn làm khoảng phản hồi dài hơn. Báo cả thời gian và khả năng thao tác, không chỉ chọn cấu hình có một con số nhanh nhất.
+
+Ta đã có nhiều mẫu đúng nghĩa. Bài tiếp theo [biến chúng thành hình có chiều sâu mà vẫn đọc được vùng nút](/projects/atomic-playground/06-splat-va-do-sang), không dùng brightness để che lỗi phân bố.

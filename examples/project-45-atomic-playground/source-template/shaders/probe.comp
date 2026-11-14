@@ -1,0 +1,53 @@
+#version 430 core
+layout(local_size_x=256) in;
+struct PointRecord { vec4 positionDensity; vec4 signPadding; };
+layout(std430,binding=2) readonly buffer Points { PointRecord points[]; };
+// [0] examined, [1] finite-valid, [2] visible after clipping, [3] inside region,
+// [4..19] radial histogram, [20] region AND visible, [21] invalid. Host zeroes it.
+layout(std430,binding=4) buffer Measurement { uint measurement[]; };
+uniform uint pointCount;
+uniform uint startIndex;
+uniform uint batchCount;
+uniform float rMax;
+uniform vec4 clipPlane;
+uniform int clipEnabled;
+uniform vec4 regionSphere;
+
+// Clipping only changes visibility counters, never the full-cloud denominator.
+// snippet:atom-gpu-probe
+#if LAB_CHECKPOINT >= 8
+void main() {
+    uint local=gl_GlobalInvocationID.x;
+    if (local>=batchCount || startIndex>=pointCount || local>=pointCount-startIndex)
+        return;
+    // A short counter buffer cannot even hold the invalid counter. Return with
+    // missing examined records so the host rejects the incomplete measurement.
+    if (measurement.length()<22)
+        return;
+    uint index=startIndex+local;
+    atomicAdd(measurement[0],1u);
+    if (pointCount>uint(points.length()) || isnan(rMax) || isinf(rMax) || rMax<=0.0 || any(isnan(regionSphere)) || any(isinf(regionSphere)) || regionSphere.w<0.0 || any(isnan(clipPlane)) || any(isinf(clipPlane))) {
+        atomicAdd(measurement[21],1u);
+        return;
+    }
+    vec4 record=points[index].positionDensity;
+    vec4 signRecord=points[index].signPadding;
+    bool validSign=signRecord.x==-1.0 || signRecord.x==0.0 || signRecord.x==1.0;
+    if (any(isnan(record)) || any(isinf(record)) || record.w<0.0 || any(isnan(signRecord)) || any(isinf(signRecord)) || !validSign || any(notEqual(signRecord.yzw,vec3(0))) || length(record.xyz)>rMax*1.000002) {
+        atomicAdd(measurement[21],1u);
+        return;
+    }
+    atomicAdd(measurement[1],1u);
+    bool visible=clipEnabled==0 || dot(clipPlane.xyz,record.xyz)<=clipPlane.w;
+    bool region=distance(record.xyz,regionSphere.xyz)<=regionSphere.w;
+    if (visible) atomicAdd(measurement[2],1u);
+    if (region) atomicAdd(measurement[3],1u);
+    if (visible && region) atomicAdd(measurement[20],1u);
+    uint bin=min(15u,uint(floor(clamp(length(record.xyz)/rMax,0.0,1.0)*16.0)));
+    atomicAdd(measurement[4u+bin],1u);
+}
+#else
+// The histogram/region kernel is implemented in lesson 8, not in the starter.
+void main() {}
+#endif
+// end-snippet:atom-gpu-probe

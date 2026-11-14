@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lưu điều kiện để mở lại đúng thí nghiệm
+
+Dự kiến 90 phút: đọc 20 phút, viết 45 phút, thử và kiểm tra 25 phút.
+
+## Ta cần giải quyết điều gì?
+
+Ta đã có hai pane và phép đo. Nếu bạn tìm được một cấu hình thú vị rồi đóng ứng dụng, một ảnh chụp không đủ để tạo lại nó. Ta cần giữ orbital, seed, số mẫu, bảng, miền và các lựa chọn hiển thị/đo.
+
+Các file làm việc là `starter/include/atom_config.hpp`, `atom_events.hpp` và phần app dùng config. Chạy bản tự sửa qua `project_45_starter`; checkpoint 10 giúp so toàn bộ parser và các action Save/Load/Reset.
+
+Bài này lưu một file cấu hình nhỏ, **không** ghi toàn bộ triệu vị trí. Khi load, chương trình kiểm đầy đủ file trước, sau đó yêu cầu dựng candidate. Cloud cũ vẫn còn cho tới khi candidate đạt yêu cầu. Reset cũng không được tự đổi seed theo thời gian hệ thống.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một bộ mẫu được xác định bởi field, miền, độ phân giải bảng, sampler, seed và N. Cùng seed nhưng đổi độ phân giải không còn là cùng thí nghiệm. Cùng hình ảnh nhưng khác exposure cũng không có nghĩa cloud khác.
+
+Lưu tham số có hai lợi ích: file rất nhỏ và người khác thấy rõ điều kiện. Đổi lại, nó không phải archive từng byte vị trí GPU; khác nền tảng/driver có thể có sai khác float nhỏ. Camera trong khung này được reset bằng Home/R, không được hứa rằng config lưu một ảnh hay mọi trạng thái của cửa sổ.
+
+Trong Lab, lưu cấu hình trong phiên, đổi preset/seed rồi nạp lại. Đọc nhãn để phân biệt việc khôi phục tham số với việc cloud mới đã sinh xong.
+
+<InteractiveLab demo="atomic-playground" mode="config" />
+
+Lab giữ cấu hình nhỏ phục vụ minh họa, không thay cho file I/O native. Source C++ ở dưới dùng một định dạng có magic/version, budget đầu vào và kiểm token; không “đọc được phần nào dùng phần ấy”.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Ghi thông số với độ chính xác đủ để đọc lại
+
+Mở `include/atom_config.hpp`. `PlaygroundConfig` chứa hai SamplingConfig và các lựa chọn comparison, scale, palette, clip, probe, splat. Writer kiểm trước khi ghi:
+
+```cpp title="include/atom_config.hpp — ghi cấu hình, không ghi vị trí"
+inline void writeConfig(std::ostream& output, const PlaygroundConfig& config) {
+    config.validate();
+    output.imbue(std::locale::classic());
+    output << std::dec << std::noboolalpha << std::defaultfloat << std::setprecision(std::numeric_limits<float>::max_digits10);
+    output << "ATOMIC_PLAYGROUND 1\n";
+    writeSamplingConfig(output, config.primary);
+    writeSamplingConfig(output, config.secondary);
+    output << static_cast<std::uint32_t>(config.mode) << ' ' << config.comparison << ' ' << config.autoFit << ' ' << config.debug << ' ' << config.clipEnabled << ' ' << config.densityBoost << '\n';
+    output << config.clipAxis << ' ' << config.clipOffset << ' ' << config.probeCenter.x << ' ' << config.probeCenter.y << ' ' << config.probeCenter.z << ' ' << config.probeRadius << '\n';
+    output << config.palette << ' ' << config.exposure << ' ' << config.opacity << ' ' << config.pointSize << '\n';
+    if (!output)
+        throw std::runtime_error("Configuration write failed");
+}
+```
+
+`ATOMIC_PLAYGROUND 1` là định danh và version, không phải một tiêu đề cho đẹp. Khi cấu trúc thay đổi, loader phải nhận biết thay vì âm thầm đọc nhầm thứ tự.
+
+Locale classic giữ dấu chấm thập phân; `max_digits10` giúp float ghi ra rồi đọc lại giữ được giá trị. Các cờ format cũng được đặt rõ để stream của bên gọi không vô tình chuyển số sang dạng khác.
+
+### Bước 2 — Đọc hết và kiểm hết trước khi áp dụng
+
+Loader giới hạn file 16 KiB, đọc magic/version, hai cấu hình, flags và các thông số hiển thị/đo rồi từ chối token dư:
+
+```cpp title="include/atom_config.hpp — tạo một cấu hình đã kiểm"
+inline PlaygroundConfig readConfig(std::istream& source) {
+    std::string bytes;
+    for (char value; source.get(value);) {
+        if (bytes.size() >= 16384)
+            throw std::invalid_argument("Configuration exceeds the 16 KiB input budget");
+        bytes.push_back(value);
+    }
+    if (!source.eof())
+        throw std::runtime_error("Configuration input failed");
+    std::istringstream input(bytes);
+    input.imbue(std::locale::classic());
+    std::string magic;
+    if (!(input >> magic) || magic != "ATOMIC_PLAYGROUND" || readUnsigned(input) != 1)
+        throw std::invalid_argument("Unsupported Atomic Playground configuration");
+    PlaygroundConfig config;
+    config.primary = readSamplingConfig(input);
+    config.secondary = readSamplingConfig(input);
+    const auto mode = readUnsigned(input);
+    const auto comparison = readUnsigned(input), autoFit = readUnsigned(input);
+    const auto debug = readUnsigned(input), clip = readUnsigned(input), boost = readUnsigned(input);
+    if (comparison > 1 || autoFit > 1 || debug > 1 || clip > 1 || boost > 1)
+        throw std::invalid_argument("Invalid configuration mode/boolean fields");
+    config.mode = static_cast<SamplingMode>(mode);
+    config.comparison = comparison != 0;
+    config.autoFit = autoFit != 0;
+    config.debug = debug != 0;
+    config.clipEnabled = clip != 0;
+    config.densityBoost = boost != 0;
+    if (!(input >> config.clipAxis >> config.clipOffset >> config.probeCenter.x >> config.probeCenter.y >> config.probeCenter.z >> config.probeRadius >> config.palette >> config.exposure >> config.opacity >> config.pointSize))
+        throw std::invalid_argument("Incomplete display/probe configuration");
+    std::string trailing;
+    if (input >> trailing)
+        throw std::invalid_argument("Configuration has trailing tokens");
+    config.validate();
+    return config;
+}
+```
+
+`readUnsigned` dùng `from_chars` cho token số nguyên; nó từ chối dấu âm, tràn và phần đuôi không hợp lệ. Không chỉ đọc trực tiếp vào uint rồi hy vọng −1 sẽ bị từ chối: formatted extraction có thể chấp nhận dấu trừ rồi chuyển thành một giá trị unsigned.
+
+`config.validate` cuối kiểm cả những trường đọc đúng cú pháp nhưng không hợp nghĩa: count vượt giới hạn, radius NaN, trục clip sai, opacity ngoài miền. Tạo đủ biến tạm trước giúp config đang dùng không bị sửa một nửa.
+
+### Bước 3 — Nối Save/Load vào action của ứng dụng
+
+Mở `include/atom_events.hpp`, trong chuỗi xử lý `Application::command`. Save/Load là hai nhánh được thêm ở checkpoint 10; đoạn sau nằm **trong** hàm ấy, không phải một chương trình độc lập:
+
+```cpp title="include/atom_events.hpp — nhánh Save/Load trong Application::command"
+} else if (action == Action::save) {
+    std::ofstream output("atomic-playground.cfg");
+    if (!output)
+        throw std::runtime_error("Could not open configuration output");
+    writeConfig(output, config_);
+    message_ = "SAVED PARAMETERS / NO POSITION DATA";
+} else if (action == Action::load) {
+    std::ifstream input("atomic-playground.cfg");
+    if (!input)
+        throw std::runtime_error("Could not open atomic-playground.cfg");
+    const auto candidate = readConfig(input);
+    pointer_.release();
+    config_ = candidate;
+    selected_ = 0;
+    ++probeRevision_;
+    refresh();
+    message_ = "CONFIG VALIDATED / LAST-GOOD UNTIL READY";
+```
+
+File `atomic-playground.cfg` nằm trong working directory của lần chạy. F6 ghi tham số hiện tại; F7 đọc file đó. Khi load thành công, `refresh` chỉ gửi yêu cầu candidate; nó không đổi nhãn của active cloud thành cấu hình mới trước khi job ready.
+
+Nếu đọc file lỗi, exception đi tới phần báo lỗi chung của action, cloud tốt vẫn tồn tại. Không xóa active ở đầu nhánh Load để “chuẩn bị chỗ”.
+
+### Bước 4 — Reset giữ điều kiện, không gieo seed mới
+
+Nhánh Reset cũng nằm trong `Application::command`:
+
+```cpp title="include/atom_events.hpp — reset tái lập điều kiện hiện tại"
+pointer_.release();
+config_.probeCenter = {};
+++probeRevision_;
+resetCamera();
+refresh();
+```
+
+Reset giải phóng drag, đưa probe về gốc, reset camera rồi tạo lại cùng mô hình/bảng/seed. Chọn seed mới là một action riêng. Đừng gọi thời gian hệ thống trong reset rồi vẫn ghi “tái lập” trên UI.
+
+## Chạy checkpoint và đọc kết quả
+
+Chạy checkpoint 10 từ một working directory bạn biết. Chọn hai orbital, seed/N và một vùng đo; F6 lưu. Đổi chúng rồi F7 load. So tham số và một vài sample ID sau khi candidate ready; không chỉ nhìn ảnh có vẻ giống.
+
+Kiểm file là vài dòng tham số, không có một triệu record. Rồi thử R hai lần với cùng cấu hình: ID được đối chiếu và kết quả thống kê phải trở lại cùng trạng thái trong giới hạn float đã ghi.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — File đúng nửa đầu, sai nửa sau
+
+Sao chép config, sửa palette thành một giá trị ngoài miền hoặc bỏ dòng cuối. Load phải từ chối toàn bộ; không được áp dụng orbital mới nhưng để nửa style cũ. Kiểm nhãn/counters last-good vẫn đúng.
+
+### Thí nghiệm 2 — Token đáng ngờ
+
+Trong bản sao config, thử seed=−1, count quá lớn, version lạ và token dư ở cuối. Mỗi trường hợp cần một lỗi hữu hạn, không bắt đầu cấp phát GPU. Khôi phục file hợp lệ rồi load lại để chắc ứng dụng còn phục hồi được.
+
+## Kiểm tra trước khi sang bài mới
+
+- Save chỉ ghi tham số nhỏ, có magic/version và float round-trip.
+- Loader giới hạn kích thước, từ chối âm/tràn/NaN/token dư và config ngoài miền.
+- Parse/validate xong mới áp dụng và request candidate; lỗi giữ active lẫn nhãn.
+- Cùng điều kiện/seed/ID được tái lập; Reset không tự đổi seed.
+- Working directory và file được ghi rõ; không nhầm config với screenshot hay archive vị trí.
+- Nạp file khi có job khác không xếp vô hạn candidate hoặc vượt budget.
+
+## Thử đi thêm một bước
+
+Gửi một config cùng ba dòng ghi lại môi trường, commit source và giới hạn float cho người khác. Họ có thể dựng lại hình và phép đo mà không cần bạn chỉ bằng chuột không? Nếu chưa, bổ sung điều kiện còn thiếu vào tài liệu, không nhét cả cloud vào config ngay.
+
+Bài cuối [ghép sản phẩm, kiểm mốc triệu mẫu và đo chi phí từng phần](/projects/atomic-playground/11-hoan-thien-atomic-playground). Cấu hình bạn vừa lưu sẽ là một phần của hồ sơ kiểm chứng.

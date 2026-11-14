@@ -64,6 +64,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
           projectNumber === 42 ||
           projectNumber === 43 ||
           projectNumber === 44 ||
+          projectNumber === 45 ||
           projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
@@ -101,6 +102,15 @@ test("C++ validation remains active in both Debug and Release", async () => {
       assert.match(
         testsSource,
         /void require\(bool condition, const char\s*\*\s*message\)\s*\{\s*if \(!condition\)\s*throw std::runtime_error\(message\)/,
+      );
+      assert.match(
+        testsSource,
+        /catch \(const std::exception\s*&\s*error\) \{[\s\S]*?return EXIT_FAILURE;/,
+      );
+    } else if (directory === "project-45-atomic-playground") {
+      assert.match(
+        testsSource,
+        /void check\(bool condition, const std::string\s*&\s*message\)\s*\{\s*if \(!condition\)\s*throw std::runtime_error\(message\)/,
       );
       assert.match(
         testsSource,

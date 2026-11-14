@@ -2,61 +2,66 @@ import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
   base: {
-    label: "MOLECULAR LAB GPU",
-    title: "Từ ca nhỏ kiểm chứng được tới mục tiêu hàng triệu hạt",
+    label: "ATOMIC PLAYGROUND",
+    title: "Nhìn, cắt và đo một đám mây orbital",
     description:
-      "Canvas CPU giải thích các pha, bank và vùng tìm hạt; bản native dùng OpenGL compute mới là nơi đo GPU.",
+      "Canvas 2D lấy mẫu CPU với N nhỏ để đọc thuật toán. Mỗi điểm là một mẫu vị trí theo mật độ hydrogen, không phải một electron riêng; bản native sinh một triệu vị trí thật trên GPU và được kiểm riêng.",
   },
   modes: {
-    "gpu-md-1": {
-      title: "Dựng cửa sổ và nhìn thấy hệ hạt trước",
+    field: {
+      title: "Field 2p khác cloud lấy mẫu thế nào?",
       description:
-        "Tạo cửa sổ OpenGL, đặt 64 hạt đứng yên và phân biệt preview với dữ liệu tính trên GPU.",
+        "Đổi orbital và nhìn các thùy/node. Phân biệt density được cung cấp với màu và với tập vị trí đã lấy mẫu.",
     },
-    "gpu-md-2": {
-      title: "Đặt dữ liệu lên GPU và khởi tạo hạt",
+    measure: {
+      title: "Lấy đều theo bán kính có đều theo thể tích không?",
       description:
-        "Tách các SSBO vec4, ước tính dung lượng và cho compute shader tạo position/velocity bằng seed cố định.",
+        "So với sandbox sai uniform-radius/uniform-angle hữu hạn; đọc phần tử thể tích và lượng mẫu gần tâm/cực.",
     },
-    "gpu-md-3": {
-      title: "Vẽ hạt trực tiếp từ SSBO",
+    cdf: {
+      title: "Một số u đi vào bin nào của CDF?",
       description:
-        "Vertex shader đọc bank đã hoàn tất; thêm pan, cursor-anchored zoom và giới hạn số marker được vẽ.",
+        "Đổi seed, quan sát histogram và radial reference. Bảng hữu hạn là approximation; nhiều seed không tạo cùng một đám điểm.",
     },
-    "gpu-md-4": {
-      title: "Tính lực trên GPU, bắt đầu từ ca nhỏ",
+    gpu: {
+      title: "Dữ liệu nào phải nằm lại trên GPU?",
       description:
-        "Mỗi invocation tự cộng lực cho một hạt, giữ U/2 và đối chiếu force-shifted LJ với oracle CPU.",
+        "Lab vẫn là CPU nhỏ. Theo dõi positions/density của record; ứng dụng C++ mới có compute shader và renderer đọc SSBO trực tiếp.",
     },
-    "gpu-md-5": {
-      title: "Dựng grid trên GPU để giảm số cặp",
+    batches: {
+      title: "Candidate chưa xong có được thay cloud cũ không?",
       description:
-        "Atomic append vào bucket 16 slot, kiểm overflow rồi tìm hạt trong stencil tuần hoàn quanh mốc dựng.",
+        "Pause, đi một batch, hủy hoặc reset; đọc requested/generated/accepted và nhãn last-good trước khi công bố kết quả.",
     },
-    "gpu-md-6": {
-      title: "Cho hệ chuyển động bằng Velocity Verlet",
+    splats: {
+      title: "Tăng độ sáng có làm mật độ thay đổi không?",
       description:
-        "Drift ghi bank ứng viên, dựng grid rồi tính lực mới, kick và chỉ nhận bước hoàn tất.",
+        "Giữ cùng samples, thay size/opacity/palette. Legend mô tả transfer function; độ sáng ảnh không phải xác suất tuyến tính.",
     },
-    "gpu-md-7": {
-      title: "Tái sử dụng grid mà không bỏ sót lực",
+    clip: {
+      title: "Mặt cắt làm lộ gì trong các thùy?",
       description:
-        "Theo dõi displacement trên GPU, kiểm nửa skin sau drift và truy vấn quanh vị trí reference.",
+        "Orbit/pan/zoom và kéo clip plane; generation không đổi, mẫu bị che không biến thành mẫu chưa từng tồn tại.",
     },
-    "gpu-md-8": {
-      title: "Đo năng lượng và động lượng trên GPU",
+    probe: {
+      title: "Bao nhiêu mẫu thật sự nằm trong vùng đang chọn?",
       description:
-        "Reduction phân tầng biến hàng triệu giá trị thành bốn số; từ chối bước có dữ liệu không hữu hạn.",
+        "Đổi vùng đo rồi so tỷ lệ với reference/uncertainty. Mẫu số là cả cloud, không chỉ phần còn nhìn sau clipping.",
     },
-    "gpu-md-9": {
-      title: "Tăng số hạt có kiểm soát",
+    compare: {
+      title: "Hai hình có đang dùng cùng thang không?",
       description:
-        "Kiểm SSBO, bộ nhớ resident/peak, chia dispatch và cho phép chọn 100.000 tới mục tiêu 5 triệu hạt.",
+        "So hai orbital theo cùng đơn vị a₀, đọc N mỗi pane. Không tự thu phóng từng hình rồi ngầm gọi là cùng kích thước.",
     },
-    "gpu-md-10": {
-      title: "Kiểm chứng, đo chi phí và chạy bản hoàn chỉnh",
+    config: {
+      title: "Mở lại seed có khôi phục đúng điều kiện không?",
       description:
-        "Chạy oracle ở 64/257 hạt, kiểm quỹ đạo/reduction, đo hữu hạn và tải toàn bộ source có thể build.",
+        "Giữ/khôi phục cấu hình RAM của lab và thử reset. File cấu hình thật thuộc bản C++; không giả nút RAM là save/load file native.",
+    },
+    validation: {
+      title: "Hình đẹp đã đủ chứng minh sampling đúng chưa?",
+      description:
+        "Đổi seed/preset, đo vùng và đối chiếu histogram/reference; cuối cùng kiểm riêng source/native GPU một triệu mẫu.",
     },
   },
 } satisfies ProjectLabMeta;

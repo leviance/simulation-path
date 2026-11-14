@@ -1,0 +1,180 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt hai orbital cạnh nhau ở cùng thang
+
+Dự kiến 120 phút: đọc 25 phút, viết 65 phút, thử và kiểm tra 30 phút.
+
+## Ta cần giải quyết điều gì?
+
+Ta đã đo được một cloud. Bây giờ muốn trả lời một câu hỏi có hình ảnh: 1s, 2s và các dạng d/f khác nhau về kích thước, vùng nút và phân bố ra sao? Chuyển preset qua lại dễ làm mất dấu thang đo, nhất là khi camera tự fit mỗi hình.
+
+Sửa app/events/panel của bản starter để bật pane thứ hai và chọn đúng nguồn dữ liệu. Build `project_45_starter`; dùng checkpoint 9/source diff để đối chiếu cả ownership, viewport và readout, không chỉ bật hai khung hình.
+
+Checkpoint 9 thêm hai pane. Mỗi pane giữ cấu hình và cloud riêng, nhưng có thể dùng cùng camera và cùng đơn vị a₀. Chế độ auto-fit vẫn hữu ích để khám phá chi tiết; ta giữ nó như một chế độ **khác**, có nhãn, không lén dùng nó khi so kích thước.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai quả cầu một lớn một nhỏ sẽ trông bằng nhau nếu chụp riêng và zoom cho vừa khung. Hai orbital cũng vậy. “Mỗi ảnh đầy viewport” không phải “hai đối tượng bằng cỡ”.
+
+Ta cần tách ba lựa chọn: cùng đơn vị a₀, cùng thang camera và cùng N. Chúng không tự kéo theo nhau. Mỗi pane có một triệu mẫu chỉ có nghĩa cùng số mẫu; chưa có nghĩa brightness từng pixel hay xác suất trong cùng một quả cầu giống nhau.
+
+Trong Lab, đặt 1s cạnh 2s và quan sát trên cùng thang; đây là chế độ comparison mà Canvas cung cấp. Lab chỉ đo pane A, không có auto-fit hay bộ đo riêng cho B. Đến phần chạy native ở dưới, ta mới đổi common scale/auto-fit và đo cả hai pane.
+
+<InteractiveLab demo="atomic-playground" mode="compare" />
+
+Canvas chỉ là bản CPU nhỏ. Native cần báo N/seed/Rmax/counts và budget của **từng pane**, cộng cả candidate đang dựng; không lấy một số tổng N rồi khiến người xem tưởng mỗi pane đều có số ấy.
+
+## Bắt tay xây dựng
+
+### Bước 1 — Hai pane, hai quyền sở hữu dữ liệu
+
+Mở `include/atom_app.hpp`. `primary_` và `secondary_` là hai CloudPane cùng dùng `budget_`. Cấu hình yêu cầu giữ ở `config_.primary` và `config_.secondary`, nhưng renderer lấy cấu hình của active cloud khi nó tồn tại.
+
+Hàm request được dùng cho pane được chọn:
+
+```cpp title="include/atom_app.hpp — yêu cầu một pane mà không đổi pane kia"
+void requestPane(int index) {
+    auto request = requestedConfig(index);
+    if (config_.mode != SamplingMode::weighted)
+        request.count = std::min<std::uint32_t>(request.count, 16384);
+    pane(index).request(request, config_.mode);
+}
+```
+
+Ở checkpoint trước 5 và trong sandbox sai, count được giới hạn 16.384 có chủ đích. Sản phẩm đúng ở checkpoint 9 dùng weighted và mốc một triệu cho mỗi pane đang yêu cầu kiểm. Giới hạn sandbox phải được báo, không lấy sandbox làm bằng chứng mốc lớn.
+
+`CloudPane::request` chỉ xếp cấu hình mới và hủy candidate cũ có kiểm soát; nó chưa đổi active. Nhờ vậy người dùng có thể đổi pane bên phải mà không làm pane bên trái trống hoặc đổi nhãn sai.
+
+### Bước 2 — Common scale không tự đổi khoảng cách từng pane
+
+Camera của người dùng được sao chép cho mỗi pane. Chỉ nhánh auto-fit mới thay distance theo radius:
+
+```cpp title="include/atom_app.hpp — tách common scale khỏi auto-fit"
+Camera viewCamera(int index) {
+    Camera result = camera_;
+    if (config_.autoFit) {
+        float radius = requestedConfig(index).radius;
+        if (pane(index).active())
+            radius = pane(index).active()->config().radius;
+        result.distance *= radius / cameraScaleRadius_;
+    }
+    return result;
+}
+```
+
+Nếu `autoFit` tắt, hai pane giữ cùng distance/FOV. Khi bật, mỗi radius có thể lấp khung tương tự nhau; UI phải ghi auto-fit để người học không suy ra kích thước vật lý từ hai ảnh đó. `cameraScaleRadius_` là mốc của lần fit camera, không đọc lại radius đang yêu cầu của pane A trong mỗi frame; đổi một preset vì vậy không làm thang pane kia nhảy theo một cấu hình chưa publish.
+
+Không chỉnh vị trí mẫu bằng cách chia mỗi cloud cho Rmax. Cách ấy thay dữ liệu world space và làm hỏng phép đo a₀. Fit là một lựa chọn camera, không phải phép biến đổi mô hình.
+
+### Bước 3 — Chia viewport, giữ dữ liệu mỗi pane đúng nguồn
+
+Đọc vòng vẽ sau. Chiều rộng dành cho scene được chia thành hai khoảng không chồng nhau, phần panel nằm riêng:
+
+```cpp title="include/atom_app.hpp — nối hai cloud vào cùng pipeline vẽ"
+void draw() {
+    submitted_.fill(0);
+    if (!SDL_GetWindowSize(window_.get(), &width_, &height_) ||
+        !SDL_GetWindowSizeInPixels(window_.get(), &drawableWidth_, &drawableHeight_))
+        throw std::runtime_error(SDL_GetError());
+    if (drawableWidth_ < 1 || drawableHeight_ < 1)
+        return;
+    const int sceneWidth = static_cast<int>(static_cast<double>(width_ - nativePanelWidth) * drawableWidth_ / width_);
+    int count = 1;
+    if (config_.comparison)
+        count = 2;
+    if (!beginRenderTarget()) {
+        drawTargetFailure();
+        return;
+    }
+    const auto display = style();
+    for (int index = 0; index < count; ++index) {
+        const int left = index * sceneWidth / count;
+        const int right = (index + 1) * sceneWidth / count;
+        renderer_.draw(pane(index).active(), requestedConfig(index), viewCamera(index), display, left, right - left, drawableHeight_, cpuPoints_.get(), cpuCount_);
+        submitted_[index] = 48 * 48 * 48;
+        if (pane(index).active())
+            submitted_[index] = pane(index).active()->accepted();
+        if (cpuPoints_)
+            submitted_[index] = cpuCount_;
+    }
+    renderer_.finish(display);
+    PanelState state = panelState();
+    panel_.build(overlay_, width_, height_, state);
+    const float logicalPaneWidth = static_cast<float>(width_ - nativePanelWidth) / count;
+    if (config_.debug || placeProbe_)
+        for (int index = 0; index < count; ++index)
+            sphereGuide(overlay_, config_.probeCenter, config_.probeRadius, viewCamera(index), index * logicalPaneWidth, logicalPaneWidth, static_cast<float>(height_));
+    overlayRenderer_.draw(overlay_, drawableWidth_, drawableHeight_);
+}
+```
+
+Mỗi lần `renderer_.draw` nhận active/request/camera của đúng index. Projection dùng aspect của pane chứ không lấy aspect toàn cửa sổ, nếu không orbital sẽ bị dẹt khi bật so sánh.
+
+HDR target vẫn dùng kích thước drawable; hit test panel dùng logical coordinates. Hai hệ kích thước có vai trò khác nhau trên HiDPI. Đừng sửa chỗ click bằng cách thay aspect renderer.
+
+### Bước 4 — Bật comparison và chọn pane qua input
+
+Trong chuỗi `Application::command`, thay nhánh pane cũ vốn chỉ báo “bài sau” bằng nhánh chọn pane:
+
+```cpp title="include/atom_events.hpp — Tab chỉ đổi pane khi comparison bật"
+} else if (action == Action::pane) {
+    if (config_.comparison)
+        selected_ = 1 - selected_;
+}
+```
+
+Thêm hai nhánh compare/fit vào cùng chuỗi action. Chúng là nơi F2/F3 thực sự đổi trạng thái; chỉ thêm hai viewport mà bỏ các nhánh này thì nút vẫn chưa làm gì:
+
+```cpp title="include/atom_events.hpp — kích hoạt comparison và đổi thang"
+} else if (action == Action::compare) {
+    config_.comparison = !config_.comparison;
+    selected_ = 0;
+    pointer_.release();
+    if (config_.comparison && !secondary_.active())
+        requestPane(1);
+    resetCamera();
+} else if (action == Action::fit) {
+    config_.autoFit = !config_.autoFit;
+    // Only the camera changes. Both clouds retain their original units.
+    // end-snippet:atom-comparison
+}
+```
+
+F2 yêu cầu pane B khi cần rồi reset camera. F3 chỉ đổi cách nhìn, không thay mẫu. Khi đọc source diff, giữ nhánh action ở đúng vị trí trước nhánh mode mặc định; đây là các khối trong một hàm, không phải hai hàm command khác nhau.
+
+### Bước 5 — Đọc cả hai điều kiện thí nghiệm
+
+Panel chọn pane để chỉnh bằng Tab. Bật comparison bằng F2; thao tác này cũng reset góc nhìn để fit cả hai miền đang chọn và tính khoảng cách có xét aspect hẹp hơn của hai pane. F3 đổi common scale/auto-fit; Home fit lại khi cần. Preset/count/seed áp dụng vào pane đang chọn. Hiện active và pending riêng. Nếu pane phải đang dựng, nhãn bên phải phải nói last-good/pending, không gắn ngay tên orbital mới lên dữ liệu cũ.
+
+Mỗi phép đo vùng thuộc đúng active generation của pane đó. Không dùng một histogram cuối cùng cho cả hai pane. Thử hủy candidate mới ở bên phải khi active bên trái đã tốt, rồi đo lại bên trái. Phím C hủy các candidate của cả hai pane, không phải một lệnh hủy riêng pane đang chọn; active đã kiểm vẫn được giữ.
+
+## Chạy checkpoint và đọc kết quả
+
+Chạy checkpoint 9, dùng 1s và 2s ở common scale, cùng N. Ghi seed, Rmax, tail và tỷ lệ trong cùng một quả cầu tâm gốc. Sau đó bật auto-fit: hình nhìn khác nhưng các số đo không đổi.
+
+Tiếp tục thử 2pz và một dạng d/f. Zoom/orbit camera chung giúp thấy vùng nút, không cần “căn lại” từng pane bằng cách đổi vị trí điểm.
+
+## Thử tạo lỗi
+
+### Thí nghiệm 1 — Auto-fit nhưng bỏ nhãn
+
+Tạm ẩn nhãn scale mode, chụp hai pane đều vừa khung và viết một kết luận về kích thước. Mở lại common scale để thấy kết luận ấy có còn đúng không. Khôi phục nhãn; đây là lỗi truyền đạt, dù code lấy mẫu có thể hoàn toàn đúng.
+
+### Thí nghiệm 2 — Candidate bên phải thiếu budget
+
+Giữ hai active rồi yêu cầu candidate mới trong một bản thử budget thấp. Ứng dụng phải từ chối có thông báo, giữ cả hai last-good và không gắn counts của pane này vào pane kia. Khôi phục budget sau phép thử, không cố đẩy máy tới hết VRAM thật.
+
+## Kiểm tra trước khi sang bài mới
+
+- Có hai pane độc lập về orbital/seed/N/Rmax, dùng chung budget tổng.
+- Common scale giữ a₀ và camera chung; auto-fit có nhãn riêng, không sửa vị trí mẫu.
+- Aspect đúng cho từng viewport; resize/HiDPI không làm hình dẹt hoặc lệch vùng click.
+- Counts và measurement thuộc đúng pane/generation; pending không đổi nhãn active.
+- Cancel/lỗi candidate một pane không xóa cloud tốt của pane kia.
+- So cùng một vùng bằng k/N, không suy xác suất từ brightness giữa hai pane.
+
+## Thử đi thêm một bước
+
+Tạo một “ảnh thí nghiệm” gồm 1s/2s common scale, cùng N và cùng vùng đo, kèm bảng ngắn Rmax/tail/k/N. Một người khác có thể đọc được điều kiện từ ảnh không? Nếu không, cần bổ sung nhãn trước khi làm hình rực rỡ hơn.
+
+Tiếp theo, [ta lưu cấu hình để mở lại đúng điều kiện](/projects/atomic-playground/10-luu-cau-hinh-va-reset), thay vì chỉ giữ một ảnh không thể tái lập.

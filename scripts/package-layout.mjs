@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 const requiredEntries = ["README.md", "CMakeLists.txt", "starter", "checkpoints", "final", "tests"];
-const optionalEntries = ["assets", "LICENSE", "LICENSE.md"];
+const optionalEntries = ["assets", "LICENSE", "LICENSE.md", "REFERENCES.md"];
 
 export function projectPackageEntries(projectDirectory) {
   return [
