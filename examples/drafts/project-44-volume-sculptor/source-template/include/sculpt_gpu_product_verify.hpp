@@ -77,6 +77,7 @@ inline void verifyGpuProducts(GpuMeshBuilder& sphere, GlApi& gl, GpuBudget& budg
     inspectGpuProduct(sphere, 1, 2);
 
     // A genuine subtract stroke drills through stored samples; this does not select the torus preset.
+    // snippet:sculpt-product-drill-stroke
     const Brush drill{{0, 0, 0.95F}, 0.32F, 0.65F, BrushMode::subtract};
     gpuCheck(sphere.beginStroke(70, drill) && sphere.moveStroke(70, {0, 0, -0.95F}) && sphere.endStroke(70), "Could not submit the complete bounded drill stroke");
     waitForGpuModel(
@@ -86,12 +87,15 @@ inline void verifyGpuProducts(GpuMeshBuilder& sphere, GlApi& gl, GpuBudget& budg
         deadline
     );
     const auto hole = inspectGpuProduct(sphere, 1, 0);
+    // end-snippet:sculpt-product-drill-stroke
     ScalarGrid drilled(sphere.settings().grid);
     drilled.replaceValues(snapshotGpuField(sphere));
+    // snippet:sculpt-product-tunnel-probes
     for (int sample = 0; sample <= 256; ++sample) {
         const float z = -1.4F + 2.8F * sample / 256.0F;
         gpuCheck(drilled.sample({0, 0, z}) > 0.01F, "The apparent hole is a blind cavity instead of an open tunnel");
     }
+    // end-snippet:sculpt-product-tunnel-probes
     gpuCheck(sphere.undo(), "Drilled mesh could not undo its stroke");
     waitForGpuModel(
         sphere, [&] {
@@ -115,6 +119,7 @@ inline void verifyGpuProducts(GpuMeshBuilder& sphere, GlApi& gl, GpuBudget& budg
     auto bridge = waitForScene(scenes, sphere, deadline);
     gpuCheck(static_cast<bool>(bridge), "Two-sphere reset did not publish a complete model");
     inspectGpuProduct(*bridge, 2, 4);
+    // snippet:sculpt-product-bridge-stroke
     const Brush joining{{-0.3F, 0, 0}, 0.28F, 0.35F, BrushMode::add};
     gpuCheck(bridge->beginStroke(71, joining) && bridge->moveStroke(71, {0.3F, 0, 0}) && bridge->endStroke(71), "Could not submit the joining stroke");
     waitForGpuModel(
@@ -124,12 +129,15 @@ inline void verifyGpuProducts(GpuMeshBuilder& sphere, GlApi& gl, GpuBudget& budg
         deadline
     );
     inspectGpuProduct(*bridge, 1, 2);
+    // end-snippet:sculpt-product-bridge-stroke
     ScalarGrid joined(bridge->settings().grid);
     joined.replaceValues(snapshotGpuField(*bridge));
+    // snippet:sculpt-product-bridge-probes
     for (int sample = 0; sample <= 128; ++sample) {
         const float x = -0.55F + 1.1F * sample / 128.0F;
         gpuCheck(joined.sample({x, 0, 0}) < -0.01F, "The bridge image hides an unjoined gap in its stored field");
     }
+    // end-snippet:sculpt-product-bridge-probes
     gpuCheck(bridge->undo(), "Joined mesh could not undo its stroke");
     waitForGpuModel(
         *bridge, [&] {

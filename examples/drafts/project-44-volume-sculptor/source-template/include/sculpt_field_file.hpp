@@ -16,12 +16,14 @@ inline constexpr std::array<std::byte, 8> fieldMagic{
     std::byte{'S'}, std::byte{'C'}, std::byte{'L'}, std::byte{'P'},
     std::byte{'T'}, std::byte{'4'}, std::byte{'4'}, std::byte{0}};
 
+// snippet:sculpt-file-store-unsigned
 inline void storeUnsigned(std::span<std::byte> bytes, std::size_t offset, std::uint64_t value, std::size_t width) {
     if (width > 8 || offset > bytes.size() || width > bytes.size() - offset)
         throw std::invalid_argument("Binary integer write is outside the bounded header");
     for (std::size_t index = 0; index < width; ++index)
         bytes[offset + index] = static_cast<std::byte>((value >> (index * 8)) & 255);
 }
+// end-snippet:sculpt-file-store-unsigned
 
 inline std::uint64_t loadUnsigned(std::span<const std::byte> bytes, std::size_t offset, std::size_t width) {
     if (width > 8 || offset > bytes.size() || width > bytes.size() - offset)
@@ -45,6 +47,7 @@ struct FieldHeader {
     std::uint64_t checksum{};
 };
 
+// snippet:sculpt-file-encode-header
 inline std::array<std::byte, fieldHeaderSize> encodeFieldHeader(const FieldHeader& header) {
     header.settings.validate();
     std::array<std::byte, fieldHeaderSize> bytes{};
@@ -62,7 +65,9 @@ inline std::array<std::byte, fieldHeaderSize> encodeFieldHeader(const FieldHeade
     // Bytes 56..63 are reserved and must remain zero in version 1.
     return bytes;
 }
+// end-snippet:sculpt-file-encode-header
 
+// snippet:sculpt-file-decode-header
 inline FieldHeader decodeFieldHeader(std::span<const std::byte> bytes) {
     if (bytes.size() != fieldHeaderSize || !std::equal(fieldMagic.begin(), fieldMagic.end(), bytes.begin()))
         throw std::invalid_argument("Not a complete SCLPT44 scalar-field header");
@@ -86,7 +91,9 @@ inline FieldHeader decodeFieldHeader(std::span<const std::byte> bytes) {
     result.checksum = loadUnsigned(bytes, 48, 8);
     return result;
 }
+// end-snippet:sculpt-file-decode-header
 
+// snippet:sculpt-file-checksum
 class FieldChecksum {
     public:
     explicit FieldChecksum(std::span<const std::byte> header) {
@@ -110,6 +117,7 @@ class FieldChecksum {
     private:
     std::uint64_t value_{14695981039346656037ULL};
 };
+// end-snippet:sculpt-file-checksum
 
 inline std::vector<std::byte> encodeFieldSamples(std::span<const float> values) {
     if (values.size() > 65536)
@@ -155,6 +163,7 @@ class FieldWriter {
         written_ += values.size();
     }
 
+    // snippet:sculpt-file-finish-write
     void finish() {
         if (finished_ || written_ != header_.settings.grid.sampleCount())
             throw std::logic_error("An incomplete field cannot become a completed archive");
@@ -167,6 +176,7 @@ class FieldWriter {
         checkStream();
         finished_ = true;
     }
+    // end-snippet:sculpt-file-finish-write
 
     std::size_t written() const {
         return written_;
@@ -203,6 +213,7 @@ class FieldReader {
         return read_;
     }
 
+    // snippet:sculpt-file-read-batches
     std::vector<float> next(std::size_t maximumSamples = 65536) {
         if (finished_ || maximumSamples == 0 || maximumSamples > 65536 || read_ == header_.settings.grid.sampleCount())
             throw std::logic_error("Field read has no remaining bounded batch");
@@ -224,6 +235,7 @@ class FieldReader {
             throw std::invalid_argument("Field archive has trailing bytes or a read error");
         finished_ = true;
     }
+    // end-snippet:sculpt-file-read-batches
 
     private:
     static std::array<std::byte, fieldHeaderSize> readHeader(std::istream& stream) {

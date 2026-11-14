@@ -96,6 +96,7 @@ class SaveFieldJob {
             stage_ = FileStage::cancelled;
             return;
         }
+        // snippet:sculpt-save-check-before-publish
         if (stage_ == FileStage::writing) {
             const auto count = std::min<std::size_t>(65536, settings_.grid.sampleCount() - writer_->written());
             std::vector<float> values(count);
@@ -122,6 +123,7 @@ class SaveFieldJob {
                 stage_ = FileStage::complete;
             }
         }
+        // end-snippet:sculpt-save-check-before-publish
     }
 
     private:
@@ -220,6 +222,7 @@ class ExportMeshJob {
             writer_->append(vertices);
             local_ += count;
         } else {
+            // snippet:sculpt-obj-check-before-publish
             reader_->readBatch();
             if (reader_->complete()) {
                 const auto& actual = reader_->summary();
@@ -231,6 +234,7 @@ class ExportMeshJob {
                 source_.clear();
                 stage_ = FileStage::complete;
             }
+            // end-snippet:sculpt-obj-check-before-publish
         }
     }
 

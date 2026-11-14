@@ -12,6 +12,7 @@ inline std::string pathText(const std::filesystem::path& path) {
 
 class LoadFieldJob {
     public:
+    // snippet:sculpt-load-candidate
     LoadFieldJob(GlApi& gl, GpuBudget& budget, const std::filesystem::path& source)
         : source_(source) {
         if (!std::filesystem::is_regular_file(source))
@@ -27,6 +28,7 @@ class LoadFieldJob {
         // The current document is not touched. Only this private candidate receives imported batches.
         candidate_ = std::make_unique<GpuMeshBuilder>(gl, budget, reader_->header().settings, false, FieldInitialization::archive);
     }
+    // end-snippet:sculpt-load-candidate
 
     bool complete() const {
         return complete_;
@@ -63,6 +65,7 @@ class LoadFieldJob {
         }
         if (candidate_->gpuBusy())
             return;
+        // snippet:sculpt-load-validate-before-remesh
         if (!checked_) {
             if (reader_->readCount() < reader_->header().settings.grid.sampleCount())
                 candidate_->appendImport(reader_->next());
@@ -74,6 +77,7 @@ class LoadFieldJob {
             }
         } else if (candidate_->ready())
             complete_ = true;
+        // end-snippet:sculpt-load-validate-before-remesh
     }
 
     std::unique_ptr<GpuMeshBuilder> takeModel() {

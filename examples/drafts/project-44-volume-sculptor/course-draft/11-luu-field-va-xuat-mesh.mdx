@@ -1,0 +1,461 @@
+> Bản biên tập cho checkpoint 11, chưa phát hành hoặc ghép Canvas.
+
+Thời gian gợi ý: đọc 45 phút, tự viết 110 phút, thử save/load/export và file lỗi 40 phút. Setup/build tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Bạn đã nặn được một khối có lỗ hoặc một cầu nối. Nếu đóng cửa sổ bây giờ, mọi nét sửa sẽ mất. Lưu tên preset và thông số cọ không giải quyết được: chúng không chứa hàng triệu giá trị scalar đã thay đổi. Ta cần lưu đúng field đang có, rồi mở lại mà không phải nặn từ đầu.
+
+Một nhu cầu khác là đem bề mặt sang công cụ 3D. Công cụ ấy cần triangles và normals, không cần hiểu format field của ta. Vì thế bài này xây **hai đầu ra khác nhau**: file `.scl` để tiếp tục chỉnh sửa, file `.obj` để dùng mesh ở nơi khác. Mở lại `.scl` phải dựng lại mesh từ dữ liệu đã lưu; mở OBJ trong chương trình khác không khôi phục được volume hay history.
+
+Khó khăn không chỉ là gọi `write()`. Người dùng có thể nặn tiếp khi đang lưu, file có thể bị cắt cụt, và một tác vụ load có thể thất bại sau khi đã đọc gần hết. Ta sẽ làm chúng theo batch, kiểm dữ liệu trước khi công bố và giữ model hợp lệ cũ nếu có lỗi.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Lưu một thời điểm, không lưu một hỗn hợp
+
+Save bắt đầu khi field/mesh đang current. Ta đóng băng field trên GPU bằng một buffer riêng, rồi đọc từng batch của snapshot ấy để ghi file. Nét cọ đến sau không sửa snapshot. Nếu đọc thẳng buffer đang được nặn qua nhiều frame, nửa đầu file có thể thuộc trước stroke còn nửa sau thuộc sau stroke.
+
+Export giữ các buffer mesh **đã công bố** bằng shared ownership. Chúng không bị ghi đè khi mesher tạo candidate mới, nên output vẫn thuộc đúng generation đã chọn. Nếu editor đang giữ last-good vì remesh chưa xong, E xuất chính last-good ấy, không giả vờ xuất field mới nhất.
+
+Load đi theo chiều ngược lại nhưng không ghi vào `current`: đọc/kiểm file → upload vào candidate → count/scan/emit/normals → chỉ thay model khi mọi phần đã xong. Đây là cách giữ model cũ của Bài 10, áp dụng thêm cho dữ liệu đến từ file.
+
+### File field có những gì?
+
+Version 1 dùng header 64 bytes, sau đó là $N^3$ giá trị IEEE-754 binary32 theo row-major x nhanh nhất. Các số được mã hóa little-endian rõ ràng, không ghi nguyên một C++ struct vì struct có thể có padding hoặc layout khác giữa compiler.
+
+| Byte offset | Nội dung | Số bytes |
+| --- | --- | --- |
+| 0 | Magic `SCLPT44` và byte 0 | 8 |
+| 8 | Version = 1 | 4 |
+| 12 | N samples mỗi chiều | 4 |
+| 16, 20, 24 | Origin x/y/z | 4 mỗi thành phần |
+| 28 | Extent | 4 |
+| 32 | Isovalue | 4 |
+| 36 | Preset dùng khi reset | 4 |
+| 40 | Tổng số samples, phải bằng N³ | 8 |
+| 48 | Checksum | 8 |
+| 56 | Reserved, phải bằng 0 | 8 |
+
+Kích thước chính xác là $64+4N^3$ bytes. Ở 128³, file có 8.388.672 bytes. Origin/extent/isovalue không phải thông tin trang trí: thiếu chúng, cùng một mảng số có thể dựng thành khối sai kích thước hoặc sai bề mặt.
+
+File không lưu GPU buffer ID, camera, history hay generation của phiên cũ. Mở file là một document mới với history rỗng. Preset trong header chỉ cho biết R sẽ tạo lại loại khối nào; **payload scalar mới là tác phẩm đã nặn**.
+
+### Checksum không thay việc kiểm dữ liệu
+
+Ta dùng FNV-1a 64-bit để phát hiện dữ liệu hỏng do ghi/đọc hoặc thay đổi ngoài ý muốn. Nó bao gồm metadata và payload, bỏ qua chính ô checksum. Đây không phải chữ ký hay hash mật mã; một file có checksum đúng vẫn có thể chứa NaN, resolution ngoài budget hoặc metadata vô nghĩa. Parser phải từ chối các trường hợp ấy độc lập.
+
+File đang ghi mang đuôi `.partial`. Ghi xong, flush/đóng, đọc lại kiểm tra, rồi mới rename thành `.scl` hoặc `.obj`. Việc này tránh gắn tên kết quả hoàn chỉnh cho file dở; nó **không** cam kết dữ liệu đã được đồng bộ bền vững xuống ổ đĩa khi mất điện. `ostream::flush()` không phải cơ chế bảo đảm crash durability của hệ điều hành.
+
+## Bắt tay xây dựng
+
+### 1. Thêm đường chạy I/O từ checkpoint 11
+
+Giữ editor của Bài 10 và build target mới:
+
+```powershell title="Build và mở checkpoint 11"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 1 --target project_44_checkpoint_11
+./build/Release/project_44_checkpoint_11.exe --grid 128
+```
+
+Generator single-config đặt executable ngay trong `build/`. Bài này thêm tab Files: S lưu field, O mở lại file vừa lưu/đã load trong phiên, E xuất mesh đang active. Không có file picker. Muốn mở một file bất kỳ, chạy app với `--load "đường-dẫn/field.scl"`.
+
+Nguồn chia thành bốn phần: `sculpt_field_file.hpp` mã hóa/đọc field; `sculpt_mesh_file.hpp` ghi/đọc OBJ; `sculpt_export_jobs.hpp` chia việc save/export thành các lượt nhỏ; `sculpt_file_tasks.hpp` quản lý job và candidate load. `src/main.cpp` chỉ nối input, tick và handoff. Không đặt toàn bộ parser vào vòng lặp sự kiện.
+
+### 2. Ghi header theo byte, không theo layout struct
+
+Trong `sculpt_field_file.hpp`, hàm nhỏ dưới đây ghi một số nguyên theo thứ tự little-endian. Kiểm `width > bytes.size() - offset` tránh phép cộng offset+width bị overflow trước khi so bounds.
+
+```cpp title="include/sculpt_field_file.hpp — Ghi số nguyên có giới hạn"
+inline void storeUnsigned(std::span<std::byte> bytes, std::size_t offset, std::uint64_t value, std::size_t width) {
+    if (width > 8 || offset > bytes.size() || width > bytes.size() - offset)
+        throw std::invalid_argument("Binary integer write is outside the bounded header");
+    for (std::size_t index = 0; index < width; ++index)
+        bytes[offset + index] = static_cast<std::byte>((value >> (index * 8)) & 255);
+}
+```
+
+`storeFloat()` dùng `std::bit_cast<std::uint32_t>` để lấy bit pattern của float rồi gọi hàm này với width 4; không ép kiểu float sang số nguyên, vì ép kiểu sẽ đổi giá trị thay vì giữ cách biểu diễn. `loadUnsigned/loadFloat` làm chiều ngược lại. Source có `static_assert` yêu cầu float 32-bit/IEC 559.
+
+Từ bảng layout, hàm tạo header trở thành một loạt thao tác có thể đối chiếu trực tiếp:
+
+```cpp title="include/sculpt_field_file.hpp — Mã hóa header version 1"
+inline std::array<std::byte, fieldHeaderSize> encodeFieldHeader(const FieldHeader& header) {
+    header.settings.validate();
+    std::array<std::byte, fieldHeaderSize> bytes{};
+    std::copy(fieldMagic.begin(), fieldMagic.end(), bytes.begin());
+    storeUnsigned(bytes, 8, 1, 4);
+    storeUnsigned(bytes, 12, static_cast<unsigned>(header.settings.grid.samples), 4);
+    storeFloat(bytes, 16, header.settings.grid.origin.x);
+    storeFloat(bytes, 20, header.settings.grid.origin.y);
+    storeFloat(bytes, 24, header.settings.grid.origin.z);
+    storeFloat(bytes, 28, header.settings.grid.extent);
+    storeFloat(bytes, 32, header.settings.isovalue);
+    storeUnsigned(bytes, 36, static_cast<unsigned>(header.settings.shape), 4);
+    storeUnsigned(bytes, 40, header.settings.grid.sampleCount(), 8);
+    storeUnsigned(bytes, 48, header.checksum, 8);
+    // Bytes 56..63 are reserved and must remain zero in version 1.
+    return bytes;
+}
+```
+
+Mảng được khởi tạo bằng 0 nên reserved có giá trị rõ ràng. `settings.validate()` dùng cùng ràng buộc domain/resolution/isovalue của editor; writer không tạo một format rộng hơn khả năng đọc của chính app.
+
+### 3. Từ chối header sai trước khi cấp volume
+
+Đọc đủ 64 bytes trước, kiểm magic/version/reserved, rồi mới diễn giải các trường còn lại. Không lấy N trực tiếp từ file để cấp một vector N³ mà chưa kiểm giới hạn.
+
+```cpp title="include/sculpt_field_file.hpp — Đọc và kiểm metadata"
+inline FieldHeader decodeFieldHeader(std::span<const std::byte> bytes) {
+    if (bytes.size() != fieldHeaderSize || !std::equal(fieldMagic.begin(), fieldMagic.end(), bytes.begin()))
+        throw std::invalid_argument("Not a complete SCLPT44 scalar-field header");
+    if (loadUnsigned(bytes, 8, 4) != 1 || loadUnsigned(bytes, 56, 8) != 0)
+        throw std::invalid_argument("Unsupported field version or nonzero reserved header bytes");
+    const auto samples = loadUnsigned(bytes, 12, 4);
+    if (samples > 192)
+        throw std::invalid_argument("Field grid exceeds the bounded resolution presets");
+    FieldHeader result;
+    result.settings.grid.samples = static_cast<int>(samples);
+    result.settings.grid.origin = {loadFloat(bytes, 16), loadFloat(bytes, 20), loadFloat(bytes, 24)};
+    result.settings.grid.extent = loadFloat(bytes, 28);
+    result.settings.isovalue = loadFloat(bytes, 32);
+    const auto shape = loadUnsigned(bytes, 36, 4);
+    if (shape > 2)
+        throw std::invalid_argument("Field archive has an unknown reset preset");
+    result.settings.shape = static_cast<Shape>(shape);
+    result.settings.validate();
+    if (loadUnsigned(bytes, 40, 8) != result.settings.grid.sampleCount())
+        throw std::invalid_argument("Field payload count does not match N cubed");
+    result.checksum = loadUnsigned(bytes, 48, 8);
+    return result;
+}
+```
+
+Điều kiện `samples > 192` chưa phải toàn bộ kiểm N. `ModelSettings::validate()` sau đó chỉ nhận các preset 32/64/128/192 và kiểm cả domain hữu hạn, range isovalue, preset. Các phép tính số samples/bytes dùng hàm có kiểm overflow từ những bài đầu.
+
+Checksum được cập nhật tuần tự, nên không phải giữ cả file trong RAM. Hai đoạn header được đưa vào checksum bỏ qua bytes 48…55 là nơi sẽ ghi chính kết quả:
+
+```cpp title="include/sculpt_field_file.hpp — Checksum cho metadata và payload"
+class FieldChecksum {
+    public:
+    explicit FieldChecksum(std::span<const std::byte> header) {
+        if (header.size() != fieldHeaderSize)
+            throw std::invalid_argument("Checksum requires the complete field header");
+        update(header.first(48));
+        update(header.subspan(56, 8));
+    }
+
+    void update(std::span<const std::byte> bytes) {
+        for (const auto byte : bytes) {
+            value_ ^= std::to_integer<unsigned>(byte);
+            value_ *= 1099511628211ULL;
+        }
+    }
+
+    std::uint64_t value() const {
+        return value_;
+    }
+
+    private:
+    std::uint64_t value_{14695981039346656037ULL};
+};
+```
+
+Phép nhân unsigned có wrap modulo 2⁶⁴ theo thuật toán. Đừng đổi sang signed integer rồi dựa vào overflow. Đây là một checksum cố định cho version 1, không dùng `std::hash` có thể không ổn định như format lưu trữ cần.
+
+### 4. Ghi/đọc payload theo batch rồi chốt checksum
+
+`FieldWriter` mở đầu bằng header có checksum tạm bằng 0. Mỗi `append()` kiểm số samples còn thiếu, mã hóa tối đa 65.536 floats, ghi bytes rồi cập nhật checksum. `encodeFieldSamples()` từ chối NaN/Infinity và độ lớn quá 32 trước khi ghi batch.
+
+Khi đã đủ đúng N³ samples, `finish()` quay lại byte 48 để điền checksum, trở về cuối file và flush. Thiếu dù chỉ một sample cũng không được đánh dấu hoàn tất.
+
+```cpp title="include/sculpt_field_file.hpp — Chốt một field đã ghi đủ"
+void finish() {
+    if (finished_ || written_ != header_.settings.grid.sampleCount())
+        throw std::logic_error("An incomplete field cannot become a completed archive");
+    std::array<std::byte, 8> checksumBytes{};
+    storeUnsigned(checksumBytes, 0, checksum_.value(), 8);
+    stream_.seekp(48);
+    stream_.write(reinterpret_cast<const char*>(checksumBytes.data()), checksumBytes.size());
+    stream_.seekp(0, std::ios::end);
+    stream_.flush();
+    checkStream();
+    finished_ = true;
+}
+```
+
+Phía đọc cũng xử lý từng batch. `next()` trả floats để upload; `finish()` mới xác nhận toàn bộ file đã đủ, checksum khớp và không thừa bytes. Không gọi `finishImport()` của GPU chỉ vì đã đọc được header hoặc một batch đầu.
+
+```cpp title="include/sculpt_field_file.hpp — Đọc đủ chưa đồng nghĩa đọc đúng"
+std::vector<float> next(std::size_t maximumSamples = 65536) {
+    if (finished_ || maximumSamples == 0 || maximumSamples > 65536 || read_ == header_.settings.grid.sampleCount())
+        throw std::logic_error("Field read has no remaining bounded batch");
+    const auto count = std::min(maximumSamples, header_.settings.grid.sampleCount() - read_);
+    std::vector<std::byte> bytes(count * 4);
+    stream_.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!stream_)
+        throw std::invalid_argument("Truncated scalar field payload");
+    auto result = decodeFieldSamples(bytes);
+    checksum_.update(bytes);
+    read_ += count;
+    return result;
+}
+
+void finish() {
+    if (finished_ || read_ != header_.settings.grid.sampleCount() || checksum_.value() != header_.checksum)
+        throw std::invalid_argument("Incomplete field or checksum mismatch; keep the previous document");
+    if (stream_.peek() != std::char_traits<char>::eof() || stream_.bad())
+        throw std::invalid_argument("Field archive has trailing bytes or a read error");
+    finished_ = true;
+}
+```
+
+`decodeFieldSamples()` kiểm range/finite ngay cả khi checksum có thể đúng. Reader chỉ cần một batch hữu hạn trong RAM; model GPU candidate giữ dữ liệu đã upload nhưng chưa được trao cho editor.
+
+### 5. Biến Save thành tác vụ có thể tiếp tục qua nhiều frame
+
+`SaveFieldJob` yêu cầu model current, cấp snapshot trong budget, rồi copy field GPU→GPU giống nguồn đóng băng của Bài 10. `reserveOutputDirectory()` tạo thư mục mới dưới `.runtime/volume-sculptor`; nếu trùng tên timestamp thì thử suffix khác, không mở ghi đè tác phẩm cũ.
+
+`tick()` đợi ticket copy và kiểm canary trước. Sau đó mỗi lượt ghi tối đa 65.536 samples từ snapshot. Ghi hết thì mở lại chính file `.partial` để kiểm, không lập tức công bố tên `.scl`:
+
+```cpp title="include/sculpt_export_jobs.hpp — Ghi rồi đọc lại trước khi công bố"
+if (stage_ == FileStage::writing) {
+    const auto count = std::min<std::size_t>(65536, settings_.grid.sampleCount() - writer_->written());
+    std::vector<float> values(count);
+    snapshot_->read(writer_->written() * sizeof(float), std::as_writable_bytes(std::span(values)));
+    writer_->append(values);
+    if (writer_->written() == settings_.grid.sampleCount()) {
+        writer_->finish();
+        output_.close();
+        input_.open(partial_, std::ios::binary);
+        if (!input_)
+            throw std::runtime_error("Cannot reopen saved field for verification");
+        reader_ = std::make_unique<FieldReader>(input_);
+        if (reader_->header().checksum != writer_->checksum())
+            throw std::runtime_error("Saved field checksum does not match its frozen source");
+        stage_ = FileStage::checking;
+    }
+} else if (stage_ == FileStage::checking) {
+    reader_->next();
+    if (reader_->readCount() == settings_.grid.sampleCount()) {
+        reader_->finish();
+        input_.close();
+        std::filesystem::rename(partial_, path());
+        snapshot_.reset();
+        stage_ = FileStage::complete;
+    }
+}
+```
+
+C hủy job: chờ ticket đang bay xong, đóng streams, trả snapshot budget, giữ file partial nhưng không rename. Khi disk/stream lỗi, `NativeFileTasks` bắt exception, bỏ job và báo lỗi; model đang chỉnh sửa không bị thay. Mỗi job còn có deadline tổng 60 giây. Batch nhỏ giúp vòng lặp có điểm trả quyền điều khiển, nhưng không biến I/O đồng bộ thành cam kết không bao giờ chờ hệ điều hành; process supervisor vẫn cần cho kiểm tự động.
+
+### 6. Load vào candidate riêng
+
+Constructor của `LoadFieldJob` kiểm file thường, header, kích thước chính xác và khả năng GPU trước khi tạo candidate import. Nó không giữ tham chiếu để ghi vào field đang mở:
+
+```cpp title="include/sculpt_file_tasks.hpp — Chuẩn bị document nhập riêng"
+LoadFieldJob(GlApi& gl, GpuBudget& budget, const std::filesystem::path& source)
+    : source_(source) {
+    if (!std::filesystem::is_regular_file(source))
+        throw std::invalid_argument("Field import requires a regular local file");
+    input_.open(source, std::ios::binary);
+    if (!input_)
+        throw std::runtime_error("Cannot open the requested field archive");
+    reader_ = std::make_unique<FieldReader>(input_);
+    const auto expectedBytes = fieldHeaderSize + reader_->header().settings.grid.sampleCount() * sizeof(float);
+    if (std::filesystem::file_size(source) != expectedBytes)
+        throw std::invalid_argument("Field file size does not match its exact declared sample count");
+    preflightSculpt(gl, reader_->header().settings);
+    // The current document is not touched. Only this private candidate receives imported batches.
+    candidate_ = std::make_unique<GpuMeshBuilder>(gl, budget, reader_->header().settings, false, FieldInitialization::archive);
+}
+```
+
+Trong `tick()`, candidate xử lý GPU ticket trước. Khi còn busy thì trả về, không upload chồng tùy ý. Phần đọc/import là:
+
+```cpp title="include/sculpt_file_tasks.hpp — Chỉ dựng mesh sau khi file hợp lệ"
+if (!checked_) {
+    if (reader_->readCount() < reader_->header().settings.grid.sampleCount())
+        candidate_->appendImport(reader_->next());
+    else {
+        reader_->finish();
+        input_.close();
+        candidate_->finishImport();
+        checked_ = true;
+    }
+} else if (candidate_->ready())
+    complete_ = true;
+```
+
+Nếu checksum sai ở cuối, candidate bị bỏ; `current` vẫn còn. Đã upload một phần **không** có nghĩa người dùng đã mất field cũ. `takeModel()` cũng kiểm `complete_` và `ready()` trước khi trao quyền sở hữu. Cancel ngừng gửi thêm việc, đợi ticket đang chạy, rồi mới bỏ candidate. Load thành công xóa history cũ vì đây là document mới, không phải một nét cọ có thể undo.
+
+### 7. Xuất đúng triangles đang được vẽ
+
+`ExportMeshJob` giữ một bản vector `MeshChunk` của active mesh. Các buffer bên trong dùng shared ownership và immutable sau publish, nên vẫn tồn tại khi editor remesh. Ta không gọi marching tetrahedra CPU để dựng một mesh “gần giống” rồi xuất nó.
+
+OBJ dùng các dòng `v` cho position, `vn` cho normal và `f` cho triangle. Chỉ số bắt đầu từ 1. Format của ta không có UV, material hay vertex welding; mỗi triangle có ba cặp position/normal riêng. File sẽ lớn hơn mesh indexed, đổi lại cách xuất/đọc và đối chiếu đơn giản.
+
+Constructor của `MeshWriter` chọn locale cố định và `max_digits10`, đủ để round-trip các giá trị binary32 khi đọc bằng parser tương ứng:
+
+```cpp title="include/sculpt_mesh_file.hpp — Không làm tròn mất dữ liệu khi xuất text"
+explicit MeshWriter(std::ostream& stream)
+    : stream_(stream) {
+    stream_.imbue(std::locale::classic());
+    stream_ << std::setprecision(std::numeric_limits<float>::max_digits10);
+    stream_ << "# Volume Sculptor / actual extracted mesh / triangles with outward normals\n";
+}
+```
+
+`append()` kiểm cả batch trước khi ghi: số đỉnh chia hết cho 3, không quá 4.095 đỉnh/lượt, packed w đúng 1/0, positions hữu hạn, normals đơn vị và triangle không suy biến. Sau đó ghi từng triangle:
+
+```cpp title="include/sculpt_mesh_file.hpp — Ghi cặp position và normal với mặt tham chiếu chúng"
+for (std::size_t first = 0; first < vertices.size(); first += 3) {
+    const auto begin = summary_.vertices + 1;
+    for (std::size_t index = 0; index < 3; ++index) {
+        const auto point = positionOf(vertices[first + index]), normal = normalOf(vertices[first + index]);
+        stream_ << "v " << point.x << ' ' << point.y << ' ' << point.z << '\n';
+        stream_ << "vn " << normal.x << ' ' << normal.y << ' ' << normal.z << '\n';
+        includeMeshPoint(summary_, point);
+        hashMeshVector(summary_, normal);
+        ++summary_.vertices;
+        ++summary_.normals;
+    }
+    stream_ << "f " << begin << "//" << begin << ' ' << begin + 1 << "//" << begin + 1 << ' ' << begin + 2 << "//" << begin + 2 << '\n';
+    ++summary_.triangles;
+}
+```
+
+Ở triangle đầu, dòng face là `f 1//1 2//2 3//3`; `//` nghĩa là bỏ chỉ số texture coordinate, không phải toán tử C++. Số thứ nhất trỏ vào danh sách `v`, số sau trỏ vào `vn`. Triangle sau dùng 4/5/6. Thứ tự đỉnh và hướng normal giữ nguyên từ mesh GPU.
+
+### 8. Đọc lại OBJ, nhưng đừng giả vờ đã viết importer tổng quát
+
+`MeshReader` chỉ đọc format vừa công bố: vector hữu hạn, normal đơn vị, triangle tham chiếu đúng ba cặp vừa ghi. Nó từ chối negative indices, UV/material, polygon nhiều hơn ba đỉnh và record không hỗ trợ. Một OBJ hợp lệ từ công cụ khác có thể bị từ chối; đó là giới hạn của parser này, không có nghĩa file kia hỏng.
+
+Sau khi tách token face tại `//`, nhánh kiểm index là:
+
+```cpp title="include/sculpt_mesh_file.hpp — Kiểm chỉ số mặt trước khi nhận triangle"
+for (int corner = 0; corner < 3; ++corner) {
+    const auto face = token(line);
+    const auto separator = face.find("//");
+    if (separator == std::string_view::npos)
+        throw std::invalid_argument("This OBJ reader expects triangle position//normal records");
+    const auto position = number<std::uint64_t>(face.substr(0, separator));
+    const auto normal = number<std::uint64_t>(face.substr(separator + 2));
+    if (position == 0 || position > summary_.vertices || normal == 0 || normal > summary_.normals || summary_.vertices < 3 || position != summary_.vertices - 2 + corner || normal != position)
+        throw std::invalid_argument("Streamed OBJ face must reference its three just-written position/normal pairs");
+    positions[corner] = position;
+}
+```
+
+`number()` dùng `from_chars` và yêu cầu ăn hết token, không chấp nhận `12abc`. Reader còn kiểm diện tích triangle, số lượng v/vn/f, giới hạn 255 bytes/dòng, 512 MiB/file và tối đa 2.048 dòng mỗi lượt. Không dùng `getline` không giới hạn rồi mới phát hiện một dòng khổng lồ.
+
+Export hoàn tất ghi sẽ flush/đóng, mở `.partial` và parse theo batch. Cuối cùng đối chiếu counts cùng digest số trước khi rename:
+
+```cpp title="include/sculpt_export_jobs.hpp — OBJ phải đọc lại được trước khi mang tên hoàn chỉnh"
+reader_->readBatch();
+if (reader_->complete()) {
+    const auto& actual = reader_->summary();
+    const auto& expected = writer_->summary();
+    if (actual.vertices != total_ || actual.triangles != total_ / 3 || actual.normals != total_ || actual.hash != expected.hash)
+        throw std::runtime_error("Read-back OBJ does not match the exported geometry/normals");
+    input_.close();
+    std::filesystem::rename(partial_, path());
+    source_.clear();
+    stage_ = FileStage::complete;
+}
+```
+
+Đây là kiểm integrity hữu hạn của đường export, không phải chứng minh không thể có hash collision. Fixture mạnh hơn dùng `MeshReader::TriangleVisitor`: sau khi một face hợp lệ, parser trả ba `SurfaceVertex` để so **trực tiếp từng byte** với snapshot mesh nguồn. Span chỉ sống trong callback; không giữ nó lại cho frame sau. Cách kiểm này không buộc runtime giữ cả OBJ trong RAM.
+
+## Ghép các phần lại
+
+Tạo `NativeFileTasks files(gl, budget)` cạnh `NativeSceneTasks` trong `src/main.cpp`. File job và scene job không bắt đầu chồng nhau; model có thể nặn/remesh tiếp trong khi save/export dùng snapshot riêng. Chỉ một file job hoạt động tại một thời điểm.
+
+Sau khi đọc `key` trong nhánh key-down, nối ba thao tác:
+
+```cpp title="src/main.cpp — Save field, export mesh và mở lại file"
+if ((key == SDLK_S || key == SDLK_E || key == SDLK_O) && scenes.busy()) {
+    actionNotice = "WAIT OR CANCEL GRID CHANGE FIRST";
+    continue;
+}
+if (key == SDLK_S)
+    files.save(model);
+if (key == SDLK_E)
+    files.exportMesh(model);
+if (key == SDLK_O && files.load(files.lastSaved())) {
+    panel.cancel();
+    controls.cancel(model);
+    slice.cancel();
+    model.cancel();
+}
+```
+
+Save đòi model current. Export dùng active/last-good hợp lệ; comment đầu OBJ ghi generation/field revision đã chọn. O chỉ dùng `lastSaved()` của phiên; chưa có file thì báo hướng dẫn, không tự tìm trên ổ đĩa. Khi nhận load, hủy capture/stroke cũ nhưng chưa thay field bằng dữ liệu đang đọc.
+
+Sau `model.tick()` và `scenes.tick(model)`, cho file job tiến thêm một lượt. Nếu load lỗi/hủy, đưa model cũ về last-good:
+
+```cpp title="src/main.cpp — Tiến thêm một batch I/O trong vòng lặp"
+files.tick();
+if (files.takeRetainedLoad()) {
+    if (!initialLoadComplete && options.hidden)
+        throw std::runtime_error(files.status());
+    model.resumeLastGood();
+}
+```
+
+`--load` ở chế độ hidden phải báo lỗi ra process nếu không load được; không được âm thầm chạy sphere mặc định rồi coi smoke đã qua. Khi `files.takeLoaded()` có model hoàn chỉnh, đầu vòng lặp kế tiếp mới handoff:
+
+```cpp title="src/main.cpp — Chỉ thay document sau load và meshing hợp lệ"
+if (auto loaded = files.takeLoaded()) {
+    panel.cancel();
+    controls.cancel(*current);
+    current = std::move(loaded);
+    initialLoadComplete = true;
+    requestedIso = current->settings().isovalue;
+    camera.centerOn(current->settings().grid.origin + Vec3{1, 1, 1} * (current->settings().grid.extent * 0.5F));
+    controls.cameraChanged();
+    slice.modelChanged();
+    inspection = {};
+    ++sceneEpoch;
+}
+```
+
+Điểm đo/chunk cũ bị bỏ, camera chuyển tâm theo domain mới và epoch tăng. Các mẫu số revision/generation của document vừa mở không được gắn vào cache của document trước. Giữ toàn bộ cách xử lý focus/pointer của Bài 10; O không tạo một đường đi tắt bỏ qua cancellation.
+
+Các file được lưu dưới working directory của executable, trong `.runtime/volume-sculptor`. Terminal và Files panel cho biết đường dẫn; `.partial` bị giữ khi hủy không phải kết quả cần phát hành. Không đưa chúng, executable hoặc snapshots sinh tự động vào Git. Source chuẩn của checkpoint vẫn ở `source-template/`; thư mục `checkpoints/11` là bản mã đầy đủ để build, không chỉ các trích đoạn trong bài.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng bản sao file `.scl`, bỏ byte cuối hoặc thêm một byte ở cuối. Hai trường hợp đều phải bị từ chối, dù header vẫn đủ và N còn hợp lệ. Đừng thử bằng file duy nhất chứa tác phẩm của bạn.
+2. Sửa một byte isovalue nhưng không cập nhật checksum. Nếu parser chỉ checksum payload, lỗi metadata này sẽ lọt qua. Với format hiện tại, nó phải bị phát hiện trước handoff.
+3. Trong bản thử riêng, giảm precision OBJ xuống 3 chữ số. Mesh có thể trông gần như cũ, nhưng phép so trực tiếp position/normal phải thất bại. Khôi phục `max_digits10`; chỉ nhìn file hoặc so số triangle không chứng minh dữ liệu giữ nguyên.
+4. Save rồi nặn tiếp trong khi job đang chạy; mở lại file đã lưu. Nó phải trở về thời điểm nhấn S, không trộn một phần nét cọ sau đó. Export rồi đổi isovalue cũng phải xuất đúng mesh đã chọn ban đầu.
+
+Để kiểm NaN có checksum đúng, dùng fixture parser được cung cấp thay vì tự sửa hex tùy ý. Thử lỗi trên dữ liệu tách riêng, giữ deadline và không mở nhiều job GPU cùng lúc.
+
+## Tự kiểm tra kết quả
+
+```powershell title="Kiểm parser và I/O GPU theo lượt hữu hạn"
+cmake --build build --config Release --parallel 1 --target project_44_tests
+ctest --test-dir build -C Release --timeout 15 --output-on-failure
+./build/Release/project_44_checkpoint_11.exe --hidden --seconds 35 --grid 128 --verify-files
+```
+
+Fixture I/O tự tạo dữ liệu kiểm và các output riêng, không cần file của người dùng. Chạy nó riêng với analytic/slice/edit/scene/product fixtures vì mỗi nhóm có dữ liệu đầu vào khác nhau. Dùng supervisor bên ngoài: deadline trong fixture hoặc `--seconds` không tự bảo đảm dọn process tree nếu chương trình không trả quyền điều khiển.
+
+- CTest kiểm round-trip field bằng bytes, layout little-endian biết trước, 13 biến thể archive sai và NaN đã được checksum lại. Mỗi batch phải có giới hạn; file thừa bytes cũng bị từ chối.
+- OBJ parser từ chối 15 ca sai của format hỗ trợ. Fixture visitor so hai triangle trực tiếp theo bytes qua bốn cách chia batch, gồm signed zero và giá trị binary32 không tròn; face sai bị chặn trước callback. Hash equality không thay phép so này.
+- GPU 128³: lưu đủ 2.097.152 samples/8.388.672 bytes. Nặn sau lúc snapshot phải đổi model đang mở nhưng không đổi bản lưu. Load phải khôi phục field và mọi chunk position/normal bit-exact, history mới rỗng và canary nguyên.
+- Export sphere mặc định có 408.024 vertices/136.008 triangles. Editor remesh trong lúc export nhưng file vẫn thuộc mesh ban đầu; parser so đủ từng đỉnh với snapshot, không chỉ một fingerprint. Số vertices sẽ khác khi bạn nặn khối khác, không ép mọi output phải giống sphere.
+- Hủy save/export không công bố file dở; hủy load trả candidate budget. Payload sai checksum không thay model cũ. So cả buffer IDs/last-good, không chỉ chờ exception.
+
+Cuối cùng, thử cửa sổ thật: nặn → S → chờ hoàn thành → nặn tiếp → O; hình phải trở lại bản lưu, history không chứa nét của document cũ. E phải tạo file OBJ mở được trong một viewer khác và có bề mặt/normals, không phải ảnh screenshot. Thử C khi job còn chạy; thử mở một bản sao file hỏng; thử load domain đã dịch để kiểm camera, guides và slice. Chưa làm các thao tác này thì ghi rõ chưa kiểm trực tiếp, không suy từ CTest rằng UI đã đạt.
+
+## Bài tập mở rộng
+
+- Hiện rõ field revision/mesh generation đã chọn lúc save/export, bên cạnh generation hiện tại. Nhấn cọ hoặc remesh sau đó và giải thích vì sao file vẫn thuộc bản cũ.
+- Tạo fixture NaN/Infinity có checksum hợp lệ và fixture metadata domain khác. Kiểm cả parser lẫn việc candidate lỗi không thay document.
+- Thêm export indexed mesh ở một version riêng: xác định điều kiện có thể dùng chung vertex mà vẫn giữ normal và hướng mặt. Không tự ý thay writer trong khi reader vẫn giả định ba cặp mới cho mỗi triangle.
+
+Sang Bài 12, ta ghép các phần thành sản phẩm cuối, tạo lỗ/cầu nối bằng cọ và đo riêng brush/count/scan/emit/normals/draw có warm-up và lặp. Một lần save/load đúng hoặc một ảnh đẹp vẫn chưa thay cho nghiệm thu đầy đủ công cụ điêu khắc.

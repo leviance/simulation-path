@@ -10,11 +10,13 @@ namespace sculpt {
 struct GpuBudget {
     std::size_t used{};
     std::size_t limit{gpuByteBudget};
+    std::size_t peakReserved{};
 
     void reserve(std::size_t bytes) {
         if (limit > gpuByteBudget || bytes == 0 || bytes > limit || used > limit - bytes)
             throw std::runtime_error("GPU allocation exceeds the configured byte budget; keep last-good");
         used += bytes;
+        peakReserved = std::max(peakReserved, used);
     }
 
     void release(std::size_t bytes) {

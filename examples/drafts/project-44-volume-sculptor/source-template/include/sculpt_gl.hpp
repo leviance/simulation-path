@@ -73,6 +73,7 @@ struct GlApi {
     PFNGLDELETEQUERIESPROC DeleteQueries{};
     PFNGLBEGINQUERYPROC BeginQuery{};
     PFNGLENDQUERYPROC EndQuery{};
+    PFNGLGETQUERYIVPROC GetQueryiv{};
     PFNGLGETQUERYOBJECTIVPROC GetQueryObjectiv{};
     PFNGLGETQUERYOBJECTUI64VPROC GetQueryObjectui64v{};
     PFNGLFENCESYNCPROC FenceSync{};
@@ -149,6 +150,7 @@ struct GlApi {
         SCULPT_LOAD(DeleteQueries);
         SCULPT_LOAD(BeginQuery);
         SCULPT_LOAD(EndQuery);
+        SCULPT_LOAD(GetQueryiv);
         SCULPT_LOAD(GetQueryObjectiv);
         SCULPT_LOAD(GetQueryObjectui64v);
         SCULPT_LOAD(FenceSync);

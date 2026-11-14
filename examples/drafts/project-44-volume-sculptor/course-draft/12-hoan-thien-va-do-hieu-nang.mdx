@@ -1,0 +1,371 @@
+> Bản biên tập cho checkpoint 12/final, chưa phát hành hoặc nghiệm thu toàn học phần.
+
+Thời gian gợi ý: đọc 45 phút, tự hoàn thiện 100 phút, kiểm sản phẩm và đo 45 phút. Setup/build tính riêng.
+
+## Ta cần giải quyết điều gì?
+
+Một nét cọ đã làm mặt cầu phồng lên. Nhưng liệu chương trình chỉ xử lý vùng vừa sửa, hay vẫn âm thầm dựng lại cả volume? Một lỗ trông có vẻ xuyên qua có thật sự thông không? Và nếu panel hiện một con số nhỏ, ta đang đo GPU làm việc hay chỉ đo CPU gửi lệnh?
+
+Bài cuối ghép hai việc: chứng minh sản phẩm đã làm đúng và đo công việc thật của nó. Bạn sẽ kiểm một lỗ khoét cùng cầu nối tạo bằng cọ, chạy ứng dụng C++ hoàn chỉnh, rồi thu báo cáo có workload rõ ràng và nhiều mẫu đo. Không dùng ảnh đẹp thay kiểm topology; cũng không dùng benchmark nhanh thay kiểm tính đúng.
+
+Toàn bộ editor, shaders và I/O của Bài 01–11 được giữ lại. Phần mới là `sculpt_benchmark.hpp`, bộ thống kê thuần C++ và cờ `--benchmark` của checkpoint 12/final. Không có một thuật toán extraction khác dành riêng cho màn trình diễn cuối.
+
+## Hiểu ý tưởng trước khi viết code
+
+### Ba loại bằng chứng không thay thế nhau
+
+| Câu hỏi | Bằng chứng phù hợp |
+| --- | --- |
+| Field và mesh có đúng không? | Reference plane/sphere, shared faces, byte comparison, topology/probe |
+| Thao tác có dùng được không? | Thử native window: cọ, camera, capture/focus, slice, undo, S/O/E |
+| Tốn bao nhiêu công việc/thời gian? | Counters, GPU queries, thời gian host, warm-up và mẫu lặp |
+
+Build thành công chưa trả lời cả ba. Một mesh sai vẫn có thể vẽ rất nhanh. Một fixture gọi API trực tiếp cũng chưa chứng minh việc kéo chuột qua panel hoạt động đúng.
+
+Đối với lỗ và cầu nối, ta còn dùng $\chi=V-E+F$. Ở đây V là số vị trí hình học đã gộp theo key của oracle, không phải số vertex records đã emit: mesh triangle soup có thể lặp cùng một vị trí nhiều lần. Một mặt cầu kín có $\chi=2$; hai mặt cầu rời có tổng 4. Một bề mặt kín, định hướng được và liên thông với một quai như torus có $\chi=0$. Phải kiểm cả cạnh, hướng và số thành phần trước khi diễn giải con số này.
+
+### GPU time khác thời gian chờ một tác vụ
+
+CPU gọi `DispatchCompute()` rồi đi tiếp; GPU có thể chưa chạy xong. Đo khoảng thời gian quanh lời gọi đó bằng `chrono` không đo thời gian hoàn thành kernel. Ta dùng `GL_TIME_ELAPSED`, đợi kết quả available, đọc số nguyên 64-bit theo nanosecond rồi đổi sang millisecond. Đây là elapsed time trong phạm vi GL đã đặt query, không phải phép đo riêng từng phép toán shader. Xem [ARB_timer_query của Khronos](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_timer_query.txt).
+
+Đồng hồ host vẫn hữu ích nếu gắn nhãn đúng: nó bao gồm tạo model/program, polling, `SDL_Delay`, đọc summaries/canary và cleanup. Không lấy GPU draw time để suy ra FPS toàn editor, cũng không coi tổng host là thời gian kernel.
+
+### Vì sao cần nhiều lượt?
+
+Lượt đầu có thể chịu ảnh hưởng của cache, shader compilation hoặc trạng thái xung GPU. Ta định trước hai lượt warm-up và năm lượt lấy mẫu. Mỗi lượt làm cùng một công việc từ model mới; không được chạy cọ liên tiếp trên field càng lúc càng biến dạng rồi gọi đó là cùng workload.
+
+Với năm thời gian $t_i$, ta báo median và độ phân tán MAD:
+
+$$
+m=\operatorname{median}(t_i),\qquad
+\mathrm{MAD}=\operatorname{median}(|t_i-m|).
+$$
+
+Min/max cũng được giữ để thấy khoảng dao động. Năm mẫu chỉ là một phép đo nhỏ có thể lặp lại, không phải khoảng tin cậy hay cam kết tốc độ trên mọi GPU. Warm-up được bỏ theo quy tắc đã định, không phải vì có kết quả làm biểu đồ xấu đi.
+
+## Bắt tay xây dựng
+
+### 1. Chạy bản editor đầy đủ trước khi đo
+
+Trong thư mục project độc lập đã có CMake/snapshot, build final và tests. Target final là ứng dụng hoàn chỉnh, không cần bật mọi checkpoint để chạy nó.
+
+```powershell title="Build ứng dụng cuối và kiểm CPU"
+cmake -S . -B build
+cmake --build build --config Release --parallel 1 --target project_44_final project_44_tests
+ctest --test-dir build -C Release --timeout 15 --output-on-failure
+./build/Release/project_44_final.exe --grid 128
+```
+
+Generator single-config đặt executable ngay trong `build/`. Muốn build riêng bài này, bật `BUILD_CHECKPOINTS=ON` và chọn `project_44_checkpoint_12`; hành vi cốt lõi giống final. Khi tự thao tác không dùng `--hidden` hoặc `--seconds`; các cờ ấy phục vụ kiểm hữu hạn.
+
+Thử A/D, radius/strength, Tab chuyển cọ/camera, right drag orbit, middle drag pan và wheel zoom. F9/V mở lát cắt, X/Up/Down/HJKL chọn mặt/điểm; F11/F12 xem wireframe/normal. Ctrl+1…4 đổi N, còn 1/2/3 reset preset. F5 full remesh, I/F6 kiểm chunk. S/O/E dùng quy trình file của Bài 11.
+
+Trước khi làm sản phẩm thử, chờ model current và giữ isovalue 0. Đừng nhầm một candidate còn đang chạy với hình đã được công bố; label last-good có ý nghĩa.
+
+### 2. Khoét một lỗ thật, không chọn preset torus
+
+Trên cửa sổ, dùng subtract để mở một hốc rồi nặn sâu dần bằng các stroke liên tiếp. Depth dương đẩy tâm cọ vào theo hướng nhìn; một stroke kéo vẫn nằm trên mặt phẳng đã chọn khi bắt đầu, không tự chạy xuyên vật thể. Dùng preview và slice để đặt cọ; không tăng depth quá xa khiến các lần khoét rời nhau thành những túi kín bên trong.
+
+Sau mỗi đợt sửa, xoay camera nhìn từ phía đối diện. Nếu chỉ thấy một miệng hốc đẹp thì chưa chứng minh lỗ thông. Để kiểm thuật toán bằng một thao tác có thể tái lập, fixture dùng cùng API stroke như editor, kéo tâm cọ theo Z xuyên sphere:
+
+```cpp title="include/sculpt_gpu_product_verify.hpp — Stroke subtract xuyên field"
+const Brush drill{{0, 0, 0.95F}, 0.32F, 0.65F, BrushMode::subtract};
+gpuCheck(sphere.beginStroke(70, drill) && sphere.moveStroke(70, {0, 0, -0.95F}) && sphere.endStroke(70), "Could not submit the complete bounded drill stroke");
+waitForGpuModel(
+    sphere, [&] {
+        return sphere.ready();
+    },
+    deadline
+);
+const auto hole = inspectGpuProduct(sphere, 1, 0);
+```
+
+`moveStroke()` đi qua bộ lấy mẫu theo quãng đường của Bài 05/06; không chỉ đặt hai stamp ở hai đầu. `inspectGpuProduct()` đọc mesh đã emit, kiểm cạnh có hai owner ngược hướng, không boundary/non-manifold edge, đúng một thành phần và Euler 0. Oracle gộp vị trí theo float bit pattern, chuẩn hóa +0/−0 về cùng điểm hình học; không làm tròn để che crack.
+
+Euler 0 vẫn chưa xác định đường thông nằm đúng nơi ta khoét. Fixture lấy field đã sửa làm dữ liệu kiểm và đặt thêm 257 probe dọc trục Z:
+
+```cpp title="include/sculpt_gpu_product_verify.hpp — Phân biệt hốc kín với đường thông"
+for (int sample = 0; sample <= 256; ++sample) {
+    const float z = -1.4F + 2.8F * sample / 256.0F;
+    gpuCheck(drilled.sample({0, 0, z}) > 0.01F, "The apparent hole is a blind cavity instead of an open tunnel");
+}
+```
+
+Giá trị dương ở đây là outside vì isovalue bằng 0. Ngưỡng 0,01 là biên kiểm scalar của fixture, không phải khoảng hở 0,01 world unit: field sau brush không còn là SDF. Probe hữu hạn hỗ trợ kiểm đường mẫu này, không chứng minh mọi đường bất kỳ trong volume. Undo phải trả về sphere kín Euler 2, redo phải trả lại sản phẩm đã khoét.
+
+### 3. Nối hai khối thành một bề mặt
+
+Reset bằng phím 2 để có hai sphere. Camera preset cho thấy chúng cạnh nhau. Dùng add, kéo một nét từ phía trong khối trái sang khối phải, quan sát cả hai chỗ tiếp xúc và lát cắt. Nếu nét cọ bắt đầu từ khoảng không, picking không có bề mặt để đặt mặt phẳng stroke; hãy bắt đầu trên khối.
+
+Fixture bắt đầu từ preset hai sphere có hai thành phần/Euler 4, rồi dùng stroke add:
+
+```cpp title="include/sculpt_gpu_product_verify.hpp — Tạo cầu nối bằng stored-field brush"
+const Brush joining{{-0.3F, 0, 0}, 0.28F, 0.35F, BrushMode::add};
+gpuCheck(bridge->beginStroke(71, joining) && bridge->moveStroke(71, {0.3F, 0, 0}) && bridge->endStroke(71), "Could not submit the joining stroke");
+waitForGpuModel(
+    *bridge, [&] {
+        return bridge->ready();
+    },
+    deadline
+);
+inspectGpuProduct(*bridge, 1, 2);
+```
+
+Sau stroke, oracle yêu cầu một thành phần kín/Euler 2. Để tránh một ảnh chồng hai vật thể được hiểu nhầm thành nối khối, nó còn kiểm 129 vị trí bên trong phần cầu:
+
+```cpp title="include/sculpt_gpu_product_verify.hpp — Kiểm đoạn nối có vật liệu liên tục"
+for (int sample = 0; sample <= 128; ++sample) {
+    const float x = -0.55F + 1.1F * sample / 128.0F;
+    gpuCheck(joined.sample({x, 0, 0}) < -0.01F, "The bridge image hides an unjoined gap in its stored field");
+}
+```
+
+Undo/redo phải chuyển đúng 2 → 1 → 2 → 1 thành phần theo các bước tương ứng. Đây là kiểm tính đúng riêng; không đặt các phép đọc toàn field/mesh hay phân tích topology CPU vào benchmark.
+
+### 4. Đặt query quanh đúng phần công việc
+
+Các pass compute đã dùng `GpuTicket` từ Bài 06–09. Count/scan được đo riêng; emit/normal cũng riêng. `poll()` trước hết đợi fence và trạng thái available. Chỉ sau đó mới đọc kết quả, tránh một lời gọi lấy query result chặn CPU trong lúc đang xử lý input.
+
+```cpp title="include/sculpt_gpu_ticket.hpp — Chỉ lấy GPU result sau khi available"
+std::optional<std::array<double, 2>> poll() {
+    if (!busy())
+        return {};
+    if (std::chrono::steady_clock::now() - started_ > std::chrono::seconds(3))
+        throw std::runtime_error("Sculpt GPU batch exceeded its three-second fence deadline");
+    const GLenum state = gl_.ClientWaitSync(fence_, 0, 0);
+    if (state == GL_WAIT_FAILED)
+        throw std::runtime_error("GPU fence wait failed");
+    if (state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED)
+        return {};
+    for (std::size_t index = 0; index < count_; ++index) {
+        GLint available{};
+        gl_.GetQueryObjectiv(queries_[index], GL_QUERY_RESULT_AVAILABLE, &available);
+        if (!available)
+            return {};
+    }
+    std::array<double, 2> times{};
+    for (std::size_t index = 0; index < count_; ++index) {
+        GLuint64 nanoseconds{};
+        gl_.GetQueryObjectui64v(queries_[index], GL_QUERY_RESULT, &nanoseconds);
+        times[index] = static_cast<double>(nanoseconds) / 1000000.0;
+    }
+    gl_.DeleteSync(fence_);
+    fence_ = nullptr;
+    count_ = 0;
+    return times;
+}
+```
+
+Không lồng hai query `GL_TIME_ELAPSED` đang active. Trong benchmark, mỗi compute job đã current trước khi đo draw. Thời gian pass là tổng các query của batch thuộc job ấy; phạm vi bao gồm các lệnh/barrier được đặt bên trong query, không gắn nhãn “shader math thuần”. Độ dài counter được kiểm trước khi chạy: benchmark yêu cầu ít nhất 32 bits để phù hợp deadline batch ba giây; đây là ràng buộc của chương trình, không phải tuyên bố mọi GPU OpenGL đều có cùng counter.
+
+Draw dùng camera cố định, kích thước drawable được ghi trong báo cáo và không đổi giữa các lượt. Clear ở ngoài query; không vẽ panel, guide, slice hoặc gọi swap/vsync bên trong:
+
+```cpp title="include/sculpt_benchmark.hpp — Đo riêng mesh draw"
+inline double benchmarkMeshDraw(GlApi& gl, MeshRenderer& renderer, const GpuMeshBuilder& model, int width, int height, const BenchmarkDeadline& deadline) {
+    benchmarkCheck(model.ready() && !model.gpuBusy(), "Draw timing cannot overlap a compute batch");
+    Camera camera;
+    GpuTicket ticket(gl);
+    gl.ClearColor(0.01F, 0.02F, 0.03F, 1);
+    gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    ticket.begin(0);
+    renderer.draw(model.active(), camera, 0, 0, width, height, false, false);
+    ticket.end();
+    ticket.submit();
+    std::optional<std::array<double, 2>> elapsed;
+    while (!elapsed) {
+        deadline.poll();
+        elapsed = ticket.poll();
+        if (!elapsed)
+            SDL_Delay(1);
+    }
+    // Outside the query: prove the hidden back buffer contains the mesh, not only a clear.
+    std::array<std::uint8_t, 4> pixel{};
+    gl.ReadPixels(width / 2, height / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    benchmarkCheck(gl.GetError() == GL_NO_ERROR && (pixel[0] > 32 || pixel[1] > 32 || pixel[2] > 32), "Benchmark draw produced no visible center surface or an OpenGL error");
+    return (*elapsed)[0];
+}
+```
+
+Lượt đọc một pixel xác nhận có bề mặt ở giữa back buffer, thay vì đo một ảnh chỉ clear nền. Nó ở ngoài query và không thay kiểm toàn hình. Thời gian draw không gồm phép readback này.
+
+### 5. Lặp cùng workload từ model mới
+
+Mỗi trial có ba giai đoạn. Đầu tiên init field và dựng sphere toàn grid. Tiếp đó đặt một stamp add cố định để đo brush/history cùng dirty remesh. Cuối cùng full remesh **cùng field đã sửa**, không reset sphere để làm phép so dễ hơn.
+
+```cpp title="include/sculpt_benchmark.hpp — Một trial đầy đủ"
+inline BenchmarkTimings runBenchmarkTrial(GlApi& gl, GpuBudget& budget, MeshRenderer& renderer, const ModelSettings& settings, int width, int height, const BenchmarkDeadline& deadline, BenchmarkWork& work) {
+    GpuMeshBuilder model(gl, budget, settings);
+    waitForBenchmarkMesh(model, deadline);
+    BenchmarkTimings timings;
+    timings.initial = model.times();
+    work.initial = benchmarkMeshCounts(model);
+    benchmarkCheck(model.lastRebuiltChunks() == chunkCount(settings.grid), "Initial benchmark did not process the full grid");
+
+    const Brush brush{{0.7F, 0, 0}, 0.32F, 0.28F, BrushMode::add};
+    benchmarkCheck(model.beginStroke(90, brush) && model.endStroke(90), "Benchmark could not submit its fixed one-stamp stroke");
+    waitForBenchmarkMesh(model, deadline);
+    timings.local = model.times();
+    work.edited = benchmarkMeshCounts(model);
+    work.dirtyChunks = model.lastRebuiltChunks();
+    work.brushWrites = model.document().changedSampleWrites();
+    for (const auto& chunk : model.active())
+        if (chunk.buffer && chunk.stats.generation != model.activeGeneration())
+            ++work.reusedNonempty;
+    benchmarkCheck(work.brushWrites != 0 && work.dirtyChunks != 0 && work.dirtyChunks < chunkCount(settings.grid) && work.reusedNonempty != 0, "The local benchmark did not edit stored samples and reuse unaffected geometry");
+
+    const auto editedRevision = model.document().revision();
+    model.requestIsovalue(settings.isovalue);
+    waitForBenchmarkMesh(model, deadline);
+    timings.full = model.times();
+    benchmarkCheck(model.document().revision() == editedRevision && benchmarkMeshCounts(model) == work.edited && model.lastRebuiltChunks() == chunkCount(settings.grid), "Full benchmark did not rebuild the same edited field");
+    const auto generation = model.activeGeneration();
+    timings.draw = benchmarkMeshDraw(gl, renderer, model, width, height, deadline);
+    benchmarkCheck(model.activeGeneration() == generation && model.document().revision() == editedRevision && model.guardsIntact(), "Draw changed the field/generation or a benchmark canary was damaged");
+    deadline.poll();
+    return timings;
+}
+```
+
+`model.times()` có các scope khác nhau: field/history tích lũy trong document, brush reset khi bắt đầu stroke, count/scan/emit/normals reset khi bắt đầu remesh. Model mới mỗi trial giúp các tổng đời sống không kéo theo công việc của trial trước. `BenchmarkTimings` chỉ chọn đúng cột cho từng giai đoạn, không cộng field/history cũ vào full remesh.
+
+Trong trial chỉ kiểm counters, current/generation và canary; không đọc cả mesh để so bytes. Sự bằng nhau của counters **chưa chứng minh** geometry bằng nhau. Phép so dirty/full từng byte đã có fixture correctness riêng của Bài 09 và vẫn phải chạy riêng.
+
+### 6. Bỏ warm-up theo quy tắc cố định
+
+`benchmarkWarmups = 2`, `benchmarkRepeats = 5`. Vòng lặp tạo một `BenchmarkWork` để so counters giữa mọi trial, lấy host time riêng, rồi chỉ đưa trial từ index 2 vào tập đo. Sau khi `runBenchmarkTrial()` trả về, model của lượt đó đã bị hủy; budget phải trở lại baseline.
+
+```cpp title="include/sculpt_benchmark.hpp — Không trộn warm-up vào số liệu"
+for (int trial = 0; trial < benchmarkWarmups + benchmarkRepeats; ++trial) {
+    deadline.poll();
+    int currentWidth{}, currentHeight{};
+    benchmarkCheck(SDL_GetWindowSizeInPixels(window, &currentWidth, &currentHeight) && currentWidth == width && currentHeight == height, "Drawable changed during benchmark; no aggregate report");
+    BenchmarkWork work;
+    const auto began = std::chrono::steady_clock::now();
+    const auto timings = runBenchmarkTrial(gl, budget, renderer, settings, width, height, deadline, work);
+    const double hostMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+    benchmarkCheck(budget.used == baselineBytes, "A benchmark trial leaked tracked buffer reservations");
+    if (expected)
+        benchmarkCheck(work == *expected, "Benchmark changed samples/counters/workload between trials");
+    else
+        expected = work;
+    const bool included = trial >= benchmarkWarmups;
+    if (included) {
+        measured.push_back(timings);
+        hostTimes.push_back(hostMs);
+    }
+    std::cout << "BENCH_TRIAL index=" << trial << " included=" << included << " hostMs=" << hostMs;
+    const auto values = timings.values();
+    for (std::size_t metric = 0; metric < values.size(); ++metric)
+        std::cout << ' ' << benchmarkMetricNames[metric] << '=' << values[metric];
+    std::cout << '\n' << std::flush;
+}
+```
+
+Các dòng raw vẫn được in cả warm-up để người đọc tự kiểm. Không bỏ thêm một mẫu chậm trong năm mẫu đã chọn. Drawable đổi, workload khác, allocation lỗi, timer unavailable hoặc deadline hết thì không được in kết quả hoàn tất từ phần dữ liệu còn lại.
+
+### 7. Tính median và MAD từ đúng các mẫu
+
+Bộ thống kê không biết OpenGL. Nó nhận một dãy số hữu hạn không âm, giới hạn 1…64 samples, sao chép rồi sort để không sửa dữ liệu gốc. `sortedMedian()` lấy phần tử giữa hoặc trung bình hai phần tử giữa khi số mẫu chẵn.
+
+```cpp title="include/sculpt_benchmark_statistics.hpp — Thống kê có kiểm đầu vào"
+inline TimingDistribution summarizeTimings(std::span<const double> values) {
+    if (values.empty() || values.size() > 64)
+        throw std::invalid_argument("Timing statistics need 1..64 bounded samples");
+    std::vector<double> sorted(values.begin(), values.end());
+    for (const double value : sorted)
+        if (!std::isfinite(value) || value < 0)
+            throw std::invalid_argument("A timing sample must be finite and nonnegative");
+    std::sort(sorted.begin(), sorted.end());
+    const double median = sortedMedian(sorted);
+    std::vector<double> deviations;
+    deviations.reserve(sorted.size());
+    for (const double value : sorted)
+        deviations.push_back(std::abs(value - median));
+    std::sort(deviations.begin(), deviations.end());
+    return {median, sorted.front(), sorted.back(), sortedMedian(deviations), sorted.size()};
+}
+```
+
+Ví dụ `[1; 9; 5; 2; 6]` có median 5; độ lệch tuyệt đối là `[4; 4; 0; 3; 1]`, median của chúng là 3. Không nhầm MAD với trung bình độ lệch hay standard deviation. Mẫu 0 được giữ nguyên nếu timer trả 0; không thay bằng một số “đẹp” để tránh chia cho 0.
+
+`values()` có thứ tự 16 cột cố định: năm init, sáu local, bốn full, một draw. Phần host riêng thành cột thứ 17 trong báo cáo. Trước khi in aggregate, chương trình kiểm mọi cột đủ dữ liệu hợp lệ. CTest còn gán các giá trị đánh dấu vào `PassTimes` để bắt lỗi lấy nhầm lifetime total vào cột của job mới.
+
+## Ghép các phần lại
+
+Sau khi tạo window/context, load GL entry points và preflight grid, `src/main.cpp` chọn benchmark **trước khi tạo model editor**. Nhờ vậy không có một volume không dùng đến cùng nằm trong budget của phép đo:
+
+```cpp title="src/main.cpp — Đường chạy benchmark tách khỏi editor"
+if (options.benchmark)
+    return runSculptBenchmark(gl, budget, window.get(), settings);
+```
+
+Parser chỉ cho `--grid` và `--hidden` đi cùng `--benchmark`. Các cờ cọ, plane, load, capture hoặc verifier khác bị từ chối, không bị bỏ qua âm thầm. Benchmark tự dùng hidden window và camera mặc định, không mở thêm một UI giành chuột/phím của người học.
+
+```powershell title="Đo Release — một tiến trình GPU mỗi lần"
+./build/Release/project_44_final.exe --benchmark --grid 128
+```
+
+App có deadline benchmark 45 giây và fence deadline ba giây. Khi chạy tự động, bọc process supervisor khoảng 50 giây với khả năng dọn cả process tree; deadline bên trong không thay watchdog bên ngoài. Không dùng một lệnh chờ vô hạn cho cả bộ kiểm. Nếu máy không hoàn tất, báo không hoàn tất; đừng giảm N hoặc số mẫu rồi gắn lại nhãn preset bắt buộc.
+
+Các dòng `BENCH` ghi protocol, N³ samples/(N−1)³ cells, kích thước drawable, counter bits, GPU/GL driver và NDEBUG. `BENCH_TRIAL` chứa dữ liệu thô, `BENCH_STAT` là thống kê, `BENCH_COUNTERS` cho khối lượng công việc. Chỉ có `BENCHMARK COMPLETE` khi đủ toàn bộ protocol.
+
+Khi chia sẻ kết quả, kèm CPU/OS, compiler và lệnh configure/build đã dùng. NDEBUG không tự phân biệt Release với mọi cấu hình tối ưu khác; đừng chỉ đổi nhãn một executable. Workload này không dùng số ngẫu nhiên, nên không có seed để thay đổi giữa các lượt.
+
+Một lượt đo 128³ trên RTX 3050 Laptop/OpenGL 4.3 NVIDIA 546.30, drawable 1280×820, cho bảng sau. Đây là ví dụ của một lượt chạy trong repository, không phải ngưỡng pass hoặc con số bạn phải tái tạo:
+
+| Đại lượng | Median (ms) | Min…max (ms) | MAD (ms) |
+| --- | ---: | ---: | ---: |
+| Local brush | 0,060 | 0,057…0,329 | 0,003 |
+| Local count | 14,670 | 12,685…15,801 | 0,871 |
+| Full count, cùng field đã sửa | 263,114 | 249,057…269,262 | 5,533 |
+| Mesh-only draw | 1,673 | 1,648…2,540 | 0,010 |
+| Host toàn trial | 4.889,737 | 4.820,232…4.959,694 | 28,952 |
+
+Counters của lượt đó: 2.097.152 samples/2.048.383 cells; sphere 408.024 emitted vertices, sau stamp 410.616 vertices/136.872 triangles. Local remesh 27/512 chunk, giữ 62 buffer không rỗng; full remesh vẫn cùng field revision và mesh counts. GPU thời gian count nhỏ hơn thời gian host nhiều lần vì host còn có các tác vụ/điểm chờ đã nêu; không có phép suy ra FPS từ bảng này.
+
+Muốn so tổng chi phí GPU remesh local/full, cộng count+scan+emit+normals **trong từng trial**, rồi mới lấy median của các tổng. Tổng các median không nhất thiết là median của tổng. Không gộp brush/history vào chỉ một phía mà vẫn gọi hai workload là giống nhau.
+
+`BENCH_MEMORY` của lượt đó có peak reservation 59.861.328 bytes (khoảng 57,1 MiB), cuối mỗi trial về baseline 0, trong limit 512 MiB. Bộ đếm gồm buffers được `GpuBudget` theo dõi và canary; không phải tổng VRAM của driver, shader programs, window hay residency vật lý. `reserve()` cập nhật high-water mark khi dành chỗ; không gọi nó là phép đo VRAM toàn máy.
+
+## Thử làm sai để hiểu đúng
+
+1. Đo `chrono` chỉ quanh `requestIsovalue()`. Kết quả có thể rất nhỏ nhưng công việc còn nằm trong hàng đợi. Đối chiếu với lúc model thực sự current và GPU query; đừng đổi nhãn một lời gọi enqueue thành kernel time.
+2. Trong bản thử riêng, dùng lại một model và nặn thêm ở mỗi trial. Quan sát vertices/brush writes thay đổi, rồi khôi phục fresh model. Benchmark hiện tại phải bắt được workload không còn giống nhau.
+3. Cho cả hai lượt warm-up vào thống kê rồi so với protocol chuẩn. Kết quả có thể tăng hoặc giảm, không nhất thiết lượt đầu luôn chậm hơn. Khôi phục quy tắc loại hai lượt đầu, giữ nguyên năm mẫu còn lại.
+4. Bơm NaN hoặc thời gian âm vào một mẫu: thống kê phải từ chối. Số 0 thì vẫn hợp lệ, nên bộ thống kê không thể tự biết một pass đã bị bỏ qua hay bị điền 0 giả. Vì vậy phải giữ cả gate current/workload và kiểm phạm vi query, không chỉ nhìn bảng số đã sort.
+
+Không thử kéo deadline dài vô hạn, làm tràn GPU thật hoặc bỏ bounds để “xem máy chịu được không”. Dùng capacity/fault-injection fixtures đã có; lỗi phải giữ last-good chứ không làm máy treo.
+
+## Tự kiểm tra kết quả
+
+Chạy từng nhóm riêng, không ghép verifier vào benchmark. Ví dụ ba lượt sau lần lượt kiểm geometry, sản phẩm cọ và phép đo:
+
+```powershell title="Các nhóm kiểm độc lập và hữu hạn"
+./build/Release/project_44_final.exe --hidden --seconds 20 --grid 128 --verify
+./build/Release/project_44_final.exe --hidden --seconds 35 --grid 128 --verify-products
+./build/Release/project_44_final.exe --benchmark --grid 128
+```
+
+Các nhóm edit, slice, scene và file dùng lệnh riêng của Bài 09–11; không bỏ chúng chỉ vì ba lệnh trên qua. Debug/Release đều phải build; Debug chạy fixture để chẩn đoán, không dùng thay số đo Release. Với gói tải về, giải nén vào thư mục mới rồi configure/build/CTest lại để bắt thiếu shader/DLL/assets; không lấy kết quả từ build directory sẵn có làm bằng chứng ZIP độc lập.
+
+Definition of Done cho sản phẩm C++:
+
+- Có stored field 128³ thật trên GPU, số cells công bố đúng. Brush sửa dữ liệu, undo/redo/rollback nhất quán; no-op không tạo history/remesh.
+- Init/edit/count/scan/emit/normals và draw dùng đường thật. Count trước allocation, không cắt output; camera không remesh. Dirty/full geometry được đối chiếu bằng fixture riêng, không chỉ so counters benchmark.
+- Khoét và ghép bằng brush, không lấy torus preset làm bằng chứng lỗ khoét. Kiểm connectivity, cạnh/hướng, Euler và probe; còn phải tự thao tác trên native window.
+- Slice, isovalue/resolution, save/load/export, cancel và last-good có trạng thái rõ. File đọc lại hợp lệ; field/mesh khớp snapshot theo byte trong fixture, history không đi theo document cũ.
+- Benchmark có hai warm-up bị loại, năm mẫu cho mỗi metric, đủ median/min/max/MAD; raw values cho phép tính lại độc lập. Timer/error/deadline failure không được coi là kết quả hoàn tất.
+- Focus loss/reset/resize nhả capture và bỏ stroke cũ; không có input cũ ghi vào model mới. Kiểm cả mouse và keyboard thay vì chỉ gọi API.
+
+Khi kiểm cửa sổ, tạo lỗ/cầu nối, nhìn cả hai phía, dùng slice/wireframe/normal; S → sửa tiếp → O, rồi E và mở OBJ bằng viewer khác. Thử Pause/C trong job còn chạy, blur trong stroke, resize, pan/zoom và đổi resolution. Ghi lại điều đã thử cùng phần chưa kiểm; một ảnh hoặc log benchmark không thay ma trận UI này.
+
+Nguồn đầy đủ nằm ở `source-template/`, bản chạy độc lập ở `final/` sau generator; không chép riêng các trích đoạn trong bài rồi đo một chương trình thiếu phần còn lại. Source, CMake, shaders, tests, lesson và ZIP phải cùng phiên bản. Phát hành học phần web còn cần Canvas hỗ trợ, metadata/search/progress/routes và kiểm gói; bản biên tập này chưa tự chứng nhận các phần đó đã xong.
+
+## Bài tập mở rộng
+
+- Từ raw samples, tính median của tổng local/full remesh và mức dao động của từng cặp. Giải thích vì sao tỷ lệ thời gian không bằng đúng 512/27 dù số chunk đã giảm theo tỷ lệ ấy.
+- Đổi kích thước drawable để kiểm draw time, giữ field và camera cố định. Ghi protocol mới; không trộn các viewport khác nhau vào cùng năm mẫu.
+- Tìm phần host overhead lớn nhất bằng đo riêng việc tạo model, polling và đọc summary. Nếu đổi cách gộp dispatch/batch, kiểm lại generation/cancel/capacity và dirty/full bytes trước khi báo tối ưu.
+- Thiết kế một field khác làm workload thứ hai, đặt tên protocol riêng và giữ tính đúng độc lập. Không thay sphere bằng một case dễ hơn nhưng vẫn ghi `volume-sculptor-v1`.
+
+Bạn đã đi từ dấu của bốn samples trong một tetra đến một công cụ sửa volume và trích mesh GPU. Bước tiếp theo của roadmap là dùng nhiều điểm mẫu để dựng đám mây orbital trong Atomic Playground; đó là một sản phẩm khác, không phải lý do bỏ qua những gate còn thiếu của công cụ hiện tại.

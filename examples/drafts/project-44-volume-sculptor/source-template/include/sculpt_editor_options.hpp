@@ -9,7 +9,7 @@ namespace sculpt {
 struct EditorOptions {
     int samples{128};
     int seconds{};
-    bool hidden{}, verify{}, verifyEdits{}, verifyFiles{}, verifySlice{}, verifyScene{}, verifyProducts{}, plane{}, showSlice{}, traceInput{};
+    bool hidden{}, verify{}, verifyEdits{}, verifyFiles{}, verifySlice{}, verifyScene{}, verifyProducts{}, plane{}, showSlice{}, traceInput{}, benchmark{};
     std::filesystem::path capture, load;
     Brush startingBrush;
     float brushDepth{};
@@ -33,8 +33,15 @@ inline float editorRealOption(std::string_view text, float minimum, float maximu
 
 inline EditorOptions parseEditorOptions(int argc, char** argv) {
     EditorOptions result;
+#if LAB_CHECKPOINT >= 12
+    bool benchmarkOptionsOnly = true;
+#endif
     for (int index = 1; index < argc; ++index) {
         const std::string_view option = argv[index];
+#if LAB_CHECKPOINT >= 12
+        if (option != "--benchmark" && option != "--grid" && option != "--hidden")
+            benchmarkOptionsOnly = false;
+#endif
         const auto next = [&]() -> std::string_view {
             if (index + 1 >= argc)
                 throw std::invalid_argument("Missing option value");
@@ -46,6 +53,10 @@ inline EditorOptions parseEditorOptions(int argc, char** argv) {
             result.seconds = editorInteger(next(), 1, 120);
         else if (option == "--hidden")
             result.hidden = true;
+#if LAB_CHECKPOINT >= 12
+        else if (option == "--benchmark")
+            result.benchmark = true;
+#endif
         else if (option == "--verify")
             result.verify = true;
         else if (option == "--verify-edits")
@@ -84,6 +95,12 @@ inline EditorOptions parseEditorOptions(int argc, char** argv) {
         else
             throw std::invalid_argument("Unknown sculpt option");
     }
+#if LAB_CHECKPOINT >= 12
+    if (result.benchmark && !benchmarkOptionsOnly)
+        throw std::invalid_argument("Benchmark uses a fixed workload; only --grid and --hidden may accompany --benchmark");
+#endif
+    if (!result.capture.empty() && (result.verifyEdits || result.verifyFiles || result.verifyScene || result.verifyProducts))
+        throw std::invalid_argument("Editing/file/scene/product fixtures cannot capture frames; run capture separately");
     if (result.verifyEdits && result.plane)
         throw std::invalid_argument("Editing fixtures require the sphere field preset");
     if (result.verifyFiles && (result.plane || result.verifyEdits))
@@ -96,7 +113,7 @@ inline EditorOptions parseEditorOptions(int argc, char** argv) {
         throw std::invalid_argument("Brush product fixtures require their own sphere preset and run separately");
     if (!result.load.empty() && (result.plane || result.verify || result.verifyEdits || result.verifyFiles || result.verifySlice || result.verifyScene || result.verifyProducts))
         throw std::invalid_argument("Analytic field fixtures cannot validate an arbitrary loaded field");
-    if (result.hidden && !result.verify && !result.verifyEdits && !result.verifyFiles && !result.verifySlice && !result.verifyScene && !result.verifyProducts && result.capture.empty() && result.seconds == 0)
+    if (result.hidden && !result.verify && !result.verifyEdits && !result.verifyFiles && !result.verifySlice && !result.verifyScene && !result.verifyProducts && !result.benchmark && result.capture.empty() && result.seconds == 0)
         throw std::invalid_argument("Hidden run needs a finite verify/capture/seconds condition");
     return result;
 }

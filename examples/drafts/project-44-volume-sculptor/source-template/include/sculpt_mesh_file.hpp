@@ -3,6 +3,7 @@
 #include "sculpt_limits.hpp"
 #include <bit>
 #include <charconv>
+#include <functional>
 #include <iomanip>
 #include <istream>
 #include <locale>
@@ -10,6 +11,7 @@
 #include <ostream>
 #include <span>
 #include <string>
+#include <utility>
 
 namespace sculpt {
 
@@ -43,12 +45,14 @@ inline void includeMeshPoint(MeshFileSummary& summary, Vec3 point) {
 
 class MeshWriter {
     public:
+    // snippet:sculpt-obj-numeric-precision
     explicit MeshWriter(std::ostream& stream)
         : stream_(stream) {
         stream_.imbue(std::locale::classic());
         stream_ << std::setprecision(std::numeric_limits<float>::max_digits10);
         stream_ << "# Volume Sculptor / actual extracted mesh / triangles with outward normals\n";
     }
+    // end-snippet:sculpt-obj-numeric-precision
 
     void append(std::span<const SurfaceVertex> vertices) {
         if (vertices.size() % 3 != 0 || vertices.size() > 4095 || summary_.vertices + vertices.size() > maximumMeshVertices)
@@ -64,6 +68,7 @@ class MeshWriter {
             if (dot(cross(b - a, c - a), cross(b - a, c - a)) <= 1e-24F)
                 throw std::invalid_argument("OBJ export cannot publish a degenerate triangle");
         }
+        // snippet:sculpt-obj-write-triangle
         for (std::size_t first = 0; first < vertices.size(); first += 3) {
             const auto begin = summary_.vertices + 1;
             for (std::size_t index = 0; index < 3; ++index) {
@@ -78,6 +83,7 @@ class MeshWriter {
             stream_ << "f " << begin << "//" << begin << ' ' << begin + 1 << "//" << begin + 1 << ' ' << begin + 2 << "//" << begin + 2 << '\n';
             ++summary_.triangles;
         }
+        // end-snippet:sculpt-obj-write-triangle
         if (!stream_)
             throw std::runtime_error("OBJ write failed; the partial output was not published");
     }
@@ -93,8 +99,11 @@ class MeshWriter {
 
 class MeshReader {
     public:
-    explicit MeshReader(std::istream& stream)
-        : stream_(stream) {}
+    // The visitor receives one validated triangle; its span lives only during this call.
+    using TriangleVisitor = std::function<void(std::span<const SurfaceVertex>)>;
+
+    explicit MeshReader(std::istream& stream, TriangleVisitor visitor = {})
+        : stream_(stream), visitor_(std::move(visitor)) {}
 
     bool complete() const {
         return complete_;
@@ -189,10 +198,12 @@ class MeshReader {
             } else {
                 if (++summary_.normals > maximumMeshVertices || !finite(value) || std::abs(length(value) - 1) > 0.001F)
                     throw std::invalid_argument("OBJ normal is not a finite unit vector within budget");
+                lastNormals_[(summary_.normals - 1) % 3] = value;
                 hashMeshVector(summary_, value);
             }
         } else if (kind == "f") {
             std::array<std::uint64_t, 3> positions{};
+            // snippet:sculpt-obj-read-face-indices
             for (int corner = 0; corner < 3; ++corner) {
                 const auto face = token(line);
                 const auto separator = face.find("//");
@@ -204,18 +215,29 @@ class MeshReader {
                     throw std::invalid_argument("Streamed OBJ face must reference its three just-written position/normal pairs");
                 positions[corner] = position;
             }
+            // end-snippet:sculpt-obj-read-face-indices
             if (!token(line).empty() || summary_.vertices != summary_.normals || summary_.vertices % 3 != 0 || summary_.triangles + 1 != summary_.vertices / 3 || ++summary_.triangles > maximumMeshVertices / 3)
                 throw std::invalid_argument("OBJ has a non-triangle, repeated index or excessive face count");
             const auto area = cross(lastPoints_[1] - lastPoints_[0], lastPoints_[2] - lastPoints_[0]);
             if (dot(area, area) <= 1e-24F)
                 throw std::invalid_argument("OBJ contains a degenerate triangle");
+            // Do not retain a complete OBJ in RAM merely to inspect its values.
+            if (visitor_) {
+                std::array<SurfaceVertex, 3> triangle{};
+                for (int corner = 0; corner < 3; ++corner) {
+                    const auto point = lastPoints_[corner], normal = lastNormals_[corner];
+                    triangle[corner] = {{point.x, point.y, point.z, 1}, {normal.x, normal.y, normal.z, 0}};
+                }
+                visitor_(triangle);
+            }
         } else
             throw std::invalid_argument("Unsupported OBJ record; this is a strict reader for the documented exporter");
     }
 
     std::istream& stream_;
+    TriangleVisitor visitor_;
     MeshFileSummary summary_;
-    std::array<Vec3, 3> lastPoints_;
+    std::array<Vec3, 3> lastPoints_, lastNormals_;
     std::size_t bytes_{};
     bool complete_{};
 };

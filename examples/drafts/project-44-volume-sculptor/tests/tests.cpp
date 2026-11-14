@@ -19,6 +19,8 @@ void testGridGuides();
 void testDirtyDependencies();
 void testMeshSnapshotBytes();
 void testEditorDigitKeys();
+void testMeshReaderTriangles();
+void testBenchmarkStatistics();
 
 namespace {
 using namespace sculpt;
@@ -401,7 +403,7 @@ void meshFileFixtures() {
     while (!reader.complete())
         reader.readBatch(2);
     check(reader.summary().vertices == 3 && reader.summary().normals == 3 && reader.summary().triangles == 1, "Exported OBJ cannot be read as one complete position/normal triangle");
-    check(reader.summary().hash == writer.summary().hash, "OBJ numeric text did not preserve every binary32 position/normal value");
+    check(reader.summary().hash == writer.summary().hash, "OBJ numeric digest differs from the writer digest");
     const std::string validPrefix = "v 0 0 0\nvn 0 0 1\nv 1 0 0\nvn 0 0 1\nv 0 1 0\nvn 0 0 1\n";
     const auto rejectsMesh = [&](const std::string& text) {
         rejects([&] {
@@ -435,7 +437,7 @@ void meshFileFixtures() {
         writer.append(std::span(triangle).first(2));
     },
             "Exporter accepted a partial triangle");
-    std::cout << "MESH FILE PASS triangles=1 normals=3 numericRoundTrip=bitExact invalidCases=15 boundedLines=1\n";
+    std::cout << "MESH FILE PASS triangles=1 normals=3 numericDigestMatches=1 invalidCases=15 boundedLines=1\n";
 }
 
 } // namespace
@@ -591,6 +593,8 @@ int main() {
         testDirtyDependencies();
         testMeshSnapshotBytes();
         testEditorDigitKeys();
+        testMeshReaderTriangles();
+        testBenchmarkStatistics();
         std::cout << "P44 CPU CORE PASS; this CTest result does not verify GPU scale or native controls\n";
         return 0;
     } catch (const std::exception& error) {

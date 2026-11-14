@@ -56,6 +56,9 @@ int main(int argc, char** argv) {
 
 // end-snippet:sculpt-gpu-surface-entry
 #else
+#if LAB_CHECKPOINT >= 12
+#include "sculpt_benchmark.hpp"
+#endif
 #include "sculpt_chunk_inspector.hpp"
 #include "sculpt_controls.hpp"
 #include "sculpt_editor_keys.hpp"
@@ -85,7 +88,7 @@ int run(const EditorOptions& options) {
     ModelSettings settings;
     settings.grid.samples = options.samples;
     settings.validate();
-    NativeWindow window(options.hidden);
+    NativeWindow window(options.hidden || options.benchmark);
 #if LAB_CHECKPOINT == 10
     SDL_SetWindowTitle(window.get(), "Project 44 - Volume Sculptor / Checkpoint 10");
 #endif
@@ -94,6 +97,12 @@ int run(const EditorOptions& options) {
     preflightSculpt(gl, settings);
     SDL_GL_SetSwapInterval(0);
     GpuBudget budget;
+#if LAB_CHECKPOINT >= 12
+    // snippet:sculpt-editor-benchmark-entry
+    if (options.benchmark)
+        return runSculptBenchmark(gl, budget, window.get(), settings);
+        // end-snippet:sculpt-editor-benchmark-entry
+#endif
     auto current = std::make_unique<GpuMeshBuilder>(gl, budget, settings, options.plane);
     MeshRenderer renderer(gl);
     OverlayRenderer ui(gl);
@@ -180,6 +189,7 @@ int run(const EditorOptions& options) {
     };
     while (running) {
 #if LAB_CHECKPOINT >= 11
+        // snippet:sculpt-editor-file-handoff
         if (auto loaded = files.takeLoaded()) {
             panel.cancel();
             controls.cancel(*current);
@@ -192,6 +202,7 @@ int run(const EditorOptions& options) {
             inspection = {};
             ++sceneEpoch;
         }
+        // end-snippet:sculpt-editor-file-handoff
 #endif
         // snippet:sculpt-editor-grid-handoff
         if (auto replacement = scenes.takeModel()) {
@@ -284,6 +295,7 @@ int run(const EditorOptions& options) {
                         model.cancel();
                 }
 #if LAB_CHECKPOINT >= 11
+                // snippet:sculpt-editor-file-input
                 if ((key == SDLK_S || key == SDLK_E || key == SDLK_O) && scenes.busy()) {
                     actionNotice = "WAIT OR CANCEL GRID CHANGE FIRST";
                     continue;
@@ -298,6 +310,7 @@ int run(const EditorOptions& options) {
                     slice.cancel();
                     model.cancel();
                 }
+                // end-snippet:sculpt-editor-file-input
 #endif
                 int digit = 0;
                 if (key >= SDLK_1 && key <= SDLK_4)
@@ -359,12 +372,14 @@ int run(const EditorOptions& options) {
         if (scenes.takeRetained())
             model.resumeLastGood();
 #if LAB_CHECKPOINT >= 11
+        // snippet:sculpt-editor-file-tick
         files.tick();
         if (files.takeRetainedLoad()) {
             if (!initialLoadComplete && options.hidden)
                 throw std::runtime_error(files.status());
             model.resumeLastGood();
         }
+        // end-snippet:sculpt-editor-file-tick
 #endif
         if (model.state() == MeshJobState::failed && !reportedFailure) {
             controls.cancel(model);

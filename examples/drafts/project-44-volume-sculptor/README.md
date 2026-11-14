@@ -1,6 +1,6 @@
 # Project 44 — Xưởng điêu khắc thể tích
 
-**Đang xây dựng, chưa nghiệm thu.** Bản nháp đã có editor C++/SDL3/GPU ở 128³, starter và checkpoint 01–09 có tiến triển riêng. Thử thách và chín bài đang ở `course-draft/`; giáo trình đầy đủ, Canvas và ZIP phát hành chưa hoàn thành. Catalog cũ chưa thay. Không coi các kiểm tra dưới đây là bằng chứng hoàn thành toàn bộ đặc tả.
+**Đang xây dựng, chưa nghiệm thu.** Bản nháp đã có editor C++/SDL3/GPU ở 128³, starter và checkpoint 01–12 có tiến triển riêng. Thử thách và mười hai bài ở `course-draft/`; benchmark native đã được kiểm, nhưng Canvas, tích hợp website và ZIP phát hành chưa hoàn thành. Catalog cũ chưa thay. Không coi các kiểm tra dưới đây là bằng chứng hoàn thành toàn bộ đặc tả.
 
 Đích của học phần là một công cụ nặn khối 3D: dùng cọ thêm/bớt vật liệu, tạo lỗ hoặc nối hai khối, undo/redo, xem lát cắt và xuất mesh. Field lưu bằng scalar samples thật; sau mỗi chỉnh sửa phải trích lại bề mặt phù hợp với dữ liệu đó. Không dùng ray-marched primitive ghép sẵn thay cho field có thể sửa.
 
@@ -46,9 +46,9 @@ Kernel trả summary 16 bytes về số lần thực sự đổi sample. Stroke 
 
 - Left drag: nặn khối; `Tab`: chuyển riêng sang camera. Right drag luôn orbit, middle drag pan; wheel zoom, `Home` đưa camera về ban đầu.
 - `A` thêm, `D` bớt; F2/F3/F4 lần lượt tăng radius/strength/depth, giữ Shift để giảm, Ctrl để dùng bước lớn. Các nút −/+ trên panel nhận left click bước nhỏ, right click bước lớn. Phím cũ `[`/`]`, `-`/`=`, Page Up/Down vẫn có; Shift dùng bước lớn cho nhóm phím cũ này.
-- `Z` undo, `Y` redo; `Escape` bỏ stroke và trả field về trước stroke. Bỏ focus hủy capture/stroke và pause meshing của model đang mở; candidate grid/file đang có vẫn được poll theo batch hữu hạn. Không cho pointer cũ viết vào model thay thế.
+- `Z` undo, `Y` redo; `Escape` bỏ stroke và trả field về trước stroke. Bỏ focus hủy capture/stroke, pause meshing và grid job; fence đã gửi vẫn được poll. File task tiếp tục theo batch, dùng C để hủy. Không cho pointer cũ viết vào model thay thế.
 - F9 hoặc `V` bật slice, `X` đổi trục; Up/Down đổi layer, HJKL hoặc kéo trong ô slice đổi probe. F11/`W` wireframe, F12/`N` normal; Left/Right đổi isovalue.
-- `R` reset preset đã chọn, `1` sphere, `2` hai sphere rời, `3` torus. F5/F6/F7/F8 đổi grid 32/64/128/192 samples mỗi trục. Reset bỏ chỉnh sửa; đổi resolution giữ field đã sửa qua GPU resampling, nhưng xóa history không còn cùng grid.
+- `R` reset preset đã chọn, `1` sphere, `2` hai sphere rời, `3` torus. Ctrl+1/2/3/4 đổi grid 32/64/128/192 samples mỗi trục; F5 full remesh, I/F6 hiện/chọn chunk. Reset bỏ chỉnh sửa; đổi resolution nội suy field đã sửa trên GPU, có thể mất chi tiết khi giảm N và xóa history không còn cùng grid.
 - `C` hủy grid job trước, rồi file job, nếu không có thì hủy remesh. `Enter` yêu cầu remesh lại. `Space` pause/resume grid job nếu có, nếu không thì pause meshing hiện tại; không phải nút pause tác vụ file. `Q` thoát.
 - `S` lưu field vào một thư mục mới dưới `.runtime/volume-sculptor`, `O` mở lại field vừa lưu/đã load trong phiên, `E` xuất mesh đang được công bố. Mỗi file được kiểm lại trước khi đổi từ `.partial` thành `.scl`/`.obj`; không ghi đè file cũ. File partial của job bị hủy được giữ lại nhưng không được coi là kết quả hoàn chỉnh.
 - Tools/Stats/Files có tab click hoặc F1. F10 thu gọn panel; nút Menu/F10 mở lại. Chế độ cọ/camera luôn có nhãn, kể cả khi panel thu gọn.
@@ -90,9 +90,34 @@ Checkpoint 09 giữ viewport/cọ của 08 và bật dirty reuse. I hiện hộp
 
 Pause chặn cả API cọ/undo/redo ở model. Nhãn current dựa trên field/mesh/requested khớp nhau, không chỉ dựa vào enum ready; một yêu cầu đang chờ Pause được ghi `REMESH REQUEST QUEUED`, còn active mesh giữ nhãn last-good.
 
+Checkpoint 10 chuyển sang editor Tools/Stats: slice/probe, isovalue và grid candidate. F9/V bật slice, X đổi trục, Up/Down đổi layer, HJKL/left drag trong ô chọn điểm. Probe chỉ đọc tám scalar khi field/mesh current; cache theo cả field revision và mesh generation, bị bỏ khi thay model. Ctrl+1/2/3/4 đổi resolution; 1/2/3 không Ctrl reset preset. F5/F6 không bị đổi nghĩa. File UI/CLI chưa xuất hiện ở bước này.
+
+Bài 10 giải thích riêng UV/đảo v, logical/drawable viewport, nội suy trilinear khác nội suy trong tetra, isovalue không ghi field và giảm/tăng N không khôi phục chi tiết đã mất. GPU fixture 128³ kiểm 45 probe, 12 sign-color pixels và cache lifecycle; resample 128→64→128 so toàn samples đích với reference độc lập, giữ domain/world edits và last-good khi lỗi/hủy. 17 CLI sai của editor 10 bị chặn trước window. Build và CTest Debug/Release qua; chưa có ma trận UI trực tiếp đầy đủ cho editor 10.
+
+Checkpoint 11 thêm tab Files, S/O/E và `--load`/`--verify-files`. `course-draft/11-luu-field-va-xuat-mesh.mdx` dạy layout little-endian/checksum, stream theo batch, candidate load, snapshot export và read-back trước rename. Checksum/digest không được trình bày như chữ ký hay bằng chứng byte-exact; `MeshReader` có visitor triangle phục vụ phép so trực tiếp, không giữ cả OBJ trong RAM.
+
+I/O Release 128³ và Debug 32³ qua: save/load so field cùng từng chunk mesh bằng bytes; OBJ parse so đủ 408.024/23.544 vertices và normals với snapshot nguồn dù remesh đang diễn ra. Cancel save/export/load không công bố partial hoặc thay model; candidate load trả budget và phát tín hiệu giữ document cũ. CTest kiểm thêm signed zero/binary32 qua bốn batch sizes, face sai bị chặn trước visitor. 20 CLI sai của editor 11 và ba ca startup load (đúng, checksum sai, thiếu file) qua. Đây không phải kiểm S/O/E bằng chuột/phím hoặc nghiệm thu mở OBJ trong phần mềm khác.
+
+## Benchmark của checkpoint 12/final
+
+`sculpt_benchmark.hpp` dùng cùng mesher/brush/shaders với editor. Mỗi trial tạo model mới, dựng sphere, đặt một stamp add tại (0,7; 0; 0), radius 0,32/strength 0,28 rồi full remesh cùng field đã sửa. Hai trial warm-up bị loại, năm trial sau mới tính median/min/max/MAD. Báo 16 cột GPU (init field/count/scan/emit/normals, local brush/history/count/scan/emit/normals, full count/scan/emit/normals, draw) và host total riêng. Không đọc cả field/mesh trong workload đo; có đọc summaries/canary và một pixel ngoài draw query.
+
+```powershell
+cmake --build build --config Release --parallel 1 --target project_44_final
+./build/Release/project_44_final.exe --benchmark --grid 128
+```
+
+Chỉ `--grid`/`--hidden` đi cùng benchmark. Cờ này tự dùng hidden window, không capture input; draw chỉ vẽ mesh với camera/drawable cố định trong lượt, không gồm clear, panel, slice, swap/vsync. App có deadline 45 giây, fence ba giây; runner tự động cần supervisor bên ngoài khoảng 50 giây và cleanup process tree. Đừng thêm `--seconds`, ghép verifier hoặc dùng preset nhỏ thay kết quả 128³. Nếu không đủ mọi trial, không có aggregate hoàn tất.
+
+`BENCH_TRIAL` giữ cả mẫu warm-up; `BENCH_STAT` báo thống kê; `BENCH_COUNTERS` nêu workload. Kèm lệnh configure/build, CPU/OS/compiler khi chia sẻ; NDEBUG chỉ là một marker, không tự nhận diện mọi build configuration. Dùng Release cho phép đo chính, Debug chỉ chẩn đoán. Script kiểm local đã tính lại 17 nhóm thống kê từ raw samples, không chỉ tìm chữ COMPLETE.
+
+Release 128³ trên RTX 3050 Laptop: sphere 408.024 → edited 410.616 vertices, local 27/512 chunk và 62 nonempty buffers được reuse. Benchmark final và checkpoint 12 qua, Debug 32³ cũng qua với nhãn diagnostic. Peak reservation 59.861.328 bytes ở 128³, cuối trial về baseline 0; chỉ gồm buffers được theo dõi/guards, không gọi là tổng VRAM. Số thời gian cụ thể chỉ thuộc máy/protocol trong hồ sơ kiểm, không phải ngưỡng pass hoặc cam kết FPS.
+
+Bài 12 nối phép đo với sản phẩm thực: fixture Release 128³ vẫn khoét tunnel bằng subtract, kiểm 257 outside probes/Euler 0, và nối hai sphere thành một với 129 inside probes/Euler 2; undo/redo giữ các trạng thái topology. Kiểm correctness, benchmark và UI là ba phạm vi riêng. Editor từ chối `--capture` đi với edit/file/scene/product verifier chạy riêng để không báo thành công trong khi đã bỏ qua yêu cầu tạo ảnh; analytic/slice capture ở đường vòng lặp chính vẫn có thể dùng.
+
 ## Những phần chưa xong
 
-Checkpoint 10–12 vẫn là compile fixture của bản editor, chưa phải tiến trình giảng dạy đã biên tập. Còn phải dạy các phần ghép editor, viết Canvas, hoàn tất benchmark có warm-up/lặp, kiểm thêm native controls/focus/resize, xây metadata/route thay thế và ZIP độc lập. Chín bài đầu đã có mã thật/wiring và kiểm source, nhưng chưa gắn vào route hoặc Canvas. Các verifier GPU không thay cho kiểm chuột/bàn phím desktop.
+Mười hai bài đã có mã thật/wiring và kiểm source, chưa gắn vào route hoặc Canvas. Còn phải viết Canvas, kiểm thêm native controls/focus/resize và load domain dịch, chạy ma trận checkpoint sau thay đổi cuối, xây metadata/route thay thế cùng ZIP độc lập. Các verifier GPU và benchmark không thay cho kiểm chuột/bàn phím desktop hoặc build lại gói tải về.
 
 Kết quả theo từng phạm vi được ghi trong `docs/reviews/project-44-progress.md`; học phần Neighbor List cũ trên website chưa bị thay thế.
 
