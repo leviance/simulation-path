@@ -1,101 +1,120 @@
 #pragma once
-#ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 8
-#endif
+
 #include "field.hpp"
+#include <cmath>
 
 namespace heat {
-enum class Boundary {
-    Insulated,
-    Cold
+
+enum class StepStatus {
+    Advanced,
+    InvalidSettings,
+    UnstableSettings,
+    NonFiniteCandidate,
+    ExperimentBudget,
+    ExperimentAmplitude
 };
 
-struct Settings {
-    double diffusivity = 6;
-    double dx = 1;
-    double dy = 1;
-    double dt = 1.0 / 30.0;
-    Boundary boundary = Boundary::Insulated;
+struct StepResult {
+    StepStatus status = StepStatus::InvalidSettings;
+    std::uint32_t visited = 0;
+    double maximumAbs = 0;
+    double sourceChange = 0;
+    bool advanced = false;
 };
 
-inline double ratioX(const Settings& settings) {
-    return settings.diffusivity * settings.dt / (settings.dx * settings.dx);
-}
-
-inline double ratioY(const Settings& settings) {
-    return settings.diffusivity * settings.dt / (settings.dy * settings.dy);
-}
-
-inline bool stable(const Settings& settings) {
-    if (!std::isfinite(settings.diffusivity) || !std::isfinite(settings.dt) || !std::isfinite(settings.dx) || !std::isfinite(settings.dy)) {
-        return false;
+inline const char* stepMessage(StepStatus status) {
+    if (status == StepStatus::Advanced) {
+        return "Advanced one model timestep";
     }
-    if (settings.diffusivity < 0 || settings.dt <= 0 || settings.dx <= 0 || settings.dy <= 0) {
-        return false;
+    if (status == StepStatus::UnstableSettings) {
+        return "CFL rejected: reduce dt/D or explicitly enable the bounded experiment";
     }
-    double sum = ratioX(settings);
-#if LAB_CHECKPOINT >= 4
-    sum += ratioY(settings);
-#endif
-    return std::isfinite(sum) && sum <= 0.5;
-}
-
-// Biên cách nhiệt dùng giá trị ô sát biên cho ghost cell: thông lượng qua mặt ngoài bằng 0.
-inline double sample(const Field& field, int x, int y) {
-    x = std::clamp(x, 0, field.width - 1);
-    y = std::clamp(y, 0, field.height - 1);
-    return field.current[field.index(x, y)];
-}
-
-inline void applyBoundary(Field& field, const Settings& settings) {
-    if (settings.boundary != Boundary::Cold) {
-        return;
+    if (status == StepStatus::NonFiniteCandidate) {
+        return "Non-finite candidate rejected; the previous field is unchanged";
     }
-    for (int y = 0; y < field.height; ++y) {
-        for (int x = 0; x < field.width; ++x) {
-            if (field.edge(x, y)) {
-                field.current[field.index(x, y)] = 0;
-            }
-        }
+    if (status == StepStatus::ExperimentBudget) {
+        return "Experiment stopped at 400 accepted steps; reset before another run";
     }
+    if (status == StepStatus::ExperimentAmplitude) {
+        return "Candidate |theta| exceeds 16; retained the last finite field, no clamping";
+    }
+    return "Invalid D/dt/dx/dy or boundary; field unchanged";
 }
 
 #if LAB_CHECKPOINT >= 3
-inline bool diffuse(Field& field, const Settings& settings) {
-    // Từ chối cấu hình không ổn định trước khi chạm vào trạng thái.
-    if (!stable(settings)) {
-        return false;
-    }
-#if LAB_CHECKPOINT >= 5
-    applyBoundary(field, settings);
-#endif
-    const double rx = ratioX(settings);
+inline StepResult diffuse(Field& field, const Settings& settings) {
+    bool twoDimensions = false;
 #if LAB_CHECKPOINT >= 4
-    const double ry = ratioY(settings);
+    twoDimensions = true;
 #endif
+    const Stability coefficients = stability(settings, twoDimensions);
+    StepResult result;
+    if (!coefficients.valid) {
+        return result;
+    }
+    bool allowUnstable = false;
+#if LAB_CHECKPOINT >= 6
+    allowUnstable = settings.experiment;
+    if (allowUnstable && field.experimentSteps >= 400) {
+        result.status = StepStatus::ExperimentBudget;
+        return result;
+    }
+#endif
+    if (!coefficients.stable && !allowUnstable) {
+        result.status = StepStatus::UnstableSettings;
+        return result;
+    }
+
     for (int y = 0; y < field.height; ++y) {
         for (int x = 0; x < field.width; ++x) {
             const std::size_t index = field.index(x, y);
+            ++result.visited;
+            double value = 0;
+            bool fixedRim = false;
 #if LAB_CHECKPOINT >= 5
-            if (settings.boundary == Boundary::Cold && field.edge(x, y)) {
-                field.next[index] = 0;
-                continue;
+            fixedRim = settings.boundary == Boundary::ColdRim && field.edge(x, y);
+#endif
+            if (!fixedRim) {
+                const double center = sample(field, x, y);
+                const double horizontal = sample(field, x - 1, y) - 2 * center + sample(field, x + 1, y);
+                value = center + coefficients.rx * horizontal;
+#if LAB_CHECKPOINT >= 4
+                const double vertical = sample(field, x, y - 1) - 2 * center + sample(field, x, y + 1);
+                value += coefficients.ry * vertical;
+#endif
+            }
+#if LAB_CHECKPOINT >= 5
+            if (!fixedRim && field.pins[index] != Pin::None) {
+                const double target = static_cast<double>(field.pins[index]);
+                result.sourceChange += (target - value) * settings.dx * settings.dy;
+                value = target;
             }
 #endif
-            const double center = sample(field, x, y);
-            const double horizontal = sample(field, x - 1, y) - 2 * center + sample(field, x + 1, y);
-            double value = center + rx * horizontal;
-#if LAB_CHECKPOINT >= 4
-            const double vertical = sample(field, x, y - 1) - 2 * center + sample(field, x, y + 1);
-            value += ry * vertical;
-#endif
+            if (!std::isfinite(value)) {
+                result.status = StepStatus::NonFiniteCandidate;
+                return result;
+            }
+            result.maximumAbs = std::max(result.maximumAbs, std::abs(value));
             field.next[index] = value;
         }
     }
-    // Chỉ hoán đổi sau khi đã tính xong tất cả ô; tuyệt đối không clamp nghiệm.
+    if (allowUnstable && result.maximumAbs > 16) {
+        result.status = StepStatus::ExperimentAmplitude;
+        return result;
+    }
+    // Mọi ô đã được tính xong: publish một mức thời gian, không clamp nghiệm.
     field.current.swap(field.next);
     ++field.tick;
-    return true;
+    field.time += settings.dt;
+#if LAB_CHECKPOINT >= 6
+    if (allowUnstable) {
+        ++field.experimentSteps;
+    }
+#endif
+    result.advanced = true;
+    result.status = StepStatus::Advanced;
+    return result;
 }
 #endif
+
 } // namespace heat

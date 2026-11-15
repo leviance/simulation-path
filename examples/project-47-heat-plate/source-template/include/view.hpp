@@ -1,55 +1,90 @@
 #pragma once
-#ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 8
-#endif
-#include "field.hpp"
-#include <SDL3/SDL.h>
+
+#include "layout.hpp"
+#include "pixels.hpp"
+#include "sdl_resources.hpp"
 
 namespace heat {
-inline SDL_Color colorFor(double temperature) {
-    // Clamp chỉ dành cho màu, không ghi ngược vào Field.
-    if (!std::isfinite(temperature)) {
-        return {255, 0, 255, 255};
+
+inline void setColor(SDL_Renderer* renderer, Rgba color) {
+    requireSdl(SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a), "set draw color");
+}
+
+inline void setPresentation(SDL_Renderer* renderer, const Field& field, bool showcase) {
+    int width = 1200;
+    int height = 860;
+    if (showcase) {
+        width = field.width;
+        height = field.height;
     }
-    const double t = std::clamp(temperature, 0.0, 1.0);
-    return {
-        static_cast<Uint8>(std::lround(20 + 235 * t)),
-        static_cast<Uint8>(std::lround(35 + 175 * t)),
-        static_cast<Uint8>(std::lround(90 - 50 * t)),
-        255};
+    requireSdl(SDL_SetRenderLogicalPresentation(renderer, width, height, SDL_LOGICAL_PRESENTATION_LETTERBOX), "logical presentation");
+}
+
+inline bool mouseCell(SDL_Renderer* renderer, const Field& field, float windowX, float windowY, int& x, int& y, bool showcase) {
+    float logicalX = 0;
+    float logicalY = 0;
+    if (!SDL_RenderCoordinatesFromWindow(renderer, windowX, windowY, &logicalX, &logicalY)) {
+        return false;
+    }
+    return logicalCell(field, logicalX, logicalY, x, y, showcase);
 }
 
 #if LAB_CHECKPOINT >= 1
-inline bool drawField(SDL_Renderer* renderer, const Field& field) {
+inline void drawGrid(SDL_Renderer* renderer, const Field& field) {
+    const Rect view = sceneRect(field, false);
+    const float cellWidth = view.width / field.width;
+    const float cellHeight = view.height / field.height;
     for (int y = 0; y < field.height; ++y) {
         for (int x = 0; x < field.width; ++x) {
-            const SDL_Color color = colorFor(field.current[field.index(x, y)]);
-            if (!SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a)) {
-                return false;
-            }
-            const SDL_FRect cell{static_cast<float>(x), static_cast<float>(y), 1.0F, 1.0F};
-            if (!SDL_RenderFillRect(renderer, &cell)) {
-                return false;
-            }
+            setColor(renderer, heatColor(field.current[field.index(x, y)]));
+            const SDL_FRect rectangle{view.x + x * cellWidth, view.y + y * cellHeight, cellWidth, cellHeight};
+            requireSdl(SDL_RenderFillRect(renderer, &rectangle), "draw temperature cell");
         }
     }
-    return true;
 }
 #endif
 
-#if LAB_CHECKPOINT >= 2
-inline bool mouseCell(SDL_Renderer* renderer, const Field& field, float mouseX, float mouseY, int& x, int& y) {
-    float logicalX = 0;
-    float logicalY = 0;
-    if (!SDL_RenderCoordinatesFromWindow(renderer, mouseX, mouseY, &logicalX, &logicalY)) {
-        return false;
+#if LAB_CHECKPOINT >= 7
+inline void createTexture(SdlResources& sdl) {
+    // Reserve capacity cho cả ba preset: đổi độ phân giải không cấp lại GPU resource.
+    SDL_Texture* candidate = SDL_CreateTexture(sdl.renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 256, 256);
+    requireSdl(candidate != nullptr, "create temperature texture");
+    if (!SDL_SetTextureScaleMode(candidate, SDL_SCALEMODE_NEAREST)) {
+        SDL_DestroyTexture(candidate);
+        throw std::runtime_error(std::string("nearest sampling: ") + SDL_GetError());
     }
-    if (!std::isfinite(logicalX) || !std::isfinite(logicalY) || logicalX < 0 || logicalY < 0 || logicalX >= field.width || logicalY >= field.height) {
-        return false;
+    if (sdl.texture) {
+        SDL_DestroyTexture(sdl.texture);
     }
-    x = static_cast<int>(std::floor(logicalX));
-    y = static_cast<int>(std::floor(logicalY));
-    return true;
+    sdl.texture = candidate;
+}
+
+inline void uploadGrid(SDL_Texture* texture, const Field& field, bool experiment, bool showPins) {
+    if (field.width > 256 || field.height > 256) {
+        throw std::invalid_argument("Viewer texture capacity is 256x256; CPU field limit is separate");
+    }
+    void* pixels = nullptr;
+    int pitch = 0;
+    const SDL_Rect region{0, 0, field.width, field.height};
+    requireSdl(SDL_LockTexture(texture, &region, &pixels, &pitch), "lock temperature texture region");
+    const std::size_t rowBytes = static_cast<std::size_t>(field.width) * 4;
+    if (pitch < 0 || static_cast<std::size_t>(pitch) < rowBytes) {
+        SDL_UnlockTexture(texture);
+        throw std::runtime_error("Texture pitch is shorter than a complete RGBA row");
+    }
+    auto* bytes = static_cast<std::uint8_t*>(pixels);
+    for (int y = 0; y < field.height; ++y) {
+        encodeRow(field, y, bytes + static_cast<std::size_t>(y) * static_cast<std::size_t>(pitch), experiment, showPins);
+    }
+    SDL_UnlockTexture(texture);
+}
+
+inline void drawTexture(SDL_Renderer* renderer, SDL_Texture* texture, const Field& field, bool showcase) {
+    const Rect view = sceneRect(field, showcase);
+    const SDL_FRect source{0, 0, static_cast<float>(field.width), static_cast<float>(field.height)};
+    const SDL_FRect rectangle{view.x, view.y, view.width, view.height};
+    requireSdl(SDL_RenderTexture(renderer, texture, &source, &rectangle), "draw temperature texture");
 }
 #endif
+
 } // namespace heat
